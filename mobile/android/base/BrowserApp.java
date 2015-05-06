@@ -104,6 +104,7 @@ import android.os.Bundle;
 import android.os.StrictMode;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentManager;
+import android.support.v4.view.MenuItemCompat;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Base64;
@@ -123,6 +124,7 @@ import android.view.ViewStub;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.animation.Interpolator;
+import android.widget.Button;
 import android.widget.ListView;
 import android.widget.RelativeLayout;
 import android.widget.Toast;
@@ -1951,6 +1953,9 @@ public class BrowserApp extends GeckoApp
                 });
             }
         } else {
+            if (mDoorHangerPopup != null) {
+                mDoorHangerPopup.disable();
+            }
             mTabsPanel.show(panel);
         }
     }
@@ -1958,6 +1963,9 @@ public class BrowserApp extends GeckoApp
     @Override
     public void hideTabs() {
         mTabsPanel.hide();
+        if (mDoorHangerPopup != null) {
+            mDoorHangerPopup.enable();
+        }
     }
 
     @Override
@@ -2232,6 +2240,14 @@ public class BrowserApp extends GeckoApp
         // Expected to be fixed by bug 915825.
         hideHomePager(url);
         loadUrlOrKeywordSearch(url);
+        clearSelectedTabApplicationId();
+    }
+
+    private void clearSelectedTabApplicationId() {
+        final Tab selected = Tabs.getInstance().getSelectedTab();
+        if (selected != null) {
+            selected.setApplicationId(null);
+        }
     }
 
     private void loadUrlOrKeywordSearch(final String url) {
@@ -3038,6 +3054,40 @@ public class BrowserApp extends GeckoApp
         desktopMode.setChecked(tab.getDesktopMode());
         desktopMode.setIcon(tab.getDesktopMode() ? R.drawable.ic_menu_desktop_mode_on : R.drawable.ic_menu_desktop_mode_off);
 
+        View backButtonView = MenuItemCompat.getActionView(back);
+
+        if (backButtonView != null) {
+            backButtonView.setOnLongClickListener(new Button.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View view) {
+                    Tab tab = Tabs.getInstance().getSelectedTab();
+                    if (tab != null) {
+                        closeOptionsMenu();
+                        return tabHistoryController.showTabHistory(tab,
+                                TabHistoryController.HistoryAction.BACK);
+                    }
+                    return false;
+                }
+            });
+        }
+
+        View forwardButtonView = MenuItemCompat.getActionView(forward);
+
+        if (forwardButtonView != null) {
+            forwardButtonView.setOnLongClickListener(new Button.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View view) {
+                    Tab tab = Tabs.getInstance().getSelectedTab();
+                    if (tab != null) {
+                        closeOptionsMenu();
+                        return tabHistoryController.showTabHistory(tab,
+                                TabHistoryController.HistoryAction.FORWARD);
+                    }
+                    return false;
+                }
+            });
+        }
+
         String url = tab.getURL();
         if (AboutPages.isAboutReader(url)) {
             String urlFromReader = ReaderModeUtils.getUrlFromAboutReader(url);
@@ -3536,6 +3586,7 @@ public class BrowserApp extends GeckoApp
             startActivity(intent);
         } else if (!maybeSwitchToTab(url, flags)) {
             openUrlAndStopEditing(url);
+            clearSelectedTabApplicationId();
         }
     }
 

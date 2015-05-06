@@ -1725,8 +1725,8 @@ gfxWindowsPlatform::GetDXGIAdapter()
 
 bool DoesD3D11DeviceWork(ID3D11Device *device)
 {
-  static bool checked;
-  static bool result;
+  static bool checked = false;
+  static bool result = false;
 
   if (checked)
       return result;
@@ -1764,8 +1764,8 @@ bool DoesD3D11DeviceWork(ID3D11Device *device)
 // with E_OUTOFMEMORY.
 bool DoesD3D11TextureSharingWork(ID3D11Device *device)
 {
-  static bool checked;
-  static bool result;
+  static bool checked = false;
+  static bool result = false;
 
   if (checked)
       return result;
@@ -2135,7 +2135,7 @@ public:
       void ScheduleSoftwareVsync(TimeStamp aVsyncTimestamp)
       {
         MOZ_ASSERT(IsInVsyncThread());
-        NS_WARNING("DwmComposition dynamically disabled, falling back to software timers\n");
+        NS_WARNING("DwmComposition dynamically disabled, falling back to software timers");
 
         TimeStamp nextVsync = aVsyncTimestamp + mSoftwareVsyncRate;
         TimeDuration delay = nextVsync - TimeStamp::Now();
@@ -2246,14 +2246,14 @@ gfxWindowsPlatform::CreateHardwareVsyncSource()
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
   if (!WinUtils::dwmIsCompositionEnabledPtr) {
-    NS_WARNING("Dwm composition not available, falling back to software vsync\n");
+    NS_WARNING("Dwm composition not available, falling back to software vsync");
     return gfxPlatform::CreateHardwareVsyncSource();
   }
 
   BOOL dwmEnabled = false;
   WinUtils::dwmIsCompositionEnabledPtr(&dwmEnabled);
   if (!dwmEnabled) {
-    NS_WARNING("DWM not enabled, falling back to software vsync\n");
+    NS_WARNING("DWM not enabled, falling back to software vsync");
     return gfxPlatform::CreateHardwareVsyncSource();
   }
 

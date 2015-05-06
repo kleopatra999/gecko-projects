@@ -28,10 +28,6 @@
                           command="Tools:PrivateBrowsing"
                           key="key_privatebrowsing"/>
 #ifdef E10S_TESTING_ONLY
-                <menuitem id="menu_newRemoteWindow"
-                          label="New e10s Window"
-                          hidden="true"
-                          command="Tools:RemoteWindow"/>
                 <menuitem id="menu_newNonRemoteWindow"
                           label="New Non-e10s Window"
                           hidden="true"
@@ -391,6 +387,7 @@
                oncommand="BookmarksEventHandler.onCommand(event, this.parentNode._placesView);"
                onclick="BookmarksEventHandler.onClick(event, this.parentNode._placesView);"
                onpopupshowing="BookmarkingUI.onMainMenuPopupShowing(event);
+                               BookmarkingUI.updatePocketItemVisibility('menu_');
                                if (!this.parentNode._placesView)
                                  new PlacesMenu(event, 'place:folder=BOOKMARKS_MENU');"
                tooltip="bhTooltip" popupsinherittooltip="true">
@@ -464,6 +461,9 @@
         </menupopup>
       </menu>
 #endif
+      <menuseparator id="menu_pocketSeparator"/>
+      <menuitem id="menu_pocket" label="&pocketMenuitem.label;"
+                oncommand="openUILink(Pocket.listURL, event);"/>
       <menuseparator id="bookmarksMenuItemsSeparator"/>
       <!-- Bookmarks menu items -->
       <menuseparator builder="end"

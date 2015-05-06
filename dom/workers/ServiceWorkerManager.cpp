@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,6 +16,7 @@
 #include "nsIHttpHeaderVisitor.h"
 #include "nsINetworkInterceptController.h"
 #include "nsIMutableArray.h"
+#include "nsIUploadChannel2.h"
 #include "nsPIDOMWindow.h"
 #include "nsScriptLoader.h"
 #include "nsDebug.h"
@@ -581,6 +584,7 @@ public:
         if (newest && mScriptSpec.Equals(newest->ScriptSpec()) &&
             mScriptSpec.Equals(mRegistration->mScriptSpec)) {
           mRegistration->mPendingUninstall = false;
+          swm->StoreRegistration(mPrincipal, mRegistration);
           Succeed();
           Done(NS_OK);
           return;
@@ -1043,6 +1047,7 @@ ServiceWorkerManager::AppendPendingOperation(nsIRunnable* aRunnable)
 class LifecycleEventPromiseHandler final : public PromiseNativeHandler
 {
   nsMainThreadPtrHandle<ContinueLifecycleTask> mTask;
+  nsMainThreadPtrHandle<ServiceWorker> mServiceWorker;
   bool mActivateImmediately;
 
   virtual
@@ -1051,8 +1056,10 @@ class LifecycleEventPromiseHandler final : public PromiseNativeHandler
 
 public:
   LifecycleEventPromiseHandler(const nsMainThreadPtrHandle<ContinueLifecycleTask>& aTask,
+                               const nsMainThreadPtrHandle<ServiceWorker>& aServiceWorker,
                                bool aActivateImmediately)
     : mTask(aTask)
+    , mServiceWorker(aServiceWorker)
     , mActivateImmediately(aActivateImmediately)
   {
     MOZ_ASSERT(!NS_IsMainThread());
@@ -1135,7 +1142,7 @@ LifecycleEventWorkerRunnable::DispatchLifecycleEvent(JSContext* aCx, WorkerPriva
   }
 
   nsRefPtr<LifecycleEventPromiseHandler> handler =
-    new LifecycleEventPromiseHandler(mTask, false /* activateImmediately */);
+    new LifecycleEventPromiseHandler(mTask, mServiceWorker, false /* activateImmediately */);
   waitUntilPromise->AppendNativeHandler(handler);
   return true;
 }
@@ -2351,6 +2358,7 @@ class FetchEventRunnable : public WorkerRunnable
   RequestMode mRequestMode;
   RequestCredentials mRequestCredentials;
   nsContentPolicyType mContentPolicyType;
+  nsCOMPtr<nsIInputStream> mUploadStream;
 public:
   FetchEventRunnable(WorkerPrivate* aWorkerPrivate,
                      nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel,
@@ -2445,6 +2453,13 @@ public:
 
     mContentPolicyType = loadInfo->GetContentPolicyType();
 
+    nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(httpChannel);
+    if (uploadChannel) {
+      MOZ_ASSERT(!mUploadStream);
+      rv = uploadChannel->CloneUploadStream(getter_AddRefs(mUploadStream));
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
+
     return NS_OK;
   }
 
@@ -2504,8 +2519,6 @@ private:
     reqInit.mHeaders.Construct();
     reqInit.mHeaders.Value().SetAsHeaders() = headers;
 
-    //TODO(jdm): set request body
-
     reqInit.mMode.Construct(mRequestMode);
     reqInit.mCredentials.Construct(mRequestCredentials);
 
@@ -2518,6 +2531,8 @@ private:
     nsRefPtr<InternalRequest> internalReq = request->GetInternalRequest();
     MOZ_ASSERT(internalReq);
     internalReq->SetCreatedByFetchEvent();
+
+    internalReq->SetBody(mUploadStream);
 
     request->SetContentPolicyType(mContentPolicyType);
 

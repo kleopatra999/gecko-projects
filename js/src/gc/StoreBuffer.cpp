@@ -42,7 +42,7 @@ StoreBuffer::SlotsEdge::mark(JSTracer* trc) const
         int32_t start = Min(uint32_t(start_), obj->slotSpan());
         int32_t end = Min(uint32_t(start_) + count_, obj->slotSpan());
         MOZ_ASSERT(end >= start);
-        MarkObjectSlots(trc, obj, start, end - start);
+        TraceObjectSlots(trc, obj, start, end - start);
     }
 }
 
@@ -200,50 +200,6 @@ StoreBuffer::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::GCSi
     sizes->storeBufferRelocVals  += bufferRelocVal.sizeOfExcludingThis(mallocSizeOf);
     sizes->storeBufferRelocCells += bufferRelocCell.sizeOfExcludingThis(mallocSizeOf);
     sizes->storeBufferGenerics   += bufferGeneric.sizeOfExcludingThis(mallocSizeOf);
-}
-
-JS_PUBLIC_API(void)
-JS::HeapCellPostBarrier(js::gc::Cell** cellp)
-{
-    MOZ_ASSERT(cellp);
-    MOZ_ASSERT(*cellp);
-    StoreBuffer* storeBuffer = (*cellp)->storeBuffer();
-    if (storeBuffer)
-        storeBuffer->putRelocatableCellFromAnyThread(cellp);
-}
-
-JS_PUBLIC_API(void)
-JS::HeapCellRelocate(js::gc::Cell** cellp)
-{
-    /* Called with old contents of *cellp before overwriting. */
-    MOZ_ASSERT(cellp);
-    MOZ_ASSERT(*cellp);
-    JSRuntime* runtime = (*cellp)->runtimeFromMainThread();
-    runtime->gc.storeBuffer.removeRelocatableCellFromAnyThread(cellp);
-}
-
-JS_PUBLIC_API(void)
-JS::HeapValuePostBarrier(JS::Value* valuep)
-{
-    MOZ_ASSERT(valuep);
-    MOZ_ASSERT(valuep->isMarkable());
-    if (valuep->isObject()) {
-        StoreBuffer* storeBuffer = valuep->toObject().storeBuffer();
-        if (storeBuffer)
-            storeBuffer->putRelocatableValueFromAnyThread(valuep);
-    }
-}
-
-JS_PUBLIC_API(void)
-JS::HeapValueRelocate(JS::Value* valuep)
-{
-    /* Called with old contents of *valuep before overwriting. */
-    MOZ_ASSERT(valuep);
-    MOZ_ASSERT(valuep->isMarkable());
-    if (valuep->isString() && valuep->toString()->isPermanentAtom())
-        return;
-    JSRuntime* runtime = static_cast<js::gc::Cell*>(valuep->toGCThing())->runtimeFromMainThread();
-    runtime->gc.storeBuffer.removeRelocatableValueFromAnyThread(valuep);
 }
 
 template struct StoreBuffer::MonoTypeBuffer<StoreBuffer::ValueEdge>;

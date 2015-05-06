@@ -19,9 +19,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
+import android.provider.Browser;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -1275,6 +1274,7 @@ public abstract class GeckoApp
         mRootLayout = (OuterLayout) findViewById(R.id.root_layout);
         mGeckoLayout = (RelativeLayout) findViewById(R.id.gecko_layout);
         mMainLayout = (RelativeLayout) findViewById(R.id.main_layout);
+        mLayerView = (LayerView) findViewById(R.id.layer_view);
 
         // Determine whether we should restore tabs.
         mShouldRestore = getSessionRestoreState(savedInstanceState);
@@ -1414,35 +1414,40 @@ public abstract class GeckoApp
             }
         }
 
-        if (mLayerView == null) {
-            LayerView layerView = (LayerView) findViewById(R.id.layer_view);
-            layerView.initializeView(EventDispatcher.getInstance());
-            mLayerView = layerView;
-            GeckoAppShell.sendEventToGecko(GeckoEvent.createObjectEvent(
-                GeckoEvent.ACTION_OBJECT_LAYER_CLIENT, layerView.getLayerClientObject()));
+        // XXX our editor tests require the GeckoView to have focus to pass, so we have to
+        // manually shift focus to the GeckoView. requestFocus apparently doesn't work at
+        // this stage of starting up, so we have to unset and reset the focusability.
+        mLayerView.setFocusable(false);
+        mLayerView.setFocusable(true);
+        mLayerView.setFocusableInTouchMode(true);
+    }
+
+    /**
+     * Loads the initial tab at Fennec startup. If we don't restore tabs, this
+     * tab will be about:home. If we restore tabs, we don't need to create a new tab.
+     */
+    protected void loadStartupTabWithAboutHome(final int flags) {
+        if (!mShouldRestore) {
+            Tabs.getInstance().loadUrl(AboutPages.HOME, flags);
         }
     }
 
     /**
-     * Loads the initial tab at Fennec startup.
+     * Loads the initial tab at Fennec startup. This tab will load with the given
+     * external URL. If that URL is invalid, about:home will be loaded.
      *
-     * If Fennec was opened with an external URL, that URL will be loaded.
-     * Otherwise, unless there was a session restore, the default URL
-     * (about:home) be loaded.
-     *
-     * @param url External URL to load, or null to load the default URL
+     * @param url External URL to load.
+     * @param extraApplicationId Identifies the calling application; delivered with the URL
      */
-    protected void loadStartupTab(String url, int flags) {
+    protected void loadStartupTabWithExternalUrl(final String url, final String extraApplicationId,
+            final int flags) {
+        // Invalid url
         if (url == null) {
-            if (!mShouldRestore) {
-                // Show about:home if we aren't restoring previous session and
-                // there's no external URL.
-                Tabs.getInstance().loadUrl(AboutPages.HOME, flags);
-            }
-        } else {
-            // If given an external URL, load it
-            Tabs.getInstance().loadUrl(url, flags);
+            loadStartupTabWithAboutHome(flags);
+            return;
         }
+
+        Tabs.getInstance().loadUrl(url, extraApplicationId, flags);
     }
 
     private void initialize() {
@@ -1509,10 +1514,11 @@ public abstract class GeckoApp
             if (ACTION_HOMESCREEN_SHORTCUT.equals(action)) {
                 flags |= Tabs.LOADURL_PINNED;
             }
-            loadStartupTab(passedUri, flags);
+            final String extraApplicationId = intent.getStringExtra(Browser.EXTRA_APPLICATION_ID);
+            loadStartupTabWithExternalUrl(passedUri, extraApplicationId, flags);
         } else {
             if (!mIsRestoringActivity) {
-                loadStartupTab(null, Tabs.LOADURL_NEW_TAB);
+                loadStartupTabWithAboutHome(Tabs.LOADURL_NEW_TAB);
             }
 
             Tabs.getInstance().notifyListeners(null, Tabs.TabEvents.RESTORED);
@@ -1824,9 +1830,10 @@ public abstract class GeckoApp
                         TabQueueHelper.openQueuedUrls(GeckoApp.this, mProfile, TabQueueHelper.FILE_NAME, true);
                     } else {
                         String uri = intent.getDataString();
-                        Tabs.getInstance().loadUrl(uri, Tabs.LOADURL_NEW_TAB |
-                                                                Tabs.LOADURL_USER_ENTERED |
-                                                                Tabs.LOADURL_EXTERNAL);
+                        final String extraApplicationId = intent.getStringExtra(Browser.EXTRA_APPLICATION_ID);
+                        Tabs.getInstance().loadUrl(uri, extraApplicationId, Tabs.LOADURL_NEW_TAB |
+                                                                            Tabs.LOADURL_USER_ENTERED |
+                                                                            Tabs.LOADURL_EXTERNAL);
                     }
                 }
             });

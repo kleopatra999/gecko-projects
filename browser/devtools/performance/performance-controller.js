@@ -27,12 +27,8 @@ devtools.lazyRequireGetter(this, "RecordingUtils",
   "devtools/performance/recording-utils", true);
 devtools.lazyRequireGetter(this, "RecordingModel",
   "devtools/performance/recording-model", true);
-devtools.lazyRequireGetter(this, "FramerateGraph",
-  "devtools/performance/performance-graphs", true);
-devtools.lazyRequireGetter(this, "MemoryGraph",
-  "devtools/performance/performance-graphs", true);
-devtools.lazyRequireGetter(this, "MarkersOverview",
-  "devtools/shared/timeline/markers-overview", true);
+devtools.lazyRequireGetter(this, "GraphsController",
+  "devtools/performance/graphs", true);
 devtools.lazyRequireGetter(this, "Waterfall",
   "devtools/shared/timeline/waterfall", true);
 devtools.lazyRequireGetter(this, "MarkerDetails",
@@ -52,8 +48,6 @@ devtools.lazyRequireGetter(this, "FlameGraphUtils",
 devtools.lazyRequireGetter(this, "FlameGraph",
   "devtools/shared/widgets/FlameGraph", true);
 
-devtools.lazyImporter(this, "CanvasGraphUtils",
-  "resource:///modules/devtools/Graphs.jsm");
 devtools.lazyImporter(this, "SideMenuWidget",
   "resource:///modules/devtools/SideMenuWidget.jsm");
 devtools.lazyImporter(this, "PluralForm",
@@ -68,13 +62,6 @@ const EVENTS = {
 
   // Fired by the PerformanceController when the devtools theme changes.
   THEME_CHANGED: "Performance:ThemeChanged",
-
-  // When the SharedPerformanceConnection handles profiles created via `console.profile()`,
-  // the controller handles those events and emits the below events for consumption
-  // by other views.
-  CONSOLE_RECORDING_STARTED: "Performance:ConsoleRecordingStarted",
-  CONSOLE_RECORDING_WILL_STOP: "Performance:ConsoleRecordingWillStop",
-  CONSOLE_RECORDING_STOPPED: "Performance:ConsoleRecordingStopped",
 
   // Emitted by the PerformanceView when the state (display mode) changes,
   // for example when switching between "empty", "recording" or "recorded".
@@ -196,9 +183,7 @@ let PerformanceController = {
     this._onRecordingSelectFromView = this._onRecordingSelectFromView.bind(this);
     this._onPrefChanged = this._onPrefChanged.bind(this);
     this._onThemeChanged = this._onThemeChanged.bind(this);
-    this._onConsoleProfileStart = this._onConsoleProfileStart.bind(this);
-    this._onConsoleProfileEnd = this._onConsoleProfileEnd.bind(this);
-    this._onConsoleProfileEnding = this._onConsoleProfileEnding.bind(this);
+    this._onRecordingStateChange = this._onRecordingStateChange.bind(this);
 
     // All boolean prefs should be handled via the OptionsView in the
     // ToolbarView, so that they may be accessible via the "gear" menu.
@@ -214,9 +199,10 @@ let PerformanceController = {
     this._nonBooleanPrefs.registerObserver();
     this._nonBooleanPrefs.on("pref-changed", this._onPrefChanged);
 
-    gFront.on("console-profile-start", this._onConsoleProfileStart);
-    gFront.on("console-profile-ending", this._onConsoleProfileEnding);
-    gFront.on("console-profile-end", this._onConsoleProfileEnd);
+    gFront.on("recording-starting", this._onRecordingStateChange);
+    gFront.on("recording-started", this._onRecordingStateChange);
+    gFront.on("recording-stopping", this._onRecordingStateChange);
+    gFront.on("recording-stopped", this._onRecordingStateChange);
     ToolbarView.on(EVENTS.PREF_CHANGED, this._onPrefChanged);
     PerformanceView.on(EVENTS.UI_START_RECORDING, this.startRecording);
     PerformanceView.on(EVENTS.UI_STOP_RECORDING, this.stopRecording);
@@ -235,9 +221,10 @@ let PerformanceController = {
     this._nonBooleanPrefs.unregisterObserver();
     this._nonBooleanPrefs.off("pref-changed", this._onPrefChanged);
 
-    gFront.off("console-profile-start", this._onConsoleProfileStart);
-    gFront.off("console-profile-ending", this._onConsoleProfileEnding);
-    gFront.off("console-profile-end", this._onConsoleProfileEnd);
+    gFront.off("recording-starting", this._onRecordingStateChange);
+    gFront.off("recording-started", this._onRecordingStateChange);
+    gFront.off("recording-stopping", this._onRecordingStateChange);
+    gFront.off("recording-stopped", this._onRecordingStateChange);
     ToolbarView.off(EVENTS.PREF_CHANGED, this._onPrefChanged);
     PerformanceView.off(EVENTS.UI_START_RECORDING, this.startRecording);
     PerformanceView.off(EVENTS.UI_STOP_RECORDING, this.stopRecording);
@@ -290,22 +277,23 @@ let PerformanceController = {
    * when the front has started to record.
    */
   startRecording: Task.async(function *() {
+    // Store retro-mode here so we can easily list true/false
+    // values for reverting.
+    // TODO bug 1160313
+    let superMode = !this.getOption("retro-mode");
+
     let options = {
-      withMemory: this.getOption("enable-memory"),
+      withMarkers: superMode ? true : false,
+      withMemory: superMode ? this.getOption("enable-memory") : false,
       withTicks: this.getOption("enable-framerate"),
-      withAllocations: this.getOption("enable-memory"),
+      withAllocations: superMode ? this.getOption("enable-memory") : false,
       allocationsSampleProbability: this.getPref("memory-sample-probability"),
       allocationsMaxLogLength: this.getPref("memory-max-log-length"),
       bufferSize: this.getPref("profiler-buffer-size"),
       sampleFrequency: this.getPref("profiler-sample-frequency")
     };
 
-    this.emit(EVENTS.RECORDING_WILL_START);
-
-    let recording = yield gFront.startRecording(options);
-    this._recordings.push(recording);
-
-    this.emit(EVENTS.RECORDING_STARTED, recording);
+    yield gFront.startRecording(options);
   }),
 
   /**
@@ -315,9 +303,7 @@ let PerformanceController = {
   stopRecording: Task.async(function *() {
     let recording = this.getLatestManualRecording();
 
-    this.emit(EVENTS.RECORDING_WILL_STOP, recording);
     yield gFront.stopRecording(recording);
-    this.emit(EVENTS.RECORDING_STOPPED, recording);
   }),
 
   /**
@@ -343,6 +329,11 @@ let PerformanceController = {
 
     if (latest && latest.isRecording()) {
       yield this.stopRecording();
+    }
+    // If last recording is not recording, but finalizing itself,
+    // wait for that to finish
+    if (latest && !latest.isCompleted()) {
+      yield this.once(EVENTS.RECORDING_STOPPED);
     }
 
     this._recordings.length = 0;
@@ -440,27 +431,33 @@ let PerformanceController = {
   },
 
   /**
-   * Fired when `console.profile()` is executed.
+   * Fired when a recording model changes state.
+   *
+   * @param {string} state
+   * @param {RecordingModel} model
    */
-  _onConsoleProfileStart: function (_, recording) {
-    this._recordings.push(recording);
-    this.emit(EVENTS.CONSOLE_RECORDING_STARTED, recording);
-  },
-
-  /**
-   * Fired when `console.profileEnd()` is executed, and the profile
-   * is stopping soon, as it fetches profiler data.
-   */
-  _onConsoleProfileEnding: function (_, recording) {
-    this.emit(EVENTS.CONSOLE_RECORDING_WILL_STOP, recording);
-  },
-
-  /**
-   * Fired when `console.profileEnd()` is executed, and
-   * has a corresponding `console.profile()` session.
-   */
-  _onConsoleProfileEnd: function (_, recording) {
-    this.emit(EVENTS.CONSOLE_RECORDING_STOPPED, recording);
+  _onRecordingStateChange: function (state, model) {
+    switch (state) {
+      // Fired when a RecordingModel was just created from the front
+      case "recording-starting":
+        // When a recording is just starting, store it internally
+        this._recordings.push(model);
+        this.emit(EVENTS.RECORDING_WILL_START, model);
+        break;
+      // Fired when a RecordingModel has started recording
+      case "recording-started":
+        this.emit(EVENTS.RECORDING_STARTED, model);
+        break;
+      // Fired when a RecordingModel is no longer recording, and
+      // starting to fetch all the profiler data
+      case "recording-stopping":
+        this.emit(EVENTS.RECORDING_WILL_STOP, model);
+        break;
+      // Fired when a RecordingModel is finished fetching all of its data
+      case "recording-stopped":
+        this.emit(EVENTS.RECORDING_STOPPED, model);
+        break;
+    }
   },
 
   /**
@@ -468,6 +465,42 @@ let PerformanceController = {
    */
   getRecordings: function () {
     return this._recordings;
+  },
+
+  /**
+   * Utility method taking the currently selected recording item's features, or optionally passed
+   * in recording item, as well as the actor support on the server, returning a boolean
+   * indicating if the requirements pass or not. Used to toggle features' visibility mostly.
+   *
+   * @option {Array<string>} features
+   *         An array of strings indicating what configuration is needed on the recording
+   *         model, like `withTicks`, or `withMemory`.
+   * @option {Array<string>} actors
+   *         An array of strings indicating what actors must exist.
+   * @option {boolean} mustBeCompleted
+   *         A boolean indicating whether the recording must be either completed or not.
+   *         Setting to undefined will allow either state.
+   * @param {RecordingModel} recording
+   *        An optional recording model to use instead of the currently selected.
+   *
+   * @return boolean
+   */
+  isFeatureSupported: function ({ features, actors, mustBeCompleted }, recording) {
+    recording = recording || this.getCurrentRecording();
+    let recordingConfig = recording ? recording.getConfiguration() : {};
+    let currentCompletedState = recording ? recording.isCompleted() : void 0;
+    let actorsSupported = gFront.getActorSupport();
+
+    if (mustBeCompleted != null && mustBeCompleted !== currentCompletedState) {
+      return false;
+    }
+    if (actors && !actors.every(a => actorsSupported[a])) {
+      return false;
+    }
+    if (features && !features.every(f => recordingConfig[f])) {
+      return false;
+    }
+    return true;
   },
 
   toString: () => "[object PerformanceController]"

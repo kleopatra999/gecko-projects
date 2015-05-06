@@ -13,7 +13,9 @@
 #include "nsCharSeparatedTokenizer.h"
 #include "nsThreadUtils.h"
 #include "nsIRunnable.h"
+#include "nsIWritablePropertyBag2.h"
 #include "mozIGeckoMediaPluginService.h"
+#include "mozilla/ipc/GeckoChildProcessHost.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/unused.h"
 #include "nsIObserverService.h"
@@ -25,6 +27,7 @@
 
 #include "mozilla/dom/CrashReporterParent.h"
 using mozilla::dom::CrashReporterParent;
+using mozilla::ipc::GeckoChildProcessHost;
 
 #ifdef MOZ_CRASHREPORTER
 using CrashReporter::AnnotationTable;
@@ -55,6 +58,7 @@ GMPParent::GMPParent()
   , mDeleteProcessOnlyOnUnload(false)
   , mAbnormalShutdownInProgress(false)
   , mIsBlockingDeletion(false)
+  , mCanDecrypt(false)
   , mGMPContentChildCount(0)
   , mAsyncShutdownRequired(false)
   , mAsyncShutdownInProgress(false)
@@ -63,9 +67,7 @@ GMPParent::GMPParent()
 #endif
 {
   LOGD("GMPParent ctor");
-  // Use the parent address to identify it.
-  // We could use any unique-to-the-parent value.
-  mPluginId.AppendInt(reinterpret_cast<uint64_t>(this));
+  mPluginId = GeckoChildProcessHost::GetUniqueID();
 }
 
 GMPParent::~GMPParent()
@@ -498,23 +500,22 @@ GMPParent::GetCrashID(nsString& aResult)
 }
 
 static void
-GMPNotifyObservers(const nsACString& aPluginId, const nsACString& aPluginName, const nsAString& aPluginDumpId)
+GMPNotifyObservers(const uint32_t aPluginID, const nsACString& aPluginName, const nsAString& aPluginDumpID)
 {
   nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
-  if (obs) {
-    nsString id;
-    AppendUTF8toUTF16(aPluginId, id);
-    id.Append(NS_LITERAL_STRING(" "));
-    AppendUTF8toUTF16(aPluginName, id);
-    id.Append(NS_LITERAL_STRING(" "));
-    id.Append(aPluginDumpId);
-    obs->NotifyObservers(nullptr, "gmp-plugin-crash", id.Data());
+  nsCOMPtr<nsIWritablePropertyBag2> propbag =
+    do_CreateInstance("@mozilla.org/hash-property-bag;1");
+  if (obs && propbag) {
+    propbag->SetPropertyAsUint32(NS_LITERAL_STRING("pluginID"), aPluginID);
+    propbag->SetPropertyAsACString(NS_LITERAL_STRING("pluginName"), aPluginName);
+    propbag->SetPropertyAsAString(NS_LITERAL_STRING("pluginDumpID"), aPluginDumpID);
+    obs->NotifyObservers(propbag, "gmp-plugin-crash", nullptr);
   }
 
   nsRefPtr<gmp::GeckoMediaPluginService> service =
     gmp::GeckoMediaPluginService::GetGeckoMediaPluginService();
   if (service) {
-    service->RunPluginCrashCallbacks(aPluginId, aPluginName, aPluginDumpId);
+    service->RunPluginCrashCallbacks(aPluginID, aPluginName);
   }
 }
 #endif
@@ -756,16 +757,20 @@ GMPParent::ReadGMPMetaData()
       }
     }
 
+    if (cap->mAPIName.EqualsLiteral(GMP_API_DECRYPTOR) ||
+        cap->mAPIName.EqualsLiteral(GMP_API_DECRYPTOR_COMPAT)) {
+      mCanDecrypt = true;
+
 #if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
-    if (cap->mAPIName.EqualsLiteral(GMP_API_DECRYPTOR) &&
-        !mozilla::SandboxInfo::Get().CanSandboxMedia()) {
-      printf_stderr("GMPParent::ReadGMPMetaData: Plugin \"%s\" is an EME CDM"
-                    " but this system can't sandbox it; not loading.\n",
-                    mDisplayName.get());
-      delete cap;
-      return NS_ERROR_FAILURE;
-    }
+      if (!mozilla::SandboxInfo::Get().CanSandboxMedia()) {
+        printf_stderr("GMPParent::ReadGMPMetaData: Plugin \"%s\" is an EME CDM"
+                      " but this system can't sandbox it; not loading.\n",
+                      mDisplayName.get());
+        delete cap;
+        return NS_ERROR_FAILURE;
+      }
 #endif
+    }
 
     mCapabilities.AppendElement(cap);
   }
@@ -780,7 +785,12 @@ GMPParent::ReadGMPMetaData()
 bool
 GMPParent::CanBeSharedCrossNodeIds() const
 {
-  return mNodeId.IsEmpty();
+  return mNodeId.IsEmpty() &&
+    // XXX bug 1159300 hack -- maybe remove after openh264 1.4
+    // We don't want to use CDM decoders for non-encrypted playback
+    // just yet; especially not for WebRTC. Don't allow CDMs to be used
+    // without a node ID.
+    !mCanDecrypt;
 }
 
 bool
@@ -810,7 +820,7 @@ GMPParent::GetVersion() const
   return mVersion;
 }
 
-const nsCString&
+const uint32_t
 GMPParent::GetPluginId() const
 {
   return mPluginId;

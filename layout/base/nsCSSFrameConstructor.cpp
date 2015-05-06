@@ -1394,18 +1394,6 @@ nsFrameConstructorSaveState::~nsFrameConstructorSaveState()
   }
 }
 
-static
-bool IsBorderCollapse(nsIFrame* aFrame)
-{
-  for (nsIFrame* frame = aFrame; frame; frame = frame->GetParent()) {
-    if (nsGkAtoms::tableFrame == frame->GetType()) {
-      return ((nsTableFrame*)frame)->IsBorderCollapse();
-    }
-  }
-  NS_ASSERTION(false, "program error");
-  return false;
-}
-
 /**
  * Moves aFrameList from aOldParent to aNewParent.  This updates the parent
  * pointer of the frames in the list, and reparents their views as needed.
@@ -2187,7 +2175,8 @@ nsCSSFrameConstructor::ConstructTableCell(nsFrameConstructorState& aState,
   nsStyleContext* const styleContext = aItem.mStyleContext;
   const uint32_t nameSpaceID = aItem.mNameSpaceID;
 
-  bool borderCollapse = IsBorderCollapse(aParentFrame);
+  nsTableFrame* tableFrame =
+    static_cast<nsTableRowFrame*>(aParentFrame)->GetTableFrame();
   nsContainerFrame* newFrame;
   // <mtable> is border separate in mathml.css and the MathML code doesn't implement
   // border collapse. For those users who style <mtable> with border collapse,
@@ -2196,13 +2185,14 @@ nsCSSFrameConstructor::ConstructTableCell(nsFrameConstructorState& aState,
   // table code, and so we can freely mix <mtable> with <mtr> or <tr>, <mtd> or <td>.
   // What will happen is just that non-MathML frames won't understand MathML attributes
   // and will therefore miss the special handling that the MathML code does.
-  if (kNameSpaceID_MathML == nameSpaceID && !borderCollapse)
-    newFrame = NS_NewMathMLmtdFrame(mPresShell, styleContext);
-  else
+  if (kNameSpaceID_MathML == nameSpaceID && !tableFrame->IsBorderCollapse()) {
+    newFrame = NS_NewMathMLmtdFrame(mPresShell, styleContext, tableFrame);
+  } else {
     // Warning: If you change this and add a wrapper frame around table cell
     // frames, make sure Bug 368554 doesn't regress!
     // See IsInAutoWidthTableCellForQuirk() in nsImageFrame.cpp.
-    newFrame = NS_NewTableCellFrame(mPresShell, styleContext, borderCollapse);
+    newFrame = NS_NewTableCellFrame(mPresShell, styleContext, tableFrame);
+  }
 
   // Initialize the table cell frame
   InitAndRestoreFrame(aState, content, aParentFrame, newFrame);
@@ -2698,7 +2688,7 @@ nsCSSFrameConstructor::ConstructRootFrame()
   nsContainerFrame::SyncFrameViewProperties(mPresShell->GetPresContext(), viewportFrame,
                                             viewportPseudoStyle, rootView);
   nsContainerFrame::SyncWindowProperties(mPresShell->GetPresContext(), viewportFrame,
-                                         rootView);
+                                         rootView, nullptr, nsContainerFrame::SET_ASYNC);
 
   // Make it an absolute container for fixed-pos elements
   viewportFrame->AddStateBits(NS_FRAME_CAN_HAVE_ABSPOS_CHILDREN);
@@ -8699,8 +8689,10 @@ nsCSSFrameConstructor::CreateContinuingFrame(nsPresContext*    aPresContext,
     // Warning: If you change this and add a wrapper frame around table cell
     // frames, make sure Bug 368554 doesn't regress!
     // See IsInAutoWidthTableCellForQuirk() in nsImageFrame.cpp.
+    nsTableFrame* tableFrame =
+      static_cast<nsTableRowFrame*>(aParentFrame)->GetTableFrame();
     nsTableCellFrame* cellFrame =
-      NS_NewTableCellFrame(shell, styleContext, IsBorderCollapse(aParentFrame));
+      NS_NewTableCellFrame(shell, styleContext, tableFrame);
 
     cellFrame->Init(content, aParentFrame, aFrame);
     if (cellFrame->GetStateBits() & NS_FRAME_CAN_HAVE_ABSPOS_CHILDREN) {
@@ -9587,7 +9579,7 @@ nsCSSFrameConstructor::CreateNeededAnonFlexOrGridItems(
   FCItemIterator iter(aItems);
   do {
     // Advance iter past children that don't want to be wrapped
-    if (iter.SkipItemsThatDontNeedAnonFlexOrGridItem(aState)) {
+    if (iter.SkipItemsThatDontNeedAnonFlexOrGridItem(aState, containerType)) {
       // Hit the end of the items without finding any remaining children that
       // need to be wrapped. We're finished!
       return;
@@ -9609,7 +9601,8 @@ nsCSSFrameConstructor::CreateNeededAnonFlexOrGridItems(
       FCItemIterator afterWhitespaceIter(iter);
       bool hitEnd = afterWhitespaceIter.SkipWhitespace(aState);
       bool nextChildNeedsAnonItem =
-        !hitEnd && afterWhitespaceIter.item().NeedsAnonFlexOrGridItem(aState);
+        !hitEnd && afterWhitespaceIter.item().NeedsAnonFlexOrGridItem(aState,
+                                                containerType);
 
       if (!nextChildNeedsAnonItem) {
         // There's nothing after the whitespace that we need to wrap, so we
@@ -9623,7 +9616,7 @@ nsCSSFrameConstructor::CreateNeededAnonFlexOrGridItems(
         // we jump back to the beginning of the loop to skip over that child
         // (and anything else non-wrappable after it)
         MOZ_ASSERT(!iter.IsDone() &&
-                   !iter.item().NeedsAnonFlexOrGridItem(aState),
+                   !iter.item().NeedsAnonFlexOrGridItem(aState, containerType),
                    "hitEnd and/or nextChildNeedsAnonItem lied");
         continue;
       }
@@ -9633,7 +9626,7 @@ nsCSSFrameConstructor::CreateNeededAnonFlexOrGridItems(
     // anonymous flex/grid item. Now we see how many children after it also want
     // to be wrapped in an anonymous flex/grid item.
     FCItemIterator endIter(iter); // iterator to find the end of the group
-    endIter.SkipItemsThatNeedAnonFlexOrGridItem(aState);
+    endIter.SkipItemsThatNeedAnonFlexOrGridItem(aState, containerType);
 
     NS_ASSERTION(iter != endIter,
                  "Should've had at least one wrappable child to seek past");
@@ -9813,23 +9806,6 @@ nsCSSFrameConstructor::WrapItemsInPseudoRubyLevelContainer(
     // whether contentEndIter has been done.
     RubyWhitespaceType whitespaceType =
       InterpretRubyWhitespace(aState, endIter, contentEndIter);
-    if ((whitespaceType == eRubyInterLeafWhitespace ||
-         whitespaceType == eRubyInterSegmentWhitespace) &&
-        !endIter.item().mStyleContext->ShouldSuppressLineBreak()) {
-      // It is possible that a whitespace is not contained by any ruby
-      // box before we wrap it, which makes the ShouldSuppressLineBreak
-      // bit not be set properly before.  Hence we have to get a new
-      // context which suppress line break here.
-      nsStyleContext* oldContext = endIter.item().mStyleContext;
-      nsRefPtr<nsStyleContext> newContext = mPresShell->StyleSet()->
-        ResolveStyleForNonElement(oldContext->GetParent(), true);
-      MOZ_ASSERT(newContext->ShouldSuppressLineBreak());
-      for (FCItemIterator iter(endIter); iter != contentEndIter; iter.Next()) {
-        MOZ_ASSERT(iter.item().mStyleContext == oldContext,
-                   "all whitespaces should share the same style context");
-        iter.item().mStyleContext = newContext;
-      }
-    }
     if (whitespaceType == eRubyInterLevelWhitespace) {
       // Remove inter-level whitespace.
       bool atStart = (aIter == endIter);
@@ -11856,8 +11832,9 @@ nsCSSFrameConstructor::WipeContainingBlock(nsFrameConstructorState& aState,
 
     // Check if we're adding to-be-wrapped content right *after* an existing
     // anonymous flex or grid item (which would need to absorb this content).
+    nsIAtom* containerType = aFrame->GetType();
     if (aPrevSibling && IsAnonymousFlexOrGridItem(aPrevSibling) &&
-        iter.item().NeedsAnonFlexOrGridItem(aState)) {
+        iter.item().NeedsAnonFlexOrGridItem(aState, containerType)) {
       RecreateFramesForContent(aFrame->GetContent(), true,
                                REMOVE_FOR_RECONSTRUCTION, nullptr);
       return true;
@@ -11869,7 +11846,7 @@ nsCSSFrameConstructor::WipeContainingBlock(nsFrameConstructorState& aState,
       // Jump to the last entry in the list
       iter.SetToEnd();
       iter.Prev();
-      if (iter.item().NeedsAnonFlexOrGridItem(aState)) {
+      if (iter.item().NeedsAnonFlexOrGridItem(aState, containerType)) {
         RecreateFramesForContent(aFrame->GetContent(), true,
                                  REMOVE_FOR_RECONSTRUCTION, nullptr);
         return true;
@@ -11894,10 +11871,11 @@ nsCSSFrameConstructor::WipeContainingBlock(nsFrameConstructorState& aState,
     FCItemIterator iter(aItems);
     // Skip over things that _do_ need an anonymous flex item, because
     // they're perfectly happy to go here -- they won't cause a reframe.
-    if (!iter.SkipItemsThatNeedAnonFlexOrGridItem(aState)) {
+    nsIFrame* containerFrame = aFrame->GetParent();
+    if (!iter.SkipItemsThatNeedAnonFlexOrGridItem(aState,
+                                                  containerFrame->GetType())) {
       // We hit something that _doesn't_ need an anonymous flex item!
       // Rebuild the flex container to bust it out.
-      nsIFrame* containerFrame = aFrame->GetParent();
       RecreateFramesForContent(containerFrame->GetContent(), true,
                                REMOVE_FOR_RECONSTRUCTION, nullptr);
       return true;
@@ -12349,14 +12327,17 @@ Iterator::SkipItemsNotWantingParentType(ParentType aParentType)
 
 bool
 nsCSSFrameConstructor::FrameConstructionItem::
-  NeedsAnonFlexOrGridItem(const nsFrameConstructorState& aState)
+  NeedsAnonFlexOrGridItem(const nsFrameConstructorState& aState,
+                          nsIAtom* aContainerType)
 {
   if (mFCData->mBits & FCDATA_IS_LINE_PARTICIPANT) {
     // This will be an inline non-replaced box.
     return true;
   }
 
-  if (!(mFCData->mBits & FCDATA_DISALLOW_OUT_OF_FLOW) &&
+  // Bug 874718: Flex containers still wrap placeholders; Grid containers don't.
+  if (aContainerType == nsGkAtoms::flexContainerFrame &&
+      !(mFCData->mBits & FCDATA_DISALLOW_OUT_OF_FLOW) &&
       aState.GetGeometricParent(mStyleContext->StyleDisplay(), nullptr)) {
     // We're abspos or fixedpos, which means we'll spawn a placeholder which
     // we'll need to wrap in an anonymous flex item.  So, we just treat
@@ -12371,10 +12352,11 @@ nsCSSFrameConstructor::FrameConstructionItem::
 inline bool
 nsCSSFrameConstructor::FrameConstructionItemList::
 Iterator::SkipItemsThatNeedAnonFlexOrGridItem(
-  const nsFrameConstructorState& aState)
+  const nsFrameConstructorState& aState,
+  nsIAtom* aContainerType)
 {
   NS_PRECONDITION(!IsDone(), "Shouldn't be done yet");
-  while (item().NeedsAnonFlexOrGridItem(aState)) {
+  while (item().NeedsAnonFlexOrGridItem(aState, aContainerType)) {
     Next();
     if (IsDone()) {
       return true;
@@ -12386,10 +12368,11 @@ Iterator::SkipItemsThatNeedAnonFlexOrGridItem(
 inline bool
 nsCSSFrameConstructor::FrameConstructionItemList::
 Iterator::SkipItemsThatDontNeedAnonFlexOrGridItem(
-  const nsFrameConstructorState& aState)
+  const nsFrameConstructorState& aState,
+  nsIAtom* aContainerType)
 {
   NS_PRECONDITION(!IsDone(), "Shouldn't be done yet");
-  while (!(item().NeedsAnonFlexOrGridItem(aState))) {
+  while (!(item().NeedsAnonFlexOrGridItem(aState, aContainerType))) {
     Next();
     if (IsDone()) {
       return true;

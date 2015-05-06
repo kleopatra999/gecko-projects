@@ -91,6 +91,7 @@
 #include "InputData.h"
 #include "VibrancyManager.h"
 #include "nsNativeThemeCocoa.h"
+#include "nsIDOMWindowUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::layers;
@@ -1185,6 +1186,42 @@ nsresult nsChildView::SynthesizeNativeMouseEvent(LayoutDeviceIntPoint aPoint,
   NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
 }
 
+nsresult nsChildView::SynthesizeNativeMouseScrollEvent(mozilla::LayoutDeviceIntPoint aPoint,
+                                                       uint32_t aNativeMessage,
+                                                       double aDeltaX,
+                                                       double aDeltaY,
+                                                       double aDeltaZ,
+                                                       uint32_t aModifierFlags,
+                                                       uint32_t aAdditionalFlags,
+                                                       nsIObserver* aObserver)
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NSRESULT;
+
+  AutoObserverNotifier notifier(aObserver, "mousescrollevent");
+
+  NSPoint pt =
+    nsCocoaUtils::DevPixelsToCocoaPoints(aPoint, BackingScaleFactor());
+
+  // Move the mouse cursor to the requested position and reconnect it to the mouse.
+  CGWarpMouseCursorPosition(NSPointToCGPoint(pt));
+  CGAssociateMouseAndMouseCursorPosition(true);
+
+  // Mostly copied from http://stackoverflow.com/a/6130349
+  CGScrollEventUnit units =
+    (aAdditionalFlags & nsIDOMWindowUtils::MOUSESCROLL_SCROLL_LINES)
+    ? kCGScrollEventUnitLine : kCGScrollEventUnitPixel;
+  CGEventRef cgEvent = CGEventCreateScrollWheelEvent(NULL, units, 3, aDeltaY, aDeltaX, aDeltaZ);
+  if (!cgEvent) {
+    return NS_ERROR_FAILURE;
+  }
+
+  CGEventPost(kCGHIDEventTap, cgEvent);
+  CFRelease(cgEvent);
+  return NS_OK;
+
+  NS_OBJC_END_TRY_ABORT_BLOCK_NSRESULT;
+}
+
 // First argument has to be an NSMenu representing the application's top-level
 // menu bar. The returned item is *not* retained.
 static NSMenuItem* NativeMenuItemWithLocation(NSMenu* menubar, NSString* locationString)
@@ -1484,6 +1521,17 @@ void nsChildView::ReportSizeEvent()
 }
 
 #pragma mark -
+
+nsIntPoint nsChildView::GetClientOffset()
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
+
+  NSPoint origin = [mView convertPoint:NSMakePoint(0, 0) toView:nil];
+  origin.y = [[mView window] frame].size.height - origin.y;
+  return CocoaPointsToDevPixels(origin);
+
+  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(nsIntPoint(0, 0));
+}
 
 //    Return the offset between this child view and the screen.
 //    @return       -- widget origin in device-pixel coords
@@ -4538,7 +4586,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   NSPoint windowEventLocation = nsCocoaUtils::EventLocationForWindow(aEvent, [self window]);
   NSPoint localEventLocation = [self convertPoint:windowEventLocation fromView:nil];
 
-  uint32_t msg = aEnter ? NS_MOUSE_ENTER : NS_MOUSE_EXIT;
+  uint32_t msg = aEnter ? NS_MOUSE_ENTER_WIDGET : NS_MOUSE_EXIT_WIDGET;
   WidgetMouseEvent event(true, msg, mGeckoChild, WidgetMouseEvent::eReal);
   event.refPoint = LayoutDeviceIntPoint::FromUntyped(
     mGeckoChild->CocoaPointsToDevPixels(localEventLocation));

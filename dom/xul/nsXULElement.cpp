@@ -34,6 +34,7 @@
 #include "nsIDOMXULSelectCntrlItemEl.h"
 #include "nsIDocument.h"
 #include "nsLayoutStylesheetCache.h"
+#include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStateManager.h"
 #include "mozilla/EventStates.h"
@@ -1599,13 +1600,17 @@ nsXULElement::LoadSrc()
         // Usually xul elements are used in chrome, which doesn't have
         // session history at all.
         slots->mFrameLoader = nsFrameLoader::Create(this, false);
+        NS_ENSURE_TRUE(slots->mFrameLoader, NS_OK);
+
+        (new AsyncEventDispatcher(this,
+                                  NS_LITERAL_STRING("XULFrameLoaderCreated"),
+                                  /* aBubbles */ true))->RunDOMEventWhenSafe();
+
         if (AttrValueIs(kNameSpaceID_None, nsGkAtoms::prerendered,
                         NS_LITERAL_STRING("true"), eIgnoreCase)) {
             nsresult rv = slots->mFrameLoader->SetIsPrerendered();
             NS_ENSURE_SUCCESS(rv,rv);
         }
-
-        NS_ENSURE_TRUE(slots->mFrameLoader, NS_OK);
     }
 
     return slots->mFrameLoader->LoadFrame();

@@ -6456,8 +6456,10 @@ js::NewCompartment(JSContext* cx, Zone* zone, JSPrincipals* principals,
 
         const JSPrincipals* trusted = rt->trustedPrincipals();
         bool isSystem = principals && principals == trusted;
-        if (!zone->init(isSystem))
+        if (!zone->init(isSystem)) {
+            ReportOutOfMemory(cx);
             return nullptr;
+        }
     }
 
     ScopedJSDeletePtr<JSCompartment> compartment(cx->new_<JSCompartment>(zone, options));
@@ -6815,6 +6817,13 @@ JS::AssertGCThingMustBeTenured(JSObject* obj)
 }
 
 JS_FRIEND_API(void)
+JS::AssertGCThingIsNotAnObjectSubclass(Cell* cell)
+{
+    MOZ_ASSERT(cell);
+    MOZ_ASSERT(cell->getTraceKind() != JSTRACE_OBJECT);
+}
+
+JS_FRIEND_API(void)
 js::gc::AssertGCThingHasType(js::gc::Cell* cell, JSGCTraceKind kind)
 {
     if (!cell)
@@ -7099,7 +7108,7 @@ JS::IncrementalReferenceBarrier(GCCellPtr thing)
     if (!thing)
         return;
 
-    if (thing.isString() && StringIsPermanentAtom(thing.toString()))
+    if (thing.isString() && thing.toString()->isPermanentAtom())
         return;
 
 #ifdef DEBUG

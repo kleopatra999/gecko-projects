@@ -22,6 +22,7 @@ const RecordingModel = function (options={}) {
   this._console = options.console || false;
 
   this._configuration = {
+    withMarkers: options.withMarkers || false,
     withTicks: options.withTicks || false,
     withMemory: options.withMemory || false,
     withAllocations: options.withAllocations || false,
@@ -37,6 +38,7 @@ RecordingModel.prototype = {
   _console: false,
   _imported: false,
   _recording: false,
+  _completed: false,
   _profilerStartTime: 0,
   _timelineStartTime: 0,
   _memoryStartTime: 0,
@@ -70,6 +72,7 @@ RecordingModel.prototype = {
     this._ticks = recordingData.ticks;
     this._allocations = recordingData.allocations;
     this._profile = recordingData.profile;
+    this._configuration = recordingData.configuration || {};
   }),
 
   /**
@@ -92,7 +95,7 @@ RecordingModel.prototype = {
     // However, we also want to update the view with the elapsed time
     // even when the actor is not generating data. To do this we get
     // the local time and use it to compute a reasonable elapsed time.
-    this._localStartTime = Date.now()
+    this._localStartTime = Date.now();
 
     this._profilerStartTime = info.profilerStartTime;
     this._timelineStartTime = info.timelineStartTime;
@@ -107,18 +110,29 @@ RecordingModel.prototype = {
   },
 
   /**
+   * Called when the signal was sent to the front to no longer record more
+   * data, and begin fetching the data. There's some delay during fetching,
+   * even though the recording is stopped, the model is not yet completed until
+   * all the data is fetched.
+   */
+  _onStoppingRecording: function (endTime) {
+    this._duration = endTime - this._localStartTime;
+    this._recording = false;
+  },
+
+  /**
    * Sets results available from stopping a recording from SharedPerformanceConnection.
    * Should only be called by SharedPerformanceConnection.
    */
   _onStopRecording: Task.async(function *(info) {
     this._profile = info.profile;
-    this._duration = info.profilerEndTime - this._profilerStartTime;
-    this._recording = false;
+    this._completed = true;
 
     // We filter out all samples that fall out of current profile's range
     // since the profiler is continuously running. Because of this, sample
     // times are not guaranteed to have a zero epoch, so offset the
     // timestamps.
+    // TODO move this into FakeProfilerFront in ./actors.js after bug 1154115
     RecordingUtils.offsetSampleTimes(this._profile, this._profilerStartTime);
 
     // Markers need to be sorted ascending by time, to be properly displayed
@@ -226,7 +240,8 @@ RecordingModel.prototype = {
     let ticks = this.getTicks();
     let allocations = this.getAllocations();
     let profile = this.getProfile();
-    return { label, duration, markers, frames, memory, ticks, allocations, profile };
+    let configuration = this.getConfiguration();
+    return { label, duration, markers, frames, memory, ticks, allocations, profile, configuration };
   },
 
   /**
@@ -247,7 +262,19 @@ RecordingModel.prototype = {
 
   /**
    * Returns a boolean indicating whether or not this recording model
+   * has finished recording.
+   * There is some delay in fetching data between when the recording stops, and
+   * when the recording is considered completed once it has all the profiler and timeline data.
+   */
+  isCompleted: function () {
+    return this._completed || this.isImported();
+  },
+
+  /**
+   * Returns a boolean indicating whether or not this recording model
    * is recording.
+   * A model may no longer be recording, yet still not have the profiler data. In that
+   * case, use `isCompleted()`.
    */
   isRecording: function () {
     return this._recording;
@@ -259,14 +286,17 @@ RecordingModel.prototype = {
   addTimelineData: function (eventName, ...data) {
     // If this model isn't currently recording,
     // ignore the timeline data.
-    if (!this._recording) {
+    if (!this.isRecording()) {
       return;
     }
+
+    let config = this.getConfiguration();
 
     switch (eventName) {
       // Accumulate timeline markers into an array. Furthermore, the timestamps
       // do not have a zero epoch, so offset all of them by the start time.
       case "markers": {
+        if (!config.withMarkers) { break; }
         let [markers] = data;
         RecordingUtils.offsetMarkerTimes(markers, this._timelineStartTime);
         Array.prototype.push.apply(this._markers, markers);
@@ -274,6 +304,7 @@ RecordingModel.prototype = {
       }
       // Accumulate stack frames into an array.
       case "frames": {
+        if (!config.withMarkers) { break; }
         let [, frames] = data;
         Array.prototype.push.apply(this._frames, frames);
         break;
@@ -281,6 +312,7 @@ RecordingModel.prototype = {
       // Accumulate memory measurements into an array. Furthermore, the timestamp
       // does not have a zero epoch, so offset it by the actor's start time.
       case "memory": {
+        if (!config.withMemory) { break; }
         let [currentTime, measurement] = data;
         this._memory.push({
           delta: currentTime - this._timelineStartTime,
@@ -290,6 +322,7 @@ RecordingModel.prototype = {
       }
       // Save the accumulated refresh driver ticks.
       case "ticks": {
+        if (!config.withTicks) { break; }
         let [, timestamps] = data;
         this._ticks = timestamps;
         break;
@@ -298,6 +331,7 @@ RecordingModel.prototype = {
       // do not have a zero epoch, and are microseconds instead of milliseconds,
       // so offset all of them by the start time, also converting from µs to ms.
       case "allocations": {
+        if (!config.withAllocations) { break; }
         let [{ sites, timestamps, frames, counts }] = data;
         let timeOffset = this._memoryStartTime * 1000;
         let timeScale = 1000;

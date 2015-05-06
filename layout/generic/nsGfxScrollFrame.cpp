@@ -352,10 +352,16 @@ nsHTMLScrollFrame::TryLayout(ScrollReflowState* aState,
     ComputeInsideBorderSize(aState, desiredInsideBorderSize);
   nsSize scrollPortSize = nsSize(std::max(0, aState->mInsideBorderSize.width - vScrollbarDesiredWidth),
                                  std::max(0, aState->mInsideBorderSize.height - hScrollbarDesiredHeight));
+
   nsSize visualScrollPortSize = scrollPortSize;
   nsIPresShell* presShell = PresContext()->PresShell();
   if (mHelper.mIsRoot && presShell->IsScrollPositionClampingScrollPortSizeSet()) {
-    visualScrollPortSize = presShell->GetScrollPositionClampingScrollPortSize();
+    nsSize compositionSize = nsLayoutUtils::CalculateCompositionSizeForFrame(this, false);
+    float resolution = presShell->GetResolution();
+    compositionSize.width /= resolution;
+    compositionSize.height /= resolution;
+    visualScrollPortSize = nsSize(std::max(0, compositionSize.width - vScrollbarDesiredWidth),
+                                  std::max(0, compositionSize.height - hScrollbarDesiredHeight));
   }
 
   if (!aForce) {
@@ -3007,26 +3013,24 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       inactiveRegionItem->AddInactiveScrollPort(mScrollPort + aBuilder->ToReferenceFrame(mOuter));
     }
 
-    // In case we are not using displayport or the nsDisplayScrollLayers are
-    // flattened during visibility computation, we still need to export the
-    // metadata about this scroll box to the compositor process.
-    nsDisplayScrollInfoLayer* layerItem = new (aBuilder) nsDisplayScrollInfoLayer(
-      aBuilder, mScrolledFrame, mOuter);
-
-    nsDisplayList* positionedDescendants = scrolledContent.PositionedDescendants();
-    nsDisplayList* destinationList = nullptr;
-    int32_t zindex =
-      MaxZIndexInListOfItemsContainedInFrame(positionedDescendants, mOuter);
-    if (zindex >= 0) {
-      layerItem->SetOverrideZIndex(zindex);
-      destinationList = positionedDescendants;
-    } else {
-      destinationList = scrolledContent.Outlines();
-    }
     if (inactiveRegionItem) {
+      nsDisplayList* positionedDescendants = scrolledContent.PositionedDescendants();
+      nsDisplayList* destinationList = nullptr;
+      int32_t zindex =
+        MaxZIndexInListOfItemsContainedInFrame(positionedDescendants, mOuter);
+      if (zindex >= 0) {
+        destinationList = positionedDescendants;
+      } else {
+        destinationList = scrolledContent.Outlines();
+      }
       destinationList->AppendNewToTop(inactiveRegionItem);
     }
-    destinationList->AppendNewToTop(layerItem);
+
+    if (aBuilder->ShouldBuildScrollInfoItemsForHoisting()) {
+      aBuilder->AppendNewScrollInfoItemForHoisting(
+        new (aBuilder) nsDisplayScrollInfoLayer(aBuilder, mScrolledFrame,
+                                                mOuter));
+    }
   }
   // Now display overlay scrollbars and the resizer, if we have one.
   AppendScrollPartsTo(aBuilder, aDirtyRect, scrolledContent, usingDisplayport,
@@ -4737,8 +4741,20 @@ ScrollFrameHelper::LayoutScrollbars(nsBoxLayoutState& aState,
   NS_ASSERTION(!mSupppressScrollbarUpdate,
                "This should have been suppressed");
 
+  nsIPresShell* presShell = mOuter->PresContext()->PresShell();
+
   bool hasResizer = HasResizer();
   bool scrollbarOnLeft = !IsScrollbarOnRight();
+  bool overlayScrollBarsWithZoom =
+    mIsRoot && LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars) &&
+    presShell->IsScrollPositionClampingScrollPortSizeSet();
+
+  nsSize scrollPortClampingSize = mScrollPort.Size();
+  double res = 1.0;
+  if (overlayScrollBarsWithZoom) {
+    scrollPortClampingSize = presShell->GetScrollPositionClampingScrollPortSize();
+    res = presShell->GetCumulativeResolution();
+  }
 
   // place the scrollcorner
   if (mScrollCornerBox || mResizerBox) {
@@ -4801,8 +4817,11 @@ ScrollFrameHelper::LayoutScrollbars(nsBoxLayoutState& aState,
   if (mVScrollbarBox) {
     NS_PRECONDITION(mVScrollbarBox->IsBoxFrame(), "Must be a box frame!");
     vRect = mScrollPort;
+    if (overlayScrollBarsWithZoom) {
+      vRect.height = NSToCoordRound(res * scrollPortClampingSize.height);
+    }
     vRect.width = aContentArea.width - mScrollPort.width;
-    vRect.x = scrollbarOnLeft ? aContentArea.x : mScrollPort.XMost();
+    vRect.x = scrollbarOnLeft ? aContentArea.x : mScrollPort.x + NSToCoordRound(res * scrollPortClampingSize.width);
     if (mHasVerticalScrollbar) {
       nsMargin margin;
       mVScrollbarBox->GetMargin(margin);
@@ -4815,8 +4834,11 @@ ScrollFrameHelper::LayoutScrollbars(nsBoxLayoutState& aState,
   if (mHScrollbarBox) {
     NS_PRECONDITION(mHScrollbarBox->IsBoxFrame(), "Must be a box frame!");
     hRect = mScrollPort;
+    if (overlayScrollBarsWithZoom) {
+      hRect.width = NSToCoordRound(res * scrollPortClampingSize.width);
+    }
     hRect.height = aContentArea.height - mScrollPort.height;
-    hRect.y = true ? mScrollPort.YMost() : aContentArea.y;
+    hRect.y = mScrollPort.y + NSToCoordRound(res * scrollPortClampingSize.height);
     if (mHasHorizontalScrollbar) {
       nsMargin margin;
       mHScrollbarBox->GetMargin(margin);
@@ -4882,12 +4904,12 @@ ScrollFrameHelper::SetCoordAttribute(nsIContent* aContent, nsIAtom* aAtom,
   DebugOnly<nsWeakPtr> weakShell(
     do_GetWeakReference(mOuter->PresContext()->PresShell()));
   // convert to pixels
-  int32_t pizelSize = nsPresContext::AppUnitsToIntCSSPixels(aSize);
+  int32_t pixelSize = nsPresContext::AppUnitsToIntCSSPixels(aSize);
 
   // only set the attribute if it changed.
 
   nsAutoString newValue;
-  newValue.AppendInt(pizelSize);
+  newValue.AppendInt(pixelSize);
 
   if (aContent->AttrValueIs(kNameSpaceID_None, aAtom, newValue, eCaseMatters))
     return;

@@ -466,6 +466,14 @@ public:
   virtual nsresult SynthesizeNativeMouseMove(mozilla::LayoutDeviceIntPoint aPoint,
                                              nsIObserver* aObserver) override
   { return SynthesizeNativeMouseEvent(aPoint, NSMouseMoved, 0, aObserver); }
+  virtual nsresult SynthesizeNativeMouseScrollEvent(mozilla::LayoutDeviceIntPoint aPoint,
+                                                    uint32_t aNativeMessage,
+                                                    double aDeltaX,
+                                                    double aDeltaY,
+                                                    double aDeltaZ,
+                                                    uint32_t aModifierFlags,
+                                                    uint32_t aAdditionalFlags,
+                                                    nsIObserver* aObserver) override;
 
   // Mac specific methods
   
@@ -542,6 +550,8 @@ public:
   NS_IMETHOD SetPluginFocused(bool& aFocused) override;
 
   bool IsPluginFocused() { return mPluginFocused; }
+
+  virtual nsIntPoint GetClientOffset() override;
 
 protected:
   virtual ~nsChildView();

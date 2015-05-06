@@ -806,12 +806,15 @@ ContentChild::InitXPCOM()
         NS_WARNING("Couldn't register console listener for child process");
 
     bool isOffline, isLangRTL;
+    bool isConnected;
     ClipboardCapabilities clipboardCaps;
     DomainPolicyClone domainPolicy;
 
-    SendGetXPCOMProcessAttributes(&isOffline, &isLangRTL, &mAvailableDictionaries,
+    SendGetXPCOMProcessAttributes(&isOffline, &isConnected,
+                                  &isLangRTL, &mAvailableDictionaries,
                                   &clipboardCaps, &domainPolicy);
     RecvSetOffline(isOffline);
+    RecvSetConnectivity(isConnected);
     RecvBidiKeyboardNotify(isLangRTL);
 
     // Create the CPOW manager as soon as possible.
@@ -1883,6 +1886,18 @@ ContentChild::RecvSetOffline(const bool& offline)
     return true;
 }
 
+bool
+ContentChild::RecvSetConnectivity(const bool& connectivity)
+{
+    nsCOMPtr<nsIIOService> io(do_GetIOService());
+    nsCOMPtr<nsIIOServiceInternal> ioInternal(do_QueryInterface(io));
+    NS_ASSERTION(ioInternal, "IO Service can not be null");
+
+    ioInternal->SetConnectivity(connectivity);
+
+    return true;
+}
+
 void
 ContentChild::ActorDestroy(ActorDestroyReason why)
 {
@@ -2342,6 +2357,21 @@ ContentChild::RecvFileSystemUpdate(const nsString& aFsName,
     unused << aIsUnmounting;
     unused << aIsRemovable;
     unused << aIsHotSwappable;
+#endif
+    return true;
+}
+
+bool
+ContentChild::RecvVolumeRemoved(const nsString& aFsName)
+{
+#ifdef MOZ_WIDGET_GONK
+    nsRefPtr<nsVolumeService> vs = nsVolumeService::GetSingleton();
+    if (vs) {
+        vs->RemoveVolumeByName(aFsName);
+    }
+#else
+    // Remove warnings about unused arguments
+    unused << aFsName;
 #endif
     return true;
 }

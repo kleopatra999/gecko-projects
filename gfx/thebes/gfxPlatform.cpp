@@ -1333,7 +1333,7 @@ gfxPlatform::MakePlatformFont(const nsAString& aFontName,
     // using the data to instantiate the font, and taking responsibility
     // for freeing it when no longer required.
     if (aFontData) {
-        NS_Free((void*)aFontData);
+        free((void*)aFontData);
     }
     return nullptr;
 }
@@ -2344,7 +2344,7 @@ gfxPlatform::UsesOffMainThreadCompositing()
 already_AddRefed<mozilla::gfx::VsyncSource>
 gfxPlatform::CreateHardwareVsyncSource()
 {
-  NS_WARNING("Hardware Vsync support not yet implemented. Falling back to software timers\n");
+  NS_WARNING("Hardware Vsync support not yet implemented. Falling back to software timers");
   nsRefPtr<mozilla::gfx::VsyncSource> softwareVsync = new SoftwareVsyncSource();
   return softwareVsync.forget();
 }

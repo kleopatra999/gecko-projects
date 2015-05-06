@@ -157,6 +157,7 @@ this.AbstractCanvasGraph = function(parent, name, sharpness) {
   AbstractCanvasGraph.createIframe(GRAPH_SRC, parent, iframe => {
     this._iframe = iframe;
     this._window = iframe.contentWindow;
+    this._topWindow = this._window.top;
     this._document = iframe.contentDocument;
     this._pixelRatio = sharpness || this._window.devicePixelRatio;
 
@@ -194,7 +195,6 @@ this.AbstractCanvasGraph = function(parent, name, sharpness) {
 
     this._window.addEventListener("mousemove", this._onMouseMove);
     this._window.addEventListener("mousedown", this._onMouseDown);
-    this._window.addEventListener("mouseup", this._onMouseUp);
     this._window.addEventListener("MozMousePixelScroll", this._onMouseWheel);
     this._window.addEventListener("mouseout", this._onMouseOut);
 
@@ -221,6 +221,14 @@ AbstractCanvasGraph.prototype = {
   },
 
   /**
+   * Return true if the mouse is actively messing with the selection, false
+   * otherwise.
+   */
+  get isMouseActive() {
+    return this._isMouseActive;
+  },
+
+  /**
    * Returns a promise resolved once this graph is ready to receive data.
    */
   ready: function() {
@@ -233,9 +241,10 @@ AbstractCanvasGraph.prototype = {
   destroy: Task.async(function *() {
     yield this.ready();
 
+    this._topWindow.removeEventListener("mousemove", this._onMouseMove);
+    this._topWindow.removeEventListener("mouseup", this._onMouseUp);
     this._window.removeEventListener("mousemove", this._onMouseMove);
     this._window.removeEventListener("mousedown", this._onMouseDown);
-    this._window.removeEventListener("mouseup", this._onMouseUp);
     this._window.removeEventListener("MozMousePixelScroll", this._onMouseWheel);
     this._window.removeEventListener("mouseout", this._onMouseOut);
 
@@ -931,22 +940,34 @@ AbstractCanvasGraph.prototype = {
   },
 
   /**
-   * Gets the offset of this graph's container relative to the owner window.
-   *
-   * @return object
-   *         The { left, top } offset.
+   * Given a MouseEvent, make it relative to this._canvas.
+   * @return object {mouseX,mouseY}
    */
-  _getContainerOffset: function() {
-    let node = this._canvas;
-    let x = 0;
-    let y = 0;
-
-    while (node = node.offsetParent) {
-      x += node.offsetLeft;
-      y += node.offsetTop;
+  _getRelativeEventCoordinates: function(e) {
+    // For ease of testing, testX and testY can be passed in as the event
+    // object.  If so, just return this.
+    if ("testX" in e && "testY" in e) {
+      return {
+        mouseX: e.testX * this._pixelRatio,
+        mouseY: e.testY * this._pixelRatio
+      };
     }
 
-    return { left: x, top: y };
+    let quad = this._canvas.getBoxQuads({
+      relativeTo: this._topWindow.document
+    })[0];
+
+    let x = (e.screenX - this._topWindow.screenX) - quad.p1.x;
+    let y = (e.screenY - this._topWindow.screenY) - quad.p1.y;
+
+    // Don't allow the event coordinates to be bigger than the canvas
+    // or less than 0.
+    let maxX = quad.p2.x - quad.p1.x;
+    let maxY = quad.p3.y - quad.p1.y;
+    let mouseX = Math.max(0, Math.min(x, maxX)) * this._pixelRatio;
+    let mouseY = Math.max(0, Math.min(x, maxY)) * this._pixelRatio;
+
+    return {mouseX,mouseY};
   },
 
   /**
@@ -956,6 +977,14 @@ AbstractCanvasGraph.prototype = {
     let resizer = this._selectionResizer;
     let dragger = this._selectionDragger;
 
+    // Need to stop propagation here, since this function can be bound
+    // to both this._window and this._topWindow.  It's only attached to
+    // this._topWindow during a drag event.  Null check here since tests
+    // don't pass this method into the event object.
+    if (e.stopPropagation && this._isMouseActive) {
+      e.stopPropagation();
+    }
+
     // If a mouseup happened outside the toolbox and the current operation
     // is causing the selection changed, then end it.
     if (e.buttons == 0 && (this.hasSelectionInProgress() ||
@@ -964,9 +993,7 @@ AbstractCanvasGraph.prototype = {
       return this._onMouseUp(e);
     }
 
-    let offset = this._getContainerOffset();
-    let mouseX = (e.clientX - offset.left) * this._pixelRatio;
-    let mouseY = (e.clientY - offset.top) * this._pixelRatio;
+    let {mouseX,mouseY} = this._getRelativeEventCoordinates(e);
     this._cursor.x = mouseX;
     this._cursor.y = mouseY;
 
@@ -1024,8 +1051,7 @@ AbstractCanvasGraph.prototype = {
    */
   _onMouseDown: function(e) {
     this._isMouseActive = true;
-    let offset = this._getContainerOffset();
-    let mouseX = (e.clientX - offset.left) * this._pixelRatio;
+    let {mouseX} = this._getRelativeEventCoordinates(e);
 
     switch (this._canvas.getAttribute("input")) {
       case "hovering-background":
@@ -1054,6 +1080,11 @@ AbstractCanvasGraph.prototype = {
         break;
     }
 
+    // During a drag, bind to the top level window so that mouse movement
+    // outside of this frame will still work.
+    this._topWindow.addEventListener("mousemove", this._onMouseMove);
+    this._topWindow.addEventListener("mouseup", this._onMouseUp);
+
     this._shouldRedraw = true;
     this.emit("mousedown");
   },
@@ -1063,8 +1094,7 @@ AbstractCanvasGraph.prototype = {
    */
   _onMouseUp: function(e) {
     this._isMouseActive = false;
-    let offset = this._getContainerOffset();
-    let mouseX = (e.clientX - offset.left) * this._pixelRatio;
+    let {mouseX} = this._getRelativeEventCoordinates(e);
 
     switch (this._canvas.getAttribute("input")) {
       case "hovering-background":
@@ -1100,6 +1130,10 @@ AbstractCanvasGraph.prototype = {
         break;
     }
 
+    // No longer dragging, no need to bind to the top level window.
+    this._topWindow.removeEventListener("mousemove", this._onMouseMove);
+    this._topWindow.removeEventListener("mouseup", this._onMouseUp);
+
     this._shouldRedraw = true;
     this.emit("mouseup");
   },
@@ -1112,8 +1146,7 @@ AbstractCanvasGraph.prototype = {
       return;
     }
 
-    let offset = this._getContainerOffset();
-    let mouseX = (e.clientX - offset.left) * this._pixelRatio;
+    let {mouseX} = this._getRelativeEventCoordinates(e);
     let focusX = mouseX;
 
     let selection = this._selection;
@@ -1173,7 +1206,7 @@ AbstractCanvasGraph.prototype = {
     this.emit("scroll");
   },
 
-   /**
+  /**
    * Listener for the "mouseout" event on the graph's container.
    * Clear any active cursors if a drag isn't happening.
    */
@@ -1302,14 +1335,15 @@ LineGraphWidget.prototype = Heritage.extend(AbstractCanvasGraph.prototype, {
    *        represents the elapsed time on each refresh driver tick.
    * @param number interval
    *        The maximum amount of time to wait between calculations.
+   * @param number duration
+   *        The duration of the recording in milliseconds.
    */
-  setDataFromTimestamps: Task.async(function*(timestamps, interval) {
+  setDataFromTimestamps: Task.async(function*(timestamps, interval, duration) {
     let {
       plottedData,
       plottedMinMaxSum
     } = yield CanvasGraphUtils._performTaskInWorker("plotTimestampsGraph", {
-      timestamps: timestamps,
-      interval: interval
+      timestamps, interval, duration
     });
 
     this._tempMinMaxSum = plottedMinMaxSum;
