@@ -502,8 +502,10 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
    *        Specifies the request's url.
    * @param boolean aIsXHR
    *        True if this request was initiated via XHR.
+   * @param boolean aFromCache
+   *        Indicates if the result came from the browser cache
    */
-  addRequest: function(aId, aStartedDateTime, aMethod, aUrl, aIsXHR) {
+  addRequest: function(aId, aStartedDateTime, aMethod, aUrl, aIsXHR, aFromCache) {
     // Convert the received date/time string to a unix timestamp.
     let unixTime = Date.parse(aStartedDateTime);
 
@@ -521,7 +523,8 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
         startedMillis: unixTime,
         method: aMethod,
         url: aUrl,
-        isXHR: aIsXHR
+        isXHR: aIsXHR,
+        fromCache: aFromCache
       }
     });
 
@@ -564,6 +567,16 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
   },
 
   /**
+   * Copy the request url query string parameters from the currently selected item.
+   */
+  copyUrlParams: function() {
+    let selected = this.selectedItem.attachment;
+    let params = nsIURL(selected.url).query.split("&");
+    let string = params.join(Services.appinfo.OS === "WINNT" ? "\r\n" : "\n");
+    clipboardHelper.copyString(params.join("\n"), document);
+  },
+
+  /**
    * Copy a cURL command from the currently selected item.
    */
   copyAsCurl: function() {
@@ -593,6 +606,30 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
 
       clipboardHelper.copyString(Curl.generateCommand(data), document);
     });
+  },
+
+  /**
+   * Copy the raw request headers from the currently selected item.
+   */
+  copyRequestHeaders: function() {
+    let selected = this.selectedItem.attachment;
+    let rawHeaders = selected.requestHeaders.rawHeaders.trim();
+    if (Services.appinfo.OS !== "WINNT") {
+      rawHeaders = rawHeaders.replace(/\r/g, "");
+    }
+    clipboardHelper.copyString(rawHeaders, document);
+  },
+
+  /**
+   * Copy the raw response headers from the currently selected item.
+   */
+  copyResponseHeaders: function() {
+    let selected = this.selectedItem.attachment;
+    let rawHeaders = selected.responseHeaders.rawHeaders.trim();
+    if (Services.appinfo.OS !== "WINNT") {
+      rawHeaders = rawHeaders.replace(/\r/g, "");
+    }
+    clipboardHelper.copyString(rawHeaders, document);
   },
 
   /**
@@ -961,51 +998,51 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
    *         True if the item should be visible, false otherwise.
    */
   isHtml: function({ attachment: { mimeType } })
-    mimeType && mimeType.contains("/html"),
+    mimeType && mimeType.includes("/html"),
 
   isCss: function({ attachment: { mimeType } })
-    mimeType && mimeType.contains("/css"),
+    mimeType && mimeType.includes("/css"),
 
   isJs: function({ attachment: { mimeType } })
     mimeType && (
-      mimeType.contains("/ecmascript") ||
-      mimeType.contains("/javascript") ||
-      mimeType.contains("/x-javascript")),
+      mimeType.includes("/ecmascript") ||
+      mimeType.includes("/javascript") ||
+      mimeType.includes("/x-javascript")),
 
   isXHR: function({ attachment: { isXHR } })
     isXHR,
 
   isFont: function({ attachment: { url, mimeType } }) // Fonts are a mess.
     (mimeType && (
-      mimeType.contains("font/") ||
-      mimeType.contains("/font"))) ||
-    url.contains(".eot") ||
-    url.contains(".ttf") ||
-    url.contains(".otf") ||
-    url.contains(".woff"),
+      mimeType.includes("font/") ||
+      mimeType.includes("/font"))) ||
+    url.includes(".eot") ||
+    url.includes(".ttf") ||
+    url.includes(".otf") ||
+    url.includes(".woff"),
 
   isImage: function({ attachment: { mimeType } })
-    mimeType && mimeType.contains("image/"),
+    mimeType && mimeType.includes("image/"),
 
   isMedia: function({ attachment: { mimeType } }) // Not including images.
     mimeType && (
-      mimeType.contains("audio/") ||
-      mimeType.contains("video/") ||
-      mimeType.contains("model/")),
+      mimeType.includes("audio/") ||
+      mimeType.includes("video/") ||
+      mimeType.includes("model/")),
 
   isFlash: function({ attachment: { url, mimeType } }) // Flash is a mess.
     (mimeType && (
-      mimeType.contains("/x-flv") ||
-      mimeType.contains("/x-shockwave-flash"))) ||
-    url.contains(".swf") ||
-    url.contains(".flv"),
+      mimeType.includes("/x-flv") ||
+      mimeType.includes("/x-shockwave-flash"))) ||
+    url.includes(".swf") ||
+    url.includes(".flv"),
 
   isOther: function(e)
     !this.isHtml(e) && !this.isCss(e) && !this.isJs(e) && !this.isXHR(e) &&
     !this.isFont(e) && !this.isImage(e) && !this.isMedia(e) && !this.isFlash(e),
 
   isFreetextMatch: function({ attachment: { url } }, text) //no text is a positive match
-    !text || url.contains(text),
+    !text || url.includes(text),
 
   /**
    * Predicates used when sorting items.
@@ -1237,13 +1274,20 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
             break;
           case "status":
             requestItem.attachment.status = value;
-            this.updateMenuView(requestItem, key, value);
+            this.updateMenuView(requestItem, key, {
+              status: value,
+              cached: requestItem.attachment.fromCache
+            });
             break;
           case "statusText":
             requestItem.attachment.statusText = value;
-            this.updateMenuView(requestItem, key,
-              requestItem.attachment.status + " " +
-              requestItem.attachment.statusText);
+            let text = (requestItem.attachment.status + " " +
+                        requestItem.attachment.statusText);
+            if(requestItem.attachment.fromCache) {
+              text += " (cached)";
+            }
+
+            this.updateMenuView(requestItem, key, text);
             break;
           case "headersSize":
             requestItem.attachment.headersSize = value;
@@ -1253,8 +1297,14 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
             this.updateMenuView(requestItem, key, value);
             break;
           case "transferredSize":
-            requestItem.attachment.transferredSize = value;
-            this.updateMenuView(requestItem, key, value);
+            if(requestItem.attachment.fromCache) {
+              requestItem.attachment.transferredSize = 0;
+              this.updateMenuView(requestItem, key, 'cached');
+            }
+            else {
+              requestItem.attachment.transferredSize = value;
+              this.updateMenuView(requestItem, key, value);
+            }
             break;
           case "mimeType":
             requestItem.attachment.mimeType = value;
@@ -1278,7 +1328,9 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
             break;
           case "eventTimings":
             requestItem.attachment.eventTimings = value;
-            this._createWaterfallView(requestItem, value.timings);
+            this._createWaterfallView(
+              requestItem, value.timings, requestItem.attachment.fromCache
+            );
             break;
         }
       }
@@ -1385,7 +1437,8 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
       }
       case "remoteAddress":
         let domain = $(".requests-menu-domain", target);
-        let tooltip = domain.getAttribute("value") + " (" + aValue + ")";
+        let tooltip = (domain.getAttribute("value") +
+                       (aValue ? " (" + aValue + ")" : ""));
         domain.setAttribute("tooltiptext", tooltip);
         break;
       case "securityState": {
@@ -1399,9 +1452,9 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
       }
       case "status": {
         let node = $(".requests-menu-status", target);
+        node.setAttribute("code", aValue.cached ? "cached" : aValue.status);
         let codeNode = $(".requests-menu-status-code", target);
-        codeNode.setAttribute("value", aValue);
-        node.setAttribute("code", aValue);
+        codeNode.setAttribute("value", aValue.status);
         break;
       }
       case "statusText": {
@@ -1419,15 +1472,22 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
         break;
       }
       case "transferredSize": {
+        let node = $(".requests-menu-transferred", target);
+
         let text;
         if (aValue === null) {
           text = L10N.getStr("networkMenu.sizeUnavailable");
-        } else {
+        }
+        else if(aValue === "cached") {
+          text = aValue;
+          node.classList.add('theme-comment');
+        }
+        else {
           let kb = aValue / 1024;
           let size = L10N.numberWithDecimals(kb, CONTENT_SIZE_DECIMALS);
           text = L10N.getFormatStr("networkMenu.sizeKB", size);
         }
-        let node = $(".requests-menu-transferred", target);
+
         node.setAttribute("value", text);
         node.setAttribute("tooltiptext", text);
         break;
@@ -1444,7 +1504,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
         let { mimeType } = aItem.attachment;
         let { text, encoding } = aValue.content;
 
-        if (mimeType.contains("image/")) {
+        if (mimeType.includes("image/")) {
           let responseBody = yield gNetwork.getString(text);
           let node = $(".requests-menu-icon", aItem.target);
           node.src = "data:" + mimeType + ";" + encoding + "," + responseBody;
@@ -1472,14 +1532,21 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
    *        The network request item in this container.
    * @param object aTimings
    *        An object containing timing information.
+   * @param boolean aFromCache
+   *        Indicates if the result came from the browser cache
    */
-  _createWaterfallView: function(aItem, aTimings) {
+  _createWaterfallView: function(aItem, aTimings, aFromCache) {
     let { target, attachment } = aItem;
     let sections = ["dns", "connect", "send", "wait", "receive"];
     // Skipping "blocked" because it doesn't work yet.
 
     let timingsNode = $(".requests-menu-timings", target);
     let timingsTotal = $(".requests-menu-timings-total", timingsNode);
+
+    if(aFromCache) {
+      timingsTotal.style.display = 'none';
+      return;
+    }
 
     // Add a set of boxes representing timing information.
     for (let key of sections) {
@@ -1726,7 +1793,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     let { url } = hovered;
     let { mimeType, text, encoding } = hovered.responseContent.content;
 
-    if (mimeType && mimeType.contains("image/") && (
+    if (mimeType && mimeType.includes("image/") && (
       aTarget.classList.contains("requests-menu-icon") ||
       aTarget.classList.contains("requests-menu-file")))
     {
@@ -1773,8 +1840,17 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     let copyUrlElement = $("#request-menu-context-copy-url");
     copyUrlElement.hidden = !selectedItem;
 
+    let copyUrlParamsElement = $("#request-menu-context-copy-url-params");
+    copyUrlParamsElement.hidden = !selectedItem || !nsIURL(selectedItem.attachment.url).query;
+
     let copyAsCurlElement = $("#request-menu-context-copy-as-curl");
     copyAsCurlElement.hidden = !selectedItem || !selectedItem.attachment.responseContent;
+
+    let copyRequestHeadersElement = $("#request-menu-context-copy-request-headers");
+    copyRequestHeadersElement.hidden = !selectedItem || !selectedItem.attachment.requestHeaders;
+
+    let copyResponseHeadersElement = $("#response-menu-context-copy-response-headers");
+    copyResponseHeadersElement.hidden = !selectedItem || !selectedItem.attachment.responseHeaders;
 
     let copyResponse = $("#request-menu-context-copy-response");
     copyResponse.hidden = !selectedItem ||
@@ -1785,10 +1861,10 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     let copyImageAsDataUriElement = $("#request-menu-context-copy-image-as-data-uri");
     copyImageAsDataUriElement.hidden = !selectedItem ||
       !selectedItem.attachment.responseContent ||
-      !selectedItem.attachment.responseContent.content.mimeType.contains("image/");
+      !selectedItem.attachment.responseContent.content.mimeType.includes("image/");
 
-    let separator = $("#request-menu-context-separator");
-    separator.hidden = !selectedItem;
+    let separators = $all(".request-menu-context-separator");
+    Array.forEach(separators, separator => separator.hidden = !selectedItem);
 
     let newTabElement = $("#request-menu-context-newtab");
     newTabElement.hidden = !selectedItem;
@@ -2356,7 +2432,7 @@ NetworkDetailsView.prototype = {
     }
 
     if (aData.status) {
-      $("#headers-summary-status-circle").setAttribute("code", aData.status);
+      $("#headers-summary-status-circle").setAttribute("code", aData.fromCache ? "cached" : aData.status);
       $("#headers-summary-status-value").setAttribute("value", aData.status + " " + aData.statusText);
       $("#headers-summary-status").removeAttribute("hidden");
     } else {
@@ -2540,7 +2616,7 @@ NetworkDetailsView.prototype = {
     let contentType = yield gNetwork.getString(contentTypeLongString);
 
     // Handle query strings (e.g. "?foo=bar&baz=42").
-    if (contentType.contains("x-www-form-urlencoded")) {
+    if (contentType.includes("x-www-form-urlencoded")) {
       for (let section of postData.split(/\r\n|\r|\n/)) {
         // Before displaying it, make sure this section of the POST data
         // isn't a line containing upload stream headers.
@@ -2670,7 +2746,7 @@ NetworkDetailsView.prototype = {
       }
     }
     // Handle images.
-    else if (mimeType.contains("image/")) {
+    else if (mimeType.includes("image/")) {
       $("#response-content-image-box").setAttribute("align", "center");
       $("#response-content-image-box").setAttribute("pack", "center");
       $("#response-content-image-box").hidden = false;
@@ -2703,7 +2779,7 @@ NetworkDetailsView.prototype = {
       // Maybe set a more appropriate mode in the Source Editor if possible,
       // but avoid doing this for very large files.
       if (responseBody.length < SOURCE_SYNTAX_HIGHLIGHT_MAX_FILE_SIZE) {
-        let mapping = Object.keys(CONTENT_MIME_TYPE_MAPPINGS).find(key => mimeType.contains(key));
+        let mapping = Object.keys(CONTENT_MIME_TYPE_MAPPINGS).find(key => mimeType.includes(key));
         if (mapping) {
           editor.setMode(CONTENT_MIME_TYPE_MAPPINGS[mapping]);
         }
@@ -2727,7 +2803,9 @@ NetworkDetailsView.prototype = {
 
     let tabboxWidth = $("#details-pane").getAttribute("width");
     let availableWidth = tabboxWidth / 2; // Other nodes also take some space.
-    let scale = Math.max(availableWidth / aResponse.totalTime, 0);
+    let scale = (aResponse.totalTime > 0 ?
+                 Math.max(availableWidth / aResponse.totalTime, 0) :
+                 0);
 
     $("#timings-summary-blocked .requests-menu-timings-box")
       .setAttribute("width", blocked * scale);

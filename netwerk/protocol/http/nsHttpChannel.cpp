@@ -41,6 +41,7 @@
 #include "GeckoProfiler.h"
 #include "nsIConsoleService.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/DebugOnly.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/VisualEventTracer.h"
 #include "nsISSLSocketControl.h"
@@ -82,6 +83,10 @@
 namespace mozilla { namespace net {
 
 namespace {
+
+// Monotonically increasing ID for generating unique cache entries per
+// intercepted channel.
+static uint64_t gNumIntercepted = 0;
 
 // True if the local cache should be bypassed when processing a request.
 #define BYPASS_LOCAL_CACHE(loadFlags) \
@@ -223,6 +228,7 @@ nsHttpChannel::nsHttpChannel()
     , mRequestTime(0)
     , mOfflineCacheLastModifiedTime(0)
     , mInterceptCache(DO_NOT_INTERCEPT)
+    , mInterceptionID(gNumIntercepted++)
     , mCachedContentIsValid(false)
     , mCachedContentIsPartial(false)
     , mCacheOnlyMetadata(false)
@@ -315,7 +321,7 @@ nsHttpChannel::Connect()
     rv = mURI->SchemeIs("https", &isHttps);
     NS_ENSURE_SUCCESS(rv,rv);
 
-    if (mAllowSTS && !isHttps) {
+    if (!isHttps) {
         // enforce Strict-Transport-Security
         nsISiteSecurityService* sss = gHttpHandler->GetSSService();
         NS_ENSURE_TRUE(sss, NS_ERROR_OUT_OF_MEMORY);
@@ -332,8 +338,17 @@ nsHttpChannel::Connect()
 
         if (isStsHost) {
             LOG(("nsHttpChannel::Connect() STS permissions found\n"));
-            return AsyncCall(&nsHttpChannel::HandleAsyncRedirectChannelToHttps);
+            if (mAllowSTS) {
+                Telemetry::Accumulate(Telemetry::HTTP_SCHEME_UPGRADE, 3);
+                return AsyncCall(&nsHttpChannel::HandleAsyncRedirectChannelToHttps);
+            } else {
+                Telemetry::Accumulate(Telemetry::HTTP_SCHEME_UPGRADE, 2);
+            }
+        } else {
+            Telemetry::Accumulate(Telemetry::HTTP_SCHEME_UPGRADE, 1);
         }
+    } else {
+        Telemetry::Accumulate(Telemetry::HTTP_SCHEME_UPGRADE, 0);
     }
 
     // ensure that we are using a valid hostname
@@ -2319,7 +2334,7 @@ nsHttpChannel::ProcessPartialContent()
         LOG(("nsHttpChannel::ProcessPartialContent [this=%p] "
              "206 has different total entity size than the content length "
              "of the original partially cached entity.\n", this));
-        
+
         mCacheEntry->AsyncDoom(nullptr);
         Cancel(NS_ERROR_CORRUPTED_CONTENT);
         return CallOnStartRequest();
@@ -2754,7 +2769,7 @@ nsHttpChannel::OpenCacheEntry(bool isHttps)
     }
 
     if (!mPostID && mApplicationCache) {
-        rv = cacheStorageService->AppCacheStorage(info, 
+        rv = cacheStorageService->AppCacheStorage(info,
             mApplicationCache,
             getter_AddRefs(cacheStorage));
     }
@@ -2782,12 +2797,16 @@ nsHttpChannel::OpenCacheEntry(bool isHttps)
         extension.Append(nsPrintfCString("%d", mPostID));
     }
     if (PossiblyIntercepted()) {
-        extension.Append('u');
+        extension.Append(nsPrintfCString("u%lld", mInterceptionID));
     }
 
     // If this channel should be intercepted, we do not open a cache entry for this channel
     // until the interception process is complete and the consumer decides what to do with it.
     if (mInterceptCache == MAYBE_INTERCEPT) {
+        DebugOnly<bool> exists;
+        MOZ_ASSERT(NS_FAILED(cacheStorage->Exists(openURI, extension, &exists)) || !exists,
+                   "The entry must not exist in the cache before we create it here");
+
         nsCOMPtr<nsICacheEntry> entry;
         rv = cacheStorage->OpenTruncate(openURI, extension, getter_AddRefs(entry));
         NS_ENSURE_SUCCESS(rv, rv);
@@ -5801,7 +5820,7 @@ nsHttpChannel::OnDataAvailable(nsIRequest *request, nsISupports *ctxt,
             }
             mLogicalOffset += count;
         }
-        
+
         return rv;
     }
 
@@ -5884,11 +5903,15 @@ nsHttpChannel::OnTransportStatus(nsITransport *trans, nsresult status,
 
     if (status == NS_NET_STATUS_CONNECTED_TO ||
         status == NS_NET_STATUS_WAITING_FOR) {
-        nsCOMPtr<nsISocketTransport> socketTransport =
-            do_QueryInterface(trans);
-        if (socketTransport) {
-            socketTransport->GetSelfAddr(&mSelfAddr);
-            socketTransport->GetPeerAddr(&mPeerAddr);
+        if (mTransaction) {
+            mTransaction->GetNetworkAddresses(mSelfAddr, mPeerAddr);
+        } else {
+            nsCOMPtr<nsISocketTransport> socketTransport =
+                do_QueryInterface(trans);
+            if (socketTransport) {
+                socketTransport->GetSelfAddr(&mSelfAddr);
+                socketTransport->GetPeerAddr(&mPeerAddr);
+            }
         }
     }
 

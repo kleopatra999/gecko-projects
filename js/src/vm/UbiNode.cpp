@@ -8,6 +8,7 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/Range.h"
 #include "mozilla/Scoped.h"
 #include "mozilla/UniquePtr.h"
 
@@ -32,6 +33,7 @@
 #include "vm/Debugger-inl.h"
 
 using mozilla::Some;
+using mozilla::UniquePtr;
 using JS::HandleValue;
 using JS::Value;
 using JS::ZoneSet;
@@ -133,7 +135,8 @@ class SimpleEdgeVectorTracer : public JS::CallbackTracer {
         if (wantNames) {
             // Ask the tracer to compute an edge name for us.
             char buffer[1024];
-            const char* name = getTracingEdgeName(buffer, sizeof(buffer));
+            getTracingEdgeName(buffer, sizeof(buffer));
+            const char* name = buffer;
 
             // Convert the name to char16_t characters.
             name16 = js_pod_malloc<char16_t>(strlen(name) + 1);
@@ -226,6 +229,31 @@ const char*
 Concrete<JSObject>::jsObjectClassName() const
 {
     return Concrete::get().getClass()->name;
+}
+
+bool
+Concrete<JSObject>::jsObjectConstructorName(JSContext* cx,
+                                            UniquePtr<char16_t[], JS::FreePolicy>& outName) const
+{
+    JSAtom* name = Concrete::get().maybeConstructorDisplayAtom();
+    if (!name) {
+        outName.reset(nullptr);
+        return true;
+    }
+
+    auto len = JS_GetStringLength(name);
+    auto size = len + 1;
+
+    outName.reset(cx->pod_malloc<char16_t>(size * sizeof(char16_t)));
+    if (!outName)
+        return false;
+
+    mozilla::Range<char16_t> chars(outName.get(), size);
+    if (!JS_CopyStringChars(cx, chars, name))
+        return false;
+
+    outName[len] = '\0';
+    return true;
 }
 
 template<> const char16_t TracerConcrete<JS::Symbol>::concreteTypeName[] =

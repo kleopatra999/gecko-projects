@@ -1,5 +1,5 @@
-/* -*- Mode: C++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 8; -*- */
-/* vim: set sw=2 ts=8 et tw=80 : */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,7 +13,6 @@
 #include "mozilla/BrowserElementParent.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/DataTransfer.h"
-#include "mozilla/dom/ServiceWorkerRegistrar.h"
 #include "mozilla/dom/indexedDB/ActorsParent.h"
 #include "mozilla/plugins/PluginWidgetParent.h"
 #include "mozilla/EventStateManager.h"
@@ -754,16 +753,10 @@ TabParent::SendLoadRemoteScript(const nsString& aURL,
 }
 
 bool
-TabParent::InitBrowserConfiguration(nsIURI* aURI,
+TabParent::InitBrowserConfiguration(const nsCString& aURI,
                                     BrowserConfiguration& aConfiguration)
 {
-  // Get the list of ServiceWorkerRegistation for this origin.
-  nsRefPtr<ServiceWorkerRegistrar> swr = ServiceWorkerRegistrar::Get();
-  MOZ_ASSERT(swr);
-
-  swr->GetRegistrations(aConfiguration.serviceWorkerRegistrations());
-
-  return true;
+  return ContentParent::GetBrowserConfiguration(aURI, aConfiguration);
 }
 
 void
@@ -795,7 +788,7 @@ TabParent::LoadURL(nsIURI* aURI)
 
     // This object contains the configuration for this new app.
     BrowserConfiguration configuration;
-    if (NS_WARN_IF(!InitBrowserConfiguration(aURI, configuration))) {
+    if (NS_WARN_IF(!InitBrowserConfiguration(spec, configuration))) {
       return;
     }
 
@@ -1227,16 +1220,16 @@ bool TabParent::SendRealMouseEvent(WidgetMouseEvent& event)
   if (widget) {
     // When we mouseenter the tab, the tab's cursor should become the current
     // cursor.  When we mouseexit, we stop.
-    if (event.message == NS_MOUSE_ENTER ||
-        event.message == NS_MOUSE_ENTER_SYNTH) {
+    if (event.message == NS_MOUSE_ENTER_WIDGET ||
+        event.message == NS_MOUSE_OVER) {
       mTabSetsCursor = true;
       if (mCursor != nsCursor(-1)) {
         widget->SetCursor(mCursor);
       }
-      // We don't actually want to forward NS_MOUSE_ENTER messages.
+      // We don't actually want to forward NS_MOUSE_ENTER_WIDGET messages.
       return true;
-    } else if (event.message == NS_MOUSE_EXIT ||
-               event.message == NS_MOUSE_EXIT_SYNTH) {
+    } else if (event.message == NS_MOUSE_EXIT_WIDGET ||
+               event.message == NS_MOUSE_OUT) {
       mTabSetsCursor = false;
     }
   }

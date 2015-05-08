@@ -85,6 +85,7 @@ SOURCES += [
 ]
 
 IPDL_SOURCES += [
+    'BrowserConfiguration.ipdlh',
     'DOMTypes.ipdlh',
     'PBlob.ipdl',
     'PBlobStream.ipdl',
@@ -138,6 +139,7 @@ LOCAL_INCLUDES += [
     '/gfx/2d',
     '/hal/sandbox',
     '/layout/base',
+    '/media/webrtc',
     '/netwerk/base',
     '/toolkit/xre',
     '/uriloader/exthandler',

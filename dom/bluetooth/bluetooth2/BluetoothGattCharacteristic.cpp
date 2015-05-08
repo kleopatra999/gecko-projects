@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,8 +20,34 @@ using namespace mozilla::dom;
 
 USING_BLUETOOTH_NAMESPACE
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(
-  BluetoothGattCharacteristic, mOwner, mService, mDescriptors)
+NS_IMPL_CYCLE_COLLECTION_CLASS(BluetoothGattCharacteristic)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(BluetoothGattCharacteristic)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mOwner)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mService)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mDescriptors)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
+
+  /**
+   * Unregister the bluetooth signal handler after unlinked.
+   *
+   * This is needed to avoid ending up with exposing a deleted object to JS or
+   * accessing deleted objects while receiving signals from parent process
+   * after unlinked. Please see Bug 1138267 for detail informations.
+   */
+  nsString path;
+  GeneratePathFromGattId(tmp->mCharId, path);
+  UnregisterBluetoothSignalHandler(path, tmp);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(BluetoothGattCharacteristic)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOwner)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mService)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDescriptors)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(BluetoothGattCharacteristic)
+
 NS_IMPL_CYCLE_COLLECTING_ADDREF(BluetoothGattCharacteristic)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(BluetoothGattCharacteristic)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(BluetoothGattCharacteristic)
@@ -42,24 +68,18 @@ BluetoothGattCharacteristic::BluetoothGattCharacteristic(
   MOZ_ASSERT(aOwner);
   MOZ_ASSERT(mService);
 
-  BluetoothService* bs = BluetoothService::Get();
-  NS_ENSURE_TRUE_VOID(bs);
-
   // Generate bluetooth signal path and a string representation to provide uuid
   // of this characteristic to applications
   nsString path;
   GeneratePathFromGattId(mCharId, path, mUuidStr);
-  bs->RegisterBluetoothSignalHandler(path, this);
+  RegisterBluetoothSignalHandler(path, this);
 }
 
 BluetoothGattCharacteristic::~BluetoothGattCharacteristic()
 {
-  BluetoothService* bs = BluetoothService::Get();
-  NS_ENSURE_TRUE_VOID(bs);
-
   nsString path;
   GeneratePathFromGattId(mCharId, path);
-  bs->UnregisterBluetoothSignalHandler(path, this);
+  UnregisterBluetoothSignalHandler(path, this);
 }
 
 already_AddRefed<Promise>
@@ -129,6 +149,7 @@ BluetoothGattCharacteristic::HandleDescriptorsDiscovered(
   const InfallibleTArray<BluetoothGattId>& descriptorIds =
     aValue.get_ArrayOfBluetoothGattId();
 
+  mDescriptors.Clear();
   for (uint32_t i = 0; i < descriptorIds.Length(); i++) {
     mDescriptors.AppendElement(new BluetoothGattDescriptor(
       GetParentObject(), this, descriptorIds[i]));
@@ -150,6 +171,7 @@ void
 BluetoothGattCharacteristic::Notify(const BluetoothSignal& aData)
 {
   BT_LOGD("[D] %s", NS_ConvertUTF16toUTF8(aData.name()).get());
+  NS_ENSURE_TRUE_VOID(mSignalRegistered);
 
   BluetoothValue v = aData.value();
   if (aData.name().EqualsLiteral("DescriptorsDiscovered")) {
@@ -173,8 +195,6 @@ void
 BluetoothGattCharacteristic::GetValue(JSContext* cx,
                                       JS::MutableHandle<JSObject*> aValue) const
 {
-  MOZ_ASSERT(aValue);
-
   aValue.set(mValue.IsEmpty()
              ? nullptr
              : ArrayBuffer::Create(cx, mValue.Length(), mValue.Elements()));
@@ -280,8 +300,8 @@ BluetoothGattCharacteristic::WriteValue(const ArrayBuffer& aValue,
   NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
 
   BT_ENSURE_TRUE_REJECT(mProperties &
-                          (GATT_CHAR_PROP_BIT_WRITE_NO_RESPONSE ||
-                           GATT_CHAR_PROP_BIT_WRITE ||
+                          (GATT_CHAR_PROP_BIT_WRITE_NO_RESPONSE |
+                           GATT_CHAR_PROP_BIT_WRITE |
                            GATT_CHAR_PROP_BIT_SIGNED_WRITE),
                         promise,
                         NS_ERROR_NOT_AVAILABLE);

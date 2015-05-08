@@ -908,19 +908,23 @@ JS_LeaveCompartment(JSContext* cx, JSCompartment* oldCompartment)
     cx->leaveCompartment(oldCompartment);
 }
 
-JSAutoCompartment::JSAutoCompartment(JSContext* cx, JSObject* target)
+JSAutoCompartment::JSAutoCompartment(JSContext* cx, JSObject* target
+                                     MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
   : cx_(cx),
     oldCompartment_(cx->compartment())
 {
     AssertHeapIsIdleOrIterating(cx_);
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     cx_->enterCompartment(target->compartment());
 }
 
-JSAutoCompartment::JSAutoCompartment(JSContext* cx, JSScript* target)
+JSAutoCompartment::JSAutoCompartment(JSContext* cx, JSScript* target
+                                     MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
   : cx_(cx),
     oldCompartment_(cx->compartment())
 {
     AssertHeapIsIdleOrIterating(cx_);
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     cx_->enterCompartment(target->compartment());
 }
 
@@ -930,11 +934,13 @@ JSAutoCompartment::~JSAutoCompartment()
 }
 
 JSAutoNullableCompartment::JSAutoNullableCompartment(JSContext* cx,
-                                                     JSObject* targetOrNull)
+                                                     JSObject* targetOrNull
+                                                     MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
   : cx_(cx),
     oldCompartment_(cx->compartment())
 {
     AssertHeapIsIdleOrIterating(cx_);
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     if (targetOrNull) {
         cx_->enterCompartment(targetOrNull->compartment());
     } else {
@@ -3476,7 +3482,7 @@ JS_DefineFunctions(JSContext* cx, HandleObject obj, const JSFunctionSpec* fs,
             JSFunction* fun = DefineFunction(cx, ctor, id,
                                              GenericNativeMethodDispatcher,
                                              fs->nargs + 1, flags,
-                                             JSFunction::ExtendedFinalizeKind);
+                                             gc::AllocKind::FUNCTION_EXTENDED);
             if (!fun)
                 return false;
 
@@ -4035,7 +4041,7 @@ CompileFunction(JSContext* cx, const ReadOnlyCompileOptions& optionsArg,
     }
 
     fun.set(NewScriptedFunction(cx, 0, JSFunction::INTERPRETED, funAtom,
-                                JSFunction::FinalizeKind, TenuredObject,
+                                gc::AllocKind::FUNCTION, TenuredObject,
                                 enclosingDynamicScope));
     if (!fun)
         return false;
@@ -4454,6 +4460,12 @@ JS_New(JSContext* cx, HandleObject ctor, const JS::HandleValueArray& inputArgs)
         obj = JS_NewHelper(cx, ctor, inputArgs);
     }
     return obj;
+}
+
+JS_PUBLIC_API(bool)
+JS_CheckForInterrupt(JSContext* cx)
+{
+    return js::CheckForInterrupt(cx);
 }
 
 JS_PUBLIC_API(JSInterruptCallback)

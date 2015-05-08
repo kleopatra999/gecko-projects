@@ -69,7 +69,6 @@ public:
 
   virtual nsresult Shutdown() override;
 
-  virtual bool IsWaitingMediaResources() { return false; };
   virtual bool IsHardwareAccelerated() const override;
 
 private:
@@ -102,6 +101,7 @@ private:
   std::queue<nsRefPtr<MediaRawData>> mInput;
   bool mIsDecodeTaskDispatched;
   bool mIsFlushing;
+  bool mIsShutDown;
 };
 
 } // namespace mozilla

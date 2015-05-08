@@ -8,7 +8,7 @@
 
 const {Cc, Ci, Cu} = require("chrome");
 
-let WebConsoleUtils = require("devtools/toolkit/webconsole/utils").Utils;
+const {Utils: WebConsoleUtils, CONSOLE_WORKER_IDS} = require("devtools/toolkit/webconsole/utils");
 
 loader.lazyServiceGetter(this, "clipboardHelper",
                          "@mozilla.org/widget/clipboardhelper;1",
@@ -51,8 +51,6 @@ const WEAK_SIGNATURE_ALGORITHM_LEARN_MORE = "https://developer.mozilla.org/docs/
 const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
 
 const VARIABLES_VIEW_URL = "chrome://browser/content/devtools/widgets/VariablesView.xul";
-
-const CONSOLE_DIR_VIEW_HEIGHT = 0.6;
 
 const IGNORED_SOURCE_URLS = ["debugger eval code"];
 
@@ -130,6 +128,7 @@ const LEVELS = {
   table: SEVERITY_LOG,
   debug: SEVERITY_LOG,
   dir: SEVERITY_LOG,
+  dirxml: SEVERITY_LOG,
   group: SEVERITY_LOG,
   groupCollapsed: SEVERITY_LOG,
   groupEnd: SEVERITY_LOG,
@@ -137,6 +136,10 @@ const LEVELS = {
   timeEnd: SEVERITY_LOG,
   count: SEVERITY_LOG
 };
+
+// This array contains the prefKey for the workers and it must keep them in the
+// same order as CONSOLE_WORKER_IDS
+const WORKERTYPES_PREFKEYS = [ 'sharedworkers', 'serviceworkers', 'windowlessworkers' ];
 
 // The lowest HTTP response code (inclusive) that is considered an error.
 const MIN_HTTP_ERROR_CODE = 400;
@@ -649,7 +652,8 @@ WebConsoleFrame.prototype = {
   {
     let prefs = ["network", "networkinfo", "csserror", "cssparser", "csslog",
                  "exception", "jswarn", "jslog", "error", "info", "warn", "log",
-                 "secerror", "secwarn", "netwarn", "netxhr"];
+                 "secerror", "secwarn", "netwarn", "netxhr", "sharedworkers",
+                 "serviceworkers", "windowlessworkers"];
     for (let pref of prefs) {
       this.filterPrefs[pref] = Services.prefs
                                .getBoolPref(this._filterPrefsPrefix + pref);
@@ -1026,8 +1030,11 @@ WebConsoleFrame.prototype = {
     // (filter="error", filter="cssparser", etc.) and add or remove the
     // "filtered-by-type" class, which turns on or off the display.
 
+    let attribute = WORKERTYPES_PREFKEYS.indexOf(aPrefKey) == -1
+                      ? 'filter' : 'workerType';
+
     let xpath = ".//*[contains(@class, 'message') and " +
-      "@filter='" + aPrefKey + "']";
+      "@" + attribute + "='" + aPrefKey + "']";
     let result = doc.evaluate(xpath, outputNode, null,
       Ci.nsIDOMXPathResult.UNORDERED_NODE_SNAPSHOT_TYPE, null);
     for (let i = 0; i < result.snapshotLength; i++) {
@@ -1084,6 +1091,12 @@ WebConsoleFrame.prototype = {
     let prefKey = MESSAGE_PREFERENCE_KEYS[aNode.category][aNode.severity];
     if (prefKey && !this.getFilterState(prefKey)) {
       // The node is filtered by type.
+      aNode.classList.add("filtered-by-type");
+      isFiltered = true;
+    }
+
+    // Filter by worker type
+    if ("workerType" in aNode && !this.getFilterState(aNode.workerType)) {
       aNode.classList.add("filtered-by-type");
       isFiltered = true;
     }
@@ -1271,7 +1284,11 @@ WebConsoleFrame.prototype = {
         clipboardText = clipboardArray.join(" ");
         break;
       }
-
+      case "dirxml": {
+        // We just alias console.dirxml() with console.log().
+        aMessage.level = "log";
+        return WCF_logConsoleAPIMessage.call(this, aMessage);
+      }
       case "group":
       case "groupCollapsed":
         clipboardText = body = aMessage.groupName;
@@ -1365,6 +1382,12 @@ WebConsoleFrame.prototype = {
       }
     }
 
+    let workerTypeID = CONSOLE_WORKER_IDS.indexOf(aMessage.workerType);
+    if (workerTypeID != -1) {
+      node.workerType = WORKERTYPES_PREFKEYS[workerTypeID];
+      node.setAttribute('workerType', WORKERTYPES_PREFKEYS[workerTypeID]);
+    }
+
     return node;
   },
 
@@ -1395,6 +1418,8 @@ WebConsoleFrame.prototype = {
     let severity = 'error';
     if (aScriptError.warning || aScriptError.strict) {
       severity = 'warning';
+    } else if (aScriptError.info) {
+      severity = 'log';
     }
 
     let category = 'js';
@@ -2637,9 +2662,6 @@ WebConsoleFrame.prototype = {
 
     // Display the variables view after the message node.
     if (aLevel == "dir") {
-      bodyNode.style.height = (this.window.innerHeight *
-                               CONSOLE_DIR_VIEW_HEIGHT) + "px";
-
       let options = {
         objectActor: body.arguments[0],
         targetElement: bodyNode,
@@ -2720,7 +2742,7 @@ WebConsoleFrame.prototype = {
     let onClick = () => {
       let target = locationNode.target;
       if (target == "scratchpad" || isScratchpad) {
-        this.owner.viewSourceInScratchpad(url);
+        this.owner.viewSourceInScratchpad(url, line);
         return;
       }
 
@@ -3956,6 +3978,8 @@ JSTerm.prototype = {
     if (aClearStorage) {
       this.webConsoleClient.clearMessagesCache();
     }
+
+    this._sidebarDestroy();
 
     this.emit("messages-cleared");
   },

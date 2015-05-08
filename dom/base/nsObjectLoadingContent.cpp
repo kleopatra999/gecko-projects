@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim:set et cin sw=2 sts=2:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -38,6 +38,7 @@
 #include "nsIBlocklistService.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
 #include "nsIAppShell.h"
+#include "nsIXULRuntime.h"
 
 #include "nsError.h"
 
@@ -3196,9 +3197,7 @@ nsObjectLoadingContent::ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentTyp
   }
 
   if (XRE_GetProcessType() == GeckoProcessType_Default &&
-      (Preferences::GetBool("browser.tabs.remote.autostart", false) ||
-       Preferences::GetBool("browser.tabs.remote.autostart.1", false) ||
-       Preferences::GetBool("browser.tabs.remote.autostart.2", false))) {
+      BrowserTabsRemoteAutostart()) {
     // Plugins running OOP from the chrome process along with plugins running
     // OOP from the content process will hang. Let's prevent that situation.
     aReason = eFallbackDisabled;
@@ -3259,8 +3258,9 @@ nsObjectLoadingContent::ShouldPlay(FallbackType &aReason, bool aIgnoreCurrentTyp
   }
 
   // Before we check permissions, get the blocklist state of this plugin to set
-  // the fallback reason correctly.
-  uint32_t blocklistState = nsIBlocklistService::STATE_NOT_BLOCKED;
+  // the fallback reason correctly. In the content process this will involve
+  // an ipc call to chrome.
+  uint32_t blocklistState = nsIBlocklistService::STATE_BLOCKED;
   pluginHost->GetBlocklistStateForType(mContentType,
                                        nsPluginHost::eExcludeNone,
                                        &blocklistState);
@@ -3665,6 +3665,14 @@ nsObjectLoadingContent::DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
   if (NS_FAILED(rv)) {
     return mozilla::dom::Throw(aCx, rv);
   }
+  return true;
+}
+
+/* static */
+bool
+nsObjectLoadingContent::MayResolve(jsid aId)
+{
+  // We can resolve anything, really.
   return true;
 }
 

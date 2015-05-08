@@ -86,18 +86,6 @@ InvokeFunction(JSContext* cx, HandleObject obj, uint32_t argc, Value* argv, Valu
     return true;
 }
 
-JSObject*
-NewGCObject(JSContext* cx, gc::AllocKind allocKind, gc::InitialHeap initialHeap,
-            size_t ndynamic, const js::Class* clasp)
-{
-    JSObject* obj = js::Allocate<JSObject>(cx, allocKind, ndynamic, initialHeap, clasp);
-    if (!obj)
-        return nullptr;
-
-    SetNewObjectMetadata(cx, obj);
-    return obj;
-}
-
 bool
 CheckOverRecursed(JSContext* cx)
 {
@@ -997,6 +985,14 @@ PopBlockScope(JSContext* cx, BaselineFrame* frame)
 }
 
 bool
+DebugLeaveThenPopBlockScope(JSContext* cx, BaselineFrame* frame, jsbytecode* pc)
+{
+    MOZ_ALWAYS_TRUE(DebugLeaveBlock(cx, frame, pc));
+    frame->popBlock(cx);
+    return true;
+}
+
+bool
 FreshenBlockScope(JSContext* cx, BaselineFrame* frame)
 {
     return frame->freshenBlock(cx);
@@ -1005,7 +1001,7 @@ FreshenBlockScope(JSContext* cx, BaselineFrame* frame)
 bool
 DebugLeaveThenFreshenBlockScope(JSContext* cx, BaselineFrame* frame, jsbytecode* pc)
 {
-    DebugLeaveBlock(cx, frame, pc);
+    MOZ_ALWAYS_TRUE(DebugLeaveBlock(cx, frame, pc));
     return frame->freshenBlock(cx);
 }
 
@@ -1113,22 +1109,22 @@ Recompile(JSContext* cx)
 }
 
 bool
-SetDenseElement(JSContext* cx, HandleNativeObject obj, int32_t index, HandleValue value,
-                bool strict)
+SetDenseOrUnboxedArrayElement(JSContext* cx, HandleObject obj, int32_t index,
+                              HandleValue value, bool strict)
 {
     // This function is called from Ion code for StoreElementHole's OOL path.
-    // In this case we know the object is native and we can use setDenseElement
-    // instead of setDenseElementWithType.
+    // In this case we know the object is native or an unboxed array and we can
+    // use setDenseElement instead of setDenseElementWithType.
 
     NativeObject::EnsureDenseResult result = NativeObject::ED_SPARSE;
     do {
-        if (index < 0)
+        if (index < 0 || obj->is<UnboxedArrayObject>())
             break;
         bool isArray = obj->is<ArrayObject>();
         if (isArray && !obj->as<ArrayObject>().lengthIsWritable())
             break;
         uint32_t idx = uint32_t(index);
-        result = obj->ensureDenseElements(cx, idx, 1);
+        result = obj->as<NativeObject>().ensureDenseElements(cx, idx, 1);
         if (result != NativeObject::ED_OK)
             break;
         if (isArray) {
@@ -1136,13 +1132,22 @@ SetDenseElement(JSContext* cx, HandleNativeObject obj, int32_t index, HandleValu
             if (idx >= arr.length())
                 arr.setLengthInt32(idx + 1);
         }
-        obj->setDenseElement(idx, value);
+        obj->as<NativeObject>().setDenseElement(idx, value);
         return true;
     } while (false);
 
     if (result == NativeObject::ED_FAILED)
         return false;
     MOZ_ASSERT(result == NativeObject::ED_SPARSE);
+
+    if (index >= 0 && obj->is<UnboxedArrayObject>()) {
+        UnboxedArrayObject* nobj = &obj->as<UnboxedArrayObject>();
+        if (uint32_t(index) == nobj->initializedLength() &&
+            uint32_t(index) < UnboxedArrayObject::MaximumCapacity)
+        {
+            return nobj->appendElementNoTypeChange(cx, index, value);
+        }
+    }
 
     RootedValue indexVal(cx, Int32Value(index));
     return SetObjectElement(cx, obj, indexVal, value, strict);

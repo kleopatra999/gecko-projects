@@ -68,6 +68,10 @@ const kEventConstructors = {
                                                           return new BluetoothGattCharacteristicEvent(aName, aProps);
                                                        },
                                              },
+  BluetoothLeDeviceEvent:                    { create: function (aName, aProps) {
+                                                          return new BluetoothLeDeviceEvent(aName, aProps);
+                                                       },
+                                             },
   BluetoothPairingEvent:                     { create: function (aName, aProps) {
                                                           return new BluetoothPairingEvent(aName, aProps);
                                                        },
@@ -166,6 +170,10 @@ const kEventConstructors = {
                                              },
   DeviceProximityEvent:                      { create: function (aName, aProps) {
                                                          return new DeviceProximityEvent(aName, aProps);
+                                                       },
+                                             },
+  DeviceStorageAreaChangedEvent:             { create: function (aName, aProps) {
+                                                         return new DeviceStorageAreaChangedEvent(aName, aProps);
                                                        },
                                              },
   DeviceStorageChangeEvent:                  { create: function (aName, aProps) {

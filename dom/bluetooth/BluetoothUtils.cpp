@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,6 +12,7 @@
 #include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "nsContentUtils.h"
 #include "nsISystemMessagesInternal.h"
+#include "nsIUUIDGenerator.h"
 #include "nsServiceManagerUtils.h"
 #include "nsXULAppAPI.h"
 
@@ -77,6 +78,27 @@ StringToUuid(const char* aString, BluetoothUuid& aUuid)
 }
 
 void
+GenerateUuid(nsAString &aUuidString)
+{
+  nsresult rv;
+  nsCOMPtr<nsIUUIDGenerator> uuidGenerator =
+    do_GetService("@mozilla.org/uuid-generator;1", &rv);
+  NS_ENSURE_SUCCESS_VOID(rv);
+
+  nsID uuid;
+  rv = uuidGenerator->GenerateUUIDInPlace(&uuid);
+  NS_ENSURE_SUCCESS_VOID(rv);
+
+  // Build a string in {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx} format
+  char uuidBuffer[NSID_LENGTH];
+  uuid.ToProvidedString(uuidBuffer);
+  NS_ConvertASCIItoUTF16 uuidString(uuidBuffer);
+
+  // Remove {} and the null terminator
+  aUuidString.Assign(Substring(uuidString, 1, NSID_LENGTH - 3));
+}
+
+void
 GeneratePathFromGattId(const BluetoothGattId& aId,
                        nsAString& aPath,
                        nsAString& aUuidStr)
@@ -94,6 +116,34 @@ GeneratePathFromGattId(const BluetoothGattId& aId,
 {
   nsString uuidStr;
   GeneratePathFromGattId(aId, aPath, uuidStr);
+}
+
+void
+RegisterBluetoothSignalHandler(const nsAString& aPath,
+                               BluetoothSignalObserver* aHandler)
+{
+  MOZ_ASSERT(!aPath.IsEmpty());
+  MOZ_ASSERT(aHandler);
+
+  BluetoothService* bs = BluetoothService::Get();
+  NS_ENSURE_TRUE_VOID(bs);
+
+  bs->RegisterBluetoothSignalHandler(aPath, aHandler);
+  aHandler->SetSignalRegistered(true);
+}
+
+void
+UnregisterBluetoothSignalHandler(const nsAString& aPath,
+                                 BluetoothSignalObserver* aHandler)
+{
+  MOZ_ASSERT(!aPath.IsEmpty());
+  MOZ_ASSERT(aHandler);
+
+  BluetoothService* bs = BluetoothService::Get();
+  NS_ENSURE_TRUE_VOID(bs);
+
+  bs->UnregisterBluetoothSignalHandler(aPath, aHandler);
+  aHandler->SetSignalRegistered(false);
 }
 
 /**

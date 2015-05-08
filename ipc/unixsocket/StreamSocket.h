@@ -7,7 +7,6 @@
 #ifndef mozilla_ipc_streamsocket_h
 #define mozilla_ipc_streamsocket_h
 
-#include "mozilla/ipc/SocketBase.h"
 #include "ConnectionOrientedSocket.h"
 
 namespace mozilla {
@@ -16,19 +15,18 @@ namespace ipc {
 class StreamSocketIO;
 class UnixSocketConnector;
 
-class StreamSocket : public SocketConsumerBase
-                   , public ConnectionOrientedSocket
+class StreamSocket : public ConnectionOrientedSocket
 {
 public:
   StreamSocket();
 
   /**
-   * Queue data to be sent to the socket on the IO thread. Can only be called on
-   * originating thread.
+   * Method to be called whenever data is received. This is only called on the
+   * main thread.
    *
-   * @param aBuffer Data to be sent to socket
+   * @param aBuffer Data received from the socket.
    */
-  void SendSocketData(UnixSocketIOBuffer* aBuffer);
+  virtual void ReceiveSocketData(nsAutoPtr<UnixSocketBuffer>& aBuffer) = 0;
 
   /**
    * Convenience function for sending strings to the socket (common in bluetooth
@@ -68,6 +66,16 @@ public:
    */
   void GetSocketAddr(nsAString& aAddrStr);
 
+  // Methods for |DataSocket|
+  //
+
+  void SendSocketData(UnixSocketIOBuffer* aBuffer) override;
+
+  // Methods for |SocketBase|
+  //
+
+  void CloseSocket() override;
+
 protected:
   virtual ~StreamSocket();
 
@@ -77,13 +85,6 @@ protected:
   ConnectionOrientedSocketIO* PrepareAccept(UnixSocketConnector* aConnector);
 
 private:
-
-  // Legacy interface from |SocketBase|; should be replaced by |Close|.
-  void CloseSocket() override
-  {
-    Close();
-  }
-
   StreamSocketIO* mIO;
 };
 

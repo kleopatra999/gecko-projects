@@ -47,6 +47,9 @@ pref("browser.viewport.defaultZoom", -1);
 /* allow scrollbars to float above chrome ui */
 pref("ui.scrollbarsCanOverlapContent", 1);
 
+/* turn off the caret blink after 10 cycles */
+pref("ui.caretBlinkCount", 10);
+
 /* cache prefs */
 pref("browser.cache.disk.enable", true);
 pref("browser.cache.disk.capacity", 20480); // kilobytes
@@ -567,6 +570,7 @@ pref("media.fragmented-mp4.android-media-codec.enabled", true);
 pref("media.fragmented-mp4.android-media-codec.preferred", true);
 
 // optimize images memory usage
+pref("image.downscale-during-decode.enabled", true);
 pref("image.decode-only-on-draw.enabled", true);
 
 #ifdef NIGHTLY_BUILD
@@ -862,6 +866,10 @@ pref("reader.toolbar.vertical", false);
 
 // Whether or not to display buttons related to reading list in reader view.
 pref("browser.readinglist.enabled", true);
+
+// Telemetry settings.
+// Whether to use the unified telemetry behavior, requires a restart.
+pref("toolkit.telemetry.unified", false);
 
 // Selection carets never fall-back to internal LongTap detector.
 pref("selectioncaret.detects.longtap", false);

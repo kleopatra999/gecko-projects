@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,8 +19,32 @@ using namespace mozilla::dom;
 
 USING_BLUETOOTH_NAMESPACE
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(
-  BluetoothGattDescriptor, mOwner, mCharacteristic)
+NS_IMPL_CYCLE_COLLECTION_CLASS(BluetoothGattDescriptor)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(BluetoothGattDescriptor)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mOwner)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mCharacteristic)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
+
+  /**
+   * Unregister the bluetooth signal handler after unlinked.
+   *
+   * This is needed to avoid ending up with exposing a deleted object to JS or
+   * accessing deleted objects while receiving signals from parent process
+   * after unlinked. Please see Bug 1138267 for detail informations.
+   */
+  nsString path;
+  GeneratePathFromGattId(tmp->mDescriptorId, path);
+  UnregisterBluetoothSignalHandler(path, tmp);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(BluetoothGattDescriptor)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOwner)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCharacteristic)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(BluetoothGattDescriptor)
+
 NS_IMPL_CYCLE_COLLECTING_ADDREF(BluetoothGattDescriptor)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(BluetoothGattDescriptor)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(BluetoothGattDescriptor)
@@ -39,24 +63,18 @@ BluetoothGattDescriptor::BluetoothGattDescriptor(
   MOZ_ASSERT(aOwner);
   MOZ_ASSERT(aCharacteristic);
 
-  BluetoothService* bs = BluetoothService::Get();
-  NS_ENSURE_TRUE_VOID(bs);
-
   // Generate bluetooth signal path and a string representation to provide uuid
   // of this descriptor to applications
   nsString path;
   GeneratePathFromGattId(mDescriptorId, path, mUuidStr);
-  bs->RegisterBluetoothSignalHandler(path, this);
+  RegisterBluetoothSignalHandler(path, this);
 }
 
 BluetoothGattDescriptor::~BluetoothGattDescriptor()
 {
-  BluetoothService* bs = BluetoothService::Get();
-  NS_ENSURE_TRUE_VOID(bs);
-
   nsString path;
   GeneratePathFromGattId(mDescriptorId, path);
-  bs->UnregisterBluetoothSignalHandler(path, this);
+  UnregisterBluetoothSignalHandler(path, this);
 }
 
 void
@@ -72,6 +90,7 @@ void
 BluetoothGattDescriptor::Notify(const BluetoothSignal& aData)
 {
   BT_LOGD("[D] %s", NS_ConvertUTF16toUTF8(aData.name()).get());
+  NS_ENSURE_TRUE_VOID(mSignalRegistered);
 
   BluetoothValue v = aData.value();
   if (aData.name().EqualsLiteral("DescriptorValueUpdated")) {
@@ -93,8 +112,6 @@ void
 BluetoothGattDescriptor::GetValue(JSContext* cx,
                                   JS::MutableHandle<JSObject*> aValue) const
 {
-  MOZ_ASSERT(aValue);
-
   aValue.set(mValue.IsEmpty()
              ? nullptr
              : ArrayBuffer::Create(cx, mValue.Length(), mValue.Elements()));

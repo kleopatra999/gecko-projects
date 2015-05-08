@@ -3,7 +3,7 @@
 
 const { classes: Cc, utils: Cu, interfaces: Ci, results: Cr } = Components;
 
-Cu.import("resource://gre/modules/TelemetryPing.jsm", this);
+Cu.import("resource://gre/modules/TelemetryController.jsm", this);
 Cu.import("resource://gre/modules/Services.jsm", this);
 
 const gIsWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
@@ -16,6 +16,8 @@ const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
 const MILLISECONDS_PER_DAY = 24 * MILLISECONDS_PER_HOUR;
 
 const HAS_DATAREPORTINGSERVICE = "@mozilla.org/datareporting/service;1" in Cc;
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 let gOldAppInfo = null;
 let gGlobalScope = this;
@@ -142,15 +144,29 @@ function fakeSchedulerTimer(set, clear) {
  */
 function fakeNow(...args) {
   const date = new Date(...args);
+  const modules = [
+    Cu.import("resource://gre/modules/TelemetrySession.jsm"),
+    Cu.import("resource://gre/modules/TelemetryEnvironment.jsm"),
+    Cu.import("resource://gre/modules/TelemetryController.jsm"),
+  ];
 
-  let ping = Cu.import("resource://gre/modules/TelemetryPing.jsm");
-  ping.Policy.now = () => date;
-  let session = Cu.import("resource://gre/modules/TelemetrySession.jsm");
-  session.Policy.now = () => date;
-  let environment = Cu.import("resource://gre/modules/TelemetryEnvironment.jsm");
-  environment.Policy.now = () => date;
+  for (let m of modules) {
+    m.Policy.now = () => date;
+  }
 
   return new Date(date);
+}
+
+// Fake the timeout functions for TelemetryController sending.
+function fakePingSendTimer(set, clear) {
+  let ping = Cu.import("resource://gre/modules/TelemetryController.jsm");
+  ping.Policy.setPingSendTimeout = set;
+  ping.Policy.clearPingSendTimeout = clear;
+}
+
+function fakeMidnightPingFuzzingDelay(delayMs) {
+  let ping = Cu.import("resource://gre/modules/TelemetryController.jsm");
+  ping.Policy.midnightPingFuzzingDelay = () => delayMs;
 }
 
 // Return a date that is |offset| ms in the future from |date|.
@@ -170,10 +186,13 @@ function promiseRejects(promise) {
 
 // Set logging preferences for all the tests.
 Services.prefs.setCharPref("toolkit.telemetry.log.level", "Trace");
-TelemetryPing.initLogging();
+TelemetryController.initLogging();
 
 // Telemetry archiving should be on.
 Services.prefs.setBoolPref("toolkit.telemetry.archive.enabled", true);
 
 // Avoid timers interrupting test behavior.
 fakeSchedulerTimer(() => {}, () => {});
+fakePingSendTimer(() => {}, () => {});
+// Make pind sending predictable.
+fakeMidnightPingFuzzingDelay(0);

@@ -46,9 +46,10 @@ let accessibility = new Accessibility();
 let actions = new ActionChain(utils, checkForInterrupted);
 let importedScripts = null;
 
-// The sandbox we execute test scripts in. Gets lazily created in
-// createExecuteContentSandbox().
-let sandbox;
+// A dict of sandboxes used this session
+let sandboxes = {};
+// The name of the current sandbox
+let sandboxName = 'default';
 
 // the unload handler
 let onunload;
@@ -85,7 +86,6 @@ let modalHandler = function() {
     previousFrame = curFrame;
   }
   curFrame = content;
-  sandbox = null;
 };
 
 /**
@@ -221,7 +221,6 @@ function startListeners() {
   addMessageListenerId("Marionette:getElementTagName", getElementTagNameFn);
   addMessageListenerId("Marionette:isElementDisplayed", isElementDisplayed);
   addMessageListenerId("Marionette:getElementValueOfCssProperty", getElementValueOfCssProperty);
-  addMessageListenerId("Marionette:submitElement", submitElement);
   addMessageListenerId("Marionette:getElementSize", getElementSizeFn);  // deprecated
   addMessageListenerId("Marionette:getElementRect", getElementRectFn);
   addMessageListenerId("Marionette:isElementEnabled", isElementEnabledFn);
@@ -326,7 +325,6 @@ function deleteSession(msg) {
   removeMessageListenerId("Marionette:getElementTagName", getElementTagNameFn);
   removeMessageListenerId("Marionette:isElementDisplayed", isElementDisplayed);
   removeMessageListenerId("Marionette:getElementValueOfCssProperty", getElementValueOfCssProperty);
-  removeMessageListenerId("Marionette:submitElement", submitElement);
   removeMessageListenerId("Marionette:getElementSize", getElementSizeFn); // deprecated
   removeMessageListenerId("Marionette:getElementRect", getElementRectFn);
   removeMessageListenerId("Marionette:isElementEnabled", isElementEnabledFn);
@@ -405,7 +403,7 @@ function sendError(err, cmdId) {
  * Clear test values after completion of test
  */
 function resetValues() {
-  sandbox = null;
+  sandboxes = {};
   curFrame = content;
   actions.mouseEventsOnly = false;
 }
@@ -439,7 +437,6 @@ function checkForInterrupted() {
         //if previousFrame is set, then we're in a single process environment
         curFrame = actions.frame = previousFrame;
         previousFrame = null;
-        sandbox = null;
       }
       else {
         //else we're in OOP environment, so we'll switch to the original OOP frame
@@ -456,43 +453,49 @@ function checkForInterrupted() {
 /**
  * Returns a content sandbox that can be used by the execute_foo functions.
  */
-function createExecuteContentSandbox(aWindow, timeout) {
-  let sandbox = new Cu.Sandbox(aWindow, {sandboxPrototype: aWindow});
+function createExecuteContentSandbox(win, timeout) {
+  let mn = new Marionette(
+      this,
+      win,
+      "content",
+      marionetteLogObj,
+      timeout,
+      heartbeatCallback,
+      marionetteTestName);
+  mn.runEmulatorCmd = (cmd, cb) => this.runEmulatorCmd(cmd, cb);
+  mn.runEmulatorShell = (args, cb) => this.runEmulatorShell(args, cb);
+
+  let principal = win;
+  if (sandboxName == 'system') {
+    principal = Cc["@mozilla.org/systemprincipal;1"].
+                createInstance(Ci.nsIPrincipal);
+  }
+  let sandbox = new Cu.Sandbox(principal, {sandboxPrototype: win});
   sandbox.global = sandbox;
-  sandbox.window = aWindow;
+  sandbox.window = win;
   sandbox.document = sandbox.window.document;
   sandbox.navigator = sandbox.window.navigator;
   sandbox.testUtils = utils;
   sandbox.asyncTestCommandId = asyncTestCommandId;
+  sandbox.marionette = mn;
 
-  let marionette = new Marionette(this, aWindow, "content",
-                                  marionetteLogObj, timeout,
-                                  heartbeatCallback,
-                                  marionetteTestName);
-  marionette.runEmulatorCmd = (cmd, cb) => this.runEmulatorCmd(cmd, cb);
-  marionette.runEmulatorShell = (args, cb) => this.runEmulatorShell(args, cb);
-  sandbox.marionette = marionette;
-  marionette.exports.forEach(function(fn) {
-    try {
-      sandbox[fn] = marionette[fn].bind(marionette);
-    }
-    catch(e) {
-      sandbox[fn] = marionette[fn];
+  mn.exports.forEach(fn => {
+    if (typeof mn[fn] == "function") {
+      sandbox[fn] = mn[fn].bind(mn);
+    } else {
+      sandbox[fn] = mn[fn];
     }
   });
 
-  if (aWindow.wrappedJSObject.SpecialPowers != undefined) {
-    XPCOMUtils.defineLazyGetter(sandbox, 'SpecialPowers', function() {
-      return aWindow.wrappedJSObject.SpecialPowers;
-    });
+  let specialPowersFn;
+  if (typeof win.wrappedJSObject.SpecialPowers != "undefined") {
+    specialPowersFn = () => win.wrappedJSObject.SpecialPowers;
+  } else {
+    specialPowersFn = () => new SpecialPowers(win);
   }
-  else {
-    XPCOMUtils.defineLazyGetter(sandbox, 'SpecialPowers', function() {
-      return new SpecialPowers(aWindow);
-    });
-  }
+  XPCOMUtils.defineLazyGetter(sandbox, "SpecialPowers", specialPowersFn);
 
-  sandbox.asyncComplete = function(obj, id) {
+  sandbox.asyncComplete = (obj, id) => {
     if (id == asyncTestCommandId) {
       curFrame.removeEventListener("unload", onunload, false);
       curFrame.clearTimeout(asyncTestTimeoutId);
@@ -525,15 +528,15 @@ function createExecuteContentSandbox(aWindow, timeout) {
 
   sandbox.finish = function() {
     if (asyncTestRunning) {
-      sandbox.asyncComplete(marionette.generate_results(), sandbox.asyncTestCommandId);
+      sandbox.asyncComplete(mn.generate_results(), sandbox.asyncTestCommandId);
     } else {
-      return marionette.generate_results();
+      return mn.generate_results();
     }
   };
   sandbox.marionetteScriptFinished = val =>
       sandbox.asyncComplete(val, sandbox.asyncTestCommandId);
 
-  return sandbox;
+  sandboxes[sandboxName] = sandbox;
 }
 
 /**
@@ -558,17 +561,21 @@ function executeScript(msg, directInject) {
 
   asyncTestCommandId = msg.json.command_id;
   let script = msg.json.script;
+  sandboxName = msg.json.sandboxName;
 
-  if (msg.json.newSandbox || !sandbox) {
-    sandbox = createExecuteContentSandbox(curFrame,
-                                          msg.json.timeout);
-    if (!sandbox) {
+  if (msg.json.newSandbox ||
+      !(sandboxName in sandboxes) ||
+      (sandboxes[sandboxName].window != curFrame)) {
+    createExecuteContentSandbox(curFrame, msg.json.timeout);
+    if (!sandboxes[sandboxName]) {
       sendError(new WebDriverError("Could not create sandbox!"), asyncTestCommandId);
       return;
     }
   } else {
-    sandbox.asyncTestCommandId = asyncTestCommandId;
+    sandboxes[sandboxName].asyncTestCommandId = asyncTestCommandId;
   }
+
+  let sandbox = sandboxes[sandboxName];
 
   try {
     if (directInject) {
@@ -668,7 +675,7 @@ function executeWithCallback(msg, useFinish) {
   if (msg.json.inactivityTimeout) {
     let setTimer = function() {
       inactivityTimeoutId = curFrame.setTimeout(function() {
-        sandbox.asyncComplete(new ScriptTimeout("timed out due to inactivity"), asyncTestCommandId);
+        sandbox.asyncComplete(new ScriptTimeoutError("timed out due to inactivity"), asyncTestCommandId);
       }, msg.json.inactivityTimeout);
     };
 
@@ -681,23 +688,26 @@ function executeWithCallback(msg, useFinish) {
 
   let script = msg.json.script;
   asyncTestCommandId = msg.json.command_id;
+  sandboxName = msg.json.sandboxName;
 
   onunload = function() {
     sendError(new JavaScriptError("unload was called"), asyncTestCommandId);
   };
   curFrame.addEventListener("unload", onunload, false);
 
-  if (msg.json.newSandbox || !sandbox) {
-    sandbox = createExecuteContentSandbox(curFrame,
-                                          msg.json.timeout);
-    if (!sandbox) {
+  if (msg.json.newSandbox ||
+      !(sandboxName in sandboxes) ||
+      (sandboxes[sandboxName].window != curFrame)) {
+    createExecuteContentSandbox(curFrame, msg.json.timeout);
+    if (!sandboxes[sandboxName]) {
       sendError(new JavaScriptError("Could not create sandbox!"), asyncTestCommandId);
       return;
     }
   }
   else {
-    sandbox.asyncTestCommandId = asyncTestCommandId;
+    sandboxes[sandboxName].asyncTestCommandId = asyncTestCommandId;
   }
+  let sandbox = sandboxes[sandboxName];
   sandbox.tag = script;
 
   asyncTestTimeoutId = curFrame.setTimeout(function() {
@@ -1210,9 +1220,9 @@ function pollForReadyState(msg, start, callback) {
 
 /**
  * Navigate to the given URL.  The operation will be performed on the
- * current browser context, and handles the case where we navigate
- * within an iframe.  All other navigation is handled by the server
- * (in chrome space).
+ * current browsing context, which means it handles the case where we
+ * navigate within an iframe.  All other navigation is handled by the
+ * driver (in chrome space).
  */
 function get(msg) {
   let start = new Date().getTime();
@@ -1454,29 +1464,6 @@ function getElementValueOfCssProperty(msg) {
 }
 
 /**
-  * Submit a form on a content page by either using form or element in a form
-  * @param object msg
-  *               'json' JSON object containing 'id' member of the element
-  */
-function submitElement (msg) {
-  let command_id = msg.json.command_id;
-  try {
-    let el = elementManager.getKnownElement(msg.json.id, curFrame);
-    while (el.parentNode != null && el.tagName.toLowerCase() != 'form') {
-      el = el.parentNode;
-    }
-    if (el.tagName && el.tagName.toLowerCase() == 'form') {
-      el.submit();
-      sendOk(command_id);
-    } else {
-      sendError(new NoSuchElementError("Element is not a form element or in a form"), command_id);
-    }
-  } catch (e) {
-    sendError(e, command_id);
-  }
-}
-
-/**
  * Get the size of the element.
  *
  * @param {WebElement} id
@@ -1666,7 +1653,7 @@ function switchToFrame(msg) {
     if(msg.json.focus == true) {
       curFrame.focus();
     }
-    sandbox = null;
+
     checkTimer.initWithCallback(checkLoad, 100, Ci.nsITimer.TYPE_ONE_SHOT);
     return;
   }
@@ -1718,7 +1705,7 @@ function switchToFrame(msg) {
           if(msg.json.focus == true) {
             curFrame.focus();
           }
-          sandbox = null;
+
           checkTimer.initWithCallback(checkLoad, 100, Ci.nsITimer.TYPE_ONE_SHOT);
           return;
         }
@@ -1739,8 +1726,6 @@ function switchToFrame(msg) {
     sendError(new NoSuchFrameError("Unable to locate frame: " + (msg.json.id || msg.json.element)), command_id);
     return true;
   }
-
-  sandbox = null;
 
   // send a synchronous message to let the server update the currently active
   // frame element (for getActiveFrame)
@@ -1794,7 +1779,7 @@ function addCookie(msg) {
 
   var document = curFrame.document;
   if (!document || !document.contentType.match(/html/i)) {
-    sendError(new UnableToSetCookie("You may only set cookies on html documents"), msg.json.command_id);
+    sendError(new UnableToSetCookieError("You may only set cookies on html documents"), msg.json.command_id);
   }
 
   let added = sendSyncMessage("Marionette:addCookie", {value: cookie});
@@ -1901,7 +1886,7 @@ function runEmulatorShell(args, callback) {
 
 function emulatorCmdResult(msg) {
   let message = msg.json;
-  if (!sandbox) {
+  if (!sandboxes[sandboxName]) {
     return;
   }
   let cb = _emu_cbs[message.id];

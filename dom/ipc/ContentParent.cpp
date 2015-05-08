@@ -51,6 +51,7 @@
 #include "mozilla/dom/PCycleCollectWithLogsParent.h"
 #include "mozilla/dom/PFMRadioParent.h"
 #include "mozilla/dom/PMemoryReportRequestParent.h"
+#include "mozilla/dom/ServiceWorkerRegistrar.h"
 #include "mozilla/dom/asmjscache/AsmJSCache.h"
 #include "mozilla/dom/bluetooth/PBluetoothParent.h"
 #include "mozilla/dom/cellbroadcast/CellBroadcastParent.h"
@@ -152,14 +153,22 @@
 #include "URIUtils.h"
 #include "nsIWebBrowserChrome.h"
 #include "nsIDocShell.h"
+#include "nsDocShell.h"
 #include "mozilla/net/NeckoMessageUtils.h"
 #include "gfxPrefs.h"
 #include "prio.h"
 #include "private/pprio.h"
 #include "ContentProcessManager.h"
 #include "mozilla/psm/PSMContentListener.h"
+#include "nsPluginHost.h"
+#include "nsPluginTags.h"
+#include "nsIBlocklistService.h"
 
 #include "nsIBidiKeyboard.h"
+
+#ifdef MOZ_WEBRTC
+#include "signaling/src/peerconnection/WebrtcGlobalParent.h"
+#endif
 
 #if defined(ANDROID) || defined(LINUX)
 #include "nsSystemInfo.h"
@@ -399,49 +408,70 @@ bool ContentParent::sNuwaReady = false;
 #endif
 
 #define NS_IPC_IOSERVICE_SET_OFFLINE_TOPIC "ipc:network:set-offline"
+#define NS_IPC_IOSERVICE_SET_CONNECTIVITY_TOPIC "ipc:network:set-connectivity"
 
 class MemoryReportRequestParent : public PMemoryReportRequestParent
 {
 public:
-    MemoryReportRequestParent();
+    explicit MemoryReportRequestParent(uint32_t aGeneration);
+
     virtual ~MemoryReportRequestParent();
 
     virtual void ActorDestroy(ActorDestroyReason aWhy) override;
 
-    virtual bool Recv__delete__(const uint32_t& aGeneration, InfallibleTArray<MemoryReport>&& aReport) override;
+    virtual bool RecvReport(const MemoryReport& aReport) override;
+    virtual bool Recv__delete__() override;
 
 private:
+    const uint32_t mGeneration;
+    // Non-null if we haven't yet called EndChildReport() on it.
+    nsRefPtr<nsMemoryReporterManager> mReporterManager;
+
     ContentParent* Owner()
     {
         return static_cast<ContentParent*>(Manager());
     }
 };
 
-MemoryReportRequestParent::MemoryReportRequestParent()
+MemoryReportRequestParent::MemoryReportRequestParent(uint32_t aGeneration)
+    : mGeneration(aGeneration)
 {
     MOZ_COUNT_CTOR(MemoryReportRequestParent);
+    mReporterManager = nsMemoryReporterManager::GetOrCreate();
+    NS_WARN_IF(!mReporterManager);
+}
+
+bool
+MemoryReportRequestParent::RecvReport(const MemoryReport& aReport)
+{
+    if (mReporterManager) {
+        mReporterManager->HandleChildReport(mGeneration, aReport);
+    }
+    return true;
+}
+
+bool
+MemoryReportRequestParent::Recv__delete__()
+{
+    // Notifying the reporter manager is done in ActorDestroy, because
+    // it needs to happen even if the child process exits mid-report.
+    // (The reporter manager will time out eventually, but let's avoid
+    // that if possible.)
+    return true;
 }
 
 void
 MemoryReportRequestParent::ActorDestroy(ActorDestroyReason aWhy)
 {
-  // Implement me! Bug 1005154
-}
-
-bool
-MemoryReportRequestParent::Recv__delete__(const uint32_t& generation,
-                                          nsTArray<MemoryReport>&& childReports)
-{
-    nsRefPtr<nsMemoryReporterManager> mgr =
-        nsMemoryReporterManager::GetOrCreate();
-    if (mgr) {
-        mgr->HandleChildReports(generation, childReports);
+    if (mReporterManager) {
+        mReporterManager->EndChildReport(mGeneration, aWhy == Deletion);
+        mReporterManager = nullptr;
     }
-    return true;
 }
 
 MemoryReportRequestParent::~MemoryReportRequestParent()
 {
+    MOZ_ASSERT(!mReporterManager);
     MOZ_COUNT_DTOR(MemoryReportRequestParent);
 }
 
@@ -617,6 +647,7 @@ static const char* sObserverTopics[] = {
     "xpcom-shutdown",
     "profile-before-change",
     NS_IPC_IOSERVICE_SET_OFFLINE_TOPIC,
+    NS_IPC_IOSERVICE_SET_CONNECTIVITY_TOPIC,
     "child-memory-reporter-request",
     "memory-pressure",
     "child-gc-request",
@@ -626,6 +657,7 @@ static const char* sObserverTopics[] = {
     "file-watcher-update",
 #ifdef MOZ_WIDGET_GONK
     NS_VOLUME_STATE_CHANGED,
+    NS_VOLUME_REMOVED,
     "phone-state-changed",
 #endif
 #ifdef ACCESSIBILITY
@@ -1058,6 +1090,25 @@ ContentParent::RecvConnectPluginBridge(const uint32_t& aPluginId, nsresult* aRv)
     // pointer and just throw it away.
     uint32_t dummy = 0;
     return mozilla::plugins::SetupBridge(aPluginId, this, true, aRv, &dummy);
+}
+
+bool
+ContentParent::RecvGetBlocklistState(const uint32_t& aPluginId,
+                                     uint32_t* aState)
+{
+    *aState = nsIBlocklistService::STATE_BLOCKED;
+
+    nsRefPtr<nsPluginHost> pluginHost = nsPluginHost::GetInst();
+    if (!pluginHost) {
+        return false;
+    }
+    nsPluginTag* tag =  pluginHost->PluginWithId(aPluginId);
+
+    if (!tag) {
+        return false;
+    }
+
+    return NS_SUCCEEDED(tag->GetBlocklistState(aState));
 }
 
 bool
@@ -2606,7 +2657,7 @@ ContentParent::RecvSetClipboard(const IPCDataTransfer& aDataTransfer,
         raw->GuaranteePersistance();
 
         nsRefPtr<gfxDrawable> drawable = new gfxSurfaceDrawable(image, size);
-        nsCOMPtr<imgIContainer> imageContainer(image::ImageOps::CreateFromDrawable(drawable)); 
+        nsCOMPtr<imgIContainer> imageContainer(image::ImageOps::CreateFromDrawable(drawable));
 
         nsCOMPtr<nsISupportsInterfacePointer>
           imgPtr(do_CreateInstance(NS_SUPPORTS_INTERFACE_POINTER_CONTRACTID, &rv));
@@ -2890,13 +2941,16 @@ ContentParent::RecvAddNewProcess(const uint32_t& aPid,
 
     // Update offline settings.
     bool isOffline, isLangRTL;
+    bool isConnected;
     InfallibleTArray<nsString> unusedDictionaries;
     ClipboardCapabilities clipboardCaps;
     DomainPolicyClone domainPolicy;
 
-    RecvGetXPCOMProcessAttributes(&isOffline, &isLangRTL, &unusedDictionaries,
+    RecvGetXPCOMProcessAttributes(&isOffline, &isConnected,
+                                  &isLangRTL, &unusedDictionaries,
                                   &clipboardCaps, &domainPolicy);
     mozilla::unused << content->SendSetOffline(isOffline);
+    mozilla::unused << content->SendSetConnectivity(isConnected);
     MOZ_ASSERT(!clipboardCaps.supportsSelectionClipboard() &&
                !clipboardCaps.supportsFindClipboard(),
                "Unexpected values");
@@ -2987,6 +3041,17 @@ ContentParent::Observe(nsISupports* aSubject,
           }
 #ifdef MOZ_NUWA_PROCESS
       }
+#endif
+    }
+    else if (!strcmp(aTopic, NS_IPC_IOSERVICE_SET_CONNECTIVITY_TOPIC)) {
+#ifdef MOZ_NUWA_PROCESS
+        if (!(IsNuwaReady() && IsNuwaProcess())) {
+#endif
+            if (!SendSetConnectivity(NS_LITERAL_STRING("true").Equals(aData))) {
+                return NS_ERROR_NOT_AVAILABLE;
+            }
+#ifdef MOZ_NUWA_PROCESS
+        }
 #endif
     }
     // listening for alert notifications
@@ -3104,6 +3169,15 @@ ContentParent::Observe(nsISupports* aSubject,
     } else if (!strcmp(aTopic, "phone-state-changed")) {
         nsString state(aData);
         unused << SendNotifyPhoneStateChange(state);
+    }
+    else if(!strcmp(aTopic, NS_VOLUME_REMOVED)) {
+#ifdef MOZ_NUWA_PROCESS
+        if (!(IsNuwaReady() && IsNuwaProcess()))
+#endif
+        {
+            nsString volName(aData);
+            unused << SendVolumeRemoved(volName);
+        }
     }
 #endif
 #ifdef ACCESSIBILITY
@@ -3237,6 +3311,7 @@ ContentParent::RecvGetProcessAttributes(ContentParentId* aCpId,
 
 bool
 ContentParent::RecvGetXPCOMProcessAttributes(bool* aIsOffline,
+                                             bool* aIsConnected,
                                              bool* aIsLangRTL,
                                              InfallibleTArray<nsString>* dictionaries,
                                              ClipboardCapabilities* clipboardCaps,
@@ -3246,6 +3321,9 @@ ContentParent::RecvGetXPCOMProcessAttributes(bool* aIsOffline,
     MOZ_ASSERT(io, "No IO service?");
     DebugOnly<nsresult> rv = io->GetOffline(aIsOffline);
     MOZ_ASSERT(NS_SUCCEEDED(rv), "Failed getting offline?");
+
+    rv = io->GetConnectivity(aIsConnected);
+    MOZ_ASSERT(NS_SUCCEEDED(rv), "Failed getting connectivity?");
 
     nsIBidiKeyboard* bidi = nsContentUtils::GetBidiKeyboard();
 
@@ -3547,7 +3625,8 @@ ContentParent::AllocPMemoryReportRequestParent(const uint32_t& aGeneration,
                                                const bool &aMinimizeMemoryUsage,
                                                const MaybeFileDesc &aDMDFile)
 {
-    MemoryReportRequestParent* parent = new MemoryReportRequestParent();
+    MemoryReportRequestParent* parent =
+        new MemoryReportRequestParent(aGeneration);
     return parent;
 }
 
@@ -4025,7 +4104,7 @@ ContentParent::RecvGetRandomValues(const uint32_t& length,
 
     memcpy(randomValues->Elements(), buf, length);
 
-    NS_Free(buf);
+    free(buf);
 
     return true;
 }
@@ -4387,7 +4466,8 @@ ContentParent::DoSendAsyncMessage(JSContext* aCx,
         return false;
     }
     InfallibleTArray<CpowEntry> cpows;
-    if (aCpows && !GetCPOWManager()->Wrap(aCx, aCpows, &cpows)) {
+    jsipc::CPOWManager* mgr = GetCPOWManager();
+    if (aCpows && (!mgr || !mgr->Wrap(aCx, aCpows, &cpows))) {
         return false;
     }
 #ifdef MOZ_NUWA_PROCESS
@@ -4495,6 +4575,22 @@ ContentParent::RecvSetFakeVolumeState(const nsString& fsName, const int32_t& fsS
 }
 
 bool
+ContentParent::RecvRemoveFakeVolume(const nsString& fsName)
+{
+#ifdef MOZ_WIDGET_GONK
+    nsresult rv;
+    nsCOMPtr<nsIVolumeService> vs = do_GetService(NS_VOLUMESERVICE_CONTRACTID, &rv);
+    if (vs) {
+        vs->RemoveFakeVolume(fsName);
+    }
+    return true;
+#else
+    NS_WARNING("ContentParent::RecvRemoveFakeVolume shouldn't be called when MOZ_WIDGET_GONK is not defined");
+    return false;
+#endif
+}
+
+bool
 ContentParent::RecvKeywordToURI(const nsCString& aKeyword,
                                 nsString* aProviderName,
                                 OptionalInputStreamParams* aPostData,
@@ -4542,6 +4638,24 @@ ContentParent::RecvNotifyKeywordSearchLoading(const nsString &aProvider,
         }
     }
 #endif
+    return true;
+}
+
+bool
+ContentParent::RecvCopyFavicon(const URIParams& aOldURI,
+                               const URIParams& aNewURI,
+                               const bool& aInPrivateBrowsing)
+{
+    nsCOMPtr<nsIURI> oldURI = DeserializeURI(aOldURI);
+    if (!oldURI) {
+        return true;
+    }
+    nsCOMPtr<nsIURI> newURI = DeserializeURI(aNewURI);
+    if (!newURI) {
+        return true;
+    }
+
+    nsDocShell::CopyFavicon(oldURI, newURI, aInPrivateBrowsing);
     return true;
 }
 
@@ -4905,6 +5019,27 @@ ContentParent::DeallocPOfflineCacheUpdateParent(POfflineCacheUpdateParent* aActo
     return true;
 }
 
+PWebrtcGlobalParent *
+ContentParent::AllocPWebrtcGlobalParent()
+{
+#ifdef MOZ_WEBRTC
+    return WebrtcGlobalParent::Alloc();
+#else
+    return nullptr;
+#endif
+}
+
+bool
+ContentParent::DeallocPWebrtcGlobalParent(PWebrtcGlobalParent *aActor)
+{
+#ifdef MOZ_WEBRTC
+    WebrtcGlobalParent::Dealloc(static_cast<WebrtcGlobalParent*>(aActor));
+    return true;
+#else
+    return false;
+#endif
+}
+
 bool
 ContentParent::RecvSetOfflinePermission(const Principal& aPrincipal)
 {
@@ -4993,6 +5128,28 @@ ContentParent::DeallocPContentPermissionRequestParent(PContentPermissionRequestP
     nsContentPermissionUtils::NotifyRemoveContentPermissionRequestParent(actor);
     delete actor;
     return true;
+}
+
+bool
+ContentParent::RecvGetBrowserConfiguration(const nsCString& aURI, BrowserConfiguration* aConfig)
+{
+    MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+
+    return GetBrowserConfiguration(aURI, *aConfig);;
+}
+
+/*static*/ bool
+ContentParent::GetBrowserConfiguration(const nsCString& aURI, BrowserConfiguration& aConfig)
+{
+    if (XRE_GetProcessType() == GeckoProcessType_Default) {
+        nsRefPtr<ServiceWorkerRegistrar> swr = ServiceWorkerRegistrar::Get();
+        MOZ_ASSERT(swr);
+
+        swr->GetRegistrations(aConfig.serviceWorkerRegistrations());
+        return true;
+    }
+
+    return ContentChild::GetSingleton()->SendGetBrowserConfiguration(aURI, &aConfig);
 }
 
 bool

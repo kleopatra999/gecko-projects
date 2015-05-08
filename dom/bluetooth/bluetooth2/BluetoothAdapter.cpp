@@ -1,11 +1,12 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "BluetoothReplyRunnable.h"
 #include "BluetoothService.h"
+#include "BluetoothUtils.h"
 #include "DOMRequest.h"
 #include "nsIDocument.h"
 #include "nsIPrincipal.h"
@@ -29,9 +30,32 @@ using namespace mozilla::dom;
 
 USING_BLUETOOTH_NAMESPACE
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED(BluetoothAdapter, DOMEventTargetHelper,
-                                   mDevices, mDiscoveryHandleInUse,
-                                   mPairingReqs)
+NS_IMPL_CYCLE_COLLECTION_CLASS(BluetoothAdapter)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(BluetoothAdapter,
+                                                DOMEventTargetHelper)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mDevices)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mDiscoveryHandleInUse)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mPairingReqs)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mLeScanHandleArray)
+
+  /**
+   * Unregister the bluetooth signal handler after unlinked.
+   *
+   * This is needed to avoid ending up with exposing a deleted object to JS or
+   * accessing deleted objects while receiving signals from parent process
+   * after unlinked. Please see Bug 1138267 for detail informations.
+   */
+  UnregisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_ADAPTER), tmp);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(BluetoothAdapter,
+                                                  DOMEventTargetHelper)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDevices)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDiscoveryHandleInUse)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPairingReqs)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mLeScanHandleArray)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 // QueryInterface implementation for BluetoothAdapter
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(BluetoothAdapter)
@@ -86,6 +110,101 @@ public:
 
 private:
   nsRefPtr<BluetoothAdapter> mAdapter;
+};
+
+class StartLeScanTask final : public BluetoothReplyRunnable
+{
+public:
+  StartLeScanTask(BluetoothAdapter* aAdapter, Promise* aPromise,
+                  const nsTArray<nsString>& aServiceUuids)
+    : BluetoothReplyRunnable(nullptr, aPromise,
+                             NS_LITERAL_STRING("StartLeScan"))
+    , mAdapter(aAdapter)
+    , mServiceUuids(aServiceUuids)
+  {
+    MOZ_ASSERT(aPromise);
+    MOZ_ASSERT(aAdapter);
+  }
+
+  bool
+  ParseSuccessfulReply(JS::MutableHandle<JS::Value> aValue)
+  {
+    aValue.setUndefined();
+
+    AutoJSAPI jsapi;
+    NS_ENSURE_TRUE(jsapi.Init(mAdapter->GetParentObject()), false);
+    JSContext* cx = jsapi.cx();
+
+    const BluetoothValue& v = mReply->get_BluetoothReplySuccess().value();
+    NS_ENSURE_TRUE(v.type() == BluetoothValue::TnsString, false);
+
+    /**
+     * Create a new discovery handle and wrap it to return. Each
+     * discovery handle is one-time-use only.
+     */
+    nsRefPtr<BluetoothDiscoveryHandle> discoveryHandle =
+      BluetoothDiscoveryHandle::Create(mAdapter->GetParentObject(),
+                                       mServiceUuids, v.get_nsString(),
+                                       mAdapter);
+
+    if (!ToJSValue(cx, discoveryHandle, aValue)) {
+      JS_ClearPendingException(cx);
+      return false;
+    }
+
+    // Append a BluetoothDiscoveryHandle to LeScan handle array.
+    mAdapter->AppendLeScanHandle(discoveryHandle);
+
+    return true;
+  }
+
+  virtual void
+  ReleaseMembers() override
+  {
+    BluetoothReplyRunnable::ReleaseMembers();
+    mAdapter = nullptr;
+  }
+
+private:
+  nsRefPtr<BluetoothAdapter> mAdapter;
+  nsTArray<nsString> mServiceUuids;
+};
+
+class StopLeScanTask final : public BluetoothReplyRunnable
+{
+public:
+  StopLeScanTask(BluetoothAdapter* aAdapter,
+                 Promise* aPromise,
+                 const nsAString& aScanUuid)
+      : BluetoothReplyRunnable(nullptr, aPromise,
+                               NS_LITERAL_STRING("StopLeScan"))
+      , mAdapter(aAdapter)
+      , mScanUuid(aScanUuid)
+  {
+    MOZ_ASSERT(aPromise);
+    MOZ_ASSERT(aAdapter);
+    MOZ_ASSERT(!aScanUuid.IsEmpty());
+  }
+
+protected:
+  virtual bool
+  ParseSuccessfulReply(JS::MutableHandle<JS::Value> aValue) override
+  {
+    mAdapter->RemoveLeScanHandle(mScanUuid);
+    aValue.setUndefined();
+    return true;
+  }
+
+  virtual void
+  ReleaseMembers() override
+  {
+    BluetoothReplyRunnable::ReleaseMembers();
+    mAdapter = nullptr;
+  }
+
+private:
+  nsRefPtr<BluetoothAdapter> mAdapter;
+  nsString mScanUuid;
 };
 
 class GetDevicesTask : public BluetoothReplyRunnable
@@ -210,17 +329,12 @@ BluetoothAdapter::BluetoothAdapter(nsPIDOMWindow* aWindow,
     SetPropertyByValue(values[i]);
   }
 
-  BluetoothService* bs = BluetoothService::Get();
-  NS_ENSURE_TRUE_VOID(bs);
-  bs->RegisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_ADAPTER), this);
+  RegisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_ADAPTER), this);
 }
 
 BluetoothAdapter::~BluetoothAdapter()
 {
-  BluetoothService* bs = BluetoothService::Get();
-  // We can be null on shutdown, where this might happen
-  NS_ENSURE_TRUE_VOID(bs);
-  bs->UnregisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_ADAPTER), this);
+  UnregisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_ADAPTER), this);
 }
 
 void
@@ -228,9 +342,7 @@ BluetoothAdapter::DisconnectFromOwner()
 {
   DOMEventTargetHelper::DisconnectFromOwner();
 
-  BluetoothService* bs = BluetoothService::Get();
-  NS_ENSURE_TRUE_VOID(bs);
-  bs->UnregisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_ADAPTER), this);
+  UnregisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_ADAPTER), this);
 }
 
 void
@@ -259,9 +371,10 @@ BluetoothAdapter::SetPropertyByValue(const BluetoothNamedValue& aValue)
     mState = value.get_bool() ? BluetoothAdapterState::Enabled
                               : BluetoothAdapterState::Disabled;
 
-    // Clear saved devices when state changes to disabled
+    // Clear saved devices and LE scan handles when state changes to disabled
     if (mState == BluetoothAdapterState::Disabled) {
       mDevices.Clear();
+      mLeScanHandleArray.Clear();
     }
   } else if (name.EqualsLiteral("Name")) {
     mName = value.get_nsString();
@@ -321,9 +434,8 @@ BluetoothAdapter::Create(nsPIDOMWindow* aWindow, const BluetoothValue& aValue)
 void
 BluetoothAdapter::Notify(const BluetoothSignal& aData)
 {
-  InfallibleTArray<BluetoothNamedValue> arr;
-
   BT_LOGD("[A] %s", NS_ConvertUTF16toUTF8(aData.name()).get());
+  NS_ENSURE_TRUE_VOID(mSignalRegistered);
 
   BluetoothValue v = aData.value();
   if (aData.name().EqualsLiteral("PropertyChanged")) {
@@ -338,6 +450,10 @@ BluetoothAdapter::Notify(const BluetoothSignal& aData)
      */
     if (mDiscoveryHandleInUse) {
       HandleDeviceFound(v);
+    }
+  } else if (aData.name().EqualsLiteral("LeDeviceFound")) {
+    if (!mLeScanHandleArray.IsEmpty()) {
+      HandleLeDeviceFound(v);
     }
   } else if (aData.name().EqualsLiteral(DEVICE_PAIRED_ID)) {
     HandleDevicePaired(aData.value());
@@ -385,6 +501,26 @@ BluetoothAdapter::SetDiscoveryHandleInUse(
   mDiscoveryHandleInUse = aDiscoveryHandle;
 }
 
+void
+BluetoothAdapter::AppendLeScanHandle(
+  BluetoothDiscoveryHandle* aDiscoveryHandle)
+{
+  mLeScanHandleArray.AppendElement(aDiscoveryHandle);
+}
+
+void
+BluetoothAdapter::RemoveLeScanHandle(const nsAString& aScanUuid)
+{
+  nsString uuid;
+  for (uint32_t i = 0; i < mLeScanHandleArray.Length(); ++i) {
+    mLeScanHandleArray[i]->GetLeScanUuid(uuid);
+    if (aScanUuid.Equals(uuid)) {
+      mLeScanHandleArray.RemoveElementAt(i);
+      break;
+    }
+  }
+}
+
 already_AddRefed<Promise>
 BluetoothAdapter::StartDiscovery(ErrorResult& aRv)
 {
@@ -423,9 +559,7 @@ BluetoothAdapter::StartDiscovery(ErrorResult& aRv)
   // Return BluetoothDiscoveryHandle in StartDiscoveryTask
   nsRefPtr<BluetoothReplyRunnable> result =
     new StartDiscoveryTask(this, promise);
-  BT_ENSURE_TRUE_REJECT(NS_SUCCEEDED(bs->StartDiscoveryInternal(result)),
-                        promise,
-                        NS_ERROR_DOM_OPERATION_ERR);
+  bs->StartDiscoveryInternal(result);
 
   return promise.forget();
 }
@@ -461,9 +595,68 @@ BluetoothAdapter::StopDiscovery(ErrorResult& aRv)
     new BluetoothVoidReplyRunnable(nullptr /* DOMRequest */,
                                    promise,
                                    NS_LITERAL_STRING("StopDiscovery"));
-  BT_ENSURE_TRUE_REJECT(NS_SUCCEEDED(bs->StopDiscoveryInternal(result)),
+  bs->StopDiscoveryInternal(result);
+
+  return promise.forget();
+}
+
+already_AddRefed<Promise>
+BluetoothAdapter::StartLeScan(const nsTArray<nsString>& aServiceUuids,
+                              ErrorResult& aRv)
+{
+  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(GetOwner());
+  if (!global) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  nsRefPtr<Promise> promise = Promise::Create(global, aRv);
+  NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
+
+  BT_ENSURE_TRUE_REJECT(mState == BluetoothAdapterState::Enabled,
                         promise,
-                        NS_ERROR_DOM_OPERATION_ERR);
+                        NS_ERROR_DOM_INVALID_STATE_ERR);
+
+  BluetoothService* bs = BluetoothService::Get();
+  BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
+
+  nsRefPtr<BluetoothReplyRunnable> result =
+    new StartLeScanTask(this, promise, aServiceUuids);
+  bs->StartLeScanInternal(aServiceUuids, result);
+
+  return promise.forget();
+}
+
+already_AddRefed<Promise>
+BluetoothAdapter::StopLeScan(BluetoothDiscoveryHandle& aDiscoveryHandle,
+                             ErrorResult& aRv)
+{
+  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(GetOwner());
+  if (!global) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  nsRefPtr<Promise> promise = Promise::Create(global, aRv);
+  NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
+
+  BT_ENSURE_TRUE_REJECT(mState == BluetoothAdapterState::Enabled,
+                        promise,
+                        NS_ERROR_DOM_INVALID_STATE_ERR);
+
+  BluetoothService* bs = BluetoothService::Get();
+  BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
+
+  // Reject the request if there's no ongoing LE Scan using this handle.
+  BT_ENSURE_TRUE_REJECT(!mLeScanHandleArray.Contains(&aDiscoveryHandle),
+                        promise,
+                        NS_ERROR_DOM_BLUETOOTH_DONE);
+
+  nsString scanUuid;
+  aDiscoveryHandle.GetLeScanUuid(scanUuid);
+  nsRefPtr<BluetoothReplyRunnable> result =
+    new StopLeScanTask(this, promise, scanUuid);
+  bs->StopLeScanInternal(scanUuid, result);
 
   return promise.forget();
 }
@@ -863,6 +1056,42 @@ BluetoothAdapter::HandleDeviceFound(const BluetoothValue& aValue)
 
   // Notify application of discovered device via discovery handle
   mDiscoveryHandleInUse->DispatchDeviceEvent(discoveredDevice);
+}
+
+void
+BluetoothAdapter::HandleLeDeviceFound(const BluetoothValue& aValue)
+{
+  MOZ_ASSERT(aValue.type() == BluetoothValue::TArrayOfBluetoothNamedValue);
+
+  const InfallibleTArray<BluetoothNamedValue>& values =
+    aValue.get_ArrayOfBluetoothNamedValue();
+
+  int rssi = 0;
+  nsTArray<uint8_t> advData;
+  for (uint32_t i = 0; i < values.Length(); ++i) {
+    nsString name = values[i].name();
+    BluetoothValue value = values[i].value();
+    if (name.EqualsLiteral("Rssi")) {
+      MOZ_ASSERT(value.type() == BluetoothValue::Tint32_t);
+      rssi = value.get_int32_t();
+    } else if (name.EqualsLiteral("GattAdv")) {
+      MOZ_ASSERT(value.type() == BluetoothValue::TArrayOfuint8_t);
+      advData = value.get_ArrayOfuint8_t();
+    } else {
+      BT_WARNING("Receive an unexpected value name '%s'",
+                 NS_ConvertUTF16toUTF8(name).get());
+    }
+  }
+
+  // Create an individual scanned BluetoothDevice for each LeDeviceEvent even
+  // the device exists in adapter's devices array
+  nsRefPtr<BluetoothDevice> scannedDevice =
+    BluetoothDevice::Create(GetOwner(), aValue);
+
+  // Notify application of scanned devices via discovery handle
+  for (uint32_t i = 0; i < mLeScanHandleArray.Length(); ++i) {
+    mLeScanHandleArray[i]->DispatchLeDeviceEvent(scannedDevice, rssi, advData);
+  }
 }
 
 void

@@ -16,6 +16,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
   var ROOM_STATES = loop.store.ROOM_STATES;
   var sharedActions = loop.shared.actions;
   var sharedMixins = loop.shared.mixins;
+  var sharedUtils = loop.shared.utils;
   var sharedViews = loop.shared.views;
 
   var StandaloneRoomInfoArea = React.createClass({
@@ -204,7 +205,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
           <a href={loop.config.privacyWebsiteUrl} target="_blank">
             {mozL10n.get("privacy_notice_link_text")}
           </a>
-        ),
+        )
       });
     },
 
@@ -214,7 +215,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
       if (event.target && event.target.href) {
         this.props.dispatcher.dispatch(new sharedActions.RecordClick({
           linkInfo: event.target.href
-        }))
+        }));
       }
     },
 
@@ -248,7 +249,10 @@ loop.standaloneRoomViews = (function(mozL10n) {
         return null;
       }
 
-      var location = this.props.roomContextUrl.location;
+      var locationInfo = sharedUtils.formatURL(this.props.roomContextUrl.location);
+      if (!locationInfo) {
+        return null;
+      }
 
       var cx = React.addons.classSet;
 
@@ -262,9 +266,10 @@ loop.standaloneRoomViews = (function(mozL10n) {
             <img src={this.props.roomContextUrl.thumbnail} />
           <div className="standalone-context-url-description-wrapper">
             {this.props.roomContextUrl.description}
-            <br /><a href={location}
+            <br /><a href={locationInfo.location}
                      onClick={this.recordClick}
-                     target="_blank">{location}</a>
+                     target="_blank"
+                     title={locationInfo.location}>{locationInfo.hostname}</a>
           </div>
         </div>
       );
@@ -280,15 +285,28 @@ loop.standaloneRoomViews = (function(mozL10n) {
       roomInfoFailure: React.PropTypes.string
     },
 
+    getInitialState: function() {
+      return {
+        failureLogged: false
+      };
+    },
+
+    _logFailure: function(message) {
+      if (!this.state.failureLogged) {
+        console.error(mozL10n.get(message));
+        this.state.failureLogged = true;
+      }
+    },
+
     render: function() {
+      // For failures, we currently just log the messages - UX doesn't want them
+      // displayed on primary UI at the moment.
       if (this.props.roomInfoFailure === ROOM_INFO_FAILURES.WEB_CRYPTO_UNSUPPORTED) {
-        return (<h2 className="room-info-failure">
-          {mozL10n.get("room_information_failure_unsupported_browser")}
-        </h2>);
+        this._logFailure("room_information_failure_unsupported_browser");
+        return null;
       } else if (this.props.roomInfoFailure) {
-        return (<h2 className="room-info-failure">
-          {mozL10n.get("room_information_failure_not_available")}
-        </h2>);
+        this._logFailure("room_information_failure_not_available");
+        return null;
       }
 
       // We only support one item in the context Urls array for now.
@@ -558,7 +576,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
       var screenShareStreamClasses = React.addons.classSet({
         "screen": true,
         "focus-stream": this.state.receivingScreenShare,
-        hide: !this.state.receivingScreenShare,
+        hide: !this.state.receivingScreenShare
       });
 
       return (

@@ -100,7 +100,9 @@ const GcliActor = ActorClass({
     request: {
       customProps: Arg(0, "nullable:array:string")
     },
-    response: RetVal("json")
+    response: {
+      value: RetVal("array:json")
+    }
   }),
 
   /**
@@ -242,7 +244,7 @@ const GcliActor = ActorClass({
     this._system = createSystem({ location: "server" });
     this._system.commands.onCommandsChange.add(this._commandsChanged);
 
-    const gcliInit = require("devtools/commandline/commands-index");
+    const gcliInit = require("gcli/commands/index");
     gcliInit.addAllItemsByModule(this._system);
 
     // this._requisitionPromise should be created synchronously with the call
@@ -280,7 +282,7 @@ const GcliActor = ActorClass({
 exports.GcliActor = GcliActor;
 
 /**
- * 
+ *
  */
 const GcliFront = exports.GcliFront = FrontClass(GcliActor, {
   initialize: function(client, tabForm) {

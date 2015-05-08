@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,7 +9,7 @@
 
 #include "BluetoothCommon.h"
 #include <stdlib.h>
-#include "mozilla/ipc/SocketBase.h"
+#include "mozilla/ipc/DataSocket.h"
 #include "mozilla/ipc/UnixSocketWatcher.h"
 #include "mozilla/RefPtr.h"
 #include "nsAutoPtr.h"
@@ -21,7 +21,7 @@ BEGIN_BLUETOOTH_NAMESPACE
 class BluetoothSocketObserver;
 class BluetoothUnixSocketConnector;
 
-class BluetoothSocket final : public mozilla::ipc::SocketConsumerBase
+class BluetoothSocket final : public mozilla::ipc::DataSocket
 {
 public:
   BluetoothSocket(BluetoothSocketObserver* aObserver,
@@ -41,24 +41,18 @@ public:
     CloseSocket();
   }
 
-  virtual void OnConnectSuccess() override;
-  virtual void OnConnectError() override;
-  virtual void OnDisconnect() override;
-  virtual void ReceiveSocketData(
-    nsAutoPtr<mozilla::ipc::UnixSocketBuffer>& aBuffer) override;
-
   inline void GetAddress(nsAString& aDeviceAddress)
   {
     GetSocketAddr(aDeviceAddress);
   }
 
   /**
-   * Queue data to be sent to the socket on the IO thread. Can only be called on
-   * originating thread.
+   * Method to be called whenever data is received. This is only called on the
+   * main thread.
    *
-   * @param aBuffer Data to be sent to socket
+   * @param aBuffer Data received from the socket.
    */
-  void SendSocketData(mozilla::ipc::UnixSocketIOBuffer* aBuffer) override;
+  void ReceiveSocketData(nsAutoPtr<mozilla::ipc::UnixSocketBuffer>& aBuffer);
 
   /**
    * Convenience function for sending strings to the socket (common in bluetooth
@@ -96,15 +90,23 @@ public:
   bool ListenSocket(BluetoothUnixSocketConnector* aConnector);
 
   /**
-   * Queues the internal representation of socket for deletion. Can be called
-   * from main thread.
-   */
-  void CloseSocket() override;
-
-  /**
    * Get the current sockaddr for the socket
    */
   void GetSocketAddr(nsAString& aAddrStr);
+
+  // Methods for |DataSocket|
+  //
+
+  void SendSocketData(mozilla::ipc::UnixSocketIOBuffer* aBuffer) override;
+
+  // Methods for |SocketBase|
+  //
+
+  void CloseSocket() override;
+
+  void OnConnectSuccess() override;
+  void OnConnectError() override;
+  void OnDisconnect() override;
 
 private:
   class BluetoothSocketIO;

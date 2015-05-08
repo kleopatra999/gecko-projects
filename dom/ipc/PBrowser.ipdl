@@ -17,7 +17,7 @@ include protocol PPluginWidget;
 include DOMTypes;
 include JavaScriptTypes;
 include URIParams;
-include ServiceWorkerRegistrarTypes;
+include BrowserConfiguration;
 
 
 using class IPC::Principal from "mozilla/dom/PermissionMessageUtils.h";
@@ -68,11 +68,6 @@ struct NativeKeyBinding
   CommandInt[] singleLineCommands;
   CommandInt[] multiLineCommands;
   CommandInt[] richTextCommands;
-};
-
-struct BrowserConfiguration
-{
-  ServiceWorkerRegistrationData[] serviceWorkerRegistrations;
 };
 
 union MaybeNativeKeyBinding
@@ -550,7 +545,7 @@ child:
     CacheFileDescriptor(nsString path, FileDescriptor fd);
 
     UpdateDimensions(IntRect rect, ScreenIntSize size, ScreenOrientation orientation,
-                     LayoutDeviceIntPoint chromeDisp) compress;
+                     LayoutDeviceIntPoint chromeDisp) compressall;
 
     UpdateFrame(FrameMetrics frame);
 

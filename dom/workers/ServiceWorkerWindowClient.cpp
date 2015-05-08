@@ -1,4 +1,5 @@
-/* -*- Mode: IDL; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -145,7 +146,7 @@ ServiceWorkerWindowClient::Focus(ErrorResult& aRv) const
                                                             promiseProxy);
   aRv = NS_DispatchToMainThread(r);
   if (NS_WARN_IF(aRv.Failed())) {
-    promise->MaybeReject(aRv.ErrorCode());
+    promise->MaybeReject(aRv);
   }
 
   return promise.forget();

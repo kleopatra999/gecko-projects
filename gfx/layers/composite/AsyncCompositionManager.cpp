@@ -13,7 +13,7 @@
 #include "gfxPoint.h"                   // for gfxPoint, gfxSize
 #include "mozilla/StyleAnimationValue.h" // for StyleAnimationValue, etc
 #include "mozilla/WidgetUtils.h"        // for ComputeTransformForRotation
-#include "mozilla/dom/KeyframeEffect.h" // for KeyframeEffectReadonly
+#include "mozilla/dom/KeyframeEffect.h" // for KeyframeEffectReadOnly
 #include "mozilla/gfx/BaseRect.h"       // for BaseRect
 #include "mozilla/gfx/Point.h"          // for RoundedToInt, PointTyped
 #include "mozilla/gfx/Rect.h"           // for RoundedToInt, RectTyped
@@ -27,7 +27,7 @@
 #include "nsDisplayList.h"              // for nsDisplayTransform, etc
 #include "nsMathUtils.h"                // for NS_round
 #include "nsPoint.h"                    // for nsPoint
-#include "nsRect.h"                     // for nsIntRect
+#include "nsRect.h"                     // for mozilla::gfx::IntRect
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTArray.h"                   // for nsTArray, nsTArray_Impl, etc
 #include "nsTArrayForwardDeclare.h"     // for InfallibleTArray
@@ -56,7 +56,7 @@ IsSameDimension(dom::ScreenOrientation o1, dom::ScreenOrientation o2)
 }
 
 static bool
-ContentMightReflowOnOrientationChange(const nsIntRect& rect)
+ContentMightReflowOnOrientationChange(const IntRect& rect)
 {
   return rect.width != rect.height;
 }
@@ -474,7 +474,7 @@ SampleAnimations(Layer* aLayer, TimeStamp aPoint)
     timing.mFillMode = NS_STYLE_ANIMATION_FILL_MODE_BOTH;
 
     ComputedTiming computedTiming =
-      dom::KeyframeEffectReadonly::GetComputedTimingAt(
+      dom::KeyframeEffectReadOnly::GetComputedTimingAt(
         Nullable<TimeDuration>(elapsedDuration), timing);
 
     MOZ_ASSERT(0.0 <= computedTiming.mTimeFraction &&
@@ -606,6 +606,17 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer)
     // When doing so, it might be useful to look at how it was called here before
     // bug 1036967 removed the (dead) call.
 
+#if defined(MOZ_ANDROID_APZ)
+    if (mIsFirstPaint) {
+      CSSToLayerScale geckoZoom = metrics.LayersPixelsPerCSSPixel().ToScaleFactor();
+      LayerIntPoint scrollOffsetLayerPixels = RoundedToInt(metrics.GetScrollOffset() * geckoZoom);
+      mContentRect = metrics.GetScrollableRect();
+      SetFirstPaintViewport(scrollOffsetLayerPixels,
+                            geckoZoom,
+                            mContentRect);
+    }
+#endif
+
     mIsFirstPaint = false;
     mLayersUpdated = false;
 
@@ -723,11 +734,13 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
     // |metrics.CalculateCompositedSizeInCssPixels()| would not give a correct
     // result.
     const CSSToParentLayerScale effectiveZoom(metrics.GetZoom().yScale * asyncZoomY);
-    const CSSCoord compositedHeight = (metrics.mCompositionBounds / effectiveZoom).height;
-    const CSSCoord scrollableHeight = metrics.GetScrollableRect().height;
 
-    // The scrollbar thumb ratio is in AppUnits.
-    const float ratio = aScrollbar->GetScrollbarThumbRatio();
+    const LayoutDeviceToParentLayerScale nonLayoutScale = effectiveZoom /
+        metrics.GetDevPixelsPerCSSPixel();
+    // Here we convert the scrollbar thumb ratio into a true unitless ratio by
+    // dividing out the conversion factor from the scrollframe's parent's space
+    // to the scrollframe's space.
+    const float ratio = aScrollbar->GetScrollbarThumbRatio() / nonLayoutScale.scale;
     ParentLayerCoord yTranslation = -asyncScrollY * ratio;
 
     // The scroll thumb additionally needs to be translated to compensate for
@@ -741,7 +754,7 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
     // a change of basis. We have a method to help with that,
     // Matrix4x4::ChangeBasis(), but it wouldn't necessarily make the code
     // cleaner in this case).
-    const CSSCoord thumbOrigin = (metrics.GetScrollOffset().y / scrollableHeight) * compositedHeight;
+    const CSSCoord thumbOrigin = (metrics.GetScrollOffset().y * ratio);
     const CSSCoord thumbOriginScaled = thumbOrigin * yScale;
     const CSSCoord thumbOriginDelta = thumbOriginScaled - thumbOrigin;
     const ParentLayerCoord thumbOriginDeltaPL = thumbOriginDelta * effectiveZoom;
@@ -770,14 +783,13 @@ ApplyAsyncTransformToScrollbarForContent(Layer* aScrollbar,
     const float xScale = 1.f / asyncZoomX;
 
     const CSSToParentLayerScale effectiveZoom(metrics.GetZoom().xScale * asyncZoomX);
-    const CSSCoord compositedWidth = (metrics.mCompositionBounds / effectiveZoom).width;
-    const CSSCoord scrollableWidth = metrics.GetScrollableRect().width;
 
-    // The scrollbar thumb ratio is in AppUnits.
-    const float ratio = aScrollbar->GetScrollbarThumbRatio();
+    const LayoutDeviceToParentLayerScale nonLayoutScale = effectiveZoom /
+        metrics.GetDevPixelsPerCSSPixel();
+    const float ratio = aScrollbar->GetScrollbarThumbRatio() / nonLayoutScale.scale;
     ParentLayerCoord xTranslation = -asyncScrollX * ratio;
 
-    const CSSCoord thumbOrigin = (metrics.GetScrollOffset().x / scrollableWidth) * compositedWidth;
+    const CSSCoord thumbOrigin = (metrics.GetScrollOffset().x * ratio);
     const CSSCoord thumbOriginScaled = thumbOrigin * xScale;
     const CSSCoord thumbOriginDelta = thumbOriginScaled - thumbOrigin;
     const ParentLayerCoord thumbOriginDeltaPL = thumbOriginDelta * effectiveZoom;
@@ -1030,7 +1042,8 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
 }
 
 bool
-AsyncCompositionManager::TransformShadowTree(TimeStamp aCurrentFrame)
+AsyncCompositionManager::TransformShadowTree(TimeStamp aCurrentFrame,
+                                             TransformsToSkip aSkip)
 {
   PROFILER_LABEL("AsyncCompositionManager", "TransformShadowTree",
     js::ProfileEntry::Category::GRAPHICS);
@@ -1045,29 +1058,31 @@ AsyncCompositionManager::TransformShadowTree(TimeStamp aCurrentFrame)
   // transforms.
   bool wantNextFrame = SampleAnimations(root, aCurrentFrame);
 
-  // FIXME/bug 775437: unify this interface with the ~native-fennec
-  // derived code
-  //
-  // Attempt to apply an async content transform to any layer that has
-  // an async pan zoom controller (which means that it is rendered
-  // async using Gecko). If this fails, fall back to transforming the
-  // primary scrollable layer.  "Failing" here means that we don't
-  // find a frame that is async scrollable.  Note that the fallback
-  // code also includes Fennec which is rendered async.  Fennec uses
-  // its own platform-specific async rendering that is done partially
-  // in Gecko and partially in Java.
-  wantNextFrame |= SampleAPZAnimations(LayerMetricsWrapper(root), aCurrentFrame);
-  if (!ApplyAsyncContentTransformToTree(root)) {
-    nsAutoTArray<Layer*,1> scrollableLayers;
+  if (!(aSkip & TransformsToSkip::APZ)) {
+    // FIXME/bug 775437: unify this interface with the ~native-fennec
+    // derived code
+    //
+    // Attempt to apply an async content transform to any layer that has
+    // an async pan zoom controller (which means that it is rendered
+    // async using Gecko). If this fails, fall back to transforming the
+    // primary scrollable layer.  "Failing" here means that we don't
+    // find a frame that is async scrollable.  Note that the fallback
+    // code also includes Fennec which is rendered async.  Fennec uses
+    // its own platform-specific async rendering that is done partially
+    // in Gecko and partially in Java.
+    wantNextFrame |= SampleAPZAnimations(LayerMetricsWrapper(root), aCurrentFrame);
+    if (!ApplyAsyncContentTransformToTree(root)) {
+      nsAutoTArray<Layer*,1> scrollableLayers;
 #ifdef MOZ_WIDGET_ANDROID
-    mLayerManager->GetRootScrollableLayers(scrollableLayers);
+      mLayerManager->GetRootScrollableLayers(scrollableLayers);
 #else
-    mLayerManager->GetScrollableLayers(scrollableLayers);
+      mLayerManager->GetScrollableLayers(scrollableLayers);
 #endif
 
-    for (uint32_t i = 0; i < scrollableLayers.Length(); i++) {
-      if (scrollableLayers[i]) {
-        TransformScrollableLayer(scrollableLayers[i]);
+      for (uint32_t i = 0; i < scrollableLayers.Length(); i++) {
+        if (scrollableLayers[i]) {
+          TransformScrollableLayer(scrollableLayers[i]);
+        }
       }
     }
   }

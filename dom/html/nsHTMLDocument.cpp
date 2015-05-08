@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=2 et tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -926,7 +926,7 @@ nsHTMLDocument::SetDomain(const nsAString& aDomain)
 {
   ErrorResult rv;
   SetDomain(aDomain, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -1047,7 +1047,7 @@ nsHTMLDocument::SetBody(nsIDOMHTMLElement* aBody)
              "How could we be an nsIContent but not actually HTML here?");
   ErrorResult rv;
   SetBody(static_cast<nsGenericHTMLElement*>(newBody.get()), rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -1226,7 +1226,7 @@ nsHTMLDocument::GetCookie(nsAString& aCookie)
 {
   ErrorResult rv;
   GetCookie(aCookie, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<nsIChannel>
@@ -1309,7 +1309,7 @@ nsHTMLDocument::SetCookie(const nsAString& aCookie)
 {
   ErrorResult rv;
   SetCookie(aCookie, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -1365,7 +1365,7 @@ nsHTMLDocument::Open(const nsAString& aContentTypeOrUrl,
     ErrorResult rv;
     *aReturn = Open(cx, aContentTypeOrUrl, aReplaceOrName, aFeatures,
                     false, rv).take();
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   nsString type;
@@ -1380,7 +1380,7 @@ nsHTMLDocument::Open(const nsAString& aContentTypeOrUrl,
   }
   ErrorResult rv;
   *aReturn = Open(cx, type, replace, rv).take();
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<nsIDOMWindow>
@@ -1561,13 +1561,6 @@ nsHTMLDocument::Open(JSContext* cx,
                      nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL,
                      nsIContentPolicy::TYPE_OTHER,
                      group);
-
-  if (rv.Failed()) {
-    return nullptr;
-  }
-
-  // We can't depend on channels implementing property bags, so do our
-  // base URI manually after reset.
 
   if (rv.Failed()) {
     return nullptr;
@@ -1754,7 +1747,7 @@ nsHTMLDocument::Close()
 {
   ErrorResult rv;
   Close(rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -2228,7 +2221,7 @@ nsHTMLDocument::GetSelection(nsISelection** aReturn)
 {
   ErrorResult rv;
   NS_IF_ADDREF(*aReturn = GetSelection(rv));
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 Selection*
@@ -2957,7 +2950,7 @@ nsHTMLDocument::SetDesignMode(const nsAString & aDesignMode)
 {
   ErrorResult rv;
   SetDesignMode(aDesignMode, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -3238,7 +3231,7 @@ nsHTMLDocument::ExecCommand(const nsAString& commandID,
 {
   ErrorResult rv;
   *_retval = ExecCommand(commandID, doShowUI, value, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 bool
@@ -3349,7 +3342,7 @@ nsHTMLDocument::QueryCommandEnabled(const nsAString& commandID,
 {
   ErrorResult rv;
   *_retval = QueryCommandEnabled(commandID, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 bool
@@ -3392,7 +3385,7 @@ nsHTMLDocument::QueryCommandIndeterm(const nsAString & commandID,
 {
   ErrorResult rv;
   *_retval = QueryCommandIndeterm(commandID, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 bool
@@ -3450,7 +3443,7 @@ nsHTMLDocument::QueryCommandState(const nsAString & commandID, bool *_retval)
 {
   ErrorResult rv;
   *_retval = QueryCommandState(commandID, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 bool
@@ -3553,7 +3546,7 @@ nsHTMLDocument::QueryCommandValue(const nsAString & commandID,
 {
   ErrorResult rv;
   QueryCommandValue(commandID, _retval, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void

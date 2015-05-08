@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=78: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -270,14 +270,14 @@ nsIdentifierMapEntry::Traverse(nsCycleCollectionTraversalCallback* aCallback)
 bool
 nsIdentifierMapEntry::IsEmpty()
 {
-  return mIdContentList.Count() == 0 && !mNameContentList &&
+  return mIdContentList.IsEmpty() && !mNameContentList &&
          !mChangeCallbacks && !mImageElement;
 }
 
 Element*
 nsIdentifierMapEntry::GetIdElement()
 {
-  return static_cast<Element*>(mIdContentList.SafeElementAt(0));
+  return mIdContentList.SafeElementAt(0);
 }
 
 Element*
@@ -289,8 +289,8 @@ nsIdentifierMapEntry::GetImageIdElement()
 void
 nsIdentifierMapEntry::AppendAllIdContent(nsCOMArray<nsIContent>* aElements)
 {
-  for (int32_t i = 0; i < mIdContentList.Count(); ++i) {
-    aElements->AppendObject(static_cast<Element*>(mIdContentList[i]));
+  for (size_t i = 0; i < mIdContentList.Length(); ++i) {
+    aElements->AppendObject(mIdContentList[i]);
   }
 }
 
@@ -592,16 +592,15 @@ bool
 nsIdentifierMapEntry::AddIdElement(Element* aElement)
 {
   NS_PRECONDITION(aElement, "Must have element");
-  NS_PRECONDITION(mIdContentList.IndexOf(nullptr) < 0,
+  NS_PRECONDITION(!mIdContentList.Contains(nullptr),
                   "Why is null in our list?");
 
 #ifdef DEBUG
-  Element* currentElement =
-    static_cast<Element*>(mIdContentList.SafeElementAt(0));
+  Element* currentElement = mIdContentList.SafeElementAt(0);
 #endif
 
   // Common case
-  if (mIdContentList.Count() == 0) {
+  if (mIdContentList.IsEmpty()) {
     if (!mIdContentList.AppendElement(aElement))
       return false;
     NS_ASSERTION(currentElement == nullptr, "How did that happen?");
@@ -613,7 +612,7 @@ nsIdentifierMapEntry::AddIdElement(Element* aElement)
   // with us.  Search for the right place to insert the content.
 
   size_t idx;
-  if (BinarySearchIf(mIdContentList, 0, mIdContentList.Count(),
+  if (BinarySearchIf(mIdContentList, 0, mIdContentList.Length(),
                      PositionComparator(aElement), &idx)) {
     // Already in the list, so already in the right spot.  Get out of here.
     // XXXbz this only happens because XUL does all sorts of random
@@ -621,12 +620,12 @@ nsIdentifierMapEntry::AddIdElement(Element* aElement)
     return true;
   }
 
-  if (!mIdContentList.InsertElementAt(aElement, idx))
+  if (!mIdContentList.InsertElementAt(idx, aElement)) {
     return false;
+  }
 
   if (idx == 0) {
-    Element* oldElement =
-      static_cast<Element*>(mIdContentList.SafeElementAt(1));
+    Element* oldElement = mIdContentList.SafeElementAt(1);
     NS_ASSERTION(currentElement == oldElement, "How did that happen?");
     FireChangeCallbacks(oldElement, aElement);
   }
@@ -645,17 +644,15 @@ nsIdentifierMapEntry::RemoveIdElement(Element* aElement)
   // Only assert this in HTML documents for now as XUL does all sorts of weird
   // crap.
   NS_ASSERTION(!aElement->OwnerDoc()->IsHTMLDocument() ||
-               mIdContentList.IndexOf(aElement) >= 0,
+               mIdContentList.Contains(aElement),
                "Removing id entry that doesn't exist");
 
   // XXXbz should this ever Compact() I guess when all the content is gone
   // we'll just get cleaned up in the natural order of things...
-  Element* currentElement =
-    static_cast<Element*>(mIdContentList.SafeElementAt(0));
+  Element* currentElement = mIdContentList.SafeElementAt(0);
   mIdContentList.RemoveElement(aElement);
   if (currentElement == aElement) {
-    FireChangeCallbacks(currentElement,
-                        static_cast<Element*>(mIdContentList.SafeElementAt(0)));
+    FireChangeCallbacks(currentElement, mIdContentList.SafeElementAt(0));
   }
 }
 
@@ -1636,6 +1633,8 @@ nsIDocument::~nsIDocument()
   if (mNodeInfoManager) {
     mNodeInfoManager->DropDocumentReference();
   }
+
+  UnlinkOriginalDocumentIfStatic();
 }
 
 
@@ -1777,10 +1776,6 @@ nsDocument::~nsDocument()
   }
 
   mPendingTitleChangeEvent.Revoke();
-
-  for (uint32_t i = 0; i < mHostObjectURIs.Length(); ++i) {
-    nsHostObjectProtocolHandler::RemoveDataEntry(mHostObjectURIs[i]);
-  }
 
   // We don't want to leave residual locks on images. Make sure we're in an
   // unlocked state, and then clear the table.
@@ -2048,10 +2043,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsDocument)
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCSSLoader)
 
-  for (uint32_t i = 0; i < tmp->mHostObjectURIs.Length(); ++i) {
-    nsHostObjectProtocolHandler::Traverse(tmp->mHostObjectURIs[i], cb);
-  }
-
   // We own only the items in mDOMMediaQueryLists that have listeners;
   // this reference is managed by their AddListener and RemoveListener
   // methods.
@@ -2093,13 +2084,14 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
   }
   tmp->mFirstChild = nullptr;
 
+  tmp->UnlinkOriginalDocumentIfStatic();
+
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mXPathEvaluator)
   tmp->mCachedRootElement = nullptr; // Avoid a dangling pointer
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDisplayDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mFirstBaseNodeWithHref)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDOMImplementation)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mImageMaps)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mOriginalDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCachedEncoder)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mUndoManager)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocumentTimeline)
@@ -2160,10 +2152,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDocument)
   if (tmp->mCSSLoader) {
     tmp->mCSSLoader->DropDocumentReference();
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mCSSLoader)
-  }
-
-  for (uint32_t i = 0; i < tmp->mHostObjectURIs.Length(); ++i) {
-    nsHostObjectProtocolHandler::RemoveDataEntry(tmp->mHostObjectURIs[i]);
   }
 
   // We own only the items in mDOMMediaQueryLists that have listeners;
@@ -3340,7 +3328,7 @@ nsDocument::HasFocus(bool* aResult)
 {
   ErrorResult rv;
   *aResult = nsIDocument::HasFocus(rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 bool
@@ -3925,6 +3913,11 @@ nsIDocument::TakeFrameRequestCallbacks(FrameRequestCallbackList& aCallbacks)
 bool
 nsIDocument::ShouldThrottleFrameRequests()
 {
+  if (mStaticCloneCount > 0) {
+    // Even if we're not visible, a static clone may be, so run at full speed.
+    return false;
+  }
+
   if (!mIsShowing) {
     // We're not showing (probably in a background tab or the bf cache).
     return true;
@@ -4047,9 +4040,6 @@ nsDocument::SetSubDocumentFor(Element* aElement, nsIDocument* aSubDoc)
       };
 
       mSubDocuments = PL_NewDHashTable(&hash_table_ops, sizeof(SubDocMapEntry));
-      if (!mSubDocuments) {
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
     }
 
     // Add a mapping to the hash table
@@ -5043,7 +5033,7 @@ nsDocument::GetElementById(const nsAString& aElementId)
   return entry ? entry->GetIdElement() : nullptr;
 }
 
-const nsSmallVoidArray*
+const nsTArray<Element*>*
 nsDocument::GetAllElementsForId(const nsAString& aElementId) const
 {
   if (aElementId.IsEmpty()) {
@@ -5051,7 +5041,7 @@ nsDocument::GetAllElementsForId(const nsAString& aElementId) const
   }
 
   nsIdentifierMapEntry *entry = mIdentifierMap.GetEntry(aElementId);
-  return entry ? entry->GetIdElements() : nullptr;
+  return entry ? &entry->GetIdElements() : nullptr;
 }
 
 NS_IMETHODIMP
@@ -5461,7 +5451,7 @@ nsDocument::GetImplementation(nsIDOMDOMImplementation** aImplementation)
   *aImplementation = GetImplementation(rv);
   if (rv.Failed()) {
     MOZ_ASSERT(!*aImplementation);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_ADDREF(*aImplementation);
   return NS_OK;
@@ -5513,7 +5503,7 @@ nsDocument::CreateElement(const nsAString& aTagName,
   *aReturn = nullptr;
   ErrorResult rv;
   nsCOMPtr<Element> element = nsIDocument::CreateElement(aTagName, rv);
-  NS_ENSURE_FALSE(rv.Failed(), rv.ErrorCode());
+  NS_ENSURE_FALSE(rv.Failed(), rv.StealNSResult());
   return CallQueryInterface(element, aReturn);
 }
 
@@ -5620,7 +5610,7 @@ nsDocument::CreateElementNS(const nsAString& aNamespaceURI,
   ErrorResult rv;
   nsCOMPtr<Element> element =
     nsIDocument::CreateElementNS(aNamespaceURI, aQualifiedName, rv);
-  NS_ENSURE_FALSE(rv.Failed(), rv.ErrorCode());
+  NS_ENSURE_FALSE(rv.Failed(), rv.StealNSResult());
   return CallQueryInterface(element, aReturn);
 }
 
@@ -5733,7 +5723,7 @@ nsDocument::CreateCDATASection(const nsAString& aData,
   NS_ENSURE_ARG_POINTER(aReturn);
   ErrorResult rv;
   *aReturn = nsIDocument::CreateCDATASection(aData, rv).take();
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<CDATASection>
@@ -5766,7 +5756,7 @@ nsDocument::CreateProcessingInstruction(const nsAString& aTarget,
   ErrorResult rv;
   *aReturn =
     nsIDocument::CreateProcessingInstruction(aTarget, aData, rv).take();
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<ProcessingInstruction>
@@ -5797,7 +5787,7 @@ nsDocument::CreateAttribute(const nsAString& aName,
 {
   ErrorResult rv;
   *aReturn = nsIDocument::CreateAttribute(aName, rv).take();
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<Attr>
@@ -5838,7 +5828,7 @@ nsDocument::CreateAttributeNS(const nsAString & aNamespaceURI,
   ErrorResult rv;
   *aResult =
     nsIDocument::CreateAttributeNS(aNamespaceURI, aQualifiedName, rv).take();
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<Attr>
@@ -6532,7 +6522,7 @@ nsDocument::GetElementsByTagNameNS(const nsAString& aNamespaceURI,
   nsRefPtr<nsContentList> list =
     nsIDocument::GetElementsByTagNameNS(aNamespaceURI, aLocalName, rv);
   if (rv.Failed()) {
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   // transfer ref to aReturn
@@ -6756,7 +6746,7 @@ nsDocument::ImportNode(nsIDOMNode* aImportedNode,
   ErrorResult rv;
   nsCOMPtr<nsINode> result = nsIDocument::ImportNode(*imported, aDeep, rv);
   if (rv.Failed()) {
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   NS_ADDREF(*aResult = result->AsDOMNode());
@@ -6803,7 +6793,7 @@ nsDocument::LoadBindingDocument(const nsAString& aURI)
 {
   ErrorResult rv;
   nsIDocument::LoadBindingDocument(aURI, rv);
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 void
@@ -6946,7 +6936,7 @@ nsDocument::CreateRange(nsIDOMRange** aReturn)
 {
   ErrorResult rv;
   *aReturn = nsIDocument::CreateRange(rv).take();
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<nsRange>
@@ -6986,7 +6976,7 @@ nsDocument::CreateNodeIterator(nsIDOMNode *aRoot,
   NodeFilterHolder holder(aFilter);
   *_retval = nsIDocument::CreateNodeIterator(*root, aWhatToShow, holder,
                                              rv).take();
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<NodeIterator>
@@ -7029,7 +7019,7 @@ nsDocument::CreateTreeWalker(nsIDOMNode *aRoot,
   NodeFilterHolder holder(aFilter);
   *_retval = nsIDocument::CreateTreeWalker(*root, aWhatToShow, holder,
                                            rv).take();
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<TreeWalker>
@@ -7751,7 +7741,7 @@ nsDocument::AdoptNode(nsIDOMNode *aAdoptedNode, nsIDOMNode **aResult)
   ErrorResult rv;
   nsINode* result = nsIDocument::AdoptNode(*adoptedNode, rv);
   if (rv.Failed()) {
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   NS_ADDREF(*aResult = result->AsDOMNode());
@@ -8196,7 +8186,7 @@ nsDocument::CreateEvent(const nsAString& aEventType, nsIDOMEvent** aReturn)
   NS_ENSURE_ARG_POINTER(aReturn);
   ErrorResult rv;
   *aReturn = nsIDocument::CreateEvent(aEventType, rv).take();
-  return rv.ErrorCode();
+  return rv.StealNSResult();
 }
 
 already_AddRefed<Event>
@@ -10063,18 +10053,6 @@ nsDocument::GetTemplateContentsOwner()
 }
 
 void
-nsDocument::RegisterHostObjectUri(const nsACString& aUri)
-{
-  mHostObjectURIs.AppendElement(aUri);
-}
-
-void
-nsDocument::UnregisterHostObjectUri(const nsACString& aUri)
-{
-  mHostObjectURIs.RemoveElement(aUri);
-}
-
-void
 nsDocument::SetScrollToRef(nsIURI *aDocumentURI)
 {
   if (!aDocumentURI) {
@@ -10283,6 +10261,9 @@ nsIDocument::CreateStaticClone(nsIDocShell* aCloneContainer)
       } else {
         clonedDoc->mOriginalDocument = this;
       }
+
+      clonedDoc->mOriginalDocument->mStaticCloneCount++;
+
       int32_t sheetsCount = GetNumberOfStyleSheets();
       for (int32_t i = 0; i < sheetsCount; ++i) {
         nsRefPtr<CSSStyleSheet> sheet = do_QueryObject(GetStyleSheetAt(i));
@@ -10318,6 +10299,17 @@ nsIDocument::CreateStaticClone(nsIDocShell* aCloneContainer)
   }
   mCreatingStaticClone = false;
   return clonedDoc.forget();
+}
+
+void
+nsIDocument::UnlinkOriginalDocumentIfStatic()
+{
+  if (IsStaticDocument() && mOriginalDocument) {
+    MOZ_ASSERT(mOriginalDocument->mStaticCloneCount > 0);
+    mOriginalDocument->mStaticCloneCount--;
+    mOriginalDocument = nullptr;
+  }
+  MOZ_ASSERT(!mOriginalDocument);
 }
 
 nsresult
@@ -11247,6 +11239,12 @@ ExitFullscreenInDocTree(nsIDocument* aMaybeNotARootDoc)
   NS_ASSERTION(!root->IsFullScreenDoc(),
     "Fullscreen root should no longer be a fullscreen doc...");
 
+  // Dispatch MozExitedDomFullscreen to the last document in
+  // the list since we want this event to follow the same path
+  // MozEnteredDomFullscreen dispatched.
+  nsRefPtr<AsyncEventDispatcher> asyncDispatcher = new AsyncEventDispatcher(
+    changed.LastElement(), NS_LITERAL_STRING("MozExitedDomFullscreen"), true, true);
+  asyncDispatcher->PostDOMEvent();
   // Move the top-level window out of fullscreen mode.
   SetWindowFullScreen(root, false);
 }
@@ -11403,6 +11401,9 @@ nsDocument::RestorePreviousFullScreenState()
     // move the top-level window out of fullscreen mode.
     NS_ASSERTION(!GetFullscreenRootDocument(this)->IsFullScreenDoc(),
       "Should have cleared all docs' stacks");
+    nsRefPtr<AsyncEventDispatcher> asyncDispatcher = new AsyncEventDispatcher(
+      this, NS_LITERAL_STRING("MozExitedDomFullscreen"), true, true);
+    asyncDispatcher->PostDOMEvent();
     SetWindowFullScreen(this, false);
   }
 }
@@ -11909,7 +11910,7 @@ nsDocument::GetMozFullScreenElement(nsIDOMElement **aFullScreenElement)
   ErrorResult rv;
   Element* el = GetMozFullScreenElement(rv);
   if (rv.Failed()) {
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   nsCOMPtr<nsIDOMElement> retval = do_QueryInterface(el);
   retval.forget(aFullScreenElement);

@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -615,7 +615,7 @@ public:
     nsRefPtr<IDBObjectStore> store =
       aTxn->ObjectStore(NS_LITERAL_STRING(DATASTOREDB_REVISION), error);
     if (NS_WARN_IF(error.Failed())) {
-      return error.ErrorCode();
+      return error.StealNSResult();
     }
     MOZ_ASSERT(store);
 
@@ -669,7 +669,7 @@ public:
     JS::Rooted<JS::Value> result(cx);
     request->GetResult(cx, &result, error);
     if (NS_WARN_IF(error.Failed())) {
-      return error.ErrorCode();
+      return error.StealNSResult();
     }
 
     // This means that the content is a IDBCursor, so the first revision already
@@ -960,7 +960,7 @@ DataStoreService::GetDataStores(nsIDOMWindow* aWindow,
   ErrorResult rv;
   nsRefPtr<Promise> promise = Promise::Create(global, rv);
   if (rv.Failed()) {
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   nsCOMPtr<nsIDocument> document = window->GetDoc();

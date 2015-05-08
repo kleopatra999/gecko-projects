@@ -16,6 +16,12 @@ MOZ_OFFICIAL_BRANDING_DIRECTORY=mobile/android/branding/official
 # See the --enable-android-min-sdk and --enable-android-max-sdk arguments in configure.in.
 MOZ_ANDROID_MIN_SDK_VERSION=9
 
+# There are several entry points into the Firefox application.  These are the names of some of the classes that are
+# listed in the Android manifest.  They are specified in here to avoid hard-coding them in source code files.
+MOZ_ANDROID_APPLICATION_CLASS=org.mozilla.gecko.GeckoApplication
+MOZ_ANDROID_BROWSER_INTENT_CLASS=org.mozilla.gecko.BrowserApp
+MOZ_ANDROID_SEARCH_INTENT_CLASS=org.mozilla.search.SearchActivity
+
 MOZ_SAFE_BROWSING=1
 
 MOZ_NO_SMART_CARDS=1
@@ -46,8 +52,11 @@ MOZ_APP_ID={aa3c5121-dab2-40e2-81ca-7ea25febc110}
 
 MOZ_APP_STATIC_INI=1
 
-# Enable on-demand decompression
+# Enable on-demand decompression.  This requires a host compile toolchain to
+# build szip to use during packaging.
+if test "$COMPILE_ENVIRONMENT"; then
 MOZ_ENABLE_SZIP=1
+fi
 
 # Enable navigator.mozPay
 MOZ_PAY=1

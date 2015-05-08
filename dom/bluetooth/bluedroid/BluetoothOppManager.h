@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -40,6 +40,7 @@ class BluetoothOppManager : public BluetoothSocketObserver
 
 public:
   BT_DECL_PROFILE_MGR_BASE
+  BT_DECL_SOCKET_OBSERVER
   virtual void GetName(nsACString& aName)
   {
     aName.AssignLiteral("OPP");
@@ -68,14 +69,6 @@ public:
   bool ExtractBlobHeaders();
   void CheckPutFinal(uint32_t aNumRead);
 
-  // The following functions are inherited from BluetoothSocketObserver
-  void ReceiveSocketData(
-    BluetoothSocket* aSocket,
-    nsAutoPtr<mozilla::ipc::UnixSocketBuffer>& aMessage) override;
-  virtual void OnSocketConnectSuccess(BluetoothSocket* aSocket) override;
-  virtual void OnSocketConnectError(BluetoothSocket* aSocket) override;
-  virtual void OnSocketDisconnect(BluetoothSocket* aSocket) override;
-
 protected:
   virtual ~BluetoothOppManager();
 
@@ -84,11 +77,7 @@ private:
   bool Init();
   void HandleShutdown();
 
-#ifdef MOZ_B2G_BT_API_V2
-  // Removed in bluetooth2
-#else
   void HandleVolumeStateChanged(nsISupports* aSubject);
-#endif
 
   void StartFileTransfer();
   void StartSendingNextFile();

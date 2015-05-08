@@ -217,6 +217,13 @@ JS_TraceShapeCycleCollectorChildren(JSTracer* trc, JS::GCCellPtr shape)
     MarkCycleCollectorChildren(trc, static_cast<Shape*>(shape.asCell()));
 }
 
+JS_FRIEND_API(void)
+JS_TraceObjectGroupCycleCollectorChildren(JSTracer* trc, JS::GCCellPtr group)
+{
+    MOZ_ASSERT(group.isObjectGroup());
+    MarkCycleCollectorChildren(trc, static_cast<ObjectGroup*>(group.asCell()));
+}
+
 static bool
 DefineHelpProperty(JSContext* cx, HandleObject obj, const char* prop, const char* value)
 {
@@ -417,7 +424,7 @@ js::DefineFunctionWithReserved(JSContext* cx, JSObject* objArg, const char* name
     if (!atom)
         return nullptr;
     Rooted<jsid> id(cx, AtomToId(atom));
-    return DefineFunction(cx, obj, id, call, nargs, attrs, JSFunction::ExtendedFinalizeKind);
+    return DefineFunction(cx, obj, id, call, nargs, attrs, gc::AllocKind::FUNCTION_EXTENDED);
 }
 
 JS_FRIEND_API(JSFunction*)
@@ -436,8 +443,8 @@ js::NewFunctionWithReserved(JSContext* cx, JSNative native, unsigned nargs, unsi
     }
 
     return (flags & JSFUN_CONSTRUCTOR) ?
-        NewNativeConstructor(cx, native, nargs, atom, JSFunction::ExtendedFinalizeKind) :
-        NewNativeFunction(cx, native, nargs, atom, JSFunction::ExtendedFinalizeKind);
+        NewNativeConstructor(cx, native, nargs, atom, gc::AllocKind::FUNCTION_EXTENDED) :
+        NewNativeFunction(cx, native, nargs, atom, gc::AllocKind::FUNCTION_EXTENDED);
 }
 
 JS_FRIEND_API(JSFunction*)
@@ -450,8 +457,8 @@ js::NewFunctionByIdWithReserved(JSContext* cx, JSNative native, unsigned nargs, 
 
     RootedAtom atom(cx, JSID_TO_ATOM(id));
     return (flags & JSFUN_CONSTRUCTOR) ?
-        NewNativeConstructor(cx, native, nargs, atom, JSFunction::ExtendedFinalizeKind) :
-        NewNativeFunction(cx, native, nargs, atom, JSFunction::ExtendedFinalizeKind);
+        NewNativeConstructor(cx, native, nargs, atom, gc::AllocKind::FUNCTION_EXTENDED) :
+        NewNativeFunction(cx, native, nargs, atom, gc::AllocKind::FUNCTION_EXTENDED);
 }
 
 JS_FRIEND_API(const Value&)
@@ -947,8 +954,8 @@ DumpHeapVisitChild(JS::CallbackTracer* trc, void** thingp, JSGCTraceKind kind)
 
     DumpHeapTracer* dtrc = static_cast<DumpHeapTracer*>(trc);
     char buffer[1024];
-    fprintf(dtrc->output, "> %p %c %s\n", *thingp, MarkDescriptor(*thingp),
-            dtrc->getTracingEdgeName(buffer, sizeof(buffer)));
+    dtrc->getTracingEdgeName(buffer, sizeof(buffer));
+    fprintf(dtrc->output, "> %p %c %s\n", *thingp, MarkDescriptor(*thingp), buffer);
 }
 
 static void
@@ -959,8 +966,8 @@ DumpHeapVisitRoot(JS::CallbackTracer* trc, void** thingp, JSGCTraceKind kind)
 
     DumpHeapTracer* dtrc = static_cast<DumpHeapTracer*>(trc);
     char buffer[1024];
-    fprintf(dtrc->output, "%p %c %s\n", *thingp, MarkDescriptor(*thingp),
-            dtrc->getTracingEdgeName(buffer, sizeof(buffer)));
+    dtrc->getTracingEdgeName(buffer, sizeof(buffer));
+    fprintf(dtrc->output, "%p %c %s\n", *thingp, MarkDescriptor(*thingp), buffer);
 }
 
 void
@@ -1252,6 +1259,13 @@ JS_FRIEND_API(bool)
 js::ForwardToNative(JSContext* cx, JSNative native, const CallArgs& args)
 {
     return native(cx, args.length(), args.base());
+}
+
+JS_FRIEND_API(JSObject*)
+js::ConvertArgsToArray(JSContext* cx, const CallArgs& args)
+{
+    RootedObject argsArray(cx, NewDenseCopiedArray(cx, args.length(), args.array()));
+    return argsArray;
 }
 
 JS_FRIEND_API(JSAtom*)

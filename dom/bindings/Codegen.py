@@ -23,6 +23,7 @@ CONSTRUCT_HOOK_NAME = '_constructor'
 LEGACYCALLER_HOOK_NAME = '_legacycaller'
 HASINSTANCE_HOOK_NAME = '_hasInstance'
 RESOLVE_HOOK_NAME = '_resolve'
+MAY_RESOLVE_HOOK_NAME = '_mayResolve'
 ENUMERATE_HOOK_NAME = '_enumerate'
 ENUM_ENTRY_VARIABLE_NAME = 'strings'
 INSTANCE_RESERVED_SLOTS = 1
@@ -457,12 +458,15 @@ class CGDOMJSClass(CGThing):
             reservedSlots = slotCount
         if self.descriptor.interface.getExtendedAttribute("NeedResolve"):
             resolveHook = RESOLVE_HOOK_NAME
+            mayResolveHook = MAY_RESOLVE_HOOK_NAME
             enumerateHook = ENUMERATE_HOOK_NAME
         elif self.descriptor.isGlobal():
             resolveHook = "mozilla::dom::ResolveGlobal"
+            mayResolveHook = "mozilla::dom::MayResolveGlobal"
             enumerateHook = "mozilla::dom::EnumerateGlobal"
         else:
             resolveHook = "nullptr"
+            mayResolveHook = "nullptr"
             enumerateHook = "nullptr"
 
         return fill(
@@ -476,7 +480,7 @@ class CGDOMJSClass(CGThing):
                 nullptr,               /* setProperty */
                 ${enumerate}, /* enumerate */
                 ${resolve}, /* resolve */
-                nullptr,               /* mayResolve */
+                ${mayResolve}, /* mayResolve */
                 nullptr,               /* convert */
                 ${finalize}, /* finalize */
                 ${call}, /* call */
@@ -498,6 +502,7 @@ class CGDOMJSClass(CGThing):
             addProperty=ADDPROPERTY_HOOK_NAME if wantsAddProperty(self.descriptor) else 'nullptr',
             enumerate=enumerateHook,
             resolve=resolveHook,
+            mayResolve=mayResolveHook,
             finalize=FINALIZE_HOOK_NAME,
             call=callHook,
             trace=traceHook,
@@ -3555,11 +3560,12 @@ class CGUpdateMemberSlotsMethod(CGAbstractStaticMethod):
                 "JSJitGetterCallArgs args(&temp);\n")
         for m in self.descriptor.interface.members:
             if m.isAttr() and m.getExtendedAttribute("StoreInSlot"):
-                # Skip doing this for the "window" attribute on the Window
-                # interface, because that can't be gotten safely until we have
-                # hooked it up correctly to the outer window.
+                # Skip doing this for the "window" and "self" attributes on the
+                # Window interface, because those can't be gotten safely until
+                # we have hooked it up correctly to the outer window.  The
+                # window code handles doing the get itself.
                 if (self.descriptor.interface.identifier.name == "Window" and
-                    m.identifier.name == "window"):
+                    (m.identifier.name == "window" or m.identifier.name == "self")):
                     continue
                 body += fill(
                     """
@@ -7768,7 +7774,7 @@ class CGLegacyCallHook(CGAbstractBindingMethod):
                             self._legacycaller)
 
 
-class CGResolveHook(CGAbstractBindingMethod):
+class CGResolveHook(CGAbstractClassHook):
     """
     Resolve hook for objects that have the NeedResolve extended attribute.
     """
@@ -7779,13 +7785,11 @@ class CGResolveHook(CGAbstractBindingMethod):
                 Argument('JS::Handle<JSObject*>', 'obj'),
                 Argument('JS::Handle<jsid>', 'id'),
                 Argument('bool*', 'resolvedp')]
-        # Our "self" is actually the "obj" argument in this case, not the thisval.
-        CGAbstractBindingMethod.__init__(
-            self, descriptor, RESOLVE_HOOK_NAME,
-            args, getThisObj="", callArgs="")
+        CGAbstractClassHook.__init__(self, descriptor, RESOLVE_HOOK_NAME,
+                                     "bool", args)
 
     def generate_code(self):
-        return CGGeneric(dedent("""
+        return dedent("""
             JS::Rooted<JSPropertyDescriptor> desc(cx);
             if (!self->DoResolve(cx, obj, id, &desc)) {
               return false;
@@ -7802,7 +7806,7 @@ class CGResolveHook(CGAbstractBindingMethod):
             }
             *resolvedp = true;
             return true;
-            """))
+            """)
 
     def definition_body(self):
         if self.descriptor.isGlobal():
@@ -7818,7 +7822,35 @@ class CGResolveHook(CGAbstractBindingMethod):
                 """)
         else:
             prefix = ""
-        return prefix + CGAbstractBindingMethod.definition_body(self)
+        return prefix + CGAbstractClassHook.definition_body(self)
+
+
+class CGMayResolveHook(CGAbstractStaticMethod):
+    """
+    Resolve hook for objects that have the NeedResolve extended attribute.
+    """
+    def __init__(self, descriptor):
+        assert descriptor.interface.getExtendedAttribute("NeedResolve")
+
+        args = [Argument('const JSAtomState&', 'names'),
+                Argument('jsid', 'id'),
+                Argument('JSObject*', 'maybeObj')]
+        CGAbstractStaticMethod.__init__(self, descriptor, MAY_RESOLVE_HOOK_NAME,
+                                        "bool", args)
+
+    def definition_body(self):
+        if self.descriptor.isGlobal():
+            # Check whether this would resolve as a standard class.
+            prefix = dedent("""
+                if (MayResolveGlobal(names, id, maybeObj)) {
+                  return true;
+                }
+
+                """)
+        else:
+            prefix = ""
+        return (prefix +
+                "return %s::MayResolve(id);\n" % self.descriptor.nativeType)
 
 
 class CGEnumerateHook(CGAbstractBindingMethod):
@@ -10366,7 +10398,7 @@ class CGDOMJSProxyHandler_getOwnPropDescriptor(ClassMethod):
             $*{getIndexed}
             JS::Rooted<JSObject*> expando(cx);
             if (!isXray && (expando = GetExpandoObject(proxy))) {
-              if (!JS_GetPropertyDescriptorById(cx, expando, id, desc)) {
+              if (!JS_GetOwnPropertyDescriptorById(cx, expando, id, desc)) {
                 return false;
               }
               if (desc.object()) {
@@ -11347,6 +11379,7 @@ class CGDescriptor(CGThing):
         cgThings.append(CGLegacyCallHook(descriptor))
         if descriptor.interface.getExtendedAttribute("NeedResolve"):
             cgThings.append(CGResolveHook(descriptor))
+            cgThings.append(CGMayResolveHook(descriptor))
             cgThings.append(CGEnumerateHook(descriptor))
 
         if descriptor.hasNamedPropertiesObject:

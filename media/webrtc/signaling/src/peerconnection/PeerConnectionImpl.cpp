@@ -136,13 +136,7 @@ public:
   ~JSErrorResult()
   {
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
-    WouldReportJSException();
-    if (IsJSException()) {
-      MOZ_ASSERT(NS_IsMainThread());
-      AutoJSContext cx;
-      Optional<JS::Handle<JS::Value> > value(cx);
-      StealJSException(cx, &value.Value());
-    }
+    SuppressException();
 #endif
   }
 };
@@ -237,7 +231,7 @@ public:
       if (jrv.Failed()) {
         CSFLogError(logTag, ": OnAddTrack(%u) failed! Error: %u",
                     static_cast<unsigned>(i),
-                    static_cast<unsigned>(jrv.ErrorCode()));
+                    jrv.ErrorCodeAsInt());
       }
     }
 
@@ -252,7 +246,7 @@ public:
       mObserver->OnAddStream(*aStream, rv);
       if (rv.Failed()) {
         CSFLogError(logTag, ": OnAddStream() failed! Error: %u",
-                    static_cast<unsigned>(rv.ErrorCode()));
+                    rv.ErrorCodeAsInt());
       }
     }
   }
@@ -2296,9 +2290,8 @@ PeerConnectionImpl::Close()
 }
 
 bool
-PeerConnectionImpl::PluginCrash(uint64_t aPluginID,
-                                const nsAString& aPluginName,
-                                const nsAString& aPluginDumpID)
+PeerConnectionImpl::PluginCrash(uint32_t aPluginID,
+                                const nsAString& aPluginName)
 {
   // fire an event to the DOM window if this is "ours"
   bool result = mMedia ? mMedia->AnyCodecHasPluginID(aPluginID) : false;
@@ -2316,7 +2309,7 @@ PeerConnectionImpl::PluginCrash(uint64_t aPluginID,
   }
 
   PluginCrashedEventInit init;
-  init.mPluginDumpID = aPluginDumpID;
+  init.mPluginID = aPluginID;
   init.mPluginName = aPluginName;
   init.mSubmittedCrashReport = false;
   init.mGmpPlugin = true;

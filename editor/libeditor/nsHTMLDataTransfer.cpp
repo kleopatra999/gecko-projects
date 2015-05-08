@@ -1222,7 +1222,7 @@ nsresult nsHTMLEditor::InsertFromDataTransfer(DataTransfer *aDataTransfer,
   ErrorResult rv;
   nsRefPtr<DOMStringList> types = aDataTransfer->MozTypesAt(aIndex, rv);
   if (rv.Failed()) {
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   bool hasPrivateHTMLFlavor = types->Contains(NS_LITERAL_STRING(kHTMLContext));
@@ -1632,7 +1632,7 @@ NS_IMETHODIMP nsHTMLEditor::PasteAsPlaintextQuotation(int32_t aSelectionType)
       rv = InsertAsPlaintextQuotation(stuffToPaste, true, 0);
     }
   }
-  NS_Free(flav);
+  free(flav);
 
   return rv;
 }

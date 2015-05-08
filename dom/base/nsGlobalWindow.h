@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -144,6 +144,8 @@ extern already_AddRefed<nsIScriptTimeoutHandler>
 NS_CreateJSTimeoutHandler(JSContext* aCx, nsGlobalWindow *aWindow,
                           const nsAString& aExpression,
                           mozilla::ErrorResult& aError);
+
+extern const js::Class OuterWindowProxyClass;
 
 /*
  * Timeout struct that holds information about each script
@@ -502,6 +504,9 @@ public:
   bool DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObj,
                  JS::Handle<jsid> aId,
                  JS::MutableHandle<JSPropertyDescriptor> aDesc);
+  // The return value is whether DoResolve might end up resolving the given id.
+  // If in doubt, return true.
+  static bool MayResolve(jsid aId);
 
   void GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
                            mozilla::ErrorResult& aRv);
@@ -838,7 +843,7 @@ public:
     CreateNamedPropertiesObject(JSContext *aCx, JS::Handle<JSObject*> aProto);
 
   nsGlobalWindow* Window();
-  nsIDOMWindow* GetSelf(mozilla::ErrorResult& aError);
+  nsGlobalWindow* Self();
   nsIDocument* GetDocument()
   {
     return GetDoc();
@@ -1306,7 +1311,7 @@ public:
   {
     mozilla::ErrorResult rv;
     ClearTimeoutOrInterval(aTimerID, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   // JS specific timeout functions (JS args grabbed from context).
@@ -1533,6 +1538,7 @@ protected:
   // These members are only used on outer window objects. Make sure
   // you never set any of these on an inner object!
   bool                          mFullScreen : 1;
+  bool                          mFullscreenMode : 1;
   bool                          mIsClosed : 1;
   bool                          mInClose : 1;
   // mHavePendingClose means we've got a termination function set to

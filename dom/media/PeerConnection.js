@@ -45,9 +45,14 @@ function GlobalPCList() {
   Services.obs.addObserver(this, "network:offline-about-to-go-offline", true);
   Services.obs.addObserver(this, "network:offline-status-changed", true);
   Services.obs.addObserver(this, "gmp-plugin-crash", true);
+  if (Cc["@mozilla.org/childprocessmessagemanager;1"]) {
+    let mm = Cc["@mozilla.org/childprocessmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
+    mm.addMessageListener("gmp-plugin-crash", this);
+  }
 }
 GlobalPCList.prototype = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver,
+                                         Ci.nsIMessageListener,
                                          Ci.nsISupportsWeakReference,
                                          Ci.IPeerConnectionManager]),
   classID: PC_MANAGER_CID,
@@ -93,6 +98,31 @@ GlobalPCList.prototype = {
     return this._list[winID] ? true : false;
   },
 
+  handleGMPCrash: function(data) {
+    let broadcastPluginCrash = function(list, winID, pluginID, pluginName) {
+      if (list.hasOwnProperty(winID)) {
+        list[winID].forEach(function(pcref) {
+          let pc = pcref.get();
+          if (pc) {
+            pc._pc.pluginCrash(pluginID, pluginName);
+          }
+        });
+      }
+    };
+
+    // a plugin crashed; if it's associated with any of our PCs, fire an
+    // event to the DOM window
+    for (let winId in this._list) {
+      broadcastPluginCrash(this._list, winId, data.pluginID, data.pluginName);
+    }
+  },
+
+  receiveMessage: function(message) {
+    if (message.name == "gmp-plugin-crash") {
+      this.handleGMPCrash(message.data);
+    }
+  },
+
   observe: function(subject, topic, data) {
     let cleanupPcRef = function(pcref) {
       let pc = pcref.get();
@@ -107,17 +137,6 @@ GlobalPCList.prototype = {
       if (list.hasOwnProperty(winID)) {
         list[winID].forEach(cleanupPcRef);
         delete list[winID];
-      }
-    };
-
-    let broadcastPluginCrash = function(list, winID, pluginID, name, crashReportID) {
-      if (list.hasOwnProperty(winID)) {
-        list[winID].forEach(function(pcref) {
-          let pc = pcref.get();
-          if (pc) {
-            pc._pc.pluginCrash(pluginID, name, crashReportID);
-          }
-        });
       }
     };
 
@@ -149,26 +168,24 @@ GlobalPCList.prototype = {
         this._networkdown = false;
       }
     } else if (topic == "network:app-offline-status-changed") {
-      // App just went offline. The subject also contains the appId,
-      // but navigator.onLine checks that for us
-      if (!this._networkdown && !this._win.navigator.onLine) {
-        for (let winId in this._list) {
+      // App changed offline status. The subject contains the appId for which
+      // we need to check the status
+      let appId = subject.QueryInterface(Ci.nsIAppOfflineInfo).appId;
+      let ios = Cc['@mozilla.org/network/io-service;1'].getService(Ci.nsIIOService);
+      for (let winId in this._list) {
+        if (appId != this._list[winId]._appId) {
+          continue;
+        }
+        if (ios.isAppOffline(appId)) {
           cleanupWinId(this._list, winId);
         }
       }
-      this._networkdown = !this._win.navigator.onLine;
     } else if (topic == "gmp-plugin-crash") {
-      // a plugin crashed; if it's associated with any of our PCs, fire an
-      // event to the DOM window
-      let sep = data.indexOf(' ');
-      let pluginId = data.slice(0, sep);
-      let rest = data.slice(sep+1);
-      // This presumes no spaces in the name!
-      sep = rest.indexOf(' ');
-      let name = rest.slice(0, sep);
-      let crashId = rest.slice(sep+1);
-      for (let winId in this._list) {
-        broadcastPluginCrash(this._list, winId, pluginId, name, crashId);
+      if (subject instanceof Ci.nsIWritablePropertyBag2) {
+        let pluginID = subject.getPropertyAsUint32("pluginID");
+        let pluginName = subject.getPropertyAsAString("pluginName");
+        let data = { pluginID, pluginName };
+        this.handleGMPCrash(data);
       }
     }
   },
@@ -324,7 +341,19 @@ RTCPeerConnection.prototype = {
     });
     this._mustValidateRTCConfiguration(rtcConfig,
         "RTCPeerConnection constructor passed invalid RTCConfiguration");
-    if (_globalPCList._networkdown || !this._win.navigator.onLine) {
+
+    // Save the appId
+    this._appId = Cu.getWebIDLCallerPrincipal().appId;
+
+    // Get the offline status for this appId
+    let appOffline = false;
+    if (this._appId != Ci.nsIScriptSecurityManager.NO_APP_ID &&
+        this._appId != Ci.nsIScriptSecurityManager.UNKNOWN_APP_ID) {
+      let ios = Cc['@mozilla.org/network/io-service;1'].getService(Ci.nsIIOService);
+      appOffline = ios.isAppOffline(this._appId);
+    }
+
+    if (_globalPCList._networkdown || appOffline) {
       throw new this._win.DOMException(
           "Can't create RTCPeerConnections when the network is down",
           "InvalidStateError");

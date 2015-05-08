@@ -658,14 +658,15 @@ NonLocalExitScope::prepareForNonLocalJump(StmtInfoBCE* toStmt)
         if (stmt->isBlockScope) {
             MOZ_ASSERT(stmt->isNestedScope);
             StaticBlockObject& blockObj = stmt->staticBlock();
-            if (!bce->emit1(JSOP_DEBUGLEAVEBLOCK))
-                return false;
-            if (!popScopeForNonLocalExit(stmt->blockScopeIndex))
-                return false;
             if (blockObj.needsClone()) {
                 if (!bce->emit1(JSOP_POPBLOCKSCOPE))
                     return false;
+            } else {
+                if (!bce->emit1(JSOP_DEBUGLEAVEBLOCK))
+                    return false;
             }
+            if (!popScopeForNonLocalExit(stmt->blockScopeIndex))
+                return false;
         }
     }
 
@@ -877,11 +878,17 @@ BytecodeEmitter::computeLocalOffset(Handle<StaticBlockObject*> blockObj)
 // Only functions have fixed var bindings.
 //
 // To assist the debugger, we emit a DEBUGLEAVEBLOCK opcode before leaving a
-// block scope, even if the block has no aliased locals.  This allows
-// DebugScopes to invalidate any association between a debugger scope object,
-// which can proxy access to unaliased stack locals, and the actual live frame.
-// In normal, non-debug mode, this opcode does not cause any baseline code to be
+// block scope, if the block has no aliased locals.  This allows DebugScopes
+// to invalidate any association between a debugger scope object, which can
+// proxy access to unaliased stack locals, and the actual live frame.  In
+// normal, non-debug mode, this opcode does not cause any baseline code to be
 // emitted.
+//
+// If the block has aliased locals, no DEBUGLEAVEBLOCK is emitted, and
+// POPBLOCKSCOPE itself balances the debug scope mapping. This gets around a
+// comedic situation where DEBUGLEAVEBLOCK may remove a block scope from the
+// debug scope map, but the immediate following POPBLOCKSCOPE adds it back due
+// to an onStep hook.
 //
 // Enter a nested scope with enterNestedScope.  It will emit
 // PUSHBLOCKSCOPE/ENTERWITH if needed, and arrange to record the PC bounds of
@@ -974,11 +981,16 @@ BytecodeEmitter::leaveNestedScope(StmtInfoBCE* stmt)
 
     popStatement();
 
-    if (!emit1(stmt->isBlockScope ? JSOP_DEBUGLEAVEBLOCK : JSOP_LEAVEWITH))
-        return false;
-
-    if (stmt->isBlockScope && stmt->staticScope->as<StaticBlockObject>().needsClone()) {
-        if (!emit1(JSOP_POPBLOCKSCOPE))
+    if (stmt->isBlockScope) {
+        if (stmt->staticScope->as<StaticBlockObject>().needsClone()) {
+            if (!emit1(JSOP_POPBLOCKSCOPE))
+                return false;
+        } else {
+            if (!emit1(JSOP_DEBUGLEAVEBLOCK))
+                return false;
+        }
+    } else {
+        if (!emit1(JSOP_LEAVEWITH))
             return false;
     }
 
@@ -6418,7 +6430,7 @@ BytecodeEmitter::emitCallOrNew(ParseNode* pn)
                 return false;
         }
     } else {
-        if (!emitArray(pn2->pn_next, argc))
+        if (!emitArray(pn2->pn_next, argc, JSOP_SPREADCALLARRAY))
             return false;
     }
     emittingForInit = oldEmittingForInit;
@@ -6885,7 +6897,7 @@ BytecodeEmitter::emitSpread()
 }
 
 bool
-BytecodeEmitter::emitArray(ParseNode* pn, uint32_t count)
+BytecodeEmitter::emitArray(ParseNode* pn, uint32_t count, JSOp op)
 {
     /*
      * Emit code for [a, b, c] that is equivalent to constructing a new
@@ -6895,6 +6907,7 @@ BytecodeEmitter::emitArray(ParseNode* pn, uint32_t count)
      * to avoid dup'ing and popping the array as each element is added, as
      * JSOP_SETELEM/JSOP_SETPROP would do.
      */
+    MOZ_ASSERT(op == JSOP_NEWARRAY || op == JSOP_SPREADCALLARRAY);
 
     int32_t nspread = 0;
     for (ParseNode* elt = pn; elt; elt = elt->pn_next) {
@@ -6903,9 +6916,9 @@ BytecodeEmitter::emitArray(ParseNode* pn, uint32_t count)
     }
 
     ptrdiff_t off;
-    if (!emitN(JSOP_NEWARRAY, 3, &off))                             // ARRAY
+    if (!emitN(op, 3, &off))                                        // ARRAY
         return false;
-    checkTypeSet(JSOP_NEWARRAY);
+    checkTypeSet(op);
     jsbytecode* pc = code(off);
 
     // For arrays with spread, this is a very pessimistic allocation, the
@@ -7563,7 +7576,7 @@ BytecodeEmitter::emitTree(ParseNode* pn)
             }
         }
 
-        ok = emitArray(pn->pn_head, pn->pn_count);
+        ok = emitArray(pn->pn_head, pn->pn_count, JSOP_NEWARRAY);
         break;
 
        case PNK_ARRAYCOMP:

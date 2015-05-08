@@ -79,7 +79,7 @@ CacheStorage::CreateOnMainThread(Namespace aNamespace, nsIGlobalObject* aGlobal,
 
   if (nullPrincipal) {
     NS_WARNING("CacheStorage not supported on null principal.");
-    aRv.Throw(NS_ERROR_FAILURE);
+    aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return nullptr;
   }
 
@@ -91,7 +91,7 @@ CacheStorage::CreateOnMainThread(Namespace aNamespace, nsIGlobalObject* aGlobal,
   aPrincipal->GetUnknownAppId(&unknownAppId);
   if (unknownAppId) {
     NS_WARNING("CacheStorage not supported on principal with unknown appId.");
-    aRv.Throw(NS_ERROR_FAILURE);
+    aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return nullptr;
   }
 
@@ -126,7 +126,7 @@ CacheStorage::CreateOnWorker(Namespace aNamespace, nsIGlobalObject* aGlobal,
   const PrincipalInfo& principalInfo = aWorkerPrivate->GetPrincipalInfo();
   if (principalInfo.type() == PrincipalInfo::TNullPrincipalInfo) {
     NS_WARNING("CacheStorage not supported on null principal.");
-    aRv.Throw(NS_ERROR_FAILURE);
+    aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return nullptr;
   }
 
@@ -134,7 +134,7 @@ CacheStorage::CreateOnWorker(Namespace aNamespace, nsIGlobalObject* aGlobal,
       principalInfo.get_ContentPrincipalInfo().appId() ==
       nsIScriptSecurityManager::UNKNOWN_APP_ID) {
     NS_WARNING("CacheStorage not supported on principal with unknown appId.");
-    aRv.Throw(NS_ERROR_FAILURE);
+    aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
     return nullptr;
   }
 
@@ -166,7 +166,7 @@ CacheStorage::CacheStorage(Namespace aNamespace, nsIGlobalObject* aGlobal,
   // wait for the async ActorCreated() callback.
   MOZ_ASSERT(NS_IsMainThread());
   bool ok = BackgroundChild::GetOrCreateForCurrentThread(this);
-  if (!ok) {
+  if (NS_WARN_IF(!ok)) {
     ActorFailed();
   }
 }
@@ -177,7 +177,7 @@ CacheStorage::Match(const RequestOrUSVString& aRequest,
 {
   NS_ASSERT_OWNINGTHREAD(CacheStorage);
 
-  if (mFailedActor) {
+  if (NS_WARN_IF(mFailedActor)) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
@@ -189,7 +189,7 @@ CacheStorage::Match(const RequestOrUSVString& aRequest,
   }
 
   nsRefPtr<Promise> promise = Promise::Create(mGlobal, aRv);
-  if (!promise) {
+  if (NS_WARN_IF(!promise)) {
     return nullptr;
   }
 
@@ -212,13 +212,13 @@ CacheStorage::Has(const nsAString& aKey, ErrorResult& aRv)
 {
   NS_ASSERT_OWNINGTHREAD(CacheStorage);
 
-  if (mFailedActor) {
+  if (NS_WARN_IF(mFailedActor)) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
 
   nsRefPtr<Promise> promise = Promise::Create(mGlobal, aRv);
-  if (!promise) {
+  if (NS_WARN_IF(!promise)) {
     return nullptr;
   }
 
@@ -237,13 +237,13 @@ CacheStorage::Open(const nsAString& aKey, ErrorResult& aRv)
 {
   NS_ASSERT_OWNINGTHREAD(CacheStorage);
 
-  if (mFailedActor) {
+  if (NS_WARN_IF(mFailedActor)) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
 
   nsRefPtr<Promise> promise = Promise::Create(mGlobal, aRv);
-  if (!promise) {
+  if (NS_WARN_IF(!promise)) {
     return nullptr;
   }
 
@@ -262,13 +262,13 @@ CacheStorage::Delete(const nsAString& aKey, ErrorResult& aRv)
 {
   NS_ASSERT_OWNINGTHREAD(CacheStorage);
 
-  if (mFailedActor) {
+  if (NS_WARN_IF(mFailedActor)) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
 
   nsRefPtr<Promise> promise = Promise::Create(mGlobal, aRv);
-  if (!promise) {
+  if (NS_WARN_IF(!promise)) {
     return nullptr;
   }
 
@@ -287,13 +287,13 @@ CacheStorage::Keys(ErrorResult& aRv)
 {
   NS_ASSERT_OWNINGTHREAD(CacheStorage);
 
-  if (mFailedActor) {
+  if (NS_WARN_IF(mFailedActor)) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
 
   nsRefPtr<Promise> promise = Promise::Create(mGlobal, aRv);
-  if (!promise) {
+  if (NS_WARN_IF(!promise)) {
     return nullptr;
   }
 
@@ -312,6 +312,30 @@ bool
 CacheStorage::PrefEnabled(JSContext* aCx, JSObject* aObj)
 {
   return Cache::PrefEnabled(aCx, aObj);
+}
+
+// static
+already_AddRefed<CacheStorage>
+CacheStorage::Constructor(const GlobalObject& aGlobal,
+                          CacheStorageNamespace aNamespace,
+                          nsIPrincipal* aPrincipal, ErrorResult& aRv)
+{
+  if (NS_WARN_IF(!NS_IsMainThread())) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  // TODO: remove Namespace in favor of CacheStorageNamespace
+  static_assert(DEFAULT_NAMESPACE == (uint32_t)CacheStorageNamespace::Content,
+                "Default namespace should match webidl Content enum");
+  static_assert(CHROME_ONLY_NAMESPACE == (uint32_t)CacheStorageNamespace::Chrome,
+                "Chrome namespace should match webidl Chrome enum");
+  static_assert(NUMBER_OF_NAMESPACES == (uint32_t)CacheStorageNamespace::EndGuard_,
+                "Number of namespace should match webidl endguard enum");
+
+  Namespace ns = static_cast<Namespace>(aNamespace);
+  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
+  return CreateOnMainThread(ns, global, aPrincipal, aRv);
 }
 
 nsISupports*
@@ -413,9 +437,9 @@ CacheStorage::~CacheStorage()
 {
   NS_ASSERT_OWNINGTHREAD(CacheStorage);
   if (mActor) {
-    mActor->StartDestroy();
-    // DestroyInternal() is called synchronously by StartDestroy().  So we
-    // should have already cleared the mActor.
+    mActor->StartDestroyFromListener();
+    // DestroyInternal() is called synchronously by StartDestroyFromListener().
+    // So we should have already cleared the mActor.
     MOZ_ASSERT(!mActor);
   }
 }
@@ -432,14 +456,13 @@ CacheStorage::MaybeRunPendingRequests()
     nsAutoPtr<Entry> entry(mPendingRequests[i].forget());
     AutoChildOpArgs args(this, entry->mArgs);
     if (entry->mRequest) {
-      args.Add(entry->mRequest, IgnoreBody, PassThroughReferrer,
-               IgnoreInvalidScheme, rv);
+      args.Add(entry->mRequest, IgnoreBody, IgnoreInvalidScheme, rv);
     }
-    if (rv.Failed()) {
+    if (NS_WARN_IF(rv.Failed())) {
       entry->mPromise->MaybeReject(rv);
       continue;
     }
-    mActor->ExecuteOp(mGlobal, entry->mPromise, args.SendAsOpArgs());
+    mActor->ExecuteOp(mGlobal, entry->mPromise, this, args.SendAsOpArgs());
   }
   mPendingRequests.Clear();
 }

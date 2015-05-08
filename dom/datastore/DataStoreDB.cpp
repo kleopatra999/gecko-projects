@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -154,7 +154,7 @@ DataStoreDB::Open(IDBTransactionMode aMode, const Sequence<nsString>& aDbs,
   ErrorResult error;
   mRequest = mFactory->Open(mDatabaseName, DATASTOREDB_VERSION, error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   rv = AddEventListeners();
@@ -234,7 +234,7 @@ DataStoreDB::UpgradeSchema(nsIDOMEvent* aEvent)
   JS::Rooted<JS::Value> result(cx);
   mRequest->GetResult(&result, error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   MOZ_ASSERT(result.isObject());
@@ -253,7 +253,7 @@ DataStoreDB::UpgradeSchema(nsIDOMEvent* aEvent)
       database->CreateObjectStore(NS_LITERAL_STRING(DATASTOREDB_NAME),
                                   params, error);
     if (NS_WARN_IF(error.Failed())) {
-      return error.ErrorCode();
+      return error.StealNSResult();
     }
   }
 
@@ -267,7 +267,7 @@ DataStoreDB::UpgradeSchema(nsIDOMEvent* aEvent)
       database->CreateObjectStore(NS_LITERAL_STRING(DATASTOREDB_REVISION),
                                   params, error);
     if (NS_WARN_IF(error.Failed())) {
-      return error.ErrorCode();
+      return error.StealNSResult();
     }
   }
 
@@ -278,7 +278,7 @@ DataStoreDB::UpgradeSchema(nsIDOMEvent* aEvent)
       store->CreateIndex(NS_LITERAL_STRING(DATASTOREDB_REVISION_INDEX),
                          NS_LITERAL_STRING("revisionId"), params, error);
     if (NS_WARN_IF(error.Failed())) {
-      return error.ErrorCode();
+      return error.StealNSResult();
     }
   }
 
@@ -296,7 +296,7 @@ DataStoreDB::DatabaseOpened()
   JS::Rooted<JS::Value> result(cx);
   mRequest->GetResult(&result, error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   MOZ_ASSERT(result.isObject());
@@ -323,7 +323,7 @@ DataStoreDB::DatabaseOpened()
                                  mTransactionMode,
                                  getter_AddRefs(txn));
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   mTransaction = txn.forget();
@@ -351,7 +351,7 @@ DataStoreDB::Delete()
   nsRefPtr<IDBOpenDBRequest> request =
     mFactory->DeleteDatabase(mDatabaseName, IDBOpenDBOptions(), error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   return NS_OK;

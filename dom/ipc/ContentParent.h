@@ -173,6 +173,7 @@ public:
 
     virtual bool RecvLoadPlugin(const uint32_t& aPluginId, nsresult* aRv, uint32_t* aRunID) override;
     virtual bool RecvConnectPluginBridge(const uint32_t& aPluginId, nsresult* aRv) override;
+    virtual bool RecvGetBlocklistState(const uint32_t& aPluginId, uint32_t* aIsBlocklisted) override;
     virtual bool RecvFindPlugins(const uint32_t& aPluginEpoch,
                                  nsTArray<PluginTag>* aPlugins,
                                  uint32_t* aNewPluginEpoch) override;
@@ -217,6 +218,9 @@ public:
                   const ContentParentId& aCpId);
     static void
     DeallocateTabId(const TabId& aTabId, const ContentParentId& aCpId);
+
+    static bool
+    GetBrowserConfiguration(const nsCString& aURI, BrowserConfiguration& aConfig);
 
     void ReportChildAlreadyBlocked();
     bool RequestRunToCompletion();
@@ -542,6 +546,7 @@ private:
                                           bool* aIsForApp,
                                           bool* aIsForBrowser) override;
     virtual bool RecvGetXPCOMProcessAttributes(bool* aIsOffline,
+                                               bool* aIsConnected,
                                                bool* aIsLangRTL,
                                                InfallibleTArray<nsString>* dictionaries,
                                                ClipboardCapabilities* clipboardCaps,
@@ -782,6 +787,8 @@ private:
 
     virtual bool RecvSetFakeVolumeState(const nsString& fsName, const int32_t& fsState) override;
 
+    virtual bool RecvRemoveFakeVolume(const nsString& fsName) override;
+
     virtual bool RecvKeywordToURI(const nsCString& aKeyword,
                                   nsString* aProviderName,
                                   OptionalInputStreamParams* aPostData,
@@ -789,6 +796,10 @@ private:
 
     virtual bool RecvNotifyKeywordSearchLoading(const nsString &aProvider,
                                                 const nsString &aKeyword) override;
+
+    virtual bool RecvCopyFavicon(const URIParams& aOldURI,
+                                 const URIParams& aNewURI,
+                                 const bool& aInPrivateBrowsing) override;
 
     virtual void ProcessingError(Result aCode, const char* aMsgName) override;
 
@@ -840,8 +851,14 @@ private:
     virtual bool RecvPDocAccessibleConstructor(PDocAccessibleParent* aDoc,
                                                PDocAccessibleParent* aParentDoc, const uint64_t& aParentID) override;
 
+    virtual PWebrtcGlobalParent* AllocPWebrtcGlobalParent() override;
+    virtual bool DeallocPWebrtcGlobalParent(PWebrtcGlobalParent *aActor) override;
+
+
     virtual bool RecvUpdateDropEffect(const uint32_t& aDragAction,
                                       const uint32_t& aDropEffect) override;
+
+    virtual bool RecvGetBrowserConfiguration(const nsCString& aURI, BrowserConfiguration* aConfig) override;
 
     virtual bool RecvGamepadListenerAdded() override;
     virtual bool RecvGamepadListenerRemoved() override;

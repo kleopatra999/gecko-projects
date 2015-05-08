@@ -29,16 +29,16 @@ endif
 
 RUN_MOCHITEST_B2G_DESKTOP = \
   rm -f ./$@.log && \
-  $(PYTHON) _tests/testing/mochitest/runtestsb2g.py --autorun --close-when-done \
-    --console-level=INFO --log-tbpl=./$@.log \
+  $(PYTHON) _tests/testing/mochitest/runtestsb2g.py \
+    --log-tbpl=./$@.log \
     --desktop --profile ${GAIA_PROFILE_DIR} \
     --failure-file=$(abspath _tests/testing/mochitest/makefailures.json) \
     $(TEST_PATH_ARG) $(EXTRA_TEST_ARGS)
 
 RUN_MOCHITEST = \
   rm -f ./$@.log && \
-  $(PYTHON) _tests/testing/mochitest/runtests.py --autorun --close-when-done \
-    --console-level=INFO --log-tbpl=./$@.log \
+  $(PYTHON) _tests/testing/mochitest/runtests.py \
+    --log-tbpl=./$@.log \
     --failure-file=$(abspath _tests/testing/mochitest/makefailures.json) \
     --testing-modules-dir=$(abspath _tests/modules) \
     --extra-profile-file=$(DIST)/plugins \
@@ -46,8 +46,8 @@ RUN_MOCHITEST = \
 
 RERUN_MOCHITEST = \
   rm -f ./$@.log && \
-  $(PYTHON) _tests/testing/mochitest/runtests.py --autorun --close-when-done \
-    --console-level=INFO --log-tbpl=./$@.log \
+  $(PYTHON) _tests/testing/mochitest/runtests.py \
+    --log-tbpl=./$@.log \
     --run-only-tests=makefailures.json \
     --testing-modules-dir=$(abspath _tests/modules) \
     --extra-profile-file=$(DIST)/plugins \
@@ -55,8 +55,8 @@ RERUN_MOCHITEST = \
 
 RUN_MOCHITEST_REMOTE = \
   rm -f ./$@.log && \
-  $(PYTHON) _tests/testing/mochitest/runtestsremote.py --autorun --close-when-done \
-    --console-level=INFO --log-tbpl=./$@.log $(DM_FLAGS) --dm_trans=$(DM_TRANS) \
+  $(PYTHON) _tests/testing/mochitest/runtestsremote.py \
+    --log-tbpl=./$@.log $(DM_FLAGS) --dm_trans=$(DM_TRANS) \
     --app=$(TEST_PACKAGE_NAME) --deviceIP=${TEST_DEVICE} --xre-path=${MOZ_HOST_BIN} \
     --testing-modules-dir=$(abspath _tests/modules) \
     $(SYMBOLS_PATH) $(TEST_PATH_ARG) $(EXTRA_TEST_ARGS)
@@ -66,8 +66,8 @@ RUN_MOCHITEST_ROBOCOP = \
   $(PYTHON) _tests/testing/mochitest/runtestsremote.py \
     --robocop-apk=$(DEPTH)/build/mobile/robocop/robocop-debug.apk \
     --robocop-ids=$(DEPTH)/mobile/android/base/fennec_ids.txt \
-    --robocop-ini=$(DEPTH)/build/mobile/robocop/robocop.ini \
-    --console-level=INFO --log-tbpl=./$@.log $(DM_FLAGS) --dm_trans=$(DM_TRANS) \
+    --robocop-ini=_tests/testing/mochitest/robocop.ini \
+    --log-tbpl=./$@.log $(DM_FLAGS) --dm_trans=$(DM_TRANS) \
     --app=$(TEST_PACKAGE_NAME) --deviceIP=${TEST_DEVICE} --xre-path=${MOZ_HOST_BIN} \
     $(SYMBOLS_PATH) $(TEST_PATH_ARG) $(EXTRA_TEST_ARGS)
 
@@ -422,11 +422,10 @@ package-tests:
 ifndef UNIVERSAL_BINARY
 	$(NSINSTALL) -D $(DIST)/$(PKG_PATH)
 endif
-	find -L $(PKG_STAGE) -name '*.pyc' -exec rm {} \;
 	$(MKDIR) -p $(abspath $(DIST))/$(PKG_PATH) && \
 	cd $(PKG_STAGE) && \
 	  zip -rq9D '$(abspath $(DIST))/$(PKG_PATH)$(TEST_PACKAGE)' \
-	  * -x \*/.mkdir.done
+	  * -x \*/.mkdir.done \*.pyc
 
 ifeq ($(MOZ_WIDGET_TOOLKIT),android)
 package-tests: stage-android

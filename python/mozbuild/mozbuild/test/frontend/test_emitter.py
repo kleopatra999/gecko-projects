@@ -10,6 +10,7 @@ import unittest
 from mozunit import main
 
 from mozbuild.frontend.data import (
+    BrandingFiles,
     ConfigFileSubstitution,
     Defines,
     DistFiles,
@@ -160,10 +161,9 @@ class TestEmitterBasic(unittest.TestCase):
 
         wanted = {
             'DISABLE_STL_WRAPPING': True,
-            'EXTRA_COMPONENTS': ['fans.js', 'tans.js'],
+            'EXTRA_COMPONENTS': ['dummy.manifest', 'fans.js', 'tans.js'],
             'EXTRA_PP_COMPONENTS': ['fans.pp.js', 'tans.pp.js'],
             'FAIL_ON_WARNINGS': True,
-            'MSVC_ENABLE_PGO': True,
             'NO_DIST_INSTALL': True,
             'VISIBILITY_FLAGS': '',
             'RCFILE': 'foo.rc',
@@ -345,6 +345,23 @@ class TestEmitterBasic(unittest.TestCase):
         self.assertIn('overwrite', resources._children)
         overwrite = resources._children['overwrite']
         self.assertEqual(overwrite._strings, ['new.res'])
+
+    def test_branding_files(self):
+        reader = self.reader('branding-files')
+        objs = self.read_topsrcdir(reader)
+
+        self.assertEqual(len(objs), 1)
+        self.assertIsInstance(objs[0], BrandingFiles)
+
+        files = objs[0].files
+
+        self.assertEqual(files._strings, ['app.ico', 'bar.ico', 'baz.png', 'foo.xpm'])
+        self.assertEqual(files['app.ico'].source, 'test/bar.ico')
+
+        self.assertIn('icons', files._children)
+        icons = files._children['icons']
+
+        self.assertEqual(icons._strings, ['quux.icns'])
 
     def test_preferences_js(self):
         reader = self.reader('js_preference_files')

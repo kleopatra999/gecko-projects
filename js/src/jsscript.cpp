@@ -1141,7 +1141,10 @@ js::XDRLazyScript(XDRState<mode>* xdr, HandleObject enclosingScope, HandleScript
         uint64_t packedFields;
 
         if (mode == XDR_ENCODE) {
-            MOZ_ASSERT(!lazy->maybeScript());
+            // Note: it's possible the LazyScript has a non-null script_ pointer
+            // to a JSScript. We don't encode it: we can just delazify the
+            // lazy script.
+
             MOZ_ASSERT(fun == lazy->functionNonDelazifying());
 
             begin = lazy->begin();
@@ -1592,8 +1595,10 @@ ScriptSource::chars(JSContext* cx, UncompressedSourceCache::AutoHoldEntry& holde
 
         const size_t nbytes = sizeof(char16_t) * (length_ + 1);
         char16_t* decompressed = static_cast<char16_t*>(js_malloc(nbytes));
-        if (!decompressed)
+        if (!decompressed) {
+            JS_ReportOutOfMemory(cx);
             return nullptr;
+        }
 
         if (!DecompressString((const unsigned char*) compressedData(), compressedBytes(),
                               reinterpret_cast<unsigned char*>(decompressed), nbytes)) {
@@ -2731,6 +2736,15 @@ JSScript::finalize(FreeOp* fop)
     }
 
     fop->runtime()->lazyScriptCache.remove(this);
+
+    if (lazyScript && lazyScript->maybeScriptUnbarriered() == this) {
+        // In most cases, our LazyScript's script pointer will reference this
+        // script. However, because sweeping can be incremental, it's
+        // possible LazyScript::maybeScript() already null'ed this pointer.
+        // Furthermore, if we unlazified the LazyScript, it will have a
+        // completely different JSScript.
+        lazyScript->resetScript();
+    }
 }
 
 static const uint32_t GSN_CACHE_THRESHOLD = 100;
@@ -3482,33 +3496,6 @@ JSScript::traceChildren(JSTracer* trc)
 }
 
 void
-LazyScript::traceChildren(JSTracer* trc)
-{
-    if (function_)
-        TraceEdge(trc, &function_, "function");
-
-    if (sourceObject_)
-        TraceEdge(trc, &sourceObject_, "sourceObject");
-
-    if (enclosingScope_)
-        TraceEdge(trc, &enclosingScope_, "enclosingScope");
-
-    if (script_)
-        TraceEdge(trc, &script_, "realScript");
-
-    // We rely on the fact that atoms are always tenured.
-    FreeVariable* freeVariables = this->freeVariables();
-    for (size_t i = 0; i < numFreeVariables(); i++) {
-        JSAtom* atom = freeVariables[i].atom();
-        TraceManuallyBarrieredEdge(trc, &atom, "lazyScriptFreeVariable");
-    }
-
-    HeapPtrFunction* innerFunctions = this->innerFunctions();
-    for (size_t i = 0; i < numInnerFunctions(); i++)
-        TraceEdge(trc, &innerFunctions[i], "lazyScriptInnerFunction");
-}
-
-void
 LazyScript::finalize(FreeOp* fop)
 {
     if (table_)
@@ -3750,15 +3737,16 @@ LazyScript::LazyScript(JSFunction* fun, void* table, uint64_t packedFields, uint
 void
 LazyScript::initScript(JSScript* script)
 {
-    MOZ_ASSERT(script && !script_);
-    script_ = script;
+    MOZ_ASSERT(script);
+    MOZ_ASSERT(!script_.unbarrieredGet());
+    script_.set(script);
 }
 
 void
 LazyScript::resetScript()
 {
-    MOZ_ASSERT(script_);
-    script_ = nullptr;
+    MOZ_ASSERT(script_.unbarrieredGet());
+    script_.set(nullptr);
 }
 
 void
@@ -3876,7 +3864,7 @@ LazyScript::Create(ExclusiveContext* cx, HandleFunction fun,
     MOZ_ASSERT(!res->sourceObject());
     res->setParent(enclosingScope, &sourceObjectScript->scriptSourceUnwrap());
 
-    MOZ_ASSERT(!res->maybeScript());
+    MOZ_ASSERT(!res->maybeScriptUnbarriered());
     if (script)
         res->initScript(script);
 
@@ -3911,7 +3899,7 @@ LazyScript::hasUncompiledEnclosingScript() const
         return false;
 
     JSFunction& fun = enclosingScope()->as<JSFunction>();
-    return fun.isInterpreted() && (!fun.hasScript() || !fun.nonLazyScript()->code());
+    return !fun.hasScript() || fun.hasUncompiledScript() || !fun.nonLazyScript()->code();
 }
 
 uint32_t

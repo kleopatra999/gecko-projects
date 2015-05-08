@@ -1212,7 +1212,6 @@ protected:
   // sites.
   bool mDidUnprefixWebkitBoxInEarlierDecl; // not :1 so we can use AutoRestore
 
-#ifdef DEBUG
   // True if any parsing of URL values requires a sheet principal to have
   // been passed in the nsCSSScanner constructor.  This is usually the case.
   // It can be set to false, for example, when we create an nsCSSParser solely
@@ -1221,7 +1220,6 @@ protected:
   // not be set to false if any nsCSSValues created during parsing can escape
   // out of the parser.
   bool mSheetPrincipalRequired;
-#endif
 
   // Stack of rule groups; used for @media and such.
   InfallibleTArray<nsRefPtr<css::GroupRule> > mGroupStack;
@@ -1300,9 +1298,7 @@ CSSParserImpl::CSSParserImpl()
     mInFailingSupportsRule(false),
     mSuppressErrors(false),
     mDidUnprefixWebkitBoxInEarlierDecl(false),
-#ifdef DEBUG
     mSheetPrincipalRequired(true),
-#endif
     mNextFree(nullptr)
 {
 }
@@ -2738,7 +2734,9 @@ CSSParserImpl::GetToken(bool aSkipWS)
       return true;
     }
   }
-  return mScanner->Next(mToken, aSkipWS);
+  return mScanner->Next(mToken, aSkipWS ?
+                        eCSSScannerExclude_WhitespaceAndComments :
+                        eCSSScannerExclude_Comments);
 }
 
 void
@@ -3009,9 +3007,7 @@ CSSParserImpl::ParseCharsetRule(RuleAppendFunc aAppendFunc,
     return false;
   }
 
-  nsRefPtr<css::CharsetRule> rule = new css::CharsetRule(charset,
-                                                         linenum, colnum);
-  (*aAppendFunc)(rule, aData);
+  // It's intentional that we don't create a rule object for @charset rules.
 
   return true;
 }
@@ -7613,9 +7609,13 @@ bool
 CSSParserImpl::SetValueToURL(nsCSSValue& aValue, const nsString& aURL)
 {
   if (!mSheetPrincipal) {
-    NS_ASSERTION(!mSheetPrincipalRequired,
-                 "Codepaths that expect to parse URLs MUST pass in an "
-                 "origin principal");
+    if (!mSheetPrincipalRequired) {
+      /* Pretend to succeed.  */
+      return true;
+    }
+
+    NS_NOTREACHED("Codepaths that expect to parse URLs MUST pass in an "
+                  "origin principal");
     return false;
   }
 
@@ -8057,17 +8057,17 @@ CSSParserImpl::ParseOptionalLineNameListAfterSubgrid(nsCSSValue& aValue)
   }
 }
 
-// Parse a <track-breadth>
+// Parse a <track-breadth>.
 bool
 CSSParserImpl::ParseGridTrackBreadth(nsCSSValue& aValue)
 {
   if (ParseNonNegativeVariant(aValue,
-                              VARIANT_LPCALC | VARIANT_KEYWORD,
+                              VARIANT_AUTO | VARIANT_LPCALC | VARIANT_KEYWORD,
                               nsCSSProps::kGridTrackBreadthKTable)) {
     return true;
   }
 
-  // Attempt to parse <flex> (a dimension with the "fr" unit)
+  // Attempt to parse <flex> (a dimension with the "fr" unit).
   if (!GetToken(true)) {
     return false;
   }
@@ -8081,17 +8081,16 @@ CSSParserImpl::ParseGridTrackBreadth(nsCSSValue& aValue)
   return true;
 }
 
-// Parse a <track-size>
+// Parse a <track-size>.
 CSSParseResult
 CSSParserImpl::ParseGridTrackSize(nsCSSValue& aValue)
 {
-  // Attempt to parse 'auto' or a single <track-breadth>
-  if (ParseGridTrackBreadth(aValue) ||
-      ParseVariant(aValue, VARIANT_AUTO, nullptr)) {
+  // Attempt to parse a single <track-breadth>.
+  if (ParseGridTrackBreadth(aValue)) {
     return CSSParseResult::Ok;
   }
 
-  // Attempt to parse a minmax() function
+  // Attempt to parse a minmax() function.
   if (!GetToken(true)) {
     return CSSParseResult::NotFound;
   }
@@ -15382,7 +15381,6 @@ CSSParserImpl::IsValueValidForProperty(const nsCSSProperty aPropID,
   css::ErrorReporter reporter(scanner, mSheet, mChildLoader, nullptr);
   InitScanner(scanner, reporter, nullptr, nullptr, nullptr);
 
-#ifdef DEBUG
   // We normally would need to pass in a sheet principal to InitScanner,
   // because we might parse a URL value.  However, we will never use the
   // parsed nsCSSValue (and so whether we have a sheet principal or not
@@ -15391,7 +15389,6 @@ CSSParserImpl::IsValueValidForProperty(const nsCSSProperty aPropID,
   // that it's safe to skip the assertion.
   AutoRestore<bool> autoRestore(mSheetPrincipalRequired);
   mSheetPrincipalRequired = false;
-#endif
 
   nsAutoSuppressErrors suppressErrors(this);
 

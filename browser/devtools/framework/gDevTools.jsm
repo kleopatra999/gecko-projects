@@ -70,13 +70,22 @@ DevTools.prototype = {
   },
 
   set testing(state) {
+    let oldState = this._testing;
     this._testing = state;
 
-    if (state) {
-      // dom.send_after_paint_to_content is set to true (non-default) in
-      // testing/profiles/prefs_general.js so lets set it to the same as it is
-      // in a default browser profile for the duration of the test.
-      Services.prefs.setBoolPref("dom.send_after_paint_to_content", false);
+    if (state !== oldState) {
+      if (state) {
+        this._savedSendAfterPaintToContentPref =
+          Services.prefs.getBoolPref("dom.send_after_paint_to_content");
+
+        // dom.send_after_paint_to_content is set to true (non-default) in
+        // testing/profiles/prefs_general.js so lets set it to the same as it is
+        // in a default browser profile for the duration of the test.
+        Services.prefs.setBoolPref("dom.send_after_paint_to_content", false);
+      } else {
+        Services.prefs.setBoolPref("dom.send_after_paint_to_content",
+                                   this._savedSendAfterPaintToContentPref);
+      }
     }
   },
 
@@ -563,7 +572,11 @@ let gDevToolsBrowser = {
     let target = devtools.TargetFactory.forTab(gBrowser.selectedTab);
     let toolbox = gDevTools.getToolbox(target);
 
-    toolbox ? toolbox.destroy() : gDevTools.showToolbox(target);
+    // If a toolbox exists, using toggle from the Main window :
+    // - should close a docked toolbox
+    // - should focus a windowed toolbox
+    let isDocked = toolbox && toolbox.hostType != devtools.Toolbox.HostType.WINDOW;
+    isDocked ? toolbox.destroy() : gDevTools.showToolbox(target);
   },
 
   toggleBrowserToolboxCommand: function(gBrowser) {

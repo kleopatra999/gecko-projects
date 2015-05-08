@@ -42,6 +42,9 @@ enum JSGCTraceKind
     // Shape details are exposed through JS_TraceShapeCycleCollectorChildren.
     JSTRACE_SHAPE = 0x04,
 
+    // ObjectGroup details are exposed through JS_TraceObjectGroupCycleCollectorChildren.
+    JSTRACE_OBJECT_GROUP = 0x05,
+
     // The kind associated with a nullptr.
     JSTRACE_NULL = 0x06,
 
@@ -52,7 +55,6 @@ enum JSGCTraceKind
     JSTRACE_BASE_SHAPE = 0x0F,
     JSTRACE_JITCODE = 0x1F,
     JSTRACE_LAZY_SCRIPT = 0x2F,
-    JSTRACE_OBJECT_GROUP = 0x3F,
 
     JSTRACE_LAST = JSTRACE_OBJECT_GROUP
 };
@@ -96,21 +98,25 @@ class JS_PUBLIC_API(JSTracer)
     WeakMapTraceKind eagerlyTraceWeakMaps() const { return eagerlyTraceWeakMaps_; }
 
     // An intermediate state on the road from C to C++ style dispatch.
-    enum TracerKindTag {
-        MarkingTracer,
-        CallbackTracer
+    enum class TracerKindTag {
+        Marking,
+        Tenuring,
+        Callback
     };
-    bool isMarkingTracer() const { return tag == MarkingTracer; }
-    bool isCallbackTracer() const { return tag == CallbackTracer; }
+    bool isMarkingTracer() const { return tag_ == TracerKindTag::Marking; }
+    bool isTenuringTracer() const { return tag_ == TracerKindTag::Tenuring; }
+    bool isCallbackTracer() const { return tag_ == TracerKindTag::Callback; }
     inline JS::CallbackTracer* asCallbackTracer();
 
   protected:
     JSTracer(JSRuntime* rt, TracerKindTag tag,
-             WeakMapTraceKind weakTraceKind = TraceWeakMapValues);
+             WeakMapTraceKind weakTraceKind = TraceWeakMapValues)
+      : runtime_(rt), tag_(tag), eagerlyTraceWeakMaps_(weakTraceKind)
+    {}
 
   private:
     JSRuntime*          runtime_;
-    TracerKindTag       tag;
+    TracerKindTag       tag_;
     WeakMapTraceKind    eagerlyTraceWeakMaps_;
 };
 
@@ -119,20 +125,20 @@ namespace JS {
 class AutoTracingName;
 class AutoTracingIndex;
 class AutoTracingCallback;
-class AutoOriginalTraceLocation;
 
 class JS_PUBLIC_API(CallbackTracer) : public JSTracer
 {
   public:
     CallbackTracer(JSRuntime* rt, JSTraceCallback traceCallback,
                    WeakMapTraceKind weakTraceKind = TraceWeakMapValues)
-      : JSTracer(rt, JSTracer::CallbackTracer, weakTraceKind), callback(traceCallback),
-        contextName_(nullptr), contextIndex_(InvalidIndex), contextFunctor_(nullptr),
-        contextRealLocation_(nullptr)
+      : JSTracer(rt, JSTracer::TracerKindTag::Callback, weakTraceKind), callback(traceCallback),
+        contextName_(nullptr), contextIndex_(InvalidIndex), contextFunctor_(nullptr)
     {}
 
     // Update the trace callback.
-    void setTraceCallback(JSTraceCallback traceCallback);
+    void setTraceCallback(JSTraceCallback traceCallback) {
+        callback = traceCallback;
+    }
 
     // Test if the given callback is the same as our callback.
     bool hasCallback(JSTraceCallback maybeCallback) const {
@@ -177,7 +183,7 @@ class JS_PUBLIC_API(CallbackTracer) : public JSTracer
     // heap. On the other hand, the description provided by this method may be
     // substantially more accurate and useful than those provided by only the
     // contextName and contextIndex.
-    const char* getTracingEdgeName(char* buffer, size_t bufferSize);
+    void getTracingEdgeName(char* buffer, size_t bufferSize);
 
     // The trace implementation may associate a callback with one or more edges
     // using AutoTracingDetails. This functor is called by getTracingEdgeName
@@ -188,14 +194,6 @@ class JS_PUBLIC_API(CallbackTracer) : public JSTracer
       public:
         virtual void operator()(CallbackTracer* trc, char* buf, size_t bufsize) = 0;
     };
-
-    // Return the original heap tracing location if the raw thingp reference
-    // has been moved. This is generally only useful for heap analyses that
-    // need to build an accurate model of the heap, and thus is only accurate
-    // when built with JS_GC_ZEAL.
-    void*const* tracingLocation(void** thingp) {
-        return contextRealLocation_ ? contextRealLocation_ : thingp;
-    }
 
   private:
     // Exposed publicly for several callers that need to check if the tracer
@@ -210,9 +208,6 @@ class JS_PUBLIC_API(CallbackTracer) : public JSTracer
 
     friend class AutoTracingDetails;
     ContextFunctor* contextFunctor_;
-
-    friend class AutoOriginalTraceLocation;
-    void*const* contextRealLocation_;
 };
 
 // Set the name portion of the tracer's context for the current edge.
@@ -282,37 +277,6 @@ class AutoTracingDetails
     }
 };
 
-// Some dynamic analyses depend on knowing the edge source location as it
-// exists in the object graph. When marking some types of things, e.g. Value
-// edges, it is necessary to copy into a temporary on the stack. This class
-// records the original location if we need to copy the tracee, so that the
-// relevant analyses can continue to operate correctly.
-class AutoOriginalTraceLocation
-{
-#ifdef JS_GC_ZEAL
-    CallbackTracer* trc_;
-
-  public:
-    template <typename T>
-    AutoOriginalTraceLocation(JSTracer* trc, T*const* realLocation) : trc_(nullptr) {
-        if (trc->isCallbackTracer() && trc->asCallbackTracer()->contextRealLocation_ == nullptr) {
-            trc_ = trc->asCallbackTracer();
-            trc_->contextRealLocation_ = reinterpret_cast<void*const*>(realLocation);
-        }
-    }
-    ~AutoOriginalTraceLocation() {
-        if (trc_) {
-            MOZ_ASSERT(trc_->contextRealLocation_);
-            trc_->contextRealLocation_ = nullptr;
-        }
-    }
-#else
-  public:
-    template <typename T>
-    AutoOriginalTraceLocation(JSTracer* trc, T*const* realLocation) {}
-#endif
-};
-
 } // namespace JS
 
 JS::CallbackTracer*
@@ -375,7 +339,6 @@ inline void
 JS_CallHashSetObjectTracer(JSTracer* trc, HashSetEnum& e, JSObject* const& key, const char* name)
 {
     JSObject* updated = key;
-    JS::AutoOriginalTraceLocation reloc(trc, &key);
     JS_CallUnbarrieredObjectTracer(trc, &updated, name);
     if (updated != key)
         e.rekeyFront(updated);

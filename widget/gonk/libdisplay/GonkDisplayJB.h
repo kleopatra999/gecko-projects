@@ -55,6 +55,8 @@ public:
     bool Post(buffer_handle_t buf, int fence);
 
 private:
+    void StopBootAnim();
+
     hw_module_t const*        mModule;
     hw_module_t const*        mFBModule;
     hwc_composer_device_1_t*  mHwc;
@@ -63,6 +65,7 @@ private:
     android::sp<android::DisplaySurface> mDispSurface;
     android::sp<ANativeWindow> mSTClient;
     android::sp<android::IGraphicBufferAlloc> mAlloc;
+    android::sp<android::GraphicBuffer> mBootAnimBuffer;
     int mFence;
     hwc_display_contents_1_t* mList;
     uint32_t mWidth;

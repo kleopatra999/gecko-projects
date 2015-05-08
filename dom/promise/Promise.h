@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -92,7 +92,7 @@ public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_PROMISE_IID)
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS(Promise)
-  MOZ_DECLARE_REFCOUNTED_TYPENAME(Promise)
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(Promise)
 
   // Promise creation tries to create a JS reflector for the Promise, so is
   // fallible.  Furthermore, we don't want to do JS-wrapping on a 0-refcount
@@ -186,6 +186,10 @@ public:
   static already_AddRefed<Promise>
   All(const GlobalObject& aGlobal,
       const Sequence<JS::Value>& aIterable, ErrorResult& aRv);
+
+  static already_AddRefed<Promise>
+  All(const GlobalObject& aGlobal,
+      const nsTArray<nsRefPtr<Promise>>& aPromiseList, ErrorResult& aRv);
 
   static already_AddRefed<Promise>
   Race(const GlobalObject& aGlobal,

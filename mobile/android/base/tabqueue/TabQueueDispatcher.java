@@ -6,7 +6,6 @@
 package org.mozilla.gecko.tabqueue;
 
 import org.mozilla.gecko.AppConstants;
-import org.mozilla.gecko.BrowserApp;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.Locales;
@@ -38,7 +37,7 @@ public class TabQueueDispatcher extends Locales.LocaleAwareActivity {
 
         // For the moment lets exit early and start fennec as normal if we're not in nightly with
         // the tab queue build flag.
-        if (!AppConstants.MOZ_ANDROID_TAB_QUEUE) {
+        if (!AppConstants.MOZ_ANDROID_TAB_QUEUE || !AppConstants.NIGHTLY_BUILD) {
             loadNormally(intent.getUnsafe());
             return;
         }
@@ -69,7 +68,7 @@ public class TabQueueDispatcher extends Locales.LocaleAwareActivity {
      * Start fennec with the supplied intent.
      */
     private void loadNormally(Intent intent) {
-        intent.setClass(getApplicationContext(), BrowserApp.class);
+        intent.setClassName(getApplicationContext(), AppConstants.MOZ_ANDROID_BROWSER_INTENT_CLASS);
         startActivity(intent);
         finish();
     }

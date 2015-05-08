@@ -246,6 +246,7 @@ protected:
   {
     gfxPrefs::GetSingleton();
     APZThreadUtils::SetThreadAssertionsEnabled(false);
+    APZThreadUtils::SetControllerThread(MessageLoop::current());
 
     testStartTime = TimeStamp::Now();
     AsyncPanZoomController::SetFrameTime(testStartTime);
@@ -254,6 +255,17 @@ protected:
     tm = new TestAPZCTreeManager();
     apzc = new TestAsyncPanZoomController(0, mcc, tm, mGestureBehavior);
     apzc->SetFrameMetrics(TestFrameMetrics());
+  }
+
+  /**
+   * Get the APZC's scroll range in CSS pixels.
+   */
+  CSSRect GetScrollRange() const
+  {
+    const FrameMetrics& metrics = apzc->GetFrameMetrics();
+    return CSSRect(
+        metrics.GetScrollableRect().TopLeft(),
+        metrics.GetScrollableRect().Size() - metrics.CalculateCompositedSizeInCssPixels());
   }
 
   virtual void TearDown()
@@ -274,6 +286,49 @@ protected:
   void MakeApzcUnzoomable()
   {
     apzc->UpdateZoomConstraints(ZoomConstraints(false, false, CSSToParentLayerScale(1.0f), CSSToParentLayerScale(1.0f)));
+  }
+
+  void PanIntoOverscroll(int& aTime);
+
+  /**
+   * Sample animations once, 1 ms later than the last sample.
+   */
+  void SampleAnimationOnce()
+  {
+    const TimeDuration increment = TimeDuration::FromMilliseconds(1);
+    ParentLayerPoint pointOut;
+    ViewTransform viewTransformOut;
+    testStartTime += increment;
+    apzc->SampleContentTransformForFrame(testStartTime, &viewTransformOut, pointOut);
+  }
+
+  /**
+   * Sample animations until we recover from overscroll.
+   * @param aExpectedScrollOffset the expected reported scroll offset
+   *                              throughout the animation
+   */
+  void SampleAnimationUntilRecoveredFromOverscroll(const ParentLayerPoint& aExpectedScrollOffset)
+  {
+    const TimeDuration increment = TimeDuration::FromMilliseconds(1);
+    bool recoveredFromOverscroll = false;
+    ParentLayerPoint pointOut;
+    ViewTransform viewTransformOut;
+    while (apzc->SampleContentTransformForFrame(testStartTime, &viewTransformOut, pointOut)) {
+      // The reported scroll offset should be the same throughout.
+      EXPECT_EQ(aExpectedScrollOffset, pointOut);
+
+      // Trigger computation of the overscroll tranform, to make sure
+      // no assetions fire during the calculation.
+      apzc->GetOverscrollTransform();
+
+      if (!apzc->IsOverscrolled()) {
+        recoveredFromOverscroll = true;
+      }
+
+      testStartTime += increment;
+    }
+    EXPECT_TRUE(recoveredFromOverscroll);
+    apzc->AssertStateIsReset();
   }
 
   void TestOverscroll();
@@ -850,8 +905,8 @@ TEST_F(APZCBasicTester, ComplexTransform) {
   const char* layerTreeSyntax = "c(c)";
   // LayerID                     0 1
   nsIntRegion layerVisibleRegion[] = {
-    nsIntRegion(nsIntRect(0, 0, 300, 300)),
-    nsIntRegion(nsIntRect(0, 0, 150, 300)),
+    nsIntRegion(IntRect(0, 0, 300, 300)),
+    nsIntRegion(IntRect(0, 0, 150, 300)),
   };
   Matrix4x4 transforms[] = {
     Matrix4x4(),
@@ -1136,36 +1191,23 @@ TEST_F(APZCBasicTester, PanningTransformNotifications) {
   check.Call("Done");
 }
 
+void APZCBasicTester::PanIntoOverscroll(int& aTime)
+{
+  int touchStart = 500;
+  int touchEnd = 10;
+  Pan(apzc, aTime, touchStart, touchEnd);
+  EXPECT_TRUE(apzc->IsOverscrolled());
+}
+
 void APZCBasicTester::TestOverscroll()
 {
   // Pan sufficiently to hit overscroll behavior
   int time = 0;
-  int touchStart = 500;
-  int touchEnd = 10;
-  Pan(apzc, time, touchStart, touchEnd);
-  EXPECT_TRUE(apzc->IsOverscrolled());
+  PanIntoOverscroll(time);
 
   // Check that we recover from overscroll via an animation.
-  const TimeDuration increment = TimeDuration::FromMilliseconds(1);
-  bool recoveredFromOverscroll = false;
-  ParentLayerPoint pointOut;
-  ViewTransform viewTransformOut;
-  while (apzc->SampleContentTransformForFrame(testStartTime, &viewTransformOut, pointOut)) {
-    // The reported scroll offset should be the same throughout.
-    EXPECT_EQ(ParentLayerPoint(0, 90), pointOut);
-
-    // Trigger computation of the overscroll tranform, to make sure
-    // no assetions fire during the calculation.
-    apzc->GetOverscrollTransform();
-
-    if (!apzc->IsOverscrolled()) {
-      recoveredFromOverscroll = true;
-    }
-
-    testStartTime += increment;
-  }
-  EXPECT_TRUE(recoveredFromOverscroll);
-  apzc->AssertStateIsReset();
+  ParentLayerPoint expectedScrollOffset(0, GetScrollRange().YMost());
+  SampleAnimationUntilRecoveredFromOverscroll(expectedScrollOffset);
 }
 
 
@@ -1177,7 +1219,7 @@ TEST_F(APZCBasicTester, OverScrollPanning) {
 
 // Tests that an overscroll animation doesn't trigger an assertion failure
 // in the case where a sample has a velocity of zero.
-TEST_F(APZCBasicTester, OverScroll_Bug1152051) {
+TEST_F(APZCBasicTester, OverScroll_Bug1152051a) {
   SCOPED_GFX_PREF(APZOverscrollEnabled, bool, true);
 
   // Doctor the prefs to make the velocity zero at the end of the first sample.
@@ -1194,6 +1236,44 @@ TEST_F(APZCBasicTester, OverScroll_Bug1152051) {
   SCOPED_GFX_PREF(APZOverscrollSpringStiffness, float, 0.01225f);
 
   TestOverscroll();
+}
+
+// Tests that ending an overscroll animation doesn't leave around state that
+// confuses the next overscroll animation.
+TEST_F(APZCBasicTester, OverScroll_Bug1152051b) {
+  SCOPED_GFX_PREF(APZOverscrollEnabled, bool, true);
+
+  SCOPED_GFX_PREF(APZOverscrollStopDistanceThreshold, float, 0.1f);
+
+  // Pan sufficiently to hit overscroll behavior
+  int time = 0;
+  PanIntoOverscroll(time);
+
+  // Sample animations once, to give the fling animation started on touch-up
+  // a chance to realize it's overscrolled, and schedule a call to
+  // HandleFlingOverscroll().
+  SampleAnimationOnce();
+
+  // Give the call to HandleFlingOverscroll() a chance to occur, creating
+  // an overscroll animation.
+  mcc->RunThroughDelayedTasks();
+
+  // Sample the overscroll animation once, to get it to initialize
+  // the first overscroll sample.
+  SampleAnimationOnce();
+
+  // Do a touch-down to cancel the overscroll animation, and then a touch-up
+  // to schedule a new one since we're still overscrolled. We don't pan because
+  // panning can trigger functions that clear the overscroll animation state
+  // in other ways.
+  TouchDown(apzc, 10, 10, time, nullptr);
+  TouchUp(apzc, 10, 10, time);
+
+  // Sample the second overscroll animation to its end.
+  // If the ending of the first overscroll animation fails to clear state
+  // properly, this will assert.
+  ParentLayerPoint expectedScrollOffset(0, GetScrollRange().YMost());
+  SampleAnimationUntilRecoveredFromOverscroll(expectedScrollOffset);
 }
 
 TEST_F(APZCBasicTester, OverScrollAbort) {
@@ -1758,6 +1838,7 @@ protected:
   virtual void SetUp() {
     gfxPrefs::GetSingleton();
     APZThreadUtils::SetThreadAssertionsEnabled(false);
+    APZThreadUtils::SetControllerThread(MessageLoop::current());
 
     testStartTime = TimeStamp::Now();
     AsyncPanZoomController::SetFrameTime(testStartTime);
@@ -1784,7 +1865,7 @@ protected:
                                         CSSRect aScrollableRect = CSSRect(-1, -1, -1, -1)) {
     FrameMetrics metrics;
     metrics.SetScrollId(aScrollId);
-    nsIntRect layerBound = aLayer->GetVisibleRegion().GetBounds();
+    IntRect layerBound = aLayer->GetVisibleRegion().GetBounds();
     metrics.mCompositionBounds = ParentLayerRect(layerBound.x, layerBound.y,
                                                  layerBound.width, layerBound.height);
     metrics.SetScrollableRect(aScrollableRect);
@@ -1796,8 +1877,8 @@ protected:
       // case of a scrollable frame with the event regions and clip. This lets
       // us exercise the hit-testing code in APZCTreeManager
       EventRegions er = aLayer->GetEventRegions();
-      nsIntRect scrollRect = LayerIntRect::ToUntyped(RoundedToInt(aScrollableRect * metrics.LayersPixelsPerCSSPixel()));
-      er.mHitRegion = nsIntRegion(nsIntRect(layerBound.TopLeft(), scrollRect.Size()));
+      IntRect scrollRect = LayerIntRect::ToUntyped(RoundedToInt(aScrollableRect * metrics.LayersPixelsPerCSSPixel()));
+      er.mHitRegion = nsIntRegion(IntRect(layerBound.TopLeft(), scrollRect.Size()));
       aLayer->SetEventRegions(er);
     }
   }
@@ -1816,7 +1897,7 @@ protected:
   void CreateSimpleScrollingLayer() {
     const char* layerTreeSyntax = "t";
     nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(nsIntRect(0,0,200,200)),
+      nsIntRegion(IntRect(0,0,200,200)),
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
     SetScrollableFrameMetrics(root, FrameMetrics::START_SCROLL_ID, CSSRect(0, 0, 500, 500));
@@ -1826,9 +1907,9 @@ protected:
     const char* layerTreeSyntax = "c(tt)";
     // LayerID                     0 12
     nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(nsIntRect(0,0,100,100)),
-      nsIntRegion(nsIntRect(0,0,100,50)),
-      nsIntRegion(nsIntRect(0,50,100,50)),
+      nsIntRegion(IntRect(0,0,100,100)),
+      nsIntRegion(IntRect(0,0,100,50)),
+      nsIntRegion(IntRect(0,50,100,50)),
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
   }
@@ -1864,11 +1945,11 @@ protected:
     const char* layerTreeSyntax = "c(tttt)";
     // LayerID                     0 1234
     nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(nsIntRect(0,0,100,100)),
-      nsIntRegion(nsIntRect(0,0,100,100)),
-      nsIntRegion(nsIntRect(10,10,20,20)),
-      nsIntRegion(nsIntRect(10,10,20,20)),
-      nsIntRegion(nsIntRect(5,5,20,20)),
+      nsIntRegion(IntRect(0,0,100,100)),
+      nsIntRegion(IntRect(0,0,100,100)),
+      nsIntRegion(IntRect(10,10,20,20)),
+      nsIntRegion(IntRect(10,10,20,20)),
+      nsIntRegion(IntRect(5,5,20,20)),
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
   }
@@ -1877,10 +1958,10 @@ protected:
     const char* layerTreeSyntax = "c(tc(t))";
     // LayerID                     0 12 3
     nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(nsIntRect(0,0,100,100)),
-      nsIntRegion(nsIntRect(10,10,40,40)),
-      nsIntRegion(nsIntRect(10,60,40,40)),
-      nsIntRegion(nsIntRect(10,60,40,40)),
+      nsIntRegion(IntRect(0,0,100,100)),
+      nsIntRegion(IntRect(10,10,40,40)),
+      nsIntRegion(IntRect(10,60,40,40)),
+      nsIntRegion(IntRect(10,60,40,40)),
     };
     Matrix4x4 transforms[] = {
       Matrix4x4(),
@@ -1899,16 +1980,16 @@ protected:
     const char* layerTreeSyntax = "c(tc(t)tc(c(t)tt))";
     // LayerID                     0 12 3 45 6 7 89
     nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(nsIntRect(0,0,300,400)),      // root(0)
-      nsIntRegion(nsIntRect(0,0,100,100)),      // thebes(1) in top-left
-      nsIntRegion(nsIntRect(50,50,200,300)),    // container(2) centered in root(0)
-      nsIntRegion(nsIntRect(50,50,200,300)),    // thebes(3) fully occupying parent container(2)
-      nsIntRegion(nsIntRect(0,200,100,100)),    // thebes(4) in bottom-left
-      nsIntRegion(nsIntRect(200,0,100,400)),    // container(5) along the right 100px of root(0)
-      nsIntRegion(nsIntRect(200,0,100,200)),    // container(6) taking up the top half of parent container(5)
-      nsIntRegion(nsIntRect(200,0,100,200)),    // thebes(7) fully occupying parent container(6)
-      nsIntRegion(nsIntRect(200,200,100,100)),  // thebes(8) in bottom-right (below (6))
-      nsIntRegion(nsIntRect(200,300,100,100)),  // thebes(9) in bottom-right (below (8))
+      nsIntRegion(IntRect(0,0,300,400)),      // root(0)
+      nsIntRegion(IntRect(0,0,100,100)),      // thebes(1) in top-left
+      nsIntRegion(IntRect(50,50,200,300)),    // container(2) centered in root(0)
+      nsIntRegion(IntRect(50,50,200,300)),    // thebes(3) fully occupying parent container(2)
+      nsIntRegion(IntRect(0,200,100,100)),    // thebes(4) in bottom-left
+      nsIntRegion(IntRect(200,0,100,400)),    // container(5) along the right 100px of root(0)
+      nsIntRegion(IntRect(200,0,100,200)),    // container(6) taking up the top half of parent container(5)
+      nsIntRegion(IntRect(200,0,100,200)),    // thebes(7) fully occupying parent container(6)
+      nsIntRegion(IntRect(200,200,100,100)),  // thebes(8) in bottom-right (below (6))
+      nsIntRegion(IntRect(200,300,100,100)),  // thebes(9) in bottom-right (below (8))
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
     SetScrollableFrameMetrics(layers[1], FrameMetrics::START_SCROLL_ID);
@@ -1918,6 +1999,17 @@ protected:
     SetScrollableFrameMetrics(layers[7], FrameMetrics::START_SCROLL_ID + 2);
     SetScrollableFrameMetrics(layers[8], FrameMetrics::START_SCROLL_ID + 1);
     SetScrollableFrameMetrics(layers[9], FrameMetrics::START_SCROLL_ID + 3);
+  }
+
+  void CreateBug1148350LayerTree() {
+    const char* layerTreeSyntax = "c(t)";
+    // LayerID                     0 1
+    nsIntRegion layerVisibleRegion[] = {
+      nsIntRegion(IntRect(0,0,200,200)),
+      nsIntRegion(IntRect(0,0,200,200)),
+    };
+    root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
+    SetScrollableFrameMetrics(layers[1], FrameMetrics::START_SCROLL_ID);
   }
 };
 
@@ -2305,6 +2397,41 @@ TEST_F(APZHitTestingTester, TestRepaintFlushOnNewInputBlock) {
   mcc->RunThroughDelayedTasks();
 }
 
+TEST_F(APZHitTestingTester, Bug1148350) {
+  CreateBug1148350LayerTree();
+  ScopedLayerTreeRegistration registration(0, root, mcc);
+  manager->UpdateHitTestingTree(nullptr, root, false, 0, 0);
+
+  MockFunction<void(std::string checkPointName)> check;
+  {
+    InSequence s;
+    EXPECT_CALL(*mcc, HandleSingleTap(CSSPoint(100, 100), 0, ApzcOf(layers[1])->GetGuid())).Times(1);
+    EXPECT_CALL(check, Call("Tapped without transform"));
+    EXPECT_CALL(*mcc, HandleSingleTap(CSSPoint(100, 100), 0, ApzcOf(layers[1])->GetGuid())).Times(1);
+    EXPECT_CALL(check, Call("Tapped with interleaved transform"));
+  }
+
+  int time = 0;
+  Tap(manager, 100, 100, time, 100);
+  mcc->RunThroughDelayedTasks();
+  check.Call("Tapped without transform");
+
+  uint64_t blockId;
+  TouchDown(manager, 100, 100, time, &blockId);
+  if (gfxPrefs::TouchActionEnabled()) {
+    SetDefaultAllowedTouchBehavior(manager, blockId);
+  }
+  time += 100;
+
+  layers[0]->SetVisibleRegion(nsIntRegion(IntRect(0,50,200,150)));
+  layers[0]->SetBaseTransform(Matrix4x4::Translation(0, 50, 0));
+  manager->UpdateHitTestingTree(nullptr, root, false, 0, 0);
+
+  TouchUp(manager, 100, 100, time);
+  mcc->RunThroughDelayedTasks();
+  check.Call("Tapped with interleaved transform");
+}
+
 class APZOverscrollHandoffTester : public APZCTreeManagerTester {
 protected:
   UniquePtr<ScopedLayerTreeRegistration> registration;
@@ -2313,8 +2440,8 @@ protected:
   void CreateOverscrollHandoffLayerTree1() {
     const char* layerTreeSyntax = "c(t)";
     nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),
-      nsIntRegion(nsIntRect(0, 50, 100, 50))
+      nsIntRegion(IntRect(0, 0, 100, 100)),
+      nsIntRegion(IntRect(0, 50, 100, 50))
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
     SetScrollableFrameMetrics(root, FrameMetrics::START_SCROLL_ID, CSSRect(0, 0, 200, 200));
@@ -2328,9 +2455,9 @@ protected:
   void CreateOverscrollHandoffLayerTree2() {
     const char* layerTreeSyntax = "c(c(t))";
     nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),
-      nsIntRegion(nsIntRect(0, 50, 100, 50))
+      nsIntRegion(IntRect(0, 0, 100, 100)),
+      nsIntRegion(IntRect(0, 0, 100, 100)),
+      nsIntRegion(IntRect(0, 50, 100, 50))
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
     SetScrollableFrameMetrics(root, FrameMetrics::START_SCROLL_ID, CSSRect(0, 0, 200, 200));
@@ -2348,11 +2475,11 @@ protected:
   void CreateOverscrollHandoffLayerTree3() {
     const char* layerTreeSyntax = "c(c(t)c(t))";
     nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),  // root
-      nsIntRegion(nsIntRect(0, 0, 100, 50)),   // scrolling parent 1
-      nsIntRegion(nsIntRect(0, 0, 100, 50)),   // scrolling child 1
-      nsIntRegion(nsIntRect(0, 50, 100, 50)),  // scrolling parent 2
-      nsIntRegion(nsIntRect(0, 50, 100, 50))   // scrolling child 2
+      nsIntRegion(IntRect(0, 0, 100, 100)),  // root
+      nsIntRegion(IntRect(0, 0, 100, 50)),   // scrolling parent 1
+      nsIntRegion(IntRect(0, 0, 100, 50)),   // scrolling child 1
+      nsIntRegion(IntRect(0, 50, 100, 50)),  // scrolling parent 2
+      nsIntRegion(IntRect(0, 50, 100, 50))   // scrolling child 2
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
     SetScrollableFrameMetrics(layers[1], FrameMetrics::START_SCROLL_ID, CSSRect(0, 0, 100, 100));
@@ -2368,8 +2495,8 @@ protected:
   void CreateScrollgrabLayerTree() {
     const char* layerTreeSyntax = "c(t)";
     nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),  // scroll-grabbing parent
-      nsIntRegion(nsIntRect(0, 20, 100, 80))   // child
+      nsIntRegion(IntRect(0, 0, 100, 100)),  // scroll-grabbing parent
+      nsIntRegion(IntRect(0, 20, 100, 80))   // child
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
     SetScrollableFrameMetrics(root, FrameMetrics::START_SCROLL_ID, CSSRect(0, 0, 100, 120));
@@ -2571,9 +2698,9 @@ protected:
   void CreateEventRegionsLayerTree1() {
     const char* layerTreeSyntax = "c(tt)";
     nsIntRegion layerVisibleRegions[] = {
-      nsIntRegion(nsIntRect(0, 0, 200, 200)),     // root
-      nsIntRegion(nsIntRect(0, 0, 100, 200)),     // left half
-      nsIntRegion(nsIntRect(0, 100, 200, 100)),   // bottom half
+      nsIntRegion(IntRect(0, 0, 200, 200)),     // root
+      nsIntRegion(IntRect(0, 0, 100, 200)),     // left half
+      nsIntRegion(IntRect(0, 100, 200, 100)),   // bottom half
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegions, nullptr, lm, layers);
     SetScrollableFrameMetrics(root, FrameMetrics::START_SCROLL_ID);
@@ -2588,12 +2715,12 @@ protected:
     // in the d-t-c region for both layers[1] and layers[2] (but layers[2] is
     // on top so it gets the events by default if the main thread doesn't
     // respond).
-    EventRegions regions(nsIntRegion(nsIntRect(0, 0, 200, 200)));
+    EventRegions regions(nsIntRegion(IntRect(0, 0, 200, 200)));
     root->SetEventRegions(regions);
-    regions.mDispatchToContentHitRegion = nsIntRegion(nsIntRect(0, 100, 100, 100));
-    regions.mHitRegion = nsIntRegion(nsIntRect(0, 0, 100, 200));
+    regions.mDispatchToContentHitRegion = nsIntRegion(IntRect(0, 100, 100, 100));
+    regions.mHitRegion = nsIntRegion(IntRect(0, 0, 100, 200));
     layers[1]->SetEventRegions(regions);
-    regions.mHitRegion = nsIntRegion(nsIntRect(0, 100, 200, 100));
+    regions.mHitRegion = nsIntRegion(IntRect(0, 100, 200, 100));
     layers[2]->SetEventRegions(regions);
 
     registration = MakeUnique<ScopedLayerTreeRegistration>(0, root, mcc);
@@ -2604,17 +2731,17 @@ protected:
   void CreateEventRegionsLayerTree2() {
     const char* layerTreeSyntax = "c(t)";
     nsIntRegion layerVisibleRegions[] = {
-      nsIntRegion(nsIntRect(0, 0, 100, 500)),
-      nsIntRegion(nsIntRect(0, 150, 100, 100)),
+      nsIntRegion(IntRect(0, 0, 100, 500)),
+      nsIntRegion(IntRect(0, 150, 100, 100)),
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegions, nullptr, lm, layers);
     SetScrollableFrameMetrics(root, FrameMetrics::START_SCROLL_ID);
 
     // Set up the event regions so that the child thebes layer is positioned far
     // away from the scrolling container layer.
-    EventRegions regions(nsIntRegion(nsIntRect(0, 0, 100, 100)));
+    EventRegions regions(nsIntRegion(IntRect(0, 0, 100, 100)));
     root->SetEventRegions(regions);
-    regions.mHitRegion = nsIntRegion(nsIntRect(0, 150, 100, 100));
+    regions.mHitRegion = nsIntRegion(IntRect(0, 150, 100, 100));
     layers[1]->SetEventRegions(regions);
 
     registration = MakeUnique<ScopedLayerTreeRegistration>(0, root, mcc);
@@ -2631,10 +2758,10 @@ protected:
     // 3 is the Obscurer, who ruins everything.
     nsIntRegion layerVisibleRegions[] = {
         // x coordinates are uninteresting
-        nsIntRegion(nsIntRect(0,   0, 200, 200)),  // [0, 200]
-        nsIntRegion(nsIntRect(0,   0, 200, 200)),  // [0, 200]
-        nsIntRegion(nsIntRect(0, 100, 200,  50)),  // [100, 150]
-        nsIntRegion(nsIntRect(0, 100, 200, 100))   // [100, 200]
+        nsIntRegion(IntRect(0,   0, 200, 200)),  // [0, 200]
+        nsIntRegion(IntRect(0,   0, 200, 200)),  // [0, 200]
+        nsIntRegion(IntRect(0, 100, 200,  50)),  // [100, 150]
+        nsIntRegion(IntRect(0, 100, 200, 100))   // [100, 200]
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegions, nullptr, lm, layers);
 
@@ -2644,11 +2771,11 @@ protected:
     SetScrollHandoff(layers[2], layers[1]);
     SetScrollHandoff(layers[1], root);
 
-    EventRegions regions(nsIntRegion(nsIntRect(0, 0, 200, 200)));
+    EventRegions regions(nsIntRegion(IntRect(0, 0, 200, 200)));
     root->SetEventRegions(regions);
-    regions.mHitRegion = nsIntRegion(nsIntRect(0, 0, 200, 300));
+    regions.mHitRegion = nsIntRegion(IntRect(0, 0, 200, 300));
     layers[1]->SetEventRegions(regions);
-    regions.mHitRegion = nsIntRegion(nsIntRect(0, 100, 200, 100));
+    regions.mHitRegion = nsIntRegion(IntRect(0, 100, 200, 100));
     layers[2]->SetEventRegions(regions);
 
     registration = MakeUnique<ScopedLayerTreeRegistration>(0, root, mcc);
@@ -2663,9 +2790,9 @@ protected:
     // 1 is behind 2 and does have an APZC
     // 2 entirely covers 1 and should take all the input events
     nsIntRegion layerVisibleRegions[] = {
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),
+      nsIntRegion(IntRect(0, 0, 100, 100)),
+      nsIntRegion(IntRect(0, 0, 100, 100)),
+      nsIntRegion(IntRect(0, 0, 100, 100)),
     };
     root = CreateLayerTree(layerTreeSyntax, layerVisibleRegions, nullptr, lm, layers);
 
@@ -2685,10 +2812,10 @@ protected:
     // 2 is a small layer that is the actual target
     // 3 is a big layer obscuring 2 with a dispatch-to-content region
     nsIntRegion layerVisibleRegions[] = {
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),
-      nsIntRegion(nsIntRect(0, 0, 0, 0)),
-      nsIntRegion(nsIntRect(0, 0, 10, 10)),
-      nsIntRegion(nsIntRect(0, 0, 100, 100)),
+      nsIntRegion(IntRect(0, 0, 100, 100)),
+      nsIntRegion(IntRect(0, 0, 0, 0)),
+      nsIntRegion(IntRect(0, 0, 10, 10)),
+      nsIntRegion(IntRect(0, 0, 100, 100)),
     };
     Matrix4x4 layerTransforms[] = {
       Matrix4x4(),
@@ -2701,10 +2828,10 @@ protected:
     SetScrollableFrameMetrics(layers[2], FrameMetrics::START_SCROLL_ID + 1, CSSRect(0, 0, 10, 10));
     SetScrollableFrameMetrics(layers[3], FrameMetrics::START_SCROLL_ID + 2, CSSRect(0, 0, 100, 100));
 
-    EventRegions regions(nsIntRegion(nsIntRect(0, 0, 10, 10)));
+    EventRegions regions(nsIntRegion(IntRect(0, 0, 10, 10)));
     layers[2]->SetEventRegions(regions);
-    regions.mHitRegion = nsIntRegion(nsIntRect(0, 0, 100, 100));
-    regions.mDispatchToContentHitRegion = nsIntRegion(nsIntRect(0, 0, 100, 100));
+    regions.mHitRegion = nsIntRegion(IntRect(0, 0, 100, 100));
+    regions.mDispatchToContentHitRegion = nsIntRegion(IntRect(0, 0, 100, 100));
     layers[3]->SetEventRegions(regions);
 
     registration = MakeUnique<ScopedLayerTreeRegistration>(0, root, mcc);

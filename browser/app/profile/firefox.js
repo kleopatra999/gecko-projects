@@ -69,6 +69,9 @@ pref("extensions.hotfix.certs.1.sha1Fingerprint", "91:53:98:0C:C1:86:DF:47:8F:35
 // See the SCOPE constants in AddonManager.jsm for values to use here.
 pref("extensions.autoDisableScopes", 15);
 
+// Don't require signed add-ons by default
+pref("xpinstall.signatures.required", false);
+
 // Dictionary download preference
 pref("browser.dictionaries.download.url", "https://addons.mozilla.org/%LOCALE%/firefox/dictionaries/");
 
@@ -607,7 +610,7 @@ pref("mousewheel.with_win.action", 1);
 pref("browser.xul.error_pages.enabled", true);
 pref("browser.xul.error_pages.expert_bad_cert", false);
 
-// Work Offline is best manually managed by the user.
+// If true, network link events will change the value of navigator.onLine
 pref("network.manage-offline-status", false);
 
 // We want to make sure mail URLs are handled externally...
@@ -1195,10 +1198,15 @@ pref("dom.ipc.plugins.sandbox-level.default", 0);
 // purposes. This will require a restart.
 // On windows these levels are:
 // 0 - sandbox with USER_NON_ADMIN access token level
-// 1 - a more strict sandbox, which causes problems in specific areas
+// 1 - level 0 plus low integrity
 // 2 - a policy that we can reasonably call an effective sandbox
 // 3 - an equivalent basic policy to the Chromium renderer processes
+#if defined(NIGHTLY_BUILD)
+pref("security.sandbox.content.level", 1);
+#else
 pref("security.sandbox.content.level", 0);
+#endif
+
 
 #if defined(MOZ_STACKWALKING)
 // This controls the depth of stack trace that is logged when Windows sandbox
@@ -1319,8 +1327,8 @@ pref("services.sync.prefs.sync.xpinstall.whitelist.required", true);
 
 // Developer edition preferences
 #ifdef MOZ_DEV_EDITION
-pref("lightweightThemes.selectedThemeID", "firefox-devedition@mozilla.org");
-pref("browser.devedition.theme.enabled", true);
+sticky_pref("lightweightThemes.selectedThemeID", "firefox-devedition@mozilla.org");
+sticky_pref("browser.devedition.theme.enabled", true);
 #endif
 
 // Developer edition promo preferences
@@ -1337,10 +1345,9 @@ pref("devtools.devedition.promo.url", "https://www.mozilla.org/firefox/developer
 // Disable the error console
 pref("devtools.errorconsole.enabled", false);
 
-// Developer toolbar and GCLI preferences
+// Developer toolbar preferences
 pref("devtools.toolbar.enabled", true);
 pref("devtools.toolbar.visible", false);
-pref("devtools.commands.dir", "");
 
 // Enable the app manager
 pref("devtools.appmanager.enabled", true);
@@ -1425,6 +1432,8 @@ pref("devtools.performance.enabled", true);
 pref("devtools.performance.memory.sample-probability", "0.05");
 pref("devtools.performance.memory.max-log-length", 2147483647); // Math.pow(2,31) - 1
 pref("devtools.performance.timeline.hidden-markers", "[]");
+pref("devtools.performance.profiler.buffer-size", 10000000);
+pref("devtools.performance.profiler.sample-frequency-khz", 1);
 pref("devtools.performance.ui.invert-call-tree", true);
 pref("devtools.performance.ui.invert-flame-graph", false);
 pref("devtools.performance.ui.flatten-tree-recursion", true);
@@ -1433,6 +1442,14 @@ pref("devtools.performance.ui.show-idle-blocks", true);
 pref("devtools.performance.ui.enable-memory", false);
 pref("devtools.performance.ui.enable-framerate", true);
 pref("devtools.performance.ui.show-jit-optimizations", false);
+// If in aurora/dev edition (40.0, will revert for 40.1), set default
+// to retro mode.
+// TODO bug 1160313
+#ifdef MOZ_DEV_EDITION
+  pref("devtools.performance.ui.retro-mode", true);
+#else
+  pref("devtools.performance.ui.retro-mode", false);
+#endif
 
 // The default cache UI setting
 pref("devtools.cache.disabled", false);
@@ -1497,21 +1514,10 @@ pref("devtools.webaudioeditor.inspectorWidth", 300);
 
 // Default theme ("dark" or "light")
 #ifdef MOZ_DEV_EDITION
-pref("devtools.theme", "dark");
+sticky_pref("devtools.theme", "dark");
 #else
-pref("devtools.theme", "light");
+sticky_pref("devtools.theme", "light");
 #endif
-
-// Display the introductory text
-pref("devtools.gcli.hideIntro", false);
-
-// How eager are we to show help: never=1, sometimes=2, always=3
-pref("devtools.gcli.eagerHelper", 2);
-
-// Alias to the script URLs for inject command.
-pref("devtools.gcli.jquerySrc", "https://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js");
-pref("devtools.gcli.lodashSrc", "https://cdnjs.cloudflare.com/ajax/libs/lodash.js/2.4.1/lodash.min.js");
-pref("devtools.gcli.underscoreSrc", "https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.7.0/underscore-min.js");
 
 // Remember the Web Console filters
 pref("devtools.webconsole.filter.network", true);
@@ -1530,6 +1536,9 @@ pref("devtools.webconsole.filter.info", true);
 pref("devtools.webconsole.filter.log", true);
 pref("devtools.webconsole.filter.secerror", true);
 pref("devtools.webconsole.filter.secwarn", true);
+pref("devtools.webconsole.filter.serviceworkers", false);
+pref("devtools.webconsole.filter.sharedworkers", false);
+pref("devtools.webconsole.filter.windowlessworkers", false);
 
 // Remember the Browser Console filters
 pref("devtools.browserconsole.filter.network", true);
@@ -1548,6 +1557,9 @@ pref("devtools.browserconsole.filter.info", true);
 pref("devtools.browserconsole.filter.log", true);
 pref("devtools.browserconsole.filter.secerror", true);
 pref("devtools.browserconsole.filter.secwarn", true);
+pref("devtools.browserconsole.filter.serviceworkers", true);
+pref("devtools.browserconsole.filter.sharedworkers", true);
+pref("devtools.browserconsole.filter.windowlessworkers", true);
 
 // Text size in the Web Console. Use 0 for the system default size.
 pref("devtools.webconsole.fontSize", 0);
@@ -1598,11 +1610,6 @@ pref("devtools.fontinspector.enabled", true);
 // version for each user.
 pref("devtools.telemetry.tools.opened.version", "{}");
 
-// Set imgur upload client ID
-pref("devtools.gcli.imgurClientID", '0df414e888d7240');
-// Imgur's upload URL
-pref("devtools.gcli.imgurUploadURL", "https://api.imgur.com/3/image");
-
 // Whether the character encoding menu is under the main Firefox button. This
 // preference is a string so that localizers can alter it.
 pref("browser.menu.showCharacterEncoding", "chrome://browser/locale/browser.properties");
@@ -1630,10 +1637,10 @@ pref("browser.newtabpage.rows", 3);
 pref("browser.newtabpage.columns", 5);
 
 // directory tiles download URL
-pref("browser.newtabpage.directory.source", "https://tiles.services.mozilla.com/v2/links/fetch/%LOCALE%");
+pref("browser.newtabpage.directory.source", "https://tiles.services.mozilla.com/v3/links/fetch/%LOCALE%/%CHANNEL%");
 
 // endpoint to send newtab click and view pings
-pref("browser.newtabpage.directory.ping", "https://tiles.services.mozilla.com/v2/links/");
+pref("browser.newtabpage.directory.ping", "https://tiles.services.mozilla.com/v3/links/");
 
 // Enable the DOM fullscreen API.
 pref("full-screen-api.enabled", true);
@@ -1712,7 +1719,7 @@ pref("loop.support_url", "https://support.mozilla.org/kb/group-conversations-fir
 pref("loop.contacts.gravatars.show", false);
 pref("loop.contacts.gravatars.promo", true);
 pref("loop.browserSharing.showInfoBar", true);
-pref("loop.contextInConverations.enabled", false);
+pref("loop.contextInConversations.enabled", false);
 
 pref("social.sidebar.unload_timeout_ms", 10000);
 
@@ -1783,6 +1790,9 @@ pref("identity.fxaccounts.remote.force_auth.uri", "https://accounts.firefox.com/
 // The remote content URL shown for signin in. Must use HTTPS.
 pref("identity.fxaccounts.remote.signin.uri", "https://accounts.firefox.com/signin?service=sync&context=fx_desktop_v1");
 
+// The remote content URL where FxAccountsWebChannel messages originate.
+pref("identity.fxaccounts.remote.webchannel.uri", "https://accounts.firefox.com/");
+
 // The URL we take the user to when they opt to "manage" their Firefox Account.
 // Note that this will always need to be in the same TLD as the
 // "identity.fxaccounts.remote.signup.uri" pref.
@@ -1847,7 +1857,7 @@ pref("browser.polaris.enabled", false);
 pref("privacy.trackingprotection.ui.enabled", false);
 #endif
 
-#ifdef NIGHTLY_BUILD
+#ifdef E10S_TESTING_ONLY
 // At the moment, autostart.2 is used, while autostart.1 is unused.
 // We leave it here set to false to reset users' defaults and allow
 // us to change everybody to true in the future, when desired.
@@ -1855,7 +1865,7 @@ pref("browser.tabs.remote.autostart.1", false);
 pref("browser.tabs.remote.autostart.2", true);
 #endif
 
-#ifdef NIGHTLY_BUILD
+#ifdef E10S_TESTING_ONLY
 // Enable e10s add-on interposition by default.
 pref("extensions.interposition.enabled", true);
 pref("extensions.interposition.prefetching", true);
@@ -1884,6 +1894,7 @@ pref("browser.readinglist.sidebarEverOpened", false);
 pref("readinglist.scheduler.enabled", false);
 pref("readinglist.server", "https://readinglist.services.mozilla.com/v1");
 
+pref("browser.reader.detectedFirstArticle", false);
 // Don't limit how many nodes we care about on desktop:
 pref("reader.parse-node-limit", 0);
 
@@ -1891,3 +1902,10 @@ pref("reader.parse-node-limit", 0);
 #ifdef NIGHTLY_BUILD
 pref("dom.serviceWorkers.enabled", true);
 #endif
+
+pref("browser.pocket.enabled", true);
+pref("browser.pocket.api", "api.getpocket.com");
+pref("browser.pocket.site", "getpocket.com");
+pref("browser.pocket.oAuthConsumerKey", "40249-e88c401e1b1f2242d9e441c4");
+pref("browser.pocket.useLocaleList", true);
+pref("browser.pocket.enabledLocales", "en-US");

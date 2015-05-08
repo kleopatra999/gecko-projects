@@ -839,7 +839,6 @@ HashableValue
 HashableValue::mark(JSTracer* trc) const
 {
     HashableValue hv(*this);
-    JS::AutoOriginalTraceLocation reloc(trc, (void**)this);
     TraceEdge(trc, &hv.value, "key");
     return hv;
 }
@@ -1060,7 +1059,7 @@ InitClass(JSContext* cx, Handle<GlobalObject*> global, const Class* clasp, JSPro
         return nullptr;
     proto->setPrivate(nullptr);
 
-    Rooted<JSFunction*> ctor(cx, global->createConstructor(cx, construct, ClassName(key, cx), 1));
+    Rooted<JSFunction*> ctor(cx, global->createConstructor(cx, construct, ClassName(key, cx), 0));
     if (!ctor ||
         !LinkConstructorAndPrototype(cx, ctor, proto) ||
         !DefinePropertiesAndFunctions(cx, proto, properties, methods) ||

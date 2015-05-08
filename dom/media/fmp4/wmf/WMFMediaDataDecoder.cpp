@@ -30,6 +30,7 @@ WMFMediaDataDecoder::WMFMediaDataDecoder(MFTManager* aMFTManager,
   , mMonitor("WMFMediaDataDecoder")
   , mIsDecodeTaskDispatched(false)
   , mIsFlushing(false)
+  , mIsShutDown(false)
 {
 }
 
@@ -40,6 +41,9 @@ WMFMediaDataDecoder::~WMFMediaDataDecoder()
 nsresult
 WMFMediaDataDecoder::Init()
 {
+  MOZ_ASSERT(!mDecoder);
+  MOZ_ASSERT(!mIsShutDown);
+
   mDecoder = mMFTManager->Init();
   NS_ENSURE_TRUE(mDecoder, NS_ERROR_FAILURE);
 
@@ -49,8 +53,14 @@ WMFMediaDataDecoder::Init()
 nsresult
 WMFMediaDataDecoder::Shutdown()
 {
-  mTaskQueue->Dispatch(
-    NS_NewRunnableMethod(this, &WMFMediaDataDecoder::ProcessShutdown));
+  MOZ_DIAGNOSTIC_ASSERT(!mIsShutDown);
+
+  if (mTaskQueue) {
+    mTaskQueue->Dispatch(
+      NS_NewRunnableMethod(this, &WMFMediaDataDecoder::ProcessShutdown));
+  } else {
+    ProcessShutdown();
+  }
 #ifdef DEBUG
   {
     MonitorAutoLock mon(mMonitor);
@@ -58,6 +68,7 @@ WMFMediaDataDecoder::Shutdown()
     MOZ_ASSERT(!mIsDecodeTaskDispatched);
   }
 #endif
+  mIsShutDown = true;
   return NS_OK;
 }
 
@@ -87,6 +98,9 @@ WMFMediaDataDecoder::EnsureDecodeTaskDispatched()
 nsresult
 WMFMediaDataDecoder::Input(MediaRawData* aSample)
 {
+  MOZ_ASSERT(mCallback->OnReaderTaskQueue());
+  MOZ_DIAGNOSTIC_ASSERT(!mIsShutDown);
+
   MonitorAutoLock mon(mMonitor);
   mInput.push(aSample);
   EnsureDecodeTaskDispatched();
@@ -124,7 +138,7 @@ WMFMediaDataDecoder::Decode()
         PurgeInputQueue();
       }
       mCallback->Error();
-      return;
+      continue; // complete flush if flushing
     }
 
     mLastStreamOffset = input->mOffset;
@@ -168,6 +182,9 @@ WMFMediaDataDecoder::PurgeInputQueue()
 nsresult
 WMFMediaDataDecoder::Flush()
 {
+  MOZ_ASSERT(mCallback->OnReaderTaskQueue());
+  MOZ_DIAGNOSTIC_ASSERT(!mIsShutDown);
+
   MonitorAutoLock mon(mMonitor);
   PurgeInputQueue();
   mIsFlushing = true;
@@ -195,12 +212,17 @@ WMFMediaDataDecoder::ProcessDrain()
 nsresult
 WMFMediaDataDecoder::Drain()
 {
+  MOZ_ASSERT(mCallback->OnReaderTaskQueue());
+  MOZ_DIAGNOSTIC_ASSERT(!mIsShutDown);
+
   mTaskQueue->Dispatch(NS_NewRunnableMethod(this, &WMFMediaDataDecoder::ProcessDrain));
   return NS_OK;
 }
 
 bool
 WMFMediaDataDecoder::IsHardwareAccelerated() const {
+  MOZ_ASSERT(!mIsShutDown);
+
   return mMFTManager && mMFTManager->IsHardwareAccelerated();
 }
 

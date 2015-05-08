@@ -1,4 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -37,6 +38,7 @@ class nsIDocument;
 class nsIEventTarget;
 class nsIPrincipal;
 class nsIScriptContext;
+class nsISerializable;
 class nsIThread;
 class nsIThreadInternal;
 class nsITimer;
@@ -169,9 +171,6 @@ private:
 
   // Only used for top level workers.
   nsTArray<nsCOMPtr<nsIRunnable>> mQueuedRunnables;
-
-  // Only for ChromeWorkers without window and only touched on the main thread.
-  nsTArray<nsCString> mHostObjectURIs;
 
   // Protected by mMutex.
   JSSettings mJSSettings;
@@ -491,6 +490,25 @@ public:
     return mLoadInfo.mServiceWorkerCacheName;
   }
 
+  const nsCString&
+  GetSecurityInfo() const
+  {
+    MOZ_ASSERT(IsServiceWorker());
+    return mLoadInfo.mSecurityInfo;
+  }
+
+  void
+  SetSecurityInfo(const nsCString& aSecurityInfo)
+  {
+    MOZ_ASSERT(IsServiceWorker());
+    AssertIsOnMainThread();
+    MOZ_ASSERT(mLoadInfo.mSecurityInfo.IsEmpty());
+    mLoadInfo.mSecurityInfo = aSecurityInfo;
+  }
+
+  void
+  SetSecurityInfo(nsISerializable* aSerializable);
+
   // This is used to handle importScripts(). When the worker is first loaded
   // and executed, it happens in a sync loop. At this point it sets
   // mLoadingWorkerScript to true. importScripts() calls that occur during the
@@ -711,15 +729,6 @@ public:
 
   void
   CloseSharedWorkersForWindow(nsPIDOMWindow* aWindow);
-
-  void
-  RegisterHostObjectURI(const nsACString& aURI);
-
-  void
-  UnregisterHostObjectURI(const nsACString& aURI);
-
-  void
-  StealHostObjectURIs(nsTArray<nsCString>& aArray);
 
   void
   UpdateOverridenLoadGroup(nsILoadGroup* aBaseLoadGroup);

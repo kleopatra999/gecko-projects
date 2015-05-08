@@ -18,9 +18,6 @@
   <script type="application/javascript;version=1.8"
           src="chrome://browser/content/devtools/theme-switching.js"/>
 
-  <script type="application/javascript"
-          src="chrome://global/content/viewSourceUtils.js"/>
-
   <commandset>
     <command id="nodeSearchCommand"
       oncommand="inspector.searchBox.focus()"/>
@@ -94,11 +91,15 @@
         label="&inspectorScrollNodeIntoView.label;"
         accesskey="&inspectorScrollNodeIntoView.accesskey;"
         oncommand="inspector.scrollNodeIntoView()"/>
-      <menuseparator/>
       <menuitem id="node-menu-delete"
         label="&inspectorHTMLDelete.label;"
         accesskey="&inspectorHTMLDelete.accesskey;"
         oncommand="inspector.deleteNode()"/>
+      <menuseparator id="node-menu-link-separator"/>
+      <menuitem id="node-menu-link-follow"
+        oncommand="inspector.followAttributeLink()"/>
+      <menuitem id="node-menu-link-copy"
+        oncommand="inspector.copyAttributeLink()"/>
       <menuseparator/>
       <menuitem id="node-menu-pseudo-hover"
         label=":hover" type="checkbox"

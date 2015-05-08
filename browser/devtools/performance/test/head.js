@@ -5,7 +5,7 @@
 const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 let { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
-
+let { Preferences } = Cu.import("resource://gre/modules/Preferences.jsm", {});
 let { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
 let { Promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
 let { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
@@ -25,6 +25,8 @@ const SIMPLE_URL = EXAMPLE_URL + "doc_simple-test.html";
 
 const MEMORY_SAMPLE_PROB_PREF = "devtools.performance.memory.sample-probability";
 const MEMORY_MAX_LOG_LEN_PREF = "devtools.performance.memory.max-log-length";
+const PROFILER_BUFFER_SIZE_PREF = "devtools.performance.profiler.buffer-size";
+const PROFILER_SAMPLE_RATE_PREF = "devtools.performance.profiler.sample-frequency-khz";
 
 const FRAMERATE_PREF = "devtools.performance.ui.enable-framerate";
 const MEMORY_PREF = "devtools.performance.ui.enable-memory";
@@ -50,8 +52,13 @@ let DEFAULT_PREFS = [
   "devtools.performance.ui.enable-memory",
   "devtools.performance.ui.enable-framerate",
   "devtools.performance.ui.show-jit-optimizations",
+  "devtools.performance.memory.sample-probability",
+  "devtools.performance.memory.max-log-length",
+  "devtools.performance.profiler.buffer-size",
+  "devtools.performance.profiler.sample-frequency-khz",
+  "devtools.performance.ui.retro-mode",
 ].reduce((prefs, pref) => {
-  prefs[pref] = Services.prefs.getBoolPref(pref);
+  prefs[pref] = Preferences.get(pref);
   return prefs;
 }, {});
 
@@ -60,6 +67,10 @@ Services.prefs.setBoolPref("devtools.performance.enabled", true);
 // Enable logging for all the tests. Both the debugger server and frontend will
 // be affected by this pref.
 Services.prefs.setBoolPref("devtools.debugger.log", false);
+
+// Disable retro mode.
+// TODO bug 1160313
+Services.prefs.setBoolPref("devtools.performance.ui.retro-mode", false);
 
 /**
  * Call manually in tests that use frame script utils after initializing
@@ -78,7 +89,7 @@ registerCleanupFunction(() => {
 
   // Rollback any pref changes
   Object.keys(DEFAULT_PREFS).forEach(pref => {
-    Services.prefs.setBoolPref(pref, DEFAULT_PREFS[pref]);
+    Preferences.set(pref, DEFAULT_PREFS[pref]);
   });
 
   // Make sure the profiler module is stopped when the test finishes.
@@ -131,7 +142,7 @@ function handleError(aError) {
 }
 
 function once(aTarget, aEventName, aUseCapture = false, spread = false) {
-  info("Waiting for event: '" + aEventName + "' on " + aTarget + ".");
+  info(`Waiting for event: '${aEventName}' on ${aTarget}`);
 
   let deferred = Promise.defer();
 
@@ -142,6 +153,7 @@ function once(aTarget, aEventName, aUseCapture = false, spread = false) {
   ]) {
     if ((add in aTarget) && (remove in aTarget)) {
       aTarget[add](aEventName, function onEvent(...aArgs) {
+        info(`Received event: '${aEventName}' on ${aTarget}`);
         aTarget[remove](aEventName, onEvent, aUseCapture);
         deferred.resolve(spread ? aArgs : aArgs[0]);
       }, aUseCapture);
@@ -183,6 +195,7 @@ function initBackend(aUrl, targetOps={}) {
     // may not exist. Possible options that will actually work:
     // TEST_MOCK_MEMORY_ACTOR = true
     // TEST_MOCK_TIMELINE_ACTOR = true
+    // TEST_MOCK_BUFFER_CHECK_TIMER = number
     merge(target, targetOps);
 
     let connection = getPerformanceActorsConnection(target);
@@ -294,13 +307,13 @@ function consoleMethod (...args) {
 }
 
 function* consoleProfile(win, label) {
-  let profileStart = once(win.PerformanceController, win.EVENTS.CONSOLE_RECORDING_STARTED);
+  let profileStart = once(win.PerformanceController, win.EVENTS.RECORDING_STARTED);
   consoleMethod("profile", label);
   yield profileStart;
 }
 
 function* consoleProfileEnd(win, label) {
-  let ended = once(win.PerformanceController, win.EVENTS.CONSOLE_RECORDING_STOPPED);
+  let ended = once(win.PerformanceController, win.EVENTS.RECORDING_STOPPED);
   consoleMethod("profileEnd", label);
   yield ended;
 }
@@ -348,6 +361,7 @@ function* startRecording(panel, options = {
     : Promise.resolve();
 
   yield hasStarted;
+
   let overviewRendered = options.waitForOverview
     ? once(win.OverviewView, win.EVENTS.OVERVIEW_RENDERED)
     : Promise.resolve();
@@ -373,6 +387,7 @@ function* stopRecording(panel, options = {
   let willStop = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_WILL_STOP);
   let hasStopped = panel.panelWin.PerformanceController.once(win.EVENTS.RECORDING_STOPPED);
   let button = win.$("#main-record-button");
+  let overviewRendered = null;
 
   ok(button.hasAttribute("checked"),
     "The record button should already be checked.");
@@ -393,12 +408,17 @@ function* stopRecording(panel, options = {
     : Promise.resolve();
 
   yield hasStopped;
-  let overviewRendered = options.waitForOverview
-    ? once(win.OverviewView, win.EVENTS.OVERVIEW_RENDERED)
-    : Promise.resolve();
+
+  // Wait for the final rendering of the overview, not a low res
+  // incremental rendering and less likely to be from another rendering that was selected
+  while (!overviewRendered && options.waitForOverview) {
+    let [_, res] = yield onceSpread(win.OverviewView, win.EVENTS.OVERVIEW_RENDERED);
+    if (res === win.FRAMERATE_GRAPH_HIGH_RES_INTERVAL) {
+      overviewRendered = true;
+    }
+  }
 
   yield stateChanged;
-  yield overviewRendered;
 
   is(win.PerformanceView.getState(), "recorded",
     "The current state is 'recorded'.");
@@ -457,25 +477,20 @@ function waitUntil(predicate, interval = 10) {
 function dragStart(graph, x, y = 1) {
   x /= window.devicePixelRatio;
   y /= window.devicePixelRatio;
-  graph._onMouseMove({ clientX: x, clientY: y });
-  graph._onMouseDown({ clientX: x, clientY: y });
+  graph._onMouseMove({ testX: x, testY: y });
+  graph._onMouseDown({ testX: x, testY: y });
 }
 
 function dragStop(graph, x, y = 1) {
   x /= window.devicePixelRatio;
   y /= window.devicePixelRatio;
-  graph._onMouseMove({ clientX: x, clientY: y });
-  graph._onMouseUp({ clientX: x, clientY: y });
+  graph._onMouseMove({ testX: x, testY: y });
+  graph._onMouseUp({ testX: x, testY: y });
 }
 
 function dropSelection(graph) {
   graph.dropSelection();
   graph.emit("selecting");
-}
-
-function getSourceActor(aSources, aURL) {
-  let item = aSources.getItemForAttachment(a => a.source.url === aURL);
-  return item && item.value;
 }
 
 /**
@@ -488,4 +503,14 @@ function fireKey (e) {
 function reload (aTarget, aEvent = "navigate") {
   aTarget.activeTab.reload();
   return once(aTarget, aEvent);
+}
+
+/**
+* Forces cycle collection and GC, used in AudioNode destruction tests.
+*/
+function forceCC () {
+  info("Triggering GC/CC...");
+  SpecialPowers.DOMWindowUtils.cycleCollect();
+  SpecialPowers.DOMWindowUtils.garbageCollect();
+  SpecialPowers.DOMWindowUtils.garbageCollect();
 }

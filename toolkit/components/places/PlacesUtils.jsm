@@ -880,6 +880,8 @@ this.PlacesUtils = {
    * Set the POST data associated with a bookmark, if any.
    * Used by POST keywords.
    *   @param aBookmarkId
+   *
+   * @deprecated Use PlacesUtils.keywords.insert() API instead.
    */
   setPostDataForBookmark(aBookmarkId, aPostData) {
     if (!aPostData)
@@ -923,6 +925,8 @@ this.PlacesUtils = {
    * Get the POST data associated with a bookmark, if any.
    * @param aBookmarkId
    * @returns string of POST data if set for aBookmarkId. null otherwise.
+   *
+   * @deprecated Use PlacesUtils.keywords.fetch() API instead.
    */
   getPostDataForBookmark(aBookmarkId) {
     let stmt = PlacesUtils.history.DBConnection.createStatement(
@@ -1614,7 +1618,7 @@ this.PlacesUtils = {
     }
     let width  = Math.round(aWidth * aWindow.devicePixelRatio);
     let height = Math.round(aHeight * aWindow.devicePixelRatio);
-    return aURL + (aURL.contains("#") ? "&" : "#") +
+    return aURL + (aURL.includes("#") ? "&" : "#") +
            "-moz-resolution=" + width + "," + height;
   },
 
@@ -2006,6 +2010,12 @@ XPCOMUtils.defineLazyGetter(this, "gAsyncDBWrapperPromised",
         Sqlite.shutdown.addBlocker(
           "PlacesUtils wrapped connection closing",
           conn.close.bind(conn));
+
+        // Also ensure we close the wrapper in case Places shutdowns first.
+        Services.obs.addObserver(function observe() {
+          Services.obs.removeObserver(observe, "places-will-close-connection");
+          conn.close();
+        }, "places-will-close-connection", false);
       } catch(ex) {
         // It's too late to block shutdown, just close the connection.
         conn.close();

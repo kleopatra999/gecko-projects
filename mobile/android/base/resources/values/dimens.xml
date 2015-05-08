@@ -103,7 +103,7 @@
     <dimen name="doorhanger_input_width">250dp</dimen>
     <dimen name="doorhanger_spinner_textsize">9sp</dimen>
     <dimen name="doorhanger_padding">15dp</dimen>
-    <dimen name="doorhanger_offsetX">10dp</dimen>
+    <dimen name="doorhanger_offsetX">12dp</dimen>
     <dimen name="doorhanger_offsetY">67dp</dimen>
     <dimen name="doorhanger_GB_offsetY">7dp</dimen>
     <dimen name="doorhanger_drawable_padding">5dp</dimen>
@@ -204,6 +204,10 @@
     <dimen name="tab_history_border_padding">2dp</dimen>
 
     <dimen name="horizontal_drag_area">256dp</dimen>
+
+    <!-- ZoomedView dimensions. -->
+    <dimen name="zoomed_view_toolbar_height">44dp</dimen>
+    <dimen name="drawable_dropshadow_size">3dp</dimen>
 
     <!-- Find-In-Page dialog dimensions. -->
     <dimen name="find_in_page_text_margin_left">5dip</dimen>

@@ -127,9 +127,11 @@ js::InformalValueTypeName(const Value& v)
     return "value";
 }
 
+// ES6 draft rev37 6.2.4.4 FromPropertyDescriptor
 bool
 js::FromPropertyDescriptor(JSContext* cx, Handle<PropertyDescriptor> desc, MutableHandleValue vp)
 {
+    // Step 1.
     if (!desc.object()) {
         vp.setUndefined();
         return true;
@@ -142,31 +144,28 @@ bool
 js::FromPropertyDescriptorToObject(JSContext* cx, Handle<PropertyDescriptor> desc,
                                    MutableHandleValue vp)
 {
+    // Step 2-3.
     RootedObject obj(cx, NewBuiltinClassInstance<PlainObject>(cx));
     if (!obj)
         return false;
 
     const JSAtomState& names = cx->names();
-    RootedValue v(cx);
-    if (desc.hasConfigurable()) {
-        v.setBoolean(desc.configurable());
-        if (!DefineProperty(cx, obj, names.configurable, v))
-            return false;
-    }
-    if (desc.hasEnumerable()) {
-        v.setBoolean(desc.enumerable());
-        if (!DefineProperty(cx, obj, names.enumerable, v))
-            return false;
-    }
+
+    // Step 4.
     if (desc.hasValue()) {
         if (!DefineProperty(cx, obj, names.value, desc.value()))
             return false;
     }
+
+    // Step 5.
+    RootedValue v(cx);
     if (desc.hasWritable()) {
         v.setBoolean(desc.writable());
         if (!DefineProperty(cx, obj, names.writable, v))
             return false;
     }
+
+    // Step 6.
     if (desc.hasGetterObject()) {
         if (JSObject* get = desc.getterObject())
             v.setObject(*get);
@@ -175,6 +174,8 @@ js::FromPropertyDescriptorToObject(JSContext* cx, Handle<PropertyDescriptor> des
         if (!DefineProperty(cx, obj, names.get, v))
             return false;
     }
+
+    // Step 7.
     if (desc.hasSetterObject()) {
         if (JSObject* set = desc.setterObject())
             v.setObject(*set);
@@ -183,6 +184,21 @@ js::FromPropertyDescriptorToObject(JSContext* cx, Handle<PropertyDescriptor> des
         if (!DefineProperty(cx, obj, names.set, v))
             return false;
     }
+
+    // Step 8.
+    if (desc.hasEnumerable()) {
+        v.setBoolean(desc.enumerable());
+        if (!DefineProperty(cx, obj, names.enumerable, v))
+            return false;
+    }
+
+    // Step 9.
+    if (desc.hasConfigurable()) {
+        v.setBoolean(desc.configurable());
+        if (!DefineProperty(cx, obj, names.configurable, v))
+            return false;
+    }
+
     vp.setObject(*obj);
     return true;
 }
@@ -1069,7 +1085,7 @@ NewObject(ExclusiveContext* cx, HandleObjectGroup group, gc::AllocKind kind,
 
     MOZ_ASSERT(clasp != &ArrayObject::class_);
     MOZ_ASSERT_IF(clasp == &JSFunction::class_,
-                  kind == JSFunction::FinalizeKind || kind == JSFunction::ExtendedFinalizeKind);
+                  kind == AllocKind::FUNCTION || kind == AllocKind::FUNCTION_EXTENDED);
 
     // For objects which can have fixed data following the object, only use
     // enough fixed slots to cover the number of reserved slots in the object,
@@ -3006,19 +3022,18 @@ js::GetOwnPropertyDescriptor(JSContext* cx, HandleObject obj, HandleId id,
     }
 #endif
 
+    RootedNativeObject nobj(cx, obj.as<NativeObject>());
     RootedShape shape(cx);
-    if (!NativeLookupOwnProperty<CanGC>(cx, obj.as<NativeObject>(), id, &shape))
+    if (!NativeLookupOwnProperty<CanGC>(cx, nobj, id, &shape))
         return false;
     if (!shape) {
         desc.object().set(nullptr);
         return true;
     }
 
-    bool doGet = true;
     desc.setAttributes(GetShapeAttributes(obj, shape));
     if (desc.isAccessorDescriptor()) {
         MOZ_ASSERT(desc.isShared());
-        doGet = false;
 
         // The result of GetOwnPropertyDescriptor() must be either undefined or
         // a complete property descriptor (per ES6 draft rev 32 (2015 Feb 2)
@@ -3040,20 +3055,24 @@ js::GetOwnPropertyDescriptor(JSContext* cx, HandleObject obj, HandleId id,
             desc.setSetterObject(nullptr);
             desc.attributesRef() |= JSPROP_SETTER;
         }
+
+        desc.value().setUndefined();
     } else {
         // This is either a straight-up data property or (rarely) a
         // property with a JSGetterOp/JSSetterOp. The latter must be
         // reported to the caller as a plain data property, so don't
         // populate desc.getter/setter, and mask away the SHARED bit.
         desc.attributesRef() &= ~JSPROP_SHARED;
+
+        if (IsImplicitDenseOrTypedArrayElement(shape)) {
+            desc.value().set(nobj->getDenseOrTypedArrayElement(JSID_TO_INT(id)));
+        } else {
+            if (!NativeGetExistingProperty(cx, nobj, nobj, shape, desc.value()))
+                return false;
+        }
     }
 
-    RootedValue value(cx);
-    if (doGet && !GetProperty(cx, obj, obj, id, &value))
-        return false;
-
-    desc.value().set(value);
-    desc.object().set(obj);
+    desc.object().set(nobj);
     desc.assertComplete();
     return true;
 }
@@ -3946,6 +3965,16 @@ JSObject::allocKindForTenure(const js::Nursery& nursery) const
         return GetGCObjectKindForBytes(UnboxedPlainObject::offsetOfData() + nbytes);
     }
 
+    // Unboxed arrays use inline data if their size is small enough.
+    if (is<UnboxedArrayObject>()) {
+        const UnboxedArrayObject* nobj = &as<UnboxedArrayObject>();
+        size_t nbytes = UnboxedArrayObject::offsetOfInlineElements() +
+                        nobj->capacity() * nobj->elementSize();
+        if (nbytes <= JSObject::MAX_BYTE_SIZE)
+            return GetGCObjectKindForBytes(nbytes);
+        return AllocKind::OBJECT0;
+    }
+
     // Inlined typed objects are followed by their data, so make sure we copy
     // it all over to the new object.
     if (is<InlineTypedObject>()) {
@@ -4084,7 +4113,7 @@ JSObject::traceChildren(JSTracer* trc)
         {
             GetObjectSlotNameFunctor func(nobj);
             JS::AutoTracingDetails ctx(trc, func);
-            MarkObjectSlots(trc, nobj, 0, nobj->slotSpan());
+            TraceObjectSlots(trc, nobj, 0, nobj->slotSpan());
         }
 
         do {
@@ -4102,4 +4131,33 @@ JSObject::traceChildren(JSTracer* trc)
                        "objectElements");
         } while (false);
     }
+}
+
+static JSAtom*
+displayAtomFromObjectGroup(ObjectGroup& group)
+{
+    TypeNewScript* script = group.newScript();
+    if (!script)
+        return nullptr;
+
+    return script->function()->displayAtom();
+}
+
+bool
+JSObject::constructorDisplayAtom(JSContext* cx, js::MutableHandleAtom name)
+{
+    ObjectGroup *g = getGroup(cx);
+    if (!g)
+        return false;
+
+    name.set(displayAtomFromObjectGroup(*g));
+    return true;
+}
+
+JSAtom*
+JSObject::maybeConstructorDisplayAtom() const
+{
+    if (hasLazyGroup())
+        return nullptr;
+    return displayAtomFromObjectGroup(*group());
 }

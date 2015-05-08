@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -220,7 +221,7 @@ FetchDriver::BasicFetch()
       uint64_t size = blob->GetSize(result);
       if (NS_WARN_IF(result.Failed())) {
         FailWithNetworkError();
-        return result.ErrorCode();
+        return result.StealNSResult();
       }
 
       nsAutoString sizeStr;
@@ -228,7 +229,7 @@ FetchDriver::BasicFetch()
       response->Headers()->Append(NS_LITERAL_CSTRING("Content-Length"), NS_ConvertUTF16toUTF8(sizeStr), result);
       if (NS_WARN_IF(result.Failed())) {
         FailWithNetworkError();
-        return result.ErrorCode();
+        return result.StealNSResult();
       }
 
       nsAutoString type;
@@ -236,7 +237,7 @@ FetchDriver::BasicFetch()
       response->Headers()->Append(NS_LITERAL_CSTRING("Content-Type"), NS_ConvertUTF16toUTF8(type), result);
       if (NS_WARN_IF(result.Failed())) {
         FailWithNetworkError();
-        return result.ErrorCode();
+        return result.StealNSResult();
       }
     }
 
@@ -634,7 +635,7 @@ public:
       NS_WARNING(nsPrintfCString("Fetch ignoring illegal header - '%s': '%s'",
                                  PromiseFlatCString(aHeader).get(),
                                  PromiseFlatCString(aValue).get()).get());
-      result.ClearMessage();
+      result.SuppressException();
     }
     return NS_OK;
   }

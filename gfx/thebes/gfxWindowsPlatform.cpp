@@ -494,11 +494,6 @@ gfxWindowsPlatform::UpdateRenderMode()
 
     bool isVistaOrHigher = IsVistaOrLater();
 
-    bool safeMode = false;
-    nsCOMPtr<nsIXULRuntime> xr = do_GetService("@mozilla.org/xre/runtime;1");
-    if (xr)
-      xr->GetInSafeMode(&safeMode);
-
     mUseDirectWrite = Preferences::GetBool("gfx.font_rendering.directwrite.enabled", false);
 
 #ifdef CAIRO_HAS_D2D_SURFACE
@@ -535,7 +530,7 @@ gfxWindowsPlatform::UpdateRenderMode()
     }
 
     ID3D11Device *device = GetD3D11Device();
-    if (isVistaOrHigher && !safeMode && tryD2D &&
+    if (isVistaOrHigher && !InSafeMode() && tryD2D &&
         device &&
         device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_10_0 &&
         DoesD3D11TextureSharingWork(device)) {
@@ -1730,8 +1725,8 @@ gfxWindowsPlatform::GetDXGIAdapter()
 
 bool DoesD3D11DeviceWork(ID3D11Device *device)
 {
-  static bool checked;
-  static bool result;
+  static bool checked = false;
+  static bool result = false;
 
   if (checked)
       return result;
@@ -1769,8 +1764,8 @@ bool DoesD3D11DeviceWork(ID3D11Device *device)
 // with E_OUTOFMEMORY.
 bool DoesD3D11TextureSharingWork(ID3D11Device *device)
 {
-  static bool checked;
-  static bool result;
+  static bool checked = false;
+  static bool result = false;
 
   if (checked)
       return result;
@@ -1869,13 +1864,7 @@ gfxWindowsPlatform::InitD3D11Devices()
 
   MOZ_ASSERT(!mD3D11Device); 
 
-  bool safeMode = false;
-  nsCOMPtr<nsIXULRuntime> xr = do_GetService("@mozilla.org/xre/runtime;1");
-  if (xr) {
-    xr->GetInSafeMode(&safeMode);
-  }
-
-  if (safeMode) {
+  if (InSafeMode()) {
     return;
   }
 
@@ -1887,7 +1876,8 @@ gfxWindowsPlatform::InitD3D11Devices()
     if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS, &status))) {
       if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
 
-        if (gfxPrefs::LayersD3D11DisableWARP()) {
+        // It seems like nvdxgiwrapper makes a mess of WARP. See bug 1154703 for more.
+        if (gfxPrefs::LayersD3D11DisableWARP() || GetModuleHandleA("nvdxgiwrapper.dll")) {
           return;
         }
 
@@ -2145,7 +2135,7 @@ public:
       void ScheduleSoftwareVsync(TimeStamp aVsyncTimestamp)
       {
         MOZ_ASSERT(IsInVsyncThread());
-        NS_WARNING("DwmComposition dynamically disabled, falling back to software timers\n");
+        NS_WARNING("DwmComposition dynamically disabled, falling back to software timers");
 
         TimeStamp nextVsync = aVsyncTimestamp + mSoftwareVsyncRate;
         TimeDuration delay = nextVsync - TimeStamp::Now();
@@ -2256,14 +2246,14 @@ gfxWindowsPlatform::CreateHardwareVsyncSource()
 {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
   if (!WinUtils::dwmIsCompositionEnabledPtr) {
-    NS_WARNING("Dwm composition not available, falling back to software vsync\n");
+    NS_WARNING("Dwm composition not available, falling back to software vsync");
     return gfxPlatform::CreateHardwareVsyncSource();
   }
 
   BOOL dwmEnabled = false;
   WinUtils::dwmIsCompositionEnabledPtr(&dwmEnabled);
   if (!dwmEnabled) {
-    NS_WARNING("DWM not enabled, falling back to software vsync\n");
+    NS_WARNING("DWM not enabled, falling back to software vsync");
     return gfxPlatform::CreateHardwareVsyncSource();
   }
 

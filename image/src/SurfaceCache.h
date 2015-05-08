@@ -27,6 +27,7 @@ namespace image {
 class DrawableFrameRef;
 class Image;
 class imgFrame;
+struct SurfaceMemoryCounter;
 
 /*
  * ImageKey contains the information we need to look up all cached surfaces for
@@ -287,10 +288,13 @@ struct SurfaceCache
    * for sure the cache can't hold it.
    *
    * @param aSize  The dimensions of a surface in pixels.
+   * @param aBytesPerPixel  How many bytes each pixel of the surface requires.
+   *                        Defaults to 4, which is appropriate for RGBA or RGBX
+   *                        images.
    *
    * @return false if the surface cache can't hold a surface of that size.
    */
-  static bool CanHold(const IntSize& aSize);
+  static bool CanHold(const IntSize& aSize, uint32_t aBytesPerPixel = 4);
   static bool CanHold(size_t aSize);
 
   /**
@@ -392,21 +396,19 @@ struct SurfaceCache
   static void DiscardAll();
 
   /**
-   * Computes the size of the surfaces stored for the given image at the given
-   * memory location.
+   * Collects an accounting of the surfaces contained in the SurfaceCache for
+   * the given image, along with their size and various other metadata.
    *
    * This is intended for use with memory reporting.
    *
    * @param aImageKey     The image to report memory usage for.
-   * @param aLocation     The location (heap, nonheap, etc.) of the memory to
-   *                      report on.
-   * @param aMallocSizeOf A fallback malloc memory reporting function. This
-   *                      should be null unless we're reporting on in-process
-   *                      heap memory.
+   * @param aCounters     An array into which the report for each surface will
+   *                      be written.
+   * @param aMallocSizeOf A fallback malloc memory reporting function.
    */
-  static size_t SizeOfSurfaces(const ImageKey    aImageKey,
-                               gfxMemoryLocation aLocation,
-                               MallocSizeOf      aMallocSizeOf);
+  static void CollectSizeOfSurfaces(const ImageKey    aImageKey,
+                                    nsTArray<SurfaceMemoryCounter>& aCounters,
+                                    MallocSizeOf      aMallocSizeOf);
 
 private:
   virtual ~SurfaceCache() = 0;  // Forbid instantiation.

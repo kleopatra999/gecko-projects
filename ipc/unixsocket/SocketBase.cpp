@@ -269,39 +269,123 @@ SocketBase::SetConnectionStatus(SocketConnectionStatus aConnectionStatus)
 }
 
 //
-// SocketConsumerBase
-//
-
-SocketConsumerBase::~SocketConsumerBase()
-{ }
-
-//
 // SocketIOBase
 //
+
+SocketIOBase::SocketIOBase()
+{ }
 
 SocketIOBase::~SocketIOBase()
 { }
 
-void
-SocketIOBase::EnqueueData(UnixSocketIOBuffer* aBuffer)
+//
+// SocketIOEventRunnable
+//
+
+SocketIOEventRunnable::SocketIOEventRunnable(SocketIOBase* aIO,
+                                             SocketEvent aEvent)
+  : SocketIORunnable<SocketIOBase>(aIO)
+  , mEvent(aEvent)
+{ }
+
+NS_METHOD
+SocketIOEventRunnable::Run()
 {
-  if (!aBuffer->GetSize()) {
-    delete aBuffer; // delete empty data immediately
-    return;
+  MOZ_ASSERT(NS_IsMainThread());
+
+  SocketIOBase* io = SocketIORunnable<SocketIOBase>::GetIO();
+
+  if (NS_WARN_IF(io->IsShutdownOnMainThread())) {
+    // Since we've already explicitly closed and the close
+    // happened before this, this isn't really an error.
+    return NS_OK;
   }
-  mOutgoingQ.AppendElement(aBuffer);
+
+  SocketBase* socketBase = io->GetSocketBase();
+  MOZ_ASSERT(socketBase);
+
+  if (mEvent == CONNECT_SUCCESS) {
+    socketBase->NotifySuccess();
+  } else if (mEvent == CONNECT_ERROR) {
+    socketBase->NotifyError();
+  } else if (mEvent == DISCONNECT) {
+    socketBase->NotifyDisconnect();
+  }
+
+  return NS_OK;
 }
 
-bool
-SocketIOBase::HasPendingData() const
+//
+// SocketIORequestClosingRunnable
+//
+
+SocketIORequestClosingRunnable::SocketIORequestClosingRunnable(
+  SocketIOBase* aIO)
+  : SocketIORunnable<SocketIOBase>(aIO)
+{ }
+
+NS_METHOD
+SocketIORequestClosingRunnable::Run()
 {
-  return !mOutgoingQ.IsEmpty();
+  MOZ_ASSERT(NS_IsMainThread());
+
+  SocketIOBase* io = SocketIORunnable<SocketIOBase>::GetIO();
+
+  if (NS_WARN_IF(io->IsShutdownOnMainThread())) {
+    // Since we've already explicitly closed and the close
+    // happened before this, this isn't really an error.
+    return NS_OK;
+  }
+
+  SocketBase* socketBase = io->GetSocketBase();
+  MOZ_ASSERT(socketBase);
+
+  socketBase->CloseSocket();
+
+  return NS_OK;
 }
 
-SocketIOBase::SocketIOBase(size_t aMaxReadSize)
-  : mMaxReadSize(aMaxReadSize)
+//
+// SocketIODeleteInstanceRunnable
+//
+
+SocketIODeleteInstanceRunnable::SocketIODeleteInstanceRunnable(
+  SocketIOBase* aIO)
+  : mIO(aIO)
+{ }
+
+NS_METHOD
+SocketIODeleteInstanceRunnable::Run()
 {
-  MOZ_ASSERT(mMaxReadSize);
+  mIO = nullptr; // delete instance
+
+  return NS_OK;
+}
+
+//
+// SocketIOShutdownTask
+//
+
+SocketIOShutdownTask::SocketIOShutdownTask(SocketIOBase* aIO)
+  : SocketIOTask<SocketIOBase>(aIO)
+{ }
+
+void
+SocketIOShutdownTask::Run()
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+
+  SocketIOBase* io = SocketIOTask<SocketIOBase>::GetIO();
+
+  // At this point, there should be no new events on the I/O thread
+  // after this one with the possible exception of an accept task,
+  // which ShutdownOnIOThread will cancel for us. We are now fully
+  // shut down, so we can send a message to the main thread to delete
+  // |io| safely knowing that it's not reference any longer.
+  MOZ_ASSERT(!io->IsShutdownOnIOThread());
+  io->ShutdownOnIOThread();
+
+  NS_DispatchToMainThread(new SocketIODeleteInstanceRunnable(io));
 }
 
 }

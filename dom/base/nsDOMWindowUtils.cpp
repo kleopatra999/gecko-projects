@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sts=2 sw=2 et tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,6 +25,9 @@
 #include "mozilla/layers/ShadowLayers.h"
 #include "ClientLayerManager.h"
 #include "nsQueryObject.h"
+#ifdef MOZ_FMP4
+#include "MP4Reader.h"
+#endif
 
 #include "nsIScrollableFrame.h"
 
@@ -2237,6 +2240,27 @@ nsDOMWindowUtils::GetLayerManagerRemote(bool* retval)
 }
 
 NS_IMETHODIMP
+nsDOMWindowUtils::GetSupportsHardwareH264Decoding(bool* retval)
+{
+  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+
+#ifdef MOZ_FMP4
+  nsCOMPtr<nsIWidget> widget = GetWidget();
+  if (!widget)
+    return NS_ERROR_FAILURE;
+
+  LayerManager *mgr = widget->GetLayerManager();
+  if (!mgr)
+    return NS_ERROR_FAILURE;
+
+  *retval = MP4Reader::IsVideoAccelerated(mgr->GetCompositorBackendType());
+#else
+  *retval = false;
+#endif
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDOMWindowUtils::StartFrameTimeRecording(uint32_t *startIndex)
 {
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
@@ -3472,7 +3496,7 @@ nsDOMWindowUtils::GetOMTAStyle(nsIDOMElement* aElement,
     ErrorResult rv;
     cssValue->GetCssText(text, rv);
     aResult.Assign(text);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   } else {
     aResult.Truncate();
   }
@@ -3585,6 +3609,18 @@ nsDOMWindowUtils::GetCompositorAPZTestData(JSContext* aContext,
     }
   }
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::PostRestyleSelfEvent(nsIDOMElement* aElement)
+{
+  nsCOMPtr<Element> element = do_QueryInterface(aElement);
+  if (!element) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  nsLayoutUtils::PostRestyleEvent(element, eRestyle_Self, nsChangeHint(0));
   return NS_OK;
 }
 

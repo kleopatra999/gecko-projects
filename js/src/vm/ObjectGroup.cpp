@@ -416,7 +416,6 @@ class ObjectGroupCompartment::NewTableRef : public gc::BufferableRef
 
     void mark(JSTracer* trc) {
         JSObject* prior = proto;
-        JS::AutoOriginalTraceLocation reloc(trc, &proto);
         TraceManuallyBarrieredEdge(trc, &proto, "newObjectGroups set prototype");
         if (prior == proto)
             return;
@@ -466,6 +465,8 @@ ObjectGroup::defaultNewGroup(ExclusiveContext* cx, const Class* clasp,
     // unboxed plain object.
     MOZ_ASSERT(!clasp == (associated && associated->is<JSFunction>()));
 
+    AutoEnterAnalysis enter(cx);
+
     ObjectGroupCompartment::NewTable*& table = cx->compartment()->objectGroups.defaultNewTable;
 
     if (!table) {
@@ -473,6 +474,7 @@ ObjectGroup::defaultNewGroup(ExclusiveContext* cx, const Class* clasp,
         if (!table || !table->init()) {
             js_delete(table);
             table = nullptr;
+            ReportOutOfMemory(cx);
             return nullptr;
         }
     }
@@ -498,6 +500,9 @@ ObjectGroup::defaultNewGroup(ExclusiveContext* cx, const Class* clasp,
             clasp = &PlainObject::class_;
     }
 
+    if (proto.isObject() && !proto.toObject()->setDelegate(cx))
+        return nullptr;
+
     ObjectGroupCompartment::NewTable::AddPtr p =
         table->lookupForAdd(ObjectGroupCompartment::NewEntry::Lookup(clasp, proto, associated));
     if (p) {
@@ -509,11 +514,6 @@ ObjectGroup::defaultNewGroup(ExclusiveContext* cx, const Class* clasp,
         return group;
     }
 
-    AutoEnterAnalysis enter(cx);
-
-    if (proto.isObject() && !proto.toObject()->setDelegate(cx))
-        return nullptr;
-
     ObjectGroupFlags initialFlags = 0;
     if (!proto.isObject() || proto.toObject()->isNewGroupUnknown())
         initialFlags = OBJECT_FLAG_DYNAMIC_MASK;
@@ -524,8 +524,10 @@ ObjectGroup::defaultNewGroup(ExclusiveContext* cx, const Class* clasp,
     if (!group)
         return nullptr;
 
-    if (!table->add(p, ObjectGroupCompartment::NewEntry(group, associated)))
+    if (!table->add(p, ObjectGroupCompartment::NewEntry(group, associated))) {
+        ReportOutOfMemory(cx);
         return nullptr;
+    }
 
     ObjectGroupCompartment::newTablePostBarrier(cx, table, clasp, proto, associated);
 
@@ -581,6 +583,7 @@ ObjectGroup::lazySingletonGroup(ExclusiveContext* cx, const Class* clasp, Tagged
     if (!table) {
         table = cx->new_<ObjectGroupCompartment::NewTable>();
         if (!table || !table->init()) {
+            ReportOutOfMemory(cx);
             js_delete(table);
             table = nullptr;
             return nullptr;
@@ -605,8 +608,10 @@ ObjectGroup::lazySingletonGroup(ExclusiveContext* cx, const Class* clasp, Tagged
     if (!group)
         return nullptr;
 
-    if (!table->add(p, ObjectGroupCompartment::NewEntry(group, nullptr)))
+    if (!table->add(p, ObjectGroupCompartment::NewEntry(group, nullptr))) {
+        ReportOutOfMemory(cx);
         return nullptr;
+    }
 
     ObjectGroupCompartment::newTablePostBarrier(cx, table, clasp, proto, nullptr);
 
@@ -837,7 +842,8 @@ ObjectGroup::setGroupToHomogenousArray(ExclusiveContext* cx, JSObject* obj,
         AddTypePropertyId(cx, group, nullptr, JSID_VOID, elementType);
 
         key.proto = objProto;
-        (void) p.add(cx, *table, key, group);
+        if (!p.add(cx, *table, key, group))
+            cx->recoverFromOutOfMemory();
     }
 }
 
@@ -1159,6 +1165,15 @@ ObjectGroup::allocationSiteGroup(JSContext* cx, JSScript* script, jsbytecode* pc
             else
                 cx->recoverFromOutOfMemory();
         }
+    }
+
+    if (JSOp(*pc) == JSOP_NEWARRAY && cx->runtime()->options().unboxedArrays()) {
+        PreliminaryObjectArrayWithTemplate* preliminaryObjects =
+            cx->new_<PreliminaryObjectArrayWithTemplate>(nullptr);
+        if (preliminaryObjects)
+            res->setPreliminaryObjects(preliminaryObjects);
+        else
+            cx->recoverFromOutOfMemory();
     }
 
     if (!table->add(p, key, res))

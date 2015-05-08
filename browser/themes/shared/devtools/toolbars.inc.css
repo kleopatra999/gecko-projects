@@ -316,7 +316,7 @@
   background-repeat: no-repeat;
 }
 
-@media (min-resolution: 2dppx) {
+@media (min-resolution: 1.25dppx) {
   .devtools-button::before {
     background-size: 32px;
   }
@@ -437,7 +437,7 @@
   -moz-image-region: rect(0, 32px, 16px, 16px);
 }
 
-@media (min-resolution: 2dppx) {
+@media (min-resolution: 1.25dppx) {
   .theme-dark .devtools-searchinput {
     background-image: url(magnifying-glass@2x.png);
   }
@@ -769,7 +769,7 @@
   background-image: url("chrome://browser/skin/devtools/command-rulers.png");
 }
 
-@media (min-resolution: 2dppx) {
+@media (min-resolution: 1.25dppx) {
   #command-button-paintflashing > image {
     background-image: url("chrome://browser/skin/devtools/command-paintflashing@2x.png");
   }
@@ -878,9 +878,12 @@
   background-color: rgba(170,170,170,.4);
 }
 
+.devtools-tab:not([selected])[highlighted] {
+  box-shadow: 0 2px 0 var(--theme-highlight-green) inset;
+}
+
 .theme-dark .devtools-tab:not([selected])[highlighted] {
   background-color: hsla(99,100%,14%,.2);
-  box-shadow: 0 2px 0 #7bc107 inset;
 }
 
 .theme-light .devtools-tab:not([selected])[highlighted] {

@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-*/
-/* vim: set ts=2 sw=2 et tw=79: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -146,7 +146,7 @@ ErrorResult::ThrowErrorWithMessage(va_list ap, const dom::ErrNum errorNumber,
   MOZ_ASSERT(argCount <= 10);
   argCount = std::min<uint16_t>(argCount, 10);
   while (argCount--) {
-    message->mArgs.AppendElement(*va_arg(ap, nsString*));
+    message->mArgs.AppendElement(*va_arg(ap, const nsAString*));
   }
   mMessage = message;
 #ifdef DEBUG
@@ -223,13 +223,12 @@ ErrorResult::ReportErrorWithMessage(JSContext* aCx)
 void
 ErrorResult::ClearMessage()
 {
-  if (IsErrorWithMessage()) {
-    delete mMessage;
-    mMessage = nullptr;
+  MOZ_ASSERT(IsErrorWithMessage());
+  delete mMessage;
+  mMessage = nullptr;
 #ifdef DEBUG
-    mHasMessage = false;
+  mHasMessage = false;
 #endif
-  }
 }
 
 void
@@ -340,6 +339,14 @@ ErrorResult::ReportNotEnoughArgsError(JSContext* cx,
   ThrowErrorMessage(cx, dom::MSG_MISSING_ARGUMENTS, errorMessage.get());
 }
 
+void
+ErrorResult::ReportGenericError(JSContext* cx)
+{
+  MOZ_ASSERT(!IsErrorWithMessage());
+  MOZ_ASSERT(!IsJSException());
+  dom::Throw(cx, ErrorCode());
+}
+
 ErrorResult&
 ErrorResult::operator=(ErrorResult&& aRHS)
 {
@@ -376,6 +383,24 @@ ErrorResult::operator=(ErrorResult&& aRHS)
   mResult = aRHS.mResult;
   aRHS.mResult = NS_OK;
   return *this;
+}
+
+void
+ErrorResult::SuppressException()
+{
+  WouldReportJSException();
+  if (IsErrorWithMessage()) {
+    ClearMessage();
+  } else if (IsJSException()) {
+    JSContext* cx = nsContentUtils::GetDefaultJSContextForThread();
+    // Just steal it into a stack value (unrooting it in the process)
+    // that we then allow to die.
+    JS::Rooted<JS::Value> temp(cx);
+    StealJSException(cx, &temp);
+  }
+  // We don't use AssignErrorCode, because we want to override existing error
+  // states, which AssignErrorCode is not allowed to do.
+  mResult = NS_OK;
 }
 
 namespace dom {
@@ -2409,6 +2434,12 @@ ResolveGlobal(JSContext* aCx, JS::Handle<JSObject*> aObj,
              "classes!");
 
   return JS_ResolveStandardClass(aCx, aObj, aId, aResolvedp);
+}
+
+bool
+MayResolveGlobal(const JSAtomState& aNames, jsid aId, JSObject* aMaybeObj)
+{
+  return JS_MayResolveStandardClass(aNames, aId, aMaybeObj);
 }
 
 bool

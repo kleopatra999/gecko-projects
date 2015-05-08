@@ -52,6 +52,11 @@ public:
       mManager->mActiveCallback->ReleaseMediaResources();
     }
   }
+  virtual bool OnReaderTaskQueue() override
+  {
+    MOZ_ASSERT(mManager->mActiveCallback);
+    return mManager->mActiveCallback->OnReaderTaskQueue();
+  }
 
   SharedDecoderManager* mManager;
 };
@@ -98,9 +103,12 @@ SharedDecoderManager::CreateVideoDecoder(
       mPDM = nullptr;
       return nullptr;
     }
-    mPDM = aPDM;
     nsresult rv = mDecoder->Init();
-    NS_ENSURE_SUCCESS(rv, nullptr);
+    if (NS_FAILED(rv)) {
+      mDecoder = nullptr;
+      return nullptr;
+    }
+    mPDM = aPDM;
   }
 
   nsRefPtr<SharedDecoderProxy> proxy(new SharedDecoderProxy(this, aCallback));
@@ -147,11 +155,19 @@ void
 SharedDecoderManager::SetIdle(MediaDataDecoder* aProxy)
 {
   if (aProxy && mActiveProxy == aProxy) {
-    mWaitForInternalDrain = true;
-    mActiveProxy->Drain();
     MonitorAutoLock mon(mMonitor);
-    while (mWaitForInternalDrain) {
-      mon.Wait();
+    mWaitForInternalDrain = true;
+    nsresult rv;
+    {
+      // We don't want to hold the lock while calling Drain() has some
+      // platform implementations call DrainComplete() immediately.
+      MonitorAutoUnlock mon(mMonitor);
+      rv = mActiveProxy->Drain();
+    }
+    if (NS_SUCCEEDED(rv)) {
+      while (mWaitForInternalDrain) {
+        mon.Wait();
+      }
     }
     mActiveProxy->Flush();
     mActiveProxy = nullptr;
@@ -161,18 +177,23 @@ SharedDecoderManager::SetIdle(MediaDataDecoder* aProxy)
 void
 SharedDecoderManager::DrainComplete()
 {
-  if (mWaitForInternalDrain) {
+  {
     MonitorAutoLock mon(mMonitor);
-    mWaitForInternalDrain = false;
-    mon.NotifyAll();
-  } else {
-    mActiveCallback->DrainComplete();
+    if (mWaitForInternalDrain) {
+      mWaitForInternalDrain = false;
+      mon.NotifyAll();
+      return;
+    }
   }
+  mActiveCallback->DrainComplete();
 }
 
 void
 SharedDecoderManager::Shutdown()
 {
+  // Shutdown() should have been called on any proxies.
+  MOZ_ASSERT(!mActiveProxy);
+
   if (mDecoder) {
     mDecoder->Shutdown();
     mDecoder = nullptr;
@@ -237,15 +258,6 @@ SharedDecoderProxy::Shutdown()
 {
   mManager->SetIdle(this);
   return NS_OK;
-}
-
-bool
-SharedDecoderProxy::IsWaitingMediaResources()
-{
-  if (mManager->mActiveProxy == this) {
-    return mManager->mDecoder->IsWaitingMediaResources();
-  }
-  return mManager->mActiveProxy != nullptr;
 }
 
 bool

@@ -53,12 +53,20 @@ from manifestparser.filters import (
     subsuite,
     tags,
 )
-from mochitest_options import MochitestOptions
+from mochitest_options import MochitestArgumentParser
 from mozprofile import Profile, Preferences
 from mozprofile.permissions import ServerLocations
 from urllib import quote_plus as encodeURIComponent
 from mozlog.structured.formatters import TbplFormatter
 from mozlog.structured import commandline
+
+here = os.path.abspath(os.path.dirname(__file__))
+
+try:
+    from mozbuild.base import MozbuildObject
+    build_obj = MozbuildObject.from_environment(cwd=here)
+except ImportError:
+    build_obj = None
 
 
 ###########################
@@ -366,6 +374,11 @@ class MochitestServer(object):
         # the test slaves. Try to limit the amount of resources by disabling certain
         # features.
         env["ASAN_OPTIONS"] = "quarantine_size=1:redzone=32:malloc_context_size=5"
+
+        # Likewise, when running with a TSan build, our xpcshell server will
+        # also be TSan-enabled. Except that in this case, we don't really
+        # care about races in xpcshell. So disable TSan for the server.
+        env["TSAN_OPTIONS"] = "report_bugs=0"
 
         if mozinfo.isWin:
             env["PATH"] = env["PATH"] + ";" + str(self._xrePath)
@@ -1281,6 +1294,9 @@ class Mochitest(MochitestUtilsMixin):
         if mozinfo.info["asan"]:
             # Disable leak checking when running these tools
             toolsEnv["ASAN_OPTIONS"] = "detect_leaks=0"
+        if mozinfo.info["tsan"]:
+            # Disable race checking when running these tools
+            toolsEnv["TSAN_OPTIONS"] = "report_bugs=0"
 
         if self.certdbNew:
             # android and b2g use the new DB formats exclusively
@@ -1443,6 +1459,7 @@ class Mochitest(MochitestUtilsMixin):
 
         gmp_subdirs = [
             os.path.join('gmp-fake', '1.0'),
+            os.path.join('gmp-fakeopenh264', '1.0'),
             os.path.join('gmp-clearkey', '0.1'),
         ]
 
@@ -2103,7 +2120,7 @@ class Mochitest(MochitestUtilsMixin):
                 continue
 
             print "dir: %s" % d
-            tests_in_dir = [t for t in testsToRun if t.startswith(d)]
+            tests_in_dir = [t for t in testsToRun if os.path.dirname(t) == d]
 
             # If we are using --run-by-dir, we should not use the profile path (if) provided
             # by the user, since we need to create a new directory for each run. We would face problems
@@ -2586,29 +2603,34 @@ class Mochitest(MochitestUtilsMixin):
         return dirlist
 
 
-def main():
+def run_test_harness(options):
+    logger_options = {
+        key: value for key, value in vars(options).iteritems() if key.startswith('log')}
+    runner = Mochitest(logger_options)
+    result = runner.runTests(options)
+
+    # don't dump failures if running from automation as treeherder already displays them
+    if build_obj:
+        if runner.message_logger.errors:
+            result = 1
+            runner.message_logger.logger.warning("The following tests failed:")
+            for error in runner.message_logger.errors:
+                runner.message_logger.logger.log_raw(error)
+
+    runner.message_logger.finish()
+
+    return result
+
+
+def cli(args=sys.argv[1:]):
     # parse command line options
-    parser = MochitestOptions()
-    commandline.add_logging_group(parser)
-    options = parser.parse_args()
+    parser = MochitestArgumentParser(app='generic')
+    options = parser.parse_args(args)
     if options is None:
         # parsing error
         sys.exit(1)
-    logger_options = {
-        key: value for key,
-        value in vars(options).iteritems() if key.startswith('log')}
-    mochitest = Mochitest(logger_options)
-    options = parser.verifyOptions(options, mochitest)
 
-    options.utilityPath = mochitest.getFullPath(options.utilityPath)
-    options.certPath = mochitest.getFullPath(options.certPath)
-    if options.symbolsPath and len(urlparse(options.symbolsPath).scheme) < 2:
-        options.symbolsPath = mochitest.getFullPath(options.symbolsPath)
-
-    return_code = mochitest.runTests(options)
-    mochitest.message_logger.finish()
-
-    sys.exit(return_code)
+    return run_test_harness(options)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(cli())

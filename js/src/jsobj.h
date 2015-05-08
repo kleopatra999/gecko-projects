@@ -33,7 +33,7 @@ struct ClassInfo;
 
 namespace js {
 
-class AutoPropertyDescriptorVector;
+typedef AutoVectorRooter<PropertyDescriptor> AutoPropertyDescriptorVector;
 class GCMarker;
 class Nursery;
 
@@ -253,6 +253,20 @@ class JSObject : public js::gc::Cell
      * the object's elements.
      */
     inline bool isIndexed() const;
+
+    /*
+     * If this object was instantiated with `new Ctor`, return the constructor's
+     * display atom. Otherwise, return nullptr.
+     */
+    bool constructorDisplayAtom(JSContext* cx, js::MutableHandleAtom name);
+
+    /*
+     * The same as constructorDisplayAtom above, however if this object has a
+     * lazy group, nullptr is returned. This allows for use in situations that
+     * cannot GC and where having some information, even if it is inconsistently
+     * available, is better than no information.
+     */
+    JSAtom* maybeConstructorDisplayAtom() const;
 
     /* GC support. */
 
@@ -1098,7 +1112,7 @@ GetInitialHeap(NewObjectKind newKind, const Class* clasp)
 {
     if (newKind != GenericObject)
         return gc::TenuredHeap;
-    if (clasp->finalize && !(clasp->flags & JSCLASS_FINALIZE_FROM_NURSERY))
+    if (clasp->finalize && !(clasp->flags & JSCLASS_SKIP_NURSERY_FINALIZE))
         return gc::TenuredHeap;
     return gc::DefaultHeap;
 }

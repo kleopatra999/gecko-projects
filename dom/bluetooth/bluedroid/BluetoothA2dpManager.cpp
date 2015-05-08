@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -298,11 +298,7 @@ BluetoothA2dpManager::ResetAvrcp()
   mMediaNumber = 0;
   mTotalMediaCount = 0;
   mPosition = 0;
-#ifdef MOZ_B2G_BT_API_V2
-  mPlayStatus = ControlPlayStatus::PLAYSTATUS_UNKNOWN;
-#else
   mPlayStatus = ControlPlayStatus::PLAYSTATUS_STOPPED;
-#endif
 }
 
 /*
@@ -538,6 +534,7 @@ void
 BluetoothA2dpManager::OnDisconnectError()
 {
   MOZ_ASSERT(NS_IsMainThread());
+  NS_ENSURE_TRUE_VOID(mController);
 
   mController->NotifyCompletion(NS_LITERAL_STRING(ERR_DISCONNECTION_FAILED));
 }
@@ -582,7 +579,9 @@ BluetoothA2dpManager::Disconnect(BluetoothProfileController* aController)
 
   if (!sBtA2dpInterface) {
     BT_LOGR("sBluetoothA2dpInterface is null");
-    aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    if (aController) {
+      aController->NotifyCompletion(NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    }
     return;
   }
 
@@ -930,9 +929,6 @@ BluetoothA2dpManager::UpdateRegisterNotification(BluetoothAvrcpEvent aEvent,
       }
       mPlaybackInterval = aParam;
       break;
-#ifdef MOZ_B2G_BT_API_V2
-      // Missing in bluetooth2
-#else
     case AVRCP_EVENT_APP_SETTINGS_CHANGED:
       mAppSettingsChangedNotifyType = AVRCP_NTF_INTERIM;
       param.mNumAttr = 2;
@@ -941,7 +937,6 @@ BluetoothA2dpManager::UpdateRegisterNotification(BluetoothAvrcpEvent aEvent,
       param.mIds[1] = AVRCP_PLAYER_ATTRIBUTE_SHUFFLE;
       param.mValues[1] = AVRCP_PLAYER_VAL_OFF_SHUFFLE;
       break;
-#endif
     default:
       break;
   }

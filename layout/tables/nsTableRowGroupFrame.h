@@ -12,8 +12,9 @@
 #include "nsILineIterator.h"
 #include "nsTablePainter.h"
 #include "nsTArray.h"
+#include "nsTableFrame.h"
+#include "mozilla/WritingModes.h"
 
-class nsTableFrame;
 class nsTableRowFrame;
 
 struct nsRowGroupReflowState {
@@ -68,6 +69,13 @@ public:
                                                         nsStyleContext* aContext);
   virtual ~nsTableRowGroupFrame();
 
+  nsTableFrame* GetTableFrame() const
+  {
+    nsIFrame* parent = GetParent();
+    MOZ_ASSERT(parent && parent->GetType() == nsGkAtoms::tableFrame);
+    return static_cast<nsTableFrame*>(parent);
+  }
+
   virtual void DestroyFrom(nsIFrame* aDestructRoot) override;
 
   /** @see nsIFrame::DidSetStyleContext */
@@ -118,6 +126,9 @@ public:
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
+  virtual mozilla::WritingMode GetWritingMode() const override
+    { return GetTableFrame()->GetWritingMode(); }
+
   /** return the number of child rows (not necessarily == number of child frames) */
   int32_t GetRowCount();
 
@@ -151,7 +162,7 @@ public:
    */
   nscoord GetHeightBasis(const nsHTMLReflowState& aReflowState);
 
-  nsMargin* GetBCBorderWidth(nsMargin& aBorder);
+  mozilla::LogicalMargin GetBCBorderWidth(mozilla::WritingMode aWM);
 
   /**
    * Gets inner border widths before collapsing with cell borders
@@ -440,12 +451,12 @@ inline void
 nsTableRowGroupFrame::GetContinuousBCBorderWidth(nsMargin& aBorder)
 {
   int32_t aPixelsToTwips = nsPresContext::AppUnitsPerCSSPixel();
-  aBorder.right = BC_BORDER_LEFT_HALF_COORD(aPixelsToTwips,
-                                            mRightContBorderWidth);
-  aBorder.bottom = BC_BORDER_TOP_HALF_COORD(aPixelsToTwips,
-                                            mBottomContBorderWidth);
-  aBorder.left = BC_BORDER_RIGHT_HALF_COORD(aPixelsToTwips,
-                                            mLeftContBorderWidth);
+  aBorder.right = BC_BORDER_START_HALF_COORD(aPixelsToTwips,
+                                             mRightContBorderWidth);
+  aBorder.bottom = BC_BORDER_START_HALF_COORD(aPixelsToTwips,
+                                              mBottomContBorderWidth);
+  aBorder.left = BC_BORDER_END_HALF_COORD(aPixelsToTwips,
+                                          mLeftContBorderWidth);
   return;
 }
 #endif

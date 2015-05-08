@@ -341,18 +341,20 @@ DOMCameraControlListener::OnAutoFocusComplete(bool aAutoFocusSucceeded)
 }
 
 void
-DOMCameraControlListener::OnTakePictureComplete(uint8_t* aData, uint32_t aLength, const nsAString& aMimeType)
+DOMCameraControlListener::OnTakePictureComplete(const uint8_t* aData, uint32_t aLength, const nsAString& aMimeType)
 {
   class Callback : public DOMCallback
   {
   public:
     Callback(nsMainThreadPtrHandle<nsISupports> aDOMCameraControl,
-             uint8_t* aData, uint32_t aLength, const nsAString& aMimeType)
+             const uint8_t* aData, uint32_t aLength, const nsAString& aMimeType)
       : DOMCallback(aDOMCameraControl)
-      , mData(aData)
       , mLength(aLength)
       , mMimeType(aMimeType)
-    { }
+    {
+        mData = (uint8_t*) malloc(aLength);
+        memcpy(mData, aData, aLength);
+    }
 
     void
     RunCallback(nsDOMCameraControl* aDOMCameraControl) override
@@ -363,9 +365,16 @@ DOMCameraControlListener::OnTakePictureComplete(uint8_t* aData, uint32_t aLength
                                static_cast<uint64_t>(mLength),
                                mMimeType);
       aDOMCameraControl->OnTakePictureComplete(picture);
+      mData = NULL;
     }
 
   protected:
+    virtual
+    ~Callback()
+    {
+        free(mData);
+    }
+
     uint8_t* mData;
     uint32_t mLength;
     nsString mMimeType;

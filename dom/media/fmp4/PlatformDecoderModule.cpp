@@ -118,8 +118,7 @@ PlatformDecoderModule::CreateCDMWrapper(CDMProxy* aProxy,
 already_AddRefed<PlatformDecoderModule>
 PlatformDecoderModule::Create()
 {
-  // Note: This runs on the decode thread.
-  MOZ_ASSERT(!NS_IsMainThread());
+  // Note: This (usually) runs on the decode thread.
 
   nsRefPtr<PlatformDecoderModule> m(CreatePDM());
 
@@ -186,26 +185,26 @@ PlatformDecoderModule::CreateDecoder(const TrackInfo& aConfig,
 {
   nsRefPtr<MediaDataDecoder> m;
 
-  if (aConfig.IsAudio()) {
-    m = CreateAudioDecoder(static_cast<const AudioInfo&>(aConfig),
+  if (aConfig.GetAsAudioInfo()) {
+    m = CreateAudioDecoder(*aConfig.GetAsAudioInfo(),
                            aTaskQueue,
                            aCallback);
     return m.forget();
   }
 
-  if (!aConfig.IsVideo()) {
+  if (!aConfig.GetAsVideoInfo()) {
     return nullptr;
   }
 
   if (H264Converter::IsH264(aConfig)) {
     m = new H264Converter(this,
-                          static_cast<const VideoInfo&>(aConfig),
+                          *aConfig.GetAsVideoInfo(),
                           aLayersBackend,
                           aImageContainer,
                           aTaskQueue,
                           aCallback);
   } else {
-    m = CreateVideoDecoder(static_cast<const VideoInfo&>(aConfig),
+    m = CreateVideoDecoder(*aConfig.GetAsVideoInfo(),
                            aLayersBackend,
                            aImageContainer,
                            aTaskQueue,

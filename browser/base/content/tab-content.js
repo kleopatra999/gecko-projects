@@ -555,7 +555,9 @@ addEventListener("unload", () => {
 }, false);
 
 addMessageListener("Browser:AppTab", function(message) {
-  docShell.isAppTab = message.data.isAppTab;
+  if (docShell) {
+    docShell.isAppTab = message.data.isAppTab;
+  }
 });
 
 let WebBrowserChrome = {
@@ -588,6 +590,7 @@ let DOMFullscreenHandler = {
     addMessageListener("DOMFullscreen:Approved", this);
     addMessageListener("DOMFullscreen:CleanUp", this);
     addEventListener("MozEnteredDomFullscreen", this);
+    addEventListener("MozExitedDomFullscreen", this);
   },
 
   receiveMessage: function(aMessage) {
@@ -613,6 +616,8 @@ let DOMFullscreenHandler = {
       sendAsyncMessage("MozEnteredDomFullscreen", {
         origin: this._fullscreenDoc.nodePrincipal.origin,
       });
+    } else if (aEvent.type == "MozExitedDomFullscreen") {
+      sendAsyncMessage("MozExitedDomFullscreen");
     }
   }
 };

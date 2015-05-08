@@ -268,7 +268,7 @@ loop.panel = (function(_, mozL10n) {
             <a href={privacy_notice_url} target="_blank">
               {mozL10n.get("legal_text_privacy")}
             </a>
-          ),
+          )
         });
         return (
           <div id="powered-by-wrapper">
@@ -432,15 +432,18 @@ loop.panel = (function(_, mozL10n) {
   });
 
   var RoomEntryContextItem = React.createClass({
+    mixins: [loop.shared.mixins.WindowCloseMixin],
+
     propTypes: {
       mozLoop: React.PropTypes.object.isRequired,
-      roomUrls: React.PropTypes.object
+      roomUrls: React.PropTypes.array
     },
 
     handleClick: function(event) {
       event.stopPropagation();
       event.preventDefault();
       this.props.mozLoop.openURL(event.currentTarget.href);
+      this.closeWindow();
     },
 
     render: function() {
@@ -700,10 +703,18 @@ loop.panel = (function(_, mozL10n) {
     },
 
     render: function() {
+      var hostname;
+
+      try {
+        hostname = new URL(this.state.url).hostname;
+      } catch (ex) {
+        // Empty catch - if there's an error, then we won't show the context.
+      }
+
       var contextClasses = React.addons.classSet({
         context: true,
-        hide: !this.state.url ||
-          !this.props.mozLoop.getLoopPref("contextInConverations.enabled")
+        hide: !hostname ||
+          !this.props.mozLoop.getLoopPref("contextInConversations.enabled")
       });
 
       return (
@@ -716,7 +727,7 @@ loop.panel = (function(_, mozL10n) {
             </label>
             <img className="context-preview" src={this.state.previewImage}/>
             <span className="context-description">{this.state.description}</span>
-            <span className="context-url">{this.state.url}</span>
+            <span className="context-url">{hostname}</span>
           </div>
           <button className="btn btn-info new-room-button"
                   onClick={this.handleCreateButtonClick}
@@ -748,7 +759,7 @@ loop.panel = (function(_, mozL10n) {
     getInitialState: function() {
       return {
         userProfile: this.props.userProfile || this.props.mozLoop.userProfile,
-        gettingStartedSeen: this.props.mozLoop.getLoopPref("gettingStarted.seen"),
+        gettingStartedSeen: this.props.mozLoop.getLoopPref("gettingStarted.seen")
       };
     },
 
@@ -761,7 +772,7 @@ loop.panel = (function(_, mozL10n) {
       var firstErrorKey = Object.keys(this.props.mozLoop.errors)[0];
       return {
         type: firstErrorKey,
-        error: this.props.mozLoop.errors[firstErrorKey],
+        error: this.props.mozLoop.errors[firstErrorKey]
       };
     },
 
@@ -774,7 +785,7 @@ loop.panel = (function(_, mozL10n) {
           message: serviceError.error.friendlyMessage,
           details: serviceError.error.friendlyDetails,
           detailsButtonLabel: serviceError.error.friendlyDetailsButtonLabel,
-          detailsButtonCallback: serviceError.error.friendlyDetailsButtonCallback,
+          detailsButtonCallback: serviceError.error.friendlyDetailsButtonCallback
         });
       } else {
         this.props.notifications.remove(this.props.notifications.get("service-error"));
@@ -795,7 +806,7 @@ loop.panel = (function(_, mozL10n) {
 
     _gettingStartedSeen: function() {
       this.setState({
-        gettingStartedSeen: this.props.mozLoop.getLoopPref("gettingStarted.seen"),
+        gettingStartedSeen: this.props.mozLoop.getLoopPref("gettingStarted.seen")
       });
     },
 
@@ -948,7 +959,7 @@ loop.panel = (function(_, mozL10n) {
     RoomList: RoomList,
     SettingsDropdown: SettingsDropdown,
     ToSView: ToSView,
-    UserIdentity: UserIdentity,
+    UserIdentity: UserIdentity
   };
 })(_, document.mozL10n);
 

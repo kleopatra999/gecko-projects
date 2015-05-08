@@ -74,6 +74,7 @@ import org.mozilla.gecko.util.PrefUtils;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.util.UIAsyncTask;
+import org.mozilla.gecko.widget.AnchoredPopup;
 import org.mozilla.gecko.widget.ButtonToast;
 import org.mozilla.gecko.widget.ButtonToast.ToastListener;
 import org.mozilla.gecko.widget.GeckoActionProvider;
@@ -103,6 +104,7 @@ import android.os.Bundle;
 import android.os.StrictMode;
 import android.support.v4.app.Fragment;
 import android.support.v4.app.FragmentManager;
+import android.support.v4.view.MenuItemCompat;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.Base64;
@@ -122,6 +124,7 @@ import android.view.ViewStub;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.animation.Interpolator;
+import android.widget.Button;
 import android.widget.ListView;
 import android.widget.RelativeLayout;
 import android.widget.Toast;
@@ -150,6 +153,7 @@ public class BrowserApp extends GeckoApp
                                    BrowserSearch.OnEditSuggestionListener,
                                    OnUrlOpenListener,
                                    OnUrlOpenInBackgroundListener,
+                                   AnchoredPopup.OnShowListener,
                                    ActionModeCompat.Presenter,
                                    LayoutInflater.Factory {
     private static final String LOGTAG = "GeckoBrowserApp";
@@ -916,8 +920,25 @@ public class BrowserApp extends GeckoApp
                 @Override
                 public void run() {
                     if (TabQueueHelper.shouldOpenTabQueueUrls(BrowserApp.this)) {
-                        TabQueueHelper.openQueuedUrls(BrowserApp.this, mProfile, TabQueueHelper.FILE_NAME, false);
+                        openQueuedTabs();
                     }
+                }
+            });
+        }
+    }
+
+    private void openQueuedTabs() {
+        ThreadUtils.assertNotOnUiThread();
+
+        int queuedTabCount = TabQueueHelper.getTabQueueLength(BrowserApp.this);
+        TabQueueHelper.openQueuedUrls(BrowserApp.this, mProfile, TabQueueHelper.FILE_NAME, false);
+
+        // If there's more than one tab then also show the tabs panel.
+        if (queuedTabCount > 1) {
+            ThreadUtils.postToUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    showNormalTabs();
                 }
             });
         }
@@ -1347,6 +1368,7 @@ public class BrowserApp extends GeckoApp
         super.initializeChrome();
 
         mDoorHangerPopup.setAnchor(mBrowserToolbar.getDoorHangerAnchor());
+        mDoorHangerPopup.setOnShowListener(this);
 
         mDynamicToolbar.setLayerView(mLayerView);
         setDynamicToolbarEnabled(mDynamicToolbar.isEnabled());
@@ -1359,6 +1381,16 @@ public class BrowserApp extends GeckoApp
             onCreatePanelMenu(Window.FEATURE_OPTIONS_PANEL, null);
             invalidateOptionsMenu();
         }
+    }
+
+    @Override
+    public void onDoorHangerShow() {
+        ThreadUtils.postToUiThread(new Runnable() {
+            @Override
+            public void run() {
+                mDynamicToolbar.setVisible(true, VisibilityTransition.ANIMATE);
+            }
+        });
     }
 
     private void handleClearHistory(final boolean clearSearchHistory) {
@@ -1436,10 +1468,6 @@ public class BrowserApp extends GeckoApp
                 final float offset = getResources().getDimensionPixelOffset(R.dimen.progress_bar_scroll_offset);
                 final float progressTranslationY = Math.max(marginTop - browserChrome.getHeight(), offset - browserChrome.getHeight());
                 ViewHelper.setTranslationY(progressView, progressTranslationY);
-
-                if (mDoorHangerPopup.isShowing()) {
-                    mDoorHangerPopup.updatePopup();
-                }
             }
         });
 
@@ -1841,7 +1869,7 @@ public class BrowserApp extends GeckoApp
             } else if (event.equals("Prompt:ShowTop")) {
                 // Bring this activity to front so the prompt is visible..
                 Intent bringToFrontIntent = new Intent();
-                bringToFrontIntent.setClassName(AppConstants.ANDROID_PACKAGE_NAME, AppConstants.BROWSER_INTENT_CLASS_NAME);
+                bringToFrontIntent.setClassName(AppConstants.ANDROID_PACKAGE_NAME, AppConstants.MOZ_ANDROID_BROWSER_INTENT_CLASS);
                 bringToFrontIntent.setFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
                 startActivity(bringToFrontIntent);
             } else if (event.equals("Accounts:Exist")) {
@@ -1925,6 +1953,9 @@ public class BrowserApp extends GeckoApp
                 });
             }
         } else {
+            if (mDoorHangerPopup != null) {
+                mDoorHangerPopup.disable();
+            }
             mTabsPanel.show(panel);
         }
     }
@@ -1932,6 +1963,9 @@ public class BrowserApp extends GeckoApp
     @Override
     public void hideTabs() {
         mTabsPanel.hide();
+        if (mDoorHangerPopup != null) {
+            mDoorHangerPopup.enable();
+        }
     }
 
     @Override
@@ -2206,6 +2240,14 @@ public class BrowserApp extends GeckoApp
         // Expected to be fixed by bug 915825.
         hideHomePager(url);
         loadUrlOrKeywordSearch(url);
+        clearSelectedTabApplicationId();
+    }
+
+    private void clearSelectedTabApplicationId() {
+        final Tab selected = Tabs.getInstance().getSelectedTab();
+        if (selected != null) {
+            selected.setApplicationId(null);
+        }
     }
 
     private void loadUrlOrKeywordSearch(final String url) {
@@ -2590,6 +2632,16 @@ public class BrowserApp extends GeckoApp
 
         fm.beginTransaction().add(R.id.search_container, mBrowserSearch, BROWSER_SEARCH_TAG).commitAllowingStateLoss();
         mBrowserSearch.setUserVisibleHint(true);
+
+        // We want to adjust the window size when the keyboard appears to bring the
+        // SearchEngineBar above the keyboard. However, adjusting the window size
+        // when hiding the keyboard results in graphical glitches where the keyboard was
+        // because nothing was being drawn underneath (bug 933422). This can be
+        // prevented drawing content under the keyboard (i.e. in the Window).
+        //
+        // We do this here because there are glitches when unlocking a device with
+        // BrowserSearch in the foreground if we use BrowserSearch.onStart/Stop.
+        getActivity().getWindow().setBackgroundDrawableResource(android.R.color.white);
     }
 
     private void hideBrowserSearch() {
@@ -2606,6 +2658,8 @@ public class BrowserApp extends GeckoApp
         getSupportFragmentManager().beginTransaction()
                 .remove(mBrowserSearch).commitAllowingStateLoss();
         mBrowserSearch.setUserVisibleHint(false);
+
+        getWindow().setBackgroundDrawable(null);
     }
 
     /**
@@ -3012,6 +3066,40 @@ public class BrowserApp extends GeckoApp
         desktopMode.setChecked(tab.getDesktopMode());
         desktopMode.setIcon(tab.getDesktopMode() ? R.drawable.ic_menu_desktop_mode_on : R.drawable.ic_menu_desktop_mode_off);
 
+        View backButtonView = MenuItemCompat.getActionView(back);
+
+        if (backButtonView != null) {
+            backButtonView.setOnLongClickListener(new Button.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View view) {
+                    Tab tab = Tabs.getInstance().getSelectedTab();
+                    if (tab != null) {
+                        closeOptionsMenu();
+                        return tabHistoryController.showTabHistory(tab,
+                                TabHistoryController.HistoryAction.BACK);
+                    }
+                    return false;
+                }
+            });
+        }
+
+        View forwardButtonView = MenuItemCompat.getActionView(forward);
+
+        if (forwardButtonView != null) {
+            forwardButtonView.setOnLongClickListener(new Button.OnLongClickListener() {
+                @Override
+                public boolean onLongClick(View view) {
+                    Tab tab = Tabs.getInstance().getSelectedTab();
+                    if (tab != null) {
+                        closeOptionsMenu();
+                        return tabHistoryController.showTabHistory(tab,
+                                TabHistoryController.HistoryAction.FORWARD);
+                    }
+                    return false;
+                }
+            });
+        }
+
         String url = tab.getURL();
         if (AboutPages.isAboutReader(url)) {
             String urlFromReader = ReaderModeUtils.getUrlFromAboutReader(url);
@@ -3414,18 +3502,7 @@ public class BrowserApp extends GeckoApp
             ThreadUtils.postToBackgroundThread(new Runnable() {
                 @Override
                 public void run() {
-                    int queuedTabCount = TabQueueHelper.getTabQueueLength(BrowserApp.this);
-                    TabQueueHelper.openQueuedUrls(BrowserApp.this, mProfile, TabQueueHelper.FILE_NAME, false);
-
-                    // If there's more than one tab then also show the tabs panel.
-                    if (queuedTabCount > 1) {
-                        ThreadUtils.postToUiThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                showNormalTabs();
-                            }
-                        });
-                    }
+                    openQueuedTabs();
                 }
             });
         }
@@ -3521,6 +3598,7 @@ public class BrowserApp extends GeckoApp
             startActivity(intent);
         } else if (!maybeSwitchToTab(url, flags)) {
             openUrlAndStopEditing(url);
+            clearSelectedTabApplicationId();
         }
     }
 
