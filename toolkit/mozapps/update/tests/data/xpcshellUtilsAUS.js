@@ -769,6 +769,8 @@ function setupTestCommon() {
   let caller = Components.stack.caller;
   gTestID = caller.filename.toString().split("/").pop().split(".")[0];
 
+  createAppInfo("xpcshell@tests.mozilla.org", APP_INFO_NAME, "1.0", "2.0");
+
   if (DEBUG_TEST_LOG) {
     let logFile = do_get_file(gTestID + ".log", true);
     if (logFile.exists()) {
@@ -1113,7 +1115,6 @@ function checkPostUpdateRunningFile(aShouldExist) {
  * update service stub.
  */
 function standardInit() {
-  createAppInfo("xpcshell@tests.mozilla.org", APP_INFO_NAME, "1.0", "2.0");
   setDefaultPrefs();
   // Initialize the update service stub component
   initUpdateServiceStub();
@@ -1642,10 +1643,15 @@ function stageUpdate() {
   Services.obs.addObserver(gUpdateStagedObserver, "update-staged", false);
 
   setEnvironment();
-  // Stage the update.
-  Cc["@mozilla.org/updates/update-processor;1"].
-    createInstance(Ci.nsIUpdateProcessor).
-    processUpdate(gUpdateManager.activeUpdate);
+  try {
+    // Stage the update.
+    Cc["@mozilla.org/updates/update-processor;1"].
+      createInstance(Ci.nsIUpdateProcessor).
+      processUpdate(gUpdateManager.activeUpdate);
+  } catch (e) {
+    Assert.ok(false,
+              "error thrown while calling processUpdate, exception: " + e);
+  }
   resetEnvironment();
 
   debugDump("finish - attempting to stage update");
