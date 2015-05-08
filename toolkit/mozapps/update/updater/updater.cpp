@@ -864,16 +864,16 @@ static int remove_recursive_on_reboot(const NS_tchar *path, const NS_tchar *dele
   }
 
   if (!S_ISDIR(sInfo.st_mode)) {
-    NS_tchar tmpDeleteDir[MAXPATHLEN];
-    GetTempFileNameW(deleteDir, L"rep", 0, tmpDeleteDir);
-    NS_tremove(tmpDeleteDir);
-    rv = rename_file(path, tmpDeleteDir, false);
-    if (MoveFileEx(rv ? path : tmpDeleteDir, nullptr, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+    NS_tchar tmpDeleteFile[MAXPATHLEN];
+    GetTempFileNameW(deleteDir, L"rep", 0, tmpDeleteFile);
+    NS_tremove(tmpDeleteFile);
+    rv = rename_file(path, tmpDeleteFile, false);
+    if (MoveFileEx(rv ? path : tmpDeleteFile, nullptr, MOVEFILE_DELAY_UNTIL_REBOOT)) {
       LOG(("remove_recursive_on_reboot: file will be removed on OS reboot: "
-           LOG_S, rv ? path : tmpDeleteDir));
+           LOG_S, rv ? path : tmpDeleteFile));
     } else {
       LOG(("remove_recursive_on_reboot: failed to schedule OS reboot removal of "
-           "file: " LOG_S, rv ? path : tmpDeleteDir));
+           "file: " LOG_S, rv ? path : tmpDeleteFile));
     }
     return rv;
   }
@@ -895,10 +895,11 @@ static int remove_recursive_on_reboot(const NS_tchar *path, const NS_tchar *dele
       NS_tchar childPath[MAXPATHLEN];
       NS_tsnprintf(childPath, sizeof(childPath)/sizeof(childPath[0]),
                    NS_T("%s/%s"), path, entry->d_name);
-      rv = remove_recursive_on_reboot(childPath, deleteDir);
-      if (rv) {
-// Log
-      }
+      // There is no need to check the return value of this call since this
+      // function is only called after an update is successful and there is not
+      // much that can be done to recover if it isn't successful. There is also
+      // no need to log the value since it will have already been logged.
+      remove_recursive_on_reboot(childPath, deleteDir);
     }
   }
 
