@@ -498,7 +498,7 @@ ParseVarOrConstStatement(AsmJSParser& parser, ParseNode** var)
         return true;
     }
 
-    *var = parser.statement();
+    *var = parser.statement(YieldIsName);
     if (!*var)
         return false;
 
@@ -5984,19 +5984,19 @@ CheckSimdOperationCall(FunctionCompiler& f, ParseNode* call, const ModuleCompile
 
       case AsmJSSimdOperation_load:
         return CheckSimdLoad(f, call, opType, 4, def, type);
-      case AsmJSSimdOperation_loadX:
+      case AsmJSSimdOperation_load1:
         return CheckSimdLoad(f, call, opType, 1, def, type);
-      case AsmJSSimdOperation_loadXY:
+      case AsmJSSimdOperation_load2:
         return CheckSimdLoad(f, call, opType, 2, def, type);
-      case AsmJSSimdOperation_loadXYZ:
+      case AsmJSSimdOperation_load3:
         return CheckSimdLoad(f, call, opType, 3, def, type);
       case AsmJSSimdOperation_store:
         return CheckSimdStore(f, call, opType, 4, def, type);
-      case AsmJSSimdOperation_storeX:
+      case AsmJSSimdOperation_store1:
         return CheckSimdStore(f, call, opType, 1, def, type);
-      case AsmJSSimdOperation_storeXY:
+      case AsmJSSimdOperation_store2:
         return CheckSimdStore(f, call, opType, 2, def, type);
-      case AsmJSSimdOperation_storeXYZ:
+      case AsmJSSimdOperation_store3:
         return CheckSimdStore(f, call, opType, 3, def, type);
 
       case AsmJSSimdOperation_bitselect:
@@ -7585,7 +7585,7 @@ ParseFunction(ModuleCompiler& m, ParseNode** fnOut)
     // This flows into FunctionBox, so must be tenured.
     RootedFunction fun(m.cx(),
                        NewScriptedFunction(m.cx(), 0, JSFunction::INTERPRETED,
-                                           name, JSFunction::FinalizeKind,
+                                           name, gc::AllocKind::FUNCTION,
                                            TenuredObject));
     if (!fun)
         return false;
@@ -7604,7 +7604,9 @@ ParseFunction(ModuleCompiler& m, ParseNode** fnOut)
     if (!funpc.init(tokenStream))
         return false;
 
-    if (!m.parser().functionArgsAndBodyGeneric(fn, fun, Normal, Statement)) {
+    if (!m.parser().functionArgsAndBodyGeneric(InAllowed, YieldIsName, fn, fun, Normal,
+                                               Statement))
+    {
         if (tokenStream.hadError() || directives == newDirectives)
             return false;
 
@@ -8182,7 +8184,7 @@ CheckModuleReturn(ModuleCompiler& m)
         return m.fail(nullptr, "invalid asm.js statement");
     }
 
-    ParseNode* returnStmt = m.parser().statement();
+    ParseNode* returnStmt = m.parser().statement(YieldIsName);
     if (!returnStmt)
         return false;
 

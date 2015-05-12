@@ -113,9 +113,11 @@ EXPORTS += [
     'EncodedBufferCache.h',
     'FileBlockCache.h',
     'GraphDriver.h',
+    'Intervals.h',
     'Latency.h',
     'MediaCache.h',
     'MediaData.h',
+    'MediaDataDemuxer.h',
     'MediaDecoder.h',
     'MediaDecoderOwner.h',
     'MediaDecoderReader.h',
@@ -154,6 +156,14 @@ EXPORTS += [
 
 EXPORTS.mozilla += [
     'MediaManager.h',
+]
+
+EXPORTS.mozilla.media.webrtc += [
+    'webrtc/WebrtcGlobal.h',
+]
+
+IPDL_SOURCES += [
+    'webrtc/PWebrtcGlobal.ipdl'
 ]
 
 if CONFIG['MOZ_B2G']:

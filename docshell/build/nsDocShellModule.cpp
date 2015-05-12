@@ -1,6 +1,6 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -23,7 +23,7 @@
 #include "nsLocalHandlerApp.h"
 #ifdef MOZ_ENABLE_DBUS
 #include "nsDBusHandlerApp.h"
-#endif 
+#endif
 #if defined(MOZ_WIDGET_ANDROID)
 #include "nsExternalSharingAppService.h"
 #include "nsExternalURLHandlerService.h"
@@ -81,7 +81,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsOfflineCacheUpdate)
 NS_GENERIC_FACTORY_CONSTRUCTOR(PlatformLocalHandlerApp_t)
 #ifdef MOZ_ENABLE_DBUS
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsDBusHandlerApp)
-#endif 
+#endif
 #if defined(MOZ_WIDGET_ANDROID)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsExternalSharingAppService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsExternalURLHandlerService)
@@ -119,7 +119,6 @@ NS_DEFINE_NAMED_CID(NS_SHTRANSACTION_CID);
 NS_DEFINE_NAMED_CID(NS_SHISTORY_CID);
 NS_DEFINE_NAMED_CID(NS_SHISTORY_INTERNAL_CID);
 NS_DEFINE_NAMED_CID(NS_DOWNLOADHISTORY_CID);
-
 
 const mozilla::Module::CIDEntry kDocShellCIDs[] = {
   { &kNS_DOCSHELL_CID, false, nullptr, nsDocShellConstructor },

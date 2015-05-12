@@ -20,6 +20,7 @@ Cu.import("resource://gre/modules/DeferredTask.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
+Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
 
 const myScope = this;
 
@@ -173,58 +174,6 @@ let Policy = {
   setSchedulerTickTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
   clearSchedulerTickTimeout: id => clearTimeout(id),
 };
-
-/**
- * Takes a date and returns it trunctated to a date with daily precision.
- */
-function truncateToDays(date) {
-  return new Date(date.getFullYear(),
-                  date.getMonth(),
-                  date.getDate(),
-                  0, 0, 0, 0);
-}
-
-/**
- * Check if the difference between the times is within the provided tolerance.
- * @param {Number} t1 A time in milliseconds.
- * @param {Number} t2 A time in milliseconds.
- * @param {Number} tolerance The tolerance, in milliseconds.
- * @return {Boolean} True if the absolute time difference is within the tolerance, false
- *                   otherwise.
- */
-function areTimesClose(t1, t2, tolerance) {
-  return Math.abs(t1 - t2) <= tolerance;
-}
-
-/**
- * Get the next midnight for a date.
- * @param {Object} date The date object to check.
- * @return {Object} The Date object representing the next midnight.
- */
-function getNextMidnight(date) {
-  let nextMidnight = new Date(truncateToDays(date));
-  nextMidnight.setDate(nextMidnight.getDate() + 1);
-  return nextMidnight;
-}
-
-/**
- * Get the midnight which is closer to the provided date.
- * @param {Object} date The date object to check.
- * @return {Object} The Date object representing the closes midnight, or null if midnight
- *                  is not within the midnight tolerance.
- */
-function getNearestMidnight(date) {
-  let lastMidnight = truncateToDays(date);
-  if (areTimesClose(date.getTime(), lastMidnight.getTime(), SCHEDULER_MIDNIGHT_TOLERANCE_MS)) {
-    return lastMidnight;
-  }
-
-  const nextMidnightDate = getNextMidnight(date);
-  if (areTimesClose(date.getTime(), nextMidnightDate.getTime(), SCHEDULER_MIDNIGHT_TOLERANCE_MS)) {
-    return nextMidnightDate;
-  }
-  return null;
-}
 
 /**
  * Get the ping type based on the payload.
@@ -473,7 +422,7 @@ let TelemetryScheduler = {
       timeout = SCHEDULER_TICK_IDLE_INTERVAL_MS;
       // We need to make sure though that we don't miss sending pings around
       // midnight when we use the longer idle intervals.
-      const nextMidnight = getNextMidnight(now);
+      const nextMidnight = TelemetryUtils.getNextMidnight(now);
       timeout = Math.min(timeout, nextMidnight.getTime() - now.getTime());
     }
 
@@ -484,8 +433,8 @@ let TelemetryScheduler = {
 
   _sentDailyPingToday: function(nowDate) {
     // This is today's date and also the previous midnight (0:00).
-    const todayDate = truncateToDays(nowDate);
-    const nearestMidnight = getNearestMidnight(nowDate);
+    const todayDate = TelemetryUtils.truncateToDays(nowDate);
+    const nearestMidnight = TelemetryUtils.getNearestMidnight(nowDate, SCHEDULER_MIDNIGHT_TOLERANCE_MS);
     // If we are close to midnight, we check against that, otherwise against the last midnight.
     const checkDate = nearestMidnight || todayDate;
     // We consider a ping sent for today if it occured after midnight, or prior within the tolerance.
@@ -506,7 +455,7 @@ let TelemetryScheduler = {
       return false;
     }
 
-    const nearestMidnight = getNearestMidnight(nowDate);
+    const nearestMidnight = TelemetryUtils.getNearestMidnight(nowDate, SCHEDULER_MIDNIGHT_TOLERANCE_MS);
     if (!sentPingToday && !nearestMidnight) {
       // Computer must have gone to sleep, the daily ping is overdue.
       this._log.trace("_isDailyPingDue - daily ping is overdue... computer went to sleep?");
@@ -616,7 +565,8 @@ let TelemetryScheduler = {
     let nextSessionCheckpoint =
       this._lastSessionCheckpointTime + ABORTED_SESSION_UPDATE_INTERVAL_MS;
     let combineActions = (shouldSendDaily && isAbortedPingDue) || (shouldSendDaily &&
-                          areTimesClose(now, nextSessionCheckpoint, SCHEDULER_COALESCE_THRESHOLD_MS));
+                          TelemetryUtils.areTimesClose(now, nextSessionCheckpoint,
+                                                       SCHEDULER_COALESCE_THRESHOLD_MS));
 
     if (combineActions) {
       this._log.trace("_schedulerTickLogic - Combining pings.");
@@ -661,7 +611,7 @@ let TelemetryScheduler = {
       // update the schedules.
       this._saveAbortedPing(now.getTime(), competingPayload);
       // If we're close to midnight, skip today's daily ping and reschedule it for tomorrow.
-      let nearestMidnight = getNearestMidnight(now);
+      let nearestMidnight = TelemetryUtils.getNearestMidnight(now, SCHEDULER_MIDNIGHT_TOLERANCE_MS);
       if (nearestMidnight) {
         this._lastDailyPingTime = now.getTime();
       }
@@ -879,8 +829,6 @@ let Impl = {
   _delayedInitTaskDeferred: null,
   // Used to serialize session state writes to disk.
   _stateSaveSerializer: new SaveSerializer(),
-  // Used to serialize aborted session ping writes to disk.
-  _abortedSessionSerializer: new SaveSerializer(),
 
   /**
    * Gets a series of simple measurements (counters). At the moment, this
@@ -1152,8 +1100,8 @@ let Impl = {
   getMetadata: function getMetadata(reason) {
     this._log.trace("getMetadata - Reason " + reason);
 
-    let sessionStartDate = toLocalTimeISOString(truncateToDays(this._sessionStartDate));
-    let subsessionStartDate = toLocalTimeISOString(truncateToDays(this._subsessionStartDate));
+    let sessionStartDate = toLocalTimeISOString(TelemetryUtils.truncateToDays(this._sessionStartDate));
+    let subsessionStartDate = toLocalTimeISOString(TelemetryUtils.truncateToDays(this._subsessionStartDate));
     // Compute the subsession length in milliseconds, then convert to seconds.
     let subsessionLength =
       Math.floor((Policy.now() - this._subsessionStartDate.getTime()) / 1000);
@@ -1544,7 +1492,7 @@ let Impl = {
 
         if (IS_UNIFIED_TELEMETRY) {
           // Check for a previously written aborted session ping.
-          yield this._checkAbortedSessionPing();
+          yield TelemetryController.checkAbortedSessionPing();
 
           // Write the first aborted-session ping as early as possible. Just do that
           // if we are not testing, since calling Telemetry.reset() will make a previous
@@ -1890,8 +1838,7 @@ let Impl = {
           yield this._stateSaveSerializer.flushTasks();
 
           if (IS_UNIFIED_TELEMETRY) {
-            yield this._abortedSessionSerializer
-                      .enqueueTask(() => this._removeAbortedSessionPing());
+            yield TelemetryController.removeAbortedSessionPing();
           }
 
           reset();
@@ -2040,47 +1987,6 @@ let Impl = {
   },
 
   /**
-   * Deletes the aborted session ping. This is called during shutdown.
-   * @return {Promise} Resolved when the aborted session ping is removed or if it doesn't
-   *                   exist.
-   */
-  _removeAbortedSessionPing: function() {
-    const FILE_PATH = OS.Path.join(OS.Constants.Path.profileDir, DATAREPORTING_DIRECTORY,
-                                   ABORTED_SESSION_FILE_NAME);
-    try {
-      this._log.trace("_removeAbortedSessionPing - success");
-      return OS.File.remove(FILE_PATH);
-    } catch (ex if ex.becauseNoSuchFile) {
-      this._log.trace("_removeAbortedSessionPing - no such file");
-    } catch (ex) {
-      this._log.error("_removeAbortedSessionPing - error removing ping", ex)
-    }
-    return Promise.resolve();
-  },
-
-  /**
-   * Check if there's any aborted session ping available. If so, tell TelemetryController about
-   * it.
-   */
-  _checkAbortedSessionPing: Task.async(function* () {
-    // Create the subdirectory that will contain te aborted session ping. We put it in a
-    // subdirectory so that it doesn't get picked up as a pending ping. Please note that
-    // this does nothing if the directory does not already exist.
-    const ABORTED_SESSIONS_DIR =
-      OS.Path.join(OS.Constants.Path.profileDir, DATAREPORTING_DIRECTORY);
-    yield OS.File.makeDir(ABORTED_SESSIONS_DIR, { ignoreExisting: true });
-
-    const FILE_PATH = OS.Path.join(OS.Constants.Path.profileDir, DATAREPORTING_DIRECTORY,
-                                   ABORTED_SESSION_FILE_NAME);
-    let abortedExists = yield OS.File.exists(FILE_PATH);
-    if (abortedExists) {
-      this._log.trace("_checkAbortedSessionPing - aborted session found: " + FILE_PATH);
-      yield this._abortedSessionSerializer.enqueueTask(
-        () => TelemetryController.addAbortedSessionPing(FILE_PATH));
-    }
-  }),
-
-  /**
    * Saves the aborted session ping to disk.
    * @param {Object} [aProvidedPayload=null] A payload object to be used as an aborted
    *                 session ping. The reason of this payload is changed to aborted-session.
@@ -2100,13 +2006,6 @@ let Impl = {
       payload = this.getSessionPayload(REASON_ABORTED_SESSION, false);
     }
 
-    let options = {
-      retentionDays: RETENTION_DAYS,
-      addClientId: true,
-      addEnvironment: true,
-      overwrite: true,
-    };
-    return this._abortedSessionSerializer.enqueueTask(() =>
-      TelemetryController.savePing(getPingType(payload), payload, FILE_PATH, options));
+    return TelemetryController.saveAbortedSessionPing(payload);
   },
 };

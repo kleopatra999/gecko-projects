@@ -298,11 +298,7 @@ BluetoothA2dpManager::ResetAvrcp()
   mMediaNumber = 0;
   mTotalMediaCount = 0;
   mPosition = 0;
-#ifdef MOZ_B2G_BT_API_V2
-  mPlayStatus = ControlPlayStatus::PLAYSTATUS_UNKNOWN;
-#else
   mPlayStatus = ControlPlayStatus::PLAYSTATUS_STOPPED;
-#endif
 }
 
 /*
@@ -727,6 +723,19 @@ BluetoothA2dpManager::HandleSinkPropertyChanged(const BluetoothSignal& aSignal)
   }
 }
 
+/*
+ * Reset connection state to DISCONNECTED to handle backend error. The state
+ * change triggers UI status bar update as ordinary bluetooth turn-off sequence.
+ */
+void
+BluetoothA2dpManager::HandleBackendError()
+{
+  if (mSinkState != SinkState::SINK_DISCONNECTED) {
+    ConnectionStateNotification(A2DP_CONNECTION_STATE_DISCONNECTED,
+      mDeviceAddress);
+  }
+}
+
 void
 BluetoothA2dpManager::NotifyConnectionStatusChanged()
 {
@@ -933,9 +942,6 @@ BluetoothA2dpManager::UpdateRegisterNotification(BluetoothAvrcpEvent aEvent,
       }
       mPlaybackInterval = aParam;
       break;
-#ifdef MOZ_B2G_BT_API_V2
-      // Missing in bluetooth2
-#else
     case AVRCP_EVENT_APP_SETTINGS_CHANGED:
       mAppSettingsChangedNotifyType = AVRCP_NTF_INTERIM;
       param.mNumAttr = 2;
@@ -944,7 +950,6 @@ BluetoothA2dpManager::UpdateRegisterNotification(BluetoothAvrcpEvent aEvent,
       param.mIds[1] = AVRCP_PLAYER_ATTRIBUTE_SHUFFLE;
       param.mValues[1] = AVRCP_PLAYER_VAL_OFF_SHUFFLE;
       break;
-#endif
     default:
       break;
   }

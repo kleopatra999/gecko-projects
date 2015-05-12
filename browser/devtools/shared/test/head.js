@@ -8,6 +8,7 @@ let {console} = Cu.import("resource://gre/modules/devtools/Console.jsm", {});
 let {gDevTools} = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
 const {DOMHelpers} = Cu.import("resource:///modules/devtools/DOMHelpers.jsm", {});
 const {Hosts} = require("devtools/framework/toolbox-hosts");
+const {defer} = require("sdk/core/promise");
 
 gDevTools.testing = true;
 SimpleTest.registerCleanupFunction(() => {
@@ -244,6 +245,24 @@ function* openAndCloseToolbox(nbOfTimes, usageTime, toolId) {
 }
 
 /**
+ * Synthesize a profile for testing.
+ */
+function synthesizeProfileForTest(samples) {
+  const { RecordingUtils } = devtools.require("devtools/performance/recording-utils");
+
+  samples.unshift({
+    time: 0,
+    frames: []
+  });
+
+  let uniqueStacks = new RecordingUtils.UniqueStacks();
+  return RecordingUtils.deflateThread({
+    samples: samples,
+    markers: []
+  }, uniqueStacks);
+}
+
+/**
  * Waits until a predicate returns true.
  *
  * @param function predicate
@@ -261,5 +280,3 @@ function waitUntil(predicate, interval = 10) {
     }, interval);
   });
 }
-
-// EventUtils just doesn't work!

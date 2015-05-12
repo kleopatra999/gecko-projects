@@ -54,7 +54,6 @@
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/plugins/PluginInstanceParent.h"
 #include "mozilla/plugins/PluginModuleParent.h"
-#include "mozilla/media/webrtc/WebrtcGlobalChild.h"
 #include "mozilla/widget/WidgetMessageUtils.h"
 
 #if defined(MOZ_CONTENT_SANDBOX)
@@ -120,6 +119,10 @@
 #include "mozilla/dom/PCycleCollectWithLogsChild.h"
 
 #include "nsIScriptSecurityManager.h"
+
+#ifdef MOZ_WEBRTC
+#include "signaling/src/peerconnection/WebrtcGlobalChild.h"
+#endif
 
 #ifdef MOZ_PERMISSIONS
 #include "nsPermission.h"
@@ -809,10 +812,11 @@ ContentChild::InitXPCOM()
     bool isConnected;
     ClipboardCapabilities clipboardCaps;
     DomainPolicyClone domainPolicy;
+    OwningSerializedStructuredCloneBuffer initialData;
 
     SendGetXPCOMProcessAttributes(&isOffline, &isConnected,
                                   &isLangRTL, &mAvailableDictionaries,
-                                  &clipboardCaps, &domainPolicy);
+                                  &clipboardCaps, &domainPolicy, &initialData);
     RecvSetOffline(isOffline);
     RecvSetConnectivity(isConnected);
     RecvBidiKeyboardNotify(isLangRTL);
@@ -833,6 +837,20 @@ ContentChild::InitXPCOM()
     nsCOMPtr<nsIClipboard> clipboard(do_GetService("@mozilla.org/widget/clipboard;1"));
     if (nsCOMPtr<nsIClipboardProxy> clipboardProxy = do_QueryInterface(clipboard)) {
         clipboardProxy->SetCapabilities(clipboardCaps);
+    }
+
+    {
+        AutoJSAPI jsapi;
+        if (NS_WARN_IF(!jsapi.Init(xpc::PrivilegedJunkScope()))) {
+            MOZ_CRASH();
+        }
+        JS::RootedValue data(jsapi.cx());
+        if (!JS_ReadStructuredClone(jsapi.cx(), initialData.data, initialData.dataLength,
+                                    JS_STRUCTURED_CLONE_VERSION, &data, nullptr, nullptr)) {
+            MOZ_CRASH();
+        }
+        ProcessGlobal* global = ProcessGlobal::Get();
+        global->SetInitialProcessData(data);
     }
 
     DebugOnly<FileUpdateDispatcher*> observer = FileUpdateDispatcher::GetSingleton();
@@ -1246,6 +1264,26 @@ ContentChild::RecvUpdateServiceWorkerRegistrations()
     nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
     if (swm) {
         swm->UpdateAllRegistrations();
+    }
+    return true;
+}
+
+bool
+ContentChild::RecvRemoveServiceWorkerRegistrationsForDomain(const nsString& aDomain)
+{
+    nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
+    if (swm) {
+        swm->Remove(NS_ConvertUTF16toUTF8(aDomain));
+    }
+    return true;
+}
+
+bool
+ContentChild::RecvRemoveServiceWorkerRegistrations()
+{
+    nsCOMPtr<nsIServiceWorkerManager> swm = mozilla::services::GetServiceWorkerManager();
+    if (swm) {
+        swm->RemoveAll();
     }
     return true;
 }
@@ -1821,15 +1859,23 @@ ContentChild::DeallocPSpeechSynthesisChild(PSpeechSynthesisChild* aActor)
 PWebrtcGlobalChild *
 ContentChild::AllocPWebrtcGlobalChild()
 {
+#ifdef MOZ_WEBRTC
     WebrtcGlobalChild *child = new WebrtcGlobalChild();
     return child;
+#else
+    return nullptr;
+#endif
 }
 
 bool
 ContentChild::DeallocPWebrtcGlobalChild(PWebrtcGlobalChild *aActor)
 {
+#ifdef MOZ_WEBRTC
     delete static_cast<WebrtcGlobalChild*>(aActor);
     return true;
+#else
+    return false;
+#endif
 }
 
 

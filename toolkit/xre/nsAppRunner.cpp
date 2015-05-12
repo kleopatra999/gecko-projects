@@ -95,6 +95,8 @@
 #ifdef XP_WIN
 #include "nsIWinAppHelper.h"
 #include <windows.h>
+#include <intrin.h>
+#include <math.h>
 #include "cairo/cairo-features.h"
 #include "mozilla/WindowsVersion.h"
 

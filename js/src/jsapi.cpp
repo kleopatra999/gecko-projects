@@ -61,6 +61,7 @@
 #include "jit/JitCommon.h"
 #include "js/CharacterEncoding.h"
 #include "js/Conversions.h"
+#include "js/Date.h"
 #include "js/Proxy.h"
 #include "js/SliceBudget.h"
 #include "js/StructuredClone.h"
@@ -3482,7 +3483,7 @@ JS_DefineFunctions(JSContext* cx, HandleObject obj, const JSFunctionSpec* fs,
             JSFunction* fun = DefineFunction(cx, ctor, id,
                                              GenericNativeMethodDispatcher,
                                              fs->nargs + 1, flags,
-                                             JSFunction::ExtendedFinalizeKind);
+                                             gc::AllocKind::FUNCTION_EXTENDED);
             if (!fun)
                 return false;
 
@@ -4041,7 +4042,7 @@ CompileFunction(JSContext* cx, const ReadOnlyCompileOptions& optionsArg,
     }
 
     fun.set(NewScriptedFunction(cx, 0, JSFunction::INTERPRETED, funAtom,
-                                JSFunction::FinalizeKind, TenuredObject,
+                                gc::AllocKind::FUNCTION, TenuredObject,
                                 enclosingDynamicScope));
     if (!fun)
         return false;
@@ -5237,7 +5238,7 @@ JS_NewDateObjectMsec(JSContext* cx, double msec)
 {
     AssertHeapIsIdle(cx);
     CHECK_REQUEST(cx);
-    return NewDateObjectMsec(cx, msec);
+    return NewDateObjectMsec(cx, JS::TimeClip(msec));
 }
 
 JS_PUBLIC_API(bool)

@@ -53,6 +53,9 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(FontFaceSet, DOMEventTargetHel
   for (size_t i = 0; i < tmp->mNonRuleFaces.Length(); i++) {
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mNonRuleFaces[i].mFontFace);
   }
+  if (tmp->mUserFontSet) {
+    NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mUserFontSet->mFontFaceSet);
+  }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(FontFaceSet, DOMEventTargetHelper)
@@ -65,6 +68,10 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(FontFaceSet, DOMEventTargetHelpe
   for (size_t i = 0; i < tmp->mNonRuleFaces.Length(); i++) {
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mNonRuleFaces[i].mFontFace);
   }
+  if (tmp->mUserFontSet) {
+    NS_IMPL_CYCLE_COLLECTION_UNLINK(mUserFontSet->mFontFaceSet);
+  }
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mUserFontSet);
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_ADDREF_INHERITED(FontFaceSet, DOMEventTargetHelper)
@@ -107,6 +114,8 @@ FontFaceSet::FontFaceSet(nsPIDOMWindow* aWindow, nsPresContext* aPresContext)
   }
 
   mDocument->CSSLoader()->AddObserver(this);
+
+  mUserFontSet = new UserFontSet(this);
 }
 
 FontFaceSet::~FontFaceSet()
@@ -137,16 +146,6 @@ FontFaceSet::Disconnect()
       mDocument->CSSLoader()->RemoveObserver(this);
     }
   }
-}
-
-FontFaceSet::UserFontSet*
-FontFaceSet::EnsureUserFontSet(nsPresContext* aPresContext)
-{
-  if (!mUserFontSet) {
-    mUserFontSet = new UserFontSet(this);
-    mPresContext = aPresContext;
-  }
-  return mUserFontSet;
 }
 
 already_AddRefed<Promise>
@@ -213,14 +212,12 @@ FontFaceSet::Add(FontFace& aFontFace, ErrorResult& aRv)
     return nullptr;
   }
 
-  if (aFontFace.HasRule()) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_MODIFICATION_ERR);
-    return nullptr;
-  }
-
   if (aFontFace.IsInFontFaceSet()) {
     return this;
   }
+
+  MOZ_ASSERT(!aFontFace.HasRule(),
+             "rule-backed FontFaces should always be in the FontFaceSet");
 
   bool removed = mUnavailableFaces.RemoveElement(&aFontFace);
   if (!removed) {
@@ -283,7 +280,6 @@ FontFaceSet::Delete(FontFace& aFontFace, ErrorResult& aRv)
   mPresContext->FlushUserFontSet();
 
   if (aFontFace.HasRule()) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_MODIFICATION_ERR);
     return false;
   }
 
@@ -455,10 +451,6 @@ FontFaceSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
   nsRefPtr<nsFontFaceLoader> fontLoader =
     new nsFontFaceLoader(aUserFontEntry, aFontFaceSrc->mURI, this, channel);
 
-  if (!fontLoader)
-    return NS_ERROR_OUT_OF_MEMORY;
-
-#ifdef PR_LOGGING
   if (LOG_ENABLED()) {
     nsAutoCString fontURI, referrerURI;
     aFontFaceSrc->mURI->GetSpec(fontURI);
@@ -468,7 +460,6 @@ FontFaceSet::StartLoad(gfxUserFontEntry* aUserFontEntry,
          "referrer uri: (%s)\n",
          fontLoader.get(), fontURI.get(), referrerURI.get()));
   }
-#endif
 
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(channel));
   if (httpChannel) {
@@ -660,14 +651,12 @@ FontFaceSet::UpdateRules(const nsTArray<nsFontFaceRuleContainer>& aRules)
   // local rules have been rebuilt, so clear the flag
   mUserFontSet->mLocalRulesUsed = false;
 
-#if PR_LOGGING
   if (LOG_ENABLED() && !mRuleFaces.IsEmpty()) {
     LOG(("userfonts (%p) userfont rules update (%s) rule count: %d",
          mUserFontSet.get(),
          (modified ? "modified" : "not modified"),
          mRuleFaces.Length()));
   }
-#endif
 
   return modified;
 }
@@ -1118,11 +1107,9 @@ FontFaceSet::LogMessage(gfxUserFontEntry* aUserFontEntry,
   message.AppendLiteral(" source: ");
   message.Append(fontURI);
 
-#ifdef PR_LOGGING
   if (LOG_ENABLED()) {
     LOG(("userfonts (%p) %s", mUserFontSet.get(), message.get()));
   }
-#endif
 
   // try to give the user an indication of where the rule came from
   nsCSSFontFaceRule* rule = FindRuleForUserFontEntry(aUserFontEntry);
