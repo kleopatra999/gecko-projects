@@ -19736,6 +19736,13 @@
             "timeout": "long",
             "url": "/encoding/api-invalid-label.html"
           }
+        ],
+        "quirks-mode/hashless-hex-color.html": [
+          {
+            "path": "quirks-mode/hashless-hex-color.html",
+            "timeout": "long",
+            "url": "/quirks-mode/hashless-hex-color.html"
+          }
         ]
       }
     },

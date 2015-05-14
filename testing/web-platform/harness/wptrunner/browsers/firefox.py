@@ -52,7 +52,7 @@ def executor_kwargs(test_type, server_config, cache_manager, run_info_data,
                                            cache_manager, **kwargs)
     executor_kwargs["close_after_done"] = True
     if run_info_data["debug"] and kwargs["timeout_multiplier"] is None:
-        executor_kwargs["timeout_multiplier"] = 2
+        executor_kwargs["timeout_multiplier"] = 3
     return executor_kwargs
 
 
