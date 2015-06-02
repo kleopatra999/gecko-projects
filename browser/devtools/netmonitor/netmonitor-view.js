@@ -563,7 +563,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
    */
   copyUrl: function() {
     let selected = this.selectedItem.attachment;
-    clipboardHelper.copyString(selected.url, document);
+    clipboardHelper.copyString(selected.url);
   },
 
   /**
@@ -573,8 +573,85 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     let selected = this.selectedItem.attachment;
     let params = nsIURL(selected.url).query.split("&");
     let string = params.join(Services.appinfo.OS === "WINNT" ? "\r\n" : "\n");
-    clipboardHelper.copyString(params.join("\n"), document);
+    clipboardHelper.copyString(string);
   },
+
+  /**
+   * Extracts any urlencoded form data sections (e.g. "?foo=bar&baz=42") from a
+   * POST request.
+   *
+   * @param object aHeaders
+   *        The "requestHeaders".
+   * @param object aUploadHeaders
+   *        The "requestHeadersFromUploadStream".
+   * @param object aPostData
+   *        The "requestPostData".
+   * @return array
+   *        A promise that is resolved with the extracted form data.
+   */
+  _getFormDataSections: Task.async(function*(aHeaders, aUploadHeaders, aPostData) {
+    let formDataSections = [];
+
+    let { headers: requestHeaders } = aHeaders;
+    let { headers: payloadHeaders } = aUploadHeaders;
+    let allHeaders = [...payloadHeaders, ...requestHeaders];
+
+    let contentTypeHeader = allHeaders.find(e => e.name.toLowerCase() == "content-type");
+    let contentTypeLongString = contentTypeHeader ? contentTypeHeader.value : "";
+    let contentType = yield gNetwork.getString(contentTypeLongString);
+
+    if (contentType.includes("x-www-form-urlencoded")) {
+      let postDataLongString = aPostData.postData.text;
+      let postData = yield gNetwork.getString(postDataLongString);
+
+      for (let section of postData.split(/\r\n|\r|\n/)) {
+        // Before displaying it, make sure this section of the POST data
+        // isn't a line containing upload stream headers.
+        if (payloadHeaders.every(header => !section.startsWith(header.name))) {
+          formDataSections.push(section);
+        }
+      }
+    }
+
+    return formDataSections;
+  }),
+
+  /**
+   * Copy the request form data parameters (or raw payload) from the currently selected item.
+   */
+  copyPostData: Task.async(function*() {
+    let selected = this.selectedItem.attachment;
+    let view = this;
+
+    // Try to extract any form data parameters.
+    let formDataSections = yield view._getFormDataSections(
+      selected.requestHeaders,
+      selected.requestHeadersFromUploadStream,
+      selected.requestPostData);
+
+    let params = [];
+    formDataSections.forEach(section => {
+      let paramsArray = parseQueryString(section);
+      if (paramsArray) {
+        params = [...params, ...paramsArray];
+      }
+    });
+
+    let string = params
+      .map(param => param.name + (param.value ? "=" + param.value : ""))
+      .join(Services.appinfo.OS === "WINNT" ? "\r\n" : "\n");
+
+    // Fall back to raw payload.
+    if (!string) {
+      let postData = selected.requestPostData.postData.text;
+      string = yield gNetwork.getString(postData);
+      if (Services.appinfo.OS !== "WINNT") {
+        string = string.replace(/\r/g, "");
+      }
+    }
+
+    clipboardHelper.copyString(string);
+  }),
 
   /**
    * Copy a cURL command from the currently selected item.
@@ -604,7 +681,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
         data.postDataText = yield gNetwork.getString(postData);
       }
 
-      clipboardHelper.copyString(Curl.generateCommand(data), document);
+      clipboardHelper.copyString(Curl.generateCommand(data));
     });
   },
 
@@ -617,7 +694,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     if (Services.appinfo.OS !== "WINNT") {
       rawHeaders = rawHeaders.replace(/\r/g, "");
     }
-    clipboardHelper.copyString(rawHeaders, document);
+    clipboardHelper.copyString(rawHeaders);
   },
 
   /**
@@ -629,7 +706,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     if (Services.appinfo.OS !== "WINNT") {
       rawHeaders = rawHeaders.replace(/\r/g, "");
     }
-    clipboardHelper.copyString(rawHeaders, document);
+    clipboardHelper.copyString(rawHeaders);
   },
 
   /**
@@ -641,7 +718,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
 
     gNetwork.getString(text).then(aString => {
       let data = "data:" + mimeType + ";" + encoding + "," + aString;
-      clipboardHelper.copyString(data, document);
+      clipboardHelper.copyString(data);
     });
   },
 
@@ -653,7 +730,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     let text = selected.responseContent.content.text;
 
     gNetwork.getString(text).then(aString => {
-      clipboardHelper.copyString(aString, document);
+      clipboardHelper.copyString(aString);
     });
   },
 
@@ -871,19 +948,21 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
   /**
    * Returns an object with all the filter predicates as [key: function] pairs.
    */
-  get _allFilterPredicates() ({
-    all: () => true,
-    html: this.isHtml,
-    css: this.isCss,
-    js: this.isJs,
-    xhr: this.isXHR,
-    fonts: this.isFont,
-    images: this.isImage,
-    media: this.isMedia,
-    flash: this.isFlash,
-    other: this.isOther,
-    freetext: this.isFreetextMatch
-  }),
+  get _allFilterPredicates() {
+    return {
+      all: () => true,
+      html: this.isHtml,
+      css: this.isCss,
+      js: this.isJs,
+      xhr: this.isXHR,
+      fonts: this.isFont,
+      images: this.isImage,
+      media: this.isMedia,
+      flash: this.isFlash,
+      other: this.isOther,
+      freetext: this.isFreetextMatch
+    };
+  },
 
   /**
    * Sorts all network requests in this container by a specified detail.
@@ -997,52 +1076,72 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
    * @return boolean
    *         True if the item should be visible, false otherwise.
    */
-  isHtml: function({ attachment: { mimeType } })
-    mimeType && mimeType.includes("/html"),
+  isHtml: function({ attachment: { mimeType } }) {
+    return mimeType && mimeType.includes("/html");
+  },
 
-  isCss: function({ attachment: { mimeType } })
-    mimeType && mimeType.includes("/css"),
+  isCss: function({ attachment: { mimeType } }) {
+    return mimeType && mimeType.includes("/css");
+  },
 
-  isJs: function({ attachment: { mimeType } })
-    mimeType && (
+  isJs: function({ attachment: { mimeType } }) {
+    return mimeType && (
       mimeType.includes("/ecmascript") ||
       mimeType.includes("/javascript") ||
-      mimeType.includes("/x-javascript")),
+      mimeType.includes("/x-javascript"));
+  },
 
-  isXHR: function({ attachment: { isXHR } })
-    isXHR,
+  isXHR: function({ attachment: { isXHR } }) {
+    return isXHR;
+  },
 
-  isFont: function({ attachment: { url, mimeType } }) // Fonts are a mess.
-    (mimeType && (
-      mimeType.includes("font/") ||
-      mimeType.includes("/font"))) ||
-    url.includes(".eot") ||
-    url.includes(".ttf") ||
-    url.includes(".otf") ||
-    url.includes(".woff"),
+  isFont: function({ attachment: { url, mimeType } }) {
+    // Fonts are a mess.
+    return (mimeType && (
+        mimeType.includes("font/") ||
+        mimeType.includes("/font"))) ||
+      url.includes(".eot") ||
+      url.includes(".ttf") ||
+      url.includes(".otf") ||
+      url.includes(".woff");
+  },
 
-  isImage: function({ attachment: { mimeType } })
-    mimeType && mimeType.includes("image/"),
+  isImage: function({ attachment: { mimeType } }) {
+    return mimeType && mimeType.includes("image/");
+  },
 
-  isMedia: function({ attachment: { mimeType } }) // Not including images.
-    mimeType && (
+  isMedia: function({ attachment: { mimeType } }) {
+    // Not including images.
+    return mimeType && (
       mimeType.includes("audio/") ||
       mimeType.includes("video/") ||
-      mimeType.includes("model/")),
+      mimeType.includes("model/"));
+  },
 
-  isFlash: function({ attachment: { url, mimeType } }) // Flash is a mess.
-    (mimeType && (
-      mimeType.includes("/x-flv") ||
-      mimeType.includes("/x-shockwave-flash"))) ||
-    url.includes(".swf") ||
-    url.includes(".flv"),
+  isFlash: function({ attachment: { url, mimeType } }) {
+    // Flash is a mess.
+    return (mimeType && (
+        mimeType.includes("/x-flv") ||
+        mimeType.includes("/x-shockwave-flash"))) ||
+      url.includes(".swf") ||
+      url.includes(".flv");
+  },
 
-  isOther: function(e)
-    !this.isHtml(e) && !this.isCss(e) && !this.isJs(e) && !this.isXHR(e) &&
-    !this.isFont(e) && !this.isImage(e) && !this.isMedia(e) && !this.isFlash(e),
+  isOther: function(e) {
+    return !this.isHtml(e) &&
+           !this.isCss(e) &&
+           !this.isJs(e) &&
+           !this.isXHR(e) &&
+           !this.isFont(e) &&
+           !this.isImage(e) &&
+           !this.isMedia(e) &&
+           !this.isFlash(e);
+  },
 
-  isFreetextMatch: function({ attachment: { url } }, text) //no text is a positive match
-    !text || url.includes(text),
+  isFreetextMatch: function({ attachment: { url } }, text) {
+    //no text is a positive match
+    return !text || url.includes(text);
+  },
 
   /**
    * Predicates used when sorting items.
@@ -1056,18 +1155,21 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
    *          0 to leave aFirst and aSecond unchanged with respect to each other
    *          1 to sort aSecond to a lower index than aFirst
    */
-  _byTiming: function({ attachment: first }, { attachment: second })
-    first.startedMillis > second.startedMillis,
+  _byTiming: function({ attachment: first }, { attachment: second }) {
+    return first.startedMillis > second.startedMillis;
+  },
 
-  _byStatus: function({ attachment: first }, { attachment: second })
-    first.status == second.status
-      ? first.startedMillis > second.startedMillis
-      : first.status > second.status,
+  _byStatus: function({ attachment: first }, { attachment: second }) {
+    return first.status == second.status
+           ? first.startedMillis > second.startedMillis
+           : first.status > second.status;
+  },
 
-  _byMethod: function({ attachment: first }, { attachment: second })
-    first.method == second.method
-      ? first.startedMillis > second.startedMillis
-      : first.method > second.method,
+  _byMethod: function({ attachment: first }, { attachment: second }) {
+    return first.method == second.method
+           ? first.startedMillis > second.startedMillis
+           : first.method > second.method;
+  },
 
   _byFile: function({ attachment: first }, { attachment: second }) {
     let firstUrl = this._getUriNameWithQuery(first.url).toLowerCase();
@@ -1425,10 +1527,11 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
         }
         let nameWithQuery = this._getUriNameWithQuery(uri);
         let hostPort = this._getUriHostPort(uri);
+        let unicodeUrl = NetworkHelper.convertToUnicode(unescape(uri.spec));
 
         let file = $(".requests-menu-file", target);
         file.setAttribute("value", nameWithQuery);
-        file.setAttribute("tooltiptext", nameWithQuery);
+        file.setAttribute("tooltiptext", unicodeUrl);
 
         let domain = $(".requests-menu-domain", target);
         domain.setAttribute("value", hostPort);
@@ -1843,6 +1946,9 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     let copyUrlParamsElement = $("#request-menu-context-copy-url-params");
     copyUrlParamsElement.hidden = !selectedItem || !nsIURL(selectedItem.attachment.url).query;
 
+    let copyPostDataElement = $("#request-menu-context-copy-post-data");
+    copyPostDataElement.hidden = !selectedItem || !selectedItem.attachment.requestPostData;
+
     let copyAsCurlElement = $("#request-menu-context-copy-as-curl");
     copyAsCurlElement.hidden = !selectedItem || !selectedItem.attachment.responseContent;
 
@@ -1906,7 +2012,7 @@ RequestsMenuView.prototype = Heritage.extend(WidgetMethods, {
     if (!(aUrl instanceof Ci.nsIURL)) {
       aUrl = nsIURL(aUrl);
     }
-    let name = NetworkHelper.convertToUnicode(unescape(aUrl.fileName)) || "/";
+    let name = NetworkHelper.convertToUnicode(unescape(aUrl.fileName || aUrl.filePath || "/"));
     let query = NetworkHelper.convertToUnicode(unescape(aUrl.query));
     return name + (query ? "?" + query : "");
   },
@@ -2450,19 +2556,19 @@ NetworkDetailsView.prototype = {
   /**
    * Sets the network request headers shown in this view.
    *
-   * @param object aHeadersResponse
+   * @param object aHeaders
    *        The "requestHeaders" message received from the server.
-   * @param object aHeadersFromUploadStream
+   * @param object aUploadHeaders
    *        The "requestHeadersFromUploadStream" inferred from the POST payload.
    * @return object
    *        A promise that resolves when request headers are set.
    */
-  _setRequestHeaders: Task.async(function*(aHeadersResponse, aHeadersFromUploadStream) {
-    if (aHeadersResponse && aHeadersResponse.headers.length) {
-      yield this._addHeaders(this._requestHeaders, aHeadersResponse);
+  _setRequestHeaders: Task.async(function*(aHeaders, aUploadHeaders) {
+    if (aHeaders && aHeaders.headers.length) {
+      yield this._addHeaders(this._requestHeaders, aHeaders);
     }
-    if (aHeadersFromUploadStream && aHeadersFromUploadStream.headers.length) {
-      yield this._addHeaders(this._requestHeadersFromUpload, aHeadersFromUploadStream);
+    if (aUploadHeaders && aUploadHeaders.headers.length) {
+      yield this._addHeaders(this._requestHeadersFromUpload, aUploadHeaders);
     }
   }),
 
@@ -2590,40 +2696,28 @@ NetworkDetailsView.prototype = {
   /**
    * Sets the network request post params shown in this view.
    *
-   * @param object aHeadersResponse
+   * @param object aHeaders
    *        The "requestHeaders" message received from the server.
-   * @param object aHeadersFromUploadStream
+   * @param object aUploadHeaders
    *        The "requestHeadersFromUploadStream" inferred from the POST payload.
-   * @param object aPostDataResponse
+   * @param object aPostData
    *        The "requestPostData" message received from the server.
    * @return object
    *        A promise that is resolved when the request post params are set.
    */
-  _setRequestPostParams: Task.async(function*(aHeadersResponse, aHeadersFromUploadStream, aPostDataResponse) {
-    if (!aHeadersResponse || !aHeadersFromUploadStream || !aPostDataResponse) {
+  _setRequestPostParams: Task.async(function*(aHeaders, aUploadHeaders, aPostData) {
+    if (!aHeaders || !aUploadHeaders || !aPostData) {
       return;
     }
 
-    let { headers: requestHeaders } = aHeadersResponse;
-    let { headers: payloadHeaders } = aHeadersFromUploadStream;
-    let allHeaders = [...payloadHeaders, ...requestHeaders];
+    let formDataSections = yield RequestsMenuView.prototype._getFormDataSections(
+      aHeaders, aUploadHeaders, aPostData);
 
-    let contentTypeHeader = allHeaders.find(e => e.name.toLowerCase() == "content-type");
-    let contentTypeLongString = contentTypeHeader ? contentTypeHeader.value : "";
-    let postDataLongString = aPostDataResponse.postData.text;
-
-    let postData = yield gNetwork.getString(postDataLongString);
-    let contentType = yield gNetwork.getString(contentTypeLongString);
-
-    // Handle query strings (e.g. "?foo=bar&baz=42").
-    if (contentType.includes("x-www-form-urlencoded")) {
-      for (let section of postData.split(/\r\n|\r|\n/)) {
-        // Before displaying it, make sure this section of the POST data
-        // isn't a line containing upload stream headers.
-        if (payloadHeaders.every(header => !section.startsWith(header.name))) {
-          this._addParams(this._paramsFormData, section);
-        }
-      }
+    // Handle urlencoded form data sections (e.g. "?foo=bar&baz=42").
+    if (formDataSections.length > 0) {
+      formDataSections.forEach(section => {
+        this._addParams(this._paramsFormData, section);
+      });
     }
     // Handle actual forms ("multipart/form-data" content type).
     else {
@@ -2637,6 +2731,9 @@ NetworkDetailsView.prototype = {
 
       $("#request-post-data-textarea-box").hidden = false;
       let editor = yield NetMonitorView.editor("#request-post-data-textarea");
+      let postDataLongString = aPostData.postData.text;
+      let postData = yield gNetwork.getString(postDataLongString);
+
       // Most POST bodies are usually JSON, so they can be neatly
       // syntax highlighted as JS. Otheriwse, fall back to plain text.
       try {
@@ -3184,8 +3281,8 @@ PerformanceStatisticsView.prototype = {
 /**
  * DOM query helper.
  */
-function $(aSelector, aTarget = document) aTarget.querySelector(aSelector);
-function $all(aSelector, aTarget = document) aTarget.querySelectorAll(aSelector);
+let $ = (aSelector, aTarget = document) => aTarget.querySelector(aSelector);
+let $all = (aSelector, aTarget = document) => aTarget.querySelectorAll(aSelector);
 
 /**
  * Helper for getting an nsIURL instance out of a string.
@@ -3280,7 +3377,7 @@ function parseRequestText(aText, aName, aDivider) {
  *         List of headers in text format
  */
 function writeHeaderText(aHeaders) {
-  return [(name + ": " + value) for ({name, value} of aHeaders)].join("\n");
+  return aHeaders.map(({name, value}) => name + ": " + value).join("\n");
 }
 
 /**
@@ -3292,7 +3389,7 @@ function writeHeaderText(aHeaders) {
  *         List of query params in text format
  */
 function writeQueryText(aParams) {
-  return [(name + "=" + value) for ({name, value} of aParams)].join("\n");
+  return aParams.map(({name, value}) => name + "=" + value).join("\n");
 }
 
 /**
@@ -3304,7 +3401,7 @@ function writeQueryText(aParams) {
  *         Query string that can be appended to a url.
  */
 function writeQueryString(aParams) {
-  return [(name + "=" + value) for ({name, value} of aParams)].join("&");
+  return aParams.map(({name, value}) => name + "=" + value).join("&");
 }
 
 /**

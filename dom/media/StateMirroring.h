@@ -16,7 +16,7 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/unused.h"
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "nsISupportsImpl.h"
 
 /*
@@ -50,7 +50,7 @@ namespace mozilla {
 // the same log module.
 #define MIRROR_LOG(x, ...) \
   MOZ_ASSERT(gStateWatchingLog); \
-  PR_LOG(gStateWatchingLog, PR_LOG_DEBUG, (x, ##__VA_ARGS__))
+  MOZ_LOG(gStateWatchingLog, PR_LOG_DEBUG, (x, ##__VA_ARGS__))
 
 template<typename T> class AbstractMirror;
 
@@ -130,7 +130,7 @@ private:
       : AbstractCanonical<T>(aThread), WatchTarget(aName), mValue(aInitialValue)
     {
       MIRROR_LOG("%s [%p] initialized", mName, this);
-      MOZ_ASSERT(aThread->RequiresTailDispatch(), "Can't get coherency without tail dispatch");
+      MOZ_ASSERT(aThread->SupportsTailDispatch(), "Can't get coherency without tail dispatch");
     }
 
     void AddMirror(AbstractMirror<T>* aMirror) override
@@ -303,6 +303,7 @@ private:
       : AbstractMirror<T>(aThread), WatchTarget(aName), mValue(aInitialValue)
     {
       MIRROR_LOG("%s [%p] initialized", mName, this);
+      MOZ_ASSERT(aThread->SupportsTailDispatch(), "Can't get coherency without tail dispatch");
     }
 
     operator const T&()
@@ -334,6 +335,7 @@ private:
       MIRROR_LOG("%s [%p] Connecting to %p", mName, this, aCanonical);
       MOZ_ASSERT(OwnerThread()->IsCurrentThreadIn());
       MOZ_ASSERT(!IsConnected());
+      MOZ_ASSERT(OwnerThread()->RequiresTailDispatch(aCanonical->OwnerThread()), "Can't get coherency without tail dispatch");
 
       nsCOMPtr<nsIRunnable> r = NS_NewRunnableMethodWithArg<StorensRefPtrPassByPtr<AbstractMirror<T>>>
                                   (aCanonical, &AbstractCanonical<T>::AddMirror, this);

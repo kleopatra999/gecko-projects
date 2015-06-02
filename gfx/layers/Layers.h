@@ -39,12 +39,11 @@
 #include "nsISupportsImpl.h"            // for Layer::Release, etc
 #include "nsRect.h"                     // for mozilla::gfx::IntRect
 #include "nsRegion.h"                   // for nsIntRegion
-#include "nsSize.h"                     // for nsIntSize
 #include "nsString.h"                   // for nsCString
 #include "nsTArray.h"                   // for nsTArray
 #include "nsTArrayForwardDeclare.h"     // for InfallibleTArray
 #include "nscore.h"                     // for nsACString, nsAString
-#include "prlog.h"                      // for PRLogModuleInfo
+#include "mozilla/Logging.h"                      // for PRLogModuleInfo
 #include "nsIWidget.h"                  // For plugin window configuration information structs
 #include "gfxVR.h"
 

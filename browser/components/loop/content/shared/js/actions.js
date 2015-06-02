@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* global loop:true */
-
 var loop = loop || {};
 loop.shared = loop.shared || {};
 loop.shared.actions = (function() {
@@ -165,6 +163,28 @@ loop.shared.actions = (function() {
      * Used to notify that a remote peer has connected to the room.
      */
     RemotePeerConnected: Action.define("remotePeerConnected", {
+    }),
+
+    /**
+     * Used to notify that the session has a data channel available.
+     */
+    DataChannelsAvailable: Action.define("dataChannelsAvailable", {
+    }),
+
+    /**
+     * Used to send a message to the other peer.
+     */
+    SendTextChatMessage: Action.define("sendTextChatMessage", {
+      contentType: String,
+      message: String
+    }),
+
+    /**
+     * Notifies that a message has been received from the other peer.
+     */
+    ReceivedTextChatMessage: Action.define("receivedTextChatMessage", {
+      contentType: String,
+      message: String
     }),
 
     /**
@@ -349,6 +369,12 @@ loop.shared.actions = (function() {
     }),
 
     /**
+     * Updating the context data attached to a room finished successfully.
+     */
+    UpdateRoomContextDone: Action.define("updateRoomContextDone", {
+    }),
+
+    /**
      * Copy a room url into the user's clipboard.
      * XXX: should move to some roomActions module - refs bug 1079284
      */
@@ -362,6 +388,7 @@ loop.shared.actions = (function() {
      */
     EmailRoomUrl: Action.define("emailRoomUrl", {
       roomUrl: String
+      // roomDescription: String, Optional.
     }),
 
     /**

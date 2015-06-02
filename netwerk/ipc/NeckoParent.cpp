@@ -483,7 +483,7 @@ PUDPSocketParent*
 NeckoParent::AllocPUDPSocketParent(const Principal& /* unused */,
                                    const nsCString& /* unused */)
 {
-  nsRefPtr<UDPSocketParent> p = new UDPSocketParent();
+  nsRefPtr<UDPSocketParent> p = new UDPSocketParent(this);
 
   return p.forget().take();
 }
@@ -603,7 +603,7 @@ NeckoParent::AllocPRemoteOpenFileParent(const SerializedLoadContext& aSerialized
     bool themeWhitelist = false;
     if (Preferences::GetBool("dom.mozApps.themable") && appUri) {
       nsAutoCString origin;
-      nsPrincipal::GetOriginForURI(appUri, getter_Copies(origin));
+      nsPrincipal::GetOriginForURI(appUri, origin);
       nsAutoCString themeOrigin;
       themeOrigin = Preferences::GetCString("b2g.theme.origin");
       themeWhitelist = origin.Equals(themeOrigin);

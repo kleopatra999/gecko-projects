@@ -22,6 +22,7 @@
 #include "vm/ScopeObject-inl.h"
 #include "vm/Stack-inl.h"
 #include "vm/String-inl.h"
+#include "vm/UnboxedObject-inl.h"
 
 namespace js {
 
@@ -186,7 +187,7 @@ ValuePropertyBearer(JSContext* cx, InterpreterFrame* fp, HandleValue v, int spin
         return GlobalObject::getOrCreateBooleanPrototype(cx, global);
 
     MOZ_ASSERT(v.isNull() || v.isUndefined());
-    ReportIsNullOrUndefined(cx, spindex, v, NullPtr());
+    ReportIsNullOrUndefined(cx, spindex, v, nullptr);
     return nullptr;
 }
 

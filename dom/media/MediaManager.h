@@ -27,7 +27,7 @@
 #include "mozilla/dom/MediaStreamBinding.h"
 #include "mozilla/dom/MediaStreamTrackBinding.h"
 #include "mozilla/dom/MediaStreamError.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "DOMMediaStream.h"
 
 #ifdef MOZ_WEBRTC
@@ -48,12 +48,8 @@ struct MediaStreamConstraints;
 struct MediaTrackConstraintSet;
 }
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetMediaManagerLog();
-#define MM_LOG(msg) PR_LOG(GetMediaManagerLog(), PR_LOG_DEBUG, msg)
-#else
-#define MM_LOG(msg)
-#endif
+#define MM_LOG(msg) MOZ_LOG(GetMediaManagerLog(), PR_LOG_DEBUG, msg)
 
 /**
  * This class is an implementation of MediaStreamListener. This is used
@@ -75,6 +71,7 @@ public:
 
   ~GetUserMediaCallbackMediaStreamListener()
   {
+    unused << mMediaThread;
     // It's OK to release mStream on any thread; they have thread-safe
     // refcounts.
   }
@@ -518,7 +515,7 @@ public:
   // from MediaManager thread.
   static MediaManager* Get();
   static MediaManager* GetIfExists();
-  static MessageLoop* GetMessageLoop();
+  static void PostTask(const tracked_objects::Location& from_here, Task* task);
 #ifdef DEBUG
   static bool IsInMediaThread();
 #endif

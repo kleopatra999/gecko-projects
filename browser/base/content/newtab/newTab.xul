@@ -24,11 +24,6 @@
 
   <div id="newtab-customize-overlay"></div>
 
-  <xul:panel id="newtab-intro-panel" orient="vertical" type="arrow"
-             noautohide="true" hidden="true">
-    <h1>&newtab.intro.header;</h1>
-  </xul:panel>
-
   <xul:panel id="newtab-search-panel" orient="vertical" type="arrow"
              noautohide="true" hidden="true">
     <xul:hbox id="newtab-search-manage">
@@ -57,6 +52,35 @@
       <xul:label>&newtab.customize.cog.learn;</xul:label>
     </xul:hbox>
   </xul:panel>
+
+  <div id="newtab-intro-mask">
+    <div id="newtab-intro-modal">
+      <div id="newtab-intro-progress">
+        <div id="newtab-intro-numerical-progress"/>
+        <div id="newtab-intro-graphical-progress">
+          <span id="indicator"/>
+        </div>
+      </div>
+      <div id="newtab-intro-header"/>
+      <div id="newtab-intro-body">
+        <div id="newtab-intro-content">
+          <div id="newtab-intro-image"/>
+          <div id="newtab-intro-text">
+            <p/><p/>
+          </div>
+        </div>
+        <div id="newtab-intro-buttons">
+          <input type="button" onclick="gIntro._back()"/>
+          <input type="button" default="true" onclick="gIntro._next()"/>
+        </div>
+      </div>
+      <div id="newtab-intro-footer">
+        <ul>
+          <li/><li/>
+        </ul>
+      </div>
+    </div>
+  </div>
 
   <div id="newtab-scrollbox">
 
@@ -102,8 +126,6 @@
       <div id="newtab-margin-bottom"/>
 
     </div>
-
-    <div id="newtab-intro-what">&newtab.customize.what;</div>
 
     <input id="newtab-customize-button" type="button" title="&newtab.customize.title;"/>
   </div>

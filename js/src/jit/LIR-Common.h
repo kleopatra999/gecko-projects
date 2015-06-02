@@ -58,27 +58,21 @@ class LOsiPoint : public LInstructionHelper<0, 0, 0>
 
 class LMove
 {
-    LAllocation* from_;
-    LAllocation* to_;
+    LAllocation from_;
+    LAllocation to_;
     LDefinition::Type type_;
 
   public:
-    LMove(LAllocation* from, LAllocation* to, LDefinition::Type type)
+    LMove(LAllocation from, LAllocation to, LDefinition::Type type)
       : from_(from),
         to_(to),
         type_(type)
     { }
 
-    LAllocation* from() {
+    LAllocation from() const {
         return from_;
     }
-    const LAllocation* from() const {
-        return from_;
-    }
-    LAllocation* to() {
-        return to_;
-    }
-    const LAllocation* to() const {
+    LAllocation to() const {
         return to_;
     }
     LDefinition::Type type() const {
@@ -106,13 +100,13 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
         return new(alloc) LMoveGroup(alloc);
     }
 
-    void printOperands(FILE* fp);
+    void printOperands(GenericPrinter& out);
 
     // Add a move which takes place simultaneously with all others in the group.
-    bool add(LAllocation* from, LAllocation* to, LDefinition::Type type);
+    bool add(LAllocation from, LAllocation to, LDefinition::Type type);
 
     // Add a move which takes place after existing moves in the group.
-    bool addAfter(LAllocation* from, LAllocation* to, LDefinition::Type type);
+    bool addAfter(LAllocation from, LAllocation to, LDefinition::Type type);
 
     size_t numMoves() const {
         return moves_.length();
@@ -137,7 +131,7 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
     bool uses(Register reg) {
         for (size_t i = 0; i < numMoves(); i++) {
             LMove move = getMove(i);
-            if (*move.from() == LGeneralReg(reg) || *move.to() == LGeneralReg(reg))
+            if (move.from() == LGeneralReg(reg) || move.to() == LGeneralReg(reg))
                 return true;
         }
         return false;
@@ -4052,6 +4046,20 @@ class LLambdaArrow : public LInstructionHelper<1, 1 + BOX_PIECES, 1>
     }
 };
 
+class LKeepAliveObject : public LInstructionHelper<0, 1, 0>
+{
+  public:
+    LIR_HEADER(KeepAliveObject)
+
+    explicit LKeepAliveObject(const LAllocation& object) {
+        setOperand(0, object);
+    }
+
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+};
+
 // Load the "slots" member out of a JSObject.
 //   Input: JSObject pointer
 //   Output: slots pointer
@@ -4147,6 +4155,10 @@ class LMaybeCopyElementsForWrite : public LInstructionHelper<0, 1, 1>
 
     const LDefinition* temp() {
         return getTemp(0);
+    }
+
+    const MMaybeCopyElementsForWrite* mir() const {
+        return mir_->toMaybeCopyElementsForWrite();
     }
 };
 
@@ -4924,6 +4936,39 @@ class LArrayConcat : public LCallInstructionHelper<1, 2, 2>
     }
     const LAllocation* rhs() {
         return getOperand(1);
+    }
+    const LDefinition* temp1() {
+        return getTemp(0);
+    }
+    const LDefinition* temp2() {
+        return getTemp(1);
+    }
+};
+
+class LArraySlice : public LCallInstructionHelper<1, 3, 2>
+{
+  public:
+    LIR_HEADER(ArraySlice)
+
+    LArraySlice(const LAllocation& obj, const LAllocation& begin, const LAllocation& end,
+                const LDefinition& temp1, const LDefinition& temp2) {
+        setOperand(0, obj);
+        setOperand(1, begin);
+        setOperand(2, end);
+        setTemp(0, temp1);
+        setTemp(1, temp2);
+    }
+    const MArraySlice* mir() const {
+        return mir_->toArraySlice();
+    }
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+    const LAllocation* begin() {
+        return getOperand(1);
+    }
+    const LAllocation* end() {
+        return getOperand(2);
     }
     const LDefinition* temp1() {
         return getTemp(0);

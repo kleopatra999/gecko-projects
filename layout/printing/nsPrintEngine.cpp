@@ -127,7 +127,7 @@ using namespace mozilla::dom;
 
 //-----------------------------------------------------
 // PR LOGGING
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #ifdef DEBUG
 // PR_LOGGING is force to always be on (even in release builds)
@@ -146,7 +146,7 @@ GetPrintingLog()
     sLog = PR_NewLogModule("printing");
   return sLog;
 }
-#define PR_PL(_p1)  PR_LOG(GetPrintingLog(), PR_LOG_DEBUG, _p1);
+#define PR_PL(_p1)  MOZ_LOG(GetPrintingLog(), PR_LOG_DEBUG, _p1);
 #endif
 
 #ifdef EXTENDED_DEBUG_PRINTING

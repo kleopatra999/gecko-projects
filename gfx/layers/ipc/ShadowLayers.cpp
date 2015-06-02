@@ -28,7 +28,6 @@
 #include "mozilla/layers/TextureClient.h"  // for TextureClient
 #include "mozilla/mozalloc.h"           // for operator new, etc
 #include "nsAutoPtr.h"                  // for nsRefPtr, getter_AddRefs, etc
-#include "nsSize.h"                     // for nsIntSize
 #include "nsTArray.h"                   // for nsAutoTArray, nsTArray, etc
 #include "nsXULAppAPI.h"                // for XRE_GetProcessType, etc
 #include "mozilla/ReentrantMonitor.h"
@@ -729,6 +728,16 @@ ShadowLayerForwarder::IsSameProcess() const
     return false;
   }
   return mShadowManager->OtherPid() == base::GetCurrentProcId();
+}
+
+base::ProcessId
+ShadowLayerForwarder::ParentPid() const
+{
+  if (!HasShadowManager() || !mShadowManager->IPCOpen()) {
+    return base::ProcessId();
+  }
+
+  return mShadowManager->OtherPid();
 }
 
 /**

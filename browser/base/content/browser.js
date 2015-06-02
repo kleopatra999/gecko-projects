@@ -55,6 +55,35 @@ XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
 XPCOMUtils.defineLazyModuleGetter(this, "Pocket",
                                   "resource:///modules/Pocket.jsm");
 
+// Can't use XPCOMUtils for these because the scripts try to define the variables
+// on window, and so the defineProperty inside defineLazyGetter fails.
+Object.defineProperty(window, "pktApi", {
+  get: function() {
+    // Avoid this getter running again:
+    delete window.pktApi;
+    Services.scriptloader.loadSubScript("chrome://browser/content/pocket/pktApi.js", window);
+    return window.pktApi;
+  },
+  configurable: true,
+  enumerable: true
+});
+
+function pktUIGetter(prop) {
+  return {
+    get: function() {
+      // Avoid either of these getters running again:
+      delete window.pktUI;
+      delete window.pktUIMessaging;
+      Services.scriptloader.loadSubScript("chrome://browser/content/pocket/main.js", window);
+      return window[prop];
+    },
+    configurable: true,
+    enumerable: true
+  };
+}
+Object.defineProperty(window, "pktUI", pktUIGetter("pktUI"));
+Object.defineProperty(window, "pktUIMessaging", pktUIGetter("pktUIMessaging"));
+
 const nsIWebNavigation = Ci.nsIWebNavigation;
 
 var gLastBrowserCharset = null;
@@ -957,6 +986,7 @@ var gBrowserInit = {
     mm.loadFrameScript("chrome://browser/content/content.js", true);
     mm.loadFrameScript("chrome://browser/content/content-UITour.js", true);
     mm.loadFrameScript("chrome://global/content/manifestMessages.js", true);
+    mm.loadFrameScript("chrome://global/content/viewSource-content.js", true);
 
     window.messageManager.addMessageListener("Browser:LoadURI", RedirectLoad);
 
@@ -2293,11 +2323,11 @@ function readFromClipboard()
  *        If aArgsOrDocument is an object, that object can take the
  *        following properties:
  *
- *        browser:
- *          The browser containing the document that we would like to view the
- *          source of.
- *        URL:
+ *        URL (required):
  *          A string URL for the page we'd like to view the source of.
+ *        browser (optional):
+ *          The browser containing the document that we would like to view the
+ *          source of. This is required if outerWindowID is passed.
  *        outerWindowID (optional):
  *          The outerWindowID of the content window containing the document that
  *          we want to view the source of. You only need to provide this if you
@@ -2330,7 +2360,28 @@ function BrowserViewSourceOfDocument(aArgsOrDocument) {
     args = aArgsOrDocument;
   }
 
-  top.gViewSourceUtils.viewSource(args);
+  let inTab = Services.prefs.getBoolPref("view_source.tab");
+  if (inTab) {
+    let viewSourceURL = `view-source:${args.URL}`;
+    let tabBrowser = gBrowser;
+    // In the case of sidebars and chat windows, gBrowser is defined but null,
+    // because no #content element exists.  For these cases, we need to find
+    // the most recent browser window.
+    // In the case of popups, we need to find a non-popup browser window.
+    if (!tabBrowser || !window.toolbar.visible) {
+      // This returns only non-popup browser windows by default.
+      let browserWindow = RecentWindow.getMostRecentBrowserWindow();
+      tabBrowser = browserWindow.gBrowser;
+    }
+    let tab = tabBrowser.loadOneTab(viewSourceURL, {
+      relatedToCurrent: true,
+      inBackground: false
+    });
+    args.viewSourceBrowser = tabBrowser.getBrowserForTab(tab);
+    top.gViewSourceUtils.viewSourceInBrowser(args);
+  } else {
+    top.gViewSourceUtils.viewSource(args);
+  }
 }
 
 /**
@@ -2389,9 +2440,8 @@ function URLBarSetURI(aURI) {
 
     // Replace initial page URIs with an empty string
     // only if there's no opener (bug 370555).
-    // Bug 863515 - Make content.opener checks work in electrolysis.
     if (gInitialPages.indexOf(uri.spec) != -1)
-      value = !gMultiProcessBrowser && content.opener ? uri.spec : "";
+      value = gBrowser.selectedBrowser.hasContentOpener ? uri.spec : "";
     else
       value = losslessDecodeURI(uri);
 
@@ -2521,18 +2571,27 @@ function PageProxyClickHandler(aEvent)
 // Setup the hamburger button badges for updates, if enabled.
 let gMenuButtonUpdateBadge = {
   enabled: false,
+  badgeWaitTime: 0,
+  timer: null,
 
   init: function () {
     try {
       this.enabled = Services.prefs.getBoolPref("app.update.badge");
     } catch (e) {}
     if (this.enabled) {
+      try {
+        this.badgeWaitTime = Services.prefs.getIntPref("app.update.badgeWaitTime");
+      } catch (e) {
+        this.badgeWaitTime = 345600; // 4 days
+      }
       PanelUI.menuButton.classList.add("badged-button");
       Services.obs.addObserver(this, "update-staged", false);
     }
   },
 
   uninit: function () {
+    if (this.timer)
+      this.timer.cancel();
     if (this.enabled) {
       Services.obs.removeObserver(this, "update-staged");
       PanelUI.panel.removeEventListener("popupshowing", this, true);
@@ -2576,23 +2635,14 @@ let gMenuButtonUpdateBadge = {
       case STATE_APPLIED_SVC:
       case STATE_PENDING:
       case STATE_PENDING_SVC:
-        // If the update is successfully applied, or if the updater has fallen back
-        // to non-staged updates, add a badge to the hamburger menu to indicate an
-        // update will be applied once the browser restarts.
-        PanelUI.menuButton.setAttribute("update-status", "succeeded");
-
-        let brandBundle = document.getElementById("bundle_brand");
-        let brandShortName = brandBundle.getString("brandShortName");
-        stringId = "appmenu.restartNeeded.description";
-        updateButtonText = gNavigatorBundle.getFormattedString(stringId,
-                                                               [brandShortName]);
-
-        updateButton.setAttribute("label", updateButtonText);
-        updateButton.setAttribute("update-status", "succeeded");
-        updateButton.hidden = false;
-
-        PanelUI.panel.addEventListener("popupshowing", this, true);
-
+        if (this.timer) {
+          return;
+        }
+        // Give the user badgeWaitTime seconds to react before prompting.
+        this.timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+        this.timer.initWithCallback(this, this.badgeWaitTime * 1000,
+                                    this.timer.TYPE_ONE_SHOT);
+        // The timer callback will call uninit() when it completes.
         break;
       case STATE_FAILED:
         // Background update has failed, let's show the UI responsible for
@@ -2609,13 +2659,29 @@ let gMenuButtonUpdateBadge = {
 
         PanelUI.panel.addEventListener("popupshowing", this, true);
 
+        this.uninit();
         break;
-      case STATE_DOWNLOADING:
-        // We've fallen back to downloading the full update because the partial
-        // update failed to get staged in the background. Therefore we need to keep
-        // our observer.
-        return;
     }
+  },
+
+  notify: function () {
+    // If the update is successfully applied, or if the updater has fallen back
+    // to non-staged updates, add a badge to the hamburger menu to indicate an
+    // update will be applied once the browser restarts.
+    PanelUI.menuButton.setAttribute("update-status", "succeeded");
+
+    let brandBundle = document.getElementById("bundle_brand");
+    let brandShortName = brandBundle.getString("brandShortName");
+    stringId = "appmenu.restartNeeded.description";
+    updateButtonText = gNavigatorBundle.getFormattedString(stringId,
+                                                           [brandShortName]);
+
+    let updateButton = document.getElementById("PanelUI-update-status");
+    updateButton.setAttribute("label", updateButtonText);
+    updateButton.setAttribute("update-status", "succeeded");
+    updateButton.hidden = false;
+
+    PanelUI.panel.addEventListener("popupshowing", this, true);
     this.uninit();
   },
 
@@ -4158,7 +4224,7 @@ var XULBrowserWindow = {
     // Do not update urlbar if there was a subframe navigation
 
     if (aWebProgress.isTopLevel) {
-      if ((location == "about:blank" && (gMultiProcessBrowser || !content.opener)) ||
+      if ((location == "about:blank" && !gBrowser.selectedBrowser.hasContentOpener) ||
           location == "") {  // Second condition is for new tabs, otherwise
                              // reload function is enabled until tab is refreshed.
         this.reloadCommand.setAttribute("disabled", "true");
@@ -4172,7 +4238,6 @@ var XULBrowserWindow = {
         BookmarkingUI.onLocationChange();
         SocialUI.updateState(location);
         UITour.onLocationChange(location);
-        Pocket.onLocationChange(browser, aLocationURI);
       }
 
       // Utility functions for disabling find
@@ -4531,7 +4596,7 @@ var TabsProgressListener = {
     if (aFlags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) {
       // Reader mode actually cares about these:
       let mm = gBrowser.selectedBrowser.messageManager;
-      mm.sendAsyncMessage("Reader:PushState");
+      mm.sendAsyncMessage("Reader:PushState", {isArticle: gBrowser.selectedBrowser.isArticle});
       return;
     }
 
@@ -5533,7 +5598,7 @@ function middleMousePaste(event) {
 
   clipboard = stripUnsafeProtocolOnPaste(clipboard);
 
-  // if it's not the current tab, we don't need to do anything because the 
+  // if it's not the current tab, we don't need to do anything because the
   // browser doesn't exist.
   let where = whereToOpenLink(event, true, false);
   let lastLocationChange;
@@ -6251,10 +6316,10 @@ function warnAboutClosingWindow() {
         otherPBWindowExists = true;
       if (win.toolbar.visible)
         nonPopupPresent = true;
-      // If the current window is not in private browsing mode we don't need to 
-      // look for other pb windows, we can leave the loop when finding the 
-      // first non-popup window. If however the current window is in private 
-      // browsing mode then we need at least one other pb and one non-popup 
+      // If the current window is not in private browsing mode we don't need to
+      // look for other pb windows, we can leave the loop when finding the
+      // first non-popup window. If however the current window is in private
+      // browsing mode then we need at least one other pb and one non-popup
       // window to break out early.
       if ((!isPBWindow || otherPBWindowExists) && nonPopupPresent)
         break;
@@ -6375,97 +6440,32 @@ function BrowserOpenApps() {
   switchToTabHavingURI(appsURL, true)
 }
 
-function GetSearchFieldBookmarkData(node) {
-  var charset = node.ownerDocument.characterSet;
-
-  var formBaseURI = makeURI(node.form.baseURI,
-                            charset);
-
-  var formURI = makeURI(node.form.getAttribute("action"),
-                        charset,
-                        formBaseURI);
-
-  var spec = formURI.spec;
-
-  var isURLEncoded =
-               (node.form.method.toUpperCase() == "POST"
-                && (node.form.enctype == "application/x-www-form-urlencoded" ||
-                    node.form.enctype == ""));
-
-  var title = gNavigatorBundle.getFormattedString("addKeywordTitleAutoFill",
-                                                  [node.ownerDocument.title]);
-  var description = PlacesUIUtils.getDescriptionFromDocument(node.ownerDocument);
-
-  var formData = [];
-
-  function escapeNameValuePair(aName, aValue, aIsFormUrlEncoded) {
-    if (aIsFormUrlEncoded)
-      return escape(aName + "=" + aValue);
-    else
-      return escape(aName) + "=" + escape(aValue);
-  }
-
-  for (let el of node.form.elements) {
-    if (!el.type) // happens with fieldsets
-      continue;
-
-    if (el == node) {
-      formData.push((isURLEncoded) ? escapeNameValuePair(el.name, "%s", true) :
-                                     // Don't escape "%s", just append
-                                     escapeNameValuePair(el.name, "", false) + "%s");
-      continue;
-    }
-
-    let type = el.type.toLowerCase();
-
-    if (((el instanceof HTMLInputElement && el.mozIsTextField(true)) ||
-        type == "hidden" || type == "textarea") ||
-        ((type == "checkbox" || type == "radio") && el.checked)) {
-      formData.push(escapeNameValuePair(el.name, el.value, isURLEncoded));
-    } else if (el instanceof HTMLSelectElement && el.selectedIndex >= 0) {
-      for (var j=0; j < el.options.length; j++) {
-        if (el.options[j].selected)
-          formData.push(escapeNameValuePair(el.name, el.options[j].value,
-                                            isURLEncoded));
-      }
-    }
-  }
-
-  var postData;
-
-  if (isURLEncoded)
-    postData = formData.join("&");
-  else {
-    let separator = spec.includes("?") ? "&" : "?";
-    spec += separator + formData.join("&");
-  }
-
-  return {
-    spec: spec,
-    title: title,
-    description: description,
-    postData: postData,
-    charSet: charset
-  };
-}
-
-
 function AddKeywordForSearchField() {
-  let bookmarkData = GetSearchFieldBookmarkData(gContextMenu.target);
+  let mm = gBrowser.selectedBrowser.messageManager;
 
-  PlacesUIUtils.showBookmarkDialog({ action: "add"
-                                   , type: "bookmark"
-                                   , uri: makeURI(bookmarkData.spec)
-                                   , title: bookmarkData.title
-                                   , description: bookmarkData.description
-                                   , keyword: ""
-                                   , postData: bookmarkData.postData
-                                   , charSet: bookmarkData.charset
-                                   , hiddenRows: [ "location"
-                                                 , "description"
-                                                 , "tags"
-                                                 , "loadInSidebar" ]
-                                   }, window);
+  let onMessage = (message) => {
+    mm.removeMessageListener("ContextMenu:SearchFieldBookmarkData:Result", onMessage);
+
+    let bookmarkData = message.data;
+    let title = gNavigatorBundle.getFormattedString("addKeywordTitleAutoFill",
+                                                    [bookmarkData.title]);
+    PlacesUIUtils.showBookmarkDialog({ action: "add"
+                                     , type: "bookmark"
+                                     , uri: makeURI(bookmarkData.spec)
+                                     , title: title
+                                     , description: bookmarkData.description
+                                     , keyword: ""
+                                     , postData: bookmarkData.postData
+                                     , charSet: bookmarkData.charset
+                                     , hiddenRows: [ "location"
+                                                   , "description"
+                                                   , "tags"
+                                                   , "loadInSidebar" ]
+                                     }, window);
+  }
+  mm.addMessageListener("ContextMenu:SearchFieldBookmarkData:Result", onMessage);
+
+  mm.sendAsyncMessage("ContextMenu:SearchFieldBookmarkData", {}, { target: gContextMenu.target });
 }
 
 function convertFromUnicode(charset, str)
@@ -6533,8 +6533,7 @@ function isTabEmpty(aTab) {
   if (!isBlankPageURL(browser.currentURI.spec))
     return false;
 
-  // Bug 863515 - Make content.opener checks work in electrolysis.
-  if (!gMultiProcessBrowser && browser.contentWindow.opener)
+  if (browser.hasContentOpener)
     return false;
 
   if (browser.canGoForward || browser.canGoBack)
@@ -7073,7 +7072,7 @@ var gIdentityHandler = {
     dt.setData("text/html", htmlString);
     dt.setDragImage(gProxyFavIcon, 16, 16);
   },
- 
+
   handleEvent: function (event) {
     switch (event.type) {
       case "blur":

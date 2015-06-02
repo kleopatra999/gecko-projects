@@ -414,11 +414,6 @@ test("debugger; @");
 // export
 
 test_no_fun_no_eval("export @");
-test_no_fun_no_eval("export x @");
-test_no_fun_no_eval("export x, @");
-test_no_fun_no_eval("export x, y @");
-test_no_fun_no_eval("export x, y; @");
-
 test_no_fun_no_eval("export { @");
 test_no_fun_no_eval("export { x @");
 test_no_fun_no_eval("export { x, @");
@@ -473,6 +468,54 @@ test_no_fun_no_eval("export const a = 1, b = @");
 test_no_fun_no_eval("export const a = 1, b = 2 @");
 test_no_fun_no_eval("export const a = 1, b = 2; @");
 
+test_no_fun_no_eval("export class @");
+test_no_fun_no_eval("export class Foo @");
+test_no_fun_no_eval("export class Foo {  @");
+test_no_fun_no_eval("export class Foo { constructor @");
+test_no_fun_no_eval("export class Foo { constructor( @");
+test_no_fun_no_eval("export class Foo { constructor() @");
+test_no_fun_no_eval("export class Foo { constructor() { @");
+test_no_fun_no_eval("export class Foo { constructor() {} @");
+test_no_fun_no_eval("export class Foo { constructor() {} } @");
+test_no_fun_no_eval("export class Foo { constructor() {} }; @");
+
+test_no_fun_no_eval("export default @");
+test_no_fun_no_eval("export default 1 @");
+test_no_fun_no_eval("export default 1; @");
+
+test_no_fun_no_eval("export default function @");
+test_no_fun_no_eval("export default function() @");
+test_no_fun_no_eval("export default function() { @");
+test_no_fun_no_eval("export default function() {} @");
+test_no_fun_no_eval("export default function() {}; @");
+
+test_no_fun_no_eval("export default function foo @");
+test_no_fun_no_eval("export default function foo( @");
+test_no_fun_no_eval("export default function foo() @");
+test_no_fun_no_eval("export default function foo() { @");
+test_no_fun_no_eval("export default function foo() {} @");
+test_no_fun_no_eval("export default function foo() {}; @");
+
+test_no_fun_no_eval("export default class @");
+test_no_fun_no_eval("export default class { @");
+test_no_fun_no_eval("export default class { constructor @");
+test_no_fun_no_eval("export default class { constructor( @");
+test_no_fun_no_eval("export default class { constructor() @");
+test_no_fun_no_eval("export default class { constructor() { @");
+test_no_fun_no_eval("export default class { constructor() {} @");
+test_no_fun_no_eval("export default class { constructor() {} } @");
+test_no_fun_no_eval("export default class { constructor() {} }; @");
+
+test_no_fun_no_eval("export default class Foo @");
+test_no_fun_no_eval("export default class Foo { @");
+test_no_fun_no_eval("export default class Foo { constructor @");
+test_no_fun_no_eval("export default class Foo { constructor( @");
+test_no_fun_no_eval("export default class Foo { constructor() @");
+test_no_fun_no_eval("export default class Foo { constructor() { @");
+test_no_fun_no_eval("export default class Foo { constructor() {} @");
+test_no_fun_no_eval("export default class Foo { constructor() {} } @");
+test_no_fun_no_eval("export default class Foo { constructor() {} }; @");
+
 // import
 
 test_no_fun_no_eval("import @");
@@ -499,6 +542,29 @@ test_no_fun_no_eval("import { x as y } from 'a'; @");
 
 test_no_fun_no_eval("import 'a' @");
 test_no_fun_no_eval("import 'a'; @");
+
+test_no_fun_no_eval("import * @");
+test_no_fun_no_eval("import * as @");
+test_no_fun_no_eval("import * as a @");
+test_no_fun_no_eval("import * as a from @");
+test_no_fun_no_eval("import * as a from 'a' @");
+test_no_fun_no_eval("import * as a from 'a'; @");
+
+test_no_fun_no_eval("import a @");
+test_no_fun_no_eval("import a, @");
+test_no_fun_no_eval("import a, * @");
+test_no_fun_no_eval("import a, * as @");
+test_no_fun_no_eval("import a, * as b @");
+test_no_fun_no_eval("import a, * as b from @");
+test_no_fun_no_eval("import a, * as b from 'c' @");
+test_no_fun_no_eval("import a, * as b from 'c'; @");
+
+test_no_fun_no_eval("import a, { @");
+test_no_fun_no_eval("import a, { b @");
+test_no_fun_no_eval("import a, { b } @");
+test_no_fun_no_eval("import a, { b } from @");
+test_no_fun_no_eval("import a, { b } from 'c' @");
+test_no_fun_no_eval("import a, { b } from 'c'; @");
 
 // label
 
@@ -977,7 +1043,6 @@ test("let ( x = 1, y = 2 ) { @");
 test("let ( x = 1, y = 2 ) { x @");
 test("let ( x = 1, y = 2 ) { x; @");
 test("let ( x = 1, y = 2 ) { x; } @");
-test_no_strict("let ( x = 1, y = 2 ) x @");
 
 // Expression closures
 
@@ -1013,22 +1078,6 @@ test("for each (let x @");
 test("for each (let x in @");
 test("for each (let x in y @");
 test("for each (let x in y) @");
-
-// let expression
-
-test("(let @");
-test("(let ( @");
-test("(let ( x @");
-test("(let ( x = @");
-test("(let ( x = 1 @");
-test("(let ( x = 1, @");
-test("(let ( x = 1, y @");
-test("(let ( x = 1, y = @");
-test("(let ( x = 1, y = 2 @");
-test("(let ( x = 1, y = 2 ) @");
-test("(let ( x = 1, y = 2 ) x @");
-test("(let ( x = 1, y = 2 ) x) @");
-test("(let ( x = 1, y = 2 ) x); @");
 
 // Legacy array comprehensions
 

@@ -140,6 +140,7 @@ typedef nsStyleTransformMatrix::TransformReferenceBox TransformReferenceBox;
 /* static */ bool nsLayoutUtils::sInvalidationDebuggingIsEnabled;
 /* static */ bool nsLayoutUtils::sCSSVariablesEnabled;
 /* static */ bool nsLayoutUtils::sInterruptibleReflowEnabled;
+/* static */ bool nsLayoutUtils::sSVGTransformOriginEnabled;
 
 static ViewID sScrollIdCounter = FrameMetrics::START_SCROLL_ID;
 
@@ -1064,6 +1065,13 @@ nsLayoutUtils::GetDisplayPort(nsIContent* aContent, nsRect *aResult)
   return GetDisplayPortImpl(aContent, aResult, 1.0f);
 }
 
+/* static */ bool
+nsLayoutUtils::GetDisplayPortForVisibilityTesting(nsIContent* aContent,
+                                                  nsRect* aResult)
+{
+  return GetDisplayPortImpl(aContent, aResult, 1.0f);
+}
+
 bool
 nsLayoutUtils::SetDisplayPortMargins(nsIContent* aContent,
                                      nsIPresShell* aPresShell,
@@ -1101,6 +1109,10 @@ nsLayoutUtils::SetDisplayPortMargins(nsIContent* aContent,
       rootFrame->SchedulePaint();
     }
   }
+
+  // Display port margins changing means that the set of visible images may
+  // have drastically changed. Schedule an update.
+  aPresShell->ScheduleImageVisibilityUpdate();
 
   return true;
 }
@@ -7051,6 +7063,8 @@ nsLayoutUtils::Initialize()
                                "layout.css.variables.enabled");
   Preferences::AddBoolVarCache(&sInterruptibleReflowEnabled,
                                "layout.interruptible-reflow.enabled");
+  Preferences::AddBoolVarCache(&sSVGTransformOriginEnabled,
+                               "svg.transform-origin.enabled");
 
   Preferences::RegisterCallback(GridEnabledPrefChangeCallback,
                                 GRID_ENABLED_PREF_NAME);
@@ -7642,25 +7656,31 @@ UpdateCompositionBoundsForRCDRSF(ParentLayerRect& aCompBounds,
   return false;
 }
 
-static bool
-DeflateScrollbarAreaFromCompositionBoundsFor(nsIFrame* aScrollFrame)
+/* static */ nsMargin
+nsLayoutUtils::ScrollbarAreaToExcludeFromCompositionBoundsFor(nsIFrame* aScrollFrame)
 {
   if (!aScrollFrame || !aScrollFrame->GetScrollTargetFrame()) {
-    return false;
+    return nsMargin();
   }
   nsPresContext* presContext = aScrollFrame->PresContext();
   nsIPresShell* presShell = presContext->GetPresShell();
   if (!presShell) {
-    return false;
+    return nsMargin();
   }
   bool isRootScrollFrame = aScrollFrame == presShell->GetRootScrollFrame();
   bool isRootContentDocRootScrollFrame = isRootScrollFrame
                                       && presContext->IsRootContentDocument();
-  // Exclude any non-overlay scroll bars from the composition bounds.
-  // This is only done for the RCD-RSF case, because otherwise the scroll
-  // port size is used and that already excludes the scroll bars.
-  return isRootContentDocRootScrollFrame &&
-         !LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars);
+  if (!isRootContentDocRootScrollFrame) {
+    return nsMargin();
+  }
+  if (LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars)) {
+    return nsMargin();
+  }
+  nsIScrollableFrame* scrollableFrame = aScrollFrame->GetScrollTargetFrame();
+  if (!scrollableFrame) {
+    return nsMargin();
+  }
+  return scrollableFrame->GetActualScrollbarSizes();
 }
 
 /* static */ nsSize
@@ -7690,9 +7710,8 @@ nsLayoutUtils::CalculateCompositionSizeForFrame(nsIFrame* aFrame, bool aSubtract
     }
   }
 
-  if (aSubtractScrollbars && DeflateScrollbarAreaFromCompositionBoundsFor(aFrame)) {
-    MOZ_ASSERT(scrollableFrame);
-    nsMargin margins = scrollableFrame->GetActualScrollbarSizes();
+  if (aSubtractScrollbars) {
+    nsMargin margins = ScrollbarAreaToExcludeFromCompositionBoundsFor(aFrame);
     size.width -= margins.LeftRight();
     size.height -= margins.TopBottom();
   }
@@ -7748,14 +7767,11 @@ nsLayoutUtils::CalculateRootCompositionSize(nsIFrame* aFrame,
 
   // Adjust composition size for the size of scroll bars.
   nsIFrame* rootRootScrollFrame = rootPresShell ? rootPresShell->GetRootScrollFrame() : nullptr;
-  if (DeflateScrollbarAreaFromCompositionBoundsFor(rootRootScrollFrame)) {
-    nsIScrollableFrame* rootScrollableFrame = rootRootScrollFrame->GetScrollTargetFrame();
-    MOZ_ASSERT(rootScrollableFrame);
-    CSSMargin margins = CSSMargin::FromAppUnits(rootScrollableFrame->GetActualScrollbarSizes());
-    // Scrollbars are not subject to scaling, so CSS pixels = layer pixels for them.
-    rootCompositionSize.width -= margins.LeftRight();
-    rootCompositionSize.height -= margins.TopBottom();
-  }
+  nsMargin scrollbarMargins = ScrollbarAreaToExcludeFromCompositionBoundsFor(rootRootScrollFrame);
+  CSSMargin margins = CSSMargin::FromAppUnits(scrollbarMargins);
+  // Scrollbars are not subject to scaling, so CSS pixels = layer pixels for them.
+  rootCompositionSize.width -= margins.LeftRight();
+  rootCompositionSize.height -= margins.TopBottom();
 
   return rootCompositionSize / aMetrics.DisplayportPixelsPerCSSPixel();
 }
@@ -8132,6 +8148,7 @@ nsLayoutUtils::ComputeFrameMetrics(nsIFrame* aForFrame,
                                    Layer* aLayer,
                                    ViewID aScrollParentId,
                                    const nsRect& aViewport,
+                                   const Maybe<nsRect>& aClipRect,
                                    bool aIsRoot,
                                    const ContainerLayerParameters& aContainerParameters)
 {
@@ -8212,6 +8229,13 @@ nsLayoutUtils::ComputeFrameMetrics(nsIFrame* aForFrame,
   metrics.SetIsRoot(aIsRoot);
   metrics.SetScrollParentId(aScrollParentId);
 
+  if (scrollId != FrameMetrics::NULL_SCROLL_ID && !presContext->GetParentPresContext()) {
+    if ((aScrollFrame && (aScrollFrame == presShell->GetRootScrollFrame())) ||
+        aContent == presShell->GetDocument()->GetDocumentElement()) {
+      metrics.SetIsLayersIdRoot(true);
+    }
+  }
+
   // Only the root scrollable frame for a given presShell should pick up
   // the presShell's resolution. All the other frames are 1.0.
   if (aScrollFrame == presShell->GetRootScrollFrame()) {
@@ -8259,6 +8283,13 @@ nsLayoutUtils::ComputeFrameMetrics(nsIFrame* aForFrame,
                               * metrics.GetCumulativeResolution()
                               * layerToParentLayerScale;
 
+  if (aClipRect) {
+    ParentLayerRect rect = LayoutDeviceRect::FromAppUnits(*aClipRect, auPerDevPixel)
+                         * metrics.GetCumulativeResolution()
+                         * layerToParentLayerScale;
+    metrics.SetClipRect(Some(RoundedToInt(rect)));
+  }
+
   // For the root scroll frame of the root content document (RCD-RSF), the above calculation
   // will yield the size of the viewport frame as the composition bounds, which
   // doesn't actually correspond to what is visible when
@@ -8275,13 +8306,10 @@ nsLayoutUtils::ComputeFrameMetrics(nsIFrame* aForFrame,
       compositionBounds, true, metrics.GetCumulativeResolution());
   }
 
-  if (DeflateScrollbarAreaFromCompositionBoundsFor(aScrollFrame)) {
-    MOZ_ASSERT(scrollableFrame);
-    nsMargin sizes = scrollableFrame->GetActualScrollbarSizes();
-    // Scrollbars are not subject to scaling, so CSS pixels = layer pixels for them.
-    ParentLayerMargin boundMargins = CSSMargin::FromAppUnits(sizes) * CSSToParentLayerScale(1.0f);
-    frameBounds.Deflate(boundMargins);
-  }
+  nsMargin sizes = ScrollbarAreaToExcludeFromCompositionBoundsFor(aScrollFrame);
+  // Scrollbars are not subject to scaling, so CSS pixels = layer pixels for them.
+  ParentLayerMargin boundMargins = CSSMargin::FromAppUnits(sizes) * CSSToParentLayerScale(1.0f);
+  frameBounds.Deflate(boundMargins);
 
   metrics.SetCompositionBounds(frameBounds);
 
@@ -8320,6 +8348,22 @@ nsLayoutUtils::ComputeFrameMetrics(nsIFrame* aForFrame,
   }
 
   return metrics;
+}
+
+/* static */ bool
+nsLayoutUtils::ContainsMetricsWithId(const Layer* aLayer, const ViewID& aScrollId)
+{
+  for (uint32_t i = aLayer->GetFrameMetricsCount(); i > 0; i--) {
+    if (aLayer->GetFrameMetrics(i-1).GetScrollId() == aScrollId) {
+      return true;
+    }
+  }
+  for (Layer* child = aLayer->GetFirstChild(); child; child = child->GetNextSibling()) {
+    if (ContainsMetricsWithId(child, aScrollId)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /* static */ uint32_t

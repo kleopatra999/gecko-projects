@@ -2,16 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* global loop, sinon */
-/* jshint newcap:false */
-
-var expect = chai.expect;
-
 describe("loop.shared.mixins", function() {
   "use strict";
 
+  var expect = chai.expect;
   var sandbox;
   var sharedMixins = loop.shared.mixins;
+  var TestUtils = React.addons.TestUtils;
   var ROOM_STATES = loop.store.ROOM_STATES;
 
   beforeEach(function() {
@@ -468,11 +465,9 @@ describe("loop.shared.mixins", function() {
           }
         };
 
-        beforeEach(function() {
-          view.updateVideoDimensions(localVideoDimensions, remoteVideoDimensions);
-        });
-
         it("should register video dimension updates correctly", function() {
+          view.updateVideoDimensions(localVideoDimensions, remoteVideoDimensions);
+
           expect(view._videoDimensionsCache.local.camera.width)
             .eql(localVideoDimensions.camera.width);
           expect(view._videoDimensionsCache.local.camera.height)
@@ -487,6 +482,24 @@ describe("loop.shared.mixins", function() {
           expect(view._videoDimensionsCache.remote.camera.aspectRatio.height)
             .eql(0.32857142857142857);
         });
+
+        it("should unregister video dimension updates correctly", function() {
+          view.updateVideoDimensions(localVideoDimensions, {});
+
+          expect("camera" in view._videoDimensionsCache.local).eql(true);
+          expect("camera" in view._videoDimensionsCache.remote).eql(false);
+        });
+
+        it("should not populate the cache on another component instance", function() {
+            view.updateVideoDimensions(localVideoDimensions, remoteVideoDimensions);
+
+            var view2 =
+              TestUtils.renderIntoDocument(React.createElement(TestComp));
+
+            expect(view2._videoDimensionsCache.local).to.be.empty;
+            expect(view2._videoDimensionsCache.remote).to.be.empty;
+        });
+
       });
     });
   });
@@ -498,7 +511,7 @@ describe("loop.shared.mixins", function() {
       navigator.mozLoop = {
         doNotDisturb: true,
         getAudioBlob: sinon.spy(function(name, callback) {
-          callback(null, new Blob([new ArrayBuffer(10)], {type: 'audio/ogg'}));
+          callback(null, new Blob([new ArrayBuffer(10)], {type: "audio/ogg"}));
         })
       };
 

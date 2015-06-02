@@ -192,13 +192,14 @@ TextureSourceD3D9::InitTextures(DeviceManagerD3D9* aDeviceManager,
   }
 
   tmpTexture->GetSurfaceLevel(0, byRef(aSurface));
-  aSurface->LockRect(&aLockedRect, nullptr, 0);
-  if (!aLockedRect.pBits) {
-    NS_WARNING("Could not lock surface");
+  
+  HRESULT hr = aSurface->LockRect(&aLockedRect, nullptr, 0);
+  if (FAILED(hr) || !aLockedRect.pBits) {
+    gfxCriticalError() << "Failed to lock rect initialize texture in D3D9 " << hexa(hr);
     return nullptr;
   }
 
-  return result;
+  return result.forget();
 }
 
 /**
@@ -246,7 +247,7 @@ TextureSourceD3D9::DataToTexture(DeviceManagerD3D9* aDeviceManager,
 
   FinishTextures(aDeviceManager, texture, surface);
 
-  return texture;
+  return texture.forget();
 }
 
 TemporaryRef<IDirect3DTexture9>
@@ -270,7 +271,7 @@ TextureSourceD3D9::TextureToTexture(DeviceManagerD3D9* aDeviceManager,
     return nullptr;
   }
 
-  return texture;
+  return texture.forget();
 }
 
 TemporaryRef<IDirect3DTexture9>
@@ -311,7 +312,7 @@ TextureSourceD3D9::SurfaceToTexture(DeviceManagerD3D9* aDeviceManager,
 
   FinishTextures(aDeviceManager, texture, surface);
 
-  return texture;
+  return texture.forget();
 }
 
 DataTextureSourceD3D9::DataTextureSourceD3D9(gfx::SurfaceFormat aFormat,
@@ -585,7 +586,7 @@ CairoTextureClientD3D9::CreateSimilar(TextureFlags aFlags, TextureAllocationFlag
     return nullptr;
   }
 
-  return tex;
+  return tex.forget();
 }
 
 bool
@@ -707,7 +708,11 @@ CairoTextureClientD3D9::BorrowDrawTarget()
     // windows surface optimization.
     // Instead we have to use a gfxImageSurface and fallback for font drawing.
     D3DLOCKED_RECT rect;
-    mD3D9Surface->LockRect(&rect, nullptr, 0);
+    HRESULT hr = mD3D9Surface->LockRect(&rect, nullptr, 0);
+    if (FAILED(hr) || !rect.pBits) {
+      gfxCriticalError() << "Failed to lock rect borrowing the target in D3D9 " << hexa(hr);
+      return nullptr;
+    }
     mSurface = new gfxImageSurface((uint8_t*)rect.pBits, mSize,
                                    rect.Pitch, SurfaceFormatToImageFormat(mFormat));
     mLockRect = true;
@@ -782,7 +787,7 @@ SharedTextureClientD3D9::Create(ISurfaceAllocator* aAllocator,
   if (texture->mTexture) {
     gfxWindowsPlatform::sD3D9SharedTextureUsed += texture->mDesc.Width * texture->mDesc.Height * 4;
   }
-  return texture;
+  return texture.forget();
 }
 
 bool

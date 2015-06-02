@@ -100,7 +100,18 @@ MOZ_ANDROID_MLS_STUMBLER=1
 MOZ_ANDROID_DOWNLOADS_INTEGRATION=1
 
 # Enable Tab Queue
-MOZ_ANDROID_TAB_QUEUE=1
+if test "$NIGHTLY_BUILD"; then
+  MOZ_ANDROID_TAB_QUEUE=1
+fi
 
 # Use the low-memory GC tuning.
 export JS_GC_SMALL_CHUNK_SIZE=1
+
+# Enable checking that add-ons are signed by the trusted root
+MOZ_ADDON_SIGNING=1
+if test "$MOZ_OFFICIAL_BRANDING"; then
+  if test "$MOZ_UPDATE_CHANNEL" = "beta" -o \
+          "$MOZ_UPDATE_CHANNEL" = "release"; then
+    MOZ_REQUIRE_SIGNING=1
+  fi
+fi

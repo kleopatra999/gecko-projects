@@ -102,6 +102,7 @@ MOZBUILD_VARIABLES = [
     'MODULE',
     'NO_DIST_INSTALL',
     'NO_EXPAND_LIBS',
+    'NO_INTERFACES_MANIFEST',
     'NO_JS_MANIFEST',
     'OS_LIBS',
     'PARALLEL_DIRS',
@@ -453,9 +454,16 @@ class RecursiveMakeBackend(CommonBackend):
                 '.rs': 'RSSRCS',
                 '.S': 'SSRCS',
             }
-            var = suffix_map[obj.canonical_suffix]
+            variables = [suffix_map[obj.canonical_suffix]]
+            if isinstance(obj, GeneratedSources):
+                variables.append('GARBAGE')
+                base = backend_file.objdir
+            else:
+                base = backend_file.srcdir
             for f in sorted(obj.files):
-                backend_file.write('%s += %s\n' % (var, f))
+                f = mozpath.relpath(f, base)
+                for var in variables:
+                    backend_file.write('%s += %s\n' % (var, f))
         elif isinstance(obj, HostSources):
             suffix_map = {
                 '.c': 'HOST_CSRCS',
@@ -464,7 +472,8 @@ class RecursiveMakeBackend(CommonBackend):
             }
             var = suffix_map[obj.canonical_suffix]
             for f in sorted(obj.files):
-                backend_file.write('%s += %s\n' % (var, f))
+                backend_file.write('%s += %s\n' % (
+                    var, mozpath.relpath(f, backend_file.srcdir)))
         elif isinstance(obj, VariablePassthru):
             # Sorted so output is consistent and we don't bump mtimes.
             for k, v in sorted(obj.variables.items()):
@@ -930,7 +939,8 @@ class RecursiveMakeBackend(CommonBackend):
 INSTALL_TARGETS += %(prefix)s
 """ % { 'prefix': prefix,
         'dest': '$(DEPTH)/_tests/%s' % path,
-        'files': ' '.join(files) })
+        'files': ' '.join(mozpath.relpath(f, backend_file.objdir)
+                          for f in files) })
 
     def _process_resources(self, obj, resources, backend_file):
         dep_path = mozpath.join(self.environment.topobjdir, '_build_manifests', '.deps', 'install')
@@ -1072,6 +1082,22 @@ INSTALL_TARGETS += %(prefix)s
         rules = StringIO()
         mk.dump(rules, removal_guard=False)
 
+        # Write out manifests defining interfaces
+        dist_dir = mozpath.join(self.environment.topobjdir, 'dist')
+        for manifest, entries in manager.interface_manifests.items():
+            path = mozpath.join(self.environment.topobjdir, manifest)
+            with self._write_file(path) as fh:
+                for xpt in sorted(entries):
+                    fh.write('interfaces %s\n' % xpt)
+
+            if install_target.startswith('dist/'):
+                path = mozpath.relpath(path, dist_dir)
+                prefix, subpath = path.split('/', 1)
+                key = 'dist_%s' % prefix
+                self._install_manifests[key].add_optional_exists(subpath)
+
+        chrome_manifests = [mozpath.join('$(DEPTH)', m) for m in sorted(manager.chrome_manifests)]
+
         # Create dependency for output header so we force regeneration if the
         # header was deleted. This ideally should not be necessary. However,
         # some processes (such as PGO at the time this was implemented) wipe
@@ -1086,6 +1112,7 @@ INSTALL_TARGETS += %(prefix)s
         obj.topobjdir = self.environment.topobjdir
         obj.config = self.environment
         self._create_makefile(obj, extra=dict(
+            chrome_manifests = ' '.join(chrome_manifests),
             xpidl_rules=rules.getvalue(),
             xpidl_modules=' '.join(xpt_modules),
             xpt_files=' '.join(sorted(xpt_files)),

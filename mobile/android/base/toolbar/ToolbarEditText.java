@@ -531,6 +531,10 @@ public class ToolbarEditText extends CustomEditText
                 String text = voiceStrings.get(0);
                 setText(text);
                 setSelection(0, text.length());
+
+                final InputMethodManager imm =
+                        (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                imm.showSoftInput(ToolbarEditText.this, InputMethodManager.SHOW_IMPLICIT);
             }
         });
     }
@@ -723,6 +727,8 @@ public class ToolbarEditText extends CustomEditText
         @Override
         public boolean onTouch(View v, MotionEvent event) {
             boolean tapped;
+            final int action = event.getActionMasked();
+
             switch (mVoiceSearchIconIndex) {
                 case 0:
                     tapped = event.getX() < (getPaddingLeft() + mVoiceSearchIcon.getIntrinsicWidth());
@@ -733,7 +739,7 @@ public class ToolbarEditText extends CustomEditText
                 default:
                     tapped = false;
             }
-            if (tapped) {
+            if (tapped && (action == MotionEvent.ACTION_DOWN)) {
                 launchVoiceRecognizer();
             }
             return tapped;

@@ -430,6 +430,7 @@ struct WellKnownSymbols
 {
     js::ImmutableSymbolPtr iterator;
     js::ImmutableSymbolPtr match;
+    js::ImmutableSymbolPtr species;
 
     const ImmutableSymbolPtr& get(size_t u) const {
         MOZ_ASSERT(u < JS::WellKnownSymbolLimit);
@@ -679,6 +680,9 @@ struct JSRuntime : public JS::shadow::Runtime,
      * Value of asyncCause to be attached to asyncStackForNewActivations.
      */
     JSString* asyncCauseForNewActivations;
+
+    /* If non-null, report JavaScript entry points to this monitor. */
+    JS::dbg::AutoEntryMonitor* entryMonitor;
 
     js::Activation* const* addressOfActivation() const {
         return &activation_;
@@ -1073,6 +1077,9 @@ struct JSRuntime : public JS::shadow::Runtime,
     /* Had an out-of-memory error which did not populate an exception. */
     bool                hadOutOfMemory;
 
+    /* We are curently deleting an object due to an initialization failure. */
+    mozilla::DebugOnly<bool> handlingInitFailure;
+
     /* A context has been created on this runtime. */
     bool                haveCreatedContext;
 
@@ -1320,7 +1327,7 @@ struct JSRuntime : public JS::shadow::Runtime,
     // Cache for jit::GetPcScript().
     js::jit::PcScriptCache* ionPcScriptCache;
 
-    js::DefaultJSContextCallback defaultJSContextCallback;
+    js::ScriptEnvironmentPreparer* scriptEnvironmentPreparer;
 
     js::CTypesActivityCallback  ctypesActivityCallback;
 
@@ -1485,9 +1492,22 @@ struct JSRuntime : public JS::shadow::Runtime,
          */
         js::PerformanceData performance;
 
+        /**
+         * Callback used to ask the embedding to determine in which
+         * Performance Group the current execution belongs. Typically, this is
+         * used to regroup JSCompartments from several iframes from the same
+         * page or from several compartments of the same addon into a single
+         * Performance Group.
+         *
+         * May be `nullptr`, in which case we put all the JSCompartments
+         * in the same PerformanceGroup.
+         */
+        JSCurrentPerfGroupCallback currentPerfGroupCallback;
+
         Stopwatch()
           : iteration(0)
           , isEmpty(true)
+          , currentPerfGroupCallback(nullptr)
           , isActive_(false)
         { }
 
@@ -1920,6 +1940,71 @@ class AutoEnterIonCompilation
     }
 
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+};
+
+/*
+ * AutoInitGCManagedObject is a wrapper for use when initializing a object whose
+ * lifetime is managed by the GC.  It ensures that the object is destroyed if
+ * initialization fails but also allows us to assert the invariant that such
+ * objects are only destroyed in this way or by the GC.
+ *
+ * It has a limited interface but is a drop-in replacement for UniquePtr<T> is
+ * this situation.  For example:
+ *
+ *   AutoInitGCManagedObject<MyClass> ptr(cx->make_unique<MyClass>());
+ *   if (!ptr) {
+ *     ReportOutOfMemory(cx);
+ *     return nullptr;
+ *   }
+ *
+ *   if (!ptr->init(cx))
+ *     return nullptr;    // Object destroyed here if init() failed.
+ *
+ *   object->setPrivate(ptr.release());
+ *   // Initialization successful, ptr is now owned through another object.
+ */
+template <typename T>
+class MOZ_STACK_CLASS AutoInitGCManagedObject
+{
+    typedef mozilla::UniquePtr<T, JS::DeletePolicy<T>> UniquePtrT;
+
+    UniquePtrT ptr_;
+
+  public:
+    explicit AutoInitGCManagedObject(UniquePtrT&& ptr)
+      : ptr_(mozilla::Move(ptr))
+    {}
+
+    ~AutoInitGCManagedObject() {
+#ifdef DEBUG
+        if (ptr_) {
+            JSRuntime* rt = TlsPerThreadData.get()->runtimeFromMainThread();
+            MOZ_ASSERT(!rt->handlingInitFailure);
+            rt->handlingInitFailure = true;
+            ptr_.reset(nullptr);
+            rt->handlingInitFailure = false;
+        }
+#endif
+    }
+
+    T& operator*() const {
+        return *ptr_.get();
+    }
+
+    T* operator->() const {
+        return ptr_.get();
+    }
+
+    explicit operator bool() const {
+        return ptr_.get() != nullptr;
+    }
+
+    T* release() {
+        return ptr_.release();
+    }
+
+    AutoInitGCManagedObject(const AutoInitGCManagedObject<T>& other) = delete;
+    AutoInitGCManagedObject& operator=(const AutoInitGCManagedObject<T>& other) = delete;
 };
 
 } /* namespace js */

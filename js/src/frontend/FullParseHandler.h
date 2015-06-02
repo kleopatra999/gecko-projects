@@ -53,6 +53,9 @@ class FullParseHandler
         return tokenStream.currentToken().pos;
     }
 
+    inline ParseNode* makeAssignmentFromArg(ParseNode* arg, ParseNode* lhs, ParseNode* rhs);
+    inline void replaceLastFunctionArgument(ParseNode* funcpn, ParseNode* pn);
+
   public:
 
     /*
@@ -253,7 +256,7 @@ class FullParseHandler
         if (!elision)
             return false;
         literal->append(elision);
-        literal->pn_xflags |= PNX_SPECIALARRAYINIT | PNX_NONCONST;
+        literal->pn_xflags |= PNX_ARRAYHOLESPREAD | PNX_NONCONST;
         return true;
     }
 
@@ -263,7 +266,7 @@ class FullParseHandler
         if (!spread)
             return null();
         literal->append(spread);
-        literal->pn_xflags |= PNX_SPECIALARRAYINIT | PNX_NONCONST;
+        literal->pn_xflags |= PNX_ARRAYHOLESPREAD | PNX_NONCONST;
         return true;
     }
 
@@ -461,6 +464,10 @@ class FullParseHandler
         return pn;
     }
 
+    ParseNode* newExportDefaultDeclaration(ParseNode* kid, const TokenPos& pos) {
+        return new_<UnaryNode>(PNK_EXPORT_DEFAULT, JSOP_NOP, pos, kid);
+    }
+
     ParseNode* newExprStatement(ParseNode* expr, uint32_t end) {
         MOZ_ASSERT(expr->pn_pos.end <= end);
         return new_<UnaryNode>(PNK_SEMI, JSOP_NOP, TokenPos(expr->pn_pos.begin, end), expr);
@@ -568,7 +575,8 @@ class FullParseHandler
     inline bool addCatchBlock(ParseNode* catchList, ParseNode* letBlock,
                               ParseNode* catchName, ParseNode* catchGuard, ParseNode* catchBody);
 
-    inline void setLastFunctionArgumentDefault(ParseNode* funcpn, ParseNode* pn);
+    inline bool setLastFunctionArgumentDefault(ParseNode* funcpn, ParseNode* pn);
+    inline void setLastFunctionArgumentDestructuring(ParseNode* funcpn, ParseNode* pn);
 
     ParseNode* newFunctionDefinition() {
         return new_<CodeNode>(pos());
@@ -589,14 +597,6 @@ class FullParseHandler
     }
     void setLexicalScopeBody(ParseNode* block, ParseNode* body) {
         block->pn_expr = body;
-    }
-
-    ParseNode* newLetExpression(ParseNode* vars, ParseNode* block, const TokenPos& pos) {
-        ParseNode* letExpr = newBinary(PNK_LETEXPR, vars, block);
-        if (!letExpr)
-            return nullptr;
-        letExpr->pn_pos = pos;
-        return letExpr;
     }
 
     ParseNode* newLetBlock(ParseNode* vars, ParseNode* block, const TokenPos& pos) {
@@ -825,12 +825,56 @@ FullParseHandler::addCatchBlock(ParseNode* catchList, ParseNode* letBlock,
     return true;
 }
 
+inline ParseNode*
+FullParseHandler::makeAssignmentFromArg(ParseNode* arg, ParseNode* lhs, ParseNode* rhs)
+{
+    return newBinary(PNK_ASSIGN, lhs, rhs, JSOP_NOP);
+}
+
 inline void
+FullParseHandler::replaceLastFunctionArgument(ParseNode* funcpn, ParseNode* pn)
+{
+    funcpn->pn_body->pn_pos.end = pn->pn_pos.end;
+    ParseNode* pnchild = funcpn->pn_body->pn_head;
+    ParseNode* pnlast = funcpn->pn_body->last();
+    MOZ_ASSERT(pnchild);
+    if (pnchild == pnlast) {
+        funcpn->pn_body->pn_head = pn;
+    } else {
+        while (pnchild->pn_next != pnlast) {
+            MOZ_ASSERT(pnchild->pn_next);
+            pnchild = pnchild->pn_next;
+        }
+        pnchild->pn_next = pn;
+    }
+    funcpn->pn_body->pn_tail = &pn->pn_next;
+}
+
+inline bool
 FullParseHandler::setLastFunctionArgumentDefault(ParseNode* funcpn, ParseNode* defaultValue)
 {
     ParseNode* arg = funcpn->pn_body->last();
-    arg->pn_dflags |= PND_DEFAULT;
-    arg->pn_expr = defaultValue;
+    MOZ_ASSERT(arg->isKind(PNK_NAME));
+    ParseNode* lhs = arg->pn_expr ? arg->pn_expr : arg;
+    ParseNode* pn = makeAssignmentFromArg(arg, lhs, defaultValue);
+    if (!pn)
+        return false;
+
+    if (arg->pn_expr)
+        arg->pn_expr = pn;
+    else
+        replaceLastFunctionArgument(funcpn, pn);
+    return true;
+}
+
+inline void
+FullParseHandler::setLastFunctionArgumentDestructuring(ParseNode* funcpn, ParseNode* destruct)
+{
+    ParseNode* arg = funcpn->pn_body->last();
+    MOZ_ASSERT(arg->isKind(PNK_NAME));
+    MOZ_ASSERT(!arg->isUsed());
+    MOZ_ASSERT(arg->isDefn());
+    arg->pn_expr = destruct;
 }
 
 inline bool

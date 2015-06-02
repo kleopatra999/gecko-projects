@@ -15,7 +15,6 @@ include protocol PContentBridge;
 include protocol PContentPermissionRequest;
 include protocol PCycleCollectWithLogs;
 include protocol PCrashReporter;
-include protocol PDocAccessible;
 include protocol PPSMContentDownloader;
 include protocol PExternalHelperApp;
 include protocol PDeviceStorageRequest;
@@ -422,7 +421,6 @@ prio(normal upto urgent) sync protocol PContent
     manages PContentPermissionRequest;
     manages PCrashReporter;
     manages PCycleCollectWithLogs;
-    manages PDocAccessible;
     manages PDeviceStorageRequest;
     manages PFileSystemRequest;
     manages PPSMContentDownloader;
@@ -565,6 +563,7 @@ child:
 
     AppInfo(nsCString version, nsCString buildID, nsCString name, nsCString UAName,
             nsCString ID, nsCString vendor);
+    AppInit();
 
     // Notify child that last-pb-context-exited notification was observed
     LastPrivateDocShellDestroyed();
@@ -631,7 +630,6 @@ child:
     InvokeDragSession(IPCDataTransfer[] transfers, uint32_t action);
 
     EndDragSession(bool aDoneDrag, bool aUserCancelled);
-    NuwaFreeze();
 
     async DomainSetChanged(uint32_t aSetType, uint32_t aChangeType, OptionalURIParams aDomain);
 
@@ -654,14 +652,6 @@ child:
      */
     GamepadUpdate(GamepadChangeEvent aGamepadEvent);
 parent:
-    /**
-     * Tell the parent process a new accessible document has been created.
-     * aParentDoc is the accessible document it was created in if any, and
-     * aParentAcc is the id of the accessible in that document the new document
-     * is a child of.
-     */
-    PDocAccessible(nullable PDocAccessible aParentDoc, uint64_t aParentAcc);
-
     /**
      * Tell the content process some attributes of itself.  This is
      * among the first information queried by content processes after
@@ -898,9 +888,6 @@ parent:
     async SystemMessageHandled();
 
     NuwaReady();
-    // Sent when nuwa finished its initialization process and is waiting for
-    // parent's signal to make it freeze.
-    NuwaWaitForFreeze();
 
     sync AddNewProcess(uint32_t pid, ProtocolFdMapping[] aFds);
 

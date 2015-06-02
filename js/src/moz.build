@@ -213,7 +213,6 @@ UNIFIED_SOURCES += [
     'jit/JSONSpewer.cpp',
     'jit/LICM.cpp',
     'jit/LIR.cpp',
-    'jit/LiveRangeAllocator.cpp',
     'jit/LoopUnroller.cpp',
     'jit/Lowering.cpp',
     'jit/MacroAssembler.cpp',
@@ -295,6 +294,7 @@ UNIFIED_SOURCES += [
     'vm/NativeObject.cpp',
     'vm/ObjectGroup.cpp',
     'vm/PIC.cpp',
+    'vm/Printer.cpp',
     'vm/Probes.cpp',
     'vm/ProxyObject.cpp',
     'vm/ReceiverGuard.cpp',
@@ -539,6 +539,11 @@ if CONFIG['_MSC_VER']:
     # But given the conversion from bool is specified, and this is a
     # pattern widely used in code in js/src, suppress this warning here.
     CXXFLAGS += ['-wd4805']
+    # C4661 ("no suitable definition provided for explicit template
+    # instantiation request") is emitted for all Parser methods that
+    # have a Parser<FullParseHandler> definition but no
+    # Parser<SyntaxParseHandler> definition, see bug 1167030.
+    CXXFLAGS += ['-wd4661']
     CXXFLAGS += ['-we4067', '-we4258', '-we4275']
 
 if CONFIG['OS_ARCH'] not in ('WINNT', 'HP-UX'):

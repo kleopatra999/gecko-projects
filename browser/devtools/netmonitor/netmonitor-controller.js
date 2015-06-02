@@ -368,7 +368,9 @@ function TargetEventsHandler() {
 }
 
 TargetEventsHandler.prototype = {
-  get target() NetMonitorController._target,
+  get target() {
+    return NetMonitorController._target;
+  },
 
   /**
    * Listen for events emitted by the current tab target.
@@ -448,8 +450,13 @@ function NetworkEventsHandler() {
 }
 
 NetworkEventsHandler.prototype = {
-  get client() NetMonitorController._target.client,
-  get webConsoleClient() NetMonitorController.webConsoleClient,
+  get client() {
+    return NetMonitorController._target.client;
+  },
+
+  get webConsoleClient() {
+    return NetMonitorController.webConsoleClient;
+  },
 
   /**
    * Connect to the current target client.
@@ -763,7 +770,9 @@ NetMonitorController.NetworkEventsHandler = new NetworkEventsHandler();
  */
 Object.defineProperties(window, {
   "gNetwork": {
-    get: function() NetMonitorController.NetworkEventsHandler,
+    get: function() {
+      return NetMonitorController.NetworkEventsHandler;
+    },
     configurable: true
   }
 });
@@ -799,7 +808,12 @@ function whenDataAvailable(aDataStore, aMandatoryFields) {
 };
 
 const WDA_DEFAULT_VERIFY_INTERVAL = 50; // ms
-const WDA_DEFAULT_GIVE_UP_TIMEOUT = 2000; // ms
+
+// Use longer timeout during testing as the tests need this process to succeed
+// and two seconds is quite short on slow debug builds. The timeout here should
+// be at least equal to the general mochitest timeout of 45 seconds so that this
+// never gets hit during testing.
+const WDA_DEFAULT_GIVE_UP_TIMEOUT = gDevTools.testing ? 45000 : 2000; // ms
 
 /**
  * Helper method for debugging.

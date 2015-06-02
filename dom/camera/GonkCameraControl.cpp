@@ -179,7 +179,7 @@ nsGonkCameraControl::Initialize()
   mCurrentConfiguration.mRecorderProfile.Truncate();
 
   // Initialize our camera configuration database.
-  PullParametersImpl();
+  mCameraHw->PullParameters(mParams);
 
   // Set preferred preview frame format.
   mParams.Set(CAMERA_PARAM_PREVIEWFORMAT, NS_LITERAL_STRING("yuv420sp"));
@@ -1127,7 +1127,13 @@ nsGonkCameraControl::PullParametersImpl()
   DOM_CAMERA_LOGI("Pulling camera parameters\n");
   RETURN_IF_NO_CAMERA_HW();
 
-  return mCameraHw->PullParameters(mParams);
+  nsresult rv = mCameraHw->PullParameters(mParams);
+  mParams.Get(CAMERA_PARAM_THUMBNAILSIZE, mLastThumbnailSize);
+  mParams.Get(CAMERA_PARAM_PICTURE_SIZE, mCurrentConfiguration.mPictureSize);
+  mParams.Get(CAMERA_PARAM_PREVIEWSIZE, mCurrentConfiguration.mPreviewSize);
+  mParams.Get(CAMERA_PARAM_VIDEOSIZE, mLastRecorderSize);
+
+  return rv;
 }
 
 nsresult
@@ -2246,12 +2252,7 @@ OnSystemError(nsGonkCameraControl* gc,
               CameraControlListener::SystemContext aWhere,
               int32_t aArg1, int32_t aArg2)
 {
-#ifdef PR_LOGGING
   DOM_CAMERA_LOGE("OnSystemError : aWhere=%d, aArg1=%d, aArg2=%d\n", aWhere, aArg1, aArg2);
-#else
-  unused << aArg1;
-  unused << aArg2;
-#endif
   gc->OnSystemError(aWhere, NS_ERROR_FAILURE);
 }
 

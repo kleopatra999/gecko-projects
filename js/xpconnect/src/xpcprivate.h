@@ -605,10 +605,12 @@ public:
     void AddContextCallback(xpcContextCallback cb);
     void RemoveContextCallback(xpcContextCallback cb);
 
-    static JSContext* DefaultJSContextCallback(JSRuntime* rt);
+    struct EnvironmentPreparer : public js::ScriptEnvironmentPreparer {
+        bool invoke(JS::HandleObject scope, Closure& closure) override;
+    };
+    EnvironmentPreparer mEnvironmentPreparer;
+
     static void ActivityCallback(void* arg, bool active);
-    static void CTypesActivityCallback(JSContext* cx,
-                                       js::CTypesActivityType type);
     static bool InterruptCallback(JSContext* cx);
 
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf);
@@ -820,8 +822,8 @@ public:
 
     XPCCallContext(XPCContext::LangType callerLanguage,
                    JSContext* cx,
-                   JS::HandleObject obj    = JS::NullPtr(),
-                   JS::HandleObject funobj = JS::NullPtr(),
+                   JS::HandleObject obj    = nullptr,
+                   JS::HandleObject funobj = nullptr,
                    JS::HandleId id         = JSID_VOIDHANDLE,
                    unsigned argc           = NO_ARGS,
                    jsval* argv             = nullptr,
@@ -1285,7 +1287,7 @@ public:
                           jsval* pval)
         {MOZ_ASSERT(IsConstant(),
                     "Only call this if you're sure this is a constant!");
-         return Resolve(ccx, iface, JS::NullPtr(), pval);}
+         return Resolve(ccx, iface, nullptr, pval);}
 
     bool NewFunctionObject(XPCCallContext& ccx, XPCNativeInterface* iface,
                            JS::HandleObject parent, jsval* pval);
@@ -2842,14 +2844,8 @@ struct XPCJSContextInfo {
 };
 
 namespace xpc {
-
-// These functions are used in a few places where a callback model makes it
-// impossible to push a JSContext using one of our stack-scoped classes. We
-// depend on those stack-scoped classes to maintain nsIScriptContext
-// invariants, so these functions may only be used of the context is not
-// associated with an nsJSContext/nsIScriptContext.
-bool PushJSContextNoScriptContext(JSContext* aCx);
-void PopJSContextNoScriptContext();
+bool PushNullJSContext();
+void PopNullJSContext();
 
 } /* namespace xpc */
 
@@ -2890,8 +2886,8 @@ public:
 
 private:
     friend class mozilla::dom::danger::AutoCxPusher;
-    friend bool xpc::PushJSContextNoScriptContext(JSContext* aCx);
-    friend void xpc::PopJSContextNoScriptContext();
+    friend bool xpc::PushNullJSContext();
+    friend void xpc::PopNullJSContext();
 
     // We make these private so that stack manipulation can only happen
     // through one of the above friends.
@@ -3400,6 +3396,7 @@ struct GlobalProperties {
     bool File : 1;
     bool crypto : 1;
     bool rtcIdentityProvider : 1;
+    bool fetch : 1;
 };
 
 // Infallible.
@@ -3511,7 +3508,7 @@ public:
     { }
 
     JSObject* ToJSObject(JSContext* cx) {
-        JS::RootedObject obj(cx, JS_NewObjectWithGivenProto(cx, nullptr, JS::NullPtr()));
+        JS::RootedObject obj(cx, JS_NewObjectWithGivenProto(cx, nullptr, nullptr));
         if (!obj)
             return nullptr;
 
@@ -3724,8 +3721,17 @@ public:
 
     const nsACString& GetLocation() {
         if (location.IsEmpty() && locationURI) {
-            if (NS_FAILED(locationURI->GetSpec(location)))
+
+            nsCOMPtr<nsIXPConnectWrappedJS> jsLocationURI =
+                 do_QueryInterface(locationURI);
+            if (jsLocationURI) {
+                // We cannot call into JS-implemented nsIURI objects, because
+                // we are iterating over the JS heap at this point.
+                location =
+                    NS_LITERAL_CSTRING("<JS-implemented nsIURI location>");
+            } else if (NS_FAILED(locationURI->GetSpec(location))) {
                 location = NS_LITERAL_CSTRING("<unknown location>");
+            }
         }
         return location;
     }

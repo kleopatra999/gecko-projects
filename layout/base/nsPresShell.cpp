@@ -18,7 +18,7 @@
 
 /* a presentation of a document, part 2 */
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/CSSStyleSheet.h"
@@ -30,6 +30,7 @@
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MouseEvents.h"
+#include "mozilla/Snprintf.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
 #include "mozilla/UniquePtr.h"
@@ -899,6 +900,7 @@ PresShell::Init(nsIDocument* aDocument,
   if (TouchCaretPrefEnabled() && !AccessibleCaretEnabled()) {
     // Create touch caret handle
     mTouchCaret = new TouchCaret(this);
+    mTouchCaret->Init();
   }
 
   if (SelectionCaretPrefEnabled() && !AccessibleCaretEnabled()) {
@@ -1011,14 +1013,14 @@ LogTextPerfStats(gfxTextPerfMetrics* aTextPerf,
 
   switch (aLogType) {
     case eLog_reflow:
-      sprintf(prefix, "(textperf-reflow) %p time-ms: %7.0f", aPresShell, aTime);
+      snprintf_literal(prefix, "(textperf-reflow) %p time-ms: %7.0f", aPresShell, aTime);
       break;
     case eLog_loaddone:
-      sprintf(prefix, "(textperf-loaddone) %p time-ms: %7.0f", aPresShell, aTime);
+      snprintf_literal(prefix, "(textperf-loaddone) %p time-ms: %7.0f", aPresShell, aTime);
       break;
     default:
       MOZ_ASSERT(aLogType == eLog_totals, "unknown textperf log type");
-      sprintf(prefix, "(textperf-totals) %p", aPresShell);
+      snprintf_literal(prefix, "(textperf-totals) %p", aPresShell);
   }
 
   double hitRatio = 0.0;
@@ -1028,7 +1030,7 @@ LogTextPerfStats(gfxTextPerfMetrics* aTextPerf,
   }
 
   if (aLogType == eLog_loaddone) {
-    PR_LOG(tpLog, logLevel,
+    MOZ_LOG(tpLog, logLevel,
            ("%s reflow: %d chars: %d "
             "[%s] "
             "content-textruns: %d chrome-textruns: %d "
@@ -1048,7 +1050,7 @@ LogTextPerfStats(gfxTextPerfMetrics* aTextPerf,
             aCounts.textrunConst, aCounts.textrunDestr,
             aTextPerf->cumulative.textrunDestr));
   } else {
-    PR_LOG(tpLog, logLevel,
+    MOZ_LOG(tpLog, logLevel,
            ("%s reflow: %d chars: %d "
             "content-textruns: %d chrome-textruns: %d "
             "max-textrun-len: %d "
@@ -2554,6 +2556,27 @@ PresShell::CheckVisibilityContent(nsIContent* aNode, int16_t aStartOffset,
   return NS_OK;
 }
 
+NS_IMETHODIMP
+PresShell::GetSelectionCaretsVisibility(bool* aOutVisibility)
+{
+  *aOutVisibility = (SelectionCaretPrefEnabled() &&
+    mSelectionCarets && mSelectionCarets->GetVisibility());
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+PresShell::SetSelectionCaretsVisibility(bool aVisibility)
+{
+  if (SelectionCaretPrefEnabled() && mSelectionCarets) {
+    if (aVisibility) {
+      mSelectionCarets->UpdateSelectionCarets();
+    } else {
+      mSelectionCarets->SetVisibility(false);
+    }
+  }
+  return NS_OK;
+}
+
 //end implementations nsISelectionController
 
 nsIFrame*
@@ -2697,7 +2720,7 @@ PresShell::BeginLoad(nsIDocument *aDocument)
     if (uri) {
       uri->GetSpec(spec);
     }
-    PR_LOG(gLog, PR_LOG_DEBUG,
+    MOZ_LOG(gLog, PR_LOG_DEBUG,
            ("(presshell) %p load begin [%s]\n",
             this, spec.get()));
   }
@@ -2731,7 +2754,7 @@ PresShell::LoadComplete()
       uri->GetSpec(spec);
     }
     if (shouldLog) {
-      PR_LOG(gLog, PR_LOG_DEBUG,
+      MOZ_LOG(gLog, PR_LOG_DEBUG,
              ("(presshell) %p load done time-ms: %9.2f [%s]\n",
               this, loadTime.ToMilliseconds(), spec.get()));
     }
@@ -5917,7 +5940,9 @@ PresShell::MarkImagesInSubtreeVisible(nsIFrame* aFrame, const nsRect& aRect)
   nsIScrollableFrame* scrollFrame = do_QueryFrame(aFrame);
   if (scrollFrame) {
     nsRect displayPort;
-    bool usingDisplayport = nsLayoutUtils::GetDisplayPort(aFrame->GetContent(), &displayPort);
+    bool usingDisplayport =
+      nsLayoutUtils::GetDisplayPortForVisibilityTesting(aFrame->GetContent(),
+                                                        &displayPort);
     if (usingDisplayport) {
       rect = displayPort;
     } else {
@@ -8035,10 +8060,10 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
       case NS_KEY_UP: {
         nsIDocument* doc = GetCurrentEventContent() ?
                            mCurrentEventContent->OwnerDoc() : nullptr;
-        nsIDocument* fullscreenAncestor = nullptr;
         auto keyCode = aEvent->AsKeyboardEvent()->keyCode;
         if (keyCode == NS_VK_ESCAPE) {
-          if ((fullscreenAncestor = nsContentUtils::GetFullscreenAncestor(doc))) {
+          nsIDocument* root = nsContentUtils::GetRootDocument(doc);
+          if (root && root->IsFullScreenDoc()) {
             // Prevent default action on ESC key press when exiting
             // DOM fullscreen mode. This prevents the browser ESC key
             // handler from stopping all loads in the document, which
@@ -8051,16 +8076,9 @@ PresShell::HandleEventInternal(WidgetEvent* aEvent, nsEventStatus* aStatus)
             if (!mIsLastChromeOnlyEscapeKeyConsumed &&
                 aEvent->message == NS_KEY_UP) {
               // ESC key released while in DOM fullscreen mode.
-              // If fullscreen is running in content-only mode, exit the target
-              // doctree branch from fullscreen, otherwise fully exit all
-              // browser windows and documents from fullscreen mode.
-              // Note: in the content-only fullscreen case, we pass the
-              // fullscreenAncestor since |doc| may not actually be fullscreen
-              // here, and ExitFullscreen() has no affect when passed a
-              // non-fullscreen document.
-              nsIDocument::ExitFullscreen(
-                nsContentUtils::IsFullscreenApiContentOnly() ? fullscreenAncestor : nullptr,
-                /* async */ true);
+              // Fully exit all browser windows and documents from
+              // fullscreen mode.
+              nsIDocument::ExitFullscreen(nullptr, /* async */ true);
             }
           }
           nsCOMPtr<nsIDocument> pointerLockedDoc =
@@ -10360,7 +10378,7 @@ void ReflowCountMgr::Add(const char * aName, nsIFrame * aFrame)
       nullptr != mIndiFrameCounts &&
       aFrame != nullptr) {
     char key[KEY_BUF_SIZE_FOR_PTR];
-    sprintf(key, "%p", (void*)aFrame);
+    snprintf_literal(key, "%p", (void*)aFrame);
     IndiReflowCounter * counter = (IndiReflowCounter *)PL_HashTableLookup(mIndiFrameCounts, key);
     if (counter == nullptr) {
       counter = new IndiReflowCounter(this);
@@ -10388,7 +10406,7 @@ void ReflowCountMgr::PaintCount(const char*     aName,
       nullptr != mIndiFrameCounts &&
       aFrame != nullptr) {
     char key[KEY_BUF_SIZE_FOR_PTR];
-    sprintf(key, "%p", (void*)aFrame);
+    snprintf_literal(key, "%p", (void*)aFrame);
     IndiReflowCounter * counter =
       (IndiReflowCounter *)PL_HashTableLookup(mIndiFrameCounts, key);
     if (counter != nullptr && counter->mName.EqualsASCII(aName)) {
@@ -10412,7 +10430,7 @@ void ReflowCountMgr::PaintCount(const char*     aName,
         aPresContext->GetTextPerfMetrics(), *getter_AddRefs(fm));
 
       char buf[16];
-      int len = sprintf(buf, "%d", counter->mCount);
+      int len = snprintf_literal(buf, "%d", counter->mCount);
       nscoord x = 0, y = fm->MaxAscent();
       nscoord width, height = fm->MaxHeight();
       fm->SetTextRunRTL(false);
@@ -10533,7 +10551,7 @@ static void RecurseIndiTotals(nsPresContext* aPresContext,
   }
 
   char key[KEY_BUF_SIZE_FOR_PTR];
-  sprintf(key, "%p", (void*)aParentFrame);
+  snprintf_literal(key, "%p", (void*)aParentFrame);
   IndiReflowCounter * counter = (IndiReflowCounter *)PL_HashTableLookup(aHT, key);
   if (counter) {
     counter->mHasBeenOutput = true;

@@ -17,6 +17,7 @@ constants_jar.sources = [
     'SysInfo.java',
 ]
 constants_jar.generated_sources = [
+    'preprocessed/org/mozilla/gecko/AdjustConstants.java',
     'preprocessed/org/mozilla/gecko/AppConstants.java',
 ]
 
@@ -340,6 +341,7 @@ gbjar.sources += [
     'home/RemoteTabsSplitPlaneFragment.java',
     'home/RemoteTabsStaticFragment.java',
     'home/SearchEngine.java',
+    'home/SearchEngineBar.java',
     'home/SearchEngineRow.java',
     'home/SearchLoader.java',
     'home/SimpleCursorLoader.java',
@@ -518,6 +520,7 @@ gbjar.sources += [
     'widget/IconTabWidget.java',
     'widget/LoginDoorHanger.java',
     'widget/ResizablePathDrawable.java',
+    'widget/SiteLogins.java',
     'widget/SquaredImageView.java',
     'widget/SwipeDismissListViewTouchListener.java',
     'widget/TabThumbnailWrapper.java',

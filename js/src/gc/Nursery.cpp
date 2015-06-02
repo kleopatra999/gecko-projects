@@ -246,9 +246,9 @@ js::Nursery::allocateBuffer(Zone* zone, uint32_t nbytes)
     }
 
     void* buffer = zone->pod_malloc<uint8_t>(nbytes);
-    if (buffer) {
-        /* If this put fails, we will only leak the slots. */
-        (void)mallocedBuffers.put(buffer);
+    if (buffer && !mallocedBuffers.putNew(buffer)) {
+        js_free(buffer);
+        return nullptr;
     }
     return buffer;
 }
@@ -273,11 +273,8 @@ js::Nursery::reallocateBuffer(JSObject* obj, void* oldBuffer,
 
     if (!isInside(oldBuffer)) {
         void* newBuffer = obj->zone()->pod_realloc<uint8_t>((uint8_t*)oldBuffer, oldBytes, newBytes);
-        if (newBuffer && oldBytes != newBytes) {
-            removeMallocedBuffer(oldBuffer);
-            /* If this put fails, we will only leak the slots. */
-            (void)mallocedBuffers.put(newBuffer);
-        }
+        if (newBuffer && oldBuffer != newBuffer)
+            MOZ_ALWAYS_TRUE(mallocedBuffers.rekeyAs(oldBuffer, newBuffer, newBuffer));
         return newBuffer;
     }
 
@@ -397,9 +394,9 @@ js::TenuringTracer::~TenuringTracer()
     runtime()->setNeedsIncrementalBarrier(savedRuntimeNeedBarrier);
 }
 
-#define TIME_START(name) int64_t timstampStart_##name = enableProfiling_ ? PRMJ_Now() : 0
-#define TIME_END(name) int64_t timstampEnd_##name = enableProfiling_ ? PRMJ_Now() : 0
-#define TIME_TOTAL(name) (timstampEnd_##name - timstampStart_##name)
+#define TIME_START(name) int64_t timestampStart_##name = enableProfiling_ ? PRMJ_Now() : 0
+#define TIME_END(name) int64_t timestampEnd_##name = enableProfiling_ ? PRMJ_Now() : 0
+#define TIME_TOTAL(name) (timestampEnd_##name - timestampStart_##name)
 
 void
 js::Nursery::collect(JSRuntime* rt, JS::gcreason::Reason reason, ObjectGroupList* pretenureGroups)
@@ -427,12 +424,12 @@ js::Nursery::collect(JSRuntime* rt, JS::gcreason::Reason reason, ObjectGroupList
 
     TraceMinorGCStart();
 
-    TIME_START(total);
+    int64_t timestampStart_total = PRMJ_Now();
 
     AutoTraceSession session(rt, MinorCollecting);
     AutoStopVerifyingBarriers av(rt, false);
     AutoDisableProxyCheck disableStrictProxyChecking(rt);
-    DebugOnly<AutoEnterOOMUnsafeRegion> oomUnsafeRegion;
+    mozilla::DebugOnly<AutoEnterOOMUnsafeRegion> oomUnsafeRegion;
 
     // Move objects pointed to by roots from the nursery to the major heap.
     TenuringTracer mover(rt, this);
@@ -554,11 +551,14 @@ js::Nursery::collect(JSRuntime* rt, JS::gcreason::Reason reason, ObjectGroupList
     if (rt->gc.usage.gcBytes() >= rt->gc.tunables.gcMaxBytes())
         disable();
 
-    TIME_END(total);
+    int64_t totalTime = PRMJ_Now() - timestampStart_total;
+    rt->addTelemetry(JS_TELEMETRY_GC_MINOR_US, totalTime);
+    rt->addTelemetry(JS_TELEMETRY_GC_MINOR_REASON, reason);
+    if (totalTime > 1000)
+        rt->addTelemetry(JS_TELEMETRY_GC_MINOR_REASON_LONG, reason);
 
     TraceMinorGCEnd();
 
-    int64_t totalTime = TIME_TOTAL(total);
     if (enableProfiling_ && totalTime >= profileThreshold_) {
         static bool printedHeader = false;
         if (!printedHeader) {

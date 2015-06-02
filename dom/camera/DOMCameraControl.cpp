@@ -18,7 +18,6 @@
 #include "mozilla/unused.h"
 #include "nsIAppsService.h"
 #include "nsIObserverService.h"
-#include "nsIDOMDeviceStorage.h"
 #include "nsIDOMEventListener.h"
 #include "nsIScriptSecurityManager.h"
 #include "Navigator.h"
@@ -763,10 +762,10 @@ nsDOMCameraControl::StartRecording(const CameraStartRecordingOptions& aOptions,
   }
 #endif
 
-  nsCOMPtr<nsIDOMDOMRequest> request;
   mDSFileDescriptor = new DeviceStorageFileDescriptor();
-  aRv = aStorageArea.CreateFileDescriptor(aFilename, mDSFileDescriptor.get(),
-                                          getter_AddRefs(request));
+  nsRefPtr<DOMRequest> request = aStorageArea.CreateFileDescriptor(aFilename,
+                                                                   mDSFileDescriptor.get(),
+                                                                   aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -774,9 +773,15 @@ nsDOMCameraControl::StartRecording(const CameraStartRecordingOptions& aOptions,
   mStartRecordingPromise = promise;
   mOptions = aOptions;
 
+  EventListenerManager* elm = request->GetOrCreateListenerManager();
+  if (!elm) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);
+    return nullptr;
+  }
+
   nsCOMPtr<nsIDOMEventListener> listener = new StartRecordingHelper(this);
-  request->AddEventListener(NS_LITERAL_STRING("success"), listener, false);
-  request->AddEventListener(NS_LITERAL_STRING("error"), listener, false);
+  elm->AddEventListener(NS_LITERAL_STRING("success"), listener, false, false);
+  elm->AddEventListener(NS_LITERAL_STRING("error"), listener, false, false);
   return promise.forget();
 }
 
@@ -1374,9 +1379,9 @@ nsDOMCameraControl::OnFacesDetected(const nsTArray<ICameraControl::Face>& aFaces
   Sequence<OwningNonNull<DOMCameraDetectedFace> > faces;
   uint32_t len = aFaces.Length();
 
-  if (faces.SetCapacity(len)) {
+  if (faces.SetCapacity(len, fallible)) {
     for (uint32_t i = 0; i < len; ++i) {
-      *faces.AppendElement() =
+      *faces.AppendElement(fallible) =
         new DOMCameraDetectedFace(static_cast<DOMMediaStream*>(this), aFaces[i]);
     }
   }
@@ -1405,7 +1410,7 @@ nsDOMCameraControl::OnTakePictureComplete(nsIDOMBlob* aPicture)
     promise->MaybeResolve(picture);
   }
 
-  nsRefPtr<File> blob = static_cast<File*>(aPicture);
+  nsRefPtr<Blob> blob = static_cast<Blob*>(aPicture);
   BlobEventInit eventInit;
   eventInit.mData = blob;
 

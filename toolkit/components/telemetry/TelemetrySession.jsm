@@ -22,6 +22,8 @@ Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
 
+const Utils = TelemetryUtils;
+
 const myScope = this;
 
 const IS_CONTENT_PROCESS = (function() {
@@ -35,12 +37,12 @@ const IS_CONTENT_PROCESS = (function() {
 const PAYLOAD_VERSION = 4;
 const PING_TYPE_MAIN = "main";
 const PING_TYPE_SAVED_SESSION = "saved-session";
-const RETENTION_DAYS = 14;
 
 const REASON_ABORTED_SESSION = "aborted-session";
 const REASON_DAILY = "daily";
 const REASON_SAVED_SESSION = "saved-session";
 const REASON_GATHER_PAYLOAD = "gather-payload";
+const REASON_GATHER_SUBSESSION_PAYLOAD = "gather-subsession-payload";
 const REASON_TEST_PING = "test-ping";
 const REASON_ENVIRONMENT_CHANGE = "environment-change";
 const REASON_SHUTDOWN = "shutdown";
@@ -107,6 +109,8 @@ const IDLE_TIMEOUT_SECONDS = 5 * 60;
 // The frequency at which we persist session data to the disk to prevent data loss
 // in case of aborted sessions (currently 5 minutes).
 const ABORTED_SESSION_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
+
+const TOPIC_CYCLE_COLLECTOR_BEGIN = "cycle-collector-begin";
 
 var gLastMemoryPoll = null;
 
@@ -422,7 +426,7 @@ let TelemetryScheduler = {
       timeout = SCHEDULER_TICK_IDLE_INTERVAL_MS;
       // We need to make sure though that we don't miss sending pings around
       // midnight when we use the longer idle intervals.
-      const nextMidnight = TelemetryUtils.getNextMidnight(now);
+      const nextMidnight = Utils.getNextMidnight(now);
       timeout = Math.min(timeout, nextMidnight.getTime() - now.getTime());
     }
 
@@ -433,8 +437,8 @@ let TelemetryScheduler = {
 
   _sentDailyPingToday: function(nowDate) {
     // This is today's date and also the previous midnight (0:00).
-    const todayDate = TelemetryUtils.truncateToDays(nowDate);
-    const nearestMidnight = TelemetryUtils.getNearestMidnight(nowDate, SCHEDULER_MIDNIGHT_TOLERANCE_MS);
+    const todayDate = Utils.truncateToDays(nowDate);
+    const nearestMidnight = Utils.getNearestMidnight(nowDate, SCHEDULER_MIDNIGHT_TOLERANCE_MS);
     // If we are close to midnight, we check against that, otherwise against the last midnight.
     const checkDate = nearestMidnight || todayDate;
     // We consider a ping sent for today if it occured after midnight, or prior within the tolerance.
@@ -455,7 +459,7 @@ let TelemetryScheduler = {
       return false;
     }
 
-    const nearestMidnight = TelemetryUtils.getNearestMidnight(nowDate, SCHEDULER_MIDNIGHT_TOLERANCE_MS);
+    const nearestMidnight = Utils.getNearestMidnight(nowDate, SCHEDULER_MIDNIGHT_TOLERANCE_MS);
     if (!sentPingToday && !nearestMidnight) {
       // Computer must have gone to sleep, the daily ping is overdue.
       this._log.trace("_isDailyPingDue - daily ping is overdue... computer went to sleep?");
@@ -565,7 +569,7 @@ let TelemetryScheduler = {
     let nextSessionCheckpoint =
       this._lastSessionCheckpointTime + ABORTED_SESSION_UPDATE_INTERVAL_MS;
     let combineActions = (shouldSendDaily && isAbortedPingDue) || (shouldSendDaily &&
-                          TelemetryUtils.areTimesClose(now, nextSessionCheckpoint,
+                          Utils.areTimesClose(now, nextSessionCheckpoint,
                                                        SCHEDULER_COALESCE_THRESHOLD_MS));
 
     if (combineActions) {
@@ -611,7 +615,7 @@ let TelemetryScheduler = {
       // update the schedules.
       this._saveAbortedPing(now.getTime(), competingPayload);
       // If we're close to midnight, skip today's daily ping and reschedule it for tomorrow.
-      let nearestMidnight = TelemetryUtils.getNearestMidnight(now, SCHEDULER_MIDNIGHT_TOLERANCE_MS);
+      let nearestMidnight = Utils.getNearestMidnight(now, SCHEDULER_MIDNIGHT_TOLERANCE_MS);
       if (nearestMidnight) {
         this._lastDailyPingTime = now.getTime();
       }
@@ -740,6 +744,7 @@ this.TelemetrySession = Object.freeze({
   reset: function() {
     Impl._sessionId = null;
     Impl._subsessionId = null;
+    Impl._previousSessionId = null;
     Impl._previousSubsessionId = null;
     Impl._subsessionCounter = 0;
     Impl._profileSubsessionCounter = 0;
@@ -812,6 +817,8 @@ let Impl = {
   _sessionId: null,
   // Random subsession id.
   _subsessionId: null,
+  // Session id of the previous session, null on first run.
+  _previousSessionId: null,
   // Subsession id of the previous subsession (even if it was in a different session),
   // null on first run.
   _previousSubsessionId: null,
@@ -1100,8 +1107,8 @@ let Impl = {
   getMetadata: function getMetadata(reason) {
     this._log.trace("getMetadata - Reason " + reason);
 
-    let sessionStartDate = toLocalTimeISOString(TelemetryUtils.truncateToDays(this._sessionStartDate));
-    let subsessionStartDate = toLocalTimeISOString(TelemetryUtils.truncateToDays(this._subsessionStartDate));
+    let sessionStartDate = toLocalTimeISOString(Utils.truncateToDays(this._sessionStartDate));
+    let subsessionStartDate = toLocalTimeISOString(Utils.truncateToDays(this._subsessionStartDate));
     // Compute the subsession length in milliseconds, then convert to seconds.
     let subsessionLength =
       Math.floor((Policy.now() - this._subsessionStartDate.getTime()) / 1000);
@@ -1118,6 +1125,7 @@ let Impl = {
 
       sessionId: this._sessionId,
       subsessionId: this._subsessionId,
+      previousSessionId: this._previousSessionId,
       previousSubsessionId: this._previousSubsessionId,
 
       subsessionCounter: this._subsessionCounter,
@@ -1325,7 +1333,13 @@ let Impl = {
       payloadObj.slowSQL = Telemetry.slowSQL;
       payloadObj.fileIOReports = Telemetry.fileIOReports;
       payloadObj.lateWrites = Telemetry.lateWrites;
-      payloadObj.addonHistograms = this.getAddonHistograms();
+
+      // Add the addon histograms if they are present
+      let addonHistograms = this.getAddonHistograms();
+      if (Object.keys(addonHistograms).length > 0) {
+        payloadObj.addonHistograms = addonHistograms;
+      }
+
       payloadObj.addonDetails = AddonManagerPrivate.getTelemetryDetails();
       payloadObj.UIMeasurements = UITelemetry.getUIMeasurements();
 
@@ -1389,7 +1403,6 @@ let Impl = {
     const isSubsession = !this._isClassicReason(reason);
     let payload = this.getSessionPayload(reason, isSubsession);
     let options = {
-      retentionDays: RETENTION_DAYS,
       addClientId: true,
       addEnvironment: true,
     };
@@ -1399,15 +1412,23 @@ let Impl = {
   attachObservers: function attachObservers() {
     if (!this._initialized)
       return;
-    Services.obs.addObserver(this, "cycle-collector-begin", false);
     Services.obs.addObserver(this, "idle-daily", false);
+    if (Telemetry.canRecordExtended) {
+      Services.obs.addObserver(this, TOPIC_CYCLE_COLLECTOR_BEGIN, false);
+    }
   },
 
   detachObservers: function detachObservers() {
     if (!this._initialized)
       return;
     Services.obs.removeObserver(this, "idle-daily");
-    Services.obs.removeObserver(this, "cycle-collector-begin");
+    try {
+      // Tests may flip Telemetry.canRecordExtended on and off. Just try to remove this
+      // observer and catch if it fails because the observer was not added.
+      Services.obs.removeObserver(this, TOPIC_CYCLE_COLLECTOR_BEGIN);
+    } catch (e) {
+      this._log.warn("detachObservers - Failed to remove " + TOPIC_CYCLE_COLLECTOR_BEGIN, e);
+    }
   },
 
   /**
@@ -1609,50 +1630,49 @@ let Impl = {
     cpmm.sendAsyncMessage(MESSAGE_TELEMETRY_PAYLOAD, payload);
   },
 
-  /**
-   * Save both the "saved-session" and the "shutdown" pings to disk.
-   */
-  savePendingPings: function savePendingPings() {
-    this._log.trace("savePendingPings");
+   /**
+    * Save both the "saved-session" and the "shutdown" pings to disk.
+    */
+  saveShutdownPings: Task.async(function*() {
+    this._log.trace("saveShutdownPings");
 
-    if (!IS_UNIFIED_TELEMETRY) {
-      return this.savePendingPingsClassic();
+    if (IS_UNIFIED_TELEMETRY) {
+      try {
+        let shutdownPayload = this.getSessionPayload(REASON_SHUTDOWN, false);
+
+        let options = {
+          addClientId: true,
+          addEnvironment: true,
+          overwrite: true,
+        };
+        yield TelemetryController.addPendingPing(getPingType(shutdownPayload), shutdownPayload, options);
+      } catch (ex) {
+        this._log.error("saveShutdownPings - failed to submit shutdown ping", ex);
+      }
+     }
+
+    // As a temporary measure, we want to submit saved-session too if extended Telemetry is enabled
+    // to keep existing performance analysis working.
+    if (Telemetry.canRecordExtended) {
+      try {
+        let payload = this.getSessionPayload(REASON_SAVED_SESSION, false);
+
+        let options = {
+          addClientId: true,
+          addEnvironment: true,
+        };
+        yield TelemetryController.addPendingPing(getPingType(payload), payload, options);
+      } catch (ex) {
+        this._log.error("saveShutdownPings - failed to submit saved-session ping", ex);
+      }
     }
+  }),
 
-    let options = {
-      retentionDays: RETENTION_DAYS,
-      addClientId: true,
-      addEnvironment: true,
-      overwrite: true,
-    };
-
-    let shutdownPayload = this.getSessionPayload(REASON_SHUTDOWN, false);
-    // Make sure we try to save the pending pings, even though we failed saving the shutdown
-    // ping.
-    return TelemetryController.addPendingPing(getPingType(shutdownPayload), shutdownPayload, options)
-                        .then(() => this.savePendingPingsClassic(),
-                              () => this.savePendingPingsClassic());
-  },
-
-  /**
-   * Save the "saved-session" ping and make TelemetryController save all the pending pings to disk.
-   */
-  savePendingPingsClassic: function savePendingPingsClassic() {
-    this._log.trace("savePendingPingsClassic");
-    let payload = this.getSessionPayload(REASON_SAVED_SESSION, false);
-    let options = {
-      retentionDays: RETENTION_DAYS,
-      addClientId: true,
-      addEnvironment: true,
-    };
-    return TelemetryController.savePendingPings(getPingType(payload), payload, options);
-  },
 
   testSaveHistograms: function testSaveHistograms(file) {
     this._log.trace("testSaveHistograms - Path: " + file.path);
     let payload = this.getSessionPayload(REASON_SAVED_SESSION, false);
     let options = {
-      retentionDays: RETENTION_DAYS,
       addClientId: true,
       addEnvironment: true,
       overwrite: true,
@@ -1723,7 +1743,10 @@ let Impl = {
       this._log = Log.repository.getLoggerWithMessagePrefix(LOGGER_NAME, LOGGER_PREFIX);
     }
 
-    this._log.trace("observe - " + aTopic + " notified.");
+    // Prevent the cycle collector begin topic from cluttering the log.
+    if (aTopic != TOPIC_CYCLE_COLLECTOR_BEGIN) {
+      this._log.trace("observe - " + aTopic + " notified.");
+    }
 
     switch (aTopic) {
     case "profile-after-change":
@@ -1741,7 +1764,7 @@ let Impl = {
         this.sendContentProcessPing(REASON_SAVED_SESSION);
       }
       break;
-    case "cycle-collector-begin":
+    case TOPIC_CYCLE_COLLECTOR_BEGIN:
       let now = new Date();
       if (!gLastMemoryPoll
           || (TELEMETRY_INTERVAL <= now - gLastMemoryPoll)) {
@@ -1800,7 +1823,6 @@ let Impl = {
       if (Telemetry.isOfficialTelemetry) {
         let payload = this.getSessionPayload(REASON_SAVED_SESSION, false);
         let options = {
-          retentionDays: RETENTION_DAYS,
           addClientId: true,
           addEnvironment: true,
           overwrite: true,
@@ -1834,7 +1856,7 @@ let Impl = {
 
       if (Telemetry.isOfficialTelemetry || testing) {
         return Task.spawn(function*() {
-          yield this.savePendingPings();
+          yield this.saveShutdownPings();
           yield this._stateSaveSerializer.flushTasks();
 
           if (IS_UNIFIED_TELEMETRY) {
@@ -1882,7 +1904,6 @@ let Impl = {
     let payload = this.getSessionPayload(REASON_DAILY, true);
 
     let options = {
-      retentionDays: RETENTION_DAYS,
       addClientId: true,
       addEnvironment: true,
     };
@@ -1905,13 +1926,14 @@ let Impl = {
     let dataFile = OS.Path.join(OS.Constants.Path.profileDir, DATAREPORTING_DIRECTORY,
                                 SESSION_STATE_FILE_NAME);
 
-    // Try to load the "profileSubsessionCounter" from the state file.
+    // Try to load info about the previous session from the state file.
     try {
       let data = yield CommonUtils.readJSON(dataFile);
       if (data &&
           "profileSubsessionCounter" in data &&
           typeof(data.profileSubsessionCounter) == "number" &&
-          "subsessionId" in data) {
+          "subsessionId" in data && "sessionId" in data) {
+        this._previousSessionId = data.sessionId;
         this._previousSubsessionId = data.subsessionId;
         // Add |_subsessionCounter| to the |_profileSubsessionCounter| to account for
         // new subsession while loading still takes place. This will always be exactly
@@ -1931,6 +1953,7 @@ let Impl = {
    */
   _getSessionDataObject: function() {
     return {
+      sessionId: this._sessionId,
       subsessionId: this._subsessionId,
       profileSubsessionCounter: this._profileSubsessionCounter,
     };
@@ -1958,7 +1981,6 @@ let Impl = {
     TelemetryScheduler.reschedulePings(REASON_ENVIRONMENT_CHANGE, payload);
 
     let options = {
-      retentionDays: RETENTION_DAYS,
       addClientId: true,
       addEnvironment: true,
       overrideEnvironment: oldEnvironment,

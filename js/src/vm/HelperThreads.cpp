@@ -1054,6 +1054,7 @@ HelperThread::handleAsmJSWorkload()
                             &asmData->mir->alloc());
 
         int64_t before = PRMJ_Now();
+        jit::AutoSpewEndFunction spewEndFunction(asmData->mir);
 
         if (!OptimizeMIR(asmData->mir))
             break;
@@ -1232,7 +1233,7 @@ HelperThread::handleParseWorkload()
         SourceBufferHolder srcBuf(parseTask->chars, parseTask->length,
                                   SourceBufferHolder::NoOwnership);
         parseTask->script = frontend::CompileScript(parseTask->cx, &parseTask->alloc,
-                                                    NullPtr(), NullPtr(), NullPtr(),
+                                                    nullptr, nullptr, nullptr,
                                                     parseTask->options,
                                                     srcBuf);
     }

@@ -10,6 +10,7 @@
 #include <unistd.h>
 #endif
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/CheckedInt.h"
 #include "mozilla/dom/BlobSet.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/XMLHttpRequestUploadBinding.h"
@@ -391,29 +392,33 @@ nsXMLHttpRequest::InitParameters(bool aAnon, bool aSystem)
   }
 
   // Check for permissions.
-  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(GetOwner());
-  if (!window || !window->GetDocShell()) {
-    return;
-  }
-
   // Chrome is always allowed access, so do the permission check only
   // for non-chrome pages.
   if (!IsSystemXHR() && aSystem) {
-    nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
-    if (!doc) {
+    nsIGlobalObject* global = GetOwnerGlobal();
+    if (NS_WARN_IF(!global)) {
+      SetParameters(aAnon, false);
       return;
     }
 
-    nsCOMPtr<nsIPrincipal> principal = doc->NodePrincipal();
+    nsIPrincipal* principal = global->PrincipalOrNull();
+    if (NS_WARN_IF(!principal)) {
+      SetParameters(aAnon, false);
+      return;
+    }
+
     nsCOMPtr<nsIPermissionManager> permMgr =
       services::GetPermissionManager();
-    if (!permMgr)
+    if (NS_WARN_IF(!permMgr)) {
+      SetParameters(aAnon, false);
       return;
+    }
 
     uint32_t permission;
     nsresult rv =
       permMgr->TestPermissionFromPrincipal(principal, "systemXHR", &permission);
     if (NS_FAILED(rv) || permission != nsIPermissionManager::ALLOW_ACTION) {
+      SetParameters(aAnon, false);
       return;
     }
   }
@@ -428,7 +433,7 @@ nsXMLHttpRequest::ResetResponse()
   mResponseBody.Truncate();
   mResponseText.Truncate();
   mResponseBlob = nullptr;
-  mDOMFile = nullptr;
+  mDOMBlob = nullptr;
   mBlobSet = nullptr;
   mResultArrayBuffer = nullptr;
   mArrayBufferBuilder.reset();
@@ -479,7 +484,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsXMLHttpRequest,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mXMLParserStreamListener)
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mResponseBlob)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDOMFile)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDOMBlob)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mNotificationCallbacks)
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mChannelEventSink)
@@ -501,7 +506,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(nsXMLHttpRequest,
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mXMLParserStreamListener)
 
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mResponseBlob)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mDOMFile)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mDOMBlob)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mNotificationCallbacks)
 
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mChannelEventSink)
@@ -789,15 +794,15 @@ nsXMLHttpRequest::CreateResponseParsedJSON(JSContext* aCx)
 void
 nsXMLHttpRequest::CreatePartialBlob()
 {
-  if (mDOMFile) {
+  if (mDOMBlob) {
     // Use progress info to determine whether load is complete, but use
     // mDataAvailable to ensure a slice is created based on the uncompressed
     // data count.
     if (mLoadTotal == mLoadTransferred) {
-      mResponseBlob = mDOMFile;
+      mResponseBlob = mDOMBlob;
     } else {
       ErrorResult rv;
-      mResponseBlob = mDOMFile->CreateSlice(0, mDataAvailable,
+      mResponseBlob = mDOMBlob->CreateSlice(0, mDataAvailable,
                                             EmptyString(), rv);
     }
     return;
@@ -1829,7 +1834,7 @@ nsXMLHttpRequest::StreamReaderFunc(nsIInputStream* in,
 
   if (xmlHttpRequest->mResponseType == XML_HTTP_RESPONSE_TYPE_BLOB ||
       xmlHttpRequest->mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB) {
-    if (!xmlHttpRequest->mDOMFile) {
+    if (!xmlHttpRequest->mDOMBlob) {
       if (!xmlHttpRequest->mBlobSet) {
         xmlHttpRequest->mBlobSet = new BlobSet();
       }
@@ -1852,9 +1857,7 @@ nsXMLHttpRequest::StreamReaderFunc(nsIInputStream* in,
   } else if (xmlHttpRequest->mResponseType == XML_HTTP_RESPONSE_TYPE_DEFAULT &&
              xmlHttpRequest->mResponseXML) {
     // Copy for our own use
-    uint32_t previousLength = xmlHttpRequest->mResponseBody.Length();
-    xmlHttpRequest->mResponseBody.Append(fromRawSegment,count);
-    if (count > 0 && xmlHttpRequest->mResponseBody.Length() == previousLength) {
+    if (!xmlHttpRequest->mResponseBody.Append(fromRawSegment, count, fallible)) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
   } else if (xmlHttpRequest->mResponseType == XML_HTTP_RESPONSE_TYPE_DEFAULT ||
@@ -1899,7 +1902,7 @@ nsXMLHttpRequest::StreamReaderFunc(nsIInputStream* in,
   return rv;
 }
 
-bool nsXMLHttpRequest::CreateDOMFile(nsIRequest *request)
+bool nsXMLHttpRequest::CreateDOMBlob(nsIRequest *request)
 {
   nsCOMPtr<nsIFile> file;
   nsCOMPtr<nsIFileChannel> fc = do_QueryInterface(request);
@@ -1913,7 +1916,7 @@ bool nsXMLHttpRequest::CreateDOMFile(nsIRequest *request)
   nsAutoCString contentType;
   mChannel->GetContentType(contentType);
 
-  mDOMFile = File::CreateFromFile(GetOwner(), file, EmptyString(),
+  mDOMBlob = File::CreateFromFile(GetOwner(), file, EmptyString(),
                                   NS_ConvertASCIItoUTF16(contentType));
 
   mBlobSet = nullptr;
@@ -1936,8 +1939,8 @@ nsXMLHttpRequest::OnDataAvailable(nsIRequest *request,
 
   bool cancelable = false;
   if ((mResponseType == XML_HTTP_RESPONSE_TYPE_BLOB ||
-       mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB) && !mDOMFile) {
-    cancelable = CreateDOMFile(request);
+       mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB) && !mDOMBlob) {
+    cancelable = CreateDOMBlob(request);
     // The nsIStreamListener contract mandates us
     // to read from the stream before returning.
   }
@@ -1949,7 +1952,12 @@ nsXMLHttpRequest::OnDataAvailable(nsIRequest *request,
 
   if (cancelable) {
     // We don't have to read from the local file for the blob response
-    mDOMFile->GetSize(&mDataAvailable);
+    ErrorResult error;
+    mDataAvailable = mDOMBlob->GetSize(error);
+    if (NS_WARN_IF(error.Failed())) {
+      return error.StealNSResult();
+    }
+
     ChangeState(XML_HTTP_REQUEST_LOADING);
     return request->Cancel(NS_OK);
   }
@@ -2246,12 +2254,12 @@ nsXMLHttpRequest::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult
   if (NS_SUCCEEDED(status) &&
       (mResponseType == XML_HTTP_RESPONSE_TYPE_BLOB ||
        mResponseType == XML_HTTP_RESPONSE_TYPE_MOZ_BLOB)) {
-    if (!mDOMFile) {
-      CreateDOMFile(request);
+    if (!mDOMBlob) {
+      CreateDOMBlob(request);
     }
-    if (mDOMFile) {
-      mResponseBlob = mDOMFile;
-      mDOMFile = nullptr;
+    if (mDOMBlob) {
+      mResponseBlob = mDOMBlob;
+      mDOMBlob = nullptr;
     } else {
       // mBlobSet can be null if the channel is non-file non-cacheable
       // and if the response length is zero.
@@ -3986,26 +3994,30 @@ ArrayBufferBuilder::append(const uint8_t *aNewData, uint32_t aDataLen,
 {
   MOZ_ASSERT(!mMapPtr);
 
+  CheckedUint32 neededCapacity = mLength;
+  neededCapacity += aDataLen;
+  if (!neededCapacity.isValid()) {
+    return false;
+  }
   if (mLength + aDataLen > mCapacity) {
-    uint32_t newcap;
+    CheckedUint32 newcap = mCapacity;
     // Double while under aMaxGrowth or if not specified.
     if (!aMaxGrowth || mCapacity < aMaxGrowth) {
-      newcap = mCapacity * 2;
+      newcap *= 2;
     } else {
-      newcap = mCapacity + aMaxGrowth;
+      newcap += aMaxGrowth;
     }
 
-    // But make sure there's always enough to satisfy our request.
-    if (newcap < mLength + aDataLen) {
-      newcap = mLength + aDataLen;
-    }
-
-    // Did we overflow?
-    if (newcap < mCapacity) {
+    if (!newcap.isValid()) {
       return false;
     }
 
-    if (!setCapacity(newcap)) {
+    // But make sure there's always enough to satisfy our request.
+    if (newcap.value() < neededCapacity.value()) {
+      newcap = neededCapacity;
+    }
+
+    if (!setCapacity(newcap.value())) {
       return false;
     }
   }

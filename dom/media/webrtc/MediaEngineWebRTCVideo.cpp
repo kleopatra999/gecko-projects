@@ -18,14 +18,9 @@ using dom::ConstrainLongRange;
 using dom::ConstrainDoubleRange;
 using dom::MediaTrackConstraintSet;
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetMediaManagerLog();
-#define LOG(msg) PR_LOG(GetMediaManagerLog(), PR_LOG_DEBUG, msg)
-#define LOGFRAME(msg) PR_LOG(GetMediaManagerLog(), 6, msg)
-#else
-#define LOG(msg)
-#define LOGFRAME(msg)
-#endif
+#define LOG(msg) MOZ_LOG(GetMediaManagerLog(), PR_LOG_DEBUG, msg)
+#define LOGFRAME(msg) MOZ_LOG(GetMediaManagerLog(), 6, msg)
 
 /**
  * Webrtc video source.
@@ -232,15 +227,13 @@ MediaEngineWebRTCVideoSource::Allocate(const dom::MediaTrackConstraints &aConstr
     }
     mState = kAllocated;
     LOG(("Video device %d allocated", mCaptureIndex));
-  } else {
-#ifdef PR_LOGGING
+  } else if (PR_LOG_TEST(GetMediaManagerLog(), PR_LOG_DEBUG)) {
     MonitorAutoLock lock(mMonitor);
     if (mSources.IsEmpty()) {
       LOG(("Video device %d reallocated", mCaptureIndex));
     } else {
       LOG(("Video device %d allocated shared", mCaptureIndex));
     }
-#endif
   }
 
   return NS_OK;
@@ -273,7 +266,7 @@ MediaEngineWebRTCVideoSource::Deallocate()
     // another thread anywhere else, b) ViEInputManager::DestroyCaptureDevice() grabs
     // an exclusive object lock and deletes it in a critical section, so all in all
     // this should be safe threadwise.
-    NS_DispatchToMainThread(WrapRunnable(mViECapture,
+    NS_DispatchToMainThread(WrapRunnable(mViECapture.get(),
                                          &webrtc::ViECapture::ReleaseCaptureDevice,
                                          mCaptureIndex),
                             NS_DISPATCH_SYNC);
@@ -429,9 +422,10 @@ MediaEngineWebRTCVideoSource::Shutdown()
   if (mState == kAllocated || mState == kStopped) {
     Deallocate();
   }
-  mViECapture->Release();
-  mViERender->Release();
-  mViEBase->Release();
+  mViECapture = nullptr;
+  mViERender = nullptr;
+  mViEBase = nullptr;
+
   mState = kReleased;
   mInitDone = false;
 }

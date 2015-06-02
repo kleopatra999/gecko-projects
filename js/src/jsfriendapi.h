@@ -96,9 +96,9 @@ JS_IsDeadWrapper(JSObject* obj);
  * all cycle-participating data it reaches, using bounded stack space.
  */
 extern JS_FRIEND_API(void)
-JS_TraceShapeCycleCollectorChildren(JSTracer* trc, JS::GCCellPtr shape);
+JS_TraceShapeCycleCollectorChildren(JS::CallbackTracer* trc, JS::GCCellPtr shape);
 extern JS_FRIEND_API(void)
-JS_TraceObjectGroupCycleCollectorChildren(JSTracer* trc, JS::GCCellPtr group);
+JS_TraceObjectGroupCycleCollectorChildren(JS::CallbackTracer* trc, JS::GCCellPtr group);
 
 enum {
     JS_TELEMETRY_GC_REASON,
@@ -116,6 +116,9 @@ enum {
     JS_TELEMETRY_GC_NON_INCREMENTAL,
     JS_TELEMETRY_GC_SCC_SWEEP_TOTAL_MS,
     JS_TELEMETRY_GC_SCC_SWEEP_MAX_PAUSE_MS,
+    JS_TELEMETRY_GC_MINOR_REASON,
+    JS_TELEMETRY_GC_MINOR_REASON_LONG,
+    JS_TELEMETRY_GC_MINOR_US,
     JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT,
     JS_TELEMETRY_ADDON_EXCEPTIONS
 };
@@ -459,7 +462,7 @@ typedef enum  {
   * fp is the file for the dump output.
   */
 extern JS_FRIEND_API(void)
-DumpHeapComplete(JSRuntime* rt, FILE* fp, DumpHeapNurseryBehaviour nurseryBehaviour);
+DumpHeap(JSRuntime* rt, FILE* fp, DumpHeapNurseryBehaviour nurseryBehaviour);
 
 #ifdef JS_OLD_GETTER_SETTER_METHODS
 JS_FRIEND_API(bool) obj_defineGetter(JSContext* cx, unsigned argc, JS::Value* vp);
@@ -475,6 +478,9 @@ IsSystemZone(JS::Zone* zone);
 extern JS_FRIEND_API(bool)
 IsAtomsCompartment(JSCompartment* comp);
 
+extern JS_FRIEND_API(bool)
+IsAtomsZone(JS::Zone* zone);
+
 /*
  * Returns whether we're in a non-strict property set (in that we're in a
  * non-strict script and the bytecode we're on is a property set).  The return
@@ -484,25 +490,19 @@ IsAtomsCompartment(JSCompartment* comp);
 extern JS_FRIEND_API(bool)
 IsInNonStrictPropertySet(JSContext* cx);
 
-struct WeakMapTracer;
+struct WeakMapTracer
+{
+    JSRuntime* runtime;
 
-/*
- * Weak map tracer callback, called once for every binding of every
- * weak map that was live at the time of the last garbage collection.
- *
- * m will be nullptr if the weak map is not contained in a JS Object.
- *
- * The callback should not GC (and will assert in a debug build if it does so.)
- */
-typedef void
-(* WeakMapTraceCallback)(WeakMapTracer* trc, JSObject* m, JS::GCCellPtr key, JS::GCCellPtr value);
+    explicit WeakMapTracer(JSRuntime* rt) : runtime(rt) {}
 
-struct WeakMapTracer {
-    JSRuntime*           runtime;
-    WeakMapTraceCallback callback;
-
-    WeakMapTracer(JSRuntime* rt, WeakMapTraceCallback cb)
-        : runtime(rt), callback(cb) {}
+    // Weak map tracer callback, called once for every binding of every
+    // weak map that was live at the time of the last garbage collection.
+    //
+    // m will be nullptr if the weak map is not contained in a JS Object.
+    //
+    // The callback should not GC (and will assert in a debug build if it does so.)
+    virtual void trace(JSObject* m, JS::GCCellPtr key, JS::GCCellPtr value) = 0;
 };
 
 extern JS_FRIEND_API(void)
@@ -523,7 +523,7 @@ VisitGrayWrapperTargets(JS::Zone* zone, GCThingCallback callback, void* closure)
 extern JS_FRIEND_API(JSObject*)
 GetWeakmapKeyDelegate(JSObject* key);
 
-JS_FRIEND_API(JSGCTraceKind)
+JS_FRIEND_API(JS::TraceKind)
 GCThingTraceKind(void* thing);
 
 /*
@@ -1321,10 +1321,10 @@ class MOZ_STACK_CLASS AutoStableStringChars
     {}
     ~AutoStableStringChars();
 
-    bool init(JSContext* cx, JSString* s);
+    bool init(JSContext* cx, JSString* s) MOZ_WARN_UNUSED_RESULT;
 
     /* Like init(), but Latin1 chars are inflated to TwoByte. */
-    bool initTwoByte(JSContext* cx, JSString* s);
+    bool initTwoByte(JSContext* cx, JSString* s) MOZ_WARN_UNUSED_RESULT;
 
     bool isLatin1() const { return state_ == Latin1; }
     bool isTwoByte() const { return state_ == TwoByte; }
@@ -2439,7 +2439,7 @@ FunctionObjectToShadowFunction(JSObject* fun)
 }
 
 /* Statically asserted in jsfun.h. */
-static const unsigned JS_FUNCTION_INTERPRETED_BITS = 0x401;
+static const unsigned JS_FUNCTION_INTERPRETED_BITS = 0x0201;
 
 // Return whether the given function object is native.
 static MOZ_ALWAYS_INLINE bool
@@ -2558,18 +2558,32 @@ IdToValue(jsid id)
 }
 
 /*
- * If the embedder has registered a default JSContext callback, returns the
- * result of the callback. Otherwise, asserts that |rt| has exactly one
- * JSContext associated with it, and returns that context.
+ * If the embedder has registered a ScriptEnvironmentPreparer,
+ * PrepareScriptEnvironmentAndInvoke will call the preparer's 'invoke' method
+ * with the given |closure|, with the assumption that the preparer will set up
+ * any state necessary to run script in |scope|, invoke |closure| with a valid
+ * JSContext*, and return.
+ *
+ * If no preparer is registered, PrepareScriptEnvironmentAndInvoke will assert
+ * that |rt| has exactly one JSContext associated with it, enter the compartment
+ * of |scope| on that context, and invoke |closure|.
  */
-extern JS_FRIEND_API(JSContext*)
-DefaultJSContext(JSRuntime* rt);
 
-typedef JSContext*
-(* DefaultJSContextCallback)(JSRuntime* rt);
+struct ScriptEnvironmentPreparer {
+    struct Closure {
+        virtual bool operator()(JSContext* cx) = 0;
+    };
+
+    virtual bool invoke(JS::HandleObject scope, Closure& closure) = 0;
+};
+
+extern JS_FRIEND_API(bool)
+PrepareScriptEnvironmentAndInvoke(JSRuntime* rt, JS::HandleObject scope,
+                                  ScriptEnvironmentPreparer::Closure& closure);
 
 JS_FRIEND_API(void)
-SetDefaultJSContextCallback(JSRuntime* rt, DefaultJSContextCallback cb);
+SetScriptEnvironmentPreparer(JSRuntime* rt, ScriptEnvironmentPreparer*
+preparer);
 
 /*
  * To help embedders enforce their invariants, we allow them to specify in

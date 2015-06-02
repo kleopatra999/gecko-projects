@@ -10,7 +10,6 @@
   padding: 0;
   font: message-box;
   font-size: 1.25rem;
-  line-height: 22px;
 }
 
 * {
@@ -243,8 +242,8 @@ description > html|a {
 #weavePrefsDeck > vbox > description,
 #weavePrefsDeck > vbox > #pairDevice > label,
 #weavePrefsDeck > #needsUpdate > hbox > #loginError,
-#weavePrefsDeck > #hasFxaAccount > hbox:not(#tosPP-normal) > label,
-#weavePrefsDeck > #hasFxaAccount > hbox:not(#tosPP-small) > label {
+#weavePrefsDeck > #hasFxaAccount > vbox > label,
+#weavePrefsDeck > #hasFxaAccount > hbox:not(#tosPP-normal) > label {
   /* no margin-start for elements at the begin of a line */
   -moz-margin-start: 0;
 }

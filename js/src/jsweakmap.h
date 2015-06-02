@@ -92,7 +92,7 @@ class WeakMapBase {
     virtual void finish() = 0;
 
     // Object that this weak map is part of, if any.
-    RelocatablePtrObject memberOf;
+    HeapPtrObject memberOf;
 
     // Compartment that this weak map is part of.
     JSCompartment* compartment;
@@ -250,9 +250,9 @@ class WeakMap : public HashMap<Key, Value, HashPolicy, RuntimeAllocPolicy>, publ
             gc::Cell* key = gc::ToMarkable(r.front().key());
             gc::Cell* value = gc::ToMarkable(r.front().value());
             if (key && value) {
-                tracer->callback(tracer, memberOf,
-                                 JS::GCCellPtr(r.front().key()),
-                                 JS::GCCellPtr(r.front().value()));
+                tracer->trace(memberOf,
+                              JS::GCCellPtr(r.front().key()),
+                              JS::GCCellPtr(r.front().value()));
             }
         }
     }

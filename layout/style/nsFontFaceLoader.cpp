@@ -6,7 +6,7 @@
 
 /* code for loading in @font-face defined font data */
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "nsFontFaceLoader.h"
 
@@ -25,7 +25,7 @@
 
 using namespace mozilla;
 
-#define LOG(args) PR_LOG(gfxUserFontSet::GetUserFontsLog(), PR_LOG_DEBUG, args)
+#define LOG(args) MOZ_LOG(gfxUserFontSet::GetUserFontsLog(), PR_LOG_DEBUG, args)
 #define LOG_ENABLED() PR_LOG_TEST(gfxUserFontSet::GetUserFontsLog(), \
                                   PR_LOG_DEBUG)
 

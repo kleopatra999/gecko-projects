@@ -25,6 +25,7 @@
 #include "mozilla/Monitor.h"            // for Monitor
 #include "mozilla/RefPtr.h"             // for RefPtr
 #include "mozilla/TimeStamp.h"          // for TimeStamp
+#include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/layers/GeckoContentController.h"
 #include "mozilla/layers/LayersMessages.h"  // for TargetConfig
@@ -33,7 +34,6 @@
 #include "mozilla/layers/APZTestData.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsISupportsImpl.h"
-#include "nsSize.h"                     // for nsIntSize
 #include "ThreadSafeRefcountingWithMainThreadDestruction.h"
 #include "mozilla/VsyncDispatcher.h"
 
@@ -234,6 +234,8 @@ public:
   virtual bool RecvStop() override;
   virtual bool RecvPause() override;
   virtual bool RecvResume() override;
+  virtual bool RecvNotifyHidden(const uint64_t& id) override { return true; }
+  virtual bool RecvNotifyVisible(const uint64_t& id) override { return true; }
   virtual bool RecvNotifyChildCreated(const uint64_t& child) override;
   virtual bool RecvAdoptChild(const uint64_t& child) override;
   virtual bool RecvMakeSnapshot(const SurfaceDescriptor& aInSnapshot,

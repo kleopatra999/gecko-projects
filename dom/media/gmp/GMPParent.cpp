@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GMPParent.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "nsComponentManagerUtils.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIInputStream.h"
@@ -24,6 +24,7 @@
 #if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
 #include "mozilla/SandboxInfo.h"
 #endif
+#include "GMPContentParent.h"
 
 #include "mozilla/dom/CrashReporterParent.h"
 using mozilla::dom::CrashReporterParent;
@@ -41,14 +42,14 @@ namespace mozilla {
 #undef LOG
 #undef LOGD
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetGMPLog();
-#define LOG(level, x, ...) PR_LOG(GetGMPLog(), (level), (x, ##__VA_ARGS__))
+#define LOG(level, x, ...) MOZ_LOG(GetGMPLog(), (level), (x, ##__VA_ARGS__))
 #define LOGD(x, ...) LOG(PR_LOG_DEBUG, "GMPParent[%p|childPid=%d] " x, this, mChildPid, ##__VA_ARGS__)
-#else
-#define LOG(level, x, ...)
-#define LOGD(x, ...)
+
+#ifdef __CLASS__
+#undef __CLASS__
 #endif
+#define __CLASS__ "GMPParent"
 
 namespace gmp {
 
@@ -62,9 +63,7 @@ GMPParent::GMPParent()
   , mGMPContentChildCount(0)
   , mAsyncShutdownRequired(false)
   , mAsyncShutdownInProgress(false)
-#ifdef PR_LOGGING
   , mChildPid(0)
-#endif
 {
   LOGD("GMPParent ctor");
   mPluginId = GeckoChildProcessHost::GetUniqueID();
@@ -145,9 +144,7 @@ GMPParent::LoadProcess()
       return NS_ERROR_FAILURE;
     }
 
-#ifdef PR_LOGGING
     mChildPid = base::GetProcId(mProcess->GetChildProcessHandle());
-#endif
     LOGD("%s: Launched new child process", __FUNCTION__);
 
     bool opened = Open(mProcess->GetChannel(),
@@ -374,11 +371,21 @@ void
 GMPParent::ChildTerminated()
 {
   nsRefPtr<GMPParent> self(this);
-  GMPThread()->Dispatch(NS_NewRunnableMethodWithArg<nsRefPtr<GMPParent>>(
-                          mService,
-                          &GeckoMediaPluginServiceParent::PluginTerminated,
-                          self),
-                        NS_DISPATCH_NORMAL);
+  nsIThread* gmpThread = GMPThread();
+
+  if (!gmpThread) {
+    // Bug 1163239 - this can happen on shutdown.
+    // PluginTerminated removes the GMP from the GMPService.
+    // On shutdown we can have this case where it is already been
+    // removed so there is no harm in not trying to remove it again.
+    LOGD("%s::%s: GMPThread() returned nullptr.", __CLASS__, __FUNCTION__);
+  } else {
+    gmpThread->Dispatch(NS_NewRunnableMethodWithArg<nsRefPtr<GMPParent>>(
+                         mService,
+                         &GeckoMediaPluginServiceParent::PluginTerminated,
+                         self),
+                         NS_DISPATCH_NORMAL);
+  }
 }
 
 void

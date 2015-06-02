@@ -45,6 +45,7 @@
 #include "jsobjinlines.h"
 
 #include "frontend/ParseNode-inl.h"
+#include "jit/MacroAssembler-inl.h"
 #include "vm/ArrayBufferObject-inl.h"
 #include "vm/Stack-inl.h"
 
@@ -1019,7 +1020,7 @@ const Class AsmJSModuleObject::class_ = {
 AsmJSModuleObject*
 AsmJSModuleObject::create(ExclusiveContext* cx, ScopedJSDeletePtr<AsmJSModule>* module)
 {
-    JSObject* obj = NewObjectWithGivenProto(cx, &AsmJSModuleObject::class_, NullPtr());
+    JSObject* obj = NewObjectWithGivenProto(cx, &AsmJSModuleObject::class_, nullptr);
     if (!obj)
         return nullptr;
     AsmJSModuleObject* nobj = &obj->as<AsmJSModuleObject>();
@@ -2289,7 +2290,8 @@ js::LookupAsmJSModuleInCache(ExclusiveContext* cx,
     if (!atEnd)
         return true;
 
-    parser.tokenStream.advance(module->srcEndBeforeCurly());
+    if (!parser.tokenStream.advance(module->srcEndBeforeCurly()))
+        return false;
 
     {
         // Delay flushing until dynamic linking.

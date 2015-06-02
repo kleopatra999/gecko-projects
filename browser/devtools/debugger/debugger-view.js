@@ -422,7 +422,8 @@ let DebuggerView = {
       deferred.resolve([aSource, aText, aContentType]);
     },
     ([, aError]) => {
-      let msg = L10N.getStr("errorLoadingText") + DevToolsUtils.safeErrorString(aError);
+      let url = aError;
+      let msg = L10N.getFormatStr("errorLoadingText2", url);
       this._setEditorText(msg);
       Cu.reportError(msg);
       dumpn(msg);
@@ -514,15 +515,17 @@ let DebuggerView = {
    * Gets the visibility state of the instruments pane.
    * @return boolean
    */
-  get instrumentsPaneHidden()
-    this._instrumentsPane.hasAttribute("pane-collapsed"),
+  get instrumentsPaneHidden() {
+    return this._instrumentsPane.hasAttribute("pane-collapsed");
+  },
 
   /**
    * Gets the currently selected tab in the instruments pane.
    * @return string
    */
-  get instrumentsPaneTab()
-    this._instrumentsPane.selectedTab.id,
+  get instrumentsPaneTab() {
+    return this._instrumentsPane.selectedTab.id;
+  },
 
   /**
    * Sets the instruments pane hidden or visible.
@@ -753,9 +756,10 @@ ResultsPanelContainer.prototype = Heritage.extend(WidgetMethods, {
    * Gets this container's visibility state.
    * @return boolean
    */
-  get hidden()
-    this._panel.state == "closed" ||
-    this._panel.state == "hiding",
+  get hidden() {
+    return this._panel.state == "closed" ||
+           this._panel.state == "hiding";
+  },
 
   /**
    * Removes all items from this container and hides it.

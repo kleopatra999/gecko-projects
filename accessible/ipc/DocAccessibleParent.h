@@ -32,7 +32,7 @@ public:
   {
     MOZ_COUNT_DTOR_INHERITED(DocAccessibleParent, ProxyAccessible);
     MOZ_ASSERT(mChildDocs.Length() == 0);
-    MOZ_ASSERT(!mParentDoc);
+    MOZ_ASSERT(!ParentDoc());
   }
 
   /*
@@ -44,12 +44,18 @@ public:
 
   virtual bool RecvShowEvent(const ShowEventData& aData) override;
   virtual bool RecvHideEvent(const uint64_t& aRootID) override;
+  virtual bool RecvStateChangeEvent(const uint64_t& aID,
+                                    const uint64_t& aState,
+                                    const bool& aEnabled) override final;
+
+  virtual bool RecvCaretMoveEvent(const uint64_t& aID, const int32_t& aOffset)
+    override final;
 
   virtual bool RecvBindChildDoc(PDocAccessibleParent* aChildDoc, const uint64_t& aID) override;
   void Unbind()
   {
     mParent = nullptr;
-    mParentDoc->mChildDocs.RemoveElement(this);
+    ParentDoc()->mChildDocs.RemoveElement(this);
     mParentDoc = nullptr;
   }
 
@@ -64,7 +70,7 @@ public:
    * Return the main processes representation of the parent document (if any)
    * of the document this object represents.
    */
-  DocAccessibleParent* Parent() const { return mParentDoc; }
+  DocAccessibleParent* ParentDoc() const { return mParentDoc; }
 
   /*
    * Called when a document in a content process notifies the main process of a
@@ -79,7 +85,7 @@ public:
    */
   void RemoveChildDoc(DocAccessibleParent* aChildDoc)
   {
-    aChildDoc->mParent->SetChildDoc(nullptr);
+    aChildDoc->Parent()->SetChildDoc(nullptr);
     mChildDocs.RemoveElement(aChildDoc);
     aChildDoc->mParentDoc = nullptr;
     MOZ_ASSERT(aChildDoc->mChildDocs.Length() == 0);
@@ -94,11 +100,17 @@ public:
   /**
    * Return the accessible for given id.
    */
-  ProxyAccessible* GetAccessible(uintptr_t aID) const
+  ProxyAccessible* GetAccessible(uintptr_t aID)
   {
+    if (!aID)
+      return this;
+
     ProxyEntry* e = mAccessibles.GetEntry(aID);
     return e ? e->mProxy : nullptr;
   }
+
+  const ProxyAccessible* GetAccessible(uintptr_t aID) const
+    { return const_cast<DocAccessibleParent*>(this)->GetAccessible(aID); }
 
 private:
 

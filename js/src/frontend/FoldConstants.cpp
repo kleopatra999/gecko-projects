@@ -128,6 +128,7 @@ ContainsHoistedDeclaration(ExclusiveContext* cx, ParseNode* node, bool* result)
       case PNK_IMPORT_SPEC_LIST:
       case PNK_IMPORT_SPEC:
       case PNK_EXPORT_FROM:
+      case PNK_EXPORT_DEFAULT:
       case PNK_EXPORT_SPEC_LIST:
       case PNK_EXPORT_SPEC:
       case PNK_EXPORT:
@@ -239,22 +240,6 @@ ContainsHoistedDeclaration(ExclusiveContext* cx, ParseNode* node, bool* result)
         MOZ_ASSERT(node->isArity(PN_BINARY));
         return ContainsHoistedDeclaration(cx, node->pn_right, result);
 
-      // PNK_SEQ has two purposes.
-      //
-      // The first is to prepend destructuring operations to the body of a
-      // deprecated function expression closure: irrelevant here, as this
-      // function doesn't recur into PNK_FUNCTION, and this method's sole
-      // caller acts upon statements nested in if-statements not found in
-      // destructuring operations.
-      //
-      // The second is to provide a place for a hoisted declaration to go, in
-      // the bizarre for-in/of loops that have as target a declaration with an
-      // assignment, e.g. |for (var i = 0 in expr)|.  This case is sadly still
-      // relevant, so we can't banish this ParseNodeKind to the unreachable
-      // list and must check every list member.
-      case PNK_SEQ:
-        return ListContainsHoistedDeclaration(cx, &node->as<ListNode>(), result);
-
       case PNK_FOR: {
         MOZ_ASSERT(node->isArity(PN_BINARY));
 
@@ -287,11 +272,8 @@ ContainsHoistedDeclaration(ExclusiveContext* cx, ParseNode* node, bool* result)
             // for (target of ...), where only target may introduce hoisted
             // declarations.
             //
-            // Either way, if |target| contains a declaration, it's either
-            // |loopHead|'s first kid, *or* that declaration was hoisted to
-            // become a child of an ancestral PNK_SEQ node.  The former case we
-            // detect here.  The latter case is handled by this method
-            // recurring on PNK_SEQ, above.
+            // Either way, if |target| contains a declaration, it's |loopHead|'s
+            // first kid.
             MOZ_ASSERT(loopHead->isArity(PN_TERNARY));
 
             ParseNode* decl = loopHead->pn_kid1;
@@ -402,7 +384,6 @@ ContainsHoistedDeclaration(ExclusiveContext* cx, ParseNode* node, bool* result)
       case PNK_FALSE:
       case PNK_NULL:
       case PNK_THIS:
-      case PNK_LETEXPR:
       case PNK_ELISION:
       case PNK_NUMBER:
       case PNK_NEW:
@@ -886,131 +867,101 @@ Fold(ExclusiveContext* cx, ParseNode** pnp,
         }
         break;
 
-      case PNK_ADD:
-        if (pn->isArity(PN_LIST)) {
-            bool folded = false;
+      case PNK_ADD: {
+        MOZ_ASSERT(pn->isArity(PN_LIST));
 
-            pn2 = pn1->pn_next;
-            if (pn1->isKind(PNK_NUMBER)) {
-                // Fold addition of numeric literals: (1 + 2 + x === 3 + x).
-                // Note that we can only do this the front of the list:
-                // (x + 1 + 2 !== x + 3) when x is a string.
-                while (pn2 && pn2->isKind(PNK_NUMBER)) {
-                    pn1->pn_dval += pn2->pn_dval;
-                    pn1->pn_next = pn2->pn_next;
-                    handler.freeTree(pn2);
-                    pn2 = pn1->pn_next;
-                    pn->pn_count--;
-                    folded = true;
-                }
+        bool folded = false;
+
+        pn2 = pn1->pn_next;
+        if (pn1->isKind(PNK_NUMBER)) {
+            // Fold addition of numeric literals: (1 + 2 + x === 3 + x).
+            // Note that we can only do this the front of the list:
+            // (x + 1 + 2 !== x + 3) when x is a string.
+            while (pn2 && pn2->isKind(PNK_NUMBER)) {
+                pn1->pn_dval += pn2->pn_dval;
+                pn1->pn_next = pn2->pn_next;
+                handler.freeTree(pn2);
+                pn2 = pn1->pn_next;
+                pn->pn_count--;
+                folded = true;
             }
+        }
 
-            // Now search for adjacent pairs of literals to fold for string
-            // concatenation.
-            //
-            // isStringConcat is true if we know the operation we're looking at
-            // will be string concatenation at runtime.  As soon as we see a
-            // string, we know that every addition to the right of it will be
-            // string concatenation, even if both operands are numbers:
-            // ("s" + x + 1 + 2 === "s" + x + "12").
-            //
-            bool isStringConcat = false;
-            RootedString foldedStr(cx);
+        // Now search for adjacent pairs of literals to fold for string
+        // concatenation.
+        //
+        // isStringConcat is true if we know the operation we're looking at
+        // will be string concatenation at runtime.  As soon as we see a
+        // string, we know that every addition to the right of it will be
+        // string concatenation, even if both operands are numbers:
+        // ("s" + x + 1 + 2 === "s" + x + "12").
+        //
+        bool isStringConcat = false;
+        RootedString foldedStr(cx);
 
-            // (number + string) is definitely concatenation, but only at the
-            // front of the list: (x + 1 + "2" !== x + "12") when x is a
-            // number.
-            if (pn1->isKind(PNK_NUMBER) && pn2 && pn2->isKind(PNK_STRING))
-                isStringConcat = true;
+        // (number + string) is definitely concatenation, but only at the
+        // front of the list: (x + 1 + "2" !== x + "12") when x is a
+        // number.
+        if (pn1->isKind(PNK_NUMBER) && pn2 && pn2->isKind(PNK_STRING))
+            isStringConcat = true;
 
-            while (pn2) {
-                isStringConcat = isStringConcat || pn1->isKind(PNK_STRING);
+        while (pn2) {
+            isStringConcat = isStringConcat || pn1->isKind(PNK_STRING);
 
-                if (isStringConcat &&
-                    (pn1->isKind(PNK_STRING) || pn1->isKind(PNK_NUMBER)) &&
-                    (pn2->isKind(PNK_STRING) || pn2->isKind(PNK_NUMBER)))
-                {
-                    // Fold string concatenation of literals.
-                    if (pn1->isKind(PNK_NUMBER) && !FoldType(cx, pn1, PNK_STRING))
-                        return false;
-                    if (pn2->isKind(PNK_NUMBER) && !FoldType(cx, pn2, PNK_STRING))
-                        return false;
-                    if (!foldedStr)
-                        foldedStr = pn1->pn_atom;
-                    RootedString right(cx, pn2->pn_atom);
-                    foldedStr = ConcatStrings<CanGC>(cx, foldedStr, right);
-                    if (!foldedStr)
-                        return false;
-                    pn1->pn_next = pn2->pn_next;
-                    handler.freeTree(pn2);
-                    pn2 = pn1->pn_next;
-                    pn->pn_count--;
-                    folded = true;
-                } else {
-                    if (foldedStr) {
-                        // Convert the rope of folded strings into an Atom.
-                        pn1->pn_atom = AtomizeString(cx, foldedStr);
-                        if (!pn1->pn_atom)
-                            return false;
-                        foldedStr = nullptr;
-                    }
-                    pn1 = pn2;
-                    pn2 = pn2->pn_next;
-                }
-            }
-
-            if (foldedStr) {
-                // Convert the rope of folded strings into an Atom.
-                pn1->pn_atom = AtomizeString(cx, foldedStr);
-                if (!pn1->pn_atom)
+            if (isStringConcat &&
+                (pn1->isKind(PNK_STRING) || pn1->isKind(PNK_NUMBER)) &&
+                (pn2->isKind(PNK_STRING) || pn2->isKind(PNK_NUMBER)))
+            {
+                // Fold string concatenation of literals.
+                if (pn1->isKind(PNK_NUMBER) && !FoldType(cx, pn1, PNK_STRING))
                     return false;
-            }
-
-            if (folded) {
-                if (pn->pn_count == 1) {
-                    // We reduced the list to one constant. There is no
-                    // addition anymore. Replace the PNK_ADD node with the
-                    // single PNK_STRING or PNK_NUMBER node.
-                    ReplaceNode(pnp, pn1);
-                    pn = pn1;
-                } else if (!pn2) {
-                    pn->pn_tail = &pn1->pn_next;
+                if (pn2->isKind(PNK_NUMBER) && !FoldType(cx, pn2, PNK_STRING))
+                    return false;
+                if (!foldedStr)
+                    foldedStr = pn1->pn_atom;
+                RootedString right(cx, pn2->pn_atom);
+                foldedStr = ConcatStrings<CanGC>(cx, foldedStr, right);
+                if (!foldedStr)
+                    return false;
+                pn1->pn_next = pn2->pn_next;
+                handler.freeTree(pn2);
+                pn2 = pn1->pn_next;
+                pn->pn_count--;
+                folded = true;
+            } else {
+                if (foldedStr) {
+                    // Convert the rope of folded strings into an Atom.
+                    pn1->pn_atom = AtomizeString(cx, foldedStr);
+                    if (!pn1->pn_atom)
+                        return false;
+                    foldedStr = nullptr;
                 }
+                pn1 = pn2;
+                pn2 = pn2->pn_next;
             }
-            break;
         }
 
-        /* Handle a binary string concatenation. */
-        MOZ_ASSERT(pn->isArity(PN_BINARY));
-        if (pn1->isKind(PNK_STRING) || pn2->isKind(PNK_STRING)) {
-            if (!FoldType(cx, !pn1->isKind(PNK_STRING) ? pn1 : pn2, PNK_STRING))
+        if (foldedStr) {
+            // Convert the rope of folded strings into an Atom.
+            pn1->pn_atom = AtomizeString(cx, foldedStr);
+            if (!pn1->pn_atom)
                 return false;
-            if (!pn1->isKind(PNK_STRING) || !pn2->isKind(PNK_STRING))
-                return true;
-            RootedString left(cx, pn1->pn_atom);
-            RootedString right(cx, pn2->pn_atom);
-            RootedString str(cx, ConcatStrings<CanGC>(cx, left, right));
-            if (!str)
-                return false;
-            pn->pn_atom = AtomizeString(cx, str);
-            if (!pn->pn_atom)
-                return false;
-            pn->setKind(PNK_STRING);
-            pn->setOp(JSOP_STRING);
-            pn->setArity(PN_NULLARY);
-            handler.freeTree(pn1);
-            handler.freeTree(pn2);
-            break;
         }
 
-        /* Can't concatenate string literals, let's try numbers. */
-        if (!FoldType(cx, pn1, PNK_NUMBER) || !FoldType(cx, pn2, PNK_NUMBER))
-            return false;
-        if (pn1->isKind(PNK_NUMBER) && pn2->isKind(PNK_NUMBER)) {
-            if (!FoldBinaryNumeric(cx, pn->getOp(), pn1, pn2, pn))
-                return false;
+        if (folded) {
+            if (pn->pn_count == 1) {
+                // We reduced the list to one constant. There is no
+                // addition anymore. Replace the PNK_ADD node with the
+                // single PNK_STRING or PNK_NUMBER node.
+                ReplaceNode(pnp, pn1);
+                pn = pn1;
+            } else if (!pn2) {
+                pn->pn_tail = &pn1->pn_next;
+            }
         }
+
         break;
+      }
 
       case PNK_SUB:
       case PNK_STAR:

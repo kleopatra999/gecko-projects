@@ -23,7 +23,6 @@
 #include "nsDebug.h"                    // for NS_ASSERTION
 #include "nsISupportsImpl.h"            // for Image::Release, etc
 #include "nsRect.h"                     // for mozilla::gfx::IntRect
-#include "nsSize.h"                     // for nsIntSize
 #include "nsTArray.h"                   // for nsTArray
 #include "mozilla/Atomics.h"
 #include "mozilla/WeakPtr.h"
@@ -804,7 +803,8 @@ public:
 
   virtual TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() override
   {
-    return mSourceSurface.get();
+    RefPtr<gfx::SourceSurface> surface(mSourceSurface);
+    return surface.forget();
   }
 
   virtual TextureClient* GetTextureClient(CompositableClient* aClient) override;

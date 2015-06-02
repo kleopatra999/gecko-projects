@@ -471,12 +471,12 @@ struct nsStyleBackground {
       return !(*this == aOther);
     }
   };
-  
+
   struct Repeat;
   friend struct Repeat;
   struct Repeat {
     uint8_t mXRepeat, mYRepeat;
-    
+
     // Initialize nothing
     Repeat() {}
 
@@ -1583,7 +1583,7 @@ struct nsStyleTextReset {
   nsChangeHint CalcDifference(const nsStyleTextReset& aOther) const;
   static nsChangeHint MaxDifference() {
     return nsChangeHint(
-        NS_STYLE_HINT_REFLOW | 
+        NS_STYLE_HINT_REFLOW |
         nsChangeHint_UpdateSubtreeOverflow);
   }
   static nsChangeHint MaxDifferenceNeverInherited() {
@@ -2109,6 +2109,7 @@ struct nsStyleDisplay {
   // null, as appropriate.)
   uint8_t mBackfaceVisibility;
   uint8_t mTransformStyle;
+  uint8_t mTransformBox;        // [reset] see nsStyleConsts.h
   nsRefPtr<nsCSSValueSharedList> mSpecifiedTransform; // [reset]
   nsStyleCoord mTransformOrigin[3]; // [reset] percent, coord, calc, 3rd param is coord, calc only
   nsStyleCoord mChildPerspective; // [reset] coord

@@ -55,7 +55,7 @@
 #include "nsGkAtoms.h"
 #include "nsXULElement.h"
 #include "jsapi.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "rdf.h"
 #include "pldhash.h"
 #include "plhash.h"
@@ -502,7 +502,7 @@ nsXULTemplateBuilder::UpdateResult(nsIXULTemplateResult* aOldResult,
                                    nsIXULTemplateResult* aNewResult,
                                    nsIDOMNode* aQueryNode)
 {
-    PR_LOG(gXULTemplateLog, PR_LOG_ALWAYS,
+    MOZ_LOG(gXULTemplateLog, PR_LOG_ALWAYS,
            ("nsXULTemplateBuilder::UpdateResult %p %p %p",
            aOldResult, aNewResult, aQueryNode));
 

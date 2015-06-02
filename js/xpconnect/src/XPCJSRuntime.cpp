@@ -27,6 +27,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/Services.h"
+#include "mozilla/dom/ScriptSettings.h"
 
 #include "nsContentUtils.h"
 #include "nsCCUncollectableMarker.h"
@@ -59,6 +60,7 @@ using namespace mozilla;
 using namespace xpc;
 using namespace JS;
 using mozilla::dom::PerThreadAtomCache;
+using mozilla::dom::AutoEntryScript;
 
 /***************************************************************************/
 
@@ -279,6 +281,16 @@ TryParseLocationURICandidate(const nsACString& uristr,
         if (StringBeginsWith(uristr, kGRE) ||
             StringBeginsWith(uristr, kToolkit) ||
             StringBeginsWith(uristr, kBrowser))
+            return false;
+
+        // -- GROSS HACK ALERT --
+        // The Yandex Elements 8.10.2 extension implements its own "xb://" URL
+        // scheme. If we call NS_NewURI() on an "xb://..." URL, we'll end up
+        // calling into the extension's own JS-implemented nsIProtocolHandler
+        // object, which we can't allow while we're iterating over the JS heap.
+        // So just skip any such URL.
+        // -- GROSS HACK ALERT --
+        if (StringBeginsWith(uristr, NS_LITERAL_CSTRING("xb")))
             return false;
     }
 
@@ -1360,11 +1372,15 @@ xpc::SimulateActivityCallback(bool aActive)
 }
 
 // static
-JSContext*
-XPCJSRuntime::DefaultJSContextCallback(JSRuntime* rt)
+bool
+XPCJSRuntime::EnvironmentPreparer::invoke(HandleObject scope, js::ScriptEnvironmentPreparer::Closure& closure)
 {
-    MOZ_ASSERT(rt == Get()->Runtime());
-    return Get()->GetJSContextStack()->GetSafeJSContext();
+    MOZ_ASSERT(NS_IsMainThread());
+    nsIGlobalObject* global = NativeGlobal(scope);
+    NS_ENSURE_TRUE(global && global->GetGlobalJSObject(), false);
+    AutoEntryScript aes(global, "JS-engine-initiated execution");
+    aes.TakeOwnershipOfErrorReporting();
+    return closure(aes.cx());
 }
 
 // static
@@ -1377,22 +1393,6 @@ XPCJSRuntime::ActivityCallback(void* arg, bool active)
 
     XPCJSRuntime* self = static_cast<XPCJSRuntime*>(arg);
     self->mWatchdogManager->RecordRuntimeActivity(active);
-}
-
-// static
-//
-// JS-CTypes creates and caches a JSContext that it uses when executing JS
-// callbacks. When we're notified that ctypes is about to call into some JS,
-// push the cx to maintain the integrity of the context stack.
-void
-XPCJSRuntime::CTypesActivityCallback(JSContext* cx, js::CTypesActivityType type)
-{
-  if (type == js::CTYPES_CALLBACK_BEGIN) {
-    if (!xpc::PushJSContextNoScriptContext(cx))
-      MOZ_CRASH();
-  } else if (type == js::CTYPES_CALLBACK_END) {
-    xpc::PopJSContextNoScriptContext();
-  }
 }
 
 // static
@@ -1777,6 +1777,20 @@ GetCompartmentName(JSCompartment* c, nsCString& name, int* anonymizeID,
     } else {
         name.AssignLiteral("null-principal");
     }
+}
+
+extern void
+xpc::GetCurrentCompartmentName(JSContext* cx, nsCString& name)
+{
+    RootedObject global(cx, JS::CurrentGlobalOrNull(cx));
+    if (!global) {
+        name.AssignLiteral("no global");
+        return;
+    }
+
+    JSCompartment* compartment = GetObjectCompartment(global);
+    int anonymizeID = 0;
+    GetCompartmentName(compartment, name, &anonymizeID, false);
 }
 
 static int64_t
@@ -3148,6 +3162,15 @@ AccumulateTelemetryCallback(int id, uint32_t sample, const char* key)
       case JS_TELEMETRY_GC_SCC_SWEEP_MAX_PAUSE_MS:
         Telemetry::Accumulate(Telemetry::GC_SCC_SWEEP_MAX_PAUSE_MS, sample);
         break;
+      case JS_TELEMETRY_GC_MINOR_REASON:
+        Telemetry::Accumulate(Telemetry::GC_MINOR_REASON, sample);
+        break;
+      case JS_TELEMETRY_GC_MINOR_REASON_LONG:
+        Telemetry::Accumulate(Telemetry::GC_MINOR_REASON_LONG, sample);
+        break;
+      case JS_TELEMETRY_GC_MINOR_US:
+        Telemetry::Accumulate(Telemetry::GC_MINOR_US, sample);
+        break;
       case JS_TELEMETRY_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT:
         Telemetry::Accumulate(Telemetry::JS_DEPRECATED_LANGUAGE_EXTENSIONS_IN_CONTENT, sample);
         break;
@@ -3293,6 +3316,47 @@ static const JSWrapObjectCallbacks WrapObjectCallbacks = {
     xpc::WrapperFactory::PrepareForWrapping
 };
 
+/**
+ * Group JSCompartments into PerformanceGroups.
+ *
+ * - All JSCompartments from the same add-on belong to the same
+ *   PerformanceGroup.
+ * - All JSCompartments from the same same webpage (including
+ *   frames) belong to the same PerformanceGroup.
+ * - All other JSCompartments (normally, system add-ons)
+ *   belong to to a big uncategorized PerformanceGroup.
+ */
+static void*
+GetCurrentPerfGroupCallback(JSContext* cx) {
+    RootedObject global(cx, CurrentGlobalOrNull(cx));
+    if (!global) {
+        // This can happen for the atom compartments, which is system
+        // code.
+        return nullptr;
+    }
+
+    JSAddonId* addonId = AddonIdOfObject(global);
+    if (addonId) {
+        // If this is an add-on, use the id as key.
+        return addonId;
+    }
+
+    // If the compartment belongs to a webpage, use the address of the
+    // topmost scriptable window, hence regrouping all frames of a
+    // window.
+    nsRefPtr<nsGlobalWindow> win = WindowOrNull(global);
+    if (win) {
+        nsCOMPtr<nsIDOMWindow> top;
+        nsresult rv = win->GetScriptableTop(getter_AddRefs(top));
+        NS_ENSURE_SUCCESS(rv, nullptr);
+
+        return top.get();
+    }
+
+    // Otherwise, this is platform code, use `nullptr` as key.
+    return nullptr;
+}
+
 XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
    : CycleCollectedJSRuntime(nullptr, JS::DefaultHeapMaxBytes, JS::DefaultNurseryBytes),
    mJSContextStack(new XPCJSContextStack(this)),
@@ -3387,15 +3451,15 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     // were not taken at the time of this writing, so we hazard a guess that
     // ASAN builds have roughly thrice the stack overhead as normal builds.
     // On normal builds, the largest stack frame size we might encounter is
-    // 9.0k (see above), so let's use a buffer of 9.0 * 3 * 10 = 270k.
+    // 9.0k (see above), so let's use a buffer of 9.0 * 5 * 10 = 450k.
     const size_t kStackQuota =  2 * kDefaultStackQuota;
-    const size_t kTrustedScriptBuffer = 270 * 1024;
+    const size_t kTrustedScriptBuffer = 450 * 1024;
 #elif defined(XP_WIN)
     // 1MB is the default stack size on Windows, so use 900k.
     // Windows PGO stack frames have unfortunately gotten pretty large lately. :-(
     const size_t kStackQuota = 900 * 1024;
-    const size_t kTrustedScriptBuffer = (sizeof(size_t) == 8) ? 160 * 1024
-                                                              : 100 * 1024;
+    const size_t kTrustedScriptBuffer = (sizeof(size_t) == 8) ? 180 * 1024   //win64
+                                                              : 120 * 1024;  //win32
     // The following two configurations are linux-only. Given the numbers above,
     // we use 50k and 100k trusted buffers on 32-bit and 64-bit respectively.
 #elif defined(DEBUG)
@@ -3431,9 +3495,8 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
         stack->sampleRuntime(runtime);
 #endif
     JS_SetAccumulateTelemetryCallback(runtime, AccumulateTelemetryCallback);
-    js::SetDefaultJSContextCallback(runtime, DefaultJSContextCallback);
+    js::SetScriptEnvironmentPreparer(runtime, &mEnvironmentPreparer);
     js::SetActivityCallback(runtime, ActivityCallback, this);
-    js::SetCTypesActivityCallback(runtime, CTypesActivityCallback);
     JS_SetInterruptCallback(runtime, InterruptCallback);
 
     // The JS engine needs to keep the source code around in order to implement
@@ -3473,6 +3536,8 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     // Watch for the JS boolean options.
     ReloadPrefsCallback(nullptr, this);
     Preferences::RegisterCallback(ReloadPrefsCallback, JS_OPTIONS_DOT_STR, this);
+
+    JS_SetCurrentPerfGroupCallback(runtime, ::GetCurrentPerfGroupCallback);
 }
 
 // static

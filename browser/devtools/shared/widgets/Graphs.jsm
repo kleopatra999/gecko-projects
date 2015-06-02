@@ -9,7 +9,7 @@ Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
 const promise = Cu.import("resource://gre/modules/Promise.jsm", {}).Promise;
 const {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
 const {EventEmitter} = Cu.import("resource://gre/modules/devtools/event-emitter.js", {});
-const {DevToolsWorker} = Cu.import("resource:///modules/devtools/shared/worker.js", {});
+const {DevToolsWorker} = Cu.import("resource://gre/modules/devtools/shared/worker.js", {});
 
 this.EXPORTED_SYMBOLS = [
   "GraphCursor",
@@ -684,6 +684,13 @@ AbstractCanvasGraph.prototype = {
       return;
     }
 
+    // Handle a changed size by mapping the old selection to the new width
+    if (this._width && newWidth && this.hasSelection()) {
+      let ratio = this._width / (newWidth * this._pixelRatio);
+      this._selection.start = Math.round(this._selection.start / ratio);
+      this._selection.end = Math.round(this._selection.end / ratio);
+    }
+
     bounds.width = newWidth;
     bounds.height = newHeight;
     this._iframe.setAttribute("width", bounds.width);
@@ -826,7 +833,9 @@ AbstractCanvasGraph.prototype = {
       stripesColor: this.selectionStripesColor
     });
     ctx.fillStyle = pattern;
-    ctx.fillRect(start, 0, end - start, this._height);
+    let rectStart = Math.min(this._width, Math.max(0, start));
+    let rectEnd = Math.min(this._width, Math.max(0, end));
+    ctx.fillRect(rectStart, 0, rectEnd - rectStart, this._height);
 
     // Draw left boundary.
 
@@ -2025,9 +2034,14 @@ AbstractCanvasGraph.createIframe = function(url, parent, callback) {
     callback(iframe);
   });
 
+  // Setting 100% width on the frame and flex on the parent allows the graph
+  // to properly shrink when the window is resized to be smaller.
   iframe.setAttribute("frameborder", "0");
+  iframe.style.width = "100%";
+  iframe.style.minWidth = "50px";
   iframe.src = url;
 
+  parent.style.display = "flex";
   parent.appendChild(iframe);
 };
 

@@ -69,6 +69,7 @@
 #include "RestyleManager.h"
 #include "nsCaret.h"
 #include "nsISelection.h"
+#include "nsDOMTokenList.h"
 
 // GetCurrentTime is defined in winbase.h as zero argument macro forwarding to
 // GetTickCount().
@@ -897,9 +898,20 @@ nsDisplayListBuilder::MarkFramesForDisplayList(nsIFrame* aDirtyFrame,
                                                const nsFrameList& aFrames,
                                                const nsRect& aDirtyRect) {
   mFramesMarkedForDisplay.SetCapacity(mFramesMarkedForDisplay.Length() + aFrames.GetLength());
-  for (nsFrameList::Enumerator e(aFrames); !e.AtEnd(); e.Next()) {
-    mFramesMarkedForDisplay.AppendElement(e.get());
-    MarkOutOfFlowFrameForDisplay(aDirtyFrame, e.get(), aDirtyRect);
+  for (nsIFrame* e : aFrames) {
+    // Skip the AccessibleCaret frame when building no caret.
+    if (!IsBuildingCaret()) {
+      nsIContent* content = e->GetContent();
+      if (content && content->IsInNativeAnonymousSubtree() && content->IsElement()) {
+        ErrorResult rv;
+        auto classList = content->AsElement()->ClassList();
+        if (classList->Contains(NS_LITERAL_STRING("moz-accessiblecaret"), rv)) {
+          continue;
+        }
+      }
+    }
+    mFramesMarkedForDisplay.AppendElement(e);
+    MarkOutOfFlowFrameForDisplay(aDirtyFrame, e, aDirtyRect);
   }
 }
 
@@ -1257,6 +1269,24 @@ nsDisplayListBuilder::AppendNewScrollInfoItemForHoisting(nsDisplayScrollInfoLaye
   mScrollInfoItemsForHoisting->AppendNewToTop(aScrollInfoItem);
 }
 
+void
+nsDisplayListBuilder::StoreDirtyRectForScrolledContents(const nsIFrame* aScrollableFrame,
+                                                        const nsRect& aDirty)
+{
+  mDirtyRectForScrolledContents.Put(const_cast<nsIFrame*>(aScrollableFrame),
+                                    aDirty + ToReferenceFrame(aScrollableFrame));
+}
+
+nsRect
+nsDisplayListBuilder::GetDirtyRectForScrolledContents(const nsIFrame* aScrollableFrame) const
+{
+  nsRect result;
+  if (!mDirtyRectForScrolledContents.Get(const_cast<nsIFrame*>(aScrollableFrame), &result)) {
+    return nsRect();
+  }
+  return result;
+}
+
 void nsDisplayListSet::MoveTo(const nsDisplayListSet& aDestination) const
 {
   aDestination.BorderBackground()->AppendToTop(BorderBackground());
@@ -1517,34 +1547,53 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
   // want the root container layer to have metrics. If the parent process is
   // using XUL windows, there is no root scrollframe, and without explicitly
   // creating metrics there will be no guaranteed top-level APZC.
-  if (gfxPrefs::LayoutUseContainersForRootFrames() ||
-      (XRE_IsParentProcess() && !presShell->GetRootScrollFrame()))
-  {
+  bool addMetrics = gfxPrefs::LayoutUseContainersForRootFrames() ||
+      (XRE_IsParentProcess() && !presShell->GetRootScrollFrame());
+
+  // Add metrics if there are none in the layer tree with the id (create an id
+  // if there isn't one already) of the root scroll frame/root content.
+  bool ensureMetricsForRootId =
+    gfxPrefs::AsyncPanZoomEnabled() &&
+    !gfxPrefs::LayoutUseContainersForRootFrames() &&
+    aBuilder->IsPaintingToWindow() &&
+    !presContext->GetParentPresContext();
+
+  nsIContent* content = nullptr;
+  nsIFrame* rootScrollFrame = presShell->GetRootScrollFrame();
+  if (rootScrollFrame) {
+    content = rootScrollFrame->GetContent();
+  } else {
+    // If there is no root scroll frame, pick the document element instead.
+    // The only case we don't want to do this is in non-APZ fennec, where
+    // we want the root xul document to get a null scroll id so that the root
+    // content document gets the first non-null scroll id.
+#if !defined(MOZ_WIDGET_ANDROID) || defined(MOZ_ANDROID_APZ)
+    content = document->GetDocumentElement();
+#endif
+  }
+
+
+  if (ensureMetricsForRootId && content) {
+    ViewID scrollId = nsLayoutUtils::FindOrCreateIDFor(content);
+    if (nsLayoutUtils::ContainsMetricsWithId(root, scrollId)) {
+      ensureMetricsForRootId = false;
+    }
+  }
+
+  if (addMetrics || ensureMetricsForRootId) {
     bool isRoot = presContext->IsRootContentDocument();
 
     nsRect viewport(aBuilder->ToReferenceFrame(frame), frame->GetSize());
 
-    nsIFrame* scrollFrame = presShell->GetRootScrollFrame();
-    nsIContent* content = nullptr;
-    if (scrollFrame) {
-      content = scrollFrame->GetContent();
-    } else {
-      // If there is no root scroll frame, pick the document element instead.
-      // The only case we don't want to do this is in non-APZ fennec, where
-      // we want the root xul document to get a null scroll id so that the root
-      // content document gets the first non-null scroll id.
-#if !defined(MOZ_WIDGET_ANDROID) || defined(MOZ_ANDROID_APZ)
-      content = document->GetDocumentElement();
-#endif
-    }
-
     root->SetFrameMetrics(
       nsLayoutUtils::ComputeFrameMetrics(frame,
-                         presShell->GetRootScrollFrame(),
-                         content,
+                         rootScrollFrame, content,
                          aBuilder->FindReferenceFrameFor(frame),
-                         root, FrameMetrics::NULL_SCROLL_ID, viewport,
+                         root, FrameMetrics::NULL_SCROLL_ID, viewport, Nothing(),
                          isRoot, containerParameters));
+  } else {
+    // Set empty metrics to clear any metrics that might be on a recycled layer.
+    root->SetFrameMetrics(nsTArray<FrameMetrics>());
   }
 
   // NS_WARNING is debug-only, so don't even bother checking the conditions in
@@ -2164,7 +2213,7 @@ nsDisplayBackgroundImage::AppendBackgroundItemsToTop(nsDisplayListBuilder* aBuil
 
   if (isThemed) {
     nsITheme* theme = presContext->GetTheme();
-    if (theme->NeedToClearBackgroundBehindWidget(aFrame->StyleDisplay()->mAppearance) &&
+    if (theme->NeedToClearBackgroundBehindWidget(aFrame, aFrame->StyleDisplay()->mAppearance) &&
         aBuilder->IsInRootChromeDocumentOrPopup() && !aBuilder->IsInTransform()) {
       bgItemList.AppendNewToTop(
         new (aBuilder) nsDisplayClearBackground(aBuilder, aFrame));
@@ -2296,11 +2345,12 @@ nsDisplayBackgroundImage::ShouldFixToViewport(LayerManager* aManager)
 }
 
 bool
-nsDisplayBackgroundImage::TryOptimizeToImageLayer(LayerManager* aManager,
+nsDisplayBackgroundImage::CanOptimizeToImageLayer(LayerManager* aManager,
                                                   nsDisplayListBuilder* aBuilder)
 {
-  if (!mBackgroundStyle)
+  if (!mBackgroundStyle) {
     return false;
+  }
 
   nsPresContext* presContext = mFrame->PresContext();
   uint32_t flags = aBuilder->GetBackgroundPaintFlags();
@@ -2320,13 +2370,14 @@ nsDisplayBackgroundImage::TryOptimizeToImageLayer(LayerManager* aManager,
                                            borderArea, borderArea, layer);
   nsImageRenderer* imageRenderer = &state.mImageRenderer;
   // We only care about images here, not gradients.
-  if (!imageRenderer->IsRasterImage())
+  if (!imageRenderer->IsRasterImage()) {
     return false;
+  }
 
-  nsRefPtr<ImageContainer> imageContainer = imageRenderer->GetContainer(aManager);
-  // Image is not ready to be made into a layer yet
-  if (!imageContainer)
+  if (!imageRenderer->IsContainerAvailable(aManager, aBuilder)) {
+    // The image is not ready to be made into a layer yet.
     return false;
+  }
 
   // We currently can't handle tiled or partial backgrounds.
   if (!state.mDestArea.IsEqualEdges(state.mFillArea)) {
@@ -2339,9 +2390,11 @@ nsDisplayBackgroundImage::TryOptimizeToImageLayer(LayerManager* aManager,
   int32_t appUnitsPerDevPixel = presContext->AppUnitsPerDevPixel();
   mDestRect =
     LayoutDeviceRect::FromAppUnits(state.mDestArea, appUnitsPerDevPixel);
-  mImageContainer = imageContainer;
 
   // Ok, we can turn this into a layer if needed.
+  mImage = imageRenderer->GetImage();
+  MOZ_ASSERT(mImage);
+
   return true;
 }
 
@@ -2349,12 +2402,23 @@ already_AddRefed<ImageContainer>
 nsDisplayBackgroundImage::GetContainer(LayerManager* aManager,
                                        nsDisplayListBuilder *aBuilder)
 {
-  if (!TryOptimizeToImageLayer(aManager, aBuilder)) {
+  if (!mImage) {
+    MOZ_ASSERT_UNREACHABLE("Must call CanOptimizeToImage() and get true "
+                           "before calling GetContainer()");
     return nullptr;
   }
 
-  nsRefPtr<ImageContainer> container = mImageContainer;
+  if (!mImageContainer) {
+    // We don't have an ImageContainer yet; get it from mImage.
 
+    uint32_t flags = aBuilder->ShouldSyncDecodeImages()
+                   ? imgIContainer::FLAG_SYNC_DECODE
+                   : imgIContainer::FLAG_NONE;
+
+    mImageContainer = mImage->GetImageContainer(aManager, flags);
+  }
+
+  nsRefPtr<ImageContainer> container = mImageContainer;
   return container.forget();
 }
 
@@ -2386,19 +2450,24 @@ nsDisplayBackgroundImage::GetLayerState(nsDisplayListBuilder* aBuilder,
     }
   }
 
-  if (!TryOptimizeToImageLayer(aManager, aBuilder)) {
+  if (!CanOptimizeToImageLayer(aManager, aBuilder)) {
     return LAYER_NONE;
   }
 
+  MOZ_ASSERT(mImage);
+
   if (!animated) {
-    mozilla::gfx::IntSize imageSize = mImageContainer->GetCurrentSize();
-    NS_ASSERTION(imageSize.width != 0 && imageSize.height != 0, "Invalid image size!");
+    int32_t imageWidth;
+    int32_t imageHeight;
+    mImage->GetWidth(&imageWidth);
+    mImage->GetHeight(&imageHeight);
+    NS_ASSERTION(imageWidth != 0 && imageHeight != 0, "Invalid image size!");
 
     const LayerRect destLayerRect = mDestRect * aParameters.Scale();
 
     // Calculate the scaling factor for the frame.
-    const gfxSize scale = gfxSize(destLayerRect.width / imageSize.width,
-                                  destLayerRect.height / imageSize.height);
+    const gfxSize scale = gfxSize(destLayerRect.width / imageWidth,
+                                  destLayerRect.height / imageHeight);
 
     // If we are not scaling at all, no point in separating this into a layer.
     if (scale.width == 1.0f && scale.height == 1.0f) {
@@ -2426,7 +2495,8 @@ nsDisplayBackgroundImage::BuildLayer(nsDisplayListBuilder* aBuilder,
     if (!layer)
       return nullptr;
   }
-  layer->SetContainer(mImageContainer);
+  nsRefPtr<ImageContainer> imageContainer = GetContainer(aManager, aBuilder);
+  layer->SetContainer(imageContainer);
   ConfigureLayer(layer, aParameters);
   return layer.forget();
 }
@@ -2437,9 +2507,14 @@ nsDisplayBackgroundImage::ConfigureLayer(ImageLayer* aLayer,
 {
   aLayer->SetFilter(nsLayoutUtils::GetGraphicsFilterForFrame(mFrame));
 
-  mozilla::gfx::IntSize imageSize = mImageContainer->GetCurrentSize();
-  NS_ASSERTION(imageSize.width != 0 && imageSize.height != 0, "Invalid image size!");
-  if (imageSize.width > 0 && imageSize.height > 0) {
+  MOZ_ASSERT(mImage);
+  int32_t imageWidth;
+  int32_t imageHeight;
+  mImage->GetWidth(&imageWidth);
+  mImage->GetHeight(&imageHeight);
+  NS_ASSERTION(imageWidth != 0 && imageHeight != 0, "Invalid image size!");
+
+  if (imageWidth > 0 && imageHeight > 0) {
     // We're actually using the ImageContainer. Let our frame know that it
     // should consider itself to have painted successfully.
     nsDisplayBackgroundGeometry::UpdateDrawResult(this, DrawResult::SUCCESS);
@@ -2453,8 +2528,8 @@ nsDisplayBackgroundImage::ConfigureLayer(ImageLayer* aLayer,
 
   const LayoutDevicePoint p = mDestRect.TopLeft();
   Matrix transform = Matrix::Translation(p.x, p.y);
-  transform.PreScale(mDestRect.width / imageSize.width,
-                     mDestRect.height / imageSize.height);
+  transform.PreScale(mDestRect.width / imageWidth,
+                     mDestRect.height / imageHeight);
   aLayer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
 }
 
@@ -2886,19 +2961,36 @@ void
 nsDisplayBackgroundColor::Paint(nsDisplayListBuilder* aBuilder,
                                 nsRenderingContext* aCtx)
 {
-  DrawTarget& aDrawTarget = *aCtx->GetDrawTarget();
-
   if (mColor == NS_RGBA(0, 0, 0, 0)) {
     return;
   }
 
   nsRect borderBox = nsRect(ToReferenceFrame(), mFrame->GetSize());
 
+#if 0
+  // See https://bugzilla.mozilla.org/show_bug.cgi?id=1148418#c21 for why this
+  // results in a precision induced rounding issue that makes the rect one
+  // pixel shorter in rare cases. Disabled in favor of the old code for now.
+  // Note that the pref layout.css.devPixelsPerPx needs to be set to 1 to
+  // reproduce the bug.
+  DrawTarget& aDrawTarget = *aCtx->GetDrawTarget();
+
   Rect rect = NSRectToSnappedRect(borderBox,
                                   mFrame->PresContext()->AppUnitsPerDevPixel(),
                                   aDrawTarget);
   ColorPattern color(ToDeviceColor(mColor));
   aDrawTarget.FillRect(rect, color);
+#else
+  gfxContext* ctx = aCtx->ThebesContext();
+
+  gfxRect bounds =
+    nsLayoutUtils::RectToGfxRect(borderBox, mFrame->PresContext()->AppUnitsPerDevPixel());
+
+  ctx->SetColor(mColor);
+  ctx->NewPath();
+  ctx->Rectangle(bounds, true);
+  ctx->Fill();
+#endif
 }
 
 nsRegion
@@ -4132,7 +4224,7 @@ nsDisplaySubDocument::ComputeFrameMetrics(Layer* aLayer,
   return MakeUnique<FrameMetrics>(
     nsLayoutUtils::ComputeFrameMetrics(
       mFrame, rootScrollFrame, rootScrollFrame->GetContent(), ReferenceFrame(),
-      aLayer, mScrollParentId, viewport,
+      aLayer, mScrollParentId, viewport, Nothing(),
       isRootContentDocument, params));
 }
 
@@ -4404,7 +4496,7 @@ nsDisplayScrollInfoLayer::ComputeFrameMetrics(Layer* aLayer,
     nsLayoutUtils::ComputeFrameMetrics(
       mScrolledFrame, mScrollFrame, mScrollFrame->GetContent(),
       ReferenceFrame(), aLayer,
-      mScrollParentId, viewport, false, params)));
+      mScrollParentId, viewport, Nothing(), false, params)));
 }
 
 
@@ -4609,17 +4701,23 @@ nsDisplayTransform::GetDeltaToTransformOrigin(const nsIFrame* aFrame,
    * a distance, it's already computed for us!
    */
   const nsStyleDisplay* display = aFrame->StyleDisplay();
+  // We don't use aBoundsOverride for SVG since we need to account for
+  // refBox.X/Y(). This happens to work because ReflowSVG sets the frame's
+  // mRect before calling FinishAndStoreOverflow so we don't need the override.
   TransformReferenceBox refBox;
-  if (aBoundsOverride) {
+  if (aBoundsOverride &&
+      !(aFrame->GetStateBits() & NS_FRAME_SVG_LAYOUT)) {
     refBox.Init(aBoundsOverride->Size());
   } else {
     refBox.Init(aFrame);
   }
 
   /* Allows us to access dimension getters by index. */
-  float coords[3];
+  float coords[2];
   TransformReferenceBox::DimensionGetter dimensionGetter[] =
     { &TransformReferenceBox::Width, &TransformReferenceBox::Height };
+  TransformReferenceBox::DimensionGetter offsetGetter[] =
+    { &TransformReferenceBox::X, &TransformReferenceBox::Y };
 
   for (uint8_t index = 0; index < 2; ++index) {
     /* If the -moz-transform-origin specifies a percentage, take the percentage
@@ -4641,25 +4739,19 @@ nsDisplayTransform::GetDeltaToTransformOrigin(const nsIFrame* aFrame,
       coords[index] =
         NSAppUnitsToFloatPixels(coord.GetCoordValue(), aAppUnitsPerPixel);
     }
-    if ((aFrame->GetStateBits() & NS_FRAME_SVG_LAYOUT) &&
-        coord.GetUnit() != eStyleUnit_Percent) {
-      // <length> values represent offsets from the origin of the SVG element's
-      // user space, not the top left of its bounds, so we must adjust for that:
-      nscoord offset =
-        (index == 0) ? aFrame->GetPosition().x : aFrame->GetPosition().y;
-      coords[index] -= NSAppUnitsToFloatPixels(offset, aAppUnitsPerPixel);
+
+    if (aFrame->GetStateBits() & NS_FRAME_SVG_LAYOUT) {
+      // SVG frames (unlike other frames) have a reference box that can be (and
+      // typically is) offset from the TopLeft() of the frame. We need to
+      // account for that here.
+      coords[index] +=
+        NSAppUnitsToFloatPixels((refBox.*offsetGetter[index])(), aAppUnitsPerPixel);
     }
   }
 
-  coords[2] = NSAppUnitsToFloatPixels(display->mTransformOrigin[2].GetCoordValue(),
-                                      aAppUnitsPerPixel);
-  if (aBoundsOverride) {
-    // Adjust based on the origin of the override:
-    coords[0] += NSAppUnitsToFloatPixels(aBoundsOverride->x, aAppUnitsPerPixel);
-    coords[1] += NSAppUnitsToFloatPixels(aBoundsOverride->y, aAppUnitsPerPixel);
-  }
-
-  return Point3D(coords[0], coords[1], coords[2]);
+  return Point3D(coords[0], coords[1],
+                 NSAppUnitsToFloatPixels(display->mTransformOrigin[2].GetCoordValue(),
+                                         aAppUnitsPerPixel));
 }
 
 /* Returns the delta specified by the -moz-perspective-origin property.
@@ -4809,8 +4901,12 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
 
   // Get the underlying transform matrix:
 
+  // We don't use aBoundsOverride for SVG since we need to account for
+  // refBox.X/Y(). This happens to work because ReflowSVG sets the frame's
+  // mRect before calling FinishAndStoreOverflow so we don't need the override.
   TransformReferenceBox refBox;
-  if (aBoundsOverride) {
+  if (aBoundsOverride &&
+      (!frame || !(frame->GetStateBits() & NS_FRAME_SVG_LAYOUT))) {
     refBox.Init(aBoundsOverride->Size());
   } else {
     refBox.Init(frame);
@@ -4824,6 +4920,8 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
   Matrix svgTransform, transformFromSVGParent;
   bool hasSVGTransforms =
     frame && frame->IsSVGTransformed(&svgTransform, &transformFromSVGParent);
+  bool hasTransformFromSVGParent =
+    hasSVGTransforms && !transformFromSVGParent.IsIdentity();
   /* Transformed frames always have a transform, or are preserving 3d (and might still have perspective!) */
   if (aProperties.mTransformList) {
     result = nsStyleTransformMatrix::ReadTransforms(aProperties.mTransformList->mHead,
@@ -4837,15 +4935,6 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
     svgTransform._31 *= pixelsPerCSSPx;
     svgTransform._32 *= pixelsPerCSSPx;
     result = gfx3DMatrix::From2D(ThebesMatrix(svgTransform));
-  }
-
-  if (hasSVGTransforms && !transformFromSVGParent.IsIdentity()) {
-    // Correct the translation components for zoom:
-    float pixelsPerCSSPx = frame->PresContext()->AppUnitsPerCSSPixel() /
-                             aAppUnitsPerPixel;
-    transformFromSVGParent._31 *= pixelsPerCSSPx;
-    transformFromSVGParent._32 *= pixelsPerCSSPx;
-    result = result * gfx3DMatrix::From2D(ThebesMatrix(transformFromSVGParent));
   }
 
   if (aProperties.mChildPerspective > 0.0) {
@@ -4869,7 +4958,53 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
   Point3D roundedOrigin(hasSVGTransforms ? newOrigin.x : NS_round(newOrigin.x),
                         hasSVGTransforms ? newOrigin.y : NS_round(newOrigin.y),
                         0);
-  Point3D offsetBetweenOrigins = roundedOrigin + aProperties.mToTransformOrigin;
+
+  if (!hasSVGTransforms || !hasTransformFromSVGParent) {
+    // This is a simplification of the following |else| block, the
+    // simplification being possible because we don't need to apply
+    // mToTransformOrigin between two transforms.
+    Point3D offsets = roundedOrigin + aProperties.mToTransformOrigin;
+    if (aOffsetByOrigin) {
+      // We can fold the final translation by roundedOrigin into the first matrix
+      // basis change translation. This is more stable against variation due to
+      // insufficient floating point precision than reversing the translation
+      // afterwards.
+      result.Translate(-aProperties.mToTransformOrigin);
+      result.TranslatePost(offsets);
+    } else {
+      result.ChangeBasis(offsets);
+    }
+  } else {
+    Point3D refBoxOffset(NSAppUnitsToFloatPixels(refBox.X(), aAppUnitsPerPixel),
+                         NSAppUnitsToFloatPixels(refBox.Y(), aAppUnitsPerPixel),
+                         0);
+    // We have both a transform and children-only transform. The
+    // 'transform-origin' must apply between the two, so we need to apply it
+    // now before we apply transformFromSVGParent. Since mToTransformOrigin is
+    // relative to the frame's TopLeft(), we need to convert it to SVG user
+    // space by subtracting refBoxOffset. (Then after applying
+    // transformFromSVGParent we have to reapply refBoxOffset below.)
+    result.ChangeBasis(aProperties.mToTransformOrigin - refBoxOffset);
+
+    // Now apply the children-only transforms, converting the translation
+    // components to device pixels:
+    float pixelsPerCSSPx =
+      frame->PresContext()->AppUnitsPerCSSPixel() / aAppUnitsPerPixel;
+    transformFromSVGParent._31 *= pixelsPerCSSPx;
+    transformFromSVGParent._32 *= pixelsPerCSSPx;
+    result = result * gfx3DMatrix::From2D(ThebesMatrix(transformFromSVGParent));
+
+    // Similar to the code in the |if| block above, but since we've accounted
+    // for mToTransformOrigin so we don't include that. We also need to reapply
+    // refBoxOffset.
+    Point3D offsets = roundedOrigin + refBoxOffset;
+    if (aOffsetByOrigin) {
+      result.Translate(-refBoxOffset);
+      result.TranslatePost(offsets);
+    } else {
+      result.ChangeBasis(offsets);
+    }
+  }
 
   if (frame && frame->Preserves3D()) {
     // Include the transform set on our parent
@@ -4890,27 +5025,9 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
                                           aOrigin - frame->GetPosition(),
                                           aAppUnitsPerPixel, nullptr,
                                           aOutAncestor, !frame->IsTransformed());
-
-    if (aOffsetByOrigin) {
-      result.Translate(-aProperties.mToTransformOrigin);
-      result.TranslatePost(offsetBetweenOrigins);
-    } else {
-      result.ChangeBasis(offsetBetweenOrigins);
-    }
     result = result * parent;
-    return result;
   }
 
-  if (aOffsetByOrigin) {
-    // We can fold the final translation by roundedOrigin into the first matrix
-    // basis change translation. This is more stable against variation due to
-    // insufficient floating point precision than reversing the translation
-    // afterwards.
-    result.Translate(-aProperties.mToTransformOrigin);
-    result.TranslatePost(offsetBetweenOrigins);
-  } else {
-    result.ChangeBasis(offsetBetweenOrigins);
-  }
   return result;
 }
 

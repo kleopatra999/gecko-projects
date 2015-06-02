@@ -136,8 +136,6 @@ struct BytecodeEmitter
     Parser<FullParseHandler>* const parser;
 
     HandleScript    evalCaller;     /* scripted caller info for eval and dbgapi */
-    Handle<StaticEvalObject*> evalStaticScope;
-                                   /* compile time scope for eval; does not imply stmt stack */
 
     StmtInfoBCE*    topStmt;       /* top of statement info stack */
     StmtInfoBCE*    topScopeStmt;  /* top lexical scope statement */
@@ -222,8 +220,7 @@ struct BytecodeEmitter
     BytecodeEmitter(BytecodeEmitter* parent, Parser<FullParseHandler>* parser, SharedContext* sc,
                     HandleScript script, Handle<LazyScript*> lazyScript,
                     bool insideEval, HandleScript evalCaller,
-                    Handle<StaticEvalObject*> evalStaticScope, bool insideNonGlobalEval,
-                    uint32_t lineNum, EmitterMode emitterMode = Normal);
+                    bool insideNonGlobalEval, uint32_t lineNum, EmitterMode emitterMode = Normal);
     bool init();
     bool updateLocalsToFrameSlots();
 
@@ -490,7 +487,7 @@ struct BytecodeEmitter
     bool emitWith(ParseNode* pn);
 
     MOZ_NEVER_INLINE bool emitLabeledStatement(const LabeledStatement* pn);
-    MOZ_NEVER_INLINE bool emitLet(ParseNode* pnLet);
+    MOZ_NEVER_INLINE bool emitLetBlock(ParseNode* pnLet);
     MOZ_NEVER_INLINE bool emitLexicalScope(ParseNode* pn);
     MOZ_NEVER_INLINE bool emitSwitch(ParseNode* pn);
     MOZ_NEVER_INLINE bool emitTry(ParseNode* pn);
@@ -524,6 +521,10 @@ struct BytecodeEmitter
     // the stack.
     bool emitInitializeDestructuringDecls(JSOp prologueOp, ParseNode* pattern);
 
+    // Throw a TypeError if the value atop the stack isn't convertible to an
+    // object, with no overall effect on the stack.
+    bool emitRequireObjectCoercible();
+
     // emitIterator expects the iterable to already be on the stack.
     // It will replace that stack value with the corresponding iterator
     bool emitIterator();
@@ -543,7 +544,6 @@ struct BytecodeEmitter
     bool emitReturn(ParseNode* pn);
     bool emitStatement(ParseNode* pn);
     bool emitStatementList(ParseNode* pn, ptrdiff_t top);
-    bool emitSyntheticStatements(ParseNode* pn, ptrdiff_t top);
 
     bool emitDelete(ParseNode* pn);
     bool emitLogical(ParseNode* pn);
@@ -568,7 +568,7 @@ struct BytecodeEmitter
     bool emitBreak(PropertyName* label);
     bool emitContinue(PropertyName* label);
 
-    bool emitDefaults(ParseNode* pn);
+    bool emitDefaultsAndDestructuring(ParseNode* pn);
     bool emitLexicalInitialization(ParseNode* pn, JSOp globalDefOp);
 
     bool pushInitialConstants(JSOp op, unsigned n);

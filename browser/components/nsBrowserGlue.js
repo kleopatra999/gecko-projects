@@ -175,28 +175,6 @@ const BOOKMARKS_BACKUP_MIN_INTERVAL_DAYS = 1;
 // days we will try to create a new one more aggressively.
 const BOOKMARKS_BACKUP_MAX_INTERVAL_DAYS = 3;
 
-// Record the current default search engine in Telemetry.
-function recordDefaultSearchEngine() {
-  let engine;
-  try {
-    engine = Services.search.defaultEngine;
-  } catch (e) {}
-  let name;
-
-  if (!engine) {
-    name = "NONE";
-  } else if (engine.identifier) {
-    name = engine.identifier;
-  } else if (engine.name) {
-    name = "other-" + engine.name;
-  } else {
-    name = "UNDEFINED";
-  }
-
-  let engines = Services.telemetry.getKeyedHistogramById("SEARCH_DEFAULT_ENGINE");
-  engines.add(name, true)
-}
-
 // Factory object
 const BrowserGlueServiceFactory = {
   _instance: null,
@@ -397,7 +375,7 @@ BrowserGlue.prototype = {
       case "handle-xul-text-link":
         let linkHandled = subject.QueryInterface(Ci.nsISupportsPRBool);
         if (!linkHandled.data) {
-          let win = this.getMostRecentBrowserWindow();
+          let win = RecentWindow.getMostRecentBrowserWindow();
           if (win) {
             win.openUILinkIn(data, "tab");
             linkHandled.data = true;
@@ -415,7 +393,7 @@ BrowserGlue.prototype = {
         // browser.js:BrowserSearch.recordSearchInHealthReport(). The code could
         // be consolidated if there is will. We need the observer in
         // nsBrowserGlue to prevent double counting.
-        let win = this.getMostRecentBrowserWindow();
+        let win = RecentWindow.getMostRecentBrowserWindow();
         BrowserUITelemetry.countSearchEvent("urlbar", win.gURLBar.value);
 
         let engine = null;
@@ -476,14 +454,12 @@ BrowserGlue.prototype = {
           ss.defaultEngine = ss.currentEngine;
         else
           ss.currentEngine = ss.defaultEngine;
-        recordDefaultSearchEngine();
         break;
       case "browser-search-service":
         if (data != "init-complete")
           return;
         Services.obs.removeObserver(this, "browser-search-service");
         this._syncSearchEngines();
-        recordDefaultSearchEngine();
         break;
 #ifdef NIGHTLY_BUILD
       case "nsPref:changed":
@@ -739,9 +715,6 @@ BrowserGlue.prototype = {
     LightweightThemeManager.addBuiltInTheme({
       id: "firefox-devedition@mozilla.org",
       name: themeName,
-#ifdef XP_WIN
-      accentcolor: "transparent",
-#endif
       headerURL: "resource:///chrome/browser/content/browser/defaultthemes/devedition.header.png",
       iconURL: "resource:///chrome/browser/content/browser/defaultthemes/devedition.icon.png",
       author: vendorShortName,
@@ -840,7 +813,7 @@ BrowserGlue.prototype = {
   },
 
   _showSlowStartupNotification: function () {
-    let win = this.getMostRecentBrowserWindow();
+    let win = RecentWindow.getMostRecentBrowserWindow();
     if (!win)
       return;
 
@@ -874,7 +847,7 @@ BrowserGlue.prototype = {
    * Show a notification bar offering a reset if the profile has been unused for some time.
    */
   _resetUnusedProfileNotification: function () {
-    let win = this.getMostRecentBrowserWindow();
+    let win = RecentWindow.getMostRecentBrowserWindow();
     if (!win)
       return;
 
@@ -904,7 +877,7 @@ BrowserGlue.prototype = {
   },
 
   _notifyUnsignedAddonsDisabled: function () {
-    let win = this.getMostRecentBrowserWindow();
+    let win = RecentWindow.getMostRecentBrowserWindow();
     if (!win)
       return;
 
@@ -1102,7 +1075,7 @@ BrowserGlue.prototype = {
     // them to the user.
     let changedIDs = AddonManager.getStartupChanges(AddonManager.STARTUP_CHANGE_INSTALLED);
     if (changedIDs.length > 0) {
-      let win = this.getMostRecentBrowserWindow();
+      let win = RecentWindow.getMostRecentBrowserWindow();
       AddonManager.getAddonsByIDs(changedIDs, function(aAddons) {
         aAddons.forEach(function(aAddon) {
           // If the add-on isn't user disabled or can't be enabled then skip it.
@@ -1140,9 +1113,11 @@ BrowserGlue.prototype = {
       }
       catch (ex) { /* Don't break the default prompt if telemetry is broken. */ }
 
+      Services.prefs.setBoolPref("browser.shell.isSetAsDefaultBrowser", isDefault);
+
       if (shouldCheck && !isDefault && !willRecoverSession) {
         Services.tm.mainThread.dispatch(function() {
-          DefaultBrowserCheck.prompt(this.getMostRecentBrowserWindow());
+          DefaultBrowserCheck.prompt(RecentWindow.getMostRecentBrowserWindow());
         }.bind(this), Ci.nsIThread.DISPATCH_NORMAL);
       }
     }
@@ -1366,8 +1341,8 @@ BrowserGlue.prototype = {
       let key = getNotifyString({propName: "notificationButtonAccessKey",
                                  stringName: "pu.notifyButton.accesskey"});
 
-      let win = this.getMostRecentBrowserWindow();
-      let notifyBox = win.gBrowser.getNotificationBox();
+      let win = RecentWindow.getMostRecentBrowserWindow();
+      let notifyBox = win.document.getElementById("high-priority-global-notificationbox");
 
       let buttons = [
                       {
@@ -1383,7 +1358,6 @@ BrowserGlue.prototype = {
       let notification = notifyBox.appendNotification(text, "post-update-notification",
                                                       null, notifyBox.PRIORITY_INFO_LOW,
                                                       buttons);
-      notification.persistence = -1; // Until user closes it
     }
 
     if (actions.indexOf("showAlert") == -1)
@@ -1408,12 +1382,11 @@ BrowserGlue.prototype = {
     let url = getNotifyString({propName: "alertURL",
                                prefName: "startup.homepage_override_url"});
 
-    var self = this;
     function clickCallback(subject, topic, data) {
       // This callback will be called twice but only once with this topic
       if (topic != "alertclickcallback")
         return;
-      let win = self.getMostRecentBrowserWindow();
+      let win = RecentWindow.getMostRecentBrowserWindow();
       win.openUILinkIn(data, "tab");
     }
 
@@ -1434,7 +1407,7 @@ BrowserGlue.prototype = {
                     getService(Ci.nsIURLFormatter);
     var updateUrl = formatter.formatURLPref(PREF_PLUGINS_UPDATEURL);
 
-    var win = this.getMostRecentBrowserWindow();
+    var win = RecentWindow.getMostRecentBrowserWindow();
     win.openUILinkIn(updateUrl, "tab");
   },
 
@@ -1683,7 +1656,7 @@ BrowserGlue.prototype = {
               formatURLPref("app.support.baseURL");
     url += helpTopic;
 
-    var win = this.getMostRecentBrowserWindow();
+    var win = RecentWindow.getMostRecentBrowserWindow();
 
     var buttons = [
                     {
@@ -2229,11 +2202,6 @@ BrowserGlue.prototype = {
     }
   }),
 
-  // this returns the most recent non-popup browser window
-  getMostRecentBrowserWindow: function BG_getMostRecentBrowserWindow() {
-    return RecentWindow.getMostRecentBrowserWindow();
-  },
-
 #ifdef MOZ_SERVICES_SYNC
   /**
    * Called as an observer when Sync's "display URI" notification is fired.
@@ -2280,7 +2248,7 @@ BrowserGlue.prototype = {
     Services.prefs.setBoolPref("dom.ipc.plugins.flash.disable-protected-mode", true);
     Services.prefs.setBoolPref("browser.flash-protected-mode-flip.done", true);
 
-    let win = this.getMostRecentBrowserWindow();
+    let win = RecentWindow.getMostRecentBrowserWindow();
     if (!win) {
       return;
     }
@@ -2346,11 +2314,6 @@ ContentPermissionPrompt.prototype = {
    */
   _showPrompt: function CPP_showPrompt(aRequest, aMessage, aPermission, aActions,
                                        aNotificationId, aAnchorId, aOptions) {
-    function onFullScreen() {
-      popup.remove();
-    }
-
-
     var browser = this._getBrowserForRequest(aRequest);
     var chromeWin = browser.ownerDocument.defaultView;
     var requestPrincipal = aRequest.principal;
@@ -2397,51 +2360,25 @@ ContentPermissionPrompt.prototype = {
                        popupNotificationActions[0] : null;
     var secondaryActions = popupNotificationActions.splice(1);
 
-    // Only allow exactly one permission rquest here.
+    // Only allow exactly one permission request here.
     let types = aRequest.types.QueryInterface(Ci.nsIArray);
     if (types.length != 1) {
       aRequest.cancel();
       return;
     }
 
-    let perm = types.queryElementAt(0, Ci.nsIContentPermissionType);
+    if (!aOptions)
+      aOptions = {};
+    aOptions.displayOrigin = (requestPrincipal.URI instanceof Ci.nsIFileURL) ?
+                             requestPrincipal.URI.file.path :
+                             requestPrincipal.URI.host;
 
-    if (perm.type == "pointerLock") {
-      // If there's no mainAction, this is the autoAllow warning prompt.
-      let autoAllow = !mainAction;
-
-      if (!aOptions)
-        aOptions = {};
-
-      aOptions.removeOnDismissal = autoAllow;
-      aOptions.eventCallback = type => {
-        if (type == "removed") {
-          browser.removeEventListener("mozfullscreenchange", onFullScreen, true);
-          if (autoAllow) {
-            aRequest.allow();
-          }
-        }
-      }
-
-    }
-
-    var popup = chromeWin.PopupNotifications.show(browser, aNotificationId, aMessage, aAnchorId,
-                                                  mainAction, secondaryActions, aOptions);
-    if (perm.type == "pointerLock") {
-      // pointerLock is automatically allowed in fullscreen mode (and revoked
-      // upon exit), so if the page enters fullscreen mode after requesting
-      // pointerLock (but before the user has granted permission), we should
-      // remove the now-impotent notification.
-      browser.addEventListener("mozfullscreenchange", onFullScreen, true);
-    }
+    return chromeWin.PopupNotifications.show(browser, aNotificationId, aMessage, aAnchorId,
+                                             mainAction, secondaryActions, aOptions);
   },
 
   _promptPush : function(aRequest) {
-    var browserBundle = Services.strings.createBundle("chrome://browser/locale/browser.properties");
-    var requestingURI = aRequest.principal.URI;
-
-    var message = browserBundle.formatStringFromName("push.enablePush",
-                                                 [requestingURI.host], 1);
+    var message = gBrowserBundle.GetStringFromName("push.enablePush2");
 
     var actions = [
     {
@@ -2464,8 +2401,8 @@ ContentPermissionPrompt.prototype = {
     }]
 
     var options = {
-                    learnMoreURL: Services.urlFormatter.formatURLPref("browser.push.warning.infoURL"),
-                  };
+      learnMoreURL: Services.urlFormatter.formatURLPref("browser.push.warning.infoURL"),
+    };
 
     this._showPrompt(aRequest, message, "push", actions, "push",
                      "push-notification-icon", options);
@@ -2474,7 +2411,6 @@ ContentPermissionPrompt.prototype = {
 
   _promptGeo : function(aRequest) {
     var secHistogram = Services.telemetry.getHistogramById("SECURITY_UI");
-    var requestingURI = aRequest.principal.URI;
 
     var message;
 
@@ -2488,12 +2424,14 @@ ContentPermissionPrompt.prototype = {
       },
     }];
 
-    if (requestingURI.schemeIs("file")) {
-      message = gBrowserBundle.formatStringFromName("geolocation.shareWithFile",
-                                                    [requestingURI.path], 1);
+    let options = {
+      learnMoreURL: Services.urlFormatter.formatURLPref("browser.geolocation.warning.infoURL"),
+    };
+
+    if (aRequest.principal.URI.schemeIs("file")) {
+      message = gBrowserBundle.GetStringFromName("geolocation.shareWithFile2");
     } else {
-      message = gBrowserBundle.formatStringFromName("geolocation.shareWithSite",
-                                                    [requestingURI.host], 1);
+      message = gBrowserBundle.GetStringFromName("geolocation.shareWithSite2");
       // Always share location action.
       actions.push({
         stringId: "geolocation.alwaysShareLocation",
@@ -2515,10 +2453,6 @@ ContentPermissionPrompt.prototype = {
       });
     }
 
-    var options = {
-                    learnMoreURL: Services.urlFormatter.formatURLPref("browser.geolocation.warning.infoURL"),
-                  };
-
     secHistogram.add(Ci.nsISecurityUITelemetry.WARNING_GEOLOCATION_REQUEST);
 
     this._showPrompt(aRequest, message, "geo", actions, "geolocation",
@@ -2526,10 +2460,7 @@ ContentPermissionPrompt.prototype = {
   },
 
   _promptWebNotifications : function(aRequest) {
-    var requestingURI = aRequest.principal.URI;
-
-    var message = gBrowserBundle.formatStringFromName("webNotifications.showFromSite",
-                                                      [requestingURI.host], 1);
+    var message = gBrowserBundle.GetStringFromName("webNotifications.showFromSite2");
 
     var actions = [
       {
@@ -2558,13 +2489,9 @@ ContentPermissionPrompt.prototype = {
   },
 
   _promptPointerLock: function CPP_promtPointerLock(aRequest, autoAllow) {
+    let message = gBrowserBundle.GetStringFromName(autoAllow ?
+                                  "pointerLock.autoLock.title3" : "pointerLock.title3");
 
-    let requestingURI = aRequest.principal.URI;
-
-    let originString = requestingURI.schemeIs("file") ? requestingURI.path : requestingURI.host;
-    let message = gBrowserBundle.formatStringFromName(autoAllow ?
-                                  "pointerLock.autoLock.title2" : "pointerLock.title2",
-                                  [originString], 1);
     // If this is an autoAllow info prompt, offer no actions.
     // _showPrompt() will allow the request when it's dismissed.
     let actions = [];
@@ -2591,12 +2518,34 @@ ContentPermissionPrompt.prototype = {
       ];
     }
 
-    this._showPrompt(aRequest, message, "pointerLock", actions, "pointerLock",
-                     "pointerLock-notification-icon", null);
+    function onFullScreen() {
+      notification.remove();
+    }
+
+    let options = {};
+    options.removeOnDismissal = autoAllow;
+    options.eventCallback = type => {
+      if (type == "removed") {
+        notification.browser.removeEventListener("mozfullscreenchange", onFullScreen, true);
+        if (autoAllow) {
+          aRequest.allow();
+        }
+      }
+    }
+
+    let notification =
+      this._showPrompt(aRequest, message, "pointerLock", actions, "pointerLock",
+                       "pointerLock-notification-icon", options);
+
+    // pointerLock is automatically allowed in fullscreen mode (and revoked
+    // upon exit), so if the page enters fullscreen mode after requesting
+    // pointerLock (but before the user has granted permission), we should
+    // remove the now-impotent notification.
+    notification.browser.addEventListener("mozfullscreenchange", onFullScreen, true);
   },
 
   prompt: function CPP_prompt(request) {
-    // Only allow exactly one permission rquest here.
+    // Only allow exactly one permission request here.
     let types = request.types.QueryInterface(Ci.nsIArray);
     if (types.length != 1) {
       request.cancel();
@@ -2612,7 +2561,7 @@ ContentPermissionPrompt.prototype = {
 
     // Make sure that we support the request.
     if (!(perm.type in kFeatureKeys)) {
-        return;
+      return;
     }
 
     var requestingPrincipal = request.principal;
@@ -2832,7 +2781,7 @@ let E10SUINotification = {
       let channelAuthorized = updateChannel == "nightly" || updateChannel == "aurora";
 
       skipE10sChecks = !channelAuthorized ||
-                       UpdateServices.prefs.getBoolPref("browser.tabs.remote.autostart.disabled-because-using-a11y");
+                       Services.prefs.getBoolPref("browser.tabs.remote.disabled-for-a11y");
     } catch(e) {}
 
     if (skipE10sChecks) {
@@ -2916,7 +2865,9 @@ let E10SUINotification = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver, Ci.nsISupportsWeakReference]),
 
   observe: function(subject, topic, data) {
-    if (topic == "a11y-init-or-shutdown" && data == "1") {
+    if (topic == "a11y-init-or-shutdown"
+        && data == "1" &&
+        Services.appinfo.accessibilityIsBlacklistedForE10S) {
       this._showE10sAccessibilityWarning();
     }
   },
@@ -3006,7 +2957,15 @@ let E10SUINotification = {
   _warnedAboutAccessibility: false,
 
   _showE10sAccessibilityWarning: function() {
-    Services.prefs.setBoolPref("browser.tabs.remote.autostart.disabled-because-using-a11y", true);
+    try {
+      if (!Services.prefs.getBoolPref("browser.tabs.remote.disabled-for-a11y")) {
+        // Only return if the pref exists and was set to false, but not
+        // if the pref didn't exist (which will throw).
+        return;
+      }
+    } catch (e) { }
+
+    Services.prefs.setBoolPref("browser.tabs.remote.disabled-for-a11y", true);
 
     if (this._warnedAboutAccessibility) {
       return;
@@ -3043,7 +3002,7 @@ let E10SUINotification = {
         label: win.gNavigatorBundle.getString("e10s.accessibilityNotice.dontDisable.label"),
         accessKey: win.gNavigatorBundle.getString("e10s.accessibilityNotice.dontDisable.accesskey"),
         callback: function () {
-          Services.prefs.setBoolPref("browser.tabs.remote.autostart.disabled-because-using-a11y", false);
+          Services.prefs.setBoolPref("browser.tabs.remote.disabled-for-a11y", false);
         }
       }
     ];

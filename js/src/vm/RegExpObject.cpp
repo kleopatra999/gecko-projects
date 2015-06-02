@@ -694,8 +694,10 @@ RegExpShared::execute(JSContext* cx, HandleLinearString input, size_t start,
      * Ensure sufficient memory for output vector.
      * No need to initialize it. The RegExp engine fills them in on a match.
      */
-    if (matches && !matches->allocOrExpandArray(pairCount()))
+    if (matches && !matches->allocOrExpandArray(pairCount())) {
+        ReportOutOfMemory(cx);
         return RegExpRunStatus_Error;
+    }
 
     /*
      * |displacement| emulates sticky mode by matching from this offset
@@ -841,7 +843,7 @@ RegExpCompartment::createMatchResultTemplateObject(JSContext* cx)
     MOZ_ASSERT(!matchResultTemplateObject_);
 
     /* Create template array object */
-    RootedArrayObject templateObject(cx, NewDenseUnallocatedArray(cx, 0, NullPtr(), TenuredObject));
+    RootedArrayObject templateObject(cx, NewDenseUnallocatedArray(cx, 0, nullptr, TenuredObject));
     if (!templateObject)
         return matchResultTemplateObject_; // = nullptr
 

@@ -8,7 +8,6 @@
  */
 
 typedef long long GLint64; // Should this be int64?
-typedef unsigned long long GLuint64; // Should this be uint64?
 
 [Pref="webgl.enable-prototype-webgl2"]
 interface WebGLQuery {
@@ -329,9 +328,14 @@ interface WebGL2RenderingContext : WebGLRenderingContext
                          GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
     void framebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer);
     any getInternalformatParameter(GLenum target, GLenum internalformat, GLenum pname);
+
+    [Throws]
     void invalidateFramebuffer(GLenum target, sequence<GLenum> attachments);
+
+    [Throws]
     void invalidateSubFramebuffer (GLenum target, sequence<GLenum> attachments,
                                    GLint x, GLint y, GLsizei width, GLsizei height);
+
     void readBuffer(GLenum src);
 
     /* Renderbuffer objects */

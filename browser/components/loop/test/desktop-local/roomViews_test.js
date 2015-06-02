@@ -1,15 +1,19 @@
-var expect = chai.expect;
-
-/* jshint newcap:false */
+/* Any copyright is dedicated to the Public Domain.
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 describe("loop.roomViews", function () {
   "use strict";
 
+  var expect = chai.expect;
+  var TestUtils = React.addons.TestUtils;
+  var sharedActions = loop.shared.actions;
+  var sharedUtils = loop.shared.utils;
   var ROOM_STATES = loop.store.ROOM_STATES;
   var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
 
   var sandbox, dispatcher, roomStore, activeRoomStore, fakeWindow,
     fakeMozLoop, fakeContextURL;
+  var favicon = "data:image/x-icon;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
@@ -20,10 +24,22 @@ describe("loop.roomViews", function () {
       getAudioBlob: sinon.stub(),
       getLoopPref: sinon.stub(),
       getSelectedTabMetadata: sinon.stub().callsArgWith(0, {
+        favicon: favicon,
         previews: [],
         title: ""
       }),
-      isSocialShareButtonAvailable: sinon.stub()
+      isSocialShareButtonAvailable: sinon.stub(),
+      rooms: {
+        get: sinon.stub().callsArgWith(1, null, {
+          roomToken: "fakeToken",
+          roomName: "fakeName",
+          decryptedContext: {
+            roomName: "fakeName",
+            urls: []
+          }
+        }),
+        update: sinon.stub().callsArgWith(2, null)
+      }
     };
 
     fakeWindow = {
@@ -49,7 +65,7 @@ describe("loop.roomViews", function () {
       sdkDriver: {}
     });
     roomStore = new loop.store.RoomStore(dispatcher, {
-      mozLoop: {},
+      mozLoop: fakeMozLoop,
       activeRoomStore: activeRoomStore
     });
 
@@ -80,7 +96,7 @@ describe("loop.roomViews", function () {
           roomStore: roomStore
         }));
 
-      var expectedState = _.extend({foo: "bar"},
+      var expectedState = _.extend({foo: "bar", savingContext: false},
         activeRoomStore.getInitialStoreState());
 
       expect(testView.state).eql(expectedState);
@@ -137,7 +153,33 @@ describe("loop.roomViews", function () {
 
         sinon.assert.calledOnce(dispatcher.dispatch);
         sinon.assert.calledWith(dispatcher.dispatch,
-          new sharedActions.EmailRoomUrl({roomUrl: "http://invalid"}));
+          new sharedActions.EmailRoomUrl({
+            roomUrl: "http://invalid",
+            roomDescription: undefined
+          }));
+      });
+
+    it("should dispatch a different EmailRoomUrl action for rooms with context",
+      function() {
+        var url = "http://invalid";
+        var description = "Hello, is it me you're looking for?";
+        view = mountTestComponent({
+          roomData: {
+            roomUrl: url,
+            roomContextUrls: [{ description: description }]
+          }
+        });
+
+        var emailBtn = view.getDOMNode().querySelector(".btn-email");
+
+        React.addons.TestUtils.Simulate.click(emailBtn);
+
+        sinon.assert.calledOnce(dispatcher.dispatch);
+        sinon.assert.calledWith(dispatcher.dispatch,
+          new sharedActions.EmailRoomUrl({
+            roomUrl: url,
+            roomDescription: description
+          }));
       });
 
     describe("Copy Button", function() {
@@ -270,7 +312,7 @@ describe("loop.roomViews", function () {
 
         view.setState({audioMuted: true});
 
-        var muteBtn = view.getDOMNode().querySelector('.btn-mute-audio');
+        var muteBtn = view.getDOMNode().querySelector(".btn-mute-audio");
 
         React.addons.TestUtils.Simulate.click(muteBtn);
 
@@ -288,7 +330,7 @@ describe("loop.roomViews", function () {
 
         view.setState({videoMuted: false});
 
-        var muteBtn = view.getDOMNode().querySelector('.btn-mute-video');
+        var muteBtn = view.getDOMNode().querySelector(".btn-mute-video");
 
         React.addons.TestUtils.Simulate.click(muteBtn);
 
@@ -305,7 +347,7 @@ describe("loop.roomViews", function () {
 
       view.setState({videoMuted: false});
 
-      var muteBtn = view.getDOMNode().querySelector('.btn-mute-video');
+      var muteBtn = view.getDOMNode().querySelector(".btn-mute-video");
 
       expect(muteBtn.classList.contains("muted")).eql(false);
     });
@@ -315,7 +357,7 @@ describe("loop.roomViews", function () {
 
       view.setState({audioMuted: true});
 
-      var muteBtn = view.getDOMNode().querySelector('.btn-mute-audio');
+      var muteBtn = view.getDOMNode().querySelector(".btn-mute-audio");
 
       expect(muteBtn.classList.contains("muted")).eql(true);
     });
@@ -326,7 +368,7 @@ describe("loop.roomViews", function () {
 
       view.setState({screenSharingState: SCREEN_SHARE_STATES.INACTIVE});
 
-      var muteBtn = view.getDOMNode().querySelector('.btn-mute-video');
+      var muteBtn = view.getDOMNode().querySelector(".btn-mute-video");
 
       React.addons.TestUtils.Simulate.click(muteBtn);
 
@@ -634,10 +676,8 @@ describe("loop.roomViews", function () {
         expect(node).to.not.eql(null);
         expect(node.querySelector(".room-context-thumbnail").src).to.
           eql(fakeContextURL.thumbnail);
-        expect(node.querySelector(".room-context-description").textContent).to.
-          eql(fakeContextURL.description);
-        expect(node.querySelector(".room-context-comment").textContent).to.
-          eql(view.props.roomData.roomDescription);
+        expect(node.querySelector(".room-context-description").firstChild.textContent).
+          to.eql(fakeContextURL.description);
       });
 
       it("should not render optional data", function() {
@@ -685,17 +725,67 @@ describe("loop.roomViews", function () {
         expect(node.querySelector(".room-context-comments").value).to.eql(fakeContextURL.description);
       });
 
-      it("should show the checkbox as disabled when no context is available", function() {
+      it("should show the checkbox as disabled when context is already set", function() {
         view = mountTestComponent({
           editMode: true,
           roomData: {
             roomToken: "fakeToken",
-            roomName: "fakeName"
+            roomName: "fakeName",
+            roomContextUrls: [fakeContextURL]
           }
         });
 
         var checkbox = view.getDOMNode().querySelector(".checkbox");
         expect(checkbox.classList.contains("disabled")).to.eql(true);
+      });
+
+      it("should render the editMode view when the edit button is clicked", function(next) {
+        var roomName = "Hello, is it me you're looking for?";
+        view = mountTestComponent({
+          roomData: {
+            roomToken: "fakeToken",
+            roomName: roomName,
+            roomContextUrls: [fakeContextURL]
+          }
+        });
+
+        // Switch to editMode via setting the prop, since we can control that
+        // better.
+        view.setProps({ editMode: true }, function() {
+          // First check if availableContext is set correctly.
+          expect(view.state.availableContext).to.not.eql(null);
+          expect(view.state.availableContext.previewImage).to.eql(favicon);
+
+          var node = view.getDOMNode();
+          expect(node.querySelector(".checkbox-wrapper").classList.contains("disabled")).to.eql(true);
+          expect(node.querySelector(".room-context-name").value).to.eql(roomName);
+          expect(node.querySelector(".room-context-url").value).to.eql(fakeContextURL.location);
+          expect(node.querySelector(".room-context-comments").value).to.eql(fakeContextURL.description);
+
+          next();
+        });
+      });
+
+      it("should hide the checkbox when no context data is stored or available", function(next) {
+        view = mountTestComponent({
+          roomData: {
+            roomToken: "fakeToken",
+            roomName: "Hello, is it me you're looking for?"
+          }
+        });
+
+        // Switch to editMode via setting the prop, since we can control that
+        // better.
+        view.setProps({ editMode: true }, function() {
+          // First check if availableContext is set correctly.
+          expect(view.state.availableContext).to.not.eql(null);
+          expect(view.state.availableContext.previewImage).to.eql(favicon);
+
+          var node = view.getDOMNode();
+          expect(node.querySelector(".checkbox-wrapper").classList.contains("hide")).to.eql(true);
+
+          next();
+        });
       });
     });
 
@@ -717,13 +807,13 @@ describe("loop.roomViews", function () {
         roomNameBox = view.getDOMNode().querySelector(".room-context-name");
       });
 
-      it("should dispatch a UpdateRoomContext action when the focus is lost",
+      it("should dispatch a UpdateRoomContext action when the save button is clicked",
         function() {
           React.addons.TestUtils.Simulate.change(roomNameBox, { target: {
             value: "reallyFake"
           }});
 
-          React.addons.TestUtils.Simulate.blur(roomNameBox);
+          React.addons.TestUtils.Simulate.click(view.getDOMNode().querySelector(".btn-info"));
 
           sinon.assert.calledOnce(dispatcher.dispatch);
           sinon.assert.calledWithExactly(dispatcher.dispatch,

@@ -1158,7 +1158,7 @@ ContainerLayer::DefaultComputeEffectiveTransforms(const Matrix4x4& aTransformToS
       GetForceIsolatedGroup()) {
     useIntermediateSurface = true;
 #ifdef MOZ_DUMP_PAINTING
-  } else if (gfxUtils::sDumpPainting) {
+  } else if (gfxUtils::sDumpPaintingIntermediate) {
     useIntermediateSurface = true;
 #endif
   } else {
@@ -1427,11 +1427,11 @@ void WriteSnapshotToDumpFile_internal(T* aObj, DataSourceSurface* aSurf)
   nsCString string(aObj->Name());
   string.Append('-');
   string.AppendInt((uint64_t)aObj);
-  if (gfxUtils::sDumpPaintFile) {
+  if (gfxUtils::sDumpPaintFile != stderr) {
     fprintf_stderr(gfxUtils::sDumpPaintFile, "array[\"%s\"]=\"", string.BeginReading());
   }
   gfxUtils::DumpAsDataURI(aSurf, gfxUtils::sDumpPaintFile);
-  if (gfxUtils::sDumpPaintFile) {
+  if (gfxUtils::sDumpPaintFile != stderr) {
     fprintf_stderr(gfxUtils::sDumpPaintFile, "\";");
   }
 }
@@ -1716,6 +1716,25 @@ Layer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
   if (!mVisibleRegion.IsEmpty()) {
     DumpRegion(layer->mutable_vregion(), mVisibleRegion);
   }
+  // EventRegions
+  if (!mEventRegions.IsEmpty()) {
+    const EventRegions &e = mEventRegions;
+    if (!e.mHitRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_hitregion(), e.mHitRegion);
+    }
+    if (!e.mDispatchToContentHitRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_dispatchregion(), e.mDispatchToContentHitRegion);
+    }
+    if (!e.mNoActionRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_noactionregion(), e.mNoActionRegion);
+    }
+    if (!e.mHorizontalPanRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_hpanregion(), e.mHorizontalPanRegion);
+    }
+    if (!e.mVerticalPanRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_vpanregion(), e.mVerticalPanRegion);
+    }
+  }
   // Opacity
   layer->set_opacity(mOpacity);
   // Content opaque
@@ -1796,6 +1815,7 @@ ColorLayer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
 {
   Layer::PrintInfo(aStream, aPrefix);
   AppendToString(aStream, mColor, " [color=", "]");
+  AppendToString(aStream, mBounds, " [bounds=", "]");
 }
 
 void

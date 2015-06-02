@@ -52,8 +52,10 @@
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/dom/TabParent.h"
+#include "mozilla/Snprintf.h"
 #include "nsRefPtrHashtable.h"
 #include "TouchEvents.h"
+#include "WritingModes.h"
 #ifdef ACCESSIBILITY
 #include "nsAccessibilityService.h"
 #endif
@@ -76,6 +78,7 @@ static int32_t gNumWidgets;
 #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
 static nsRefPtrHashtable<nsVoidPtrHashKey, nsIWidget>* sPluginWidgetList;
 #endif
+
 nsIRollupListener* nsBaseWidget::gRollupListener = nullptr;
 
 using namespace mozilla::layers;
@@ -97,6 +100,25 @@ int32_t nsIWidget::sPointerIdCounter = 0;
 // Some statics from nsIWidget.h
 /*static*/ uint64_t AutoObserverNotifier::sObserverId = 0;
 /*static*/ nsDataHashtable<nsUint64HashKey, nsCOMPtr<nsIObserver>> AutoObserverNotifier::sSavedObservers;
+
+namespace mozilla {
+namespace widget {
+
+void
+IMENotification::SelectionChangeData::SetWritingMode(
+                                        const WritingMode& aWritingMode)
+{
+  mWritingMode = aWritingMode.mWritingMode;
+}
+
+WritingMode
+IMENotification::SelectionChangeData::GetWritingMode() const
+{
+  return WritingMode(mWritingMode);
+}
+
+} // namespace widget
+} // namespace mozilla
 
 nsAutoRollup::nsAutoRollup()
 {
@@ -124,6 +146,7 @@ NS_IMPL_ISUPPORTS(nsBaseWidget, nsIWidget, nsISupportsWeakReference)
 nsBaseWidget::nsBaseWidget()
 : mWidgetListener(nullptr)
 , mAttachedWidgetListener(nullptr)
+, mLayerManager(nullptr)
 , mCompositorVsyncDispatcher(nullptr)
 , mCursor(eCursor_standard)
 , mUpdateCursor(true)
@@ -994,7 +1017,7 @@ nsBaseWidget::ProcessUntransformedAPZEvent(WidgetInputEvent* aEvent,
                                            nsEventStatus aApzResponse)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  InputAPZContext context(aGuid, aInputBlockId);
+  InputAPZContext context(aGuid, aInputBlockId, aApzResponse);
 
   // If this is a touch event and APZ has targeted it to an APZC in the root
   // process, apply that APZC's callback-transform before dispatching the
@@ -1949,7 +1972,7 @@ case _value: eventName.AssignLiteral(_name) ; break
     {
       char buf[32];
 
-      sprintf(buf,"UNKNOWN: %d",aGuiEvent->message);
+      snprintf_literal(buf,"UNKNOWN: %d",aGuiEvent->message);
 
       CopyASCIItoUTF16(buf, eventName);
     }

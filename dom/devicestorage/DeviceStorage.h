@@ -7,7 +7,6 @@
 #ifndef DeviceStorage_h
 #define DeviceStorage_h
 
-#include "nsIDOMDeviceStorage.h"
 #include "nsIFile.h"
 #include "nsIPrincipal.h"
 #include "nsIObserver.h"
@@ -25,10 +24,12 @@
 
 class nsIInputStream;
 class nsIOutputStream;
+struct DeviceStorageFileDescriptor;
 
 namespace mozilla {
 class EventListenerManager;
 namespace dom {
+class Blob;
 struct DeviceStorageEnumerationParameters;
 class DOMCursor;
 class DOMRequest;
@@ -158,7 +159,6 @@ class FileUpdateDispatcher final
 
 class nsDOMDeviceStorage final
   : public mozilla::DOMEventTargetHelper
-  , public nsIDOMDeviceStorage
   , public nsIObserver
 {
   typedef mozilla::ErrorResult ErrorResult;
@@ -172,27 +172,12 @@ public:
   typedef nsTArray<nsString> VolumeNameArray;
 
   NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_NSIDOMDEVICESTORAGE
-
   NS_DECL_NSIOBSERVER
-  NS_DECL_NSIDOMEVENTTARGET
+  NS_REALLY_FORWARD_NSIDOMEVENTTARGET(DOMEventTargetHelper)
 
-  virtual mozilla::EventListenerManager*
-    GetExistingListenerManager() const override;
-  virtual mozilla::EventListenerManager*
-    GetOrCreateListenerManager() override;
-
-  virtual void
-  AddEventListener(const nsAString& aType,
-                   mozilla::dom::EventListener* aListener,
-                   bool aUseCapture,
-                   const mozilla::dom::Nullable<bool>& aWantsUntrusted,
-                   ErrorResult& aRv) override;
-
-  virtual void RemoveEventListener(const nsAString& aType,
-                                   mozilla::dom::EventListener* aListener,
-                                   bool aUseCapture,
-                                   ErrorResult& aRv) override;
+  void EventListenerWasAdded(const nsAString& aType,
+                             ErrorResult& aRv,
+                             JSCompartment* aCompartment) override;
 
   explicit nsDOMDeviceStorage(nsPIDOMWindow* aWindow);
 
@@ -222,15 +207,16 @@ public:
   IMPL_EVENT_HANDLER(change)
 
   already_AddRefed<DOMRequest>
-  Add(nsIDOMBlob* aBlob, ErrorResult& aRv);
+  Add(mozilla::dom::Blob* aBlob, ErrorResult& aRv);
   already_AddRefed<DOMRequest>
-  AddNamed(nsIDOMBlob* aBlob, const nsAString& aPath, ErrorResult& aRv);
+  AddNamed(mozilla::dom::Blob* aBlob, const nsAString& aPath, ErrorResult& aRv);
 
   already_AddRefed<DOMRequest>
-  AppendNamed(nsIDOMBlob* aBlob, const nsAString& aPath, ErrorResult& aRv);
+  AppendNamed(mozilla::dom::Blob* aBlob, const nsAString& aPath,
+              ErrorResult& aRv);
 
   already_AddRefed<DOMRequest>
-  AddOrAppendNamed(nsIDOMBlob* aBlob, const nsAString& aPath,
+  AddOrAppendNamed(mozilla::dom::Blob* aBlob, const nsAString& aPath,
                    const int32_t aRequestType, ErrorResult& aRv);
 
   already_AddRefed<DOMRequest>
@@ -271,13 +257,16 @@ public:
   already_AddRefed<DOMRequest> Mount(ErrorResult& aRv);
   already_AddRefed<DOMRequest> Unmount(ErrorResult& aRv);
 
+  already_AddRefed<DOMRequest> CreateFileDescriptor(const nsAString& aPath,
+                                                    DeviceStorageFileDescriptor* aDSFD,
+                                                    ErrorResult& aRv);
+
   bool CanBeMounted();
   bool CanBeFormatted();
   bool CanBeShared();
   bool IsRemovable();
   bool Default();
-
-  // Uses XPCOM GetStorageName
+  void GetStorageName(nsAString& aStorageName);
 
   already_AddRefed<Promise>
   GetRoot(ErrorResult& aRv);
@@ -365,13 +354,6 @@ private:
   void DispatchStatusChangeEvent(nsAString& aStatus);
   void DispatchStorageStatusChangeEvent(nsAString& aStorageStatus);
 #endif
-
-  // nsIDOMDeviceStorage.type
-  enum {
-      DEVICE_STORAGE_TYPE_DEFAULT = 0,
-      DEVICE_STORAGE_TYPE_SHARED,
-      DEVICE_STORAGE_TYPE_EXTERNAL
-  };
 
   nsRefPtr<DeviceStorageFileSystem> mFileSystem;
 };

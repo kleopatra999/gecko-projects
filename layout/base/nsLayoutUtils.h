@@ -8,6 +8,7 @@
 
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/Maybe.h"
 #include "nsBoundingMetrics.h"
 #include "nsChangeHint.h"
 #include "nsAutoPtr.h"
@@ -163,6 +164,16 @@ public:
    * Get display port for the given element.
    */
   static bool GetDisplayPort(nsIContent* aContent, nsRect *aResult = nullptr);
+
+  /**
+   * @return the display port for the given element which should be used for
+   * visibility testing purposes.
+   *
+   * If low-precision buffers are enabled, this is the critical display port;
+   * otherwise, it's the same display port returned by GetDisplayPort().
+   */
+  static bool GetDisplayPortForVisibilityTesting(nsIContent* aContent,
+                                                 nsRect* aResult = nullptr);
 
   enum class RepaintMode : uint8_t {
     Repaint,
@@ -2304,6 +2315,10 @@ public:
     return sFontSizeInflationDisabledInMasterProcess;
   }
 
+  static bool SVGTransformOriginEnabled() {
+    return sSVGTransformOriginEnabled;
+  }
+
   /**
    * See comment above "font.size.inflation.mappingIntercept" in
    * modules/libpref/src/init/all.js .
@@ -2628,8 +2643,28 @@ public:
                                           Layer* aLayer,
                                           ViewID aScrollParentId,
                                           const nsRect& aViewport,
+                                          const mozilla::Maybe<nsRect>& aClipRect,
                                           bool aIsRoot,
                                           const ContainerLayerParameters& aContainerParameters);
+
+  /**
+   * If the given scroll frame needs an area excluded from its composition
+   * bounds due to scrollbars, return that area, otherwise return an empty
+   * margin.
+   * There is no need to exclude scrollbars in the following cases:
+   *   - If the scroll frame is not the RCD-RSF; in that case, the composition
+   *     bounds is calculated based on the scroll port which already excludes
+   *     the scrollbar area.
+   *   - If the scrollbars are overlay, since then they are drawn on top of the
+   *     scrollable content.
+   */
+  static nsMargin ScrollbarAreaToExcludeFromCompositionBoundsFor(nsIFrame* aScrollFrame);
+
+  /**
+   * Looks in the layer subtree rooted at aLayer for a metrics with scroll id
+   * aScrollId. Returns true if such is found.
+   */
+  static bool ContainsMetricsWithId(const Layer* aLayer, const ViewID& aScrollId);
 
 private:
   static uint32_t sFontSizeInflationEmPerLine;
@@ -2642,6 +2677,7 @@ private:
   static bool sInvalidationDebuggingIsEnabled;
   static bool sCSSVariablesEnabled;
   static bool sInterruptibleReflowEnabled;
+  static bool sSVGTransformOriginEnabled;
 
   /**
    * Helper function for LogTestDataForPaint().

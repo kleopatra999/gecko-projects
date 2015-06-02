@@ -92,15 +92,10 @@
 #include "nsRange.h"
 #include <algorithm>
 
-#ifdef PR_LOGGING
 static PRLogModuleInfo* gMediaElementLog;
 static PRLogModuleInfo* gMediaElementEventsLog;
-#define LOG(type, msg) PR_LOG(gMediaElementLog, type, msg)
-#define LOG_EVENT(type, msg) PR_LOG(gMediaElementEventsLog, type, msg)
-#else
-#define LOG(type, msg)
-#define LOG_EVENT(type, msg)
-#endif
+#define LOG(type, msg) MOZ_LOG(gMediaElementLog, type, msg)
+#define LOG_EVENT(type, msg) MOZ_LOG(gMediaElementEventsLog, type, msg)
 
 #include "nsIContentSecurityPolicy.h"
 
@@ -1489,10 +1484,12 @@ HTMLMediaElement::Seek(double aTime,
 
   // Clamp the seek target to inside the seekable ranges.
   nsRefPtr<dom::TimeRanges> seekable = new dom::TimeRanges();
-  if (NS_FAILED(mDecoder->GetSeekable(seekable))) {
+  media::TimeIntervals seekableIntervals = mDecoder->GetSeekable();
+  if (seekableIntervals.IsInvalid()) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
   }
+  seekableIntervals.ToTimeRanges(seekable);
   uint32_t length = 0;
   seekable->GetLength(&length);
   if (!length) {
@@ -1606,9 +1603,8 @@ HTMLMediaElement::Seekable() const
 {
   nsRefPtr<TimeRanges> ranges = new TimeRanges();
   if (mDecoder && mReadyState > nsIDOMHTMLMediaElement::HAVE_NOTHING) {
-    mDecoder->GetSeekable(ranges);
+    mDecoder->GetSeekable().ToTimeRanges(ranges);
   }
-  ranges->Normalize();
   return ranges.forget();
 }
 
@@ -2094,14 +2090,12 @@ HTMLMediaElement::HTMLMediaElement(already_AddRefed<mozilla::dom::NodeInfo>& aNo
     mDisableVideo(false),
     mElementInTreeState(ELEMENT_NOT_INTREE)
 {
-#ifdef PR_LOGGING
   if (!gMediaElementLog) {
     gMediaElementLog = PR_NewLogModule("nsMediaElement");
   }
   if (!gMediaElementEventsLog) {
     gMediaElementEventsLog = PR_NewLogModule("nsMediaElementEvents");
   }
-#endif
 
   mAudioChannel = AudioChannelService::GetDefaultAudioChannel();
 
@@ -2797,12 +2791,6 @@ nsresult HTMLMediaElement::FinishDecoderSetup(MediaDecoder* aDecoder,
     mDecoder->SetMinimizePrerollUntilPlaybackStarts();
   }
 
-  for (uint32_t i = 0; i < mOutputStreams.Length(); ++i) {
-    OutputMediaStream* ms = &mOutputStreams[i];
-    aDecoder->AddOutputStream(ms->mStream->GetStream()->AsProcessedStream(),
-                              ms->mFinishWhenEnded);
-  }
-
   // Update decoder principal before we start decoding, since it
   // can affect how we feed data to MediaStreams
   NotifyDecoderPrincipalChanged();
@@ -2812,6 +2800,12 @@ nsresult HTMLMediaElement::FinishDecoderSetup(MediaDecoder* aDecoder,
     SetDecoder(nullptr);
     LOG(PR_LOG_DEBUG, ("%p Failed to load for decoder %p", this, aDecoder));
     return rv;
+  }
+
+  for (uint32_t i = 0; i < mOutputStreams.Length(); ++i) {
+    OutputMediaStream* ms = &mOutputStreams[i];
+    aDecoder->AddOutputStream(ms->mStream->GetStream()->AsProcessedStream(),
+                              ms->mFinishWhenEnded);
   }
 
 #ifdef MOZ_EME
@@ -3597,7 +3591,6 @@ HTMLMediaElement::UpdateReadyStateInternal()
   ChangeReadyState(nsIDOMHTMLMediaElement::HAVE_FUTURE_DATA);
 }
 
-#ifdef PR_LOGGING
 static const char* const gReadyStateToString[] = {
   "HAVE_NOTHING",
   "HAVE_METADATA",
@@ -3605,7 +3598,6 @@ static const char* const gReadyStateToString[] = {
   "HAVE_FUTURE_DATA",
   "HAVE_ENOUGH_DATA"
 };
-#endif
 
 void HTMLMediaElement::ChangeReadyState(nsMediaReadyState aState)
 {
@@ -3657,14 +3649,12 @@ void HTMLMediaElement::ChangeReadyState(nsMediaReadyState aState)
   }
 }
 
-#ifdef PR_LOGGING
 static const char* const gNetworkStateToString[] = {
   "EMPTY",
   "IDLE",
   "LOADING",
   "NO_SOURCE"
  };
-#endif
 
 void HTMLMediaElement::ChangeNetworkState(nsMediaNetworkState aState)
 {
@@ -4180,12 +4170,12 @@ HTMLMediaElement::Buffered() const
   nsRefPtr<TimeRanges> ranges = new TimeRanges();
   if (mReadyState > nsIDOMHTMLMediaElement::HAVE_NOTHING) {
     if (mDecoder) {
-      // If GetBuffered fails we ignore the error result and just return the
-      // time ranges we found up till the error.
-      mDecoder->GetBuffered(ranges);
+      media::TimeIntervals buffered = mDecoder->GetBuffered();
+      if (!buffered.IsInvalid()) {
+        buffered.ToTimeRanges(ranges);
+      }
     }
   }
-  ranges->Normalize();
   return ranges.forget();
 }
 

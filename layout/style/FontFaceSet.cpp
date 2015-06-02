@@ -6,7 +6,7 @@
 
 #include "FontFaceSet.h"
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "mozilla/css/Loader.h"
 #include "mozilla/dom/CSSFontFaceLoadEvent.h"
@@ -16,6 +16,7 @@
 #include "mozilla/dom/Promise.h"
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/Snprintf.h"
 #include "nsCORSListenerProxy.h"
 #include "nsFontFaceLoader.h"
 #include "nsIConsoleService.h"
@@ -36,7 +37,7 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 
-#define LOG(args) PR_LOG(gfxUserFontSet::GetUserFontsLog(), PR_LOG_DEBUG, args)
+#define LOG(args) MOZ_LOG(gfxUserFontSet::GetUserFontsLog(), PR_LOG_DEBUG, args)
 #define LOG_ENABLED() PR_LOG_TEST(gfxUserFontSet::GetUserFontsLog(), \
                                   PR_LOG_DEBUG)
 
@@ -136,15 +137,22 @@ FontFaceSet::WrapObject(JSContext* aContext, JS::Handle<JSObject*> aGivenProto)
 void
 FontFaceSet::Disconnect()
 {
-  if (mDocument) {
-    mDocument->RemoveSystemEventListener(NS_LITERAL_STRING("DOMContentLoaded"),
-                                         this, false);
+  RemoveDOMContentLoadedListener();
+
+  if (mDocument && mDocument->CSSLoader()) {
     // We're null checking CSSLoader() since FontFaceSet::Disconnect() might be
     // being called during unlink, at which time the loader amy already have
     // been unlinked from the document.
-    if (mDocument->CSSLoader()) {
-      mDocument->CSSLoader()->RemoveObserver(this);
-    }
+    mDocument->CSSLoader()->RemoveObserver(this);
+  }
+}
+
+void
+FontFaceSet::RemoveDOMContentLoadedListener()
+{
+  if (mDocument) {
+    mDocument->RemoveSystemEventListener(NS_LITERAL_STRING("DOMContentLoaded"),
+                                         this, false);
   }
 }
 
@@ -275,7 +283,7 @@ FontFaceSet::Clear()
 }
 
 bool
-FontFaceSet::Delete(FontFace& aFontFace, ErrorResult& aRv)
+FontFaceSet::Delete(FontFace& aFontFace)
 {
   mPresContext->FlushUserFontSet();
 
@@ -1074,7 +1082,7 @@ FontFaceSet::LogMessage(gfxUserFontEntry* aUserFontEntry,
   if (weightKeywordString.Length() > 0) {
     weightKeyword = weightKeywordString.get();
   } else {
-    sprintf(weightKeywordBuf, "%u", aUserFontEntry->Weight());
+    snprintf_literal(weightKeywordBuf, "%u", aUserFontEntry->Weight());
     weightKeyword = weightKeywordBuf;
   }
 
@@ -1536,7 +1544,8 @@ FontFaceSet::DispatchLoadingFinishedEvent(
   init.mBubbles = false;
   init.mCancelable = false;
   OwningNonNull<FontFace>* elements =
-    init.mFontfaces.AppendElements(aFontFaces.Length());
+    init.mFontfaces.AppendElements(aFontFaces.Length(), fallible);
+  MOZ_ASSERT(elements);
   for (size_t i = 0; i < aFontFaces.Length(); i++) {
     elements[i] = aFontFaces[i];
   }
@@ -1557,7 +1566,7 @@ FontFaceSet::HandleEvent(nsIDOMEvent* aEvent)
     return NS_ERROR_FAILURE;
   }
 
-  Disconnect();
+  RemoveDOMContentLoadedListener();
   CheckLoadingFinished();
 
   return NS_OK;

@@ -40,7 +40,7 @@
 #include "nsThreadUtils.h"
 #include "nsDocShellCID.h"
 #include "nsIContentSecurityPolicy.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "nsCRT.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsCORSListenerProxy.h"
@@ -54,9 +54,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/unused.h"
 
-#ifdef PR_LOGGING
 static PRLogModuleInfo* gCspPRLog;
-#endif
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -109,10 +107,8 @@ nsScriptLoader::nsScriptLoader(nsIDocument *aDocument)
     mBlockingDOMContentLoaded(false)
 {
   // enable logging for CSP
-#ifdef PR_LOGGING
   if (!gCspPRLog)
     gCspPRLog = PR_NewLogModule("CSP");
-#endif
 }
 
 nsScriptLoader::~nsScriptLoader()
@@ -1214,14 +1210,18 @@ nsScriptLoader::ProcessPendingRequests()
     child->RemoveExecuteBlocker();
   }
 
+  if (mDocumentParsingDone && mDocument && !mParserBlockingRequest &&
+      mNonAsyncExternalScriptInsertedRequests.isEmpty() &&
+      mXSLTRequests.isEmpty() && mDeferRequests.isEmpty() &&
+      MaybeRemovedDeferRequests()) {
+    return ProcessPendingRequests();
+  }
+
   if (mDocumentParsingDone && mDocument &&
       !mParserBlockingRequest && mLoadingAsyncRequests.isEmpty() &&
       mLoadedAsyncRequests.isEmpty() &&
       mNonAsyncExternalScriptInsertedRequests.isEmpty() &&
       mXSLTRequests.isEmpty() && mDeferRequests.isEmpty()) {
-    if (MaybeRemovedDeferRequests()) {
-      return ProcessPendingRequests();
-    }
     // No more pending scripts; time to unblock onload.
     // OK to unblock onload synchronously here, since callers must be
     // prepared for the world changing anyway.

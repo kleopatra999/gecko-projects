@@ -263,7 +263,6 @@ public:
      * on the critical path.
      */
     static void PreloadSlowThings();
-    static void PostForkPreload();
 
     /** Return a TabChild with the given attributes. */
     static already_AddRefed<TabChild>
@@ -363,10 +362,12 @@ public:
                                      const uint64_t& aInputBlockId) override;
     virtual bool RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
                                     const ScrollableLayerGuid& aGuid,
-                                    const uint64_t& aInputBlockId) override;
+                                    const uint64_t& aInputBlockId,
+                                    const nsEventStatus& aApzResponse) override;
     virtual bool RecvRealTouchMoveEvent(const WidgetTouchEvent& aEvent,
                                         const ScrollableLayerGuid& aGuid,
-                                        const uint64_t& aInputBlockId) override;
+                                        const uint64_t& aInputBlockId,
+                                        const nsEventStatus& aApzResponse) override;
     virtual bool RecvKeyEvent(const nsString& aType,
                               const int32_t&  aKeyCode,
                               const int32_t&  aCharCode,
@@ -390,6 +391,10 @@ public:
 
     virtual bool RecvSwappedWithOtherRemoteLoader() override;
 
+    virtual PDocAccessibleChild* AllocPDocAccessibleChild(PDocAccessibleChild*,
+                                                          const uint64_t&)
+      override;
+    virtual bool DeallocPDocAccessibleChild(PDocAccessibleChild*) override;
     virtual PDocumentRendererChild*
     AllocPDocumentRendererChild(const nsRect& documentRect, const gfx::Matrix& transform,
                                 const nsString& bgcolor,
@@ -428,6 +433,8 @@ public:
     /** Return the DPI of the widget this TabChild draws to. */
     void GetDPI(float* aDPI);
     void GetDefaultScale(double *aScale);
+
+    void GetMaxTouchPoints(uint32_t* aTouchPoints);
 
     ScreenOrientation GetOrientation() { return mOrientation; }
 
@@ -472,6 +479,7 @@ public:
     static TabChild* GetFrom(uint64_t aLayersId);
 
     void DidComposite(uint64_t aTransactionId);
+    void ClearCachedResources();
 
     static inline TabChild*
     GetFrom(nsIDOMWindow* aWindow)

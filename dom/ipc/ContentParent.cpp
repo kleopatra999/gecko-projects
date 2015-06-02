@@ -32,10 +32,6 @@
 #include "IHistory.h"
 #include "imgIContainer.h"
 #include "mozIApplication.h"
-#ifdef ACCESSIBILITY
-#include "mozilla/a11y/DocAccessibleParent.h"
-#include "nsAccessibilityService.h"
-#endif
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/docshell/OfflineCacheUpdateParent.h"
 #include "mozilla/dom/DataStoreService.h"
@@ -140,7 +136,6 @@
 #include "nsServiceManagerUtils.h"
 #include "nsStyleSheetService.h"
 #include "nsThreadUtils.h"
-#include "nsThreadManager.h"
 #include "nsToolkitCompsCID.h"
 #include "nsWidgetsCID.h"
 #include "PreallocatedProcessManager.h"
@@ -1563,28 +1558,6 @@ StaticAutoPtr<LinkedList<SystemMessageHandledListener> >
 NS_IMPL_ISUPPORTS(SystemMessageHandledListener,
                   nsITimerCallback)
 
-#ifdef MOZ_NUWA_PROCESS
-class NuwaFreezeListener : public nsThreadManager::AllThreadsWereIdleListener
-{
-public:
-    NuwaFreezeListener(ContentParent* parent)
-        : mParent(parent)
-    {
-    }
-
-    void OnAllThreadsWereIdle()
-    {
-        unused << mParent->SendNuwaFreeze();
-        nsThreadManager::get()->RemoveAllThreadsWereIdleListener(this);
-    }
-private:
-    nsRefPtr<ContentParent> mParent;
-    virtual ~NuwaFreezeListener()
-    {
-    }
-};
-#endif // MOZ_NUWA_PROCESS
-
 } // anonymous namespace
 
 void
@@ -2058,6 +2031,15 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
         obs->NotifyObservers((nsIPropertyBag2*) props, "ipc:content-shutdown", nullptr);
     }
 
+    // Remove any and all idle listeners.
+    nsCOMPtr<nsIIdleService> idleService =
+        do_GetService("@mozilla.org/widget/idleservice;1");
+    MOZ_ASSERT(idleService);
+    nsRefPtr<ParentIdleListener> listener;
+    for (int32_t i = mIdleListeners.Length() - 1; i >= 0; --i) {
+        listener = static_cast<ParentIdleListener*>(mIdleListeners[i].get());
+        idleService->RemoveIdleObserver(listener, listener->mTime);
+    }
     mIdleListeners.Clear();
 
     MessageLoop::current()->
@@ -2362,8 +2344,6 @@ ContentParent::ContentParent(ContentParent* aTemplate,
         priority = PROCESS_PRIORITY_FOREGROUND;
     }
 
-    mSendPermissionUpdates = aTemplate->mSendPermissionUpdates;
-
     InitInternal(priority,
                  false, /* Setup Off-main thread compositing */
                  false  /* Send registered chrome */);
@@ -2426,6 +2406,18 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
     // must come after the Open() call above.
     ProcessPriorityManager::SetProcessPriority(this, aInitialPriority);
 
+    if (gAppData) {
+        nsCString version(gAppData->version);
+        nsCString buildID(gAppData->buildID);
+        nsCString name(gAppData->name);
+        nsCString UAName(gAppData->UAName);
+        nsCString ID(gAppData->ID);
+        nsCString vendor(gAppData->vendor);
+
+        // Sending all information to content process.
+        unused << SendAppInfo(version, buildID, name, UAName, ID, vendor);
+    }
+
     if (aSetupOffMainThreadCompositing) {
         // NB: internally, this will send an IPC message to the child
         // process to get it to create the CompositorChild.  This
@@ -2457,15 +2449,8 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
     }
 
     if (gAppData) {
-        nsCString version(gAppData->version);
-        nsCString buildID(gAppData->buildID);
-        nsCString name(gAppData->name);
-        nsCString UAName(gAppData->UAName);
-        nsCString ID(gAppData->ID);
-        nsCString vendor(gAppData->vendor);
-
         // Sending all information to content process.
-        unused << SendAppInfo(version, buildID, name, UAName, ID, vendor);
+        unused << SendAppInit();
     }
 
     nsStyleSheetService *sheetService = nsStyleSheetService::GetInstance();
@@ -2522,7 +2507,7 @@ ContentParent::IsForApp()
 
 #ifdef MOZ_NUWA_PROCESS
 bool
-ContentParent::IsNuwaProcess() const
+ContentParent::IsNuwaProcess()
 {
     return mIsNuwaProcess;
 }
@@ -2548,7 +2533,7 @@ bool
 ContentParent::RecvReadFontList(InfallibleTArray<FontListEntry>* retValue)
 {
 #ifdef ANDROID
-    gfxAndroidPlatform::GetPlatform()->GetFontList(retValue);
+    gfxAndroidPlatform::GetPlatform()->GetSystemFontList(retValue);
 #endif
     return true;
 }
@@ -2898,19 +2883,6 @@ ContentParent::RecvNuwaReady()
 }
 
 bool
-ContentParent::RecvNuwaWaitForFreeze()
-{
-#ifdef MOZ_NUWA_PROCESS
-    nsRefPtr<NuwaFreezeListener> listener = new NuwaFreezeListener(this);
-    nsThreadManager::get()->AddAllThreadsWereIdleListener(listener);
-    return true;
-#else // MOZ_NUWA_PROCESS
-    NS_ERROR("ContentParent::RecvNuwaWaitForFreeze() not implemented!");
-    return false;
-#endif // MOZ_NUWA_PROCESS
-}
-
-bool
 ContentParent::RecvAddNewProcess(const uint32_t& aPid,
                                  InfallibleTArray<ProtocolFdMapping>&& aFds)
 {
@@ -3177,42 +3149,6 @@ ContentParent::Observe(nsISupports* aSubject,
     }
 #endif
     return NS_OK;
-}
-
-  a11y::PDocAccessibleParent*
-ContentParent::AllocPDocAccessibleParent(PDocAccessibleParent* aParent, const uint64_t&)
-{
-#ifdef ACCESSIBILITY
-  return new a11y::DocAccessibleParent();
-#else
-  return nullptr;
-#endif
-}
-
-bool
-ContentParent::DeallocPDocAccessibleParent(PDocAccessibleParent* aParent)
-{
-#ifdef ACCESSIBILITY
-  delete static_cast<a11y::DocAccessibleParent*>(aParent);
-#endif
-  return true;
-}
-
-bool
-ContentParent::RecvPDocAccessibleConstructor(PDocAccessibleParent* aDoc, PDocAccessibleParent* aParentDoc, const uint64_t& aParentID)
-{
-#ifdef ACCESSIBILITY
-  auto doc = static_cast<a11y::DocAccessibleParent*>(aDoc);
-  if (aParentDoc) {
-    MOZ_ASSERT(aParentID);
-    auto parentDoc = static_cast<a11y::DocAccessibleParent*>(aParentDoc);
-    return parentDoc->AddChildDoc(doc, aParentID);
-  } else {
-    MOZ_ASSERT(!aParentID);
-    a11y::DocManager::RemoteDocAdded(doc);
-  }
-#endif
-  return true;
 }
 
 PGMPServiceParent*
@@ -4283,7 +4219,7 @@ ContentParent::RecvAddGeolocationListener(const IPC::Principal& aPrincipal,
     if (!principal) {
       return true;
     }
-    principal->GetOrigin(getter_Copies(origin));
+    principal->GetOrigin(origin);
     nsRefPtr<nsGeolocationSettings> gs = nsGeolocationSettings::GetGeolocationSettings();
     if (gs) {
       gs->PutWatchOrigin(mGeolocationWatchID, origin);
@@ -4693,30 +4629,34 @@ ContentParent::RecvAddIdleObserver(const uint64_t& aObserver, const uint32_t& aI
 {
     nsresult rv;
     nsCOMPtr<nsIIdleService> idleService =
-      do_GetService("@mozilla.org/widget/idleservice;1", &rv);
+        do_GetService("@mozilla.org/widget/idleservice;1", &rv);
     NS_ENSURE_SUCCESS(rv, false);
 
-    nsRefPtr<ParentIdleListener> listener = new ParentIdleListener(this, aObserver);
-    mIdleListeners.Put(aObserver, listener);
-    idleService->AddIdleObserver(listener, aIdleTimeInS);
+    nsRefPtr<ParentIdleListener> listener =
+        new ParentIdleListener(this, aObserver, aIdleTimeInS);
+    rv = idleService->AddIdleObserver(listener, aIdleTimeInS);
+    NS_ENSURE_SUCCESS(rv, false);
+    mIdleListeners.AppendElement(listener);
     return true;
 }
 
 bool
 ContentParent::RecvRemoveIdleObserver(const uint64_t& aObserver, const uint32_t& aIdleTimeInS)
 {
-    nsresult rv;
-    nsCOMPtr<nsIIdleService> idleService =
-      do_GetService("@mozilla.org/widget/idleservice;1", &rv);
-    NS_ENSURE_SUCCESS(rv, false);
-
     nsRefPtr<ParentIdleListener> listener;
-    bool found = mIdleListeners.Get(aObserver, &listener);
-    if (found) {
-        mIdleListeners.Remove(aObserver);
-        idleService->RemoveIdleObserver(listener, aIdleTimeInS);
+    for (int32_t i = mIdleListeners.Length() - 1; i >= 0; --i) {
+        listener = static_cast<ParentIdleListener*>(mIdleListeners[i].get());
+        if (listener->mObserver == aObserver &&
+            listener->mTime == aIdleTimeInS) {
+            nsresult rv;
+            nsCOMPtr<nsIIdleService> idleService =
+                do_GetService("@mozilla.org/widget/idleservice;1", &rv);
+            NS_ENSURE_SUCCESS(rv, false);
+            idleService->RemoveIdleObserver(listener, aIdleTimeInS);
+            mIdleListeners.RemoveElementAt(i);
+            break;
+        }
     }
-
     return true;
 }
 

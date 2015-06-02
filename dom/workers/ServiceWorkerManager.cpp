@@ -14,6 +14,7 @@
 #include "nsIHttpChannel.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIHttpHeaderVisitor.h"
+#include "nsIJARChannel.h"
 #include "nsINetworkInterceptController.h"
 #include "nsIMutableArray.h"
 #include "nsIUploadChannel2.h"
@@ -445,7 +446,7 @@ public:
     JS::Rooted<JSString*> msg(cx, msgval.toString());
 
     JS::Rooted<JS::Value> error(cx);
-    if (!JS::CreateError(cx, JSEXN_ERR, JS::NullPtr(), fn, aErrorDesc.mLineno,
+    if (!JS::CreateError(cx, JSEXN_ERR, nullptr, fn, aErrorDesc.mLineno,
                          aErrorDesc.mColno, nullptr, msg, &error)) {
       JS_ClearPendingException(cx);
       mPromise->MaybeReject(NS_ERROR_DOM_ABORT_ERR);
@@ -2137,6 +2138,7 @@ ServiceWorkerManager::CreateServiceWorkerForWindow(nsPIDOMWindow* aWindow,
 
   MOZ_ASSERT(!aInfo->CacheName().IsEmpty());
   loadInfo.mServiceWorkerCacheName = aInfo->CacheName();
+  loadInfo.mServiceWorkerID = aInfo->ID();
 
   RuntimeService* rs = RuntimeService::GetOrCreateService();
   if (!rs) {
@@ -2330,14 +2332,17 @@ void
 ServiceWorkerManager::MaybeStartControlling(nsIDocument* aDoc)
 {
   AssertIsOnMainThread();
+
+  // We keep a set of documents that service workers may choose to start
+  // controlling using claim().
+  MOZ_ASSERT(!mAllDocuments.Contains(aDoc));
+  mAllDocuments.PutEntry(aDoc);
+
   nsRefPtr<ServiceWorkerRegistrationInfo> registration =
     GetServiceWorkerRegistrationInfo(aDoc);
   if (registration) {
     MOZ_ASSERT(!mControlledDocuments.Contains(aDoc));
-    registration->StartControllingADocument();
-    // Use the already_AddRefed<> form of Put to avoid the addref-deref since
-    // we don't need the registration pointer in this function anymore.
-    mControlledDocuments.Put(aDoc, registration.forget());
+    StartControllingADocument(registration, aDoc);
   }
 }
 
@@ -2351,14 +2356,35 @@ ServiceWorkerManager::MaybeStopControlling(nsIDocument* aDoc)
   // it will always call MaybeStopControlling() even if there isn't an
   // associated registration. So this check is required.
   if (registration) {
-    registration->StopControllingADocument();
-    if (!registration->IsControllingDocuments()) {
-      if (registration->mPendingUninstall) {
-        registration->Clear();
-        RemoveRegistration(registration);
-      } else {
-        registration->TryToActivate();
-      }
+    StopControllingADocument(registration);
+  }
+
+  if (mAllDocuments.Contains(aDoc)) {
+    mAllDocuments.RemoveEntry(aDoc);
+  }
+}
+
+void
+ServiceWorkerManager::StartControllingADocument(ServiceWorkerRegistrationInfo* aRegistration,
+                                                nsIDocument* aDoc)
+{
+  MOZ_ASSERT(aRegistration);
+  MOZ_ASSERT(aDoc);
+
+  aRegistration->StartControllingADocument();
+  mControlledDocuments.Put(aDoc, aRegistration);
+}
+
+void
+ServiceWorkerManager::StopControllingADocument(ServiceWorkerRegistrationInfo* aRegistration)
+{
+  aRegistration->StopControllingADocument();
+  if (!aRegistration->IsControllingDocuments()) {
+    if (aRegistration->mPendingUninstall) {
+      aRegistration->Clear();
+      RemoveRegistration(aRegistration);
+    } else {
+      aRegistration->TryToActivate();
     }
   }
 }
@@ -2569,47 +2595,8 @@ public:
     rv = uri->GetSpec(mSpec);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel);
-    NS_ENSURE_TRUE(httpChannel, NS_ERROR_NOT_AVAILABLE);
-
-    rv = httpChannel->GetRequestMethod(mMethod);
-    NS_ENSURE_SUCCESS(rv, rv);
-
     uint32_t loadFlags;
     rv = channel->GetLoadFlags(&loadFlags);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsCOMPtr<nsIHttpChannelInternal> internalChannel = do_QueryInterface(httpChannel);
-    NS_ENSURE_TRUE(internalChannel, NS_ERROR_NOT_AVAILABLE);
-
-    uint32_t mode;
-    internalChannel->GetCorsMode(&mode);
-    switch (mode) {
-      case nsIHttpChannelInternal::CORS_MODE_SAME_ORIGIN:
-        mRequestMode = RequestMode::Same_origin;
-        break;
-      case nsIHttpChannelInternal::CORS_MODE_NO_CORS:
-        mRequestMode = RequestMode::No_cors;
-        break;
-      case nsIHttpChannelInternal::CORS_MODE_CORS:
-      case nsIHttpChannelInternal::CORS_MODE_CORS_WITH_FORCED_PREFLIGHT:
-        mRequestMode = RequestMode::Cors;
-        break;
-      default:
-        MOZ_CRASH("Unexpected CORS mode");
-    }
-
-    if (loadFlags & nsIRequest::LOAD_ANONYMOUS) {
-      mRequestCredentials = RequestCredentials::Omit;
-    } else {
-      bool includeCrossOrigin;
-      internalChannel->GetCorsIncludeCredentials(&includeCrossOrigin);
-      if (includeCrossOrigin) {
-        mRequestCredentials = RequestCredentials::Include;
-      }
-    }
-
-    rv = httpChannel->VisitRequestHeaders(this);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsILoadInfo> loadInfo;
@@ -2618,11 +2605,60 @@ public:
 
     mContentPolicyType = loadInfo->GetContentPolicyType();
 
-    nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(httpChannel);
-    if (uploadChannel) {
-      MOZ_ASSERT(!mUploadStream);
-      rv = uploadChannel->CloneUploadStream(getter_AddRefs(mUploadStream));
+    nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel);
+    if (httpChannel) {
+      rv = httpChannel->GetRequestMethod(mMethod);
       NS_ENSURE_SUCCESS(rv, rv);
+
+      nsCOMPtr<nsIHttpChannelInternal> internalChannel = do_QueryInterface(httpChannel);
+      NS_ENSURE_TRUE(internalChannel, NS_ERROR_NOT_AVAILABLE);
+
+      uint32_t mode;
+      internalChannel->GetCorsMode(&mode);
+      switch (mode) {
+        case nsIHttpChannelInternal::CORS_MODE_SAME_ORIGIN:
+          mRequestMode = RequestMode::Same_origin;
+          break;
+        case nsIHttpChannelInternal::CORS_MODE_NO_CORS:
+          mRequestMode = RequestMode::No_cors;
+          break;
+        case nsIHttpChannelInternal::CORS_MODE_CORS:
+        case nsIHttpChannelInternal::CORS_MODE_CORS_WITH_FORCED_PREFLIGHT:
+          mRequestMode = RequestMode::Cors;
+          break;
+        default:
+          MOZ_CRASH("Unexpected CORS mode");
+      }
+
+      if (loadFlags & nsIRequest::LOAD_ANONYMOUS) {
+        mRequestCredentials = RequestCredentials::Omit;
+      } else {
+        bool includeCrossOrigin;
+        internalChannel->GetCorsIncludeCredentials(&includeCrossOrigin);
+        if (includeCrossOrigin) {
+          mRequestCredentials = RequestCredentials::Include;
+        }
+      }
+
+      rv = httpChannel->VisitRequestHeaders(this);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      nsCOMPtr<nsIUploadChannel2> uploadChannel = do_QueryInterface(httpChannel);
+      if (uploadChannel) {
+        MOZ_ASSERT(!mUploadStream);
+        rv = uploadChannel->CloneUploadStream(getter_AddRefs(mUploadStream));
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+    } else {
+      nsCOMPtr<nsIJARChannel> jarChannel = do_QueryInterface(channel);
+      // If it is not an HTTP channel it must be a JAR one.
+      NS_ENSURE_TRUE(jarChannel, NS_ERROR_NOT_AVAILABLE);
+
+      mMethod = "GET";
+
+      if (loadFlags & nsIRequest::LOAD_ANONYMOUS) {
+        mRequestCredentials = RequestCredentials::Omit;
+      }
     }
 
     return NS_OK;
@@ -2921,6 +2957,7 @@ ServiceWorkerManager::CreateServiceWorker(nsIPrincipal* aPrincipal,
   info.mResolvedScriptURI = info.mBaseURI;
   MOZ_ASSERT(!aInfo->CacheName().IsEmpty());
   info.mServiceWorkerCacheName = aInfo->CacheName();
+  info.mServiceWorkerID = aInfo->ID();
 
   rv = info.mBaseURI->GetHost(info.mDomain);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -3066,6 +3103,33 @@ EnumControlledDocuments(nsISupports* aKey,
   return PL_DHASH_NEXT;
 }
 
+static void
+FireControllerChangeOnDocument(nsIDocument* aDocument)
+{
+  AssertIsOnMainThread();
+  MOZ_ASSERT(aDocument);
+
+  nsCOMPtr<nsPIDOMWindow> w = aDocument->GetWindow();
+  MOZ_ASSERT(w);
+  auto* window = static_cast<nsGlobalWindow*>(w.get());
+  if (NS_WARN_IF(!window)) {
+    NS_WARNING("No valid nsGlobalWindow");
+    return;
+  }
+
+  ErrorResult result;
+  dom::Navigator* navigator = window->GetNavigator(result);
+  if (NS_WARN_IF(result.Failed())) {
+    return;
+  }
+
+  nsRefPtr<ServiceWorkerContainer> container = navigator->ServiceWorker();
+  container->ControllerChanged(result);
+  if (result.Failed()) {
+    NS_WARNING("Failed to dispatch controllerchange event");
+  }
+}
+
 static PLDHashOperator
 FireControllerChangeOnMatchingDocument(nsISupports* aKey,
                                        ServiceWorkerRegistrationInfo* aValue,
@@ -3083,25 +3147,20 @@ FireControllerChangeOnMatchingDocument(nsISupports* aKey,
     return PL_DHASH_NEXT;
   }
 
-  nsCOMPtr<nsPIDOMWindow> w = doc->GetWindow();
-  MOZ_ASSERT(w);
-  auto* window = static_cast<nsGlobalWindow*>(w.get());
-  if (NS_WARN_IF(!window)) {
-    NS_WARNING("No valid nsGlobalWindow");
-    return PL_DHASH_NEXT;
-  }
+  FireControllerChangeOnDocument(doc);
 
-  ErrorResult result;
-  dom::Navigator* navigator = window->GetNavigator(result);
-  if (NS_WARN_IF(result.Failed())) {
-    return PL_DHASH_NEXT;
-  }
+  return PL_DHASH_NEXT;
+}
 
-  nsRefPtr<ServiceWorkerContainer> container = navigator->ServiceWorker();
-  result = container->DispatchTrustedEvent(NS_LITERAL_STRING("controllerchange"));
-  if (result.Failed()) {
-    NS_WARNING("Failed to dispatch controllerchange event");
-  }
+static PLDHashOperator
+ClaimMatchingClients(nsISupportsHashKey* aKey, void* aData)
+{
+  nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  ServiceWorkerRegistrationInfo* workerRegistration =
+    static_cast<ServiceWorkerRegistrationInfo*>(aData);
+  nsCOMPtr<nsIDocument> document = do_QueryInterface(aKey->GetKey());
+
+  swm->MaybeClaimClient(document, workerRegistration);
 
   return PL_DHASH_NEXT;
 }
@@ -3121,6 +3180,56 @@ ServiceWorkerManager::GetAllClients(const nsCString& aScope,
   FilterRegistrationData data(aControlledDocuments, registration);
 
   mControlledDocuments.EnumerateRead(EnumControlledDocuments, &data);
+}
+
+void
+ServiceWorkerManager::MaybeClaimClient(nsIDocument* aDocument,
+                                       ServiceWorkerRegistrationInfo* aWorkerRegistration)
+{
+  MOZ_ASSERT(aWorkerRegistration);
+  MOZ_ASSERT(aWorkerRegistration->mActiveWorker);
+
+  // Same origin check
+  if (!aWorkerRegistration->mPrincipal->Equals(aDocument->NodePrincipal())) {
+    return;
+  }
+
+  // The registration that should be controlling the client
+  nsRefPtr<ServiceWorkerRegistrationInfo> matchingRegistration =
+    GetServiceWorkerRegistrationInfo(aDocument);
+
+  // The registration currently controlling the client
+  nsRefPtr<ServiceWorkerRegistrationInfo> controllingRegistration;
+  GetDocumentRegistration(aDocument, getter_AddRefs(controllingRegistration));
+
+  if (aWorkerRegistration != matchingRegistration ||
+        aWorkerRegistration == controllingRegistration) {
+    return;
+  }
+
+  if (controllingRegistration) {
+    StopControllingADocument(controllingRegistration);
+  }
+
+  StartControllingADocument(aWorkerRegistration, aDocument);
+  FireControllerChangeOnDocument(aDocument);
+}
+
+nsresult
+ServiceWorkerManager::ClaimClients(const nsCString& aScope, uint64_t aId)
+{
+  nsRefPtr<ServiceWorkerRegistrationInfo> registration =
+    GetRegistration(aScope);
+
+  if (!registration || !registration->mActiveWorker ||
+      !(registration->mActiveWorker->ID() == aId)) {
+    // The worker is not active.
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
+
+  mAllDocuments.EnumerateEntries(ClaimMatchingClients, registration);
+
+  return NS_OK;
 }
 
 void
@@ -3527,4 +3636,13 @@ ServiceWorkerInfo::UpdateState(ServiceWorkerState aState)
     mInstances[i]->QueueStateChangeEvent(mState);
   }
 }
+
+static uint64_t gServiceWorkerInfoCurrentID = 0;
+
+uint64_t
+ServiceWorkerInfo::GetNextID() const
+{
+  return ++gServiceWorkerInfoCurrentID;
+}
+
 END_WORKERS_NAMESPACE

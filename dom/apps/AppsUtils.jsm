@@ -66,7 +66,8 @@ mozIApplication.prototype = {
     let uri = Services.io.newURI(aPageURL, null, null);
     let filepath = AppsUtils.getFilePath(uri.path);
     let eliminatedUri = Services.io.newURI(uri.prePath + filepath, null, null);
-    let equalCriterion = aUri => aUri.equals(eliminatedUri);
+    let equalCriterion = aUrl => Services.io.newURI(aUrl, null, null)
+                                            .equals(eliminatedUri);
     return this.widgetPages.find(equalCriterion) !== undefined;
   },
 
@@ -696,17 +697,13 @@ this.AppsUtils = {
       let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
       file.initWithPath(aPath);
 
-      let channel = NetUtil.newChannel2(file,
-                                        null,
-                                        null,
-                                        null,      // aLoadingNode
-                                        Services.scriptSecurityManager.getSystemPrincipal(),
-                                        null,      // aTriggeringPrincipal
-                                        Ci.nsILoadInfo.SEC_NORMAL,
-                                        Ci.nsIContentPolicy.TYPE_OTHER);
+      let channel = NetUtil.newChannel({
+        uri: NetUtil.newURI(file),
+        loadUsingSystemPrincipal: true});
+
       channel.contentType = "application/json";
 
-      NetUtil.asyncFetch2(channel, function(aStream, aResult) {
+      NetUtil.asyncFetch(channel, function(aStream, aResult) {
         if (!Components.isSuccessCode(aResult)) {
           deferred.resolve(null);
 
@@ -895,18 +892,17 @@ ManifestHelper.prototype = {
     return {};
   },
 
-  get biggestIconURL() {
+  biggestIconURL: function(predicate) {
     let icons = this._localeProp("icons");
     if (!icons) {
       return null;
     }
 
-    let iconSizes = Object.keys(icons);
+    let iconSizes = Object.keys(icons).sort((a, b) => a - b)
+                          .filter(predicate || (() => true));
     if (iconSizes.length == 0) {
       return null;
     }
-
-    iconSizes.sort((a, b) => a - b);
     let biggestIconSize = iconSizes.pop();
     let biggestIcon = icons[biggestIconSize];
     let biggestIconURL = this._baseURI.resolve(biggestIcon);

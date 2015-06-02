@@ -159,7 +159,7 @@ void ProfileBuffer::reset() {
   mReadPos = mWritePos = 0;
 }
 
-#define DYNAMIC_MAX_STRING 512
+#define DYNAMIC_MAX_STRING 8192
 
 char* ProfileBuffer::processDynamicTag(int readPos,
                                        int* tagsConsumed, char* tagBuff)
@@ -184,44 +184,6 @@ char* ProfileBuffer::processDynamicTag(int readPos,
       readAheadPos = (readAheadPos + 1) % mEntrySize;
   }
   return tagBuff;
-}
-
-void ProfileBuffer::IterateTagsForThread(IterateTagsCallback aCallback, int aThreadId)
-{
-  MOZ_ASSERT(aCallback);
-
-  int readPos = mReadPos;
-  int currentThreadID = -1;
-
-  while (readPos != mWritePos) {
-    const ProfileEntry& entry = mEntries[readPos];
-
-    if (entry.mTagName == 'T') {
-      currentThreadID = entry.mTagInt;
-      readPos = (readPos + 1) % mEntrySize;
-      continue;
-    }
-
-    // Number of tags consumed
-    int incBy = 1;
-
-    // Read ahead to the next tag, if it's a 'd' tag process it now
-    const char* tagStringData = entry.mTagData;
-    int readAheadPos = (readPos + 1) % mEntrySize;
-    char tagBuff[DYNAMIC_MAX_STRING];
-    // Make sure the string is always null terminated if it fills up DYNAMIC_MAX_STRING-2
-    tagBuff[DYNAMIC_MAX_STRING-1] = '\0';
-
-    if (readAheadPos != mWritePos && mEntries[readAheadPos].mTagName == 'd') {
-      tagStringData = processDynamicTag(readPos, &incBy, tagBuff);
-    }
-
-    if (currentThreadID == aThreadId) {
-      aCallback(entry, tagStringData);
-    }
-
-    readPos = (readPos + incBy) % mEntrySize;
-  }
 }
 
 class JSONSchemaWriter
@@ -398,7 +360,10 @@ uint32_t UniqueStacks::Stack::GetOrAddIndex() const
 
 uint32_t UniqueStacks::FrameKey::Hash() const
 {
-  uint32_t hash = mozilla::HashString(mLocation.c_str(), mLocation.length());
+  uint32_t hash = 0;
+  if (!mLocation.IsEmpty()) {
+    hash = mozilla::HashString(mLocation.get());
+  }
   if (mLine.isSome()) {
     hash = mozilla::AddToHash(hash, *mLine);
   }
@@ -531,7 +496,7 @@ void UniqueStacks::StreamFrame(const OnStackFrameKey& aFrame)
 
   mFrameTableWriter.StartArrayElement();
   if (!aFrame.mJITFrameHandle) {
-    mUniqueStrings.WriteElement(mFrameTableWriter, aFrame.mLocation.c_str());
+    mUniqueStrings.WriteElement(mFrameTableWriter, aFrame.mLocation.get());
     if (aFrame.mLine.isSome()) {
       mFrameTableWriter.NullElement(); // implementation
       mFrameTableWriter.NullElement(); // optimizations
@@ -681,6 +646,7 @@ void ProfileBuffer::StreamSamplesToJSON(SpliceableJSONWriter& aWriter, int aThre
   int readPos = mReadPos;
   int currentThreadID = -1;
   Maybe<float> currentTime;
+  UniquePtr<char[]> tagBuff = MakeUnique<char[]>(DYNAMIC_MAX_STRING);
 
   while (readPos != mWritePos) {
     ProfileEntry entry = mEntries[readPos];
@@ -749,13 +715,12 @@ void ProfileBuffer::StreamSamplesToJSON(SpliceableJSONWriter& aWriter, int aThre
             // Read ahead to the next tag, if it's a 'd' tag process it now
             const char* tagStringData = frame.mTagData;
             int readAheadPos = (framePos + 1) % mEntrySize;
-            char tagBuff[DYNAMIC_MAX_STRING];
             // Make sure the string is always null terminated if it fills up
             // DYNAMIC_MAX_STRING-2
             tagBuff[DYNAMIC_MAX_STRING-1] = '\0';
 
             if (readAheadPos != mWritePos && mEntries[readAheadPos].mTagName == 'd') {
-              tagStringData = processDynamicTag(framePos, &incBy, tagBuff);
+              tagStringData = processDynamicTag(framePos, &incBy, tagBuff.get());
             }
 
             // Write one frame. It can have either
@@ -768,8 +733,8 @@ void ProfileBuffer::StreamSamplesToJSON(SpliceableJSONWriter& aWriter, int aThre
               // We need a double cast here to tell GCC that we don't want to sign
               // extend 32-bit addresses starting with 0xFXXXXXX.
               unsigned long long pc = (unsigned long long)(uintptr_t)frame.mTagPtr;
-              snprintf(tagBuff, DYNAMIC_MAX_STRING, "%#llx", pc);
-              stack.AppendFrame(UniqueStacks::OnStackFrameKey(tagBuff));
+              snprintf(tagBuff.get(), DYNAMIC_MAX_STRING, "%#llx", pc);
+              stack.AppendFrame(UniqueStacks::OnStackFrameKey(tagBuff.get()));
             } else if (frame.mTagName == 'c') {
               UniqueStacks::OnStackFrameKey frameKey(tagStringData);
               readAheadPos = (framePos + incBy) % mEntrySize;
@@ -927,17 +892,6 @@ void ThreadProfile::addTag(const ProfileEntry& aTag)
 
 void ThreadProfile::addStoredMarker(ProfilerMarker *aStoredMarker) {
   mBuffer->addStoredMarker(aStoredMarker);
-}
-
-void ThreadProfile::IterateTags(IterateTagsCallback aCallback)
-{
-  mBuffer->IterateTagsForThread(aCallback, mThreadId);
-}
-
-void ThreadProfile::ToStreamAsJSON(std::ostream& stream, float aSinceTime)
-{
-  SpliceableJSONWriter b(MakeUnique<OStreamJSONWriteFunc>(stream));
-  StreamJSON(b, aSinceTime);
 }
 
 void ThreadProfile::StreamJSON(SpliceableJSONWriter& aWriter, float aSinceTime)
@@ -1105,20 +1059,6 @@ void ThreadProfile::FlushSamplesAndMarkers()
   // Reset the buffer. Attempting to symbolicate JS samples after mRuntime has
   // gone away will crash.
   mBuffer->reset();
-}
-
-JSObject* ThreadProfile::ToJSObject(JSContext* aCx, float aSinceTime)
-{
-  JS::RootedValue val(aCx);
-  {
-    SpliceableChunkedJSONWriter b;
-    StreamJSON(b, aSinceTime);
-    UniquePtr<char[]> buf = b.WriteFunc()->CopyData();
-    NS_ConvertUTF8toUTF16 js_string(nsDependentCString(buf.get()));
-    MOZ_ALWAYS_TRUE(JS_ParseJSON(aCx, static_cast<const char16_t*>(js_string.get()),
-                                 js_string.Length(), &val));
-  }
-  return &val.toObject();
 }
 
 PseudoStack* ThreadProfile::GetPseudoStack()

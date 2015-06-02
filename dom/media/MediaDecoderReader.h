@@ -12,12 +12,9 @@
 #include "MediaPromise.h"
 #include "MediaQueue.h"
 #include "AudioCompactor.h"
+#include "TimeUnits.h"
 
 namespace mozilla {
-
-namespace dom {
-class TimeRanges;
-}
 
 class MediaDecoderReader;
 class SharedDecoderManager;
@@ -168,19 +165,16 @@ public:
   virtual bool HasVideo() = 0;
 
   // The default implementation of AsyncReadMetadata is implemented in terms of
-  // synchronous PreReadMetadata() / ReadMetadata() calls. Implementations may also
+  // synchronous ReadMetadata() calls. Implementations may also
   // override AsyncReadMetadata to create a more proper async implementation.
   virtual nsRefPtr<MetadataPromise> AsyncReadMetadata();
-
-  // A function that is called before ReadMetadata() call.
-  virtual void PreReadMetadata() {};
 
   // Read header data for all bitstreams in the file. Fills aInfo with
   // the data required to present the media, and optionally fills *aTags
   // with tag metadata from the file.
   // Returns NS_OK on success, or NS_ERROR_FAILURE on failure.
   virtual nsresult ReadMetadata(MediaInfo* aInfo,
-                                MetadataTags** aTags) = 0;
+                                MetadataTags** aTags) { MOZ_CRASH(); }
 
   // Fills aInfo with the latest cached data required to present the media,
   // ReadUpdatedMetadata will always be called once ReadMetadata has succeeded.
@@ -226,7 +220,7 @@ public:
   // The OggReader relies on this base implementation not performing I/O,
   // since in FirefoxOS we can't do I/O on the main thread, where this is
   // called.
-  virtual nsresult GetBuffered(dom::TimeRanges* aBuffered);
+  virtual media::TimeIntervals GetBuffered();
 
   virtual int64_t ComputeStartTime(const VideoData* aVideo, const AudioData* aAudio);
 
@@ -250,6 +244,8 @@ public:
   // Only used by WebMReader and MediaOmxReader for now, so stub here rather
   // than in every reader than inherits from MediaDecoderReader.
   virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset) {}
+  // Notify the reader that data from the resource was evicted (MediaSource only)
+  virtual void NotifyDataRemoved() {}
   virtual int64_t GetEvictionOffset(double aTime) { return -1; }
 
   virtual MediaQueue<AudioData>& AudioQueue() { return mAudioQueue; }

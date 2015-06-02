@@ -1217,6 +1217,9 @@ nsSocketTransport::InitiateSocket()
     bool isLocal;
     IsLocal(&isLocal);
 
+    if (gIOService->IsShutdown()) {
+        return NS_ERROR_ABORT;
+    }
     if (gIOService->IsOffline()) {
         if (!isLocal)
             return NS_ERROR_OFFLINE;
@@ -1922,7 +1925,8 @@ nsSocketTransport::OnSocketDetached(PRFileDesc *fd)
         }
     }
 
-    if (RecoverFromError())
+    // If we are not offline try again.
+    if (!gIOService->IsOffline() && RecoverFromError())
         mCondition = NS_OK;
     else {
         mState = STATE_CLOSED;

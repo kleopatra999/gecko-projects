@@ -174,10 +174,9 @@ public:
 
   NS_IMETHOD SetCursor(nsCursor aCursor) override;
   NS_IMETHOD SetCursor(imgIContainer* aCursor,
-                       uint32_t aHotspotX, uint32_t aHotspotY) override
-  {
-    return nsBaseWidget::SetCursor(aCursor, aHotspotX, aHotspotY);
-  }
+                       uint32_t aHotspotX, uint32_t aHotspotY) override;
+
+  virtual void ClearCachedCursor() override;
 
   // Gets the DPI of the screen corresponding to this widget.
   // Contacts the parent process which gets the DPI from the
@@ -241,6 +240,7 @@ public:
                                             bool aLongTap,
                                             nsIObserver* aObserver) override;
   virtual nsresult ClearNativeTouchSequence(nsIObserver* aObserver) override;
+  virtual uint32_t GetMaxTouchPoints() const override;
 
 protected:
   bool mEnabled;
@@ -279,6 +279,18 @@ private:
     PuppetWidget* mWidget;
   };
 
+  class MemoryPressureObserver : public nsIObserver {
+  public:
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSIOBSERVER
+    explicit MemoryPressureObserver(PuppetWidget* aWidget) : mWidget(aWidget) {}
+    void Remove();
+  private:
+    virtual ~MemoryPressureObserver() {}
+    PuppetWidget* mWidget;
+  };
+  friend class MemoryPressureObserver;
+
   // TabChild normally holds a strong reference to this PuppetWidget
   // or its root ancestor, but each PuppetWidget also needs a
   // reference back to TabChild (e.g. to delegate nsIWidget IME calls
@@ -291,18 +303,12 @@ private:
   nsRefPtr<PuppetWidget> mChild;
   nsIntRegion mDirtyRegion;
   nsRevocableEventPtr<PaintTask> mPaintTask;
+  nsRefPtr<MemoryPressureObserver> mMemoryPressureObserver;
   // XXX/cjones: keeping this around until we teach LayerManager to do
   // retained-content-only transactions
   mozilla::RefPtr<DrawTarget> mDrawTarget;
   // IME
   nsIMEUpdatePreference mIMEPreferenceOfParent;
-  // Latest seqno received through events
-  uint32_t mIMELastReceivedSeqno;
-  // Chrome's seqno value when last blur occurred
-  // arriving events with seqno up to this should be discarded
-  // Note that if seqno overflows (~50 days at 1 ms increment rate),
-  // events will be discarded until new focus/blur occurs
-  uint32_t mIMELastBlurSeqno;
   bool mNeedIMEStateInit;
 
   // The DPI of the screen corresponding to this widget
@@ -314,6 +320,9 @@ private:
   InfallibleTArray<mozilla::CommandInt> mSingleLineCommands;
   InfallibleTArray<mozilla::CommandInt> mMultiLineCommands;
   InfallibleTArray<mozilla::CommandInt> mRichTextCommands;
+
+  nsCOMPtr<imgIContainer> mCustomCursor;
+  uint32_t mCursorHotspotX, mCursorHotspotY;
 };
 
 struct AutoCacheNativeKeyCommands

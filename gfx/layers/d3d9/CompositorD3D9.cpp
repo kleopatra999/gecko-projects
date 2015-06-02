@@ -97,7 +97,7 @@ CompositorD3D9::GetMaxTextureSize() const
 TemporaryRef<DataTextureSource>
 CompositorD3D9::CreateDataTextureSource(TextureFlags aFlags)
 {
-  return new DataTextureSourceD3D9(SurfaceFormat::UNKNOWN, this, aFlags);
+  return MakeAndAddRef<DataTextureSourceD3D9>(SurfaceFormat::UNKNOWN, this, aFlags);
 }
 
 TemporaryRef<CompositingRenderTarget>
@@ -125,10 +125,7 @@ CompositorD3D9::CreateRenderTarget(const gfx::IntRect &aRect,
     return nullptr;
   }
 
-  RefPtr<CompositingRenderTargetD3D9> rt =
-    new CompositingRenderTargetD3D9(texture, aInit, aRect);
-
-  return rt;
+  return MakeAndAddRef<CompositingRenderTargetD3D9>(texture, aInit, aRect);
 }
 
 TemporaryRef<CompositingRenderTarget>
@@ -192,12 +189,9 @@ CompositorD3D9::CreateRenderTargetFromSource(const gfx::IntRect &aRect,
     }
   }
 
-  RefPtr<CompositingRenderTargetD3D9> rt =
-    new CompositingRenderTargetD3D9(texture,
-                                    INIT_MODE_NONE,
-                                    aRect);
-
-  return rt;
+  return MakeAndAddRef<CompositingRenderTargetD3D9>(texture,
+                                                    INIT_MODE_NONE,
+                                                    aRect);
 }
 
 void
@@ -752,7 +746,11 @@ CompositorD3D9::PaintToTarget()
   device()->GetRenderTargetData(backBuff, destSurf);
 
   D3DLOCKED_RECT rect;
-  destSurf->LockRect(&rect, nullptr, D3DLOCK_READONLY);
+  HRESULT hr = destSurf->LockRect(&rect, nullptr, D3DLOCK_READONLY);
+  if (FAILED(hr) || !rect.pBits) {
+    gfxCriticalError() << "Failed to lock rect in paint to target D3D9 " << hexa(hr);
+    return;
+  }
   RefPtr<DataSourceSurface> sourceSurface =
     Factory::CreateWrappingDataSourceSurface((uint8_t*)rect.pBits,
                                              rect.Pitch,

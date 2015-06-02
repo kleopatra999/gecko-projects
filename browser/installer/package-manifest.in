@@ -53,7 +53,6 @@
 @RESPATH@/dictionaries/*
 @RESPATH@/hyphenation/*
 @RESPATH@/browser/@PREF_DIR@/firefox-l10n.js
-@RESPATH@/browser/searchplugins/*
 #ifdef HAVE_MAKENSISU
 @BINPATH@/uninstall/helper.exe
 #endif
@@ -207,7 +206,6 @@
 @RESPATH@/components/dom_alarm.xpt
 @RESPATH@/components/dom_core.xpt
 @RESPATH@/components/dom_css.xpt
-@RESPATH@/components/dom_devicestorage.xpt
 @RESPATH@/components/dom_events.xpt
 @RESPATH@/components/dom_geolocation.xpt
 @RESPATH@/components/dom_media.xpt
@@ -801,7 +799,6 @@
 #endif
 @RESPATH@/chrome/pippki@JAREXT@
 @RESPATH@/chrome/pippki.manifest
-@RESPATH@/components/pipboot.xpt
 @RESPATH@/components/pipnss.xpt
 @RESPATH@/components/pippki.xpt
 

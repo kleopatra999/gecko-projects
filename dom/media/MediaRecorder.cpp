@@ -31,12 +31,8 @@
 #undef LOG
 #endif
 
-#ifdef PR_LOGGING
 PRLogModuleInfo* gMediaRecorderLog;
-#define LOG(type, msg) PR_LOG(gMediaRecorderLog, type, msg)
-#else
-#define LOG(type, msg)
-#endif
+#define LOG(type, msg) MOZ_LOG(gMediaRecorderLog, type, msg)
 
 namespace mozilla {
 
@@ -642,14 +638,13 @@ private:
   void DoSessionEndTask(nsresult rv)
   {
     MOZ_ASSERT(NS_IsMainThread());
+    CleanupStreams();
     if (NS_FAILED(rv)) {
       nsCOMPtr<nsIRunnable> runnable =
         NS_NewRunnableMethodWithArg<nsresult>(mRecorder,
                                               &MediaRecorder::NotifyError, rv);
       NS_DispatchToMainThread(runnable);
     }
-
-    CleanupStreams();
     if (NS_FAILED(NS_DispatchToMainThread(new EncoderErrorNotifierRunnable(this)))) {
       MOZ_ASSERT(false, "NS_DispatchToMainThread EncoderErrorNotifierRunnable failed");
     }
@@ -759,11 +754,9 @@ MediaRecorder::MediaRecorder(DOMMediaStream& aSourceMediaStream,
   MOZ_ASSERT(aOwnerWindow);
   MOZ_ASSERT(aOwnerWindow->IsInnerWindow());
   mDOMStream = &aSourceMediaStream;
-#ifdef PR_LOGGING
   if (!gMediaRecorderLog) {
     gMediaRecorderLog = PR_NewLogModule("MediaRecorder");
   }
-#endif
   RegisterActivityObserver();
 }
 
@@ -792,11 +785,9 @@ MediaRecorder::MediaRecorder(AudioNode& aSrcAudioNode,
                                                 aSrcOutput);
   }
   mAudioNode = &aSrcAudioNode;
-  #ifdef PR_LOGGING
   if (!gMediaRecorderLog) {
     gMediaRecorderLog = PR_NewLogModule("MediaRecorder");
   }
-  #endif
   RegisterActivityObserver();
 }
 
@@ -1017,7 +1008,7 @@ MediaRecorder::CreateAndDispatchBlobEvent(already_AddRefed<nsIDOMBlob>&& aBlob)
   init.mCancelable = false;
 
   nsCOMPtr<nsIDOMBlob> blob = aBlob;
-  init.mData = static_cast<File*>(blob.get());
+  init.mData = static_cast<Blob*>(blob.get());
 
   nsRefPtr<BlobEvent> event =
     BlobEvent::Constructor(this,

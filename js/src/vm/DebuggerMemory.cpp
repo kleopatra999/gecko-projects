@@ -191,7 +191,7 @@ DebuggerMemory::drainAllocationsLog(JSContext* cx, unsigned argc, Value* vp)
             return false;
 
         // Don't pop the AllocationSite yet. The queue's links are followed by
-        // the GC to find the AllocationSite, but are not barried, so we must
+        // the GC to find the AllocationSite, but are not barriered, so we must
         // edit them with great care. Use the queue entry in place, and then
         // pop and delete together.
         Debugger::AllocationSite* allocSite = dbg->allocationsLog.getFirst();
@@ -325,9 +325,16 @@ DebuggerMemory::setOnGarbageCollection(JSContext* cx, unsigned argc, Value* vp)
 
 /* Debugger.Memory.prototype.takeCensus */
 
-void
-JS::dbg::SetDebuggerMallocSizeOf(JSRuntime* rt, mozilla::MallocSizeOf mallocSizeOf) {
+JS_PUBLIC_API(void)
+JS::dbg::SetDebuggerMallocSizeOf(JSRuntime* rt, mozilla::MallocSizeOf mallocSizeOf)
+{
     rt->debuggerMallocSizeOf = mallocSizeOf;
+}
+
+JS_PUBLIC_API(mozilla::MallocSizeOf)
+JS::dbg::GetDebuggerMallocSizeOf(JSRuntime* rt)
+{
+    return rt->debuggerMallocSizeOf;
 }
 
 namespace js {

@@ -8,7 +8,7 @@
 #ifndef nsPluginLogging_h__
 #define nsPluginLogging_h__
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #ifndef PLUGIN_LOGGING    // allow external override
 #define PLUGIN_LOGGING 1  // master compile-time switch for pluging logging
@@ -60,7 +60,7 @@ public:
 #ifdef PLUGIN_LOGGING
  #define NPN_PLUGIN_LOG(a, b)                              \
    PR_BEGIN_MACRO                                        \
-   PR_LOG(nsPluginLogging::gNPNLog, a, b); \
+   MOZ_LOG(nsPluginLogging::gNPNLog, a, b); \
    PR_LogFlush();                                                    \
    PR_END_MACRO
 #else
@@ -70,7 +70,7 @@ public:
 #ifdef PLUGIN_LOGGING
  #define NPP_PLUGIN_LOG(a, b)                              \
    PR_BEGIN_MACRO                                         \
-   PR_LOG(nsPluginLogging::gNPPLog, a, b); \
+   MOZ_LOG(nsPluginLogging::gNPPLog, a, b); \
    PR_LogFlush();                                                    \
    PR_END_MACRO
 #else
@@ -80,7 +80,7 @@ public:
 #ifdef PLUGIN_LOGGING
  #define PLUGIN_LOG(a, b)                              \
    PR_BEGIN_MACRO                                         \
-   PR_LOG(nsPluginLogging::gPluginLog, a, b); \
+   MOZ_LOG(nsPluginLogging::gPluginLog, a, b); \
    PR_LogFlush();                                                    \
    PR_END_MACRO
 #else

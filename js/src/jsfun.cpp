@@ -363,60 +363,53 @@ static const JSPropertySpec function_properties[] = {
     JS_PS_END
 };
 
-static JSObject*
-ResolveInterpretedFunctionPrototype(JSContext* cx, HandleObject obj)
+static bool
+ResolveInterpretedFunctionPrototype(JSContext* cx, HandleFunction fun, HandleId id)
 {
-#ifdef DEBUG
-    JSFunction* fun = &obj->as<JSFunction>();
     MOZ_ASSERT(fun->isInterpreted() || fun->isAsmJSNative());
     MOZ_ASSERT(!fun->isFunctionPrototype());
-#endif
+    MOZ_ASSERT(id == NameToId(cx->names().prototype));
 
     // Assert that fun is not a compiler-created function object, which
     // must never leak to script or embedding code and then be mutated.
-    // Also assert that obj is not bound, per the ES5 15.3.4.5 ref above.
-    MOZ_ASSERT(!IsInternalFunctionObject(obj));
-    MOZ_ASSERT(!obj->isBoundFunction());
+    // Also assert that fun is not bound, per the ES5 15.3.4.5 ref above.
+    MOZ_ASSERT(!IsInternalFunctionObject(fun));
+    MOZ_ASSERT(!fun->isBoundFunction());
 
     // Make the prototype object an instance of Object with the same parent as
     // the function object itself, unless the function is an ES6 generator.  In
     // that case, per the 15 July 2013 ES6 draft, section 15.19.3, its parent is
     // the GeneratorObjectPrototype singleton.
-    bool isStarGenerator = obj->as<JSFunction>().isStarGenerator();
-    Rooted<GlobalObject*> global(cx, &obj->global());
+    bool isStarGenerator = fun->isStarGenerator();
+    Rooted<GlobalObject*> global(cx, &fun->global());
     RootedObject objProto(cx);
     if (isStarGenerator)
         objProto = GlobalObject::getOrCreateStarGeneratorObjectPrototype(cx, global);
     else
-        objProto = obj->global().getOrCreateObjectPrototype(cx);
+        objProto = fun->global().getOrCreateObjectPrototype(cx);
     if (!objProto)
-        return nullptr;
+        return false;
 
     RootedPlainObject proto(cx, NewObjectWithGivenProto<PlainObject>(cx, objProto,
                                                                      SingletonObject));
     if (!proto)
-        return nullptr;
-
-    // Per ES5 15.3.5.2 a user-defined function's .prototype property is
-    // initially non-configurable, non-enumerable, and writable.
-    RootedValue protoVal(cx, ObjectValue(*proto));
-    if (!DefineProperty(cx, obj, cx->names().prototype, protoVal, nullptr, nullptr,
-                        JSPROP_PERMANENT))
-    {
-        return nullptr;
-    }
+        return false;
 
     // Per ES5 13.2 the prototype's .constructor property is configurable,
     // non-enumerable, and writable.  However, per the 15 July 2013 ES6 draft,
     // section 15.19.3, the .prototype of a generator function does not link
     // back with a .constructor.
     if (!isStarGenerator) {
-        RootedValue objVal(cx, ObjectValue(*obj));
+        RootedValue objVal(cx, ObjectValue(*fun));
         if (!DefineProperty(cx, proto, cx->names().constructor, objVal, nullptr, nullptr, 0))
-            return nullptr;
+            return false;
     }
 
-    return proto;
+    // Per ES5 15.3.5.2 a user-defined function's .prototype property is
+    // initially non-configurable, non-enumerable, and writable.
+    RootedValue protoVal(cx, ObjectValue(*proto));
+    return DefineProperty(cx, fun, id, protoVal, nullptr, nullptr,
+                          JSPROP_PERMANENT | JSPROP_RESOLVING);
 }
 
 static bool
@@ -443,19 +436,22 @@ fun_resolve(JSContext* cx, HandleObject obj, HandleId id, bool* resolvedp)
          * or (Object.prototype, Function.prototype, etc.) have that property
          * created eagerly.
          *
-         * ES5 15.3.4: the non-native function object named Function.prototype
-         * does not have a .prototype property.
-         *
          * ES5 15.3.4.5: bound functions don't have a prototype property. The
          * isBuiltin() test covers this case because bound functions are native
          * (and thus built-in) functions by definition/construction.
          *
-         * ES6 19.2.4.3: arrow functions also don't have a prototype property.
+         * In ES6 9.2.8 MakeConstructor the .prototype property is only assigned
+         * to constructors.
+         *
+         * Thus all of the following don't get a .prototype property:
+         * - Methods (that are not class-constructors or generators)
+         * - Arrow functions
+         * - Function.prototype
          */
-        if (fun->isBuiltin() || fun->isArrow() || fun->isFunctionPrototype())
+        if (fun->isBuiltin() || !fun->isConstructor())
             return true;
 
-        if (!ResolveInterpretedFunctionPrototype(cx, fun))
+        if (!ResolveInterpretedFunctionPrototype(cx, fun, id))
             return false;
 
         *resolvedp = true;
@@ -498,8 +494,11 @@ fun_resolve(JSContext* cx, HandleObject obj, HandleId id, bool* resolvedp)
             v.setString(fun->atom() == nullptr ? cx->runtime()->emptyString : fun->atom());
         }
 
-        if (!NativeDefineProperty(cx, fun, id, v, nullptr, nullptr, JSPROP_READONLY))
+        if (!NativeDefineProperty(cx, fun, id, v, nullptr, nullptr,
+                                  JSPROP_READONLY | JSPROP_RESOLVING))
+        {
             return false;
+        }
 
         if (isLength)
             fun->setResolvedLength();
@@ -595,7 +594,7 @@ js::XDRInterpretedFunction(XDRState<mode>* xdr, HandleObject enclosingScope, Han
         if (uint16_t(flagsword) & JSFunction::EXTENDED)
             allocKind = gc::AllocKind::FUNCTION_EXTENDED;
         fun = NewFunctionWithProto(cx, nullptr, 0, JSFunction::INTERPRETED,
-                                   /* enclosingDynamicScope = */ NullPtr(), NullPtr(), proto,
+                                   /* enclosingDynamicScope = */ nullptr, nullptr, proto,
                                    allocKind, TenuredObject);
         if (!fun)
             return false;
@@ -651,7 +650,7 @@ js::CloneFunctionAndScript(JSContext* cx, HandleObject enclosingScope, HandleFun
 
     gc::AllocKind allocKind = srcFun->getAllocKind();
     RootedFunction clone(cx, NewFunctionWithProto(cx, nullptr, 0,
-                                                  JSFunction::INTERPRETED, NullPtr(), NullPtr(),
+                                                  JSFunction::INTERPRETED, nullptr, nullptr,
                                                   cloneProto, allocKind, TenuredObject));
     if (!clone)
         return nullptr;
@@ -698,7 +697,7 @@ fun_hasInstance(JSContext* cx, HandleObject objArg, MutableHandleValue v, bool* 
          * has a non-object as its .prototype value.
          */
         RootedValue val(cx, ObjectValue(*obj));
-        ReportValueError(cx, JSMSG_BAD_PROTOTYPE, -1, val, js::NullPtr());
+        ReportValueError(cx, JSMSG_BAD_PROTOTYPE, -1, val, nullptr);
         return false;
     }
 
@@ -756,7 +755,7 @@ CreateFunctionConstructor(JSContext* cx, JSProtoKey key)
 
     RootedObject functionCtor(cx,
       NewFunctionWithProto(cx, Function, 1, JSFunction::NATIVE_CTOR,
-                           NullPtr(), HandlePropertyName(cx->names().Function),
+                           nullptr, HandlePropertyName(cx->names().Function),
                            functionProto, AllocKind::FUNCTION, SingletonObject));
     if (!functionCtor)
         return nullptr;
@@ -777,7 +776,7 @@ CreateFunctionPrototype(JSContext* cx, JSProtoKey key)
      */
     JSObject* functionProto_ =
         NewFunctionWithProto(cx, nullptr, 0, JSFunction::INTERPRETED,
-                             self, NullPtr(), objectProto, AllocKind::FUNCTION,
+                             self, nullptr, objectProto, AllocKind::FUNCTION,
                              SingletonObject);
     if (!functionProto_)
         return nullptr;
@@ -807,7 +806,7 @@ CreateFunctionPrototype(JSContext* cx, JSProtoKey key)
         return nullptr;
 
     RootedScript script(cx, JSScript::Create(cx,
-                                             /* enclosingScope = */ js::NullPtr(),
+                                             /* enclosingScope = */ nullptr,
                                              /* savedCallerFun = */ false,
                                              options,
                                              /* staticLevel = */ 0,
@@ -845,7 +844,7 @@ CreateFunctionPrototype(JSContext* cx, JSProtoKey key)
     // confused.
     RootedFunction throwTypeError(cx,
       NewFunctionWithProto(cx, ThrowTypeError, 0, JSFunction::NATIVE_FUN,
-                           NullPtr(), NullPtr(), functionProto, AllocKind::FUNCTION,
+                           nullptr, nullptr, functionProto, AllocKind::FUNCTION,
                            SingletonObject));
     if (!throwTypeError || !PreventExtensions(cx, throwTypeError))
         return nullptr;
@@ -980,8 +979,9 @@ js::FunctionToString(JSContext* cx, HandleFunction fun, bool bodyOnly, bool lamb
             return out.finishString();
         }
     }
-    
-    bool funIsMethodOrNonArrowLambda = (fun->isLambda() && !fun->isArrow()) || fun->isMethod();
+
+    bool funIsMethodOrNonArrowLambda = (fun->isLambda() && !fun->isArrow()) || fun->isMethod() ||
+                                        fun->isGetter() || fun->isSetter();
     if (!bodyOnly) {
         // If we're not in pretty mode, put parentheses around lambda functions and methods.
         if (fun->isInterpreted() && !lambdaParen && funIsMethodOrNonArrowLambda) {
@@ -1955,7 +1955,7 @@ FunctionConstructor(JSContext* cx, unsigned argc, Value* vp, GeneratorKind gener
         ok = frontend::CompileStarGeneratorBody(cx, &fun, options, formals, srcBuf);
     else
         ok = frontend::CompileFunctionBody(cx, &fun, options, formals, srcBuf,
-                                           /* enclosingScope = */ js::NullPtr());
+                                           /* enclosingScope = */ nullptr);
     args.rval().setObject(*fun);
     return ok;
 }
@@ -1984,7 +1984,7 @@ js::NewNativeFunction(ExclusiveContext* cx, Native native, unsigned nargs, Handl
                       NewObjectKind newKind /* = GenericObject */)
 {
     return NewFunctionWithProto(cx, native, nargs, JSFunction::NATIVE_FUN,
-                                NullPtr(), atom, NullPtr(), allocKind, newKind);
+                                nullptr, atom, nullptr, allocKind, newKind);
 }
 
 JSFunction*
@@ -1994,8 +1994,8 @@ js::NewNativeConstructor(ExclusiveContext* cx, Native native, unsigned nargs, Ha
                          JSFunction::Flags flags /* = JSFunction::NATIVE_CTOR */)
 {
     MOZ_ASSERT(flags & JSFunction::NATIVE_CTOR);
-    return NewFunctionWithProto(cx, native, nargs, flags, NullPtr(), atom,
-                                NullPtr(), allocKind, newKind);
+    return NewFunctionWithProto(cx, native, nargs, flags, nullptr, atom,
+                                nullptr, allocKind, newKind);
 }
 
 JSFunction*
@@ -2003,11 +2003,11 @@ js::NewScriptedFunction(ExclusiveContext* cx, unsigned nargs,
                         JSFunction::Flags flags, HandleAtom atom,
                         gc::AllocKind allocKind /* = AllocKind::FUNCTION */,
                         NewObjectKind newKind /* = GenericObject */,
-                        HandleObject enclosingDynamicScope /* = NullPtr() */)
+                        HandleObject enclosingDynamicScope /* = nullptr */)
 {
     return NewFunctionWithProto(cx, nullptr, nargs, flags,
                                 enclosingDynamicScope ? enclosingDynamicScope : cx->global(),
-                                atom, NullPtr(), allocKind, newKind);
+                                atom, nullptr, allocKind, newKind);
 }
 
 JSFunction*
@@ -2330,7 +2330,7 @@ CheckIsValidConstructible(Value calleev)
 {
     JSObject* callee = &calleev.toObject();
     if (callee->is<JSFunction>())
-        MOZ_ASSERT(callee->as<JSFunction>().isNativeConstructor());
+        MOZ_ASSERT(callee->as<JSFunction>().isConstructor());
     else
         MOZ_ASSERT(callee->constructHook() != nullptr);
 }

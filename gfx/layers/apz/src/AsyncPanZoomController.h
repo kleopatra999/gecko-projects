@@ -378,8 +378,14 @@ public:
   void NotifyMozMouseScrollEvent(const nsString& aString) const;
 
 protected:
+  // These functions are protected virtual so test code can override them.
+
+  // Returns the cached current frame time.
+  virtual TimeStamp GetFrameTime() const;
+
+protected:
   // Protected destructor, to discourage deletion outside of Release():
-  ~AsyncPanZoomController();
+  virtual ~AsyncPanZoomController();
 
   /**
    * Helper method for touches beginning. Sets everything up for panning and any
@@ -517,6 +523,11 @@ protected:
    * Gets a vector of the velocities of each axis.
    */
   const ParentLayerPoint GetVelocityVector() const;
+
+  /**
+   * Sets the velocities of each axis.
+   */
+  void SetVelocityVector(const ParentLayerPoint& aVelocityVector);
 
   /**
    * Gets the first touch point from a MultiTouchInput.  This gets only
@@ -845,9 +856,6 @@ private:
   friend class SmoothScrollAnimation;
   friend class WheelScrollAnimation;
 
-  // Returns the cached current frame time.
-  static TimeStamp GetFrameTime();
-
   // The initial velocity of the most recent fling.
   ParentLayerPoint mLastFlingVelocity;
   // The time at which the most recent fling started.
@@ -891,10 +899,16 @@ public:
   }
 
   /* Returns true if there is no APZC higher in the tree with the same
-   * layers id.
+   * layers id. Deprecated. New code shouldn't use this. Old code should be
+   * updated to not use this.
    */
-  bool IsRootForLayersId() const {
+  bool HasNoParentWithSameLayersId() const {
     return !mParent || (mParent->mLayersId != mLayersId);
+  }
+
+  bool IsRootForLayersId() const {
+    ReentrantMonitorAutoEnter lock(mMonitor);
+    return mFrameMetrics.IsLayersIdRoot();
   }
 
 private:
@@ -1055,17 +1069,18 @@ private:
    */
 public:
   /**
-   * Sync panning and zooming animation using a fixed frame time.
-   * This will ensure that we animate the APZC correctly with other external
-   * animations to the same timestamp.
-   */
-  static void SetFrameTime(const TimeStamp& aMilliseconds);
-  /**
    * Set an extra offset for testing async scrolling.
    */
   void SetTestAsyncScrollOffset(const CSSPoint& aPoint)
   {
     mTestAsyncScrollOffset = aPoint;
+  }
+  /**
+   * Set an extra offset for testing async scrolling.
+   */
+  void SetTestAsyncZoom(const LayerToParentLayerScale& aZoom)
+  {
+    mTestAsyncZoom = aZoom;
   }
 
   void MarkAsyncTransformAppliedToContent()
@@ -1078,9 +1093,16 @@ public:
     return mAsyncTransformAppliedToContent;
   }
 
+  uint64_t GetLayersId() const
+  {
+    return mLayersId;
+  }
+
 private:
   // Extra offset to add in SampleContentTransformForFrame for testing
   CSSPoint mTestAsyncScrollOffset;
+  // Extra zoom to include in SampleContentTransformForFrame for testing
+  LayerToParentLayerScale mTestAsyncZoom;
   // Flag to track whether or not the APZ transform is not used. This
   // flag is recomputed for every composition frame.
   bool mAsyncTransformAppliedToContent;

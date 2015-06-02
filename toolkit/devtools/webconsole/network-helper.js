@@ -275,21 +275,14 @@ let NetworkHelper = {
    */
   loadFromCache: function NH_loadFromCache(aUrl, aCharset, aCallback)
   {
-    let channel = NetUtil.newChannel2(aUrl,
-                                      null,
-                                      null,
-                                      null,      // aLoadingNode
-                                      Services.scriptSecurityManager.getSystemPrincipal(),
-                                      null,      // aTriggeringPrincipal
-                                      Ci.nsILoadInfo.SEC_NORMAL,
-                                      Ci.nsIContentPolicy.TYPE_OTHER);
+    let channel = NetUtil.newChannel({uri: aUrl, loadUsingSystemPrincipal: true});
 
     // Ensure that we only read from the cache and not the server.
     channel.loadFlags = Ci.nsIRequest.LOAD_FROM_CACHE |
       Ci.nsICachingChannel.LOAD_ONLY_FROM_CACHE |
       Ci.nsICachingChannel.LOAD_BYPASS_LOCAL_CACHE_IF_BUSY;
 
-    NetUtil.asyncFetch2(
+    NetUtil.asyncFetch(
       channel,
       (aInputStream, aStatusCode, aRequest) => {
         if (!components.isSuccessCode(aStatusCode)) {
@@ -559,7 +552,7 @@ let NetworkHelper = {
      *
      * - request is HTTPS but it uses a weak cipher or old protocol, see
      *   http://hg.mozilla.org/mozilla-central/annotate/def6ed9d1c1a/
-     *   security/manager/ssl/src/nsNSSCallbacks.cpp#l1233
+     *   security/manager/ssl/nsNSSCallbacks.cpp#l1233
      * - request is mixed content (which makes no sense whatsoever)
      *   => .securityState has STATE_IS_BROKEN flag
      *   => .errorCode is NOT an NSS error code
@@ -732,7 +725,7 @@ let NetworkHelper = {
 
     // If there's non-fatal security issues the request has STATE_IS_BROKEN
     // flag set. See http://hg.mozilla.org/mozilla-central/file/44344099d119
-    // /security/manager/ssl/src/nsNSSCallbacks.cpp#l1233
+    // /security/manager/ssl/nsNSSCallbacks.cpp#l1233
     let reasons = [];
 
     if (state & wpl.STATE_IS_BROKEN) {

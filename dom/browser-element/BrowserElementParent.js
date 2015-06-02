@@ -85,9 +85,9 @@ function BrowserElementParent() {
   this._pendingSetInputMethodActive = [];
   this._nextPaintListeners = [];
 
-  Services.obs.addObserver(this, 'ask-children-to-exit-fullscreen', /* ownsWeak = */ true);
   Services.obs.addObserver(this, 'oop-frameloader-crashed', /* ownsWeak = */ true);
   Services.obs.addObserver(this, 'copypaste-docommand', /* ownsWeak = */ true);
+  Services.obs.addObserver(this, 'ask-children-to-execute-copypaste-command', /* ownsWeak = */ true);
 }
 
 BrowserElementParent.prototype = {
@@ -130,6 +130,11 @@ BrowserElementParent.prototype = {
     BrowserElementPromptService.mapFrameToBrowserElementParent(this._frameElement, this);
     this._setupMessageListener();
     this._registerAppManifest();
+
+    let els = Cc["@mozilla.org/eventlistenerservice;1"]
+                .getService(Ci.nsIEventListenerService);
+    els.addSystemEventListener(this._window.document, "mozfullscreenchange",
+                               this._fullscreenChange.bind(this), true);
   },
 
   _runPendingAPICall: function() {
@@ -191,14 +196,15 @@ BrowserElementParent.prototype = {
       "got-contentdimensions": this._gotDOMRequestResult,
       "got-can-go-back": this._gotDOMRequestResult,
       "got-can-go-forward": this._gotDOMRequestResult,
-      "fullscreen-origin-change": this._remoteFullscreenOriginChange,
-      "rollback-fullscreen": this._remoteFrameFullscreenReverted,
-      "exit-fullscreen": this._exitFullscreen,
+      "entered-dom-fullscreen": this._enteredDomFullscreen,
+      "fullscreen-origin-change": this._fullscreenOriginChange,
+      "exited-dom-fullscreen": this._exitedDomFullscreen,
       "got-visible": this._gotDOMRequestResult,
       "visibilitychange": this._childVisibilityChange,
       "got-set-input-method-active": this._gotDOMRequestResult,
       "selectionstatechanged": this._handleSelectionStateChanged,
       "scrollviewchange": this._handleScrollViewChange,
+      "caretstatechanged": this._handleCaretStateChanged,
     };
 
     let mmSecuritySensitiveCalls = {
@@ -431,6 +437,34 @@ BrowserElementParent.prototype = {
   _handleSelectionStateChanged: function(data) {
     let evt = this._createEvent('selectionstatechanged', data.json,
                                 /* cancelable = */ false);
+    this._frameElement.dispatchEvent(evt);
+  },
+
+  // Called when state of accessible caret in child has changed.
+  // The fields of data is as following:
+  //  - rect: Contains bounding rectangle of selection, Include width, height,
+  //          top, bottom, left and right.
+  //  - commands: Describe what commands can be executed in child. Include canSelectAll,
+  //              canCut, canCopy and canPaste. For example: if we want to check if cut
+  //              command is available, using following code, if (data.commands.canCut) {}.
+  //  - zoomFactor: Current zoom factor in child frame.
+  //  - reason: The reason causes the state changed. Include "visibilitychange",
+  //            "updateposition", "longpressonemptycontent", "taponcaret", "presscaret",
+  //            "releasecaret".
+  //  - collapsed: Indicate current selection is collapsed or not.
+  //  - caretVisible: Indicate the caret visiibility.
+  //  - selectionVisible: Indicate current selection is visible or not.
+  _handleCaretStateChanged: function(data) {
+    let evt = this._createEvent('caretstatechanged', data.json,
+                                /* cancelable = */ false);
+
+    let self = this;
+    function sendDoCommandMsg(cmd) {
+      let data = { command: cmd };
+      self._sendAsyncMsg('copypaste-do-command', data);
+    }
+    Cu.exportFunction(sendDoCommandMsg, evt.detail, { defineAs: 'sendDoCommandMsg' });
+
     this._frameElement.dispatchEvent(evt);
   },
 
@@ -936,17 +970,25 @@ BrowserElementParent.prototype = {
     this._fireEventFromMsg(data);
   },
 
-  _exitFullscreen: function() {
-    this._windowUtils.exitFullscreen();
+  _enteredDomFullscreen: function() {
+    this._windowUtils.remoteFrameFullscreenChanged(this._frameElement);
   },
 
-  _remoteFullscreenOriginChange: function(data) {
-    let origin = data.json._payload_;
-    this._windowUtils.remoteFrameFullscreenChanged(this._frameElement, origin);
+  _fullscreenOriginChange: function(data) {
+    Services.obs.notifyObservers(
+      this._frameElement, "fullscreen-origin-change", data.json.originNoSuffix);
   },
 
-  _remoteFrameFullscreenReverted: function(data) {
+  _exitedDomFullscreen: function(data) {
     this._windowUtils.remoteFrameFullscreenReverted();
+  },
+
+  _fullscreenChange: function(evt) {
+    if (this._isAlive() && evt.target == this._window.document) {
+      if (!this._window.document.mozFullScreen) {
+        this._sendAsyncMsg("exit-fullscreen");
+      }
+    }
   },
 
   _fireFatalError: function() {
@@ -962,16 +1004,14 @@ BrowserElementParent.prototype = {
         this._fireFatalError();
       }
       break;
-    case 'ask-children-to-exit-fullscreen':
-      if (this._isAlive() &&
-          this._frameElement.ownerDocument == subject &&
-          this._frameLoader.QueryInterface(Ci.nsIFrameLoader).tabParent) {
-        this._sendAsyncMsg('exit-fullscreen');
-      }
-      break;
     case 'copypaste-docommand':
       if (this._isAlive() && this._frameElement.isEqualNode(subject.wrappedJSObject)) {
         this._sendAsyncMsg('do-command', { command: data });
+      }
+      break;
+    case 'ask-children-to-execute-copypaste-command':
+      if (this._isAlive() && this._frameElement == subject.wrappedJSObject) {
+        this._sendAsyncMsg('copypaste-do-command', { command: data });
       }
       break;
     default:

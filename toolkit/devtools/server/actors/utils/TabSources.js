@@ -296,11 +296,9 @@ TabSources.prototype = {
             spec.contentType = "text/javascript";
           }
         } catch(ex) {
-          // Not a valid URI.
-
-          // bug 1124536: fix getSourceText on scripts associated "javascript:SOURCE" urls
-          // (e.g. 'evaluate(sandbox, sourcecode, "javascript:"+sourcecode)' )
-          if (url.indexOf("javascript:") === 0) {
+          // There are a few special URLs that we know are JavaScript:
+          // inline `javascript:` and code coming from the console
+          if (url.indexOf("javascript:") === 0 || url === 'debugger eval code') {
             spec.contentType = "text/javascript";
           }
         }
@@ -333,10 +331,9 @@ TabSources.prototype = {
     return this.fetchSourceMap(aSource)
       .then(map => {
         if (map) {
-          return [
-            this.source({ originalUrl: s, generatedSource: aSource })
-            for (s of map.sources)
-          ].filter(isNotNull);
+          return map.sources.map(s => {
+            return this.source({ originalUrl: s, generatedSource: aSource });
+          }).filter(isNotNull);
         }
         return null;
       });

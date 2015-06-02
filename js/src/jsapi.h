@@ -720,6 +720,18 @@ typedef void
 (* JSCompartmentNameCallback)(JSRuntime* rt, JSCompartment* compartment,
                               char* buf, size_t bufsize);
 
+/**
+ * Callback used to ask the embedding to determine in which
+ * Performance Group the current execution belongs. Typically, this is
+ * used to regroup JSCompartments from several iframes from the same
+ * page or from several compartments of the same addon into a single
+ * Performance Group.
+ *
+ * Returns an opaque key.
+ */
+typedef void*
+(* JSCurrentPerfGroupCallback)(JSContext*);
+
 /************************************************************************/
 
 static MOZ_ALWAYS_INLINE jsval
@@ -861,26 +873,6 @@ class MOZ_STACK_CLASS SourceBufferHolder final
 
 #define JSFUN_CONSTRUCTOR      0x400    /* native that can be called as a ctor */
 
-#define JSPROP_REDEFINE_NONCONFIGURABLE 0x800 /* If set, will allow redefining a
-                                                 non-configurable property, but
-                                                 only on a non-DOM global.  This
-                                                 is a temporary hack that will
-                                                 need to go away in bug
-                                                 1105518 */
-
-#define JSPROP_IGNORE_ENUMERATE 0x1000  /* ignore the value in JSPROP_ENUMERATE.
-                                           This flag only valid when defining over
-                                           an existing property. */
-#define JSPROP_IGNORE_READONLY  0x2000  /* ignore the value in JSPROP_READONLY.
-                                           This flag only valid when defining over
-                                           an existing property. */
-#define JSPROP_IGNORE_PERMANENT 0x4000  /* ignore the value in JSPROP_PERMANENT.
-                                           This flag only valid when defining over
-                                           an existing property. */
-#define JSPROP_IGNORE_VALUE     0x8000  /* ignore the Value in the descriptor. Nothing was
-                                           specified when passed to Object.defineProperty
-                                           from script. */
-
 /*
  * Specify a generic native prototype methods, i.e., methods of a class
  * prototype that are exposed as static methods taking an extra leading
@@ -894,6 +886,40 @@ class MOZ_STACK_CLASS SourceBufferHolder final
 #define JSFUN_GENERIC_NATIVE   0x800
 
 #define JSFUN_FLAGS_MASK       0xe00    /* | of all the JSFUN_* flags */
+
+/*
+ * If set, will allow redefining a non-configurable property, but only on a
+ * non-DOM global.  This is a temporary hack that will need to go away in bug
+ * 1105518.
+ */
+#define JSPROP_REDEFINE_NONCONFIGURABLE 0x1000
+
+/*
+ * Resolve hooks and enumerate hooks must pass this flag when calling
+ * JS_Define* APIs to reify lazily-defined properties.
+ *
+ * JSPROP_RESOLVING is used only with property-defining APIs. It tells the
+ * engine to skip the resolve hook when performing the lookup at the beginning
+ * of property definition. This keeps the resolve hook from accidentally
+ * triggering itself: unchecked recursion.
+ *
+ * For enumerate hooks, triggering the resolve hook would be merely silly, not
+ * fatal, except in some cases involving non-configurable properties.
+ */
+#define JSPROP_RESOLVING         0x2000
+
+#define JSPROP_IGNORE_ENUMERATE  0x4000  /* ignore the value in JSPROP_ENUMERATE.
+                                            This flag only valid when defining over
+                                            an existing property. */
+#define JSPROP_IGNORE_READONLY   0x8000  /* ignore the value in JSPROP_READONLY.
+                                            This flag only valid when defining over
+                                            an existing property. */
+#define JSPROP_IGNORE_PERMANENT 0x10000  /* ignore the value in JSPROP_PERMANENT.
+                                            This flag only valid when defining over
+                                            an existing property. */
+#define JSPROP_IGNORE_VALUE     0x20000  /* ignore the Value in the descriptor. Nothing was
+                                            specified when passed to Object.defineProperty
+                                            from script. */
 
 /*
  * The first call to JS_CallOnce by any thread in a process will call 'func'.
@@ -1137,8 +1163,7 @@ class JS_PUBLIC_API(RuntimeOptions) {
         ion_(true),
         asmJS_(true),
         nativeRegExp_(true),
-        unboxedObjects_(false), // Not enabled by default yet
-        unboxedArrays_(false), // Ditto
+        unboxedArrays_(false),
         werror_(false),
         strictMode_(false),
         extraWarnings_(false),
@@ -1179,12 +1204,6 @@ class JS_PUBLIC_API(RuntimeOptions) {
     bool nativeRegExp() const { return nativeRegExp_; }
     RuntimeOptions& setNativeRegExp(bool flag) {
         nativeRegExp_ = flag;
-        return *this;
-    }
-
-    bool unboxedObjects() const { return unboxedObjects_; }
-    RuntimeOptions& setUnboxedObjects(bool flag) {
-        unboxedObjects_ = flag;
         return *this;
     }
 
@@ -1239,7 +1258,6 @@ class JS_PUBLIC_API(RuntimeOptions) {
     bool ion_ : 1;
     bool asmJS_ : 1;
     bool nativeRegExp_ : 1;
-    bool unboxedObjects_ : 1;
     bool unboxedArrays_ : 1;
     bool werror_ : 1;
     bool strictMode_ : 1;
@@ -2103,6 +2121,11 @@ inline int CheckIsSetterOp(JSSetterOp op);
      { nullptr, JS_CAST_STRING_TO(getterName, const JSJitInfo*) },  \
      { nullptr, JS_CAST_STRING_TO(setterName, const JSJitInfo*) } }
 #define JS_PS_END { nullptr, 0, JSNATIVE_WRAPPER(nullptr), JSNATIVE_WRAPPER(nullptr) }
+#define JS_SELF_HOSTED_SYM_GET(symbol, getterName, flags) \
+    {reinterpret_cast<const char*>(uint32_t(::JS::SymbolCode::symbol) + 1), \
+     uint8_t(JS_CHECK_ACCESSOR_FLAGS(flags) | JSPROP_SHARED | JSPROP_GETTER), \
+     { { nullptr, JS_CAST_STRING_TO(getterName, const JSJitInfo*) } }, \
+     JSNATIVE_WRAPPER(nullptr) }
 
 /*
  * To define a native function, set call to a JSNativeWrapper. To define a
@@ -2428,8 +2451,8 @@ extern JS_PUBLIC_API(JSRuntime*)
 JS_GetObjectRuntime(JSObject* obj);
 
 /*
- * Unlike JS_NewObject, JS_NewObjectWithGivenProto does not compute a default proto.
- * If proto is JS::NullPtr, the JS object will have `null` as [[Prototype]].
+ * Unlike JS_NewObject, JS_NewObjectWithGivenProto does not compute a default
+ * proto. If proto is nullptr, the JS object will have `null` as [[Prototype]].
  */
 extern JS_PUBLIC_API(JSObject*)
 JS_NewObjectWithGivenProto(JSContext* cx, const JSClass* clasp, JS::Handle<JSObject*> proto);
@@ -2566,6 +2589,7 @@ class PropertyDescriptorOperations
                                      JSPROP_SETTER |
                                      JSPROP_SHARED |
                                      JSPROP_REDEFINE_NONCONFIGURABLE |
+                                     JSPROP_RESOLVING |
                                      SHADOWABLE)) == 0);
         MOZ_ASSERT(!hasAll(JSPROP_IGNORE_ENUMERATE | JSPROP_ENUMERATE));
         MOZ_ASSERT(!hasAll(JSPROP_IGNORE_PERMANENT | JSPROP_PERMANENT));
@@ -2584,6 +2608,12 @@ class PropertyDescriptorOperations
         }
         MOZ_ASSERT(getter() != JS_PropertyStub);
         MOZ_ASSERT(setter() != JS_StrictPropertyStub);
+
+        MOZ_ASSERT_IF(has(JSPROP_RESOLVING), !has(JSPROP_IGNORE_ENUMERATE));
+        MOZ_ASSERT_IF(has(JSPROP_RESOLVING), !has(JSPROP_IGNORE_PERMANENT));
+        MOZ_ASSERT_IF(has(JSPROP_RESOLVING), !has(JSPROP_IGNORE_READONLY));
+        MOZ_ASSERT_IF(has(JSPROP_RESOLVING), !has(JSPROP_IGNORE_VALUE));
+        MOZ_ASSERT_IF(has(JSPROP_RESOLVING), !has(JSPROP_REDEFINE_NONCONFIGURABLE));
 #endif
     }
 
@@ -2597,6 +2627,7 @@ class PropertyDescriptorOperations
                                      JSPROP_SETTER |
                                      JSPROP_SHARED |
                                      JSPROP_REDEFINE_NONCONFIGURABLE |
+                                     JSPROP_RESOLVING |
                                      SHADOWABLE)) == 0);
         MOZ_ASSERT_IF(isAccessorDescriptor(), has(JSPROP_GETTER) && has(JSPROP_SETTER));
 #endif
@@ -2892,6 +2923,12 @@ JS_GetOwnPropertyDescriptor(JSContext* cx, JS::HandleObject obj, const char* nam
 extern JS_PUBLIC_API(bool)
 JS_GetOwnUCPropertyDescriptor(JSContext* cx, JS::HandleObject obj, const char16_t* name,
                               JS::MutableHandle<JSPropertyDescriptor> desc);
+
+extern JS_PUBLIC_API(bool)
+JS_HasOwnPropertyById(JSContext* cx, JS::HandleObject obj, JS::HandleId id, bool* foundp);
+
+extern JS_PUBLIC_API(bool)
+JS_HasOwnProperty(JSContext* cx, JS::HandleObject obj, const char* name, bool* foundp);
 
 /*
  * Like JS_GetOwnPropertyDescriptorById but will return a property on
@@ -4349,12 +4386,13 @@ GetSymbolDescription(HandleSymbol symbol);
 enum class SymbolCode : uint32_t {
     iterator,                       // Symbol.iterator
     match,                          // Symbol.match
+    species,                        // Symbol.species
     InSymbolRegistry = 0xfffffffe,  // created by Symbol.for() or JS::GetSymbolFor()
     UniqueSymbol = 0xffffffff       // created by Symbol() or JS::NewSymbol()
 };
 
 /* For use in loops that iterate over the well-known symbols. */
-const size_t WellKnownSymbolLimit = 2;
+const size_t WellKnownSymbolLimit = 3;
 
 /*
  * Return the SymbolCode telling what sort of symbol `symbol` is.
@@ -5420,9 +5458,10 @@ struct PerformanceGroup {
         stopwatch_ = nullptr;
     }
 
-    PerformanceGroup()
+    explicit PerformanceGroup(void* key)
       : stopwatch_(nullptr)
       , iteration_(0)
+      , key_(key)
       , refCount_(0)
     { }
     ~PerformanceGroup()
@@ -5441,6 +5480,9 @@ struct PerformanceGroup {
     // may safely overflow.
     uint64_t iteration_;
 
+    // The hash key for this PerformanceGroup.
+    void* const key_;
+
     // Increment/decrement the refcounter, return the updated value.
     uint64_t incRefCount() {
         MOZ_ASSERT(refCount_ + 1 > 0);
@@ -5452,7 +5494,7 @@ struct PerformanceGroup {
     }
     friend struct PerformanceGroupHolder;
 
-  private:
+private:
     // A reference counter. Maintained by PerformanceGroupHolder.
     uint64_t refCount_;
 };
@@ -5465,7 +5507,7 @@ struct PerformanceGroupHolder {
     // Get the group.
     // On first call, this causes a single Hashtable lookup.
     // Successive calls do not require further lookups.
-    js::PerformanceGroup* getGroup();
+    js::PerformanceGroup* getGroup(JSContext*);
 
     // `true` if the this holder is currently associated to a
     // PerformanceGroup, `false` otherwise. Use this method to avoid
@@ -5480,9 +5522,8 @@ struct PerformanceGroupHolder {
     // (new values of `isSystem()`, `principals()` or `addonId`).
     void unlink();
 
-    PerformanceGroupHolder(JSRuntime* runtime, JSCompartment* compartment)
+    explicit PerformanceGroupHolder(JSRuntime* runtime)
       : runtime_(runtime)
-      , compartment_(compartment)
       , group_(nullptr)
     {   }
     ~PerformanceGroupHolder();
@@ -5490,10 +5531,9 @@ private:
     // Return the key representing this PerformanceGroup in
     // Runtime::Stopwatch.
     // Do not deallocate the key.
-    void* getHashKey();
+    void* getHashKey(JSContext* cx);
 
-    JSRuntime* runtime_;
-    JSCompartment* compartment_;
+    JSRuntime *runtime_;
 
     // The PerformanceGroup held by this object.
     // Initially set to `nullptr` until the first cal to `getGroup`.
@@ -5526,56 +5566,30 @@ IsStopwatchActive(JSRuntime*);
 extern JS_PUBLIC_API(PerformanceData*)
 GetPerformanceData(JSRuntime*);
 
+typedef bool
+(PerformanceStatsWalker)(JSContext* cx, const PerformanceData& stats, void* closure);
+
 /**
- * Performance statistics for a performance group (a process, an
- * add-on, a webpage, the built-ins or a special compartment).
- */
-struct PerformanceStats {
-    /**
-     * If this group represents an add-on, the ID of the addon,
-     * otherwise `nullptr`.
-     */
-    JSAddonId* addonId;
-
-    /**
-     * If this group represents a webpage, the process itself or a special
-     * compartment, a human-readable name. Unspecified for add-ons.
-     */
-    char name[1024];
-
-    /**
-     * `true` if the group represents in system compartments, `false`
-     * otherwise. A group may never contain both system and non-system
-     * compartments.
-     */
-    bool isSystem;
-
-    /**
-     * Performance information.
-     */
-    js::PerformanceData performance;
-
-    PerformanceStats()
-      : addonId(nullptr)
-      , isSystem(false)
-    {
-        name[0] = '\0';
-    }
-};
-
-typedef js::Vector<PerformanceStats, 0, js::SystemAllocPolicy> PerformanceStatsVector;
-
-    /**
  * Extract the performance statistics.
  *
- * After a successful call, `stats` holds the `PerformanceStats` for
- * all performance groups, and `global` holds a `PerformanceStats`
- * representing the entire process.
+ * Note that before calling `walker`, we enter the corresponding context.
  */
 extern JS_PUBLIC_API(bool)
-GetPerformanceStats(JSRuntime* rt, js::PerformanceStatsVector& stats, js::PerformanceStats& global);
+IterPerformanceStats(JSContext* cx, PerformanceStatsWalker* walker, js::PerformanceData* process, void* closure);
 
 } /* namespace js */
+
+/**
+ * Callback used to ask the embedding to determine in which
+ * Performance Group a compartment belongs. Typically, this is used to
+ * regroup JSCompartments from several iframes from the same page or
+ * from several compartments of the same addon into a single
+ * Performance Group.
+ *
+ * Returns an opaque key.
+ */
+extern JS_PUBLIC_API(void)
+JS_SetCurrentPerfGroupCallback(JSRuntime *rt, JSCurrentPerfGroupCallback cb);
 
 
 #endif /* jsapi_h */

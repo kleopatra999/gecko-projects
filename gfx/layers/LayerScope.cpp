@@ -226,10 +226,9 @@ public:
 
     virtual ~DebugGLData() { }
 
-    Packet::DataType GetDataType() const { return mDataType; }
-
     virtual bool Write() = 0;
 
+protected:
     static bool WriteToStream(Packet& aPacket) {
         if (!WebSocketHelper::GetSocketManager())
             return true;
@@ -240,11 +239,10 @@ public:
         return WebSocketHelper::GetSocketManager()->WriteAll(data.get(), size);
     }
 
-protected:
     Packet::DataType mDataType;
 };
 
-class DebugGLFrameStatusData : public DebugGLData
+class DebugGLFrameStatusData final: public DebugGLData
 {
 public:
     DebugGLFrameStatusData(Packet::DataType aDataType,
@@ -258,8 +256,6 @@ public:
           mFrameStamp(0)
     { }
 
-    int64_t GetFrameStamp() const { return mFrameStamp; }
-
     virtual bool Write() override {
         Packet packet;
         packet.set_type(mDataType);
@@ -267,16 +263,95 @@ public:
         FramePacket* fp = packet.mutable_frame();
         fp->set_value(static_cast<uint64_t>(mFrameStamp));
 
-        if (!WriteToStream(packet))
-            return false;
-        return true;
+        return WriteToStream(packet);
     }
 
 protected:
     int64_t mFrameStamp;
 };
 
-class DebugGLTextureData : public DebugGLData {
+#ifdef MOZ_WIDGET_GONK
+// B2G optimization.
+class DebugGLGraphicBuffer final: public DebugGLData {
+public:
+    DebugGLGraphicBuffer(void *layerRef,
+                         GLenum target,
+                         GLuint name,
+                         const LayerRenderState &aState)
+        : DebugGLData(Packet::TEXTURE),
+          mLayerRef(reinterpret_cast<uint64_t>(layerRef)),
+          mTarget(target),
+          mName(name),
+          mState(aState)
+    {
+    }
+
+    virtual bool Write() override {
+        return WriteToStream(mPacket);
+    }
+
+    bool TryPack() {
+        android::sp<android::GraphicBuffer> buffer = mState.mSurface;
+        MOZ_ASSERT(buffer.get());
+
+        mPacket.set_type(mDataType);
+        TexturePacket* tp = mPacket.mutable_texture();
+        tp->set_layerref(mLayerRef);
+        tp->set_name(mName);
+        tp->set_target(mTarget);
+
+        int format = buffer->getPixelFormat();
+        if (HAL_PIXEL_FORMAT_RGBA_8888 != format &&
+            HAL_PIXEL_FORMAT_RGBX_8888 != format) {
+            return false;
+        }
+
+        uint8_t* grallocData;
+        if (BAD_VALUE == buffer->lock(GRALLOC_USAGE_SW_READ_OFTEN |
+                                       GRALLOC_USAGE_SW_WRITE_NEVER,
+                                       reinterpret_cast<void**>(&grallocData))) {
+            return false;
+        }
+
+        int32_t stride = buffer->getStride() * 4;
+        int32_t height = buffer->getHeight();
+        int32_t width = buffer->getWidth();
+        int32_t sourceSize = stride * height;
+        bool    ret = false;
+
+        if (sourceSize > 0) {
+            auto compressedData = MakeUnique<char[]>(LZ4::maxCompressedSize(sourceSize));
+            int compressedSize = LZ4::compress((char*)grallocData,
+                                               sourceSize,
+                                               compressedData.get());
+
+            if (compressedSize > 0) {
+                uint32_t format = mState.FormatRBSwapped() ?
+                  LOCAL_GL_BGRA : LOCAL_GL_RGBA;
+                tp->set_dataformat(format);
+                tp->set_dataformat((1 << 16 | tp->dataformat()));
+                tp->set_width(width);
+                tp->set_height(height);
+                tp->set_stride(stride);
+                tp->set_data(compressedData.get(), compressedSize);
+                ret = true;
+            }
+        }
+
+        buffer->unlock();
+        return ret;
+    }
+
+private:
+    uint64_t mLayerRef;
+    GLenum mTarget;
+    GLuint mName;
+    const LayerRenderState &mState;
+    Packet mPacket;
+};
+#endif
+
+class DebugGLTextureData final: public DebugGLData {
 public:
     DebugGLTextureData(GLContext* cx,
                        void* layerRef,
@@ -284,7 +359,7 @@ public:
                        GLuint name,
                        DataSourceSurface* img)
         : DebugGLData(Packet::TEXTURE),
-          mLayerRef(layerRef),
+          mLayerRef(reinterpret_cast<uint64_t>(layerRef)),
           mTarget(target),
           mName(name),
           mContextAddress(reinterpret_cast<intptr_t>(cx)),
@@ -297,16 +372,8 @@ public:
         pack(img);
     }
 
-    const void* GetLayerRef() const { return mLayerRef; }
-    GLuint GetName() const { return mName; }
-    GLenum GetTextureTarget() const { return mTarget; }
-    intptr_t GetContextAddress() const { return mContextAddress; }
-    uint32_t GetDataSize() const { return mDatasize; }
-
     virtual bool Write() override {
-        if (!WriteToStream(mPacket))
-            return false;
-        return true;
+        return WriteToStream(mPacket);
     }
 
 private:
@@ -314,7 +381,7 @@ private:
         mPacket.set_type(mDataType);
 
         TexturePacket* tp = mPacket.mutable_texture();
-        tp->set_layerref(reinterpret_cast<uint64_t>(mLayerRef));
+        tp->set_layerref(mLayerRef);
         tp->set_name(mName);
         tp->set_target(mTarget);
         tp->set_dataformat(LOCAL_GL_RGBA);
@@ -352,7 +419,7 @@ private:
     }
 
 protected:
-    void* mLayerRef;
+    uint64_t mLayerRef;
     GLenum mTarget;
     GLuint mName;
     intptr_t mContextAddress;
@@ -362,44 +429,38 @@ protected:
     Packet mPacket;
 };
 
-class DebugGLColorData : public DebugGLData {
+class DebugGLColorData final: public DebugGLData {
 public:
     DebugGLColorData(void* layerRef,
                      const gfxRGBA& color,
                      int width,
                      int height)
         : DebugGLData(Packet::COLOR),
-          mLayerRef(layerRef),
+          mLayerRef(reinterpret_cast<uint64_t>(layerRef)),
           mColor(color.Packed()),
           mSize(width, height)
     { }
-
-    const void* GetLayerRef() const { return mLayerRef; }
-    uint32_t GetColor() const { return mColor; }
-    const nsIntSize& GetSize() const { return mSize; }
 
     virtual bool Write() override {
         Packet packet;
         packet.set_type(mDataType);
 
         ColorPacket* cp = packet.mutable_color();
-        cp->set_layerref(reinterpret_cast<uint64_t>(mLayerRef));
+        cp->set_layerref(mLayerRef);
         cp->set_color(mColor);
         cp->set_width(mSize.width);
         cp->set_height(mSize.height);
 
-        if (!WriteToStream(packet))
-            return false;
-        return true;
+        return WriteToStream(packet);
     }
 
 protected:
-    void* mLayerRef;
+    uint64_t mLayerRef;
     uint32_t mColor;
     nsIntSize mSize;
 };
 
-class DebugGLLayersData : public DebugGLData {
+class DebugGLLayersData final: public DebugGLData {
 public:
     explicit DebugGLLayersData(UniquePtr<Packet> aPacket)
         : DebugGLData(Packet::LAYERS),
@@ -408,17 +469,14 @@ public:
 
     virtual bool Write() override {
         mPacket->set_type(mDataType);
-
-        if (!WriteToStream(*mPacket))
-            return false;
-        return true;
+        return WriteToStream(*mPacket);
     }
 
 protected:
     UniquePtr<Packet> mPacket;
 };
 
-class DebugGLMetaData : public DebugGLData
+class DebugGLMetaData final: public DebugGLData
 {
 public:
     DebugGLMetaData(Packet::DataType aDataType,
@@ -439,15 +497,69 @@ public:
         MetaPacket* mp = packet.mutable_meta();
         mp->set_composedbyhwc(mComposedByHwc);
 
-        if (!WriteToStream(packet))
-            return false;
-        return true;
+        return WriteToStream(packet);
     }
 
 protected:
     bool mComposedByHwc;
 };
 
+class DebugGLDrawData final: public DebugGLData {
+public:
+    DebugGLDrawData(float aOffsetX,
+                    float aOffsetY,
+                    const gfx::Matrix4x4& aMVMatrix,
+                    size_t aRects,
+                    const gfx::Rect* aLayerRects,
+                    void* aLayerRef)
+        : DebugGLData(Packet::DRAW),
+          mOffsetX(aOffsetX),
+          mOffsetY(aOffsetY),
+          mMVMatrix(aMVMatrix),
+          mRects(aRects),
+          mLayerRef(reinterpret_cast<uint64_t>(aLayerRef))
+    {
+        for (size_t i = 0; i < mRects; i++){
+            mLayerRects[i] = aLayerRects[i];
+        }
+    }
+
+    virtual bool Write() override {
+        Packet packet;
+        packet.set_type(mDataType);
+
+        DrawPacket* dp = packet.mutable_draw();
+        dp->set_layerref(mLayerRef);
+
+        dp->set_offsetx(mOffsetX);
+        dp->set_offsety(mOffsetY);
+
+        auto element = reinterpret_cast<Float *>(&mMVMatrix);
+        for (int i = 0; i < 16; i++) {
+          dp->add_mvmatrix(*element++);
+        }
+        dp->set_totalrects(mRects);
+
+        MOZ_ASSERT(mRects > 0 && mRects < 4);
+        for (size_t i = 0; i < mRects; i++) {
+            layerscope::DrawPacket::Rect* pRect = dp->add_layerrect();
+            pRect->set_x(mLayerRects[i].x);
+            pRect->set_y(mLayerRects[i].y);
+            pRect->set_w(mLayerRects[i].width);
+            pRect->set_h(mLayerRects[i].height);
+        }
+
+        return WriteToStream(packet);
+    }
+
+protected:
+    float mOffsetX;
+    float mOffsetY;
+    gfx::Matrix4x4 mMVMatrix;
+    size_t mRects;
+    gfx::Rect mLayerRects[4];
+    uint64_t mLayerRef;
+};
 
 class DebugListener : public nsIServerSocketListener
 {
@@ -577,7 +689,6 @@ public:
 
     static void ClearTextureIdList();
 
-    static bool IsTextureIdContainsInList(GLuint aTextureId);
 
 // Sender private functions
 private:
@@ -588,14 +699,23 @@ private:
     static void SendTextureSource(GLContext* aGLContext,
                                   void* aLayerRef,
                                   TextureSourceOGL* aSource,
+                                  GLuint aTexID,
                                   bool aFlipY);
+#ifdef MOZ_WIDGET_GONK
+    static bool SendGraphicBuffer(void* aLayerRef,
+                                  TextureSourceOGL* aSource,
+                                  GLuint aTexID,
+                                  const TexturedEffect* aEffect);
+#endif
     static void SendTexturedEffect(GLContext* aGLContext,
                                    void* aLayerRef,
                                    const TexturedEffect* aEffect);
     static void SendYCbCrEffect(GLContext* aGLContext,
                                 void* aLayerRef,
                                 const EffectYCbCr* aEffect);
-
+    static GLuint GetTextureID(GLContext* aGLContext,
+                               TextureSourceOGL* aSource);
+    static bool IsTextureIdContainsInList(GLuint aTextureId);
 // Data fields
 private:
     static bool sLayersTreeSendable;
@@ -683,10 +803,31 @@ SenderHelper::SendColor(void* aLayerRef,
         new DebugGLColorData(aLayerRef, aColor, aWidth, aHeight));
 }
 
+GLuint
+SenderHelper::GetTextureID(GLContext* aGLContext,
+                           TextureSourceOGL* aSource) {
+    GLenum textureTarget = aSource->GetTextureTarget();
+    aSource->BindTexture(LOCAL_GL_TEXTURE0, gfx::Filter::LINEAR);
+
+    GLuint texID = 0;
+    // This is horrid hack. It assumes that aGLContext matches the context
+    // aSource has bound to.
+    if (textureTarget == LOCAL_GL_TEXTURE_2D) {
+        aGLContext->GetUIntegerv(LOCAL_GL_TEXTURE_BINDING_2D, &texID);
+    } else if (textureTarget == LOCAL_GL_TEXTURE_EXTERNAL) {
+        aGLContext->GetUIntegerv(LOCAL_GL_TEXTURE_BINDING_EXTERNAL, &texID);
+    } else if (textureTarget == LOCAL_GL_TEXTURE_RECTANGLE) {
+        aGLContext->GetUIntegerv(LOCAL_GL_TEXTURE_BINDING_RECTANGLE, &texID);
+    }
+
+    return texID;
+}
+
 void
 SenderHelper::SendTextureSource(GLContext* aGLContext,
                                 void* aLayerRef,
                                 TextureSourceOGL* aSource,
+                                GLuint aTexID,
                                 bool aFlipY)
 {
     MOZ_ASSERT(aGLContext);
@@ -699,35 +840,45 @@ SenderHelper::SendTextureSource(GLContext* aGLContext,
                                                              aSource->GetFormat());
     int shaderConfig = config.mFeatures;
 
-    aSource->BindTexture(LOCAL_GL_TEXTURE0, gfx::Filter::LINEAR);
-
-    GLuint textureId = 0;
-    // This is horrid hack. It assumes that aGLContext matches the context
-    // aSource has bound to.
-    if (textureTarget == LOCAL_GL_TEXTURE_2D) {
-        aGLContext->GetUIntegerv(LOCAL_GL_TEXTURE_BINDING_2D, &textureId);
-    } else if (textureTarget == LOCAL_GL_TEXTURE_EXTERNAL) {
-        aGLContext->GetUIntegerv(LOCAL_GL_TEXTURE_BINDING_EXTERNAL, &textureId);
-    } else if (textureTarget == LOCAL_GL_TEXTURE_RECTANGLE) {
-        aGLContext->GetUIntegerv(LOCAL_GL_TEXTURE_BINDING_RECTANGLE, &textureId);
-    }
-
     gfx::IntSize size = aSource->GetSize();
 
     // By sending 0 to ReadTextureImage rely upon aSource->BindTexture binding
-    // texture correctly. textureId is used for tracking in DebugGLTextureData.
+    // texture correctly. texID is used for tracking in DebugGLTextureData.
     RefPtr<DataSourceSurface> img =
         aGLContext->ReadTexImageHelper()->ReadTexImage(0, textureTarget,
-                                                       size,
-                                                       shaderConfig, aFlipY);
+                                                         size,
+                                                         shaderConfig, aFlipY);
+    WebSocketHelper::GetSocketManager()->AppendDebugData(
+        new DebugGLTextureData(aGLContext, aLayerRef, textureTarget,
+                               aTexID, img));
 
-    if (!IsTextureIdContainsInList(textureId)) {
-      sTextureIdList.push_back(textureId);
-      WebSocketHelper::GetSocketManager()->AppendDebugData(
-          new DebugGLTextureData(aGLContext, aLayerRef, textureTarget,
-                               textureId, img));
-    }
+    sTextureIdList.push_back(aTexID);
 }
+
+#ifdef MOZ_WIDGET_GONK
+bool
+SenderHelper::SendGraphicBuffer(void* aLayerRef,
+                                TextureSourceOGL* aSource,
+                                GLuint aTexID,
+                                const TexturedEffect* aEffect) {
+    if (!aEffect->mState.mSurface.get()) {
+        return false;
+    }
+
+    GLenum target = aSource->GetTextureTarget();
+    mozilla::UniquePtr<DebugGLGraphicBuffer> package =
+        MakeUnique<DebugGLGraphicBuffer>(aLayerRef, target, aTexID, aEffect->mState);
+
+    if (!package->TryPack()) {
+        return false;
+    }
+
+    // Transfer ownership to SocketManager.
+    WebSocketHelper::GetSocketManager()->AppendDebugData(package.release());
+    sTextureIdList.push_back(aTexID);
+    return true;
+}
+#endif
 
 void
 SenderHelper::SendTexturedEffect(GLContext* aGLContext,
@@ -735,11 +886,22 @@ SenderHelper::SendTexturedEffect(GLContext* aGLContext,
                                  const TexturedEffect* aEffect)
 {
     TextureSourceOGL* source = aEffect->mTexture->AsSourceOGL();
-    if (!source)
+    if (!source) {
         return;
+    }
 
-    bool flipY = false;
-    SendTextureSource(aGLContext, aLayerRef, source, flipY);
+    GLuint texID = GetTextureID(aGLContext, source);
+    if (IsTextureIdContainsInList(texID)) {
+        return;
+    }
+
+#ifdef MOZ_WIDGET_GONK
+    if (SendGraphicBuffer(aLayerRef, source, texID, aEffect)) {
+         return;
+    }
+#endif
+    // Render to texture and read pixels back.
+    SendTextureSource(aGLContext, aLayerRef, source, texID, false);
 }
 
 void
@@ -756,10 +918,20 @@ SenderHelper::SendYCbCrEffect(GLContext* aGLContext,
     TextureSourceOGL* sourceCb = sourceYCbCr->GetSubSource(Cb)->AsSourceOGL();
     TextureSourceOGL* sourceCr = sourceYCbCr->GetSubSource(Cr)->AsSourceOGL();
 
-    bool flipY = false;
-    SendTextureSource(aGLContext, aLayerRef, sourceY,  flipY);
-    SendTextureSource(aGLContext, aLayerRef, sourceCb, flipY);
-    SendTextureSource(aGLContext, aLayerRef, sourceCr, flipY);
+    GLuint texID = GetTextureID(aGLContext, sourceY);
+    if (!IsTextureIdContainsInList(texID)) {
+        SendTextureSource(aGLContext, aLayerRef, sourceY, texID, false);
+    }
+
+    texID = GetTextureID(aGLContext, sourceCb);
+    if (!IsTextureIdContainsInList(texID)) {
+        SendTextureSource(aGLContext, aLayerRef, sourceCb, texID, false);
+    }
+
+    texID = GetTextureID(aGLContext, sourceCr);
+    if (!IsTextureIdContainsInList(texID)) {
+        SendTextureSource(aGLContext, aLayerRef, sourceCr, texID, false);
+    }
 }
 
 void
@@ -803,7 +975,6 @@ SenderHelper::SendEffectChain(GLContext* aGLContext,
     //const Effect* secondaryEffect = aEffectChain.mSecondaryEffects[EffectTypes::MASK];
     // TODO:
 }
-
 
 // ----------------------------------------------
 // LayerScopeWebSocketHandler implementation
@@ -1297,16 +1468,107 @@ LayerScope::Init()
     }
 }
 
+class DrawSession {
+public:
+    NS_INLINE_DECL_REFCOUNTING(DrawSession)
+
+    DrawSession()
+      : mOffsetX(0.0),
+        mOffsetY(0.0),
+        mRects(0)
+    { }
+
+    float mOffsetX;
+    float mOffsetY;
+    gfx::Matrix4x4 mMVMatrix;
+    size_t mRects;
+    gfx::Rect mLayerRects[4];
+private:
+    ~DrawSession() {}
+};
+
+class DrawSessionHolder {
+public:
+    static void setSession(DrawSession *aSession) {
+        mSession = aSession;
+    }
+
+    static DrawSession& current() {
+        return *mSession;
+    }
+
+private:
+    static nsRefPtr<DrawSession> mSession;
+};
+
+nsRefPtr<DrawSession> DrawSessionHolder::mSession;
+
 void
-LayerScope::SendEffectChain(gl::GLContext* aGLContext,
-                            const EffectChain& aEffectChain,
-                            int aWidth,
-                            int aHeight)
+LayerScope::DrawBegin()
+{
+    if (!CheckSendable()) {
+        return;
+    }
+
+    DrawSessionHolder::setSession(new DrawSession());
+}
+
+void LayerScope::SetRenderOffset(float aX, float aY)
+{
+    if (!CheckSendable()) {
+        return;
+    }
+
+    DrawSessionHolder::current().mOffsetX = aX;
+    DrawSessionHolder::current().mOffsetY = aY;
+}
+
+void LayerScope::SetLayerTransform(const gfx::Matrix4x4& aMatrix)
+{
+    if (!CheckSendable()) {
+        return;
+    }
+
+    DrawSessionHolder::current().mMVMatrix = aMatrix;
+}
+
+void LayerScope::SetLayerRects(size_t aRects, const gfx::Rect* aLayerRects)
+{
+    if (!CheckSendable()) {
+        return;
+    }
+
+    MOZ_ASSERT(aRects > 0 && aRects <= 4);
+    MOZ_ASSERT(aLayerRects);
+
+    DrawSessionHolder::current().mRects = aRects;
+
+    for (size_t i = 0; i < aRects; i++){
+        DrawSessionHolder::current().mLayerRects[i] = aLayerRects[i];
+    }
+}
+
+void
+LayerScope::DrawEnd(gl::GLContext* aGLContext,
+                    const EffectChain& aEffectChain,
+                    int aWidth,
+                    int aHeight)
 {
     // Protect this public function
     if (!CheckSendable()) {
         return;
     }
+
+    // 1. Send parameters of draw call, such as uniforms and attributes of
+    // vertex adnd fragment shader.
+    DrawSession& draws = DrawSessionHolder::current();
+    WebSocketHelper::GetSocketManager()->AppendDebugData(
+        new DebugGLDrawData(draws.mOffsetX, draws.mOffsetY,
+                            draws.mMVMatrix, draws.mRects,
+                            draws.mLayerRects,
+                            aEffectChain.mLayerRef));
+
+    // 2. Send textures.
     SenderHelper::SendEffectChain(aGLContext, aEffectChain, aWidth, aHeight);
 }
 
@@ -1359,7 +1621,6 @@ LayerScope::CleanLayer()
         WebSocketHelper::GetSocketManager()->CleanDebugData();
     }
 }
-
 
 void
 LayerScope::SetHWComposed()

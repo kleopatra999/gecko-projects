@@ -29,19 +29,8 @@ const PREF_ENABLE_MDN_DOCS_TOOLTIP = "devtools.inspector.mdnDocsTooltip.enabled"
 const PROPERTY_NAME_CLASS = "ruleview-propertyname";
 const FILTER_CHANGED_TIMEOUT = 150;
 
-/**
- * These regular expressions are adapted from firebug's css.js, and are
- * used to parse CSSStyleDeclaration's cssText attribute.
- */
-
-// Used to split on css line separators
-const CSS_LINE_RE = /(?:[^;\(]*(?:\([^\)]*?\))?[^;\(]*)*;?/g;
-
-// Used to parse a single property line.
-const CSS_PROP_RE = /\s*([^:\s]*)\s*:\s*(.*?)\s*(?:! (important))?;?$/;
-
-// Used to parse an external resource from a property value
-const CSS_RESOURCE_RE = /url\([\'\"]?(.*?)[\'\"]?\)/;
+// This is used to parse user input when filtering.
+const FILTER_PROP_RE = /\s*([^:\s]*)\s*:\s*(.*?)\s*;?$/;
 
 const IOService = Cc["@mozilla.org/network/io-service;1"]
                   .getService(Ci.nsIIOService);
@@ -234,7 +223,14 @@ ElementStyle.prototype = {
 
         return null;
       });
-    }).then(null, promiseWarn);
+    }).then(null, e => {
+      // populate is often called after a setTimeout,
+      // the connection may already be closed.
+      if (this.destroyed) {
+        return;
+      }
+      return promiseWarn(e);
+    });
     this.populated = populated;
     return this.populated;
   },
@@ -261,7 +257,7 @@ ElementStyle.prototype = {
     // If we've already included this domRule (for example, when a
     // common selector is inherited), ignore it.
     if (aOptions.rule &&
-        this.rules.some(function(rule) rule.domRule === aOptions.rule)) {
+        this.rules.some(rule => rule.domRule === aOptions.rule)) {
       return false;
     }
 
@@ -400,7 +396,7 @@ ElementStyle.prototype = {
   _updatePropertyOverridden: function(aProp) {
     let overridden = true;
     let dirty = false;
-    for each (let computedProp in aProp.computed) {
+    for (let computedProp of aProp.computed) {
       if (!computedProp.overridden) {
         overridden = false;
       }
@@ -743,7 +739,7 @@ Rule.prototype = {
    *        The property to be removed
    */
   removeProperty: function(aProperty) {
-    this.textProps = this.textProps.filter(function(prop) prop != aProperty);
+    this.textProps = this.textProps.filter(prop => prop != aProperty);
     let modifications = this.style.startModifyingProperties();
     modifications.removeProperty(aProperty.name);
     // Need to re-apply properties in case removing this TextProperty
@@ -786,7 +782,7 @@ Rule.prototype = {
 
     let textProps = [];
 
-    for each (let prop in disabledProps) {
+    for (let prop of disabledProps) {
       let value = store.userProperties.getProperty(this.style, prop.name, prop.value);
       let textProp = new TextProperty(this, prop.name, value, prop.priority);
       textProp.enabled = false;
@@ -865,7 +861,7 @@ Rule.prototype = {
   _updateTextProperty: function(aNewProp) {
     let match = { rank: 0, prop: null };
 
-    for each (let prop in this.textProps) {
+    for (let prop of this.textProps) {
       if (prop.name != aNewProp.name)
         continue;
 
@@ -1127,6 +1123,7 @@ function CssRuleView(aInspector, aDoc, aStore, aPageStyle) {
   this._onSelectAll = this._onSelectAll.bind(this);
   this._onCopy = this._onCopy.bind(this);
   this._onCopyColor = this._onCopyColor.bind(this);
+  this._onCopyImageDataUrl = this._onCopyImageDataUrl.bind(this);
   this._onToggleOrigSources = this._onToggleOrigSources.bind(this);
   this._onShowMdnDocs = this._onShowMdnDocs.bind(this);
   this._onFilterStyles = this._onFilterStyles.bind(this);
@@ -1135,6 +1132,7 @@ function CssRuleView(aInspector, aDoc, aStore, aPageStyle) {
   this._onFilterTextboxContextMenu = this._onFilterTextboxContextMenu.bind(this);
 
   this.element = this.doc.getElementById("ruleview-container");
+  this.addRuleButton = this.doc.getElementById("ruleview-add-rule-button");
   this.searchField = this.doc.getElementById("ruleview-searchbox");
   this.searchClearButton = this.doc.getElementById("ruleview-searchinput-clear");
 
@@ -1142,6 +1140,7 @@ function CssRuleView(aInspector, aDoc, aStore, aPageStyle) {
 
   this.element.addEventListener("copy", this._onCopy);
   this.element.addEventListener("contextmenu", this._onContextMenu);
+  this.addRuleButton.addEventListener("click", this._onAddRule);
   this.searchField.addEventListener("input", this._onFilterStyles);
   this.searchField.addEventListener("keypress", this._onFilterKeyPress);
   this.searchField.addEventListener("contextmenu", this._onFilterTextboxContextMenu);
@@ -1197,8 +1196,8 @@ CssRuleView.prototype = {
     this._contextmenu.id = "rule-view-context-menu";
 
     this.menuitemAddRule = createMenuItem(this._contextmenu, {
-      label: "ruleView.contextmenu.addRule",
-      accesskey: "ruleView.contextmenu.addRule.accessKey",
+      label: "ruleView.contextmenu.addNewRule",
+      accesskey: "ruleView.contextmenu.addNewRule.accessKey",
       command: this._onAddRule
     });
     this.menuitemSelectAll = createMenuItem(this._contextmenu, {
@@ -1215,6 +1214,11 @@ CssRuleView.prototype = {
       label: "ruleView.contextmenu.copyColor",
       accesskey: "ruleView.contextmenu.copyColor.accessKey",
       command: this._onCopyColor
+    });
+    this.menuitemCopyImageDataUrl = createMenuItem(this._contextmenu, {
+      label: "styleinspector.contextmenu.copyImageDataUrl",
+      accesskey: "styleinspector.contextmenu.copyImageDataUrl.accessKey",
+      command: this._onCopyImageDataUrl
     });
     this.menuitemSources = createMenuItem(this._contextmenu, {
       label: "ruleView.contextmenu.showOrigSources",
@@ -1350,6 +1354,7 @@ CssRuleView.prototype = {
     }
 
     this.menuitemCopyColor.hidden = !this._isColorPopup();
+    this.menuitemCopyImageDataUrl.hidden = !this._isImageUrlPopup();
     this.menuitemCopy.disabled = !copy;
 
     var showOrig = Services.prefs.getBoolPref(PREF_ORIG_SOURCES);
@@ -1400,7 +1405,7 @@ CssRuleView.prototype = {
         pseudoElement: prop.rule.pseudoElement,
         sheetHref: prop.rule.domRule.href
       };
-    } else if (classes.contains("theme-link") && prop) {
+    } else if (classes.contains("theme-link") && !classes.contains("ruleview-rule-source") && prop) {
       type = overlays.VIEW_NODE_IMAGE_URL_TYPE;
       value = {
         property: getPropertyNameAndValue(node).name,
@@ -1432,13 +1437,10 @@ CssRuleView.prototype = {
   _isColorPopup: function () {
     this._colorToCopy = "";
 
-    let trigger = this.doc.popupNode;
-    if (!trigger) {
+    let container = this._getPopupNodeContainer();
+    if (!container) {
       return false;
     }
-
-    let container = (trigger.nodeType == trigger.TEXT_NODE) ?
-                     trigger.parentElement : trigger;
 
     let isColorNode = el => el.dataset && "color" in el.dataset;
 
@@ -1451,6 +1453,52 @@ CssRuleView.prototype = {
 
     this._colorToCopy = container.dataset["color"];
     return true;
+  },
+
+  /**
+   * Check if the context menu popup was opened with a click on an image link
+   * If true, save the image url to this._imageUrlToCopy
+   */
+  _isImageUrlPopup: function () {
+    this._imageUrlToCopy = "";
+
+    let container = this._getPopupNodeContainer();
+    let isImageUrlNode = this._isImageUrlNode(container);
+    if (isImageUrlNode) {
+      this._imageUrlToCopy = container.href;
+    }
+
+    return isImageUrlNode;
+  },
+
+  /**
+   * Check if a node is an image url
+   * @param {DOMNode} node The node which we want information about
+   * @return {Boolean} true if the node is an image url
+   */
+  _isImageUrlNode: function (node) {
+    let nodeInfo = this.getNodeInfo(node);
+    if (!nodeInfo) {
+      return false
+    }
+    return nodeInfo.type == overlays.VIEW_NODE_IMAGE_URL_TYPE;
+  },
+
+  /**
+   * Get the DOM Node container for the current popupNode.
+   * If popupNode is a textNode, return the parent node, otherwise return popupNode itself.
+   * @return {DOMNode}
+   */
+  _getPopupNodeContainer: function () {
+    let container = null;
+    let node = this.doc.popupNode;
+
+    if (node) {
+      let isTextNode = node.nodeType == node.TEXT_NODE;
+      container = isTextNode ? node.parentElement : node;
+    }
+
+    return container;
   },
 
   /**
@@ -1513,7 +1561,7 @@ CssRuleView.prototype = {
         text = text.replace(rx, "");
       }
 
-      clipboardHelper.copyString(text, this.doc);
+      clipboardHelper.copyString(text);
       event.preventDefault();
     } catch(e) {
       console.error(e);
@@ -1524,8 +1572,24 @@ CssRuleView.prototype = {
    * Copy the most recently selected color value to clipboard.
    */
   _onCopyColor: function() {
-    clipboardHelper.copyString(this._colorToCopy, this.styleDocument);
+    clipboardHelper.copyString(this._colorToCopy);
   },
+
+  /**
+   * Retrieve the image data for the selected image url and copy it to the clipboard
+   */
+  _onCopyImageDataUrl: Task.async(function*() {
+    let message;
+    try {
+      let inspectorFront = this.inspector.inspector;
+      let data = yield inspectorFront.getImageDataFromURL(this._imageUrlToCopy);
+      message = yield data.data.string();
+    } catch (e) {
+      message = _strings.GetStringFromName("styleinspector.copyImageDataUrlError");
+    }
+
+    clipboardHelper.copyString(message);
+  }),
 
   /**
    *  Toggle the original sources pref.
@@ -1731,6 +1795,10 @@ CssRuleView.prototype = {
       this.menuitemCopyColor.removeEventListener("command", this._onCopyColor);
       this.menuitemCopyColor = null;
 
+      // Destroy Copy Data URI menuitem.
+      this.menuitemCopyImageDataUrl.removeEventListener("command", this._onCopyImageDataUrl);
+      this.menuitemCopyImageDataUrl = null;
+
       this.menuitemSources.removeEventListener("command", this._onToggleOrigSources);
       this.menuitemSources = null;
 
@@ -1749,6 +1817,7 @@ CssRuleView.prototype = {
     // Remove bound listeners
     this.element.removeEventListener("copy", this._onCopy);
     this.element.removeEventListener("contextmenu", this._onContextMenu);
+    this.addRuleButton.removeEventListener("click", this._onAddRule);
     this.searchField.removeEventListener("input", this._onFilterStyles);
     this.searchField.removeEventListener("keypress", this._onFilterKeyPress);
     this.searchField.removeEventListener("contextmenu",
@@ -2100,7 +2169,7 @@ CssRuleView.prototype = {
     // Parse search value as a single property line and extract the property
     // name and value. Otherwise, use the search value as both the name and
     // value.
-    let propertyMatch = CSS_PROP_RE.exec(aValue);
+    let propertyMatch = FILTER_PROP_RE.exec(aValue);
     let name = propertyMatch ? propertyMatch[1] : aValue;
     let value = propertyMatch ? propertyMatch[2] : aValue;
 
@@ -2109,8 +2178,10 @@ CssRuleView.prototype = {
       // Get the actual property value displayed in the rule view
       let propertyValue = textProp.editor.valueSpan.textContent.toLowerCase();
       let propertyName = textProp.name.toLowerCase();
+      let styleSheetSource = textProp.rule.title.toLowerCase();
 
       let editor = textProp.editor;
+      let source = editor.ruleEditor.source;
 
       let isPropertyHighlighted = this._highlightMatches(editor.container, {
         searchName: name,
@@ -2125,8 +2196,9 @@ CssRuleView.prototype = {
       // Highlight search matches in the computed list of properties
       for (let computed of textProp.computed) {
         if (computed.element) {
-          let computedName = computed.name;
-          let computedValue = computed.value;
+          // Get the actual property value displayed in the computed list
+          let computedValue = computed.parsedValue.toLowerCase();
+          let computedName = computed.name.toLowerCase();
 
           isComputedHighlighted = this._highlightMatches(computed.element, {
             searchName: name,
@@ -2138,7 +2210,14 @@ CssRuleView.prototype = {
         }
       }
 
-      if (isPropertyHighlighted || isComputedHighlighted) {
+      // Highlight search matches in the stylesheet source
+      let isStyleSheetHighlighted = styleSheetSource.includes(aValue);
+      if (isStyleSheetHighlighted) {
+        source.classList.add("ruleview-highlight");
+      }
+
+      if (isPropertyHighlighted || isComputedHighlighted ||
+          isStyleSheetHighlighted) {
         isHighlighted = true;
       }
 
@@ -2263,11 +2342,11 @@ RuleEditor.prototype = {
     this.element.style.position = "relative";
 
     // Add the source link.
-    let source = createChild(this.element, "div", {
+    this.source = createChild(this.element, "div", {
       class: "ruleview-rule-source theme-link"
     });
-    source.addEventListener("click", function() {
-      if (source.hasAttribute("unselectable")) {
+    this.source.addEventListener("click", function() {
+      if (this.source.hasAttribute("unselectable")) {
         return;
       }
       let rule = this.rule.domRule;
@@ -2276,7 +2355,7 @@ RuleEditor.prototype = {
     let sourceLabel = this.doc.createElementNS(XUL_NS, "label");
     sourceLabel.setAttribute("crop", "center");
     sourceLabel.classList.add("source-link-label");
-    source.appendChild(sourceLabel);
+    this.source.appendChild(sourceLabel);
 
     this.updateSourceLink();
 
@@ -2606,13 +2685,45 @@ RuleEditor.prototype = {
       return;
     }
 
+    let ruleView = this.ruleView;
+    let elementStyle = ruleView._elementStyle;
+    let element = elementStyle.element;
+    let supportsUnmatchedRules =
+      this.rule.domRule.supportsModifySelectorUnmatched;
+
     this.isEditing = true;
 
-    this.rule.domRule.modifySelector(aValue).then(isModified => {
+    this.rule.domRule.modifySelector(element, aValue).then(response => {
       this.isEditing = false;
 
-      if (isModified) {
-        this.ruleView.refreshPanel();
+      if (!supportsUnmatchedRules) {
+        if (response) {
+          this.ruleView.refreshPanel();
+        }
+        return;
+      }
+
+      let {ruleProps, isMatching} = response;
+      if (!ruleProps) {
+        return;
+      }
+
+      let newRule = new Rule(elementStyle, ruleProps);
+      let editor = new RuleEditor(ruleView, newRule);
+      let rules = elementStyle.rules;
+
+      rules.splice(rules.indexOf(this.rule), 1);
+      rules.push(newRule);
+      elementStyle._changed();
+
+      editor.element.setAttribute("unmatched", !isMatching);
+      this.element.parentNode.replaceChild(editor.element, this.element);
+
+      // Remove highlight for modified selector
+      if (ruleView.highlightedSelector &&
+          ruleView.highlightedSelector == this.rule.selectorText) {
+        ruleView.toggleSelectorHighlighter(ruleView.lastSelectorIcon,
+          ruleView.highlightedSelector);
       }
     }).then(null, err => {
       this.isEditing = false;
@@ -2796,7 +2907,7 @@ TextPropertyEditor.prototype = {
         done: this._onValueDone,
         destroy: this.update,
         validate: this._onValidate,
-        advanceChars: ';',
+        advanceChars: advanceValidate,
         contentType: InplaceEditor.CONTENT_TYPES.CSS_VALUE,
         property: this.prop,
         popup: this.popup
@@ -2843,22 +2954,6 @@ TextPropertyEditor.prototype = {
       relativePath = this.sheetURI.resolve(relativePath);
     }
     return relativePath;
-  },
-
-  /**
-   * Check the property value to find an external resource (if any).
-   * @return {string} the URI in the property value, or null if there is no match.
-   */
-  getResourceURI: function() {
-    let val = this.prop.value;
-    let uriMatch = CSS_RESOURCE_RE.exec(val);
-    let uri = null;
-
-    if (uriMatch && uriMatch[1]) {
-      uri = uriMatch[1];
-    }
-
-    return uri;
   },
 
   /**
@@ -2988,7 +3083,7 @@ TextPropertyEditor.prototype = {
     }
 
     let showExpander = false;
-    for each (let computed in this.prop.computed) {
+    for (let computed of this.prop.computed) {
       // Don't bother to duplicate information already
       // shown in the text property.
       if (computed.name === this.prop.name) {
@@ -3019,6 +3114,9 @@ TextPropertyEditor.prototype = {
           baseURI: this.sheetURI
         }
       );
+
+      // Store the computed property value that was parsed for output
+      computed.parsedValue = frag.textContent;
 
       createChild(li, "span", {
         class: "ruleview-propertyvalue theme-fg-color1",
@@ -3524,6 +3622,48 @@ function getPropertyNameAndValue(node) {
     node = node.parentNode;
   }
 }
+
+/**
+ * Called when a character is typed in a value editor.  This decides
+ * whether to advance or not, first by checking to see if ";" was
+ * typed, and then by lexing the input and seeing whether the ";"
+ * would be a terminator at this point.
+ *
+ * @param {number} aKeyCode Key code to be checked.
+ * @param {String} aValue   Current text editor value.
+ * @param {number} aInsertionPoint The index of the insertion point.
+ * @return {Boolean} True if the focus should advance; false if
+ *        the character should be inserted.
+ */
+function advanceValidate(aKeyCode, aValue, aInsertionPoint) {
+  // Only ";" has special handling here.
+  if (aKeyCode !== Ci.nsIDOMKeyEvent.DOM_VK_SEMICOLON) {
+    return false;
+  }
+
+  // Insert the character provisionally and see what happens.  If we
+  // end up with a ";" symbol token, then the semicolon terminates the
+  // value.  Otherwise it's been inserted in some spot where it has a
+  // valid meaning, like a comment or string.
+  aValue = aValue.slice(0, aInsertionPoint) + ';' + aValue.slice(aInsertionPoint);
+  let lexer = domUtils.getCSSLexer(aValue);
+  while (true) {
+    let token = lexer.nextToken();
+    if (token.endOffset > aInsertionPoint) {
+      if (token.tokenType === "symbol" && token.text === ";") {
+        // The ";" is a terminator.
+        return true;
+      } else {
+        // The ";" is not a terminator in this context.
+        break;
+      }
+    }
+  }
+  return false;
+}
+
+// We're exporting _advanceValidate for unit tests.
+exports._advanceValidate = advanceValidate;
 
 XPCOMUtils.defineLazyGetter(this, "clipboardHelper", function() {
   return Cc["@mozilla.org/widget/clipboardhelper;1"].

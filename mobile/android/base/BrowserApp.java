@@ -49,6 +49,7 @@ import org.mozilla.gecko.preferences.ClearOnShutdownPref;
 import org.mozilla.gecko.preferences.GeckoPreferences;
 import org.mozilla.gecko.prompts.Prompt;
 import org.mozilla.gecko.prompts.PromptListItem;
+import org.mozilla.gecko.sync.repositories.android.FennecTabsRepository;
 import org.mozilla.gecko.sync.setup.SyncAccounts;
 import org.mozilla.gecko.tabqueue.TabQueueHelper;
 import org.mozilla.gecko.tabqueue.TabQueuePrompt;
@@ -547,6 +548,8 @@ public class BrowserApp extends GeckoApp
     }
 
     private void showBookmarkAddedToast() {
+        // This flow is from the option menu which has check to see if a bookmark was already added.
+        // So, it is safe here to show the toast that bookmark_added without any checks.
         getButtonToast().show(false,
                 getResources().getString(R.string.bookmark_added),
                 ButtonToast.LENGTH_SHORT,
@@ -720,10 +723,10 @@ public class BrowserApp extends GeckoApp
             mBrowserToolbar.setTitle(intent.getDataString());
 
             showTabQueuePromptIfApplicable(intent);
-
-            Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.INTENT);
         } else if (GuestSession.NOTIFICATION_INTENT.equals(action)) {
             GuestSession.handleIntent(this, intent);
+        } else if (TabQueueHelper.LOAD_URLS_ACTION.equals(action)) {
+            Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.NOTIFICATION, "tabqueue");
         }
 
         if (HardwareUtils.isTablet()) {
@@ -784,6 +787,7 @@ public class BrowserApp extends GeckoApp
             "Menu:Remove",
             "Reader:Share",
             "Sanitize:ClearHistory",
+            "Sanitize:ClearSyncedTabs",
             "Settings:Show",
             "Telemetry:Gather",
             "Updater:Launch");
@@ -914,8 +918,9 @@ public class BrowserApp extends GeckoApp
         checkFirstrun(this, new SafeIntent(getIntent()));
     }
 
-    private void processTabQueue() {
-        if (AppConstants.NIGHTLY_BUILD && AppConstants.MOZ_ANDROID_TAB_QUEUE) {
+    @Override
+    protected void processTabQueue() {
+        if (AppConstants.NIGHTLY_BUILD && AppConstants.MOZ_ANDROID_TAB_QUEUE && mInitialized) {
             ThreadUtils.postToBackgroundThread(new Runnable() {
                 @Override
                 public void run() {
@@ -927,10 +932,15 @@ public class BrowserApp extends GeckoApp
         }
     }
 
-    private void openQueuedTabs() {
+    @Override
+    protected void openQueuedTabs() {
         ThreadUtils.assertNotOnUiThread();
 
         int queuedTabCount = TabQueueHelper.getTabQueueLength(BrowserApp.this);
+
+        Telemetry.addToHistogram("FENNEC_TABQUEUE_QUEUESIZE", queuedTabCount);
+        Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.INTENT, "tabqueue-delayed");
+
         TabQueueHelper.openQueuedUrls(BrowserApp.this, mProfile, TabQueueHelper.FILE_NAME, false);
 
         // If there's more than one tab then also show the tabs panel.
@@ -1346,6 +1356,7 @@ public class BrowserApp extends GeckoApp
             "Menu:Remove",
             "Reader:Share",
             "Sanitize:ClearHistory",
+            "Sanitize:ClearSyncedTabs",
             "Settings:Show",
             "Telemetry:Gather",
             "Updater:Launch");
@@ -1399,6 +1410,15 @@ public class BrowserApp extends GeckoApp
             @Override
             public void run() {
                 db.clearHistory(getContentResolver(), clearSearchHistory);
+            }
+        });
+    }
+
+    private void handleClearSyncedTabs() {
+        ThreadUtils.postToBackgroundThread(new Runnable() {
+            @Override
+            public void run() {
+                FennecTabsRepository.deleteNonLocalClientsAndTabs(getContext());
             }
         });
     }
@@ -1683,6 +1703,9 @@ public class BrowserApp extends GeckoApp
         } else if ("Sanitize:ClearHistory".equals(event)) {
             handleClearHistory(message.optBoolean("clearSearchHistory", false));
             callback.sendSuccess(true);
+        } else if ("Sanitize:ClearSyncedTabs".equals(event)) {
+            handleClearSyncedTabs();
+            callback.sendSuccess(true);
         } else if ("Settings:Show".equals(event)) {
             final String resource =
                     message.optString(GeckoPreferences.INTENT_EXTRA_RESOURCES, null);
@@ -1705,6 +1728,7 @@ public class BrowserApp extends GeckoApp
             Telemetry.addToHistogram("FENNEC_THUMBNAILS_COUNT", db.getCount(cr, "thumbnails"));
             Telemetry.addToHistogram("FENNEC_READING_LIST_COUNT", db.getReadingListAccessor().getCount(cr));
             Telemetry.addToHistogram("BROWSER_IS_USER_DEFAULT", (isDefaultBrowser(Intent.ACTION_VIEW) ? 1 : 0));
+            Telemetry.addToHistogram("FENNEC_TABQUEUE_ENABLED", (TabQueueHelper.isTabQueueEnabled(BrowserApp.this) ? 1 : 0));
             if (Versions.feature16Plus) {
                 Telemetry.addToHistogram("BROWSER_IS_ASSIST_DEFAULT", (isDefaultBrowser(Intent.ACTION_ASSIST) ? 1 : 0));
             }
@@ -2632,6 +2656,16 @@ public class BrowserApp extends GeckoApp
 
         fm.beginTransaction().add(R.id.search_container, mBrowserSearch, BROWSER_SEARCH_TAG).commitAllowingStateLoss();
         mBrowserSearch.setUserVisibleHint(true);
+
+        // We want to adjust the window size when the keyboard appears to bring the
+        // SearchEngineBar above the keyboard. However, adjusting the window size
+        // when hiding the keyboard results in graphical glitches where the keyboard was
+        // because nothing was being drawn underneath (bug 933422). This can be
+        // prevented drawing content under the keyboard (i.e. in the Window).
+        //
+        // We do this here because there are glitches when unlocking a device with
+        // BrowserSearch in the foreground if we use BrowserSearch.onStart/Stop.
+        getActivity().getWindow().setBackgroundDrawableResource(android.R.color.white);
     }
 
     private void hideBrowserSearch() {
@@ -2648,6 +2682,8 @@ public class BrowserApp extends GeckoApp
         getSupportFragmentManager().beginTransaction()
                 .remove(mBrowserSearch).commitAllowingStateLoss();
         mBrowserSearch.setUserVisibleHint(false);
+
+        getWindow().setBackgroundDrawable(null);
     }
 
     /**
@@ -3463,12 +3499,11 @@ public class BrowserApp extends GeckoApp
             // Hide firstrun-pane if the user is loading a URL from an external app.
             hideFirstrunPager();
 
-            // GeckoApp.ACTION_HOMESCREEN_SHORTCUT means we're opening a bookmark that
-            // was added to Android's homescreen.
-            final TelemetryContract.Method method =
-                (isViewAction ? TelemetryContract.Method.INTENT : TelemetryContract.Method.HOMESCREEN);
-
-            Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, method);
+            if (isBookmarkAction) {
+                // GeckoApp.ACTION_HOMESCREEN_SHORTCUT means we're opening a bookmark that
+                // was added to Android's homescreen.
+                Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.HOMESCREEN);
+            }
         }
 
         showTabQueuePromptIfApplicable(intent);
@@ -3487,6 +3522,7 @@ public class BrowserApp extends GeckoApp
 
         // If the user has clicked the tab queue notification then load the tabs.
         if(AppConstants.NIGHTLY_BUILD  && AppConstants.MOZ_ANDROID_TAB_QUEUE && mInitialized && isTabQueueAction) {
+            Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.NOTIFICATION, "tabqueue");
             ThreadUtils.postToBackgroundThread(new Runnable() {
                 @Override
                 public void run() {

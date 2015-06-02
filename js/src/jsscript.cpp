@@ -148,8 +148,10 @@ Bindings::initWithTemporaryStorage(ExclusiveContext* cx, InternalBindingsHandle 
 
 #ifdef DEBUG
     HashSet<PropertyName*> added(cx);
-    if (!added.init())
+    if (!added.init()) {
+        ReportOutOfMemory(cx);
         return false;
+    }
 #endif
 
     uint32_t slot = CallObject::RESERVED_SLOTS;
@@ -160,8 +162,10 @@ Bindings::initWithTemporaryStorage(ExclusiveContext* cx, InternalBindingsHandle 
 #ifdef DEBUG
         // The caller ensures no duplicate aliased names.
         MOZ_ASSERT(!added.has(bi->name()));
-        if (!added.put(bi->name()))
+        if (!added.put(bi->name())) {
+            ReportOutOfMemory(cx);
             return false;
+        }
 #endif
 
         StackBaseShape stackBase(cx, &CallObject::class_,
@@ -1174,7 +1178,7 @@ js::XDRLazyScript(XDRState<mode>* xdr, HandleObject enclosingScope, HandleScript
         }
 
         if (mode == XDR_DECODE)
-            lazy.set(LazyScript::Create(cx, fun, NullPtr(), enclosingScope, enclosingScript,
+            lazy.set(LazyScript::Create(cx, fun, nullptr, enclosingScope, enclosingScript,
                                         packedFields, begin, end, lineno, column));
     }
 
@@ -1388,7 +1392,7 @@ const Class ScriptSourceObject::class_ = {
 ScriptSourceObject*
 ScriptSourceObject::create(ExclusiveContext* cx, ScriptSource* source)
 {
-    RootedObject object(cx, NewObjectWithGivenProto(cx, &class_, NullPtr()));
+    RootedObject object(cx, NewObjectWithGivenProto(cx, &class_, nullptr));
     if (!object)
         return nullptr;
     RootedScriptSource sourceObject(cx, &object->as<ScriptSourceObject>());
@@ -3244,7 +3248,7 @@ js::CloneFunctionScript(JSContext* cx, HandleFunction original, HandleFunction c
     if (script->compartment() != cx->compartment() && scope) {
         MOZ_ASSERT(!scope->as<StaticEvalObject>().isDirect() &&
                    !scope->as<StaticEvalObject>().isStrict());
-        scope = StaticEvalObject::create(cx, NullPtr());
+        scope = StaticEvalObject::create(cx, nullptr);
         if (!scope)
             return false;
     }

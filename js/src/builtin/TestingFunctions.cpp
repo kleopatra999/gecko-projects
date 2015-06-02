@@ -30,6 +30,7 @@
 #include "vm/Interpreter.h"
 #include "vm/ProxyObject.h"
 #include "vm/SavedStacks.h"
+#include "vm/Stack.h"
 #include "vm/TraceLogging.h"
 
 #include "jscntxtinlines.h"
@@ -423,7 +424,7 @@ IsLazyFunction(JSContext* cx, unsigned argc, Value* vp)
     }
     if (!args[0].isObject() || !args[0].toObject().is<JSFunction>()) {
         JS_ReportError(cx, "The first argument should be a function.");
-        return true;
+        return false;
     }
     args.rval().setBoolean(args[0].toObject().as<JSFunction>().isInterpretedLazy());
     return true;
@@ -802,167 +803,43 @@ NondeterministicGetWeakMapKeys(JSContext* cx, unsigned argc, jsval* vp)
     return true;
 }
 
-struct JSCountHeapNode {
-    void*               thing;
-    JSGCTraceKind       kind;
-    JSCountHeapNode*    next;
-};
-
-typedef HashSet<void*, PointerHasher<void*, 3>, SystemAllocPolicy> VisitedSet;
-
-class CountHeapTracer : public JS::CallbackTracer
+class HasChildTracer : public JS::CallbackTracer
 {
+    RootedValue child_;
+    bool found_;
+
+    void onEdge(void** thingp, JS::TraceKind kind) {
+        if (*thingp == child_.toGCThing())
+            found_ = true;
+    }
+
+    static void trampoline(JS::CallbackTracer* trc, void** thingp, JS::TraceKind kind) {
+        static_cast<HasChildTracer*>(trc)->onEdge(thingp, kind);
+    }
+
   public:
-    CountHeapTracer(JSRuntime* rt, JSTraceCallback callback) : CallbackTracer(rt, callback) {}
+    HasChildTracer(JSRuntime* rt, HandleValue child)
+      : JS::CallbackTracer(rt, trampoline, TraceWeakMapKeysValues), child_(rt, child), found_(false)
+    {}
 
-    VisitedSet          visited;
-    JSCountHeapNode*    traceList;
-    JSCountHeapNode*    recycleList;
-    bool                ok;
-};
-
-static void
-CountHeapNotify(JS::CallbackTracer* trc, void** thingp, JSGCTraceKind kind)
-{
-    CountHeapTracer* countTracer = (CountHeapTracer*)trc;
-    void* thing = *thingp;
-
-    if (!countTracer->ok)
-        return;
-
-    VisitedSet::AddPtr p = countTracer->visited.lookupForAdd(thing);
-    if (p)
-        return;
-
-    if (!countTracer->visited.add(p, thing)) {
-        countTracer->ok = false;
-        return;
-    }
-
-    JSCountHeapNode* node = countTracer->recycleList;
-    if (node) {
-        countTracer->recycleList = node->next;
-    } else {
-        node = js_pod_malloc<JSCountHeapNode>();
-        if (!node) {
-            countTracer->ok = false;
-            return;
-        }
-    }
-    node->thing = thing;
-    node->kind = kind;
-    node->next = countTracer->traceList;
-    countTracer->traceList = node;
-}
-
-static const struct TraceKindPair {
-    const char*      name;
-    int32_t           kind;
-} traceKindNames[] = {
-    { "all",        -1                  },
-    { "object",     JSTRACE_OBJECT      },
-    { "string",     JSTRACE_STRING      },
-    { "symbol",     JSTRACE_SYMBOL      },
+    bool found() const { return found_; }
 };
 
 static bool
-CountHeap(JSContext* cx, unsigned argc, jsval* vp)
+HasChild(JSContext* cx, unsigned argc, jsval* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
+    RootedValue parent(cx, args.get(0));
+    RootedValue child(cx, args.get(1));
 
-    RootedValue startValue(cx, UndefinedValue());
-    if (args.length() > 0) {
-        jsval v = args[0];
-        if (v.isMarkable()) {
-            startValue = v;
-        } else if (!v.isNull()) {
-            JS_ReportError(cx,
-                           "the first argument is not null or a heap-allocated "
-                           "thing");
-            return false;
-        }
+    if (!parent.isMarkable() || !child.isMarkable()) {
+        args.rval().setBoolean(false);
+        return true;
     }
 
-    RootedValue traceValue(cx);
-    int32_t traceKind = -1;
-    void* traceThing = nullptr;
-    if (args.length() > 1) {
-        JSString* str = ToString(cx, args[1]);
-        if (!str)
-            return false;
-        JSFlatString* flatStr = JS_FlattenString(cx, str);
-        if (!flatStr)
-            return false;
-        if (JS_FlatStringEqualsAscii(flatStr, "specific")) {
-            if (args.length() < 3) {
-                JS_ReportError(cx, "tracing of specific value requested "
-                               "but no value provided");
-                return false;
-            }
-            traceValue = args[2];
-            if (!traceValue.isMarkable()){
-                JS_ReportError(cx, "cannot trace this kind of value");
-                return false;
-            }
-            traceThing = traceValue.toGCThing();
-        } else {
-            for (size_t i = 0; ;) {
-                if (JS_FlatStringEqualsAscii(flatStr, traceKindNames[i].name)) {
-                    traceKind = traceKindNames[i].kind;
-                    break;
-                }
-                if (++i == ArrayLength(traceKindNames)) {
-                    JSAutoByteString bytes(cx, str);
-                    if (!!bytes)
-                        JS_ReportError(cx, "trace kind name '%s' is unknown", bytes.ptr());
-                    return false;
-                }
-            }
-        }
-    }
-
-    CountHeapTracer countTracer(JS_GetRuntime(cx), CountHeapNotify);
-    if (!countTracer.visited.init()) {
-        JS_ReportOutOfMemory(cx);
-        return false;
-    }
-    countTracer.ok = true;
-    countTracer.traceList = nullptr;
-    countTracer.recycleList = nullptr;
-
-    if (startValue.isUndefined()) {
-        JS_TraceRuntime(&countTracer);
-    } else {
-        JS_CallUnbarrieredValueTracer(&countTracer, startValue.address(), "root");
-    }
-
-    JSCountHeapNode* node;
-    size_t counter = 0;
-    while ((node = countTracer.traceList) != nullptr) {
-        if (traceThing == nullptr) {
-            // We are looking for all nodes with a specific kind
-            if (traceKind == -1 || node->kind == traceKind)
-                counter++;
-        } else {
-            // We are looking for some specific thing
-            if (node->thing == traceThing)
-                counter++;
-        }
-        countTracer.traceList = node->next;
-        node->next = countTracer.recycleList;
-        countTracer.recycleList = node;
-        JS_TraceChildren(&countTracer, node->thing, node->kind);
-    }
-    while ((node = countTracer.recycleList) != nullptr) {
-        countTracer.recycleList = node->next;
-        js_free(node);
-    }
-    if (!countTracer.ok) {
-        JS_ReportOutOfMemory(cx);
-        return false;
-    }
-
-    args.rval().setNumber(double(counter));
+    HasChildTracer trc(cx->runtime(), child);
+    TraceChildren(&trc, parent.toGCThing(), parent.traceKind());
+    args.rval().setBoolean(trc.found());
     return true;
 }
 
@@ -1005,7 +882,7 @@ SaveStack(JSContext* cx, unsigned argc, jsval* vp)
             return false;
         if (d < 0) {
             ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                                  JSDVG_SEARCH_STACK, args[0], JS::NullPtr(),
+                                  JSDVG_SEARCH_STACK, args[0], nullptr,
                                   "not a valid maximum frame count", NULL);
             return false;
         }
@@ -1016,7 +893,7 @@ SaveStack(JSContext* cx, unsigned argc, jsval* vp)
     if (args.length() >= 2) {
         if (!args[1].isObject()) {
             ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                                  JSDVG_SEARCH_STACK, args[0], JS::NullPtr(),
+                                  JSDVG_SEARCH_STACK, args[0], nullptr,
                                   "not an object", NULL);
             return false;
         }
@@ -1100,6 +977,34 @@ OOMAfterAllocations(JSContext* cx, unsigned argc, jsval* vp)
         return false;
 
     OOM_maxAllocations = OOM_counter + count;
+    OOM_failAlways = true;
+    return true;
+}
+
+static bool
+OOMAtAllocation(JSContext* cx, unsigned argc, jsval* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() != 1) {
+        JS_ReportError(cx, "count argument required");
+        return false;
+    }
+
+    uint32_t count;
+    if (!JS::ToUint32(cx, args[0], &count))
+        return false;
+
+    OOM_maxAllocations = OOM_counter + count;
+    OOM_failAlways = false;
+    return true;
+}
+
+static bool
+ResetOOMFailure(JSContext* cx, unsigned argc, jsval* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    args.rval().setBoolean(OOM_counter >= OOM_maxAllocations);
+    OOM_maxAllocations = UINT32_MAX;
     return true;
 }
 #endif
@@ -1113,7 +1018,7 @@ MakeFakePromise(JSContext* cx, unsigned argc, jsval* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    RootedObject obj(cx, NewObjectWithGivenProto(cx, &FakePromiseClass, NullPtr()));
+    RootedObject obj(cx, NewObjectWithGivenProto(cx, &FakePromiseClass, nullptr));
     if (!obj)
         return false;
 
@@ -1164,7 +1069,7 @@ MakeFinalizeObserver(JSContext* cx, unsigned argc, jsval* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    JSObject* obj = JS_NewObjectWithGivenProto(cx, &FinalizeCounterClass, JS::NullPtr());
+    JSObject* obj = JS_NewObjectWithGivenProto(cx, &FinalizeCounterClass, nullptr);
     if (!obj)
         return false;
 
@@ -1181,7 +1086,7 @@ FinalizeCount(JSContext* cx, unsigned argc, jsval* vp)
 }
 
 static bool
-DumpHeapComplete(JSContext* cx, unsigned argc, jsval* vp)
+DumpHeap(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
@@ -1223,11 +1128,11 @@ DumpHeapComplete(JSContext* cx, unsigned argc, jsval* vp)
     }
 
     if (i != args.length()) {
-        JS_ReportError(cx, "bad arguments passed to dumpHeapComplete");
+        JS_ReportError(cx, "bad arguments passed to dumpHeap");
         return false;
     }
 
-    js::DumpHeapComplete(JS_GetRuntime(cx), dumpFile ? dumpFile : stdout, nurseryBehaviour);
+    js::DumpHeap(JS_GetRuntime(cx), dumpFile ? dumpFile : stdout, nurseryBehaviour);
 
     if (dumpFile)
         fclose(dumpFile);
@@ -1545,18 +1450,26 @@ js::testingFunc_inIon(JSContext* cx, unsigned argc, jsval* vp)
         return true;
     }
 
-    JSScript* script = cx->currentScript();
-    if (script && script->getWarmUpResetCount() >= 20) {
-        JSString* error = JS_NewStringCopyZ(cx, "Compilation is being repeatedly prevented. Giving up.");
-        if (!error)
-            return false;
+    ScriptFrameIter iter(cx);
+    if (iter.isIon()) {
+        // Reset the counter of the IonScript's script.
+        JitFrameIterator jitIter(cx);
+        ++jitIter;
+        jitIter.script()->resetWarmUpResetCounter();
+    } else {
+        // Check if we missed multiple attempts at compiling the innermost script.
+        JSScript* script = cx->currentScript();
+        if (script && script->getWarmUpResetCount() >= 20) {
+            JSString* error = JS_NewStringCopyZ(cx, "Compilation is being repeatedly prevented. Giving up.");
+            if (!error)
+                return false;
 
-        args.rval().setString(error);
-        return true;
+            args.rval().setString(error);
+            return true;
+        }
     }
 
-    // false when not in ionMonkey
-    args.rval().setBoolean(false);
+    args.rval().setBoolean(iter.isIon());
     return true;
 }
 
@@ -2246,14 +2159,14 @@ FindPath(JSContext* cx, unsigned argc, jsval* vp)
     // Non-GCThing endpoints don't make much sense.
     if (!args[0].isObject() && !args[0].isString() && !args[0].isSymbol()) {
         ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                              JSDVG_SEARCH_STACK, args[0], JS::NullPtr(),
+                              JSDVG_SEARCH_STACK, args[0], nullptr,
                               "not an object, string, or symbol", NULL);
         return false;
     }
 
     if (!args[1].isObject() && !args[1].isString() && !args[1].isSymbol()) {
         ReportValueErrorFlags(cx, JSREPORT_ERROR, JSMSG_UNEXPECTED_TYPE,
-                              JSDVG_SEARCH_STACK, args[0], JS::NullPtr(),
+                              JSDVG_SEARCH_STACK, args[0], nullptr,
                               "not an object, string, or symbol", NULL);
         return false;
     }
@@ -2608,14 +2521,10 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
 "  Return an object describing some of the configuration options SpiderMonkey\n"
 "  was built with."),
 
-    JS_FN_HELP("countHeap", CountHeap, 0, 0,
-"countHeap([start[, kind[, thing]]])",
-"  Count the number of live GC things in the heap or things reachable from\n"
-"  start when it is given and is not null. kind is either 'all' (default) to\n"
-"  count all things or one of 'object', 'double', 'string', 'function'\n"
-"  to count only things of that kind. If kind is the string 'specific',\n"
-"  then you can provide an extra argument with some specific traceable\n"
-"  thing to count.\n"),
+    JS_FN_HELP("hasChild", HasChild, 0, 0,
+"hasChild(parent, child)",
+"  Return true if |child| is a child of |parent|, as determined by a call to\n"
+"  TraceChildren"),
 
     JS_FN_HELP("setSavedStacksRNGState", SetSavedStacksRNGState, 1, 0,
 "setSavedStacksRNGState(seed)",
@@ -2654,6 +2563,16 @@ static const JSFunctionSpecWithHelp TestingFunctions[] = {
 "oomAfterAllocations(count)",
 "  After 'count' js_malloc memory allocations, fail every following allocation\n"
 "  (return NULL)."),
+
+    JS_FN_HELP("oomAtAllocation", OOMAtAllocation, 1, 0,
+"oomAtAllocation(count)",
+"  After 'count' js_malloc memory allocations, fail the next allocation\n"
+"  (return NULL)."),
+
+    JS_FN_HELP("resetOOMFailure", ResetOOMFailure, 0, 0,
+"resetOOMFailure()",
+"  Remove the allocation failure scheduled by either oomAfterAllocations() or\n"
+"  oomAtAllocation() and return whether any allocation had been caused to fail."),
 #endif
 
     JS_FN_HELP("makeFakePromise", MakeFakePromise, 0, 0,
@@ -2750,8 +2669,8 @@ gc::ZealModeHelpText),
 "isProxy(obj)",
 "  If true, obj is a proxy of some sort"),
 
-    JS_FN_HELP("dumpHeapComplete", DumpHeapComplete, 1, 0,
-"dumpHeapComplete(['collectNurseryBeforeDump'], [filename])",
+    JS_FN_HELP("dumpHeap", DumpHeap, 1, 0,
+"dumpHeap(['collectNurseryBeforeDump'], [filename])",
 "  Dump reachable and unreachable objects to the named file, or to stdout.  If\n"
 "  'collectNurseryBeforeDump' is specified, a minor GC is performed first,\n"
 "  otherwise objects in the nursery are ignored."),

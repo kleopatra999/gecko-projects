@@ -201,6 +201,12 @@ private:
 #if defined(ANDROID)
   DECL_GFX_PREF(Once, "gfx.apitrace.enabled",                  UseApitrace, bool, false);
 #endif
+#if defined(RELEASE_BUILD)
+  // "Skip" means this is locked to the default value in beta and release.
+  DECL_GFX_PREF(Skip, "gfx.blocklist.all",                     BlocklistAll, int32_t, 0);
+#else
+  DECL_GFX_PREF(Once, "gfx.blocklist.all",                     BlocklistAll, int32_t, 0);
+#endif
   DECL_GFX_PREF(Live, "gfx.canvas.auto_accelerate.min_calls",  CanvasAutoAccelerateMinCalls, int32_t, 4);
   DECL_GFX_PREF(Live, "gfx.canvas.auto_accelerate.min_frames", CanvasAutoAccelerateMinFrames, int32_t, 30);
   DECL_GFX_PREF(Live, "gfx.canvas.auto_accelerate.min_seconds", CanvasAutoAccelerateMinSeconds, float, 5.0f);
@@ -368,6 +374,8 @@ private:
   DECL_GFX_PREF(Live, "ui.click_hold_context_menus.delay",     UiClickHoldContextMenusDelay, int32_t, 500);
   DECL_GFX_PREF(Once, "webgl.angle.force-d3d11",               WebGLANGLEForceD3D11, bool, false);
   DECL_GFX_PREF(Once, "webgl.angle.try-d3d11",                 WebGLANGLETryD3D11, bool, false);
+  DECL_GFX_PREF(Live, "webgl.disable-fail-if-major-performance-caveat",
+                WebGLDisableFailIfMajorPerformanceCaveat, bool, false);
   DECL_GFX_PREF(Once, "webgl.force-layers-readback",           WebGLForceLayersReadback, bool, false);
 
   // WARNING:

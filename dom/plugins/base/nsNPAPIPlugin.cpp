@@ -1954,7 +1954,7 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
     return NPERR_GENERIC_ERROR;
 #endif
 
-#if defined(XP_WIN) || (MOZ_WIDGET_GTK == 2) || defined(MOZ_WIDGET_QT)
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
   case NPNVnetscapeWindow: {
     if (!npp || !npp->ndata)
       return NPERR_INVALID_INSTANCE_ERROR;
@@ -2468,10 +2468,10 @@ _requestread(NPStream *pstream, NPByteRange *rangeList)
 
 #ifdef PLUGIN_LOGGING
   for(NPByteRange * range = rangeList; range != nullptr; range = range->next)
-    PR_LOG(nsPluginLogging::gNPNLog,PLUGIN_LOG_NOISY,
+    MOZ_LOG(nsPluginLogging::gNPNLog,PLUGIN_LOG_NOISY,
     ("%i-%i", range->offset, range->offset + range->length - 1));
 
-  PR_LOG(nsPluginLogging::gNPNLog,PLUGIN_LOG_NOISY, ("\n\n"));
+  MOZ_LOG(nsPluginLogging::gNPNLog,PLUGIN_LOG_NOISY, ("\n\n"));
   PR_LogFlush();
 #endif
 

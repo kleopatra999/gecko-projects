@@ -25,6 +25,7 @@
 #include "vm/NativeObject-inl.h"
 #include "vm/StringObject-inl.h"
 #include "vm/TypeInference-inl.h"
+#include "vm/UnboxedObject-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -268,7 +269,7 @@ ArraySpliceDense(JSContext* cx, HandleObject obj, uint32_t start, uint32_t delet
 bool
 ArrayPopDense(JSContext* cx, HandleObject obj, MutableHandleValue rval)
 {
-    MOZ_ASSERT(obj->is<ArrayObject>());
+    MOZ_ASSERT(obj->is<ArrayObject>() || obj->is<UnboxedArrayObject>());
 
     AutoDetectInvalidation adi(cx, rval);
 
@@ -287,21 +288,14 @@ ArrayPopDense(JSContext* cx, HandleObject obj, MutableHandleValue rval)
 }
 
 bool
-ArrayPushDense(JSContext* cx, HandleArrayObject obj, HandleValue v, uint32_t* length)
+ArrayPushDense(JSContext* cx, HandleObject obj, HandleValue v, uint32_t* length)
 {
-    if (MOZ_LIKELY(obj->lengthIsWritable())) {
-        uint32_t idx = obj->length();
-        NativeObject::EnsureDenseResult result = obj->ensureDenseElements(cx, idx, 1);
-        if (result == NativeObject::ED_FAILED)
-            return false;
-
-        if (result == NativeObject::ED_OK) {
-            obj->setDenseElement(idx, v);
-            MOZ_ASSERT(idx < INT32_MAX);
-            *length = idx + 1;
-            obj->setLengthInt32(*length);
-            return true;
-        }
+    *length = GetAnyBoxedOrUnboxedArrayLength(obj);
+    DenseElementResult result =
+        SetOrExtendAnyBoxedOrUnboxedDenseElements(cx, obj, *length, v.address(), 1, DontUpdateTypes);
+    if (result != DenseElementResult::Incomplete) {
+        (*length)++;
+        return result == DenseElementResult::Success;
     }
 
     JS::AutoValueArray<3> argv(cx);
@@ -318,7 +312,7 @@ ArrayPushDense(JSContext* cx, HandleArrayObject obj, HandleValue v, uint32_t* le
 bool
 ArrayShiftDense(JSContext* cx, HandleObject obj, MutableHandleValue rval)
 {
-    MOZ_ASSERT(obj->is<ArrayObject>());
+    MOZ_ASSERT(obj->is<ArrayObject>() || obj->is<UnboxedArrayObject>());
 
     AutoDetectInvalidation adi(cx, rval);
 
@@ -339,21 +333,17 @@ ArrayShiftDense(JSContext* cx, HandleObject obj, MutableHandleValue rval)
 JSObject*
 ArrayConcatDense(JSContext* cx, HandleObject obj1, HandleObject obj2, HandleObject objRes)
 {
-    Rooted<ArrayObject*> arr1(cx, &obj1->as<ArrayObject>());
-    Rooted<ArrayObject*> arr2(cx, &obj2->as<ArrayObject>());
-    Rooted<ArrayObject*> arrRes(cx, objRes ? &objRes->as<ArrayObject>() : nullptr);
-
-    if (arrRes) {
+    if (objRes) {
         // Fast path if we managed to allocate an object inline.
-        if (!js::array_concat_dense(cx, arr1, arr2, arrRes))
+        if (!js::array_concat_dense(cx, obj1, obj2, objRes))
             return nullptr;
-        return arrRes;
+        return objRes;
     }
 
     JS::AutoValueArray<3> argv(cx);
     argv[0].setUndefined();
-    argv[1].setObject(*arr1);
-    argv[2].setObject(*arr2);
+    argv[1].setObject(*obj1);
+    argv[2].setObject(*obj2);
     if (!js::array_concat(cx, 1, argv.begin()))
         return nullptr;
     return &argv[0].toObject();
@@ -552,7 +542,7 @@ CreateThis(JSContext* cx, HandleObject callee, MutableHandleValue rval)
 
     if (callee->is<JSFunction>()) {
         JSFunction* fun = &callee->as<JSFunction>();
-        if (fun->isInterpretedConstructor()) {
+        if (fun->isInterpreted() && fun->isConstructor()) {
             JSScript* script = fun->getOrCreateScript(cx);
             if (!script || !script->ensureHasTypes(cx))
                 return false;
@@ -891,7 +881,7 @@ InitRestParameter(JSContext* cx, uint32_t length, Value* rest, HandleObject temp
     NewObjectKind newKind = templateObj->group()->shouldPreTenure()
                             ? TenuredObject
                             : GenericObject;
-    ArrayObject* arrRes = NewDenseCopiedArray(cx, length, rest, NullPtr(), newKind);
+    ArrayObject* arrRes = NewDenseCopiedArray(cx, length, rest, nullptr, newKind);
     if (arrRes)
         arrRes->setGroup(templateObj->group());
     return arrRes;
@@ -1113,41 +1103,14 @@ SetDenseOrUnboxedArrayElement(JSContext* cx, HandleObject obj, int32_t index,
                               HandleValue value, bool strict)
 {
     // This function is called from Ion code for StoreElementHole's OOL path.
-    // In this case we know the object is native or an unboxed array and we can
-    // use setDenseElement instead of setDenseElementWithType.
+    // In this case we know the object is native or an unboxed array and that
+    // no type changes are needed.
 
-    NativeObject::EnsureDenseResult result = NativeObject::ED_SPARSE;
-    do {
-        if (index < 0 || obj->is<UnboxedArrayObject>())
-            break;
-        bool isArray = obj->is<ArrayObject>();
-        if (isArray && !obj->as<ArrayObject>().lengthIsWritable())
-            break;
-        uint32_t idx = uint32_t(index);
-        result = obj->as<NativeObject>().ensureDenseElements(cx, idx, 1);
-        if (result != NativeObject::ED_OK)
-            break;
-        if (isArray) {
-            ArrayObject& arr = obj->as<ArrayObject>();
-            if (idx >= arr.length())
-                arr.setLengthInt32(idx + 1);
-        }
-        obj->as<NativeObject>().setDenseElement(idx, value);
-        return true;
-    } while (false);
-
-    if (result == NativeObject::ED_FAILED)
-        return false;
-    MOZ_ASSERT(result == NativeObject::ED_SPARSE);
-
-    if (index >= 0 && obj->is<UnboxedArrayObject>()) {
-        UnboxedArrayObject* nobj = &obj->as<UnboxedArrayObject>();
-        if (uint32_t(index) == nobj->initializedLength() &&
-            uint32_t(index) < UnboxedArrayObject::MaximumCapacity)
-        {
-            return nobj->appendElementNoTypeChange(cx, index, value);
-        }
-    }
+    DenseElementResult result =
+        SetOrExtendAnyBoxedOrUnboxedDenseElements(cx, obj, index, value.address(), 1,
+                                                  DontUpdateTypes);
+    if (result != DenseElementResult::Incomplete)
+        return result == DenseElementResult::Success;
 
     RootedValue indexVal(cx, Int32Value(index));
     return SetObjectElement(cx, obj, indexVal, value, strict);

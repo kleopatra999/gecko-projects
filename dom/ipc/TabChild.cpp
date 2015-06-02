@@ -8,6 +8,9 @@
 
 #include "TabChild.h"
 
+#ifdef ACCESSIBILITY
+#include "mozilla/a11y/DocAccessibleChild.h"
+#endif
 #include "Layers.h"
 #include "ContentChild.h"
 #include "TabParent.h"
@@ -88,6 +91,7 @@
 #include "nsNetUtil.h"
 #include "nsIPermissionManager.h"
 #include "nsIScriptError.h"
+#include "mozilla/EventForwards.h"
 
 #define BROWSER_ELEMENT_CHILD_SCRIPT \
     NS_LITERAL_STRING("chrome://global/content/BrowserElementChild.js")
@@ -142,6 +146,19 @@ private:
   TabChild *mTabChild;
 };
 
+static bool
+UsingCompositorLRU()
+{
+  static bool sHavePrefs = false;
+  static uint32_t sCompositorLRUSize = 0;
+  if (!sHavePrefs) {
+    sHavePrefs = true;
+    Preferences::AddUintVarCache(&sCompositorLRUSize,
+                                 "layers.compositor-lru-size", 0);
+  }
+  return sCompositorLRUSize != 0;
+}
+
 NS_IMPL_ISUPPORTS(TabChild::DelayedFireContextMenuEvent,
                   nsITimerCallback)
 
@@ -188,6 +205,28 @@ NS_INTERFACE_MAP_END
 NS_IMPL_CYCLE_COLLECTING_ADDREF(TabChildBase)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(TabChildBase)
 
+// For the root frame, Screen and ParentLayer pixels are interchangeable.
+// nsViewportInfo stores zoom values as CSSToScreenScale (because it's a
+// data structure specific to the root frame), while FrameMetrics and
+// ZoomConstraints store zoom values as CSSToParentLayerScale (because they
+// are not specific to the root frame). We define convenience functions for
+// converting between the two. As the name suggests, they should only be used
+// when dealing with the root frame!
+CSSToScreenScale ConvertScaleForRoot(CSSToParentLayerScale aScale)
+{
+  return ViewTargetAs<ScreenPixel>(aScale, PixelCastJustification::ScreenIsParentLayerForRoot);
+}
+CSSToParentLayerScale ConvertScaleForRoot(CSSToScreenScale aScale)
+{
+  return ViewTargetAs<ParentLayerPixel>(aScale, PixelCastJustification::ScreenIsParentLayerForRoot);
+}
+
+// Calculate the scale needed to fit the given viewport into the given display.
+CSSToScreenScale CalculateIntrinsicScale(const ScreenIntSize& aDisplaySize, const CSSSize& aViewportSize)
+{
+  return MaxScaleRatio(ScreenSize(aDisplaySize), aViewportSize);
+}
+
 void
 TabChildBase::InitializeRootMetrics()
 {
@@ -198,7 +237,8 @@ TabChildBase::InitializeRootMetrics()
   mLastRootMetrics.SetCompositionBounds(ParentLayerRect(
       ParentLayerPoint(),
       ParentLayerSize(ViewAs<ParentLayerPixel>(mInnerSize, PixelCastJustification::ScreenIsParentLayerForRoot))));
-  mLastRootMetrics.SetZoom(CSSToParentLayerScale2D(mLastRootMetrics.CalculateIntrinsicScale()));
+  mLastRootMetrics.SetZoom(CSSToParentLayerScale2D(
+      ConvertScaleForRoot(CalculateIntrinsicScale(mInnerSize, kDefaultViewportSize))));
   mLastRootMetrics.SetDevPixelsPerCSSPixel(WebWidget()->GetDefaultScale());
   // We use ParentLayerToLayerScale(1) below in order to turn the
   // async zoom amount into the gecko zoom amount.
@@ -248,20 +288,6 @@ TabChildBase::GetPageSize(nsCOMPtr<nsIDocument> aDocument, const CSSSize& aViewp
   }
   return CSSSize(std::max(htmlWidth, bodyWidth),
                  std::max(htmlHeight, bodyHeight));
-}
-
-// For the root frame, Screen and ParentLayer pixels are interchangeable.
-// nsViewportInfo stores zoom values as CSSToScreenScale (because it's a
-// data structure specific to the root frame), while FrameMetrics and
-// ZoomConstraints store zoom values as CSSToParentLayerScale (because they
-// are not specific to the root frame). We define convenience functions for
-// converting between the two. As the name suggests, they should only be used
-// when dealing with the root frame!
-CSSToScreenScale ConvertScaleForRoot(CSSToParentLayerScale aScale) {
-  return ViewTargetAs<ScreenPixel>(aScale, PixelCastJustification::ScreenIsParentLayerForRoot);
-}
-CSSToParentLayerScale ConvertScaleForRoot(CSSToScreenScale aScale) {
-  return ViewTargetAs<ParentLayerPixel>(aScale, PixelCastJustification::ScreenIsParentLayerForRoot);
 }
 
 bool
@@ -336,11 +362,26 @@ TabChildBase::HandlePossibleViewportChange(const ScreenIntSize& aOldScreenSize)
 
   FrameMetrics metrics(mLastRootMetrics);
   metrics.SetViewport(CSSRect(CSSPoint(), viewport));
+
+  // Calculate the composition bounds based on mInnerSize, excluding the sizes
+  // of the scrollbars if they are not overlay scrollbars.
+  ScreenSize compositionSize(mInnerSize);
+  nsCOMPtr<nsIPresShell> shell = GetPresShell();
+  if (shell) {
+    nsMargin scrollbarsAppUnits =
+        nsLayoutUtils::ScrollbarAreaToExcludeFromCompositionBoundsFor(shell->GetRootScrollFrame());
+    // Scrollbars are not subject to scaling, so CSS pixels = screen pixels for them.
+    ScreenMargin scrollbars = CSSMargin::FromAppUnits(scrollbarsAppUnits)
+                            * CSSToScreenScale(1.0f);
+    compositionSize.width -= scrollbars.LeftRight();
+    compositionSize.height -= scrollbars.TopBottom();
+  }
+
   metrics.SetCompositionBounds(ParentLayerRect(
       ParentLayerPoint(),
-      ParentLayerSize(ViewAs<ParentLayerPixel>(mInnerSize, PixelCastJustification::ScreenIsParentLayerForRoot))));
+      ParentLayerSize(ViewAs<ParentLayerPixel>(compositionSize, PixelCastJustification::ScreenIsParentLayerForRoot))));
   metrics.SetRootCompositionSize(
-      ScreenSize(mInnerSize) * ScreenToLayoutDeviceScale(1.0f) / metrics.GetDevPixelsPerCSSPixel());
+      ScreenSize(compositionSize) * ScreenToLayoutDeviceScale(1.0f) / metrics.GetDevPixelsPerCSSPixel());
 
   // This change to the zoom accounts for all types of changes I can conceive:
   // 1. screen size changes, CSS viewport does not (pages with no meta viewport
@@ -354,14 +395,12 @@ TabChildBase::HandlePossibleViewportChange(const ScreenIntSize& aOldScreenSize)
   // In all of these cases, we maintain how much actual content is visible
   // within the screen width. Note that "actual content" may be different with
   // respect to CSS pixels because of the CSS viewport size changing.
-  float oldIntrinsicScale =
-      std::max(oldScreenSize.width / oldBrowserSize.width,
-               oldScreenSize.height / oldBrowserSize.height);
-  metrics.ZoomBy(metrics.CalculateIntrinsicScale().scale / oldIntrinsicScale);
+  CSSToScreenScale oldIntrinsicScale = CalculateIntrinsicScale(oldScreenSize, oldBrowserSize);
+  CSSToScreenScale newIntrinsicScale = CalculateIntrinsicScale(mInnerSize, viewport);
+  metrics.ZoomBy(newIntrinsicScale.scale / oldIntrinsicScale.scale);
 
   // Changing the zoom when we're not doing a first paint will get ignored
   // by AsyncPanZoomController and causes a blurry flash.
-  nsCOMPtr<nsIPresShell> shell = GetPresShell();
   bool isFirstPaint = true;
   if (shell) {
     isFirstPaint = shell->GetIsFirstPaint();
@@ -371,7 +410,7 @@ TabChildBase::HandlePossibleViewportChange(const ScreenIntSize& aOldScreenSize)
     // 0.0 to mean "did not calculate a zoom".  In that case, we default
     // it to the intrinsic scale.
     if (viewportInfo.GetDefaultZoom().scale < 0.01f) {
-      viewportInfo.SetDefaultZoom(ConvertScaleForRoot(metrics.CalculateIntrinsicScale()));
+      viewportInfo.SetDefaultZoom(newIntrinsicScale);
     }
 
     CSSToScreenScale defaultZoom = viewportInfo.GetDefaultZoom();
@@ -772,21 +811,6 @@ TabChild::PreloadSlowThings()
 
     sPreallocatedTab = tab;
     ClearOnShutdown(&sPreallocatedTab);
-}
-
-/*static*/ void
-TabChild::PostForkPreload()
-{
-    // Preallocated Tab can be null if we are forked directly from b2g. In such
-    // case we don't need to preload anything, just return.
-    if (!sPreallocatedTab) {
-        return;
-    }
-
-    // Rebuild connections to parent.
-    sPreallocatedTab->RecvLoadRemoteScript(
-      NS_LITERAL_STRING("chrome://global/content/post-fork-preload.js"),
-      true);
 }
 
 /*static*/ already_AddRefed<TabChild>
@@ -2379,7 +2403,8 @@ TabChild::GetPresShellResolution() const
 bool
 TabChild::RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
                              const ScrollableLayerGuid& aGuid,
-                             const uint64_t& aInputBlockId)
+                             const uint64_t& aInputBlockId,
+                             const nsEventStatus& aApzResponse)
 {
   TABC_LOG("Receiving touch event of type %d\n", aEvent.message);
 
@@ -2407,17 +2432,17 @@ TabChild::RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
     return true;
   }
 
-  mAPZEventState->ProcessTouchEvent(localEvent, aGuid, aInputBlockId,
-                                    nsEventStatus_eIgnore);
+  mAPZEventState->ProcessTouchEvent(localEvent, aGuid, aInputBlockId, aApzResponse);
   return true;
 }
 
 bool
 TabChild::RecvRealTouchMoveEvent(const WidgetTouchEvent& aEvent,
                                  const ScrollableLayerGuid& aGuid,
-                                 const uint64_t& aInputBlockId)
+                                 const uint64_t& aInputBlockId,
+                                 const nsEventStatus& aApzResponse)
 {
-  return RecvRealTouchEvent(aEvent, aGuid, aInputBlockId);
+  return RecvRealTouchEvent(aEvent, aGuid, aInputBlockId, aApzResponse);
 }
 
 bool
@@ -2555,6 +2580,22 @@ TabChild::RecvSelectionEvent(const WidgetSelectionEvent& event)
   WidgetSelectionEvent localEvent(event);
   localEvent.widget = mWidget;
   APZCCallbackHelper::DispatchWidgetEvent(localEvent);
+  return true;
+}
+
+a11y::PDocAccessibleChild*
+TabChild::AllocPDocAccessibleChild(PDocAccessibleChild*, const uint64_t&)
+{
+  MOZ_ASSERT(false, "should never call this!");
+  return nullptr;
+}
+
+bool
+TabChild::DeallocPDocAccessibleChild(a11y::PDocAccessibleChild* aChild)
+{
+#ifdef ACCESSIBILITY
+  delete static_cast<mozilla::a11y::DocAccessibleChild*>(aChild);
+#endif
   return true;
 }
 
@@ -2967,6 +3008,13 @@ TabChild::GetDefaultScale(double* aScale)
 }
 
 void
+TabChild::GetMaxTouchPoints(uint32_t* aTouchPoints)
+{
+  // Fallback to a sync call.
+  SendGetMaxTouchPoints(aTouchPoints);
+}
+
+void
 TabChild::NotifyPainted()
 {
     if (!mNotified) {
@@ -2978,17 +3026,32 @@ TabChild::NotifyPainted()
 void
 TabChild::MakeVisible()
 {
-    if (mWidget) {
-        mWidget->Show(true);
-    }
+  CompositorChild* compositor = CompositorChild::Get();
+  if (UsingCompositorLRU()) {
+    compositor->SendNotifyVisible(mLayersId);
+  }
+
+  if (mWidget) {
+    mWidget->Show(true);
+  }
 }
 
 void
 TabChild::MakeHidden()
 {
-    if (mWidget) {
-        mWidget->Show(false);
-    }
+  CompositorChild* compositor = CompositorChild::Get();
+  if (UsingCompositorLRU()) {
+    compositor->SendNotifyHidden(mLayersId);
+  } else {
+    // Clear cached resources directly. This avoids one extra IPC
+    // round-trip from CompositorChild to CompositorParent when
+    // CompositorLRU is not used.
+    compositor->RecvClearCachedResources(mLayersId);
+  }
+
+  if (mWidget) {
+    mWidget->Show(false);
+  }
 }
 
 void
@@ -3128,6 +3191,17 @@ TabChild::DidComposite(uint64_t aTransactionId)
 
   ClientLayerManager *manager = static_cast<ClientLayerManager*>(mWidget->GetLayerManager());
   manager->DidComposite(aTransactionId);
+}
+
+void
+TabChild::ClearCachedResources()
+{
+  MOZ_ASSERT(mWidget);
+  MOZ_ASSERT(mWidget->GetLayerManager());
+  MOZ_ASSERT(mWidget->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT);
+
+  ClientLayerManager *manager = static_cast<ClientLayerManager*>(mWidget->GetLayerManager());
+  manager->ClearCachedResources();
 }
 
 NS_IMETHODIMP

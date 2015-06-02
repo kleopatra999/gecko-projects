@@ -154,6 +154,12 @@ let lazilyLoadedObserverScripts = [
   ["EmbedRT", ["GeckoView:ImportScript"], "chrome://browser/content/EmbedRT.js"],
   ["Reader", ["Reader:FetchContent", "Reader:Added", "Reader:Removed"], "chrome://browser/content/Reader.js"],
 ];
+if (AppConstants.NIGHTLY_BUILD) {
+  lazilyLoadedObserverScripts.push(
+    ["ActionBarHandler", ["ActionBar:OpenNew", "ActionBar:Close", "TextSelection:Get"],
+      "chrome://browser/content/ActionBarHandler.js"]
+  );
+}
 if (AppConstants.MOZ_WEBRTC) {
   lazilyLoadedObserverScripts.push(
     ["WebrtcUI", ["getUserMedia:request", "recording-device-events"], "chrome://browser/content/WebrtcUI.js"])
@@ -4213,17 +4219,22 @@ Tab.prototype = {
 
           this.browser.addEventListener("pagehide", listener, true);
         }
-
-        if (docURI.startsWith("about:reader")) {
-          // Update the page action to show the "reader active" icon.
-          Reader.updatePageAction(this);
-        }
-
         break;
       }
 
       case "DOMFormHasPassword": {
-        LoginManagerContent.onFormPassword(aEvent);
+        LoginManagerContent.onDOMFormHasPassword(aEvent,
+                                                 this.browser.contentWindow);
+
+        // Send logins for this hostname to Java.
+        let hostname = aEvent.target.baseURIObject.prePath;
+        let foundLogins = Services.logins.findLogins({}, hostname, "", "");
+        if (foundLogins.length > 0) {
+          let displayHost = IdentityHandler.getEffectiveHost();
+          let title = { text: displayHost, resource: hostname };
+          let selectObj = { title: title, logins: foundLogins };
+          Messaging.sendRequest({ type: "Doorhanger:Logins", data: selectObj });
+        }
         break;
       }
 
@@ -4365,7 +4376,9 @@ Tab.prototype = {
       }
 
       case "pageshow": {
-        // only send pageshow for the top-level document
+        LoginManagerContent.onPageShow(aEvent, this.browser.contentWindow);
+
+        // The rest of this only handles pageshow for the top-level document.
         if (aEvent.originalTarget.defaultView != this.browser.contentWindow)
           return;
 
@@ -4526,6 +4539,13 @@ Tab.prototype = {
     let sameDocument = (aFlags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) != 0 ||
                        ((this.browser.lastURI != null) && fixedURI.equals(this.browser.lastURI) && !fixedURI.equals(aLocationURI));
     this.browser.lastURI = fixedURI;
+
+    // Let the reader logic know about same document changes because we won't get a DOMContentLoaded
+    // or pageshow event, but we'll still want to update the reader view button to account for this change.
+    // This mirrors the desktop logic in TabsProgressListener.
+    if (aFlags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) {
+      this.browser.messageManager.sendAsyncMessage("Reader:PushState", {isArticle: gBrowser.selectedBrowser.isArticle});
+    }
 
     // Reset state of click-to-play plugin notifications.
     clearTimeout(this.pluginDoorhangerTimeout);
@@ -4777,6 +4797,18 @@ Tab.prototype = {
     let oldBrowserWidth = this.browserWidth;
     this.setBrowserSize(viewportW, viewportH);
 
+    // if this page has not been painted yet, then this must be getting run
+    // because a meta-viewport element was added (via the DOMMetaAdded handler).
+    // in this case, we should not do anything that forces a reflow (see bug 759678)
+    // such as requesting the page size or sending a viewport update. this code
+    // will get run again in the before-first-paint handler and that point we
+    // will run though all of it. the reason we even bother executing up to this
+    // point on the DOMMetaAdded handler is so that scripts that use window.innerWidth
+    // before they are painted have a correct value (bug 771575).
+    if (!this.contentDocumentIsDisplayed) {
+      return;
+    }
+
     // This change to the zoom accounts for all types of changes I can conceive:
     // 1. screen size changes, CSS viewport does not (pages with no meta viewport
     //    or a fixed size viewport)
@@ -4796,18 +4828,6 @@ Tab.prototype = {
     }
     this.setResolution(zoom, false);
     this.setScrollClampingSize(zoom);
-
-    // if this page has not been painted yet, then this must be getting run
-    // because a meta-viewport element was added (via the DOMMetaAdded handler).
-    // in this case, we should not do anything that forces a reflow (see bug 759678)
-    // such as requesting the page size or sending a viewport update. this code
-    // will get run again in the before-first-paint handler and that point we
-    // will run though all of it. the reason we even bother executing up to this
-    // point on the DOMMetaAdded handler is so that scripts that use window.innerWidth
-    // before they are painted have a correct value (bug 771575).
-    if (!this.contentDocumentIsDisplayed) {
-      return;
-    }
 
     this.viewportExcludesHorizontalMargins = true;
     this.viewportExcludesVerticalMargins = true;
@@ -5843,9 +5863,10 @@ var FormAssistant = {
   // aCallback(array_of_suggestions) is called when results are available.
   _getAutoCompleteSuggestions: function _getAutoCompleteSuggestions(aSearchString, aElement, aCallback) {
     // Cache the form autocomplete service for future use
-    if (!this._formAutoCompleteService)
-      this._formAutoCompleteService = Cc["@mozilla.org/satchel/form-autocomplete;1"].
-                                      getService(Ci.nsIFormAutoComplete);
+    if (!this._formAutoCompleteService) {
+      this._formAutoCompleteService = Cc["@mozilla.org/satchel/form-autocomplete;1"]
+          .getService(Ci.nsIFormAutoComplete);
+    }
 
     let resultsAvailable = function (results) {
       let suggestions = [];
@@ -5864,7 +5885,7 @@ var FormAssistant = {
 
     this._formAutoCompleteService.autoCompleteSearchAsync(aElement.name || aElement.id,
                                                           aSearchString, aElement, null,
-                                                          resultsAvailable);
+                                                          null, resultsAvailable);
   },
 
   /**
@@ -6247,6 +6268,12 @@ var XPInstallObserver = {
   },
 
   onInstallEnded: function(aInstall, aAddon) {
+    // Don't create a notification for distribution add-ons.
+    if (Distribution.pendingAddonInstalls.has(aInstall)) {
+      Distribution.pendingAddonInstalls.delete(aInstall);
+      return;
+    }
+
     let needsRestart = false;
     if (aInstall.existingAddon && (aInstall.existingAddon.pendingOperations & AddonManager.PENDING_UPGRADE))
       needsRestart = true;
@@ -6271,6 +6298,13 @@ var XPInstallObserver = {
   },
 
   onInstallFailed: function(aInstall) {
+    // Don't create a notification for distribution add-ons.
+    if (Distribution.pendingAddonInstalls.has(aInstall)) {
+      Cu.reportError("Error installing distribution add-on: " + aInstall.addon.id);
+      Distribution.pendingAddonInstalls.delete(aInstall);
+      return;
+    }
+
     NativeWindow.toast.show(Strings.browser.GetStringFromName("alertAddonsFail"), "short");
   },
 
@@ -6359,7 +6393,7 @@ var ViewportHandler = {
         let document = target.ownerDocument;
         let browser = BrowserApp.getBrowserForDocument(document);
         let tab = BrowserApp.getTabForBrowser(browser);
-        if (tab && tab.contentDocumentIsDisplayed)
+        if (tab)
           this.updateMetadata(tab, false);
         break;
     }
@@ -7680,6 +7714,7 @@ var Distribution = {
       case "Distribution:Set":
         // Reload the default prefs so we can observe "prefservice:after-app-defaults"
         Services.prefs.QueryInterface(Ci.nsIObserver).observe(null, "reload-default-prefs", null);
+        this.installDistroAddons();
         break;
 
       case "prefservice:after-app-defaults":
@@ -7802,7 +7837,61 @@ var Distribution = {
         Cu.reportError("Distribution: Could not read from " + aFile.leafName + " file");
       }
     });
-  }
+  },
+
+  // Track pending installs so we can avoid showing notifications for them.
+  pendingAddonInstalls: new Set(),
+
+  installDistroAddons: Task.async(function* () {
+    const PREF_ADDONS_INSTALLED = "distribution.addonsInstalled";
+    try {
+      let installed = Services.prefs.getBoolPref(PREF_ADDONS_INSTALLED);
+      if (installed) {
+        return;
+      }
+    } catch (e) {
+      Services.prefs.setBoolPref(PREF_ADDONS_INSTALLED, true);
+    }
+
+    let distroPath;
+    try {
+      distroPath = FileUtils.getDir("XREAppDist", ["extensions"]).path;
+
+      let info = yield OS.File.stat(distroPath);
+      if (!info.isDir) {
+        return;
+      }
+    } catch (e) {
+      return;
+    }
+
+    let it = new OS.File.DirectoryIterator(distroPath);
+    try {
+      yield it.forEach(entry => {
+        // Only support extensions that are zipped in .xpi files.
+        if (entry.isDir || !entry.name.endsWith(".xpi")) {
+          dump("Ignoring distribution add-on that isn't an XPI: " + entry.path);
+          return;
+        }
+
+        new Promise((resolve, reject) => {
+          AddonManager.getInstallForFile(new FileUtils.File(entry.path), resolve);
+        }).then(install => {
+          let id = entry.name.substring(0, entry.name.length - 4);
+          if (install.addon.id !== id) {
+            Cu.reportError("File entry " + entry.path + " contains an add-on with an incorrect ID");
+            return;
+          }
+          this.pendingAddonInstalls.add(install);
+          install.install();
+        }).catch(e => {
+          Cu.reportError("Error installing distribution add-on: " + entry.path + ": " + e);
+        });
+      });
+    } finally {
+      it.close();
+    }
+  })
 };
 
 var Tabs = {

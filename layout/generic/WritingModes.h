@@ -30,6 +30,10 @@
 
 namespace mozilla {
 
+namespace widget {
+struct IMENotification;
+} // namespace widget
+
 // Physical axis constants.
 enum PhysicalAxis {
   eAxisVertical      = 0x0,
@@ -475,6 +479,10 @@ private:
   friend class LogicalRect;
 
   friend struct IPC::ParamTraits<WritingMode>;
+  // IMENotification cannot store this class directly since this has some
+  // constructors.  Therefore, it stores mWritingMode and recreate the
+  // instance from it.
+  friend struct widget::IMENotification;
 
   /**
    * Return a WritingMode representing an unknown value.
@@ -1211,13 +1219,17 @@ public:
   nsMargin GetPhysicalMargin(WritingMode aWritingMode) const
   {
     CHECK_WRITING_MODE(aWritingMode);
-    return aWritingMode.IsVertical() ?
-      (aWritingMode.IsVerticalLR() ?
-        nsMargin(IStart(), BEnd(), IEnd(), BStart()) :
-        nsMargin(IStart(), BStart(), IEnd(), BEnd())) :
-      (aWritingMode.IsBidiLTR() ?
-        nsMargin(BStart(), IEnd(), BEnd(), IStart()) :
-        nsMargin(BStart(), IStart(), BEnd(), IEnd()));
+    return aWritingMode.IsVertical()
+      ? (aWritingMode.IsVerticalLR()
+        ? (aWritingMode.IsBidiLTR()
+          ? nsMargin(IStart(), BEnd(), IEnd(), BStart())
+          : nsMargin(IEnd(), BEnd(), IStart(), BStart()))
+        : (aWritingMode.IsBidiLTR()
+          ? nsMargin(IStart(), BStart(), IEnd(), BEnd())
+          : nsMargin(IEnd(), BStart(), IStart(), BEnd())))
+      : (aWritingMode.IsBidiLTR()
+        ? nsMargin(BStart(), IEnd(), BEnd(), IStart())
+        : nsMargin(BStart(), IStart(), BEnd(), IEnd()));
   }
 
   /**

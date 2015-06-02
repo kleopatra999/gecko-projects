@@ -112,7 +112,7 @@ public:
   nsresult ResetDecode() override;
 
   // Acquires the decoder monitor, and is thus callable on any thread.
-  nsresult GetBuffered(dom::TimeRanges* aBuffered) override;
+  media::TimeIntervals GetBuffered() override;
 
   already_AddRefed<SourceBufferDecoder> CreateSubDecoder(const nsACString& aType,
                                                          int64_t aTimestampOffset /* microseconds */);
@@ -240,8 +240,8 @@ private:
   nsRefPtr<TrackBuffer> mAudioTrack;
   nsRefPtr<TrackBuffer> mVideoTrack;
 
-  MediaPromiseConsumerHolder<AudioDataPromise> mAudioRequest;
-  MediaPromiseConsumerHolder<VideoDataPromise> mVideoRequest;
+  MediaPromiseRequestHolder<AudioDataPromise> mAudioRequest;
+  MediaPromiseRequestHolder<VideoDataPromise> mVideoRequest;
 
   MediaPromiseHolder<AudioDataPromise> mAudioPromise;
   MediaPromiseHolder<VideoDataPromise> mVideoPromise;
@@ -261,8 +261,8 @@ private:
   int64_t mLastAudioTime;
   int64_t mLastVideoTime;
 
-  MediaPromiseConsumerHolder<SeekPromise> mAudioSeekRequest;
-  MediaPromiseConsumerHolder<SeekPromise> mVideoSeekRequest;
+  MediaPromiseRequestHolder<SeekPromise> mAudioSeekRequest;
+  MediaPromiseRequestHolder<SeekPromise> mVideoSeekRequest;
   MediaPromiseHolder<SeekPromise> mSeekPromise;
 
   // Temporary seek information while we wait for the data

@@ -40,14 +40,12 @@ MOZ_SERVICES_CLOUDSYNC=1
 MOZ_APP_VERSION=$FIREFOX_VERSION
 MOZ_EXTENSIONS_DEFAULT=" gio"
 # MOZ_APP_DISPLAYNAME will be set by branding/configure.sh
-# Changing MOZ_*BRANDING_DIRECTORY requires a clobber to ensure correct results,
-# because branding dependencies are broken.
 # MOZ_BRANDING_DIRECTORY is the default branding directory used when none is
 # specified. It should never point to the "official" branding directory.
 # For mozilla-beta, mozilla-release, or mozilla-central repositories, use
-# "nightly" branding (until bug 659568 is fixed).
+# "unofficial" branding.
 # For the mozilla-aurora repository, use "aurora".
-MOZ_BRANDING_DIRECTORY=browser/branding/nightly
+MOZ_BRANDING_DIRECTORY=browser/branding/unofficial
 MOZ_OFFICIAL_BRANDING_DIRECTORY=browser/branding/official
 MOZ_APP_ID={ec8030f7-c20a-464f-9b0e-13a3a9e97384}
 # This should usually be the same as the value MAR_CHANNEL_ID.
@@ -67,3 +65,13 @@ MOZ_PAY=1
 MOZ_ACTIVITIES=1
 MOZ_JSDOWNLOADS=1
 MOZ_WEBM_ENCODER=1
+
+# Enable checking that add-ons are signed by the trusted root
+MOZ_ADDON_SIGNING=1
+if test "$MOZ_OFFICIAL_BRANDING"; then
+  if test "$MOZ_UPDATE_CHANNEL" = "beta" -o \
+          "$MOZ_UPDATE_CHANNEL" = "release" -o \
+          "$MOZ_UPDATE_CHANNEL" = "esr"; then
+    MOZ_REQUIRE_SIGNING=1
+  fi
+fi

@@ -350,6 +350,7 @@ var shell = {
     this.contentBrowser.addEventListener('mozbrowserloadstart', this, true);
     this.contentBrowser.addEventListener('mozbrowserselectionstatechanged', this, true);
     this.contentBrowser.addEventListener('mozbrowserscrollviewchange', this, true);
+    this.contentBrowser.addEventListener('mozbrowsercaretstatechanged', this);
 
     CustomEventManager.init();
     WebappsHelper.init();
@@ -380,6 +381,7 @@ var shell = {
     this.contentBrowser.removeEventListener('mozbrowserloadstart', this, true);
     this.contentBrowser.removeEventListener('mozbrowserselectionstatechanged', this, true);
     this.contentBrowser.removeEventListener('mozbrowserscrollviewchange', this, true);
+    this.contentBrowser.removeEventListener('mozbrowsercaretstatechanged', this);
     ppmm.removeMessageListener("content-handler", this);
 
     UserAgentOverrides.uninit();
@@ -489,6 +491,28 @@ var shell = {
           type: 'selectionstatechanged',
           detail: data,
         });
+        break;
+      case 'mozbrowsercaretstatechanged':
+        {
+          let elt = evt.target;
+          let win = elt.ownerDocument.defaultView;
+          let offsetX = win.mozInnerScreenX - window.mozInnerScreenX;
+          let offsetY = win.mozInnerScreenY - window.mozInnerScreenY;
+
+          let rect = elt.getBoundingClientRect();
+          offsetX += rect.left;
+          offsetY += rect.top;
+
+          let data = evt.detail;
+          data.offsetX = offsetX;
+          data.offsetY = offsetY;
+          data.sendDoCommandMsg = null;
+
+          shell.sendChromeEvent({
+            type: 'caretstatechanged',
+            detail: data,
+          });
+        }
         break;
 
       case 'MozApplicationManifest':
@@ -636,7 +660,27 @@ var shell = {
       }
       delete shell.pendingChromeEvents;
     });
-  }
+
+    shell.handleCmdLine();
+  },
+
+  handleCmdLine: function shell_handleCmdLine() {
+#ifndef MOZ_WIDGET_GONK
+    let b2gcmds = Cc["@mozilla.org/commandlinehandler/general-startup;1?type=b2gcmds"]
+                    .getService(Ci.nsISupports);
+    let args = b2gcmds.wrappedJSObject.cmdLine;
+    try {
+      // Returns null if -url is not present
+      let url = args.handleFlagWithParam("url", false);
+      if (url) {
+        this.sendChromeEvent({type: "mozbrowseropenwindow", url});
+        args.preventDefault = true;
+      }
+    } catch(e) {
+      // Throws if -url is present with no params
+    }
+#endif
+  },
 };
 
 Services.obs.addObserver(function onFullscreenOriginChange(subject, topic, data) {
@@ -697,6 +741,10 @@ var CustomEventManager = {
         break;
       case 'do-command':
         DoCommandHelper.handleEvent(detail.cmd);
+        break;
+      case 'copypaste-do-command':
+        Services.obs.notifyObservers({ wrappedJSObject: shell.contentBrowser },
+                                     'ask-children-to-execute-copypaste-command', detail.cmd);
         break;
     }
   }
@@ -1086,7 +1134,12 @@ window.addEventListener('ContentStart', function update_onContentStart() {
 
   // We must set the size in KB, and keep a bit of free space.
   let size = Math.floor(stats.totalBytes / 1024) - 1024;
-  Services.prefs.setIntPref("browser.cache.disk.capacity", size);
+
+  // keep the default value if it is smaller than the physical partition size.
+  let oldSize = Services.prefs.getIntPref("browser.cache.disk.capacity");
+  if (size < oldSize) {
+    Services.prefs.setIntPref("browser.cache.disk.capacity", size);
+  }
 })();
 #endif
 

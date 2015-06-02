@@ -50,9 +50,6 @@ function sendSyncMsg(msg, data) {
 let CERTIFICATE_ERROR_PAGE_PREF = 'security.alternate_certificate_error_page';
 
 const OBSERVED_EVENTS = [
-  'fullscreen-origin-change',
-  'ask-parent-to-exit-fullscreen',
-  'ask-parent-to-rollback-fullscreen',
   'xpcom-shutdown',
   'activity-done'
 ];
@@ -144,6 +141,21 @@ BrowserElementChild.prototype = {
 
     addEventListener('MozScrolledAreaChanged',
                      this._mozScrollAreaChanged.bind(this),
+                     /* useCapture = */ true,
+                     /* wantsUntrusted = */ false);
+
+    addEventListener("MozDOMFullscreen:Entered",
+                     this._mozEnteredDomFullscreen.bind(this),
+                     /* useCapture = */ true,
+                     /* wantsUntrusted = */ false);
+
+    addEventListener("MozDOMFullscreen:NewOrigin",
+                     this._mozFullscreenOriginChange.bind(this),
+                     /* useCapture = */ true,
+                     /* wantsUntrusted = */ false);
+
+    addEventListener("MozDOMFullscreen:Exited",
+                     this._mozExitedDomFullscreen.bind(this),
                      /* useCapture = */ true,
                      /* wantsUntrusted = */ false);
 
@@ -259,15 +271,6 @@ BrowserElementChild.prototype = {
     if (topic == 'activity-done' && docShell !== subject)
       return;
     switch (topic) {
-      case 'fullscreen-origin-change':
-        sendAsyncMsg('fullscreen-origin-change', { _payload_: data });
-        break;
-      case 'ask-parent-to-exit-fullscreen':
-        sendAsyncMsg('exit-fullscreen');
-        break;
-      case 'ask-parent-to-rollback-fullscreen':
-        sendAsyncMsg('rollback-fullscreen');
-        break;
       case 'activity-done':
         sendAsyncMsg('activitydone', { success: (data == 'activity-success') });
         break;
@@ -527,6 +530,7 @@ BrowserElementChild.prototype = {
     debug('Got metaChanged: (' + e.target.name + ') ' + e.target.content);
 
     let handlers = {
+      'viewmode': this._viewmodeChangedHandler,
       'theme-color': this._themeColorChangedHandler,
       'application-name': this._applicationNameChangedHandler
     };
@@ -697,6 +701,16 @@ BrowserElementChild.prototype = {
     }
 
     sendAsyncMsg('selectionstatechanged', detail);
+  },
+
+
+  _viewmodeChangedHandler: function(eventType, target) {
+    let meta = {
+      name: 'viewmode',
+      content: target.content,
+      type: eventType.replace('DOMMeta', '').toLowerCase()
+    };
+    sendAsyncMsg('metachange', meta);
   },
 
   _themeColorChangedHandler: function(eventType, target) {
@@ -954,6 +968,20 @@ BrowserElementChild.prototype = {
       width: dimensions.width,
       height: dimensions.height
     });
+  },
+
+  _mozEnteredDomFullscreen: function(e) {
+    sendAsyncMsg("entered-dom-fullscreen");
+  },
+
+  _mozFullscreenOriginChange: function(e) {
+    sendAsyncMsg("fullscreen-origin-change", {
+      originNoSuffix: e.target.nodePrincipal.originNoSuffix
+    });
+  },
+
+  _mozExitedDomFullscreen: function(e) {
+    sendAsyncMsg("exited-dom-fullscreen");
   },
 
   _getContentDimensions: function() {

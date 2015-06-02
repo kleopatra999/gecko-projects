@@ -69,7 +69,8 @@ TemporaryRef<SourceSurface>
 DrawTargetD2D1::Snapshot()
 {
   if (mSnapshot) {
-    return mSnapshot;
+    RefPtr<SourceSurface> snapshot(mSnapshot);
+    return snapshot.forget();
   }
   PopAllClips();
 
@@ -77,7 +78,8 @@ DrawTargetD2D1::Snapshot()
 
   mSnapshot = new SourceSurfaceD2D1(mBitmap, mDC, mFormat, mSize, this);
 
-  return mSnapshot;
+  RefPtr<SourceSurface> snapshot(mSnapshot);
+  return snapshot.forget();
 }
 
 void
@@ -203,7 +205,11 @@ DrawTargetD2D1::DrawSurfaceWithShadow(SourceSurface *aSurface,
 
   // Step 1, create the shadow effect.
   RefPtr<ID2D1Effect> shadowEffect;
-  mDC->CreateEffect(CLSID_D2D1Shadow, byRef(shadowEffect));
+  HRESULT hr = mDC->CreateEffect(CLSID_D2D1Shadow, byRef(shadowEffect));
+  if (FAILED(hr) || !shadowEffect) {
+    gfxWarning() << "Failed to create shadow effect. Code: " << hexa(hr);
+    return;
+  }
   shadowEffect->SetInput(0, image);
   shadowEffect->SetValue(D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION, aSigma);
   D2D1_VECTOR_4F color = { aColor.r, aColor.g, aColor.b, aColor.a };
@@ -524,8 +530,67 @@ DrawTargetD2D1::FillGlyphs(ScaledFont *aFont,
   AutoDWriteGlyphRun autoRun;
   DWriteGlyphRunFromGlyphs(aBuffer, font, &autoRun);
 
+  bool needsRepushedLayers = false;
+  if (d2dAAMode == D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE && mFormat != SurfaceFormat::B8G8R8X8) {
+    D2D1_RECT_F rect;
+    bool isAligned;
+    needsRepushedLayers = mPushedClips.size() && !GetDeviceSpaceClipRect(rect, isAligned);
+
+    // If we have a complex clip in our stack and we have a transparent
+    // background, and subpixel AA is permitted, we need to repush our layer
+    // stack limited by the glyph run bounds initializing our layers for
+    // subpixel AA.
+    if (needsRepushedLayers) {
+      mDC->GetGlyphRunWorldBounds(D2D1::Point2F(), &autoRun,
+                                  DWRITE_MEASURING_MODE_NATURAL, &rect);
+      rect.left = std::floor(rect.left);
+      rect.right = std::ceil(rect.right);
+      rect.top = std::floor(rect.top);
+      rect.bottom = std::ceil(rect.bottom);
+
+      PopAllClips();
+
+      if (!mTransform.IsRectilinear()) {
+        // We must limit the pixels we touch to the -user space- bounds of
+        // the glyphs being drawn. In order not to get transparent pixels
+        // copied up in our pushed layer stack.
+        D2D1_RECT_F userRect;
+        mDC->SetTransform(D2D1::IdentityMatrix());
+        mDC->GetGlyphRunWorldBounds(D2D1::Point2F(), &autoRun,
+                                    DWRITE_MEASURING_MODE_NATURAL, &userRect);
+
+        RefPtr<ID2D1PathGeometry> path;
+        D2DFactory()->CreatePathGeometry(byRef(path));
+        RefPtr<ID2D1GeometrySink> sink;
+        path->Open(byRef(sink));
+        sink->BeginFigure(D2D1::Point2F(userRect.left, userRect.top), D2D1_FIGURE_BEGIN_FILLED);
+        sink->AddLine(D2D1::Point2F(userRect.right, userRect.top));
+        sink->AddLine(D2D1::Point2F(userRect.right, userRect.bottom));
+        sink->AddLine(D2D1::Point2F(userRect.left, userRect.bottom));
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+        sink->Close();
+
+        mDC->PushLayer(D2D1::LayerParameters1(D2D1::InfiniteRect(), path, D2D1_ANTIALIAS_MODE_ALIASED,
+                                              D2DMatrix(mTransform), 1.0f, nullptr,
+                                              D2D1_LAYER_OPTIONS1_INITIALIZE_FROM_BACKGROUND |
+                                              D2D1_LAYER_OPTIONS1_IGNORE_ALPHA), nullptr);
+      }
+
+      PushClipsToDC(mDC, true, rect);
+      mDC->SetTransform(D2DMatrix(mTransform));
+    }
+  }
+
   if (brush) {
     mDC->DrawGlyphRun(D2D1::Point2F(), &autoRun, brush);
+  }
+
+  if (needsRepushedLayers) {
+    PopClipsFromDC(mDC);
+
+    if (!mTransform.IsRectilinear()) {
+      mDC->PopLayer();
+    }
   }
 
   FinalizeDrawing(aOptions.mCompositionOp, aPattern);
@@ -657,7 +722,7 @@ DrawTargetD2D1::CreateSourceSurfaceFromData(unsigned char *aData,
     return nullptr;
   }
 
-  return new SourceSurfaceD2D1(bitmap.get(), mDC, aFormat, aSize);
+  return MakeAndAddRef<SourceSurfaceD2D1>(bitmap.get(), mDC, aFormat, aSize);
 }
 
 TemporaryRef<DrawTarget>
@@ -694,7 +759,7 @@ DrawTargetD2D1::CreatePathBuilder(FillRule aFillRule) const
     sink->SetFillMode(D2D1_FILL_MODE_WINDING);
   }
 
-  return new PathBuilderD2D(sink, path, aFillRule, BackendType::DIRECT2D1_1);
+  return MakeAndAddRef<PathBuilderD2D>(sink, path, aFillRule, BackendType::DIRECT2D1_1);
 }
 
 TemporaryRef<GradientStops>
@@ -725,7 +790,7 @@ DrawTargetD2D1::CreateGradientStops(GradientStop *rawStops, uint32_t aNumStops, 
     return nullptr;
   }
 
-  return new GradientStopsD2D(stopCollection, Factory::GetDirect3D11Device());
+  return MakeAndAddRef<GradientStopsD2D>(stopCollection, Factory::GetDirect3D11Device());
 }
 
 TemporaryRef<FilterNode>
@@ -944,12 +1009,16 @@ DrawTargetD2D1::PrepareForDrawing(CompositionOp aOp, const Pattern &aPattern)
 {
   MarkChanged();
 
-  if (aOp == CompositionOp::OP_OVER && IsPatternSupportedByD2D(aPattern)) {
+  if (D2DSupportsPrimitiveBlendMode(aOp) && IsPatternSupportedByD2D(aPattern)) {
     // It's important to do this before FlushTransformToDC! As this will cause
     // the transform to become dirty.
     PushAllClips();
 
     FlushTransformToDC();
+
+    if (aOp != CompositionOp::OP_OVER)
+      mDC->SetPrimitiveBlend(D2DPrimitiveBlendMode(aOp));
+
     return;
   }
 
@@ -967,7 +1036,9 @@ DrawTargetD2D1::FinalizeDrawing(CompositionOp aOp, const Pattern &aPattern)
 {
   bool patternSupported = IsPatternSupportedByD2D(aPattern);
 
-  if (aOp == CompositionOp::OP_OVER && patternSupported) {
+  if (D2DSupportsPrimitiveBlendMode(aOp) && patternSupported) {
+    if (aOp != CompositionOp::OP_OVER)
+      mDC->SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
     return;
   }
 
@@ -1019,9 +1090,9 @@ DrawTargetD2D1::FinalizeDrawing(CompositionOp aOp, const Pattern &aPattern)
     }
 
     if (!mBlendEffect) {
-      mDC->CreateEffect(CLSID_D2D1Blend, byRef(mBlendEffect));
+      HRESULT hr = mDC->CreateEffect(CLSID_D2D1Blend, byRef(mBlendEffect));
 
-      if (!mBlendEffect) {
+      if (FAILED(hr) || !mBlendEffect) {
         gfxWarning() << "Failed to create blend effect!";
         return;
       }
@@ -1064,7 +1135,11 @@ DrawTargetD2D1::FinalizeDrawing(CompositionOp aOp, const Pattern &aPattern)
 
   RefPtr<ID2D1Effect> radialGradientEffect;
 
-  mDC->CreateEffect(CLSID_RadialGradientEffect, byRef(radialGradientEffect));
+  HRESULT hr = mDC->CreateEffect(CLSID_RadialGradientEffect, byRef(radialGradientEffect));
+  if (FAILED(hr) || !radialGradientEffect) {
+    gfxWarning() << "Failed to create radial gradient effect. Code: " << hexa(hr);
+    return;
+  }
 
   radialGradientEffect->SetValue(RADIAL_PROP_STOP_COLLECTION,
                                  static_cast<const GradientStopsD2D*>(pat->mStops.get())->mStopCollection);
@@ -1128,7 +1203,8 @@ DrawTargetD2D1::GetClippedGeometry(IntRect *aClipBounds)
 {
   if (mCurrentClippedGeometry) {
     *aClipBounds = mCurrentClipBounds;
-    return mCurrentClippedGeometry;
+    RefPtr<ID2D1Geometry> clippedGeometry(mCurrentClippedGeometry);
+    return clippedGeometry.forget();
   }
 
   MOZ_ASSERT(mPushedClips.size());
@@ -1209,7 +1285,8 @@ DrawTargetD2D1::GetClippedGeometry(IntRect *aClipBounds)
   }
   mCurrentClippedGeometry = pathGeom.forget();
   *aClipBounds = mCurrentClipBounds;
-  return mCurrentClippedGeometry;
+  RefPtr<ID2D1Geometry> clippedGeometry(mCurrentClippedGeometry);
+  return clippedGeometry.forget();
 }
 
 TemporaryRef<ID2D1Geometry>
@@ -1227,7 +1304,7 @@ DrawTargetD2D1::GetInverseClippedGeometry()
   rectGeom->CombineWithGeometry(geom, D2D1_COMBINE_MODE_EXCLUDE, D2D1::IdentityMatrix(), sink);
   sink->Close();
 
-  return inverseGeom;
+  return inverseGeom.forget();
 }
 
 void
@@ -1251,7 +1328,7 @@ DrawTargetD2D1::PushAllClips()
 }
 
 void
-DrawTargetD2D1::PushClipsToDC(ID2D1DeviceContext *aDC)
+DrawTargetD2D1::PushClipsToDC(ID2D1DeviceContext *aDC, bool aForceIgnoreAlpha, const D2D1_RECT_F& aMaxRect)
 {
   mDC->SetTransform(D2D1::IdentityMatrix());
   mTransformDirty = true;
@@ -1259,7 +1336,7 @@ DrawTargetD2D1::PushClipsToDC(ID2D1DeviceContext *aDC)
   for (std::vector<PushedClip>::iterator iter = mPushedClips.begin();
         iter != mPushedClips.end(); iter++) {
     if (iter->mPath) {
-      PushD2DLayer(aDC, iter->mPath->mGeometry, iter->mTransform);
+      PushD2DLayer(aDC, iter->mPath->mGeometry, iter->mTransform, aForceIgnoreAlpha, aMaxRect);
     } else {
       mDC->PushAxisAlignedClip(iter->mBounds, iter->mIsPixelAligned ? D2D1_ANTIALIAS_MODE_ALIASED : D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
     }
@@ -1289,7 +1366,7 @@ DrawTargetD2D1::GetSolidColorBrush(const D2D_COLOR_F& aColor)
 {
   RefPtr<ID2D1SolidColorBrush> brush = mSolidColorBrush;
   brush->SetColor(aColor);
-  return brush;
+  return brush.forget();
 }
 
 TemporaryRef<ID2D1Brush>
@@ -1453,7 +1530,8 @@ TemporaryRef<SourceSurface>
 DrawTargetD2D1::OptimizeSourceSurface(SourceSurface* aSurface) const
 {
   if (aSurface->GetType() == SurfaceType::D2D1_1_IMAGE) {
-    return aSurface;
+    RefPtr<SourceSurface> surface(aSurface);
+    return surface.forget();
   }
 
   RefPtr<DataSourceSurface> data = aSurface->GetDataSurface();
@@ -1478,19 +1556,20 @@ DrawTargetD2D1::OptimizeSourceSurface(SourceSurface* aSurface) const
     return data.forget();
   }
 
-  return new SourceSurfaceD2D1(bitmap.get(), mDC, data->GetFormat(), data->GetSize());
+  return MakeAndAddRef<SourceSurfaceD2D1>(bitmap.get(), mDC, data->GetFormat(), data->GetSize());
 }
 
 void
-DrawTargetD2D1::PushD2DLayer(ID2D1DeviceContext *aDC, ID2D1Geometry *aGeometry, const D2D1_MATRIX_3X2_F &aTransform)
+DrawTargetD2D1::PushD2DLayer(ID2D1DeviceContext *aDC, ID2D1Geometry *aGeometry, const D2D1_MATRIX_3X2_F &aTransform,
+                             bool aForceIgnoreAlpha, const D2D1_RECT_F& aMaxRect)
 {
   D2D1_LAYER_OPTIONS1 options = D2D1_LAYER_OPTIONS1_NONE;
 
-  if (aDC->GetPixelFormat().alphaMode == D2D1_ALPHA_MODE_IGNORE) {
+  if (aDC->GetPixelFormat().alphaMode == D2D1_ALPHA_MODE_IGNORE || aForceIgnoreAlpha) {
     options = D2D1_LAYER_OPTIONS1_IGNORE_ALPHA | D2D1_LAYER_OPTIONS1_INITIALIZE_FROM_BACKGROUND;
   }
 
-  mDC->PushLayer(D2D1::LayerParameters1(D2D1::InfiniteRect(), aGeometry,
+  mDC->PushLayer(D2D1::LayerParameters1(aMaxRect, aGeometry,
                                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, aTransform,
                                         1.0, nullptr, options), nullptr);
 }

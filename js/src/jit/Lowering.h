@@ -162,6 +162,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitStringReplace(MStringReplace* ins);
     void visitLambda(MLambda* ins);
     void visitLambdaArrow(MLambdaArrow* ins);
+    void visitKeepAliveObject(MKeepAliveObject* ins);
     void visitSlots(MSlots* ins);
     void visitElements(MElements* ins);
     void visitConstantElements(MConstantElements* ins);
@@ -206,6 +207,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitArrayPopShift(MArrayPopShift* ins);
     void visitArrayPush(MArrayPush* ins);
     void visitArrayConcat(MArrayConcat* ins);
+    void visitArraySlice(MArraySlice* ins);
     void visitArrayJoin(MArrayJoin* ins);
     void visitLoadUnboxedScalar(MLoadUnboxedScalar* ins);
     void visitLoadTypedArrayElementHole(MLoadTypedArrayElementHole* ins);
