@@ -1394,7 +1394,6 @@ SetFactor(const nsCSSValue& aValue, float& aField, bool& aCanStoreInRuleTree,
   NS_NOTREACHED("SetFactor: inappropriate unit");
 }
 
-// Overloaded new operator that allocates from a presShell arena.
 void*
 nsRuleNode::operator new(size_t sz, nsPresContext* aPresContext) CPP_THROW_NEW
 {
@@ -1427,7 +1426,7 @@ nsRuleNode::DestroyInternal(nsRuleNode ***aDestroyQueueTail)
   }
 
   if (ChildrenAreHashed()) {
-    PLDHashTable2 *children = ChildrenHash();
+    PLDHashTable *children = ChildrenHash();
     PL_DHashTableEnumerate(children, EnqueueRuleNodeChildren,
                            &destroyQueueTail);
     *destroyQueueTail = nullptr; // ensure null-termination
@@ -1554,20 +1553,11 @@ nsRuleNode::Transition(nsIStyleRule* aRule, uint8_t aLevel,
     else {
       next = entry->mRuleNode = new (mPresContext)
         nsRuleNode(mPresContext, this, aRule, aLevel, aIsImportantRule);
-      if (!next) {
-        PL_DHashTableRawRemove(ChildrenHash(), entry);
-        NS_WARNING("out of memory");
-        return this;
-      }
     }
   } else if (!next) {
     // Create the new entry in our list.
     next = new (mPresContext)
       nsRuleNode(mPresContext, this, aRule, aLevel, aIsImportantRule);
-    if (!next) {
-      NS_WARNING("out of memory");
-      return this;
-    }
     next->mNextSibling = ChildrenList();
     SetChildrenList(next);
   }
@@ -1614,9 +1604,9 @@ nsRuleNode::ConvertChildrenToHash(int32_t aNumKids)
 {
   NS_ASSERTION(!ChildrenAreHashed() && HaveChildren(),
                "must have a non-empty list of children");
-  PLDHashTable2 *hash = new PLDHashTable2(&ChildrenHashOps,
-                                          sizeof(ChildrenHashEntry),
-                                          aNumKids);
+  PLDHashTable *hash = new PLDHashTable(&ChildrenHashOps,
+                                        sizeof(ChildrenHashEntry),
+                                        aNumKids);
   for (nsRuleNode* curr = ChildrenList(); curr; curr = curr->mNextSibling) {
     // This will never fail because of the initial size we gave the table.
     ChildrenHashEntry *entry = static_cast<ChildrenHashEntry*>(
@@ -9374,7 +9364,7 @@ nsRuleNode::SweepChildren(nsTArray<nsRuleNode*>& aSweepQueue)
   uint32_t childrenDestroyed = 0;
   nsRuleNode* survivorsWithChildren = nullptr;
   if (ChildrenAreHashed()) {
-    PLDHashTable2* children = ChildrenHash();
+    PLDHashTable* children = ChildrenHash();
     uint32_t oldChildCount = children->EntryCount();
     PL_DHashTableEnumerate(children, SweepHashEntry, &survivorsWithChildren);
     childrenDestroyed = oldChildCount - children->EntryCount();

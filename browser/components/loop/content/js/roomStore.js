@@ -27,13 +27,13 @@ loop.store = loop.store || {};
    * @type {Object}
    */
   var roomSchema = {
-    roomToken:    String,
-    roomUrl:      String,
-    // roomName:     String - Optional.
-    // roomKey:      String - Optional.
-    maxSize:      Number,
+    roomToken: String,
+    roomUrl: String,
+    // roomName: String - Optional.
+    // roomKey: String - Optional.
+    maxSize: Number,
     participants: Array,
-    ctime:        Number
+    ctime: Number
   };
 
   /**
@@ -77,7 +77,6 @@ loop.store = loop.store || {};
      * @type {Array}
      */
     actions: [
-      "addSocialShareButton",
       "addSocialShareProvider",
       "createRoom",
       "createdRoom",
@@ -263,10 +262,10 @@ loop.store = loop.store || {};
 
       var roomCreationData = {
         decryptedContext: {
-          roomName:  this._generateNewRoomName(actionData.nameTemplate)
+          roomName: this._generateNewRoomName(actionData.nameTemplate)
         },
         roomOwner: actionData.roomOwner,
-        maxSize:   this.maxRoomCreationSize
+        maxSize: this.maxRoomCreationSize
       };
 
       if ("urls" in actionData) {
@@ -373,15 +372,6 @@ loop.store = loop.store || {};
       this._mozLoop.socialShareRoom(actionData.provider.origin, actionData.roomUrl,
         shareTitle, shareBody);
       this._mozLoop.notifyUITour("Loop:RoomURLShared");
-    },
-
-    /**
-     * Add the Social Share button to the browser toolbar.
-     *
-     * @param {sharedActions.AddSocialShareButton} actionData The action data.
-     */
-    addSocialShareButton: function(actionData) {
-      this._mozLoop.addSocialShareButton();
     },
 
     /**

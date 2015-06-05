@@ -668,6 +668,10 @@ public:
     return mAnimationReadyTime;
   }
 
+  virtual bool AsyncPanZoomEnabled() const {
+    return false;
+  }
+
 protected:
   nsRefPtr<Layer> mRoot;
   gfx::UserData mUserData;
@@ -1255,6 +1259,12 @@ public:
   bool IsScrollbarContainer() { return mIsScrollbarContainer; }
   Layer* GetMaskLayer() const { return mMaskLayer; }
 
+  /*
+   * Get the combined clip rect of the Layer clip and all clips on FrameMetrics.
+   * This is intended for use in Layout. The compositor needs to apply async
+   * transforms to find the combined clip.
+   */
+  Maybe<ParentLayerIntRect> GetCombinedClipRect() const;
 
   /**
    * Retrieve the root level visible region for |this| taking into account
@@ -2142,7 +2152,7 @@ public:
     uint32_t mFrontbufferGLTex;
 
     // The size of the canvas content
-    nsIntSize mSize;
+    gfx::IntSize mSize;
 
     // Whether the canvas drawingbuffer has an alpha channel.
     bool mHasAlpha;

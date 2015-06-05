@@ -169,7 +169,7 @@ describe("loop.store.RoomStore", function () {
       });
 
       describe("refresh", function() {
-        it ("should clear the list of rooms", function() {
+        it("should clear the list of rooms", function() {
           fakeMozLoop.rooms.trigger("refresh", "refresh");
 
           expect(store.getStoreState().rooms).to.have.length.of(0);
@@ -322,7 +322,7 @@ describe("loop.store.RoomStore", function () {
       });
 
       it("should switch the pendingCreation state flag to false", function() {
-        store.setStoreState({pendingCreation:true});
+        store.setStoreState({pendingCreation: true});
 
         store.createdRoom(new sharedActions.CreatedRoom({
           roomToken: "fakeToken"
@@ -347,7 +347,7 @@ describe("loop.store.RoomStore", function () {
 
     describe("#createRoomError", function() {
       it("should switch the pendingCreation state flag to false", function() {
-        store.setStoreState({pendingCreation:true});
+        store.setStoreState({pendingCreation: true});
 
         store.createRoomError({
           error: new Error("fake")
@@ -444,16 +444,6 @@ describe("loop.store.RoomStore", function () {
         sinon.assert.calledOnce(fakeMozLoop.socialShareRoom);
         sinon.assert.calledWithExactly(fakeMozLoop.socialShareRoom, origin,
           roomUrl, "share_tweet", null);
-      });
-    });
-
-    describe("#addSocialShareButton", function() {
-      it("should invoke to the correct mozLoop function", function() {
-        fakeMozLoop.addSocialShareButton = sinon.stub();
-
-        store.addSocialShareButton(new sharedActions.AddSocialShareButton());
-
-        sinon.assert.calledOnce(fakeMozLoop.addSocialShareButton);
       });
     });
 

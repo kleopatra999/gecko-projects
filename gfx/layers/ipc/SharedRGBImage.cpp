@@ -28,7 +28,7 @@ namespace layers {
 
 already_AddRefed<Image>
 CreateSharedRGBImage(ImageContainer *aImageContainer,
-                     nsIntSize aSize,
+                     gfx::IntSize aSize,
                      gfxImageFormat aImageFormat)
 {
   NS_ASSERTION(aImageFormat == gfxImageFormat::ARGB32 ||
@@ -69,7 +69,10 @@ SharedRGBImage::~SharedRGBImage()
 
   if (mCompositable->GetAsyncID() != 0 &&
       !InImageBridgeChildThread()) {
-    ImageBridgeChild::DispatchReleaseTextureClient(mTextureClient.forget().take());
+    ADDREF_MANUALLY(mTextureClient);
+    ImageBridgeChild::DispatchReleaseTextureClient(mTextureClient);
+    mTextureClient = nullptr;
+
     ImageBridgeChild::DispatchReleaseImageClient(mCompositable.forget().take());
   }
 }

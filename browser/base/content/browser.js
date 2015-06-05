@@ -986,7 +986,6 @@ var gBrowserInit = {
     mm.loadFrameScript("chrome://browser/content/content.js", true);
     mm.loadFrameScript("chrome://browser/content/content-UITour.js", true);
     mm.loadFrameScript("chrome://global/content/manifestMessages.js", true);
-    mm.loadFrameScript("chrome://global/content/viewSource-content.js", true);
 
     window.messageManager.addMessageListener("Browser:LoadURI", RedirectLoad);
 
@@ -6686,14 +6685,6 @@ var gIdentityHandler = {
   },
 
   /**
-   * Handler for commands on the help button in the "identity-popup" panel.
-   */
-  handleHelpCommand : function(event) {
-    openHelpLink("secure-connection");
-    this._identityPopup.hidePopup();
-  },
-
-  /**
    * Handler for mouseclicks on the "More Information" button in the
    * "identity-popup" panel.
    */
@@ -7051,8 +7042,6 @@ var gIdentityHandler = {
   },
 
   onPopupShown : function(event) {
-    document.getElementById('identity-popup-more-info-button').focus();
-
     this._identityPopup.addEventListener("blur", this, true);
     this._identityPopup.addEventListener("popuphidden", this);
   },

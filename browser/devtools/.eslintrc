@@ -32,8 +32,9 @@
     "brace-style": [2, "1tbs", {"allowSingleLine": false}],
     // Require camel case names
     "camelcase": 2,
-    // Disallow trailing commas. Not valid JSON notation.
-    "comma-dangle": 1,
+    // Allow trailing commas for easy list extension.  Having them does not
+    // impair readability, but also not required either.
+    "comma-dangle": 0,
     // Enforce spacing before and after comma
     "comma-spacing": [2, {"before": false, "after": true}],
     // Enforce one true comma style.
@@ -50,9 +51,8 @@
     // Don't require a default case in switch statements. Avoid being forced to
     // add a bogus default when you know all possible cases are handled.
     "default-case": 0,
-    // Don't enforce consistent newlines before or after dots. This depends on
-    // what gives the most readable code.
-    "dot-location": [1, "object"],
+    // Enforce dots on the next line with property name.
+    "dot-location": [1, "property"],
     // Encourage the use of dot notation whenever possible.
     "dot-notation": 2,
     // Enforce newline at the end of file, with no multiple empty lines.

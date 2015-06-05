@@ -743,32 +743,6 @@ Parser<ParseHandler>::reportBadReturn(Node pn, ParseReportKind kind,
 }
 
 /*
- * Check that assigning to lhs is permitted.  Assigning to 'eval' or
- * 'arguments' is banned in strict mode.
- */
-template <typename ParseHandler>
-bool
-Parser<ParseHandler>::checkStrictAssignment(Node lhs)
-{
-    if (!pc->sc->needStrictChecks())
-        return true;
-
-    JSAtom* atom = handler.isName(lhs);
-    if (!atom)
-        return true;
-
-    if (atom == context->names().eval || atom == context->names().arguments) {
-        JSAutoByteString name;
-        if (!AtomToPrintableString(context, atom, &name))
-            return false;
-
-        if (!report(ParseStrictError, pc->sc->strict(), lhs, JSMSG_BAD_STRICT_ASSIGN, name.ptr()))
-            return false;
-    }
-    return true;
-}
-
-/*
  * Check that it is permitted to introduce a binding for atom.  Strict mode
  * forbids introducing new definitions for 'eval', 'arguments', or for any
  * strict mode reserved keyword.  Use pn for reporting error locations, or use
@@ -1325,7 +1299,7 @@ IsNonDominatingInScopedSwitch(ParseContext<FullParseHandler>* pc, HandleAtom nam
                               Definition* dn)
 {
     MOZ_ASSERT(dn->isLexical());
-    StmtInfoPC* stmt = LexicalLookup(pc, name, nullptr, (StmtInfoPC*)nullptr);
+    StmtInfoPC* stmt = LexicalLookup(pc, name);
     if (stmt && stmt->type == STMT_SWITCH)
         return dn->pn_cookie.slot() < stmt->firstDominatingLexicalInCase;
     return false;
@@ -2940,7 +2914,7 @@ Parser<ParseHandler>::reportRedeclaration(Node pn, Definition::Kind redeclKind, 
     if (!AtomToPrintableString(context, name, &printable))
         return false;
 
-    StmtInfoPC* stmt = LexicalLookup(pc, name, nullptr, (StmtInfoPC*)nullptr);
+    StmtInfoPC* stmt = LexicalLookup(pc, name);
     if (stmt && stmt->type == STMT_CATCH) {
         report(ParseError, false, pn, JSMSG_REDECLARED_CATCH_IDENTIFIER, printable.ptr());
     } else {
@@ -3142,7 +3116,7 @@ PopStatementPC(TokenStream& ts, ParseContext<ParseHandler>* pc)
  */
 template <class ContextT>
 typename ContextT::StmtInfo*
-LexicalLookup(ContextT* ct, HandleAtom atom, int* slotp, typename ContextT::StmtInfo* stmt)
+LexicalLookup(ContextT* ct, HandleAtom atom, typename ContextT::StmtInfo* stmt)
 {
     RootedId id(ct->sc->context, AtomToId(atom));
 
@@ -3163,15 +3137,10 @@ LexicalLookup(ContextT* ct, HandleAtom atom, int* slotp, typename ContextT::Stmt
 
         StaticBlockObject& blockObj = stmt->staticBlock();
         Shape* shape = blockObj.lookup(ct->sc->context, id);
-        if (shape) {
-            if (slotp)
-                *slotp = blockObj.shapeToIndex(*shape);
+        if (shape)
             return stmt;
-        }
     }
 
-    if (slotp)
-        *slotp = -1;
     return stmt;
 }
 
@@ -3180,7 +3149,7 @@ static inline bool
 OuterLet(ParseContext<ParseHandler>* pc, StmtInfoPC* stmt, HandleAtom atom)
 {
     while (stmt->downScope) {
-        stmt = LexicalLookup(pc, atom, nullptr, stmt->downScope);
+        stmt = LexicalLookup(pc, atom, stmt->downScope);
         if (!stmt)
             return false;
         if (stmt->type == STMT_BLOCK)
@@ -3205,7 +3174,7 @@ Parser<ParseHandler>::bindVarOrGlobalConst(BindData<ParseHandler>* data,
     if (!parser->checkStrictBinding(name, pn))
         return false;
 
-    StmtInfoPC* stmt = LexicalLookup(pc, name, nullptr, (StmtInfoPC*)nullptr);
+    StmtInfoPC* stmt = LexicalLookup(pc, name);
 
     if (stmt && stmt->type == STMT_WITH) {
         parser->handler.setFlag(pn, PND_DEOPTIMIZED);
@@ -3287,20 +3256,20 @@ Parser<ParseHandler>::bindVarOrGlobalConst(BindData<ParseHandler>* data,
     return true;
 }
 
-template <>
+template <typename ParseHandler>
 bool
-Parser<FullParseHandler>::makeSetCall(ParseNode* pn, unsigned msg)
+Parser<ParseHandler>::makeSetCall(Node target, unsigned msg)
 {
-    MOZ_ASSERT(pn->isKind(PNK_CALL));
-    MOZ_ASSERT(pn->isArity(PN_LIST));
-    MOZ_ASSERT(pn->isOp(JSOP_CALL) || pn->isOp(JSOP_SPREADCALL) ||
-               pn->isOp(JSOP_EVAL) || pn->isOp(JSOP_STRICTEVAL) ||
-               pn->isOp(JSOP_SPREADEVAL) || pn->isOp(JSOP_STRICTSPREADEVAL) ||
-               pn->isOp(JSOP_FUNCALL) || pn->isOp(JSOP_FUNAPPLY));
+    MOZ_ASSERT(handler.isFunctionCall(target));
 
-    if (!report(ParseStrictError, pc->sc->strict(), pn, msg))
+    // Assignment to function calls is forbidden in ES6.  We're still somewhat
+    // concerned about sites using this in dead code, so forbid it only in
+    // strict mode code (or if the werror option has been set), and otherwise
+    // warn.
+    if (!report(ParseStrictError, pc->sc->strict(), target, msg))
         return false;
-    handler.markAsSetCall(pn);
+
+    handler.markAsSetCall(target);
     return true;
 }
 
@@ -3317,7 +3286,7 @@ Parser<ParseHandler>::noteNameUse(HandlePropertyName name, Node pn)
     if (pc->useAsmOrInsideUseAsm())
         return true;
 
-    StmtInfoPC* stmt = LexicalLookup(pc, name, nullptr, (StmtInfoPC*)nullptr);
+    StmtInfoPC* stmt = LexicalLookup(pc, name);
 
     DefinitionList::Range defs = pc->decls().lookupMulti(name);
 
@@ -4523,6 +4492,10 @@ Parser<FullParseHandler>::exportDeclaration()
           default:
             tokenStream.ungetToken();
             kid = assignExpr(InAllowed, YieldIsKeyword);
+            if (kid) {
+                if (!MatchOrInsertSemicolon(tokenStream))
+                    return null();
+            }
             break;
         }
         if (!kid)
@@ -5133,9 +5106,8 @@ Parser<SyntaxParseHandler>::forStatement(YieldHandling yieldHandling)
 
         /* Check that the left side of the 'in' or 'of' is valid. */
         if (!isForDecl &&
-            lhsNode != SyntaxParseHandler::NodeName &&
-            lhsNode != SyntaxParseHandler::NodeGetProp &&
-            lhsNode != SyntaxParseHandler::NodeLValue)
+            !handler.maybeName(lhsNode) &&
+            !handler.isPropertyAccess(lhsNode))
         {
             JS_ALWAYS_FALSE(abortIfSyntaxParser());
             return null();
@@ -6420,74 +6392,56 @@ Parser<ParseHandler>::condExpr1(InHandling inHandling, YieldHandling yieldHandli
     return handler.newConditional(condition, thenExpr, elseExpr);
 }
 
-template <>
+template <typename ParseHandler>
 bool
-Parser<FullParseHandler>::checkAndMarkAsAssignmentLhs(ParseNode* pn, AssignmentFlavor flavor)
+Parser<ParseHandler>::checkAndMarkAsAssignmentLhs(Node target, AssignmentFlavor flavor)
 {
-    switch (pn->getKind()) {
-      case PNK_NAME:
-        if (!checkStrictAssignment(pn))
-            return false;
-        if (flavor == KeyedDestructuringAssignment) {
-            /*
-             * We may be called on a name node that has already been
-             * specialized, in the very weird "for (var [x] = i in o) ..."
-             * case. See bug 558633.
-             */
-            if (!(js_CodeSpec[pn->getOp()].format & JOF_SET))
-                pn->setOp(JSOP_SETNAME);
-        } else {
-            pn->setOp(pn->isOp(JSOP_GETLOCAL) ? JSOP_SETLOCAL : JSOP_SETNAME);
-        }
-        pn->markAsAssigned();
-        break;
-
-      case PNK_DOT:
-      case PNK_ELEM:
-      case PNK_SUPERPROP:
-      case PNK_SUPERELEM:
-        break;
-
-      case PNK_ARRAY:
-      case PNK_OBJECT:
+    // Handle destructuring object/array patterns specially.
+    if (handler.isDestructuringTarget(target)) {
         if (flavor == CompoundAssignment) {
             report(ParseError, false, null(), JSMSG_BAD_DESTRUCT_ASS);
             return false;
         }
-        if (!checkDestructuring(nullptr, pn))
-            return false;
-        break;
 
-      case PNK_CALL:
+        return checkDestructuring(nullptr, target);
+    }
+
+    // All other permitted targets are simple.
+    if (!reportIfNotValidSimpleAssignmentTarget(target, flavor))
+        return false;
+
+    if (handler.isPropertyAccess(target))
+        return true;
+
+    if (handler.maybeName(target)) {
+        // The arguments/eval identifiers are simple in non-strict mode code,
+        // but warn to discourage use nonetheless.
+        if (!reportIfArgumentsEvalTarget(target))
+            return false;
+
         if (flavor == KeyedDestructuringAssignment) {
-            report(ParseError, false, pn, JSMSG_BAD_DESTRUCT_TARGET);
-            return false;
+            // We may be called on a name node that has already been
+            // specialized, in the very weird "for (var [x] = i in o) ..."
+            // case. See bug 558633.
+            //
+            // XXX Is this necessary with the changes in bug 1164741?  This is
+            //     likely removable now.
+            handler.maybeDespecializeSet(target);
+        } else {
+            handler.adjustGetToSet(target);
         }
-        if (!makeSetCall(pn, JSMSG_BAD_LEFTSIDE_OF_ASS))
-            return false;
-        break;
+        handler.markAsAssigned(target);
+        return true;
+    }
 
-      default:
-        unsigned errnum = (flavor == KeyedDestructuringAssignment) ? JSMSG_BAD_DESTRUCT_TARGET :
-            JSMSG_BAD_LEFTSIDE_OF_ASS;
-        report(ParseError, false, pn, errnum);
+    MOZ_ASSERT(handler.isFunctionCall(target));
+
+    if (flavor == KeyedDestructuringAssignment) {
+        report(ParseError, false, target, JSMSG_BAD_DESTRUCT_TARGET);
         return false;
     }
-    return true;
-}
 
-template <>
-bool
-Parser<SyntaxParseHandler>::checkAndMarkAsAssignmentLhs(Node pn, AssignmentFlavor flavor)
-{
-    /* Full syntax checking of valid assignment LHS terms requires a parse tree. */
-    if (pn != SyntaxParseHandler::NodeName &&
-        pn != SyntaxParseHandler::NodeGetProp &&
-        pn != SyntaxParseHandler::NodeLValue)
-    {
-        return abortIfSyntaxParser();
-    }
-    return checkStrictAssignment(pn);
+    return makeSetCall(target, JSMSG_BAD_LEFTSIDE_OF_ASS);
 }
 
 template <typename ParseHandler>
@@ -6606,51 +6560,108 @@ Parser<ParseHandler>::assignExpr(InHandling inHandling, YieldHandling yieldHandl
     return handler.newAssignment(kind, lhs, rhs, pc, op);
 }
 
-static const char incop_name_str[][10] = {"increment", "decrement"};
-
-template <>
+template <typename ParseHandler>
 bool
-Parser<FullParseHandler>::checkAndMarkAsIncOperand(ParseNode* kid, TokenKind tt, bool preorder)
+Parser<ParseHandler>::isValidSimpleAssignmentTarget(Node node)
 {
-    // Check.
-    if (!kid->isKind(PNK_NAME) &&
-        !kid->isKind(PNK_DOT) &&
-        !kid->isKind(PNK_SUPERPROP) &&
-        !kid->isKind(PNK_SUPERELEM) &&
-        !kid->isKind(PNK_ELEM) &&
-        !(kid->isKind(PNK_CALL) &&
-          (kid->isOp(JSOP_CALL) || kid->isOp(JSOP_SPREADCALL) ||
-           kid->isOp(JSOP_EVAL) || kid->isOp(JSOP_STRICTEVAL) ||
-           kid->isOp(JSOP_SPREADEVAL) || kid->isOp(JSOP_STRICTSPREADEVAL) ||
-           kid->isOp(JSOP_FUNCALL) ||
-           kid->isOp(JSOP_FUNAPPLY))))
-    {
-        report(ParseError, false, null(), JSMSG_BAD_OPERAND, incop_name_str[tt == TOK_DEC]);
-        return false;
+    if (PropertyName* name = handler.maybeName(node)) {
+        // Note that we implement *exactly* the ES6 semantics here.  Warning
+        // for arguments/eval when extraWarnings is set isn't handled here.
+        if (!pc->sc->strict())
+            return true;
+
+        return name != context->names().arguments && name != context->names().eval;
     }
 
-    if (!checkStrictAssignment(kid))
+    if (handler.isPropertyAccess(node))
+        return true;
+    return handler.isFunctionCall(node);
+}
+
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::reportIfArgumentsEvalTarget(Node target)
+{
+    PropertyName* name = handler.maybeName(target);
+    if (!name)
+        return true;
+
+    const char* chars = (name == context->names().arguments)
+                        ? js_arguments_str
+                        : (name == context->names().eval)
+                        ? js_eval_str
+                        : nullptr;
+    if (!chars)
+        return true;
+
+    if (!report(ParseStrictError, pc->sc->strict(), target, JSMSG_BAD_STRICT_ASSIGN, chars))
         return false;
 
-    // Mark.
-    if (kid->isKind(PNK_NAME)) {
-        kid->markAsAssigned();
-    } else if (kid->isKind(PNK_CALL)) {
-        if (!makeSetCall(kid, JSMSG_BAD_INCOP_OPERAND))
-            return false;
-    }
+    MOZ_ASSERT(!pc->sc->strict(), "in strict mode an error should have been reported");
     return true;
 }
 
-template <>
+template <typename ParseHandler>
 bool
-Parser<SyntaxParseHandler>::checkAndMarkAsIncOperand(Node kid, TokenKind tt, bool preorder)
+Parser<ParseHandler>::reportIfNotValidSimpleAssignmentTarget(Node target,
+                                                             AssignmentFlavor flavor)
 {
-    // To the extent of what we support in syntax-parse mode, the rules for
-    // inc/dec operands are the same as for assignment. There are differences,
-    // such as destructuring; but if we hit any of those cases, we'll abort and
-    // reparse in full mode.
-    return checkAndMarkAsAssignmentLhs(kid, IncDecAssignment);
+    if (isValidSimpleAssignmentTarget(target))
+        return true;
+
+    // Use a special error if the target is arguments/eval, as a nicety.
+    if (!reportIfArgumentsEvalTarget(target))
+        return false;
+
+    unsigned errnum;
+    const char* extra = nullptr;
+
+    switch (flavor) {
+      case IncrementAssignment:
+        errnum = JSMSG_BAD_OPERAND;
+        extra = "increment";
+        break;
+
+      case DecrementAssignment:
+        errnum = JSMSG_BAD_OPERAND;
+        extra = "decrement";
+        break;
+
+      case KeyedDestructuringAssignment:
+        errnum = JSMSG_BAD_DESTRUCT_TARGET;
+        break;
+
+      case PlainAssignment:
+      case CompoundAssignment:
+        errnum = JSMSG_BAD_LEFTSIDE_OF_ASS;
+        break;
+    }
+
+    report(ParseError, pc->sc->strict(), target, errnum, extra);
+    return false;
+}
+
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::checkAndMarkAsIncOperand(Node target, AssignmentFlavor flavor)
+{
+    // Check.
+    if (!reportIfNotValidSimpleAssignmentTarget(target, flavor))
+        return false;
+
+    // Assignment to arguments/eval is allowed outside strict mode code,
+    // but it's dodgy.  Report a strict warning (error, if werror was set).
+    if (!reportIfArgumentsEvalTarget(target))
+        return false;
+
+    // Mark.
+    if (handler.maybeName(target)) {
+        handler.markAsAssigned(target);
+    } else if (handler.isFunctionCall(target)) {
+        if (!makeSetCall(target, JSMSG_BAD_INCOP_OPERAND))
+            return false;
+    }
+    return true;
 }
 
 template <typename ParseHandler>
@@ -6668,8 +6679,6 @@ template <typename ParseHandler>
 typename ParseHandler::Node
 Parser<ParseHandler>::unaryExpr(YieldHandling yieldHandling, InvokedPrediction invoked)
 {
-    Node pn, pn2;
-
     JS_CHECK_RECURSION(context, return null());
 
     TokenKind tt;
@@ -6677,8 +6686,6 @@ Parser<ParseHandler>::unaryExpr(YieldHandling yieldHandling, InvokedPrediction i
         return null();
     uint32_t begin = pos().begin;
     switch (tt) {
-      case TOK_TYPEOF:
-        return unaryOpExpr(yieldHandling, PNK_TYPEOF, JSOP_TYPEOF, begin);
       case TOK_VOID:
         return unaryOpExpr(yieldHandling, PNK_VOID, JSOP_VOID, begin);
       case TOK_NOT:
@@ -6690,16 +6697,36 @@ Parser<ParseHandler>::unaryExpr(YieldHandling yieldHandling, InvokedPrediction i
       case TOK_SUB:
         return unaryOpExpr(yieldHandling, PNK_NEG, JSOP_NEG, begin);
 
+      case TOK_TYPEOF: {
+        // The |typeof| operator is specially parsed to distinguish its
+        // application to a name, from its application to a non-name
+        // expression:
+        //
+        //   // Looks up the name, doesn't find it and so evaluates to
+        //   // "undefined".
+        //   assertEq(typeof nonExistentName, "undefined");
+        //
+        //   // Evaluates expression, triggering a runtime ReferenceError for
+        //   // the undefined name.
+        //   typeof (1, nonExistentName);
+        Node kid = unaryExpr(yieldHandling);
+        if (!kid)
+            return null();
+
+        return handler.newTypeof(begin, kid);
+      }
+
       case TOK_INC:
       case TOK_DEC:
       {
         TokenKind tt2;
         if (!tokenStream.getToken(&tt2, TokenStream::Operand))
             return null();
-        pn2 = memberExpr(yieldHandling, tt2, true);
+        Node pn2 = memberExpr(yieldHandling, tt2, true);
         if (!pn2)
             return null();
-        if (!checkAndMarkAsIncOperand(pn2, tt, true))
+        AssignmentFlavor flavor = (tt == TOK_INC) ? IncrementAssignment : DecrementAssignment;
+        if (!checkAndMarkAsIncOperand(pn2, flavor))
             return null();
         return handler.newUnary((tt == TOK_INC) ? PNK_PREINCREMENT : PNK_PREDECREMENT,
                                 JSOP_NOP,
@@ -6714,7 +6741,7 @@ Parser<ParseHandler>::unaryExpr(YieldHandling yieldHandling, InvokedPrediction i
 
         // Per spec, deleting any unary expression is valid -- it simply
         // returns true -- except for one case that is illegal in strict mode.
-        if (handler.isName(expr)) {
+        if (handler.maybeName(expr)) {
             if (!report(ParseStrictError, pc->sc->strict(), expr, JSMSG_DEPRECATED_DELETE_OPERAND))
                 return null();
             pc->sc->setBindingsAccessedDynamically();
@@ -6723,8 +6750,8 @@ Parser<ParseHandler>::unaryExpr(YieldHandling yieldHandling, InvokedPrediction i
         return handler.newDelete(begin, expr);
       }
 
-      default:
-        pn = memberExpr(yieldHandling, tt, /* allowCallSyntax = */ true, invoked);
+      default: {
+        Node pn = memberExpr(yieldHandling, tt, /* allowCallSyntax = */ true, invoked);
         if (!pn)
             return null();
 
@@ -6733,7 +6760,8 @@ Parser<ParseHandler>::unaryExpr(YieldHandling yieldHandling, InvokedPrediction i
             return null();
         if (tt == TOK_INC || tt == TOK_DEC) {
             tokenStream.consumeKnownToken(tt);
-            if (!checkAndMarkAsIncOperand(pn, tt, false))
+            AssignmentFlavor flavor = (tt == TOK_INC) ? IncrementAssignment : DecrementAssignment;
+            if (!checkAndMarkAsIncOperand(pn, flavor))
                 return null();
             return handler.newUnary((tt == TOK_INC) ? PNK_POSTINCREMENT : PNK_POSTDECREMENT,
                                     JSOP_NOP,
@@ -6741,6 +6769,7 @@ Parser<ParseHandler>::unaryExpr(YieldHandling yieldHandling, InvokedPrediction i
                                     pn);
         }
         return pn;
+      }
     }
 }
 
@@ -6899,7 +6928,7 @@ LegacyCompExprTransplanter::transplant(ParseNode* pn)
 
             RootedAtom atom(parser->context, pn->pn_atom);
 #ifdef DEBUG
-            StmtInfoPC* stmt = LexicalLookup(pc, atom, nullptr, (StmtInfoPC*)nullptr);
+            StmtInfoPC* stmt = LexicalLookup(pc, atom);
             MOZ_ASSERT(!stmt || stmt != pc->topStmt);
 #endif
             if (isGenexp && !dn->isOp(JSOP_CALLEE)) {
@@ -7802,18 +7831,35 @@ Parser<ParseHandler>::argumentList(YieldHandling yieldHandling, Node listNode, b
 
 template <typename ParseHandler>
 bool
-Parser<ParseHandler>::checkAndMarkSuperScope()
+Parser<ParseHandler>::checkAllowedNestedSyntax(SharedContext::AllowedSyntax allowed,
+                                               SharedContext** allowingContext)
 {
     for (GenericParseContext* gpc = pc; gpc; gpc = gpc->parent) {
         SharedContext* sc = gpc->sc;
-        if (sc->allowSuperProperty()) {
-            if (sc->isFunctionBox())
-                sc->asFunctionBox()->setNeedsHomeObject();
-            return true;
-        } else if (sc->isFunctionBox() && !sc->asFunctionBox()->function()->isArrow()) {
-            // super is not legal in normal functions.
-            break;
-        }
+
+        // Arrow functions don't help decide whether we should allow nested
+        // syntax, as they don't store any of the necessary state for themselves.
+        if (sc->isFunctionBox() && sc->asFunctionBox()->function()->isArrow())
+            continue;
+
+        if (!sc->allowSyntax(allowed))
+            return false;
+        if (allowingContext)
+            *allowingContext = sc;
+        return true;
+    }
+    return false;
+}
+
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::checkAndMarkSuperScope()
+{
+    SharedContext* foundContext = nullptr;
+    if (checkAllowedNestedSyntax(SharedContext::AllowedSyntax::SuperProperty, &foundContext)) {
+        if (foundContext->isFunctionBox())
+            foundContext->asFunctionBox()->setNeedsHomeObject();
+        return true;
     }
     return false;
 }
@@ -7834,27 +7880,36 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TokenKind tt, bool
 
     /* Check for new expression first. */
     if (tt == TOK_NEW) {
-        lhs = handler.newList(PNK_NEW, JSOP_NEW);
-        if (!lhs)
+        uint32_t newBegin = pos().begin;
+        // Make sure this wasn't a |new.target| in disguise.
+        Node newTarget;
+        if (!tryNewTarget(newTarget))
             return null();
-
-        if (!tokenStream.getToken(&tt, TokenStream::Operand))
-            return null();
-        Node ctorExpr = memberExpr(yieldHandling, tt, false, PredictInvoked);
-        if (!ctorExpr)
-            return null();
-
-        handler.addList(lhs, ctorExpr);
-
-        bool matched;
-        if (!tokenStream.matchToken(&matched, TOK_LP))
-            return null();
-        if (matched) {
-            bool isSpread = false;
-            if (!argumentList(yieldHandling, lhs, &isSpread))
+        if (newTarget) {
+            lhs = newTarget;
+        } else {
+            lhs = handler.newList(PNK_NEW, newBegin, JSOP_NEW);
+            if (!lhs)
                 return null();
-            if (isSpread)
-                handler.setOp(lhs, JSOP_SPREADNEW);
+
+            // Gotten by tryNewTarget
+            tt = tokenStream.currentToken().type;
+            Node ctorExpr = memberExpr(yieldHandling, tt, false, PredictInvoked);
+            if (!ctorExpr)
+                return null();
+
+            handler.addList(lhs, ctorExpr);
+
+            bool matched;
+            if (!tokenStream.matchToken(&matched, TOK_LP))
+                return null();
+            if (matched) {
+                bool isSpread = false;
+                if (!argumentList(yieldHandling, lhs, &isSpread))
+                    return null();
+                if (isSpread)
+                    handler.setOp(lhs, JSOP_SPREADNEW);
+            }
         }
     } else if (tt == TOK_SUPER) {
         lhs = null();
@@ -7922,13 +7977,13 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TokenKind tt, bool
                 return null();
             }
 
-            JSOp op = JSOP_CALL;
-            nextMember = handler.newList(tt == TOK_LP ? PNK_CALL : PNK_TAGGED_TEMPLATE, JSOP_CALL);
+            nextMember = tt == TOK_LP ? handler.newCall() : handler.newTaggedTemplate();
             if (!nextMember)
                 return null();
 
-            if (JSAtom* atom = handler.isName(lhs)) {
-                if (tt == TOK_LP && atom == context->names().eval) {
+            JSOp op = JSOP_CALL;
+            if (PropertyName* name = handler.maybeName(lhs)) {
+                if (tt == TOK_LP && name == context->names().eval) {
                     /* Select JSOP_EVAL and flag pc as heavyweight. */
                     op = pc->sc->strict() ? JSOP_STRICTEVAL : JSOP_EVAL;
                     pc->sc->setBindingsAccessedDynamically();
@@ -7947,13 +8002,14 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TokenKind tt, bool
                     // return value.)
                     checkAndMarkSuperScope();
                 }
-            } else if (JSAtom* atom = handler.isGetProp(lhs)) {
-                /* Select JSOP_FUNAPPLY given foo.apply(...). */
-                if (atom == context->names().apply) {
+            } else if (PropertyName* prop = handler.maybeDottedProperty(lhs)) {
+                // Use the JSOP_FUN{APPLY,CALL} optimizations given the right
+                // syntax.
+                if (prop == context->names().apply) {
                     op = JSOP_FUNAPPLY;
                     if (pc->sc->isFunctionBox())
                         pc->sc->asFunctionBox()->usesApply = true;
-                } else if (atom == context->names().call) {
+                } else if (prop == context->names().call) {
                     op = JSOP_FUNCALL;
                 }
             }
@@ -8002,7 +8058,7 @@ template <typename ParseHandler>
 typename ParseHandler::Node
 Parser<ParseHandler>::newName(PropertyName* name)
 {
-    return handler.newName(name, pc->blockid(), pos());
+    return handler.newName(name, pc->blockid(), pos(), context);
 }
 
 template <typename ParseHandler>
@@ -8571,6 +8627,42 @@ Parser<ParseHandler>::methodDefinition(YieldHandling yieldHandling, PropListType
 
     MOZ_ASSERT(listType == ObjectLiteral);
     return handler.addObjectMethodDefinition(propList, propname, fn, op);
+}
+
+template <typename ParseHandler>
+bool
+Parser<ParseHandler>::tryNewTarget(Node &newTarget)
+{
+    MOZ_ASSERT(tokenStream.isCurrentTokenType(TOK_NEW));
+
+    uint32_t begin = pos().begin;
+    newTarget = null();
+
+    // |new| expects to look for an operand, so we will honor that.
+    TokenKind next;
+    if (!tokenStream.getToken(&next, TokenStream::Operand))
+        return false;
+
+    // Don't unget the token, since lookahead cannot handle someone calling
+    // getToken() with a different modifier. Callers should inspect currentToken().
+    if (next != TOK_DOT)
+        return true;
+
+    if (!tokenStream.getToken(&next))
+        return false;
+    if (next != TOK_NAME || tokenStream.currentName() != context->names().target) {
+        report(ParseError, false, null(), JSMSG_UNEXPECTED_TOKEN,
+               "target", TokenKindToDesc(next));
+        return false;
+    }
+
+    if (!checkAllowedNestedSyntax(SharedContext::AllowedSyntax::NewTarget)) {
+        reportWithOffset(ParseError, false, begin, JSMSG_BAD_NEWTARGET);
+        return false;
+    }
+
+    newTarget = handler.newNewTarget(TokenPos(begin, pos().end));
+    return !!newTarget;
 }
 
 template <typename ParseHandler>

@@ -32,10 +32,13 @@ class JSObject2WrappedJSMap
 public:
     static JSObject2WrappedJSMap* newMap(int length) {
         JSObject2WrappedJSMap* map = new JSObject2WrappedJSMap();
-        if (map && map->mTable.init(length))
-            return map;
-        delete map;
-        return nullptr;
+        if (!map->mTable.init(length)) {
+            // This is a decent estimate of the size of the hash table's
+            // entry storage. The |2| is because on average the capacity is
+            // twice the requested length.
+            NS_ABORT_OOM(length * 2 * sizeof(Map::Entry));
+        }
+        return map;
     }
 
     inline nsXPCWrappedJS* Find(JSObject* Obj) {
@@ -158,7 +161,7 @@ private:
     static size_t SizeOfEntryExcludingThis(PLDHashEntryHdr* hdr, mozilla::MallocSizeOf mallocSizeOf, void*);
 
 private:
-    PLDHashTable2* mTable;
+    PLDHashTable* mTable;
 };
 
 /*************************/
@@ -212,7 +215,7 @@ private:
     IID2WrappedJSClassMap();    // no implementation
     explicit IID2WrappedJSClassMap(int size);
 private:
-    PLDHashTable2* mTable;
+    PLDHashTable* mTable;
 };
 
 /*************************/
@@ -271,7 +274,7 @@ private:
     static size_t SizeOfEntryExcludingThis(PLDHashEntryHdr* hdr, mozilla::MallocSizeOf mallocSizeOf, void*);
 
 private:
-    PLDHashTable2* mTable;
+    PLDHashTable* mTable;
 };
 
 /*************************/
@@ -328,7 +331,7 @@ private:
     ClassInfo2NativeSetMap();    // no implementation
     explicit ClassInfo2NativeSetMap(int size);
 private:
-    PLDHashTable2* mTable;
+    PLDHashTable* mTable;
 };
 
 /*************************/
@@ -384,7 +387,7 @@ private:
     static size_t SizeOfEntryExcludingThis(PLDHashEntryHdr* hdr, mozilla::MallocSizeOf mallocSizeOf, void*);
 
 private:
-    PLDHashTable2* mTable;
+    PLDHashTable* mTable;
 };
 
 /*************************/
@@ -454,7 +457,7 @@ private:
     static size_t SizeOfEntryExcludingThis(PLDHashEntryHdr* hdr, mozilla::MallocSizeOf mallocSizeOf, void*);
 
 private:
-    PLDHashTable2* mTable;
+    PLDHashTable* mTable;
 };
 
 /***************************************************************************/
@@ -512,7 +515,7 @@ private:
     IID2ThisTranslatorMap();    // no implementation
     explicit IID2ThisTranslatorMap(int size);
 private:
-    PLDHashTable2* mTable;
+    PLDHashTable* mTable;
 };
 
 /***************************************************************************/
@@ -548,7 +551,7 @@ private:
     XPCNativeScriptableSharedMap();    // no implementation
     explicit XPCNativeScriptableSharedMap(int size);
 private:
-    PLDHashTable2* mTable;
+    PLDHashTable* mTable;
 };
 
 /***************************************************************************/
@@ -586,7 +589,7 @@ private:
     XPCWrappedNativeProtoMap();    // no implementation
     explicit XPCWrappedNativeProtoMap(int size);
 private:
-    PLDHashTable2* mTable;
+    PLDHashTable* mTable;
 };
 
 /***************************************************************************/
@@ -599,10 +602,13 @@ class JSObject2JSObjectMap
 public:
     static JSObject2JSObjectMap* newMap(int length) {
         JSObject2JSObjectMap* map = new JSObject2JSObjectMap();
-        if (map && map->mTable.init(length))
-            return map;
-        delete map;
-        return nullptr;
+        if (!map->mTable.init(length)) {
+            // This is a decent estimate of the size of the hash table's
+            // entry storage. The |2| is because on average the capacity is
+            // twice the requested length.
+            NS_ABORT_OOM(length * 2 * sizeof(Map::Entry));
+        }
+        return map;
     }
 
     inline JSObject* Find(JSObject* key) {

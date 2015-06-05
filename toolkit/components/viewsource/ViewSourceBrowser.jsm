@@ -25,7 +25,13 @@ const BUNDLE_URL = "chrome://global/locale/viewSource.properties";
 const MARK_SELECTION_START = "\uFDD0";
 const MARK_SELECTION_END = "\uFDEF";
 
+const FRAME_SCRIPT = "chrome://global/content/viewSource-content.js";
+
 this.EXPORTED_SYMBOLS = ["ViewSourceBrowser"];
+
+// Keep a set of browsers we've seen before, so we can load our frame script as
+// needed into any new ones.
+let gKnownBrowsers = new WeakSet();
 
 /**
  * ViewSourceBrowser manages the view source <browser> from the chrome side.
@@ -37,9 +43,8 @@ this.EXPORTED_SYMBOLS = ["ViewSourceBrowser"];
  * The page script takes care of loading the companion frame script.
  *
  * For a view source tab (or some other non-window case), an instance of this is
- * created by viewSourceUtils.js to wrap the <browser>.  The caller that manages
- * the <browser> is responsible for ensuring the companion frame script has been
- * loaded.
+ * created by viewSourceUtils.js to wrap the <browser>.  The frame script will
+ * be loaded by this module at construction time.
  */
 this.ViewSourceBrowser = function ViewSourceBrowser(aBrowser) {
   this._browser = aBrowser;
@@ -71,6 +76,8 @@ ViewSourceBrowser.prototype = {
     "ViewSource:PromptAndGoToLine",
     "ViewSource:GoToLine:Success",
     "ViewSource:GoToLine:Failed",
+    "ViewSource:StoreWrapping",
+    "ViewSource:StoreSyntaxHighlighting",
   ],
 
   /**
@@ -81,6 +88,14 @@ ViewSourceBrowser.prototype = {
     this.messages.forEach((msgName) => {
       this.mm.addMessageListener(msgName, this);
     });
+
+    // If we have a known <browser> already, load the frame script here.  This
+    // is not true for the window case, as the element does not exist until the
+    // XUL document loads.  For that case, the frame script is loaded by
+    // viewSource.js.
+    if (this._browser) {
+      this.loadFrameScript();
+    }
   },
 
   /**
@@ -91,6 +106,16 @@ ViewSourceBrowser.prototype = {
     this.messages.forEach((msgName) => {
       this.mm.removeMessageListener(msgName, this);
     });
+  },
+
+  /**
+   * For a new browser we've not seen before, load the frame script.
+   */
+  loadFrameScript() {
+    if (!gKnownBrowsers.has(this.browser)) {
+      gKnownBrowsers.add(this.browser);
+      this.mm.loadFrameScript(FRAME_SCRIPT, false);
+    }
   },
 
   /**
@@ -109,6 +134,12 @@ ViewSourceBrowser.prototype = {
         break;
       case "ViewSource:GoToLine:Failed":
         this.onGoToLineFailed();
+        break;
+      case "ViewSource:StoreWrapping":
+        this.storeWrapping(data.state);
+        break;
+      case "ViewSource:StoreSyntaxHighlighting":
+        this.storeSyntaxHighlighting(data.state);
         break;
     }
   },
@@ -624,4 +655,33 @@ ViewSourceBrowser.prototype = {
                           this.bundle.GetStringFromName("outOfRangeText"));
     this.promptAndGoToLine();
   },
+
+  /**
+   * Update the wrapping pref based on the child's current state.
+   * @param state
+   *        Whether wrapping is currently enabled in the child.
+   */
+  storeWrapping(state) {
+    Services.prefs.setBoolPref("view_source.wrap_long_lines", state);
+  },
+
+  /**
+   * Update the syntax highlighting pref based on the child's current state.
+   * @param state
+   *        Whether syntax highlighting is currently enabled in the child.
+   */
+  storeSyntaxHighlighting(state) {
+    Services.prefs.setBoolPref("view_source.syntax_highlight", state);
+  },
+
+};
+
+/**
+ * Helper to decide if a URI maps to view source content.
+ * @param uri
+ *        String containing the URI
+ */
+ViewSourceBrowser.isViewSource = function(uri) {
+  return uri.startsWith("view-source:") ||
+         (uri.startsWith("data:") && uri.includes("MathML"));
 };

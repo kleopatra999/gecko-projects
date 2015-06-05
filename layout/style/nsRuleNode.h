@@ -317,7 +317,7 @@ private:
   union {
     void* asVoid;
     nsRuleNode* asList;
-    PLDHashTable2* asHash;
+    PLDHashTable* asHash;
   } mChildren; // Accessed only through the methods below.
 
   enum {
@@ -343,18 +343,18 @@ private:
   nsRuleNode** ChildrenListPtr() {
     return &mChildren.asList;
   }
-  PLDHashTable2* ChildrenHash() {
-    return (PLDHashTable2*) (intptr_t(mChildren.asHash) & ~intptr_t(kTypeMask));
+  PLDHashTable* ChildrenHash() {
+    return (PLDHashTable*) (intptr_t(mChildren.asHash) & ~intptr_t(kTypeMask));
   }
   void SetChildrenList(nsRuleNode *aList) {
     NS_ASSERTION(!(intptr_t(aList) & kTypeMask),
                  "pointer not 2-byte aligned");
     mChildren.asList = aList;
   }
-  void SetChildrenHash(PLDHashTable2 *aHashtable) {
+  void SetChildrenHash(PLDHashTable *aHashtable) {
     NS_ASSERTION(!(intptr_t(aHashtable) & kTypeMask),
                  "pointer not 2-byte aligned");
-    mChildren.asHash = (PLDHashTable2*)(intptr_t(aHashtable) | kHashType);
+    mChildren.asHash = (PLDHashTable*)(intptr_t(aHashtable) | kHashType);
   }
   void ConvertChildrenToHash(int32_t aNumKids);
 
@@ -394,7 +394,7 @@ private:
   uint32_t mRefCnt;
 
 public:
-  // Overloaded new operator that allocates from a presShell arena.
+  // Infallible overloaded new operator that allocates from a presShell arena.
   void* operator new(size_t sz, nsPresContext* aContext) CPP_THROW_NEW;
   void Destroy() { DestroyInternal(nullptr); }
 
@@ -651,6 +651,7 @@ private:
   ~nsRuleNode();
 
 public:
+  // This is infallible; it will never return nullptr.
   static nsRuleNode* CreateRootNode(nsPresContext* aPresContext);
 
   static void EnsureBlockDisplay(uint8_t& display,

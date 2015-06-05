@@ -646,7 +646,8 @@ function BuildConditionSandbox(aURL) {
     sandbox.B2GDT = appInfo.name.toLowerCase() == "b2g" && !sandbox.B2G;
     sandbox.Android = xr.OS == "Android" && !sandbox.B2G;
     sandbox.cocoaWidget = xr.widgetToolkit == "cocoa";
-    sandbox.gtk2Widget = xr.widgetToolkit == "gtk2";
+    sandbox.gtkWidget = xr.widgetToolkit == "gtk2"
+                        || xr.widgetToolkit == "gtk3";
     sandbox.qtWidget = xr.widgetToolkit == "qt";
     sandbox.winWidget = xr.widgetToolkit == "windows";
 
@@ -744,7 +745,7 @@ function BuildConditionSandbox(aURL) {
     sandbox.Mulet = gB2GisMulet;
 
     try {
-        sandbox.asyncPanZoom = prefs.getBoolPref("layers.async-pan-zoom.enabled");
+        sandbox.asyncPanZoom = gContainingWindow.document.docShell.asyncPanZoomEnabled;
     } catch (e) {
         sandbox.asyncPanZoom = false;
     }
@@ -754,9 +755,6 @@ function BuildConditionSandbox(aURL) {
         dump("REFTEST INFO | " + JSON.stringify(CU.waiveXrays(sandbox)) + " \n");
         gDumpedConditionSandbox = true;
     }
-
-    // Graphics features
-    sandbox.supportsRepeatResampling = !sandbox.cocoaWidget;
     return sandbox;
 }
 
@@ -884,8 +882,9 @@ function ReadManifest(aURL, inherited_status)
         var refPrefSettings = defaultRefPrefSettings.concat();
         var fuzzy_max_delta = 2;
         var fuzzy_max_pixels = 1;
+        var chaosMode = false;
 
-        while (items[0].match(/^(fails|needs-focus|random|skip|asserts|slow|require-or|silentfail|pref|test-pref|ref-pref|fuzzy)/)) {
+        while (items[0].match(/^(fails|needs-focus|random|skip|asserts|slow|require-or|silentfail|pref|test-pref|ref-pref|fuzzy|chaos-mode)/)) {
             var item = items.shift();
             var stat;
             var cond;
@@ -964,6 +963,9 @@ function ReadManifest(aURL, inherited_status)
                 fuzzy_max_delta = Number(m[2]);
                 fuzzy_max_pixels = Number(m[3]);
               }
+            } else if (item == "chaos-mode") {
+                cond = false;
+                chaosMode = true;
             } else {
                 throw "Error in manifest file " + aURL.spec + " line " + lineNo + ": unexpected item " + item;
             }
@@ -1052,7 +1054,8 @@ function ReadManifest(aURL, inherited_status)
                           fuzzyMaxDelta: fuzzy_max_delta,
                           fuzzyMaxPixels: fuzzy_max_pixels,
                           url1: testURI,
-                          url2: null });
+                          url2: null,
+                          chaosMode: chaosMode });
         } else if (items[0] == TYPE_SCRIPT) {
             if (items.length != 2)
                 throw "Error in manifest file " + aURL.spec + " line " + lineNo + ": incorrect number of arguments to script";
@@ -1078,7 +1081,8 @@ function ReadManifest(aURL, inherited_status)
                           fuzzyMaxDelta: fuzzy_max_delta,
                           fuzzyMaxPixels: fuzzy_max_pixels,
                           url1: testURI,
-                          url2: null });
+                          url2: null,
+                          chaosMode: chaosMode });
         } else if (items[0] == TYPE_REFTEST_EQUAL || items[0] == TYPE_REFTEST_NOTEQUAL) {
             if (items.length != 3)
                 throw "Error in manifest file " + aURL.spec + " line " + lineNo + ": incorrect number of arguments to " + items[0];
@@ -1107,7 +1111,8 @@ function ReadManifest(aURL, inherited_status)
                           fuzzyMaxDelta: fuzzy_max_delta,
                           fuzzyMaxPixels: fuzzy_max_pixels,
                           url1: testURI,
-                          url2: refURI });
+                          url2: refURI,
+                          chaosMode: chaosMode });
         } else {
             throw "Error in manifest file " + aURL.spec + " line " + lineNo + ": unknown test type " + items[0];
         }
@@ -1241,6 +1246,9 @@ function StartCurrentTest()
     }
     else {
         gDumpLog("REFTEST TEST-START | " + gURLs[0].prettyPath + "\n");
+        if (gURLs[0].chaosMode) {
+            gWindowUtils.enterChaosMode();
+        }
         if (!gURLs[0].needsFocus) {
             Blur();
         }
@@ -1862,6 +1870,9 @@ function DoAssertionCheck(numAsserts)
         }
     }
 
+    if (gURLs[0].chaosMode) {
+        gWindowUtils.leaveChaosMode();
+    }
     gDumpLog("REFTEST TEST-END | " + gURLs[0].prettyPath + "\n");
 
     // And start the next test.
