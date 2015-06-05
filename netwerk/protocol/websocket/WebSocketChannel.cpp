@@ -426,11 +426,13 @@ public:
                  aChannel->mScriptCloseCode == CLOSE_GOING_AWAY,
                  "websocket closed while connecting w/o failing?");
 
-      sManager->RemoveFromQueue(aChannel);
+      bool wasQueued = (aChannel->mConnecting == CONNECTING_QUEUED);
+      if (wasQueued) {
+        sManager->RemoveFromQueue(aChannel);
+      }
 
-      bool wasNotQueued = (aChannel->mConnecting != CONNECTING_QUEUED);
       aChannel->mConnecting = NOT_CONNECTING;
-      if (wasNotQueued) {
+      if (!wasQueued) {
         sManager->ConnectNext(aChannel->mAddress);
       }
     }
