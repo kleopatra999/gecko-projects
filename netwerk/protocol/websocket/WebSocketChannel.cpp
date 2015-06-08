@@ -2319,8 +2319,6 @@ WebSocketChannel::StopSession(nsresult reason)
   if (!mCalledOnStop) {
     mCalledOnStop = 1;
 
-    nsWSAdmissionManager::OnStopSession(this, reason);
-
     nsRefPtr<CallOnStop> runnable = new CallOnStop(this, reason);
     mTargetThread->Dispatch(runnable, NS_DISPATCH_NORMAL);
   }
