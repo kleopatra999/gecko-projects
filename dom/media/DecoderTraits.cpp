@@ -75,6 +75,9 @@
 #endif
 #include "MediaFormatReader.h"
 
+#include "MP3Decoder.h"
+#include "MP3Demuxer.h"
+
 namespace mozilla
 {
 
@@ -188,8 +191,8 @@ static char const *const gWebMCodecs[7] = {
   nullptr
 };
 
-static bool
-IsWebMType(const nsACString& aType)
+/* static */ bool
+DecoderTraits::IsWebMType(const nsACString& aType)
 {
   if (!MediaDecoder::IsWebMEnabled()) {
     return false;
@@ -207,7 +210,7 @@ IsGStreamerSupportedType(const nsACString& aMimeType)
     return false;
 
 #ifdef MOZ_WEBM
-  if (IsWebMType(aMimeType) && !Preferences::GetBool("media.prefer-gstreamer", false))
+  if (DecoderTraits::IsWebMType(aMimeType) && !Preferences::GetBool("media.prefer-gstreamer", false))
     return false;
 #endif
   if (IsOggType(aMimeType) && !Preferences::GetBool("media.prefer-gstreamer", false))
@@ -358,6 +361,12 @@ IsMP4SupportedType(const nsACString& aType,
          MP4Decoder::CanHandleMediaType(aType, aCodecs, haveAAC, haveH264, haveMP3);
 }
 #endif
+static bool
+IsMP3SupportedType(const nsACString& aType,
+                   const nsAString& aCodecs = EmptyString())
+{
+  return aType.EqualsASCII("audio/mpeg") && MP3Decoder::IsEnabled();
+}
 
 #ifdef MOZ_APPLEMEDIA
 static const char * const gAppleMP3Types[] = {
@@ -444,6 +453,10 @@ DecoderTraits::CanHandleMediaType(const char* aMIMEType,
     return aHaveRequestedCodecs ? CANPLAY_YES : CANPLAY_MAYBE;
   }
 #endif
+  if (IsMP3SupportedType(nsDependentCString(aMIMEType),
+                                     aRequestedCodecs)) {
+    return aHaveRequestedCodecs ? CANPLAY_YES : CANPLAY_MAYBE;
+  }
 #ifdef MOZ_GSTREAMER
   if (GStreamerDecoder::CanHandleMediaType(nsDependentCString(aMIMEType),
                                            aHaveRequestedCodecs ? &aRequestedCodecs : nullptr)) {
@@ -538,6 +551,10 @@ InstantiateDecoder(const nsACString& aType, MediaDecoderOwner* aOwner)
     return decoder.forget();
   }
 #endif
+  if (IsMP3SupportedType(aType)) {
+    decoder = new MP3Decoder();
+    return decoder.forget();
+  }
 #ifdef MOZ_GSTREAMER
   if (IsGStreamerSupportedType(aType)) {
     decoder = new GStreamerDecoder();
@@ -607,7 +624,7 @@ InstantiateDecoder(const nsACString& aType, MediaDecoderOwner* aOwner)
   }
 #endif
 #ifdef MOZ_WEBM
-  if (IsWebMType(aType)) {
+  if (DecoderTraits::IsWebMType(aType)) {
     decoder = new WebMDecoder();
     return decoder.forget();
   }
@@ -666,6 +683,9 @@ MediaDecoderReader* DecoderTraits::CreateReader(const nsACString& aType, Abstrac
       static_cast<MediaDecoderReader*>(new MP4Reader(aDecoder));
   } else
 #endif
+  if (IsMP3SupportedType(aType)) {
+    decoderReader = new MediaFormatReader(aDecoder, new mp3::MP3Demuxer(aDecoder->GetResource()));
+  } else
 #ifdef MOZ_GSTREAMER
   if (IsGStreamerSupportedType(aType)) {
     decoderReader = new GStreamerReader(aDecoder);
@@ -760,6 +780,7 @@ bool DecoderTraits::IsSupportedInVideoDocument(const nsACString& aType)
 #ifdef MOZ_FMP4
     IsMP4SupportedType(aType) ||
 #endif
+    IsMP3SupportedType(aType) ||
 #ifdef MOZ_WMF
     IsWMFSupportedType(aType) ||
 #endif

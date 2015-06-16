@@ -2387,18 +2387,19 @@ nsRuleNode::WalkRuleTree(const nsStyleStructID aSID,
       return SetDefaultOnRoot(aSID, aContext);
   }
 
-  // We need to compute the data from the information that the rules specified.
-  const void* res;
-#define STYLE_STRUCT_TEST aSID
-#define STYLE_STRUCT(name, checkdata_cb)                                      \
-  res = Compute##name##Data(startStruct, &ruleData, aContext,                 \
-                            highestNode, detail, ruleData.mCanStoreInRuleTree);
+  typedef const void* (nsRuleNode::*ComputeFunc)(void*, const nsRuleData*,
+                                                 nsStyleContext*, nsRuleNode*,
+                                                 RuleDetail, const bool);
+  static const ComputeFunc sComputeFuncs[] = {
+#define STYLE_STRUCT(name, checkdata_cb) &nsRuleNode::Compute##name##Data,
 #include "nsStyleStructList.h"
 #undef STYLE_STRUCT
-#undef STYLE_STRUCT_TEST
+  };
 
-  // Now return the result.
-  return res;
+  // We need to compute the data from the information that the rules specified.
+  return (this->*sComputeFuncs[aSID])(startStruct, &ruleData, aContext,
+                                      highestNode, detail,
+                                      ruleData.mCanStoreInRuleTree);
 }
 
 const void*
@@ -5265,6 +5266,12 @@ nsRuleNode::ComputeDisplayData(void* aStartStruct,
               SETDSC_ENUMERATED | SETDSC_UNSET_INITIAL,
               parentDisplay->mDisplay,
               NS_STYLE_DISPLAY_INLINE, 0, 0, 0, 0);
+
+  // contain: none, enum, inherit, initial
+  SetDiscrete(*aRuleData->ValueForContain(), display->mContain, canStoreInRuleTree,
+              SETDSC_ENUMERATED | SETDSC_NONE | SETDSC_UNSET_INITIAL,
+              parentDisplay->mContain,
+              NS_STYLE_CONTAIN_NONE, 0, NS_STYLE_CONTAIN_NONE, 0, 0);
 
   // mix-blend-mode: enum, inherit, initial
   SetDiscrete(*aRuleData->ValueForMixBlendMode(), display->mMixBlendMode,

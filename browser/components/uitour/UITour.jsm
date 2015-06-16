@@ -12,6 +12,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
+Cu.import("resource://gre/modules/TelemetryController.jsm");
 
 Cu.importGlobalProperties(["URL"]);
 
@@ -70,8 +71,7 @@ const TARGET_SEARCHENGINE_PREFIX = "searchEngine-";
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let ConsoleAPI = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).ConsoleAPI;
   let consoleOptions = {
-    // toLowerCase is because the loglevel values use title case to be compatible with Log.jsm.
-    maxLogLevel: Services.prefs.getCharPref(PREF_LOG_LEVEL).toLowerCase(),
+    maxLogLevelPref: PREF_LOG_LEVEL,
     prefix: "UITour",
   };
   return new ConsoleAPI(consoleOptions);
@@ -1979,6 +1979,16 @@ const DAILY_DISCRETE_TEXT_FIELD = Metrics.Storage.FIELD_DAILY_DISCRETE_TEXT;
  */
 const UITourHealthReport = {
   recordTreatmentTag: function(tag, value) {
+  TelemetryController.submitExternalPing("uitour-tag",
+    {
+      version: 1,
+      tagName: tag,
+      tagValue: value,
+    },
+    {
+      addClientId: true,
+      addEnvironment: true,
+    });
 #ifdef MOZ_SERVICES_HEALTHREPORT
     Task.spawn(function*() {
       let reporter = Cc["@mozilla.org/datareporting/service;1"]

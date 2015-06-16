@@ -14,12 +14,14 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
 Cu.import("resource://gre/modules/TelemetryController.jsm", this);
 Cu.import("resource://gre/modules/TelemetryStorage.jsm", this);
+Cu.import("resource://gre/modules/TelemetrySend.jsm", this);
 Cu.import("resource://gre/modules/TelemetryArchive.jsm", this);
 Cu.import("resource://gre/modules/Task.jsm", this);
 Cu.import("resource://gre/modules/Promise.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm");
 
 const PING_FORMAT_VERSION = 4;
+const DELETION_PING_TYPE = "deletion";
 const TEST_PING_TYPE = "test-ping-type";
 
 const PLATFORM_VERSION = "1.9.2";
@@ -42,9 +44,9 @@ let gClientID = null;
 
 function sendPing(aSendClientId, aSendEnvironment) {
   if (gServerStarted) {
-    TelemetryController.setServer("http://localhost:" + gHttpServer.identity.primaryPort);
+    TelemetrySend.setServer("http://localhost:" + gHttpServer.identity.primaryPort);
   } else {
-    TelemetryController.setServer("http://doesnotexist");
+    TelemetrySend.setServer("http://doesnotexist");
   }
 
   let options = {
@@ -173,6 +175,25 @@ add_task(function* test_simplePing() {
   checkPingFormat(ping, TEST_PING_TYPE, false, false);
 });
 
+add_task(function* test_deletionPing() {
+  const isUnified = Preferences.get(PREF_UNIFIED, false);
+  if (!isUnified) {
+    // Skipping the test if unified telemetry is off, as no deletion ping will
+    // be generated.
+    return;
+  }
+
+  // Disable FHR upload: this should trigger a deletion ping.
+  Preferences.set(PREF_FHR_UPLOAD_ENABLED, false);
+
+  let request = yield gRequestIterator.next();
+  let ping = decodeRequestPayload(request);
+  checkPingFormat(ping, DELETION_PING_TYPE, true, false);
+
+  // Restore FHR Upload.
+  Preferences.set(PREF_FHR_UPLOAD_ENABLED, true);
+});
+
 add_task(function* test_pingHasClientId() {
   // Send a ping with a clientId.
   yield sendPing(true, false);
@@ -230,6 +251,14 @@ add_task(function* test_archivePings() {
   const uploadPref = isUnified ? PREF_FHR_UPLOAD_ENABLED : PREF_ENABLED;
   Preferences.set(uploadPref, false);
 
+  // If we're using unified telemetry, disabling ping upload will generate a "deletion"
+  // ping. Catch it.
+  if (isUnified) {
+    let request = yield gRequestIterator.next();
+    let ping = decodeRequestPayload(request);
+    checkPingFormat(ping, DELETION_PING_TYPE, true, false);
+  }
+
   // Register a new Ping Handler that asserts if a ping is received, then send a ping.
   registerPingHandler(() => Assert.ok(false, "Telemetry must not send pings if not allowed to."));
   let pingId = yield sendPing(true, true);
@@ -282,19 +311,18 @@ add_task(function* test_midnightPingSendFuzzing() {
   gRequestIterator = Iterator(new Request());
   yield TelemetryController.reset();
 
-  // A ping submitted shortly before midnight should not get sent yet.
-  now = new Date(2030, 5, 1, 23, 55, 0);
+  // A ping after midnight within the fuzzing delay should not get sent.
+  now = new Date(2030, 5, 2, 0, 40, 0);
   fakeNow(now);
   registerPingHandler((req, res) => {
     Assert.ok(false, "No ping should be received yet.");
   });
   yield sendPing(true, true);
-
   Assert.ok(!!pingSendTimerCallback);
   Assert.deepEqual(futureDate(now, pingSendTimeout), new Date(2030, 5, 2, 1, 0, 0));
 
-  // A ping after midnight within the fuzzing delay should also not get sent.
-  now = new Date(2030, 5, 2, 0, 40, 0);
+  // A ping just before the end of the fuzzing delay should not get sent.
+  now = new Date(2030, 5, 2, 0, 59, 59);
   fakeNow(now);
   pingSendTimeout = null;
   yield sendPing(true, true);
@@ -323,9 +351,33 @@ add_task(function* test_midnightPingSendFuzzing() {
   let ping = decodeRequestPayload(request);
   checkPingFormat(ping, TEST_PING_TYPE, true, true);
 
+  // Check that pings shortly before midnight are immediately sent.
+  now = fakeNow(2030, 5, 3, 23, 59, 0);
+  yield sendPing(true, true);
+  request = yield gRequestIterator.next();
+  ping = decodeRequestPayload(request);
+  checkPingFormat(ping, TEST_PING_TYPE, true, true);
+
   // Clean-up.
   fakeMidnightPingFuzzingDelay(0);
   fakePingSendTimer(() => {}, () => {});
+});
+
+add_task(function* test_changePingAfterSubmission() {
+  // Submit a ping with a custom payload.
+  let payload = { canary: "test" };
+  let pingPromise = TelemetryController.submitExternalPing(TEST_PING_TYPE, payload, options);
+
+  // Change the payload with a predefined value.
+  payload.canary = "changed";
+
+  // Wait for the ping to be archived.
+  const pingId = yield pingPromise;
+
+  // Make sure our changes didn't affect the submitted payload.
+  let archivedCopy = yield TelemetryArchive.promiseArchivedPingById(pingId);
+  Assert.equal(archivedCopy.payload.canary, "test",
+               "The payload must not be changed after being submitted.");
 });
 
 add_task(function* stopServer(){

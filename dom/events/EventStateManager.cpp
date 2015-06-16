@@ -3281,12 +3281,13 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
       }
       if (dispatchedToContentProcess) {
         dragSession->SetCanDrop(true);
-      }
-
-      // now set the drop effect in the initial dataTransfer. This ensures
-      // that we can get the desired drop effect in the drop event.
-      if (initialDataTransfer)
+      } else if (initialDataTransfer) {
+        // Now set the drop effect in the initial dataTransfer. This ensures
+        // that we can get the desired drop effect in the drop event. For events
+        // dispatched to content, the content process will take care of setting
+        // this.
         initialDataTransfer->SetDropEffectInt(dropEffect);
+      }
     }
     break;
 
@@ -3707,8 +3708,18 @@ EventStateManager::IsHandlingUserInput()
   }
 
   TimeDuration timeout = nsContentUtils::HandlingUserInputTimeout();
-  return timeout <= TimeDuration(0) ||
-         (TimeStamp::Now() - sHandlingInputStart) <= timeout;
+  TimeDuration elapsed = TimeStamp::Now() - sHandlingInputStart;
+  bool inTime = timeout <= TimeDuration(0) || elapsed <= timeout;
+
+  if (!inTime) {
+#ifdef DEBUG
+    printf("EventStateManager::IsHandlingUserInput() has timed out "
+           "(timeout: %f, elapsed: %f)\n",
+           timeout.ToMilliseconds(), elapsed.ToMilliseconds());
+#endif
+    return false;
+  }
+  return true;
 }
 
 static void

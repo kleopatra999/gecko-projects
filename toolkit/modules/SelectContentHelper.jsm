@@ -45,7 +45,7 @@ this.SelectContentHelper.prototype = {
     this.global.sendAsyncMessage("Forms:ShowDropDown", {
       rect: rect,
       options: this._buildOptionList(),
-      selectedIndex: this.element.selectedIndex,
+      selectedIndex: this.element.selectedIndex
     });
   },
 
@@ -107,6 +107,7 @@ function buildOptionListForChildren(node) {
       let info = {
         tagName: child.tagName,
         textContent: textContent,
+        disabled: child.disabled,
         // We need to do this for every option element as each one can have
         // an individual style set for direction
         textDirection: win.getComputedStyle(child).getPropertyValue("direction"),

@@ -173,6 +173,7 @@ class XPCShellRunner(MozbuildObject):
             'jsDebugger': jsDebugger,
             'jsDebuggerPort': jsDebuggerPort,
             'test_tags': test_tags,
+            'utility_path': self.bindir,
         }
 
         if test_path is not None:
@@ -469,10 +470,10 @@ class MachCommands(MachCommandBase):
         driver = self._spawn(BuildDriver)
         driver.install_tests(remove=False)
 
-        structured.commandline.formatter_option_defaults['verbose'] = True
         params['log'] = structured.commandline.setup_logging("XPCShellTests",
                                                              params,
-                                                             {"mach": sys.stdout})
+                                                             {"mach": sys.stdout},
+                                                             {"verbose": True})
 
         if conditions.is_android(self):
             xpcshell = self._spawn(AndroidXPCShellRunner)

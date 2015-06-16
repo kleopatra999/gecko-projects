@@ -213,14 +213,7 @@ nsJARChannel::nsJARChannel()
 
 nsJARChannel::~nsJARChannel()
 {
-    if (mLoadInfo) {
-      nsCOMPtr<nsIThread> mainThread;
-      NS_GetMainThread(getter_AddRefs(mainThread));
-
-      nsILoadInfo *forgetableLoadInfo;
-      mLoadInfo.forget(&forgetableLoadInfo);
-      NS_ProxyRelease(mainThread, forgetableLoadInfo, false);
-    }
+    NS_ReleaseOnMainThread(mLoadInfo);
 
     // release owning reference to the jar handler
     nsJARProtocolHandler *handler = gJarHandler;
@@ -695,6 +688,16 @@ nsJARChannel::OverrideSecurityInfo(nsISupports* aSecurityInfo)
   return NS_OK;
 }
 
+void
+nsJARChannel::OverrideURI(nsIURI* aRedirectedURI)
+{
+  MOZ_RELEASE_ASSERT(mLoadFlags & LOAD_REPLACE,
+                     "This can only happen if the LOAD_REPLACE flag is set");
+  MOZ_RELEASE_ASSERT(ShouldIntercept(),
+                     "This can only be called on channels that can be intercepted");
+  mAppURI = aRedirectedURI;
+}
+
 NS_IMETHODIMP
 nsJARChannel::GetSecurityInfo(nsISupports **aSecurityInfo)
 {
@@ -896,7 +899,8 @@ void nsJARChannel::ResetInterception()
 }
 
 void
-nsJARChannel::OverrideWithSynthesizedResponse(nsIInputStream* aSynthesizedInput)
+nsJARChannel::OverrideWithSynthesizedResponse(nsIInputStream* aSynthesizedInput,
+                                              const nsACString& aContentType)
 {
     // In our current implementation, the FetchEvent handler will copy the
     // response stream completely into the pipe backing the input stream so we
@@ -916,6 +920,8 @@ nsJARChannel::OverrideWithSynthesizedResponse(nsIInputStream* aSynthesizedInput)
       aSynthesizedInput->Close();
       return;
     }
+
+    SetContentType(aContentType);
 
     FinishAsyncOpen();
 
