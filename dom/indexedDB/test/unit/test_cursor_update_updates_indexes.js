@@ -32,6 +32,9 @@ function testSteps()
     event = yield undefined;
 
     let db = event.target.result;
+    db.onversionchange = function(event) {
+      event.target.close();
+    };
 
     ok(true, "2");
     let objectStore = info.hasOwnProperty("options") ?
@@ -85,7 +88,6 @@ function testSteps()
     ok(true, "7");
     ok(obj.data, event.target.result.data,
                   "Unique index was properly updated.");
-    db.close();
   }
 
   finishTest();

@@ -45,6 +45,9 @@ function testSteps()
     let event = yield undefined;
 
     let db = event.target.result;
+    db.onversionchange = function(event) {
+      event.target.close();
+    };
 
     let objectStore = db.createObjectStore(test.name,
                                            { keyPath: test.keyName,
@@ -77,7 +80,6 @@ function testSteps()
     event = yield undefined;
 
     ok(event.target.result === undefined, "Object was deleted");
-    db.close();
   }
 
   finishTest();

@@ -15,6 +15,9 @@ function testSteps()
   let event = yield undefined;
 
   let db = event.target.result;
+  db.onversionchange = function() {
+    db.close();
+  };
 
   // Check default state.
   is(db.version, 1, "Correct default version for a new database.");
@@ -24,7 +27,7 @@ function testSteps()
     42,
   ];
 
-  db.close();
+  
 
   for (let i = 0; i < versions.length; i++) {
     let version = versions[i];
@@ -35,13 +38,12 @@ function testSteps()
     let event = yield undefined;
 
     let db = event.target.result;
+    db.onversionchange = function(event) {
+      event.target.close();
+    };
 
     is(db.version, version, "Database version number updated correctly");
     is(event.target.transaction.mode, "versionchange", "Correct mode");
-
-    executeSoon(function() { testGenerator.next(); });
-    yield undefined;
-    db.close();
   }
 
   finishTest();
