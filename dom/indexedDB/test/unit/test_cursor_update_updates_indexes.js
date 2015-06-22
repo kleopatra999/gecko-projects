@@ -29,12 +29,10 @@ function testSteps()
     request = indexedDB.open(name, i + 1);
     request.onerror = errorHandler;
     request.onupgradeneeded = grabEventAndContinueHandler;
+    request.onsuccess = grabEventAndContinueHandler;
     event = yield undefined;
 
     let db = event.target.result;
-    db.onversionchange = function(event) {
-      event.target.close();
-    };
 
     ok(true, "2");
     let objectStore = info.hasOwnProperty("options") ?
@@ -88,6 +86,11 @@ function testSteps()
     ok(true, "7");
     ok(obj.data, event.target.result.data,
                   "Unique index was properly updated.");
+
+    // Wait for success
+    yield undefined;
+
+    db.close();
   }
 
   finishTest();

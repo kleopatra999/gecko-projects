@@ -218,6 +218,7 @@ nsIPrincipal *nsContentUtils::sNullSubjectPrincipal;
 nsIParserService *nsContentUtils::sParserService = nullptr;
 nsNameSpaceManager *nsContentUtils::sNameSpaceManager;
 nsIIOService *nsContentUtils::sIOService;
+nsIUUIDGenerator *nsContentUtils::sUUIDGenerator;
 nsIConsoleService *nsContentUtils::sConsoleService;
 nsDataHashtable<nsISupportsHashKey, EventNameMapping>* nsContentUtils::sAtomEventTable = nullptr;
 nsDataHashtable<nsStringHashKey, EventNameMapping>* nsContentUtils::sStringEventTable = nullptr;
@@ -255,6 +256,7 @@ bool nsContentUtils::sIsResourceTimingEnabled = false;
 bool nsContentUtils::sIsUserTimingLoggingEnabled = false;
 bool nsContentUtils::sIsExperimentalAutocompleteEnabled = false;
 bool nsContentUtils::sEncodeDecodeURLHash = false;
+bool nsContentUtils::sGettersDecodeURLHash = false;
 bool nsContentUtils::sPrivacyResistFingerprinting = false;
 
 uint32_t nsContentUtils::sHandlingInputTimeout = 1000;
@@ -537,6 +539,9 @@ nsContentUtils::Init()
   Preferences::AddBoolVarCache(&sEncodeDecodeURLHash,
                                "dom.url.encode_decode_hash", false);
 
+  Preferences::AddBoolVarCache(&sGettersDecodeURLHash,
+                               "dom.url.getters_decode_hash", false);
+
   Preferences::AddBoolVarCache(&sPrivacyResistFingerprinting,
                                "privacy.resistFingerprinting", false);
 
@@ -550,6 +555,13 @@ nsContentUtils::Init()
 #endif
 
   Element::InitCCCallbacks();
+
+  nsCOMPtr<nsIUUIDGenerator> uuidGenerator =
+    do_GetService("@mozilla.org/uuid-generator;1", &rv);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+  uuidGenerator.forget(&sUUIDGenerator);
 
   sInitialized = true;
 
@@ -1803,6 +1815,7 @@ nsContentUtils::Shutdown()
   NS_IF_RELEASE(sNullSubjectPrincipal);
   NS_IF_RELEASE(sParserService);
   NS_IF_RELEASE(sIOService);
+  NS_IF_RELEASE(sUUIDGenerator);
   NS_IF_RELEASE(sLineBreaker);
   NS_IF_RELEASE(sWordBreaker);
   NS_IF_RELEASE(sBidiKeyboard);
@@ -3992,9 +4005,8 @@ nsContentUtils::UnmarkGrayJSListenersInCCGenerationDocuments()
     return;
   }
 
-  PLDHashTable::Iterator iter(sEventListenerManagersHash);
-  while (iter.HasMoreEntries()) {
-    auto entry = static_cast<EventListenerManagerMapEntry*>(iter.NextEntry());
+  for (auto i = sEventListenerManagersHash->Iter(); !i.Done(); i.Next()) {
+    auto entry = static_cast<EventListenerManagerMapEntry*>(i.Get());
     nsINode* n = static_cast<nsINode*>(entry->mListenerManager->GetTarget());
     if (n && n->IsInDoc() &&
         nsCCUncollectableMarker::InGeneration(n->OwnerDoc()->GetMarkedCCGeneration())) {
@@ -6305,10 +6317,7 @@ nsContentUtils::FlushLayoutForTree(nsIDOMWindow* aWindow)
     // is O(N^2) in docshell tree depth.  However, the docshell tree is
     // usually pretty shallow.
 
-    nsCOMPtr<nsIDOMDocument> domDoc;
-    aWindow->GetDocument(getter_AddRefs(domDoc));
-    nsCOMPtr<nsIDocument> doc = do_QueryInterface(domDoc);
-    if (doc) {
+    if (nsCOMPtr<nsIDocument> doc = piWin->GetDoc()) {
         doc->FlushPendingNotifications(Flush_Layout);
     }
 
@@ -7151,6 +7160,19 @@ nsContentUtils::IsJavascriptMIMEType(const nsAString& aMIMEType)
   return false;
 }
 
+nsresult
+nsContentUtils::GenerateUUIDInPlace(nsID& aUUID)
+{
+  MOZ_ASSERT(sUUIDGenerator);
+
+  nsresult rv = sUUIDGenerator->GenerateUUIDInPlace(&aUUID);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  return NS_OK;
+}
+
 uint64_t
 nsContentUtils::GetInnerWindowID(nsIRequest* aRequest)
 {
@@ -7554,7 +7576,7 @@ nsContentUtils::GetViewToDispatchEvent(nsPresContext* presContext,
 }
 
 nsresult
-nsContentUtils::SendKeyEvent(nsCOMPtr<nsIWidget> aWidget,
+nsContentUtils::SendKeyEvent(nsIWidget* aWidget,
                              const nsAString& aType,
                              int32_t aKeyCode,
                              int32_t aCharCode,
@@ -7811,4 +7833,32 @@ nsContentUtils::GetWindowRoot(nsIDocument* aDoc)
     }
   }
   return nullptr;
+}
+
+/* static */
+nsContentPolicyType
+nsContentUtils::InternalContentPolicyTypeToExternal(nsContentPolicyType aType)
+{
+  switch (aType) {
+  case nsIContentPolicy::TYPE_INTERNAL_SCRIPT:
+  case nsIContentPolicy::TYPE_INTERNAL_WORKER:
+  case nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER:
+    return nsIContentPolicy::TYPE_SCRIPT;
+
+  case nsIContentPolicy::TYPE_INTERNAL_EMBED:
+  case nsIContentPolicy::TYPE_INTERNAL_OBJECT:
+    return nsIContentPolicy::TYPE_OBJECT;
+
+  case nsIContentPolicy::TYPE_INTERNAL_FRAME:
+  case nsIContentPolicy::TYPE_INTERNAL_IFRAME:
+    return nsIContentPolicy::TYPE_SUBDOCUMENT;
+
+  case nsIContentPolicy::TYPE_INTERNAL_AUDIO:
+  case nsIContentPolicy::TYPE_INTERNAL_VIDEO:
+  case nsIContentPolicy::TYPE_INTERNAL_TRACK:
+    return nsIContentPolicy::TYPE_MEDIA;
+
+  default:
+    return aType;
+  }
 }

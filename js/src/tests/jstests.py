@@ -9,10 +9,10 @@ from __future__ import print_function
 
 import os, sys, textwrap
 from os.path import abspath, dirname, isfile, realpath
+from contextlib import contextmanager
 from copy import copy
 from subprocess import list2cmdline, call
 
-from lib.results import NullTestOutput
 from lib.tests import TestCase, get_jitflags
 from lib.results import ResultsSink
 from lib.progressbar import ProgressBar
@@ -22,15 +22,6 @@ if sys.platform.startswith('linux') or sys.platform.startswith('darwin'):
 else:
     from lib.tasks_win import run_all_tests
 
-def run_tests(options, tests, results):
-    """Run the given tests, sending raw results to the given results
-    accumulator."""
-    try:
-        completed = run_all_tests(tests, results, options)
-    except KeyboardInterrupt:
-        completed = False
-
-    results.finish(completed)
 
 def get_cpu_count():
     """
@@ -61,6 +52,17 @@ def get_cpu_count():
         pass
 
     return 1
+
+
+@contextmanager
+def changedir(dirname):
+    pwd = os.getcwd()
+    os.chdir(dirname)
+    try:
+        yield
+    finally:
+        os.chdir(pwd)
+
 
 def parse_args():
     """
@@ -191,14 +193,14 @@ def parse_args():
         op.error("--valgrind, --debug, and --rr are mutually exclusive.")
 
     # Fill the debugger field, as needed.
-    prefix = options.debugger.split() if options.debug else []
+    debugger_prefix = options.debugger.split() if options.debug else []
     if options.valgrind:
-        prefix = ['valgrind'] + options.valgrind_args.split()
+        debugger_prefix = ['valgrind'] + options.valgrind_args.split()
         if os.uname()[0] == 'Darwin':
-            prefix.append('--dsymutil=yes')
+            debugger_prefix.append('--dsymutil=yes')
         options.show_output = True
     if options.rr:
-        prefix = ['rr', 'record']
+        debugger_prefix = ['rr', 'record']
 
     js_cmd_args = options.shell_args.split()
     if options.jorendb:
@@ -209,7 +211,8 @@ def parse_args():
             abspath(dirname(abspath(__file__))),
             '..', '..', 'examples', 'jorendb.js'))
         js_cmd_args.extend(['-d', '-f', debugger_path, '--'])
-    TestCase.set_js_cmd_prefix(options.js_shell, js_cmd_args, prefix)
+    prefix = TestCase.build_js_cmd_prefix(options.js_shell, js_cmd_args,
+                                          debugger_prefix)
 
     # If files with lists of tests to run were specified, add them to the
     # requested tests set.
@@ -248,7 +251,8 @@ def parse_args():
                              not ProgressBar.conservative_isatty() or
                              options.hide_progress)
 
-    return (options, requested_paths, excluded_paths)
+    return (options, prefix, requested_paths, excluded_paths)
+
 
 def load_tests(options, requested_paths, excluded_paths):
     """
@@ -318,18 +322,15 @@ def load_tests(options, requested_paths, excluded_paths):
     if not options.run_slow_tests:
         test_list = [_ for _ in test_list if not _.slow]
 
-    if not options.run_skipped:
-        skip_list = [_ for _ in test_list if not _.enable]
-        test_list = [_ for _ in test_list if _.enable]
+    return test_list
 
-    return skip_list, test_list
 
 def main():
-    options, requested_paths, excluded_paths = parse_args()
+    options, prefix, requested_paths, excluded_paths = parse_args()
     if options.js_shell is not None and not isfile(options.js_shell):
         print('Could not find shell at given path.')
         return 1
-    skip_list, test_list = load_tests(options, requested_paths, excluded_paths)
+    test_list = load_tests(options, requested_paths, excluded_paths)
 
     if not test_list:
         print('no tests selected')
@@ -348,31 +349,25 @@ def main():
         cmd = test_list[0].get_command(TestCase.js_cmd_prefix)
         if options.show_cmd:
             print(list2cmdline(cmd))
-        if test_dir not in ('', '.'):
-            os.chdir(test_dir)
-        call(cmd)
+        with changedir(test_dir):
+            call(cmd)
         return 0
 
-    curdir = os.getcwd()
-    if test_dir not in ('', '.'):
-        os.chdir(test_dir)
+    with changedir(test_dir):
+        # Force Pacific time zone to avoid failures in Date tests.
+        os.environ['TZ'] = 'PST8PDT'
+        # Force date strings to English.
+        os.environ['LC_TIME'] = 'en_US.UTF-8'
 
-    # Force Pacific time zone to avoid failures in Date tests.
-    os.environ['TZ'] = 'PST8PDT'
-    # Force date strings to English.
-    os.environ['LC_TIME'] = 'en_US.UTF-8'
+        results = ResultsSink(options, len(test_list))
+        try:
+            for out in run_all_tests(test_list, prefix, results, options):
+                results.push(out)
+            results.finish(True)
+        except KeyboardInterrupt:
+            results.finish(False)
 
-    results = None
-    try:
-        results = ResultsSink(options, len(skip_list) + len(test_list))
-        for t in skip_list:
-            results.push(NullTestOutput(t))
-        run_tests(options, test_list, results)
-    finally:
-        os.chdir(curdir)
-
-    if results is None or not results.all_passed():
-        return 1
+        return 0 if results.all_passed() else 1
 
     return 0
 

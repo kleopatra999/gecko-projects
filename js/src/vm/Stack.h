@@ -381,8 +381,6 @@ class InterpreterFrame
         JS_STATIC_ASSERT(sizeof(InterpreterFrame) % sizeof(Value) == 0);
     }
 
-    void writeBarrierPost();
-
     /*
      * The utilities are private since they are not able to assert that only
      * unaliased vars/formals are accessed. Normal code should prefer the
@@ -1899,6 +1897,13 @@ class NonBuiltinFrameIter : public FrameIter
                         FrameIter::DebuggerEvalOption debuggerEvalOption,
                         JSPrincipals* principals)
       : FrameIter(cx, contextOption, savedOption, debuggerEvalOption, principals)
+    {
+        settle();
+    }
+
+    NonBuiltinFrameIter(JSContext* cx, JSPrincipals* principals)
+        : FrameIter(cx, FrameIter::ALL_CONTEXTS, FrameIter::GO_THROUGH_SAVED,
+                    FrameIter::FOLLOW_DEBUGGER_EVAL_PREV_LINK, principals)
     {
         settle();
     }

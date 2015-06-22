@@ -224,10 +224,12 @@ using namespace mozilla;
 using namespace mozilla::dom;
 using mozilla::dom::workers::ServiceWorkerManager;
 
-// True means sUseErrorPages has been added to preferences var cache.
+// True means sUseErrorPages and sInterceptionEnabled has been added to
+// preferences var cache.
 static bool gAddedPreferencesVarCache = false;
 
 bool nsDocShell::sUseErrorPages = false;
+bool nsDocShell::sInterceptionEnabled = false;
 
 // Number of documents currently loading
 static int32_t gNumberOfDocumentsLoading = 0;
@@ -5741,6 +5743,9 @@ nsDocShell::Create()
     Preferences::AddBoolVarCache(&sUseErrorPages,
                                  "browser.xul.error_pages.enabled",
                                  mUseErrorPages);
+    Preferences::AddBoolVarCache(&sInterceptionEnabled,
+                                 "dom.serviceWorkers.interception.enabled",
+                                 false);
     gAddedPreferencesVarCache = true;
   }
 
@@ -10094,6 +10099,11 @@ nsDocShell::InternalLoad(nsIURI* aURI,
        */
       SetHistoryEntry(&mLSHE, aSHEntry);
 
+      // Set the doc's URI according to the new history entry's URI.
+      nsCOMPtr<nsIDocument> doc = GetDocument();
+      NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
+      doc->SetDocumentURI(aURI);
+
       /* This is a anchor traversal with in the same page.
        * call OnNewURI() so that, this traversal will be
        * recorded in session and global history.
@@ -10183,11 +10193,6 @@ nsDocShell::InternalLoad(nsIURI* aURI,
           mGlobalHistory->SetPageTitle(aURI, mTitle);
         }
       }
-
-      // Set the doc's URI according to the new history entry's URI.
-      nsCOMPtr<nsIDocument> doc = GetDocument();
-      NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
-      doc->SetDocumentURI(aURI);
 
       SetDocCurrentStateObj(mOSHE);
 
@@ -11716,8 +11721,8 @@ nsDocShell::AddState(JS::Handle<JS::Value> aData, const nsAString& aTitle,
   // document and it requires LOCATION_CHANGE_SAME_DOCUMENT flag. Otherwise,
   // FireOnLocationChange(...) breaks security UI.
   if (!equalURIs) {
-    SetCurrentURI(newURI, nullptr, true, LOCATION_CHANGE_SAME_DOCUMENT);
     document->SetDocumentURI(newURI);
+    SetCurrentURI(newURI, nullptr, true, LOCATION_CHANGE_SAME_DOCUMENT);
 
     AddURIVisit(newURI, oldURI, oldURI, 0);
 
@@ -14047,6 +14052,11 @@ nsDocShell::ShouldPrepareForIntercept(nsIURI* aURI, bool aIsNavigate,
                                       bool* aShouldIntercept)
 {
   *aShouldIntercept = false;
+  // Preffed off.
+  if (!sInterceptionEnabled) {
+    return NS_OK;
+  }
+
   if (mSandboxFlags) {
     // If we're sandboxed, don't intercept.
     return NS_OK;

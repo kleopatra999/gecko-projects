@@ -3959,7 +3959,7 @@ PrintProfilerEvents(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
-#if defined(JS_ARM_SIMULATOR)
+#if defined(JS_SIMULATOR_ARM)
 typedef Vector<char16_t, 0, SystemAllocPolicy> StackChars;
 Vector<StackChars, 0, SystemAllocPolicy> stacks;
 
@@ -4007,7 +4007,7 @@ SingleStepCallback(void* arg, jit::Simulator* sim, void* pc)
 static bool
 EnableSingleStepProfiling(JSContext* cx, unsigned argc, Value* vp)
 {
-#if defined(JS_ARM_SIMULATOR)
+#if defined(JS_SIMULATOR_ARM)
     CallArgs args = CallArgsFromVp(argc, vp);
 
     jit::Simulator* sim = cx->runtime()->simulator();
@@ -4024,7 +4024,7 @@ EnableSingleStepProfiling(JSContext* cx, unsigned argc, Value* vp)
 static bool
 DisableSingleStepProfiling(JSContext* cx, unsigned argc, Value* vp)
 {
-#if defined(JS_ARM_SIMULATOR)
+#if defined(JS_SIMULATOR_ARM)
     CallArgs args = CallArgsFromVp(argc, vp);
 
     jit::Simulator* sim = cx->runtime()->simulator();
@@ -4317,6 +4317,36 @@ ReflectTrackedOptimizations(JSContext* cx, unsigned argc, Value* vp)
     args.rval().set(jsonVal);
     return true;
 }
+
+#ifdef DEBUG
+static bool
+DumpStaticScopeChain(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    RootedObject callee(cx, &args.callee());
+
+    if (args.length() != 1) {
+        ReportUsageError(cx, callee, "Wrong number of arguments");
+        return false;
+    }
+
+    if (!args[0].isObject() || !args[0].toObject().is<JSFunction>()) {
+        ReportUsageError(cx, callee, "Argument must be an interpreted function");
+        return false;
+    }
+
+    RootedFunction fun(cx, &args[0].toObject().as<JSFunction>());
+    if (!fun->isInterpreted()) {
+        ReportUsageError(cx, callee, "Argument must be an interpreted function");
+        return false;
+    }
+
+    js::DumpStaticScopeChain(fun->getOrCreateScript(cx));
+
+    args.rval().setUndefined();
+    return true;
+}
+#endif
 
 namespace js {
 namespace shell {
@@ -4965,6 +4995,12 @@ static const JSFunctionSpecWithHelp fuzzing_unsafe_functions[] = {
 "  Returns an object describing the tracked optimizations of |fun|, if\n"
 "  any. If |fun| is not a scripted function or has not been compiled by\n"
 "  Ion, null is returned."),
+
+#ifdef DEBUG
+    JS_FN_HELP("dumpStaticScopeChain", DumpStaticScopeChain, 1, 0,
+"dumpStaticScopeChain(fun)",
+"  Prints the static scope chain of an interpreted function fun."),
+#endif
 
     JS_FS_HELP_END
 };
@@ -6046,14 +6082,14 @@ SetRuntimeOptions(JSRuntime* rt, const OptionParser& op)
         jit::Assembler::AsmPoolMaxOffset = poolMaxOffset;
 #endif
 
-#if defined(JS_ARM_SIMULATOR)
+#if defined(JS_SIMULATOR_ARM)
     if (op.getBoolOption("arm-sim-icache-checks"))
         jit::Simulator::ICacheCheckingEnabled = true;
 
     int32_t stopAt = op.getIntOption("arm-sim-stop-at");
     if (stopAt >= 0)
         jit::Simulator::StopSimAt = stopAt;
-#elif defined(JS_MIPS_SIMULATOR)
+#elif defined(JS_SIMULATOR_MIPS)
     if (op.getBoolOption("mips-sim-icache-checks"))
         jit::Simulator::ICacheCheckingEnabled = true;
 
@@ -6292,6 +6328,7 @@ main(int argc, char** argv, char** envp)
         || !op.addStringOption('\0', "ion-regalloc", "[mode]",
                                "Specify Ion register allocation:\n"
                                "  backtracking: Priority based backtracking register allocation (default)\n"
+                               "  testbed: Backtracking allocator with experimental features\n"
                                "  stupid: Simple block local register allocation")
         || !op.addBoolOption('\0', "ion-eager", "Always ion-compile methods (implies --baseline-eager)")
         || !op.addStringOption('\0', "ion-offthread-compile", "on/off",
@@ -6334,12 +6371,12 @@ main(int argc, char** argv, char** envp)
         || !op.addIntOption('\0', "asm-pool-max-offset", "OFFSET",
                             "The maximum pc relative OFFSET permitted in pool reference instructions.", 1024)
 #endif
-#if defined(JS_ARM_SIMULATOR)
+#if defined(JS_SIMULATOR_ARM)
         || !op.addBoolOption('\0', "arm-sim-icache-checks", "Enable icache flush checks in the ARM "
                              "simulator.")
         || !op.addIntOption('\0', "arm-sim-stop-at", "NUMBER", "Stop the ARM simulator after the given "
                             "NUMBER of instructions.", -1)
-#elif defined(JS_MIPS_SIMULATOR)
+#elif defined(JS_SIMULATOR_MIPS)
 	|| !op.addBoolOption('\0', "mips-sim-icache-checks", "Enable icache flush checks in the MIPS "
                              "simulator.")
         || !op.addIntOption('\0', "mips-sim-stop-at", "NUMBER", "Stop the MIPS simulator after the given "

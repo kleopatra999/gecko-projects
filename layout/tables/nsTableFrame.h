@@ -319,8 +319,7 @@ public:
   // border to the results of these functions.
   virtual nscoord GetMinISize(nsRenderingContext *aRenderingContext) override;
   virtual nscoord GetPrefISize(nsRenderingContext *aRenderingContext) override;
-  virtual IntrinsicISizeOffsetData
-    IntrinsicISizeOffsets(nsRenderingContext* aRenderingContext) override;
+  virtual IntrinsicISizeOffsetData IntrinsicISizeOffsets() override;
 
   virtual mozilla::LogicalSize
   ComputeSize(nsRenderingContext *aRenderingContext,
@@ -811,7 +810,8 @@ protected:
   void ExpandBCDamageArea(mozilla::TableArea& aRect) const;
 
   void SetColumnDimensions(nscoord aHeight, WritingMode aWM,
-                           const LogicalMargin& aBorderPadding);
+                           const LogicalMargin& aBorderPadding,
+                           nscoord aContainerWidth);
 
   int32_t CollectRows(nsIFrame*                   aFrame,
                       nsTArray<nsTableRowFrame*>& aCollection);
@@ -1010,12 +1010,10 @@ public:
   explicit nsTableIterator(nsFrameList& aSource);
   nsIFrame* First();
   nsIFrame* Next();
-  bool      IsLeftToRight();
   int32_t   Count();
 
 protected:
   void Init(nsIFrame* aFirstChild);
-  bool      mLeftToRight;
   nsIFrame* mFirstListChild;
   nsIFrame* mFirstChild;
   nsIFrame* mCurrentChild;

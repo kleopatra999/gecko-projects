@@ -112,6 +112,7 @@ enum {
     JS_TELEMETRY_GC_MARK_ROOTS_MS,
     JS_TELEMETRY_GC_MARK_GRAY_MS,
     JS_TELEMETRY_GC_SLICE_MS,
+    JS_TELEMETRY_GC_SLOW_PHASE,
     JS_TELEMETRY_GC_MMU_50,
     JS_TELEMETRY_GC_RESET,
     JS_TELEMETRY_GC_INCREMENTAL_DISABLED,
@@ -1395,6 +1396,9 @@ struct MOZ_STACK_CLASS JS_FRIEND_API(ErrorReport)
     // for some reason (probably out of memory).
     bool populateUncaughtExceptionReport(JSContext* cx, ...);
     bool populateUncaughtExceptionReportVA(JSContext* cx, va_list ap);
+
+    // Reports exceptions from add-on scopes to telementry.
+    void ReportAddonExceptionToTelementry(JSContext* cx);
 
     // We may have a provided JSErrorReport, so need a way to represent that.
     JSErrorReport* reportp;

@@ -42,6 +42,7 @@ function testSteps()
     let request = indexedDB.open(name, i+1);
     request.onerror = errorHandler;
     request.onupgradeneeded = grabEventAndContinueHandler;
+    request.onsuccess = grabEventAndContinueHandler;
     let event = yield undefined;
 
     let db = event.target.result;
@@ -80,6 +81,9 @@ function testSteps()
     event = yield undefined;
 
     ok(event.target.result === undefined, "Object was deleted");
+
+    // Wait for success
+    yield undefined;
   }
 
   finishTest();

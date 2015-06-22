@@ -104,7 +104,7 @@ GetBuildConfiguration(JSContext* cx, unsigned argc, jsval* vp)
     if (!JS_SetProperty(cx, info, "x64", value))
         return false;
 
-#ifdef JS_ARM_SIMULATOR
+#ifdef JS_SIMULATOR_ARM
     value = BooleanValue(true);
 #else
     value = BooleanValue(false);
@@ -2272,11 +2272,10 @@ EvalReturningScope(JSContext* cx, unsigned argc, jsval* vp)
     JS::CompileOptions options(cx);
     options.setFileAndLine(filename.get(), lineno);
     options.setNoScriptRval(true);
-    options.setHasPollutedScope(true);
 
     JS::SourceBufferHolder srcBuf(src, srclen, JS::SourceBufferHolder::NoOwnership);
     RootedScript script(cx);
-    if (!JS::Compile(cx, options, srcBuf, &script))
+    if (!JS::CompileForNonSyntacticScope(cx, options, srcBuf, &script))
         return false;
 
     if (global) {

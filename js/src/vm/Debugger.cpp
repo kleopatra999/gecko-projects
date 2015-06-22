@@ -1652,7 +1652,7 @@ Debugger::slowPathOnNewGlobalObject(JSContext* cx, Handle<GlobalObject*> global)
 
 /* static */ bool
 Debugger::slowPathOnLogAllocationSite(JSContext* cx, HandleObject obj, HandleSavedFrame frame,
-                                      int64_t when, GlobalObject::DebuggerVector& dbgs)
+                                      double when, GlobalObject::DebuggerVector& dbgs)
 {
     MOZ_ASSERT(!dbgs.empty());
     mozilla::DebugOnly<Debugger**> begin = dbgs.begin();
@@ -1700,7 +1700,7 @@ Debugger::isDebuggee(const JSCompartment* compartment) const
 }
 
 /* static */ Debugger::AllocationSite*
-Debugger::AllocationSite::create(JSContext* cx, HandleObject frame, int64_t when, HandleObject obj)
+Debugger::AllocationSite::create(JSContext* cx, HandleObject frame, double when, HandleObject obj)
 {
     assertSameCompartment(cx, frame);
 
@@ -1723,7 +1723,7 @@ Debugger::AllocationSite::create(JSContext* cx, HandleObject frame, int64_t when
 
 bool
 Debugger::appendAllocationSite(JSContext* cx, HandleObject obj, HandleSavedFrame frame,
-                               int64_t when)
+                               double when)
 {
     MOZ_ASSERT(trackingAllocationSites);
 
@@ -2486,7 +2486,7 @@ Debugger::trace(JSTracer* trc)
      * frames.)
      */
     for (FrameMap::Range r = frames.all(); !r.empty(); r.popFront()) {
-        RelocatablePtrNativeObject& frameobj = r.front().value();
+        HeapPtrNativeObject& frameobj = r.front().value();
         MOZ_ASSERT(MaybeForwarded(frameobj.get())->getPrivate());
         TraceEdge(trc, &frameobj, "live Debugger.Frame");
     }
@@ -6261,12 +6261,14 @@ EvaluateInEnv(JSContext* cx, Handle<Env*> env, HandleValue thisv, AbstractFrameP
      * boundaries, and we are putting a DebugScopeProxy or non-syntactic With on
      * the scope chain.
      */
-    Rooted<StaticEvalObject*> staticScope(cx, StaticEvalObject::create(cx, nullptr));
+    Rooted<ScopeObject*> enclosingStaticScope(cx);
+    if (!env->is<GlobalObject>())
+        enclosingStaticScope = StaticNonSyntacticScopeObjects::create(cx, nullptr);
+    Rooted<StaticEvalObject*> staticScope(cx, StaticEvalObject::create(cx, enclosingStaticScope));
     if (!staticScope)
         return false;
     CompileOptions options(cx);
-    options.setHasPollutedScope(true)
-           .setIsRunOnce(true)
+    options.setIsRunOnce(true)
            .setForEval(true)
            .setNoScriptRval(false)
            .setFileAndLine(filename, lineno)
@@ -6275,8 +6277,8 @@ EvaluateInEnv(JSContext* cx, Handle<Env*> env, HandleValue thisv, AbstractFrameP
            .maybeMakeStrictMode(frame ? frame.script()->strict() : false);
     RootedScript callerScript(cx, frame ? frame.script() : nullptr);
     SourceBufferHolder srcBuf(chars.start().get(), chars.length(), SourceBufferHolder::NoOwnership);
-    RootedScript script(cx, frontend::CompileScript(cx, &cx->tempLifoAlloc(), env, callerScript,
-                                                    staticScope, options, srcBuf,
+    RootedScript script(cx, frontend::CompileScript(cx, &cx->tempLifoAlloc(), env, staticScope,
+                                                    callerScript, options, srcBuf,
                                                     /* source = */ nullptr,
                                                     /* staticLevel = */ frame ? 1 : 0));
     if (!script)
@@ -6301,6 +6303,13 @@ DebuggerGenericEval(JSContext* cx, const char* fullMethodName, const Value& code
     /* Either we're specifying the frame, or a global. */
     MOZ_ASSERT_IF(iter, !scope);
     MOZ_ASSERT_IF(!iter, scope && scope->is<GlobalObject>());
+
+    if (iter && iter->script()->isDerivedClassConstructor()) {
+        MOZ_ASSERT(iter->isFunctionFrame() && iter->calleeTemplate()->isClassConstructor());
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_DISABLED_DERIVED_CLASS,
+                             "debugger eval");
+        return false;
+    }
 
     /* Check the first argument, the eval code string. */
     if (!code.isString()) {
@@ -6417,14 +6426,8 @@ DebuggerGenericEval(JSContext* cx, const char* fullMethodName, const Value& code
             return false;
 
         RootedObject dynamicScope(cx);
-        // We ignore the static scope here.  See comments about static
-        // scopes in EvaluateInEnv.
-        RootedObject unusedStaticScope(cx);
-        if (!CreateScopeObjectsForScopeChain(cx, scopeChain, env, &dynamicScope,
-                                             &unusedStaticScope))
-        {
+        if (!CreateScopeObjectsForScopeChain(cx, scopeChain, env, &dynamicScope))
             return false;
-        }
 
         env = dynamicScope;
     }
@@ -6937,17 +6940,17 @@ DebuggerObject_getOwnPropertyDescriptor(JSContext* cx, unsigned argc, Value* vp)
     return FromPropertyDescriptor(cx, desc, args.rval());
 }
 
-static bool
-DebuggerObject_getOwnPropertyNames(JSContext* cx, unsigned argc, Value* vp)
-{
-    THIS_DEBUGOBJECT_REFERENT(cx, argc, vp, "getOwnPropertyNames", args, obj);
 
+static bool
+getOwnPropertyKeys(JSContext* cx, unsigned argc, unsigned flags, Value* vp)
+{
+    THIS_DEBUGOBJECT_REFERENT(cx, argc, vp, "getOwnPropertyKeys", args, obj);
     AutoIdVector keys(cx);
     {
         Maybe<AutoCompartment> ac;
         ac.emplace(cx, obj);
         ErrorCopier ec(ac);
-        if (!GetPropertyKeys(cx, obj, JSITER_OWNONLY | JSITER_HIDDEN, &keys))
+        if (!GetPropertyKeys(cx, obj, flags, &keys))
             return false;
     }
 
@@ -6964,8 +6967,10 @@ DebuggerObject_getOwnPropertyNames(JSContext* cx, unsigned argc, Value* vp)
              vals[i].setString(str);
          } else if (JSID_IS_ATOM(id)) {
              vals[i].setString(JSID_TO_STRING(id));
+         } else if (JSID_IS_SYMBOL(id)) {
+             vals[i].setSymbol(JSID_TO_SYMBOL(id));
          } else {
-             MOZ_ASSERT_UNREACHABLE("GetPropertyKeys must return only string and int jsids");
+             MOZ_ASSERT_UNREACHABLE("GetPropertyKeys must return only string, int, and Symbol jsids");
          }
     }
 
@@ -6974,6 +6979,18 @@ DebuggerObject_getOwnPropertyNames(JSContext* cx, unsigned argc, Value* vp)
         return false;
     args.rval().setObject(*aobj);
     return true;
+}
+
+static bool
+DebuggerObject_getOwnPropertyNames(JSContext* cx, unsigned argc, Value* vp) {
+    return getOwnPropertyKeys(cx, argc, JSITER_OWNONLY | JSITER_HIDDEN, vp);
+}
+
+static bool
+DebuggerObject_getOwnPropertySymbols(JSContext* cx, unsigned argc, Value* vp) {
+    return getOwnPropertyKeys(cx, argc,
+                              JSITER_OWNONLY | JSITER_HIDDEN | JSITER_SYMBOLS | JSITER_SYMBOLSONLY,
+                              vp);
 }
 
 static bool
@@ -7408,6 +7425,7 @@ static const JSPropertySpec DebuggerObject_properties[] = {
 static const JSFunctionSpec DebuggerObject_methods[] = {
     JS_FN("getOwnPropertyDescriptor", DebuggerObject_getOwnPropertyDescriptor, 1, 0),
     JS_FN("getOwnPropertyNames", DebuggerObject_getOwnPropertyNames, 0, 0),
+    JS_FN("getOwnPropertySymbols", DebuggerObject_getOwnPropertySymbols, 0, 0),
     JS_FN("defineProperty", DebuggerObject_defineProperty, 2, 0),
     JS_FN("defineProperties", DebuggerObject_defineProperties, 1, 0),
     JS_FN("deleteProperty", DebuggerObject_deleteProperty, 1, 0),
@@ -8045,8 +8063,8 @@ GarbageCollectionEvent::Create(JSRuntime* rt, ::js::gcstats::Statistics& stats, 
         if (!data->collections.growBy(1))
             return nullptr;
 
-        data->collections.back().startTimestamp = range.front().start;
-        data->collections.back().endTimestamp = range.front().end;
+        data->collections.back().startTimestamp = range.front().startTimestamp;
+        data->collections.back().endTimestamp = range.front().endTimestamp;
     }
 
 
