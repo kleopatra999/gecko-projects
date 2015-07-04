@@ -3818,11 +3818,9 @@ XREMain::XRE_mainStartup(bool* aExitFlag)
   bool persistent;
   rv = mDirProvider.GetFile(XRE_UPDATE_ROOT_DIR, &persistent,
                             getter_AddRefs(updRoot));
-  // XRE_UPDATE_ROOT_DIR should not fail but if it does fallback to the
-  // application directory just to be safe.
-  if (NS_FAILED(rv)) {
+  // XRE_UPDATE_ROOT_DIR may fail. Fallback to appDir if failed
+  if (NS_FAILED(rv))
     updRoot = mDirProvider.GetAppDir();
-  }
 
   // If the MOZ_TEST_PROCESS_UPDATES environment variable already exists, then
   // we are being called from the callback application.
