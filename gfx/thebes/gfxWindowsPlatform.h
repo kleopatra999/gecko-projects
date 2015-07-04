@@ -118,7 +118,7 @@ public:
       CreateOffscreenSurface(const IntSize& size,
                              gfxContentType contentType) override;
 
-    virtual mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
+    virtual already_AddRefed<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont);
 
     enum RenderMode {
@@ -203,6 +203,8 @@ public:
                                            const uint8_t* aFontData,
                                            uint32_t aLength);
 
+    virtual bool CanUseHardwareVideoDecoding() override;
+
     /**
      * Check whether format is supported on a platform or not (if unclear, returns true)
      */
@@ -244,16 +246,18 @@ public:
 #endif
     ID3D11Device *GetD3D11Device();
     ID3D11Device *GetD3D11ContentDevice();
-    ID3D11Device *GetD3D11MediaDevice();
+    // Device to be used on the ImageBridge thread
+    ID3D11Device *GetD3D11ImageBridgeDevice();
 
     // Create a D3D11 device to be used for DXVA decoding.
-    mozilla::TemporaryRef<ID3D11Device> CreateD3D11DecoderDevice();
+    already_AddRefed<ID3D11Device> CreateD3D11DecoderDevice();
 
     mozilla::layers::ReadbackManagerD3D11* GetReadbackManager();
 
     static bool IsOptimus();
 
     bool IsWARP() { return mIsWARP; }
+    bool DoesD3D11TextureSharingWork() { return mDoesD3D11TextureSharingWork; }
 
     bool SupportsApzWheelInput() const override {
       return true;
@@ -276,6 +280,7 @@ private:
     void Init();
     void InitD3D11Devices();
     IDXGIAdapter1 *GetDXGIAdapter();
+    bool IsDeviceReset(HRESULT hr, DeviceResetReason* aReason);
 
     bool mUseDirectWrite;
     bool mUsingGDIFonts;
@@ -293,16 +298,15 @@ private:
     nsRefPtr<mozilla::layers::DeviceManagerD3D9> mDeviceManager;
     mozilla::RefPtr<ID3D11Device> mD3D11Device;
     mozilla::RefPtr<ID3D11Device> mD3D11ContentDevice;
-    mozilla::RefPtr<ID3D11Device> mD3D11MediaDevice;
+    mozilla::RefPtr<ID3D11Device> mD3D11ImageBridgeDevice;
     bool mD3D11DeviceInitialized;
     mozilla::RefPtr<mozilla::layers::ReadbackManagerD3D11> mD3D11ReadbackManager;
     bool mIsWARP;
-    bool mCanInitMediaDevice;
+    bool mHasDeviceReset;
+    bool mDoesD3D11TextureSharingWork;
+    DeviceResetReason mDeviceResetReason;
 
     virtual void GetPlatformCMSOutputProfile(void* &mem, size_t &size);
 };
-
-bool DoesD3D11TextureSharingWork(ID3D11Device *device);
-bool DoesD3D11DeviceWork(ID3D11Device *device);
 
 #endif /* GFX_WINDOWS_PLATFORM_H */

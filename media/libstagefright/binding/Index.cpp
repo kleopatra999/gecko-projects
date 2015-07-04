@@ -91,6 +91,13 @@ already_AddRefed<MediaRawData> SampleIterator::GetNext()
     return nullptr;
   }
 
+  int64_t length = std::numeric_limits<int64_t>::max();
+  mIndex->mSource->Length(&length);
+  if (s->mByteRange.mEnd > length) {
+    // We don't have this complete sample.
+    return nullptr;
+  }
+
   nsRefPtr<MediaRawData> sample = new MediaRawData();
   sample->mTimecode= s->mDecodeTime;
   sample->mTime = s->mCompositionRange.start;
@@ -237,6 +244,10 @@ Index::Index(const nsTArray<Indice>& aIndex,
   if (aIndex.IsEmpty()) {
     mMoofParser = new MoofParser(aSource, aTrackId, aIsAudio, aMonitor);
   } else {
+    if (!mIndex.SetCapacity(aIndex.Length(), fallible)) {
+      // OOM.
+      return;
+    }
     for (size_t i = 0; i < aIndex.Length(); i++) {
       const Indice& indice = aIndex[i];
       Sample sample;
@@ -245,7 +256,8 @@ Index::Index(const nsTArray<Indice>& aIndex,
       sample.mCompositionRange = Interval<Microseconds>(indice.start_composition,
                                                         indice.end_composition);
       sample.mSync = indice.sync;
-      mIndex.AppendElement(sample);
+      // FIXME: Make this infallible after bug 968520 is done.
+      MOZ_ALWAYS_TRUE(mIndex.AppendElement(sample, fallible));
     }
   }
 }
@@ -265,7 +277,7 @@ Index::UpdateMoofIndex(const nsTArray<MediaByteRange>& aByteRanges)
 Microseconds
 Index::GetEndCompositionIfBuffered(const nsTArray<MediaByteRange>& aByteRanges)
 {
-  nsTArray<Sample>* index;
+  FallibleTArray<Sample>* index;
   if (mMoofParser) {
     if (!mMoofParser->ReachedEnd() || mMoofParser->Moofs().IsEmpty()) {
       return 0;
@@ -298,7 +310,7 @@ Index::ConvertByteRangesToTimeRanges(
   RangeFinder rangeFinder(aByteRanges);
   nsTArray<Interval<Microseconds>> timeRanges;
 
-  nsTArray<nsTArray<Sample>*> indexes;
+  nsTArray<FallibleTArray<Sample>*> indexes;
   if (mMoofParser) {
     // We take the index out of the moof parser and move it into a local
     // variable so we don't get concurrency issues. It gets freed when we
@@ -321,7 +333,7 @@ Index::ConvertByteRangesToTimeRanges(
 
   bool hasSync = false;
   for (size_t i = 0; i < indexes.Length(); i++) {
-    nsTArray<Sample>* index = indexes[i];
+    FallibleTArray<Sample>* index = indexes[i];
     for (size_t j = 0; j < index->Length(); j++) {
       const Sample& sample = (*index)[j];
       if (!rangeFinder.Contains(sample.mByteRange)) {

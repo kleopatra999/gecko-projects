@@ -5,8 +5,6 @@ It does not contain any logic for saving or communication with the extension or 
 var PKT_SIGNUP_OVERLAY = function (options) 
 {
     var myself = this;
-    this.baseHost = "getpocket.com";
-
     this.inited = false;
     this.active = false;
     this.delayedStateSaved = false;
@@ -14,12 +12,12 @@ var PKT_SIGNUP_OVERLAY = function (options)
     this.variant = window.___PKT__SIGNUP_VARIANT;
     this.tagline = window.___PKT__SIGNUP_TAGLINE || '';
     this.preventCloseTimerCancel = false;
-    // TODO: populate this with actual translations
     this.translations = {};
     this.closeValid = true;
     this.mouseInside = false;
     this.autocloseTimer = null;
     this.variant = "";
+    this.inoverflowmenu = false;
     this.pockethost = "getpocket.com";
     this.fxasignedin = false;
     this.dictJSON = {};
@@ -59,85 +57,7 @@ var PKT_SIGNUP_OVERLAY = function (options)
     };
     this.getTranslations = function()
     {
-        var language = window.navigator.language.toLowerCase();
-        this.dictJSON = {};
-
-        var dictsuffix = 'en-US';
-
-        if (language.indexOf('en') == 0)
-        {
-            dictsuffix = 'en';
-        }
-        else if (language.indexOf('it') == 0)
-        {
-            dictsuffix = 'it';
-        }
-        else if (language.indexOf('fr-ca') == 0)
-        {
-            dictsuffix = 'fr';
-        }
-        else if (language.indexOf('fr') == 0)
-        {
-            dictsuffix = 'fr';
-        }
-        else if (language.indexOf('de') == 0)
-        {
-            dictsuffix = 'de';
-        }
-        else if (language.indexOf('es-es') == 0)
-        {
-            dictsuffix = 'es';
-        }
-        else if (language.indexOf('es-419') == 0)
-        {
-            dictsuffix = 'es_419';
-        }
-        else if (language.indexOf('es') == 0)
-        {
-            dictsuffix = 'es';
-        }
-        else if (language.indexOf('ja') == 0)
-        {
-            dictsuffix = 'ja';
-        }
-        else if (language.indexOf('nl') == 0)
-        {
-            dictsuffix = 'nl';
-        }
-        else if (language.indexOf('pt-pt') == 0)
-        {
-            dictsuffix = 'pt_PT';
-        }
-        else if (language.indexOf('pt') == 0)
-        {
-            dictsuffix = 'pt_BR';
-        }
-        else if (language.indexOf('ru') == 0)
-        {
-            dictsuffix = 'ru';
-        }
-        else if (language.indexOf('zh-tw') == 0)
-        {
-            dictsuffix = 'zh_TW';
-        }
-        else if (language.indexOf('zh') == 0)
-        {
-            dictsuffix = 'zh_CN';
-        }
-        else if (language.indexOf('ko') == 0)
-        {
-            dictsuffix = 'ko';
-        }
-        else if (language.indexOf('pl') == 0)
-        {
-            dictsuffix = 'pl';
-        }
-
-        // TODO: when we add all dictionaries, modify this, but for now hard code to English
-        dictsuffix = 'en';
-
-        this.dictJSON = Translations[dictsuffix];
-        
+        this.dictJSON = window.pocketStrings;
     };
 };
 
@@ -161,6 +81,16 @@ PKT_SIGNUP_OVERLAY.prototype = {
         {
             this.pockethost = host[1];
         }
+        var inoverflowmenu = window.location.href.match(/inoverflowmenu=([\w|\.]*)&?/);
+        if (inoverflowmenu && inoverflowmenu.length > 1)
+        {
+            this.inoverflowmenu = (inoverflowmenu[1] == 'true');
+        }
+        var locale = window.location.href.match(/locale=([\w|\.]*)&?/);
+        if (locale && locale.length > 1)
+        {
+           this.locale = locale[1].toLowerCase();
+        }
 
         if (this.active)
         {
@@ -172,10 +102,24 @@ PKT_SIGNUP_OVERLAY.prototype = {
         this.getTranslations();
         this.dictJSON.fxasignedin = this.fxasignedin ? 1 : 0;
         this.dictJSON.variant = (this.variant ? this.variant : 'undefined');
+        this.dictJSON.variant += this.fxasignedin ? '_fxa' : '_nonfxa';
         this.dictJSON.pockethost = this.pockethost;
+        this.dictJSON.showlearnmore = (this.variant.indexOf('_lm') > -1 || this.variant == 'storyboard' || this.variant == 'hero') ? 1 : 0;
+
+        // extra modifier class for collapsed state
+        if (this.inoverflowmenu)
+        {
+            $('body').addClass('pkt_ext_signup_overflow');
+        }
+
+        // extra modifier class for language
+        if (this.locale)
+        {
+            $('body').addClass('pkt_ext_signup_' + this.locale);
+        }
 
         // Create actual content
-        if (this.variant == 'storyboard')
+        if (this.variant == 'storyboard' || this.variant == 'storyboard_lm' || this.variant == 'storyboard_nlm')
         {
             $('body').append(Handlebars.templates.signupstoryboard_shell(this.dictJSON));
         }
@@ -183,6 +127,7 @@ PKT_SIGNUP_OVERLAY.prototype = {
         {
             $('body').append(Handlebars.templates.signup_shell(this.dictJSON));
         }
+
 
         // tell background we're ready
         thePKT_SIGNUP.sendMessage("show");
@@ -201,17 +146,18 @@ PKT_SIGNUP.prototype = {
         if (this.inited) {
             return;
         }
+        this.panelId = pktPanelMessaging.panelIdFromURL(window.location.href);
         this.overlay = new PKT_SIGNUP_OVERLAY();
 
         this.inited = true;
     },
 
     addMessageListener: function(messageId, callback) {
-        Messaging.addMessageListener(messageId, callback);
+        pktPanelMessaging.addMessageListener(this.panelId, messageId, callback);
     },
 
     sendMessage: function(messageId, payload, callback) {
-        Messaging.sendMessage(messageId, payload, callback);
+        pktPanelMessaging.sendMessage(this.panelId, messageId, payload, callback);
     },
 
     create: function() {
@@ -230,6 +176,10 @@ $(function()
         thePKT_SIGNUP.init();
     }
 
-    window.thePKT_SIGNUP.create();
+    // send an async message to get string data
+    thePKT_SIGNUP.sendMessage("initL10N", {}, function(resp) {
+        window.pocketStrings = resp.strings;
+        window.thePKT_SIGNUP.create();
+    });
 });
 

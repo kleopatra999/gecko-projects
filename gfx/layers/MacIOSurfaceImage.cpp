@@ -22,7 +22,7 @@ MacIOSurfaceImage::GetTextureClient(CompositableClient* aClient)
   return mTextureClient;
 }
 
-TemporaryRef<gfx::SourceSurface>
+already_AddRefed<gfx::SourceSurface>
 MacIOSurfaceImage::GetAsSourceSurface()
 {
   mSurface->Lock();
@@ -51,5 +51,5 @@ MacIOSurfaceImage::GetAsSourceSurface()
   dataSurface->Unmap();
   mSurface->Unlock();
 
-  return dataSurface;
+  return dataSurface.forget();
 }

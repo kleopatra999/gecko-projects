@@ -15,6 +15,8 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.Proxy;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.ByteBuffer;
@@ -52,6 +54,7 @@ import org.mozilla.gecko.util.NativeJSObject;
 import org.mozilla.gecko.util.ProxySelector;
 import org.mozilla.gecko.util.ThreadUtils;
 
+import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.PendingIntent;
@@ -97,6 +100,7 @@ import android.os.Message;
 import android.os.MessageQueue;
 import android.os.SystemClock;
 import android.os.Vibrator;
+import android.provider.Browser;
 import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
@@ -957,11 +961,24 @@ public class GeckoAppShell
         return getHandlersForIntent(intent);
     }
 
+    static List<ResolveInfo> queryIntentActivities(Intent intent) {
+        final PackageManager pm = getContext().getPackageManager();
+
+        // Exclude any non-exported activities: we can't open them even if we want to!
+        // Bug 1031569 has some details.
+        final ArrayList<ResolveInfo> list = new ArrayList<>();
+        for (ResolveInfo ri: pm.queryIntentActivities(intent, 0)) {
+            if (ri.activityInfo.exported) {
+                list.add(ri);
+            }
+        }
+
+        return list;
+    }
+
     static boolean hasHandlersForIntent(Intent intent) {
         try {
-            PackageManager pm = getContext().getPackageManager();
-            List<ResolveInfo> list = pm.queryIntentActivities(intent, 0);
-            return !list.isEmpty();
+            return !queryIntentActivities(intent).isEmpty();
         } catch (Exception ex) {
             Log.e(LOGTAG, "Exception in GeckoAppShell.hasHandlersForIntent");
             return false;
@@ -969,11 +986,12 @@ public class GeckoAppShell
     }
 
     static String[] getHandlersForIntent(Intent intent) {
+        final PackageManager pm = getContext().getPackageManager();
         try {
-            PackageManager pm = getContext().getPackageManager();
-            List<ResolveInfo> list = pm.queryIntentActivities(intent, 0);
+            final List<ResolveInfo> list = queryIntentActivities(intent);
+
             int numAttr = 4;
-            String[] ret = new String[list.size() * numAttr];
+            final String[] ret = new String[list.size() * numAttr];
             for (int i = 0; i < list.size(); i++) {
                 ResolveInfo resolveInfo = list.get(i);
                 ret[i * numAttr] = resolveInfo.loadLabel(pm).toString();
@@ -1094,6 +1112,10 @@ public class GeckoAppShell
             context.startActivity(intent);
             return true;
         } catch (ActivityNotFoundException e) {
+            Log.w(LOGTAG, "Activity not found.", e);
+            return false;
+        } catch (SecurityException e) {
+            Log.w(LOGTAG, "Forbidden to launch activity.", e);
             return false;
         }
     }
@@ -1170,6 +1192,29 @@ public class GeckoAppShell
                                    final String action,
                                    final String title) {
 
+        // The resultant chooser can return non-exported activities in 4.1 and earlier.
+        // https://code.google.com/p/android/issues/detail?id=29535
+        final Intent intent = getOpenURIIntentInner(context, targetURI, mimeType, action, title);
+
+        if (intent != null) {
+            // Setting category on file:// URIs breaks about:downloads (Bug 1176018)
+            if (!targetURI.startsWith("file:")) {
+                // Only handle applications which can accept arbitrary data from a browser.
+                intent.addCategory(Intent.CATEGORY_BROWSABLE);
+            }
+
+            // Some applications use this field to return to the same browser after processing the
+            // Intent. While there is some danger (e.g. denial of service), other major browsers already
+            // use it and so it's the norm.
+            intent.putExtra(Browser.EXTRA_APPLICATION_ID, AppConstants.ANDROID_PACKAGE_NAME);
+        }
+
+        return intent;
+    }
+
+    private static Intent getOpenURIIntentInner(final Context context,  final String targetURI,
+            final String mimeType, final String action, final String title) {
+
         if (action.equalsIgnoreCase(Intent.ACTION_SEND)) {
             Intent shareIntent = getShareIntent(context, targetURI, mimeType, title);
             return Intent.createChooser(shareIntent,
@@ -1188,6 +1233,21 @@ public class GeckoAppShell
         }
 
         final String scheme = uri.getScheme();
+        if ("intent".equals(scheme)) {
+            final Intent intent;
+            try {
+                intent = Intent.parseUri(targetURI, Intent.URI_INTENT_SCHEME);
+            } catch (final URISyntaxException e) {
+                Log.e(LOGTAG, "Unable to parse URI - " + e);
+                return null;
+            }
+
+            // Prevent site from explicitly opening our internal activities, which can leak data.
+            intent.setComponent(null);
+            nullIntentSelector(intent);
+
+            return intent;
+        }
 
         // Compute our most likely intent, then check to see if there are any
         // custom handlers that would apply.
@@ -1261,6 +1321,16 @@ public class GeckoAppShell
         intent.setData(pruned);
 
         return intent;
+    }
+
+    // We create a separate method to better encapsulate the @TargetApi use.
+    @TargetApi(15)
+    private static void nullIntentSelector(final Intent intent) {
+        if (!Versions.feature15Plus) {
+            return;
+        }
+
+        intent.setSelector(null);
     }
 
     /**
@@ -1742,7 +1812,7 @@ public class GeckoAppShell
                 String[] split = output.split("\\s+");
                 if (split.length <= pidColumn || split.length <= nameColumn)
                     continue;
-                Integer pid = new Integer(split[pidColumn]);
+                final Integer pid = Integer.valueOf(split[pidColumn]);
                 String name = pidNameMap.get(pid);
                 if (name == null) {
                     name = getAppNameByPID(pid.intValue());
@@ -2392,17 +2462,6 @@ public class GeckoAppShell
                 GeckoNetworkManager.getInstance().disableNotifications();
             }
         });
-    }
-
-    /**
-     * Decodes a byte array from Base64 format.
-     * No blanks or line breaks are allowed within the Base64 encoded input data.
-     * @param s     A string containing the Base64 encoded data.
-     * @return      An array containing the decoded data bytes.
-     * @throws      IllegalArgumentException If the input is not valid Base64 encoded data.
-     */
-    public static byte[] decodeBase64(String s, int flags) {
-        return Base64.decode(s.getBytes(), flags);
     }
 
     @WrapElementForJNI(stubName = "GetScreenOrientationWrapper")

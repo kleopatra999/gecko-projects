@@ -22,7 +22,7 @@
 #include "mozilla/DebugOnly.h"          // for DebugOnly
 #include "mozilla/EventForwards.h"      // for nsPaintEvent
 #include "mozilla/Maybe.h"              // for Maybe
-#include "mozilla/RefPtr.h"             // for TemporaryRef
+#include "mozilla/RefPtr.h"             // for already_AddRefed
 #include "mozilla/StyleAnimationValue.h" // for StyleAnimationValue, etc
 #include "mozilla/TimeStamp.h"          // for TimeStamp, TimeDuration
 #include "mozilla/gfx/BaseMargin.h"     // for BaseMargin
@@ -39,14 +39,14 @@
 #include "nsISupportsImpl.h"            // for Layer::Release, etc
 #include "nsRect.h"                     // for mozilla::gfx::IntRect
 #include "nsRegion.h"                   // for nsIntRegion
-#include "nsSize.h"                     // for nsIntSize
 #include "nsString.h"                   // for nsCString
 #include "nsTArray.h"                   // for nsTArray
 #include "nsTArrayForwardDeclare.h"     // for InfallibleTArray
 #include "nscore.h"                     // for nsACString, nsAString
-#include "prlog.h"                      // for PRLogModuleInfo
+#include "mozilla/Logging.h"                      // for PRLogModuleInfo
 #include "nsIWidget.h"                  // For plugin window configuration information structs
 #include "gfxVR.h"
+#include "ImageContainer.h"
 
 class gfxContext;
 
@@ -82,7 +82,6 @@ class PaintedLayer;
 class ContainerLayer;
 class ImageLayer;
 class ColorLayer;
-class ImageContainer;
 class CanvasLayer;
 class ReadbackLayer;
 class ReadbackProcessor;
@@ -93,6 +92,8 @@ class ShadowLayerForwarder;
 class LayerManagerComposite;
 class SpecificLayerAttributes;
 class Compositor;
+class FrameUniformityData;
+class PersistentBufferProvider;
 
 namespace layerscope {
 class LayersPacket;
@@ -435,19 +436,12 @@ public:
    * Can be called anytime, from any thread.
    *
    * Creates an Image container which forwards its images to the compositor within
-   * layer transactions on the main thread.
+   * layer transactions on the main thread or asynchronously using the ImageBridge IPDL protocol.
+   * In the case of asynchronous, If the protocol is not available, the returned ImageContainer
+   * will forward images within layer transactions.
    */
-  static already_AddRefed<ImageContainer> CreateImageContainer();
-
-  /**
-   * Can be called anytime, from any thread.
-   *
-   * Tries to create an Image container which forwards its images to the compositor
-   * asynchronously using the ImageBridge IPDL protocol. If the protocol is not
-   * available, the returned ImageContainer will forward images within layer
-   * transactions, just like if it was created with CreateImageContainer().
-   */
-  static already_AddRefed<ImageContainer> CreateAsynchronousImageContainer();
+  static already_AddRefed<ImageContainer> CreateImageContainer(ImageContainer::Mode flag
+                                                                = ImageContainer::SYNCHRONOUS);
 
   /**
    * Type of layer manager his is. This is to be used sparsely in order to
@@ -467,7 +461,7 @@ public:
    * Creates a DrawTarget which is optimized for inter-operating with this
    * layer manager.
    */
-  virtual TemporaryRef<DrawTarget>
+  virtual already_AddRefed<DrawTarget>
     CreateOptimalDrawTarget(const IntSize &aSize,
                             SurfaceFormat imageFormat);
 
@@ -477,16 +471,24 @@ public:
    * this surface is optimised for drawing alpha only and we assume that
    * drawing the mask is fairly simple.
    */
-  virtual TemporaryRef<DrawTarget>
+  virtual already_AddRefed<DrawTarget>
     CreateOptimalMaskDrawTarget(const IntSize &aSize);
 
   /**
    * Creates a DrawTarget for use with canvas which is optimized for
    * inter-operating with this layermanager.
    */
-  virtual TemporaryRef<mozilla::gfx::DrawTarget>
+  virtual already_AddRefed<mozilla::gfx::DrawTarget>
     CreateDrawTarget(const mozilla::gfx::IntSize &aSize,
                      mozilla::gfx::SurfaceFormat aFormat);
+
+  /**
+   * Creates a PersistentBufferProvider for use with canvas which is optimized for
+   * inter-operating with this layermanager.
+   */
+  virtual already_AddRefed<PersistentBufferProvider>
+    CreatePersistentBufferProvider(const mozilla::gfx::IntSize &aSize,
+                                   mozilla::gfx::SurfaceFormat aFormat);
 
   virtual bool CanUseCanvasLayerForSize(const gfx::IntSize &aSize) { return true; }
 
@@ -644,6 +646,7 @@ public:
   virtual bool IsCompositingCheap() { return true; }
 
   bool IsInTransaction() const { return mInTransaction; }
+  virtual void GetFrameUniformity(FrameUniformityData* aOutData) { }
   virtual bool RequestOverfill(mozilla::dom::OverfillCallback* aCallback) { return true; }
   virtual void RunOverfillCallback(const uint32_t aOverfill) { }
 
@@ -667,6 +670,10 @@ public:
 
   const TimeStamp& GetAnimationReadyTime() const {
     return mAnimationReadyTime;
+  }
+
+  virtual bool AsyncPanZoomEnabled() const {
+    return false;
   }
 
 protected:
@@ -789,7 +796,15 @@ public:
      * Disable subpixel AA for this layer. This is used if the display isn't suited
      * for subpixel AA like hidpi or rotated content.
      */
-    CONTENT_DISABLE_SUBPIXEL_AA = 0x20
+    CONTENT_DISABLE_SUBPIXEL_AA = 0x20,
+
+    /**
+     * If this is set then the layer contains content that may look objectionable
+     * if not handled as an active layer (such as text with an animated transform).
+     * This is for internal layout/FrameLayerBuilder usage only until flattening
+     * code is obsoleted. See bug 633097
+     */
+    CONTENT_DISABLE_FLATTENING = 0x40
   };
   /**
    * CONSTRUCTION PHASE ONLY
@@ -1045,6 +1060,18 @@ public:
 
   /**
    * CONSTRUCTION PHASE ONLY
+   * Add a FrameMetrics-associated mask layer.
+   */
+  void SetAncestorMaskLayers(const nsTArray<nsRefPtr<Layer>>& aLayers) {
+    if (aLayers != mAncestorMaskLayers) {
+      MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) AncestorMaskLayers", this));
+      mAncestorMaskLayers = aLayers;
+      Mutated();
+    }
+  }
+
+  /**
+   * CONSTRUCTION PHASE ONLY
    * Tell this layer what its transform should be. The transformation
    * is applied when compositing the layer into its parent container.
    */
@@ -1256,6 +1283,25 @@ public:
   bool IsScrollbarContainer() { return mIsScrollbarContainer; }
   Layer* GetMaskLayer() const { return mMaskLayer; }
 
+  // Ancestor mask layers are associated with FrameMetrics, but for simplicity
+  // in maintaining the layer tree structure we attach them to the layer.
+  size_t GetAncestorMaskLayerCount() const {
+    return mAncestorMaskLayers.Length();
+  }
+  Layer* GetAncestorMaskLayerAt(size_t aIndex) const {
+    return mAncestorMaskLayers.ElementAt(aIndex);
+  }
+
+  bool HasMaskLayers() const {
+    return GetMaskLayer() || mAncestorMaskLayers.Length() > 0;
+  }
+
+  /*
+   * Get the combined clip rect of the Layer clip and all clips on FrameMetrics.
+   * This is intended for use in Layout. The compositor needs to apply async
+   * transforms to find the combined clip.
+   */
+  Maybe<ParentLayerIntRect> GetCombinedClipRect() const;
 
   /**
    * Retrieve the root level visible region for |this| taking into account
@@ -1468,9 +1514,11 @@ public:
   virtual void ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransformToSurface) = 0;
 
   /**
-   * computes the effective transform for a mask layer, if this layer has one
+   * Computes the effective transform for mask layers, if this layer has any.
    */
-  void ComputeEffectiveTransformForMaskLayer(const gfx::Matrix4x4& aTransformToSurface);
+  void ComputeEffectiveTransformForMaskLayers(const gfx::Matrix4x4& aTransformToSurface);
+  static void ComputeEffectiveTransformForMaskLayer(Layer* aMaskLayer,
+                                                    const gfx::Matrix4x4& aTransformToSurface);
 
   /**
    * Calculate the scissor rect required when rendering this layer.
@@ -1674,6 +1722,7 @@ protected:
   Layer* mPrevSibling;
   void* mImplData;
   nsRefPtr<Layer> mMaskLayer;
+  nsTArray<nsRefPtr<Layer>> mAncestorMaskLayers;
   gfx::UserData mUserData;
   gfx::IntRect mLayerBounds;
   nsIntRegion mVisibleRegion;
@@ -1785,7 +1834,7 @@ public:
                    "Residual translation out of range");
       mValidRegion.SetEmpty();
     }
-    ComputeEffectiveTransformForMaskLayer(aTransformToSurface);
+    ComputeEffectiveTransformForMaskLayers(aTransformToSurface);
   }
 
   LayerManager::PaintedLayerCreationHint GetCreationHint() const { return mCreationHint; }
@@ -2096,7 +2145,7 @@ public:
   {
     gfx::Matrix4x4 idealTransform = GetLocalTransform() * aTransformToSurface;
     mEffectiveTransform = SnapTransformTranslation(idealTransform, nullptr);
-    ComputeEffectiveTransformForMaskLayer(aTransformToSurface);
+    ComputeEffectiveTransformForMaskLayers(aTransformToSurface);
   }
 
 protected:
@@ -2127,7 +2176,7 @@ class CanvasLayer : public Layer {
 public:
   struct Data {
     Data()
-      : mDrawTarget(nullptr)
+      : mBufferProvider(nullptr)
       , mGLContext(nullptr)
       , mFrontbufferGLTex(0)
       , mSize(0,0)
@@ -2136,14 +2185,14 @@ public:
     { }
 
     // One of these two must be specified for Canvas2D, but never both
-    mozilla::gfx::DrawTarget* mDrawTarget; // a DrawTarget for the canvas contents
+    PersistentBufferProvider* mBufferProvider; // A BufferProvider for the Canvas contents
     mozilla::gl::GLContext* mGLContext; // or this, for GL.
 
     // Frontbuffer override
     uint32_t mFrontbufferGLTex;
 
     // The size of the canvas content
-    nsIntSize mSize;
+    gfx::IntSize mSize;
 
     // Whether the canvas drawingbuffer has an alpha channel.
     bool mHasAlpha;
@@ -2248,7 +2297,7 @@ public:
         SnapTransform(GetLocalTransform(), gfxRect(0, 0, mBounds.width, mBounds.height),
                       nullptr)*
         SnapTransformTranslation(aTransformToSurface, nullptr);
-    ComputeEffectiveTransformForMaskLayer(aTransformToSurface);
+    ComputeEffectiveTransformForMaskLayers(aTransformToSurface);
   }
 
 protected:

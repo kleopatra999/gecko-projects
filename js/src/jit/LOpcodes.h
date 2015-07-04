@@ -76,8 +76,7 @@
     _(GetDynamicName)               \
     _(FilterArgumentsOrEvalS)       \
     _(FilterArgumentsOrEvalV)       \
-    _(CallDirectEvalS)              \
-    _(CallDirectEvalV)              \
+    _(CallDirectEval)               \
     _(StackArgT)                    \
     _(StackArgV)                    \
     _(CreateThis)                   \
@@ -191,6 +190,7 @@
     _(Lambda)                       \
     _(LambdaArrow)                  \
     _(LambdaForSingleton)           \
+    _(KeepAliveObject)              \
     _(Slots)                        \
     _(Elements)                     \
     _(ConvertElementsToDoubles)     \
@@ -217,6 +217,7 @@
     _(UnboxedArrayLength)           \
     _(UnboxedArrayInitializedLength) \
     _(IncrementUnboxedArrayInitializedLength) \
+    _(SetUnboxedArrayInitializedLength) \
     _(BoundsCheck)                  \
     _(BoundsCheckRange)             \
     _(BoundsCheckLower)             \
@@ -237,6 +238,7 @@
     _(ArrayPushV)                   \
     _(ArrayPushT)                   \
     _(ArrayConcat)                  \
+    _(ArraySlice)                   \
     _(ArrayJoin)                    \
     _(StoreElementHoleV)            \
     _(StoreElementHoleT)            \
@@ -244,6 +246,7 @@
     _(LoadTypedArrayElementStatic)  \
     _(StoreTypedArrayElementHole)   \
     _(StoreTypedArrayElementStatic) \
+    _(AtomicIsLockFree)             \
     _(CompareExchangeTypedArrayElement) \
     _(AtomicTypedArrayElementBinop) \
     _(AtomicTypedArrayElementBinopForEffect) \
@@ -347,8 +350,9 @@
     _(AssertResultT)                \
     _(LexicalCheck)                 \
     _(ThrowUninitializedLexical)    \
-    _(NurseryObject)                \
-    _(Debugger)
+    _(Debugger)                     \
+    _(NewTarget)                    \
+    _(ArrowNewTarget)
 
 #if defined(JS_CODEGEN_X86)
 # include "jit/x86/LOpcodes-x86.h"
@@ -356,6 +360,8 @@
 # include "jit/x64/LOpcodes-x64.h"
 #elif defined(JS_CODEGEN_ARM)
 # include "jit/arm/LOpcodes-arm.h"
+#elif defined(JS_CODEGEN_ARM64)
+# include "jit/arm64/LOpcodes-arm64.h"
 #elif defined(JS_CODEGEN_MIPS)
 # include "jit/mips/LOpcodes-mips.h"
 #elif defined(JS_CODEGEN_NONE)

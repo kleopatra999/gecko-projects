@@ -52,7 +52,7 @@
 #endif
 
 #ifdef MOZ_LOGGING
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #endif
 
 #ifdef DEBUG_ANDROID_EVENTS
@@ -63,9 +63,7 @@
 
 using namespace mozilla;
 
-#ifdef PR_LOGGING
 PRLogModuleInfo *gWidgetLog = nullptr;
-#endif
 
 nsIGeolocationUpdate *gLocationCallback = nullptr;
 nsAutoPtr<mozilla::AndroidGeckoEvent> gLastSizeChange;
@@ -177,10 +175,8 @@ static const char* kObservedPrefs[] = {
 nsresult
 nsAppShell::Init()
 {
-#ifdef PR_LOGGING
     if (!gWidgetLog)
         gWidgetLog = PR_NewLogModule("Widget");
-#endif
 
     nsresult rv = nsBaseAppShell::Init();
     nsCOMPtr<nsIObserverService> obsServ =

@@ -149,9 +149,10 @@ class PCUuidGenerator : public mozilla::JsepUuidGenerator {
 class IceConfiguration
 {
 public:
-  bool addStunServer(const std::string& addr, uint16_t port)
+  bool addStunServer(const std::string& addr, uint16_t port,
+                     const char* transport)
   {
-    NrIceStunServer* server(NrIceStunServer::Create(addr, port));
+    NrIceStunServer* server(NrIceStunServer::Create(addr, port, transport));
     if (!server) {
       return false;
     }
@@ -286,6 +287,11 @@ public:
 
   // Configure the ability to use localhost.
   void SetAllowIceLoopback(bool val) { mAllowIceLoopback = val; }
+  bool GetAllowIceLoopback() const { return mAllowIceLoopback; }
+
+  // Configure the ability to use IPV6 link-local addresses.
+  void SetAllowIceLinkLocal(bool val) { mAllowIceLinkLocal = val; }
+  bool GetAllowIceLinkLocal() const { return mAllowIceLinkLocal; }
 
   // Handle system to allow weak references to be passed through C code
   virtual const std::string& GetHandle();
@@ -298,9 +304,10 @@ public:
                                 NrIceCtx::ConnectionState state);
   void IceGatheringStateChange(NrIceCtx* ctx,
                                NrIceCtx::GatheringState state);
-  // TODO(bug 1096795): Need a |component| id here for rtcp.
   void EndOfLocalCandidates(const std::string& defaultAddr,
                             uint16_t defaultPort,
+                            const std::string& defaultRtcpAddr,
+                            uint16_t defaultRtcpPort,
                             uint16_t level);
   void IceStreamReady(NrIceMediaStream *aStream);
 
@@ -571,10 +578,11 @@ public:
   const std::vector<std::string> &GetSdpParseErrors();
 
   // Sets the RTC Signaling State
-  void SetSignalingState_m(mozilla::dom::PCImplSignalingState aSignalingState);
+  void SetSignalingState_m(mozilla::dom::PCImplSignalingState aSignalingState,
+                           bool rollback = false);
 
   // Updates the RTC signaling state based on the JsepSession state
-  void UpdateSignalingState();
+  void UpdateSignalingState(bool rollback = false);
 
   bool IsClosed() const;
   // called when DTLS connects; we only need this once
@@ -736,6 +744,7 @@ private:
 #endif
 
   bool mAllowIceLoopback;
+  bool mAllowIceLinkLocal;
   nsRefPtr<PeerConnectionMedia> mMedia;
 
   // The JSEP negotiation session.

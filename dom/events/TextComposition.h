@@ -17,6 +17,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/TextRange.h"
+#include "mozilla/dom/TabParent.h"
 
 class nsIEditor;
 
@@ -38,8 +39,11 @@ class TextComposition final
   NS_INLINE_DECL_REFCOUNTING(TextComposition)
 
 public:
+  typedef dom::TabParent TabParent;
+
   TextComposition(nsPresContext* aPresContext,
                   nsINode* aNode,
+                  TabParent* aTabParent,
                   WidgetCompositionEvent* aCompositionEvent);
 
   bool Destroyed() const { return !mPresContext; }
@@ -125,6 +129,12 @@ public:
   void EndHandlingComposition(nsIEditor* aEditor);
 
   /**
+   * OnEditorDestroyed() is called when the editor is destroyed but there is
+   * active composition.
+   */
+  void OnEditorDestroyed();
+
+  /**
    * CompositionChangeEventHandlingMarker class should be created at starting
    * to handle text event in focused editor.  This calls
    * EditorWillHandleCompositionChangeEvent() and
@@ -167,6 +177,7 @@ private:
   // this instance.
   nsPresContext* mPresContext;
   nsCOMPtr<nsINode> mNode;
+  nsRefPtr<TabParent> mTabParent;
 
   // This is the clause and caret range information which is managed by
   // the focused editor.  This may be null if there is no clauses or caret.
@@ -308,8 +319,7 @@ private:
    * compositionupdate, compositionend or compositionchange event due to not
    * safe to dispatch event.
    */
-  void OnCompositionEventDiscarded(
-         const WidgetCompositionEvent* aCompositionEvent);
+  void OnCompositionEventDiscarded(WidgetCompositionEvent* aCompositionEvent);
 
   /**
    * Calculate composition offset then notify composition update to widget

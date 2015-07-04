@@ -34,7 +34,7 @@ static bool IsMoveto(uint16_t aSegType)
 nsresult
 SVGPathData::CopyFrom(const SVGPathData& rhs)
 {
-  if (!mData.SetCapacity(rhs.mData.Length())) {
+  if (!mData.SetCapacity(rhs.mData.Length(), fallible)) {
     // Yes, we do want fallible alloc here
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -81,7 +81,7 @@ SVGPathData::AppendSeg(uint32_t aType, ...)
 {
   uint32_t oldLength = mData.Length();
   uint32_t newLength = oldLength + 1 + SVGPathSegUtils::ArgCountForType(aType);
-  if (!mData.SetLength(newLength)) {
+  if (!mData.SetLength(newLength, fallible)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -175,7 +175,7 @@ SVGPathData::GetDistancesFromOriginToEndsOfVisibleSegments(FallibleTArray<double
 
     if (i == 0 || (segType != PATHSEG_MOVETO_ABS &&
                    segType != PATHSEG_MOVETO_REL)) {
-      if (!aOutput->AppendElement(state.length)) {
+      if (!aOutput->AppendElement(state.length, fallible)) {
         return false;
       }
     }
@@ -273,7 +273,7 @@ ApproximateZeroLengthSubpathSquareCaps(PathBuilder* aPB,
     }                                                                         \
   } while(0)
 
-TemporaryRef<Path>
+already_AddRefed<Path>
 SVGPathData::BuildPath(PathBuilder* builder,
                        uint8_t aStrokeLineCap,
                        Float aStrokeWidth) const
@@ -507,7 +507,7 @@ SVGPathData::BuildPath(PathBuilder* builder,
   return builder->Finish();
 }
 
-TemporaryRef<Path>
+already_AddRefed<Path>
 SVGPathData::BuildPathForMeasuring() const
 {
   // Since the path that we return will not be used for painting it doesn't

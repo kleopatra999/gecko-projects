@@ -4,53 +4,70 @@
 "use strict";
 
 const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+const { devtools: loader } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+const require = loader.require;
 
-Cu.import("resource://gre/modules/Task.jsm");
-Cu.import("resource://gre/modules/devtools/Loader.jsm");
-Cu.import("resource://gre/modules/devtools/Console.jsm");
-Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
+const { Task } = require("resource://gre/modules/Task.jsm");
+const { Heritage, ViewHelpers, WidgetMethods } = require("resource:///modules/devtools/ViewHelpers.jsm");
 
-devtools.lazyRequireGetter(this, "Services");
-devtools.lazyRequireGetter(this, "promise");
-devtools.lazyRequireGetter(this, "EventEmitter",
+loader.lazyRequireGetter(this, "Services");
+loader.lazyRequireGetter(this, "promise");
+loader.lazyRequireGetter(this, "EventEmitter",
   "devtools/toolkit/event-emitter");
-devtools.lazyRequireGetter(this, "DevToolsUtils",
+loader.lazyRequireGetter(this, "DevToolsUtils",
   "devtools/toolkit/DevToolsUtils");
+loader.lazyRequireGetter(this, "system",
+  "devtools/toolkit/shared/system");
 
-devtools.lazyRequireGetter(this, "TreeWidget",
-  "devtools/shared/widgets/TreeWidget", true);
-devtools.lazyRequireGetter(this, "TIMELINE_BLUEPRINT",
-  "devtools/shared/timeline/global", true);
-devtools.lazyRequireGetter(this, "L10N",
-  "devtools/shared/profiler/global", true);
-devtools.lazyRequireGetter(this, "RecordingUtils",
-  "devtools/performance/recording-utils", true);
-devtools.lazyRequireGetter(this, "RecordingModel",
+// Logic modules
+
+loader.lazyRequireGetter(this, "L10N",
+  "devtools/performance/global", true);
+loader.lazyRequireGetter(this, "TIMELINE_BLUEPRINT",
+  "devtools/performance/markers", true);
+loader.lazyRequireGetter(this, "RecordingUtils",
+  "devtools/performance/recording-utils");
+loader.lazyRequireGetter(this, "RecordingModel",
   "devtools/performance/recording-model", true);
-devtools.lazyRequireGetter(this, "GraphsController",
+loader.lazyRequireGetter(this, "GraphsController",
   "devtools/performance/graphs", true);
-devtools.lazyRequireGetter(this, "Waterfall",
-  "devtools/shared/timeline/waterfall", true);
-devtools.lazyRequireGetter(this, "MarkerDetails",
-  "devtools/shared/timeline/marker-details", true);
-devtools.lazyRequireGetter(this, "CallView",
-  "devtools/shared/profiler/tree-view", true);
-devtools.lazyRequireGetter(this, "ThreadNode",
-  "devtools/shared/profiler/tree-model", true);
-devtools.lazyRequireGetter(this, "FrameNode",
-  "devtools/shared/profiler/tree-model", true);
-devtools.lazyRequireGetter(this, "JITOptimizations",
-  "devtools/shared/profiler/jit", true);
-devtools.lazyRequireGetter(this, "OptionsView",
-  "devtools/shared/options-view", true);
-devtools.lazyRequireGetter(this, "FlameGraphUtils",
-  "devtools/shared/widgets/FlameGraph", true);
-devtools.lazyRequireGetter(this, "FlameGraph",
-  "devtools/shared/widgets/FlameGraph", true);
+loader.lazyRequireGetter(this, "WaterfallHeader",
+  "devtools/performance/waterfall-ticks", true);
+loader.lazyRequireGetter(this, "MarkerView",
+  "devtools/performance/marker-view", true);
+loader.lazyRequireGetter(this, "MarkerDetails",
+  "devtools/performance/marker-details", true);
+loader.lazyRequireGetter(this, "MarkerUtils",
+  "devtools/performance/marker-utils");
+loader.lazyRequireGetter(this, "WaterfallUtils",
+  "devtools/performance/waterfall-utils");
+loader.lazyRequireGetter(this, "CallView",
+  "devtools/performance/tree-view", true);
+loader.lazyRequireGetter(this, "ThreadNode",
+  "devtools/performance/tree-model", true);
+loader.lazyRequireGetter(this, "FrameNode",
+  "devtools/performance/tree-model", true);
+loader.lazyRequireGetter(this, "JITOptimizations",
+  "devtools/performance/jit", true);
 
-devtools.lazyImporter(this, "SideMenuWidget",
+// Widgets modules
+
+loader.lazyRequireGetter(this, "OptionsView",
+  "devtools/shared/options-view", true);
+loader.lazyRequireGetter(this, "FlameGraphUtils",
+  "devtools/shared/widgets/FlameGraph", true);
+loader.lazyRequireGetter(this, "FlameGraph",
+  "devtools/shared/widgets/FlameGraph", true);
+loader.lazyRequireGetter(this, "TreeWidget",
+  "devtools/shared/widgets/TreeWidget", true);
+
+loader.lazyImporter(this, "SideMenuWidget",
   "resource:///modules/devtools/SideMenuWidget.jsm");
-devtools.lazyImporter(this, "PluralForm",
+loader.lazyImporter(this, "setNamedTimeout",
+  "resource:///modules/devtools/ViewHelpers.jsm");
+loader.lazyImporter(this, "clearNamedTimeout",
+  "resource:///modules/devtools/ViewHelpers.jsm");
+loader.lazyImporter(this, "PluralForm",
   "resource://gre/modules/PluralForm.jsm");
 
 const BRANCH_NAME = "devtools.performance.ui.";
@@ -97,6 +114,11 @@ const EVENTS = {
   RECORDING_IMPORTED: "Performance:RecordingImported",
   RECORDING_EXPORTED: "Performance:RecordingExported",
 
+  // When the front has updated information on the profiler's circular buffer
+  PROFILER_STATUS_UPDATED: "Performance:BufferUpdated",
+
+  // When the PerformanceView updates the display of the buffer status
+  UI_BUFFER_STATUS_UPDATED: "Performance:UI:BufferUpdated",
 
   // Emitted by the JITOptimizationsView when it renders new optimization
   // data and clears the optimization data
@@ -111,8 +133,6 @@ const EVENTS = {
 
   // Emitted by the OverviewView when a range has been selected in the graphs
   OVERVIEW_RANGE_SELECTED: "Performance:UI:OverviewRangeSelected",
-  // Emitted by the OverviewView when a selection range has been removed
-  OVERVIEW_RANGE_CLEARED: "Performance:UI:OverviewRangeCleared",
 
   // Emitted by the DetailsView when a subview is selected
   DETAILS_VIEW_SELECTED: "Performance:UI:DetailsViewSelected",
@@ -138,7 +158,7 @@ const EVENTS = {
 };
 
 /**
- * The current target and the profiler connection, set by this tool's host.
+ * The current target, toolbox and PerformanceFront, set by this tool's host.
  */
 let gToolbox, gTarget, gFront;
 
@@ -184,25 +204,20 @@ let PerformanceController = {
     this._onPrefChanged = this._onPrefChanged.bind(this);
     this._onThemeChanged = this._onThemeChanged.bind(this);
     this._onRecordingStateChange = this._onRecordingStateChange.bind(this);
+    this._onProfilerStatusUpdated = this._onProfilerStatusUpdated.bind(this);
 
-    // All boolean prefs should be handled via the OptionsView in the
-    // ToolbarView, so that they may be accessible via the "gear" menu.
-    // Every other pref should be registered here.
-    this._nonBooleanPrefs = new ViewHelpers.Prefs("devtools.performance", {
-      "hidden-markers": ["Json", "timeline.hidden-markers"],
-      "memory-sample-probability": ["Float", "memory.sample-probability"],
-      "memory-max-log-length": ["Int", "memory.max-log-length"],
-      "profiler-buffer-size": ["Int", "profiler.buffer-size"],
-      "profiler-sample-frequency": ["Int", "profiler.sample-frequency-khz"],
-    });
+    // Store data regarding if e10s is enabled.
+    this._e10s = Services.appinfo.browserTabsRemoteAutostart;
+    this._setMultiprocessAttributes();
 
-    this._nonBooleanPrefs.registerObserver();
-    this._nonBooleanPrefs.on("pref-changed", this._onPrefChanged);
+    this._prefs = require("devtools/performance/global").PREFS;
+    this._prefs.on("pref-changed", this._onPrefChanged);
 
     gFront.on("recording-starting", this._onRecordingStateChange);
     gFront.on("recording-started", this._onRecordingStateChange);
     gFront.on("recording-stopping", this._onRecordingStateChange);
     gFront.on("recording-stopped", this._onRecordingStateChange);
+    gFront.on("profiler-status", this._onProfilerStatusUpdated);
     ToolbarView.on(EVENTS.PREF_CHANGED, this._onPrefChanged);
     PerformanceView.on(EVENTS.UI_START_RECORDING, this.startRecording);
     PerformanceView.on(EVENTS.UI_STOP_RECORDING, this.stopRecording);
@@ -218,13 +233,13 @@ let PerformanceController = {
    * Remove events handled by the PerformanceController
    */
   destroy: function() {
-    this._nonBooleanPrefs.unregisterObserver();
-    this._nonBooleanPrefs.off("pref-changed", this._onPrefChanged);
+    this._prefs.off("pref-changed", this._onPrefChanged);
 
     gFront.off("recording-starting", this._onRecordingStateChange);
     gFront.off("recording-started", this._onRecordingStateChange);
     gFront.off("recording-stopping", this._onRecordingStateChange);
     gFront.off("recording-stopped", this._onRecordingStateChange);
+    gFront.off("profiler-status", this._onProfilerStatusUpdated);
     ToolbarView.off(EVENTS.PREF_CHANGED, this._onPrefChanged);
     PerformanceView.off(EVENTS.UI_START_RECORDING, this.startRecording);
     PerformanceView.off(EVENTS.UI_STOP_RECORDING, this.stopRecording);
@@ -245,7 +260,8 @@ let PerformanceController = {
 
   /**
    * Get a boolean preference setting from `prefName` via the underlying
-   * OptionsView in the ToolbarView.
+   * OptionsView in the ToolbarView. This preference is guaranteed to be
+   * displayed in the UI.
    *
    * @param string prefName
    * @return boolean
@@ -255,21 +271,25 @@ let PerformanceController = {
   },
 
   /**
-   * Get a preference setting from `prefName`.
+   * Get a preference setting from `prefName`. This preference can be of
+   * any type and might not be displayed in the UI.
+   *
    * @param string prefName
-   * @return object
+   * @return any
    */
   getPref: function (prefName) {
-    return this._nonBooleanPrefs[prefName];
+    return this._prefs[prefName];
   },
 
   /**
-   * Set a preference setting from `prefName`.
+   * Set a preference setting from `prefName`. This preference can be of
+   * any type and might not be displayed in the UI.
+   *
    * @param string prefName
-   * @param object prefValue
+   * @param any prefValue
    */
   setPref: function (prefName, prefValue) {
-    this._nonBooleanPrefs[prefName] = prefValue;
+    this._prefs[prefName] = prefValue;
   },
 
   /**
@@ -277,16 +297,12 @@ let PerformanceController = {
    * when the front has started to record.
    */
   startRecording: Task.async(function *() {
-    // Store retro-mode here so we can easily list true/false
-    // values for reverting.
-    // TODO bug 1160313
-    let superMode = !this.getOption("retro-mode");
-
     let options = {
-      withMarkers: superMode ? true : false,
-      withMemory: superMode ? this.getOption("enable-memory") : false,
+      withMarkers: true,
+      withMemory: this.getOption("enable-memory"),
       withTicks: this.getOption("enable-framerate"),
-      withAllocations: superMode ? this.getOption("enable-memory") : false,
+      withJITOptimizations: this.getOption("enable-jit-optimizations"),
+      withAllocations: this.getOption("enable-allocations"),
       allocationsSampleProbability: this.getPref("memory-sample-probability"),
       allocationsMaxLogLength: this.getPref("memory-max-log-length"),
       bufferSize: this.getPref("profiler-buffer-size"),
@@ -302,7 +318,6 @@ let PerformanceController = {
    */
   stopRecording: Task.async(function *() {
     let recording = this.getLatestManualRecording();
-
     yield gFront.stopRecording(recording);
   }),
 
@@ -326,7 +341,6 @@ let PerformanceController = {
    */
   clearRecordings: Task.async(function* () {
     let latest = this.getLatestManualRecording();
-
     if (latest && latest.isRecording()) {
       yield this.stopRecording();
     }
@@ -392,16 +406,6 @@ let PerformanceController = {
   },
 
   /**
-   * Gets the current timeline blueprint without the hidden markers.
-   * @return object
-   */
-  getTimelineBlueprint: function() {
-    let blueprint = TIMELINE_BLUEPRINT;
-    let hiddenMarkers = this.getPref("hidden-markers");
-    return RecordingUtils.getFilteredBlueprint({ blueprint, hiddenMarkers });
-  },
-
-  /**
    * Fired from RecordingsView, we listen on the PerformanceController so we can
    * set it here and re-emit on the controller, where all views can listen.
    */
@@ -431,12 +435,25 @@ let PerformanceController = {
   },
 
   /**
+   * Emitted when the front updates RecordingModel's buffer status.
+   */
+  _onProfilerStatusUpdated: function (_, data) {
+    this.emit(EVENTS.PROFILER_STATUS_UPDATED, data);
+  },
+
+  /**
    * Fired when a recording model changes state.
    *
    * @param {string} state
    * @param {RecordingModel} model
    */
   _onRecordingStateChange: function (state, model) {
+    // If we get a state change for a recording that isn't being tracked in the front,
+    // just ignore it. This can occur when stopping a profile via console that was cleared.
+    if (state !== "recording-starting" && this.getRecordings().indexOf(model) === -1) {
+      return;
+    }
+
     switch (state) {
       // Fired when a RecordingModel was just created from the front
       case "recording-starting":
@@ -501,6 +518,44 @@ let PerformanceController = {
       return false;
     }
     return true;
+  },
+
+  /**
+   * Returns an object with `supported` and `enabled` properties indicating
+   * whether or not the platform is capable of turning on e10s and whether or not
+   * it's already enabled, respectively.
+   *
+   * @return {object}
+   */
+  getMultiprocessStatus: function () {
+    // If testing, set both supported and enabled to true so we
+    // have realtime rendering tests in non-e10s. This function is
+    // overridden wholesale in tests when we want to test multiprocess support
+    // specifically.
+    if (DevToolsUtils.testing) {
+      return { supported: true, enabled: true };
+    }
+    let supported = system.constants.E10S_TESTING_ONLY;
+    // This is only checked on tool startup -- requires a restart if
+    // e10s subsequently enabled.
+    let enabled = this._e10s;
+    return { supported, enabled };
+  },
+
+  /**
+   * Called on init, sets an `e10s` attribute on the main view container with
+   * "disabled" if e10s is possible on the platform and just not on, or "unsupported"
+   * if e10s is not possible on the platform. If e10s is on, no attribute is set.
+   */
+  _setMultiprocessAttributes: function () {
+    let { enabled, supported } = this.getMultiprocessStatus();
+    if (!enabled && supported) {
+      $("#performance-view").setAttribute("e10s", "disabled");
+    }
+    // Could be a chance where the directive goes away yet e10s is still on
+    else if (!enabled && !supported) {
+      $("#performance-view").setAttribute("e10s", "unsupported");
+    }
   },
 
   toString: () => "[object PerformanceController]"

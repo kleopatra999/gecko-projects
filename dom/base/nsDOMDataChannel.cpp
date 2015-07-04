@@ -7,13 +7,11 @@
 #include "nsDOMDataChannel.h"
 
 #include "base/basictypes.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetDataChannelLog();
-#endif
 #undef LOG
-#define LOG(args) PR_LOG(GetDataChannelLog(), PR_LOG_DEBUG, args)
+#define LOG(args) MOZ_LOG(GetDataChannelLog(), mozilla::LogLevel::Debug, args)
 
 
 #include "nsDOMDataChannelDeclarations.h"
@@ -267,21 +265,18 @@ nsDOMDataChannel::Send(const nsAString& aData, ErrorResult& aRv)
 }
 
 void
-nsDOMDataChannel::Send(File& aData, ErrorResult& aRv)
+nsDOMDataChannel::Send(Blob& aData, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread(), "Not running on main thread");
 
   nsCOMPtr<nsIInputStream> msgStream;
-  nsresult rv = aData.GetInternalStream(getter_AddRefs(msgStream));
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
+  aData.GetInternalStream(getter_AddRefs(msgStream), aRv);
+  if (NS_WARN_IF(aRv.Failed())){
     return;
   }
 
-  uint64_t msgLength;
-  rv = aData.GetSize(&msgLength);
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
+  uint64_t msgLength = aData.GetSize(aRv);
+  if (NS_WARN_IF(aRv.Failed())){
     return;
   }
 
@@ -394,7 +389,7 @@ nsDOMDataChannel::DoOnMessageAvailable(const nsACString& aData,
       JS::Rooted<JSObject*> arrayBuf(cx);
       rv = nsContentUtils::CreateArrayBuffer(cx, aData, arrayBuf.address());
       NS_ENSURE_SUCCESS(rv, rv);
-      jsData = OBJECT_TO_JSVAL(arrayBuf);
+      jsData.setObject(*arrayBuf);
     } else {
       NS_RUNTIMEABORT("Unknown binary type!");
       return NS_ERROR_UNEXPECTED;
@@ -404,7 +399,7 @@ nsDOMDataChannel::DoOnMessageAvailable(const nsACString& aData,
     JSString* jsString = JS_NewUCStringCopyN(cx, utf16data.get(), utf16data.Length());
     NS_ENSURE_TRUE(jsString, NS_ERROR_FAILURE);
 
-    jsData = STRING_TO_JSVAL(jsString);
+    jsData.setString(jsString);
   }
 
   nsCOMPtr<nsIDOMEvent> event;

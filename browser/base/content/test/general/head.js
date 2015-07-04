@@ -633,18 +633,79 @@ function waitForNewTabEvent(aTabBrowser) {
  * @resolves to the window
  */
 function promiseWindow(url) {
-  info("waiting for a " + url + " window");
+  info("expecting a " + url + " window");
   return new Promise(resolve => {
     Services.obs.addObserver(function obs(win) {
       win.QueryInterface(Ci.nsIDOMWindow);
-      if (win.location.href !== url) {
-        info("ignoring a window with this url: " + win.location.href);
-        return;
-      }
+      win.addEventListener("load", function loadHandler() {
+        win.removeEventListener("load", loadHandler);
 
-      Services.obs.removeObserver(obs, "domwindowopened");
-      resolve(win);
+        if (win.location.href !== url) {
+          info("ignoring a window with this url: " + win.location.href);
+          return;
+        }
+
+        Services.obs.removeObserver(obs, "domwindowopened");
+        resolve(win);
+      });
     }, "domwindowopened", false);
+  });
+}
+
+function promiseIndicatorWindow() {
+  // We don't show the indicator window on Mac.
+  if ("nsISystemStatusBar" in Ci)
+    return Promise.resolve();
+
+  return promiseWindow("chrome://browser/content/webrtcIndicator.xul");
+}
+
+/**
+ * Add some entries to a test tracking protection database, and reset
+ * back to the default database after the test ends.
+ */
+function updateTrackingProtectionDatabase() {
+  let TABLE = "urlclassifier.trackingTable";
+  Services.prefs.setCharPref(TABLE, "test-track-simple");
+
+  registerCleanupFunction(function() {
+    Services.prefs.clearUserPref(TABLE);
+  });
+
+  // Add some URLs to the tracking database (to be blocked)
+  let testData = "tracking.example.com/";
+  let testUpdate =
+    "n:1000\ni:test-track-simple\nad:1\n" +
+    "a:524:32:" + testData.length + "\n" +
+    testData;
+
+  return new Promise((resolve, reject) => {
+    let dbService = Cc["@mozilla.org/url-classifier/dbservice;1"]
+                    .getService(Ci.nsIUrlClassifierDBService);
+    let listener = {
+      QueryInterface: iid => {
+        if (iid.equals(Ci.nsISupports) ||
+            iid.equals(Ci.nsIUrlClassifierUpdateObserver))
+          return listener;
+
+        throw Cr.NS_ERROR_NO_INTERFACE;
+      },
+      updateUrlRequested: url => { },
+      streamFinished: status => { },
+      updateError: errorCode => {
+        ok(false, "Couldn't update classifier.");
+        resolve();
+      },
+      updateSuccess: requestedTimeout => {
+        resolve();
+      }
+    };
+
+    dbService.beginUpdate(listener, "test-track-simple", "");
+    dbService.beginStream("", "");
+    dbService.updateStream(testUpdate);
+    dbService.finishStream();
+    dbService.finishUpdate();
   });
 }
 
@@ -694,9 +755,6 @@ function assertWebRTCIndicatorStatus(expected) {
         });
       }
     }
-    if (expected &&
-        !Services.wm.getMostRecentWindow("Browser:WebRTCGlobalIndicator"))
-      yield promiseWindow("chrome://browser/content/webrtcIndicator.xul");
     let indicator = Services.wm.getEnumerator("Browser:WebRTCGlobalIndicator");
     let hasWindow = indicator.hasMoreElements();
     is(hasWindow, !!expected, "popup " + msg);

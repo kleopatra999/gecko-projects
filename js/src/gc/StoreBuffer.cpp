@@ -18,7 +18,7 @@ using namespace js;
 using namespace js::gc;
 
 void
-StoreBuffer::GenericBuffer::mark(StoreBuffer* owner, JSTracer* trc)
+StoreBuffer::GenericBuffer::trace(StoreBuffer* owner, JSTracer* trc)
 {
     mozilla::ReentrancyGuard g(*owner);
     MOZ_ASSERT(owner->isEnabled());
@@ -29,7 +29,7 @@ StoreBuffer::GenericBuffer::mark(StoreBuffer* owner, JSTracer* trc)
         unsigned size = *e.get<unsigned>();
         e.popFront<unsigned>();
         BufferableRef* edge = e.get<BufferableRef>(size);
-        edge->mark(trc);
+        edge->trace(trc);
         e.popFront(size);
     }
 }
@@ -44,8 +44,6 @@ StoreBuffer::enable()
         !bufferCell.init() ||
         !bufferSlot.init() ||
         !bufferWholeCell.init() ||
-        !bufferRelocVal.init() ||
-        !bufferRelocCell.init() ||
         !bufferGeneric.init())
     {
         return false;
@@ -73,13 +71,12 @@ StoreBuffer::clear()
         return true;
 
     aboutToOverflow_ = false;
+    cancelIonCompilations_ = false;
 
     bufferVal.clear();
     bufferCell.clear();
     bufferSlot.clear();
     bufferWholeCell.clear();
-    bufferRelocVal.clear();
-    bufferRelocCell.clear();
     bufferGeneric.clear();
 
     return true;
@@ -103,8 +100,6 @@ StoreBuffer::addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::GCSi
     sizes->storeBufferCells      += bufferCell.sizeOfExcludingThis(mallocSizeOf);
     sizes->storeBufferSlots      += bufferSlot.sizeOfExcludingThis(mallocSizeOf);
     sizes->storeBufferWholeCells += bufferWholeCell.sizeOfExcludingThis(mallocSizeOf);
-    sizes->storeBufferRelocVals  += bufferRelocVal.sizeOfExcludingThis(mallocSizeOf);
-    sizes->storeBufferRelocCells += bufferRelocCell.sizeOfExcludingThis(mallocSizeOf);
     sizes->storeBufferGenerics   += bufferGeneric.sizeOfExcludingThis(mallocSizeOf);
 }
 

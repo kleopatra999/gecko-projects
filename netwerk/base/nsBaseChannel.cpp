@@ -69,14 +69,7 @@ nsBaseChannel::nsBaseChannel()
 
 nsBaseChannel::~nsBaseChannel()
 {
-  if (mLoadInfo) {
-    nsCOMPtr<nsIThread> mainThread;
-    NS_GetMainThread(getter_AddRefs(mainThread));
-    
-    nsILoadInfo *forgetableLoadInfo;
-    mLoadInfo.forget(&forgetableLoadInfo);
-    NS_ProxyRelease(mainThread, forgetableLoadInfo, false);
-  }
+  NS_ReleaseOnMainThread(mLoadInfo);
 }
 
 nsresult
@@ -293,7 +286,7 @@ nsBaseChannel::ClassifyURI()
   if (mLoadFlags & LOAD_CLASSIFY_URI) {
     nsRefPtr<nsChannelClassifier> classifier = new nsChannelClassifier();
     if (classifier) {
-      classifier->Start(this, false);
+      classifier->Start(this);
     } else {
       Cancel(NS_ERROR_OUT_OF_MEMORY);
     }

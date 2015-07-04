@@ -313,6 +313,13 @@ public:
         return static_cast<JSProtoKey>(key);
     }
 
+    // Operates in the wrapper compartment.
+    static bool getOwnPropertyFromWrapperIfSafe(JSContext* cx,
+                                                JS::HandleObject wrapper,
+                                                JS::HandleId id,
+                                                JS::MutableHandle<JSPropertyDescriptor> desc);
+
+    // Like the above, but operates in the target compartment.
     static bool getOwnPropertyFromTargetIfSafe(JSContext* cx,
                                                JS::HandleObject target,
                                                JS::HandleObject wrapper,
@@ -399,7 +406,7 @@ public:
 
     virtual JSObject* createHolder(JSContext* cx, JSObject* wrapper) override
     {
-        return JS_NewObjectWithGivenProto(cx, nullptr, JS::NullPtr());
+        return JS_NewObjectWithGivenProto(cx, nullptr, nullptr);
     }
 
     static OpaqueXrayTraits singleton;

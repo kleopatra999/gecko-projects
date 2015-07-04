@@ -34,7 +34,7 @@ SourceSurfaceD2D1::IsValid() const
   return mDevice == Factory::GetD2D1Device();
 }
 
-TemporaryRef<DataSourceSurface>
+already_AddRefed<DataSourceSurface>
 SourceSurfaceD2D1::GetDataSurface()
 {
   HRESULT hr;
@@ -66,7 +66,7 @@ SourceSurfaceD2D1::GetDataSurface()
     return nullptr;
   }
 
-  return new DataSourceSurfaceD2D1(softwareBitmap, mFormat);
+  return MakeAndAddRef<DataSourceSurfaceD2D1>(softwareBitmap, mFormat);
 }
 
 void
@@ -182,7 +182,10 @@ DataSourceSurfaceD2D1::Map(MapType aMapType, MappedSurface *aMappedSurface)
   }
 
   D2D1_MAPPED_RECT map;
-  mBitmap->Map(D2D1_MAP_OPTIONS_READ, &map);
+  if (FAILED(mBitmap->Map(D2D1_MAP_OPTIONS_READ, &map))) {
+    gfxCriticalError() << "Failed to map bitmap.";
+    return false;
+  }
   aMappedSurface->mData = map.bits;
   aMappedSurface->mStride = map.pitch;
 
@@ -215,7 +218,10 @@ DataSourceSurfaceD2D1::EnsureMapped()
   if (mMapped) {
     return;
   }
-  mBitmap->Map(D2D1_MAP_OPTIONS_READ, &mMap);
+  if (FAILED(mBitmap->Map(D2D1_MAP_OPTIONS_READ, &mMap))) {
+    gfxCriticalError() << "Failed to map bitmap.";
+    return;
+  }
   mMapped = true;
 }
 

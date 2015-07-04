@@ -29,7 +29,7 @@
                           key="key_privatebrowsing"/>
 #ifdef E10S_TESTING_ONLY
                 <menuitem id="menu_newNonRemoteWindow"
-                          label="New Non-e10s Window"
+                          label="&newNonRemoteWindow.label;"
                           hidden="true"
                           command="Tools:NonRemoteWindow"/>
 #endif
@@ -396,6 +396,12 @@
                 command="Browser:ShowAllBookmarks"
                 key="manBookmarkKb"/>
       <menuseparator id="organizeBookmarksSeparator"/>
+      <menuitem id="menu_pocket" label="&pocketMenuitem.label;"
+#ifndef XP_MACOSX
+                class="menuitem-iconic"
+#endif
+                oncommand="openUILink(Pocket.listURL, event);"/>
+      <menuseparator id="menu_pocketSeparator"/>
       <menuitem id="menu_bookmarkThisPage"
                 command="Browser:AddBookmarkAs"
                 observes="bookmarkThisPageBroadcaster"
@@ -461,9 +467,6 @@
         </menupopup>
       </menu>
 #endif
-      <menuseparator id="menu_pocketSeparator"/>
-      <menuitem id="menu_pocket" label="&pocketMenuitem.label;"
-                oncommand="openUILink(Pocket.listURL, event);"/>
       <menuseparator id="bookmarksMenuItemsSeparator"/>
       <!-- Bookmarks menu items -->
       <menuseparator builder="end"
@@ -540,7 +543,8 @@
                             observes="devtoolsMenuBroadcaster_BrowserToolbox"
                             accesskey="&browserToolboxMenu.accesskey;"/>
                   <menuitem id="menu_browserContentToolbox"
-                            observes="devtoolsMenuBroadcaster_BrowserContentToolbox"/>
+                            observes="devtoolsMenuBroadcaster_BrowserContentToolbox"
+                            accesskey="&browserContentToolboxMenu.accesskey;" />
                   <menuitem id="menu_browserConsole"
                             observes="devtoolsMenuBroadcaster_BrowserConsole"
                             accesskey="&browserConsoleCmd.accesskey;"/>

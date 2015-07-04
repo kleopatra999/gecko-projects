@@ -79,7 +79,7 @@ void mozilla_dump_image(void* bytes, int width, int height, int bytepp,
 
     RefPtr<DataSourceSurface> surf =
         Factory::CreateWrappingDataSourceSurface((uint8_t*)bytes, strideBytes,
-                                                 gfx::IntSize(width, height),
+                                                 IntSize(width, height),
                                                  format);
     gfxUtils::DumpAsDataURI(surf);
 }
@@ -323,7 +323,7 @@ MapSrcAndCreateMappedDest(DataSourceSurface* srcSurf,
     return true;
 }
 
-TemporaryRef<DataSourceSurface>
+already_AddRefed<DataSourceSurface>
 gfxUtils::CreatePremultipliedDataSurface(DataSourceSurface* srcSurf)
 {
     RefPtr<DataSourceSurface> destSurf;
@@ -331,7 +331,8 @@ gfxUtils::CreatePremultipliedDataSurface(DataSourceSurface* srcSurf)
     DataSourceSurface::MappedSurface destMap;
     if (!MapSrcAndCreateMappedDest(srcSurf, &destSurf, &srcMap, &destMap)) {
         MOZ_ASSERT(false, "MapSrcAndCreateMappedDest failed.");
-        return srcSurf;
+        RefPtr<DataSourceSurface> surface(srcSurf);
+        return surface.forget();
     }
 
     PremultiplyData(srcMap.mData, srcMap.mStride,
@@ -340,10 +341,10 @@ gfxUtils::CreatePremultipliedDataSurface(DataSourceSurface* srcSurf)
                     srcSurf->GetSize().height);
 
     UnmapSrcDest(srcSurf, destSurf);
-    return destSurf;
+    return destSurf.forget();
 }
 
-TemporaryRef<DataSourceSurface>
+already_AddRefed<DataSourceSurface>
 gfxUtils::CreateUnpremultipliedDataSurface(DataSourceSurface* srcSurf)
 {
     RefPtr<DataSourceSurface> destSurf;
@@ -351,7 +352,8 @@ gfxUtils::CreateUnpremultipliedDataSurface(DataSourceSurface* srcSurf)
     DataSourceSurface::MappedSurface destMap;
     if (!MapSrcAndCreateMappedDest(srcSurf, &destSurf, &srcMap, &destMap)) {
         MOZ_ASSERT(false, "MapSrcAndCreateMappedDest failed.");
-        return srcSurf;
+        RefPtr<DataSourceSurface> surface(srcSurf);
+        return surface.forget();
     }
 
     UnpremultiplyData(srcMap.mData, srcMap.mStride,
@@ -360,7 +362,7 @@ gfxUtils::CreateUnpremultipliedDataSurface(DataSourceSurface* srcSurf)
                       srcSurf->GetSize().height);
 
     UnmapSrcDest(srcSurf, destSurf);
-    return destSurf;
+    return destSurf.forget();
 }
 
 void
@@ -389,7 +391,7 @@ IsSafeImageTransformComponent(gfxFloat aValue)
   return aValue >= -32768 && aValue <= 32767;
 }
 
-#if !defined(MOZ_GFX_OPTIMIZE_MOBILE) && !defined(MOZ_WIDGET_COCOA)
+#ifndef MOZ_GFX_OPTIMIZE_MOBILE
 /**
  * This returns the fastest operator to use for solid surfaces which have no
  * alpha channel or their alpha channel is uniformly opaque.
@@ -438,7 +440,7 @@ CreateSamplingRestrictedDrawable(gfxDrawable* aDrawable,
     if (needed.IsEmpty())
         return nullptr;
 
-    gfxIntSize size(int32_t(needed.Width()), int32_t(needed.Height()));
+    IntSize size(int32_t(needed.Width()), int32_t(needed.Height()));
 
     RefPtr<DrawTarget> target =
       gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(size, aFormat);
@@ -455,7 +457,7 @@ CreateSamplingRestrictedDrawable(gfxDrawable* aDrawable,
     nsRefPtr<gfxDrawable> drawable = new gfxSurfaceDrawable(surface, size, gfxMatrix::Translation(-needed.TopLeft()));
     return drawable.forget();
 }
-#endif // !MOZ_GFX_OPTIMIZE_MOBILE && !MOZ_WIDGET_COCOA
+#endif // !MOZ_GFX_OPTIMIZE_MOBILE
 
 // working around cairo/pixman bug (bug 364968)
 // Our device-space-to-image-space transform may not be acceptable to pixman.
@@ -650,7 +652,7 @@ gfxUtils::DrawPixelSnapped(gfxContext*         aContext,
             // On Mobile, we don't ever want to do this; it has the potential for
             // allocating very large temporary surfaces, especially since we'll
             // do full-page snapshots often (see bug 749426).
-#if !defined(MOZ_GFX_OPTIMIZE_MOBILE) && !defined(MOZ_WIDGET_COCOA)
+#ifndef MOZ_GFX_OPTIMIZE_MOBILE
             nsRefPtr<gfxDrawable> restrictedDrawable =
               CreateSamplingRestrictedDrawable(aDrawable, aContext,
                                                aRegion, aFormat);
@@ -703,7 +705,7 @@ ClipToRegionInternal(gfxContext* aContext, const nsIntRegion& aRegion)
   aContext->Clip();
 }
 
-static TemporaryRef<Path>
+static already_AddRefed<Path>
 PathFromRegionInternal(DrawTarget* aTarget, const nsIntRegion& aRegion)
 {
   RefPtr<PathBuilder> pb = aTarget->CreatePathBuilder();
@@ -717,8 +719,7 @@ PathFromRegionInternal(DrawTarget* aTarget, const nsIntRegion& aRegion)
     pb->LineTo(Point(r->x, r->YMost()));
     pb->Close();
   }
-  RefPtr<Path> path = pb->Finish();
-  return path;
+  return pb->Finish();
 }
 
 static void
@@ -857,7 +858,7 @@ gfxUtils::GfxRectToIntRect(const gfxRect& aIn, IntRect* aOut)
 void
 gfxUtils::GetYCbCrToRGBDestFormatAndSize(const PlanarYCbCrData& aData,
                                          gfxImageFormat& aSuggestedFormat,
-                                         gfxIntSize& aSuggestedSize)
+                                         IntSize& aSuggestedSize)
 {
   YUVType yuvtype =
     TypeFromSize(aData.mYSize.width,
@@ -911,7 +912,7 @@ gfxUtils::GetYCbCrToRGBDestFormatAndSize(const PlanarYCbCrData& aData,
 void
 gfxUtils::ConvertYCbCrToRGB(const PlanarYCbCrData& aData,
                             const gfxImageFormat& aDestFormat,
-                            const gfxIntSize& aDestSize,
+                            const IntSize& aDestSize,
                             unsigned char* aDestBuffer,
                             int32_t aStride)
 {
@@ -1019,7 +1020,7 @@ gfxUtils::ConvertYCbCrToRGB(const PlanarYCbCrData& aData,
   cairo_destroy(ctx);
 }
 
-/* static */ TemporaryRef<DataSourceSurface>
+/* static */ already_AddRefed<DataSourceSurface>
 gfxUtils::CopySurfaceToDataSourceSurfaceWithFormat(SourceSurface* aSurface,
                                                    SurfaceFormat aFormat)
 {
@@ -1262,7 +1263,7 @@ EncodeSourceSurfaceInternal(SourceSurface* aSurface,
   } else {
     nsCOMPtr<nsIClipboardHelper> clipboard(do_GetService("@mozilla.org/widget/clipboardhelper;1", &rv));
     if (clipboard) {
-      clipboard->CopyString(NS_ConvertASCIItoUTF16(string), nullptr);
+      clipboard->CopyString(NS_ConvertASCIItoUTF16(string));
     }
   }
   return NS_OK;
@@ -1452,10 +1453,14 @@ FILE *gfxUtils::sDumpPaintFile = stderr;
 
 #ifdef MOZ_DUMP_PAINTING
 bool gfxUtils::sDumpPainting = getenv("MOZ_DUMP_PAINT") != 0;
+bool gfxUtils::sDumpPaintingIntermediate = getenv("MOZ_DUMP_PAINT_INTERMEDIATE") != 0;
 bool gfxUtils::sDumpPaintingToFile = getenv("MOZ_DUMP_PAINT_TO_FILE") != 0;
+bool gfxUtils::sDumpPaintItems = getenv("MOZ_DUMP_PAINT_ITEMS") != 0;
 #else
 bool gfxUtils::sDumpPainting = false;
+bool gfxUtils::sDumpPaintingIntermediate = false;
 bool gfxUtils::sDumpPaintingToFile = false;
+bool gfxUtils::sDumpPaintItems = false;
 #endif
 
 namespace mozilla {

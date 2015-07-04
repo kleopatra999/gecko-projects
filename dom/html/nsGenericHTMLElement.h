@@ -233,6 +233,17 @@ public:
     mScrollgrab = aValue;
   }
 
+  mozilla::net::ReferrerPolicy
+  GetReferrerPolicy()
+  {
+    nsAutoString aPolicyString;
+    GetEnumAttr(nsGkAtoms::referrer, nullptr, aPolicyString);
+    if (aPolicyString.IsEmpty()) {
+      return mozilla::net::RP_Unset;
+    }
+    return mozilla::net::ReferrerPolicyFromString(aPolicyString);
+  }
+
   /**
    * Determine whether an attribute is an event (onclick, etc.)
    * @param aName the attribute
@@ -711,6 +722,10 @@ public:
   static bool ParseImageAttribute(nsIAtom* aAttribute,
                                     const nsAString& aString,
                                     nsAttrValue& aResult);
+
+  static bool ParseReferrerAttribute(const nsAString& aString,
+                                     nsAttrValue& aResult);
+
   /**
    * Convert a frameborder string to value (yes/no/1/0)
    *
@@ -1011,7 +1026,7 @@ protected:
    * Returns INVALID_STATE_ERR and nulls *aURI if aURISpec is empty
    * and the document's URI matches the element's base URI.
    */
-  nsresult NewURIFromString(const nsAutoString& aURISpec, nsIURI** aURI);
+  nsresult NewURIFromString(const nsAString& aURISpec, nsIURI** aURI);
 
   void GetHTMLAttr(nsIAtom* aName, nsAString& aResult) const
   {
@@ -1742,6 +1757,7 @@ NS_DECLARE_NS_NEW_HTML_ELEMENT(Mod)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Data)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(DataList)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Div)
+NS_DECLARE_NS_NEW_HTML_ELEMENT(ExtApp)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(FieldSet)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Font)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Form)

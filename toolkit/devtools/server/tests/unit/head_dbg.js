@@ -6,6 +6,7 @@ const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 const Cr = Components.results;
+const CC = Components.Constructor;
 
 const { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 const { worker } = Cu.import("resource://gre/modules/devtools/worker-loader.js", {})
@@ -74,9 +75,9 @@ function attachTab(client, tab) {
   return rdpRequest(client, client.attachTab, tab.actor);
 }
 
-function waitForNewSource(client, url) {
+function waitForNewSource(threadClient, url) {
   dump("Waiting for new source with url '" + url + "'.\n");
-  return waitForEvent(client, "newSource", function (packet) {
+  return waitForEvent(threadClient, "newSource", function (packet) {
     return packet.source.url === url;
   });
 }
@@ -300,6 +301,20 @@ function initTestDebuggerServer(aServer = DebuggerServer)
   aServer.init(function () { return true; });
 }
 
+/**
+ * Initialize the testing debugger server with a tab whose title is |title|.
+ */
+function startTestDebuggerServer(title, server = DebuggerServer) {
+  initTestDebuggerServer(server);
+  addTestGlobal(title);
+  DebuggerServer.addTabActors();
+
+  let transport = DebuggerServer.connectPipe();
+  let client = new DebuggerClient(transport);
+
+  return connect(client).then(() => client);
+}
+
 function initTestTracerServer(aServer = DebuggerServer)
 {
   aServer.registerModule("xpcshell-test/testactors");
@@ -337,6 +352,11 @@ function get_chrome_actors(callback)
   });
 }
 
+function getChromeActors(client, server = DebuggerServer) {
+  server.allowChromeProcess = true;
+  return client.getProcess().then(response => response.form);
+}
+
 /**
  * Takes a relative file path and returns the absolute file url for it.
  */
@@ -349,7 +369,7 @@ function getFileUrl(aName, aAllowMissing=false) {
  * Returns the full path of the file with the specified name in a
  * platform-independent and URL-like form.
  */
-function getFilePath(aName, aAllowMissing=false)
+function getFilePath(aName, aAllowMissing=false, aUsePlatformPathSeparator=false)
 {
   let file = do_get_file(aName, aAllowMissing);
   let path = Services.io.newFileURI(file).spec;
@@ -358,7 +378,14 @@ function getFilePath(aName, aAllowMissing=false)
       file instanceof Ci.nsILocalFileWin) {
     filePrePath += "/";
   }
-  return path.slice(filePrePath.length);
+
+  path = path.slice(filePrePath.length);
+
+  if (aUsePlatformPathSeparator && path.match(/^\w:/)) {
+    path = path.replace(/\//g, "\\");
+  }
+
+  return path;
 }
 
 Cu.import("resource://gre/modules/NetUtil.jsm");
@@ -712,4 +739,35 @@ function reload(tabClient) {
   let deferred = promise.defer();
   tabClient._reload({}, deferred.resolve);
   return deferred.promise;
+}
+
+/**
+ * Returns an array of stack location strings given a thread and a sample.
+ *
+ * @param object thread
+ * @param object sample
+ * @returns object
+ */
+function getInflatedStackLocations(thread, sample) {
+  let stackTable = thread.stackTable;
+  let frameTable = thread.frameTable;
+  let stringTable = thread.stringTable;
+  let SAMPLE_STACK_SLOT = thread.samples.schema.stack;
+  let STACK_PREFIX_SLOT = stackTable.schema.prefix;
+  let STACK_FRAME_SLOT = stackTable.schema.frame;
+  let FRAME_LOCATION_SLOT = frameTable.schema.location;
+
+  // Build the stack from the raw data and accumulate the locations in
+  // an array.
+  let stackIndex = sample[SAMPLE_STACK_SLOT];
+  let locations = [];
+  while (stackIndex !== null) {
+    let stackEntry = stackTable.data[stackIndex];
+    let frame = frameTable.data[stackEntry[STACK_FRAME_SLOT]];
+    locations.push(stringTable[frame[FRAME_LOCATION_SLOT]]);
+    stackIndex = stackEntry[STACK_PREFIX_SLOT];
+  }
+
+  // The profiler tree is inverted, so reverse the array.
+  return locations.reverse();
 }

@@ -483,38 +483,32 @@ var PlacesCommandHook = {
    *        the address of the link target
    * @param aTitle
    *        The link text
+   * @param [optional] aDescription
+   *        The linked page description, if available
    */
-  bookmarkLink: Task.async(function* (aParentId, aURL, aTitle) {
-    let node = null;
-    if (PlacesUIUtils.useAsyncTransactions) {
-      node = yield PlacesUIUtils.fetchNodeLike({ url: aURL });
-    }
-    else {
-      let linkURI = makeURI(aURL);
-      let itemId = PlacesUtils.getMostRecentBookmarkForURI(linkURI);
-      if (itemId != -1) {
-        node = { itemId, uri: aURL };
-        PlacesUIUtils.completeNodeLikeObjectForItemId(node);
-      }
-    }
-
+  bookmarkLink: Task.async(function* (aParentId, aURL, aTitle, aDescription="") {
+    let node = yield PlacesUIUtils.fetchNodeLike({ url: aURL });
     if (node) {
       PlacesUIUtils.showBookmarkDialog({ action: "edit"
-                                       , type: "bookmark"
                                        , node
-                                       }, window);
+                                       }, window.top);
+      return;
     }
-    else {
-      PlacesUIUtils.showBookmarkDialog({ action: "add"
-                                       , type: "bookmark"
-                                       , uri: linkURI
-                                       , title: aTitle
-                                       , hiddenRows: [ "description"
-                                                     , "location"
-                                                     , "loadInSidebar"
-                                                     , "keyword" ]
-                                       }, window);
-    }
+
+    let ip = new InsertionPoint(aParentId,
+                                PlacesUtils.bookmarks.DEFAULT_INDEX,
+                                Components.interfaces.nsITreeView.DROP_ON);
+    PlacesUIUtils.showBookmarkDialog({ action: "add"
+                                     , type: "bookmark"
+                                     , uri: makeURI(aURL)
+                                     , title: aTitle
+                                     , description: aDescription
+                                     , defaultInsertionPoint: ip
+                                     , hiddenRows: [ "description"
+                                                   , "location"
+                                                   , "loadInSidebar"
+                                                   , "keyword" ]
+                                     }, window.top);
   }),
 
   /**
@@ -586,7 +580,9 @@ var PlacesCommandHook = {
     else
       description = PlacesUIUtils.getDescriptionFromDocument(doc);
 
-    var toolbarIP = new InsertionPoint(PlacesUtils.toolbarFolderId, -1);
+    var toolbarIP = new InsertionPoint(PlacesUtils.toolbarFolderId,
+                                       PlacesUtils.bookmarks.DEFAULT_INDEX,
+                                       Components.interfaces.nsITreeView.DROP_ON);
     PlacesUIUtils.showBookmarkDialog({ action: "add"
                                      , type: "livemark"
                                      , feedURI: feedURI
@@ -1001,7 +997,7 @@ var PlacesMenuDNDHandler = {
   onDragOver: function PMDH_onDragOver(event) {
     let ip = new InsertionPoint(PlacesUtils.bookmarksMenuFolderId,
                                 PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                Ci.nsITreeView.DROP_ON);
+                                Components.interfaces.nsITreeView.DROP_ON);
     if (ip && PlacesControllerDragHelper.canDrop(ip, event.dataTransfer))
       event.preventDefault();
 
@@ -1017,7 +1013,7 @@ var PlacesMenuDNDHandler = {
     // Put the item at the end of bookmark menu.
     let ip = new InsertionPoint(PlacesUtils.bookmarksMenuFolderId,
                                 PlacesUtils.bookmarks.DEFAULT_INDEX,
-                                Ci.nsITreeView.DROP_ON);
+                                Components.interfaces.nsITreeView.DROP_ON);
     PlacesControllerDragHelper.onDrop(ip, event.dataTransfer);
     PlacesControllerDragHelper.currentDropTarget = null;
     event.stopPropagation();
@@ -1348,11 +1344,13 @@ let BookmarkingUI = {
 
     if (aState == "invalid") {
       this.star.setAttribute("disabled", "true");
-      this.button.removeAttribute("starred");
-      this.button.setAttribute("buttontooltiptext", "");
+      this.broadcaster.setAttribute("stardisabled", "true");
+      this.broadcaster.removeAttribute("starred");
+      this.broadcaster.setAttribute("buttontooltiptext", "");
     }
     else {
       this.star.removeAttribute("disabled");
+      this.broadcaster.removeAttribute("stardisabled");
       this._updateStar();
     }
     this._updateToolbarStyle();
@@ -1527,23 +1525,23 @@ let BookmarkingUI = {
 
   _updateStar: function BUI__updateStar() {
     if (!this._shouldUpdateStarState()) {
-      if (this.button.hasAttribute("starred")) {
-        this.button.removeAttribute("starred");
-        this.button.removeAttribute("buttontooltiptext");
+      if (this.broadcaster.hasAttribute("starred")) {
+        this.broadcaster.removeAttribute("starred");
+        this.broadcaster.removeAttribute("buttontooltiptext");
       }
       return;
     }
 
     if (this._itemIds.length > 0) {
-      this.button.setAttribute("starred", "true");
-      this.button.setAttribute("buttontooltiptext", this._starredTooltip);
+      this.broadcaster.setAttribute("starred", "true");
+      this.broadcaster.setAttribute("buttontooltiptext", this._starredTooltip);
       if (this.button.getAttribute("overflowedItem") == "true") {
         this.button.setAttribute("label", this._starButtonOverflowedStarredLabel);
       }
     }
     else {
-      this.button.removeAttribute("starred");
-      this.button.setAttribute("buttontooltiptext", this._unstarredTooltip);
+      this.broadcaster.removeAttribute("starred");
+      this.broadcaster.setAttribute("buttontooltiptext", this._unstarredTooltip);
       if (this.button.getAttribute("overflowedItem") == "true") {
         this.button.setAttribute("label", this._starButtonOverflowedLabel);
       }
@@ -1557,7 +1555,9 @@ let BookmarkingUI = {
   _updateBookmarkPageMenuItem: function BUI__updateBookmarkPageMenuItem(forceReset) {
     let isStarred = !forceReset && this._itemIds.length > 0;
     let label = isStarred ? "editlabel" : "bookmarklabel";
-    this.broadcaster.setAttribute("label", this.broadcaster.getAttribute(label));
+    if (this.broadcaster) {
+      this.broadcaster.setAttribute("label", this.broadcaster.getAttribute(label));
+    }
   },
 
   onMainMenuPopupShowing: function BUI_onMainMenuPopupShowing(event) {
@@ -1673,6 +1673,10 @@ let BookmarkingUI = {
         this._showBookmarkedNotification();
       PlacesCommandHook.bookmarkCurrentPage(isBookmarked);
     }
+  },
+
+  onCurrentPageContextPopupShowing() {
+    this._updateBookmarkPageMenuItem();
   },
 
   handleEvent: function BUI_handleEvent(aEvent) {

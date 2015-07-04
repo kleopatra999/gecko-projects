@@ -53,7 +53,7 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
 #endif
     global_(nullptr),
     enterCompartmentDepth(0),
-    performanceMonitoring(runtime_, this),
+    performanceMonitoring(runtime_),
     data(nullptr),
     objectMetadataCallback(nullptr),
     lastAnimationTime(0),
@@ -213,7 +213,7 @@ class WrapperMapRef : public BufferableRef
     WrapperMapRef(WrapperMap* map, const CrossCompartmentKey& key)
       : map(map), key(key) {}
 
-    void mark(JSTracer* trc) {
+    void trace(JSTracer* trc) override {
         CrossCompartmentKey prior = key;
         if (key.debugger)
             TraceManuallyBarrieredEdge(trc, &key.debugger, "CCW debugger");
@@ -223,7 +223,7 @@ class WrapperMapRef : public BufferableRef
             key.kind == CrossCompartmentKey::DebuggerSource)
         {
             MOZ_ASSERT(IsInsideNursery(key.wrapped) ||
-                       key.wrapped->asTenured().getTraceKind() == JSTRACE_OBJECT);
+                       key.wrapped->asTenured().getTraceKind() == JS::TraceKind::Object);
             TraceManuallyBarrieredEdge(trc, reinterpret_cast<JSObject**>(&key.wrapped),
                                        "CCW wrapped object");
         }
@@ -340,8 +340,7 @@ JSCompartment::wrap(JSContext* cx, MutableHandleString strp)
 
     /* If the string is an atom, we don't have to copy. */
     if (str->isAtom()) {
-        MOZ_ASSERT(str->isPermanentAtom() ||
-                   cx->runtime()->isAtomsZone(str->zone()));
+        MOZ_ASSERT(str->isPermanentAtom() || str->zone()->isAtomsZone());
         return true;
     }
 
@@ -490,7 +489,8 @@ JSCompartment::wrap(JSContext* cx, MutableHandle<PropertyDescriptor> desc)
 void
 JSCompartment::markCrossCompartmentWrappers(JSTracer* trc)
 {
-    MOZ_ASSERT(!zone()->isCollecting() || trc->runtime()->isHeapCompacting());
+    MOZ_ASSERT(trc->runtime()->isHeapMajorCollecting());
+    MOZ_ASSERT(!zone()->isCollecting() || trc->runtime()->gc.isHeapCompacting());
 
     for (WrapperMap::Enum e(crossCompartmentWrappers); !e.empty(); e.popFront()) {
         Value v = e.front().value();
@@ -625,17 +625,17 @@ JSCompartment::sweepCrossCompartmentWrappers()
           case CrossCompartmentKey::DebuggerEnvironment:
           case CrossCompartmentKey::DebuggerSource:
               MOZ_ASSERT(IsInsideNursery(key.wrapped) ||
-                         key.wrapped->asTenured().getTraceKind() == JSTRACE_OBJECT);
+                         key.wrapped->asTenured().getTraceKind() == JS::TraceKind::Object);
               keyDying = IsAboutToBeFinalizedUnbarriered(
                   reinterpret_cast<JSObject**>(&key.wrapped));
               break;
           case CrossCompartmentKey::StringWrapper:
-              MOZ_ASSERT(key.wrapped->asTenured().getTraceKind() == JSTRACE_STRING);
+              MOZ_ASSERT(key.wrapped->asTenured().getTraceKind() == JS::TraceKind::String);
               keyDying = IsAboutToBeFinalizedUnbarriered(
                   reinterpret_cast<JSString**>(&key.wrapped));
               break;
           case CrossCompartmentKey::DebuggerScript:
-              MOZ_ASSERT(key.wrapped->asTenured().getTraceKind() == JSTRACE_SCRIPT);
+              MOZ_ASSERT(key.wrapped->asTenured().getTraceKind() == JS::TraceKind::Script);
               keyDying = IsAboutToBeFinalizedUnbarriered(
                   reinterpret_cast<JSScript**>(&key.wrapped));
               break;
@@ -720,16 +720,17 @@ JSCompartment::clearObjectMetadata()
 void
 JSCompartment::setNewObjectMetadata(JSContext* cx, JSObject* obj)
 {
-    MOZ_ASSERT(this == cx->compartment());
+    assertSameCompartment(cx, this, obj);
 
     if (JSObject* metadata = objectMetadataCallback(cx, obj)) {
+        assertSameCompartment(cx, metadata);
         if (!objectMetadataTable) {
             objectMetadataTable = cx->new_<ObjectWeakMap>(cx);
             if (!objectMetadataTable)
-                CrashAtUnhandlableOOM("setObjectMetadata");
+                CrashAtUnhandlableOOM("setNewObjectMetadata");
         }
         if (!objectMetadataTable->add(cx, obj, metadata))
-            CrashAtUnhandlableOOM("setObjectMetadata");
+            CrashAtUnhandlableOOM("setNewObjectMetadata");
     }
 }
 
@@ -750,10 +751,8 @@ AddInnerLazyFunctionsFromScript(JSScript* script, AutoObjectVector& lazyFunction
 }
 
 static bool
-CreateLazyScriptsForCompartment(JSContext* cx)
+AddLazyFunctionsForCompartment(JSContext* cx, AutoObjectVector& lazyFunctions, AllocKind kind)
 {
-    AutoObjectVector lazyFunctions(cx);
-
     // Find all live root lazy functions in the compartment: those which have a
     // source object, indicating that they have a parent, and which do not have
     // an uncompiled enclosing script. The last condition is so that we don't
@@ -763,12 +762,8 @@ CreateLazyScriptsForCompartment(JSContext* cx)
     // Some LazyScripts have a non-null |JSScript* script| pointer. We still
     // want to delazify in that case: this pointer is weak so the JSScript
     // could be destroyed at the next GC.
-    //
-    // Note that while we ideally iterate over LazyScripts, LazyScripts do not
-    // currently stand in 1-1 relation with JSScripts; JSFunctions with the
-    // same LazyScript may create different JSScripts due to relazification of
-    // clones. See bug 1105306.
-    for (gc::ZoneCellIter i(cx->zone(), AllocKind::FUNCTION); !i.done(); i.next()) {
+
+    for (gc::ZoneCellIter i(cx->zone(), kind); !i.done(); i.next()) {
         JSFunction* fun = &i.get<JSObject>()->as<JSFunction>();
 
         // Sweeping is incremental; take care to not delazify functions that
@@ -788,6 +783,22 @@ CreateLazyScriptsForCompartment(JSContext* cx)
             }
         }
     }
+
+    return true;
+}
+
+static bool
+CreateLazyScriptsForCompartment(JSContext* cx)
+{
+    AutoObjectVector lazyFunctions(cx);
+
+    if (!AddLazyFunctionsForCompartment(cx, lazyFunctions, AllocKind::FUNCTION))
+        return false;
+
+    // Methods, for instance {get method() {}}, are extended functions that can
+    // be relazified, so we need to handle those as well.
+    if (!AddLazyFunctionsForCompartment(cx, lazyFunctions, AllocKind::FUNCTION_EXTENDED))
+        return false;
 
     // Create scripts for each lazy function, updating the list of functions to
     // process with any newly exposed inner functions in created scripts.

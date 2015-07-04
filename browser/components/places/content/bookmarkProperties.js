@@ -235,14 +235,10 @@ var BookmarkPropertiesPanel = {
     else { // edit
       this._node = dialogInfo.node;
       this._title = this._node.title;
-      switch (dialogInfo.type) {
-        case "bookmark":
-          this._itemType = BOOKMARK_ITEM;
-          break;
-        case "folder":
-          this._itemType = BOOKMARK_FOLDER;
-          break;
-      }
+      if (PlacesUtils.nodeIsFolder(this._node))
+        this._itemType = BOOKMARK_FOLDER;
+      else if (PlacesUtils.nodeIsURI(this._node))
+        this._itemType = BOOKMARK_ITEM;
     }
   },
 
@@ -287,7 +283,8 @@ var BookmarkPropertiesPanel = {
         this._node = yield this._promiseNewItem();
         // Edit the new item
         gEditItemOverlay.initPanel({ node: this._node
-                                   , hiddenRows: this._hiddenRows });
+                                   , hiddenRows: this._hiddenRows
+                                   , postData: this._postData });
 
         // Empty location field if the uri is about:blank, this way inserting a new
         // url will be easier for the user, Accept button will be automatically
@@ -529,11 +526,6 @@ var BookmarkPropertiesPanel = {
       childTransactions.push(setLoadTxn);
     }
 
-    if (this._postData) {
-      let postDataTxn = new PlacesEditBookmarkPostDataTransaction(-1, this._postData);
-      childTransactions.push(postDataTxn);
-    }
-
     //XXX TODO: this should be in a transaction!
     if (this._charSet && !PrivateBrowsingUtils.isWindowPrivate(window))
       PlacesUtils.setCharsetForURI(this._uri, this._charSet);
@@ -544,7 +536,8 @@ var BookmarkPropertiesPanel = {
                                                         this._title,
                                                         this._keyword,
                                                         annotations,
-                                                        childTransactions);
+                                                        childTransactions,
+                                                        this._postData);
 
     return new PlacesAggregatedTransaction(this._getDialogTitle(),
                                            [createTxn]);

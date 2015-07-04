@@ -10,7 +10,7 @@
 #include "mozilla/layers/SharedBufferManagerChild.h"
 #include "mozilla/layers/ISurfaceAllocator.h"     // for GfxMemoryImageReporter
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "prprf.h"
 
 #include "gfxPlatform.h"
@@ -75,6 +75,10 @@
 #include "GLContext.h"
 #include "GLContextProvider.h"
 #include "mozilla/gfx/Logging.h"
+
+#if defined(MOZ_WIDGET_GTK)
+#include "gfxPlatformGtk.h" // xxx - for UseFcFontList
+#endif
 
 #ifdef MOZ_WIDGET_ANDROID
 #include "TexturePoolOGL.h"
@@ -382,6 +386,48 @@ static const char *gPrefLangNames[] = {
     "x-unicode",
 };
 
+static nsIAtom* PrefLangToLangGroups(uint32_t aIndex)
+{
+    // This needs to match the list of pref font.default.xx entries listed in
+    // all.js! The order *must* match the order in eFontPrefLang.
+    //
+    // Having this array within a static function rather than at the top-level
+    // avoids a static constructor.
+    static nsIAtom* gPrefLangToLangGroups[] = {
+        nsGkAtoms::x_western,
+        nsGkAtoms::Japanese,
+        nsGkAtoms::Taiwanese,
+        nsGkAtoms::Chinese,
+        nsGkAtoms::HongKongChinese,
+        nsGkAtoms::ko,
+        nsGkAtoms::x_cyrillic,
+        nsGkAtoms::el,
+        nsGkAtoms::th,
+        nsGkAtoms::he,
+        nsGkAtoms::ar,
+        nsGkAtoms::x_devanagari,
+        nsGkAtoms::x_tamil,
+        nsGkAtoms::x_armn,
+        nsGkAtoms::x_beng,
+        nsGkAtoms::x_cans,
+        nsGkAtoms::x_ethi,
+        nsGkAtoms::x_geor,
+        nsGkAtoms::x_gujr,
+        nsGkAtoms::x_guru,
+        nsGkAtoms::x_khmr,
+        nsGkAtoms::x_mlym,
+        nsGkAtoms::x_orya,
+        nsGkAtoms::x_telu,
+        nsGkAtoms::x_knda,
+        nsGkAtoms::x_sinh,
+        nsGkAtoms::x_tibt,
+        nsGkAtoms::Unicode
+    };
+    return aIndex < ArrayLength(gPrefLangToLangGroups)
+         ? gPrefLangToLangGroups[aIndex]
+         : nsGkAtoms::Unicode;
+}
+
 gfxPlatform::gfxPlatform()
   : mTileWidth(-1)
   , mTileHeight(-1)
@@ -503,12 +549,19 @@ gfxPlatform::Init()
 
     nsresult rv;
 
-#if defined(XP_MACOSX) || defined(XP_WIN) || defined(ANDROID) // temporary, until this is implemented on others
-    rv = gfxPlatformFontList::Init();
-    if (NS_FAILED(rv)) {
-        NS_RUNTIMEABORT("Could not initialize gfxPlatformFontList");
-    }
+    bool usePlatformFontList = true;
+#if defined(MOZ_WIDGET_GTK)
+    usePlatformFontList = gfxPlatformGtk::UseFcFontList();
+#elif defined(MOZ_WIDGET_QT)
+    usePlatformFontList = false;
 #endif
+
+    if (usePlatformFontList) {
+        rv = gfxPlatformFontList::Init();
+        if (NS_FAILED(rv)) {
+            NS_RUNTIMEABORT("Could not initialize gfxPlatformFontList");
+        }
+    }
 
     gPlatform->mScreenReferenceSurface =
         gPlatform->CreateOffscreenSurface(IntSize(1, 1),
@@ -725,7 +778,7 @@ gfxPlatform::~gfxPlatform()
 
 cairo_user_data_key_t kDrawTarget;
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateDrawTargetForSurface(gfxASurface *aSurface, const IntSize& aSize)
 {
   SurfaceFormat format = Optimal2DFormatForContent(aSurface->GetContentType());
@@ -741,7 +794,7 @@ gfxPlatform::CreateDrawTargetForSurface(gfxASurface *aSurface, const IntSize& aS
 // This is a temporary function used by ContentClient to build a DrawTarget
 // around the gfxASurface. This should eventually be replaced by plumbing
 // the DrawTarget through directly
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateDrawTargetForUpdateSurface(gfxASurface *aSurface, const IntSize& aSize)
 {
 #ifdef XP_MACOSX
@@ -794,7 +847,7 @@ gfxPlatform::ClearSourceSurfaceForSurface(gfxASurface *aSurface)
   aSurface->SetData(&kSourceSurface, nullptr, nullptr);
 }
 
-/* static */ TemporaryRef<SourceSurface>
+/* static */ already_AddRefed<SourceSurface>
 gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurface)
 {
   if (!aSurface->CairoSurface() || aSurface->CairoStatus()) {
@@ -814,7 +867,8 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
     SourceSurfaceUserData *surf = static_cast<SourceSurfaceUserData*>(userData);
 
     if (surf->mSrcSurface->IsValid() && surf->mBackendType == aTarget->GetBackendType()) {
-      return surf->mSrcSurface;
+      RefPtr<SourceSurface> srcSurface(surf->mSrcSurface);
+      return srcSurface.forget();
     }
     // We can just continue here as when setting new user data the destroy
     // function will be called for the old user data.
@@ -949,7 +1003,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
   return srcBuffer.forget();
 }
 
-TemporaryRef<DataSourceSurface>
+already_AddRefed<DataSourceSurface>
 gfxPlatform::GetWrappedDataSourceSurface(gfxASurface* aSurface)
 {
   nsRefPtr<gfxImageSurface> image = aSurface->GetAsImageSurface();
@@ -975,16 +1029,14 @@ gfxPlatform::GetWrappedDataSourceSurface(gfxASurface* aSurface)
   return result.forget();
 }
 
-TemporaryRef<ScaledFont>
+already_AddRefed<ScaledFont>
 gfxPlatform::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
 {
   NativeFont nativeFont;
   nativeFont.mType = NativeFontType::CAIRO_FONT_FACE;
   nativeFont.mFont = aFont->GetCairoScaledFont();
-  RefPtr<ScaledFont> scaledFont =
-    Factory::CreateScaledFontForNativeFont(nativeFont,
-                                           aFont->GetAdjustedSize());
-  return scaledFont;
+  return Factory::CreateScaledFontForNativeFont(nativeFont,
+                                                aFont->GetAdjustedSize());
 }
 
 int
@@ -1150,7 +1202,7 @@ gfxPlatform::HasEnoughTotalSystemMemoryForSkiaGL()
   return true;
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateDrawTargetForBackend(BackendType aBackend, const IntSize& aSize, SurfaceFormat aFormat)
 {
   // There is a bunch of knowledge in the gfxPlatform heirarchy about how to
@@ -1174,7 +1226,7 @@ gfxPlatform::CreateDrawTargetForBackend(BackendType aBackend, const IntSize& aSi
   }
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateOffscreenCanvasDrawTarget(const IntSize& aSize, SurfaceFormat aFormat)
 {
   NS_ASSERTION(mPreferredCanvasBackend != BackendType::NONE, "No backend.");
@@ -1192,14 +1244,14 @@ gfxPlatform::CreateOffscreenCanvasDrawTarget(const IntSize& aSize, SurfaceFormat
 #endif
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateOffscreenContentDrawTarget(const IntSize& aSize, SurfaceFormat aFormat)
 {
   NS_ASSERTION(mPreferredCanvasBackend != BackendType::NONE, "No backend.");
   return CreateDrawTargetForBackend(mContentBackend, aSize, aFormat);
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateDrawTargetForData(unsigned char* aData, const IntSize& aSize, int32_t aStride, SurfaceFormat aFormat)
 {
   NS_ASSERTION(mContentBackend != BackendType::NONE, "No backend.");
@@ -1472,6 +1524,16 @@ gfxPlatform::GetFontPrefLangFor(nsIAtom *aLang)
     nsAutoCString lang;
     aLang->ToUTF8String(lang);
     return GetFontPrefLangFor(lang.get());
+}
+
+nsIAtom*
+gfxPlatform::GetLangGroupForPrefLang(eFontPrefLang aLang)
+{
+    // the special CJK set pref lang should be resolved into separate
+    // calls to individual CJK pref langs before getting here
+    NS_ASSERTION(aLang != eFontPrefLang_CJKSet, "unresolved CJK set pref lang");
+
+    return PrefLangToLangGroups(uint32_t(aLang));
 }
 
 const char*
@@ -2083,7 +2145,6 @@ PRLogModuleInfo*
 gfxPlatform::GetLog(eGfxLog aWhichLog)
 {
     // logs shared across gfx
-#ifdef PR_LOGGING
     static PRLogModuleInfo *sFontlistLog = nullptr;
     static PRLogModuleInfo *sFontInitLog = nullptr;
     static PRLogModuleInfo *sTextrunLog = nullptr;
@@ -2125,9 +2186,6 @@ gfxPlatform::GetLog(eGfxLog aWhichLog)
     }
 
     return nullptr;
-#else
-    return nullptr;
-#endif
 }
 
 int
@@ -2188,8 +2246,9 @@ gfxPlatform::OptimalFormatForContent(gfxContentType aContent)
  */
 static bool sLayersSupportsD3D9 = false;
 static bool sLayersSupportsD3D11 = false;
-static bool sANGLESupportsD3D11 = false;
+bool gANGLESupportsD3D11 = false;
 static bool sLayersSupportsHardwareVideoDecoding = false;
+static bool sLayersHardwareVideoDecodingFailed = false;
 static bool sBufferRotationCheckPref = true;
 static bool sPrefBrowserTabsRemoteAutostart = false;
 
@@ -2232,7 +2291,7 @@ InitLayersAccelerationPrefs()
       }
       if (NS_SUCCEEDED(gfxInfo->GetFeatureStatus(nsIGfxInfo::FEATURE_DIRECT3D_11_ANGLE, &status))) {
         if (status == nsIGfxInfo::FEATURE_STATUS_OK) {
-          sANGLESupportsD3D11 = true;
+          gANGLESupportsD3D11 = true;
         }
       }
     }
@@ -2248,6 +2307,10 @@ InitLayersAccelerationPrefs()
         sLayersSupportsHardwareVideoDecoding = true;
       }
     }
+
+    Preferences::AddBoolVarCache(&sLayersHardwareVideoDecodingFailed,
+                                 "media.hardware-video-decoding.failed",
+                                 false);
 
     sLayersAccelerationPrefsInitialized = true;
   }
@@ -2277,14 +2340,14 @@ gfxPlatform::CanUseHardwareVideoDecoding()
   // this function is called from the compositor thread, so it is not
   // safe to init the prefs etc. from here.
   MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
-  return sLayersSupportsHardwareVideoDecoding;
+  return sLayersSupportsHardwareVideoDecoding && !sLayersHardwareVideoDecodingFailed;
 }
 
 bool
 gfxPlatform::CanUseDirect3D11ANGLE()
 {
   MOZ_ASSERT(sLayersAccelerationPrefsInitialized);
-  return sANGLESupportsD3D11;
+  return gANGLESupportsD3D11;
 }
 
 
@@ -2304,7 +2367,7 @@ gfxPlatform::DisableBufferRotation()
   sBufferRotationCheckPref = false;
 }
 
-TemporaryRef<ScaledFont>
+already_AddRefed<ScaledFont>
 gfxPlatform::GetScaledFontForFontWithCairoSkia(DrawTarget* aTarget, gfxFont* aFont)
 {
     NativeFont nativeFont;
@@ -2391,7 +2454,7 @@ DetectBadApzWheelInputPrefs()
 void
 gfxPlatform::GetApzSupportInfo(mozilla::widget::InfoObject& aObj)
 {
-  if (!gfxPrefs::AsyncPanZoomEnabled()) {
+  if (!gfxPlatform::AsyncPanZoomEnabled()) {
     return;
   }
 
@@ -2409,3 +2472,17 @@ gfxPlatform::GetApzSupportInfo(mozilla::widget::InfoObject& aObj)
   }
 }
 
+/*static*/ bool
+gfxPlatform::AsyncPanZoomEnabled()
+{
+#if !defined(MOZ_B2G) && !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_UIKIT)
+  // For XUL applications (everything but B2G on mobile and desktop, and
+  // Firefox on Android) we only want to use APZ when E10S is enabled. If
+  // we ever get input events off the main thread we can consider relaxing
+  // this requirement.
+  if (!BrowserTabsRemoteAutostart()) {
+    return false;
+  }
+#endif
+  return gfxPrefs::AsyncPanZoomEnabledDoNotUseDirectly();
+}

@@ -112,7 +112,6 @@
 #include "nsIXPConnect.h"
 #include "nsIInterfaceInfo.h"
 #include "nsIXPCScriptable.h"
-#include "nsIJSRuntimeService.h"
 #include "nsIObserver.h"
 #include "nsWeakReference.h"
 #include "nsCOMPtr.h"
@@ -192,7 +191,6 @@
 /***************************************************************************/
 // data declarations...
 extern const char XPC_CONTEXT_STACK_CONTRACTID[];
-extern const char XPC_RUNTIME_CONTRACTID[];
 extern const char XPC_EXCEPTION_CONTRACTID[];
 extern const char XPC_CONSOLE_CONTRACTID[];
 extern const char XPC_SCRIPT_ERROR_CONTRACTID[];
@@ -244,16 +242,13 @@ static inline bool IS_WN_REFLECTOR(JSObject* obj)
 // to this rule are noted explicitly.
 
 class nsXPConnect final : public nsIXPConnect,
-                          public nsIThreadObserver,
-                          public nsSupportsWeakReference,
-                          public nsIJSRuntimeService
+                          public nsIThreadObserver
 {
 public:
     // all the interface method declarations...
     NS_DECL_ISUPPORTS
     NS_DECL_NSIXPCONNECT
     NS_DECL_NSITHREADOBSERVER
-    NS_DECL_NSIJSRUNTIMESERVICE
 
     // non-interface implementation
 public:
@@ -602,13 +597,13 @@ public:
 
     void AddGCCallback(xpcGCCallback cb);
     void RemoveGCCallback(xpcGCCallback cb);
-    void AddContextCallback(xpcContextCallback cb);
-    void RemoveContextCallback(xpcContextCallback cb);
 
-    static JSContext* DefaultJSContextCallback(JSRuntime* rt);
+    struct EnvironmentPreparer : public js::ScriptEnvironmentPreparer {
+        bool invoke(JS::HandleObject scope, Closure& closure) override;
+    };
+    EnvironmentPreparer mEnvironmentPreparer;
+
     static void ActivityCallback(void* arg, bool active);
-    static void CTypesActivityCallback(JSContext* cx,
-                                       js::CTypesActivityType type);
     static bool InterruptCallback(JSContext* cx);
 
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf);
@@ -668,7 +663,6 @@ private:
     XPCRootSetElem* mWrappedJSRoots;
     XPCRootSetElem* mObjectHolderRoots;
     nsTArray<xpcGCCallback> extraGCCallbacks;
-    nsTArray<xpcContextCallback> extraContextCallbacks;
     nsRefPtr<WatchdogManager> mWatchdogManager;
     JS::GCSliceCallback mPrevGCSliceCallback;
     JS::PersistentRootedObject mUnprivilegedJunkScope;
@@ -820,8 +814,8 @@ public:
 
     XPCCallContext(XPCContext::LangType callerLanguage,
                    JSContext* cx,
-                   JS::HandleObject obj    = JS::NullPtr(),
-                   JS::HandleObject funobj = JS::NullPtr(),
+                   JS::HandleObject obj    = nullptr,
+                   JS::HandleObject funobj = nullptr,
                    JS::HandleId id         = JSID_VOIDHANDLE,
                    unsigned argc           = NO_ARGS,
                    jsval* argv             = nullptr,
@@ -1016,6 +1010,17 @@ static inline bool IS_PROTO_CLASS(const js::Class* clazz)
            clazz == &XPC_WN_ModsAllowed_NoCall_Proto_JSClass;
 }
 
+typedef js::HashSet<size_t,
+                    js::DefaultHasher<size_t>,
+                    js::SystemAllocPolicy> InterpositionWhitelist;
+
+struct InterpositionWhitelistPair {
+    nsIAddonInterposition* interposition;
+    InterpositionWhitelist whitelist;
+};
+
+typedef nsTArray<InterpositionWhitelistPair> InterpositionWhitelistArray;
+
 /***************************************************************************/
 // XPCWrappedNativeScope is one-to-one with a JS global object.
 
@@ -1185,8 +1190,13 @@ public:
     bool HasInterposition() { return mInterposition; }
     nsCOMPtr<nsIAddonInterposition> GetInterposition();
 
-    static bool SetAddonInterposition(JSAddonId* addonId,
+    static bool SetAddonInterposition(JSContext* cx,
+                                      JSAddonId* addonId,
                                       nsIAddonInterposition* interp);
+
+    static InterpositionWhitelist* GetInterpositionWhitelist(nsIAddonInterposition* interposition);
+    static bool UpdateInterpositionWhitelist(JSContext* cx,
+                                             nsIAddonInterposition* interposition);
 
     void SetAddonCallInterposition() { mHasCallInterpositions = true; }
     bool HasCallInterposition() { return mHasCallInterpositions; };
@@ -1209,6 +1219,8 @@ private:
     static XPCWrappedNativeScope* gDyingScopes;
 
     static InterpositionMap*         gInterpositionMap;
+
+    static InterpositionWhitelistArray* gInterpositionWhitelists;
 
     XPCJSRuntime*                    mRuntime;
     Native2WrappedNativeMap*         mWrappedNativeMap;
@@ -1285,7 +1297,7 @@ public:
                           jsval* pval)
         {MOZ_ASSERT(IsConstant(),
                     "Only call this if you're sure this is a constant!");
-         return Resolve(ccx, iface, JS::NullPtr(), pval);}
+         return Resolve(ccx, iface, nullptr, pval);}
 
     bool NewFunctionObject(XPCCallContext& ccx, XPCNativeInterface* iface,
                            JS::HandleObject parent, jsval* pval);
@@ -2386,7 +2398,7 @@ private:
                                uint16_t methodIndex,
                                uint8_t paramIndex,
                                nsXPTCMiniVariant* params,
-                               uint32_t* result);
+                               uint32_t* result) const;
 
     bool GetInterfaceTypeFromParam(JSContext* cx,
                                    const XPTMethodDescriptor* method,
@@ -2394,14 +2406,17 @@ private:
                                    uint16_t methodIndex,
                                    const nsXPTType& type,
                                    nsXPTCMiniVariant* params,
-                                   nsID* result);
+                                   nsID* result) const;
 
-    void CleanupPointerArray(const nsXPTType& datum_type,
-                             uint32_t array_count,
-                             void** arrayp);
+    static void CleanupPointerArray(const nsXPTType& datum_type,
+                                    uint32_t array_count,
+                                    void** arrayp);
 
-    void CleanupPointerTypeObject(const nsXPTType& type,
-                                  void** pp);
+    static void CleanupPointerTypeObject(const nsXPTType& type,
+                                         void** pp);
+
+    void CleanupOutparams(JSContext* cx, uint16_t methodIndex, const nsXPTMethodInfo* info,
+                          nsXPTCMiniVariant* nativeParams, bool inOutOnly, uint8_t n) const;
 
 private:
     XPCJSRuntime* mRuntime;
@@ -2842,14 +2857,8 @@ struct XPCJSContextInfo {
 };
 
 namespace xpc {
-
-// These functions are used in a few places where a callback model makes it
-// impossible to push a JSContext using one of our stack-scoped classes. We
-// depend on those stack-scoped classes to maintain nsIScriptContext
-// invariants, so these functions may only be used of the context is not
-// associated with an nsJSContext/nsIScriptContext.
-bool PushJSContextNoScriptContext(JSContext* aCx);
-void PopJSContextNoScriptContext();
+bool PushNullJSContext();
+void PopNullJSContext();
 
 } /* namespace xpc */
 
@@ -2890,8 +2899,8 @@ public:
 
 private:
     friend class mozilla::dom::danger::AutoCxPusher;
-    friend bool xpc::PushJSContextNoScriptContext(JSContext* aCx);
-    friend void xpc::PopJSContextNoScriptContext();
+    friend bool xpc::PushNullJSContext();
+    friend void xpc::PopNullJSContext();
 
     // We make these private so that stack manipulation can only happen
     // through one of the above friends.
@@ -3400,6 +3409,7 @@ struct GlobalProperties {
     bool File : 1;
     bool crypto : 1;
     bool rtcIdentityProvider : 1;
+    bool fetch : 1;
 };
 
 // Infallible.
@@ -3511,7 +3521,7 @@ public:
     { }
 
     JSObject* ToJSObject(JSContext* cx) {
-        JS::RootedObject obj(cx, JS_NewObjectWithGivenProto(cx, nullptr, JS::NullPtr()));
+        JS::RootedObject obj(cx, JS_NewObjectWithGivenProto(cx, nullptr, nullptr));
         if (!obj)
             return nullptr;
 
@@ -3724,8 +3734,17 @@ public:
 
     const nsACString& GetLocation() {
         if (location.IsEmpty() && locationURI) {
-            if (NS_FAILED(locationURI->GetSpec(location)))
+
+            nsCOMPtr<nsIXPConnectWrappedJS> jsLocationURI =
+                 do_QueryInterface(locationURI);
+            if (jsLocationURI) {
+                // We cannot call into JS-implemented nsIURI objects, because
+                // we are iterating over the JS heap at this point.
+                location =
+                    NS_LITERAL_CSTRING("<JS-implemented nsIURI location>");
+            } else if (NS_FAILED(locationURI->GetSpec(location))) {
                 location = NS_LITERAL_CSTRING("<unknown location>");
+            }
         }
         return location;
     }

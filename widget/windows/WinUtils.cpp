@@ -20,7 +20,7 @@
 #include "nsIContentPolicy.h"
 #include "nsContentUtils.h"
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "nsString.h"
 #include "nsDirectoryServiceUtils.h"
@@ -40,15 +40,14 @@
 #include "nsIThread.h"
 #include "MainThreadUtils.h"
 #include "gfxColor.h"
+#include "nsLookAndFeel.h"
 
 #ifdef NS_ENABLE_TSF
 #include <textstor.h>
 #include "nsTextStore.h"
 #endif // #ifdef NS_ENABLE_TSF
 
-#ifdef PR_LOGGING
 PRLogModuleInfo* gWindowsLog = nullptr;
-#endif
 
 using namespace mozilla::gfx;
 
@@ -432,11 +431,9 @@ WinUtils::DwmFlushProc WinUtils::dwmFlushProcPtr = nullptr;
 void
 WinUtils::Initialize()
 {
-#ifdef PR_LOGGING
   if (!gWindowsLog) {
     gWindowsLog = PR_NewLogModule("Widget");
   }
-#endif
   if (!sDwmDll && IsVistaOrLater()) {
     sDwmDll = ::LoadLibraryW(kDwmLibraryName);
 
@@ -485,11 +482,9 @@ WinUtils::LogW(const wchar_t *fmt, ...)
                             nullptr) > 0) {
       // desktop console
       printf("%s\n", utf8);
-#ifdef PR_LOGGING
       NS_ASSERTION(gWindowsLog, "Called WinUtils Log() but Widget "
                                    "log module doesn't exist!");
-      PR_LOG(gWindowsLog, PR_LOG_ALWAYS, (utf8));
-#endif
+      MOZ_LOG(gWindowsLog, LogLevel::Error, (utf8));
     }
     delete[] utf8;
   }
@@ -521,11 +516,9 @@ WinUtils::Log(const char *fmt, ...)
   // desktop console
   printf("%s\n", buffer);
 
-#ifdef PR_LOGGING
   NS_ASSERTION(gWindowsLog, "Called WinUtils Log() but Widget "
                                "log module doesn't exist!");
-  PR_LOG(gWindowsLog, PR_LOG_ALWAYS, (buffer));
-#endif
+  MOZ_LOG(gWindowsLog, LogLevel::Error, (buffer));
   delete[] buffer;
 }
 
@@ -947,8 +940,8 @@ WinUtils::GetMouseInputSource()
 bool
 WinUtils::GetIsMouseFromTouch(uint32_t aEventType)
 {
-  const int MOZ_T_I_SIGNATURE = TABLET_INK_TOUCH | TABLET_INK_SIGNATURE;
-  const int MOZ_T_I_CHECK_TCH = TABLET_INK_TOUCH | TABLET_INK_CHECK;
+  const uint32_t MOZ_T_I_SIGNATURE = TABLET_INK_TOUCH | TABLET_INK_SIGNATURE;
+  const uint32_t MOZ_T_I_CHECK_TCH = TABLET_INK_TOUCH | TABLET_INK_CHECK;
   return ((aEventType == NS_MOUSE_MOVE ||
            aEventType == NS_MOUSE_BUTTON_DOWN ||
            aEventType == NS_MOUSE_BUTTON_UP) &&
@@ -1163,7 +1156,9 @@ AsyncFaviconDataReady::OnComplete(nsIURI *aFaviconURI,
   NS_ENSURE_SUCCESS(rv, rv);
 
   RefPtr<SourceSurface> surface =
-    container->GetFrame(imgIContainer::FRAME_FIRST, 0);
+    container->GetFrame(imgIContainer::FRAME_FIRST,
+                        imgIContainer::FLAG_SYNC_DECODE |
+                        imgIContainer::FLAG_ASYNC_NOTIFY);
   NS_ENSURE_TRUE(surface, NS_ERROR_FAILURE);
 
   RefPtr<DataSourceSurface> dataSurface;
@@ -1676,6 +1671,26 @@ bool
 WinUtils::ShouldHideScrollbars()
 {
   return false;
+}
+
+// This is in use here and in dom/events/TouchEvent.cpp
+/* static */
+uint32_t
+WinUtils::IsTouchDeviceSupportPresent()
+{
+  int32_t touchCapabilities = ::GetSystemMetrics(SM_DIGITIZER);
+  return (touchCapabilities & NID_READY) &&
+         (touchCapabilities & (NID_EXTERNAL_TOUCH | NID_INTEGRATED_TOUCH));
+}
+
+/* static */
+uint32_t
+WinUtils::GetMaxTouchPoints()
+{
+  if (IsWin7OrLater() && IsTouchDeviceSupportPresent()) {
+    return GetSystemMetrics(SM_MAXIMUMTOUCHES);
+  }
+  return 0;
 }
 
 } // namespace widget

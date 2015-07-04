@@ -20,12 +20,21 @@
                        oncommand="gMenuButtonUpdateBadge.onMenuPanelCommand(event);"
                        wrap="true"
                        hidden="true"/>
-        <toolbarbutton id="PanelUI-fxa-status"
-                       defaultlabel="&fxaSignIn.label;"
-                       errorlabel="&fxaSignInError.label;"
-                       fxabrandname="&syncBrand.fxAccount.label;"
-                       oncommand="gFxAccounts.onMenuPanelCommand(event);"
-                       hidden="true"/>
+        <hbox id="PanelUI-footer-fxa">
+          <hbox id="PanelUI-fxa-status"
+                defaultlabel="&fxaSignIn.label;"
+                signedinTooltiptext="&fxaSignedIn.tooltip;"
+                errorlabel="&fxaSignInError.label;"
+                onclick="gFxAccounts.onMenuPanelCommand();">
+            <image id="PanelUI-fxa-avatar"/>
+            <toolbarbutton id="PanelUI-fxa-label"
+                           fxabrandname="&syncBrand.fxAccount.label;"/>
+          </hbox>
+          <toolbarseparator/>
+          <toolbarbutton id="PanelUI-fxa-icon"
+                         oncommand="gSyncUI.doSync();"
+                         closemenu="none"/>
+        </hbox>
 
         <hbox id="PanelUI-footer-inner">
           <toolbarbutton id="PanelUI-customize" label="&appMenuCustomize.label;"
@@ -103,6 +112,10 @@
                        observes="bookmarkThisPageBroadcaster"
                        command="Browser:AddBookmarkAs"
                        onclick="PanelUI.hide();"/>
+        <toolbarseparator id="panelMenu_pocketSeparator"/>
+        <toolbarbutton id="panelMenu_pocket" label="&pocketMenuitem.label;"
+                       class="subviewbutton cui-withicon"
+                       oncommand="openUILink(Pocket.listURL, event);"/>
         <toolbarseparator/>
         <toolbarbutton id="panelMenu_viewBookmarksSidebar"
                        label="&viewBookmarksSidebar2.label;"
@@ -137,10 +150,6 @@
           <observes element="readingListSidebar" attribute="checked"/>
           <observes element="readingListSidebar" attribute="hidden"/>
         </toolbarbutton>
-        <toolbarseparator id="panelMenu_pocketSeparator"/>
-        <toolbarbutton id="panelMenu_pocket" label="&pocketMenuitem.label;"
-                       class="subviewbutton cui-withicon"
-                       oncommand="openUILink(Pocket.listURL, event);"/>
         <toolbarseparator class="small-separator"/>
         <toolbaritem id="panelMenu_bookmarksMenu"
                      orient="vertical"
@@ -235,9 +244,6 @@
 
     <panelview id="PanelUI-pocketView" flex="1">
       <vbox class="panel-subview-body">
-        <hbox id="pocket-panel-container" align="top" flex="1">
-          <iframe id="pocket-panel-iframe" type="content"/>
-        </hbox>
       </vbox>
     </panelview>
 

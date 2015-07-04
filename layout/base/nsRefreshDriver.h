@@ -17,6 +17,7 @@
 #include "nsTObserverArray.h"
 #include "nsTArray.h"
 #include "nsTHashtable.h"
+#include "nsTObserverArray.h"
 #include "nsClassHashtable.h"
 #include "nsHashKeys.h"
 #include "mozilla/Attributes.h"
@@ -28,6 +29,8 @@ class nsPresContext;
 class nsIPresShell;
 class nsIDocument;
 class imgIRequest;
+class nsIDOMEvent;
+class nsINode;
 
 namespace mozilla {
 class RefreshDriverTimer;
@@ -149,22 +152,6 @@ public:
   void RemoveImageRequest(imgIRequest* aRequest);
 
   /**
-   * Add / remove presshells which have pending resize event.
-   */
-  void AddResizeEventFlushObserver(nsIPresShell* aShell)
-  {
-    NS_ASSERTION(!mResizeEventFlushObservers.Contains(aShell),
-      "Double-adding resize event flush observer");
-    mResizeEventFlushObservers.AppendElement(aShell);
-    EnsureTimerStarted();
-  }
-
-  void RemoveResizeEventFlushObserver(nsIPresShell* aShell)
-  {
-    mResizeEventFlushObservers.RemoveElement(aShell);
-  }
-
-  /**
    * Add / remove presshells that we should flush style and layout on
    */
   bool AddStyleFlushObserver(nsIPresShell* aShell) {
@@ -236,6 +223,17 @@ public:
    * Remove a document for which we have nsIFrameRequestCallbacks
    */
   void RevokeFrameRequestCallbacks(nsIDocument* aDocument);
+
+  /**
+   * Queue a new event to dispatch in next tick before the style flush
+   */
+  void ScheduleEventDispatch(nsINode* aTarget, nsIDOMEvent* aEvent);
+
+  /**
+   * Cancel all pending events scheduled by ScheduleEventDispatch which
+   * targets any node in aDocument.
+   */
+  void CancelPendingEvents(nsIDocument* aDocument);
 
   /**
    * Tell the refresh driver that it is done driving refreshes and
@@ -323,6 +321,7 @@ private:
   };
   typedef nsClassHashtable<nsUint32HashKey, ImageStartData> ImageStartTable;
 
+  void DispatchPendingEvents();
   void RunFrameRequestCallbacks(int64_t aNowEpoch, mozilla::TimeStamp aNowTime);
 
   void Tick(int64_t aNowEpoch, mozilla::TimeStamp aNowTime);
@@ -355,6 +354,8 @@ private:
   double GetRegularTimerInterval(bool *outIsDefault = nullptr) const;
   static double GetThrottledTimerInterval();
 
+  static mozilla::TimeDuration GetMinRecomputeVisibilityInterval();
+
   bool HaveFrameRequestCallbacks() const {
     return mFrameRequestCallbackDocs.Length() != 0;
   }
@@ -383,7 +384,14 @@ private:
   // non-visible) documents registered with a non-throttled refresh driver.
   const mozilla::TimeDuration mThrottledFrameRequestInterval;
 
+  // How long we wait, at a minimum, before recomputing image visibility
+  // information. This is a minimum because, regardless of this interval, we
+  // only recompute visibility when we've seen a layout or style flush since the
+  // last time we did it.
+  const mozilla::TimeDuration mMinRecomputeVisibilityInterval;
+
   bool mThrottled;
+  bool mNeedToRecomputeVisibility;
   bool mTestControllingRefreshes;
   bool mViewManagerFlushIsPending;
   bool mRequestedHighPrecision;
@@ -402,20 +410,26 @@ private:
   mozilla::TimeStamp mMostRecentTick;
   mozilla::TimeStamp mTickStart;
   mozilla::TimeStamp mNextThrottledFrameRequestTick;
+  mozilla::TimeStamp mNextRecomputeVisibilityTick;
 
   // separate arrays for each flush type we support
   ObserverArray mObservers[3];
   RequestTable mRequests;
   ImageStartTable mStartTable;
 
-  nsAutoTArray<nsIPresShell*, 16> mResizeEventFlushObservers;
+  struct PendingEvent {
+    nsCOMPtr<nsINode> mTarget;
+    nsCOMPtr<nsIDOMEvent> mEvent;
+  };
+
   nsAutoTArray<nsIPresShell*, 16> mStyleFlushObservers;
   nsAutoTArray<nsIPresShell*, 16> mLayoutFlushObservers;
   nsAutoTArray<nsIPresShell*, 16> mPresShellsToInvalidateIfHidden;
   // nsTArray on purpose, because we want to be able to swap.
   nsTArray<nsIDocument*> mFrameRequestCallbackDocs;
   nsTArray<nsIDocument*> mThrottledFrameRequestCallbackDocs;
-  nsTArray<nsAPostRefreshObserver*> mPostRefreshObservers;
+  nsTObserverArray<nsAPostRefreshObserver*> mPostRefreshObservers;
+  nsTArray<PendingEvent> mPendingEvents;
 
   // Helper struct for processing image requests
   struct ImageRequestParameters {

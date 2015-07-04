@@ -31,7 +31,6 @@ toolkit.jar:
 *       skin/classic/global/global.css
         skin/classic/global/globalBindings.xml
         skin/classic/global/groupbox.css
-*       skin/classic/global/inContentUI.css
         skin/classic/global/linkTree.css
 *       skin/classic/global/listbox.css
 *       skin/classic/global/menu.css
@@ -102,9 +101,7 @@ toolkit.jar:
         skin/classic/global/icons/blacklist_large.png            (icons/blacklist_large.png)
         skin/classic/global/icons/Close.gif                      (icons/Close.gif)
         skin/classic/global/icons/close.png                      (icons/close.png)
-        skin/classic/global/icons/close-lunaBlue.png             (icons/close-lunaBlue.png)
-        skin/classic/global/icons/close-lunaOlive.png            (icons/close-lunaOlive.png)
-        skin/classic/global/icons/close-lunaSilver.png           (icons/close-lunaSilver.png)
+        skin/classic/global/icons/close@2x.png                   (icons/close@2x.png)
         skin/classic/global/icons/collapse.png                   (icons/collapse.png)
         skin/classic/global/icons/Error.png                      (icons/Error.png)
         skin/classic/global/icons/error-16.png                   (icons/error-16.png)
@@ -138,7 +135,6 @@ toolkit.jar:
         skin/classic/global/icons/windowControls.png             (icons/windowControls.png)
         skin/classic/global/icons/webapps-16.png                 (icons/webapps-16.png)
         skin/classic/global/icons/webapps-64.png                 (icons/webapps-64.png)
-        skin/classic/global/inContentUI/background-texture.png   (inContentUI/background-texture.png)
         skin/classic/global/media/TopLevelImageDocument.css      (media/TopLevelImageDocument.css)
         skin/classic/global/media/TopLevelVideoDocument.css      (media/TopLevelVideoDocument.css)
         skin/classic/global/media/imagedoc-lightnoise.png        (media/imagedoc-lightnoise.png)
@@ -160,6 +156,9 @@ toolkit.jar:
         skin/classic/global/media/clicktoplay-bgtexture.png      (media/clicktoplay-bgtexture.png)
         skin/classic/global/media/videoClickToPlayButton.svg     (media/videoClickToPlayButton.svg)
         skin/classic/global/menu/shared-menu-check.png           (../../shared/menu-check.png)
+        skin/classic/global/menu/shared-menu-check-active.svg    (../../shared/menu-check-active.svg)
+        skin/classic/global/menu/shared-menu-check-black.svg     (../../shared/menu-check-black.svg)
+        skin/classic/global/menu/shared-menu-check-hover.svg     (../../shared/menu-check-hover.svg)
 *       skin/classic/global/in-content/common.css                (in-content/common.css)
 *       skin/classic/global/in-content/info-pages.css            (in-content/info-pages.css)
         skin/classic/global/in-content/check.svg                 (../../shared/in-content/check.svg)
@@ -173,6 +172,7 @@ toolkit.jar:
         skin/classic/global/printpreview/arrow-right-end.png     (printpreview/arrow-right-end.png)
         skin/classic/global/radio/radio-check.gif                (radio/radio-check.gif)
         skin/classic/global/radio/radio-check-dis.gif            (radio/radio-check-dis.gif)
+        skin/classic/global/reader/pocket.svg                    (../../shared/reader/pocket.svg)
         skin/classic/global/reader/RM-Add-24x24.svg              (../../shared/reader/RM-Add-24x24.svg)
         skin/classic/global/reader/RM-Close-24x24.svg            (../../shared/reader/RM-Close-24x24.svg)
         skin/classic/global/reader/RM-Delete-24x24.svg           (../../shared/reader/RM-Delete-24x24.svg)
@@ -243,6 +243,9 @@ toolkit.jar:
         skin/classic/global/tree/twisty-clsd-XP.png                    (tree/twisty-clsd-XP.png)
         skin/classic/global/tree/twisty-open-XP.png                    (tree/twisty-open-XP.png)
 
+#if MOZ_BUILD_APP == browser
+../browser/extensions/{972ce4c6-7e08-4474-a285-3208198ce6fd}/chrome.jar:
+#endif
 % override chrome://global/skin/console/console-toolbar.png       chrome://global/skin/console/console-toolbar-XP.png      osversion<6
 % override chrome://global/skin/dirListing/folder.png             chrome://global/skin/dirListing/folder-XP.png            osversion<6
 % override chrome://global/skin/dirListing/local.png              chrome://global/skin/dirListing/local-XP.png             osversion<6
@@ -283,5 +286,8 @@ toolkit.jar:
 % override chrome://global/skin/tree/twisty-open.png              chrome://global/skin/tree/twisty-open-XP.png             osversion<6
 #endif
 
+#if MOZ_BUILD_APP == browser
+../browser/extensions/{972ce4c6-7e08-4474-a285-3208198ce6fd}/chrome.jar:
+#endif
 % override chrome://global/skin/arrow/arrow-lft-hov.gif           chrome://global/skin/arrow/arrow-lft.gif
 % override chrome://global/skin/arrow/arrow-rit-hov.gif           chrome://global/skin/arrow/arrow-rit.gif

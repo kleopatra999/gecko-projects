@@ -13,6 +13,7 @@
 #include "nsIThread.h"
 #include "nsSize.h"
 #include "nsRect.h"
+#include "MediaPromise.h"
 
 #if !(defined(XP_WIN) || defined(XP_MACOSX) || defined(LINUX)) || \
     defined(MOZ_ASAN)
@@ -23,6 +24,7 @@
 #include "prtime.h"
 #include "AudioSampleFormat.h"
 #include "mozilla/RefPtr.h"
+#include "TimeUnits.h"
 
 using mozilla::CheckedInt64;
 using mozilla::CheckedUint64;
@@ -115,19 +117,14 @@ void DeleteOnMainThread(nsAutoPtr<T>& aObject) {
 
 class MediaResource;
 
-namespace dom {
-class TimeRanges;
-}
-
 // Estimates the buffered ranges of a MediaResource using a simple
 // (byteOffset/length)*duration method. Probably inaccurate, but won't
 // do file I/O, and can be used when we don't have detailed knowledge
 // of the byte->time mapping of a resource. aDurationUsecs is the duration
 // of the media in microseconds. Estimated buffered ranges are stored in
 // aOutBuffered. Ranges are 0-normalized, i.e. in the range of (0,duration].
-void GetEstimatedBufferedTimeRanges(mozilla::MediaResource* aStream,
-                                    int64_t aDurationUsecs,
-                                    mozilla::dom::TimeRanges* aOutBuffered);
+media::TimeIntervals GetEstimatedBufferedTimeRanges(mozilla::MediaResource* aStream,
+                                                    int64_t aDurationUsecs);
 
 // Converts from number of audio frames (aFrames) to microseconds, given
 // the specified audio rate (aRate). Stores result in aOutUsecs. Returns true
@@ -140,12 +137,6 @@ CheckedInt64 FramesToUsecs(int64_t aFrames, uint32_t aRate);
 // true if the operation succeeded, or false if there was an integer
 // overflow while calulating the conversion.
 CheckedInt64 UsecsToFrames(int64_t aUsecs, uint32_t aRate);
-
-// Number of microseconds per second. 1e6.
-static const int64_t USECS_PER_S = 1000000;
-
-// Number of microseconds per millisecond.
-static const int64_t USECS_PER_MS = 1000;
 
 // Converts milliseconds to seconds.
 #define MS_TO_SECONDS(ms) ((double)(ms) / (PR_MSEC_PER_SEC))
@@ -216,9 +207,22 @@ private:
 
 class SharedThreadPool;
 
+// The MediaDataDecoder API blocks, with implementations waiting on platform
+// decoder tasks.  These platform decoder tasks are queued on a separate
+// thread pool to ensure they can run when the MediaDataDecoder clients'
+// thread pool is blocked.  Tasks on the PLATFORM_DECODER thread pool must not
+// wait on tasks in the PLAYBACK thread pool.
+//
+// No new dependencies on this mechanism should be added, as methods are being
+// made async supported by MediaPromise, making this unnecessary and
+// permitting unifying the pool.
+enum class MediaThreadType {
+  PLAYBACK, // MediaDecoderStateMachine and MediaDecoderReader
+  PLATFORM_DECODER
+};
 // Returns the thread pool that is shared amongst all decoder state machines
 // for decoding streams.
-TemporaryRef<SharedThreadPool> GetMediaThreadPool();
+already_AddRefed<SharedThreadPool> GetMediaThreadPool(MediaThreadType aType);
 
 enum H264_PROFILE {
   H264_PROFILE_UNKNOWN                     = 0,
@@ -277,6 +281,34 @@ CreateMediaDecodeTaskQueue();
 
 already_AddRefed<FlushableMediaTaskQueue>
 CreateFlushableMediaDecodeTaskQueue();
+
+// Iteratively invokes aWork until aCondition returns true, or aWork returns false.
+// Use this rather than a while loop to avoid bogarting the task queue.
+template<class Work, class Condition>
+nsRefPtr<GenericPromise> InvokeUntil(Work aWork, Condition aCondition) {
+  nsRefPtr<GenericPromise::Private> p = new GenericPromise::Private(__func__);
+
+  if (aCondition()) {
+    p->Resolve(true, __func__);
+  }
+
+  struct Helper {
+    static void Iteration(nsRefPtr<GenericPromise::Private> aPromise, Work aWork, Condition aCondition) {
+      if (!aWork()) {
+        aPromise->Reject(NS_ERROR_FAILURE, __func__);
+      } else if (aCondition()) {
+        aPromise->Resolve(true, __func__);
+      } else {
+        nsCOMPtr<nsIRunnable> r =
+          NS_NewRunnableFunction([aPromise, aWork, aCondition] () { Iteration(aPromise, aWork, aCondition); });
+        AbstractThread::GetCurrent()->Dispatch(r.forget());
+      }
+    }
+  };
+
+  Helper::Iteration(p, aWork, aCondition);
+  return p.forget();
+}
 
 } // end namespace mozilla
 

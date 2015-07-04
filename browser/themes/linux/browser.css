@@ -916,6 +916,29 @@ toolbarbutton[constrain-size="true"][cui-areatype="toolbar"] > .toolbarbutton-ba
   padding: 0 3px;
 }
 
+#urlbar-search-footer {
+  border-top: 1px solid hsla(210,4%,10%,.14);
+  background-color: hsla(210,4%,10%,.07);
+}
+
+#urlbar-search-settings {
+  -moz-appearance: none;
+  -moz-user-focus: ignore;
+  color: inherit;
+  margin: 0;
+  border: 0;
+  padding: 8px 20px;
+  background: transparent;
+}
+
+#urlbar-search-settings:hover {
+  background-color: hsla(210,4%,10%,.07);
+}
+
+#urlbar-search-settings:hover:active {
+  background-color: hsla(210,4%,10%,.12);
+}
+
 #urlbar-search-splitter {
   -moz-appearance: none;
   width: 8px;
@@ -1023,123 +1046,14 @@ toolbarbutton[constrain-size="true"][cui-areatype="toolbar"] > .toolbarbutton-ba
   margin-bottom: 1px;
   -moz-margin-start: 3px;
   -moz-margin-end: 1px;
-  -moz-image-region: rect(0, 16px, 16px, 0);
-}
-
-#identity-box:hover > #page-proxy-favicon {
-  -moz-image-region: rect(0, 32px, 16px, 16px);
-}
-
-#identity-box:hover:active > #page-proxy-favicon,
-#identity-box[open=true] > #page-proxy-favicon {
-  -moz-image-region: rect(0, 48px, 16px, 32px);
-}
-
-/* Identity popup icons */
-#identity-popup-icon {
-  height: 64px;
-  width: 64px;
-  padding: 0;
-  list-style-image: url("chrome://browser/skin/identity.png");
-  -moz-image-region: rect(0px, 64px, 64px, 0px);
-}
-
-#identity-popup.verifiedDomain > #identity-popup-container > #identity-popup-icon {
-  -moz-image-region: rect(64px, 64px, 128px, 0px);
-}
-
-#identity-popup.verifiedIdentity > #identity-popup-container > #identity-popup-icon {
-  -moz-image-region: rect(128px, 64px, 192px, 0px);
-}
-
-/* Identity popup body text */
-.identity-popup-description {
-  white-space: pre-wrap;
-  -moz-padding-start: 15px;
-  margin: 2px 0 4px;
-}
-
-.identity-popup-label {
-  white-space: pre-wrap;
-  -moz-padding-start: 15px;
-  margin: 0;
-}
-
-#identity-popup-content-host ,
-#identity-popup-content-owner {
-  font-weight: bold;
-  max-width: 300px;
-}
-
-#identity-popup-content-host ,
-#identity-popup-content-box.verifiedIdentity > #identity-popup-content-owner {
-  font-size: 140%;
-}
-
-#identity-popup-content-owner {
-  margin-bottom: 0 !important;
-}
-
-#identity-popup-content-verifier {
-  margin: 4px 0 2px;
-}
-
-#identity-popup-content-box.verifiedIdentity > #identity-popup-encryption ,
-#identity-popup-content-box.verifiedDomain > #identity-popup-encryption {
-  margin-top: 10px;
-  -moz-margin-start: -18px;
-}
-
-#identity-popup-content-box.verifiedIdentity > #identity-popup-encryption > vbox > #identity-popup-encryption-icon ,
-#identity-popup-content-box.verifiedDomain > #identity-popup-encryption > vbox > #identity-popup-encryption-icon {
-  list-style-image: url("chrome://browser/skin/Secure.png");
-}
-
-#identity-popup-help-icon {
-  -moz-appearance: none;
-  margin-left: 0px;
-  border: none;
-  background: none;
-  min-width: 0;
-  list-style-image: url("moz-icon://stock/gtk-dialog-question?size=16");
-  cursor: pointer;
-}
-
-#identity-popup-help-icon > .button-box > .button-text {
-  display: none;
-}
-
-#identity-popup-help-icon > .button-box > .button-icon {
-  height: 16px;
-  width: 16px;
-}
-
-#identity-popup-help-icon:-moz-focusring {
-  outline: 1px dotted;
-  outline-offset: 1px;
-}
-
-#identity-popup > .panel-arrowcontainer > .panel-arrowcontent {
-  padding: 0;
-}
-
-#identity-popup-container {
-  min-width: 280px;
-  padding: 10px;
-}
-
-#identity-popup-button-container {
-  background: linear-gradient(to bottom, rgba(0,0,0,0.04) 60%, transparent);
-  padding: 10px;
-  margin-top: 5px;
 }
 
 %include ../shared/notification-icons.inc.css
 
-.popup-notification-description[popupid="addon-progress"],
-.popup-notification-description[popupid="addon-install-confirmation"] {
-  width: 27em;
-  max-width: 27em;
+.popup-notification-body[popupid="addon-progress"],
+.popup-notification-body[popupid="addon-install-confirmation"] {
+  width: 28em;
+  max-width: 28em;
 }
 
 .addon-install-confirmation-name {
@@ -1165,10 +1079,6 @@ toolbarbutton[constrain-size="true"][cui-areatype="toolbar"] > .toolbarbutton-ba
 .indexedDB-notification-icon,
 #indexedDB-notification-icon {
   list-style-image: url(moz-icon://stock/gtk-dialog-question?size=16);
-}
-
-#pointerLock-cancel {
-  margin: 0px;
 }
 
 /* Translation infobar */
@@ -1383,6 +1293,52 @@ richlistitem[type~="action"][actiontype="switchtab"] > .ac-url-box > .ac-action-
 #urlbar-stop-button:hover:active {
   background-image: radial-gradient(circle closest-side, hsla(5,100%,75%,.1), transparent);
   -moz-image-region: rect(28px, 28px, 42px, 14px);
+}
+
+@media (min-resolution: 1.1dppx) {
+  #urlbar > toolbarbutton {
+    list-style-image: url("chrome://browser/skin/reload-stop-go@2x.png");
+  }
+
+  #urlbar-go-button {
+    -moz-image-region: rect(0, 84px, 28px, 56px);
+  }
+
+  #urlbar-go-button:hover {
+    -moz-image-region: rect(28px, 84px, 56px, 56px);
+  }
+
+  #urlbar-go-button:hover:active {
+    -moz-image-region: rect(56px, 84px, 84px, 56px);
+  }
+
+  #urlbar-reload-button {
+    -moz-image-region: rect(0, 28px, 28px, 0);
+  }
+
+  #urlbar-reload-button:not([disabled]):hover {
+    -moz-image-region: rect(28px, 28px, 56px, 0);
+  }
+
+  #urlbar-reload-button:not([disabled]):hover:active {
+    -moz-image-region: rect(56px, 28px, 84px, 0);
+  }
+
+  #urlbar-stop-button {
+    -moz-image-region: rect(0, 56px, 28px, 28px);
+  }
+
+  #urlbar-stop-button:not([disabled]):hover {
+    -moz-image-region: rect(28px, 56px, 56px, 28px);
+  }
+
+  #urlbar-stop-button:hover:active {
+    -moz-image-region: rect(56px, 56px, 84px, 28px);
+  }
+
+  #urlbar > toolbarbutton > .toolbarbutton-icon {
+    width: 14px;
+  }
 }
 
 /* Popup blocker button */
@@ -1862,6 +1818,7 @@ toolbarbutton.chevron > .toolbarbutton-icon {
 %include ../shared/devtools/commandline.inc.css
 %include ../shared/plugin-doorhanger.inc.css
 %include ../shared/badcontent-doorhanger.inc.css
+%include ../shared/login-doorhanger.inc.css
 
 %include downloads/indicator.css
 
@@ -1885,10 +1842,6 @@ toolbarbutton.chevron > .toolbarbutton-icon {
 }
 
 /* Social toolbar item */
-
-#social-undoactivation-button {
-  -moz-margin-start: 0; /* override default label margin to match description margin */
-}
 
 .social-activation-icon {
   width: auto;

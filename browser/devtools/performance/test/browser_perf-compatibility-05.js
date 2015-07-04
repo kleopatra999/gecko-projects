@@ -9,13 +9,12 @@
 
 const WAIT_TIME = 1000; // ms
 
-function spawnTest () {
+function* spawnTest() {
   let { panel } = yield initPerformance(SIMPLE_URL);
   let { gFront: front, gTarget: target } = panel.panelWin;
-  let connection = getPerformanceActorsConnection(target);
 
   // Explicitly override the profiler's trait `filterable`
-  connection._profiler.traits.filterable = false;
+  front._profiler.traits.filterable = false;
 
   // Ugly, but we need to also not send the startTime to the server
   // so we don't filter it both on the server and client
@@ -36,9 +35,8 @@ function spawnTest () {
   busyWait(WAIT_TIME); // allow the profiler module to sample some cpu activity
 
   yield front.stopRecording(firstRecording);
+  info("The first recording is " + firstRecording.getDuration() + "ms long.");
 
-  is(firstRecordingStartTime, 0,
-    "The profiling start time should be 0 for the first recording.");
   ok(firstRecording.getDuration() >= WAIT_TIME,
     "The first recording duration is correct.");
 
@@ -51,20 +49,23 @@ function spawnTest () {
   busyWait(WAIT_TIME); // allow the profiler module to sample more cpu activity
 
   yield front.stopRecording(secondRecording);
+  info("The second recording is " + secondRecording.getDuration() + "ms long.");
+
   let secondRecordingProfile = secondRecording.getProfile();
-  let secondRecordingSamples = secondRecordingProfile.threads[0].samples;
+  let secondRecordingSamples = secondRecordingProfile.threads[0].samples.data;
 
   isnot(secondRecording._profilerStartTime, 0,
     "The profiling start time should not be 0 on the second recording.");
   ok(secondRecording.getDuration() >= WAIT_TIME,
     "The second recording duration is correct.");
 
-  info("Second profile's first sample time: " + secondRecordingSamples[0].time);
-  ok(secondRecordingSamples[0].time < secondRecordingStartTime,
+  const TIME_SLOT = secondRecordingProfile.threads[0].samples.schema.time;
+  info("Second profile's first sample time: " + secondRecordingSamples[0][TIME_SLOT]);
+  ok(secondRecordingSamples[0][TIME_SLOT] < secondRecordingStartTime,
     "The second recorded sample times were normalized.");
-  ok(secondRecordingSamples[0].time > 0,
+  ok(secondRecordingSamples[0][TIME_SLOT] > 0,
     "The second recorded sample times were normalized correctly.");
-  ok(!secondRecordingSamples.find(e => e.time + secondRecordingStartTime <= firstRecording.getDuration()),
+  ok(!secondRecordingSamples.find(e => e[TIME_SLOT] + secondRecordingStartTime <= firstRecording.getDuration()),
     "There should be no samples from the first recording in the second one, " +
     "even though the total number of frames did not overflow.");
 

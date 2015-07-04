@@ -25,8 +25,7 @@ SyncProfile::~SyncProfile()
 bool
 SyncProfile::ShouldDestroy()
 {
-  GetMutex()->AssertNotCurrentThreadOwns();
-  mozilla::MutexAutoLock lock(*GetMutex());
+  ::MutexAutoLock lock(GetMutex());
   if (mOwnerState == OWNED) {
     mOwnerState = OWNER_DESTROYING;
     return true;
@@ -38,8 +37,6 @@ SyncProfile::ShouldDestroy()
 void
 SyncProfile::EndUnwind()
 {
-  // Mutex must be held when this is called
-  GetMutex()->AssertCurrentThreadOwns();
   if (mOwnerState != ORPHANED) {
     mOwnerState = OWNED;
   }
@@ -51,3 +48,10 @@ SyncProfile::EndUnwind()
   }
 }
 
+// SyncProfiles' stacks are deduplicated in the context of the containing
+// profile in which the backtrace is as a marker payload.
+void
+SyncProfile::StreamJSON(SpliceableJSONWriter& aWriter, UniqueStacks& aUniqueStacks)
+{
+  ThreadProfile::StreamSamplesAndMarkers(aWriter, /* aSinceTime = */ 0, aUniqueStacks);
+}

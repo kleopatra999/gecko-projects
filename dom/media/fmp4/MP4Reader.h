@@ -19,26 +19,16 @@
 
 namespace mozilla {
 
-namespace dom {
-class TimeRanges;
-}
-
 typedef std::deque<nsRefPtr<MediaRawData>> MediaSampleQueue;
 
 class MP4Stream;
-
-#if defined(MOZ_GONK_MEDIACODEC) || defined(XP_WIN) || defined(MOZ_APPLEMEDIA) || defined(MOZ_FFMPEG)
-#define MP4_READER_DORMANT_HEURISTIC
-#else
-#undef MP4_READER_DORMANT_HEURISTIC
-#endif
 
 class MP4Reader final : public MediaDecoderReader
 {
   typedef TrackInfo::TrackType TrackType;
 
 public:
-  explicit MP4Reader(AbstractMediaDecoder* aDecoder);
+  explicit MP4Reader(AbstractMediaDecoder* aDecoder, MediaTaskQueue* aBorrowedTaskQueue = nullptr);
 
   virtual ~MP4Reader();
 
@@ -66,13 +56,15 @@ public:
   virtual bool IsMediaSeekable() override;
 
   virtual int64_t GetEvictionOffset(double aTime) override;
-  virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset) override;
 
-  virtual nsresult GetBuffered(dom::TimeRanges* aBuffered) override;
+protected:
+  virtual void NotifyDataArrivedInternal(uint32_t aLength, int64_t aOffset) override;
+public:
+
+  virtual media::TimeIntervals GetBuffered() override;
 
   // For Media Resource Management
   virtual void SetIdle() override;
-  virtual bool IsDormantNeeded() override;
   virtual void ReleaseMediaResources() override;
   virtual void SetSharedDecoderManager(SharedDecoderManager* aManager)
     override;
@@ -86,8 +78,6 @@ public:
   virtual bool VideoIsHardwareAccelerated() const override;
 
   virtual void DisableHardwareAcceleration() override;
-
-  static bool IsVideoAccelerated(layers::LayersBackend aBackend);
 
 private:
 
@@ -126,7 +116,6 @@ private:
   void UpdateIndex();
   bool IsSupportedAudioMimeType(const nsACString& aMimeType);
   bool IsSupportedVideoMimeType(const nsACString& aMimeType);
-  void NotifyResourcesStatusChanged();
   virtual bool IsWaitingOnCDMResource() override;
 
   Microseconds GetNextKeyframeTime();
@@ -157,9 +146,6 @@ private:
     }
     virtual void DrainComplete() override {
       mReader->DrainComplete(mType);
-    }
-    virtual void NotifyResourcesStatusChanged() override {
-      mReader->NotifyResourcesStatusChanged();
     }
     virtual void ReleaseMediaResources() override {
       mReader->ReleaseMediaResources();
@@ -284,10 +270,6 @@ private:
   int64_t mLastSeenEnd;
   Monitor mDemuxerMonitor;
   nsRefPtr<SharedDecoderManager> mSharedDecoderManager;
-
-#if defined(MP4_READER_DORMANT_HEURISTIC)
-  const bool mDormantEnabled;
-#endif
 };
 
 } // namespace mozilla

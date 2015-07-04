@@ -10,6 +10,10 @@ let PerformanceView = {
 
   _state: null,
 
+  // Set to true if the front emits a "buffer-status" event, indicating
+  // that the server has support for determining buffer status.
+  _bufferStatusSupported: false,
+
   // Mapping of state to selectors for different panes
   // of the main profiler view. Used in `PerformanceView.setState()`
   states: {
@@ -27,6 +31,10 @@ let PerformanceView = {
     recorded: [
       { deck: "#performance-view", pane: "#performance-view-content" },
       { deck: "#details-pane-container", pane: "#details-pane" }
+    ],
+    loading: [
+      { deck: "#performance-view", pane: "#performance-view-content" },
+      { deck: "#details-pane-container", pane: "#loading-notice" }
     ]
   },
 
@@ -41,11 +49,12 @@ let PerformanceView = {
     this._onRecordButtonClick = this._onRecordButtonClick.bind(this);
     this._onImportButtonClick = this._onImportButtonClick.bind(this);
     this._onClearButtonClick = this._onClearButtonClick.bind(this);
-    this._lockRecordButtons = this._lockRecordButtons.bind(this);
-    this._unlockRecordButtons = this._unlockRecordButtons.bind(this);
     this._onRecordingSelected = this._onRecordingSelected.bind(this);
-    this._onRecordingStopped = this._onRecordingStopped.bind(this);
+    this._onProfilerStatusUpdated = this._onProfilerStatusUpdated.bind(this);
+    this._onRecordingWillStart = this._onRecordingWillStart.bind(this);
     this._onRecordingStarted = this._onRecordingStarted.bind(this);
+    this._onRecordingWillStop = this._onRecordingWillStop.bind(this);
+    this._onRecordingStopped = this._onRecordingStopped.bind(this);
 
     for (let button of $$(".record-button")) {
       button.addEventListener("click", this._onRecordButtonClick);
@@ -54,9 +63,12 @@ let PerformanceView = {
     this._clearButton.addEventListener("click", this._onClearButtonClick);
 
     // Bind to controller events to unlock the record button
-    PerformanceController.on(EVENTS.RECORDING_STARTED, this._onRecordingStarted);
-    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStopped);
     PerformanceController.on(EVENTS.RECORDING_SELECTED, this._onRecordingSelected);
+    PerformanceController.on(EVENTS.PROFILER_STATUS_UPDATED, this._onProfilerStatusUpdated);
+    PerformanceController.on(EVENTS.RECORDING_WILL_START, this._onRecordingWillStart);
+    PerformanceController.on(EVENTS.RECORDING_STARTED, this._onRecordingStarted);
+    PerformanceController.on(EVENTS.RECORDING_WILL_STOP, this._onRecordingWillStop);
+    PerformanceController.on(EVENTS.RECORDING_STOPPED, this._onRecordingStopped);
 
     this.setState("empty");
 
@@ -78,9 +90,12 @@ let PerformanceView = {
     this._importButton.removeEventListener("click", this._onImportButtonClick);
     this._clearButton.removeEventListener("click", this._onClearButtonClick);
 
-    PerformanceController.off(EVENTS.RECORDING_STARTED, this._onRecordingStarted);
-    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStopped);
     PerformanceController.off(EVENTS.RECORDING_SELECTED, this._onRecordingSelected);
+    PerformanceController.off(EVENTS.PROFILER_STATUS_UPDATED, this._onProfilerStatusUpdated);
+    PerformanceController.off(EVENTS.RECORDING_WILL_START, this._onRecordingWillStart);
+    PerformanceController.off(EVENTS.RECORDING_STARTED, this._onRecordingStarted);
+    PerformanceController.off(EVENTS.RECORDING_WILL_STOP, this._onRecordingWillStop);
+    PerformanceController.off(EVENTS.RECORDING_STOPPED, this._onRecordingStopped);
 
     yield ToolbarView.destroy();
     yield RecordingsView.destroy();
@@ -106,9 +121,17 @@ let PerformanceView = {
     if (state === "console-recording") {
       let recording = PerformanceController.getCurrentRecording();
       let label = recording.getLabel() || "";
-      $(".console-profile-recording-notice").value = L10N.getFormatStr("consoleProfile.recordingNotice", label);
-      $(".console-profile-stop-notice").value = L10N.getFormatStr("consoleProfile.stopCommand", label);
+      // Wrap the label in quotes if it exists for the commands.
+      label = label ? `"${label}"` : "";
+
+      let startCommand = $(".console-profile-recording-notice .console-profile-command");
+      let stopCommand = $(".console-profile-stop-notice .console-profile-command");
+
+      startCommand.value = `console.profile(${label})`;
+      stopCommand.value = `console.profileEnd(${label})`;
     }
+
+    this.updateBufferStatus();
     this.emit(EVENTS.UI_STATE_CHANGED, state);
   },
 
@@ -120,21 +143,80 @@ let PerformanceView = {
   },
 
   /**
-   * Adds the `locked` attribute on the record button. This prevents it
-   * from being clicked while recording is started or stopped.
+   * Updates the displayed buffer status.
    */
-  _lockRecordButtons: function () {
+  updateBufferStatus: function () {
+    // If we've never seen a "buffer-status" event from the front, ignore
+    // and keep the buffer elements hidden.
+    if (!this._bufferStatusSupported) {
+      return;
+    }
+
+    let recording = PerformanceController.getCurrentRecording();
+    if (!recording || !recording.isRecording()) {
+      return;
+    }
+
+    let bufferUsage = recording.getBufferUsage();
+
+    // Normalize to a percentage value
+    let percent = Math.floor(bufferUsage * 100);
+
+    let $container = $("#details-pane-container");
+    let $bufferLabel = $(".buffer-status-message", $container.selectedPanel);
+
+    // Be a little flexible on the buffer status, although not sure how
+    // this could happen, as RecordingModel clamps.
+    if (percent >= 99) {
+      $container.setAttribute("buffer-status", "full");
+    } else {
+      $container.setAttribute("buffer-status", "in-progress");
+    }
+
+    $bufferLabel.value = `Buffer ${percent}% full`;
+    this.emit(EVENTS.UI_BUFFER_UPDATED, percent);
+  },
+
+  /**
+   * Toggles the `locked` attribute on the record buttons based
+   * on `lock`.
+   *
+   * @param {boolean} lock
+   */
+  _lockRecordButtons: function (lock) {
     for (let button of $$(".record-button")) {
-      button.setAttribute("locked", "true");
+      if (lock) {
+        button.setAttribute("locked", "true");
+      } else {
+        button.removeAttribute("locked");
+      }
+    }
+  },
+
+  /*
+   * Toggles the `checked` attribute on the record buttons based
+   * on `activate`.
+   *
+   * @param {boolean} activate
+   */
+  _activateRecordButtons: function (activate) {
+    for (let button of $$(".record-button")) {
+      if (activate) {
+        button.setAttribute("checked", "true");
+      } else {
+        button.removeAttribute("checked");
+      }
     }
   },
 
   /**
-   * Removes the `locked` attribute on the record button.
+   * Fired when a recording is just starting, but actors may not have
+   * yet started actually recording.
    */
-  _unlockRecordButtons: function () {
-    for (let button of $$(".record-button")) {
-      button.removeAttribute("locked");
+  _onRecordingWillStart: function (_, recording) {
+    if (!recording.isConsole()) {
+      this._lockRecordButtons(true);
+      this._activateRecordButtons(true);
     }
   },
 
@@ -145,7 +227,25 @@ let PerformanceView = {
     // A stopped recording can be from `console.profileEnd` -- only unlock
     // the button if it's the main recording that was started via UI.
     if (!recording.isConsole()) {
-      this._unlockRecordButtons();
+      this._lockRecordButtons(false);
+    }
+    if (recording.isRecording()) {
+      this.updateBufferStatus();
+    }
+  },
+
+  /**
+   * Fired when a recording is stopping, but not yet completed
+   */
+  _onRecordingWillStop: function (_, recording) {
+    if (!recording.isConsole()) {
+      this._lockRecordButtons(true);
+      this._activateRecordButtons(false);
+    }
+    // Lock the details view while the recording is being loaded in the UI.
+    // Only do this if this is the current recording.
+    if (recording === PerformanceController.getCurrentRecording()) {
+      this.setState("loading");
     }
   },
 
@@ -156,7 +256,7 @@ let PerformanceView = {
     // A stopped recording can be from `console.profileEnd` -- only unlock
     // the button if it's the main recording that was started via UI.
     if (!recording.isConsole()) {
-      this._unlockRecordButtons();
+      this._lockRecordButtons(false);
     }
 
     // If the currently selected recording is the one that just stopped,
@@ -179,15 +279,7 @@ let PerformanceView = {
   _onRecordButtonClick: function (e) {
     if (this._recordButton.hasAttribute("checked")) {
       this.emit(EVENTS.UI_STOP_RECORDING);
-      this._lockRecordButtons();
-      for (let button of $$(".record-button")) {
-        button.removeAttribute("checked");
-      }
     } else {
-      this._lockRecordButtons();
-      for (let button of $$(".record-button")) {
-        button.setAttribute("checked", "true");
-      }
       this.emit(EVENTS.UI_START_RECORDING);
     }
   },
@@ -197,7 +289,8 @@ let PerformanceView = {
    */
   _onImportButtonClick: function(e) {
     let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
-    fp.init(window, L10N.getStr("recordingsList.saveDialogTitle"), Ci.nsIFilePicker.modeOpen);
+    // TODO localize? in bug 1163763
+    fp.init(window, "Import recording…", Ci.nsIFilePicker.modeOpen);
     fp.appendFilter(L10N.getStr("recordingsList.saveDialogJSONFilter"), "*.json");
     fp.appendFilter(L10N.getStr("recordingsList.saveDialogAllFilter"), "*.*");
 
@@ -219,6 +312,29 @@ let PerformanceView = {
     } else {
       this.setState("recorded");
     }
+  },
+
+  /**
+   * Fired when the controller has updated information on the buffer's status.
+   * Update the buffer status display if shown.
+   */
+  _onProfilerStatusUpdated: function (_, data) {
+    // We only care about buffer status here, so check to see
+    // if it has position.
+    if (!data || data.position === void 0) {
+      return;
+    }
+    // If this is our first buffer event, set the status and add a class
+    if (!this._bufferStatusSupported) {
+      this._bufferStatusSupported = true;
+      $("#details-pane-container").setAttribute("buffer-status", "in-progress");
+    }
+
+    if (!this.getState("recording") && !this.getState("console-recording")) {
+      return;
+    }
+
+    this.updateBufferStatus();
   },
 
   toString: () => "[object PerformanceView]"

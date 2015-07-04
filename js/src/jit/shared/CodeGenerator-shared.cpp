@@ -20,6 +20,7 @@
 #include "vm/TraceLogging.h"
 
 #include "jit/JitFrames-inl.h"
+#include "jit/MacroAssembler-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -971,12 +972,16 @@ CodeGeneratorShared::verifyCompactTrackedOptimizationsMap(JitCode* code, uint32_
             MOZ_ASSERT(index == unique.indexOf(entry.optimizations));
 
             // Assert that the type info and attempts vectors are correctly
-            // decoded.
-            IonTrackedOptimizationsTypeInfo typeInfo = typesTable->entry(index);
-            TempOptimizationTypeInfoVector tvec(alloc());
-            ReadTempTypeInfoVectorOp top(alloc(), &tvec);
-            typeInfo.forEach(top, allTypes);
-            MOZ_ASSERT(entry.optimizations->matchTypes(tvec));
+            // decoded. This is disabled for now if the types table might
+            // contain nursery pointers, in which case the types might not
+            // match, see bug 1175761.
+            if (!code->runtimeFromMainThread()->gc.storeBuffer.cancelIonCompilations()) {
+                IonTrackedOptimizationsTypeInfo typeInfo = typesTable->entry(index);
+                TempOptimizationTypeInfoVector tvec(alloc());
+                ReadTempTypeInfoVectorOp top(alloc(), &tvec);
+                typeInfo.forEach(top, allTypes);
+                MOZ_ASSERT(entry.optimizations->matchTypes(tvec));
+            }
 
             IonTrackedOptimizationsAttempts attempts = attemptsTable->entry(index);
             TempOptimizationAttemptsVector avec(alloc());
@@ -1026,7 +1031,8 @@ CodeGeneratorShared::ensureOsiSpace()
         for (int32_t i = 0; i < paddingSize; ++i)
             masm.nop();
     }
-    MOZ_ASSERT(masm.currentOffset() - lastOsiPointOffset_ >= Assembler::PatchWrite_NearCallSize());
+    MOZ_ASSERT_IF(!masm.oom(),
+                  masm.currentOffset() - lastOsiPointOffset_ >= Assembler::PatchWrite_NearCallSize());
     lastOsiPointOffset_ = masm.currentOffset();
 }
 
@@ -1380,12 +1386,12 @@ CodeGeneratorShared::visitOutOfLineTruncateSlow(OutOfLineTruncateSlow* ool)
     Register dest = ool->dest();
 
     saveVolatile(dest);
-#if defined(JS_CODEGEN_ARM)
+
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64)
     if (ool->needFloat32Conversion()) {
         masm.convertFloat32ToDouble(src, ScratchDoubleReg);
         src = ScratchDoubleReg;
     }
-
 #else
     FloatRegister srcSingle = src.asSingle();
     if (ool->needFloat32Conversion()) {
@@ -1395,6 +1401,7 @@ CodeGeneratorShared::visitOutOfLineTruncateSlow(OutOfLineTruncateSlow* ool)
         src = src.asDouble();
     }
 #endif
+
     masm.setupUnalignedABICall(1, dest);
     masm.passABIArg(src, MoveOp::DOUBLE);
     if (gen->compilingAsmJS())
@@ -1403,12 +1410,12 @@ CodeGeneratorShared::visitOutOfLineTruncateSlow(OutOfLineTruncateSlow* ool)
         masm.callWithABI(BitwiseCast<void*, int32_t(*)(double)>(JS::ToInt32));
     masm.storeCallResult(dest);
 
-#if !defined(JS_CODEGEN_ARM)
+#if !defined(JS_CODEGEN_ARM) && !defined(JS_CODEGEN_ARM64)
     if (ool->needFloat32Conversion())
         masm.pop(srcSingle);
 #endif
-    restoreVolatile(dest);
 
+    restoreVolatile(dest);
     masm.jump(ool->rejoin());
 }
 

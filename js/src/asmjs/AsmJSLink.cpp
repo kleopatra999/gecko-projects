@@ -425,6 +425,7 @@ ValidateAtomicsBuiltinFunction(JSContext* cx, AsmJSModule::Global& global, Handl
       case AsmJSAtomicsBuiltin_and: native = atomics_and; break;
       case AsmJSAtomicsBuiltin_or: native = atomics_or; break;
       case AsmJSAtomicsBuiltin_xor: native = atomics_xor; break;
+      case AsmJSAtomicsBuiltin_isLockFree: native = atomics_isLockFree; break;
     }
 
     if (!IsNativeFunction(v, native))
@@ -598,6 +599,9 @@ DynamicallyLinkModule(JSContext* cx, CallArgs args, AsmJSModule& module)
 
     module.initGlobalNaN();
 
+    // See the comment in AllocateExecutableMemory.
+    ExecutableAllocator::makeExecutable(module.codeBase(), module.codeBytes());
+
     return true;
 }
 
@@ -744,8 +748,12 @@ CallAsmJS(JSContext* cx, unsigned argc, Value* vp)
         // that the optimized asm.js-to-Ion FFI call path (which we want to be
         // very fast) can avoid doing so. The JitActivation is marked as
         // inactive so stack iteration will skip over it.
+        //
+        // We needn't provide an entry script pointer; that's only used for
+        // reporting entry points to performance-monitoring tools, and asm.js ->
+        // Ion calls will never be entry points.
         AsmJSActivation activation(cx, module);
-        JitActivation jitActivation(cx, /* active */ false);
+        JitActivation jitActivation(cx, /* entryScript */ nullptr, /* active */ false);
 
         // Call the per-exported-function trampoline created by GenerateEntry.
         AsmJSModule::CodePtr enter = module.entryTrampoline(func);
@@ -831,7 +839,7 @@ HandleDynamicLinkFailure(JSContext* cx, CallArgs args, AsmJSModule& module, Hand
     if (!src)
         return false;
 
-    RootedFunction fun(cx, NewScriptedFunction(cx, 0, JSFunction::INTERPRETED,
+    RootedFunction fun(cx, NewScriptedFunction(cx, 0, JSFunction::INTERPRETED_NORMAL,
                                                name, gc::AllocKind::FUNCTION,
                                                TenuredObject));
     if (!fun)
@@ -868,7 +876,7 @@ HandleDynamicLinkFailure(JSContext* cx, CallArgs args, AsmJSModule& module, Hand
                                               : SourceBufferHolder::NoOwnership;
     SourceBufferHolder srcBuf(chars, end - begin, ownership);
     if (!frontend::CompileFunctionBody(cx, &fun, options, formals, srcBuf,
-                                       /* enclosingScope = */ NullPtr()))
+                                       /* enclosingScope = */ nullptr))
         return false;
 
     // Call the function we just recompiled.

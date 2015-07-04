@@ -352,6 +352,13 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
       layer->SetInvalidRegion(common.invalidRegion());
       layer->SetFrameMetrics(common.metrics());
 
+      nsTArray<nsRefPtr<Layer>> maskLayers;
+      for (size_t i = 0; i < common.ancestorMaskLayersParent().Length(); i++) {
+        Layer* maskLayer = cast(common.ancestorMaskLayersParent().ElementAt(i))->AsLayer();
+        maskLayers.AppendElement(maskLayer);
+      }
+      layer->SetAncestorMaskLayers(maskLayers);
+
       typedef SpecificLayerAttributes Specific;
       const SpecificLayerAttributes& specific = attrs.specific();
       switch (specific.type()) {
@@ -626,11 +633,9 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
         severity = 1.f;
       }
       mLayerManager->VisualFrameWarning(severity);
-#ifdef PR_LOGGING
       PR_LogPrint("LayerTransactionParent::RecvUpdate transaction from process %d took %f ms",
                   OtherPid(),
                   latency.ToMilliseconds());
-#endif
     }
   }
 
@@ -782,6 +787,29 @@ LayerTransactionParent::RecvSetAsyncScrollOffset(const FrameMetrics::ViewID& aSc
     return false;
   }
   controller->SetTestAsyncScrollOffset(CSSPoint(aX, aY));
+  return true;
+}
+
+bool
+LayerTransactionParent::RecvSetAsyncZoom(const FrameMetrics::ViewID& aScrollID,
+                                         const float& aValue)
+{
+  if (mDestroyed || !layer_manager() || layer_manager()->IsDestroyed()) {
+    return false;
+  }
+
+  AsyncPanZoomController* controller = GetAPZCForViewID(mRoot, aScrollID);
+  if (!controller) {
+    return false;
+  }
+  controller->SetTestAsyncZoom(LayerToParentLayerScale(aValue));
+  return true;
+}
+
+bool
+LayerTransactionParent::RecvFlushApzRepaints()
+{
+  mShadowLayersManager->FlushApzRepaints(this);
   return true;
 }
 

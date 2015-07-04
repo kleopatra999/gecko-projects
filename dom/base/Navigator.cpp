@@ -117,6 +117,7 @@
 
 #ifdef MOZ_EME
 #include "mozilla/EMEUtils.h"
+#include "mozilla/DetailedPromise.h"
 #endif
 
 #ifdef MOZ_WIDGET_GONK
@@ -201,6 +202,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAudioChannelManager)
 #endif
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCameraManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaDevices)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMessagesManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDeviceStorageStores)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTimeManager)
@@ -307,6 +309,7 @@ Navigator::Invalidate()
 #endif
 
   mCameraManager = nullptr;
+  mMediaDevices = nullptr;
 
   if (mMessagesManager) {
     mMessagesManager = nullptr;
@@ -1213,18 +1216,14 @@ Navigator::SendBeacon(const nsAString& aUrl,
       in = strStream;
 
     } else if (aData.Value().IsBlob()) {
-      File& blob = aData.Value().GetAsBlob();
-      rv = blob.GetInternalStream(getter_AddRefs(in));
-      if (NS_FAILED(rv)) {
-        aRv.Throw(NS_ERROR_FAILURE);
+      Blob& blob = aData.Value().GetAsBlob();
+      blob.GetInternalStream(getter_AddRefs(in), aRv);
+      if (NS_WARN_IF(aRv.Failed())) {
         return false;
       }
+
       nsAutoString type;
-      rv = blob.GetType(type);
-      if (NS_FAILED(rv)) {
-        aRv.Throw(NS_ERROR_FAILURE);
-        return false;
-      }
+      blob.GetType(type);
       mimeType = NS_ConvertUTF16toUTF8(type);
 
     } else if (aData.Value().IsFormData()) {
@@ -1509,6 +1508,12 @@ Navigator::GetFeature(const nsAString& aName, ErrorResult& aRv)
     }
   }
 #endif
+
+  // Mirror the dom.apps.developer_mode pref to let apps get it read-only.
+  if (aName.EqualsLiteral("dom.apps.developer_mode")) {
+    p->MaybeResolve(Preferences::GetBool("dom.apps.developer_mode", false));
+    return p.forget();
+  }
 
   p->MaybeResolve(JS::UndefinedHandleValue);
   return p.forget();
@@ -2303,35 +2308,6 @@ Navigator::MayResolve(jsid aId)
   return nameSpaceManager->LookupNavigatorName(name);
 }
 
-struct NavigatorNameEnumeratorClosure
-{
-  NavigatorNameEnumeratorClosure(JSContext* aCx, JSObject* aWrapper,
-                                 nsTArray<nsString>& aNames)
-    : mCx(aCx),
-      mWrapper(aCx, aWrapper),
-      mNames(aNames)
-  {
-  }
-
-  JSContext* mCx;
-  JS::Rooted<JSObject*> mWrapper;
-  nsTArray<nsString>& mNames;
-};
-
-static PLDHashOperator
-SaveNavigatorName(const nsAString& aName,
-                  const nsGlobalNameStruct& aNameStruct,
-                  void* aClosure)
-{
-  NavigatorNameEnumeratorClosure* closure =
-    static_cast<NavigatorNameEnumeratorClosure*>(aClosure);
-  if (!aNameStruct.mConstructorEnabled ||
-      aNameStruct.mConstructorEnabled(closure->mCx, closure->mWrapper)) {
-    closure->mNames.AppendElement(aName);
-  }
-  return PL_DHASH_NEXT;
-}
-
 void
 Navigator::GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
                                ErrorResult& aRv)
@@ -2343,8 +2319,14 @@ Navigator::GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
     return;
   }
 
-  NavigatorNameEnumeratorClosure closure(aCx, GetWrapper(), aNames);
-  nameSpaceManager->EnumerateNavigatorNames(SaveNavigatorName, &closure);
+  JS::Rooted<JSObject*> wrapper(aCx, GetWrapper());
+  for (auto i = nameSpaceManager->NavigatorNameIter(); !i.Done(); i.Next()) {
+    const GlobalNameMapEntry* entry = i.Get();
+    if (!entry->mGlobalName.mConstructorEnabled ||
+        entry->mGlobalName.mConstructorEnabled(aCx, wrapper)) {
+      aNames.AppendElement(entry->mKey);
+    }
+  }
 }
 
 JSObject*
@@ -2741,7 +2723,7 @@ Navigator::RequestMediaKeySystemAccess(const nsAString& aKeySystem,
                                        ErrorResult& aRv)
 {
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
-  nsRefPtr<Promise> promise = Promise::Create(go, aRv);
+  nsRefPtr<DetailedPromise> promise = DetailedPromise::Create(go, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }

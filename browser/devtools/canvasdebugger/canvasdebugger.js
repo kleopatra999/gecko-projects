@@ -10,7 +10,6 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource:///modules/devtools/SideMenuWidget.jsm");
 Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
 Cu.import("resource://gre/modules/devtools/Console.jsm");
-Cu.import("resource:///modules/devtools/gDevTools.jsm");
 
 const devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
 const { require } = devtools;
@@ -18,11 +17,12 @@ const promise = Cu.import("resource://gre/modules/Promise.jsm", {}).Promise;
 const EventEmitter = require("devtools/toolkit/event-emitter");
 const { CallWatcherFront } = require("devtools/server/actors/call-watcher");
 const { CanvasFront } = require("devtools/server/actors/canvas");
+const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
 
 const Telemetry = require("devtools/shared/telemetry");
 const telemetry = new Telemetry();
 
-const CANVAS_ACTOR_RECORDING_ATTEMPT = gDevTools.testing ? 500 : 5000;
+const CANVAS_ACTOR_RECORDING_ATTEMPT = DevToolsUtils.testing ? 500 : 5000;
 
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
   "resource://gre/modules/Task.jsm");
@@ -36,8 +36,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
   "resource://gre/modules/NetUtil.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "DevToolsUtils",
-  "resource://gre/modules/devtools/DevToolsUtils.jsm");
+XPCOMUtils.defineLazyGetter(this, "NetworkHelper", function() {
+  return require("devtools/toolkit/webconsole/network-helper");
+});
 
 // The panel's window global is an EventEmitter firing the following events:
 const EVENTS = {
@@ -190,30 +191,15 @@ EventEmitter.decorate(this);
 /**
  * DOM query helpers.
  */
-function $(selector, target = document) target.querySelector(selector);
-function $all(selector, target = document) target.querySelectorAll(selector);
-
-/**
- * Helper for getting an nsIURL instance out of a string.
- */
-function nsIURL(url, store = nsIURL.store) {
-  if (store.has(url)) {
-    return store.get(url);
-  }
-  let uri = Services.io.newURI(url, null, null).QueryInterface(Ci.nsIURL);
-  store.set(url, uri);
-  return uri;
-}
-
-// The cache used in the `nsIURL` function.
-nsIURL.store = new Map();
+let $ = (selector, target = document) => target.querySelector(selector);
+let $all = (selector, target = document) => target.querySelectorAll(selector);
 
 /**
  * Gets the fileName part of a string which happens to be an URL.
  */
 function getFileName(url) {
   try {
-    let { fileName } = nsIURL(url);
+    let { fileName } = NetworkHelper.nsIURL(url);
     return fileName || "/";
   } catch (e) {
     // This doesn't look like a url, or nsIURL can't handle it.

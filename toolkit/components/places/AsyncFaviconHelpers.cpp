@@ -144,18 +144,11 @@ SetIconInfo(nsRefPtr<Database>& aDB,
   NS_PRECONDITION(!NS_IsMainThread(),
                   "This should not be called on the main thread");
 
-  // The 'multi-coalesce' here ensures that replacing a favicon without
-  // specifying a :guid parameter doesn't cause it to be allocated a new
-  // GUID.
   nsCOMPtr<mozIStorageStatement> stmt = aDB->GetStatement(
     "INSERT OR REPLACE INTO moz_favicons "
-      "(id, url, data, mime_type, expiration, guid) "
+      "(id, url, data, mime_type, expiration) "
     "VALUES ((SELECT id FROM moz_favicons WHERE url = :icon_url), "
-            ":icon_url, :data, :mime_type, :expiration, "
-            "COALESCE(:guid, "
-                     "(SELECT guid FROM moz_favicons "
-                      "WHERE url = :icon_url), "
-                     "GENERATE_GUID()))"
+            ":icon_url, :data, :mime_type, :expiration) "
   );
   NS_ENSURE_STATE(stmt);
   mozStorageStatementScoper scoper(stmt);
@@ -167,15 +160,6 @@ SetIconInfo(nsRefPtr<Database>& aDB,
   rv = stmt->BindUTF8StringByName(NS_LITERAL_CSTRING("mime_type"), aIcon.mimeType);
   NS_ENSURE_SUCCESS(rv, rv);
   rv = stmt->BindInt64ByName(NS_LITERAL_CSTRING("expiration"), aIcon.expiration);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  // Binding a GUID allows us to override the current (or generated) GUID.
-  if (aIcon.guid.IsEmpty()) {
-    rv = stmt->BindNullByName(NS_LITERAL_CSTRING("guid"));
-  }
-  else {
-    rv = stmt->BindUTF8StringByName(NS_LITERAL_CSTRING("guid"), aIcon.guid);
-  }
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = stmt->Execute();
@@ -582,13 +566,23 @@ AsyncFetchAndSetIconFromNetwork::OnDataAvailable(nsIRequest* aRequest,
                                                  uint64_t aOffset,
                                                  uint32_t aCount)
 {
+  const size_t kMaxFaviconDownloadSize = 1 * 1024 * 1024;
+  if (mIcon.data.Length() + aCount > kMaxFaviconDownloadSize) {
+    mIcon.data.Truncate();
+    return NS_ERROR_FILE_TOO_BIG;
+  }
+
   nsAutoCString buffer;
   nsresult rv = NS_ConsumeStream(aInputStream, aCount, buffer);
   if (rv != NS_BASE_STREAM_WOULD_BLOCK && NS_FAILED(rv)) {
     return rv;
   }
 
-  mIcon.data.Append(buffer);
+  if (!mIcon.data.Append(buffer, fallible)) {
+    mIcon.data.Truncate();
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
   return NS_OK;
 }
 
@@ -635,9 +629,21 @@ AsyncFetchAndSetIconFromNetwork::OnStopRequest(nsIRequest* aRequest,
     return NS_OK;
   }
 
-  NS_SniffContent(NS_DATA_SNIFFER_CATEGORY, aRequest,
-                  TO_INTBUFFER(mIcon.data), mIcon.data.Length(),
-                  mIcon.mimeType);
+  nsCOMPtr<nsIChannel> channel = do_QueryInterface(aRequest);
+  // aRequest should always QI to nsIChannel.
+  // See AsyncFetchAndSetIconFromNetwork::Run()
+  MOZ_ASSERT(channel);
+
+  nsAutoCString contentType;
+  channel->GetContentType(contentType);
+  // Bug 366324 - can't sniff SVG yet, so rely on server-specified type
+  if (contentType.EqualsLiteral("image/svg+xml")) {
+    mIcon.mimeType.AssignLiteral("image/svg+xml");
+  } else {
+    NS_SniffContent(NS_DATA_SNIFFER_CATEGORY, aRequest,
+                    TO_INTBUFFER(mIcon.data), mIcon.data.Length(),
+                    mIcon.mimeType);
+  }
 
   // If the icon does not have a valid MIME type, add it to the failed cache.
   if (mIcon.mimeType.IsEmpty()) {
@@ -649,10 +655,6 @@ AsyncFetchAndSetIconFromNetwork::OnStopRequest(nsIRequest* aRequest,
     return NS_OK;
   }
 
-  nsCOMPtr<nsIChannel> channel = do_QueryInterface(aRequest);
-  // aRequest should always QI to nsIChannel.
-  // See AsyncFetchAndSetIconFromNetwork::Run()
-  MOZ_ASSERT(channel);
   mIcon.expiration = GetExpirationTimeFromChannel(channel);
 
   // Telemetry probes to measure the favicon file sizes for each different file type.

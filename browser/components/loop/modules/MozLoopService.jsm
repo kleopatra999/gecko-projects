@@ -15,7 +15,7 @@ const LOOP_SESSION_TYPE = {
   FXA: 2
 };
 
-/***
+/**
  * Values that we segment 2-way media connection length telemetry probes
  * into.
  *
@@ -122,7 +122,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "gWM",
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let ConsoleAPI = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).ConsoleAPI;
   let consoleOptions = {
-    maxLogLevel: Services.prefs.getCharPref(PREF_LOG_LEVEL).toLowerCase(),
+    maxLogLevelPref: PREF_LOG_LEVEL,
     prefix: "Loop"
   };
   return new ConsoleAPI(consoleOptions);
@@ -190,7 +190,6 @@ let MozLoopServiceInternal = {
       // Default to 5 seconds
       return 5000;
     }
-    return initialDelay;
   },
 
   /**
@@ -358,8 +357,8 @@ let MozLoopServiceInternal = {
     log.debug("createNotificationChannel", channelID, sessionType, serviceType);
     // Wrap the push notification registration callback in a Promise.
     return new Promise((resolve, reject) => {
-      let onRegistered = (error, pushURL, channelID) => {
-        log.debug("createNotificationChannel onRegistered:", error, pushURL, channelID);
+      let onRegistered = (error, pushURL, chID) => {
+        log.debug("createNotificationChannel onRegistered:", error, pushURL, chID);
         if (error) {
           reject(Error(error));
         } else {
@@ -512,26 +511,26 @@ let MozLoopServiceInternal = {
         roomsPushURL = pushURLs ? pushURLs.rooms : null;
     this.pushURLs.delete(sessionType);
 
-    let unregister = (sessionType, pushURL) => {
+    let unregister = (sessType, pushURL) => {
       if (!pushURL) {
         return Promise.resolve("no pushURL of this type to unregister");
       }
 
       let unregisterURL = "/registration?simplePushURL=" + encodeURIComponent(pushURL);
-      return this.hawkRequestInternal(sessionType, unregisterURL, "DELETE").then(
+      return this.hawkRequestInternal(sessType, unregisterURL, "DELETE").then(
         () => {
-          log.debug("Successfully unregistered from server for sessionType = ", sessionType);
-          return "unregistered sessionType " + sessionType;
+          log.debug("Successfully unregistered from server for sessionType = ", sessType);
+          return "unregistered sessionType " + sessType;
         },
-        error => {
-          if (error.code === 401) {
+        err => {
+          if (err.code === 401) {
             // Authorization failed, invalid token. This is fine since it may mean we already logged out.
-            log.debug("already unregistered - invalid token", sessionType);
-            return "already unregistered, sessionType = " + sessionType;
+            log.debug("already unregistered - invalid token", sessType);
+            return "already unregistered, sessionType = " + sessType;
           }
 
           log.error("Failed to unregister with the loop server. Error: ", error);
-          throw error;
+          throw err;
         });
     };
 
@@ -615,7 +614,8 @@ let MozLoopServiceInternal = {
               return this.hawkRequestInternal(sessionType, path, method, payloadObj, false);
             },
             () => {
-              return handle401Error(error); //Process the original error that triggered the retry.
+              // Process the original error that triggered the retry.
+              return handle401Error(error);
             }
           );
         }
@@ -724,8 +724,9 @@ let MozLoopServiceInternal = {
    * @returns {Map} a map of element ids with localized string values
    */
   get localizedStrings() {
-    if (gLocalizedStrings.size)
+    if (gLocalizedStrings.size) {
       return gLocalizedStrings;
+    }
 
     let stringBundle =
       Services.strings.createBundle("chrome://browser/locale/loop/loop.properties");
@@ -752,7 +753,7 @@ let MozLoopServiceInternal = {
   stageForTelemetryUpload: function(window, pc) {
     window.WebrtcGlobalInformation.getAllStats(allStats => {
       let internalFormat = allStats.reports[0]; // filtered on pc.id
-      window.WebrtcGlobalInformation.getLogging('', logs => {
+      window.WebrtcGlobalInformation.getLogging("", logs => {
         let report = convertToRTCStatsReport(internalFormat);
         let logStr = "";
         logs.forEach(s => { logStr += s + "\n"; });
@@ -765,7 +766,7 @@ let MozLoopServiceInternal = {
 
         let ai = Services.appinfo;
         let uuid = uuidgen.generateUUID().toString();
-        uuid = uuid.substr(1, uuid.length-2); // remove uuid curly braces
+        uuid = uuid.substr(1, uuid.length - 2); // remove uuid curly braces
 
         let directory = OS.Path.join(OS.Constants.Path.profileDir,
                                      "saved-telemetry-pings");
@@ -853,26 +854,53 @@ let MozLoopServiceInternal = {
         return;
       }
 
-      chatbox.setAttribute("dark", true);
-      chatbox.setAttribute("large", true);
-
       chatbox.addEventListener("DOMContentLoaded", function loaded(event) {
         if (event.target != chatbox.contentDocument) {
           return;
         }
         chatbox.removeEventListener("DOMContentLoaded", loaded, true);
 
+        let chatbar = chatbox.parentNode;
         let window = chatbox.contentWindow;
 
         function socialFrameChanged(eventName) {
           UITour.availableTargetsCache.clear();
           UITour.notify(eventName);
+
+          if (eventName == "Loop:ChatWindowDetached" || eventName == "Loop:ChatWindowAttached") {
+            // After detach, re-attach of the chatbox, refresh its reference so
+            // we can keep using it here.
+            let ref = chatbar.chatboxForURL.get(chatbox.src);
+            chatbox = ref && ref.get() || chatbox;
+          }
         }
 
         window.addEventListener("socialFrameHide", socialFrameChanged.bind(null, "Loop:ChatWindowHidden"));
         window.addEventListener("socialFrameShow", socialFrameChanged.bind(null, "Loop:ChatWindowShown"));
         window.addEventListener("socialFrameDetached", socialFrameChanged.bind(null, "Loop:ChatWindowDetached"));
+        window.addEventListener("socialFrameAttached", socialFrameChanged.bind(null, "Loop:ChatWindowAttached"));
         window.addEventListener("unload", socialFrameChanged.bind(null, "Loop:ChatWindowClosed"));
+
+        const kSizeMap = {
+          LoopChatEnabled: "loopChatEnabled",
+          LoopChatMessageAppended: "loopChatMessageAppended"
+        };
+
+        function onChatEvent(ev) {
+          // When the chat box or messages are shown, resize the panel or window
+          // to be slightly higher to accomodate them.
+          let customSize = kSizeMap[ev.type];
+          let currSize = chatbox.getAttribute("customSize");
+          // If the size is already at the requested one or at the maximum size
+          // already, don't do anything. Especially don't make it shrink.
+          if (customSize && currSize != customSize && currSize != "loopChatMessageAppended") {
+            chatbox.setAttribute("customSize", customSize);
+            chatbox.parentNode.setAttribute("customSize", customSize);
+          }
+        }
+
+        window.addEventListener("LoopChatEnabled", onChatEvent);
+        window.addEventListener("LoopChatMessageAppended", onChatEvent);
 
         injectLoopAPI(window);
 
@@ -885,17 +913,17 @@ let MozLoopServiceInternal = {
           }
 
           // Chat Window Id, this is different that the internal winId
-          let windowId = window.location.hash.slice(1);
-          var context = this.conversationContexts.get(windowId);
+          let chatWindowId = window.location.hash.slice(1);
+          var context = this.conversationContexts.get(chatWindowId);
           var exists = pc.id.match(/session=(\S+)/);
           if (context && !exists) {
             // Not ideal but insert our data amidst existing data like this:
             // - 000 (id=00 url=http)
             // + 000 (session=000 call=000 id=00 url=http)
-            var pair = pc.id.split("(");  //)
+            var pair = pc.id.split("(");
             if (pair.length == 2) {
               pc.id = pair[0] + "(session=" + context.sessionId +
-                  (context.callId? " call=" + context.callId : "") + " " + pair[1]; //)
+                  (context.callId ? " call=" + context.callId : "") + " " + pair[1];
             }
           }
 
@@ -918,8 +946,17 @@ let MozLoopServiceInternal = {
       }.bind(this), true);
     };
 
-    if (!Chat.open(null, origin, "", url, undefined, undefined, callback)) {
+    let chatboxInstance = Chat.open(null, origin, "", url, undefined, undefined,
+                                    callback);
+    if (!chatboxInstance) {
       return null;
+    // It's common for unit tests to overload Chat.open.
+    } else if (chatboxInstance.setAttribute) {
+      // Set properties that influence visual appeara nce of the chatbox right
+      // away to circumvent glitches.
+      chatboxInstance.setAttribute("dark", true);
+      chatboxInstance.setAttribute("customSize", "loopDefault");
+      chatboxInstance.parentNode.setAttribute("customSize", "loopDefault");
     }
     return windowId;
   },
@@ -948,9 +985,10 @@ let MozLoopServiceInternal = {
   /**
    * Get the OAuth client constructed with Loop OAauth parameters.
    *
+   * @param {Boolean} forceReAuth Set to true to force the user to reauthenticate.
    * @return {Promise}
    */
-  promiseFxAOAuthClient: Task.async(function* () {
+  promiseFxAOAuthClient: Task.async(function* (forceReAuth) {
     // We must make sure to have only a single client otherwise they will have different states and
     // multiple channels. This would happen if the user clicks the Login button more than once.
     if (gFxAOAuthClientPromise) {
@@ -961,6 +999,10 @@ let MozLoopServiceInternal = {
       parameters => {
         // Add the fact that we want keys to the parameters.
         parameters.keys = true;
+        if (forceReAuth) {
+          parameters.action = "force_auth";
+          parameters.email = MozLoopService.userProfile.email;
+        }
 
         try {
           gFxAOAuthClient = new FxAccountsOAuthClient({
@@ -984,11 +1026,12 @@ let MozLoopServiceInternal = {
   /**
    * Get the OAuth client and do the authorization web flow to get an OAuth code.
    *
+   * @param {Boolean} forceReAuth Set to true to force the user to reauthenticate.
    * @return {Promise}
    */
-  promiseFxAOAuthAuthorization: function() {
+  promiseFxAOAuthAuthorization: function(forceReAuth) {
     let deferred = Promise.defer();
-    this.promiseFxAOAuthClient().then(
+    this.promiseFxAOAuthClient(forceReAuth).then(
       client => {
         client.onComplete = this._fxAOAuthComplete.bind(this, deferred);
         client.onError = this._fxAOAuthError.bind(this, deferred);
@@ -1066,6 +1109,7 @@ let gInitializeTimerFunc = (deferredInitialization) => {
              MozLoopServiceInternal.initialRegistrationDelayMilliseconds);
 };
 
+let gServiceInitialized = false;
 
 /**
  * Public API
@@ -1083,8 +1127,19 @@ this.MozLoopService = {
     };
   },
 
+  /**
+   * Used to override the initalize timer function for test purposes.
+   */
   set initializeTimerFunc(value) {
     gInitializeTimerFunc = value;
+  },
+
+  /**
+   * Used to reset if the service has been initialized or not - for test
+   * purposes.
+   */
+  resetServiceInitialized: function() {
+    gServiceInitialized = false;
   },
 
   get roomsParticipantsCount() {
@@ -1095,9 +1150,18 @@ this.MozLoopService = {
    * Initialized the loop service, and starts registration with the
    * push and loop servers.
    *
+   * Note: this returns a promise for unit test purposes.
+   *
    * @return {Promise}
    */
   initialize: Task.async(function*() {
+    // Ensure we don't setup things like listeners more than once.
+    if (gServiceInitialized) {
+      return Promise.resolve();
+    }
+
+    gServiceInitialized = true;
+
     // Do this here, rather than immediately after definition, so that we can
     // stub out API functions for unit testing
     Object.freeze(this);
@@ -1173,10 +1237,10 @@ this.MozLoopService = {
       return;
     }
 
-    // The particpant that joined isn't necessarily included in room.participants (depending on
+    // The participant that joined isn't necessarily included in room.participants (depending on
     // when the broadcast happens) so concatenate.
-    for (let participant of room.participants.concat(participant)) {
-      if (participant.owner) {
+    for (let roomParticipant of room.participants.concat(participant)) {
+      if (roomParticipant.owner) {
         isOwnerInRoom = true;
       } else {
         isOtherInRoom = true;
@@ -1342,9 +1406,10 @@ this.MozLoopService = {
           return;
         }
 
-        // XXX If we don't have a key for FxA yet, then simply reject for now.
-        // We'll create some sign-in/sign-out UX in bug 1153788.
-        reject(new Error("FxA re-register not implemented"));
+        // This should generally never happen, but its not really possible
+        // for us to force reauth from here in a sensible way for the user.
+        // So we'll just have to flag it the best we can.
+        reject(new Error("No FxA key available"));
         return;
       }
 
@@ -1364,6 +1429,18 @@ this.MozLoopService = {
 
       resolve(MozLoopService.getLoopPref("key"));
     });
+  },
+
+  /**
+   * Returns true if this profile has an encryption key. For guest profiles
+   * this is always true, since we can generate a new one if needed. For FxA
+   * profiles, we need to check the preference.
+   *
+   * @return {Boolean} True if the profile has an encryption key.
+   */
+  get hasEncryptionKey() {
+    return !this.userProfile ||
+      Services.prefs.prefHasUserValue("loop.key.fxa");
   },
 
   get errors() {
@@ -1468,14 +1545,15 @@ this.MozLoopService = {
    *
    * The caller should be prepared to handle rejections related to network, server or login errors.
    *
+   * @param {Boolean} forceReAuth Set to true to force the user to reauthenticate.
    * @return {Promise} that resolves when the FxA login flow is complete.
    */
-  logInToFxA: function() {
+  logInToFxA: function(forceReAuth) {
     log.debug("logInToFxA with fxAOAuthTokenData:", !!MozLoopServiceInternal.fxAOAuthTokenData);
-    if (MozLoopServiceInternal.fxAOAuthTokenData) {
+    if (!forceReAuth && MozLoopServiceInternal.fxAOAuthTokenData) {
       return Promise.resolve(MozLoopServiceInternal.fxAOAuthTokenData);
     }
-    return MozLoopServiceInternal.promiseFxAOAuthAuthorization().then(response => {
+    return MozLoopServiceInternal.promiseFxAOAuthAuthorization(forceReAuth).then(response => {
       return MozLoopServiceInternal.promiseFxAOAuthToken(response.code, response.state);
     }).then(tokenData => {
       MozLoopServiceInternal.fxAOAuthTokenData = tokenData;

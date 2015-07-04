@@ -37,6 +37,8 @@
 #endif
 #include "vm/MatchPairs.h"
 
+#include "jit/MacroAssembler-inl.h"
+
 using namespace js;
 using namespace js::irregexp;
 using namespace js::jit;
@@ -117,6 +119,12 @@ NativeRegExpMacroAssembler::GenerateCode(JSContext* cx, bool match_only)
     // Finalize code - write the entry point code now we know how many
     // registers we need.
     masm.bind(&entry_label_);
+
+#ifdef JS_CODEGEN_ARM64
+    // ARM64 communicates stack address via sp, but uses a pseudo-sp for addressing.
+    MOZ_ASSERT(!masm.GetStackPointer64().Is(sp));
+    masm.moveStackPtrTo(masm.getStackPointer());
+#endif
 
     // Push non-volatile registers which might be modified by jitcode.
     size_t pushedNonVolatileRegisters = 0;
@@ -385,7 +393,7 @@ NativeRegExpMacroAssembler::GenerateCode(JSContext* cx, bool match_only)
 
         // Save registers before calling C function
         LiveGeneralRegisterSet volatileRegs(GeneralRegisterSet::Volatile());
-#if defined(JS_CODEGEN_ARM)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64)
         volatileRegs.add(Register::FromCode(Registers::lr));
 #elif defined(JS_CODEGEN_MIPS)
         volatileRegs.add(Register::FromCode(Registers::ra));
@@ -439,6 +447,8 @@ NativeRegExpMacroAssembler::GenerateCode(JSContext* cx, bool match_only)
 #ifdef JS_ION_PERF
     writePerfSpewerJitCodeProfile(code, "RegExp");
 #endif
+
+    AutoWritableJitCode awjc(code);
 
     for (size_t i = 0; i < labelPatches.length(); i++) {
         LabelPatch& v = labelPatches[i];

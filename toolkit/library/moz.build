@@ -6,7 +6,7 @@
 
 @template
 def Libxul(name):
-    if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+    if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('cocoa', 'uikit'):
         # This is going to be a framework named "XUL", not an ordinary library named
         # "libxul.dylib"
         GeckoFramework(name, linkage=None)
@@ -31,6 +31,12 @@ def Libxul(name):
 
     if CONFIG['MOZ_WEBRTC']:
         DELAYLOAD_DLLS += ['msdmo.dll']
+
+    if CONFIG['OS_ARCH'] == 'WINNT':
+        DELAYLOAD_DLLS += [
+            'api-ms-win-core-winrt-l1-1-0.dll',
+            'api-ms-win-core-winrt-string-l1-1-0.dll',
+        ]
 
     if CONFIG['OS_ARCH'] == 'WINNT' and not CONFIG['GNU_CC']:
         LOCAL_INCLUDES += [
@@ -253,6 +259,16 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
         'mtp',
     ]
 
+    if int(CONFIG['ANDROID_VERSION']) >= 17:
+        OS_LIBS += [
+            'sync',
+        ]
+
+    if CONFIG['ANDROID_VERSION'] >= '16':
+        OS_LIBS += [
+            'mdnssd',
+        ]
+
 if 'rtsp' in CONFIG['NECKO_PROTOCOLS']:
     OS_LIBS += [
         'stagefright_foundation',
@@ -260,7 +276,7 @@ if 'rtsp' in CONFIG['NECKO_PROTOCOLS']:
 
 OS_LIBS += CONFIG['ICONV_LIBS']
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('cocoa', 'uikit'):
     OS_LIBS += CONFIG['TK_LIBS']
 
 if CONFIG['OS_ARCH'] == 'OpenBSD':

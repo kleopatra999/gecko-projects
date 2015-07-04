@@ -8,6 +8,7 @@ var PKT_SAVED_OVERLAY = function (options)
     this.inited = false;
     this.active = false;
     this.wrapper = null;
+    this.pockethost = "getpocket.com";
     this.savedItemId = 0;
     this.savedUrl = '';
     this.premiumStatus = false;
@@ -15,8 +16,8 @@ var PKT_SAVED_OVERLAY = function (options)
     this.closeValid = true;
     this.mouseInside = false;
     this.autocloseTimer = null;
+    this.inoverflowmenu = false;
     this.dictJSON = {};
-    // TODO: allow the timer to be editable?
     this.autocloseTiming = 3500;
     this.autocloseTimingFinalState = 2000;
     this.mouseInside = false;
@@ -33,14 +34,8 @@ var PKT_SAVED_OVERLAY = function (options)
             var newtag = $('<li><a href="#" class="token_tag ' + tagclass + '">' + tags[i] + '</a></li>');
             container.append(newtag);
             var templeft = newtag.position().left;
-            if (templeft > newtagleft) {
-                this.cxt_suggested_available++;
-                newtagleft = templeft;
-            }
-            else {
-                newtag.remove();
-                break;
-            }
+            this.cxt_suggested_available++;
+            newtagleft = templeft;
         }
     };
     this.fillUserTags = function() {
@@ -60,9 +55,10 @@ var PKT_SAVED_OVERLAY = function (options)
             myself.startCloseTimer();
             return;
         }
+
         thePKT_SAVED.sendMessage("getSuggestedTags",
         {
-            url: myself.savedUrl || window.location.toString()
+            url: myself.savedUrl
         }, function(resp) 
         {
             $('.pkt_ext_suggestedtag_detail').removeClass('pkt_ext_suggestedtag_detail_loading');
@@ -81,7 +77,7 @@ var PKT_SAVED_OVERLAY = function (options)
             }
             else if (resp.status == 'error') {
                 var msg = $('<p class="suggestedtag_msg">');
-                msg.text(resp.error);
+                msg.text(resp.error.message);
                 $('.pkt_ext_suggestedtag_detail').append(msg);
                 this.suggestedTagsLoaded = true;
                 if (!myself.mouseInside) {
@@ -190,9 +186,6 @@ var PKT_SAVED_OVERLAY = function (options)
                         }   
                     }
                 }
-                else {
-                    returnlist.push({name:'blah'});
-                }
                 if (!$('.token-input-dropdown-tag').data('init')) {
                     $('.token-input-dropdown-tag').css('width',inputwrapper.outerWidth()).data('init');
                     inputwrapper.append($('.token-input-dropdown-tag'));
@@ -202,7 +195,7 @@ var PKT_SAVED_OVERLAY = function (options)
             textToData: function(text) {
                 if($.trim(text).length > 25 || !$.trim(text).length) {
                     if (text.length > 25) {
-                        $('.pkt_ext_edit_msg').addClass('pkt_ext_edit_msg_error pkt_ext_edit_msg_active').text(myself.dictJSON.invalidTags);
+                        myself.showTagsError(myself.dictJSON.maxtaglength);
                         changestamp = Date.now();
                         setTimeout(function() {
                             $('.token-input-input-token input').val(text).focus();
@@ -211,7 +204,7 @@ var PKT_SAVED_OVERLAY = function (options)
                     return null;
                 }
                 else {
-                    $('.pkt_ext_edit_msg').removeClass('pkt_ext_edit_msg_error pkt_ext_edit_msg_active').text('');
+                    myself.hideTagsError();
                     return {name:myself.sanitizeText(text.toLowerCase())};
                 }                       
             },
@@ -258,6 +251,12 @@ var PKT_SAVED_OVERLAY = function (options)
                 changestamp = Date.now();
                 myself.showActiveTags();
                 myself.checkPlaceholderStatus();
+            },
+            onShowDropdown: function() {
+            	thePKT_SAVED.sendMessage("expandSavePanel");
+            },
+            onHideDropdown: function() {
+            	thePKT_SAVED.sendMessage("collapseSavePanel");
             }
         });
         $('body').on('keydown',function(e) {
@@ -311,10 +310,11 @@ var PKT_SAVED_OVERLAY = function (options)
                     originaltags.push(text);
                 }
             });
+
             thePKT_SAVED.sendMessage("addTags",
             {
-                url: myself.savedUrl || window.location.toString(),
-                tags: originaltags   
+                url: myself.savedUrl,
+                tags: originaltags
             }, function(resp)
             {
                 if (resp.status == 'success') 
@@ -323,7 +323,7 @@ var PKT_SAVED_OVERLAY = function (options)
                 }
                 else if (resp.status == 'error') 
                 {
-                    $('.pkt_ext_edit_msg').addClass('pkt_ext_edit_msg_error pkt_ext_edit_msg_active').text(resp.error);
+                    $('.pkt_ext_edit_msg').addClass('pkt_ext_edit_msg_error pkt_ext_edit_msg_active').text(resp.error.message);
                 }
             });
         });
@@ -338,6 +338,7 @@ var PKT_SAVED_OVERLAY = function (options)
                 e.preventDefault();
                 myself.disableInput();
                 $('.pkt_ext_containersaved').find('.pkt_ext_detail h2').text(myself.dictJSON.processingremove);
+
                 thePKT_SAVED.sendMessage("deleteItem",
                 {
                     itemId: myself.savedItemId
@@ -346,7 +347,7 @@ var PKT_SAVED_OVERLAY = function (options)
                         myself.showStateFinalMsg(myself.dictJSON.pageremoved);
                     }
                     else if (resp.status == 'error') {
-                        $('.pkt_ext_edit_msg').addClass('pkt_ext_edit_msg_error pkt_ext_edit_msg_active').text(resp.error);
+                        $('.pkt_ext_edit_msg').addClass('pkt_ext_edit_msg_error pkt_ext_edit_msg_active').text(resp.error.message);
                     }
                 });
             }
@@ -363,6 +364,14 @@ var PKT_SAVED_OVERLAY = function (options)
             });
             myself.closePopup();
         });
+    };
+    this.showTagsError = function(msg) {
+        $('.pkt_ext_edit_msg').addClass('pkt_ext_edit_msg_error pkt_ext_edit_msg_active').text(msg);
+        $('.pkt_ext_tag_detail').addClass('pkt_ext_tag_error');
+    };
+    this.hideTagsError = function(msg) {
+        $('.pkt_ext_edit_msg').removeClass('pkt_ext_edit_msg_error pkt_ext_edit_msg_active').text('');
+        $('.pkt_ext_tag_detail').removeClass('pkt_ext_tag_error');
     };
     this.showActiveTags = function() {
         if (!$('.pkt_ext_suggestedtag_detail').length) {
@@ -401,7 +410,7 @@ var PKT_SAVED_OVERLAY = function (options)
         if (typeof initobj.item == 'object')
         {
             this.savedItemId = initobj.item.item_id;
-            this.savedUrl = initobj.item.resolved_url;
+            this.savedUrl = initobj.item.given_url;
         }
         $('.pkt_ext_containersaved').addClass('pkt_ext_container_detailactive').removeClass('pkt_ext_container_finalstate');
 
@@ -451,85 +460,7 @@ var PKT_SAVED_OVERLAY = function (options)
     }
     this.getTranslations = function()
     {
-        var language = window.navigator.language.toLowerCase();
-        this.dictJSON = {};
-
-        var dictsuffix = 'en-US';
-
-        if (language.indexOf('en') == 0)
-        {
-            dictsuffix = 'en';
-        }
-        else if (language.indexOf('it') == 0)
-        {
-            dictsuffix = 'it';
-        }
-        else if (language.indexOf('fr-ca') == 0)
-        {
-            dictsuffix = 'fr';
-        }
-        else if (language.indexOf('fr') == 0)
-        {
-            dictsuffix = 'fr';
-        }
-        else if (language.indexOf('de') == 0)
-        {
-            dictsuffix = 'de';
-        }
-        else if (language.indexOf('es-es') == 0)
-        {
-            dictsuffix = 'es';
-        }
-        else if (language.indexOf('es-419') == 0)
-        {
-            dictsuffix = 'es_419';
-        }
-        else if (language.indexOf('es') == 0)
-        {
-            dictsuffix = 'es';
-        }
-        else if (language.indexOf('ja') == 0)
-        {
-            dictsuffix = 'ja';
-        }
-        else if (language.indexOf('nl') == 0)
-        {
-            dictsuffix = 'nl';
-        }
-        else if (language.indexOf('pt-pt') == 0)
-        {
-            dictsuffix = 'pt_PT';
-        }
-        else if (language.indexOf('pt') == 0)
-        {
-            dictsuffix = 'pt_BR';
-        }
-        else if (language.indexOf('ru') == 0)
-        {
-            dictsuffix = 'ru';
-        }
-        else if (language.indexOf('zh-tw') == 0)
-        {
-            dictsuffix = 'zh_TW';
-        }
-        else if (language.indexOf('zh') == 0)
-        {
-            dictsuffix = 'zh_CN';
-        }
-        else if (language.indexOf('ko') == 0)
-        {
-            dictsuffix = 'ko';
-        }
-        else if (language.indexOf('pl') == 0)
-        {
-            dictsuffix = 'pl';
-        }
-
-        // TODO: when we add all dictionaries, modify this, but for now hard code to English
-        dictsuffix = 'en';
-
-        this.dictJSON = Translations[dictsuffix];
-        
+        this.dictJSON = window.pocketStrings;
     };
 };
 
@@ -547,6 +478,18 @@ PKT_SAVED_OVERLAY.prototype = {
 
         // set host
         this.dictJSON.pockethost = this.pockethost;
+
+        // extra modifier class for collapsed state
+        if (this.inoverflowmenu)
+        {
+            $('body').addClass('pkt_ext_saved_overflow');
+        }
+
+        // extra modifier class for language
+        if (this.locale)
+        {
+            $('body').addClass('pkt_ext_saved_' + this.locale);
+        }
 
         // Create actual content
         $('body').append(Handlebars.templates.saved_shell(this.dictJSON));
@@ -567,6 +510,7 @@ PKT_SAVED_OVERLAY.prototype = {
         if (this.premiumStatus && !$('.pkt_ext_suggestedtag_detail').length)
         {
             $('body').append(Handlebars.templates.saved_premiumshell(this.dictJSON));
+            $('.pkt_ext_initload').append(Handlebars.templates.saved_premiumextras(this.dictJSON));
         }
     }
 };
@@ -580,17 +524,18 @@ PKT_SAVED.prototype = {
         if (this.inited) {
             return;
         }
+        this.panelId = pktPanelMessaging.panelIdFromURL(window.location.href);
         this.overlay = new PKT_SAVED_OVERLAY();
 
         this.inited = true;
     },
 
     addMessageListener: function(messageId, callback) {
-    	Messaging.addMessageListener(messageId, callback);
+    	pktPanelMessaging.addMessageListener(this.panelId, messageId, callback);
     },
 
     sendMessage: function(messageId, payload, callback) {
-    	Messaging.sendMessage(messageId, payload, callback);
+    	pktPanelMessaging.sendMessage(this.panelId, messageId, payload, callback);
     },
 
     create: function() {
@@ -605,6 +550,17 @@ PKT_SAVED.prototype = {
         {
             myself.overlay.pockethost = host[1];
         }
+        var inoverflowmenu = window.location.href.match(/inoverflowmenu=([\w|\.]*)&?/);
+        if (inoverflowmenu && inoverflowmenu.length > 1)
+        {
+            myself.overlay.inoverflowmenu = (inoverflowmenu[1] == 'true');
+        }
+        var locale = window.location.href.match(/locale=([\w|\.]*)&?/);
+        if (locale && locale.length > 1)
+        {
+            myself.overlay.locale = locale[1].toLowerCase();
+        }
+
         myself.overlay.create();
 
         // tell back end we're ready
@@ -614,7 +570,21 @@ PKT_SAVED.prototype = {
         thePKT_SAVED.addMessageListener("saveLink",function(resp)
         {
             if (resp.status == 'error') {
-                myself.overlay.showStateError(myself.overlay.dictJSON.pagenotsaved,myself.overlay.dictJSON.onlylinkssaved);
+                if (typeof resp.error == 'object')
+                {
+                    if (resp.error.localizedKey)
+                    {
+                        myself.overlay.showStateError(myself.overlay.dictJSON.pagenotsaved,myself.overlay.dictJSON[resp.error.localizedKey]);
+                    }
+                    else
+                    {
+                        myself.overlay.showStateError(myself.overlay.dictJSON.pagenotsaved,resp.error.message);
+                    }
+                }       
+                else
+                {
+                    myself.overlay.showStateError(myself.overlay.dictJSON.pagenotsaved,myself.overlay.dictJSON.errorgeneric);
+                }         
                 return;
             }
 
@@ -632,6 +602,10 @@ $(function()
         thePKT_SAVED.init();
     }
 
-    window.thePKT_SAVED.create();
+    // send an async message to get string data
+    thePKT_SAVED.sendMessage("initL10N", {}, function(resp) {
+        window.pocketStrings = resp.strings;
+        window.thePKT_SAVED.create();
+    });
 });
 

@@ -124,6 +124,25 @@ const cloneValueInto = function(value, targetWindow) {
 };
 
 /**
+ * Guarded callback invocation that reports when a callback function doesn't
+ * exist anymore.
+ *
+ * @param {Function} callback Callback function to be invoked.
+ * @param {...mixed} args     Rest param of callback function arguments.
+ */
+const invokeCallback = function(callback, ...args) {
+  if (typeof callback != "function") {
+    // We log an error, because it will have a stack trace attached which will
+    // be helpful whilst debugging.
+    MozLoopService.log.error.apply(MozLoopService.log,
+      [new Error("Callback function was lost!"), ...args]);
+    return;
+  }
+
+  return callback.apply(null, args);
+};
+
+/**
  * Get the two-digit hexadecimal code for a byte
  *
  * @param {byte} charCode
@@ -434,7 +453,7 @@ function injectLoopAPI(targetWindow) {
       writable: true,
       value: function(options, callback) {
         LoopContacts.startImport(options, getChromeWindow(targetWindow), function(...results) {
-          callback(...[cloneValueInto(r, targetWindow) for (r of results)]);
+          invokeCallback(callback, ...[cloneValueInto(r, targetWindow) for (r of results)]);
         });
       }
     },
@@ -494,7 +513,7 @@ function injectLoopAPI(targetWindow) {
         } else if (!options.okButton && !options.cancelButton) {
           buttonFlags = Services.prompt.STD_YES_NO_BUTTONS;
         } else {
-          callback(cloneValueInto(new Error("confirm: missing button options"), targetWindow));
+          invokeCallback(callback, cloneValueInto(new Error("confirm: missing button options"), targetWindow));
         }
 
         try {
@@ -502,9 +521,9 @@ function injectLoopAPI(targetWindow) {
             options.message, buttonFlags, options.okButton, options.cancelButton,
             null, null, {});
 
-          callback(null, chosenButton == 0);
+          invokeCallback(callback, null, chosenButton == 0);
         } catch (ex) {
-          callback(cloneValueInto(ex, targetWindow));
+          invokeCallback(callback, cloneValueInto(ex, targetWindow));
         }
       }
     },
@@ -617,20 +636,13 @@ function injectLoopAPI(targetWindow) {
       writable: true,
       value: function(sessionType, path, method, payloadObj, callback) {
         // XXX Should really return a DOM promise here.
-        let callbackIsFunction = (typeof callback == "function");
         MozLoopService.hawkRequest(sessionType, path, method, payloadObj).then((response) => {
-          callback(null, response.body);
+          invokeCallback(callback, null, response.body);
         }, hawkError => {
-          // When the function was garbage collected due to async events, like
-          // closing a window, we want to circumvent a JS error.
-          if (callbackIsFunction && typeof callback != "function") {
-            MozLoopService.log.error("hawkRequest: callback function was lost.", hawkError);
-            return;
-          }
           // The hawkError.error property, while usually a string representing
           // an HTTP response status message, may also incorrectly be a native
           // error object that will cause the cloning function to fail.
-          callback(Cu.cloneInto({
+          invokeCallback(callback, Cu.cloneInto({
             error: (hawkError.error && typeof hawkError.error == "string")
                    ? hawkError.error : "Unexpected exception",
             message: hawkError.message,
@@ -669,11 +681,20 @@ function injectLoopAPI(targetWindow) {
       },
     },
 
+    /**
+     * Start the FxA login flow using the OAuth client and params from the Loop
+     * server.
+     *
+     * @param {Boolean} forceReAuth Set to true to force FxA into a re-auth even
+     *                              if the user is already logged in.
+     * @return {Promise} Returns a promise that is resolved on successful
+     *                   completion, or rejected otherwise.
+     */
     logInToFxA: {
       enumerable: true,
       writable: true,
-      value: function() {
-        return MozLoopService.logInToFxA();
+      value: function(forceReAuth) {
+        return MozLoopService.logInToFxA(forceReAuth);
       }
     },
 
@@ -691,6 +712,18 @@ function injectLoopAPI(targetWindow) {
       value: function() {
         return MozLoopService.openFxASettings();
       },
+    },
+
+    /**
+     * Returns true if this profile has an encryption key.
+     *
+     * @return {Boolean} True if the profile has an encryption key.
+     */
+    hasEncryptionKey: {
+      enumerable: true,
+      get: function() {
+        return MozLoopService.hasEncryptionKey;
+      }
     },
 
     /**
@@ -822,12 +855,12 @@ function injectLoopAPI(targetWindow) {
         request.onload = () => {
           if (request.status < 200 || request.status >= 300) {
             let error = new Error(request.status + " " + request.statusText);
-            callback(cloneValueInto(error, targetWindow));
+            invokeCallback(callback, cloneValueInto(error, targetWindow));
             return;
           }
 
           let blob = new Blob([request.response], {type: "audio/ogg"});
-          callback(null, cloneValueInto(blob, targetWindow));
+          invokeCallback(callback, null, cloneValueInto(blob, targetWindow));
         };
 
         request.send();
@@ -883,7 +916,16 @@ function injectLoopAPI(targetWindow) {
         win.messageManager.addMessageListener("PageMetadata:PageDataResult", function onPageDataResult(msg) {
           win.messageManager.removeMessageListener("PageMetadata:PageDataResult", onPageDataResult);
           let pageData = msg.json;
-          callback(cloneValueInto(pageData, targetWindow));
+          win.LoopUI.getFavicon(function(err, favicon) {
+            if (err) {
+              MozLoopService.log.error("Error occurred whilst fetching favicon", err);
+              // We don't return here intentionally to make sure the callback is
+              // invoked at all times. We just report the error here.
+            }
+            pageData.favicon = favicon || null;
+
+            invokeCallback(callback, cloneValueInto(pageData, targetWindow));
+          });
         });
         win.gBrowser.selectedBrowser.messageManager.sendAsyncMessage("PageMetadata:GetPageData");
       }
@@ -940,58 +982,6 @@ function injectLoopAPI(targetWindow) {
     },
 
     /**
-     * Checks if the Social Share widget is available in any of the registered
-     * widget areas (navbar, MenuPanel, etc).
-     *
-     * @return {Boolean} `true` if the widget is available and `false` when it's
-     *                   still in the Customization palette.
-     */
-    isSocialShareButtonAvailable: {
-      enumerable: true,
-      writable: true,
-      value: function() {
-        let win = Services.wm.getMostRecentWindow("navigator:browser");
-        if (!win || !win.CustomizableUI) {
-          return false;
-        }
-
-        let widget = win.CustomizableUI.getWidget(kShareWidgetId);
-        if (widget) {
-          if (!socialShareButtonListenersAdded) {
-            let eventName = "social:" + kShareWidgetId;
-            Services.obs.addObserver(onShareWidgetChanged, eventName + "-added", false);
-            Services.obs.addObserver(onShareWidgetChanged, eventName + "-removed", false);
-            socialShareButtonListenersAdded = true;
-          }
-          return !!widget.areaType;
-        }
-
-        return false;
-      }
-    },
-
-    /**
-     * Add the Social Share widget to the navbar area, but only when it's not
-     * located anywhere else than the Customization palette.
-     */
-    addSocialShareButton: {
-      enumerable: true,
-      writable: true,
-      value: function() {
-        // Don't do anything if the button is already available.
-        if (api.isSocialShareButtonAvailable.value()) {
-          return;
-        }
-
-        let win = Services.wm.getMostRecentWindow("navigator:browser");
-        if (!win || !win.CustomizableUI) {
-          return;
-        }
-        win.CustomizableUI.addWidgetToArea(kShareWidgetId, win.CustomizableUI.AREA_NAVBAR);
-      }
-    },
-
-    /**
      * Activates the Social Share panel with the Social Provider panel opened
      * when the popup open.
      */
@@ -999,23 +989,18 @@ function injectLoopAPI(targetWindow) {
       enumerable: true,
       writable: true,
       value: function() {
-        // Don't do anything if the button is _not_ available.
-        if (!api.isSocialShareButtonAvailable.value()) {
-          return;
-        }
-
         let win = Services.wm.getMostRecentWindow("navigator:browser");
         if (!win || !win.SocialShare) {
           return;
         }
-        win.SocialShare.showDirectory();
+        win.SocialShare.showDirectory(win.LoopUI.toolbarButton.anchor);
       }
     },
 
     /**
      * Returns a sorted list of Social Providers that can share URLs. See
      * `updateSocialProvidersCache()` for more information.
-     * 
+     *
      * @return {Array} Sorted list of share-capable Social Providers.
      */
     getSocialShareProviders: {
@@ -1057,7 +1042,8 @@ function injectLoopAPI(targetWindow) {
         if (body) {
           graphData.body = body;
         }
-        win.SocialShare.sharePage(providerOrigin, graphData);
+        win.SocialShare.sharePage(providerOrigin, graphData, null,
+          win.LoopUI.toolbarButton.anchor);
       }
     }
   };

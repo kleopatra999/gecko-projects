@@ -18,6 +18,8 @@
 # include "jit/x64/CodeGenerator-x64.h"
 #elif defined(JS_CODEGEN_ARM)
 # include "jit/arm/CodeGenerator-arm.h"
+#elif defined(JS_CODEGEN_ARM64)
+# include "jit/arm64/CodeGenerator-arm64.h"
 #elif defined(JS_CODEGEN_MIPS)
 # include "jit/mips/CodeGenerator-mips.h"
 #elif defined(JS_CODEGEN_NONE)
@@ -42,6 +44,7 @@ class OutOfLineCallPostWriteBarrier;
 class OutOfLineIsCallable;
 class OutOfLineRegExpExec;
 class OutOfLineRegExpTest;
+class OutOfLineLambdaArrow;
 
 class CodeGenerator : public CodeGeneratorSpecific
 {
@@ -104,10 +107,11 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitRegExpReplace(LRegExpReplace* lir);
     void visitStringReplace(LStringReplace* lir);
     void visitLambda(LLambda* lir);
+    void visitOutOfLineLambdaArrow(OutOfLineLambdaArrow* ool);
     void visitLambdaArrow(LLambdaArrow* lir);
     void visitLambdaForSingleton(LLambdaForSingleton* lir);
     void visitPointer(LPointer* lir);
-    void visitNurseryObject(LNurseryObject* lir);
+    void visitKeepAliveObject(LKeepAliveObject* lir);
     void visitSlots(LSlots* lir);
     void visitLoadSlotT(LLoadSlotT* lir);
     void visitLoadSlotV(LLoadSlotV* lir);
@@ -129,8 +133,13 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitOutOfLineCallPostWriteBarrier(OutOfLineCallPostWriteBarrier* ool);
     void visitCallNative(LCallNative* call);
     void emitCallInvokeFunction(LInstruction* call, Register callereg,
-                                uint32_t argc, uint32_t unusedStack);
+                                bool isConstructing, uint32_t argc,
+                                uint32_t unusedStack);
     void visitCallGeneric(LCallGeneric* call);
+    void emitCallInvokeFunctionShuffleNewTarget(LCallKnown *call,
+                                                Register calleeReg,
+                                                uint32_t numFormals,
+                                                uint32_t unusedStack);
     void visitCallKnown(LCallKnown* call);
     void emitCallInvokeFunction(LApplyArgsGeneric* apply, Register extraStackSize);
     void emitPushArguments(LApplyArgsGeneric* apply, Register extraStackSpace);
@@ -142,8 +151,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitGetDynamicName(LGetDynamicName* lir);
     void visitFilterArgumentsOrEvalS(LFilterArgumentsOrEvalS* lir);
     void visitFilterArgumentsOrEvalV(LFilterArgumentsOrEvalV* lir);
-    void visitCallDirectEvalS(LCallDirectEvalS* lir);
-    void visitCallDirectEvalV(LCallDirectEvalV* lir);
+    void visitCallDirectEval(LCallDirectEval* lir);
     void visitDoubleToInt32(LDoubleToInt32* lir);
     void visitFloat32ToInt32(LFloat32ToInt32* lir);
     void visitNewArrayCallVM(LNewArray* lir);
@@ -191,6 +199,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitUnboxedArrayLength(LUnboxedArrayLength* lir);
     void visitUnboxedArrayInitializedLength(LUnboxedArrayInitializedLength* lir);
     void visitIncrementUnboxedArrayInitializedLength(LIncrementUnboxedArrayInitializedLength* lir);
+    void visitSetUnboxedArrayInitializedLength(LSetUnboxedArrayInitializedLength* lir);
     void visitNotO(LNotO* ins);
     void visitNotV(LNotV* ins);
     void visitBoundsCheck(LBoundsCheck* lir);
@@ -214,7 +223,6 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitHypot(LHypot* lir);
     void visitPowI(LPowI* lir);
     void visitPowD(LPowD* lir);
-    void visitRandom(LRandom* lir);
     void visitMathFunctionD(LMathFunctionD* ins);
     void visitMathFunctionF(LMathFunctionF* ins);
     void visitModD(LModD* ins);
@@ -264,11 +272,13 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitArrayPushV(LArrayPushV* lir);
     void visitArrayPushT(LArrayPushT* lir);
     void visitArrayConcat(LArrayConcat* lir);
+    void visitArraySlice(LArraySlice* lir);
     void visitArrayJoin(LArrayJoin* lir);
     void visitLoadUnboxedScalar(LLoadUnboxedScalar* lir);
     void visitLoadTypedArrayElementHole(LLoadTypedArrayElementHole* lir);
     void visitStoreUnboxedScalar(LStoreUnboxedScalar* lir);
     void visitStoreTypedArrayElementHole(LStoreTypedArrayElementHole* lir);
+    void visitAtomicIsLockFree(LAtomicIsLockFree* lir);
     void visitCompareExchangeTypedArrayElement(LCompareExchangeTypedArrayElement* lir);
     void visitAtomicTypedArrayElementBinop(LAtomicTypedArrayElementBinop* lir);
     void visitAtomicTypedArrayElementBinopForEffect(LAtomicTypedArrayElementBinopForEffect* lir);
@@ -318,6 +328,8 @@ class CodeGenerator : public CodeGeneratorSpecific
     void visitLexicalCheck(LLexicalCheck* ins);
     void visitThrowUninitializedLexical(LThrowUninitializedLexical* ins);
     void visitDebugger(LDebugger* ins);
+    void visitNewTarget(LNewTarget* ins);
+    void visitArrowNewTarget(LArrowNewTarget* ins);
 
     void visitCheckOverRecursed(LCheckOverRecursed* lir);
     void visitCheckOverRecursedFailure(CheckOverRecursedFailure* ool);
@@ -361,8 +373,8 @@ class CodeGenerator : public CodeGeneratorSpecific
 
     void visitAssertResultV(LAssertResultV* ins);
     void visitAssertResultT(LAssertResultT* ins);
-    void emitAssertResultV(const ValueOperand output, TemporaryTypeSet* typeset);
-    void emitAssertObjectOrStringResult(Register input, MIRType type, TemporaryTypeSet* typeset);
+    void emitAssertResultV(const ValueOperand output, const TemporaryTypeSet* typeset);
+    void emitAssertObjectOrStringResult(Register input, MIRType type, const TemporaryTypeSet* typeset);
 
     void visitInterruptCheck(LInterruptCheck* lir);
     void visitAsmJSInterruptCheck(LAsmJSInterruptCheck* lir);

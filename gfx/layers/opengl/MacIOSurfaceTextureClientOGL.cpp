@@ -23,7 +23,7 @@ MacIOSurfaceTextureClientOGL::~MacIOSurfaceTextureClientOGL()
 }
 
 // static
-TemporaryRef<MacIOSurfaceTextureClientOGL>
+already_AddRefed<MacIOSurfaceTextureClientOGL>
 MacIOSurfaceTextureClientOGL::Create(ISurfaceAllocator* aAllocator,
                                      TextureFlags aFlags,
                                      MacIOSurface* aSurface)
@@ -33,7 +33,7 @@ MacIOSurfaceTextureClientOGL::Create(ISurfaceAllocator* aAllocator,
   MOZ_ASSERT(texture->IsValid());
   MOZ_ASSERT(!texture->IsAllocated());
   texture->mSurface = aSurface;
-  return texture;
+  return texture.forget();
 }
 
 bool
@@ -76,7 +76,7 @@ MacIOSurfaceTextureClientOGL::GetSize() const
   return gfx::IntSize(mSurface->GetDevicePixelWidth(), mSurface->GetDevicePixelHeight());
 }
 
-TemporaryRef<gfx::DataSourceSurface>
+already_AddRefed<gfx::DataSourceSurface>
 MacIOSurfaceTextureClientOGL::GetAsSurface()
 {
   RefPtr<gfx::SourceSurface> surf = mSurface->GetAsSurface();

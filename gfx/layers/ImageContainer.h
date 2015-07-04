@@ -23,7 +23,6 @@
 #include "nsDebug.h"                    // for NS_ASSERTION
 #include "nsISupportsImpl.h"            // for Image::Release, etc
 #include "nsRect.h"                     // for mozilla::gfx::IntRect
-#include "nsSize.h"                     // for nsIntSize
 #include "nsTArray.h"                   // for nsTArray
 #include "mozilla/Atomics.h"
 #include "mozilla/WeakPtr.h"
@@ -149,7 +148,7 @@ public:
   void MarkSent() { mSent = true; }
   bool IsSentToCompositor() { return mSent; }
 
-  virtual TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() = 0;
+  virtual already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() = 0;
 
   virtual GrallocImage* AsGrallocImage()
   {
@@ -292,9 +291,9 @@ class ImageContainer final : public SupportsWeakPtr<ImageContainer> {
 public:
   MOZ_DECLARE_WEAKREFERENCE_TYPENAME(ImageContainer)
 
-  enum { DISABLE_ASYNC = 0x0, ENABLE_ASYNC = 0x01 };
+  enum Mode { SYNCHRONOUS = 0x0, ASYNCHRONOUS = 0x01, ASYNCHRONOUS_OVERLAY = 0x02 };
 
-  explicit ImageContainer(int flag = 0);
+  explicit ImageContainer(ImageContainer::Mode flag = SYNCHRONOUS);
 
   /**
    * Create an Image in one of the given formats.
@@ -304,7 +303,7 @@ public:
    * Can be called on any thread. This method takes mReentrantMonitor
    * when accessing thread-shared state.
    */
-  already_AddRefed<Image> CreateImage(ImageFormat aFormat);
+  B2G_ACL_EXPORT already_AddRefed<Image> CreateImage(ImageFormat aFormat);
 
   /**
    * Set an Image as the current image to display. The Image must have
@@ -424,12 +423,12 @@ public:
    * the lock methods should be used to avoid the copy, however this should be
    * avoided if the surface is required for a long period of time.
    */
-  TemporaryRef<gfx::SourceSurface> GetCurrentAsSourceSurface(gfx::IntSize* aSizeResult);
+  already_AddRefed<gfx::SourceSurface> GetCurrentAsSourceSurface(gfx::IntSize* aSizeResult);
 
   /**
    * Same as LockCurrentAsSurface but for Moz2D
    */
-  TemporaryRef<gfx::SourceSurface> LockCurrentAsSourceSurface(gfx::IntSize* aSizeResult,
+  already_AddRefed<gfx::SourceSurface> LockCurrentAsSourceSurface(gfx::IntSize* aSizeResult,
                                                               Image** aCurrentImage = nullptr);
 
   /**
@@ -524,7 +523,7 @@ private:
   typedef mozilla::ReentrantMonitor ReentrantMonitor;
 
   // Private destructor, to discourage deletion outside of Release():
-  ~ImageContainer();
+  B2G_ACL_EXPORT ~ImageContainer();
 
   void SetCurrentImageInternal(Image* aImage);
 
@@ -765,7 +764,7 @@ protected:
    */
   virtual uint8_t* AllocateBuffer(uint32_t aSize);
 
-  TemporaryRef<gfx::SourceSurface> GetAsSourceSurface();
+  already_AddRefed<gfx::SourceSurface> GetAsSourceSurface();
 
   void SetOffscreenFormat(gfxImageFormat aFormat) { mOffscreenFormat = aFormat; }
   gfxImageFormat GetOffscreenFormat();
@@ -802,9 +801,10 @@ public:
     mSourceSurface = aData.mSourceSurface;
   }
 
-  virtual TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() override
+  virtual already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override
   {
-    return mSourceSurface.get();
+    RefPtr<gfx::SourceSurface> surface(mSourceSurface);
+    return surface.forget();
   }
 
   virtual TextureClient* GetTextureClient(CompositableClient* aClient) override;
@@ -842,7 +842,7 @@ public:
     mSize = aData.mSize;
   }
 
-  TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() { return nullptr; } ;
+  already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() { return nullptr; } ;
   int32_t GetOverlayId() { return mOverlayId; }
 
   gfx::IntSize GetSize() { return mSize; }

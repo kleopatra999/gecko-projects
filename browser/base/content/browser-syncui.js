@@ -166,8 +166,15 @@ let gSyncUI = {
       return;
 
     let syncButton = document.getElementById("sync-button");
-    if (needsSetup && syncButton)
-      syncButton.removeAttribute("tooltiptext");
+    let statusButton = document.getElementById("PanelUI-fxa-icon");
+    if (needsSetup) {
+      if (syncButton) {
+        syncButton.removeAttribute("tooltiptext");
+      }
+      if (statusButton) {
+        statusButton.removeAttribute("tooltiptext");
+      }
+    }
 
     this._updateLastSyncTime();
   },
@@ -184,9 +191,9 @@ let gSyncUI = {
       if (button) {
         button.setAttribute("status", "active");
       }
-      button = document.getElementById("PanelUI-fxa-status");
-      if (button) {
-        button.setAttribute("syncstatus", "active");
+      let container = document.getElementById("PanelUI-footer-fxa");
+      if (container) {
+        container.setAttribute("syncstatus", "active");
       }
     }
   },
@@ -210,9 +217,9 @@ let gSyncUI = {
     if (syncButton) {
       syncButton.removeAttribute("status");
     }
-    let panelHorizontalButton = document.getElementById("PanelUI-fxa-status");
-    if (panelHorizontalButton) {
-      panelHorizontalButton.removeAttribute("syncstatus");
+    let fxaContainer = document.getElementById("PanelUI-footer-fxa");
+    if (fxaContainer) {
+      fxaContainer.removeAttribute("syncstatus");
     }
   },
 
@@ -227,6 +234,7 @@ let gSyncUI = {
   },
 
   onLoginError: function SUI_onLoginError() {
+    this.log.debug("onLoginError: login=${login}, sync=${sync}", Weave.Status);
     // Note: This is used for *both* Sync and ReadingList login errors.
     // if login fails, any other notifications are essentially moot
     Weave.Notifications.removeAll();
@@ -417,8 +425,7 @@ let gSyncUI = {
       return;
 
     let syncButton = document.getElementById("sync-button");
-    if (!syncButton)
-      return;
+    let statusButton = document.getElementById("PanelUI-fxa-icon");
 
     let lastSync;
     try {
@@ -434,7 +441,12 @@ let gSyncUI = {
     }
     catch (e) { };
     if (!lastSync || this._needsSetup()) {
-      syncButton.removeAttribute("tooltiptext");
+      if (syncButton) {
+        syncButton.removeAttribute("tooltiptext");
+      }
+      if (statusButton) {
+        statusButton.removeAttribute("tooltiptext");
+      }
       return;
     }
 
@@ -443,7 +455,12 @@ let gSyncUI = {
     let lastSyncLabel =
       this._stringBundle.formatStringFromName("lastSync2.label", [lastSyncDateString], 1);
 
-    syncButton.setAttribute("tooltiptext", lastSyncLabel);
+    if (syncButton) {
+      syncButton.setAttribute("tooltiptext", lastSyncLabel);
+    }
+    if (statusButton) {
+      statusButton.setAttribute("tooltiptext", lastSyncLabel);
+    }
   },
 
   clearError: function SUI_clearError(errorString) {
@@ -462,6 +479,14 @@ let gSyncUI = {
   // engine doesn't impose what that means, so calculate it here. For
   // consistency, we just use the sync prefs.
   isProlongedReadingListError() {
+    // If the readinglist scheduler is disabled we don't treat it as prolonged.
+    let enabled = false;
+    try {
+      enabled = Services.prefs.getBoolPref("readinglist.scheduler.enabled");
+    } catch (_) {}
+    if (!enabled) {
+      return false;
+    }
     let lastSync, threshold, prolonged;
     try {
       lastSync = new Date(Services.prefs.getCharPref("readinglist.scheduler.lastSync"));
@@ -520,7 +545,7 @@ let gSyncUI = {
   },
 
   onSyncError: function SUI_onSyncError() {
-    this.log.debug("onSyncError");
+    this.log.debug("onSyncError: login=${login}, sync=${sync}", Weave.Status);
     let title = this._stringBundle.GetStringFromName("error.sync.title");
 
     if (Weave.Status.login != Weave.LOGIN_SUCCEEDED) {

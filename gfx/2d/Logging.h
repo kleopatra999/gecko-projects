@@ -12,7 +12,7 @@
 #include <vector>
 
 #ifdef MOZ_LOGGING
-#include <prlog.h>
+#include "mozilla/Logging.h"
 #endif
 
 #if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID)
@@ -22,20 +22,7 @@
 #include "BaseRect.h"
 #include "Matrix.h"
 
-#ifdef WIN32
-// This file gets included from nsGlobalWindow.cpp, which doesn't like
-// having windows.h included in it. Since OutputDebugStringA is the only
-// thing we need from windows.h, we just declare it here directly.
-// Note: the function's documented signature is
-//  WINBASEAPI void WINAPI OutputDebugStringA(LPCSTR lpOutputString)
-// but if we don't include windows.h, the macros WINBASEAPI, WINAPI, and 
-// LPCSTR are not defined, so we need to replace them with their expansions.
-extern "C" __declspec(dllimport) void __stdcall OutputDebugStringA(const char* lpOutputString);
-#endif
-
-#if defined(PR_LOGGING)
 extern GFX2D_API PRLogModuleInfo *GetGFX2DLog();
-#endif
 
 namespace mozilla {
 namespace gfx {
@@ -55,25 +42,21 @@ const int LOG_DEFAULT = LOG_EVERYTHING;
 const int LOG_DEFAULT = LOG_CRITICAL;
 #endif
 
-#if defined(PR_LOGGING)
-
-inline PRLogModuleLevel PRLogLevelForLevel(int aLevel) {
+inline mozilla::LogLevel PRLogLevelForLevel(int aLevel) {
   switch (aLevel) {
   case LOG_CRITICAL:
-    return PR_LOG_ERROR;
+    return LogLevel::Error;
   case LOG_WARNING:
-    return PR_LOG_WARNING;
+    return LogLevel::Warning;
   case LOG_DEBUG:
-    return PR_LOG_DEBUG;
+    return LogLevel::Debug;
   case LOG_DEBUG_PRLOG:
-    return PR_LOG_DEBUG;
+    return LogLevel::Debug;
   case LOG_EVERYTHING:
-    return PR_LOG_ALWAYS;
+    return LogLevel::Error;
   }
-  return PR_LOG_DEBUG;
+  return LogLevel::Debug;
 }
-
-#endif
 
 class PreferenceAccess
 {
@@ -147,19 +130,15 @@ struct BasicLogger
   // in the appropriate places in that method.
   static bool ShouldOutputMessage(int aLevel) {
     if (PreferenceAccess::sGfxLogLevel >= aLevel) {
-#if defined(WIN32) && !defined(PR_LOGGING)
+#if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID)
       return true;
-#elif defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID)
-      return true;
-#elif defined(PR_LOGGING)
-      if (PR_LOG_TEST(GetGFX2DLog(), PRLogLevelForLevel(aLevel))) {
+#else
+      if (MOZ_LOG_TEST(GetGFX2DLog(), PRLogLevelForLevel(aLevel))) {
         return true;
       } else if ((PreferenceAccess::sGfxLogLevel >= LOG_DEBUG_PRLOG) ||
                  (aLevel < LOG_DEBUG)) {
         return true;
       }
-#else
-      return true;
 #endif
     }
     return false;
@@ -178,19 +157,15 @@ struct BasicLogger
     // make the corresponding change in the ShouldOutputMessage method
     // above.
     if (PreferenceAccess::sGfxLogLevel >= aLevel) {
-#if defined(WIN32) && !defined(PR_LOGGING)
-      ::OutputDebugStringA((aNoNewline ? aString : aString+"\n").c_str());
-#elif defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID)
+#if defined(MOZ_WIDGET_GONK) || defined(MOZ_WIDGET_ANDROID)
       printf_stderr("%s%s", aString.c_str(), aNoNewline ? "" : "\n");
-#elif defined(PR_LOGGING)
-      if (PR_LOG_TEST(GetGFX2DLog(), PRLogLevelForLevel(aLevel))) {
+#else
+      if (MOZ_LOG_TEST(GetGFX2DLog(), PRLogLevelForLevel(aLevel))) {
         PR_LogPrint("%s%s", aString.c_str(), aNoNewline ? "" : "\n");
       } else if ((PreferenceAccess::sGfxLogLevel >= LOG_DEBUG_PRLOG) ||
                  (aLevel < LOG_DEBUG)) {
         printf("%s%s", aString.c_str(), aNoNewline ? "" : "\n");
       }
-#else
-      printf("%s%s", aString.c_str(), aNoNewline ? "" : "\n");
 #endif
     }
   }
@@ -271,7 +246,7 @@ public:
     if (!str.empty()) {
       WriteLog(str);
     }
-    mMessage.clear();
+    mMessage.str("");
   }
 
   Log &operator <<(char aChar) {
@@ -513,6 +488,15 @@ typedef Log<LOG_CRITICAL, CriticalLogger> CriticalLog;
 // This log goes into crash reports, use with care.
 #define gfxCriticalError mozilla::gfx::CriticalLog
 #define gfxCriticalErrorOnce static gfxCriticalError GFX_LOGGING_GLUE(sOnceAtLine,__LINE__) = gfxCriticalError
+
+// This is a shortcut for errors we want logged in crash reports/about support
+// but we do not want asserting.  These are available in all builds, so it is
+// not worth trying to do magic to avoid matching the syntax of gfxCriticalError.
+// So, this one is used as
+// gfxCriticalNote << "Something to report and not assert";
+// while the critical error is
+// gfxCriticalError() << "Something to report and assert";
+#define gfxCriticalNote gfxCriticalError(gfxCriticalError::DefaultOptions(false))
 
 // The "once" versions will only trigger the first time through. You can do this:
 // gfxCriticalErrorOnce() << "This message only shows up once;

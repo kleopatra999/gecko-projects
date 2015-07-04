@@ -12,6 +12,7 @@
 #include "nsAutoPtr.h"
 #include "nsTArray.h"
 #include "MediaInfo.h"
+#include "MediaResource.h"
 
 namespace mozilla { class MediaByteRange; }
 
@@ -29,6 +30,7 @@ public:
   ~MP4Metadata();
 
   static bool HasCompleteMetadata(Stream* aSource);
+  static mozilla::MediaByteRange MetadataRange(Stream* aSource);
   uint32_t GetNumberTracks(mozilla::TrackInfo::TrackType aType) const;
   mozilla::UniquePtr<mozilla::TrackInfo> GetTrackInfo(mozilla::TrackInfo::TrackType aType,
                                                       size_t aTrackNumber) const;
@@ -39,7 +41,7 @@ public:
     return mCrypto;
   }
 
-  bool ReadTrackIndex(nsTArray<Index::Indice>& aDest, mozilla::TrackID aTrackID);
+  bool ReadTrackIndex(FallibleTArray<Index::Indice>& aDest, mozilla::TrackID aTrackID);
 
 private:
   int32_t GetTrackNumber(mozilla::TrackID aTrackID);

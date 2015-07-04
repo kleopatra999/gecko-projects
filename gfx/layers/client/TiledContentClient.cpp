@@ -24,7 +24,6 @@
 #include "TextureClientPool.h"
 #include "nsDebug.h"                    // for NS_ASSERTION
 #include "nsISupportsImpl.h"            // for gfxContext::AddRef, etc
-#include "nsSize.h"                     // for nsIntSize
 #include "gfxReusableSharedImageSurfaceWrapper.h"
 #include "nsExpirationTracker.h"        // for nsExpirationTracker
 #include "nsMathUtils.h"               // for NS_lroundf
@@ -374,7 +373,7 @@ int32_t
 gfxMemorySharedReadLock::ReadUnlock()
 {
   int32_t readCount = PR_ATOMIC_DECREMENT(&mReadCount);
-  NS_ASSERTION(readCount >= 0, "ReadUnlock called without ReadLock.");
+  MOZ_ASSERT(readCount >= 0);
 
   return readCount;
 }
@@ -424,7 +423,7 @@ gfxShmSharedReadLock::ReadUnlock() {
   }
   ShmReadLockInfo* info = GetShmReadLockInfoPtr();
   int32_t readCount = PR_ATOMIC_DECREMENT(&info->readCount);
-  NS_ASSERTION(readCount >= 0, "ReadUnlock called without a ReadLock.");
+  MOZ_ASSERT(readCount >= 0);
   if (readCount <= 0) {
     mAllocator->FreeShmemSection(mShmemSection);
   }
@@ -520,6 +519,7 @@ TileClient::TileClient(const TileClient& o)
   mBackLock = o.mBackLock;
   mFrontLock = o.mFrontLock;
   mCompositableClient = o.mCompositableClient;
+  mUpdateRect = o.mUpdateRect;
 #ifdef GFX_TILEDLAYER_DEBUG_OVERLAY
   mLastUpdate = o.mLastUpdate;
 #endif
@@ -539,6 +539,7 @@ TileClient::operator=(const TileClient& o)
   mBackLock = o.mBackLock;
   mFrontLock = o.mFrontLock;
   mCompositableClient = o.mCompositableClient;
+  mUpdateRect = o.mUpdateRect;
 #ifdef GFX_TILEDLAYER_DEBUG_OVERLAY
   mLastUpdate = o.mLastUpdate;
 #endif
@@ -598,17 +599,19 @@ CopyFrontToBack(TextureClient* aFront,
                 const gfx::IntRect& aRectToCopy)
 {
   if (!aFront->Lock(OpenMode::OPEN_READ)) {
-    NS_WARNING("Failed to lock the tile's front buffer");
+    gfxCriticalError() << "[Tiling:Client] Failed to lock the tile's front buffer";
     return false;
   }
 
   if (!aBack->Lock(OpenMode::OPEN_READ_WRITE)) {
-    NS_WARNING("Failed to lock the tile's back buffer");
+    gfxCriticalError() << "[Tiling:Client] Failed to lock the tile's back buffer";
     return false;
   }
 
   gfx::IntPoint rectToCopyTopLeft = aRectToCopy.TopLeft();
   aFront->CopyToTextureClient(aBack, &aRectToCopy, &rectToCopyTopLeft);
+
+  aFront->Unlock();
   return true;
 }
 
@@ -705,9 +708,9 @@ TileClient::DiscardBackBuffer()
        mManager->ReportClientLost(*mBackBufferOnWhite);
      }
     } else {
-      mManager->ReturnTextureClient(*mBackBuffer);
+      mManager->ReturnTextureClientDeferred(*mBackBuffer);
       if (mBackBufferOnWhite) {
-        mManager->ReturnTextureClient(*mBackBufferOnWhite);
+        mManager->ReturnTextureClientDeferred(*mBackBufferOnWhite);
       }
     }
     mBackLock->ReadUnlock();
@@ -816,20 +819,14 @@ TileClient::GetTileDescriptor()
   if (mFrontLock->GetType() == gfxSharedReadLock::TYPE_MEMORY) {
     return TexturedTileDescriptor(nullptr, mFrontBuffer->GetIPDLActor(),
                                   mFrontBufferOnWhite ? MaybeTexture(mFrontBufferOnWhite->GetIPDLActor()) : MaybeTexture(null_t()),
+                                  mUpdateRect,
                                   TileLock(uintptr_t(mFrontLock.get())));
   } else {
     gfxShmSharedReadLock *lock = static_cast<gfxShmSharedReadLock*>(mFrontLock.get());
     return TexturedTileDescriptor(nullptr, mFrontBuffer->GetIPDLActor(),
                                   mFrontBufferOnWhite ? MaybeTexture(mFrontBufferOnWhite->GetIPDLActor()) : MaybeTexture(null_t()),
+                                  mUpdateRect,
                                   TileLock(lock->GetShmemSection()));
-  }
-}
-
-void
-ClientTiledLayerBuffer::ReadUnlock() {
-  for (size_t i = 0; i < mRetainedTiles.Length(); i++) {
-    if (mRetainedTiles[i].IsPlaceholderTile()) continue;
-    mRetainedTiles[i].ReadUnlock();
   }
 }
 
@@ -873,9 +870,12 @@ ClientTiledLayerBuffer::GetSurfaceDescriptorTiles()
       tileDesc = mRetainedTiles[i].GetTileDescriptor();
     }
     tiles.AppendElement(tileDesc);
+    mRetainedTiles[i].mUpdateRect = IntRect();
   }
   return SurfaceDescriptorTiles(mValidRegion, mPaintedRegion,
-                                tiles, mRetainedWidth, mRetainedHeight,
+                                tiles,
+                                mTiles.mFirst.x, mTiles.mFirst.y,
+                                mTiles.mSize.width, mTiles.mSize.height,
                                 mResolution, mFrameResolution.xScale,
                                 mFrameResolution.yScale);
 }
@@ -1100,6 +1100,71 @@ ClientTiledLayerBuffer::UnlockTile(TileClient aTile)
   }
 }
 
+void ClientTiledLayerBuffer::Update(const nsIntRegion& newValidRegion,
+                                    const nsIntRegion& aPaintRegion)
+{
+  const IntSize scaledTileSize = GetScaledTileSize();
+  const gfx::IntRect newBounds = newValidRegion.GetBounds();
+
+  const TilesPlacement oldTiles = mTiles;
+  const TilesPlacement newTiles(floor_div(newBounds.x, scaledTileSize.width),
+                          floor_div(newBounds.y, scaledTileSize.height),
+                          floor_div(GetTileStart(newBounds.x, scaledTileSize.width)
+                                    + newBounds.width, scaledTileSize.width) + 1,
+                          floor_div(GetTileStart(newBounds.y, scaledTileSize.height)
+                                    + newBounds.height, scaledTileSize.height) + 1);
+
+  const size_t oldTileCount = mRetainedTiles.Length();
+  const size_t newTileCount = newTiles.mSize.width * newTiles.mSize.height;
+
+  nsTArray<TileClient> oldRetainedTiles;
+  mRetainedTiles.SwapElements(oldRetainedTiles);
+  mRetainedTiles.SetLength(newTileCount);
+
+  for (size_t oldIndex = 0; oldIndex < oldTileCount; oldIndex++) {
+    const TileIntPoint tilePosition = oldTiles.TilePosition(oldIndex);
+    const size_t newIndex = newTiles.TileIndex(tilePosition);
+    // First, get the already existing tiles to the right place in the new array.
+    // Leave placeholders (default constructor) where there was no tile.
+    if (newTiles.HasTile(tilePosition)) {
+      mRetainedTiles[newIndex] = oldRetainedTiles[oldIndex];
+    } else {
+      // release tiles that we are not going to reuse before allocating new ones
+      // to avoid allocating unnecessarily.
+      oldRetainedTiles[oldIndex].Release();
+    }
+  }
+
+  oldRetainedTiles.Clear();
+
+  for (size_t i = 0; i < newTileCount; ++i) {
+    const TileIntPoint tilePosition = newTiles.TilePosition(i);
+
+    IntPoint tileOffset = GetTileOffset(tilePosition);
+    nsIntRegion tileDrawRegion = IntRect(tileOffset, scaledTileSize);
+    tileDrawRegion.AndWith(aPaintRegion);
+
+    if (tileDrawRegion.IsEmpty()) {
+      continue;
+    }
+
+    TileClient tile = mRetainedTiles[i];
+    tile = ValidateTile(tile, GetTileOffset(tilePosition),
+                        tileDrawRegion);
+
+    mRetainedTiles[i] = tile;
+  }
+
+  PostValidate(aPaintRegion);
+  for (size_t i = 0; i < mRetainedTiles.Length(); ++i) {
+    UnlockTile(mRetainedTiles[i]);
+  }
+
+  mTiles = newTiles;
+  mValidRegion = newValidRegion;
+  mPaintedRegion.OrWith(aPaintRegion);
+}
+
 TileClient
 ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
                                     const nsIntPoint& aTileOrigin,
@@ -1136,12 +1201,14 @@ ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
                         &createdTextureClient, extraPainted,
                         &backBufferOnWhite);
 
+  aTile.mUpdateRect = offsetScaledDirtyRegion.GetBounds().Union(extraPainted.GetBounds());
+
   extraPainted.MoveBy(aTileOrigin);
   extraPainted.And(extraPainted, mNewValidRegion);
   mPaintedRegion.Or(mPaintedRegion, extraPainted);
 
   if (!backBuffer) {
-    NS_WARNING("Failed to allocate a tile TextureClient");
+    gfxCriticalError() << "[Tiling:Client] Failed to allocate a TextureClient";
     aTile.DiscardBackBuffer();
     aTile.DiscardFrontBuffer();
     return TileClient();
@@ -1150,7 +1217,7 @@ ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
   // the back buffer may have been already locked in ValidateBackBufferFromFront
   if (!backBuffer->IsLocked()) {
     if (!backBuffer->Lock(OpenMode::OPEN_READ_WRITE)) {
-      NS_WARNING("Failed to lock a tile TextureClient");
+      gfxCriticalError() << "[Tiling:Client] Failed to lock a tile";
       aTile.DiscardBackBuffer();
       aTile.DiscardFrontBuffer();
       return TileClient();
@@ -1159,7 +1226,7 @@ ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
 
   if (backBufferOnWhite && !backBufferOnWhite->IsLocked()) {
     if (!backBufferOnWhite->Lock(OpenMode::OPEN_READ_WRITE)) {
-      NS_WARNING("Failed to lock tile TextureClient for updating.");
+      gfxCriticalError() << "[Tiling:Client] Failed to lock a tile";
       aTile.DiscardBackBuffer();
       aTile.DiscardFrontBuffer();
       return TileClient();
@@ -1169,13 +1236,13 @@ ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
   if (usingTiledDrawTarget) {
     if (createdTextureClient) {
       if (!mCompositableClient->AddTextureClient(backBuffer)) {
-        NS_WARNING("Failed to add tile TextureClient.");
+        gfxCriticalError() << "[Tiling:Client] Failed to connect a TextureClient (a)";
         aTile.DiscardFrontBuffer();
         aTile.DiscardBackBuffer();
         return aTile;
       }
       if (backBufferOnWhite && !mCompositableClient->AddTextureClient(backBufferOnWhite)) {
-        NS_WARNING("Failed to add tile TextureClient.");
+        gfxCriticalError() << "[Tiling:Client] Failed to connect a TextureClient (b)";
         aTile.DiscardFrontBuffer();
         aTile.DiscardBackBuffer();
         return aTile;
@@ -1312,7 +1379,7 @@ ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
 
   if (createdTextureClient) {
     if (!mCompositableClient->AddTextureClient(backBuffer)) {
-      NS_WARNING("Failed to add tile TextureClient.");
+      gfxCriticalError() << "[Tiling:Client] Failed to connect a TextureClient (c)";
       aTile.DiscardFrontBuffer();
       aTile.DiscardBackBuffer();
       return aTile;
@@ -1350,7 +1417,7 @@ GetCompositorSideCompositionBounds(const LayerMetricsWrapper& aScrollAncestor,
 {
   Matrix4x4 transform = aTransformToCompBounds * Matrix4x4(aAPZTransform);
   return TransformTo<LayerPixel>(transform.Inverse(),
-            aScrollAncestor.Metrics().mCompositionBounds);
+            aScrollAncestor.Metrics().GetCompositionBounds());
 }
 
 bool

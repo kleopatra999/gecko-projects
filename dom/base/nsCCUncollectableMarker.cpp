@@ -33,6 +33,7 @@
 #include "xpcpublic.h"
 #include "nsObserverService.h"
 #include "nsFocusManager.h"
+#include "nsIInterfaceRequestorUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -317,8 +318,6 @@ nsCCUncollectableMarker::Observe(nsISupports* aSubject, const char* aTopic,
                                  const char16_t* aData)
 {
   if (!strcmp(aTopic, "xpcom-shutdown")) {
-    Element::ClearContentUnbinder();
-
     nsCOMPtr<nsIObserverService> obs =
       mozilla::services::GetObserverService();
     if (!obs)
@@ -343,9 +342,6 @@ nsCCUncollectableMarker::Observe(nsISupports* aSubject, const char* aTopic,
     !strcmp(aTopic, "cycle-collector-forget-skippable");
 
   bool prepareForCC = !strcmp(aTopic, "cycle-collector-begin");
-  if (prepareForCC) {
-    Element::ClearContentUnbinder();
-  }
 
   // Increase generation to effectively unmark all current objects
   if (!++sGeneration) {
@@ -437,7 +433,7 @@ nsCCUncollectableMarker::Observe(nsISupports* aSubject, const char* aTopic,
 
   switch(sFSState) {
     case eUnmarkJSEventListeners: {
-      nsContentUtils::UnmarkGrayJSListenersInCCGenerationDocuments(sGeneration);
+      nsContentUtils::UnmarkGrayJSListenersInCCGenerationDocuments();
       break;
     }
     case eUnmarkMessageManagers: {

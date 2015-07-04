@@ -54,9 +54,8 @@ class FetchUuidsTask final : public BluetoothReplyRunnable
 {
 public:
   FetchUuidsTask(Promise* aPromise,
-                 const nsAString& aName,
                  BluetoothDevice* aDevice)
-    : BluetoothReplyRunnable(nullptr /* DOMRequest */, aPromise, aName)
+    : BluetoothReplyRunnable(nullptr, aPromise)
     , mDevice(aDevice)
   {
     MOZ_ASSERT(aPromise);
@@ -185,16 +184,14 @@ BluetoothDevice::FetchUuids(ErrorResult& aRv)
   nsRefPtr<Promise> promise = Promise::Create(global, aRv);
   NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
 
+  // Ensure BluetoothService is available
   BluetoothService* bs = BluetoothService::Get();
   BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
-  nsRefPtr<BluetoothReplyRunnable> result =
-    new FetchUuidsTask(promise,
-                       NS_LITERAL_STRING("FetchUuids"),
-                       this);
-
-  nsresult rv = bs->FetchUuidsInternal(mAddress, result);
-  BT_ENSURE_TRUE_REJECT(NS_SUCCEEDED(rv), promise, NS_ERROR_DOM_OPERATION_ERR);
+  BT_ENSURE_TRUE_REJECT(
+    NS_SUCCEEDED(
+      bs->FetchUuidsInternal(mAddress, new FetchUuidsTask(promise, this))),
+    promise, NS_ERROR_DOM_OPERATION_ERR);
 
   return promise.forget();
 }
@@ -292,7 +289,7 @@ BluetoothDevice::HandlePropertyChanged(const BluetoothValue& aValue)
     // BluetoothDeviceAttribute properties
     if (IsDeviceAttributeChanged(type, arr[i].value())) {
       SetPropertyByValue(arr[i]);
-      BT_APPEND_ENUM_STRING(types, BluetoothDeviceAttribute, type);
+      BT_APPEND_ENUM_STRING_FALLIBLE(types, BluetoothDeviceAttribute, type);
     }
   }
 
@@ -382,19 +379,23 @@ BluetoothDevice::UpdatePropertiesFromAdvData(const nsTArray<uint8_t>& aAdvData)
             dataLength -= 2;
           }
 
-          char uuidStr[36];
+          char uuidStr[37]; // one more char to be null-terminated
           if (type == GAP_INCOMPLETE_UUID16 || type == GAP_COMPLETE_UUID16) {
             // Convert 16-bits UUID into string.
-            sprintf(uuidStr, "0000%04x-0000-1000-8000-00805f9b34fb", uuid[0]);
-          } else if (type == GAP_INCOMPLETE_UUID32 || type == GAP_COMPLETE_UUID32) {
+            snprintf(uuidStr, sizeof(uuidStr),
+                     "0000%04x-0000-1000-8000-00805f9b34fb", uuid[0]);
+          } else if (type == GAP_INCOMPLETE_UUID32 ||
+                     type == GAP_COMPLETE_UUID32) {
             // Convert 32-bits UUID into string.
-            sprintf(uuidStr, "%04x%04x-0000-1000-8000-00805f9b34fb",
-              uuid[1], uuid[0]);
-          } else if (type == GAP_INCOMPLETE_UUID128 || type == GAP_COMPLETE_UUID128) {
+            snprintf(uuidStr, sizeof(uuidStr),
+                     "%04x%04x-0000-1000-8000-00805f9b34fb", uuid[1], uuid[0]);
+          } else if (type == GAP_INCOMPLETE_UUID128 ||
+                     type == GAP_COMPLETE_UUID128) {
             // Convert 128-bits UUID into string.
-            sprintf(uuidStr, "%04x%04x-%04x-%04x-%04x-%04x%04x%04x",
-              uuid[7], uuid[6], uuid[5], uuid[4],
-              uuid[3], uuid[2], uuid[1], uuid[0]);
+            snprintf(uuidStr, sizeof(uuidStr),
+                     "%04x%04x-%04x-%04x-%04x-%04x%04x%04x",
+                     uuid[7], uuid[6], uuid[5], uuid[4],
+                     uuid[3], uuid[2], uuid[1], uuid[0]);
           }
           nsString uuidNsString;
           uuidNsString.AssignLiteral(uuidStr);

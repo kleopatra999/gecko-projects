@@ -58,8 +58,8 @@ let MemoryFlameGraphView = Heritage.extend(DetailsSubview, {
     let duration = recording.getDuration();
     let allocations = recording.getAllocations();
 
-    let samples = RecordingUtils.getSamplesFromAllocations(allocations);
-    let data = FlameGraphUtils.createFlameGraphDataFromSamples(samples, {
+    let thread = RecordingUtils.getProfileThreadFromAllocations(allocations);
+    let data = FlameGraphUtils.createFlameGraphDataFromThread(thread, {
       invertStack: PerformanceController.getOption("invert-flame-graph"),
       flattenRecursion: PerformanceController.getOption("flatten-tree-recursion"),
       showIdleBlocks: PerformanceController.getOption("show-idle-blocks") && L10N.getStr("table.idle")
@@ -84,7 +84,13 @@ let MemoryFlameGraphView = Heritage.extend(DetailsSubview, {
    */
   _onRangeChangeInGraph: function () {
     let interval = this.graph.getViewRange();
-    OverviewView.setTimeInterval(interval, { stopPropagation: true });
+
+    // Squelch rerendering this view when we update the range here
+    // to avoid recursion, as our FlameGraph handles rerendering itself
+    // when originating from within the graph.
+    this.requiresUpdateOnRangeChange = false;
+    OverviewView.setTimeInterval(interval);
+    this.requiresUpdateOnRangeChange = true;
   },
 
   /**
@@ -93,8 +99,8 @@ let MemoryFlameGraphView = Heritage.extend(DetailsSubview, {
   _onRerenderPrefChanged: function() {
     let recording = PerformanceController.getCurrentRecording();
     let allocations = recording.getAllocations();
-    let samples = RecordingUtils.getSamplesFromAllocations(allocations);
-    FlameGraphUtils.removeFromCache(samples);
+    let thread = RecordingUtils.getProfileThreadFromAllocations(allocations);
+    FlameGraphUtils.removeFromCache(thread);
   },
 
   /**
@@ -107,3 +113,5 @@ let MemoryFlameGraphView = Heritage.extend(DetailsSubview, {
 
   toString: () => "[object MemoryFlameGraphView]"
 });
+
+EventEmitter.decorate(MemoryFlameGraphView);

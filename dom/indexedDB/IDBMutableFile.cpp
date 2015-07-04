@@ -27,7 +27,6 @@
 #include "nsContentUtils.h"
 #include "nsDebug.h"
 #include "nsError.h"
-#include "nsIDOMFile.h"
 #include "nsIPrincipal.h"
 
 namespace mozilla {
@@ -169,14 +168,18 @@ IDBMutableFile::Create(IDBDatabase* aDatabase,
   const DatabaseSpec* spec = aDatabase->Spec();
   MOZ_ASSERT(spec);
 
-  PersistenceType persistenceType = spec->metadata().persistenceType();
+  const DatabaseMetadata& metadata = spec->metadata();
+
+  PersistenceType persistenceType = metadata.persistenceType();
 
   nsCString storageId;
   QuotaManager::GetStorageId(persistenceType,
                              origin,
                              Client::IDB,
-                             aDatabase->Name(),
                              storageId);
+
+  storageId.Append('*');
+  storageId.Append(NS_ConvertUTF16toUTF8(metadata.name()));
 
   nsCOMPtr<nsIFile> file = GetFileFor(fileInfo);
   if (NS_WARN_IF(!file)) {
@@ -328,20 +331,22 @@ IDBMutableFile::GetFileId() const
   return mFileInfo->Id();
 }
 
-already_AddRefed<nsIDOMFile>
+already_AddRefed<File>
 IDBMutableFile::CreateFileObject(IDBFileHandle* aFileHandle,
                                  MetadataParameters* aMetadataParams)
 {
-  nsRefPtr<FileImpl> impl =
-    new FileImplSnapshot(mName,
+  nsRefPtr<BlobImpl> impl =
+    new BlobImplSnapshot(mName,
                          mType,
                          aMetadataParams,
                          mFile,
                          aFileHandle,
                          mFileInfo);
 
-  nsCOMPtr<nsIDOMFile> fileSnapshot = new File(GetOwner(), impl);
-  return fileSnapshot.forget();
+  nsRefPtr<File> file = File::Create(GetOwner(), impl);
+  MOZ_ASSERT(file);
+
+  return file.forget();
 }
 
 already_AddRefed<DOMRequest>
@@ -391,12 +396,10 @@ GetFileHelper::GetSuccessResult(JSContext* aCx,
 
   auto fileHandle = static_cast<IDBFileHandle*>(mFileHandle.get());
 
-  nsCOMPtr<nsIDOMFile> domFile =
+  nsRefPtr<File> domFile =
     mMutableFile->CreateFileObject(fileHandle, mParams);
 
-  nsresult rv =
-    nsContentUtils::WrapNative(aCx, domFile, &NS_GET_IID(nsIDOMFile), aVal);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  if (!ToJSValue(aCx, domFile, aVal)) {
     return NS_ERROR_DOM_FILEHANDLE_UNKNOWN_ERR;
   }
 

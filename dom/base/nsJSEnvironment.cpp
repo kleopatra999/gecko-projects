@@ -14,7 +14,6 @@
 #include "nsDOMCID.h"
 #include "nsIServiceManager.h"
 #include "nsIXPConnect.h"
-#include "nsIJSRuntimeService.h"
 #include "nsCOMPtr.h"
 #include "nsISupportsPrimitives.h"
 #include "nsReadableUtils.h"
@@ -77,7 +76,7 @@
 #endif
 #include "AccessCheck.h"
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "prthread.h"
 
 #include "mozilla/Preferences.h"
@@ -196,11 +195,6 @@ static bool sIncrementalCC = false;
 static bool sDidPaintAfterPreviousICCSlice = false;
 
 static nsScriptNameSpaceManager *gNameSpaceManager;
-
-static nsIJSRuntimeService *sRuntimeService;
-
-static const char kJSRuntimeServiceContractID[] =
-  "@mozilla.org/js/xpc/RuntimeService;1";
 
 static PRTime sFirstCollectionTime;
 
@@ -651,10 +645,8 @@ nsJSContext::~nsJSContext()
 
   if (!sContextCount && sDidShutdown) {
     // The last context is being deleted, and we're already in the
-    // process of shutting down, release the JS runtime service, and
-    // the security manager.
+    // process of shutting down, release the security manager.
 
-    NS_IF_RELEASE(sRuntimeService);
     NS_IF_RELEASE(sSecurityManager);
   }
 }
@@ -939,7 +931,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
       JSString *str = ::JS_NewStringCopyN(cx, data.get(), data.Length());
       NS_ENSURE_TRUE(str, NS_ERROR_OUT_OF_MEMORY);
 
-      *aArgv = STRING_TO_JSVAL(str);
+      aArgv->setString(str);
 
       break;
     }
@@ -957,7 +949,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
         ::JS_NewUCStringCopyN(cx, data.get(), data.Length());
       NS_ENSURE_TRUE(str, NS_ERROR_OUT_OF_MEMORY);
 
-      *aArgv = STRING_TO_JSVAL(str);
+      aArgv->setString(str);
       break;
     }
     case nsISupportsPrimitive::TYPE_PRBOOL : {
@@ -968,7 +960,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = BOOLEAN_TO_JSVAL(data);
+      aArgv->setBoolean(data);
 
       break;
     }
@@ -980,7 +972,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -992,7 +984,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -1004,7 +996,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -1019,7 +1011,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
       JSString *str = ::JS_NewStringCopyN(cx, &data, 1);
       NS_ENSURE_TRUE(str, NS_ERROR_OUT_OF_MEMORY);
 
-      *aArgv = STRING_TO_JSVAL(str);
+      aArgv->setString(str);
 
       break;
     }
@@ -1031,7 +1023,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -1043,7 +1035,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -1100,12 +1092,12 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
     case nsISupportsPrimitive::TYPE_PRTIME :
     case nsISupportsPrimitive::TYPE_VOID : {
       NS_WARNING("Unsupported primitive type used");
-      *aArgv = JSVAL_NULL;
+      aArgv->setNull();
       break;
     }
     default : {
       NS_WARNING("Unknown primitive type used");
-      *aArgv = JSVAL_NULL;
+      aArgv->setNull();
       break;
     }
   }
@@ -2228,7 +2220,7 @@ DOMGCSliceCallback(JSRuntime *aRt, JS::GCProgress aProgress, const JS::GCDescrip
       if (sPostGCEventsToConsole) {
         NS_NAMED_LITERAL_STRING(kFmt, "GC(T+%.1f) ");
         nsString prefix, gcstats;
-        gcstats.Adopt(aDesc.formatMessage(aRt));
+        gcstats.Adopt(aDesc.formatSummaryMessage(aRt));
         prefix.Adopt(nsTextFormatter::smprintf(kFmt.get(),
                                              double(delta) / PR_USEC_PER_SEC));
         nsString msg = prefix + gcstats;
@@ -2304,6 +2296,15 @@ DOMGCSliceCallback(JSRuntime *aRt, JS::GCProgress aProgress, const JS::GCDescrip
         nsCycleCollector_dispatchDeferredDeletion();
       }
 
+      if (sPostGCEventsToConsole) {
+        nsString gcstats;
+        gcstats.Adopt(aDesc.formatSliceMessage(aRt));
+        nsCOMPtr<nsIConsoleService> cs = do_GetService(NS_CONSOLESERVICE_CONTRACTID);
+        if (cs) {
+          cs->LogStringMessage(gcstats.get());
+        }
+      }
+
       break;
 
     default:
@@ -2363,7 +2364,6 @@ mozilla::dom::StartupJSEnvironment()
   sNeedsFullCC = false;
   sNeedsGCAfterCC = false;
   gNameSpaceManager = nullptr;
-  sRuntimeService = nullptr;
   sRuntime = nullptr;
   sIsInitialized = false;
   sDidShutdown = false;
@@ -2483,7 +2483,7 @@ NS_DOMReadStructuredClone(JSContext* cx,
       if (!key->ReadStructuredClone(reader)) {
         result = nullptr;
       } else {
-        result = key->WrapObject(cx, JS::NullPtr());
+        result = key->WrapObject(cx, nullptr);
       }
     }
     return result;
@@ -2539,7 +2539,7 @@ NS_DOMReadStructuredClone(JSContext* cx,
     {
       nsRefPtr<MozNDEFRecord> ndefRecord = new MozNDEFRecord(global);
       result = ndefRecord->ReadStructuredClone(cx, reader) ?
-               ndefRecord->WrapObject(cx, JS::NullPtr()) : nullptr;
+               ndefRecord->WrapObject(cx, nullptr) : nullptr;
     }
     return result;
 #else
@@ -2664,13 +2664,8 @@ nsJSContext::EnsureStatics()
     MOZ_CRASH();
   }
 
-  rv = CallGetService(kJSRuntimeServiceContractID, &sRuntimeService);
-  if (NS_FAILED(rv)) {
-    MOZ_CRASH();
-  }
-
-  rv = sRuntimeService->GetRuntime(&sRuntime);
-  if (NS_FAILED(rv)) {
+  sRuntime = xpc::GetJSRuntime();
+  if (!sRuntime) {
     MOZ_CRASH();
   }
 
@@ -2841,9 +2836,7 @@ mozilla::dom::ShutdownJSEnvironment()
 
   if (!sContextCount) {
     // We're being shutdown, and there are no more contexts
-    // alive, release the JS runtime service and the security manager.
-
-    NS_IF_RELEASE(sRuntimeService);
+    // alive, release the security manager.
     NS_IF_RELEASE(sSecurityManager);
   }
 
@@ -2859,7 +2852,7 @@ mozilla::dom::ShutdownJSEnvironment()
 // on-the-fly.
 class nsJSArgArray final : public nsIJSArgArray {
 public:
-  nsJSArgArray(JSContext *aContext, uint32_t argc, JS::Value *argv,
+  nsJSArgArray(JSContext *aContext, uint32_t argc, const JS::Value* argv,
                nsresult *prv);
 
   // nsISupports
@@ -2882,11 +2875,11 @@ protected:
   uint32_t mArgc;
 };
 
-nsJSArgArray::nsJSArgArray(JSContext *aContext, uint32_t argc, JS::Value *argv,
-                           nsresult *prv) :
-    mContext(aContext),
-    mArgv(nullptr),
-    mArgc(argc)
+nsJSArgArray::nsJSArgArray(JSContext *aContext, uint32_t argc,
+                           const JS::Value* argv, nsresult *prv)
+  : mContext(aContext)
+  , mArgv(nullptr)
+  , mArgc(argc)
 {
   // copy the array - we don't know its lifetime, and ours is tied to xpcom
   // refcounting.
@@ -3001,12 +2994,11 @@ NS_IMETHODIMP nsJSArgArray::Enumerate(nsISimpleEnumerator **_retval)
 }
 
 // The factory function
-nsresult NS_CreateJSArgv(JSContext *aContext, uint32_t argc, void *argv,
-                         nsIJSArgArray **aArray)
+nsresult NS_CreateJSArgv(JSContext *aContext, uint32_t argc,
+                         const JS::Value* argv, nsIJSArgArray **aArray)
 {
   nsresult rv;
-  nsCOMPtr<nsIJSArgArray> ret = new nsJSArgArray(aContext, argc,
-                                                static_cast<JS::Value *>(argv), &rv);
+  nsCOMPtr<nsIJSArgArray> ret = new nsJSArgArray(aContext, argc, argv, &rv);
   if (NS_FAILED(rv)) {
     return rv;
   }

@@ -22,7 +22,6 @@
 #include "nsArrayEnumerator.h"
 #include "nsCOMArray.h"
 #include "nsDirectoryServiceUtils.h"
-#include "nsIJSRuntimeService.h"
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
 #include "nsJSPrincipals.h"
@@ -32,6 +31,8 @@
 #include "nsIScriptSecurityManager.h"
 #include "nsIPrincipal.h"
 #include "nsJSUtils.h"
+#include "gfxPrefs.h"
+#include "nsIXULRuntime.h"
 
 #include "base/histogram.h"
 
@@ -60,6 +61,8 @@
 
 using namespace mozilla;
 using namespace JS;
+using mozilla::dom::AutoJSAPI;
+using mozilla::dom::AutoEntryScript;
 
 class XPCShellDirProvider : public nsIDirectoryServiceProvider2
 {
@@ -103,7 +106,6 @@ static FILE* gErrFile = nullptr;
 static FILE* gInFile = nullptr;
 
 static int gExitCode = 0;
-static bool gIgnoreReportedErrors = false;
 static bool gQuitting = false;
 static bool reportWarnings = true;
 static bool compileOnly = false;
@@ -172,20 +174,16 @@ GetLocationProperty(JSContext* cx, unsigned argc, Value* vp)
         }
 
         if (location) {
-            nsCOMPtr<nsIXPConnectJSObjectHolder> locationHolder;
-
             bool symlink;
             // don't normalize symlinks, because that's kind of confusing
             if (NS_SUCCEEDED(location->IsSymlink(&symlink)) &&
                 !symlink)
                 location->Normalize();
+            RootedObject locationObj(cx);
             rv = xpc->WrapNative(cx, &args.thisv().toObject(), location,
-                                 NS_GET_IID(nsIFile),
-                                 getter_AddRefs(locationHolder));
-
-            if (NS_SUCCEEDED(rv) &&
-                locationHolder->GetJSObject()) {
-                args.rval().setObject(*locationHolder->GetJSObject());
+                                 NS_GET_IID(nsIFile), locationObj.address());
+            if (NS_SUCCEEDED(rv) && locationObj) {
+                args.rval().setObject(*locationObj);
             }
         }
     }
@@ -373,15 +371,6 @@ Version(JSContext* cx, unsigned argc, jsval* vp)
 }
 
 static bool
-BuildDate(JSContext* cx, unsigned argc, jsval* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    fprintf(gOutFile, "built on %s at %s\n", __DATE__, __TIME__);
-    args.rval().setUndefined();
-    return true;
-}
-
-static bool
 Quit(JSContext* cx, unsigned argc, jsval* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -393,21 +382,6 @@ Quit(JSContext* cx, unsigned argc, jsval* vp)
     gQuitting = true;
 //    exit(0);
     return false;
-}
-
-// Provide script a way to disable the xpcshell error reporter, preventing
-// reported errors from being logged to the console and also from affecting the
-// exit code returned by the xpcshell binary.
-static bool
-IgnoreReportedErrors(JSContext* cx, unsigned argc, jsval* vp)
-{
-    CallArgs args = CallArgsFromVp(argc, vp);
-    if (args.length() != 1 || !args[0].isBoolean()) {
-        JS_ReportError(cx, "Bad arguments");
-        return false;
-    }
-    gIgnoreReportedErrors = args[0].toBoolean();
-    return true;
 }
 
 static bool
@@ -580,7 +554,7 @@ XPCShellInterruptCallback(JSContext* cx)
 
     JSAutoCompartment ac(cx, &callback.toObject());
     RootedValue rv(cx);
-    if (!JS_CallFunctionValue(cx, JS::NullPtr(), callback, JS::HandleValueArray::empty(), &rv) ||
+    if (!JS_CallFunctionValue(cx, nullptr, callback, JS::HandleValueArray::empty(), &rv) ||
         !rv.isBoolean())
     {
         NS_WARNING("Scripted interrupt callback failed! Terminating script.");
@@ -667,9 +641,7 @@ static const JSFunctionSpec glob_functions[] = {
     JS_FS("readline",        ReadLine,       1,0),
     JS_FS("load",            Load,           1,0),
     JS_FS("quit",            Quit,           0,0),
-    JS_FS("ignoreReportedErrors", IgnoreReportedErrors, 1,0),
     JS_FS("version",         Version,        1,0),
-    JS_FS("build",           BuildDate,      0,0),
     JS_FS("dumpXPC",         DumpXPC,        1,0),
     JS_FS("dump",            Dump,           1,0),
     JS_FS("gc",              GC,             0,0),
@@ -736,7 +708,7 @@ env_setProperty(JSContext* cx, HandleObject obj, HandleId id, MutableHandleValue
         JS_ReportError(cx, "can't set envariable %s to %s", name.ptr(), value.ptr());
         return false;
     }
-    vp.set(STRING_TO_JSVAL(valstr));
+    vp.setString(valstr);
 #endif /* !defined SOLARIS */
     return result.succeed();
 }
@@ -830,23 +802,45 @@ my_GetErrorMessage(void* userRef, const unsigned errorNumber)
     return &jsShell_ErrorFormatString[errorNumber];
 }
 
-static void
-ProcessFile(JSContext* cx, const char* filename, FILE* file, bool forceTTY)
+static bool
+ProcessLine(AutoJSAPI& jsapi, const char* buffer, int startline)
 {
+    JSContext* cx = jsapi.cx();
     JS::RootedScript script(cx);
     JS::RootedValue result(cx);
-    int lineno, startline;
-    bool ok, hitEOF;
-    char* bufp, buffer[4096];
-    JSString* str;
+    JS::CompileOptions options(cx);
+    options.setFileAndLine("typein", startline)
+           .setIsRunOnce(true);
+    if (!JS_CompileScript(cx, buffer, strlen(buffer), options, &script))
+        return false;
+    if (compileOnly)
+        return true;
+    if (!JS_ExecuteScript(cx, script, &result))
+        return false;
 
+    if (result.isUndefined())
+        return true;
+    RootedString str(cx);
+    if (!(str = ToString(cx, result)))
+        return false;
+    JSAutoByteString bytes;
+    if (!bytes.encodeLatin1(cx, str))
+        return false;
+
+    fprintf(gOutFile, "%s\n", bytes.ptr());
+    return true;
+}
+
+static bool
+ProcessFile(AutoJSAPI& jsapi, const char* filename, FILE* file, bool forceTTY)
+{
+    JSContext* cx = jsapi.cx();
     JS::Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
     MOZ_ASSERT(global);
 
     if (forceTTY) {
         file = stdin;
-    } else if (!isatty(fileno(file)))
-    {
+    } else if (!isatty(fileno(file))) {
         /*
          * It's not interactive - just execute it.
          *
@@ -863,24 +857,25 @@ ProcessFile(JSContext* cx, const char* filename, FILE* file, bool forceTTY)
             }
         }
         ungetc(ch, file);
-        JS_BeginRequest(cx);
 
+        JS::RootedScript script(cx);
+        JS::RootedValue unused(cx);
         JS::CompileOptions options(cx);
         options.setUTF8(true)
                .setFileAndLine(filename, 1)
-               .setIsRunOnce(true);
-        if (JS::Compile(cx, options, file, &script) && !compileOnly)
-            (void)JS_ExecuteScript(cx, script, &result);
-        JS_EndRequest(cx);
-
-        return;
+               .setIsRunOnce(true)
+               .setNoScriptRval(true);
+        if (!JS::Compile(cx, options, file, &script))
+            return false;
+        return compileOnly || JS_ExecuteScript(cx, script, &unused);
     }
 
     /* It's an interactive filehandle; drop into read-eval-print loop. */
-    lineno = 1;
-    hitEOF = false;
+    int lineno = 1;
+    bool hitEOF = false;
     do {
-        bufp = buffer;
+        char buffer[4096];
+        char* bufp = buffer;
         *bufp = '\0';
 
         /*
@@ -889,7 +884,7 @@ ProcessFile(JSContext* cx, const char* filename, FILE* file, bool forceTTY)
          * cleanly.  This should be whenever we get a complete statement that
          * coincides with the end of a line.
          */
-        startline = lineno;
+        int startline = lineno;
         do {
             if (!GetLine(cx, bufp, file, startline == lineno ? "js> " : "")) {
                 hitEOF = true;
@@ -899,38 +894,16 @@ ProcessFile(JSContext* cx, const char* filename, FILE* file, bool forceTTY)
             lineno++;
         } while (!JS_BufferIsCompilableUnit(cx, global, buffer, strlen(buffer)));
 
-        JS_BeginRequest(cx);
-        /* Clear any pending exception from previous failed compiles.  */
-        JS_ClearPendingException(cx);
-        JS::CompileOptions options(cx);
-        options.setFileAndLine("typein", startline)
-               .setIsRunOnce(true);
-        if (JS_CompileScript(cx, buffer, strlen(buffer), options, &script)) {
-            JSErrorReporter older;
-
-            if (!compileOnly) {
-                ok = JS_ExecuteScript(cx, script, &result);
-                if (ok && result != JSVAL_VOID) {
-                    /* Suppress error reports from JS::ToString(). */
-                    older = JS_SetErrorReporter(JS_GetRuntime(cx), nullptr);
-                    str = ToString(cx, result);
-                    JS_SetErrorReporter(JS_GetRuntime(cx), older);
-                    JSAutoByteString bytes;
-                    if (str && bytes.encodeLatin1(cx, str))
-                        fprintf(gOutFile, "%s\n", bytes.ptr());
-                    else
-                        ok = false;
-                }
-            }
-        }
-        JS_EndRequest(cx);
+        if (!ProcessLine(jsapi, buffer, startline))
+            jsapi.ClearException(); // Errors from interactive processing are squelched.
     } while (!hitEOF && !gQuitting);
 
     fprintf(gOutFile, "\n");
+    return true;
 }
 
-static void
-Process(JSContext* cx, const char* filename, bool forceTTY)
+static bool
+Process(AutoJSAPI& jsapi, const char* filename, bool forceTTY)
 {
     FILE* file;
 
@@ -939,25 +912,33 @@ Process(JSContext* cx, const char* filename, bool forceTTY)
     } else {
         file = fopen(filename, "r");
         if (!file) {
-            JS_ReportErrorNumber(cx, my_GetErrorMessage, nullptr,
+            JS_ReportErrorNumber(jsapi.cx(), my_GetErrorMessage, nullptr,
                                  JSSMSG_CANT_OPEN,
                                  filename, strerror(errno));
             gExitCode = EXITCODE_FILE_NOT_FOUND;
-            return;
+            return false;
         }
     }
 
-    ProcessFile(cx, filename, file, forceTTY);
+    bool ok = ProcessFile(jsapi, filename, file, forceTTY);
     if (file != stdin)
         fclose(file);
+    return ok;
 }
 
 static int
-usage(void)
+usage()
 {
     fprintf(gErrFile, "%s\n", JS_GetImplementationVersion());
     fprintf(gErrFile, "usage: xpcshell [-g gredir] [-a appdir] [-r manifest]... [-WwxiCSsmIp] [-v version] [-f scriptfile] [-e script] [scriptfile] [scriptarg...]\n");
     return 2;
+}
+
+static bool
+printUsageAndSetExitCode()
+{
+    gExitCode = usage();
+    return false;
 }
 
 static void
@@ -987,9 +968,10 @@ ProcessArgsForCompartment(JSContext* cx, char** argv, int argc)
     }
 }
 
-static int
-ProcessArgs(JSContext* cx, char** argv, int argc, XPCShellDirProvider* aDirProvider)
+static bool
+ProcessArgs(AutoJSAPI& jsapi, char** argv, int argc, XPCShellDirProvider* aDirProvider)
 {
+    JSContext* cx = jsapi.cx();
     const char rcfilename[] = "xpcshell.js";
     FILE* rcfile;
     int rootPosition;
@@ -1001,8 +983,11 @@ ProcessArgs(JSContext* cx, char** argv, int argc, XPCShellDirProvider* aDirProvi
     rcfile = fopen(rcfilename, "r");
     if (rcfile) {
         printf("[loading '%s'...]\n", rcfilename);
-        ProcessFile(cx, rcfilename, rcfile, false);
+        bool ok = ProcessFile(jsapi, rcfilename, rcfile, false);
         fclose(rcfile);
+        if (!ok) {
+            return false;
+        }
     }
 
     JS::Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
@@ -1058,7 +1043,7 @@ ProcessArgs(JSContext* cx, char** argv, int argc, XPCShellDirProvider* aDirProvi
         switch (argv[i][1]) {
         case 'v':
             if (++i == argc) {
-                return usage();
+                return printUsageAndSetExitCode();
             }
             JS_SetVersionForCompartment(js::GetContextCompartment(cx),
                                         JSVersion(atoi(argv[i])));
@@ -1078,9 +1063,10 @@ ProcessArgs(JSContext* cx, char** argv, int argc, XPCShellDirProvider* aDirProvi
             break;
         case 'f':
             if (++i == argc) {
-                return usage();
+                return printUsageAndSetExitCode();
             }
-            Process(cx, argv[i], false);
+            if (!Process(jsapi, argv[i], false))
+                return false;
             /*
              * XXX: js -f foo.js should interpret foo.js and then
              * drop into interactive mode, but that breaks test
@@ -1096,7 +1082,7 @@ ProcessArgs(JSContext* cx, char** argv, int argc, XPCShellDirProvider* aDirProvi
             RootedValue rval(cx);
 
             if (++i == argc) {
-                return usage();
+                return printUsageAndSetExitCode();
             }
 
             JS::CompileOptions opts(cx);
@@ -1122,20 +1108,19 @@ ProcessArgs(JSContext* cx, char** argv, int argc, XPCShellDirProvider* aDirProvi
           nsCOMPtr<nsIFile> pluginsDir;
           if (NS_FAILED(XRE_GetFileFromPath(pluginPath, getter_AddRefs(pluginsDir)))) {
               fprintf(gErrFile, "Couldn't use given plugins dir.\n");
-              return usage();
+              return printUsageAndSetExitCode();
           }
           aDirProvider->SetPluginDir(pluginsDir);
           break;
         }
         default:
-            return usage();
+            return printUsageAndSetExitCode();
         }
     }
 
     if (filename || isInteractive)
-        Process(cx, filename, forceTTY);
-
-    return gExitCode;
+        return Process(jsapi, filename, forceTTY);
+    return true;
 }
 
 /***************************************************************************/
@@ -1211,19 +1196,6 @@ nsXPCFunctionThisTranslator::TranslateThis(nsISupports* aInitialThis,
 
 #endif
 
-static void
-XPCShellErrorReporter(JSContext* cx, const char* message, JSErrorReport* rep)
-{
-    if (gIgnoreReportedErrors)
-        return;
-
-    if (!JSREPORT_IS_WARNING(rep->flags))
-        gExitCode = EXITCODE_RUNTIME_ERROR;
-
-    // Delegate to the system error reporter for heavy lifting.
-    xpc::SystemErrorReporter(cx, message, rep);
-}
-
 static bool
 GetCurrentWorkingDirectory(nsAString& workingDirectory)
 {
@@ -1268,7 +1240,7 @@ XRE_XPCShellMain(int argc, char** argv, char** envp)
 {
     JSRuntime* rt;
     JSContext* cx;
-    int result;
+    int result = 0;
     nsresult rv;
 
     gErrFile = stderr;
@@ -1415,15 +1387,9 @@ XRE_XPCShellMain(int argc, char** argv, char** envp)
             return 1;
         }
 
-        nsCOMPtr<nsIJSRuntimeService> rtsvc = do_GetService("@mozilla.org/js/xpc/RuntimeService;1");
-        // get the JSRuntime from the runtime svc
-        if (!rtsvc) {
-            printf("failed to get nsJSRuntimeService!\n");
-            return 1;
-        }
-
-        if (NS_FAILED(rtsvc->GetRuntime(&rt)) || !rt) {
-            printf("failed to get JSRuntime from nsJSRuntimeService!\n");
+        rt = xpc::GetJSRuntime();
+        if (!rt) {
+            printf("failed to get JSRuntime from XPConnect!\n");
             return 1;
         }
 
@@ -1433,9 +1399,7 @@ XRE_XPCShellMain(int argc, char** argv, char** envp)
         sScriptedInterruptCallback.init(rt, UndefinedValue());
         JS_SetInterruptCallback(rt, XPCShellInterruptCallback);
 
-        JS_SetErrorReporter(rt, XPCShellErrorReporter);
-
-        dom::AutoJSAPI jsapi;
+        AutoJSAPI jsapi;
         jsapi.Init();
         cx = jsapi.cx();
 
@@ -1505,6 +1469,11 @@ XRE_XPCShellMain(int argc, char** argv, char** envp)
         if (NS_FAILED(rv))
             return 1;
 
+        // Initialize graphics prefs on the main thread, if not already done
+        gfxPrefs::GetSingleton();
+        // Initialize e10s check on the main thread, if not already done
+        BrowserTabsRemoteAutostart();
+
         {
             JS::Rooted<JSObject*> glob(cx, holder->GetJSObject());
             if (!glob) {
@@ -1546,14 +1515,28 @@ XRE_XPCShellMain(int argc, char** argv, char** envp)
                               GetLocationProperty,
                               nullptr);
 
-            // We are almost certainly going to run script here, so we need an
-            // AutoEntryScript. This is Gecko-specific and not in any spec.
-            dom::AutoEntryScript aes(backstagePass,
-                                     "xpcshell argument processing");
-            result = ProcessArgs(aes.cx(), argv, argc, &dirprovider);
+            {
+                // We are almost certainly going to run script here, so we need an
+                // AutoEntryScript. This is Gecko-specific and not in any spec.
+                AutoEntryScript aes(backstagePass, "xpcshell argument processing");
+
+                // If an exception is thrown, we'll set our return code
+                // appropriately, and then let the AutoJSAPI destructor report
+                // the error to the console.
+                aes.TakeOwnershipOfErrorReporting();
+                if (!ProcessArgs(aes, argv, argc, &dirprovider)) {
+                    if (gExitCode) {
+                        result = gExitCode;
+                    } else if (gQuitting) {
+                        result = 0;
+                    } else {
+                        result = EXITCODE_RUNTIME_ERROR;
+                    }
+                }
+            }
 
             JS_DropPrincipals(rt, gJSPrincipals);
-            JS_SetAllNonReservedSlotsToUndefined(aes.cx(), glob);
+            JS_SetAllNonReservedSlotsToUndefined(cx, glob);
             JS_GC(rt);
         }
         JS_GC(rt);

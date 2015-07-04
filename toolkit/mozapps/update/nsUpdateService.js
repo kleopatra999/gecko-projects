@@ -495,25 +495,25 @@ function hasUpdateMutex() {
   return !!gUpdateMutexHandle;
 }
 
-XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpdates() {
+function getCanApplyUpdates() {
   let useService = false;
-  if (shouldUseService() && isServiceInstalled()) {
+  if (shouldUseService()) {
     // No need to perform directory write checks, the maintenance service will
     // be able to write to all directories.
-    LOG("gCanApplyUpdates - bypass the write checks because we'll use the service");
+    LOG("getCanApplyUpdates - bypass the write checks because we'll use the service");
     useService = true;
   }
 
   if (!useService) {
     try {
       let updateTestFile = getUpdateFile([FILE_PERMS_TEST]);
-      LOG("gCanApplyUpdates - testing write access " + updateTestFile.path);
+      LOG("getCanApplyUpdates - testing write access " + updateTestFile.path);
       testWriteAccess(updateTestFile, false);
       if (AppConstants.platform == "macosx") {
         // Check that the application bundle can be written to.
         let appDirTestFile = getAppBaseDir();
         appDirTestFile.append(FILE_PERMS_TEST);
-        LOG("gCanApplyUpdates - testing write access " + appDirTestFile.path);
+        LOG("getCanApplyUpdates - testing write access " + appDirTestFile.path);
         if (appDirTestFile.exists()) {
           appDirTestFile.remove(false);
         }
@@ -522,7 +522,7 @@ XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpda
       } else if (AppConstants.platform == "win") {
         // Example windowsVersion:  Windows XP == 5.1
         let windowsVersion = Services.sysinfo.getProperty("version");
-        LOG("gCanApplyUpdates - windowsVersion = " + windowsVersion);
+        LOG("getCanApplyUpdates - windowsVersion = " + windowsVersion);
 
       /**
        * For Vista, updates can be performed to a location requiring admin
@@ -545,13 +545,13 @@ XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpda
             // appDir is under Program Files, so check if the user can elevate
             userCanElevate = Services.appinfo.QueryInterface(Ci.nsIWinAppHelper).
                              userCanElevate;
-            LOG("gCanApplyUpdates - on Vista, userCanElevate: " + userCanElevate);
+            LOG("getCanApplyUpdates - on Vista, userCanElevate: " + userCanElevate);
           }
           catch (ex) {
             // When the installation directory is not under Program Files,
             // fall through to checking if write access to the
             // installation directory is available.
-            LOG("gCanApplyUpdates - on Vista, appDir is not under Program Files");
+            LOG("getCanApplyUpdates - on Vista, appDir is not under Program Files");
           }
         }
 
@@ -579,7 +579,7 @@ XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpda
           // if we're unable to create the test file this will throw an exception.
           let appDirTestFile = getAppBaseDir();
           appDirTestFile.append(FILE_PERMS_TEST);
-          LOG("gCanApplyUpdates - testing write access " + appDirTestFile.path);
+          LOG("getCanApplyUpdates - testing write access " + appDirTestFile.path);
           if (appDirTestFile.exists()) {
             appDirTestFile.remove(false);
           }
@@ -588,15 +588,15 @@ XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpda
         }
       }
     } catch (e) {
-       LOG("gCanApplyUpdates - unable to apply updates. Exception: " + e);
+       LOG("getCanApplyUpdates - unable to apply updates. Exception: " + e);
       // No write privileges to install directory
       return false;
     }
   } // if (!useService)
 
-  LOG("gCanApplyUpdates - able to apply updates");
+  LOG("getCanApplyUpdates - able to apply updates");
   return true;
-});
+}
 
 /**
  * Whether or not the application can stage an update for the current session.
@@ -648,8 +648,7 @@ function getCanStageUpdates() {
     return false;
   }
 
-  if (AppConstants.platform == "win" && isServiceInstalled() &&
-      shouldUseService()) {
+  if (AppConstants.platform == "win" && shouldUseService()) {
     // No need to perform directory write checks, the maintenance service will
     // be able to write to all directories.
     LOG("getCanStageUpdates - able to stage updates using the service");
@@ -1025,13 +1024,12 @@ function releaseSDCardMountLock() {
 
 /**
  * Determines if the service should be used to attempt an update
- * or not.  For now this is only when PREF_APP_UPDATE_SERVICE_ENABLED
- * is true and we have Firefox.
+ * or not.
  *
  * @return  true if the service should be used for updates.
  */
 function shouldUseService() {
-  if (AppConstants.MOZ_MAINTENANCE_SERVICE) {
+  if (AppConstants.MOZ_MAINTENANCE_SERVICE && isServiceInstalled()) {
     return getPref("getBoolPref",
                    PREF_APP_UPDATE_SERVICE_ENABLED, false);
   }
@@ -2292,6 +2290,8 @@ UpdateService.prototype = {
       Services.prefs.setIntPref(PREF_APP_UPDATE_CERT_ERRORS, errCount);
       maxErrors = getPref("getIntPref", PREF_APP_UPDATE_CERT_MAXERRORS, 5);
     } else {
+      // Send the actual error code to telemetry
+      AUSTLMY.pingCheckExError(this._pingSuffix, update.errorCode);
       update.errorCode = BACKGROUNDCHECK_MULTIPLE_FAILURES;
       errCount = getPref("getIntPref", PREF_APP_UPDATE_BACKGROUNDERRORS, 0);
       errCount++;
@@ -2315,7 +2315,6 @@ UpdateService.prototype = {
           break;
         default:
           checkCode = AUSTLMY.CHK_GENERAL_ERROR_PROMPT;
-          AUSTLMY.pingCheckExError(this._pingSuffix, update.errorCode);
       }
     } else {
       switch (update.errorCode) {
@@ -2327,7 +2326,6 @@ UpdateService.prototype = {
           break;
         default:
           checkCode = AUSTLMY.CHK_GENERAL_ERROR_SILENT;
-          AUSTLMY.pingCheckExError(this._pingSuffix, update.errorCode);
       }
     }
     AUSTLMY.pingCheckCode(this._pingSuffix, checkCode);
@@ -2398,7 +2396,7 @@ UpdateService.prototype = {
     // UPDATE_UNABLE_TO_APPLY_EXTERNAL
     // UPDATE_UNABLE_TO_APPLY_NOTIFY
     AUSTLMY.pingGeneric("UPDATE_UNABLE_TO_APPLY_" + this._pingSuffix,
-                        gCanApplyUpdates, true);
+                        getCanApplyUpdates(), true);
     // Histogram IDs:
     // UPDATE_CANNOT_STAGE_EXTERNAL
     // UPDATE_CANNOT_STAGE_NOTIFY
@@ -2648,7 +2646,7 @@ UpdateService.prototype = {
       return;
     }
 
-    if (!gCanApplyUpdates) {
+    if (!getCanApplyUpdates()) {
       LOG("UpdateService:_selectAndInstallUpdate - the user is unable to " +
           "apply updates... prompting");
       this._showPrompt(update);
@@ -2858,7 +2856,7 @@ UpdateService.prototype = {
       return;
     }
 
-    if (this._incompatibleAddons.length > 0 || !gCanApplyUpdates) {
+    if (this._incompatibleAddons.length > 0 || !getCanApplyUpdates()) {
       LOG("UpdateService:onUpdateEnded - prompting because there are " +
           "incompatible add-ons");
       if (this._incompatibleAddons.length > 0) {
@@ -2905,7 +2903,7 @@ UpdateService.prototype = {
    * See nsIUpdateService.idl
    */
   get canApplyUpdates() {
-    return gCanApplyUpdates && hasUpdateMutex();
+    return getCanApplyUpdates() && hasUpdateMutex();
   },
 
   /**
@@ -3496,10 +3494,15 @@ Checker.prototype = {
     if (AppConstants.platform == "gonk") {
       let sysLibs = {};
       Cu.import("resource://gre/modules/systemlibs.js", sysLibs);
+      let productDevice = sysLibs.libcutils.property_get("ro.product.device");
+      let buildType = sysLibs.libcutils.property_get("ro.build.type");
       url = url.replace(/%PRODUCT_MODEL%/g,
                         sysLibs.libcutils.property_get("ro.product.model"));
-      url = url.replace(/%PRODUCT_DEVICE%/g,
-                        sysLibs.libcutils.property_get("ro.product.device"));
+      if (buildType == "user" || buildType == "userdebug") {
+        url = url.replace(/%PRODUCT_DEVICE%/g, productDevice);
+      } else {
+        url = url.replace(/%PRODUCT_DEVICE%/g, productDevice + "-" + buildType);
+      }
       url = url.replace(/%B2G_VERSION%/g,
                         getPref("getCharPref", PREF_APP_B2G_VERSION, null));
     }
@@ -3631,7 +3634,7 @@ Checker.prototype = {
 
     var prefs = Services.prefs;
     var certs = null;
-    if (!prefs.prefHasUserValue(PREF_APP_UPDATE_URL_OVERRIDE) &&
+    if (!getPref("getCharPref", PREF_APP_UPDATE_URL_OVERRIDE, null) &&
         getPref("getBoolPref", PREF_APP_UPDATE_CERT_CHECKATTRS, true)) {
       certs = gCertUtils.readCertPrefs(PREF_APP_UPDATE_CERTS_BRANCH);
     }
@@ -4214,7 +4217,7 @@ Downloader.prototype = {
 
     if (maxProgress != this._patch.size) {
       LOG("Downloader:onProgress - maxProgress: " + maxProgress +
-          " is not equal to expectd patch size: " + this._patch.size);
+          " is not equal to expected patch size: " + this._patch.size);
       // It's important that we use a different code than
       // NS_ERROR_CORRUPTED_CONTENT so that tests can verify the difference
       // between a hash error and a wrong download error.
@@ -4565,13 +4568,16 @@ UpdatePrompt.prototype = {
    * See nsIUpdateService.idl
    */
   showUpdateDownloaded: function UP_showUpdateDownloaded(update, background) {
+    if (background && getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false)) {
+      return;
+    }
+    // Trigger the display of the hamburger menu badge.
+    Services.obs.notifyObservers(null, "update-downloaded", update.state);
+
     if (this._getAltUpdateWindow())
       return;
 
     if (background) {
-      if (getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false))
-        return;
-
       var stringsPrefix = "updateDownloaded_" + update.type + ".";
       var title = gUpdateBundle.formatStringFromName(stringsPrefix + "title",
                                                      [update.name], 1);

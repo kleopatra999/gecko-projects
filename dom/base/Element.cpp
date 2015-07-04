@@ -1235,9 +1235,7 @@ Element::RemoveAttributeNode(Attr& aAttribute,
   }
 
   OwnerDoc()->WarnOnceAbout(nsIDocument::eRemoveAttributeNode);
-  nsAutoString nameSpaceURI;
-  aAttribute.NodeInfo()->GetNamespaceURI(nameSpaceURI);
-  return Attributes()->RemoveNamedItemNS(nameSpaceURI, aAttribute.NodeInfo()->LocalName(), aError);
+  return Attributes()->RemoveNamedItem(aAttribute.NodeName(), aError);
 }
 
 void
@@ -3103,13 +3101,6 @@ Element::AttrValueToCORSMode(const nsAttrValue* aValue)
 static const char*
 GetFullScreenError(nsIDocument* aDoc)
 {
-  // Block fullscreen requests in the chrome document when the fullscreen API
-  // is configured for content only.
-  if (nsContentUtils::IsFullscreenApiContentOnly() &&
-      nsContentUtils::IsChromeDoc(aDoc)) {
-    return "FullScreenDeniedContentOnly";
-  }
-
   nsCOMPtr<nsPIDOMWindow> win = aDoc->GetWindow();
   if (aDoc->NodePrincipal()->GetAppStatus() >= nsIPrincipal::APP_STATUS_INSTALLED) {
     // Request is in a web app and in the same origin as the web app.
@@ -3157,9 +3148,10 @@ Element::MozRequestFullScreen(JSContext* aCx, JS::Handle<JS::Value> aOptions,
     return;
   }
 
-  FullScreenOptions opts;
-  RequestFullscreenOptions fsOptions;
+  auto request = MakeUnique<FullscreenRequest>(this);
+  request->mIsCallerChrome = nsContentUtils::IsCallerChrome();
 
+  RequestFullscreenOptions fsOptions;
   // We need to check if options is convertible to a dict first before
   // trying to init fsOptions; otherwise Init() would throw, and we want to
   // silently ignore non-dictionary values
@@ -3170,11 +3162,11 @@ Element::MozRequestFullScreen(JSContext* aCx, JS::Handle<JS::Value> aOptions,
     }
 
     if (fsOptions.mVrDisplay) {
-      opts.mVRHMDDevice = fsOptions.mVrDisplay->GetHMD();
+      request->mVRHMDDevice = fsOptions.mVrDisplay->GetHMD();
     }
   }
 
-  OwnerDoc()->AsyncRequestFullScreen(this, opts);
+  OwnerDoc()->AsyncRequestFullScreen(Move(request));
 }
 
 void

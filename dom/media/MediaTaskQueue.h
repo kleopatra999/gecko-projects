@@ -31,14 +31,7 @@ typedef MediaPromise<bool, bool, false> ShutdownPromise;
 // to make this threadsafe for objects that aren't already threadsafe.
 class MediaTaskQueue : public AbstractThread {
 public:
-  explicit MediaTaskQueue(TemporaryRef<SharedThreadPool> aPool, bool aRequireTailDispatch = false);
-
-  void Dispatch(TemporaryRef<nsIRunnable> aRunnable,
-                DispatchFailureHandling aFailureHandling = AssertDispatchSuccess)
-  {
-    nsCOMPtr<nsIRunnable> r = dont_AddRef(aRunnable.take());
-    return Dispatch(r.forget(), aFailureHandling);
-  }
+  explicit MediaTaskQueue(already_AddRefed<SharedThreadPool> aPool, bool aSupportsTailDispatch = false);
 
   TaskDispatcher& TailDispatcher() override;
 
@@ -56,7 +49,7 @@ public:
 
   // DEPRECATED! Do not us, if a flush happens at the same time, this function
   // can hang and block forever!
-  void SyncDispatch(TemporaryRef<nsIRunnable> aRunnable);
+  void SyncDispatch(already_AddRefed<nsIRunnable> aRunnable);
 
   // Puts the queue in a shutdown state and returns immediately. The queue will
   // remain alive at least until all the events are drained, because the Runners
@@ -93,6 +86,15 @@ protected:
   nsresult DispatchLocked(already_AddRefed<nsIRunnable> aRunnable, DispatchMode aMode,
                           DispatchFailureHandling aFailureHandling,
                           DispatchReason aReason = NormalDispatch);
+
+  void MaybeResolveShutdown()
+  {
+    mQueueMonitor.AssertCurrentThreadOwns();
+    if (mIsShutdown && !mIsRunning) {
+      mShutdownPromise.ResolveIfExists(true, __func__);
+      mPool = nullptr;
+    }
+  }
 
   RefPtr<SharedThreadPool> mPool;
 
@@ -174,8 +176,8 @@ protected:
 class FlushableMediaTaskQueue : public MediaTaskQueue
 {
 public:
-  explicit FlushableMediaTaskQueue(TemporaryRef<SharedThreadPool> aPool) : MediaTaskQueue(aPool) {}
-  nsresult FlushAndDispatch(TemporaryRef<nsIRunnable> aRunnable);
+  explicit FlushableMediaTaskQueue(already_AddRefed<SharedThreadPool> aPool) : MediaTaskQueue(Move(aPool)) {}
+  nsresult FlushAndDispatch(already_AddRefed<nsIRunnable> aRunnable);
   void Flush();
 
   bool IsDispatchReliable() override { return false; }

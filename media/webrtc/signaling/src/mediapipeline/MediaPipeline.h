@@ -191,8 +191,8 @@ class MediaPipeline : public sigslot::has_slots<> {
     virtual nsresult SendRtcpPacket(const void* data, int len);
 
    private:
-    virtual nsresult SendRtpPacket_s(nsAutoPtr<DataBuffer> data);
-    virtual nsresult SendRtcpPacket_s(nsAutoPtr<DataBuffer> data);
+    nsresult SendRtpRtcpPacket_s(nsAutoPtr<DataBuffer> data,
+                                 bool is_rtp);
 
     MediaPipeline *pipeline_;  // Raw pointer to avoid cycles
     nsCOMPtr<nsIEventTarget> sts_thread_;
@@ -361,7 +361,7 @@ class GenericReceiveCallback : public TrackAddedCallback
 class ConduitDeleteEvent: public nsRunnable
 {
 public:
-  explicit ConduitDeleteEvent(TemporaryRef<MediaSessionConduit> aConduit) :
+  explicit ConduitDeleteEvent(already_AddRefed<MediaSessionConduit> aConduit) :
     mConduit(aConduit) {}
 
   /* we exist solely to proxy release of the conduit */

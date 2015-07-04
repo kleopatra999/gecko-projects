@@ -65,7 +65,7 @@
 #ifdef MOZ_LOGGING
 #define FORCE_PR_LOG 1 /* Allow logging in the release build */
 #endif /* MOZ_LOGGING */
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #ifdef XP_MACOSX
 #include "gfxQuartzNativeDrawing.h"
@@ -93,7 +93,6 @@ using mozilla::DefaultXDisplay;
 #undef CreateEvent
 #endif
 
-#ifdef PR_LOGGING 
 static PRLogModuleInfo *
 GetObjectFrameLog()
 {
@@ -102,7 +101,6 @@ GetObjectFrameLog()
     sLog = PR_NewLogModule("nsPluginFrame");
   return sLog;
 }
-#endif /* PR_LOGGING */
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -157,15 +155,16 @@ protected:
 
 nsPluginFrame::nsPluginFrame(nsStyleContext* aContext)
   : nsPluginFrameSuper(aContext)
+  , mInstanceOwner(nullptr)
   , mReflowCallbackPosted(false)
 {
-  PR_LOG(GetObjectFrameLog(), PR_LOG_DEBUG,
+  MOZ_LOG(GetObjectFrameLog(), LogLevel::Debug,
          ("Created new nsPluginFrame %p\n", this));
 }
 
 nsPluginFrame::~nsPluginFrame()
 {
-  PR_LOG(GetObjectFrameLog(), PR_LOG_DEBUG,
+  MOZ_LOG(GetObjectFrameLog(), LogLevel::Debug,
          ("nsPluginFrame %p deleted\n", this));
 }
 
@@ -195,7 +194,7 @@ nsPluginFrame::Init(nsIContent*       aContent,
                     nsContainerFrame* aParent,
                     nsIFrame*         aPrevInFlow)
 {
-  PR_LOG(GetObjectFrameLog(), PR_LOG_DEBUG,
+  MOZ_LOG(GetObjectFrameLog(), LogLevel::Debug,
          ("Initializing nsPluginFrame %p for content %p\n", this, aContent));
 
   nsPluginFrameSuper::Init(aContent, aParent, aPrevInFlow);
@@ -608,9 +607,19 @@ nsPluginFrame::CallSetWindow(bool aCheckIsHidden)
   if (aCheckIsHidden && IsHidden())
     return NS_ERROR_FAILURE;
 
+  // Calling either nsPluginInstanceOwner::FixUpPluginWindow() (here,
+  // on OS X) or SetWindow() (below, on all platforms) can destroy this
+  // frame.  (FixUpPluginWindow() calls SetWindow()).  So grab a safe
+  // reference to mInstanceOwner which we can use below, if needed.
+  nsRefPtr<nsPluginInstanceOwner> instanceOwnerRef(mInstanceOwner);
+
   // refresh the plugin port as well
 #ifdef XP_MACOSX
   mInstanceOwner->FixUpPluginWindow(nsPluginInstanceOwner::ePluginPaintEnable);
+  // Bail now if our frame has been destroyed.
+  if (!instanceOwnerRef->GetFrame()) {
+    return NS_ERROR_FAILURE;
+  }
 #endif
   window->window = mInstanceOwner->GetPluginPort();
 
@@ -641,10 +650,6 @@ nsPluginFrame::CallSetWindow(bool aCheckIsHidden)
   window->y = intBounds.y / intScaleFactor;
   window->width = intBounds.width / intScaleFactor;
   window->height = intBounds.height / intScaleFactor;
-
-  // Calling SetWindow might destroy this frame. We need to use the instance
-  // owner to clean up so hold a ref.
-  nsRefPtr<nsPluginInstanceOwner> instanceOwnerRef(mInstanceOwner);
 
   // This will call pi->SetWindow and take care of window subclassing
   // if needed, see bug 132759. Calling SetWindow can destroy this frame

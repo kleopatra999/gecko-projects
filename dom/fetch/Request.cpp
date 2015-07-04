@@ -51,30 +51,26 @@ Request::GetInternalRequest()
 
 namespace {
 void
-GetRequestURLFromWindow(const GlobalObject& aGlobal, nsPIDOMWindow* aWindow,
-                        const nsAString& aInput, nsAString& aRequestURL,
-                        ErrorResult& aRv)
+GetRequestURLFromDocument(nsIDocument* aDocument, const nsAString& aInput,
+                          nsAString& aRequestURL, ErrorResult& aRv)
 {
-  MOZ_ASSERT(aWindow);
+  MOZ_ASSERT(aDocument);
   MOZ_ASSERT(NS_IsMainThread());
 
-  nsCOMPtr<nsIURI> docURI = aWindow->GetDocumentURI();
+  nsCOMPtr<nsIURI> baseURI = aDocument->GetBaseURI();
+  nsCOMPtr<nsIURI> resolvedURI;
+  aRv = NS_NewURI(getter_AddRefs(resolvedURI), aInput, nullptr, baseURI);
+  if (NS_WARN_IF(aRv.Failed())) {
+      return;
+  }
+
   nsAutoCString spec;
-  aRv = docURI->GetSpec(spec);
+  aRv = resolvedURI->GetSpec(spec);
   if (NS_WARN_IF(aRv.Failed())) {
     return;
   }
 
-  nsRefPtr<dom::URL> url =
-    dom::URL::Constructor(aGlobal, aInput, NS_ConvertUTF8toUTF16(spec), aRv);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
-
-  url->Stringify(aRequestURL, aRv);
-  if (NS_WARN_IF(aRv.Failed())) {
-    return;
-  }
+  CopyUTF8toUTF16(spec, aRequestURL);
 }
 
 void
@@ -131,6 +127,7 @@ Request::Constructor(const GlobalObject& aGlobal,
                      const RequestInit& aInit, ErrorResult& aRv)
 {
   nsRefPtr<InternalRequest> request;
+  bool inputRequestHasBody = false;
 
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
 
@@ -139,6 +136,7 @@ Request::Constructor(const GlobalObject& aGlobal,
     nsCOMPtr<nsIInputStream> body;
     inputReq->GetBody(getter_AddRefs(body));
     if (body) {
+      inputRequestHasBody = true;
       if (inputReq->BodyUsed()) {
         aRv.ThrowTypeError(MSG_FETCH_BODY_CONSUMED_ERROR);
         return nullptr;
@@ -166,11 +164,11 @@ Request::Constructor(const GlobalObject& aGlobal,
 
     nsAutoString requestURL;
     if (NS_IsMainThread()) {
-      nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(global);
-      if (window) {
-        GetRequestURLFromWindow(aGlobal, window, input, requestURL, aRv);
+      nsIDocument* doc = GetEntryDocument();
+      if (doc) {
+        GetRequestURLFromDocument(doc, input, requestURL, aRv);
       } else {
-        // If we don't have a window, we must assume that this is a full URL.
+        // If we don't have a document, we must assume that this is a full URL.
         GetRequestURLFromChrome(input, requestURL, aRv);
       }
     } else {
@@ -267,6 +265,10 @@ Request::Constructor(const GlobalObject& aGlobal,
   }
 
   requestHeaders->Clear();
+  // From "Let r be a new Request object associated with request and a new
+  // Headers object whose guard is "request"."
+  requestHeaders->SetGuard(HeadersGuardEnum::Request, aRv);
+  MOZ_ASSERT(!aRv.Failed());
 
   if (request->Mode() == RequestMode::No_cors) {
     if (!request->HasSimpleMethod()) {
@@ -288,7 +290,7 @@ Request::Constructor(const GlobalObject& aGlobal,
     return nullptr;
   }
 
-  if (aInit.mBody.WasPassed()) {
+  if (aInit.mBody.WasPassed() || inputRequestHasBody) {
     // HEAD and GET are not allowed to have a body.
     nsAutoCString method;
     request->GetMethod(method);
@@ -297,7 +299,9 @@ Request::Constructor(const GlobalObject& aGlobal,
       aRv.ThrowTypeError(MSG_NO_BODY_ALLOWED_FOR_GET_AND_HEAD);
       return nullptr;
     }
+  }
 
+  if (aInit.mBody.WasPassed()) {
     const OwningArrayBufferOrArrayBufferViewOrBlobOrFormDataOrUSVStringOrURLSearchParams& bodyInit = aInit.mBody.Value();
     nsCOMPtr<nsIInputStream> stream;
     nsAutoCString contentType;

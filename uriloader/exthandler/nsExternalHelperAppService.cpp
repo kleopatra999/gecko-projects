@@ -122,16 +122,14 @@ enum {
 , NS_FOLDER_VALUE_CUSTOM = 2
 };
 
-#ifdef PR_LOGGING
 PRLogModuleInfo* nsExternalHelperAppService::mLog = nullptr;
-#endif
 
 // Using level 3 here because the OSHelperAppServices use a log level
-// of PR_LOG_DEBUG (4), and we want less detailed output here
-// Using 3 instead of PR_LOG_WARN because we don't output warnings
+// of LogLevel::Debug (4), and we want less detailed output here
+// Using 3 instead of LogLevel::Warning because we don't output warnings
 #undef LOG
-#define LOG(args) PR_LOG(nsExternalHelperAppService::mLog, 3, args)
-#define LOG_ENABLED() PR_LOG_TEST(nsExternalHelperAppService::mLog, 3)
+#define LOG(args) MOZ_LOG(nsExternalHelperAppService::mLog, mozilla::LogLevel::Info, args)
+#define LOG_ENABLED() MOZ_LOG_TEST(nsExternalHelperAppService::mLog, mozilla::LogLevel::Info)
 
 static const char NEVER_ASK_FOR_SAVE_TO_DISK_PREF[] =
   "browser.helperApps.neverAsk.saveToDisk";
@@ -591,13 +589,11 @@ nsresult nsExternalHelperAppService::Init()
   if (!obs)
     return NS_ERROR_FAILURE;
 
-#ifdef PR_LOGGING
   if (!mLog) {
     mLog = PR_NewLogModule("HelperAppService");
     if (!mLog)
       return NS_ERROR_OUT_OF_MEMORY;
   }
-#endif
 
   nsresult rv = obs->AddObserver(this, "profile-before-change", true);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1612,12 +1608,10 @@ NS_IMETHODIMP nsExternalAppHandler::OnStartRequest(nsIRequest *request, nsISuppo
     nsresult transferError = rv;
 
     rv = CreateFailedTransfer(aChannel && NS_UsePrivateBrowsing(aChannel));
-#ifdef PR_LOGGING
     if (NS_FAILED(rv)) {
       LOG(("Failed to create transfer to report failure."
            "Will fallback to prompter!"));
     }
-#endif
 
     mCanceled = true;
     request->Cancel(transferError);
@@ -1822,10 +1816,10 @@ void nsExternalAppHandler::SendStatusChange(ErrorType type, nsresult rv, nsIRequ
         }
         break;
     }
-    PR_LOG(nsExternalHelperAppService::mLog, PR_LOG_ERROR,
+    MOZ_LOG(nsExternalHelperAppService::mLog, LogLevel::Error,
         ("Error: %s, type=%i, listener=0x%p, transfer=0x%p, rv=0x%08X\n",
          NS_LossyConvertUTF16toASCII(msgId).get(), type, mDialogProgressListener.get(), mTransfer.get(), rv));
-    PR_LOG(nsExternalHelperAppService::mLog, PR_LOG_ERROR,
+    MOZ_LOG(nsExternalHelperAppService::mLog, LogLevel::Error,
         ("       path='%s'\n", NS_ConvertUTF16toUTF8(path).get()));
 
     // Get properties file bundle and extract status string.
@@ -1854,7 +1848,7 @@ void nsExternalAppHandler::SendStatusChange(ErrorType type, nsresult rv, nsIRequ
                                              1,
                                              getter_Copies(title));
 
-                PR_LOG(nsExternalHelperAppService::mLog, PR_LOG_DEBUG,
+                MOZ_LOG(nsExternalHelperAppService::mLog, LogLevel::Debug,
                        ("mContentContext=0x%p, prompter=0x%p, qi rv=0x%08X, title='%s', msg='%s'",
                        mContentContext.get(),
                        prompter.get(),
@@ -1872,7 +1866,7 @@ void nsExternalAppHandler::SendStatusChange(ErrorType type, nsresult rv, nsIRequ
 
                   prompter = do_GetInterface(window->GetDocShell(), &qiRv);
 
-                  PR_LOG(nsExternalHelperAppService::mLog, PR_LOG_DEBUG,
+                  MOZ_LOG(nsExternalHelperAppService::mLog, LogLevel::Debug,
                          ("No prompter from mContentContext, using DocShell, " \
                           "window=0x%p, docShell=0x%p, " \
                           "prompter=0x%p, qi rv=0x%08X",
@@ -1884,7 +1878,7 @@ void nsExternalAppHandler::SendStatusChange(ErrorType type, nsresult rv, nsIRequ
                   // If we still don't have a prompter, there's nothing else we
                   // can do so just return.
                   if (!prompter) {
-                    PR_LOG(nsExternalHelperAppService::mLog, PR_LOG_ERROR,
+                    MOZ_LOG(nsExternalHelperAppService::mLog, LogLevel::Error,
                            ("No prompter from DocShell, no way to alert user"));
                     return;
                   }
@@ -2637,7 +2631,6 @@ NS_IMETHODIMP nsExternalHelperAppService::GetFromTypeAndExtension(const nsACStri
       (*_retval)->SetPrimaryExtension(aFileExt);
   }
 
-#ifdef PR_LOGGING
   if (LOG_ENABLED()) {
     nsAutoCString type;
     (*_retval)->GetMIMEType(type);
@@ -2646,7 +2639,6 @@ NS_IMETHODIMP nsExternalHelperAppService::GetFromTypeAndExtension(const nsACStri
     (*_retval)->GetPrimaryExtension(ext);
     LOG(("MIME Info Summary: Type '%s', Primary Ext '%s'\n", type.get(), ext.get()));
   }
-#endif
 
   return NS_OK;
 }

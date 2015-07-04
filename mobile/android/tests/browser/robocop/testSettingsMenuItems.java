@@ -7,9 +7,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import org.mozilla.gecko.R;
 import org.mozilla.gecko.Actions;
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.util.HardwareUtils;
+import org.mozilla.gecko.util.InputOptionsUtils;
 
 /** This patch tests the Sections present in the Settings Menu and the
  *  default values for them
@@ -30,7 +32,6 @@ public class testSettingsMenuItems extends PixelTest {
 
     // Privacy menu items.
     String[] PATH_PRIVACY;
-    String[] TRACKING_PROTECTION_LABEL_ARR;
     String[] MANAGE_LOGINS_ARR;
     String[][] OPTIONS_PRIVACY;
 
@@ -94,16 +95,15 @@ public class testSettingsMenuItems extends PixelTest {
         };
 
         PATH_PRIVACY = new String[] { mStringHelper.PRIVACY_SECTION_LABEL };
-        TRACKING_PROTECTION_LABEL_ARR = new String[] { mStringHelper.TRACKING_PROTECTION_LABEL };
         MANAGE_LOGINS_ARR = new String[] { mStringHelper.MANAGE_LOGINS_LABEL };
         OPTIONS_PRIVACY = new String[][] {
-                TRACKING_PROTECTION_LABEL_ARR,
+                { mStringHelper.TRACKING_PROTECTION_LABEL },
                 { mStringHelper.DNT_LABEL },
                 { mStringHelper.COOKIES_LABEL, "Enabled", "Enabled, excluding 3rd party", "Disabled" },
-                { mStringHelper.REMEMBER_PASSWORDS_LABEL },
+                { mStringHelper.REMEMBER_LOGINS_LABEL },
                 MANAGE_LOGINS_ARR,
                 { mStringHelper.MASTER_PASSWORD_LABEL },
-                { mStringHelper.CLEAR_PRIVATE_DATA_LABEL, "", "Browsing history", "Search history", "Downloads", "Form history", "Cookies & active logins", "Saved passwords", "Cache", "Offline website data", "Site settings", "Clear data" },
+                { mStringHelper.CLEAR_PRIVATE_DATA_LABEL, "", "Browsing history", "Search history", "Downloads", "Form history", "Cookies & active logins", mStringHelper.CLEAR_PRIVATE_DATA_LABEL, "Cache", "Offline website data", "Site settings", "Clear data" },
         };
 
         PATH_MOZILLA = new String[] { mStringHelper.MOZILLA_SECTION_LABEL };
@@ -144,7 +144,7 @@ public class testSettingsMenuItems extends PixelTest {
                 "The Settings menu did not load", mStringHelper.SETTINGS_LABEL);
 
         // Dismiss the Settings screen and verify that the view is returned to about:home page
-        mActions.sendSpecialKey(Actions.SpecialKey.BACK);
+        mSolo.goBack();
 
         // Waiting for page title to appear to be sure that is fully loaded before opening the menu
         mAsserter.ok(mSolo.waitForText(mStringHelper.TITLE_PLACE_HOLDER), "about:home did not load",
@@ -194,7 +194,6 @@ public class testSettingsMenuItems extends PixelTest {
 
         if (!AppConstants.NIGHTLY_BUILD) {
             final List<String[]> privacy = settingsMap.get(PATH_PRIVACY);
-            privacy.remove(TRACKING_PROTECTION_LABEL_ARR);
             privacy.remove(MANAGE_LOGINS_ARR);
         }
 
@@ -206,8 +205,7 @@ public class testSettingsMenuItems extends PixelTest {
 
         // Tab Queue
         if (AppConstants.NIGHTLY_BUILD && AppConstants.MOZ_ANDROID_TAB_QUEUE) {
-            final String expected = "Queue links for later instead of switching to " + mStringHelper.BRAND_NAME + " each time";
-            String[] tabQueue = { mStringHelper.TAB_QUEUE_LABEL, expected };
+            final String[] tabQueue = { mStringHelper.TAB_QUEUE_LABEL, mStringHelper.TAB_QUEUE_SUMMARY };
             settingsMap.get(PATH_CUSTOMIZE).add(tabQueue);
         }
 
@@ -226,6 +224,12 @@ public class testSettingsMenuItems extends PixelTest {
         // Tablet: we don't allow a page title option.
         if (HardwareUtils.isTablet()) {
             settingsMap.get(PATH_DISPLAY).remove(TITLE_BAR_LABEL_ARR);
+        }
+
+        // Voice input
+        if (AppConstants.NIGHTLY_BUILD && InputOptionsUtils.supportsVoiceRecognizer(this.getActivity().getApplicationContext(), this.getActivity().getResources().getString(R.string.voicesearch_prompt))) {
+            String[] voiceInputUi = { mStringHelper.VOICE_INPUT_TITLE_LABEL, mStringHelper.VOICE_INPUT_SUMMARY_LABEL };
+            settingsMap.get(PATH_DISPLAY).add(voiceInputUi);
         }
     }
 
@@ -282,7 +286,7 @@ public class testSettingsMenuItems extends PixelTest {
                         mSolo.clickOnText("^Cancel$");
                     } else {
                         // Some submenus aren't dialogs, but are nested screens; exit using "back".
-                        mActions.sendSpecialKey(Actions.SpecialKey.BACK);
+                        mSolo.goBack();
                     }
                 }
             }
@@ -291,7 +295,7 @@ public class testSettingsMenuItems extends PixelTest {
             if (mDevice.type.equals("phone")) {
                 int menuDepth = menuPath.length;
                 while (menuDepth > 0) {
-                    mActions.sendSpecialKey(Actions.SpecialKey.BACK);
+                    mSolo.goBack();
                     menuDepth--;
                     // Sleep so subsequent back actions aren't lost.
                     mSolo.sleep(150);

@@ -149,10 +149,10 @@ class GCMarker : public JSTracer
     template <typename T> void traverse(T thing);
 
     // Calls traverse on target after making additional assertions.
-    template <typename S, typename T> void traverse(S source, T target);
-
+    template <typename S, typename T> void traverseEdge(S source, T target);
     // C++ requires explicit declarations of partial template instantiations.
-    template <typename S> void traverse(S source, jsid target);
+    template <typename S> void traverseEdge(S source, jsid target);
+    template <typename S> void traverseEdge(S source, Value target);
 
     /*
      * Care must be taken changing the mark color from gray to black. The cycle
@@ -194,9 +194,6 @@ class GCMarker : public JSTracer
 #ifdef DEBUG
     bool shouldCheckCompartments() { return strictCompartmentChecking; }
 #endif
-
-    /* This is public exclusively for ScanRope. */
-    MarkStack stack;
 
   private:
 #ifdef DEBUG
@@ -257,7 +254,7 @@ class GCMarker : public JSTracer
             delayMarkingChildren(ptr);
     }
 
-    void pushValueArray(JSObject* obj, void* start, void* end) {
+    void pushValueArray(JSObject* obj, HeapSlot* start, HeapSlot* end) {
         checkZone(obj);
 
         MOZ_ASSERT(start <= end);
@@ -281,6 +278,9 @@ class GCMarker : public JSTracer
     void saveValueRanges();
     inline void processMarkStackTop(SliceBudget& budget);
 
+    /* The mark stack. Pointers in this stack are "gray" in the GC sense. */
+    MarkStack stack;
+
     /* The color is only applied to objects and functions. */
     uint32_t color;
 
@@ -300,21 +300,16 @@ class GCMarker : public JSTracer
     mozilla::DebugOnly<bool> strictCompartmentChecking;
 };
 
+#ifdef DEBUG
+// Return true if this trace is happening on behalf of gray buffering during
+// the marking phase of incremental GC.
 bool
-IsBufferingGrayRoots(JSTracer* trc);
+IsBufferGrayRootsTracer(JSTracer* trc);
+#endif
 
 namespace gc {
 
 /*** Special Cases ***/
-
-/*
- * Trace through a shape or group iteratively during cycle collection to avoid
- * deep or infinite recursion.
- */
-void
-MarkCycleCollectorChildren(JSTracer* trc, Shape* shape);
-void
-MarkCycleCollectorChildren(JSTracer* trc, ObjectGroup* group);
 
 void
 PushArena(GCMarker* gcmarker, ArenaHeader* aheader);
@@ -378,7 +373,7 @@ class HashKeyRef : public BufferableRef
   public:
     HashKeyRef(Map* m, const Key& k) : map(m), key(k) {}
 
-    void mark(JSTracer* trc) {
+    void trace(JSTracer* trc) override {
         Key prior = key;
         typename Map::Ptr p = map->lookup(key);
         if (!p)

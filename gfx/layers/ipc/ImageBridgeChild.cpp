@@ -351,7 +351,7 @@ void ImageBridgeChild::DispatchReleaseImageClient(ImageClient* aClient)
 static void ReleaseTextureClientNow(TextureClient* aClient)
 {
   MOZ_ASSERT(InImageBridgeChildThread());
-  aClient->Release();
+  RELEASE_MANUALLY(aClient);
 }
 
 // static
@@ -368,7 +368,7 @@ void ImageBridgeChild::DispatchReleaseTextureClient(TextureClient* aClient)
     // has already shut down, along with the TextureChild, which means no
     // message will be sent and it is safe to run this code from any thread.
     MOZ_ASSERT(aClient->GetIPDLActor() == nullptr);
-    aClient->Release();
+    RELEASE_MANUALLY(aClient);
     return;
   }
 
@@ -650,7 +650,7 @@ ImageBridgeChild::IdentifyCompositorTextureHost(const TextureFactoryIdentifier& 
   }
 }
 
-TemporaryRef<ImageClient>
+already_AddRefed<ImageClient>
 ImageBridgeChild::CreateImageClient(CompositableType aType)
 {
   if (InImageBridgeChildThread()) {
@@ -671,7 +671,7 @@ ImageBridgeChild::CreateImageClient(CompositableType aType)
   return result.forget();
 }
 
-TemporaryRef<ImageClient>
+already_AddRefed<ImageClient>
 ImageBridgeChild::CreateImageClientNow(CompositableType aType)
 {
   MOZ_ASSERT(!sImageBridgeChildSingleton->mShuttingDown);

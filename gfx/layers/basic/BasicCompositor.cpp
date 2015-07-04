@@ -103,7 +103,7 @@ void BasicCompositor::Destroy()
   mWidget = nullptr;
 }
 
-TemporaryRef<CompositingRenderTarget>
+already_AddRefed<CompositingRenderTarget>
 BasicCompositor::CreateRenderTarget(const IntRect& aRect, SurfaceInitMode aInit)
 {
   MOZ_ASSERT(aRect.width != 0 && aRect.height != 0, "Trying to create a render target of invalid size");
@@ -123,7 +123,7 @@ BasicCompositor::CreateRenderTarget(const IntRect& aRect, SurfaceInitMode aInit)
   return rt.forget();
 }
 
-TemporaryRef<CompositingRenderTarget>
+already_AddRefed<CompositingRenderTarget>
 BasicCompositor::CreateRenderTargetFromSource(const IntRect &aRect,
                                               const CompositingRenderTarget *aSource,
                                               const IntPoint &aSourcePoint)
@@ -132,7 +132,7 @@ BasicCompositor::CreateRenderTargetFromSource(const IntRect &aRect,
   return nullptr;
 }
 
-TemporaryRef<DataTextureSource>
+already_AddRefed<DataTextureSource>
 BasicCompositor::CreateDataTextureSource(TextureFlags aFlags)
 {
   RefPtr<DataTextureSource> result = new DataTextureSourceBasic();
@@ -323,7 +323,8 @@ BasicCompositor::DrawQuad(const gfx::Rect& aRect,
                           const gfx::Rect& aClipRect,
                           const EffectChain &aEffectChain,
                           gfx::Float aOpacity,
-                          const gfx::Matrix4x4 &aTransform)
+                          const gfx::Matrix4x4& aTransform,
+                          const gfx::Rect& aVisibleRect)
 {
   RefPtr<DrawTarget> buffer = mRenderTarget->mDrawTarget;
 
@@ -517,7 +518,7 @@ BasicCompositor::BeginFrame(const nsIntRegion& aInvalidRegion,
   RefPtr<CompositingRenderTarget> target = CreateRenderTarget(mInvalidRect, INIT_MODE_CLEAR);
   if (!target) {
     if (!mTarget) {
-      mWidget->EndRemoteDrawing();
+      mWidget->EndRemoteDrawingInRegion(mDrawTarget, mInvalidRegion);
     }
     return;
   }
@@ -579,7 +580,7 @@ BasicCompositor::EndFrame()
                       IntPoint(r->x - offset.x, r->y - offset.y));
   }
   if (!mTarget) {
-    mWidget->EndRemoteDrawing();
+    mWidget->EndRemoteDrawingInRegion(mDrawTarget, mInvalidRegion);
   }
 
   mDrawTarget = nullptr;

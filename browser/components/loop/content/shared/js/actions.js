@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* global loop:true */
-
 var loop = loop || {};
 loop.shared = loop.shared || {};
 loop.shared.actions = (function() {
@@ -168,19 +166,38 @@ loop.shared.actions = (function() {
     }),
 
     /**
+     * Used to notify that the session has a data channel available.
+     */
+    DataChannelsAvailable: Action.define("dataChannelsAvailable", {
+      available: Boolean
+    }),
+
+    /**
+     * Used to send a message to the other peer.
+     */
+    SendTextChatMessage: Action.define("sendTextChatMessage", {
+      contentType: String,
+      message: String,
+      sentTimestamp: String
+    }),
+
+    /**
+     * Notifies that a message has been received from the other peer.
+     */
+    ReceivedTextChatMessage: Action.define("receivedTextChatMessage", {
+      contentType: String,
+      message: String,
+      receivedTimestamp: String
+      // sentTimestamp: String (optional)
+    }),
+
+    /**
      * Used by the ongoing views to notify stores about the elements
      * required for the sdk.
      */
     SetupStreamElements: Action.define("setupStreamElements", {
       // The configuration for the publisher/subscribe options
-      publisherConfig: Object,
-      // The local stream element
-      getLocalElementFunc: Function,
-      // The screen share element; optional until all conversation
-      // types support it.
-      // getScreenShareElementFunc: Function,
-      // The remote stream element
-      getRemoteElementFunc: Function
+      publisherConfig: Object
     }),
 
     /**
@@ -203,6 +220,42 @@ loop.shared.actions = (function() {
       isLocal: Boolean,
       videoType: String,
       dimensions: Object
+    }),
+
+    /**
+     * Video has been enabled from the remote sender.
+     *
+     * XXX somewhat tangled up with remote video muting semantics; see bug
+     * 1171969
+     *
+     * @note if/when we want to untangle this, we'll may want to include the
+     *       reason provided by the SDK and documented hereI:
+     *       https://tokbox.com/opentok/libraries/client/js/reference/VideoEnabledChangedEvent.html
+     */
+    RemoteVideoEnabled: Action.define("remoteVideoEnabled", {
+      /* The SDK video object that the views will be copying the remote
+         stream from. */
+      srcVideoObject: Object
+    }),
+
+    /**
+     * Video has been disabled by the remote sender.
+     *
+     *  @see RemoteVideoEnabled
+     */
+    RemoteVideoDisabled: Action.define("remoteVideoDisabled", {
+    }),
+
+    /**
+     * Video from the local camera has been enabled.
+     *
+     * XXX we should implement a LocalVideoDisabled action to cleanly prevent
+     * leakage; see bug 1171978 for details
+     */
+    LocalVideoEnabled: Action.define("localVideoEnabled", {
+      /* The SDK video object that the views will be copying the remote
+         stream from. */
+      srcVideoObject: Object
     }),
 
     /**
@@ -230,7 +283,7 @@ loop.shared.actions = (function() {
     }),
 
     /**
-     * Used to notifiy that screen sharing is active or not.
+     * Used to notify that screen sharing is active or not.
      */
     ScreenSharingState: Action.define("screenSharingState", {
       // One of loop.shared.utils.SCREEN_SHARE_STATES.
@@ -239,9 +292,12 @@ loop.shared.actions = (function() {
 
     /**
      * Used to notify that a shared screen is being received (or not).
+     *
+     * XXX this should be split into multiple actions to make the code clearer.
      */
     ReceivingScreenShare: Action.define("receivingScreenShare", {
       receiving: Boolean
+      // srcVideoObject: Object (only present if receiving is true)
     }),
 
     /**
@@ -349,6 +405,12 @@ loop.shared.actions = (function() {
     }),
 
     /**
+     * Updating the context data attached to a room finished successfully.
+     */
+    UpdateRoomContextDone: Action.define("updateRoomContextDone", {
+    }),
+
+    /**
      * Copy a room url into the user's clipboard.
      * XXX: should move to some roomActions module - refs bug 1079284
      */
@@ -362,6 +424,7 @@ loop.shared.actions = (function() {
      */
     EmailRoomUrl: Action.define("emailRoomUrl", {
       roomUrl: String
+      // roomDescription: String, Optional.
     }),
 
     /**
@@ -371,13 +434,6 @@ loop.shared.actions = (function() {
     ShareRoomUrl: Action.define("shareRoomUrl", {
       provider: Object,
       roomUrl: String
-    }),
-
-    /**
-     * Add the Social Share button to the browser toolbar.
-     * XXX: should move to some roomActions module - refs bug 1079284
-     */
-    AddSocialShareButton: Action.define("addSocialShareButton", {
     }),
 
     /**
@@ -409,7 +465,6 @@ loop.shared.actions = (function() {
       roomOwner: String,
       roomToken: String,
       roomUrl: String,
-      socialShareButtonAvailable: Boolean,
       socialShareProviders: Array
     }),
 
@@ -433,7 +488,6 @@ loop.shared.actions = (function() {
      * XXX: should move to some roomActions module - refs bug 1079284
      */
     UpdateSocialShareInfo: Action.define("updateSocialShareInfo", {
-      socialShareButtonAvailable: Boolean,
       socialShareProviders: Array
     }),
 

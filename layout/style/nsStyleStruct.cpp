@@ -333,8 +333,9 @@ nsChangeHint nsStyleMargin::CalcDifference(const nsStyleMargin& aOther) const
   }
   // Margin differences can't affect descendant intrinsic sizes and
   // don't need to force children to reflow.
-  return NS_CombineHint(nsChangeHint_NeedReflow,
-                        nsChangeHint_ClearAncestorIntrinsics);
+  return nsChangeHint_NeedReflow |
+         nsChangeHint_ReflowChangesSizeOrPosition |
+         nsChangeHint_ClearAncestorIntrinsics;
 }
 
 nsStylePadding::nsStylePadding()
@@ -1685,7 +1686,7 @@ nsStyleTableBorder::nsStyleTableBorder()
   mBorderCollapse = NS_STYLE_BORDER_SEPARATE;
 
   mEmptyCells = NS_STYLE_TABLE_EMPTY_CELLS_SHOW;
-  mCaptionSide = NS_STYLE_CAPTION_SIDE_TOP;
+  mCaptionSide = NS_STYLE_CAPTION_SIDE_BSTART;
   mBorderSpacingCol = 0;
   mBorderSpacingRow = 0;
 }
@@ -2582,6 +2583,7 @@ nsStyleDisplay::nsStyleDisplay()
   mAppearance = NS_THEME_NONE;
   mDisplay = NS_STYLE_DISPLAY_INLINE;
   mOriginalDisplay = mDisplay;
+  mContain = NS_STYLE_CONTAIN_NONE;
   mPosition = NS_STYLE_POSITION_STATIC;
   mFloats = NS_STYLE_FLOAT_NONE;
   mOriginalFloats = mFloats;
@@ -2605,6 +2607,7 @@ nsStyleDisplay::nsStyleDisplay()
   mChildPerspective.SetNoneValue();
   mBackfaceVisibility = NS_STYLE_BACKFACE_VISIBILITY_VISIBLE;
   mTransformStyle = NS_STYLE_TRANSFORM_STYLE_FLAT;
+  mTransformBox = NS_STYLE_TRANSFORM_BOX_BORDER_BOX;
   mOrient = NS_STYLE_ORIENT_INLINE;
   mMixBlendMode = NS_STYLE_BLEND_NORMAL;
   mIsolation = NS_STYLE_ISOLATION_AUTO;
@@ -2646,6 +2649,7 @@ nsStyleDisplay::nsStyleDisplay(const nsStyleDisplay& aSource)
   , mOpacity(aSource.mOpacity)
   , mDisplay(aSource.mDisplay)
   , mOriginalDisplay(aSource.mOriginalDisplay)
+  , mContain(aSource.mContain)
   , mAppearance(aSource.mAppearance)
   , mPosition(aSource.mPosition)
   , mFloats(aSource.mFloats)
@@ -2674,6 +2678,7 @@ nsStyleDisplay::nsStyleDisplay(const nsStyleDisplay& aSource)
   , mScrollSnapCoordinate(aSource.mScrollSnapCoordinate)
   , mBackfaceVisibility(aSource.mBackfaceVisibility)
   , mTransformStyle(aSource.mTransformStyle)
+  , mTransformBox(aSource.mTransformBox)
   , mSpecifiedTransform(aSource.mSpecifiedTransform)
   , mChildPerspective(aSource.mChildPerspective)
   , mTransitions(aSource.mTransitions)
@@ -2708,6 +2713,7 @@ nsChangeHint nsStyleDisplay::CalcDifference(const nsStyleDisplay& aOther) const
   if (!EqualURIs(mBinding, aOther.mBinding)
       || mPosition != aOther.mPosition
       || mDisplay != aOther.mDisplay
+      || mContain != aOther.mContain
       || (mFloats == NS_STYLE_FLOAT_NONE) != (aOther.mFloats == NS_STYLE_FLOAT_NONE)
       || mOverflowX != aOther.mOverflowX
       || mOverflowY != aOther.mOverflowY
@@ -2830,7 +2836,8 @@ nsChangeHint nsStyleDisplay::CalcDifference(const nsStyleDisplay& aOther) const
       NS_CombineHint(nsChangeHint_UpdateOverflow, nsChangeHint_RepaintFrame);
     for (uint8_t index = 0; index < 3; ++index)
       if (mTransformOrigin[index] != aOther.mTransformOrigin[index]) {
-        NS_UpdateHint(transformHint, kUpdateOverflowAndRepaintHint);
+        NS_UpdateHint(transformHint, NS_CombineHint(nsChangeHint_UpdateTransformLayer,
+                                                    nsChangeHint_UpdatePostTransformOverflow));
         break;
       }
     
@@ -2841,7 +2848,8 @@ nsChangeHint nsStyleDisplay::CalcDifference(const nsStyleDisplay& aOther) const
       }
 
     if (mChildPerspective != aOther.mChildPerspective ||
-        mTransformStyle != aOther.mTransformStyle)
+        mTransformStyle != aOther.mTransformStyle ||
+        mTransformBox != aOther.mTransformBox)
       NS_UpdateHint(transformHint, kUpdateOverflowAndRepaintHint);
 
     if (mBackfaceVisibility != aOther.mBackfaceVisibility)

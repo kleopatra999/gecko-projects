@@ -95,6 +95,10 @@ MobileMessageCallback::~MobileMessageCallback()
 nsresult
 MobileMessageCallback::NotifySuccess(JS::Handle<JS::Value> aResult, bool aAsync)
 {
+  if (NS_WARN_IF(!mDOMRequest->GetOwner())) {
+    return NS_ERROR_FAILURE;
+  }
+
   if (aAsync) {
     nsCOMPtr<nsIDOMRequestService> rs =
       do_GetService(DOMREQUEST_SERVICE_CONTRACTID);
@@ -126,6 +130,10 @@ MobileMessageCallback::NotifySuccess(nsISupports *aMessage, bool aAsync)
 nsresult
 MobileMessageCallback::NotifyError(int32_t aError, DOMError *aDetailedError, bool aAsync)
 {
+  if (NS_WARN_IF(!mDOMRequest->GetOwner())) {
+    return NS_ERROR_FAILURE;
+  }
+
   if (aAsync) {
     NS_ASSERTION(!aDetailedError,
       "No Support to FireDetailedErrorAsync() in nsIDOMRequestService!");
@@ -156,18 +164,23 @@ MobileMessageCallback::NotifyMessageSent(nsISupports *aMessage)
 NS_IMETHODIMP
 MobileMessageCallback::NotifySendMessageFailed(int32_t aError, nsISupports *aMessage)
 {
+  nsCOMPtr<nsPIDOMWindow> window = mDOMRequest->GetOwner();
+  if (NS_WARN_IF(!window)) {
+    return NS_ERROR_FAILURE;
+  }
+
   nsRefPtr<DOMMobileMessageError> domMobileMessageError;
   if (aMessage) {
     nsAutoString errorStr = ConvertErrorCodeToErrorString(aError);
     nsCOMPtr<nsIDOMMozSmsMessage> smsMsg = do_QueryInterface(aMessage);
     if (smsMsg) {
       domMobileMessageError =
-        new DOMMobileMessageError(mDOMRequest->GetOwner(), errorStr, smsMsg);
+        new DOMMobileMessageError(window, errorStr, smsMsg);
     }
     else {
       nsCOMPtr<nsIDOMMozMmsMessage> mmsMsg = do_QueryInterface(aMessage);
       domMobileMessageError =
-        new DOMMobileMessageError(mDOMRequest->GetOwner(), errorStr, mmsMsg);
+        new DOMMobileMessageError(window, errorStr, mmsMsg);
     }
     NS_ASSERTION(domMobileMessageError, "Invalid DOMMobileMessageError!");
   }
@@ -192,7 +205,7 @@ MobileMessageCallback::NotifyMessageDeleted(bool *aDeleted, uint32_t aSize)
 {
   if (aSize == 1) {
     AutoJSContext cx;
-    JS::Rooted<JS::Value> val(cx, aDeleted[0] ? JSVAL_TRUE : JSVAL_FALSE);
+    JS::Rooted<JS::Value> val(cx, JS::BooleanValue(*aDeleted));
     return NotifySuccess(val);
   }
 
@@ -221,7 +234,7 @@ NS_IMETHODIMP
 MobileMessageCallback::NotifyMessageMarkedRead(bool aRead)
 {
   AutoJSContext cx;
-  JS::Rooted<JS::Value> val(cx, aRead ? JSVAL_TRUE : JSVAL_FALSE);
+  JS::Rooted<JS::Value> val(cx, JS::BooleanValue(aRead));
   return NotifySuccess(val);
 }
 
@@ -277,7 +290,7 @@ MobileMessageCallback::NotifyGetSmscAddress(const nsAString& aSmscAddress)
     return NotifyError(nsIMobileMessageCallback::INTERNAL_ERROR);
   }
 
-  JS::Rooted<JS::Value> val(cx, STRING_TO_JSVAL(smsc));
+  JS::Rooted<JS::Value> val(cx, JS::StringValue(smsc));
   return NotifySuccess(val);
 }
 

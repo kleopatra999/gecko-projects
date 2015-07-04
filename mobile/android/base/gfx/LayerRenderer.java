@@ -17,6 +17,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
@@ -147,7 +148,10 @@ public class LayerRenderer implements Tabs.OnTabsChangedListener {
         mView = view;
         setOverscrollColor(R.color.toolbar_grey);
 
-        Bitmap scrollbarImage = view.getScrollbarImage();
+        final BitmapFactory.Options bitmapOptions = new BitmapFactory.Options();
+        bitmapOptions.inScaled = false;
+        Bitmap scrollbarImage =
+                BitmapUtils.decodeResource(view.getContext(), R.drawable.scrollbar, bitmapOptions);
         IntSize size = new IntSize(scrollbarImage.getWidth(), scrollbarImage.getHeight());
         scrollbarImage = expandCanvasToPowerOfTwo(scrollbarImage, size);
 
@@ -160,12 +164,6 @@ public class LayerRenderer implements Tabs.OnTabsChangedListener {
 
         mFrameTimings = new int[60];
         mCurrentFrame = mFrameTimingsSum = mDroppedFrames = 0;
-
-        // Initialize the FloatBuffer that will be used to store all vertices and texture
-        // coordinates in draw() commands.
-        mCoordByteBuffer = DirectBufferAllocator.allocate(COORD_BUFFER_SIZE * 4);
-        mCoordByteBuffer.order(ByteOrder.nativeOrder());
-        mCoordBuffer = mCoordByteBuffer.asFloatBuffer();
 
         Tabs.registerOnTabsChangedListener(this);
         mZoomedViewListeners = new ArrayList<LayerView.ZoomedViewListener>();
@@ -190,9 +188,11 @@ public class LayerRenderer implements Tabs.OnTabsChangedListener {
     }
 
     public void destroy() {
-        DirectBufferAllocator.free(mCoordByteBuffer);
-        mCoordByteBuffer = null;
-        mCoordBuffer = null;
+        if (mCoordByteBuffer != null) {
+            DirectBufferAllocator.free(mCoordByteBuffer);
+            mCoordByteBuffer = null;
+            mCoordBuffer = null;
+        }
         mHorizScrollLayer.destroy();
         mVertScrollLayer.destroy();
         Tabs.unregisterOnTabsChangedListener(this);
@@ -348,10 +348,17 @@ public class LayerRenderer implements Tabs.OnTabsChangedListener {
 
     private RenderContext createContext(RectF viewport, RectF pageRect, float zoomFactor, PointF offset) {
         if (mCoordBuffer == null) {
-            throw new IllegalStateException();
+            // Initialize the FloatBuffer that will be used to store all vertices and texture
+            // coordinates in draw() commands.
+            mCoordByteBuffer = DirectBufferAllocator.allocate(COORD_BUFFER_SIZE * 4);
+            mCoordByteBuffer.order(ByteOrder.nativeOrder());
+            mCoordBuffer = mCoordByteBuffer.asFloatBuffer();
+            if (mCoordBuffer == null) {
+                throw new IllegalStateException();
+            }
         }
-        return new RenderContext(viewport, pageRect, zoomFactor, offset, mPositionHandle, mTextureHandle,
-                                 mCoordBuffer);
+        return new RenderContext(viewport, pageRect, zoomFactor, offset,
+                                 mPositionHandle, mTextureHandle, mCoordBuffer);
     }
 
     private void updateDroppedFrames(long frameStartTime) {
@@ -390,7 +397,7 @@ public class LayerRenderer implements Tabs.OnTabsChangedListener {
 
     class FadeRunnable implements Runnable {
         private boolean mStarted;
-        private long mRunAt;
+        long mRunAt; // Would be private but we need both file access and high performance.
 
         void scheduleStartFade(long delay) {
             mRunAt = SystemClock.elapsedRealtime() + delay;
@@ -501,7 +508,9 @@ public class LayerRenderer implements Tabs.OnTabsChangedListener {
                 mHorizScrollLayer.unfade();
                 mFadeRunnable.scheduleStartFade(ScrollbarLayer.FADE_DELAY);
             } else if (mFadeRunnable.timeToFade()) {
-                boolean stillFading = mVertScrollLayer.fade() | mHorizScrollLayer.fade();
+                final long currentMillis = SystemClock.elapsedRealtime();
+                final boolean stillFading = mVertScrollLayer.fade(mFadeRunnable.mRunAt, currentMillis) |
+                        mHorizScrollLayer.fade(mFadeRunnable.mRunAt, currentMillis);
                 if (stillFading) {
                     mFadeRunnable.scheduleNextFadeFrame();
                 }
@@ -682,7 +691,7 @@ public class LayerRenderer implements Tabs.OnTabsChangedListener {
         if (msg == Tabs.TabEvents.SELECTED) {
             if (mView != null) {
                 final int overscrollColor =
-                        (tab.isPrivate() ? R.color.private_toolbar_grey : R.color.toolbar_grey);
+                        (tab.isPrivate() ? R.color.tabs_tray_grey_pressed : R.color.toolbar_grey);
                 setOverscrollColor(overscrollColor);
 
                 if (mView.getChildAt(0) != null) {

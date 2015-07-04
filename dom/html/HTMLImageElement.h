@@ -189,6 +189,20 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::border, aBorder, aError);
   }
+  void SetReferrer(const nsAString& aReferrer, ErrorResult& aError)
+  {
+    SetHTMLAttr(nsGkAtoms::referrer, aReferrer, aError);
+  }
+  void GetReferrer(nsAString& aReferrer)
+  {
+    GetEnumAttr(nsGkAtoms::referrer, nullptr, aReferrer);
+  }
+
+  mozilla::net::ReferrerPolicy
+  GetImageReferrerPolicy() override
+  {
+    return GetReferrerPolicy();
+  }
 
   int32_t X();
   int32_t Y();
@@ -205,6 +219,8 @@ public:
   void ClearForm(bool aRemoveFromForm);
 
   virtual void DestroyContent() override;
+
+  void MediaFeatureValuesChanged();
 
   /**
    * Given a hypothetical <img> or <source> tag with the given parameters,
@@ -332,6 +348,8 @@ protected:
   nsRefPtr<ResponsiveImageSelector> mResponsiveSelector;
 
 private:
+  bool SourceElementMatches(nsIContent* aSourceNode);
+
   static void MapAttributesIntoRule(const nsMappedAttributes* aAttributes,
                                     nsRuleData* aData);
 

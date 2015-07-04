@@ -29,9 +29,7 @@
 
 using namespace mozilla::pkix;
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* gPIPNSSLog;
-#endif
 
 static const unsigned int DEFAULT_MIN_RSA_BITS = 2048;
 
@@ -236,7 +234,7 @@ AppTrustDomain::DigestBuf(Input item,
 }
 
 Result
-AppTrustDomain::CheckRevocation(EndEntityOrCA, const CertID&, Time,
+AppTrustDomain::CheckRevocation(EndEntityOrCA, const CertID&, Time, Duration,
                                 /*optional*/ const Input*,
                                 /*optional*/ const Input*)
 {
@@ -302,6 +300,14 @@ AppTrustDomain::VerifyECDSASignedDigest(const SignedDigest& signedDigest,
 {
   return VerifyECDSASignedDigestNSS(signedDigest, subjectPublicKeyInfo,
                                     mPinArg);
+}
+
+Result
+AppTrustDomain::CheckValidityIsAcceptable(Time /*notBefore*/, Time /*notAfter*/,
+                                          EndEntityOrCA /*endEntityOrCA*/,
+                                          KeyPurposeId /*keyPurpose*/)
+{
+  return Success;
 }
 
 } } // namespace mozilla::psm

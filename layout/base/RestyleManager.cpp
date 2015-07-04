@@ -148,7 +148,8 @@ SyncViewsAndInvalidateDescendants(nsIFrame* aFrame,
 {
   NS_PRECONDITION(gInApplyRenderingChangeToTree,
                   "should only be called within ApplyRenderingChangeToTree");
-  NS_ASSERTION(aChange == (aChange & (nsChangeHint_RepaintFrame |
+  NS_ASSERTION(nsChangeHint_size_t(aChange) ==
+                          (aChange & (nsChangeHint_RepaintFrame |
                                       nsChangeHint_SyncFrameView |
                                       nsChangeHint_UpdateOpacityLayer |
                                       nsChangeHint_SchedulePaint)),
@@ -257,7 +258,7 @@ DoApplyRenderingChangeToTree(nsIFrame* aFrame,
       // painting is suppressed.
       needInvalidatingPaint = true;
       aFrame->InvalidateFrameSubtree();
-      if (aChange & nsChangeHint_UpdateEffects &&
+      if ((aChange & nsChangeHint_UpdateEffects) &&
           aFrame->IsFrameOfType(nsIFrame::eSVG) &&
           !(aFrame->GetStateBits() & NS_STATE_IS_OUTER_SVG)) {
         // Need to update our overflow rects:
@@ -437,11 +438,10 @@ RestyleManager::RecomputePosition(nsIFrame* aFrame)
            cont = nsLayoutUtils::GetNextContinuationOrIBSplitSibling(cont)) {
         nsIFrame* cb = cont->GetContainingBlock();
         nsMargin newOffsets;
-        const nsSize size = cb->GetContentRectRelativeToSelf().Size();
+        WritingMode wm = cb->GetWritingMode();
+        const LogicalSize size(wm, cb->GetContentRectRelativeToSelf().Size());
 
-        nsHTMLReflowState::ComputeRelativeOffsets(
-            cb->StyleVisibility()->mDirection,
-            cont, size.width, size.height, newOffsets);
+        nsHTMLReflowState::ComputeRelativeOffsets(wm, cont, size, newOffsets);
         NS_ASSERTION(newOffsets.left == -newOffsets.right &&
                      newOffsets.top == -newOffsets.bottom,
                      "ComputeRelativeOffsets should return valid results");
@@ -497,9 +497,9 @@ RestyleManager::RecomputePosition(nsIFrame* aFrame)
   const nsMargin& parentBorder =
     parentReflowState.mStyleBorder->GetComputedBorder();
   cbSize -= nsSize(parentBorder.LeftRight(), parentBorder.TopBottom());
+  LogicalSize lcbSize(frameWM, cbSize);
   nsHTMLReflowState reflowState(aFrame->PresContext(), parentReflowState,
-                                aFrame, availSize,
-                                cbSize.width, cbSize.height);
+                                aFrame, availSize, &lcbSize);
   nsSize computedSize(reflowState.ComputedWidth(), reflowState.ComputedHeight());
   computedSize.width += reflowState.ComputedPhysicalBorderPadding().LeftRight();
   if (computedSize.height != NS_INTRINSICSIZE) {
@@ -575,8 +575,16 @@ RestyleManager::StyleChangeReflow(nsIFrame* aFrame, nsChangeHint aHint)
   if (dirtyType == nsIPresShell::eResize && !dirtyBits)
     return;
 
+  nsIPresShell::ReflowRootHandling rootHandling;
+  if (aHint & nsChangeHint_ReflowChangesSizeOrPosition) {
+    rootHandling = nsIPresShell::ePositionOrSizeChange;
+  } else {
+    rootHandling = nsIPresShell::eNoPositionOrSizeChange;
+  }
+
   do {
-    mPresContext->PresShell()->FrameNeedsReflow(aFrame, dirtyType, dirtyBits);
+    mPresContext->PresShell()->FrameNeedsReflow(aFrame, dirtyType, dirtyBits,
+                                                rootHandling);
     aFrame = nsLayoutUtils::GetNextContinuationOrIBSplitSibling(aFrame);
   } while (aFrame);
 }
@@ -802,7 +810,10 @@ RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList)
           nsSVGEffects::UpdateEffects(cont);
         }
       }
-      if (hint & nsChangeHint_InvalidateRenderingObservers) {
+      if ((hint & nsChangeHint_InvalidateRenderingObservers) ||
+          ((hint & nsChangeHint_UpdateOpacityLayer) &&
+           frame->IsFrameOfType(nsIFrame::eSVG) &&
+           !(frame->GetStateBits() & NS_STATE_IS_OUTER_SVG))) {
         nsSVGEffects::InvalidateRenderingObservers(frame);
       }
       if (hint & nsChangeHint_NeedReflow) {
@@ -4183,7 +4194,6 @@ RestyleManager::StructsToLog()
 }
 #endif
 
-#ifdef DEBUG
 /* static */ nsCString
 RestyleManager::RestyleHintToString(nsRestyleHint aHint)
 {
@@ -4216,6 +4226,7 @@ RestyleManager::RestyleHintToString(nsRestyleHint aHint)
   return result;
 }
 
+#ifdef DEBUG
 /* static */ nsCString
 RestyleManager::ChangeHintToString(nsChangeHint aHint)
 {
@@ -4230,7 +4241,8 @@ RestyleManager::ChangeHintToString(nsChangeHint aHint)
     "UpdateParentOverflow",
     "ChildrenOnlyTransform", "RecomputePosition", "AddOrRemoveTransform",
     "BorderStyleNoneChange", "UpdateTextPath", "SchedulePaint",
-    "NeutralChange", "InvalidateRenderingObservers"
+    "NeutralChange", "InvalidateRenderingObservers",
+    "ReflowChangesSizeOrPosition"
   };
   uint32_t hint = aHint & ((1 << ArrayLength(names)) - 1);
   uint32_t rest = aHint & ~((1 << ArrayLength(names)) - 1);

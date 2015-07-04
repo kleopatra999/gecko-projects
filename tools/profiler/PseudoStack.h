@@ -11,7 +11,9 @@
 #include "js/ProfilingStack.h"
 #include <stdlib.h>
 #include "mozilla/Atomics.h"
+#ifndef SPS_STANDALONE
 #include "nsISupportsImpl.h"
+#endif
 
 /* we duplicate this code here to avoid header dependencies
  * which make it more difficult to include in other places */
@@ -74,13 +76,15 @@ class StackEntry : public js::ProfileEntry
 class ProfilerMarkerPayload;
 template<typename T>
 class ProfilerLinkedList;
-class JSStreamWriter;
+class SpliceableJSONWriter;
+class UniqueStacks;
+
 class ProfilerMarker {
   friend class ProfilerLinkedList<ProfilerMarker>;
 public:
   explicit ProfilerMarker(const char* aMarkerName,
-         ProfilerMarkerPayload* aPayload = nullptr,
-         float aTime = 0);
+                          ProfilerMarkerPayload* aPayload = nullptr,
+                          double aTime = 0);
 
   ~ProfilerMarker();
 
@@ -88,8 +92,7 @@ public:
     return mMarkerName;
   }
 
-  void
-  StreamJSObject(JSStreamWriter& b) const;
+  void StreamJSON(SpliceableJSONWriter& aWriter, UniqueStacks& aUniqueStacks) const;
 
   void SetGeneration(uint32_t aGenID);
 
@@ -97,13 +100,13 @@ public:
     return mGenID + 2 <= aGenID;
   }
 
-  float GetTime() const;
+  double GetTime() const;
 
 private:
   char* mMarkerName;
   ProfilerMarkerPayload* mPayload;
   ProfilerMarker* mNext;
-  float mTime;
+  double mTime;
   uint32_t mGenID;
 };
 
@@ -234,7 +237,7 @@ public:
     mSleepId++;
   }
 
-  void addMarker(const char *aMarkerStr, ProfilerMarkerPayload *aPayload, float aTime)
+  void addMarker(const char* aMarkerStr, ProfilerMarkerPayload* aPayload, double aTime)
   {
     ProfilerMarker* marker = new ProfilerMarker(aMarkerStr, aPayload, aTime);
     mPendingMarkers.insert(marker);
@@ -319,6 +322,7 @@ public:
   }
 
   void sampleRuntime(JSRuntime* runtime) {
+#ifndef SPS_STANDALONE
     if (mRuntime && !runtime) {
       // On JS shut down, flush the current buffer as stringifying JIT samples
       // requires a live JSRuntime.
@@ -339,7 +343,9 @@ public:
                                  (uint32_t) mozilla::ArrayLength(mStack));
     if (mStartJSSampling)
       enableJSSampling();
+#endif
   }
+#ifndef SPS_STANDALONE
   void enableJSSampling() {
     if (mRuntime) {
       js::EnableRuntimeProfilingStack(mRuntime, true);
@@ -358,6 +364,7 @@ public:
     if (mRuntime)
       js::EnableRuntimeProfilingStack(mRuntime, false);
   }
+#endif
 
   // Keep a list of active checkpoints
   StackEntry volatile mStack[1024];
@@ -370,7 +377,9 @@ public:
     , mSleepIdObserved(0)
     , mSleeping(false)
     , mRefCnt(1)
+#ifndef SPS_STANDALONE
     , mRuntime(nullptr)
+#endif
     , mStartJSSampling(false)
     , mPrivacyMode(false)
   { }
@@ -410,8 +419,10 @@ public:
   mozilla::Atomic<int> mRefCnt;
 
  public:
+#ifndef SPS_STANDALONE
   // The runtime which is being sampled
   JSRuntime *mRuntime;
+#endif
   // Start JS Profiling when possible
   bool mStartJSSampling;
   bool mPrivacyMode;

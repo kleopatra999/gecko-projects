@@ -66,56 +66,56 @@ endif
 # JavaScript Shell packaging
 ifndef LIBXUL_SDK
 JSSHELL_BINS  = \
-  $(DIST)/bin/js$(BIN_SUFFIX) \
-  $(DIST)/bin/$(DLL_PREFIX)mozglue$(DLL_SUFFIX) \
+  js$(BIN_SUFFIX) \
+  $(DLL_PREFIX)mozglue$(DLL_SUFFIX) \
   $(NULL)
 ifndef MOZ_NATIVE_NSPR
 ifdef MSVC_C_RUNTIME_DLL
-JSSHELL_BINS += $(DIST)/bin/$(MSVC_C_RUNTIME_DLL)
+JSSHELL_BINS += $(MSVC_C_RUNTIME_DLL)
 endif
 ifdef MSVC_CXX_RUNTIME_DLL
-JSSHELL_BINS += $(DIST)/bin/$(MSVC_CXX_RUNTIME_DLL)
+JSSHELL_BINS += $(MSVC_CXX_RUNTIME_DLL)
 endif
 ifdef MSVC_APPCRT_DLL
-JSSHELL_BINS += $(DIST)/bin/$(MSVC_APPCRT_DLL)
+JSSHELL_BINS += $(MSVC_APPCRT_DLL)
 endif
 ifdef MSVC_DESKTOPCRT_DLL
-JSSHELL_BINS += $(DIST)/bin/$(MSVC_DESKTOPCRT_DLL)
+JSSHELL_BINS += $(MSVC_DESKTOPCRT_DLL)
 endif
 ifdef MOZ_FOLD_LIBS
-JSSHELL_BINS += $(DIST)/bin/$(DLL_PREFIX)nss3$(DLL_SUFFIX)
+JSSHELL_BINS += $(DLL_PREFIX)nss3$(DLL_SUFFIX)
 else
 JSSHELL_BINS += \
-  $(DIST)/bin/$(DLL_PREFIX)nspr4$(DLL_SUFFIX) \
-  $(DIST)/bin/$(DLL_PREFIX)plds4$(DLL_SUFFIX) \
-  $(DIST)/bin/$(DLL_PREFIX)plc4$(DLL_SUFFIX) \
+  $(DLL_PREFIX)nspr4$(DLL_SUFFIX) \
+  $(DLL_PREFIX)plds4$(DLL_SUFFIX) \
+  $(DLL_PREFIX)plc4$(DLL_SUFFIX) \
   $(NULL)
 endif # MOZ_FOLD_LIBS
 endif # MOZ_NATIVE_NSPR
 ifdef MOZ_SHARED_ICU
 ifeq ($(OS_TARGET), WINNT)
 JSSHELL_BINS += \
-  $(DIST)/bin/icudt$(MOZ_ICU_DBG_SUFFIX)$(MOZ_ICU_VERSION).dll \
-  $(DIST)/bin/icuin$(MOZ_ICU_DBG_SUFFIX)$(MOZ_ICU_VERSION).dll \
-  $(DIST)/bin/icuuc$(MOZ_ICU_DBG_SUFFIX)$(MOZ_ICU_VERSION).dll \
+  icudt$(MOZ_ICU_DBG_SUFFIX)$(MOZ_ICU_VERSION).dll \
+  icuin$(MOZ_ICU_DBG_SUFFIX)$(MOZ_ICU_VERSION).dll \
+  icuuc$(MOZ_ICU_DBG_SUFFIX)$(MOZ_ICU_VERSION).dll \
   $(NULL)
 else
 ifeq ($(OS_TARGET), Darwin)
 JSSHELL_BINS += \
-  $(DIST)/bin/libicudata.$(MOZ_ICU_VERSION).dylib \
-  $(DIST)/bin/libicui18n.$(MOZ_ICU_VERSION).dylib \
-  $(DIST)/bin/libicuuc.$(MOZ_ICU_VERSION).dylib \
+  libicudata.$(MOZ_ICU_VERSION).dylib \
+  libicui18n.$(MOZ_ICU_VERSION).dylib \
+  libicuuc.$(MOZ_ICU_VERSION).dylib \
   $(NULL)
 else
 JSSHELL_BINS += \
-  $(DIST)/bin/libicudata.so.$(MOZ_ICU_VERSION) \
-  $(DIST)/bin/libicui18n.so.$(MOZ_ICU_VERSION) \
-  $(DIST)/bin/libicuuc.so.$(MOZ_ICU_VERSION) \
+  libicudata.so.$(MOZ_ICU_VERSION) \
+  libicui18n.so.$(MOZ_ICU_VERSION) \
+  libicuuc.so.$(MOZ_ICU_VERSION) \
   $(NULL)
 endif # Darwin
 endif # WINNT
 endif # MOZ_STATIC_JS
-MAKE_JSSHELL  = $(PYTHON) $(MOZILLA_DIR)/toolkit/mozapps/installer/dozip.py $(PKG_JSSHELL) $(abspath $(JSSHELL_BINS))
+MAKE_JSSHELL  = $(call py_action,zip,-C $(DIST)/bin $(abspath $(PKG_JSSHELL)) $(JSSHELL_BINS))
 endif # LIBXUL_SDK
 
 _ABS_DIST = $(abspath $(DIST))
@@ -151,14 +151,14 @@ MAKE_SDK = $(CREATE_FINAL_TAR) - $(MOZ_APP_NAME)-sdk | bzip2 -vf > $(SDK)
 endif
 ifeq ($(MOZ_PKG_FORMAT),ZIP)
 ifdef MOZ_EXTERNAL_SIGNING_FORMAT
-# We can't use signcode on zip files
-MOZ_EXTERNAL_SIGNING_FORMAT := $(filter-out osslsigncode signcode,$(MOZ_EXTERNAL_SIGNING_FORMAT))
+# We can't use osslsigncode on zip files
+MOZ_EXTERNAL_SIGNING_FORMAT := $(filter-out osslsigncode,$(MOZ_EXTERNAL_SIGNING_FORMAT))
 endif
 PKG_SUFFIX	= .zip
 INNER_MAKE_PACKAGE	= $(ZIP) -r9D $(PACKAGE) $(MOZ_PKG_DIR) \
   -x \*/.mkdir.done
 INNER_UNMAKE_PACKAGE	= $(UNZIP) $(UNPACKAGE)
-MAKE_SDK = $(ZIP) -r9D $(SDK) $(MOZ_APP_NAME)-sdk
+MAKE_SDK = $(call py_action,zip,$(SDK) $(MOZ_APP_NAME)-sdk)
 endif
 ifeq ($(MOZ_PKG_FORMAT),SFX7Z)
 PKG_SUFFIX	= .exe
@@ -303,6 +303,7 @@ DIST_FILES += \
   extensions \
   application.ini \
   package-name.txt \
+  ua-update.json \
   platform.ini \
   greprefs.js \
   browserconfig.properties \
@@ -366,6 +367,7 @@ endif
 # Create Android ARchives and metadata for download by local
 # developers using Gradle.
 ifdef MOZ_ANDROID_GECKOLIBS_AAR
+ifndef MOZ_DISABLE_GECKOVIEW
 geckoaar-revision := $(BUILDID)
 
 UPLOAD_EXTRA_FILES += \
@@ -391,8 +393,11 @@ INNER_MAKE_GECKOLIBS_AAR= \
     --distdir '$(_ABS_DIST)' \
     '$(_ABS_DIST)'
 else
+INNER_MAKE_GECKOLIBS_AAR=echo 'Android geckolibs.aar packaging requires packaging geckoview'
+endif # MOZ_DISABLE_GECKOVIEW
+else
 INNER_MAKE_GECKOLIBS_AAR=echo 'Android geckolibs.aar packaging is disabled'
-endif
+endif # MOZ_ANDROID_GECKOLIBS_AAR
 
 ifdef MOZ_OMX_PLUGIN
 DIST_FILES += libomxplugin.so libomxplugingb.so libomxplugingb235.so \
@@ -410,6 +415,11 @@ ifdef MOZ_ENABLE_SZIP
 # These libraries are szipped in-place in the
 # assets/$(ANDROID_CPU_ARCH) directory.
 SZIP_LIBRARIES := $(ASSET_SO_LIBRARIES)
+endif
+
+ifndef COMPILE_ENVIRONMENT
+# Any Fennec binary libraries we download are already szipped.
+ALREADY_SZIPPED=1
 endif
 
 # Fennec's OMNIJAR_NAME can include a directory; for example, it might
@@ -458,7 +468,7 @@ INNER_MAKE_PACKAGE	= \
   ( cd $(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH) && \
     unzip -o $(_ABS_DIST)/gecko.ap_ && \
     rm $(_ABS_DIST)/gecko.ap_ && \
-    $(ZIP) $(if $(MOZ_ENABLE_SZIP),-0 )$(_ABS_DIST)/gecko.ap_ $(ASSET_SO_LIBRARIES) && \
+    $(ZIP) $(if $(ALREADY_SZIPPED),-0 ,$(if $(MOZ_ENABLE_SZIP),-0 ))$(_ABS_DIST)/gecko.ap_ $(ASSET_SO_LIBRARIES) && \
     $(ZIP) -r9D $(_ABS_DIST)/gecko.ap_ $(DIST_FILES) -x $(NON_DIST_FILES) $(SZIP_LIBRARIES) && \
     $(if $(filter-out ./,$(OMNIJAR_DIR)), \
       mkdir -p $(OMNIJAR_DIR) && mv $(OMNIJAR_NAME) $(OMNIJAR_DIR) && ) \
@@ -606,7 +616,6 @@ NO_PKG_FILES += \
 	ClientAuthServer* \
 	OCSPStaplingServer* \
 	GenerateOCSPResponse* \
-	winEmbed.exe \
 	chrome/chrome.rdf \
 	chrome/app-chrome.manifest \
 	chrome/overlayinfo \
@@ -647,10 +656,6 @@ GARBAGE		+= $(DIST)/$(PACKAGE) $(PACKAGE)
 
 PKG_ARG = , '$(pkg)'
 
-ifeq (gonk,$(MOZ_WIDGET_TOOLKIT))
-ELF_HACK_FLAGS = --fill
-endif
-
 # MOZ_PKG_MANIFEST is the canonical way to define the package manifest (which
 # the packager will preprocess), but for a smooth transition, we derive it
 # from the now deprecated MOZ_PKG_MANIFEST_P when MOZ_PKG_MANIFEST is not
@@ -678,8 +683,6 @@ endif
 ifneq (android,$(MOZ_WIDGET_TOOLKIT))
 OPTIMIZEJARS = 1
 endif
-
-export NO_PKG_FILES USE_ELF_HACK ELF_HACK_FLAGS
 
 # A js binary is needed to perform verification of JavaScript minification.
 # We can only use the built binary when not cross-compiling. Environments
@@ -727,11 +730,17 @@ UPLOAD_FILES= \
   $(call QUOTED_WILDCARD,$(DIST)/$(LANGPACK)) \
   $(call QUOTED_WILDCARD,$(wildcard $(DIST)/$(PARTIAL_MAR))) \
   $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(TEST_PACKAGE)) \
+  $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(CPP_TEST_PACKAGE)) \
+  $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(XPC_TEST_PACKAGE)) \
+  $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(MOCHITEST_PACKAGE)) \
+  $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(REFTEST_PACKAGE)) \
+  $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(WP_TEST_PACKAGE)) \
   $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(SYMBOL_ARCHIVE_BASENAME).zip) \
   $(call QUOTED_WILDCARD,$(DIST)/$(SDK)) \
   $(call QUOTED_WILDCARD,$(MOZ_SOURCESTAMP_FILE)) \
   $(call QUOTED_WILDCARD,$(MOZ_BUILDINFO_FILE)) \
   $(call QUOTED_WILDCARD,$(MOZ_MOZINFO_FILE)) \
+  $(call QUOTED_WILDCARD,$(MOZ_TEST_PACKAGES_FILE)) \
   $(call QUOTED_WILDCARD,$(PKG_JSSHELL)) \
   $(if $(UPLOAD_EXTRA_FILES), $(foreach f, $(UPLOAD_EXTRA_FILES), $(wildcard $(DIST)/$(f))))
 
@@ -766,7 +775,7 @@ ifndef MOZ_PKG_SRCDIR
 MOZ_PKG_SRCDIR = $(topsrcdir)
 endif
 
-DIR_TO_BE_PACKAGED ?= ../$(notdir $(topsrcdir))
+SRC_TAR_PREFIX = $(MOZ_APP_NAME)-$(MOZ_PKG_VERSION)
 SRC_TAR_EXCLUDE_PATHS += \
   --exclude='.hg*' \
   --exclude='CVS' \
@@ -779,9 +788,9 @@ ifdef MOZ_OBJDIR
 SRC_TAR_EXCLUDE_PATHS += --exclude='$(MOZ_OBJDIR)'
 endif
 CREATE_SOURCE_TAR = $(TAR) -c --owner=0 --group=0 --numeric-owner \
-  --mode=go-w $(SRC_TAR_EXCLUDE_PATHS) -f
+  --mode=go-w $(SRC_TAR_EXCLUDE_PATHS) --transform='s,^\./,$(SRC_TAR_PREFIX)/,' -f
 
-SOURCE_TAR = $(DIST)/$(PKG_SRCPACK_PATH)$(PKG_SRCPACK_BASENAME).tar.bz2
+SOURCE_TAR = $(DIST)/$(PKG_SRCPACK_PATH)$(PKG_SRCPACK_BASENAME).tar.xz
 HG_BUNDLE_FILE = $(DIST)/$(PKG_SRCPACK_PATH)$(PKG_BUNDLE_BASENAME).bundle
 SOURCE_CHECKSUM_FILE = $(DIST)/$(PKG_SRCPACK_PATH)$(PKG_SRCPACK_BASENAME).checksums
 SOURCE_UPLOAD_FILES = $(SOURCE_TAR)

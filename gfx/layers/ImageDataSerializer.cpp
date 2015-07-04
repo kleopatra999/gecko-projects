@@ -5,7 +5,7 @@
 
 #include "ImageDataSerializer.h"
 #include "gfx2DGlue.h"                  // for SurfaceFormatToImageFormat
-#include "gfxPoint.h"                   // for gfxIntSize
+#include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/gfx/2D.h"             // for DataSourceSurface, Factory
 #include "mozilla/gfx/Logging.h"        // for gfxDebug
@@ -147,7 +147,7 @@ ImageDataSerializerBase::GetFormat() const
   return GetBufferInfo(mData, mDataSize)->format;
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 ImageDataSerializerBase::GetAsDrawTarget(gfx::BackendType aBackend)
 {
   MOZ_ASSERT(IsValid());
@@ -156,7 +156,7 @@ ImageDataSerializerBase::GetAsDrawTarget(gfx::BackendType aBackend)
                                                GetStride(), GetFormat());
 }
 
-TemporaryRef<gfx::DataSourceSurface>
+already_AddRefed<gfx::DataSourceSurface>
 ImageDataSerializerBase::GetAsSurface()
 {
   MOZ_ASSERT(IsValid());

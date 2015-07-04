@@ -6,18 +6,20 @@
  * for meta nodes when viewing "content only".
  */
 
-let { CATEGORY_MASK } = devtools.require("devtools/shared/profiler/global");
+const { CATEGORY_MASK } = devtools.require("devtools/performance/global");
+const RecordingUtils = devtools.require("devtools/performance/recording-utils");
+
 Services.prefs.setBoolPref(INVERT_PREF, false);
 Services.prefs.setBoolPref(PLATFORM_DATA_PREF, false);
 
-function spawnTest () {
+function* spawnTest() {
   let { panel } = yield initPerformance(SIMPLE_URL);
   let { EVENTS, $, $$, window, PerformanceController } = panel.panelWin;
   let { OverviewView, DetailsView, JITOptimizationsView, JsCallTreeView, RecordingsView } = panel.panelWin;
 
-  let profilerData = { threads: [{samples: gSamples, optimizations: gOpts}] };
+  let profilerData = { threads: [gThread] };
 
-  is(Services.prefs.getBoolPref(JIT_PREF), false, "show JIT Optimizations pref off by default");
+  Services.prefs.setBoolPref(JIT_PREF, true);
 
   // Make two recordings, so we have one to switch to later, as the
   // second one will have fake sample data
@@ -31,7 +33,6 @@ function spawnTest () {
 
   yield injectAndRenderProfilerData();
 
-  Services.prefs.setBoolPref(JIT_PREF, true);
   // Click the frame
   let rendered = once(JITOptimizationsView, EVENTS.OPTIMIZATIONS_RENDERED);
   mousedown(window, $$(".call-tree-item")[2]);
@@ -59,51 +60,102 @@ function spawnTest () {
 
     // Force a rerender
     let rendered = once(JsCallTreeView, EVENTS.JS_CALL_TREE_RENDERED);
-    JsCallTreeView.render();
+    JsCallTreeView.render(OverviewView.getTimeInterval());
     yield rendered;
 
-    Services.prefs.setBoolPref(JIT_PREF, true);
     ok($("#jit-optimizations-view").classList.contains("empty"),
       "JIT Optimizations view has empty message when no frames selected.");
-
-     Services.prefs.setBoolPref(JIT_PREF, false);
   }
 }
 
-let gSamples = [{
-  time: 5,
-  frames: [
-    { location: "(root)" },
-    { location: "A (http://foo/bar/baz:12)", optsIndex: 0 }
-  ]
-}, {
-  time: 5 + 1,
-  frames: [
-    { location: "(root)" },
-    { location: "A (http://foo/bar/baz:12)", optsIndex: 0 },
-    { location: "JS", optsIndex: 1, category: CATEGORY_MASK("js") },
-  ]
-}];
+let gUniqueStacks = new RecordingUtils.UniqueStacks();
 
-// Array of OptimizationSites
-let gOpts = [{
+function uniqStr(s) {
+  return gUniqueStacks.getOrAddStringIndex(s);
+}
+
+let gThread = RecordingUtils.deflateThread({
+  samples: [{
+    time: 0,
+    frames: [
+      { location: "(root)" }
+    ]
+  }, {
+    time: 5,
+    frames: [
+      { location: "(root)" },
+      { location: "A (http://foo/bar/baz:12)" }
+    ]
+  }, {
+    time: 5 + 1,
+    frames: [
+      { location: "(root)" },
+      { location: "A (http://foo/bar/baz:12)" },
+      { location: "JS", category: CATEGORY_MASK("js") },
+    ]
+  }],
+  markers: []
+}, gUniqueStacks);
+
+// 3 RawOptimizationSites
+let gRawSite1 = {
   line: 12,
   column: 2,
-  types: [{ mirType: "Object", site: "A (http://foo/bar/bar:12)", types: [
-    { keyedBy: "constructor", name: "Foo", location: "A (http://foo/bar/baz:12)" },
-    { keyedBy: "primitive", location: "self-hosted" }
-  ]}],
-  attempts: [
-    { outcome: "Failure1", strategy: "SomeGetter1" },
-    { outcome: "Failure2", strategy: "SomeGetter2" },
-    { outcome: "Inlined", strategy: "SomeGetter3" },
-  ]
-}, {
+  types: [{
+    mirType: uniqStr("Object"),
+    site: uniqStr("A (http://foo/bar/bar:12)"),
+    typeset: [{
+        keyedBy: uniqStr("constructor"),
+        name: uniqStr("Foo"),
+        location: uniqStr("A (http://foo/bar/baz:12)")
+    }, {
+        keyedBy: uniqStr("primitive"),
+        location: uniqStr("self-hosted")
+    }]
+  }],
+  attempts: {
+    schema: {
+      outcome: 0,
+      strategy: 1
+    },
+    data: [
+      [uniqStr("Failure1"), uniqStr("SomeGetter1")],
+      [uniqStr("Failure2"), uniqStr("SomeGetter2")],
+      [uniqStr("Inlined"), uniqStr("SomeGetter3")]
+    ]
+  }
+};
+
+let gRawSite2 = {
   line: 22,
-  types: [{ mirType: "Int32", site: "Receiver" }], // use no types
-  attempts: [
-    { outcome: "Failure1", strategy: "SomeGetter1" },
-    { outcome: "Failure2", strategy: "SomeGetter2" },
-    { outcome: "Failure3", strategy: "SomeGetter3" },
-  ]
-}];
+  types: [{
+    mirType: uniqStr("Int32"),
+    site: uniqStr("Receiver")
+  }],
+  attempts: {
+    schema: {
+      outcome: 0,
+      strategy: 1
+    },
+    data: [
+      [uniqStr("Failure1"), uniqStr("SomeGetter1")],
+      [uniqStr("Failure2"), uniqStr("SomeGetter2")],
+      [uniqStr("Failure3"), uniqStr("SomeGetter3")]
+    ]
+  }
+};
+
+gThread.frameTable.data.forEach((frame) => {
+  const LOCATION_SLOT = gThread.frameTable.schema.location;
+  const OPTIMIZATIONS_SLOT = gThread.frameTable.schema.optimizations;
+
+  let l = gThread.stringTable[frame[LOCATION_SLOT]];
+  switch (l) {
+  case "A (http://foo/bar/baz:12)":
+    frame[OPTIMIZATIONS_SLOT] = gRawSite1;
+    break;
+  case "JS":
+    frame[OPTIMIZATIONS_SLOT] = gRawSite2;
+    break;
+  }
+});

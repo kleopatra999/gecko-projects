@@ -8,6 +8,8 @@ processing jar.mn files.
 See the documentation for jar.mn on MDC for further details on the format.
 '''
 
+from __future__ import absolute_import
+
 import sys
 import os
 import errno
@@ -70,7 +72,7 @@ class JarMaker(object):
       '''
 
     ignore = re.compile('\s*(\#.*)?$')
-    jarline = re.compile('(?:(?P<jarfile>[\w\d.\-\_\\\/]+).jar\:)|(?:\s*(\#.*)?)\s*$')
+    jarline = re.compile('(?:(?P<jarfile>[\w\d.\-\_\\\/{}]+).jar\:)|(?:\s*(\#.*)?)\s*$')
     relsrcline = re.compile('relativesrcdir\s+(?P<relativesrcdir>.+?):')
     regline = re.compile('\%\s+(.*)$')
     entryre = '(?P<optPreprocess>\*)?(?P<optOverwrite>\+?)\s+'

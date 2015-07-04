@@ -186,13 +186,6 @@ void nsMenuBarX::ConstructFallbackNativeMenus()
   [quitMenuItem setTarget:nsMenuBarX::sNativeEventTarget];
   [quitMenuItem setTag:eCommand_ID_Quit];
   [sApplicationMenu addItem:quitMenuItem];
-
-  // Add debug logging to help decipher bug 1151345.
-#if !defined(RELEASE_BUILD) || defined(DEBUG)
-  NSLog(@"nsMenuBarX::ConstructFallbackNativeMenus(): labelUTF16 %s, keyUTF16 %s",
-        NS_ConvertUTF16toUTF8(labelUTF16).get(),
-        NS_ConvertUTF16toUTF8(keyUTF16).get());
-#endif
 }
 
 uint32_t nsMenuBarX::GetMenuCount()
@@ -248,7 +241,10 @@ void nsMenuBarX::RemoveMenuAtIndex(uint32_t aIndex)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
-  NS_ASSERTION(aIndex < mMenuArray.Length(), "Attempting submenu removal with bad index!");
+  if (mMenuArray.Length() <= aIndex) {
+    NS_ERROR("Attempting submenu removal with bad index!");
+    return;
+  }
 
   // Our native menu and our internal menu object array might be out of sync.
   // This happens, for example, when a submenu is hidden. Because of this we
@@ -504,6 +500,14 @@ char nsMenuBarX::GetLocalizedAccelKey(const char *shortcutID)
   return retval;
 }
 
+/* static */
+void nsMenuBarX::ResetNativeApplicationMenu()
+{
+  [sApplicationMenu removeAllItems];
+  [sApplicationMenu release];
+  sApplicationMenu = nil;
+}
+
 // Hide the item in the menu by setting the 'hidden' attribute. Returns it in |outHiddenNode| so
 // the caller can hang onto it if they so choose. It is acceptable to pass nsull
 // for |outHiddenNode| if the caller doesn't care about the hidden node.
@@ -559,26 +563,13 @@ NSMenuItem* nsMenuBarX::CreateNativeAppMenuItem(nsMenuX* inMenu, const nsAString
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_NIL;
 
-  // Add debug logging to help decipher bug 1151345.
-#if !defined(RELEASE_BUILD) || defined(DEBUG)
-  NS_ConvertUTF16toUTF8 nodeID_UTF8(nodeID);
-#endif
-
   nsCOMPtr<nsIDocument> doc = inMenu->Content()->GetUncomposedDoc();
   if (!doc) {
-#if !defined(RELEASE_BUILD) || defined(DEBUG)
-    NSLog(@"nsMenuBarX::CreateNativeAppMenuItem(1): nodeID %s, doc is null!",
-          nodeID_UTF8.get());
-#endif
     return nil;
   }
 
   nsCOMPtr<nsIDOMDocument> domdoc(do_QueryInterface(doc));
   if (!domdoc) {
-#if !defined(RELEASE_BUILD) || defined(DEBUG)
-    NSLog(@"nsMenuBarX::CreateNativeAppMenuItem(2): nodeID %s, domdoc is null!",
-          nodeID_UTF8.get());
-#endif
     return nil;
   }
 
@@ -594,10 +585,6 @@ NSMenuItem* nsMenuBarX::CreateNativeAppMenuItem(nsMenuX* inMenu, const nsAString
     menuItem->GetAttribute(NS_LITERAL_STRING("key"), key);
   }
   else {
-#if !defined(RELEASE_BUILD) || defined(DEBUG)
-    NSLog(@"nsMenuBarX::CreateNativeAppMenuItem(3): nodeID %s, menuItem is null!",
-          nodeID_UTF8.get());
-#endif
     return nil;
   }
 
@@ -644,15 +631,6 @@ NSMenuItem* nsMenuBarX::CreateNativeAppMenuItem(nsMenuX* inMenu, const nsAString
   [newMenuItem setRepresentedObject:info];
   [info release];
 
-#if !defined(RELEASE_BUILD) || defined(DEBUG)
-  if (!newMenuItem) {
-    NSLog(@"nsMenuBarX::CreateNativeAppMenuItem(4): nodeID %s, label %s, modifiers %s, key %s, newMenuItem is null!",
-          nodeID_UTF8.get(),
-          NS_ConvertUTF16toUTF8(label).get(),
-          NS_ConvertUTF16toUTF8(modifiers).get(),
-          NS_ConvertUTF16toUTF8(key).get());
-  }
-#endif
   return newMenuItem;
 
   NS_OBJC_END_TRY_ABORT_BLOCK_NIL;

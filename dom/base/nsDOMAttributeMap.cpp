@@ -15,6 +15,7 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/NamedNodeMapBinding.h"
 #include "mozilla/dom/NodeInfoInlines.h"
+#include "mozilla/Telemetry.h"
 #include "nsAttrName.h"
 #include "nsContentUtils.h"
 #include "nsError.h"
@@ -271,6 +272,21 @@ nsDOMAttributeMap::SetNamedItemInternal(Attr& aAttr,
 {
   NS_ENSURE_TRUE(mContent, nullptr);
 
+  if (!aAttr.IsNSAware() &&
+      !mContent->IsHTMLElement() &&
+      aAttr.OwnerDoc()->IsHTMLDocument()) {
+    // Check whether we have a non-lowercase name, and if so log some telemetry.
+    // We check whether the attr's document is HTML _before_ the adopt we do
+    // below, because we're trying to figure out whether we could lowercase the
+    // attr name at creation time.  We restrict this to the !IsNSAware() case,
+    // because we only care about Attr nodes created via createAttribute.
+    nsIAtom* nameAtom = aAttr.NodeInfo()->NameAtom();
+    if (nsContentUtils::StringContainsASCIIUpper(nsDependentAtomString(nameAtom))) {
+        Telemetry::Accumulate(Telemetry::NONLOWERCASE_NONHTML_ATTR_NODE_SET,
+                              true);
+      }
+  }
+
   // XXX should check same-origin between mContent and aAttr however
   // nsContentUtils::CheckSameOrigin can't deal with attributenodes yet
 
@@ -300,50 +316,45 @@ nsDOMAttributeMap::SetNamedItemInternal(Attr& aAttr,
   }
 
   // Get nodeinfo and preexisting attribute (if it exists)
-  nsRefPtr<NodeInfo> oldNi;
-
-  if (!aWithNS) {
-    nsAutoString name;
-    aAttr.GetName(name);
-    oldNi = mContent->GetExistingAttrNameFromQName(name);
-  }
-  else {
-    uint32_t i, count = mContent->GetAttrCount();
-    for (i = 0; i < count; ++i) {
-      const nsAttrName* name = mContent->GetAttrNameAt(i);
-      int32_t attrNS = name->NamespaceID();
-      nsIAtom* nameAtom = name->LocalName();
-
-      // we're purposefully ignoring the prefix.
-      if (aAttr.NodeInfo()->Equals(nameAtom, attrNS)) {
-        oldNi = mContent->NodeInfo()->NodeInfoManager()->
-          GetNodeInfo(nameAtom, name->GetPrefix(), aAttr.NodeInfo()->NamespaceID(),
-                      nsIDOMNode::ATTRIBUTE_NODE);
-        break;
-      }
-    }
-  }
+  nsAutoString name;
+  nsRefPtr<mozilla::dom::NodeInfo> ni;
 
   nsRefPtr<Attr> attr;
+  // SetNamedItemNS()
+  if (aWithNS) {
+    // Return existing attribute, if present
+    ni = aAttr.NodeInfo();
 
-  if (oldNi) {
-    nsRefPtr<Attr> oldAttr = GetAttribute(oldNi, true);
-
-    if (oldAttr == &aAttr) {
-      return oldAttr.forget();
+    if (mContent->HasAttr(ni->NamespaceID(), ni->NameAtom())) {
+      attr = RemoveAttribute(ni);
     }
+  } else { // SetNamedItem()
+    aAttr.GetName(name);
 
-    if (oldAttr) {
-      attr = RemoveNamedItem(oldNi, aError);
-      NS_ASSERTION(attr->NodeInfo()->NameAndNamespaceEquals(oldNi),
-        "RemoveNamedItem() called, attr->NodeInfo() should be equal to oldNi!");
+    // get node-info of old attribute
+    ni = mContent->GetExistingAttrNameFromQName(name);
+    if (ni) {
+      attr = RemoveAttribute(ni);
+    }
+    else {
+      if (mContent->IsInHTMLDocument() &&
+          mContent->IsHTMLElement()) {
+        nsContentUtils::ASCIIToLower(name);
+      }
+
+      rv = mContent->NodeInfo()->NodeInfoManager()->
+        GetNodeInfo(name, nullptr, kNameSpaceID_None,
+                    nsIDOMNode::ATTRIBUTE_NODE, getter_AddRefs(ni));
+      if (NS_FAILED(rv)) {
+        aError.Throw(rv);
+        return nullptr;
+      }
+      // value is already empty
     }
   }
 
   nsAutoString value;
   aAttr.GetValue(value);
-
-  nsRefPtr<NodeInfo> ni = aAttr.NodeInfo();
 
   // Add the new attribute to the attribute map before updating
   // its value in the element. @see bug 364413.
@@ -359,15 +370,6 @@ nsDOMAttributeMap::SetNamedItemInternal(Attr& aAttr,
   }
 
   return attr.forget();
-}
-
-already_AddRefed<Attr>
-nsDOMAttributeMap::RemoveNamedItem(NodeInfo* aNodeInfo, ErrorResult& aError)
-{
-  nsRefPtr<Attr> attribute = GetAttribute(aNodeInfo, true);
-  // This removes the attribute node from the attribute map.
-  aError = mContent->UnsetAttr(aNodeInfo->NamespaceID(), aNodeInfo->NameAtom(), true);
-  return attribute.forget();
 }
 
 NS_IMETHODIMP
@@ -395,7 +397,11 @@ nsDOMAttributeMap::RemoveNamedItem(const nsAString& aName, ErrorResult& aError)
     return nullptr;
   }
 
-  return RemoveNamedItem(ni, aError);
+  nsRefPtr<Attr> attribute = GetAttribute(ni, true);
+
+  // This removes the attribute node from the attribute map.
+  aError = mContent->UnsetAttr(ni->NamespaceID(), ni->NameAtom(), true);
+  return attribute.forget();
 }
 
 
@@ -493,7 +499,6 @@ nsDOMAttributeMap::GetAttrNodeInfo(const nsAString& aNamespaceURI,
     int32_t attrNS = name->NamespaceID();
     nsIAtom* nameAtom = name->LocalName();
 
-    // we're purposefully ignoring the prefix.
     if (nameSpaceID == attrNS &&
         nameAtom->Equals(aLocalName)) {
       nsRefPtr<mozilla::dom::NodeInfo> ni;
@@ -530,7 +535,11 @@ nsDOMAttributeMap::RemoveNamedItemNS(const nsAString& aNamespaceURI,
     return nullptr;
   }
 
-  return RemoveNamedItem(ni, aError);
+  nsRefPtr<Attr> attr = RemoveAttribute(ni);
+  mozilla::dom::NodeInfo* attrNi = attr->NodeInfo();
+  mContent->UnsetAttr(attrNi->NamespaceID(), attrNi->NameAtom(), true);
+
+  return attr.forget();
 }
 
 uint32_t

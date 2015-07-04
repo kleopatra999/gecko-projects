@@ -7,6 +7,7 @@
 #include "nsSocketTransport2.h"
 
 #include "mozilla/Attributes.h"
+#include "mozilla/Telemetry.h"
 #include "nsIOService.h"
 #include "nsStreamUtils.h"
 #include "nsNetSegmentUtils.h"
@@ -22,7 +23,6 @@
 #include "NetworkActivityMonitor.h"
 #include "NSSErrorsService.h"
 #include "mozilla/net/NeckoChild.h"
-#include "mozilla/VisualEventTracer.h"
 #include "nsThreadUtils.h"
 #include "nsISocketProviderService.h"
 #include "nsISocketProvider.h"
@@ -51,6 +51,11 @@
 #include <netinet/tcp.h>
 #endif
 /* End keepalive config inclusions. */
+
+#define SUCCESSFUL_CONNECTING_TO_IPV4_ADDRESS 0
+#define UNSUCCESSFUL_CONNECTING_TO_IPV4_ADDRESS 1
+#define SUCCESSFUL_CONNECTING_TO_IPV6_ADDRESS 2
+#define UNSUCCESSFUL_CONNECTING_TO_IPV6_ADDRESS 3
 
 using namespace mozilla;
 using namespace mozilla::net;
@@ -727,6 +732,7 @@ nsSocketTransport::nsSocketTransport()
     , mTypeCount(0)
     , mPort(0)
     , mProxyPort(0)
+    , mOriginPort(0)
     , mProxyTransparent(false)
     , mProxyTransparentResolvesHost(false)
     , mHttpsProxy(false)
@@ -780,10 +786,9 @@ nsSocketTransport::CleanupTypes()
 nsresult
 nsSocketTransport::Init(const char **types, uint32_t typeCount,
                         const nsACString &host, uint16_t port,
+                        const nsACString &hostRoute, uint16_t portRoute,
                         nsIProxyInfo *givenProxyInfo)
 {
-    MOZ_EVENT_TRACER_NAME_OBJECT(this, host.BeginReading());
-
     nsCOMPtr<nsProxyInfo> proxyInfo;
     if (givenProxyInfo) {
         proxyInfo = do_QueryInterface(givenProxyInfo);
@@ -792,8 +797,15 @@ nsSocketTransport::Init(const char **types, uint32_t typeCount,
 
     // init socket type info
 
-    mPort = port;
-    mHost = host;
+    mOriginHost = host;
+    mOriginPort = port;
+    if (!hostRoute.IsEmpty()) {
+        mHost = hostRoute;
+        mPort = portRoute;
+    } else {
+        mHost = host;
+        mPort = port;
+    }
 
     if (proxyInfo) {
         mHttpsProxy = proxyInfo->IsHTTPS();
@@ -813,8 +825,9 @@ nsSocketTransport::Init(const char **types, uint32_t typeCount,
         }
     }
 
-    SOCKET_LOG(("nsSocketTransport::Init [this=%p host=%s:%hu proxy=%s:%hu]\n",
-        this, mHost.get(), mPort, mProxyHost.get(), mProxyPort));
+    SOCKET_LOG(("nsSocketTransport::Init [this=%p host=%s:%hu origin=%s:%d proxy=%s:%hu]\n",
+                this, mHost.get(), mPort, mOriginHost.get(), mOriginPort,
+                mProxyHost.get(), mProxyPort));
 
     // include proxy type as a socket type if proxy type is not "http"
     mTypeCount = typeCount + (proxyType != nullptr);
@@ -1046,6 +1059,11 @@ nsSocketTransport::ResolveHost()
                  "Setting both RESOLVE_DISABLE_IPV6 and RESOLVE_DISABLE_IPV4");
 
     SendStatus(NS_NET_STATUS_RESOLVING_HOST);
+
+    if (!SocketHost().Equals(mOriginHost)) {
+        SOCKET_LOG(("nsSocketTransport %p origin %s doing dns for %s\n",
+                    this, mOriginHost.get(), SocketHost().get()));
+    }
     rv = dns->AsyncResolveExtended(SocketHost(), dnsFlags, mNetworkInterfaceId, this,
                                    nullptr, getter_AddRefs(mDNSRequest));
     if (NS_SUCCEEDED(rv)) {
@@ -1081,8 +1099,11 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
             do_GetService(kSocketProviderServiceCID, &rv);
         if (NS_FAILED(rv)) return rv;
 
-        const char *host       = mHost.get();
-        int32_t     port       = (int32_t) mPort;
+        // by setting host to mOriginHost, instead of mHost we send the
+        // SocketProvider (e.g. PSM) the origin hostname but can still do DNS
+        // on an explicit alternate service host name
+        const char *host       = mOriginHost.get();
+        int32_t     port       = (int32_t) mOriginPort;
         const char *proxyHost  = mProxyHost.IsEmpty() ? nullptr : mProxyHost.get();
         int32_t     proxyPort  = (int32_t) mProxyPort;
         uint32_t    controlFlags = 0;
@@ -1105,6 +1126,9 @@ nsSocketTransport::BuildSocket(PRFileDesc *&fd, bool &proxyTransparent, bool &us
 
             if (mConnectionFlags & nsISocketTransport::NO_PERMANENT_STORAGE)
                 controlFlags |= nsISocketProvider::NO_PERMANENT_STORAGE;
+
+            if (mConnectionFlags & nsISocketTransport::MITM_OK)
+                controlFlags |= nsISocketProvider::MITM_OK;
 
             nsCOMPtr<nsISupports> secinfo;
             if (i == 0) {
@@ -1196,6 +1220,9 @@ nsSocketTransport::InitiateSocket()
     bool isLocal;
     IsLocal(&isLocal);
 
+    if (gIOService->IsShutdown()) {
+        return NS_ERROR_ABORT;
+    }
     if (gIOService->IsOffline()) {
         if (!isLocal)
             return NS_ERROR_OFFLINE;
@@ -1230,7 +1257,6 @@ nsSocketTransport::InitiateSocket()
     // connected - Bug 853423.
     if (mConnectionFlags & nsISocketTransport::DISABLE_RFC1918 &&
         IsIPAddrLocal(&mNetAddr)) {
-#ifdef PR_LOGGING
         if (SOCKET_LOG_ENABLED()) {
             nsAutoCString netAddrCString;
             netAddrCString.SetCapacity(kIPv6CStrBufSize);
@@ -1244,7 +1270,6 @@ nsSocketTransport::InitiateSocket()
                         mHost.get(), mPort, mProxyHost.get(), mProxyPort,
                         netAddrCString.get()));
         }
-#endif
         mCondition = NS_ERROR_CONNECTION_REFUSED;
         OnSocketDetached(nullptr);
         return mCondition;
@@ -1351,13 +1376,11 @@ nsSocketTransport::InitiateSocket()
     mPollTimeout = mTimeouts[TIMEOUT_CONNECT];
     SendStatus(NS_NET_STATUS_CONNECTING_TO);
 
-#if defined(PR_LOGGING)
     if (SOCKET_LOG_ENABLED()) {
         char buf[kNetAddrMaxCStrBufSize];
         NetAddrToString(&mNetAddr, buf, sizeof(buf));
         SOCKET_LOG(("  trying address: %s\n", buf));
     }
-#endif
 
     //
     // Initiate the connect() to the host...
@@ -1377,7 +1400,6 @@ nsSocketTransport::InitiateSocket()
 
     NetAddrToPRNetAddr(&mNetAddr, &prAddr);
 
-    MOZ_EVENT_TRACER_EXEC(this, "net::tcp::connect");
     status = PR_Connect(fd, &prAddr, NS_SOCKET_CONNECT_TIMEOUT);
     if (status == PR_SUCCESS) {
         // 
@@ -1484,6 +1506,16 @@ nsSocketTransport::RecoverFromError()
         return false;
 
     bool tryAgain = false;
+
+    if (mSocketTransportService->IsTelemetryEnabled()) {
+        if (mNetAddr.raw.family == AF_INET) {
+            Telemetry::Accumulate(Telemetry::IPV4_AND_IPV6_ADDRESS_CONNECTIVITY,
+                                  UNSUCCESSFUL_CONNECTING_TO_IPV4_ADDRESS);
+        } else if (mNetAddr.raw.family == AF_INET6) {
+            Telemetry::Accumulate(Telemetry::IPV4_AND_IPV6_ADDRESS_CONNECTIVITY,
+                                  UNSUCCESSFUL_CONNECTING_TO_IPV6_ADDRESS);
+        }
+    }
 
     if (mConnectionFlags & (DISABLE_IPV6 | DISABLE_IPV4) &&
         mCondition == NS_ERROR_UNKNOWN_HOST &&
@@ -1621,8 +1653,6 @@ nsSocketTransport::OnSocketConnected()
             SOCKET_LOG(("  SetKeepaliveEnabledInternal failed rv[0x%x]", rv));
         }
     }
-
-    MOZ_EVENT_TRACER_DONE(this, "net::tcp::connect");
 
     SendStatus(NS_NET_STATUS_CONNECTED_TO);
 }
@@ -1841,6 +1871,18 @@ nsSocketTransport::OnSocketReady(PRFileDesc *fd, int16_t outFlags)
             // we are connected!
             //
             OnSocketConnected();
+
+            if (mSocketTransportService->IsTelemetryEnabled()) {
+                if (mNetAddr.raw.family == AF_INET) {
+                    Telemetry::Accumulate(
+                        Telemetry::IPV4_AND_IPV6_ADDRESS_CONNECTIVITY,
+                        SUCCESSFUL_CONNECTING_TO_IPV4_ADDRESS);
+                } else if (mNetAddr.raw.family == AF_INET6) {
+                    Telemetry::Accumulate(
+                        Telemetry::IPV4_AND_IPV6_ADDRESS_CONNECTIVITY,
+                        SUCCESSFUL_CONNECTING_TO_IPV6_ADDRESS);
+                }
+            }
         }
         else {
             PRErrorCode code = PR_GetError();
@@ -1905,7 +1947,8 @@ nsSocketTransport::OnSocketDetached(PRFileDesc *fd)
         }
     }
 
-    if (RecoverFromError())
+    // If we are not shutting down try again.
+    if (!gIOService->IsShutdown() && RecoverFromError())
         mCondition = NS_OK;
     else {
         mState = STATE_CLOSED;
@@ -2423,7 +2466,6 @@ nsSocketTransport::OnLookupComplete(nsICancelable *request,
     // flag host lookup complete for the benefit of the ResolveHost method.
     mResolving = false;
 
-    MOZ_EVENT_TRACER_WAIT(this, "net::tcp::connect");
     nsresult rv = PostEvent(MSG_DNS_LOOKUP_COMPLETE, status, rec);
 
     // if posting a message fails, then we should assume that the socket
@@ -2786,7 +2828,7 @@ nsSocketTransport::TraceOutBuf(const char *buf, int32_t n)
 
 static void LogNSPRError(const char* aPrefix, const void *aObjPtr)
 {
-#if defined(PR_LOGGING) && defined(DEBUG)
+#if defined(DEBUG)
     PRErrorCode errCode = PR_GetError();
     int errLen = PR_GetErrorTextLength();
     nsAutoCString errStr;
@@ -2826,7 +2868,7 @@ nsSocketTransport::PRFileDescAutoLock::SetKeepaliveEnabled(bool aEnable)
 
 static void LogOSError(const char *aPrefix, const void *aObjPtr)
 {
-#if defined(PR_LOGGING) && defined(DEBUG)
+#if defined(DEBUG)
     MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread, "wrong thread");
 
 #ifdef XP_WIN
@@ -2904,8 +2946,8 @@ nsSocketTransport::PRFileDescAutoLock::SetKeepaliveVals(bool aEnabled,
     }
     return NS_OK;
 
-#elif defined(XP_MACOSX)
-    // OS X uses sec; only supports idle time being set.
+#elif defined(XP_DARWIN)
+    // Darwin uses sec; only supports idle time being set.
     int err = setsockopt(sock, IPPROTO_TCP, TCP_KEEPALIVE,
                          &aIdleTime, sizeof(aIdleTime));
     if (NS_WARN_IF(err)) {

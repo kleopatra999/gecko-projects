@@ -214,6 +214,12 @@ endif # !GNU_CC
 
 endif # WINNT
 
+ifeq (arm-Darwin,$(CPU_ARCH)-$(OS_TARGET))
+ifdef PROGRAM
+MOZ_PROGRAM_LDFLAGS += -Wl,-rpath -Wl,@executable_path/Frameworks
+endif
+endif
+
 ifeq ($(SOLARIS_SUNPRO_CXX),1)
 ifeq (86,$(findstring 86,$(OS_TEST)))
 OS_LDFLAGS += -M $(MOZILLA_DIR)/config/solaris_ia32.map
@@ -244,8 +250,9 @@ CPPOBJS = $(notdir $(addsuffix .$(OBJ_SUFFIX),$(basename $(CPPSRCS))))
 CMOBJS = $(notdir $(CMSRCS:.m=.$(OBJ_SUFFIX)))
 CMMOBJS = $(notdir $(CMMSRCS:.mm=.$(OBJ_SUFFIX)))
 ASOBJS = $(notdir $(ASFILES:.$(ASM_SUFFIX)=.$(OBJ_SUFFIX)))
+RSOBJS = $(addprefix lib,$(notdir $(RSSRCS:.rs=.$(LIB_SUFFIX))))
 ifndef OBJS
-_OBJS = $(COBJS) $(SOBJS) $(CPPOBJS) $(CMOBJS) $(CMMOBJS) $(ASOBJS)
+_OBJS = $(COBJS) $(SOBJS) $(CPPOBJS) $(CMOBJS) $(CMMOBJS) $(ASOBJS) $(RSOBJS)
 OBJS = $(strip $(_OBJS))
 endif
 
@@ -389,7 +396,12 @@ ifdef SHARED_LIBRARY
 ifdef IS_COMPONENT
 EXTRA_DSO_LDOPTS	+= -bundle
 else
-EXTRA_DSO_LDOPTS	+= -dynamiclib -install_name @executable_path/$(SHARED_LIBRARY) -compatibility_version 1 -current_version 1 -single_module
+ifdef MOZ_IOS
+_LOADER_PATH := @rpath
+else
+_LOADER_PATH := @executable_path
+endif
+EXTRA_DSO_LDOPTS	+= -dynamiclib -install_name $(_LOADER_PATH)/$(SHARED_LIBRARY) -compatibility_version 1 -current_version 1 -single_module
 endif
 endif
 endif
@@ -876,6 +888,11 @@ $(basename $2$(notdir $1)).$(OBJ_SUFFIX): $1 $$(call mkdir_deps,$$(MDDEPDIR))
 endef
 $(foreach f,$(CSRCS) $(SSRCS) $(CPPSRCS) $(CMSRCS) $(CMMSRCS) $(ASFILES),$(eval $(call src_objdep,$(f))))
 $(foreach f,$(HOST_CSRCS) $(HOST_CPPSRCS) $(HOST_CMSRCS) $(HOST_CMMSRCS),$(eval $(call src_objdep,$(f),host_)))
+# The rust compiler only outputs library objects, and so we need different
+# mangling to generate dependency rules for it.
+mk_libname = $(basename lib$(notdir $1)).$(LIB_SUFFIX)
+src_libdep = $(call mk_libname,$1): $1 $$(call mkdir_deps,$$(MDDEPDIR))
+$(foreach f,$(RSSRCS),$(eval $(call src_libdep,$(f))))
 
 $(OBJS) $(HOST_OBJS) $(PROGOBJS) $(HOST_PROGOBJS): $(GLOBAL_DEPS)
 
@@ -922,6 +939,14 @@ ifdef ASFILES
 $(ASOBJS):
 	$(REPORT_BUILD)
 	$(AS) $(ASOUTOPTION)$@ $(ASFLAGS) $($(notdir $<)_FLAGS) $(AS_DASH_C_FLAG) $(_VPATH_SRCS)
+endif
+
+ifdef MOZ_RUST
+# Assume any system libraries rustc links against are already
+# in the target's LIBS.
+$(RSOBJS):
+	$(REPORT_BUILD)
+	$(RUSTC) --crate-type staticlib -o $(call mk_libname,$<) $(_VPATH_SRCS)
 endif
 
 $(SOBJS):
@@ -1154,21 +1179,6 @@ endif
 endif
 
 ################################################################################
-# Install a linked .xpt into the appropriate place.
-# This should ideally be performed by the non-recursive idl make file. Some day.
-ifdef XPT_NAME #{
-
-ifndef NO_DIST_INSTALL
-ifndef NO_INTERFACES_MANIFEST
-export:: $(call mkdir_deps,$(FINAL_TARGET)/components)
-	$(call py_action,buildlist,$(FINAL_TARGET)/components/interfaces.manifest 'interfaces $(XPT_NAME)')
-	$(call py_action,buildlist,$(FINAL_TARGET)/chrome.manifest 'manifest components/interfaces.manifest')
-endif
-endif
-
-endif #} XPT_NAME
-
-################################################################################
 # Copy each element of EXTRA_COMPONENTS to $(FINAL_TARGET)/components
 ifdef EXTRA_COMPONENTS
 misc:: $(EXTRA_COMPONENTS)
@@ -1268,7 +1278,7 @@ ifneq ($(DIST_FILES),)
 DIST_FILES_PATH := $(FINAL_TARGET)
 # We preprocess these, but they don't necessarily have preprocessor directives,
 # so tell them preprocessor to not complain about that.
-DIST_FILES_FLAGS := $(XULAPP_DEFINES) --silence-missing-directive-warnings
+DIST_FILES_FLAGS := --silence-missing-directive-warnings
 PP_TARGETS += DIST_FILES
 endif
 
@@ -1306,7 +1316,7 @@ ifndef MOZ_DEBUG
 endif
 endif
 	@echo 'Packaging $(XPI_PKGNAME).xpi...'
-	cd $(FINAL_TARGET) && $(ZIP) -qr ../$(XPI_PKGNAME).xpi *
+	$(call py_action,zip,-C $(FINAL_TARGET) ../$(XPI_PKGNAME).xpi '*')
 endif
 
 # See comment above about moving this out of the tools tier.

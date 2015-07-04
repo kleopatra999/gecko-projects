@@ -15,6 +15,11 @@ typedef
 
 typedef
   BluetoothHALInterfaceRunnable1<BluetoothGattClientResultHandler, void,
+                                 BluetoothTypeOfDevice, BluetoothTypeOfDevice>
+  BluetoothGattClientGetDeviceTypeHALResultRunnable;
+
+typedef
+  BluetoothHALInterfaceRunnable1<BluetoothGattClientResultHandler, void,
                                  BluetoothStatus, BluetoothStatus>
   BluetoothGattClientHALErrorRunnable;
 
@@ -42,6 +47,35 @@ DispatchBluetoothGattClientHALResult(
   } else {
     runnable = new BluetoothGattClientHALErrorRunnable(aRes,
       &BluetoothGattClientResultHandler::OnError, aStatus);
+  }
+  nsresult rv = NS_DispatchToMainThread(runnable);
+  if (NS_FAILED(rv)) {
+    BT_WARNING("NS_DispatchToMainThread failed: %X", rv);
+  }
+  return rv;
+}
+
+template <typename ResultRunnable, typename Tin1, typename Arg1>
+static nsresult
+DispatchBluetoothGattClientHALResult(
+  BluetoothGattClientResultHandler* aRes,
+  void (BluetoothGattClientResultHandler::*aMethod)(Arg1),
+  Tin1 aArg1,
+  BluetoothStatus aStatus)
+{
+  MOZ_ASSERT(aRes);
+
+  nsRunnable* runnable;
+  Arg1 arg1;
+
+  if (aStatus != STATUS_SUCCESS) {
+    runnable = new BluetoothGattClientHALErrorRunnable(aRes,
+      &BluetoothGattClientResultHandler::OnError, aStatus);
+  } else if (NS_FAILED(Convert(aArg1, arg1))) {
+    runnable = new BluetoothGattClientHALErrorRunnable(aRes,
+      &BluetoothGattClientResultHandler::OnError, STATUS_PARM_INVALID);
+  } else {
+    runnable = new ResultRunnable(aRes, aMethod, arg1);
   }
   nsresult rv = NS_DispatchToMainThread(runnable);
   if (NS_FAILED(rv)) {
@@ -1007,22 +1041,23 @@ void
 BluetoothGattClientHALInterface::GetDeviceType(
   const nsAString& aBdAddr, BluetoothGattClientResultHandler* aRes)
 {
-  int status;
+  int status = BT_STATUS_FAIL;
+  bt_device_type_t type = BT_DEVICE_DEVTYPE_BLE;
 #if ANDROID_VERSION >= 19
   bt_bdaddr_t bdAddr;
 
   if (NS_SUCCEEDED(Convert(aBdAddr, bdAddr))) {
-    status = mInterface->get_device_type(&bdAddr);
-  } else {
-    status = BT_STATUS_PARM_INVALID;
+    status = BT_STATUS_SUCCESS;
+    type = static_cast<bt_device_type_t>(mInterface->get_device_type(&bdAddr));
   }
 #else
   status = BT_STATUS_UNSUPPORTED;
 #endif
 
   if (aRes) {
-    DispatchBluetoothGattClientHALResult(
-      aRes, &BluetoothGattClientResultHandler::GetDeviceType,
+    DispatchBluetoothGattClientHALResult<
+      BluetoothGattClientGetDeviceTypeHALResultRunnable>(
+      aRes, &BluetoothGattClientResultHandler::GetDeviceType, type,
       ConvertDefault(status, STATUS_FAIL));
   }
 }
@@ -1031,44 +1066,22 @@ void
 BluetoothGattClientHALInterface::SetAdvData(
   int aServerIf, bool aIsScanRsp, bool aIsNameIncluded,
   bool aIsTxPowerIncluded, int aMinInterval, int aMaxInterval, int aApperance,
-  uint8_t aManufacturerLen, const ArrayBuffer& aManufacturerData,
-  uint8_t aServiceDataLen, const ArrayBuffer& aServiceData,
-  uint8_t aServiceUUIDLen, const ArrayBuffer& aServiceUUID,
+  uint16_t aManufacturerLen, char* aManufacturerData,
+  uint16_t aServiceDataLen, char* aServiceData,
+  uint16_t aServiceUUIDLen, char* aServiceUUID,
   BluetoothGattClientResultHandler* aRes)
 {
-  /* FIXME: This method allocates a large amount of memory on the
-   * stack. It should be rewritten to prevent the pending stack
-   * overflow. Additionally |ArrayBuffer| seems like the wrong data
-   * type here. Why not use plain pointers instead?
-   */
-
   bt_status_t status;
 #if ANDROID_VERSION >= 21
-  char manufacturerData[aManufacturerLen + 1];
-  char serviceData[aServiceDataLen + 1];
-  char serviceUUID[aServiceUUIDLen + 1];
-
-  if (NS_SUCCEEDED(Convert(aManufacturerData, manufacturerData)) ||
-      NS_SUCCEEDED(Convert(aServiceData, serviceData)) ||
-      NS_SUCCEEDED(Convert(aServiceUUID, serviceUUID))) {
-    status = mInterface->set_adv_data(
-      aServerIf, aIsScanRsp, aIsNameIncluded, aIsTxPowerIncluded,
-      aMinInterval, aMaxInterval, aApperance,
-      aManufacturerLen, manufacturerData,
-      aServiceDataLen, serviceData, aServiceUUIDLen, serviceUUID);
-  } else {
-    status = BT_STATUS_PARM_INVALID;
-  }
+  status = mInterface->set_adv_data(
+    aServerIf, aIsScanRsp, aIsNameIncluded, aIsTxPowerIncluded,
+    aMinInterval, aMaxInterval, aApperance,
+    aManufacturerLen, aManufacturerData,
+    aServiceDataLen, aServiceData, aServiceUUIDLen, aServiceUUID);
 #elif ANDROID_VERSION >= 19
-  char value[aManufacturerLen + 1];
-
-  if (NS_SUCCEEDED(Convert(aManufacturerData, value))) {
-    status = mInterface->set_adv_data(
-      aServerIf, aIsScanRsp, aIsNameIncluded, aIsTxPowerIncluded, aMinInterval,
-      aMaxInterval, aApperance, aManufacturerLen, value);
-  } else {
-    status = BT_STATUS_PARM_INVALID;
-  }
+  status = mInterface->set_adv_data(
+    aServerIf, aIsScanRsp, aIsNameIncluded, aIsTxPowerIncluded, aMinInterval,
+    aMaxInterval, aApperance, aManufacturerLen, aManufacturerData);
 #else
   status = BT_STATUS_UNSUPPORTED;
 #endif
@@ -1078,6 +1091,32 @@ BluetoothGattClientHALInterface::SetAdvData(
       aRes, &BluetoothGattClientResultHandler::SetAdvData,
       ConvertDefault(status, STATUS_FAIL));
   }
+}
+
+void
+BluetoothGattClientHALInterface::TestCommand(
+  int aCommand, const BluetoothGattTestParam& aTestParam,
+  BluetoothGattClientResultHandler* aRes)
+{
+  bt_status_t status;
+#if ANDROID_VERSION >= 19
+  btgatt_test_params_t testParam;
+
+  if (NS_SUCCEEDED(Convert(aTestParam, testParam))) {
+    status = mInterface->test_command(aCommand, &testParam);
+  } else {
+    status = BT_STATUS_PARM_INVALID;
+  }
+#else
+  status = BT_STATUS_UNSUPPORTED;
+#endif
+
+  if (aRes) {
+    DispatchBluetoothGattClientHALResult(
+      aRes, &BluetoothGattClientResultHandler::TestCommand,
+      ConvertDefault(status, STATUS_FAIL));
+  }
+
 }
 
 // TODO: Add GATT Server Interface

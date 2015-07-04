@@ -18,8 +18,7 @@
 #include "nsCRT.h"
 #include <math.h>
 #include "nsHashKeys.h"
-#include "nsStackWalkPrivate.h"
-#include "nsStackWalk.h"
+#include "mozilla/StackWalk.h"
 #include "nsString.h"
 #include "nsThreadUtils.h"
 #include "CodeAddressService.h"
@@ -238,7 +237,7 @@ struct CodeAddressServiceStringAlloc final
   static void free(char* aPtr) { ::free(aPtr); }
 };
 
-// WalkTheStack does not hold any locks needed by NS_DescribeCodeAddress, so
+// WalkTheStack does not hold any locks needed by MozDescribeCodeAddress, so
 // this class does not need to do anything.
 struct CodeAddressServiceLock final
 {
@@ -425,9 +424,17 @@ GetBloatEntry(const char* aTypeName, uint32_t aInstanceSize)
         entry = nullptr;
       }
     } else {
+#ifdef DEBUG
+      static const char kMismatchedSizesMessage[] =
+        "Mismatched sizes were recorded in the memory leak logging table. "
+        "The usual cause of this is having a templated class that uses "
+        "MOZ_COUNT_{C,D}TOR in the constructor or destructor, respectively. "
+        "As a workaround, the MOZ_COUNT_{C,D}TOR calls can be moved to a "
+        "non-templated base class.";
       NS_ASSERTION(aInstanceSize == 0 ||
                    entry->GetClassSize() == aInstanceSize,
-                   "bad size recorded");
+                   kMismatchedSizesMessage);
+#endif
     }
   }
   return entry;
@@ -837,11 +844,11 @@ static void
 PrintStackFrame(uint32_t aFrameNumber, void* aPC, void* aSP, void* aClosure)
 {
   FILE* stream = (FILE*)aClosure;
-  nsCodeAddressDetails details;
+  MozCodeAddressDetails details;
   char buf[1024];
 
-  NS_DescribeCodeAddress(aPC, &details);
-  NS_FormatCodeAddressDetails(buf, sizeof(buf), aFrameNumber, aPC, &details);
+  MozDescribeCodeAddress(aPC, &details);
+  MozFormatCodeAddressDetails(buf, sizeof(buf), aFrameNumber, aPC, &details);
   fprintf(stream, "%s\n", buf);
   fflush(stream);
 }
@@ -865,7 +872,7 @@ void
 nsTraceRefcnt::WalkTheStack(FILE* aStream)
 {
 #ifdef MOZ_STACKWALKING
-  NS_StackWalk(PrintStackFrame, /* skipFrames */ 2, /* maxFrames */ 0, aStream,
+  MozStackWalk(PrintStackFrame, /* skipFrames */ 2, /* maxFrames */ 0, aStream,
                0, nullptr);
 #endif
 }
@@ -877,7 +884,7 @@ nsTraceRefcnt::WalkTheStackCached(FILE* aStream)
   if (!gCodeAddressService) {
     gCodeAddressService = new WalkTheStackCodeAddressService();
   }
-  NS_StackWalk(PrintStackFrameCached, /* skipFrames */ 2, /* maxFrames */ 0,
+  MozStackWalk(PrintStackFrameCached, /* skipFrames */ 2, /* maxFrames */ 0,
                aStream, 0, nullptr);
 #endif
 }
@@ -1022,7 +1029,7 @@ NS_LogAddRef(void* aPtr, nsrefcnt aRefcnt,
     }
 
     if (gRefcntsLog && loggingThisType && loggingThisObject) {
-      // Can't use PR_LOG(), b/c it truncates the line
+      // Can't use MOZ_LOG(), b/c it truncates the line
       fprintf(gRefcntsLog, "\n<%s> %p %" PRIuPTR " AddRef %" PRIuPTR "\n",
               aClass, aPtr, serialno, aRefcnt);
       nsTraceRefcnt::WalkTheStackCached(gRefcntsLog);
@@ -1069,7 +1076,7 @@ NS_LogRelease(void* aPtr, nsrefcnt aRefcnt, const char* aClass)
 
     bool loggingThisObject = (!gObjectsToLog || LogThisObj(serialno));
     if (gRefcntsLog && loggingThisType && loggingThisObject) {
-      // Can't use PR_LOG(), b/c it truncates the line
+      // Can't use MOZ_LOG(), b/c it truncates the line
       fprintf(gRefcntsLog,
               "\n<%s> %p %" PRIuPTR " Release %" PRIuPTR "\n",
               aClass, aPtr, serialno, aRefcnt);

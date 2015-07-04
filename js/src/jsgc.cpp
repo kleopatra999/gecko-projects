@@ -1068,7 +1068,7 @@ GCRuntime::allocateArena(Chunk* chunk, Zone* zone, AllocKind thingKind, const Au
     MOZ_ASSERT(chunk->hasAvailableArenas());
 
     // Fail the allocation if we are over our heap size limits.
-    if (!isHeapMinorCollecting() &&
+    if (!rt->isHeapMinorCollecting() &&
         !isHeapCompacting() &&
         usage.gcBytes() >= tunables.gcMaxBytes())
     {
@@ -1079,7 +1079,7 @@ GCRuntime::allocateArena(Chunk* chunk, Zone* zone, AllocKind thingKind, const Au
     zone->usage.addGCArena();
 
     // Trigger an incremental slice if needed.
-    if (!isHeapMinorCollecting() && !isHeapCompacting())
+    if (!rt->isHeapMinorCollecting() && !isHeapCompacting())
         maybeAllocTriggerZoneGC(zone, lock);
 
     return aheader;
@@ -1152,7 +1152,6 @@ GCRuntime::GCRuntime(JSRuntime* rt) :
     manipulatingDeadZones(false),
     objectsMarkedInDeadZones(0),
     poked(false),
-    heapState(Idle),
 #ifdef JS_GC_ZEAL
     zealMode(0),
     zealFrequency(0),
@@ -1334,6 +1333,7 @@ GCRuntime::finish()
 
     /* Delete all remaining zones. */
     if (rt->gcInitialized) {
+        AutoSetThreadIsSweeping threadIsSweeping;
         for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next()) {
             for (CompartmentsInZoneIter comp(zone); !comp.done(); comp.next())
                 js_delete(comp.get());
@@ -1530,7 +1530,7 @@ GCRuntime::getParameter(JSGCParamKey key, const AutoLockGC& lock)
 void
 GCRuntime::setMarkStackLimit(size_t limit)
 {
-    MOZ_ASSERT(!isHeapBusy());
+    MOZ_ASSERT(!rt->isHeapBusy());
     AutoStopVerifyingBarriers pauseVerification(rt, false);
     marker.setMaxCapacity(limit);
 }
@@ -1872,9 +1872,9 @@ AutoDisableCompactingGC::~AutoDisableCompactingGC()
 }
 
 static bool
-CanRelocateZone(JSRuntime* rt, Zone* zone)
+CanRelocateZone(Zone* zone)
 {
-    return !rt->isAtomsZone(zone) && !rt->isSelfHostingZone(zone);
+    return !zone->isAtomsZone() && !zone->isSelfHostingZone();
 }
 
 static bool
@@ -2127,7 +2127,7 @@ ArenaLists::relocateArenas(ArenaHeader*& relocatedListOut, JS::gcreason::Reason 
     // This is only called from the main thread while we are doing a GC, so
     // there is no need to lock.
     MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime_));
-    MOZ_ASSERT(runtime_->isHeapCompacting());
+    MOZ_ASSERT(runtime_->gc.isHeapCompacting());
     MOZ_ASSERT(!runtime_->gc.isBackgroundSweeping());
 
     // Flush all the freeLists back into the arena headers
@@ -2182,7 +2182,7 @@ GCRuntime::relocateArenas(Zone* zone, JS::gcreason::Reason reason, SliceBudget& 
     gcstats::AutoPhase ap(stats, gcstats::PHASE_COMPACT_MOVE);
 
     MOZ_ASSERT(!zone->isPreservingCode());
-    MOZ_ASSERT(CanRelocateZone(rt, zone));
+    MOZ_ASSERT(CanRelocateZone(zone));
 
     jit::StopAllOffThreadCompilations(zone);
 
@@ -2207,21 +2207,11 @@ GCRuntime::relocateArenas(Zone* zone, JS::gcreason::Reason reason, SliceBudget& 
     return true;
 }
 
-
 void
-MovingTracer::Visit(JS::CallbackTracer* jstrc, void** thingp, JSGCTraceKind kind)
+MovingTracer::onObjectEdge(JSObject** objp)
 {
-    TenuredCell* thing = TenuredCell::fromPointer(*thingp);
-
-    // Currently we only relocate objects.
-    if (kind != JSTRACE_OBJECT) {
-        MOZ_ASSERT(!RelocationOverlay::isCellForwarded(thing));
-        return;
-    }
-
-    JSObject* obj = reinterpret_cast<JSObject*>(thing);
-    if (IsForwarded(obj))
-        *thingp = Forwarded(obj);
+    if (IsForwarded(*objp))
+        *objp = Forwarded(*objp);
 }
 
 void
@@ -2272,7 +2262,7 @@ GCRuntime::sweepZoneAfterCompacting(Zone* zone)
 
 template <typename T>
 static void
-UpdateCellPointersTyped(MovingTracer* trc, ArenaHeader* arena, JSGCTraceKind traceKind)
+UpdateCellPointersTyped(MovingTracer* trc, ArenaHeader* arena, JS::TraceKind traceKind)
 {
     for (ArenaCellIterUnderGC i(arena); !i.done(); i.next()) {
         T* cell = reinterpret_cast<T*>(i.getCell());
@@ -2288,7 +2278,7 @@ static void
 UpdateCellPointers(MovingTracer* trc, ArenaHeader* arena)
 {
     AllocKind kind = arena->getAllocKind();
-    JSGCTraceKind traceKind = MapAllocToTraceKind(kind);
+    JS::TraceKind traceKind = MapAllocToTraceKind(kind);
 
     switch (kind) {
       case AllocKind::FUNCTION:
@@ -3006,7 +2996,7 @@ SliceBudget::describe(char* buffer, size_t maxlen) const
 {
     if (isUnlimited())
         return JS_snprintf(buffer, maxlen, "unlimited");
-    else if (deadline == 0)
+    else if (isWorkBudget())
         return JS_snprintf(buffer, maxlen, "work(%lld)", workBudget.budget);
     else
         return JS_snprintf(buffer, maxlen, "%lldms", timeBudget.budget);
@@ -3104,7 +3094,7 @@ GCRuntime::triggerZoneGC(Zone* zone, JS::gcreason::Reason reason)
 {
     /* Zones in use by a thread with an exclusive context can't be collected. */
     if (!CurrentThreadCanAccessRuntime(rt)) {
-        MOZ_ASSERT(zone->usedByExclusiveThread || rt->isAtomsZone(zone));
+        MOZ_ASSERT(zone->usedByExclusiveThread || zone->isAtomsZone());
         return false;
     }
 
@@ -3119,7 +3109,7 @@ GCRuntime::triggerZoneGC(Zone* zone, JS::gcreason::Reason reason)
     }
 #endif
 
-    if (rt->isAtomsZone(zone)) {
+    if (zone->isAtomsZone()) {
         /* We can't do a zone GC of the atoms compartment. */
         if (rt->keepAtoms()) {
             /* Skip GC and retrigger later, since atoms zone won't be collected
@@ -3450,7 +3440,7 @@ GCRuntime::queueZonesForBackgroundSweep(ZoneList& zones)
 void
 GCRuntime::freeUnusedLifoBlocksAfterSweeping(LifoAlloc* lifo)
 {
-    MOZ_ASSERT(isHeapBusy());
+    MOZ_ASSERT(rt->isHeapBusy());
     AutoLockGC lock(rt);
     freeLifoAlloc.transferUnusedFrom(lifo);
 }
@@ -3458,7 +3448,7 @@ GCRuntime::freeUnusedLifoBlocksAfterSweeping(LifoAlloc* lifo)
 void
 GCRuntime::freeAllLifoBlocksAfterSweeping(LifoAlloc* lifo)
 {
-    MOZ_ASSERT(isHeapBusy());
+    MOZ_ASSERT(rt->isHeapBusy());
     AutoLockGC lock(rt);
     freeLifoAlloc.transferFrom(lifo);
 }
@@ -3610,7 +3600,7 @@ GCRuntime::sweepZones(FreeOp* fop, bool destroyingRuntime)
     Zone** end = zones.end();
     Zone** write = read;
     MOZ_ASSERT(zones.length() >= 1);
-    MOZ_ASSERT(rt->isAtomsZone(zones[0]));
+    MOZ_ASSERT(zones[0]->isAtomsZone());
 
     while (read < end) {
         Zone* zone = *read++;
@@ -3679,23 +3669,25 @@ GCRuntime::shouldPreserveJITCode(JSCompartment* comp, int64_t currentTime,
 #ifdef DEBUG
 class CompartmentCheckTracer : public JS::CallbackTracer
 {
+    void onChild(const JS::GCCellPtr& thing) override;
+
   public:
-    CompartmentCheckTracer(JSRuntime* rt, JSTraceCallback callback)
-      : JS::CallbackTracer(rt, callback)
+    explicit CompartmentCheckTracer(JSRuntime* rt)
+      : JS::CallbackTracer(rt), src(nullptr), zone(nullptr), compartment(nullptr)
     {}
 
     Cell* src;
-    JSGCTraceKind srcKind;
+    JS::TraceKind srcKind;
     Zone* zone;
     JSCompartment* compartment;
 };
 
 static bool
-InCrossCompartmentMap(JSObject* src, Cell* dst, JSGCTraceKind dstKind)
+InCrossCompartmentMap(JSObject* src, Cell* dst, JS::TraceKind dstKind)
 {
     JSCompartment* srccomp = src->compartment();
 
-    if (dstKind == JSTRACE_OBJECT) {
+    if (dstKind == JS::TraceKind::Object) {
         Value key = ObjectValue(*static_cast<JSObject*>(dst));
         if (WrapperMap::Ptr p = srccomp->lookupWrapper(key)) {
             if (*p->value().unsafeGet() == ObjectValue(*src))
@@ -3715,43 +3707,22 @@ InCrossCompartmentMap(JSObject* src, Cell* dst, JSGCTraceKind dstKind)
     return false;
 }
 
-static void
-CheckCompartment(CompartmentCheckTracer* trc, JSCompartment* thingCompartment,
-                 Cell* thing, JSGCTraceKind kind)
-{
-    MOZ_ASSERT(thingCompartment == trc->compartment ||
-               trc->runtime()->isAtomsCompartment(thingCompartment) ||
-               (trc->srcKind == JSTRACE_OBJECT &&
-                InCrossCompartmentMap((JSObject*)trc->src, thing, kind)));
-}
+struct MaybeCompartmentFunctor {
+    template <typename T> JSCompartment* operator()(T* t) { return t->maybeCompartment(); }
+};
 
-static JSCompartment*
-CompartmentOfCell(Cell* thing, JSGCTraceKind kind)
+void
+CompartmentCheckTracer::onChild(const JS::GCCellPtr& thing)
 {
-    if (kind == JSTRACE_OBJECT)
-        return static_cast<JSObject*>(thing)->compartment();
-    else if (kind == JSTRACE_SHAPE)
-        return static_cast<Shape*>(thing)->compartment();
-    else if (kind == JSTRACE_BASE_SHAPE)
-        return static_cast<BaseShape*>(thing)->compartment();
-    else if (kind == JSTRACE_SCRIPT)
-        return static_cast<JSScript*>(thing)->compartment();
-    else
-        return nullptr;
-}
+    TenuredCell* tenured = TenuredCell::fromPointer(thing.asCell());
 
-static void
-CheckCompartmentCallback(JS::CallbackTracer* trcArg, void** thingp, JSGCTraceKind kind)
-{
-    CompartmentCheckTracer* trc = static_cast<CompartmentCheckTracer*>(trcArg);
-    TenuredCell* thing = TenuredCell::fromPointer(*thingp);
-
-    JSCompartment* comp = CompartmentOfCell(thing, kind);
-    if (comp && trc->compartment) {
-        CheckCompartment(trc, comp, thing, kind);
+    JSCompartment* comp = CallTyped(MaybeCompartmentFunctor(), tenured, thing.kind());
+    if (comp && compartment) {
+        MOZ_ASSERT(comp == compartment || runtime()->isAtomsCompartment(comp) ||
+                   (srcKind == JS::TraceKind::Object &&
+                    InCrossCompartmentMap(static_cast<JSObject*>(src), tenured, thing.kind())));
     } else {
-        MOZ_ASSERT(thing->zone() == trc->zone ||
-                   trc->runtime()->isAtomsZone(thing->zone()));
+        MOZ_ASSERT(tenured->zone() == zone || tenured->zone()->isAtomsZone());
     }
 }
 
@@ -3761,14 +3732,14 @@ GCRuntime::checkForCompartmentMismatches()
     if (disableStrictProxyCheckingCount)
         return;
 
-    CompartmentCheckTracer trc(rt, CheckCompartmentCallback);
+    CompartmentCheckTracer trc(rt);
     for (ZonesIter zone(rt, SkipAtoms); !zone.done(); zone.next()) {
         trc.zone = zone;
         for (auto thingKind : AllAllocKinds()) {
             for (ZoneCellIterUnderGC i(zone, thingKind); !i.done(); i.next()) {
                 trc.src = i.getCell();
                 trc.srcKind = MapAllocToTraceKind(thingKind);
-                trc.compartment = CompartmentOfCell(trc.src, trc.srcKind);
+                trc.compartment = CallTyped(MaybeCompartmentFunctor(), trc.src, trc.srcKind);
                 JS_TraceChildren(&trc, trc.src, trc.srcKind);
             }
         }
@@ -3816,7 +3787,7 @@ GCRuntime::beginMarkPhase(JS::gcreason::Reason reason)
 
         /* Set up which zones will be collected. */
         if (zone->isGCScheduled()) {
-            if (!rt->isAtomsZone(zone)) {
+            if (!zone->isAtomsZone()) {
                 any = true;
                 zone->setGCState(Zone::Mark);
             }
@@ -4079,6 +4050,25 @@ GCRuntime::markAllGrayReferences(gcstats::Phase phase)
 
 #ifdef DEBUG
 
+struct GCChunkHasher {
+    typedef gc::Chunk* Lookup;
+
+    /*
+     * Strip zeros for better distribution after multiplying by the golden
+     * ratio.
+     */
+    static HashNumber hash(gc::Chunk* chunk) {
+        MOZ_ASSERT(!(uintptr_t(chunk) & gc::ChunkMask));
+        return HashNumber(uintptr_t(chunk) >> gc::ChunkShift);
+    }
+
+    static bool match(gc::Chunk* k, gc::Chunk* l) {
+        MOZ_ASSERT(!(uintptr_t(k) & gc::ChunkMask));
+        MOZ_ASSERT(!(uintptr_t(l) & gc::ChunkMask));
+        return k == l;
+    }
+};
+
 class js::gc::MarkingValidator
 {
   public:
@@ -4320,17 +4310,6 @@ GCRuntime::finishMarkingValidation()
 }
 
 static void
-AssertNeedsBarrierFlagsConsistent(JSRuntime* rt)
-{
-#ifdef JS_GC_MARKING_VALIDATION
-    bool anyNeedsBarrier = false;
-    for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next())
-        anyNeedsBarrier |= zone->needsIncrementalBarrier();
-    MOZ_ASSERT(rt->needsIncrementalBarrier() == anyNeedsBarrier);
-#endif
-}
-
-static void
 DropStringWrappers(JSRuntime* rt)
 {
     /*
@@ -4493,8 +4472,6 @@ GCRuntime::getNextZoneGroup()
             zone->setGCState(Zone::NoGC);
             zone->gcGrayRoots.clearAndFree();
         }
-        rt->setNeedsIncrementalBarrier(false);
-        AssertNeedsBarrierFlagsConsistent(rt);
 
         for (GCCompartmentGroupIter comp(rt); !comp.done(); comp.next())
             ResetGrayList(comp);
@@ -4893,7 +4870,7 @@ GCRuntime::beginSweepingZoneGroup()
         /* Purge the ArenaLists before sweeping. */
         zone->arenas.purge();
 
-        if (rt->isAtomsZone(zone))
+        if (zone->isAtomsZone())
             sweepingAtoms = true;
 
         if (rt->sweepZoneCallback)
@@ -5431,7 +5408,7 @@ GCRuntime::beginCompactPhase()
 
     MOZ_ASSERT(zonesToMaybeCompact.isEmpty());
     for (GCZonesIter zone(rt); !zone.done(); zone.next()) {
-        if (CanRelocateZone(rt, zone))
+        if (CanRelocateZone(zone))
             zonesToMaybeCompact.append(zone);
     }
 
@@ -5532,15 +5509,15 @@ GCRuntime::finishCollection(JS::gcreason::Reason reason)
 }
 
 /* Start a new heap session. */
-AutoTraceSession::AutoTraceSession(JSRuntime* rt, js::HeapState heapState)
+AutoTraceSession::AutoTraceSession(JSRuntime* rt, JS::HeapState heapState)
   : lock(rt),
     runtime(rt),
-    prevState(rt->gc.heapState)
+    prevState(rt->heapState_)
 {
     MOZ_ASSERT(rt->gc.isAllocAllowed());
-    MOZ_ASSERT(rt->gc.heapState == Idle);
-    MOZ_ASSERT(heapState != Idle);
-    MOZ_ASSERT_IF(heapState == MajorCollecting, rt->gc.nursery.isEmpty());
+    MOZ_ASSERT(rt->heapState_ == JS::HeapState::Idle);
+    MOZ_ASSERT(heapState != JS::HeapState::Idle);
+    MOZ_ASSERT_IF(heapState == JS::HeapState::MajorCollecting, rt->gc.nursery.isEmpty());
 
     // Threads with an exclusive context can hit refillFreeList while holding
     // the exclusive access lock. To avoid deadlocking when we try to acquire
@@ -5552,9 +5529,9 @@ AutoTraceSession::AutoTraceSession(JSRuntime* rt, js::HeapState heapState)
         // Lock the helper thread state when changing the heap state in the
         // presence of exclusive threads, to avoid racing with refillFreeList.
         AutoLockHelperThreadState lock;
-        rt->gc.heapState = heapState;
+        rt->heapState_ = heapState;
     } else {
-        rt->gc.heapState = heapState;
+        rt->heapState_ = heapState;
     }
 }
 
@@ -5564,12 +5541,12 @@ AutoTraceSession::~AutoTraceSession()
 
     if (runtime->exclusiveThreadsPresent()) {
         AutoLockHelperThreadState lock;
-        runtime->gc.heapState = prevState;
+        runtime->heapState_ = prevState;
 
         // Notify any helper threads waiting for the trace session to end.
         HelperThreadState().notifyAll(GlobalHelperThreadState::PRODUCER);
     } else {
-        runtime->gc.heapState = prevState;
+        runtime->heapState_ = prevState;
     }
 }
 
@@ -5626,8 +5603,6 @@ GCRuntime::resetIncrementalGC(const char* reason)
             zone->setNeedsIncrementalBarrier(false, Zone::UpdateJit);
             zone->setGCState(Zone::NoGC);
         }
-        rt->setNeedsIncrementalBarrier(false);
-        AssertNeedsBarrierFlagsConsistent(rt);
 
         freeLifoAlloc.freeAll();
 
@@ -5739,25 +5714,19 @@ AutoGCSlice::AutoGCSlice(JSRuntime* rt)
             MOZ_ASSERT(!zone->needsIncrementalBarrier());
         }
     }
-    rt->setNeedsIncrementalBarrier(false);
-    AssertNeedsBarrierFlagsConsistent(rt);
 }
 
 AutoGCSlice::~AutoGCSlice()
 {
     /* We can't use GCZonesIter if this is the end of the last slice. */
-    bool haveBarriers = false;
     for (ZonesIter zone(runtime, WithAtoms); !zone.done(); zone.next()) {
         if (zone->isGCMarking()) {
             zone->setNeedsIncrementalBarrier(true, Zone::UpdateJit);
             zone->arenas.prepareForIncrementalGC(runtime);
-            haveBarriers = true;
         } else {
             zone->setNeedsIncrementalBarrier(false, Zone::UpdateJit);
         }
     }
-    runtime->setNeedsIncrementalBarrier(haveBarriers);
-    AssertNeedsBarrierFlagsConsistent(runtime);
 }
 
 void
@@ -6018,7 +5987,7 @@ GCRuntime::gcCycle(bool incremental, SliceBudget& budget, JS::gcreason::Reason r
      */
     AutoDisableStoreBuffer adsb(this);
 
-    AutoTraceSession session(rt, MajorCollecting);
+    AutoTraceSession session(rt, JS::HeapState::MajorCollecting);
 
     majorGCTriggerReason = JS::gcreason::NO_REASON;
     interFrameGC = true;
@@ -6286,7 +6255,7 @@ GCRuntime::abortGC()
 
     evictNursery(JS::gcreason::ABORT_GC);
     AutoDisableStoreBuffer adsb(this);
-    AutoTraceSession session(rt, MajorCollecting);
+    AutoTraceSession session(rt, JS::HeapState::MajorCollecting);
 
     number++;
     resetIncrementalGC("abort");
@@ -6673,14 +6642,14 @@ GCRuntime::runDebugGC()
 void
 GCRuntime::setValidate(bool enabled)
 {
-    MOZ_ASSERT(!isHeapMajorCollecting());
+    MOZ_ASSERT(!rt->isHeapMajorCollecting());
     validate = enabled;
 }
 
 void
 GCRuntime::setFullCompartmentChecks(bool enabled)
 {
-    MOZ_ASSERT(!isHeapMajorCollecting());
+    MOZ_ASSERT(!rt->isHeapMajorCollecting());
     fullCompartmentChecks = enabled;
 }
 
@@ -6688,7 +6657,7 @@ GCRuntime::setFullCompartmentChecks(bool enabled)
 bool
 GCRuntime::selectForMarking(JSObject* object)
 {
-    MOZ_ASSERT(!isHeapMajorCollecting());
+    MOZ_ASSERT(!rt->isHeapMajorCollecting());
     return selectedForMarking.append(object);
 }
 
@@ -6701,7 +6670,7 @@ GCRuntime::clearSelectedForMarking()
 void
 GCRuntime::setDeterministic(bool enabled)
 {
-    MOZ_ASSERT(!isHeapMajorCollecting());
+    MOZ_ASSERT(!rt->isHeapMajorCollecting());
     deterministicOnly = enabled;
 }
 #endif
@@ -6875,16 +6844,16 @@ JS_FRIEND_API(void)
 JS::AssertGCThingIsNotAnObjectSubclass(Cell* cell)
 {
     MOZ_ASSERT(cell);
-    MOZ_ASSERT(cell->getTraceKind() != JSTRACE_OBJECT);
+    MOZ_ASSERT(cell->getTraceKind() != JS::TraceKind::Object);
 }
 
 JS_FRIEND_API(void)
-js::gc::AssertGCThingHasType(js::gc::Cell* cell, JSGCTraceKind kind)
+js::gc::AssertGCThingHasType(js::gc::Cell* cell, JS::TraceKind kind)
 {
     if (!cell)
-        MOZ_ASSERT(kind == JSTRACE_NULL);
+        MOZ_ASSERT(kind == JS::TraceKind::Null);
     else if (IsInsideNursery(cell))
-        MOZ_ASSERT(kind == JSTRACE_OBJECT);
+        MOZ_ASSERT(kind == JS::TraceKind::Object);
     else
         MOZ_ASSERT(MapAllocToTraceKind(cell->asTenured().getAllocKind()) == kind);
 }
@@ -6973,18 +6942,12 @@ JS::AutoAssertGCCallback::AutoAssertGCCallback(JSObject* obj)
 }
 
 JS_FRIEND_API(const char*)
-JS::GCTraceKindToAscii(JSGCTraceKind kind)
+JS::GCTraceKindToAscii(JS::TraceKind kind)
 {
     switch(kind) {
-      case JSTRACE_OBJECT: return "Object";
-      case JSTRACE_SCRIPT: return "Script";
-      case JSTRACE_STRING: return "String";
-      case JSTRACE_SYMBOL: return "Symbol";
-      case JSTRACE_SHAPE: return "Shape";
-      case JSTRACE_BASE_SHAPE: return "BaseShape";
-      case JSTRACE_LAZY_SCRIPT: return "LazyScript";
-      case JSTRACE_JITCODE: return "JitCode";
-      case JSTRACE_OBJECT_GROUP: return "ObjectGroup";
+#define MAP_NAME(name, _0, _1) case JS::TraceKind::name: return #name;
+FOR_EACH_GC_LAYOUT(MAP_NAME);
+#undef MAP_NAME
       default: return "Invalid";
     }
 }
@@ -6993,19 +6956,19 @@ JS::GCCellPtr::GCCellPtr(const Value& v)
   : ptr(0)
 {
     if (v.isString())
-        ptr = checkedCast(v.toString(), JSTRACE_STRING);
+        ptr = checkedCast(v.toString(), JS::TraceKind::String);
     else if (v.isObject())
-        ptr = checkedCast(&v.toObject(), JSTRACE_OBJECT);
+        ptr = checkedCast(&v.toObject(), JS::TraceKind::Object);
     else if (v.isSymbol())
-        ptr = checkedCast(v.toSymbol(), JSTRACE_SYMBOL);
+        ptr = checkedCast(v.toSymbol(), JS::TraceKind::Symbol);
     else
-        ptr = checkedCast(nullptr, JSTRACE_NULL);
+        ptr = checkedCast(nullptr, JS::TraceKind::Null);
 }
 
-JSGCTraceKind
+JS::TraceKind
 JS::GCCellPtr::outOfLineKind() const
 {
-    MOZ_ASSERT(JSGCTraceKind(ptr & JSTRACE_OUTOFLINE) == JSTRACE_OUTOFLINE);
+    MOZ_ASSERT((ptr & OutOfLineTraceKindMask) == OutOfLineTraceKindMask);
     MOZ_ASSERT(asCell()->isTenured());
     return MapAllocToTraceKind(asCell()->asTenured().getAllocKind());
 }
@@ -7111,9 +7074,33 @@ JS::AbortIncrementalGC(JSRuntime* rt)
 }
 
 char16_t*
-JS::GCDescription::formatMessage(JSRuntime* rt) const
+JS::GCDescription::formatSliceMessage(JSRuntime* rt) const
 {
-    return rt->gc.stats.formatMessage();
+    UniqueChars cstr = rt->gc.stats.formatCompactSliceMessage();
+
+    size_t nchars = strlen(cstr.get());
+    UniquePtr<char16_t, JS::FreePolicy> out(js_pod_malloc<char16_t>(nchars + 1));
+    if (!out)
+        return nullptr;
+    out.get()[nchars] = 0;
+
+    CopyAndInflateChars(out.get(), cstr.get(), nchars);
+    return out.release();
+}
+
+char16_t*
+JS::GCDescription::formatSummaryMessage(JSRuntime* rt) const
+{
+    UniqueChars cstr = rt->gc.stats.formatCompactSummaryMessage();
+
+    size_t nchars = strlen(cstr.get());
+    UniquePtr<char16_t, JS::FreePolicy> out(js_pod_malloc<char16_t>(nchars + 1));
+    if (!out)
+        return nullptr;
+    out.get()[nchars] = 0;
+
+    CopyAndInflateChars(out.get(), cstr.get(), nchars);
+    return out.release();
 }
 
 JS::dbg::GarbageCollectionEvent::Ptr
@@ -7125,7 +7112,16 @@ JS::GCDescription::toGCEvent(JSRuntime* rt) const
 char16_t*
 JS::GCDescription::formatJSON(JSRuntime* rt, uint64_t timestamp) const
 {
-    return rt->gc.stats.formatJSON(timestamp);
+    UniqueChars cstr = rt->gc.stats.formatJsonMessage(timestamp);
+
+    size_t nchars = strlen(cstr.get());
+    UniquePtr<char16_t, JS::FreePolicy> out(js_pod_malloc<char16_t>(nchars + 1));
+    if (!out)
+        return nullptr;
+    out.get()[nchars] = 0;
+
+    CopyAndInflateChars(out.get(), cstr.get(), nchars);
+    return out.release();
 }
 
 JS_PUBLIC_API(JS::GCSliceCallback)
@@ -7164,40 +7160,17 @@ JS::IsIncrementalBarrierNeeded(JSContext* cx)
     return IsIncrementalBarrierNeeded(cx->runtime());
 }
 
+struct IncrementalReferenceBarrierFunctor {
+    template <typename T> void operator()(T* t) { T::writeBarrierPre(t); }
+};
+
 JS_PUBLIC_API(void)
 JS::IncrementalReferenceBarrier(GCCellPtr thing)
 {
     if (!thing)
         return;
 
-    if (thing.isString() && thing.toString()->isPermanentAtom())
-        return;
-
-#ifdef DEBUG
-    Zone* zone = thing.isObject()
-                 ? thing.toObject()->zone()
-                 : thing.asCell()->asTenured().zone();
-    MOZ_ASSERT(!zone->runtimeFromMainThread()->isHeapMajorCollecting());
-#endif
-
-    switch(thing.kind()) {
-      case JSTRACE_OBJECT: return JSObject::writeBarrierPre(thing.toObject());
-      case JSTRACE_STRING: return JSString::writeBarrierPre(thing.toString());
-      case JSTRACE_SCRIPT: return JSScript::writeBarrierPre(thing.toScript());
-      case JSTRACE_SYMBOL: return JS::Symbol::writeBarrierPre(thing.toSymbol());
-      case JSTRACE_LAZY_SCRIPT:
-        return LazyScript::writeBarrierPre(static_cast<LazyScript*>(thing.asCell()));
-      case JSTRACE_JITCODE:
-        return jit::JitCode::writeBarrierPre(static_cast<jit::JitCode*>(thing.asCell()));
-      case JSTRACE_SHAPE:
-        return Shape::writeBarrierPre(static_cast<Shape*>(thing.asCell()));
-      case JSTRACE_BASE_SHAPE:
-        return BaseShape::writeBarrierPre(static_cast<BaseShape*>(thing.asCell()));
-      case JSTRACE_OBJECT_GROUP:
-        return ObjectGroup::writeBarrierPre(static_cast<ObjectGroup*>(thing.asCell()));
-      default:
-        MOZ_CRASH("Invalid trace kind in IncrementalReferenceBarrier.");
-    }
+    CallTyped(IncrementalReferenceBarrierFunctor(), thing.asCell(), thing.kind());
 }
 
 JS_PUBLIC_API(void)
@@ -7390,7 +7363,7 @@ NewMemoryInfoObject(JSContext* cx)
     RootedObject obj(cx, JS_NewObject(cx, nullptr));
 
     using namespace MemInfo;
-    struct {
+    struct NamedGetter {
         const char* name;
         JSNative getter;
     } getters[] = {
@@ -7404,13 +7377,13 @@ NewMemoryInfoObject(JSContext* cx)
         { "minorGCCount", MinorGCCountGetter }
     };
 
-    for (size_t i = 0; i < mozilla::ArrayLength(getters); i++) {
- #ifdef JS_MORE_DETERMINISTIC
+    for (auto pair : getters) {
+#ifdef JS_MORE_DETERMINISTIC
         JSNative getter = DummyGetter;
 #else
-        JSNative getter = getters[i].getter;
+        JSNative getter = pair.getter;
 #endif
-        if (!JS_DefineProperty(cx, obj, getters[i].name, UndefinedHandleValue,
+        if (!JS_DefineProperty(cx, obj, pair.name, UndefinedHandleValue,
                                JSPROP_ENUMERATE | JSPROP_SHARED,
                                getter, nullptr))
         {
@@ -7425,7 +7398,7 @@ NewMemoryInfoObject(JSContext* cx)
     if (!JS_DefineProperty(cx, obj, "zone", zoneObj, JSPROP_ENUMERATE))
         return nullptr;
 
-    struct {
+    struct NamedZoneGetter {
         const char* name;
         JSNative getter;
     } zoneGetters[] = {
@@ -7439,13 +7412,13 @@ NewMemoryInfoObject(JSContext* cx)
         { "gcNumber", ZoneGCNumberGetter }
     };
 
-    for (size_t i = 0; i < mozilla::ArrayLength(zoneGetters); i++) {
+    for (auto pair : zoneGetters) {
  #ifdef JS_MORE_DETERMINISTIC
         JSNative getter = DummyGetter;
 #else
-        JSNative getter = zoneGetters[i].getter;
+        JSNative getter = pair.getter;
 #endif
-        if (!JS_DefineProperty(cx, zoneObj, zoneGetters[i].name, UndefinedHandleValue,
+        if (!JS_DefineProperty(cx, zoneObj, pair.name, UndefinedHandleValue,
                                JSPROP_ENUMERATE | JSPROP_SHARED,
                                getter, nullptr))
         {

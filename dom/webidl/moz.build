@@ -65,6 +65,7 @@ WEBIDL_FILES = [
     'CameraControl.webidl',
     'CameraManager.webidl',
     'CameraUtil.webidl',
+    'CanvasCaptureMediaStream.webidl',
     'CanvasRenderingContext2D.webidl',
     'CaretPosition.webidl',
     'CDATASection.webidl',
@@ -73,6 +74,7 @@ WEBIDL_FILES = [
     'CharacterData.webidl',
     'ChildNode.webidl',
     'ChromeNotifications.webidl',
+    'ChromeUtils.webidl',
     'Client.webidl',
     'Clients.webidl',
     'ClipboardEvent.webidl',
@@ -86,6 +88,7 @@ WEBIDL_FILES = [
     'ConvolverNode.webidl',
     'Coordinates.webidl',
     'Crypto.webidl',
+    'CSPDictionaries.webidl',
     'CSPReport.webidl',
     'CSS.webidl',
     'CSSLexer.webidl',
@@ -159,6 +162,7 @@ WEBIDL_FILES = [
     'GetUserMediaRequest.webidl',
     'HDMIInputPort.webidl',
     'Headers.webidl',
+    'HeapSnapshot.webidl',
     'History.webidl',
     'HTMLAllCollection.webidl',
     'HTMLAnchorElement.webidl',
@@ -180,6 +184,7 @@ WEBIDL_FILES = [
     'HTMLDocument.webidl',
     'HTMLElement.webidl',
     'HTMLEmbedElement.webidl',
+    'HTMLExtAppElement.webidl',
     'HTMLFieldSetElement.webidl',
     'HTMLFontElement.webidl',
     'HTMLFormControlsCollection.webidl',
@@ -284,6 +289,7 @@ WEBIDL_FILES = [
     'MediaStreamError.webidl',
     'MediaStreamTrack.webidl',
     'MediaTrackConstraintSet.webidl',
+    'MediaTrackSupportedConstraints.webidl',
     'MenuBoxObject.webidl',
     'MessageChannel.webidl',
     'MessageEvent.webidl',
@@ -518,6 +524,7 @@ WEBIDL_FILES = [
     'TextTrack.webidl',
     'TextTrackCueList.webidl',
     'TextTrackList.webidl',
+    'ThreadSafeChromeUtils.webidl',
     'TimeEvent.webidl',
     'TimeRanges.webidl',
     'Touch.webidl',
@@ -606,6 +613,7 @@ if CONFIG['MOZ_WEBSPEECH']:
         'SpeechRecognitionResult.webidl',
         'SpeechRecognitionResultList.webidl',
         'SpeechSynthesis.webidl',
+        'SpeechSynthesisErrorEvent.webidl',
         'SpeechSynthesisEvent.webidl',
         'SpeechSynthesisUtterance.webidl',
         'SpeechSynthesisVoice.webidl',
@@ -638,10 +646,18 @@ WEBIDL_FILES += [
 # We only expose our prefable test interfaces in debug builds, just to be on
 # the safe side.
 if CONFIG['MOZ_DEBUG']:
-    WEBIDL_FILES += ['TestInterfaceJS.webidl', 'TestInterfaceJSDictionaries.webidl']
+    WEBIDL_FILES += ['TestInterfaceJS.webidl',
+                     'TestInterfaceJSDictionaries.webidl',
+                     'TestInterfaceJSMaplikeSetlike.webidl']
 
 if CONFIG['MOZ_B2G_BT']:
-    if CONFIG['MOZ_B2G_BT_API_V2']:
+    if CONFIG['MOZ_B2G_BT_API_V1']:
+        WEBIDL_FILES += [
+            'BluetoothAdapter.webidl',
+            'BluetoothDevice.webidl',
+            'BluetoothManager.webidl',
+        ]
+    else:
         WEBIDL_FILES += [
             'BluetoothAdapter2.webidl',
             'BluetoothClassOfDevice.webidl',
@@ -655,12 +671,6 @@ if CONFIG['MOZ_B2G_BT']:
             'BluetoothManager2.webidl',
             'BluetoothPairingHandle.webidl',
             'BluetoothPairingListener.webidl',
-        ]
-    else:
-        WEBIDL_FILES += [
-            'BluetoothAdapter.webidl',
-            'BluetoothDevice.webidl',
-            'BluetoothManager.webidl',
         ]
 
 if CONFIG['MOZ_SIMPLEPUSH']:
@@ -722,6 +732,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     'CameraConfigurationEvent.webidl',
     'CameraFacesDetectedEvent.webidl',
     'CameraStateChangeEvent.webidl',
+    'CaretStateChangedEvent.webidl',
     'CFStateChangeEvent.webidl',
     'CloseEvent.webidl',
     'CSSFontFaceLoadEvent.webidl',
@@ -735,6 +746,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     'DOMTransactionEvent.webidl',
     'DownloadEvent.webidl',
     'ErrorEvent.webidl',
+    'ExternalAppEvent.webidl',
     'HashChangeEvent.webidl',
     'IccChangeEvent.webidl',
     'ImageCaptureErrorEvent.webidl',
@@ -780,6 +792,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
 if CONFIG['MOZ_WEBSPEECH']:
     GENERATED_EVENTS_WEBIDL_FILES += [
         'SpeechRecognitionEvent.webidl',
+        'SpeechSynthesisErrorEvent.webidl',
         'SpeechSynthesisEvent.webidl',
     ]
 
@@ -791,16 +804,16 @@ if CONFIG['MOZ_GAMEPAD']:
     ]
 
 if CONFIG['MOZ_B2G_BT']:
-    if CONFIG['MOZ_B2G_BT_API_V2']:
+    if CONFIG['MOZ_B2G_BT_API_V1']:
+        GENERATED_EVENTS_WEBIDL_FILES += [
+            'BluetoothDiscoveryStateChangedEvent.webidl',
+        ]
+    else:
         GENERATED_EVENTS_WEBIDL_FILES += [
             'BluetoothAdapterEvent.webidl',
             'BluetoothAttributeEvent.webidl',
             'BluetoothGattCharacteristicEvent.webidl',
             'BluetoothPairingEvent.webidl',
-        ]
-    else:
-        GENERATED_EVENTS_WEBIDL_FILES += [
-            'BluetoothDiscoveryStateChangedEvent.webidl',
         ]
 
     GENERATED_EVENTS_WEBIDL_FILES += [

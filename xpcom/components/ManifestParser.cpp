@@ -135,7 +135,9 @@ static const ManifestDirective kParsingTable[] = {
     nullptr, &nsChromeRegistry::ManifestStyle, nullptr
   },
   {
-    "override",         2, false, true, true, true, false,
+    // NB: note that while skin manifests can use this, they are only allowed
+    // to use it for chrome://../skin/ URLs
+    "override",         2, false, false, true, true, false,
     nullptr, &nsChromeRegistry::ManifestOverride, nullptr
   },
   {
@@ -657,11 +659,13 @@ ParseManifest(NSLocationType aType, FileLocation& aFile, char* aBuf,
       continue;
     }
 
+#ifndef MOZ_BINARY_EXTENSIONS
     if (directive->apponly && NS_APP_LOCATION != aType) {
       LogMessageWithContext(aFile, line,
                             "Only application manifests may use the '%s' directive.", token);
       continue;
     }
+#endif
 
     if (directive->componentonly && NS_SKIN_LOCATION == aType) {
       LogMessageWithContext(aFile, line,

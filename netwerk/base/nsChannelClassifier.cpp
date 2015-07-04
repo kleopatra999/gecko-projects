@@ -31,19 +31,17 @@
 
 #include "mozilla/Preferences.h"
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 using mozilla::ArrayLength;
 using mozilla::Preferences;
 
-#if defined(PR_LOGGING)
 //
 // NSPR_LOG_MODULES=nsChannelClassifier:5
 //
 static PRLogModuleInfo *gChannelClassifierLog;
-#endif
 #undef LOG
-#define LOG(args)     PR_LOG(gChannelClassifierLog, PR_LOG_DEBUG, args)
+#define LOG(args)     MOZ_LOG(gChannelClassifierLog, mozilla::LogLevel::Debug, args)
 
 NS_IMPL_ISUPPORTS(nsChannelClassifier,
                   nsIURIClassifierCallback)
@@ -52,10 +50,8 @@ nsChannelClassifier::nsChannelClassifier()
   : mIsAllowListed(false),
     mSuspendedChannel(false)
 {
-#if defined(PR_LOGGING)
     if (!gChannelClassifierLog)
         gChannelClassifierLog = PR_NewLogModule("nsChannelClassifier");
-#endif
 }
 
 nsresult
@@ -241,12 +237,9 @@ nsChannelClassifier::NotifyTrackingProtectionDisabled(nsIChannel *aChannel)
 }
 
 void
-nsChannelClassifier::Start(nsIChannel *aChannel, bool aContinueBeginConnect)
+nsChannelClassifier::Start(nsIChannel *aChannel)
 {
   mChannel = aChannel;
-  if (aContinueBeginConnect) {
-    mChannelInternal = do_QueryInterface(aChannel);
-  }
 
   nsresult rv = StartInternal();
   if (NS_FAILED(rv)) {
@@ -534,13 +527,7 @@ nsChannelClassifier::OnClassifyComplete(nsresult aErrorCode)
         mChannel->Resume();
     }
 
-    // Even if we have cancelled the channel, we may need to call
-    // ContinueBeginConnect so that we abort appropriately.
-    if (mChannelInternal) {
-        mChannelInternal->ContinueBeginConnect();
-    }
     mChannel = nullptr;
-    mChannelInternal = nullptr;
 
     return NS_OK;
 }

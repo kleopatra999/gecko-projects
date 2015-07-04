@@ -60,8 +60,6 @@ user_pref("font.size.inflation.minTwips", 0);
 
 // AddonManager tests require that the experiments provider be present.
 user_pref("experiments.supported", true);
-user_pref("experiments.logging.level", "Trace");
-user_pref("experiments.logging.dump", true);
 // Point the manifest at something local so we don't risk it hitting production
 // data and installing experiments that may vary over time.
 user_pref("experiments.manifest.uri", "http://%(server)s/experiments-dummy/manifest");
@@ -69,6 +67,7 @@ user_pref("experiments.manifest.uri", "http://%(server)s/experiments-dummy/manif
 // Only load extensions from the application and user profile
 // AddonManager.SCOPE_PROFILE + AddonManager.SCOPE_APPLICATION
 user_pref("extensions.enabledScopes", 5);
+user_pref("extensions.autoDisableScopes", 0);
 // Disable metadata caching for installed add-ons by default
 user_pref("extensions.getAddons.cache.enabled", false);
 // Disable intalling any distribution add-ons
@@ -148,6 +147,9 @@ user_pref("layout.css.report_errors", true);
 // Enable CSS Grid for testing
 user_pref("layout.css.grid.enabled", true);
 
+// Enable CSS 'contain' for testing
+user_pref("layout.css.contain.enabled", true);
+
 // Enable CSS object-fit & object-position for testing
 user_pref("layout.css.object-fit-and-position.enabled", true);
 
@@ -192,6 +194,7 @@ user_pref("browser.download.panel.shown", true);
 // Assume the about:newtab page's intro panels have been shown to not depend on
 // which test runs first and happens to open about:newtab
 user_pref("browser.newtabpage.introShown", true);
+user_pref("browser.newtabpage.updateIntroShown", true);
 
 // Tell the PBackground infrastructure to run a test at startup.
 user_pref("pbackground.testing", true);
@@ -254,6 +257,8 @@ user_pref("security.ssl.errorReporting.url", "https://example.com/browser/browse
 // Make sure Translation won't hit the network.
 user_pref("browser.translation.bing.authURL", "http://%(server)s/browser/browser/components/translation/test/bing.sjs");
 user_pref("browser.translation.bing.translateArrayURL", "http://%(server)s/browser/browser/components/translation/test/bing.sjs");
+user_pref("browser.translation.yandex.translateURLOverride", "http://%(server)s/browser/browser/components/translation/test/yandex.sjs");
+user_pref("browser.translation.engine", "bing");
 
 // Make sure we don't try to load snippets from the network.
 user_pref("browser.aboutHomeSnippets.updateUrl", "nonexistent://test");
@@ -318,3 +323,10 @@ user_pref("browser.devedition.theme.enabled", false);
 
 // Disable periodic updates of service workers.
 user_pref("dom.serviceWorkers.periodic-updates.enabled", false);
+
+// Enable speech synth test service, and disable built in platform services.
+user_pref("media.webspeech.synth.test", true);
+
+// Turn off search suggestions in the location bar so as not to trigger network
+// connections.
+user_pref("browser.urlbar.suggest.searches", false);

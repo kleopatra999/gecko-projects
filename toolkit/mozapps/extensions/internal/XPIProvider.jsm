@@ -53,6 +53,12 @@ XPCOMUtils.defineLazyServiceGetter(this,
                                    "@mozilla.org/network/protocol;1?name=resource",
                                    "nsIResProtocolHandler");
 
+XPCOMUtils.defineLazyGetter(this, "CertUtils", function certUtilsLazyGetter() {
+  let certUtils = {};
+  Components.utils.import("resource://gre/modules/CertUtils.jsm", certUtils);
+  return certUtils;
+});
+
 const nsIFile = Components.Constructor("@mozilla.org/file/local;1", "nsIFile",
                                        "initWithPath");
 
@@ -94,6 +100,10 @@ const PREF_EM_MIN_COMPAT_APP_VERSION      = "extensions.minCompatibleAppVersion"
 const PREF_EM_MIN_COMPAT_PLATFORM_VERSION = "extensions.minCompatiblePlatformVersion";
 
 const PREF_CHECKCOMAT_THEMEOVERRIDE   = "extensions.checkCompatibility.temporaryThemeOverride_minAppVersion";
+
+const PREF_EM_HOTFIX_ID               = "extensions.hotfix.id";
+const PREF_EM_CERT_CHECKATTRIBUTES    = "extensions.hotfix.cert.checkAttributes";
+const PREF_EM_HOTFIX_CERTS            = "extensions.hotfix.certs.";
 
 const URI_EXTENSION_SELECT_DIALOG     = "chrome://mozapps/content/extensions/selectAddons.xul";
 const URI_EXTENSION_UPDATE_DIALOG     = "chrome://mozapps/content/extensions/update.xul";
@@ -647,8 +657,12 @@ function isUsableAddon(aAddon) {
   if (aAddon.type == "theme" && aAddon.internalName == XPIProvider.defaultSkin)
     return true;
 
-  if (mustSign(aAddon.type) && aAddon.signedState <= AddonManager.SIGNEDSTATE_MISSING)
-    return false;
+  if (mustSign(aAddon.type)) {
+    if (aAddon.signedState <= AddonManager.SIGNEDSTATE_MISSING)
+      return false;
+    if (aAddon.foreignInstall && aAddon.signedState < AddonManager.SIGNEDSTATE_SIGNED)
+      return false;
+  }
 
   if (aAddon.blocklistState == Blocklist.STATE_BLOCKED)
     return false;
@@ -997,16 +1011,32 @@ function loadManifestFromRDF(aUri, aStream) {
   // to avoid a SQLite initialization error (bug 717904).
   let storage = Services.storage;
 
-  // Generate random GUID used for Sync.
-  // This was lifted from util.js:makeGUID() from services-sync.
-  let rng = Cc["@mozilla.org/security/random-generator;1"].
-            createInstance(Ci.nsIRandomGenerator);
-  let bytes = rng.generateRandomBytes(9);
-  let byte_string = [String.fromCharCode(byte) for each (byte in bytes)]
-                    .join("");
-  // Base64 encode
-  addon.syncGUID = btoa(byte_string).replace(/\+/g, '-')
-                                    .replace(/\//g, '_');
+  // Define .syncGUID as a lazy property which is also settable
+  Object.defineProperty(addon, "syncGUID", {
+    get: () => {
+
+      // Generate random GUID used for Sync.
+      // This was lifted from util.js:makeGUID() from services-sync.
+      let rng = Cc["@mozilla.org/security/random-generator;1"].
+        createInstance(Ci.nsIRandomGenerator);
+      let bytes = rng.generateRandomBytes(9);
+      let byte_string = [String.fromCharCode(byte) for each (byte in bytes)]
+                        .join("");
+      // Base64 encode
+      let guid = btoa(byte_string).replace(/\+/g, '-')
+        .replace(/\//g, '_');
+
+      delete addon.syncGUID;
+      addon.syncGUID = guid;
+      return guid;
+    },
+    set: (val) => {
+      delete addon.syncGUID;
+      addon.syncGUID = val;
+    },
+    configurable: true,
+    enumerable: true,
+  });
 
   return addon;
 }
@@ -1290,6 +1320,20 @@ function getSignedStatus(aRv, aCert, aExpectedID) {
       if (aExpectedID != aCert.commonName)
         return AddonManager.SIGNEDSTATE_BROKEN;
 
+      let hotfixID = Preferences.get(PREF_EM_HOTFIX_ID, undefined);
+      if (hotfixID && hotfixID == aExpectedID && Preferences.get(PREF_EM_CERT_CHECKATTRIBUTES, false)) {
+        // The hotfix add-on has some more rigorous certificate checks
+        try {
+          CertUtils.validateCert(aCert,
+                                 CertUtils.readCertPrefs(PREF_EM_HOTFIX_CERTS));
+        }
+        catch (e) {
+          logger.warn("The hotfix add-on was not signed by the expected " +
+                      "certificate and so will not be installed.", e);
+          return AddonManager.SIGNEDSTATE_BROKEN;
+        }
+      }
+
       return /preliminary/i.test(aCert.organizationalUnit)
                ? AddonManager.SIGNEDSTATE_PRELIMINARY
                : AddonManager.SIGNEDSTATE_SIGNED;
@@ -1324,7 +1368,7 @@ function getSignedStatus(aRv, aCert, aExpectedID) {
  * @return a Promise that resolves to an AddonManager.SIGNEDSTATE_* constant.
  */
 function verifyZipSignedState(aFile, aAddon) {
-  if (!SIGNED_TYPES.has(aAddon.type))
+  if (!ADDON_SIGNING || !SIGNED_TYPES.has(aAddon.type))
     return Promise.resolve(undefined);
 
   let certDB = Cc["@mozilla.org/security/x509certdb;1"]
@@ -1354,11 +1398,21 @@ function verifyZipSignedState(aFile, aAddon) {
  * @return a Promise that resolves to an AddonManager.SIGNEDSTATE_* constant.
  */
 function verifyDirSignedState(aDir, aAddon) {
-  if (!SIGNED_TYPES.has(aAddon.type))
+  if (!ADDON_SIGNING || !SIGNED_TYPES.has(aAddon.type))
     return Promise.resolve(undefined);
 
-  // TODO: Get the certificate for an unpacked add-on (bug 1038072)
-  return Promise.resolve(AddonManager.SIGNEDSTATE_MISSING);
+  let certDB = Cc["@mozilla.org/security/x509certdb;1"]
+               .getService(Ci.nsIX509CertDB);
+
+  let root = Ci.nsIX509CertDB.AddonsPublicRoot;
+  if (!REQUIRE_SIGNING && Preferences.get(PREF_XPI_SIGNATURES_DEV_ROOT, false))
+    root = Ci.nsIX509CertDB.AddonsStageRoot;
+
+  return new Promise(resolve => {
+    certDB.verifySignedDirectoryAsync(root, aDir, (aRv, aCert) => {
+      resolve(getSignedStatus(aRv, aCert, aAddon.id));
+    });
+  });
 }
 
 /**
@@ -2473,7 +2527,8 @@ this.XPIProvider = {
     let addons = XPIDatabase.getAddons();
       for (let addon of addons) {
         if ((startupChanges.indexOf(addon.id) != -1) &&
-            (addon.permissions() & AddonManager.PERM_CAN_UPGRADE)) {
+            (addon.permissions() & AddonManager.PERM_CAN_UPGRADE) &&
+            !addon.isCompatible) {
           logger.debug("shouldForceUpdateCheck: can upgrade disabled add-on " + addon.id);
           forceUpdate.push(addon.id);
         }
@@ -2702,9 +2757,12 @@ this.XPIProvider = {
 
         let jsonfile = stagingDir.clone();
         jsonfile.append(id + ".json");
+        // Assume this was a foreign install if there is no cached metadata file
+        let foreignInstall = !jsonfile.exists();
+        let addon;
 
         try {
-          aManifests[aLocation.name][id] = syncLoadManifestFromFile(stageDirEntry);
+          addon = syncLoadManifestFromFile(stageDirEntry);
         }
         catch (e) {
           logger.error("Unable to read add-on manifest from " + stageDirEntry.path, e);
@@ -2714,9 +2772,9 @@ this.XPIProvider = {
           continue;
         }
 
-        let addon = aManifests[aLocation.name][id];
-
-        if ((addon.signedState <= AddonManager.SIGNEDSTATE_MISSING) && mustSign(addon.type)) {
+        if (mustSign(addon.type) &&
+            (addon.signedState <= AddonManager.SIGNEDSTATE_MISSING ||
+            (foreignInstall && addon.signedState < AddonManager.SIGNEDSTATE_SIGNED))) {
           logger.warn("Refusing to install staged add-on " + id + " with signed state " + addon.signedState);
           seenFiles.push(stageDirEntry.leafName);
           seenFiles.push(jsonfile.leafName);
@@ -2725,7 +2783,7 @@ this.XPIProvider = {
 
         // Check for a cached metadata for this add-on, it may contain updated
         // compatibility information
-        if (jsonfile.exists()) {
+        if (!foreignInstall) {
           logger.debug("Found updated metadata for " + id + " in " + aLocation.name);
           let fis = Cc["@mozilla.org/network/file-input-stream;1"].
                        createInstance(Ci.nsIFileInputStream);
@@ -2736,6 +2794,10 @@ this.XPIProvider = {
             fis.init(jsonfile, -1, 0, 0);
             let metadata = json.decodeFromStream(fis, jsonfile.fileSize);
             addon.importMetadata(metadata);
+
+            // Pass this through to addMetadata so it knows this add-on was
+            // likely installed through the UI
+            aManifests[aLocation.name][id] = addon;
           }
           catch (e) {
             // If some data can't be recovered from the cached metadata then it
@@ -3168,7 +3230,8 @@ this.XPIProvider = {
 
         // If updating from a version of the app that didn't support signedState
         // then fetch that property now
-        if (aOldAddon.signedState === undefined && SIGNED_TYPES.has(aOldAddon.type)) {
+        if (aOldAddon.signedState === undefined && ADDON_SIGNING &&
+            SIGNED_TYPES.has(aOldAddon.type)) {
           let file = aInstallLocation.getLocationForID(aOldAddon.id);
           let manifest = syncLoadManifestFromFile(file);
           aOldAddon.signedState = manifest.signedState;
@@ -3329,6 +3392,9 @@ this.XPIProvider = {
       newAddon.installDate = aAddonState.mtime;
       newAddon.updateDate = aAddonState.mtime;
       newAddon.foreignInstall = isDetectedInstall;
+
+      // appDisabled depends on whether the add-on is a foreignInstall so update
+      newAddon.appDisabled = !isUsableAddon(newAddon);
 
       if (aMigrateData) {
         // If there is migration data then apply it.
@@ -5534,18 +5600,12 @@ AddonInstall.prototype = {
                    createInstance(Ci.nsIStreamListenerTee);
     listener.init(this, this.stream);
     try {
-      Components.utils.import("resource://gre/modules/CertUtils.jsm");
       let requireBuiltIn = Preferences.get(PREF_INSTALL_REQUIREBUILTINCERTS, true);
-      this.badCertHandler = new BadCertHandler(!requireBuiltIn);
+      this.badCertHandler = new CertUtils.BadCertHandler(!requireBuiltIn);
 
-      this.channel = NetUtil.newChannel2(this.sourceURI,
-                                         null,
-                                         null,
-                                         null,      // aLoadingNode
-                                         Services.scriptSecurityManager.getSystemPrincipal(),
-                                         null,      // aTriggeringPrincipal
-                                         Ci.nsILoadInfo.SEC_NORMAL,
-                                         Ci.nsIContentPolicy.TYPE_OTHER);
+      this.channel = NetUtil.newChannel({
+        uri: this.sourceURI,
+        loadUsingSystemPrincipal: true});
       this.channel.notificationCallbacks = this;
       if (this.channel instanceof Ci.nsIHttpChannel) {
         this.channel.setRequestHeader("Moz-XPI-Update", "1", true);
@@ -5690,8 +5750,8 @@ AddonInstall.prototype = {
       if (!(aRequest instanceof Ci.nsIHttpChannel) || aRequest.requestSucceeded) {
         if (!this.hash && (aRequest instanceof Ci.nsIChannel)) {
           try {
-            checkCert(aRequest,
-                      !Preferences.get(PREF_INSTALL_REQUIREBUILTINCERTS, true));
+            CertUtils.checkCert(aRequest,
+                                !Preferences.get(PREF_INSTALL_REQUIREBUILTINCERTS, true));
           }
           catch (e) {
             this.downloadFailed(AddonManager.ERROR_NETWORK_FAILURE, e);
@@ -7841,8 +7901,19 @@ WinRegInstallLocation.prototype = {
 };
 #endif
 
-// Make this a non-changable property so it can't be manipulated from other
+// Make these non-changable properties so they can't be manipulated from other
 // code in the app.
+Object.defineProperty(this, "ADDON_SIGNING", {
+  configurable: false,
+  enumerable: false,
+  writable: false,
+#ifdef MOZ_ADDON_SIGNING
+  value: true,
+#else
+  value: false,
+#endif
+});
+
 Object.defineProperty(this, "REQUIRE_SIGNING", {
   configurable: false,
   enumerable: false,

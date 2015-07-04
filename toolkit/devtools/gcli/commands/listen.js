@@ -29,6 +29,7 @@ XPCOMUtils.defineLazyGetter(this, "debuggerServer", () => {
   let debuggerServer = serverLoader.DebuggerServer;
   debuggerServer.init();
   debuggerServer.addBrowserActors();
+  debuggerServer.allowChromeProcess = !l10n.hiddenByChromePref();
   return debuggerServer;
 });
 
@@ -64,5 +65,16 @@ exports.items = [
 
       return l10n.lookup("listenNoInitOutput");
     },
+  },
+  {
+    item: "command",
+    runAt: "client",
+    name: "unlisten",
+    description: l10n.lookup("unlistenDesc"),
+    manual: l10n.lookup("unlistenManual"),
+    exec: function(args, context) {
+      debuggerServer.closeAllListeners();
+      return l10n.lookup("unlistenOutput");
+    }
   }
 ];

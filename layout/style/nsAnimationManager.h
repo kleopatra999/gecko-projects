@@ -65,11 +65,11 @@ public:
   virtual CSSAnimation* AsCSSAnimation() override { return this; }
 
   virtual dom::Promise* GetReady(ErrorResult& aRv) override;
-  virtual void Play(LimitBehavior aLimitBehavior) override;
-  virtual void Pause() override;
+  virtual void Play(ErrorResult& aRv, LimitBehavior aLimitBehavior) override;
+  virtual void Pause(ErrorResult& aRv) override;
 
   virtual dom::AnimationPlayState PlayStateFromJS() const override;
-  virtual void PlayFromJS() override;
+  virtual void PlayFromJS(ErrorResult& aRv) override;
 
   void PlayFromStyle();
   void PauseFromStyle();
@@ -161,13 +161,6 @@ public:
   explicit nsAnimationManager(nsPresContext *aPresContext)
     : mozilla::css::CommonAnimationManager(aPresContext)
   {
-  }
-
-  static mozilla::AnimationCollection*
-  GetAnimationsForCompositor(nsIContent* aContent, nsCSSProperty aProperty)
-  {
-    return mozilla::css::CommonAnimationManager::GetAnimationsForCompositor(
-      aContent, nsGkAtoms::animationsProperty, aProperty);
   }
 
   void UpdateStyleAndEvents(mozilla::AnimationCollection* aEA,

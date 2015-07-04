@@ -159,9 +159,11 @@ WebGLContext::BindFramebuffer(GLenum target, WebGLFramebuffer* wfb)
     if (!wfb) {
         gl->fBindFramebuffer(target, 0);
     } else {
-        wfb->BindTo(target);
-        GLuint framebuffername = wfb->GLName();
+        GLuint framebuffername = wfb->mGLName;
         gl->fBindFramebuffer(target, framebuffername);
+#ifdef ANDROID
+        wfb->mIsFB = true;
+#endif
     }
 
     switch (target) {
@@ -196,15 +198,15 @@ WebGLContext::BindRenderbuffer(GLenum target, WebGLRenderbuffer* wrb)
     if (wrb && wrb->IsDeleted())
         return;
 
-    if (wrb)
-        wrb->BindTo(target);
-
     MakeContextCurrent();
 
     // Sometimes we emulate renderbuffers (depth-stencil emu), so there's not
     // always a 1-1 mapping from `wrb` to GL name. Just have `wrb` handle it.
     if (wrb) {
         wrb->BindRenderbuffer();
+#ifdef ANDROID
+        wrb->mIsRB = true;
+#endif
     } else {
         gl->fBindRenderbuffer(target, 0);
     }
@@ -457,7 +459,8 @@ WebGLContext::CopyTexSubImage2D_base(TexImageTarget texImageTarget, GLint level,
             tex->SetImageInfo(texImageTarget, level, width, height, 1,
                       effectiveInternalFormat,
                       WebGLImageDataStatus::UninitializedImageData);
-            tex->EnsureNoUninitializedImageData(texImageTarget, level);
+            if (!tex->EnsureInitializedImageData(texImageTarget, level))
+                return;
         }
 
         // if we are completely outside of the framebuffer, we can exit now with our black texture
@@ -605,7 +608,8 @@ WebGLContext::CopyTexSubImage2D(GLenum rawTexImgTarget,
         if (coversWholeImage) {
             tex->SetImageDataStatus(texImageTarget, level, WebGLImageDataStatus::InitializedImageData);
         } else {
-            tex->EnsureNoUninitializedImageData(texImageTarget, level);
+            if (!tex->EnsureInitializedImageData(texImageTarget, level))
+                return;
         }
     }
 
@@ -737,7 +741,7 @@ WebGLContext::DeleteTexture(WebGLTexture* tex)
             (mBound3DTextures[i] == tex && tex->Target() == LOCAL_GL_TEXTURE_3D))
         {
             ActiveTexture(LOCAL_GL_TEXTURE0 + i);
-            BindTexture(tex->Target().get(), nullptr);
+            BindTexture(tex->Target(), nullptr);
         }
     }
     ActiveTexture(LOCAL_GL_TEXTURE0 + activeTexture);
@@ -1127,8 +1131,12 @@ WebGLContext::GetFramebufferAttachmentParameter(JSContext* cx,
         return JS::NullValue();
     }
 
-    if (IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers))
+    if (IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers) &&
+        attachment >= LOCAL_GL_COLOR_ATTACHMENT0 &&
+        attachment <= LOCAL_GL_COLOR_ATTACHMENT15)
+    {
         fb->EnsureColorAttachPoints(attachment - LOCAL_GL_COLOR_ATTACHMENT0);
+    }
 
     MakeContextCurrent();
 
@@ -1691,9 +1699,22 @@ WebGLContext::IsFramebuffer(WebGLFramebuffer* fb)
     if (IsContextLost())
         return false;
 
-    return ValidateObjectAllowDeleted("isFramebuffer", fb) &&
-        !fb->IsDeleted() &&
-        fb->HasEverBeenBound();
+    if (!ValidateObjectAllowDeleted("isFramebuffer", fb))
+        return false;
+
+    if (fb->IsDeleted())
+        return false;
+
+#ifdef ANDROID
+    if (gl->WorkAroundDriverBugs() &&
+        gl->Renderer() == GLRenderer::AndroidEmulator)
+    {
+        return fb->mIsFB;
+    }
+#endif
+
+    MakeContextCurrent();
+    return gl->fIsFramebuffer(fb->mGLName);
 }
 
 bool
@@ -1711,9 +1732,22 @@ WebGLContext::IsRenderbuffer(WebGLRenderbuffer* rb)
     if (IsContextLost())
         return false;
 
-    return ValidateObjectAllowDeleted("isRenderBuffer", rb) &&
-        !rb->IsDeleted() &&
-        rb->HasEverBeenBound();
+    if (!ValidateObjectAllowDeleted("isRenderBuffer", rb))
+        return false;
+
+    if (rb->IsDeleted())
+        return false;
+
+#ifdef ANDROID
+    if (gl->WorkAroundDriverBugs() &&
+        gl->Renderer() == GLRenderer::AndroidEmulator)
+    {
+         return rb->mIsRB;
+    }
+#endif
+
+    MakeContextCurrent();
+    return gl->fIsRenderbuffer(rb->PrimaryGLName());
 }
 
 bool
@@ -1806,8 +1840,8 @@ SetFullAlpha(void* data, GLenum format, GLenum type, size_t width,
 {
     if (format == LOCAL_GL_ALPHA && type == LOCAL_GL_UNSIGNED_BYTE) {
         // Just memset the rows.
+        uint8_t* row = static_cast<uint8_t*>(data);
         for (size_t j = 0; j < height; ++j) {
-            uint8_t* row = static_cast<uint8_t*>(data) + j*stride;
             memset(row, 0xff, width);
             row += stride;
         }
@@ -2005,7 +2039,7 @@ WebGLContext::ReadPixels(GLint x, GLint y, GLsizei width,
     }
 
     const ArrayBufferView& pixbuf = pixels.Value();
-    int dataType = JS_GetArrayBufferViewType(pixbuf.Obj());
+    int dataType = pixbuf.Type();
 
     // Check the pixels param type
     if (dataType != requiredDataType)
@@ -3034,7 +3068,8 @@ WebGLContext::CompressedTexSubImage2D(GLenum rawTexImgTarget, GLint level, GLint
         if (coversWholeImage) {
             tex->SetImageDataStatus(texImageTarget, level, WebGLImageDataStatus::InitializedImageData);
         } else {
-            tex->EnsureNoUninitializedImageData(texImageTarget, level);
+            if (!tex->EnsureInitializedImageData(texImageTarget, level))
+                return;
         }
     }
 
@@ -3197,6 +3232,9 @@ GLenum WebGLContext::CheckedTexImage2D(TexImageTarget texImageTarget,
     }
 
     gl->fTexImage2D(texImageTarget.get(), level, driverInternalFormat, width, height, border, driverFormat, driverType, data);
+
+    if (effectiveInternalFormat != driverInternalFormat)
+        SetLegacyTextureSwizzle(gl, texImageTarget.get(), internalformat.get());
 
     GLenum error = LOCAL_GL_NO_ERROR;
     if (sizeMayChange) {
@@ -3380,7 +3418,7 @@ WebGLContext::TexImage2D(GLenum rawTarget, GLint level,
 
         data = view.Data();
         length = view.Length();
-        jsArrayType = JS_GetArrayBufferViewType(view.Obj());
+        jsArrayType = view.Type();
     }
 
     if (!ValidateTexImageTarget(rawTarget, WebGLTexImageFunc::TexImage, WebGLTexDimensions::Tex2D))
@@ -3504,7 +3542,8 @@ WebGLContext::TexSubImage2D_base(GLenum rawImageTarget, GLint level,
         if (coversWholeImage) {
             tex->SetImageDataStatus(texImageTarget, level, WebGLImageDataStatus::InitializedImageData);
         } else {
-            tex->EnsureNoUninitializedImageData(texImageTarget, level);
+            if (!tex->EnsureInitializedImageData(texImageTarget, level))
+                return;
         }
     }
     MakeContextCurrent();
@@ -3579,8 +3618,7 @@ WebGLContext::TexSubImage2D(GLenum rawTarget, GLint level,
 
     return TexSubImage2D_base(rawTarget, level, xoffset, yoffset,
                               width, height, 0, format, type,
-                              view.Data(), view.Length(),
-                              JS_GetArrayBufferViewType(view.Obj()),
+                              view.Data(), view.Length(), view.Type(),
                               WebGLTexelFormat::Auto, false);
 }
 

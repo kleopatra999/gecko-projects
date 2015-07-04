@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "mozilla/unused.h"
 
@@ -26,14 +26,13 @@
 
 using mozilla::gfx::DataSourceSurface;
 using mozilla::gfx::SourceSurface;
+using mozilla::LogLevel;
 using mozilla::RefPtr;
 
 // Screenshots use the (undocumented) png pasteboard type.
 #define IMAGE_PASTEBOARD_TYPES NSTIFFPboardType, @"Apple PNG pasteboard type", nil
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* sCocoaLog;
-#endif
 
 extern void EnsureLogInitialized();
 
@@ -420,7 +419,7 @@ nsClipboard::PasteboardDictFromTransferable(nsITransferable* aTransferable)
     nsXPIDLCString flavorStr;
     currentFlavor->ToString(getter_Copies(flavorStr));
 
-    PR_LOG(sCocoaLog, PR_LOG_ALWAYS, ("writing out clipboard data of type %s (%d)\n", flavorStr.get(), i));
+    MOZ_LOG(sCocoaLog, LogLevel::Info, ("writing out clipboard data of type %s (%d)\n", flavorStr.get(), i));
 
     NSString *pboardType = nil;
 

@@ -311,7 +311,7 @@ LIRGeneratorShared::useRegisterOrNonDoubleConstant(MDefinition* mir)
     return useRegister(mir);
 }
 
-#if defined(JS_CODEGEN_ARM)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64)
 LAllocation
 LIRGeneratorShared::useAnyOrConstant(MDefinition* mir)
 {
@@ -359,11 +359,17 @@ LIRGeneratorShared::useStorableAtStart(MDefinition* mir)
 #endif
 
 LAllocation
+LIRGeneratorShared::useKeepalive(MDefinition* mir)
+{
+    return use(mir, LUse(LUse::KEEPALIVE));
+}
+
+LAllocation
 LIRGeneratorShared::useKeepaliveOrConstant(MDefinition* mir)
 {
     if (mir->isConstant())
         return LAllocation(mir->toConstant()->vp());
-    return use(mir, LUse(LUse::KEEPALIVE));
+    return useKeepalive(mir);
 }
 
 LUse

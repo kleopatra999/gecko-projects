@@ -219,8 +219,6 @@ AltSvcMapping::RouteEquals(AltSvcMapping *map)
   return mAlternateHost.Equals(map->mAlternateHost) &&
     (mAlternatePort == map->mAlternatePort) &&
     mNPNToken.Equals(map->mNPNToken);
-
-  return false;
 }
 
 void
@@ -228,8 +226,8 @@ AltSvcMapping::GetConnectionInfo(nsHttpConnectionInfo **outCI,
                                  nsProxyInfo *pi)
 {
   nsRefPtr<nsHttpConnectionInfo> ci =
-    new nsHttpConnectionInfo(mAlternateHost, mAlternatePort, mNPNToken,
-                             mUsername, pi, mOriginHost, mOriginPort);
+    new nsHttpConnectionInfo(mOriginHost, mOriginPort, mNPNToken,
+                             mUsername, pi, mAlternateHost, mAlternatePort);
   ci->SetInsecureScheme(!mHttps);
   ci->SetPrivate(mPrivate);
   ci.forget(outCI);
@@ -524,8 +522,8 @@ AltSvcCache::ClearHostMapping(const nsACString &host, int32_t port)
 void
 AltSvcCache::ClearHostMapping(nsHttpConnectionInfo *ci)
 {
-  if (!ci->GetAuthenticationHost().IsEmpty()) {
-    ClearHostMapping(ci->GetAuthenticationHost(), ci->GetAuthenticationPort());
+  if (!ci->GetOrigin().IsEmpty()) {
+    ClearHostMapping(ci->GetOrigin(), ci->OriginPort());
   }
 }
 

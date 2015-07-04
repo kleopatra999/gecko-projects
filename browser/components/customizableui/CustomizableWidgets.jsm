@@ -39,10 +39,6 @@ XPCOMUtils.defineLazyGetter(this, "BrandBundle", function() {
   const kBrandBundle = "chrome://branding/locale/brand.properties";
   return Services.strings.createBundle(kBrandBundle);
 });
-XPCOMUtils.defineLazyGetter(this, "PocketBundle", function() {
-  const kPocketBundle = "chrome://browser/content/browser-pocket.properties";
-  return Services.strings.createBundle(kPocketBundle);
-});
 
 const kNSXUL = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 const kPrefCustomizationDebug = "browser.uiCustomization.debug";
@@ -373,12 +369,10 @@ const CustomizableWidgets = [
       // Hardcode the addition of the "work offline" menuitem at the bottom:
       itemsToDisplay.push({localName: "menuseparator", getAttribute: () => {}});
       itemsToDisplay.push(doc.getElementById("goOfflineMenuitem"));
-      fillSubviewFromMenuItems(itemsToDisplay, doc.getElementById("PanelUI-developerItems"));
 
-    },
-    onViewHiding: function(aEvent) {
-      let doc = aEvent.target.ownerDocument;
-      clearSubview(doc.getElementById("PanelUI-developerItems"));
+      let developerItems = doc.getElementById("PanelUI-developerItems");
+      clearSubview(developerItems);
+      fillSubviewFromMenuItems(itemsToDisplay, developerItems);
     }
   }, {
     id: "sidebar-button",
@@ -403,11 +397,9 @@ const CustomizableWidgets = [
       if (providerMenuSeps.length > 0)
         win.SocialSidebar.populateProviderMenu(providerMenuSeps[0]);
 
-      fillSubviewFromMenuItems([...menu.children], doc.getElementById("PanelUI-sidebarItems"));
-    },
-    onViewHiding: function(aEvent) {
-      let doc = aEvent.target.ownerDocument;
-      clearSubview(doc.getElementById("PanelUI-sidebarItems"));
+      let sidebarItems = doc.getElementById("PanelUI-sidebarItems");
+      clearSubview(sidebarItems);
+      fillSubviewFromMenuItems([...menu.children], sidebarItems);
     }
   }, {
     id: "social-share-button",
@@ -1089,10 +1081,13 @@ if (Services.prefs.getBoolPref("browser.pocket.enabled")) {
       introducedInVersion: "pref",
       type: "view",
       viewId: "PanelUI-pocketView",
-      label: PocketBundle.GetStringFromName("pocket-button.label"),
-      tooltiptext: PocketBundle.GetStringFromName("pocket-button.tooltiptext"),
-      onViewShowing: Pocket.onPanelViewShowing,
-      onViewHiding: Pocket.onPanelViewHiding,
+      // Use forwarding functions here to avoid loading Pocket.jsm on startup:
+      onViewShowing: function() {
+        return Pocket.onPanelViewShowing.apply(this, arguments);
+      },
+      onViewHiding: function() {
+        return Pocket.onPanelViewHiding.apply(this, arguments);
+      },
 
       // If the user has the "classic" Pocket add-on installed, use that instead
       // and destroy the widget.
@@ -1127,7 +1122,7 @@ if (Services.prefs.getBoolPref("browser.pocket.enabled")) {
 }
 
 #ifdef E10S_TESTING_ONLY
-let e10sDisabled = Services.appinfo.inSafeMode;
+let e10sDisabled = false;
 #ifdef XP_MACOSX
 // On OS X, "Disable Hardware Acceleration" also disables OMTC and forces
 // a fallback to Basic Layers. This is incompatible with e10s.
@@ -1137,10 +1132,12 @@ e10sDisabled |= Services.prefs.getBoolPref("layers.acceleration.disabled");
 if (Services.appinfo.browserTabsRemoteAutostart) {
   CustomizableWidgets.push({
     id: "e10s-button",
-    label: "New Non-e10s Window",
-    tooltiptext: "New Non-e10s Window",
     disabled: e10sDisabled,
     defaultArea: CustomizableUI.AREA_PANEL,
+    onBuild: function(aDocument) {
+        node.setAttribute("label", CustomizableUI.getLocalizedProperty(this, "label"));
+        node.setAttribute("tooltiptext", CustomizableUI.getLocalizedProperty(this, "tooltiptext"));
+    },
     onCommand: function(aEvent) {
       let win = aEvent.view;
       if (win && typeof win.OpenBrowserWindow == "function") {

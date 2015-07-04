@@ -27,21 +27,21 @@
 
 using namespace mozilla;
 
-#define LOG_FONTLIST(args) PR_LOG(gfxPlatform::GetLog(eGfxLog_fontlist), \
-                               PR_LOG_DEBUG, args)
-#define LOG_FONTLIST_ENABLED() PR_LOG_TEST( \
+#define LOG_FONTLIST(args) MOZ_LOG(gfxPlatform::GetLog(eGfxLog_fontlist), \
+                               LogLevel::Debug, args)
+#define LOG_FONTLIST_ENABLED() MOZ_LOG_TEST( \
                                    gfxPlatform::GetLog(eGfxLog_fontlist), \
-                                   PR_LOG_DEBUG)
+                                   LogLevel::Debug)
 
-#define LOG_FONTINIT(args) PR_LOG(gfxPlatform::GetLog(eGfxLog_fontinit), \
-                               PR_LOG_DEBUG, args)
-#define LOG_FONTINIT_ENABLED() PR_LOG_TEST( \
+#define LOG_FONTINIT(args) MOZ_LOG(gfxPlatform::GetLog(eGfxLog_fontinit), \
+                               LogLevel::Debug, args)
+#define LOG_FONTINIT_ENABLED() MOZ_LOG_TEST( \
                                    gfxPlatform::GetLog(eGfxLog_fontinit), \
-                                   PR_LOG_DEBUG)
+                                   LogLevel::Debug)
 
-#define LOG_CMAPDATA_ENABLED() PR_LOG_TEST( \
+#define LOG_CMAPDATA_ENABLED() MOZ_LOG_TEST( \
                                    gfxPlatform::GetLog(eGfxLog_cmapdata), \
-                                   PR_LOG_DEBUG)
+                                   LogLevel::Debug)
 
 static __inline void
 BuildKeyNameFromFontName(nsAString &aName)
@@ -212,7 +212,6 @@ gfxDWriteFontFamily::FindStyleVariations(FontInfoData *aFontInfoData)
             }
         }
 
-#ifdef PR_LOGGING
         if (LOG_FONTLIST_ENABLED()) {
             LOG_FONTLIST(("(fontlist) added (%s) to family (%s)"
                  " with style: %s weight: %d stretch: %d psname: %s fullname: %s",
@@ -223,7 +222,6 @@ gfxDWriteFontFamily::FindStyleVariations(FontInfoData *aFontInfoData)
                  NS_ConvertUTF16toUTF8(psname).get(),
                  NS_ConvertUTF16toUTF8(fullname).get()));
         }
-#endif
     }
 
     // assume that if no error, all postscript/fullnames were initialized
@@ -313,7 +311,7 @@ gfxDWriteFontFamily::LocalizedName(nsAString &aLocalizedName)
         return;
     }
     
-    if (!famName.SetLength(length + 1)) {
+    if (!famName.SetLength(length + 1, fallible)) {
         // Eeep - running out of memory. Unlikely to end well.
         return;
     }
@@ -405,7 +403,7 @@ gfxDWriteFontEntry::CopyFontTable(uint32_t aTableTag,
                               NativeEndian::swapToBigEndian(aTableTag), 0,
                               nullptr, 0);
             if (tableSize != GDI_ERROR) {
-                if (aBuffer.SetLength(tableSize)) {
+                if (aBuffer.SetLength(tableSize, fallible)) {
                     ::GetFontData(dc.GetDC(),
                                   NativeEndian::swapToBigEndian(aTableTag), 0,
                                   aBuffer.Elements(), aBuffer.Length());
@@ -435,7 +433,7 @@ gfxDWriteFontEntry::CopyFontTable(uint32_t aTableTag,
         return NS_ERROR_FAILURE;
     }
 
-    if (aBuffer.SetLength(len)) {
+    if (aBuffer.SetLength(len, fallible)) {
         memcpy(aBuffer.Elements(), tableData, len);
         rv = NS_OK;
     } else {
@@ -556,7 +554,6 @@ gfxDWriteFontEntry::ReadCMAP(FontInfoData *aFontInfoData)
         mCharacterMap = new gfxCharacterMap();
     }
 
-#ifdef PR_LOGGING
     LOG_FONTLIST(("(fontlist-cmap) name: %s, size: %d hash: %8.8x%s\n",
                   NS_ConvertUTF16toUTF8(mName).get(),
                   charmap->SizeOfIncludingThis(moz_malloc_size_of),
@@ -567,7 +564,6 @@ gfxDWriteFontEntry::ReadCMAP(FontInfoData *aFontInfoData)
                 NS_ConvertUTF16toUTF8(mName).get());
         charmap->Dump(prefix, eGfxLog_cmapdata);
     }
-#endif
 
     return rv;
 }
@@ -1024,7 +1020,6 @@ gfxDWriteFontList::DelayedInitFontList()
                 faces[i]->mFamilyName = gillSansMTFamily->Name();
                 gillSansMTFamily->AddFontEntry(faces[i]);
 
-#ifdef PR_LOGGING
                 if (LOG_FONTLIST_ENABLED()) {
                     gfxFontEntry *fe = faces[i];
                     LOG_FONTLIST(("(fontlist) moved (%s) to family (%s)"
@@ -1034,7 +1029,6 @@ gfxDWriteFontList::DelayedInitFontList()
                          (fe->IsItalic()) ? "italic" : "normal",
                          fe->Weight(), fe->Stretch()));
                 }
-#endif
             }
 
             // remove Gills Sans
@@ -1128,7 +1122,7 @@ gfxDWriteFontList::GetFontsFromCollection(IDWriteFontCollection* aCollection)
             continue;
         }
 
-        if (!enName.SetLength(length + 1)) {
+        if (!enName.SetLength(length + 1, fallible)) {
             // Eeep - running out of memory. Unlikely to end well.
             continue;
         }
@@ -1177,7 +1171,7 @@ gfxDWriteFontList::GetFontsFromCollection(IDWriteFontCollection* aCollection)
                 continue;
             }
 
-            if (!localizedName.SetLength(nameLen + 1)) {
+            if (!localizedName.SetLength(nameLen + 1, fallible)) {
                 continue;
             }
 
@@ -1310,7 +1304,9 @@ gfxDWriteFontList::GetStandardFamilyName(const nsAString& aFontName,
 }
 
 gfxFontFamily*
-gfxDWriteFontList::FindFamily(const nsAString& aFamily, bool aUseSystemFonts)
+gfxDWriteFontList::FindFamily(const nsAString& aFamily,
+                              nsIAtom* aLanguage,
+                              bool aUseSystemFonts)
 {
     if (!mInitialized) {
         mInitialized = true;
@@ -1410,7 +1406,7 @@ static HRESULT GetFamilyName(IDWriteFont *aFont, nsString& aFamilyName)
         return hr;
     }
 
-    if (!name.SetLength(length + 1)) {
+    if (!name.SetLength(length + 1, fallible)) {
         return E_FAIL;
     }
     hr = familyNames->GetString(index, name.Elements(), length + 1);
@@ -1591,7 +1587,7 @@ DirectWriteFontInfo::LoadFontFamilyData(const nsAString& aFamilyName)
     nsAutoTArray<wchar_t, 32> famName;
 
     uint32_t len = aFamilyName.Length();
-    famName.SetLength(len + 1);
+    famName.SetLength(len + 1, fallible);
     memcpy(famName.Elements(), aFamilyName.BeginReading(), len * sizeof(char16_t));
     famName[len] = 0;
 

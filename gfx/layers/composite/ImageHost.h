@@ -75,13 +75,13 @@ public:
                     const char* aPrefix = "",
                     bool aDumpHtml = false) override;
 
-  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() override;
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override;
 
   virtual bool Lock() override;
 
   virtual void Unlock() override;
 
-  virtual TemporaryRef<TexturedEffect> GenEffect(const gfx::Filter& aFilter) override;
+  virtual already_AddRefed<TexturedEffect> GenEffect(const gfx::Filter& aFilter) override;
 
 protected:
 
@@ -112,7 +112,8 @@ public:
                          const nsIntRegion* aVisibleRegion = nullptr) override;
   virtual LayerRenderState GetRenderState() override;
   virtual void UseOverlaySource(OverlaySource aOverlay) override;
-  virtual void SetPictureRect(const gfx::IntRect& aPictureRect) override
+  virtual gfx::IntSize GetImageSize() const override;
+  virtual void SetPictureRect(const nsIntRect& aPictureRect) override
   {
     mPictureRect = aPictureRect;
     mHasPictureRect = true;

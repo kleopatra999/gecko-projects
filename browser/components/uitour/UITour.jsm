@@ -12,6 +12,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
+Cu.import("resource://gre/modules/TelemetryController.jsm");
 
 Cu.importGlobalProperties(["URL"]);
 
@@ -70,8 +71,7 @@ const TARGET_SEARCHENGINE_PREFIX = "searchEngine-";
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let ConsoleAPI = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).ConsoleAPI;
   let consoleOptions = {
-    // toLowerCase is because the loglevel values use title case to be compatible with Log.jsm.
-    maxLogLevel: Services.prefs.getCharPref(PREF_LOG_LEVEL).toLowerCase(),
+    maxLogLevelPref: PREF_LOG_LEVEL,
     prefix: "UITour",
   };
   return new ConsoleAPI(consoleOptions);
@@ -96,12 +96,12 @@ this.UITour = {
   targets: new Map([
     ["accountStatus", {
       query: (aDocument) => {
-        let statusButton = aDocument.getElementById("PanelUI-fxa-status");
+        let statusButton = aDocument.getElementById("PanelUI-fxa-label");
         return aDocument.getAnonymousElementByAttribute(statusButton,
                                                         "class",
                                                         "toolbarbutton-icon");
       },
-      widgetName: "PanelUI-fxa-status",
+      widgetName: "PanelUI-fxa-label",
     }],
     ["addons",      {query: "#add-ons-button"}],
     ["appMenu",     {
@@ -191,7 +191,11 @@ this.UITour = {
         return loopBrowser.contentDocument.querySelector(".signin-link");
       },
     }],
-    ["pocket", {query: "#pocket-button"}],
+    ["pocket", {
+      allowAdd: true,
+      query: "#pocket-button",
+      widgetName: "pocket-button",
+    }],
     ["privateWindow",  {query: "#privatebrowsing-button"}],
     ["quit",        {query: "#PanelUI-quit"}],
     ["readerMode-urlBar", {query: "#reader-mode-button"}],
@@ -1550,6 +1554,46 @@ this.UITour = {
       this.getTarget(aWindow, "searchProvider").then(target => {
         openMenuButton(target.node);
       }).catch(log.error);
+    } else if (aMenuName == "pocket") {
+      this.getTarget(aWindow, "pocket").then(Task.async(function* onPocketTarget(target) {
+        let widgetGroupWrapper = CustomizableUI.getWidget(target.widgetName);
+        if (widgetGroupWrapper.type != "view" || !widgetGroupWrapper.viewId) {
+          log.error("Can't open the pocket menu without a view");
+          return;
+        }
+        let placement = CustomizableUI.getPlacementOfWidget(target.widgetName);
+        if (!placement || !placement.area) {
+          log.error("Can't open the pocket menu without a placement");
+          return;
+        }
+
+        if (placement.area == CustomizableUI.AREA_PANEL) {
+          // Open the appMenu and wait for it if it's not already opened or showing a subview.
+          yield new Promise((resolve, reject) => {
+            if (aWindow.PanelUI.panel.state != "closed") {
+              if (aWindow.PanelUI.multiView.showingSubView) {
+                reject("A subview is already showing");
+                return;
+              }
+
+              resolve();
+              return;
+            }
+
+            aWindow.PanelUI.panel.addEventListener("popupshown", function onShown() {
+              aWindow.PanelUI.panel.removeEventListener("popupshown", onShown);
+              resolve();
+            });
+
+            aWindow.PanelUI.show();
+          });
+        }
+
+        let widgetWrapper = widgetGroupWrapper.forWindow(aWindow);
+        aWindow.PanelUI.showSubView(widgetGroupWrapper.viewId,
+                                    widgetWrapper.anchor,
+                                    placement.area);
+      })).catch(log.error);
     }
   },
 
@@ -1935,6 +1979,16 @@ const DAILY_DISCRETE_TEXT_FIELD = Metrics.Storage.FIELD_DAILY_DISCRETE_TEXT;
  */
 const UITourHealthReport = {
   recordTreatmentTag: function(tag, value) {
+  TelemetryController.submitExternalPing("uitour-tag",
+    {
+      version: 1,
+      tagName: tag,
+      tagValue: value,
+    },
+    {
+      addClientId: true,
+      addEnvironment: true,
+    });
 #ifdef MOZ_SERVICES_HEALTHREPORT
     Task.spawn(function*() {
       let reporter = Cc["@mozilla.org/datareporting/service;1"]

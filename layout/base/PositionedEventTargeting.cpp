@@ -76,7 +76,7 @@ struct EventRadiusPrefs
   bool mRegistered;
   bool mTouchOnly;
   bool mRepositionEventCoords;
-  bool mTouchClusterDetection;
+  bool mTouchClusterDetectionDisabled;
   uint32_t mLimitReadableSize;
 };
 
@@ -125,8 +125,8 @@ GetPrefsFor(EventClassID aEventClassID)
     nsPrintfCString repositionPref("ui.%s.radius.reposition", prefBranch);
     Preferences::AddBoolVarCache(&prefs->mRepositionEventCoords, repositionPref.get(), false);
 
-    nsPrintfCString touchClusterPref("ui.zoomedview.enabled", prefBranch);
-    Preferences::AddBoolVarCache(&prefs->mTouchClusterDetection, touchClusterPref.get(), false);
+    nsPrintfCString touchClusterPref("ui.zoomedview.disabled", prefBranch);
+    Preferences::AddBoolVarCache(&prefs->mTouchClusterDetectionDisabled, touchClusterPref.get(), true);
 
     nsPrintfCString limitReadableSizePref("ui.zoomedview.limitReadableSize", prefBranch);
     Preferences::AddUintVarCache(&prefs->mLimitReadableSize, limitReadableSizePref.get(), 8);
@@ -173,7 +173,7 @@ HasTouchListener(nsIContent* aContent)
 }
 
 static bool
-IsElementClickable(nsIFrame* aFrame, nsIAtom* stopAt = nullptr)
+IsElementClickable(nsIFrame* aFrame, nsIAtom* stopAt = nullptr, nsAutoString* aLabelTargetId = nullptr)
 {
   // Input events propagate up the content tree so we'll follow the content
   // ancestors to look for elements accepting the click.
@@ -188,8 +188,13 @@ IsElementClickable(nsIFrame* aFrame, nsIAtom* stopAt = nullptr)
     if (content->IsAnyOfHTMLElements(nsGkAtoms::button,
                                      nsGkAtoms::input,
                                      nsGkAtoms::select,
-                                     nsGkAtoms::textarea,
-                                     nsGkAtoms::label)) {
+                                     nsGkAtoms::textarea)) {
+      return true;
+    }
+    if (content->IsHTMLElement(nsGkAtoms::label)) {
+      if (aLabelTargetId) {
+        content->GetAttr(kNameSpaceID_None, nsGkAtoms::_for, *aLabelTargetId);
+      }
       return true;
     }
 
@@ -320,6 +325,22 @@ SubtractFromExposedRegion(nsRegion* aExposedRegion, const nsRegion& aRegion)
   }
 }
 
+// Search in the list of frames aCandidates if the element with the id "aLabelTargetId"
+// is present.
+static bool IsElementPresent(nsTArray<nsIFrame*>& aCandidates, const nsAutoString& aLabelTargetId)
+{
+  for (uint32_t i = 0; i < aCandidates.Length(); ++i) {
+    nsIFrame* f = aCandidates[i];
+    nsIContent* aContent = f->GetContent();
+    if (aContent && aContent->IsElement()) {
+      if (aContent->GetID() && aLabelTargetId == nsAtomString(aContent->GetID())) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 static nsIFrame*
 GetClosest(nsIFrame* aRoot, const nsPoint& aPointRelativeToRootFrame,
            const nsRect& aTargetRect, const EventRadiusPrefs* aPrefs,
@@ -351,7 +372,8 @@ GetClosest(nsIFrame* aRoot, const nsPoint& aPointRelativeToRootFrame,
       SubtractFromExposedRegion(&exposedRegion, region);
     }
 
-    if (!IsElementClickable(f, nsGkAtoms::body)) {
+    nsAutoString labelTargetId;
+    if (!IsElementClickable(f, nsGkAtoms::body, &labelTargetId)) {
       PET_LOG("  candidate %p was not clickable\n", f);
       continue;
     }
@@ -366,7 +388,13 @@ GetClosest(nsIFrame* aRoot, const nsPoint& aPointRelativeToRootFrame,
       continue;
     }
 
-    (*aElementsInCluster)++;
+    // If the first clickable ancestor of f is a label element
+    // and "for" attribute is present in label element, search the frame list for the "for" element
+    // If this element is present in the current list, do not count the frame in
+    // the cluster elements counter
+    if (labelTargetId.IsEmpty() || !IsElementPresent(aCandidates, labelTargetId)) {
+      (*aElementsInCluster)++;
+    }
 
     // distance is in appunits
     float distance = ComputeDistanceFromRegion(aPointRelativeToRootFrame, region);
@@ -387,16 +415,19 @@ GetClosest(nsIFrame* aRoot, const nsPoint& aPointRelativeToRootFrame,
 
 /*
  * Return always true when touch cluster detection is OFF.
- * When cluster detection is ON, return true if the text inside
- * the frame is readable (by human eyes):
- *   in this case, the frame is really clickable.
- * Frames with a too small size will return false:
- *   in this case, the frame is considered not clickable.
+ * When cluster detection is ON, return true:
+ *   if the text inside the frame is readable (by human eyes)
+ *   or
+ *   if the structure is too complex to determine the size.
+ * In both cases, the frame is considered as clickable.
+ *
+ * Frames with a too small size will return false.
+ * In this case, the frame is considered not clickable.
  */
 static bool
 IsElementClickableAndReadable(nsIFrame* aFrame, WidgetGUIEvent* aEvent, const EventRadiusPrefs* aPrefs)
 {
-  if (!aPrefs->mTouchClusterDetection) {
+  if (aPrefs->mTouchClusterDetectionDisabled) {
     return true;
   }
 
@@ -413,11 +444,38 @@ IsElementClickableAndReadable(nsIFrame* aFrame, WidgetGUIEvent* aEvent, const Ev
       (pc->AppUnitsToGfxUnits(frameSize.width) * cumulativeResolution) < limitReadableSize) {
     return false;
   }
-  nsRefPtr<nsFontMetrics> fm;
-  nsLayoutUtils::GetFontMetricsForFrame(aFrame, getter_AddRefs(fm),
-    nsLayoutUtils::FontSizeInflationFor(aFrame));
-  if (fm) {
-    if ((pc->AppUnitsToGfxUnits(fm->EmHeight()) * cumulativeResolution) < limitReadableSize) {
+  // We want to detect small clickable text elements using the font size.
+  // Two common cases are supported for now:
+  //    1. text node
+  //    2. any element with only one child of type text node
+  // All the other cases are currently ignored.
+  nsIContent *content = aFrame->GetContent();
+  bool testFontSize = false;
+  if (content) {
+    nsINodeList* childNodes = content->ChildNodes();
+    uint32_t childNodeCount = childNodes->Length();
+    if ((content->IsNodeOfType(nsINode::eTEXT)) ||
+      // click occurs on the text inside <a></a> or other clickable tags with text inside
+
+      (childNodeCount == 1 && childNodes->Item(0) &&
+        childNodes->Item(0)->IsNodeOfType(nsINode::eTEXT))) {
+      // The click occurs on an element with only one text node child. In this case, the font size
+      // can be tested.
+      // The number of child nodes is tested to avoid the following cases (See bug 1172488):
+      //   Some jscript libraries transform text elements into Canvas elements but keep the text nodes
+      //   with a very small size (1px) to handle the selection of text.
+      //   With such libraries, the font size of the text elements is not relevant to detect small elements.
+
+      testFontSize = true;
+    }
+  }
+
+  if (testFontSize) {
+    nsRefPtr<nsFontMetrics> fm;
+    nsLayoutUtils::GetFontMetricsForFrame(aFrame, getter_AddRefs(fm),
+      nsLayoutUtils::FontSizeInflationFor(aFrame));
+    if (fm && fm->EmHeight() > 0 && // See bug 1171731
+        (pc->AppUnitsToGfxUnits(fm->EmHeight()) * cumulativeResolution) < limitReadableSize) {
       return false;
     }
   }
@@ -487,7 +545,7 @@ FindFrameTargetedByInputEvent(WidgetGUIEvent* aEvent,
     GetClosest(aRootFrame, aPointRelativeToRootFrame, targetRect, prefs,
                restrictToDescendants, candidates, &elementsInCluster);
   if (closestClickable) {
-    if ((prefs->mTouchClusterDetection && elementsInCluster > 1) ||
+    if ((!prefs->mTouchClusterDetectionDisabled && elementsInCluster > 1) ||
         (!IsElementClickableAndReadable(closestClickable, aEvent, prefs))) {
       if (aEvent->mClass == eMouseEventClass) {
         WidgetMouseEventBase* mouseEventBase = aEvent->AsMouseEventBase();

@@ -32,7 +32,7 @@
                   command="Browser:Stop"/>
         <menuitem id="context-bookmarkpage"
                   class="menuitem-iconic"
-                  tooltiptext="&bookmarkPageCmd2.label;"
+                  observes="bookmarkThisPageBroadcaster"
                   aria-label="&bookmarkPageCmd2.label;"
                   oncommand="gContextMenu.bookmarkThisPage();"/>
       </menugroup>
@@ -79,6 +79,10 @@
                 label="&saveLinkCmd.label;"
                 accesskey="&saveLinkCmd.accesskey;"
                 oncommand="gContextMenu.saveLink();"/>
+      <menuitem id="context-savelinktopocket"
+                label="&saveLinkToPocketCmd.label;"
+                accesskey="&saveLinkToPocketCmd.accesskey;"
+                oncommand="gContextMenu.saveLinkToPocket();"/>
       <menu id="context-marklinkMenu" label="&social.marklinkMenu.label;"
             accesskey="&social.marklinkMenu.accesskey;">
         <menupopup/>
@@ -269,7 +273,7 @@
       <menuitem id="context-pocket"
                 label="&saveToPocketCmd.label;"
                 accesskey="&saveToPocketCmd.accesskey;"
-                oncommand="gContextMenu.saveToPocket();"/>
+                oncommand="gContextMenu.savePageToPocket();"/>
       <menu id="context-markpageMenu" label="&social.markpageMenu.label;"
             accesskey="&social.markpageMenu.accesskey;">
         <menupopup/>
@@ -377,7 +381,7 @@
       <menuitem id="context-viewsource"
                 label="&viewPageSourceCmd.label;"
                 accesskey="&viewPageSourceCmd.accesskey;"
-                oncommand="BrowserViewSourceOfDocument(gContextMenu.browser.contentDocumentAsCPOW);"
+                oncommand="BrowserViewSource(gContextMenu.browser);"
                 observes="isImage"/>
       <menuitem id="context-viewinfo"
                 label="&viewPageInfoCmd.label;"

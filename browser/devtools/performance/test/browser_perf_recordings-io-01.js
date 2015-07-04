@@ -6,10 +6,11 @@
  */
 
 let test = Task.async(function*() {
-  let { target, panel, toolbox } = yield initPerformance(SIMPLE_URL);
-  let { EVENTS, PerformanceController, DetailsView, DetailsSubview } = panel.panelWin;
+  var { target, panel, toolbox } = yield initPerformance(SIMPLE_URL);
+  var { EVENTS, PerformanceController, DetailsView, DetailsSubview } = panel.panelWin;
 
-  // Enable memory to test the memory-calltree and memory-flamegraph.
+  // Enable allocations to test the memory-calltree and memory-flamegraph.
+  Services.prefs.setBoolPref(ALLOCATIONS_PREF, true);
   Services.prefs.setBoolPref(MEMORY_PREF, true);
   Services.prefs.setBoolPref(FRAMERATE_PREF, true);
 
@@ -27,7 +28,6 @@ let test = Task.async(function*() {
   yield DetailsView.selectView("js-flamegraph");
   yield DetailsView.selectView("memory-calltree");
   yield DetailsView.selectView("memory-flamegraph");
-
 
   // Verify original recording.
 

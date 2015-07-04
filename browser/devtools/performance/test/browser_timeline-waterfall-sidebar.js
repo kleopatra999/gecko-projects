@@ -5,10 +5,19 @@
  * Tests if the sidebar is properly updated when a marker is selected.
  */
 
-function spawnTest () {
+function* spawnTest() {
   let { target, panel } = yield initPerformance(SIMPLE_URL);
-  let { $, $$, EVENTS, PerformanceController, OverviewView } = panel.panelWin;
-  let { L10N, TIMELINE_BLUEPRINT } = devtools.require("devtools/shared/timeline/global");
+  let { $, $$, PerformanceController, WaterfallView } = panel.panelWin;
+  let { L10N } = devtools.require("devtools/performance/global");
+  let { getMarkerLabel } = devtools.require("devtools/performance/marker-utils");
+
+  // Hijack the markers massaging part of creating the waterfall view,
+  // to prevent collapsing markers and allowing this test to verify
+  // everything individually. A better solution would be to just expand
+  // all markers first and then skip the meta nodes, but I'm lazy.
+  WaterfallView._prepareWaterfallTree = markers => {
+    return { submarkers: markers };
+  };
 
   yield startRecording(panel);
   ok(true, "Recording has started.");
@@ -24,36 +33,44 @@ function spawnTest () {
   yield stopRecording(panel);
   ok(true, "Recording has ended.");
 
-  // Select everything
-  OverviewView.graphs.get("timeline").setSelection({ start: 0, end: OverviewView.graphs.get("timeline").width })
+  info("No need to select everything in the timeline.");
+  info("All the markers should be displayed by default.");
 
-  let bars = $$(".waterfall-marker-item:not(spacer) > .waterfall-marker-bar");
+  let bars = $$(".waterfall-marker-bar");
   let markers = PerformanceController.getCurrentRecording().getMarkers();
 
-  ok(bars.length > 2, "got at least 3 markers");
+  info(`Got ${bars.length} bars and ${markers.length} markers.`);
+  info("Markers types from datasrc: " + Array.map(markers, e => e.name));
+  info("Markers names from sidebar: " + Array.map(bars, e => e.parentNode.parentNode.querySelector(".waterfall-marker-name").getAttribute("value")));
 
-  let sidebar = $("#waterfall-details");
+  ok(bars.length > 2, "Got at least 3 markers (1)");
+  ok(markers.length > 2, "Got at least 3 markers (2)");
+
+  let toMs = ms => L10N.getFormatStrWithNumbers("timeline.tick", ms);
+
   for (let i = 0; i < bars.length; i++) {
     let bar = bars[i];
-    bar.click();
-    let m = markers[i];
+    let mkr = markers[i];
+    EventUtils.sendMouseEvent({ type: "mousedown" }, bar);
 
-    let name = TIMELINE_BLUEPRINT[m.name].label;
+    let type = $(".marker-details-type").getAttribute("value");
+    let tooltip = $(".marker-details-duration").getAttribute("tooltiptext");
+    let duration = $(".marker-details-duration .marker-details-labelvalue").getAttribute("value");
 
-    is($("#waterfall-details .marker-details-type").getAttribute("value"), name,
-      "sidebar title matches markers name");
+    info("Current marker data: " + mkr.toSource());
+    info("Current marker output: " + $("#waterfall-details").innerHTML);
 
-    let printedStartTime = $(".marker-details-start .marker-details-labelvalue").getAttribute("value");
-    let printedEndTime = $(".marker-details-end .marker-details-labelvalue").getAttribute("value");
-    let printedDuration= $(".marker-details-duration .marker-details-labelvalue").getAttribute("value");
-
-    let toMs = ms => L10N.getFormatStrWithNumbers("timeline.tick", ms);
+    is(type, getMarkerLabel(mkr), "Sidebar title matches markers name.");
 
     // Values are rounded. We don't use a strict equality.
-    is(toMs(m.start), printedStartTime, "sidebar start time is valid");
-    is(toMs(m.end), printedEndTime, "sidebar end time is valid");
-    is(toMs(m.end - m.start), printedDuration, "sidebar duration is valid");
+    is(toMs(mkr.end - mkr.start), duration, "Sidebar duration is valid.");
+
+    // For some reason, anything that creates "→" here turns it into a "â" for some reason.
+    // So just check that start and end time are in there somewhere.
+    ok(tooltip.indexOf(toMs(mkr.start)) !== -1, "Tooltip has start time.");
+    ok(tooltip.indexOf(toMs(mkr.end)) !== -1, "Tooltip has end time.");
   }
+
   yield teardown(panel);
   finish();
 }

@@ -19,6 +19,10 @@ class MediaBuffer;
 };
 
 namespace mozilla {
+namespace gl {
+class SharedSurface;
+}
+
 namespace layers {
 
 /**
@@ -110,11 +114,11 @@ public:
     return mMediaBuffer;
   }
 
-  virtual TemporaryRef<TextureClient>
+  virtual already_AddRefed<TextureClient>
   CreateSimilar(TextureFlags aFlags = TextureFlags::DEFAULT,
                 TextureAllocationFlags aAllocFlags = ALLOC_DEFAULT) const override;
 
-  static TemporaryRef<TextureClient> FromSharedSurface(gl::SharedSurface* surf,
+  static already_AddRefed<TextureClient> FromSharedSurface(gl::SharedSurface* surf,
                                                        TextureFlags flags);
 
 protected:

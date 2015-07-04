@@ -580,6 +580,15 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
     }
     break;
   }
+  case NS_MOUSE_ENTER_WIDGET:
+    // In some cases on e10s NS_MOUSE_ENTER_WIDGET
+    // event was sent twice into child process of content.
+    // (From specific widget code (sending is not permanent) and
+    // from ESM::DispatchMouseOrPointerEvent (sending is permanent)).
+    // Flag mNoCrossProcessBoundaryForwarding helps to
+    // suppress sending accidental event from widget code.
+    aEvent->mFlags.mNoCrossProcessBoundaryForwarding = true;
+    break;
   case NS_MOUSE_EXIT_WIDGET:
     // If this is a remote frame, we receive NS_MOUSE_EXIT_WIDGET from the parent
     // the mouse exits our content. Since the parent may update the cursor
@@ -591,6 +600,10 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
     if (XRE_GetProcessType() == GeckoProcessType_Content) {
       ClearCachedWidgetCursor(mCurrentTarget);
     }
+
+    // Flag helps to suppress double event sending into process of content.
+    // For more information see comment above, at NS_MOUSE_ENTER_WIDGET case.
+    aEvent->mFlags.mNoCrossProcessBoundaryForwarding = true;
 
     // If the event is not a top-level window exit, then it's not
     // really an exit --- we may have traversed widget boundaries but
@@ -828,21 +841,6 @@ EventStateManager::PreHandleEvent(nsPresContext* aPresContext,
       DoQuerySelectedText(&selectedText);
       NS_ASSERTION(selectedText.mSucceeded, "Failed to get selected text");
       compositionEvent->mData = selectedText.mReply.mString;
-    }
-    // through to compositionend handling
-  case NS_COMPOSITION_END:
-  case NS_COMPOSITION_CHANGE:
-  case NS_COMPOSITION_COMMIT_AS_IS:
-  case NS_COMPOSITION_COMMIT:
-    {
-      WidgetCompositionEvent* compositionEvent = aEvent->AsCompositionEvent();
-      if (IsTargetCrossProcess(compositionEvent)) {
-        // Will not be handled locally, remote the event
-        if (GetCrossProcessTarget()->SendCompositionEvent(*compositionEvent)) {
-          // Cancel local dispatching
-          aEvent->mFlags.mPropagationStopped = true;
-        }
-      }
     }
     break;
   }
@@ -1183,7 +1181,6 @@ CrossProcessSafeEvent(const WidgetEvent& aEvent)
     case NS_CONTEXTMENU:
     case NS_MOUSE_ENTER_WIDGET:
     case NS_MOUSE_EXIT_WIDGET:
-    case NS_MOUSE_OVER:
       return true;
     default:
       return false;
@@ -2745,6 +2742,8 @@ EventStateManager::PostHandleKeyboardEvent(WidgetKeyboardEvent* aKeyboardEvent,
     case NS_VK_F6:
       // This is to prevent keyboard scrolling while alt modifier in use.
       if (!aKeyboardEvent->IsAlt()) {
+        aStatus = nsEventStatus_eConsumeNoDefault;
+
         // Handling the tab event after it was sent to content is bad,
         // because to the FocusManager the remote-browser looks like one
         // element, so we would just move the focus to the next element
@@ -2768,7 +2767,6 @@ EventStateManager::PostHandleKeyboardEvent(WidgetKeyboardEvent* aKeyboardEvent,
                         nsIFocusManager::FLAG_BYKEY,
                         getter_AddRefs(result));
         }
-        aStatus = nsEventStatus_eConsumeNoDefault;
       }
       return;
     case 0:
@@ -3268,12 +3266,13 @@ EventStateManager::PostHandleEvent(nsPresContext* aPresContext,
       }
       if (dispatchedToContentProcess) {
         dragSession->SetCanDrop(true);
-      }
-
-      // now set the drop effect in the initial dataTransfer. This ensures
-      // that we can get the desired drop effect in the drop event.
-      if (initialDataTransfer)
+      } else if (initialDataTransfer) {
+        // Now set the drop effect in the initial dataTransfer. This ensures
+        // that we can get the desired drop effect in the drop event. For events
+        // dispatched to content, the content process will take care of setting
+        // this.
         initialDataTransfer->SetDropEffectInt(dropEffect);
+      }
     }
     break;
 
@@ -3371,7 +3370,7 @@ EventStateManager::RemoteQueryContentEvent(WidgetEvent* aEvent)
 TabParent*
 EventStateManager::GetCrossProcessTarget()
 {
-  return TabParent::GetIMETabParent();
+  return IMEStateManager::GetActiveTabParent();
 }
 
 bool
@@ -3382,7 +3381,7 @@ EventStateManager::IsTargetCrossProcess(WidgetGUIEvent* aEvent)
   nsIContent *focusedContent = GetFocusedContent();
   if (focusedContent && focusedContent->IsEditable())
     return false;
-  return TabParent::GetIMETabParent() != nullptr;
+  return IMEStateManager::GetActiveTabParent() != nullptr;
 }
 
 void
@@ -3930,10 +3929,15 @@ EventStateManager::NotifyMouseOut(WidgetMouseEvent* aMouseEvent,
     SetContentState(nullptr, NS_EVENT_STATE_HOVER);
   }
 
+  // In case we go out from capturing element (retargetedByPointerCapture is true)
+  // we should dispatch NS_POINTER_LEAVE event and only for capturing element.
+  nsRefPtr<nsIContent> movingInto = aMouseEvent->retargetedByPointerCapture
+                                    ? wrapper->mLastOverElement->GetParent()
+                                    : aMovingInto;
+
   EnterLeaveDispatcher leaveDispatcher(this, wrapper->mLastOverElement,
-                                       aMovingInto, aMouseEvent,
-                                       isPointer ? NS_POINTER_LEAVE :
-                                                   NS_MOUSELEAVE);
+                                       movingInto, aMouseEvent,
+                                       isPointer ? NS_POINTER_LEAVE : NS_MOUSELEAVE);
 
   // Fire mouseout
   DispatchMouseOrPointerEvent(aMouseEvent, isPointer ? NS_POINTER_OUT : NS_MOUSE_OUT,
@@ -4784,8 +4788,10 @@ EventStateManager::SetContentState(nsIContent* aContent, EventStates aState)
 
     if (aState == NS_EVENT_STATE_ACTIVE) {
       // Editable content can never become active since their default actions
-      // are disabled.
-      if (aContent && aContent->IsEditable()) {
+      // are disabled.  Watch out for editable content in native anonymous
+      // subtrees though, as they belong to text controls.
+      if (aContent && aContent->IsEditable() &&
+          !aContent->IsInNativeAnonymousSubtree()) {
         aContent = nullptr;
       }
       if (aContent != mActiveContent) {

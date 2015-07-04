@@ -36,6 +36,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/MemoryReporting.h"
+#include "ZoomConstraintsClient.h"
 
 class nsRange;
 
@@ -77,6 +78,8 @@ public:
   // Selection caret preference
   static bool SelectionCaretPrefEnabled();
 
+  static bool AccessibleCaretEnabled();
+
   // BeforeAfterKeyboardEvent preference
   static bool BeforeAfterKeyboardEventEnabled();
 
@@ -86,7 +89,7 @@ public:
   virtual void Destroy() override;
   virtual void MakeZombie() override;
 
-  virtual nsresult SetPreferenceStyleRules(bool aForceReflow) override;
+  virtual void UpdatePreferenceStyles() override;
 
   NS_IMETHOD GetSelection(SelectionType aType, nsISelection** aSelection) override;
   virtual mozilla::dom::Selection* GetCurrentSelection(SelectionType aType) override;
@@ -108,7 +111,9 @@ public:
 
   virtual nsIFrame* GetPlaceholderFrameFor(nsIFrame* aFrame) const override;
   virtual void FrameNeedsReflow(nsIFrame *aFrame, IntrinsicDirty aIntrinsicDirty,
-                                            nsFrameState aBitToAdd) override;
+                                nsFrameState aBitToAdd,
+                                ReflowRootHandling aRootHandling =
+                                  eInferFromBitToAdd) override;
   virtual void FrameNeedsToContinueReflow(nsIFrame *aFrame) override;
   virtual void CancelAllPendingReflows() override;
   virtual bool IsSafeToFlush() const override;
@@ -181,13 +186,13 @@ public:
                                               nscolor aBackgroundColor,
                                               gfxContext* aThebesContext) override;
 
-  virtual mozilla::TemporaryRef<SourceSurface>
+  virtual already_AddRefed<SourceSurface>
   RenderNode(nsIDOMNode* aNode,
              nsIntRegion* aRegion,
              nsIntPoint& aPoint,
              nsIntRect* aScreenRect) override;
 
-  virtual mozilla::TemporaryRef<SourceSurface>
+  virtual already_AddRefed<SourceSurface>
   RenderSelection(nsISelection* aSelection,
                   nsIntPoint& aPoint,
                   nsIntRect* aScreenRect) override;
@@ -195,6 +200,8 @@ public:
   virtual already_AddRefed<nsPIDOMWindow> GetRootWindow() override;
 
   virtual LayerManager* GetLayerManager() override;
+
+  virtual bool AsyncPanZoomEnabled() override;
 
   virtual void SetIgnoreViewportScrolling(bool aIgnore) override;
 
@@ -240,6 +247,9 @@ public:
   virtual already_AddRefed<mozilla::SelectionCarets> GetSelectionCarets() const override;
   virtual mozilla::dom::Element* GetSelectionCaretsStartElement() const override;
   virtual mozilla::dom::Element* GetSelectionCaretsEndElement() const override;
+
+  virtual already_AddRefed<mozilla::AccessibleCaretEventHub> GetAccessibleCaretEventHub() const override;
+
   // caret handling
   virtual already_AddRefed<nsCaret> GetCaret() const override;
   NS_IMETHOD SetCaretEnabled(bool aInEnable) override;
@@ -273,6 +283,9 @@ public:
   NS_IMETHOD CheckVisibility(nsIDOMNode *node, int16_t startOffset, int16_t EndOffset, bool *_retval) override;
   virtual nsresult CheckVisibilityContent(nsIContent* aNode, int16_t aStartOffset,
                                           int16_t aEndOffset, bool* aRetval) override;
+
+  NS_IMETHOD GetSelectionCaretsVisibility(bool* aOutVisibility) override;
+  NS_IMETHOD SetSelectionCaretsVisibility(bool aVisibility) override;
 
   // nsIDocumentObserver
   NS_DECL_NSIDOCUMENTOBSERVER_BEGINUPDATE
@@ -319,9 +332,7 @@ public:
   virtual void VerifyStyleTree() override;
 #endif
 
-#ifdef PR_LOGGING
   static PRLogModuleInfo* gLog;
-#endif
 
   virtual void DisableNonTestMouseEvents(bool aDisable) override;
 
@@ -389,8 +400,6 @@ public:
                                           bool aEmbeddedCancelled) override;
 
   void SetNextPaintCompressed() { mNextPaintCompressed = true; }
-
-  virtual void FireResizeEvent() override;
 
 protected:
   virtual ~PresShell();
@@ -508,16 +517,7 @@ protected:
 
   void RecordStyleSheetChange(nsIStyleSheet* aStyleSheet);
 
-    /**
-    * methods that manage rules that are used to implement the associated preferences
-    *  - initially created for bugs 31816, 20760, 22963
-    */
-  nsresult ClearPreferenceStyleRules(void);
-  nsresult CreatePreferenceStyleSheet(void);
-  nsresult SetPrefLinkRules(void);
-  nsresult SetPrefFocusRules(void);
-  nsresult SetPrefNoScriptRule();
-  nsresult SetPrefNoFramesRule(void);
+  void RemovePreferenceStyles();
 
   // methods for painting a range to an offscreen buffer
 
@@ -543,7 +543,7 @@ protected:
    * aScreenRect - [out] set to the area of the screen the painted area should
    *               be displayed at
    */
-  mozilla::TemporaryRef<SourceSurface>
+  already_AddRefed<SourceSurface>
   PaintRangePaintInfo(nsTArray<nsAutoPtr<RangePaintInfo> >* aItems,
                       nsISelection* aSelection,
                       nsIntRegion* aRegion,
@@ -702,6 +702,9 @@ protected:
                                            mozilla::LayoutDeviceIntPoint& aTargetPt,
                                            nsIWidget *aRootWidget);
 
+  void FireResizeEvent();
+  static void AsyncResizeEventCallback(nsITimer* aTimer, void* aPresShell);
+
   virtual void SynthesizeMouseMove(bool aFromScroll) override;
 
   PresShell* GetRootPresShell();
@@ -791,6 +794,8 @@ protected:
   nsTArray<nsIFrame*>       mDirtyRoots;
 
   nsTArray<nsAutoPtr<DelayedEvent> > mDelayedEvents;
+  nsRevocableEventPtr<nsRunnableMethod<PresShell> > mResizeEvent;
+  nsCOMPtr<nsITimer>        mAsyncResizeEventTimer;
 private:
   nsIFrame*                 mCurrentEventFrame;
   nsCOMPtr<nsIContent>      mCurrentEventContent;
@@ -807,9 +812,12 @@ protected:
   // TouchManager
   TouchManager              mTouchManager;
 
+  nsRefPtr<ZoomConstraintsClient> mZoomConstraintsClient;
+
   // TouchCaret
   nsRefPtr<mozilla::TouchCaret> mTouchCaret;
   nsRefPtr<mozilla::SelectionCarets> mSelectionCarets;
+  nsRefPtr<mozilla::AccessibleCaretEventHub> mAccessibleCaretEventHub;
 
   // This timer controls painting suppression.  Until it fires
   // or all frames are constructed, we won't paint anything but
@@ -858,7 +866,8 @@ protected:
   // have been processed.
   bool                      mShouldUnsuppressPainting : 1;
 
-  bool                      mResizeEventPending : 1;
+  bool                      mAsyncResizeTimerIsActive : 1;
+  bool                      mInResize : 1;
 
   bool                      mImageVisibilityVisited : 1;
 
@@ -873,6 +882,9 @@ protected:
 
   // Whether the last chrome-only escape key event is consumed.
   bool                      mIsLastChromeOnlyEscapeKeyConsumed : 1;
+
+  // Whether the widget has received a paint message yet.
+  bool                      mHasReceivedPaintMessage : 1;
 
   static bool               sDisableNonTestMouseEvents;
 };

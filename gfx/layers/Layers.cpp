@@ -30,6 +30,7 @@
 #include "mozilla/layers/LayerManagerComposite.h"  // for LayerComposite
 #include "mozilla/layers/LayerMetricsWrapper.h" // for LayerMetricsWrapper
 #include "mozilla/layers/LayersMessages.h"  // for TransformFunction, etc
+#include "mozilla/layers/PersistentBufferProvider.h"
 #include "nsAString.h"
 #include "nsCSSValue.h"                 // for nsCSSValue::Array, etc
 #include "nsPrintfCString.h"            // for nsPrintfCString
@@ -137,7 +138,7 @@ LayerManager::GetScrollableLayers(nsTArray<Layer*>& aArray)
   }
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 LayerManager::CreateOptimalDrawTarget(const gfx::IntSize &aSize,
                                       SurfaceFormat aFormat)
 {
@@ -145,18 +146,39 @@ LayerManager::CreateOptimalDrawTarget(const gfx::IntSize &aSize,
                                                                       aFormat);
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 LayerManager::CreateOptimalMaskDrawTarget(const gfx::IntSize &aSize)
 {
   return CreateOptimalDrawTarget(aSize, SurfaceFormat::A8);
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 LayerManager::CreateDrawTarget(const IntSize &aSize,
                                SurfaceFormat aFormat)
 {
   return gfxPlatform::GetPlatform()->
     CreateOffscreenCanvasDrawTarget(aSize, aFormat);
+}
+
+already_AddRefed<PersistentBufferProvider>
+LayerManager::CreatePersistentBufferProvider(const mozilla::gfx::IntSize &aSize,
+                                             mozilla::gfx::SurfaceFormat aFormat)
+{
+  RefPtr<PersistentBufferProviderBasic> bufferProvider =
+    new PersistentBufferProviderBasic(this, aSize, aFormat,
+                                      gfxPlatform::GetPlatform()->GetPreferredCanvasBackend());
+
+  if (!bufferProvider->IsValid()) {
+    bufferProvider =
+      new PersistentBufferProviderBasic(this, aSize, aFormat,
+                                        gfxPlatform::GetPlatform()->GetFallbackCanvasBackend());
+  }
+
+  if (!bufferProvider->IsValid()) {
+    return nullptr;
+  }
+
+  return bufferProvider.forget();
 }
 
 #ifdef DEBUG
@@ -167,16 +189,9 @@ LayerManager::Mutated(Layer* aLayer)
 #endif  // DEBUG
 
 already_AddRefed<ImageContainer>
-LayerManager::CreateImageContainer()
+LayerManager::CreateImageContainer(ImageContainer::Mode flag)
 {
-  nsRefPtr<ImageContainer> container = new ImageContainer(ImageContainer::DISABLE_ASYNC);
-  return container.forget();
-}
-
-already_AddRefed<ImageContainer>
-LayerManager::CreateAsynchronousImageContainer()
-{
-  nsRefPtr<ImageContainer> container = new ImageContainer(ImageContainer::ENABLE_ASYNC);
+  nsRefPtr<ImageContainer> container = new ImageContainer(flag);
   return container.forget();
 }
 
@@ -842,21 +857,31 @@ Layer::DeprecatedGetEffectiveMixBlendMode()
 }
 
 void
-Layer::ComputeEffectiveTransformForMaskLayer(const Matrix4x4& aTransformToSurface)
+Layer::ComputeEffectiveTransformForMaskLayers(const gfx::Matrix4x4& aTransformToSurface)
 {
-  if (mMaskLayer) {
-    mMaskLayer->mEffectiveTransform = aTransformToSurface;
+  if (GetMaskLayer()) {
+    ComputeEffectiveTransformForMaskLayer(GetMaskLayer(), aTransformToSurface);
+  }
+  for (size_t i = 0; i < GetAncestorMaskLayerCount(); i++) {
+    Layer* maskLayer = GetAncestorMaskLayerAt(i);
+    ComputeEffectiveTransformForMaskLayer(maskLayer, aTransformToSurface);
+  }
+}
+
+/* static */ void
+Layer::ComputeEffectiveTransformForMaskLayer(Layer* aMaskLayer, const gfx::Matrix4x4& aTransformToSurface)
+{
+  aMaskLayer->mEffectiveTransform = aTransformToSurface;
 
 #ifdef DEBUG
-    bool maskIs2D = mMaskLayer->GetTransform().CanDraw2D();
-    NS_ASSERTION(maskIs2D, "How did we end up with a 3D transform here?!");
+  bool maskIs2D = aMaskLayer->GetTransform().CanDraw2D();
+  NS_ASSERTION(maskIs2D, "How did we end up with a 3D transform here?!");
 #endif
-    // The mask layer can have an async transform applied to it in some
-    // situations, so be sure to use its GetLocalTransform() rather than
-    // its GetTransform().
-    mMaskLayer->mEffectiveTransform = mMaskLayer->GetLocalTransform() *
-      mMaskLayer->mEffectiveTransform;
-  }
+  // The mask layer can have an async transform applied to it in some
+  // situations, so be sure to use its GetLocalTransform() rather than
+  // its GetTransform().
+  aMaskLayer->mEffectiveTransform = aMaskLayer->GetLocalTransform() *
+    aMaskLayer->mEffectiveTransform;
 }
 
 RenderTargetRect
@@ -927,6 +952,27 @@ Layer::GetVisibleRegionRelativeToRootLayer(nsIntRegion& aResult,
 
   *aLayerOffset = nsIntPoint(offset.x, offset.y);
   return true;
+}
+
+Maybe<ParentLayerIntRect>
+Layer::GetCombinedClipRect() const
+{
+  Maybe<ParentLayerIntRect> clip = GetClipRect();
+
+  for (size_t i = 0; i < mFrameMetrics.Length(); i++) {
+    if (!mFrameMetrics[i].HasClipRect()) {
+      continue;
+    }
+
+    const ParentLayerIntRect& other = mFrameMetrics[i].ClipRect();
+    if (clip) {
+      clip = Some(clip.value().Intersect(other));
+    } else {
+      clip = Some(other);
+    }
+  }
+
+  return clip;
 }
 
 ContainerLayer::ContainerLayer(LayerManager* aManager, void* aImplData)
@@ -1154,11 +1200,11 @@ ContainerLayer::DefaultComputeEffectiveTransforms(const Matrix4x4& aTransformToS
   mEffectiveTransform = SnapTransformTranslation(idealTransform, &residual);
 
   bool useIntermediateSurface;
-  if (GetMaskLayer() ||
+  if (HasMaskLayers() ||
       GetForceIsolatedGroup()) {
     useIntermediateSurface = true;
 #ifdef MOZ_DUMP_PAINTING
-  } else if (gfxUtils::sDumpPainting) {
+  } else if (gfxUtils::sDumpPaintingIntermediate) {
     useIntermediateSurface = true;
 #endif
   } else {
@@ -1183,7 +1229,7 @@ ContainerLayer::DefaultComputeEffectiveTransforms(const Matrix4x4& aTransformToS
            * Nor for a child with a mask layer.
            */
           if ((clipRect && !clipRect->IsEmpty() && !child->GetVisibleRegion().IsEmpty()) ||
-              child->GetMaskLayer()) {
+              child->HasMaskLayers()) {
             useIntermediateSurface = true;
             break;
           }
@@ -1200,9 +1246,9 @@ ContainerLayer::DefaultComputeEffectiveTransforms(const Matrix4x4& aTransformToS
   }
 
   if (idealTransform.CanDraw2D()) {
-    ComputeEffectiveTransformForMaskLayer(aTransformToSurface);
+    ComputeEffectiveTransformForMaskLayers(aTransformToSurface);
   } else {
-    ComputeEffectiveTransformForMaskLayer(Matrix4x4());
+    ComputeEffectiveTransformForMaskLayers(Matrix4x4());
   }
 }
 
@@ -1427,11 +1473,11 @@ void WriteSnapshotToDumpFile_internal(T* aObj, DataSourceSurface* aSurf)
   nsCString string(aObj->Name());
   string.Append('-');
   string.AppendInt((uint64_t)aObj);
-  if (gfxUtils::sDumpPaintFile) {
+  if (gfxUtils::sDumpPaintFile != stderr) {
     fprintf_stderr(gfxUtils::sDumpPaintFile, "array[\"%s\"]=\"", string.BeginReading());
   }
   gfxUtils::DumpAsDataURI(aSurf, gfxUtils::sDumpPaintFile);
-  if (gfxUtils::sDumpPaintFile) {
+  if (gfxUtils::sDumpPaintFile != stderr) {
     fprintf_stderr(gfxUtils::sDumpPaintFile, "\";");
   }
 }
@@ -1483,6 +1529,13 @@ Layer::Dump(std::stringstream& aStream, const char* aPrefix, bool aDumpHtml)
     nsAutoCString pfx(aPrefix);
     pfx += "    ";
     mask->Dump(aStream, pfx.get(), aDumpHtml);
+  }
+
+  for (size_t i = 0; i < GetAncestorMaskLayerCount(); i++) {
+    aStream << nsPrintfCString("%s  Ancestor mask layer %d:\n", aPrefix, uint32_t(i)).get();
+    nsAutoCString pfx(aPrefix);
+    pfx += "    ";
+    GetAncestorMaskLayerAt(i)->Dump(aStream, pfx.get(), aDumpHtml);
   }
 
 #ifdef MOZ_DUMP_PAINTING
@@ -1716,6 +1769,25 @@ Layer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
   if (!mVisibleRegion.IsEmpty()) {
     DumpRegion(layer->mutable_vregion(), mVisibleRegion);
   }
+  // EventRegions
+  if (!mEventRegions.IsEmpty()) {
+    const EventRegions &e = mEventRegions;
+    if (!e.mHitRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_hitregion(), e.mHitRegion);
+    }
+    if (!e.mDispatchToContentHitRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_dispatchregion(), e.mDispatchToContentHitRegion);
+    }
+    if (!e.mNoActionRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_noactionregion(), e.mNoActionRegion);
+    }
+    if (!e.mHorizontalPanRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_hpanregion(), e.mHorizontalPanRegion);
+    }
+    if (!e.mVerticalPanRegion.IsEmpty()) {
+      DumpRegion(layer->mutable_vpanregion(), e.mVerticalPanRegion);
+    }
+  }
   // Opacity
   layer->set_opacity(mOpacity);
   // Content opaque
@@ -1796,6 +1868,7 @@ ColorLayer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
 {
   Layer::PrintInfo(aStream, aPrefix);
   AppendToString(aStream, mColor, " [color=", "]");
+  AppendToString(aStream, mBounds, " [bounds=", "]");
 }
 
 void
@@ -2050,7 +2123,7 @@ LayerManager::IsLogEnabled()
 {
   MOZ_ASSERT(!!sLog,
              "layer manager must be created before logging is allowed");
-  return PR_LOG_TEST(sLog, PR_LOG_DEBUG);
+  return MOZ_LOG_TEST(sLog, LogLevel::Debug);
 }
 
 void

@@ -16,9 +16,7 @@
 #include "nsServiceManagerUtils.h"
 #include "secerr.h"
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* gCertVerifierLog;
-#endif
 
 namespace mozilla {
 
@@ -58,7 +56,7 @@ AppendEscapedBase64Item(const SECItem* encodedRequest, nsACString& path)
     return rv;
   }
 
-  PR_LOG(gCertVerifierLog, PR_LOG_DEBUG,
+  MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
          ("Setting up OCSP GET path, pre path =%s\n",
           PromiseFlatCString(path).get()));
 
@@ -161,7 +159,7 @@ DoOCSPRequest(PLArenaPool* arena, const char* url,
   } else {
     path.Assign("/");
   }
-  PR_LOG(gCertVerifierLog, PR_LOG_DEBUG,
+  MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
          ("Setting up OCSP request: pre all path =%s  pathlen=%d\n", path.get(),
           pathLen));
   nsAutoCString method("POST");

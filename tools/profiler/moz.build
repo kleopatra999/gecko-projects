@@ -15,22 +15,25 @@ if CONFIG['MOZ_ENABLE_PROFILER_SPS']:
     EXPORTS += [
         'GeckoProfilerFunc.h',
         'GeckoProfilerImpl.h',
-        'JSStreamWriter.h',
         'ProfilerBacktrace.h',
         'ProfilerMarkers.h',
         'PseudoStack.h',
         'shared-libraries.h',
     ]
+    EXPORTS.mozilla += [
+        'ProfileGatherer.h',
+    ]
     EXTRA_JS_MODULES += [
         'Profiler.jsm',
     ]
     UNIFIED_SOURCES += [
-        'JSStreamWriter.cpp',
         'nsProfiler.cpp',
         'nsProfilerFactory.cpp',
         'nsProfilerStartParams.cpp',
         'platform.cpp',
         'ProfileEntry.cpp',
+        'ProfileGatherer.cpp',
+        'ProfileJSONWriter.cpp',
         'ProfilerBacktrace.cpp',
         'ProfilerIOInterposeObserver.cpp',
         'ProfilerMarkers.cpp',
@@ -61,9 +64,6 @@ if CONFIG['MOZ_ENABLE_PROFILER_SPS']:
             'shared-libraries-linux.cc',
         ]
         if CONFIG['CPU_ARCH'] == 'arm':
-            UNIFIED_SOURCES += [
-                'LulExidx.cpp',
-            ]
             SOURCES += [
                 'EHABIStackWalk.cpp',
             ]

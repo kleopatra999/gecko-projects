@@ -662,8 +662,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       // Instead we are dispatching back to the same method for
       // all of these.
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::Initialize,
-          aObserver, aWindow, aConfiguration, aThread, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::Initialize,
+          aObserver, aWindow, aConfiguration, aThread),
         NS_DISPATCH_SYNC);
       rv = NS_OK;
     }
@@ -685,8 +685,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       }
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::CreateOffer,
-          aOptions, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::CreateOffer, aOptions),
         NS_DISPATCH_SYNC);
     }
 
@@ -700,7 +699,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->CreateAnswer();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::CreateAnswer, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::CreateAnswer),
         NS_DISPATCH_SYNC);
     }
 
@@ -714,8 +713,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->SetLocalDescription(aAction, aSDP);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::SetLocalDescription,
-          aAction, aSDP, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::SetLocalDescription,
+          aAction, aSDP),
         NS_DISPATCH_SYNC);
     }
 
@@ -729,8 +728,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->SetRemoteDescription(aAction, aSDP);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::SetRemoteDescription,
-          aAction, aSDP, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::SetRemoteDescription,
+          aAction, aSDP),
         NS_DISPATCH_SYNC);
     }
 
@@ -745,8 +744,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->AddIceCandidate(aCandidate, aMid, aLevel);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::AddIceCandidate,
-          aCandidate, aMid, aLevel, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::AddIceCandidate,
+          aCandidate, aMid, aLevel),
         NS_DISPATCH_SYNC);
     }
     return rv;
@@ -761,8 +760,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->AddTrack(*aTrack, *aMediaStream);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::AddTrack, aTrack,
-                        aMediaStream, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::AddTrack, aTrack,
+                        aMediaStream),
         NS_DISPATCH_SYNC);
     }
 
@@ -776,7 +775,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->RemoveTrack(*aTrack);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::RemoveTrack, aTrack, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::RemoveTrack, aTrack),
         NS_DISPATCH_SYNC);
     }
 
@@ -790,8 +789,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->GetLocalDescription(aSDP);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::GetLocalDescription,
-          aSDP, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::GetLocalDescription,
+          aSDP),
         NS_DISPATCH_SYNC);
     }
 
@@ -805,8 +804,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->GetRemoteDescription(aSDP);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::GetRemoteDescription,
-          aSDP, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::GetRemoteDescription,
+          aSDP),
         NS_DISPATCH_SYNC);
     }
 
@@ -820,8 +819,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       result = pc_->SignalingState();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::SignalingState,
-          &result),
+        WrapRunnableRet(&result, this, &PCDispatchWrapper::SignalingState),
         NS_DISPATCH_SYNC);
     }
 
@@ -835,8 +833,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       result = pc_->IceConnectionState();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::IceConnectionState,
-          &result),
+        WrapRunnableRet(&result, this, &PCDispatchWrapper::IceConnectionState),
         NS_DISPATCH_SYNC);
     }
 
@@ -850,8 +847,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       result = pc_->IceGatheringState();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::IceGatheringState,
-          &result),
+        WrapRunnableRet(&result, this, &PCDispatchWrapper::IceGatheringState),
         NS_DISPATCH_SYNC);
     }
 
@@ -865,7 +861,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->Close();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::Close, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::Close),
         NS_DISPATCH_SYNC);
     }
 
@@ -907,16 +903,17 @@ class SignalingAgent {
     mBundleEnabled(true),
     mExpectedFrameRequestType(VideoSessionConduit::FrameRequestPli),
     mExpectNack(true),
-    mExpectTmmbr(true),
     mExpectRtcpMuxAudio(true),
     mExpectRtcpMuxVideo(true),
     mRemoteDescriptionSet(false) {
-    cfg_.addStunServer(stun_addr, stun_port);
+    cfg_.addStunServer(stun_addr, stun_port, kNrIceTransportUdp);
+    cfg_.addStunServer(stun_addr, stun_port, kNrIceTransportTcp);
 
     PeerConnectionImpl *pcImpl =
       PeerConnectionImpl::CreatePeerConnection();
     EXPECT_TRUE(pcImpl);
     pcImpl->SetAllowIceLoopback(true);
+    pcImpl->SetAllowIceLinkLocal(true);
     pc = new PCDispatchWrapper(pcImpl);
   }
 
@@ -1068,7 +1065,7 @@ class SignalingAgent {
       nsresult ret;
       mozilla::SyncRunnable::DispatchToThread(
         test_utils->sts_target(),
-        WrapRunnableRet(audio_stream, &Fake_MediaStream::Start, &ret));
+        WrapRunnableRet(&ret, audio_stream, &Fake_MediaStream::Start));
 
       ASSERT_TRUE(NS_SUCCEEDED(ret));
       stream = audio_stream;
@@ -1128,9 +1125,9 @@ class SignalingAgent {
   {
     LocalSourceStreamInfo* info;
     mozilla::SyncRunnable::DispatchToThread(
-      gMainThread, WrapRunnableRet(
+      gMainThread, WrapRunnableRet(&info,
         pc->media(), &PeerConnectionMedia::GetLocalStreamById,
-        streamId, &info));
+        streamId));
 
     ASSERT_TRUE(info) << "No such local stream id: " << streamId;
 
@@ -1138,10 +1135,9 @@ class SignalingAgent {
 
     mozilla::SyncRunnable::DispatchToThread(
         gMainThread,
-        WrapRunnableRet(info,
+        WrapRunnableRet(&pipeline, info,
                         &SourceStreamInfo::GetPipelineByTrackId_m,
-                        trackId,
-                        &pipeline));
+                        trackId));
 
     ASSERT_TRUE(pipeline) << "No such local track id: " << trackId;
 
@@ -1176,9 +1172,9 @@ class SignalingAgent {
   {
     RemoteSourceStreamInfo* info;
     mozilla::SyncRunnable::DispatchToThread(
-      gMainThread, WrapRunnableRet(
+      gMainThread, WrapRunnableRet(&info,
         pc->media(), &PeerConnectionMedia::GetRemoteStreamById,
-        streamId, &info));
+        streamId));
 
     ASSERT_TRUE(info) << "No such remote stream id: " << streamId;
 
@@ -1186,10 +1182,9 @@ class SignalingAgent {
 
     mozilla::SyncRunnable::DispatchToThread(
         gMainThread,
-        WrapRunnableRet(info,
+        WrapRunnableRet(&pipeline, info,
                         &SourceStreamInfo::GetPipelineByTrackId_m,
-                        trackId,
-                        &pipeline));
+                        trackId));
 
     ASSERT_TRUE(pipeline) << "No such remote track id: " << trackId;
 
@@ -1202,7 +1197,6 @@ class SignalingAgent {
       mozilla::VideoSessionConduit *video_conduit =
         static_cast<mozilla::VideoSessionConduit*>(conduit);
       ASSERT_EQ(mExpectNack, video_conduit->UsingNackBasic());
-      ASSERT_EQ(mExpectTmmbr, video_conduit->UsingTmmbr());
       ASSERT_EQ(mExpectedFrameRequestType,
                 video_conduit->FrameRequestMethod());
       ASSERT_EQ(mExpectRtcpMuxVideo, pipeline->IsDoingRtcpMux())
@@ -1302,7 +1296,7 @@ class SignalingAgent {
     nsresult ret;
     mozilla::SyncRunnable::DispatchToThread(
       test_utils->sts_target(),
-      WrapRunnableRet(audio_stream, &Fake_MediaStream::Start, &ret));
+      WrapRunnableRet(&ret, audio_stream, &Fake_MediaStream::Start));
 
     ASSERT_TRUE(NS_SUCCEEDED(ret));
 
@@ -1511,14 +1505,14 @@ class SignalingAgent {
     SourceStreamInfo* streamInfo;
     if (local) {
       mozilla::SyncRunnable::DispatchToThread(
-        gMainThread, WrapRunnableRet(
+        gMainThread, WrapRunnableRet(&streamInfo,
           pc->media(), &PeerConnectionMedia::GetLocalStreamByIndex,
-          stream, &streamInfo));
+          stream));
     } else {
       mozilla::SyncRunnable::DispatchToThread(
-        gMainThread, WrapRunnableRet(
+        gMainThread, WrapRunnableRet(&streamInfo,
           pc->media(), &PeerConnectionMedia::GetRemoteStreamByIndex,
-          stream, &streamInfo));
+          stream));
     }
 
     if (!streamInfo) {
@@ -1551,7 +1545,6 @@ public:
   bool mBundleEnabled;
   VideoSessionConduit::FrameRequestType mExpectedFrameRequestType;
   bool mExpectNack;
-  bool mExpectTmmbr;
   bool mExpectRtcpMuxAudio;
   bool mExpectRtcpMuxVideo;
   bool mRemoteDescriptionSet;
@@ -1993,7 +1986,6 @@ public:
 
   void TestRtcpFbAnswer(const std::set<std::string>& feedback,
       bool expectNack,
-      bool expectTmmbr,
       VideoSessionConduit::FrameRequestType frameRequestType) {
     EnsureInit();
     OfferOptions options;
@@ -2012,7 +2004,8 @@ public:
 
     a1_->SetExpectedFrameRequestType(frameRequestType);
     a1_->mExpectNack = expectNack;
-    a1_->mExpectTmmbr = expectTmmbr;
+    // Since we don't support rewriting rtcp-fb in answers, a2 still thinks it
+    // will be doing all of the normal rtcp-fb
 
     WaitForCompleted();
     CheckPipelines();
@@ -2023,7 +2016,6 @@ public:
   void TestRtcpFbOffer(
       const std::set<std::string>& feedback,
       bool expectNack,
-      bool expectTmmbr,
       VideoSessionConduit::FrameRequestType frameRequestType) {
     EnsureInit();
     OfferOptions options;
@@ -2034,9 +2026,10 @@ public:
     std::string modifiedOffer = HardcodeRtcpFb(a1_->offer(), feedback);
 
     a2_->SetRemote(TestObserver::OFFER, modifiedOffer);
+    a1_->SetExpectedFrameRequestType(frameRequestType);
+    a1_->mExpectNack = expectNack;
     a2_->SetExpectedFrameRequestType(frameRequestType);
     a2_->mExpectNack = expectNack;
-    a2_->mExpectTmmbr = expectTmmbr;
 
     a2_->CreateAnswer(OFFER_AV | ANSWER_AV);
 
@@ -3088,6 +3081,38 @@ TEST_F(SignalingAgentTest, CreateOffer) {
   agent(0)->CreateOffer(options, OFFER_AUDIO);
 }
 
+TEST_F(SignalingAgentTest, SetLocalWithoutCreateOffer) {
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  OfferOptions options;
+  agent(0)->CreateOffer(options, OFFER_AUDIO);
+  agent(1)->SetLocal(TestObserver::OFFER,
+                     agent(0)->offer(),
+                     true,
+                     PCImplSignalingState::SignalingStable);
+}
+
+TEST_F(SignalingAgentTest, SetLocalWithoutCreateAnswer) {
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  OfferOptions options;
+  agent(0)->CreateOffer(options, OFFER_AUDIO);
+  agent(1)->SetRemote(TestObserver::OFFER, agent(0)->offer());
+  agent(1)->CreateAnswer(ANSWER_AUDIO);
+  agent(2)->SetRemote(TestObserver::OFFER, agent(0)->offer());
+  // Use agent 1's answer on agent 2, should fail
+  agent(2)->SetLocal(TestObserver::ANSWER,
+                     agent(1)->answer(),
+                     true,
+                     PCImplSignalingState::SignalingHaveRemoteOffer);
+}
+
 TEST_F(SignalingAgentTest, CreateOfferSetLocalTrickleTestServer) {
   TestStunServer::GetInstance()->SetActive(false);
   TestStunServer::GetInstance()->SetResponseAddr(
@@ -3394,25 +3419,23 @@ TEST_P(SignalingTest, RtcpFbInOffer)
   EnsureInit();
   OfferOptions options;
   a1_->CreateOffer(options, OFFER_AV);
-  const char *expected[] = { "nack", "nack pli", "ccm fir", "ccm tmmbr" };
+  const char *expected[] = { "nack", "nack pli", "ccm fir" };
   CheckRtcpFbSdp(a1_->offer(), ARRAY_TO_SET(std::string, expected));
 }
 
 TEST_P(SignalingTest, RtcpFbOfferAll)
 {
-  const char *feedbackTypes[] = { "nack", "nack pli", "ccm fir", "ccm tmmbr" };
+  const char *feedbackTypes[] = { "nack", "nack pli", "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
-                  true,
                   true,
                   VideoSessionConduit::FrameRequestPli);
 }
 
 TEST_P(SignalingTest, RtcpFbOfferNoNackBasic)
 {
-  const char *feedbackTypes[] = { "nack pli", "ccm fir", "ccm tmmbr" };
+  const char *feedbackTypes[] = { "nack pli", "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   false,
-                  true,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3421,7 +3444,6 @@ TEST_P(SignalingTest, RtcpFbOfferNoNackPli)
   const char *feedbackTypes[] = { "nack", "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
-                  false,
                   VideoSessionConduit::FrameRequestFir);
 }
 
@@ -3430,7 +3452,6 @@ TEST_P(SignalingTest, RtcpFbOfferNoCcmFir)
   const char *feedbackTypes[] = { "nack", "nack pli" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
-                  false,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3438,7 +3459,6 @@ TEST_P(SignalingTest, RtcpFbOfferNoNack)
 {
   const char *feedbackTypes[] = { "ccm fir" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
-                  false,
                   false,
                   VideoSessionConduit::FrameRequestFir);
 }
@@ -3448,7 +3468,6 @@ TEST_P(SignalingTest, RtcpFbOfferNoFrameRequest)
   const char *feedbackTypes[] = { "nack" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
-                  false,
                   VideoSessionConduit::FrameRequestNone);
 }
 
@@ -3456,7 +3475,6 @@ TEST_P(SignalingTest, RtcpFbOfferPliOnly)
 {
   const char *feedbackTypes[] = { "nack pli" };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
-                  false,
                   false,
                   VideoSessionConduit::FrameRequestPli);
 }
@@ -3466,7 +3484,6 @@ TEST_P(SignalingTest, RtcpFbOfferNoFeedback)
   const char *feedbackTypes[] = { };
   TestRtcpFbOffer(ARRAY_TO_SET(std::string, feedbackTypes),
                   false,
-                  false,
                   VideoSessionConduit::FrameRequestNone);
 }
 
@@ -3475,7 +3492,6 @@ TEST_P(SignalingTest, RtcpFbAnswerAll)
   const char *feedbackTypes[] = { "nack", "nack pli", "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
-                  false,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3483,7 +3499,6 @@ TEST_P(SignalingTest, RtcpFbAnswerNoNackBasic)
 {
   const char *feedbackTypes[] = { "nack pli", "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
-                  false,
                   false,
                   VideoSessionConduit::FrameRequestPli);
 }
@@ -3493,7 +3508,6 @@ TEST_P(SignalingTest, RtcpFbAnswerNoNackPli)
   const char *feedbackTypes[] = { "nack", "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
-                  false,
                   VideoSessionConduit::FrameRequestFir);
 }
 
@@ -3502,7 +3516,6 @@ TEST_P(SignalingTest, RtcpFbAnswerNoCcmFir)
   const char *feedbackTypes[] = { "nack", "nack pli" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
-                  false,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3510,7 +3523,6 @@ TEST_P(SignalingTest, RtcpFbAnswerNoNack)
 {
   const char *feedbackTypes[] = { "ccm fir" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
-                  false,
                   false,
                   VideoSessionConduit::FrameRequestFir);
 }
@@ -3520,7 +3532,6 @@ TEST_P(SignalingTest, RtcpFbAnswerNoFrameRequest)
   const char *feedbackTypes[] = { "nack" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
                   true,
-                  false,
                   VideoSessionConduit::FrameRequestNone);
 }
 
@@ -3528,8 +3539,7 @@ TEST_P(SignalingTest, RtcpFbAnswerPliOnly)
 {
   const char *feedbackTypes[] = { "nack pli" };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
-                  false,
-                  false,
+                  0,
                   VideoSessionConduit::FrameRequestPli);
 }
 
@@ -3537,8 +3547,7 @@ TEST_P(SignalingTest, RtcpFbAnswerNoFeedback)
 {
   const char *feedbackTypes[] = { };
   TestRtcpFbAnswer(ARRAY_TO_SET(std::string, feedbackTypes),
-                  false,
-                  false,
+                  0,
                   VideoSessionConduit::FrameRequestNone);
 }
 
@@ -4391,12 +4400,6 @@ TEST_P(SignalingTest, UseNonPrefferedPayloadTypeOnAnswer)
                  strlen("\r\na=rtcp-fb:121 ccm fir"),
                  "\r\na=rtcp-fb:121 ccm fir");
 
-  match = answer.find("\r\na=rtcp-fb:120 ccm tmmbr");
-  ASSERT_NE(std::string::npos, match);
-  answer.replace(match,
-                 strlen("\r\na=rtcp-fb:121 ccm tmmbr"),
-                 "\r\na=rtcp-fb:121 ccm tmmbr");
-
   std::cout << "Modified SDP " << std::endl
             << indent(answer) << std::endl;
 
@@ -4707,7 +4710,7 @@ int main(int argc, char **argv) {
   // Adds a listener to the end.  Google Test takes the ownership.
   listeners.Append(new test::RingbufferDumper(test_utils));
   test_utils->sts_target()->Dispatch(
-    WrapRunnableNM(&TestStunServer::GetInstance), NS_DISPATCH_SYNC);
+    WrapRunnableNM(&TestStunServer::GetInstance, AF_INET), NS_DISPATCH_SYNC);
 
   // Set the main thread global which is this thread.
   nsIThread *thread;
@@ -4722,7 +4725,7 @@ int main(int argc, char **argv) {
 
   int result;
   gGtestThread->Dispatch(
-    WrapRunnableNMRet(gtest_main, argc, argv, &result), NS_DISPATCH_NORMAL);
+    WrapRunnableNMRet(&result, gtest_main, argc, argv), NS_DISPATCH_NORMAL);
 
   // Here we handle the event queue for dispatches to the main thread
   // When the GTest thread is complete it will send one more dispatch

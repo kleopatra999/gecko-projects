@@ -681,7 +681,7 @@ doGetIdentifier(JSContext *cx, const NPUTF8* name)
 {
   NS_ConvertUTF8toUTF16 utf16name(name);
 
-  JSString *str = ::JS_InternUCStringN(cx, utf16name.get(), utf16name.Length());
+  JSString *str = ::JS_AtomizeAndPinUCStringN(cx, utf16name.get(), utf16name.Length());
 
   if (!str)
     return nullptr;
@@ -1066,7 +1066,7 @@ _destroystream(NPP npp, NPStream *pstream, NPError reason)
     // the reference until it is to be deleted here. Deleting the wrapper will
     // release the wrapped nsIOutputStream.
     //
-    // The NPStream the plugin references should always be a sub-object of it's own
+    // The NPStream the plugin references should always be a sub-object of its own
     // 'ndata', which is our nsNPAPIStramWrapper. See bug 548441.
     NS_ASSERTION((char*)streamWrapper <= (char*)pstream &&
                  ((char*)pstream) + sizeof(*pstream)
@@ -1084,23 +1084,7 @@ _destroystream(NPP npp, NPStream *pstream, NPError reason)
 void
 _status(NPP npp, const char *message)
 {
-  if (!NS_IsMainThread()) {
-    NPN_PLUGIN_LOG(PLUGIN_LOG_ALWAYS,("NPN_status called from the wrong thread\n"));
-    return;
-  }
-  NPN_PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("NPN_Status: npp=%p, message=%s\n",
-                                     (void*)npp, message));
-
-  if (!npp || !npp->ndata) {
-    NS_WARNING("_status: npp or npp->ndata == 0");
-    return;
-  }
-
-  nsNPAPIPluginInstance *inst = (nsNPAPIPluginInstance*)npp->ndata;
-
-  PluginDestructionGuard guard(inst);
-
-  inst->ShowStatus(message);
+  // NPN_Status is no longer supported.
 }
 
 void
@@ -1248,13 +1232,9 @@ _getpluginelement(NPP npp)
   nsCOMPtr<nsIXPConnect> xpc(do_GetService(nsIXPConnect::GetCID()));
   NS_ENSURE_TRUE(xpc, nullptr);
 
-  nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
+  JS::RootedObject obj(cx);
   xpc->WrapNative(cx, ::JS::CurrentGlobalOrNull(cx), element,
-                  NS_GET_IID(nsIDOMElement),
-                  getter_AddRefs(holder));
-  NS_ENSURE_TRUE(holder, nullptr);
-
-  JS::Rooted<JSObject*> obj(cx, holder->GetJSObject());
+                  NS_GET_IID(nsIDOMElement), obj.address());
   NS_ENSURE_TRUE(obj, nullptr);
 
   return nsJSObjWrapper::GetNewOrUsed(npp, cx, obj);
@@ -1499,6 +1479,7 @@ _evaluate(NPP npp, NPObject* npobj, NPString *script, NPVariant *result)
   }
 
   dom::AutoEntryScript aes(win, "NPAPI NPN_evaluate");
+  aes.TakeOwnershipOfErrorReporting();
   JSContext* cx = aes.cx();
 
   JS::Rooted<JSObject*> obj(cx, nsNPObjWrapper::GetNewOrUsed(npp, cx, npobj));
@@ -1954,7 +1935,7 @@ _getvalue(NPP npp, NPNVariable variable, void *result)
     return NPERR_GENERIC_ERROR;
 #endif
 
-#if defined(XP_WIN) || (MOZ_WIDGET_GTK == 2) || defined(MOZ_WIDGET_QT)
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
   case NPNVnetscapeWindow: {
     if (!npp || !npp->ndata)
       return NPERR_INVALID_INSTANCE_ERROR;
@@ -2468,10 +2449,10 @@ _requestread(NPStream *pstream, NPByteRange *rangeList)
 
 #ifdef PLUGIN_LOGGING
   for(NPByteRange * range = rangeList; range != nullptr; range = range->next)
-    PR_LOG(nsPluginLogging::gNPNLog,PLUGIN_LOG_NOISY,
+    MOZ_LOG(nsPluginLogging::gNPNLog,PLUGIN_LOG_NOISY,
     ("%i-%i", range->offset, range->offset + range->length - 1));
 
-  PR_LOG(nsPluginLogging::gNPNLog,PLUGIN_LOG_NOISY, ("\n\n"));
+  MOZ_LOG(nsPluginLogging::gNPNLog,PLUGIN_LOG_NOISY, ("\n\n"));
   PR_LogFlush();
 #endif
 

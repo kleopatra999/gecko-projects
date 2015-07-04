@@ -782,7 +782,7 @@ XPCConvert::NativeInterface2JSObject(MutableHandleValue d,
     if (!flat && cache && cache->IsDOMBinding()) {
         RootedObject global(cx, xpcscope->GetGlobalJSObject());
         js::AssertSameCompartment(cx, global);
-        flat = cache->WrapObject(cx, JS::NullPtr());
+        flat = cache->WrapObject(cx, nullptr);
         if (!flat)
             return false;
     }
@@ -1274,7 +1274,7 @@ XPCConvert::NativeArray2JS(MutableHandleValue d, const void** s,
         *pErr = NS_ERROR_XPC_BAD_CONVERT_NATIVE;
 
     uint32_t i;
-    RootedValue current(cx, JSVAL_NULL);
+    RootedValue current(cx, JS::NullValue());
 
 #define POPULATE(_t)                                                                    \
     PR_BEGIN_MACRO                                                                      \

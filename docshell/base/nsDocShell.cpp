@@ -17,13 +17,13 @@
 #include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/ProfileTimelineMarkerBinding.h"
 #include "mozilla/dom/ToJSValue.h"
+#include "mozilla/dom/workers/ServiceWorkerManager.h"
 #include "mozilla/EventStateManager.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/StartupTimeline.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/unused.h"
-#include "mozilla/VisualEventTracer.h"
 #include "URIUtils.h"
 
 #include "nsIContent.h"
@@ -52,7 +52,6 @@
 #include "nsIAuthPrompt2.h"
 #include "nsIChannelEventSink.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
-#include "nsIServiceWorkerManager.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScrollableFrame.h"
@@ -151,7 +150,7 @@
 
 #include "nsIJARChannel.h"
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "nsISelectionDisplay.h"
 
@@ -194,12 +193,17 @@
 #include "nsIWidget.h"
 #include "mozilla/dom/EncodingUtils.h"
 #include "mozilla/dom/ScriptSettings.h"
-#include "mozilla/dom/URLSearchParams.h"
 #include "nsPerformance.h"
 
 #ifdef MOZ_TOOLKIT_SEARCH
 #include "nsIBrowserSearchService.h"
 #endif
+
+#include "mozIThirdPartyUtil.h"
+// Values for the network.cookie.cookieBehavior pref are documented in
+// nsCookieService.cpp
+#define COOKIE_BEHAVIOR_ACCEPT 0 // Allow all cookies.
+#define COOKIE_BEHAVIOR_REJECT_FOREIGN 1 // Reject all third-party cookies.
 
 static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
 
@@ -217,11 +221,14 @@ static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
 
 using namespace mozilla;
 using namespace mozilla::dom;
+using mozilla::dom::workers::ServiceWorkerManager;
 
-// True means sUseErrorPages has been added to preferences var cache.
+// True means sUseErrorPages and sInterceptionEnabled has been added to
+// preferences var cache.
 static bool gAddedPreferencesVarCache = false;
 
 bool nsDocShell::sUseErrorPages = false;
+bool nsDocShell::sInterceptionEnabled = false;
 
 // Number of documents currently loading
 static int32_t gNumberOfDocumentsLoading = 0;
@@ -246,12 +253,10 @@ static uint32_t gValidateOrigin = 0xffffffff;
 // Can be overridden with docshell.event_starvation_delay_hint pref.
 #define NS_EVENT_STARVATION_DELAY_HINT 2000
 
-#ifdef PR_LOGGING
 #ifdef DEBUG
 static PRLogModuleInfo* gDocShellLog;
 #endif
 static PRLogModuleInfo* gDocShellLeakLog;
-#endif
 
 const char kBrandBundleURL[]      = "chrome://branding/locale/brand.properties";
 const char kAppstringsBundleURL[] = "chrome://global/locale/appstrings.properties";
@@ -919,7 +924,6 @@ nsDocShell::nsDocShell()
     CallGetService(NS_URIFIXUP_CONTRACTID, &sURIFixup);
   }
 
-#ifdef PR_LOGGING
 #ifdef DEBUG
   if (!gDocShellLog) {
     gDocShellLog = PR_NewLogModule("nsDocShell");
@@ -929,9 +933,8 @@ nsDocShell::nsDocShell()
     gDocShellLeakLog = PR_NewLogModule("nsDocShellLeak");
   }
   if (gDocShellLeakLog) {
-    PR_LOG(gDocShellLeakLog, PR_LOG_DEBUG, ("DOCSHELL %p created\n", this));
+    MOZ_LOG(gDocShellLeakLog, LogLevel::Debug, ("DOCSHELL %p created\n", this));
   }
-#endif
 
 #ifdef DEBUG
   // We're counting the number of |nsDocShells| to help find leaks
@@ -948,7 +951,7 @@ nsDocShell::nsDocShell()
 
 nsDocShell::~nsDocShell()
 {
-  MOZ_ASSERT(!mProfileTimelineRecording);
+  MOZ_ASSERT(!IsObserved());
 
   Destroy();
 
@@ -961,11 +964,9 @@ nsDocShell::~nsDocShell()
     NS_IF_RELEASE(sURIFixup);
   }
 
-#ifdef PR_LOGGING
   if (gDocShellLeakLog) {
-    PR_LOG(gDocShellLeakLog, PR_LOG_DEBUG, ("DOCSHELL %p destroyed\n", this));
+    MOZ_LOG(gDocShellLeakLog, LogLevel::Debug, ("DOCSHELL %p destroyed\n", this));
   }
-#endif
 
 #ifdef DEBUG
   // We're counting the number of |nsDocShells| to help find leaks
@@ -1100,8 +1101,8 @@ nsDocShell::GetInterface(const nsIID& aIID, void** aSink)
       return NS_ERROR_NO_INTERFACE;
     }
 
-#if defined(PR_LOGGING) && defined(DEBUG)
-    PR_LOG(gDocShellLog, PR_LOG_DEBUG,
+#if defined(DEBUG)
+    MOZ_LOG(gDocShellLog, LogLevel::Debug,
            ("nsDocShell[%p]: returning app cache container %p",
             this, domDoc.get()));
 #endif
@@ -1423,11 +1424,11 @@ nsDocShell::LoadURI(nsIURI* aURI,
     aLoadInfo->GetBaseURI(getter_AddRefs(baseURI));
   }
 
-#if defined(PR_LOGGING) && defined(DEBUG)
-  if (PR_LOG_TEST(gDocShellLog, PR_LOG_DEBUG)) {
+#if defined(DEBUG)
+  if (MOZ_LOG_TEST(gDocShellLog, LogLevel::Debug)) {
     nsAutoCString uristr;
     aURI->GetAsciiSpec(uristr);
-    PR_LOG(gDocShellLog, PR_LOG_DEBUG,
+    MOZ_LOG(gDocShellLog, LogLevel::Debug,
            ("nsDocShell[%p]: loading %s with flags 0x%08x",
             this, uristr.get(), aLoadFlags));
   }
@@ -1546,7 +1547,7 @@ nsDocShell::LoadURI(nsIURI* aURI,
 
   if (shEntry) {
 #ifdef DEBUG
-    PR_LOG(gDocShellLog, PR_LOG_DEBUG,
+    MOZ_LOG(gDocShellLog, LogLevel::Debug,
            ("nsDocShell[%p]: loading from session history", this));
 #endif
 
@@ -1986,15 +1987,13 @@ bool
 nsDocShell::SetCurrentURI(nsIURI* aURI, nsIRequest* aRequest,
                           bool aFireOnLocationChange, uint32_t aLocationFlags)
 {
-#ifdef PR_LOGGING
-  if (gDocShellLeakLog && PR_LOG_TEST(gDocShellLeakLog, PR_LOG_DEBUG)) {
+  if (gDocShellLeakLog && MOZ_LOG_TEST(gDocShellLeakLog, LogLevel::Debug)) {
     nsAutoCString spec;
     if (aURI) {
       aURI->GetSpec(spec);
     }
     PR_LogPrint("DOCSHELL %p SetCurrentURI %s\n", this, spec.get());
   }
-#endif
 
   // We don't want to send a location change when we're displaying an error
   // page, and we don't want to change our idea of "current URI" either
@@ -2021,24 +2020,6 @@ nsDocShell::SetCurrentURI(nsIURI* aURI, nsIRequest* aRequest,
   if (mLSHE) {
     mLSHE->GetIsSubFrame(&isSubFrame);
   }
-
-  // nsDocShell owns a URLSearchParams that is used by
-  // window.location.searchParams to be in sync with the current location.
-  if (!mURLSearchParams) {
-    mURLSearchParams = new URLSearchParams();
-  }
-
-  nsAutoCString search;
-
-  nsCOMPtr<nsIURL> url(do_QueryInterface(mCurrentURI));
-  if (url) {
-    nsresult rv = url->GetQuery(search);
-    if (NS_FAILED(rv)) {
-      NS_WARNING("Failed to get the query from a nsIURL.");
-    }
-  }
-
-  mURLSearchParams->ParseInput(search, nullptr);
 
   if (!isSubFrame && !isRoot) {
     /*
@@ -2935,6 +2916,8 @@ nsDocShell::HistoryTransactionRemoved(int32_t aIndex)
 
 unsigned long nsDocShell::gProfileTimelineRecordingsCount = 0;
 
+mozilla::LinkedList<nsDocShell::ObservedDocShell>* nsDocShell::gObservedDocShells = nullptr;
+
 NS_IMETHODIMP
 nsDocShell::SetRecordProfileTimelineMarkers(bool aValue)
 {
@@ -2943,11 +2926,16 @@ nsDocShell::SetRecordProfileTimelineMarkers(bool aValue)
     if (aValue) {
       ++gProfileTimelineRecordingsCount;
       UseEntryScriptProfiling();
-      mProfileTimelineRecording = true;
+
+      MOZ_ASSERT(!mObserved);
+      mObserved.reset(new ObservedDocShell(this));
+      GetOrCreateObservedDocShells().insertFront(mObserved.get());
     } else {
       --gProfileTimelineRecordingsCount;
       UnuseEntryScriptProfiling();
-      mProfileTimelineRecording = false;
+
+      mObserved.reset(nullptr);
+
       ClearProfileTimelineMarkers();
     }
   }
@@ -2958,7 +2946,7 @@ nsDocShell::SetRecordProfileTimelineMarkers(bool aValue)
 NS_IMETHODIMP
 nsDocShell::GetRecordProfileTimelineMarkers(bool* aValue)
 {
-  *aValue = mProfileTimelineRecording;
+  *aValue = IsObserved();
   return NS_OK;
 }
 
@@ -2994,6 +2982,21 @@ nsDocShell::PopProfileTimelineMarkers(
     // If we are processing a Paint marker, we append information from
     // all the embedded Layer markers to this array.
     dom::Sequence<dom::ProfileTimelineLayerRect> layerRectangles;
+
+    // If this is a TRACING_TIMESTAMP marker, there's no corresponding "end"
+    // marker, as it's a single unit of time, not a duration, create the final
+    // marker here.
+    if (startPayload->GetMetaData() == TRACING_TIMESTAMP) {
+      mozilla::dom::ProfileTimelineMarker* marker =
+        profileTimelineMarkers.AppendElement();
+
+      marker->mName = NS_ConvertUTF8toUTF16(startPayload->GetName());
+      marker->mStart = startPayload->GetTime();
+      marker->mEnd = startPayload->GetTime();
+      marker->mStack = startPayload->GetStack();
+      startPayload->AddDetails(aCx, *marker);
+      continue;
+    }
 
     if (startPayload->GetMetaData() == TRACING_INTERVAL_START) {
       bool hasSeenEnd = false;
@@ -3039,8 +3042,8 @@ nsDocShell::PopProfileTimelineMarkers(
               if (isPaint) {
                 marker->mRectangles.Construct(layerRectangles);
               }
-              startPayload->AddDetails(*marker);
-              endPayload->AddDetails(*marker);
+              startPayload->AddDetails(aCx, *marker);
+              endPayload->AddDetails(aCx, *marker);
             }
 
             // We want the start to be dropped either way.
@@ -3083,7 +3086,7 @@ void
 nsDocShell::AddProfileTimelineMarker(const char* aName,
                                      TracingMetadata aMetaData)
 {
-  if (mProfileTimelineRecording) {
+  if (IsObserved()) {
     TimelineMarker* marker = new TimelineMarker(this, aName, aMetaData);
     mProfileTimelineMarkers.AppendElement(marker);
   }
@@ -3092,7 +3095,7 @@ nsDocShell::AddProfileTimelineMarker(const char* aName,
 void
 nsDocShell::AddProfileTimelineMarker(UniquePtr<TimelineMarker>&& aMarker)
 {
-  if (mProfileTimelineRecording) {
+  if (IsObserved()) {
     mProfileTimelineMarkers.AppendElement(Move(aMarker));
   }
 }
@@ -4582,8 +4585,7 @@ nsDocShell::GetDocument()
 nsPIDOMWindow*
 nsDocShell::GetWindow()
 {
-  NS_ENSURE_SUCCESS(EnsureScriptEnvironment(), nullptr);
-  return mScriptGlobal;
+  return NS_SUCCEEDED(EnsureScriptEnvironment()) ? mScriptGlobal : nullptr;
 }
 
 NS_IMETHODIMP
@@ -5295,8 +5297,8 @@ nsDocShell::LoadErrorPage(nsIURI* aURI, const char16_t* aURL,
                           const char* aCSSClass,
                           nsIChannel* aFailedChannel)
 {
-#if defined(PR_LOGGING) && defined(DEBUG)
-  if (PR_LOG_TEST(gDocShellLog, PR_LOG_DEBUG)) {
+#if defined(DEBUG)
+  if (MOZ_LOG_TEST(gDocShellLog, LogLevel::Debug)) {
     nsAutoCString spec;
     aURI->GetSpec(spec);
 
@@ -5307,7 +5309,7 @@ nsDocShell::LoadErrorPage(nsIURI* aURI, const char16_t* aURL,
       chanName.AssignLiteral("<no channel>");
     }
 
-    PR_LOG(gDocShellLog, PR_LOG_DEBUG,
+    MOZ_LOG(gDocShellLog, LogLevel::Debug,
            ("nsDocShell[%p]::LoadErrorPage(\"%s\", \"%s\", {...}, [%s])\n", this,
             spec.get(), NS_ConvertUTF16toUTF8(aURL).get(), chanName.get()));
   }
@@ -5721,6 +5723,9 @@ nsDocShell::Create()
     Preferences::AddBoolVarCache(&sUseErrorPages,
                                  "browser.xul.error_pages.enabled",
                                  mUseErrorPages);
+    Preferences::AddBoolVarCache(&sInterceptionEnabled,
+                                 "dom.serviceWorkers.interception.enabled",
+                                 false);
     gAddedPreferencesVarCache = true;
   }
 
@@ -5820,11 +5825,6 @@ nsDocShell::Destroy()
 
   mParentWidget = nullptr;
   mCurrentURI = nullptr;
-
-  if (mURLSearchParams) {
-    mURLSearchParams->RemoveObservers();
-    mURLSearchParams = nullptr;
-  }
 
   if (mScriptGlobal) {
     mScriptGlobal->DetachFromDocShell();
@@ -6679,11 +6679,7 @@ nsDocShell::DoAppRedirectIfNeeded(nsIURI* aURI,
                                   nsIDocShellLoadInfo* aLoadInfo,
                                   bool aFirstParty)
 {
-  uint32_t appId;
-  nsresult rv = GetAppId(&appId);
-  if (NS_FAILED(rv)) {
-    return false;
-  }
+  uint32_t appId = nsIDocShell::GetAppId();
 
   if (appId != nsIScriptSecurityManager::NO_APP_ID &&
       appId != nsIScriptSecurityManager::UNKNOWN_APP_ID) {
@@ -6691,7 +6687,7 @@ nsDocShell::DoAppRedirectIfNeeded(nsIURI* aURI,
       do_GetService(APPS_SERVICE_CONTRACTID);
     NS_ASSERTION(appsService, "No AppsService available");
     nsCOMPtr<nsIURI> redirect;
-    rv = appsService->GetRedirect(appId, aURI, getter_AddRefs(redirect));
+    nsresult rv = appsService->GetRedirect(appId, aURI, getter_AddRefs(redirect));
     if (NS_SUCCEEDED(rv) && redirect) {
       rv = LoadURI(redirect, aLoadInfo, nsIWebNavigation::LOAD_FLAGS_NONE,
                    aFirstParty);
@@ -7495,8 +7491,6 @@ nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
   if (!aChannel) {
     return NS_ERROR_NULL_POINTER;
   }
-
-  MOZ_EVENT_TRACER_DONE(this, "docshell::pageload");
 
   nsCOMPtr<nsIURI> url;
   nsresult rv = aChannel->GetURI(getter_AddRefs(url));
@@ -9604,15 +9598,13 @@ nsDocShell::InternalLoad(nsIURI* aURI,
   nsresult rv = NS_OK;
   mOriginalUriString.Truncate();
 
-#ifdef PR_LOGGING
-  if (gDocShellLeakLog && PR_LOG_TEST(gDocShellLeakLog, PR_LOG_DEBUG)) {
+  if (gDocShellLeakLog && MOZ_LOG_TEST(gDocShellLeakLog, LogLevel::Debug)) {
     nsAutoCString spec;
     if (aURI) {
       aURI->GetSpec(spec);
     }
     PR_LogPrint("DOCSHELL %p InternalLoad %s\n", this, spec.get());
   }
-#endif
   // Initialize aDocShell/aRequest
   if (aDocShell) {
     *aDocShell = nullptr;
@@ -10082,6 +10074,11 @@ nsDocShell::InternalLoad(nsIURI* aURI,
        */
       SetHistoryEntry(&mLSHE, aSHEntry);
 
+      // Set the doc's URI according to the new history entry's URI.
+      nsCOMPtr<nsIDocument> doc = GetDocument();
+      NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
+      doc->SetDocumentURI(aURI);
+
       /* This is a anchor traversal with in the same page.
        * call OnNewURI() so that, this traversal will be
        * recorded in session and global history.
@@ -10171,11 +10168,6 @@ nsDocShell::InternalLoad(nsIURI* aURI,
           mGlobalHistory->SetPageTitle(aURI, mTitle);
         }
       }
-
-      // Set the doc's URI according to the new history entry's URI.
-      nsCOMPtr<nsIDocument> doc = GetDocument();
-      NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
-      doc->SetDocumentURI(aURI);
 
       SetDocCurrentStateObj(mOSHE);
 
@@ -10480,13 +10472,6 @@ nsDocShell::DoURILoad(nsIURI* aURI,
                       nsIURI* aBaseURI,
                       nsContentPolicyType aContentPolicyType)
 {
-#ifdef MOZ_VISUAL_EVENT_TRACER
-  nsAutoCString urlSpec;
-  aURI->GetAsciiSpec(urlSpec);
-  MOZ_EVENT_TRACER_NAME_OBJECT(this, urlSpec.BeginReading());
-  MOZ_EVENT_TRACER_EXEC(this, "docshell::pageload");
-#endif
-
   nsresult rv;
   nsCOMPtr<nsIURILoader> uriLoader;
 
@@ -10735,7 +10720,7 @@ nsDocShell::DoURILoad(nsIURI* aURI,
   // (ie. POST data, referrer, ...)
   //
   if (httpChannel) {
-    nsCOMPtr<nsICachingChannel> cacheChannel(do_QueryInterface(httpChannel));
+    nsCOMPtr<nsICacheInfoChannel> cacheChannel(do_QueryInterface(httpChannel));
     /* Get the cache Key from SH */
     nsCOMPtr<nsISupports> cacheKey;
     if (mLSHE) {
@@ -10994,6 +10979,18 @@ nsDocShell::DoChannelLoad(nsIChannel* aChannel,
 
   (void)aChannel->SetLoadFlags(loadFlags);
 
+  // If the user pressed shift-reload, then do not allow ServiceWorker
+  // interception to occur. See step 12.1 of the SW HandleFetch algorithm.
+  if (mLoadType == LOAD_RELOAD_BYPASS_CACHE ||
+      mLoadType == LOAD_RELOAD_BYPASS_PROXY ||
+      mLoadType == LOAD_RELOAD_BYPASS_PROXY_AND_CACHE ||
+      mLoadType == LOAD_RELOAD_ALLOW_MIXED_CONTENT) {
+    nsCOMPtr<nsIHttpChannelInternal> internal = do_QueryInterface(aChannel);
+    if (internal) {
+      internal->ForceNoIntercept();
+    }
+  }
+
   uint32_t openFlags = 0;
   if (mLoadType == LOAD_LINK) {
     openFlags |= nsIURILoader::IS_CONTENT_PREFERRED;
@@ -11152,8 +11149,8 @@ nsDocShell::OnNewURI(nsIURI* aURI, nsIChannel* aChannel, nsISupports* aOwner,
   NS_PRECONDITION(aURI, "uri is null");
   NS_PRECONDITION(!aChannel || !aOwner, "Shouldn't have both set");
 
-#if defined(PR_LOGGING) && defined(DEBUG)
-  if (PR_LOG_TEST(gDocShellLog, PR_LOG_DEBUG)) {
+#if defined(DEBUG)
+  if (MOZ_LOG_TEST(gDocShellLog, LogLevel::Debug)) {
     nsAutoCString spec;
     aURI->GetSpec(spec);
 
@@ -11164,7 +11161,7 @@ nsDocShell::OnNewURI(nsIURI* aURI, nsIChannel* aChannel, nsISupports* aOwner,
       chanName.AssignLiteral("<no channel>");
     }
 
-    PR_LOG(gDocShellLog, PR_LOG_DEBUG,
+    MOZ_LOG(gDocShellLog, LogLevel::Debug,
            ("nsDocShell[%p]::OnNewURI(\"%s\", [%s], 0x%x)\n", this, spec.get(),
             chanName.get(), aLoadType));
   }
@@ -11229,7 +11226,7 @@ nsDocShell::OnNewURI(nsIURI* aURI, nsIChannel* aChannel, nsISupports* aOwner,
   // XXX This log message is almost useless because |updateSHistory|
   //     and |updateGHistory| are not correct at this point.
 
-  PR_LOG(gDocShellLog, PR_LOG_DEBUG,
+  MOZ_LOG(gDocShellLog, LogLevel::Debug,
          ("  shAvailable=%i updateSHistory=%i updateGHistory=%i"
           " equalURI=%i\n",
           shAvailable, updateSHistory, updateGHistory, equalUri));
@@ -11285,7 +11282,7 @@ nsDocShell::OnNewURI(nsIURI* aURI, nsIChannel* aChannel, nsISupports* aOwner,
                  "We shouldn't be updating session history for forced"
                  " reloads!");
 
-    nsCOMPtr<nsICachingChannel> cacheChannel(do_QueryInterface(aChannel));
+    nsCOMPtr<nsICacheInfoChannel> cacheChannel(do_QueryInterface(aChannel));
     nsCOMPtr<nsISupports> cacheKey;
     // Get the Cache Key and store it in SH.
     if (cacheChannel) {
@@ -11699,8 +11696,8 @@ nsDocShell::AddState(JS::Handle<JS::Value> aData, const nsAString& aTitle,
   // document and it requires LOCATION_CHANGE_SAME_DOCUMENT flag. Otherwise,
   // FireOnLocationChange(...) breaks security UI.
   if (!equalURIs) {
-    SetCurrentURI(newURI, nullptr, true, LOCATION_CHANGE_SAME_DOCUMENT);
     document->SetDocumentURI(newURI);
+    SetCurrentURI(newURI, nullptr, true, LOCATION_CHANGE_SAME_DOCUMENT);
 
     AddURIVisit(newURI, oldURI, oldURI, 0);
 
@@ -11734,7 +11731,7 @@ nsDocShell::ShouldAddToSessionHistory(nsIURI* aURI)
   // should just do a spec compare, rather than two gets of the scheme and
   // then the path.  -Gagan
   nsresult rv;
-  nsAutoCString buf, pref;
+  nsAutoCString buf;
 
   rv = aURI->GetScheme(buf);
   if (NS_FAILED(rv)) {
@@ -11752,16 +11749,17 @@ nsDocShell::ShouldAddToSessionHistory(nsIURI* aURI)
     }
   }
 
-  rv = Preferences::GetDefaultCString("browser.newtab.url", &pref);
-
-  if (NS_FAILED(rv)) {
-    return true;
+  // Check if the webbrowser chrome wants us to proceed - by default it ensures
+  // aURI is not the newtab URI.
+  nsCOMPtr<nsIWebBrowserChrome3> browserChrome3 = do_GetInterface(mTreeOwner);
+  if (browserChrome3) {
+    bool shouldAdd;
+    rv = browserChrome3->ShouldAddToSessionHistory(this, aURI, &shouldAdd);
+    NS_ENSURE_SUCCESS(rv, true);
+    return shouldAdd;
   }
 
-  rv = aURI->GetSpec(buf);
-  NS_ENSURE_SUCCESS(rv, true);
-
-  return !buf.Equals(pref);
+  return true;
 }
 
 nsresult
@@ -11772,8 +11770,8 @@ nsDocShell::AddToSessionHistory(nsIURI* aURI, nsIChannel* aChannel,
   NS_PRECONDITION(aURI, "uri is null");
   NS_PRECONDITION(!aChannel || !aOwner, "Shouldn't have both set");
 
-#if defined(PR_LOGGING) && defined(DEBUG)
-  if (PR_LOG_TEST(gDocShellLog, PR_LOG_DEBUG)) {
+#if defined(DEBUG)
+  if (MOZ_LOG_TEST(gDocShellLog, LogLevel::Debug)) {
     nsAutoCString spec;
     aURI->GetSpec(spec);
 
@@ -11784,7 +11782,7 @@ nsDocShell::AddToSessionHistory(nsIURI* aURI, nsIChannel* aChannel,
       chanName.AssignLiteral("<no channel>");
     }
 
-    PR_LOG(gDocShellLog, PR_LOG_DEBUG,
+    MOZ_LOG(gDocShellLog, LogLevel::Debug,
            ("nsDocShell[%p]::AddToSessionHistory(\"%s\", [%s])\n",
             this, spec.get(), chanName.get()));
   }
@@ -11839,7 +11837,7 @@ nsDocShell::AddToSessionHistory(nsIURI* aURI, nsIChannel* aChannel,
   nsCOMPtr<nsISupports> owner = aOwner;
   bool expired = false;
   bool discardLayoutState = false;
-  nsCOMPtr<nsICachingChannel> cacheChannel;
+  nsCOMPtr<nsICacheInfoChannel> cacheChannel;
   if (aChannel) {
     cacheChannel = do_QueryInterface(aChannel);
 
@@ -13841,9 +13839,7 @@ nsDocShell::GetAppId(uint32_t* aAppId)
 NS_IMETHODIMP
 nsDocShell::GetAppManifestURL(nsAString& aAppManifestURL)
 {
-  uint32_t appId;
-  GetAppId(&appId);
-
+  uint32_t appId = nsIDocShell::GetAppId();
   if (appId != nsIScriptSecurityManager::NO_APP_ID &&
       appId != nsIScriptSecurityManager::UNKNOWN_APP_ID) {
     nsCOMPtr<nsIAppsService> appsService =
@@ -13860,7 +13856,14 @@ nsDocShell::GetAppManifestURL(nsAString& aAppManifestURL)
 NS_IMETHODIMP
 nsDocShell::GetAsyncPanZoomEnabled(bool* aOut)
 {
-  *aOut = Preferences::GetBool("layers.async-pan-zoom.enabled", false);
+  if (nsIPresShell* presShell = GetPresShell()) {
+    *aOut = presShell->AsyncPanZoomEnabled();
+    return NS_OK;
+  }
+
+  // If we don't have a presShell, fall back to the default platform value of
+  // whether or not APZ is enabled.
+  *aOut = gfxPlatform::AsyncPanZoomEnabled();
   return NS_OK;
 }
 
@@ -13904,37 +13907,65 @@ nsDocShell::GetOpener()
   return opener;
 }
 
-URLSearchParams*
-nsDocShell::GetURLSearchParams()
-{
-  return mURLSearchParams;
-}
-
 class JavascriptTimelineMarker : public TimelineMarker
 {
 public:
   JavascriptTimelineMarker(nsDocShell* aDocShell, const char* aName,
-                           const char* aReason)
+                           const char* aReason,
+                           const char16_t* aFunctionName,
+                           const char16_t* aFileName,
+                           uint32_t aLineNumber)
     : TimelineMarker(aDocShell, aName, TRACING_INTERVAL_START,
-                     NS_ConvertUTF8toUTF16(aReason))
+                     NS_ConvertUTF8toUTF16(aReason),
+                     NO_STACK)
+    , mFunctionName(aFunctionName)
+    , mFileName(aFileName)
+    , mLineNumber(aLineNumber)
   {
   }
 
-  void AddDetails(mozilla::dom::ProfileTimelineMarker& aMarker) override
+  void AddDetails(JSContext* aCx, mozilla::dom::ProfileTimelineMarker& aMarker)
+    override
   {
     aMarker.mCauseName.Construct(GetCause());
+
+    if (!mFunctionName.IsEmpty() || !mFileName.IsEmpty()) {
+      RootedDictionary<ProfileTimelineStackFrame> stackFrame(aCx);
+      stackFrame.mLine.Construct(mLineNumber);
+      stackFrame.mSource.Construct(mFileName);
+      stackFrame.mFunctionDisplayName.Construct(mFunctionName);
+
+      JS::Rooted<JS::Value> newStack(aCx);
+      if (ToJSValue(aCx, stackFrame, &newStack)) {
+        if (newStack.isObject()) {
+          aMarker.mStack = &newStack.toObject();
+        }
+      } else {
+        JS_ClearPendingException(aCx);
+      }
+    }
   }
+
+private:
+  nsString mFunctionName;
+  nsString mFileName;
+  uint32_t mLineNumber;
 };
 
 void
-nsDocShell::NotifyJSRunToCompletionStart(const char* aReason)
+nsDocShell::NotifyJSRunToCompletionStart(const char* aReason,
+                                         const char16_t* aFunctionName,
+                                         const char16_t* aFilename,
+                                         const uint32_t aLineNumber)
 {
   bool timelineOn = nsIDocShell::GetRecordProfileTimelineMarkers();
 
   // If first start, mark interval start.
   if (timelineOn && mJSRunToCompletionDepth == 0) {
     mozilla::UniquePtr<TimelineMarker> marker =
-      MakeUnique<JavascriptTimelineMarker>(this, "Javascript", aReason);
+      MakeUnique<JavascriptTimelineMarker>(this, "Javascript", aReason,
+                                           aFunctionName, aFilename,
+                                           aLineNumber);
     AddProfileTimelineMarker(Move(marker));
   }
   mJSRunToCompletionDepth++;
@@ -13991,18 +14022,56 @@ nsDocShell::ShouldPrepareForIntercept(nsIURI* aURI, bool aIsNavigate,
                                       bool* aShouldIntercept)
 {
   *aShouldIntercept = false;
+  // Preffed off.
+  if (!sInterceptionEnabled) {
+    return NS_OK;
+  }
+
+  // No in private browsing
+  if (mInPrivateBrowsing) {
+    return NS_OK;
+  }
+
   if (mSandboxFlags) {
     // If we're sandboxed, don't intercept.
     return NS_OK;
   }
 
-  nsCOMPtr<nsIServiceWorkerManager> swm = services::GetServiceWorkerManager();
+  nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   if (!swm) {
     return NS_OK;
   }
 
+  nsresult result;
+  nsCOMPtr<mozIThirdPartyUtil> thirdPartyUtil =
+    do_GetService(THIRDPARTYUTIL_CONTRACTID, &result);
+  NS_ENSURE_SUCCESS(result, result);
+
+  if (mCurrentURI) {
+    nsAutoCString uriSpec;
+    mCurrentURI->GetSpec(uriSpec);
+    if (!(uriSpec.EqualsLiteral("about:blank"))) {
+      // Reject the interception of third-party iframes if the cookie behaviour
+      // is set to reject all third-party cookies (1). In case that this pref
+      // is not set or can't be read, we default to allow all cookies (0) as
+      // this is the default value in all.js.
+      bool isThirdPartyURI = true;
+      result = thirdPartyUtil->IsThirdPartyURI(mCurrentURI, aURI,
+                                               &isThirdPartyURI);
+      NS_ENSURE_SUCCESS(result, result);
+      if (isThirdPartyURI &&
+          (Preferences::GetInt("network.cookie.cookieBehavior",
+                               COOKIE_BEHAVIOR_ACCEPT) ==
+                               COOKIE_BEHAVIOR_REJECT_FOREIGN)) {
+        return NS_OK;
+      }
+    }
+  }
+
   if (aIsNavigate) {
-    return swm->IsAvailableForURI(aURI, aShouldIntercept);
+    OriginAttributes attrs(GetAppId(), GetIsInBrowserElement());
+    *aShouldIntercept = swm->IsAvailable(attrs, aURI);
+    return NS_OK;
   }
 
   nsCOMPtr<nsIDocument> doc = GetDocument();
@@ -14010,13 +14079,19 @@ nsDocShell::ShouldPrepareForIntercept(nsIURI* aURI, bool aIsNavigate,
     return NS_ERROR_NOT_AVAILABLE;
   }
 
-  return swm->IsControlled(doc, aShouldIntercept);
+  ErrorResult rv;
+  *aShouldIntercept = swm->IsControlled(doc, rv);
+  if (NS_WARN_IF(rv.Failed())) {
+    return rv.StealNSResult();
+  }
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP
 nsDocShell::ChannelIntercepted(nsIInterceptedChannel* aChannel)
 {
-  nsCOMPtr<nsIServiceWorkerManager> swm = services::GetServiceWorkerManager();
+  nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   if (!swm) {
     aChannel->Cancel();
     return NS_OK;
@@ -14036,7 +14111,16 @@ nsDocShell::ChannelIntercepted(nsIInterceptedChannel* aChannel)
   }
 
   bool isReload = mLoadType & LOAD_CMD_RELOAD;
-  return swm->DispatchFetchEvent(doc, aChannel, isReload);
+
+  OriginAttributes attrs(GetAppId(), GetIsInBrowserElement());
+
+  ErrorResult error;
+  swm->DispatchFetchEvent(attrs, doc, aChannel, isReload, error);
+  if (NS_WARN_IF(error.Failed())) {
+    return error.StealNSResult();
+  }
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP

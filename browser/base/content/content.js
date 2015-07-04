@@ -31,6 +31,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "FormSubmitObserver",
   "resource:///modules/FormSubmitObserver.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PageMetadata",
   "resource://gre/modules/PageMetadata.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PlacesUIUtils",
+  "resource:///modules/PlacesUIUtils.jsm");
 XPCOMUtils.defineLazyGetter(this, "PageMenuChild", function() {
   let tmp = {};
   Cu.import("resource://gre/modules/PageMenu.jsm", tmp);
@@ -47,9 +49,18 @@ addMessageListener("ContextMenu:DoCustomCommand", function(message) {
   PageMenuChild.executeMenu(message.data);
 });
 
+addMessageListener("RemoteLogins:fillForm", function(message) {
+  LoginManagerContent.receiveMessage(message, content);
+});
 addEventListener("DOMFormHasPassword", function(event) {
+  LoginManagerContent.onDOMFormHasPassword(event, content);
   InsecurePasswordUtils.checkForInsecurePasswords(event.target);
-  LoginManagerContent.onFormPassword(event);
+});
+addEventListener("DOMInputPasswordAdded", function(event) {
+  LoginManagerContent.onDOMInputPasswordAdded(event, content);
+});
+addEventListener("pageshow", function(event) {
+  LoginManagerContent.onPageShow(event, content);
 });
 addEventListener("DOMAutoComplete", function(event) {
   LoginManagerContent.onUsernameInput(event);
@@ -94,12 +105,15 @@ let handleContentContextMenu = function (event) {
                                           .getInterface(Ci.nsIDOMWindowUtils)
                                           .outerWindowID;
 
+  let disableSetDesktopBg = null;
   // Media related cache info parent needs for saving
   let contentType = null;
   let contentDisposition = null;
   if (event.target.nodeType == Ci.nsIDOMNode.ELEMENT_NODE &&
       event.target instanceof Ci.nsIImageLoadingContent &&
       event.target.currentURI) {
+    disableSetDesktopBg = disableSetDesktopBackground(event.target);
+
     try {
       let imageCache = 
         Cc["@mozilla.org/image/tools;1"].getService(Ci.imgITools)
@@ -140,7 +154,7 @@ let handleContentContextMenu = function (event) {
                     { editFlags, spellInfo, customMenuItems, addonInfo,
                       principal, docLocation, charSet, baseURI, referrer,
                       referrerPolicy, contentType, contentDisposition,
-                      frameOuterWindowID, selectionInfo },
+                      frameOuterWindowID, selectionInfo, disableSetDesktopBg },
                     { event, popupNode: event.target });
   }
   else {
@@ -161,6 +175,7 @@ let handleContentContextMenu = function (event) {
       contentType: contentType,
       contentDisposition: contentDisposition,
       selectionInfo: selectionInfo,
+      disableSetDesktopBackground: disableSetDesktopBg,
     };
   }
 }
@@ -169,11 +184,18 @@ Cc["@mozilla.org/eventlistenerservice;1"]
   .getService(Ci.nsIEventListenerService)
   .addSystemEventListener(global, "contextmenu", handleContentContextMenu, false);
 
+// Values for telemtery bins: see TLS_ERROR_REPORT_UI in Histograms.json
+const TLS_ERROR_REPORT_TELEMETRY_UI_SHOWN = 0;
+const TLS_ERROR_REPORT_TELEMETRY_EXPANDED = 1;
+const TLS_ERROR_REPORT_TELEMETRY_SUCCESS  = 6;
+const TLS_ERROR_REPORT_TELEMETRY_FAILURE  = 7;
+
 let AboutNetErrorListener = {
   init: function(chromeGlobal) {
     chromeGlobal.addEventListener('AboutNetErrorLoad', this, false, true);
     chromeGlobal.addEventListener('AboutNetErrorSetAutomatic', this, false, true);
     chromeGlobal.addEventListener('AboutNetErrorSendReport', this, false, true);
+    chromeGlobal.addEventListener('AboutNetErrorUIExpanded', this, false, true);
   },
 
   get isAboutNetError() {
@@ -195,6 +217,10 @@ let AboutNetErrorListener = {
     case "AboutNetErrorSendReport":
       this.onSendReport(aEvent);
       break;
+    case "AboutNetErrorUIExpanded":
+      sendAsyncMessage("Browser:SSLErrorReportTelemetry",
+                       {reportStatus: TLS_ERROR_REPORT_TELEMETRY_EXPANDED});
+      break;
     }
   },
 
@@ -207,6 +233,10 @@ let AboutNetErrorListener = {
             })
           }
     ));
+
+    sendAsyncMessage("Browser:SSLErrorReportTelemetry",
+                     {reportStatus: TLS_ERROR_REPORT_TELEMETRY_UI_SHOWN});
+
     if (automatic) {
       this.onSendReport(evt);
     }
@@ -251,11 +281,15 @@ let AboutNetErrorListener = {
           // show the retry button
           retryBtn.style.removeProperty("display");
           reportSendingMsg.style.display = "none";
+          sendAsyncMessage("Browser:SSLErrorReportTelemetry",
+                           {reportStatus: TLS_ERROR_REPORT_TELEMETRY_FAILURE});
           break;
         case "complete":
           // Show a success indicator
           reportSentMsg.style.removeProperty("display");
           reportSendingMsg.style.display = "none";
+          sendAsyncMessage("Browser:SSLErrorReportTelemetry",
+                           {reportStatus: TLS_ERROR_REPORT_TELEMETRY_SUCCESS});
           break;
         }
       }
@@ -276,57 +310,13 @@ let AboutNetErrorListener = {
     sendAsyncMessage("Browser:SendSSLErrorReport", {
         elementId: evt.target.id,
         documentURI: contentDoc.documentURI,
-        location: contentDoc.location,
+        location: {hostname: contentDoc.location.hostname, port: contentDoc.location.port},
         securityInfo: serializedSecurityInfo
       });
   }
 }
 
 AboutNetErrorListener.init(this);
-
-// An event listener for custom "WebChannelMessageToChrome" events on pages
-addEventListener("WebChannelMessageToChrome", function (e) {
-  // if target is window then we want the document principal, otherwise fallback to target itself.
-  let principal = e.target.nodePrincipal ? e.target.nodePrincipal : e.target.document.nodePrincipal;
-
-  if (e.detail) {
-    sendAsyncMessage("WebChannelMessageToChrome", e.detail, { eventTarget: e.target }, principal);
-  } else  {
-    Cu.reportError("WebChannel message failed. No message detail.");
-  }
-}, true, true);
-
-// Add message listener for "WebChannelMessageToContent" messages from chrome scripts
-addMessageListener("WebChannelMessageToContent", function (e) {
-  if (e.data) {
-    // e.objects.eventTarget will be defined if sending a response to
-    // a WebChannelMessageToChrome event. An unsolicited send
-    // may not have an eventTarget defined, in this case send to the
-    // main content window.
-    let eventTarget = e.objects.eventTarget || content;
-
-    // if eventTarget is window then we want the document principal,
-    // otherwise use target itself.
-    let targetPrincipal = eventTarget instanceof Ci.nsIDOMWindow ? eventTarget.document.nodePrincipal : eventTarget.nodePrincipal;
-
-    if (e.principal.subsumes(targetPrincipal)) {
-      // if eventTarget is a window, use it as the targetWindow, otherwise
-      // find the window that owns the eventTarget.
-      let targetWindow = eventTarget instanceof Ci.nsIDOMWindow ? eventTarget : eventTarget.ownerDocument.defaultView;
-
-      eventTarget.dispatchEvent(new targetWindow.CustomEvent("WebChannelMessageToContent", {
-        detail: Cu.cloneInto({
-          id: e.data.id,
-          message: e.data.message,
-        }, targetWindow),
-      }));
-    } else {
-      Cu.reportError("WebChannel message failed. Principal mismatch.");
-    }
-  } else {
-    Cu.reportError("WebChannel message failed. No message data.");
-  }
-});
 
 
 let ClickEventHandler = {
@@ -367,6 +357,12 @@ let ClickEventHandler = {
                  bookmark: false, referrerPolicy: ownerDoc.referrerPolicy };
 
     if (href) {
+      try {
+        BrowserUtils.urlSecurityCheck(href, node.ownerDocument.nodePrincipal);
+      } catch (e) {
+        return;
+      }
+
       json.href = href;
       if (node) {
         json.title = node.getAttribute("title");
@@ -642,4 +638,130 @@ addMessageListener("ContextMenu:ReloadImage", (message) => {
   let image = message.objects.target;
   if (image instanceof Ci.nsIImageLoadingContent)
     image.forceReload();
+});
+
+addMessageListener("ContextMenu:BookmarkFrame", (message) => {
+  let frame = message.objects.target.ownerDocument;
+  sendAsyncMessage("ContextMenu:BookmarkFrame:Result",
+                   { title: frame.title,
+                     description: PlacesUIUtils.getDescriptionFromDocument(frame) });
+});
+
+addMessageListener("ContextMenu:SearchFieldBookmarkData", (message) => {
+  let node = message.objects.target;
+
+  let charset = node.ownerDocument.characterSet;
+
+  let formBaseURI = BrowserUtils.makeURI(node.form.baseURI,
+                                         charset);
+
+  let formURI = BrowserUtils.makeURI(node.form.getAttribute("action"),
+                                     charset,
+                                     formBaseURI);
+
+  let spec = formURI.spec;
+
+  let isURLEncoded =
+               (node.form.method.toUpperCase() == "POST"
+                && (node.form.enctype == "application/x-www-form-urlencoded" ||
+                    node.form.enctype == ""));
+
+  let title = node.ownerDocument.title;
+  let description = PlacesUIUtils.getDescriptionFromDocument(node.ownerDocument);
+
+  let formData = [];
+
+  function escapeNameValuePair(aName, aValue, aIsFormUrlEncoded) {
+    if (aIsFormUrlEncoded)
+      return escape(aName + "=" + aValue);
+    else
+      return escape(aName) + "=" + escape(aValue);
+  }
+
+  for (let el of node.form.elements) {
+    if (!el.type) // happens with fieldsets
+      continue;
+
+    if (el == node) {
+      formData.push((isURLEncoded) ? escapeNameValuePair(el.name, "%s", true) :
+                                     // Don't escape "%s", just append
+                                     escapeNameValuePair(el.name, "", false) + "%s");
+      continue;
+    }
+
+    let type = el.type.toLowerCase();
+
+    if (((el instanceof content.HTMLInputElement && el.mozIsTextField(true)) ||
+        type == "hidden" || type == "textarea") ||
+        ((type == "checkbox" || type == "radio") && el.checked)) {
+      formData.push(escapeNameValuePair(el.name, el.value, isURLEncoded));
+    } else if (el instanceof content.HTMLSelectElement && el.selectedIndex >= 0) {
+      for (let j=0; j < el.options.length; j++) {
+        if (el.options[j].selected)
+          formData.push(escapeNameValuePair(el.name, el.options[j].value,
+                                            isURLEncoded));
+      }
+    }
+  }
+
+  let postData;
+
+  if (isURLEncoded)
+    postData = formData.join("&");
+  else {
+    let separator = spec.includes("?") ? "&" : "?";
+    spec += separator + formData.join("&");
+  }
+
+  sendAsyncMessage("ContextMenu:SearchFieldBookmarkData:Result",
+                   { spec, title, description, postData, charset });
+});
+
+function disableSetDesktopBackground(aTarget) {
+  // Disable the Set as Desktop Background menu item if we're still trying
+  // to load the image or the load failed.
+  if (!(aTarget instanceof Ci.nsIImageLoadingContent))
+    return true;
+
+  if (("complete" in aTarget) && !aTarget.complete)
+    return true;
+
+  if (aTarget.currentURI.schemeIs("javascript"))
+    return true;
+
+  let request = aTarget.QueryInterface(Ci.nsIImageLoadingContent)
+                       .getRequest(Ci.nsIImageLoadingContent.CURRENT_REQUEST);
+  if (!request)
+    return true;
+
+  return false;
+}
+
+addMessageListener("ContextMenu:SetAsDesktopBackground", (message) => {
+  let target = message.objects.target;
+
+  // Paranoia: check disableSetDesktopBackground again, in case the
+  // image changed since the context menu was initiated.
+  let disable = disableSetDesktopBackground(target);
+
+  if (!disable) {
+    try {
+      BrowserUtils.urlSecurityCheck(target.currentURI.spec, target.ownerDocument.nodePrincipal);
+      let canvas = content.document.createElement("canvas");
+      canvas.width = target.naturalWidth;
+      canvas.height = target.naturalHeight;
+      let ctx = canvas.getContext("2d");
+      ctx.drawImage(target, 0, 0);
+      let dataUrl = canvas.toDataURL();
+      sendAsyncMessage("ContextMenu:SetAsDesktopBackground:Result",
+                       { dataUrl });
+    }
+    catch (e) {
+      Cu.reportError(e);
+      disable = true;
+    }
+  }
+
+  if (disable)
+    sendAsyncMessage("ContextMenu:SetAsDesktopBackground:Result", { disable });
 });

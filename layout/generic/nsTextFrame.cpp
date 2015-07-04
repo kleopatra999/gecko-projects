@@ -619,7 +619,8 @@ struct FlowLengthProperty {
 };
 
 int32_t nsTextFrame::GetInFlowContentLength() {
-  if (!(mState & NS_FRAME_IS_BIDI)) {
+  if (!(mState & NS_FRAME_IS_BIDI) &&
+      !StyleText()->NewlineIsSignificant(this)) {
     return mContent->TextLength() - mContentOffset;
   }
 
@@ -631,7 +632,7 @@ int32_t nsTextFrame::GetInFlowContentLength() {
    * mContentOffset but this frame is empty, logically it might be before the
    * start of the cached flow.
    */
-  if (flowLength && 
+  if (flowLength && !StyleText()->NewlineIsSignificant(this) &&
       (flowLength->mStartOffset < mContentOffset ||
        (flowLength->mStartOffset == mContentOffset && GetContentEnd() > mContentOffset)) &&
       flowLength->mEndFlowOffset > mContentOffset) {
@@ -1310,10 +1311,8 @@ BuildTextRuns(gfxContext* aContext, nsTextFrame* aForFrame,
     // just one line
     scanner.SetAtStartOfLine();
     scanner.SetCommonAncestorWithLastFrame(nullptr);
-    nsIFrame* child = textRunContainer->GetFirstPrincipalChild();
-    while (child) {
+    for (nsIFrame* child : textRunContainer->PrincipalChildList()) {
       scanner.ScanFrame(child);
-      child = child->GetNextSibling();
     }
     // Set mStartOfLine so FlushFrames knows its textrun ends a line
     scanner.SetAtStartOfLine();
@@ -1502,7 +1501,7 @@ void BuildTextRunsScanner::FlushFrames(bool aFlushLineBreaks, bool aSuppressTrai
       AutoFallibleTArray<uint8_t,BIG_TEXT_NODE_SIZE> buffer;
       uint32_t bufferSize = mMaxTextLength*(mDoubleByteText ? 2 : 1);
       if (bufferSize < mMaxTextLength || bufferSize == UINT32_MAX ||
-          !buffer.AppendElements(bufferSize)) {
+          !buffer.AppendElements(bufferSize, fallible)) {
         return;
       }
       textRun = BuildTextRunForFrames(buffer.Elements());
@@ -2050,7 +2049,7 @@ BuildTextRunsScanner::BuildTextRunForFrames(void* aTextBuffer)
         // Need to expand the text. First transform it into a temporary buffer,
         // then expand.
         AutoFallibleTArray<uint8_t,BIG_TEXT_NODE_SIZE> tempBuf;
-        uint8_t* bufStart = tempBuf.AppendElements(contentLength);
+        uint8_t* bufStart = tempBuf.AppendElements(contentLength, fallible);
         if (!bufStart) {
           DestroyUserData(userDataToDestroy);
           return nullptr;
@@ -2268,7 +2267,7 @@ BuildTextRunsScanner::SetupLineBreakerContext(gfxTextRun *aTextRun)
   if (bufferSize < mMaxTextLength || bufferSize == UINT32_MAX) {
     return false;
   }
-  void *textPtr = buffer.AppendElements(bufferSize);
+  void *textPtr = buffer.AppendElements(bufferSize, fallible);
   if (!textPtr) {
     return false;
   }
@@ -2341,7 +2340,7 @@ BuildTextRunsScanner::SetupLineBreakerContext(gfxTextRun *aTextRun)
         // Need to expand the text. First transform it into a temporary buffer,
         // then expand.
         AutoFallibleTArray<uint8_t,BIG_TEXT_NODE_SIZE> tempBuf;
-        uint8_t* bufStart = tempBuf.AppendElements(contentLength);
+        uint8_t* bufStart = tempBuf.AppendElements(contentLength, fallible);
         if (!bufStart) {
           DestroyUserData(userDataToDestroy);
           return false;
@@ -4804,6 +4803,18 @@ LazyGetLineBaselineOffset(nsIFrame* aChildFrame, nsBlockFrame* aBlockFrame)
   }
 }
 
+static bool IsUnderlineRight(nsIFrame* aFrame)
+{
+  nsIAtom* langAtom = aFrame->StyleFont()->mLanguage;
+  if (!langAtom) {
+    return false;
+  }
+  nsAtomString langStr(langAtom);
+  return (StringBeginsWith(langStr, NS_LITERAL_STRING("ja")) ||
+          StringBeginsWith(langStr, NS_LITERAL_STRING("ko"))) &&
+         (langStr.Length() == 2 || langStr[2] == '-');
+}
+
 void
 nsTextFrame::GetTextDecorations(
                     nsPresContext* aPresContext,
@@ -4902,11 +4913,19 @@ nsTextFrame::GetTextDecorations(
         color = nsLayoutUtils::GetColor(f, eCSSProperty_text_decoration_color);
       }
 
-      if (textDecorations & NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE) {
+      bool swapUnderlineAndOverline = vertical && IsUnderlineRight(f);
+      const uint8_t kUnderline =
+        swapUnderlineAndOverline ? NS_STYLE_TEXT_DECORATION_LINE_OVERLINE :
+                                   NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE;
+      const uint8_t kOverline =
+        swapUnderlineAndOverline ? NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE :
+                                   NS_STYLE_TEXT_DECORATION_LINE_OVERLINE;
+
+      if (textDecorations & kUnderline) {
         aDecorations.mUnderlines.AppendElement(
           nsTextFrame::LineDecoration(f, baselineOffset, color, style));
       }
-      if (textDecorations & NS_STYLE_TEXT_DECORATION_LINE_OVERLINE) {
+      if (textDecorations & kOverline) {
         aDecorations.mOverlines.AppendElement(
           nsTextFrame::LineDecoration(f, baselineOffset, color, style));
       }
@@ -5260,7 +5279,7 @@ static void DrawSelectionDecorations(gfxContext* aContext,
     const gfxPoint& aPt, gfxFloat aICoordInFrame, gfxFloat aWidth,
     gfxFloat aAscent, const gfxFont::Metrics& aFontMetrics,
     nsTextFrame::DrawPathCallbacks* aCallbacks,
-    bool aVertical)
+    bool aVertical, uint8_t aDecoration)
 {
   gfxPoint pt(aPt);
   gfxSize size(aWidth,
@@ -5338,8 +5357,10 @@ static void DrawSelectionDecorations(gfxContext* aContext,
   size.height *= relativeSize;
   PaintDecorationLine(aFrame, aContext, aDirtyRect, color, nullptr, pt,
     (aVertical ? (pt.y - aPt.y) : (pt.x - aPt.x)) + aICoordInFrame,
-    size, aAscent, aFontMetrics.underlineOffset,
-    NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE, style, eSelectionDecoration,
+    size, aAscent, 
+    aDecoration == NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE ?
+      aFontMetrics.underlineOffset : aFontMetrics.maxAscent,
+    aDecoration, style, eSelectionDecoration,
     aCallbacks, aVertical, descentLimit);
 }
 
@@ -5641,7 +5662,7 @@ nsTextFrame::PaintTextWithSelectionColors(gfxContext* aCtx,
   // Figure out which selections control the colors to use for each character.
   AutoFallibleTArray<SelectionDetails*,BIG_TEXT_NODE_SIZE> prevailingSelectionsBuffer;
   SelectionDetails** prevailingSelections =
-    prevailingSelectionsBuffer.AppendElements(aContentLength);
+    prevailingSelectionsBuffer.AppendElements(aContentLength, fallible);
   if (!prevailingSelections) {
     return false;
   }
@@ -5781,7 +5802,7 @@ nsTextFrame::PaintTextSelectionDecorations(gfxContext* aCtx,
   // Figure out which characters will be decorated for this selection.
   AutoFallibleTArray<SelectionDetails*, BIG_TEXT_NODE_SIZE> selectedCharsBuffer;
   SelectionDetails** selectedChars =
-    selectedCharsBuffer.AppendElements(aContentLength);
+    selectedCharsBuffer.AppendElements(aContentLength, fallible);
   if (!selectedChars) {
     return;
   }
@@ -5804,6 +5825,10 @@ nsTextFrame::PaintTextSelectionDecorations(gfxContext* aCtx,
 
   gfxFont* firstFont = aProvider.GetFontGroup()->GetFirstValidFont();
   bool verticalRun = mTextRun->IsVertical();
+  bool rightUnderline = verticalRun && IsUnderlineRight(this);
+  const uint8_t kDecoration =
+    rightUnderline ? NS_STYLE_TEXT_DECORATION_LINE_OVERLINE :
+                     NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE;
   bool useVerticalMetrics = verticalRun && mTextRun->UseCenterBaseline();
   gfxFont::Metrics
     decorationMetrics(firstFont->GetMetrics(useVerticalMetrics ?
@@ -5850,7 +5875,7 @@ nsTextFrame::PaintTextSelectionDecorations(gfxContext* aCtx,
       DrawSelectionDecorations(aCtx, dirtyRect, aSelectionType, this,
                                aTextPaintStyle, selectedStyle, pt, xInFrame,
                                width, mAscent / app, decorationMetrics,
-                               aCallbacks, verticalRun);
+                               aCallbacks, verticalRun, kDecoration);
     }
     iterator.UpdateWithAdvance(advance);
   }
@@ -7456,7 +7481,8 @@ nsTextFrame::AddInlineMinISizeForFlow(nsRenderingContext *aRenderingContext,
   AutoFallibleTArray<bool,BIG_TEXT_NODE_SIZE> hyphBuffer;
   bool *hyphBreakBefore = nullptr;
   if (hyphenating) {
-    hyphBreakBefore = hyphBuffer.AppendElements(flowEndInTextRun - start);
+    hyphBreakBefore = hyphBuffer.AppendElements(flowEndInTextRun - start,
+                                                fallible);
     if (hyphBreakBefore) {
       provider.GetHyphenationBreaks(start, flowEndInTextRun - start,
                                     hyphBreakBefore);
@@ -8994,19 +9020,6 @@ nsTextFrame::AdjustOffsetsForBidi(int32_t aStart, int32_t aEnd)
 
   mContentOffset = aStart;
   SetLength(aEnd - aStart, nullptr, 0);
-
-  /**
-   * After inserting text the caret Bidi level must be set to the level of the
-   * inserted text.This is difficult, because we cannot know what the level is
-   * until after the Bidi algorithm is applied to the whole paragraph.
-   *
-   * So we set the caret Bidi level to UNDEFINED here, and the caret code will
-   * set it correctly later
-   */
-  nsRefPtr<nsFrameSelection> frameSelection = GetFrameSelection();
-  if (frameSelection) {
-    frameSelection->UndefineCaretBidiLevel();
-  }
 }
 
 /**

@@ -270,7 +270,7 @@ let Activities = {
                           .getService(Ci.nsISystemMessagesInternal);
             if (!sysmm) {
               // System message is not present, what should we do?
-              delete self.callers[aMsg.id];
+              self.removeCaller(aMsg.id);
               return;
             }
 
@@ -334,7 +334,7 @@ let Activities = {
               "id": aMsg.id,
               "result": results
             });
-          delete Activities.callers[aMsg.id];
+          self.removeCaller(aMsg.id);
         });
       } else {
         let glue = Cc["@mozilla.org/dom/activities/ui-glue;1"]
@@ -383,7 +383,7 @@ let Activities = {
     try {
       this.callers[aId].mm.sendAsyncMessage(aName, aPayload);
     } finally {
-      delete this.callers[aId];
+      this.removeCaller(aId);
     }
   },
 
@@ -409,8 +409,10 @@ let Activities = {
 
     switch(aMessage.name) {
       case "Activity:Start":
+        Services.obs.notifyObservers(null, "activity-opened", msg.childID);
         this.callers[msg.id] = { mm: mm,
                                  manifestURL: msg.manifestURL,
+                                 childID: msg.childID,
                                  pageURL: msg.pageURL };
         this.startActivity(msg);
         break;
@@ -427,13 +429,16 @@ let Activities = {
         break;
 
       case "Activities:Register":
-        let self = this;
         this.db.add(msg,
           function onSuccess(aEvent) {
+            debug("Activities:Register:OK");
+            Services.obs.notifyObservers(null, "new-activity-registered-success", null);
             mm.sendAsyncMessage("Activities:Register:OK", null);
           },
           function onError(aEvent) {
             msg.error = "REGISTER_ERROR";
+            debug("Activities:Register:KO");
+            Services.obs.notifyObservers(null, "new-activity-registered-failure", null);
             mm.sendAsyncMessage("Activities:Register:KO", msg);
           });
         break;
@@ -455,6 +460,12 @@ let Activities = {
         }
         break;
     }
+  },
+
+  removeCaller: function activities_removeCaller(id) {
+    Services.obs.notifyObservers(null, "activity-closed",
+                                 this.callers[id].childID);
+    delete this.callers[id];
   }
 
 }

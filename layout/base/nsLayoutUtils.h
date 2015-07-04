@@ -8,6 +8,7 @@
 
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/Maybe.h"
 #include "nsBoundingMetrics.h"
 #include "nsChangeHint.h"
 #include "nsAutoPtr.h"
@@ -163,6 +164,16 @@ public:
    * Get display port for the given element.
    */
   static bool GetDisplayPort(nsIContent* aContent, nsRect *aResult = nullptr);
+
+  /**
+   * @return the display port for the given element which should be used for
+   * visibility testing purposes.
+   *
+   * If low-precision buffers are enabled, this is the critical display port;
+   * otherwise, it's the same display port returned by GetDisplayPort().
+   */
+  static bool GetDisplayPortForVisibilityTesting(nsIContent* aContent,
+                                                 nsRect* aResult = nullptr);
 
   enum class RepaintMode : uint8_t {
     Repaint,
@@ -859,6 +870,13 @@ public:
                                           const nsRect& aRect);
 
   /**
+   * Clamp aRect relative to aFrame to the scroll frames boundary searching from
+   * aFrame.
+   */
+  static nsRect ClampRectToScrollFrames(nsIFrame* aFrame,
+                                        const nsRect& aRect);
+
+  /**
    * Return true if a "layer transform" could be computed for aFrame,
    * and optionally return the computed transform.  The returned
    * transform is what would be set on the layer currently if a layers
@@ -1281,18 +1299,27 @@ public:
 
   /**
    * Get the contribution of aFrame to its containing block's intrinsic
-   * width.  This considers the child's intrinsic width, its 'width',
-   * 'min-width', and 'max-width' properties, and its padding, border,
-   * and margin.
+   * size for the given physical axis.  This considers the child's intrinsic
+   * width, its 'width', 'min-width', and 'max-width' properties (or 'height'
+   * variations if that's what matches aAxis) and its padding, border and margin
+   * in the corresponding dimension.
    */
   enum IntrinsicISizeType { MIN_ISIZE, PREF_ISIZE };
   enum {
     IGNORE_PADDING = 0x01
   };
+  static nscoord IntrinsicForAxis(mozilla::PhysicalAxis aAxis,
+                                  nsRenderingContext*   aRenderingContext,
+                                  nsIFrame*             aFrame,
+                                  IntrinsicISizeType    aType,
+                                  uint32_t              aFlags = 0);
+  /**
+   * Calls IntrinsicForAxis with aFrame's parent's inline physical axis.
+   */
   static nscoord IntrinsicForContainer(nsRenderingContext* aRenderingContext,
-                                       nsIFrame* aFrame,
-                                       IntrinsicISizeType aType,
-                                       uint32_t aFlags = 0);
+                                       nsIFrame*           aFrame,
+                                       IntrinsicISizeType  aType,
+                                       uint32_t            aFlags = 0);
 
   /*
    * Convert nsStyleCoord to nscoord when percentages depend on the
@@ -2017,6 +2044,8 @@ public:
     /* Whether the element was still loading.  Some consumers need to handle
        this case specially. */
     bool mIsStillLoading;
+    /* Whether the element has a valid size. */
+    bool mHasSize;
     /* Whether the element used CORS when loading. */
     bool mCORSUsed;
     /* Whether the returned image contains premultiplied pixel data */
@@ -2106,32 +2135,48 @@ public:
                                         bool clear);
 
   /**
-   * Returns true if the content node has animations or transitions that can be
+   * Given a frame with possibly animated content, finds the content node
+   * that contains its animations as well as the frame's pseudo-element type
+   * relative to the resulting content node. Returns true if animated content
+   * was found, otherwise it returns false and the output parameters are
+   * undefined.
+   */
+  static bool GetAnimationContent(const nsIFrame* aFrame,
+                                  nsIContent* &aContentResult,
+                                  nsCSSPseudoElements::Type &aPseudoTypeResult);
+
+  /**
+   * Returns true if the frame has animations or transitions that can be
    * performed on the compositor.
    */
-  static bool HasAnimationsForCompositor(nsIContent* aContent,
+  static bool HasAnimationsForCompositor(const nsIFrame* aFrame,
                                          nsCSSProperty aProperty);
 
   /**
-   * Returns true if the content node has animations or transitions for the
+   * Returns true if the frame has animations or transitions for the
    * property.
    */
-  static bool HasAnimations(nsIContent* aContent, nsCSSProperty aProperty);
+  static bool HasAnimations(const nsIFrame* aFrame, nsCSSProperty aProperty);
 
   /**
-   * Returns true if the content node has any current animations or transitions
-   * (depending on the value of |aAnimationProperty|).
+   * Returns true if the frame has any current animations.
    * A current animation is any animation that has not yet finished playing
    * including paused animations.
    */
-  static bool HasCurrentAnimations(nsIContent* aContent,
-                                   nsIAtom* aAnimationProperty);
+  static bool HasCurrentAnimations(const nsIFrame* aFrame);
 
   /**
-   * Returns true if the content node has any current animations or transitions
+   * Returns true if the frame has any current transitions.
+   * A current transition is any transition that has not yet finished playing
+   * including paused transitions.
+   */
+  static bool HasCurrentTransitions(const nsIFrame* aFrame);
+
+  /**
+   * Returns true if the frame has any current animations or transitions
    * for any of the specified properties.
    */
-  static bool HasCurrentAnimationsForProperties(nsIContent* aContent,
+  static bool HasCurrentAnimationsForProperties(const nsIFrame* aFrame,
                                                 const nsCSSProperty* aProperties,
                                                 size_t aPropertyCount);
 
@@ -2146,7 +2191,7 @@ public:
   static bool IsAnimationLoggingEnabled();
 
   /**
-   * Find a suitable scale for an element (aContent) over the course of any
+   * Find a suitable scale for a element (aFrame's content) over the course of any
    * animations and transitions of the CSS transform property on the
    * element that run on the compositor thread.
    * It will check the maximum and minimum scale during the animations and
@@ -2156,7 +2201,7 @@ public:
    * @param aVisibleSize is the size of the area we want to paint
    * @param aDisplaySize is the size of the display area of the pres context
    */
-  static gfxSize ComputeSuitableScaleForAnimation(nsIContent* aContent,
+  static gfxSize ComputeSuitableScaleForAnimation(const nsIFrame* aFrame,
                                                   const nsSize& aVisibleSize,
                                                   const nsSize& aDisplaySize);
 
@@ -2293,6 +2338,10 @@ public:
 
   static bool FontSizeInflationDisabledInMasterProcess() {
     return sFontSizeInflationDisabledInMasterProcess;
+  }
+
+  static bool SVGTransformOriginEnabled() {
+    return sSVGTransformOriginEnabled;
   }
 
   /**
@@ -2505,10 +2554,16 @@ public:
   CalculateExpandedScrollableRect(nsIFrame* aFrame);
 
   /**
-   * Returns true if we're using asynchronous scrolling (either through
-   * APZ or the android frontend).
+   * Returns true if the widget owning the given frame uses asynchronous
+   * scrolling.
    */
-  static bool UsesAsyncScrolling();
+  static bool UsesAsyncScrolling(nsIFrame* aFrame);
+
+  /**
+   * Returns true if the widget owning the given frame has builtin APZ support
+   * enabled.
+   */
+  static bool AsyncPanZoomEnabled(nsIFrame* aFrame);
 
   /**
    * Log a key/value pair for APZ testing during a paint.
@@ -2619,8 +2674,31 @@ public:
                                           Layer* aLayer,
                                           ViewID aScrollParentId,
                                           const nsRect& aViewport,
+                                          const mozilla::Maybe<nsRect>& aClipRect,
                                           bool aIsRoot,
                                           const ContainerLayerParameters& aContainerParameters);
+
+  /**
+   * If the given scroll frame needs an area excluded from its composition
+   * bounds due to scrollbars, return that area, otherwise return an empty
+   * margin.
+   * There is no need to exclude scrollbars in the following cases:
+   *   - If the scroll frame is not the RCD-RSF; in that case, the composition
+   *     bounds is calculated based on the scroll port which already excludes
+   *     the scrollbar area.
+   *   - If the scrollbars are overlay, since then they are drawn on top of the
+   *     scrollable content.
+   */
+  static nsMargin ScrollbarAreaToExcludeFromCompositionBoundsFor(nsIFrame* aScrollFrame);
+
+  /**
+   * Looks in the layer subtree rooted at aLayer for a metrics with scroll id
+   * aScrollId. Returns true if such is found.
+   */
+  static bool ContainsMetricsWithId(const Layer* aLayer, const ViewID& aScrollId);
+
+  static bool ShouldUseNoScriptSheet(nsIDocument* aDocument);
+  static bool ShouldUseNoFramesSheet(nsIDocument* aDocument);
 
 private:
   static uint32_t sFontSizeInflationEmPerLine;
@@ -2633,6 +2711,7 @@ private:
   static bool sInvalidationDebuggingIsEnabled;
   static bool sCSSVariablesEnabled;
   static bool sInterruptibleReflowEnabled;
+  static bool sSVGTransformOriginEnabled;
 
   /**
    * Helper function for LogTestDataForPaint().

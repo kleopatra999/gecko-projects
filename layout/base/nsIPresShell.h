@@ -59,6 +59,7 @@ class nsCanvasFrame;
 class nsAString;
 class nsCaret;
 namespace mozilla {
+class AccessibleCaretEventHub;
 class TouchCaret;
 class SelectionCarets;
 } // namespace mozilla
@@ -138,10 +139,10 @@ typedef struct CapturingContentInfo {
   mozilla::StaticRefPtr<nsIContent> mContent;
 } CapturingContentInfo;
 
-// b7b89561-4f03-44b3-9afa-b47e7f313ffb
+// 7f0ae6b1-5fa1-4ba7-885e-a93e17d72cd2
 #define NS_IPRESSHELL_IID \
-  { 0xb7b89561, 0x4f03, 0x44b3, \
-    { 0x9a, 0xfa, 0xb4, 0x7e, 0x7f, 0x31, 0x3f, 0xfb } }
+{ 0x7f0ae6b1, 0x5fa1, 0x4ba7, \
+  { 0x88, 0x5e, 0xa9, 0x3e, 0x17, 0xd7, 0x2c, 0xd2 } }
 
 // debug VerifyReflow flags
 #define VERIFY_REFLOW_ON                    0x01
@@ -354,15 +355,11 @@ public:
   void ReconstructStyleData() { ReconstructStyleDataExternal(); }
 #endif
 
-  /** Setup all style rules required to implement preferences
-   * - used for background/text/link colors and link underlining
-   *    may be extended for any prefs that are implemented via style rules
-   * - aForceReflow argument is used to force a full reframe to make the rules show
-   *   (only used when the current page needs to reflect changed pref rules)
-   *
-   * - initially created for bugs 31816, 20760, 22963
+  /**
+   * Update the style set somehow to take into account changed prefs which
+   * affect document styling.
    */
-  virtual nsresult SetPreferenceStyleRules(bool aForceReflow) = 0;
+  virtual void UpdatePreferenceStyles() = 0;
 
   /**
    * FrameSelection will return the Frame based selection API.
@@ -511,9 +508,19 @@ public:
     eTreeChange, // mark intrinsic widths dirty on aFrame and its ancestors
     eStyleChange // Do eTreeChange, plus all of aFrame's descendants
   };
+  enum ReflowRootHandling {
+    ePositionOrSizeChange, // aFrame is changing position or size
+    eNoPositionOrSizeChange, // ... NOT changing ...
+    eInferFromBitToAdd // is changing iff (aBitToAdd == NS_FRAME_IS_DIRTY)
+
+    // Note:  With eStyleChange, these can also apply to out-of-flows
+    // in addition to aFrame.
+  };
   virtual void FrameNeedsReflow(nsIFrame *aFrame,
                                 IntrinsicDirty aIntrinsicDirty,
-                                nsFrameState aBitToAdd) = 0;
+                                nsFrameState aBitToAdd,
+                                ReflowRootHandling aRootHandling =
+                                  eInferFromBitToAdd) = 0;
 
   /**
    * Calls FrameNeedsReflow on all fixed position children of the root frame.
@@ -809,6 +816,11 @@ public:
   virtual mozilla::dom::Element* GetSelectionCaretsEndElement() const = 0;
 
   /**
+   * Get the AccessibleCaretEventHub, if it exists. AddRefs it.
+   */
+  virtual already_AddRefed<mozilla::AccessibleCaretEventHub> GetAccessibleCaretEventHub() const = 0;
+
+  /**
    * Get the caret, if it exists. AddRefs it.
    */
   virtual already_AddRefed<nsCaret> GetCaret() const = 0;
@@ -1099,7 +1111,7 @@ public:
    * edge of the presshell area. The aPoint, aScreenRect and aSurface
    * arguments function in a similar manner as RenderSelection.
    */
-  virtual mozilla::TemporaryRef<SourceSurface>
+  virtual already_AddRefed<SourceSurface>
   RenderNode(nsIDOMNode* aNode,
              nsIntRegion* aRegion,
              nsIntPoint& aPoint,
@@ -1120,7 +1132,7 @@ public:
    * the original. When scaling does not occur, the mouse point isn't used
    * as the position can be determined from the displayed frames.
    */
-  virtual mozilla::TemporaryRef<SourceSurface>
+  virtual already_AddRefed<SourceSurface>
   RenderSelection(nsISelection* aSelection,
                   nsIntPoint& aPoint,
                   nsIntRect* aScreenRect) = 0;
@@ -1363,6 +1375,12 @@ public:
   virtual LayerManager* GetLayerManager() = 0;
 
   /**
+   * Return true iff there is a widget rendering this presShell and that
+   * widget is APZ-enabled.
+   */
+  virtual bool AsyncPanZoomEnabled() = 0;
+
+  /**
    * Track whether we're ignoring viewport scrolling for the purposes
    * of painting.  If we are ignoring, then layers aren't clipped to
    * the CSS viewport and scrollbars aren't drawn.
@@ -1549,8 +1567,6 @@ public:
 
   // Whether we should assume all images are visible.
   virtual bool AssumeAllImagesVisible() = 0;
-
-  virtual void FireResizeEvent() = 0;
 
   /**
    * Refresh observer management.

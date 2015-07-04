@@ -197,6 +197,7 @@ js::Nursery::allocateObject(JSContext* cx, size_t size, size_t numDynamic, const
     /* If we want external slots, add them. */
     HeapSlot* slots = nullptr;
     if (numDynamic) {
+        MOZ_ASSERT(clasp->isNative());
         slots = static_cast<HeapSlot*>(allocateBuffer(cx->zone(), numDynamic * sizeof(HeapSlot)));
         if (!slots) {
             /*
@@ -246,9 +247,9 @@ js::Nursery::allocateBuffer(Zone* zone, uint32_t nbytes)
     }
 
     void* buffer = zone->pod_malloc<uint8_t>(nbytes);
-    if (buffer) {
-        /* If this put fails, we will only leak the slots. */
-        (void)mallocedBuffers.put(buffer);
+    if (buffer && !mallocedBuffers.putNew(buffer)) {
+        js_free(buffer);
+        return nullptr;
     }
     return buffer;
 }
@@ -273,11 +274,8 @@ js::Nursery::reallocateBuffer(JSObject* obj, void* oldBuffer,
 
     if (!isInside(oldBuffer)) {
         void* newBuffer = obj->zone()->pod_realloc<uint8_t>((uint8_t*)oldBuffer, oldBytes, newBytes);
-        if (newBuffer && oldBytes != newBytes) {
-            removeMallocedBuffer(oldBuffer);
-            /* If this put fails, we will only leak the slots. */
-            (void)mallocedBuffers.put(newBuffer);
-        }
+        if (newBuffer && oldBuffer != newBuffer)
+            MOZ_ALWAYS_TRUE(mallocedBuffers.rekeyAs(oldBuffer, newBuffer, newBuffer));
         return newBuffer;
     }
 
@@ -378,31 +376,13 @@ js::TenuringTracer::TenuringTracer(JSRuntime* rt, Nursery* nursery)
   , tenuredSize(0)
   , head(nullptr)
   , tail(&head)
-  , savedRuntimeNeedBarrier(rt->needsIncrementalBarrier())
-#ifdef JS_GC_ZEAL
-  , verifyingPostBarriers(nullptr)
-#endif
 {
     rt->gc.incGcNumber();
-
-    // We disable the runtime needsIncrementalBarrier() check so that
-    // pre-barriers do not fire on objects that have been relocated. The
-    // pre-barrier's call to obj->zone() will try to look through shape_,
-    // which is now the relocation magic and will crash. However,
-    // zone->needsIncrementalBarrier() must still be set correctly so that
-    // allocations we make in minor GCs between incremental slices will
-    // allocate their objects marked.
-    rt->setNeedsIncrementalBarrier(false);
 }
 
-js::TenuringTracer::~TenuringTracer()
-{
-    runtime()->setNeedsIncrementalBarrier(savedRuntimeNeedBarrier);
-}
-
-#define TIME_START(name) int64_t timstampStart_##name = enableProfiling_ ? PRMJ_Now() : 0
-#define TIME_END(name) int64_t timstampEnd_##name = enableProfiling_ ? PRMJ_Now() : 0
-#define TIME_TOTAL(name) (timstampEnd_##name - timstampStart_##name)
+#define TIME_START(name) int64_t timestampStart_##name = enableProfiling_ ? PRMJ_Now() : 0
+#define TIME_END(name) int64_t timestampEnd_##name = enableProfiling_ ? PRMJ_Now() : 0
+#define TIME_TOTAL(name) (timestampEnd_##name - timestampStart_##name)
 
 void
 js::Nursery::collect(JSRuntime* rt, JS::gcreason::Reason reason, ObjectGroupList* pretenureGroups)
@@ -430,44 +410,44 @@ js::Nursery::collect(JSRuntime* rt, JS::gcreason::Reason reason, ObjectGroupList
 
     TraceMinorGCStart();
 
-    TIME_START(total);
+    int64_t timestampStart_total = PRMJ_Now();
 
-    AutoTraceSession session(rt, MinorCollecting);
+    AutoTraceSession session(rt, JS::HeapState::MinorCollecting);
     AutoStopVerifyingBarriers av(rt, false);
     AutoDisableProxyCheck disableStrictProxyChecking(rt);
-    DebugOnly<AutoEnterOOMUnsafeRegion> oomUnsafeRegion;
+    mozilla::DebugOnly<AutoEnterOOMUnsafeRegion> oomUnsafeRegion;
 
     // Move objects pointed to by roots from the nursery to the major heap.
     TenuringTracer mover(rt, this);
 
     // Mark the store buffer. This must happen first.
-    TIME_START(markValues);
-    sb.markValues(mover);
-    TIME_END(markValues);
 
-    TIME_START(markCells);
-    sb.markCells(mover);
-    TIME_END(markCells);
+    TIME_START(cancelIonCompilations);
+    if (sb.cancelIonCompilations()) {
+        for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next())
+            jit::StopAllOffThreadCompilations(c);
+    }
+    TIME_END(cancelIonCompilations);
 
-    TIME_START(markSlots);
-    sb.markSlots(mover);
-    TIME_END(markSlots);
+    TIME_START(traceValues);
+    sb.traceValues(mover);
+    TIME_END(traceValues);
 
-    TIME_START(markWholeCells);
-    sb.markWholeCells(mover);
-    TIME_END(markWholeCells);
+    TIME_START(traceCells);
+    sb.traceCells(mover);
+    TIME_END(traceCells);
 
-    TIME_START(markRelocatableValues);
-    sb.markRelocatableValues(mover);
-    TIME_END(markRelocatableValues);
+    TIME_START(traceSlots);
+    sb.traceSlots(mover);
+    TIME_END(traceSlots);
 
-    TIME_START(markRelocatableCells);
-    sb.markRelocatableCells(mover);
-    TIME_END(markRelocatableCells);
+    TIME_START(traceWholeCells);
+    sb.traceWholeCells(mover);
+    TIME_END(traceWholeCells);
 
-    TIME_START(markGenericEntries);
-    sb.markGenericEntries(&mover);
-    TIME_END(markGenericEntries);
+    TIME_START(traceGenericEntries);
+    sb.traceGenericEntries(&mover);
+    TIME_END(traceGenericEntries);
 
     TIME_START(markRuntime);
     rt->gc.markRuntime(&mover);
@@ -557,33 +537,35 @@ js::Nursery::collect(JSRuntime* rt, JS::gcreason::Reason reason, ObjectGroupList
     if (rt->gc.usage.gcBytes() >= rt->gc.tunables.gcMaxBytes())
         disable();
 
-    TIME_END(total);
+    int64_t totalTime = PRMJ_Now() - timestampStart_total;
+    rt->addTelemetry(JS_TELEMETRY_GC_MINOR_US, totalTime);
+    rt->addTelemetry(JS_TELEMETRY_GC_MINOR_REASON, reason);
+    if (totalTime > 1000)
+        rt->addTelemetry(JS_TELEMETRY_GC_MINOR_REASON_LONG, reason);
 
     TraceMinorGCEnd();
 
-    int64_t totalTime = TIME_TOTAL(total);
     if (enableProfiling_ && totalTime >= profileThreshold_) {
         static bool printedHeader = false;
         if (!printedHeader) {
             fprintf(stderr,
-                    "MinorGC: Reason               PRate  Size Time   mkVals mkClls mkSlts mkWCll mkRVal mkRCll mkGnrc ckTbls mkRntm mkDbgr clrNOC collct swpABO updtIn runFin frSlts clrSB  sweep resize pretnr\n");
+                    "MinorGC: Reason               PRate  Size Time   mkVals mkClls mkSlts mkWCll mkGnrc ckTbls mkRntm mkDbgr clrNOC collct swpABO updtIn runFin frSlts clrSB  sweep resize pretnr\n");
             printedHeader = true;
         }
 
 #define FMT " %6" PRIu64
         fprintf(stderr,
-                "MinorGC: %20s %5.1f%% %4d" FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT "\n",
+                "MinorGC: %20s %5.1f%% %4d" FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT FMT "\n",
                 js::gcstats::ExplainReason(reason),
                 promotionRate * 100,
                 numActiveChunks_,
                 totalTime,
-                TIME_TOTAL(markValues),
-                TIME_TOTAL(markCells),
-                TIME_TOTAL(markSlots),
-                TIME_TOTAL(markWholeCells),
-                TIME_TOTAL(markRelocatableValues),
-                TIME_TOTAL(markRelocatableCells),
-                TIME_TOTAL(markGenericEntries),
+                TIME_TOTAL(cancelIonCompilations),
+                TIME_TOTAL(traceValues),
+                TIME_TOTAL(traceCells),
+                TIME_TOTAL(traceSlots),
+                TIME_TOTAL(traceWholeCells),
+                TIME_TOTAL(traceGenericEntries),
                 TIME_TOTAL(checkHashTables),
                 TIME_TOTAL(markRuntime),
                 TIME_TOTAL(markDebugger),
@@ -668,8 +650,10 @@ js::Nursery::sweep()
     {
 #ifdef JS_CRASH_DIAGNOSTICS
         JS_POISON((void*)start(), JS_SWEPT_NURSERY_PATTERN, allocationEnd() - start());
-        for (int i = 0; i < numActiveChunks_; ++i)
+        for (int i = 0; i < numActiveChunks_; ++i) {
+            chunk(i).trailer.location = gc::ChunkLocationBitNursery;
             chunk(i).trailer.runtime = runtime();
+        }
 #endif
         setCurrentChunk(0);
     }

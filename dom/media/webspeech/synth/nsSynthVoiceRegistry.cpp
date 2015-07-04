@@ -23,12 +23,8 @@
 #include "SpeechSynthesisParent.h"
 
 #undef LOG
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetSpeechSynthLog();
-#define LOG(type, msg) PR_LOG(GetSpeechSynthLog(), type, msg)
-#else
-#define LOG(type, msg)
-#endif
+#define LOG(type, msg) MOZ_LOG(GetSpeechSynthLog(), type, msg)
 
 namespace {
 
@@ -129,7 +125,7 @@ nsSynthVoiceRegistry::nsSynthVoiceRegistry()
 
 nsSynthVoiceRegistry::~nsSynthVoiceRegistry()
 {
-  LOG(PR_LOG_DEBUG, ("~nsSynthVoiceRegistry"));
+  LOG(LogLevel::Debug, ("~nsSynthVoiceRegistry"));
 
   // mSpeechSynthChild's lifecycle is managed by the Content protocol.
   mSpeechSynthChild = nullptr;
@@ -168,7 +164,7 @@ nsSynthVoiceRegistry::GetInstanceForService()
 void
 nsSynthVoiceRegistry::Shutdown()
 {
-  LOG(PR_LOG_DEBUG, ("[%s] nsSynthVoiceRegistry::Shutdown()",
+  LOG(LogLevel::Debug, ("[%s] nsSynthVoiceRegistry::Shutdown()",
                      (XRE_GetProcessType() == GeckoProcessType_Content) ? "Content" : "Default"));
   gSynthVoiceRegistry = nullptr;
 }
@@ -234,14 +230,15 @@ nsSynthVoiceRegistry::AddVoice(nsISpeechService* aService,
                                const nsAString& aLang,
                                bool aLocalService)
 {
-  LOG(PR_LOG_DEBUG,
+  LOG(LogLevel::Debug,
       ("nsSynthVoiceRegistry::AddVoice uri='%s' name='%s' lang='%s' local=%s",
        NS_ConvertUTF16toUTF8(aUri).get(), NS_ConvertUTF16toUTF8(aName).get(),
        NS_ConvertUTF16toUTF8(aLang).get(),
        aLocalService ? "true" : "false"));
 
-  NS_ENSURE_FALSE(XRE_GetProcessType() == GeckoProcessType_Content,
-                  NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(XRE_GetProcessType() == GeckoProcessType_Content)) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   return AddVoiceImpl(aService, aUri, aName, aLang,
                       aLocalService);
@@ -251,7 +248,7 @@ NS_IMETHODIMP
 nsSynthVoiceRegistry::RemoveVoice(nsISpeechService* aService,
                                   const nsAString& aUri)
 {
-  LOG(PR_LOG_DEBUG,
+  LOG(LogLevel::Debug,
       ("nsSynthVoiceRegistry::RemoveVoice uri='%s' (%s)",
        NS_ConvertUTF16toUTF8(aUri).get(),
        (XRE_GetProcessType() == GeckoProcessType_Content) ? "child" : "parent"));
@@ -259,8 +256,12 @@ nsSynthVoiceRegistry::RemoveVoice(nsISpeechService* aService,
   bool found = false;
   VoiceData* retval = mUriVoiceMap.GetWeak(aUri, &found);
 
-  NS_ENSURE_TRUE(found, NS_ERROR_NOT_AVAILABLE);
-  NS_ENSURE_TRUE(aService == retval->mService, NS_ERROR_INVALID_ARG);
+  if(NS_WARN_IF(!(found))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  if(NS_WARN_IF(!(aService == retval->mService))) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
   mVoices.RemoveElement(retval);
   mDefaultVoices.RemoveElement(retval);
@@ -281,11 +282,13 @@ nsSynthVoiceRegistry::SetDefaultVoice(const nsAString& aUri,
 {
   bool found = false;
   VoiceData* retval = mUriVoiceMap.GetWeak(aUri, &found);
-  NS_ENSURE_TRUE(found, NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(!(found))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   mDefaultVoices.RemoveElement(retval);
 
-  LOG(PR_LOG_DEBUG, ("nsSynthVoiceRegistry::SetDefaultVoice %s %s",
+  LOG(LogLevel::Debug, ("nsSynthVoiceRegistry::SetDefaultVoice %s %s",
                      NS_ConvertUTF16toUTF8(aUri).get(),
                      aIsDefault ? "true" : "false"));
 
@@ -316,7 +319,9 @@ nsSynthVoiceRegistry::GetVoiceCount(uint32_t* aRetval)
 NS_IMETHODIMP
 nsSynthVoiceRegistry::GetVoice(uint32_t aIndex, nsAString& aRetval)
 {
-  NS_ENSURE_TRUE(aIndex < mVoices.Length(), NS_ERROR_INVALID_ARG);
+  if(NS_WARN_IF(!(aIndex < mVoices.Length()))) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
   aRetval = mVoices[aIndex]->mUri;
 
@@ -328,7 +333,9 @@ nsSynthVoiceRegistry::IsDefaultVoice(const nsAString& aUri, bool* aRetval)
 {
   bool found;
   VoiceData* voice = mUriVoiceMap.GetWeak(aUri, &found);
-  NS_ENSURE_TRUE(found, NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(!(found))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   for (int32_t i = mDefaultVoices.Length(); i > 0; ) {
     VoiceData* defaultVoice = mDefaultVoices[--i];
@@ -348,7 +355,9 @@ nsSynthVoiceRegistry::IsLocalVoice(const nsAString& aUri, bool* aRetval)
 {
   bool found;
   VoiceData* voice = mUriVoiceMap.GetWeak(aUri, &found);
-  NS_ENSURE_TRUE(found, NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(!(found))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   *aRetval = voice->mIsLocal;
   return NS_OK;
@@ -359,7 +368,9 @@ nsSynthVoiceRegistry::GetVoiceLang(const nsAString& aUri, nsAString& aRetval)
 {
   bool found;
   VoiceData* voice = mUriVoiceMap.GetWeak(aUri, &found);
-  NS_ENSURE_TRUE(found, NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(!(found))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   aRetval = voice->mLang;
   return NS_OK;
@@ -370,7 +381,9 @@ nsSynthVoiceRegistry::GetVoiceName(const nsAString& aUri, nsAString& aRetval)
 {
   bool found;
   VoiceData* voice = mUriVoiceMap.GetWeak(aUri, &found);
-  NS_ENSURE_TRUE(found, NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(!(found))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   aRetval = voice->mName;
   return NS_OK;
@@ -385,7 +398,9 @@ nsSynthVoiceRegistry::AddVoiceImpl(nsISpeechService* aService,
 {
   bool found = false;
   mUriVoiceMap.GetWeak(aUri, &found);
-  NS_ENSURE_FALSE(found, NS_ERROR_INVALID_ARG);
+  if(NS_WARN_IF(found)) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
   nsRefPtr<VoiceData> voice = new VoiceData(aService, aUri, aName, aLang,
                                             aLocalService);
@@ -462,14 +477,14 @@ nsSynthVoiceRegistry::FindBestMatch(const nsAString& aUri,
   VoiceData* retval = mUriVoiceMap.GetWeak(aUri, &found);
 
   if (found) {
-    LOG(PR_LOG_DEBUG, ("nsSynthVoiceRegistry::FindBestMatch - Matched URI"));
+    LOG(LogLevel::Debug, ("nsSynthVoiceRegistry::FindBestMatch - Matched URI"));
     return retval;
   }
 
   // Try finding a match for given voice.
   if (!aLang.IsVoid() && !aLang.IsEmpty()) {
     if (FindVoiceByLang(aLang, &retval)) {
-      LOG(PR_LOG_DEBUG,
+      LOG(LogLevel::Debug,
           ("nsSynthVoiceRegistry::FindBestMatch - Matched language (%s ~= %s)",
            NS_ConvertUTF16toUTF8(aLang).get(),
            NS_ConvertUTF16toUTF8(retval->mLang).get()));
@@ -481,14 +496,18 @@ nsSynthVoiceRegistry::FindBestMatch(const nsAString& aUri,
   // Try UI language.
   nsresult rv;
   nsCOMPtr<nsILocaleService> localeService = do_GetService(NS_LOCALESERVICE_CONTRACTID, &rv);
-  NS_ENSURE_SUCCESS(rv, nullptr);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return nullptr;
+  }
 
   nsAutoString uiLang;
   rv = localeService->GetLocaleComponentForUserAgent(uiLang);
-  NS_ENSURE_SUCCESS(rv, nullptr);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return nullptr;
+  }
 
   if (FindVoiceByLang(uiLang, &retval)) {
-    LOG(PR_LOG_DEBUG,
+    LOG(LogLevel::Debug,
         ("nsSynthVoiceRegistry::FindBestMatch - Matched UI language (%s ~= %s)",
          NS_ConvertUTF16toUTF8(uiLang).get(),
          NS_ConvertUTF16toUTF8(retval->mLang).get()));
@@ -498,7 +517,7 @@ nsSynthVoiceRegistry::FindBestMatch(const nsAString& aUri,
 
   // Try en-US, the language of locale "C"
   if (FindVoiceByLang(NS_LITERAL_STRING("en-US"), &retval)) {
-    LOG(PR_LOG_DEBUG,
+    LOG(LogLevel::Debug,
         ("nsSynthVoiceRegistry::FindBestMatch - Matched C locale language (en-US ~= %s)",
          NS_ConvertUTF16toUTF8(retval->mLang).get()));
 
@@ -554,7 +573,7 @@ nsSynthVoiceRegistry::Speak(const nsAString& aText,
                             const float& aPitch,
                             nsSpeechTask* aTask)
 {
-  LOG(PR_LOG_DEBUG,
+  LOG(LogLevel::Debug,
       ("nsSynthVoiceRegistry::Speak text='%s' lang='%s' uri='%s' rate=%f pitch=%f",
        NS_ConvertUTF16toUTF8(aText).get(), NS_ConvertUTF16toUTF8(aLang).get(),
        NS_ConvertUTF16toUTF8(aUri).get(), aRate, aPitch));
@@ -567,7 +586,9 @@ nsSynthVoiceRegistry::Speak(const nsAString& aText,
     return;
   }
 
-  LOG(PR_LOG_DEBUG, ("nsSynthVoiceRegistry::Speak - Using voice URI: %s",
+  aTask->SetChosenVoiceURI(voice->mUri);
+
+  LOG(LogLevel::Debug, ("nsSynthVoiceRegistry::Speak - Using voice URI: %s",
                      NS_ConvertUTF16toUTF8(voice->mUri).get()));
 
   SpeechServiceType serviceType;

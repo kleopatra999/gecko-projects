@@ -7,17 +7,24 @@
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.drawable.Drawable;
+import android.support.v4.content.ContextCompat;
+import android.support.v4.graphics.drawable.DrawableCompat;
 import android.util.AttributeSet;
+import android.util.DisplayMetrics;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 
 import org.mozilla.gecko.R;
-import org.mozilla.gecko.widget.FaviconView;
 import org.mozilla.gecko.widget.TwoWayView;
 
 import java.util.ArrayList;
@@ -27,15 +34,36 @@ public class SearchEngineBar extends TwoWayView
                              implements AdapterView.OnItemClickListener {
     private static final String LOGTAG = "Gecko" + SearchEngineBar.class.getSimpleName();
 
+    private static final float ICON_CONTAINER_MIN_WIDTH_DP = 72;
+    private static final float LABEL_CONTAINER_WIDTH_DP = 48;
+    private static final float DIVIDER_HEIGHT_DP = 1;
+
     public interface OnSearchBarClickListener {
         public void onSearchBarClickListener(SearchEngine searchEngine);
     }
 
     private final SearchEngineAdapter adapter;
+    private final Paint dividerPaint;
+    private final float minIconContainerWidth;
+    private final float dividerHeight;
+    private final int labelContainerWidth;
+
+    private int iconContainerWidth;
     private OnSearchBarClickListener onSearchBarClickListener;
 
     public SearchEngineBar(final Context context, final AttributeSet attrs) {
         super(context, attrs);
+
+        dividerPaint = new Paint();
+        dividerPaint.setColor(getResources().getColor(R.color.divider_light));
+        dividerPaint.setStyle(Paint.Style.FILL_AND_STROKE);
+
+        final DisplayMetrics displayMetrics = getResources().getDisplayMetrics();
+        minIconContainerWidth = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, ICON_CONTAINER_MIN_WIDTH_DP, displayMetrics);
+        dividerHeight = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, DIVIDER_HEIGHT_DP, displayMetrics);
+        labelContainerWidth = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, LABEL_CONTAINER_WIDTH_DP, displayMetrics);
+
+        iconContainerWidth =  (int) minIconContainerWidth;
 
         adapter = new SearchEngineAdapter();
         setAdapter(adapter);
@@ -50,6 +78,11 @@ public class SearchEngineBar extends TwoWayView
                     OnSearchBarClickListener.class.getSimpleName() + " is not initialized");
         }
 
+        if (position == 0) {
+            // Ignore click on label
+            return;
+        }
+
         final SearchEngine searchEngine = adapter.getItem(position);
         onSearchBarClickListener.onSearchBarClickListener(searchEngine);
     }
@@ -62,7 +95,38 @@ public class SearchEngineBar extends TwoWayView
         adapter.setSearchEngines(searchEngines);
     }
 
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+
+        final int searchEngineCount = adapter.getCount() - 1;
+
+        if (searchEngineCount > 0) {
+            final float availableWidthPerContainer = (getMeasuredWidth() - labelContainerWidth) / searchEngineCount;
+
+            final int desiredIconContainerSize = (int) Math.max(
+                    availableWidthPerContainer,
+                    minIconContainerWidth
+            );
+
+            if (desiredIconContainerSize != iconContainerWidth) {
+                iconContainerWidth = desiredIconContainerSize;
+                adapter.notifyDataSetChanged();
+            }
+        }
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+
+        canvas.drawRect(0, 0, getWidth(), dividerHeight, dividerPaint);
+    }
+
     public class SearchEngineAdapter extends BaseAdapter {
+        private static final int VIEW_TYPE_SEARCH_ENGINE = 0;
+        private static final int VIEW_TYPE_LABEL = 1;
+
         List<SearchEngine> searchEngines = new ArrayList<>();
 
         public void setSearchEngines(final List<SearchEngine> searchEngines) {
@@ -72,12 +136,14 @@ public class SearchEngineBar extends TwoWayView
 
         @Override
         public int getCount() {
-            return searchEngines.size();
+            // Adding offset for label at position 0 (Bug 1172071)
+            return searchEngines.size() + 1;
         }
 
         @Override
         public SearchEngine getItem(final int position) {
-            return searchEngines.get(position);
+            // Returning null for the label at position 0 (Bug 1172071)
+            return position == 0 ? null : searchEngines.get(position - 1);
         }
 
         @Override
@@ -86,52 +152,56 @@ public class SearchEngineBar extends TwoWayView
         }
 
         @Override
-        public View getView(final int position, final View convertView, final ViewGroup parent) {
-            final View view;
-            if (convertView == null) {
-                view = LayoutInflater.from(getContext()).inflate(R.layout.search_engine_bar_item, parent, false);
-            } else {
-                view = convertView;
-            }
-
-            final FaviconView faviconView = (FaviconView) view.findViewById(R.id.search_engine_icon);
-            final SearchEngine searchEngine = searchEngines.get(position);
-            faviconView.updateAndScaleImage(searchEngine.getIcon(), searchEngine.getEngineIdentifier());
-
-            final View container = view.findViewById(R.id.search_engine_icon_container);
-            final String desc = getResources().getString(R.string.search_bar_item_desc, searchEngine.getEngineIdentifier());
-            container.setContentDescription(desc);
-
-            return view;
-        }
-    }
-
-    /**
-     * A Container to surround the SearchEngineBar. This is necessary so we can draw
-     * a divider across the entire width of the screen, but have the inner list layout
-     * not take up the full width of the screen so it can be centered within this container
-     * if there aren't enough items that it needs to scroll.
-     *
-     * Note: a better implementation would have this View inflating an inner layout so
-     * the containing layout doesn't need two "SearchEngineBar" Views but it wasn't
-     * worth the refactor time.
-     */
-    @SuppressWarnings("unused") // via XML
-    public static class SearchEngineBarContainer extends FrameLayout {
-        private final Paint dividerPaint;
-
-        public SearchEngineBarContainer(final Context context, final AttributeSet attrs) {
-            super(context, attrs);
-
-            dividerPaint = new Paint();
-            dividerPaint.setColor(getResources().getColor(R.color.divider_light));
+        public int getItemViewType(int position) {
+            return position == 0 ? VIEW_TYPE_LABEL : VIEW_TYPE_SEARCH_ENGINE;
         }
 
         @Override
-        public void onDraw(final Canvas canvas) {
-            super.onDraw(canvas);
+        public int getViewTypeCount() {
+            return 2;
+        }
 
-            canvas.drawLine(0, 0, getWidth(), 0, dividerPaint);
+        @Override
+        public View getView(final int position, final View convertView, final ViewGroup parent) {
+            if (position == 0) {
+                return getLabelView(convertView, parent);
+            } else {
+                return getSearchEngineView(position, convertView, parent);
+            }
+        }
+
+        private View getLabelView(View view, final ViewGroup parent) {
+            if (view == null) {
+                view = LayoutInflater.from(getContext()).inflate(R.layout.search_engine_bar_label, parent, false);
+            }
+
+            Drawable icon = DrawableCompat.wrap(ContextCompat.getDrawable(parent.getContext(), R.drawable.search_icon_active));
+            DrawableCompat.setTint(icon, getResources().getColor(R.color.disabled_grey));
+
+            final ImageView iconView = (ImageView) view.findViewById(R.id.search_engine_label);
+            iconView.setImageDrawable(icon);
+            iconView.setScaleType(ImageView.ScaleType.FIT_XY);
+
+            return view;
+        }
+
+        private View getSearchEngineView(final int position, View view, final ViewGroup parent) {
+            if (view == null) {
+                view = LayoutInflater.from(getContext()).inflate(R.layout.search_engine_bar_item, parent, false);
+            }
+
+            LayoutParams params = (LayoutParams) view.getLayoutParams();
+            params.width = iconContainerWidth;
+            view.setLayoutParams(params);
+
+            final ImageView faviconView = (ImageView) view.findViewById(R.id.search_engine_icon);
+            final SearchEngine searchEngine = getItem(position);
+            faviconView.setImageBitmap(searchEngine.getIcon());
+
+            final String desc = getResources().getString(R.string.search_bar_item_desc, searchEngine.getEngineIdentifier());
+            view.setContentDescription(desc);
+
+            return view;
         }
     }
 }

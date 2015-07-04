@@ -21,7 +21,7 @@
 #include "nsIInputStream.h"
 #include "nsIIPCSerializableInputStream.h"
 #include "nsISeekableStream.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MathAlgorithms.h"
@@ -30,7 +30,6 @@
 using mozilla::ipc::InputStreamParams;
 using mozilla::ipc::StringInputStreamParams;
 
-#if defined(PR_LOGGING)
 //
 // Log module for StorageStream logging...
 //
@@ -39,7 +38,7 @@ using mozilla::ipc::StringInputStreamParams;
 //    set NSPR_LOG_MODULES=StorageStreamLog:5
 //    set NSPR_LOG_FILE=nspr.log
 //
-// this enables PR_LOG_DEBUG level information and places all output in
+// this enables LogLevel::Debug level information and places all output in
 // the file nspr.log
 //
 static PRLogModuleInfo*
@@ -51,11 +50,10 @@ GetStorageStreamLog()
   }
   return sLog;
 }
-#endif
 #ifdef LOG
 #undef LOG
 #endif
-#define LOG(args) PR_LOG(GetStorageStreamLog(), PR_LOG_DEBUG, args)
+#define LOG(args) MOZ_LOG(GetStorageStreamLog(), mozilla::LogLevel::Debug, args)
 
 nsStorageStream::nsStorageStream()
   : mSegmentedBuffer(0), mSegmentSize(0), mWriteInProgress(false),

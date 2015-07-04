@@ -10,7 +10,19 @@ this.EXPORTED_SYMBOLS = [
 
 const {classes: Cc, interfaces: Ci, results: Cr, utils: Cu} = Components;
 
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
+
 this.TelemetryUtils = {
+  /**
+   * Turn a millisecond timestamp into a day timestamp.
+   *
+   * @param aMsec A number of milliseconds since Unix epoch.
+   * @return The number of whole days since Unix epoch.
+   */
+  millisecondsToDays: function(aMsec) {
+    return Math.floor(aMsec / MILLISECONDS_PER_DAY);
+  },
+
   /**
    * Takes a date and returns it trunctated to a date with daily precision.
    */
@@ -62,5 +74,22 @@ this.TelemetryUtils = {
       return nextMidnightDate;
     }
     return null;
+  },
+
+  generateUUID: function() {
+    let str = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator).generateUUID().toString();
+    // strip {}
+    return str.substring(1, str.length - 1);
+  },
+
+  /**
+   * Find how many months passed between two dates.
+   * @param {Object} aStartDate The starting date.
+   * @param {Object} aEndDate The ending date.
+   * @return {Integer} The number of months between the two dates.
+   */
+  getElapsedTimeInMonths: function(aStartDate, aEndDate) {
+    return (aEndDate.getMonth() - aStartDate.getMonth())
+           + 12 * (aEndDate.getFullYear() - aStartDate.getFullYear());
   },
 };

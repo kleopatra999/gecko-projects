@@ -860,8 +860,7 @@ nsContainerFrame::DoInlineIntrinsicISize(nsRenderingContext *aRenderingContext,
     if (aData->currentLine == 0) {
       aData->currentLine = clonePBM;
     }
-    for (nsIFrame *kid = nif->mFrames.FirstChild(); kid;
-         kid = kid->GetNextSibling()) {
+    for (nsIFrame* kid : nif->mFrames) {
       if (aType == nsLayoutUtils::MIN_ISIZE)
         kid->AddInlineMinISize(aRenderingContext,
                                static_cast<InlineMinISizeData*>(aData));
@@ -910,9 +909,7 @@ nsContainerFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
   // replaced elements always shrink-wrap
   if (aShrinkWrap || IsFrameOfType(eReplaced)) {
     // don't bother setting it if the result won't be used
-    const nsStyleCoord& inlineStyleCoord =
-      aWM.IsVertical() ? StylePosition()->mHeight : StylePosition()->mWidth;
-    if (inlineStyleCoord.GetUnit() == eStyleUnit_Auto) {
+    if (StylePosition()->ISize(aWM).GetUnit() == eStyleUnit_Auto) {
       result.ISize(aWM) = ShrinkWidthToFit(aRenderingContext, availBased);
     }
   } else {
@@ -924,24 +921,46 @@ nsContainerFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
     // wrapping inside of us should not apply font size inflation.
     AutoMaybeDisableFontInflation an(this);
 
-    // XXX todo: make this aware of vertical writing modes
-    uint8_t captionSide = StyleTableBorder()->mCaptionSide;
-    if (captionSide == NS_STYLE_CAPTION_SIDE_LEFT ||
-        captionSide == NS_STYLE_CAPTION_SIDE_RIGHT) {
-      result.ISize(aWM) = GetMinISize(aRenderingContext);
-    } else if (captionSide == NS_STYLE_CAPTION_SIDE_TOP ||
-               captionSide == NS_STYLE_CAPTION_SIDE_BOTTOM) {
-      // The outer frame constrains our available width to the width of
-      // the table.  Grow if our min-width is bigger than that, but not
-      // larger than the containing block width.  (It would really be nice
-      // to transmit that information another way, so we could grow up to
-      // the table's available width, but that's harder.)
-      nscoord min = GetMinISize(aRenderingContext);
-      if (min > aCBSize.ISize(aWM)) {
-        min = aCBSize.ISize(aWM);
+    WritingMode tableWM = GetParent()->GetWritingMode();
+    uint8_t captionSide = StyleTableBorder()->LogicalCaptionSide(tableWM);
+
+    if (aWM.IsOrthogonalTo(tableWM)) {
+      if (captionSide == NS_STYLE_CAPTION_SIDE_BSTART ||
+          captionSide == NS_STYLE_CAPTION_SIDE_BSTART_OUTSIDE ||
+          captionSide == NS_STYLE_CAPTION_SIDE_BEND ||
+          captionSide == NS_STYLE_CAPTION_SIDE_BEND_OUTSIDE) {
+        // For an orthogonal caption on a block-dir side of the table,
+        // shrink-wrap to min-isize.
+        result.ISize(aWM) = GetMinISize(aRenderingContext);
+      } else {
+        // An orthogonal caption on an inline-dir side of the table
+        // is constrained to the containing block.
+        nscoord pref = GetPrefISize(aRenderingContext);
+        if (pref > aCBSize.ISize(aWM)) {
+          pref = aCBSize.ISize(aWM);
+        }
+        if (pref < result.ISize(aWM)) {
+          result.ISize(aWM) = pref;
+        }
       }
-      if (min > result.ISize(aWM)) {
-        result.ISize(aWM) = min;
+    } else {
+      if (captionSide == NS_STYLE_CAPTION_SIDE_ISTART ||
+          captionSide == NS_STYLE_CAPTION_SIDE_IEND) {
+        result.ISize(aWM) = GetMinISize(aRenderingContext);
+      } else if (captionSide == NS_STYLE_CAPTION_SIDE_BSTART ||
+                 captionSide == NS_STYLE_CAPTION_SIDE_BEND) {
+        // The outer frame constrains our available isize to the isize of
+        // the table.  Grow if our min-isize is bigger than that, but not
+        // larger than the containing block isize.  (It would really be nice
+        // to transmit that information another way, so we could grow up to
+        // the table's available isize, but that's harder.)
+        nscoord min = GetMinISize(aRenderingContext);
+        if (min > aCBSize.ISize(aWM)) {
+          min = aCBSize.ISize(aWM);
+        }
+        if (min > result.ISize(aWM)) {
+          result.ISize(aWM) = min;
+        }
       }
     }
   }
@@ -1226,8 +1245,7 @@ nsContainerFrame::ReflowOverflowContainerChildren(nsPresContext*           aPres
   nsOverflowContinuationTracker tracker(this, false, false);
   bool shouldReflowAllKids = aReflowState.ShouldReflowAllKids();
 
-  for (nsIFrame* frame = overflowContainers->FirstChild(); frame;
-       frame = frame->GetNextSibling()) {
+  for (nsIFrame* frame : *overflowContainers) {
     if (frame->GetPrevInFlow()->GetParent() != GetPrevInFlow()) {
       // frame's prevInFlow has moved, skip reflowing this frame;
       // it will get reflowed once it's been placed
@@ -1317,8 +1335,7 @@ nsContainerFrame::DisplayOverflowContainers(nsDisplayListBuilder*   aBuilder,
 {
   nsFrameList* overflowconts = GetPropTableFrames(OverflowContainersProperty());
   if (overflowconts) {
-    for (nsIFrame* frame = overflowconts->FirstChild(); frame;
-         frame = frame->GetNextSibling()) {
+    for (nsIFrame* frame : *overflowconts) {
       BuildDisplayListForChild(aBuilder, frame, aDirtyRect, aLists);
     }
   }

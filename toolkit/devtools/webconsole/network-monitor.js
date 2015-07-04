@@ -1,6 +1,8 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* globals NetworkHelper, Services, DevToolsUtils, NetUtil,
+   gActivityDistributor */
 
 "use strict";
 
@@ -8,9 +10,11 @@ const {Cc, Ci, Cu, Cr} = require("chrome");
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-loader.lazyGetter(this, "NetworkHelper", () => require("devtools/toolkit/webconsole/network-helper"));
+loader.lazyRequireGetter(this, "NetworkHelper",
+                         "devtools/toolkit/webconsole/network-helper");
 loader.lazyImporter(this, "Services", "resource://gre/modules/Services.jsm");
-loader.lazyImporter(this, "DevToolsUtils", "resource://gre/modules/devtools/DevToolsUtils.jsm");
+loader.lazyRequireGetter(this, "DevToolsUtils",
+                         "devtools/toolkit/DevToolsUtils");
 loader.lazyImporter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm");
 loader.lazyServiceGetter(this, "gActivityDistributor",
                          "@mozilla.org/network/http-activity-distributor;1",
@@ -95,7 +99,11 @@ NetworkResponseListener.prototype = {
     try {
       let impl = this._wrappedNotificationCallbacks.getInterface(iid);
       impl[method].apply(impl, args);
-    } catch(e if e.result == Cr.NS_ERROR_NO_INTERFACE) {}
+    } catch (e) {
+      if (e.result != Cr.NS_ERROR_NO_INTERFACE) {
+        throw e;
+      }
+    }
   },
 
   /**
@@ -303,7 +311,8 @@ NetworkResponseListener.prototype = {
 
     let openResponse = null;
 
-    for each (let item in this.owner.openResponses) {
+    for (let id in this.owner.openResponses) {
+      let item = this.owner.openResponses[id];
       if (item.channel === this.httpActivity.channel) {
         openResponse = item;
         break;
@@ -677,7 +686,8 @@ NetworkMonitor.prototype = {
     // Iterate over all currently ongoing requests. If aChannel can't
     // be found within them, then exit this function.
     let httpActivity = null;
-    for each (let item in this.openRequests) {
+    for (let id in this.openRequests) {
+      let item = this.openRequests[id];
       if (item.channel === aChannel) {
         httpActivity = item;
         break;
@@ -735,6 +745,17 @@ NetworkMonitor.prototype = {
       return true;
     }
 
+    // Ignore requests from chrome or add-on code when we are monitoring
+    // content.
+    // TODO: one particular test (browser_styleeditor_fetch-from-cache.js) needs
+    // the DevToolsUtils.testing check. We will move to a better way to serve
+    // its needs in bug 1167188, where this check should be removed.
+    if (!DevToolsUtils.testing && aChannel.loadInfo &&
+        aChannel.loadInfo.loadingDocument === null &&
+        aChannel.loadInfo.loadingPrincipal === Services.scriptSecurityManager.getSystemPrincipal()) {
+      return false;
+    }
+
     if (this.window) {
       // Since frames support, this.window may not be the top level content
       // frame, so that we can't only compare with win.top.
@@ -750,12 +771,6 @@ NetworkMonitor.prototype = {
       }
     }
 
-    if (aChannel.loadInfo) {
-      if (aChannel.loadInfo.contentPolicyType == Ci.nsIContentPolicy.TYPE_BEACON) {
-        return true;
-      }
-    }
-
     if (this.topFrame) {
       let topFrame = NetworkHelper.getTopFrameForRequest(aChannel);
       if (topFrame && topFrame === this.topFrame) {
@@ -766,6 +781,24 @@ NetworkMonitor.prototype = {
     if (this.appId) {
       let appId = NetworkHelper.getAppIdForRequest(aChannel);
       if (appId && appId == this.appId) {
+        return true;
+      }
+    }
+
+    // The following check is necessary because beacon channels don't come
+    // associated with a load group. Bug 1160837 will hopefully introduce a
+    // platform fix that will render the following code entirely useless.
+    if (aChannel.loadInfo &&
+        aChannel.loadInfo.contentPolicyType == Ci.nsIContentPolicy.TYPE_BEACON) {
+      let nonE10sMatch = this.window &&
+                         aChannel.loadInfo.loadingDocument === this.window.document;
+      let e10sMatch = this.topFrame &&
+                      this.topFrame.contentPrincipal &&
+                      this.topFrame.contentPrincipal.equals(aChannel.loadInfo.loadingPrincipal) &&
+                      this.topFrame.contentPrincipal.URI.spec == aChannel.referrer.spec;
+      let b2gMatch = this.appId &&
+                     aChannel.loadInfo.loadingPrincipal.appId === this.appId;
+      if (nonE10sMatch || e10sMatch || b2gMatch) {
         return true;
       }
     }

@@ -43,6 +43,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.InputDevice;
 import android.widget.FrameLayout;
 
 /**
@@ -243,6 +244,13 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
 
     @Override
     public boolean onHoverEvent(MotionEvent event) {
+        // If we get a touchscreen hover event, and accessibility is not enabled,
+        // don't send it to gecko.
+        if (event.getSource() == InputDevice.SOURCE_TOUCHSCREEN &&
+            !GeckoAccessibility.isEnabled()) {
+            return false;
+        }
+
         return sendEventToGecko(event);
     }
 
@@ -449,18 +457,6 @@ public class LayerView extends FrameLayout implements Tabs.OnTabsChangedListener
 
     public GLController getGLController() {
         return mGLController;
-    }
-
-    private Bitmap getDrawable(String name) {
-        BitmapFactory.Options options = new BitmapFactory.Options();
-        options.inScaled = false;
-        Context context = getContext();
-        int resId = context.getResources().getIdentifier(name, "drawable", context.getPackageName());
-        return BitmapUtils.decodeResource(context, resId, options);
-    }
-
-    Bitmap getScrollbarImage() {
-        return getDrawable("scrollbar");
     }
 
     /* When using a SurfaceView (mSurfaceView != null), resizing happens in two

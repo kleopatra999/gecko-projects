@@ -28,7 +28,8 @@ footer = """
 # can we find a better way of dealing with asm sources?
 
 # left out of UNIFIED_SOURCES for now; that's not C++ anyway, nothing else to unify it with
-if not CONFIG['INTEL_ARCHITECTURE'] and CONFIG['CPU_ARCH'] == 'arm' and CONFIG['GNU_CC']:
+#XXX: doesn't build with Apple's assembler
+if not CONFIG['INTEL_ARCHITECTURE'] and CONFIG['CPU_ARCH'] == 'arm' and CONFIG['GNU_CC'] and CONFIG['OS_TARGET'] != 'Darwin':
     SOURCES += [
         'trunk/src/opts/memset.arm.S',
     ]
@@ -75,7 +76,7 @@ LOCAL_INCLUDES += [
     'trunk/src/utils/win',
 ]
 
-if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gtk3', 'qt', 'gonk', 'cocoa'):
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in {'android', 'gtk2', 'gtk3', 'qt', 'gonk', 'cocoa', 'uikit'}:
     DEFINES['SK_USE_POSIX_THREADS'] = 1
 
 if CONFIG['INTEL_ARCHITECTURE'] and CONFIG['HAVE_TOOLCHAIN_SUPPORT_MSSSE3']:
@@ -84,11 +85,13 @@ if CONFIG['INTEL_ARCHITECTURE'] and CONFIG['HAVE_TOOLCHAIN_SUPPORT_MSSSE3']:
 if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gonk'):
     DEFINES['SK_FONTHOST_CAIRO_STANDALONE'] = 0
 
-if (CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android') or \
-   (CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa') or \
-   (CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk') or \
-   (CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt') or \
-   CONFIG['MOZ_WIDGET_GTK']:
+if CONFIG['MOZ_WIDGET_TOOLKIT'] in {
+    'android',
+    'cocoa',
+    'uikit',
+    'gonk',
+    'qt',
+  } or CONFIG['MOZ_WIDGET_GTK']:
     DEFINES['SK_FONTHOST_DOES_NOT_USE_FONTMGR'] = 1
 
 if CONFIG['GKMEDIAS_SHARED_LIBRARY']:
@@ -410,7 +413,7 @@ def write_mozbuild(includes, sources):
   f.write("if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gonk'):\n")
   write_sources(f, sources['android'], 4)
 
-  f.write("if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':\n")
+  f.write("if CONFIG['MOZ_WIDGET_TOOLKIT'] in {'cocoa', 'uikit'}:\n")
   write_sources(f, sources['mac'], 4)
 
   f.write("if CONFIG['MOZ_WIDGET_GTK']:\n")

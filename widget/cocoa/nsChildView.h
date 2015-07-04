@@ -487,7 +487,6 @@ public:
 #endif
 
   virtual void CreateCompositor() override;
-  virtual bool IsMultiProcessWindow() override;
   virtual void PrepareWindowEffects() override;
   virtual void CleanupWindowEffects() override;
   virtual bool PreRender(LayerManagerComposite* aManager) override;
@@ -537,7 +536,7 @@ public:
     return nsCocoaUtils::DevPixelsToCocoaPoints(aRect, BackingScaleFactor());
   }
 
-  mozilla::TemporaryRef<mozilla::gfx::DrawTarget> StartRemoteDrawing() override;
+  already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawing() override;
   void EndRemoteDrawing() override;
   void CleanupRemoteDrawing() override;
 

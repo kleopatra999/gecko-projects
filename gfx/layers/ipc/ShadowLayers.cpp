@@ -28,7 +28,6 @@
 #include "mozilla/layers/TextureClient.h"  // for TextureClient
 #include "mozilla/mozalloc.h"           // for operator new, etc
 #include "nsAutoPtr.h"                  // for nsRefPtr, getter_AddRefs, etc
-#include "nsSize.h"                     // for nsIntSize
 #include "nsTArray.h"                   // for nsAutoTArray, nsTArray, etc
 #include "nsXULAppAPI.h"                // for XRE_GetProcessType, etc
 #include "mozilla/ReentrantMonitor.h"
@@ -429,7 +428,7 @@ ShadowLayerForwarder::RemoveTextureFromCompositableAsync(AsyncTransactionTracker
                                                      CompositableClient* aCompositable,
                                                      TextureClient* aTexture)
 {
-  if (mTxn->Opened()) {
+  if (mTxn->Opened() && !aCompositable->IsDestroyed()) {
     mTxn->AddEdit(OpRemoveTextureAsync(CompositableClient::GetTrackersHolderId(aCompositable->GetIPDLActor()),
                                        aAsyncTransactionTracker->GetId(),
                                        nullptr, aCompositable->GetIPDLActor(),
@@ -608,6 +607,10 @@ ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies,
     common.animations() = mutant->GetAnimations();
     common.invalidRegion() = mutant->GetInvalidRegion();
     common.metrics() = mutant->GetAllFrameMetrics();
+    for (size_t i = 0; i < mutant->GetAncestorMaskLayerCount(); i++) {
+      auto layer = Shadow(mutant->GetAncestorMaskLayerAt(i)->AsShadowableLayer());
+      common.ancestorMaskLayersChild().AppendElement(layer);
+    }
     attrs.specific() = null_t();
     mutant->FillSpecificAttributes(attrs.specific());
 
@@ -671,10 +674,6 @@ ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies,
     }
   }
 
-  // Clear any cached plugin data we might have, now that the
-  // transaction is complete.
-  mPluginWindowData.Clear();
-
   *aSent = true;
   mIsFirstPaint = false;
   MOZ_LAYERS_LOG(("[LayersForwarder] ... done"));
@@ -729,6 +728,16 @@ ShadowLayerForwarder::IsSameProcess() const
     return false;
   }
   return mShadowManager->OtherPid() == base::GetCurrentProcId();
+}
+
+base::ProcessId
+ShadowLayerForwarder::ParentPid() const
+{
+  if (!HasShadowManager() || !mShadowManager->IPCOpen()) {
+    return base::ProcessId();
+  }
+
+  return mShadowManager->OtherPid();
 }
 
 /**
