@@ -126,6 +126,11 @@ static bool sUseHardLinks = true;
 #endif
 
 #ifdef XP_WIN
+#include "registrycertificates.h"
+BOOL PathAppendSafe(LPWSTR base, LPCWSTR extra);
+BOOL PathGetSiblingFilePath(LPWSTR destinationBuffer,
+                            LPCWSTR siblingFilePath,
+                            LPCWSTR newFileName);
 #include "updatehelper.h"
 
 // Closes the handle if valid and if the updater is elevated returns with the
@@ -1812,6 +1817,131 @@ PatchIfFile::Finish(int status)
 #include "nsWindowsHelpers.h"
 #include "uachelper.h"
 #include "pathhash.h"
+
+/**
+ * Launch the post update application as the specified user (helper.exe).
+ * It takes in the path of the callback application to calculate the path
+ * of helper.exe.  For service updates this is called from both the system
+ * account and the current user account.
+ *
+ * @param  installationDir The path to the callback application binary.
+ * @param  updateInfoDir   The directory where update info is stored.
+ * @param  forceSync       If true even if the ini file specifies async, the
+ *                         process will wait for termination of PostUpdate.
+ * @return TRUE if there was no error starting the process.
+ */
+BOOL
+LaunchWinPostProcess(const WCHAR *installationDir,
+                     const WCHAR *updateInfoDir,
+                     bool forceSync)
+{
+  WCHAR workingDirectory[MAX_PATH + 1] = { L'\0' };
+  wcsncpy(workingDirectory, installationDir, MAX_PATH);
+
+  // Launch helper.exe to perform post processing (e.g. registry and log file
+  // modifications) for the update.
+  WCHAR inifile[MAX_PATH + 1] = { L'\0' };
+  wcsncpy(inifile, installationDir, MAX_PATH);
+  if (!PathAppendSafe(inifile, L"updater.ini")) {
+    return FALSE;
+  }
+
+  WCHAR exefile[MAX_PATH + 1];
+  WCHAR exearg[MAX_PATH + 1];
+  WCHAR exeasync[10];
+  bool async = true;
+  if (!GetPrivateProfileStringW(L"PostUpdateWin", L"ExeRelPath", nullptr,
+                                exefile, MAX_PATH + 1, inifile)) {
+    return FALSE;
+  }
+
+  if (!GetPrivateProfileStringW(L"PostUpdateWin", L"ExeArg", nullptr, exearg,
+                                MAX_PATH + 1, inifile)) {
+    return FALSE;
+  }
+
+  if (!GetPrivateProfileStringW(L"PostUpdateWin", L"ExeAsync", L"TRUE",
+                                exeasync,
+                                sizeof(exeasync)/sizeof(exeasync[0]),
+                                inifile)) {
+    return FALSE;
+  }
+
+  // Verify that exeFile doesn't contain relative paths
+  if (wcsstr(exefile, L"..") != nullptr) {
+    return false;
+  }
+
+  WCHAR exefullpath[MAX_PATH + 1] = { L'\0' };
+  wcsncpy(exefullpath, installationDir, MAX_PATH);
+  if (!PathAppendSafe(exefullpath, exefile)) {
+    return false;
+  }
+
+#if !defined(TEST_UPDATER)
+  if (DoesBinaryMatchAllowedCertificates(installationDir, exefullpath)) {
+    return false;
+  }
+#endif
+
+  WCHAR dlogFile[MAX_PATH + 1];
+  if (!PathGetSiblingFilePath(dlogFile, exefullpath, L"uninstall.update")) {
+    return FALSE;
+  }
+
+  WCHAR slogFile[MAX_PATH + 1] = { L'\0' };
+  wcsncpy(slogFile, updateInfoDir, MAX_PATH);
+  if (!PathAppendSafe(slogFile, L"update.log")) {
+    return FALSE;
+  }
+
+  WCHAR dummyArg[14] = { L'\0' };
+  wcsncpy(dummyArg, L"argv0ignored ", sizeof(dummyArg) / sizeof(dummyArg[0]) - 1);
+
+  size_t len = wcslen(exearg) + wcslen(dummyArg);
+  WCHAR *cmdline = (WCHAR *) malloc((len + 1) * sizeof(WCHAR));
+  if (!cmdline) {
+    return FALSE;
+  }
+
+  wcsncpy(cmdline, dummyArg, len);
+  wcscat(cmdline, exearg);
+
+  if (forceSync ||
+      !_wcsnicmp(exeasync, L"false", 6) ||
+      !_wcsnicmp(exeasync, L"0", 2)) {
+    async = false;
+  }
+
+  // We want to launch the post update helper app to update the Windows
+  // registry even if there is a failure with removing the uninstall.update
+  // file or copying the update.log file.
+  CopyFileW(slogFile, dlogFile, false);
+
+  STARTUPINFOW si = {sizeof(si), 0};
+  si.lpDesktop = L"";
+  PROCESS_INFORMATION pi = {0};
+
+  bool ok = CreateProcessW(exefullpath,
+                           cmdline,
+                           nullptr,  // no special security attributes
+                           nullptr,  // no special thread attributes
+                           false,    // don't inherit filehandles
+                           0,        // No special process creation flags
+                           nullptr,  // inherit my environment
+                           workingDirectory,
+                           &si,
+                           &pi);
+  free(cmdline);
+  if (ok) {
+    if (!async)
+      WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+  }
+  return ok;
+}
+
 #endif
 
 static void
@@ -2500,17 +2630,13 @@ int NS_main(int argc, NS_tchar **argv)
   if (sReplaceRequest) {
     // If we're attempting to replace the application, try to append to the
     // log generated when staging the staged update.
-#ifdef XP_WIN
-    NS_tchar* logDir = gPatchDirPath;
-#else
-#ifdef XP_MACOSX
+#if defined(XP_WIN) || defined(XP_MACOSX)
     NS_tchar* logDir = gPatchDirPath;
 #else
     NS_tchar logDir[MAXPATHLEN];
     NS_tsnprintf(logDir, sizeof(logDir)/sizeof(logDir[0]),
                  NS_T("%s/updated/updates"),
                  gInstallDirPath);
-#endif
 #endif
 
     LogInitAppend(logDir, NS_T("last-update.log"), NS_T("update.log"));
@@ -2532,6 +2658,28 @@ int NS_main(int argc, NS_tchar **argv)
   LOG(("PATCH DIRECTORY " LOG_S, gPatchDirPath));
   LOG(("INSTALLATION DIRECTORY " LOG_S, gInstallDirPath));
   LOG(("WORKING DIRECTORY " LOG_S, gWorkingDirPath));
+
+#if defined(XP_WIN)
+  if (sReplaceRequest) {
+    NS_tchar stagedParent[MAX_PATH];
+    NS_tsnprintf(stagedParent, sizeof(stagedParent)/sizeof(stagedParent[0]),
+                 NS_T("%s"), gWorkingDirPath);
+    if (!PathRemoveFileSpecW(stagedParent)) {
+      WriteStatusFile(REMOVE_FILE_SPEC_ERROR);
+      LOG(("Error calling PathRemoveFileSpecW: %d", GetLastError()));
+      LogFinish();
+      return 1;
+    }
+
+    if (_wcsnicmp(stagedParent, gInstallDirPath, MAX_PATH) != 0) {
+      WriteStatusFile(INVALID_STAGED_PARENT_ERROR);
+      LOG(("Replace requests require that the working directory is a " \
+           "sub-directory of the installation directory! Exiting"));
+      LogFinish();
+      return 1;
+    }
+  }
+#endif
 
 #ifdef MOZ_WIDGET_GONK
   const char *prioEnv = getenv("MOZ_UPDATER_PRIO");
@@ -2826,8 +2974,7 @@ int NS_main(int argc, NS_tchar **argv)
         bool updateStatusSucceeded = false;
         if (IsUpdateStatusSucceeded(updateStatusSucceeded) &&
             updateStatusSucceeded) {
-          if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath, false,
-                                    nullptr)) {
+          if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath, false)) {
             fprintf(stderr, "The post update process which runs as the user"
                     " for service update could not be launched.");
           }
@@ -3222,6 +3369,10 @@ int NS_main(int argc, NS_tchar **argv)
   if (argc > callbackIndex) {
 #if defined(XP_WIN)
     if (gSucceeded) {
+      if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath, sUsingService)) {
+        LOG(("NS_main: The post update process could not be launched."));
+      }
+
       // The service update will only be executed if it is already installed.
       // For first time installs of the service, the install will happen from
       // the PostUpdate process. We do the service update process here
@@ -3230,10 +3381,6 @@ int NS_main(int argc, NS_tchar **argv)
       // the service to a newer version in that case. If we are not running
       // through the service, then MOZ_USING_SERVICE will not exist.
       if (!sUsingService) {
-        if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath, false, nullptr)) {
-          LOG(("NS_main: The post update process could not be launched."));
-        }
-
         StartServiceUpdate(gInstallDirPath);
       }
     }
