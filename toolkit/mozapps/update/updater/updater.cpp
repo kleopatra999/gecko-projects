@@ -1879,7 +1879,7 @@ LaunchWinPostProcess(const WCHAR *installationDir,
   }
 
 #if !defined(TEST_UPDATER)
-  if (forceSync && DoesBinaryMatchAllowedCertificates(installationDir, exefullpath)) {
+  if (forceSync && !DoesBinaryMatchAllowedCertificates(installationDir, exefullpath)) {
     return false;
   }
 #endif
