@@ -142,6 +142,7 @@ BOOL PathGetSiblingFilePath(LPWSTR destinationBuffer,
         CloseHandle(handle); \
       } \
       if (_waccess(path, F_OK) == 0 && NS_tremove(path) != 0) { \
+        LogFinish(); \
         return retCode; \
       } \
   }
@@ -1819,21 +1820,17 @@ PatchIfFile::Finish(int status)
 #include "pathhash.h"
 
 /**
- * Launch the post update application as the specified user (helper.exe).
- * It takes in the path of the callback application to calculate the path
- * of helper.exe.  For service updates this is called from both the system
- * account and the current user account.
+ * Launch the post update application (helper.exe). It takes in the path of the
+ * callback application to calculate the path of helper.exe. For service updates
+ * this is called from both the system account and the current user account.
  *
  * @param  installationDir The path to the callback application binary.
  * @param  updateInfoDir   The directory where update info is stored.
- * @param  forceSync       If true even if the ini file specifies async, the
- *                         process will wait for termination of PostUpdate.
- * @return TRUE if there was no error starting the process.
+ * @return true if there was no error starting the process.
  */
-BOOL
+bool
 LaunchWinPostProcess(const WCHAR *installationDir,
-                     const WCHAR *updateInfoDir,
-                     bool forceSync)
+                     const WCHAR *updateInfoDir)
 {
   WCHAR workingDirectory[MAX_PATH + 1] = { L'\0' };
   wcsncpy(workingDirectory, installationDir, MAX_PATH);
@@ -1843,7 +1840,7 @@ LaunchWinPostProcess(const WCHAR *installationDir,
   WCHAR inifile[MAX_PATH + 1] = { L'\0' };
   wcsncpy(inifile, installationDir, MAX_PATH);
   if (!PathAppendSafe(inifile, L"updater.ini")) {
-    return FALSE;
+    return false;
   }
 
   WCHAR exefile[MAX_PATH + 1];
@@ -1852,19 +1849,19 @@ LaunchWinPostProcess(const WCHAR *installationDir,
   bool async = true;
   if (!GetPrivateProfileStringW(L"PostUpdateWin", L"ExeRelPath", nullptr,
                                 exefile, MAX_PATH + 1, inifile)) {
-    return FALSE;
+    return false;
   }
 
   if (!GetPrivateProfileStringW(L"PostUpdateWin", L"ExeArg", nullptr, exearg,
                                 MAX_PATH + 1, inifile)) {
-    return FALSE;
+    return false;
   }
 
   if (!GetPrivateProfileStringW(L"PostUpdateWin", L"ExeAsync", L"TRUE",
                                 exeasync,
                                 sizeof(exeasync)/sizeof(exeasync[0]),
                                 inifile)) {
-    return FALSE;
+    return false;
   }
 
   // Verify that exeFile doesn't contain relative paths
@@ -1879,20 +1876,21 @@ LaunchWinPostProcess(const WCHAR *installationDir,
   }
 
 #if !defined(TEST_UPDATER)
-  if (forceSync && !DoesBinaryMatchAllowedCertificates(installationDir, exefullpath)) {
+  if (sUsingService &&
+      !DoesBinaryMatchAllowedCertificates(installationDir, exefullpath)) {
     return false;
   }
 #endif
 
   WCHAR dlogFile[MAX_PATH + 1];
   if (!PathGetSiblingFilePath(dlogFile, exefullpath, L"uninstall.update")) {
-    return FALSE;
+    return false;
   }
 
   WCHAR slogFile[MAX_PATH + 1] = { L'\0' };
   wcsncpy(slogFile, updateInfoDir, MAX_PATH);
   if (!PathAppendSafe(slogFile, L"update.log")) {
-    return FALSE;
+    return false;
   }
 
   WCHAR dummyArg[14] = { L'\0' };
@@ -1901,13 +1899,13 @@ LaunchWinPostProcess(const WCHAR *installationDir,
   size_t len = wcslen(exearg) + wcslen(dummyArg);
   WCHAR *cmdline = (WCHAR *) malloc((len + 1) * sizeof(WCHAR));
   if (!cmdline) {
-    return FALSE;
+    return false;
   }
 
   wcsncpy(cmdline, dummyArg, len);
   wcscat(cmdline, exearg);
 
-  if (forceSync ||
+  if (sUsingService ||
       !_wcsnicmp(exeasync, L"false", 6) ||
       !_wcsnicmp(exeasync, L"0", 2)) {
     async = false;
@@ -1934,8 +1932,10 @@ LaunchWinPostProcess(const WCHAR *installationDir,
                            &pi);
   free(cmdline);
   if (ok) {
-    if (!async)
-      WaitForSingleObject(pi.hProcess, INFINITE);
+    if (!async) {
+      // If the process takes over 30 seconds continue
+      WaitForSingleObject(pi.hProcess, 30000);
+    }
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
   }
@@ -2660,7 +2660,7 @@ int NS_main(int argc, NS_tchar **argv)
   LOG(("WORKING DIRECTORY " LOG_S, gWorkingDirPath));
 
 #if defined(XP_WIN)
-  if (sReplaceRequest) {
+  if (sReplaceRequest || sStagedUpdate) {
     NS_tchar stagedParent[MAX_PATH];
     NS_tsnprintf(stagedParent, sizeof(stagedParent)/sizeof(stagedParent[0]),
                  NS_T("%s"), gWorkingDirPath);
@@ -2673,8 +2673,8 @@ int NS_main(int argc, NS_tchar **argv)
 
     if (_wcsnicmp(stagedParent, gInstallDirPath, MAX_PATH) != 0) {
       WriteStatusFile(INVALID_STAGED_PARENT_ERROR);
-      LOG(("Replace requests require that the working directory is a " \
-           "sub-directory of the installation directory! Exiting"));
+      LOG(("Stage and Replace requests require that the working directory " \
+           "is a sub-directory of the installation directory! Exiting"));
       LogFinish();
       return 1;
     }
@@ -2974,7 +2974,7 @@ int NS_main(int argc, NS_tchar **argv)
         bool updateStatusSucceeded = false;
         if (IsUpdateStatusSucceeded(updateStatusSucceeded) &&
             updateStatusSucceeded) {
-          if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath, false)) {
+          if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath)) {
             fprintf(stderr, "The post update process which runs as the user"
                     " for service update could not be launched.");
           }
@@ -3369,8 +3369,8 @@ int NS_main(int argc, NS_tchar **argv)
   if (argc > callbackIndex) {
 #if defined(XP_WIN)
     if (gSucceeded) {
-      if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath, sUsingService)) {
-        LOG(("NS_main: The post update process could not be launched."));
+      if (!LaunchWinPostProcess(gInstallDirPath, gPatchDirPath)) {
+        fprintf(stderr, "The post update process was not launched");
       }
 
       // The service update will only be executed if it is already installed.

@@ -205,23 +205,6 @@ DoCertificateAttributesMatch(PCCERT_CONTEXT certContext,
 }
 
 /**
- * Duplicates the specified string
- *
- * @param  inputString The string to duplicate
- * @return The duplicated string which should be freed by the caller.
- */
-LPWSTR 
-AllocateAndCopyWideString(LPCWSTR inputString)
-{
-  LPWSTR outputString = 
-    (LPWSTR)LocalAlloc(LPTR, (wcslen(inputString) + 1) * sizeof(WCHAR));
-  if (outputString) {
-    lstrcpyW(outputString, inputString);
-  }
-  return outputString;
-}
-
-/**
  * Verifies the trust of the specified file path.
  *
  * @param  filePath  The file path to check.
