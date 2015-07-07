@@ -8,7 +8,7 @@
 
 #include "Units.h"                      // for ScreenPoint
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
-#include "mozilla/RefPtr.h"             // for TemporaryRef, RefCounted
+#include "mozilla/RefPtr.h"             // for already_AddRefed, RefCounted
 #include "mozilla/gfx/Point.h"          // for IntSize, Point
 #include "mozilla/gfx/Rect.h"           // for Rect, IntRect
 #include "mozilla/gfx/Types.h"          // for Float
@@ -120,7 +120,6 @@ namespace layers {
 struct Effect;
 struct EffectChain;
 class Image;
-class ISurfaceAllocator;
 class Layer;
 class TextureSource;
 class DataTextureSource;
@@ -192,7 +191,7 @@ public:
   {
   }
 
-  virtual TemporaryRef<DataTextureSource> CreateDataTextureSource(TextureFlags aFlags = TextureFlags::NO_FLAGS) = 0;
+  virtual already_AddRefed<DataTextureSource> CreateDataTextureSource(TextureFlags aFlags = TextureFlags::NO_FLAGS) = 0;
   virtual bool Initialize() = 0;
   virtual void Destroy() = 0;
 
@@ -225,7 +224,7 @@ public:
    * If this method is not used, or we pass in nullptr, we target the compositor's
    * usual swap chain and render to the screen.
    */
-  void SetTargetContext(gfx::DrawTarget* aTarget, const nsIntRect& aRect)
+  void SetTargetContext(gfx::DrawTarget* aTarget, const gfx::IntRect& aRect)
   {
     mTarget = aTarget;
     mTargetBounds = aRect;
@@ -254,7 +253,7 @@ public:
    * Creates a Surface that can be used as a rendering target by this
    * compositor.
    */
-  virtual TemporaryRef<CompositingRenderTarget>
+  virtual already_AddRefed<CompositingRenderTarget>
   CreateRenderTarget(const gfx::IntRect& aRect, SurfaceInitMode aInit) = 0;
 
   /**
@@ -264,7 +263,7 @@ public:
    *
    * aSourcePoint specifies the point in aSource to copy data from.
    */
-  virtual TemporaryRef<CompositingRenderTarget>
+  virtual already_AddRefed<CompositingRenderTarget>
   CreateRenderTargetFromSource(const gfx::IntRect& aRect,
                                const CompositingRenderTarget* aSource,
                                const gfx::IntPoint& aSourcePoint) = 0;
@@ -298,10 +297,24 @@ public:
    * drawn is specified by aEffectChain. aRect is the quad to draw, in user space.
    * aTransform transforms from user space to screen space. If texture coords are
    * required, these will be in the primary effect in the effect chain.
+   * aVisibleRect is used to determine which edges should be antialiased,
+   * without applying the effect to the inner edges of a tiled layer.
    */
   virtual void DrawQuad(const gfx::Rect& aRect, const gfx::Rect& aClipRect,
                         const EffectChain& aEffectChain,
-                        gfx::Float aOpacity, const gfx::Matrix4x4 &aTransform) = 0;
+                        gfx::Float aOpacity, const gfx::Matrix4x4& aTransform,
+                        const gfx::Rect& aVisibleRect) = 0;
+
+  /**
+   * Overload of DrawQuad, with aVisibleRect defaulted to the value of aRect.
+   * Use this when you are drawing a single quad that is not part of a tiled
+   * layer.
+   */
+  void DrawQuad(const gfx::Rect& aRect, const gfx::Rect& aClipRect,
+                        const EffectChain& aEffectChain,
+                        gfx::Float aOpacity, const gfx::Matrix4x4& aTransform) {
+      DrawQuad(aRect, aClipRect, aEffectChain, aOpacity, aTransform, aRect);
+  }
 
   /*
    * Clear aRect on current render target.
@@ -338,7 +351,7 @@ public:
    */
   virtual void EndFrame() = 0;
 
-  virtual void SetFBAcquireFence(Layer* aLayer) {}
+  virtual void SetDispAcquireFence(Layer* aLayer) {}
 
   virtual FenceHandle GetReleaseFence()
   {
@@ -501,7 +514,7 @@ protected:
   virtual gfx::IntSize GetWidgetSize() const = 0;
 
   RefPtr<gfx::DrawTarget> mTarget;
-  nsIntRect mTargetBounds;
+  gfx::IntRect mTargetBounds;
 
 private:
   static LayersBackend sBackend;

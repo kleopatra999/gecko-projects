@@ -307,10 +307,13 @@ ShapeTable::grow(ExclusiveContext* cx)
 
     MOZ_ASSERT(entryCount_ + removedCount_ <= size - 1);
 
-    if (!change(delta, cx) && entryCount_ + removedCount_ == size - 1) {
-        ReportOutOfMemory(cx);
-        return false;
+    if (!change(delta, cx)) {
+        if (entryCount_ + removedCount_ == size - 1)
+            return false;
+
+        cx->recoverFromOutOfMemory();
     }
+
     return true;
 }
 
@@ -1204,13 +1207,53 @@ StackBaseShape::match(UnownedBaseShape* key, const Lookup& lookup)
     return key->flags == lookup.flags && key->clasp_ == lookup.clasp;
 }
 
+inline
+BaseShape::BaseShape(const StackBaseShape& base)
+  : clasp_(base.clasp),
+    compartment_(base.compartment),
+    flags(base.flags),
+    slotSpan_(0),
+    unowned_(nullptr),
+    table_(nullptr)
+{
+}
+
+/* static */ void
+BaseShape::copyFromUnowned(BaseShape& dest, UnownedBaseShape& src)
+{
+    dest.clasp_ = src.clasp_;
+    dest.slotSpan_ = src.slotSpan_;
+    dest.compartment_ = src.compartment_;
+    dest.unowned_ = &src;
+    dest.flags = src.flags | OWNED_SHAPE;
+}
+
+inline void
+BaseShape::adoptUnowned(UnownedBaseShape* other)
+{
+    // This is a base shape owned by a dictionary object, update it to reflect the
+    // unowned base shape of a new last property.
+    MOZ_ASSERT(isOwned());
+
+    uint32_t span = slotSpan();
+    ShapeTable* table = &this->table();
+
+    BaseShape::copyFromUnowned(*this, *other);
+    setTable(table);
+    setSlotSpan(span);
+
+    assertConsistency();
+}
+
 /* static */ UnownedBaseShape*
 BaseShape::getUnowned(ExclusiveContext* cx, StackBaseShape& base)
 {
     BaseShapeSet& table = cx->compartment()->baseShapes;
 
-    if (!table.initialized() && !table.init())
+    if (!table.initialized() && !table.init()) {
+        ReportOutOfMemory(cx);
         return nullptr;
+    }
 
     DependentAddPtr<BaseShapeSet> p(cx, table, base);
     if (p)
@@ -1239,6 +1282,22 @@ BaseShape::assertConsistency()
         MOZ_ASSERT(getObjectFlags() == unowned->getObjectFlags());
     }
 #endif
+}
+
+void
+BaseShape::traceChildren(JSTracer* trc)
+{
+    assertConsistency();
+
+    if (trc->isMarkingTracer())
+        compartment()->mark();
+
+    if (isOwned())
+        TraceEdge(trc, &unowned_, "base");
+
+    JSObject* global = compartment()->unsafeUnbarrieredMaybeGlobal();
+    if (global)
+        TraceManuallyBarrieredEdge(trc, &global, "global");
 }
 
 void
@@ -1347,7 +1406,7 @@ class InitialShapeSetRef : public BufferableRef
           objectFlags(objectFlags)
     {}
 
-    void mark(JSTracer* trc) {
+    void trace(JSTracer* trc) override {
         TaggedProto priorProto = proto;
         if (proto.isObject()) {
             TraceManuallyBarrieredEdge(trc, reinterpret_cast<JSObject**>(&proto),
@@ -1426,8 +1485,10 @@ EmptyShape::getInitialShape(ExclusiveContext* cx, const Class* clasp, TaggedProt
 
     InitialShapeSet& table = cx->compartment()->initialShapes;
 
-    if (!table.initialized() && !table.init())
+    if (!table.initialized() && !table.init()) {
+        ReportOutOfMemory(cx);
         return nullptr;
+    }
 
     typedef InitialShapeEntry::Lookup Lookup;
     DependentAddPtr<InitialShapeSet>

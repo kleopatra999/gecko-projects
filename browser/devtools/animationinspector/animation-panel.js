@@ -3,8 +3,18 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* globals AnimationsController, document, performance, promise,
+   gToolbox, gInspector, requestAnimationFrame, cancelAnimationFrame, L10N */
 
 "use strict";
+
+const {createNode} = require("devtools/animationinspector/utils");
+const {
+  PlayerMetaDataHeader,
+  PlaybackRateSelector,
+  AnimationTargetNode,
+  AnimationsTimeline
+} = require("devtools/animationinspector/components");
 
 /**
  * The main animations panel UI.
@@ -14,6 +24,11 @@ let AnimationsPanel = {
   PANEL_INITIALIZED: "panel-initialized",
 
   initialize: Task.async(function*() {
+    if (AnimationsController.destroyed) {
+      console.warn("Could not initialize the animation-panel, controller " +
+                   "was destroyed");
+      return;
+    }
     if (this.initialized) {
       return this.initialized.promise;
     }
@@ -34,13 +49,18 @@ let AnimationsPanel = {
     this.togglePicker = hUtils.togglePicker.bind(hUtils);
     this.onPickerStarted = this.onPickerStarted.bind(this);
     this.onPickerStopped = this.onPickerStopped.bind(this);
-    this.createPlayerWidgets = this.createPlayerWidgets.bind(this);
+    this.refreshAnimations = this.refreshAnimations.bind(this);
     this.toggleAll = this.toggleAll.bind(this);
     this.onTabNavigated = this.onTabNavigated.bind(this);
 
     this.startListeners();
 
-    yield this.createPlayerWidgets();
+    if (AnimationsController.isNewUI) {
+      this.animationsTimelineComponent = new AnimationsTimeline(gInspector);
+      this.animationsTimelineComponent.init(this.playersEl);
+    }
+
+    yield this.refreshAnimations();
 
     this.initialized.resolve();
 
@@ -58,6 +78,11 @@ let AnimationsPanel = {
     this.destroyed = promise.defer();
 
     this.stopListeners();
+
+    if (this.animationsTimelineComponent) {
+      this.animationsTimelineComponent.destroy();
+      this.animationsTimelineComponent = null;
+    }
     yield this.destroyPlayerWidgets();
 
     this.playersEl = this.errorMessageEl = null;
@@ -68,7 +93,7 @@ let AnimationsPanel = {
 
   startListeners: function() {
     AnimationsController.on(AnimationsController.PLAYERS_UPDATED_EVENT,
-      this.createPlayerWidgets);
+      this.refreshAnimations);
 
     this.pickerButtonEl.addEventListener("click", this.togglePicker, false);
     gToolbox.on("picker-started", this.onPickerStarted);
@@ -80,7 +105,7 @@ let AnimationsPanel = {
 
   stopListeners: function() {
     AnimationsController.off(AnimationsController.PLAYERS_UPDATED_EVENT,
-      this.createPlayerWidgets);
+      this.refreshAnimations);
 
     this.pickerButtonEl.removeEventListener("click", this.togglePicker, false);
     gToolbox.off("picker-started", this.onPickerStarted);
@@ -111,16 +136,18 @@ let AnimationsPanel = {
   toggleAll: Task.async(function*() {
     let btnClass = this.toggleAllButtonEl.classList;
 
-    // Toggling all animations is async and it may be some time before each of
-    // the current players get their states updated, so toggle locally too, to
-    // avoid the timelines from jumping back and forth.
-    if (this.playerWidgets) {
-      let currentWidgetStateChange = [];
-      for (let widget of this.playerWidgets) {
-        currentWidgetStateChange.push(btnClass.contains("paused")
-          ? widget.play() : widget.pause());
+    if (!AnimationsController.isNewUI) {
+      // Toggling all animations is async and it may be some time before each of
+      // the current players get their states updated, so toggle locally too, to
+      // avoid the timelines from jumping back and forth.
+      if (this.playerWidgets) {
+        let currentWidgetStateChange = [];
+        for (let widget of this.playerWidgets) {
+          currentWidgetStateChange.push(btnClass.contains("paused")
+            ? widget.play() : widget.pause());
+        }
+        yield promise.all(currentWidgetStateChange).catch(Cu.reportError);
       }
-      yield promise.all(currentWidgetStateChange).catch(Cu.reportError);
     }
 
     btnClass.toggle("paused");
@@ -131,14 +158,21 @@ let AnimationsPanel = {
     this.toggleAllButtonEl.classList.remove("paused");
   },
 
-  createPlayerWidgets: Task.async(function*() {
+  refreshAnimations: Task.async(function*() {
     let done = gInspector.updating("animationspanel");
 
     // Empty the whole panel first.
     this.hideErrorMessage();
     yield this.destroyPlayerWidgets();
 
-    // If there are no players to show, show the error message instead and return.
+    // Re-render the timeline component.
+    if (this.animationsTimelineComponent) {
+      this.animationsTimelineComponent.render(
+        AnimationsController.animationPlayers);
+    }
+
+    // If there are no players to show, show the error message instead and
+    // return.
     if (!AnimationsController.animationPlayers.length) {
       this.displayErrorMessage();
       this.emit(this.UI_UPDATED_EVENT);
@@ -146,17 +180,21 @@ let AnimationsPanel = {
       return;
     }
 
-    // Otherwise, create player widgets.
-    this.playerWidgets = [];
-    let initPromises = [];
+    // Otherwise, create player widgets (only when isNewUI is false, the
+    // timeline has already been re-rendered).
+    if (!AnimationsController.isNewUI) {
+      this.playerWidgets = [];
+      let initPromises = [];
 
-    for (let player of AnimationsController.animationPlayers) {
-      let widget = new PlayerWidget(player, this.playersEl);
-      initPromises.push(widget.initialize());
-      this.playerWidgets.push(widget);
+      for (let player of AnimationsController.animationPlayers) {
+        let widget = new PlayerWidget(player, this.playersEl);
+        initPromises.push(widget.initialize());
+        this.playerWidgets.push(widget);
+      }
+
+      yield initPromises;
     }
 
-    yield initPromises;
     this.emit(this.UI_UPDATED_EVENT);
     done();
   }),
@@ -195,6 +233,9 @@ function PlayerWidget(player, containerEl) {
   if (AnimationsController.hasSetPlaybackRate) {
     this.rateComponent = new PlaybackRateSelector();
   }
+  if (AnimationsController.hasTargetNode) {
+    this.targetNodeComponent = new AnimationTargetNode(gInspector);
+  }
 }
 
 PlayerWidget.prototype = {
@@ -219,6 +260,9 @@ PlayerWidget.prototype = {
     this.metaDataComponent.destroy();
     if (this.rateComponent) {
       this.rateComponent.destroy();
+    }
+    if (this.targetNodeComponent) {
+      this.targetNodeComponent.destroy();
     }
 
     this.el.remove();
@@ -257,10 +301,16 @@ PlayerWidget.prototype = {
     let state = this.player.state;
 
     this.el = createNode({
+      parent: this.containerEl,
       attributes: {
         "class": "player-widget " + state.playState
       }
     });
+
+    if (this.targetNodeComponent) {
+      this.targetNodeComponent.init(this.el);
+      this.targetNodeComponent.render(this.player);
+    }
 
     this.metaDataComponent.init(this.el);
     this.metaDataComponent.render(state);
@@ -355,8 +405,6 @@ PlayerWidget.prototype = {
       }
     });
 
-    this.containerEl.appendChild(this.el);
-
     // Show the initial time.
     this.displayTime(state.currentTime);
   },
@@ -371,9 +419,8 @@ PlayerWidget.prototype = {
   onPlayPauseBtnClick: function() {
     if (this.player.state.playState === "running") {
       return this.pause();
-    } else {
-      return this.play();
     }
+    return this.play();
   },
 
   onRewindBtnClick: function() {
@@ -385,7 +432,7 @@ PlayerWidget.prototype = {
 
     let time = state.duration;
     if (state.iterationCount) {
-     time = state.iterationCount * state.duration;
+      time = state.iterationCount * state.duration;
     }
     this.setCurrentTime(time, true);
   },
@@ -445,7 +492,8 @@ PlayerWidget.prototype = {
    */
   setCurrentTime: Task.async(function*(time, shouldPause) {
     if (!AnimationsController.hasSetCurrentTime) {
-      throw new Error("This server version doesn't support setting animations' currentTime");
+      throw new Error("This server version doesn't support setting " +
+                      "animations' currentTime");
     }
 
     if (shouldPause) {
@@ -471,7 +519,8 @@ PlayerWidget.prototype = {
    */
   setPlaybackRate: function(rate) {
     if (!AnimationsController.hasSetPlaybackRate) {
-      throw new Error("This server version doesn't support setting animations' playbackRate");
+      throw new Error("This server version doesn't support setting " +
+                      "animations' playbackRate");
     }
 
     return this.player.setPlaybackRate(rate);
@@ -567,261 +616,3 @@ PlayerWidget.prototype = {
     }
   }
 };
-
-/**
- * UI component responsible for displaying and updating the player meta-data:
- * name, duration, iterations, delay.
- * The parent UI component for this should drive its updates by calling
- * render(state) whenever it wants the component to update.
- */
-function PlayerMetaDataHeader() {
-  // Store the various state pieces we need to only refresh the UI when things
-  // change.
-  this.state = {};
-}
-
-PlayerMetaDataHeader.prototype = {
-  init: function(containerEl) {
-    // The main title element.
-    this.el = createNode({
-      parent: containerEl,
-      attributes: {
-        "class": "animation-title"
-      }
-    });
-
-    // Animation name (value hidden by default since transitions don't have names).
-    this.nameLabel = createNode({
-      parent: this.el,
-      nodeType: "span"
-    });
-
-    this.nameValue = createNode({
-      parent: this.el,
-      nodeType: "strong",
-      attributes: {
-        "style": "display:none;"
-      }
-    });
-
-    // Animation duration, delay and iteration container.
-    let metaData = createNode({
-      parent: this.el,
-      nodeType: "span",
-      attributes: {
-        "class": "meta-data"
-      }
-    });
-
-    // Animation duration.
-    this.durationLabel = createNode({
-      parent: metaData,
-      nodeType: "span"
-    });
-    this.durationLabel.textContent = L10N.getStr("player.animationDurationLabel");
-
-    this.durationValue = createNode({
-      parent: metaData,
-      nodeType: "strong"
-    });
-
-    // Animation delay (hidden by default since there may not be a delay).
-    this.delayLabel = createNode({
-      parent: metaData,
-      nodeType: "span",
-      attributes: {
-        "style": "display:none;"
-      }
-    });
-    this.delayLabel.textContent = L10N.getStr("player.animationDelayLabel");
-
-    this.delayValue = createNode({
-      parent: metaData,
-      nodeType: "strong"
-    });
-
-    // Animation iteration count (also hidden by default since we don't display
-    // single iterations).
-    this.iterationLabel = createNode({
-      parent: metaData,
-      nodeType: "span",
-      attributes: {
-        "style": "display:none;"
-      }
-    });
-    this.iterationLabel.textContent = L10N.getStr("player.animationIterationCountLabel");
-
-    this.iterationValue = createNode({
-      parent: metaData,
-      nodeType: "strong",
-      attributes: {
-        "style": "display:none;"
-      }
-    });
-  },
-
-  destroy: function() {
-    this.state = null;
-    this.el.remove();
-    this.el = null;
-    this.nameLabel = this.nameValue = null;
-    this.durationLabel = this.durationValue = null;
-    this.delayLabel = this.delayValue = null;
-    this.iterationLabel = this.iterationValue = null;
-  },
-
-  render: function(state) {
-    // Update the name if needed.
-    if (state.name !== this.state.name) {
-      if (state.name) {
-        // Css animations have names.
-        this.nameLabel.textContent = L10N.getStr("player.animationNameLabel");
-        this.nameValue.style.display = "inline";
-        this.nameValue.textContent = state.name;
-      } else {
-        // Css transitions don't.
-        this.nameLabel.textContent = L10N.getStr("player.transitionNameLabel");
-        this.nameValue.style.display = "none";
-      }
-    }
-
-    // update the duration value if needed.
-    if (state.duration !== this.state.duration) {
-      this.durationValue.textContent = L10N.getFormatStr("player.timeLabel",
-        L10N.numberWithDecimals(state.duration / 1000, 2));
-    }
-
-    // Update the delay if needed.
-    if (state.delay !== this.state.delay) {
-      if (state.delay) {
-        this.delayLabel.style.display = "inline";
-        this.delayValue.style.display = "inline";
-        this.delayValue.textContent = L10N.getFormatStr("player.timeLabel",
-          L10N.numberWithDecimals(state.delay / 1000, 2));
-      } else {
-        // Hide the delay elements if there is no delay defined.
-        this.delayLabel.style.display = "none";
-        this.delayValue.style.display = "none";
-      }
-    }
-
-    // Update the iterationCount if needed.
-    if (state.iterationCount !== this.state.iterationCount) {
-      if (state.iterationCount !== 1) {
-        this.iterationLabel.style.display = "inline";
-        this.iterationValue.style.display = "inline";
-        let count = state.iterationCount ||
-                    L10N.getStr("player.infiniteIterationCount");
-        this.iterationValue.innerHTML = count;
-      } else {
-        // Hide the iteration elements if iteration is 1.
-        this.iterationLabel.style.display = "none";
-        this.iterationValue.style.display = "none";
-      }
-    }
-
-    this.state = state;
-  }
-};
-
-/**
- * UI component responsible for displaying the playback rate drop-down in each
- * player widget, updating it when the state changes, and emitting events when
- * the user selects a new value.
- * The parent UI component for this should drive its updates by calling
- * render(state) whenever it wants the component to update.
- */
-function PlaybackRateSelector() {
-  this.currentRate = null;
-  this.onSelectionChanged = this.onSelectionChanged.bind(this);
-  EventEmitter.decorate(this);
-}
-
-PlaybackRateSelector.prototype = {
-  PRESETS: [.1, .5, 1, 2, 5, 10],
-
-  init: function(containerEl) {
-    // This component is simple enough that we can re-create the markup every
-    // time it's rendered. So here we only store the parentEl.
-    this.parentEl = containerEl;
-  },
-
-  destroy: function() {
-    this.removeSelect();
-    this.parentEl = this.el = null;
-  },
-
-  removeSelect: function() {
-    if (this.el) {
-      this.el.removeEventListener("change", this.onSelectionChanged);
-      this.el.remove();
-    }
-  },
-
-  /**
-   * Get the ordered list of presets, including the current playbackRate if
-   * different from the existing presets.
-   */
-  getCurrentPresets: function({playbackRate}) {
-    return [...new Set([...this.PRESETS, playbackRate])].sort((a,b) => a > b);
-  },
-
-  render: function(state) {
-    if (state.playbackRate === this.currentRate) {
-      return;
-    }
-
-    this.removeSelect();
-
-    this.el = createNode({
-      parent: this.parentEl,
-      nodeType: "select",
-      attributes: {
-        "class": "rate devtools-button"
-      }
-    });
-
-    for (let preset of this.getCurrentPresets(state)) {
-      let option = createNode({
-        parent: this.el,
-        nodeType: "option",
-        attributes: {
-          value: preset,
-        }
-      });
-      option.textContent = L10N.getFormatStr("player.playbackRateLabel", preset);
-      if (preset === state.playbackRate) {
-        option.setAttribute("selected", "");
-      }
-    }
-
-    this.el.addEventListener("change", this.onSelectionChanged);
-
-    this.currentRate = state.playbackRate;
-  },
-
-  onSelectionChanged: function(e) {
-    this.emit("rate-changed", parseFloat(this.el.value));
-  }
-};
-
-/**
- * DOM node creation helper function.
- * @param {Object} Options to customize the node to be created.
- * @return {DOMNode} The newly created node.
- */
-function createNode(options) {
-  let type = options.nodeType || "div";
-  let node = document.createElement(type);
-
-  for (let name in options.attributes || {}) {
-    let value = options.attributes[name];
-    node.setAttribute(name, value);
-  }
-
-  if (options.parent) {
-    options.parent.appendChild(node);
-  }
-
-  return node;
-}

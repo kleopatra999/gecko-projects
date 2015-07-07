@@ -30,26 +30,14 @@
 
 namespace mozilla {
 
+namespace widget {
+struct IMENotification;
+} // namespace widget
+
 // Physical axis constants.
 enum PhysicalAxis {
   eAxisVertical      = 0x0,
   eAxisHorizontal    = 0x1
-};
-
-// Logical axis, edge and side constants for use in various places.
-enum LogicalAxis {
-  eLogicalAxisBlock  = 0x0,
-  eLogicalAxisInline = 0x1
-};
-enum LogicalEdge {
-  eLogicalEdgeStart  = 0x0,
-  eLogicalEdgeEnd    = 0x1
-};
-enum LogicalSide {
-  eLogicalSideBStart = (eLogicalAxisBlock  << 1) | eLogicalEdgeStart,  // 0x0
-  eLogicalSideBEnd   = (eLogicalAxisBlock  << 1) | eLogicalEdgeEnd,    // 0x1
-  eLogicalSideIStart = (eLogicalAxisInline << 1) | eLogicalEdgeStart,  // 0x2
-  eLogicalSideIEnd   = (eLogicalAxisInline << 1) | eLogicalEdgeEnd     // 0x3
 };
 
 inline bool IsInline(LogicalSide aSide) { return aSide & 0x2; }
@@ -369,6 +357,62 @@ public:
   }
 
   /**
+   * Returns the logical side corresponding to the specified physical side,
+   * given the current writing mode.
+   * (This is the inverse of the PhysicalSide() method above.)
+   */
+  LogicalSide LogicalSideForPhysicalSide(mozilla::css::Side aSide) const
+  {
+    // indexes are four-bit values:
+    //   bit 0 = the eOrientationMask value
+    //   bit 1 = the eInlineFlowMask value
+    //   bit 2 = the eBlockFlowMask value
+    //   bit 3 = the eLineOrientMask value
+    static const LogicalSide kPhysicalToLogicalSides[][4] = {
+      // top                right
+      // bottom             left
+      { eLogicalSideBStart, eLogicalSideIEnd,
+        eLogicalSideBEnd,   eLogicalSideIStart },  // horizontal-tb         ltr
+      { eLogicalSideIStart, eLogicalSideBStart,
+        eLogicalSideIEnd,   eLogicalSideBEnd   },  // vertical-rl           ltr
+      { eLogicalSideBStart, eLogicalSideIStart,
+        eLogicalSideBEnd,   eLogicalSideIEnd   },  // horizontal-tb         rtl
+      { eLogicalSideIEnd,   eLogicalSideBStart,
+        eLogicalSideIStart, eLogicalSideBEnd   },  // vertical-rl           rtl
+      { eLogicalSideBEnd,   eLogicalSideIStart,
+        eLogicalSideBStart, eLogicalSideIEnd   },  // (horizontal-bt) (inv) ltr
+      { eLogicalSideIStart, eLogicalSideBEnd,
+        eLogicalSideIEnd,   eLogicalSideBStart },  // vertical-lr   sw-left rtl
+      { eLogicalSideBEnd,   eLogicalSideIEnd,
+        eLogicalSideBStart, eLogicalSideIStart },  // (horizontal-bt) (inv) rtl
+      { eLogicalSideIEnd,   eLogicalSideBEnd,
+        eLogicalSideIStart, eLogicalSideBStart },  // vertical-lr   sw-left ltr
+      { eLogicalSideBStart, eLogicalSideIEnd,
+        eLogicalSideBEnd,   eLogicalSideIStart },  // horizontal-tb   (inv) rtl
+      { eLogicalSideIStart, eLogicalSideBStart,
+        eLogicalSideIEnd,   eLogicalSideBEnd   },  // vertical-rl   sw-left rtl
+      { eLogicalSideBStart, eLogicalSideIStart,
+        eLogicalSideBEnd,   eLogicalSideIEnd   },  // horizontal-tb   (inv) ltr
+      { eLogicalSideIEnd,   eLogicalSideBStart,
+        eLogicalSideIStart, eLogicalSideBEnd   },  // vertical-rl   sw-left ltr
+      { eLogicalSideBEnd,   eLogicalSideIEnd,
+        eLogicalSideBStart, eLogicalSideIStart },  // (horizontal-bt)       ltr
+      { eLogicalSideIStart, eLogicalSideBEnd,
+        eLogicalSideIEnd,   eLogicalSideBStart },  // vertical-lr           ltr
+      { eLogicalSideBEnd,   eLogicalSideIStart,
+        eLogicalSideBStart, eLogicalSideIEnd   },  // (horizontal-bt)       rtl
+      { eLogicalSideIEnd,   eLogicalSideBEnd,
+        eLogicalSideIStart, eLogicalSideBStart },  // vertical-lr           rtl
+    };
+
+    static_assert(eOrientationMask == 0x01 && eInlineFlowMask == 0x02 &&
+                  eBlockFlowMask == 0x04 && eLineOrientMask == 0x08,
+                  "unexpected mask values");
+    int index = mWritingMode & 0x0F;
+    return kPhysicalToLogicalSides[index][aSide];
+  }
+
+  /**
    * Returns the logical side corresponding to the specified
    * line-relative direction, given the current writing mode.
    */
@@ -484,6 +528,8 @@ public:
     return IsVertical() != aOther.IsVertical();
   }
 
+  uint8_t GetBits() const { return mWritingMode; }
+
 private:
   friend class LogicalPoint;
   friend class LogicalSize;
@@ -491,6 +537,10 @@ private:
   friend class LogicalRect;
 
   friend struct IPC::ParamTraits<WritingMode>;
+  // IMENotification cannot store this class directly since this has some
+  // constructors.  Therefore, it stores mWritingMode and recreate the
+  // instance from it.
+  friend struct widget::IMENotification;
 
   /**
    * Return a WritingMode representing an unknown value.
@@ -1227,13 +1277,17 @@ public:
   nsMargin GetPhysicalMargin(WritingMode aWritingMode) const
   {
     CHECK_WRITING_MODE(aWritingMode);
-    return aWritingMode.IsVertical() ?
-      (aWritingMode.IsVerticalLR() ?
-        nsMargin(IStart(), BEnd(), IEnd(), BStart()) :
-        nsMargin(IStart(), BStart(), IEnd(), BEnd())) :
-      (aWritingMode.IsBidiLTR() ?
-        nsMargin(BStart(), IEnd(), BEnd(), IStart()) :
-        nsMargin(BStart(), IStart(), BEnd(), IEnd()));
+    return aWritingMode.IsVertical()
+      ? (aWritingMode.IsVerticalLR()
+        ? (aWritingMode.IsBidiLTR()
+          ? nsMargin(IStart(), BEnd(), IEnd(), BStart())
+          : nsMargin(IEnd(), BEnd(), IStart(), BStart()))
+        : (aWritingMode.IsBidiLTR()
+          ? nsMargin(IStart(), BStart(), IEnd(), BEnd())
+          : nsMargin(IEnd(), BStart(), IStart(), BEnd())))
+      : (aWritingMode.IsBidiLTR()
+        ? nsMargin(BStart(), IEnd(), BEnd(), IStart())
+        : nsMargin(BStart(), IStart(), BEnd(), IEnd()));
   }
 
   /**
@@ -1276,6 +1330,13 @@ public:
                          IEnd() + aMargin.IEnd(),
                          BEnd() + aMargin.BEnd(),
                          IStart() + aMargin.IStart());
+  }
+
+  LogicalMargin operator+=(const LogicalMargin& aMargin)
+  {
+    CHECK_WRITING_MODE(aMargin.GetWritingMode());
+    mMargin += aMargin.mMargin;
+    return *this;
   }
 
   LogicalMargin operator-(const LogicalMargin& aMargin) const {
@@ -1731,6 +1792,17 @@ public:
                           aContainerWidth);
   }
 
+  /**
+   * Set *this to be the rectangle containing the intersection of aRect1
+   * and aRect2, return whether the intersection is non-empty.
+   */
+  bool IntersectRect(const LogicalRect& aRect1, const LogicalRect& aRect2)
+  {
+    CHECK_WRITING_MODE(aRect1.mWritingMode);
+    CHECK_WRITING_MODE(aRect2.mWritingMode);
+    return mRect.IntersectRect(aRect1.mRect, aRect2.mRect);
+  }
+
 private:
   LogicalRect() = delete;
 
@@ -1790,5 +1862,191 @@ private:
 };
 
 } // namespace mozilla
+
+// Definitions of inline methods for nsStyleSides, declared in nsStyleCoord.h
+// but not defined there because they need WritingMode.
+inline nsStyleUnit nsStyleSides::GetUnit(mozilla::WritingMode aWM,
+                                         mozilla::LogicalSide aSide) const
+{
+  return GetUnit(aWM.PhysicalSide(aSide));
+}
+
+inline nsStyleUnit nsStyleSides::GetIStartUnit(mozilla::WritingMode aWM) const
+{
+  return GetUnit(aWM, mozilla::eLogicalSideIStart);
+}
+
+inline nsStyleUnit nsStyleSides::GetBStartUnit(mozilla::WritingMode aWM) const
+{
+  return GetUnit(aWM, mozilla::eLogicalSideBStart);
+}
+
+inline nsStyleUnit nsStyleSides::GetIEndUnit(mozilla::WritingMode aWM) const
+{
+  return GetUnit(aWM, mozilla::eLogicalSideIEnd);
+}
+
+inline nsStyleUnit nsStyleSides::GetBEndUnit(mozilla::WritingMode aWM) const
+{
+  return GetUnit(aWM, mozilla::eLogicalSideBEnd);
+}
+
+inline nsStyleCoord nsStyleSides::Get(mozilla::WritingMode aWM,
+                                      mozilla::LogicalSide aSide) const
+{
+  return Get(aWM.PhysicalSide(aSide));
+}
+
+inline nsStyleCoord nsStyleSides::GetIStart(mozilla::WritingMode aWM) const
+{
+  return Get(aWM, mozilla::eLogicalSideIStart);
+}
+
+inline nsStyleCoord nsStyleSides::GetBStart(mozilla::WritingMode aWM) const
+{
+  return Get(aWM, mozilla::eLogicalSideBStart);
+}
+
+inline nsStyleCoord nsStyleSides::GetIEnd(mozilla::WritingMode aWM) const
+{
+  return Get(aWM, mozilla::eLogicalSideIEnd);
+}
+
+inline nsStyleCoord nsStyleSides::GetBEnd(mozilla::WritingMode aWM) const
+{
+  return Get(aWM, mozilla::eLogicalSideBEnd);
+}
+
+// Definitions of inline methods for nsStylePosition, declared in
+// nsStyleStruct.h but not defined there because they need WritingMode.
+inline nsStyleCoord& nsStylePosition::ISize(mozilla::WritingMode aWM)
+{
+  return aWM.IsVertical() ? mHeight : mWidth;
+}
+inline nsStyleCoord& nsStylePosition::MinISize(mozilla::WritingMode aWM)
+{
+  return aWM.IsVertical() ? mMinHeight : mMinWidth;
+}
+inline nsStyleCoord& nsStylePosition::MaxISize(mozilla::WritingMode aWM)
+{
+  return aWM.IsVertical() ? mMaxHeight : mMaxWidth;
+}
+inline nsStyleCoord& nsStylePosition::BSize(mozilla::WritingMode aWM)
+{
+  return aWM.IsVertical() ? mWidth : mHeight;
+}
+inline nsStyleCoord& nsStylePosition::MinBSize(mozilla::WritingMode aWM)
+{
+  return aWM.IsVertical() ? mMinWidth : mMinHeight;
+}
+inline nsStyleCoord& nsStylePosition::MaxBSize(mozilla::WritingMode aWM)
+{
+  return aWM.IsVertical() ? mMaxWidth : mMaxHeight;
+}
+
+inline const nsStyleCoord&
+nsStylePosition::ISize(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? mHeight : mWidth;
+}
+inline const nsStyleCoord&
+nsStylePosition::MinISize(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? mMinHeight : mMinWidth;
+}
+inline const nsStyleCoord&
+nsStylePosition::MaxISize(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? mMaxHeight : mMaxWidth;
+}
+inline const nsStyleCoord&
+nsStylePosition::BSize(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? mWidth : mHeight;
+}
+inline const nsStyleCoord&
+nsStylePosition::MinBSize(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? mMinWidth : mMinHeight;
+}
+inline const nsStyleCoord&
+nsStylePosition::MaxBSize(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? mMaxWidth : mMaxHeight;
+}
+
+inline bool
+nsStylePosition::ISizeDependsOnContainer(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? HeightDependsOnContainer()
+                          : WidthDependsOnContainer();
+}
+inline bool
+nsStylePosition::MinISizeDependsOnContainer(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? MinHeightDependsOnContainer()
+                          : MinWidthDependsOnContainer();
+}
+inline bool
+nsStylePosition::MaxISizeDependsOnContainer(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? MaxHeightDependsOnContainer()
+                          : MaxWidthDependsOnContainer();
+}
+inline bool
+nsStylePosition::BSizeDependsOnContainer(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? WidthDependsOnContainer()
+                          : HeightDependsOnContainer();
+}
+inline bool
+nsStylePosition::MinBSizeDependsOnContainer(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? MinWidthDependsOnContainer()
+                          : MinHeightDependsOnContainer();
+}
+inline bool
+nsStylePosition::MaxBSizeDependsOnContainer(mozilla::WritingMode aWM) const
+{
+  return aWM.IsVertical() ? MaxWidthDependsOnContainer()
+                          : MaxHeightDependsOnContainer();
+}
+
+inline uint8_t
+nsStyleTableBorder::LogicalCaptionSide(mozilla::WritingMode aWM) const
+{
+  // sanity-check that constants we're using have the expected relationships
+  static_assert(NS_STYLE_CAPTION_SIDE_BSTART == mozilla::eLogicalSideBStart &&
+                NS_STYLE_CAPTION_SIDE_BEND == mozilla::eLogicalSideBEnd &&
+                NS_STYLE_CAPTION_SIDE_ISTART == mozilla::eLogicalSideIStart &&
+                NS_STYLE_CAPTION_SIDE_IEND == mozilla::eLogicalSideIEnd,
+                "bad logical caption-side values");
+  static_assert((NS_STYLE_CAPTION_SIDE_TOP - NS_SIDE_TOP ==
+                 NS_STYLE_CAPTION_SIDE_BOTTOM - NS_SIDE_BOTTOM) &&
+                (NS_STYLE_CAPTION_SIDE_LEFT - NS_SIDE_LEFT ==
+                 NS_STYLE_CAPTION_SIDE_RIGHT - NS_SIDE_RIGHT) &&
+                (NS_STYLE_CAPTION_SIDE_LEFT - NS_SIDE_LEFT ==
+                 NS_STYLE_CAPTION_SIDE_TOP - NS_SIDE_TOP),
+                "mismatch between caption-side and side values");
+  switch (mCaptionSide) {
+    case NS_STYLE_CAPTION_SIDE_TOP:
+    case NS_STYLE_CAPTION_SIDE_RIGHT:
+    case NS_STYLE_CAPTION_SIDE_BOTTOM:
+    case NS_STYLE_CAPTION_SIDE_LEFT: {
+      uint8_t side = mCaptionSide - (NS_STYLE_CAPTION_SIDE_TOP - NS_SIDE_TOP);
+      return aWM.LogicalSideForPhysicalSide(mozilla::css::Side(side));
+    }
+
+    case NS_STYLE_CAPTION_SIDE_TOP_OUTSIDE:
+      return aWM.IsVertical() ? aWM.LogicalSideForPhysicalSide(NS_SIDE_TOP)
+                              : NS_STYLE_CAPTION_SIDE_BSTART_OUTSIDE;
+
+    case NS_STYLE_CAPTION_SIDE_BOTTOM_OUTSIDE:
+      return aWM.IsVertical() ? aWM.LogicalSideForPhysicalSide(NS_SIDE_BOTTOM)
+                              : NS_STYLE_CAPTION_SIDE_BEND_OUTSIDE;
+  }
+  MOZ_ASSERT(mCaptionSide <= NS_STYLE_CAPTION_SIDE_BEND_OUTSIDE);
+  return mCaptionSide;
+}
 
 #endif // WritingModes_h_

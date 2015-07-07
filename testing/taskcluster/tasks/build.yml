@@ -14,7 +14,7 @@ task:
     createdForUser: {{owner}}
 
   workerType: b2gbuild
-  provisionerId: aws-provisioner
+  provisionerId: aws-provisioner-v1
   schedulerId: task-graph-scheduler
 
   routes:
@@ -25,15 +25,15 @@ task:
     # the board.
     - 'docker-worker:cache:tc-vcs'
     - 'docker-worker:image:{{#docker_image}}builder{{/docker_image}}'
-    - 'queue:define-task:aws-provisioner/build-c4-2xlarge'
-    - 'queue:create-task:aws-provisioner/build-c4-2xlarge'
+    - 'queue:define-task:aws-provisioner-v1/build-c4-2xlarge'
+    - 'queue:create-task:aws-provisioner-v1/build-c4-2xlarge'
 
 
   payload:
     image: '{{#docker_image}}builder{{/docker_image}}'
 
-    # One hour is a good value for most builds
-    maxRunTime: 3600
+    # Two hours is long but covers edge cases (and matches bb based infra)
+    maxRunTime: 7200
 
     cache:
       tc-vcs: '/home/worker/.tc-vcs'

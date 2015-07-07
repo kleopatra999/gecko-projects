@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-*/
-/* vim: set ts=2 sw=2 et tw=79: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -172,7 +172,7 @@ ToJSValue(JSContext* aCx,
 }
 
 // Accept objects that inherit from nsISupports but not nsWrapperCache (e.g.
-// nsIDOMFile).
+// DOM File).
 template <class T>
 MOZ_WARN_UNUSED_RESULT
 typename EnableIf<!IsBaseOf<nsWrapperCache, T>::value &&
@@ -204,6 +204,15 @@ template <typename T>
 MOZ_WARN_UNUSED_RESULT bool
 ToJSValue(JSContext* aCx,
           const nsRefPtr<T>& aArgument,
+          JS::MutableHandle<JS::Value> aValue)
+{
+  return ToJSValue(aCx, *aArgument.get(), aValue);
+}
+
+template <typename T>
+MOZ_WARN_UNUSED_RESULT bool
+ToJSValue(JSContext* aCx,
+          const NonNull<T>& aArgument,
           JS::MutableHandle<JS::Value> aValue)
 {
   return ToJSValue(aCx, *aArgument.get(), aValue);
@@ -271,6 +280,18 @@ MOZ_WARN_UNUSED_RESULT bool
 ToJSValue(JSContext* aCx,
           ErrorResult& aArgument,
           JS::MutableHandle<JS::Value> aValue);
+
+// Accept owning WebIDL unions.
+template <typename T>
+MOZ_WARN_UNUSED_RESULT
+typename EnableIf<IsBaseOf<AllOwningUnionBase, T>::value, bool>::Type
+ToJSValue(JSContext* aCx,
+          const T& aArgument,
+          JS::MutableHandle<JS::Value> aValue)
+{
+  JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
+  return aArgument.ToJSVal(aCx, global, aValue);
+}
 
 // Accept pointers to other things we accept
 template <typename T>

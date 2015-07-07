@@ -29,7 +29,7 @@ public:
       CreateOffscreenSurface(const IntSize& size,
                              gfxContentType contentType) override;
 
-    mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
+    already_AddRefed<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont) override;
 
     nsresult GetStandardFamilyName(const nsAString& aFontName, nsAString& aFamilyName) override;
@@ -65,6 +65,10 @@ public:
                                         nsTArray<const char*>& aFontList) override;
 
     virtual bool CanRenderContentToDataSurface() const override {
+      return true;
+    }
+
+    virtual bool SupportsApzWheelInput() const override {
       return true;
     }
 

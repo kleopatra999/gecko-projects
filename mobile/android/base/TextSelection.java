@@ -4,6 +4,7 @@
 
 package org.mozilla.gecko;
 
+import android.content.res.Resources;
 import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.gfx.BitmapUtils.BitmapLoader;
 import org.mozilla.gecko.gfx.Layer;
@@ -16,6 +17,7 @@ import org.mozilla.gecko.util.FloatUtils;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.ActionModeCompat.Callback;
+import org.mozilla.gecko.AppConstants.Versions;
 
 import android.content.Context;
 import android.app.Activity;
@@ -35,6 +37,7 @@ import android.view.View;
 
 class TextSelection extends Layer implements GeckoEventListener {
     private static final String LOGTAG = "GeckoTextSelection";
+    private static final int SHUTDOWN_DELAY_MS = 250;
 
     private final TextSelectionHandle anchorHandle;
     private final TextSelectionHandle caretHandle;
@@ -89,6 +92,9 @@ class TextSelection extends Layer implements GeckoEventListener {
             Log.e(LOGTAG, "Failed to initialize text selection because at least one handle is null");
         } else {
             EventDispatcher.getInstance().registerGeckoThreadListener(this,
+                "TextSelection:ActionbarInit",
+                "TextSelection:ActionbarStatus",
+                "TextSelection:ActionbarUninit",
                 "TextSelection:ShowHandles",
                 "TextSelection:HideHandles",
                 "TextSelection:PositionHandles",
@@ -99,6 +105,9 @@ class TextSelection extends Layer implements GeckoEventListener {
 
     void destroy() {
         EventDispatcher.getInstance().unregisterGeckoThreadListener(this,
+            "TextSelection:ActionbarInit",
+            "TextSelection:ActionbarStatus",
+            "TextSelection:ActionbarUninit",
             "TextSelection:ShowHandles",
             "TextSelection:HideHandles",
             "TextSelection:PositionHandles",
@@ -165,7 +174,7 @@ class TextSelection extends Layer implements GeckoEventListener {
                         }
 
                         mActionModeTimerTask = new ActionModeTimerTask();
-                        mActionModeTimer.schedule(mActionModeTimerTask, 250);
+                        mActionModeTimer.schedule(mActionModeTimerTask, SHUTDOWN_DELAY_MS);
 
                         anchorHandle.setVisibility(View.GONE);
                         caretHandle.setVisibility(View.GONE);
@@ -183,7 +192,28 @@ class TextSelection extends Layer implements GeckoEventListener {
                             handle.setVisibility(position.getBoolean("hidden") ? View.GONE : View.VISIBLE);
                             handle.positionFromGecko(left, top, rtl);
                         }
+
+                    } else if (event.equals("TextSelection:ActionbarInit")) {
+                        // Init / Open the action bar. Note the current selectionID,
+                        // cancel any pending actionBar close.
+                        selectionID = message.getString("selectionID");
+                        mCurrentItems = null;
+                        if (mActionModeTimerTask != null) {
+                            mActionModeTimerTask.cancel();
+                        }
+
+                    } else if (event.equals("TextSelection:ActionbarStatus")) {
+                        // Update the actionBar actions as provided by Gecko.
+                        showActionMode(message.getJSONArray("actions"));
+
+                    } else if (event.equals("TextSelection:ActionbarUninit")) {
+                        // Uninit the actionbar. Schedule a cancellable close
+                        // action to avoid UI jank. (During SelectionAll for ex).
+                        mCurrentItems = null;
+                        mActionModeTimerTask = new ActionModeTimerTask();
+                        mActionModeTimer.schedule(mActionModeTimerTask, SHUTDOWN_DELAY_MS);
                     }
+
                 } catch (JSONException e) {
                     Log.e(LOGTAG, "JSON exception", e);
                 }
@@ -279,11 +309,23 @@ class TextSelection extends Layer implements GeckoEventListener {
                     final int actionEnum = obj.optBoolean("showAsAction") ? GeckoMenuItem.SHOW_AS_ACTION_ALWAYS : GeckoMenuItem.SHOW_AS_ACTION_NEVER;
                     menuitem.setShowAsAction(actionEnum, R.attr.menuItemActionModeStyle);
 
-                    BitmapUtils.getDrawable(anchorHandle.getContext(), obj.optString("icon"), new BitmapLoader() {
+                    final String iconString = obj.optString("icon");
+                    BitmapUtils.getDrawable(anchorHandle.getContext(), iconString, new BitmapLoader() {
                         @Override
                         public void onBitmapFound(Drawable d) {
                             if (d != null) {
                                 menuitem.setIcon(d);
+
+                                // Dynamically add padding to align the share icon on GB devices.
+                                // To be removed in bug 1122752.
+                                if (Versions.preHC && "drawable://ic_menu_share".equals(iconString)) {
+                                    final View view = menuitem.getActionView();
+
+                                    final Resources res = view.getContext().getResources();
+                                    final int padding = res.getDimensionPixelSize(R.dimen.ab_share_padding);
+
+                                    view.setPadding(padding, padding, padding, padding);
+                                }
                             }
                         }
                     });

@@ -28,7 +28,7 @@
 #include "nsDebug.h"                    // for NS_RUNTIMEABORT
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsPoint.h"                    // for nsIntPoint
-#include "nsRect.h"                     // for nsIntRect
+#include "nsRect.h"                     // for mozilla::gfx::IntRect
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTArray.h"                   // for nsTArray
 #include "nscore.h"                     // for nsACString
@@ -40,9 +40,7 @@ class Matrix4x4;
 namespace layers {
 class Compositor;
 class ThebesBufferData;
-class TiledLayerComposer;
 struct EffectChain;
-class TextureImageTextureSourceOGL;
 
 struct TexturedEffect;
 
@@ -55,10 +53,6 @@ struct TexturedEffect;
 class ContentHost : public CompositableHost
 {
 public:
-  // Subclasses should implement this method if they support being used as a
-  // tiling.
-  virtual TiledLayerComposer* AsTiledLayerComposer() { return nullptr; }
-
   virtual bool UpdateThebes(const ThebesBufferData& aData,
                             const nsIntRegion& aUpdated,
                             const nsIntRegion& aOldValidRegionBack,
@@ -103,7 +97,7 @@ protected:
   }
 
 
-  nsIntRect mBufferRect;
+  gfx::IntRect mBufferRect;
   nsIntPoint mBufferRotation;
   bool mInitialised;
 };
@@ -129,7 +123,7 @@ public:
 
   virtual void SetCompositor(Compositor* aCompositor) override;
 
-  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() override;
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override;
 
   virtual void Dump(std::stringstream& aStream,
                     const char* aPrefix="",
@@ -168,7 +162,7 @@ public:
 
   LayerRenderState GetRenderState() override;
 
-  virtual TemporaryRef<TexturedEffect> GenEffect(const gfx::Filter& aFilter) override;
+  virtual already_AddRefed<TexturedEffect> GenEffect(const gfx::Filter& aFilter) override;
 
 protected:
   CompositableTextureHostRef mTextureHost;

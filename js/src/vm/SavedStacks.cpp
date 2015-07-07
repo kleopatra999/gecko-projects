@@ -10,6 +10,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Maybe.h"
 
+#include <algorithm>
 #include <math.h>
 
 #include "jsapi.h"
@@ -26,6 +27,7 @@
 #include "js/Vector.h"
 #include "vm/Debugger.h"
 #include "vm/StringBuffer.h"
+#include "vm/WrapperObject.h"
 
 #include "jscntxtinlines.h"
 
@@ -185,6 +187,7 @@ SavedFrame::finishSavedFrameInit(JSContext* cx, HandleObject ctor, HandleObject 
     nullptr,                    // setProperty
     nullptr,                    // enumerate
     nullptr,                    // resolve
+    nullptr,                    // mayResolve
     nullptr,                    // convert
     SavedFrame::finalize,       // finalize
     nullptr,                    // call
@@ -194,7 +197,7 @@ SavedFrame::finishSavedFrameInit(JSContext* cx, HandleObject ctor, HandleObject 
 
     // ClassSpec
     {
-        GenericCreateConstructor<SavedFrame::construct, 0, JSFunction::FinalizeKind>,
+        GenericCreateConstructor<SavedFrame::construct, 0, gc::AllocKind::FUNCTION>,
         GenericCreatePrototype,
         SavedFrame::staticFunctions,
         nullptr,
@@ -693,10 +696,13 @@ SavedFrame::sourceProperty(JSContext* cx, unsigned argc, Value* vp)
 {
     THIS_SAVEDFRAME(cx, argc, vp, "(get source)", args, frame);
     RootedString source(cx);
-    if (JS::GetSavedFrameSource(cx, frame, &source) == JS::SavedFrameResult::Ok)
+    if (JS::GetSavedFrameSource(cx, frame, &source) == JS::SavedFrameResult::Ok) {
+        if (!cx->compartment()->wrap(cx, &source))
+            return false;
         args.rval().setString(source);
-    else
+    } else {
         args.rval().setNull();
+    }
     return true;
 }
 
@@ -730,10 +736,13 @@ SavedFrame::functionDisplayNameProperty(JSContext* cx, unsigned argc, Value* vp)
     THIS_SAVEDFRAME(cx, argc, vp, "(get functionDisplayName)", args, frame);
     RootedString name(cx);
     JS::SavedFrameResult result = JS::GetSavedFrameFunctionDisplayName(cx, frame, &name);
-    if (result == JS::SavedFrameResult::Ok && name)
+    if (result == JS::SavedFrameResult::Ok && name) {
+        if (!cx->compartment()->wrap(cx, &name))
+            return false;
         args.rval().setString(name);
-    else
+    } else {
         args.rval().setNull();
+    }
     return true;
 }
 
@@ -743,10 +752,13 @@ SavedFrame::asyncCauseProperty(JSContext* cx, unsigned argc, Value* vp)
     THIS_SAVEDFRAME(cx, argc, vp, "(get asyncCause)", args, frame);
     RootedString asyncCause(cx);
     JS::SavedFrameResult result = JS::GetSavedFrameAsyncCause(cx, frame, &asyncCause);
-    if (result == JS::SavedFrameResult::Ok && asyncCause)
+    if (result == JS::SavedFrameResult::Ok && asyncCause) {
+        if (!cx->compartment()->wrap(cx, &asyncCause))
+            return false;
         args.rval().setString(asyncCause);
-    else
+    } else {
         args.rval().setNull();
+    }
     return true;
 }
 
@@ -756,6 +768,8 @@ SavedFrame::asyncParentProperty(JSContext* cx, unsigned argc, Value* vp)
     THIS_SAVEDFRAME(cx, argc, vp, "(get asyncParent)", args, frame);
     RootedObject asyncParent(cx);
     (void) JS::GetSavedFrameAsyncParent(cx, frame, &asyncParent);
+    if (!cx->compartment()->wrap(cx, &asyncParent))
+        return false;
     args.rval().setObjectOrNull(asyncParent);
     return true;
 }
@@ -766,6 +780,8 @@ SavedFrame::parentProperty(JSContext* cx, unsigned argc, Value* vp)
     THIS_SAVEDFRAME(cx, argc, vp, "(get parent)", args, frame);
     RootedObject parent(cx);
     (void) JS::GetSavedFrameParent(cx, frame, &parent);
+    if (!cx->compartment()->wrap(cx, &parent))
+        return false;
     args.rval().setObjectOrNull(parent);
     return true;
 }
@@ -1035,10 +1051,8 @@ SavedStacks::getOrCreateSavedFrame(JSContext* cx, SavedFrame::HandleLookup looku
     if (!frame)
         return nullptr;
 
-    if (!p.add(cx, frames, lookupInstance, frame)) {
-        ReportOutOfMemory(cx);
+    if (!p.add(cx, frames, lookupInstance, frame))
         return nullptr;
-    }
 
     return frame;
 }
@@ -1161,27 +1175,26 @@ SavedStacks::chooseSamplingProbability(JSContext* cx)
     if (!dbgs || dbgs->empty())
         return;
 
-    Debugger* allocationTrackingDbg = nullptr;
     mozilla::DebugOnly<Debugger**> begin = dbgs->begin();
 
+    allocationSamplingProbability = 0;
     for (Debugger** dbgp = dbgs->begin(); dbgp < dbgs->end(); dbgp++) {
         // The set of debuggers had better not change while we're iterating,
         // such that the vector gets reallocated.
         MOZ_ASSERT(dbgs->begin() == begin);
 
-        if ((*dbgp)->trackingAllocationSites && (*dbgp)->enabled)
-            allocationTrackingDbg = *dbgp;
+        if ((*dbgp)->trackingAllocationSites && (*dbgp)->enabled) {
+            allocationSamplingProbability = std::max((*dbgp)->allocationSamplingProbability,
+                                                     allocationSamplingProbability);
+        }
     }
-
-    if (!allocationTrackingDbg)
-        return;
-
-    allocationSamplingProbability = allocationTrackingDbg->allocationSamplingProbability;
 }
 
 JSObject*
-SavedStacksMetadataCallback(JSContext* cx)
+SavedStacksMetadataCallback(JSContext* cx, JSObject* target)
 {
+    RootedObject obj(cx, target);
+
     SavedStacks& stacks = cx->compartment()->savedStacks();
     if (stacks.allocationSkipCount > 0) {
         stacks.allocationSkipCount--;
@@ -1221,18 +1234,11 @@ SavedStacksMetadataCallback(JSContext* cx)
     if (!stacks.saveCurrentStack(cx, &frame))
         CrashAtUnhandlableOOM("SavedStacksMetadataCallback");
 
-    if (!Debugger::onLogAllocationSite(cx, frame, PRMJ_Now()))
+    if (!Debugger::onLogAllocationSite(cx, obj, frame, JS_GetCurrentEmbedderTime()))
         CrashAtUnhandlableOOM("SavedStacksMetadataCallback");
 
+    MOZ_ASSERT_IF(frame, !frame->is<WrapperObject>());
     return frame;
-}
-
-JS_FRIEND_API(JSPrincipals*)
-GetSavedFramePrincipals(HandleObject savedFrame)
-{
-    MOZ_ASSERT(savedFrame);
-    MOZ_ASSERT(savedFrame->is<SavedFrame>());
-    return savedFrame->as<SavedFrame>().getPrincipals();
 }
 
 #ifdef JS_CRASH_DIAGNOSTICS

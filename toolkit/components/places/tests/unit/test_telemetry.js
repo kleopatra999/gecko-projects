@@ -42,7 +42,7 @@ add_task(function test_execute()
                                                     PlacesUtils.bookmarks.DEFAULT_INDEX,
                                                     "moz test");
   PlacesUtils.tagging.tagURI(uri, ["tag"]);
-  PlacesUtils.bookmarks.setKeywordForBookmark(itemId, "keyword");
+  yield PlacesUtils.keywords.insert({ url: uri.spec, keyword: "keyword"});
 
   // Set a large annotation.
   let content = "";
@@ -126,6 +126,7 @@ add_task(function test_execute()
 });
 
 add_test(function test_healthreport_callback() {
+  Services.prefs.clearUserPref("places.database.lastMaintenance");
   PlacesDBUtils.telemetry(null, function onResult(data) {
     do_check_neq(data, null);
 
@@ -133,6 +134,7 @@ add_test(function test_healthreport_callback() {
     do_check_eq(data.PLACES_PAGES_COUNT, 1);
     do_check_eq(data.PLACES_BOOKMARKS_COUNT, 1);
 
+    do_check_true(!Services.prefs.prefHasUserValue("places.database.lastMaintenance"));
     run_next_test();
   });
 });

@@ -77,7 +77,8 @@ enum AsmJSAtomicsBuiltinFunction
     AsmJSAtomicsBuiltin_sub,
     AsmJSAtomicsBuiltin_and,
     AsmJSAtomicsBuiltin_or,
-    AsmJSAtomicsBuiltin_xor
+    AsmJSAtomicsBuiltin_xor,
+    AsmJSAtomicsBuiltin_isLockFree
 };
 
 // Set of known global object SIMD's attributes, i.e. types
@@ -580,6 +581,9 @@ class AsmJSModule
 
         uint32_t begin() const {
             return begin_;
+        }
+        uint32_t profilingEntry() const {
+            return begin();
         }
         uint32_t entry() const {
             MOZ_ASSERT(isFunction());

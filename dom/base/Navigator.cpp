@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=2 et tw=78: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -32,6 +32,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "BatteryManager.h"
+#include "mozilla/dom/DeviceStorageAreaListener.h"
 #include "mozilla/dom/PowerManager.h"
 #include "mozilla/dom/WakeLock.h"
 #include "mozilla/dom/power/PowerManagerService.h"
@@ -116,6 +117,11 @@
 
 #ifdef MOZ_EME
 #include "mozilla/EMEUtils.h"
+#include "mozilla/DetailedPromise.h"
+#endif
+
+#ifdef MOZ_WIDGET_GONK
+#include <cutils/properties.h>
 #endif
 
 namespace mozilla {
@@ -196,6 +202,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAudioChannelManager)
 #endif
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCameraManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaDevices)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMessagesManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDeviceStorageStores)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTimeManager)
@@ -206,6 +213,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
 #ifdef MOZ_EME
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaKeySystemAccessManager)
 #endif
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDeviceStorageAreaListener)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -301,6 +309,7 @@ Navigator::Invalidate()
 #endif
 
   mCameraManager = nullptr;
+  mMediaDevices = nullptr;
 
   if (mMessagesManager) {
     mMessagesManager = nullptr;
@@ -330,6 +339,10 @@ Navigator::Invalidate()
     mMediaKeySystemAccessManager = nullptr;
   }
 #endif
+
+  if (mDeviceStorageAreaListener) {
+    mDeviceStorageAreaListener = nullptr;
+  }
 }
 
 //*****************************************************************************
@@ -910,6 +923,20 @@ Navigator::RegisterProtocolHandler(const nsAString& aProtocol,
                                            mWindow->GetOuterWindow());
 }
 
+DeviceStorageAreaListener*
+Navigator::GetDeviceStorageAreaListener(ErrorResult& aRv)
+{
+  if (!mDeviceStorageAreaListener) {
+    if (!mWindow || !mWindow->GetOuterWindow() || !mWindow->GetDocShell()) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+    mDeviceStorageAreaListener = new DeviceStorageAreaListener(mWindow);
+  }
+
+  return mDeviceStorageAreaListener;
+}
+
 nsDOMDeviceStorage*
 Navigator::GetDeviceStorage(const nsAString& aType, ErrorResult& aRv)
 {
@@ -943,6 +970,28 @@ Navigator::GetDeviceStorages(const nsAString& aType,
   nsDOMDeviceStorage::CreateDeviceStoragesFor(mWindow, aType, aStores);
 
   mDeviceStorageStores.AppendElements(aStores);
+}
+
+nsDOMDeviceStorage*
+Navigator::GetDeviceStorageByNameAndType(const nsAString& aName,
+                                         const nsAString& aType,
+                                         ErrorResult& aRv)
+{
+  if (!mWindow || !mWindow->GetOuterWindow() || !mWindow->GetDocShell()) {
+    aRv.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+
+  nsRefPtr<nsDOMDeviceStorage> storage;
+  nsDOMDeviceStorage::CreateDeviceStorageByNameAndType(mWindow, aName, aType,
+                                                       getter_AddRefs(storage));
+
+  if (!storage) {
+    return nullptr;
+  }
+
+  mDeviceStorageStores.AppendElement(storage);
+  return storage;
 }
 
 Geolocation*
@@ -1167,18 +1216,14 @@ Navigator::SendBeacon(const nsAString& aUrl,
       in = strStream;
 
     } else if (aData.Value().IsBlob()) {
-      File& blob = aData.Value().GetAsBlob();
-      rv = blob.GetInternalStream(getter_AddRefs(in));
-      if (NS_FAILED(rv)) {
-        aRv.Throw(NS_ERROR_FAILURE);
+      Blob& blob = aData.Value().GetAsBlob();
+      blob.GetInternalStream(getter_AddRefs(in), aRv);
+      if (NS_WARN_IF(aRv.Failed())) {
         return false;
       }
+
       nsAutoString type;
-      rv = blob.GetType(type);
-      if (NS_FAILED(rv)) {
-        aRv.Throw(NS_ERROR_FAILURE);
-        return false;
-      }
+      blob.GetType(type);
       mimeType = NS_ConvertUTF16toUTF8(type);
 
     } else if (aData.Value().IsFormData()) {
@@ -1221,7 +1266,7 @@ Navigator::SendBeacon(const nsAString& aUrl,
                                                                principal,
                                                                true);
 
-  rv = cors->Init(channel, true);
+  rv = cors->Init(channel, DataURIHandling::Allow);
   NS_ENSURE_SUCCESS(rv, false);
 
   nsCOMPtr<nsINetworkInterceptController> interceptController = do_QueryInterface(docShell);
@@ -1436,7 +1481,7 @@ Navigator::GetFeature(const nsAString& aName, ErrorResult& aRv)
 #if defined(XP_LINUX)
   if (aName.EqualsLiteral("hardware.memory")) {
     // with seccomp enabled, fopen() should be in a non-sandboxed process
-    if (XRE_GetProcessType() == GeckoProcessType_Default) {
+    if (XRE_IsParentProcess()) {
       uint32_t memLevel = mozilla::hal::GetTotalSystemMemoryLevel();
       if (memLevel == 0) {
         p->MaybeReject(NS_ERROR_NOT_AVAILABLE);
@@ -1452,6 +1497,23 @@ Navigator::GetFeature(const nsAString& aName, ErrorResult& aRv)
     return p.forget();
   } // hardware.memory
 #endif
+
+#ifdef MOZ_WIDGET_GONK
+  if (aName.EqualsLiteral("acl.version")) {
+    char value[PROPERTY_VALUE_MAX];
+    uint32_t len = property_get("persist.acl.version", value, nullptr);
+    if (len > 0) {
+      p->MaybeResolve(NS_ConvertUTF8toUTF16(value));
+      return p.forget();
+    }
+  }
+#endif
+
+  // Mirror the dom.apps.developer_mode pref to let apps get it read-only.
+  if (aName.EqualsLiteral("dom.apps.developer_mode")) {
+    p->MaybeResolve(Preferences::GetBool("dom.apps.developer_mode", false));
+    return p.forget();
+  }
 
   p->MaybeResolve(JS::UndefinedHandleValue);
   return p.forget();
@@ -2072,6 +2134,7 @@ Navigator::DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
                      JS::Handle<jsid> aId,
                      JS::MutableHandle<JSPropertyDescriptor> aDesc)
 {
+  // Note: Keep this in sync with MayResolve.
   if (!JSID_IS_STRING(aId)) {
     return true;
   }
@@ -2223,33 +2286,26 @@ Navigator::DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
   return true;
 }
 
-struct NavigatorNameEnumeratorClosure
+/* static */
+bool
+Navigator::MayResolve(jsid aId)
 {
-  NavigatorNameEnumeratorClosure(JSContext* aCx, JSObject* aWrapper,
-                                 nsTArray<nsString>& aNames)
-    : mCx(aCx),
-      mWrapper(aCx, aWrapper),
-      mNames(aNames)
-  {
+  // Note: This function does not fail and may not have any side-effects.
+  // Note: Keep this in sync with DoResolve.
+  if (!JSID_IS_STRING(aId)) {
+    return false;
   }
 
-  JSContext* mCx;
-  JS::Rooted<JSObject*> mWrapper;
-  nsTArray<nsString>& mNames;
-};
-
-static PLDHashOperator
-SaveNavigatorName(const nsAString& aName,
-                  const nsGlobalNameStruct& aNameStruct,
-                  void* aClosure)
-{
-  NavigatorNameEnumeratorClosure* closure =
-    static_cast<NavigatorNameEnumeratorClosure*>(aClosure);
-  if (!aNameStruct.mConstructorEnabled ||
-      aNameStruct.mConstructorEnabled(closure->mCx, closure->mWrapper)) {
-    closure->mNames.AppendElement(aName);
+  nsScriptNameSpaceManager *nameSpaceManager = PeekNameSpaceManager();
+  if (!nameSpaceManager) {
+    // Really shouldn't happen here.  Fail safe.
+    return true;
   }
-  return PL_DHASH_NEXT;
+
+  nsAutoString name;
+  AssignJSFlatString(name, JSID_TO_FLAT_STRING(aId));
+
+  return nameSpaceManager->LookupNavigatorName(name);
 }
 
 void
@@ -2263,8 +2319,14 @@ Navigator::GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
     return;
   }
 
-  NavigatorNameEnumeratorClosure closure(aCx, GetWrapper(), aNames);
-  nameSpaceManager->EnumerateNavigatorNames(SaveNavigatorName, &closure);
+  JS::Rooted<JSObject*> wrapper(aCx, GetWrapper());
+  for (auto i = nameSpaceManager->NavigatorNameIter(); !i.Done(); i.Next()) {
+    const GlobalNameMapEntry* entry = i.Get();
+    if (!entry->mGlobalName.mConstructorEnabled ||
+        entry->mGlobalName.mConstructorEnabled(aCx, wrapper)) {
+      aNames.AppendElement(entry->mKey);
+    }
+  }
 }
 
 JSObject*
@@ -2487,7 +2549,7 @@ Navigator::HasTVSupport(JSContext* aCx, JSObject* aGlobal)
 bool
 Navigator::IsE10sEnabled(JSContext* aCx, JSObject* aGlobal)
 {
-  return XRE_GetProcessType() == GeckoProcessType_Content;
+  return XRE_IsContentProcess();
 }
 
 bool
@@ -2661,7 +2723,7 @@ Navigator::RequestMediaKeySystemAccess(const nsAString& aKeySystem,
                                        ErrorResult& aRv)
 {
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
-  nsRefPtr<Promise> promise = Promise::Create(go, aRv);
+  nsRefPtr<DetailedPromise> promise = DetailedPromise::Create(go, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }

@@ -29,7 +29,7 @@
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_DTOR
 #include "nsPoint.h"                    // for nsIntPoint
-#include "nsRect.h"                     // for nsIntRect
+#include "nsRect.h"                     // for mozilla::gfx::IntRect
 #include "nsRegion.h"                   // for nsIntRegion
 #include "nsTArray.h"                   // for nsTArray, nsTArray_Impl, etc
 #include "nsExpirationTracker.h"
@@ -41,7 +41,6 @@
 namespace mozilla {
 namespace layers {
 
-class BasicTileDescriptor;
 class ClientTiledPaintedLayer;
 class ClientLayerManager;
 
@@ -271,6 +270,7 @@ struct TileClient
   RefPtr<gfxSharedReadLock> mBackLock;
   RefPtr<gfxSharedReadLock> mFrontLock;
   RefPtr<ClientLayerManager> mManager;
+  gfx::IntRect mUpdateRect;
   CompositableClient* mCompositableClient;
 #ifdef GFX_TILEDLAYER_DEBUG_OVERLAY
   TimeStamp        mLastUpdate;
@@ -405,6 +405,8 @@ public:
     : mPaintedLayer(nullptr)
     , mCompositableClient(nullptr)
     , mManager(nullptr)
+    , mCallback(nullptr)
+    , mCallbackData(nullptr)
     , mLastPaintContentType(gfxContentType::COLOR)
     , mLastPaintSurfaceMode(SurfaceMode::SURFACE_OPAQUE)
     , mSharedFrameMetricsHelper(nullptr)
@@ -417,7 +419,7 @@ public:
                    LayerManager::DrawPaintedLayerCallback aCallback,
                    void* aCallbackData);
 
-  void ReadUnlock();
+  void Update(const nsIntRegion& aNewValidRegion, const nsIntRegion& aPaintRegion);
 
   void ReadLock();
 
@@ -444,6 +446,28 @@ public:
 
   SurfaceDescriptorTiles GetSurfaceDescriptorTiles();
 
+  void SetResolution(float aResolution) {
+    if (mResolution == aResolution) {
+      return;
+    }
+
+    Update(nsIntRegion(), nsIntRegion());
+    mResolution = aResolution;
+  }
+
+  void ResetPaintedAndValidState() {
+    mPaintedRegion.SetEmpty();
+    mValidRegion.SetEmpty();
+    mTiles.mSize.width = 0;
+    mTiles.mSize.height = 0;
+    for (size_t i = 0; i < mRetainedTiles.Length(); i++) {
+      if (!mRetainedTiles[i].IsPlaceholderTile()) {
+        mRetainedTiles[i].Release();
+      }
+    }
+    mRetainedTiles.Clear();
+  }
+
 protected:
   TileClient ValidateTile(TileClient aTile,
                           const nsIntPoint& aTileRect,
@@ -452,10 +476,6 @@ protected:
   void PostValidate(const nsIntRegion& aPaintRegion);
 
   void UnlockTile(TileClient aTile);
-
-  void ReleaseTile(TileClient aTile) { aTile.Release(); }
-
-  void SwapTiles(TileClient& aTileA, TileClient& aTileB) { std::swap(aTileA, aTileB); }
 
   TileClient GetPlaceholderTile() const { return TileClient(); }
 
@@ -531,6 +551,7 @@ protected:
   {
     MOZ_COUNT_DTOR(TiledContentClient);
 
+    mDestroyed = true;
     mTiledBuffer.Release();
     mLowPrecisionTiledBuffer.Release();
   }

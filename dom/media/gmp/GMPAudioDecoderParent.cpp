@@ -9,7 +9,7 @@
 #include "mozilla/unused.h"
 #include "GMPMessageUtils.h"
 #include "nsThreadUtils.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 namespace mozilla {
 
@@ -17,21 +17,17 @@ namespace mozilla {
 #undef LOG
 #endif
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetGMPLog();
 
-#define LOGD(msg) PR_LOG(GetGMPLog(), PR_LOG_DEBUG, msg)
-#define LOG(level, msg) PR_LOG(GetGMPLog(), (level), msg)
-#else
-#define LOGD(msg)
-#define LOG(level, msg)
-#endif
+#define LOGD(msg) MOZ_LOG(GetGMPLog(), mozilla::LogLevel::Debug, msg)
+#define LOG(level, msg) MOZ_LOG(GetGMPLog(), (level), msg)
 
 namespace gmp {
 
 GMPAudioDecoderParent::GMPAudioDecoderParent(GMPContentParent* aPlugin)
   : mIsOpen(false)
   , mShuttingDown(false)
+  , mActorDestroyed(false)
   , mPlugin(aPlugin)
   , mCallback(nullptr)
 {
@@ -174,7 +170,9 @@ GMPAudioDecoderParent::Shutdown()
   }
 
   mIsOpen = false;
-  unused << SendDecodingComplete();
+  if (!mActorDestroyed) {
+    unused << SendDecodingComplete();
+  }
 
   return NS_OK;
 }
@@ -184,6 +182,7 @@ void
 GMPAudioDecoderParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   mIsOpen = false;
+  mActorDestroyed = true;
   if (mCallback) {
     // May call Close() (and Shutdown()) immediately or with a delay
     mCallback->Terminated();

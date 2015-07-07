@@ -53,14 +53,14 @@ protected:
   void SetSize(const gfx::IntSize& aSize) { mSize = aSize; }
 
   // Helper methods for creating and copying textures.
-  TemporaryRef<IDirect3DTexture9> InitTextures(
+  already_AddRefed<IDirect3DTexture9> InitTextures(
     DeviceManagerD3D9* aDeviceManager,
     const gfx::IntSize &aSize,
     _D3DFORMAT aFormat,
     RefPtr<IDirect3DSurface9>& aSurface,
     D3DLOCKED_RECT& aLockedRect);
 
-  TemporaryRef<IDirect3DTexture9> DataToTexture(
+  already_AddRefed<IDirect3DTexture9> DataToTexture(
     DeviceManagerD3D9* aDeviceManager,
     unsigned char *aData,
     int aStride,
@@ -70,15 +70,9 @@ protected:
 
   // aTexture should be in SYSTEMMEM, returns a texture in the default
   // pool (that is, in video memory).
-  TemporaryRef<IDirect3DTexture9> TextureToTexture(
+  already_AddRefed<IDirect3DTexture9> TextureToTexture(
     DeviceManagerD3D9* aDeviceManager,
     IDirect3DTexture9* aTexture,
-    const gfx::IntSize& aSize,
-    _D3DFORMAT aFormat);
-
-  TemporaryRef<IDirect3DTexture9> SurfaceToTexture(
-    DeviceManagerD3D9* aDeviceManager,
-    gfxWindowsSurface* aSurface,
     const gfx::IntSize& aSize,
     _D3DFORMAT aFormat);
 
@@ -147,7 +141,7 @@ public:
 
   virtual bool NextTile() override { return (++mCurrentTile < mTileTextures.size()); }
 
-  virtual nsIntRect GetTileRect() override;
+  virtual gfx::IntRect GetTileRect() override;
 
   virtual void EndBigImageIteration() override { mIterating = false; }
 
@@ -161,10 +155,6 @@ public:
    * Copy the content of aTexture using the GPU.
    */
   bool UpdateFromTexture(IDirect3DTexture9* aTexture, const nsIntRegion* aRegion);
-
-  // To use with DIBTextureHostD3D9
-
-  bool Update(gfxWindowsSurface* aSurface);
 
 protected:
   gfx::IntRect GetTileRect(uint32_t aTileIndex) const;
@@ -181,16 +171,16 @@ protected:
 };
 
 /**
- * Can only be drawn into through Cairo and need a D3D9 context on the client side.
+ * Needs a D3D9 context on the client side.
  * The corresponding TextureHost is TextureHostD3D9.
  */
-class CairoTextureClientD3D9 : public TextureClient
+class TextureClientD3D9 : public TextureClient
 {
 public:
-  CairoTextureClientD3D9(ISurfaceAllocator* aAllocator, gfx::SurfaceFormat aFormat,
+  TextureClientD3D9(ISurfaceAllocator* aAllocator, gfx::SurfaceFormat aFormat,
                          TextureFlags aFlags);
 
-  virtual ~CairoTextureClientD3D9();
+  virtual ~TextureClientD3D9();
 
   // TextureClient
 
@@ -217,7 +207,7 @@ public:
 
   virtual bool HasInternalBuffer() const override { return true; }
 
-  virtual TemporaryRef<TextureClient>
+  virtual already_AddRefed<TextureClient>
   CreateSimilar(TextureFlags aFlags = TextureFlags::DEFAULT,
                 TextureAllocationFlags aAllocFlags = ALLOC_DEFAULT) const override;
 
@@ -225,7 +215,6 @@ private:
   RefPtr<IDirect3DTexture9> mTexture;
   nsRefPtr<IDirect3DSurface9> mD3D9Surface;
   RefPtr<gfx::DrawTarget> mDrawTarget;
-  nsRefPtr<gfxASurface> mSurface;
   gfx::IntSize mSize;
   gfx::SurfaceFormat mFormat;
   bool mIsLocked;
@@ -248,6 +237,15 @@ public:
 
   virtual ~SharedTextureClientD3D9();
 
+  // Creates a TextureClient and init width.
+  static already_AddRefed<SharedTextureClientD3D9>
+  Create(ISurfaceAllocator* aAllocator,
+         gfx::SurfaceFormat aFormat,
+         TextureFlags aFlags,
+         IDirect3DTexture9* aTexture,
+         HANDLE aSharedHandle,
+         D3DSURFACE_DESC aDesc);
+
   // TextureClient
 
   virtual bool IsAllocated() const override { return !!mTexture; }
@@ -260,17 +258,6 @@ public:
 
   virtual bool ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor) override;
 
-  void InitWith(IDirect3DTexture9* aTexture, HANDLE aSharedHandle, D3DSURFACE_DESC aDesc)
-  {
-    MOZ_ASSERT(!mTexture);
-    mTexture = aTexture;
-    mHandle = aSharedHandle;
-    mDesc = aDesc;
-    if (mTexture) {
-      gfxWindowsPlatform::sD3D9SharedTextureUsed += mDesc.Width * mDesc.Height * 4;
-    }
-  }
-
   virtual gfx::IntSize GetSize() const
   {
     return gfx::IntSize(mDesc.Width, mDesc.Height);
@@ -281,7 +268,7 @@ public:
   // This TextureClient should not be used in a context where we use CreateSimilar
   // (ex. component alpha) because the underlying texture data is always created by
   // an external producer.
-  virtual TemporaryRef<TextureClient>
+  virtual already_AddRefed<TextureClient>
   CreateSimilar(TextureFlags, TextureAllocationFlags) const override { return nullptr; }
 
 private:
@@ -310,11 +297,9 @@ public:
 
   virtual void Unlock() override;
 
-  virtual void Updated(const nsIntRegion* aRegion) override;
-
   virtual gfx::IntSize GetSize() const override { return mSize; }
 
-  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() override
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override
   {
     return nullptr;
   }
@@ -324,6 +309,8 @@ public:
 protected:
   TextureHostD3D9(TextureFlags aFlags);
   IDirect3DDevice9* GetDevice();
+
+  virtual void UpdatedInternal(const nsIntRegion* aRegion) override;
 
   RefPtr<DataTextureSourceD3D9> mTextureSource;
   RefPtr<IDirect3DTexture9> mTexture;
@@ -353,7 +340,7 @@ public:
 
   virtual void Unlock() override;
 
-  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() override
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override
   {
     return nullptr; // TODO: cf bug 872568
   }
@@ -388,7 +375,7 @@ public:
   virtual void Unlock() override;
   virtual gfx::IntSize GetSize() const override { return mSize; }
 
-  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() override
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override
   {
     return nullptr;
   }

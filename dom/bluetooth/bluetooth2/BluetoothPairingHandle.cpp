@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -76,16 +76,14 @@ BluetoothPairingHandle::SetPinCode(const nsAString& aPinCode, ErrorResult& aRv)
   NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
 
   BT_ENSURE_TRUE_REJECT(mType.EqualsLiteral(PAIRING_REQ_TYPE_ENTERPINCODE),
+                        promise,
                         NS_ERROR_DOM_INVALID_STATE_ERR);
 
   BluetoothService* bs = BluetoothService::Get();
-  BT_ENSURE_TRUE_REJECT(bs, NS_ERROR_NOT_AVAILABLE);
+  BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
-  nsRefPtr<BluetoothReplyRunnable> result =
-    new BluetoothVoidReplyRunnable(nullptr /* DOMRequest */,
-                                   promise,
-                                   NS_LITERAL_STRING("SetPinCode"));
-  bs->PinReplyInternal(mDeviceAddress, true /* accept */, aPinCode, result);
+  bs->PinReplyInternal(mDeviceAddress, true /* accept */, aPinCode,
+                       new BluetoothVoidReplyRunnable(nullptr, promise));
 
   return promise.forget();
 }
@@ -104,20 +102,19 @@ BluetoothPairingHandle::Accept(ErrorResult& aRv)
 
   BT_ENSURE_TRUE_REJECT(mType.EqualsLiteral(PAIRING_REQ_TYPE_CONFIRMATION) ||
                         mType.EqualsLiteral(PAIRING_REQ_TYPE_CONSENT),
+                        promise,
                         NS_ERROR_DOM_INVALID_STATE_ERR);
 
   BluetoothService* bs = BluetoothService::Get();
-  BT_ENSURE_TRUE_REJECT(bs, NS_ERROR_NOT_AVAILABLE);
+  BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
   BluetoothSspVariant variant;
-  BT_ENSURE_TRUE_REJECT(GetSspVariant(variant), NS_ERROR_DOM_OPERATION_ERR);
+  BT_ENSURE_TRUE_REJECT(GetSspVariant(variant),
+                        promise,
+                        NS_ERROR_DOM_OPERATION_ERR);
 
-  nsRefPtr<BluetoothReplyRunnable> result =
-    new BluetoothVoidReplyRunnable(nullptr /* DOMRequest */,
-                                   promise,
-                                   NS_LITERAL_STRING("Accept"));
-  bs->SspReplyInternal(
-    mDeviceAddress, variant, true /* aAccept */, result);
+  bs->SspReplyInternal(mDeviceAddress, variant, true /* aAccept */,
+                       new BluetoothVoidReplyRunnable(nullptr, promise));
 
   return promise.forget();
 }
@@ -135,22 +132,19 @@ BluetoothPairingHandle::Reject(ErrorResult& aRv)
   NS_ENSURE_TRUE(!aRv.Failed(), nullptr);
 
   BluetoothService* bs = BluetoothService::Get();
-  BT_ENSURE_TRUE_REJECT(bs, NS_ERROR_NOT_AVAILABLE);
-
-  nsRefPtr<BluetoothReplyRunnable> result =
-    new BluetoothVoidReplyRunnable(nullptr /* DOMRequest */,
-                                   promise,
-                                   NS_LITERAL_STRING("Reject"));
+  BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
   if (mType.EqualsLiteral(PAIRING_REQ_TYPE_ENTERPINCODE)) { // Pin request
-    bs->PinReplyInternal(
-      mDeviceAddress, false /* aAccept */, EmptyString(), result);
+    bs->PinReplyInternal(mDeviceAddress, false /* aAccept */, EmptyString(),
+                         new BluetoothVoidReplyRunnable(nullptr, promise));
   } else { // Ssp request
     BluetoothSspVariant variant;
-    BT_ENSURE_TRUE_REJECT(GetSspVariant(variant), NS_ERROR_DOM_OPERATION_ERR);
+    BT_ENSURE_TRUE_REJECT(GetSspVariant(variant),
+                          promise,
+                          NS_ERROR_DOM_OPERATION_ERR);
 
-    bs->SspReplyInternal(
-      mDeviceAddress, variant, false /* aAccept */, result);
+    bs->SspReplyInternal(mDeviceAddress, variant, false /* aAccept */,
+                         new BluetoothVoidReplyRunnable(nullptr, promise));
   }
 
   return promise.forget();

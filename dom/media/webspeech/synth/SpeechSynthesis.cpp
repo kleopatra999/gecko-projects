@@ -5,7 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsSpeechTask.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/Element.h"
@@ -16,7 +16,6 @@
 #include "nsIDocument.h"
 
 #undef LOG
-#ifdef PR_LOGGING
 PRLogModuleInfo*
 GetSpeechSynthLog()
 {
@@ -28,10 +27,7 @@ GetSpeechSynthLog()
 
   return sLog;
 }
-#define LOG(type, msg) PR_LOG(GetSpeechSynthLog(), type, msg)
-#else
-#define LOG(type, msg)
-#endif
+#define LOG(type, msg) MOZ_LOG(GetSpeechSynthLog(), type, msg)
 
 namespace mozilla {
 namespace dom {
@@ -141,7 +137,7 @@ SpeechSynthesis::Speak(SpeechSynthesisUtterance& aUtterance)
   mSpeechQueue.AppendElement(&aUtterance);
   aUtterance.mState = SpeechSynthesisUtterance::STATE_PENDING;
 
-  if (mSpeechQueue.Length() == 1) {
+  if (mSpeechQueue.Length() == 1 && !mCurrentTask) {
     AdvanceQueue();
   }
 }
@@ -149,7 +145,7 @@ SpeechSynthesis::Speak(SpeechSynthesisUtterance& aUtterance)
 void
 SpeechSynthesis::AdvanceQueue()
 {
-  LOG(PR_LOG_DEBUG,
+  LOG(LogLevel::Debug,
       ("SpeechSynthesis::AdvanceQueue length=%d", mSpeechQueue.Length()));
 
   if (mSpeechQueue.IsEmpty()) {
@@ -183,17 +179,20 @@ SpeechSynthesis::AdvanceQueue()
 void
 SpeechSynthesis::Cancel()
 {
-  mSpeechQueue.Clear();
-
   if (mCurrentTask) {
-    mCurrentTask->Cancel();
+   if (mSpeechQueue.Length() > 1) {
+      // Remove all queued utterances except for current one.
+      mSpeechQueue.RemoveElementsAt(1, mSpeechQueue.Length() - 1);
+    }
+
+   mCurrentTask->Cancel();
   }
 }
 
 void
 SpeechSynthesis::Pause()
 {
-  if (mCurrentTask) {
+  if (mCurrentTask && !Paused() && (Speaking() || Pending())) {
     mCurrentTask->Pause();
   }
 }
@@ -201,7 +200,7 @@ SpeechSynthesis::Pause()
 void
 SpeechSynthesis::Resume()
 {
-  if (mCurrentTask) {
+  if (mCurrentTask && Paused()) {
     mCurrentTask->Resume();
   }
 }
@@ -226,7 +225,9 @@ SpeechSynthesis::GetVoices(nsTArray< nsRefPtr<SpeechSynthesisVoice> >& aResult)
   uint32_t voiceCount = 0;
 
   nsresult rv = nsSynthVoiceRegistry::GetInstance()->GetVoiceCount(&voiceCount);
-  NS_ENSURE_SUCCESS_VOID(rv);
+  if(NS_WARN_IF(NS_FAILED(rv))) {
+    return;
+  }
 
   for (uint32_t i = 0; i < voiceCount; i++) {
     nsAutoString uri;

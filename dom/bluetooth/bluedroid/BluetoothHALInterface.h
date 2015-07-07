@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -75,15 +75,9 @@ public:
                 const nsAString& aPinCode,
                 BluetoothResultHandler* aRes);
 
-#ifdef MOZ_B2G_BT_API_V2
   void SspReply(const nsAString& aBdAddr, BluetoothSspVariant aVariant,
                 bool aAccept, uint32_t aPasskey,
                 BluetoothResultHandler* aRes);
-#else
-  void SspReply(const nsAString& aBdAddr, const nsAString& aVariant,
-                bool aAccept, uint32_t aPasskey,
-                BluetoothResultHandler* aRes);
-#endif
 
   /* DUT Mode */
 
@@ -106,12 +100,7 @@ public:
   BluetoothHandsfreeInterface* GetBluetoothHandsfreeInterface();
   BluetoothA2dpInterface* GetBluetoothA2dpInterface();
   BluetoothAvrcpInterface* GetBluetoothAvrcpInterface();
-
-#ifdef MOZ_B2G_BT_API_V2
   BluetoothGattInterface* GetBluetoothGattInterface();
-#else
-// TODO: Support GATT
-#endif
 
 protected:
   BluetoothHALInterface(const bt_interface_t* aInterface);

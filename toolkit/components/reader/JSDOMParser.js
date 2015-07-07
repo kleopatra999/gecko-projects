@@ -55,6 +55,12 @@
     "'": "&apos;",
   };
 
+  function encodeTextContentHTML(s) {
+    return s.replace(/[&<>]/g, function(x) {
+      return reverseEntityTable[x];
+    });
+  }
+
   function encodeHTML(s) {
     return s.replace(/[&<>'"]/g, function(x) {
       return reverseEntityTable[x];
@@ -277,6 +283,7 @@
     "meta": true,
     "param": true,
     "source": true,
+    "wbr": true
   };
 
   var whitespace = [" ", "\t", "\n", "\r"];
@@ -542,7 +549,7 @@
     },
     get innerHTML() {
       if (typeof this._innerHTML === "undefined") {
-        this._innerHTML = encodeHTML(this._textContent || "");
+        this._innerHTML = encodeTextContentHTML(this._textContent || "");
       }
       return this._innerHTML;
     },
@@ -590,7 +597,13 @@
     createElement: function (tag) {
       var node = new Element(tag);
       return node;
-    }
+    },
+
+    createTextNode: function (text) {
+      var node = new Text();
+      node.textContent = text;
+      return node;
+    },
   };
 
   var Element = function (tag) {

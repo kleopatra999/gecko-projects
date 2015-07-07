@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,7 +22,6 @@ class gfxTextContextPaint;
 class nsIContent;
 class nsIDocument;
 class nsIFrame;
-class nsPresContext;
 class nsStyleContext;
 class nsStyleCoord;
 class nsSVGElement;
@@ -321,8 +321,14 @@ public:
    * Returns a path
    * string formatted as an SVG path
    */
-  static mozilla::TemporaryRef<mozilla::gfx::Path>
+  static already_AddRefed<mozilla::gfx::Path>
   GetPath(const nsAString& aPathString);
+
+  /**
+   *  Returns true if aContent is one of the elements whose stroke is guaranteed
+   *  to have no corners: circle or ellipse
+   */
+  static bool ShapeTypeHasNoCorners(const nsIContent* aContent);
 };
 
 #endif

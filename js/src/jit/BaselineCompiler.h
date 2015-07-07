@@ -14,6 +14,8 @@
 # include "jit/x64/BaselineCompiler-x64.h"
 #elif defined(JS_CODEGEN_ARM)
 # include "jit/arm/BaselineCompiler-arm.h"
+#elif defined(JS_CODEGEN_ARM64)
+# include "jit/arm64/BaselineCompiler-arm64.h"
 #elif defined(JS_CODEGEN_MIPS)
 # include "jit/mips/BaselineCompiler-mips.h"
 #elif defined(JS_CODEGEN_NONE)
@@ -93,6 +95,7 @@ namespace jit {
     _(JSOP_BITNOT)             \
     _(JSOP_NEG)                \
     _(JSOP_NEWARRAY)           \
+    _(JSOP_SPREADCALLARRAY)    \
     _(JSOP_NEWARRAY_COPYONWRITE) \
     _(JSOP_INITELEM_ARRAY)     \
     _(JSOP_NEWOBJECT)          \
@@ -194,7 +197,8 @@ namespace jit {
     _(JSOP_CALLEE)             \
     _(JSOP_SETRVAL)            \
     _(JSOP_RETRVAL)            \
-    _(JSOP_RETURN)
+    _(JSOP_RETURN)             \
+    _(JSOP_NEWTARGET)
 
 class BaselineCompiler : public BaselineCompilerSpecific
 {

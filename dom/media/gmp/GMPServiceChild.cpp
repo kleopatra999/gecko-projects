@@ -3,8 +3,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "GMPService.h"
+#include "GMPServiceChild.h"
 #include "mozilla/dom/ContentChild.h"
+#include "mozIGeckoMediaPluginService.h"
+#include "mozIGeckoMediaPluginChromeService.h"
+#include "nsCOMPtr.h"
+#include "GMPParent.h"
+#include "GMPContentParent.h"
+#include "nsXPCOMPrivate.h"
+#include "mozilla/SyncRunnable.h"
+#include "runnable_utils.h"
 
 namespace mozilla {
 
@@ -12,13 +20,8 @@ namespace mozilla {
 #undef LOG
 #endif
 
-#ifdef PR_LOGGING
-#define LOGD(msg) PR_LOG(GetGMPLog(), PR_LOG_DEBUG, msg)
-#define LOG(level, msg) PR_LOG(GetGMPLog(), (level), msg)
-#else
-#define LOGD(msg)
-#define LOG(leve1, msg)
-#endif
+#define LOGD(msg) MOZ_LOG(GetGMPLog(), mozilla::LogLevel::Debug, msg)
+#define LOG(level, msg) MOZ_LOG(GetGMPLog(), (level), msg)
 
 #ifdef __CLASS__
 #undef __CLASS__
@@ -30,7 +33,7 @@ namespace gmp {
 already_AddRefed<GeckoMediaPluginServiceChild>
 GeckoMediaPluginServiceChild::GetSingleton()
 {
-  MOZ_ASSERT(XRE_GetProcessType() != GeckoProcessType_Default);
+  MOZ_ASSERT(!XRE_IsParentProcess());
   nsRefPtr<GeckoMediaPluginService> service(
     GeckoMediaPluginService::GetGeckoMediaPluginService());
 #ifdef DEBUG
@@ -42,20 +45,6 @@ GeckoMediaPluginServiceChild::GetSingleton()
 #endif
   return service.forget().downcast<GeckoMediaPluginServiceChild>();
 }
-
-class GetServiceChildCallback
-{
-public:
-  GetServiceChildCallback()
-  {
-    MOZ_COUNT_CTOR(GetServiceChildCallback);
-  }
-  virtual ~GetServiceChildCallback()
-  {
-    MOZ_COUNT_DTOR(GetServiceChildCallback);
-  }
-  virtual void Done(GMPServiceChild* aGMPServiceChild) = 0;
-};
 
 class GetContentParentFromDone : public GetServiceChildCallback
 {
@@ -82,7 +71,7 @@ public:
 
     base::ProcessId otherProcess;
     nsCString displayName;
-    nsCString pluginId;
+    uint32_t pluginId;
     bool ok = aGMPServiceChild->SendLoadGMP(mNodeId, mAPI, mTags,
                                             alreadyBridgedTo, &otherProcess,
                                             &displayName, &pluginId);
@@ -148,12 +137,10 @@ class GetNodeIdDone : public GetServiceChildCallback
 {
 public:
   GetNodeIdDone(const nsAString& aOrigin, const nsAString& aTopLevelOrigin,
-                bool aInPrivateBrowsing, const nsACString& aVersion,
-                UniquePtr<GetNodeIdCallback>&& aCallback)
+                bool aInPrivateBrowsing, UniquePtr<GetNodeIdCallback>&& aCallback)
     : mOrigin(aOrigin),
       mTopLevelOrigin(aTopLevelOrigin),
       mInPrivateBrowsing(aInPrivateBrowsing),
-      mVersion(aVersion),
       mCallback(Move(aCallback))
   {
   }
@@ -167,8 +154,7 @@ public:
 
     nsCString outId;
     if (!aGMPServiceChild->SendGetGMPNodeId(mOrigin, mTopLevelOrigin,
-                                            mInPrivateBrowsing, mVersion,
-                                            &outId)) {
+                                            mInPrivateBrowsing, &outId)) {
       mCallback->Done(NS_ERROR_FAILURE, EmptyCString());
       return;
     }
@@ -180,7 +166,6 @@ private:
   nsString mOrigin;
   nsString mTopLevelOrigin;
   bool mInPrivateBrowsing;
-  nsCString mVersion;
   UniquePtr<GetNodeIdCallback> mCallback;
 };
 
@@ -188,12 +173,10 @@ NS_IMETHODIMP
 GeckoMediaPluginServiceChild::GetNodeId(const nsAString& aOrigin,
                                         const nsAString& aTopLevelOrigin,
                                         bool aInPrivateBrowsing,
-                                        const nsACString& aVersion,
                                         UniquePtr<GetNodeIdCallback>&& aCallback)
 {
   UniquePtr<GetServiceChildCallback> callback(
-    new GetNodeIdDone(aOrigin, aTopLevelOrigin, aInPrivateBrowsing, aVersion,
-                      Move(aCallback)));
+    new GetNodeIdDone(aOrigin, aTopLevelOrigin, aInPrivateBrowsing, Move(aCallback)));
   GetServiceChild(Move(callback));
   return NS_OK;
 }

@@ -23,7 +23,6 @@ sys.path.insert(0, SCRIPT_DIRECTORY)
 
 from automationutils import (
     dumpScreen,
-    environment,
     printstatus,
     processLeakLog
 )
@@ -33,6 +32,7 @@ import mozinfo
 import mozprocess
 import mozprofile
 import mozrunner
+from mozrunner.utils import test_environment
 
 here = os.path.abspath(os.path.dirname(__file__))
 
@@ -206,9 +206,7 @@ class RefTest(object):
     # Ensure that telemetry is disabled, so we don't connect to the telemetry
     # server in the middle of the tests.
     prefs['toolkit.telemetry.enabled'] = False
-    # Don't send Telemetry reports to the production server. This is
-    # needed as Telemetry sends pings also if FHR upload is enabled.
-    prefs['toolkit.telemetry.server'] = 'http://%(server)s/telemetry-dummy/'
+    prefs['toolkit.telemetry.unified'] = False
     # Likewise for safebrowsing.
     prefs['browser.safebrowsing.enabled'] = False
     prefs['browser.safebrowsing.malware.enabled'] = False
@@ -223,6 +221,11 @@ class RefTest(object):
     # And for about:newtab content fetch and pings.
     prefs['browser.newtabpage.directory.source'] = 'data:application/json,{"reftest":1}'
     prefs['browser.newtabpage.directory.ping'] = ''
+    # Only allow add-ons from the profile and app and allow foreign injection
+    prefs["extensions.enabledScopes"] = 5;
+    prefs["extensions.autoDisableScopes"] = 0;
+    # Allow unsigned add-ons
+    prefs['xpinstall.signatures.required'] = False
 
     #Don't use auto-enabled e10s
     prefs['browser.tabs.remote.autostart.1'] = False
@@ -270,7 +273,8 @@ class RefTest(object):
     return profile
 
   def environment(self, **kwargs):
-    return environment(**kwargs)
+    kwargs['log'] = log
+    return test_environment(**kwargs)
 
   def buildBrowserEnv(self, options, profileDir):
     browserEnv = self.environment(xrePath = options.xrePath, debugger=options.debugger)
@@ -820,7 +824,7 @@ class ReftestOptions(OptionParser):
 
     options.leakThresholds = {
         "default": options.defaultLeakThreshold,
-        "tab": 25000,  # See dependencies of bug 1051230.
+        "tab": 5000,  # See dependencies of bug 1051230.
     }
 
     return options

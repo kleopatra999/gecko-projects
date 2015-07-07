@@ -570,14 +570,14 @@ ComputeAccessAddress(EMULATOR_CONTEXT* context, const Disassembler::ComplexAddre
 
     uintptr_t result = address.disp();
 
-    if (address.base() != Registers::Invalid) {
+    if (address.hasBase()) {
         uintptr_t base;
         StoreValueFromGPReg(&base, sizeof(uintptr_t),
                             AddressOfGPRegisterSlot(context, address.base()));
         result += base;
     }
 
-    if (address.index() != Registers::Invalid) {
+    if (address.hasIndex()) {
         uintptr_t index;
         StoreValueFromGPReg(&index, sizeof(uintptr_t),
                             AddressOfGPRegisterSlot(context, address.index()));
@@ -608,15 +608,15 @@ EmulateHeapAccess(EMULATOR_CONTEXT* context, uint8_t* pc, uint8_t* faultingAddre
     // Check x64 asm.js heap access invariants.
     MOZ_RELEASE_ASSERT(address.disp() >= 0);
     MOZ_RELEASE_ASSERT(address.base() == HeapReg.code());
-    MOZ_RELEASE_ASSERT(address.index() != HeapReg.code());
+    MOZ_RELEASE_ASSERT(!address.hasIndex() || address.index() != HeapReg.code());
     MOZ_RELEASE_ASSERT(address.scale() == 0);
-    if (address.base() != Registers::Invalid) {
+    if (address.hasBase()) {
         uintptr_t base;
         StoreValueFromGPReg(&base, sizeof(uintptr_t),
                             AddressOfGPRegisterSlot(context, address.base()));
         MOZ_RELEASE_ASSERT(reinterpret_cast<uint8_t*>(base) == module.maybeHeap());
     }
-    if (address.index() != Registers::Invalid) {
+    if (address.hasIndex()) {
         uintptr_t index;
         StoreValueFromGPReg(&index, sizeof(uintptr_t),
                             AddressOfGPRegisterSlot(context, address.index()));
@@ -1163,9 +1163,9 @@ RedirectJitCodeToInterruptCheck(JSRuntime* rt, CONTEXT* context)
     if (AsmJSActivation* activation = rt->asmJSActivationStack()) {
         const AsmJSModule& module = activation->module();
 
-#if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
-        if (module.containsFunctionPC((void*)rt->simulator()->get_pc()))
-            rt->simulator()->set_resume_pc(int32_t(module.interruptExit()));
+#ifdef JS_SIMULATOR
+        if (module.containsFunctionPC(rt->simulator()->get_pc_as<void*>()))
+            rt->simulator()->set_resume_pc(module.interruptExit());
 #endif
 
         uint8_t** ppc = ContextToPC(context);

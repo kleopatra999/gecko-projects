@@ -59,14 +59,12 @@
  */
 
 struct nsHTMLReflowState;
-class nsHTMLReflowCommand;
 class nsIAtom;
 class nsPresContext;
 class nsIPresShell;
 class nsRenderingContext;
 class nsView;
 class nsIWidget;
-class nsIDOMRange;
 class nsISelectionController;
 class nsBoxLayoutState;
 class nsBoxLayout;
@@ -736,21 +734,39 @@ public:
   }
 
   /**
-   * Set this frame's size from a logical size in its own writing direction
+   * Set this frame's size from a logical size in its own writing direction.
+   * This leaves the frame's logical position unchanged, which means its
+   * physical position may change (for right-to-left modes).
    */
   void SetSize(const mozilla::LogicalSize& aSize) {
     SetSize(GetWritingMode(), aSize);
   }
   /*
-   * Set this frame's size from a logical size in a different writing direction
+   * Set this frame's size from a logical size in a different writing direction.
+   * This leaves the frame's logical position in the given mode unchanged,
+   * which means its physical position may change (for right-to-left modes).
    */
   void SetSize(mozilla::WritingMode aWritingMode,
-               const mozilla::LogicalSize& aSize) {
-    SetSize(aSize.GetPhysicalSize(aWritingMode));
+               const mozilla::LogicalSize& aSize)
+  {
+    if ((!aWritingMode.IsVertical() && !aWritingMode.IsBidiLTR()) ||
+        aWritingMode.IsVerticalRL()) {
+      nscoord oldWidth = mRect.width;
+      SetSize(aSize.GetPhysicalSize(aWritingMode));
+      mRect.x -= mRect.width - oldWidth;
+    } else {
+      SetSize(aSize.GetPhysicalSize(aWritingMode));
+    }
   }
+
+  /**
+   * Set this frame's physical size. This leaves the frame's physical position
+   * (topLeft) unchanged.
+   */
   void SetSize(const nsSize& aSize) {
     SetRect(nsRect(mRect.TopLeft(), aSize));
   }
+
   void SetPosition(const nsPoint& aPt) { mRect.MoveTo(aPt); }
   void SetPosition(mozilla::WritingMode aWritingMode,
                    const mozilla::LogicalPoint& aPt,
@@ -859,8 +875,6 @@ public:
   NS_DECLARE_FRAME_PROPERTY(UsedMarginProperty, DeleteValue<nsMargin>)
   NS_DECLARE_FRAME_PROPERTY(UsedPaddingProperty, DeleteValue<nsMargin>)
   NS_DECLARE_FRAME_PROPERTY(UsedBorderProperty, DeleteValue<nsMargin>)
-
-  NS_DECLARE_FRAME_PROPERTY(ScrollLayerCount, nullptr)
 
   NS_DECLARE_FRAME_PROPERTY(LineBaselineOffset, nullptr)
 
@@ -1652,8 +1666,13 @@ public:
       , hPctPadding(0.0f), hPctMargin(0.0f)
     {}
   };
-  virtual IntrinsicISizeOffsetData
-    IntrinsicISizeOffsets(nsRenderingContext* aRenderingContext) = 0;
+  virtual IntrinsicISizeOffsetData IntrinsicISizeOffsets() = 0;
+
+  /**
+   * Return the bsize components of padding, border, and margin
+   * that contribute to the intrinsic width that applies to the parent.
+   */
+  IntrinsicISizeOffsetData IntrinsicBSizeOffsets();
 
   virtual mozilla::IntrinsicSize GetIntrinsicSize() = 0;
 
@@ -2572,7 +2591,7 @@ public:
    *
    * @return whether the frame correspods to generated content
    */
-  bool IsGeneratedContentFrame() {
+  bool IsGeneratedContentFrame() const {
     return (mState & NS_FRAME_GENERATED_CONTENT) != 0;
   }
 
@@ -2808,15 +2827,27 @@ NS_PTR_TO_INT32(frame->Properties().Get(nsIFrame::ParagraphDepthProperty()))
    * the last repaint.
    */  
   void UpdatePaintCountForPaintedPresShells() {
-    nsTArray<nsWeakPtr> * list = PaintedPresShellList();
-    for (int i = 0, l = list->Length(); i < l; i++) {
-      nsCOMPtr<nsIPresShell> shell = do_QueryReferent(list->ElementAt(i));
-      
+    for (nsWeakPtr& item : *PaintedPresShellList()) {
+      nsCOMPtr<nsIPresShell> shell = do_QueryReferent(item);
       if (shell) {
         shell->IncrementPaintCount();
       }
     }
   }  
+
+  /**
+   * @return true if we painted @aShell during the last repaint.
+   */
+  bool DidPaintPresShell(nsIPresShell* aShell)
+  {
+    for (nsWeakPtr& item : *PaintedPresShellList()) {
+      nsCOMPtr<nsIPresShell> shell = do_QueryReferent(item);
+      if (shell == aShell) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   /**
    * Accessors for the absolute containing block.

@@ -14,7 +14,7 @@
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_ASSERTION
 #include "nsISupportsImpl.h"            // for gfxPattern::Release, etc
-#include "nsRect.h"                     // for nsIntRect
+#include "nsRect.h"                     // for mozilla::gfx::IntRect
 #include "nsRegion.h"                   // for nsIntRegion
 #include "mozilla/gfx/Point.h"          // for IntSize
 
@@ -49,7 +49,7 @@ public:
                      const gfx::Point& aDeviceOffset,
                      Layer* aMaskLayer) override;
 
-  virtual TemporaryRef<SourceSurface> GetAsSourceSurface() override;
+  virtual already_AddRefed<SourceSurface> GetAsSourceSurface() override;
 
 protected:
   BasicLayerManager* BasicManager()
@@ -91,7 +91,7 @@ BasicImageLayer::Paint(DrawTarget* aDT,
   GetContainer()->NotifyPaintedImage(image);
 }
 
-TemporaryRef<SourceSurface>
+already_AddRefed<SourceSurface>
 BasicImageLayer::GetAsSourceSurface()
 {
   if (!mContainer) {

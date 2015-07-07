@@ -10,9 +10,12 @@ Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 
 const {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+const {gDevTools} = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
 const {require} = devtools;
 const promise = require("promise");
 const {AppProjects} = require("devtools/app-manager/app-projects");
+const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
+DevToolsUtils.testing = true;
 
 let TEST_BASE;
 if (window.location === "chrome://browser/content/browser.xul") {
@@ -23,7 +26,6 @@ if (window.location === "chrome://browser/content/browser.xul") {
 
 Services.prefs.setBoolPref("devtools.webide.enabled", true);
 Services.prefs.setBoolPref("devtools.webide.enableLocalRuntime", true);
-Services.prefs.setBoolPref("devtools.webide.enableRuntimeConfiguration", true);
 
 Services.prefs.setCharPref("devtools.webide.addonsURL", TEST_BASE + "addons/simulators.json");
 Services.prefs.setCharPref("devtools.webide.simulatorAddonsURL", TEST_BASE + "addons/fxos_#SLASHED_VERSION#_simulator-#OS#.xpi");
@@ -32,7 +34,10 @@ Services.prefs.setCharPref("devtools.webide.adaptersAddonURL", TEST_BASE + "addo
 Services.prefs.setCharPref("devtools.webide.templatesURL", TEST_BASE + "templates.json");
 Services.prefs.setCharPref("devtools.devices.url", TEST_BASE + "browser_devices.json");
 
-SimpleTest.registerCleanupFunction(() => {
+let registerCleanupFunction = registerCleanupFunction ||
+                              SimpleTest.registerCleanupFunction;
+registerCleanupFunction(() => {
+  DevToolsUtils.testing = false;
   Services.prefs.clearUserPref("devtools.webide.enabled");
   Services.prefs.clearUserPref("devtools.webide.enableLocalRuntime");
   Services.prefs.clearUserPref("devtools.webide.autoinstallADBHelper");
@@ -191,10 +196,29 @@ function removeTab(aTab, aWindow) {
   return deferred.promise;
 }
 
+function getRuntimeDocument(win) {
+  return win.document.querySelector("#runtime-listing-panel-details").contentDocument;
+}
+
+function getProjectDocument(win) {
+  return win.document.querySelector("#project-listing-panel-details").contentDocument;
+}
+
 function connectToLocalRuntime(aWindow) {
   info("Loading local runtime.");
 
-  let panelNode = aWindow.document.querySelector("#runtime-panel");
+  let panelNode;
+  let runtimePanel;
+
+  // If we are currently toggled to the sidebar panel display in WebIDE then
+  // the runtime panel is in an iframe.
+  if (aWindow.runtimeList.sidebarsEnabled) {
+    runtimePanel = getRuntimeDocument(aWindow);
+  } else {
+    runtimePanel = aWindow.document;
+  }
+
+  panelNode = runtimePanel.querySelector("#runtime-panel");
   let items = panelNode.querySelectorAll(".runtime-panel-item-other");
   is(items.length, 2, "Found 2 custom runtime buttons");
 

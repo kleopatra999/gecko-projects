@@ -161,7 +161,7 @@ public:
 
     InterruptFrame& operator=(InterruptFrame&& aOther)
     {
-        MOZ_ASSERT(&aOther != this);
+        MOZ_RELEASE_ASSERT(&aOther != this);
         this->~InterruptFrame();
         new (this) InterruptFrame(mozilla::Move(aOther));
         return *this;
@@ -522,7 +522,7 @@ MessageChannel::Echo(Message* aMsg)
     MonitorAutoLock lock(*mMonitor);
 
     if (!Connected()) {
-        ReportConnectionError("MessageChannel");
+        ReportConnectionError("MessageChannel", msg);
         return false;
     }
 
@@ -545,7 +545,7 @@ MessageChannel::Send(Message* aMsg)
 
     MonitorAutoLock lock(*mMonitor);
     if (!Connected()) {
-        ReportConnectionError("MessageChannel");
+        ReportConnectionError("MessageChannel", msg);
         return false;
     }
     mLink->SendMessage(msg.forget());
@@ -612,6 +612,19 @@ MessageChannel::ShouldDeferMessage(const Message& aMsg)
     return mSide == ParentSide && aMsg.transaction_id() != mCurrentTransaction;
 }
 
+// Predicate that is true for messages that should be consolidated if 'compress' is set.
+class MatchingKinds {
+    typedef IPC::Message Message;
+    Message::msgid_t mType;
+    int32_t mRoutingId;
+public:
+    MatchingKinds(Message::msgid_t aType, int32_t aRoutingId) :
+        mType(aType), mRoutingId(aRoutingId) {}
+    bool operator()(const Message &msg) {
+        return msg.type() == mType && msg.routing_id() == mRoutingId;
+    }
+};
+
 void
 MessageChannel::OnMessageReceivedFromLink(const Message& aMsg)
 {
@@ -653,17 +666,35 @@ MessageChannel::OnMessageReceivedFromLink(const Message& aMsg)
     }
 
     // Prioritized messages cannot be compressed.
-    MOZ_ASSERT(!aMsg.compress() || aMsg.priority() == IPC::Message::PRIORITY_NORMAL);
+    MOZ_ASSERT_IF(aMsg.compress_type() != IPC::Message::COMPRESSION_NONE,
+                  aMsg.priority() == IPC::Message::PRIORITY_NORMAL);
 
-    bool compress = (aMsg.compress() && !mPending.empty() &&
-                     mPending.back().type() == aMsg.type() &&
-                     mPending.back().routing_id() == aMsg.routing_id());
-    if (compress) {
-        // This message type has compression enabled, and the back of the
-        // queue was the same message type and routed to the same destination.
-        // Replace it with the newer message.
-        MOZ_ASSERT(mPending.back().compress());
-        mPending.pop_back();
+    bool compress = false;
+    if (aMsg.compress_type() == IPC::Message::COMPRESSION_ENABLED) {
+        compress = (!mPending.empty() &&
+                    mPending.back().type() == aMsg.type() &&
+                    mPending.back().routing_id() == aMsg.routing_id());
+        if (compress) {
+            // This message type has compression enabled, and the back of the
+            // queue was the same message type and routed to the same destination.
+            // Replace it with the newer message.
+            MOZ_ASSERT(mPending.back().compress_type() ==
+                       IPC::Message::COMPRESSION_ENABLED);
+            mPending.pop_back();
+        }
+    } else if (aMsg.compress_type() == IPC::Message::COMPRESSION_ALL) {
+        // Check the message queue for another message with this type/destination.
+        auto it = std::find_if(mPending.rbegin(), mPending.rend(),
+                               MatchingKinds(aMsg.type(), aMsg.routing_id()));
+        if (it != mPending.rend()) {
+            // This message type has compression enabled, and the queue holds
+            // a message with the same message type and routed to the same destination.
+            // Erase it.  Note that, since we always compress these redundancies, There Can
+            // Be Only One.
+            compress = true;
+            MOZ_ASSERT((*it).compress_type() == IPC::Message::COMPRESSION_ALL);
+            mPending.erase((++it).base());
+        }
     }
 
     bool shouldWakeUp = AwaitingInterruptReply() ||
@@ -778,7 +809,7 @@ MessageChannel::Send(Message* aMsg, Message* aReply)
     nsAutoPtr<Message> msg(aMsg);
 
     if (!Connected()) {
-        ReportConnectionError("MessageChannel::SendAndWait");
+        ReportConnectionError("MessageChannel::SendAndWait", msg);
         return false;
     }
 
@@ -871,7 +902,7 @@ MessageChannel::Call(Message* aMsg, Message* aReply)
 
     MonitorAutoLock lock(*mMonitor);
     if (!Connected()) {
-        ReportConnectionError("MessageChannel::Call");
+        ReportConnectionError("MessageChannel::Call", aMsg);
         return false;
     }
 
@@ -1266,8 +1297,9 @@ MessageChannel::DispatchInterruptMessage(const Message& aMsg, size_t stackDepth)
         // processing of the other side's in-call.
         bool defer;
         const char* winner;
-        switch (mListener->MediateInterruptRace((mSide == ChildSide) ? aMsg : mInterruptStack.top(),
-                                          (mSide != ChildSide) ? mInterruptStack.top() : aMsg))
+        const Message& parentMsg = (mSide == ChildSide) ? aMsg : mInterruptStack.top();
+        const Message& childMsg = (mSide == ChildSide) ? mInterruptStack.top() : aMsg;
+        switch (mListener->MediateInterruptRace(parentMsg, childMsg))
         {
           case RIPChildWins:
             winner = "child";
@@ -1527,7 +1559,7 @@ MessageChannel::ReportMessageRouteError(const char* channelName) const
 }
 
 void
-MessageChannel::ReportConnectionError(const char* aChannelName) const
+MessageChannel::ReportConnectionError(const char* aChannelName, Message* aMsg) const
 {
     AssertWorkerThread();
     mMonitor->AssertCurrentThreadOwns();
@@ -1554,7 +1586,16 @@ MessageChannel::ReportConnectionError(const char* aChannelName) const
         NS_RUNTIMEABORT("unreached");
     }
 
-    PrintErrorMessage(mSide, aChannelName, errorMsg);
+    if (aMsg) {
+        char reason[512];
+        PR_snprintf(reason, sizeof(reason),
+                    "(msgtype=0x%lX,name=%s) %s",
+                    aMsg->type(), aMsg->name(), errorMsg);
+
+        PrintErrorMessage(mSide, aChannelName, reason);
+    } else {
+        PrintErrorMessage(mSide, aChannelName, errorMsg);
+    }
 
     MonitorAutoUnlock unlock(*mMonitor);
     mListener->OnProcessingError(MsgDropped, errorMsg);

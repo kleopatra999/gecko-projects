@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,6 +11,7 @@
 #include "mozilla/dom/BluetoothGattCharacteristicBinding.h"
 #include "mozilla/dom/bluetooth/BluetoothCommon.h"
 #include "mozilla/dom/bluetooth/BluetoothGattDescriptor.h"
+#include "mozilla/dom/TypedArray.h"
 #include "nsCOMPtr.h"
 #include "nsWrapperCache.h"
 #include "nsPIDOMWindow.h"
@@ -31,6 +32,7 @@ class BluetoothGattCharacteristic final : public nsISupports
                                         , public nsWrapperCache
                                         , public BluetoothSignalObserver
 {
+  friend class BluetoothGattService;
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(BluetoothGattCharacteristic)
@@ -59,6 +61,17 @@ public:
     return mCharId.mInstanceId;
   }
 
+  void GetValue(JSContext* cx, JS::MutableHandle<JSObject*> aValue) const;
+
+  void GetProperties(GattCharacteristicProperties& aProperties) const;
+
+  /****************************************************************************
+   * Methods (Web API Implementation)
+   ***************************************************************************/
+  already_AddRefed<Promise> ReadValue(ErrorResult& aRv);
+  already_AddRefed<Promise> WriteValue(const ArrayBuffer& aValue,
+                                       ErrorResult& aRv);
+
   /****************************************************************************
    * Methods (Web API Implementation)
    ***************************************************************************/
@@ -85,7 +98,7 @@ public:
 
   BluetoothGattCharacteristic(nsPIDOMWindow* aOwner,
                               BluetoothGattService* aService,
-                              const BluetoothGattId& aCharId);
+                              const BluetoothGattCharAttribute& aChar);
 
 private:
   ~BluetoothGattCharacteristic();
@@ -94,10 +107,17 @@ private:
    * Add newly discovered GATT descriptors into mDescriptors and update the
    * cache value of mDescriptors.
    *
-   * @param aValue [in] BluetoothValue which contains an array of
-   *                    BluetoothGattId of all discovered descriptors.
+   * @param aDescriptorIds [in] An array of BluetoothGattId for each descriptor
+   *                            that belongs to this characteristic.
    */
-  void HandleDescriptorsDiscovered(const BluetoothValue& aValue);
+  void AssignDescriptors(const nsTArray<BluetoothGattId>& aDescriptorIds);
+
+  /**
+   * Update the value of this characteristic.
+   *
+   * @param aValue [in] BluetoothValue which contains an uint8_t array.
+   */
+  void HandleCharacteristicValueUpdated(const BluetoothValue& aValue);
 
   /****************************************************************************
    * Variables
@@ -125,8 +145,44 @@ private:
    * UUID string of this GATT characteristic.
    */
   nsString mUuidStr;
+
+  /**
+   * Value of this GATT characteristic.
+   */
+  nsTArray<uint8_t> mValue;
+
+  /**
+   * Properties of this GATT characteristic.
+   */
+  BluetoothGattCharProp mProperties;
+
+  /**
+   * Write type of this GATT characteristic.
+   */
+  BluetoothGattWriteType mWriteType;
 };
 
 END_BLUETOOTH_NAMESPACE
+
+/**
+ * Explicit Specialization of Function Templates
+ *
+ * Allows customizing the template code for a given set of template arguments.
+ * With this function template, nsTArray can handle comparison between
+ * 'nsRefPtr<BluetoothGattCharacteristic>' and 'BluetoothGattId' properly,
+ * including IndexOf() and Contains();
+ */
+template <>
+class nsDefaultComparator <
+  nsRefPtr<mozilla::dom::bluetooth::BluetoothGattCharacteristic>,
+  mozilla::dom::bluetooth::BluetoothGattId> {
+public:
+  bool Equals(
+    const nsRefPtr<mozilla::dom::bluetooth::BluetoothGattCharacteristic>& aChar,
+    const mozilla::dom::bluetooth::BluetoothGattId& aCharId) const
+  {
+    return aChar->GetCharacteristicId() == aCharId;
+  }
+};
 
 #endif

@@ -180,10 +180,16 @@ public:
 
   // Syncs properties to the top level view and window, like transparency and
   // shadow.
+  // The SET_ASYNC indicates that the actual nsIWidget calls to sync the window
+  // properties should be done async.
+  enum {
+    SET_ASYNC = 0x01,
+  };
   static void SyncWindowProperties(nsPresContext*       aPresContext,
                                    nsIFrame*            aFrame,
-                                   nsView*             aView,
-                                   nsRenderingContext*  aRC = nullptr);
+                                   nsView*              aView,
+                                   nsRenderingContext*  aRC,
+                                   uint32_t             aFlags);
 
   // Sets the view's attributes from the frame style.
   // - visibility
@@ -610,6 +616,12 @@ protected:
                                   nsIPresShell* aPresShell,
                                   mozilla::FramePropertyTable* aPropTable,
                                   const FramePropertyDescriptor* aProp);
+
+  // ==========================================================================
+
+  // Helper used by Progress and Meter frames. Returns true if the bar should
+  // be rendered vertically, based on writing-mode and -moz-orient properties.
+  bool ResolvedOrientationIsVertical();
 
   // ==========================================================================
 

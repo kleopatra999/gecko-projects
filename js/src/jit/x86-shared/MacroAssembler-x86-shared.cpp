@@ -9,6 +9,8 @@
 #include "jit/JitFrames.h"
 #include "jit/MacroAssembler.h"
 
+#include "jit/MacroAssembler-inl.h"
+
 using namespace js;
 using namespace js::jit;
 
@@ -65,26 +67,26 @@ MacroAssembler::clampDoubleToUint8(FloatRegister input, Register output)
 void
 MacroAssemblerX86Shared::buildFakeExitFrame(Register scratch, uint32_t* offset)
 {
-    mozilla::DebugOnly<uint32_t> initialDepth = framePushed();
+    mozilla::DebugOnly<uint32_t> initialDepth = asMasm().framePushed();
 
     CodeLabel cl;
     mov(cl.dest(), scratch);
 
-    uint32_t descriptor = MakeFrameDescriptor(framePushed(), JitFrame_IonJS);
+    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS);
     asMasm().Push(Imm32(descriptor));
     asMasm().Push(scratch);
 
     bind(cl.src());
     *offset = currentOffset();
 
-    MOZ_ASSERT(framePushed() == initialDepth + ExitFrameLayout::Size());
+    MOZ_ASSERT(asMasm().framePushed() == initialDepth + ExitFrameLayout::Size());
     addCodeLabel(cl);
 }
 
 void
 MacroAssemblerX86Shared::callWithExitFrame(Label* target)
 {
-    uint32_t descriptor = MakeFrameDescriptor(framePushed(), JitFrame_IonJS);
+    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS);
     asMasm().Push(Imm32(descriptor));
     call(target);
 }
@@ -92,7 +94,7 @@ MacroAssemblerX86Shared::callWithExitFrame(Label* target)
 void
 MacroAssemblerX86Shared::callWithExitFrame(JitCode* target)
 {
-    uint32_t descriptor = MakeFrameDescriptor(framePushed(), JitFrame_IonJS);
+    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS);
     asMasm().Push(Imm32(descriptor));
     call(target);
 }
@@ -112,7 +114,7 @@ MacroAssembler::restoreFrameAlignmentForICArguments(AfterICSaveLive& aic)
 bool
 MacroAssemblerX86Shared::buildOOLFakeExitFrame(void* fakeReturnAddr)
 {
-    uint32_t descriptor = MakeFrameDescriptor(framePushed(), JitFrame_IonJS);
+    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS);
     asMasm().Push(Imm32(descriptor));
     asMasm().Push(ImmPtr(fakeReturnAddr));
     return true;
@@ -161,6 +163,24 @@ MacroAssemblerX86Shared::branchNegativeZeroFloat32(FloatRegister reg,
     vmovd(reg, scratch);
     cmp32(scratch, Imm32(1));
     j(Overflow, label);
+}
+
+void
+MacroAssemblerX86Shared::callJit(Register callee)
+{
+    call(callee);
+}
+
+void
+MacroAssemblerX86Shared::callJitFromAsmJS(Register callee)
+{
+    call(callee);
+}
+
+void
+MacroAssemblerX86Shared::callAndPushReturnAddress(Label* label)
+{
+    call(label);
 }
 
 MacroAssembler&
@@ -347,4 +367,51 @@ MacroAssembler::Pop(const ValueOperand& val)
 {
     popValue(val);
     framePushed_ -= sizeof(Value);
+}
+
+// ===============================================================
+// Simple call functions.
+
+void
+MacroAssembler::call(Register reg)
+{
+    Assembler::call(reg);
+}
+
+void
+MacroAssembler::call(Label* label)
+{
+    Assembler::call(label);
+}
+
+void
+MacroAssembler::call(const Address& addr)
+{
+    Assembler::call(Operand(addr.base, addr.offset));
+}
+
+void
+MacroAssembler::call(AsmJSImmPtr target)
+{
+    mov(target, eax);
+    Assembler::call(eax);
+}
+
+void
+MacroAssembler::call(ImmWord target)
+{
+    mov(target, eax);
+    Assembler::call(eax);
+}
+
+void
+MacroAssembler::call(ImmPtr target)
+{
+    call(ImmWord(uintptr_t(target.value)));
+}
+
+void
+MacroAssembler::call(JitCode* target)
+{
+    Assembler::call(target);
 }

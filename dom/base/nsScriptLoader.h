@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -64,6 +65,7 @@ public:
       mIsAsync(false),
       mIsNonAsyncScriptInserted(false),
       mIsXSLT(false),
+      mIsCanceled(false),
       mScriptTextBuf(nullptr),
       mScriptTextLength(0),
       mJSVersion(aVersion),
@@ -89,6 +91,16 @@ public:
     return mElement == nullptr;
   }
 
+  void Cancel()
+  {
+    mIsCanceled = true;
+  }
+
+  bool IsCanceled() const
+  {
+    return mIsCanceled;
+  }
+
   using super::getNext;
   using super::isInList;
 
@@ -100,6 +112,7 @@ public:
   bool mIsAsync;          // True if we live in mLoadingAsyncRequests or mLoadedAsyncRequests.
   bool mIsNonAsyncScriptInserted; // True if we live in mNonAsyncExternalScriptInsertedRequests
   bool mIsXSLT;           // True if we live in mXSLTRequests.
+  bool mIsCanceled;       // True if we have been explicitly canceled.
   nsString mSourceMapURL; // Holds source map url for loaded scripts
   char16_t* mScriptTextBuf; // Holds script text for non-inline scripts. Don't
   size_t mScriptTextLength; // use nsString so we can give ownership to jsapi.

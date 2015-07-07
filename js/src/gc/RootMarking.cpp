@@ -151,13 +151,13 @@ AutoGCRooter::trace(JSTracer* trc)
 
       case VALVECTOR: {
         AutoValueVector::VectorImpl& vector = static_cast<AutoValueVector*>(this)->vector;
-        TraceRootRange(trc, vector.length(), vector.begin(), "js::AutoValueVector.vector");
+        TraceRootRange(trc, vector.length(), vector.begin(), "JS::AutoValueVector.vector");
         return;
       }
 
       case IDVECTOR: {
         AutoIdVector::VectorImpl& vector = static_cast<AutoIdVector*>(this)->vector;
-        TraceRootRange(trc, vector.length(), vector.begin(), "js::AutoIdVector.vector");
+        TraceRootRange(trc, vector.length(), vector.begin(), "JS::AutoIdVector.vector");
         return;
       }
 
@@ -179,13 +179,7 @@ AutoGCRooter::trace(JSTracer* trc)
 
       case OBJVECTOR: {
         AutoObjectVector::VectorImpl& vector = static_cast<AutoObjectVector*>(this)->vector;
-        TraceRootRange(trc, vector.length(), vector.begin(), "js::AutoObjectVector.vector");
-        return;
-      }
-
-      case FUNVECTOR: {
-        AutoFunctionVector::VectorImpl& vector = static_cast<AutoFunctionVector*>(this)->vector;
-        TraceRootRange(trc, vector.length(), vector.begin(), "js::AutoFunctionVector.vector");
+        TraceRootRange(trc, vector.length(), vector.begin(), "JS::AutoObjectVector.vector");
         return;
       }
 
@@ -217,19 +211,6 @@ AutoGCRooter::trace(JSTracer* trc)
         return;
       }
 
-      case OBJOBJHASHMAP: {
-        AutoObjectObjectHashMap::HashMapImpl& map = static_cast<AutoObjectObjectHashMap*>(this)->map;
-        for (AutoObjectObjectHashMap::Enum e(map); !e.empty(); e.popFront()) {
-            TraceRoot(trc, &e.front().value(), "AutoObjectObjectHashMap value");
-            trc->setTracingLocation((void*)&e.front().key());
-            JSObject* key = e.front().key();
-            TraceRoot(trc, &key, "AutoObjectObjectHashMap key");
-            if (key != e.front().key())
-                e.rekeyFront(key);
-        }
-        return;
-      }
-
       case OBJU32HASHMAP: {
         AutoObjectUnsigned32HashMap* self = static_cast<AutoObjectUnsigned32HashMap*>(this);
         AutoObjectUnsigned32HashMap::HashMapImpl& map = self->map;
@@ -238,18 +219,6 @@ AutoGCRooter::trace(JSTracer* trc)
             TraceRoot(trc, &key, "AutoObjectUnsignedHashMap key");
             if (key != e.front().key())
                 e.rekeyFront(key);
-        }
-        return;
-      }
-
-      case OBJHASHSET: {
-        AutoObjectHashSet* self = static_cast<AutoObjectHashSet*>(this);
-        AutoObjectHashSet::HashSetImpl& set = self->set;
-        for (AutoObjectHashSet::Enum e(set); !e.empty(); e.popFront()) {
-            JSObject* obj = e.front();
-            TraceRoot(trc, &obj, "AutoObjectHashSet value");
-            if (obj != e.front())
-                e.rekeyFront(obj);
         }
         return;
       }
@@ -462,7 +431,7 @@ js::gc::GCRuntime::markRuntime(JSTracer* trc,
             TraceRoot(trc, &vec[i].script, "scriptAndCountsVector");
     }
 
-    if (!rt->isBeingDestroyed() && !trc->runtime()->isHeapMinorCollecting()) {
+    if (!rt->isBeingDestroyed() && !rt->isHeapMinorCollecting()) {
         gcstats::AutoPhase ap(stats, gcstats::PHASE_MARK_RUNTIME_DATA);
 
         if (traceOrMark == TraceRuntime || rt->atomsCompartment()->zone()->isCollecting()) {
@@ -481,7 +450,7 @@ js::gc::GCRuntime::markRuntime(JSTracer* trc,
             continue;
 
         /* Do not discard scripts with counts while profiling. */
-        if (rt->profilingScripts && !isHeapMinorCollecting()) {
+        if (rt->profilingScripts && !rt->isHeapMinorCollecting()) {
             for (ZoneCellIterUnderGC i(zone, AllocKind::SCRIPT); !i.done(); i.next()) {
                 JSScript* script = i.get<JSScript>();
                 if (script->hasScriptCounts()) {
@@ -494,7 +463,7 @@ js::gc::GCRuntime::markRuntime(JSTracer* trc,
 
     /* We can't use GCCompartmentsIter if we're called from TraceRuntime. */
     for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next()) {
-        if (trc->runtime()->isHeapMinorCollecting())
+        if (rt->isHeapMinorCollecting())
             c->globalWriteBarriered = false;
 
         if (traceOrMark == MarkRuntime && !c->zone()->isCollecting())
@@ -521,7 +490,7 @@ js::gc::GCRuntime::markRuntime(JSTracer* trc,
 
     jit::MarkJitActivations(rt, trc);
 
-    if (!isHeapMinorCollecting()) {
+    if (!rt->isHeapMinorCollecting()) {
         gcstats::AutoPhase ap(stats, gcstats::PHASE_MARK_EMBEDDING);
 
         /*
@@ -552,6 +521,38 @@ js::gc::GCRuntime::markRuntime(JSTracer* trc,
     }
 }
 
+// Append traced things to a buffer on the zone for use later in the GC.
+// See the comment in GCRuntime.h above grayBufferState for details.
+class BufferGrayRootsTracer : public JS::CallbackTracer
+{
+    // Set to false if we OOM while buffering gray roots.
+    bool bufferingGrayRootsFailed;
+
+    void onChild(const JS::GCCellPtr& thing) override;
+
+  public:
+    explicit BufferGrayRootsTracer(JSRuntime* rt)
+      : JS::CallbackTracer(rt), bufferingGrayRootsFailed(false)
+    {}
+
+    bool failed() const { return bufferingGrayRootsFailed; }
+
+#ifdef DEBUG
+    TracerKind getTracerKind() const override { return TracerKind::GrayBuffering; }
+#endif
+};
+
+#ifdef DEBUG
+// Return true if this trace is happening on behalf of gray buffering during
+// the marking phase of incremental GC.
+bool
+js::IsBufferGrayRootsTracer(JSTracer* trc)
+{
+    return trc->isCallbackTracer() &&
+           trc->asCallbackTracer()->getTracerKind() == JS::CallbackTracer::TracerKind::GrayBuffering;
+}
+#endif
+
 void
 js::gc::GCRuntime::bufferGrayRoots()
 {
@@ -576,36 +577,28 @@ js::gc::GCRuntime::bufferGrayRoots()
 }
 
 struct SetMaybeAliveFunctor {
-    template <typename T>
-    void operator()(Cell* cell) {
-        SetMaybeAliveFlag<T>(static_cast<T*>(cell));
-    }
+    template <typename T> void operator()(T* t) { SetMaybeAliveFlag(t); }
 };
 
 void
-BufferGrayRootsTracer::appendGrayRoot(Cell* thing, JSGCTraceKind kind)
+BufferGrayRootsTracer::onChild(const JS::GCCellPtr& thing)
 {
     MOZ_ASSERT(runtime()->isHeapBusy());
 
     if (bufferingGrayRootsFailed)
         return;
 
-    GrayRoot root(thing, kind);
-#ifdef DEBUG
-    root.debugPrinter = debugPrinter();
-    root.debugPrintArg = debugPrintArg();
-    root.debugPrintIndex = debugPrintIndex();
-#endif
+    gc::TenuredCell* tenured = gc::TenuredCell::fromPointer(thing.asCell());
 
-    Zone* zone = TenuredCell::fromPointer(thing)->zone();
+    Zone* zone = tenured->zone();
     if (zone->isCollecting()) {
         // See the comment on SetMaybeAliveFlag to see why we only do this for
         // objects and scripts. We rely on gray root buffering for this to work,
         // but we only need to worry about uncollected dead compartments during
         // incremental GCs (when we do gray root buffering).
-        CallTyped(SetMaybeAliveFunctor(), kind, thing);
+        CallTyped(SetMaybeAliveFunctor(), tenured, thing.kind());
 
-        if (!zone->gcGrayRoots.append(root))
+        if (!zone->gcGrayRoots.append(tenured))
             bufferingGrayRootsFailed = true;
     }
 }
@@ -616,13 +609,8 @@ GCRuntime::markBufferedGrayRoots(JS::Zone* zone)
     MOZ_ASSERT(grayBufferState == GrayBufferState::Okay);
     MOZ_ASSERT(zone->isGCMarkingGray() || zone->isGCCompacting());
 
-    for (GrayRoot* elem = zone->gcGrayRoots.begin(); elem != zone->gcGrayRoots.end(); elem++) {
-#ifdef DEBUG
-        marker.setTracingDetails(elem->debugPrinter, elem->debugPrintArg, elem->debugPrintIndex);
-#endif
-        TraceManuallyBarrieredGenericPointerEdge(&marker, reinterpret_cast<Cell**>(&elem->thing),
-                                                 "buffered gray root");
-    }
+    for (auto cell : zone->gcGrayRoots)
+        TraceManuallyBarrieredGenericPointerEdge(&marker, &cell, "buffered gray root");
 }
 
 void
@@ -633,3 +621,4 @@ GCRuntime::resetBufferedGrayRoots() const
     for (GCZonesIter zone(rt); !zone.done(); zone.next())
         zone->gcGrayRoots.clearAndFree();
 }
+

@@ -58,25 +58,18 @@ nsBaseChannel::nsBaseChannel()
   , mQueriedProgressSink(true)
   , mSynthProgressEvents(false)
   , mAllowThreadRetargeting(true)
-  , mWasOpened(false)
   , mWaitingOnAsyncRedirect(false)
   , mStatus(NS_OK)
   , mContentDispositionHint(UINT32_MAX)
   , mContentLength(-1)
+  , mWasOpened(false)
 {
   mContentType.AssignLiteral(UNKNOWN_CONTENT_TYPE);
 }
 
 nsBaseChannel::~nsBaseChannel()
 {
-  if (mLoadInfo) {
-    nsCOMPtr<nsIThread> mainThread;
-    NS_GetMainThread(getter_AddRefs(mainThread));
-    
-    nsILoadInfo *forgetableLoadInfo;
-    mLoadInfo.forget(&forgetableLoadInfo);
-    NS_ProxyRelease(mainThread, forgetableLoadInfo, false);
-  }
+  NS_ReleaseOnMainThread(mLoadInfo);
 }
 
 nsresult
@@ -286,14 +279,14 @@ nsBaseChannel::ClassifyURI()
 {
   // For channels created in the child process, delegate to the parent to
   // classify URIs.
-  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+  if (!XRE_IsParentProcess()) {
     return;
   }
 
   if (mLoadFlags & LOAD_CLASSIFY_URI) {
     nsRefPtr<nsChannelClassifier> classifier = new nsChannelClassifier();
     if (classifier) {
-      classifier->Start(this, false);
+      classifier->Start(this);
     } else {
       Cancel(NS_ERROR_OUT_OF_MEMORY);
     }

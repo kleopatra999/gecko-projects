@@ -81,7 +81,7 @@ static bool TestClientPool(const char* what,
 }
 #endif
 
-TemporaryRef<TextureClient>
+already_AddRefed<TextureClient>
 TextureClientPool::GetTextureClient()
 {
   // Try to fetch a client from the pool
@@ -96,7 +96,7 @@ TextureClientPool::GetTextureClient()
 #endif
     TCP_LOG("TexturePool %p giving %p from pool; size %u outstanding %u\n",
         this, textureClient.get(), mTextureClients.size(), mOutstandingClients);
-    return textureClient;
+    return textureClient.forget();
   }
 
   // We're increasing the number of outstanding TextureClients without reusing a
@@ -122,7 +122,7 @@ TextureClientPool::GetTextureClient()
 #endif
   TCP_LOG("TexturePool %p giving new %p; size %u outstanding %u\n",
       this, textureClient.get(), mTextureClients.size(), mOutstandingClients);
-  return textureClient;
+  return textureClient.forget();
 }
 
 void

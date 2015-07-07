@@ -20,8 +20,6 @@
 #include "ThreadSafeRefcountingWithMainThreadDestruction.h"
 #include "nsWeakReference.h"
 
-class nsIObserver;
-
 namespace mozilla {
 
 namespace dom {
@@ -73,6 +71,9 @@ public:
   void AddOverfillObserver(ClientLayerManager* aLayerManager);
 
   virtual bool
+  RecvClearCachedResources(const uint64_t& id) override;
+
+  virtual bool
   RecvDidComposite(const uint64_t& aId, const uint64_t& aTransactionId) override;
 
   virtual bool
@@ -87,7 +88,8 @@ public:
                                  nsTArray<PluginWindowData>&& aPlugins) override;
 
   virtual bool
-  RecvUpdatePluginVisibility(nsTArray<uintptr_t>&& aWindowList) override;
+  RecvUpdatePluginVisibility(const uintptr_t& aOwnerWidget,
+                             nsTArray<uintptr_t>&& aWindowList) override;
 
   /**
    * Request that the parent tell us when graphics are ready on GPU.
@@ -108,9 +110,11 @@ public:
   bool SendWillStop();
   bool SendPause();
   bool SendResume();
+  bool SendNotifyHidden(const uint64_t& id);
+  bool SendNotifyVisible(const uint64_t& id);
   bool SendNotifyChildCreated(const uint64_t& id);
   bool SendAdoptChild(const uint64_t& id);
-  bool SendMakeSnapshot(const SurfaceDescriptor& inSnapshot, const nsIntRect& dirtyRect);
+  bool SendMakeSnapshot(const SurfaceDescriptor& inSnapshot, const gfx::IntRect& dirtyRect);
   bool SendFlushRendering();
   bool SendGetTileSize(int32_t* tileWidth, int32_t* tileHeight);
   bool SendStartFrameTimeRecording(const int32_t& bufferSize, uint32_t* startIndex);

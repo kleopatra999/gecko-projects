@@ -55,7 +55,7 @@ let shutdown = Task.async(function*() {
   yield AnimationsController.destroy();
   // Don't assume that AnimationsPanel is defined here, it's in another file.
   if (typeof AnimationsPanel !== "undefined") {
-    yield AnimationsPanel.destroy()
+    yield AnimationsPanel.destroy();
   }
   gToolbox = gInspector = null;
 });
@@ -97,6 +97,10 @@ let AnimationsController = {
     }
     this.initialized = promise.defer();
 
+    this.onPanelVisibilityChange = this.onPanelVisibilityChange.bind(this);
+    this.onNewNodeFront = this.onNewNodeFront.bind(this);
+    this.onAnimationMutations = this.onAnimationMutations.bind(this);
+
     let target = gToolbox.target;
     this.animationsFront = new AnimationsFront(target.client, target.form);
 
@@ -108,13 +112,16 @@ let AnimationsController = {
                                                          "stopAnimationPlayerUpdates");
     this.hasSetPlaybackRate = yield target.actorHasMethod("animationplayer",
                                                           "setPlaybackRate");
+    this.hasTargetNode = yield target.actorHasMethod("domwalker",
+                                                     "getNodeFromActor");
+    this.isNewUI = Services.prefs.getBoolPref("devtools.inspector.animationInspectorV3");
 
-    this.onPanelVisibilityChange = this.onPanelVisibilityChange.bind(this);
-    this.onNewNodeFront = this.onNewNodeFront.bind(this);
-    this.onAnimationMutations = this.onAnimationMutations.bind(this);
+    if (this.destroyed) {
+      console.warn("Could not fully initialize the AnimationsController");
+      return;
+    }
 
     this.startListeners();
-
     yield this.onNewNodeFront();
 
     this.initialized.resolve();
@@ -234,11 +241,15 @@ let AnimationsController = {
     for (let {type, player} of changes) {
       if (type === "added") {
         this.animationPlayers.push(player);
-        player.startAutoRefresh();
+        if (!this.isNewUI) {
+          player.startAutoRefresh();
+        }
       }
 
       if (type === "removed") {
-        player.stopAutoRefresh();
+        if (!this.isNewUI) {
+          player.stopAutoRefresh();
+        }
         yield player.release();
         let index = this.animationPlayers.indexOf(player);
         this.animationPlayers.splice(index, 1);
@@ -250,12 +261,20 @@ let AnimationsController = {
   }),
 
   startAllAutoRefresh: function() {
+    if (this.isNewUI) {
+      return;
+    }
+
     for (let front of this.animationPlayers) {
       front.startAutoRefresh();
     }
   },
 
   stopAllAutoRefresh: function() {
+    if (this.isNewUI) {
+      return;
+    }
+
     for (let front of this.animationPlayers) {
       front.stopAutoRefresh();
     }

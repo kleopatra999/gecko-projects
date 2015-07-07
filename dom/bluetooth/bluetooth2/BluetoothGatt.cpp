@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,8 +11,8 @@
 #include "mozilla/dom/bluetooth/BluetoothGatt.h"
 #include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "mozilla/dom/BluetoothGattBinding.h"
+#include "mozilla/dom/BluetoothGattCharacteristicEvent.h"
 #include "mozilla/dom/Promise.h"
-#include "nsIUUIDGenerator.h"
 #include "nsServiceManagerUtils.h"
 
 using namespace mozilla;
@@ -20,9 +20,26 @@ using namespace mozilla::dom;
 
 USING_BLUETOOTH_NAMESPACE
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED(BluetoothGatt,
-                                   DOMEventTargetHelper,
-                                   mServices)
+NS_IMPL_CYCLE_COLLECTION_CLASS(BluetoothGatt)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(BluetoothGatt,
+                                                DOMEventTargetHelper)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mServices)
+
+  /**
+   * Unregister the bluetooth signal handler after unlinked.
+   *
+   * This is needed to avoid ending up with exposing a deleted object to JS or
+   * accessing deleted objects while receiving signals from parent process
+   * after unlinked. Please see Bug 1138267 for detail informations.
+   */
+  UnregisterBluetoothSignalHandler(tmp->mAppUuid, tmp);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(BluetoothGatt,
+                                                  DOMEventTargetHelper)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mServices)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(BluetoothGatt)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
@@ -55,28 +72,7 @@ BluetoothGatt::~BluetoothGatt()
     bs->UnregisterGattClientInternal(mClientIf, result);
   }
 
-  bs->UnregisterBluetoothSignalHandler(mAppUuid, this);
-}
-
-void
-BluetoothGatt::GenerateUuid(nsAString &aUuidString)
-{
-  nsresult rv;
-  nsCOMPtr<nsIUUIDGenerator> uuidGenerator =
-    do_GetService("@mozilla.org/uuid-generator;1", &rv);
-  NS_ENSURE_SUCCESS_VOID(rv);
-
-  nsID uuid;
-  rv = uuidGenerator->GenerateUUIDInPlace(&uuid);
-  NS_ENSURE_SUCCESS_VOID(rv);
-
-  // Build a string in {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx} format
-  char uuidBuffer[NSID_LENGTH];
-  uuid.ToProvidedString(uuidBuffer);
-  NS_ConvertASCIItoUTF16 uuidString(uuidBuffer);
-
-  // Remove {} and the null terminator
-  aUuidString.Assign(Substring(uuidString, 1, NSID_LENGTH - 3));
+  UnregisterBluetoothSignalHandler(mAppUuid, this);
 }
 
 void
@@ -93,7 +89,7 @@ BluetoothGatt::DisconnectFromOwner()
     bs->UnregisterGattClientInternal(mClientIf, result);
   }
 
-  bs->UnregisterBluetoothSignalHandler(mAppUuid, this);
+  UnregisterBluetoothSignalHandler(mAppUuid, this);
 }
 
 already_AddRefed<Promise>
@@ -110,26 +106,23 @@ BluetoothGatt::Connect(ErrorResult& aRv)
 
   BT_ENSURE_TRUE_REJECT(
     mConnectionState == BluetoothConnectionState::Disconnected,
+    promise,
     NS_ERROR_DOM_INVALID_STATE_ERR);
 
   BluetoothService* bs = BluetoothService::Get();
-  BT_ENSURE_TRUE_REJECT(bs, NS_ERROR_NOT_AVAILABLE);
+  BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
   if (mAppUuid.IsEmpty()) {
     GenerateUuid(mAppUuid);
     BT_ENSURE_TRUE_REJECT(!mAppUuid.IsEmpty(),
+                          promise,
                           NS_ERROR_DOM_OPERATION_ERR);
-    bs->RegisterBluetoothSignalHandler(mAppUuid, this);
+    RegisterBluetoothSignalHandler(mAppUuid, this);
   }
 
   UpdateConnectionState(BluetoothConnectionState::Connecting);
-  nsRefPtr<BluetoothReplyRunnable> result =
-    new BluetoothVoidReplyRunnable(nullptr /* DOMRequest */,
-                                   promise,
-                                   NS_LITERAL_STRING("ConnectGattClient"));
-  bs->ConnectGattClientInternal(mAppUuid,
-                                mDeviceAddr,
-                                result);
+  bs->ConnectGattClientInternal(
+    mAppUuid, mDeviceAddr, new BluetoothVoidReplyRunnable(nullptr, promise));
 
   return promise.forget();
 }
@@ -148,17 +141,15 @@ BluetoothGatt::Disconnect(ErrorResult& aRv)
 
   BT_ENSURE_TRUE_REJECT(
     mConnectionState == BluetoothConnectionState::Connected,
+    promise,
     NS_ERROR_DOM_INVALID_STATE_ERR);
 
   BluetoothService* bs = BluetoothService::Get();
-  BT_ENSURE_TRUE_REJECT(bs, NS_ERROR_NOT_AVAILABLE);
+  BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
   UpdateConnectionState(BluetoothConnectionState::Disconnecting);
-  nsRefPtr<BluetoothReplyRunnable> result =
-    new BluetoothVoidReplyRunnable(nullptr /* DOMRequest */,
-                                   promise,
-                                   NS_LITERAL_STRING("DisconnectGattClient"));
-  bs->DisconnectGattClientInternal(mAppUuid, mDeviceAddr, result);
+  bs->DisconnectGattClientInternal(
+    mAppUuid, mDeviceAddr, new BluetoothVoidReplyRunnable(nullptr, promise));
 
   return promise.forget();
 }
@@ -167,8 +158,7 @@ class ReadRemoteRssiTask final : public BluetoothReplyRunnable
 {
 public:
   ReadRemoteRssiTask(Promise* aPromise)
-    : BluetoothReplyRunnable(nullptr, aPromise,
-                             NS_LITERAL_STRING("GattClientReadRemoteRssi"))
+    : BluetoothReplyRunnable(nullptr, aPromise)
   {
     MOZ_ASSERT(aPromise);
   }
@@ -179,9 +169,9 @@ public:
     aValue.setUndefined();
 
     const BluetoothValue& v = mReply->get_BluetoothReplySuccess().value();
-    NS_ENSURE_TRUE(v.type() == BluetoothValue::Tuint32_t, false);
+    NS_ENSURE_TRUE(v.type() == BluetoothValue::Tint32_t, false);
 
-    aValue.setInt32(static_cast<int32_t>(v.get_uint32_t()));
+    aValue.setInt32(static_cast<int32_t>(v.get_int32_t()));
     return true;
   }
 };
@@ -200,14 +190,14 @@ BluetoothGatt::ReadRemoteRssi(ErrorResult& aRv)
 
   BT_ENSURE_TRUE_REJECT(
     mConnectionState == BluetoothConnectionState::Connected,
+    promise,
     NS_ERROR_DOM_INVALID_STATE_ERR);
 
   BluetoothService* bs = BluetoothService::Get();
-  BT_ENSURE_TRUE_REJECT(bs, NS_ERROR_NOT_AVAILABLE);
+  BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
-  nsRefPtr<BluetoothReplyRunnable> result =
-    new ReadRemoteRssiTask(promise);
-  bs->GattClientReadRemoteRssiInternal(mClientIf, mDeviceAddr, result);
+  bs->GattClientReadRemoteRssiInternal(
+    mClientIf, mDeviceAddr, new ReadRemoteRssiTask(promise));
 
   return promise.forget();
 }
@@ -227,17 +217,18 @@ BluetoothGatt::DiscoverServices(ErrorResult& aRv)
   BT_ENSURE_TRUE_REJECT(
     mConnectionState == BluetoothConnectionState::Connected &&
     !mDiscoveringServices,
+    promise,
     NS_ERROR_DOM_INVALID_STATE_ERR);
 
   BluetoothService* bs = BluetoothService::Get();
-  BT_ENSURE_TRUE_REJECT(bs, NS_ERROR_NOT_AVAILABLE);
+  BT_ENSURE_TRUE_REJECT(bs, promise, NS_ERROR_NOT_AVAILABLE);
 
   mDiscoveringServices = true;
-  nsRefPtr<BluetoothReplyRunnable> result =
-    new BluetoothVoidReplyRunnable(nullptr /* DOMRequest */,
-                                   promise,
-                                   NS_LITERAL_STRING("DiscoverGattServices"));
-  bs->DiscoverGattServicesInternal(mAppUuid, result);
+  mServices.Clear();
+  BluetoothGattBinding::ClearCachedServicesValue(this);
+
+  bs->DiscoverGattServicesInternal(
+    mAppUuid, new BluetoothVoidReplyRunnable(nullptr, promise));
 
   return promise.forget();
 }
@@ -245,7 +236,7 @@ BluetoothGatt::DiscoverServices(ErrorResult& aRv)
 void
 BluetoothGatt::UpdateConnectionState(BluetoothConnectionState aState)
 {
-  BT_API2_LOGR("GATT connection state changes to: %d", int(aState));
+  BT_LOGR("GATT connection state changes to: %d", int(aState));
   mConnectionState = aState;
 
   // Dispatch connectionstatechanged event to application
@@ -269,6 +260,7 @@ BluetoothGatt::HandleServicesDiscovered(const BluetoothValue& aValue)
   const InfallibleTArray<BluetoothGattServiceId>& serviceIds =
     aValue.get_ArrayOfBluetoothGattServiceId();
 
+  mServices.Clear();
   for (uint32_t i = 0; i < serviceIds.Length(); i++) {
     mServices.AppendElement(new BluetoothGattService(
       GetParentObject(), mAppUuid, serviceIds[i]));
@@ -278,9 +270,117 @@ BluetoothGatt::HandleServicesDiscovered(const BluetoothValue& aValue)
 }
 
 void
+BluetoothGatt::HandleIncludedServicesDiscovered(const BluetoothValue& aValue)
+{
+  MOZ_ASSERT(aValue.type() == BluetoothValue::TArrayOfBluetoothNamedValue);
+
+  const InfallibleTArray<BluetoothNamedValue>& values =
+    aValue.get_ArrayOfBluetoothNamedValue();
+  MOZ_ASSERT(values.Length() == 2); // ServiceId, IncludedServices
+  MOZ_ASSERT(values[0].name().EqualsLiteral("serviceId"));
+  MOZ_ASSERT(values[0].value().type() ==
+             BluetoothValue::TBluetoothGattServiceId);
+  MOZ_ASSERT(values[1].name().EqualsLiteral("includedServices"));
+  MOZ_ASSERT(values[1].value().type() ==
+             BluetoothValue::TArrayOfBluetoothGattServiceId);
+
+  size_t index = mServices.IndexOf(
+    values[0].value().get_BluetoothGattServiceId());
+  NS_ENSURE_TRUE_VOID(index != mServices.NoIndex);
+
+  nsRefPtr<BluetoothGattService> service = mServices.ElementAt(index);
+  service->AssignIncludedServices(
+    values[1].value().get_ArrayOfBluetoothGattServiceId());
+}
+
+void
+BluetoothGatt::HandleCharacteristicsDiscovered(const BluetoothValue& aValue)
+{
+  MOZ_ASSERT(aValue.type() == BluetoothValue::TArrayOfBluetoothNamedValue);
+
+  const InfallibleTArray<BluetoothNamedValue>& values =
+    aValue.get_ArrayOfBluetoothNamedValue();
+  MOZ_ASSERT(values.Length() == 2); // ServiceId, Characteristics
+  MOZ_ASSERT(values[0].name().EqualsLiteral("serviceId"));
+  MOZ_ASSERT(values[0].value().type() == BluetoothValue::TBluetoothGattServiceId);
+  MOZ_ASSERT(values[1].name().EqualsLiteral("characteristics"));
+  MOZ_ASSERT(values[1].value().type() ==
+             BluetoothValue::TArrayOfBluetoothGattCharAttribute);
+
+  size_t index = mServices.IndexOf(
+    values[0].value().get_BluetoothGattServiceId());
+  NS_ENSURE_TRUE_VOID(index != mServices.NoIndex);
+
+  nsRefPtr<BluetoothGattService> service = mServices.ElementAt(index);
+  service->AssignCharacteristics(
+    values[1].value().get_ArrayOfBluetoothGattCharAttribute());
+}
+
+void
+BluetoothGatt::HandleDescriptorsDiscovered(const BluetoothValue& aValue)
+{
+  MOZ_ASSERT(aValue.type() == BluetoothValue::TArrayOfBluetoothNamedValue);
+
+  const InfallibleTArray<BluetoothNamedValue>& values =
+    aValue.get_ArrayOfBluetoothNamedValue();
+  MOZ_ASSERT(values.Length() == 3); // ServiceId, CharacteristicId, Descriptors
+  MOZ_ASSERT(values[0].name().EqualsLiteral("serviceId"));
+  MOZ_ASSERT(values[0].value().type() == BluetoothValue::TBluetoothGattServiceId);
+  MOZ_ASSERT(values[1].name().EqualsLiteral("characteristicId"));
+  MOZ_ASSERT(values[1].value().type() == BluetoothValue::TBluetoothGattId);
+  MOZ_ASSERT(values[2].name().EqualsLiteral("descriptors"));
+  MOZ_ASSERT(values[2].value().type() == BluetoothValue::TArrayOfBluetoothGattId);
+
+  size_t index = mServices.IndexOf(
+    values[0].value().get_BluetoothGattServiceId());
+  NS_ENSURE_TRUE_VOID(index != mServices.NoIndex);
+
+  nsRefPtr<BluetoothGattService> service = mServices.ElementAt(index);
+  service->AssignDescriptors(values[1].value().get_BluetoothGattId(),
+                             values[2].value().get_ArrayOfBluetoothGattId());
+}
+
+void
+BluetoothGatt::HandleCharacteristicChanged(const BluetoothValue& aValue)
+{
+  MOZ_ASSERT(aValue.type() == BluetoothValue::TArrayOfBluetoothNamedValue);
+
+  const InfallibleTArray<BluetoothNamedValue>& ids =
+    aValue.get_ArrayOfBluetoothNamedValue();
+  MOZ_ASSERT(ids.Length() == 2); // ServiceId, CharId
+  MOZ_ASSERT(ids[0].name().EqualsLiteral("serviceId"));
+  MOZ_ASSERT(ids[0].value().type() == BluetoothValue::TBluetoothGattServiceId);
+  MOZ_ASSERT(ids[1].name().EqualsLiteral("charId"));
+  MOZ_ASSERT(ids[1].value().type() == BluetoothValue::TBluetoothGattId);
+
+  size_t index = mServices.IndexOf(ids[0].value().get_BluetoothGattServiceId());
+  NS_ENSURE_TRUE_VOID(index != mServices.NoIndex);
+
+  nsRefPtr<BluetoothGattService> service = mServices.ElementAt(index);
+  nsTArray<nsRefPtr<BluetoothGattCharacteristic>> chars;
+  service->GetCharacteristics(chars);
+
+  index = chars.IndexOf(ids[1].value().get_BluetoothGattId());
+  NS_ENSURE_TRUE_VOID(index != chars.NoIndex);
+  nsRefPtr<BluetoothGattCharacteristic> characteristic = chars.ElementAt(index);
+
+  // Dispatch characteristicchanged event to application
+  BluetoothGattCharacteristicEventInit init;
+  init.mCharacteristic = characteristic;
+  nsRefPtr<BluetoothGattCharacteristicEvent> event =
+    BluetoothGattCharacteristicEvent::Constructor(
+      this,
+      NS_LITERAL_STRING(GATT_CHARACTERISTIC_CHANGED_ID),
+      init);
+
+  DispatchTrustedEvent(event);
+}
+
+void
 BluetoothGatt::Notify(const BluetoothSignal& aData)
 {
   BT_LOGD("[D] %s", NS_ConvertUTF16toUTF8(aData.name()).get());
+  NS_ENSURE_TRUE_VOID(mSignalRegistered);
 
   BluetoothValue v = aData.value();
   if (aData.name().EqualsLiteral("ClientRegistered")) {
@@ -307,6 +407,14 @@ BluetoothGatt::Notify(const BluetoothSignal& aData)
     }
 
     mDiscoveringServices = false;
+  } else if (aData.name().EqualsLiteral("IncludedServicesDiscovered")) {
+    HandleIncludedServicesDiscovered(v);
+  } else if (aData.name().EqualsLiteral("CharacteristicsDiscovered")) {
+    HandleCharacteristicsDiscovered(v);
+  } else if (aData.name().EqualsLiteral("DescriptorsDiscovered")) {
+    HandleDescriptorsDiscovered(v);
+  } else if (aData.name().EqualsLiteral(GATT_CHARACTERISTIC_CHANGED_ID)) {
+    HandleCharacteristicChanged(v);
   } else {
     BT_WARNING("Not handling GATT signal: %s",
                NS_ConvertUTF16toUTF8(aData.name()).get());

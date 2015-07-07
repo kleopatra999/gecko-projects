@@ -1,15 +1,16 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "base/basictypes.h"
-#include "BluetoothManager.h"
-#include "BluetoothAdapter.h"
-#include "BluetoothService.h"
 #include "BluetoothReplyRunnable.h"
+#include "BluetoothService.h"
+#include "BluetoothUtils.h"
 
+#include "mozilla/dom/bluetooth/BluetoothAdapter.h"
+#include "mozilla/dom/bluetooth/BluetoothManager.h"
 #include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "mozilla/dom/BluetoothManager2Binding.h"
 #include "mozilla/Services.h"
@@ -22,7 +23,27 @@ using namespace mozilla;
 
 USING_BLUETOOTH_NAMESPACE
 
-// QueryInterface implementation for BluetoothManager
+NS_IMPL_CYCLE_COLLECTION_CLASS(BluetoothManager)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(BluetoothManager,
+                                                DOMEventTargetHelper)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAdapters)
+
+  /**
+   * Unregister the bluetooth signal handler after unlinked.
+   *
+   * This is needed to avoid ending up with exposing a deleted object to JS or
+   * accessing deleted objects while receiving signals from parent process
+   * after unlinked. Please see Bug 1138267 for detail informations.
+   */
+  UnregisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_MANAGER), tmp);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(BluetoothManager,
+                                                  DOMEventTargetHelper)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAdapters)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(BluetoothManager)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
@@ -60,7 +81,6 @@ class GetAdaptersTask : public BluetoothReplyRunnable
 
     const InfallibleTArray<BluetoothNamedValue>& adaptersPropertiesArray =
       adaptersProperties.get_ArrayOfBluetoothNamedValue();
-    BT_API2_LOGR("GetAdaptersTask: len[%d]", adaptersPropertiesArray.Length());
 
     // Append a BluetoothAdapter into adapters array for each properties array
     uint32_t numAdapters = adaptersPropertiesArray.Length();
@@ -92,8 +112,7 @@ BluetoothManager::BluetoothManager(nsPIDOMWindow *aWindow)
 {
   MOZ_ASSERT(aWindow);
 
-  ListenToBluetoothSignal(true);
-  BT_API2_LOGR("aWindow %p", aWindow);
+  RegisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_MANAGER), this);
 
   // Query adapters list from bluetooth backend
   BluetoothService* bs = BluetoothService::Get();
@@ -105,34 +124,19 @@ BluetoothManager::BluetoothManager(nsPIDOMWindow *aWindow)
 
 BluetoothManager::~BluetoothManager()
 {
-  ListenToBluetoothSignal(false);
+  UnregisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_MANAGER), this);
 }
 
 void
 BluetoothManager::DisconnectFromOwner()
 {
   DOMEventTargetHelper::DisconnectFromOwner();
-  ListenToBluetoothSignal(false);
-}
-
-void
-BluetoothManager::ListenToBluetoothSignal(bool aStart)
-{
-  BluetoothService* bs = BluetoothService::Get();
-  NS_ENSURE_TRUE_VOID(bs);
-
-  if (aStart) {
-    bs->RegisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_MANAGER), this);
-  } else {
-    bs->UnregisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_MANAGER), this);
-  }
+  UnregisterBluetoothSignalHandler(NS_LITERAL_STRING(KEY_MANAGER), this);
 }
 
 BluetoothAdapter*
 BluetoothManager::GetDefaultAdapter()
 {
-  BT_API2_LOGR("mDefaultAdapterIndex: %d", mDefaultAdapterIndex);
-
   return DefaultAdapterExists() ? mAdapters[mDefaultAdapterIndex] : nullptr;
 }
 
@@ -177,7 +181,6 @@ void
 BluetoothManager::HandleAdapterAdded(const BluetoothValue& aValue)
 {
   MOZ_ASSERT(aValue.type() == BluetoothValue::TArrayOfBluetoothNamedValue);
-  BT_API2_LOGR();
 
   AppendAdapter(aValue);
 
@@ -222,8 +225,6 @@ BluetoothManager::ReselectDefaultAdapter()
 {
   // Select the first of existing/remaining adapters as default adapter
   mDefaultAdapterIndex = mAdapters.IsEmpty() ? -1 : 0;
-  BT_API2_LOGR("mAdapters length: %d => NEW mDefaultAdapterIndex: %d",
-               mAdapters.Length(), mDefaultAdapterIndex);
 
   // Notify application of default adapter change
   DispatchAttributeEvent();
@@ -233,8 +234,6 @@ void
 BluetoothManager::DispatchAdapterEvent(const nsAString& aType,
                                        const BluetoothAdapterEventInit& aInit)
 {
-  BT_API2_LOGR("aType (%s)", NS_ConvertUTF16toUTF8(aType).get());
-
   nsRefPtr<BluetoothAdapterEvent> event =
     BluetoothAdapterEvent::Constructor(this, aType, aInit);
   DispatchTrustedEvent(event);
@@ -244,30 +243,19 @@ void
 BluetoothManager::DispatchAttributeEvent()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  BT_API2_LOGR();
 
-  AutoJSAPI jsapi;
-  NS_ENSURE_TRUE_VOID(jsapi.Init(GetOwner()));
-  JSContext* cx = jsapi.cx();
-  JS::Rooted<JS::Value> value(cx);
-
-  nsTArray<nsString> types;
-  BT_APPEND_ENUM_STRING(types,
-                        BluetoothManagerAttribute,
-                        BluetoothManagerAttribute::DefaultAdapter);
-
-  if (!ToJSValue(cx, types, &value)) {
-    JS_ClearPendingException(cx);
-    return;
-  }
+  Sequence<nsString> types;
+  BT_APPEND_ENUM_STRING_FALLIBLE(types,
+                                 BluetoothManagerAttribute,
+                                 BluetoothManagerAttribute::DefaultAdapter);
 
   // Notify application of default adapter change
-  RootedDictionary<BluetoothAttributeEventInit> init(cx);
-  init.mAttrs = value;
+  BluetoothAttributeEventInit init;
+  init.mAttrs = types;
   nsRefPtr<BluetoothAttributeEvent> event =
-    BluetoothAttributeEvent::Constructor(this,
-                                         NS_LITERAL_STRING("attributechanged"),
-                                         init);
+    BluetoothAttributeEvent::Constructor(
+      this, NS_LITERAL_STRING(ATTRIBUTE_CHANGED_ID), init);
+
   DispatchTrustedEvent(event);
 }
 
@@ -275,6 +263,7 @@ void
 BluetoothManager::Notify(const BluetoothSignal& aData)
 {
   BT_LOGD("[M] %s", NS_ConvertUTF16toUTF8(aData.name()).get());
+  NS_ENSURE_TRUE_VOID(mSignalRegistered);
 
   if (aData.name().EqualsLiteral("AdapterAdded")) {
     HandleAdapterAdded(aData.value());

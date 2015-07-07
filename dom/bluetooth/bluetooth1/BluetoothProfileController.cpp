@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -116,8 +116,7 @@ BluetoothProfileController::AddProfileWithServiceClass(
       profile = BluetoothHidManager::Get();
       break;
     default:
-      DispatchBluetoothReply(mRunnable, BluetoothValue(),
-                             NS_LITERAL_STRING(ERR_UNKNOWN_PROFILE));
+      DispatchReplyError(mRunnable, NS_LITERAL_STRING(ERR_UNKNOWN_PROFILE));
       mCallback();
       return;
   }
@@ -130,8 +129,8 @@ BluetoothProfileController::AddProfile(BluetoothProfileManagerBase* aProfile,
                                        bool aCheckConnected)
 {
   if (!aProfile) {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(),
-                           NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
+    DispatchReplyError(mRunnable,
+                       NS_LITERAL_STRING(ERR_NO_AVAILABLE_RESOURCE));
     mCallback();
     return;
   }
@@ -266,13 +265,11 @@ BluetoothProfileController::EndSession()
   // The action has completed, so the DOM request should be replied then invoke
   // the callback.
   if (mSuccess) {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(true), EmptyString());
+    DispatchReplySuccess(mRunnable);
   } else if (mConnect) {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(true),
-                           NS_LITERAL_STRING(ERR_CONNECTION_FAILED));
+    DispatchReplyError(mRunnable, NS_LITERAL_STRING(ERR_CONNECTION_FAILED));
   } else {
-    DispatchBluetoothReply(mRunnable, BluetoothValue(true),
-                           NS_LITERAL_STRING(ERR_DISCONNECTION_FAILED));
+    DispatchReplyError(mRunnable, NS_LITERAL_STRING(ERR_DISCONNECTION_FAILED));
   }
 
   mCallback();

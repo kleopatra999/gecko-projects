@@ -167,8 +167,6 @@ bool
 Telephony::IsActiveState(uint16_t aCallState) {
   return aCallState == nsITelephonyService::CALL_STATE_DIALING ||
       aCallState == nsITelephonyService::CALL_STATE_ALERTING ||
-      aCallState == nsITelephonyService::CALL_STATE_HOLDING ||
-      aCallState == nsITelephonyService::CALL_STATE_DISCONNECTING ||
       aCallState == nsITelephonyService::CALL_STATE_CONNECTED;
 }
 
@@ -195,20 +193,6 @@ Telephony::GetServiceId(const Optional<uint32_t>& aServiceId,
   return serviceId;
 }
 
-bool
-Telephony::HasDialingCall()
-{
-  for (uint32_t i = 0; i < mCalls.Length(); i++) {
-    const nsRefPtr<TelephonyCall>& call = mCalls[i];
-    if (call->CallState() > nsITelephonyService::CALL_STATE_UNKNOWN &&
-        call->CallState() < nsITelephonyService::CALL_STATE_CONNECTED) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 already_AddRefed<Promise>
 Telephony::DialInternal(uint32_t aServiceId, const nsAString& aNumber,
                         bool aEmergency, ErrorResult& aRv)
@@ -225,12 +209,6 @@ Telephony::DialInternal(uint32_t aServiceId, const nsAString& aNumber,
 
   if (!IsValidNumber(aNumber) || !IsValidServiceId(aServiceId)) {
     promise->MaybeReject(NS_ERROR_DOM_INVALID_ACCESS_ERR);
-    return promise.forget();
-  }
-
-  // We only support one outgoing call at a time.
-  if (HasDialingCall()) {
-    promise->MaybeReject(NS_ERROR_DOM_INVALID_STATE_ERR);
     return promise.forget();
   }
 
@@ -377,10 +355,14 @@ Telephony::HandleCallInfo(nsITelephonyCallInfo* aInfo)
     nsRefPtr<TelephonyCallId> id = call->Id();
     id->UpdateNumber(number);
 
+    nsAutoString disconnectedReason;
+    aInfo->GetDisconnectedReason(disconnectedReason);
+
     // State changed.
     if (call->CallState() != callState) {
       if (callState == nsITelephonyService::CALL_STATE_DISCONNECTED) {
-        call->ChangeStateInternal(callState, true);
+        call->UpdateDisconnectedReason(disconnectedReason);
+        call->ChangeState(nsITelephonyService::CALL_STATE_DISCONNECTED);
         return NS_OK;
       }
 
@@ -613,9 +595,12 @@ Telephony::GetReady(ErrorResult& aRv) const
 // nsITelephonyListener
 
 NS_IMETHODIMP
-Telephony::CallStateChanged(nsITelephonyCallInfo* aInfo)
+Telephony::CallStateChanged(uint32_t aLength, nsITelephonyCallInfo** aAllInfo)
 {
-  return HandleCallInfo(aInfo);
+  for (uint32_t i = 0; i < aLength; ++i) {
+    HandleCallInfo(aAllInfo[i]);
+  }
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -687,26 +672,6 @@ Telephony::SupplementaryServiceNotification(uint32_t aServiceId,
 }
 
 NS_IMETHODIMP
-Telephony::NotifyError(uint32_t aServiceId,
-                       int32_t aCallIndex,
-                       const nsAString& aError)
-{
-  nsRefPtr<TelephonyCall> callToNotify =
-    GetCallFromEverywhere(aServiceId, aCallIndex);
-  if (!callToNotify) {
-    NS_ERROR("Don't call me with a bad call index!");
-    return NS_ERROR_UNEXPECTED;
-  }
-
-  // Set the call state to 'disconnected' and remove it from the calls list.
-  callToNotify->UpdateDisconnectedReason(aError);
-  callToNotify->NotifyError(aError);
-  callToNotify->ChangeState(nsITelephonyService::CALL_STATE_DISCONNECTED);
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 Telephony::NotifyCdmaCallWaiting(uint32_t aServiceId, const nsAString& aNumber,
                                  uint16_t aNumberPresentation,
                                  const nsAString& aName,
@@ -755,7 +720,7 @@ NS_CreateTelephonyService()
 {
   nsCOMPtr<nsITelephonyService> service;
 
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     service = new mozilla::dom::telephony::TelephonyIPCService();
   } else {
 #if defined(MOZ_WIDGET_GONK) && defined(MOZ_B2G_RIL)

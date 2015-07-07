@@ -345,7 +345,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   nsFrameLoader* frameLoader = FrameLoader();
   RenderFrameParent* rfp = nullptr;
   if (frameLoader) {
-    rfp = frameLoader->GetCurrentRemoteFrame();
+    rfp = frameLoader->GetCurrentRenderFrame();
   }
 
   // If we are pointer-events:none then we don't need to HitTest background
@@ -463,6 +463,11 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       haveDisplayPort ||
       presContext->IsRootContentDocument() ||
       (sf && sf->IsScrollingActive(aBuilder)))
+  {
+    needsOwnLayer = true;
+  }
+  if (!needsOwnLayer && aBuilder->IsBuildingLayerEventRegions() &&
+      nsLayoutUtils::HasDocumentLevelListenersForApzAwareEvents(presShell))
   {
     needsOwnLayer = true;
   }
@@ -937,7 +942,7 @@ public:
     if (!mPresShell->IsDestroying()) {
       mPresShell->FlushPendingNotifications(Flush_Frames);
     }
-    nsIFrame* frame = mFrameElement->GetPrimaryFrame();
+    nsSubDocumentFrame* frame = do_QueryFrame(mFrameElement->GetPrimaryFrame());
     if ((!frame && mHideViewerIfFrameless) ||
         mPresShell->IsDestroying()) {
       // Either the frame element has no nsIFrame or the presshell is being

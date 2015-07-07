@@ -1,4 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,6 +9,7 @@
 
 #include "Workers.h"
 
+#include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsILoadGroup.h"
 #include "nsIWorkerDebugger.h"
@@ -37,6 +39,7 @@ class nsIDocument;
 class nsIEventTarget;
 class nsIPrincipal;
 class nsIScriptContext;
+class nsISerializable;
 class nsIThread;
 class nsIThreadInternal;
 class nsITimer;
@@ -71,6 +74,7 @@ class WorkerDebuggerGlobalScope;
 class WorkerGlobalScope;
 class WorkerPrivate;
 class WorkerRunnable;
+class WorkerStructuredCloneClosure;
 class WorkerThread;
 
 // SharedMutex is a small wrapper around an (internal) reference-counted Mutex
@@ -170,9 +174,6 @@ private:
   // Only used for top level workers.
   nsTArray<nsCOMPtr<nsIRunnable>> mQueuedRunnables;
 
-  // Only for ChromeWorkers without window and only touched on the main thread.
-  nsTArray<nsCString> mHostObjectURIs;
-
   // Protected by mMutex.
   JSSettings mJSSettings;
 
@@ -188,7 +189,9 @@ private:
   bool mMainThreadObjectsForgotten;
   WorkerType mWorkerType;
   TimeStamp mCreationTimeStamp;
+  DOMHighResTimeStamp mCreationTimeHighRes;
   TimeStamp mNowBaseTimeStamp;
+  DOMHighResTimeStamp mNowBaseTimeHighRes;
 
 protected:
   // The worker is owned by its thread, which is represented here.  This is set
@@ -311,7 +314,7 @@ public:
   }
 
   bool
-  Close(JSContext* aCx);
+  Close();
 
   bool
   ModifyBusyCount(JSContext* aCx, bool aIncrease);
@@ -348,7 +351,7 @@ public:
                                JSContext* aCx,
                                uint64_t aMessagePortSerial,
                                JSAutoStructuredCloneBuffer&& aBuffer,
-                               nsTArray<nsCOMPtr<nsISupports>>& aClonedObjects);
+                               WorkerStructuredCloneClosure& aClosure);
 
   void
   UpdateRuntimeOptions(JSContext* aCx,
@@ -466,6 +469,12 @@ public:
     return mLoadInfo.mWindowID;
   }
 
+  uint64_t
+  ServiceWorkerID() const
+  {
+    return mLoadInfo.mServiceWorkerID;
+  }
+
   nsIURI*
   GetBaseURI() const
   {
@@ -489,6 +498,35 @@ public:
     MOZ_ASSERT(IsServiceWorker());
     AssertIsOnMainThread();
     return mLoadInfo.mServiceWorkerCacheName;
+  }
+
+  const ChannelInfo&
+  GetChannelInfo() const
+  {
+    MOZ_ASSERT(IsServiceWorker());
+    return mLoadInfo.mChannelInfo;
+  }
+
+  void
+  SetChannelInfo(const ChannelInfo& aChannelInfo)
+  {
+    MOZ_ASSERT(IsServiceWorker());
+    AssertIsOnMainThread();
+    MOZ_ASSERT(!mLoadInfo.mChannelInfo.IsInitialized());
+    MOZ_ASSERT(aChannelInfo.IsInitialized());
+    mLoadInfo.mChannelInfo = aChannelInfo;
+  }
+
+  void
+  InitChannelInfo(nsIChannel* aChannel)
+  {
+    mLoadInfo.mChannelInfo.InitFromChannel(aChannel);
+  }
+
+  void
+  InitChannelInfo(const ChannelInfo& aChannelInfo)
+  {
+    mLoadInfo.mChannelInfo = aChannelInfo;
   }
 
   // This is used to handle importScripts(). When the worker is first loaded
@@ -519,9 +557,19 @@ public:
     return mCreationTimeStamp;
   }
 
+  DOMHighResTimeStamp CreationTimeHighRes() const
+  {
+    return mCreationTimeHighRes;
+  }
+
   TimeStamp NowBaseTimeStamp() const
   {
     return mNowBaseTimeStamp;
+  }
+
+  DOMHighResTimeStamp NowBaseTimeHighRes() const
+  {
+    return mNowBaseTimeHighRes;
   }
 
   nsIPrincipal*
@@ -687,6 +735,28 @@ public:
     return mWorkerType == WorkerTypeService;
   }
 
+  nsContentPolicyType
+  ContentPolicyType() const
+  {
+    return ContentPolicyType(mWorkerType);
+  }
+
+  static nsContentPolicyType
+  ContentPolicyType(WorkerType aWorkerType)
+  {
+    switch (aWorkerType) {
+    case WorkerTypeDedicated:
+      return nsIContentPolicy::TYPE_INTERNAL_WORKER;
+    case WorkerTypeShared:
+      return nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER;
+    case WorkerTypeService:
+      return nsIContentPolicy::TYPE_SCRIPT;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Invalid worker type");
+      return nsIContentPolicy::TYPE_INVALID;
+    }
+  }
+
   const nsCString&
   SharedWorkerName() const
   {
@@ -706,20 +776,24 @@ public:
     return mLoadInfo.mIndexedDBAllowed;
   }
 
+  bool
+  IsInPrivateBrowsing() const
+  {
+    return mLoadInfo.mPrivateBrowsing;
+  }
+
+  // Determine if the SW testing per-window flag is set by devtools
+  bool
+  ServiceWorkersTestingInWindow() const
+  {
+    return mLoadInfo.mServiceWorkersTestingInWindow;
+  }
+
   void
   GetAllSharedWorkers(nsTArray<nsRefPtr<SharedWorker>>& aSharedWorkers);
 
   void
   CloseSharedWorkersForWindow(nsPIDOMWindow* aWindow);
-
-  void
-  RegisterHostObjectURI(const nsACString& aURI);
-
-  void
-  UnregisterHostObjectURI(const nsACString& aURI);
-
-  void
-  StealHostObjectURIs(nsTArray<nsCString>& aArray);
 
   void
   UpdateOverridenLoadGroup(nsILoadGroup* aBaseLoadGroup);
@@ -931,7 +1005,8 @@ public:
   static nsresult
   GetLoadInfo(JSContext* aCx, nsPIDOMWindow* aWindow, WorkerPrivate* aParent,
               const nsAString& aScriptURL, bool aIsChromeWorker,
-              LoadGroupBehavior aLoadGroupBehavior, WorkerLoadInfo* aLoadInfo);
+              LoadGroupBehavior aLoadGroupBehavior, WorkerType aWorkerType,
+              WorkerLoadInfo* aLoadInfo);
 
   static void
   OverrideLoadInfoLoadGroup(WorkerLoadInfo& aLoadInfo);
@@ -1192,6 +1267,49 @@ public:
   {
     AssertIsOnWorkerThread();
     return mPreferences[WORKERPREF_DOM_CACHES];
+  }
+
+  bool
+  ServiceWorkersEnabled() const
+  {
+    AssertIsOnWorkerThread();
+    return mPreferences[WORKERPREF_SERVICEWORKERS];
+  }
+
+  // Determine if the SW testing browser-wide pref is set
+  bool
+  ServiceWorkersTestingEnabled() const
+  {
+    AssertIsOnWorkerThread();
+    return mPreferences[WORKERPREF_SERVICEWORKERS_TESTING];
+  }
+
+  bool
+  InterceptionEnabled() const
+  {
+    AssertIsOnWorkerThread();
+    return mPreferences[WORKERPREF_INTERCEPTION_ENABLED];
+  }
+
+  bool
+  OpaqueInterceptionEnabled() const
+  {
+    AssertIsOnWorkerThread();
+    return mPreferences[WORKERPREF_INTERCEPTION_OPAQUE_ENABLED];
+  }
+
+  bool
+  DOMWorkerNotificationEnabled() const
+  {
+    AssertIsOnWorkerThread();
+    return mPreferences[WORKERPREF_DOM_WORKERNOTIFICATION];
+  }
+
+  bool
+  DOMCachesTestingEnabled() const
+  {
+    AssertIsOnWorkerThread();
+    return mPreferences[WORKERPREF_DOM_CACHES_TESTING];
   }
 
   bool

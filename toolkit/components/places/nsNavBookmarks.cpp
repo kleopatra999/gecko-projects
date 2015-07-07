@@ -56,6 +56,7 @@ public:
     nsRefPtr<Database> DB = Database::GetDatabase();
     if (DB) {
       nsCOMPtr<mozIStorageAsyncStatement> stmt = DB->GetAsyncStatement(
+        "/* do not warn (bug 1175249) */ "
         "SELECT b.id, b.guid, b.parent, b.lastModified, t.guid, t.parent "
         "FROM moz_bookmarks b "
         "JOIN moz_bookmarks t on t.id = b.parent "
@@ -2444,6 +2445,8 @@ nsNavBookmarks::GetURIForKeyword(const nsAString& aUserCasedKeyword,
   NS_ENSURE_ARG_POINTER(aURI);
   NS_ENSURE_TRUE(!aUserCasedKeyword.IsEmpty(), NS_ERROR_INVALID_ARG);
   *aURI = nullptr;
+
+  PLACES_WARN_DEPRECATED();
 
   // Shortcuts are always lowercased internally.
   nsAutoString keyword(aUserCasedKeyword);

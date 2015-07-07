@@ -32,12 +32,16 @@ class JSFunction : public js::NativeObject
         NormalFunction = 0,
         Arrow,                      /* ES6 '(args) => body' syntax */
         Method,                     /* ES6 MethodDefinition */
-        AsmJS                       /* function is an asm.js module or exported function */
+        ClassConstructor,
+        Getter,
+        Setter,
+        AsmJS,                      /* function is an asm.js module or exported function */
+        FunctionKindLimit
     };
 
     enum Flags {
         INTERPRETED      = 0x0001,  /* function has a JSScript and environment. */
-        NATIVE_CTOR      = 0x0002,  /* native that can be called as a constructor */
+        CONSTRUCTOR      = 0x0002,  /* function that can be called as a constructor */
         EXTENDED         = 0x0004,  /* structure is FunctionExtended */
         IS_FUN_PROTO     = 0x0008,  /* function is Function.prototype for some global object */
         EXPR_BODY        = 0x0010,  /* arrow function with expression body or
@@ -49,33 +53,44 @@ class JSFunction : public js::NativeObject
                                        function-statement) */
         SELF_HOSTED      = 0x0080,  /* function is self-hosted builtin and must not be
                                        decompilable nor constructible. */
-        SELF_HOSTED_CTOR = 0x0100,  /* function is self-hosted builtin constructor and
-                                       must be constructible but not decompilable. */
-        HAS_REST         = 0x0200,  /* function has a rest (...) parameter */
-        INTERPRETED_LAZY = 0x0400,  /* function is interpreted but doesn't have a script yet */
-        RESOLVED_LENGTH  = 0x0800,  /* f.length has been resolved (see js::fun_resolve). */
-        RESOLVED_NAME    = 0x1000,  /* f.name has been resolved (see js::fun_resolve). */
+        HAS_REST         = 0x0100,  /* function has a rest (...) parameter */
+        INTERPRETED_LAZY = 0x0200,  /* function is interpreted but doesn't have a script yet */
+        RESOLVED_LENGTH  = 0x0400,  /* f.length has been resolved (see fun_resolve). */
+        RESOLVED_NAME    = 0x0800,  /* f.name has been resolved (see fun_resolve). */
 
-        FUNCTION_KIND_SHIFT = 13,
-        FUNCTION_KIND_MASK  = 0x3 << FUNCTION_KIND_SHIFT,
+        FUNCTION_KIND_SHIFT = 12,
+        FUNCTION_KIND_MASK  = 0xf << FUNCTION_KIND_SHIFT,
 
         ASMJS_KIND = AsmJS << FUNCTION_KIND_SHIFT,
         ARROW_KIND = Arrow << FUNCTION_KIND_SHIFT,
+        METHOD_KIND = Method << FUNCTION_KIND_SHIFT,
+        CLASSCONSTRUCTOR_KIND = ClassConstructor << FUNCTION_KIND_SHIFT,
+        GETTER_KIND = Getter << FUNCTION_KIND_SHIFT,
+        SETTER_KIND = Setter << FUNCTION_KIND_SHIFT,
 
         /* Derived Flags values for convenience: */
         NATIVE_FUN = 0,
+        NATIVE_CTOR = NATIVE_FUN | CONSTRUCTOR,
         ASMJS_CTOR = ASMJS_KIND | NATIVE_CTOR,
         ASMJS_LAMBDA_CTOR = ASMJS_KIND | NATIVE_CTOR | LAMBDA,
-        INTERPRETED_METHOD = INTERPRETED | (Method << FUNCTION_KIND_SHIFT),
-        INTERPRETED_LAMBDA = INTERPRETED | LAMBDA,
+        INTERPRETED_METHOD = INTERPRETED | METHOD_KIND,
+        INTERPRETED_METHOD_GENERATOR = INTERPRETED | METHOD_KIND | CONSTRUCTOR,
+        INTERPRETED_CLASS_CONSTRUCTOR = INTERPRETED | CLASSCONSTRUCTOR_KIND | CONSTRUCTOR,
+        INTERPRETED_GETTER = INTERPRETED | GETTER_KIND,
+        INTERPRETED_SETTER = INTERPRETED | SETTER_KIND,
+        INTERPRETED_LAMBDA = INTERPRETED | LAMBDA | CONSTRUCTOR,
         INTERPRETED_LAMBDA_ARROW = INTERPRETED | LAMBDA | ARROW_KIND,
-        STABLE_ACROSS_CLONES = NATIVE_CTOR | IS_FUN_PROTO | EXPR_BODY | HAS_GUESSED_ATOM |
-                               LAMBDA | SELF_HOSTED | SELF_HOSTED_CTOR | HAS_REST |
-                               FUNCTION_KIND_MASK
+        INTERPRETED_NORMAL = INTERPRETED | CONSTRUCTOR,
+        NO_XDR_FLAGS = RESOLVED_LENGTH | RESOLVED_NAME,
+
+        STABLE_ACROSS_CLONES = IS_FUN_PROTO | CONSTRUCTOR | EXPR_BODY | HAS_GUESSED_ATOM |
+                               LAMBDA | SELF_HOSTED |  HAS_REST | FUNCTION_KIND_MASK
     };
 
     static_assert((INTERPRETED | INTERPRETED_LAZY) == js::JS_FUNCTION_INTERPRETED_BITS,
                   "jsfriendapi.h's JSFunction::INTERPRETED-alike is wrong");
+    static_assert(((FunctionKindLimit - 1) << FUNCTION_KIND_SHIFT) <= FUNCTION_KIND_MASK,
+                  "FunctionKind doesn't fit into flags_");
 
   private:
     uint16_t        nargs_;       /* number of formal arguments
@@ -135,8 +150,9 @@ class JSFunction : public js::NativeObject
     bool isInterpreted()            const { return flags() & (INTERPRETED | INTERPRETED_LAZY); }
     bool isNative()                 const { return !isInterpreted(); }
 
+    bool isConstructor()            const { return flags() & CONSTRUCTOR; }
+
     /* Possible attributes of a native function: */
-    bool isNativeConstructor()      const { return flags() & NATIVE_CTOR; }
     bool isAsmJSNative()            const { return kind() == AsmJS; }
 
     /* Possible attributes of an interpreted function: */
@@ -145,14 +161,22 @@ class JSFunction : public js::NativeObject
     bool hasGuessedAtom()           const { return flags() & HAS_GUESSED_ATOM; }
     bool isLambda()                 const { return flags() & LAMBDA; }
     bool isSelfHostedBuiltin()      const { return flags() & SELF_HOSTED; }
-    bool isSelfHostedConstructor()  const { return flags() & SELF_HOSTED_CTOR; }
     bool hasRest()                  const { return flags() & HAS_REST; }
     bool isInterpretedLazy()        const { return flags() & INTERPRETED_LAZY; }
     bool hasScript()                const { return flags() & INTERPRETED; }
 
     // Arrow functions store their lexical |this| in the first extended slot.
     bool isArrow()                  const { return kind() == Arrow; }
-    bool isMethod()                 const { return kind() == Method; }
+    // Every class-constructor is also a method.
+    bool isMethod()                 const { return kind() == Method || kind() == ClassConstructor; }
+    bool isClassConstructor()       const { return kind() == ClassConstructor; }
+
+    bool isGetter()                 const { return kind() == Getter; }
+    bool isSetter()                 const { return kind() == Setter; }
+
+    bool allowSuperProperty() const {
+        return isMethod() || isGetter() || isSetter();
+    }
 
     bool hasResolvedLength()        const { return flags() & RESOLVED_LENGTH; }
     bool hasResolvedName()          const { return flags() & RESOLVED_NAME; }
@@ -168,12 +192,7 @@ class JSFunction : public js::NativeObject
     bool isBuiltin() const {
         return (isNative() && !isAsmJSNative()) || isSelfHostedBuiltin();
     }
-    bool isInterpretedConstructor() const {
-        // Note: the JITs inline this check, so be careful when making changes
-        // here. See MacroAssembler::branchIfNotInterpretedConstructor.
-        return isInterpreted() && !isFunctionPrototype() && !isArrow() &&
-               (!isSelfHostedBuiltin() || isSelfHostedConstructor());
-    }
+
     bool isNamedLambda() const {
         return isLambda() && displayAtom() && !hasGuessedAtom();
     }
@@ -194,6 +213,13 @@ class JSFunction : public js::NativeObject
         this->flags_ |= static_cast<uint16_t>(kind) << FUNCTION_KIND_SHIFT;
     }
 
+    // Make the function constructible.
+    void setIsConstructor() {
+        MOZ_ASSERT(!isConstructor());
+        MOZ_ASSERT(isSelfHostedBuiltin());
+        flags_ |= CONSTRUCTOR;
+    }
+
     // Can be called multiple times by the parser.
     void setArgCount(uint16_t nargs) {
         this->nargs_ = nargs;
@@ -207,11 +233,8 @@ class JSFunction : public js::NativeObject
     void setIsSelfHostedBuiltin() {
         MOZ_ASSERT(!isSelfHostedBuiltin());
         flags_ |= SELF_HOSTED;
-    }
-
-    void setIsSelfHostedConstructor() {
-        MOZ_ASSERT(!isSelfHostedConstructor());
-        flags_ |= SELF_HOSTED_CTOR;
+        // Self-hosted functions should not be constructable.
+        flags_ &= ~CONSTRUCTOR;
     }
 
     void setIsFunctionPrototype() {
@@ -284,7 +307,7 @@ class JSFunction : public js::NativeObject
     static inline size_t offsetOfAtom() { return offsetof(JSFunction, atom_); }
 
     static bool createScriptForLazilyInterpretedFunction(JSContext* cx, js::HandleFunction fun);
-    void relazify(JSTracer* trc);
+    void maybeRelazify(JSRuntime* rt);
 
     // Function Scripts
     //
@@ -342,9 +365,16 @@ class JSFunction : public js::NativeObject
         return nonLazyScript();
     }
 
-    JSScript* nonLazyScript() const {
+    // The state of a JSFunction whose script errored out during bytecode
+    // compilation. Such JSFunctions are only reachable via GC iteration and
+    // not from script.
+    bool hasUncompiledScript() const {
         MOZ_ASSERT(hasScript());
-        MOZ_ASSERT(u.i.s.script_);
+        return !u.i.s.script_;
+    }
+
+    JSScript* nonLazyScript() const {
+        MOZ_ASSERT(!hasUncompiledScript());
         return u.i.s.script_;
     }
 
@@ -447,14 +477,6 @@ class JSFunction : public js::NativeObject
         return offsetof(JSFunction, u.nativeOrScript);
     }
 
-#if JS_BITS_PER_WORD == 32
-    static const js::gc::AllocKind FinalizeKind = js::gc::AllocKind::OBJECT2_BACKGROUND;
-    static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::AllocKind::OBJECT4_BACKGROUND;
-#else
-    static const js::gc::AllocKind FinalizeKind = js::gc::AllocKind::OBJECT4_BACKGROUND;
-    static const js::gc::AllocKind ExtendedFinalizeKind = js::gc::AllocKind::OBJECT8_BACKGROUND;
-#endif
-
     inline void trace(JSTracer* trc);
 
     /* Bound function accessors. */
@@ -478,8 +500,10 @@ class JSFunction : public js::NativeObject
 
   public:
     inline bool isExtended() const {
-        MOZ_ASSERT_IF(isTenured(), !!(flags() & EXTENDED) == (asTenured().getAllocKind() == ExtendedFinalizeKind));
-        return !!(flags() & EXTENDED);
+        bool extended = !!(flags() & EXTENDED);
+        MOZ_ASSERT_IF(isTenured(),
+                      extended == (asTenured().getAllocKind() == js::gc::AllocKind::FUNCTION_EXTENDED));
+        return extended;
     }
 
     /*
@@ -498,13 +522,13 @@ class JSFunction : public js::NativeObject
 
     /* GC support. */
     js::gc::AllocKind getAllocKind() const {
-        static_assert(FinalizeKind != ExtendedFinalizeKind,
+        static_assert(js::gc::AllocKind::FUNCTION != js::gc::AllocKind::FUNCTION_EXTENDED,
                       "extended/non-extended AllocKinds have to be different "
                       "for getAllocKind() to have a reason to exist");
 
-        js::gc::AllocKind kind = FinalizeKind;
+        js::gc::AllocKind kind = js::gc::AllocKind::FUNCTION;
         if (isExtended())
-            kind = ExtendedFinalizeKind;
+            kind = js::gc::AllocKind::FUNCTION_EXTENDED;
         MOZ_ASSERT_IF(isTenured(), kind == asTenured().getAllocKind());
         return kind;
     }
@@ -527,13 +551,13 @@ Generator(JSContext* cx, unsigned argc, Value* vp);
 // Allocate a new function backed by a JSNative.
 extern JSFunction*
 NewNativeFunction(ExclusiveContext* cx, JSNative native, unsigned nargs, HandleAtom atom,
-                  gc::AllocKind allocKind = JSFunction::FinalizeKind,
+                  gc::AllocKind allocKind = gc::AllocKind::FUNCTION,
                   NewObjectKind newKind = GenericObject);
 
 // Allocate a new constructor backed by a JSNative.
 extern JSFunction*
 NewNativeConstructor(ExclusiveContext* cx, JSNative native, unsigned nargs, HandleAtom atom,
-                     gc::AllocKind allocKind = JSFunction::FinalizeKind,
+                     gc::AllocKind allocKind = gc::AllocKind::FUNCTION,
                      NewObjectKind newKind = GenericObject,
                      JSFunction::Flags flags = JSFunction::NATIVE_CTOR);
 
@@ -542,9 +566,9 @@ NewNativeConstructor(ExclusiveContext* cx, JSNative native, unsigned nargs, Hand
 // the global.
 extern JSFunction*
 NewScriptedFunction(ExclusiveContext* cx, unsigned nargs, JSFunction::Flags flags,
-                    HandleAtom atom, gc::AllocKind allocKind = JSFunction::FinalizeKind,
+                    HandleAtom atom, gc::AllocKind allocKind = gc::AllocKind::FUNCTION,
                     NewObjectKind newKind = GenericObject,
-                    HandleObject enclosingDynamicScope = NullPtr());
+                    HandleObject enclosingDynamicScope = nullptr);
 
 // If proto is nullptr, Function.prototype is used instead.  If
 // enclosingDynamicScope is null, the function will have a null environment()
@@ -553,7 +577,7 @@ NewScriptedFunction(ExclusiveContext* cx, unsigned nargs, JSFunction::Flags flag
 extern JSFunction*
 NewFunctionWithProto(ExclusiveContext* cx, JSNative native, unsigned nargs,
                      JSFunction::Flags flags, HandleObject enclosingDynamicScope, HandleAtom atom,
-                     HandleObject proto, gc::AllocKind allocKind = JSFunction::FinalizeKind,
+                     HandleObject proto, gc::AllocKind allocKind = gc::AllocKind::FUNCTION,
                      NewObjectKind newKind = GenericObject);
 
 extern JSAtom*
@@ -562,14 +586,11 @@ IdToFunctionName(JSContext* cx, HandleId id);
 extern JSFunction*
 DefineFunction(JSContext* cx, HandleObject obj, HandleId id, JSNative native,
                unsigned nargs, unsigned flags,
-               gc::AllocKind allocKind = JSFunction::FinalizeKind,
+               gc::AllocKind allocKind = gc::AllocKind::FUNCTION,
                NewObjectKind newKind = GenericObject);
 
 bool
 FunctionHasResolveHook(const JSAtomState& atomState, jsid id);
-
-extern bool
-fun_resolve(JSContext* cx, HandleObject obj, HandleId id, bool* resolvedp);
 
 extern bool
 fun_toString(JSContext* cx, unsigned argc, Value* vp);
@@ -589,6 +610,7 @@ class FunctionExtended : public JSFunction
 
     /* Arrow functions store their lexical |this| in the first extended slot. */
     static const unsigned ARROW_THIS_SLOT = 0;
+    static const unsigned ARROW_NEWTARGET_SLOT = 1;
 
     static const unsigned METHOD_HOMEOBJECT_SLOT = 0;
 
@@ -599,6 +621,9 @@ class FunctionExtended : public JSFunction
     static inline size_t offsetOfArrowThisSlot() {
         return offsetOfExtendedSlot(ARROW_THIS_SLOT);
     }
+    static inline size_t offsetOfArrowNewTargetSlot() {
+        return offsetOfExtendedSlot(ARROW_NEWTARGET_SLOT);
+    }
 
   private:
     friend class JSFunction;
@@ -608,14 +633,20 @@ class FunctionExtended : public JSFunction
 };
 
 extern bool
-CloneFunctionObjectUseSameScript(JSCompartment* compartment, HandleFunction fun,
-                                 HandleObject newParent);
+CanReuseScriptForClone(JSCompartment* compartment, HandleFunction fun, HandleObject newParent);
 
 extern JSFunction*
-CloneFunctionObject(JSContext* cx, HandleFunction fun, HandleObject parent,
-                    gc::AllocKind kind = JSFunction::FinalizeKind,
-                    NewObjectKind newKindArg = GenericObject,
-                    HandleObject proto = NullPtr());
+CloneFunctionReuseScript(JSContext* cx, HandleFunction fun, HandleObject parent,
+                         gc::AllocKind kind = gc::AllocKind::FUNCTION,
+                         NewObjectKind newKindArg = GenericObject,
+                         HandleObject proto = nullptr);
+
+// Functions whose scripts are cloned are always given singleton types.
+extern JSFunction*
+CloneFunctionAndScript(JSContext* cx, HandleFunction fun, HandleObject parent,
+                       HandleObject newStaticScope,
+                       gc::AllocKind kind = gc::AllocKind::FUNCTION,
+                       HandleObject proto = nullptr);
 
 extern bool
 FindBody(JSContext* cx, HandleFunction fun, HandleLinearString src, size_t* bodyStart,
@@ -677,10 +708,6 @@ bool
 XDRInterpretedFunction(XDRState<mode>* xdr, HandleObject enclosingScope,
                        HandleScript enclosingScript, MutableHandleFunction objp);
 
-extern JSObject*
-CloneFunctionAndScript(JSContext* cx, HandleObject enclosingScope, HandleFunction fun,
-                       PollutedGlobalScopeOption polluted);
-
 /*
  * Report an error that call.thisv is not compatible with the specified class,
  * assuming that the method (clasp->name).prototype.<name of callee function>
@@ -706,10 +733,6 @@ fun_apply(JSContext* cx, unsigned argc, Value* vp);
 
 extern bool
 fun_call(JSContext* cx, unsigned argc, Value* vp);
-
-extern JSObject*
-fun_bind(JSContext* cx, HandleObject target, HandleValue thisArg,
-         Value* boundArgs, unsigned argslen);
 
 } /* namespace js */
 

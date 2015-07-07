@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -202,6 +202,10 @@ BluetoothParent::RecvPBluetoothRequestConstructor(
       return actor->DoRequest(aRequest.get_StartDiscoveryRequest());
     case Request::TStopDiscoveryRequest:
       return actor->DoRequest(aRequest.get_StopDiscoveryRequest());
+    case Request::TStartLeScanRequest:
+      return actor->DoRequest(aRequest.get_StartLeScanRequest());
+    case Request::TStopLeScanRequest:
+      return actor->DoRequest(aRequest.get_StopLeScanRequest());
     case Request::TPairRequest:
       return actor->DoRequest(aRequest.get_PairRequest());
     case Request::TUnpairRequest:
@@ -270,6 +274,18 @@ BluetoothParent::RecvPBluetoothRequestConstructor(
       return actor->DoRequest(aRequest.get_UnregisterGattClientRequest());
     case Request::TGattClientReadRemoteRssiRequest:
       return actor->DoRequest(aRequest.get_GattClientReadRemoteRssiRequest());
+    case Request::TGattClientReadCharacteristicValueRequest:
+      return actor->DoRequest(
+        aRequest.get_GattClientReadCharacteristicValueRequest());
+    case Request::TGattClientWriteCharacteristicValueRequest:
+      return actor->DoRequest(
+        aRequest.get_GattClientWriteCharacteristicValueRequest());
+    case Request::TGattClientReadDescriptorValueRequest:
+      return actor->DoRequest(
+        aRequest.get_GattClientReadDescriptorValueRequest());
+    case Request::TGattClientWriteDescriptorValueRequest:
+      return actor->DoRequest(
+        aRequest.get_GattClientWriteDescriptorValueRequest());
     default:
       MOZ_CRASH("Unknown type!");
   }
@@ -391,9 +407,7 @@ BluetoothRequestParent::DoRequest(const StartDiscoveryRequest& aRequest)
   MOZ_ASSERT(mService);
   MOZ_ASSERT(mRequestType == Request::TStartDiscoveryRequest);
 
-  nsresult rv =
-    mService->StartDiscoveryInternal(mReplyRunnable.get());
-  NS_ENSURE_SUCCESS(rv, false);
+  mService->StartDiscoveryInternal(mReplyRunnable.get());
 
   return true;
 }
@@ -404,9 +418,29 @@ BluetoothRequestParent::DoRequest(const StopDiscoveryRequest& aRequest)
   MOZ_ASSERT(mService);
   MOZ_ASSERT(mRequestType == Request::TStopDiscoveryRequest);
 
-  nsresult rv =
-    mService->StopDiscoveryInternal(mReplyRunnable.get());
-  NS_ENSURE_SUCCESS(rv, false);
+  mService->StopDiscoveryInternal(mReplyRunnable.get());
+
+  return true;
+}
+
+bool
+BluetoothRequestParent::DoRequest(const StartLeScanRequest& aRequest)
+{
+  MOZ_ASSERT(mService);
+  MOZ_ASSERT(mRequestType == Request::TStartLeScanRequest);
+
+  mService->StartLeScanInternal(aRequest.serviceUuids(), mReplyRunnable.get());
+
+  return true;
+}
+
+bool
+BluetoothRequestParent::DoRequest(const StopLeScanRequest& aRequest)
+{
+  MOZ_ASSERT(mService);
+  MOZ_ASSERT(mRequestType == Request::TStopLeScanRequest);
+
+  mService->StopLeScanInternal(aRequest.scanUuid(), mReplyRunnable.get());
 
   return true;
 }
@@ -823,6 +857,75 @@ BluetoothRequestParent::DoRequest(
   mService->GattClientReadRemoteRssiInternal(aRequest.clientIf(),
                                              aRequest.deviceAddress(),
                                              mReplyRunnable.get());
+
+  return true;
+}
+
+bool
+BluetoothRequestParent::DoRequest(
+  const GattClientReadCharacteristicValueRequest& aRequest)
+{
+  MOZ_ASSERT(mService);
+  MOZ_ASSERT(mRequestType ==
+             Request::TGattClientReadCharacteristicValueRequest);
+
+  mService->GattClientReadCharacteristicValueInternal(aRequest.appUuid(),
+                                                      aRequest.serviceId(),
+                                                      aRequest.charId(),
+                                                      mReplyRunnable.get());
+
+  return true;
+}
+
+bool
+BluetoothRequestParent::DoRequest(
+  const GattClientWriteCharacteristicValueRequest& aRequest)
+{
+  MOZ_ASSERT(mService);
+  MOZ_ASSERT(mRequestType ==
+             Request::TGattClientWriteCharacteristicValueRequest);
+
+  mService->GattClientWriteCharacteristicValueInternal(aRequest.appUuid(),
+                                                       aRequest.serviceId(),
+                                                       aRequest.charId(),
+                                                       aRequest.writeType(),
+                                                       aRequest.value(),
+                                                       mReplyRunnable.get());
+
+  return true;
+}
+
+bool
+BluetoothRequestParent::DoRequest(
+  const GattClientReadDescriptorValueRequest& aRequest)
+{
+  MOZ_ASSERT(mService);
+  MOZ_ASSERT(mRequestType ==
+             Request::TGattClientReadDescriptorValueRequest);
+
+  mService->GattClientReadDescriptorValueInternal(aRequest.appUuid(),
+                                                  aRequest.serviceId(),
+                                                  aRequest.charId(),
+                                                  aRequest.descId(),
+                                                  mReplyRunnable.get());
+
+  return true;
+}
+
+bool
+BluetoothRequestParent::DoRequest(
+  const GattClientWriteDescriptorValueRequest& aRequest)
+{
+  MOZ_ASSERT(mService);
+  MOZ_ASSERT(mRequestType ==
+             Request::TGattClientWriteDescriptorValueRequest);
+
+  mService->GattClientWriteDescriptorValueInternal(aRequest.appUuid(),
+                                                   aRequest.serviceId(),
+                                                   aRequest.charId(),
+                                                   aRequest.descId(),
+                                                   aRequest.value(),
+                                                   mReplyRunnable.get());
 
   return true;
 }

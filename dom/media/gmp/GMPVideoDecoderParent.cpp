@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GMPVideoDecoderParent.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "mozilla/unused.h"
 #include "nsAutoRef.h"
 #include "nsThreadUtils.h"
@@ -21,15 +21,10 @@ namespace mozilla {
 #undef LOG
 #endif
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetGMPLog();
 
-#define LOGD(msg) PR_LOG(GetGMPLog(), PR_LOG_DEBUG, msg)
-#define LOG(level, msg) PR_LOG(GetGMPLog(), (level), msg)
-#else
-#define LOGD(msg)
-#define LOG(level, msg)
-#endif
+#define LOGD(msg) MOZ_LOG(GetGMPLog(), mozilla::LogLevel::Debug, msg)
+#define LOG(level, msg) MOZ_LOG(GetGMPLog(), (level), msg)
 
 namespace gmp {
 
@@ -47,9 +42,11 @@ GMPVideoDecoderParent::GMPVideoDecoderParent(GMPContentParent* aPlugin)
   : GMPSharedMemManager(aPlugin)
   , mIsOpen(false)
   , mShuttingDown(false)
+  , mActorDestroyed(false)
   , mPlugin(aPlugin)
   , mCallback(nullptr)
   , mVideoHost(this)
+  , mPluginId(aPlugin->GetPluginId())
 {
   MOZ_ASSERT(mPlugin);
 }
@@ -87,6 +84,10 @@ GMPVideoDecoderParent::InitDecode(const GMPVideoCodec& aCodecSettings,
                                   GMPVideoDecoderCallbackProxy* aCallback,
                                   int32_t aCoreCount)
 {
+  if (mActorDestroyed) {
+    NS_WARNING("Trying to use a destroyed GMP video decoder!");
+    return NS_ERROR_FAILURE;
+  }
   if (mIsOpen) {
     NS_WARNING("Trying to re-init an in-use GMP video decoder!");
     return NS_ERROR_FAILURE;
@@ -109,7 +110,7 @@ GMPVideoDecoderParent::InitDecode(const GMPVideoCodec& aCodecSettings,
 }
 
 nsresult
-GMPVideoDecoderParent::Decode(GMPUnique<GMPVideoEncodedFrame>::Ptr aInputFrame,
+GMPVideoDecoderParent::Decode(GMPUniquePtr<GMPVideoEncodedFrame> aInputFrame,
                               bool aMissingFrames,
                               const nsTArray<uint8_t>& aCodecSpecificInfo,
                               int64_t aRenderTimeMs)
@@ -121,7 +122,7 @@ GMPVideoDecoderParent::Decode(GMPUnique<GMPVideoEncodedFrame>::Ptr aInputFrame,
 
   MOZ_ASSERT(mPlugin->GMPThread() == NS_GetCurrentThread());
 
-  GMPUnique<GMPVideoEncodedFrameImpl>::Ptr inputFrameImpl(
+  GMPUniquePtr<GMPVideoEncodedFrameImpl> inputFrameImpl(
     static_cast<GMPVideoEncodedFrameImpl*>(aInputFrame.release()));
 
   // Very rough kill-switch if the plugin stops processing.  If it's merely
@@ -213,7 +214,9 @@ GMPVideoDecoderParent::Shutdown()
   }
 
   mIsOpen = false;
-  unused << SendDecodingComplete();
+  if (!mActorDestroyed) {
+    unused << SendDecodingComplete();
+  }
 
   return NS_OK;
 }
@@ -223,6 +226,7 @@ void
 GMPVideoDecoderParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   mIsOpen = false;
+  mActorDestroyed = true;
   mVideoHost.DoneWithAPI();
 
   if (mCallback) {
@@ -246,7 +250,7 @@ GMPVideoDecoderParent::RecvDecoded(const GMPVideoi420FrameData& aDecodedFrame)
   }
 
   if (!GMPVideoi420FrameImpl::CheckFrameData(aDecodedFrame)) {
-    LOG(PR_LOG_ERROR, ("%s: Decoded frame corrupt, ignoring", __FUNCTION__));
+    LOG(LogLevel::Error, ("%s: Decoded frame corrupt, ignoring", __FUNCTION__));
     return false;
   }
   auto f = new GMPVideoi420FrameImpl(aDecodedFrame, &mVideoHost);
@@ -362,7 +366,7 @@ GMPVideoDecoderParent::AnswerNeedShmem(const uint32_t& aFrameBufferSize,
                                                 aFrameBufferSize,
                                                 ipc::SharedMemory::TYPE_BASIC, &mem))
   {
-    LOG(PR_LOG_ERROR, ("%s: Failed to get a shared mem buffer for Child! size %u",
+    LOG(LogLevel::Error, ("%s: Failed to get a shared mem buffer for Child! size %u",
                        __FUNCTION__, aFrameBufferSize));
     return false;
   }

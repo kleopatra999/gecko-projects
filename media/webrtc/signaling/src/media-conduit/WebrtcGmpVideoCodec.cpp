@@ -31,7 +31,6 @@ namespace mozilla {
 #undef LOG
 #endif
 
-#ifdef PR_LOGGING
 #ifdef MOZILLA_INTERNAL_API
 extern PRLogModuleInfo* GetGMPLog();
 #else
@@ -45,12 +44,8 @@ GetGMPLog()
   return sLog;
 }
 #endif
-#define LOGD(msg) PR_LOG(GetGMPLog(), PR_LOG_DEBUG, msg)
-#define LOG(level, msg) PR_LOG(GetGMPLog(), (level), msg)
-#else
-#define LOGD(msg)
-#define LOG(level, msg)
-#endif
+#define LOGD(msg) MOZ_LOG(GetGMPLog(), mozilla::LogLevel::Debug, msg)
+#define LOG(level, msg) MOZ_LOG(GetGMPLog(), (level), msg)
 
 // Encoder.
 WebrtcGmpVideoEncoder::WebrtcGmpVideoEncoder()
@@ -282,12 +277,11 @@ WebrtcGmpVideoEncoder::Encode(const webrtc::I420VideoFrame& aInputImage,
 
   int32_t ret;
   mozilla::SyncRunnable::DispatchToThread(mGMPThread,
-                WrapRunnableRet(this,
+                WrapRunnableRet(&ret, this,
                                 &WebrtcGmpVideoEncoder::Encode_g,
                                 &aInputImage,
                                 aCodecSpecificInfo,
-                                aFrameTypes,
-                                &ret));
+                                aFrameTypes));
 
   return ret;
 }
@@ -330,7 +324,7 @@ WebrtcGmpVideoEncoder::Encode_g(const webrtc::I420VideoFrame* aInputImage,
   if (err != GMPNoErr) {
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
-  GMPUnique<GMPVideoi420Frame>::Ptr frame(static_cast<GMPVideoi420Frame*>(ftmp));
+  GMPUniquePtr<GMPVideoi420Frame> frame(static_cast<GMPVideoi420Frame*>(ftmp));
 
   err = frame->CreateFrame(aInputImage->allocated_size(webrtc::kYPlane),
                            aInputImage->buffer(webrtc::kYPlane),
@@ -415,10 +409,9 @@ WebrtcGmpVideoEncoder::SetRates(uint32_t aNewBitRate, uint32_t aFrameRate)
   int32_t ret;
   MOZ_ASSERT(mGMPThread);
   mozilla::SyncRunnable::DispatchToThread(mGMPThread,
-                WrapRunnableRet(this,
+                WrapRunnableRet(&ret, this,
                                 &WebrtcGmpVideoEncoder::SetRates_g,
-                                aNewBitRate, aFrameRate,
-                                &ret));
+                                aNewBitRate, aFrameRate));
 
   return WEBRTC_VIDEO_CODEC_OK;
 }
@@ -490,7 +483,7 @@ WebrtcGmpVideoEncoder::Encoded(GMPVideoEncodedFrame* aEncodedFrame,
         break;
       default:
         // Really that it's not in the enum
-        LOG(PR_LOG_ERROR,
+        LOG(LogLevel::Error,
             ("GMP plugin returned incorrect type (%d)", aEncodedFrame->BufferType()));
         // XXX Bug 1041232 - need a better API for interfacing to the
         // plugin so we can kill it here
@@ -535,7 +528,7 @@ WebrtcGmpVideoEncoder::Encoded(GMPVideoEncodedFrame* aEncodedFrame,
       }
       if (buffer+size > end) {
         // XXX see above - should we kill the plugin for returning extra bytes?  Probably
-        LOG(PR_LOG_ERROR,
+        LOG(LogLevel::Error,
             ("GMP plugin returned badly formatted encoded data: end is %td bytes past buffer end",
              buffer+size - end));
         return;
@@ -686,14 +679,13 @@ WebrtcGmpVideoDecoder::Decode(const webrtc::EncodedImage& aInputImage,
   int32_t ret;
   MOZ_ASSERT(mGMPThread);
   mozilla::SyncRunnable::DispatchToThread(mGMPThread,
-                WrapRunnableRet(this,
+                WrapRunnableRet(&ret, this,
                                 &WebrtcGmpVideoDecoder::Decode_g,
                                 aInputImage,
                                 aMissingFrames,
                                 aFragmentation,
                                 aCodecSpecificInfo,
-                                aRenderTimeMs,
-                                &ret));
+                                aRenderTimeMs));
 
   return ret;
 }
@@ -721,7 +713,7 @@ WebrtcGmpVideoDecoder::Decode_g(const webrtc::EncodedImage& aInputImage,
     return WEBRTC_VIDEO_CODEC_ERROR;
   }
 
-  GMPUnique<GMPVideoEncodedFrame>::Ptr frame(static_cast<GMPVideoEncodedFrame*>(ftmp));
+  GMPUniquePtr<GMPVideoEncodedFrame> frame(static_cast<GMPVideoEncodedFrame*>(ftmp));
   err = frame->CreateEmptyFrame(aInputImage._length);
   if (err != GMPNoErr) {
     return WEBRTC_VIDEO_CODEC_ERROR;

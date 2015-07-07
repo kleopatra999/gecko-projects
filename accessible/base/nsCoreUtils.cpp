@@ -300,7 +300,7 @@ nsCoreUtils::ScrollFrameToPoint(nsIFrame *aScrollableFrame,
     return;
 
   nsPoint point =
-    aPoint.ToAppUnits(aFrame->PresContext()->AppUnitsPerDevPixel());
+    ToAppUnits(aPoint, aFrame->PresContext()->AppUnitsPerDevPixel());
   nsRect frameRect = aFrame->GetScreenRectInAppUnits();
   nsPoint deltaPoint(point.x - frameRect.x, point.y - frameRect.y);
 
@@ -425,7 +425,7 @@ nsCoreUtils::IsTabDocument(nsIDocument* aDocumentNode)
   treeItem->GetParent(getter_AddRefs(parentTreeItem));
 
   // Tab document running in own process doesn't have parent.
-  if (XRE_GetProcessType() == GeckoProcessType_Content)
+  if (XRE_IsContentProcess())
     return !parentTreeItem;
 
   // Parent of docshell for tab document running in chrome process is root.

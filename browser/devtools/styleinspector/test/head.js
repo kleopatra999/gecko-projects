@@ -11,6 +11,7 @@ let TargetFactory = devtools.TargetFactory;
 let {CssHtmlTree} = devtools.require("devtools/styleinspector/computed-view");
 let {CssRuleView, _ElementStyle} = devtools.require("devtools/styleinspector/rule-view");
 let {CssLogic, CssSelector} = devtools.require("devtools/styleinspector/css-logic");
+let DevToolsUtils = devtools.require("devtools/toolkit/DevToolsUtils");
 let {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 let {editableField, getInplaceEditorForSpan: inplaceEditor} = devtools.require("devtools/shared/inplace-editor");
 let {console} = Components.utils.import("resource://gre/modules/devtools/Console.jsm", {});
@@ -37,8 +38,8 @@ registerCleanupFunction(function*() {
 // Services.prefs.setBoolPref("devtools.dump.emit", true);
 
 // Set the testing flag on gDevTools and reset it when the test ends
-gDevTools.testing = true;
-registerCleanupFunction(() => gDevTools.testing = false);
+DevToolsUtils.testing = true;
+registerCleanupFunction(() => DevToolsUtils.testing = false);
 
 // Clean-up all prefs that might have been changed during a test run
 // (safer here because if the test fails, then the pref is never reverted)
@@ -492,6 +493,21 @@ function waitForWindow() {
 }
 
 /**
+ * Listen for a new tab to open and return a promise that resolves when one
+ * does and completes the load event.
+ * @return a promise that resolves to the tab object
+ */
+let waitForTab = Task.async(function*() {
+  info("Waiting for a tab to open");
+  yield once(gBrowser.tabContainer, "TabOpen");
+  let tab = gBrowser.selectedTab;
+  let browser = tab.linkedBrowser;
+  yield once(browser, "load", true);
+  info("The tab load completed");
+  return tab;
+});
+
+/**
  * @see SimpleTest.waitForClipboard
  * @param {Function} setup Function to execute before checking for the
  * clipboard content
@@ -584,6 +600,17 @@ let getFontFamilyDataURL = Task.async(function*(font, nodeFront) {
   let dataURL = yield data.string();
   return dataURL;
 });
+
+/**
+ * Simulate the key input for the given input in the window.
+ * @param {String} input The string value to input
+ * @param {Window} win The window containing the panel
+ */
+function synthesizeKeys(input, win) {
+  for (let key of input.split("")) {
+     EventUtils.synthesizeKey(key, {}, win);
+  }
+}
 
 /* *********************************************
  * RULE-VIEW

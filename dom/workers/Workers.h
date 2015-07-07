@@ -1,4 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,6 +20,7 @@
 #include "nsILoadContext.h"
 #include "nsIWeakReferenceUtils.h"
 #include "nsIInterfaceRequestor.h"
+#include "mozilla/dom/ChannelInfo.h"
 
 #define BEGIN_WORKERS_NAMESPACE \
   namespace mozilla { namespace dom { namespace workers {
@@ -195,6 +197,12 @@ enum WorkerPreference
 {
   WORKERPREF_DUMP = 0, // browser.dom.window.dump.enabled
   WORKERPREF_DOM_CACHES, // dom.caches.enabled
+  WORKERPREF_SERVICEWORKERS, // dom.serviceWorkers.enabled
+  WORKERPREF_INTERCEPTION_ENABLED, // dom.serviceWorkers.interception.enabled
+  WORKERPREF_DOM_WORKERNOTIFICATION, // dom.webnotifications.workers.enabled
+  WORKERPREF_DOM_CACHES_TESTING, // dom.caches.testing.enabled
+  WORKERPREF_SERVICEWORKERS_TESTING, // dom.serviceWorkers.testing.enabled
+  WORKERPREF_INTERCEPTION_OPAQUE_ENABLED, // dom.serviceWorkers.interception.opaque.enabled
   WORKERPREF_COUNT
 };
 
@@ -242,7 +250,10 @@ struct WorkerLoadInfo
 
   nsString mServiceWorkerCacheName;
 
+  ChannelInfo mChannelInfo;
+
   uint64_t mWindowID;
+  uint64_t mServiceWorkerID;
 
   bool mFromWindow;
   bool mEvalAllowed;
@@ -252,6 +263,8 @@ struct WorkerLoadInfo
   bool mIsInPrivilegedApp;
   bool mIsInCertifiedApp;
   bool mIndexedDBAllowed;
+  bool mPrivateBrowsing;
+  bool mServiceWorkersTestingInWindow;
 
   WorkerLoadInfo();
   ~WorkerLoadInfo();

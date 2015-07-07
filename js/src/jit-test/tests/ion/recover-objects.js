@@ -1,14 +1,28 @@
+// |jit-test| test-join=--no-unboxed-objects
+//
+// Unboxed object optimization might not trigger in all cases, thus we ensure
+// that Scalar Replacement optimization is working well independently of the
+// object representation.
+
 // Ion eager fails the test below because we have not yet created any
 // template object in baseline before running the content of the top-level
 // function.
 if (getJitCompilerOptions()["ion.warmup.trigger"] <= 90)
     setJitCompilerOption("ion.warmup.trigger", 90);
 
+// This test checks that we are able to remove the getprop & setprop with scalar
+// replacement, so we should not force inline caches, as this would skip the
+// generation of getprop & setprop instructions.
+if (getJitCompilerOptions()["ion.forceinlineCaches"])
+    setJitCompilerOption("ion.forceinlineCaches", 0);
+
+function resumeHere() {}
 var uceFault = function (i) {
     if (i > 98)
         uceFault = function (i) { return true; };
     return false;
 };
+
 
 // Without "use script" in the inner function, the arguments might be
 // obersvable.
@@ -125,7 +139,6 @@ function unknownLoad(i) {
 }
 
 // Check with dynamic slots.
-function resumeHere() {}
 function dynamicSlots(i) {
     var obj = {
         p0: i + 0, p1: i + 1, p2: i + 2, p3: i + 3, p4: i + 4, p5: i + 5, p6: i + 6, p7: i + 7, p8: i + 8, p9: i + 9, p10: i + 10,
@@ -156,7 +169,6 @@ function createThisWithTemplate(i)
     assertEq(p.y - p.x, 2);
     assertRecoveredOnBailout(p, true);
 }
-
 
 for (var i = 0; i < 100; i++) {
     notSoEmpty1(i);

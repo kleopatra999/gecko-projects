@@ -23,7 +23,7 @@
 #include "gfxQPainterSurface.h"
 #include "nsUnicodeProperties.h"
 
-#include "gfxPangoFonts.h"
+#include "gfxFontconfigFonts.h"
 #include "gfxContext.h"
 #include "gfxUserFontSet.h"
 
@@ -95,7 +95,7 @@ gfxQtPlatform::CreateOffscreenSurface(const IntSize& size,
     gfxImageFormat imageFormat = OptimalFormatForContent(contentType);
 
     nsRefPtr<gfxASurface> newSurface =
-        new gfxImageSurface(gfxIntSize(size.width, size.height), imageFormat);
+        new gfxImageSurface(size, imageFormat);
 
     return newSurface.forget();
 }
@@ -202,7 +202,7 @@ gfxQtPlatform::GetScreenDepth() const
     return mScreenDepth;
 }
 
-TemporaryRef<ScaledFont>
+already_AddRefed<ScaledFont>
 gfxQtPlatform::GetScaledFontForFont(DrawTarget* aTarget, gfxFont* aFont)
 {
     return GetScaledFontForFontWithCairoSkia(aTarget, aFont);

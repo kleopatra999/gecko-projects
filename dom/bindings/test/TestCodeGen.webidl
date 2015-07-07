@@ -7,6 +7,7 @@
 typedef long myLong;
 typedef TestInterface AnotherNameForTestInterface;
 typedef TestInterface? NullableTestInterface;
+typedef CustomEventInit TestDictionaryTypedef;
 
 interface TestExternalInterface;
 
@@ -128,6 +129,8 @@ interface OnlyForUseInConstructor {
  Constructor(TestInterface? iface),
  Constructor(long arg1, IndirectlyImplementedInterface iface),
  Constructor(Date arg1),
+ Constructor(ArrayBuffer arrayBuf),
+ Constructor(Uint8Array typedArr),
  // Constructor(long arg1, long arg2, (TestInterface or OnlyForUseInConstructor) arg3),
  AvailableIn=CertifiedApps,
  NamedConstructor=Test,
@@ -685,6 +688,7 @@ interface TestInterface {
   attribute byte otherAttributeRenamedFrom;
 
   void passDictionary(optional Dict x);
+  void passDictionary2(Dict x);
   [Cached, Pure]
   readonly attribute Dict readonlyDictionary;
   [Cached, Pure]
@@ -725,10 +729,26 @@ interface TestInterface {
   AnotherNameForTestInterface exerciseTypedefInterfaces2(NullableTestInterface arg);
   void exerciseTypedefInterfaces3(YetAnotherNameForTestInterface arg);
 
+  // Deprecated methods and attributes
+  [Deprecated="GetAttributeNode"]
+  attribute byte deprecatedAttribute;
+  [Deprecated="GetAttributeNode"]
+  byte deprecatedMethod();
+  [Deprecated="GetAttributeNode"]
+  byte deprecatedMethodWithContext(any arg);
+
   // Static methods and attributes
   static attribute boolean staticAttribute;
   static void staticMethod(boolean arg);
   static void staticMethodWithContext(any arg);
+
+  // Deprecated static methods and attributes
+  [Deprecated="GetAttributeNode"]
+  static attribute byte staticDeprecatedAttribute;
+  [Deprecated="GetAttributeNode"]
+  static void staticDeprecatedMethod();
+  [Deprecated="GetAttributeNode"]
+  static void staticDeprecatedMethodWithContext(any arg);
 
   // Overload resolution tests
   //void overload1(DOMString... strs);
@@ -1002,6 +1022,7 @@ dictionary Dict : ParentDict {
   required object requiredObject;
 
   CustomEventInit customEventInit;
+  TestDictionaryTypedef dictionaryTypedef;
 };
 
 dictionary ParentDict : GrandparentDict {

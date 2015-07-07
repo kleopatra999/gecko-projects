@@ -43,17 +43,16 @@ TextureClient*
 D3D11ShareHandleImage::GetTextureClient(CompositableClient* aClient)
 {
   if (!mTextureClient) {
-    RefPtr<TextureClientD3D11> textureClient =
-      new TextureClientD3D11(aClient->GetForwarder(),
-                             mFormat,
-                             TextureFlags::DEFAULT);
-    textureClient->InitWith(mTexture, mSize);
-    mTextureClient = textureClient;
+    mTextureClient = TextureClientD3D11::Create(aClient->GetForwarder(),
+                                                mFormat,
+                                                TextureFlags::DEFAULT,
+                                                mTexture,
+                                                mSize);
   }
   return mTextureClient;
 }
 
-TemporaryRef<gfx::SourceSurface>
+already_AddRefed<gfx::SourceSurface>
 D3D11ShareHandleImage::GetAsSourceSurface()
 {
   if (!mTexture) {

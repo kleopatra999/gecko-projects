@@ -390,6 +390,11 @@ CollectWindowReports(nsGlobalWindow *aWindow,
   aWindowTotalSizes->mArenaStats.mStyleContexts
     += windowSizes.mArenaStats.mStyleContexts;
 
+  REPORT_SIZE("/layout/style-structs", windowSizes.mArenaStats.mStyleStructs,
+              "Memory used by style structs within a window.");
+  aWindowTotalSizes->mArenaStats.mStyleStructs
+    += windowSizes.mArenaStats.mStyleStructs;
+
   REPORT_SIZE("/layout/style-sets", windowSizes.mLayoutStyleSetsSize,
               "Memory used by style sets within a window.");
   aWindowTotalSizes->mLayoutStyleSetsSize += windowSizes.mLayoutStyleSetsSize;
@@ -529,7 +534,7 @@ nsWindowMemoryReporter::CollectReports(nsIMemoryReporterCallback* aCb,
   // Collect window memory usage.
   nsWindowSizes windowTotalSizes(nullptr);
   nsCOMPtr<amIAddonManager> addonManager;
-  if (XRE_GetProcessType() == GeckoProcessType_Default) {
+  if (XRE_IsParentProcess()) {
     // Only try to access the service from the main process.
     addonManager = do_GetService("@mozilla.org/addons/integration;1");
   }
@@ -595,6 +600,10 @@ nsWindowMemoryReporter::CollectReports(nsIMemoryReporterCallback* aCb,
   REPORT("window-objects/layout/style-contexts",
          windowTotalSizes.mArenaStats.mStyleContexts,
          "This is the sum of all windows' 'layout/style-contexts' numbers.");
+
+  REPORT("window-objects/layout/style-structs",
+         windowTotalSizes.mArenaStats.mStyleStructs,
+         "This is the sum of all windows' 'layout/style-structs' numbers.");
 
   REPORT("window-objects/layout/style-sets", windowTotalSizes.mLayoutStyleSetsSize,
          "This is the sum of all windows' 'layout/style-sets' numbers.");

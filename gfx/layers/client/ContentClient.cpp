@@ -9,7 +9,7 @@
 #include "gfxContext.h"                 // for gfxContext, etc
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "gfxPrefs.h"                   // for gfxPrefs
-#include "gfxPoint.h"                   // for gfxIntSize, gfxPoint
+#include "gfxPoint.h"                   // for IntSize, gfxPoint
 #include "gfxTeeSurface.h"              // for gfxTeeSurface
 #include "gfxUtils.h"                   // for gfxUtils
 #include "ipc/ShadowLayers.h"           // for ShadowLayerForwarder
@@ -59,7 +59,7 @@ static TextureFlags TextureFlagsForRotatedContentBufferFlags(uint32_t aBufferFla
   return result;
 }
 
-/* static */ TemporaryRef<ContentClient>
+/* static */ already_AddRefed<ContentClient>
 ContentClient::CreateContentClient(CompositableForwarder* aForwarder)
 {
   LayersBackend backend = aForwarder->GetCompositorBackendType();
@@ -74,7 +74,7 @@ ContentClient::CreateContentClient(CompositableForwarder* aForwarder)
 
 #ifdef XP_WIN
   if (backend == LayersBackend::LAYERS_D3D11) {
-    useDoubleBuffering = !!gfxWindowsPlatform::GetPlatform()->GetD2DDevice();
+    useDoubleBuffering = !!gfxWindowsPlatform::GetPlatform()->GetD3D10Device();
   } else
 #endif
 #ifdef MOZ_WIDGET_GTK
@@ -91,9 +91,9 @@ ContentClient::CreateContentClient(CompositableForwarder* aForwarder)
   }
 
   if (useDoubleBuffering || PR_GetEnv("MOZ_FORCE_DOUBLE_BUFFERING")) {
-    return new ContentClientDoubleBuffered(aForwarder);
+    return MakeAndAddRef<ContentClientDoubleBuffered>(aForwarder);
   }
-  return new ContentClientSingleBuffered(aForwarder);
+  return MakeAndAddRef<ContentClientSingleBuffered>(aForwarder);
 }
 
 void
@@ -136,7 +136,7 @@ ContentClientBasic::ContentClientBasic()
 
 void
 ContentClientBasic::CreateBuffer(ContentType aType,
-                                 const nsIntRect& aRect,
+                                 const IntRect& aRect,
                                  uint32_t aFlags,
                                  RefPtr<gfx::DrawTarget>* aBlackDT,
                                  RefPtr<gfx::DrawTarget>* aWhiteDT)
@@ -171,7 +171,7 @@ class RemoteBufferReadbackProcessor : public TextureReadbackSink
 {
 public:
   RemoteBufferReadbackProcessor(nsTArray<ReadbackProcessor::Update>* aReadbackUpdates,
-                                const nsIntRect& aBufferRect, const nsIntPoint& aBufferRotation)
+                                const IntRect& aBufferRect, const nsIntPoint& aBufferRotation)
     : mReadbackUpdates(*aReadbackUpdates)
     , mBufferRect(aBufferRect)
     , mBufferRotation(aBufferRotation)
@@ -221,7 +221,7 @@ private:
   // This array is used to keep the layers alive until the callback.
   vector<RefPtr<Layer>> mLayerRefs;
 
-  nsIntRect mBufferRect;
+  IntRect mBufferRect;
   nsIntPoint mBufferRotation;
 };
 
@@ -276,7 +276,7 @@ ContentClientRemoteBuffer::EndPaint(nsTArray<ReadbackProcessor::Update>* aReadba
 
 void
 ContentClientRemoteBuffer::BuildTextureClients(SurfaceFormat aFormat,
-                                               const nsIntRect& aRect,
+                                               const IntRect& aRect,
                                                uint32_t aFlags)
 {
   // If we hit this assertion, then it might be due to an empty transaction
@@ -293,7 +293,7 @@ ContentClientRemoteBuffer::BuildTextureClients(SurfaceFormat aFormat,
   DestroyBuffers();
 
   mSurfaceFormat = aFormat;
-  mSize = gfx::IntSize(aRect.width, aRect.height);
+  mSize = IntSize(aRect.width, aRect.height);
   mTextureFlags = TextureFlagsForRotatedContentBufferFlags(aFlags);
 
   if (aFlags & BUFFER_COMPONENT_ALPHA) {
@@ -304,12 +304,12 @@ ContentClientRemoteBuffer::BuildTextureClients(SurfaceFormat aFormat,
 }
 
 void
-ContentClientRemoteBuffer::CreateBackBuffer(const nsIntRect& aBufferRect)
+ContentClientRemoteBuffer::CreateBackBuffer(const IntRect& aBufferRect)
 {
   // gfx::BackendType::NONE means fallback to the content backend
   mTextureClient = CreateTextureClientForDrawing(
     mSurfaceFormat, mSize, gfx::BackendType::NONE,
-    mTextureFlags,
+    mTextureFlags | ExtraTextureFlags(),
     TextureAllocationFlags::ALLOC_CLEAR_BUFFER
   );
   if (!mTextureClient || !AddTextureClient(mTextureClient)) {
@@ -319,7 +319,7 @@ ContentClientRemoteBuffer::CreateBackBuffer(const nsIntRect& aBufferRect)
 
   if (mTextureFlags & TextureFlags::COMPONENT_ALPHA) {
     mTextureClientOnWhite = mTextureClient->CreateSimilar(
-      mTextureFlags,
+      mTextureFlags | ExtraTextureFlags(),
       TextureAllocationFlags::ALLOC_CLEAR_BUFFER_WHITE
     );
     if (!mTextureClientOnWhite || !AddTextureClient(mTextureClientOnWhite)) {
@@ -331,7 +331,7 @@ ContentClientRemoteBuffer::CreateBackBuffer(const nsIntRect& aBufferRect)
 
 void
 ContentClientRemoteBuffer::CreateBuffer(ContentType aType,
-                                        const nsIntRect& aRect,
+                                        const IntRect& aRect,
                                         uint32_t aFlags,
                                         RefPtr<gfx::DrawTarget>* aBlackDT,
                                         RefPtr<gfx::DrawTarget>* aWhiteDT)
@@ -487,7 +487,7 @@ ContentClientDoubleBuffered::SwapBuffers(const nsIntRegion& aFrontUpdatedRegion)
   mTextureClientOnWhite = mFrontClientOnWhite;
   mFrontClientOnWhite = oldBack;
 
-  nsIntRect oldBufferRect = mBufferRect;
+  IntRect oldBufferRect = mBufferRect;
   mBufferRect = mFrontBufferRect;
   mFrontBufferRect = oldBufferRect;
 
@@ -668,5 +668,5 @@ ContentClientSingleBuffered::FinalizeFrame(const nsIntRegion& aRegionToDraw)
   }
 }
 
-}
-}
+} // namespace layers
+} // namespace mozilla

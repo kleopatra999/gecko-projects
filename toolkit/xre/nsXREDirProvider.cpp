@@ -10,7 +10,6 @@
 #include "jsapi.h"
 #include "xpcpublic.h"
 
-#include "nsIJSRuntimeService.h"
 #include "nsIAddonInterposition.h"
 #include "nsIAppStartup.h"
 #include "nsIDirectoryEnumerator.h"
@@ -52,6 +51,9 @@
 #endif
 #ifdef XP_UNIX
 #include <ctype.h>
+#endif
+#ifdef XP_IOS
+#include "UIKitDirProvider.h"
 #endif
 
 #if defined(XP_MACOSX)
@@ -113,12 +115,15 @@ nsXREDirProvider::Initialize(nsIFile *aXULAppDir,
     if (app) {
       bool per = false;
       app->GetFile(NS_APP_USER_PROFILE_50_DIR, &per, getter_AddRefs(mProfileDir));
-      NS_ASSERTION(per, "NS_APP_USER_PROFILE_50_DIR must be persistent!"); 
-      NS_ASSERTION(mProfileDir, "NS_APP_USER_PROFILE_50_DIR not defined! This shouldn't happen!"); 
+      NS_ASSERTION(per, "NS_APP_USER_PROFILE_50_DIR must be persistent!");
+      NS_ASSERTION(mProfileDir, "NS_APP_USER_PROFILE_50_DIR not defined! This shouldn't happen!");
     }
   }
 
+#ifdef MOZ_B2G
   LoadAppBundleDirs();
+#endif
+
   return NS_OK;
 }
 
@@ -406,9 +411,6 @@ nsXREDirProvider::GetFile(const char* aProperty, bool* aPersistent,
     else if (!strcmp(aProperty, NS_APP_PREFS_50_FILE)) {
       rv = file->AppendNative(NS_LITERAL_CSTRING("prefs.js"));
     }
-    else if (!strcmp(aProperty, NS_METRO_APP_PREFS_50_FILE)) {
-      rv = file->AppendNative(NS_LITERAL_CSTRING("metro-prefs.js"));
-    }
     else if (!strcmp(aProperty, NS_LOCALSTORE_UNSAFE_FILE)) {
       rv = file->AppendNative(NS_LITERAL_CSTRING("localstore.rdf"));
     }
@@ -638,12 +640,13 @@ nsXREDirProvider::LoadExtensionBundleDirectories()
 
     RegisterExtensionInterpositions(parser);
     LoadExtensionDirectories(parser, "ExtensionDirs", mExtensionDirectories,
-                             NS_COMPONENT_LOCATION);
+                             NS_EXTENSION_LOCATION);
     LoadExtensionDirectories(parser, "ThemeDirs", mThemeDirectories,
                              NS_SKIN_LOCATION);
   }
 }
 
+#ifdef MOZ_B2G
 void
 nsXREDirProvider::LoadAppBundleDirs()
 {
@@ -670,9 +673,10 @@ nsXREDirProvider::LoadAppBundleDirs()
 
     nsCOMPtr<nsIFile> manifest =
       CloneAndAppend(subdir, "chrome.manifest");
-    XRE_AddManifestLocation(NS_COMPONENT_LOCATION, manifest);
+    XRE_AddManifestLocation(NS_APP_LOCATION, manifest);
   }
 }
+#endif
 
 static const char *const kAppendPrefDir[] = { "defaults", "preferences", nullptr };
 
@@ -891,14 +895,9 @@ nsXREDirProvider::DoShutdown()
       // Phase 2c: Now that things are torn down, force JS GC so that things which depend on
       // resources which are about to go away in "profile-before-change" are destroyed first.
 
-      nsCOMPtr<nsIJSRuntimeService> rtsvc
-        (do_GetService("@mozilla.org/js/xpc/RuntimeService;1"));
-      if (rtsvc)
-      {
-        JSRuntime *rt = nullptr;
-        rtsvc->GetRuntime(&rt);
-        if (rt)
-          ::JS_GC(rt);
+      JSRuntime *rt = xpc::GetJSRuntime();
+      if (rt) {
+        JS_GC(rt);
       }
 
       // Phase 3: Notify observers of a profile change
@@ -1100,8 +1099,7 @@ nsXREDirProvider::GetUpdateRootDir(nsIFile* *aResult)
   // Get the local app data directory and if a vendor name exists append it.
   // If only a product name exists, append it.  If neither exist fallback to
   // old handling.  We don't use the product name on purpose because we want a
-  // shared update directory for different apps run from the same path (like
-  // Metro & Desktop).
+  // shared update directory for different apps run from the same path.
   nsCOMPtr<nsIFile> localDir;
   if (pathHashResult && (hasVendor || gAppData->name) &&
       NS_SUCCEEDED(GetUserDataDirectoryHome(getter_AddRefs(localDir), true)) &&
@@ -1240,6 +1238,14 @@ nsXREDirProvider::GetUserDataDirectoryHome(nsIFile** aFile, bool aLocal)
   NS_ENSURE_SUCCESS(rv, rv);
 
   localDir = do_QueryInterface(dirFileMac, &rv);
+#elif defined(XP_IOS)
+  nsAutoCString userDir;
+  if (GetUIKitDirectory(aLocal, userDir)) {
+    rv = NS_NewNativeLocalFile(userDir, true, getter_AddRefs(localDir));
+  } else {
+    rv = NS_ERROR_FAILURE;
+  }
+  NS_ENSURE_SUCCESS(rv, rv);
 #elif defined(XP_WIN)
   nsString path;
   if (aLocal) {

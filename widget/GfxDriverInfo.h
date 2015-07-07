@@ -56,6 +56,7 @@ enum OperatingSystem {
   DRIVER_OS_OS_X_10_9,
   DRIVER_OS_OS_X_10_10,
   DRIVER_OS_ANDROID,
+  DRIVER_OS_IOS,
   DRIVER_OS_ALL
 };
 
@@ -85,9 +86,11 @@ enum DeviceFamily {
   RadeonX1000,
   Geforce7300GT,
   Nvidia310M,
+  Nvidia8800GTS,
   AMDRadeonHD5800,
   Bug1137716,
   Bug1116812,
+  Bug1155608,
   DeviceFamilyMax
 };
 

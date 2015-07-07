@@ -19,7 +19,6 @@
 { 0x3cc9e801, 0x1806, 0x4ff6, \
   { 0x86, 0x14, 0xf9, 0xd0, 0xf4, 0xfb, 0x3b, 0x08 } }
 
-class gfxContext;
 class gfxASurface;
 class nsDisplayListBuilder;
 
@@ -111,7 +110,7 @@ public:
   // If aPremultAlpha is provided, then it assumed the callee can handle
   // un-premultiplied surfaces, and *aPremultAlpha will be set to false
   // if one is returned.
-  virtual mozilla::TemporaryRef<mozilla::gfx::SourceSurface> GetSurfaceSnapshot(bool* aPremultAlpha = nullptr) = 0;
+  virtual already_AddRefed<mozilla::gfx::SourceSurface> GetSurfaceSnapshot(bool* aPremultAlpha = nullptr) = 0;
 
   // If this context is opaque, the backing store of the canvas should
   // be created as opaque; all compositing operators should assume the

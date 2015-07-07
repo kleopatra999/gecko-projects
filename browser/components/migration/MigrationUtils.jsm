@@ -15,11 +15,10 @@ const TOPIC_DID_IMPORT_BOOKMARKS = "initial-migration-did-import-default-bookmar
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/Task.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
-                                  "resource://gre/modules/NetUtil.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "BookmarkHTMLUtils",
                                   "resource://gre/modules/BookmarkHTMLUtils.jsm");
 
@@ -44,11 +43,12 @@ function getMigrationBundle() {
  */
 function getMigratorKeyForDefaultBrowser() {
   const APP_DESC_TO_KEY = {
-    "Internet Explorer": "ie",
-    "Safari":            "safari",
-    "Firefox":           "firefox",
-    "Google Chrome":     "chrome",  // Windows, Linux
-    "Chrome":            "chrome",  // OS X
+    "Internet Explorer":                 "ie",
+    "Safari":                            "safari",
+    "Firefox":                           "firefox",
+    "Google Chrome":                     "chrome",  // Windows, Linux
+    "Chrome":                            "chrome",  // OS X
+    "360\u5b89\u5168\u6d4f\u89c8\u5668": "360se",
   };
 
   let browserDesc = "";
@@ -422,23 +422,22 @@ this.MigrationUtils = Object.freeze({
    * Helper for creating a folder for imported bookmarks from a particular
    * migration source.  The folder is created at the end of the given folder.
    *
-   * @param aSourceNameStr
+   * @param sourceNameStr
    *        the source name (first letter capitalized).  This is used
    *        for reading the localized source name from the migration
    *        bundle (e.g. if aSourceNameStr is Mosaic, this will try to read
    *        sourceNameMosaic from the migration bundle).
-   * @param aParentId
-   *        the item-id of the folder in which the new folder should be
-   *        created.
-   * @return the item-id of the new folder.
+   * @param parentGuid
+   *        the GUID of the folder in which the new folder should be created.
+   * @return the GUID of the new folder.
    */
-  createImportedBookmarksFolder:
-  function MU_createImportedBookmarksFolder(aSourceNameStr, aParentId) {
-    let source = this.getLocalizedString("sourceName" + aSourceNameStr);
-    let label = this.getLocalizedString("importedBookmarksFolder", [source]);
-    return PlacesUtils.bookmarks.createFolder(
-      aParentId, label, PlacesUtils.bookmarks.DEFAULT_INDEX);
-  },
+  createImportedBookmarksFolder: Task.async(function* (sourceNameStr, parentGuid) {
+    let source = this.getLocalizedString("sourceName" + sourceNameStr);
+    let title = this.getLocalizedString("importedBookmarksFolder", [source]);
+    return (yield PlacesUtils.bookmarks.insert({
+      type: PlacesUtils.bookmarks.TYPE_FOLDER, parentGuid, title
+    })).guid;
+  }),
 
   get _migrators() {
     return gMigrators ? gMigrators : gMigrators = new Map();
@@ -452,6 +451,7 @@ this.MigrationUtils = Object.freeze({
    *             Supported values: ie (windows),
    *                               safari (mac/windows),
    *                               chrome (mac/windows/linux),
+   *                               360se (windows),
    *                               firefox.
    *
    * If null is returned,  either no data can be imported
@@ -484,7 +484,7 @@ this.MigrationUtils = Object.freeze({
   get migrators() {
     let migratorKeysOrdered = [
 #ifdef XP_WIN
-      "firefox", "ie", "chrome", "safari"
+      "firefox", "ie", "chrome", "safari", "360se"
 #elifdef XP_MACOSX
       "firefox", "safari", "chrome"
 #elifdef XP_UNIX

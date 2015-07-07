@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -29,7 +29,7 @@ class SourceSurface;
 }
 
 namespace dom {
-
+class CanvasCaptureMediaStream;
 class File;
 class FileCallback;
 class HTMLCanvasPrintState;
@@ -126,6 +126,9 @@ public:
   PrintCallback* GetMozPrintCallback() const;
   void SetMozPrintCallback(PrintCallback* aCallback);
 
+  already_AddRefed<CanvasCaptureMediaStream>
+  CaptureStream(const Optional<double>& aFrameRate, ErrorResult& aRv);
+
   /**
    * Get the size in pixels of this canvas element
    */
@@ -165,7 +168,7 @@ public:
    */
   bool GetIsOpaque();
 
-  virtual TemporaryRef<gfx::SourceSurface> GetSurfaceSnapshot(bool* aPremultAlpha = nullptr);
+  virtual already_AddRefed<gfx::SourceSurface> GetSurfaceSnapshot(bool* aPremultAlpha = nullptr);
 
   virtual bool ParseAttribute(int32_t aNamespaceID,
                                 nsIAtom* aAttribute,
@@ -232,9 +235,9 @@ protected:
                          const nsAString& aMimeType,
                          const JS::Value& aEncoderOptions,
                          nsAString& aDataURL);
-  nsresult MozGetAsFileImpl(const nsAString& aName,
+  nsresult MozGetAsBlobImpl(const nsAString& aName,
                             const nsAString& aType,
-                            nsIDOMFile** aResult);
+                            nsISupports** aResult);
   void CallPrintCallback();
 
   CanvasContextType mCurrentContextType;

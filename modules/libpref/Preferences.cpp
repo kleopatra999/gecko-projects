@@ -50,7 +50,7 @@
 
 #ifdef DEBUG
 #define ENSURE_MAIN_PROCESS(message, pref) do {                                \
-  if (MOZ_UNLIKELY(XRE_GetProcessType() != GeckoProcessType_Default)) {        \
+  if (MOZ_UNLIKELY(!XRE_IsParentProcess())) {        \
     nsPrintfCString msg("ENSURE_MAIN_PROCESS failed. %s %s", message, pref);   \
     NS_WARNING(msg.get());                                                     \
     return NS_ERROR_NOT_AVAILABLE;                                             \
@@ -58,7 +58,7 @@
 } while (0);
 #else
 #define ENSURE_MAIN_PROCESS(message, pref)                                     \
-  if (MOZ_UNLIKELY(XRE_GetProcessType() != GeckoProcessType_Default)) {        \
+  if (MOZ_UNLIKELY(!XRE_IsParentProcess())) {        \
     return NS_ERROR_NOT_AVAILABLE;                                             \
   }
 #endif
@@ -235,10 +235,10 @@ Preferences::SizeOfIncludingThisAndOtherStuff(mozilla::MallocSizeOf aMallocSizeO
   NS_ENSURE_TRUE(InitStaticMembers(), 0);
 
   size_t n = aMallocSizeOf(sPreferences);
-  if (gHashTable.IsInitialized()) {
+  if (gHashTable) {
     // pref keys are allocated in a private arena, which we count elsewhere.
     // pref stringvals are allocated out of the same private arena.
-    n += PL_DHashTableSizeOfExcludingThis(&gHashTable, nullptr, aMallocSizeOf);
+    n += PL_DHashTableSizeOfExcludingThis(gHashTable, nullptr, aMallocSizeOf);
   }
   if (gCacheData) {
     n += gCacheData->SizeOfIncludingThis(aMallocSizeOf);
@@ -523,14 +523,13 @@ Preferences::Init()
 {
   nsresult rv;
 
-  rv = PREF_Init();
-  NS_ENSURE_SUCCESS(rv, rv);
+  PREF_Init();
 
   rv = pref_InitInitialObjects();
   NS_ENSURE_SUCCESS(rv, rv);
 
   using mozilla::dom::ContentChild;
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     InfallibleTArray<PrefSetting> prefs;
     ContentChild::GetSingleton()->SendReadPrefsArray(&prefs);
 
@@ -581,7 +580,7 @@ NS_IMETHODIMP
 Preferences::Observe(nsISupports *aSubject, const char *aTopic,
                      const char16_t *someData)
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content)
+  if (XRE_IsContentProcess())
     return NS_ERROR_NOT_AVAILABLE;
 
   nsresult rv = NS_OK;
@@ -606,7 +605,7 @@ Preferences::Observe(nsISupports *aSubject, const char *aTopic,
 NS_IMETHODIMP
 Preferences::ReadUserPrefs(nsIFile *aFile)
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     NS_ERROR("cannot load prefs from content process");
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -636,7 +635,7 @@ Preferences::ReadUserPrefs(nsIFile *aFile)
 NS_IMETHODIMP
 Preferences::ResetPrefs()
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     NS_ERROR("cannot reset prefs from content process");
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -644,8 +643,7 @@ Preferences::ResetPrefs()
   NotifyServiceObservers(NS_PREFSERVICE_RESET_TOPIC_ID);
   PREF_CleanupPrefs();
 
-  nsresult rv = PREF_Init();
-  NS_ENSURE_SUCCESS(rv, rv);
+  PREF_Init();
 
   return pref_InitInitialObjects();
 }
@@ -653,7 +651,7 @@ Preferences::ResetPrefs()
 NS_IMETHODIMP
 Preferences::ResetUserPrefs()
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     NS_ERROR("cannot reset user prefs from content process");
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -665,7 +663,7 @@ Preferences::ResetUserPrefs()
 NS_IMETHODIMP
 Preferences::SavePrefFile(nsIFile *aFile)
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     NS_ERROR("cannot save pref file from content process");
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -738,8 +736,12 @@ Preferences::GetPreference(PrefSetting* aPref)
 void
 Preferences::GetPreferences(InfallibleTArray<PrefSetting>* aPrefs)
 {
-  aPrefs->SetCapacity(gHashTable.Capacity());
-  PL_DHashTableEnumerate(&gHashTable, pref_GetPrefs, aPrefs);
+  aPrefs->SetCapacity(gHashTable->Capacity());
+  for (auto iter = gHashTable->Iter(); !iter.Done(); iter.Next()) {
+    auto entry = static_cast<PrefHashEntry*>(iter.Get());
+    dom::PrefSetting *pref = aPrefs->AppendElement();
+    pref_GetPrefFromEntry(entry, pref);
+  }
 }
 
 NS_IMETHODIMP
@@ -802,17 +804,8 @@ Preferences::NotifyServiceObservers(const char *aTopic)
 nsresult
 Preferences::UseDefaultPrefFile()
 {
-  nsresult rv;
   nsCOMPtr<nsIFile> aFile;
-
-#if defined(XP_WIN) && defined(MOZ_METRO)
-  if (XRE_GetWindowsEnvironment() == WindowsEnvironmentType_Metro) {
-    rv = NS_GetSpecialDirectory(NS_METRO_APP_PREFS_50_FILE, getter_AddRefs(aFile));
-  } else
-#endif
-  {
-    rv = NS_GetSpecialDirectory(NS_APP_PREFS_50_FILE, getter_AddRefs(aFile));
-  }
+  nsresult rv = NS_GetSpecialDirectory(NS_APP_PREFS_50_FILE, getter_AddRefs(aFile));
 
   if (NS_SUCCEEDED(rv)) {
     rv = ReadAndOwnUserPrefFile(aFile);
@@ -953,7 +946,7 @@ Preferences::WritePrefFile(nsIFile* aFile)
   uint32_t                  writeAmount;
   nsresult                  rv;
 
-  if (!gHashTable.IsInitialized())
+  if (!gHashTable)
     return NS_ERROR_NOT_INITIALIZED;
 
   // execute a "safe" save by saving through a tempfile
@@ -967,27 +960,25 @@ Preferences::WritePrefFile(nsIFile* aFile)
   if (NS_FAILED(rv)) 
       return rv;  
 
-  nsAutoArrayPtr<char*> valueArray(new char*[gHashTable.EntryCount()]);
-  memset(valueArray, 0, gHashTable.EntryCount() * sizeof(char*));
-  pref_saveArgs saveArgs;
-  saveArgs.prefArray = valueArray;
-  saveArgs.saveTypes = SAVE_ALL;
-  
+  nsAutoArrayPtr<char*> valueArray(new char*[gHashTable->EntryCount()]);
+  memset(valueArray, 0, gHashTable->EntryCount() * sizeof(char*));
+
   // get the lines that we're supposed to be writing to the file
-  PL_DHashTableEnumerate(&gHashTable, pref_savePref, &saveArgs);
-    
+  pref_savePrefs(gHashTable, valueArray);
+
   /* Sort the preferences to make a readable file on disk */
-  NS_QuickSort(valueArray, gHashTable.EntryCount(), sizeof(char *), pref_CompareStrings, nullptr);
-  
+  NS_QuickSort(valueArray, gHashTable->EntryCount(), sizeof(char *),
+               pref_CompareStrings, nullptr);
+
   // write out the file header
   outStream->Write(outHeader, sizeof(outHeader) - 1, &writeAmount);
 
   char** walker = valueArray;
-  for (uint32_t valueIdx = 0; valueIdx < gHashTable.EntryCount(); valueIdx++, walker++) {
+  for (uint32_t valueIdx = 0; valueIdx < gHashTable->EntryCount(); valueIdx++, walker++) {
     if (*walker) {
       outStream->Write(*walker, strlen(*walker), &writeAmount);
       outStream->Write(NS_LINEBREAK, NS_LINEBREAK_LEN, &writeAmount);
-      NS_Free(*walker);
+      free(*walker);
     }
   }
 

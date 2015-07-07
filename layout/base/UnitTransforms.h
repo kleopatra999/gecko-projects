@@ -22,6 +22,10 @@ namespace mozilla {
 enum class PixelCastJustification : uint8_t {
   // For the root layer, Screen Pixel = Parent Layer Pixel.
   ScreenIsParentLayerForRoot,
+  // On the layout side, Screen Pixel = LayoutDevice at the outer-window level.
+  LayoutDeviceIsScreenForBounds,
+  // For the root layer, Render Target Pixel = Parent Layer Pixel.
+  RenderTargetIsParentLayerForRoot,
   // For the root composition size we want to view it as layer pixels in any layer
   ParentLayerToLayerForRootComposition,
   // The Layer coordinate space for one layer is the ParentLayer coordinate
@@ -35,7 +39,10 @@ enum class PixelCastJustification : uint8_t {
   // technically in screen pixels, as it has not yet accounted for any
   // asynchronous transforms. This justification is for viewing the initial
   // reference point as a screen point.
-  LayoutDeviceToScreenForUntransformedEvent
+  LayoutDeviceToScreenForUntransformedEvent,
+  // Similar to LayoutDeviceToScreenForUntransformedEvent, PBrowser handles
+  // some widget/tab dimension information as the OS does -- in screen units.
+  LayoutDeviceIsScreenForTabDims
 };
 
 template <class TargetUnits, class SourceUnits>
@@ -53,6 +60,14 @@ gfx::PointTyped<TargetUnits> ViewAs(const gfx::PointTyped<SourceUnits>& aPoint, 
 template <class TargetUnits, class SourceUnits>
 gfx::IntPointTyped<TargetUnits> ViewAs(const gfx::IntPointTyped<SourceUnits>& aPoint, PixelCastJustification) {
   return gfx::IntPointTyped<TargetUnits>(aPoint.x, aPoint.y);
+}
+template <class TargetUnits, class SourceUnits>
+gfx::RectTyped<TargetUnits> ViewAs(const gfx::RectTyped<SourceUnits>& aRect, PixelCastJustification) {
+  return gfx::RectTyped<TargetUnits>(aRect.x, aRect.y, aRect.width, aRect.height);
+}
+template <class TargetUnits, class SourceUnits>
+gfx::IntRectTyped<TargetUnits> ViewAs(const gfx::IntRectTyped<SourceUnits>& aRect, PixelCastJustification) {
+  return gfx::IntRectTyped<TargetUnits>(aRect.x, aRect.y, aRect.width, aRect.height);
 }
 template <class NewTargetUnits, class OldTargetUnits, class SourceUnits>
 gfx::ScaleFactor<SourceUnits, NewTargetUnits> ViewTargetAs(
@@ -128,6 +143,45 @@ static gfx::PointTyped<TargetUnits> TransformVector(const gfx::Matrix4x4& aTrans
   gfx::PointTyped<TargetUnits> transformedStart = TransformTo<TargetUnits>(aTransform, aAnchor);
   gfx::PointTyped<TargetUnits> transformedEnd = TransformTo<TargetUnits>(aTransform, aAnchor + aVector);
   return transformedEnd - transformedStart;
+}
+
+// UntransformTo() and UntransformVector() are like TransformTo() and 
+// TransformVector(), respectively, but are intended for cases where
+// the transformation matrix is the inverse of a 3D projection. When
+// using such transforms, the resulting Point4D is only meaningful
+// if it has a positive w-coordinate. To handle this, these functions
+// return a Maybe object which contains a value if and only if the
+// result is meaningful
+template <typename TargetUnits, typename SourceUnits>
+static Maybe<gfx::PointTyped<TargetUnits>> UntransformTo(const gfx::Matrix4x4& aTransform,
+                                                const gfx::PointTyped<SourceUnits>& aPoint)
+{
+  gfx::Point4D point = aTransform.ProjectPoint(aPoint.ToUnknownPoint());
+  if (!point.HasPositiveWCoord()) {
+    return Nothing();
+  }
+  return Some(ViewAs<TargetUnits>(point.As2DPoint()));
+}
+template <typename TargetUnits, typename SourceUnits>
+static Maybe<gfx::IntPointTyped<TargetUnits>> UntransformTo(const gfx::Matrix4x4& aTransform,
+                                                const gfx::IntPointTyped<SourceUnits>& aPoint)
+{
+  gfx::Point4D point = aTransform.ProjectPoint(aPoint.ToUnknownPoint());
+  if (!point.HasPositiveWCoord()) {
+    return Nothing();
+  }
+  return Some(RoundedToInt(ViewAs<TargetUnits>(point.As2DPoint())));
+}
+template <typename TargetUnits, typename SourceUnits>
+static Maybe<gfx::PointTyped<TargetUnits>> UntransformVector(const gfx::Matrix4x4& aTransform,
+                                                    const gfx::PointTyped<SourceUnits>& aVector,
+                                                    const gfx::PointTyped<SourceUnits>& aAnchor) {
+  gfx::Point4D point = aTransform.ProjectPoint(aAnchor.ToUnknownPoint() + aVector.ToUnknownPoint()) 
+    - aTransform.ProjectPoint(aAnchor.ToUnknownPoint());
+  if (!point.HasPositiveWCoord()){
+    return Nothing();
+  }
+  return Some(ViewAs<TargetUnits>(point.As2DPoint()));
 }
 
 }

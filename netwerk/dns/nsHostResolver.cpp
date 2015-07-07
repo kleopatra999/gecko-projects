@@ -23,7 +23,7 @@
 #include "prthread.h"
 #include "prerror.h"
 #include "prtime.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "pldhash.h"
 #include "plstr.h"
 #include "nsURLHelper.h"
@@ -33,7 +33,6 @@
 #include "mozilla/HashFunctions.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Telemetry.h"
-#include "mozilla/VisualEventTracer.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Preferences.h"
 
@@ -69,12 +68,8 @@ PR_STATIC_ASSERT (HighThreadThreshold <= MAX_RESOLVER_THREADS);
 
 //----------------------------------------------------------------------------
 
-#if defined(PR_LOGGING)
 static PRLogModuleInfo *gHostResolverLog = nullptr;
-#define LOG(args) PR_LOG(gHostResolverLog, PR_LOG_DEBUG, args)
-#else
-#define LOG(args)
-#endif
+#define LOG(args) MOZ_LOG(gHostResolverLog, mozilla::LogLevel::Debug, args)
 
 #define LOG_HOST(host, interface) host,                                        \
                  (interface && interface[0] != '\0') ? " on interface " : "",  \
@@ -203,8 +198,6 @@ nsHostRecord::Create(const nsHostKey *key, nsHostRecord **result)
     void *place = ::operator new(size);
     *result = new(place) nsHostRecord(key);
     NS_ADDREF(*result);
-
-    MOZ_EVENT_TRACER_NAME_OBJECT(*result, key->host);
 
     return NS_OK;
 }
@@ -443,7 +436,7 @@ HostDB_ClearEntry(PLDHashTable *table,
 
     LOG(("Clearing cache db entry for host [%s%s%s].\n",
          LOG_HOST(hr->host, hr->netInterface)));
-#if defined(DEBUG) && defined(PR_LOGGING)
+#if defined(DEBUG)
     {
         MutexAutoLock lock(hr->addr_info_lock);
         if (!hr->addr_info) {
@@ -498,30 +491,6 @@ static const PLDHashTableOps gHostDB_ops =
     HostDB_InitEntry,
 };
 
-static PLDHashOperator
-HostDB_RemoveEntry(PLDHashTable *table,
-                   PLDHashEntryHdr *hdr,
-                   uint32_t number,
-                   void *arg)
-{
-    return PL_DHASH_REMOVE;
-}
-
-static PLDHashOperator
-HostDB_PruneEntry(PLDHashTable *table,
-                  PLDHashEntryHdr *hdr,
-                  uint32_t number,
-                  void *arg)
-{
-    nsHostDBEnt* ent = static_cast<nsHostDBEnt *>(hdr);
-    // Try to remove the record, or mark it for refresh
-    if (ent->rec->RemoveOrRefresh()) {
-        PR_REMOVE_LINK(ent->rec);
-        return PL_DHASH_REMOVE;
-    }
-    return PL_DHASH_NEXT;
-}
-
 //----------------------------------------------------------------------------
 
 #if TTL_AVAILABLE
@@ -556,6 +525,7 @@ nsHostResolver::nsHostResolver(uint32_t maxCacheEntries,
     , mNumIdleThreads(0)
     , mThreadCount(0)
     , mActiveAnyThreadCount(0)
+    , mDB(&gHostDB_ops, sizeof(nsHostDBEnt), 0)
     , mEvictionQSize(0)
     , mPendingCount(0)
     , mShutdown(true)
@@ -572,7 +542,6 @@ nsHostResolver::nsHostResolver(uint32_t maxCacheEntries,
 
 nsHostResolver::~nsHostResolver()
 {
-    PL_DHashTableFinish(&mDB);
 }
 
 nsresult
@@ -581,8 +550,6 @@ nsHostResolver::Init()
     if (NS_FAILED(GetAddrInfoInit())) {
         return NS_ERROR_FAILURE;
     }
-
-    PL_DHashTableInit(&mDB, &gHostDB_ops, sizeof(nsHostDBEnt), 0);
 
     mShutdown = false;
 
@@ -641,24 +608,31 @@ nsHostResolver::ClearPendingQueue(PRCList *aPendingQ)
 void
 nsHostResolver::FlushCache()
 {
-  MutexAutoLock lock(mLock);
-  mEvictionQSize = 0;
+    MutexAutoLock lock(mLock);
+    mEvictionQSize = 0;
 
-  // Clear the evictionQ and remove all its corresponding entries from
-  // the cache first
-  if (!PR_CLIST_IS_EMPTY(&mEvictionQ)) {
-      PRCList *node = mEvictionQ.next;
-      while (node != &mEvictionQ) {
-          nsHostRecord *rec = static_cast<nsHostRecord *>(node);
-          node = node->next;
-          PR_REMOVE_AND_INIT_LINK(rec);
-          PL_DHashTableRemove(&mDB, (nsHostKey *) rec);
-          NS_RELEASE(rec);
-      }
-  }
+    // Clear the evictionQ and remove all its corresponding entries from
+    // the cache first
+    if (!PR_CLIST_IS_EMPTY(&mEvictionQ)) {
+        PRCList *node = mEvictionQ.next;
+        while (node != &mEvictionQ) {
+            nsHostRecord *rec = static_cast<nsHostRecord *>(node);
+            node = node->next;
+            PR_REMOVE_AND_INIT_LINK(rec);
+            PL_DHashTableRemove(&mDB, (nsHostKey *) rec);
+            NS_RELEASE(rec);
+        }
+    }
 
-  // Refresh the cache entries that are resolving RIGHT now, remove the rest.
-  PL_DHashTableEnumerate(&mDB, HostDB_PruneEntry, nullptr);
+    // Refresh the cache entries that are resolving RIGHT now, remove the rest.
+    for (auto iter = mDB.RemovingIter(); !iter.Done(); iter.Next()) {
+        auto entry = static_cast<nsHostDBEnt *>(iter.Get());
+        // Try to remove the record, or mark it for refresh.
+        if (entry->rec->RemoveOrRefresh()) {
+            PR_REMOVE_LINK(entry->rec);
+            iter.Remove();
+        }
+    }
 }
 
 void
@@ -697,7 +671,7 @@ nsHostResolver::Shutdown()
             mIdleThreadCV.NotifyAll();
 
         // empty host database
-        PL_DHashTableEnumerate(&mDB, HostDB_RemoveEntry, nullptr);
+        mDB.Clear();
     }
 
     ClearPendingQueue(&pendingQHigh);
@@ -1052,20 +1026,16 @@ nsHostResolver::ConditionallyCreateThread(nsHostRecord *rec)
             return NS_ERROR_OUT_OF_MEMORY;
         }
     }
-#if defined(PR_LOGGING)
     else {
         LOG(("  Unable to find a thread for looking up host [%s%s%s].\n",
              LOG_HOST(rec->host, rec->netInterface)));
     }
-#endif
     return NS_OK;
 }
 
 nsresult
 nsHostResolver::IssueLookup(nsHostRecord *rec)
 {
-    MOZ_EVENT_TRACER_WAIT(rec, "net::dns::resolve");
-
     nsresult rv = NS_OK;
     NS_ASSERTION(!rec->resolving, "record is already being resolved");
 
@@ -1325,8 +1295,6 @@ nsHostResolver::OnLookupComplete(nsHostRecord* rec, nsresult status, AddrInfo* r
         }
     }
 
-    MOZ_EVENT_TRACER_DONE(rec, "net::dns::resolve");
-
     if (!PR_CLIST_IS_EMPTY(&cbs)) {
         PRCList *node = cbs.next;
         while (node != &cbs) {
@@ -1433,8 +1401,6 @@ nsHostResolver::ThreadFunc(void *arg)
              LOG_HOST(rec->host, rec->netInterface)));
 
         TimeStamp startTime = TimeStamp::Now();
-        MOZ_EVENT_TRACER_EXEC(rec, "net::dns::resolve");
-
 #if TTL_AVAILABLE
         bool getTtl = rec->mGetTtl;
 #else
@@ -1497,15 +1463,11 @@ nsHostResolver::Create(uint32_t maxCacheEntries,
                        uint32_t defaultGracePeriod,
                        nsHostResolver **result)
 {
-#if defined(PR_LOGGING)
     if (!gHostResolverLog)
         gHostResolverLog = PR_NewLogModule("nsHostResolver");
-#endif
 
     nsHostResolver *res = new nsHostResolver(maxCacheEntries, defaultCacheEntryLifetime,
                                              defaultGracePeriod);
-    if (!res)
-        return NS_ERROR_OUT_OF_MEMORY;
     NS_ADDREF(res);
 
     nsresult rv = res->Init();
@@ -1516,58 +1478,51 @@ nsHostResolver::Create(uint32_t maxCacheEntries,
     return rv;
 }
 
-PLDHashOperator
-CacheEntryEnumerator(PLDHashTable *table, PLDHashEntryHdr *entry,
-                     uint32_t number, void *arg)
-{
-    // We don't pay attention to address literals, only resolved domains.
-    // Also require a host.
-    nsHostRecord *rec = static_cast<nsHostDBEnt*>(entry)->rec;
-    MOZ_ASSERT(rec, "rec should never be null here!");
-    if (!rec || !rec->addr_info || !rec->host) {
-        return PL_DHASH_NEXT;
-    }
-
-    DNSCacheEntries info;
-    info.hostname = rec->host;
-    info.family = rec->af;
-    info.netInterface = rec->netInterface;
-    info.expiration =
-        (int64_t)(rec->mValidEnd - TimeStamp::NowLoRes()).ToSeconds();
-    if (info.expiration <= 0) {
-        // We only need valid DNS cache entries
-        return PL_DHASH_NEXT;
-    }
-
-    {
-        MutexAutoLock lock(rec->addr_info_lock);
-
-        NetAddr *addr = nullptr;
-        NetAddrElement *addrElement = rec->addr_info->mAddresses.getFirst();
-        if (addrElement) {
-            addr = &addrElement->mAddress;
-        }
-        while (addr) {
-            char buf[kIPv6CStrBufSize];
-            if (NetAddrToString(addr, buf, sizeof(buf))) {
-                info.hostaddr.AppendElement(buf);
-            }
-            addr = nullptr;
-            addrElement = addrElement->getNext();
-            if (addrElement) {
-                addr = &addrElement->mAddress;
-            }
-        }
-    }
-
-    nsTArray<DNSCacheEntries> *args = static_cast<nsTArray<DNSCacheEntries> *>(arg);
-    args->AppendElement(info);
-
-    return PL_DHASH_NEXT;
-}
-
 void
 nsHostResolver::GetDNSCacheEntries(nsTArray<DNSCacheEntries> *args)
 {
-    PL_DHashTableEnumerate(&mDB, CacheEntryEnumerator, args);
+    for (auto iter = mDB.Iter(); !iter.Done(); iter.Next()) {
+        // We don't pay attention to address literals, only resolved domains.
+        // Also require a host.
+        auto entry = static_cast<nsHostDBEnt*>(iter.Get());
+        nsHostRecord* rec = entry->rec;
+        MOZ_ASSERT(rec, "rec should never be null here!");
+        if (!rec || !rec->addr_info || !rec->host) {
+            continue;
+        }
+
+        DNSCacheEntries info;
+        info.hostname = rec->host;
+        info.family = rec->af;
+        info.netInterface = rec->netInterface;
+        info.expiration =
+            (int64_t)(rec->mValidEnd - TimeStamp::NowLoRes()).ToSeconds();
+        if (info.expiration <= 0) {
+            // We only need valid DNS cache entries
+            continue;
+        }
+
+        {
+            MutexAutoLock lock(rec->addr_info_lock);
+
+            NetAddr *addr = nullptr;
+            NetAddrElement *addrElement = rec->addr_info->mAddresses.getFirst();
+            if (addrElement) {
+                addr = &addrElement->mAddress;
+            }
+            while (addr) {
+                char buf[kIPv6CStrBufSize];
+                if (NetAddrToString(addr, buf, sizeof(buf))) {
+                    info.hostaddr.AppendElement(buf);
+                }
+                addr = nullptr;
+                addrElement = addrElement->getNext();
+                if (addrElement) {
+                    addr = &addrElement->mAddress;
+                }
+            }
+        }
+
+        args->AppendElement(info);
+    }
 }

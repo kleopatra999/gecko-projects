@@ -45,6 +45,9 @@ BytecodeAnalysis::init(TempAllocator& alloc, GSNCache& gsn)
     if (!infos_.growByUninitialized(script_->length()))
         return false;
 
+    // We need a scope chain if any of the bindings are aliased.
+    usesScopeChain_ = script_->hasAnyAliasedBindings();
+
     jsbytecode* end = script_->codeEnd();
 
     // Clear all BytecodeInfo.
@@ -167,7 +170,7 @@ BytecodeAnalysis::init(TempAllocator& alloc, GSNCache& gsn)
           case JSOP_GETGNAME:
           case JSOP_SETGNAME:
           case JSOP_STRICTSETGNAME:
-            if (script_->hasPollutedGlobalScope())
+            if (script_->hasNonSyntacticScope())
                 usesScopeChain_ = true;
             break;
 

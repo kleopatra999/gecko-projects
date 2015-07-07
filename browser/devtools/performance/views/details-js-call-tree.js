@@ -10,10 +10,11 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
 
   rerenderPrefs: [
     "invert-call-tree",
-    "show-platform-data"
+    "show-platform-data",
+    "flatten-tree-recursion",
   ],
 
-  rangeChangeDebounceTime: 50, // ms
+  rangeChangeDebounceTime: 75, // ms
 
   /**
    * Sets up the view with event binding.
@@ -21,12 +22,9 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
   initialize: function () {
     DetailsSubview.initialize.call(this);
 
-    this._onPrefChanged = this._onPrefChanged.bind(this);
     this._onLink = this._onLink.bind(this);
 
     this.container = $("#js-calltree-view .call-tree-cells-container");
-
-    JITOptimizationsView.initialize();
   },
 
   /**
@@ -34,7 +32,6 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
    */
   destroy: function () {
     this.container = null;
-    JITOptimizationsView.destroy();
     DetailsSubview.destroy.call(this);
   },
 
@@ -45,12 +42,14 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
    *        The { startTime, endTime }, in milliseconds.
    */
   render: function (interval={}) {
-    let options = {
-      contentOnly: !PerformanceController.getOption("show-platform-data"),
-      invertTree: PerformanceController.getOption("invert-call-tree")
-    };
     let recording = PerformanceController.getCurrentRecording();
     let profile = recording.getProfile();
+    let options = {
+      contentOnly: !PerformanceController.getOption("show-platform-data"),
+      invertTree: PerformanceController.getOption("invert-call-tree"),
+      flattenRecursion: PerformanceController.getOption("flatten-tree-recursion"),
+      showOptimizationHint: recording.getConfiguration().withJITOptimizations,
+    };
     let threadNode = this._prepareCallTree(profile, interval, options);
     this._populateCallTree(threadNode, options);
     this.emit(EVENTS.JS_CALL_TREE_RENDERED);
@@ -61,9 +60,13 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
    */
   _onLink: function (_, treeItem) {
     let { url, line } = treeItem.frame.getInfo();
-    viewSourceInDebugger(url, line).then(
-      () => this.emit(EVENTS.SOURCE_SHOWN_IN_JS_DEBUGGER),
-      () => this.emit(EVENTS.SOURCE_NOT_FOUND_IN_JS_DEBUGGER));
+    gToolbox.viewSourceInDebugger(url, line).then(success => {
+      if (success) {
+        this.emit(EVENTS.SOURCE_SHOWN_IN_JS_DEBUGGER);
+      } else {
+        this.emit(EVENTS.SOURCE_NOT_FOUND_IN_JS_DEBUGGER);
+      }
+    });
   },
 
   /**
@@ -71,12 +74,17 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
    * populate the call tree.
    */
   _prepareCallTree: function (profile, { startTime, endTime }, options) {
-    let threadSamples = profile.threads[0].samples;
-    let optimizations = profile.threads[0].optimizations;
-    let { contentOnly, invertTree } = options;
+    let thread = profile.threads[0];
+    let { contentOnly, invertTree, flattenRecursion } = options;
+    let threadNode = new ThreadNode(thread, { startTime, endTime, contentOnly, invertTree, flattenRecursion });
 
-    let threadNode = new ThreadNode(threadSamples,
-      { startTime, endTime, contentOnly, invertTree, optimizations });
+    // Real profiles from nsProfiler (i.e. not synthesized from allocation
+    // logs) always have a (root) node. Go down one level in the uninverted
+    // view to avoid displaying both the synthesized root node and the (root)
+    // node from the profiler.
+    if (!invertTree) {
+      threadNode.calls = threadNode.calls[0].calls;
+    }
 
     return threadNode;
   },
@@ -93,27 +101,30 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
     let root = new CallView({
       frame: frameNode,
       inverted: inverted,
-      // Root nodes are hidden in inverted call trees.
+      // The synthesized root node is hidden in inverted call trees.
       hidden: inverted,
       // Call trees should only auto-expand when not inverted. Passing undefined
       // will default to the CALL_TREE_AUTO_EXPAND depth.
-      autoExpandDepth: inverted ? 0 : undefined
+      autoExpandDepth: inverted ? 0 : undefined,
+      showOptimizationHint: options.showOptimizationHint
     });
 
     // Bind events.
     root.on("link", this._onLink);
 
-    // Pipe "focus" events to the view, used by
-    // tests and JITOptimizationsView.
-    root.on("focus", (_, node) => this.emit("focus", node));
+    // Pipe "focus" events to the view, mostly for tests
+    root.on("focus", () => this.emit("focus"));
+    // TODO tests for optimization event and rendering
+    // optimization bubbles in call tree
+    root.on("optimization", (_, node) => this.emit("optimization", node));
 
     // Clear out other call trees.
     this.container.innerHTML = "";
     root.attachTo(this.container);
 
     // When platform data isn't shown, hide the cateogry labels, since they're
-    // only available for C++ frames.
-    root.toggleCategories(options.contentOnly);
+    // only available for C++ frames. Pass *false* to make them invisible.
+    root.toggleCategories(!options.contentOnly);
 
     // Return the CallView for tests
     return root;
@@ -122,30 +133,4 @@ let JsCallTreeView = Heritage.extend(DetailsSubview, {
   toString: () => "[object JsCallTreeView]"
 });
 
-/**
- * Opens/selects the debugger in this toolbox and jumps to the specified
- * file name and line number.
- * @param string url
- * @param number line
- */
-let viewSourceInDebugger = Task.async(function *(url, line) {
-  // If the Debugger was already open, switch to it and try to show the
-  // source immediately. Otherwise, initialize it and wait for the sources
-  // to be added first.
-  let debuggerAlreadyOpen = gToolbox.getPanel("jsdebugger");
-  let { panelWin: dbg } = yield gToolbox.selectTool("jsdebugger");
-
-  if (!debuggerAlreadyOpen) {
-    yield dbg.once(dbg.EVENTS.SOURCES_ADDED);
-  }
-
-  let { DebuggerView } = dbg;
-  let { Sources } = DebuggerView;
-
-  let item = Sources.getItemForAttachment(a => a.source.url === url);
-  if (item) {
-    return DebuggerView.setEditorLocation(item.attachment.source.actor, line, { noDebug: true });
-  }
-
-  return Promise.reject("Couldn't find the specified source in the debugger.");
-});
+EventEmitter.decorate(JsCallTreeView);

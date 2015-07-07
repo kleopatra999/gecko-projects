@@ -26,15 +26,10 @@ namespace mozilla {
 #undef LOG
 #endif
 
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetGMPLog();
 
-#define LOGD(msg) PR_LOG(GetGMPLog(), PR_LOG_DEBUG, msg)
-#define LOG(level, msg) PR_LOG(GetGMPLog(), (level), msg)
-#else
-#define LOGD(msg)
-#define LOG(level, msg)
-#endif
+#define LOGD(msg) MOZ_LOG(GetGMPLog(), mozilla::LogLevel::Debug, msg)
+#define LOG(level, msg) MOZ_LOG(GetGMPLog(), (level), msg)
 
 #ifdef __CLASS__
 #undef __CLASS__
@@ -91,7 +86,7 @@ GetGMPStorageDir(nsIFile** aTempDir, const nsCString& aNodeId)
 
 enum OpenFileMode  { ReadWrite, Truncate };
 
-nsresult
+static nsresult
 OpenStorageFile(const nsCString& aRecordName,
                 const nsCString& aNodeId,
                 const OpenFileMode aMode,
@@ -117,11 +112,28 @@ OpenStorageFile(const nsCString& aRecordName,
   return f->OpenNSPRFileDesc(mode, PR_IRWXU, aOutFD);
 }
 
+static nsresult
+RemoveStorageFile(const nsCString& aRecordName,
+                  const nsCString& aNodeId)
+{
+  nsCOMPtr<nsIFile> f;
+  nsresult rv = GetGMPStorageDir(getter_AddRefs(f), aNodeId);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  nsAutoString recordNameHash;
+  recordNameHash.AppendInt(HashString(aRecordName.get()));
+  f->Append(recordNameHash);
+
+  return f->Remove(/* bool recursive= */ false);
+}
+
 PLDHashOperator
 CloseFile(const nsACString& key, PRFileDesc*& entry, void* cx)
 {
   if (PR_Close(entry) != PR_SUCCESS) {
-    NS_WARNING("GMPDiskStorage Failed to clsose file.");
+    NS_WARNING("GMPDiskStorage failed to close file.");
   }
   return PL_DHASH_REMOVE;
 }
@@ -153,6 +165,7 @@ public:
     return mFiles.Contains(aRecordName);
   }
 
+  static
   GMPErr ReadRecordMetadata(PRFileDesc* aFd,
                             int32_t& aOutFileLength,
                             int32_t& aOutRecordLength,
@@ -257,10 +270,22 @@ public:
       return GMPGenericErr;
     }
 
-    // Write operations overwrite the entire record. So re-open the file
-    // in truncate mode, to clear its contents.
+    // Write operations overwrite the entire record. So close it now.
     PR_Close(fd);
     mFiles.Remove(aRecordName);
+
+    // Writing 0 bytes means removing (deleting) the file.
+    if (aBytes.Length() == 0) {
+      nsresult rv = RemoveStorageFile(aRecordName, mNodeId);
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        // Could not delete file -> Continue with trying to erase the contents.
+      } else {
+        return GMPNoErr;
+      }
+    }
+
+    // Write operations overwrite the entire record. So re-open the file
+    // in truncate mode, to clear its contents.
     if (NS_FAILED(OpenStorageFile(aRecordName, mNodeId, Truncate, &fd))) {
       return GMPGenericErr;
     }
@@ -358,7 +383,7 @@ public:
       if (PR_Close(fd) == PR_SUCCESS) {
         mFiles.Remove(aRecordName);
       } else {
-        NS_WARNING("GMPDiskStorage Failed to clsose file.");
+        NS_WARNING("GMPDiskStorage failed to close file.");
       }
     }
   }

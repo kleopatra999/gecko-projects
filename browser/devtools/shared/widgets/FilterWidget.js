@@ -14,6 +14,7 @@ const { Cu } = require("chrome");
 const { ViewHelpers } = Cu.import("resource:///modules/devtools/ViewHelpers.jsm", {});
 const STRINGS_URI = "chrome://browser/locale/devtools/filterwidget.properties";
 const L10N = new ViewHelpers.L10N(STRINGS_URI);
+const {cssTokenizer} = require("devtools/sourceeditor/css-tokenizer");
 
 const DEFAULT_FILTER_TYPE = "length";
 const UNIT_MAPPING = {
@@ -113,6 +114,7 @@ function CSSFilterEditorWidget(el, value = "") {
   this._mouseMove = this._mouseMove.bind(this);
   this._mouseUp = this._mouseUp.bind(this);
   this._mouseDown = this._mouseDown.bind(this);
+  this._keyDown = this._keyDown.bind(this);
   this._input = this._input.bind(this);
 
   this._initMarkup();
@@ -195,6 +197,7 @@ CSSFilterEditorWidget.prototype = {
     this.addButton.addEventListener("click", this._addButtonClick);
     this.list.addEventListener("click", this._removeButtonClick);
     this.list.addEventListener("mousedown", this._mouseDown);
+    this.list.addEventListener("keydown", this._keyDown);
 
     // These events are event delegators for
     // drag-drop re-ordering and label-dragging
@@ -205,9 +208,77 @@ CSSFilterEditorWidget.prototype = {
     this.list.addEventListener("input", this._input);
   },
 
+  _getFilterElementIndex: function(el) {
+    return [...this.list.children].indexOf(el);
+  },
+
+  _keyDown: function(e) {
+    if (e.target.tagName.toLowerCase() !== "input" ||
+       (e.keyCode !== 40 && e.keyCode !== 38)) {
+      return;
+    }
+    let input = e.target;
+
+    const direction = e.keyCode === 40 ? -1 : 1;
+
+    let multiplier = DEFAULT_VALUE_MULTIPLIER;
+    if (e.altKey) {
+      multiplier = SLOW_VALUE_MULTIPLIER;
+    } else if (e.shiftKey) {
+      multiplier = FAST_VALUE_MULTIPLIER;
+    }
+
+    const filterEl = e.target.closest(".filter");
+    const index = this._getFilterElementIndex(filterEl);
+    const filter = this.filters[index];
+
+    // Filters that have units are number-type filters. For them,
+    // the value can be incremented/decremented simply.
+    // For other types of filters (e.g. drop-shadow) we need to check
+    // if the keypress happened close to a number first.
+    if (filter.unit) {
+      let startValue = parseFloat(e.target.value);
+      let value = startValue + direction * multiplier;
+
+      const [min, max] = this._definition(filter.name).range;
+      value = value < min ? min :
+              value > max ? max : value;
+
+      input.value = fixFloat(value);
+
+      this.updateValueAt(index, value);
+    } else {
+      let selectionStart = input.selectionStart;
+      let num = getNeighbourNumber(input.value, selectionStart);
+      if (!num) {
+        return;
+      }
+
+      let {start, end, value} = num;
+
+      let split = input.value.split("");
+      let computed = fixFloat(value + direction * multiplier),
+          dotIndex = computed.indexOf(".0");
+      if (dotIndex > -1) {
+        computed = computed.slice(0, -2);
+
+        selectionStart = selectionStart > start + dotIndex ?
+                                          start + dotIndex :
+                                          selectionStart;
+      }
+      split.splice(start, end - start, computed);
+
+      value = split.join("");
+      input.value = value;
+      this.updateValueAt(index, value);
+      input.setSelectionRange(selectionStart, selectionStart);
+    }
+    e.preventDefault();
+  },
+
   _input: function(e) {
     let filterEl = e.target.closest(".filter"),
-        index = [...this.list.children].indexOf(filterEl),
+        index = this._getFilterElementIndex(filterEl),
         filter = this.filters[index],
         def = this._definition(filter.name);
 
@@ -231,7 +302,7 @@ CSSFilterEditorWidget.prototype = {
     } else if (e.target.classList.contains("devtools-draglabel")) {
       let label = e.target,
           input = filterEl.querySelector("input"),
-          index = [...this.list.children].indexOf(filterEl);
+          index = this._getFilterElementIndex(filterEl);
 
       this._dragging = {
         index, label, input,
@@ -273,7 +344,7 @@ CSSFilterEditorWidget.prototype = {
     }
 
     let filterEl = e.target.closest(".filter");
-    let index = [...this.list.children].indexOf(filterEl);
+    let index = this._getFilterElementIndex(filterEl);
     this.removeAt(index);
   },
 
@@ -622,6 +693,7 @@ CSSFilterEditorWidget.prototype = {
     this.addButton.removeEventListener("click", this._addButtonClick);
     this.list.removeEventListener("click", this._removeButtonClick);
     this.list.removeEventListener("mousedown", this._mouseDown);
+    this.list.removeEventListener("keydown", this._keyDown);
 
     // These events are used for drag drop re-ordering
     this.win.removeEventListener("mousemove", this._mouseMove);
@@ -679,42 +751,84 @@ function swapArrayIndices(array, a, b) {
   */
 function tokenizeComputedFilter(css) {
   let filters = [];
-  let current = "";
   let depth = 0;
 
   if (css === "none") {
     return filters;
   }
 
-  while (css.length) {
-    const char = css[0];
+  let state = "initial";
+  let name;
+  let contents;
+  for (let token of cssTokenizer(css)) {
+    switch (state) {
+      case "initial":
+        if (token.tokenType === "function") {
+          name = token.text;
+          contents = "";
+          state = "function";
+          depth = 1;
+        } else if (token.tokenType === "url" || token.tokenType === "bad_url") {
+          filters.push({name: "url", value: token.text});
+          // Leave state as "initial" because the URL token includes
+          // the trailing close paren.
+        }
+        break;
 
-    switch (char) {
-      case "(":
-        depth++;
-        if (depth === 1) {
-          filters.push({name: current.trim()});
-          current = "";
-        } else {
-          current += char;
+      case "function":
+        if (token.tokenType === "symbol" && token.text === ")") {
+          --depth;
+          if (depth === 0) {
+            filters.push({name: name, value: contents});
+            state = "initial";
+            break;
+          }
         }
-      break;
-      case ")":
-        depth--;
-        if (depth === 0) {
-          filters[filters.length - 1].value = current.trim();
-          current = "";
-        } else {
-          current += char;
+        contents += css.substring(token.startOffset, token.endOffset);
+        if (token.tokenType === "function" ||
+            (token.tokenType === "symbol" && token.text === "(")) {
+          ++depth;
         }
-      break;
-      default:
-        current += char;
-      break;
+        break;
     }
-
-    css = css.slice(1);
   }
 
   return filters;
+}
+
+/**
+  * Finds neighbour number characters of an index in a string
+  * the numbers may be floats (containing dots)
+  * It's assumed that the value given to this function is a valid number
+  *
+  * @param {String} string
+  *        The string containing numbers
+  * @param {Number} index
+  *        The index to look for neighbours for
+  * @return {Object}
+  *         returns null if no number is found
+  *         value: The number found
+  *         start: The number's starting index
+  *         end: The number's ending index
+  */
+function getNeighbourNumber(string, index) {
+  if (!/\d/.test(string)) {
+    return null;
+  }
+
+  let left = /-?[0-9.]*$/.exec(string.slice(0, index)),
+      right = /-?[0-9.]*/.exec(string.slice(index));
+
+  left = left ? left[0] : "";
+  right = right ? right[0] : "";
+
+  if (!right && !left) {
+    return null;
+  }
+
+  return {
+    value: fixFloat(left + right, true),
+    start: index - left.length,
+    end: index + right.length
+  };
 }

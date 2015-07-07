@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -47,7 +47,7 @@ DeviceStorageFileSystem::DeviceStorageFileSystem(
   // Get the local path of the file system root.
   // Since the child process is not allowed to access the file system, we only
   // do this from the parent process.
-  if (!FileSystemUtils::IsParentProcess()) {
+  if (!XRE_IsParentProcess()) {
     return;
   }
   nsCOMPtr<nsIFile> rootFile;
@@ -100,7 +100,7 @@ DeviceStorageFileSystem::GetWindow() const
 already_AddRefed<nsIFile>
 DeviceStorageFileSystem::GetLocalFile(const nsAString& aRealPath) const
 {
-  MOZ_ASSERT(FileSystemUtils::IsParentProcess(),
+  MOZ_ASSERT(XRE_IsParentProcess(),
              "Should be on parent process!");
   nsAutoString localPath;
   FileSystemUtils::NormalizedPathToLocalPath(aRealPath, localPath);
@@ -114,9 +114,9 @@ DeviceStorageFileSystem::GetLocalFile(const nsAString& aRealPath) const
 }
 
 bool
-DeviceStorageFileSystem::GetRealPath(FileImpl* aFile, nsAString& aRealPath) const
+DeviceStorageFileSystem::GetRealPath(BlobImpl* aFile, nsAString& aRealPath) const
 {
-  MOZ_ASSERT(FileSystemUtils::IsParentProcess(),
+  MOZ_ASSERT(XRE_IsParentProcess(),
              "Should be on parent process!");
   MOZ_ASSERT(aFile, "aFile Should not be null.");
 
@@ -141,7 +141,7 @@ DeviceStorageFileSystem::GetRootName() const
 bool
 DeviceStorageFileSystem::IsSafeFile(nsIFile* aFile) const
 {
-  MOZ_ASSERT(FileSystemUtils::IsParentProcess(),
+  MOZ_ASSERT(XRE_IsParentProcess(),
              "Should be on parent process!");
   MOZ_ASSERT(aFile);
 

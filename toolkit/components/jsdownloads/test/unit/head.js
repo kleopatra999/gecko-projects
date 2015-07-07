@@ -69,7 +69,7 @@ const TEST_STORE_FILE_NAME = "test-downloads.json";
 const TEST_REFERRER_URL = "http://www.example.com/referrer.html";
 
 const TEST_DATA_SHORT = "This test string is downloaded.";
-// Generate using gzipCompressString in TelemetryPing.jsm.
+// Generate using gzipCompressString in TelemetryController.jsm.
 const TEST_DATA_SHORT_GZIP_ENCODED_FIRST = [
  31,139,8,0,0,0,0,0,0,3,11,201,200,44,86,40,73,45,46,81,40,46,41,202,204
 ];
@@ -137,8 +137,19 @@ function getTempFile(aLeafName)
   do_check_false(file.exists());
 
   do_register_cleanup(function () {
-    if (file.exists()) {
-      file.remove(false);
+    try {
+      file.remove(false)
+    } catch (e) {
+      if (!(e instanceof Components.Exception &&
+            (e.result == Cr.NS_ERROR_FILE_ACCESS_DENIED ||
+             e.result == Cr.NS_ERROR_FILE_TARGET_DOES_NOT_EXIST ||
+             e.result == Cr.NS_ERROR_FILE_NOT_FOUND))) {
+        throw e;
+      }
+      // On Windows, we may get an access denied error if the file existed before,
+      // and was recently deleted.
+      // Don't bother checking file.exists() as that may also cause an access
+      // denied error.
     }
   });
 
@@ -534,7 +545,7 @@ function promiseVerifyContents(aPath, aExpectedContents)
 
     let deferred = Promise.defer();
     NetUtil.asyncFetch(
-      file,
+      { uri: NetUtil.newURI(file), loadUsingSystemPrincipal: true },
       function(aInputStream, aStatus) {
         do_check_true(Components.isSuccessCode(aStatus));
         let contents = NetUtil.readInputStreamToString(aInputStream,

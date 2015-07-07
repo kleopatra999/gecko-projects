@@ -18,12 +18,18 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesUIUtils",
   "resource:///modules/PlacesUIUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "RecentlyClosedTabsAndWindowsMenuUtils",
   "resource:///modules/sessionstore/RecentlyClosedTabsAndWindowsMenuUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Pocket",
+  "resource:///modules/Pocket.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ShortcutUtils",
   "resource://gre/modules/ShortcutUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "CharsetMenu",
   "resource://gre/modules/CharsetMenu.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
+  "resource://gre/modules/AddonManager.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "SocialService",
+  "resource://gre/modules/SocialService.jsm");
 
 XPCOMUtils.defineLazyGetter(this, "CharsetBundle", function() {
   const kCharsetBundle = "chrome://global/locale/charsetMenu.properties";
@@ -363,12 +369,10 @@ const CustomizableWidgets = [
       // Hardcode the addition of the "work offline" menuitem at the bottom:
       itemsToDisplay.push({localName: "menuseparator", getAttribute: () => {}});
       itemsToDisplay.push(doc.getElementById("goOfflineMenuitem"));
-      fillSubviewFromMenuItems(itemsToDisplay, doc.getElementById("PanelUI-developerItems"));
 
-    },
-    onViewHiding: function(aEvent) {
-      let doc = aEvent.target.ownerDocument;
-      clearSubview(doc.getElementById("PanelUI-developerItems"));
+      let developerItems = doc.getElementById("PanelUI-developerItems");
+      clearSubview(developerItems);
+      fillSubviewFromMenuItems(itemsToDisplay, developerItems);
     }
   }, {
     id: "sidebar-button",
@@ -393,11 +397,9 @@ const CustomizableWidgets = [
       if (providerMenuSeps.length > 0)
         win.SocialSidebar.populateProviderMenu(providerMenuSeps[0]);
 
-      fillSubviewFromMenuItems([...menu.children], doc.getElementById("PanelUI-sidebarItems"));
-    },
-    onViewHiding: function(aEvent) {
-      let doc = aEvent.target.ownerDocument;
-      clearSubview(doc.getElementById("PanelUI-sidebarItems"));
+      let sidebarItems = doc.getElementById("PanelUI-sidebarItems");
+      clearSubview(sidebarItems);
+      fillSubviewFromMenuItems([...menu.children], sidebarItems);
     }
   }, {
     id: "social-share-button",
@@ -993,30 +995,6 @@ const CustomizableWidgets = [
     }
   }];
 
-#ifdef XP_WIN
-#ifdef MOZ_METRO
-if (Services.metro && Services.metro.supported) {
-  let widgetArgs = {tooltiptext: "switch-to-metro-button2.tooltiptext"};
-  let brandShortName = BrandBundle.GetStringFromName("brandShortName");
-  let metroTooltip = CustomizableUI.getLocalizedProperty(widgetArgs, "tooltiptext",
-                                                         [brandShortName]);
-  CustomizableWidgets.push({
-    id: "switch-to-metro-button",
-    label: "switch-to-metro-button2.label",
-    tooltiptext: metroTooltip,
-    defaultArea: CustomizableUI.AREA_PANEL,
-    showInPrivateBrowsing: false, /* See bug 928068 */
-    onCommand: function(aEvent) {
-      let win = aEvent.view;
-      if (win && typeof win.SwitchToMetro == "function") {
-        win.SwitchToMetro();
-      }
-    }
-  });
-}
-#endif
-#endif
-
 if (Services.prefs.getBoolPref("privacy.panicButton.enabled")) {
   CustomizableWidgets.push({
     id: "panic-button",
@@ -1081,41 +1059,91 @@ if (Services.prefs.getBoolPref("privacy.panicButton.enabled")) {
   });
 }
 
-#ifdef E10S_TESTING_ONLY
-/**
-  * The e10s button's purpose is to lower the barrier of entry
-  * for our Nightly testers to use e10s windows. We'll be removing it
-  * once remote tabs are enabled. This button should never ever make it
-  * to production. If it does, that'd be bad, and we should all feel bad.
-  */
-let getCommandFunction = function(aOpenRemote) {
-  return function(aEvent) {
-    let win = aEvent.view;
-    if (win && typeof win.OpenBrowserWindow == "function") {
-      win.OpenBrowserWindow({remote: aOpenRemote});
+if (Services.prefs.getBoolPref("browser.pocket.enabled")) {
+  let isEnabledForLocale = true;
+  if (Services.prefs.getBoolPref("browser.pocket.useLocaleList")) {
+    let chromeRegistry = Cc["@mozilla.org/chrome/chrome-registry;1"]
+                           .getService(Ci.nsIXULChromeRegistry);
+    let browserLocale = chromeRegistry.getSelectedLocale("browser");
+    let enabledLocales = [];
+    try {
+      enabledLocales = Services.prefs.getCharPref("browser.pocket.enabledLocales").split(' ');
+    } catch (ex) {
+      Cu.reportError(ex);
     }
-  };
+    isEnabledForLocale = enabledLocales.indexOf(browserLocale) != -1;
+  }
+
+  if (isEnabledForLocale) {
+    let pocketButton = {
+      id: "pocket-button",
+      defaultArea: CustomizableUI.AREA_NAVBAR,
+      introducedInVersion: "pref",
+      type: "view",
+      viewId: "PanelUI-pocketView",
+      // Use forwarding functions here to avoid loading Pocket.jsm on startup:
+      onViewShowing: function() {
+        return Pocket.onPanelViewShowing.apply(this, arguments);
+      },
+      onViewHiding: function() {
+        return Pocket.onPanelViewHiding.apply(this, arguments);
+      },
+
+      // If the user has the "classic" Pocket add-on installed, use that instead
+      // and destroy the widget.
+      conditionalDestroyPromise: new Promise(resolve => {
+        AddonManager.getAddonByID("isreaditlater@ideashower.com", addon => {
+          resolve(addon && addon.isActive);
+        });
+      }),
+    };
+
+    CustomizableWidgets.push(pocketButton);
+    CustomizableUI.addListener(pocketButton);
+
+    // Uninstall the Pocket social provider if it exists, but only if we haven't
+    // already uninstalled it in this manner.  That way the user can reinstall
+    // it if they prefer it without its being uninstalled every time they start
+    // the browser.
+    let origin = "https://getpocket.com";
+    SocialService.getProvider(origin, provider => {
+      if (provider) {
+        let pref = "social.backup.getpocket-com";
+        if (!Services.prefs.prefHasUserValue(pref)) {
+          let str = Cc["@mozilla.org/supports-string;1"].
+                    createInstance(Ci.nsISupportsString);
+          str.data = JSON.stringify(provider.manifest);
+          Services.prefs.setComplexValue(pref, Ci.nsISupportsString, str);
+          SocialService.uninstallProvider(origin, () => {});
+        }
+      }
+    });
+  }
 }
 
-let openRemote = !Services.appinfo.browserTabsRemoteAutostart;
-// Like the XUL menuitem counterparts, we hard-code these strings in because
-// this button should never roll into production.
-let buttonLabel = openRemote ? "New e10s Window"
-                              : "New Non-e10s Window";
-
-let e10sDisabled = Services.appinfo.inSafeMode;
+#ifdef E10S_TESTING_ONLY
+let e10sDisabled = false;
 #ifdef XP_MACOSX
 // On OS X, "Disable Hardware Acceleration" also disables OMTC and forces
 // a fallback to Basic Layers. This is incompatible with e10s.
 e10sDisabled |= Services.prefs.getBoolPref("layers.acceleration.disabled");
 #endif
 
-CustomizableWidgets.push({
-  id: "e10s-button",
-  label: buttonLabel,
-  tooltiptext: buttonLabel,
-  disabled: e10sDisabled,
-  defaultArea: CustomizableUI.AREA_PANEL,
-  onCommand: getCommandFunction(openRemote),
-});
+if (Services.appinfo.browserTabsRemoteAutostart) {
+  CustomizableWidgets.push({
+    id: "e10s-button",
+    disabled: e10sDisabled,
+    defaultArea: CustomizableUI.AREA_PANEL,
+    onBuild: function(aDocument) {
+        node.setAttribute("label", CustomizableUI.getLocalizedProperty(this, "label"));
+        node.setAttribute("tooltiptext", CustomizableUI.getLocalizedProperty(this, "tooltiptext"));
+    },
+    onCommand: function(aEvent) {
+      let win = aEvent.view;
+      if (win && typeof win.OpenBrowserWindow == "function") {
+        win.OpenBrowserWindow({remote: false});
+      }
+    },
+  });
+}
 #endif

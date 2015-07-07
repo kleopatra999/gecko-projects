@@ -1,8 +1,14 @@
-const Services = require("Services");
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+"use strict";
+
 const { Ci, Cu } = require("chrome");
+const Services = require("Services");
 const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
+const { dbg_assert, fetch } = DevToolsUtils;
 const EventEmitter = require("devtools/toolkit/event-emitter");
-const { dbg_assert, fetch } = require("devtools/toolkit/DevToolsUtils");
 const { OriginalLocation, GeneratedLocation, getOffsetColumn } = require("devtools/server/actors/common");
 const { resolve } = require("promise");
 
@@ -150,6 +156,7 @@ TabSources.prototype = {
       source: source,
       originalUrl: originalUrl,
       generatedSource: generatedSource,
+      isInlineSource: isInlineSource,
       contentType: contentType
     });
 
@@ -275,28 +282,37 @@ TabSources.prototype = {
     // need to be conservative and only treat valid js files as real
     // sources. Otherwise, use the `originalUrl` property to treat it
     // as an HTML source that manages multiple inline sources.
-    if (url) {
-      try {
-        let urlInfo = Services.io.newURI(url, null, null).QueryInterface(Ci.nsIURL);
-        if (urlInfo.fileExtension === "html" || urlInfo.fileExtension === "xml") {
-          spec.isInlineSource = true;
-        }
-        else if (urlInfo.fileExtension === "js") {
-          spec.contentType = "text/javascript";
-        }
-      } catch(ex) {
-        // Not a valid URI.
 
-        // bug 1124536: fix getSourceText on scripts associated "javascript:SOURCE" urls
-        // (e.g. 'evaluate(sandbox, sourcecode, "javascript:"+sourcecode)' )
-        if (url.indexOf("javascript:") === 0) {
-          spec.contentType = "text/javascript";
+    // Assume the source is inline if the element that introduced it is not a
+    // script element, or does not have a src attribute.
+    let element = aSource.element ? aSource.element.unsafeDereference() : null;
+    if (element && (element.tagName !== "SCRIPT" || !element.hasAttribute("src"))) {
+      spec.isInlineSource = true;
+    } else {
+      if (url) {
+        try {
+          let urlInfo = Services.io.newURI(url, null, null).QueryInterface(Ci.nsIURL);
+          if (urlInfo.fileExtension === "xml") {
+            // XUL inline scripts may not correctly have the
+            // `source.element` property, so do a blunt check here if
+            // it's an xml page.
+            spec.isInlineSource = true;
+          }
+          else if (urlInfo.fileExtension === "js") {
+            spec.contentType = "text/javascript";
+          }
+        } catch(ex) {
+          // There are a few special URLs that we know are JavaScript:
+          // inline `javascript:` and code coming from the console
+          if (url.indexOf("javascript:") === 0 || url === 'debugger eval code') {
+            spec.contentType = "text/javascript";
+          }
         }
       }
-    }
-    else {
-      // Assume the content is javascript if there's no URL
-      spec.contentType = "text/javascript";
+      else {
+        // Assume the content is javascript if there's no URL
+        spec.contentType = "text/javascript";
+      }
     }
 
     return this.source(spec);
@@ -321,10 +337,9 @@ TabSources.prototype = {
     return this.fetchSourceMap(aSource)
       .then(map => {
         if (map) {
-          return [
-            this.source({ originalUrl: s, generatedSource: aSource })
-            for (s of map.sources)
-          ].filter(isNotNull);
+          return map.sources.map(s => {
+            return this.source({ originalUrl: s, generatedSource: aSource });
+          }).filter(isNotNull);
         }
         return null;
       });

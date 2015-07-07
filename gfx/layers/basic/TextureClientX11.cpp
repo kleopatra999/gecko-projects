@@ -34,7 +34,7 @@ TextureClientX11::~TextureClientX11()
   MOZ_COUNT_DTOR(TextureClientX11);
 }
 
-TemporaryRef<TextureClient>
+already_AddRefed<TextureClient>
 TextureClientX11::CreateSimilar(TextureFlags aFlags,
                                 TextureAllocationFlags aAllocFlags) const
 {
@@ -46,7 +46,7 @@ TextureClientX11::CreateSimilar(TextureFlags aFlags,
     return nullptr;
   }
 
-  return tex;
+  return tex.forget();
 }
 
 bool
@@ -112,7 +112,9 @@ TextureClientX11::AllocateForSurface(IntSize aSize, TextureAllocationFlags aText
   //MOZ_ASSERT(mFormat != gfx::FORMAT_YUV, "This TextureClient cannot use YCbCr data");
 
   MOZ_ASSERT(aSize.width >= 0 && aSize.height >= 0);
-  if (aSize.width <= 0 || aSize.height <= 0) {
+  if (aSize.width <= 0 || aSize.height <= 0 ||
+      aSize.width > XLIB_IMAGE_SIDE_SIZE_LIMIT ||
+      aSize.height > XLIB_IMAGE_SIDE_SIZE_LIMIT) {
     gfxDebug() << "Asking for X11 surface of invalid size " << aSize.width << "x" << aSize.height;
     return false;
   }

@@ -8,7 +8,7 @@
 #include <math.h>                       // for fabsf, pow, powf
 #include <algorithm>                    // for max
 #include "AsyncPanZoomController.h"     // for AsyncPanZoomController
-#include "mozilla/dom/AnimationPlayer.h" // for ComputedTimingFunction
+#include "mozilla/dom/KeyframeEffect.h" // for ComputedTimingFunction
 #include "mozilla/layers/APZCTreeManager.h" // for APZCTreeManager
 #include "mozilla/layers/APZThreadUtils.h" // for AssertOnControllerThread
 #include "FrameMetrics.h"               // for FrameMetrics
@@ -125,22 +125,21 @@ void Axis::StartTouch(ParentLayerCoord aPos, uint32_t aTimestampMs) {
 
 bool Axis::AdjustDisplacement(ParentLayerCoord aDisplacement,
                               /* ParentLayerCoord */ float& aDisplacementOut,
-                              /* ParentLayerCoord */ float&
-                              aOverscrollAmountOut,
-                              bool forceOverscroll /* = false */)
+                              /* ParentLayerCoord */ float& aOverscrollAmountOut,
+                              bool aForceOverscroll /* = false */)
 {
   if (mAxisLocked) {
     aOverscrollAmountOut = 0;
     aDisplacementOut = 0;
     return false;
   }
-  if (forceOverscroll) {
+  if (aForceOverscroll) {
     aOverscrollAmountOut = aDisplacement;
     aDisplacementOut = 0;
     return false;
   }
 
-  StopSamplingOverscrollAnimation();
+  ClearOverscrollAnimationState();
 
   ParentLayerCoord displacement = aDisplacement;
 
@@ -182,7 +181,12 @@ ParentLayerCoord Axis::ApplyResistance(ParentLayerCoord aRequestedOverscroll) co
 
 void Axis::OverscrollBy(ParentLayerCoord aOverscroll) {
   MOZ_ASSERT(CanScroll());
-  StopSamplingOverscrollAnimation();
+  // We can get some spurious calls to OverscrollBy() with near-zero values
+  // due to rounding error. Ignore those (they might trip the asserts below.)
+  if (FuzzyEqualsAdditive(aOverscroll.value, 0.0f, COORDINATE_EPSILON)) {
+    return;
+  }
+  ClearOverscrollAnimationState();
   aOverscroll = ApplyResistance(aOverscroll);
   if (aOverscroll > 0) {
 #ifdef DEBUG
@@ -224,10 +228,23 @@ ParentLayerCoord Axis::GetOverscroll() const {
   return result;
 }
 
-void Axis::StopSamplingOverscrollAnimation() {
-  ParentLayerCoord overscroll = GetOverscroll();
-  ClearOverscroll();
-  mOverscroll = overscroll;
+void Axis::StartOverscrollAnimation(float aVelocity) {
+  // Make sure any state from a previous animation has been cleared.
+  MOZ_ASSERT(mFirstOverscrollAnimationSample == 0 &&
+             mLastOverscrollPeak == 0 &&
+             mOverscrollScale == 1);
+
+  SetVelocity(aVelocity);
+}
+
+void Axis::EndOverscrollAnimation() {
+  ClearOverscrollAnimationState();
+}
+
+void Axis::ClearOverscrollAnimationState() {
+  mFirstOverscrollAnimationSample = 0;
+  mLastOverscrollPeak = 0;
+  mOverscrollScale = 1.0f;
 }
 
 void Axis::StepOverscrollAnimation(double aStepDurationMilliseconds) {
@@ -347,10 +364,8 @@ bool Axis::IsOverscrolled() const {
 }
 
 void Axis::ClearOverscroll() {
+  ClearOverscrollAnimationState();
   mOverscroll = 0;
-  mFirstOverscrollAnimationSample = 0;
-  mLastOverscrollPeak = 0;
-  mOverscrollScale = 1.0f;
 }
 
 ParentLayerCoord Axis::PanStart() const {
@@ -522,7 +537,7 @@ ParentLayerCoord Axis::GetOrigin() const {
 }
 
 ParentLayerCoord Axis::GetCompositionLength() const {
-  return GetRectLength(GetFrameMetrics().mCompositionBounds);
+  return GetRectLength(GetFrameMetrics().GetCompositionBounds());
 }
 
 ParentLayerCoord Axis::GetPageStart() const {
@@ -537,7 +552,7 @@ ParentLayerCoord Axis::GetPageLength() const {
 
 bool Axis::ScaleWillOverscrollBothSides(float aScale) const {
   const FrameMetrics& metrics = GetFrameMetrics();
-  ParentLayerRect screenCompositionBounds = metrics.mCompositionBounds
+  ParentLayerRect screenCompositionBounds = metrics.GetCompositionBounds()
                                           / ParentLayerToParentLayerScale(aScale);
   return GetRectLength(screenCompositionBounds) - GetPageLength() > COORDINATE_EPSILON;
 }

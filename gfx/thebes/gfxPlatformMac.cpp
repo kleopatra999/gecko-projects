@@ -8,6 +8,7 @@
 #include "gfxQuartzSurface.h"
 #include "gfxQuartzImageSurface.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/MacIOSurface.h"
 
 #include "gfxMacPlatformFontList.h"
 #include "gfxMacFont.h"
@@ -78,7 +79,8 @@ gfxPlatformMac::gfxPlatformMac()
     uint32_t canvasMask = BackendTypeBit(BackendType::CAIRO) |
                           BackendTypeBit(BackendType::SKIA) |
                           BackendTypeBit(BackendType::COREGRAPHICS);
-    uint32_t contentMask = BackendTypeBit(BackendType::COREGRAPHICS);
+    uint32_t contentMask = BackendTypeBit(BackendType::COREGRAPHICS) |
+                           BackendTypeBit(BackendType::SKIA);
     InitBackendPrefs(canvasMask, BackendType::COREGRAPHICS,
                      contentMask, BackendType::COREGRAPHICS);
 
@@ -93,6 +95,8 @@ gfxPlatformMac::gfxPlatformMac()
             NS_WARNING("Unable to bump RLIMIT_NOFILE to the maximum number on this OS");
         }
     }
+
+    MacIOSurfaceLib::LoadLibrary();
 }
 
 gfxPlatformMac::~gfxPlatformMac()
@@ -120,7 +124,7 @@ gfxPlatformMac::CreateOffscreenSurface(const IntSize& size,
     return newSurface.forget();
 }
 
-TemporaryRef<ScaledFont>
+already_AddRefed<ScaledFont>
 gfxPlatformMac::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
 {
     gfxMacFont *font = static_cast<gfxMacFont*>(aFont);
@@ -165,7 +169,7 @@ gfxPlatformMac::MakePlatformFont(const nsAString& aFontName,
 {
     // Ownership of aFontData is received here, and passed on to
     // gfxPlatformFontList::MakePlatformFont(), which must ensure the data
-    // is released with NS_Free when no longer needed
+    // is released with free when no longer needed
     return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aFontName,
                                                                      aWeight,
                                                                      aStretch,
@@ -481,7 +485,7 @@ public:
       // situations. According to the docs, it is compatible with all displays running on the computer
       // But if we have different monitors at different display rates, we may hit issues.
       if (CVDisplayLinkCreateWithActiveCGDisplays(&mDisplayLink) != kCVReturnSuccess) {
-        NS_WARNING("Could not create a display link with all active displays. Retrying\n");
+        NS_WARNING("Could not create a display link with all active displays. Retrying");
         CVDisplayLinkRelease(mDisplayLink);
         mDisplayLink = nullptr;
 
@@ -568,11 +572,25 @@ static CVReturn VsyncCallback(CVDisplayLinkRef aDisplayLink,
   // Executed on OS X hardware vsync thread
   OSXVsyncSource::OSXDisplay* display = (OSXVsyncSource::OSXDisplay*) aDisplayLinkContext;
   int64_t nextVsyncTimestamp = aOutputTime->hostTime;
-  mozilla::TimeStamp nextVsync = mozilla::TimeStamp::FromSystemTime(nextVsyncTimestamp);
 
+  mozilla::TimeStamp nextVsync = mozilla::TimeStamp::FromSystemTime(nextVsyncTimestamp);
   mozilla::TimeStamp previousVsync = display->mPreviousTimestamp;
+  mozilla::TimeStamp now = TimeStamp::Now();
+
+  // Snow leopard sometimes sends vsync timestamps very far in the past.
+  // Normalize the vsync timestamps to now.
+  if (nextVsync <= previousVsync) {
+    nextVsync = now;
+    previousVsync = now;
+  } else if (now < previousVsync) {
+    // Bug 1158321 - The VsyncCallback can sometimes execute before the reported
+    // vsync time. In those cases, normalize the timestamp to Now() as sending
+    // timestamps in the future has undefined behavior. See the comment above
+    // OSXDisplay::mPreviousTimestamp
+    previousVsync = now;
+  }
+
   display->mPreviousTimestamp = nextVsync;
-  MOZ_ASSERT(TimeStamp::Now() > previousVsync);
 
   display->NotifyVsync(previousVsync);
   return kCVReturnSuccess;
@@ -585,7 +603,7 @@ gfxPlatformMac::CreateHardwareVsyncSource()
   VsyncSource::Display& primaryDisplay = osxVsyncSource->GetGlobalDisplay();
   primaryDisplay.EnableVsync();
   if (!primaryDisplay.IsVsyncEnabled()) {
-    NS_WARNING("OS X Vsync source not enabled. Falling back to software vsync.\n");
+    NS_WARNING("OS X Vsync source not enabled. Falling back to software vsync.");
     return gfxPlatform::CreateHardwareVsyncSource();
   }
 

@@ -54,6 +54,7 @@ let gPage = {
       // Update thumbnails to the new enhanced setting
       if (aData == "browser.newtabpage.enhanced") {
         this.update();
+        gIntro.showIfNecessary();
       }
 
       // Initialize the whole page if we haven't done that, yet.
@@ -217,7 +218,10 @@ let gPage = {
 
     for (let site of gGrid.sites) {
       if (site) {
-        site.captureIfMissing();
+        // The site may need to modify and/or re-render itself if
+        // something changed after newtab was created by preloader.
+        // For example, the suggested tile endTime may have passed.
+        site.onFirstVisible();
       }
     }
 

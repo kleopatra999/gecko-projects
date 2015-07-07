@@ -157,7 +157,7 @@ ReportInvalidTrapResult(JSContext* cx, JSObject* proxy, JSAtom* atom)
     if (!AtomToPrintableString(cx, atom, &bytes))
         return;
     ReportValueError2(cx, JSMSG_INVALID_TRAP_RESULT, JSDVG_IGNORE_STACK, v,
-                      js::NullPtr(), bytes.ptr());
+                      nullptr, bytes.ptr());
 }
 
 // This function is shared between ownPropertyKeys, enumerate, and
@@ -404,28 +404,6 @@ ScriptedDirectProxyHandler::isExtensible(JSContext* cx, HandleObject proxy, bool
     return true;
 }
 
-// Corresponds to the "standard" property descriptor getOwn/getPrototype dance. It's so explicit
-// here because ScriptedDirectProxyHandler allows script visibility for this operation.
-bool
-ScriptedDirectProxyHandler::getPropertyDescriptor(JSContext* cx, HandleObject proxy, HandleId id,
-                                                  MutableHandle<PropertyDescriptor> desc) const
-{
-    JS_CHECK_RECURSION(cx, return false);
-
-    if (!GetOwnPropertyDescriptor(cx, proxy, id, desc))
-        return false;
-    if (desc.object())
-        return true;
-    RootedObject proto(cx);
-    if (!GetPrototype(cx, proxy, &proto))
-        return false;
-    if (!proto) {
-        MOZ_ASSERT(!desc.object());
-        return true;
-    }
-    return GetPropertyDescriptor(cx, proto, id, desc);
-}
-
 // ES6 (5 April 2014) 9.5.5 Proxy.[[GetOwnProperty]](P)
 bool
 ScriptedDirectProxyHandler::getOwnPropertyDescriptor(JSContext* cx, HandleObject proxy, HandleId id,
@@ -570,11 +548,11 @@ ScriptedDirectProxyHandler::defineProperty(JSContext* cx, HandleObject proxy, Ha
 
     // step 8
     if (trap.isUndefined())
-        return StandardDefineProperty(cx, target, id, desc, result);
+        return DefineProperty(cx, target, id, desc, result);
 
     // step 9
     RootedValue descObj(cx);
-    if (!FromPropertyDescriptor(cx, desc, &descObj))
+    if (!FromPropertyDescriptorToObject(cx, desc, &descObj))
         return false;
 
     // steps 10-11
@@ -730,7 +708,7 @@ ScriptedDirectProxyHandler::delete_(JSContext* cx, HandleObject proxy, HandleId 
     // step 14-15
     if (desc.object() && !desc.configurable()) {
         RootedValue v(cx, IdToValue(id));
-        ReportValueError(cx, JSMSG_CANT_DELETE, JSDVG_IGNORE_STACK, v, js::NullPtr());
+        ReportValueError(cx, JSMSG_CANT_DELETE, JSDVG_IGNORE_STACK, v, nullptr);
         return false;
     }
 
@@ -1060,13 +1038,14 @@ ScriptedDirectProxyHandler::construct(JSContext* cx, HandleObject proxy, const C
     // step 6
     if (trap.isUndefined()) {
         RootedValue targetv(cx, ObjectValue(*target));
-        return InvokeConstructor(cx, targetv, args.length(), args.array(), args.rval());
+        return InvokeConstructor(cx, targetv, args.length(), args.array(), true, args.rval());
     }
 
     // step 8-9
     Value constructArgv[] = {
         ObjectValue(*target),
-        ObjectValue(*argsArray)
+        ObjectValue(*argsArray),
+        args.newTarget()
     };
     RootedValue thisValue(cx, ObjectValue(*handler));
     if (!Invoke(cx, thisValue, trap, ArrayLength(constructArgv), constructArgv, args.rval()))

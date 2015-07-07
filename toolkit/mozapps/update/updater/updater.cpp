@@ -65,7 +65,6 @@
 
 // Amount of time in ms to wait for the parent process to close
 #define PARENT_WAIT 5000
-#define IMMERSIVE_PARENT_WAIT 15000
 
 #if defined(XP_MACOSX)
 // These functions are defined in launchchild_osx.mm
@@ -308,8 +307,10 @@ mmin(size_t a, size_t b)
 static NS_tchar*
 mstrtok(const NS_tchar *delims, NS_tchar **str)
 {
-  if (!*str || !**str)
+  if (!*str || !**str) {
+    *str = nullptr;
     return nullptr;
+  }
 
   // skip leading "whitespace"
   NS_tchar *ret = *str;
@@ -342,6 +343,13 @@ mstrtok(const NS_tchar *delims, NS_tchar **str)
 
   *str = nullptr;
   return ret;
+}
+
+static bool
+EnvHasValue(const char *name)
+{
+  const char *val = getenv(name);
+  return (val && *val);
 }
 
 #ifdef XP_WIN
@@ -474,7 +482,8 @@ static int ensure_remove(const NS_tchar *path)
 }
 
 // Remove the directory pointed to by path and all of its files and sub-directories.
-static int ensure_remove_recursive(const NS_tchar *path)
+static int ensure_remove_recursive(const NS_tchar *path,
+                                   bool continueEnumOnFailure = false)
 {
   // We use lstat rather than stat here so that we can successfully remove
   // symlinks.
@@ -493,8 +502,8 @@ static int ensure_remove_recursive(const NS_tchar *path)
 
   dir = NS_topendir(path);
   if (!dir) {
-    LOG(("ensure_remove_recursive: path is not a directory: " LOG_S ", rv: %d, err: %d",
-         path, rv, errno));
+    LOG(("ensure_remove_recursive: unable to open directory: " LOG_S
+         ", rv: %d, err: %d", path, rv, errno));
     return rv;
   }
 
@@ -505,7 +514,7 @@ static int ensure_remove_recursive(const NS_tchar *path)
       NS_tsnprintf(childPath, sizeof(childPath)/sizeof(childPath[0]),
                    NS_T("%s/%s"), path, entry->d_name);
       rv = ensure_remove_recursive(childPath);
-      if (rv) {
+      if (rv && !continueEnumOnFailure) {
         break;
       }
     }
@@ -517,8 +526,8 @@ static int ensure_remove_recursive(const NS_tchar *path)
     ensure_write_permissions(path);
     rv = NS_trmdir(path);
     if (rv) {
-      LOG(("ensure_remove_recursive: path is not a directory: " LOG_S ", rv: %d, err: %d",
-           path, rv, errno));
+      LOG(("ensure_remove_recursive: unable to remove directory: " LOG_S
+           ", rv: %d, err: %d", path, rv, errno));
     }
   }
   return rv;
@@ -802,7 +811,7 @@ static int ensure_copy_recursive(const NS_tchar *path, const NS_tchar *dest,
       }
     }
   }
-
+  NS_tclosedir(dir);
   return rv;
 }
 
@@ -849,6 +858,73 @@ static int rename_file(const NS_tchar *spath, const NS_tchar *dpath,
 
   return OK;
 }
+
+#ifdef XP_WIN
+// Remove the directory pointed to by path and all of its files and
+// sub-directories. If a file is in use move it to the tobedeleted directory
+// and attempt to schedule removal of the file on reboot
+static int remove_recursive_on_reboot(const NS_tchar *path, const NS_tchar *deleteDir)
+{
+  struct NS_tstat_t sInfo;
+  int rv = NS_tlstat(path, &sInfo);
+  if (rv) {
+    // This error is benign
+    return rv;
+  }
+
+  if (!S_ISDIR(sInfo.st_mode)) {
+    NS_tchar tmpDeleteFile[MAXPATHLEN];
+    GetTempFileNameW(deleteDir, L"rep", 0, tmpDeleteFile);
+    NS_tremove(tmpDeleteFile);
+    rv = rename_file(path, tmpDeleteFile, false);
+    if (MoveFileEx(rv ? path : tmpDeleteFile, nullptr, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+      LOG(("remove_recursive_on_reboot: file will be removed on OS reboot: "
+           LOG_S, rv ? path : tmpDeleteFile));
+    } else {
+      LOG(("remove_recursive_on_reboot: failed to schedule OS reboot removal of "
+           "file: " LOG_S, rv ? path : tmpDeleteFile));
+    }
+    return rv;
+  }
+
+  NS_tDIR *dir;
+  NS_tdirent *entry;
+
+  dir = NS_topendir(path);
+  if (!dir) {
+    LOG(("remove_recursive_on_reboot: unable to open directory: " LOG_S
+         ", rv: %d, err: %d",
+         path, rv, errno));
+    return rv;
+  }
+
+  while ((entry = NS_treaddir(dir)) != 0) {
+    if (NS_tstrcmp(entry->d_name, NS_T(".")) &&
+        NS_tstrcmp(entry->d_name, NS_T(".."))) {
+      NS_tchar childPath[MAXPATHLEN];
+      NS_tsnprintf(childPath, sizeof(childPath)/sizeof(childPath[0]),
+                   NS_T("%s/%s"), path, entry->d_name);
+      // There is no need to check the return value of this call since this
+      // function is only called after an update is successful and there is not
+      // much that can be done to recover if it isn't successful. There is also
+      // no need to log the value since it will have already been logged.
+      remove_recursive_on_reboot(childPath, deleteDir);
+    }
+  }
+
+  NS_tclosedir(dir);
+
+  if (rv == OK) {
+    ensure_write_permissions(path);
+    rv = NS_trmdir(path);
+    if (rv) {
+      LOG(("remove_recursive_on_reboot: unable to remove directory: " LOG_S
+           ", rv: %d, err: %d", path, rv, errno));
+    }
+  }
+  return rv;
+}
+#endif
 
 //-----------------------------------------------------------------------------
 
@@ -1731,23 +1807,6 @@ PatchIfFile::Finish(int status)
 #include "nsWindowsHelpers.h"
 #include "uachelper.h"
 #include "pathhash.h"
-
-#ifdef MOZ_METRO
-/**
- * Determines if the update came from an Immersive browser
- * @return true if the update came from an immersive browser
- */
-bool
-IsUpdateFromMetro(int argc, NS_tchar **argv)
-{
-  for (int i = 0; i < argc; i++) {
-    if (!wcsicmp(L"-ServerName:DefaultBrowserServer", argv[i])) {
-      return true;
-    }
-  }
-  return false;
-}
-#endif
 #endif
 
 static void
@@ -1774,14 +1833,6 @@ LaunchCallbackApp(const NS_tchar *workingDir,
   // Do not allow the callback to run when running an update through the
   // service as session 0.  The unelevated updater.exe will do the launching.
   if (!usingService) {
-#if defined(MOZ_METRO)
-    // If our callback application is the default metro browser, then
-    // launch it now.
-    if (IsUpdateFromMetro(argc, argv)) {
-      LaunchDefaultMetroBrowser();
-      return;
-    }
-#endif
     WinLaunchChild(argv[0], argc, argv, nullptr);
   }
 #else
@@ -2028,16 +2079,20 @@ ProcessReplaceRequest()
   }
 
   LOG(("Now, remove the tmpDir"));
-  rv = ensure_remove_recursive(tmpDir);
+  rv = ensure_remove_recursive(tmpDir, true);
   if (rv) {
     LOG(("Removing tmpDir failed, err: %d", rv));
 #ifdef XP_WIN
-    if (MoveFileExW(tmpDir, nullptr, MOVEFILE_DELAY_UNTIL_REBOOT)) {
-      LOG(("tmpDir will be removed on OS reboot: " LOG_S, tmpDir));
-    } else {
-      LOG(("Failed to schedule OS reboot removal of directory: " LOG_S,
-           tmpDir));
+    NS_tchar deleteDir[MAXPATHLEN];
+    NS_tsnprintf(deleteDir, sizeof(deleteDir)/sizeof(deleteDir[0]),
+                 NS_T("%s\\%s"), destDir, DELETE_DIR);
+    // Attempt to remove the tobedeleted directory and then recreate it if it
+    // was successfully removed.
+    _wrmdir(deleteDir);
+    if (NS_taccess(deleteDir, F_OK)) {
+      NS_tmkdir(deleteDir, 0755);
     }
+    remove_recursive_on_reboot(tmpDir, deleteDir);
 #endif
   }
 
@@ -2214,7 +2269,18 @@ UpdateThreadFunc(void *param)
 #endif
 
     if (rv == OK && sStagedUpdate && !sIsOSUpdate) {
+#ifdef TEST_UPDATER
+      // The MOZ_TEST_SKIP_UPDATE_STAGE environment variable prevents copying
+      // the files in dist/bin in the test updater when staging an update since
+      // this can cause tests to timeout.
+      if (EnvHasValue("MOZ_TEST_SKIP_UPDATE_STAGE")) {
+        rv = OK;
+      } else {
+        rv = CopyInstallDirToDestDir();
+      }
+#else
       rv = CopyInstallDirToDestDir();
+#endif
     }
 
     if (rv == OK) {
@@ -2227,8 +2293,7 @@ UpdateThreadFunc(void *param)
     }
   }
 
-  bool reportRealResults = true;
-  if (sReplaceRequest && rv && !getenv("MOZ_NO_REPLACE_FALLBACK")) {
+  if (sReplaceRequest && rv) {
     // When attempting to replace the application, we should fall back
     // to non-staged updates in case of a failure.  We do this by
     // setting the status to pending, exiting the updater, and
@@ -2236,22 +2301,16 @@ UpdateThreadFunc(void *param)
     // startup path will see the pending status, and will start the
     // updater application again in order to apply the update without
     // staging.
-    // The MOZ_NO_REPLACE_FALLBACK environment variable is used to
-    // bypass this fallback, and is used in the updater tests.
-    // The only special thing which we should do here is to remove the
-    // staged directory as it won't be useful any more.
     ensure_remove_recursive(gWorkingDirPath);
     WriteStatusFile(sUsingService ? "pending-service" : "pending");
-    // We need to use --process-updates again in the tests
-    putenv(const_cast<char*>("MOZ_PROCESS_UPDATES="));
-    reportRealResults = false; // pretend success
-  }
-
-  if (reportRealResults) {
+#ifdef TEST_UPDATER
+    // Some tests need to use --test-process-updates again.
+    putenv(const_cast<char*>("MOZ_TEST_PROCESS_UPDATES="));
+#endif
+  } else {
     if (rv) {
       LOG(("failed: %d", rv));
-    }
-    else {
+    } else {
 #ifdef XP_MACOSX
       // If the update was successful we need to update the timestamp on the
       // top-level Mac OS X bundle directory so that Mac OS X's Launch Services
@@ -2273,7 +2332,7 @@ UpdateThreadFunc(void *param)
 int NS_main(int argc, NS_tchar **argv)
 {
 #if defined(MOZ_WIDGET_GONK)
-  if (getenv("LD_PRELOAD")) {
+  if (EnvHasValue("LD_PRELOAD")) {
     // If the updater is launched with LD_PRELOAD set, then we wind up
     // preloading libmozglue.so. Under some circumstances, this can cause
     // the remount of /system to fail when going from rw to ro, so if we
@@ -2340,7 +2399,7 @@ int NS_main(int argc, NS_tchar **argv)
 #ifdef XP_WIN
   bool useService = false;
   bool testOnlyFallbackKeyExists = false;
-  bool noServiceFallback = getenv("MOZ_NO_SERVICE_FALLBACK") != nullptr;
+  bool noServiceFallback = EnvHasValue("MOZ_NO_SERVICE_FALLBACK");
   putenv(const_cast<char*>("MOZ_NO_SERVICE_FALLBACK="));
 
   // We never want the service to be used unless we build with
@@ -2406,7 +2465,7 @@ int NS_main(int argc, NS_tchar **argv)
     *slash = NS_T('\0');
   }
 
-  if (getenv("MOZ_OS_UPDATE")) {
+  if (EnvHasValue("MOZ_OS_UPDATE")) {
     sIsOSUpdate = true;
     putenv(const_cast<char*>("MOZ_OS_UPDATE="));
   }
@@ -2484,15 +2543,10 @@ int NS_main(int argc, NS_tchar **argv)
     // Otherwise, wait for the parent process to exit before starting the
     // update.
     if (parent) {
-      bool updateFromMetro = false;
-#ifdef MOZ_METRO
-      updateFromMetro = IsUpdateFromMetro(argc, argv);
-#endif
-      DWORD waitTime = updateFromMetro ?
-                       IMMERSIVE_PARENT_WAIT : PARENT_WAIT;
+      DWORD waitTime = PARENT_WAIT;
       DWORD result = WaitForSingleObject(parent, waitTime);
       CloseHandle(parent);
-      if (result != WAIT_OBJECT_0 && !updateFromMetro)
+      if (result != WAIT_OBJECT_0)
         return 1;
     }
   }
@@ -2505,9 +2559,9 @@ int NS_main(int argc, NS_tchar **argv)
 #ifdef XP_WIN
     // On Windows, the current working directory of the process should be changed
     // so that it's not locked.
-    NS_tchar tmpDir[MAXPATHLEN];
-    if (GetTempPathW(MAXPATHLEN, tmpDir)) {
-      NS_tchdir(tmpDir);
+    NS_tchar sysDir[MAX_PATH + 1] = { L'\0' };
+    if (GetSystemDirectoryW(sysDir, MAX_PATH + 1)) {
+      NS_tchdir(sysDir);
     }
 #endif
   }
@@ -2518,7 +2572,7 @@ int NS_main(int argc, NS_tchar **argv)
   const int callbackIndex = 6;
 
 #if defined(XP_WIN)
-  sUsingService = getenv("MOZ_USING_SERVICE") != nullptr;
+  sUsingService = EnvHasValue("MOZ_USING_SERVICE");
   putenv(const_cast<char*>("MOZ_USING_SERVICE="));
   // lastFallbackError keeps track of the last error for the service not being
   // used, in case of an error when fallback is not enabled we write the
@@ -3163,13 +3217,10 @@ int NS_main(int argc, NS_tchar **argv)
       LaunchMacPostProcess(gInstallDirPath);
     }
 #endif /* XP_MACOSX */
-
-    if (getenv("MOZ_PROCESS_UPDATES") == nullptr) {
-      LaunchCallbackApp(argv[5],
-                        argc - callbackIndex,
-                        argv + callbackIndex,
-                        sUsingService);
-    }
+    LaunchCallbackApp(argv[5],
+                      argc - callbackIndex,
+                      argv + callbackIndex,
+                      sUsingService);
   }
 
   return gSucceeded ? 0 : 1;

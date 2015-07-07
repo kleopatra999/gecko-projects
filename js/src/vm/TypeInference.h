@@ -613,10 +613,15 @@ class ConstraintTypeSet : public TypeSet
      */
     void addType(ExclusiveContext* cx, Type type);
 
+    // Trigger a post barrier when writing to this set, if necessary.
+    // addType(cx, type) takes care of this automatically.
+    void postWriteBarrier(ExclusiveContext* cx, Type type);
+
     /* Add a new constraint to this set. */
     bool addConstraint(JSContext* cx, TypeConstraint* constraint, bool callExisting = true);
 
     inline void sweep(JS::Zone* zone, AutoClearTypeInferenceStateOnOOM& oom);
+    inline void trace(JS::Zone* zone, JSTracer* trc);
 };
 
 class StackTypeSet : public ConstraintTypeSet
@@ -806,6 +811,10 @@ class PreliminaryObjectArrayWithTemplate : public PreliminaryObjectArray
       : shape_(shape)
     {}
 
+    void clear() {
+        shape_.init(nullptr);
+    }
+
     Shape* shape() {
         return shape_;
     }
@@ -912,6 +921,13 @@ class TypeNewScript
     ~TypeNewScript() {
         js_delete(preliminaryObjects);
         js_free(initializerList);
+    }
+
+    void clear() {
+        function_.init(nullptr);
+        templateObject_.init(nullptr);
+        initializedShape_.init(nullptr);
+        initializedGroup_.init(nullptr);
     }
 
     static void writeBarrierPre(TypeNewScript* newScript);

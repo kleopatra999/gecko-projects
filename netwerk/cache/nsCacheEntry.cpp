@@ -17,7 +17,6 @@
 #include "nsCacheService.h"
 #include "nsCacheDevice.h"
 #include "nsHashKeys.h"
-#include "mozilla/VisualEventTracer.h"
 
 using namespace mozilla;
 
@@ -45,8 +44,6 @@ nsCacheEntry::nsCacheEntry(const nsACString &   key,
     SetStoragePolicy(storagePolicy);
 
     MarkPublic();
-
-    MOZ_EVENT_TRACER_NAME_OBJECT(this, key.BeginReading());
 }
 
 
@@ -385,7 +382,8 @@ nsCacheEntryHashTable::ops =
 
 
 nsCacheEntryHashTable::nsCacheEntryHashTable()
-    : initialized(false)
+    : table(&ops, sizeof(nsCacheEntryHashTableEntry), kInitialTableLength)
+    , initialized(false)
 {
     MOZ_COUNT_CTOR(nsCacheEntryHashTable);
 }
@@ -399,24 +397,18 @@ nsCacheEntryHashTable::~nsCacheEntryHashTable()
 }
 
 
-nsresult
+void
 nsCacheEntryHashTable::Init()
 {
-    nsresult rv = NS_OK;
-    initialized = PL_DHashTableInit(&table, &ops,
-                                    sizeof(nsCacheEntryHashTableEntry),
-                                    fallible, 256);
-
-    if (!initialized) rv = NS_ERROR_OUT_OF_MEMORY;
-
-    return rv;
+    table.ClearAndPrepareForLength(kInitialTableLength);
+    initialized = true;
 }
 
 void
 nsCacheEntryHashTable::Shutdown()
 {
     if (initialized) {
-        PL_DHashTableFinish(&table);
+        table.ClearAndPrepareForLength(kInitialTableLength);
         initialized = false;
     }
 }
@@ -470,15 +462,17 @@ nsCacheEntryHashTable::RemoveEntry( nsCacheEntry *cacheEntry)
     PL_DHashTableRemove(&table, &(cacheEntry->mKey));
 }
 
-
-void
-nsCacheEntryHashTable::VisitEntries( PLDHashEnumerator etor, void *arg)
+PLDHashTable::Iterator
+nsCacheEntryHashTable::Iter() const
 {
-    NS_ASSERTION(initialized, "nsCacheEntryHashTable not initialized");
-    if (!initialized)  return; // NS_ERROR_NOT_INITIALIZED
-    PL_DHashTableEnumerate(&table, etor, arg);
+    return PLDHashTable::Iterator(&table);
 }
 
+PLDHashTable::RemovingIterator
+nsCacheEntryHashTable::RemovingIter()
+{
+    return PLDHashTable::RemovingIterator(&table);
+}
 
 /**
  *  hash table operation callback functions

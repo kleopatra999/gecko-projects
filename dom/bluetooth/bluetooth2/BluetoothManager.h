@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,6 +25,8 @@ class BluetoothManager final : public DOMEventTargetHelper
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(BluetoothManager,
+                                           DOMEventTargetHelper)
 
   /****************************************************************************
    * Event Handlers
@@ -78,13 +80,6 @@ public:
 private:
   BluetoothManager(nsPIDOMWindow* aWindow);
   ~BluetoothManager();
-
-  /**
-   * Start/Stop listening to bluetooth signal.
-   *
-   * @param aStart [in] Whether to start or stop listening to bluetooth signal
-   */
-  void ListenToBluetoothSignal(bool aStart);
 
   /**
    * Check whether default adapter exists.

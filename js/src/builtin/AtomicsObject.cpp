@@ -55,8 +55,8 @@
 
 #include "prmjtime.h"
 
+#include "asmjs/AsmJSModule.h"
 #include "jit/AtomicOperations.h"
-
 #include "js/Class.h"
 #include "vm/GlobalObject.h"
 #include "vm/SharedTypedArrayObject.h"
@@ -505,6 +505,19 @@ js::atomics_xor(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     return atomics_binop_impl<do_xor>(cx, args.get(0), args.get(1), args.get(2), args.rval());
+}
+
+bool
+js::atomics_isLockFree(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    HandleValue v = args.get(0);
+    if (!v.isInt32()) {
+        args.rval().setBoolean(false);
+        return true;
+    }
+    args.rval().setBoolean(jit::AtomicOperations::isLockfree(v.toInt32()));
+    return true;
 }
 
 // asm.js callouts for platforms that do not have non-word-sized
@@ -1032,7 +1045,13 @@ js::FutexRuntime::destroyInstance()
 bool
 js::FutexRuntime::isWaiting()
 {
-    return state_ == Waiting || state_ == WaitingInterrupted;
+    // When a worker is awoken for an interrupt it goes into state
+    // WaitingNotifiedForInterrupt for a short time before it actually
+    // wakes up and goes into WaitingInterrupted.  In those states the
+    // worker is still waiting, and if an explicit wake arrives the
+    // worker transitions to Woken.  See further comments in
+    // FutexRuntime::wait().
+    return state_ == Waiting || state_ == WaitingInterrupted || state_ == WaitingNotifiedForInterrupt;
 }
 
 bool
@@ -1102,7 +1121,7 @@ js::FutexRuntime::wait(JSContext* cx, double timeout_ms, AtomicsObject::FutexWai
             *result = AtomicsObject::FutexOK;
             goto finished;
 
-          case FutexRuntime::WokenForJSInterrupt:
+          case FutexRuntime::WaitingNotifiedForInterrupt:
             // The interrupt handler may reenter the engine.  In that case
             // there are two complications:
             //
@@ -1112,7 +1131,7 @@ js::FutexRuntime::wait(JSContext* cx, double timeout_ms, AtomicsObject::FutexWai
             //   To that end, we flag the thread as interrupted around
             //   the interrupt and check state_ when the interrupt
             //   handler returns.  A futexWake() call that reaches the
-            //   runtime during the interrupt sets state_ to woken.
+            //   runtime during the interrupt sets state_ to Woken.
             //
             // - It is in principle possible for futexWait() to be
             //   reentered on the same thread/runtime and waiting on the
@@ -1160,7 +1179,7 @@ js::FutexRuntime::wake(WakeReason reason)
     MOZ_ASSERT(lockHolder_ == PR_GetCurrentThread());
     MOZ_ASSERT(isWaiting());
 
-    if (state_ == WaitingInterrupted && reason == WakeExplicit) {
+    if ((state_ == WaitingInterrupted || state_ == WaitingNotifiedForInterrupt) && reason == WakeExplicit) {
         state_ = Woken;
         return;
     }
@@ -1169,7 +1188,9 @@ js::FutexRuntime::wake(WakeReason reason)
         state_ = Woken;
         break;
       case WakeForJSInterrupt:
-        state_ = WokenForJSInterrupt;
+        if (state_ == WaitingNotifiedForInterrupt)
+            return;
+        state_ = WaitingNotifiedForInterrupt;
         break;
       default:
         MOZ_CRASH();
@@ -1187,6 +1208,7 @@ const JSFunctionSpec AtomicsMethods[] = {
     JS_FN("and",                atomics_and,                3,0),
     JS_FN("or",                 atomics_or,                 3,0),
     JS_FN("xor",                atomics_xor,                3,0),
+    JS_FN("isLockFree",         atomics_isLockFree,         1,0),
     JS_FN("futexWait",          atomics_futexWait,          4,0),
     JS_FN("futexWake",          atomics_futexWake,          3,0),
     JS_FN("futexWakeOrRequeue", atomics_futexWakeOrRequeue, 5,0),
@@ -1220,8 +1242,11 @@ AtomicsObject::initClass(JSContext* cx, Handle<GlobalObject*> global)
     RootedValue AtomicsValue(cx, ObjectValue(*Atomics));
 
     // Everything is set up, install Atomics on the global object.
-    if (!DefineProperty(cx, global, cx->names().Atomics, AtomicsValue, nullptr, nullptr, 0))
+    if (!DefineProperty(cx, global, cx->names().Atomics, AtomicsValue, nullptr, nullptr,
+                        JSPROP_RESOLVING))
+    {
         return nullptr;
+    }
 
     global->setConstructor(JSProto_Atomics, AtomicsValue);
     return Atomics;

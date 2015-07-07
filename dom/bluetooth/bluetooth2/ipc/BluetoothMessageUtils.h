@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -34,6 +34,14 @@ struct ParamTraits<mozilla::dom::bluetooth::BluetoothStatus>
              mozilla::dom::bluetooth::BluetoothStatus,
              mozilla::dom::bluetooth::STATUS_SUCCESS,
              mozilla::dom::bluetooth::NUM_STATUS>
+{ };
+
+template <>
+struct ParamTraits<mozilla::dom::bluetooth::BluetoothGattWriteType>
+  : public ContiguousEnumSerializer<
+             mozilla::dom::bluetooth::BluetoothGattWriteType,
+             mozilla::dom::bluetooth::GATT_WRITE_TYPE_NO_RESPONSE,
+             mozilla::dom::bluetooth::GATT_WRITE_TYPE_END_GUARD>
 { };
 
 template <>
@@ -97,6 +105,30 @@ struct ParamTraits<mozilla::dom::bluetooth::BluetoothGattServiceId>
   {
     if (!ReadParam(aMsg, aIter, &(aResult->mId)) ||
         !ReadParam(aMsg, aIter, &(aResult->mIsPrimary))) {
+      return false;
+    }
+
+    return true;
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::dom::bluetooth::BluetoothGattCharAttribute>
+{
+  typedef mozilla::dom::bluetooth::BluetoothGattCharAttribute paramType;
+
+  static void Write(Message* aMsg, const paramType& aParam)
+  {
+    WriteParam(aMsg, aParam.mId);
+    WriteParam(aMsg, aParam.mProperties);
+    WriteParam(aMsg, aParam.mWriteType);
+  }
+
+  static bool Read(const Message* aMsg, void** aIter, paramType* aResult)
+  {
+    if (!ReadParam(aMsg, aIter, &(aResult->mId)) ||
+        !ReadParam(aMsg, aIter, &(aResult->mProperties)) ||
+        !ReadParam(aMsg, aIter, &(aResult->mWriteType))) {
       return false;
     }
 

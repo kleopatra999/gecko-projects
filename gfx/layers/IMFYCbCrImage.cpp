@@ -56,7 +56,7 @@ struct AutoLockTexture
   RefPtr<IDXGIKeyedMutex> mMutex;
 };
 
-static TemporaryRef<IDirect3DTexture9>
+static already_AddRefed<IDirect3DTexture9>
 InitTextures(IDirect3DDevice9* aDevice,
              const IntSize &aSize,
             _D3DFORMAT aFormat,
@@ -95,22 +95,34 @@ InitTextures(IDirect3DDevice9* aDevice,
     return nullptr;
   }
 
-  return result;
+  return result.forget();
 }
 
-static void
+static bool
 FinishTextures(IDirect3DDevice9* aDevice,
                IDirect3DTexture9* aTexture,
                IDirect3DSurface9* aSurface)
 {
   if (!aDevice) {
-    return;
+    return false;
   }
 
-  aSurface->UnlockRect();
+  HRESULT hr = aSurface->UnlockRect();
+  if (FAILED(hr)) {
+    return false;
+  }
+
   nsRefPtr<IDirect3DSurface9> dstSurface;
-  aTexture->GetSurfaceLevel(0, getter_AddRefs(dstSurface));
-  aDevice->UpdateSurface(aSurface, nullptr, dstSurface, nullptr);
+  hr = aTexture->GetSurfaceLevel(0, getter_AddRefs(dstSurface));
+  if (FAILED(hr)) {
+    return false;
+  }
+
+  hr = aDevice->UpdateSurface(aSurface, nullptr, dstSurface, nullptr);
+  if (FAILED(hr)) {
+    return false;
+  }
+  return true;
 }
 
 static bool UploadData(IDirect3DDevice9* aDevice,
@@ -137,8 +149,7 @@ static bool UploadData(IDirect3DDevice9* aDevice,
     }
   }
 
-  FinishTextures(aDevice, aTexture, surf);
-  return true;
+  return FinishTextures(aDevice, aTexture, surf);
 }
 
 TextureClient*
@@ -190,12 +201,17 @@ IMFYCbCrImage::GetD3D9TextureClient(CompositableClient* aClient)
     return nullptr;
   }
 
-  RefPtr<DXGIYCbCrTextureClient> texClient =
-    new DXGIYCbCrTextureClient(aClient->GetForwarder(), TextureFlags::DEFAULT);
-  texClient->InitWith(textureY, textureCb, textureCr,
-                      shareHandleY, shareHandleCb, shareHandleCr,
-                      GetSize(), mData.mYSize, mData.mCbCrSize);
-  mTextureClient = texClient;
+  mTextureClient = DXGIYCbCrTextureClient::Create(aClient->GetForwarder(),
+                                                  TextureFlags::DEFAULT,
+                                                  textureY,
+                                                  textureCb,
+                                                  textureCr,
+                                                  shareHandleY,
+                                                  shareHandleCb,
+                                                  shareHandleCr,
+                                                  GetSize(),
+                                                  mData.mYSize,
+                                                  mData.mCbCrSize);
 
   return mTextureClient;
 }
@@ -203,9 +219,9 @@ IMFYCbCrImage::GetD3D9TextureClient(CompositableClient* aClient)
 TextureClient*
 IMFYCbCrImage::GetTextureClient(CompositableClient* aClient)
 {
-  ID3D11Device* device = gfxWindowsPlatform::GetPlatform()->GetD3D11MediaDevice();
+  ID3D11Device* device = gfxWindowsPlatform::GetPlatform()->GetD3D11ImageBridgeDevice();
   if (!device ||
-    aClient->GetForwarder()->GetCompositorBackendType() != LayersBackend::LAYERS_D3D11) {
+      aClient->GetForwarder()->GetCompositorBackendType() != LayersBackend::LAYERS_D3D11) {
 
     IDirect3DDevice9* d3d9device = gfxWindowsPlatform::GetPlatform()->GetD3D9Device();
     if (d3d9device && aClient->GetForwarder()->GetCompositorBackendType() == LayersBackend::LAYERS_D3D9) {
@@ -221,7 +237,7 @@ IMFYCbCrImage::GetTextureClient(CompositableClient* aClient)
   RefPtr<ID3D11DeviceContext> ctx;
   device->GetImmediateContext(byRef(ctx));
 
-  CD3D11_TEXTURE2D_DESC newDesc(DXGI_FORMAT_A8_UNORM,
+  CD3D11_TEXTURE2D_DESC newDesc(DXGI_FORMAT_R8_UNORM,
                                 mData.mYSize.width, mData.mYSize.height, 1, 1);
 
   newDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
@@ -268,12 +284,17 @@ IMFYCbCrImage::GetTextureClient(CompositableClient* aClient)
   textureCr->QueryInterface((IDXGIResource**)byRef(resource));
   hr = resource->GetSharedHandle(&shareHandleCr);
 
-  RefPtr<DXGIYCbCrTextureClient> texClient =
-    new DXGIYCbCrTextureClient(aClient->GetForwarder(), TextureFlags::DEFAULT);
-  texClient->InitWith(textureY, textureCb, textureCr,
-                      shareHandleY, shareHandleCb, shareHandleCr,
-                      GetSize(), mData.mYSize, mData.mCbCrSize);
-  mTextureClient = texClient;
+  mTextureClient = DXGIYCbCrTextureClient::Create(aClient->GetForwarder(),
+                                                  TextureFlags::DEFAULT,
+                                                  textureY,
+                                                  textureCb,
+                                                  textureCr,
+                                                  shareHandleY,
+                                                  shareHandleCb,
+                                                  shareHandleCr,
+                                                  GetSize(),
+                                                  mData.mYSize,
+                                                  mData.mCbCrSize);
 
   return mTextureClient;
 }

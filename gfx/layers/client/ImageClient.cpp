@@ -11,7 +11,7 @@
 #include "gfx2DGlue.h"                  // for ImageFormatToSurfaceFormat
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
-#include "mozilla/RefPtr.h"             // for RefPtr, TemporaryRef
+#include "mozilla/RefPtr.h"             // for RefPtr, already_AddRefed
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
 #include "mozilla/gfx/Point.h"          // for IntSize
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat, etc
@@ -30,7 +30,7 @@
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_WARNING, NS_ASSERTION
 #include "nsISupportsImpl.h"            // for Image::Release, etc
-#include "nsRect.h"                     // for nsIntRect
+#include "nsRect.h"                     // for mozilla::gfx::IntRect
 #include "mozilla/gfx/2D.h"
 #ifdef MOZ_WIDGET_GONK
 #include "GrallocImages.h"
@@ -41,7 +41,7 @@ namespace layers {
 
 using namespace mozilla::gfx;
 
-/* static */ TemporaryRef<ImageClient>
+/* static */ already_AddRefed<ImageClient>
 ImageClient::CreateImageClient(CompositableType aCompositableHostType,
                                CompositableForwarder* aForwarder,
                                TextureFlags aFlags)
@@ -117,11 +117,10 @@ TextureInfo ImageClientSingle::GetTextureInfo() const
   return TextureInfo(CompositableType::IMAGE);
 }
 
-TemporaryRef<AsyncTransactionTracker>
+already_AddRefed<AsyncTransactionTracker>
 ImageClientSingle::PrepareFlushAllImages()
 {
-  RefPtr<AsyncTransactionTracker> status = new RemoveTextureFromCompositableTracker();
-  return status;
+  return MakeAndAddRef<RemoveTextureFromCompositableTracker>();
 }
 
 void
@@ -279,7 +278,7 @@ ImageClient::ImageClient(CompositableForwarder* aFwd, TextureFlags aFlags,
 {}
 
 void
-ImageClient::UpdatePictureRect(nsIntRect aRect)
+ImageClient::UpdatePictureRect(IntRect aRect)
 {
   if (mPictureRect == aRect) {
     return;
@@ -385,5 +384,5 @@ ImageClientOverlay::CreateImage(ImageFormat aFormat)
 }
 
 #endif
-}
-}
+} // namespace layers
+} // namespace mozilla

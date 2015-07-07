@@ -613,12 +613,12 @@ JSVAL_TO_GCTHING_IMPL(jsval_layout l)
 static inline uint32_t
 JSVAL_TRACE_KIND_IMPL(jsval_layout l)
 {
-    static_assert((JSVAL_TAG_STRING & 0x03) == JSTRACE_STRING,
-                  "Value type tags must correspond with JSGCTraceKinds.");
-    static_assert((JSVAL_TAG_SYMBOL & 0x03) == JSTRACE_SYMBOL,
-                  "Value type tags must correspond with JSGCTraceKinds.");
-    static_assert((JSVAL_TAG_OBJECT & 0x03) == JSTRACE_OBJECT,
-                  "Value type tags must correspond with JSGCTraceKinds.");
+    static_assert((JSVAL_TAG_STRING & 0x03) == size_t(JS::TraceKind::String),
+                  "Value type tags must correspond with JS::TraceKinds.");
+    static_assert((JSVAL_TAG_SYMBOL & 0x03) == size_t(JS::TraceKind::Symbol),
+                  "Value type tags must correspond with JS::TraceKinds.");
+    static_assert((JSVAL_TAG_OBJECT & 0x03) == size_t(JS::TraceKind::Object),
+                  "Value type tags must correspond with JS::TraceKinds.");
     return l.s.tag & 0x03;
 }
 
@@ -854,12 +854,12 @@ JSVAL_TO_GCTHING_IMPL(jsval_layout l)
 static inline uint32_t
 JSVAL_TRACE_KIND_IMPL(jsval_layout l)
 {
-    static_assert((JSVAL_TAG_STRING & 0x03) == JSTRACE_STRING,
-                  "Value type tags must correspond with JSGCTraceKinds.");
-    static_assert((JSVAL_TAG_SYMBOL & 0x03) == JSTRACE_SYMBOL,
-                  "Value type tags must correspond with JSGCTraceKinds.");
-    static_assert((JSVAL_TAG_OBJECT & 0x03) == JSTRACE_OBJECT,
-                  "Value type tags must correspond with JSGCTraceKinds.");
+    static_assert((JSVAL_TAG_STRING & 0x03) == size_t(JS::TraceKind::String),
+                  "Value type tags must correspond with JS::TraceKinds.");
+    static_assert((JSVAL_TAG_SYMBOL & 0x03) == size_t(JS::TraceKind::Symbol),
+                  "Value type tags must correspond with JS::TraceKinds.");
+    static_assert((JSVAL_TAG_OBJECT & 0x03) == size_t(JS::TraceKind::Object),
+                  "Value type tags must correspond with JS::TraceKinds.");
     return (uint32_t)(l.asBits >> JSVAL_TAG_SHIFT) & 0x03;
 }
 
@@ -1179,9 +1179,9 @@ class Value
         return JSVAL_IS_TRACEABLE_IMPL(data);
     }
 
-    JSGCTraceKind gcKind() const {
+    JS::TraceKind traceKind() const {
         MOZ_ASSERT(isMarkable());
-        return JSGCTraceKind(JSVAL_TRACE_KIND_IMPL(data));
+        return JS::TraceKind(JSVAL_TRACE_KIND_IMPL(data));
     }
 
     JSWhyMagic whyMagic() const {
@@ -1249,7 +1249,7 @@ class Value
     }
 
     GCCellPtr toGCCellPtr() const {
-        return GCCellPtr(toGCThing(), gcKind());
+        return GCCellPtr(toGCThing(), traceKind());
     }
 
     bool toBoolean() const {
@@ -1392,12 +1392,10 @@ UndefinedValue()
 #endif
 }
 
-static inline Value
+static inline JS_VALUE_CONSTEXPR Value
 Int32Value(int32_t i32)
 {
-    Value v;
-    v.setInt32(i32);
-    return v;
+    return IMPL_TO_JSVAL(INT32_TO_JSVAL_IMPL(i32));
 }
 
 static inline Value
@@ -1629,8 +1627,7 @@ SameType(const Value& lhs, const Value& rhs)
 /************************************************************************/
 
 namespace JS {
-JS_PUBLIC_API(void) HeapValuePostBarrier(Value* valuep);
-JS_PUBLIC_API(void) HeapValueRelocate(Value* valuep);
+JS_PUBLIC_API(void) HeapValuePostBarrier(Value* valuep, const Value& prev, const Value& next);
 }
 
 namespace js {
@@ -1646,11 +1643,9 @@ template <> struct GCMethods<JS::Value>
     static gc::Cell* asGCThingOrNull(const JS::Value& v) {
         return v.isMarkable() ? v.toGCThing() : nullptr;
     }
-    static bool needsPostBarrier(const JS::Value& v) {
-        return v.isObject() && gc::IsInsideNursery(reinterpret_cast<gc::Cell*>(&v.toObject()));
+    static void postBarrier(JS::Value* v, const JS::Value& prev, const JS::Value& next) {
+        JS::HeapValuePostBarrier(v, prev, next);
     }
-    static void postBarrier(JS::Value* v) { JS::HeapValuePostBarrier(v); }
-    static void relocate(JS::Value* v) { JS::HeapValueRelocate(v); }
 };
 
 template <class Outer> class MutableValueOperations;
@@ -1676,6 +1671,7 @@ class ValueOperations
     bool isFalse() const { return value()->isFalse(); }
     bool isNumber() const { return value()->isNumber(); }
     bool isInt32() const { return value()->isInt32(); }
+    bool isInt32(int32_t i32) const { return value()->isInt32(i32); }
     bool isDouble() const { return value()->isDouble(); }
     bool isString() const { return value()->isString(); }
     bool isSymbol() const { return value()->isSymbol(); }
@@ -1698,6 +1694,7 @@ class ValueOperations
     JSObject& toObject() const { return value()->toObject(); }
     JSObject* toObjectOrNull() const { return value()->toObjectOrNull(); }
     gc::Cell* toGCThing() const { return value()->toGCThing(); }
+    JS::TraceKind traceKind() const { return value()->traceKind(); }
     uint64_t asRawBits() const { return value()->asRawBits(); }
 
     JSValueType extractNonDoubleType() const { return value()->extractNonDoubleType(); }
@@ -1859,6 +1856,29 @@ class PersistentRootedBase<JS::Value> : public MutableValueOperations<JS::Persis
     }
 };
 
+/*
+ * If the Value is a GC pointer type, convert to that type and call |f| with
+ * the pointer. If the Value is not a GC type, calls F::defaultValue.
+ */
+template <typename F, typename... Args>
+auto
+DispatchValueTyped(F f, const JS::Value& val, Args&&... args)
+  -> decltype(f(static_cast<JSObject*>(nullptr), mozilla::Forward<Args>(args)...))
+{
+    if (val.isString())
+        return f(val.toString(), mozilla::Forward<Args>(args)...);
+    if (val.isObject())
+        return f(&val.toObject(), mozilla::Forward<Args>(args)...);
+    if (val.isSymbol())
+        return f(val.toSymbol(), mozilla::Forward<Args>(args)...);
+    MOZ_ASSERT(!val.isMarkable());
+    return F::defaultValue(val);
+}
+
+template <class S> struct VoidDefaultAdaptor { static void defaultValue(S) {} };
+template <class S> struct IdentityDefaultAdaptor { static S defaultValue(const S& v) {return v;} };
+template <class S, bool v> struct BoolDefaultAdaptor { static bool defaultValue(S) { return v; } };
+
 } // namespace js
 
 inline jsval_layout
@@ -1910,12 +1930,6 @@ static_assert(sizeof(jsval_layout) == sizeof(JS::Value),
 /************************************************************************/
 
 static inline JS_VALUE_CONSTEXPR jsval
-INT_TO_JSVAL(int32_t i)
-{
-    return IMPL_TO_JSVAL(INT32_TO_JSVAL_IMPL(i));
-}
-
-static inline JS_VALUE_CONSTEXPR jsval
 DOUBLE_TO_JSVAL(double d)
 {
     /*
@@ -1942,48 +1956,9 @@ static inline JS_VALUE_CONSTEXPR jsval
 UINT_TO_JSVAL(uint32_t i)
 {
     return i <= JSVAL_INT_MAX
-           ? INT_TO_JSVAL((int32_t)i)
+           ? JS::Int32Value(int32_t(i))
            : DOUBLE_TO_JSVAL((double)i);
 }
-
-static inline jsval
-STRING_TO_JSVAL(JSString* str)
-{
-    return IMPL_TO_JSVAL(STRING_TO_JSVAL_IMPL(str));
-}
-
-static inline jsval
-OBJECT_TO_JSVAL(JSObject* obj)
-{
-    if (obj)
-        return IMPL_TO_JSVAL(OBJECT_TO_JSVAL_IMPL(obj));
-    return IMPL_TO_JSVAL(BUILD_JSVAL(JSVAL_TAG_NULL, 0));
-}
-
-static inline jsval
-BOOLEAN_TO_JSVAL(bool b)
-{
-    return IMPL_TO_JSVAL(BOOLEAN_TO_JSVAL_IMPL(b));
-}
-
-/* To be GC-safe, privates are tagged as doubles. */
-
-static inline jsval
-PRIVATE_TO_JSVAL(void* ptr)
-{
-    return IMPL_TO_JSVAL(PRIVATE_PTR_TO_JSVAL_IMPL(ptr));
-}
-
-// JS constants. For efficiency, prefer predicates (e.g. v.isNull()) and
-// constructing values from scratch (e.g. Int32Value(0)).  These constants are
-// stored in memory and initialized at startup, so testing against them and
-// using them requires memory loads and will be correspondingly slow.
-extern JS_PUBLIC_DATA(const jsval) JSVAL_NULL;
-extern JS_PUBLIC_DATA(const jsval) JSVAL_ZERO;
-extern JS_PUBLIC_DATA(const jsval) JSVAL_ONE;
-extern JS_PUBLIC_DATA(const jsval) JSVAL_FALSE;
-extern JS_PUBLIC_DATA(const jsval) JSVAL_TRUE;
-extern JS_PUBLIC_DATA(const jsval) JSVAL_VOID;
 
 namespace JS {
 

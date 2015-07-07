@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,7 +19,6 @@
 
 using namespace mozilla;
 
-#if defined(PR_LOGGING)
 static PRLogModuleInfo*
 GetCspParserLog()
 {
@@ -27,9 +27,9 @@ GetCspParserLog()
     gCspParserPRLog = PR_NewLogModule("CSPParser");
   return gCspParserPRLog;
 }
-#endif
 
-#define CSPPARSERLOG(args) PR_LOG(GetCspParserLog(), 4, args)
+#define CSPPARSERLOG(args) MOZ_LOG(GetCspParserLog(), mozilla::LogLevel::Debug, args)
+#define CSPPARSERLOGENABLED() MOZ_LOG_TEST(GetCspParserLog(), mozilla::LogLevel::Debug)
 
 static const char16_t COLON        = ':';
 static const char16_t SEMICOLON    = ';';
@@ -1079,8 +1079,7 @@ nsCSPParser::parseContentSecurityPolicy(const nsAString& aPolicyString,
                                         bool aReportOnly,
                                         uint64_t aInnerWindowID)
 {
-#ifdef PR_LOGGING
-  {
+  if (CSPPARSERLOGENABLED()) {
     CSPPARSERLOG(("nsCSPParser::parseContentSecurityPolicy, policy: %s",
                  NS_ConvertUTF16toUTF8(aPolicyString).get()));
     nsAutoCString spec;
@@ -1089,7 +1088,6 @@ nsCSPParser::parseContentSecurityPolicy(const nsAString& aPolicyString,
     CSPPARSERLOG(("nsCSPParser::parseContentSecurityPolicy, reportOnly: %s",
                  (aReportOnly ? "true" : "false")));
   }
-#endif
 
   NS_ASSERTION(aSelfURI, "Can not parseContentSecurityPolicy without aSelfURI");
 
@@ -1127,14 +1125,12 @@ nsCSPParser::parseContentSecurityPolicy(const nsAString& aPolicyString,
     return nullptr;
   }
 
-#ifdef PR_LOGGING
-  {
+  if (CSPPARSERLOGENABLED()) {
     nsString parsedPolicy;
     policy->toString(parsedPolicy);
     CSPPARSERLOG(("nsCSPParser::parseContentSecurityPolicy, parsedPolicy: %s",
                  NS_ConvertUTF16toUTF8(parsedPolicy).get()));
   }
-#endif
 
   return policy;
 }

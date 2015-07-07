@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,26 +11,20 @@
 #include "BluetoothProfileManagerBase.h"
 #include "nsAutoPtr.h"
 #include "nsClassHashtable.h"
-#include "nsIDOMFile.h"
 #include "nsIObserver.h"
 #include "nsTObserverArray.h"
 #include "nsThreadUtils.h"
 
-class nsIDOMBlob;
-
 namespace mozilla {
 namespace dom {
+class Blob;
 class BlobChild;
 class BlobParent;
-}
-namespace ipc {
-class UnixSocketConsumer;
 }
 }
 
 BEGIN_BLUETOOTH_NAMESPACE
 
-class BluetoothManager;
 class BluetoothNamedValue;
 class BluetoothReplyRunnable;
 class BluetoothSignal;
@@ -161,7 +155,7 @@ public:
    *
    * @return NS_OK if discovery stopped correctly, false otherwise
    */
-  virtual nsresult
+  virtual void
   StopDiscoveryInternal(BluetoothReplyRunnable* aRunnable) = 0;
 
   /**
@@ -169,7 +163,7 @@ public:
    *
    * @return NS_OK if discovery stopped correctly, false otherwise
    */
-  virtual nsresult
+  virtual void
   StartDiscoveryInternal(BluetoothReplyRunnable* aRunnable) = 0;
 
   /**
@@ -245,7 +239,7 @@ public:
 
   virtual void
   SendFile(const nsAString& aDeviceAddress,
-           nsIDOMBlob* aBlob,
+           Blob* aBlob,
            BluetoothReplyRunnable* aRunnable) = 0;
 
   virtual void
@@ -369,6 +363,9 @@ protected:
   virtual nsresult
   HandleStartup();
 
+  virtual void
+  CompleteToggleBt(bool aEnabled);
+
   /**
    * Called when the startup settings check has completed.
    */
@@ -394,8 +391,6 @@ protected:
   // Called by Get().
   static BluetoothService*
   Create();
-
-  void CompleteToggleBt(bool aEnabled);
 
   typedef nsClassHashtable<nsStringHashKey, BluetoothSignalObserverList >
   BluetoothSignalObserverTable;

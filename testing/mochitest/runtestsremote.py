@@ -18,13 +18,11 @@ sys.path.insert(
 from automation import Automation
 from remoteautomation import RemoteAutomation, fennecLogcatFilters
 from runtests import Mochitest, MessageLogger
-from mochitest_options import RemoteOptions
-from mozlog import structured
+from mochitest_options import MochitestArgumentParser
 
 from manifestparser import TestManifest
 from manifestparser.filters import chunk_by_slice
 import devicemanager
-import droid
 import mozinfo
 
 SCRIPT_DIR = os.path.abspath(os.path.realpath(os.path.dirname(__file__)))
@@ -435,6 +433,11 @@ class MochiRemote(Mochitest):
             self,
             options,
             debugger=debugger)
+        # remove desktop environment not used on device
+        if "MOZ_WIN_INHERIT_STD_HANDLES_PRE_VISTA" in browserEnv:
+            del browserEnv["MOZ_WIN_INHERIT_STD_HANDLES_PRE_VISTA"]
+        if "XPCOM_MEM_BLOAT_LOG" in browserEnv:
+            del browserEnv["XPCOM_MEM_BLOAT_LOG"]
         # override nsprLogs to avoid processing in Mochitest base class
         self.nsprLogs = None
         browserEnv["NSPR_LOG_FILE"] = os.path.join(
@@ -451,57 +454,27 @@ class MochiRemote(Mochitest):
         if 'profileDir' not in kwargs and 'profile' in kwargs:
             kwargs['profileDir'] = kwargs.pop('profile').profile
 
-        # We're handling ssltunnel, so we should lie to automation.py to avoid
-        # it trying to set up ssltunnel as well
-        kwargs['runSSLTunnel'] = False
-
         if 'quiet' in kwargs:
             kwargs.pop('quiet')
 
         return self._automation.runApp(*args, **kwargs)
 
 
-def main(args):
+def run_test_harness(options):
     message_logger = MessageLogger(logger=None)
     process_args = {'messageLogger': message_logger}
     auto = RemoteAutomation(None, "fennec", processArgs=process_args)
 
-    parser = RemoteOptions(auto)
-    structured.commandline.add_logging_group(parser)
-    options = parser.parse_args(args)
+    if options is None:
+        raise ValueError("Invalid options specified, use --help for a list of valid options")
 
-    if (options.dm_trans == "adb"):
-        if (options.deviceIP):
-            dm = droid.DroidADB(
-                options.deviceIP,
-                options.devicePort,
-                deviceRoot=options.remoteTestRoot)
-        elif (options.deviceSerial):
-            dm = droid.DroidADB(
-                None,
-                None,
-                deviceSerial=options.deviceSerial,
-                deviceRoot=options.remoteTestRoot)
-        else:
-            dm = droid.DroidADB(deviceRoot=options.remoteTestRoot)
-    else:
-        dm = droid.DroidSUT(
-            options.deviceIP,
-            options.devicePort,
-            deviceRoot=options.remoteTestRoot)
+    dm = options.dm
     auto.setDeviceManager(dm)
-    options = parser.verifyRemoteOptions(options, auto)
-
     mochitest = MochiRemote(auto, dm, options)
 
     log = mochitest.log
     message_logger.logger = log
     mochitest.message_logger = message_logger
-
-    if (options is None):
-        log.error(
-            "Invalid options specified, use --help for a list of valid options")
-        return 1
 
     productPieces = options.remoteProductName.split('.')
     if (productPieces is not None):
@@ -509,10 +482,6 @@ def main(args):
     else:
         auto.setProduct(options.remoteProductName)
     auto.setAppName(options.remoteappname)
-
-    options = parser.verifyOptions(options, mochitest)
-    if (options is None):
-        return 1
 
     logParent = os.path.dirname(options.remoteLogFile)
     dm.mkDir(logParent)
@@ -548,9 +517,11 @@ def main(args):
 
         # sut may wait up to 300 s for a robocop am process before returning
         dm.default_timeout = 320
-        mp = TestManifest(strict=False)
-        # TODO: pull this in dynamically
-        mp.read(options.robocopIni)
+        if isinstance(options.manifestFile, TestManifest):
+            mp = options.manifestFile
+        else:
+            mp = TestManifest(strict=False)
+            mp.read(options.robocopIni)
 
         filters = []
         if options.totalChunks:
@@ -564,15 +535,21 @@ def main(args):
         options.extraPrefs.append('browser.chrome.dynamictoolbar=false')
         options.extraPrefs.append('browser.snippets.enabled=false')
         options.extraPrefs.append('browser.casting.enabled=true')
+        options.extraPrefs.append('extensions.autoupdate.enabled=false')
 
         if (options.dm_trans == 'adb' and options.robocopApk):
             dm._checkCmd(["install", "-r", options.robocopApk])
+
+        if not options.autorun:
+            # Force a single loop iteration. The iteration will start Fennec and
+            # the httpd server, but not actually run a test.
+            options.test_paths = [robocop_tests[0]['name']]
 
         retVal = None
         # Filtering tests
         active_tests = []
         for test in robocop_tests:
-            if options.testPath and options.testPath != test['name']:
+            if options.test_paths and test['name'] not in options.test_paths:
                 continue
 
             if 'disabled' in test:
@@ -595,20 +572,36 @@ def main(args):
                 mochitest.localProfile = options.profilePath
 
             options.app = "am"
-            options.browserArgs = [
-                "instrument",
-                "-w",
-                "-e",
-                "deviceroot",
-                deviceRoot,
-                "-e",
-                "class"]
-            options.browserArgs.append(
-                "org.mozilla.gecko.tests.%s" %
-                test['name'])
-            options.browserArgs.append(
-                "org.mozilla.roboexample.test/org.mozilla.gecko.FennecInstrumentationTestRunner")
             mochitest.nsprLogName = "nspr-%s.log" % test['name']
+            if options.autorun:
+                # This launches a test (using "am instrument") and instructs
+                # Fennec to /quit/ the browser (using Robocop:Quit) and to
+                # /finish/ all opened activities.
+                options.browserArgs = [
+                    "instrument",
+                    "-w",
+                    "-e", "quit_and_finish", "1",
+                    "-e", "deviceroot", deviceRoot,
+                    "-e",
+                    "class"]
+                options.browserArgs.append(
+                    "org.mozilla.gecko.tests.%s" %
+                    test['name'].split('.java')[0])
+                options.browserArgs.append(
+                    "org.mozilla.roboexample.test/org.mozilla.gecko.FennecInstrumentationTestRunner")
+            else:
+                # This does not launch a test at all. It launches an activity
+                # that starts Fennec and then waits indefinitely, since cat
+                # never returns.
+                options.browserArgs = ["start",
+                                       "-n", "org.mozilla.roboexample.test/org.mozilla.gecko.LaunchFennecWithConfigurationActivity",
+                                       "&&", "cat"]
+                dm.default_timeout = sys.maxint # Forever.
+
+                mochitest.log.info("")
+                mochitest.log.info("Serving mochi.test Robocop root at http://%s:%s/tests/robocop/" %
+                    (options.remoteWebServer, options.httpPort))
+                mochitest.log.info("")
 
             # If the test is for checking the import from bookmarks then make
             # sure there is data to import
@@ -740,5 +733,12 @@ def main(args):
     return retVal
 
 
+def main(args=sys.argv[1:]):
+    parser = MochitestArgumentParser(app='android')
+    options = parser.parse_args(args)
+
+    return run_test_harness(options)
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())

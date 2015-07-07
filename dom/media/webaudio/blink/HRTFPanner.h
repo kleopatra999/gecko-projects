@@ -35,13 +35,15 @@ struct AudioChunk;
 
 namespace WebCore {
 
+typedef nsTArray<float> AudioFloatArray;
+
 class HRTFDatabaseLoader;
 
 using mozilla::AudioChunk;
 
 class HRTFPanner {
 public:
-    HRTFPanner(float sampleRate, mozilla::TemporaryRef<HRTFDatabaseLoader> databaseLoader);
+    HRTFPanner(float sampleRate, already_AddRefed<HRTFDatabaseLoader> databaseLoader);
     ~HRTFPanner();
 
     // chunk durations must be 128

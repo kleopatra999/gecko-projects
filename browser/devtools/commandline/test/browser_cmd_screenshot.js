@@ -11,7 +11,7 @@ function test() {
   return Task.spawn(spawnTest).then(finish, helpers.handleError);
 }
 
-function spawnTest() {
+function* spawnTest() {
   waitForExplicitFinish();
 
   info("RUN TEST: non-private window");
@@ -25,7 +25,7 @@ function spawnTest() {
   pbWin.close();
 }
 
-function addTabWithToolbarRunTests(win) {
+function* addTabWithToolbarRunTests(win) {
   let options = yield helpers.openTab(TEST_URI, { chromeWindow: win });
   yield helpers.openToolbar(options);
 
@@ -81,11 +81,6 @@ function addTabWithToolbarRunTests(win) {
         input:  'screenshot --selector img#testImage',
         markup: 'VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVV',
         status: 'VALID',
-        args: {
-          selector: {
-            value: options.window.document.getElementById("testImage")
-          },
-        }
       },
     },
   ]);

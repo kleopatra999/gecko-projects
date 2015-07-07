@@ -29,6 +29,10 @@ if (cm) {
   cm.deleteCategoryEntry("update-timer", "nsUpdateService", false);
 }
 
+let SECURITY_PREF = "security.turn_off_all_security_so_that_viruses_can_take_over_this_computer";
+Components.utils.import("resource://gre/modules/Services.jsm");
+Services.prefs.setBoolPref(SECURITY_PREF, true);
+
 function openWindow(aEvent) {
   var popupIframe = aEvent.detail.frameElement;
   popupIframe.id = 'popupiframe';
@@ -66,6 +70,14 @@ function openWindow(aEvent) {
   container.parentNode.appendChild(popupIframe);
 }
 container.addEventListener('mozbrowseropenwindow', openWindow);
+container.addEventListener('mozbrowsershowmodalprompt', function (e) {
+  if (e.detail.message == 'setVisible::false') {
+    container.setVisible(false);
+  }
+  else if (e.detail.message == 'setVisible::true') {
+    container.setVisible(true);
+  }
+});
 
 if (outOfProcess) {
   let specialpowers = {};
@@ -89,6 +101,11 @@ if (outOfProcess) {
 
 if (chrome) {
   let loader = Cc["@mozilla.org/moz/jssubscript-loader;1"].getService(Ci.mozIJSSubScriptLoader);
+  if (typeof(SpecialPowers) == 'undefined') {
+    loader.loadSubScript("chrome://specialpowers/content/specialpowersAPI.js");
+    loader.loadSubScript("chrome://specialpowers/content/SpecialPowersObserverAPI.js");
+    loader.loadSubScript("chrome://specialpowers/content/ChromePowers.js");
+  }
   loader.loadSubScript("chrome://mochikit/content/browser-test.js");
   b2gStart();
 }

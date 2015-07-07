@@ -5,7 +5,7 @@
 
 package org.mozilla.gecko.tabqueue;
 
-import org.mozilla.gecko.BrowserApp;
+import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.GeckoProfile;
@@ -21,6 +21,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Resources;
 import android.support.v4.app.NotificationCompat;
+import android.text.TextUtils;
 import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -53,12 +54,11 @@ public class TabQueueHelper {
     public static boolean shouldShowTabQueuePrompt(Context context) {
         final SharedPreferences prefs = GeckoSharedPrefs.forApp(context);
 
-        boolean isTabQueueEnabled = prefs.getBoolean(GeckoPreferences.PREFS_TAB_QUEUE, false);
         int numberOfTimesTabQueuePromptSeen = prefs.getInt(PREF_TAB_QUEUE_TIMES_PROMPT_SHOWN, 0);
 
         // Exit early if the feature is already enabled or the user has seen the
         // prompt more than MAX_TIMES_TO_SHOW_PROMPT times.
-        if (isTabQueueEnabled || numberOfTimesTabQueuePromptSeen >= MAX_TIMES_TO_SHOW_PROMPT) {
+        if (isTabQueueEnabled(prefs) || numberOfTimesTabQueuePromptSeen >= MAX_TIMES_TO_SHOW_PROMPT) {
             return false;
         }
 
@@ -105,6 +105,45 @@ public class TabQueueHelper {
     }
 
     /**
+     * Remove a url from the file, if it exists.
+     * If the url exists multiple times, all instances of it will be removed.
+     * This should not be run on the UI thread.
+     *
+     * @param context
+     * @param urlToRemove URL to remove
+     * @param filename    filename to remove URL from
+     * @return the number of queued urls
+     */
+    public static int removeURLFromFile(final Context context, final String urlToRemove, final String filename) {
+        ThreadUtils.assertNotOnUiThread();
+
+        final GeckoProfile profile = GeckoProfile.get(context);
+
+        JSONArray jsonArray = profile.readJSONArrayFromFile(filename);
+        JSONArray newArray = new JSONArray();
+        String url;
+
+        // Since JSONArray.remove was only added in API 19, we have to use two arrays in order to remove.
+        for (int i = 0; i < jsonArray.length(); i++) {
+            try {
+                url = jsonArray.getString(i);
+            } catch (JSONException e) {
+                url = "";
+            }
+            if(!TextUtils.isEmpty(url) && !urlToRemove.equals(url)) {
+                newArray.put(url);
+            }
+        }
+
+        profile.writeFile(filename, newArray.toString());
+
+        final SharedPreferences prefs = GeckoSharedPrefs.forApp(context);
+        prefs.edit().putInt(PREF_TAB_QUEUE_COUNT, newArray.length()).apply();
+
+        return newArray.length();
+    }
+
+    /**
      * Displays a notification showing the total number of tabs queue.  If there is already a notification displayed, it
      * will be replaced.
      *
@@ -114,24 +153,23 @@ public class TabQueueHelper {
     public static void showNotification(final Context context, final int tabsQueued) {
         ThreadUtils.assertNotOnUiThread();
 
-        Intent resultIntent = new Intent(context, BrowserApp.class);
+        Intent resultIntent = new Intent();
+        resultIntent.setClassName(context, AppConstants.MOZ_ANDROID_BROWSER_INTENT_CLASS);
         resultIntent.setAction(TabQueueHelper.LOAD_URLS_ACTION);
 
         PendingIntent pendingIntent = PendingIntent.getActivity(context, 0, resultIntent, PendingIntent.FLAG_CANCEL_CURRENT);
 
-        String title, text;
+        final String text;
         final Resources resources = context.getResources();
         if (tabsQueued == 1) {
-            title = resources.getString(R.string.tab_queue_notification_title_singular);
             text = resources.getString(R.string.tab_queue_notification_text_singular);
         } else {
-            title = resources.getString(R.string.tab_queue_notification_title_plural);
             text = resources.getString(R.string.tab_queue_notification_text_plural, tabsQueued);
         }
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(context)
                                                      .setSmallIcon(R.drawable.ic_status_logo)
-                                                     .setContentTitle(title)
+                                                     .setContentTitle(resources.getString(R.string.tab_queue_notification_title))
                                                      .setContentText(text)
                                                      .setContentIntent(pendingIntent);
 
@@ -145,10 +183,9 @@ public class TabQueueHelper {
         // TODO: Use profile shared prefs when bug 1147925 gets fixed.
         final SharedPreferences prefs = GeckoSharedPrefs.forApp(context);
 
-        boolean tabQueueEnabled = prefs.getBoolean(GeckoPreferences.PREFS_TAB_QUEUE, false);
         int tabsQueued = prefs.getInt(PREF_TAB_QUEUE_COUNT, 0);
 
-        return tabQueueEnabled && tabsQueued > 0;
+        return isTabQueueEnabled(prefs) && tabsQueued > 0;
     }
 
     public static int getTabQueueLength(final Context context) {
@@ -162,9 +199,7 @@ public class TabQueueHelper {
     public static void openQueuedUrls(final Context context, final GeckoProfile profile, final String filename, boolean shouldPerformJavaScriptCallback) {
         ThreadUtils.assertNotOnUiThread();
 
-        // Remove the notification.
-        NotificationManager notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-        notificationManager.cancel(TAB_QUEUE_NOTIFICATION_ID);
+        removeNotification(context);
 
         // exit early if we don't have any tabs queued
         if (getTabQueueLength(context) < 1) {
@@ -194,6 +229,11 @@ public class TabQueueHelper {
         // TODO: Use profile shared prefs when bug 1147925 gets fixed.
         final SharedPreferences prefs = GeckoSharedPrefs.forApp(context);
         prefs.edit().remove(PREF_TAB_QUEUE_COUNT).apply();
+    }
+
+    protected static void removeNotification(Context context) {
+        NotificationManager notificationManager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        notificationManager.cancel(TAB_QUEUE_NOTIFICATION_ID);
     }
 
     public static void processTabQueuePromptResponse(int resultCode, Context context) {
@@ -227,5 +267,13 @@ public class TabQueueHelper {
         }
 
         editor.apply();
+    }
+
+    public static boolean isTabQueueEnabled(Context context) {
+        return isTabQueueEnabled(GeckoSharedPrefs.forApp(context));
+    }
+
+    public static boolean isTabQueueEnabled(SharedPreferences prefs) {
+        return prefs.getBoolean(GeckoPreferences.PREFS_TAB_QUEUE, false);
     }
 }

@@ -33,7 +33,6 @@
 #import <Cocoa/Cocoa.h>
 #import <AppKit/NSOpenGL.h>
 
-class gfxASurface;
 class nsChildView;
 class nsCocoaWindow;
 
@@ -456,14 +455,25 @@ public:
                                             int32_t aNativeKeyCode,
                                             uint32_t aModifierFlags,
                                             const nsAString& aCharacters,
-                                            const nsAString& aUnmodifiedCharacters) override;
+                                            const nsAString& aUnmodifiedCharacters,
+                                            nsIObserver* aObserver) override;
 
   virtual nsresult SynthesizeNativeMouseEvent(mozilla::LayoutDeviceIntPoint aPoint,
                                               uint32_t aNativeMessage,
-                                              uint32_t aModifierFlags) override;
+                                              uint32_t aModifierFlags,
+                                              nsIObserver* aObserver) override;
 
-  virtual nsresult SynthesizeNativeMouseMove(mozilla::LayoutDeviceIntPoint aPoint) override
-  { return SynthesizeNativeMouseEvent(aPoint, NSMouseMoved, 0); }
+  virtual nsresult SynthesizeNativeMouseMove(mozilla::LayoutDeviceIntPoint aPoint,
+                                             nsIObserver* aObserver) override
+  { return SynthesizeNativeMouseEvent(aPoint, NSMouseMoved, 0, aObserver); }
+  virtual nsresult SynthesizeNativeMouseScrollEvent(mozilla::LayoutDeviceIntPoint aPoint,
+                                                    uint32_t aNativeMessage,
+                                                    double aDeltaX,
+                                                    double aDeltaY,
+                                                    double aDeltaZ,
+                                                    uint32_t aModifierFlags,
+                                                    uint32_t aAdditionalFlags,
+                                                    nsIObserver* aObserver) override;
 
   // Mac specific methods
   
@@ -526,7 +536,7 @@ public:
     return nsCocoaUtils::DevPixelsToCocoaPoints(aRect, BackingScaleFactor());
   }
 
-  mozilla::TemporaryRef<mozilla::gfx::DrawTarget> StartRemoteDrawing() override;
+  already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawing() override;
   void EndRemoteDrawing() override;
   void CleanupRemoteDrawing() override;
 
@@ -539,6 +549,8 @@ public:
   NS_IMETHOD SetPluginFocused(bool& aFocused) override;
 
   bool IsPluginFocused() { return mPluginFocused; }
+
+  virtual nsIntPoint GetClientOffset() override;
 
 protected:
   virtual ~nsChildView();

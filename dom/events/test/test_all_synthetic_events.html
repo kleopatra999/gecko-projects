@@ -64,6 +64,14 @@ const kEventConstructors = {
                                                           return new BluetoothDiscoveryStateChangedEvent(aName, aProps);
                                                        },
                                              },
+  BluetoothGattCharacteristicEvent:          { create: function (aName, aProps) {
+                                                          return new BluetoothGattCharacteristicEvent(aName, aProps);
+                                                       },
+                                             },
+  BluetoothLeDeviceEvent:                    { create: function (aName, aProps) {
+                                                          return new BluetoothLeDeviceEvent(aName, aProps);
+                                                       },
+                                             },
   BluetoothPairingEvent:                     { create: function (aName, aProps) {
                                                           return new BluetoothPairingEvent(aName, aProps);
                                                        },
@@ -162,6 +170,10 @@ const kEventConstructors = {
                                              },
   DeviceProximityEvent:                      { create: function (aName, aProps) {
                                                          return new DeviceProximityEvent(aName, aProps);
+                                                       },
+                                             },
+  DeviceStorageAreaChangedEvent:             { create: function (aName, aProps) {
+                                                         return new DeviceStorageAreaChangedEvent(aName, aProps);
                                                        },
                                              },
   DeviceStorageChangeEvent:                  { create: function (aName, aProps) {
@@ -415,11 +427,22 @@ const kEventConstructors = {
                                                          return e;
                                                        },
                                              },
+  SpeechRecognitionError:                    { create: function (aName, aProps) {
+                                                         return new SpeechRecognitionError(aName, aProps);
+                                                       },
+                                             },
   SpeechRecognitionEvent:                    { create: function (aName, aProps) {
                                                          return new SpeechRecognitionEvent(aName, aProps);
                                                        },
                                              },
+  SpeechSynthesisErrorEvent:                 { create: function (aName, aProps) {
+                                                         aProps.error = "synthesis-unavailable";
+                                                         aProps.utterance = new SpeechSynthesisUtterance("Hello World");
+                                                         return new SpeechSynthesisErrorEvent(aName, aProps);
+                                                       },
+                                             },
   SpeechSynthesisEvent:                      { create: function (aName, aProps) {
+                                                         aProps.utterance = new SpeechSynthesisUtterance("Hello World");
                                                          return new SpeechSynthesisEvent(aName, aProps);
                                                        },
                                              },

@@ -23,7 +23,6 @@
 #include "nsIFile.h"
 #include "ThreadSafeRefcountingWithMainThreadDestruction.h"
 
-class nsILineInputStream;
 class nsIThread;
 
 #ifdef MOZ_CRASHREPORTER
@@ -124,7 +123,7 @@ public:
 
   const nsCString& GetDisplayName() const;
   const nsCString& GetVersion() const;
-  const nsCString& GetPluginId() const;
+  const uint32_t GetPluginId() const;
 
   // Returns true if a plugin can be or is being used across multiple NodeIds.
   bool CanBeSharedCrossNodeIds() const;
@@ -193,12 +192,14 @@ private:
   nsCString mDisplayName; // name of plugin displayed to users
   nsCString mDescription; // description of plugin for display to users
   nsCString mVersion;
-  nsCString mPluginId;
+  uint32_t mPluginId;
   nsTArray<nsAutoPtr<GMPCapability>> mCapabilities;
   GMPProcessParent* mProcess;
   bool mDeleteProcessOnlyOnUnload;
   bool mAbnormalShutdownInProgress;
   bool mIsBlockingDeletion;
+
+  bool mCanDecrypt;
 
   nsTArray<nsRefPtr<GMPTimerParent>> mTimers;
   nsTArray<nsRefPtr<GMPStorageParent>> mStorage;
@@ -216,9 +217,13 @@ private:
   bool mAsyncShutdownRequired;
   bool mAsyncShutdownInProgress;
 
-#ifdef PR_LOGGING
   int mChildPid;
-#endif
+
+  // We hold a self reference to ourself while the child process is alive.
+  // This ensures that if the GMPService tries to shut us down and drops
+  // its reference to us, we stay alive long enough for the child process
+  // to terminate gracefully.
+  bool mHoldingSelfRef;
 };
 
 } // namespace gmp

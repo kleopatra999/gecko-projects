@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -167,6 +167,10 @@ public:
     BT_WARNING("Unable to get value for '" BLUETOOTH_ENABLED_SETTING "'");
     return NS_OK;
   }
+
+private:
+  ~StartupTask()
+  { }
 };
 
 NS_IMPL_ISUPPORTS(BluetoothService::StartupTask, nsISettingsServiceCallback);
@@ -189,7 +193,7 @@ BluetoothService*
 BluetoothService::Create()
 {
 #if defined(MOZ_B2G_BT)
-  if (!IsMainProcess()) {
+  if (!XRE_IsParentProcess()) {
     return BluetoothServiceChildProcess::Create();
   }
 
@@ -223,7 +227,7 @@ BluetoothService::Init()
   }
 
   // Only the main process should observe bluetooth settings changes.
-  if (IsMainProcess() &&
+  if (XRE_IsParentProcess() &&
       NS_FAILED(obs->AddObserver(this, MOZSETTINGS_CHANGED_ID, false))) {
     BT_WARNING("Failed to add settings change observer!");
     return false;
@@ -265,7 +269,7 @@ BluetoothService::RegisterBluetoothSignalHandler(
 
   // Distribute pending pairing requests when pairing listener has been added
   // to signal observer table.
-  if (IsMainProcess() &&
+  if (XRE_IsParentProcess() &&
       !mPendingPairReqSignals.IsEmpty() &&
       aNodeName.EqualsLiteral(KEY_PAIRING_LISTENER)) {
     for (uint32_t i = 0; i < mPendingPairReqSignals.Length(); ++i) {

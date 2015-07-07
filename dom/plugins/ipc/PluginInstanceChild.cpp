@@ -32,6 +32,7 @@ using mozilla::gfx::SharedDIBSurface;
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/ipc/MessageChannel.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/StaticPtr.h"
 #include "ImageContainer.h"
 
 using namespace mozilla;
@@ -129,7 +130,7 @@ PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface,
     , mMode(aMode)
     , mNames(aNames)
     , mValues(aValues)
-#if defined(XP_MACOSX)
+#if defined(XP_DARWIN)
     , mContentsScaleFactor(1.0)
 #endif
     , mDrawingModel(kDefaultDrawingModel)
@@ -148,6 +149,8 @@ PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface,
     , mWinlessPopupSurrogateHWND(0)
     , mWinlessThrottleOldWndProc(0)
     , mWinlessHiddenMsgHWND(0)
+    , mUnityGetMessageHook(NULL)
+    , mUnitySendMessageHook(NULL)
 #endif // OS_WIN
     , mAsyncCallMutex("PluginInstanceChild::mAsyncCallMutex")
 #if defined(MOZ_WIDGET_COCOA)
@@ -194,6 +197,9 @@ PluginInstanceChild::PluginInstanceChild(const NPPluginFuncs* aPluginIface,
 #endif // OS_WIN
 #if defined(OS_WIN)
     InitPopupMenuHook();
+    if (GetQuirks() & PluginModuleChild::QUIRK_UNITY_FIXUP_MOUSE_CAPTURE) {
+        SetUnityHooks();
+    }
 #endif // OS_WIN
 }
 
@@ -201,6 +207,9 @@ PluginInstanceChild::~PluginInstanceChild()
 {
 #if defined(OS_WIN)
     NS_ASSERTION(!mPluginWindowHWND, "Destroying PluginInstanceChild without NPP_Destroy?");
+    if (GetQuirks() & PluginModuleChild::QUIRK_UNITY_FIXUP_MOUSE_CAPTURE) {
+        ClearUnityHooks();
+    }
 #endif
 #if defined(MOZ_WIDGET_COCOA)
     if (mShColorSpace) {
@@ -394,7 +403,9 @@ PluginInstanceChild::NPN_GetValue(NPNVariable aVar,
         if (!CallNPN_GetValue_NPNVdocumentOrigin(&v, &result)) {
             return NPERR_GENERIC_ERROR;
         }
-        if (result == NPERR_NO_ERROR) {
+        if (result == NPERR_NO_ERROR ||
+            (GetQuirks() &
+                PluginModuleChild::QUIRK_FLASH_RETURN_EMPTY_DOCUMENT_ORIGIN)) {
             *static_cast<char**>(aValue) = ToNewCString(v);
         }
         return result;
@@ -498,7 +509,7 @@ PluginInstanceChild::NPN_GetValue(NPNVariable aVar,
 #endif
 
     default:
-        PR_LOG(GetPluginLog(), PR_LOG_WARNING,
+        MOZ_LOG(GetPluginLog(), LogLevel::Warning,
                ("In PluginInstanceChild::NPN_GetValue: Unhandled NPNVariable %i (%s)",
                 (int) aVar, NPNVariableToString(aVar)));
         return NPERR_GENERIC_ERROR;
@@ -527,7 +538,7 @@ PluginInstanceChild::Invalidate()
 NPError
 PluginInstanceChild::NPN_SetValue(NPPVariable aVar, void* aValue)
 {
-    PR_LOG(GetPluginLog(), PR_LOG_DEBUG, ("%s (aVar=%i, aValue=%p)",
+    MOZ_LOG(GetPluginLog(), LogLevel::Debug, ("%s (aVar=%i, aValue=%p)",
                                       FULLFUNCTION, (int) aVar, aValue));
 
     AssertPluginThread();
@@ -616,7 +627,7 @@ PluginInstanceChild::NPN_SetValue(NPPVariable aVar, void* aValue)
 #endif
 
     default:
-        PR_LOG(GetPluginLog(), PR_LOG_WARNING,
+        MOZ_LOG(GetPluginLog(), LogLevel::Warning,
                ("In PluginInstanceChild::NPN_SetValue: Unhandled NPPVariable %i (%s)",
                 (int) aVar, NPPVariableToString(aVar)));
         return NPERR_GENERIC_ERROR;
@@ -1113,7 +1124,8 @@ void PluginInstanceChild::DeleteWindow()
 #endif
 
 bool
-PluginInstanceChild::AnswerNPP_SetWindow(const NPRemoteWindow& aWindow)
+PluginInstanceChild::AnswerNPP_SetWindow(const NPRemoteWindow& aWindow,
+                                         NPRemoteWindow* aChildWindowToBeAdopted)
 {
     PLUGIN_LOG_DEBUG(("%s (aWindow=<window: 0x%lx, x: %d, y: %d, width: %d, height: %d>)",
                       FULLFUNCTION,
@@ -1204,8 +1216,31 @@ PluginInstanceChild::AnswerNPP_SetWindow(const NPRemoteWindow& aWindow)
           if (!CreatePluginWindow())
               return false;
 
-          ReparentPluginWindow(reinterpret_cast<HWND>(aWindow.window));
           SizePluginWindow(aWindow.width, aWindow.height);
+
+          // If the window is not our parent set the return child window so that
+          // it can be re-parented in the chrome process. Re-parenting now
+          // happens there as we might not have sufficient permission.
+          // Also, this needs to be after SizePluginWindow because SetWindowPos
+          // relies on things that it sets.
+          HWND parentWindow = reinterpret_cast<HWND>(aWindow.window);
+          if (mPluginParentHWND != parentWindow  && IsWindow(parentWindow)) {
+              mPluginParentHWND = parentWindow;
+              aChildWindowToBeAdopted->window =
+                  reinterpret_cast<uint64_t>(mPluginWindowHWND);
+          } else {
+              // Now we know that the window has the correct parent we can show
+              // it. The actual visibility is controlled by its parent.
+              // First time round, these calls are made by our caller after the
+              // parent is set.
+              ShowWindow(mPluginWindowHWND, SW_SHOWNA);
+
+              // This used to be called in SizePluginWindow, but we need to make
+              // sure that mPluginWindowHWND has had it's parent set correctly,
+              // otherwise it can cause a focus issue.
+              SetWindowPos(mPluginWindowHWND, nullptr, 0, 0, aWindow.width,
+                           aWindow.height, SWP_NOZORDER | SWP_NOREPOSITION);
+          }
 
           mWindow.window = (void*)mPluginWindowHWND;
           mWindow.x = aWindow.x;
@@ -1270,6 +1305,8 @@ PluginInstanceChild::AnswerNPP_SetWindow(const NPRemoteWindow& aWindow)
     // TODO: Need Android impl
 #elif defined(MOZ_WIDGET_QT)
     // TODO: Need QT-nonX impl
+#elif defined(MOZ_WIDGET_UIKIT)
+    // Don't care
 #else
 #  error Implement me for your OS
 #endif
@@ -1393,33 +1430,12 @@ PluginInstanceChild::DestroyPluginWindow()
 }
 
 void
-PluginInstanceChild::ReparentPluginWindow(HWND hWndParent)
-{
-    if (hWndParent != mPluginParentHWND && IsWindow(hWndParent)) {
-        // Fix the child window's style to be a child window.
-        LONG_PTR style = GetWindowLongPtr(mPluginWindowHWND, GWL_STYLE);
-        style |= WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-        style &= ~WS_POPUP;
-        SetWindowLongPtr(mPluginWindowHWND, GWL_STYLE, style);
-
-        // Do the reparenting.
-        SetParent(mPluginWindowHWND, hWndParent);
-
-        // Make sure we're visible.
-        ShowWindow(mPluginWindowHWND, SW_SHOWNA);
-    }
-    mPluginParentHWND = hWndParent;
-}
-
-void
 PluginInstanceChild::SizePluginWindow(int width,
                                       int height)
 {
     if (mPluginWindowHWND) {
         mPluginSize.x = width;
         mPluginSize.y = height;
-        SetWindowPos(mPluginWindowHWND, nullptr, 0, 0, width, height,
-                     SWP_NOZORDER | SWP_NOREPOSITION);
     }
 }
 
@@ -1698,6 +1714,139 @@ PluginInstanceChild::HookSetWindowLongPtr()
         sUser32Intercept.AddHook("SetWindowLongW", reinterpret_cast<intptr_t>(SetWindowLongWHook),
                                  (void**) &sUser32SetWindowLongWHookStub);
 #endif
+}
+
+class SetCaptureHookData
+{
+public:
+    explicit SetCaptureHookData(HWND aHwnd)
+        : mHwnd(aHwnd)
+        , mHaveRect(false)
+    {
+        MOZ_ASSERT(aHwnd);
+        mHaveRect = !!GetClientRect(aHwnd, &mCaptureRect);
+    }
+
+    /**
+     * @return true if capture was released
+     */
+    bool HandleMouseMsg(const MSG& aMsg)
+    {
+        // If the window belongs to Unity, the mouse button is up, and the mouse
+        // has moved outside the client rect of the Unity window, release capture.
+        if (aMsg.hwnd != mHwnd || !mHaveRect) {
+            return false;
+        }
+        if (aMsg.message != WM_MOUSEMOVE && aMsg.message != WM_LBUTTONUP) {
+            return false;
+        }
+        if ((aMsg.message == WM_MOUSEMOVE && (aMsg.wParam & MK_LBUTTON))) {
+            return false;
+        }
+        POINT pt = { GET_X_LPARAM(aMsg.lParam), GET_Y_LPARAM(aMsg.lParam) };
+        if (PtInRect(&mCaptureRect, pt)) {
+            return false;
+        }
+        return !!ReleaseCapture();
+    }
+
+    bool IsUnityLosingCapture(const CWPSTRUCT& aInfo) const
+    {
+        return aInfo.message == WM_CAPTURECHANGED &&
+               aInfo.hwnd == mHwnd;
+    }
+
+private:
+    HWND mHwnd;
+    bool mHaveRect;
+    RECT mCaptureRect;
+};
+
+static StaticAutoPtr<SetCaptureHookData> sSetCaptureHookData;
+typedef HWND (WINAPI* User32SetCapture)(HWND);
+static User32SetCapture sUser32SetCaptureHookStub = nullptr;
+
+HWND WINAPI
+PluginInstanceChild::SetCaptureHook(HWND aHwnd)
+{
+    // Don't do anything unless aHwnd belongs to Unity
+    wchar_t className[256] = {0};
+    int numChars = GetClassNameW(aHwnd, className, ArrayLength(className));
+    NS_NAMED_LITERAL_STRING(unityClassName, "Unity.WebPlayer");
+    if (numChars == unityClassName.Length() && unityClassName == wwc(className)) {
+        sSetCaptureHookData = new SetCaptureHookData(aHwnd);
+    }
+    return sUser32SetCaptureHookStub(aHwnd);
+}
+
+void
+PluginInstanceChild::SetUnityHooks()
+{
+    if (!(GetQuirks() & PluginModuleChild::QUIRK_UNITY_FIXUP_MOUSE_CAPTURE)) {
+        return;
+    }
+
+    sUser32Intercept.Init("user32.dll");
+    if (!sUser32SetCaptureHookStub) {
+        sUser32Intercept.AddHook("SetCapture",
+                                 reinterpret_cast<intptr_t>(SetCaptureHook),
+                                 (void**) &sUser32SetCaptureHookStub);
+    }
+    if (!mUnityGetMessageHook) {
+        mUnityGetMessageHook = SetWindowsHookEx(WH_GETMESSAGE,
+                                                &UnityGetMessageHookProc, NULL,
+                                                GetCurrentThreadId());
+    }
+    if (!mUnitySendMessageHook) {
+        mUnitySendMessageHook = SetWindowsHookEx(WH_CALLWNDPROC,
+                                                 &UnitySendMessageHookProc,
+                                                 NULL, GetCurrentThreadId());
+    }
+}
+
+void
+PluginInstanceChild::ClearUnityHooks()
+{
+    if (mUnityGetMessageHook) {
+        UnhookWindowsHookEx(mUnityGetMessageHook);
+        mUnityGetMessageHook = NULL;
+    }
+    if (mUnitySendMessageHook) {
+        UnhookWindowsHookEx(mUnitySendMessageHook);
+        mUnitySendMessageHook = NULL;
+    }
+    sSetCaptureHookData = nullptr;
+}
+
+LRESULT CALLBACK
+PluginInstanceChild::UnityGetMessageHookProc(int aCode, WPARAM aWparam,
+                                             LPARAM aLParam)
+{
+    if (aCode >= 0) {
+        MSG* info = reinterpret_cast<MSG*>(aLParam);
+        MOZ_ASSERT(info);
+        if (sSetCaptureHookData && sSetCaptureHookData->HandleMouseMsg(*info)) {
+            sSetCaptureHookData = nullptr;
+        }
+    }
+
+    return CallNextHookEx(0, aCode, aWparam, aLParam);
+}
+
+LRESULT CALLBACK
+PluginInstanceChild::UnitySendMessageHookProc(int aCode, WPARAM aWparam,
+                                              LPARAM aLParam)
+{
+    if (aCode >= 0) {
+        CWPSTRUCT* info = reinterpret_cast<CWPSTRUCT*>(aLParam);
+        MOZ_ASSERT(info);
+        if (sSetCaptureHookData &&
+            sSetCaptureHookData->IsUnityLosingCapture(*info)) {
+            sSetCaptureHookData = nullptr;
+        }
+    }
+
+    return CallNextHookEx(0, aCode, aWparam, aLParam);
 }
 
 /* windowless track popup menu helpers */
@@ -2205,7 +2354,7 @@ PluginInstanceChild::FlashThrottleMessage(HWND aWnd,
 bool
 PluginInstanceChild::AnswerSetPluginFocus()
 {
-    PR_LOG(GetPluginLog(), PR_LOG_DEBUG, ("%s", FULLFUNCTION));
+    MOZ_LOG(GetPluginLog(), LogLevel::Debug, ("%s", FULLFUNCTION));
 
 #if defined(OS_WIN)
     // Parent is letting us know the dom set focus to the plugin. Note,
@@ -2228,7 +2377,7 @@ PluginInstanceChild::AnswerSetPluginFocus()
 bool
 PluginInstanceChild::AnswerUpdateWindow()
 {
-    PR_LOG(GetPluginLog(), PR_LOG_DEBUG, ("%s", FULLFUNCTION));
+    MOZ_LOG(GetPluginLog(), LogLevel::Debug, ("%s", FULLFUNCTION));
 
 #if defined(OS_WIN)
     if (mPluginWindowHWND) {
@@ -2365,11 +2514,7 @@ PluginInstanceChild::RecvAsyncNPP_NewStream(PBrowserStreamChild* actor,
     BrowserStreamChild* child = static_cast<BrowserStreamChild*>(actor);
     NewStreamAsyncCall* task = new NewStreamAsyncCall(this, child, mimeType,
                                                       seekable);
-    {
-        MutexAutoLock lock(mAsyncCallMutex);
-        mPendingAsyncCalls.AppendElement(task);
-    }
-    MessageLoop::current()->PostTask(FROM_HERE, task);
+    PostChildAsyncCall(task);
     return true;
 }
 
@@ -2708,8 +2853,7 @@ PluginInstanceChild::CreateOptSurface(void)
 #endif
 
 #ifdef XP_WIN
-    if (mSurfaceType == gfxSurfaceType::Win32 ||
-        mSurfaceType == gfxSurfaceType::D2D) {
+    if (mSurfaceType == gfxSurfaceType::Win32) {
         bool willHaveTransparentPixels = mIsTransparent && !mBackground;
 
         SharedDIBSurface* s = new SharedDIBSurface();
@@ -2793,7 +2937,7 @@ PluginInstanceChild::MaybeCreatePlatformHelperSurface(void)
 bool
 PluginInstanceChild::EnsureCurrentBuffer(void)
 {
-#ifndef XP_MACOSX
+#ifndef XP_DARWIN
     nsIntRect toInvalidate(0, 0, 0, 0);
     gfxIntSize winSize = gfxIntSize(mWindow.width, mWindow.height);
 
@@ -2839,7 +2983,7 @@ PluginInstanceChild::EnsureCurrentBuffer(void)
     }
 
     return true;
-#else // XP_MACOSX
+#elif defined(XP_MACOSX)
 
     if (!mDoubleBufferCARenderer.HasCALayer()) {
         void *caLayer = nullptr;
@@ -2893,9 +3037,8 @@ PluginInstanceChild::EnsureCurrentBuffer(void)
         nsIntRect toInvalidate(0, 0, mWindow.width, mWindow.height);
         mAccumulatedInvalidRect.UnionRect(mAccumulatedInvalidRect, toInvalidate);
     }
-  
-    return true;
 #endif
+    return true;
 }
 
 void
@@ -3087,7 +3230,7 @@ PluginInstanceChild::PaintRectToSurface(const nsIntRect& aRect,
         RefPtr<DrawTarget> dt = CreateDrawTargetForSurface(aSurface);
         RefPtr<SourceSurface> surface =
             gfxPlatform::GetSourceSurfaceForSurface(dt, renderSurface);
-        dt->CopySurface(surface, ToIntRect(aRect), ToIntPoint(aRect.TopLeft()));
+        dt->CopySurface(surface, aRect, aRect.TopLeft());
     }
 }
 
@@ -3145,7 +3288,7 @@ PluginInstanceChild::PaintRectWithAlphaExtraction(const nsIntRect& aRect,
         RefPtr<DrawTarget> dt = CreateDrawTargetForSurface(whiteImage);
         RefPtr<SourceSurface> surface =
             gfxPlatform::GetSourceSurfaceForSurface(dt, aSurface);
-        dt->CopySurface(surface, ToIntRect(rect), IntPoint());
+        dt->CopySurface(surface, rect, IntPoint());
     }
 
     // Paint the plugin directly onto the target, with a black
@@ -3191,7 +3334,7 @@ PluginInstanceChild::PaintRectWithAlphaExtraction(const nsIntRect& aRect,
             gfxPlatform::GetSourceSurfaceForSurface(dt, blackImage);
         dt->CopySurface(surface,
                         IntRect(0, 0, rect.width, rect.height),
-                        ToIntPoint(rect.TopLeft()));
+                        rect.TopLeft());
     }
 }
 
@@ -3328,9 +3471,7 @@ PluginInstanceChild::ShowPluginFrame()
             RefPtr<DrawTarget> dt = CreateDrawTargetForSurface(surface);
             RefPtr<SourceSurface> backgroundSurface =
                 gfxPlatform::GetSourceSurfaceForSurface(dt, mBackground);
-            dt->CopySurface(backgroundSurface,
-                            ToIntRect(rect),
-                            ToIntPoint(rect.TopLeft()));
+            dt->CopySurface(backgroundSurface, rect, rect.TopLeft());
         }
         // ... and hand off to the plugin
         // BEWARE: mBackground may die during this call
@@ -3463,7 +3604,7 @@ PluginInstanceChild::ReadbackDifferenceRect(const nsIntRect& rect)
     nsIntRegionRectIterator iter(result);
     const nsIntRect* r;
     while ((r = iter.Next()) != nullptr) {
-        dt->CopySurface(source, ToIntRect(*r), ToIntPoint(r->TopLeft()));
+        dt->CopySurface(source, *r, r->TopLeft());
     }
 
     return true;
@@ -3647,12 +3788,17 @@ void
 PluginInstanceChild::AsyncCall(PluginThreadCallback aFunc, void* aUserData)
 {
     ChildAsyncCall* task = new ChildAsyncCall(this, aFunc, aUserData);
+    PostChildAsyncCall(task);
+}
 
+void
+PluginInstanceChild::PostChildAsyncCall(ChildAsyncCall* aTask)
+{
     {
         MutexAutoLock lock(mAsyncCallMutex);
-        mPendingAsyncCalls.AppendElement(task);
+        mPendingAsyncCalls.AppendElement(aTask);
     }
-    ProcessChild::message_loop()->PostTask(FROM_HERE, task);
+    ProcessChild::message_loop()->PostTask(FROM_HERE, aTask);
 }
 
 static PLDHashOperator

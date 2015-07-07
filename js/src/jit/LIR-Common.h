@@ -31,26 +31,6 @@ class LBinaryMath : public LInstructionHelper<1, 2 + ExtraUses, Temps>
     }
 };
 
-// Simplifies register allocation since the first instruction of a block is
-// guaranteed to have no uses.
-class LLabel : public LInstructionHelper<0, 0, 0>
-{
-  public:
-    LIR_HEADER(Label)
-};
-
-class LNop : public LInstructionHelper<0, 0, 0>
-{
-  public:
-    LIR_HEADER(Nop)
-};
-
-class LMop : public LInstructionHelper<0, 0, 0>
-{
-  public:
-    LIR_HEADER(Mop)
-};
-
 // An LOsiPoint captures a snapshot after a call and ensures enough space to
 // patch in a call to the invalidation mechanism.
 //
@@ -78,27 +58,21 @@ class LOsiPoint : public LInstructionHelper<0, 0, 0>
 
 class LMove
 {
-    LAllocation* from_;
-    LAllocation* to_;
+    LAllocation from_;
+    LAllocation to_;
     LDefinition::Type type_;
 
   public:
-    LMove(LAllocation* from, LAllocation* to, LDefinition::Type type)
+    LMove(LAllocation from, LAllocation to, LDefinition::Type type)
       : from_(from),
         to_(to),
         type_(type)
     { }
 
-    LAllocation* from() {
+    LAllocation from() const {
         return from_;
     }
-    const LAllocation* from() const {
-        return from_;
-    }
-    LAllocation* to() {
-        return to_;
-    }
-    const LAllocation* to() const {
+    LAllocation to() const {
         return to_;
     }
     LDefinition::Type type() const {
@@ -126,13 +100,13 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
         return new(alloc) LMoveGroup(alloc);
     }
 
-    void printOperands(FILE* fp);
+    void printOperands(GenericPrinter& out);
 
     // Add a move which takes place simultaneously with all others in the group.
-    bool add(LAllocation* from, LAllocation* to, LDefinition::Type type);
+    bool add(LAllocation from, LAllocation to, LDefinition::Type type);
 
     // Add a move which takes place after existing moves in the group.
-    bool addAfter(LAllocation* from, LAllocation* to, LDefinition::Type type);
+    bool addAfter(LAllocation from, LAllocation to, LDefinition::Type type);
 
     size_t numMoves() const {
         return moves_.length();
@@ -145,19 +119,15 @@ class LMoveGroup : public LInstructionHelper<0, 0, 0>
     void setScratchRegister(Register reg) {
         scratchRegister_ = LGeneralReg(reg);
     }
-#endif
     LAllocation maybeScratchRegister() {
-#ifdef JS_CODEGEN_X86
         return scratchRegister_;
-#else
-        return LAllocation();
-#endif
     }
+#endif
 
     bool uses(Register reg) {
         for (size_t i = 0; i < numMoves(); i++) {
             LMove move = getMove(i);
-            if (*move.from() == LGeneralReg(reg) || *move.to() == LGeneralReg(reg))
+            if (move.from() == LGeneralReg(reg) || move.to() == LGeneralReg(reg))
                 return true;
         }
         return false;
@@ -586,6 +556,9 @@ class LSimdShift : public LInstructionHelper<1, 2, 0>
     MSimdShift::Operation operation() const {
         return mir_->toSimdShift()->operation();
     }
+    const char* extraName() const {
+        return MSimdShift::OperationName(operation());
+    }
     MSimdShift* mir() const {
         return mir_->toSimdShift();
     }
@@ -735,16 +708,6 @@ class LValue : public LInstructionHelper<BOX_PIECES, 0, 0>
 
     Value value() const {
         return v_;
-    }
-};
-
-class LNurseryObject : public LInstructionHelper<1, 0, 0>
-{
-  public:
-    LIR_HEADER(NurseryObject);
-
-    MNurseryObject* mir() const {
-        return mir_->toNurseryObject();
     }
 };
 
@@ -1556,6 +1519,10 @@ class LJSCallInstructionHelper : public LCallInstructionHelper<Defs, Operands, T
     uint32_t numActualArgs() const {
         return mir()->numActualArgs();
     }
+
+    bool isConstructing() const {
+        return mir()->isConstructing();
+    }
 };
 
 // Generates a polymorphic callsite, wherein the function being called is
@@ -1946,18 +1913,19 @@ class LFilterArgumentsOrEvalV : public LCallInstructionHelper<0, BOX_PIECES, 3>
     }
 };
 
-class LCallDirectEvalS : public LCallInstructionHelper<BOX_PIECES, 2 + BOX_PIECES, 0>
+class LCallDirectEval : public LCallInstructionHelper<BOX_PIECES, 2 + (2 * BOX_PIECES), 0>
 {
   public:
-    LIR_HEADER(CallDirectEvalS)
+    LIR_HEADER(CallDirectEval)
 
-    LCallDirectEvalS(const LAllocation& scopeChain, const LAllocation& string)
+    LCallDirectEval(const LAllocation& scopeChain, const LAllocation& string)
     {
         setOperand(0, scopeChain);
         setOperand(1, string);
     }
 
     static const size_t ThisValue = 2;
+    static const size_t NewTarget = 2 + BOX_PIECES;
 
     MCallDirectEval* mir() const {
         return mir_->toCallDirectEval();
@@ -1968,28 +1936,6 @@ class LCallDirectEvalS : public LCallInstructionHelper<BOX_PIECES, 2 + BOX_PIECE
     }
     const LAllocation* getString() {
         return getOperand(1);
-    }
-};
-
-class LCallDirectEvalV : public LCallInstructionHelper<BOX_PIECES, 1 + (2 * BOX_PIECES), 0>
-{
-  public:
-    LIR_HEADER(CallDirectEvalV)
-
-    explicit LCallDirectEvalV(const LAllocation& scopeChain)
-    {
-        setOperand(0, scopeChain);
-    }
-
-    static const size_t Argument = 1;
-    static const size_t ThisValue = 1 + BOX_PIECES;
-
-    MCallDirectEval* mir() const {
-        return mir_->toCallDirectEval();
-    }
-
-    const LAllocation* getScopeChain() {
-        return getOperand(0);
     }
 };
 
@@ -3149,23 +3095,6 @@ class LPowD : public LCallInstructionHelper<1, 2, 1>
     }
 };
 
-// Math.random().
-class LRandom : public LCallInstructionHelper<1, 0, 2>
-{
-  public:
-    LIR_HEADER(Random)
-    LRandom(const LDefinition& temp, const LDefinition& temp2) {
-        setTemp(0, temp);
-        setTemp(1, temp2);
-    }
-    const LDefinition* temp() {
-        return getTemp(0);
-    }
-    const LDefinition* temp2() {
-        return getTemp(1);
-    }
-};
-
 class LMathFunctionD : public LCallInstructionHelper<1, 1, 1>
 {
   public:
@@ -3779,12 +3708,19 @@ class LInt32x4ToFloat32x4 : public LInstructionHelper<1, 1, 0>
     }
 };
 
-class LFloat32x4ToInt32x4 : public LInstructionHelper<1, 1, 0>
+class LFloat32x4ToInt32x4 : public LInstructionHelper<1, 1, 1>
 {
   public:
     LIR_HEADER(Float32x4ToInt32x4);
-    explicit LFloat32x4ToInt32x4(const LAllocation& input) {
+    explicit LFloat32x4ToInt32x4(const LAllocation& input, const LDefinition& temp) {
         setOperand(0, input);
+        setTemp(0, temp);
+    }
+    const LDefinition* temp() {
+        return getTemp(0);
+    }
+    const MSimdConvert* mir() const {
+        return mir_->toSimdConvert();
     }
 };
 
@@ -4040,25 +3976,36 @@ class LLambda : public LInstructionHelper<1, 1, 1>
     }
 };
 
-class LLambdaArrow : public LInstructionHelper<1, 1 + BOX_PIECES, 1>
+class LLambdaArrow : public LInstructionHelper<1, 1 + (2 * BOX_PIECES), 0>
 {
   public:
     LIR_HEADER(LambdaArrow)
 
     static const size_t ThisValue = 1;
+    static const size_t NewTargetValue = ThisValue + BOX_PIECES;
 
-    LLambdaArrow(const LAllocation& scopeChain, const LDefinition& temp) {
+    explicit LLambdaArrow(const LAllocation& scopeChain) {
         setOperand(0, scopeChain);
-        setTemp(0, temp);
     }
     const LAllocation* scopeChain() {
         return getOperand(0);
     }
-    const LDefinition* temp() {
-        return getTemp(0);
-    }
     const MLambdaArrow* mir() const {
         return mir_->toLambdaArrow();
+    }
+};
+
+class LKeepAliveObject : public LInstructionHelper<0, 1, 0>
+{
+  public:
+    LIR_HEADER(KeepAliveObject)
+
+    explicit LKeepAliveObject(const LAllocation& object) {
+        setOperand(0, object);
+    }
+
+    const LAllocation* object() {
+        return getOperand(0);
     }
 };
 
@@ -4093,6 +4040,10 @@ class LElements : public LInstructionHelper<1, 1, 0>
 
     const LAllocation* object() {
         return getOperand(0);
+    }
+
+    const MElements* mir() const {
+        return mir_->toElements();
     }
 };
 
@@ -4154,6 +4105,10 @@ class LMaybeCopyElementsForWrite : public LInstructionHelper<0, 1, 1>
     const LDefinition* temp() {
         return getTemp(0);
     }
+
+    const MMaybeCopyElementsForWrite* mir() const {
+        return mir_->toMaybeCopyElementsForWrite();
+    }
 };
 
 // Load the initialized length from an elements header.
@@ -4188,6 +4143,72 @@ class LSetInitializedLength : public LInstructionHelper<0, 2, 0>
     }
     const LAllocation* index() {
         return getOperand(1);
+    }
+};
+
+class LUnboxedArrayLength : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(UnboxedArrayLength)
+
+    explicit LUnboxedArrayLength(const LAllocation& object) {
+        setOperand(0, object);
+    }
+
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+};
+
+class LUnboxedArrayInitializedLength : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(UnboxedArrayInitializedLength)
+
+    explicit LUnboxedArrayInitializedLength(const LAllocation& object) {
+        setOperand(0, object);
+    }
+
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+};
+
+class LIncrementUnboxedArrayInitializedLength : public LInstructionHelper<0, 1, 0>
+{
+  public:
+    LIR_HEADER(IncrementUnboxedArrayInitializedLength)
+
+    explicit LIncrementUnboxedArrayInitializedLength(const LAllocation& object) {
+        setOperand(0, object);
+    }
+
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+};
+
+class LSetUnboxedArrayInitializedLength : public LInstructionHelper<0, 2, 1>
+{
+  public:
+    LIR_HEADER(SetUnboxedArrayInitializedLength)
+
+    explicit LSetUnboxedArrayInitializedLength(const LAllocation& object,
+                                               const LAllocation& length,
+                                               const LDefinition& temp) {
+        setOperand(0, object);
+        setOperand(1, length);
+        setTemp(0, temp);
+    }
+
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+    const LAllocation* length() {
+        return getOperand(1);
+    }
+    const LDefinition* temp() {
+        return getTemp(0);
     }
 };
 
@@ -4252,6 +4273,43 @@ class LTypedArrayElements : public LInstructionHelper<1, 1, 0>
     }
     const LAllocation* object() {
         return getOperand(0);
+    }
+};
+
+// Assign
+//
+//   target[targetOffset..targetOffset + source.length] = source[0..source.length]
+//
+// where the source element range doesn't overlap the target element range in
+// memory.
+class LSetDisjointTypedElements : public LCallInstructionHelper<0, 3, 1>
+{
+  public:
+    LIR_HEADER(SetDisjointTypedElements)
+
+    explicit LSetDisjointTypedElements(const LAllocation& target, const LAllocation& targetOffset,
+                                       const LAllocation& source, const LDefinition& temp)
+    {
+        setOperand(0, target);
+        setOperand(1, targetOffset);
+        setOperand(2, source);
+        setTemp(0, temp);
+    }
+
+    const LAllocation* target() {
+        return getOperand(0);
+    }
+
+    const LAllocation* targetOffset() {
+        return getOperand(1);
+    }
+
+    const LAllocation* source() {
+        return getOperand(2);
+    }
+
+    const LDefinition* temp() {
+        return getTemp(0);
     }
 };
 
@@ -4620,16 +4678,17 @@ class LStoreElementT : public LInstructionHelper<0, 3, 0>
 };
 
 // Like LStoreElementV, but supports indexes >= initialized length.
-class LStoreElementHoleV : public LInstructionHelper<0, 3 + BOX_PIECES, 0>
+class LStoreElementHoleV : public LInstructionHelper<0, 3 + BOX_PIECES, 1>
 {
   public:
     LIR_HEADER(StoreElementHoleV)
 
     LStoreElementHoleV(const LAllocation& object, const LAllocation& elements,
-                       const LAllocation& index) {
+                       const LAllocation& index, const LDefinition& temp) {
         setOperand(0, object);
         setOperand(1, elements);
         setOperand(2, index);
+        setTemp(0, temp);
     }
 
     static const size_t Value = 3;
@@ -4649,17 +4708,19 @@ class LStoreElementHoleV : public LInstructionHelper<0, 3 + BOX_PIECES, 0>
 };
 
 // Like LStoreElementT, but supports indexes >= initialized length.
-class LStoreElementHoleT : public LInstructionHelper<0, 4, 0>
+class LStoreElementHoleT : public LInstructionHelper<0, 4, 1>
 {
   public:
     LIR_HEADER(StoreElementHoleT)
 
     LStoreElementHoleT(const LAllocation& object, const LAllocation& elements,
-                       const LAllocation& index, const LAllocation& value) {
+                       const LAllocation& index, const LAllocation& value,
+                       const LDefinition& temp) {
         setOperand(0, object);
         setOperand(1, elements);
         setOperand(2, index);
         setOperand(3, value);
+        setTemp(0, temp);
     }
 
     const MStoreElementHole* mir() const {
@@ -4857,6 +4918,39 @@ class LArrayConcat : public LCallInstructionHelper<1, 2, 2>
     }
 };
 
+class LArraySlice : public LCallInstructionHelper<1, 3, 2>
+{
+  public:
+    LIR_HEADER(ArraySlice)
+
+    LArraySlice(const LAllocation& obj, const LAllocation& begin, const LAllocation& end,
+                const LDefinition& temp1, const LDefinition& temp2) {
+        setOperand(0, obj);
+        setOperand(1, begin);
+        setOperand(2, end);
+        setTemp(0, temp1);
+        setTemp(1, temp2);
+    }
+    const MArraySlice* mir() const {
+        return mir_->toArraySlice();
+    }
+    const LAllocation* object() {
+        return getOperand(0);
+    }
+    const LAllocation* begin() {
+        return getOperand(1);
+    }
+    const LAllocation* end() {
+        return getOperand(2);
+    }
+    const LDefinition* temp1() {
+        return getTemp(0);
+    }
+    const LDefinition* temp2() {
+        return getTemp(1);
+    }
+};
+
 class LArrayJoin : public LCallInstructionHelper<1, 2, 0>
 {
   public:
@@ -5011,6 +5105,19 @@ class LStoreTypedArrayElementStatic : public LInstructionHelper<0, 2, 0>
     }
     const LAllocation* value() {
         return getOperand(1);
+    }
+};
+
+class LAtomicIsLockFree : public LInstructionHelper<1, 1, 0>
+{
+  public:
+    LIR_HEADER(AtomicIsLockFree)
+
+    explicit LAtomicIsLockFree(const LAllocation& value) {
+        setOperand(0, value);
+    }
+    const LAllocation* value() {
+        return getOperand(0);
     }
 };
 
@@ -6925,6 +7032,26 @@ class LDebugger : public LCallInstructionHelper<0, 0, 2>
     LDebugger(const LDefinition& temp1, const LDefinition& temp2) {
         setTemp(0, temp1);
         setTemp(1, temp2);
+    }
+};
+
+class LNewTarget : public LInstructionHelper<BOX_PIECES, 0, 0>
+{
+  public:
+    LIR_HEADER(NewTarget)
+};
+
+class LArrowNewTarget : public LInstructionHelper<BOX_PIECES, 1, 0>
+{
+  public:
+    explicit LArrowNewTarget(const LAllocation& callee) {
+        setOperand(0, callee);
+    }
+
+    LIR_HEADER(ArrowNewTarget)
+
+    const LAllocation* callee() {
+        return getOperand(0);
     }
 };
 

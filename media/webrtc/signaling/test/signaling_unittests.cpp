@@ -32,6 +32,7 @@
 #include "nsIPrefService.h"
 #include "nsIPrefBranch.h"
 #include "nsIDNSService.h"
+#include "nsQueryObject.h"
 #include "nsWeakReference.h"
 #include "nricectx.h"
 #include "rlogringbuffer.h"
@@ -644,9 +645,9 @@ class PCDispatchWrapper : public nsSupportsWeakReference
   }
 
   NS_IMETHODIMP Initialize(TestObserver* aObserver,
-                      nsGlobalWindow* aWindow,
-                      const IceConfiguration& aConfiguration,
-                      nsIThread* aThread) {
+                           nsGlobalWindow* aWindow,
+                           const PeerConnectionConfiguration& aConfiguration,
+                           nsIThread* aThread) {
     nsresult rv;
 
     observer_ = aObserver;
@@ -661,8 +662,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       // Instead we are dispatching back to the same method for
       // all of these.
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::Initialize,
-          aObserver, aWindow, aConfiguration, aThread, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::Initialize,
+          aObserver, aWindow, aConfiguration, aThread),
         NS_DISPATCH_SYNC);
       rv = NS_OK;
     }
@@ -684,8 +685,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       }
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::CreateOffer,
-          aOptions, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::CreateOffer, aOptions),
         NS_DISPATCH_SYNC);
     }
 
@@ -699,7 +699,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->CreateAnswer();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::CreateAnswer, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::CreateAnswer),
         NS_DISPATCH_SYNC);
     }
 
@@ -713,8 +713,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->SetLocalDescription(aAction, aSDP);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::SetLocalDescription,
-          aAction, aSDP, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::SetLocalDescription,
+          aAction, aSDP),
         NS_DISPATCH_SYNC);
     }
 
@@ -728,8 +728,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->SetRemoteDescription(aAction, aSDP);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::SetRemoteDescription,
-          aAction, aSDP, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::SetRemoteDescription,
+          aAction, aSDP),
         NS_DISPATCH_SYNC);
     }
 
@@ -744,8 +744,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->AddIceCandidate(aCandidate, aMid, aLevel);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::AddIceCandidate,
-          aCandidate, aMid, aLevel, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::AddIceCandidate,
+          aCandidate, aMid, aLevel),
         NS_DISPATCH_SYNC);
     }
     return rv;
@@ -760,8 +760,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->AddTrack(*aTrack, *aMediaStream);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::AddTrack, aTrack,
-                        aMediaStream, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::AddTrack, aTrack,
+                        aMediaStream),
         NS_DISPATCH_SYNC);
     }
 
@@ -775,7 +775,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->RemoveTrack(*aTrack);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::RemoveTrack, aTrack, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::RemoveTrack, aTrack),
         NS_DISPATCH_SYNC);
     }
 
@@ -789,8 +789,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->GetLocalDescription(aSDP);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::GetLocalDescription,
-          aSDP, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::GetLocalDescription,
+          aSDP),
         NS_DISPATCH_SYNC);
     }
 
@@ -804,8 +804,8 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->GetRemoteDescription(aSDP);
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::GetRemoteDescription,
-          aSDP, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::GetRemoteDescription,
+          aSDP),
         NS_DISPATCH_SYNC);
     }
 
@@ -819,8 +819,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       result = pc_->SignalingState();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::SignalingState,
-          &result),
+        WrapRunnableRet(&result, this, &PCDispatchWrapper::SignalingState),
         NS_DISPATCH_SYNC);
     }
 
@@ -834,8 +833,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       result = pc_->IceConnectionState();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::IceConnectionState,
-          &result),
+        WrapRunnableRet(&result, this, &PCDispatchWrapper::IceConnectionState),
         NS_DISPATCH_SYNC);
     }
 
@@ -849,8 +847,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       result = pc_->IceGatheringState();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::IceGatheringState,
-          &result),
+        WrapRunnableRet(&result, this, &PCDispatchWrapper::IceGatheringState),
         NS_DISPATCH_SYNC);
     }
 
@@ -864,7 +861,7 @@ class PCDispatchWrapper : public nsSupportsWeakReference
       rv = pc_->Close();
     } else {
       gMainThread->Dispatch(
-        WrapRunnableRet(this, &PCDispatchWrapper::Close, &rv),
+        WrapRunnableRet(&rv, this, &PCDispatchWrapper::Close),
         NS_DISPATCH_SYNC);
     }
 
@@ -909,12 +906,14 @@ class SignalingAgent {
     mExpectRtcpMuxAudio(true),
     mExpectRtcpMuxVideo(true),
     mRemoteDescriptionSet(false) {
-    cfg_.addStunServer(stun_addr, stun_port);
+    cfg_.addStunServer(stun_addr, stun_port, kNrIceTransportUdp);
+    cfg_.addStunServer(stun_addr, stun_port, kNrIceTransportTcp);
 
     PeerConnectionImpl *pcImpl =
       PeerConnectionImpl::CreatePeerConnection();
     EXPECT_TRUE(pcImpl);
     pcImpl->SetAllowIceLoopback(true);
+    pcImpl->SetAllowIceLinkLocal(true);
     pc = new PCDispatchWrapper(pcImpl);
   }
 
@@ -941,6 +940,11 @@ class SignalingAgent {
   void SetBundleEnabled(bool enabled)
   {
     mBundleEnabled = enabled;
+  }
+
+  void SetBundlePolicy(JsepBundlePolicy policy)
+  {
+    cfg_.setBundlePolicy(policy);
   }
 
   void SetExpectedFrameRequestType(VideoSessionConduit::FrameRequestType type)
@@ -1066,7 +1070,7 @@ class SignalingAgent {
       nsresult ret;
       mozilla::SyncRunnable::DispatchToThread(
         test_utils->sts_target(),
-        WrapRunnableRet(audio_stream, &Fake_MediaStream::Start, &ret));
+        WrapRunnableRet(&ret, audio_stream, &Fake_MediaStream::Start));
 
       ASSERT_TRUE(NS_SUCCEEDED(ret));
       stream = audio_stream;
@@ -1126,9 +1130,9 @@ class SignalingAgent {
   {
     LocalSourceStreamInfo* info;
     mozilla::SyncRunnable::DispatchToThread(
-      gMainThread, WrapRunnableRet(
+      gMainThread, WrapRunnableRet(&info,
         pc->media(), &PeerConnectionMedia::GetLocalStreamById,
-        streamId, &info));
+        streamId));
 
     ASSERT_TRUE(info) << "No such local stream id: " << streamId;
 
@@ -1136,10 +1140,9 @@ class SignalingAgent {
 
     mozilla::SyncRunnable::DispatchToThread(
         gMainThread,
-        WrapRunnableRet(info,
+        WrapRunnableRet(&pipeline, info,
                         &SourceStreamInfo::GetPipelineByTrackId_m,
-                        trackId,
-                        &pipeline));
+                        trackId));
 
     ASSERT_TRUE(pipeline) << "No such local track id: " << trackId;
 
@@ -1174,9 +1177,9 @@ class SignalingAgent {
   {
     RemoteSourceStreamInfo* info;
     mozilla::SyncRunnable::DispatchToThread(
-      gMainThread, WrapRunnableRet(
+      gMainThread, WrapRunnableRet(&info,
         pc->media(), &PeerConnectionMedia::GetRemoteStreamById,
-        streamId, &info));
+        streamId));
 
     ASSERT_TRUE(info) << "No such remote stream id: " << streamId;
 
@@ -1184,10 +1187,9 @@ class SignalingAgent {
 
     mozilla::SyncRunnable::DispatchToThread(
         gMainThread,
-        WrapRunnableRet(info,
+        WrapRunnableRet(&pipeline, info,
                         &SourceStreamInfo::GetPipelineByTrackId_m,
-                        trackId,
-                        &pipeline));
+                        trackId));
 
     ASSERT_TRUE(pipeline) << "No such remote track id: " << trackId;
 
@@ -1299,7 +1301,7 @@ class SignalingAgent {
     nsresult ret;
     mozilla::SyncRunnable::DispatchToThread(
       test_utils->sts_target(),
-      WrapRunnableRet(audio_stream, &Fake_MediaStream::Start, &ret));
+      WrapRunnableRet(&ret, audio_stream, &Fake_MediaStream::Start));
 
     ASSERT_TRUE(NS_SUCCEEDED(ret));
 
@@ -1508,14 +1510,14 @@ class SignalingAgent {
     SourceStreamInfo* streamInfo;
     if (local) {
       mozilla::SyncRunnable::DispatchToThread(
-        gMainThread, WrapRunnableRet(
+        gMainThread, WrapRunnableRet(&streamInfo,
           pc->media(), &PeerConnectionMedia::GetLocalStreamByIndex,
-          stream, &streamInfo));
+          stream));
     } else {
       mozilla::SyncRunnable::DispatchToThread(
-        gMainThread, WrapRunnableRet(
+        gMainThread, WrapRunnableRet(&streamInfo,
           pc->media(), &PeerConnectionMedia::GetRemoteStreamByIndex,
-          stream, &streamInfo));
+          stream));
     }
 
     if (!streamInfo) {
@@ -1543,7 +1545,7 @@ public:
   std::string offer_;
   std::string answer_;
   std::vector<nsRefPtr<DOMMediaStream>> domMediaStreams_;
-  IceConfiguration cfg_;
+  PeerConnectionConfiguration cfg_;
   const std::string name;
   bool mBundleEnabled;
   VideoSessionConduit::FrameRequestType mExpectedFrameRequestType;
@@ -1704,18 +1706,33 @@ public:
 
     a1_ = new SignalingAgent(callerName, stun_addr_, stun_port_);
     a2_ = new SignalingAgent(calleeName, stun_addr_, stun_port_);
-    a1_->Init();
-    a2_->Init();
+
     if (GetParam() == "no_bundle") {
       a1_->SetBundleEnabled(false);
     } else if(GetParam() == "reject_bundle") {
       a2_->SetBundleEnabled(false);
+    } else if (GetParam() == "max-bundle") {
+      a1_->SetBundlePolicy(JsepBundlePolicy::kBundleMaxBundle);
+      a2_->SetBundlePolicy(JsepBundlePolicy::kBundleMaxBundle);
+    } else if (GetParam() == "balanced") {
+      a1_->SetBundlePolicy(JsepBundlePolicy::kBundleBalanced);
+      a2_->SetBundlePolicy(JsepBundlePolicy::kBundleBalanced);
+    } else if (GetParam() == "max-compat") {
+      a1_->SetBundlePolicy(JsepBundlePolicy::kBundleMaxCompat);
+      a2_->SetBundlePolicy(JsepBundlePolicy::kBundleMaxCompat);
     }
 
+    a1_->Init();
+    a2_->Init();
     a1_->SetPeer(a2_.get());
     a2_->SetPeer(a1_.get());
 
     init_ = true;
+  }
+
+  bool UseBundle()
+  {
+    return (GetParam() != "no_bundle") && (GetParam() != "reject_bundle");
   }
 
   void WaitForGather() {
@@ -2007,6 +2024,8 @@ public:
 
     a1_->SetExpectedFrameRequestType(frameRequestType);
     a1_->mExpectNack = expectNack;
+    // Since we don't support rewriting rtcp-fb in answers, a2 still thinks it
+    // will be doing all of the normal rtcp-fb
 
     WaitForCompleted();
     CheckPipelines();
@@ -2027,6 +2046,8 @@ public:
     std::string modifiedOffer = HardcodeRtcpFb(a1_->offer(), feedback);
 
     a2_->SetRemote(TestObserver::OFFER, modifiedOffer);
+    a1_->SetExpectedFrameRequestType(frameRequestType);
+    a1_->mExpectNack = expectNack;
     a2_->SetExpectedFrameRequestType(frameRequestType);
     a2_->mExpectNack = expectNack;
 
@@ -2469,7 +2490,7 @@ TEST_P(SignalingTest, RenegotiationAnswererReplacesTrack)
 
 TEST_P(SignalingTest, BundleRenegotiation)
 {
-  if (GetParam() == "bundle") {
+  if (UseBundle()) {
     // We don't support ICE restart, which is a prereq for renegotiating bundle
     // off.
     return;
@@ -3080,6 +3101,38 @@ TEST_F(SignalingAgentTest, CreateOffer) {
   agent(0)->CreateOffer(options, OFFER_AUDIO);
 }
 
+TEST_F(SignalingAgentTest, SetLocalWithoutCreateOffer) {
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  OfferOptions options;
+  agent(0)->CreateOffer(options, OFFER_AUDIO);
+  agent(1)->SetLocal(TestObserver::OFFER,
+                     agent(0)->offer(),
+                     true,
+                     PCImplSignalingState::SignalingStable);
+}
+
+TEST_F(SignalingAgentTest, SetLocalWithoutCreateAnswer) {
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  CreateAgent(TestStunServer::GetInstance()->addr(),
+              TestStunServer::GetInstance()->port());
+  OfferOptions options;
+  agent(0)->CreateOffer(options, OFFER_AUDIO);
+  agent(1)->SetRemote(TestObserver::OFFER, agent(0)->offer());
+  agent(1)->CreateAnswer(ANSWER_AUDIO);
+  agent(2)->SetRemote(TestObserver::OFFER, agent(0)->offer());
+  // Use agent 1's answer on agent 2, should fail
+  agent(2)->SetLocal(TestObserver::ANSWER,
+                     agent(1)->answer(),
+                     true,
+                     PCImplSignalingState::SignalingHaveRemoteOffer);
+}
+
 TEST_F(SignalingAgentTest, CreateOfferSetLocalTrickleTestServer) {
   TestStunServer::GetInstance()->SetActive(false);
   TestStunServer::GetInstance()->SetResponseAddr(
@@ -3344,7 +3397,7 @@ TEST_P(SignalingTest, AudioOnlyG722Rejected)
 
 TEST_P(SignalingTest, FullCallAudioNoMuxVideoMux)
 {
-  if (GetParam() == "bundle") {
+  if (UseBundle()) {
     // This test doesn't make sense for bundle
     return;
   }
@@ -4477,7 +4530,7 @@ TEST_P(SignalingTest, AudioNegotiationFails)
 
 TEST_P(SignalingTest, BundleStreamCorrelationBySsrc)
 {
-  if (GetParam() != "bundle") {
+  if (!UseBundle()) {
     return;
   }
 
@@ -4525,7 +4578,7 @@ TEST_P(SignalingTest, BundleStreamCorrelationBySsrc)
 
 TEST_P(SignalingTest, BundleStreamCorrelationByUniquePt)
 {
-  if (GetParam() != "bundle") {
+  if (!UseBundle()) {
     return;
   }
 
@@ -4576,7 +4629,9 @@ TEST_P(SignalingTest, BundleStreamCorrelationByUniquePt)
 }
 
 INSTANTIATE_TEST_CASE_P(Variants, SignalingTest,
-                        ::testing::Values("bundle",
+                        ::testing::Values("max-bundle",
+                                          "balanced",
+                                          "max-compat",
                                           "no_bundle",
                                           "reject_bundle"));
 
@@ -4677,7 +4732,7 @@ int main(int argc, char **argv) {
   // Adds a listener to the end.  Google Test takes the ownership.
   listeners.Append(new test::RingbufferDumper(test_utils));
   test_utils->sts_target()->Dispatch(
-    WrapRunnableNM(&TestStunServer::GetInstance), NS_DISPATCH_SYNC);
+    WrapRunnableNM(&TestStunServer::GetInstance, AF_INET), NS_DISPATCH_SYNC);
 
   // Set the main thread global which is this thread.
   nsIThread *thread;
@@ -4692,7 +4747,7 @@ int main(int argc, char **argv) {
 
   int result;
   gGtestThread->Dispatch(
-    WrapRunnableNMRet(gtest_main, argc, argv, &result), NS_DISPATCH_NORMAL);
+    WrapRunnableNMRet(&result, gtest_main, argc, argv), NS_DISPATCH_NORMAL);
 
   // Here we handle the event queue for dispatches to the main thread
   // When the GTest thread is complete it will send one more dispatch

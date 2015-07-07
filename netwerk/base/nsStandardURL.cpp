@@ -15,7 +15,7 @@
 #include "nsIPrefService.h"
 #include "nsIPrefBranch.h"
 #include "nsIIDNService.h"
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "nsAutoPtr.h"
 #include "nsIURLParser.h"
 #include "nsNetCID.h"
@@ -37,18 +37,16 @@ bool nsStandardURL::gEscapeUTF8 = true;
 bool nsStandardURL::gAlwaysEncodeInUTF8 = true;
 char nsStandardURL::gHostLimitDigits[] = { '/', '\\', '?', '#', 0 };
 
-#if defined(PR_LOGGING)
 //
 // setenv NSPR_LOG_MODULES nsStandardURL:5
 //
 static PRLogModuleInfo *gStandardURLLog;
-#endif
 
 // The Chromium code defines its own LOG macro which we don't want
 #undef LOG
-#define LOG(args)     PR_LOG(gStandardURLLog, PR_LOG_DEBUG, args)
+#define LOG(args)     MOZ_LOG(gStandardURLLog, mozilla::LogLevel::Debug, args)
 #undef LOG_ENABLED
-#define LOG_ENABLED() PR_LOG_TEST(gStandardURLLog, PR_LOG_DEBUG)
+#define LOG_ENABLED() MOZ_LOG_TEST(gStandardURLLog, mozilla::LogLevel::Debug)
 
 //----------------------------------------------------------------------------
 
@@ -254,10 +252,8 @@ nsStandardURL::nsStandardURL(bool aSupportsFileURL, bool aTrackURL)
     , mMutable(true)
     , mSupportsFileURL(aSupportsFileURL)
 {
-#if defined(PR_LOGGING)
     if (!gStandardURLLog)
         gStandardURLLog = PR_NewLogModule("nsStandardURL");
-#endif
 
     LOG(("Creating nsStandardURL @%p\n", this));
 
@@ -889,7 +885,7 @@ nsStandardURL::AppendToSubstring(uint32_t pos,
     if (UINT32_MAX - ((uint32_t)len + 1) < tailLen)
         return nullptr;
 
-    char *result = (char *) NS_Alloc(len + tailLen + 1);
+    char *result = (char *) moz_xmalloc(len + tailLen + 1);
     if (result) {
         memcpy(result, mSpec.get() + pos, len);
         memcpy(result + len, tail, tailLen);
@@ -1206,7 +1202,6 @@ nsStandardURL::SetSpec(const nsACString &input)
         return rv;
     }
 
-#if defined(PR_LOGGING)
     if (LOG_ENABLED()) {
         LOG((" spec      = %s\n", mSpec.get()));
         LOG((" port      = %d\n", mPort));
@@ -1223,7 +1218,6 @@ nsStandardURL::SetSpec(const nsACString &input)
         LOG((" query     = (%u,%d)\n", mQuery.mPos,     mQuery.mLen));
         LOG((" ref       = (%u,%d)\n", mRef.mPos,       mRef.mLen));
     }
-#endif
     return rv;
 }
 
@@ -2710,14 +2704,12 @@ nsStandardURL::GetFile(nsIFile **result)
     if (NS_FAILED(rv))
         return rv;
 
-#if defined(PR_LOGGING)
     if (LOG_ENABLED()) {
         nsAutoCString path;
         mFile->GetNativePath(path);
         LOG(("nsStandardURL::GetFile [this=%p spec=%s resulting_path=%s]\n",
             this, mSpec.get(), path.get()));
     }
-#endif
 
     // clone the file, so the caller can modify it.
     // XXX nsIFileURL.idl specifies that the consumer must _not_ modify the

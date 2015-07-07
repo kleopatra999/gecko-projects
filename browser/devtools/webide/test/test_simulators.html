@@ -18,10 +18,11 @@
       window.onload = function() {
         SimpleTest.waitForExplicitFinish();
 
+        const asyncStorage = require("devtools/toolkit/shared/async-storage");
         const EventEmitter = require("devtools/toolkit/event-emitter");
         const { GetAvailableAddons } = require("devtools/webide/addons");
         const { GetDevices } = require("devtools/shared/devices");
-        const { Simulator } = require("devtools/webide/simulators");
+        const { Simulator, Simulators } = require("devtools/webide/simulators");
         const { AddonSimulatorProcess,
                 OldAddonSimulatorProcess,
                 CustomSimulatorProcess } = require("devtools/webide/simulator-process");
@@ -34,7 +35,7 @@
           addon.on("update", function onUpdate() {
             if (addon.status == status) {
               addon.off("update", onUpdate);
-              deferred.resolve();
+              nextTick().then(() => deferred.resolve());
             }
           });
           return deferred.promise;
@@ -43,6 +44,8 @@
         Task.spawn(function* () {
 
           let win = yield openWebIDE(false);
+
+          yield Simulators._load();
 
           let find = win.document.querySelector.bind(win.document);
           let findAll = win.document.querySelectorAll.bind(win.document);
@@ -233,7 +236,7 @@
           let defaults = Simulator.prototype._defaults;
 
           for (let param in defaults) {
-            is(form[param].value, defaults[param], "Default value for device " + param);
+            is(form[param].value, String(defaults[param]), "Default value for device " + param);
           }
 
           let width = 5000, height = 4000;
@@ -276,7 +279,7 @@
           // Test `device`.
 
           for (let param in defaults) {
-            is(form[param].value, defaults[param], "Default value for device " + param);
+            is(form[param].value, String(defaults[param]), "Default value for device " + param);
           }
 
           let devices = yield GetDevices();
@@ -286,8 +289,8 @@
           yield set(form.device, device.name);
 
           is(form.device.value, device.name, "Device selector was changed");
-          is(form.width.value, device.width, "New device width is correct");
-          is(form.height.value, device.height, "New device height is correct");
+          is(form.width.value, String(device.width), "New device width is correct");
+          is(form.height.value, String(device.height), "New device height is correct");
 
           params = yield runSimulator(1);
 
@@ -300,8 +303,17 @@
           yield nextTick();
 
           for (let param in defaults) {
-            is(form[param].value, defaults[param], "Default value for device " + param);
+            is(form[param].value, String(defaults[param]), "Default value for device " + param);
           }
+
+          // Force reload the list of simulators.
+
+          Simulators._loadingPromise = null;
+          Simulators._simulators = [];
+          yield Simulators._load();
+          yield nextTick();
+
+          is(findAll(".runtime-panel-item-simulator").length, 2, "Two simulators saved and reloaded " + Simulators._simulators.map(s => s.name).join(','));
 
           // Uninstall the 2.0 addon and watch its Simulator object disappear.
 
@@ -320,6 +332,8 @@
           yield nextTick();
 
           is(findAll(".runtime-panel-item-simulator").length, 0, "Last simulator was removed");
+
+          yield asyncStorage.removeItem("simulators");
 
           sim10.uninstall();
 

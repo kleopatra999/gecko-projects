@@ -8,10 +8,12 @@ let {console} = Cu.import("resource://gre/modules/devtools/Console.jsm", {});
 let {gDevTools} = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
 const {DOMHelpers} = Cu.import("resource:///modules/devtools/DOMHelpers.jsm", {});
 const {Hosts} = require("devtools/framework/toolbox-hosts");
+const {defer} = require("sdk/core/promise");
+const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
 
-gDevTools.testing = true;
+DevToolsUtils.testing = true;
 SimpleTest.registerCleanupFunction(() => {
-  gDevTools.testing = false;
+  DevToolsUtils.testing = false;
 });
 
 const TEST_URI_ROOT = "http://example.com/browser/browser/devtools/shared/test/";
@@ -43,7 +45,10 @@ function promiseTab(aURL) {
     addTab(aURL, resolve));
 }
 
-registerCleanupFunction(function tearDown() {
+registerCleanupFunction(function* tearDown() {
+  let target = TargetFactory.forTab(gBrowser.selectedTab);
+  yield gDevTools.closeToolbox(target);
+
   while (gBrowser.tabs.length > 1) {
     gBrowser.removeCurrentTab();
   }
@@ -122,7 +127,9 @@ function waitForValue(aOptions)
       successFn(aOptions, lastValue);
     }
     else {
-      setTimeout(function() wait(validatorFn, successFn, failureFn), 100);
+      setTimeout(() => {
+        wait(validatorFn, successFn, failureFn);
+      }, 100);
     }
   }
 
@@ -238,4 +245,41 @@ function* openAndCloseToolbox(nbOfTimes, usageTime, toolId) {
     info("Closing toolbox " + (i + 1));
     yield gDevTools.closeToolbox(target);
   }
+}
+
+/**
+ * Synthesize a profile for testing.
+ */
+function synthesizeProfileForTest(samples) {
+  const RecordingUtils = devtools.require("devtools/performance/recording-utils");
+
+  samples.unshift({
+    time: 0,
+    frames: []
+  });
+
+  let uniqueStacks = new RecordingUtils.UniqueStacks();
+  return RecordingUtils.deflateThread({
+    samples: samples,
+    markers: []
+  }, uniqueStacks);
+}
+
+/**
+ * Waits until a predicate returns true.
+ *
+ * @param function predicate
+ *        Invoked once in a while until it returns true.
+ * @param number interval [optional]
+ *        How often the predicate is invoked, in milliseconds.
+ */
+function waitUntil(predicate, interval = 10) {
+  if (predicate()) {
+    return Promise.resolve(true);
+  }
+  return new Promise(resolve => {
+    setTimeout(function() {
+      waitUntil(predicate).then(() => resolve(true));
+    }, interval);
+  });
 }

@@ -140,7 +140,7 @@ static bool
 ConvertAndCopyTo(JSContext* cx, HandleTypedObject typedObj, HandleValue val)
 {
     Rooted<TypeDescr*> type(cx, &typedObj->typeDescr());
-    return ConvertAndCopyTo(cx, type, typedObj, 0, NullPtr(), val);
+    return ConvertAndCopyTo(cx, type, typedObj, 0, nullptr, val);
 }
 
 /*
@@ -224,6 +224,7 @@ const Class js::ScalarTypeDescr::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     TypeDescr::finalize,
     ScalarTypeDescr::call
@@ -321,6 +322,7 @@ const Class js::ReferenceTypeDescr::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     TypeDescr::finalize,
     ReferenceTypeDescr::call
@@ -488,7 +490,7 @@ CreatePrototypeObjectForComplexTypeInstance(JSContext* cx, HandleObject ctorProt
     if (!ctorPrototypePrototype)
         return nullptr;
 
-    return NewObjectWithProto<TypedProto>(cx, ctorPrototypePrototype, SingletonObject);
+    return NewObjectWithGivenProto<TypedProto>(cx, ctorPrototypePrototype, SingletonObject);
 }
 
 const Class ArrayTypeDescr::class_ = {
@@ -500,6 +502,7 @@ const Class ArrayTypeDescr::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     TypeDescr::finalize,
     nullptr, /* call */
@@ -583,8 +586,9 @@ ArrayMetaTypeDescr::create(JSContext* cx,
                            int32_t size,
                            int32_t length)
 {
+    MOZ_ASSERT(arrayTypePrototype);
     Rooted<ArrayTypeDescr*> obj(cx);
-    obj = NewObjectWithProto<ArrayTypeDescr>(cx, arrayTypePrototype, SingletonObject);
+    obj = NewObjectWithGivenProto<ArrayTypeDescr>(cx, arrayTypePrototype, SingletonObject);
     if (!obj)
         return nullptr;
 
@@ -727,6 +731,7 @@ const Class StructTypeDescr::class_ = {
     nullptr, /* setProperty */
     nullptr, /* enumerate */
     nullptr, /* resolve */
+    nullptr, /* mayResolve */
     nullptr, /* convert */
     TypeDescr::finalize,
     nullptr, /* call */
@@ -776,11 +781,11 @@ StructMetaTypeDescr::create(JSContext* cx,
     int32_t alignment = 1;             // Alignment of struct.
     bool opaque = false;               // Opacity of struct.
 
-    userFieldOffsets = NewObjectWithProto<PlainObject>(cx, NullPtr(), TenuredObject);
+    userFieldOffsets = NewBuiltinClassInstance<PlainObject>(cx, TenuredObject);
     if (!userFieldOffsets)
         return nullptr;
 
-    userFieldTypes = NewObjectWithProto<PlainObject>(cx, NullPtr(), TenuredObject);
+    userFieldTypes = NewBuiltinClassInstance<PlainObject>(cx, TenuredObject);
     if (!userFieldTypes)
         return nullptr;
 
@@ -910,8 +915,7 @@ StructMetaTypeDescr::create(JSContext* cx,
         return nullptr;
 
     Rooted<StructTypeDescr*> descr(cx);
-    descr = NewObjectWithProto<StructTypeDescr>(cx, structTypePrototype,
-                                                SingletonObject);
+    descr = NewObjectWithGivenProto<StructTypeDescr>(cx, structTypePrototype, SingletonObject);
     if (!descr)
         return nullptr;
 
@@ -925,7 +929,7 @@ StructMetaTypeDescr::create(JSContext* cx,
     {
         RootedObject fieldNamesVec(cx);
         fieldNamesVec = NewDenseCopiedArray(cx, fieldNames.length(),
-                                            fieldNames.begin(), NullPtr(),
+                                            fieldNames.begin(), nullptr,
                                             TenuredObject);
         if (!fieldNamesVec)
             return nullptr;
@@ -937,7 +941,7 @@ StructMetaTypeDescr::create(JSContext* cx,
     {
         RootedObject fieldTypeVec(cx);
         fieldTypeVec = NewDenseCopiedArray(cx, fieldTypeObjs.length(),
-                                           fieldTypeObjs.begin(), NullPtr(),
+                                           fieldTypeObjs.begin(), nullptr,
                                            TenuredObject);
         if (!fieldTypeVec)
             return nullptr;
@@ -949,7 +953,7 @@ StructMetaTypeDescr::create(JSContext* cx,
     {
         RootedObject fieldOffsetsVec(cx);
         fieldOffsetsVec = NewDenseCopiedArray(cx, fieldOffsets.length(),
-                                              fieldOffsets.begin(), NullPtr(),
+                                              fieldOffsets.begin(), nullptr,
                                               TenuredObject);
         if (!fieldOffsetsVec)
             return nullptr;
@@ -1152,7 +1156,7 @@ DefineSimpleTypeDescr(JSContext* cx,
         return false;
 
     Rooted<T*> descr(cx);
-    descr = NewObjectWithProto<T>(cx, funcProto, SingletonObject);
+    descr = NewObjectWithGivenProto<T>(cx, funcProto, SingletonObject);
     if (!descr)
         return false;
 
@@ -1172,7 +1176,7 @@ DefineSimpleTypeDescr(JSContext* cx,
     // Create the typed prototype for the scalar type. This winds up
     // not being user accessible, but we still create one for consistency.
     Rooted<TypedProto*> proto(cx);
-    proto = NewObjectWithProto<TypedProto>(cx, objProto, TenuredObject);
+    proto = NewObjectWithGivenProto<TypedProto>(cx, objProto, TenuredObject);
     if (!proto)
         return false;
     descr->initReservedSlot(JS_DESCR_SLOT_TYPROTO, ObjectValue(*proto));
@@ -1207,8 +1211,7 @@ DefineMetaTypeDescr(JSContext* cx,
 
     // Create ctor.prototype, which inherits from Function.__proto__
 
-    RootedObject proto(cx, NewObjectWithProto<PlainObject>(cx, funcProto,
-                                                           SingletonObject));
+    RootedObject proto(cx, NewObjectWithGivenProto<PlainObject>(cx, funcProto, SingletonObject));
     if (!proto)
         return nullptr;
 
@@ -1218,7 +1221,7 @@ DefineMetaTypeDescr(JSContext* cx,
     if (!objProto)
         return nullptr;
     RootedObject protoProto(cx);
-    protoProto = NewObjectWithProto<PlainObject>(cx, objProto, SingletonObject);
+    protoProto = NewObjectWithGivenProto<PlainObject>(cx, objProto, SingletonObject);
     if (!protoProto)
         return nullptr;
 
@@ -1265,7 +1268,7 @@ GlobalObject::initTypedObjectModule(JSContext* cx, Handle<GlobalObject*> global)
         return false;
 
     Rooted<TypedObjectModuleObject*> module(cx);
-    module = NewObjectWithProto<TypedObjectModuleObject>(cx, objProto);
+    module = NewObjectWithGivenProto<TypedObjectModuleObject>(cx, objProto);
     if (!module)
         return false;
 
@@ -1321,8 +1324,11 @@ GlobalObject::initTypedObjectModule(JSContext* cx, Handle<GlobalObject*> global)
     // Everything is setup, install module on the global object:
     RootedValue moduleValue(cx, ObjectValue(*module));
     global->setConstructor(JSProto_TypedObject, moduleValue);
-    if (!DefineProperty(cx, global, cx->names().TypedObject, moduleValue, nullptr, nullptr, 0))
+    if (!DefineProperty(cx, global, cx->names().TypedObject, moduleValue, nullptr, nullptr,
+                        JSPROP_RESOLVING))
+    {
         return false;
+    }
 
     return module;
 }
@@ -1926,7 +1932,7 @@ TypedObject::obj_setProperty(JSContext* cx, HandleObject obj, HandleId id, Handl
             Rooted<TypeDescr*> elementType(cx);
             elementType = &typedObj->typeDescr().as<ArrayTypeDescr>().elementType();
             size_t offset = elementType->size() * index;
-            if (!ConvertAndCopyTo(cx, elementType, typedObj, offset, NullPtr(), v))
+            if (!ConvertAndCopyTo(cx, elementType, typedObj, offset, nullptr, v))
                 return false;
             return result.succeed();
         }
@@ -2246,6 +2252,7 @@ OutlineTransparentTypedObject::getOrCreateBuffer(JSContext* cx)
         nullptr,        /* setProperty */                \
         nullptr,        /* enumerate   */                \
         nullptr,        /* resolve     */                \
+        nullptr,        /* mayResolve  */                \
         nullptr,        /* convert     */                \
         nullptr,        /* finalize    */                \
         nullptr,        /* call        */                \

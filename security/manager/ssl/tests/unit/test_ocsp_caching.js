@@ -4,6 +4,9 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 "use strict";
 
+// Checks various aspects of the OCSP cache, mainly to to ensure we do not fetch
+// responses more than necessary.
+
 let gFetchCount = 0;
 let gGoodOCSPResponse = null;
 
@@ -16,6 +19,7 @@ function generateGoodOCSPResponse() {
 function run_test() {
   do_get_profile();
   Services.prefs.setBoolPref("security.ssl.enable_ocsp_stapling", true);
+  Services.prefs.setIntPref("security.OCSP.enabled", 1);
   add_tls_server_setup("OCSPStaplingServer");
 
   let ocspResponder = new HttpServer();
@@ -47,22 +51,63 @@ function run_test() {
 }
 
 function add_tests() {
+  // Test that verifying a certificate with a "short lifetime" doesn't result
+  // in OCSP fetching. Due to longevity requirements in our testing
+  // infrastructure, the certificate we encounter is valid for a very long
+  // time, so we have to define a "short lifetime" as something very long.
+  add_test(function() {
+    Services.prefs.setIntPref("security.pki.cert_short_lifetime_in_days",
+                              12000);
+    run_next_test();
+  });
+  add_connection_test("ocsp-stapling-none.example.com", PRErrorCodeSuccess,
+                      clearSessionCache);
+  add_test(function() {
+    Assert.equal(0, gFetchCount,
+                 "expected zero OCSP requests for a short-lived certificate");
+    Services.prefs.setIntPref("security.pki.cert_short_lifetime_in_days", 100);
+    run_next_test();
+  });
+  // If a "short lifetime" is something more reasonable, ensure that we do OCSP
+  // fetching for this long-lived certificate.
+  add_connection_test("ocsp-stapling-none.example.com", PRErrorCodeSuccess,
+                      clearSessionCache);
+  add_test(function() {
+    Assert.equal(1, gFetchCount,
+                 "expected one OCSP request for a long-lived certificate");
+    Services.prefs.clearUserPref("security.pki.cert_short_lifetime_in_days");
+    run_next_test();
+  });
+
+  //---------------------------------------------------------------------------
+
+  // Reset state
+  add_test(function() { clearOCSPCache(); gFetchCount = 0; run_next_test(); });
+
   // This test assumes that OCSPStaplingServer uses the same cert for
   // ocsp-stapling-unknown.example.com and ocsp-stapling-none.example.com.
 
-  // Get an Unknown response for the *.exmaple.com cert and put it in the
+  // Get an Unknown response for the *.example.com cert and put it in the
   // OCSP cache.
   add_connection_test("ocsp-stapling-unknown.example.com",
                       SEC_ERROR_OCSP_UNKNOWN_CERT,
                       clearSessionCache);
-  add_test(function() { do_check_eq(gFetchCount, 0); run_next_test(); });
+  add_test(function() {
+    equal(gFetchCount, 0,
+          "Stapled Unknown response -> a fetch should not have been attempted");
+    run_next_test();
+  });
 
-  // A failure to retrieve an OCSP response must result in the cached Unkown
+  // A failure to retrieve an OCSP response must result in the cached Unknown
   // response being recognized and honored.
   add_connection_test("ocsp-stapling-none.example.com",
                       SEC_ERROR_OCSP_UNKNOWN_CERT,
                       clearSessionCache);
-  add_test(function() { do_check_eq(gFetchCount, 1); run_next_test(); });
+  add_test(function() {
+    equal(gFetchCount, 1,
+          "No stapled response -> a fetch should have been attempted");
+    run_next_test();
+  });
 
   // A valid Good response from the OCSP responder must override the cached
   // Unknown response.
@@ -83,14 +128,23 @@ function add_tests() {
   });
   add_connection_test("ocsp-stapling-none.example.com", PRErrorCodeSuccess,
                       clearSessionCache);
-  add_test(function() { do_check_eq(gFetchCount, 2); run_next_test(); });
+  add_test(function() {
+    equal(gFetchCount, 2,
+          "Cached Unknown response, no stapled response -> a fetch should" +
+          " have been attempted");
+    run_next_test();
+  });
 
   // The Good response retrieved from the previous fetch must have replaced
   // the Unknown response in the cache, resulting in the catched Good response
   // being returned and no fetch.
   add_connection_test("ocsp-stapling-none.example.com", PRErrorCodeSuccess,
                       clearSessionCache);
-  add_test(function() { do_check_eq(gFetchCount, 2); run_next_test(); });
+  add_test(function() {
+    equal(gFetchCount, 2,
+          "Cached Good response -> a fetch should not have been attempted");
+    run_next_test();
+  });
 
 
   //---------------------------------------------------------------------------
@@ -102,19 +156,31 @@ function add_tests() {
   // added to the cache.
   add_connection_test("ocsp-stapling-none.example.com", PRErrorCodeSuccess,
                       clearSessionCache);
-  add_test(function() { do_check_eq(gFetchCount, 1); run_next_test(); });
+  add_test(function() {
+    equal(gFetchCount, 1,
+          "No stapled response -> a fetch should have been attempted");
+    run_next_test();
+  });
 
   // The error entry will prevent a fetch from happening for a while.
   add_connection_test("ocsp-stapling-none.example.com", PRErrorCodeSuccess,
                       clearSessionCache);
-  add_test(function() { do_check_eq(gFetchCount, 1); run_next_test(); });
+  add_test(function() {
+    equal(gFetchCount, 1,
+          "Noted OCSP server failure -> a fetch should not have been attempted");
+    run_next_test();
+  });
 
   // The error entry must not prevent a stapled OCSP response from being
   // honored.
   add_connection_test("ocsp-stapling-revoked.example.com",
                       SEC_ERROR_REVOKED_CERTIFICATE,
                       clearSessionCache);
-  add_test(function() { do_check_eq(gFetchCount, 1); run_next_test(); });
+  add_test(function() {
+    equal(gFetchCount, 1,
+          "Stapled Revoked response -> a fetch should not have been attempted");
+    run_next_test();
+  });
 
   //---------------------------------------------------------------------------
 

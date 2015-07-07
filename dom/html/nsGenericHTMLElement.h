@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set tw=80 expandtab softtabstop=2 ts=2 sw=2: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -233,6 +233,17 @@ public:
     mScrollgrab = aValue;
   }
 
+  mozilla::net::ReferrerPolicy
+  GetReferrerPolicy()
+  {
+    nsAutoString aPolicyString;
+    GetEnumAttr(nsGkAtoms::referrer, nullptr, aPolicyString);
+    if (aPolicyString.IsEmpty()) {
+      return mozilla::net::RP_Unset;
+    }
+    return mozilla::net::ReferrerPolicyFromString(aPolicyString);
+  }
+
   /**
    * Determine whether an attribute is an event (onclick, etc.)
    * @param aName the attribute
@@ -357,7 +368,7 @@ public:
   NS_IMETHOD SetDir(const nsAString& aDir) final override {
     mozilla::ErrorResult rv;
     SetDir(aDir, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD GetDOMClassName(nsAString& aClassName) final {
     GetHTMLAttr(nsGkAtoms::_class, aClassName);
@@ -375,12 +386,12 @@ public:
   NS_IMETHOD SetHidden(bool aHidden) final override {
     mozilla::ErrorResult rv;
     SetHidden(aHidden, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD DOMBlur() final override {
     mozilla::ErrorResult rv;
     Blur(rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD GetItemScope(bool* aItemScope) final override {
     *aItemScope = ItemScope();
@@ -389,7 +400,7 @@ public:
   NS_IMETHOD SetItemScope(bool aItemScope) final override {
     mozilla::ErrorResult rv;
     SetItemScope(aItemScope, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD GetItemType(nsIVariant** aType) final override {
     GetTokenList(nsGkAtoms::itemtype, aType);
@@ -407,7 +418,7 @@ public:
   NS_IMETHOD SetItemId(const nsAString& aId) final override {
     mozilla::ErrorResult rv;
     SetItemId(aId, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD GetProperties(nsISupports** aReturn) final override;
   NS_IMETHOD GetItemValue(nsIVariant** aValue) final override;
@@ -435,7 +446,7 @@ public:
   NS_IMETHOD SetAccessKey(const nsAString& aAccessKey) final override {
     mozilla::ErrorResult rv;
     SetAccessKey(aAccessKey, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD GetAccessKeyLabel(nsAString& aAccessKeyLabel)
     final override {
@@ -447,7 +458,7 @@ public:
   NS_IMETHOD SetDraggable(bool aDraggable) final override {
     mozilla::ErrorResult rv;
     SetDraggable(aDraggable, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD GetContentEditable(nsAString& aContentEditable)
     final override {
@@ -460,7 +471,7 @@ public:
     final override {
     mozilla::ErrorResult rv;
     SetContentEditable(aContentEditable, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD GetIsContentEditable(bool* aIsContentEditable)
     final override {
@@ -476,7 +487,7 @@ public:
   NS_IMETHOD SetSpellcheck(bool aSpellcheck) final override {
     mozilla::ErrorResult rv;
     SetSpellcheck(aSpellcheck, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD GetOuterHTML(nsAString& aOuterHTML) final override {
     mozilla::dom::Element::GetOuterHTML(aOuterHTML);
@@ -485,8 +496,8 @@ public:
   NS_IMETHOD SetOuterHTML(const nsAString& aOuterHTML) final override {
     mozilla::ErrorResult rv;
     mozilla::dom::Element::SetOuterHTML(aOuterHTML, rv);
-    return rv.ErrorCode();
-  }                                                                            \
+    return rv.StealNSResult();
+  }
   NS_IMETHOD InsertAdjacentHTML(const nsAString& position,
                                 const nsAString& text) final override;
   NS_IMETHOD ScrollIntoView(bool top, uint8_t _argc) final override {
@@ -532,12 +543,12 @@ public:
   NS_IMETHOD SetTabIndex(int32_t aTabIndex) final override {
     mozilla::ErrorResult rv;
     SetTabIndex(aTabIndex, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD Focus() final override {
     mozilla::ErrorResult rv;
     Focus(rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
   NS_IMETHOD GetDraggable(bool* aDraggable) final override {
     *aDraggable = Draggable();
@@ -550,7 +561,7 @@ public:
   NS_IMETHOD SetInnerHTML(const nsAString& aInnerHTML) final override {
     mozilla::ErrorResult rv;
     SetInnerHTML(aInnerHTML, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   using nsGenericHTMLElementBase::GetOwnerDocument;
@@ -711,6 +722,10 @@ public:
   static bool ParseImageAttribute(nsIAtom* aAttribute,
                                     const nsAString& aString,
                                     nsAttrValue& aResult);
+
+  static bool ParseReferrerAttribute(const nsAString& aString,
+                                     nsAttrValue& aResult);
+
   /**
    * Convert a frameborder string to value (yes/no/1/0)
    *
@@ -1011,7 +1026,7 @@ protected:
    * Returns INVALID_STATE_ERR and nulls *aURI if aURISpec is empty
    * and the document's URI matches the element's base URI.
    */
-  nsresult NewURIFromString(const nsAutoString& aURISpec, nsIURI** aURI);
+  nsresult NewURIFromString(const nsAString& aURISpec, nsIURI** aURI);
 
   void GetHTMLAttr(nsIAtom* aName, nsAString& aResult) const
   {
@@ -1527,7 +1542,7 @@ protected:
   {                                                                       \
     mozilla::ErrorResult rv;                                              \
     SetUnsignedIntAttr(nsGkAtoms::_atom, aValue, rv);                     \
-    return rv.ErrorCode();                                                \
+    return rv.StealNSResult();                                            \
   }
 
 /**
@@ -1554,7 +1569,7 @@ protected:
     }                                                                     \
     mozilla::ErrorResult rv;                                              \
     SetUnsignedIntAttr(nsGkAtoms::_atom, aValue, rv);                     \
-    return rv.ErrorCode();                                                \
+    return rv.StealNSResult();                                            \
   }
 
 /**
@@ -1742,6 +1757,7 @@ NS_DECLARE_NS_NEW_HTML_ELEMENT(Mod)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Data)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(DataList)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Div)
+NS_DECLARE_NS_NEW_HTML_ELEMENT(ExtApp)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(FieldSet)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Font)
 NS_DECLARE_NS_NEW_HTML_ELEMENT(Form)

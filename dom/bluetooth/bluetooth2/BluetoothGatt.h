@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -22,8 +22,6 @@ class Promise;
 
 BEGIN_BLUETOOTH_NAMESPACE
 
-class BluetoothReplyRunnable;
-class BluetoothService;
 class BluetoothSignal;
 class BluetoothValue;
 
@@ -50,6 +48,7 @@ public:
   /****************************************************************************
    * Event Handlers
    ***************************************************************************/
+  IMPL_EVENT_HANDLER(characteristicchanged);
   IMPL_EVENT_HANDLER(connectionstatechanged);
 
   /****************************************************************************
@@ -89,13 +88,6 @@ private:
   void UpdateConnectionState(BluetoothConnectionState aState);
 
   /**
-   * Generate a random uuid.
-   *
-   * @param aUuidString [out] String to store the generated uuid.
-   */
-  void GenerateUuid(nsAString &aUuidString);
-
-  /**
    * Add newly discovered GATT services into mServices and update the cache
    * value of mServices.
    *
@@ -103,6 +95,64 @@ private:
    *                    BluetoothGattServiceId of all discovered services.
    */
   void HandleServicesDiscovered(const BluetoothValue& aValue);
+
+  /**
+   * Add newly discovered GATT included services into mIncludedServices of
+   * BluetoothGattService and update the cache value of mIncludedServices.
+   *
+   * @param aValue [in] BluetoothValue which contains an array of
+   *                    BluetoothNamedValue. There are exact two elements in
+   *                    the array. The first element uses 'serviceId' as the
+   *                    name and uses BluetoothGattServiceId as the value. The
+   *                    second element uses 'includedServices' as the name and
+   *                    uses an array of BluetoothGattServiceId of all
+   *                    discovered included services as the value.
+   */
+  void HandleIncludedServicesDiscovered(const BluetoothValue& aValue);
+
+  /**
+   * Add newly discovered GATT characteristics into mCharacteristics of
+   * BluetoothGattService and update the cache value of mCharacteristics.
+   *
+   * @param aValue [in] BluetoothValue which contains an array of
+   *                    BluetoothNamedValue. There are exact two elements in
+   *                    the array. The first element uses 'serviceId' as the
+   *                    name and uses BluetoothGattServiceId as the value. The
+   *                    second element uses 'characteristics' as the name and
+   *                    uses an array of BluetoothGattCharAttribute of all
+   *                    discovered characteristics as the value.
+   */
+  void HandleCharacteristicsDiscovered(const BluetoothValue& aValue);
+
+  /**
+   * Add newly discovered GATT descriptors into mDescriptors of
+   * BluetoothGattCharacteristic and update the cache value of mDescriptors.
+   *
+   * @param aValue [in] BluetoothValue which contains an array of
+   *                    BluetoothNamedValue. There are exact three elements in
+   *                    the array. The first element uses 'serviceId' as the
+   *                    name and uses BluetoothGattServiceId as the value. The
+   *                    second element uses 'characteristicId' as the name and
+   *                    uses BluetoothGattId as the value. The third element
+   *                    uses 'descriptors' as the name and uses an array of
+   *                    BluetoothGattId of all discovered descriptors as the
+   *                    value.
+   */
+  void HandleDescriptorsDiscovered(const BluetoothValue& aValue);
+
+  /**
+   * The value of a GATT characteristic has changed. In the mean time, the
+   * cached value of this GATT characteristic has already been updated. An
+   * 'characteristicchanged' event will be fired by this function.
+   *
+   * @param aValue [in] BluetoothValue which contains an array of
+   *                    BluetoothNamedValue. There are exact two elements in
+   *                    the array. The first element uses 'serviceId' as the
+   *                    name and uses BluetoothGattServiceId as the value. The
+   *                    second element uses 'charId' as the name and uses
+   *                    BluetoothGattId as the value.
+   */
+  void HandleCharacteristicChanged(const BluetoothValue& aValue);
 
   /****************************************************************************
    * Variables

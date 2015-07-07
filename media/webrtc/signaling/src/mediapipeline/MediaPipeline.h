@@ -191,8 +191,8 @@ class MediaPipeline : public sigslot::has_slots<> {
     virtual nsresult SendRtcpPacket(const void* data, int len);
 
    private:
-    virtual nsresult SendRtpPacket_s(nsAutoPtr<DataBuffer> data);
-    virtual nsresult SendRtcpPacket_s(nsAutoPtr<DataBuffer> data);
+    nsresult SendRtpRtcpPacket_s(nsAutoPtr<DataBuffer> data,
+                                 bool is_rtp);
 
     MediaPipeline *pipeline_;  // Raw pointer to avoid cycles
     nsCOMPtr<nsIEventTarget> sts_thread_;
@@ -361,7 +361,7 @@ class GenericReceiveCallback : public TrackAddedCallback
 class ConduitDeleteEvent: public nsRunnable
 {
 public:
-  explicit ConduitDeleteEvent(TemporaryRef<MediaSessionConduit> aConduit) :
+  explicit ConduitDeleteEvent(already_AddRefed<MediaSessionConduit> aConduit) :
     mConduit(aConduit) {}
 
   /* we exist solely to proxy release of the conduit */
@@ -466,6 +466,12 @@ public:
       }
     }
 
+    // Dispatches setting the internal TrackID to TRACK_INVALID to the media
+    // graph thread to keep it in sync with other MediaStreamGraph operations
+    // like RemoveListener() and AddListener(). The TrackID will be updated on
+    // the next NewData() callback.
+    void UnsetTrackId(MediaStreamGraphImpl* graph);
+
     void SetActive(bool active) { active_ = active; }
     void SetEnabled(bool enabled) { enabled_ = enabled; }
     TrackID trackid() {
@@ -487,6 +493,11 @@ public:
                                     const MediaSegment& media) override;
 
    private:
+    void UnsetTrackIdImpl() {
+      MutexAutoLock lock(mMutex);
+      track_id_ = track_id_external_ = TRACK_INVALID;
+    }
+
     void NewData(MediaStreamGraph* graph, TrackID tid,
                  StreamTime offset,
                  uint32_t events,

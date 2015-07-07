@@ -10,15 +10,15 @@ config = {
                 "--xre-path=%(abs_app_dir)s"
             ],
             "run_filename": "runcppunittests.py",
-            "testsdir": "cppunittests"
+            "testsdir": "cppunittest"
         },
         "jittest": {
             "options": [
                 "tests/bin/js",
                 "--no-slow",
                 "--no-progress",
-                "--tinderbox",
-                "--tbpl"
+                "--format=automation",
+                "--jitflags=all"
             ],
             "run_filename": "jit_test.py",
             "testsdir": "jit-test/jit-test"
@@ -30,14 +30,12 @@ config = {
                 "--extra-profile-file=tests/bin/plugins",
                 "--symbols-path=%(symbols_path)s",
                 "--certificate-path=tests/certs",
-                "--autorun",
-                "--close-when-done",
-                "--console-level=INFO",
                 "--setpref=webgl.force-enabled=true",
                 "--quiet",
                 "--log-raw=%(raw_log_file)s",
                 "--use-test-media-devices",
-                "--e10s"
+                "--screenshot-on-fail",
+                "--e10s",
             ],
             "run_filename": "runtests.py",
             "testsdir": "mochitest"
@@ -89,7 +87,8 @@ config = {
             "options": [
                 "--symbols-path=%(symbols_path)s",
                 "--test-plugin-path=%(test_plugin_path)s",
-                "--log-raw=%(raw_log_file)s"
+                "--log-raw=%(raw_log_file)s",
+                "--utility-path=tests/bin",
             ],
             "run_filename": "runxpcshelltests.py",
             "testsdir": "xpcshell"

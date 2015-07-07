@@ -15,8 +15,8 @@
 
         <view class="org.mozilla.gecko.tabs.TabsPanel$TabsPanelToolbar"
               android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:background="@color/background_tabs">
+              android:layout_height="@dimen/browser_toolbar_height"
+              android:background="@color/text_and_tabs_tray_grey">
 
             <ViewStub android:id="@+id/nav_back_stub"
                       android:layout="@layout/new_tablet_tabs_panel_back_button"
@@ -45,7 +45,7 @@
             <ImageButton android:id="@+id/menu"
                          style="@style/UrlBar.ImageButton"
                          android:padding="@dimen/browser_toolbar_button_padding"
-                         android:src="@drawable/menu_tabs"
+                         android:src="@drawable/menu"
                          android:contentDescription="@string/menu"
                          android:background="@drawable/action_bar_button_inverse"
                          android:visibility="gone"/>

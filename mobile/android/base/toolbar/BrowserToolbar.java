@@ -133,6 +133,8 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
     protected TabHistoryController tabHistoryController;
 
     private final Paint shadowPaint;
+    private final int shadowColor;
+    private final int shadowPrivateColor;
     private final int shadowSize;
 
     private final ToolbarPrefs prefs;
@@ -200,7 +202,9 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
         shadowSize = res.getDimensionPixelSize(R.dimen.browser_toolbar_shadow_size);
 
         shadowPaint = new Paint();
-        shadowPaint.setColor(res.getColor(R.color.url_bar_shadow));
+        shadowColor = res.getColor(R.color.url_bar_shadow);
+        shadowPrivateColor = res.getColor(R.color.url_bar_shadow_private);
+        shadowPaint.setColor(shadowColor);
         shadowPaint.setStrokeWidth(0.0f);
 
         setUIMode(UIMode.DISPLAY);
@@ -345,6 +349,10 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
 
         final int height = getHeight();
         canvas.drawRect(0, height - shadowSize, getWidth(), height, shadowPaint);
+    }
+
+    public void onParentFocus() {
+        urlEditLayout.onParentFocus();
     }
 
     public void setProgressBar(ToolbarProgressView progressBar) {
@@ -836,8 +844,9 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
 
         tabsButton.setPrivateMode(isPrivate);
         menuButton.setPrivateMode(isPrivate);
-        menuIcon.setPrivateMode(isPrivate);
         urlEditLayout.setPrivateMode(isPrivate);
+
+        shadowPaint.setColor(isPrivate ? shadowPrivateColor : shadowColor);
     }
 
     public void show() {
@@ -849,11 +858,12 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
     }
 
     public View getDoorHangerAnchor() {
-        return urlDisplayLayout.getDoorHangerAnchor();
+        return urlDisplayLayout;
     }
 
     public void onDestroy() {
         Tabs.unregisterOnTabsChangedListener(this);
+        urlDisplayLayout.destroy();
     }
 
     public boolean openOptionsMenu() {
@@ -903,7 +913,7 @@ public abstract class BrowserToolbar extends ThemedRelativeLayout
         }
 
         final StateListDrawable stateList = new StateListDrawable();
-        stateList.addState(PRIVATE_STATE_SET, getColorDrawable(R.color.background_private));
+        stateList.addState(PRIVATE_STATE_SET, getColorDrawable(R.color.tabs_tray_grey_pressed));
         stateList.addState(EMPTY_STATE_SET, drawable);
 
         setBackgroundDrawable(stateList);

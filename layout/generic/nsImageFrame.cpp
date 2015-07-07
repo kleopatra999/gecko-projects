@@ -100,7 +100,9 @@ nsImageFrame::IconLoad* nsImageFrame::gIconLoad = nullptr;
 nsIIOService* nsImageFrame::sIOService;
 
 // test if the width and height are fixed, looking at the style data
-static bool HaveFixedSize(const nsStylePosition* aStylePosition)
+// This is used by nsImageFrame::ShouldCreateImageFrameFor and should
+// not be used for layout decisions.
+static bool HaveSpecifiedSize(const nsStylePosition* aStylePosition)
 {
   // check the width and height values in the reflow state's style struct
   // - if width and height are specified as either coord or percentage, then
@@ -109,28 +111,16 @@ static bool HaveFixedSize(const nsStylePosition* aStylePosition)
          aStylePosition->mHeight.IsCoordPercentCalcUnit();
 }
 
-// use the data in the reflow state to decide if the image has a constrained size
-// (i.e. width and height that are based on the containing block size and not the image size)
-// so we can avoid animated GIF related reflows
+// Decide whether we can optimize away reflows that result from the
+// image's intrinsic size changing.
 inline bool HaveFixedSize(const nsHTMLReflowState& aReflowState)
 {
   NS_ASSERTION(aReflowState.mStylePosition, "crappy reflowState - null stylePosition");
-  // when an image has percent css style height or width, but ComputedHeight()
-  // or ComputedWidth() of reflow state is  NS_UNCONSTRAINEDSIZE
-  // it needs to return false to cause an incremental reflow later
-  // if an image is inside table like bug 156731 simple testcase III,
-  // during pass 1 reflow, ComputedWidth() is NS_UNCONSTRAINEDSIZE
-  // in pass 2 reflow, ComputedWidth() is 0, it also needs to return false
-  // see bug 156731
-  const nsStyleCoord &height = aReflowState.mStylePosition->mHeight;
-  const nsStyleCoord &width = aReflowState.mStylePosition->mWidth;
-  return ((height.HasPercent() &&
-           NS_UNCONSTRAINEDSIZE == aReflowState.ComputedHeight()) ||
-          (width.HasPercent() &&
-           (NS_UNCONSTRAINEDSIZE == aReflowState.ComputedWidth() ||
-            0 == aReflowState.ComputedWidth())))
-          ? false
-          : HaveFixedSize(aReflowState.mStylePosition);
+  // Don't try to make this optimization when an image has percentages
+  // in its 'width' or 'height'.  The percentages might be treated like
+  // auto (especially for intrinsic width calculations and for heights).
+  return aReflowState.mStylePosition->mHeight.ConvertsToLength() &&
+         aReflowState.mStylePosition->mWidth.ConvertsToLength();
 }
 
 nsIFrame*
@@ -182,7 +172,7 @@ nsImageFrame::DisconnectMap()
 {
   if (mImageMap) {
     mImageMap->Destroy();
-    NS_RELEASE(mImageMap);
+    mImageMap = nullptr;
 
 #ifdef ACCESSIBILITY
   nsAccessibilityService* accService = GetAccService();
@@ -451,7 +441,7 @@ nsImageFrame::ShouldCreateImageFrameFor(Element* aElement,
 {
   EventStates state = aElement->State();
   if (IMAGE_OK(state,
-               HaveFixedSize(aStyleContext->StylePosition()))) {
+               HaveSpecifiedSize(aStyleContext->StylePosition()))) {
     // Image is fine; do the image frame thing
     return true;
   }
@@ -489,8 +479,8 @@ nsImageFrame::ShouldCreateImageFrameFor(Element* aElement,
     useSizedBox = false;
   }
   else {
-    // check whether we have fixed size
-    useSizedBox = HaveFixedSize(aStyleContext->StylePosition());
+    // check whether we have specified size
+    useSizedBox = HaveSpecifiedSize(aStyleContext->StylePosition());
   }
 
   return useSizedBox;
@@ -614,7 +604,7 @@ nsImageFrame::OnFrameUpdate(imgIRequest* aRequest, const nsIntRect* aRect)
                              ? mImage->GetImageSpaceInvalidationRect(*aRect)
                              : *aRect;
 
-  if (layerInvalidRect.IsEqualInterior(nsIntRect::GetMaxSizedIntRect())) {
+  if (layerInvalidRect.IsEqualInterior(GetMaxSizedIntRect())) {
     // Invalidate our entire area.
     InvalidateSelf(nullptr, nullptr);
     return NS_OK;
@@ -1425,6 +1415,17 @@ nsDisplayImage::ComputeInvalidationRegion(nsDisplayListBuilder* aBuilder,
   nsDisplayImageContainer::ComputeInvalidationRegion(aBuilder, aGeometry, aInvalidRegion);
 }
 
+bool
+nsDisplayImage::CanOptimizeToImageLayer(LayerManager* aManager,
+                                        nsDisplayListBuilder* aBuilder)
+{
+  uint32_t flags = aBuilder->ShouldSyncDecodeImages()
+                 ? imgIContainer::FLAG_SYNC_DECODE
+                 : imgIContainer::FLAG_NONE;
+
+  return mImage->IsImageContainerAvailable(aManager, flags);
+}
+
 already_AddRefed<ImageContainer>
 nsDisplayImage::GetContainer(LayerManager* aManager,
                              nsDisplayListBuilder* aBuilder)
@@ -1513,9 +1514,7 @@ nsDisplayImage::GetLayerState(nsDisplayListBuilder* aBuilder,
                  ? imgIContainer::FLAG_SYNC_DECODE
                  : imgIContainer::FLAG_NONE;
 
-  nsRefPtr<ImageContainer> container =
-    mImage->GetImageContainer(aManager, flags);
-  if (!container) {
+  if (!mImage->IsImageContainerAvailable(aManager, flags)) {
     return LAYER_NONE;
   }
 
@@ -1779,7 +1778,6 @@ nsImageFrame::GetImageMap()
     nsIContent* map = GetMapElement();
     if (map) {
       mImageMap = new nsImageMap();
-      NS_ADDREF(mImageMap);
       mImageMap->Init(this, map);
     }
   }
@@ -2220,10 +2218,12 @@ nsImageFrame::IconLoad::Observe(nsISupports *aSubject, const char* aTopic,
                "wrong topic");
 #ifdef DEBUG
   // assert |aData| is one of our prefs.
-  for (uint32_t i = 0; i < ArrayLength(kIconLoadPrefs) ||
-                       (NS_NOTREACHED("wrong pref"), false); ++i)
+  uint32_t i = 0;
+  for (; i < ArrayLength(kIconLoadPrefs); ++i) {
     if (NS_ConvertASCIItoUTF16(kIconLoadPrefs[i]) == nsDependentString(aData))
       break;
+  }
+  MOZ_ASSERT(i < ArrayLength(kIconLoadPrefs));
 #endif
 
   GetPrefs();

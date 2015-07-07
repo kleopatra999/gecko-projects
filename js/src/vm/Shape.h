@@ -110,9 +110,8 @@
 namespace js {
 
 class Bindings;
-class Debugger;
-class Nursery;
 class StaticBlockObject;
+class TenuringTracer;
 
 typedef JSGetterOp GetterOp;
 typedef JSSetterOp SetterOp;
@@ -354,16 +353,10 @@ class BaseShape : public gc::TenuredCell
         UNCACHEABLE_PROTO   =  0x800,
         IMMUTABLE_PROTOTYPE = 0x1000,
 
-        // These two flags control which scope a new variables ends up on in the
-        // scope chain. If the variable is "qualified" (i.e., if it was defined
-        // using var, let, or const) then it ends up on the lowest scope in the
-        // chain that has the QUALIFIED_VAROBJ flag set. If it's "unqualified"
-        // (i.e., if it was introduced without any var, let, or const, which
-        // incidentally is an error in strict mode) then it goes on the lowest
-        // scope in the chain with the UNQUALIFIED_VAROBJ flag set (which is
-        // typically the global).
+        // See JSObject::isQualifiedVarObj().
         QUALIFIED_VAROBJ    = 0x2000,
-        UNQUALIFIED_VAROBJ  = 0x4000,
+
+        // 0x4000 is unused.
 
         // For a function used as an interpreted constructor, whether a 'new'
         // type had constructor information cleared.
@@ -386,6 +379,7 @@ class BaseShape : public gc::TenuredCell
     ShapeTable*      table_;
 
     BaseShape(const BaseShape& base) = delete;
+    BaseShape& operator=(const BaseShape& other) = delete;
 
   public:
     void finalize(FreeOp* fop);
@@ -404,23 +398,16 @@ class BaseShape : public gc::TenuredCell
     /* Not defined: BaseShapes must not be stack allocated. */
     ~BaseShape();
 
-    BaseShape& operator=(const BaseShape& other) {
-        clasp_ = other.clasp_;
-        flags = other.flags;
-        slotSpan_ = other.slotSpan_;
-        compartment_ = other.compartment_;
-        return *this;
-    }
-
     const Class* clasp() const { return clasp_; }
 
     bool isOwned() const { return !!(flags & OWNED_SHAPE); }
 
+    static void copyFromUnowned(BaseShape& dest, UnownedBaseShape& src);
     inline void adoptUnowned(UnownedBaseShape* other);
 
     void setOwned(UnownedBaseShape* unowned) {
         flags |= OWNED_SHAPE;
-        this->unowned_ = unowned;
+        unowned_ = unowned;
     }
 
     uint32_t getObjectFlags() const { return flags & OBJECT_FLAG_MASK; }
@@ -433,6 +420,7 @@ class BaseShape : public gc::TenuredCell
     void setSlotSpan(uint32_t slotSpan) { MOZ_ASSERT(isOwned()); slotSpan_ = slotSpan; }
 
     JSCompartment* compartment() const { return compartment_; }
+    JSCompartment* maybeCompartment() const { return compartment(); }
 
     /*
      * Lookup base shapes from the compartment's baseShapes table, adding if
@@ -457,7 +445,7 @@ class BaseShape : public gc::TenuredCell
 
     static inline ThingRootKind rootKind() { return THING_ROOT_BASE_SHAPE; }
 
-    void markChildren(JSTracer* trc);
+    void traceChildren(JSTracer* trc);
 
     void fixupAfterMovingGC() {}
 
@@ -472,24 +460,6 @@ class BaseShape : public gc::TenuredCell
 
 class UnownedBaseShape : public BaseShape {};
 
-inline void
-BaseShape::adoptUnowned(UnownedBaseShape* other)
-{
-    // This is a base shape owned by a dictionary object, update it to reflect the
-    // unowned base shape of a new last property.
-    MOZ_ASSERT(isOwned());
-
-    uint32_t span = slotSpan();
-    ShapeTable* table = &this->table();
-
-    *this = *other;
-    setOwned(other);
-    setTable(table);
-    setSlotSpan(span);
-
-    assertConsistency();
-}
-
 UnownedBaseShape*
 BaseShape::unowned()
 {
@@ -499,13 +469,15 @@ BaseShape::unowned()
 UnownedBaseShape*
 BaseShape::toUnowned()
 {
-    MOZ_ASSERT(!isOwned() && !unowned_); return static_cast<UnownedBaseShape*>(this);
+    MOZ_ASSERT(!isOwned() && !unowned_);
+    return static_cast<UnownedBaseShape*>(this);
 }
 
 UnownedBaseShape*
 BaseShape::baseUnowned()
 {
-    MOZ_ASSERT(isOwned() && unowned_); return unowned_;
+    MOZ_ASSERT(isOwned() && unowned_);
+    return unowned_;
 }
 
 /* Entries for the per-compartment baseShapes set of unowned base shapes. */
@@ -544,15 +516,6 @@ struct StackBaseShape : public DefaultHasher<ReadBarrieredUnownedBaseShape>
     static inline bool match(UnownedBaseShape* key, const Lookup& lookup);
 };
 
-inline
-BaseShape::BaseShape(const StackBaseShape& base)
-{
-    mozilla::PodZero(this);
-    this->clasp_ = base.clasp;
-    this->flags = base.flags;
-    this->compartment_ = base.compartment;
-}
-
 typedef HashSet<ReadBarrieredUnownedBaseShape,
                 StackBaseShape,
                 SystemAllocPolicy> BaseShapeSet;
@@ -563,12 +526,12 @@ class Shape : public gc::TenuredCell
     friend class ::JSObject;
     friend class ::JSFunction;
     friend class Bindings;
-    friend class Nursery;
     friend class NativeObject;
     friend class PropertyTree;
     friend class StaticBlockObject;
-    friend struct StackShape;
+    friend class TenuringTracer;
     friend struct StackBaseShape;
+    friend struct StackShape;
 
   protected:
     HeapPtrBaseShape    base_;
@@ -687,6 +650,7 @@ class Shape : public gc::TenuredCell
 
     const HeapPtrShape& previous() const { return parent; }
     JSCompartment* compartment() const { return base()->compartment(); }
+    JSCompartment* maybeCompartment() const { return compartment(); }
 
     template <AllowGC allowGC>
     class Range {
@@ -965,13 +929,13 @@ class Shape : public gc::TenuredCell
 
     static inline ThingRootKind rootKind() { return THING_ROOT_SHAPE; }
 
-    inline void markChildren(JSTracer* trc);
+    void traceChildren(JSTracer* trc);
 
     inline Shape* search(ExclusiveContext* cx, jsid id);
     inline Shape* searchLinear(jsid id);
 
     void fixupAfterMovingGC();
-    void fixupGetterSetterForBarrier(JSTracer *trc);
+    void fixupGetterSetterForBarrier(JSTracer* trc);
 
     /* For JIT usage */
     static inline size_t offsetOfBase() { return offsetof(Shape, base_); }
@@ -1245,7 +1209,7 @@ class ShapeGetterSetterRef : public gc::BufferableRef
 
   public:
     explicit ShapeGetterSetterRef(AccessorShape* shape) : shape_(shape) {}
-    void mark(JSTracer* trc) { shape_->fixupGetterSetterForBarrier(trc); }
+    void trace(JSTracer* trc) override { shape_->fixupGetterSetterForBarrier(trc); }
 };
 
 static inline void
@@ -1253,14 +1217,14 @@ GetterSetterWriteBarrierPost(AccessorShape* shape)
 {
     MOZ_ASSERT(shape);
     if (shape->hasGetterObject()) {
-        gc::StoreBuffer *sb = reinterpret_cast<gc::Cell*>(shape->getterObject())->storeBuffer();
+        gc::StoreBuffer* sb = reinterpret_cast<gc::Cell*>(shape->getterObject())->storeBuffer();
         if (sb) {
             sb->putGeneric(ShapeGetterSetterRef(shape));
             return;
         }
     }
     if (shape->hasSetterObject()) {
-        gc::StoreBuffer *sb = reinterpret_cast<gc::Cell*>(shape->setterObject())->storeBuffer();
+        gc::StoreBuffer* sb = reinterpret_cast<gc::Cell*>(shape->setterObject())->storeBuffer();
         if (sb) {
             sb->putGeneric(ShapeGetterSetterRef(shape));
             return;
@@ -1349,21 +1313,6 @@ Shape::searchLinear(jsid id)
     }
 
     return nullptr;
-}
-
-inline void
-Shape::markChildren(JSTracer* trc)
-{
-    TraceEdge(trc, &base_, "base");
-    TraceEdge(trc, &propidRef(), "propid");
-    if (parent)
-        TraceEdge(trc, &parent, "parent");
-
-    if (hasGetterObject())
-        TraceManuallyBarrieredEdge(trc, &asAccessorShape().getterObj, "getter");
-
-    if (hasSetterObject())
-        TraceManuallyBarrieredEdge(trc, &asAccessorShape().setterObj, "setter");
 }
 
 /*

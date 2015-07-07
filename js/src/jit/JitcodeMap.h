@@ -245,7 +245,7 @@ class JitcodeGlobalEntry
 
         struct SizedScriptList {
             uint32_t size;
-            ScriptNamePair pairs[0];
+            ScriptNamePair pairs[1];
             SizedScriptList(uint32_t sz, JSScript** scrs, char** strs) : size(sz) {
                 for (uint32_t i = 0; i < size; i++) {
                     pairs[i].script = scrs[i];
@@ -254,7 +254,7 @@ class JitcodeGlobalEntry
             }
 
             static uint32_t AllocSizeFor(uint32_t nscripts) {
-                return sizeof(SizedScriptList) + (nscripts * sizeof(ScriptNamePair));
+                return sizeof(SizedScriptList) + ((nscripts - 1) * sizeof(ScriptNamePair));
             }
         };
 
@@ -317,6 +317,8 @@ class JitcodeGlobalEntry
             }
             return -1;
         }
+
+        void* canonicalNativeAddrFor(JSRuntime*rt, void* ptr) const;
 
         bool callStackAtAddr(JSRuntime* rt, void* ptr, BytecodeLocationVector& results,
                              uint32_t* depth) const;
@@ -405,6 +407,8 @@ class JitcodeGlobalEntry
 
         void destroy();
 
+        void* canonicalNativeAddrFor(JSRuntime* rt, void* ptr) const;
+
         bool callStackAtAddr(JSRuntime* rt, void* ptr, BytecodeLocationVector& results,
                              uint32_t* depth) const;
 
@@ -437,6 +441,8 @@ class JitcodeGlobalEntry
 
         void destroy() {}
 
+        void* canonicalNativeAddrFor(JSRuntime* rt, void* ptr) const;
+
         bool callStackAtAddr(JSRuntime* rt, void* ptr, BytecodeLocationVector& results,
                              uint32_t* depth) const;
 
@@ -461,6 +467,10 @@ class JitcodeGlobalEntry
         }
 
         void destroy() {}
+
+        void* canonicalNativeAddrFor(JSRuntime* rt, void* ptr) const {
+            return nullptr;
+        }
 
         bool callStackAtAddr(JSRuntime* rt, void* ptr, BytecodeLocationVector& results,
                              uint32_t* depth) const
@@ -703,6 +713,22 @@ class JitcodeGlobalEntry
     const QueryEntry& queryEntry() const {
         MOZ_ASSERT(isQuery());
         return query_;
+    }
+
+    void* canonicalNativeAddrFor(JSRuntime* rt, void* ptr) const {
+        switch (kind()) {
+          case Ion:
+            return ionEntry().canonicalNativeAddrFor(rt, ptr);
+          case Baseline:
+            return baselineEntry().canonicalNativeAddrFor(rt, ptr);
+          case IonCache:
+            return ionCacheEntry().canonicalNativeAddrFor(rt, ptr);
+          case Dummy:
+            return dummyEntry().canonicalNativeAddrFor(rt, ptr);
+          default:
+            MOZ_CRASH("Invalid JitcodeGlobalEntry kind.");
+        }
+        return nullptr;
     }
 
     // Read the inline call stack at a given point in the native code and append into
@@ -1326,7 +1352,7 @@ class JitcodeIonTable
   private:
     /* Variable length payload section "below" here. */
     uint32_t numRegions_;
-    uint32_t regionOffsets_[0];
+    uint32_t regionOffsets_[1];
 
     const uint8_t* payloadEnd() const {
         return reinterpret_cast<const uint8_t*>(this);

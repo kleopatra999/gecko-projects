@@ -50,8 +50,6 @@ public:
   bool mIsInfinite;
 };
 
-struct NewLayerEntry;
-
 struct ContainerLayerParameters {
   ContainerLayerParameters()
     : mXScale(1)
@@ -192,8 +190,7 @@ public:
   static void Shutdown();
 
   void Init(nsDisplayListBuilder* aBuilder, LayerManager* aManager,
-            PaintedLayerData* aLayerData = nullptr,
-            ContainerState* aContainingContainerState = nullptr);
+            PaintedLayerData* aLayerData = nullptr);
 
   /**
    * Call this to notify that we have just started a transaction on the
@@ -674,11 +671,6 @@ public:
     return !mContainingPaintedLayer && mRetainingManager;
   }
 
-  ContainerState* GetContainingContainerState()
-  {
-    return mContainingContainerState;
-  }
-
   /**
    * Attempt to build the most compressed layer tree possible, even if it means
    * throwing away existing retained buffers.
@@ -729,8 +721,6 @@ protected:
    * inactive layer will be placed.
    */
   PaintedLayerData*                   mContainingPaintedLayer;
-
-  ContainerState*                     mContainingContainerState;
 
   /**
    * Saved generation counter so we can detect DOM changes.

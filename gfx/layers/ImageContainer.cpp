@@ -10,7 +10,7 @@
 #include "gfx2DGlue.h"
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "gfxUtils.h"                   // for gfxUtils
-#include "mozilla/RefPtr.h"             // for TemporaryRef
+#include "mozilla/RefPtr.h"             // for already_AddRefed
 #include "mozilla/ipc/CrossProcessMutex.h"  // for CrossProcessMutex, etc
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/ImageBridgeChild.h"  // for ImageBridgeChild
@@ -32,7 +32,6 @@
 #endif
 
 #ifdef XP_WIN
-#include "gfxD2DSurface.h"
 #include "gfxWindowsPlatform.h"
 #include <d3d10_1.h>
 #include "D3D9SurfaceImage.h"
@@ -138,7 +137,7 @@ BufferRecycleBin::GetBuffer(uint32_t aSize)
   return result;
 }
 
-ImageContainer::ImageContainer(int flag)
+ImageContainer::ImageContainer(ImageContainer::Mode flag)
 : mReentrantMonitor("ImageContainer.mReentrantMonitor"),
   mPaintCount(0),
   mPreviousImagePainted(false),
@@ -147,11 +146,24 @@ ImageContainer::ImageContainer(int flag)
   mCompositionNotifySink(nullptr),
   mImageClient(nullptr)
 {
-  if (flag == ENABLE_ASYNC && ImageBridgeChild::IsCreated()) {
+  if (ImageBridgeChild::IsCreated()) {
     // the refcount of this ImageClient is 1. we don't use a RefPtr here because the refcount
     // of this class must be done on the ImageBridge thread.
-    mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(CompositableType::IMAGE).take();
-    MOZ_ASSERT(mImageClient);
+    switch(flag) {
+      case SYNCHRONOUS:
+        break;
+      case ASYNCHRONOUS:
+        mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(CompositableType::IMAGE).take();
+        MOZ_ASSERT(mImageClient);
+        break;
+      case ASYNCHRONOUS_OVERLAY:
+        mImageClient = ImageBridgeChild::GetSingleton()->CreateImageClient(CompositableType::IMAGE_OVERLAY).take();
+        MOZ_ASSERT(mImageClient);
+        break;
+      default:
+        MOZ_ASSERT(false, "This flag is invalid.");
+        break;
+    }
   }
 }
 
@@ -280,7 +292,7 @@ ImageContainer::LockCurrentImage()
   return retval.forget();
 }
 
-TemporaryRef<gfx::SourceSurface>
+already_AddRefed<gfx::SourceSurface>
 ImageContainer::LockCurrentAsSourceSurface(gfx::IntSize *aSize, Image** aCurrentImage)
 {
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);
@@ -303,7 +315,7 @@ ImageContainer::UnlockCurrentImage()
 {
 }
 
-TemporaryRef<gfx::SourceSurface>
+already_AddRefed<gfx::SourceSurface>
 ImageContainer::GetCurrentAsSourceSurface(gfx::IntSize *aSize)
 {
   ReentrantMonitorAutoEnter mon(mReentrantMonitor);
@@ -454,11 +466,12 @@ PlanarYCbCrImage::AllocateAndGetNewBuffer(uint32_t aSize)
   return mBuffer;
 }
 
-TemporaryRef<gfx::SourceSurface>
+already_AddRefed<gfx::SourceSurface>
 PlanarYCbCrImage::GetAsSourceSurface()
 {
   if (mSourceSurface) {
-    return mSourceSurface.get();
+    RefPtr<gfx::SourceSurface> surface(mSourceSurface);
+    return surface.forget();
   }
 
   gfx::IntSize size(mSize);
@@ -475,7 +488,12 @@ PlanarYCbCrImage::GetAsSourceSurface()
     return nullptr;
   }
 
-  gfx::ConvertYCbCrToRGB(mData, format, size, surface->GetData(), surface->Stride());
+  DataSourceSurface::ScopedMap mapping(surface, DataSourceSurface::WRITE);
+  if (NS_WARN_IF(!mapping.IsMapped())) {
+    return nullptr;
+  }
+
+  gfx::ConvertYCbCrToRGB(mData, format, size, mapping.GetData(), mapping.GetStride());
 
   mSourceSurface = surface;
 

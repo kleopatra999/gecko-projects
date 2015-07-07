@@ -49,6 +49,8 @@
 #include "mozilla/plugins/PluginSurfaceParent.h"
 #include "nsClassHashtable.h"
 #include "nsHashKeys.h"
+#include "nsIWidget.h"
+#include "nsPluginNativeWindow.h"
 extern const wchar_t* kFlashFullscreenClass;
 #elif defined(MOZ_WIDGET_GTK)
 #include <gdk/gdk.h>
@@ -270,7 +272,7 @@ PluginInstanceParent::AnswerNPN_GetValue_NPNVnetscapeWindow(NativeWindowHandle* 
     HWND id;
 #elif defined(MOZ_X11)
     XID id;
-#elif defined(XP_MACOSX)
+#elif defined(XP_DARWIN)
     intptr_t id;
 #elif defined(ANDROID)
     // TODO: Need Android impl
@@ -1025,8 +1027,30 @@ PluginInstanceParent::NPP_SetWindow(const NPWindow* aWindow)
     window.colormap = ws_info->colormap;
 #endif
 
-    if (!CallNPP_SetWindow(window))
+    NPRemoteWindow childWindow;
+    if (!CallNPP_SetWindow(window, &childWindow)) {
         return NPERR_GENERIC_ERROR;
+    }
+
+#if defined(XP_WIN)
+    // If a child window is returned it means that we need to re-parent it.
+    if (childWindow.window) {
+        nsCOMPtr<nsIWidget> widget;
+        static_cast<const nsPluginNativeWindow*>(aWindow)->
+            GetPluginWidget(getter_AddRefs(widget));
+        if (widget) {
+            widget->SetNativeData(NS_NATIVE_CHILD_WINDOW,
+                                  static_cast<uintptr_t>(childWindow.window));
+        }
+
+        // Now it has got the correct parent, make sure it is visible.
+        // In subsequent calls to SetWindow these calls happen in the Child.
+        HWND childHWND = reinterpret_cast<HWND>(childWindow.window);
+        ShowWindow(childHWND, SW_SHOWNA);
+        SetWindowPos(childHWND, nullptr, 0, 0, window.width, window.height,
+                     SWP_NOZORDER | SWP_NOREPOSITION);
+    }
+#endif
 
     return NPERR_NO_ERROR;
 }
@@ -1119,7 +1143,7 @@ PluginInstanceParent::NPP_GetValue(NPPVariable aVariable,
 #endif
 
     default:
-        PR_LOG(GetPluginLog(), PR_LOG_WARNING,
+        MOZ_LOG(GetPluginLog(), LogLevel::Warning,
                ("In PluginInstanceParent::NPP_GetValue: Unhandled NPPVariable %i (%s)",
                 (int) aVariable, NPPVariableToString(aVariable)));
         return NPERR_GENERIC_ERROR;
@@ -1140,7 +1164,7 @@ PluginInstanceParent::NPP_SetValue(NPNVariable variable, void* value)
 
     default:
         NS_ERROR("Unhandled NPNVariable in NPP_SetValue");
-        PR_LOG(GetPluginLog(), PR_LOG_WARNING,
+        MOZ_LOG(GetPluginLog(), LogLevel::Warning,
                ("In PluginInstanceParent::NPP_SetValue: Unhandled NPNVariable %i (%s)",
                 (int) variable, NPNVariableToString(variable)));
         return NPERR_GENERIC_ERROR;
@@ -1419,6 +1443,12 @@ PluginInstanceParent::NPP_DestroyStream(NPStream* stream, NPReason reason)
                       FULLFUNCTION, (void*) stream, (int) reason));
 
     AStream* s = static_cast<AStream*>(stream->pdata);
+    if (!s) {
+        // The stream has already been deleted by other means.
+        // With async plugin init this could happen if async NPP_NewStream
+        // returns an error code.
+        return NPERR_NO_ERROR;
+    }
     if (s->IsBrowserStream()) {
         BrowserStreamParent* sp =
             static_cast<BrowserStreamParent*>(s);
@@ -1826,7 +1856,7 @@ PluginInstanceParent::SubclassPluginWindow(HWND aWnd)
         return;
     }
 
-    if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    if (XRE_IsContentProcess()) {
         if (!aWnd) {
             NS_WARNING("PluginInstanceParent::SubclassPluginWindow unexpected null window");
             return;
@@ -1856,7 +1886,7 @@ PluginInstanceParent::SubclassPluginWindow(HWND aWnd)
 void
 PluginInstanceParent::UnsubclassPluginWindow()
 {
-    if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    if (XRE_IsContentProcess()) {
         if (mPluginHWND) {
             // Remove 'this' from the plugin list safely
             nsAutoPtr<PluginInstanceParent> tmp;

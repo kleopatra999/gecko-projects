@@ -547,43 +547,6 @@ NS_IMETHODIMP nsPluginInstanceOwner::GetURL(const char *aURL,
   return rv;
 }
 
-NS_IMETHODIMP nsPluginInstanceOwner::ShowStatus(const char *aStatusMsg)
-{
-  nsresult  rv = NS_ERROR_FAILURE;
-
-  rv = this->ShowStatus(NS_ConvertUTF8toUTF16(aStatusMsg).get());
-
-  return rv;
-}
-
-NS_IMETHODIMP nsPluginInstanceOwner::ShowStatus(const char16_t *aStatusMsg)
-{
-  nsresult  rv = NS_ERROR_FAILURE;
-
-  if (!mPluginFrame) {
-    return rv;
-  }
-  nsCOMPtr<nsIDocShellTreeItem> docShellItem = mPluginFrame->PresContext()->GetDocShell();
-  if (NS_FAILED(rv) || !docShellItem) {
-    return rv;
-  }
-
-  nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
-  rv = docShellItem->GetTreeOwner(getter_AddRefs(treeOwner));
-  if (NS_FAILED(rv) || !treeOwner) {
-    return rv;
-  }
-
-  nsCOMPtr<nsIWebBrowserChrome> browserChrome(do_GetInterface(treeOwner, &rv));
-  if (NS_FAILED(rv) || !browserChrome) {
-    return rv;
-  }
-  rv = browserChrome->SetStatus(nsIWebBrowserChrome::STATUS_SCRIPT,
-                                aStatusMsg);
-
-  return rv;
-}
-
 NS_IMETHODIMP nsPluginInstanceOwner::GetDocument(nsIDocument* *aDocument)
 {
   nsCOMPtr<nsIContent> content = do_QueryReferent(mContent);
@@ -689,7 +652,7 @@ NS_IMETHODIMP nsPluginInstanceOwner::GetNetscapeWindow(void *value)
   // we only attempt to get the nearest window if this really is a "windowless" plugin so as not
   // to change any behaviour for the much more common windowed plugins,
   // though why this method would even be being called for a windowed plugin escapes me.
-  if (XRE_GetProcessType() != GeckoProcessType_Content &&
+  if (!XRE_IsContentProcess() &&
       mPluginWindow && mPluginWindow->type == NPWindowTypeDrawable) {
     // it turns out that flash also uses this window for determining focus, and is currently
     // unable to show a caret correctly if we return the enclosing window. Therefore for
@@ -745,13 +708,6 @@ NS_IMETHODIMP nsPluginInstanceOwner::SetEventModel(int32_t eventModel)
 #else
   return NS_ERROR_NOT_IMPLEMENTED;
 #endif
-}
-
-// This is no longer used, just leaving it here so we don't have to change
-// the nsIPluginInstanceOwner interface.
-NPError nsPluginInstanceOwner::ShowNativeContextMenu(NPMenu* menu, void* event)
-{
-  return NPERR_GENERIC_ERROR;
 }
 
 #ifdef XP_MACOSX
@@ -1759,9 +1715,9 @@ CocoaEventTypeForEvent(const WidgetGUIEvent& anEvent, nsIFrame* aObjectFrame)
   }
 
   switch (anEvent.message) {
-    case NS_MOUSE_ENTER_SYNTH:
+    case NS_MOUSE_OVER:
       return NPCocoaEventMouseEntered;
-    case NS_MOUSE_EXIT_SYNTH:
+    case NS_MOUSE_OUT:
       return NPCocoaEventMouseExited;
     case NS_MOUSE_MOVE:
     {
@@ -1803,8 +1759,8 @@ TranslateToNPCocoaEvent(WidgetGUIEvent* anEvent, nsIFrame* aObjectFrame)
       anEvent->message == NS_MOUSE_BUTTON_DOWN ||
       anEvent->message == NS_MOUSE_BUTTON_UP ||
       anEvent->message == NS_MOUSE_SCROLL ||
-      anEvent->message == NS_MOUSE_ENTER_SYNTH ||
-      anEvent->message == NS_MOUSE_EXIT_SYNTH)
+      anEvent->message == NS_MOUSE_OVER ||
+      anEvent->message == NS_MOUSE_OUT)
   {
     nsPoint pt = nsLayoutUtils::GetEventCoordinatesRelativeTo(anEvent, aObjectFrame) -
                  aObjectFrame->GetContentRectRelativeToSelf().TopLeft();
@@ -2059,8 +2015,8 @@ nsEventStatus nsPluginInstanceOwner::ProcessEvent(const WidgetGUIEvent& anEvent)
       NS_ASSERTION(anEvent.message == NS_MOUSE_BUTTON_DOWN ||
                    anEvent.message == NS_MOUSE_BUTTON_UP ||
                    anEvent.message == NS_MOUSE_DOUBLECLICK ||
-                   anEvent.message == NS_MOUSE_ENTER_SYNTH ||
-                   anEvent.message == NS_MOUSE_EXIT_SYNTH ||
+                   anEvent.message == NS_MOUSE_OVER ||
+                   anEvent.message == NS_MOUSE_OUT ||
                    anEvent.message == NS_MOUSE_MOVE,
                    "Incorrect event type for coordinate translation");
       nsPoint pt =
@@ -2145,11 +2101,11 @@ nsEventStatus nsPluginInstanceOwner::ProcessEvent(const WidgetGUIEvent& anEvent)
 
         switch (anEvent.message)
           {
-          case NS_MOUSE_ENTER_SYNTH:
-          case NS_MOUSE_EXIT_SYNTH:
+          case NS_MOUSE_OVER:
+          case NS_MOUSE_OUT:
             {
               XCrossingEvent& event = pluginEvent.xcrossing;
-              event.type = anEvent.message == NS_MOUSE_ENTER_SYNTH ?
+              event.type = anEvent.message == NS_MOUSE_OVER ?
                 EnterNotify : LeaveNotify;
               event.root = root;
               event.time = anEvent.time;
@@ -2884,7 +2840,7 @@ NS_IMETHODIMP nsPluginInstanceOwner::CreateWidget(void)
       parentWidget = nsContentUtils::WidgetForDocument(doc);
 #ifndef XP_MACOSX
       // If we're running in the content process, we need a remote widget created in chrome.
-      if (XRE_GetProcessType() == GeckoProcessType_Content) {
+      if (XRE_IsContentProcess()) {
         nsCOMPtr<nsIDOMWindow> window = doc->GetWindow();
         if (window) {
           nsCOMPtr<nsIDOMWindow> topWindow;
@@ -3006,7 +2962,7 @@ void nsPluginInstanceOwner::FixUpPluginWindow(int32_t inPaintState)
     mPluginWindow->clipRect.bottom = mPluginWindow->clipRect.top;
     mPluginWindow->clipRect.right  = mPluginWindow->clipRect.left;
   }
-  else if (XRE_GetProcessType() != GeckoProcessType_Default)
+  else if (!XRE_IsParentProcess())
   {
     // For e10s we only support async windowless plugin. This means that
     // we're always going to allocate a full window for the plugin to draw
@@ -3200,7 +3156,7 @@ nsPluginInstanceOwner::UpdateDocumentActiveState(bool aIsActive)
   // to be forwarded over after the active state is updated. If we
   // don't hide plugin widgets in hidden tabs, the native child window
   // in chrome will remain visible after a tab switch.
-  if (mWidget && XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (mWidget && XRE_IsContentProcess()) {
     mWidget->Show(aIsActive);
     mWidget->Enable(aIsActive);
   }

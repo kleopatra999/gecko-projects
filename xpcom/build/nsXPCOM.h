@@ -30,7 +30,7 @@ DECL_CLASS(nsIFile);
 DECL_CLASS(nsILocalFile);
 DECL_CLASS(nsIDirectoryServiceProvider);
 DECL_CLASS(nsIMemory);
-DECL_CLASS(nsIDebug);
+DECL_CLASS(nsIDebug2);
 
 #ifdef __cplusplus
 namespace mozilla {
@@ -163,6 +163,12 @@ XPCOM_API(nsresult) NS_NewNativeLocalFile(const nsACString& aPath,
 #endif
 
 /**
+ * Allocator functions for the standalone glue.
+ * Do not use outside the xpcom glue code.
+ * Use moz_xmalloc/moz_xrealloc/free, or new/delete instead.
+ */
+#ifdef XPCOM_GLUE
+/**
  * Allocates a block of memory of a particular size. If the memory cannot
  * be allocated (because of an out-of-memory condition), the process aborts.
  *
@@ -198,6 +204,11 @@ XPCOM_API(void*) NS_Realloc(void* aPtr, size_t aSize);
  * @note        This function is thread-safe.
  */
 XPCOM_API(void) NS_Free(void* aPtr);
+#else
+#define NS_Alloc moz_xmalloc
+#define NS_Realloc moz_xrealloc
+#define NS_Free free
+#endif
 
 /**
  * Support for warnings, assertions, and debugging breaks.
@@ -389,6 +400,6 @@ XPCOM_API(void) NS_CycleCollectorSuspect3(void* aPtr,
  */
 #define NS_XPCOM_CATEGORY_CLEARED_OBSERVER_ID "xpcom-category-cleared"
 
-XPCOM_API(nsresult) NS_GetDebug(nsIDebug** aResult);
+XPCOM_API(nsresult) NS_GetDebug(nsIDebug2** aResult);
 
 #endif

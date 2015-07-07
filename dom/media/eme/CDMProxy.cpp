@@ -56,27 +56,22 @@ CDMProxy::Init(PromiseId aPromiseId,
     nsCOMPtr<mozIGeckoMediaPluginService> mps =
       do_GetService("@mozilla.org/gecko-media-plugin-service;1");
     if (!mps) {
-      RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+      RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                    NS_LITERAL_CSTRING("Couldn't get MediaPluginService in CDMProxy::Init"));
       return;
     }
     mps->GetThread(getter_AddRefs(mGMPThread));
     if (!mGMPThread) {
-      RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+      RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                    NS_LITERAL_CSTRING("Couldn't get GMP thread CDMProxy::Init"));
       return;
     }
-    bool hasPlugin;
-    nsTArray<nsCString> tags;
-    tags.AppendElement(NS_ConvertUTF16toUTF8(mKeySystem));
-    nsresult rv = mps->GetPluginVersionForAPI(NS_LITERAL_CSTRING(GMP_API_DECRYPTOR),
-                                              &tags, &hasPlugin, pluginVersion);
-    NS_ENSURE_SUCCESS_VOID(rv);
   }
 
   nsAutoPtr<InitData> data(new InitData());
   data->mPromiseId = aPromiseId;
   data->mOrigin = aOrigin;
   data->mTopLevelOrigin = aTopLevelOrigin;
-  data->mPluginVersion = pluginVersion;
   data->mInPrivateBrowsing = aInPrivateBrowsing;
   nsCOMPtr<nsIRunnable> task(
     NS_NewRunnableMethodWithArg<nsAutoPtr<InitData>>(this,
@@ -97,11 +92,17 @@ void
 CDMProxy::gmp_InitDone(GMPDecryptorProxy* aCDM, nsAutoPtr<InitData>&& aData)
 {
   EME_LOG("CDMProxy::gmp_InitDone");
-  if (!aCDM || mShutdownCalled) {
+  if (mShutdownCalled) {
     if (aCDM) {
       aCDM->Close();
     }
-    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("CDMProxy was shut down before init could complete"));
+    return;
+  }
+  if (!aCDM) {
+    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("GetGMPDecryptor failed to return a CDM"));
     return;
   }
 
@@ -163,7 +164,8 @@ CDMProxy::gmp_Init(nsAutoPtr<InitData>&& aData)
   nsCOMPtr<mozIGeckoMediaPluginService> mps =
     do_GetService("@mozilla.org/gecko-media-plugin-service;1");
   if (!mps) {
-    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Couldn't get MediaPluginService in CDMProxy::gmp_Init"));
     return;
   }
 
@@ -175,10 +177,10 @@ CDMProxy::gmp_Init(nsAutoPtr<InitData>&& aData)
   nsresult rv = mps->GetNodeId(data.mOrigin,
                                data.mTopLevelOrigin,
                                data.mInPrivateBrowsing,
-                               data.mPluginVersion,
                                Move(callback));
   if (NS_FAILED(rv)) {
-    RejectPromise(data.mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(data.mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Call to GetNodeId() failed early"));
   }
 }
 
@@ -189,7 +191,8 @@ CDMProxy::gmp_InitGetGMPDecryptor(nsresult aResult,
 {
   uint32_t promiseID = aData->mPromiseId;
   if (NS_FAILED(aResult)) {
-    RejectPromise(promiseID, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(promiseID, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("GetNodeId() called back, but with a failure result"));
     return;
   }
 
@@ -199,7 +202,8 @@ CDMProxy::gmp_InitGetGMPDecryptor(nsresult aResult,
   nsCOMPtr<mozIGeckoMediaPluginService> mps =
     do_GetService("@mozilla.org/gecko-media-plugin-service;1");
   if (!mps) {
-    RejectPromise(promiseID, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(promiseID, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Couldn't get MediaPluginService in CDMProxy::gmp_InitGetGMPDecryptor"));
     return;
   }
 
@@ -216,7 +220,8 @@ CDMProxy::gmp_InitGetGMPDecryptor(nsresult aResult,
                                                                        Move(aData)));
   nsresult rv = mps->GetGMPDecryptor(&tags, GetNodeId(), Move(callback));
   if (NS_FAILED(rv)) {
-    RejectPromise(promiseID, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(promiseID, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Call to GetGMPDecryptor() failed early"));
   }
 }
 
@@ -232,7 +237,8 @@ CDMProxy::OnCDMCreated(uint32_t aPromiseId)
     mKeys->OnCDMCreated(aPromiseId, GetNodeId(), mCDM->GetPluginId());
   } else {
     // No CDM? Just reject the promise.
-    mKeys->RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    mKeys->RejectPromise(aPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                         NS_LITERAL_CSTRING("Null CDM in OnCDMCreated()"));
   }
 }
 
@@ -272,7 +278,8 @@ CDMProxy::gmp_CreateSession(nsAutoPtr<CreateSessionData> aData)
 {
   MOZ_ASSERT(IsOnGMPThread());
   if (!mCDM) {
-    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Null CDM in gmp_CreateSession"));
     return;
   }
   mCDM->CreateSession(aData->mCreateSessionToken,
@@ -303,7 +310,8 @@ CDMProxy::gmp_LoadSession(nsAutoPtr<SessionOpData> aData)
   MOZ_ASSERT(IsOnGMPThread());
 
   if (!mCDM) {
-    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Null CDM in gmp_LoadSession"));
     return;
   }
   mCDM->LoadSession(aData->mPromiseId, aData->mSessionId);
@@ -329,7 +337,8 @@ CDMProxy::gmp_SetServerCertificate(nsAutoPtr<SetServerCertificateData> aData)
 {
   MOZ_ASSERT(IsOnGMPThread());
   if (!mCDM) {
-    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Null CDM in gmp_SetServerCertificate"));
     return;
   }
   mCDM->SetServerCertificate(aData->mPromiseId, aData->mCert);
@@ -358,7 +367,8 @@ CDMProxy::gmp_UpdateSession(nsAutoPtr<UpdateSessionData> aData)
 {
   MOZ_ASSERT(IsOnGMPThread());
   if (!mCDM) {
-    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Null CDM in gmp_UpdateSession"));
     return;
   }
   mCDM->UpdateSession(aData->mPromiseId,
@@ -386,7 +396,8 @@ CDMProxy::gmp_CloseSession(nsAutoPtr<SessionOpData> aData)
 {
   MOZ_ASSERT(IsOnGMPThread());
   if (!mCDM) {
-    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Null CDM in gmp_CloseSession"));
     return;
   }
   mCDM->CloseSession(aData->mPromiseId, aData->mSessionId);
@@ -412,7 +423,8 @@ CDMProxy::gmp_RemoveSession(nsAutoPtr<SessionOpData> aData)
 {
   MOZ_ASSERT(IsOnGMPThread());
   if (!mCDM) {
-    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR);
+    RejectPromise(aData->mPromiseId, NS_ERROR_DOM_INVALID_STATE_ERR,
+                  NS_LITERAL_CSTRING("Null CDM in gmp_RemoveSession"));
     return;
   }
   mCDM->RemoveSession(aData->mPromiseId, aData->mSessionId);
@@ -440,7 +452,7 @@ CDMProxy::gmp_Shutdown()
   // Abort any pending decrypt jobs, to awaken any clients waiting on a job.
   for (size_t i = 0; i < mDecryptionJobs.Length(); i++) {
     DecryptJob* job = mDecryptionJobs[i];
-    job->mClient->Decrypted(GMPAbortedErr, nullptr);
+    job->PostResult(GMPAbortedErr);
   }
   mDecryptionJobs.Clear();
 
@@ -451,14 +463,16 @@ CDMProxy::gmp_Shutdown()
 }
 
 void
-CDMProxy::RejectPromise(PromiseId aId, nsresult aCode)
+CDMProxy::RejectPromise(PromiseId aId, nsresult aCode,
+                        const nsCString& aReason)
 {
   if (NS_IsMainThread()) {
     if (!mKeys.IsNull()) {
-      mKeys->RejectPromise(aId, aCode);
+      mKeys->RejectPromise(aId, aCode, aReason);
     }
   } else {
-    nsCOMPtr<nsIRunnable> task(new RejectPromiseTask(this, aId, aCode));
+    nsCOMPtr<nsIRunnable> task(new RejectPromiseTask(this, aId, aCode,
+                                                     aReason));
     NS_DispatchToMainThread(task);
   }
 }
@@ -605,11 +619,10 @@ CDMProxy::OnSessionError(const nsAString& aSessionId,
 void
 CDMProxy::OnRejectPromise(uint32_t aPromiseId,
                           nsresult aDOMException,
-                          const nsAString& aMsg)
+                          const nsCString& aMsg)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  RejectPromise(aPromiseId, aDOMException);
-  LogToConsole(aMsg);
+  RejectPromise(aPromiseId, aDOMException, aMsg);
 }
 
 const nsString&
@@ -623,25 +636,25 @@ CDMProxy::Capabilites() {
   return mCapabilites;
 }
 
-void
-CDMProxy::Decrypt(MediaRawData* aSample,
-                  DecryptionClient* aClient)
+nsRefPtr<CDMProxy::DecryptPromise>
+CDMProxy::Decrypt(MediaRawData* aSample)
 {
-  nsAutoPtr<DecryptJob> job(new DecryptJob(aSample, aClient));
+  nsRefPtr<DecryptJob> job(new DecryptJob(aSample));
+  nsRefPtr<DecryptPromise> promise(job->Ensure());
+
   nsCOMPtr<nsIRunnable> task(
-    NS_NewRunnableMethodWithArg<nsAutoPtr<DecryptJob>>(this, &CDMProxy::gmp_Decrypt, job));
+    NS_NewRunnableMethodWithArg<nsRefPtr<DecryptJob>>(this, &CDMProxy::gmp_Decrypt, job));
   mGMPThread->Dispatch(task, NS_DISPATCH_NORMAL);
+  return promise;
 }
 
 void
-CDMProxy::gmp_Decrypt(nsAutoPtr<DecryptJob> aJob)
+CDMProxy::gmp_Decrypt(nsRefPtr<DecryptJob> aJob)
 {
   MOZ_ASSERT(IsOnGMPThread());
-  MOZ_ASSERT(aJob->mClient);
-  MOZ_ASSERT(aJob->mSample);
 
   if (!mCDM) {
-    aJob->mClient->Decrypted(GMPAbortedErr, nullptr);
+    aJob->PostResult(GMPAbortedErr);
     return;
   }
 
@@ -658,34 +671,54 @@ CDMProxy::gmp_Decrypted(uint32_t aId,
                         const nsTArray<uint8_t>& aDecryptedData)
 {
   MOZ_ASSERT(IsOnGMPThread());
+#ifdef DEBUG
+  bool jobIdFound = false;
+#endif
   for (size_t i = 0; i < mDecryptionJobs.Length(); i++) {
     DecryptJob* job = mDecryptionJobs[i];
     if (job->mId == aId) {
-      if (aDecryptedData.Length() != job->mSample->mSize) {
-        NS_WARNING("CDM returned incorrect number of decrypted bytes");
-      }
-      if (GMP_SUCCEEDED(aResult)) {
-        nsAutoPtr<MediaRawDataWriter> writer(job->mSample->CreateWriter());
-        PodCopy(writer->mData,
-                aDecryptedData.Elements(),
-                std::min<size_t>(aDecryptedData.Length(), job->mSample->mSize));
-        job->mClient->Decrypted(GMPNoErr, job->mSample);
-      } else if (aResult == GMPNoKeyErr) {
-        NS_WARNING("CDM returned GMPNoKeyErr");
-        // We still have the encrypted sample, so we can re-enqueue it to be
-        // decrypted again once the key is usable again.
-        job->mClient->Decrypted(GMPNoKeyErr, job->mSample);
-      } else {
-        nsAutoCString str("CDM returned decode failure GMPErr=");
-        str.AppendInt(aResult);
-        NS_WARNING(str.get());
-        job->mClient->Decrypted(aResult, nullptr);
-      }
+#ifdef DEBUG
+      jobIdFound = true;
+#endif
+      job->PostResult(aResult, aDecryptedData);
       mDecryptionJobs.RemoveElementAt(i);
-      return;
     }
   }
-  NS_WARNING("GMPDecryptorChild returned incorrect job ID");
+#ifdef DEBUG
+  if (!jobIdFound) {
+    NS_WARNING("GMPDecryptorChild returned incorrect job ID");
+  }
+#endif
+}
+
+void
+CDMProxy::DecryptJob::PostResult(GMPErr aResult)
+{
+  nsTArray<uint8_t> empty;
+  PostResult(aResult, empty);
+}
+
+void
+CDMProxy::DecryptJob::PostResult(GMPErr aResult, const nsTArray<uint8_t>& aDecryptedData)
+{
+  if (aDecryptedData.Length() != mSample->mSize) {
+    NS_WARNING("CDM returned incorrect number of decrypted bytes");
+  }
+  if (GMP_SUCCEEDED(aResult)) {
+    nsAutoPtr<MediaRawDataWriter> writer(mSample->CreateWriter());
+    PodCopy(writer->mData,
+            aDecryptedData.Elements(),
+            std::min<size_t>(aDecryptedData.Length(), mSample->mSize));
+  } else if (aResult == GMPNoKeyErr) {
+    NS_WARNING("CDM returned GMPNoKeyErr");
+    // We still have the encrypted sample, so we can re-enqueue it to be
+    // decrypted again once the key is usable again.
+  } else {
+    nsAutoCString str("CDM returned decode failure GMPErr=");
+    str.AppendInt(aResult);
+    NS_WARNING(str.get());
+  }
+  mPromise.Resolve(DecryptResult(aResult, mSample), __func__);
 }
 
 void

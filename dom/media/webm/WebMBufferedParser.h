@@ -12,10 +12,6 @@
 
 namespace mozilla {
 
-namespace dom {
-class TimeRanges;
-}
-
 // Stores a stream byte offset and the scaled timecode of the block at
 // that offset.
 struct WebMTimeDataOffset
@@ -232,7 +228,7 @@ public:
     MOZ_COUNT_CTOR(WebMBufferedState);
   }
 
-  void NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset);
+  void NotifyDataArrived(const unsigned char* aBuffer, uint32_t aLength, int64_t aOffset);
   bool CalculateBufferedForRange(int64_t aStartOffset, int64_t aEndOffset,
                                  uint64_t* aStartTime, uint64_t* aEndTime);
 

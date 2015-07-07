@@ -4,6 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+'use strict';
+
 const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
@@ -320,8 +322,8 @@ XPCOMUtils.defineLazyGetter(this, "gOSVersion", function aus_gOSVersion() {
             winVer.dwOSVersionInfoSize = OSVERSIONINFOEXW.size;
 
             if(0 !== GetVersionEx(winVer.address())) {
-              osVersion += "." + winVer.wServicePackMajor
-                        +  "." + winVer.wServicePackMinor;
+              osVersion += "." + winVer.wServicePackMajor +
+                           "." + winVer.wServicePackMinor;
             } else {
               LOG("gOSVersion - Unknown failure in GetVersionEX (returned 0)");
               osVersion += ".unknown";
@@ -493,34 +495,34 @@ function hasUpdateMutex() {
   return !!gUpdateMutexHandle;
 }
 
-XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpdates() {
+function getCanApplyUpdates() {
   let useService = false;
-  if (shouldUseService() && isServiceInstalled()) {
+  if (shouldUseService()) {
     // No need to perform directory write checks, the maintenance service will
     // be able to write to all directories.
-    LOG("gCanApplyUpdates - bypass the write checks because we'll use the service");
+    LOG("getCanApplyUpdates - bypass the write checks because we'll use the service");
     useService = true;
   }
 
   if (!useService) {
     try {
       let updateTestFile = getUpdateFile([FILE_PERMS_TEST]);
-      LOG("gCanApplyUpdates - testing write access " + updateTestFile.path);
+      LOG("getCanApplyUpdates - testing write access " + updateTestFile.path);
       testWriteAccess(updateTestFile, false);
       if (AppConstants.platform == "macosx") {
         // Check that the application bundle can be written to.
         let appDirTestFile = getAppBaseDir();
         appDirTestFile.append(FILE_PERMS_TEST);
-        LOG("gCanApplyUpdates - testing write access " + appDirTestFile.path);
+        LOG("getCanApplyUpdates - testing write access " + appDirTestFile.path);
         if (appDirTestFile.exists()) {
-          appDirTestFile.remove(false)
+          appDirTestFile.remove(false);
         }
         appDirTestFile.create(Ci.nsILocalFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
         appDirTestFile.remove(false);
       } else if (AppConstants.platform == "win") {
         // Example windowsVersion:  Windows XP == 5.1
         let windowsVersion = Services.sysinfo.getProperty("version");
-        LOG("gCanApplyUpdates - windowsVersion = " + windowsVersion);
+        LOG("getCanApplyUpdates - windowsVersion = " + windowsVersion);
 
       /**
        * For Vista, updates can be performed to a location requiring admin
@@ -543,13 +545,13 @@ XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpda
             // appDir is under Program Files, so check if the user can elevate
             userCanElevate = Services.appinfo.QueryInterface(Ci.nsIWinAppHelper).
                              userCanElevate;
-            LOG("gCanApplyUpdates - on Vista, userCanElevate: " + userCanElevate);
+            LOG("getCanApplyUpdates - on Vista, userCanElevate: " + userCanElevate);
           }
           catch (ex) {
             // When the installation directory is not under Program Files,
             // fall through to checking if write access to the
             // installation directory is available.
-            LOG("gCanApplyUpdates - on Vista, appDir is not under Program Files");
+            LOG("getCanApplyUpdates - on Vista, appDir is not under Program Files");
           }
         }
 
@@ -577,21 +579,59 @@ XPCOMUtils.defineLazyGetter(this, "gCanApplyUpdates", function aus_gCanApplyUpda
           // if we're unable to create the test file this will throw an exception.
           let appDirTestFile = getAppBaseDir();
           appDirTestFile.append(FILE_PERMS_TEST);
-          LOG("gCanApplyUpdates - testing write access " + appDirTestFile.path);
-          if (appDirTestFile.exists())
-            appDirTestFile.remove(false)
+          LOG("getCanApplyUpdates - testing write access " + appDirTestFile.path);
+          if (appDirTestFile.exists()) {
+            appDirTestFile.remove(false);
+          }
           appDirTestFile.create(Ci.nsILocalFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
           appDirTestFile.remove(false);
         }
       }
     } catch (e) {
-       LOG("gCanApplyUpdates - unable to apply updates. Exception: " + e);
+       LOG("getCanApplyUpdates - unable to apply updates. Exception: " + e);
       // No write privileges to install directory
       return false;
     }
   } // if (!useService)
 
-  LOG("gCanApplyUpdates - able to apply updates");
+  LOG("getCanApplyUpdates - able to apply updates");
+  return true;
+}
+
+/**
+ * Whether or not the application can stage an update for the current session.
+ * These checks are only performed once per session due to using a lazy getter.
+ *
+ * @return true if updates can be staged for this session.
+ */
+XPCOMUtils.defineLazyGetter(this, "gCanStageUpdatesSession",
+                            function aus_gCanStageUpdatesSession() {
+  try {
+    let updateTestFile = getInstallDirRoot();
+    updateTestFile.append(FILE_PERMS_TEST);
+    LOG("gCanStageUpdatesSession - testing write access " +
+        updateTestFile.path);
+    testWriteAccess(updateTestFile, true);
+    if (AppConstants.platform != "macosx") {
+      // On all platforms except Mac, we need to test the parent directory as
+      // well, as we need to be able to move files in that directory during the
+      // replacing step.
+      updateTestFile = getInstallDirRoot().parent;
+      updateTestFile.append(FILE_PERMS_TEST);
+      LOG("gCanStageUpdatesSession - testing write access " +
+          updateTestFile.path);
+      updateTestFile.createUnique(Ci.nsILocalFile.DIRECTORY_TYPE,
+                                  FileUtils.PERMS_DIRECTORY);
+      updateTestFile.remove(false);
+    }
+  } catch (e) {
+     LOG("gCanStageUpdatesSession - unable to stage updates. Exception: " +
+         e);
+    // No write privileges
+    return false;
+  }
+
+  LOG("gCanStageUpdatesSession - able to stage updates");
   return true;
 });
 
@@ -608,16 +648,18 @@ function getCanStageUpdates() {
     return false;
   }
 
+  if (AppConstants.platform == "win" && shouldUseService()) {
+    // No need to perform directory write checks, the maintenance service will
+    // be able to write to all directories.
+    LOG("getCanStageUpdates - able to stage updates using the service");
+    return true;
+  }
+
   // For Gonk, the updater will remount the /system partition to move staged
-  // files into place and it uses the app.update.service.enabled preference for
-  // this purpose.
-  if (AppConstants.platform == "win" || AppConstants.platform == "gonk") {
-    if (getPref("getBoolPref", PREF_APP_UPDATE_SERVICE_ENABLED, false)) {
-      // No need to perform directory write checks, the maintenance service will
-      // be able to write to all directories.
-      LOG("getCanStageUpdates - able to stage updates because we'll use the service");
-      return true;
-    }
+  // files into place.
+  if (AppConstants.platform == "gonk") {
+    LOG("getCanStageUpdates - able to stage updates because this is gonk");
+    return true;
   }
 
   if (!hasUpdateMutex()) {
@@ -627,43 +669,7 @@ function getCanStageUpdates() {
     return false;
   }
 
-  /**
-   * Whether or not the application can stage an update for the current session.
-   * These checks are only performed once per session due to using a lazy getter.
-   *
-   * @return true if updates can be staged for this session.
-   */
-  XPCOMUtils.defineLazyGetter(this, "canStageUpdatesSession", function canStageUpdatesSession() {
-    try {
-      var updateTestFile = getInstallDirRoot();
-      updateTestFile.append(FILE_PERMS_TEST);
-      LOG("canStageUpdatesSession - testing write access " +
-          updateTestFile.path);
-      testWriteAccess(updateTestFile, true);
-      if (AppConstants.platform != "macosx") {
-        // On all platforms except Mac, we need to test the parent directory as
-        // well, as we need to be able to move files in that directory during the
-        // replacing step.
-        updateTestFile = getInstallDirRoot().parent;
-        updateTestFile.append(FILE_PERMS_TEST);
-        LOG("canStageUpdatesSession - testing write access " +
-            updateTestFile.path);
-        updateTestFile.createUnique(Ci.nsILocalFile.DIRECTORY_TYPE,
-                                    FileUtils.PERMS_DIRECTORY);
-        updateTestFile.remove(false);
-      }
-    } catch (e) {
-       LOG("canStageUpdatesSession - unable to stage updates. Exception: " +
-           e);
-      // No write privileges
-      return false;
-    }
-
-    LOG("canStageUpdatesSession - able to stage updates");
-    return true;
-  });
-
-  return canStageUpdatesSession;
+  return gCanStageUpdatesSession;
 }
 
 XPCOMUtils.defineLazyGetter(this, "gCanCheckForUpdates", function aus_gCanCheckForUpdates() {
@@ -1018,13 +1024,12 @@ function releaseSDCardMountLock() {
 
 /**
  * Determines if the service should be used to attempt an update
- * or not.  For now this is only when PREF_APP_UPDATE_SERVICE_ENABLED
- * is true and we have Firefox.
+ * or not.
  *
  * @return  true if the service should be used for updates.
  */
 function shouldUseService() {
-  if (AppConstants.MOZ_MAINTENANCE_SERVICE) {
+  if (AppConstants.MOZ_MAINTENANCE_SERVICE && isServiceInstalled()) {
     return getPref("getBoolPref",
                    PREF_APP_UPDATE_SERVICE_ENABLED, false);
   }
@@ -1117,8 +1122,9 @@ function cleanUpMozUpdaterDirs() {
  */
 function cleanUpUpdatesDir(aBackgroundUpdate) {
   // Bail out if we don't have appropriate permissions
+  let updateDir;
   try {
-    var updateDir = getUpdatesDir();
+    updateDir = getUpdatesDir();
   } catch (e) {
     return;
   }
@@ -1201,18 +1207,20 @@ function cleanupActiveUpdate() {
  * the application directory.
  */
 function getLocale() {
-  if (gLocale)
+  if (gLocale) {
     return gLocale;
+  }
 
+  let channel;
   for (let res of ['app', 'gre']) {
-    var channel = Services.io.newChannel2("resource://" + res + "/" + FILE_UPDATE_LOCALE,
-                                          null,
-                                          null,
-                                          null,      // aLoadingNode
-                                          Services.scriptSecurityManager.getSystemPrincipal(),
-                                          null,      // aTriggeringPrincipal
-                                          Ci.nsILoadInfo.SEC_NORMAL,
-                                          Ci.nsIContentPolicy.TYPE_DATAREQUEST);
+    channel = Services.io.newChannel2("resource://" + res + "/" + FILE_UPDATE_LOCALE,
+                                      null,
+                                      null,
+                                      null,      // aLoadingNode
+                                      Services.scriptSecurityManager.getSystemPrincipal(),
+                                      null,      // aTriggeringPrincipal
+                                      Ci.nsILoadInfo.SEC_NORMAL,
+                                      Ci.nsIContentPolicy.TYPE_DATAREQUEST);
     try {
       var inputStream = channel.open();
       gLocale = readStringFromInputStream(inputStream);
@@ -1277,7 +1285,7 @@ ArrayEnumerator.prototype = {
  * written to the file.  This function only works with ASCII text.
  */
 function writeStringToFile(file, text) {
-  var fos = FileUtils.openSafeFileOutputStream(file)
+  let fos = FileUtils.openSafeFileOutputStream(file);
   text += "\n";
   fos.write(text, text.length);
   FileUtils.closeSafeFileOutputStream(fos);
@@ -1346,8 +1354,9 @@ function handleUpdateFailure(update, errorCode) {
     Services.prefs.setIntPref(PREF_APP_UPDATE_CANCELATIONS, cancelations);
     return true;
   }
-  if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_SERVICE_ERRORS)) {
-    Services.prefs.clearUserPref(PREF_APP_UPDATE_SERVICE_ERRORS);
+
+  if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_CANCELATIONS)) {
+    Services.prefs.clearUserPref(PREF_APP_UPDATE_CANCELATIONS);
   }
 
   // Replace with Array.prototype.includes when it has stabilized.
@@ -1373,6 +1382,11 @@ function handleUpdateFailure(update, errorCode) {
     writeStatusFile(getUpdatesDir(), update.state = STATE_PENDING);
     return true;
   }
+
+  if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_SERVICE_ERRORS)) {
+    Services.prefs.clearUserPref(PREF_APP_UPDATE_SERVICE_ERRORS);
+  }
+
   return false;
 }
 
@@ -1518,7 +1532,7 @@ UpdatePatch.prototype = {
     }
     patch.setAttribute("state", this.state);
 
-    for (var p in this._properties) {
+    for (let p in this._properties) {
       if (this._properties[p].present) {
         patch.setAttribute(p, this._properties[p].data);
       }
@@ -1625,8 +1639,9 @@ function Update(update) {
   }
 
   const ELEMENT_NODE = Ci.nsIDOMNode.ELEMENT_NODE;
-  for (var i = 0; i < update.childNodes.length; ++i) {
-    var patchElement = update.childNodes.item(i);
+  let patch;
+  for (let i = 0; i < update.childNodes.length; ++i) {
+    let patchElement = update.childNodes.item(i);
     if (patchElement.nodeType != ELEMENT_NODE ||
         patchElement.localName != "patch") {
       continue;
@@ -1634,7 +1649,7 @@ function Update(update) {
 
     patchElement.QueryInterface(Ci.nsIDOMElement);
     try {
-      var patch = new UpdatePatch(patchElement);
+      patch = new UpdatePatch(patchElement);
     } catch (e) {
       continue;
     }
@@ -1662,7 +1677,7 @@ function Update(update) {
   // equal 0.
   this.installDate = (new Date()).getTime();
 
-  for (var i = 0; i < update.attributes.length; ++i) {
+  for (let i = 0; i < update.attributes.length; ++i) {
     var attr = update.attributes.item(i);
     attr.QueryInterface(Ci.nsIDOMAttr);
     if (attr.value == "undefined") {
@@ -1863,7 +1878,7 @@ Update.prototype = {
     }
     updates.documentElement.appendChild(update);
 
-    for (var p in this._properties) {
+    for (let p in this._properties) {
       if (this._properties[p].present) {
         update.setAttribute(p, this._properties[p].data);
       }
@@ -1903,8 +1918,9 @@ Update.prototype = {
    */
   get enumerator() {
     var properties = [];
-    for (var p in this._properties)
+    for (let p in this._properties) {
       properties.push(this._properties[p].data);
+    }
     return new ArrayEnumerator(properties);
   },
 
@@ -2096,7 +2112,7 @@ UpdateService.prototype = {
           "state");
       if (update && update.state != STATE_SUCCEEDED) {
         // Resume download
-        var status = this.downloadUpdate(update, true);
+        status = this.downloadUpdate(update, true);
         if (status == STATE_NONE)
           cleanupActiveUpdate();
       }
@@ -2169,7 +2185,7 @@ UpdateService.prototype = {
       update = new Update(null);
     }
 
-    var prompter = Cc["@mozilla.org/updates/update-prompt;1"].
+    let prompter = Cc["@mozilla.org/updates/update-prompt;1"].
                    createInstance(Ci.nsIUpdatePrompt);
 
     update.state = status;
@@ -2274,6 +2290,8 @@ UpdateService.prototype = {
       Services.prefs.setIntPref(PREF_APP_UPDATE_CERT_ERRORS, errCount);
       maxErrors = getPref("getIntPref", PREF_APP_UPDATE_CERT_MAXERRORS, 5);
     } else {
+      // Send the actual error code to telemetry
+      AUSTLMY.pingCheckExError(this._pingSuffix, update.errorCode);
       update.errorCode = BACKGROUNDCHECK_MULTIPLE_FAILURES;
       errCount = getPref("getIntPref", PREF_APP_UPDATE_BACKGROUNDERRORS, 0);
       errCount++;
@@ -2284,7 +2302,7 @@ UpdateService.prototype = {
 
     let checkCode;
     if (errCount >= maxErrors) {
-      var prompter = Cc["@mozilla.org/updates/update-prompt;1"].
+      let prompter = Cc["@mozilla.org/updates/update-prompt;1"].
                      createInstance(Ci.nsIUpdatePrompt);
       prompter.showUpdateError(update);
 
@@ -2297,7 +2315,6 @@ UpdateService.prototype = {
           break;
         default:
           checkCode = AUSTLMY.CHK_GENERAL_ERROR_PROMPT;
-          AUSTLMY.pingCheckExError(this._pingSuffix, update.errorCode);
       }
     } else {
       switch (update.errorCode) {
@@ -2309,7 +2326,6 @@ UpdateService.prototype = {
           break;
         default:
           checkCode = AUSTLMY.CHK_GENERAL_ERROR_SILENT;
-          AUSTLMY.pingCheckExError(this._pingSuffix, update.errorCode);
       }
     }
     AUSTLMY.pingCheckCode(this._pingSuffix, checkCode);
@@ -2319,7 +2335,7 @@ UpdateService.prototype = {
    * Called when a connection should be resumed
    */
   _attemptResume: function AUS_attemptResume() {
-    LOG("UpdateService:_attemptResume")
+    LOG("UpdateService:_attemptResume");
     // If a download is in progress, then resume it.
     if (this._downloader && this._downloader._patch &&
         this._downloader._patch.state == STATE_DOWNLOADING &&
@@ -2380,7 +2396,7 @@ UpdateService.prototype = {
     // UPDATE_UNABLE_TO_APPLY_EXTERNAL
     // UPDATE_UNABLE_TO_APPLY_NOTIFY
     AUSTLMY.pingGeneric("UPDATE_UNABLE_TO_APPLY_" + this._pingSuffix,
-                        gCanApplyUpdates, true);
+                        getCanApplyUpdates(), true);
     // Histogram IDs:
     // UPDATE_CANNOT_STAGE_EXTERNAL
     // UPDATE_CANNOT_STAGE_NOTIFY
@@ -2630,7 +2646,7 @@ UpdateService.prototype = {
       return;
     }
 
-    if (!gCanApplyUpdates) {
+    if (!getCanApplyUpdates()) {
       LOG("UpdateService:_selectAndInstallUpdate - the user is unable to " +
           "apply updates... prompting");
       this._showPrompt(update);
@@ -2684,9 +2700,10 @@ UpdateService.prototype = {
       // Do not prompt regardless of add-on incompatibilities
       LOG("UpdateService:_selectAndInstallUpdate - add-on compatibility " +
           "check disabled by preference, just download the update");
-      var status = this.downloadUpdate(update, true);
-      if (status == STATE_NONE)
+      let status = this.downloadUpdate(update, true);
+      if (status == STATE_NONE) {
         cleanupActiveUpdate();
+      }
       AUSTLMY.pingCheckCode(this._pingSuffix, AUSTLMY.CHK_ADDON_PREF_DISABLED);
       return;
     }
@@ -2710,7 +2727,7 @@ UpdateService.prototype = {
   },
 
   _showPrompt: function AUS__showPrompt(update) {
-    var prompter = Cc["@mozilla.org/updates/update-prompt;1"].
+    let prompter = Cc["@mozilla.org/updates/update-prompt;1"].
                    createInstance(Ci.nsIUpdatePrompt);
     prompter.showUpdateAvailable(update);
   },
@@ -2839,7 +2856,7 @@ UpdateService.prototype = {
       return;
     }
 
-    if (this._incompatibleAddons.length > 0 || !gCanApplyUpdates) {
+    if (this._incompatibleAddons.length > 0 || !getCanApplyUpdates()) {
       LOG("UpdateService:onUpdateEnded - prompting because there are " +
           "incompatible add-ons");
       if (this._incompatibleAddons.length > 0) {
@@ -2886,7 +2903,7 @@ UpdateService.prototype = {
    * See nsIUpdateService.idl
    */
   get canApplyUpdates() {
-    return gCanApplyUpdates && hasUpdateMutex();
+    return getCanApplyUpdates() && hasUpdateMutex();
   },
 
   /**
@@ -3159,8 +3176,9 @@ UpdateManager.prototype = {
           continue;
 
         updateElement.QueryInterface(Ci.nsIDOMElement);
+        let update;
         try {
-          var update = new Update(updateElement);
+          update = new Update(updateElement);
         } catch (e) {
           LOG("UpdateManager:_loadXMLFileIntoArray - invalid update");
           continue;
@@ -3476,10 +3494,15 @@ Checker.prototype = {
     if (AppConstants.platform == "gonk") {
       let sysLibs = {};
       Cu.import("resource://gre/modules/systemlibs.js", sysLibs);
+      let productDevice = sysLibs.libcutils.property_get("ro.product.device");
+      let buildType = sysLibs.libcutils.property_get("ro.build.type");
       url = url.replace(/%PRODUCT_MODEL%/g,
                         sysLibs.libcutils.property_get("ro.product.model"));
-      url = url.replace(/%PRODUCT_DEVICE%/g,
-                        sysLibs.libcutils.property_get("ro.product.device"));
+      if (buildType == "user" || buildType == "userdebug") {
+        url = url.replace(/%PRODUCT_DEVICE%/g, productDevice);
+      } else {
+        url = url.replace(/%PRODUCT_DEVICE%/g, productDevice + "-" + buildType);
+      }
       url = url.replace(/%B2G_VERSION%/g,
                         getPref("getCharPref", PREF_APP_B2G_VERSION, null));
     }
@@ -3566,8 +3589,9 @@ Checker.prototype = {
         continue;
 
       updateElement.QueryInterface(Ci.nsIDOMElement);
+      let update;
       try {
-        var update = new Update(updateElement);
+        update = new Update(updateElement);
       } catch (e) {
         LOG("Checker:_updates get - invalid <update/>, ignoring...");
         continue;
@@ -3610,7 +3634,7 @@ Checker.prototype = {
 
     var prefs = Services.prefs;
     var certs = null;
-    if (!prefs.prefHasUserValue(PREF_APP_UPDATE_URL_OVERRIDE) &&
+    if (!getPref("getCharPref", PREF_APP_UPDATE_URL_OVERRIDE, null) &&
         getPref("getBoolPref", PREF_APP_UPDATE_CERT_CHECKATTRS, true)) {
       certs = gCertUtils.readCertPrefs(PREF_APP_UPDATE_CERTS_BRANCH);
     }
@@ -4193,7 +4217,7 @@ Downloader.prototype = {
 
     if (maxProgress != this._patch.size) {
       LOG("Downloader:onProgress - maxProgress: " + maxProgress +
-          " is not equal to expectd patch size: " + this._patch.size);
+          " is not equal to expected patch size: " + this._patch.size);
       // It's important that we use a different code than
       // NS_ERROR_CORRUPTED_CONTENT so that tests can verify the difference
       // between a hash error and a wrong download error.
@@ -4410,7 +4434,7 @@ Downloader.prototype = {
         if (!Services.wm.getMostRecentWindow(UPDATE_WINDOW_NAME)) {
           this._update.QueryInterface(Ci.nsIWritablePropertyBag);
           if (this._update.getProperty("foregroundDownload") == "true") {
-            var prompter = Cc["@mozilla.org/updates/update-prompt;1"].
+            let prompter = Cc["@mozilla.org/updates/update-prompt;1"].
                            createInstance(Ci.nsIUpdatePrompt);
             prompter.showUpdateError(this._update);
           }
@@ -4544,13 +4568,16 @@ UpdatePrompt.prototype = {
    * See nsIUpdateService.idl
    */
   showUpdateDownloaded: function UP_showUpdateDownloaded(update, background) {
+    if (background && getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false)) {
+      return;
+    }
+    // Trigger the display of the hamburger menu badge.
+    Services.obs.notifyObservers(null, "update-downloaded", update.state);
+
     if (this._getAltUpdateWindow())
       return;
 
     if (background) {
-      if (getPref("getBoolPref", PREF_APP_UPDATE_SILENT, false))
-        return;
-
       var stringsPrefix = "updateDownloaded_" + update.type + ".";
       var title = gUpdateBundle.formatStringFromName(stringsPrefix + "title",
                                                      [update.name], 1);

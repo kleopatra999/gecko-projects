@@ -10,8 +10,7 @@ var gContentPane = {
     this._rebuildFonts();
     var menulist = document.getElementById("defaultFont");
     if (menulist.selectedIndex == -1) {
-      menulist.insertItemAt(0, "", "", "");
-      menulist.selectedIndex = 0;
+      menulist.value = FontBuilder.readFontSelection(menulist);
     }
 
     // Show translation preferences if we may:
@@ -24,8 +23,12 @@ var gContentPane = {
     let drmInfoURL =
       Services.urlFormatter.formatURLPref("app.support.baseURL") + "drm-content";
     document.getElementById("playDRMContentLink").setAttribute("href", drmInfoURL);
-    document.getElementById("playDRMContentRow").hidden =
-      !Services.prefs.getBoolPref("browser.eme.ui.enabled");
+    let emeUIEnabled = Services.prefs.getBoolPref("browser.eme.ui.enabled");
+    // Force-disable/hide on WinXP:
+    if (navigator.platform.toLowerCase().startsWith("win")) {
+      emeUIEnabled = emeUIEnabled && parseFloat(Services.sysinfo.get("version")) >= 6;
+    }
+    document.getElementById("playDRMContentRow").hidden = !emeUIEnabled;
   },
 
   // UTILITY FUNCTIONS

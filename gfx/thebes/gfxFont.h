@@ -54,6 +54,8 @@ class gfxTextContextPaint;
 // we use a platform-dependent value to harmonize with the platform's own APIs.
 #ifdef XP_WIN
 #define OBLIQUE_SKEW_FACTOR  0.3
+#elif defined(MOZ_WIDGET_GTK) || defined(MOZ_WIDGET_QT)
+#define OBLIQUE_SKEW_FACTOR  0.2
 #else
 #define OBLIQUE_SKEW_FACTOR  0.25
 #endif
@@ -103,8 +105,8 @@ struct gfxFontStyle {
 
     // The aspect-value (ie., the ratio actualsize:actualxheight) that any
     // actual physical font created from this font structure must have when
-    // rendering or measuring a string. A value of 0 means no adjustment
-    // needs to be done.
+    // rendering or measuring a string. A value of -1.0 means no adjustment
+    // needs to be done; otherwise the value must be nonnegative.
     float sizeAdjust;
 
     // baseline offset, used when simulating sub/superscript glyphs
@@ -162,9 +164,9 @@ struct gfxFontStyle {
     uint8_t variantSubSuper;
 
     // Return the final adjusted font size for the given aspect ratio.
-    // Not meant to be called when sizeAdjust = 0.
+    // Not meant to be called when sizeAdjust = -1.0.
     gfxFloat GetAdjustedSize(gfxFloat aspect) const {
-        NS_ASSERTION(sizeAdjust != 0.0, "Not meant to be called when sizeAdjust = 0");
+        NS_ASSERTION(sizeAdjust >= 0.0, "Not meant to be called when sizeAdjust = -1.0");
         gfxFloat adjustedSize = std::max(NS_round(size*(sizeAdjust/aspect)), 1.0);
         return std::min(adjustedSize, FONT_MAX_SIZE);
     }
@@ -647,8 +649,10 @@ public:
                       void* aHandleFeatureData);
 
 protected:
-    // the font this shaper is working with
-    gfxFont * mFont;
+    // the font this shaper is working with. The font owns a nsAutoPtr reference
+    // to this object, and will destroy it before it dies. Thus, mFont will always
+    // be valid.
+    gfxFont* MOZ_NON_OWNING_REF mFont;
 };
 
 
@@ -1387,7 +1391,9 @@ public:
     }
 
     virtual gfxFloat GetAdjustedSize() const {
-        return mAdjustedSize > 0.0 ? mAdjustedSize : mStyle.size;
+        return mAdjustedSize > 0.0
+                 ? mAdjustedSize
+                 : (mStyle.sizeAdjust == 0.0 ? 0.0 : mStyle.size);
     }
 
     float FUnitsToDevUnitsFactor() const {
@@ -1453,7 +1459,7 @@ public:
     gfxFloat GetGlyphHAdvance(gfxContext *aCtx, uint16_t aGID);
 
     // Return Azure GlyphRenderingOptions for drawing this font.
-    virtual mozilla::TemporaryRef<mozilla::gfx::GlyphRenderingOptions>
+    virtual already_AddRefed<mozilla::gfx::GlyphRenderingOptions>
       GetGlyphRenderingOptions(const TextRunDrawParams* aRunParams = nullptr)
     { return nullptr; }
 
@@ -1617,8 +1623,7 @@ public:
     gfxGlyphExtents *GetOrCreateGlyphExtents(int32_t aAppUnitsPerDevUnit);
 
     // You need to call SetupCairoFont on the aCR just before calling this
-    virtual void SetupGlyphExtents(gfxContext *aContext,
-                                   Orientation aOrientation, uint32_t aGlyphID,
+    virtual void SetupGlyphExtents(gfxContext *aContext, uint32_t aGlyphID,
                                    bool aNeedTight, gfxGlyphExtents *aExtents);
 
     // This is called by the default Draw() implementation above.
@@ -1742,7 +1747,7 @@ public:
 
     virtual FontType GetType() const = 0;
 
-    virtual mozilla::TemporaryRef<mozilla::gfx::ScaledFont> GetScaledFont(DrawTarget* aTarget)
+    virtual already_AddRefed<mozilla::gfx::ScaledFont> GetScaledFont(DrawTarget* aTarget)
     { return gfxPlatform::GetPlatform()->GetScaledFontForFont(aTarget, this); }
 
     bool KerningDisabled() {
@@ -1769,7 +1774,9 @@ public:
         {
             mFont->AddGlyphChangeObserver(this);
         }
-        gfxFont* mFont;
+        // This pointer is nulled by ForgetFont in the gfxFont's
+        // destructor. Before the gfxFont dies.
+        gfxFont* MOZ_NON_OWNING_REF mFont;
     };
     friend class GlyphChangeObserver;
 
@@ -1841,7 +1848,7 @@ protected:
     // (and with variantCaps set to normal).
     // Default implementation relies on gfxFontEntry::CreateFontInstance;
     // backends that don't implement that will need to override this and use
-    // an alternative technique. (gfxPangoFonts, I'm looking at you...)
+    // an alternative technique. (gfxFontconfigFonts, I'm looking at you...)
     virtual already_AddRefed<gfxFont> GetSmallCapsFont();
 
     // subclasses may provide (possibly hinted) glyph widths (in font units);

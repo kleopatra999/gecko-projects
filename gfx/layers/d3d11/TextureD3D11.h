@@ -14,8 +14,6 @@
 #include <d3d11.h>
 #include <vector>
 
-class gfxD2DSurface;
-
 namespace mozilla {
 namespace layers {
 
@@ -34,11 +32,13 @@ public:
 
   virtual ~TextureClientD3D11();
 
-  void InitWith(ID3D11Texture2D* aTexture, const gfx::IntSize& aSize)
-  {
-    mTexture = aTexture;
-    mSize = aSize;
-  }
+  // Creates a TextureClient and init width.
+  static already_AddRefed<TextureClientD3D11>
+  Create(ISurfaceAllocator* aAllocator,
+         gfx::SurfaceFormat aFormat,
+         TextureFlags aFlags,
+         ID3D11Texture2D* aTexture,
+         gfx::IntSize aSize);
 
   // TextureClient
 
@@ -67,7 +67,7 @@ public:
   virtual bool AllocateForSurface(gfx::IntSize aSize,
                                   TextureAllocationFlags aFlags = ALLOC_DEFAULT) override;
 
-  virtual TemporaryRef<TextureClient>
+  virtual already_AddRefed<TextureClient>
   CreateSimilar(TextureFlags aFlags = TextureFlags::DEFAULT,
                 TextureAllocationFlags aAllocFlags = ALLOC_DEFAULT) const override;
 
@@ -92,6 +92,20 @@ public:
 
   virtual ~DXGIYCbCrTextureClient();
 
+  // Creates a TextureClient and init width.
+  static already_AddRefed<DXGIYCbCrTextureClient>
+  Create(ISurfaceAllocator* aAllocator,
+         TextureFlags aFlags,
+         IUnknown* aTextureY,
+         IUnknown* aTextureCb,
+         IUnknown* aTextureCr,
+         HANDLE aHandleY,
+         HANDLE aHandleCb,
+         HANDLE aHandleCr,
+         const gfx::IntSize& aSize,
+         const gfx::IntSize& aSizeY,
+         const gfx::IntSize& aSizeCbCr);
+
   // TextureClient
 
   virtual bool IsAllocated() const override{ return !!mHoldRefs[0]; }
@@ -104,27 +118,6 @@ public:
 
   virtual bool ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor) override;
 
-  void InitWith(IUnknown* aTextureY,
-                IUnknown* aTextureCb,
-                IUnknown* aTextureCr,
-                HANDLE aHandleY,
-                HANDLE aHandleCb,
-                HANDLE aHandleCr,
-                const gfx::IntSize& aSize,
-                const gfx::IntSize& aSizeY,
-                const gfx::IntSize& aSizeCbCr)
-  {
-    mHandles[0] = aHandleY;
-    mHandles[1] = aHandleCb;
-    mHandles[2] = aHandleCr;
-    mHoldRefs[0] = aTextureY;
-    mHoldRefs[1] = aTextureCb;
-    mHoldRefs[2] = aTextureCr;
-    mSize = aSize;
-    mSizeY = aSizeY;
-    mSizeCbCr = aSizeCbCr;
-  }
-
   virtual gfx::IntSize GetSize() const
   {
     return mSize;
@@ -135,7 +128,7 @@ public:
     // This TextureClient should not be used in a context where we use CreateSimilar
     // (ex. component alpha) because the underlying texture data is always created by
     // an external producer.
-    virtual TemporaryRef<TextureClient>
+    virtual already_AddRefed<TextureClient>
     CreateSimilar(TextureFlags, TextureAllocationFlags) const override{ return nullptr; }
 
 private:
@@ -216,7 +209,7 @@ public:
 
   virtual bool NextTile() override { return (++mCurrentTile < mTileTextures.size()); }
 
-  virtual nsIntRect GetTileRect() override;
+  virtual gfx::IntRect GetTileRect() override;
 
   virtual void EndBigImageIteration() override { mIterating = false; }
 
@@ -264,7 +257,7 @@ public:
 
   virtual gfx::IntSize GetSize() const override { return mSize; }
 
-  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() override
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override
   {
     return nullptr;
   }
@@ -303,7 +296,7 @@ public:
 
   virtual gfx::IntSize GetSize() const override{ return mSize; }
 
-  virtual TemporaryRef<gfx::DataSourceSurface> GetAsSurface() override
+  virtual already_AddRefed<gfx::DataSourceSurface> GetAsSurface() override
   {
     return nullptr;
   }

@@ -25,14 +25,9 @@ using namespace mozilla::gfx;
 using namespace android;
 
 #undef LOG
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetMediaManagerLog();
-#define LOG(msg) PR_LOG(GetMediaManagerLog(), PR_LOG_DEBUG, msg)
-#define LOGFRAME(msg) PR_LOG(GetMediaManagerLog(), 6, msg)
-#else
-#define LOG(msg)
-#define LOGFRAME(msg)
-#endif
+#define LOG(msg) MOZ_LOG(GetMediaManagerLog(), mozilla::LogLevel::Debug, msg)
+#define LOGFRAME(msg) MOZ_LOG(GetMediaManagerLog(), mozilla::LogLevel::Verbose, msg)
 
 class MediaBufferListener : public GonkCameraSource::DirectBufferListener {
 public:
@@ -152,13 +147,14 @@ MediaEngineGonkVideoSource::NumCapabilities()
 
 nsresult
 MediaEngineGonkVideoSource::Allocate(const dom::MediaTrackConstraints& aConstraints,
-                                     const MediaEnginePrefs& aPrefs)
+                                     const MediaEnginePrefs& aPrefs,
+                                     const nsString& aDeviceId)
 {
   LOG((__FUNCTION__));
 
   ReentrantMonitorAutoEnter sync(mCallbackMonitor);
   if (mState == kReleased && mInitDone) {
-    ChooseCapability(aConstraints, aPrefs);
+    ChooseCapability(aConstraints, aPrefs, aDeviceId);
     NS_DispatchToMainThread(WrapRunnable(nsRefPtr<MediaEngineGonkVideoSource>(this),
                                          &MediaEngineGonkVideoSource::AllocImpl));
     mCallbackMonitor.Wait();
@@ -342,8 +338,8 @@ MediaEngineGonkVideoSource::Init()
 {
   nsAutoCString deviceName;
   ICameraControl::GetCameraName(mCaptureIndex, deviceName);
-  CopyUTF8toUTF16(deviceName, mDeviceName);
-  CopyUTF8toUTF16(deviceName, mUniqueId);
+  SetName(NS_ConvertUTF8toUTF16(deviceName));
+  SetUUID(deviceName.get());
 
   mInitDone = true;
 }
@@ -590,7 +586,7 @@ MediaEngineGonkVideoSource::OnUserError(UserContext aContext, nsresult aError)
 }
 
 void
-MediaEngineGonkVideoSource::OnTakePictureComplete(uint8_t* aData, uint32_t aLength, const nsAString& aMimeType)
+MediaEngineGonkVideoSource::OnTakePictureComplete(const uint8_t* aData, uint32_t aLength, const nsAString& aMimeType)
 {
   // It needs to start preview because Gonk camera will stop preview while
   // taking picture.
@@ -601,7 +597,7 @@ MediaEngineGonkVideoSource::OnTakePictureComplete(uint8_t* aData, uint32_t aLeng
   class GenerateBlobRunnable : public nsRunnable {
   public:
     GenerateBlobRunnable(nsTArray<nsRefPtr<PhotoCallback>>& aCallbacks,
-                         uint8_t* aData,
+                         const uint8_t* aData,
                          uint32_t aLength,
                          const nsAString& aMimeType)
       : mPhotoDataLength(aLength)
@@ -614,11 +610,11 @@ MediaEngineGonkVideoSource::OnTakePictureComplete(uint8_t* aData, uint32_t aLeng
 
     NS_IMETHOD Run()
     {
-      nsRefPtr<dom::File> blob =
-        dom::File::CreateMemoryFile(nullptr, mPhotoData, mPhotoDataLength, mMimeType);
+      nsRefPtr<dom::Blob> blob =
+        dom::Blob::CreateMemoryBlob(nullptr, mPhotoData, mPhotoDataLength, mMimeType);
       uint32_t callbackCounts = mCallbacks.Length();
       for (uint8_t i = 0; i < callbackCounts; i++) {
-        nsRefPtr<dom::File> tempBlob = blob;
+        nsRefPtr<dom::Blob> tempBlob = blob;
         mCallbacks[i]->PhotoComplete(tempBlob.forget());
       }
       // PhotoCallback needs to dereference on main thread.

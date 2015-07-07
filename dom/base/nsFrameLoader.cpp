@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=78: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -23,7 +23,6 @@
 #include "nsIContentViewer.h"
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
-#include "nsIDOMFile.h"
 #include "nsPIDOMWindow.h"
 #include "nsIWebNavigation.h"
 #include "nsIWebProgress.h"
@@ -137,6 +136,9 @@ nsFrameLoader::nsFrameLoader(Element* aOwner, bool aNetworkCreated)
   : mOwnerContent(aOwner)
   , mAppIdSentToPermissionManager(nsIScriptSecurityManager::NO_APP_ID)
   , mDetachedSubdocViews(nullptr)
+  , mRemoteBrowser(nullptr)
+  , mChildID(0)
+  , mEventMode(EVENT_MODE_NORMAL_DISPATCH)
   , mIsPrerendered(false)
   , mDepthTooGreat(false)
   , mIsTopLevelContent(false)
@@ -152,10 +154,6 @@ nsFrameLoader::nsFrameLoader(Element* aOwner, bool aNetworkCreated)
   , mClampScrollPosition(true)
   , mObservingOwnerContent(false)
   , mVisible(true)
-  , mCurrentRemoteFrame(nullptr)
-  , mRemoteBrowser(nullptr)
-  , mChildID(0)
-  , mEventMode(EVENT_MODE_NORMAL_DISPATCH)
 {
   ResetPermissionManagerStatus();
 }
@@ -294,37 +292,6 @@ nsFrameLoader::ReallyStartLoading()
   
   return rv;
 }
-
-class DelayedStartLoadingRunnable : public nsRunnable
-{
-public:
-  explicit DelayedStartLoadingRunnable(nsFrameLoader* aFrameLoader)
-    : mFrameLoader(aFrameLoader)
-  {
-  }
-
-  NS_IMETHOD Run()
-  {
-    // Retry the request.
-    mFrameLoader->ReallyStartLoading();
-
-    // We delayed nsFrameLoader::ReallyStartLoading() after the child process is
-    // ready and might not be able to notify the remote browser in
-    // UpdatePositionAndSize() when reflow finished. Retrigger reflow.
-    nsIFrame* frame = mFrameLoader->GetPrimaryFrameOfOwningContent();
-    if (!frame) {
-      return NS_OK;
-    }
-    frame->InvalidateFrame();
-    frame->PresContext()->PresShell()->
-      FrameNeedsReflow(frame, nsIPresShell::eResize, NS_FRAME_IS_DIRTY);
-
-    return NS_OK;
-  }
-
-private:
-  nsRefPtr<nsFrameLoader> mFrameLoader;
-};
 
 nsresult
 nsFrameLoader::ReallyStartLoadingInternal()
@@ -489,7 +456,6 @@ nsFrameLoader::GetDocShell(nsIDocShell **aDocShell)
     if (NS_FAILED(rv))
       return rv;
     if (mRemoteFrame) {
-      NS_WARNING("No docshells for remote frames!");
       return rv;
     }
     NS_ASSERTION(mDocShell,
@@ -500,59 +466,6 @@ nsFrameLoader::GetDocShell(nsIDocShell **aDocShell)
   NS_IF_ADDREF(*aDocShell);
 
   return rv;
-}
-
-static void
-FirePageHideEvent(nsIDocShellTreeItem* aItem,
-                  EventTarget* aChromeEventHandler)
-{
-  nsCOMPtr<nsIDocument> doc = aItem->GetDocument();
-  NS_ASSERTION(doc, "What happened here?");
-  doc->OnPageHide(true, aChromeEventHandler);
-
-  int32_t childCount = 0;
-  aItem->GetChildCount(&childCount);
-  nsAutoTArray<nsCOMPtr<nsIDocShellTreeItem>, 8> kids;
-  kids.AppendElements(childCount);
-  for (int32_t i = 0; i < childCount; ++i) {
-    aItem->GetChildAt(i, getter_AddRefs(kids[i]));
-  }
-
-  for (uint32_t i = 0; i < kids.Length(); ++i) {
-    if (kids[i]) {
-      FirePageHideEvent(kids[i], aChromeEventHandler);
-    }
-  }
-}
-
-// The pageshow event is fired for a given document only if IsShowing() returns
-// the same thing as aFireIfShowing.  This gives us a way to fire pageshow only
-// on documents that are still loading or only on documents that are already
-// loaded.
-static void
-FirePageShowEvent(nsIDocShellTreeItem* aItem,
-                  EventTarget* aChromeEventHandler,
-                  bool aFireIfShowing)
-{
-  int32_t childCount = 0;
-  aItem->GetChildCount(&childCount);
-  nsAutoTArray<nsCOMPtr<nsIDocShellTreeItem>, 8> kids;
-  kids.AppendElements(childCount);
-  for (int32_t i = 0; i < childCount; ++i) {
-    aItem->GetChildAt(i, getter_AddRefs(kids[i]));
-  }
-
-  for (uint32_t i = 0; i < kids.Length(); ++i) {
-    if (kids[i]) {
-      FirePageShowEvent(kids[i], aChromeEventHandler, aFireIfShowing);
-    }
-  }
-
-  nsCOMPtr<nsIDocument> doc = aItem->GetDocument();
-  NS_ASSERTION(doc, "What happened here?");
-  if (doc->IsShowing() == aFireIfShowing) {
-    doc->OnPageShow(true, aChromeEventHandler);
-  }
 }
 
 static void
@@ -973,6 +886,8 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
     return rv;
   }
 
+  mRemoteBrowser->SwapLayerTreeObservers(aOther->mRemoteBrowser);
+
   nsCOMPtr<nsIBrowserDOMWindow> otherBrowserDOMWindow =
     aOther->mRemoteBrowser->GetBrowserDOMWindow();
   nsCOMPtr<nsIBrowserDOMWindow> browserDOMWindow =
@@ -1017,10 +932,16 @@ nsFrameLoader::SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
 
   ourFrameFrame->EndSwapDocShells(otherFrame);
 
+  ourShell->BackingScaleFactorChanged();
+  otherShell->BackingScaleFactorChanged();
+
   ourDoc->FlushPendingNotifications(Flush_Layout);
   otherDoc->FlushPendingNotifications(Flush_Layout);
 
   mInSwap = aOther->mInSwap = false;
+
+  unused << mRemoteBrowser->SendSwappedWithOtherRemoteLoader();
+  unused << aOther->mRemoteBrowser->SendSwappedWithOtherRemoteLoader();
   return NS_OK;
 }
 
@@ -1197,25 +1118,25 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
   // Fire pageshow events on still-loading pages, and then fire pagehide
   // events.  Note that we do NOT fire these in the normal way, but just fire
   // them on the chrome event handlers.
-  FirePageShowEvent(ourDocshell, ourEventTarget, false);
-  FirePageShowEvent(otherDocshell, otherEventTarget, false);
-  FirePageHideEvent(ourDocshell, ourEventTarget);
-  FirePageHideEvent(otherDocshell, otherEventTarget);
+  nsContentUtils::FirePageShowEvent(ourDocshell, ourEventTarget, false);
+  nsContentUtils::FirePageShowEvent(otherDocshell, otherEventTarget, false);
+  nsContentUtils::FirePageHideEvent(ourDocshell, ourEventTarget);
+  nsContentUtils::FirePageHideEvent(otherDocshell, otherEventTarget);
   
   nsIFrame* ourFrame = ourContent->GetPrimaryFrame();
   nsIFrame* otherFrame = otherContent->GetPrimaryFrame();
   if (!ourFrame || !otherFrame) {
     mInSwap = aOther->mInSwap = false;
-    FirePageShowEvent(ourDocshell, ourEventTarget, true);
-    FirePageShowEvent(otherDocshell, otherEventTarget, true);
+    nsContentUtils::FirePageShowEvent(ourDocshell, ourEventTarget, true);
+    nsContentUtils::FirePageShowEvent(otherDocshell, otherEventTarget, true);
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
   nsSubDocumentFrame* ourFrameFrame = do_QueryFrame(ourFrame);
   if (!ourFrameFrame) {
     mInSwap = aOther->mInSwap = false;
-    FirePageShowEvent(ourDocshell, ourEventTarget, true);
-    FirePageShowEvent(otherDocshell, otherEventTarget, true);
+    nsContentUtils::FirePageShowEvent(ourDocshell, ourEventTarget, true);
+    nsContentUtils::FirePageShowEvent(otherDocshell, otherEventTarget, true);
     return NS_ERROR_NOT_IMPLEMENTED;
   }
 
@@ -1223,8 +1144,8 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
   rv = ourFrameFrame->BeginSwapDocShells(otherFrame);
   if (NS_FAILED(rv)) {
     mInSwap = aOther->mInSwap = false;
-    FirePageShowEvent(ourDocshell, ourEventTarget, true);
-    FirePageShowEvent(otherDocshell, otherEventTarget, true);
+    nsContentUtils::FirePageShowEvent(ourDocshell, ourEventTarget, true);
+    nsContentUtils::FirePageShowEvent(otherDocshell, otherEventTarget, true);
     return rv;
   }
 
@@ -1327,8 +1248,8 @@ nsFrameLoader::SwapWithOtherLoader(nsFrameLoader* aOther,
   ourParentDocument->FlushPendingNotifications(Flush_Layout);
   otherParentDocument->FlushPendingNotifications(Flush_Layout);
 
-  FirePageShowEvent(ourDocshell, ourEventTarget, true);
-  FirePageShowEvent(otherDocshell, otherEventTarget, true);
+  nsContentUtils::FirePageShowEvent(ourDocshell, ourEventTarget, true);
+  nsContentUtils::FirePageShowEvent(otherDocshell, otherEventTarget, true);
 
   mInSwap = aOther->mInSwap = false;
   return NS_OK;
@@ -1386,6 +1307,9 @@ nsFrameLoader::StartDestroy()
     mOwnerContentStrong = mOwnerContent;
     if (mRemoteBrowser) {
       mRemoteBrowser->CacheFrameLoader(this);
+    }
+    if (mChildMessageManager) {
+      mChildMessageManager->CacheFrameLoader(this);
     }
   }
 
@@ -1530,6 +1454,9 @@ nsFrameLoader::DestroyComplete()
     if (mRemoteBrowser) {
       mRemoteBrowser->CacheFrameLoader(nullptr);
     }
+    if (mChildMessageManager) {
+      mChildMessageManager->CacheFrameLoader(nullptr);
+    }
   }
 
   // Call TabParent::Destroy if we haven't already (in case of a crash).
@@ -1563,7 +1490,7 @@ nsFrameLoader::SetOwnerContent(Element* aContent)
     mOwnerContent->RemoveMutationObserver(this);
   }
   mOwnerContent = aContent;
-  if (RenderFrameParent* rfp = GetCurrentRemoteFrame()) {
+  if (RenderFrameParent* rfp = GetCurrentRenderFrame()) {
     rfp->OwnerContentChanged(aContent);
   }
 
@@ -1673,12 +1600,12 @@ nsFrameLoader::ShouldUseRemoteProcess()
 
   // Don't try to launch nested children if we don't have OMTC.
   // They won't render!
-  if (XRE_GetProcessType() == GeckoProcessType_Content &&
+  if (XRE_IsContentProcess() &&
       !CompositorChild::ChildProcessHasCompositor()) {
     return false;
   }
 
-  if (XRE_GetProcessType() == GeckoProcessType_Content &&
+  if (XRE_IsContentProcess() &&
       !(PR_GetEnv("MOZ_NESTED_OOP_TABS") ||
         Preferences::GetBool("dom.ipc.tabs.nested.enabled", false))) {
     return false;
@@ -2273,7 +2200,6 @@ nsFrameLoader::TryRemoteBrowser()
     return false;
   }
 
-  mContentParent = mRemoteBrowser->Manager();
   mChildID = mRemoteBrowser->Manager()->ChildID();
 
   nsCOMPtr<nsIDocShellTreeItem> rootItem;
@@ -2298,9 +2224,18 @@ nsFrameLoader::TryRemoteBrowser()
 }
 
 mozilla::dom::PBrowserParent*
-nsFrameLoader::GetRemoteBrowser()
+nsFrameLoader::GetRemoteBrowser() const
 {
   return mRemoteBrowser;
+}
+
+RenderFrameParent*
+nsFrameLoader::GetCurrentRenderFrame() const
+{
+  if (mRemoteBrowser) {
+    return mRemoteBrowser->GetRenderFrame();
+  }
+  return nullptr;
 }
 
 NS_IMETHODIMP
@@ -2441,7 +2376,7 @@ public:
       static_cast<nsInProcessTabChildGlobal*>(mFrameLoader->mChildMessageManager.get());
     if (tabChild && tabChild->GetInnerManager()) {
       nsCOMPtr<nsIXPConnectJSObjectHolder> kungFuDeathGrip(tabChild->GetGlobal());
-      ReceiveMessage(static_cast<EventTarget*>(tabChild),
+      ReceiveMessage(static_cast<EventTarget*>(tabChild), mFrameLoader,
                      tabChild->GetInnerManager());
     }
     return NS_OK;
@@ -2464,7 +2399,8 @@ nsFrameLoader::DoSendAsyncMessage(JSContext* aCx,
       return false;
     }
     InfallibleTArray<mozilla::jsipc::CpowEntry> cpows;
-    if (aCpows && !cp->GetCPOWManager()->Wrap(aCx, aCpows, &cpows)) {
+    jsipc::CPOWManager* mgr = cp->GetCPOWManager();
+    if (aCpows && (!mgr || !mgr->Wrap(aCx, aCpows, &cpows))) {
       return false;
     }
     return tabParent->SendAsyncMessage(nsString(aMessage), data, cpows,
@@ -2604,7 +2540,6 @@ void
 nsFrameLoader::SetRemoteBrowser(nsITabParent* aTabParent)
 {
   MOZ_ASSERT(!mRemoteBrowser);
-  MOZ_ASSERT(!mCurrentRemoteFrame);
   mRemoteFrame = true;
   mRemoteBrowser = TabParent::GetFrom(aTabParent);
   mChildID = mRemoteBrowser ? mRemoteBrowser->Manager()->ChildID() : 0;
@@ -2714,7 +2649,7 @@ nsFrameLoader::ResetPermissionManagerStatus()
 {
   // The resetting of the permissions status can run only
   // in the main process.
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     return;
   }
 

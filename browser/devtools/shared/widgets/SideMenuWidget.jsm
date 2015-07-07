@@ -79,14 +79,6 @@ SideMenuWidget.prototype = {
   groupSortPredicate: function(a, b) a.localeCompare(b),
 
   /**
-   * Specifies that the container viewport should be "stuck" to the
-   * bottom. That is, the container is automatically scrolled down to
-   * keep appended items visible, but only when the scroll position is
-   * already at the bottom.
-   */
-  autoscrollWithAppendedItems: false,
-
-  /**
    * Inserts an item in this container at the specified index, optionally
    * grouping by name.
    *
@@ -103,28 +95,41 @@ SideMenuWidget.prototype = {
    *         The element associated with the displayed item.
    */
   insertItemAt: function(aIndex, aContents, aAttachment={}) {
-    // Maintaining scroll position at the bottom when a new item is inserted
-    // depends on several factors (the order of testing is important to avoid
-    // needlessly expensive operations that may cause reflows):
-    let maintainScrollAtBottom =
-      // 1. The behavior should be enabled,
-      this.autoscrollWithAppendedItems &&
-      // 2. There shouldn't currently be any selected item in the list.
-      !this._selectedItem &&
-      // 3. The new item should be appended at the end of the list.
-      (aIndex < 0 || aIndex >= this._orderedMenuElementsArray.length) &&
-      // 4. The list should already be scrolled at the bottom.
-      (this._list.scrollTop + this._list.clientHeight >= this._list.scrollHeight);
-
     let group = this._getMenuGroupForName(aAttachment.group);
     let item = this._getMenuItemForGroup(group, aContents, aAttachment);
     let element = item.insertSelfAt(aIndex);
 
-    if (maintainScrollAtBottom) {
-      this._list.scrollTop = this._list.scrollHeight;
+    return element;
+  },
+
+  /**
+   * Checks to see if the list is scrolled all the way to the bottom.
+   * Uses getBoundsWithoutFlushing to limit the performance impact
+   * of this function.
+   *
+   * @return bool
+   */
+  isScrolledToBottom: function() {
+    if (this._list.lastElementChild) {
+      let utils = this.window.QueryInterface(Ci.nsIInterfaceRequestor)
+                             .getInterface(Ci.nsIDOMWindowUtils);
+      let childRect = utils.getBoundsWithoutFlushing(this._list.lastElementChild);
+      let listRect = utils.getBoundsWithoutFlushing(this._list);
+
+      // Cheap way to check if it's scrolled all the way to the bottom.
+      return (childRect.height + childRect.top) <= listRect.bottom;
     }
 
-    return element;
+    return false;
+  },
+
+  /**
+   * Scroll the list to the bottom after a timeout.
+   * If the user scrolls in the meantime, cancel this operation.
+   */
+  scrollToBottom: function() {
+    this._list.scrollTop = this._list.scrollHeight;
+    this.emit("scroll-to-bottom");
   },
 
   /**
@@ -400,6 +405,15 @@ SideMenuWidget.prototype = {
       return;
     }
 
+    // Don't show the menu if a descendant node is going to be visible also.
+    let node = e.originalTarget;
+    while (node && node !== this._list) {
+      if (node.hasAttribute("contextmenu")) {
+        return;
+      }
+      node = node.parentNode;
+    }
+
     this._contextMenu.openPopupAtScreen(e.screenX, e.screenY, true);
   },
 
@@ -510,7 +524,7 @@ SideMenuGroup.prototype = {
     for (let group of groupsArray) {
       let name = group.getAttribute("name");
       if (sortPredicate(name, identifier) > 0 && // Insertion sort at its best :)
-          !name.contains(identifier)) { // Least significant group should be last.
+          !name.includes(identifier)) { // Least significant group should be last.
         return groupsArray.indexOf(group);
       }
     }

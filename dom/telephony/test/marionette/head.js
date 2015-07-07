@@ -279,6 +279,18 @@ let emulator = (function() {
   /**
    * @return Promise
    */
+  function changeModemTech(aTech, aPreferredMask) {
+    return Promise.resolve()
+      .then(() => emulator.runCmd("modem tech " + aTech + " " + aPreferredMask))
+      .then(() => emulator.runCmd("modem tech"))
+      .then(result => is(result[0],
+                         aTech + " " + aPreferredMask,
+                         "Check modem 'tech/preferred mask'"));
+  }
+
+  /**
+   * @return Promise
+   */
   function clearCalls() {
     log("Clear existing calls.");
 
@@ -777,8 +789,7 @@ let emulator = (function() {
       promises.push(waitForNamedStateEvent(call, "held"));
     }
 
-    let promise = waitForNamedStateEvent(conference, "holding")
-      .then(() => waitForNamedStateEvent(conference, "held"))
+    let promise = waitForNamedStateEvent(conference, "held")
       .then(() => {
         if (typeof heldCallback === "function") {
           heldCallback();
@@ -810,8 +821,7 @@ let emulator = (function() {
       promises.push(waitForNamedStateEvent(call, "connected"));
     }
 
-    let promise = waitForNamedStateEvent(conference, "resuming")
-      .then(() => waitForNamedStateEvent(conference, "connected"))
+    let promise = waitForNamedStateEvent(conference, "connected")
       .then(() => {
         if (typeof connectedCallback === "function") {
           connectedCallback();
@@ -1109,12 +1119,19 @@ let emulator = (function() {
 
     let promises = [];
 
-    let promise = gWaitForEvent(connection, "radiostatechange", event => {
+    promises.push(gWaitForEvent(connection, "radiostatechange", event => {
       let state = connection.radioState;
       log("current radioState: " + state);
       return state == desiredRadioState;
-    });
-    promises.push(promise);
+    }));
+
+    // Wait for icc status to finish updating. Please see bug 1169504 for the
+    // reason why we need this.
+    promises.push(gWaitForEvent(connection, "iccchange", event => {
+      let iccId = connection.iccId;
+      log("current iccId: " + iccId);
+      return !!iccId === enabled;
+    }));
 
     promises.push(connection.setRadioEnabled(enabled));
 
@@ -1147,6 +1164,7 @@ let emulator = (function() {
   this.gWaitForNamedStateEvent = waitForNamedStateEvent;
   this.gWaitForStateChangeEvent = waitForStateChangeEvent;
   this.gCheckInitialState = checkInitialState;
+  this.gChangeModemTech = changeModemTech;
   this.gClearCalls = clearCalls;
   this.gOutCallStrPool = outCallStrPool;
   this.gInCallStrPool = inCallStrPool;

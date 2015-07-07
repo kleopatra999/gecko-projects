@@ -129,6 +129,25 @@ let gSyncPane = {
     this._initProfileImageUI();
   },
 
+  _toggleComputerNameControls: function(editMode) {
+    let textbox = document.getElementById("fxaSyncComputerName");
+    textbox.className = editMode ? "" : "plain";
+    textbox.disabled = !editMode;
+    document.getElementById("fxaChangeDeviceName").hidden = editMode;
+    document.getElementById("fxaCancelChangeDeviceName").hidden = !editMode;
+    document.getElementById("fxaSaveChangeDeviceName").hidden = !editMode;
+  },
+
+  _updateComputerNameValue: function(save) {
+    let textbox = document.getElementById("fxaSyncComputerName");
+    if (save) {
+      Weave.Service.clientsEngine.localName = textbox.value;
+    }
+    else {
+      textbox.value = Weave.Service.clientsEngine.localName;
+    }
+  },
+
   _setupEventListeners: function() {
     function setEventListener(aId, aEventType, aCallback)
     {
@@ -160,6 +179,17 @@ let gSyncPane = {
     });
     setEventListener("syncComputerName", "change", function (e) {
       gSyncUtils.changeName(e.target);
+    });
+    setEventListener("fxaChangeDeviceName", "click", function () {
+      this._toggleComputerNameControls(true);
+    });
+    setEventListener("fxaCancelChangeDeviceName", "click", function () {
+      this._toggleComputerNameControls(false);
+      this._updateComputerNameValue(false);
+    });
+    setEventListener("fxaSaveChangeDeviceName", "click", function () {
+      this._toggleComputerNameControls(false);
+      this._updateComputerNameValue(true);
     });
     setEventListener("unlinkDevice", "click", function () {
       gSyncPane.startOver(true);
@@ -301,9 +331,15 @@ let gSyncPane = {
         // If the account is verified the next promise in the chain will
         // fetch profile data.
         return data.verified;
-      }).then(shouldGetProfile => {
-        if (shouldGetProfile) {
-          return fxAccounts.getSignedInUserProfile();
+      }).then(isVerified => {
+        if (isVerified) {
+          let enabled;
+          try {
+            enabled = Services.prefs.getBoolPref("identity.fxaccounts.profile_image.enabled");
+          } catch (ex) {}
+          if (enabled) {
+            return fxAccounts.getSignedInUserProfile();
+          }
         }
       }).then(data => {
         if (data && data.avatar) {
@@ -564,7 +600,7 @@ let gSyncPane = {
   },
 
   openChangeProfileImage: function() {
-    fxAccounts.promiseAccountsChangeProfileURI("avatar")
+    fxAccounts.promiseAccountsChangeProfileURI("preferences", "avatar")
       .then(url => {
         this.openContentInBrowser(url, {
           replaceQueryString: true
@@ -573,8 +609,12 @@ let gSyncPane = {
   },
 
   manageFirefoxAccount: function() {
-    let url = Services.prefs.getCharPref("identity.fxaccounts.settings.uri");
-    this.openContentInBrowser(url);
+    fxAccounts.promiseAccountsManageURI("preferences")
+      .then(url => {
+        this.openContentInBrowser(url, {
+          replaceQueryString: true
+        });
+      });
   },
 
   verifyFirefoxAccount: function() {

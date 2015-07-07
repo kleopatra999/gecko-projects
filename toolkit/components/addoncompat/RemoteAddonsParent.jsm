@@ -10,6 +10,7 @@ const Cu = Components.utils;
 const Cr = Components.results;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+Cu.import("resource://gre/modules/RemoteWebProgress.jsm");
 Cu.import('resource://gre/modules/Services.jsm');
 
 XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
@@ -258,14 +259,7 @@ let AboutProtocolParent = {
     let securityFlags = msg.data.securityFlags;
     let contentPolicyType = msg.data.contentPolicyType;
     try {
-      let channel = NetUtil.newChannel2(uri,
-                                        null,
-                                        null,
-                                        null,  // aLoadingNode
-                                        loadingPrincipal,
-                                        null,  // aTriggeringPrincipal
-                                        securityFlags,
-                                        contentPolicyType);
+      let channel = NetUtil.newChannel({uri, loadingPrincipal, securityFlags, contentPolicyType});
 
       // We're not allowed to set channel.notificationCallbacks to a
       // CPOW, since the setter for notificationCallbacks is in C++,
@@ -366,6 +360,7 @@ let TOPIC_WHITELIST = [
   "dom-window-destroyed",
   "inner-window-destroyed",
   "outer-window-destroyed",
+  "csp-on-violate-policy",
 ];
 
 // This interposition listens for
@@ -375,11 +370,12 @@ let ObserverInterposition = new Interposition("ObserverInterposition");
 ObserverInterposition.methods.addObserver =
   function(addon, target, observer, topic, ownsWeak) {
     if (TOPIC_WHITELIST.indexOf(topic) >= 0) {
+      CompatWarning.warn(`${topic} observer should be added from the child process only.`,
+                         addon, CompatWarning.warnings.observers);
+
       ObserverParent.addObserver(addon, observer, topic);
     }
 
-    CompatWarning.warn(`${topic} observer should be added from the child process only.`,
-                       addon, CompatWarning.warnings.observers);
     target.addObserver(observer, topic, ownsWeak);
   };
 
@@ -446,7 +442,7 @@ let EventTargetParent = {
     return [browser, window];
   },
 
-  addEventListener: function(addon, target, type, listener, useCapture, wantsUntrusted) {
+  addEventListener: function(addon, target, type, listener, useCapture, wantsUntrusted, delayedWarning) {
     let newTarget = this.redirectEventTarget(target);
     if (!newTarget) {
       return;
@@ -477,7 +473,8 @@ let EventTargetParent = {
     forType.push({listener: listener,
                   target: target,
                   wantsUntrusted: wantsUntrusted,
-                  useCapture: useCapture});
+                  useCapture: useCapture,
+                  delayedWarning: delayedWarning});
   },
 
   removeEventListener: function(addon, target, type, listener, useCapture) {
@@ -527,8 +524,11 @@ let EventTargetParent = {
 
       // Make a copy in case they call removeEventListener in the listener.
       let handlers = [];
-      for (let {listener, target, wantsUntrusted, useCapture} of forType) {
+      for (let {listener, target, wantsUntrusted, useCapture, delayedWarning} of forType) {
         if ((wantsUntrusted || isTrusted) && useCapture == capturing) {
+          // Issue a warning for this listener.
+          delayedWarning();
+
           handlers.push([listener, target]);
         }
       }
@@ -615,10 +615,12 @@ let EventTargetInterposition = new Interposition("EventTargetInterposition");
 
 EventTargetInterposition.methods.addEventListener =
   function(addon, target, type, listener, useCapture, wantsUntrusted) {
-    CompatWarning.warn("Registering an event listener on content DOM nodes" +
-                        " needs to happen in the content process.",
-                       addon, CompatWarning.warnings.DOM_events);
-    EventTargetParent.addEventListener(addon, target, type, listener, useCapture, wantsUntrusted);
+    let delayed = CompatWarning.delayedWarning(
+      `Registering a ${type} event listener on content DOM nodes` +
+        " needs to happen in the content process.",
+      addon, CompatWarning.warnings.DOM_events);
+
+    EventTargetParent.addEventListener(addon, target, type, listener, useCapture, wantsUntrusted, delayed);
     target.addEventListener(type, makeFilteringListener(type, listener), useCapture, wantsUntrusted);
   };
 
@@ -817,7 +819,7 @@ function makeDummyContentWindow(browser) {
 }
 
 RemoteBrowserElementInterposition.getters.contentWindow = function(addon, target) {
-  CompatWarning.warn("Direct access to content objects will no longer work in the chrome process.",
+  CompatWarning.warn("Direct access to browser.contentWindow will no longer work in the chrome process.",
                      addon, CompatWarning.warnings.content);
 
   // If we don't have a CPOW yet, just return something we can use for
@@ -845,7 +847,7 @@ function getContentDocument(addon, browser)
 }
 
 RemoteBrowserElementInterposition.getters.contentDocument = function(addon, target) {
-  CompatWarning.warn("Direct access to content objects will no longer work in the chrome process.",
+  CompatWarning.warn("Direct access to browser.contentDocument will no longer work in the chrome process.",
                      addon, CompatWarning.warnings.content);
 
   return getContentDocument(addon, target);
@@ -855,7 +857,7 @@ let TabBrowserElementInterposition = new Interposition("TabBrowserElementInterpo
                                                        EventTargetInterposition);
 
 TabBrowserElementInterposition.getters.contentWindow = function(addon, target) {
-  CompatWarning.warn("Direct access to content objects will no longer work in the chrome process.",
+  CompatWarning.warn("Direct access to gBrowser.contentWindow will no longer work in the chrome process.",
                      addon, CompatWarning.warnings.content);
 
   if (!target.selectedBrowser.contentWindowAsCPOW) {
@@ -865,11 +867,75 @@ TabBrowserElementInterposition.getters.contentWindow = function(addon, target) {
 };
 
 TabBrowserElementInterposition.getters.contentDocument = function(addon, target) {
-  CompatWarning.warn("Direct access to content objects will no longer work in the chrome process.",
+  CompatWarning.warn("Direct access to gBrowser.contentDocument will no longer work in the chrome process.",
                      addon, CompatWarning.warnings.content);
 
   let browser = target.selectedBrowser;
   return getContentDocument(addon, browser);
+};
+
+// This function returns a wrapper around an
+// nsIWebProgressListener. When the wrapper is invoked, it calls the
+// real listener but passes CPOWs for the nsIWebProgress and
+// nsIRequest arguments.
+let progressListeners = {global: new WeakMap(), tabs: new WeakMap()};
+function wrapProgressListener(kind, listener)
+{
+  if (progressListeners[kind].has(listener)) {
+    return progressListeners[kind].get(listener);
+  }
+
+  let ListenerHandler = {
+    get: function(target, name) {
+      if (name.startsWith("on")) {
+        return function(...args) {
+          listener[name].apply(listener, RemoteWebProgressManager.argumentsForAddonListener(kind, args));
+        };
+      }
+
+      return listener[name];
+    }
+  };
+  let listenerProxy = new Proxy(listener, ListenerHandler);
+
+  progressListeners[kind].set(listener, listenerProxy);
+  return listenerProxy;
+}
+
+TabBrowserElementInterposition.methods.addProgressListener = function(addon, target, listener) {
+  if (!target.ownerDocument.defaultView.gMultiProcessBrowser) {
+    return target.addProgressListener(listener);
+  }
+
+  NotificationTracker.add(["web-progress", addon]);
+  return target.addProgressListener(wrapProgressListener("global", listener));
+};
+
+TabBrowserElementInterposition.methods.removeProgressListener = function(addon, target, listener) {
+  if (!target.ownerDocument.defaultView.gMultiProcessBrowser) {
+    return target.removeProgressListener(listener);
+  }
+
+  NotificationTracker.remove(["web-progress", addon]);
+  return target.removeProgressListener(wrapProgressListener("global", listener));
+};
+
+TabBrowserElementInterposition.methods.addTabsProgressListener = function(addon, target, listener) {
+  if (!target.ownerDocument.defaultView.gMultiProcessBrowser) {
+    return target.addTabsProgressListener(listener);
+  }
+
+  NotificationTracker.add(["web-progress", addon]);
+  return target.addTabsProgressListener(wrapProgressListener("tabs", listener));
+};
+
+TabBrowserElementInterposition.methods.removeTabsProgressListener = function(addon, target, listener) {
+  if (!target.ownerDocument.defaultView.gMultiProcessBrowser) {
+    return target.removeTabsProgressListener(listener);
+  }
+
+  NotificationTracker.remove(["web-progress", addon]);
+  return target.removeTabsProgressListener(wrapProgressListener("tabs", listener));
 };
 
 let ChromeWindowInterposition = new Interposition("ChromeWindowInterposition",
@@ -879,7 +945,7 @@ let ChromeWindowInterposition = new Interposition("ChromeWindowInterposition",
 // that should be using content instead.
 ChromeWindowInterposition.getters.content =
 ChromeWindowInterposition.getters._content = function(addon, target) {
-  CompatWarning.warn("Direct access to content objects will no longer work in the chrome process.",
+  CompatWarning.warn("Direct access to chromeWindow.content will no longer work in the chrome process.",
                      addon, CompatWarning.warnings.content);
 
   let browser = target.gBrowser.selectedBrowser;

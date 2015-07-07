@@ -26,7 +26,7 @@ using gfxIntSize from "nsSize.h";
 using struct mozilla::null_t from "ipc/IPCMessageUtils.h";
 using mozilla::plugins::WindowsSharedMemoryHandle from "mozilla/plugins/PluginMessageUtils.h";
 using mozilla::layers::SurfaceDescriptorX11 from "gfxipc/ShadowLayerUtils.h";
-using struct nsIntRect from "nsRect.h";
+using nsIntRect from "nsRect.h";
 
 namespace mozilla {
 namespace plugins {
@@ -68,7 +68,10 @@ intr protocol PPluginInstance
 child:
   intr __delete__();
 
-  intr NPP_SetWindow(NPRemoteWindow window);
+  // Return value is only used on Windows and only when the window needs its
+  // parent set to the chrome widget native window.
+  intr NPP_SetWindow(NPRemoteWindow window)
+    returns (NPRemoteWindow childWindowToBeAdopted);
 
   intr NPP_GetValue_NPPVpluginWantsAllNetworkStreams()
     returns (bool value, NPError result);

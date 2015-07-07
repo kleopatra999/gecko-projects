@@ -45,7 +45,6 @@ import android.view.animation.Animation;
 import android.view.animation.TranslateAnimation;
 import android.widget.Button;
 import android.widget.ImageButton;
-import android.widget.LinearLayout;
 
 /**
 * {@code ToolbarDisplayLayout} is the UI for when the toolbar is in
@@ -173,7 +172,8 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
         mSiteSecurityVisible = (mSiteSecurity.getVisibility() == View.VISIBLE);
 
         mSiteIdentityPopup = new SiteIdentityPopup(mActivity);
-        mSiteIdentityPopup.setAnchor(getDoorHangerAnchor());
+        mSiteIdentityPopup.setAnchor(this);
+        mSiteIdentityPopup.setOnVisibilityChangeListener(mActivity);
 
         mStop = (ImageButton) findViewById(R.id.stop);
         mPageActionLayout = (PageActionLayout) findViewById(R.id.page_action_layout);
@@ -230,6 +230,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
 
     @Override
     public void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
         mIsAttached = false;
     }
 
@@ -537,8 +538,15 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
         mTitleChangeListener = listener;
     }
 
-    View getDoorHangerAnchor() {
-        return this;
+    /**
+     * Update the Site Identity popup anchor.
+     *
+     * Tablet UI has a tablet-specific doorhanger anchor, so update it after all the views
+     * are inflated.
+     * @param view View to use as the anchor for the Site Identity popup.
+     */
+    void updateSiteIdentityAnchor(View view) {
+        mSiteIdentityPopup.setAnchor(view);
     }
 
     void prepareForwardAnimation(PropertyAnimator anim, ForwardButtonAnimation animation, int width) {
@@ -609,5 +617,9 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
         }
 
         return false;
+    }
+
+    void destroy() {
+        mSiteIdentityPopup.destroy();
     }
 }

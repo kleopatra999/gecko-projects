@@ -8,11 +8,9 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 let RIL = {};
 Cu.import("resource://gre/modules/ril_consts.js", RIL);
 
-XPCOMUtils.defineLazyGetter(this, "gStkCmdFactory", function() {
-  let stk = {};
-  Cu.import("resource://gre/modules/StkProactiveCmdFactory.jsm", stk);
-  return stk.StkProactiveCmdFactory;
-});
+XPCOMUtils.defineLazyServiceGetter(this, "gStkCmdFactory",
+                                   "@mozilla.org/icc/stkcmdfactory;1",
+                                   "nsIStkCmdFactory");
 
 /**
  * Name space for RILSystemMessenger.jsm. Only initialized after first call to
@@ -40,6 +38,10 @@ function newRILSystemMessenger() {
     gReceivedMessage = aMessage;
   };
 
+  rsm.createCommandMessage = (aStkProactiveCmd) => {
+    return gStkCmdFactory.createCommandMessage(aStkProactiveCmd);
+  };
+
   return rsm;
 }
 
@@ -60,9 +62,6 @@ function run_test() {
   let smsMessenger = Cc["@mozilla.org/ril/system-messenger-helper;1"]
                      .getService(Ci.nsISmsMessenger);
 
-  let smsMessenger_new = Cc["@mozilla.org/ril/system-messenger-helper;1"]
-                         .getService(Ci.nsISmsMessenger_new);
-
   let cellbroadcastMessenger = Cc["@mozilla.org/ril/system-messenger-helper;1"]
                                .getService(Ci.nsICellbroadcastMessenger);
 
@@ -74,7 +73,6 @@ function run_test() {
 
   ok(telephonyMessenger !== null, "Get TelephonyMessenger.");
   ok(smsMessenger != null, "Get SmsMessenger.");
-  ok(smsMessenger_new != null, "Get SmsMessenger_new.");
   ok(cellbroadcastMessenger != null, "Get CellbroadcastMessenger.");
   ok(mobileConnectionMessenger != null, "Get MobileConnectionMessenger.");
   ok(iccMessenger != null, "Get IccMessenger.");
@@ -248,7 +246,7 @@ add_test(function test_sms_messenger_notify_sms() {
     });
 
   // Verify 'sms-failed' system message.
-  messenger.notifySms(Ci.nsISmsMessenger_new.NOTIFICATION_TYPE_SENT_FAILED,
+  messenger.notifySms(Ci.nsISmsMessenger.NOTIFICATION_TYPE_SENT_FAILED,
                       7,
                       8,
                       "99887766554433221100",
@@ -281,7 +279,7 @@ add_test(function test_sms_messenger_notify_sms() {
     });
 
   // Verify 'sms-delivery-error' system message.
-  messenger.notifySms(Ci.nsISmsMessenger_new.NOTIFICATION_TYPE_DELIVERY_ERROR,
+  messenger.notifySms(Ci.nsISmsMessenger.NOTIFICATION_TYPE_DELIVERY_ERROR,
                       9,
                       10,
                       "99887766554433221100",
@@ -611,7 +609,8 @@ add_test(function test_icc_stk_cmd_factory_create_command_error() {
 
     ok(false, "Failed to verify the protection of createCommand()!");
   } catch (e) {
-    equal(e.message, "Unknown Command Type: " + RIL.STK_CMD_MORE_TIME);
+    ok(e.message.indexOf("Unknown Command Type") !== -1,
+       "Invalid typeOfCommand!");
   }
 
   run_next_test();
@@ -637,7 +636,8 @@ add_test(function test_icc_stk_cmd_factory_create_system_msg_invalid_cmd_type() 
 
     ok(false, "Failed to identify invalid typeOfCommand!");
   } catch (e) {
-    equal(e.message, "Unknown Command Type: " + RIL.STK_CMD_MORE_TIME);
+    ok(e.message.indexOf("Unknown Command Type") !== -1,
+       "Invalid typeOfCommand!");
   }
 
   run_next_test();

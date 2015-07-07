@@ -58,6 +58,51 @@ static const char16_t kSeparators[] = {
 
 #define NS_BIDI_CONTROL_FRAME ((nsIFrame*)0xfffb1d1)
 
+// Given a style context, return any bidi control character necessary to
+// implement style properties that override directionality (i.e. if it has
+// unicode-bidi:bidi-override or bidi-embed, or text-orientation:upright
+// in vertical writing mode) when applying the bidi algorithm.
+//
+// The aBidiControl parameter specifies which bidi controls we want to
+// consider: override only, or also embed.
+//
+// XXX support for isolates may need to be added for bug 1157726.
+//
+// Returns 0 if no directional control character is implied by the style.
+
+enum WhichBidiControl {
+  kOverride,
+  kOverrideOrEmbed
+};
+
+static char16_t GetBidiControl(nsStyleContext* aStyleContext,
+                               WhichBidiControl aBidiControl)
+{
+  const nsStyleVisibility* vis = aStyleContext->StyleVisibility();
+  if (vis->mWritingMode != NS_STYLE_WRITING_MODE_HORIZONTAL_TB &&
+      vis->mTextOrientation == NS_STYLE_TEXT_ORIENTATION_UPRIGHT) {
+    return kLRO;
+  }
+  const nsStyleTextReset* text = aStyleContext->StyleTextReset();
+  if (text->mUnicodeBidi & NS_STYLE_UNICODE_BIDI_OVERRIDE) {
+    if (NS_STYLE_DIRECTION_RTL == vis->mDirection) {
+      return kRLO;
+    }
+    if (NS_STYLE_DIRECTION_LTR == vis->mDirection) {
+      return kLRO;
+    }
+  } else if (aBidiControl == kOverrideOrEmbed &&
+             text->mUnicodeBidi & NS_STYLE_UNICODE_BIDI_EMBED) {
+    if (NS_STYLE_DIRECTION_RTL == vis->mDirection) {
+      return kRLE;
+    }
+    if (NS_STYLE_DIRECTION_LTR == vis->mDirection) {
+      return kLRE;
+    }
+  }
+  return 0;
+}
+
 struct BidiParagraphData {
   nsString            mBuffer;
   nsAutoTArray<char16_t, 16> mEmbeddingStack;
@@ -137,10 +182,12 @@ struct BidiParagraphData {
     mPrevFrame = aBpd->mPrevFrame;
     mParagraphDepth = aBpd->mParagraphDepth + 1;
 
-    const nsStyleTextReset* text = aBDIFrame->StyleTextReset();
-    bool isRTL = (NS_STYLE_DIRECTION_RTL ==
+    char16_t ch = GetBidiControl(aBDIFrame->StyleContext(), kOverride);
+    bool isRTL = ch != kLRO &&
+                 (NS_STYLE_DIRECTION_RTL ==
                   aBDIFrame->StyleVisibility()->mDirection);
 
+    const nsStyleTextReset* text = aBDIFrame->StyleTextReset();
     if (text->mUnicodeBidi & NS_STYLE_UNICODE_BIDI_PLAINTEXT) {
       mParaLevel = NSBIDI_DEFAULT_LTR;
     } else {
@@ -148,8 +195,8 @@ struct BidiParagraphData {
       if (isRTL) ++mParaLevel;
     }
 
-    if (text->mUnicodeBidi & NS_STYLE_UNICODE_BIDI_OVERRIDE) {
-      PushBidiControl(isRTL ? kRLO : kLRO);
+    if (ch != 0) {
+      PushBidiControl(ch);
     }
   }
 
@@ -614,19 +661,9 @@ nsBidiPresUtils::Resolve(nsBlockFrame* aBlockFrame)
 
   // Handle bidi-override being set on the block itself before calling
   // TraverseFrames.
-  const nsStyleTextReset* text = aBlockFrame->StyleTextReset();
-  char16_t ch = 0;
-  if (text->mUnicodeBidi & NS_STYLE_UNICODE_BIDI_OVERRIDE) {
-    const nsStyleVisibility* vis = aBlockFrame->StyleVisibility();
-    if (NS_STYLE_DIRECTION_RTL == vis->mDirection) {
-      ch = kRLO;
-    }
-    else if (NS_STYLE_DIRECTION_LTR == vis->mDirection) {
-      ch = kLRO;
-    }
-    if (ch != 0) {
-      bpd.PushBidiControl(ch);
-    }
+  char16_t ch = GetBidiControl(aBlockFrame->StyleContext(), kOverride);
+  if (ch != 0) {
+    bpd.PushBidiControl(ch);
   }
   for (nsBlockFrame* block = aBlockFrame; block;
        block = static_cast<nsBlockFrame*>(block->GetNextContinuation())) {
@@ -697,31 +734,44 @@ nsBidiPresUtils::ResolveParagraph(nsBlockFrame* aBlockFrame,
 #endif
 #endif
 
-  if (runCount == 1 && frameCount == 1 &&
+  bool isNonBidi = false;
+
+  nsIFrame* frame0 = frameCount > 0 ? aBpd->FrameAt(0) : nullptr;
+  nsIFrame* frame1 = frameCount > 1 ? aBpd->FrameAt(1) : nullptr;
+
+  // Non-bidi frames
+  if (runCount == 1 && (frameCount == 1 || frameCount == 2) &&
       aBpd->mParagraphDepth == 0 && aBpd->GetDirection() == NSBIDI_LTR &&
-      aBpd->GetParaLevel() == 0) {
-    // We have a single left-to-right frame in a left-to-right paragraph,
+      aBpd->GetParaLevel() == 0 &&
+      frame0 != NS_BIDI_CONTROL_FRAME &&
+      !frame0->Properties().Get(nsIFrame::EmbeddingLevelProperty()) &&
+      !frame0->Properties().Get(nsIFrame::BaseLevelProperty())) {
+    // We have a left-to-right frame in a left-to-right paragraph,
     // without bidi isolation from the surrounding text.
-    // Make sure that the embedding level and base level frame properties aren't
+    // The embedding level and base level frame properties aren't
     // set (because if they are this frame used to have some other direction,
-    // so we can't do this optimization), and we're done.
-    nsIFrame* frame = aBpd->FrameAt(0);
-    if (frame != NS_BIDI_CONTROL_FRAME &&
-        !frame->Properties().Get(nsIFrame::EmbeddingLevelProperty()) &&
-        !frame->Properties().Get(nsIFrame::BaseLevelProperty())) {
+    // so we can't do this optimization)
+    // As long as this is the only frame, or it's followed by a linebreak,
+    // this is a non-bidi paragraph.
+    if (!frame1 || (frame1 != NS_BIDI_CONTROL_FRAME &&
+                    frame1->GetType() == nsGkAtoms::brFrame)) {
+      isNonBidi = true;
+    }
+  }
+
+  if (isNonBidi) {
 #ifdef DEBUG
 #ifdef NOISY_BIDI
-      printf("early return for single direction frame %p\n", (void*)frame);
+    printf("early return for single direction frame %p\n", (void*)frame);
 #endif
 #endif
-      frame->AddStateBits(NS_FRAME_IS_BIDI);
-      return NS_OK;
-    }
+    return NS_OK;
   }
 
   nsIFrame* firstFrame = nullptr;
   nsIFrame* lastFrame = nullptr;
 
+  // Bidi frames
   for (; ;) {
     if (fragmentLength <= 0) {
       // Get the next frame from mLogicalFrames
@@ -990,28 +1040,12 @@ nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
     if (frame->IsFrameOfType(nsIFrame::eBidiInlineContainer)) {
       if (!(frame->GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
         nsContainerFrame* c = static_cast<nsContainerFrame*>(frame);
-        MOZ_ASSERT(c = do_QueryFrame(frame),
+        MOZ_ASSERT(c == do_QueryFrame(frame),
                    "eBidiInlineContainer must be a nsContainerFrame subclass");
         c->DrainSelfOverflowList();
       }
 
-      const nsStyleVisibility* vis = frame->StyleVisibility();
-      const nsStyleTextReset* text = frame->StyleTextReset();
-      if (text->mUnicodeBidi & NS_STYLE_UNICODE_BIDI_OVERRIDE) {
-        if (NS_STYLE_DIRECTION_RTL == vis->mDirection) {
-          ch = kRLO;
-        }
-        else if (NS_STYLE_DIRECTION_LTR == vis->mDirection) {
-          ch = kLRO;
-        }
-      } else if (text->mUnicodeBidi & NS_STYLE_UNICODE_BIDI_EMBED) {
-        if (NS_STYLE_DIRECTION_RTL == vis->mDirection) {
-          ch = kRLE;
-        }
-        else if (NS_STYLE_DIRECTION_LTR == vis->mDirection) {
-          ch = kLRE;
-        }
-      }
+      ch = GetBidiControl(frame->StyleContext(), kOverrideOrEmbed);
 
       // Add a dummy frame pointer representing a bidi control code before the
       // first frame of an element specifying embedding or override
@@ -1034,7 +1068,8 @@ nsBidiPresUtils::TraverseFrames(nsBlockFrame*              aBlockFrame,
       if (nsGkAtoms::textFrame == frameType) {
         if (content != aBpd->mPrevContent) {
           aBpd->mPrevContent = content;
-          if (!frame->StyleText()->NewlineIsSignificant(frame)) {
+          if (!frame->StyleText()->NewlineIsSignificant(
+                static_cast<nsTextFrame*>(frame))) {
             content->AppendTextTo(aBpd->mBuffer);
           } else {
             /*
@@ -1410,11 +1445,7 @@ nsBidiPresUtils::RepositionRubyFrame(
   const LogicalMargin& aBorderPadding)
 {
   nsIAtom* frameType = aFrame->GetType();
-  MOZ_ASSERT(frameType == nsGkAtoms::rubyFrame ||
-             frameType == nsGkAtoms::rubyBaseFrame ||
-             frameType == nsGkAtoms::rubyTextFrame ||
-             frameType == nsGkAtoms::rubyBaseContainerFrame ||
-             frameType == nsGkAtoms::rubyTextContainerFrame);
+  MOZ_ASSERT(RubyUtils::IsRubyBox(frameType));
 
   nscoord icoord = 0;
   WritingMode frameWM = aFrame->GetWritingMode();
@@ -1551,7 +1582,7 @@ nsBidiPresUtils::RepositionFrame(nsIFrame* aFrame,
     }
     icoord += reverseDir ?
       borderPadding.IStart(frameWM) : borderPadding.IEnd(frameWM);
-  } else if (aFrame->StyleDisplay()->IsRubyDisplayType()) {
+  } else if (RubyUtils::IsRubyBox(aFrame->GetType())) {
     icoord += RepositionRubyFrame(aFrame, aContinuationStates,
                                   aContainerWM, borderPadding);
   } else {
@@ -1593,8 +1624,7 @@ nsBidiPresUtils::InitContinuationStates(nsIFrame*              aFrame,
   state->mFirstVisualFrame = nullptr;
   state->mFrameCount = 0;
 
-  if (!IsBidiLeaf(aFrame) ||
-      aFrame->StyleDisplay()->IsRubyDisplayType()) {
+  if (!IsBidiLeaf(aFrame) || RubyUtils::IsRubyBox(aFrame->GetType())) {
     // Continue for child frames
     nsIFrame* frame;
     for (frame = aFrame->GetFirstPrincipalChild();
@@ -2231,125 +2261,6 @@ nsresult nsBidiPresUtils::ProcessTextForRenderingContext(const char16_t*       a
   nsBidi bidiEngine;
   return ProcessText(aText, aLength, aBaseLevel, aPresContext, processor,
                      aMode, aPosResolve, aPosResolveCount, aWidth, &bidiEngine);
-}
-
-/* static */
-void nsBidiPresUtils::WriteReverse(const char16_t* aSrc,
-                                   uint32_t aSrcLength,
-                                   char16_t* aDest)
-{
-  char16_t* dest = aDest + aSrcLength;
-  mozilla::unicode::ClusterIterator iter(aSrc, aSrcLength);
-
-  while (!iter.AtEnd()) {
-    iter.Next();
-    for (const char16_t *cp = iter; cp > aSrc; ) {
-      // Here we rely on the fact that there are no non-BMP mirrored pairs
-      // currently in Unicode, so we don't need to look for surrogates
-      *--dest = mozilla::unicode::GetMirroredChar(*--cp);
-    }
-    aSrc = iter;
-  }
-
-  NS_ASSERTION(dest == aDest, "Whole string not copied");
-}
-
-/* static */
-bool nsBidiPresUtils::WriteLogicalToVisual(const char16_t* aSrc,
-                                           uint32_t aSrcLength,
-                                           char16_t* aDest,
-                                           nsBidiLevel aBaseDirection,
-                                           nsBidi* aBidiEngine)
-{
-  const char16_t* src = aSrc;
-  nsresult rv = aBidiEngine->SetPara(src, aSrcLength, aBaseDirection, nullptr);
-  if (NS_FAILED(rv)) {
-    return false;
-  }
-
-  nsBidiDirection dir;
-  rv = aBidiEngine->GetDirection(&dir);
-  // NSBIDI_LTR returned from GetDirection means the whole text is LTR
-  if (NS_FAILED(rv) || dir == NSBIDI_LTR) {
-    return false;
-  }
-
-  int32_t runCount;
-  rv = aBidiEngine->CountRuns(&runCount);
-  if (NS_FAILED(rv)) {
-    return false;
-  }
-
-  int32_t runIndex, start, length;
-  char16_t* dest = aDest;
-
-  for (runIndex = 0; runIndex < runCount; ++runIndex) {
-    rv = aBidiEngine->GetVisualRun(runIndex, &start, &length, &dir);
-    if (NS_FAILED(rv)) {
-      return false;
-    }
-
-    src = aSrc + start;
-
-    if (dir == NSBIDI_RTL) {
-      WriteReverse(src, length, dest);
-      dest += length;
-    } else {
-      do {
-        NS_ASSERTION(src >= aSrc && src < aSrc + aSrcLength,
-                     "logical index out of range");
-        NS_ASSERTION(dest < aDest + aSrcLength, "visual index out of range");
-        *(dest++) = *(src++);
-      } while (--length);
-    }
-  }
-
-  NS_ASSERTION(static_cast<uint32_t>(dest - aDest) == aSrcLength,
-               "whole string not copied");
-  return true;
-}
-
-void nsBidiPresUtils::CopyLogicalToVisual(const nsAString& aSource,
-                                          nsAString& aDest,
-                                          nsBidiLevel aBaseDirection,
-                                          bool aOverride)
-{
-  aDest.SetLength(0);
-  uint32_t srcLength = aSource.Length();
-  if (srcLength == 0)
-    return;
-  if (!aDest.SetLength(srcLength, fallible)) {
-    return;
-  }
-  nsAString::const_iterator fromBegin, fromEnd;
-  nsAString::iterator toBegin;
-  aSource.BeginReading(fromBegin);
-  aSource.EndReading(fromEnd);
-  aDest.BeginWriting(toBegin);
-
-  if (aOverride) {
-    if (aBaseDirection == NSBIDI_RTL) {
-      // no need to use the converter -- just copy the string in reverse order
-      WriteReverse(fromBegin.get(), srcLength, toBegin.get());
-    } else {
-      // if aOverride && aBaseDirection == NSBIDI_LTR, fall through to the
-      // simple copy
-      aDest.SetLength(0);
-    }
-  } else {
-    nsBidi bidiEngine;
-    if (!WriteLogicalToVisual(fromBegin.get(), srcLength, toBegin.get(),
-                             aBaseDirection, &bidiEngine)) {
-      aDest.SetLength(0);
-    }
-  }
-
-  if (aDest.IsEmpty()) {
-    // Either there was an error or the source is unidirectional
-    //  left-to-right. In either case, just copy source to dest.
-    CopyUnicodeTo(aSource.BeginReading(fromBegin), aSource.EndReading(fromEnd),
-                  aDest);
-  }
 }
 
 /* static */

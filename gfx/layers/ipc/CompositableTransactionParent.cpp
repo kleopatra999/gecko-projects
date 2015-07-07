@@ -11,7 +11,6 @@
 #include "GLContext.h"                  // for GLContext
 #include "Layers.h"                     // for Layer
 #include "RenderTrace.h"                // for RenderTraceInvalidateEnd, etc
-#include "TiledLayerBuffer.h"           // for TiledLayerComposer
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/RefPtr.h"             // for RefPtr
 #include "mozilla/layers/CompositorTypes.h"
@@ -23,6 +22,7 @@
 #include "mozilla/layers/LayersTypes.h"  // for MOZ_LAYERS_LOG
 #include "mozilla/layers/TextureHost.h"  // for TextureHost
 #include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
+#include "mozilla/layers/TiledContentHost.h"
 #include "mozilla/layers/PaintedLayerComposite.h"
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "mozilla/unused.h"
@@ -112,13 +112,12 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
     case CompositableOperation::TOpUseTiledLayerBuffer: {
       MOZ_LAYERS_LOG(("[ParentSide] Paint TiledLayerBuffer"));
       const OpUseTiledLayerBuffer& op = aEdit.get_OpUseTiledLayerBuffer();
-      CompositableHost* compositable = AsCompositable(op);
+      TiledContentHost* compositable = AsCompositable(op)->AsTiledContentHost();
 
-      TiledLayerComposer* tileComposer = compositable->AsTiledLayerComposer();
-      NS_ASSERTION(tileComposer, "compositable is not a tile composer");
+      NS_ASSERTION(compositable, "The compositable is not tiled");
 
       const SurfaceDescriptorTiles& tileDesc = op.tileLayerDescriptor();
-      bool success = tileComposer->UseTiledLayerBuffer(this, tileDesc);
+      bool success = compositable->UseTiledLayerBuffer(this, tileDesc);
       if (!success) {
         return false;
       }
@@ -145,7 +144,7 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
 
       if (!IsAsync() && ImageBridgeParent::GetInstance(GetChildProcessId())) {
         // send FenceHandle if present via ImageBridge.
-        ImageBridgeParent::SendFenceHandleToTrackerIfPresent(
+        ImageBridgeParent::AppendDeliverFenceMessage(
                              GetChildProcessId(),
                              op.holderId(),
                              op.transactionId(),
@@ -156,15 +155,13 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
         // Send message back via PImageBridge.
         ImageBridgeParent::ReplyRemoveTexture(
                              GetChildProcessId(),
-                             OpReplyRemoveTexture(true, // isMain
-                                                  op.holderId(),
+                             OpReplyRemoveTexture(op.holderId(),
                                                   op.transactionId()));
       } else {
         // send FenceHandle if present.
         SendFenceHandleIfPresent(op.textureParent(), compositable);
 
-        ReplyRemoveTexture(OpReplyRemoveTexture(false, // isMain
-                                                op.holderId(),
+        ReplyRemoveTexture(OpReplyRemoveTexture(op.holderId(),
                                                 op.transactionId()));
       }
       break;
@@ -176,6 +173,14 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
 
       MOZ_ASSERT(tex.get());
       compositable->UseTextureHost(tex);
+
+      MaybeFence maybeFence = op.fence();
+      if (maybeFence.type() == MaybeFence::TFenceHandle) {
+        FenceHandle fence = maybeFence.get_FenceHandle();
+        if (fence.IsValid() && tex) {
+          tex->SetAcquireFenceHandle(fence);
+        }
+      }
 
       if (IsAsync() && compositable->GetLayer()) {
         ScheduleComposition(op);
@@ -217,7 +222,7 @@ CompositableParentManager::ReceiveCompositableUpdate(const CompositableOperation
 }
 
 void
-CompositableParentManager::SendPendingAsyncMessges()
+CompositableParentManager::SendPendingAsyncMessages()
 {
   if (mPendingAsyncMessage.empty()) {
     return;

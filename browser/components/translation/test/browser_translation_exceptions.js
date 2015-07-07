@@ -72,7 +72,7 @@ function openPopup(aPopup) {
   aPopup.focus();
   // One down event to open the popup.
   EventUtils.synthesizeKey("VK_DOWN",
-                           { altKey: !navigator.platform.contains("Mac") });
+                           { altKey: !navigator.platform.includes("Mac") });
 
   return deferred.promise;
 }
@@ -194,7 +194,7 @@ let gTests = [
        "The 'Never translate French' item is disabled");
 
     // Cleanup.
-    Services.perms.remove("example.com", "translate");
+    Services.perms.remove(makeURI("http://example.com"), "translate");
     notif.close();
   }
 },
@@ -287,8 +287,8 @@ let gTests = [
     is(getDomainExceptions().length, 1, "One exception in the permissions");
 
     // Clear the permissions, and check the last item is removed from the display.
-    perms.remove("example.org", "translate");
-    perms.remove("example.com", "translate");
+    perms.remove(makeURI("http://example.org"), "translate");
+    perms.remove(makeURI("http://example.com"), "translate");
     is(tree.view.rowCount, 0, "The site exceptions list is empty");
     ok(remove.disabled, "The 'Remove Site' button is disabled");
     ok(removeAll.disabled, "The 'Remove All Site' button is disabled");

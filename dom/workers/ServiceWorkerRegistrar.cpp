@@ -1,3 +1,5 @@
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -46,7 +48,7 @@ ServiceWorkerRegistrar::Initialize()
 {
   MOZ_ASSERT(!gServiceWorkerRegistrar);
 
-  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+  if (!XRE_IsParentProcess()) {
     return;
   }
 
@@ -68,7 +70,7 @@ ServiceWorkerRegistrar::Initialize()
 /* static */ already_AddRefed<ServiceWorkerRegistrar>
 ServiceWorkerRegistrar::Get()
 {
-  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+  MOZ_ASSERT(XRE_IsParentProcess());
 
   MOZ_ASSERT(gServiceWorkerRegistrar);
   nsRefPtr<ServiceWorkerRegistrar> service = gServiceWorkerRegistrar.get();
@@ -147,12 +149,26 @@ ServiceWorkerRegistrar::RegisterServiceWorker(
     MonitorAutoLock lock(mMonitor);
     MOZ_ASSERT(mDataLoaded);
 
+    const mozilla::ipc::PrincipalInfo& newPrincipalInfo = aData.principal();
+    MOZ_ASSERT(newPrincipalInfo.type() ==
+               mozilla::ipc::PrincipalInfo::TContentPrincipalInfo);
+
+    const mozilla::ipc::ContentPrincipalInfo& newContentPrincipalInfo =
+      newPrincipalInfo.get_ContentPrincipalInfo();
+
     bool found = false;
     for (uint32_t i = 0, len = mData.Length(); i < len; ++i) {
       if (mData[i].scope() == aData.scope()) {
-        mData[i] = aData;
-        found = true;
-        break;
+        const mozilla::ipc::PrincipalInfo& existingPrincipalInfo =
+          mData[i].principal();
+        const mozilla::ipc::ContentPrincipalInfo& existingContentPrincipalInfo =
+          existingPrincipalInfo.get_ContentPrincipalInfo();
+
+        if (newContentPrincipalInfo == existingContentPrincipalInfo) {
+          mData[i] = aData;
+          found = true;
+          break;
+        }
       }
     }
 
@@ -165,7 +181,9 @@ ServiceWorkerRegistrar::RegisterServiceWorker(
 }
 
 void
-ServiceWorkerRegistrar::UnregisterServiceWorker(const nsACString& aScope)
+ServiceWorkerRegistrar::UnregisterServiceWorker(
+                                            const PrincipalInfo& aPrincipalInfo,
+                                            const nsACString& aScope)
 {
   AssertIsOnBackgroundThread();
 
@@ -181,12 +199,38 @@ ServiceWorkerRegistrar::UnregisterServiceWorker(const nsACString& aScope)
     MOZ_ASSERT(mDataLoaded);
 
     for (uint32_t i = 0; i < mData.Length(); ++i) {
-      if (mData[i].scope() == aScope) {
+      if (mData[i].principal() == aPrincipalInfo &&
+          mData[i].scope() == aScope) {
         mData.RemoveElementAt(i);
         deleted = true;
         break;
       }
     }
+  }
+
+  if (deleted) {
+    ScheduleSaveData();
+  }
+}
+
+void
+ServiceWorkerRegistrar::RemoveAll()
+{
+  AssertIsOnBackgroundThread();
+
+  if (mShuttingDown) {
+    NS_WARNING("Failed to remove all the serviceWorkers during shutting down.");
+    return;
+  }
+
+  bool deleted = false;
+
+  {
+    MonitorAutoLock lock(mMonitor);
+    MOZ_ASSERT(mDataLoaded);
+
+    deleted = !mData.IsEmpty();
+    mData.Clear();
   }
 
   if (deleted) {
@@ -279,34 +323,23 @@ ServiceWorkerRegistrar::ReadData()
 
     GET_LINE(line);
 
-    if (line.EqualsLiteral(SERVICEWORKERREGISTRAR_SYSTEM_PRINCIPAL)) {
-      entry->principal() = mozilla::ipc::SystemPrincipalInfo();
-    } else {
-      if (!line.EqualsLiteral(SERVICEWORKERREGISTRAR_CONTENT_PRINCIPAL)) {
-        return NS_ERROR_FAILURE;
-      }
-
-      GET_LINE(line);
-
-      uint32_t appId = line.ToInteger(&rv);
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-      }
-
-      GET_LINE(line);
-
-      if (!line.EqualsLiteral(SERVICEWORKERREGISTRAR_TRUE) &&
-          !line.EqualsLiteral(SERVICEWORKERREGISTRAR_FALSE)) {
-        return NS_ERROR_FAILURE;
-      }
-
-      bool isInBrowserElement = line.EqualsLiteral(SERVICEWORKERREGISTRAR_TRUE);
-
-      GET_LINE(line);
-      entry->principal() =
-        mozilla::ipc::ContentPrincipalInfo(appId, isInBrowserElement,
-                                           line);
+    uint32_t appId = line.ToInteger(&rv);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
     }
+
+    GET_LINE(line);
+
+    if (!line.EqualsLiteral(SERVICEWORKERREGISTRAR_TRUE) &&
+        !line.EqualsLiteral(SERVICEWORKERREGISTRAR_FALSE)) {
+      return NS_ERROR_FAILURE;
+    }
+
+    bool isInBrowserElement = line.EqualsLiteral(SERVICEWORKERREGISTRAR_TRUE);
+
+    GET_LINE(line);
+    entry->principal() =
+      mozilla::ipc::ContentPrincipalInfo(appId, isInBrowserElement, line);
 
     GET_LINE(entry->scope());
     GET_LINE(entry->scriptSpec());
@@ -516,29 +549,23 @@ ServiceWorkerRegistrar::WriteData()
   for (uint32_t i = 0, len = data.Length(); i < len; ++i) {
     const mozilla::ipc::PrincipalInfo& info = data[i].principal();
 
-    if (info.type() == mozilla::ipc::PrincipalInfo::TSystemPrincipalInfo) {
-      buffer.AssignLiteral(SERVICEWORKERREGISTRAR_SYSTEM_PRINCIPAL);
+    MOZ_ASSERT(info.type() == mozilla::ipc::PrincipalInfo::TContentPrincipalInfo);
+
+    const mozilla::ipc::ContentPrincipalInfo& cInfo =
+      info.get_ContentPrincipalInfo();
+
+    buffer.Truncate();
+    buffer.AppendInt(cInfo.appId());
+    buffer.Append('\n');
+
+    if (cInfo.isInBrowserElement()) {
+      buffer.AppendLiteral(SERVICEWORKERREGISTRAR_TRUE);
     } else {
-      MOZ_ASSERT(info.type() == mozilla::ipc::PrincipalInfo::TContentPrincipalInfo);
-
-      const mozilla::ipc::ContentPrincipalInfo& cInfo =
-        info.get_ContentPrincipalInfo();
-
-      buffer.AssignLiteral(SERVICEWORKERREGISTRAR_CONTENT_PRINCIPAL);
-      buffer.Append('\n');
-
-      buffer.AppendInt(cInfo.appId());
-      buffer.Append('\n');
-
-      if (cInfo.isInBrowserElement()) {
-        buffer.AppendLiteral(SERVICEWORKERREGISTRAR_TRUE);
-      } else {
-        buffer.AppendLiteral(SERVICEWORKERREGISTRAR_FALSE);
-      }
-
-      buffer.Append('\n');
-      buffer.Append(cInfo.spec());
+      buffer.AppendLiteral(SERVICEWORKERREGISTRAR_FALSE);
     }
+
+    buffer.Append('\n');
+    buffer.Append(cInfo.spec());
 
     buffer.Append('\n');
 

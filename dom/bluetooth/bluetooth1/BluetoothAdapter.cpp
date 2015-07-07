@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -397,16 +397,11 @@ BluetoothAdapter::StartStopDiscovery(bool aStart, ErrorResult& aRv)
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
-  nsresult rv;
+
   if (aStart) {
-    rv = bs->StartDiscoveryInternal(results);
+    bs->StartDiscoveryInternal(results);
   } else {
-    rv = bs->StopDiscoveryInternal(results);
-  }
-  if (NS_FAILED(rv)) {
-    BT_WARNING("Start/Stop Discovery failed!");
-    aRv.Throw(rv);
-    return nullptr;
+    bs->StopDiscoveryInternal(results);
   }
 
   // mDiscovering is not set here, we'll get a Property update from our external
@@ -771,7 +766,7 @@ BluetoothAdapter::IsConnected(const uint16_t aServiceUuid, ErrorResult& aRv)
 
 already_AddRefed<DOMRequest>
 BluetoothAdapter::SendFile(const nsAString& aDeviceAddress,
-                           File& aBlob, ErrorResult& aRv)
+                           Blob& aBlob, ErrorResult& aRv)
 {
   nsCOMPtr<nsPIDOMWindow> win = GetOwner();
   if (!win) {
@@ -789,7 +784,7 @@ BluetoothAdapter::SendFile(const nsAString& aDeviceAddress,
     return nullptr;
   }
 
-  if (XRE_GetProcessType() == GeckoProcessType_Default) {
+  if (XRE_IsParentProcess()) {
     // In-process transfer
     bs->SendFile(aDeviceAddress, &aBlob, results);
   } else {

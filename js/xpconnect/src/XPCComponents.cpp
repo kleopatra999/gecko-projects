@@ -28,11 +28,11 @@
 #include "mozilla/dom/StructuredCloneTags.h"
 #include "mozilla/dom/WindowBinding.h"
 #include "nsZipArchive.h"
-#include "nsIDOMFile.h"
 #include "nsIDOMFileList.h"
 #include "nsWindowMemoryReporter.h"
 #include "nsDOMClassInfo.h"
 #include "ShimInterfaceInfo.h"
+#include "nsIAddonInterposition.h"
 
 using namespace mozilla;
 using namespace JS;
@@ -307,20 +307,18 @@ nsXPCComponents_Interfaces::Resolve(nsIXPConnectWrappedNative* wrapper,
 
         if (nsid) {
             nsXPConnect* xpc = nsXPConnect::XPConnect();
-            nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
+            RootedObject idobj(cx);
             if (NS_SUCCEEDED(xpc->WrapNative(cx, obj,
                                              static_cast<nsIJSIID*>(nsid),
                                              NS_GET_IID(nsIJSIID),
-                                             getter_AddRefs(holder)))) {
-                RootedObject idobj(cx);
-                if (holder &&
-                    // Assign, not compare
-                    (idobj = holder->GetJSObject())) {
+                                             idobj.address()))) {
+                if (idobj) {
                     *resolvedp = true;
                     *_retval = JS_DefinePropertyById(cx, obj, id, idobj,
                                                      JSPROP_ENUMERATE |
                                                      JSPROP_READONLY |
-                                                     JSPROP_PERMANENT);
+                                                     JSPROP_PERMANENT |
+                                                     JSPROP_RESOLVING);
                 }
             }
         }
@@ -544,21 +542,19 @@ nsXPCComponents_InterfacesByID::Resolve(nsIXPConnectWrappedNative* wrapper,
             return NS_ERROR_OUT_OF_MEMORY;
 
         nsXPConnect* xpc = nsXPConnect::XPConnect();
-        nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
+        RootedObject idobj(cx);
         if (NS_SUCCEEDED(xpc->WrapNative(cx, obj,
                                          static_cast<nsIJSIID*>(nsid),
-                                            NS_GET_IID(nsIJSIID),
-                                            getter_AddRefs(holder)))) {
-            RootedObject idobj(cx);
-            if (holder &&
-                // Assign, not compare
-                (idobj = holder->GetJSObject())) {
+                                         NS_GET_IID(nsIJSIID),
+                                         idobj.address()))) {
+            if (idobj) {
                 *resolvedp = true;
                 *_retval =
                     JS_DefinePropertyById(cx, obj, id, idobj,
                                           JSPROP_ENUMERATE |
                                           JSPROP_READONLY |
-                                          JSPROP_PERMANENT);
+                                          JSPROP_PERMANENT |
+                                          JSPROP_RESOLVING);
             }
         }
     }
@@ -763,20 +759,18 @@ nsXPCComponents_Classes::Resolve(nsIXPConnectWrappedNative* wrapper,
         nsCOMPtr<nsIJSCID> nsid = nsJSCID::NewID(name.ptr());
         if (nsid) {
             nsXPConnect* xpc = nsXPConnect::XPConnect();
-            nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
+            RootedObject idobj(cx);
             if (NS_SUCCEEDED(xpc->WrapNative(cx, obj,
                                              static_cast<nsIJSCID*>(nsid),
                                              NS_GET_IID(nsIJSCID),
-                                             getter_AddRefs(holder)))) {
-                RootedObject idobj(cx);
-                if (holder &&
-                    // Assign, not compare
-                        (idobj = holder->GetJSObject())) {
+                                             idobj.address()))) {
+                if (idobj) {
                     *resolvedp = true;
                     *_retval = JS_DefinePropertyById(cx, obj, id, idobj,
                                                      JSPROP_ENUMERATE |
                                                      JSPROP_READONLY |
-                                                     JSPROP_PERMANENT);
+                                                     JSPROP_PERMANENT |
+                                                     JSPROP_RESOLVING);
                 }
             }
         }
@@ -1001,20 +995,18 @@ nsXPCComponents_ClassesByID::Resolve(nsIXPConnectWrappedNative* wrapper,
         nsCOMPtr<nsIJSCID> nsid = nsJSCID::NewID(name.ptr());
         if (nsid) {
             nsXPConnect* xpc = nsXPConnect::XPConnect();
-            nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
+            RootedObject idobj(cx);
             if (NS_SUCCEEDED(xpc->WrapNative(cx, obj,
                                              static_cast<nsIJSCID*>(nsid),
                                              NS_GET_IID(nsIJSCID),
-                                             getter_AddRefs(holder)))) {
-                RootedObject idobj(cx);
-                if (holder &&
-                    // Assign, not compare
-                    (idobj = holder->GetJSObject())) {
+                                             idobj.address()))) {
+                if (idobj) {
                     *resolvedp = true;
                     *_retval = JS_DefinePropertyById(cx, obj, id, idobj,
                                                      JSPROP_ENUMERATE |
                                                      JSPROP_READONLY |
-                                                     JSPROP_PERMANENT);
+                                                     JSPROP_PERMANENT |
+                                                     JSPROP_RESOLVING);
                 }
             }
         }
@@ -1209,7 +1201,8 @@ nsXPCComponents_Results::Resolve(nsIXPConnectWrappedNative* wrapper,
                 if (!JS_DefinePropertyById(cx, obj, id, (uint32_t)rv,
                                            JSPROP_ENUMERATE |
                                            JSPROP_READONLY |
-                                           JSPROP_PERMANENT)) {
+                                           JSPROP_PERMANENT |
+                                           JSPROP_RESOLVING)) {
                     return NS_ERROR_UNEXPECTED;
                 }
             }
@@ -1758,13 +1751,8 @@ nsXPCComponents_Exception::CallOrConstruct(nsIXPConnectWrappedNative* wrapper,
                                              parser.eStack,
                                              parser.eData);
 
-    nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
     RootedObject newObj(cx);
-
-    if (NS_FAILED(xpc->WrapNative(cx, obj, e, NS_GET_IID(nsIXPCException),
-                                  getter_AddRefs(holder))) || !holder ||
-        // Assign, not compare
-        !(newObj = holder->GetJSObject())) {
+    if (NS_FAILED(xpc->WrapNative(cx, obj, e, NS_GET_IID(nsIXPCException), newObj.address())) || !newObj) {
         return ThrowAndFail(NS_ERROR_XPC_CANT_CREATE_WN, cx, _retval);
     }
 
@@ -2006,19 +1994,11 @@ nsXPCConstructor::CallOrConstruct(nsIXPConnectWrappedNative* wrapper,JSContext* 
     // security check not required because we are going to call through the
     // code which is reflected into JS which will do that for us later.
 
-    nsCOMPtr<nsIXPConnectJSObjectHolder> cidHolder;
-    nsCOMPtr<nsIXPConnectJSObjectHolder> iidHolder;
     RootedObject cidObj(cx);
     RootedObject iidObj(cx);
 
-    if (NS_FAILED(xpc->WrapNative(cx, obj, mClassID, NS_GET_IID(nsIJSCID),
-                                  getter_AddRefs(cidHolder))) || !cidHolder ||
-        // Assign, not compare
-        !(cidObj = cidHolder->GetJSObject()) ||
-        NS_FAILED(xpc->WrapNative(cx, obj, mInterfaceID, NS_GET_IID(nsIJSIID),
-                                  getter_AddRefs(iidHolder))) || !iidHolder ||
-        // Assign, not compare
-        !(iidObj = iidHolder->GetJSObject())) {
+    if (NS_FAILED(xpc->WrapNative(cx, obj, mClassID, NS_GET_IID(nsIJSCID), cidObj.address())) || !cidObj ||
+        NS_FAILED(xpc->WrapNative(cx, obj, mInterfaceID, NS_GET_IID(nsIJSIID), iidObj.address())) || !iidObj) {
         return ThrowAndFail(NS_ERROR_XPC_CANT_CREATE_WN, cx, _retval);
     }
 
@@ -2255,7 +2235,6 @@ nsXPCComponents_Constructor::CallOrConstruct(nsIXPConnectWrappedNative* wrapper,
         // XXXjband support passing "Components.interfaces.foo"?
 
         nsCOMPtr<nsIXPCComponents_Interfaces> ifaces;
-        nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
         RootedObject ifacesObj(cx);
 
         // we do the lookup by asking the Components.interfaces object
@@ -2265,9 +2244,7 @@ nsXPCComponents_Constructor::CallOrConstruct(nsIXPConnectWrappedNative* wrapper,
         if (NS_FAILED(comp->GetInterfaces(getter_AddRefs(ifaces))) ||
             NS_FAILED(xpc->WrapNative(cx, obj, ifaces,
                                       NS_GET_IID(nsIXPCComponents_Interfaces),
-                                      getter_AddRefs(holder))) || !holder ||
-            // Assign, not compare
-            !(ifacesObj = holder->GetJSObject())) {
+                                      ifacesObj.address())) || !ifacesObj) {
             return ThrowAndFail(NS_ERROR_XPC_UNEXPECTED, cx, _retval);
         }
 
@@ -2307,15 +2284,12 @@ nsXPCComponents_Constructor::CallOrConstruct(nsIXPConnectWrappedNative* wrapper,
         // nsIJSCID objects work for us.
 
         nsCOMPtr<nsIXPCComponents_Classes> classes;
-        nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
         RootedObject classesObj(cx);
 
         if (NS_FAILED(comp->GetClasses(getter_AddRefs(classes))) ||
             NS_FAILED(xpc->WrapNative(cx, obj, classes,
                                       NS_GET_IID(nsIXPCComponents_Classes),
-                                      getter_AddRefs(holder))) || !holder ||
-            // Assign, not compare
-            !(classesObj = holder->GetJSObject())) {
+                                      classesObj.address())) || !classesObj) {
             return ThrowAndFail(NS_ERROR_XPC_UNEXPECTED, cx, _retval);
         }
 
@@ -2337,13 +2311,9 @@ nsXPCComponents_Constructor::CallOrConstruct(nsIXPConnectWrappedNative* wrapper,
     }
 
     nsCOMPtr<nsIXPCConstructor> ctor = new nsXPCConstructor(cClassID, cInterfaceID, cInitializer);
-    nsCOMPtr<nsIXPConnectJSObjectHolder> holder2;
     RootedObject newObj(cx);
 
-    if (NS_FAILED(xpc->WrapNative(cx, obj, ctor, NS_GET_IID(nsIXPCConstructor),
-                                  getter_AddRefs(holder2))) || !holder2 ||
-        // Assign, not compare
-        !(newObj = holder2->GetJSObject())) {
+    if (NS_FAILED(xpc->WrapNative(cx, obj, ctor, NS_GET_IID(nsIXPCConstructor), newObj.address())) || !newObj) {
         return ThrowAndFail(NS_ERROR_XPC_CANT_CREATE_WN, cx, _retval);
     }
 
@@ -2750,9 +2720,11 @@ class PreciseGCRunnable : public nsRunnable
             }
         }
 
-        PrepareForFullGC(rt);
-        JSGCInvocationKind gckind = mShrinking ? GC_SHRINK : GC_NORMAL;
-        GCForReason(rt, gckind, gcreason::COMPONENT_UTILS);
+        nsJSContext::GarbageCollectNow(gcreason::COMPONENT_UTILS,
+                                       nsJSContext::NonIncrementalGC,
+                                       mShrinking ?
+                                         nsJSContext::ShrinkingGC :
+                                         nsJSContext::NonShrinkingGC);
 
         mCallback->Callback();
         return NS_OK;
@@ -2853,7 +2825,7 @@ nsXPCComponents_Utils::CallFunctionWithAsyncStack(HandleValue function,
 
     JS::AutoSetAsyncStackForNewCalls sas(cx, asyncStackObj, asyncCauseString);
 
-    if (!JS_CallFunctionValue(cx, JS::NullPtr(), function,
+    if (!JS_CallFunctionValue(cx, nullptr, function,
                               JS::HandleValueArray::empty(), retval))
     {
         return NS_ERROR_XPC_JAVASCRIPT_ERROR;
@@ -3298,7 +3270,7 @@ nsXPCComponents_Utils::GetIncumbentGlobal(HandleValue aCallback,
     // Invoke the callback, if passed.
     if (aCallback.isObject()) {
         RootedValue ignored(aCx);
-        if (!JS_CallFunctionValue(aCx, JS::NullPtr(), aCallback, JS::HandleValueArray(globalVal), &ignored))
+        if (!JS_CallFunctionValue(aCx, nullptr, aCallback, JS::HandleValueArray(globalVal), &ignored))
             return NS_ERROR_FAILURE;
     }
 
@@ -3484,8 +3456,24 @@ nsXPCComponents_Utils::SetAddonInterposition(const nsACString& addonIdStr,
     JSAddonId* addonId = xpc::NewAddonId(cx, addonIdStr);
     if (!addonId)
         return NS_ERROR_FAILURE;
-    if (!XPCWrappedNativeScope::SetAddonInterposition(addonId, interposition))
+    if (!XPCWrappedNativeScope::SetAddonInterposition(cx, addonId, interposition))
         return NS_ERROR_FAILURE;
+
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXPCComponents_Utils::SetAddonCallInterposition(HandleValue target,
+                                                 JSContext* cx)
+{
+    NS_ENSURE_TRUE(target.isObject(), NS_ERROR_INVALID_ARG);
+    RootedObject targetObj(cx, &target.toObject());
+    targetObj = js::CheckedUnwrap(targetObj);
+    NS_ENSURE_TRUE(targetObj, NS_ERROR_INVALID_ARG);
+    XPCWrappedNativeScope* xpcScope = ObjectScope(targetObj);
+    NS_ENSURE_TRUE(xpcScope, NS_ERROR_INVALID_ARG);
+
+    xpcScope->SetAddonCallInterposition();
     return NS_OK;
 }
 

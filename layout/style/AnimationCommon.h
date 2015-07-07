@@ -15,7 +15,7 @@
 #include "nsDisplayList.h" // For nsDisplayItem::Type
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StyleAnimationValue.h"
-#include "mozilla/dom/AnimationPlayer.h"
+#include "mozilla/dom/Animation.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Nullable.h"
 #include "nsStyleStruct.h"
@@ -28,12 +28,11 @@
 
 class nsIFrame;
 class nsPresContext;
-class nsStyleChangeList;
 
 namespace mozilla {
 
 class RestyleTracker;
-struct AnimationPlayerCollection;
+struct AnimationCollection;
 
 namespace css {
 
@@ -82,7 +81,7 @@ public:
   // elements.
   void AddStyleUpdatesTo(mozilla::RestyleTracker& aTracker);
 
-  AnimationPlayerCollection*
+  AnimationCollection*
   GetAnimations(dom::Element *aElement,
                 nsCSSPseudoElements::Type aPseudoType,
                 bool aCreateIfNeeded);
@@ -100,9 +99,9 @@ public:
     return false;
   }
 
-  // Notify this manager that one of its collections of animation players,
+  // Notify this manager that one of its collections of animations,
   // has been updated.
-  void NotifyCollectionUpdated(AnimationPlayerCollection& aCollection);
+  void NotifyCollectionUpdated(AnimationCollection& aCollection);
 
   enum FlushFlags {
     Can_Throttle,
@@ -141,9 +140,9 @@ protected:
   virtual ~CommonAnimationManager();
 
   // For ElementCollectionRemoved
-  friend struct mozilla::AnimationPlayerCollection;
+  friend struct mozilla::AnimationCollection;
 
-  void AddElementCollection(AnimationPlayerCollection* aCollection);
+  void AddElementCollection(AnimationCollection* aCollection);
   void ElementCollectionRemoved() { MaybeStartOrStopObservingRefreshDriver(); }
   void RemoveAllElementCollections();
 
@@ -162,11 +161,26 @@ protected:
     return false;
   }
 
-  static AnimationPlayerCollection*
-  GetAnimationsForCompositor(nsIContent* aContent,
-                             nsIAtom* aElementProperty,
+
+public:
+  // Return an AnimationCollection* if we have an animation for
+  // the frame aFrame that can be performed on the compositor thread (as
+  // defined by AnimationCollection::CanPerformOnCompositorThread).
+  //
+  // Note that this does not test whether the frame's layer uses
+  // off-main-thread compositing, although it does check whether
+  // off-main-thread compositing is enabled as a whole.
+  AnimationCollection*
+  GetAnimationsForCompositor(const nsIFrame* aFrame,
                              nsCSSProperty aProperty);
 
+  // Given the frame aFrame with possibly animated content, finds its
+  // associated collection of animations. If it is a generated content
+  // frame, it may examine the parent frame to search for such animations.
+  AnimationCollection*
+  GetAnimationCollection(const nsIFrame* aFrame);
+
+protected:
   PRCList mElementCollections;
   nsPresContext *mPresContext; // weak (non-null from ctor to Disconnect)
   bool mIsObservingRefreshDriver;
@@ -223,18 +237,17 @@ private:
 
 } /* end css sub-namespace */
 
-typedef InfallibleTArray<nsRefPtr<dom::AnimationPlayer> >
-  AnimationPlayerPtrArray;
+typedef InfallibleTArray<nsRefPtr<dom::Animation>> AnimationPtrArray;
 
 enum EnsureStyleRuleFlags {
   EnsureStyleRule_IsThrottled,
   EnsureStyleRule_IsNotThrottled
 };
 
-struct AnimationPlayerCollection : public PRCList
+struct AnimationCollection : public PRCList
 {
-  AnimationPlayerCollection(dom::Element *aElement, nsIAtom *aElementProperty,
-                            mozilla::css::CommonAnimationManager *aManager)
+  AnimationCollection(dom::Element *aElement, nsIAtom *aElementProperty,
+                      mozilla::css::CommonAnimationManager *aManager)
     : mElement(aElement)
     , mElementProperty(aElementProperty)
     , mManager(aManager)
@@ -245,22 +258,22 @@ struct AnimationPlayerCollection : public PRCList
     , mCalledPropertyDtor(false)
 #endif
   {
-    MOZ_COUNT_CTOR(AnimationPlayerCollection);
+    MOZ_COUNT_CTOR(AnimationCollection);
     PR_INIT_CLIST(this);
   }
-  ~AnimationPlayerCollection()
+  ~AnimationCollection()
   {
     MOZ_ASSERT(mCalledPropertyDtor,
                "must call destructor through element property dtor");
-    MOZ_COUNT_DTOR(AnimationPlayerCollection);
+    MOZ_COUNT_DTOR(AnimationCollection);
     PR_REMOVE_LINK(this);
     mManager->ElementCollectionRemoved();
   }
 
   void Destroy()
   {
-    for (size_t playerIdx = mPlayers.Length(); playerIdx-- != 0; ) {
-      mPlayers[playerIdx]->Cancel();
+    for (size_t animIdx = mAnimations.Length(); animIdx-- != 0; ) {
+      mAnimations[animIdx]->CancelFromStyle();
     }
     // This will call our destructor.
     mElement->DeleteProperty(mElementProperty);
@@ -285,11 +298,13 @@ struct AnimationPlayerCollection : public PRCList
     CanAnimate_AllowPartial = 2
   };
 
+private:
   static bool
   CanAnimatePropertyOnCompositor(const dom::Element *aElement,
                                  nsCSSProperty aProperty,
                                  CanAnimateFlags aFlags);
 
+public:
   static bool IsCompositorAnimationDisabledForFrame(nsIFrame* aFrame);
 
   // True if this animation can be performed on the compositor thread.
@@ -305,6 +320,10 @@ struct AnimationPlayerCollection : public PRCList
   // time can be fully represented by data sent to the compositor.
   // (This is useful for determining whether throttle the animation
   // (suppress main-thread style updates).)
+  //
+  // Note that this does not test whether the element's layer uses
+  // off-main-thread compositing, although it does check whether
+  // off-main-thread compositing is enabled as a whole.
   bool CanPerformOnCompositorThread(CanAnimateFlags aFlags) const;
 
   void PostUpdateLayerAnimations();
@@ -375,7 +394,7 @@ struct AnimationPlayerCollection : public PRCList
     }
   }
 
-  void NotifyPlayerUpdated();
+  void NotifyAnimationUpdated();
 
   static void LogAsyncAnimationFailure(nsCString& aMessage,
                                        const nsIContent* aContent = nullptr);
@@ -388,7 +407,7 @@ struct AnimationPlayerCollection : public PRCList
 
   mozilla::css::CommonAnimationManager *mManager;
 
-  mozilla::AnimationPlayerPtrArray mPlayers;
+  mozilla::AnimationPtrArray mAnimations;
 
   // This style rule contains the style data for currently animating
   // values.  It only matches when styling with animation.  When we

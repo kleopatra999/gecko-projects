@@ -32,12 +32,16 @@
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/CSSBinding.h"
 #include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
+#include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/FileBinding.h"
 #include "mozilla/dom/PromiseBinding.h"
+#include "mozilla/dom/RequestBinding.h"
+#include "mozilla/dom/ResponseBinding.h"
 #include "mozilla/dom/RTCIdentityProviderRegistrar.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TextDecoderBinding.h"
 #include "mozilla/dom/TextEncoderBinding.h"
+#include "mozilla/dom/UnionConversions.h"
 #include "mozilla/dom/URLBinding.h"
 #include "mozilla/dom/URLSearchParamsBinding.h"
 
@@ -49,7 +53,20 @@ using namespace xpc;
 using mozilla::dom::DestroyProtoAndIfaceCache;
 using mozilla::dom::indexedDB::IndexedDatabaseManager;
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_0(SandboxPrivate)
+NS_IMPL_CYCLE_COLLECTION_CLASS(SandboxPrivate)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(SandboxPrivate)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
+  tmp->UnlinkHostObjectURIs();
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(SandboxPrivate)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
+  tmp->TraverseHostObjectURIs(cb);
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(SandboxPrivate)
+
 NS_IMPL_CYCLE_COLLECTING_ADDREF(SandboxPrivate)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(SandboxPrivate)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(SandboxPrivate)
@@ -205,7 +222,7 @@ SandboxCreateCrypto(JSContext* cx, JS::HandleObject obj)
 
     dom::Crypto* crypto = new dom::Crypto();
     crypto->Init(native);
-    JS::RootedObject wrapped(cx, crypto->WrapObject(cx, JS::NullPtr()));
+    JS::RootedObject wrapped(cx, crypto->WrapObject(cx, nullptr));
     return JS_DefineProperty(cx, obj, "crypto", wrapped, JSPROP_ENUMERATE);
 }
 
@@ -219,8 +236,86 @@ SandboxCreateRTCIdentityProvider(JSContext* cx, JS::HandleObject obj)
 
     dom::RTCIdentityProviderRegistrar* registrar =
             new dom::RTCIdentityProviderRegistrar(nativeGlobal);
-    JS::RootedObject wrapped(cx, registrar->WrapObject(cx, JS::NullPtr()));
+    JS::RootedObject wrapped(cx, registrar->WrapObject(cx, nullptr));
     return JS_DefineProperty(cx, obj, "rtcIdentityProvider", wrapped, JSPROP_ENUMERATE);
+}
+
+static bool
+SetFetchRequestFromValue(JSContext *cx, RequestOrUSVString& request,
+                         const MutableHandleValue& requestOrUrl)
+{
+    RequestOrUSVStringArgument requestHolder(request);
+    bool noMatch = true;
+    if (requestOrUrl.isObject() &&
+        !requestHolder.TrySetToRequest(cx, requestOrUrl, noMatch, false)) {
+        return false;
+    }
+    if (noMatch &&
+        !requestHolder.TrySetToUSVString(cx, requestOrUrl, noMatch)) {
+        return false;
+    }
+    if (noMatch) {
+        return false;
+    }
+    return true;
+}
+
+static bool
+SandboxFetch(JSContext* cx, JS::HandleObject scope, const CallArgs& args)
+{
+    if (args.length() < 1) {
+        JS_ReportError(cx, "fetch requires at least 1 argument");
+        return false;
+    }
+
+    RequestOrUSVString request;
+    if (!SetFetchRequestFromValue(cx, request, args[0])) {
+        JS_ReportError(cx, "fetch requires a string or Request in argument 1");
+        return false;
+    }
+    RootedDictionary<dom::RequestInit> options(cx);
+    if (!options.Init(cx, args.hasDefined(1) ? args[1] : JS::NullHandleValue,
+                      "Argument 2 of fetch", false)) {
+        return false;
+    }
+    nsCOMPtr<nsIGlobalObject> global = xpc::NativeGlobal(scope);
+    if (!global) {
+        return false;
+    }
+    ErrorResult rv;
+    nsRefPtr<dom::Promise> response =
+        FetchRequest(global, Constify(request), Constify(options), rv);
+    rv.WouldReportJSException();
+    if (rv.Failed()) {
+        return ThrowMethodFailedWithDetails(cx, rv, "Sandbox", "fetch");
+    }
+    if (!GetOrCreateDOMReflector(cx, scope, response, args.rval())) {
+        return false;
+    }
+    return true;
+}
+
+static bool SandboxFetchPromise(JSContext* cx, unsigned argc, jsval* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    RootedObject callee(cx, &args.callee());
+    RootedObject scope(cx, JS::CurrentGlobalOrNull(cx));
+    if (SandboxFetch(cx, scope, args)) {
+        return true;
+    }
+    return ConvertExceptionToPromise(cx, scope, args.rval());
+}
+
+
+static bool
+SandboxCreateFetch(JSContext* cx, HandleObject obj)
+{
+    MOZ_ASSERT(JS_IsGlobalObject(obj));
+
+    return JS_DefineFunction(cx, obj, "fetch", SandboxFetchPromise, 2, 0) &&
+        dom::RequestBinding::GetConstructorObject(cx, obj) &&
+        dom::ResponseBinding::GetConstructorObject(cx, obj) &&
+        dom::HeadersBinding::GetConstructorObject(cx, obj);
 }
 
 static bool
@@ -345,7 +440,7 @@ static bool
 sandbox_convert(JSContext* cx, HandleObject obj, JSType type, MutableHandleValue vp)
 {
     if (type == JSTYPE_OBJECT) {
-        vp.set(OBJECT_TO_JSVAL(obj));
+        vp.setObject(*obj);
         return true;
     }
 
@@ -468,7 +563,9 @@ static const js::Class SandboxClass = {
     "Sandbox",
     XPCONNECT_GLOBAL_FLAGS_WITH_EXTRA_SLOTS(1),
     nullptr, nullptr, nullptr, nullptr,
-    sandbox_enumerate, sandbox_resolve, sandbox_convert,  sandbox_finalize,
+    sandbox_enumerate, sandbox_resolve,
+    nullptr,        /* mayResolve */
+    sandbox_convert,  sandbox_finalize,
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
     JS_NULL_CLASS_SPEC,
     {
@@ -487,7 +584,9 @@ static const js::Class SandboxWriteToProtoClass = {
     "Sandbox",
     XPCONNECT_GLOBAL_FLAGS_WITH_EXTRA_SLOTS(1),
     sandbox_addProperty, nullptr, nullptr, nullptr,
-    sandbox_enumerate, sandbox_resolve, sandbox_convert,  sandbox_finalize,
+    sandbox_enumerate, sandbox_resolve,
+    nullptr,        /* mayResolve */
+    sandbox_convert,  sandbox_finalize,
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
     JS_NULL_CLASS_SPEC,
     {
@@ -801,6 +900,8 @@ xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj)
             crypto = true;
         } else if (!strcmp(name.ptr(), "rtcIdentityProvider")) {
             rtcIdentityProvider = true;
+        } else if (!strcmp(name.ptr(), "fetch")) {
+            fetch = true;
         } else {
             JS_ReportError(cx, "Unknown property name: %s", name.ptr());
             return false;
@@ -815,7 +916,7 @@ xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
     if (CSS && !dom::CSSBinding::GetConstructorObject(cx, obj))
         return false;
 
-    if (indexedDB && AccessCheck::isChrome(obj) &&
+    if (indexedDB &&
         !IndexedDatabaseManager::DefineIndexedDB(cx, obj))
         return false;
 
@@ -861,6 +962,9 @@ xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
     if (rtcIdentityProvider && !SandboxCreateRTCIdentityProvider(cx, obj))
         return false;
 
+    if (fetch && !SandboxCreateFetch(cx, obj))
+        return false;
+
     return true;
 }
 
@@ -885,6 +989,8 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
     JS::CompartmentOptions compartmentOptions;
     if (options.sameZoneAs)
         compartmentOptions.setSameZoneAs(js::UncheckedUnwrap(options.sameZoneAs));
+    else if (options.freshZone)
+        compartmentOptions.setZone(JS::FreshZone);
     else
         compartmentOptions.setZone(JS::SystemZone);
 
@@ -939,7 +1045,11 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
                 return NS_ERROR_XPC_UNEXPECTED;
 
             // Now check what sort of thing we've got in |proto|
-            JSObject* unwrappedProto = js::UncheckedUnwrap(options.proto, false);
+            JSObject* unwrappedProto = js::CheckedUnwrap(options.proto, false);
+            if (!unwrappedProto) {
+                JS_ReportError(cx, "Sandbox must subsume sandboxPrototype");
+                return NS_ERROR_INVALID_ARG;
+            }
             const js::Class* unwrappedClass = js::GetObjectClass(unwrappedProto);
             if (IS_WN_CLASS(unwrappedClass) ||
                 mozilla::dom::IsDOMClass(Jsvalify(unwrappedClass))) {
@@ -1360,18 +1470,28 @@ SandboxOptions::ParseGlobalProperties()
 bool
 SandboxOptions::Parse()
 {
-    return ParseObject("sandboxPrototype", &proto) &&
-           ParseBoolean("wantXrays", &wantXrays) &&
-           ParseBoolean("wantComponents", &wantComponents) &&
-           ParseBoolean("wantExportHelpers", &wantExportHelpers) &&
-           ParseString("sandboxName", sandboxName) &&
-           ParseObject("sameZoneAs", &sameZoneAs) &&
-           ParseBoolean("invisibleToDebugger", &invisibleToDebugger) &&
-           ParseBoolean("discardSource", &discardSource) &&
-           ParseJSString("addonId", &addonId) &&
-           ParseBoolean("writeToGlobalPrototype", &writeToGlobalPrototype) &&
-           ParseGlobalProperties() &&
-           ParseValue("metadata", &metadata);
+    bool ok = ParseObject("sandboxPrototype", &proto) &&
+              ParseBoolean("wantXrays", &wantXrays) &&
+              ParseBoolean("wantComponents", &wantComponents) &&
+              ParseBoolean("wantExportHelpers", &wantExportHelpers) &&
+              ParseString("sandboxName", sandboxName) &&
+              ParseObject("sameZoneAs", &sameZoneAs) &&
+              ParseBoolean("freshZone", &freshZone) &&
+              ParseBoolean("invisibleToDebugger", &invisibleToDebugger) &&
+              ParseBoolean("discardSource", &discardSource) &&
+              ParseJSString("addonId", &addonId) &&
+              ParseBoolean("writeToGlobalPrototype", &writeToGlobalPrototype) &&
+              ParseGlobalProperties() &&
+              ParseValue("metadata", &metadata);
+    if (!ok)
+        return false;
+
+    if (freshZone && sameZoneAs) {
+        JS_ReportError(mCx, "Cannot use both sameZoneAs and freshZone");
+        return false;
+    }
+
+    return true;
 }
 
 static nsresult
@@ -1507,7 +1627,7 @@ xpc::EvalInSandbox(JSContext* cx, HandleObject sandboxArg, const nsAString& sour
     NS_ENSURE_TRUE(prin, NS_ERROR_FAILURE);
 
     nsAutoCString filenameBuf;
-    if (!filename.IsVoid()) {
+    if (!filename.IsVoid() && filename.Length() != 0) {
         filenameBuf.Assign(filename);
     } else {
         // Default to the spec of the principal.
@@ -1522,7 +1642,7 @@ xpc::EvalInSandbox(JSContext* cx, HandleObject sandboxArg, const nsAString& sour
     {
         // We're about to evaluate script, so make an AutoEntryScript.
         // This is clearly Gecko-specific and not in any spec.
-        mozilla::dom::AutoEntryScript aes(priv);
+        mozilla::dom::AutoEntryScript aes(priv, "XPConnect sandbox evaluation");
         JSContext* sandcx = aes.cx();
         AutoSaveContextOptions savedOptions(sandcx);
         JS::ContextOptionsRef(sandcx).setDontReportUncaught(true);

@@ -7,7 +7,9 @@
 
 #include <iostream>
 #include <string>
+#include <string.h>
 #include "signaling/src/sdp/SdpMediaSection.h"
+#include "nsCRT.h"
 
 namespace mozilla {
 
@@ -77,7 +79,7 @@ struct JsepCodecDescription {
     const SdpRtpmapAttributeList::Rtpmap& entry = rtpmap.GetEntry(fmt);
 
     if (mType == remoteMsection.GetMediaType()
-        && (mName == entry.name)
+        && !nsCRT::strcasecmp(mName.c_str(), entry.name.c_str())
         && (mClock == entry.clock)
         && (mChannels == entry.channels)) {
       return ParametersMatch(entry.pt, remoteMsection);
@@ -90,18 +92,6 @@ struct JsepCodecDescription {
                   const SdpMediaSection& remoteMsection) const
   {
     return true;
-  }
-
-  UniquePtr<JsepCodecDescription>
-  MakeNegotiatedCodec(const SdpMediaSection& remoteMsection) const
-  {
-    UniquePtr<JsepCodecDescription> negotiated(Clone());
-
-    if (!negotiated->Negotiate(remoteMsection)) {
-      negotiated.reset();
-    }
-
-    return negotiated;
   }
 
   virtual bool
@@ -127,30 +117,6 @@ struct JsepCodecDescription {
       }
     }
     return nullptr;
-  }
-
-  UniquePtr<JsepCodecDescription>
-  MakeSendCodec(const mozilla::SdpMediaSection& remoteMsection) const
-  {
-    UniquePtr<JsepCodecDescription> sendCodec(Clone());
-
-    if (!sendCodec->LoadSendParameters(remoteMsection)) {
-      sendCodec.reset();
-    }
-
-    return sendCodec;
-  }
-
-  UniquePtr<JsepCodecDescription>
-  MakeRecvCodec(const mozilla::SdpMediaSection& remoteMsection) const
-  {
-    UniquePtr<JsepCodecDescription> recvCodec(Clone());
-
-    if (!recvCodec->LoadRecvParameters(remoteMsection)) {
-      recvCodec.reset();
-    }
-
-    return recvCodec;
   }
 
   virtual bool LoadSendParameters(
@@ -275,8 +241,16 @@ struct JsepVideoCodecDescription : public JsepCodecDescription {
         mMaxMbps(0),
         mMaxCpb(0),
         mMaxDpb(0),
-        mMaxBr(0)
+        mMaxBr(0),
+        mUseTmmbr(false)
   {
+    // Add supported rtcp-fb types
+    mNackFbTypes.push_back("");
+    mNackFbTypes.push_back(SdpRtcpFbAttributeList::pli);
+    mCcmFbTypes.push_back(SdpRtcpFbAttributeList::fir);
+    if (mUseTmmbr) {
+      mCcmFbTypes.push_back(SdpRtcpFbAttributeList::tmmbr);
+    }
   }
 
   virtual void
@@ -316,12 +290,15 @@ struct JsepVideoCodecDescription : public JsepCodecDescription {
   virtual void
   AddRtcpFbs(SdpRtcpFbAttributeList& rtcpfb) const override
   {
-    // Just hard code for now
-    rtcpfb.PushEntry(mDefaultPt, SdpRtcpFbAttributeList::kNack);
-    rtcpfb.PushEntry(
-        mDefaultPt, SdpRtcpFbAttributeList::kNack, SdpRtcpFbAttributeList::pli);
-    rtcpfb.PushEntry(
-        mDefaultPt, SdpRtcpFbAttributeList::kCcm, SdpRtcpFbAttributeList::fir);
+    for (const std::string& type : mAckFbTypes) {
+      rtcpfb.PushEntry(mDefaultPt, SdpRtcpFbAttributeList::kAck, type);
+    }
+    for (const std::string& type : mNackFbTypes) {
+      rtcpfb.PushEntry(mDefaultPt, SdpRtcpFbAttributeList::kNack, type);
+    }
+    for (const std::string& type : mCcmFbTypes) {
+      rtcpfb.PushEntry(mDefaultPt, SdpRtcpFbAttributeList::kCcm, type);
+    }
   }
 
   SdpFmtpAttributeList::H264Parameters
@@ -361,6 +338,54 @@ struct JsepVideoCodecDescription : public JsepCodecDescription {
     return result;
   }
 
+  static bool
+  HasRtcpFb(const SdpMediaSection& msection,
+            const std::string& pt,
+            SdpRtcpFbAttributeList::Type type,
+            const std::string& subType)
+  {
+    const SdpAttributeList& attrs(msection.GetAttributeList());
+
+    if (!attrs.HasAttribute(SdpAttribute::kRtcpFbAttribute)) {
+      return false;
+    }
+
+    for (auto& rtcpfb : attrs.GetRtcpFb().mFeedbacks) {
+      if (rtcpfb.type == type) {
+        if (rtcpfb.pt == "*" || rtcpfb.pt == pt) {
+          if (rtcpfb.parameter == subType) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  void
+  NegotiateRtcpFb(const SdpMediaSection& remoteMsection,
+                  SdpRtcpFbAttributeList::Type type,
+                  std::vector<std::string>* supportedTypes)
+  {
+    std::vector<std::string> temp;
+    for (auto& subType : *supportedTypes) {
+      if (HasRtcpFb(remoteMsection, mDefaultPt, type, subType)) {
+        temp.push_back(subType);
+      }
+    }
+    *supportedTypes = temp;
+  }
+
+  void
+  NegotiateRtcpFb(const SdpMediaSection& remote)
+  {
+    // Removes rtcp-fb types that the other side doesn't support
+    NegotiateRtcpFb(remote, SdpRtcpFbAttributeList::kAck, &mAckFbTypes);
+    NegotiateRtcpFb(remote, SdpRtcpFbAttributeList::kNack, &mNackFbTypes);
+    NegotiateRtcpFb(remote, SdpRtcpFbAttributeList::kCcm, &mCcmFbTypes);
+  }
+
   virtual bool
   Negotiate(const SdpMediaSection& remoteMsection) override
   {
@@ -376,6 +401,7 @@ struct JsepVideoCodecDescription : public JsepCodecDescription {
       // TODO(bug 1143709): max-recv-level support
     }
 
+    NegotiateRtcpFb(remoteMsection);
     return JsepCodecDescription::Negotiate(remoteMsection);
   }
 
@@ -461,47 +487,15 @@ struct JsepVideoCodecDescription : public JsepCodecDescription {
       mMaxFs = vp8Params.max_fs;
       mMaxFr = vp8Params.max_fr;
     }
+
+    NegotiateRtcpFb(remoteMsection);
     return true;
   }
 
   virtual bool
   LoadRecvParameters(const mozilla::SdpMediaSection& remoteMsection) override
   {
-    const SdpAttributeList& attrs(remoteMsection.GetAttributeList());
-
-    if (attrs.HasAttribute(SdpAttribute::kRtcpFbAttribute)) {
-      auto& rtcpfbs = attrs.GetRtcpFb().mFeedbacks;
-      for (auto i = rtcpfbs.begin(); i != rtcpfbs.end(); ++i) {
-        if (i->pt == mDefaultPt || i->pt == "*") {
-          switch (i->type) {
-            case SdpRtcpFbAttributeList::kAck:
-              mAckFbTypes.push_back(i->parameter);
-              break;
-            case SdpRtcpFbAttributeList::kCcm:
-              mCcmFbTypes.push_back(i->parameter);
-              break;
-            case SdpRtcpFbAttributeList::kNack:
-              mNackFbTypes.push_back(i->parameter);
-              break;
-            case SdpRtcpFbAttributeList::kApp:
-            case SdpRtcpFbAttributeList::kTrrInt:
-              // We don't support these, ignore.
-              {}
-          }
-        }
-      }
-    }
-
-    if (mName == "H264") {
-      SdpFmtpAttributeList::H264Parameters h264Params(
-          GetH264Parameters(mDefaultPt, remoteMsection));
-      if (!h264Params.level_asymmetry_allowed) {
-        SetSaneH264Level(std::min(GetSaneH264Level(h264Params.profile_level_id),
-                                  GetSaneH264Level(mProfileLevelId)),
-                         &mProfileLevelId);
-      }
-    }
-    return true;
+    return Negotiate(remoteMsection);
   }
 
   enum Subprofile {
@@ -664,6 +658,7 @@ struct JsepVideoCodecDescription : public JsepCodecDescription {
   uint32_t mMaxCpb;
   uint32_t mMaxDpb;
   uint32_t mMaxBr;
+  bool     mUseTmmbr;
   std::string mSpropParameterSets;
 };
 
@@ -708,7 +703,8 @@ struct JsepApplicationCodecDescription : public JsepCodecDescription {
 
     const SdpSctpmapAttributeList::Sctpmap& entry = sctpmap.GetEntry(fmt);
 
-    if (mType == remoteMsection.GetMediaType() && (mName == entry.name)) {
+    if (mType == remoteMsection.GetMediaType() &&
+        !nsCRT::strcasecmp(mName.c_str(), entry.name.c_str())) {
       return true;
     }
     return false;

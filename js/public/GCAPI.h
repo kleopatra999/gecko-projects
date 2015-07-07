@@ -7,11 +7,17 @@
 #ifndef js_GCAPI_h
 #define js_GCAPI_h
 
+#include "mozilla/UniquePtr.h"
+#include "mozilla/Vector.h"
+
 #include "js/HeapAPI.h"
 
 namespace js {
 namespace gc {
 class GCRuntime;
+}
+namespace gcstats {
+struct Statistics;
 }
 }
 
@@ -41,6 +47,8 @@ typedef enum JSGCInvocationKind {
 } JSGCInvocationKind;
 
 namespace JS {
+
+using mozilla::UniquePtr;
 
 #define GCREASONS(D)                            \
     /* Reasons internal to the JS engine */     \
@@ -100,7 +108,8 @@ namespace JS {
     D(FULL_GC_TIMER)                            \
     D(SHUTDOWN_CC)                              \
     D(FINISH_LARGE_EVALUATE)                    \
-    D(USER_INACTIVE)
+    D(USER_INACTIVE)                            \
+    D(XPCONNECT_SHUTDOWN)
 
 namespace gcreason {
 
@@ -254,6 +263,56 @@ FinishIncrementalGC(JSRuntime* rt, gcreason::Reason reason);
 extern JS_PUBLIC_API(void)
 AbortIncrementalGC(JSRuntime* rt);
 
+namespace dbg {
+
+// The `JS::dbg::GarbageCollectionEvent` class is essentially a view of the
+// `js::gcstats::Statistics` data without the uber implementation-specific bits.
+// It should generally be palatable for web developers.
+class GarbageCollectionEvent
+{
+    // The major GC number of the GC cycle this data pertains to.
+    uint64_t majorGCNumber_;
+
+    // Reference to a non-owned, statically allocated C string. This is a very
+    // short reason explaining why a GC was triggered.
+    const char* reason;
+
+    // Reference to a nullable, non-owned, statically allocated C string. If the
+    // collection was forced to be non-incremental, this is a short reason of
+    // why the GC could not perform an incremental collection.
+    const char* nonincrementalReason;
+
+    // Represents a single slice of a possibly multi-slice incremental garbage
+    // collection.
+    struct Collection {
+        double startTimestamp;
+        double endTimestamp;
+    };
+
+    // The set of garbage collection slices that made up this GC cycle.
+    mozilla::Vector<Collection> collections;
+
+    GarbageCollectionEvent(const GarbageCollectionEvent& rhs) = delete;
+    GarbageCollectionEvent& operator=(const GarbageCollectionEvent& rhs) = delete;
+
+  public:
+    explicit GarbageCollectionEvent(uint64_t majorGCNum)
+        : majorGCNumber_(majorGCNum)
+        , reason(nullptr)
+        , nonincrementalReason(nullptr)
+        , collections()
+    { }
+
+    using Ptr = UniquePtr<GarbageCollectionEvent, DeletePolicy<GarbageCollectionEvent>>;
+    static Ptr Create(JSRuntime* rt, ::js::gcstats::Statistics& stats, uint64_t majorGCNumber);
+
+    JSObject* toJSObject(JSContext* cx) const;
+
+    uint64_t majorGCNumber() const { return majorGCNumber_; }
+};
+
+} // namespace dbg
+
 enum GCProgress {
     /*
      * During non-incremental GC, the GC is bracketed by JSGC_CYCLE_BEGIN/END
@@ -274,12 +333,16 @@ enum GCProgress {
 struct JS_PUBLIC_API(GCDescription) {
     bool isCompartment_;
     JSGCInvocationKind invocationKind_;
+    gcreason::Reason reason_;
 
-    GCDescription(bool isCompartment, JSGCInvocationKind kind)
-      : isCompartment_(isCompartment), invocationKind_(kind) {}
+    GCDescription(bool isCompartment, JSGCInvocationKind kind, gcreason::Reason reason)
+      : isCompartment_(isCompartment), invocationKind_(kind), reason_(reason) {}
 
-    char16_t* formatMessage(JSRuntime* rt) const;
+    char16_t* formatSliceMessage(JSRuntime* rt) const;
+    char16_t* formatSummaryMessage(JSRuntime* rt) const;
     char16_t* formatJSON(JSRuntime* rt, uint64_t timestamp) const;
+
+    JS::dbg::GarbageCollectionEvent::Ptr toGCEvent(JSRuntime* rt) const;
 };
 
 typedef void
@@ -362,9 +425,6 @@ WasIncrementalGC(JSRuntime* rt);
 class JS_PUBLIC_API(AutoDisableGenerationalGC)
 {
     js::gc::GCRuntime* gc;
-#ifdef JS_GC_ZEAL
-    bool restartVerifier;
-#endif
 
   public:
     explicit AutoDisableGenerationalGC(JSRuntime* rt);
@@ -496,7 +556,7 @@ class JS_PUBLIC_API(AutoCheckCannotGC) : public AutoAssertOnGC
 
 /*
  * Unsets the gray bit for anything reachable from |thing|. |kind| should not be
- * JSTRACE_SHAPE. |thing| should be non-null.
+ * JS::TraceKind::Shape. |thing| should be non-null.
  */
 extern JS_FRIEND_API(bool)
 UnmarkGrayGCThingRecursively(GCCellPtr thing);
@@ -509,7 +569,7 @@ namespace gc {
 static MOZ_ALWAYS_INLINE void
 ExposeGCThingToActiveJS(JS::GCCellPtr thing)
 {
-    MOZ_ASSERT(thing.kind() != JSTRACE_SHAPE);
+    MOZ_ASSERT(thing.kind() != JS::TraceKind::Shape);
 
     /*
      * GC things residing in the nursery cannot be gray: they have no mark bits.

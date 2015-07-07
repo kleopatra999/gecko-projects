@@ -12,8 +12,6 @@
 #include "nsCOMPtr.h"
 #include "nsTArray.h"
 
-class nsIMemoryReporter;
-
 namespace mozilla {
     namespace dom {
         class FontListEntry;
@@ -38,11 +36,11 @@ public:
     
     virtual gfxImageFormat GetOffscreenFormat() { return mOffscreenFormat; }
     
-    mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
+    already_AddRefed<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont);
 
     // to support IPC font list (sharing between chrome and content)
-    void GetFontList(InfallibleTArray<FontListEntry>* retValue);
+    void GetSystemFontList(InfallibleTArray<FontListEntry>* retValue);
 
     // platform implementations of font functions
     virtual bool IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags);
@@ -96,7 +94,7 @@ public:
     virtual bool IsInGonkEmulator() const { return mIsInGonkEmulator; }
 #endif
 
-    virtual bool SupportsApzTouchInput() override {
+    virtual bool SupportsApzTouchInput() const override {
       return true;
     }
 

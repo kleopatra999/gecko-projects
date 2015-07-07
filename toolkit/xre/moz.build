@@ -40,12 +40,15 @@ elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
         'MacLaunchHelper.mm',
         'nsNativeAppSupportCocoa.mm',
     ]
+elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'uikit':
+    UNIFIED_SOURCES += [
+        'nsNativeAppSupportDefault.cpp',
+        'UIKitDirProvider.mm',
+    ]
 elif CONFIG['MOZ_WIDGET_TOOLKIT'] == 'qt':
     EXPORTS += ['nsQAppInstance.h']
-    GENERATED_SOURCES += [
-        'moc_nsNativeAppSupportQt.cpp',
-    ]
     SOURCES += [
+        '!moc_nsNativeAppSupportQt.cpp',
         'nsNativeAppSupportQt.cpp',
         'nsQAppInstance.cpp',
     ]
@@ -104,8 +107,6 @@ if CONFIG['MOZ_UPDATER']:
         UNIFIED_SOURCES += [
             'nsUpdateDriver.cpp',
         ]
-
-MSVC_ENABLE_PGO = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 

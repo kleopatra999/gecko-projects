@@ -8,6 +8,7 @@
 #if defined(HAVE_CONFIG_H)
 #include "config.h"
 #endif
+#include <algorithm>
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <windef.h>
@@ -368,14 +369,12 @@ float stream_to_mix_samplerate_ratio(cubeb_stream * stream)
   return float(stream->stream_params.rate) / stream->mix_params.rate;
 }
 
-/* Upmix function, copies a mono channel in two interleaved
- * stereo channel. |out| has to be twice as long as |in| */
+/* Upmix function, copies a mono channel into L and R */
 template<typename T>
 void
-mono_to_stereo(T * in, long insamples, T * out)
+mono_to_stereo(T * in, long insamples, T * out, int32_t out_channels)
 {
-  int j = 0;
-  for (int i = 0; i < insamples; ++i, j += 2) {
+  for (int i = 0, j = 0; i < insamples; ++i, j += out_channels) {
     out[j] = out[j + 1] = in[i];
   }
 }
@@ -384,22 +383,32 @@ template<typename T>
 void
 upmix(T * in, long inframes, T * out, int32_t in_channels, int32_t out_channels)
 {
-  XASSERT(out_channels >= in_channels);
+  XASSERT(out_channels >= in_channels && in_channels > 0);
+
+  /* Either way, if we have 2 or more channels, the first two are L and R. */
   /* If we are playing a mono stream over stereo speakers, copy the data over. */
-  if (in_channels == 1 && out_channels == 2) {
-    mono_to_stereo(in, inframes, out);
+  if (in_channels == 1 && out_channels >= 2) {
+    mono_to_stereo(in, inframes, out, out_channels);
+  } else {
+    /* Copy through. */
+    for (int i = 0, o = 0; i < inframes * in_channels;
+        i += in_channels, o += out_channels) {
+      for (int j = 0; j < in_channels; ++j) {
+        out[o + j] = in[i + j];
+      }
+    }
+  }
+
+  /* Check if more channels. */
+  if (out_channels <= 2) {
     return;
   }
-  /* Otherwise, put silence in other channels. */
-  long out_index = 0;
-  for (long i = 0; i < inframes * in_channels; i += in_channels) {
-    for (int j = 0; j < in_channels; ++j) {
-      out[out_index + j] = in[i + j];
+
+  /* Put silence in remaining channels. */
+  for (long i = 0, o = 0; i < inframes; ++i, o += out_channels) {
+    for (int j = 2; j < out_channels; ++j) {
+      out[o + j] = 0.0;
     }
-    for (int j = in_channels; j < out_channels; ++j) {
-      out[out_index + j] = 0.0;
-    }
-    out_index += out_channels;
   }
 }
 
@@ -496,12 +505,20 @@ wasapi_stream_render_loop(LPVOID stream)
   }
 
 
+  /* WaitForMultipleObjects timeout can trigger in cases where we don't want to
+     treat it as a timeout, such as across a system sleep/wake cycle.  Trigger
+     the timeout error handling only when the timeout_limit is reached, which is
+     reset on each successful loop. */
+  unsigned timeout_count = 0;
+  const unsigned timeout_limit = 5;
   while (is_playing) {
     DWORD waitResult = WaitForMultipleObjects(ARRAY_LENGTH(wait_array),
                                               wait_array,
                                               FALSE,
                                               1000);
-
+    if (waitResult != WAIT_TIMEOUT) {
+      timeout_count = 0;
+    }
     switch (waitResult) {
     case WAIT_OBJECT_0: { /* shutdown */
       is_playing = false;
@@ -543,6 +560,8 @@ wasapi_stream_render_loop(LPVOID stream)
       }
       XASSERT(padding <= stm->buffer_frame_count);
 
+      long available = stm->buffer_frame_count - padding;
+
       if (stm->draining) {
         if (padding == 0) {
           stm->state_callback(stm, stm->user_ptr, CUBEB_STATE_DRAINED);
@@ -550,8 +569,6 @@ wasapi_stream_render_loop(LPVOID stream)
         }
         continue;
       }
-
-      long available = stm->buffer_frame_count - padding;
 
       if (available == 0) {
         continue;
@@ -575,8 +592,10 @@ wasapi_stream_render_loop(LPVOID stream)
       break;
     case WAIT_TIMEOUT:
       XASSERT(stm->shutdown_event == wait_array[0]);
-      is_playing = false;
-      hr = -1;
+      if (++timeout_count >= timeout_limit) {
+        is_playing = false;
+        hr = -1;
+      }
       break;
     default:
       LOG("case %d not handled in render loop.", waitResult);

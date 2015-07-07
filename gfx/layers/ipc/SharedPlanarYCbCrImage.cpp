@@ -37,7 +37,10 @@ SharedPlanarYCbCrImage::~SharedPlanarYCbCrImage() {
 
   if (mCompositable->GetAsyncID() != 0 &&
       !InImageBridgeChildThread()) {
-    ImageBridgeChild::DispatchReleaseTextureClient(mTextureClient.forget().take());
+    ADDREF_MANUALLY(mTextureClient);
+    ImageBridgeChild::DispatchReleaseTextureClient(mTextureClient);
+    mTextureClient = nullptr;
+
     ImageBridgeChild::DispatchReleaseImageClient(mCompositable.forget().take());
   }
 }
@@ -65,7 +68,7 @@ SharedPlanarYCbCrImage::GetBuffer()
   return mTextureClient->GetBuffer();
 }
 
-TemporaryRef<gfx::SourceSurface>
+already_AddRefed<gfx::SourceSurface>
 SharedPlanarYCbCrImage::GetAsSourceSurface()
 {
   if (!mTextureClient) {

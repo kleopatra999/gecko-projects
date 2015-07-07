@@ -1,4 +1,5 @@
-/* -*- Mode: IDL; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -7,10 +8,16 @@
 #include "ServiceWorkerWindowClient.h"
 
 #include "mozilla/dom/ClientBinding.h"
+#include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseWorkerProxy.h"
+#include "mozilla/UniquePtr.h"
+#include "nsGlobalWindow.h"
+#include "WorkerPrivate.h"
 
 using namespace mozilla::dom;
 using namespace mozilla::dom::workers;
+
+using mozilla::UniquePtr;
 
 JSObject*
 ServiceWorkerWindowClient::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
@@ -79,14 +86,15 @@ public:
   Run() override
   {
     AssertIsOnMainThread();
-    nsGlobalWindow* window = nsGlobalWindow::GetOuterWindowWithId(mWindowId);
+    nsGlobalWindow* window = nsGlobalWindow::GetInnerWindowWithId(mWindowId);
     UniquePtr<ServiceWorkerClientInfo> clientInfo;
 
     if (window) {
-      ErrorResult result;
+      mozilla::ErrorResult result;
       //FIXME(catalinb): Bug 1144660 - check if we are allowed to focus here.
       window->Focus(result);
-      clientInfo.reset(new ServiceWorkerClientInfo(window->GetDocument()));
+      clientInfo.reset(new ServiceWorkerClientInfo(window->GetDocument(),
+                                                   window->GetOuterWindow()));
     }
 
     DispatchResult(Move(clientInfo));
@@ -145,7 +153,7 @@ ServiceWorkerWindowClient::Focus(ErrorResult& aRv) const
                                                             promiseProxy);
   aRv = NS_DispatchToMainThread(r);
   if (NS_WARN_IF(aRv.Failed())) {
-    promise->MaybeReject(aRv.ErrorCode());
+    promise->MaybeReject(aRv);
   }
 
   return promise.forget();

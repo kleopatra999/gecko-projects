@@ -317,12 +317,13 @@
 #define NS_SOCKETTRANSPORTSERVICE_CONTRACTID \
     "@mozilla.org/network/socket-transport-service;1"
 #define NS_SOCKETTRANSPORTSERVICE_CID                \
-{ /* c07e81e0-ef12-11d2-92b6-00105a1b0d64 */         \
-    0xc07e81e0,                                      \
-    0xef12,                                          \
-    0x11d2,                                          \
-    {0x92, 0xb6, 0x00, 0x10, 0x5a, 0x1b, 0x0d, 0x64} \
+{ /* ad56b25f-e6bb-4db3-9f7b-5b7db33fd2b1 */         \
+    0xad56b25f,                                      \
+    0xe6bb,                                          \
+    0x4db3,                                          \
+    {0x9f, 0x7b, 0x5b, 0x7d, 0xb3, 0x3f, 0xd2, 0xb1} \
 }
+
 
 // component implementing nsIServerSocket
 #define NS_SERVERSOCKET_CONTRACTID \
@@ -466,6 +467,17 @@
     0x7221, \
     0x4419, \
     { 0xae, 0xcf, 0x05, 0xf8, 0xfa, 0xf0, 0x0c, 0x9b } \
+}
+
+// captive portal service implementing nsICaptivePortalService
+#define NS_CAPTIVEPORTAL_CONTRACTID \
+    "@mozilla.org/network/captive-portal-service;1"
+#define NS_CAPTIVEPORTAL_CID \
+{ /* bdbe0555-fc3d-4f7b-9205-c309ceb2d641 */ \
+    0xbdbe0555, \
+    0xfc3d, \
+    0x4f7b, \
+  { 0x92, 0x05, 0xc3, 0x09, 0xce, 0xb2, 0xd6, 0x41 } \
 }
 
 /******************************************************************************
@@ -865,6 +877,16 @@
     0x091a,                                            \
     0x45a6,                                            \
     { 0x85, 0x44, 0x5a, 0x8d, 0x1a, 0xb7, 0x95, 0x37 } \
+}
+
+#define NS_PACKAGEDAPPSERVICE_CONTRACTID \
+    "@mozilla.org/network/packaged-app-service;1"
+#define NS_PACKAGEDAPPSERVICE_CID                      \
+{   /* adef6762-41b9-4470-a06a-dc29cf8de381 */         \
+    0xadef6762,                                        \
+    0x41b9,                                            \
+    0x4470,                                            \
+  { 0xa0, 0x6a, 0xdc, 0x29, 0xcf, 0x8d, 0xe3, 0x81 }   \
 }
 
 

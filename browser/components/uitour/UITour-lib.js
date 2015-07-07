@@ -281,6 +281,23 @@ if (typeof Mozilla == 'undefined') {
 		});
 	};
 
+	Mozilla.UITour.forceShowReaderIcon = function() {
+		_sendEvent('forceShowReaderIcon');
+	};
+
+	Mozilla.UITour.toggleReaderMode = function(feature) {
+		_sendEvent('toggleReaderMode');
+	};
+
+	Mozilla.UITour.setDefaultBrowser = function() {
+		_sendEvent('setDefaultBrowser');
+	}
+
+	Mozilla.UITour.isDefaultBrowser = function(callback) {
+		_sendEvent('isDefaultBrowser', {
+			callbackID: _waitForCallback(callback),
+		});
+	}
 })();
 
 // Make this library Require-able.

@@ -14,24 +14,19 @@ namespace gmp {
 GMPDecryptorParent::GMPDecryptorParent(GMPContentParent* aPlugin)
   : mIsOpen(false)
   , mShuttingDown(false)
+  , mActorDestroyed(false)
   , mPlugin(aPlugin)
+  , mPluginId(aPlugin->GetPluginId())
   , mCallback(nullptr)
 #ifdef DEBUG
   , mGMPThread(aPlugin->GMPThread())
 #endif
 {
   MOZ_ASSERT(mPlugin && mGMPThread);
-  mPluginId = aPlugin->GetPluginId();
 }
 
 GMPDecryptorParent::~GMPDecryptorParent()
 {
-}
-
-const nsACString&
-GMPDecryptorParent::GetPluginId() const
-{
-  return mPluginId;
 }
 
 nsresult
@@ -347,7 +342,9 @@ GMPDecryptorParent::Shutdown()
   }
 
   mIsOpen = false;
-  unused << SendDecryptingComplete();
+  if (!mActorDestroyed) {
+    unused << SendDecryptingComplete();
+  }
 }
 
 // Note: Keep this sync'd up with Shutdown
@@ -355,6 +352,7 @@ void
 GMPDecryptorParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   mIsOpen = false;
+  mActorDestroyed = true;
   if (mCallback) {
     // May call Close() (and Shutdown()) immediately or with a delay
     mCallback->Terminated();

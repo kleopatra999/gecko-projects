@@ -16,8 +16,6 @@
 namespace js {
 namespace jit {
 
-class MBasicBlock;
-class MTableSwitch;
 class MIRGenerator;
 class MIRGraph;
 class MDefinition;
@@ -105,6 +103,7 @@ class LIRGeneratorShared : public MDefinitionVisitor
     // we can expect to write into memory in 1 instruction".
     inline LAllocation useStorable(MDefinition* mir);
     inline LAllocation useStorableAtStart(MDefinition* mir);
+    inline LAllocation useKeepalive(MDefinition* mir);
     inline LAllocation useKeepaliveOrConstant(MDefinition* mir);
     inline LAllocation useRegisterOrConstant(MDefinition* mir);
     inline LAllocation useRegisterOrConstantAtStart(MDefinition* mir);

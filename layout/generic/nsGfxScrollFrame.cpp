@@ -56,6 +56,7 @@
 #include "gfxPlatform.h"
 #include "gfxPrefs.h"
 #include "AsyncScrollBase.h"
+#include "UnitTransforms.h"
 #include <mozilla/layers/AxisPhysicsModel.h>
 #include <mozilla/layers/AxisPhysicsMSDModel.h>
 #include <algorithm>
@@ -352,10 +353,16 @@ nsHTMLScrollFrame::TryLayout(ScrollReflowState* aState,
     ComputeInsideBorderSize(aState, desiredInsideBorderSize);
   nsSize scrollPortSize = nsSize(std::max(0, aState->mInsideBorderSize.width - vScrollbarDesiredWidth),
                                  std::max(0, aState->mInsideBorderSize.height - hScrollbarDesiredHeight));
+
   nsSize visualScrollPortSize = scrollPortSize;
   nsIPresShell* presShell = PresContext()->PresShell();
   if (mHelper.mIsRoot && presShell->IsScrollPositionClampingScrollPortSizeSet()) {
-    visualScrollPortSize = presShell->GetScrollPositionClampingScrollPortSize();
+    nsSize compositionSize = nsLayoutUtils::CalculateCompositionSizeForFrame(this, false);
+    float resolution = presShell->GetResolution();
+    compositionSize.width /= resolution;
+    compositionSize.height /= resolution;
+    visualScrollPortSize = nsSize(std::max(0, compositionSize.width - vScrollbarDesiredWidth),
+                                  std::max(0, compositionSize.height - hScrollbarDesiredHeight));
   }
 
   if (!aForce) {
@@ -395,22 +402,25 @@ nsHTMLScrollFrame::TryLayout(ScrollReflowState* aState,
   aState->mShowVScrollbar = aAssumeVScroll;
   nsPoint scrollPortOrigin(aState->mComputedBorder.left,
                            aState->mComputedBorder.top);
-  if (!mHelper.IsScrollbarOnRight()) {
+  if (!IsScrollbarOnRight()) {
     scrollPortOrigin.x += vScrollbarActualWidth;
   }
   mHelper.mScrollPort = nsRect(scrollPortOrigin, scrollPortSize);
   return true;
 }
 
+// XXX Height/BSize mismatch needs to be addressed here; check the caller!
+// Currently this will only behave as expected for horizontal writing modes.
+// (See bug 1175509.)
 bool
 nsHTMLScrollFrame::ScrolledContentDependsOnHeight(ScrollReflowState* aState)
 {
   // Return true if ReflowScrolledFrame is going to do something different
   // based on the presence of a horizontal scrollbar.
-  return (mHelper.mScrolledFrame->GetStateBits() & NS_FRAME_CONTAINS_RELATIVE_HEIGHT) ||
-    aState->mReflowState.ComputedHeight() != NS_UNCONSTRAINEDSIZE ||
-    aState->mReflowState.ComputedMinHeight() > 0 ||
-    aState->mReflowState.ComputedMaxHeight() != NS_UNCONSTRAINEDSIZE;
+  return (mHelper.mScrolledFrame->GetStateBits() & NS_FRAME_CONTAINS_RELATIVE_BSIZE) ||
+    aState->mReflowState.ComputedBSize() != NS_UNCONSTRAINEDSIZE ||
+    aState->mReflowState.ComputedMinBSize() > 0 ||
+    aState->mReflowState.ComputedMaxBSize() != NS_UNCONSTRAINEDSIZE;
 }
 
 void
@@ -431,7 +441,7 @@ nsHTMLScrollFrame::ReflowScrolledFrame(ScrollReflowState* aState,
   nscoord computedBSize = aState->mReflowState.ComputedBSize();
   nscoord computedMinBSize = aState->mReflowState.ComputedMinBSize();
   nscoord computedMaxBSize = aState->mReflowState.ComputedMaxBSize();
-  if (!ShouldPropagateComputedHeightToScrolledContent()) {
+  if (!ShouldPropagateComputedBSizeToScrolledContent()) {
     computedBSize = NS_UNCONSTRAINEDSIZE;
     computedMinBSize = 0;
     computedMaxBSize = NS_UNCONSTRAINEDSIZE;
@@ -486,9 +496,9 @@ nsHTMLScrollFrame::ReflowScrolledFrame(ScrollReflowState* aState,
     kidReflowState(presContext, aState->mReflowState,
                    mHelper.mScrolledFrame,
                    LogicalSize(wm, availISize, NS_UNCONSTRAINEDSIZE),
-                   -1, -1, nsHTMLReflowState::CALLER_WILL_INIT);
+                   nullptr, nsHTMLReflowState::CALLER_WILL_INIT);
   const nsMargin physicalPadding = padding.GetPhysicalMargin(wm);
-  kidReflowState.Init(presContext, -1, -1, nullptr,
+  kidReflowState.Init(presContext, nullptr, nullptr,
                       &physicalPadding);
   kidReflowState.mFlags.mAssumingHScrollbar = aAssumeHScroll;
   kidReflowState.mFlags.mAssumingVScrollbar = aAssumeVScroll;
@@ -1074,7 +1084,7 @@ ScrollFrameHelper::HandleScrollbarStyleSwitching()
   }
 }
 
-#if defined(MOZ_B2G) || defined(MOZ_WIDGET_ANDROID)
+#if defined(MOZ_B2G) || (defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_ANDROID_APZ))
 static bool IsFocused(nsIContent* aContent)
 {
   // Some content elements, like the GetContent() of a scroll frame
@@ -1099,7 +1109,7 @@ ScrollFrameHelper::WantAsyncScroll() const
   bool isHScrollable = !!(directions & nsIScrollableFrame::HORIZONTAL) &&
                        (styles.mHorizontal != NS_STYLE_OVERFLOW_HIDDEN);
 
-#if defined(MOZ_B2G) || defined(MOZ_WIDGET_ANDROID)
+#if defined(MOZ_B2G) || (defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_ANDROID_APZ))
   // Mobile platforms need focus to scroll.
   bool canScrollWithoutScrollbars = IsFocused(mOuter->GetContent());
 #else
@@ -1783,6 +1793,8 @@ ScrollFrameHelper::ScrollFrameHelper(nsContainerFrame* aOuter,
   , mResolution(1.0)
   , mScrollPosForLayerPixelAlignment(-1, -1)
   , mLastUpdateImagesPos(-1, -1)
+  , mAncestorClip(nullptr)
+  , mAncestorClipForCaret(nullptr)
   , mNeverHasVerticalScrollbar(false)
   , mNeverHasHorizontalScrollbar(false)
   , mHasVerticalScrollbar(false)
@@ -1818,7 +1830,7 @@ ScrollFrameHelper::ScrollFrameHelper(nsContainerFrame* aOuter,
 
   if (IsAlwaysActive() &&
       gfxPrefs::LayersTilesEnabled() &&
-      !nsLayoutUtils::UsesAsyncScrolling() &&
+      !nsLayoutUtils::UsesAsyncScrolling(mOuter) &&
       mOuter->GetContent()) {
     // If we have tiling but no APZ, then set a 0-margin display port on
     // active scroll containers so that we paint by whole tile increments
@@ -2022,7 +2034,7 @@ ScrollFrameHelper::ScrollToWithOrigin(nsPoint aScrollPosition,
           mAsyncScroll = nullptr;
         }
 
-        if (gfxPrefs::AsyncPanZoomEnabled()) {
+        if (nsLayoutUtils::AsyncPanZoomEnabled(mOuter)) {
           // The animation will be handled in the compositor, pass the
           // information needed to start the animation and skip the main-thread
           // animation for this scroll.
@@ -2532,7 +2544,7 @@ ScrollFrameHelper::AppendScrollPartsTo(nsDisplayListBuilder*   aBuilder,
     LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars) != 0;
 
   nsAutoTArray<nsIFrame*, 3> scrollParts;
-  for (nsIFrame* kid = mOuter->GetFirstPrincipalChild(); kid; kid = kid->GetNextSibling()) {
+  for (nsIFrame* kid : mOuter->PrincipalChildList()) {
     if (kid == mScrolledFrame ||
         (kid->IsAbsPosContaininingBlock() || overlayScrollbars) != aPositioned)
       continue;
@@ -2605,43 +2617,6 @@ ScrollFrameHelper::AppendScrollPartsTo(nsDisplayListBuilder*   aBuilder,
   }
 }
 
-class ScrollLayerWrapper : public nsDisplayWrapper
-{
-public:
-  ScrollLayerWrapper(nsIFrame* aScrollFrame, nsIFrame* aScrolledFrame)
-    : mCount(0)
-    , mProps(aScrolledFrame->Properties())
-    , mScrollFrame(aScrollFrame)
-    , mScrolledFrame(aScrolledFrame)
-  {
-    SetCount(0);
-  }
-
-  virtual nsDisplayItem* WrapList(nsDisplayListBuilder* aBuilder,
-                                  nsIFrame* aFrame,
-                                  nsDisplayList* aList) override {
-    SetCount(++mCount);
-    return new (aBuilder) nsDisplayScrollLayer(aBuilder, aList, mScrolledFrame, mScrolledFrame, mScrollFrame);
-  }
-
-  virtual nsDisplayItem* WrapItem(nsDisplayListBuilder* aBuilder,
-                                  nsDisplayItem* aItem) override {
-
-    SetCount(++mCount);
-    return new (aBuilder) nsDisplayScrollLayer(aBuilder, aItem, aItem->Frame(), mScrolledFrame, mScrollFrame);
-  }
-
-protected:
-  void SetCount(intptr_t aCount) {
-    mProps.Set(nsIFrame::ScrollLayerCount(), reinterpret_cast<void*>(aCount));
-  }
-
-  intptr_t mCount;
-  FrameProperties mProps;
-  nsIFrame* mScrollFrame;
-  nsIFrame* mScrolledFrame;
-};
-
 /* static */ bool ScrollFrameHelper::sImageVisPrefsCached = false;
 /* static */ uint32_t ScrollFrameHelper::sHorzExpandScrollPort = 0;
 /* static */ uint32_t ScrollFrameHelper::sVertExpandScrollPort = 1;
@@ -2703,45 +2678,35 @@ ShouldBeClippedByFrame(nsIFrame* aClipFrame, nsIFrame* aClippedFrame)
 }
 
 static void
-ClipItemsExceptCaret(nsDisplayList* aList, nsDisplayListBuilder* aBuilder,
-                     nsIFrame* aClipFrame, const DisplayItemClip& aClip)
+ClipItemsExceptCaret(nsDisplayList* aList,
+                     nsDisplayListBuilder* aBuilder,
+                     nsIFrame* aClipFrame,
+                     const DisplayItemClip& aNonCaretClip,
+                     bool aUsingDisplayPort)
 {
-  nsDisplayItem* i = aList->GetBottom();
-  for (; i; i = i->GetAbove()) {
-    if (!::ShouldBeClippedByFrame(aClipFrame, i->Frame())) {
+  for (nsDisplayItem* i = aList->GetBottom(); i; i = i->GetAbove()) {
+    if (!ShouldBeClippedByFrame(aClipFrame, i->Frame())) {
       continue;
     }
 
-    bool unused;
-    nsRect bounds = i->GetBounds(aBuilder, &unused);
-    bool isAffectedByClip = aClip.IsRectAffectedByClip(bounds);
-    if (isAffectedByClip && nsDisplayItem::TYPE_CARET == i->GetType()) {
-      // Don't clip the caret if it overflows vertically only, and by half
-      // its height at most.  This is to avoid clipping it when the line-height
-      // is small.
-      auto half = bounds.height / 2;
-      bounds.y += half;
-      bounds.height -= half;
-      isAffectedByClip = aClip.IsRectAffectedByClip(bounds);
-      if (isAffectedByClip) {
-        // Don't clip the caret if it's just outside on the right side.
-        nsRect rightSide(bounds.x - 1, bounds.y, 1, bounds.height);
-        isAffectedByClip = aClip.IsRectAffectedByClip(rightSide);
-        // Also, avoid clipping it in a zero-height line box (heuristic only).
-        if (isAffectedByClip) {
-          isAffectedByClip = i->Frame()->GetRect().height != 0;
-        }
-      }
+    bool isCaret = i->GetType() == nsDisplayItem::TYPE_CARET;
+    if (aUsingDisplayPort && isCaret) {
+      static_cast<nsDisplayCaret*>(i)->SetNeedsCustomScrollClip();
     }
-    if (isAffectedByClip) {
-      DisplayItemClip newClip;
-      newClip.IntersectWith(i->GetClip());
-      newClip.IntersectWith(aClip);
-      i->SetClip(aBuilder, newClip);
+    if (!aUsingDisplayPort && !isCaret) {
+      bool unused;
+      nsRect bounds = i->GetBounds(aBuilder, &unused);
+      if (aNonCaretClip.IsRectAffectedByClip(bounds)) {
+        DisplayItemClip newClip;
+        newClip.IntersectWith(i->GetClip());
+        newClip.IntersectWith(aNonCaretClip);
+        i->SetClip(aBuilder, newClip);
+      }
     }
     nsDisplayList* children = i->GetSameCoordinateSystemChildren();
     if (children) {
-      ClipItemsExceptCaret(children, aBuilder, aClipFrame, aClip);
+      ClipItemsExceptCaret(children, aBuilder, aClipFrame, aNonCaretClip,
+                           aUsingDisplayPort);
     }
   }
 }
@@ -2750,14 +2715,17 @@ static void
 ClipListsExceptCaret(nsDisplayListCollection* aLists,
                      nsDisplayListBuilder* aBuilder,
                      nsIFrame* aClipFrame,
-                     const DisplayItemClip& aClip)
+                     const nsRect& aNonCaretClip,
+                     bool aUsingDisplayPort)
 {
-  ::ClipItemsExceptCaret(aLists->BorderBackground(), aBuilder, aClipFrame, aClip);
-  ::ClipItemsExceptCaret(aLists->BlockBorderBackgrounds(), aBuilder, aClipFrame, aClip);
-  ::ClipItemsExceptCaret(aLists->Floats(), aBuilder, aClipFrame, aClip);
-  ::ClipItemsExceptCaret(aLists->PositionedDescendants(), aBuilder, aClipFrame, aClip);
-  ::ClipItemsExceptCaret(aLists->Outlines(), aBuilder, aClipFrame, aClip);
-  ::ClipItemsExceptCaret(aLists->Content(), aBuilder, aClipFrame, aClip);
+  DisplayItemClip clip;
+  clip.SetTo(aNonCaretClip);
+  ClipItemsExceptCaret(aLists->BorderBackground(), aBuilder, aClipFrame, clip, aUsingDisplayPort);
+  ClipItemsExceptCaret(aLists->BlockBorderBackgrounds(), aBuilder, aClipFrame, clip, aUsingDisplayPort);
+  ClipItemsExceptCaret(aLists->Floats(), aBuilder, aClipFrame, clip, aUsingDisplayPort);
+  ClipItemsExceptCaret(aLists->PositionedDescendants(), aBuilder, aClipFrame, clip, aUsingDisplayPort);
+  ClipItemsExceptCaret(aLists->Outlines(), aBuilder, aClipFrame, clip, aUsingDisplayPort);
+  ClipItemsExceptCaret(aLists->Content(), aBuilder, aClipFrame, clip, aUsingDisplayPort);
 }
 
 void
@@ -2784,6 +2752,10 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       mScrollPosForLayerPixelAlignment = nsPoint(-1,-1);
     }
   }
+
+  // Clear the scroll port clip that was set during the last paint.
+  mAncestorClip = nullptr;
+  mAncestorClipForCaret = nullptr;
 
   // We put non-overlay scrollbars in their own layers when this is the root
   // scroll frame and we are a toplevel content document. In this situation,
@@ -2940,7 +2912,7 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     shouldBuildLayer = true;
   } else {
     shouldBuildLayer =
-      gfxPrefs::AsyncPanZoomEnabled() &&
+      nsLayoutUtils::AsyncPanZoomEnabled(mOuter) &&
       WantAsyncScroll() &&
       // If we are using containers for root frames, and we are the root
       // scroll frame for the display root, then we don't need a scroll
@@ -2951,6 +2923,31 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   }
 
   mScrollParentID = aBuilder->GetCurrentScrollParentId();
+
+  Maybe<nsRect> contentBoxClipForCaret;
+  Maybe<nsRect> contentBoxClipForNonCaretContent;
+  if (MOZ_UNLIKELY(mOuter->StyleDisplay()->mOverflowClipBox ==
+                     NS_STYLE_OVERFLOW_CLIP_BOX_CONTENT_BOX)) {
+    // We only clip if there is *scrollable* overflow, to avoid clipping
+    // *visual* overflow unnecessarily.
+    nsRect clipRect = mScrollPort + aBuilder->ToReferenceFrame(mOuter);
+    nsRect so = mScrolledFrame->GetScrollableOverflowRect();
+    if (clipRect.width != so.width || clipRect.height != so.height ||
+        so.x < 0 || so.y < 0) {
+      clipRect.Deflate(mOuter->GetUsedPadding());
+      contentBoxClipForNonCaretContent = Some(clipRect);
+      if (nsIFrame* caretFrame = aBuilder->GetCaretFrame()) {
+        // Avoid clipping it in a zero-height line box (heuristic only).
+        if (caretFrame->GetRect().height != 0) {
+          nsRect caretRect = aBuilder->GetCaretRect();
+          // Allow the caret to stick out of the content box clip by half the
+          // caret height on the top, and its full width on the right.
+          clipRect.Inflate(nsMargin(caretRect.height / 2, caretRect.width, 0, 0));
+          contentBoxClipForCaret = Some(clipRect);
+        }
+      }
+    }
+  }
 
   nsDisplayListCollection scrolledContent;
   {
@@ -2964,23 +2961,13 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
         shouldBuildLayer && mScrolledFrame->GetContent()
             ? nsLayoutUtils::FindOrCreateIDFor(mScrolledFrame->GetContent())
             : aBuilder->GetCurrentScrollParentId());
-    DisplayListClipState::AutoSaveRestore clipState(aBuilder);
 
-    if (usingDisplayport) {
-      // If we are using a display port, then ignore any pre-existing clip
-      // passed down from our parents. The pre-existing clip would just defeat
-      // the purpose of a display port which is to paint regions that are not
-      // currently visible so that they can be brought into view asynchronously.
-      // Notes:
-      //   - The pre-existing clip state will be restored when the
-      //     AutoSaveRestore goes out of scope, so there is no permanent change
-      //     to this clip state.
-      //   - We still set a clip to the scroll port further below where we
-      //     build the scroll wrapper. This doesn't prevent us from painting
-      //     the entire displayport, but it lets the compositor know to
-      //     clip to the scroll port after compositing.
-      clipState.Clear();
-    } else {
+    // We need to apply at least one clip, potentially more, and each needs to be applied
+    // through a separate DisplayListClipState::AutoSaveRestore object.
+    // clipStatePtr will always point to the innermost used one.
+    DisplayListClipState::AutoSaveRestore clipState(aBuilder);
+    DisplayListClipState::AutoSaveRestore* clipStatePtr = &clipState;
+    if (!mIsRoot || !usingDisplayport) {
       nsRect clip = mScrollPort + aBuilder->ToReferenceFrame(mOuter);
       nscoord radii[8];
       bool haveRadii = mOuter->GetPaddingBoxBorderRadii(radii);
@@ -2993,6 +2980,53 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       }
     }
 
+    Maybe<DisplayListClipState::AutoSaveRestore> clipStateCaret;
+    if (contentBoxClipForCaret) {
+      clipStateCaret.emplace(aBuilder);
+      clipStatePtr = &*clipStateCaret;
+      if (mClipAllDescendants) {
+        clipStateCaret->ClipContentDescendants(*contentBoxClipForCaret);
+      } else {
+        clipStateCaret->ClipContainingBlockDescendants(*contentBoxClipForCaret);
+      }
+    }
+
+    Maybe<DisplayListClipState::AutoSaveRestore> clipStateNonCaret;
+    if (usingDisplayport) {
+      // Capture the clip state of the parent scroll frame. This will be saved
+      // on FrameMetrics for layers with this frame as their animated geoemetry
+      // root.
+      mAncestorClipForCaret = aBuilder->ClipState().GetCurrentCombinedClip(aBuilder);
+
+      // Add the non-caret content box clip here so that it gets picked up by
+      // mAncestorClip.
+      if (contentBoxClipForNonCaretContent) {
+        clipStateNonCaret.emplace(aBuilder);
+        clipStatePtr = &*clipStateNonCaret;
+        if (mClipAllDescendants) {
+          clipStateNonCaret->ClipContentDescendants(*contentBoxClipForNonCaretContent);
+        } else {
+          clipStateNonCaret->ClipContainingBlockDescendants(*contentBoxClipForNonCaretContent);
+        }
+      }
+      mAncestorClip = aBuilder->ClipState().GetCurrentCombinedClip(aBuilder);
+
+      // If we are using a display port, then ignore any pre-existing clip
+      // passed down from our parents. The pre-existing clip would just defeat
+      // the purpose of a display port which is to paint regions that are not
+      // currently visible so that they can be brought into view asynchronously.
+      // Notes:
+      //   - The pre-existing clip state will be restored when the
+      //     AutoSaveRestore goes out of scope, so there is no permanent change
+      //     to this clip state.
+      //   - We still set a clip to the scroll port further below where we
+      //     build the scroll wrapper. This doesn't prevent us from painting
+      //     the entire displayport, but it lets the compositor know to
+      //     clip to the scroll port after compositing.
+      clipStatePtr->Clear();
+    }
+
+    aBuilder->StoreDirtyRectForScrolledContents(mOuter, dirtyRect);
     mOuter->BuildDisplayListForChild(aBuilder, mScrolledFrame, dirtyRect, scrolledContent);
 
     if (idSetter.ShouldForceLayerForScrollParent() &&
@@ -3012,62 +3046,42 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     aBuilder->ForceLayerForScrollParent();
   }
 
-  if (MOZ_UNLIKELY(mOuter->StyleDisplay()->mOverflowClipBox ==
-                     NS_STYLE_OVERFLOW_CLIP_BOX_CONTENT_BOX)) {
-    // We only clip if there is *scrollable* overflow, to avoid clipping
-    // *visual* overflow unnecessarily.
-    nsRect clipRect = mScrollPort + aBuilder->ToReferenceFrame(mOuter);
-    nsRect so = mScrolledFrame->GetScrollableOverflowRect();
-    if (clipRect.width != so.width || clipRect.height != so.height ||
-        so.x < 0 || so.y < 0) {
-      // The 'scrolledContent' items are clipped to the padding-box at this point.
-      // Now clip them again to the content-box, except the nsDisplayCaret item
-      // which we allow to overflow the content-box in various situations --
-      // see ::ClipItemsExceptCaret.
-      clipRect.Deflate(mOuter->GetUsedPadding());
-      DisplayItemClip clip;
-      clip.SetTo(clipRect);
-      ::ClipListsExceptCaret(&scrolledContent, aBuilder, mScrolledFrame, clip);
-    }
+  if (contentBoxClipForNonCaretContent) {
+    ClipListsExceptCaret(&scrolledContent, aBuilder, mScrolledFrame,
+                         *contentBoxClipForNonCaretContent, usingDisplayport);
   }
 
   if (shouldBuildLayer) {
-    // ScrollLayerWrapper must always be created because it initializes the
-    // scroll layer count. The display lists depend on this.
-    ScrollLayerWrapper wrapper(mOuter, mScrolledFrame);
-
     // Make sure that APZ will dispatch events back to content so we can create
     // a displayport for this frame. We'll add the item later on.
     nsDisplayLayerEventRegions* inactiveRegionItem = nullptr;
     if (aBuilder->IsPaintingToWindow() &&
         !mShouldBuildScrollableLayer &&
         shouldBuildLayer &&
-        gfxPrefs::LayoutEventRegionsEnabled())
+        aBuilder->IsBuildingLayerEventRegions())
     {
       inactiveRegionItem = new (aBuilder) nsDisplayLayerEventRegions(aBuilder, mScrolledFrame);
       inactiveRegionItem->AddInactiveScrollPort(mScrollPort + aBuilder->ToReferenceFrame(mOuter));
     }
 
-    // In case we are not using displayport or the nsDisplayScrollLayers are
-    // flattened during visibility computation, we still need to export the
-    // metadata about this scroll box to the compositor process.
-    nsDisplayScrollInfoLayer* layerItem = new (aBuilder) nsDisplayScrollInfoLayer(
-      aBuilder, mScrolledFrame, mOuter);
-
-    nsDisplayList* positionedDescendants = scrolledContent.PositionedDescendants();
-    nsDisplayList* destinationList = nullptr;
-    int32_t zindex =
-      MaxZIndexInListOfItemsContainedInFrame(positionedDescendants, mOuter);
-    if (zindex >= 0) {
-      layerItem->SetOverrideZIndex(zindex);
-      destinationList = positionedDescendants;
-    } else {
-      destinationList = scrolledContent.Outlines();
-    }
     if (inactiveRegionItem) {
+      nsDisplayList* positionedDescendants = scrolledContent.PositionedDescendants();
+      nsDisplayList* destinationList = nullptr;
+      int32_t zindex =
+        MaxZIndexInListOfItemsContainedInFrame(positionedDescendants, mOuter);
+      if (zindex >= 0) {
+        destinationList = positionedDescendants;
+      } else {
+        destinationList = scrolledContent.Outlines();
+      }
       destinationList->AppendNewToTop(inactiveRegionItem);
     }
-    destinationList->AppendNewToTop(layerItem);
+
+    if (aBuilder->ShouldBuildScrollInfoItemsForHoisting()) {
+      aBuilder->AppendNewScrollInfoItemForHoisting(
+        new (aBuilder) nsDisplayScrollInfoLayer(aBuilder, mScrolledFrame,
+                                                mOuter));
+    }
   }
   // Now display overlay scrollbars and the resizer, if we have one.
   AppendScrollPartsTo(aBuilder, aDirtyRect, scrolledContent, usingDisplayport,
@@ -3075,45 +3089,99 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   scrolledContent.MoveTo(aLists);
 }
 
-void
+const DisplayItemClip*
+ScrollFrameHelper::ComputeScrollClip(bool aIsForCaret) const
+{
+  const DisplayItemClip* ancestorClip = aIsForCaret ? mAncestorClipForCaret : mAncestorClip;
+  if (!mShouldBuildScrollableLayer || mIsScrollableLayerInRootContainer) {
+    return nullptr;
+  }
+
+  return ancestorClip;
+}
+
+Maybe<FrameMetricsAndClip>
 ScrollFrameHelper::ComputeFrameMetrics(Layer* aLayer,
                                        nsIFrame* aContainerReferenceFrame,
                                        const ContainerLayerParameters& aParameters,
-                                       nsRect* aClipRect,
-                                       nsTArray<FrameMetrics>* aOutput) const
+                                       bool aIsForCaret) const
 {
+  if (!mShouldBuildScrollableLayer || mIsScrollableLayerInRootContainer) {
+    return Nothing();
+  }
+
+  bool needsParentLayerClip = true;
+  if (gfxPrefs::LayoutUseContainersForRootFrames() && !mAddClipRectToLayer) {
+    // For containerful frames, the clip is on the container frame.
+    needsParentLayerClip = false;
+  }
+
+  const DisplayItemClip* ancestorClip = aIsForCaret ? mAncestorClipForCaret : mAncestorClip;
+
   nsPoint toReferenceFrame = mOuter->GetOffsetToCrossDoc(aContainerReferenceFrame);
-  bool isRoot = mIsRoot && mOuter->PresContext()->IsRootContentDocument();
-  // If APZ is enabled, do not apply clips to the scroll ports of metrics
-  // above the first one on a given layer. They will be applied by the
-  // compositor instead, with async transforms for the scrollframes interspersed
-  // between them.
-  bool omitClip = gfxPrefs::AsyncPanZoomEnabled() && aOutput->Length() > 0;
-  if (!omitClip && (!gfxPrefs::LayoutUseContainersForRootFrames() || mAddClipRectToLayer)) {
+  bool isRootContent = mIsRoot && mOuter->PresContext()->IsRootContentDocument();
+
+  Maybe<nsRect> parentLayerClip;
+  if (needsParentLayerClip) {
     nsRect clip = nsRect(mScrollPort.TopLeft() + toReferenceFrame,
                          nsLayoutUtils::CalculateCompositionSizeForFrame(mOuter));
-    if (isRoot) {
+    if (isRootContent) {
       double res = mOuter->PresContext()->PresShell()->GetResolution();
       clip.width = NSToCoordRound(clip.width / res);
       clip.height = NSToCoordRound(clip.height / res);
     }
-    // When using containers, the container layer contains the clip. Otherwise
-    // we always include the clip.
-    *aClipRect = clip;
+
+    if (ancestorClip && ancestorClip->HasClip()) {
+      clip = ancestorClip->GetClipRect().Intersect(clip);
+    }
+
+    parentLayerClip = Some(clip);
   }
 
-  if (!mShouldBuildScrollableLayer || mIsScrollableLayerInRootContainer) {
-    return;
+  bool thisScrollFrameUsesAsyncScrolling = nsLayoutUtils::UsesAsyncScrolling(mOuter);
+#if defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_ANDROID_APZ)
+  // Android without apzc (aka the java pan zoom code) only uses async scrolling
+  // for the root scroll frame of the root content document.
+  if (!isRootContent) {
+    thisScrollFrameUsesAsyncScrolling = false;
+  }
+#endif
+  if (!thisScrollFrameUsesAsyncScrolling) {
+    if (parentLayerClip) {
+      // If APZ is not enabled, we still need the displayport to be clipped
+      // in the compositor.
+      ParentLayerIntRect displayportClip =
+        ViewAs<ParentLayerPixel>(
+          parentLayerClip->ScaleToNearestPixels(
+            aParameters.mXScale,
+            aParameters.mYScale,
+            mScrolledFrame->PresContext()->AppUnitsPerDevPixel()));
+
+      ParentLayerIntRect layerClip;
+      if (const ParentLayerIntRect* origClip = aLayer->GetClipRect().ptrOr(nullptr)) {
+        layerClip = displayportClip.Intersect(*origClip);
+      } else {
+        layerClip = displayportClip;
+      }
+      aLayer->SetClipRect(Some(layerClip));
+    }
+
+    // Return early, since if we don't use APZ we don't need FrameMetrics.
+    return Nothing();
   }
 
   MOZ_ASSERT(mScrolledFrame->GetContent());
 
+  FrameMetricsAndClip result;
+
   nsRect scrollport = mScrollPort + toReferenceFrame;
-  *aOutput->AppendElement() =
-      nsDisplayScrollLayer::ComputeFrameMetrics(
-        mScrolledFrame, mOuter, mOuter->GetContent(),
-        aContainerReferenceFrame, aLayer, mScrollParentID,
-        scrollport, isRoot, aParameters);
+  result.metrics = nsLayoutUtils::ComputeFrameMetrics(
+    mScrolledFrame, mOuter, mOuter->GetContent(),
+    aContainerReferenceFrame, aLayer, mScrollParentID,
+    scrollport, parentLayerClip, isRootContent, aParameters);
+  result.clip = ancestorClip;
+
+  return Some(result);
 }
 
 bool
@@ -3392,7 +3460,8 @@ ScrollFrameHelper::ScrollBy(nsIntPoint aDelta,
   }
 
   if (aUnit == nsIScrollableFrame::DEVICE_PIXELS &&
-      !gfxPrefs::AsyncPanZoomEnabled()) {
+      !nsLayoutUtils::AsyncPanZoomEnabled(mOuter))
+  {
     // When APZ is disabled, we must track the velocity
     // on the main thread; otherwise, the APZC will manage this.
     mVelocityQueue.Sample(GetScrollPosition());
@@ -4312,7 +4381,7 @@ ScrollFrameHelper::IsScrollingActive(nsDisplayListBuilder* aBuilder) const
 nsresult
 nsXULScrollFrame::Layout(nsBoxLayoutState& aState)
 {
-  bool scrollbarRight = mHelper.IsScrollbarOnRight();
+  bool scrollbarRight = IsScrollbarOnRight();
   bool scrollbarBottom = true;
 
   // get the content rect
@@ -4778,8 +4847,20 @@ ScrollFrameHelper::LayoutScrollbars(nsBoxLayoutState& aState,
   NS_ASSERTION(!mSupppressScrollbarUpdate,
                "This should have been suppressed");
 
+  nsIPresShell* presShell = mOuter->PresContext()->PresShell();
+
   bool hasResizer = HasResizer();
   bool scrollbarOnLeft = !IsScrollbarOnRight();
+  bool overlayScrollBarsWithZoom =
+    mIsRoot && LookAndFeel::GetInt(LookAndFeel::eIntID_UseOverlayScrollbars) &&
+    presShell->IsScrollPositionClampingScrollPortSizeSet();
+
+  nsSize scrollPortClampingSize = mScrollPort.Size();
+  double res = 1.0;
+  if (overlayScrollBarsWithZoom) {
+    scrollPortClampingSize = presShell->GetScrollPositionClampingScrollPortSize();
+    res = presShell->GetCumulativeResolution();
+  }
 
   // place the scrollcorner
   if (mScrollCornerBox || mResizerBox) {
@@ -4842,8 +4923,11 @@ ScrollFrameHelper::LayoutScrollbars(nsBoxLayoutState& aState,
   if (mVScrollbarBox) {
     NS_PRECONDITION(mVScrollbarBox->IsBoxFrame(), "Must be a box frame!");
     vRect = mScrollPort;
+    if (overlayScrollBarsWithZoom) {
+      vRect.height = NSToCoordRound(res * scrollPortClampingSize.height);
+    }
     vRect.width = aContentArea.width - mScrollPort.width;
-    vRect.x = scrollbarOnLeft ? aContentArea.x : mScrollPort.XMost();
+    vRect.x = scrollbarOnLeft ? aContentArea.x : mScrollPort.x + NSToCoordRound(res * scrollPortClampingSize.width);
     if (mHasVerticalScrollbar) {
       nsMargin margin;
       mVScrollbarBox->GetMargin(margin);
@@ -4856,8 +4940,11 @@ ScrollFrameHelper::LayoutScrollbars(nsBoxLayoutState& aState,
   if (mHScrollbarBox) {
     NS_PRECONDITION(mHScrollbarBox->IsBoxFrame(), "Must be a box frame!");
     hRect = mScrollPort;
+    if (overlayScrollBarsWithZoom) {
+      hRect.width = NSToCoordRound(res * scrollPortClampingSize.width);
+    }
     hRect.height = aContentArea.height - mScrollPort.height;
-    hRect.y = true ? mScrollPort.YMost() : aContentArea.y;
+    hRect.y = mScrollPort.y + NSToCoordRound(res * scrollPortClampingSize.height);
     if (mHasHorizontalScrollbar) {
       nsMargin margin;
       mHScrollbarBox->GetMargin(margin);
@@ -4923,12 +5010,12 @@ ScrollFrameHelper::SetCoordAttribute(nsIContent* aContent, nsIAtom* aAtom,
   DebugOnly<nsWeakPtr> weakShell(
     do_GetWeakReference(mOuter->PresContext()->PresShell()));
   // convert to pixels
-  aSize = nsPresContext::AppUnitsToIntCSSPixels(aSize);
+  int32_t pixelSize = nsPresContext::AppUnitsToIntCSSPixels(aSize);
 
   // only set the attribute if it changed.
 
   nsAutoString newValue;
-  newValue.AppendInt(aSize);
+  newValue.AppendInt(pixelSize);
 
   if (aContent->AttrValueIs(kNameSpaceID_None, aAtom, newValue, eCaseMatters))
     return;
@@ -5556,4 +5643,13 @@ ScrollFrameHelper::GetSnapPointForDestination(nsIScrollableFrame::ScrollUnit aUn
     aDestination = finalPos;
   }
   return snapped;
+}
+
+bool
+ScrollFrameHelper::UsesContainerScrolling() const
+{
+  if (gfxPrefs::LayoutUseContainersForRootFrames()) {
+    return mIsRoot;
+  }
+  return false;
 }

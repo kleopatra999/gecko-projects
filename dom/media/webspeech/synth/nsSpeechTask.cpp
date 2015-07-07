@@ -15,12 +15,8 @@
 #endif
 
 #undef LOG
-#ifdef PR_LOGGING
 extern PRLogModuleInfo* GetSpeechSynthLog();
-#define LOG(type, msg) PR_LOG(GetSpeechSynthLog(), type, msg)
-#else
-#define LOG(type, msg)
-#endif
+#define LOG(type, msg) MOZ_LOG(GetSpeechSynthLog(), type, msg)
 
 namespace mozilla {
 namespace dom {
@@ -88,7 +84,7 @@ private:
 
 // nsSpeechTask
 
-NS_IMPL_CYCLE_COLLECTION(nsSpeechTask, mSpeechSynthesis, mUtterance);
+NS_IMPL_CYCLE_COLLECTION(nsSpeechTask, mSpeechSynthesis, mUtterance, mCallback);
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsSpeechTask)
   NS_INTERFACE_MAP_ENTRY(nsISpeechTask)
@@ -118,7 +114,7 @@ nsSpeechTask::nsSpeechTask(float aVolume, const nsAString& aText)
 
 nsSpeechTask::~nsSpeechTask()
 {
-  LOG(PR_LOG_DEBUG, ("~nsSpeechTask"));
+  LOG(LogLevel::Debug, ("~nsSpeechTask"));
   if (mStream) {
     if (!mStream->IsDestroyed()) {
       mStream->Destroy();
@@ -140,13 +136,19 @@ nsSpeechTask::BindStream(ProcessedMediaStream* aStream)
   mPort = aStream->AllocateInputPort(mStream, 0);
 }
 
+void
+nsSpeechTask::SetChosenVoiceURI(const nsAString& aUri)
+{
+  mChosenVoiceURI = aUri;
+}
+
 NS_IMETHODIMP
 nsSpeechTask::Setup(nsISpeechTaskCallback* aCallback,
                     uint32_t aChannels, uint32_t aRate, uint8_t argc)
 {
-  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+  MOZ_ASSERT(XRE_IsParentProcess());
 
-  LOG(PR_LOG_DEBUG, ("nsSpeechTask::Setup"));
+  LOG(LogLevel::Debug, ("nsSpeechTask::Setup"));
 
   mCallback = aCallback;
 
@@ -163,7 +165,9 @@ nsSpeechTask::Setup(nsISpeechTaskCallback* aCallback,
   mStream->AddListener(new SynthStreamListener(this));
 
   // XXX: Support more than one channel
-  NS_ENSURE_TRUE(aChannels == 1, NS_ERROR_FAILURE);
+  if(NS_WARN_IF(!(aChannels == 1))) {
+    return NS_ERROR_FAILURE;
+  }
 
   mChannels = aChannels;
 
@@ -193,12 +197,20 @@ NS_IMETHODIMP
 nsSpeechTask::SendAudio(JS::Handle<JS::Value> aData, JS::Handle<JS::Value> aLandmarks,
                         JSContext* aCx)
 {
-  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+  MOZ_ASSERT(XRE_IsParentProcess());
 
-  NS_ENSURE_TRUE(mStream, NS_ERROR_NOT_AVAILABLE);
-  NS_ENSURE_FALSE(mStream->IsDestroyed(), NS_ERROR_NOT_AVAILABLE);
-  NS_ENSURE_TRUE(mChannels, NS_ERROR_FAILURE);
-  NS_ENSURE_TRUE(aData.isObject(), NS_ERROR_INVALID_ARG);
+  if(NS_WARN_IF(!(mStream))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  if(NS_WARN_IF(mStream->IsDestroyed())) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  if(NS_WARN_IF(!(mChannels))) {
+    return NS_ERROR_FAILURE;
+  }
+  if(NS_WARN_IF(!(aData.isObject()))) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
   if (mIndirectAudio) {
     NS_WARNING("Can't call SendAudio from an indirect audio speech service.");
@@ -235,11 +247,17 @@ nsSpeechTask::SendAudio(JS::Handle<JS::Value> aData, JS::Handle<JS::Value> aLand
 NS_IMETHODIMP
 nsSpeechTask::SendAudioNative(int16_t* aData, uint32_t aDataLen)
 {
-  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+  MOZ_ASSERT(XRE_IsParentProcess());
 
-  NS_ENSURE_TRUE(mStream, NS_ERROR_NOT_AVAILABLE);
-  NS_ENSURE_FALSE(mStream->IsDestroyed(), NS_ERROR_NOT_AVAILABLE);
-  NS_ENSURE_TRUE(mChannels, NS_ERROR_FAILURE);
+  if(NS_WARN_IF(!(mStream))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  if(NS_WARN_IF(mStream->IsDestroyed())) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  if(NS_WARN_IF(!(mChannels))) {
+    return NS_ERROR_FAILURE;
+  }
 
   if (mIndirectAudio) {
     NS_WARNING("Can't call SendAudio from an indirect audio speech service.");
@@ -282,15 +300,23 @@ nsSpeechTask::DispatchStart()
 nsresult
 nsSpeechTask::DispatchStartImpl()
 {
-  LOG(PR_LOG_DEBUG, ("nsSpeechTask::DispatchStart"));
+  return DispatchStartImpl(mChosenVoiceURI);
+}
+
+nsresult
+nsSpeechTask::DispatchStartImpl(const nsAString& aUri)
+{
+  LOG(LogLevel::Debug, ("nsSpeechTask::DispatchStart"));
 
   MOZ_ASSERT(mUtterance);
-  NS_ENSURE_TRUE(mUtterance->mState == SpeechSynthesisUtterance::STATE_PENDING,
-                 NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(!(mUtterance->mState == SpeechSynthesisUtterance::STATE_PENDING))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   mUtterance->mState = SpeechSynthesisUtterance::STATE_SPEAKING;
+  mUtterance->mChosenVoiceURI = aUri;
   mUtterance->DispatchSpeechSynthesisEvent(NS_LITERAL_STRING("start"), 0, 0,
-                                           NS_LITERAL_STRING(""));
+                                           EmptyString());
 
   return NS_OK;
 }
@@ -309,11 +335,12 @@ nsSpeechTask::DispatchEnd(float aElapsedTime, uint32_t aCharIndex)
 nsresult
 nsSpeechTask::DispatchEndImpl(float aElapsedTime, uint32_t aCharIndex)
 {
-  LOG(PR_LOG_DEBUG, ("nsSpeechTask::DispatchEnd\n"));
+  LOG(LogLevel::Debug, ("nsSpeechTask::DispatchEnd\n"));
 
   MOZ_ASSERT(mUtterance);
-  NS_ENSURE_FALSE(mUtterance->mState == SpeechSynthesisUtterance::STATE_ENDED,
-                  NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(mUtterance->mState == SpeechSynthesisUtterance::STATE_ENDED)) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   // XXX: This should not be here, but it prevents a crash in MSG.
   if (mStream) {
@@ -352,16 +379,19 @@ nsSpeechTask::DispatchPause(float aElapsedTime, uint32_t aCharIndex)
 nsresult
 nsSpeechTask::DispatchPauseImpl(float aElapsedTime, uint32_t aCharIndex)
 {
-  LOG(PR_LOG_DEBUG, ("nsSpeechTask::DispatchPause"));
+  LOG(LogLevel::Debug, ("nsSpeechTask::DispatchPause"));
   MOZ_ASSERT(mUtterance);
-  NS_ENSURE_FALSE(mUtterance->mPaused, NS_ERROR_NOT_AVAILABLE);
-  NS_ENSURE_FALSE(mUtterance->mState == SpeechSynthesisUtterance::STATE_ENDED,
-                  NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(mUtterance->mPaused)) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  if(NS_WARN_IF(mUtterance->mState == SpeechSynthesisUtterance::STATE_ENDED)) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   mUtterance->mPaused = true;
   mUtterance->DispatchSpeechSynthesisEvent(NS_LITERAL_STRING("pause"),
                                            aCharIndex, aElapsedTime,
-                                           NS_LITERAL_STRING(""));
+                                           EmptyString());
   return NS_OK;
 }
 
@@ -379,16 +409,19 @@ nsSpeechTask::DispatchResume(float aElapsedTime, uint32_t aCharIndex)
 nsresult
 nsSpeechTask::DispatchResumeImpl(float aElapsedTime, uint32_t aCharIndex)
 {
-  LOG(PR_LOG_DEBUG, ("nsSpeechTask::DispatchResume"));
+  LOG(LogLevel::Debug, ("nsSpeechTask::DispatchResume"));
   MOZ_ASSERT(mUtterance);
-  NS_ENSURE_TRUE(mUtterance->mPaused, NS_ERROR_NOT_AVAILABLE);
-  NS_ENSURE_FALSE(mUtterance->mState == SpeechSynthesisUtterance::STATE_ENDED,
-                  NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(!(mUtterance->mPaused))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  if(NS_WARN_IF(mUtterance->mState == SpeechSynthesisUtterance::STATE_ENDED)) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   mUtterance->mPaused = false;
   mUtterance->DispatchSpeechSynthesisEvent(NS_LITERAL_STRING("resume"),
                                            aCharIndex, aElapsedTime,
-                                           NS_LITERAL_STRING(""));
+                                           EmptyString());
   return NS_OK;
 }
 
@@ -407,13 +440,14 @@ nsresult
 nsSpeechTask::DispatchErrorImpl(float aElapsedTime, uint32_t aCharIndex)
 {
   MOZ_ASSERT(mUtterance);
-  NS_ENSURE_FALSE(mUtterance->mState == SpeechSynthesisUtterance::STATE_ENDED,
-                  NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(mUtterance->mState == SpeechSynthesisUtterance::STATE_ENDED)) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   mUtterance->mState = SpeechSynthesisUtterance::STATE_ENDED;
   mUtterance->DispatchSpeechSynthesisEvent(NS_LITERAL_STRING("error"),
                                            aCharIndex, aElapsedTime,
-                                           NS_LITERAL_STRING(""));
+                                           EmptyString());
   return NS_OK;
 }
 
@@ -434,8 +468,9 @@ nsSpeechTask::DispatchBoundaryImpl(const nsAString& aName,
                                    float aElapsedTime, uint32_t aCharIndex)
 {
   MOZ_ASSERT(mUtterance);
-  NS_ENSURE_TRUE(mUtterance->mState == SpeechSynthesisUtterance::STATE_SPEAKING,
-                 NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(!(mUtterance->mState == SpeechSynthesisUtterance::STATE_SPEAKING))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   mUtterance->DispatchSpeechSynthesisEvent(NS_LITERAL_STRING("boundary"),
                                            aCharIndex, aElapsedTime,
@@ -460,8 +495,9 @@ nsSpeechTask::DispatchMarkImpl(const nsAString& aName,
                                float aElapsedTime, uint32_t aCharIndex)
 {
   MOZ_ASSERT(mUtterance);
-  NS_ENSURE_TRUE(mUtterance->mState == SpeechSynthesisUtterance::STATE_SPEAKING,
-                 NS_ERROR_NOT_AVAILABLE);
+  if(NS_WARN_IF(!(mUtterance->mState == SpeechSynthesisUtterance::STATE_SPEAKING))) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   mUtterance->DispatchSpeechSynthesisEvent(NS_LITERAL_STRING("mark"),
                                            aCharIndex, aElapsedTime,
@@ -472,12 +508,7 @@ nsSpeechTask::DispatchMarkImpl(const nsAString& aName,
 void
 nsSpeechTask::Pause()
 {
-  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
-
-  if (mUtterance->IsPaused() ||
-      mUtterance->GetState() == SpeechSynthesisUtterance::STATE_ENDED) {
-    return;
-  }
+  MOZ_ASSERT(XRE_IsParentProcess());
 
   if (mCallback) {
     DebugOnly<nsresult> rv = mCallback->OnPause();
@@ -486,19 +517,14 @@ nsSpeechTask::Pause()
 
   if (mStream) {
     mStream->ChangeExplicitBlockerCount(1);
+    DispatchPauseImpl(GetCurrentTime(), GetCurrentCharOffset());
   }
-
-  DispatchPauseImpl(GetCurrentTime(), GetCurrentCharOffset());
 }
 
 void
 nsSpeechTask::Resume()
 {
-  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
-
-  if (!mUtterance->IsPaused()) {
-    return;
-  }
+  MOZ_ASSERT(XRE_IsParentProcess());
 
   if (mCallback) {
     DebugOnly<nsresult> rv = mCallback->OnResume();
@@ -507,17 +533,16 @@ nsSpeechTask::Resume()
 
   if (mStream) {
     mStream->ChangeExplicitBlockerCount(-1);
+    DispatchResumeImpl(GetCurrentTime(), GetCurrentCharOffset());
   }
-
-  DispatchResumeImpl(GetCurrentTime(), GetCurrentCharOffset());
 }
 
 void
 nsSpeechTask::Cancel()
 {
-  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+  MOZ_ASSERT(XRE_IsParentProcess());
 
-  LOG(PR_LOG_DEBUG, ("nsSpeechTask::Cancel"));
+  LOG(LogLevel::Debug, ("nsSpeechTask::Cancel"));
 
   if (mCallback) {
     DebugOnly<nsresult> rv = mCallback->OnCancel();
@@ -526,9 +551,8 @@ nsSpeechTask::Cancel()
 
   if (mStream) {
     mStream->ChangeExplicitBlockerCount(1);
+    DispatchEndImpl(GetCurrentTime(), GetCurrentCharOffset());
   }
-
-  DispatchEndImpl(GetCurrentTime(), GetCurrentCharOffset());
 }
 
 float

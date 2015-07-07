@@ -79,7 +79,7 @@ void mozilla_dump_image(void* bytes, int width, int height, int bytepp,
 
     RefPtr<DataSourceSurface> surf =
         Factory::CreateWrappingDataSourceSurface((uint8_t*)bytes, strideBytes,
-                                                 gfx::IntSize(width, height),
+                                                 IntSize(width, height),
                                                  format);
     gfxUtils::DumpAsDataURI(surf);
 }
@@ -323,7 +323,7 @@ MapSrcAndCreateMappedDest(DataSourceSurface* srcSurf,
     return true;
 }
 
-TemporaryRef<DataSourceSurface>
+already_AddRefed<DataSourceSurface>
 gfxUtils::CreatePremultipliedDataSurface(DataSourceSurface* srcSurf)
 {
     RefPtr<DataSourceSurface> destSurf;
@@ -331,7 +331,8 @@ gfxUtils::CreatePremultipliedDataSurface(DataSourceSurface* srcSurf)
     DataSourceSurface::MappedSurface destMap;
     if (!MapSrcAndCreateMappedDest(srcSurf, &destSurf, &srcMap, &destMap)) {
         MOZ_ASSERT(false, "MapSrcAndCreateMappedDest failed.");
-        return srcSurf;
+        RefPtr<DataSourceSurface> surface(srcSurf);
+        return surface.forget();
     }
 
     PremultiplyData(srcMap.mData, srcMap.mStride,
@@ -340,10 +341,10 @@ gfxUtils::CreatePremultipliedDataSurface(DataSourceSurface* srcSurf)
                     srcSurf->GetSize().height);
 
     UnmapSrcDest(srcSurf, destSurf);
-    return destSurf;
+    return destSurf.forget();
 }
 
-TemporaryRef<DataSourceSurface>
+already_AddRefed<DataSourceSurface>
 gfxUtils::CreateUnpremultipliedDataSurface(DataSourceSurface* srcSurf)
 {
     RefPtr<DataSourceSurface> destSurf;
@@ -351,7 +352,8 @@ gfxUtils::CreateUnpremultipliedDataSurface(DataSourceSurface* srcSurf)
     DataSourceSurface::MappedSurface destMap;
     if (!MapSrcAndCreateMappedDest(srcSurf, &destSurf, &srcMap, &destMap)) {
         MOZ_ASSERT(false, "MapSrcAndCreateMappedDest failed.");
-        return srcSurf;
+        RefPtr<DataSourceSurface> surface(srcSurf);
+        return surface.forget();
     }
 
     UnpremultiplyData(srcMap.mData, srcMap.mStride,
@@ -360,7 +362,7 @@ gfxUtils::CreateUnpremultipliedDataSurface(DataSourceSurface* srcSurf)
                       srcSurf->GetSize().height);
 
     UnmapSrcDest(srcSurf, destSurf);
-    return destSurf;
+    return destSurf.forget();
 }
 
 void
@@ -438,7 +440,7 @@ CreateSamplingRestrictedDrawable(gfxDrawable* aDrawable,
     if (needed.IsEmpty())
         return nullptr;
 
-    gfxIntSize size(int32_t(needed.Width()), int32_t(needed.Height()));
+    IntSize size(int32_t(needed.Width()), int32_t(needed.Height()));
 
     RefPtr<DrawTarget> target =
       gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(size, aFormat);
@@ -690,7 +692,7 @@ PathFromRegionInternal(gfxContext* aContext, const nsIntRegion& aRegion)
 {
   aContext->NewPath();
   nsIntRegionRectIterator iter(aRegion);
-  const nsIntRect* r;
+  const IntRect* r;
   while ((r = iter.Next()) != nullptr) {
     aContext->Rectangle(gfxRect(r->x, r->y, r->width, r->height));
   }
@@ -703,13 +705,13 @@ ClipToRegionInternal(gfxContext* aContext, const nsIntRegion& aRegion)
   aContext->Clip();
 }
 
-static TemporaryRef<Path>
+static already_AddRefed<Path>
 PathFromRegionInternal(DrawTarget* aTarget, const nsIntRegion& aRegion)
 {
   RefPtr<PathBuilder> pb = aTarget->CreatePathBuilder();
   nsIntRegionRectIterator iter(aRegion);
 
-  const nsIntRect* r;
+  const IntRect* r;
   while ((r = iter.Next()) != nullptr) {
     pb->MoveTo(Point(r->x, r->y));
     pb->LineTo(Point(r->XMost(), r->y));
@@ -717,15 +719,14 @@ PathFromRegionInternal(DrawTarget* aTarget, const nsIntRegion& aRegion)
     pb->LineTo(Point(r->x, r->YMost()));
     pb->Close();
   }
-  RefPtr<Path> path = pb->Finish();
-  return path;
+  return pb->Finish();
 }
 
 static void
 ClipToRegionInternal(DrawTarget* aTarget, const nsIntRegion& aRegion)
 {
   if (!aRegion.IsComplex()) {
-    nsIntRect rect = aRegion.GetBounds();
+    IntRect rect = aRegion.GetBounds();
     aTarget->PushClipRect(Rect(rect.x, rect.y, rect.width, rect.height));
     return;
   }
@@ -847,9 +848,9 @@ gfxUtils::TransformRectToRect(const gfxRect& aFrom, const IntPoint& aToTopLeft,
  * to ints then convert those ints back to doubles to make sure that
  * they equal the doubles that we got in. */
 bool
-gfxUtils::GfxRectToIntRect(const gfxRect& aIn, nsIntRect* aOut)
+gfxUtils::GfxRectToIntRect(const gfxRect& aIn, IntRect* aOut)
 {
-  *aOut = nsIntRect(int32_t(aIn.X()), int32_t(aIn.Y()),
+  *aOut = IntRect(int32_t(aIn.X()), int32_t(aIn.Y()),
   int32_t(aIn.Width()), int32_t(aIn.Height()));
   return gfxRect(aOut->x, aOut->y, aOut->width, aOut->height).IsEqualEdges(aIn);
 }
@@ -857,7 +858,7 @@ gfxUtils::GfxRectToIntRect(const gfxRect& aIn, nsIntRect* aOut)
 void
 gfxUtils::GetYCbCrToRGBDestFormatAndSize(const PlanarYCbCrData& aData,
                                          gfxImageFormat& aSuggestedFormat,
-                                         gfxIntSize& aSuggestedSize)
+                                         IntSize& aSuggestedSize)
 {
   YUVType yuvtype =
     TypeFromSize(aData.mYSize.width,
@@ -911,7 +912,7 @@ gfxUtils::GetYCbCrToRGBDestFormatAndSize(const PlanarYCbCrData& aData,
 void
 gfxUtils::ConvertYCbCrToRGB(const PlanarYCbCrData& aData,
                             const gfxImageFormat& aDestFormat,
-                            const gfxIntSize& aDestSize,
+                            const IntSize& aDestSize,
                             unsigned char* aDestBuffer,
                             int32_t aStride)
 {
@@ -995,7 +996,7 @@ gfxUtils::ConvertYCbCrToRGB(const PlanarYCbCrData& aData,
 }
 
 /* static */ void gfxUtils::ClearThebesSurface(gfxASurface* aSurface,
-                                               nsIntRect* aRect,
+                                               IntRect* aRect,
                                                const gfxRGBA& aColor)
 {
   if (aSurface->CairoStatus()) {
@@ -1008,18 +1009,18 @@ gfxUtils::ConvertYCbCrToRGB(const PlanarYCbCrData& aData,
   cairo_t* ctx = cairo_create(surf);
   cairo_set_source_rgba(ctx, aColor.r, aColor.g, aColor.b, aColor.a);
   cairo_set_operator(ctx, CAIRO_OPERATOR_SOURCE);
-  nsIntRect bounds;
+  IntRect bounds;
   if (aRect) {
     bounds = *aRect;
   } else {
-    bounds = nsIntRect(nsIntPoint(0, 0), aSurface->GetSize());
+    bounds = IntRect(nsIntPoint(0, 0), aSurface->GetSize());
   }
   cairo_rectangle(ctx, bounds.x, bounds.y, bounds.width, bounds.height);
   cairo_fill(ctx);
   cairo_destroy(ctx);
 }
 
-/* static */ TemporaryRef<DataSourceSurface>
+/* static */ already_AddRefed<DataSourceSurface>
 gfxUtils::CopySurfaceToDataSourceSurfaceWithFormat(SourceSurface* aSurface,
                                                    SurfaceFormat aFormat)
 {
@@ -1262,7 +1263,7 @@ EncodeSourceSurfaceInternal(SourceSurface* aSurface,
   } else {
     nsCOMPtr<nsIClipboardHelper> clipboard(do_GetService("@mozilla.org/widget/clipboardhelper;1", &rv));
     if (clipboard) {
-      clipboard->CopyString(NS_ConvertASCIItoUTF16(string), nullptr);
+      clipboard->CopyString(NS_ConvertASCIItoUTF16(string));
     }
   }
   return NS_OK;
@@ -1319,7 +1320,7 @@ gfxUtils::WriteAsPNG(SourceSurface* aSurface, const char* aFile)
       }
     }
     if (!file) {
-      NS_WARNING("Failed to open file to create PNG!\n");
+      NS_WARNING("Failed to open file to create PNG!");
       return;
     }
   }
@@ -1452,10 +1453,14 @@ FILE *gfxUtils::sDumpPaintFile = stderr;
 
 #ifdef MOZ_DUMP_PAINTING
 bool gfxUtils::sDumpPainting = getenv("MOZ_DUMP_PAINT") != 0;
+bool gfxUtils::sDumpPaintingIntermediate = getenv("MOZ_DUMP_PAINT_INTERMEDIATE") != 0;
 bool gfxUtils::sDumpPaintingToFile = getenv("MOZ_DUMP_PAINT_TO_FILE") != 0;
+bool gfxUtils::sDumpPaintItems = getenv("MOZ_DUMP_PAINT_ITEMS") != 0;
 #else
 bool gfxUtils::sDumpPainting = false;
+bool gfxUtils::sDumpPaintingIntermediate = false;
 bool gfxUtils::sDumpPaintingToFile = false;
+bool gfxUtils::sDumpPaintItems = false;
 #endif
 
 namespace mozilla {

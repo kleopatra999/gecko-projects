@@ -8,7 +8,7 @@
 
 #include <cstdarg>
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #ifdef ANDROID
 #include <android/log.h>
 #endif
@@ -69,12 +69,10 @@ static const char kJSCachePrefix[] = "jsloader";
 #define XPC_SERIALIZATION_BUFFER_SIZE   (64 * 1024)
 #define XPC_DESERIALIZATION_BUFFER_SIZE (12 * 8192)
 
-#ifdef PR_LOGGING
 // NSPR_LOG_MODULES=JSComponentLoader:5
 static PRLogModuleInfo* gJSCLLog;
-#endif
 
-#define LOG(args) PR_LOG(gJSCLLog, PR_LOG_DEBUG, args)
+#define LOG(args) MOZ_LOG(gJSCLLog, mozilla::LogLevel::Debug, args)
 
 // Components.utils.import error messages
 #define ERROR_SCOPE_OBJ "%s - Second argument must be an object."
@@ -199,11 +197,9 @@ mozJSComponentLoader::mozJSComponentLoader()
 {
     MOZ_ASSERT(!sSelf, "mozJSComponentLoader should be a singleton");
 
-#ifdef PR_LOGGING
     if (!gJSCLLog) {
         gJSCLLog = PR_NewLogModule("JSComponentLoader");
     }
-#endif
 
     sSelf = this;
 }
@@ -587,14 +583,13 @@ mozJSComponentLoader::PrepareObjectForLocation(JSContext* aCx,
     if (testFile) {
         *aRealFile = true;
 
-        if (XRE_GetProcessType() == GeckoProcessType_Default) {
-            nsCOMPtr<nsIXPConnectJSObjectHolder> locationHolder;
+        if (XRE_IsParentProcess()) {
+            RootedObject locationObj(aCx);
+
             rv = xpc->WrapNative(aCx, obj, aComponentFile,
                                  NS_GET_IID(nsIFile),
-                                 getter_AddRefs(locationHolder));
+                                 locationObj.address());
             NS_ENSURE_SUCCESS(rv, nullptr);
-
-            RootedObject locationObj(aCx, locationHolder->GetJSObject());
             NS_ENSURE_TRUE(locationObj, nullptr);
 
             if (!JS_DefineProperty(aCx, obj, "__LOCATION__", locationObj, 0))
@@ -617,7 +612,8 @@ mozJSComponentLoader::PrepareObjectForLocation(JSContext* aCx,
     if (createdNewGlobal) {
         // AutoEntryScript required to invoke debugger hook, which is a
         // Gecko-specific concept at present.
-        dom::AutoEntryScript aes(NativeGlobal(holder->GetJSObject()));
+        dom::AutoEntryScript aes(NativeGlobal(holder->GetJSObject()),
+                                 "component loader report global");
         RootedObject global(aes.cx(), holder->GetJSObject());
         JS_FireOnNewGlobalObject(aes.cx(), global);
     }
@@ -916,7 +912,8 @@ mozJSComponentLoader::ObjectForLocation(ComponentLoaderInfo& aInfo,
         // We're going to run script via JS_ExecuteScript or
         // JS_CallFunction, so we need an AutoEntryScript.
         // This is Gecko-specific and not in any spec.
-        dom::AutoEntryScript aes(NativeGlobal(CurrentGlobalOrNull(cx)));
+        dom::AutoEntryScript aes(NativeGlobal(CurrentGlobalOrNull(cx)),
+                                 "component loader load module");
         AutoSaveContextOptions asco(cx);
         if (aPropagateExceptions)
             ContextOptionsRef(cx).setDontReportUncaught(true);

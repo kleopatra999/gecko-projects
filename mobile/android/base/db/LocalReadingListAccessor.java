@@ -157,7 +157,6 @@ public class LocalReadingListAccessor implements ReadingListAccessor {
 
     @Override
     public void removeReadingListItemWithURL(final ContentResolver cr, String uri) {
-        uri = stripURI(uri);
         cr.delete(mReadingListUriWithProfile,
                   ReadingListItems.URL + " = ? OR " + ReadingListItems.RESOLVED_URL + " = ?",
                   new String[]{ uri, uri });
@@ -206,6 +205,10 @@ public class LocalReadingListAccessor implements ReadingListAccessor {
      * Gets the URI from an about:reader URI if applicable, else returns the URI.
      */
     private String stripURI(final String uri) {
-        return !AboutPages.isAboutReader(uri) ? uri : ReaderModeUtils.getUrlFromAboutReader(uri);
+        if (!AboutPages.isAboutReader(uri)) {
+            return uri;
+        }
+        final String strippedUrl = ReaderModeUtils.getUrlFromAboutReader(uri);
+        return strippedUrl != null ? strippedUrl : uri;
     }
 }

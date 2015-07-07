@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim: ft=cpp tw=78 sw=2 et ts=2
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -46,6 +46,7 @@
 #include "mozilla/EventStates.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/Preferences.h"
 
 #ifdef LoadImage
 // Undefine LoadImage to prevent naming conflict with Windows.
@@ -87,7 +88,6 @@ nsImageLoadingContent::nsImageLoadingContent()
     mBroken(true),
     mUserDisabled(false),
     mSuppressed(false),
-    mFireEventsOnDecode(false),
     mNewRequestsWillNeedAnimationReset(false),
     mStateChangerDepth(0),
     mCurrentRequestRegistered(false),
@@ -186,18 +186,6 @@ nsImageLoadingContent::Notify(imgIRequest* aRequest,
   }
 
   if (aType == imgINotificationObserver::DECODE_COMPLETE) {
-    if (mFireEventsOnDecode) {
-      mFireEventsOnDecode = false;
-
-      uint32_t reqStatus;
-      aRequest->GetImageStatus(&reqStatus);
-      if (reqStatus & imgIRequest::STATUS_ERROR) {
-        FireEvent(NS_LITERAL_STRING("error"));
-      } else {
-        FireEvent(NS_LITERAL_STRING("load"));
-      }
-    }
-
     UpdateImageState(true);
   }
 
@@ -277,23 +265,11 @@ nsImageLoadingContent::OnLoadComplete(imgIRequest* aRequest, nsresult aStatus)
     }
   }
 
-  // We want to give the decoder a chance to find errors. If we haven't found
-  // an error yet and we've started decoding, either from the above
-  // StartDecoding or from some other place, we must only fire these events
-  // after we finish decoding.
-  uint32_t reqStatus;
-  aRequest->GetImageStatus(&reqStatus);
-  if (NS_SUCCEEDED(aStatus) && !(reqStatus & imgIRequest::STATUS_ERROR) &&
-      (reqStatus & imgIRequest::STATUS_DECODE_STARTED) &&
-      !(reqStatus & imgIRequest::STATUS_DECODE_COMPLETE)) {
-    mFireEventsOnDecode = true;
+  // Fire the appropriate DOM event.
+  if (NS_SUCCEEDED(aStatus)) {
+    FireEvent(NS_LITERAL_STRING("load"));
   } else {
-    // Fire the appropriate DOM event.
-    if (NS_SUCCEEDED(aStatus)) {
-      FireEvent(NS_LITERAL_STRING("load"));
-    } else {
-      FireEvent(NS_LITERAL_STRING("error"));
-    }
+    FireEvent(NS_LITERAL_STRING("error"));
   }
 
   nsCOMPtr<nsINode> thisNode = do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
@@ -302,11 +278,39 @@ nsImageLoadingContent::OnLoadComplete(imgIRequest* aRequest, nsresult aStatus)
   return NS_OK;
 }
 
+static bool
+ImageIsAnimated(imgIRequest* aRequest)
+{
+  if (!aRequest) {
+    return false;
+  }
+
+  nsCOMPtr<imgIContainer> image;
+  if (NS_SUCCEEDED(aRequest->GetImage(getter_AddRefs(image)))) {
+    bool isAnimated = false;
+    nsresult rv = image->GetAnimated(&isAnimated);
+    if (NS_SUCCEEDED(rv) && isAnimated) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void
 nsImageLoadingContent::OnUnlockedDraw()
 {
   if (mVisibleCount > 0) {
     // We should already be marked as visible, there is nothing more we can do.
+    return;
+  }
+
+  // It's OK for non-animated images to wait until the next image visibility
+  // update to become locked. (And that's preferable, since in the case of
+  // scrolling it keeps memory usage minimal.) For animated images, though, we
+  // want to mark them visible right away so we can call
+  // IncrementAnimationConsumers() on them and they'll start animating.
+  if (!ImageIsAnimated(mCurrentRequest) && !ImageIsAnimated(mPendingRequest)) {
     return;
   }
 
@@ -490,7 +494,7 @@ nsImageLoadingContent::GetRequest(int32_t aRequestType,
   ErrorResult result;
   *aRequest = GetRequest(aRequestType, result).take();
 
-  return result.ErrorCode();
+  return result.StealNSResult();
 }
 
 NS_IMETHODIMP_(bool)
@@ -602,7 +606,7 @@ nsImageLoadingContent::GetRequestType(imgIRequest* aRequest,
 
   ErrorResult result;
   *aRequestType = GetRequestType(aRequest, result);
-  return result.ErrorCode();
+  return result.StealNSResult();
 }
 
 already_AddRefed<nsIURI>
@@ -628,7 +632,7 @@ nsImageLoadingContent::GetCurrentURI(nsIURI** aURI)
 
   ErrorResult result;
   *aURI = GetCurrentURI(result).take();
-  return result.ErrorCode();
+  return result.StealNSResult();
 }
 
 already_AddRefed<nsIStreamListener>
@@ -685,7 +689,7 @@ nsImageLoadingContent::LoadImageWithChannel(nsIChannel* aChannel,
 
   ErrorResult result;
   *aListener = LoadImageWithChannel(aChannel, result).take();
-  return result.ErrorCode();
+  return result.StealNSResult();
 }
 
 void
@@ -725,7 +729,7 @@ nsImageLoadingContent::ForceReload(bool aNotify /* = true */,
 
   ErrorResult result;
   ForceReload(notify, result);
-  return result.ErrorCode();
+  return result.StealNSResult();
 }
 
 NS_IMETHODIMP
@@ -927,15 +931,27 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
     loadFlags |= imgILoader::LOAD_CORS_USE_CREDENTIALS;
   }
 
+  // get document wide referrer policy
+  mozilla::net::ReferrerPolicy referrerPolicy = aDocument->GetReferrerPolicy();
+  bool referrerAttributeEnabled = Preferences::GetBool("network.http.enablePerElementReferrer", false);
+  // if referrer attributes are enabled in preferences, load img referrer attribute
+  nsresult rv;
+  if (referrerAttributeEnabled) {
+    mozilla::net::ReferrerPolicy imgReferrerPolicy = GetImageReferrerPolicy();
+    // if the image does not provide a referrer attribute, ignore this
+    if (imgReferrerPolicy != mozilla::net::RP_Unset) {
+      referrerPolicy = imgReferrerPolicy;
+    }
+  }
+
   // Not blocked. Do the load.
   nsRefPtr<imgRequestProxy>& req = PrepareNextRequest(aImageLoadType);
   nsCOMPtr<nsIContent> content =
       do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-  nsresult rv;
   rv = nsContentUtils::LoadImage(aNewURI, aDocument,
                                  aDocument->NodePrincipal(),
                                  aDocument->GetDocumentURI(),
-                                 aDocument->GetReferrerPolicy(),
+                                 referrerPolicy,
                                  this, loadFlags,
                                  content->LocalName(),
                                  getter_AddRefs(req),
@@ -1563,3 +1579,11 @@ nsImageLoadingContent::ImageObserver::~ImageObserver()
   MOZ_COUNT_DTOR(ImageObserver);
   NS_CONTENT_DELETE_LIST_MEMBER(ImageObserver, this, mNext);
 }
+
+// Only HTMLInputElement.h overrides this for <img> tags
+// all other subclasses use this one, i.e. ignore referrer attributes
+mozilla::net::ReferrerPolicy
+nsImageLoadingContent::GetImageReferrerPolicy()
+{
+  return mozilla::net::RP_Unset;
+};

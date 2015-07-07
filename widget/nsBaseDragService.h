@@ -24,10 +24,8 @@
 
 class nsIContent;
 class nsIDOMNode;
-class nsIFrame;
 class nsPresContext;
 class nsIImageLoadingContent;
-class nsICanvasElementExternal;
 
 namespace mozilla {
 namespace gfx {
@@ -58,6 +56,8 @@ public:
   void SetDragEndPoint(nsIntPoint aEndDragPoint) { mEndDragPoint = aEndDragPoint; }
 
   uint16_t GetInputSource() { return mInputSource; }
+
+  int32_t TakeChildProcessDragAction();
 
 protected:
   virtual ~nsBaseDragService();
@@ -134,6 +134,8 @@ protected:
   bool mDragEventDispatchedToChildProcess;
 
   uint32_t mDragAction;
+  uint32_t mDragActionFromChildProcess;
+
   nsSize mTargetSize;
   nsCOMPtr<nsIDOMNode> mSourceNode;
   nsCOMPtr<nsIDOMDocument> mSourceDocument;       // the document at the drag source. will be null

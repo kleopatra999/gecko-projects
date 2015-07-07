@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,8 +17,8 @@
 
 namespace mozilla {
 namespace dom {
+class Blob;
 class DOMRequest;
-class File;
 struct MediaMetaData;
 struct MediaPlayStatus;
 }
@@ -100,6 +100,12 @@ public:
                                             ErrorResult& aRv);
   already_AddRefed<Promise> StartDiscovery(ErrorResult& aRv);
   already_AddRefed<Promise> StopDiscovery(ErrorResult& aRv);
+
+  already_AddRefed<Promise> StartLeScan(
+    const nsTArray<nsString>& aServiceUuids, ErrorResult& aRv);
+  already_AddRefed<Promise> StopLeScan(
+    BluetoothDiscoveryHandle& aDiscoveryHandle, ErrorResult& aRv);
+
   already_AddRefed<Promise> Pair(const nsAString& aDeviceAddress,
                                  ErrorResult& aRv);
   already_AddRefed<Promise> Unpair(const nsAString& aDeviceAddress,
@@ -126,7 +132,7 @@ public:
 
   // OPP file transfer related methods
   already_AddRefed<DOMRequest> SendFile(const nsAString& aDeviceAddress,
-                                        File& aBlob,
+                                        Blob& aBlob,
                                         ErrorResult& aRv);
   already_AddRefed<DOMRequest> StopSendingFile(const nsAString& aDeviceAddress,
                                                ErrorResult& aRv);
@@ -179,12 +185,32 @@ public:
    */
   void SetDiscoveryHandleInUse(BluetoothDiscoveryHandle* aDiscoveryHandle);
 
+  /**
+   * Append a BluetoothDiscoveryHandle to LeScan handle array.
+   *
+   * @param aDiscoveryHandle [in] Discovery handle to be appended.
+   */
+  void AppendLeScanHandle(BluetoothDiscoveryHandle* aDiscoveryHandle);
+
+  /**
+   * Remove the BluetoothDiscoverHandle with the given UUID from LeScan handle
+   * array.
+   *
+   * @param aScanUuid [in] The UUID of the LE scan task.
+   */
+  void RemoveLeScanHandle(const nsAString& aScanUuid);
+
 private:
   BluetoothAdapter(nsPIDOMWindow* aOwner, const BluetoothValue& aValue);
   ~BluetoothAdapter();
 
   /**
-   * Set adapter properties according to properties array
+   * Unregister signal handler and clean up LE scan handles.
+   */
+  void Cleanup();
+
+  /**
+   * Set adapter properties according to properties array.
    *
    * @param aValue [in] Properties array to set with
    */
@@ -251,9 +277,16 @@ private:
   void HandleDeviceUnpaired(const BluetoothValue& aValue);
 
   /**
+   * Handle "LeDeviceFound" bluetooth signal.
+   *
+   * @param aValue [in] Properties array of the scanned device.
+   */
+  void HandleLeDeviceFound(const BluetoothValue& aValue);
+
+  /**
    * Fire BluetoothAttributeEvent to trigger onattributechanged event handler.
    */
-  void DispatchAttributeEvent(const nsTArray<nsString>& aTypes);
+  void DispatchAttributeEvent(const Sequence<nsString>& aTypes);
 
   /**
    * Fire BluetoothDeviceEvent to trigger
@@ -337,6 +370,14 @@ private:
    * some adapter.
    */
   nsRefPtr<BluetoothDiscoveryHandle> mDiscoveryHandleInUse;
+
+  /**
+   * Handles to fire 'ondevicefound' event handler for scanned device
+   *
+   * Each non-stopped LeScan process has a LeScan handle which is
+   * responsible to dispatch LeDeviceEvent.
+   */
+  nsTArray<nsRefPtr<BluetoothDiscoveryHandle> > mLeScanHandleArray;
 
   /**
    * nsRefPtr array of BluetoothDevices created by this adapter. The array is

@@ -14,6 +14,7 @@
 #include "nsIThread.h"
 #include "GMPDecryptorProxy.h"
 #include "mozilla/CDMCaps.h"
+#include "MediaPromise.h"
 
 namespace mozilla {
 class MediaRawData;
@@ -23,11 +24,13 @@ namespace dom {
 class MediaKeySession;
 }
 
-class DecryptionClient {
-public:
-  virtual ~DecryptionClient() {}
-  virtual void Decrypted(GMPErr aResult,
-                         MediaRawData* aSample) = 0;
+struct DecryptResult {
+  DecryptResult(GMPErr aStatus, MediaRawData* aSample)
+    : mStatus(aStatus)
+    , mSample(aSample)
+  {}
+  GMPErr mStatus;
+  nsRefPtr<MediaRawData> mSample;
 };
 
 // Proxies calls GMP/CDM, and proxies calls back.
@@ -40,6 +43,8 @@ class CDMProxy {
 public:
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(CDMProxy)
+
+  typedef MediaPromise<DecryptResult, DecryptResult, /* IsExclusive = */ true> DecryptPromise;
 
   // Main thread only.
   CDMProxy(dom::MediaKeys* aKeys, const nsAString& aKeySystem);
@@ -138,14 +143,14 @@ public:
   // Main thread only.
   void OnRejectPromise(uint32_t aPromiseId,
                        nsresult aDOMException,
-                       const nsAString& aMsg);
+                       const nsCString& aMsg);
 
-  // Threadsafe.
-  void Decrypt(MediaRawData* aSample, DecryptionClient* aSink);
+  nsRefPtr<DecryptPromise> Decrypt(MediaRawData* aSample);
 
   // Reject promise with DOMException corresponding to aExceptionCode.
   // Can be called from any thread.
-  void RejectPromise(PromiseId aId, nsresult aExceptionCode);
+  void RejectPromise(PromiseId aId, nsresult aExceptionCode,
+                     const nsCString& aReason);
 
   // Resolves promise with "undefined".
   // Can be called from any thread.
@@ -179,7 +184,6 @@ private:
     uint32_t mPromiseId;
     nsAutoString mOrigin;
     nsAutoString mTopLevelOrigin;
-    nsAutoCString mPluginVersion;
     bool mInPrivateBrowsing;
   };
 
@@ -234,37 +238,53 @@ private:
   // GMP thread only.
   void gmp_RemoveSession(nsAutoPtr<SessionOpData> aData);
 
-  struct DecryptJob {
-    DecryptJob(MediaRawData* aSample, DecryptionClient* aClient)
+  class DecryptJob {
+  public:
+    NS_INLINE_DECL_THREADSAFE_REFCOUNTING(DecryptJob)
+
+    explicit DecryptJob(MediaRawData* aSample)
       : mId(0)
       , mSample(aSample)
-      , mClient(aClient)
-    {}
+    {
+    }
+
+    void PostResult(GMPErr aResult, const nsTArray<uint8_t>& aDecryptedData);
+    void PostResult(GMPErr aResult);
+
+    nsRefPtr<DecryptPromise> Ensure() {
+      return mPromise.Ensure(__func__);
+    }
+
     uint32_t mId;
     nsRefPtr<MediaRawData> mSample;
-    nsAutoPtr<DecryptionClient> mClient;
+  private:
+    ~DecryptJob() {}
+    MediaPromiseHolder<DecryptPromise> mPromise;
   };
   // GMP thread only.
-  void gmp_Decrypt(nsAutoPtr<DecryptJob> aJob);
+  void gmp_Decrypt(nsRefPtr<DecryptJob> aJob);
 
   class RejectPromiseTask : public nsRunnable {
   public:
     RejectPromiseTask(CDMProxy* aProxy,
                       PromiseId aId,
-                      nsresult aCode)
+                      nsresult aCode,
+                      const nsCString& aReason)
       : mProxy(aProxy)
       , mId(aId)
       , mCode(aCode)
+      , mReason(aReason)
     {
     }
     NS_METHOD Run() {
-      mProxy->RejectPromise(mId, mCode);
+      mProxy->RejectPromise(mId, mCode, mReason);
       return NS_OK;
     }
   private:
     nsRefPtr<CDMProxy> mProxy;
     PromiseId mId;
     nsresult mCode;
+    nsCString mReason;
   };
 
   ~CDMProxy();
@@ -316,7 +336,7 @@ private:
 
   // Decryption jobs sent to CDM, awaiting result.
   // GMP thread only.
-  nsTArray<nsAutoPtr<DecryptJob>> mDecryptionJobs;
+  nsTArray<nsRefPtr<DecryptJob>> mDecryptionJobs;
 
   // Number of buffers we've decrypted. Used to uniquely identify
   // decryption jobs sent to CDM. Note we can't just use the length of

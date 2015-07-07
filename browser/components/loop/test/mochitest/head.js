@@ -1,10 +1,13 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
+"use strict";
+
 const HAWK_TOKEN_LENGTH = 64;
 const {
   LOOP_SESSION_TYPE,
   MozLoopServiceInternal,
+  MozLoopService,
 } = Cu.import("resource:///modules/loop/MozLoopService.jsm", {});
 const {LoopCalls} = Cu.import("resource:///modules/loop/LoopCalls.jsm", {});
 const {LoopRooms} = Cu.import("resource:///modules/loop/LoopRooms.jsm", {});
@@ -122,8 +125,8 @@ function loadLoopPanel(aOverrideOptions = {}) {
   let loopPanel = document.getElementById("loop-notification-panel");
   loopPanel.setAttribute("animate", "false");
 
-  // Now get the actual API.
-  yield promiseGetMozLoopAPI();
+  // Now get the actual API loaded into gMozLoopAPI.
+  return promiseGetMozLoopAPI();
 }
 
 function promiseOAuthParamsSetup(baseURL, params) {
@@ -154,18 +157,18 @@ function* resetFxA() {
 }
 
 function checkFxAOAuthTokenData(aValue) {
-  ise(MozLoopServiceInternal.fxAOAuthTokenData, aValue, "fxAOAuthTokenData should be " + aValue);
+  is(MozLoopServiceInternal.fxAOAuthTokenData, aValue, "fxAOAuthTokenData should be " + aValue);
 }
 
 function checkLoggedOutState() {
   let global = Cu.import("resource:///modules/loop/MozLoopService.jsm", {});
-  ise(global.gFxAOAuthClientPromise, null, "gFxAOAuthClientPromise should be cleared");
-  ise(MozLoopService.userProfile, null, "fxAOAuthProfile should be cleared");
-  ise(global.gFxAOAuthClient, null, "gFxAOAuthClient should be cleared");
+  is(global.gFxAOAuthClientPromise, null, "gFxAOAuthClientPromise should be cleared");
+  is(MozLoopService.userProfile, null, "fxAOAuthProfile should be cleared");
+  is(global.gFxAOAuthClient, null, "gFxAOAuthClient should be cleared");
   checkFxAOAuthTokenData(null);
   const fxASessionPref = MozLoopServiceInternal.getSessionTokenPrefName(LOOP_SESSION_TYPE.FXA);
-  ise(Services.prefs.getPrefType(fxASessionPref), Services.prefs.PREF_INVALID,
-      "FxA hawk session should be cleared anyways");
+  is(Services.prefs.getPrefType(fxASessionPref), Services.prefs.PREF_INVALID,
+     "FxA hawk session should be cleared anyways");
 }
 
 function promiseDeletedOAuthParams(baseURL) {
@@ -181,8 +184,8 @@ function promiseDeletedOAuthParams(baseURL) {
 
 function promiseObserverNotified(aTopic, aExpectedData = null) {
   return new Promise((resolve, reject) => {
-    Services.obs.addObserver(function onNotification(aSubject, aTopic, aData) {
-      Services.obs.removeObserver(onNotification, aTopic);
+    Services.obs.addObserver(function onNotification(aSubject, topic, aData) {
+      Services.obs.removeObserver(onNotification, topic);
       is(aData, aExpectedData, "observer data should match expected data");
       resolve({subject: aSubject, data: aData});
     }, aTopic, false);
@@ -237,14 +240,16 @@ function promiseTabLoadEvent(tab, url, eventType="load") {
     }
 
     let timeout = setTimeout(() => {
-      if (tab.linkedBrowser)
+      if (tab.linkedBrowser) {
         tab.linkedBrowser.removeEventListener(eventType, handle, true);
+      }
       reject(new Error("Timed out while waiting for a '" + eventType + "'' event"));
     }, 30000);
 
     tab.linkedBrowser.addEventListener(eventType, handle, true, true);
-    if (url)
+    if (url) {
       tab.linkedBrowser.loadURI(url);
+    }
   });
 }
 
@@ -318,7 +323,7 @@ const mockDb = {
     callback(null, details);
   },
   remove: function(guid, callback) {
-    if (!guid in this._store) {
+    if (!(guid in this._store)) {
       callback(new Error("Could not find _guid '" + guid + "' in database"));
       return;
     }
@@ -346,7 +351,7 @@ const mockDb = {
     callback(null);
   },
   promise: function(method, ...params) {
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
       this[method](...params, (err, res) => err ? reject(err) : resolve(res));
     });
   }

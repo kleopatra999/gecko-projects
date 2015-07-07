@@ -75,7 +75,7 @@ FindData(const MetaData* aMetaData, uint32_t aKey, nsTArray<T>* aDest)
 }
 
 static bool
-FindData(const MetaData* aMetaData, uint32_t aKey, mozilla::DataBuffer* aDest)
+FindData(const MetaData* aMetaData, uint32_t aKey, mozilla::MediaByteBuffer* aDest)
 {
   return FindData(aMetaData, aKey, static_cast<nsTArray<uint8_t>*>(aDest));
 }
@@ -166,6 +166,19 @@ MP4VideoInfo::Update(const MetaData* aMetaData, const char* aMimeType)
   mImage.height = FindInt32(aMetaData, kKeyHeight);
 
   FindData(aMetaData, kKeyAVCC, mExtraData);
+  if (!mExtraData->Length()) {
+    if (FindData(aMetaData, kKeyESDS, mExtraData)) {
+      ESDS esds(mExtraData->Elements(), mExtraData->Length());
+
+      const void* data;
+      size_t size;
+      if (esds.getCodecSpecificInfo(&data, &size) == OK) {
+        const uint8_t* cdata = reinterpret_cast<const uint8_t*>(data);
+        mCodecSpecificConfig->AppendElements(cdata, size);
+      }
+    }
+  }
+
 }
 
 bool

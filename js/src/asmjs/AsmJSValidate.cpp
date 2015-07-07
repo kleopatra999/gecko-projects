@@ -35,6 +35,7 @@
 #include "asmjs/AsmJSSignalHandlers.h"
 #include "builtin/SIMD.h"
 #include "frontend/Parser.h"
+#include "jit/AtomicOperations.h"
 #include "jit/CodeGenerator.h"
 #include "jit/CompileWrappers.h"
 #include "jit/MIR.h"
@@ -49,6 +50,8 @@
 
 #include "frontend/ParseNode-inl.h"
 #include "frontend/Parser-inl.h"
+#include "jit/AtomicOperations-inl.h"
+#include "jit/MacroAssembler-inl.h"
 
 using namespace js;
 using namespace js::frontend;
@@ -498,7 +501,7 @@ ParseVarOrConstStatement(AsmJSParser& parser, ParseNode** var)
         return true;
     }
 
-    *var = parser.statement();
+    *var = parser.statement(YieldIsName);
     if (!*var)
         return false;
 
@@ -538,9 +541,10 @@ class Type
     Type() : which_(Which(-1)) {}
     static Type Of(const AsmJSNumLit& lit) {
         MOZ_ASSERT(lit.hasType());
-        MOZ_ASSERT(Type::Which(lit.which()) >= Fixnum && Type::Which(lit.which()) <= Float32x4);
+        Which which = Type::Which(lit.which());
+        MOZ_ASSERT(which >= Fixnum && which <= Float32x4);
         Type t;
-        t.which_ = Type::Which(lit.which());
+        t.which_ = which;
         return t;
     }
     MOZ_IMPLICIT Type(Which w) : which_(w) {}
@@ -1119,7 +1123,7 @@ class MOZ_STACK_CLASS ModuleCompiler
         PropertyName* name() const { return name_; }
         bool defined() const { return defined_; }
 
-        void define(ModuleCompiler& m, ParseNode* fn) {
+        void define(ParseNode* fn) {
             MOZ_ASSERT(!defined_);
             defined_ = true;
             srcBegin_ = fn->pn_pos.begin;
@@ -1166,7 +1170,10 @@ class MOZ_STACK_CLASS ModuleCompiler
             uint32_t funcIndex_;
             uint32_t funcPtrTableIndex_;
             uint32_t ffiIndex_;
-            Scalar::Type viewType_;
+            struct {
+                Scalar::Type viewType_;
+                bool isSharedView_;
+            } viewInfo;
             AsmJSMathBuiltinFunction mathBuiltinFunc_;
             AsmJSAtomicsBuiltinFunction atomicsBuiltinFunc_;
             AsmJSSimdType simdCtorType_;
@@ -1221,7 +1228,11 @@ class MOZ_STACK_CLASS ModuleCompiler
         }
         Scalar::Type viewType() const {
             MOZ_ASSERT(isAnyArrayView());
-            return u.viewType_;
+            return u.viewInfo.viewType_;
+        }
+        bool viewIsSharedView() const {
+            MOZ_ASSERT(isAnyArrayView());
+            return u.viewInfo.isSharedView_;
         }
         bool isMathFunction() const {
             return which_ == MathBuiltinFunction;
@@ -1405,6 +1416,7 @@ class MOZ_STACK_CLASS ModuleCompiler
     NonAssertingLabel              syncInterruptLabel_;
     NonAssertingLabel              onDetachedLabel_;
     NonAssertingLabel              onOutOfBoundsLabel_;
+    NonAssertingLabel              onConversionErrorLabel_;
 
     UniquePtr<char[], JS::FreePolicy> errorString_;
     uint32_t                       errorOffset_;
@@ -1530,7 +1542,8 @@ class MOZ_STACK_CLASS ModuleCompiler
             !addStandardLibraryAtomicsName("sub", AsmJSAtomicsBuiltin_sub) ||
             !addStandardLibraryAtomicsName("and", AsmJSAtomicsBuiltin_and) ||
             !addStandardLibraryAtomicsName("or", AsmJSAtomicsBuiltin_or) ||
-            !addStandardLibraryAtomicsName("xor", AsmJSAtomicsBuiltin_xor))
+            !addStandardLibraryAtomicsName("xor", AsmJSAtomicsBuiltin_xor) ||
+            !addStandardLibraryAtomicsName("isLockFree", AsmJSAtomicsBuiltin_isLockFree))
         {
             return false;
         }
@@ -1624,6 +1637,7 @@ class MOZ_STACK_CLASS ModuleCompiler
     Label& syncInterruptLabel() { return syncInterruptLabel_; }
     Label& onDetachedLabel() { return onDetachedLabel_; }
     Label& onOutOfBoundsLabel() { return onOutOfBoundsLabel_; }
+    Label& onConversionErrorLabel() { return onConversionErrorLabel_; }
     bool hasError() const { return errorString_ != nullptr; }
     const AsmJSModule& module() const { return *module_.get(); }
     bool usesSignalHandlersForInterrupt() const { return module_->usesSignalHandlersForInterrupt(); }
@@ -1796,7 +1810,8 @@ class MOZ_STACK_CLASS ModuleCompiler
             return false;
         if (!module_->addArrayView(vt, maybeField, isSharedView))
             return false;
-        global->u.viewType_ = vt;
+        global->u.viewInfo.viewType_ = vt;
+        global->u.viewInfo.isSharedView_ = isSharedView;
         return globals_.putNew(varName, global);
     }
     bool addArrayViewCtor(PropertyName* varName, Scalar::Type vt, PropertyName* fieldName, bool isSharedView) {
@@ -1805,7 +1820,8 @@ class MOZ_STACK_CLASS ModuleCompiler
             return false;
         if (!module_->addArrayViewCtor(vt, fieldName, isSharedView))
             return false;
-        global->u.viewType_ = vt;
+        global->u.viewInfo.viewType_ = vt;
+        global->u.viewInfo.isSharedView_ = isSharedView;
         return globals_.putNew(varName, global);
     }
     bool addMathBuiltinFunction(PropertyName* varName, AsmJSMathBuiltinFunction func, PropertyName* fieldName) {
@@ -2042,6 +2058,9 @@ class MOZ_STACK_CLASS ModuleCompiler
             break;
           case JS::AsmJSCache_QuotaExceeded:
             cacheString = "not enough temporary storage quota to store in cache";
+            break;
+          case JS::AsmJSCache_StorageInitFailure:
+            cacheString = "storage initialization failed (consider filing a bug)";
             break;
           case JS::AsmJSCache_Disabled_Internal:
             cacheString = "caching disabled by internal configuration (consider filing a bug)";
@@ -2522,6 +2541,7 @@ class FunctionCompiler
                                            options, alloc_,
                                            graph_, info_, optimizationInfo,
                                            &m().onOutOfBoundsLabel(),
+                                           &m().onConversionErrorLabel(),
                                            m().usesSignalHandlersForOOB());
 
         if (!newBlock(/* pred = */ nullptr, &curBlock_, fn_))
@@ -2593,10 +2613,6 @@ class FunctionCompiler
         if (locals_.has(name))
             return nullptr;
         return m_.lookupGlobal(name);
-    }
-
-    bool supportsSimd() const {
-        return m_.supportsSimd();
     }
 
     /*************************************************************************/
@@ -3367,11 +3383,11 @@ class FunctionCompiler
     {
         if (!loopStack_.append(pn) || !breakableStack_.append(pn))
             return false;
-        MOZ_ASSERT_IF(curBlock_, curBlock_->loopDepth() == loopStack_.length() - 1);
         if (inDeadCode()) {
             *loopEntry = nullptr;
             return true;
         }
+        MOZ_ASSERT(curBlock_->loopDepth() == loopStack_.length() - 1);
         *loopEntry = MBasicBlock::NewAsmJS(mirGraph(), info(), curBlock_,
                                            MBasicBlock::PENDING_LOOP_HEADER);
         if (!*loopEntry)
@@ -3737,7 +3753,7 @@ CheckArgument(ModuleCompiler& m, ParseNode* arg, PropertyName** name)
     if (!IsDefinition(arg))
         return m.fail(arg, "duplicate argument name not allowed");
 
-    if (arg->pn_dflags & PND_DEFAULT)
+    if (arg->isKind(PNK_ASSIGN))
         return m.fail(arg, "default arguments not allowed");
 
     if (!CheckIdentifier(m, arg, arg->name()))
@@ -3977,6 +3993,7 @@ CheckNewArrayView(ModuleCompiler& m, PropertyName* varName, ParseNode* newExpr)
 
         field = nullptr;
         type = global->viewType();
+        shared = global->viewIsSharedView();
     }
 
     if (!CheckNewArrayViewArgs(m, ctorExpr, bufferName))
@@ -4953,7 +4970,7 @@ CheckAtomicsLoad(FunctionCompiler& f, ParseNode* call, MDefinition** def, Type* 
     PrepareArrayIndex(f, &pointerDef, needsBoundsCheck, mask);
 
     *def = f.atomicLoadHeap(viewType, pointerDef, needsBoundsCheck);
-    *type = Type::Signed;
+    *type = Type::Intish;
     return true;
 }
 
@@ -4987,7 +5004,7 @@ CheckAtomicsStore(FunctionCompiler& f, ParseNode* call, MDefinition** def, Type*
     f.atomicStoreHeap(viewType, pointerDef, rhsDef, needsBoundsCheck);
 
     *def = rhsDef;
-    *type = Type::Signed;
+    *type = rhsType;
     return true;
 }
 
@@ -5019,7 +5036,24 @@ CheckAtomicsBinop(FunctionCompiler& f, ParseNode* call, MDefinition** def, Type*
     PrepareArrayIndex(f, &pointerDef, needsBoundsCheck, mask);
 
     *def = f.atomicBinopHeap(op, viewType, pointerDef, valueArgDef, needsBoundsCheck);
-    *type = Type::Signed;
+    *type = Type::Intish;
+    return true;
+}
+
+static bool
+CheckAtomicsIsLockFree(FunctionCompiler& f, ParseNode* call, MDefinition** def, Type* type)
+{
+    if (CallArgListLength(call) != 1)
+        return f.fail(call, "Atomics.isLockFree must be passed 1 argument");
+
+    ParseNode* sizeArg = CallArgList(call);
+
+    uint32_t size;
+    if (!IsLiteralInt(f.m(), sizeArg, &size))
+        return f.fail(sizeArg, "Atomics.isLockFree requires an integer literal argument");
+
+    *def = f.constant(Int32Value(AtomicOperations::isLockfree(size)), Type::Int);
+    *type = Type::Int;
     return true;
 }
 
@@ -5061,7 +5095,7 @@ CheckAtomicsCompareExchange(FunctionCompiler& f, ParseNode* call, MDefinition** 
 
     *def = f.atomicCompareExchangeHeap(viewType, pointerDef, oldValueArgDef, newValueArgDef,
                                        needsBoundsCheck);
-    *type = Type::Signed;
+    *type = Type::Intish;
     return true;
 }
 
@@ -5088,6 +5122,8 @@ CheckAtomicsBuiltinCall(FunctionCompiler& f, ParseNode* callNode, AsmJSAtomicsBu
         return CheckAtomicsBinop(f, callNode, resultDef, resultType, AtomicFetchOrOp);
       case AsmJSAtomicsBuiltin_xor:
         return CheckAtomicsBinop(f, callNode, resultDef, resultType, AtomicFetchXorOp);
+      case AsmJSAtomicsBuiltin_isLockFree:
+        return CheckAtomicsIsLockFree(f, callNode, resultDef, resultType);
       default:
         MOZ_CRASH("unexpected atomicsBuiltin function");
     }
@@ -5615,6 +5651,41 @@ class CheckSimdVectorScalarArgs
     }
 };
 
+class CheckSimdReplaceLaneArgs
+{
+    AsmJSSimdType formalSimdType_;
+
+  public:
+    explicit CheckSimdReplaceLaneArgs(AsmJSSimdType t) : formalSimdType_(t) {}
+
+    bool operator()(FunctionCompiler& f, ParseNode* arg, unsigned argIndex, Type actualType,
+                    MDefinition** def) const
+    {
+        MOZ_ASSERT(argIndex < 3);
+        uint32_t u32;
+        switch (argIndex) {
+          case 0:
+            // First argument is the vector
+            if (!(actualType <= Type(formalSimdType_))) {
+                return f.failf(arg, "%s is not a subtype of %s", actualType.toChars(),
+                               Type(formalSimdType_).toChars());
+            }
+            return true;
+          case 1:
+            // Second argument is the lane < 4
+            if (!IsLiteralOrConstInt(f, arg, &u32))
+                return f.failf(arg, "lane selector should be a constant integer literal");
+            if (u32 >= SimdTypeToLength(formalSimdType_))
+                return f.failf(arg, "lane selector should be in bounds");
+            return true;
+          case 2:
+            // Third argument is the scalar
+            return CheckSimdScalarArgs(formalSimdType_)(f, arg, argIndex, actualType, def);
+        }
+        return false;
+    }
+};
+
 } // anonymous namespace
 
 static inline bool
@@ -5670,14 +5741,17 @@ CheckSimdBinary<MSimdShift::Operation>(FunctionCompiler& f, ParseNode* call, Asm
 }
 
 static bool
-CheckSimdWith(FunctionCompiler& f, ParseNode* call, AsmJSSimdType opType, SimdLane lane,
-              MDefinition** def, Type* type)
+CheckSimdReplaceLane(FunctionCompiler& f, ParseNode* call, AsmJSSimdType opType,
+                     MDefinition** def, Type* type)
 {
     DefinitionVector defs;
-    if (!CheckSimdCallArgs(f, call, 2, CheckSimdVectorScalarArgs(opType), &defs))
+    if (!CheckSimdCallArgs(f, call, 3, CheckSimdReplaceLaneArgs(opType), &defs))
         return false;
+    ParseNode* laneArg = NextNode(CallArgList(call));
+    uint32_t lane;
+    JS_ALWAYS_TRUE(IsLiteralInt(f.m(), laneArg, &lane));
     *type = opType;
-    *def = f.insertElementSimd(defs[0], defs[1], lane, type->toMIRType());
+    *def = f.insertElementSimd(defs[0], defs[2], SimdLane(lane), type->toMIRType());
     return true;
 }
 
@@ -5936,21 +6010,15 @@ CheckSimdOperationCall(FunctionCompiler& f, ParseNode* call, const ModuleCompile
       case AsmJSSimdOperation_xor:
         return CheckSimdBinary(f, call, opType, MSimdBinaryBitwise::xor_, def, type);
 
-      case AsmJSSimdOperation_withX:
-        return CheckSimdWith(f, call, opType, SimdLane::LaneX, def, type);
-      case AsmJSSimdOperation_withY:
-        return CheckSimdWith(f, call, opType, SimdLane::LaneY, def, type);
-      case AsmJSSimdOperation_withZ:
-        return CheckSimdWith(f, call, opType, SimdLane::LaneZ, def, type);
-      case AsmJSSimdOperation_withW:
-        return CheckSimdWith(f, call, opType, SimdLane::LaneW, def, type);
+      case AsmJSSimdOperation_replaceLane:
+          return CheckSimdReplaceLane(f, call, opType, def, type);
 
       case AsmJSSimdOperation_fromInt32x4:
         return CheckSimdCast<MSimdConvert>(f, call, AsmJSSimdType_int32x4, opType, def, type);
-      case AsmJSSimdOperation_fromInt32x4Bits:
-        return CheckSimdCast<MSimdReinterpretCast>(f, call, AsmJSSimdType_int32x4, opType, def, type);
       case AsmJSSimdOperation_fromFloat32x4:
         return CheckSimdCast<MSimdConvert>(f, call, AsmJSSimdType_float32x4, opType, def, type);
+      case AsmJSSimdOperation_fromInt32x4Bits:
+        return CheckSimdCast<MSimdReinterpretCast>(f, call, AsmJSSimdType_int32x4, opType, def, type);
       case AsmJSSimdOperation_fromFloat32x4Bits:
         return CheckSimdCast<MSimdReinterpretCast>(f, call, AsmJSSimdType_float32x4, opType, def, type);
 
@@ -5981,19 +6049,19 @@ CheckSimdOperationCall(FunctionCompiler& f, ParseNode* call, const ModuleCompile
 
       case AsmJSSimdOperation_load:
         return CheckSimdLoad(f, call, opType, 4, def, type);
-      case AsmJSSimdOperation_loadX:
+      case AsmJSSimdOperation_load1:
         return CheckSimdLoad(f, call, opType, 1, def, type);
-      case AsmJSSimdOperation_loadXY:
+      case AsmJSSimdOperation_load2:
         return CheckSimdLoad(f, call, opType, 2, def, type);
-      case AsmJSSimdOperation_loadXYZ:
+      case AsmJSSimdOperation_load3:
         return CheckSimdLoad(f, call, opType, 3, def, type);
       case AsmJSSimdOperation_store:
         return CheckSimdStore(f, call, opType, 4, def, type);
-      case AsmJSSimdOperation_storeX:
+      case AsmJSSimdOperation_store1:
         return CheckSimdStore(f, call, opType, 1, def, type);
-      case AsmJSSimdOperation_storeXY:
+      case AsmJSSimdOperation_store2:
         return CheckSimdStore(f, call, opType, 2, def, type);
-      case AsmJSSimdOperation_storeXYZ:
+      case AsmJSSimdOperation_store3:
         return CheckSimdStore(f, call, opType, 3, def, type);
 
       case AsmJSSimdOperation_bitselect:
@@ -6919,150 +6987,6 @@ CheckLabel(FunctionCompiler& f, ParseNode* labeledStmt, LabelVector* maybeLabels
 }
 
 static bool
-CheckLeafCondition(FunctionCompiler& f, ParseNode* cond, ParseNode* thenStmt, ParseNode* elseOrJoinStmt,
-                   MBasicBlock** thenBlock, MBasicBlock** elseOrJoinBlock)
-{
-    MDefinition* condDef;
-    Type condType;
-    if (!CheckExpr(f, cond, &condDef, &condType))
-        return false;
-    if (!condType.isInt())
-        return f.failf(cond, "%s is not a subtype of int", condType.toChars());
-
-    if (!f.branchAndStartThen(condDef, thenBlock, elseOrJoinBlock, thenStmt, elseOrJoinStmt))
-        return false;
-    return true;
-}
-
-static bool
-CheckIfCondition(FunctionCompiler& f, ParseNode* cond, ParseNode* thenStmt, ParseNode* elseOrJoinStmt,
-                 MBasicBlock** thenBlock, MBasicBlock** elseOrJoinBlock);
-
-static bool
-CheckIfConditional(FunctionCompiler& f, ParseNode* conditional, ParseNode* thenStmt, ParseNode* elseOrJoinStmt,
-                   MBasicBlock** thenBlock, MBasicBlock** elseOrJoinBlock)
-{
-    MOZ_ASSERT(conditional->isKind(PNK_CONDITIONAL));
-
-    // a ? b : c <=> (a && b) || (!a && c)
-    // b is always referred to the AND condition, as we need A and B to reach this test,
-    // c is always referred as the OR condition, as we reach it if we don't have A.
-    ParseNode* cond = TernaryKid1(conditional);
-    ParseNode* lhs = TernaryKid2(conditional);
-    ParseNode* rhs = TernaryKid3(conditional);
-
-    MBasicBlock* maybeAndTest = nullptr;
-    MBasicBlock* maybeOrTest = nullptr;
-    MBasicBlock** ifTrueBlock = &maybeAndTest;
-    MBasicBlock** ifFalseBlock = &maybeOrTest;
-    ParseNode* ifTrueBlockNode = lhs;
-    ParseNode* ifFalseBlockNode = rhs;
-
-    // Try to spot opportunities for short-circuiting in the AND subpart
-    uint32_t andTestLiteral = 0;
-    bool skipAndTest = false;
-
-    if (IsLiteralInt(f.m(), lhs, &andTestLiteral)) {
-        skipAndTest = true;
-        if (andTestLiteral == 0) {
-            // (a ? 0 : b) is equivalent to !a && b
-            // If a is true, jump to the elseBlock directly
-            ifTrueBlock = elseOrJoinBlock;
-            ifTrueBlockNode = elseOrJoinStmt;
-        } else {
-            // (a ? 1 : b) is equivalent to a || b
-            // If a is true, jump to the thenBlock directly
-            ifTrueBlock = thenBlock;
-            ifTrueBlockNode = thenStmt;
-        }
-    }
-
-    // Try to spot opportunities for short-circuiting in the OR subpart
-    uint32_t orTestLiteral = 0;
-    bool skipOrTest = false;
-
-    if (IsLiteralInt(f.m(), rhs, &orTestLiteral)) {
-        skipOrTest = true;
-        if (orTestLiteral == 0) {
-            // (a ? b : 0) is equivalent to a && b
-            // If a is false, jump to the elseBlock directly
-            ifFalseBlock = elseOrJoinBlock;
-            ifFalseBlockNode = elseOrJoinStmt;
-        } else {
-            // (a ? b : 1) is equivalent to !a || b
-            // If a is false, jump to the thenBlock directly
-            ifFalseBlock = thenBlock;
-            ifFalseBlockNode = thenStmt;
-        }
-    }
-
-    // Pathological cases: a ? 0 : 0 (i.e. false) or a ? 1 : 1 (i.e. true)
-    // These cases can't be optimized properly at this point: one of the blocks might be
-    // created and won't ever be executed. Furthermore, it introduces inconsistencies in the
-    // MIR graph (even if we try to create a block by hand, it will have no predecessor, which
-    // breaks graph assumptions). The only way we could optimize it is to do it directly in
-    // CheckIf by removing the control flow entirely.
-    if (skipOrTest && skipAndTest && (!!orTestLiteral == !!andTestLiteral))
-        return CheckLeafCondition(f, conditional, thenStmt, elseOrJoinStmt, thenBlock, elseOrJoinBlock);
-
-    if (!CheckIfCondition(f, cond, ifTrueBlockNode, ifFalseBlockNode, ifTrueBlock, ifFalseBlock))
-        return false;
-    f.assertCurrentBlockIs(*ifTrueBlock);
-
-    // Add supplementary tests, if needed
-    if (!skipAndTest) {
-        if (!CheckIfCondition(f, lhs, thenStmt, elseOrJoinStmt, thenBlock, elseOrJoinBlock))
-            return false;
-        f.assertCurrentBlockIs(*thenBlock);
-    }
-
-    if (!skipOrTest) {
-        f.switchToElse(*ifFalseBlock);
-        if (!CheckIfCondition(f, rhs, thenStmt, elseOrJoinStmt, thenBlock, elseOrJoinBlock))
-            return false;
-        f.assertCurrentBlockIs(*thenBlock);
-    }
-
-    // We might not be on the thenBlock in one case
-    if (ifTrueBlock == elseOrJoinBlock) {
-        MOZ_ASSERT(skipAndTest && andTestLiteral == 0);
-        f.switchToElse(*thenBlock);
-    }
-
-    // Check post-conditions
-    f.assertCurrentBlockIs(*thenBlock);
-    MOZ_ASSERT_IF(!f.inDeadCode(), *thenBlock && *elseOrJoinBlock);
-    return true;
-}
-
-// Recursive function that checks for a complex condition (formed with ternary
-// conditionals) and creates the associated short-circuiting control flow graph.
-//
-// After a call to CheckCondition, the followings are true:
-// - if *thenBlock and *elseOrJoinBlock were non-null on entry, their value is
-//   not changed by this function.
-// - *thenBlock and *elseOrJoinBlock are non-null on exit.
-// - the current block on exit is the *thenBlock.
-static bool
-CheckIfCondition(FunctionCompiler& f, ParseNode* cond, ParseNode* thenStmt,
-                 ParseNode* elseOrJoinStmt, MBasicBlock** thenBlock, MBasicBlock** elseOrJoinBlock)
-{
-    JS_CHECK_RECURSION_DONT_REPORT(f.cx(), return f.m().failOverRecursed());
-
-    if (cond->isKind(PNK_CONDITIONAL))
-        return CheckIfConditional(f, cond, thenStmt, elseOrJoinStmt, thenBlock, elseOrJoinBlock);
-
-    // We've reached a leaf, i.e. an atomic condition
-    if (!CheckLeafCondition(f, cond, thenStmt, elseOrJoinStmt, thenBlock, elseOrJoinBlock))
-        return false;
-
-    // Check post-conditions
-    f.assertCurrentBlockIs(*thenBlock);
-    MOZ_ASSERT_IF(!f.inDeadCode(), *thenBlock && *elseOrJoinBlock);
-    return true;
-}
-
-static bool
 CheckIf(FunctionCompiler& f, ParseNode* ifStmt)
 {
     // Handle if/else-if chains using iteration instead of recursion. This
@@ -7082,7 +7006,14 @@ CheckIf(FunctionCompiler& f, ParseNode* ifStmt)
     MBasicBlock* elseBlock = nullptr;
     ParseNode* elseOrJoinStmt = elseStmt ? elseStmt : nextStmt;
 
-    if (!CheckIfCondition(f, cond, thenStmt, elseOrJoinStmt, &thenBlock, &elseBlock))
+    MDefinition* condDef;
+    Type condType;
+    if (!CheckExpr(f, cond, &condDef, &condType))
+        return false;
+    if (!condType.isInt())
+        return f.failf(cond, "%s is not a subtype of int", condType.toChars());
+
+    if (!f.branchAndStartThen(condDef, &thenBlock, &elseBlock, thenStmt, elseOrJoinStmt))
         return false;
 
     if (!CheckStatement(f, thenStmt))
@@ -7396,8 +7327,8 @@ CheckHeapLengthCondition(ModuleCompiler& m, ParseNode* cond, PropertyName* newBu
     uint32_t minLengthExclusive;
     if (!IsLiteralInt(m, minLengthNode, &minLengthExclusive))
         return m.fail(minLengthNode, "expecting integer literal");
-    if (minLengthExclusive < 0xffffff)
-        return m.fail(minLengthNode, "literal must be >= 0xffffff");
+    if (minLengthExclusive < 0xffffff || minLengthExclusive == UINT32_MAX)
+        return m.fail(minLengthNode, "literal must be >= 0xffffff and < 0xffffffff");
 
     // Add one to convert from exclusive (the branch rejects if ==) to inclusive.
     *minLength = minLengthExclusive + 1;
@@ -7582,7 +7513,7 @@ ParseFunction(ModuleCompiler& m, ParseNode** fnOut)
     // This flows into FunctionBox, so must be tenured.
     RootedFunction fun(m.cx(),
                        NewScriptedFunction(m.cx(), 0, JSFunction::INTERPRETED,
-                                           name, JSFunction::FinalizeKind,
+                                           name, gc::AllocKind::FUNCTION,
                                            TenuredObject));
     if (!fun)
         return false;
@@ -7601,7 +7532,7 @@ ParseFunction(ModuleCompiler& m, ParseNode** fnOut)
     if (!funpc.init(tokenStream))
         return false;
 
-    if (!m.parser().functionArgsAndBodyGeneric(fn, fun, Normal, Statement)) {
+    if (!m.parser().functionArgsAndBodyGeneric(InAllowed, YieldIsName, fn, fun, Statement)) {
         if (tokenStream.hadError() || directives == newDirectives)
             return false;
 
@@ -7682,13 +7613,15 @@ CheckFunction(ModuleCompiler& m, LifoAlloc& lifo, MIRGenerator** mir, ModuleComp
     if (func->defined())
         return m.failName(fn, "function '%s' already defined", FunctionName(fn));
 
-    func->define(m, fn);
+    func->define(fn);
     func->accumulateCompileTime((PRMJ_Now() - before) / PRMJ_USEC_PER_MSEC);
 
     m.parser().release(mark);
 
     *mir = f.extractMIR();
     (*mir)->initMinAsmJSHeapLength(m.minHeapLength());
+    jit::SpewBeginFunction(*mir, nullptr);
+
     *funcOut = func;
     return true;
 }
@@ -7765,8 +7698,7 @@ CheckFunctionsSequential(ModuleCompiler& m)
         int64_t before = PRMJ_Now();
 
         JitContext jcx(m.cx(), &mir->alloc());
-
-        IonSpewNewFunction(&mir->graph(), NullPtr());
+        jit::AutoSpewEndFunction spewEndFunction(mir);
 
         if (!OptimizeMIR(mir))
             return m.failOffset(func->srcBegin(), "internal compiler failure (probably out of memory)");
@@ -7779,8 +7711,6 @@ CheckFunctionsSequential(ModuleCompiler& m)
 
         if (!GenerateCode(m, *func, *mir, *lir))
             return false;
-
-        IonSpewEndFunction();
     }
 
     if (!CheckAllFunctionsDefined(m))
@@ -8019,7 +7949,7 @@ CheckFunctions(ModuleCompiler& m)
     if (!ParallelCompilationEnabled(m.cx()) || !g.claim())
         return CheckFunctionsSequential(m);
 
-    JitSpew(JitSpew_IonLogs, "Can't log asm.js script. (Compiled on background thread.)");
+    JitSpew(JitSpew_IonSyncLogs, "Can't log asm.js script. (Compiled on background thread.)");
 
     // Saturate all helper threads.
     size_t numParallelJobs = HelperThreadState().maxAsmJSCompilationThreads();
@@ -8179,7 +8109,7 @@ CheckModuleReturn(ModuleCompiler& m)
         return m.fail(nullptr, "invalid asm.js statement");
     }
 
-    ParseNode* returnStmt = m.parser().statement();
+    ParseNode* returnStmt = m.parser().statement(YieldIsName);
     if (!returnStmt)
         return false;
 
@@ -9032,10 +8962,10 @@ GenerateOnDetachedLabelExit(ModuleCompiler& m, Label* throwLabel)
 }
 
 static bool
-GenerateOnOutOfBoundsLabelExit(ModuleCompiler& m, Label* throwLabel)
+GenerateExceptionLabelExit(ModuleCompiler& m, Label* throwLabel, Label* exit, AsmJSImmKind func)
 {
     MacroAssembler& masm = m.masm();
-    masm.bind(&m.onOutOfBoundsLabel());
+    masm.bind(exit);
 
     // sp can be anything at this point, so ensure it is aligned when calling
     // into C++.  We unconditionally jump to throw so don't worry about restoring sp.
@@ -9043,10 +8973,10 @@ GenerateOnOutOfBoundsLabelExit(ModuleCompiler& m, Label* throwLabel)
 
     // OnOutOfBounds always throws.
     masm.assertStackAlignment(ABIStackAlignment);
-    masm.call(AsmJSImmPtr(AsmJSImm_OnOutOfBounds));
+    masm.call(AsmJSImmPtr(func));
     masm.jump(throwLabel);
 
-    return m.finishGeneratingInlineStub(&m.onOutOfBoundsLabel()) && !masm.oom();
+    return m.finishGeneratingInlineStub(exit) && !masm.oom();
 }
 
 static const LiveRegisterSet AllRegsExceptSP(
@@ -9204,7 +9134,8 @@ GenerateAsyncInterruptExit(ModuleCompiler& m, Label* throwLabel)
     masm.transferReg(lr);
     masm.finishDataTransfer();
     masm.ret();
-
+#elif defined(JS_CODEGEN_ARM64)
+    MOZ_CRASH();
 #elif defined (JS_CODEGEN_NONE)
     MOZ_CRASH();
 #else
@@ -9287,7 +9218,9 @@ GenerateStubs(ModuleCompiler& m)
     if (m.onDetachedLabel().used() && !GenerateOnDetachedLabelExit(m, &throwLabel))
         return false;
 
-    if (!GenerateOnOutOfBoundsLabelExit(m, &throwLabel))
+    if (!GenerateExceptionLabelExit(m, &throwLabel, &m.onOutOfBoundsLabel(), AsmJSImm_OnOutOfBounds))
+        return false;
+    if (!GenerateExceptionLabelExit(m, &throwLabel, &m.onConversionErrorLabel(), AsmJSImm_OnImpreciseConversion))
         return false;
 
     if (!GenerateAsyncInterruptExit(m, &throwLabel))
@@ -9359,6 +9292,11 @@ CheckModule(ExclusiveContext* cx, AsmJSParser& parser, ParseNode* stmtList,
 
     m.startFunctionBodies();
 
+#if !defined(ENABLE_SHARED_ARRAY_BUFFER)
+    if (m.module().hasArrayView() && m.module().isSharedView())
+        return m.fail(nullptr, "shared views not supported by this build");
+#endif
+
     if (!CheckFunctions(m))
         return false;
 
@@ -9376,8 +9314,9 @@ CheckModule(ExclusiveContext* cx, AsmJSParser& parser, ParseNode* stmtList,
     if (tk != TOK_EOF && tk != TOK_RC)
         return m.fail(nullptr, "top-level export (return) must be the last statement");
 
-    // The instruction cache is flushed when dynamically linking, so can inhibit now.
-    AutoFlushICache afc("CheckModule", /* inhibit= */ true);
+    // Delay flushing until dynamic linking. The inhibited range is set by the
+    // masm.executableCopy() called transitively by FinishModule.
+    AutoFlushICache afc("CheckModule", /* inhibit = */ true);
 
     ScopedJSDeletePtr<AsmJSModule> module;
     if (!FinishModule(m, &module))

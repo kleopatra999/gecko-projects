@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,13 +17,14 @@
 
 BEGIN_BLUETOOTH_NAMESPACE
 
+class BluetoothGatt;
 class BluetoothSignal;
 class BluetoothValue;
 
 class BluetoothGattService final : public nsISupports
                                  , public nsWrapperCache
-                                 , public BluetoothSignalObserver
 {
+  friend class BluetoothGatt;
 public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(BluetoothGattService)
@@ -71,8 +72,6 @@ public:
     return mServiceId;
   }
 
-  void Notify(const BluetoothSignal& aData); // BluetoothSignalObserver
-
   nsPIDOMWindow* GetParentObject() const
   {
      return mOwner;
@@ -92,20 +91,36 @@ private:
    * Add newly discovered GATT included services into mIncludedServices and
    * update the cache value of mIncludedServices.
    *
-   * @param aValue [in] BluetoothValue which contains an array of
-   *                    BluetoothGattServiceId of all discovered included
-   *                    services.
+   * @param aServiceIds [in] An array of BluetoothGattServiceId for each
+   *                         included service that belongs to this service.
    */
-  void HandleIncludedServicesDiscovered(const BluetoothValue& aValue);
+  void AssignIncludedServices(
+    const nsTArray<BluetoothGattServiceId>& aServiceIds);
 
   /**
    * Add newly discovered GATT characteristics into mCharacteristics and
    * update the cache value of mCharacteristics.
    *
-   * @param aValue [in] BluetoothValue which contains an array of
-   *                    BluetoothGattId of all discovered characteristics.
+   * @param aCharacteristics [in] An array of BluetoothGattCharAttribute for
+   *                              each characteristic that belongs to this
+   *                              service.
    */
-  void HandleCharacteristicsDiscovered(const BluetoothValue& aValue);
+  void AssignCharacteristics(
+    const nsTArray<BluetoothGattCharAttribute>& aCharacteristics);
+
+  /**
+   * Add newly discovered GATT descriptors into mDescriptors of
+   * BluetoothGattCharacteristic and update the cache value of mDescriptors.
+   *
+   * @param aCharacteristicId [in] BluetoothGattId of a characteristic that
+   *                               belongs to this service.
+   * @param aDescriptorIds [in] An array of BluetoothGattId for each descriptor
+   *                            that belongs to the characteristic referred by
+   *                            aCharacteristicId.
+   */
+  void AssignDescriptors(
+    const BluetoothGattId& aCharacteristicId,
+    const nsTArray<BluetoothGattId>& aDescriptorIds);
 
   /****************************************************************************
    * Variables
@@ -142,5 +157,26 @@ private:
 };
 
 END_BLUETOOTH_NAMESPACE
+
+/**
+ * Explicit Specialization of Function Templates
+ *
+ * Allows customizing the template code for a given set of template arguments.
+ * With this function template, nsTArray can handle comparison between
+ * 'nsRefPtr<BluetoothGattService>' and 'BluetoothGattServiceId' properly,
+ * including IndexOf() and Contains();
+ */
+template <>
+class nsDefaultComparator <
+  nsRefPtr<mozilla::dom::bluetooth::BluetoothGattService>,
+  mozilla::dom::bluetooth::BluetoothGattServiceId> {
+public:
+  bool Equals(
+    const nsRefPtr<mozilla::dom::bluetooth::BluetoothGattService>& aService,
+    const mozilla::dom::bluetooth::BluetoothGattServiceId& aServiceId) const
+  {
+    return aService->GetServiceId() == aServiceId;
+  }
+};
 
 #endif

@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -26,7 +26,12 @@ public:
   static BluetoothGattManager* Get();
   static void InitGattInterface(BluetoothProfileResultHandler* aRes);
   static void DeinitGattInterface(BluetoothProfileResultHandler* aRes);
-  virtual ~BluetoothGattManager();
+
+  void StartLeScan(const nsTArray<nsString>& aServiceUuids,
+                   BluetoothReplyRunnable* aRunnable);
+
+  void StopLeScan(const nsAString& aScanUuid,
+                  BluetoothReplyRunnable* aRunnable);
 
   void Connect(const nsAString& aAppUuid,
                const nsAString& aDeviceAddr,
@@ -56,18 +61,56 @@ public:
                                const BluetoothGattId& aCharId,
                                BluetoothReplyRunnable* aRunnable);
 
+  void ReadCharacteristicValue(
+    const nsAString& aAppUuid,
+    const BluetoothGattServiceId& aServiceId,
+    const BluetoothGattId& aCharacteristicId,
+    BluetoothReplyRunnable* aRunnable);
+
+  void WriteCharacteristicValue(
+    const nsAString& aAppUuid,
+    const BluetoothGattServiceId& aServiceId,
+    const BluetoothGattId& aCharacteristicId,
+    const BluetoothGattWriteType& aWriteType,
+    const nsTArray<uint8_t>& aValue,
+    BluetoothReplyRunnable* aRunnable);
+
+  void ReadDescriptorValue(
+    const nsAString& aAppUuid,
+    const BluetoothGattServiceId& aServiceId,
+    const BluetoothGattId& aCharacteristicId,
+    const BluetoothGattId& aDescriptorId,
+    BluetoothReplyRunnable* aRunnable);
+
+  void WriteDescriptorValue(
+    const nsAString& aAppUuid,
+    const BluetoothGattServiceId& aServiceId,
+    const BluetoothGattId& aCharacteristicId,
+    const BluetoothGattId& aDescriptorId,
+    const nsTArray<uint8_t>& aValue,
+    BluetoothReplyRunnable* aRunnable);
+
 private:
+  ~BluetoothGattManager();
+
   class CleanupResultHandler;
   class CleanupResultHandlerRunnable;
   class InitGattResultHandler;
   class RegisterClientResultHandler;
   class UnregisterClientResultHandler;
+  class StartLeScanResultHandler;
+  class StopLeScanResultHandler;
   class ConnectResultHandler;
   class DisconnectResultHandler;
   class DiscoverResultHandler;
   class ReadRemoteRssiResultHandler;
   class RegisterNotificationsResultHandler;
   class DeregisterNotificationsResultHandler;
+  class ReadCharacteristicValueResultHandler;
+  class WriteCharacteristicValueResultHandler;
+  class ReadDescriptorValueResultHandler;
+  class WriteDescriptorValueResultHandler;
+  class ScanDeviceTypeResultHandler;
 
   BluetoothGattManager();
 
@@ -102,7 +145,7 @@ private:
     int aConnId, BluetoothGattStatus aStatus,
     const BluetoothGattServiceId& aServiceId,
     const BluetoothGattId& aCharId,
-    int aCharProperty) override;
+    const BluetoothGattCharProp& aCharProperty) override;
 
   void GetDescriptorNotification(
     int aConnId, BluetoothGattStatus aStatus,

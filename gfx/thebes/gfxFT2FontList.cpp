@@ -50,7 +50,6 @@
 
 using namespace mozilla;
 
-#ifdef PR_LOGGING
 static PRLogModuleInfo *
 GetFontInfoLog()
 {
@@ -59,11 +58,10 @@ GetFontInfoLog()
         sLog = PR_NewLogModule("fontInfoLog");
     return sLog;
 }
-#endif /* PR_LOGGING */
 
 #undef LOG
-#define LOG(args) PR_LOG(GetFontInfoLog(), PR_LOG_DEBUG, args)
-#define LOG_ENABLED() PR_LOG_TEST(GetFontInfoLog(), PR_LOG_DEBUG)
+#define LOG(args) MOZ_LOG(GetFontInfoLog(), mozilla::LogLevel::Debug, args)
+#define LOG_ENABLED() MOZ_LOG_TEST(GetFontInfoLog(), mozilla::LogLevel::Debug)
 
 static cairo_user_data_key_t sFTUserFontDataKey;
 
@@ -266,12 +264,12 @@ FT2FontEntry::CreateFontEntry(const nsAString& aFontName,
         FT_New_Memory_Face(gfxToolkitPlatform::GetPlatform()->GetFTLibrary(),
                            aFontData, aLength, 0, &face);
     if (error != FT_Err_Ok) {
-        NS_Free((void*)aFontData);
+        free((void*)aFontData);
         return nullptr;
     }
     if (FT_Err_Ok != FT_Select_Charmap(face, FT_ENCODING_UNICODE)) {
         FT_Done_Face(face);
-        NS_Free((void*)aFontData);
+        free((void*)aFontData);
         return nullptr;
     }
     // Create our FT2FontEntry, which inherits the name of the userfont entry
@@ -299,7 +297,7 @@ public:
     {
         FT_Done_Face(mFace);
         if (mFontData) {
-            NS_Free((void*)mFontData);
+            free((void*)mFontData);
         }
     }
 
@@ -534,7 +532,7 @@ FT2FontEntry::CopyFontTable(uint32_t aTableTag,
         return NS_ERROR_FAILURE;
     }
 
-    if (!aBuffer.SetLength(len)) {
+    if (!aBuffer.SetLength(len, fallible)) {
         return NS_ERROR_OUT_OF_MEMORY;
     }
     uint8_t *buf = aBuffer.Elements();
@@ -619,8 +617,16 @@ FT2FontFamily::AddFacesToFontList(InfallibleTArray<FontListEntry>* aFontList,
 class FontNameCache {
 public:
     FontNameCache()
-        : mWriteNeeded(false)
+        : mMap(&mOps, sizeof(FNCMapEntry), 0)
+        , mWriteNeeded(false)
     {
+        // HACK ALERT: it's weird to assign |mOps| after we passed a pointer to
+        // it to |mMap|'s constructor. A more normal approach here would be to
+        // have a static |sOps| member. Unfortunately, this mysteriously but
+        // consistently makes Fennec start-up slower, so we take this
+        // unorthodox approach instead. It's safe because PLDHashTable's
+        // constructor doesn't dereference the pointer; it just makes a copy of
+        // it.
         mOps = (PLDHashTableOps) {
             StringHash,
             HashMatchEntry,
@@ -629,9 +635,7 @@ public:
             nullptr
         };
 
-        PL_DHashTableInit(&mMap, &mOps, sizeof(FNCMapEntry), 0);
-
-        MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default,
+        MOZ_ASSERT(XRE_IsParentProcess(),
                    "StartupCacheFontNameCache should only be used in chrome "
                    "process");
         mCache = mozilla::scache::StartupCache::GetSingleton();
@@ -641,23 +645,32 @@ public:
 
     ~FontNameCache()
     {
-        if (!mMap.IsInitialized()) {
-            return;
-        }
         if (!mWriteNeeded || !mCache) {
-            PL_DHashTableFinish(&mMap);
             return;
         }
 
         nsAutoCString buf;
-        PL_DHashTableEnumerate(&mMap, WriteOutMap, &buf);
-        PL_DHashTableFinish(&mMap);
+        for (auto iter = mMap.Iter(); !iter.Done(); iter.Next()) {
+            auto entry = static_cast<FNCMapEntry*>(iter.Get());
+            if (!entry->mFileExists) {
+                // skip writing entries for files that are no longer present
+                continue;
+            }
+            buf.Append(entry->mFilename);
+            buf.Append(';');
+            buf.Append(entry->mFaces);
+            buf.Append(';');
+            buf.AppendInt(entry->mTimestamp);
+            buf.Append(';');
+            buf.AppendInt(entry->mFilesize);
+            buf.Append(';');
+        }
         mCache->PutBuffer(CACHE_KEY, buf.get(), buf.Length() + 1);
     }
 
     void Init()
     {
-        if (!mMap.IsInitialized() || !mCache) {
+        if (!mCache) {
             return;
         }
         uint32_t size;
@@ -712,9 +725,6 @@ public:
     GetInfoForFile(const nsCString& aFileName, nsCString& aFaceList,
                    uint32_t *aTimestamp, uint32_t *aFilesize)
     {
-        if (!mMap.IsInitialized()) {
-            return;
-        }
         FNCMapEntry *entry =
             static_cast<FNCMapEntry*>(PL_DHashTableSearch(&mMap,
                                                           aFileName.get()));
@@ -733,9 +743,6 @@ public:
     CacheFileInfo(const nsCString& aFileName, const nsCString& aFaceList,
                   uint32_t aTimestamp, uint32_t aFilesize)
     {
-        if (!mMap.IsInitialized()) {
-            return;
-        }
         FNCMapEntry* entry = static_cast<FNCMapEntry*>
             (PL_DHashTableAdd(&mMap, aFileName.get(), fallible));
         if (entry) {
@@ -754,28 +761,6 @@ private:
     bool mWriteNeeded;
 
     PLDHashTableOps mOps;
-
-    static PLDHashOperator WriteOutMap(PLDHashTable *aTable,
-                                       PLDHashEntryHdr *aHdr,
-                                       uint32_t aNumber, void *aData)
-    {
-        FNCMapEntry* entry = static_cast<FNCMapEntry*>(aHdr);
-        if (!entry->mFileExists) {
-            // skip writing entries for files that are no longer present
-            return PL_DHASH_NEXT;
-        }
-
-        nsAutoCString* buf = reinterpret_cast<nsAutoCString*>(aData);
-        buf->Append(entry->mFilename);
-        buf->Append(';');
-        buf->Append(entry->mFaces);
-        buf->Append(';');
-        buf->AppendInt(entry->mTimestamp);
-        buf->Append(';');
-        buf->AppendInt(entry->mFilesize);
-        buf->Append(';');
-        return PL_DHASH_NEXT;
-    }
 
     typedef struct : public PLDHashEntryHdr {
     public:
@@ -1060,7 +1045,6 @@ gfxFT2FontList::AddFaceToList(const nsCString& aEntryName, uint32_t aIndex,
         fe->CheckForBrokenFont(family);
 
         AppendToFaceList(aFaceList, name, fe);
-#ifdef PR_LOGGING
         if (LOG_ENABLED()) {
             LOG(("(fontinit) added (%s) to family (%s)"
                  " with style: %s weight: %d stretch: %d",
@@ -1069,7 +1053,6 @@ gfxFT2FontList::AddFaceToList(const nsCString& aEntryName, uint32_t aIndex,
                  fe->IsItalic() ? "italic" : "normal",
                  fe->Weight(), fe->Stretch()));
         }
-#endif
     }
 }
 
@@ -1165,7 +1148,7 @@ gfxFT2FontList::FindFonts()
     mCodepointsWithNoFonts.SetRange(0,0x1f);     // C0 controls
     mCodepointsWithNoFonts.SetRange(0x7f,0x9f);  // C1 controls
 
-    if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    if (!XRE_IsParentProcess()) {
         // Content process: ask the Chrome process to give us the list
         InfallibleTArray<FontListEntry> fonts;
         mozilla::dom::ContentChild::GetSingleton()->SendReadFontList(&fonts);
@@ -1361,7 +1344,7 @@ AddHiddenFamilyToFontList(nsStringHashKey::KeyType aKey,
 }
 
 void
-gfxFT2FontList::GetFontList(InfallibleTArray<FontListEntry>* retValue)
+gfxFT2FontList::GetSystemFontList(InfallibleTArray<FontListEntry>* retValue)
 {
     mFontFamilies.Enumerate(AddFamilyToFontList, retValue);
     mHiddenFontFamilies.Enumerate(AddHiddenFamilyToFontList, retValue);

@@ -6,7 +6,7 @@
 #ifndef GFX_PLATFORM_H
 #define GFX_PLATFORM_H
 
-#include "prlog.h"
+#include "mozilla/Logging.h"
 #include "mozilla/gfx/Types.h"
 #include "nsTArray.h"
 #include "nsString.h"
@@ -38,11 +38,9 @@ class nsIURI;
 class nsIAtom;
 class nsIObserver;
 class SRGBOverrideObserver;
-struct gfxRGBA;
 
 namespace mozilla {
 namespace gl {
-class GLContext;
 class SkiaGLGlue;
 }
 namespace gfx {
@@ -133,6 +131,8 @@ enum eGfxLog {
 // when searching through pref langs, max number of pref langs
 const uint32_t kMaxLenPrefLangList = 32;
 
+extern bool gANGLESupportsD3D11;
+
 #define UNINITIALIZED_VALUE  (-1)
 
 inline const char*
@@ -214,10 +214,10 @@ public:
      * support the DrawTarget we get back.
      * See SupportsAzureContentForDrawTarget.
      */
-    virtual mozilla::TemporaryRef<DrawTarget>
+    virtual already_AddRefed<DrawTarget>
       CreateDrawTargetForSurface(gfxASurface *aSurface, const mozilla::gfx::IntSize& aSize);
 
-    virtual mozilla::TemporaryRef<DrawTarget>
+    virtual already_AddRefed<DrawTarget>
       CreateDrawTargetForUpdateSurface(gfxASurface *aSurface, const mozilla::gfx::IntSize& aSize);
 
     /*
@@ -232,24 +232,24 @@ public:
      * PluginInstanceChild (where we can't call gfxPlatform::GetPlatform()
      * because the prefs service can only be accessed from the main process).
      */
-    static mozilla::TemporaryRef<SourceSurface>
+    static already_AddRefed<SourceSurface>
       GetSourceSurfaceForSurface(mozilla::gfx::DrawTarget *aTarget, gfxASurface *aSurface);
 
     static void ClearSourceSurfaceForSurface(gfxASurface *aSurface);
 
-    static mozilla::TemporaryRef<DataSourceSurface>
+    static already_AddRefed<DataSourceSurface>
         GetWrappedDataSourceSurface(gfxASurface *aSurface);
 
-    virtual mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
+    virtual already_AddRefed<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont);
 
-    mozilla::TemporaryRef<DrawTarget>
+    already_AddRefed<DrawTarget>
       CreateOffscreenContentDrawTarget(const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat);
 
-    mozilla::TemporaryRef<DrawTarget>
+    already_AddRefed<DrawTarget>
       CreateOffscreenCanvasDrawTarget(const mozilla::gfx::IntSize& aSize, mozilla::gfx::SurfaceFormat aFormat);
 
-    virtual mozilla::TemporaryRef<DrawTarget>
+    virtual already_AddRefed<DrawTarget>
       CreateDrawTargetForData(unsigned char* aData, const mozilla::gfx::IntSize& aSize, 
                               int32_t aStride, mozilla::gfx::SurfaceFormat aFormat);
 
@@ -291,6 +291,8 @@ public:
     /// as different platforms may override the behaviour.
     virtual bool UseProgressivePaint() { return gfxPrefs::ProgressivePaintDoNotUseDirectly(); }
 
+    static bool AsyncPanZoomEnabled();
+
     void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
       aObj.DefineProperty("AzureCanvasBackend", GetBackendName(mPreferredCanvasBackend));
       aObj.DefineProperty("AzureSkiaAccelerated", UseAcceleratedSkiaCanvas());
@@ -306,7 +308,9 @@ public:
     mozilla::gfx::BackendType GetPreferredCanvasBackend() {
       return mPreferredCanvasBackend;
     }
-
+    mozilla::gfx::BackendType GetFallbackCanvasBackend() {
+      return mFallbackCanvasBackend;
+    }
     /*
      * Font bits
      */
@@ -450,8 +454,6 @@ public:
 
     virtual bool DidRenderingDeviceReset(DeviceResetReason* aResetReason = nullptr) { return false; }
 
-    void GetPrefFonts(nsIAtom *aLanguage, nsString& array, bool aAppendUnicode = true);
-
     // in some situations, need to make decisions about ambiguous characters, may need to look at multiple pref langs
     void GetLangPrefs(eFontPrefLang aPrefLangs[], uint32_t &aLen, eFontPrefLang aCharLang, eFontPrefLang aPageLang);
     
@@ -471,6 +473,9 @@ public:
 
     // convert a lang group atom to enum constant
     static eFontPrefLang GetFontPrefLangFor(nsIAtom *aLang);
+
+    // convert an enum constant to a lang group atom
+    static nsIAtom* GetLangGroupForPrefLang(eFontPrefLang aLang);
 
     // convert a enum constant to lang group string (i.e. eFontPrefLang_ChineseTW ==> "zh-TW")
     static const char* GetPrefLangName(eFontPrefLang aLang);
@@ -493,11 +498,14 @@ public:
         // platform-specific override, by default do nothing
     }
 
+    // Are we in safe mode?
+    static bool InSafeMode();
+
     static bool OffMainThreadCompositingEnabled();
 
     static bool CanUseDirect3D9();
     static bool CanUseDirect3D11();
-    static bool CanUseHardwareVideoDecoding();
+    virtual bool CanUseHardwareVideoDecoding();
     static bool CanUseDirect3D11ANGLE();
 
     /**
@@ -587,10 +595,10 @@ public:
      */
     mozilla::layers::DiagnosticTypes GetLayerDiagnosticTypes();
 
-    static nsIntRect FrameCounterBounds() {
+    static mozilla::gfx::IntRect FrameCounterBounds() {
       int bits = 16;
       int sizeOfBit = 3;
-      return nsIntRect(0, 0, bits * sizeOfBit, sizeOfBit);
+      return mozilla::gfx::IntRect(0, 0, bits * sizeOfBit, sizeOfBit);
     }
 
     mozilla::gl::SkiaGLGlue* GetSkiaGLGlue();
@@ -622,12 +630,23 @@ public:
     /**
      * Used to test which input types are handled via APZ.
      */
-    virtual bool SupportsApzWheelInput() {
+    virtual bool SupportsApzWheelInput() const {
       return false;
     }
-    virtual bool SupportsApzTouchInput() {
+    virtual bool SupportsApzTouchInput() const {
       return false;
     }
+
+    virtual void FlushContentDrawing() {}
+
+    /**
+     * Helper method, creates a draw target for a specific Azure backend.
+     * Used by CreateOffscreenDrawTarget.
+     */
+    already_AddRefed<DrawTarget>
+      CreateDrawTargetForBackend(mozilla::gfx::BackendType aBackend,
+                                 const mozilla::gfx::IntSize& aSize,
+                                 mozilla::gfx::SurfaceFormat aFormat);
 
 protected:
     gfxPlatform();
@@ -640,15 +659,6 @@ protected:
      * Initialized hardware vsync based on each platform.
      */
     virtual already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource();
-
-    /**
-     * Helper method, creates a draw target for a specific Azure backend.
-     * Used by CreateOffscreenDrawTarget.
-     */
-    mozilla::TemporaryRef<DrawTarget>
-      CreateDrawTargetForBackend(mozilla::gfx::BackendType aBackend,
-                                 const mozilla::gfx::IntSize& aSize,
-                                 mozilla::gfx::SurfaceFormat aFormat);
 
     /**
      * Initialise the preferred and fallback canvas backends
@@ -684,7 +694,7 @@ protected:
      */
     static mozilla::gfx::BackendType BackendTypeForName(const nsCString& aName);
 
-    static mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
+    static already_AddRefed<mozilla::gfx::ScaledFont>
       GetScaledFontForFontWithCairoSkia(mozilla::gfx::DrawTarget* aTarget, gfxFont* aFont);
 
     int8_t  mAllowDownloadableFonts;

@@ -12,6 +12,7 @@
 #include "mozilla/UniquePtr.h"
 #include "jsprf.h"
 #include "gc/Marking.h"
+#include "gc/Statistics.h"
 
 #include "jit/BaselineJIT.h"
 #include "jit/JitSpewer.h"
@@ -36,6 +37,14 @@ RegionAtAddr(const JitcodeGlobalEntry::IonEntry& entry, void* ptr,
     MOZ_ASSERT(regionIdx < entry.regionTable()->numRegions());
 
     return entry.regionTable()->regionEntry(regionIdx);
+}
+
+void*
+JitcodeGlobalEntry::IonEntry::canonicalNativeAddrFor(JSRuntime* rt, void* ptr) const
+{
+    uint32_t ptrOffset;
+    JitcodeRegionEntry region = RegionAtAddr(*this, ptr, &ptrOffset);
+    return (void*)(((uint8_t*) nativeStartAddr()) + region.nativeOffset());
 }
 
 bool
@@ -148,6 +157,14 @@ JitcodeGlobalEntry::IonEntry::destroy()
     optsAllTypes_ = nullptr;
 }
 
+void*
+JitcodeGlobalEntry::BaselineEntry::canonicalNativeAddrFor(JSRuntime* rt, void* ptr) const
+{
+    // TODO: We can't yet normalize Baseline addresses until we unify
+    // BaselineScript's PCMappingEntries with JitcodeGlobalMap.
+    return ptr;
+}
+
 bool
 JitcodeGlobalEntry::BaselineEntry::callStackAtAddr(JSRuntime* rt, void* ptr,
                                                    BytecodeLocationVector& results,
@@ -207,6 +224,14 @@ RejoinEntry(JSRuntime* rt, const JitcodeGlobalEntry::IonCacheEntry& cache,
     JitRuntime* jitrt = rt->jitRuntime();
     jitrt->getJitcodeGlobalTable()->lookupInfallible(cache.rejoinAddr(), entry, rt);
     MOZ_ASSERT(entry->isIon());
+}
+
+void*
+JitcodeGlobalEntry::IonCacheEntry::canonicalNativeAddrFor(JSRuntime* rt, void* ptr) const
+{
+    JitcodeGlobalEntry entry;
+    RejoinEntry(rt, *this, ptr, &entry);
+    return entry.canonicalNativeAddrFor(rt, rejoinAddr());
 }
 
 bool
@@ -451,8 +476,12 @@ JitcodeGlobalTable::lookupForSampler(void* ptr, JitcodeGlobalEntry* result, JSRu
     // the sweep phase of the GC must be on stack, and on-stack frames must
     // already be marked at the beginning of the sweep phase. This assumption
     // is verified below.
-    if (rt->isHeapBusy() && rt->gc.state() == gc::SWEEP)
+    if (rt->isHeapBusy() &&
+        rt->gc.stats.currentPhase() >= gcstats::PHASE_FINALIZE_START &&
+        rt->gc.stats.currentPhase() <= gcstats::PHASE_FINALIZE_END)
+    {
         MOZ_ASSERT(entry->isMarkedFromAnyThread(rt));
+    }
 #endif
 
     *result = *entry;
@@ -1187,7 +1216,7 @@ struct JitcodeMapBufferWriteSpewer
         startPos = writer->length();
     }
 #else // !DEBUG
-    JitcodeMapBufferWriteSpewer(CompactBufferWriter& w) {}
+    explicit JitcodeMapBufferWriteSpewer(CompactBufferWriter& w) {}
     void spewAndAdvance(const char* name) {}
 #endif // DEBUG
 };
@@ -1271,7 +1300,7 @@ JitcodeRegionEntry::WriteRun(CompactBufferWriter& writer,
             uint32_t curBc = curBytecodeOffset;
             while (curBc < nextBytecodeOffset) {
                 jsbytecode* pc = entry[i].tree->script()->offsetToPC(curBc);
-                JSOp op = JSOp(*pc);
+                mozilla::DebugOnly<JSOp> op = JSOp(*pc);
                 JitSpewCont(JitSpew_Profiling, "%s ", js_CodeName[op]);
                 curBc += GetBytecodeLength(pc);
             }
@@ -1528,17 +1557,46 @@ JitcodeIonTable::WriteIonTable(CompactBufferWriter& writer,
 } // namespace jit
 } // namespace js
 
-
-JS_PUBLIC_API(JS::ProfilingFrameIterator::FrameKind)
-JS::GetProfilingFrameKindFromNativeAddr(JSRuntime* rt, void* addr)
+JS::ForEachProfiledFrameOp::FrameHandle::FrameHandle(JSRuntime* rt, js::jit::JitcodeGlobalEntry& entry,
+                                                     void* addr, const char* label, uint32_t depth)
+  : rt_(rt),
+    entry_(entry),
+    addr_(addr),
+    canonicalAddr_(nullptr),
+    label_(label),
+    depth_(depth)
 {
-    JitcodeGlobalTable* table = rt->jitRuntime()->getJitcodeGlobalTable();
-    JitcodeGlobalEntry entry;
-    table->lookupInfallible(addr, &entry, rt);
-    MOZ_ASSERT(entry.isIon() || entry.isIonCache() || entry.isBaseline());
+    updateHasTrackedOptimizations();
 
-    if (entry.isBaseline())
+    if (!canonicalAddr_) {
+        // If the entry has tracked optimizations, updateHasTrackedOptimizations
+        // would have updated the canonical address.
+        MOZ_ASSERT_IF(entry_.isIon(), !hasTrackedOptimizations());
+        canonicalAddr_ = entry_.canonicalNativeAddrFor(rt_, addr_);
+    }
+}
+
+JS::ProfilingFrameIterator::FrameKind
+JS::ForEachProfiledFrameOp::FrameHandle::frameKind() const
+{
+    if (entry_.isBaseline())
         return JS::ProfilingFrameIterator::Frame_Baseline;
-
     return JS::ProfilingFrameIterator::Frame_Ion;
+}
+
+JS_PUBLIC_API(void)
+JS::ForEachProfiledFrame(JSRuntime* rt, void* addr, ForEachProfiledFrameOp& op)
+{
+    js::jit::JitcodeGlobalTable* table = rt->jitRuntime()->getJitcodeGlobalTable();
+    js::jit::JitcodeGlobalEntry entry;
+    table->lookupInfallible(addr, &entry, rt);
+
+    // Extract the stack for the entry.  Assume maximum inlining depth is <64
+    const char* labels[64];
+    uint32_t depth = entry.callStackAtAddr(rt, addr, labels, 64);
+    MOZ_ASSERT(depth < 64);
+    for (uint32_t i = depth; i != 0; i--) {
+        JS::ForEachProfiledFrameOp::FrameHandle handle(rt, entry, addr, labels[i - 1], i - 1);
+        op(handle);
+    }
 }

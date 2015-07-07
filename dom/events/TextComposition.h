@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,6 +17,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/TextRange.h"
+#include "mozilla/dom/TabParent.h"
 
 class nsIEditor;
 
@@ -38,8 +39,11 @@ class TextComposition final
   NS_INLINE_DECL_REFCOUNTING(TextComposition)
 
 public:
+  typedef dom::TabParent TabParent;
+
   TextComposition(nsPresContext* aPresContext,
                   nsINode* aNode,
+                  TabParent* aTabParent,
                   WidgetCompositionEvent* aCompositionEvent);
 
   bool Destroyed() const { return !mPresContext; }
@@ -125,6 +129,12 @@ public:
   void EndHandlingComposition(nsIEditor* aEditor);
 
   /**
+   * OnEditorDestroyed() is called when the editor is destroyed but there is
+   * active composition.
+   */
+  void OnEditorDestroyed();
+
+  /**
    * CompositionChangeEventHandlingMarker class should be created at starting
    * to handle text event in focused editor.  This calls
    * EditorWillHandleCompositionChangeEvent() and
@@ -167,6 +177,7 @@ private:
   // this instance.
   nsPresContext* mPresContext;
   nsCOMPtr<nsINode> mNode;
+  nsRefPtr<TabParent> mTabParent;
 
   // This is the clause and caret range information which is managed by
   // the focused editor.  This may be null if there is no clauses or caret.
@@ -220,6 +231,13 @@ private:
   // requested commit or cancel itself but native compositionend event is
   // discarded by PresShell due to not safe to dispatch events.
   bool mWasNativeCompositionEndEventDiscarded;
+
+  // Allow control characters appear in composition string.
+  // When this is false, control characters except
+  // CHARACTER TABULATION (horizontal tab) are removed from
+  // both composition string and data attribute of compositionupdate
+  // and compositionend events.
+  bool mAllowControlCharacters;
 
   // Hide the default constructor and copy constructor.
   TextComposition() {}
@@ -301,8 +319,7 @@ private:
    * compositionupdate, compositionend or compositionchange event due to not
    * safe to dispatch event.
    */
-  void OnCompositionEventDiscarded(
-         const WidgetCompositionEvent* aCompositionEvent);
+  void OnCompositionEventDiscarded(WidgetCompositionEvent* aCompositionEvent);
 
   /**
    * Calculate composition offset then notify composition update to widget

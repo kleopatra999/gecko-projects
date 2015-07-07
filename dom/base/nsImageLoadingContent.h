@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-// vim: ft=cpp tw=78 sw=2 et ts=2
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,11 +24,10 @@
 #include "nsAutoPtr.h"
 #include "nsIContentPolicy.h"
 #include "mozilla/dom/BindingDeclarations.h"
+#include "mozilla/net/ReferrerPolicy.h"
 
 class nsIURI;
 class nsIDocument;
-class imgILoader;
-class nsIIOService;
 class nsPresContext;
 class nsIContent;
 class imgRequestProxy;
@@ -194,15 +193,13 @@ protected:
 
   void ClearBrokenState() { mBroken = false; }
 
-  // Sets blocking state only if the desired state is different from the
-  // current one. See the comment for mBlockingOnload for more information.
-  void SetBlockingOnload(bool aBlocking);
-
   /**
    * Returns the CORS mode that will be used for all future image loads. The
    * default implementation returns CORS_NONE unconditionally.
    */
   virtual mozilla::CORSMode GetCORSMode();
+
+  virtual mozilla::net::ReferrerPolicy GetImageReferrerPolicy();
 
   // Subclasses are *required* to call BindToTree/UnbindFromTree.
   void BindToTree(nsIDocument* aDocument, nsIContent* aParent,
@@ -416,7 +413,6 @@ private:
   bool mBroken : 1;
   bool mUserDisabled : 1;
   bool mSuppressed : 1;
-  bool mFireEventsOnDecode : 1;
 
 protected:
   /**

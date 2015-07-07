@@ -21,28 +21,12 @@ EXTRA_JS_MODULES.devtools += [
     'widgets/AbstractTreeItem.jsm',
     'widgets/BreadcrumbsWidget.jsm',
     'widgets/Chart.jsm',
-    'widgets/Graphs.jsm',
     'widgets/GraphsWorker.js',
     'widgets/SideMenuWidget.jsm',
     'widgets/SimpleListWidget.jsm',
     'widgets/VariablesView.jsm',
     'widgets/VariablesViewController.jsm',
     'widgets/ViewHelpers.jsm',
-]
-
-EXTRA_JS_MODULES.devtools.shared.profiler += [
-    'profiler/frame-utils.js',
-    'profiler/global.js',
-    'profiler/jit.js',
-    'profiler/tree-model.js',
-    'profiler/tree-view.js',
-]
-
-EXTRA_JS_MODULES.devtools.shared.timeline += [
-    'timeline/global.js',
-    'timeline/marker-details.js',
-    'timeline/markers-overview.js',
-    'timeline/waterfall.js',
 ]
 
 EXTRA_JS_MODULES.devtools.shared += [
@@ -52,20 +36,28 @@ EXTRA_JS_MODULES.devtools.shared += [
     'frame-script-utils.js',
     'getjson.js',
     'inplace-editor.js',
+    'node-attribute-parser.js',
     'observable-object.js',
     'options-view.js',
+    'poller.js',
+    'source-utils.js',
     'telemetry.js',
     'theme-switching.js',
     'theme.js',
-    'undo.js',
+    'undo.js'
 ]
 
 EXTRA_JS_MODULES.devtools.shared.widgets += [
+    'widgets/BarGraphWidget.js',
     'widgets/CubicBezierPresets.js',
     'widgets/CubicBezierWidget.js',
     'widgets/FastListWidget.js',
     'widgets/FilterWidget.js',
     'widgets/FlameGraph.js',
+    'widgets/Graphs.js',
+    'widgets/LineGraphWidget.js',
+    'widgets/MdnDocsWidget.js',
+    'widgets/MountainGraphWidget.js',
     'widgets/Spectrum.js',
     'widgets/TableWidget.js',
     'widgets/Tooltip.js',

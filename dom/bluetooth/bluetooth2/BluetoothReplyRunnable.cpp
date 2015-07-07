@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,17 +17,11 @@ using namespace mozilla::dom;
 USING_BLUETOOTH_NAMESPACE
 
 BluetoothReplyRunnable::BluetoothReplyRunnable(nsIDOMDOMRequest* aReq,
-                                               Promise* aPromise,
-                                               const nsAString& aName)
+                                               Promise* aPromise)
   : mDOMRequest(aReq)
   , mPromise(aPromise)
   , mErrorStatus(STATUS_FAIL)
-  , mName(aName)
-{
-  if (aPromise) {
-    BT_API2_LOGR("<%s>", NS_ConvertUTF16toUTF8(mName).get());
-  }
-}
+{}
 
 void
 BluetoothReplyRunnable::SetReply(BluetoothReply* aReply)
@@ -61,7 +55,6 @@ BluetoothReplyRunnable::FireReplySuccess(JS::Handle<JS::Value> aVal)
 
   // Promise
   if (mPromise) {
-    BT_API2_LOGR("<%s>", NS_ConvertUTF16toUTF8(mName).get());
     mPromise->MaybeResolve(aVal);
   }
 
@@ -82,8 +75,6 @@ BluetoothReplyRunnable::FireErrorString()
 
   // Promise
   if (mPromise) {
-    BT_API2_LOGR("<%s>", NS_ConvertUTF16toUTF8(mName).get());
-
     nsresult rv =
       NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_DOM_BLUETOOTH, mErrorStatus);
     mPromise->MaybeReject(rv);
@@ -128,9 +119,8 @@ BluetoothReplyRunnable::Run()
 }
 
 BluetoothVoidReplyRunnable::BluetoothVoidReplyRunnable(nsIDOMDOMRequest* aReq,
-                                                       Promise* aPromise,
-                                                       const nsAString& aName)
-  : BluetoothReplyRunnable(aReq, aPromise, aName)
+                                                       Promise* aPromise)
+  : BluetoothReplyRunnable(aReq, aPromise)
 {}
 
 BluetoothVoidReplyRunnable::~BluetoothVoidReplyRunnable()

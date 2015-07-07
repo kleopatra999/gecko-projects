@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-*/
-/* vim: set ts=2 sw=2 et tw=79: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -45,15 +45,6 @@ class nsPIDOMWindow;
 namespace mozilla {
 namespace dom {
 template<typename DataType> class MozMap;
-
-struct SelfRef
-{
-  SelfRef() : ptr(nullptr) {}
-  explicit SelfRef(nsISupports *p) : ptr(p) {}
-  ~SelfRef() { NS_IF_RELEASE(ptr); }
-
-  nsISupports* ptr;
-};
 
 nsresult
 UnwrapArgImpl(JS::Handle<JSObject*> src, const nsIID& iid, void** ppArg);
@@ -101,8 +92,7 @@ ThrowInvalidThis(JSContext* aCx, const JS::CallArgs& aArgs,
 inline bool
 ThrowMethodFailedWithDetails(JSContext* cx, ErrorResult& rv,
                              const char* ifaceName,
-                             const char* memberName,
-                             bool reportJSContentExceptions = false)
+                             const char* memberName)
 {
   if (rv.IsUncatchableException()) {
     // Nuke any existing exception on aCx, to make sure we're uncatchable.
@@ -116,18 +106,15 @@ ThrowMethodFailedWithDetails(JSContext* cx, ErrorResult& rv,
     return false;
   }
   if (rv.IsJSException()) {
-    if (reportJSContentExceptions) {
-      rv.ReportJSExceptionFromJSImplementation(cx);
-    } else {
-      rv.ReportJSException(cx);
-    }
+    rv.ReportJSException(cx);
     return false;
   }
   if (rv.IsNotEnoughArgsError()) {
     rv.ReportNotEnoughArgsError(cx, ifaceName, memberName);
     return false;
   }
-  return Throw(cx, rv.ErrorCode());
+  rv.ReportGenericError(cx);
+  return false;
 }
 
 // Returns true if the JSClass is used for DOM objects.
@@ -525,17 +512,20 @@ AllocateProtoAndIfaceCache(JSObject* obj, ProtoAndIfaceCache::Kind aKind)
 }
 
 #ifdef DEBUG
-void
-VerifyTraceProtoAndIfaceCacheCalled(JS::CallbackTracer *trc, void **thingp,
-                                    JSGCTraceKind kind);
-
 struct VerifyTraceProtoAndIfaceCacheCalledTracer : public JS::CallbackTracer
 {
-    bool ok;
+  bool ok;
 
-    explicit VerifyTraceProtoAndIfaceCacheCalledTracer(JSRuntime *rt)
-      : JS::CallbackTracer(rt, VerifyTraceProtoAndIfaceCacheCalled), ok(false)
-    {}
+  explicit VerifyTraceProtoAndIfaceCacheCalledTracer(JSRuntime *rt)
+    : JS::CallbackTracer(rt), ok(false)
+  {}
+
+  void onChild(const JS::GCCellPtr&) override {
+    // We don't do anything here, we only want to verify that
+    // TraceProtoAndIfaceCache was called.
+  }
+
+  TracerKind getTracerKind() const override { return TracerKind::VerifyTraceProtoAndIface; }
 };
 #endif
 
@@ -546,8 +536,8 @@ TraceProtoAndIfaceCache(JSTracer* trc, JSObject* obj)
 
 #ifdef DEBUG
   if (trc->isCallbackTracer() &&
-      trc->asCallbackTracer()->hasCallback(
-        VerifyTraceProtoAndIfaceCacheCalled)) {
+      (trc->asCallbackTracer()->getTracerKind() ==
+       JS::CallbackTracer::TracerKind::VerifyTraceProtoAndIface)) {
     // We don't do anything here, we only want to verify that
     // TraceProtoAndIfaceCache was called.
     static_cast<VerifyTraceProtoAndIfaceCacheCalledTracer*>(trc)->ok = true;
@@ -811,7 +801,7 @@ MaybeWrapStringValue(JSContext* cx, JS::MutableHandle<JS::Value> rval)
 {
   MOZ_ASSERT(rval.isString());
   JSString* str = rval.toString();
-  if (JS::GetTenuredGCThingZone(str) != js::GetContextZone(cx)) {
+  if (JS::GetStringZone(str) != js::GetContextZone(cx)) {
     return JS_WrapValue(cx, rval);
   }
   return true;
@@ -932,7 +922,7 @@ DoGetOrCreateDOMReflector(JSContext* cx, T* value,
       return false;
     }
 
-    obj = value->WrapObject(cx, JS::NullPtr());
+    obj = value->WrapObject(cx, nullptr);
     if (!obj) {
       // At this point, obj is null, so just return false.
       // Callers seem to be testing JS_IsExceptionPending(cx) to
@@ -1040,7 +1030,7 @@ WrapNewBindingNonWrapperCachedObject(JSContext* cx,
     }
 
     MOZ_ASSERT(js::IsObjectInContextCompartment(scope, cx));
-    if (!value->WrapObject(cx, JS::NullPtr(), &obj)) {
+    if (!value->WrapObject(cx, nullptr, &obj)) {
       return false;
     }
   }
@@ -1048,7 +1038,7 @@ WrapNewBindingNonWrapperCachedObject(JSContext* cx,
   // We can end up here in all sorts of compartments, per above.  Make
   // sure to JS_WrapValue!
   rval.set(JS::ObjectValue(*obj));
-  return JS_WrapValue(cx, rval);
+  return MaybeWrapObjectValue(cx, rval);
 }
 
 // Create a JSObject wrapping "value", for cases when "value" is a
@@ -1086,7 +1076,7 @@ WrapNewBindingNonWrapperCachedObject(JSContext* cx,
     }
 
     MOZ_ASSERT(js::IsObjectInContextCompartment(scope, cx));
-    if (!value->WrapObject(cx, JS::NullPtr(), &obj)) {
+    if (!value->WrapObject(cx, nullptr, &obj)) {
       return false;
     }
 
@@ -1096,7 +1086,7 @@ WrapNewBindingNonWrapperCachedObject(JSContext* cx,
   // We can end up here in all sorts of compartments, per above.  Make
   // sure to JS_WrapValue!
   rval.set(JS::ObjectValue(*obj));
-  return JS_WrapValue(cx, rval);
+  return MaybeWrapObjectValue(cx, rval);
 }
 
 // Helper for smart pointers (nsRefPtr/nsCOMPtr).
@@ -1522,7 +1512,7 @@ struct WrapNativeParentHelper
     if (!CouldBeDOMBinding(parent)) {
       obj = WrapNativeParentFallback<T>::Wrap(cx, parent, cache);
     } else {
-      obj = parent->WrapObject(cx, JS::NullPtr());
+      obj = parent->WrapObject(cx, nullptr);
     }
 
     return obj;
@@ -1539,8 +1529,10 @@ struct WrapNativeParentHelper<T, false>
     JSObject* obj;
     if (cache && (obj = cache->GetWrapper())) {
 #ifdef DEBUG
-      NS_ASSERTION(WrapNativeISupportsParent(cx, parent, cache) == obj,
+      JS::Rooted<JSObject*> rootedObj(cx, obj);
+      NS_ASSERTION(WrapNativeISupportsParent(cx, parent, cache) == rootedObj,
                    "Unexpected object in nsWrapperCache");
+      obj = rootedObj;
 #endif
       return obj;
     }
@@ -1730,9 +1722,9 @@ GetCallbackFromCallbackObject(T& aObj)
 }
 
 static inline bool
-InternJSString(JSContext* cx, jsid& id, const char* chars)
+AtomizeAndPinJSString(JSContext* cx, jsid& id, const char* chars)
 {
-  if (JSString *str = ::JS_InternString(cx, chars)) {
+  if (JSString *str = ::JS_AtomizeAndPinString(cx, chars)) {
     id = INTERNED_STRING_TO_JSID(cx, str);
     return true;
   }
@@ -2378,7 +2370,7 @@ inline bool
 AddStringToIDVector(JSContext* cx, JS::AutoIdVector& vector, const char* name)
 {
   return vector.growBy(1) &&
-         InternJSString(cx, *(vector[vector.length() - 1]).address(), name);
+         AtomizeAndPinJSString(cx, *(vector[vector.length() - 1]).address(), name);
 }
 
 // Implementation of the bits that XrayWrapper needs
@@ -2968,6 +2960,9 @@ ResolveGlobal(JSContext* aCx, JS::Handle<JSObject*> aObj,
               JS::Handle<jsid> aId, bool* aResolvedp);
 
 bool
+MayResolveGlobal(const JSAtomState& aNames, jsid aId, JSObject* aMaybeObj);
+
+bool
 EnumerateGlobal(JSContext* aCx, JS::Handle<JSObject*> aObj);
 
 template <class T>
@@ -3018,13 +3013,13 @@ CreateGlobal(JSContext* aCx, T* aNative, nsWrapperCache* aCache,
                                  JS::DontFireOnNewGlobalHook, aOptions));
   if (!aGlobal) {
     NS_WARNING("Failed to create global");
-    return JS::NullPtr();
+    return nullptr;
   }
 
   JSAutoCompartment ac(aCx, aGlobal);
 
   {
-    js::SetReservedSlot(aGlobal, DOM_OBJECT_SLOT, PRIVATE_TO_JSVAL(aNative));
+    js::SetReservedSlot(aGlobal, DOM_OBJECT_SLOT, JS::PrivateValue(aNative));
     NS_ADDREF(aNative);
 
     aCache->SetWrapper(aGlobal);
@@ -3033,7 +3028,7 @@ CreateGlobal(JSContext* aCx, T* aNative, nsWrapperCache* aCache,
                                     CreateGlobalOptions<T>::ProtoAndIfaceCacheKind);
 
     if (!CreateGlobalOptions<T>::PostCreateGlobal(aCx, aGlobal)) {
-      return JS::NullPtr();
+      return nullptr;
     }
   }
 
@@ -3041,31 +3036,31 @@ CreateGlobal(JSContext* aCx, T* aNative, nsWrapperCache* aCache,
       !CreateGlobalOptions<T>::ForceInitStandardClassesToFalse &&
       !JS_InitStandardClasses(aCx, aGlobal)) {
     NS_WARNING("Failed to init standard classes");
-    return JS::NullPtr();
+    return nullptr;
   }
 
   JS::Handle<JSObject*> proto = GetProto(aCx, aGlobal);
   if (!proto || !JS_SplicePrototype(aCx, aGlobal, proto)) {
     NS_WARNING("Failed to set proto");
-    return JS::NullPtr();
+    return nullptr;
   }
 
   return proto;
 }
 
 /*
- * Holds a jsid that is initialized to an interned string, with conversion to
- * Handle<jsid>.
+ * Holds a jsid that is initialized to a pinned string, with automatic
+ * conversion to Handle<jsid>, as it is held live forever by pinning.
  */
-class InternedStringId
+class PinnedStringId
 {
   jsid id;
 
  public:
-  InternedStringId() : id(JSID_VOID) {}
+  PinnedStringId() : id(JSID_VOID) {}
 
   bool init(JSContext *cx, const char *string) {
-    JSString* str = JS_InternString(cx, string);
+    JSString* str = JS_AtomizeAndPinString(cx, string);
     if (!str)
       return false;
     id = INTERNED_STRING_TO_JSID(cx, str);
@@ -3077,7 +3072,7 @@ class InternedStringId
   }
 
   operator JS::Handle<jsid> () {
-    /* This is safe because we have interned the string. */
+    /* This is safe because we have pinned the string. */
     return JS::Handle<jsid>::fromMarkedLocation(&id);
   }
 };
@@ -3191,7 +3186,7 @@ WrappedJSToDictionary(nsISupports* aObject, T& aDictionary)
 
   // we need this AutoEntryScript here because the spec requires us to execute
   // getters when parsing a dictionary
-  AutoEntryScript aes(global);
+  AutoEntryScript aes(global, "WebIDL dictionary creation");
   aes.TakeOwnershipOfErrorReporting();
 
   JS::Rooted<JS::Value> v(aes.cx(), JS::ObjectValue(*obj));
@@ -3243,6 +3238,29 @@ bool SystemGlobalResolve(JSContext* cx, JS::Handle<JSObject*> obj,
 // Exposed=System webidl annotations.  False return value means exception
 // thrown.
 bool SystemGlobalEnumerate(JSContext* cx, JS::Handle<JSObject*> obj);
+
+// Slot indexes for maplike/setlike forEach functions
+#define FOREACH_CALLBACK_SLOT 0
+#define FOREACH_MAPLIKEORSETLIKEOBJ_SLOT 1
+
+// Backing function for running .forEach() on maplike/setlike interfaces.
+// Unpacks callback and maplike/setlike object from reserved slots, then runs
+// callback for each key (and value, for maplikes)
+bool ForEachHandler(JSContext* aCx, unsigned aArgc, JS::Value* aVp);
+
+// Unpacks backing object (ES6 map/set) from the reserved slot of a reflector
+// for a maplike/setlike interface. If backing object does not exist, creates
+// backing object in the compartment of the reflector involved, making this safe
+// to use across compartments/via xrays. Return values of these methods will
+// always be in the context compartment.
+bool GetMaplikeBackingObject(JSContext* aCx, JS::Handle<JSObject*> aObj,
+                             size_t aSlotIndex,
+                             JS::MutableHandle<JSObject*> aBackingObj,
+                             bool* aBackingObjCreated);
+bool GetSetlikeBackingObject(JSContext* aCx, JS::Handle<JSObject*> aObj,
+                             size_t aSlotIndex,
+                             JS::MutableHandle<JSObject*> aBackingObj,
+                             bool* aBackingObjCreated);
 
 
 } // namespace dom

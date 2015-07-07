@@ -47,11 +47,9 @@ namespace mozilla {
 
 using namespace mozilla;
 
-#include "prlog.h"
-#if defined(PR_LOGGING)
-#endif
+#include "mozilla/Logging.h"
 #undef LOG
-#define LOG(args) PR_LOG(net::GetProxyLog(), PR_LOG_DEBUG, args)
+#define LOG(args) MOZ_LOG(net::GetProxyLog(), mozilla::LogLevel::Debug, args)
 
 //----------------------------------------------------------------------------
 
@@ -409,10 +407,17 @@ NS_IMPL_ADDREF(nsProtocolProxyService)
 NS_IMPL_RELEASE(nsProtocolProxyService)
 NS_IMPL_CLASSINFO(nsProtocolProxyService, nullptr, nsIClassInfo::SINGLETON,
                   NS_PROTOCOLPROXYSERVICE_CID)
-NS_IMPL_QUERY_INTERFACE_CI(nsProtocolProxyService,
-                           nsIProtocolProxyService,
-                           nsIProtocolProxyService2,
-                           nsIObserver)
+
+// NS_IMPL_QUERY_INTERFACE_CI with the nsProtocolProxyService QI change
+NS_INTERFACE_MAP_BEGIN(nsProtocolProxyService)
+NS_INTERFACE_MAP_ENTRY(nsIProtocolProxyService)
+NS_INTERFACE_MAP_ENTRY(nsIProtocolProxyService2)
+NS_INTERFACE_MAP_ENTRY(nsIObserver)
+if ( aIID.Equals(NS_GET_IID(nsProtocolProxyService)) )  foundInterface = static_cast<nsIProtocolProxyService2*>(this); else
+NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIProtocolProxyService)
+NS_IMPL_QUERY_CLASSINFO(nsProtocolProxyService)
+NS_INTERFACE_MAP_END
+
 NS_IMPL_CI_INTERFACE_GETTER(nsProtocolProxyService,
                             nsIProtocolProxyService,
                             nsIProtocolProxyService2)
@@ -461,7 +466,6 @@ nsProtocolProxyService::Init()
         // register for shutdown notification so we can clean ourselves up
         // properly.
         obs->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID, false);
-
         obs->AddObserver(this, NS_NETWORK_LINK_TOPIC, false);
     }
 
@@ -534,6 +538,13 @@ nsProtocolProxyService::Observe(nsISupports     *aSubject,
             mPACMan->Shutdown();
             mPACMan = nullptr;
         }
+
+        nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+        if (obs) {
+            obs->RemoveObserver(this, NS_NETWORK_LINK_TOPIC);
+            obs->RemoveObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID);
+        }
+
     } else if (strcmp(aTopic, NS_NETWORK_LINK_TOPIC) == 0) {
         nsCString converted = NS_ConvertUTF16toUTF8(aData);
         const char *state = converted.get();

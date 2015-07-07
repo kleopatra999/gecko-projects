@@ -60,6 +60,15 @@ exports.TargetFactory = {
     return targetPromise;
   },
 
+  forWorker: function TF_forWorker(workerClient) {
+    let target = targets.get(workerClient);
+    if (target == null) {
+      target = new WorkerTarget(workerClient);
+      targets.set(workerClient, target);
+    }
+    return target;
+  },
+
   /**
    * Creating a target for a tab that is being closed is a problem because it
    * allows a leak as a result of coming after the close event which normally
@@ -165,6 +174,7 @@ function TabTarget(tab) {
   this._handleThreadState = this._handleThreadState.bind(this);
   this.on("thread-resumed", this._handleThreadState);
   this.on("thread-paused", this._handleThreadState);
+  this.activeTab = this.activeConsole = null;
   // Only real tabs need initialization here. Placeholder objects for remote
   // targets will be initialized after a makeRemote method call.
   if (tab && !["client", "form", "chrome"].every(tab.hasOwnProperty, tab)) {
@@ -420,6 +430,19 @@ TabTarget.prototype = {
         }
         this.activeTab = aTabClient;
         this.threadActor = aResponse.threadActor;
+        attachConsole();
+      });
+    };
+
+    let attachConsole = () => {
+      this._client.attachConsole(this._form.consoleActor,
+                                 [ "NetworkActivity" ],
+                                 (aResponse, aWebConsoleClient) => {
+        if (!aWebConsoleClient) {
+          this._remote.reject("Unable to attach to the console");
+          return;
+        }
+        this.activeConsole = aWebConsoleClient;
         this._remote.resolve(null);
       });
     };
@@ -439,7 +462,7 @@ TabTarget.prototype = {
     } else {
       // AddonActor and chrome debugging on RootActor doesn't inherits from TabActor and
       // doesn't need to be attached.
-      this._remote.resolve(null);
+      attachConsole();
     }
 
     return this._remote.promise;
@@ -593,17 +616,15 @@ TabTarget.prototype = {
         // We started with a local tab and created the client ourselves, so we
         // should close it.
         this._client.close(cleanupAndResolve);
-      } else {
+      } else if (this.activeTab) {
         // The client was handed to us, so we are not responsible for closing
         // it. We just need to detach from the tab, if already attached.
-        if (this.activeTab) {
-          // |detach| may fail if the connection is already dead, so proceed
-          // cleanup directly after this.
-          this.activeTab.detach();
-          cleanupAndResolve();
-        } else {
-          cleanupAndResolve();
-        }
+        // |detach| may fail if the connection is already dead, so proceed with
+        // cleanup directly after this.
+        this.activeTab.detach();
+        cleanupAndResolve();
+      } else {
+        cleanupAndResolve();
       }
     }
 
@@ -620,6 +641,7 @@ TabTarget.prototype = {
       promiseTargets.delete(this._form);
     }
     this.activeTab = null;
+    this.activeConsole = null;
     this._client = null;
     this._tab = null;
     this._form = null;
@@ -785,4 +807,65 @@ WindowTarget.prototype = {
   toString: function() {
     return 'WindowTarget:' + this.window;
   },
+};
+
+function WorkerTarget(workerClient) {
+  EventEmitter.decorate(this);
+  this._workerClient = workerClient;
+}
+
+/**
+ * A WorkerTarget represents a worker. Unlike TabTarget, which can represent
+ * either a local or remote tab, WorkerTarget always represents a remote worker.
+ * Moreover, unlike TabTarget, which is constructed with a placeholder object
+ * for remote tabs (from which a TabClient can then be lazily obtained),
+ * WorkerTarget is constructed with a WorkerClient directly.
+ *
+ * The reason for this is that in order to get notifications when a worker
+ * closes/freezes/thaws, the UI needs to attach to each worker anyway, so by
+ * the time a WorkerTarget for a given worker is created, a WorkerClient for
+ * that worker will already be available. Consequently, there is no need to
+ * obtain a WorkerClient lazily.
+ *
+ * WorkerClient is designed to mimic the interface of TabClient as closely as
+ * possible. This allows us to debug workers as if they were ordinary tabs,
+ * requiring only minimal changes to the rest of the frontend.
+ */
+WorkerTarget.prototype = {
+  get isRemote() {
+    return true;
+  },
+
+  get isTabActor() {
+    return true;
+  },
+
+  get form() {
+    return {
+      from: this._workerClient.actor,
+      type: "attached",
+      isFrozen: this._workerClient.isFrozen,
+      url: this._workerClient.url
+    };
+  },
+
+  get activeTab() {
+    return this._workerClient;
+  },
+
+  get client() {
+    return this._workerClient.client;
+  },
+
+  destroy: function () {},
+
+  hasActor: function (name) {
+    return false;
+  },
+
+  getTrait: function (name) {
+    return undefined;
+  },
+
+  makeRemote: function () {}
 };

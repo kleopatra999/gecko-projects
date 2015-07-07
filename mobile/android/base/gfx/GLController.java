@@ -5,6 +5,7 @@
 
 package org.mozilla.gecko.gfx;
 
+import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.GeckoThread;
@@ -18,48 +19,6 @@ import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.egl.EGLContext;
 import javax.microedition.khronos.egl.EGLDisplay;
 import javax.microedition.khronos.egl.EGLSurface;
-
-/**
- * EGLPreloadingThread is purely a preloading optimization, not something
- * we rely on for anything else than performance. We will be initializing
- * EGL in GLController::initEGL() when we need it, but having EGL initialization
- * already previously done by EGLPreloadingThread::run() will make it much
- * faster for GLController to do again.
- *
- * For example, here are some timings recorded on two devices:
- *
- * Device                 | EGLPreloadingThread::run() | GLController::initEGL()
- * -----------------------+----------------------------+------------------------
- * Nexus S (Android 2.3)  | ~ 80 ms                    | < 0.1 ms
- * Nexus 10 (Android 4.3) | ~ 35 ms                    | < 0.1 ms
- */
-class EGLPreloadingThread extends Thread
-{
-    private static final String LOGTAG = "EGLPreloadingThread";
-    private EGL10 mEGL;
-    private EGLDisplay mEGLDisplay;
-
-    public EGLPreloadingThread()
-    {
-    }
-
-    @Override
-    public void run()
-    {
-        mEGL = (EGL10)EGLContext.getEGL();
-        mEGLDisplay = mEGL.eglGetDisplay(EGL10.EGL_DEFAULT_DISPLAY);
-        if (mEGLDisplay == EGL10.EGL_NO_DISPLAY) {
-            Log.w(LOGTAG, "Can't get EGL display!");
-            return;
-        }
-
-        int[] returnedVersion = new int[2];
-        if (!mEGL.eglInitialize(mEGLDisplay, returnedVersion)) {
-            Log.w(LOGTAG, "eglInitialize failed");
-            return;
-        }
-    }
-}
 
 /**
  * This class is a singleton that tracks EGL and compositor things over
@@ -88,7 +47,6 @@ public class GLController {
     private EGL10 mEGL;
     private EGLDisplay mEGLDisplay;
     private EGLConfig mEGLConfig;
-    private final EGLPreloadingThread mEGLPreloadingThread;
     private EGLSurface mEGLSurfaceForCompositor;
 
     private static final int LOCAL_EGL_OPENGL_ES2_BIT = 4;
@@ -112,8 +70,6 @@ public class GLController {
     };
 
     private GLController() {
-        mEGLPreloadingThread = new EGLPreloadingThread();
-        mEGLPreloadingThread.start();
     }
 
     static GLController getInstance(LayerView view) {
@@ -204,17 +160,6 @@ public class GLController {
     private void initEGL() {
         if (mEGL != null) {
             return;
-        }
-
-        // This join() should not be necessary, but makes this code a bit easier to think about.
-        // The EGLPreloadingThread should long be done by now, and even if it's not,
-        // it shouldn't be a problem to be initializing EGL from two different threads.
-        // Still, having this join() here means that we don't have to wonder about what
-        // kind of caveats might exist with EGL initialization reentrancy on various drivers.
-        try {
-            mEGLPreloadingThread.join();
-        } catch (InterruptedException e) {
-            Log.w(LOGTAG, "EGLPreloadingThread interrupted", e);
         }
 
         mEGL = (EGL10)EGLContext.getEGL();

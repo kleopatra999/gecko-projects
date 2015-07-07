@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -61,7 +62,7 @@ struct CharacterDataChangeInfo
    * mChangeStart + mReplaceLength.
    */
 
-  struct Details {
+  struct MOZ_STACK_CLASS Details {
     enum {
       eMerge,  // two text nodes are merged as a result of normalize()
       eSplit   // a text node is split as a result of splitText()
@@ -70,7 +71,7 @@ struct CharacterDataChangeInfo
      * For eMerge it's the text node that will be removed, for eSplit it's the
      * new text node.
      */
-    nsIContent* mNextSibling;
+    nsIContent* MOZ_NON_OWNING_REF mNextSibling;
   };
 
   /**

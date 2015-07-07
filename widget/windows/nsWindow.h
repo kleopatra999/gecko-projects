@@ -49,14 +49,12 @@
 
 class nsNativeDragTarget;
 class nsIRollupListener;
-class nsIFile;
 class nsIntRegion;
 class imgIContainer;
 
 namespace mozilla {
 namespace widget {
 class NativeKey;
-class ModifierKeyState;
 struct MSGResult;
 } // namespace widget
 } // namespacw mozilla;
@@ -135,6 +133,7 @@ public:
                                      bool aIncludeChildren = false);
   NS_IMETHOD              Invalidate(const nsIntRect & aRect);
   virtual void*           GetNativeData(uint32_t aDataType);
+  void                    SetNativeData(uint32_t aDataType, uintptr_t aVal) override;
   virtual void            FreeNativeData(void * data, uint32_t aDataType);
   NS_IMETHOD              SetTitle(const nsAString& aTitle);
   NS_IMETHOD              SetIcon(const nsAString& aIconSpec);
@@ -162,13 +161,16 @@ public:
                                                    int32_t aNativeKeyCode,
                                                    uint32_t aModifierFlags,
                                                    const nsAString& aCharacters,
-                                                   const nsAString& aUnmodifiedCharacters);
+                                                   const nsAString& aUnmodifiedCharacters,
+                                                   nsIObserver* aObserver) override;
   virtual nsresult        SynthesizeNativeMouseEvent(mozilla::LayoutDeviceIntPoint aPoint,
                                                      uint32_t aNativeMessage,
-                                                     uint32_t aModifierFlags);
+                                                     uint32_t aModifierFlags,
+                                                     nsIObserver* aObserver) override;
 
-  virtual nsresult        SynthesizeNativeMouseMove(mozilla::LayoutDeviceIntPoint aPoint)
-                          { return SynthesizeNativeMouseEvent(aPoint, MOUSEEVENTF_MOVE, 0); }
+  virtual nsresult        SynthesizeNativeMouseMove(mozilla::LayoutDeviceIntPoint aPoint,
+                                                    nsIObserver* aObserver) override
+                          { return SynthesizeNativeMouseEvent(aPoint, MOUSEEVENTF_MOVE, 0, aObserver); }
 
   virtual nsresult        SynthesizeNativeMouseScrollEvent(mozilla::LayoutDeviceIntPoint aPoint,
                                                            uint32_t aNativeMessage,
@@ -176,7 +178,8 @@ public:
                                                            double aDeltaY,
                                                            double aDeltaZ,
                                                            uint32_t aModifierFlags,
-                                                           uint32_t aAdditionalFlags);
+                                                           uint32_t aAdditionalFlags,
+                                                           nsIObserver* aObserver) override;
   NS_IMETHOD_(void)       SetInputContext(const InputContext& aContext,
                                           const InputContextAction& aAction);
   NS_IMETHOD_(InputContext) GetInputContext();
@@ -190,8 +193,9 @@ public:
   NS_IMETHOD              GetNonClientMargins(nsIntMargin &margins);
   NS_IMETHOD              SetNonClientMargins(nsIntMargin &margins);
   void                    SetDrawsInTitlebar(bool aState);
-  mozilla::TemporaryRef<mozilla::gfx::DrawTarget> StartRemoteDrawing() override;
+  already_AddRefed<mozilla::gfx::DrawTarget> StartRemoteDrawing() override;
   virtual void            EndRemoteDrawing() override;
+  virtual void UpdateWindowDraggingRegion(const nsIntRegion& aRegion) override;
 
   virtual void            UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries) override;
   virtual uint32_t        GetMaxTouchPoints() const override;
@@ -276,7 +280,10 @@ public:
 
   virtual void GetPreferredCompositorBackends(nsTArray<mozilla::layers::LayersBackend>& aHints);
 
+  bool IsPopup();
   virtual bool ShouldUseOffMainThreadCompositing();
+
+  bool CaptureWidgetOnScreen(mozilla::RefPtr<mozilla::gfx::DrawTarget> aDT);
 
 protected:
   virtual ~nsWindow();
@@ -447,6 +454,8 @@ protected:
   void                    ClearCachedResources();
   nsIWidgetListener*      GetPaintListener();
   static bool             IsRenderMode(gfxWindowsPlatform::RenderMode aMode);
+  virtual bool            PreRender(LayerManagerComposite*) override;
+  virtual void            PostRender(LayerManagerComposite*) override;
 
 protected:
   nsCOMPtr<nsIWidget>   mParent;
@@ -516,6 +525,9 @@ protected:
 
   nsCOMPtr<nsIIdleServiceInternal> mIdleService;
 
+  // Draggable titlebar region maintained by UpdateWindowDraggingRegion
+  nsIntRegion mDraggableRegion;
+
   // Hook Data Memebers for Dropdowns. sProcessHook Tells the
   // hook methods whether they should be processing the hook
   // messages.
@@ -564,6 +576,9 @@ protected:
   // window below. This is currently only used for popups.
   bool                  mMouseTransparent;
 
+  // Whether we're in the process of sending a WM_SETTEXT ourselves
+  bool                  mSendingSetText;
+
   // The point in time at which the last paint completed. We use this to avoid
   //  painting too rapidly in response to frequent input events.
   TimeStamp mLastPaintEndTime;
@@ -580,6 +595,8 @@ protected:
 
   static bool sNeedsToInitMouseWheelSettings;
   static void InitMouseWheelScrollData();
+
+  CRITICAL_SECTION mPresentLock;
 };
 
 /**

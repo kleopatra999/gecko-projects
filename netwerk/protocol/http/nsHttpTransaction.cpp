@@ -21,7 +21,6 @@
 #include "nsISeekableStream.h"
 #include "nsMultiplexInputStream.h"
 #include "nsStringStream.h"
-#include "mozilla/VisualEventTracer.h"
 
 #include "nsComponentManagerUtils.h" // do_CreateInstance
 #include "nsServiceManagerUtils.h"   // do_GetService
@@ -63,7 +62,6 @@ namespace net {
 // helpers
 //-----------------------------------------------------------------------------
 
-#if defined(PR_LOGGING)
 static void
 LogHeaders(const char *lineStart)
 {
@@ -81,7 +79,6 @@ LogHeaders(const char *lineStart)
         lineStart = endOfLine + 2;
     }
 }
-#endif
 
 //-----------------------------------------------------------------------------
 // nsHttpTransaction <public>
@@ -142,6 +139,13 @@ nsHttpTransaction::nsHttpTransaction()
 {
     LOG(("Creating nsHttpTransaction @%p\n", this));
     gHttpHandler->GetMaxPipelineObjectSize(&mMaxPipelineObjectSize);
+
+#ifdef MOZ_VALGRIND
+    memset(&mSelfAddr, 0, sizeof(NetAddr));
+    memset(&mPeerAddr, 0, sizeof(NetAddr));
+#endif
+    mSelfAddr.raw.family = PR_AF_UNSPEC;
+    mPeerAddr.raw.family = PR_AF_UNSPEC;
 }
 
 nsHttpTransaction::~nsHttpTransaction()
@@ -213,12 +217,6 @@ nsHttpTransaction::Init(uint32_t caps,
                         nsITransportEventSink *eventsink,
                         nsIAsyncInputStream **responseBody)
 {
-    MOZ_EVENT_TRACER_COMPOUND_NAME(static_cast<nsAHttpTransaction*>(this),
-                                   requestHead->PeekHeader(nsHttp::Host),
-                                   requestHead->RequestURI().BeginReading());
-
-    MOZ_EVENT_TRACER_WAIT(static_cast<nsAHttpTransaction*>(this),
-                          "net::http::transaction");
     nsresult rv;
 
     LOG(("nsHttpTransaction::Init [this=%p caps=%x]\n", this, caps));
@@ -313,13 +311,11 @@ nsHttpTransaction::Init(uint32_t caps,
     mReqHeaderBuf.Truncate();
     requestHead->Flatten(mReqHeaderBuf, pruneProxyHeaders);
 
-#if defined(PR_LOGGING)
     if (LOG3_ENABLED()) {
         LOG3(("http request [\n"));
         LogHeaders(mReqHeaderBuf.get());
         LOG3(("]\n"));
     }
-#endif
 
     // If the request body does not include headers or if there is no request
     // body, then we must add the header/body separator manually.
@@ -475,11 +471,6 @@ nsHttpTransaction::SetConnection(nsAHttpConnection *conn)
         MutexAutoLock lock(mLock);
         mConnection = conn;
     }
-
-    if (conn) {
-        MOZ_EVENT_TRACER_EXEC(static_cast<nsAHttpTransaction*>(this),
-                              "net::http::transaction");
-    }
 }
 
 void
@@ -510,6 +501,17 @@ nsHttpTransaction::OnTransportStatus(nsITransport* transport,
 {
     LOG(("nsHttpTransaction::OnSocketStatus [this=%p status=%x progress=%lld]\n",
         this, status, progress));
+
+    if (status == NS_NET_STATUS_CONNECTED_TO ||
+        status == NS_NET_STATUS_WAITING_FOR) {
+        nsISocketTransport *socketTransport =
+            mConnection ? mConnection->Transport() : nullptr;
+        if (socketTransport) {
+            MutexAutoLock lock(mLock);
+            socketTransport->GetSelfAddr(&mSelfAddr);
+            socketTransport->GetPeerAddr(&mPeerAddr);
+        }
+    }
 
     // If the timing is enabled, and we are not using a persistent connection
     // then the requestStart timestamp will be null, so we mark the timestamps
@@ -644,11 +646,6 @@ nsHttpTransaction::ReadRequestSegment(nsIInputStream *stream,
         trans->SetRequestStart(TimeStamp::Now(), true);
     }
 
-    if (!trans->mSentData) {
-        MOZ_EVENT_TRACER_MARK(static_cast<nsAHttpTransaction*>(trans),
-                              "net::http::first-write");
-    }
-
     trans->CountSentBytes(*countRead);
     trans->mSentData = true;
     return NS_OK;
@@ -714,17 +711,18 @@ nsHttpTransaction::WritePipeSegment(nsIOutputStream *stream,
         trans->SetResponseStart(TimeStamp::Now(), true);
     }
 
+    // Bug 1153929 - add checks to fix windows crash
+    MOZ_ASSERT(trans->mWriter);
+    if (!trans->mWriter) {
+        return NS_ERROR_UNEXPECTED;
+    }
+
     nsresult rv;
     //
     // OK, now let the caller fill this segment with data.
     //
     rv = trans->mWriter->OnWriteSegment(buf, count, countWritten);
     if (NS_FAILED(rv)) return rv; // caller didn't want to write anything
-
-    if (!trans->mReceivedData) {
-        MOZ_EVENT_TRACER_MARK(static_cast<nsAHttpTransaction*>(trans),
-                              "net::http::first-read");
-    }
 
     MOZ_ASSERT(*countWritten > 0, "bad writer");
     trans->CountRecvBytes(*countWritten);
@@ -753,6 +751,12 @@ nsHttpTransaction::WriteSegments(nsAHttpSegmentWriter *writer,
         return NS_SUCCEEDED(mStatus) ? NS_BASE_STREAM_CLOSED : mStatus;
 
     mWriter = writer;
+
+    // Bug 1153929 - add checks to fix windows crash
+    MOZ_ASSERT(mPipeOut);
+    if (!mPipeOut) {
+        return NS_ERROR_UNEXPECTED;
+    }
 
     nsresult rv = mPipeOut->WriteSegments(WritePipeSegment, this, count, countWritten);
 
@@ -1009,9 +1013,6 @@ nsHttpTransaction::Close(nsresult reason)
 
     // closing this pipe triggers the channel's OnStopRequest method.
     mPipeOut->CloseWithStatus(reason);
-
-    MOZ_EVENT_TRACER_DONE(static_cast<nsAHttpTransaction*>(this),
-                          "net::http::transaction");
 }
 
 nsHttpConnectionInfo *
@@ -1167,7 +1168,7 @@ nsHttpTransaction::Restart()
     mCaps &= ~NS_HTTP_ALLOW_PIPELINING;
     SetPipelinePosition(0);
 
-    if (!mConnInfo->GetAuthenticationHost().IsEmpty()) {
+    if (!mConnInfo->GetRoutedHost().IsEmpty()) {
         MutexAutoLock lock(*nsHttp::GetLock());
         nsRefPtr<nsHttpConnectionInfo> ci;
          mConnInfo->CloneAsDirectRoute(getter_AddRefs(ci));
@@ -1456,7 +1457,6 @@ nsHttpTransaction::HandleContentStart()
     MOZ_ASSERT(PR_GetCurrentThread() == gSocketThread);
 
     if (mResponseHead) {
-#if defined(PR_LOGGING)
         if (LOG3_ENABLED()) {
             LOG3(("http response [\n"));
             nsAutoCString headers;
@@ -1464,7 +1464,7 @@ nsHttpTransaction::HandleContentStart()
             LogHeaders(headers.get());
             LOG3(("]\n"));
         }
-#endif
+
         // Save http version, mResponseHead isn't available anymore after
         // TakeResponseHead() is called
         mHttpVersion = mResponseHead->Version();
@@ -1498,11 +1498,9 @@ nsHttpTransaction::HandleContentStart()
             LOG(("this response should not contain a body.\n"));
             break;
         case 421:
-            if (!mConnInfo->GetAuthenticationHost().IsEmpty()) {
-                LOG(("Misdirected Request.\n"));
-                gHttpHandler->ConnMgr()->
-                    ClearHostMapping(mConnInfo->GetHost(), mConnInfo->Port());
-            }
+            LOG(("Misdirected Request.\n"));
+            gHttpHandler->ConnMgr()->ClearHostMapping(mConnInfo);
+
             // retry on a new connection - just in case
             mCaps &= ~NS_HTTP_ALLOW_KEEPALIVE;
             mForceRestart = true; // force restart has built in loop protection
@@ -1545,10 +1543,8 @@ nsHttpTransaction::HandleContentStart()
                 // Ignore server specified Content-Length.
                 mContentLength = -1;
             }
-#if defined(PR_LOGGING)
             else if (mContentLength == int64_t(-1))
                 LOG(("waiting for the server to close the connection.\n"));
-#endif
         }
         if (mRestartInProgressVerifier.IsSetup() &&
             !mRestartInProgressVerifier.Verify(mContentLength, mResponseHead)) {
@@ -2201,6 +2197,14 @@ nsHttpTransaction::RestartVerifier::Set(int64_t contentLength,
     }
 
     mSetup = true;
+}
+
+void
+nsHttpTransaction::GetNetworkAddresses(NetAddr &self, NetAddr &peer)
+{
+    MutexAutoLock lock(mLock);
+    self = mSelfAddr;
+    peer = mPeerAddr;
 }
 
 } // namespace mozilla::net

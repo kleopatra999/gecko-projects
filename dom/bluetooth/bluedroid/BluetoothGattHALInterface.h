@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -38,6 +38,7 @@ public:
   void Connect(int aClientIf,
                const nsAString& aBdAddr,
                bool aIsDirect, /* auto connect */
+               BluetoothTransport aTransport,
                BluetoothGattClientResultHandler* aRes);
   void Disconnect(int aClientIf,
                   const nsAString& aBdAddr,
@@ -80,30 +81,28 @@ public:
   void ReadCharacteristic(int aConnId,
                           const BluetoothGattServiceId& aServiceId,
                           const BluetoothGattId& aCharId,
-                          int aAuthReq,
+                          BluetoothGattAuthReq aAuthReq,
                           BluetoothGattClientResultHandler* aRes);
   void WriteCharacteristic(int aConnId,
                            const BluetoothGattServiceId& aServiceId,
                            const BluetoothGattId& aCharId,
-                           int aWriteType,
-                           int aLen,
-                           int aAuthReq,
-                           const ArrayBuffer& aValue,
+                           BluetoothGattWriteType aWriteType,
+                           BluetoothGattAuthReq aAuthReq,
+                           const nsTArray<uint8_t>& aValue,
                            BluetoothGattClientResultHandler* aRes);
   void ReadDescriptor(int aConnId,
                       const BluetoothGattServiceId& aServiceId,
                       const BluetoothGattId& aCharId,
                       const BluetoothGattId& aDescriptorId,
-                      int aAuthReq,
+                      BluetoothGattAuthReq aAuthReq,
                       BluetoothGattClientResultHandler* aRes);
   void WriteDescriptor(int aConnId,
                        const BluetoothGattServiceId& aServiceId,
                        const BluetoothGattId& aCharId,
                        const BluetoothGattId& aDescriptorId,
-                       int aWriteType,
-                       int aLen,
-                       int aAuthReq,
-                       const ArrayBuffer& aValue,
+                       BluetoothGattWriteType aWriteType,
+                       BluetoothGattAuthReq aAuthReq,
+                       const nsTArray<uint8_t>& aValue,
                        BluetoothGattClientResultHandler* aRes);
 
   /* Execute / Abort Prepared Write*/
@@ -139,9 +138,13 @@ public:
                   int aMinInterval,
                   int aMaxInterval,
                   int aApperance,
-                  uint8_t aManufacturerLen,
-                  const ArrayBuffer& aManufacturerData,
+                  uint16_t aManufacturerLen, char* aManufacturerData,
+                  uint16_t aServiceDataLen, char* aServiceData,
+                  uint16_t aServiceUUIDLen, char* aServiceUUID,
                   BluetoothGattClientResultHandler* aRes);
+
+  void TestCommand(int aCommand, const BluetoothGattTestParam& aTestParam,
+                   BluetoothGattClientResultHandler* aRes);
 
 protected:
   BluetoothGattClientHALInterface(

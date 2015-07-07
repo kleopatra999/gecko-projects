@@ -35,23 +35,6 @@
 
 using namespace mozilla;
 
-// Our extended PLDHashEntryHdr
-class GlobalNameMapEntry : public PLDHashEntryHdr
-{
-public:
-  // Our hash table ops don't care about the order of these members
-  nsString mKey;
-  nsGlobalNameStruct mGlobalName;
-
-  size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) {
-    // Measurement of the following members may be added later if DMD finds it
-    // is worthwhile:
-    // - mGlobalName
-    return mKey.SizeOfExcludingThisMustBeUnshared(aMallocSizeOf);
-  }
-};
-
-
 static PLDHashNumber
 GlobalNameHashHashKey(PLDHashTable *table, const void *key)
 {
@@ -119,20 +102,29 @@ NS_IMPL_ISUPPORTS(
   nsISupportsWeakReference,
   nsIMemoryReporter)
 
+static const PLDHashTableOps hash_table_ops =
+{
+  GlobalNameHashHashKey,
+  GlobalNameHashMatchEntry,
+  PL_DHashMoveEntryStub,
+  GlobalNameHashClearEntry,
+  GlobalNameHashInitEntry
+};
+
+#define GLOBALNAME_HASHTABLE_INITIAL_LENGTH   512
+
 nsScriptNameSpaceManager::nsScriptNameSpaceManager()
-  : mIsInitialized(false)
+  : mGlobalNames(&hash_table_ops, sizeof(GlobalNameMapEntry),
+                 GLOBALNAME_HASHTABLE_INITIAL_LENGTH)
+  , mNavigatorNames(&hash_table_ops, sizeof(GlobalNameMapEntry),
+                    GLOBALNAME_HASHTABLE_INITIAL_LENGTH)
 {
   MOZ_COUNT_CTOR(nsScriptNameSpaceManager);
 }
 
 nsScriptNameSpaceManager::~nsScriptNameSpaceManager()
 {
-  if (mIsInitialized) {
-    UnregisterWeakMemoryReporter(this);
-    // Destroy the hash
-    PL_DHashTableFinish(&mGlobalNames);
-    PL_DHashTableFinish(&mNavigatorNames);
-  }
+  UnregisterWeakMemoryReporter(this);
   MOZ_COUNT_DTOR(nsScriptNameSpaceManager);
 }
 
@@ -309,36 +301,9 @@ nsScriptNameSpaceManager::RegisterInterface(const char* aIfName,
   return NS_OK;
 }
 
-#define GLOBALNAME_HASHTABLE_INITIAL_LENGTH   512
-
 nsresult
 nsScriptNameSpaceManager::Init()
 {
-  static const PLDHashTableOps hash_table_ops =
-  {
-    GlobalNameHashHashKey,
-    GlobalNameHashMatchEntry,
-    PL_DHashMoveEntryStub,
-    GlobalNameHashClearEntry,
-    GlobalNameHashInitEntry
-  };
-
-  mIsInitialized = PL_DHashTableInit(&mGlobalNames, &hash_table_ops,
-                                     sizeof(GlobalNameMapEntry),
-                                     fallible,
-                                     GLOBALNAME_HASHTABLE_INITIAL_LENGTH);
-  NS_ENSURE_TRUE(mIsInitialized, NS_ERROR_OUT_OF_MEMORY);
-
-  mIsInitialized = PL_DHashTableInit(&mNavigatorNames, &hash_table_ops,
-                                     sizeof(GlobalNameMapEntry),
-                                     fallible,
-                                     GLOBALNAME_HASHTABLE_INITIAL_LENGTH);
-  if (!mIsInitialized) {
-    PL_DHashTableFinish(&mGlobalNames);
-
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-
   RegisterWeakMemoryReporter(this);
 
   nsresult rv = NS_OK;
@@ -758,36 +723,6 @@ nsScriptNameSpaceManager::RegisterNavigatorDOMConstructor(
     s->mConstructNavigatorProperty = aNavConstructor;
     s->mConstructorEnabled = aConstructorEnabled;
   }
-}
-
-struct NameClosure
-{
-  nsScriptNameSpaceManager::NameEnumerator enumerator;
-  void* closure;
-};
-
-static PLDHashOperator
-EnumerateName(PLDHashTable*, PLDHashEntryHdr *hdr, uint32_t, void* aClosure)
-{
-  GlobalNameMapEntry *entry = static_cast<GlobalNameMapEntry *>(hdr);
-  NameClosure* closure = static_cast<NameClosure*>(aClosure);
-  return closure->enumerator(entry->mKey, entry->mGlobalName, closure->closure);
-}
-
-void
-nsScriptNameSpaceManager::EnumerateGlobalNames(NameEnumerator aEnumerator,
-                                               void* aClosure)
-{
-  NameClosure closure = { aEnumerator, aClosure };
-  PL_DHashTableEnumerate(&mGlobalNames, EnumerateName, &closure);
-}
-
-void
-nsScriptNameSpaceManager::EnumerateNavigatorNames(NameEnumerator aEnumerator,
-                                                  void* aClosure)
-{
-  NameClosure closure = { aEnumerator, aClosure };
-  PL_DHashTableEnumerate(&mNavigatorNames, EnumerateName, &closure);
 }
 
 static size_t

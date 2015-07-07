@@ -18,7 +18,6 @@
 #include "mozilla/layers/LayersMessages.h"
 #include "mozilla/mozalloc.h"           // for operator delete, etc
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
-#include "nsRect.h"                     // for nsIntRect
 #include "LayersLogging.h"
 
 namespace mozilla {
@@ -145,8 +144,8 @@ ClientTiledPaintedLayer::BeginPaint()
 
   if (!displayPortAncestor || !scrollAncestor) {
     // No displayport or scroll ancestor, so we can't do progressive rendering.
-#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_B2G)
-    // Both Android and b2g are guaranteed to have a displayport set, so this
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
+    // Both Android and b2g on phones are guaranteed to have a displayport set, so this
     // should never happen.
     NS_WARNING("Tiled PaintedLayer with no scrollable container ancestor");
 #endif
@@ -173,7 +172,7 @@ ClientTiledPaintedLayer::BeginPaint()
   if (!hasTransformAnimation) {
     ParentLayerRect criticalDisplayPort =
       (displayportMetrics.GetCriticalDisplayPort() * displayportMetrics.GetZoom())
-      + displayportMetrics.mCompositionBounds.TopLeft();
+      + displayportMetrics.GetCompositionBounds().TopLeft();
     mPaintData.mCriticalDisplayPort = RoundedToInt(
       ApplyParentLayerToLayerTransform(transformDisplayPortToLayer, criticalDisplayPort));
   }
@@ -190,7 +189,7 @@ ClientTiledPaintedLayer::BeginPaint()
   gfx::Matrix4x4 transformToBounds = mPaintData.mTransformToCompBounds;
   transformToBounds.Invert();
   mPaintData.mCompositionBounds = ApplyParentLayerToLayerTransform(
-    transformToBounds, scrollMetrics.mCompositionBounds);
+    transformToBounds, scrollMetrics.GetCompositionBounds());
   TILING_LOG("TILING %p: Composition bounds %s\n", this, Stringify(mPaintData.mCompositionBounds).c_str());
 
   // Calculate the scroll offset since the last transaction
@@ -258,7 +257,7 @@ ClientTiledPaintedLayer::UseProgressiveDraw() {
     return false;
   }
 
-  if (gfxPrefs::AsyncPanZoomEnabled()) {
+  if (ClientManager()->AsyncPanZoomEnabled()) {
     LayerMetricsWrapper scrollAncestor;
     GetAncestorLayers(&scrollAncestor, nullptr, nullptr);
     MOZ_ASSERT(scrollAncestor); // because mPaintData.mCriticalDisplayPort is non-empty
@@ -394,10 +393,6 @@ ClientTiledPaintedLayer::RenderLayer()
   LayerManager::DrawPaintedLayerCallback callback =
     ClientManager()->GetPaintedLayerCallback();
   void *data = ClientManager()->GetPaintedLayerCallbackData();
-  if (!callback) {
-    ClientManager()->SetTransactionIncomplete();
-    return;
-  }
 
   if (!mContentClient) {
     mContentClient = new TiledContentClient(this, ClientManager());
@@ -424,12 +419,12 @@ ClientTiledPaintedLayer::RenderLayer()
     // outside of our texture coords. Make the visible region a single rect,
     // and pad it out by 1 pixel (restricted to tile boundaries) so that
     // we always have valid content or transparent pixels to sample from.
-    nsIntRect bounds = neededRegion.GetBounds();
-    nsIntRect wholeTiles = bounds;
-    wholeTiles.InflateToMultiple(nsIntSize(
+    IntRect bounds = neededRegion.GetBounds();
+    IntRect wholeTiles = bounds;
+    wholeTiles.InflateToMultiple(IntSize(
       gfxPlatform::GetPlatform()->GetTileWidth(),
       gfxPlatform::GetPlatform()->GetTileHeight()));
-    nsIntRect padded = bounds;
+    IntRect padded = bounds;
     padded.Inflate(1);
     padded.IntersectRect(padded, wholeTiles);
     neededRegion = padded;
@@ -443,11 +438,14 @@ ClientTiledPaintedLayer::RenderLayer()
     return;
   }
 
+  if (!callback) {
+    ClientManager()->SetTransactionIncomplete();
+    return;
+  }
+
   if (!ClientManager()->IsRepeatTransaction()) {
-    // Only paint the mask layer on the first transaction.
-    if (GetMaskLayer()) {
-      ToClientLayer(GetMaskLayer())->RenderLayer();
-    }
+    // Only paint the mask layers on the first transaction.
+    RenderMaskLayers(this);
 
     // For more complex cases we need to calculate a bunch of metrics before we
     // can do the paint.

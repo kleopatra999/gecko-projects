@@ -29,9 +29,8 @@
 using namespace mozilla;
 using namespace mozilla::net;
 
-#if defined(PR_LOGGING)
 PRLogModuleInfo *gSocketTransportLog = nullptr;
-#endif
+PRLogModuleInfo *gUDPSocketLog = nullptr;
 
 nsSocketTransportService *gSocketTransportService = nullptr;
 PRThread                 *gSocketThread           = nullptr;
@@ -50,6 +49,38 @@ PRThread                 *gSocketThread           = nullptr;
 
 uint32_t nsSocketTransportService::gMaxCount;
 PRCallOnceType nsSocketTransportService::gMaxCountInitOnce;
+
+class DebugMutexAutoLock
+{
+public:
+    explicit DebugMutexAutoLock(Mutex& mutex);
+    ~DebugMutexAutoLock();
+
+private:
+    Mutex *mLock;
+    static PRThread *sDebugOwningThread;
+};
+
+PRThread *DebugMutexAutoLock::sDebugOwningThread = nullptr;
+
+DebugMutexAutoLock::DebugMutexAutoLock(Mutex& mutex)
+    :mLock(&mutex)
+{
+  PRThread *currentThread = PR_GetCurrentThread();
+  MOZ_RELEASE_ASSERT(sDebugOwningThread != currentThread);
+  SOCKET_LOG(("Acquiring lock on thread %p", currentThread));
+  mLock->Lock();
+  sDebugOwningThread = currentThread;
+  SOCKET_LOG(("Acquired lock on thread %p", currentThread));
+}
+
+DebugMutexAutoLock::~DebugMutexAutoLock()
+{
+  sDebugOwningThread = nullptr;
+  mLock->Unlock();
+  mLock = nullptr;
+  SOCKET_LOG(("Released lock on thread %p", PR_GetCurrentThread()));
+}
 
 //-----------------------------------------------------------------------------
 // ctor/dtor (called on the main/UI thread by the service manager)
@@ -80,9 +111,8 @@ nsSocketTransportService::nsSocketTransportService()
     , mTelemetryEnabledPref(false)
     , mProbedMaxCount(false)
 {
-#if defined(PR_LOGGING)
     gSocketTransportLog = PR_NewLogModule("nsSocketTransport");
-#endif
+    gUDPSocketLog = PR_NewLogModule("UDPSocket");
 
     NS_ASSERTION(NS_IsMainThread(), "wrong thread");
 
@@ -118,7 +148,7 @@ nsSocketTransportService::~nsSocketTransportService()
 already_AddRefed<nsIThread>
 nsSocketTransportService::GetThreadSafely()
 {
-    MutexAutoLock lock(mLock);
+    DebugMutexAutoLock lock(mLock);
     nsCOMPtr<nsIThread> result = mThread;
     return result.forget();
 }
@@ -447,6 +477,7 @@ nsSocketTransportService::Poll(bool wait, uint32_t *interval,
 
 NS_IMPL_ISUPPORTS(nsSocketTransportService,
                   nsISocketTransportService,
+                  nsIRoutedSocketTransportService,
                   nsIEventTarget,
                   nsIThreadObserver,
                   nsIRunnable,
@@ -491,7 +522,7 @@ nsSocketTransportService::Init()
     if (NS_FAILED(rv)) return rv;
     
     {
-        MutexAutoLock lock(mLock);
+        DebugMutexAutoLock lock(mLock);
         // Install our mThread, protecting against concurrent readers
         thread.swap(mThread);
     }
@@ -534,7 +565,7 @@ nsSocketTransportService::Shutdown()
         return NS_ERROR_UNEXPECTED;
 
     {
-        MutexAutoLock lock(mLock);
+        DebugMutexAutoLock lock(mLock);
 
         // signal the socket thread to shutdown
         mShuttingDown = true;
@@ -547,7 +578,7 @@ nsSocketTransportService::Shutdown()
     // join with thread
     mThread->Shutdown();
     {
-        MutexAutoLock lock(mLock);
+        DebugMutexAutoLock lock(mLock);
         // Drop our reference to mThread and make sure that any concurrent
         // readers are excluded
         mThread = nullptr;
@@ -583,7 +614,7 @@ nsSocketTransportService::GetOffline(bool *offline)
 NS_IMETHODIMP
 nsSocketTransportService::SetOffline(bool offline)
 {
-    MutexAutoLock lock(mLock);
+    DebugMutexAutoLock lock(mLock);
     if (!mOffline && offline) {
         // signal the socket thread to go offline, so it will detach sockets
         mGoingOffline = true;
@@ -639,6 +670,20 @@ nsSocketTransportService::CreateTransport(const char **types,
                                           nsIProxyInfo *proxyInfo,
                                           nsISocketTransport **result)
 {
+    return CreateRoutedTransport(types, typeCount, host, port, NS_LITERAL_CSTRING(""), 0,
+                                 proxyInfo, result);
+}
+
+NS_IMETHODIMP
+nsSocketTransportService::CreateRoutedTransport(const char **types,
+                                                uint32_t typeCount,
+                                                const nsACString &host,
+                                                int32_t port,
+                                                const nsACString &hostRoute,
+                                                int32_t portRoute,
+                                                nsIProxyInfo *proxyInfo,
+                                                nsISocketTransport **result)
+{
 #if defined(MOZILLA_XPCOMRT_API)
     NS_WARNING("nsSocketTransportService::CreateTransport not implemented");
     return NS_ERROR_NOT_IMPLEMENTED;
@@ -647,7 +692,7 @@ nsSocketTransportService::CreateTransport(const char **types,
     NS_ENSURE_TRUE(port >= 0 && port <= 0xFFFF, NS_ERROR_ILLEGAL_VALUE);
 
     nsRefPtr<nsSocketTransport> trans = new nsSocketTransport();
-    nsresult rv = trans->Init(types, typeCount, host, port, proxyInfo);
+    nsresult rv = trans->Init(types, typeCount, host, port, hostRoute, portRoute, proxyInfo);
     if (NS_FAILED(rv)) {
         return rv;
     }
@@ -702,7 +747,7 @@ nsSocketTransportService::SetAutodialEnabled(bool value)
 NS_IMETHODIMP
 nsSocketTransportService::OnDispatchedEvent(nsIThreadInternal *thread)
 {
-    MutexAutoLock lock(mLock);
+    DebugMutexAutoLock lock(mLock);
     if (mThreadEvent)
         PR_SetPollableEvent(mThreadEvent);
     return NS_OK;
@@ -742,7 +787,6 @@ nsSocketTransportService::Run()
     if (IsNuwaProcess()) {
         NuwaMarkCurrentThread(nullptr, nullptr);
     }
-    NS_SetIgnoreStatusOfCurrentThread();
 #endif
 
     SOCKET_LOG(("STS thread init\n"));
@@ -883,7 +927,7 @@ nsSocketTransportService::Run()
         bool goingOffline = false;
         // now that our event queue is empty, check to see if we should exit
         {
-            MutexAutoLock lock(mLock);
+            DebugMutexAutoLock lock(mLock);
             if (mShuttingDown) {
                 if (mTelemetryEnabledPref &&
                     !startOfCycleForLastCycleCalc.IsNull()) {
@@ -1080,7 +1124,7 @@ nsSocketTransportService::DoPollIteration(bool wait, TimeDuration *pollDuration)
                 // new pollable event.  If that fails, we fall back
                 // on "busy wait".
                 {
-                    MutexAutoLock lock(mLock);
+                    DebugMutexAutoLock lock(mLock);
                     PR_DestroyPollableEvent(mThreadEvent);
                     mThreadEvent = PR_NewPollableEvent();
                 }

@@ -672,6 +672,13 @@ AndroidGeckoEvent::ApzInputBlockId()
     return mApzInputBlockId;
 }
 
+nsEventStatus
+AndroidGeckoEvent::ApzEventStatus()
+{
+    MOZ_ASSERT(Type() == APZ_INPUT_EVENT);
+    return mApzEventStatus;
+}
+
 WidgetTouchEvent
 AndroidGeckoEvent::MakeTouchEvent(nsIWidget* widget)
 {
@@ -827,10 +834,10 @@ AndroidGeckoEvent::MakeMouseEvent(nsIWidget* widget)
                 msg = NS_MOUSE_MOVE;
                 break;
             case AndroidMotionEvent::ACTION_HOVER_ENTER:
-                msg = NS_MOUSE_ENTER;
+                msg = NS_MOUSE_ENTER_WIDGET;
                 break;
             case AndroidMotionEvent::ACTION_HOVER_EXIT:
-                msg = NS_MOUSE_EXIT;
+                msg = NS_MOUSE_EXIT_WIDGET;
                 break;
             default:
                 break;

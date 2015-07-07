@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,7 +22,7 @@ namespace dom {
 // template parameter, we need to move this class outside.
 class SurfaceHelper : public nsRunnable {
 public:
-  explicit SurfaceHelper(TemporaryRef<layers::Image> aImage) : mImage(aImage) {}
+  explicit SurfaceHelper(already_AddRefed<layers::Image> aImage) : mImage(aImage) {}
 
   // It retrieves a SourceSurface reference and convert color format on main
   // thread and passes DataSourceSurface to caller thread.
@@ -40,7 +41,7 @@ public:
     return NS_OK;
   }
 
-  TemporaryRef<gfx::DataSourceSurface> GetDataSurfaceSafe() {
+  already_AddRefed<gfx::DataSourceSurface> GetDataSurfaceSafe() {
     nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
     MOZ_ASSERT(mainThread);
     SyncRunnable::DispatchToThread(mainThread, this, false);
@@ -58,10 +59,10 @@ private:
 // image formats should be referenced or dereferenced on main thread, it uses a
 // sync class SurfaceHelper to retrieve SourceSurface and convert to B8G8R8A8 on
 // main thread.
-TemporaryRef<DataSourceSurface>
-GetBRGADataSourceSurfaceSync(TemporaryRef<layers::Image> aImage)
+already_AddRefed<DataSourceSurface>
+GetBRGADataSourceSurfaceSync(already_AddRefed<layers::Image> aImage)
 {
-  nsRefPtr<SurfaceHelper> helper = new SurfaceHelper(aImage);
+  nsRefPtr<SurfaceHelper> helper = new SurfaceHelper(Move(aImage));
   return helper->GetDataSurfaceSafe();
 }
 
@@ -89,8 +90,8 @@ public:
 
     if (!mFailed) {
       // The correct parentObject has to be set by the mEncodeCompleteCallback.
-      nsRefPtr<File> blob =
-        File::CreateMemoryFile(nullptr, mImgData, mImgSize, mType);
+      nsRefPtr<Blob> blob =
+        Blob::CreateMemoryBlob(nullptr, mImgData, mImgSize, mType);
       MOZ_ASSERT(blob);
 
       rv = mEncodeCompleteCallback->ReceiveBlob(blob.forget());
@@ -391,7 +392,8 @@ ImageEncoder::ExtractDataInternal(const nsAString& aType,
                                   aOptions);
     } else {
       RefPtr<gfx::DataSourceSurface> dataSurface;
-      dataSurface = GetBRGADataSourceSurfaceSync(aImage);
+      RefPtr<layers::Image> image(aImage);
+      dataSurface = GetBRGADataSourceSurfaceSync(image.forget());
 
       DataSourceSurface::MappedSurface map;
       if (!dataSurface->Map(gfx::DataSourceSurface::MapType::READ, &map)) {

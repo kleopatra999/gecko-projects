@@ -22,10 +22,10 @@ class D3D9SurfaceImage : public Image {
 public:
 
   struct Data {
-    Data(IDirect3DSurface9* aSurface, const nsIntRect& aRegion)
+    Data(IDirect3DSurface9* aSurface, const gfx::IntRect& aRegion)
       : mSurface(aSurface), mRegion(aRegion) {}
     RefPtr<IDirect3DSurface9> mSurface;
-    nsIntRect mRegion;
+    gfx::IntRect mRegion;
   };
 
   D3D9SurfaceImage();
@@ -40,7 +40,7 @@ public:
 
   gfx::IntSize GetSize() override;
 
-  virtual TemporaryRef<gfx::SourceSurface> GetAsSourceSurface() override;
+  virtual already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override;
 
   virtual TextureClient* GetTextureClient(CompositableClient* aClient) override;
 

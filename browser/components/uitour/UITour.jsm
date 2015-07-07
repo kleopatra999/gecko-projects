@@ -12,6 +12,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
+Cu.import("resource://gre/modules/TelemetryController.jsm");
 
 Cu.importGlobalProperties(["URL"]);
 
@@ -27,13 +28,19 @@ XPCOMUtils.defineLazyModuleGetter(this, "BrowserUITelemetry",
   "resource:///modules/BrowserUITelemetry.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Metrics",
   "resource://gre/modules/Metrics.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode",
+  "resource://gre/modules/ReaderMode.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ReaderParent",
+  "resource:///modules/ReaderParent.jsm");
 
 // See LOG_LEVELS in Console.jsm. Common examples: "All", "Info", "Warn", & "Error".
 const PREF_LOG_LEVEL      = "browser.uitour.loglevel";
 const PREF_SEENPAGEIDS    = "browser.uitour.seenPageIDs";
+const PREF_READERVIEW_TRIGGER = "browser.uitour.readerViewTrigger";
 
 const BACKGROUND_PAGE_ACTIONS_ALLOWED = new Set([
   "endUrlbarCapture",
+  "forceShowReaderIcon",
   "getConfiguration",
   "getTreatmentTag",
   "hideHighlight",
@@ -64,8 +71,7 @@ const TARGET_SEARCHENGINE_PREFIX = "searchEngine-";
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   let ConsoleAPI = Cu.import("resource://gre/modules/devtools/Console.jsm", {}).ConsoleAPI;
   let consoleOptions = {
-    // toLowerCase is because the loglevel values use title case to be compatible with Log.jsm.
-    maxLogLevel: Services.prefs.getCharPref(PREF_LOG_LEVEL).toLowerCase(),
+    maxLogLevelPref: PREF_LOG_LEVEL,
     prefix: "UITour",
   };
   return new ConsoleAPI(consoleOptions);
@@ -90,12 +96,12 @@ this.UITour = {
   targets: new Map([
     ["accountStatus", {
       query: (aDocument) => {
-        let statusButton = aDocument.getElementById("PanelUI-fxa-status");
+        let statusButton = aDocument.getElementById("PanelUI-fxa-label");
         return aDocument.getAnonymousElementByAttribute(statusButton,
                                                         "class",
                                                         "toolbarbutton-icon");
       },
-      widgetName: "PanelUI-fxa-status",
+      widgetName: "PanelUI-fxa-label",
     }],
     ["addons",      {query: "#add-ons-button"}],
     ["appMenu",     {
@@ -185,8 +191,14 @@ this.UITour = {
         return loopBrowser.contentDocument.querySelector(".signin-link");
       },
     }],
+    ["pocket", {
+      allowAdd: true,
+      query: "#pocket-button",
+      widgetName: "pocket-button",
+    }],
     ["privateWindow",  {query: "#privatebrowsing-button"}],
     ["quit",        {query: "#PanelUI-quit"}],
+    ["readerMode-urlBar", {query: "#reader-mode-button"}],
     ["search",      {
       infoPanelOffsetX: 18,
       infoPanelPosition: "after_start",
@@ -341,6 +353,22 @@ this.UITour = {
                                JSON.stringify([...this.seenPageIDs]));
   },
 
+  get _readerViewTriggerRegEx() {
+    delete this._readerViewTriggerRegEx;
+    let readerViewUITourTrigger = Services.prefs.getCharPref(PREF_READERVIEW_TRIGGER);
+    return this._readerViewTriggerRegEx = new RegExp(readerViewUITourTrigger, "i");
+  },
+
+  onLocationChange: function(aLocation) {
+    // The ReadingList/ReaderView tour page is expected to run in Reader View,
+    // which disables JavaScript on the page. To get around that, we
+    // automatically start a pre-defined tour on page load.
+    let originalUrl = ReaderMode.getOriginalUrl(aLocation);
+    if (this._readerViewTriggerRegEx.test(originalUrl)) {
+      this.startSubTour("readinglist");
+    }
+  },
+
   onPageEvent: function(aMessage, aEvent) {
     let browser = aMessage.target;
     let window = browser.ownerDocument.defaultView;
@@ -402,7 +430,7 @@ this.UITour = {
 
         // We don't want to allow BrowserUITelemetry.BUCKET_SEPARATOR in the
         // pageID, as it could make parsing the telemetry bucket name difficult.
-        if (data.pageID.contains(BrowserUITelemetry.BUCKET_SEPARATOR)) {
+        if (data.pageID.includes(BrowserUITelemetry.BUCKET_SEPARATOR)) {
           log.warn("registerPageID: Invalid page ID specified");
           break;
         }
@@ -675,6 +703,34 @@ this.UITour = {
       case "ping": {
         if (typeof data.callbackID == "string")
           this.sendPageCallback(messageManager, data.callbackID);
+        break;
+      }
+
+      case "forceShowReaderIcon": {
+        ReaderParent.forceShowReaderIcon(browser);
+        break;
+      }
+
+      case "toggleReaderMode": {
+        let targetPromise = this.getTarget(window, "readerMode-urlBar");
+        targetPromise.then(target => {
+          ReaderParent.toggleReaderMode({target: target.node});
+        });
+        break;
+      }
+
+      case "setDefaultBrowser": {
+        let shell = Components.classes["@mozilla.org/browser/shell-service;1"]
+                              .getService(Components.interfaces.nsIShellService);
+        shell.setDefaultBrowser(true, false);
+        break;
+      }
+
+      case "isDefaultBrowser": {
+        let shell = Components.classes["@mozilla.org/browser/shell-service;1"]
+                              .getService(Components.interfaces.nsIShellService);
+        let isDefault = shell.isDefaultBrowser(false);
+        this.sendPageCallback(messageManager, data.callbackID, { value: isDefault });
         break;
       }
     }
@@ -1433,6 +1489,12 @@ this.UITour = {
                                        showInfoPanel.bind(this, this._correctAnchor(aAnchor.node)));
   },
 
+  isInfoOnTarget(aChromeWindow, aTargetName) {
+    let document = aChromeWindow.document;
+    let tooltip = document.getElementById("UITourTooltip");
+    return tooltip.getAttribute("targetName") == aTargetName && tooltip.state != "closed";
+  },
+
   hideInfo: function(aWindow) {
     let document = aWindow.document;
 
@@ -1508,6 +1570,46 @@ this.UITour = {
       this.getTarget(aWindow, "searchProvider").then(target => {
         openMenuButton(target.node);
       }).catch(log.error);
+    } else if (aMenuName == "pocket") {
+      this.getTarget(aWindow, "pocket").then(Task.async(function* onPocketTarget(target) {
+        let widgetGroupWrapper = CustomizableUI.getWidget(target.widgetName);
+        if (widgetGroupWrapper.type != "view" || !widgetGroupWrapper.viewId) {
+          log.error("Can't open the pocket menu without a view");
+          return;
+        }
+        let placement = CustomizableUI.getPlacementOfWidget(target.widgetName);
+        if (!placement || !placement.area) {
+          log.error("Can't open the pocket menu without a placement");
+          return;
+        }
+
+        if (placement.area == CustomizableUI.AREA_PANEL) {
+          // Open the appMenu and wait for it if it's not already opened or showing a subview.
+          yield new Promise((resolve, reject) => {
+            if (aWindow.PanelUI.panel.state != "closed") {
+              if (aWindow.PanelUI.multiView.showingSubView) {
+                reject("A subview is already showing");
+                return;
+              }
+
+              resolve();
+              return;
+            }
+
+            aWindow.PanelUI.panel.addEventListener("popupshown", function onShown() {
+              aWindow.PanelUI.panel.removeEventListener("popupshown", onShown);
+              resolve();
+            });
+
+            aWindow.PanelUI.show();
+          });
+        }
+
+        let widgetWrapper = widgetGroupWrapper.forWindow(aWindow);
+        aWindow.PanelUI.showSubView(widgetGroupWrapper.viewId,
+                                    widgetWrapper.anchor,
+                                    placement.area);
+      })).catch(log.error);
     }
   },
 
@@ -1712,6 +1814,20 @@ this.UITour = {
     });
   },
 
+  startSubTour: function (aFeature) {
+    if (aFeature != "string") {
+      log.error("startSubTour: No feature option specified");
+      return;
+    }
+
+    if (aFeature == "readinglist") {
+      ReaderParent.showReaderModeInfoPanel(browser);
+    } else {
+      log.error("startSubTour: Unknown feature option specified");
+      return;
+    }
+  },
+
   addNavBarWidget: function (aTarget, aMessageManager, aCallbackID) {
     if (aTarget.node) {
       log.error("addNavBarWidget: can't add a widget already present:", aTarget);
@@ -1879,6 +1995,16 @@ const DAILY_DISCRETE_TEXT_FIELD = Metrics.Storage.FIELD_DAILY_DISCRETE_TEXT;
  */
 const UITourHealthReport = {
   recordTreatmentTag: function(tag, value) {
+  TelemetryController.submitExternalPing("uitour-tag",
+    {
+      version: 1,
+      tagName: tag,
+      tagValue: value,
+    },
+    {
+      addClientId: true,
+      addEnvironment: true,
+    });
 #ifdef MOZ_SERVICES_HEALTHREPORT
     Task.spawn(function*() {
       let reporter = Cc["@mozilla.org/datareporting/service;1"]

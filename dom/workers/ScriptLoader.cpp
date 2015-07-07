@@ -1,4 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,9 +10,11 @@
 #include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsIHttpChannel.h"
+#include "nsIHttpChannelInternal.h"
 #include "nsIInputStreamPump.h"
 #include "nsIIOService.h"
 #include "nsIProtocolHandler.h"
+#include "nsIScriptError.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIStreamLoader.h"
 #include "nsIStreamListenerTee.h"
@@ -37,16 +40,21 @@
 #include "mozilla/LoadContext.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/dom/CacheBinding.h"
+#include "mozilla/dom/cache/CacheTypes.h"
 #include "mozilla/dom/cache/Cache.h"
 #include "mozilla/dom/cache/CacheStorage.h"
+#include "mozilla/dom/ChannelInfo.h"
 #include "mozilla/dom/Exceptions.h"
 #include "mozilla/dom/InternalResponse.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/PromiseNativeHandler.h"
 #include "mozilla/dom/Response.h"
+#include "mozilla/UniquePtr.h"
 #include "Principal.h"
 #include "WorkerFeature.h"
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
+#include "WorkerScope.h"
 
 #define MAX_CONCURRENT_SCRIPTS 1000
 
@@ -57,6 +65,9 @@ using mozilla::dom::cache::CacheStorage;
 using mozilla::dom::Promise;
 using mozilla::dom::PromiseNativeHandler;
 using mozilla::dom::workers::exceptions::ThrowDOMExceptionForNSResult;
+using mozilla::ErrorResult;
+using mozilla::ipc::PrincipalInfo;
+using mozilla::UniquePtr;
 
 namespace {
 
@@ -94,6 +105,7 @@ ChannelFromScriptURL(nsIPrincipal* principal,
                      const nsAString& aScriptURL,
                      bool aIsMainScript,
                      WorkerScriptType aWorkerScriptType,
+                     nsContentPolicyType aContentPolicyType,
                      nsIChannel** aChannel)
 {
   AssertIsOnMainThread();
@@ -110,7 +122,7 @@ ChannelFromScriptURL(nsIPrincipal* principal,
   // If we're part of a document then check the content load policy.
   if (parentDoc) {
     int16_t shouldLoad = nsIContentPolicy::ACCEPT;
-    rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_SCRIPT, uri,
+    rv = NS_CheckContentLoadPolicy(aContentPolicyType, uri,
                                    principal, parentDoc,
                                    NS_LITERAL_CSTRING("text/javascript"),
                                    nullptr, &shouldLoad,
@@ -165,7 +177,7 @@ ChannelFromScriptURL(nsIPrincipal* principal,
                        uri,
                        parentDoc,
                        nsILoadInfo::SEC_NORMAL,
-                       nsIContentPolicy::TYPE_SCRIPT,
+                       aContentPolicyType,
                        loadGroup,
                        nullptr, // aCallbacks
                        flags,
@@ -180,7 +192,7 @@ ChannelFromScriptURL(nsIPrincipal* principal,
                        uri,
                        principal,
                        nsILoadInfo::SEC_NORMAL,
-                       nsIContentPolicy::TYPE_SCRIPT,
+                       aContentPolicyType,
                        loadGroup,
                        nullptr, // aCallbacks
                        flags,
@@ -188,6 +200,14 @@ ChannelFromScriptURL(nsIPrincipal* principal,
   }
 
   NS_ENSURE_SUCCESS(rv, rv);
+
+  if (nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel)) {
+    rv = nsContentUtils::SetFetchReferrerURIWithPolicy(principal, parentDoc,
+                                                       httpChannel);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+  }
 
   channel.forget(aChannel);
   return rv;
@@ -312,6 +332,7 @@ class CacheCreator final : public PromiseNativeHandler
 public:
   explicit CacheCreator(WorkerPrivate* aWorkerPrivate)
     : mCacheName(aWorkerPrivate->ServiceWorkerCacheName())
+    , mPrivateBrowsing(aWorkerPrivate->IsInPrivateBrowsing())
   {
     MOZ_ASSERT(aWorkerPrivate->IsServiceWorker());
     MOZ_ASSERT(aWorkerPrivate->LoadScriptAsPartOfLoadingServiceWorkerScript());
@@ -372,6 +393,7 @@ private:
   nsTArray<nsRefPtr<CacheScriptLoader>> mLoaders;
 
   nsString mCacheName;
+  bool mPrivateBrowsing;
 };
 
 class CacheScriptLoader final : public PromiseNativeHandler
@@ -420,6 +442,8 @@ private:
   bool mFailed;
   nsCOMPtr<nsIInputStreamPump> mPump;
   nsCOMPtr<nsIURI> mBaseURI;
+  mozilla::dom::ChannelInfo mChannelInfo;
+  UniquePtr<PrincipalInfo> mPrincipalInfo;
 };
 
 NS_IMPL_ISUPPORTS(CacheScriptLoader, nsIStreamLoaderObserver)
@@ -457,7 +481,8 @@ private:
 
 class ScriptLoaderRunnable final : public WorkerFeature,
                                    public nsIRunnable,
-                                   public nsIStreamLoaderObserver
+                                   public nsIStreamLoaderObserver,
+                                   public nsIRequestObserver
 {
   friend class ScriptExecutorRunnable;
   friend class CachePromiseHandler;
@@ -467,6 +492,7 @@ class ScriptLoaderRunnable final : public WorkerFeature,
   nsCOMPtr<nsIEventTarget> mSyncLoopTarget;
   nsTArray<ScriptLoadInfo> mLoadInfos;
   nsRefPtr<CacheCreator> mCacheCreator;
+  nsCOMPtr<nsIInputStream> mReader;
   bool mIsMainScript;
   WorkerScriptType mWorkerScriptType;
   bool mCanceled;
@@ -557,6 +583,91 @@ private:
     nsresult rv = OnStreamCompleteInternal(aLoader, aContext, aStatus,
                                            aStringLen, aString, loadInfo);
     LoadingFinished(index, rv);
+    return NS_OK;
+  }
+
+  NS_IMETHOD
+  OnStartRequest(nsIRequest* aRequest, nsISupports* aContext) override
+  {
+    AssertIsOnMainThread();
+
+    nsCOMPtr<nsISupportsPRUint32> indexSupports(do_QueryInterface(aContext));
+    MOZ_ASSERT(indexSupports, "This should never fail!");
+
+    uint32_t index = UINT32_MAX;
+    if (NS_FAILED(indexSupports->GetData(&index)) ||
+        index >= mLoadInfos.Length()) {
+      MOZ_CRASH("Bad index!");
+    }
+
+    ScriptLoadInfo& loadInfo = mLoadInfos[index];
+
+    nsCOMPtr<nsIChannel> channel = do_QueryInterface(aRequest);
+    MOZ_ASSERT(channel == loadInfo.mChannel);
+
+    // We synthesize the result code, but its never exposed to content.
+    nsRefPtr<mozilla::dom::InternalResponse> ir =
+      new mozilla::dom::InternalResponse(200, NS_LITERAL_CSTRING("OK"));
+    ir->SetBody(mReader);
+
+    // Set the channel info of the channel on the response so that it's
+    // saved in the cache.
+    ir->InitChannelInfo(channel);
+
+    // Save the principal of the channel since its URI encodes the script URI
+    // rather than the ServiceWorkerRegistrationInfo URI.
+    nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
+    NS_ASSERTION(ssm, "Should never be null!");
+
+    nsCOMPtr<nsIPrincipal> channelPrincipal;
+    nsresult rv = ssm->GetChannelResultPrincipal(channel, getter_AddRefs(channelPrincipal));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      channel->Cancel(rv);
+      return rv;
+    }
+
+    UniquePtr<PrincipalInfo> principalInfo(new PrincipalInfo());
+    rv = PrincipalToPrincipalInfo(channelPrincipal, principalInfo.get());
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      channel->Cancel(rv);
+      return rv;
+    }
+
+    ir->SetPrincipalInfo(Move(principalInfo));
+
+    nsRefPtr<mozilla::dom::Response> response =
+      new mozilla::dom::Response(mCacheCreator->Global(), ir);
+
+    mozilla::dom::RequestOrUSVString request;
+
+    MOZ_ASSERT(!loadInfo.mFullURL.IsEmpty());
+    request.SetAsUSVString().Rebind(loadInfo.mFullURL.Data(),
+                                    loadInfo.mFullURL.Length());
+
+    ErrorResult error;
+    nsRefPtr<Promise> cachePromise =
+      mCacheCreator->Cache_()->Put(request, *response, error);
+    if (NS_WARN_IF(error.Failed())) {
+      nsresult rv = error.StealNSResult();
+      channel->Cancel(rv);
+      return rv;
+    }
+
+    nsRefPtr<CachePromiseHandler> promiseHandler =
+      new CachePromiseHandler(this, loadInfo, index);
+    cachePromise->AppendNativeHandler(promiseHandler);
+
+    loadInfo.mCachePromise.swap(cachePromise);
+    loadInfo.mCacheStatus = ScriptLoadInfo::WritingToCache;
+
+    return NS_OK;
+  }
+
+  NS_IMETHOD
+  OnStopRequest(nsIRequest* aRequest, nsISupports* aContext,
+                nsresult aStatusCode) override
+  {
+    // Nothing to do here!
     return NS_OK;
   }
 
@@ -740,7 +851,9 @@ private:
     if (!channel) {
       rv = ChannelFromScriptURL(principal, baseURI, parentDoc, loadGroup, ios,
                                 secMan, loadInfo.mURL, IsMainWorkerScript(),
-                                mWorkerScriptType, getter_AddRefs(channel));
+                                mWorkerScriptType,
+                                mWorkerPrivate->ContentPolicyType(),
+                                getter_AddRefs(channel));
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
@@ -767,64 +880,45 @@ private:
       return rv;
     }
 
+    // If we are loading a script for a ServiceWorker then we must not
+    // try to intercept it.  If the interception matches the current
+    // ServiceWorker's scope then we could deadlock the load.
+    if (mWorkerPrivate->IsServiceWorker()) {
+      nsCOMPtr<nsIHttpChannelInternal> internal = do_QueryInterface(channel);
+      if (internal) {
+        internal->ForceNoIntercept();
+      }
+    }
+
     if (loadInfo.mCacheStatus != ScriptLoadInfo::ToBeCached) {
       rv = channel->AsyncOpen(loader, indexSupports);
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
     } else {
-      nsCOMPtr<nsIInputStream> reader;
       nsCOMPtr<nsIOutputStream> writer;
 
       // In case we return early.
       loadInfo.mCacheStatus = ScriptLoadInfo::Cancel;
 
-      rv = NS_NewPipe(getter_AddRefs(reader), getter_AddRefs(writer), 0,
+      rv = NS_NewPipe(getter_AddRefs(mReader), getter_AddRefs(writer), 0,
                       UINT32_MAX, // unlimited size to avoid writer WOULD_BLOCK case
                       true, false); // non-blocking reader, blocking writer
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
 
-      // We synthesize the result code, but its never exposed to content.
-      nsRefPtr<InternalResponse> ir =
-        new InternalResponse(200, NS_LITERAL_CSTRING("OK"));
-      ir->SetBody(reader);
-
       nsCOMPtr<nsIStreamListenerTee> tee =
         do_CreateInstance(NS_STREAMLISTENERTEE_CONTRACTID);
-      rv = tee->Init(loader, writer, nullptr);
+      rv = tee->Init(loader, writer, this);
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
 
-      rv = channel->AsyncOpen(tee, indexSupports);
+      nsresult rv = channel->AsyncOpen(tee, indexSupports);
       if (NS_WARN_IF(NS_FAILED(rv))) {
         return rv;
       }
-
-      nsRefPtr<Response> response = new Response(mCacheCreator->Global(), ir);
-
-      RequestOrUSVString request;
-
-      MOZ_ASSERT(!loadInfo.mFullURL.IsEmpty());
-      request.SetAsUSVString().Rebind(loadInfo.mFullURL.Data(),
-                                      loadInfo.mFullURL.Length());
-
-      ErrorResult error;
-      nsRefPtr<Promise> cachePromise =
-        mCacheCreator->Cache_()->Put(request, *response, error);
-      if (NS_WARN_IF(error.Failed())) {
-        channel->Cancel(error.ErrorCode());
-        return error.ErrorCode();
-      }
-
-      nsRefPtr<CachePromiseHandler> promiseHandler =
-        new CachePromiseHandler(this, loadInfo, aIndex);
-      cachePromise->AppendNativeHandler(promiseHandler);
-
-      loadInfo.mCachePromise.swap(cachePromise);
-      loadInfo.mCacheStatus = ScriptLoadInfo::WritingToCache;
     }
 
     loadInfo.mChannel.swap(channel);
@@ -883,7 +977,12 @@ private:
       return rv;
     }
 
-    if (!aLoadInfo.mScriptTextBuf || !aLoadInfo.mScriptTextLength) {
+    if (!aLoadInfo.mScriptTextLength && !aLoadInfo.mScriptTextBuf) {
+      nsContentUtils::ReportToConsole(nsIScriptError::warningFlag,
+                                      NS_LITERAL_CSTRING("DOM"), parentDoc,
+                                      nsContentUtils::eDOM_PROPERTIES,
+                                      "EmptyWorkerSourceWarning");
+    } else if (!aLoadInfo.mScriptTextBuf) {
       return NS_ERROR_FAILURE;
     }
 
@@ -911,6 +1010,11 @@ private:
       // Take care of the base URI first.
       mWorkerPrivate->SetBaseURI(finalURI);
 
+      // Store the channel info if needed.
+      if (mWorkerPrivate->IsServiceWorker()) {
+        mWorkerPrivate->InitChannelInfo(channel);
+      }
+
       // Now to figure out which principal to give this worker.
       WorkerPrivate* parent = mWorkerPrivate->GetParent();
 
@@ -933,37 +1037,34 @@ private:
       NS_ENSURE_SUCCESS(rv, rv);
       MOZ_ASSERT(channelLoadGroup);
 
-      // See if this is a resource URI. Since JSMs usually come from resource://
-      // URIs we're currently considering all URIs with the URI_IS_UI_RESOURCE
-      // flag as valid for creating privileged workers.
-      if (!nsContentUtils::IsSystemPrincipal(channelPrincipal)) {
-        bool isResource;
-        rv = NS_URIChainHasFlags(finalURI,
-                                 nsIProtocolHandler::URI_IS_UI_RESOURCE,
-                                 &isResource);
-        NS_ENSURE_SUCCESS(rv, rv);
-
-        if (isResource) {
-          rv = ssm->GetSystemPrincipal(getter_AddRefs(channelPrincipal));
-          NS_ENSURE_SUCCESS(rv, rv);
-        }
-      }
-
       // If the load principal is the system principal then the channel
       // principal must also be the system principal (we do not allow chrome
-      // code to create workers with non-chrome scripts). Otherwise this channel
-      // principal must be same origin with the load principal (we check again
-      // here in case redirects changed the location of the script).
+      // code to create workers with non-chrome scripts, and if we ever decide
+      // to change this we need to make sure we don't always set
+      // mPrincipalIsSystem to true in WorkerPrivate::GetLoadInfo()). Otherwise
+      // this channel principal must be same origin with the load principal (we
+      // check again here in case redirects changed the location of the script).
       if (nsContentUtils::IsSystemPrincipal(loadPrincipal)) {
         if (!nsContentUtils::IsSystemPrincipal(channelPrincipal)) {
-          return NS_ERROR_DOM_BAD_URI;
+          // See if this is a resource URI. Since JSMs usually come from
+          // resource:// URIs we're currently considering all URIs with the
+          // URI_IS_UI_RESOURCE flag as valid for creating privileged workers.
+          bool isResource;
+          rv = NS_URIChainHasFlags(finalURI,
+                                   nsIProtocolHandler::URI_IS_UI_RESOURCE,
+                                   &isResource);
+          NS_ENSURE_SUCCESS(rv, rv);
+
+          if (isResource) {
+            // Assign the system principal to the resource:// worker only if it
+            // was loaded from code using the system principal.
+            channelPrincipal = loadPrincipal;
+          } else {
+            return NS_ERROR_DOM_BAD_URI;
+          }
         }
       }
       else  {
-        nsCString scheme;
-        rv = finalURI->GetScheme(scheme);
-        NS_ENSURE_SUCCESS(rv, rv);
-
         // We exempt data urls and other URI's that inherit their
         // principal again.
         if (NS_FAILED(loadPrincipal->CheckMayLoad(finalURI, false, true))) {
@@ -984,7 +1085,9 @@ private:
 
   void
   DataReceivedFromCache(uint32_t aIndex, const uint8_t* aString,
-                        uint32_t aStringLen)
+                        uint32_t aStringLen,
+                        const mozilla::dom::ChannelInfo& aChannelInfo,
+                        UniquePtr<PrincipalInfo> aPrincipalInfo)
   {
     AssertIsOnMainThread();
     MOZ_ASSERT(aIndex < mLoadInfos.Length());
@@ -1007,6 +1110,20 @@ private:
       if (NS_SUCCEEDED(rv)) {
         mWorkerPrivate->SetBaseURI(finalURI);
       }
+
+      mozilla::DebugOnly<nsIPrincipal*> principal = mWorkerPrivate->GetPrincipal();
+      MOZ_ASSERT(principal);
+      nsILoadGroup* loadGroup = mWorkerPrivate->GetLoadGroup();
+      MOZ_ASSERT(loadGroup);
+
+      nsCOMPtr<nsIPrincipal> responsePrincipal =
+        PrincipalInfoToPrincipal(*aPrincipalInfo);
+      mozilla::DebugOnly<bool> equal = false;
+      MOZ_ASSERT(responsePrincipal && NS_SUCCEEDED(responsePrincipal->Equals(principal, &equal)));
+      MOZ_ASSERT(equal);
+
+      mWorkerPrivate->InitChannelInfo(aChannelInfo);
+      mWorkerPrivate->SetPrincipal(responsePrincipal, loadGroup);
     }
 
     if (NS_SUCCEEDED(rv)) {
@@ -1087,7 +1204,9 @@ private:
   }
 };
 
-NS_IMPL_ISUPPORTS(ScriptLoaderRunnable, nsIRunnable, nsIStreamLoaderObserver)
+NS_IMPL_ISUPPORTS(ScriptLoaderRunnable, nsIRunnable,
+                                        nsIStreamLoaderObserver,
+                                        nsIRequestObserver)
 
 void
 CachePromiseHandler::ResolvedCallback(JSContext* aCx,
@@ -1135,7 +1254,7 @@ CacheCreator::CreateCacheStorage(nsIPrincipal* aPrincipal)
   nsIXPConnect* xpc = nsContentUtils::XPConnect();
   MOZ_ASSERT(xpc, "This should never be null!");
 
-  AutoSafeJSContext cx;
+  mozilla::AutoSafeJSContext cx;
   nsCOMPtr<nsIXPConnectJSObjectHolder> sandbox;
   nsresult rv = xpc->CreateSandbox(cx, aPrincipal, getter_AddRefs(sandbox));
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -1147,13 +1266,25 @@ CacheCreator::CreateCacheStorage(nsIPrincipal* aPrincipal)
     return NS_ERROR_FAILURE;
   }
 
+  // If we're in private browsing mode, don't even try to create the
+  // CacheStorage.  Instead, just fail immediately to terminate the
+  // ServiceWorker load.
+  if (NS_WARN_IF(mPrivateBrowsing)) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  // Create a CacheStorage bypassing its trusted origin checks.  The
+  // ServiceWorker has already performed its own checks before getting
+  // to this point.
   ErrorResult error;
   mCacheStorage =
-    CacheStorage::CreateOnMainThread(cache::CHROME_ONLY_NAMESPACE,
+    CacheStorage::CreateOnMainThread(mozilla::dom::cache::CHROME_ONLY_NAMESPACE,
                                      mSandboxGlobalObject,
-                                     aPrincipal, error);
+                                     aPrincipal, mPrivateBrowsing,
+                                     true /* force trusted origin */,
+                                     error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   return NS_OK;
@@ -1174,7 +1305,7 @@ CacheCreator::Load(nsIPrincipal* aPrincipal)
   MOZ_ASSERT(!mCacheName.IsEmpty());
   nsRefPtr<Promise> promise = mCacheStorage->Open(mCacheName, error);
   if (NS_WARN_IF(error.Failed())) {
-    return error.ErrorCode();
+    return error.StealNSResult();
   }
 
   promise->AppendNativeHandler(this);
@@ -1300,16 +1431,16 @@ CacheScriptLoader::Load(Cache* aCache)
   MOZ_ASSERT(mLoadInfo.mFullURL.IsEmpty());
   CopyUTF8toUTF16(spec, mLoadInfo.mFullURL);
 
-  RequestOrUSVString request;
+  mozilla::dom::RequestOrUSVString request;
   request.SetAsUSVString().Rebind(mLoadInfo.mFullURL.Data(),
                                   mLoadInfo.mFullURL.Length());
 
-  CacheQueryOptions params;
+  mozilla::dom::CacheQueryOptions params;
 
   ErrorResult error;
   nsRefPtr<Promise> promise = aCache->Match(request, params, error);
   if (NS_WARN_IF(error.Failed())) {
-    Fail(error.ErrorCode());
+    Fail(error.StealNSResult());
     return;
   }
 
@@ -1346,7 +1477,7 @@ CacheScriptLoader::ResolvedCallback(JSContext* aCx,
   MOZ_ASSERT(aValue.isObject());
 
   JS::Rooted<JSObject*> obj(aCx, &aValue.toObject());
-  Response* response = nullptr;
+  mozilla::dom::Response* response = nullptr;
   nsresult rv = UNWRAP_OBJECT(Response, obj, response);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     Fail(rv);
@@ -1355,10 +1486,16 @@ CacheScriptLoader::ResolvedCallback(JSContext* aCx,
 
   nsCOMPtr<nsIInputStream> inputStream;
   response->GetBody(getter_AddRefs(inputStream));
+  mChannelInfo = response->GetChannelInfo();
+  const UniquePtr<PrincipalInfo>& pInfo = response->GetPrincipalInfo();
+  if (pInfo) {
+    mPrincipalInfo = mozilla::MakeUnique<PrincipalInfo>(*pInfo);
+  }
 
   if (!inputStream) {
     mLoadInfo.mCacheStatus = ScriptLoadInfo::Cached;
-    mRunnable->DataReceivedFromCache(mIndex, (uint8_t*)"", 0);
+    mRunnable->DataReceivedFromCache(mIndex, (uint8_t*)"", 0, mChannelInfo,
+                                     Move(mPrincipalInfo));
     return;
   }
 
@@ -1414,7 +1551,9 @@ CacheScriptLoader::OnStreamComplete(nsIStreamLoader* aLoader, nsISupports* aCont
 
   mLoadInfo.mCacheStatus = ScriptLoadInfo::Cached;
 
-  mRunnable->DataReceivedFromCache(mIndex, aString, aStringLen);
+  MOZ_ASSERT(mPrincipalInfo);
+  mRunnable->DataReceivedFromCache(mIndex, aString, aStringLen, mChannelInfo,
+                                   Move(mPrincipalInfo));
   return NS_OK;
 }
 
@@ -1461,6 +1600,8 @@ public:
       scriptloader::ChannelFromScriptURLMainThread(principal, baseURI,
                                                    parentDoc, loadGroup,
                                                    mScriptURL,
+                                                   // Nested workers are always dedicated.
+                                                   nsIContentPolicy::TYPE_INTERNAL_WORKER,
                                                    getter_AddRefs(channel));
     if (NS_SUCCEEDED(mResult)) {
       channel.forget(mChannel);
@@ -1527,27 +1668,24 @@ ScriptExecutorRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
     }
   }
 
-  JS::Rooted<JSObject*> global(aCx, JS::CurrentGlobalOrNull(aCx));
-  NS_ASSERTION(global, "Must have a global by now!");
+  JS::Rooted<JSObject*> global(aCx);
 
-  // Determine whether we want to be discarding source on this global to save
-  // memory. It would make more sense to do this when we create the global, but
-  // the information behind UsesSystemPrincipal() et al isn't finalized until
-  // the call to SetPrincipal during the first script load. After that, however,
-  // it never changes. So we can just idempotently set the bits here.
-  //
-  // Note that we read a pref that is cached on the main thread. This is benignly
-  // racey.
-  if (xpc::ShouldDiscardSystemSource()) {
-    bool discard = aWorkerPrivate->UsesSystemPrincipal() ||
-                   aWorkerPrivate->IsInPrivilegedApp();
-    JS::CompartmentOptionsRef(global).setDiscardSource(discard);
+  if (mIsWorkerScript) {
+    WorkerGlobalScope* globalScope =
+      aWorkerPrivate->GetOrCreateGlobalScope(aCx);
+    if (NS_WARN_IF(!globalScope)) {
+      NS_WARNING("Failed to make global!");
+      return false;
+    }
+
+    global.set(globalScope->GetWrapper());
+  } else {
+    global.set(JS::CurrentGlobalOrNull(aCx));
   }
 
-  // Similar to the above.
-  if (xpc::ExtraWarningsForSystemJS() && aWorkerPrivate->UsesSystemPrincipal()) {
-      JS::CompartmentOptionsRef(global).extraWarningsOverride().set(true);
-  }
+  MOZ_ASSERT(global);
+
+  JSAutoCompartment ac(aCx, global);
 
   for (uint32_t index = mFirstIndex; index <= mLastIndex; index++) {
     ScriptLoadInfo& loadInfo = loadInfos.ElementAt(index);
@@ -1675,6 +1813,7 @@ ChannelFromScriptURLMainThread(nsIPrincipal* aPrincipal,
                                nsIDocument* aParentDoc,
                                nsILoadGroup* aLoadGroup,
                                const nsAString& aScriptURL,
+                               nsContentPolicyType aContentPolicyType,
                                nsIChannel** aChannel)
 {
   AssertIsOnMainThread();
@@ -1685,7 +1824,8 @@ ChannelFromScriptURLMainThread(nsIPrincipal* aPrincipal,
   NS_ASSERTION(secMan, "This should never be null!");
 
   return ChannelFromScriptURL(aPrincipal, aBaseURI, aParentDoc, aLoadGroup,
-                              ios, secMan, aScriptURL, true, WorkerScript, aChannel);
+                              ios, secMan, aScriptURL, true, WorkerScript,
+                              aContentPolicyType, aChannel);
 }
 
 nsresult

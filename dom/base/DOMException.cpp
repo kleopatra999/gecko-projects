@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -720,6 +721,18 @@ DOMException::Create(nsresult aRv)
   NSResultToNameAndMessage(aRv, name, message, &code);
   nsRefPtr<DOMException> inst =
     new DOMException(aRv, message, name, code);
+  return inst.forget();
+}
+
+/* static */already_AddRefed<DOMException>
+DOMException::Create(nsresult aRv, const nsACString& aMessage)
+{
+  nsCString name;
+  nsCString message;
+  uint16_t code;
+  NSResultToNameAndMessage(aRv, name, message, &code);
+  nsRefPtr<DOMException> inst =
+    new DOMException(aRv, aMessage, name, code);
   return inst.forget();
 }
 

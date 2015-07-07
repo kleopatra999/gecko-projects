@@ -27,7 +27,6 @@ class nsPresContext;
 class nsIPresShell;
 class nsIContent;
 class nsIAtom;
-class nsIScrollFrameInternal;
 class nsPresState;
 class nsIScrollPositionListener;
 struct ScrollReflowState;
@@ -360,6 +359,7 @@ public:
   bool IsTransformingByAPZ() const {
     return mTransformingByAPZ;
   }
+  bool UsesContainerScrolling() const;
 
   void ScheduleSyntheticMouseMove();
   static void ScrollActivityCallback(nsITimer *aTimer, void* anInstance);
@@ -377,10 +377,11 @@ public:
     }
   }
   bool WantAsyncScroll() const;
-  void ComputeFrameMetrics(Layer* aLayer, nsIFrame* aContainerReferenceFrame,
-                           const ContainerLayerParameters& aParameters,
-                           nsRect* aClipRect,
-                           nsTArray<FrameMetrics>* aOutput) const;
+  Maybe<FrameMetricsAndClip> ComputeFrameMetrics(
+    Layer* aLayer, nsIFrame* aContainerReferenceFrame,
+    const ContainerLayerParameters& aParameters,
+    bool aIsForCaret) const;
+  virtual const mozilla::DisplayItemClip* ComputeScrollClip(bool aIsForCaret) const;
 
   // nsIScrollbarMediator
   void ScrollByPage(nsScrollbarFrame* aScrollbar, int32_t aDirection,
@@ -458,6 +459,10 @@ public:
   nsRect mPrevScrolledRect;
 
   FrameMetrics::ViewID mScrollParentID;
+
+  // The scroll port clip. Only valid during painting.
+  const DisplayItemClip* mAncestorClip;
+  const DisplayItemClip* mAncestorClipForCaret;
 
   bool mNeverHasVerticalScrollbar:1;
   bool mNeverHasHorizontalScrollbar:1;
@@ -832,18 +837,25 @@ public:
   virtual bool WantAsyncScroll() const override {
     return mHelper.WantAsyncScroll();
   }
-  virtual void ComputeFrameMetrics(Layer* aLayer, nsIFrame* aContainerReferenceFrame,
-                                   const ContainerLayerParameters& aParameters,
-                                   nsRect* aClipRect,
-                                   nsTArray<FrameMetrics>* aOutput) const override {
-    mHelper.ComputeFrameMetrics(aLayer, aContainerReferenceFrame,
-                                aParameters, aClipRect, aOutput);
+  virtual mozilla::Maybe<mozilla::FrameMetricsAndClip> ComputeFrameMetrics(
+    Layer* aLayer, nsIFrame* aContainerReferenceFrame,
+    const ContainerLayerParameters& aParameters,
+    bool aIsForCaret) const override
+  {
+    return mHelper.ComputeFrameMetrics(aLayer, aContainerReferenceFrame, aParameters, aIsForCaret);
+  }
+  virtual const mozilla::DisplayItemClip* ComputeScrollClip(bool aIsForCaret) const override
+  {
+    return mHelper.ComputeScrollClip(aIsForCaret);
   }
   virtual bool IsIgnoringViewportClipping() const override {
     return mHelper.IsIgnoringViewportClipping();
   }
   virtual void MarkScrollbarsDirtyForReflow() const override {
     mHelper.MarkScrollbarsDirtyForReflow();
+  }
+  virtual bool UsesContainerScrolling() const override {
+    return mHelper.UsesContainerScrolling();
   }
 
   // nsIStatefulFrame
@@ -899,6 +911,10 @@ public:
   virtual void ScrollbarActivityStarted() const override;
   virtual void ScrollbarActivityStopped() const override;
 
+  virtual bool IsScrollbarOnRight() const override {
+    return mHelper.IsScrollbarOnRight();
+  }
+
   virtual void SetTransformingByAPZ(bool aTransforming) override {
     mHelper.SetTransformingByAPZ(aTransforming);
   }
@@ -931,11 +947,11 @@ protected:
   bool InInitialReflow() const;
   
   /**
-   * Override this to return false if computed height/min-height/max-height
+   * Override this to return false if computed bsize/min-bsize/max-bsize
    * should NOT be propagated to child content.
    * nsListControlFrame uses this.
    */
-  virtual bool ShouldPropagateComputedHeightToScrolledContent() const { return true; }
+  virtual bool ShouldPropagateComputedBSizeToScrolledContent() const { return true; }
 
 private:
   friend class mozilla::ScrollFrameHelper;
@@ -1221,12 +1237,16 @@ public:
   virtual bool WantAsyncScroll() const override {
     return mHelper.WantAsyncScroll();
   }
-  virtual void ComputeFrameMetrics(Layer* aLayer, nsIFrame* aContainerReferenceFrame,
-                                   const ContainerLayerParameters& aParameters,
-                                   nsRect* aClipRect,
-                                   nsTArray<FrameMetrics>* aOutput) const override {
-    mHelper.ComputeFrameMetrics(aLayer, aContainerReferenceFrame,
-                                aParameters, aClipRect, aOutput);
+  virtual mozilla::Maybe<mozilla::FrameMetricsAndClip> ComputeFrameMetrics(
+    Layer* aLayer, nsIFrame* aContainerReferenceFrame,
+    const ContainerLayerParameters& aParameters,
+    bool aIsForCaret) const override
+  {
+    return mHelper.ComputeFrameMetrics(aLayer, aContainerReferenceFrame, aParameters, aIsForCaret);
+  }
+  virtual const mozilla::DisplayItemClip* ComputeScrollClip(bool aIsForCaret) const override
+  {
+    return mHelper.ComputeScrollClip(aIsForCaret);
   }
   virtual bool IsIgnoringViewportClipping() const override {
     return mHelper.IsIgnoringViewportClipping();
@@ -1296,8 +1316,15 @@ public:
   virtual void ScrollbarActivityStarted() const override;
   virtual void ScrollbarActivityStopped() const override;
 
+  virtual bool IsScrollbarOnRight() const override {
+    return mHelper.IsScrollbarOnRight();
+  }
+
   virtual void SetTransformingByAPZ(bool aTransforming) override {
     mHelper.SetTransformingByAPZ(aTransforming);
+  }
+  virtual bool UsesContainerScrolling() const override {
+    return mHelper.UsesContainerScrolling();
   }
   bool IsTransformingByAPZ() const override {
     return mHelper.IsTransformingByAPZ();

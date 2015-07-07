@@ -28,6 +28,7 @@
 #include "nsIDocumentEncoder.h"
 #include "nsIFactory.h"
 #include "nsIFrameUtil.h"
+#include "nsIIdleService.h"
 #include "nsHTMLStyleSheet.h"
 #include "nsILayoutDebugger.h"
 #include "nsNameSpaceManager.h"
@@ -90,12 +91,18 @@
 #include "mozilla/dom/network/UDPSocketChild.h"
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "mozilla/dom/workers/ServiceWorkerManager.h"
+#include "mozilla/dom/workers/ServiceWorkerPeriodicUpdater.h"
 #include "mozilla/dom/workers/WorkerDebuggerManager.h"
 #include "mozilla/OSFileConstants.h"
 #include "mozilla/Services.h"
 
-#ifdef MOZ_WEBSPEECH
+#ifdef MOZ_WEBSPEECH_TEST_BACKEND
 #include "mozilla/dom/FakeSpeechRecognitionService.h"
+#endif
+#ifdef MOZ_WEBSPEECH_POCKETSPHINX
+#include "mozilla/dom/PocketSphinxSpeechRecognitionService.h"
+#endif
+#ifdef MOZ_WEBSPEECH
 #include "mozilla/dom/nsSynthVoiceRegistry.h"
 #endif
 
@@ -208,7 +215,7 @@ static void Shutdown();
 #include "nsGeolocation.h"
 #include "nsDeviceSensors.h"
 #ifdef MOZ_GAMEPAD
-#include "mozilla/dom/GamepadService.h"
+#include "mozilla/dom/GamepadServiceTest.h"
 #endif
 #include "mozilla/dom/nsCSPService.h"
 #include "mozilla/dom/nsCSPContext.h"
@@ -263,6 +270,7 @@ using mozilla::dom::alarm::AlarmHalService;
 using mozilla::dom::power::PowerManagerService;
 using mozilla::dom::quota::QuotaManager;
 using mozilla::dom::workers::ServiceWorkerManager;
+using mozilla::dom::workers::ServiceWorkerPeriodicUpdater;
 using mozilla::dom::workers::WorkerDebuggerManager;
 using mozilla::dom::TCPSocketChild;
 using mozilla::dom::TCPSocketParent;
@@ -307,7 +315,9 @@ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(DOMRequestService,
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(QuotaManager,
                                          QuotaManager::FactoryCreate)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(ServiceWorkerManager,
-                                         ServiceWorkerManager::FactoryCreate)
+                                         ServiceWorkerManager::GetInstance)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(ServiceWorkerPeriodicUpdater,
+                                         ServiceWorkerPeriodicUpdater::GetSingleton)
 NS_GENERIC_FACTORY_CONSTRUCTOR(WorkerDebuggerManager)
 
 #ifdef MOZ_WIDGET_GONK
@@ -625,8 +635,11 @@ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(AudioChannelService, AudioChannelServic
 
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(DataStoreService, DataStoreService::GetOrCreate)
 
-#ifdef MOZ_WEBSPEECH
+#ifdef MOZ_WEBSPEECH_TEST_BACKEND
 NS_GENERIC_FACTORY_CONSTRUCTOR(FakeSpeechRecognitionService)
+#endif
+#ifdef MOZ_WEBSPEECH_POCKETSPHINX
+NS_GENERIC_FACTORY_CONSTRUCTOR(PocketSphinxSpeechRecognitionService)
 #endif
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsCSPContext)
@@ -748,6 +761,7 @@ NS_DEFINE_NAMED_CID(NS_TEXTEDITOR_CID);
 NS_DEFINE_NAMED_CID(DOMREQUEST_SERVICE_CID);
 NS_DEFINE_NAMED_CID(QUOTA_MANAGER_CID);
 NS_DEFINE_NAMED_CID(SERVICEWORKERMANAGER_CID);
+NS_DEFINE_NAMED_CID(SERVICEWORKERPERIODICUPDATER_CID);
 NS_DEFINE_NAMED_CID(WORKERDEBUGGERMANAGER_CID);
 #ifdef MOZ_WIDGET_GONK
 NS_DEFINE_NAMED_CID(SYSTEMWORKERMANAGER_CID);
@@ -820,8 +834,13 @@ NS_DEFINE_NAMED_CID(NS_MEDIAMANAGERSERVICE_CID);
 #ifdef MOZ_GAMEPAD
 NS_DEFINE_NAMED_CID(NS_GAMEPAD_TEST_CID);
 #endif
-#ifdef MOZ_WEBSPEECH
+#ifdef MOZ_WEBSPEECH_TEST_BACKEND
 NS_DEFINE_NAMED_CID(NS_FAKE_SPEECH_RECOGNITION_SERVICE_CID);
+#endif
+#ifdef MOZ_WEBSPEECH_POCKETSPHINX
+NS_DEFINE_NAMED_CID(NS_POCKETSPHINX_SPEECH_RECOGNITION_SERVICE_CID);
+#endif
+#ifdef MOZ_WEBSPEECH
 NS_DEFINE_NAMED_CID(NS_SYNTHVOICEREGISTRY_CID);
 #endif
 
@@ -1051,6 +1070,7 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kDOMREQUEST_SERVICE_CID, false, nullptr, DOMRequestServiceConstructor },
   { &kQUOTA_MANAGER_CID, false, nullptr, QuotaManagerConstructor },
   { &kSERVICEWORKERMANAGER_CID, false, nullptr, ServiceWorkerManagerConstructor },
+  { &kSERVICEWORKERPERIODICUPDATER_CID, false, nullptr, ServiceWorkerPeriodicUpdaterConstructor },
   { &kWORKERDEBUGGERMANAGER_CID, true, nullptr, WorkerDebuggerManagerConstructor },
 #ifdef MOZ_WIDGET_GONK
   { &kSYSTEMWORKERMANAGER_CID, true, nullptr, SystemWorkerManagerConstructor },
@@ -1074,8 +1094,13 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_AUDIOCHANNEL_SERVICE_CID, false, nullptr, AudioChannelServiceConstructor },
   { &kNS_DATASTORE_SERVICE_CID, false, nullptr, DataStoreServiceConstructor },
   { &kNS_FOCUSMANAGER_CID, false, nullptr, CreateFocusManager },
-#ifdef MOZ_WEBSPEECH
+#ifdef MOZ_WEBSPEECH_TEST_BACKEND
   { &kNS_FAKE_SPEECH_RECOGNITION_SERVICE_CID, false, nullptr, FakeSpeechRecognitionServiceConstructor },
+#endif
+#ifdef MOZ_WEBSPEECH_POCKETSPHINX
+  { &kNS_POCKETSPHINX_SPEECH_RECOGNITION_SERVICE_CID, false, nullptr, PocketSphinxSpeechRecognitionServiceConstructor },
+#endif
+#ifdef MOZ_WEBSPEECH
   { &kNS_SYNTHVOICEREGISTRY_CID, true, nullptr, nsSynthVoiceRegistryConstructor },
 #endif
   { &kCSPSERVICE_CID, false, nullptr, CSPServiceConstructor },
@@ -1214,6 +1239,7 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { DOMREQUEST_SERVICE_CONTRACTID, &kDOMREQUEST_SERVICE_CID },
   { QUOTA_MANAGER_CONTRACTID, &kQUOTA_MANAGER_CID },
   { SERVICEWORKERMANAGER_CONTRACTID, &kSERVICEWORKERMANAGER_CID },
+  { SERVICEWORKERPERIODICUPDATER_CONTRACTID, &kSERVICEWORKERPERIODICUPDATER_CID, Module::MAIN_PROCESS_ONLY },
   { WORKERDEBUGGERMANAGER_CONTRACTID, &kWORKERDEBUGGERMANAGER_CID },
 #ifdef MOZ_WIDGET_GONK
   { SYSTEMWORKERMANAGER_CONTRACTID, &kSYSTEMWORKERMANAGER_CID },
@@ -1235,8 +1261,13 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { "@mozilla.org/audiochannel/service;1", &kNS_AUDIOCHANNEL_SERVICE_CID },
   { "@mozilla.org/datastore-service;1", &kNS_DATASTORE_SERVICE_CID },
   { "@mozilla.org/focus-manager;1", &kNS_FOCUSMANAGER_CID },
-#ifdef MOZ_WEBSPEECH
+#ifdef MOZ_WEBSPEECH_TEST_BACKEND
   { NS_SPEECH_RECOGNITION_SERVICE_CONTRACTID_PREFIX "fake", &kNS_FAKE_SPEECH_RECOGNITION_SERVICE_CID },
+#endif
+#ifdef MOZ_WEBSPEECH_POCKETSPHINX
+  { NS_SPEECH_RECOGNITION_SERVICE_CONTRACTID_PREFIX "pocketsphinx", &kNS_POCKETSPHINX_SPEECH_RECOGNITION_SERVICE_CID },
+#endif
+#ifdef MOZ_WEBSPEECH
   { NS_SYNTHVOICEREGISTRY_CONTRACTID, &kNS_SYNTHVOICEREGISTRY_CID },
 #endif
   { CSPSERVICE_CONTRACTID, &kCSPSERVICE_CID },
@@ -1310,6 +1341,7 @@ static const mozilla::Module::CategoryEntry kLayoutCategories[] = {
   { "net-channel-event-sinks", NS_MIXEDCONTENTBLOCKER_CONTRACTID, NS_MIXEDCONTENTBLOCKER_CONTRACTID },
   { "app-startup", "Script Security Manager", "service," NS_SCRIPTSECURITYMANAGER_CONTRACTID },
   { TOPIC_WEB_APP_CLEAR_DATA, "QuotaManager", "service," QUOTA_MANAGER_CONTRACTID },
+  { OBSERVER_TOPIC_IDLE_DAILY, "QuotaManager", QUOTA_MANAGER_CONTRACTID },
 #ifdef MOZ_WIDGET_GONK
   { "app-startup", "Volume Service", "service," NS_VOLUMESERVICE_CONTRACTID },
 #endif
@@ -1321,6 +1353,7 @@ static const mozilla::Module::CategoryEntry kLayoutCategories[] = {
   { "profile-after-change", "Bluetooth Service", BLUETOOTHSERVICE_CONTRACTID },
 #endif
   { "profile-after-change", "PresentationDeviceManager", PRESENTATION_DEVICE_MANAGER_CONTRACTID },
+  { "idle-daily", "ServiceWorker Periodic Updater", SERVICEWORKERPERIODICUPDATER_CONTRACTID },
   { nullptr }
 };
 

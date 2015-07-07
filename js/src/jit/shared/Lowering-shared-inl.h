@@ -69,12 +69,7 @@ LIRGeneratorShared::defineFixed(LInstructionHelper<1, X, Y>* lir, MDefinition* m
     LDefinition def(type, LDefinition::FIXED);
     def.setOutput(output);
 
-    // Add an LNop to avoid regalloc problems if the next op uses this value
-    // with a fixed or at-start policy.
     define(lir, mir, def);
-
-    if (gen->optimizationInfo().registerAllocator() == RegisterAllocator_LSRA)
-        add(new(alloc()) LNop);
 }
 
 template <size_t Ops, size_t Temps> void
@@ -155,9 +150,6 @@ LIRGeneratorShared::defineReturn(LInstruction* lir, MDefinition* mir)
 
     mir->setVirtualRegister(vreg);
     add(lir);
-
-    if (gen->optimizationInfo().registerAllocator() == RegisterAllocator_LSRA)
-        add(new(alloc()) LNop);
 }
 
 // In LIR, we treat booleans and integers as the same low-level type (INTEGER).
@@ -319,7 +311,7 @@ LIRGeneratorShared::useRegisterOrNonDoubleConstant(MDefinition* mir)
     return useRegister(mir);
 }
 
-#if defined(JS_CODEGEN_ARM)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64)
 LAllocation
 LIRGeneratorShared::useAnyOrConstant(MDefinition* mir)
 {
@@ -367,11 +359,17 @@ LIRGeneratorShared::useStorableAtStart(MDefinition* mir)
 #endif
 
 LAllocation
+LIRGeneratorShared::useKeepalive(MDefinition* mir)
+{
+    return use(mir, LUse(LUse::KEEPALIVE));
+}
+
+LAllocation
 LIRGeneratorShared::useKeepaliveOrConstant(MDefinition* mir)
 {
     if (mir->isConstant())
         return LAllocation(mir->toConstant()->vp());
-    return use(mir, LUse(LUse::KEEPALIVE));
+    return useKeepalive(mir);
 }
 
 LUse

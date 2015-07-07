@@ -9,7 +9,7 @@
 #include <stdint.h>                     // for uint32_t, uint64_t
 #include <sys/types.h>                  // for int32_t
 #include "mozilla/Attributes.h"         // for override
-#include "mozilla/RefPtr.h"             // for RefPtr, TemporaryRef
+#include "mozilla/RefPtr.h"             // for RefPtr, already_AddRefed
 #include "mozilla/gfx/Types.h"          // for SurfaceFormat
 #include "mozilla/layers/AsyncTransactionTracker.h" // for AsyncTransactionTracker
 #include "mozilla/layers/CompositableClient.h"  // for CompositableClient
@@ -18,7 +18,7 @@
 #include "mozilla/layers/TextureClient.h"  // for TextureClient, etc
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsCOMPtr.h"                   // for already_AddRefed
-#include "nsRect.h"                     // for nsIntRect
+#include "nsRect.h"                     // for mozilla::gfx::IntRect
 
 namespace mozilla {
 namespace layers {
@@ -42,7 +42,7 @@ public:
    * message will be sent to the compositor to create a corresponding image
    * host.
    */
-  static TemporaryRef<ImageClient> CreateImageClient(CompositableType aImageHostType,
+  static already_AddRefed<ImageClient> CreateImageClient(CompositableType aImageHostType,
                                                      CompositableForwarder* aFwd,
                                                      TextureFlags aFlags);
 
@@ -59,14 +59,14 @@ public:
    * The picture rect is the area of the texture which makes up the image. That
    * is, the area that should be composited. In texture space.
    */
-  virtual void UpdatePictureRect(nsIntRect aPictureRect);
+  virtual void UpdatePictureRect(gfx::IntRect aPictureRect);
 
   virtual already_AddRefed<Image> CreateImage(ImageFormat aFormat) = 0;
 
   /**
    * Create AsyncTransactionTracker that is used for FlushAllImagesAsync().
    */
-  virtual TemporaryRef<AsyncTransactionTracker> PrepareFlushAllImages() { return nullptr; }
+  virtual already_AddRefed<AsyncTransactionTracker> PrepareFlushAllImages() { return nullptr; }
 
   /**
    * asynchronously remove all the textures used by the image client.
@@ -86,7 +86,7 @@ protected:
 
   CompositableType mType;
   int32_t mLastPaintedImageSerial;
-  nsIntRect mPictureRect;
+  gfx::IntRect mPictureRect;
 };
 
 /**
@@ -109,7 +109,7 @@ public:
 
   virtual already_AddRefed<Image> CreateImage(ImageFormat aFormat) override;
 
-  virtual TemporaryRef<AsyncTransactionTracker> PrepareFlushAllImages() override;
+  virtual already_AddRefed<AsyncTransactionTracker> PrepareFlushAllImages() override;
 
   virtual void FlushAllImages(bool aExceptFront,
                               AsyncTransactionTracker* aAsyncTransactionTracker) override;

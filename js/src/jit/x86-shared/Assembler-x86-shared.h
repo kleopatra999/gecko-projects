@@ -29,7 +29,7 @@ class Operand
   private:
     Kind kind_ : 4;
     // Used as a Register::Encoding and a FloatRegister::Encoding.
-    int32_t base_ : 5;
+    uint32_t base_ : 5;
     Scale scale_ : 3;
     Register::Encoding index_ : 5;
     int32_t disp_;
@@ -37,15 +37,23 @@ class Operand
   public:
     explicit Operand(Register reg)
       : kind_(REG),
-        base_(reg.encoding())
+        base_(reg.encoding()),
+        scale_(TimesOne),
+        index_(Registers::Invalid),
+        disp_(0)
     { }
     explicit Operand(FloatRegister reg)
       : kind_(FPREG),
-        base_(reg.encoding())
+        base_(reg.encoding()),
+        scale_(TimesOne),
+        index_(Registers::Invalid),
+        disp_(0)
     { }
     explicit Operand(const Address& address)
       : kind_(MEM_REG_DISP),
         base_(address.base.encoding()),
+        scale_(TimesOne),
+        index_(Registers::Invalid),
         disp_(address.offset)
     { }
     explicit Operand(const BaseIndex& address)
@@ -65,14 +73,22 @@ class Operand
     Operand(Register reg, int32_t disp)
       : kind_(MEM_REG_DISP),
         base_(reg.encoding()),
+        scale_(TimesOne),
+        index_(Registers::Invalid),
         disp_(disp)
     { }
     explicit Operand(AbsoluteAddress address)
       : kind_(MEM_ADDRESS32),
+        base_(Registers::Invalid),
+        scale_(TimesOne),
+        index_(Registers::Invalid),
         disp_(X86Encoding::AddressImmediate(address.addr))
     { }
     explicit Operand(PatchedAbsoluteAddress address)
       : kind_(MEM_ADDRESS32),
+        base_(Registers::Invalid),
+        scale_(TimesOne),
+        index_(Registers::Invalid),
         disp_(X86Encoding::AddressImmediate(address.addr))
     { }
 
@@ -213,8 +229,11 @@ class AssemblerX86Shared : public AssemblerShared
     CompactBufferWriter preBarriers_;
 
     void writeDataRelocation(ImmGCPtr ptr) {
-        if (ptr.value)
+        if (ptr.value) {
+            if (gc::IsInsideNursery(ptr.value))
+                embedsNurseryPointers_ = true;
             dataRelocations_.writeUnsigned(masm.currentOffset());
+        }
     }
     void writePrebarrierOffset(CodeOffsetLabel label) {
         preBarriers_.writeUnsigned(label.offset());
@@ -331,9 +350,6 @@ class AssemblerX86Shared : public AssemblerShared
     }
 
     static void TraceDataRelocations(JSTracer* trc, JitCode* code, CompactBufferReader& reader);
-
-    static void FixupNurseryObjects(JSContext* cx, JitCode* code, CompactBufferReader& reader,
-                                    const ObjectVector& nurseryObjects);
 
     // MacroAssemblers hold onto gcthings, so they are traced by the GC.
     void trace(JSTracer* trc);
@@ -2750,7 +2766,7 @@ class AssemblerX86Shared : public AssemblerShared
         }
     }
     unsigned blendpsMask(bool x, bool y, bool z, bool w) {
-        return x | (y << 1) | (z << 2) | (w << 3);
+        return (x << 0) | (y << 1) | (z << 2) | (w << 3);
     }
     void vblendps(unsigned mask, FloatRegister src1, FloatRegister src0, FloatRegister dest) {
         MOZ_ASSERT(HasSSE41());

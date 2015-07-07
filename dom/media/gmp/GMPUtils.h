@@ -8,6 +8,8 @@
 
 #include "mozilla/UniquePtr.h"
 
+class nsIFile;
+
 namespace mozilla {
 
 template<typename T>
@@ -18,11 +20,12 @@ struct DestroyPolicy
   }
 };
 
-// Ideally, this would be a template alias, but GCC 4.6 doesn't support them.  See bug 1124021.
 template<typename T>
-struct GMPUnique {
-  typedef mozilla::UniquePtr<T, DestroyPolicy<T>> Ptr;
-};
+using GMPUniquePtr = mozilla::UniquePtr<T, DestroyPolicy<T>>;
+
+bool GetEMEVoucherPath(nsIFile** aPath);
+
+bool EMEVoucherFileExists();
 
 } // namespace mozilla
 

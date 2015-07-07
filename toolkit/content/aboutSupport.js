@@ -47,6 +47,8 @@ let snapshotFormatters = {
 
     $("multiprocess-box").textContent = stringBundle().formatStringFromName("multiProcessStatus",
       [data.numRemoteWindows, data.numTotalWindows, data.remoteAutoStart], 3);
+
+    $("safemode-box").textContent = data.safeMode;
   },
 
 #ifdef MOZ_CRASHREPORTER
@@ -273,7 +275,7 @@ let snapshotFormatters = {
     let out = Object.create(data);
 
     if (apzInfo.length == 0)
-      out.asyncPanZoom = "none";
+      out.asyncPanZoom = localizedMsg(["apzNone"]);
     else
       out.asyncPanZoom = apzInfo.join("; ");
 

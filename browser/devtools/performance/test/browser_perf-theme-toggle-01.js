@@ -6,31 +6,34 @@
  * theme on load, and rerenders when changed.
  */
 
+const { setTheme } = devtools.require("devtools/shared/theme");
+
 const LIGHT_BG = "#fcfcfc";
 const DARK_BG = "#14171a";
 
 setTheme("dark");
 Services.prefs.setBoolPref(MEMORY_PREF, false);
 
-function spawnTest () {
+function* spawnTest() {
   let { panel } = yield initPerformance(SIMPLE_URL);
   let { EVENTS, $, OverviewView, document: doc } = panel.panelWin;
 
   yield startRecording(panel);
-  is(OverviewView.markersOverview.backgroundColor, DARK_BG,
+  let markers = OverviewView.graphs.get("timeline");
+  is(markers.backgroundColor, DARK_BG,
     "correct theme on load for markers.");
   yield stopRecording(panel);
 
-  let refreshed = once(OverviewView.markersOverview, "refresh");
+  let refreshed = once(markers, "refresh");
   setTheme("light");
   yield refreshed;
 
   ok(true, "markers were rerendered after theme change.");
-  is(OverviewView.markersOverview.backgroundColor, LIGHT_BG,
+  is(markers.backgroundColor, LIGHT_BG,
     "correct theme on after toggle for markers.");
 
   // reset back to dark
-  refreshed = once(OverviewView.markersOverview, "refresh");
+  refreshed = once(markers, "refresh");
   setTheme("dark");
   yield refreshed;
 
@@ -39,26 +42,27 @@ function spawnTest () {
   Services.prefs.setBoolPref(MEMORY_PREF, true);
 
   yield startRecording(panel);
-  is(OverviewView.memoryOverview.backgroundColor, DARK_BG,
+  let memory = OverviewView.graphs.get("memory");
+  is(memory.backgroundColor, DARK_BG,
     "correct theme on load for memory.");
   yield stopRecording(panel);
 
   refreshed = Promise.all([
-    once(OverviewView.markersOverview, "refresh"),
-    once(OverviewView.memoryOverview, "refresh"),
+    once(markers, "refresh"),
+    once(memory, "refresh"),
   ]);
   setTheme("light");
   yield refreshed;
 
   ok(true, "Both memory and markers were rerendered after theme change.");
-  is(OverviewView.markersOverview.backgroundColor, LIGHT_BG,
+  is(markers.backgroundColor, LIGHT_BG,
     "correct theme on after toggle for markers.");
-  is(OverviewView.memoryOverview.backgroundColor, LIGHT_BG,
+  is(memory.backgroundColor, LIGHT_BG,
     "correct theme on after toggle for memory.");
 
   refreshed = Promise.all([
-    once(OverviewView.markersOverview, "refresh"),
-    once(OverviewView.memoryOverview, "refresh"),
+    once(markers, "refresh"),
+    once(memory, "refresh"),
   ]);
 
   // Set theme back to light
@@ -67,20 +71,4 @@ function spawnTest () {
 
   yield teardown(panel);
   finish();
-}
-
-/**
- * Mimics selecting the theme selector in the toolbox;
- * sets the preference and emits an event on gDevTools to trigger
- * the themeing.
- */
-function setTheme (newTheme) {
-  let oldTheme = Services.prefs.getCharPref("devtools.theme");
-  info("Setting `devtools.theme` to \"" + newTheme + "\"");
-  Services.prefs.setCharPref("devtools.theme", newTheme);
-  gDevTools.emit("pref-changed", {
-    pref: "devtools.theme",
-    newValue: newTheme,
-    oldValue: oldTheme
-  });
 }

@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -137,6 +138,15 @@ MouseEvent::InitMouseEvent(const nsAString& aType,
   }
 }
 
+void
+MouseEvent::InitializeExtraMouseEventDictionaryMembers(const MouseEventInit& aParam)
+{
+  InitModifiers(aParam);
+  mEvent->AsMouseEventBase()->buttons = aParam.mButtons;
+  mMovementPoint.x = aParam.mMovementX;
+  mMovementPoint.y = aParam.mMovementY;
+}
+
 already_AddRefed<MouseEvent>
 MouseEvent::Constructor(const GlobalObject& aGlobal,
                         const nsAString& aType,
@@ -152,11 +162,8 @@ MouseEvent::Constructor(const GlobalObject& aGlobal,
                     aParam.mCtrlKey, aParam.mAltKey, aParam.mShiftKey,
                     aParam.mMetaKey, aParam.mButton, aParam.mRelatedTarget,
                     aRv);
-  e->InitModifiers(aParam);
+  e->InitializeExtraMouseEventDictionaryMembers(aParam);
   e->SetTrusted(trusted);
-  MOZ_RELEASE_ASSERT(e->mEvent->AsMouseEventBase(),
-                     "mEvent of MouseEvent must inherit WidgetMouseEventBase");
-  e->mEvent->AsMouseEventBase()->buttons = aParam.mButtons;
 
   return e.forget();
 }
@@ -304,7 +311,7 @@ NS_IMETHODIMP
 MouseEvent::GetMozMovementX(int32_t* aMovementX)
 {
   NS_ENSURE_ARG_POINTER(aMovementX);
-  *aMovementX = MozMovementX();
+  *aMovementX = MovementX();
 
   return NS_OK;
 }
@@ -313,7 +320,7 @@ NS_IMETHODIMP
 MouseEvent::GetMozMovementY(int32_t* aMovementY)
 {
   NS_ENSURE_ARG_POINTER(aMovementY);
-  *aMovementY = MozMovementY();
+  *aMovementY = MovementY();
 
   return NS_OK;
 }

@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,6 +12,11 @@ BEGIN_BLUETOOTH_NAMESPACE
 typedef
   BluetoothHALInterfaceRunnable0<BluetoothGattClientResultHandler, void>
   BluetoothGattClientHALResultRunnable;
+
+typedef
+  BluetoothHALInterfaceRunnable1<BluetoothGattClientResultHandler, void,
+                                 BluetoothTypeOfDevice, BluetoothTypeOfDevice>
+  BluetoothGattClientGetDeviceTypeHALResultRunnable;
 
 typedef
   BluetoothHALInterfaceRunnable1<BluetoothGattClientResultHandler, void,
@@ -42,6 +47,35 @@ DispatchBluetoothGattClientHALResult(
   } else {
     runnable = new BluetoothGattClientHALErrorRunnable(aRes,
       &BluetoothGattClientResultHandler::OnError, aStatus);
+  }
+  nsresult rv = NS_DispatchToMainThread(runnable);
+  if (NS_FAILED(rv)) {
+    BT_WARNING("NS_DispatchToMainThread failed: %X", rv);
+  }
+  return rv;
+}
+
+template <typename ResultRunnable, typename Tin1, typename Arg1>
+static nsresult
+DispatchBluetoothGattClientHALResult(
+  BluetoothGattClientResultHandler* aRes,
+  void (BluetoothGattClientResultHandler::*aMethod)(Arg1),
+  Tin1 aArg1,
+  BluetoothStatus aStatus)
+{
+  MOZ_ASSERT(aRes);
+
+  nsRunnable* runnable;
+  Arg1 arg1;
+
+  if (aStatus != STATUS_SUCCESS) {
+    runnable = new BluetoothGattClientHALErrorRunnable(aRes,
+      &BluetoothGattClientResultHandler::OnError, aStatus);
+  } else if (NS_FAILED(Convert(aArg1, arg1))) {
+    runnable = new BluetoothGattClientHALErrorRunnable(aRes,
+      &BluetoothGattClientResultHandler::OnError, STATUS_PARM_INVALID);
+  } else {
+    runnable = new ResultRunnable(aRes, aMethod, arg1);
   }
   nsresult rv = NS_DispatchToMainThread(runnable);
   if (NS_FAILED(rv)) {
@@ -134,9 +168,9 @@ struct BluetoothGattClientCallback
   typedef BluetoothNotificationHALRunnable5<
     GattClientNotificationHandlerWrapper, void,
     int, BluetoothGattStatus, BluetoothGattServiceId,
-    BluetoothGattId, int,
+    BluetoothGattId, BluetoothGattCharProp,
     int, BluetoothGattStatus, const BluetoothGattServiceId&,
-    const BluetoothGattId&>
+    const BluetoothGattId&, const BluetoothGattCharProp&>
     GetCharacteristicNotification;
 
   typedef BluetoothNotificationHALRunnable5<
@@ -514,7 +548,9 @@ void
 BluetoothGattClientHALInterface::Scan(
   int aClientIf, bool aStart, BluetoothGattClientResultHandler* aRes)
 {
-#if ANDROID_VERSION >= 19
+#if ANDROID_VERSION >= 21
+  int status = mInterface->scan(aStart);
+#elif ANDROID_VERSION >= 19
   int status = mInterface->scan(aClientIf, aStart);
 #else
   int status = BT_STATUS_UNSUPPORTED;
@@ -530,10 +566,21 @@ BluetoothGattClientHALInterface::Scan(
 void
 BluetoothGattClientHALInterface::Connect(
   int aClientIf, const nsAString& aBdAddr,
-  bool aIsDirect, BluetoothGattClientResultHandler* aRes)
+  bool aIsDirect, BluetoothTransport aTransport,
+  BluetoothGattClientResultHandler* aRes)
 {
   bt_status_t status;
-#if ANDROID_VERSION >= 19
+#if ANDROID_VERSION >= 21
+  bt_bdaddr_t bdAddr;
+  btgatt_transport_t transport;
+
+  if (NS_SUCCEEDED(Convert(aBdAddr, bdAddr)) ||
+      NS_SUCCEEDED(Convert(aTransport, transport))) {
+    status = mInterface->connect(aClientIf, &bdAddr, aIsDirect, transport);
+  } else {
+    status = BT_STATUS_PARM_INVALID;
+  }
+#elif ANDROID_VERSION >= 19
   bt_bdaddr_t bdAddr;
 
   if (NS_SUCCEEDED(Convert(aBdAddr, bdAddr))) {
@@ -745,18 +792,20 @@ BluetoothGattClientHALInterface::GetDescriptor(
 void
 BluetoothGattClientHALInterface::ReadCharacteristic(
   int aConnId, const BluetoothGattServiceId& aServiceId,
-  const BluetoothGattId& aCharId, int aAuthReq,
+  const BluetoothGattId& aCharId, BluetoothGattAuthReq aAuthReq,
   BluetoothGattClientResultHandler* aRes)
 {
   bt_status_t status;
 #if ANDROID_VERSION >= 19
   btgatt_srvc_id_t serviceId;
   btgatt_gatt_id_t charId;
+  int authReq;
 
   if (NS_SUCCEEDED(Convert(aServiceId, serviceId)) &&
-      NS_SUCCEEDED(Convert(aCharId, charId))) {
+      NS_SUCCEEDED(Convert(aCharId, charId)) &&
+      NS_SUCCEEDED(Convert(aAuthReq, authReq))) {
     status = mInterface->read_characteristic(aConnId, &serviceId, &charId,
-                                             aAuthReq);
+                                             authReq);
   } else {
     status = BT_STATUS_PARM_INVALID;
   }
@@ -774,22 +823,25 @@ BluetoothGattClientHALInterface::ReadCharacteristic(
 void
 BluetoothGattClientHALInterface::WriteCharacteristic(
   int aConnId, const BluetoothGattServiceId& aServiceId,
-  const BluetoothGattId& aCharId, int aWriteType, int aLen,
-  int aAuthReq, const ArrayBuffer& aValue,
+  const BluetoothGattId& aCharId, BluetoothGattWriteType aWriteType,
+  BluetoothGattAuthReq aAuthReq, const nsTArray<uint8_t>& aValue,
   BluetoothGattClientResultHandler* aRes)
 {
   bt_status_t status;
 #if ANDROID_VERSION >= 19
   btgatt_srvc_id_t serviceId;
   btgatt_gatt_id_t charId;
-  char value[aLen + 1];
+  int writeType;
+  int authReq;
 
   if (NS_SUCCEEDED(Convert(aServiceId, serviceId)) &&
       NS_SUCCEEDED(Convert(aCharId, charId)) &&
-      NS_SUCCEEDED(Convert(aValue, value))) {
-    status = mInterface->write_characteristic(aConnId, &serviceId, &charId,
-                                              aWriteType, aLen, aAuthReq,
-                                              value);
+      NS_SUCCEEDED(Convert(aWriteType, writeType)) &&
+      NS_SUCCEEDED(Convert(aAuthReq, authReq))) {
+    status = mInterface->write_characteristic(
+      aConnId, &serviceId, &charId, writeType,
+      aValue.Length() * sizeof(uint8_t), authReq,
+      reinterpret_cast<char*>(const_cast<uint8_t*>(aValue.Elements())));
   } else {
     status = BT_STATUS_PARM_INVALID;
   }
@@ -809,19 +861,21 @@ BluetoothGattClientHALInterface::ReadDescriptor(
   int aConnId, const BluetoothGattServiceId& aServiceId,
   const BluetoothGattId& aCharId,
   const BluetoothGattId& aDescriptorId,
-  int aAuthReq, BluetoothGattClientResultHandler* aRes)
+  BluetoothGattAuthReq aAuthReq, BluetoothGattClientResultHandler* aRes)
 {
   bt_status_t status;
 #if ANDROID_VERSION >= 19
   btgatt_srvc_id_t serviceId;
   btgatt_gatt_id_t charId;
   btgatt_gatt_id_t descriptorId;
+  int authReq;
 
   if (NS_SUCCEEDED(Convert(aServiceId, serviceId)) &&
       NS_SUCCEEDED(Convert(aCharId, charId)) &&
-      NS_SUCCEEDED(Convert(aDescriptorId, descriptorId))) {
+      NS_SUCCEEDED(Convert(aDescriptorId, descriptorId)) &&
+      NS_SUCCEEDED(Convert(aAuthReq, authReq))) {
     status = mInterface->read_descriptor(aConnId, &serviceId, &charId,
-                                         &descriptorId, aAuthReq);
+                                         &descriptorId, authReq);
   } else {
     status = BT_STATUS_PARM_INVALID;
   }
@@ -841,8 +895,9 @@ BluetoothGattClientHALInterface::WriteDescriptor(
   int aConnId, const BluetoothGattServiceId& aServiceId,
   const BluetoothGattId& aCharId,
   const BluetoothGattId& aDescriptorId,
-  int aWriteType, int aLen, int aAuthReq,
-  const ArrayBuffer& aValue,
+  BluetoothGattWriteType aWriteType,
+  BluetoothGattAuthReq aAuthReq,
+  const nsTArray<uint8_t>& aValue,
   BluetoothGattClientResultHandler* aRes)
 {
   bt_status_t status;
@@ -850,15 +905,18 @@ BluetoothGattClientHALInterface::WriteDescriptor(
   btgatt_srvc_id_t serviceId;
   btgatt_gatt_id_t charId;
   btgatt_gatt_id_t descriptorId;
-  char value[aLen + 1];
+  int writeType;
+  int authReq;
 
   if (NS_SUCCEEDED(Convert(aServiceId, serviceId)) &&
       NS_SUCCEEDED(Convert(aCharId, charId)) &&
       NS_SUCCEEDED(Convert(aDescriptorId, descriptorId)) &&
-      NS_SUCCEEDED(Convert(aValue, value))) {
-    status = mInterface->write_descriptor(aConnId, &serviceId, &charId,
-                                          &descriptorId, aWriteType, aLen,
-                                          aAuthReq, value);
+      NS_SUCCEEDED(Convert(aWriteType, writeType)) &&
+      NS_SUCCEEDED(Convert(aAuthReq, authReq))) {
+    status = mInterface->write_descriptor(
+      aConnId, &serviceId, &charId, &descriptorId, writeType,
+      aValue.Length() * sizeof(uint8_t), authReq,
+      reinterpret_cast<char*>(const_cast<uint8_t*>(aValue.Elements())));
   } else {
     status = BT_STATUS_PARM_INVALID;
   }
@@ -983,22 +1041,23 @@ void
 BluetoothGattClientHALInterface::GetDeviceType(
   const nsAString& aBdAddr, BluetoothGattClientResultHandler* aRes)
 {
-  int status;
+  int status = BT_STATUS_FAIL;
+  bt_device_type_t type = BT_DEVICE_DEVTYPE_BLE;
 #if ANDROID_VERSION >= 19
   bt_bdaddr_t bdAddr;
 
   if (NS_SUCCEEDED(Convert(aBdAddr, bdAddr))) {
-    status = mInterface->get_device_type(&bdAddr);
-  } else {
-    status = BT_STATUS_PARM_INVALID;
+    status = BT_STATUS_SUCCESS;
+    type = static_cast<bt_device_type_t>(mInterface->get_device_type(&bdAddr));
   }
 #else
   status = BT_STATUS_UNSUPPORTED;
 #endif
 
   if (aRes) {
-    DispatchBluetoothGattClientHALResult(
-      aRes, &BluetoothGattClientResultHandler::GetDeviceType,
+    DispatchBluetoothGattClientHALResult<
+      BluetoothGattClientGetDeviceTypeHALResultRunnable>(
+      aRes, &BluetoothGattClientResultHandler::GetDeviceType, type,
       ConvertDefault(status, STATUS_FAIL));
   }
 }
@@ -1007,20 +1066,22 @@ void
 BluetoothGattClientHALInterface::SetAdvData(
   int aServerIf, bool aIsScanRsp, bool aIsNameIncluded,
   bool aIsTxPowerIncluded, int aMinInterval, int aMaxInterval, int aApperance,
-  uint8_t aManufacturerLen, const ArrayBuffer& aManufacturerData,
+  uint16_t aManufacturerLen, char* aManufacturerData,
+  uint16_t aServiceDataLen, char* aServiceData,
+  uint16_t aServiceUUIDLen, char* aServiceUUID,
   BluetoothGattClientResultHandler* aRes)
 {
   bt_status_t status;
-#if ANDROID_VERSION >= 19
-  char value[aManufacturerLen + 1];
-
-  if (NS_SUCCEEDED(Convert(aManufacturerData, value))) {
-    status = mInterface->set_adv_data(
-      aServerIf, aIsScanRsp, aIsNameIncluded, aIsTxPowerIncluded, aMinInterval,
-      aMaxInterval, aApperance, aManufacturerLen, value);
-  } else {
-    status = BT_STATUS_PARM_INVALID;
-  }
+#if ANDROID_VERSION >= 21
+  status = mInterface->set_adv_data(
+    aServerIf, aIsScanRsp, aIsNameIncluded, aIsTxPowerIncluded,
+    aMinInterval, aMaxInterval, aApperance,
+    aManufacturerLen, aManufacturerData,
+    aServiceDataLen, aServiceData, aServiceUUIDLen, aServiceUUID);
+#elif ANDROID_VERSION >= 19
+  status = mInterface->set_adv_data(
+    aServerIf, aIsScanRsp, aIsNameIncluded, aIsTxPowerIncluded, aMinInterval,
+    aMaxInterval, aApperance, aManufacturerLen, aManufacturerData);
 #else
   status = BT_STATUS_UNSUPPORTED;
 #endif
@@ -1030,6 +1091,32 @@ BluetoothGattClientHALInterface::SetAdvData(
       aRes, &BluetoothGattClientResultHandler::SetAdvData,
       ConvertDefault(status, STATUS_FAIL));
   }
+}
+
+void
+BluetoothGattClientHALInterface::TestCommand(
+  int aCommand, const BluetoothGattTestParam& aTestParam,
+  BluetoothGattClientResultHandler* aRes)
+{
+  bt_status_t status;
+#if ANDROID_VERSION >= 19
+  btgatt_test_params_t testParam;
+
+  if (NS_SUCCEEDED(Convert(aTestParam, testParam))) {
+    status = mInterface->test_command(aCommand, &testParam);
+  } else {
+    status = BT_STATUS_PARM_INVALID;
+  }
+#else
+  status = BT_STATUS_UNSUPPORTED;
+#endif
+
+  if (aRes) {
+    DispatchBluetoothGattClientHALResult(
+      aRes, &BluetoothGattClientResultHandler::TestCommand,
+      ConvertDefault(status, STATUS_FAIL));
+  }
+
 }
 
 // TODO: Add GATT Server Interface

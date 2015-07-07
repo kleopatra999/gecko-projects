@@ -23,7 +23,6 @@
 #include "TimingStruct.h"
 #include "AutoClose.h"
 
-class nsIPrincipal;
 class nsDNSPrefetch;
 class nsICancelable;
 class nsIHttpChannelAuthProvider;
@@ -33,6 +32,14 @@ class nsISSLStatus;
 namespace mozilla { namespace net {
 
 class Http2PushedStream;
+
+class HttpChannelSecurityWarningReporter
+{
+public:
+  virtual nsresult ReportSecurityMessage(const nsAString& aMessageTag,
+                                         const nsAString& aMessageCategory) = 0;
+};
+
 //-----------------------------------------------------------------------------
 // nsHttpChannel
 //-----------------------------------------------------------------------------
@@ -119,7 +126,6 @@ public:
     NS_IMETHOD AsyncOpen(nsIStreamListener *listener, nsISupports *aContext) override;
     // nsIHttpChannelInternal
     NS_IMETHOD SetupFallbackChannel(const char *aFallbackKey) override;
-    NS_IMETHOD ContinueBeginConnect() override;
     // nsISupportsPriority
     NS_IMETHOD SetPriority(int32_t value) override;
     // nsIClassOfService
@@ -140,6 +146,12 @@ public:
     NS_IMETHOD GetRequestStart(mozilla::TimeStamp *aRequestStart) override;
     NS_IMETHOD GetResponseStart(mozilla::TimeStamp *aResponseStart) override;
     NS_IMETHOD GetResponseEnd(mozilla::TimeStamp *aResponseEnd) override;
+
+    nsresult AddSecurityMessage(const nsAString& aMessageTag,
+                                const nsAString& aMessageCategory) override;
+
+    void SetWarningReporter(HttpChannelSecurityWarningReporter* aReporter)
+      { mWarningReporter = aReporter; }
 
 public: /* internal necko use only */
 
@@ -228,6 +240,8 @@ private:
 
     bool     RequestIsConditional();
     nsresult BeginConnect();
+    nsresult ContinueBeginConnectWithResult();
+    void     ContinueBeginConnect();
     nsresult Connect();
     void     SpeculativeConnect();
     nsresult SetupTransaction();
@@ -405,6 +419,8 @@ private:
         MAYBE_INTERCEPT,   // interception in progress, but can be cancelled
         INTERCEPTED,       // a synthesized response has been provided
     } mInterceptCache;
+    // Unique ID of this channel for the interception purposes.
+    const uint64_t mInterceptionID;
 
     bool PossiblyIntercepted() {
         return mInterceptCache != DO_NOT_INTERCEPT;
@@ -460,6 +476,11 @@ private:
     uint32_t                          mIsPartialRequest : 1;
     // true iff there is AutoRedirectVetoNotifier on the stack
     uint32_t                          mHasAutoRedirectVetoNotifier : 1;
+    // Whether fetching the content is meant to be handled by the
+    // packaged app service, which behaves like a caching layer.
+    // Upon successfully fetching the package, the resource will be placed in
+    // the cache, and served by calling OnCacheEntryAvailable.
+    uint32_t                          mIsPackagedAppResource : 1;
 
     nsTArray<nsContinueRedirectionFunc> mRedirectFuncStack;
 
@@ -476,6 +497,9 @@ private:
     void PopRedirectAsyncFunc(nsContinueRedirectionFunc func);
 
     nsCString mUsername;
+
+    // If non-null, warnings should be reported to this object.
+    HttpChannelSecurityWarningReporter* mWarningReporter;
 
 protected:
     virtual void DoNotifyListenerCleanup() override;

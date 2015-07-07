@@ -16,7 +16,7 @@ config = {
                 "."
             ],
             "run_filename": "remotecppunittests.py",
-            "testsdir": "cppunittests"
+            "testsdir": "cppunittest"
         },
         "crashtest": {
             "options": [
@@ -61,7 +61,6 @@ config = {
             "options": [
                 "--adbpath=%(adbpath)s",
                 "--b2gpath=%(b2gpath)s",
-                "--console-level=INFO",
                 "--emulator=%(emulator)s",
                 "--logdir=%(logcat_dir)s",
                 "--remote-webserver=%(remote_webserver)s",
@@ -73,7 +72,8 @@ config = {
                 "--quiet",
                 "--log-raw=%(raw_log_file)s",
                 "--certificate-path=%(certificate_path)s",
-                "--test-path=%(test_path)s"
+                "--screenshot-on-fail",
+                "%(test_path)s"
             ],
             "run_filename": "runtestsb2g.py",
             "testsdir": "mochitest"
@@ -82,7 +82,6 @@ config = {
             "options": [
                 "--adbpath=%(adbpath)s",
                 "--b2gpath=%(b2gpath)s",
-                "--console-level=INFO",
                 "--emulator=%(emulator)s",
                 "--logdir=%(logcat_dir)s",
                 "--remote-webserver=%(remote_webserver)s",
@@ -95,7 +94,8 @@ config = {
                 "--chrome",
                 "--log-raw=%(raw_log_file)s",
                 "--certificate-path=%(certificate_path)s",
-                "--test-path=%(test_path)s"
+                "--screenshot-on-fail",
+                "%(test_path)s"
             ],
             "run_filename": "runtestsb2g.py",
             "testsdir": "mochitest"

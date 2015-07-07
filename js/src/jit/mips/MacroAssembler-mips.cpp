@@ -11,11 +11,13 @@
 
 #include "jit/Bailouts.h"
 #include "jit/BaselineFrame.h"
-#include "jit/BaselineRegisters.h"
 #include "jit/JitFrames.h"
 #include "jit/MacroAssembler.h"
 #include "jit/mips/Simulator-mips.h"
 #include "jit/MoveEmitter.h"
+#include "jit/SharedICRegisters.h"
+
+#include "jit/MacroAssembler-inl.h"
 
 using namespace js;
 using namespace jit;
@@ -48,6 +50,13 @@ MacroAssemblerMIPS::convertInt32ToDouble(const Address& src, FloatRegister dest)
     ma_lw(ScratchRegister, src);
     as_mtc1(ScratchRegister, dest);
     as_cvtdw(dest, dest);
+}
+
+void
+MacroAssemblerMIPS::convertInt32ToDouble(const BaseIndex& src, FloatRegister dest)
+{
+    computeScaledAddress(src, SecondScratchReg);
+    convertInt32ToDouble(Address(SecondScratchReg, src.offset), dest);
 }
 
 void
@@ -1492,26 +1501,26 @@ MacroAssemblerMIPS::ma_bc1d(FloatRegister lhs, FloatRegister rhs, Label* label,
 void
 MacroAssemblerMIPSCompat::buildFakeExitFrame(Register scratch, uint32_t* offset)
 {
-    mozilla::DebugOnly<uint32_t> initialDepth = framePushed();
+    mozilla::DebugOnly<uint32_t> initialDepth = asMasm().framePushed();
 
     CodeLabel cl;
     ma_li(scratch, cl.dest());
 
-    uint32_t descriptor = MakeFrameDescriptor(framePushed(), JitFrame_IonJS);
+    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS);
     asMasm().Push(Imm32(descriptor));
     asMasm().Push(scratch);
 
     bind(cl.src());
     *offset = currentOffset();
 
-    MOZ_ASSERT(framePushed() == initialDepth + ExitFrameLayout::Size());
+    MOZ_ASSERT(asMasm().framePushed() == initialDepth + ExitFrameLayout::Size());
     addCodeLabel(cl);
 }
 
 bool
 MacroAssemblerMIPSCompat::buildOOLFakeExitFrame(void* fakeReturnAddr)
 {
-    uint32_t descriptor = MakeFrameDescriptor(framePushed(), JitFrame_IonJS);
+    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS);
 
     asMasm().Push(Imm32(descriptor)); // descriptor_
     asMasm().Push(ImmPtr(fakeReturnAddr));
@@ -1522,7 +1531,7 @@ MacroAssemblerMIPSCompat::buildOOLFakeExitFrame(void* fakeReturnAddr)
 void
 MacroAssemblerMIPSCompat::callWithExitFrame(Label* target)
 {
-    uint32_t descriptor = MakeFrameDescriptor(framePushed(), JitFrame_IonJS);
+    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS);
     asMasm().Push(Imm32(descriptor)); // descriptor
 
     ma_callJitHalfPush(target);
@@ -1531,7 +1540,7 @@ MacroAssemblerMIPSCompat::callWithExitFrame(Label* target)
 void
 MacroAssemblerMIPSCompat::callWithExitFrame(JitCode* target)
 {
-    uint32_t descriptor = MakeFrameDescriptor(framePushed(), JitFrame_IonJS);
+    uint32_t descriptor = MakeFrameDescriptor(asMasm().framePushed(), JitFrame_IonJS);
     asMasm().Push(Imm32(descriptor)); // descriptor
 
     addPendingJump(m_buffer.nextOffset(), ImmPtr(target->raw()), Relocation::JITCODE);
@@ -1542,7 +1551,7 @@ MacroAssemblerMIPSCompat::callWithExitFrame(JitCode* target)
 void
 MacroAssemblerMIPSCompat::callWithExitFrame(JitCode* target, Register dynStack)
 {
-    ma_addu(dynStack, dynStack, Imm32(framePushed()));
+    ma_addu(dynStack, dynStack, Imm32(asMasm().framePushed()));
     makeFrameDescriptor(dynStack, JitFrame_IonJS);
     asMasm().Push(dynStack); // descriptor
 
@@ -1554,36 +1563,13 @@ MacroAssemblerMIPSCompat::callWithExitFrame(JitCode* target, Register dynStack)
 void
 MacroAssemblerMIPSCompat::callJit(Register callee)
 {
-    MOZ_ASSERT((framePushed() & 3) == 0);
-    if ((framePushed() & 7) == 4) {
+    MOZ_ASSERT((asMasm().framePushed() & 3) == 0);
+    if ((asMasm().framePushed() & 7) == 4) {
         ma_callJitHalfPush(callee);
     } else {
-        adjustFrame(sizeof(uint32_t));
+        asMasm().adjustFrame(sizeof(uint32_t));
         ma_callJit(callee);
     }
-}
-
-void
-MacroAssemblerMIPSCompat::reserveStack(uint32_t amount)
-{
-    if (amount)
-        ma_subu(StackPointer, StackPointer, Imm32(amount));
-    adjustFrame(amount);
-}
-
-void
-MacroAssemblerMIPSCompat::freeStack(uint32_t amount)
-{
-    MOZ_ASSERT(amount <= framePushed_);
-    if (amount)
-        ma_addu(StackPointer, StackPointer, Imm32(amount));
-    adjustFrame(-amount);
-}
-
-void
-MacroAssemblerMIPSCompat::freeStack(Register amount)
-{
-    as_addu(StackPointer, StackPointer, amount);
 }
 
 void
@@ -1688,6 +1674,12 @@ MacroAssemblerMIPSCompat::or32(Imm32 imm, const Address& dest)
 }
 
 void
+MacroAssemblerMIPSCompat::or32(Register src, Register dest)
+{
+    ma_or(dest, src);
+}
+
+void
 MacroAssemblerMIPSCompat::xor32(Imm32 imm, Register dest)
 {
     ma_xor(dest, imm);
@@ -1758,11 +1750,6 @@ MacroAssemblerMIPSCompat::movePtr(ImmGCPtr imm, Register dest)
     ma_li(dest, imm);
 }
 
-void
-MacroAssemblerMIPSCompat::movePtr(ImmMaybeNurseryPtr imm, Register dest)
-{
-    movePtr(noteMaybeNurseryPtr(imm), dest);
-}
 void
 MacroAssemblerMIPSCompat::movePtr(ImmPtr imm, Register dest)
 {
@@ -3352,11 +3339,11 @@ MacroAssemblerMIPSCompat::callWithABIPre(uint32_t* stackAdjust, bool callFromAsm
     if (dynamicAlignment_) {
         *stackAdjust += ComputeByteAlignment(*stackAdjust, ABIStackAlignment);
     } else {
-        *stackAdjust += ComputeByteAlignment(framePushed_ + alignmentAtPrologue + *stackAdjust,
+        *stackAdjust += ComputeByteAlignment(asMasm().framePushed() + alignmentAtPrologue + *stackAdjust,
                                              ABIStackAlignment);
     }
 
-    reserveStack(*stackAdjust);
+    asMasm().reserveStack(*stackAdjust);
 
     // Save $ra because call is going to clobber it. Restore it in
     // callWithABIPost. NOTE: This is needed for calls from BaselineIC.
@@ -3387,16 +3374,16 @@ MacroAssemblerMIPSCompat::callWithABIPost(uint32_t stackAdjust, MoveOp::Type res
         // Restore sp value from stack (as stored in setupUnalignedABICall()).
         ma_lw(StackPointer, Address(StackPointer, stackAdjust));
         // Use adjustFrame instead of freeStack because we already restored sp.
-        adjustFrame(-stackAdjust);
+        asMasm().adjustFrame(-stackAdjust);
     } else {
-        freeStack(stackAdjust);
+        asMasm().freeStack(stackAdjust);
     }
 
     MOZ_ASSERT(inCall_);
     inCall_ = false;
 }
 
-#if defined(DEBUG) && defined(JS_MIPS_SIMULATOR)
+#if defined(DEBUG) && defined(JS_SIMULATOR_MIPS)
 static void
 AssertValidABIFunctionType(uint32_t passedArgTypes)
 {
@@ -3431,7 +3418,7 @@ AssertValidABIFunctionType(uint32_t passedArgTypes)
 void
 MacroAssemblerMIPSCompat::callWithABI(void* fun, MoveOp::Type result)
 {
-#ifdef JS_MIPS_SIMULATOR
+#ifdef JS_SIMULATOR_MIPS
     MOZ_ASSERT(passedArgs_ <= 15);
     passedArgTypes_ <<= ArgType_Shift;
     switch (result) {
@@ -3458,7 +3445,7 @@ MacroAssemblerMIPSCompat::callWithABI(AsmJSImmPtr imm, MoveOp::Type result)
 {
     uint32_t stackAdjust;
     callWithABIPre(&stackAdjust, /* callFromAsmJS = */ true);
-    call(imm);
+    asMasm().call(imm);
     callWithABIPost(stackAdjust, result);
 }
 
@@ -3471,7 +3458,7 @@ MacroAssemblerMIPSCompat::callWithABI(const Address& fun, MoveOp::Type result)
     ma_lw(t9, Address(fun.base, fun.offset));
     uint32_t stackAdjust;
     callWithABIPre(&stackAdjust);
-    call(t9);
+    asMasm().call(t9);
     callWithABIPost(stackAdjust, result);
 
 }
@@ -3483,7 +3470,7 @@ MacroAssemblerMIPSCompat::callWithABI(Register fun, MoveOp::Type result)
     ma_move(t9, fun);
     uint32_t stackAdjust;
     callWithABIPre(&stackAdjust);
-    call(t9);
+    asMasm().call(t9);
     callWithABIPost(stackAdjust, result);
 }
 
@@ -3780,4 +3767,58 @@ MacroAssembler::Pop(const ValueOperand& val)
 {
     popValue(val);
     framePushed_ -= sizeof(Value);
+}
+
+void
+MacroAssembler::reserveStack(uint32_t amount)
+{
+    if (amount)
+        ma_subu(StackPointer, StackPointer, Imm32(amount));
+    adjustFrame(amount);
+}
+
+// ===============================================================
+// Simple call functions.
+
+void
+MacroAssembler::call(Register reg)
+{
+    as_jalr(reg);
+    as_nop();
+}
+
+void
+MacroAssembler::call(Label* label)
+{
+    ma_bal(label);
+}
+
+void
+MacroAssembler::call(AsmJSImmPtr target)
+{
+    movePtr(target, CallReg);
+    call(CallReg);
+}
+
+void
+MacroAssembler::call(ImmWord target)
+{
+    call(ImmPtr((void*)target.value));
+}
+
+void
+MacroAssembler::call(ImmPtr target)
+{
+    BufferOffset bo = m_buffer.nextOffset();
+    addPendingJump(bo, target, Relocation::HARDCODED);
+    ma_call(target);
+}
+
+void
+MacroAssembler::call(JitCode* c)
+{
+    BufferOffset bo = m_buffer.nextOffset();
+    addPendingJump(bo, ImmPtr(c->raw()), Relocation::JITCODE);
+    ma_liPatchable(ScratchRegister, Imm32((uint32_t)c->raw()));
+    ma_callJitHalfPush(ScratchRegister);
 }

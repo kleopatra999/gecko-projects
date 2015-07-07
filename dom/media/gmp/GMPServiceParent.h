@@ -42,7 +42,6 @@ public:
   NS_IMETHOD GetNodeId(const nsAString& aOrigin,
                        const nsAString& aTopLevelOrigin,
                        bool aInPrivateBrowsingMode,
-                       const nsACString& aVersion,
                        UniquePtr<GetNodeIdCallback>&& aCallback) override;
 
   NS_DECL_MOZIGECKOMEDIAPLUGINCHROMESERVICE
@@ -70,12 +69,12 @@ private:
                                   size_t* aOutPluginIndex);
 
   nsresult GetNodeId(const nsAString& aOrigin, const nsAString& aTopLevelOrigin,
-                     bool aInPrivateBrowsing, const nsACString& aVersion,
-                     nsACString& aOutId);
+                     bool aInPrivateBrowsing, nsACString& aOutId);
 
   void UnloadPlugins();
   void CrashPlugins();
-  void SetAsyncShutdownComplete();
+  void NotifySyncShutdownComplete();
+  void NotifyAsyncShutdownComplete();
 
   void LoadFromEnvironment();
   void ProcessPossiblePlugin(nsIFile* aDir);
@@ -140,6 +139,7 @@ private:
   // Protected by mMutex from the base class.
   nsTArray<nsRefPtr<GMPParent>> mPlugins;
   bool mShuttingDown;
+  nsTArray<nsRefPtr<GMPParent>> mAsyncShutdownPlugins;
 
   // True if we've inspected MOZ_GMP_PATH on the GMP thread and loaded any
   // plugins found there into mPlugins.
@@ -160,9 +160,7 @@ private:
     T mValue;
   };
 
-  MainThreadOnly<bool> mWaitingForPluginsAsyncShutdown;
-
-  nsTArray<nsRefPtr<GMPParent>> mAsyncShutdownPlugins; // GMP Thread only.
+  MainThreadOnly<bool> mWaitingForPluginsSyncShutdown;
 
   nsTArray<nsString> mPluginsWaitingForDeletion;
 
@@ -195,11 +193,10 @@ public:
                            nsTArray<ProcessId>&& aAlreadyBridgedTo,
                            base::ProcessId* aID,
                            nsCString* aDisplayName,
-                           nsCString* aPluginId) override;
+                           uint32_t* aPluginId) override;
   virtual bool RecvGetGMPNodeId(const nsString& aOrigin,
                                 const nsString& aTopLevelOrigin,
                                 const bool& aInPrivateBrowsing,
-                                const nsCString& aVersion,
                                 nsCString* aID) override;
   static bool RecvGetGMPPluginVersionForAPI(const nsCString& aAPI,
                                             nsTArray<nsCString>&& aTags,

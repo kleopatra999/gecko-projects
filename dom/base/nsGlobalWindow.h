@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -52,6 +52,7 @@
 #include "Units.h"
 #include "nsComponentManagerUtils.h"
 #include "nsSize.h"
+#include "nsCheapSets.h"
 
 #define DEFAULT_HOME_PAGE "www.mozilla.org"
 #define PREF_BROWSER_STARTUP_HOMEPAGE "browser.startup.homepage"
@@ -110,6 +111,7 @@ class MozSelfSupport;
 class Navigator;
 class OwningExternalOrWindowProxy;
 class Promise;
+class PostMessageEvent;
 struct RequestInit;
 class RequestOrUSVString;
 class Selection;
@@ -127,12 +129,6 @@ class VRHMDInfo;
 } // namespace gfx
 } // namespace mozilla
 
-extern nsresult
-NS_CreateJSTimeoutHandler(nsGlobalWindow *aWindow,
-                          bool *aIsInterval,
-                          int32_t *aInterval,
-                          nsIScriptTimeoutHandler **aRet);
-
 extern already_AddRefed<nsIScriptTimeoutHandler>
 NS_CreateJSTimeoutHandler(nsGlobalWindow *aWindow,
                           mozilla::dom::Function& aFunction,
@@ -143,6 +139,8 @@ extern already_AddRefed<nsIScriptTimeoutHandler>
 NS_CreateJSTimeoutHandler(JSContext* aCx, nsGlobalWindow *aWindow,
                           const nsAString& aExpression,
                           mozilla::ErrorResult& aError);
+
+extern const js::Class OuterWindowProxyClass;
 
 /*
  * Timeout struct that holds information about each script
@@ -405,13 +403,22 @@ public:
                                 bool aUseCapture,
                                 const mozilla::dom::Nullable<bool>& aWantsUntrusted,
                                 mozilla::ErrorResult& aRv) override;
-  virtual nsIDOMWindow* GetOwnerGlobal() override
+  virtual nsIDOMWindow* GetOwnerGlobalForBindings() override
   {
     if (IsOuterWindow()) {
       return this;
     }
 
     return GetOuterFromCurrentInner(this);
+  }
+
+  virtual nsIGlobalObject* GetOwnerGlobal() const override
+  {
+    if (IsOuterWindow()) {
+      return GetCurrentInnerWindowInternal();
+    }
+
+    return const_cast<nsGlobalWindow*>(this);
   }
 
   // nsPIDOMWindow
@@ -478,8 +485,9 @@ public:
   virtual void RefreshCompartmentPrincipal() override;
 
   // Outer windows only.
-  virtual nsresult SetFullScreenInternal(bool aIsFullScreen, bool aRequireTrust,
-                                         mozilla::gfx::VRHMDInfo *aHMD = nullptr) override;
+  virtual nsresult SetFullScreenInternal(bool aIsFullscreen, bool aFullscreenMode,
+                                         mozilla::gfx::VRHMDInfo *aHMD = nullptr) override final;
+  virtual void FinishFullscreenChange(bool aIsFullscreen) override final;
   bool FullScreen() const;
 
   // Inner windows only.
@@ -501,6 +509,9 @@ public:
   bool DoResolve(JSContext* aCx, JS::Handle<JSObject*> aObj,
                  JS::Handle<jsid> aId,
                  JS::MutableHandle<JSPropertyDescriptor> aDesc);
+  // The return value is whether DoResolve might end up resolving the given id.
+  // If in doubt, return true.
+  static bool MayResolve(jsid aId);
 
   void GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
                            mozilla::ErrorResult& aRv);
@@ -837,7 +848,7 @@ public:
     CreateNamedPropertiesObject(JSContext *aCx, JS::Handle<JSObject*> aProto);
 
   nsGlobalWindow* Window();
-  nsIDOMWindow* GetSelf(mozilla::ErrorResult& aError);
+  nsGlobalWindow* Self();
   nsIDocument* GetDocument()
   {
     return GetDoc();
@@ -892,6 +903,13 @@ public:
   void GetSidebar(mozilla::dom::OwningExternalOrWindowProxy& aResult,
                   mozilla::ErrorResult& aRv);
   already_AddRefed<mozilla::dom::External> GetExternal(mozilla::ErrorResult& aRv);
+
+  // Exposed only for testing
+  static bool
+  TokenizeDialogOptions(nsAString& aToken, nsAString::const_iterator& aIter,
+                        nsAString::const_iterator aEnd);
+  static void
+  ConvertDialogOptions(const nsAString& aOptions, nsAString& aResult);
 
 protected:
   bool AlertOrConfirm(bool aAlert, const nsAString& aMessage,
@@ -1044,6 +1062,8 @@ public:
             bool aShowDialog, mozilla::ErrorResult& aError);
   uint64_t GetMozPaintCount(mozilla::ErrorResult& aError);
 
+  bool ShouldResistFingerprinting();
+
   mozilla::dom::MozSelfSupport* GetMozSelfSupport(mozilla::ErrorResult& aError);
 
   already_AddRefed<nsIDOMWindow> OpenDialog(JSContext* aCx,
@@ -1097,6 +1117,8 @@ public:
   void GetInterface(JSContext* aCx, nsIJSID* aIID,
                     JS::MutableHandle<JS::Value> aRetval,
                     mozilla::ErrorResult& aError);
+
+  already_AddRefed<nsWindowRoot> GetWindowRoot(mozilla::ErrorResult& aError);
 
 protected:
   // Web IDL helpers
@@ -1303,11 +1325,10 @@ public:
   {
     mozilla::ErrorResult rv;
     ClearTimeoutOrInterval(aTimerID, rv);
-    return rv.ErrorCode();
+    return rv.StealNSResult();
   }
 
   // JS specific timeout functions (JS args grabbed from context).
-  nsresult SetTimeoutOrInterval(bool aIsInterval, int32_t* aReturn);
   nsresult ResetTimersForNonBackgroundWindow();
 
   // The timeout implementation functions.
@@ -1330,6 +1351,7 @@ public:
   already_AddRefed<nsIBaseWindow> GetTreeOwnerWindow();
   already_AddRefed<nsIWebBrowserChrome> GetWebBrowserChrome();
   nsresult SecurityCheckURL(const char *aURL);
+  bool IsPrivateBrowsing();
 
   bool PopupWhitelisted();
   PopupControlState RevisePopupAbuseLevel(PopupControlState);
@@ -1530,6 +1552,7 @@ protected:
   // These members are only used on outer window objects. Make sure
   // you never set any of these on an inner object!
   bool                          mFullScreen : 1;
+  bool                          mFullscreenMode : 1;
   bool                          mIsClosed : 1;
   bool                          mInClose : 1;
   // mHavePendingClose means we've got a termination function set to
@@ -1588,6 +1611,7 @@ protected:
   // Indicates whether this window wants gamepad input events
   bool                   mHasGamepad : 1;
 #ifdef MOZ_GAMEPAD
+  nsCheapSet<nsUint32HashKey> mGamepadIndexSet;
   nsRefPtrHashtable<nsUint32HashKey, mozilla::dom::Gamepad> mGamepads;
   bool mHasSeenGamepadInput;
 #endif
@@ -1623,7 +1647,7 @@ protected:
   nsRefPtr<nsDOMWindowUtils>    mWindowUtils;
   nsString                      mStatus;
   nsString                      mDefaultStatus;
-  nsGlobalWindowObserver*       mObserver; // Inner windows only.
+  nsRefPtr<nsGlobalWindowObserver> mObserver; // Inner windows only.
   nsRefPtr<mozilla::dom::Crypto>  mCrypto;
   nsRefPtr<mozilla::dom::cache::CacheStorage> mCacheStorage;
   nsRefPtr<mozilla::dom::Console> mConsole;
@@ -1730,7 +1754,7 @@ protected:
 
   friend class nsDOMScriptableHelper;
   friend class nsDOMWindowUtils;
-  friend class PostMessageEvent;
+  friend class mozilla::dom::PostMessageEvent;
   friend class DesktopNotification;
 
   static WindowByIdTable* sWindowsById;

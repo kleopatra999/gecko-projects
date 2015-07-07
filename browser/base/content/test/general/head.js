@@ -177,7 +177,7 @@ function clearAllPermissionsByPrefix(aPrefix) {
   while (perms.hasMoreElements()) {
     let perm = perms.getNext();
     if (perm.type.startsWith(aPrefix)) {
-      Services.perms.remove(perm.host, perm.type);
+      Services.perms.removePermission(perm);
     }
   }
 }
@@ -470,8 +470,9 @@ let FullZoomHelper = {
       throw new Error("tab must be given.");
     if (gBrowser.selectedTab == tab)
       return Promise.resolve();
-    gBrowser.selectedTab = tab;
-    return this.waitForLocationChange();
+
+    return Promise.all([BrowserTestUtils.switchTab(gBrowser, tab),
+                        this.waitForLocationChange()]);
   },
 
   removeTabAndWaitForLocationChange: function removeTabAndWaitForLocationChange(tab) {
@@ -484,34 +485,33 @@ let FullZoomHelper = {
   },
 
   waitForLocationChange: function waitForLocationChange() {
-    let deferred = Promise.defer();
-    Services.obs.addObserver(function obs(subj, topic, data) {
-      Services.obs.removeObserver(obs, topic);
-      deferred.resolve();
-    }, "browser-fullZoom:location-change", false);
-    return deferred.promise;
+    return new Promise(resolve => {
+      Services.obs.addObserver(function obs(subj, topic, data) {
+        Services.obs.removeObserver(obs, topic);
+        resolve();
+      }, "browser-fullZoom:location-change", false);
+    });
   },
 
   load: function load(tab, url) {
-    let deferred = Promise.defer();
-    let didLoad = false;
-    let didZoom = false;
+    return new Promise(resolve => {
+      let didLoad = false;
+      let didZoom = false;
 
-    promiseTabLoadEvent(tab).then(event => {
-      didLoad = true;
-      if (didZoom)
-        deferred.resolve();
-    }, true);
+      promiseTabLoadEvent(tab).then(event => {
+        didLoad = true;
+        if (didZoom)
+          resolve();
+      }, true);
 
-    this.waitForLocationChange().then(function () {
-      didZoom = true;
-      if (didLoad)
-        deferred.resolve();
+      this.waitForLocationChange().then(function () {
+        didZoom = true;
+        if (didLoad)
+          resolve();
+      });
+
+      tab.linkedBrowser.loadURI(url);
     });
-
-    tab.linkedBrowser.loadURI(url);
-
-    return deferred.promise;
   },
 
   zoomTest: function zoomTest(tab, val, msg) {
@@ -519,48 +519,42 @@ let FullZoomHelper = {
   },
 
   enlarge: function enlarge() {
-    let deferred = Promise.defer();
-    FullZoom.enlarge(function () deferred.resolve());
-    return deferred.promise;
+    return new Promise(resolve => FullZoom.enlarge(resolve));
   },
 
   reduce: function reduce() {
-    let deferred = Promise.defer();
-    FullZoom.reduce(function () deferred.resolve());
-    return deferred.promise;
+    return new Promise(resolve => FullZoom.reduce(resolve));
   },
 
   reset: function reset() {
-    let deferred = Promise.defer();
-    FullZoom.reset(function () deferred.resolve());
-    return deferred.promise;
+    return new Promise(resolve => FullZoom.reset(resolve));
   },
 
   BACK: 0,
   FORWARD: 1,
   navigate: function navigate(direction) {
-    let deferred = Promise.defer();
-    let didPs = false;
-    let didZoom = false;
+    return new Promise(resolve => {
+      let didPs = false;
+      let didZoom = false;
 
-    gBrowser.addEventListener("pageshow", function (event) {
-      gBrowser.removeEventListener("pageshow", arguments.callee, true);
-      didPs = true;
-      if (didZoom)
-        deferred.resolve();
-    }, true);
+      gBrowser.addEventListener("pageshow", function (event) {
+        gBrowser.removeEventListener("pageshow", arguments.callee, true);
+        didPs = true;
+        if (didZoom)
+          resolve();
+      }, true);
 
-    if (direction == this.BACK)
-      gBrowser.goBack();
-    else if (direction == this.FORWARD)
-      gBrowser.goForward();
+      if (direction == this.BACK)
+        gBrowser.goBack();
+      else if (direction == this.FORWARD)
+        gBrowser.goForward();
 
-    this.waitForLocationChange().then(function () {
-      didZoom = true;
-      if (didPs)
-        deferred.resolve();
+      this.waitForLocationChange().then(function () {
+        didZoom = true;
+        if (didPs)
+          resolve();
+      });
     });
-    return deferred.promise;
   },
 
   failAndContinue: function failAndContinue(func) {
@@ -639,18 +633,79 @@ function waitForNewTabEvent(aTabBrowser) {
  * @resolves to the window
  */
 function promiseWindow(url) {
-  info("waiting for a " + url + " window");
+  info("expecting a " + url + " window");
   return new Promise(resolve => {
     Services.obs.addObserver(function obs(win) {
       win.QueryInterface(Ci.nsIDOMWindow);
-      if (win.location.href !== url) {
-        info("ignoring a window with this url: " + win.location.href);
-        return;
-      }
+      win.addEventListener("load", function loadHandler() {
+        win.removeEventListener("load", loadHandler);
 
-      Services.obs.removeObserver(obs, "domwindowopened");
-      resolve(win);
+        if (win.location.href !== url) {
+          info("ignoring a window with this url: " + win.location.href);
+          return;
+        }
+
+        Services.obs.removeObserver(obs, "domwindowopened");
+        resolve(win);
+      });
     }, "domwindowopened", false);
+  });
+}
+
+function promiseIndicatorWindow() {
+  // We don't show the indicator window on Mac.
+  if ("nsISystemStatusBar" in Ci)
+    return Promise.resolve();
+
+  return promiseWindow("chrome://browser/content/webrtcIndicator.xul");
+}
+
+/**
+ * Add some entries to a test tracking protection database, and reset
+ * back to the default database after the test ends.
+ */
+function updateTrackingProtectionDatabase() {
+  let TABLE = "urlclassifier.trackingTable";
+  Services.prefs.setCharPref(TABLE, "test-track-simple");
+
+  registerCleanupFunction(function() {
+    Services.prefs.clearUserPref(TABLE);
+  });
+
+  // Add some URLs to the tracking database (to be blocked)
+  let testData = "tracking.example.com/";
+  let testUpdate =
+    "n:1000\ni:test-track-simple\nad:1\n" +
+    "a:524:32:" + testData.length + "\n" +
+    testData;
+
+  return new Promise((resolve, reject) => {
+    let dbService = Cc["@mozilla.org/url-classifier/dbservice;1"]
+                    .getService(Ci.nsIUrlClassifierDBService);
+    let listener = {
+      QueryInterface: iid => {
+        if (iid.equals(Ci.nsISupports) ||
+            iid.equals(Ci.nsIUrlClassifierUpdateObserver))
+          return listener;
+
+        throw Cr.NS_ERROR_NO_INTERFACE;
+      },
+      updateUrlRequested: url => { },
+      streamFinished: status => { },
+      updateError: errorCode => {
+        ok(false, "Couldn't update classifier.");
+        resolve();
+      },
+      updateSuccess: requestedTimeout => {
+        resolve();
+      }
+    };
+
+    dbService.beginUpdate(listener, "test-track-simple", "");
+    dbService.beginStream("", "");
+    dbService.updateStream(testUpdate);
+    dbService.finishStream();
+    dbService.finishUpdate();
   });
 }
 
@@ -700,9 +755,6 @@ function assertWebRTCIndicatorStatus(expected) {
         });
       }
     }
-    if (expected &&
-        !Services.wm.getMostRecentWindow("Browser:WebRTCGlobalIndicator"))
-      yield promiseWindow("chrome://browser/content/webrtcIndicator.xul");
     let indicator = Services.wm.getEnumerator("Browser:WebRTCGlobalIndicator");
     let hasWindow = indicator.hasMoreElements();
     is(hasWindow, !!expected, "popup " + msg);

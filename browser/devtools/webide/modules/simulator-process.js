@@ -35,7 +35,9 @@ function SimulatorProcess() {}
 SimulatorProcess.prototype = {
 
   // Check if B2G is running.
-  get isRunning() !!this.process,
+  get isRunning() {
+    return !!this.process;
+  },
 
   // Start the process and connect the debugger client.
   run() {
@@ -65,15 +67,22 @@ SimulatorProcess.prototype = {
       }
     });
 
-    this.on("stdout", (e, data) => this.log(e, data.trim()));
-    this.on("stderr", (e, data) => this.log(e, data.trim()));
+    let logHandler = (e, data) => this.log(e, data.trim());
+    this.on("stdout", logHandler);
+    this.on("stderr", logHandler);
+    this.once("exit", () => {
+      this.off("stdout", logHandler);
+      this.off("stderr", logHandler);
+    });
 
     let environment;
     if (OS.indexOf("linux") > -1) {
       environment = ["TMPDIR=" + Services.dirsvc.get("TmpD", Ci.nsIFile).path];
-      if ("DISPLAY" in Environment) {
-        environment.push("DISPLAY=" + Environment.DISPLAY);
-      }
+      ["DISPLAY", "XAUTHORITY"].forEach(key => {
+        if (key in Environment) {
+          environment.push(key + "=" + Environment[key]);
+        }
+      });
     }
 
     // Spawn a B2G instance.

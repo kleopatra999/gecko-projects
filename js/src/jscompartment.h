@@ -125,13 +125,10 @@ typedef HashMap<CrossCompartmentKey, ReadBarrieredValue,
 
 } /* namespace js */
 
-namespace JS {
-struct TypeInferenceSizes;
-}
-
 namespace js {
 class DebugScopes;
 class ObjectWeakMap;
+class WatchpointMap;
 class WeakMapBase;
 }
 
@@ -327,8 +324,8 @@ struct JSCompartment
      */
     js::ReadBarrieredScriptSourceObject selfHostingScriptSource;
 
-    // Keep track of the metadata objects which can be associated with each
-    // JS object.
+    // Keep track of the metadata objects which can be associated with each JS
+    // object. Both keys and values are in this compartment.
     js::ObjectWeakMap* objectMetadataTable;
 
     // Map from array buffers to views sharing that storage.
@@ -380,17 +377,17 @@ struct JSCompartment
     JSCompartment(JS::Zone* zone, const JS::CompartmentOptions& options);
     ~JSCompartment();
 
-    bool init(JSContext* cx);
+    bool init(JSContext* maybecx);
 
     /* Mark cross-compartment wrappers. */
     void markCrossCompartmentWrappers(JSTracer* trc);
 
     inline bool wrap(JSContext* cx, JS::MutableHandleValue vp,
-                     JS::HandleObject existing = js::NullPtr());
+                     JS::HandleObject existing = nullptr);
 
     bool wrap(JSContext* cx, js::MutableHandleString strp);
     bool wrap(JSContext* cx, JS::MutableHandleObject obj,
-              JS::HandleObject existingArg = js::NullPtr());
+              JS::HandleObject existingArg = nullptr);
     bool wrap(JSContext* cx, JS::MutableHandle<js::PropertyDescriptor> desc);
 
     template<typename T> bool wrap(JSContext* cx, JS::AutoVectorRooter<T>& vec) {
@@ -429,6 +426,7 @@ struct JSCompartment
     void sweepDebugScopes();
     void sweepWeakMaps();
     void sweepNativeIterators();
+    void sweepTemplateObjects();
 
     void purge();
     void clearTables();
@@ -438,6 +436,7 @@ struct JSCompartment
     void fixupGlobal();
 
     bool hasObjectMetadataCallback() const { return objectMetadataCallback; }
+    js::ObjectMetadataCallback getObjectMetadataCallback() const { return objectMetadataCallback; }
     void setObjectMetadataCallback(js::ObjectMetadataCallback callback);
     void forgetObjectMetadataCallback() {
         objectMetadataCallback = nullptr;
@@ -456,6 +455,10 @@ struct JSCompartment
 
     /* Random number generator state, used by jsmath.cpp. */
     uint64_t rngState;
+
+    static size_t offsetOfRngState() {
+        return offsetof(JSCompartment, rngState);
+    }
 
   private:
     JSCompartment* thisForCtor() { return this; }
@@ -576,6 +579,9 @@ struct JSCompartment
   private:
     js::jit::JitCompartment* jitCompartment_;
 
+    js::ReadBarriered<js::ArgumentsObject*> normalArgumentsTemplate_;
+    js::ReadBarriered<js::ArgumentsObject*> strictArgumentsTemplate_;
+
   public:
     bool ensureJitCompartmentExists(JSContext* cx);
     js::jit::JitCompartment* jitCompartment() {
@@ -588,11 +594,14 @@ struct JSCompartment
         DeprecatedLegacyGenerator = 2,      // JS 1.7+
         DeprecatedExpressionClosure = 3,    // Added in JS 1.8
         DeprecatedLetBlock = 4,             // Added in JS 1.7
-        DeprecatedLetExpression = 5,        // Added in JS 1.7
+        // NO LONGER USING 5
         DeprecatedNoSuchMethod = 6,         // JS 1.7+
         DeprecatedFlagsArgument = 7,        // JS 1.3 or older
+        RegExpSourceProperty = 8,           // ES5
         DeprecatedLanguageExtensionCount
     };
+
+    js::ArgumentsObject* getOrCreateArgumentsTemplateObject(JSContext* cx, bool strict);
 
   private:
     // Used for collecting telemetry on SpiderMonkey's deprecated language extensions.
@@ -605,7 +614,7 @@ struct JSCompartment
 };
 
 inline bool
-JSRuntime::isAtomsZone(JS::Zone* zone)
+JSRuntime::isAtomsZone(const JS::Zone* zone) const
 {
     return zone == atomsCompartment_->zone();
 }
@@ -732,12 +741,12 @@ struct WrapperValue
     Value value;
 };
 
-class AutoWrapperVector : public AutoVectorRooter<WrapperValue>
+class AutoWrapperVector : public JS::AutoVectorRooterBase<WrapperValue>
 {
   public:
     explicit AutoWrapperVector(JSContext* cx
                                MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-        : AutoVectorRooter<WrapperValue>(cx, WRAPVECTOR)
+        : AutoVectorRooterBase<WrapperValue>(cx, WRAPVECTOR)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }

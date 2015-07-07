@@ -862,7 +862,7 @@ function onBlockImage()
   if (checkbox.checked)
     permissionManager.add(uri, "image", nsIPermissionManager.DENY_ACTION);
   else
-    permissionManager.remove(uri.host, "image");
+    permissionManager.remove(uri, "image");
 }
 
 function onImageSelect()
@@ -1253,7 +1253,7 @@ function doCopy()
         elem.removeAttribute("copybuffer");
       }
     }
-    gClipboardHelper.copyString(text.join("\n"), document);
+    gClipboardHelper.copyString(text.join("\n"));
   }
 }
 

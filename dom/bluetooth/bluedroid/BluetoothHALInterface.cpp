@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,11 +8,7 @@
 #include "BluetoothHALHelpers.h"
 #include "BluetoothA2dpHALInterface.h"
 #include "BluetoothAvrcpHALInterface.h"
-#ifdef MOZ_B2G_BT_API_V2
 #include "BluetoothGattHALInterface.h"
-#else
-// TODO: Support GATT
-#endif
 #include "BluetoothHandsfreeHALInterface.h"
 #include "BluetoothSocketHALInterface.h"
 
@@ -68,7 +64,6 @@ struct interface_traits<BluetoothAvrcpHALInterface>
 };
 #endif
 
-#ifdef MOZ_B2G_BT_API_V2
 #if ANDROID_VERSION >= 19
 template<>
 struct interface_traits<BluetoothGattHALInterface>
@@ -80,9 +75,6 @@ struct interface_traits<BluetoothGattHALInterface>
     return BT_PROFILE_GATT_ID;
   }
 };
-#endif
-#else
-// TODO: Support GATT
 #endif
 
 typedef
@@ -648,6 +640,8 @@ BluetoothHALInterface::GetRemoteDeviceProperty(
 
   if (NS_SUCCEEDED(Convert(aRemoteAddr, remoteAddr)) &&
       false /* TODO: we don't support any values for aName currently */) {
+    // silence uninitialized variable warning for |name|
+    name = static_cast<bt_property_type_t>(0);
     status = mInterface->get_remote_device_property(&remoteAddr, name);
   } else {
     status = BT_STATUS_PARM_INVALID;
@@ -883,7 +877,6 @@ BluetoothHALInterface::PinReply(const nsAString& aBdAddr, bool aAccept,
   }
 }
 
-#ifdef MOZ_B2G_BT_API_V2
 void
 BluetoothHALInterface::SspReply(const nsAString& aBdAddr,
                                 BluetoothSspVariant aVariant,
@@ -909,33 +902,6 @@ BluetoothHALInterface::SspReply(const nsAString& aBdAddr,
                                ConvertDefault(status, STATUS_FAIL));
   }
 }
-#else
-void
-BluetoothHALInterface::SspReply(const nsAString& aBdAddr,
-                                const nsAString& aVariant,
-                                bool aAccept, uint32_t aPasskey,
-                                BluetoothResultHandler* aRes)
-{
-  int status;
-  bt_bdaddr_t bdAddr;
-  bt_ssp_variant_t variant;
-  uint8_t accept;
-
-  if (NS_SUCCEEDED(Convert(aBdAddr, bdAddr)) &&
-      NS_SUCCEEDED(Convert(aVariant, variant)) &&
-      NS_SUCCEEDED(Convert(aAccept, accept))) {
-    status = mInterface->ssp_reply(&bdAddr, variant, accept, aPasskey);
-  } else {
-    status = BT_STATUS_PARM_INVALID;
-  }
-
-  if (aRes) {
-    DispatchBluetoothHALResult(aRes,
-                               &BluetoothResultHandler::SspReply,
-                               ConvertDefault(status, STATUS_FAIL));
-  }
-}
-#endif
 
 /* DUT Mode */
 
@@ -1048,7 +1014,6 @@ BluetoothHALInterface::CreateProfileInterface<BluetoothAvrcpHALInterface>()
 }
 #endif
 
-#ifdef MOZ_B2G_BT_API_V2
 #if ANDROID_VERSION < 19
 /*
  * Versions that we don't support GATT will call this function
@@ -1063,9 +1028,6 @@ BluetoothHALInterface::CreateProfileInterface<BluetoothGattHALInterface>()
 
   return new BluetoothGattHALInterface();
 }
-#endif
-#else
-// TODO: Support GATT
 #endif
 
 template <class T>
@@ -1107,14 +1069,10 @@ BluetoothHALInterface::GetBluetoothAvrcpInterface()
   return GetProfileInterface<BluetoothAvrcpHALInterface>();
 }
 
-#ifdef MOZ_B2G_BT_API_V2
 BluetoothGattInterface*
 BluetoothHALInterface::GetBluetoothGattInterface()
 {
   return GetProfileInterface<BluetoothGattHALInterface>();
 }
-#else
-// TODO: Support GATT
-#endif
 
 END_BLUETOOTH_NAMESPACE

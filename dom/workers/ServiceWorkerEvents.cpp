@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,7 +16,9 @@
 #include "nsStreamUtils.h"
 #include "nsNetCID.h"
 #include "nsSerializationHelper.h"
+#include "nsQueryObject.h"
 
+#include "mozilla/Preferences.h"
 #include "mozilla/dom/FetchEventBinding.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
 #include "mozilla/dom/Request.h"
@@ -96,11 +98,14 @@ class FinishResponse final : public nsRunnable
 {
   nsMainThreadPtrHandle<nsIInterceptedChannel> mChannel;
   nsRefPtr<InternalResponse> mInternalResponse;
+  ChannelInfo mWorkerChannelInfo;
 public:
   FinishResponse(nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel,
-                 InternalResponse* aInternalResponse)
+                 InternalResponse* aInternalResponse,
+                 const ChannelInfo& aWorkerChannelInfo)
     : mChannel(aChannel)
     , mInternalResponse(aInternalResponse)
+    , mWorkerChannelInfo(aWorkerChannelInfo)
   {
   }
 
@@ -109,13 +114,17 @@ public:
   {
     AssertIsOnMainThread();
 
-    nsCOMPtr<nsISupports> infoObj;
-    nsresult rv = NS_DeserializeObject(mInternalResponse->GetSecurityInfo(), getter_AddRefs(infoObj));
-    if (NS_SUCCEEDED(rv)) {
-      rv = mChannel->SetSecurityInfo(infoObj);
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
-      }
+    ChannelInfo channelInfo;
+    if (mInternalResponse->GetChannelInfo().IsInitialized()) {
+      channelInfo = mInternalResponse->GetChannelInfo();
+    } else {
+      // We are dealing with a synthesized response here, so fall back to the
+      // channel info for the worker script.
+      channelInfo = mWorkerChannelInfo;
+    }
+    nsresult rv = mChannel->SetChannelInfo(&channelInfo);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
     }
 
     mChannel->SynthesizeStatus(mInternalResponse->GetStatus(), mInternalResponse->GetStatusText());
@@ -158,11 +167,14 @@ struct RespondWithClosure
 {
   nsMainThreadPtrHandle<nsIInterceptedChannel> mInterceptedChannel;
   nsRefPtr<InternalResponse> mInternalResponse;
+  ChannelInfo mWorkerChannelInfo;
 
   RespondWithClosure(nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel,
-                     InternalResponse* aInternalResponse)
+                     InternalResponse* aInternalResponse,
+                     const ChannelInfo& aWorkerChannelInfo)
     : mInterceptedChannel(aChannel)
     , mInternalResponse(aInternalResponse)
+    , mWorkerChannelInfo(aWorkerChannelInfo)
   {
   }
 };
@@ -172,7 +184,9 @@ void RespondWithCopyComplete(void* aClosure, nsresult aStatus)
   nsAutoPtr<RespondWithClosure> data(static_cast<RespondWithClosure*>(aClosure));
   nsCOMPtr<nsIRunnable> event;
   if (NS_SUCCEEDED(aStatus)) {
-    event = new FinishResponse(data->mInterceptedChannel, data->mInternalResponse);
+    event = new FinishResponse(data->mInterceptedChannel,
+                               data->mInternalResponse,
+                               data->mWorkerChannelInfo);
   } else {
     event = new CancelChannelRunnable(data->mInterceptedChannel);
   }
@@ -208,12 +222,24 @@ RespondWithHandler::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValu
   AutoCancel autoCancel(this);
 
   if (!aValue.isObject()) {
+    NS_WARNING("FetchEvent::RespondWith was passed a promise resolved to a non-Object value");
     return;
   }
 
   nsRefPtr<Response> response;
   nsresult rv = UNWRAP_OBJECT(Response, &aValue.toObject(), response);
   if (NS_FAILED(rv)) {
+    return;
+  }
+
+  WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
+  MOZ_ASSERT(worker);
+  worker->AssertIsOnWorkerThread();
+
+  // Allow opaque response interception to be disabled until we can ensure the
+  // security implications are not a complete disaster.
+  if (response->Type() == ResponseType::Opaque &&
+      !worker->OpaqueInterceptionEnabled()) {
     return;
   }
 
@@ -233,9 +259,10 @@ RespondWithHandler::ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValu
     return;
   }
 
-  nsAutoPtr<RespondWithClosure> closure(new RespondWithClosure(mInterceptedChannel, ir));
+  nsAutoPtr<RespondWithClosure> closure(
+      new RespondWithClosure(mInterceptedChannel, ir, worker->GetChannelInfo()));
   nsCOMPtr<nsIInputStream> body;
-  response->GetBody(getter_AddRefs(body));
+  ir->GetInternalBody(getter_AddRefs(body));
   // Errors and redirects may not have a body.
   if (body) {
     response->SetBodyUsed();
@@ -356,20 +383,6 @@ NS_INTERFACE_MAP_END_INHERITING(Event)
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(ExtendableEvent, Event, mPromise)
 
-InstallEvent::InstallEvent(EventTarget* aOwner)
-  : ExtendableEvent(aOwner)
-  , mActivateImmediately(false)
-{
-}
-
-NS_IMPL_ADDREF_INHERITED(InstallEvent, ExtendableEvent)
-NS_IMPL_RELEASE_INHERITED(InstallEvent, ExtendableEvent)
-
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(InstallEvent)
-NS_INTERFACE_MAP_END_INHERITING(ExtendableEvent)
-
-NS_IMPL_CYCLE_COLLECTION_INHERITED(InstallEvent, ExtendableEvent, mActiveWorker)
-
 #ifndef MOZ_SIMPLEPUSH
 
 PushMessageData::PushMessageData(const nsAString& aData)
@@ -404,7 +417,7 @@ PushMessageData::ArrayBuffer(JSContext* cx, JS::MutableHandle<JSObject*> aRetval
    NS_ABORT();
 }
 
-mozilla::dom::File*
+mozilla::dom::Blob*
 PushMessageData::Blob()
 {
   //todo bug 1149195.  Don't be lazy.

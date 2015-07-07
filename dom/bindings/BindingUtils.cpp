@@ -1,5 +1,5 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-*/
-/* vim: set ts=2 sw=2 et tw=79: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -34,8 +34,6 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/DOMError.h"
 #include "mozilla/dom/DOMErrorBinding.h"
-#include "mozilla/dom/DOMException.h"
-#include "mozilla/dom/DOMExceptionBinding.h"
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/HTMLObjectElement.h"
 #include "mozilla/dom/HTMLObjectElementBinding.h"
@@ -146,9 +144,12 @@ ErrorResult::ThrowErrorWithMessage(va_list ap, const dom::ErrNum errorNumber,
   MOZ_ASSERT(argCount <= 10);
   argCount = std::min<uint16_t>(argCount, 10);
   while (argCount--) {
-    message->mArgs.AppendElement(*va_arg(ap, nsString*));
+    message->mArgs.AppendElement(*va_arg(ap, const nsAString*));
   }
   mMessage = message;
+#ifdef DEBUG
+  mHasMessage = true;
+#endif
 }
 
 void
@@ -156,6 +157,7 @@ ErrorResult::SerializeMessage(IPC::Message* aMsg) const
 {
   using namespace IPC;
   MOZ_ASSERT(mMessage);
+  MOZ_ASSERT(mHasMessage);
   WriteParam(aMsg, mMessage->mArgs);
   WriteParam(aMsg, mMessage->mErrorNumber);
 }
@@ -169,10 +171,11 @@ ErrorResult::DeserializeMessage(const IPC::Message* aMsg, void** aIter)
       !ReadParam(aMsg, aIter, &readMessage->mErrorNumber)) {
     return false;
   }
-  if (mMessage) {
-    delete mMessage;
-  }
+  MOZ_ASSERT(!mHasMessage);
   mMessage = readMessage.forget();
+#ifdef DEBUG
+  mHasMessage = true;
+#endif
   return true;
 }
 
@@ -198,6 +201,7 @@ void
 ErrorResult::ReportErrorWithMessage(JSContext* aCx)
 {
   MOZ_ASSERT(mMessage, "ReportErrorWithMessage() can be called only once");
+  MOZ_ASSERT(mHasMessage);
 
   Message* message = mMessage;
   const uint32_t argCount = message->mArgs.Length();
@@ -217,10 +221,12 @@ ErrorResult::ReportErrorWithMessage(JSContext* aCx)
 void
 ErrorResult::ClearMessage()
 {
-  if (IsErrorWithMessage()) {
-    delete mMessage;
-    mMessage = nullptr;
-  }
+  MOZ_ASSERT(IsErrorWithMessage());
+  delete mMessage;
+  mMessage = nullptr;
+#ifdef DEBUG
+  mHasMessage = false;
+#endif
 }
 
 void
@@ -231,6 +237,9 @@ ErrorResult::ThrowJSException(JSContext* cx, JS::Handle<JS::Value> exn)
 
   if (IsErrorWithMessage()) {
     delete mMessage;
+#ifdef DEBUG
+    mHasMessage = false;
+#endif
   }
 
   // Make sure mJSException is initialized _before_ we try to root it.  But
@@ -268,43 +277,6 @@ ErrorResult::ReportJSException(JSContext* cx)
 }
 
 void
-ErrorResult::ReportJSExceptionFromJSImplementation(JSContext* aCx)
-{
-  MOZ_ASSERT(!mMightHaveUnreportedJSException,
-             "Why didn't you tell us you planned to handle JS exceptions?");
-
-  dom::DOMException* domException;
-  nsresult rv =
-    UNWRAP_OBJECT(DOMException, &mJSException.toObject(), domException);
-  if (NS_SUCCEEDED(rv)) {
-    ReportJSException(aCx);
-    return;
-  }
-
-  dom::DOMError* domError;
-  rv = UNWRAP_OBJECT(DOMError, &mJSException.toObject(), domError);
-  if (NS_FAILED(rv)) {
-    // Unwrapping really shouldn't fail here: if mExceptionHandling is set to
-    // eRethrowContentExceptions then the CallSetup destructor only stores an
-    // exception if it unwraps to DOMError or DOMException. If we reach this
-    // then either mExceptionHandling wasn't set to eRethrowContentExceptions
-    // and we shouldn't be calling ReportJSExceptionFromJSImplementation or
-    // something went really wrong.
-    NS_RUNTIMEABORT("We stored a non-DOMError exception!");
-  }
-
-  nsString message;
-  domError->GetMessage(message);
-
-  JS_ReportError(aCx, "%hs", message.get());
-  js::RemoveRawValueRoot(aCx, &mJSException);
-
-  // We no longer have a useful exception but we do want to signal that an error
-  // occured.
-  mResult = NS_ERROR_FAILURE;
-}
-
-void
 ErrorResult::StealJSException(JSContext* cx,
                               JS::MutableHandle<JS::Value> value)
 {
@@ -328,6 +300,14 @@ ErrorResult::ReportNotEnoughArgsError(JSContext* cx,
   ThrowErrorMessage(cx, dom::MSG_MISSING_ARGUMENTS, errorMessage.get());
 }
 
+void
+ErrorResult::ReportGenericError(JSContext* cx)
+{
+  MOZ_ASSERT(!IsErrorWithMessage());
+  MOZ_ASSERT(!IsJSException());
+  dom::Throw(cx, ErrorCode());
+}
+
 ErrorResult&
 ErrorResult::operator=(ErrorResult&& aRHS)
 {
@@ -338,6 +318,10 @@ ErrorResult::operator=(ErrorResult&& aRHS)
   if (aRHS.IsErrorWithMessage()) {
     mMessage = aRHS.mMessage;
     aRHS.mMessage = nullptr;
+#ifdef DEBUG
+    mHasMessage = aRHS.mHasMessage;
+    aRHS.mHasMessage = false;
+#endif
   } else if (aRHS.IsJSException()) {
     JSContext* cx = nsContentUtils::GetDefaultJSContextForThread();
     MOZ_ASSERT(cx);
@@ -351,12 +335,33 @@ ErrorResult::operator=(ErrorResult&& aRHS)
   } else {
     // Null out the union on both sides for hygiene purposes.
     mMessage = aRHS.mMessage = nullptr;
+#ifdef DEBUG
+    mHasMessage = aRHS.mHasMessage = false;
+#endif
   }
   // Note: It's important to do this last, since this affects the condition
   // checks above!
   mResult = aRHS.mResult;
   aRHS.mResult = NS_OK;
   return *this;
+}
+
+void
+ErrorResult::SuppressException()
+{
+  WouldReportJSException();
+  if (IsErrorWithMessage()) {
+    ClearMessage();
+  } else if (IsJSException()) {
+    JSContext* cx = nsContentUtils::GetDefaultJSContextForThread();
+    // Just steal it into a stack value (unrooting it in the process)
+    // that we then allow to die.
+    JS::Rooted<JS::Value> temp(cx);
+    StealJSException(cx, &temp);
+  }
+  // We don't use AssignErrorCode, because we want to override existing error
+  // states, which AssignErrorCode is not allowed to do.
+  mResult = NS_OK;
 }
 
 namespace dom {
@@ -506,7 +511,7 @@ DefineConstructor(JSContext* cx, JS::Handle<JSObject*> global, const char* name,
 
   // This is Enumerable: False per spec.
   return alreadyDefined ||
-         JS_DefineProperty(cx, global, name, constructor, 0);
+         JS_DefineProperty(cx, global, name, constructor, JSPROP_RESOLVING);
 }
 
 static JSObject*
@@ -553,7 +558,7 @@ CreateInterfaceObject(JSContext* cx, JS::Handle<JSObject*> global,
     // Might as well intern, since we're going to need an atomized
     // version of name anyway when we stick our constructor on the
     // global.
-    JS::Rooted<JSString*> nameStr(cx, JS_InternString(cx, name));
+    JS::Rooted<JSString*> nameStr(cx, JS_AtomizeAndPinString(cx, name));
     if (!nameStr) {
       return nullptr;
     }
@@ -810,7 +815,7 @@ NativeInterface2JSObjectAndThrowIfFailed(JSContext* aCx,
   if (cache && cache->IsDOMBinding()) {
       JS::Rooted<JSObject*> obj(aCx, cache->GetWrapper());
       if (!obj) {
-        obj = cache->WrapObject(aCx, JS::NullPtr());
+        obj = cache->WrapObject(aCx, nullptr);
       }
 
       if (obj && aAllowNativeWrapper && !JS_WrapObject(aCx, &obj)) {
@@ -1776,7 +1781,7 @@ DictionaryBase::StringifyToJSON(JSContext* aCx,
                                 JS::MutableHandle<JS::Value> aValue,
                                 nsAString& aJSON) const
 {
-  return JS_Stringify(aCx, aValue, JS::NullPtr(), JS::NullHandleValue,
+  return JS_Stringify(aCx, aValue, nullptr, JS::NullHandleValue,
                       AppendJSONToString, &aJSON);
 }
 
@@ -1851,7 +1856,7 @@ ReparentWrapper(JSContext* aCx, JS::Handle<JSObject*> aObjArg)
   JS::Rooted<JSObject*> propertyHolder(aCx);
   JS::Rooted<JSObject*> copyFrom(aCx, isProxy ? expandoObject : aObj);
   if (copyFrom) {
-    propertyHolder = JS_NewObjectWithGivenProto(aCx, nullptr, JS::NullPtr());
+    propertyHolder = JS_NewObjectWithGivenProto(aCx, nullptr, nullptr);
     if (!propertyHolder) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
@@ -2364,16 +2369,6 @@ IsInCertifiedApp(JSContext* aCx, JSObject* aObj)
          Preferences::GetBool("dom.ignore_webidl_scope_checks", false);
 }
 
-#ifdef DEBUG
-void
-VerifyTraceProtoAndIfaceCacheCalled(JS::CallbackTracer *trc, void **thingp,
-                                    JSGCTraceKind kind)
-{
-    // We don't do anything here, we only want to verify that
-    // TraceProtoAndIfaceCache was called.
-}
-#endif
-
 void
 FinalizeGlobal(JSFreeOp* aFreeOp, JSObject* aObj)
 {
@@ -2390,6 +2385,12 @@ ResolveGlobal(JSContext* aCx, JS::Handle<JSObject*> aObj,
              "classes!");
 
   return JS_ResolveStandardClass(aCx, aObj, aId, aResolvedp);
+}
+
+bool
+MayResolveGlobal(const JSAtomState& aNames, jsid aId, JSObject* aMaybeObj)
+{
+  return JS_MayResolveStandardClass(aNames, aId, aMaybeObj);
 }
 
 bool
@@ -2815,5 +2816,89 @@ SystemGlobalEnumerate(JSContext* cx, JS::Handle<JSObject*> obj)
          ResolveSystemBinding(cx, obj, JSID_VOIDHANDLE, &ignored);
 }
 
+template<decltype(JS::NewMapObject) Method>
+bool
+GetMaplikeSetlikeBackingObject(JSContext* aCx, JS::Handle<JSObject*> aObj,
+                               size_t aSlotIndex,
+                               JS::MutableHandle<JSObject*> aBackingObj,
+                               bool* aBackingObjCreated)
+{
+  JS::Rooted<JSObject*> reflector(aCx);
+  reflector = IsDOMObject(aObj) ? aObj : js::UncheckedUnwrap(aObj,
+                                                             /* stopAtOuter = */ false);
+
+  // Retrieve the backing object from the reserved slot on the maplike/setlike
+  // object. If it doesn't exist yet, create it.
+  JS::Rooted<JS::Value> slotValue(aCx);
+  slotValue = js::GetReservedSlot(reflector, aSlotIndex);
+  if (slotValue.isUndefined()) {
+    // Since backing object access can happen in non-originating compartments,
+    // make sure to create the backing object in reflector compartment.
+    {
+      JSAutoCompartment ac(aCx, reflector);
+      JS::Rooted<JSObject*> newBackingObj(aCx);
+      newBackingObj.set(Method(aCx));
+      if (NS_WARN_IF(!newBackingObj)) {
+        return false;
+      }
+      js::SetReservedSlot(reflector, aSlotIndex, JS::ObjectValue(*newBackingObj));
+    }
+    slotValue = js::GetReservedSlot(reflector, aSlotIndex);
+    *aBackingObjCreated = true;
+  } else {
+    *aBackingObjCreated = false;
+  }
+  if (!MaybeWrapNonDOMObjectValue(aCx, &slotValue)) {
+    return false;
+  }
+  aBackingObj.set(&slotValue.toObject());
+  return true;
+}
+
+bool
+GetMaplikeBackingObject(JSContext* aCx, JS::Handle<JSObject*> aObj,
+                        size_t aSlotIndex,
+                        JS::MutableHandle<JSObject*> aBackingObj,
+                        bool* aBackingObjCreated)
+{
+  return GetMaplikeSetlikeBackingObject<JS::NewMapObject>(aCx, aObj, aSlotIndex,
+                                                          aBackingObj,
+                                                          aBackingObjCreated);
+}
+
+bool
+GetSetlikeBackingObject(JSContext* aCx, JS::Handle<JSObject*> aObj,
+                        size_t aSlotIndex,
+                        JS::MutableHandle<JSObject*> aBackingObj,
+                        bool* aBackingObjCreated)
+{
+  return GetMaplikeSetlikeBackingObject<JS::NewSetObject>(aCx, aObj, aSlotIndex,
+                                                          aBackingObj,
+                                                          aBackingObjCreated);
+}
+
+bool
+ForEachHandler(JSContext* aCx, unsigned aArgc, JS::Value* aVp)
+{
+  JS::CallArgs args = CallArgsFromVp(aArgc, aVp);
+  // Unpack callback and object from slots
+  JS::Rooted<JS::Value>
+    callbackFn(aCx, js::GetFunctionNativeReserved(&args.callee(),
+                                                  FOREACH_CALLBACK_SLOT));
+  JS::Rooted<JS::Value>
+    maplikeOrSetlikeObj(aCx,
+                        js::GetFunctionNativeReserved(&args.callee(),
+                                                      FOREACH_MAPLIKEORSETLIKEOBJ_SLOT));
+  MOZ_ASSERT(aArgc == 3);
+  JS::AutoValueVector newArgs(aCx);
+  // Arguments are passed in as value, key, object. Keep value and key, replace
+  // object with the maplike/setlike object.
+  newArgs.append(args.get(0));
+  newArgs.append(args.get(1));
+  newArgs.append(maplikeOrSetlikeObj);
+  JS::Rooted<JS::Value> rval(aCx, JS::UndefinedValue());
+  // Now actually call the user specified callback
+  return JS::Call(aCx, args.thisv(), callbackFn, newArgs, &rval);
+}
 } // namespace dom
 } // namespace mozilla

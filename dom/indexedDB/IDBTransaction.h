@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -27,7 +27,6 @@ namespace dom {
 
 class DOMError;
 class DOMStringList;
-class PBlobChild;
 
 namespace indexedDB {
 
@@ -42,7 +41,6 @@ class IDBRequest;
 class IndexMetadata;
 class ObjectStoreSpec;
 class OpenCursorParams;
-class PBackgroundIDBDatabaseFileChild;
 class RequestParams;
 
 class IDBTransaction final
@@ -168,10 +166,19 @@ public:
   IsOpen() const;
 
   bool
-  IsFinished() const
+  IsCommittingOrDone() const
   {
     AssertIsOnOwningThread();
-    return mReadyState > LOADING;
+
+    return mReadyState == COMMITTING || mReadyState == DONE;
+  }
+
+  bool
+  IsDone() const
+  {
+    AssertIsOnOwningThread();
+
+    return mReadyState == DONE;
   }
 
   bool

@@ -19,6 +19,10 @@ class MediaBuffer;
 };
 
 namespace mozilla {
+namespace gl {
+class SharedSurface;
+}
+
 namespace layers {
 
 /**
@@ -59,8 +63,6 @@ public:
   virtual void SetRemoveFromCompositableTracker(AsyncTransactionTracker* aTracker) override;
 
   virtual void WaitForBufferOwnership(bool aWaitReleaseFence = true) override;
-
-  void InitWith(MaybeMagicGrallocBufferHandle aDesc, gfx::IntSize aSize);
 
   void SetTextureFlags(TextureFlags aFlags) { AddFlags(aFlags); }
 
@@ -112,11 +114,11 @@ public:
     return mMediaBuffer;
   }
 
-  virtual TemporaryRef<TextureClient>
+  virtual already_AddRefed<TextureClient>
   CreateSimilar(TextureFlags aFlags = TextureFlags::DEFAULT,
                 TextureAllocationFlags aAllocFlags = ALLOC_DEFAULT) const override;
 
-  static TemporaryRef<TextureClient> FromSharedSurface(gl::SharedSurface* surf,
+  static already_AddRefed<TextureClient> FromSharedSurface(gl::SharedSurface* surf,
                                                        TextureFlags flags);
 
 protected:

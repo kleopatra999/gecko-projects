@@ -21,8 +21,6 @@
 #include "nsRefPtr.h"                   // for nsRefPtr
 #include "nsDebug.h"                    // for NS_ASSERTION
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
-#include "nsPoint.h"                    // for nsIntPoint
-#include "nsRect.h"                     // for nsIntRect
 #include "nsString.h"                   // for nsAutoCString
 
 namespace mozilla {
@@ -82,7 +80,7 @@ ImageLayerComposite::GetLayer()
 }
 
 void
-ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
+ImageLayerComposite::RenderLayer(const IntRect& aClipRect)
 {
   if (!mImageHost || !mImageHost->IsAttached()) {
     return;
@@ -97,17 +95,15 @@ ImageLayerComposite::RenderLayer(const nsIntRect& aClipRect)
 
   mCompositor->MakeCurrent();
 
-  EffectChain effectChain(this);
-  LayerManagerComposite::AutoAddMaskEffect autoMaskEffect(mMaskLayer, effectChain);
-  AddBlendModeEffect(effectChain);
-
-  gfx::Rect clipRect(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
-  mImageHost->SetCompositor(mCompositor);
-  mImageHost->Composite(effectChain,
-                        GetEffectiveOpacity(),
-                        GetEffectiveTransformForBuffer(),
-                        GetEffectFilter(),
-                        clipRect);
+  RenderWithAllMasks(this, mCompositor, aClipRect,
+                     [&](EffectChain& effectChain, const Rect& clipRect) {
+    mImageHost->SetCompositor(mCompositor);
+    mImageHost->Composite(effectChain,
+                          GetEffectiveOpacity(),
+                          GetEffectiveTransformForBuffer(),
+                          GetEffectFilter(),
+                          clipRect);
+  });
   mImageHost->BumpFlashCounter();
 }
 
@@ -145,7 +141,7 @@ ImageLayerComposite::ComputeEffectiveTransforms(const gfx::Matrix4x4& aTransform
     mEffectiveTransformForBuffer = mEffectiveTransform;
   }
 
-  ComputeEffectiveTransformForMaskLayer(aTransformToSurface);
+  ComputeEffectiveTransformForMaskLayers(aTransformToSurface);
 }
 
 CompositableHost*

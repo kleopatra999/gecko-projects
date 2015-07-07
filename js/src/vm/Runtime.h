@@ -31,6 +31,7 @@
 #include "gc/GCRuntime.h"
 #include "gc/Tracer.h"
 #include "irregexp/RegExpStack.h"
+#include "js/Debug.h"
 #include "js/HashTable.h"
 #ifdef DEBUG
 # include "js/Proxy.h" // For AutoEnterPolicy
@@ -64,6 +65,12 @@ extern mozilla::ThreadLocal<PerThreadData*> TlsPerThreadData;
 
 struct DtoaState;
 
+#ifdef JS_SIMULATOR_ARM64
+namespace vixl {
+class Simulator;
+}
+#endif
+
 namespace js {
 
 extern MOZ_COLD void
@@ -85,9 +92,14 @@ namespace jit {
 class JitRuntime;
 class JitActivation;
 struct PcScriptCache;
-class Simulator;
 struct AutoFlushICache;
 class CompileRuntime;
+
+#ifdef JS_SIMULATOR_ARM64
+typedef vixl::Simulator Simulator;
+#elif defined(JS_SIMULATOR)
+class Simulator;
+#endif
 }
 
 /*
@@ -346,8 +358,8 @@ class NewObjectCache
 
     static void copyCachedToObject(NativeObject* dst, NativeObject* src, gc::AllocKind kind) {
         js_memcpy(dst, src, gc::Arena::thingSize(kind));
-        Shape::writeBarrierPost(dst->shape_, &dst->shape_);
-        ObjectGroup::writeBarrierPost(dst->group_, &dst->group_);
+        Shape::writeBarrierPost(&dst->shape_, nullptr, dst->shape_);
+        ObjectGroup::writeBarrierPost(&dst->group_, nullptr, dst->group_);
     }
 };
 
@@ -429,6 +441,7 @@ struct WellKnownSymbols
 {
     js::ImmutableSymbolPtr iterator;
     js::ImmutableSymbolPtr match;
+    js::ImmutableSymbolPtr species;
 
     const ImmutableSymbolPtr& get(size_t u) const {
         MOZ_ASSERT(u < JS::WellKnownSymbolLimit);
@@ -521,6 +534,11 @@ class PerThreadData : public PerThreadDataFriendFields
     // Whether this thread is actively Ion compiling.
     bool ionCompiling;
 
+    // Whether this thread is actively Ion compiling in a context where a minor
+    // GC could happen simultaneously. If this is true, this thread cannot use
+    // any pointers into the nursery.
+    bool ionCompilingSafeForMinorGC;
+
     // Whether this thread is currently sweeping GC things.
     bool gcSweeping;
 #endif
@@ -563,14 +581,12 @@ class PerThreadData : public PerThreadDataFriendFields
     js::jit::AutoFlushICache* autoFlushICache() const;
     void setAutoFlushICache(js::jit::AutoFlushICache* afc);
 
-#if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
+#ifdef JS_SIMULATOR
     js::jit::Simulator* simulator() const;
 #endif
 };
 
 class AutoLockForExclusiveAccess;
-
-struct AutoStopwatch;
 } // namespace js
 
 struct JSRuntime : public JS::shadow::Runtime,
@@ -680,6 +696,9 @@ struct JSRuntime : public JS::shadow::Runtime,
      * Value of asyncCause to be attached to asyncStackForNewActivations.
      */
     JSString* asyncCauseForNewActivations;
+
+    /* If non-null, report JavaScript entry points to this monitor. */
+    JS::dbg::AutoEntryMonitor* entryMonitor;
 
     js::Activation* const* addressOfActivation() const {
         return &activation_;
@@ -924,8 +943,8 @@ struct JSRuntime : public JS::shadow::Runtime,
     bool isSelfHostingGlobal(JSObject* global) {
         return global == selfHostingGlobal_;
     }
-    bool isSelfHostingCompartment(JSCompartment* comp);
-    bool isSelfHostingZone(JS::Zone* zone);
+    bool isSelfHostingCompartment(JSCompartment* comp) const;
+    bool isSelfHostingZone(const JS::Zone* zone) const;
     bool cloneSelfHostedFunctionScript(JSContext* cx, js::Handle<js::PropertyName*> name,
                                        js::Handle<JSFunction*> targetFun);
     bool cloneSelfHostedValue(JSContext* cx, js::Handle<js::PropertyName*> name,
@@ -1000,11 +1019,9 @@ struct JSRuntime : public JS::shadow::Runtime,
     /* Garbage collector state has been sucessfully initialized. */
     bool                gcInitialized;
 
-    bool isHeapBusy() { return gc.isHeapBusy(); }
-    bool isHeapMajorCollecting() { return gc.isHeapMajorCollecting(); }
-    bool isHeapMinorCollecting() { return gc.isHeapMinorCollecting(); }
-    bool isHeapCollecting() { return gc.isHeapCollecting(); }
-    bool isHeapCompacting() { return gc.isHeapCompacting(); }
+    bool isHeapMajorCollecting() const { return heapState_ == JS::HeapState::MajorCollecting; }
+    bool isHeapMinorCollecting() const { return heapState_ == JS::HeapState::MinorCollecting; }
+    bool isHeapCollecting() const { return isHeapMinorCollecting() || isHeapMajorCollecting(); }
 
     int gcZeal() { return gc.zeal(); }
 
@@ -1017,16 +1034,12 @@ struct JSRuntime : public JS::shadow::Runtime,
         gc.unlockGC();
     }
 
-#if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
+#ifdef JS_SIMULATOR
     js::jit::Simulator* simulator_;
 #endif
 
   public:
-    void setNeedsIncrementalBarrier(bool needs) {
-        needsIncrementalBarrier_ = needs;
-    }
-
-#if defined(JS_ARM_SIMULATOR) || defined(JS_MIPS_SIMULATOR)
+#ifdef JS_SIMULATOR
     js::jit::Simulator* simulator() const;
     uintptr_t* addressOfSimulatorStackLimit();
 #endif
@@ -1073,6 +1086,9 @@ struct JSRuntime : public JS::shadow::Runtime,
 
     /* Had an out-of-memory error which did not populate an exception. */
     bool                hadOutOfMemory;
+
+    /* We are curently deleting an object due to an initialization failure. */
+    mozilla::DebugOnly<bool> handlingInitFailure;
 
     /* A context has been created on this runtime. */
     bool                haveCreatedContext;
@@ -1270,7 +1286,7 @@ struct JSRuntime : public JS::shadow::Runtime,
     }
 
     // The atoms compartment is the only one in its zone.
-    inline bool isAtomsZone(JS::Zone* zone);
+    inline bool isAtomsZone(const JS::Zone* zone) const;
 
     bool activeGCInAtomsZone();
 
@@ -1321,7 +1337,7 @@ struct JSRuntime : public JS::shadow::Runtime,
     // Cache for jit::GetPcScript().
     js::jit::PcScriptCache* ionPcScriptCache;
 
-    js::DefaultJSContextCallback defaultJSContextCallback;
+    js::ScriptEnvironmentPreparer* scriptEnvironmentPreparer;
 
     js::CTypesActivityCallback  ctypesActivityCallback;
 
@@ -1354,23 +1370,18 @@ struct JSRuntime : public JS::shadow::Runtime,
     void reportAllocationOverflow() { js::ReportAllocationOverflow(nullptr); }
 
     /*
-     * The function must be called outside the GC lock.
-     */
-    JS_FRIEND_API(void) onTooMuchMalloc();
-
-    /*
-     * This should be called after system malloc/realloc returns nullptr to try
-     * to recove some memory or to report an error. Failures in malloc and
-     * calloc are signaled by p == null and p == reinterpret_cast<void*>(1).
-     * Other values of p mean a realloc failure.
+     * This should be called after system malloc/calloc/realloc returns nullptr
+     * to try to recove some memory or to report an error.  For realloc, the
+     * original pointer must be passed as reallocPtr.
      *
      * The function must be called outside the GC lock.
      */
-    JS_FRIEND_API(void*) onOutOfMemory(void* p, size_t nbytes);
-    JS_FRIEND_API(void*) onOutOfMemory(void* p, size_t nbytes, JSContext* cx);
+    JS_FRIEND_API(void*) onOutOfMemory(js::AllocFunction allocator, size_t nbytes,
+                                       void* reallocPtr = nullptr, JSContext* maybecx = nullptr);
 
     /*  onOutOfMemory but can call the largeAllocationFailureCallback. */
-    JS_FRIEND_API(void*) onOutOfMemoryCanGC(void* p, size_t bytes);
+    JS_FRIEND_API(void*) onOutOfMemoryCanGC(js::AllocFunction allocator, size_t nbytes,
+                                            void* reallocPtr = nullptr);
 
     void addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::RuntimeSizes* runtime);
 
@@ -1380,6 +1391,8 @@ struct JSRuntime : public JS::shadow::Runtime,
     // Settings for how helper threads can be used.
     bool offthreadIonCompilationEnabled_;
     bool parallelParsingEnabled_;
+
+    bool autoWritableJitCodeActive_;
 
   public:
 
@@ -1396,6 +1409,12 @@ struct JSRuntime : public JS::shadow::Runtime,
     }
     bool canUseParallelParsing() const {
         return parallelParsingEnabled_;
+    }
+
+    void toggleAutoWritableJitCodeActive(bool b) {
+        MOZ_ASSERT(autoWritableJitCodeActive_ != b, "AutoWritableJitCode should not be nested.");
+        MOZ_ASSERT(CurrentThreadCanAccessRuntime(this));
+        autoWritableJitCodeActive_ = b;
     }
 
     const JS::RuntimeOptions& options() const {
@@ -1434,7 +1453,7 @@ struct JSRuntime : public JS::shadow::Runtime,
             reportAllocationOverflow();
             return nullptr;
         }
-        return (T*)onOutOfMemoryCanGC(reinterpret_cast<void*>(1), numElems * sizeof(T));
+        return (T*)onOutOfMemoryCanGC(js::AllocFunction::Calloc, numElems * sizeof(T));
     }
 
     template <typename T>
@@ -1446,7 +1465,7 @@ struct JSRuntime : public JS::shadow::Runtime,
             reportAllocationOverflow();
             return nullptr;
         }
-        return (T*)onOutOfMemoryCanGC(p, newSize * sizeof(T));
+        return (T*)onOutOfMemoryCanGC(js::AllocFunction::Realloc, newSize * sizeof(T), p);
     }
 
     /*
@@ -1486,10 +1505,25 @@ struct JSRuntime : public JS::shadow::Runtime,
          */
         js::PerformanceData performance;
 
+        /**
+         * Callback used to ask the embedding to determine in which
+         * Performance Group the current execution belongs. Typically, this is
+         * used to regroup JSCompartments from several iframes from the same
+         * page or from several compartments of the same addon into a single
+         * Performance Group.
+         *
+         * May be `nullptr`, in which case we put all the JSCompartments
+         * in the same PerformanceGroup.
+         */
+        JSCurrentPerfGroupCallback currentPerfGroupCallback;
+
         Stopwatch()
           : iteration(0)
           , isEmpty(true)
-          , isActive_(false)
+          , currentPerfGroupCallback(nullptr)
+          , isMonitoringJank_(false)
+          , isMonitoringCPOW_(false)
+          , idCounter_(0)
         { }
 
         /**
@@ -1503,9 +1537,8 @@ struct JSRuntime : public JS::shadow::Runtime,
             ++iteration;
             isEmpty = true;
         }
-
         /**
-         * Activate/deactivate stopwatch measurement.
+         * Activate/deactivate stopwatch measurement of jank.
          *
          * Noop if `value` is `true` and the stopwatch is already active,
          * or if `value` is `false` and the stopwatch is already inactive.
@@ -1515,8 +1548,8 @@ struct JSRuntime : public JS::shadow::Runtime,
          *
          * May return `false` if the underlying hashtable cannot be allocated.
          */
-        bool setIsActive(bool value) {
-            if (isActive_ != value)
+        bool setIsMonitoringJank(bool value) {
+            if (isMonitoringJank_ != value)
                 reset();
 
             if (value && !groups_.initialized()) {
@@ -1524,15 +1557,31 @@ struct JSRuntime : public JS::shadow::Runtime,
                     return false;
             }
 
-            isActive_ = value;
+            isMonitoringJank_ = value;
+            return true;
+        }
+        bool isMonitoringJank() const {
+            return isMonitoringJank_;
+        }
+
+
+        /**
+         * Activate/deactivate stopwatch measurement of CPOW.
+         */
+        bool setIsMonitoringCPOW(bool value) {
+            isMonitoringCPOW_ = value;
             return true;
         }
 
+        bool isMonitoringCPOW() const {
+            return isMonitoringCPOW_;
+        }
+
         /**
-         * `true` if the stopwatch is currently monitoring, `false` otherwise.
+         * Return a identifier for a group, unique to the runtime.
          */
-        bool isActive() const {
-            return isActive_;
+        uint64_t uniqueId() {
+            return idCounter_++;
         }
 
         // Some systems have non-monotonic clocks. While we cannot
@@ -1583,7 +1632,13 @@ struct JSRuntime : public JS::shadow::Runtime,
         /**
          * `true` if stopwatch monitoring is active, `false` otherwise.
          */
-        bool isActive_;
+        bool isMonitoringJank_;
+        bool isMonitoringCPOW_;
+
+        /**
+         * A counter used to generate unique identifiers for groups.
+         */
+        uint64_t idCounter_;
     };
     Stopwatch stopwatch;
 };
@@ -1902,13 +1957,16 @@ extern const JSSecurityCallbacks NullSecurityCallbacks;
 class AutoEnterIonCompilation
 {
   public:
-    explicit AutoEnterIonCompilation(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM) {
+    explicit AutoEnterIonCompilation(bool safeForMinorGC
+                                     MOZ_GUARD_OBJECT_NOTIFIER_PARAM) {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
 
 #ifdef DEBUG
         PerThreadData* pt = js::TlsPerThreadData.get();
         MOZ_ASSERT(!pt->ionCompiling);
+        MOZ_ASSERT(!pt->ionCompilingSafeForMinorGC);
         pt->ionCompiling = true;
+        pt->ionCompilingSafeForMinorGC = safeForMinorGC;
 #endif
     }
 
@@ -1917,10 +1975,76 @@ class AutoEnterIonCompilation
         PerThreadData* pt = js::TlsPerThreadData.get();
         MOZ_ASSERT(pt->ionCompiling);
         pt->ionCompiling = false;
+        pt->ionCompilingSafeForMinorGC = false;
 #endif
     }
 
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+};
+
+/*
+ * AutoInitGCManagedObject is a wrapper for use when initializing a object whose
+ * lifetime is managed by the GC.  It ensures that the object is destroyed if
+ * initialization fails but also allows us to assert the invariant that such
+ * objects are only destroyed in this way or by the GC.
+ *
+ * It has a limited interface but is a drop-in replacement for UniquePtr<T> is
+ * this situation.  For example:
+ *
+ *   AutoInitGCManagedObject<MyClass> ptr(cx->make_unique<MyClass>());
+ *   if (!ptr) {
+ *     ReportOutOfMemory(cx);
+ *     return nullptr;
+ *   }
+ *
+ *   if (!ptr->init(cx))
+ *     return nullptr;    // Object destroyed here if init() failed.
+ *
+ *   object->setPrivate(ptr.release());
+ *   // Initialization successful, ptr is now owned through another object.
+ */
+template <typename T>
+class MOZ_STACK_CLASS AutoInitGCManagedObject
+{
+    typedef mozilla::UniquePtr<T, JS::DeletePolicy<T>> UniquePtrT;
+
+    UniquePtrT ptr_;
+
+  public:
+    explicit AutoInitGCManagedObject(UniquePtrT&& ptr)
+      : ptr_(mozilla::Move(ptr))
+    {}
+
+    ~AutoInitGCManagedObject() {
+#ifdef DEBUG
+        if (ptr_) {
+            JSRuntime* rt = TlsPerThreadData.get()->runtimeFromMainThread();
+            MOZ_ASSERT(!rt->handlingInitFailure);
+            rt->handlingInitFailure = true;
+            ptr_.reset(nullptr);
+            rt->handlingInitFailure = false;
+        }
+#endif
+    }
+
+    T& operator*() const {
+        return *ptr_.get();
+    }
+
+    T* operator->() const {
+        return ptr_.get();
+    }
+
+    explicit operator bool() const {
+        return ptr_.get() != nullptr;
+    }
+
+    T* release() {
+        return ptr_.release();
+    }
+
+    AutoInitGCManagedObject(const AutoInitGCManagedObject<T>& other) = delete;
+    AutoInitGCManagedObject& operator=(const AutoInitGCManagedObject<T>& other) = delete;
 };
 
 } /* namespace js */

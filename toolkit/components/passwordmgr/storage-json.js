@@ -1,5 +1,3 @@
-/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
-/* vim: set sw=2 ts=2 et lcs=trail\:.,tab\:>~ : */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -35,7 +33,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "gUUIDGenerator",
 ////////////////////////////////////////////////////////////////////////////////
 //// LoginManagerStorage_json
 
-this.LoginManagerStorage_json = function () {}
+this.LoginManagerStorage_json = function () {};
 
 this.LoginManagerStorage_json.prototype = {
   classID : Components.ID("{c00c432d-a0c9-46d7-bef6-9c45b4d07341}"),
@@ -49,27 +47,7 @@ this.LoginManagerStorage_json.prototype = {
     return this.__crypto;
   },
 
-  /*
-   * log
-   *
-   * Internal function for logging debug messages to the Error Console.
-   */
-  log : function (message) {
-    if (!this._debug)
-      return;
-    dump("PwMgr json: " + message + "\n");
-    Services.console.logStringMessage("PwMgr json: " + message);
-  },
-  _debug : false,
-
-
-  /*
-   * initialize
-   *
-   */
   initialize : function () {
-    this._debug = Services.prefs.getBoolPref("signon.debug");
-
     try {
       // Force initialization of the crypto module.
       // See bug 717490 comment 17.
@@ -82,7 +60,7 @@ this.LoginManagerStorage_json.prototype = {
 
       return Task.spawn(function () {
         // Load the data asynchronously.
-        this.log("Opening database at " + this._store.path);
+        this.log("Opening database at", this._store.path);
         yield this._store.load();
 
         // The import from previous versions operates the first time
@@ -114,7 +92,7 @@ this.LoginManagerStorage_json.prototype = {
         Services.prefs.setBoolPref("signon.importedFromSqlite", true);
       }.bind(this)).catch(Cu.reportError);
     } catch (e) {
-      this.log("Initialization failed: " + e);
+      this.log("Initialization failed:", e);
       throw new Error("Initialization failed");
     }
   },
@@ -279,7 +257,7 @@ this.LoginManagerStorage_json.prototype = {
     // decrypt entries for caller.
     logins = this._decryptLogins(logins);
 
-    this.log("_getAllLogins: returning " + logins.length + " logins.");
+    this.log("_getAllLogins: returning", logins.length, "logins.");
     if (count)
       count.value = logins.length; // needed for XPCOM
     return logins;
@@ -329,6 +307,11 @@ this.LoginManagerStorage_json.prototype = {
     let conditions = [];
 
     function match(aLogin) {
+      let returnValue = {
+        match: false,
+        strictMatch: true
+      };
+
       for (let field in matchData) {
         let value = matchData[field];
         switch (field) {
@@ -336,7 +319,28 @@ this.LoginManagerStorage_json.prototype = {
           case "formSubmitURL":
             if (value != null) {
               if (aLogin.formSubmitURL != "" && aLogin.formSubmitURL != value) {
-                return false;
+                // Check for cases that don't have fallback matches.
+                if (value == "" || value == "javascript:" ||
+                    aLogin.formSubmitURL == "javascript:" ||
+                    aLogin.formSubmitURL == null) {
+                  return returnValue;
+                }
+
+                // Check if it matches with a different scheme.
+                let loginURI = Services.io.newURI(aLogin.formSubmitURL, null, null);
+                let matchURI = Services.io.newURI(value, null, null);
+
+                if (loginURI.hostPort != matchURI.hostPort) {
+                  return returnValue; // not a match at all
+                }
+
+                if ((loginURI.scheme != "http" && loginURI.scheme != "https") ||
+                    (matchURI.scheme != "http" && matchURI.scheme != "https")) {
+                  // Not a match at all since we only fallback HTTP <=> HTTPS.
+                  return returnValue;
+                }
+
+                returnValue.strictMatch = false; // not a strict match
               }
               break;
             }
@@ -355,9 +359,9 @@ this.LoginManagerStorage_json.prototype = {
           case "timePasswordChanged":
           case "timesUsed":
             if (value == null && aLogin[field]) {
-              return false;
+              return returnValue;
             } else if (aLogin[field] != value) {
-              return false;
+              return returnValue;
             }
             break;
           // Fail if caller requests an unknown property.
@@ -365,12 +369,14 @@ this.LoginManagerStorage_json.prototype = {
             throw new Error("Unexpected field: " + field);
         }
       }
-      return true;
+      returnValue.match = true;
+      return returnValue;
     }
 
-    let foundLogins = [], foundIds = [];
+    let foundLogins = [], foundIds = [], fallbackLogins = [], fallbackIds = [];
     for (let loginItem of this._store.data.logins) {
-      if (match(loginItem)) {
+      let result = match(loginItem);
+      if (result.match) {
         // Create the new nsLoginInfo object, push to array
         let login = Cc["@mozilla.org/login-manager/loginInfo;1"].
                     createInstance(Ci.nsILoginInfo);
@@ -385,12 +391,22 @@ this.LoginManagerStorage_json.prototype = {
         login.timeLastUsed = loginItem.timeLastUsed;
         login.timePasswordChanged = loginItem.timePasswordChanged;
         login.timesUsed = loginItem.timesUsed;
-        foundLogins.push(login);
-        foundIds.push(loginItem.id);
+        // If protocol does not match, use as a fallback login
+        if (result.strictMatch) {
+          foundLogins.push(login);
+          foundIds.push(loginItem.id);
+        } else {
+          fallbackLogins.push(login);
+          fallbackIds.push(loginItem.id);
+        }
       }
     }
 
-    this.log("_searchLogins: returning " + foundLogins.length + " logins");
+    if (!foundLogins.length && fallbackLogins.length) {
+      this.log("_searchLogins: returning", fallbackLogins.length, "fallback logins");
+      return [fallbackLogins, fallbackIds];
+    }
+    this.log("_searchLogins: returning", foundLogins.length, "logins");
     return [foundLogins, foundIds];
   },
 
@@ -421,7 +437,7 @@ this.LoginManagerStorage_json.prototype = {
 
     let disabledHosts = this._store.data.disabledHosts.slice(0);
 
-    this.log("_getAllDisabledHosts: returning " + disabledHosts.length + " disabled hosts.");
+    this.log("_getAllDisabledHosts: returning", disabledHosts.length, "disabled hosts.");
     if (count)
       count.value = disabledHosts.length; // needed for XPCOM
     return disabledHosts;
@@ -435,7 +451,7 @@ this.LoginManagerStorage_json.prototype = {
   getLoginSavingEnabled : function (hostname) {
     this._store.ensureDataReady();
 
-    this.log("Getting login saving is enabled for " + hostname);
+    this.log("Getting login saving is enabled for", hostname);
     return this._store.data.disabledHosts.indexOf(hostname) == -1;
   },
 
@@ -450,7 +466,7 @@ this.LoginManagerStorage_json.prototype = {
     // Throws if there are bogus values.
     LoginHelper.checkHostnameValue(hostname);
 
-    this.log("Setting login saving enabled for " + hostname + " to " + enabled);
+    this.log("Setting login saving enabled for", hostname, "to", enabled);
     let foundIndex = this._store.data.disabledHosts.indexOf(hostname);
     if (enabled) {
       if (foundIndex != -1) {
@@ -487,7 +503,7 @@ this.LoginManagerStorage_json.prototype = {
     // Decrypt entries found for the caller.
     logins = this._decryptLogins(logins);
 
-    this.log("_findLogins: returning " + logins.length + " logins");
+    this.log("_findLogins: returning", logins.length, "logins");
     count.value = logins.length; // needed for XPCOM
     return logins;
   },
@@ -510,7 +526,7 @@ this.LoginManagerStorage_json.prototype = {
         matchData[field] = loginData[field];
     let [logins, ids] = this._searchLogins(matchData);
 
-    this.log("_countLogins: counted logins: " + logins.length);
+    this.log("_countLogins: counted logins:", logins.length);
     return logins.length;
   },
 
@@ -650,5 +666,10 @@ this.LoginManagerStorage_json.prototype = {
     return result;
   },
 };
+
+XPCOMUtils.defineLazyGetter(this.LoginManagerStorage_json.prototype, "log", () => {
+  let logger = LoginHelper.createLogger("Login storage");
+  return logger.log.bind(logger);
+});
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([LoginManagerStorage_json]);

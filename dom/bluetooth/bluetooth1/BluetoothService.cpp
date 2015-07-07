@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,6 +15,9 @@
 #include "BluetoothManager.h"
 #include "BluetoothOppManager.h"
 #include "BluetoothParent.h"
+#if defined(MOZ_B2G_BT_BLUEDROID)
+#include "BluetoothPbapManager.h"
+#endif
 #include "BluetoothReplyRunnable.h"
 #include "BluetoothServiceChildProcess.h"
 #include "BluetoothUtils.h"
@@ -28,7 +31,7 @@
 #include "mozilla/dom/bluetooth/BluetoothTypes.h"
 #include "mozilla/dom/ipc/BlobChild.h"
 #include "mozilla/dom/ipc/BlobParent.h"
-#include "mozilla/ipc/UnixSocket.h"
+#include "mozilla/ipc/SocketBase.h"
 #include "nsContentUtils.h"
 #include "nsIObserverService.h"
 #include "nsISettingsService.h"
@@ -94,12 +97,6 @@ StaticRefPtr<BluetoothService> sBluetoothService;
 
 bool sInShutdown = false;
 bool sToggleInProgress = false;
-
-bool
-IsMainProcess()
-{
-  return XRE_GetProcessType() == GeckoProcessType_Default;
-}
 
 void
 ShutdownTimeExceeded(nsITimer* aTimer, void* aClosure)
@@ -217,7 +214,7 @@ BluetoothService*
 BluetoothService::Create()
 {
 #if defined(MOZ_B2G_BT)
-  if (!IsMainProcess()) {
+  if (!XRE_IsParentProcess()) {
     return BluetoothServiceChildProcess::Create();
   }
 
@@ -251,7 +248,7 @@ BluetoothService::Init()
   }
 
   // Only the main process should observe bluetooth settings changes.
-  if (IsMainProcess() &&
+  if (XRE_IsParentProcess() &&
       NS_FAILED(obs->AddObserver(this, MOZSETTINGS_CHANGED_ID, false))) {
     BT_WARNING("Failed to add settings change observer!");
     return false;
@@ -408,35 +405,32 @@ BluetoothService::StopBluetooth(bool aIsStartup)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  BluetoothProfileManagerBase* profile;
-  profile = BluetoothHfpManager::Get();
-  NS_ENSURE_TRUE(profile, NS_ERROR_FAILURE);
-  if (profile->IsConnected()) {
-    profile->Disconnect(nullptr);
-  } else {
-    profile->Reset();
-  }
+  static BluetoothProfileManagerBase* sProfiles[] = {
+    BluetoothHfpManager::Get(),
+    BluetoothA2dpManager::Get(),
+    BluetoothOppManager::Get(),
+#if defined(MOZ_B2G_BT_BLUEDROID)
+    BluetoothPbapManager::Get(),
+#endif
+    BluetoothHidManager::Get()
+  };
 
-  profile = BluetoothOppManager::Get();
-  NS_ENSURE_TRUE(profile, NS_ERROR_FAILURE);
-  if (profile->IsConnected()) {
-    profile->Disconnect(nullptr);
-  }
+  // Disconnect all connected profiles
+  for (uint8_t i = 0; i < MOZ_ARRAY_LENGTH(sProfiles); i++) {
+    nsCString profileName;
+    sProfiles[i]->GetName(profileName);
 
-  profile = BluetoothA2dpManager::Get();
-  NS_ENSURE_TRUE(profile, NS_ERROR_FAILURE);
-  if (profile->IsConnected()) {
-    profile->Disconnect(nullptr);
-  } else {
-    profile->Reset();
-  }
+    if (NS_WARN_IF(!sProfiles[i])) {
+      BT_LOGR("Profile manager [%s] is null", profileName.get());
+      return NS_ERROR_FAILURE;
+    }
 
-  profile = BluetoothHidManager::Get();
-  NS_ENSURE_TRUE(profile, NS_ERROR_FAILURE);
-  if (profile->IsConnected()) {
-    profile->Disconnect(nullptr);
-  } else {
-    profile->Reset();
+    if (sProfiles[i]->IsConnected()) {
+      sProfiles[i]->Disconnect(nullptr);
+    } else if (!profileName.EqualsLiteral("OPP") &&
+               !profileName.EqualsLiteral("PBAP")) {
+      sProfiles[i]->Reset();
+    }
   }
 
   mAdapterAddedReceived = false;
@@ -570,6 +564,11 @@ BluetoothService::HandleSettingsChanged(nsISupports* aSubject)
   if (!setting.mValue.isBoolean()) {
     MOZ_ASSERT(false, "Expecting a boolean for 'bluetooth.enabled'!");
     return NS_ERROR_UNEXPECTED;
+  }
+  // Ignore bluetooth toggling request since toggling is already in progress.
+  if (sToggleInProgress) {
+    BT_LOGR("Ignore bluetooth toggling request since toggling is already in progress");
+    return NS_OK;
   }
 
   sToggleInProgress = true;
@@ -724,15 +723,6 @@ BluetoothService::Notify(const BluetoothSignal& aData)
 {
   nsString type = NS_LITERAL_STRING("bluetooth-pairing-request");
 
-  AutoSafeJSContext cx;
-  JS::Rooted<JSObject*> obj(cx, JS_NewPlainObject(cx));
-  NS_ENSURE_TRUE_VOID(obj);
-
-  if (!SetJsObject(cx, aData.value(), obj)) {
-    BT_WARNING("Failed to set properties of system message!");
-    return;
-  }
-
   BT_LOGD("[S] %s: %s", __FUNCTION__, NS_ConvertUTF16toUTF8(aData.name()).get());
 
   if (aData.name().EqualsLiteral("RequestConfirmation")) {
@@ -760,13 +750,7 @@ BluetoothService::Notify(const BluetoothSignal& aData)
     return;
   }
 
-  nsCOMPtr<nsISystemMessagesInternal> systemMessenger =
-    do_GetService("@mozilla.org/system-message-internal;1");
-  NS_ENSURE_TRUE_VOID(systemMessenger);
-
-  JS::Rooted<JS::Value> value(cx, JS::ObjectValue(*obj));
-  systemMessenger->BroadcastMessage(type, value,
-                                    JS::UndefinedHandleValue);
+  BroadcastSystemMessage(type, aData.value());
 }
 
 void

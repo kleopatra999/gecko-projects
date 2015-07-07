@@ -285,6 +285,7 @@ CollectInterpreterStackScripts(JSContext* cx, const Debugger::ExecutionObservabl
     return true;
 }
 
+#ifdef DEBUG
 static const char*
 ICEntryKindToString(ICEntry::Kind kind)
 {
@@ -309,6 +310,7 @@ ICEntryKindToString(ICEntry::Kind kind)
         MOZ_CRASH("bad ICEntry kind");
     }
 }
+#endif // DEBUG
 
 static void
 SpewPatchBaselineFrame(uint8_t* oldReturnAddress, uint8_t* newReturnAddress,
@@ -766,7 +768,7 @@ CloneOldBaselineStub(JSContext* cx, DebugModeOSREntryVector& entries, size_t ent
     switch (oldStub->kind()) {
 #define CASE_KIND(kindName)                                                  \
       case ICStub::kindName:                                                 \
-        entry.newStub = IC##kindName::Clone(stubSpace, firstMonitorStub,     \
+        entry.newStub = IC##kindName::Clone(cx, stubSpace, firstMonitorStub, \
                                             *oldStub->to##kindName());       \
         break;
         PATCHABLE_ICSTUB_KIND_LIST(CASE_KIND)

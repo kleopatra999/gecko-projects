@@ -1,5 +1,5 @@
-/* -*- Mode: c++; c-basic-offset: 2; indent-tabs-mode: nil; tab-width: 40 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,20 +12,15 @@
 #include "BluetoothProfileManagerBase.h"
 #include "nsAutoPtr.h"
 #include "nsClassHashtable.h"
-#include "nsIDOMFile.h"
 #include "nsIObserver.h"
 #include "nsTObserverArray.h"
 #include "nsThreadUtils.h"
 
-class nsIDOMBlob;
-
 namespace mozilla {
 namespace dom {
+class Blob;
 class BlobChild;
 class BlobParent;
-}
-namespace ipc {
-class UnixSocketConsumer;
 }
 }
 
@@ -179,19 +174,29 @@ public:
 
   /**
    * Stop device discovery (platform specific implementation)
-   *
-   * @return NS_OK if discovery stopped correctly, false otherwise
    */
-  virtual nsresult
+  virtual void
   StopDiscoveryInternal(BluetoothReplyRunnable* aRunnable) = 0;
 
   /**
    * Start device discovery (platform specific implementation)
-   *
-   * @return NS_OK if discovery stopped correctly, false otherwise
    */
-  virtual nsresult
+  virtual void
   StartDiscoveryInternal(BluetoothReplyRunnable* aRunnable) = 0;
+
+  /**
+   * Stops an ongoing Bluetooth LE device scan.
+   */
+  virtual void
+  StopLeScanInternal(const nsAString& aScanUuid,
+                     BluetoothReplyRunnable* aRunnable) = 0;
+
+  /**
+   * Starts a Bluetooth LE device scan.
+   */
+  virtual void
+  StartLeScanInternal(const nsTArray<nsString>& aServiceUuids,
+                      BluetoothReplyRunnable* aRunnable) = 0;
 
   /**
    * Set a property for the specified object
@@ -288,7 +293,7 @@ public:
 
   virtual void
   SendFile(const nsAString& aDeviceAddress,
-           nsIDOMBlob* aBlob,
+           Blob* aBlob,
            BluetoothReplyRunnable* aRunnable) = 0;
 
   virtual void
@@ -407,6 +412,55 @@ public:
                                    const nsAString& aDeviceAddress,
                                    BluetoothReplyRunnable* aRunnable) = 0;
 
+  /**
+   * Read the value of a characteristic on a GATT client.
+   * (platform specific implementation)
+   */
+  virtual void
+  GattClientReadCharacteristicValueInternal(
+    const nsAString& aAppUuid,
+    const BluetoothGattServiceId& aServiceId,
+    const BluetoothGattId& aCharacteristicId,
+    BluetoothReplyRunnable* aRunnable) = 0;
+
+  /**
+   * Write the value of a characteristic on a GATT client.
+   * (platform specific implementation)
+   */
+  virtual void
+  GattClientWriteCharacteristicValueInternal(
+    const nsAString& aAppUuid,
+    const BluetoothGattServiceId& aServiceId,
+    const BluetoothGattId& aCharacteristicId,
+    const BluetoothGattWriteType& aWriteType,
+    const nsTArray<uint8_t>& aValue,
+    BluetoothReplyRunnable* aRunnable) = 0;
+
+  /**
+   * Read the value of a descriptor of a characteristic on a GATT client.
+   * (platform specific implementation)
+   */
+  virtual void
+  GattClientReadDescriptorValueInternal(
+    const nsAString& aAppUuid,
+    const BluetoothGattServiceId& aServiceId,
+    const BluetoothGattId& aCharacteristicId,
+    const BluetoothGattId& aDescriptorId,
+    BluetoothReplyRunnable* aRunnable) = 0;
+
+  /**
+   * Write the value of a descriptor of a characteristic on a GATT client.
+   * (platform specific implementation)
+   */
+  virtual void
+  GattClientWriteDescriptorValueInternal(
+    const nsAString& aAppUuid,
+    const BluetoothGattServiceId& aServiceId,
+    const BluetoothGattId& aCharacteristicId,
+    const BluetoothGattId& aDescriptorId,
+    const nsTArray<uint8_t>& aValue,
+    BluetoothReplyRunnable* aRunnable) = 0;
+
   bool
   IsEnabled() const
   {
@@ -469,6 +523,9 @@ protected:
   virtual nsresult
   HandleStartup();
 
+  virtual void
+  CompleteToggleBt(bool aEnabled);
+
   /**
    * Called when the startup settings check has completed.
    */
@@ -494,9 +551,6 @@ protected:
   // Called by Get().
   static BluetoothService*
   Create();
-
-  void
-  CompleteToggleBt(bool aEnabled);
 
   typedef nsClassHashtable<nsStringHashKey, BluetoothSignalObserverList >
   BluetoothSignalObserverTable;

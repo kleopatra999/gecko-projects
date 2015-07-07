@@ -61,7 +61,7 @@ ToStringGuts(XPCCallContext& ccx)
     if (!str)
         return false;
 
-    ccx.SetRetVal(STRING_TO_JSVAL(str));
+    ccx.SetRetVal(JS::StringValue(str));
     return true;
 }
 
@@ -198,6 +198,8 @@ DefinePropertyIfFound(XPCCallContext& ccx,
     XPCJSRuntime* rt = ccx.GetRuntime();
     bool found;
     const char* name;
+
+    propFlags |= JSPROP_RESOLVING;
 
     if (set) {
         if (iface)
@@ -357,13 +359,14 @@ DefinePropertyIfFound(XPCCallContext& ccx,
 
     if (scope->HasInterposition()) {
         Rooted<JSPropertyDescriptor> desc(ccx);
-        if (!xpc::Interpose(ccx, obj, iface->GetIID(), id, &desc))
+        if (!xpc::InterposeProperty(ccx, obj, iface->GetIID(), id, &desc))
             return false;
 
         if (desc.object()) {
             AutoResolveName arn(ccx, id);
             if (resolved)
                 *resolved = true;
+            desc.attributesRef() |= JSPROP_RESOLVING;
             return JS_DefinePropertyById(ccx, obj, id, desc);
         }
     }
@@ -415,7 +418,7 @@ DefinePropertyIfFound(XPCCallContext& ccx,
 static bool
 XPC_WN_OnlyIWrite_AddPropertyStub(JSContext* cx, HandleObject obj, HandleId id, HandleValue v)
 {
-    XPCCallContext ccx(JS_CALLER, cx, obj, NullPtr(), id);
+    XPCCallContext ccx(JS_CALLER, cx, obj, nullptr, id);
     XPCWrappedNative* wrapper = ccx.GetWrapper();
     THROW_AND_RETURN_IF_BAD_WRAPPER(cx, wrapper);
 
@@ -451,7 +454,7 @@ static bool
 XPC_WN_Shared_Convert(JSContext* cx, HandleObject obj, JSType type, MutableHandleValue vp)
 {
     if (type == JSTYPE_OBJECT) {
-        vp.set(OBJECT_TO_JSVAL(obj));
+        vp.setObject(*obj);
         return true;
     }
 
@@ -466,7 +469,7 @@ XPC_WN_Shared_Convert(JSContext* cx, HandleObject obj, JSType type, MutableHandl
                     XPCNativeScriptableInfo* si = wrapper->GetScriptableInfo();
                     if (si && (si->GetFlags().WantCall() ||
                                si->GetFlags().WantConstruct())) {
-                        vp.set(OBJECT_TO_JSVAL(obj));
+                        vp.setObject(*obj);
                         return true;
                     }
                 }
@@ -476,7 +479,7 @@ XPC_WN_Shared_Convert(JSContext* cx, HandleObject obj, JSType type, MutableHandl
             vp.set(JS_GetNaNValue(cx));
             return true;
         case JSTYPE_BOOLEAN:
-            vp.set(JSVAL_TRUE);
+            vp.setBoolean(true);
             return true;
         case JSTYPE_VOID:
         case JSTYPE_STRING:
@@ -613,7 +616,7 @@ XPCWrappedNative::Trace(JSTracer* trc, JSObject* obj)
 static bool
 XPC_WN_NoHelper_Resolve(JSContext* cx, HandleObject obj, HandleId id, bool* resolvedp)
 {
-    XPCCallContext ccx(JS_CALLER, cx, obj, NullPtr(), id);
+    XPCCallContext ccx(JS_CALLER, cx, obj, nullptr, id);
     XPCWrappedNative* wrapper = ccx.GetWrapper();
     THROW_AND_RETURN_IF_BAD_WRAPPER(cx, wrapper);
 
@@ -648,6 +651,7 @@ const XPCWrappedNativeJSClass XPC_WN_NoHelper_JSClass = {
 
     XPC_WN_Shared_Enumerate,           // enumerate
     XPC_WN_NoHelper_Resolve,           // resolve
+    nullptr,                           // mayResolve
     XPC_WN_Shared_Convert,             // convert
     XPC_WN_NoHelper_Finalize,          // finalize
 
@@ -780,7 +784,7 @@ XPC_WN_Helper_Call(JSContext* cx, unsigned argc, jsval* vp)
     // N.B. we want obj to be the callee, not JS_THIS(cx, vp)
     RootedObject obj(cx, &args.callee());
 
-    XPCCallContext ccx(JS_CALLER, cx, obj, NullPtr(), JSID_VOIDHANDLE, args.length(),
+    XPCCallContext ccx(JS_CALLER, cx, obj, nullptr, JSID_VOIDHANDLE, args.length(),
                        args.array(), args.rval().address());
     if (!ccx.IsValid())
         return false;
@@ -798,7 +802,7 @@ XPC_WN_Helper_Construct(JSContext* cx, unsigned argc, jsval* vp)
     if (!obj)
         return false;
 
-    XPCCallContext ccx(JS_CALLER, cx, obj, NullPtr(), JSID_VOIDHANDLE, args.length(),
+    XPCCallContext ccx(JS_CALLER, cx, obj, nullptr, JSID_VOIDHANDLE, args.length(),
                        args.array(), args.rval().address());
     if (!ccx.IsValid())
         return false;
@@ -1288,6 +1292,7 @@ const js::Class XPC_WN_ModsAllowed_WithCall_Proto_JSClass = {
     nullptr,                        // setProperty;
     XPC_WN_Shared_Proto_Enumerate,  // enumerate;
     XPC_WN_ModsAllowed_Proto_Resolve, // resolve;
+    nullptr,                        // mayResolve;
     nullptr,                        // convert;
     XPC_WN_Shared_Proto_Finalize,   // finalize;
 
@@ -1313,6 +1318,7 @@ const js::Class XPC_WN_ModsAllowed_NoCall_Proto_JSClass = {
     nullptr,                        // setProperty;
     XPC_WN_Shared_Proto_Enumerate,  // enumerate;
     XPC_WN_ModsAllowed_Proto_Resolve, // resolve;
+    nullptr,                        // mayResolve;
     nullptr,                        // convert;
     XPC_WN_Shared_Proto_Finalize,   // finalize;
 
@@ -1391,6 +1397,7 @@ const js::Class XPC_WN_NoMods_WithCall_Proto_JSClass = {
     nullptr,                                   // setProperty;
     XPC_WN_Shared_Proto_Enumerate,             // enumerate;
     XPC_WN_NoMods_Proto_Resolve,               // resolve;
+    nullptr,                                   // mayResolve;
     nullptr,                                   // convert;
     XPC_WN_Shared_Proto_Finalize,              // finalize;
 
@@ -1416,6 +1423,7 @@ const js::Class XPC_WN_NoMods_NoCall_Proto_JSClass = {
     nullptr,                                   // setProperty;
     XPC_WN_Shared_Proto_Enumerate,             // enumerate;
     XPC_WN_NoMods_Proto_Resolve,               // resolve;
+    nullptr,                                   // mayResolve;
     nullptr,                                   // convert;
     XPC_WN_Shared_Proto_Finalize,              // finalize;
 
@@ -1511,6 +1519,7 @@ const js::Class XPC_WN_Tearoff_JSClass = {
     nullptr,                                   // setProperty;
     XPC_WN_TearOff_Enumerate,                  // enumerate;
     XPC_WN_TearOff_Resolve,                    // resolve;
+    nullptr,                                   // mayResolve;
     XPC_WN_Shared_Convert,                     // convert;
     XPC_WN_TearOff_Finalize,                   // finalize;
 

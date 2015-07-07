@@ -343,7 +343,7 @@ def _callCxxArrayLength(arr):
 
 def _callCxxCheckedArraySetLength(arr, lenexpr, sel='.'):
     ifbad = StmtIf(ExprNot(ExprCall(ExprSelect(arr, sel, 'SetLength'),
-                                    args=[ lenexpr ])))
+                                    args=[ lenexpr, ExprVar('mozilla::fallible') ])))
     ifbad.addifstmt(_fatalError('Error setting the array length'))
     ifbad.addifstmt(StmtReturn.FALSE)
     return ifbad
@@ -1838,12 +1838,15 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
         if usesend or userecv:
             transitionfunc.addstmt(Whitespace.NL)
 
-        transitionfunc.addstmts([
-            fromswitch,
-            # all --> Error transitions break to here
-            StmtExpr(ExprAssn(ExprDeref(nextvar), _errorState())),
-            StmtReturn(ExprLiteral.FALSE)
-        ])
+        transitionfunc.addstmt(fromswitch)
+        # all --> Error transitions break to here.  But only insert this
+        # block if there is any possibility of such transitions.
+        if self.protocol.transitionStmts:
+            transitionfunc.addstmts([
+                StmtExpr(ExprAssn(ExprDeref(nextvar), _errorState())),
+                StmtReturn(ExprLiteral.FALSE),
+            ])
+
         return transitionfunc
 
 ##--------------------------------------------------
@@ -1857,8 +1860,11 @@ def _generateMessageClass(clsname, msgid, priority, prettyName, compress):
     cls.addstmt(StmtDecl(Decl(idenum, '')))
 
     # make the message constructor
-    if compress:
+    if compress == 'compress':
         compression = ExprVar('COMPRESSION_ENABLED')
+    elif compress:
+        assert compress == 'compressall'
+        compression = ExprVar('COMPRESSION_ALL')
     else:
         compression = ExprVar('COMPRESSION_NONE')
     if priority == ipdl.ast.NORMAL_PRIORITY:
@@ -4972,7 +4978,6 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         actorvar = actor.var()
         method = MethodDefn(self.makeDtorMethodDecl(md))
 
-        method.addstmts(self.dtorPrologue(actor.var()))
         method.addstmts(self.dtorPrologue(actorvar))
 
         msgvar, stmts = self.makeMessage(md, errfnSendDtor, actorvar)

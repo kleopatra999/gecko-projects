@@ -4,7 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* Colors are taken from:
- * https://developer.mozilla.org/en-US/docs/Tools/DevToolsColors
+ * https://developer.mozilla.org/en-US/docs/Tools/DevToolsColors.
+ * Changes should be kept in sync with commandline.css and commandline.inc.css.
  */
 :root {
   --theme-body-background: #fcfcfc;
@@ -27,12 +28,20 @@
 
   --theme-highlight-green: #2cbb0f;
   --theme-highlight-blue: #0088cc;
-  --theme-highlight-bluegrey: #5f88b0;
+  --theme-highlight-bluegrey: #0072ab;
   --theme-highlight-purple: #5b5fff;
   --theme-highlight-lightorange: #d97e00;
   --theme-highlight-orange: #f13c00;
   --theme-highlight-red: #ed2655;
   --theme-highlight-pink: #b82ee5;
+
+  /* Colors used in Graphs, like performance tools. Similar colors to Chrome's timeline. */
+  --theme-graphs-green: #85d175;
+  --theme-graphs-blue: #83b7f6;
+  --theme-graphs-purple: #b693eb;
+  --theme-graphs-yellow: #efc052;
+  --theme-graphs-red: #e57180;
+  --theme-graphs-grey: #cccccc;
 }
 
 .theme-body {
@@ -334,7 +343,7 @@ div.CodeMirror span.eval-text {
   background-position: -14px 0;
 }
 
-@media (min-resolution: 2dppx) {
+@media (min-resolution: 1.25dppx) {
   .theme-twisty, .theme-checkbox {
     background-image: url("chrome://browser/skin/devtools/controls@2x.png");
   }
@@ -372,7 +381,7 @@ div.CodeMirror span.eval-text {
   margin-left: -4px;
 }
 
-@media (min-resolution: 2dppx) {
+@media (min-resolution: 1.25dppx) {
   .theme-tooltip-panel .panel-arrow[side="top"],
   .theme-tooltip-panel .panel-arrow[side="bottom"] {
     list-style-image: url("chrome://browser/skin/devtools/tooltip/arrow-vertical-light@2x.png");

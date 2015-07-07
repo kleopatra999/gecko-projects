@@ -527,6 +527,12 @@
    * the second assignment throws NS_SUCCESS_DOM_NO_OPERATION.
    */
   ERROR(NS_SUCCESS_DOM_NO_OPERATION,               SUCCESS(1)),
+
+  /*
+   * A success code that indicates that evaluating a string of JS went
+   * just fine except it threw an exception.
+   */
+  ERROR(NS_SUCCESS_DOM_SCRIPT_EVALUATION_THREW,    SUCCESS(2)),
 #undef MODULE
 
 
@@ -678,6 +684,7 @@
   ERROR(NS_ERROR_MALWARE_URI,           FAILURE(30)),
   ERROR(NS_ERROR_PHISHING_URI,          FAILURE(31)),
   ERROR(NS_ERROR_TRACKING_URI,          FAILURE(34)),
+  ERROR(NS_ERROR_UNWANTED_URI,          FAILURE(35)),
   /* Used when "Save Link As..." doesn't see the headers quickly enough to
    * choose a filename.  See nsContextMenu.js. */
   ERROR(NS_ERROR_SAVE_LINK_AS_TIMEOUT,  FAILURE(32)),
@@ -908,7 +915,6 @@
    * the application should be restarted.  This condition corresponds to the
    * case in which nsIAppStartup::Quit was called with the eRestart flag. */
   ERROR(NS_SUCCESS_RESTART_APP,          SUCCESS(1)),
-  ERROR(NS_SUCCESS_RESTART_METRO_APP,    SUCCESS(2)),
   ERROR(NS_SUCCESS_RESTART_APP_NOT_SAME_PROFILE,    SUCCESS(3)),
   ERROR(NS_SUCCESS_UNORM_NOTFOUND,  SUCCESS(17)),
 

@@ -22,7 +22,9 @@ let modules = {
     privileged: true,
     hide: true
   },
-  get firefox() this.fennec,
+  get firefox() {
+    return this.fennec
+  },
 
   // about:blank has some bad loading behavior we can avoid, if we use an alias
   empty: {
@@ -62,6 +64,7 @@ let modules = {
   reader: {
     uri: "chrome://global/content/reader/aboutReader.html",
     privileged: false,
+    dontLink: true,
     hide: true
   },
   feedback: {
@@ -87,8 +90,8 @@ if (AppConstants.MOZ_DEVICES) {
   };
 }
 if (AppConstants.NIGHTLY_BUILD) {
-  modules['passwords'] = {
-    uri: "chrome://browser/content/aboutPasswords.xhtml",
+  modules['logins'] = {
+    uri: "chrome://browser/content/aboutLogins.xhtml",
     privileged: true
   };
 }
@@ -109,6 +112,8 @@ AboutRedirector.prototype = {
     let moduleInfo = this._getModuleInfo(aURI);
     if (moduleInfo.hide)
       flags = Ci.nsIAboutModule.HIDE_FROM_ABOUTABOUT;
+    if (moduleInfo.dontLink)
+      flags = flags | Ci.nsIAboutModule.MAKE_UNLINKABLE;
 
     return flags | Ci.nsIAboutModule.ALLOW_SCRIPT;
   },

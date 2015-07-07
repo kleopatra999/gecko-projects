@@ -1,5 +1,5 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
+/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,7 +19,6 @@
 #include "nsTHashtable.h"
 
 class nsIDocument;
-class nsIWeakReference;
 class nsPIDOMWindow;
 
 namespace mozilla {
@@ -29,7 +28,7 @@ class EventChainPostVisitor;
 
 namespace dom {
 
-class File;
+class Blob;
 class DOMStringList;
 struct IDBObjectStoreParameters;
 template <class> class Optional;
@@ -178,13 +177,13 @@ public:
   AbortTransactions(bool aShouldWarn);
 
   PBackgroundIDBDatabaseFileChild*
-  GetOrCreateFileActorForBlob(File* aBlob);
+  GetOrCreateFileActorForBlob(Blob* aBlob);
 
   void
   NoteFinishedFileActor(PBackgroundIDBDatabaseFileChild* aFileActor);
 
   void
-  NoteReceivedBlob(File* aBlob);
+  NoteReceivedBlob(Blob* aBlob);
 
   void
   DelayedMaybeExpireFileActors();
@@ -199,6 +198,12 @@ public:
 
   void
   NoteFinishedMutableFile(IDBMutableFile* aMutableFile);
+
+  void
+  OnNewFileHandle();
+
+  void
+  OnFileHandleFinished();
 
   nsPIDOMWindow*
   GetParentObject() const;
