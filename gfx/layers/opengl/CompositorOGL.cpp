@@ -41,7 +41,6 @@
 #include "ScopedGLHelpers.h"
 #include "GLReadTexImageHelper.h"
 #include "GLBlitTextureImageHelper.h"
-#include "TiledLayerBuffer.h"           // for TiledLayerComposer
 #include "HeapCopyOfStackArray.h"
 
 #if MOZ_WIDGET_ANDROID
@@ -173,18 +172,20 @@ CompositorOGL::CleanupResources()
     ctx = mGLContext;
   }
 
+  if (!ctx->MakeCurrent()) {
+    // Leak resources!
+    mQuadVBO = 0;
+    mGLContext = nullptr;
+    mPrograms.clear();
+    return;
+  }
+
   for (std::map<ShaderConfigOGL, ShaderProgramOGL *>::iterator iter = mPrograms.begin();
        iter != mPrograms.end();
        iter++) {
     delete iter->second;
   }
   mPrograms.clear();
-
-  if (!ctx->MakeCurrent()) {
-    mQuadVBO = 0;
-    mGLContext = nullptr;
-    return;
-  }
 
   ctx->fBindFramebuffer(LOCAL_GL_FRAMEBUFFER, 0);
 
@@ -477,7 +478,7 @@ CompositorOGL::PrepareViewport(const gfx::IntSize& aSize)
   mProjMatrix = matrix3d;
 }
 
-TemporaryRef<CompositingRenderTarget>
+already_AddRefed<CompositingRenderTarget>
 CompositorOGL::CreateRenderTarget(const IntRect &aRect, SurfaceInitMode aInit)
 {
   MOZ_ASSERT(aRect.width != 0 && aRect.height != 0, "Trying to create a render target of invalid size");
@@ -495,7 +496,7 @@ CompositorOGL::CreateRenderTarget(const IntRect &aRect, SurfaceInitMode aInit)
   return surface.forget();
 }
 
-TemporaryRef<CompositingRenderTarget>
+already_AddRefed<CompositingRenderTarget>
 CompositorOGL::CreateRenderTargetFromSource(const IntRect &aRect,
                                             const CompositingRenderTarget *aSource,
                                             const IntPoint &aSourcePoint)
@@ -1537,7 +1538,7 @@ CompositorOGL::Resume()
   return true;
 }
 
-TemporaryRef<DataTextureSource>
+already_AddRefed<DataTextureSource>
 CompositorOGL::CreateDataTextureSource(TextureFlags aFlags)
 {
   return MakeAndAddRef<TextureImageTextureSourceOGL>(this, aFlags);

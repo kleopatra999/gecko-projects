@@ -268,12 +268,12 @@ ActiveLayerTracker::IsStyleAnimated(nsDisplayListBuilder* aBuilder,
   // TODO: Add some abuse restrictions
   if ((aFrame->StyleDisplay()->mWillChangeBitField & NS_STYLE_WILL_CHANGE_TRANSFORM) &&
       aProperty == eCSSProperty_transform &&
-      (!aBuilder || aBuilder->IsInWillChangeBudget(aFrame))) {
+      (!aBuilder || aBuilder->IsInWillChangeBudget(aFrame, aFrame->GetSize()))) {
     return true;
   }
   if ((aFrame->StyleDisplay()->mWillChangeBitField & NS_STYLE_WILL_CHANGE_OPACITY) &&
       aProperty == eCSSProperty_opacity &&
-      (!aBuilder || aBuilder->IsInWillChangeBudget(aFrame))) {
+      (!aBuilder || aBuilder->IsInWillChangeBudget(aFrame, aFrame->GetSize()))) {
     return true;
   }
 
@@ -286,12 +286,7 @@ ActiveLayerTracker::IsStyleAnimated(nsDisplayListBuilder* aBuilder,
   if (aProperty == eCSSProperty_transform && aFrame->Preserves3D()) {
     return IsStyleAnimated(aBuilder, aFrame->GetParent(), aProperty);
   }
-  nsIContent* content = aFrame->GetContent();
-  if (content) {
-    return nsLayoutUtils::HasCurrentAnimationsForProperties(content, &aProperty, 1);
-  }
-
-  return false;
+  return nsLayoutUtils::HasCurrentAnimationsForProperties(aFrame, &aProperty, 1);
 }
 
 /* static */ bool

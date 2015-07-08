@@ -99,6 +99,7 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventStateManager.h"
+#include "mozilla/RuleNodeCacheConditions.h"
 
 #ifdef MOZ_XUL
 #include "nsXULPopupManager.h"
@@ -371,81 +372,79 @@ TextAlignTrueEnabledPrefChangeCallback(const char* aPrefName, void* aClosure)
 }
 
 bool
-nsLayoutUtils::HasAnimationsForCompositor(nsIContent* aContent,
+nsLayoutUtils::HasAnimationsForCompositor(const nsIFrame* aFrame,
                                           nsCSSProperty aProperty)
 {
-  return nsAnimationManager::GetAnimationsForCompositor(aContent, aProperty) ||
-         nsTransitionManager::GetAnimationsForCompositor(aContent, aProperty);
-}
-
-static AnimationCollection*
-GetAnimationsOrTransitions(nsIContent* aContent,
-                           nsIAtom* aAnimationProperty,
-                           nsCSSProperty aProperty)
-{
-  AnimationCollection* collection =
-    static_cast<AnimationCollection*>(aContent->GetProperty(
-        aAnimationProperty));
-  if (collection) {
-    bool propertyMatches = collection->HasAnimationOfProperty(aProperty);
-    if (propertyMatches) {
-      return collection;
-    }
-  }
-  return nullptr;
+  nsPresContext* presContext = aFrame->PresContext();
+  return presContext->AnimationManager()->GetAnimationsForCompositor(aFrame, aProperty) ||
+         presContext->TransitionManager()->GetAnimationsForCompositor(aFrame, aProperty);
 }
 
 bool
-nsLayoutUtils::HasAnimations(nsIContent* aContent,
+nsLayoutUtils::HasAnimations(const nsIFrame* aFrame,
                              nsCSSProperty aProperty)
 {
-  if (!aContent->MayHaveAnimations())
-    return false;
-  return GetAnimationsOrTransitions(aContent, nsGkAtoms::animationsProperty,
-                                    aProperty) ||
-         GetAnimationsOrTransitions(aContent, nsGkAtoms::transitionsProperty,
-                                    aProperty);
-}
-
-bool
-nsLayoutUtils::HasCurrentAnimations(nsIContent* aContent,
-                                    nsIAtom* aAnimationProperty)
-{
-  if (!aContent->MayHaveAnimations())
-    return false;
-
+  nsPresContext* presContext = aFrame->PresContext();
   AnimationCollection* collection =
-    static_cast<AnimationCollection*>(
-      aContent->GetProperty(aAnimationProperty));
-  return (collection && collection->HasCurrentAnimations());
+    presContext->AnimationManager()->GetAnimationCollection(aFrame);
+  if (collection &&
+      collection->HasAnimationOfProperty(aProperty)) {
+    return true;
+  }
+  collection =
+    presContext->TransitionManager()->GetAnimationCollection(aFrame);
+  if (collection &&
+      collection->HasAnimationOfProperty(aProperty)) {
+    return true;
+  }
+  return false;
 }
 
 bool
-nsLayoutUtils::HasCurrentAnimationsForProperties(nsIContent* aContent,
+nsLayoutUtils::HasCurrentAnimations(const nsIFrame* aFrame)
+{
+  nsPresContext* presContext = aFrame->PresContext();
+  AnimationCollection* collection =
+    presContext->AnimationManager()->GetAnimationCollection(aFrame);
+  return collection &&
+         collection->HasCurrentAnimations();
+}
+
+bool
+nsLayoutUtils::HasCurrentTransitions(const nsIFrame* aFrame)
+{
+  nsPresContext* presContext = aFrame->PresContext();
+  AnimationCollection* collection =
+    presContext->TransitionManager()->GetAnimationCollection(aFrame);
+  return collection &&
+         collection->HasCurrentAnimations();
+}
+
+bool
+nsLayoutUtils::HasCurrentAnimationsForProperties(const nsIFrame* aFrame,
                                                  const nsCSSProperty* aProperties,
                                                  size_t aPropertyCount)
 {
-  if (!aContent->MayHaveAnimations())
-    return false;
-
-  static nsIAtom* const sAnimProps[] = { nsGkAtoms::transitionsProperty,
-                                         nsGkAtoms::animationsProperty,
-                                         nullptr };
-  for (nsIAtom* const* animProp = sAnimProps; *animProp; animProp++) {
-    AnimationCollection* collection =
-      static_cast<AnimationCollection*>(aContent->GetProperty(*animProp));
-    if (collection &&
-        collection->HasCurrentAnimationsForProperties(aProperties,
-                                                      aPropertyCount)) {
-      return true;
-    }
+  nsPresContext* presContext = aFrame->PresContext();
+  AnimationCollection* collection =
+    presContext->AnimationManager()->GetAnimationCollection(aFrame);
+  if (collection &&
+      collection->HasCurrentAnimationsForProperties(aProperties,
+                                                    aPropertyCount)) {
+    return true;
   }
-
+  collection =
+    presContext->TransitionManager()->GetAnimationCollection(aFrame);
+  if (collection &&
+      collection->HasCurrentAnimationsForProperties(aProperties,
+                                                    aPropertyCount)) {
+    return true;
+  }
   return false;
 }
 
 static gfxSize
-GetScaleForValue(const StyleAnimationValue& aValue, nsIFrame* aFrame)
+GetScaleForValue(const StyleAnimationValue& aValue, const nsIFrame* aFrame)
 {
   if (!aFrame) {
     NS_WARNING("No frame.");
@@ -459,12 +458,7 @@ GetScaleForValue(const StyleAnimationValue& aValue, nsIFrame* aFrame)
   nsCSSValueSharedList* list = aValue.GetCSSValueSharedListValue();
   MOZ_ASSERT(list->mHead);
 
-  if (list->mHead->mValue.GetUnit() == eCSSUnit_None) {
-    // There is an animation, but no actual transform yet.
-    return gfxSize();
-  }
-
-  bool dontCare;
+  RuleNodeCacheConditions dontCare;
   TransformReferenceBox refBox(aFrame);
   gfx3DMatrix transform = nsStyleTransformMatrix::ReadTransforms(
                             list->mHead,
@@ -495,7 +489,7 @@ GetSuitableScale(float aMaxScale, float aMinScale,
 }
 
 static void
-GetMinAndMaxScaleForAnimationProperty(nsIContent* aContent,
+GetMinAndMaxScaleForAnimationProperty(const nsIFrame* aFrame,
                                       AnimationCollection* aAnimations,
                                       gfxSize& aMaxScale,
                                       gfxSize& aMinScale)
@@ -511,14 +505,12 @@ GetMinAndMaxScaleForAnimationProperty(nsIContent* aContent,
       if (prop.mProperty == eCSSProperty_transform) {
         for (uint32_t segIdx = prop.mSegments.Length(); segIdx-- != 0; ) {
           AnimationPropertySegment& segment = prop.mSegments[segIdx];
-          gfxSize from = GetScaleForValue(segment.mFromValue,
-                                          aContent->GetPrimaryFrame());
+          gfxSize from = GetScaleForValue(segment.mFromValue, aFrame);
           aMaxScale.width = std::max<float>(aMaxScale.width, from.width);
           aMaxScale.height = std::max<float>(aMaxScale.height, from.height);
           aMinScale.width = std::min<float>(aMinScale.width, from.width);
           aMinScale.height = std::min<float>(aMinScale.height, from.height);
-          gfxSize to = GetScaleForValue(segment.mToValue,
-                                        aContent->GetPrimaryFrame());
+          gfxSize to = GetScaleForValue(segment.mToValue, aFrame);
           aMaxScale.width = std::max<float>(aMaxScale.width, to.width);
           aMaxScale.height = std::max<float>(aMaxScale.height, to.height);
           aMinScale.width = std::min<float>(aMinScale.width, to.width);
@@ -530,7 +522,7 @@ GetMinAndMaxScaleForAnimationProperty(nsIContent* aContent,
 }
 
 gfxSize
-nsLayoutUtils::ComputeSuitableScaleForAnimation(nsIContent* aContent,
+nsLayoutUtils::ComputeSuitableScaleForAnimation(const nsIFrame* aFrame,
                                                 const nsSize& aVisibleSize,
                                                 const nsSize& aDisplaySize)
 {
@@ -538,20 +530,21 @@ nsLayoutUtils::ComputeSuitableScaleForAnimation(nsIContent* aContent,
                    std::numeric_limits<gfxFloat>::min());
   gfxSize minScale(std::numeric_limits<gfxFloat>::max(),
                    std::numeric_limits<gfxFloat>::max());
+  nsPresContext* presContext = aFrame->PresContext();
 
   AnimationCollection* animations =
-    nsAnimationManager::GetAnimationsForCompositor(aContent,
-                                                   eCSSProperty_transform);
+    presContext->AnimationManager()->GetAnimationsForCompositor(
+      aFrame, eCSSProperty_transform);
   if (animations) {
-    GetMinAndMaxScaleForAnimationProperty(aContent, animations,
+    GetMinAndMaxScaleForAnimationProperty(aFrame, animations,
                                           maxScale, minScale);
   }
 
   animations =
-    nsTransitionManager::GetAnimationsForCompositor(aContent,
-                                                    eCSSProperty_transform);
+    presContext->TransitionManager()->GetAnimationsForCompositor(
+      aFrame, eCSSProperty_transform);
   if (animations) {
-    GetMinAndMaxScaleForAnimationProperty(aContent, animations,
+    GetMinAndMaxScaleForAnimationProperty(aFrame, animations,
                                           maxScale, minScale);
   }
 
@@ -3401,7 +3394,7 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
     // except requesting composition. Geometry updates were calculated and
     // shipped to the chrome process in nsDisplayList when the layer
     // transaction completed.
-    if (XRE_GetProcessType() == GeckoProcessType_Default) {
+    if (XRE_IsParentProcess()) {
       rootPresContext->ComputePluginGeometryUpdates(aFrame, &builder, &list);
       // We're not going to get a WillPaintWindow event here if we didn't do
       // widget invalidation, so just apply the plugin geometry update here
@@ -3508,7 +3501,7 @@ AddBoxesForFrame(nsIFrame* aFrame,
              pseudoType == nsCSSAnonBoxes::mozAnonymousPositionedBlock ||
              pseudoType == nsCSSAnonBoxes::mozMathMLAnonymousBlock ||
              pseudoType == nsCSSAnonBoxes::mozXULAnonymousBlock) {
-    for (nsIFrame* kid = aFrame->GetFirstPrincipalChild(); kid; kid = kid->GetNextSibling()) {
+    for (nsIFrame* kid : aFrame->PrincipalChildList()) {
       AddBoxesForFrame(kid, aCallback);
     }
   } else {
@@ -3547,7 +3540,7 @@ nsLayoutUtils::GetFirstNonAnonymousFrame(nsIFrame* aFrame)
                pseudoType == nsCSSAnonBoxes::mozAnonymousPositionedBlock ||
                pseudoType == nsCSSAnonBoxes::mozMathMLAnonymousBlock ||
                pseudoType == nsCSSAnonBoxes::mozXULAnonymousBlock) {
-      for (nsIFrame* kid = aFrame->GetFirstPrincipalChild(); kid; kid = kid->GetNextSibling()) {
+      for (nsIFrame* kid : aFrame->PrincipalChildList()) {
         nsIFrame* f = GetFirstNonAnonymousFrame(kid);
         if (f) {
           return f;
@@ -6870,8 +6863,12 @@ nsLayoutUtils::SurfaceFromElement(HTMLVideoElement* aElement,
   if (!container)
     return result;
 
-  mozilla::gfx::IntSize size;
-  result.mSourceSurface = container->GetCurrentAsSourceSurface(&size);
+  AutoLockImage lockImage(container);
+  layers::Image* image = lockImage.GetImage();
+  if (!image) {
+    return result;
+  }
+  result.mSourceSurface = image->GetAsSourceSurface();
   if (!result.mSourceSurface)
     return result;
 
@@ -6884,7 +6881,7 @@ nsLayoutUtils::SurfaceFromElement(HTMLVideoElement* aElement,
 
   result.mCORSUsed = aElement->GetCORSMode() != CORS_NONE;
   result.mHasSize = true;
-  result.mSize = size;
+  result.mSize = image->GetSize();
   result.mPrincipal = principal.forget();
   result.mIsWriteOnly = false;
 
@@ -6957,7 +6954,7 @@ nsLayoutUtils::GetEditableRootContentByContentEditable(nsIDocument* aDocument)
 nsLayoutUtils::AssertNoDuplicateContinuations(nsIFrame* aContainer,
                                               const nsFrameList& aFrameList)
 {
-  for (nsIFrame* f = aFrameList.FirstChild(); f ; f = f->GetNextSibling()) {
+  for (nsIFrame* f : aFrameList) {
     // Check only later continuations of f; we deal with checking the
     // earlier continuations when we hit those earlier continuations in
     // the frame list.
@@ -8131,7 +8128,8 @@ nsLayoutUtils::HasApzAwareListeners(EventListenerManager* aElm)
          aElm->HasListenersFor(nsGkAtoms::ontouchmove) ||
          aElm->HasListenersFor(nsGkAtoms::onwheel) ||
          aElm->HasListenersFor(nsGkAtoms::onDOMMouseScroll) ||
-         aElm->HasListenersFor(nsHtml5Atoms::onmousewheel);
+         aElm->HasListenersFor(nsHtml5Atoms::onmousewheel) ||
+         aElm->HasListenersFor(nsGkAtoms::onMozMousePixelScroll);
 }
 
 /* static */ bool

@@ -143,6 +143,7 @@ public:
                                   const nsString& aName,
                                   const nsString& aFeatures,
                                   const nsString& aBaseURI,
+                                  nsresult* aResult,
                                   bool* aWindowIsNew,
                                   InfallibleTArray<FrameScriptInfo>* aFrameScripts,
                                   nsCString* aURLToLoad) override;
@@ -366,7 +367,6 @@ public:
     NS_DECL_NSIAUTHPROMPTPROVIDER
     NS_DECL_NSISECUREBROWSERUI
 
-    static TabParent *GetIMETabParent() { return mIMETabParent; }
     bool HandleQueryContentEvent(mozilla::WidgetQueryContentEvent& aEvent);
     bool SendCompositionEvent(mozilla::WidgetCompositionEvent& event);
     bool SendSelectionEvent(mozilla::WidgetSelectionEvent& event);
@@ -447,8 +447,6 @@ protected:
     Element* mFrameElement;
     nsCOMPtr<nsIBrowserDOMWindow> mBrowserDOMWindow;
 
-    bool AllowContentIME();
-
     virtual PRenderFrameParent* AllocPRenderFrameParent() override;
     virtual bool DeallocPRenderFrameParent(PRenderFrameParent* aFrame) override;
 
@@ -467,9 +465,7 @@ protected:
 
     void SetHasContentOpener(bool aHasContentOpener);
 
-    // IME
-    static TabParent *mIMETabParent;
-    ContentCache mContentCache;
+    ContentCacheInParent mContentCache;
 
     nsIntRect mRect;
     ScreenIntSize mDimensions;

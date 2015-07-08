@@ -156,9 +156,6 @@ MP4Reader::MP4Reader(AbstractMediaDecoder* aDecoder, MediaTaskQueue* aBorrowedTa
   , mIndexReady(false)
   , mLastSeenEnd(-1)
   , mDemuxerMonitor("MP4 Demuxer")
-#if defined(MP4_READER_DORMANT_HEURISTIC)
-  , mDormantEnabled(Preferences::GetBool("media.decoder.heuristic.dormant.enabled", false))
-#endif
 {
   MOZ_ASSERT(NS_IsMainThread(), "Must be on main thread.");
   MOZ_COUNT_CTOR(MP4Reader);
@@ -426,7 +423,7 @@ MP4Reader::ReadMetadata(MediaInfo* aInfo,
   }
 
   // Get the duration, and report it to the decoder if we have it.
-  Microseconds duration;
+  mp4_demuxer::Microseconds duration;
   {
     MonitorAutoLock lock(mDemuxerMonitor);
     duration = mDemuxer->Duration();
@@ -564,7 +561,7 @@ MP4Reader::GetDecoderData(TrackType aTrack)
   return mVideo;
 }
 
-Microseconds
+mp4_demuxer::Microseconds
 MP4Reader::GetNextKeyframeTime()
 {
   MonitorAutoLock mon(mDemuxerMonitor);
@@ -599,7 +596,7 @@ MP4Reader::ShouldSkip(bool aSkipToNextKeyframe, int64_t aTimeThreshold)
   // if the time threshold (the current playback position) is after the next
   // keyframe in the stream. This means we'll only skip frames that we have
   // no hope of ever playing.
-  Microseconds nextKeyframe = -1;
+  mp4_demuxer::Microseconds nextKeyframe = -1;
   if (!sDemuxSkipToNextKeyframe ||
       (nextKeyframe = GetNextKeyframeTime()) == -1) {
     return aSkipToNextKeyframe;
@@ -609,7 +606,8 @@ MP4Reader::ShouldSkip(bool aSkipToNextKeyframe, int64_t aTimeThreshold)
 
 nsRefPtr<MediaDecoderReader::VideoDataPromise>
 MP4Reader::RequestVideoData(bool aSkipToNextKeyframe,
-                            int64_t aTimeThreshold)
+                            int64_t aTimeThreshold,
+                            bool aForceDecodeAhead)
 {
   MOZ_ASSERT(OnTaskQueue());
   VLOG("skip=%d time=%lld", aSkipToNextKeyframe, aTimeThreshold);
@@ -627,6 +625,7 @@ MP4Reader::RequestVideoData(bool aSkipToNextKeyframe,
   MOZ_ASSERT(HasVideo() && mPlatform && mVideo.mDecoder);
 
   bool eos = false;
+  mVideo.mForceDecodeAhead = aForceDecodeAhead;
   if (ShouldSkip(aSkipToNextKeyframe, aTimeThreshold)) {
     uint32_t parsed = 0;
     eos = !SkipVideoDemuxToNextKeyFrame(aTimeThreshold, parsed);
@@ -698,9 +697,10 @@ MP4Reader::NeedInput(DecoderData& aDecoder)
   return
     !aDecoder.mError &&
     !aDecoder.mDemuxEOS &&
-    aDecoder.HasPromise() &&
+    (aDecoder.HasPromise() || aDecoder.mForceDecodeAhead) &&
     aDecoder.mOutput.IsEmpty() &&
     (aDecoder.mInputExhausted ||
+     aDecoder.mForceDecodeAhead ||
      aDecoder.mNumSamplesInput - aDecoder.mNumSamplesOutput < aDecoder.mDecodeAhead);
 }
 
@@ -972,6 +972,7 @@ MP4Reader::Flush(TrackType aTrack)
   data.mDecoder->Flush();
   {
     MonitorAutoLock mon(data.mMonitor);
+    data.mForceDecodeAhead = false;
     data.mIsFlushing = false;
     data.mDrainComplete = false;
     data.mOutput.Clear();
@@ -1075,38 +1076,30 @@ MP4Reader::GetEvictionOffset(double aTime)
 media::TimeIntervals
 MP4Reader::GetBuffered()
 {
+  MOZ_ASSERT(OnTaskQueue());
   MonitorAutoLock mon(mDemuxerMonitor);
   media::TimeIntervals buffered;
   if (!mIndexReady) {
     return buffered;
   }
   UpdateIndex();
-  NS_ENSURE_TRUE(mStartTime >= 0, media::TimeIntervals());
+  NS_ENSURE_TRUE(HaveStartTime(), media::TimeIntervals());
 
   AutoPinned<MediaResource> resource(mDecoder->GetResource());
   nsTArray<MediaByteRange> ranges;
   nsresult rv = resource->GetCachedRanges(ranges);
 
   if (NS_SUCCEEDED(rv)) {
-    nsTArray<Interval<Microseconds>> timeRanges;
+    nsTArray<Interval<mp4_demuxer::Microseconds>> timeRanges;
     mDemuxer->ConvertByteRangesToTime(ranges, &timeRanges);
     for (size_t i = 0; i < timeRanges.Length(); i++) {
       buffered += media::TimeInterval(
-        media::TimeUnit::FromMicroseconds(timeRanges[i].start - mStartTime),
-        media::TimeUnit::FromMicroseconds(timeRanges[i].end - mStartTime));
+        media::TimeUnit::FromMicroseconds(timeRanges[i].start - StartTime()),
+        media::TimeUnit::FromMicroseconds(timeRanges[i].end - StartTime()));
     }
   }
 
   return buffered;
-}
-
-bool MP4Reader::IsDormantNeeded()
-{
-#if defined(MP4_READER_DORMANT_HEURISTIC)
-  return mDormantEnabled;
-#else
-  return false;
-#endif
 }
 
 void MP4Reader::ReleaseMediaResources()
@@ -1146,14 +1139,9 @@ MP4Reader::VideoIsHardwareAccelerated() const
 }
 
 void
-MP4Reader::NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset)
+MP4Reader::NotifyDataArrivedInternal(uint32_t aLength, int64_t aOffset)
 {
-  MOZ_ASSERT(NS_IsMainThread());
-
-  if (mShutdown) {
-    return;
-  }
-
+  MOZ_ASSERT(OnTaskQueue());
   if (mLastSeenEnd < 0) {
     MonitorAutoLock mon(mDemuxerMonitor);
     mLastSeenEnd = mDecoder->GetResource()->GetLength();

@@ -22,6 +22,8 @@
 #include "nsWeakReference.h"
 #include "TimingStruct.h"
 #include "AutoClose.h"
+#include "nsIStreamListener.h"
+#include "nsISupportsPrimitives.h"
 
 class nsDNSPrefetch;
 class nsICancelable;
@@ -126,7 +128,6 @@ public:
     NS_IMETHOD AsyncOpen(nsIStreamListener *listener, nsISupports *aContext) override;
     // nsIHttpChannelInternal
     NS_IMETHOD SetupFallbackChannel(const char *aFallbackKey) override;
-    NS_IMETHOD ContinueBeginConnect() override;
     // nsISupportsPriority
     NS_IMETHOD SetPriority(int32_t value) override;
     // nsIClassOfService
@@ -241,6 +242,8 @@ private:
 
     bool     RequestIsConditional();
     nsresult BeginConnect();
+    nsresult ContinueBeginConnectWithResult();
+    void     ContinueBeginConnect();
     nsresult Connect();
     void     SpeculativeConnect();
     nsresult SetupTransaction();

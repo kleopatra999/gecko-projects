@@ -18,8 +18,8 @@
 #include "nsDOMJSUtils.h"
 #include "nsJSUtils.h"
 #include "nsIDocument.h"
-#include "nsIJSRuntimeService.h"
 #include "nsIXPConnect.h"
+#include "xpcpublic.h"
 #include "nsIDOMElement.h"
 #include "prmem.h"
 #include "nsIContent.h"
@@ -90,8 +90,7 @@ static PLDHashTable* sNPObjWrappers;
 // wrappers and we can kill off hash tables etc.
 static int32_t sWrapperCount;
 
-// The runtime service used to register/unregister GC callbacks.
-nsCOMPtr<nsIJSRuntimeService> sCallbackRuntime;
+static bool sCallbackIsRegistered = false;
 
 static nsTArray<NPObject*>* sDelayedReleases;
 
@@ -319,18 +318,11 @@ DelayedReleaseGCCallback(JSGCStatus status)
 static bool
 RegisterGCCallbacks()
 {
-  if (sCallbackRuntime) {
+  if (sCallbackIsRegistered) {
     return true;
   }
 
-  static const char rtsvc_id[] = "@mozilla.org/js/xpc/RuntimeService;1";
-  nsCOMPtr<nsIJSRuntimeService> rtsvc(do_GetService(rtsvc_id));
-  if (!rtsvc) {
-    return false;
-  }
-
-  JSRuntime *jsRuntime = nullptr;
-  rtsvc->GetRuntime(&jsRuntime);
+  JSRuntime *jsRuntime = xpc::GetJSRuntime();
   MOZ_ASSERT(jsRuntime != nullptr);
 
   // Register a callback to trace wrapped JSObjects.
@@ -340,30 +332,29 @@ RegisterGCCallbacks()
 
   // Register our GC callback to perform delayed destruction of finalized
   // NPObjects.
-  rtsvc->RegisterGCCallback(DelayedReleaseGCCallback);
+  xpc::AddGCCallback(DelayedReleaseGCCallback);
 
-  // Set runtime pointer to indicate that callbacks have been registered.
-  sCallbackRuntime = rtsvc;
+  sCallbackIsRegistered = true;
+
   return true;
 }
 
 static void
 UnregisterGCCallbacks()
 {
-  MOZ_ASSERT(sCallbackRuntime);
+  MOZ_ASSERT(sCallbackIsRegistered);
 
-  JSRuntime *jsRuntime = nullptr;
-  sCallbackRuntime->GetRuntime(&jsRuntime);
+  JSRuntime *jsRuntime = xpc::GetJSRuntime();
   MOZ_ASSERT(jsRuntime != nullptr);
 
   // Remove tracing callback.
   JS_RemoveExtraGCRootsTracer(jsRuntime, TraceJSObjWrappers, nullptr);
 
   // Remove delayed destruction callback.
-  sCallbackRuntime->UnregisterGCCallback(DelayedReleaseGCCallback);
-
-  // Unset runtime pointer to indicate callbacks are no longer registered.
-  sCallbackRuntime = nullptr;
+  if (sCallbackIsRegistered) {
+    xpc::RemoveGCCallback(DelayedReleaseGCCallback);
+    sCallbackIsRegistered = false;
+  }
 }
 
 static bool
@@ -496,9 +487,9 @@ NPVariantToJSVal(NPP npp, JSContext *cx, const NPVariant *variant)
   case NPVariantType_Void :
     return JS::UndefinedValue();
   case NPVariantType_Null :
-    return JSVAL_NULL;
+    return JS::NullValue();
   case NPVariantType_Bool :
-    return BOOLEAN_TO_JSVAL(NPVARIANT_TO_BOOLEAN(*variant));
+    return JS::BooleanValue(NPVARIANT_TO_BOOLEAN(*variant));
   case NPVariantType_Int32 :
     {
       // Don't use INT_TO_JSVAL directly to prevent bugs when dealing
@@ -518,7 +509,7 @@ NPVariantToJSVal(NPP npp, JSContext *cx, const NPVariant *variant)
         ::JS_NewUCStringCopyN(cx, utf16String.get(), utf16String.Length());
 
       if (str) {
-        return STRING_TO_JSVAL(str);
+        return JS::StringValue(str);
       }
 
       break;
@@ -530,7 +521,7 @@ NPVariantToJSVal(NPP npp, JSContext *cx, const NPVariant *variant)
           nsNPObjWrapper::GetNewOrUsed(npp, cx, NPVARIANT_TO_OBJECT(*variant));
 
         if (obj) {
-          return OBJECT_TO_JSVAL(obj);
+          return JS::ObjectValue(*obj);
         }
       }
 
@@ -1062,7 +1053,7 @@ nsJSObjWrapper::NP_Enumerate(NPObject *npobj, NPIdentifier **idarray,
     NPIdentifier id;
     if (v.isString()) {
       JS::Rooted<JSString*> str(cx, v.toString());
-      str = JS_InternJSString(cx, str);
+      str = JS_AtomizeAndPinJSString(cx, str);
       if (!str) {
         PR_Free(*idarray);
         return false;
@@ -1562,7 +1553,7 @@ CallNPMethodInternal(JSContext *cx, JS::Handle<JSObject*> obj, unsigned argc,
     if (npobj->_class->invoke) {
       JSFunction *fun = ::JS_GetObjectFunction(funobj);
       JS::Rooted<JSString*> funId(cx, ::JS_GetFunctionId(fun));
-      JSString *name = ::JS_InternJSString(cx, funId);
+      JSString *name = ::JS_AtomizeAndPinJSString(cx, funId);
       NPIdentifier id = StringToNPIdentifier(cx, name);
 
       ok = npobj->_class->invoke(npobj, id, npargs, argc, &v);
@@ -1951,66 +1942,6 @@ nsNPObjWrapper::GetNewOrUsed(NPP npp, JSContext *cx, NPObject *npobj)
   return obj;
 }
 
-
-// Struct for passing an NPP and a JSContext to
-// NPObjWrapperPluginDestroyedCallback
-struct NppAndCx
-{
-  NPP npp;
-  JSContext *cx;
-};
-
-static PLDHashOperator
-NPObjWrapperPluginDestroyedCallback(PLDHashTable *table, PLDHashEntryHdr *hdr,
-                                    uint32_t number, void *arg)
-{
-  NPObjWrapperHashEntry *entry = (NPObjWrapperHashEntry *)hdr;
-  NppAndCx *nppcx = reinterpret_cast<NppAndCx *>(arg);
-
-  if (entry->mNpp == nppcx->npp) {
-    // HACK: temporarily hide the hash we're enumerating so that invalidate()
-    // and deallocate() don't touch it.
-    PLDHashTable *tmp = static_cast<PLDHashTable*>(table);
-    sNPObjWrappers = nullptr;
-
-    NPObject *npobj = entry->mNPObj;
-
-    if (npobj->_class && npobj->_class->invalidate) {
-      npobj->_class->invalidate(npobj);
-    }
-
-#ifdef NS_BUILD_REFCNT_LOGGING
-    {
-      int32_t refCnt = npobj->referenceCount;
-      while (refCnt) {
-        --refCnt;
-        NS_LOG_RELEASE(npobj, refCnt, "BrowserNPObject");
-      }
-    }
-#endif
-
-    // Force deallocation of plugin objects since the plugin they came
-    // from is being torn down.
-    if (npobj->_class && npobj->_class->deallocate) {
-      npobj->_class->deallocate(npobj);
-    } else {
-      PR_Free(npobj);
-    }
-
-    ::JS_SetPrivate(entry->mJSObj, nullptr);
-
-    sNPObjWrappers = tmp;
-
-    if (sDelayedReleases && sDelayedReleases->RemoveElement(npobj)) {
-      OnWrapperDestroyed();
-    }
-
-    return PL_DHASH_REMOVE;
-  }
-
-  return PL_DHASH_NEXT;
-}
-
 // static
 void
 nsJSNPRuntime::OnPluginDestroy(NPP npp)
@@ -2037,13 +1968,51 @@ nsJSNPRuntime::OnPluginDestroy(NPP npp)
     sJSObjWrappersAccessible = true;
   }
 
-  // Use the safe JSContext here as we're not always able to find the
-  // JSContext associated with the NPP any more.
-  AutoSafeJSContext cx;
   if (sNPObjWrappers) {
-    NppAndCx nppcx = { npp, cx };
-    PL_DHashTableEnumerate(sNPObjWrappers,
-                           NPObjWrapperPluginDestroyedCallback, &nppcx);
+    for (auto i = sNPObjWrappers->Iter(); !i.Done(); i.Next()) {
+      auto entry = static_cast<NPObjWrapperHashEntry*>(i.Get());
+
+      if (entry->mNpp == npp) {
+        // HACK: temporarily hide the table we're enumerating so that
+        // invalidate() and deallocate() don't touch it.
+        PLDHashTable *tmp = sNPObjWrappers;
+        sNPObjWrappers = nullptr;
+
+        NPObject *npobj = entry->mNPObj;
+
+        if (npobj->_class && npobj->_class->invalidate) {
+          npobj->_class->invalidate(npobj);
+        }
+
+#ifdef NS_BUILD_REFCNT_LOGGING
+        {
+          int32_t refCnt = npobj->referenceCount;
+          while (refCnt) {
+            --refCnt;
+            NS_LOG_RELEASE(npobj, refCnt, "BrowserNPObject");
+          }
+        }
+#endif
+
+        // Force deallocation of plugin objects since the plugin they came
+        // from is being torn down.
+        if (npobj->_class && npobj->_class->deallocate) {
+          npobj->_class->deallocate(npobj);
+        } else {
+          PR_Free(npobj);
+        }
+
+        ::JS_SetPrivate(entry->mJSObj, nullptr);
+
+        sNPObjWrappers = tmp;
+
+        if (sDelayedReleases && sDelayedReleases->RemoveElement(npobj)) {
+          OnWrapperDestroyed();
+        }
+
+        i.Remove();
+      }
+    }
   }
 }
 

@@ -20,6 +20,7 @@
 #include "ImageContainer.h"
 #include "ImageRegion.h"
 #include "Layers.h"
+#include "LookupResult.h"
 #include "nsPresContext.h"
 #include "SourceBuffer.h"
 #include "SurfaceCache.h"
@@ -266,9 +267,11 @@ RasterImage::RasterImage(ImageURL* aURI /* = nullptr */) :
   mHasSize(false),
   mDecodeOnlyOnDraw(false),
   mTransient(false),
+  mSyncLoad(false),
   mDiscardable(false),
   mHasSourceData(false),
   mHasBeenDecoded(false),
+  mDownscaleDuringDecode(false),
   mPendingAnimation(false),
   mAnimationFinished(false),
   mWantFullDecode(false)
@@ -320,6 +323,7 @@ RasterImage::Init(const char* aMimeType,
   mWantFullDecode = !!(aFlags & INIT_FLAG_DECODE_IMMEDIATELY);
   mTransient = !!(aFlags & INIT_FLAG_TRANSIENT);
   mDownscaleDuringDecode = !!(aFlags & INIT_FLAG_DOWNSCALE_DURING_DECODE);
+  mSyncLoad = !!(aFlags & INIT_FLAG_SYNC_LOAD);
 
 #ifndef MOZ_ENABLE_SKIA
   // Downscale-during-decode requires Skia.
@@ -332,10 +336,19 @@ RasterImage::Init(const char* aMimeType,
     SurfaceCache::LockImage(ImageKey(this));
   }
 
-  // Create the initial size decoder.
-  nsresult rv = Decode(Nothing(), DECODE_FLAGS_DEFAULT);
-  if (NS_FAILED(rv)) {
-    return NS_ERROR_FAILURE;
+  if (mSyncLoad) {
+    // We'll create a sync size decoder in OnImageDataComplete. For now, just
+    // verify that we *could* create such a decoder.
+    eDecoderType type = GetDecoderType(mSourceDataMimeType.get());
+    if (type == eDecoderType_unknown) {
+      return NS_ERROR_FAILURE;
+    }
+  } else {
+    // Create an async size decoder and verify that we succeed in doing so.
+    nsresult rv = Decode(Nothing(), DECODE_FLAGS_DEFAULT);
+    if (NS_FAILED(rv)) {
+      return NS_ERROR_FAILURE;
+    }
   }
 
   // Mark us as initialized
@@ -457,7 +470,7 @@ RasterImage::GetType(uint16_t* aType)
   return NS_OK;
 }
 
-DrawableFrameRef
+LookupResult
 RasterImage::LookupFrameInternal(uint32_t aFrameNum,
                                  const IntSize& aSize,
                                  uint32_t aFlags)
@@ -510,14 +523,14 @@ RasterImage::LookupFrame(uint32_t aFrameNum,
   IntSize requestedSize = CanDownscaleDuringDecode(aSize, aFlags)
                         ? aSize : mSize;
 
-  DrawableFrameRef ref = LookupFrameInternal(aFrameNum, requestedSize, aFlags);
+  LookupResult result = LookupFrameInternal(aFrameNum, requestedSize, aFlags);
 
-  if (!ref && !mHasSize) {
+  if (!result && !mHasSize) {
     // We can't request a decode without knowing our intrinsic size. Give up.
     return DrawableFrameRef();
   }
 
-  if (!ref || ref->GetImageSize() != requestedSize) {
+  if (!result || !result.IsExactMatch()) {
     // The OS threw this frame away. We need to redecode if we can.
     MOZ_ASSERT(!mAnim, "Animated frames should be locked");
 
@@ -525,29 +538,30 @@ RasterImage::LookupFrame(uint32_t aFrameNum,
 
     // If we can sync decode, we should already have the frame.
     if (aFlags & FLAG_SYNC_DECODE) {
-      ref = LookupFrameInternal(aFrameNum, requestedSize, aFlags);
+      result = LookupFrameInternal(aFrameNum, requestedSize, aFlags);
     }
   }
 
-  if (!ref) {
+  if (!result) {
     // We still weren't able to get a frame. Give up.
     return DrawableFrameRef();
   }
 
-  if (ref->GetCompositingFailed()) {
+  if (result.DrawableRef()->GetCompositingFailed()) {
     return DrawableFrameRef();
   }
 
-  MOZ_ASSERT(!ref || !ref->GetIsPaletted(), "Should not have paletted frame");
+  MOZ_ASSERT(!result.DrawableRef()->GetIsPaletted(),
+             "Should not have a paletted frame");
 
   // Sync decoding guarantees that we got the frame, but if it's owned by an
   // async decoder that's currently running, the contents of the frame may not
   // be available yet. Make sure we get everything.
-  if (ref && mHasSourceData && (aFlags & FLAG_SYNC_DECODE)) {
-    ref->WaitUntilComplete();
+  if (mHasSourceData && (aFlags & FLAG_SYNC_DECODE)) {
+    result.DrawableRef()->WaitUntilComplete();
   }
 
-  return ref;
+  return Move(result.DrawableRef());
 }
 
 uint32_t
@@ -652,7 +666,7 @@ RasterImage::GetFirstFrameDelay()
   return mAnim->GetTimeoutForFrame(0);
 }
 
-TemporaryRef<SourceSurface>
+already_AddRefed<SourceSurface>
 RasterImage::CopyFrame(uint32_t aWhichFrame, uint32_t aFlags)
 {
   if (aWhichFrame > FRAME_MAX_VALUE) {
@@ -728,7 +742,7 @@ RasterImage::CopyFrame(uint32_t aWhichFrame, uint32_t aFlags)
 //******************************************************************************
 /* [noscript] SourceSurface getFrame(in uint32_t aWhichFrame,
  *                                   in uint32_t aFlags); */
-NS_IMETHODIMP_(TemporaryRef<SourceSurface>)
+NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
 RasterImage::GetFrame(uint32_t aWhichFrame,
                       uint32_t aFlags)
 {
@@ -891,7 +905,10 @@ RasterImage::UpdateImageContainer()
   }
 
   mLastImageContainerDrawResult = result.first();
-  container->SetCurrentImage(result.second());
+  nsAutoTArray<ImageContainer::NonOwningImage,1> imageList;
+  imageList.AppendElement(
+      ImageContainer::NonOwningImage(result.second()));
+  container->SetCurrentImages(imageList);
 }
 
 size_t
@@ -1179,10 +1196,10 @@ RasterImage::OnImageDataComplete(nsIRequest*, nsISupports*, nsresult aStatus,
   // Let decoders know that there won't be any more data coming.
   mSourceBuffer->Complete(aStatus);
 
-  if (!mHasSize) {
-    // We need to guarantee that we've gotten the image's size, or at least
-    // determined that we won't be able to get it, before we deliver the load
-    // event. That means we have to do a synchronous size decode here.
+  if (mSyncLoad && !mHasSize) {
+    // We're loading this image synchronously, so it needs to be usable after
+    // this call returns.  Since we haven't gotten our size yet, we need to do a
+    // synchronous size decode here.
     Decode(Nothing(), FLAG_SYNC_DECODE);
   }
 
@@ -1198,41 +1215,43 @@ RasterImage::OnImageDataComplete(nsIRequest*, nsISupports*, nsresult aStatus,
     DoError();
   }
 
-  MOZ_ASSERT(mHasSize || mError, "Need to know size before firing load event");
-  MOZ_ASSERT(!mHasSize ||
-             (mProgressTracker->GetProgress() & FLAG_SIZE_AVAILABLE),
-             "Should have notified that the size is available if we have it");
-
   Progress loadProgress = LoadCompleteProgress(aLastPart, mError, finalStatus);
 
-  if (mDecodeOnlyOnDraw) {
-    // For decode-only-on-draw images, we want to send notifications as if we've
-    // already finished decoding. Otherwise some observers will never even try
-    // to draw. (We may have already sent some of these notifications from
-    // NotifyForDecodeOnlyOnDraw(), but ProgressTracker will ensure no duplicate
-    // notifications get sent.)
-    loadProgress |= FLAG_DECODE_STARTED |
-                    FLAG_FRAME_COMPLETE |
-                    FLAG_DECODE_COMPLETE;
+  if (!mHasSize && !mError) {
+    // We don't have our size yet, so we'll fire the load event in SetSize().
+    MOZ_ASSERT(!mSyncLoad, "Firing load asynchronously but mSyncLoad is set?");
+    NotifyProgress(FLAG_ONLOAD_BLOCKED);
+    mLoadProgress = Some(loadProgress);
+    return finalStatus;
   }
 
-  // Notify our listeners, which will fire this image's load event.
-  NotifyProgress(loadProgress);
+  NotifyForLoadEvent(loadProgress);
 
   return finalStatus;
 }
 
 void
-RasterImage::NotifyForDecodeOnlyOnDraw()
+RasterImage::NotifyForLoadEvent(Progress aProgress)
 {
-  if (!NS_IsMainThread()) {
-    nsCOMPtr<nsIRunnable> runnable =
-      NS_NewRunnableMethod(this, &RasterImage::NotifyForDecodeOnlyOnDraw);
-    NS_DispatchToMainThread(runnable);
-    return;
+  MOZ_ASSERT(mHasSize || mError, "Need to know size before firing load event");
+  MOZ_ASSERT(!mHasSize ||
+             (mProgressTracker->GetProgress() & FLAG_SIZE_AVAILABLE),
+             "Should have notified that the size is available if we have it");
+
+  if (mDecodeOnlyOnDraw) {
+    // For decode-only-on-draw images, we want to send notifications as if we've
+    // already finished decoding. Otherwise some observers will never even try
+    // to draw.
+    aProgress |= FLAG_FRAME_COMPLETE | FLAG_DECODE_COMPLETE;
   }
 
-  NotifyProgress(FLAG_DECODE_STARTED);
+  // If we encountered an error, make sure we notify for that as well.
+  if (mError) {
+    aProgress |= FLAG_HAS_ERROR;
+  }
+
+  // Notify our listeners, which will fire this image's load event.
+  NotifyProgress(aProgress);
 }
 
 nsresult
@@ -1243,12 +1262,6 @@ RasterImage::OnImageDataAvailable(nsIRequest*,
                                   uint32_t aCount)
 {
   nsresult rv;
-
-  if (MOZ_UNLIKELY(mDecodeOnlyOnDraw && aOffset == 0)) {
-    // If we're a decode-only-on-draw image, send notifications as if we've just
-    // started decoding.
-    NotifyForDecodeOnlyOnDraw();
-  }
 
   // WriteToSourceBuffer always consumes everything it gets if it doesn't run
   // out of memory.
@@ -1602,14 +1615,6 @@ RasterImage::Decode(const Maybe<IntSize>& aSize, uint32_t aFlags)
     return NS_ERROR_FAILURE;
   }
 
-  if (aSize) {
-    // This isn't a size decode (which doesn't send any early notifications), so
-    // send out notifications right away.
-    NotifyProgress(decoder->TakeProgress(),
-                   decoder->TakeInvalidRect(),
-                   decoder->GetDecodeFlags());
-  }
-
   if (mHasSourceData) {
     // If we have all the data, we can sync decode if requested.
     if (aFlags & FLAG_SYNC_DECODE) {
@@ -1804,19 +1809,19 @@ RasterImage::DrawWithPreDownscaleIfNeeded(DrawableFrameRef&& aFrameRef,
   DrawableFrameRef frameRef;
 
   if (CanScale(aFilter, aSize, aFlags)) {
-    frameRef =
+    LookupResult result =
       SurfaceCache::Lookup(ImageKey(this),
                            RasterSurfaceKey(aSize,
                                             DecodeFlags(aFlags),
                                             0));
-    if (!frameRef) {
+    if (!result) {
       // We either didn't have a matching scaled frame or the OS threw it away.
       // Request a new one so we'll be ready next time. For now, we'll fall back
       // to aFrameRef below.
       RequestScale(aFrameRef.get(), aFlags, aSize);
     }
-    if (frameRef && !frameRef->IsImageComplete()) {
-      frameRef.reset();  // We're still scaling, so we can't use this yet.
+    if (result && result.DrawableRef()->IsImageComplete()) {
+      frameRef = Move(result.DrawableRef());  // The scaled version is ready.
     }
   }
 
@@ -2170,6 +2175,13 @@ RasterImage::FinalizeDecoder(Decoder* aDecoder)
     } else if (wasSize && !mHasSize) {
       DoError();
     }
+
+    // If we were waiting to fire the load event, go ahead and fire it now.
+    if (mLoadProgress && wasSize) {
+      NotifyForLoadEvent(*mLoadProgress);
+      mLoadProgress = Nothing();
+      NotifyProgress(FLAG_ONLOAD_UNBLOCKED);
+    }
   }
 
   if (aDecoder->ImageIsLocked()) {
@@ -2209,21 +2221,21 @@ RasterImage::OptimalImageSizeForDest(const gfxSize& aDest, uint32_t aWhichFrame,
       CanDownscaleDuringDecode(destSize, aFlags)) {
     return destSize;
   } else if (CanScale(aFilter, destSize, aFlags)) {
-    DrawableFrameRef frameRef =
+    LookupResult result =
       SurfaceCache::Lookup(ImageKey(this),
                            RasterSurfaceKey(destSize,
                                             DecodeFlags(aFlags),
                                             0));
 
-    if (frameRef && frameRef->IsImageComplete()) {
-        return destSize;  // We have an existing HQ scale for this size.
+    if (result && result.DrawableRef()->IsImageComplete()) {
+      return destSize;  // We have an existing HQ scale for this size.
     }
-    if (!frameRef) {
+    if (!result) {
       // We could HQ scale to this size, but we haven't. Request a scale now.
-      frameRef = LookupFrame(GetRequestedFrameIndex(aWhichFrame),
-                             mSize, aFlags);
-      if (frameRef) {
-        RequestScale(frameRef.get(), aFlags, destSize);
+      DrawableFrameRef ref = LookupFrame(GetRequestedFrameIndex(aWhichFrame),
+                                         mSize, aFlags);
+      if (ref) {
+        RequestScale(ref.get(), aFlags, destSize);
       }
     }
   }

@@ -116,7 +116,6 @@
 #include "nsIFormProcessor.h"
 #include "nsIGfxInfo.h"
 #include "nsIIdleService.h"
-#include "nsIJSRuntimeService.h"
 #include "nsIMemoryInfoDumper.h"
 #include "nsIMemoryReporter.h"
 #include "nsIMozBrowserFrame.h"
@@ -124,6 +123,7 @@
 #include "nsIObserverService.h"
 #include "nsIPresShell.h"
 #include "nsIScriptError.h"
+#include "nsIScriptSecurityManager.h"
 #include "nsISiteSecurityService.h"
 #include "nsISpellChecker.h"
 #include "nsIStyleSheet.h"
@@ -779,7 +779,7 @@ ContentParent::StartUp()
     // child process
     sCanLaunchSubprocesses = true;
 
-    if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    if (!XRE_IsParentProcess()) {
         return;
     }
 
@@ -1153,7 +1153,7 @@ ContentParent::CreateBrowserOrApp(const TabContext& aContext,
     }
 
     ProcessPriority initialPriority = GetInitialProcessPriority(aFrameElement);
-    bool isInContentProcess = (XRE_GetProcessType() != GeckoProcessType_Default);
+    bool isInContentProcess = !XRE_IsParentProcess();
     TabId tabId;
 
     nsIDocShell* docShell = GetOpenerDocShellHelper(aFrameElement);
@@ -1694,7 +1694,7 @@ ContentParent::ShutDownProcess(ShutDownMethod aMethod)
     using mozilla::dom::quota::QuotaManager;
 
     if (QuotaManager* quotaManager = QuotaManager::Get()) {
-        quotaManager->AbortCloseStoragesForProcess(this);
+        quotaManager->AbortOperationsForProcess(mChildID);
     }
 
     // If Close() fails with an error, we'll end up back in this function, but
@@ -1812,7 +1812,7 @@ ContentParent::OnChannelError()
 
 void
 ContentParent::OnBeginSyncTransaction() {
-    if (XRE_GetProcessType() == GeckoProcessType_Default) {
+    if (XRE_IsParentProcess()) {
         nsCOMPtr<nsIConsoleService> console(do_GetService(NS_CONSOLESERVICE_CONTRACTID));
         JSContext *cx = nsContentUtils::GetCurrentJSContext();
         if (!sDisableUnsafeCPOWWarnings) {
@@ -2101,7 +2101,7 @@ ContentParent::StartForceKillTimer()
         return;
     }
 
-    int32_t timeoutSecs = Preferences::GetInt("dom.ipc.tabs.shutdownTimeoutSecs", 5);
+    int32_t timeoutSecs = Preferences::GetInt("dom.ipc.tabs.shutdownTimeoutSecs", 0);
     if (timeoutSecs > 0) {
         mForceKillTimer = do_CreateInstance("@mozilla.org/timer;1");
         MOZ_ASSERT(mForceKillTimer);
@@ -2436,15 +2436,8 @@ ContentParent::InitInternal(ProcessPriority aInitialPriority,
             DebugOnly<bool> opened = PCompositor::Open(this);
             MOZ_ASSERT(opened);
 
-#ifndef MOZ_WIDGET_GONK
-            if (gfxPrefs::AsyncVideoOOPEnabled()) {
-                opened = PImageBridge::Open(this);
-                MOZ_ASSERT(opened);
-            }
-#else
             opened = PImageBridge::Open(this);
             MOZ_ASSERT(opened);
-#endif
         }
 #ifdef MOZ_WIDGET_GONK
         DebugOnly<bool> opened = PSharedBufferManager::Open(this);
@@ -2627,33 +2620,51 @@ ContentParent::RecvSetClipboard(const IPCDataTransfer& aDataTransfer,
 
         NS_ENSURE_SUCCESS(rv, true);
       } else if (item.data().type() == IPCDataTransferData::TnsCString) {
-        const IPCDataTransferImage& imageDetails = item.imageDetails();
-        const gfxIntSize size(imageDetails.width(), imageDetails.height());
-        if (!size.width || !size.height) {
-          return true;
+        if (item.flavor().EqualsLiteral(kJPEGImageMime) ||
+            item.flavor().EqualsLiteral(kJPGImageMime) ||
+            item.flavor().EqualsLiteral(kPNGImageMime) ||
+            item.flavor().EqualsLiteral(kGIFImageMime)) {
+          const IPCDataTransferImage& imageDetails = item.imageDetails();
+          const gfxIntSize size(imageDetails.width(), imageDetails.height());
+          if (!size.width || !size.height) {
+            return true;
+          }
+
+          nsCString text = item.data().get_nsCString();
+          mozilla::RefPtr<gfx::DataSourceSurface> image =
+            new mozilla::gfx::SourceSurfaceRawData();
+          mozilla::gfx::SourceSurfaceRawData* raw =
+            static_cast<mozilla::gfx::SourceSurfaceRawData*>(image.get());
+          raw->InitWrappingData(
+            reinterpret_cast<uint8_t*>(const_cast<nsCString&>(text).BeginWriting()),
+            size, imageDetails.stride(),
+            static_cast<mozilla::gfx::SurfaceFormat>(imageDetails.format()), false);
+          raw->GuaranteePersistance();
+
+          nsRefPtr<gfxDrawable> drawable = new gfxSurfaceDrawable(image, size);
+          nsCOMPtr<imgIContainer> imageContainer(image::ImageOps::CreateFromDrawable(drawable));
+
+          nsCOMPtr<nsISupportsInterfacePointer>
+            imgPtr(do_CreateInstance(NS_SUPPORTS_INTERFACE_POINTER_CONTRACTID, &rv));
+
+          rv = imgPtr->SetData(imageContainer);
+          NS_ENSURE_SUCCESS(rv, true);
+
+          trans->SetTransferData(item.flavor().get(), imgPtr, sizeof(nsISupports*));
+        } else {
+          nsCOMPtr<nsISupportsCString> dataWrapper =
+            do_CreateInstance(NS_SUPPORTS_CSTRING_CONTRACTID, &rv);
+          NS_ENSURE_SUCCESS(rv, true);
+
+          const nsCString& text = item.data().get_nsCString();
+          rv = dataWrapper->SetData(text);
+          NS_ENSURE_SUCCESS(rv, true);
+
+          rv = trans->SetTransferData(item.flavor().get(), dataWrapper,
+                                      text.Length());
+
+          NS_ENSURE_SUCCESS(rv, true);
         }
-
-        nsCString text = item.data().get_nsCString();
-        mozilla::RefPtr<gfx::DataSourceSurface> image =
-          new mozilla::gfx::SourceSurfaceRawData();
-        mozilla::gfx::SourceSurfaceRawData* raw =
-          static_cast<mozilla::gfx::SourceSurfaceRawData*>(image.get());
-        raw->InitWrappingData(
-          reinterpret_cast<uint8_t*>(const_cast<nsCString&>(text).BeginWriting()),
-          size, imageDetails.stride(),
-          static_cast<mozilla::gfx::SurfaceFormat>(imageDetails.format()), false);
-        raw->GuaranteePersistance();
-
-        nsRefPtr<gfxDrawable> drawable = new gfxSurfaceDrawable(image, size);
-        nsCOMPtr<imgIContainer> imageContainer(image::ImageOps::CreateFromDrawable(drawable));
-
-        nsCOMPtr<nsISupportsInterfacePointer>
-          imgPtr(do_CreateInstance(NS_SUPPORTS_INTERFACE_POINTER_CONTRACTID, &rv));
-
-        rv = imgPtr->SetData(imageContainer);
-        NS_ENSURE_SUCCESS(rv, true);
-
-        trans->SetTransferData(item.flavor().get(), imgPtr, sizeof(nsISupports*));
       }
     }
 
@@ -4823,6 +4834,26 @@ ContentParent::RecvGetFileReferences(const PersistenceType& aPersistenceType,
 }
 
 bool
+ContentParent::RecvFlushPendingFileDeletions()
+{
+    nsRefPtr<IndexedDatabaseManager> mgr = IndexedDatabaseManager::Get();
+    if (NS_WARN_IF(!mgr)) {
+        return false;
+    }
+
+    if (NS_WARN_IF(!mgr->IsMainProcess())) {
+        return false;
+    }
+
+    nsresult rv = mgr->FlushPendingFileDeletions();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return false;
+    }
+
+    return true;
+}
+
+bool
 ContentParent::IgnoreIPCPrincipal()
 {
   static bool sDidAddVarCache = false;
@@ -4858,7 +4889,7 @@ ContentParent::AllocateTabId(const TabId& aOpenerTabId,
                              const ContentParentId& aCpId)
 {
     TabId tabId;
-    if (XRE_GetProcessType() == GeckoProcessType_Default) {
+    if (XRE_IsParentProcess()) {
         ContentProcessManager *cpm = ContentProcessManager::GetSingleton();
         tabId = cpm->AllocateTabId(aOpenerTabId, aContext, aCpId);
     }
@@ -4875,7 +4906,7 @@ ContentParent::AllocateTabId(const TabId& aOpenerTabId,
 ContentParent::DeallocateTabId(const TabId& aTabId,
                                const ContentParentId& aCpId)
 {
-    if (XRE_GetProcessType() == GeckoProcessType_Default) {
+    if (XRE_IsParentProcess()) {
         ContentProcessManager::GetSingleton()->DeallocateTabId(aCpId,
                                                                aTabId);
     }
@@ -5074,7 +5105,7 @@ ContentParent::DeallocPContentPermissionRequestParent(PContentPermissionRequestP
 bool
 ContentParent::RecvGetBrowserConfiguration(const nsCString& aURI, BrowserConfiguration* aConfig)
 {
-    MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+    MOZ_ASSERT(XRE_IsParentProcess());
 
     return GetBrowserConfiguration(aURI, *aConfig);;
 }
@@ -5082,7 +5113,7 @@ ContentParent::RecvGetBrowserConfiguration(const nsCString& aURI, BrowserConfigu
 /*static*/ bool
 ContentParent::GetBrowserConfiguration(const nsCString& aURI, BrowserConfiguration& aConfig)
 {
-    if (XRE_GetProcessType() == GeckoProcessType_Default) {
+    if (XRE_IsParentProcess()) {
         nsRefPtr<ServiceWorkerRegistrar> swr = ServiceWorkerRegistrar::Get();
         MOZ_ASSERT(swr);
 

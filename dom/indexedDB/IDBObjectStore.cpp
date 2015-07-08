@@ -439,7 +439,8 @@ ResolveMysteryFile(BlobImpl* aImpl,
   BlobChild* actor = ActorFromRemoteBlobImpl(aImpl);
   if (actor) {
     return actor->SetMysteryBlobInfo(aName, aContentType,
-                                     aSize, aLastModifiedDate);
+                                     aSize, aLastModifiedDate,
+                                     BlobDirState::eUnknownIfDir);
   }
   return true;
 }
@@ -1437,7 +1438,7 @@ IDBObjectStore::Index(const nsAString& aName, ErrorResult &aRv)
 {
   AssertIsOnOwningThread();
 
-  if (mTransaction->IsFinished()) {
+  if (mTransaction->IsCommittingOrDone() || mDeletedSpec) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return nullptr;
   }

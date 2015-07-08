@@ -353,7 +353,8 @@ MediaCodecReader::RequestAudioData()
 
 nsRefPtr<MediaDecoderReader::VideoDataPromise>
 MediaCodecReader::RequestVideoData(bool aSkipToNextKeyframe,
-                                   int64_t aTimeThreshold)
+                                   int64_t aTimeThreshold,
+                                   bool aForceDecodeAhead)
 {
   MOZ_ASSERT(OnTaskQueue());
   MOZ_ASSERT(HasVideo());
@@ -522,10 +523,12 @@ MediaCodecReader::HasVideo()
 }
 
 void
-MediaCodecReader::NotifyDataArrived(const char* aBuffer,
-                                    uint32_t aLength,
-                                    int64_t aOffset)
+MediaCodecReader::NotifyDataArrivedInternal(uint32_t aLength,
+                                            int64_t aOffset)
 {
+  nsRefPtr<MediaByteBuffer> bytes = mDecoder->GetResource()->SilentReadAt(aOffset, aLength);
+  NS_ENSURE_TRUE_VOID(bytes);
+
   MonitorAutoLock monLock(mParserMonitor);
   if (mNextParserPosition == mParsedDataLength &&
       mNextParserPosition >= aOffset &&
@@ -533,7 +536,7 @@ MediaCodecReader::NotifyDataArrived(const char* aBuffer,
     // No pending parsing runnable currently. And available data are adjacent to
     // parsed data.
     int64_t shift = mNextParserPosition - aOffset;
-    const char* buffer = aBuffer + shift;
+    const char* buffer = reinterpret_cast<const char*>(bytes->Elements()) + shift;
     uint32_t length = aLength - shift;
     int64_t offset = mNextParserPosition;
     if (length > 0) {
@@ -630,7 +633,7 @@ MediaCodecReader::ParseDataSegment(const char* aBuffer,
       return true; // NO-OP
     }
 
-    mMP3FrameParser->Parse(aBuffer, aLength, aOffset);
+    mMP3FrameParser->Parse(reinterpret_cast<const uint8_t*>(aBuffer), aLength, aOffset);
 
     duration = mMP3FrameParser->GetDuration();
   }
@@ -652,8 +655,7 @@ MediaCodecReader::ParseDataSegment(const char* aBuffer,
 
   if (durationUpdateRequired) {
     MOZ_ASSERT(mDecoder);
-    ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
-    mDecoder->UpdateEstimatedMediaDuration(duration);
+    mDecoder->DispatchUpdateEstimatedMediaDuration(duration);
   }
 
   return true;
@@ -740,10 +742,8 @@ MediaCodecReader::HandleResourceAllocated()
   // Video track's frame sizes will not overflow. Activate the video track.
   VideoFrameContainer* container = mDecoder->GetVideoFrameContainer();
   if (container) {
-    container->SetCurrentFrame(
-      gfxIntSize(mInfo.mVideo.mDisplay.width, mInfo.mVideo.mDisplay.height),
-      nullptr,
-      mozilla::TimeStamp::Now());
+    container->ClearCurrentFrame(
+      gfxIntSize(mInfo.mVideo.mDisplay.width, mInfo.mVideo.mDisplay.height));
   }
 
   nsRefPtr<MetadataHolder> metadata = new MetadataHolder();
@@ -1051,14 +1051,6 @@ MediaCodecReader::Seek(int64_t aTime, int64_t aEndTime)
     mVideoTrack.mInputEndOfStream = false;
     mVideoTrack.mOutputEndOfStream = false;
     mVideoTrack.mFlushed = false;
-
-    VideoFrameContainer* videoframe = mDecoder->GetVideoFrameContainer();
-    if (videoframe) {
-      layers::ImageContainer* image = videoframe->GetImageContainer();
-      if (image) {
-        image->ClearAllImagesExceptFront();
-      }
-    }
 
     MediaBuffer* source_buffer = nullptr;
     MediaSource::ReadOptions options;

@@ -22,6 +22,7 @@
 #include "mozilla/EventStateManager.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/Hal.h"
+#include "mozilla/IMEStateManager.h"
 #include "mozilla/ipc/DocumentRendererParent.h"
 #include "mozilla/jsipc/CrossProcessObjectWrappers.h"
 #include "mozilla/layers/CompositorParent.h"
@@ -88,6 +89,7 @@
 #include "gfxPrefs.h"
 #include "nsILoginManagerPrompter.h"
 #include "nsPIWindowRoot.h"
+#include "nsIAuthPrompt2.h"
 #include "gfxDrawable.h"
 #include "ImageOps.h"
 #include "UnitTransforms.h"
@@ -247,7 +249,6 @@ private:
 namespace mozilla {
 namespace dom {
 
-TabParent *TabParent::mIMETabParent = nullptr;
 TabParent::LayerToTabParentTable* TabParent::sLayerToTabParentTable = nullptr;
 
 NS_IMPL_ISUPPORTS(TabParent,
@@ -447,7 +448,7 @@ TabParent::Destroy()
   }
   mIsDestroyed = true;
 
-  if (XRE_GetProcessType() == GeckoProcessType_Default) {
+  if (XRE_IsParentProcess()) {
     Manager()->AsContentParent()->NotifyTabDestroying(this);
   }
 
@@ -465,7 +466,7 @@ TabParent::Destroy()
 bool
 TabParent::Recv__delete__()
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Default) {
+  if (XRE_IsParentProcess()) {
     Manager()->AsContentParent()->NotifyTabDestroyed(this, mMarkedDestroying);
     ContentParent::DeallocateTabId(mTabId,
                                    Manager()->AsContentParent()->ChildID());
@@ -480,9 +481,8 @@ TabParent::Recv__delete__()
 void
 TabParent::ActorDestroy(ActorDestroyReason why)
 {
-  if (mIMETabParent == this) {
-    mIMETabParent = nullptr;
-  }
+  IMEStateManager::OnTabParentDestroying(this);
+
   nsRefPtr<nsFrameLoader> frameLoader = GetFrameLoader(true);
   nsCOMPtr<nsIObserverService> os = services::GetObserverService();
   if (frameLoader) {
@@ -609,6 +609,7 @@ TabParent::RecvCreateWindow(PBrowserParent* aNewTab,
                             const nsString& aName,
                             const nsString& aFeatures,
                             const nsString& aBaseURI,
+                            nsresult* aResult,
                             bool* aWindowIsNew,
                             InfallibleTArray<FrameScriptInfo>* aFrameScripts,
                             nsCString* aURLToLoad)
@@ -616,14 +617,14 @@ TabParent::RecvCreateWindow(PBrowserParent* aNewTab,
   // We always expect to open a new window here. If we don't, it's an error.
   *aWindowIsNew = true;
 
-  if (IsBrowserOrApp()) {
+  if (NS_WARN_IF(IsBrowserOrApp()))
     return false;
-  }
 
-  nsresult rv;
   nsCOMPtr<nsPIWindowWatcher> pwwatch =
-    do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv);
-  NS_ENSURE_SUCCESS(rv, false);
+    do_GetService(NS_WINDOWWATCHER_CONTRACTID, aResult);
+
+  if (NS_WARN_IF(NS_FAILED(*aResult)))
+    return true;
 
   TabParent* newTab = TabParent::GetFrom(aNewTab);
   MOZ_ASSERT(newTab);
@@ -654,8 +655,9 @@ TabParent::RecvCreateWindow(PBrowserParent* aNewTab,
   // opened one.
   if (!parent) {
     parent = FindMostRecentOpenWindow();
-    if (!parent) {
-      return false;
+    if (NS_WARN_IF(!parent)) {
+      *aResult = NS_ERROR_FAILURE;
+      return true;
     }
 
     nsCOMPtr<nsIDOMChromeWindow> rootChromeWin = do_QueryInterface(parent);
@@ -673,7 +675,10 @@ TabParent::RecvCreateWindow(PBrowserParent* aNewTab,
 
   // Opening new tabs is the easy case...
   if (openLocation == nsIBrowserDOMWindow::OPEN_NEWTAB) {
-    NS_ENSURE_TRUE(browserDOMWin, false);
+    if (NS_WARN_IF(!browserDOMWin)) {
+      *aResult = NS_ERROR_FAILURE;
+      return true;
+    }
 
     bool isPrivate;
     nsCOMPtr<nsILoadContext> loadContext = GetLoadContext();
@@ -705,14 +710,19 @@ TabParent::RecvCreateWindow(PBrowserParent* aNewTab,
   // TabChild has sent us a baseURI with which we can ensure that
   // the URI we pass to WindowWatcher is valid.
   nsCOMPtr<nsIURI> baseURI;
-  rv = NS_NewURI(getter_AddRefs(baseURI), aBaseURI);
-  NS_ENSURE_SUCCESS(rv, false);
+  *aResult = NS_NewURI(getter_AddRefs(baseURI), aBaseURI);
+
+  if (NS_WARN_IF(NS_FAILED(*aResult)))
+    return true;
 
   nsAutoCString finalURIString;
   if (!aURI.IsEmpty()) {
     nsCOMPtr<nsIURI> finalURI;
-    rv = NS_NewURI(getter_AddRefs(finalURI), NS_ConvertUTF16toUTF8(aURI).get(), baseURI);
-    NS_ENSURE_SUCCESS(rv, false);
+    *aResult = NS_NewURI(getter_AddRefs(finalURI), NS_ConvertUTF16toUTF8(aURI).get(), baseURI);
+
+    if (NS_WARN_IF(NS_FAILED(*aResult)))
+      return true;
+
     finalURI->GetSpec(finalURIString);
   }
 
@@ -720,31 +730,45 @@ TabParent::RecvCreateWindow(PBrowserParent* aNewTab,
 
   AutoUseNewTab aunt(newTab, aWindowIsNew, aURLToLoad);
 
-  rv = pwwatch->OpenWindow2(parent, finalURIString.get(),
-                            NS_ConvertUTF16toUTF8(aName).get(),
-                            NS_ConvertUTF16toUTF8(aFeatures).get(), aCalledFromJS,
-                            false, false, this, nullptr, getter_AddRefs(window));
-  NS_ENSURE_SUCCESS(rv, false);
+  *aResult = pwwatch->OpenWindow2(parent, finalURIString.get(),
+                                  NS_ConvertUTF16toUTF8(aName).get(),
+                                  NS_ConvertUTF16toUTF8(aFeatures).get(), aCalledFromJS,
+                                  false, false, this, nullptr, getter_AddRefs(window));
+
+  if (NS_WARN_IF(NS_FAILED(*aResult)))
+    return true;
+
+  *aResult = NS_ERROR_FAILURE;
 
   nsCOMPtr<nsPIDOMWindow> pwindow = do_QueryInterface(window);
-  NS_ENSURE_TRUE(pwindow, false);
+  if (NS_WARN_IF(!pwindow)) {
+    return true;
+  }
 
   nsCOMPtr<nsIDocShell> windowDocShell = pwindow->GetDocShell();
-  NS_ENSURE_TRUE(windowDocShell, false);
+  if (NS_WARN_IF(!windowDocShell)) {
+    return true;
+  }
 
   nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
   windowDocShell->GetTreeOwner(getter_AddRefs(treeOwner));
 
   nsCOMPtr<nsIXULWindow> xulWin = do_GetInterface(treeOwner);
-  NS_ENSURE_TRUE(xulWin, false);
+  if (NS_WARN_IF(!xulWin)) {
+    return true;
+  }
 
   nsCOMPtr<nsIXULBrowserWindow> xulBrowserWin;
   xulWin->GetXULBrowserWindow(getter_AddRefs(xulBrowserWin));
-  NS_ENSURE_TRUE(xulBrowserWin, false);
+  if (NS_WARN_IF(!xulBrowserWin)) {
+    return true;
+  }
 
   nsCOMPtr<nsITabParent> newRemoteTab;
-  rv = xulBrowserWin->ForceInitialBrowserRemote(getter_AddRefs(newRemoteTab));
-  NS_ENSURE_SUCCESS(rv, false);
+  *aResult = xulBrowserWin->ForceInitialBrowserRemote(getter_AddRefs(newRemoteTab));
+
+  if (NS_WARN_IF(NS_FAILED(*aResult)))
+    return true;
 
   MOZ_ASSERT(TabParent::GetFrom(newRemoteTab) == newTab);
 
@@ -1933,11 +1957,10 @@ TabParent::RecvNotifyIMEFocus(const bool& aFocus,
     return true;
   }
 
-  mIMETabParent = aFocus ? this : nullptr;
   IMENotification notification(aFocus ? NOTIFY_IME_OF_FOCUS :
                                         NOTIFY_IME_OF_BLUR);
   mContentCache.AssignContent(aContentCache, &notification);
-  widget->NotifyIME(notification);
+  IMEStateManager::NotifyIME(notification, widget, true);
 
   if (aFocus) {
     *aPreference = widget->GetIMEUpdatePreference();
@@ -1972,7 +1995,7 @@ TabParent::RecvNotifyIMETextChange(const ContentCache& aContentCache,
   notification.mTextChangeData.mCausedByComposition = aCausedByComposition;
 
   mContentCache.AssignContent(aContentCache, &notification);
-  widget->NotifyIME(notification);
+  IMEStateManager::NotifyIME(notification, widget, true);
   return true;
 }
 
@@ -1988,7 +2011,7 @@ TabParent::RecvNotifyIMESelectedCompositionRect(
   IMENotification notification(NOTIFY_IME_OF_COMPOSITION_UPDATE);
   mContentCache.AssignContent(aContentCache, &notification);
 
-  widget->NotifyIME(notification);
+  IMEStateManager::NotifyIME(notification, widget, true);
   return true;
 }
 
@@ -2011,7 +2034,7 @@ TabParent::RecvNotifyIMESelection(const ContentCache& aContentCache,
     mContentCache.InitNotification(notification);
     notification.mSelectionChangeData.mCausedByComposition =
       aCausedByComposition;
-    widget->NotifyIME(notification);
+    IMEStateManager::NotifyIME(notification, widget, true);
   }
   return true;
 }
@@ -2039,7 +2062,7 @@ TabParent::RecvNotifyIMEMouseButtonEvent(
     *aConsumedByIME = false;
     return true;
   }
-  nsresult rv = widget->NotifyIME(aIMENotification);
+  nsresult rv = IMEStateManager::NotifyIME(aIMENotification, widget, true);
   *aConsumedByIME = rv == NS_SUCCESS_EVENT_CONSUMED;
   return true;
 }
@@ -2058,7 +2081,7 @@ TabParent::RecvNotifyIMEPositionChange(const ContentCache& aContentCache)
   const nsIMEUpdatePreference updatePreference =
     widget->GetIMEUpdatePreference();
   if (updatePreference.WantPositionChanged()) {
-    widget->NotifyIME(notification);
+    IMEStateManager::NotifyIME(notification, widget, true);
   }
   return true;
 }
@@ -2387,26 +2410,6 @@ TabParent::RecvSetInputContext(const int32_t& aIMEEnabled,
                                const int32_t& aCause,
                                const int32_t& aFocusChange)
 {
-  nsCOMPtr<nsIWidget> widget = GetWidget();
-  if (!widget || !AllowContentIME()) {
-    return true;
-  }
-
-  InputContext oldContext = widget->GetInputContext();
-
-  // Ignore if current widget IME setting is not DISABLED and didn't come
-  // from remote content.  Chrome content may have taken over.
-  if (oldContext.mIMEState.mEnabled != IMEState::DISABLED &&
-      oldContext.IsOriginMainProcess()) {
-    return true;
-  }
-
-  // mIMETabParent (which is actually static) tracks which if any TabParent has IMEFocus
-  // When the input mode is set to anything but IMEState::DISABLED,
-  // mIMETabParent should be set to this
-  mIMETabParent =
-    aIMEEnabled != static_cast<int32_t>(IMEState::DISABLED) ? this : nullptr;
-
   InputContext context;
   context.mIMEState.mEnabled = static_cast<IMEState::Enabled>(aIMEEnabled);
   context.mIMEState.mOpen = static_cast<IMEState::Open>(aIMEOpen);
@@ -2418,15 +2421,8 @@ TabParent::RecvSetInputContext(const int32_t& aIMEEnabled,
   InputContextAction action(
     static_cast<InputContextAction::Cause>(aCause),
     static_cast<InputContextAction::FocusChange>(aFocusChange));
-  widget->SetInputContext(context, action);
 
-  nsCOMPtr<nsIObserverService> observerService = mozilla::services::GetObserverService();
-  if (!observerService)
-    return true;
-
-  nsAutoString state;
-  state.AppendInt(aIMEEnabled);
-  observerService->NotifyObservers(nullptr, "ime-enabled-state-changed", state.get());
+  IMEStateManager::SetInputContextForChildProcess(this, context, action);
 
   return true;
 }
@@ -2612,19 +2608,6 @@ TabParent::RecvGetRenderFrameInfo(PRenderFrameParent* aRenderFrame,
     RequestNotifyLayerTreeReady();
     mNeedLayerTreeReadyNotification = false;
   }
-
-  return true;
-}
-
-bool
-TabParent::AllowContentIME()
-{
-  nsFocusManager* fm = nsFocusManager::GetFocusManager();
-  NS_ENSURE_TRUE(fm, false);
-
-  nsCOMPtr<nsIContent> focusedContent = fm->GetFocusedContent();
-  if (focusedContent && focusedContent->IsEditable())
-    return false;
 
   return true;
 }

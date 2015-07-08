@@ -740,14 +740,14 @@ JS_NumberValue(double d)
     int32_t i;
     d = JS::CanonicalizeNaN(d);
     if (mozilla::NumberIsInt32(d, &i))
-        return INT_TO_JSVAL(i);
+        return JS::Int32Value(i);
     return DOUBLE_TO_JSVAL(d);
 }
 
 /************************************************************************/
 
 JS_PUBLIC_API(bool)
-JS_StringHasBeenInterned(JSContext* cx, JSString* str);
+JS_StringHasBeenPinned(JSContext* cx, JSString* str);
 
 namespace JS {
 
@@ -2514,7 +2514,7 @@ struct JSPropertyDescriptor {
     JS::Value value;
 
     JSPropertyDescriptor()
-      : obj(nullptr), attrs(0), getter(nullptr), setter(nullptr), value(JSVAL_VOID)
+      : obj(nullptr), attrs(0), getter(nullptr), setter(nullptr), value(JS::UndefinedValue())
     {}
 
     void trace(JSTracer* trc);
@@ -3279,14 +3279,6 @@ JS_IsNativeFunction(JSObject* funobj, JSNative call);
 /* Return whether the given function is a valid constructor. */
 extern JS_PUBLIC_API(bool)
 JS_IsConstructor(JSFunction* fun);
-
-/*
- * Bind the given callable to use the given object as "this".
- *
- * If |callable| is not callable, will throw and return nullptr.
- */
-extern JS_PUBLIC_API(JSObject*)
-JS_BindCallable(JSContext* cx, JS::Handle<JSObject*> callable, JS::Handle<JSObject*> newThis);
 
 // This enum is used to select if properties with JSPROP_DEFINE_LATE flag
 // should be defined on the object.
@@ -4071,13 +4063,13 @@ extern JS_PUBLIC_API(JSString*)
 JS_NewStringCopyZ(JSContext* cx, const char* s);
 
 extern JS_PUBLIC_API(JSString*)
-JS_InternJSString(JSContext* cx, JS::HandleString str);
+JS_AtomizeAndPinJSString(JSContext* cx, JS::HandleString str);
 
 extern JS_PUBLIC_API(JSString*)
-JS_InternStringN(JSContext* cx, const char* s, size_t length);
+JS_AtomizeAndPinStringN(JSContext* cx, const char* s, size_t length);
 
 extern JS_PUBLIC_API(JSString*)
-JS_InternString(JSContext* cx, const char* s);
+JS_AtomizeAndPinString(JSContext* cx, const char* s);
 
 extern JS_PUBLIC_API(JSString*)
 JS_NewUCString(JSContext* cx, char16_t* chars, size_t length);
@@ -4089,10 +4081,10 @@ extern JS_PUBLIC_API(JSString*)
 JS_NewUCStringCopyZ(JSContext* cx, const char16_t* s);
 
 extern JS_PUBLIC_API(JSString*)
-JS_InternUCStringN(JSContext* cx, const char16_t* s, size_t length);
+JS_AtomizeAndPinUCStringN(JSContext* cx, const char16_t* s, size_t length);
 
 extern JS_PUBLIC_API(JSString*)
-JS_InternUCString(JSContext* cx, const char16_t* s);
+JS_AtomizeAndPinUCString(JSContext* cx, const char16_t* s);
 
 extern JS_PUBLIC_API(bool)
 JS_CompareStrings(JSContext* cx, JSString* str1, JSString* str2, int32_t* result);
@@ -4113,9 +4105,8 @@ JS_FileEscapedString(FILE* fp, JSString* str, char quote);
  * fail. As indicated by the lack of a JSContext parameter, there are two
  * special cases where getting the chars is infallible:
  *
- * The first case is interned strings, i.e., strings from JS_InternString or
- * JSID_TO_STRING(id), using JS_GetLatin1InternedStringChars or
- * JS_GetTwoByteInternedStringChars.
+ * The first case is for strings that have been atomized, e.g. directly by
+ * JS_AtomizeAndPinString or implicitly because it is stored in a jsid.
  *
  * The second case is "flat" strings that have been explicitly prepared in a
  * fallible context by JS_FlattenString. To catch errors, a separate opaque
@@ -4175,12 +4166,6 @@ JS_GetTwoByteExternalStringChars(JSString* str);
 
 extern JS_PUBLIC_API(bool)
 JS_CopyStringChars(JSContext* cx, mozilla::Range<char16_t> dest, JSString* str);
-
-extern JS_PUBLIC_API(const JS::Latin1Char*)
-JS_GetLatin1InternedStringChars(const JS::AutoCheckCannotGC& nogc, JSString* str);
-
-extern JS_PUBLIC_API(const char16_t*)
-JS_GetTwoByteInternedStringChars(const JS::AutoCheckCannotGC& nogc, JSString* str);
 
 extern JS_PUBLIC_API(JSFlatString*)
 JS_FlattenString(JSContext* cx, JSString* str);
@@ -4710,6 +4695,9 @@ extern JS_PUBLIC_API(bool)
 MapSet(JSContext* cx, HandleObject obj, HandleValue key, HandleValue val);
 
 extern JS_PUBLIC_API(bool)
+MapDelete(JSContext *cx, HandleObject obj, HandleValue key, bool *rval);
+
+extern JS_PUBLIC_API(bool)
 MapClear(JSContext* cx, HandleObject obj);
 
 extern JS_PUBLIC_API(bool)
@@ -4720,6 +4708,42 @@ MapValues(JSContext* cx, HandleObject obj, MutableHandleValue rval);
 
 extern JS_PUBLIC_API(bool)
 MapEntries(JSContext* cx, HandleObject obj, MutableHandleValue rval);
+
+extern JS_PUBLIC_API(bool)
+MapForEach(JSContext *cx, HandleObject obj, HandleValue callbackFn, HandleValue thisVal);
+
+/*
+ * Set
+ */
+extern JS_PUBLIC_API(JSObject *)
+NewSetObject(JSContext *cx);
+
+extern JS_PUBLIC_API(uint32_t)
+SetSize(JSContext *cx, HandleObject obj);
+
+extern JS_PUBLIC_API(bool)
+SetHas(JSContext *cx, HandleObject obj, HandleValue key, bool *rval);
+
+extern JS_PUBLIC_API(bool)
+SetDelete(JSContext *cx, HandleObject obj, HandleValue key, bool *rval);
+
+extern JS_PUBLIC_API(bool)
+SetAdd(JSContext *cx, HandleObject obj, HandleValue key);
+
+extern JS_PUBLIC_API(bool)
+SetClear(JSContext *cx, HandleObject obj);
+
+extern JS_PUBLIC_API(bool)
+SetKeys(JSContext *cx, HandleObject obj, MutableHandleValue rval);
+
+extern JS_PUBLIC_API(bool)
+SetValues(JSContext *cx, HandleObject obj, MutableHandleValue rval);
+
+extern JS_PUBLIC_API(bool)
+SetEntries(JSContext *cx, HandleObject obj, MutableHandleValue rval);
+
+extern JS_PUBLIC_API(bool)
+SetForEach(JSContext *cx, HandleObject obj, HandleValue callbackFn, HandleValue thisVal);
 
 } /* namespace JS */
 
@@ -5227,13 +5251,6 @@ class MOZ_STACK_CLASS JS_PUBLIC_API(ForOfIterator) {
      */
     bool init(JS::HandleValue iterable,
               NonIterableBehavior nonIterableBehavior = ThrowOnNonIterable);
-
-    /*
-     * This method assumes that |iterator| is already an iterator.  It will not
-     * check for, and call @@iterator.  Callers should make sure that the passed
-     * in value is in fact an iterator.
-     */
-    bool initWithIterator(JS::HandleValue aIterator);
 
     /*
      * Get the next value from the iterator.  If false *done is true

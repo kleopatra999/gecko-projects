@@ -27,6 +27,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/IntegerRange.h"
 #include "nsHostObjectProtocolHandler.h"
 #include "nsRefreshDriver.h"
 #include "nsITimer.h"
@@ -1319,6 +1320,7 @@ nsRefreshDriver::ObserverCount() const
   // style changes, etc.
   sum += mStyleFlushObservers.Length();
   sum += mLayoutFlushObservers.Length();
+  sum += mPendingEvents.Length();
   sum += mFrameRequestCallbackDocs.Length();
   sum += mThrottledFrameRequestCallbackDocs.Length();
   sum += mViewManagerFlushIsPending;
@@ -1452,6 +1454,17 @@ TakeFrameRequestCallbacksFrom(nsIDocument* aDocument,
 {
   aTarget.AppendElement(aDocument);
   aDocument->TakeFrameRequestCallbacks(aTarget.LastElement().mCallbacks);
+}
+
+void
+nsRefreshDriver::DispatchPendingEvents()
+{
+  // Swap out the current pending events
+  nsTArray<PendingEvent> pendingEvents(Move(mPendingEvents));
+  for (PendingEvent& event : pendingEvents) {
+    bool dummy;
+    event.mTarget->DispatchEvent(event.mEvent, &dummy);
+  }
 }
 
 void
@@ -1635,6 +1648,7 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
     if (i == 0) {
       // This is the Flush_Style case.
 
+      DispatchPendingEvents();
       RunFrameRequestCallbacks(aNowEpoch, aNowTime);
 
       if (mPresContext && mPresContext->GetPresShell()) {
@@ -1800,8 +1814,10 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
   mozilla::Telemetry::AccumulateTimeDelta(mozilla::Telemetry::REFRESH_DRIVER_TICK, mTickStart);
 #endif
 
-  for (nsAPostRefreshObserver* postRefreshObserver: mPostRefreshObservers) {
-    postRefreshObserver->DidRefresh();
+  nsTObserverArray<nsAPostRefreshObserver*>::ForwardIterator iter(mPostRefreshObservers);
+  while (iter.HasMore()) {
+    nsAPostRefreshObserver* observer = iter.GetNext();
+    observer->DidRefresh();
   }
 
   NS_ASSERTION(mInRefresh, "Still in refresh");
@@ -2105,6 +2121,24 @@ nsRefreshDriver::RevokeFrameRequestCallbacks(nsIDocument* aDocument)
   ConfigureHighPrecision();
   // No need to worry about restarting our timer in slack mode if it's already
   // running; that will happen automatically when it fires.
+}
+
+void
+nsRefreshDriver::ScheduleEventDispatch(nsINode* aTarget, nsIDOMEvent* aEvent)
+{
+  mPendingEvents.AppendElement(PendingEvent{aTarget, aEvent});
+  // make sure that the timer is running
+  EnsureTimerStarted();
+}
+
+void
+nsRefreshDriver::CancelPendingEvents(nsIDocument* aDocument)
+{
+  for (auto i : Reversed(MakeRange(mPendingEvents.Length()))) {
+    if (mPendingEvents[i].mTarget->OwnerDoc() == aDocument) {
+      mPendingEvents.RemoveElementAt(i);
+    }
+  }
 }
 
 #undef LOG

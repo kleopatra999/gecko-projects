@@ -71,6 +71,16 @@
  * @author "Benjamin Smedberg <bsmedberg@covad.net>"
  */
 
+// These are the codes returned by |Enumerator| functions, which control
+// EnumerateEntry()'s behavior. The PLD/PL_D prefix is because they originated
+// in PLDHashTable, but that class no longer uses them.
+enum PLDHashOperator
+{
+  PL_DHASH_NEXT = 0,          // enumerator says continue
+  PL_DHASH_STOP = 1,          // enumerator says stop
+  PL_DHASH_REMOVE = 2         // enumerator says remove
+};
+
 template<class EntryType>
 class nsTHashtable
 {
@@ -191,7 +201,10 @@ public:
   typedef PLDHashOperator (*Enumerator)(EntryType* aEntry, void* userArg);
 
   /**
-   * Enumerate all the entries of the function.
+   * Enumerate all the entries of the function. If any entries are removed via
+   * a PL_DHASH_REMOVE return value from |aEnumFunc|, the table may be shrunk
+   * at the end. Use RawRemoveEntry() instead if you wish to remove an entry
+   * without possibly shrinking the table.
    * @param     enumFunc the <code>Enumerator</code> function to call
    * @param     userArg a pointer to pass to the
    *            <code>Enumerator</code> function
@@ -199,8 +212,19 @@ public:
    */
   uint32_t EnumerateEntries(Enumerator aEnumFunc, void* aUserArg)
   {
-    s_EnumArgs args = { aEnumFunc, aUserArg };
-    return PL_DHashTableEnumerate(&mTable, s_EnumStub, &args);
+    uint32_t n = 0;
+    for (auto iter = mTable.Iter(); !iter.Done(); iter.Next()) {
+      auto entry = static_cast<EntryType*>(iter.Get());
+      PLDHashOperator op = aEnumFunc(entry, aUserArg);
+      n++;
+      if (op & PL_DHASH_REMOVE) {
+        iter.Remove();
+      }
+      if (op & PL_DHASH_STOP) {
+        break;
+      }
+    }
+    return n;
   }
 
   /**
@@ -317,23 +341,6 @@ protected:
   static void s_ClearEntry(PLDHashTable* aTable, PLDHashEntryHdr* aEntry);
 
   static void s_InitEntry(PLDHashEntryHdr* aEntry, const void* aKey);
-
-  /**
-   * passed internally during enumeration.  Allocated on the stack.
-   *
-   * @param userFunc the Enumerator function passed to
-   *   EnumerateEntries by the client
-   * @param userArg the userArg passed unaltered
-   */
-  struct s_EnumArgs
-  {
-    Enumerator userFunc;
-    void* userArg;
-  };
-
-  static PLDHashOperator s_EnumStub(PLDHashTable* aTable,
-                                    PLDHashEntryHdr* aEntry,
-                                    uint32_t aNumber, void* aArg);
 
   /**
    * passed internally during sizeOf counting.  Allocated on the stack.
@@ -465,19 +472,6 @@ nsTHashtable<EntryType>::s_InitEntry(PLDHashEntryHdr* aEntry,
                                      const void* aKey)
 {
   new (aEntry) EntryType(reinterpret_cast<KeyTypePointer>(aKey));
-}
-
-template<class EntryType>
-PLDHashOperator
-nsTHashtable<EntryType>::s_EnumStub(PLDHashTable* aTable,
-                                    PLDHashEntryHdr* aEntry,
-                                    uint32_t aNumber,
-                                    void* aArg)
-{
-  // dereferences the function-pointer to the user's enumeration function
-  return (*reinterpret_cast<s_EnumArgs*>(aArg)->userFunc)(
-    static_cast<EntryType*>(aEntry),
-    reinterpret_cast<s_EnumArgs*>(aArg)->userArg);
 }
 
 template<class EntryType>

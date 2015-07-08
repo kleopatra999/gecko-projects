@@ -6,7 +6,9 @@
 
 #include "nsBaseChannel.h"
 #include "nsURLHelper.h"
-#include "nsNetUtil.h"
+#include "nsNetCID.h"
+#include "nsMimeTypes.h"
+#include "nsIContentSniffer.h"
 #include "nsMimeTypes.h"
 #include "nsIHttpEventSink.h"
 #include "nsIHttpChannel.h"
@@ -279,14 +281,14 @@ nsBaseChannel::ClassifyURI()
 {
   // For channels created in the child process, delegate to the parent to
   // classify URIs.
-  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+  if (!XRE_IsParentProcess()) {
     return;
   }
 
   if (mLoadFlags & LOAD_CLASSIFY_URI) {
     nsRefPtr<nsChannelClassifier> classifier = new nsChannelClassifier();
     if (classifier) {
-      classifier->Start(this, false);
+      classifier->Start(this);
     } else {
       Cancel(NS_ERROR_OUT_OF_MEMORY);
     }

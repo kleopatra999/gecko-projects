@@ -34,11 +34,9 @@ static bool IsMoveto(uint16_t aSegType)
 nsresult
 SVGPathData::CopyFrom(const SVGPathData& rhs)
 {
-  if (!mData.SetCapacity(rhs.mData.Length(), fallible)) {
-    // Yes, we do want fallible alloc here
+  if (!mData.Assign(rhs.mData, fallible)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
-  mData = rhs.mData;
   return NS_OK;
 }
 
@@ -273,7 +271,7 @@ ApproximateZeroLengthSubpathSquareCaps(PathBuilder* aPB,
     }                                                                         \
   } while(0)
 
-TemporaryRef<Path>
+already_AddRefed<Path>
 SVGPathData::BuildPath(PathBuilder* builder,
                        uint8_t aStrokeLineCap,
                        Float aStrokeWidth) const
@@ -507,7 +505,7 @@ SVGPathData::BuildPath(PathBuilder* builder,
   return builder->Finish();
 }
 
-TemporaryRef<Path>
+already_AddRefed<Path>
 SVGPathData::BuildPathForMeasuring() const
 {
   // Since the path that we return will not be used for painting it doesn't

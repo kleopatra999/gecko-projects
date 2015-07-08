@@ -48,7 +48,7 @@ GrallocTextureClientOGL::~GrallocTextureClientOGL()
   }
 }
 
-TemporaryRef<TextureClient>
+already_AddRefed<TextureClient>
 GrallocTextureClientOGL::CreateSimilar(TextureFlags aFlags,
                                        TextureAllocationFlags aAllocFlags) const
 {
@@ -76,17 +76,17 @@ GrallocTextureClientOGL::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
 }
 
 void
-GrallocTextureClientOGL::SetRemoveFromCompositableTracker(AsyncTransactionTracker* aTracker)
+GrallocTextureClientOGL::SetRemoveFromCompositableWaiter(AsyncTransactionWaiter* aWaiter)
 {
-  mRemoveFromCompositableTracker = aTracker;
+  mRemoveFromCompositableWaiter = aWaiter;
 }
 
 void
 GrallocTextureClientOGL::WaitForBufferOwnership(bool aWaitReleaseFence)
 {
-  if (mRemoveFromCompositableTracker) {
-    mRemoveFromCompositableTracker->WaitComplete();
-    mRemoveFromCompositableTracker = nullptr;
+  if (mRemoveFromCompositableWaiter) {
+    mRemoveFromCompositableWaiter->WaitComplete();
+    mRemoveFromCompositableWaiter = nullptr;
   }
 
   if (!aWaitReleaseFence) {
@@ -351,7 +351,7 @@ GrallocTextureClientOGL::GetBufferSize() const
   return 0;
 }
 
-/*static*/ TemporaryRef<TextureClient>
+/*static*/ already_AddRefed<TextureClient>
 GrallocTextureClientOGL::FromSharedSurface(gl::SharedSurface* abstractSurf,
                                            TextureFlags flags)
 {

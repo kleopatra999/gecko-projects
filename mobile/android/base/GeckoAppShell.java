@@ -281,7 +281,7 @@ public class GeckoAppShell
 
     public static native void notifyBatteryChange(double aLevel, boolean aCharging, double aRemainingTime);
 
-    public static native void scheduleComposite();
+    public static native void invalidateAndScheduleComposite();
 
     // Resuming the compositor is a synchronous request, so be
     // careful of possible deadlock. Resuming the compositor will also cause
@@ -1197,13 +1197,16 @@ public class GeckoAppShell
         final Intent intent = getOpenURIIntentInner(context, targetURI, mimeType, action, title);
 
         if (intent != null) {
-            // Only handle applications which can accept arbitrary data from a browser.
-            intent.addCategory(Intent.CATEGORY_BROWSABLE);
+            // Setting category on file:// URIs breaks about:downloads (Bug 1176018)
+            if (!targetURI.startsWith("file:")) {
+                // Only handle applications which can accept arbitrary data from a browser.
+                intent.addCategory(Intent.CATEGORY_BROWSABLE);
+            }
 
             // Some applications use this field to return to the same browser after processing the
             // Intent. While there is some danger (e.g. denial of service), other major browsers already
             // use it and so it's the norm.
-            intent.putExtra(Browser.EXTRA_APPLICATION_ID, GeckoApp.class.getPackage().getName());
+            intent.putExtra(Browser.EXTRA_APPLICATION_ID, AppConstants.ANDROID_PACKAGE_NAME);
         }
 
         return intent;

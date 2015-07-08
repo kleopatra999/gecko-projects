@@ -221,14 +221,14 @@ description > html|a {
   border-radius: 50%;
   border-width: 5px;
   border-color: red;
-  background-image: url(chrome://browser/skin/preferences/in-content/default-profile-image.svg);
+  background-image: url(chrome://browser/skin/fxa/default-profile-image.svg);
   background-size: contain;
   cursor: pointer;
   -moz-margin-end: 15px;
 }
 
 #fxaProfileImage:hover {
-  border-color: blue;
+  box-shadow: 0px 0px 0px 1px #0095DD;
 }
 
 #noFxaAccount {
@@ -267,16 +267,8 @@ description > html|a {
   -moz-margin-start: 33px;
 }
 
-#trackingProtectionImage {
-  width: 16px;
-  height: 16px;
-  list-style-image: url(chrome://browser/skin/bad-content-blocked-16.png);
-}
-
-@media (min-resolution: 2dppx) {
-  #trackingProtectionImage {
-    list-style-image: url(chrome://browser/skin/bad-content-blocked-16@2x.png);
-  }
+.text-link {
+  margin-bottom: 0;
 }
 
 #showUpdateHistory {
@@ -386,4 +378,17 @@ description > html|a {
 @keyframes fadein {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+/**
+ * Sync
+ */
+
+#fxaDeviceName {
+  margin: 14px 0px;
+}
+
+#fxaSyncComputerName.plain {
+  background-color: transparent;
+  opacity: 1;
 }

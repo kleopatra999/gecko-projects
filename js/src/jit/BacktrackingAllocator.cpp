@@ -900,9 +900,17 @@ BacktrackingAllocator::tryMergeBundles(LiveBundle* bundle0, LiveBundle* bundle1)
         }
     }
 
+    // Limit the number of times we compare ranges if there are many ranges in
+    // one of the bundles, to avoid quadratic behavior.
+    static const size_t MAX_RANGES = 200;
+
     // Make sure that ranges in the bundles do not overlap.
     LiveRange::BundleLinkIterator iter0 = bundle0->rangesBegin(), iter1 = bundle1->rangesBegin();
+    size_t count = 0;
     while (iter0 && iter1) {
+        if (++count >= MAX_RANGES)
+            return true;
+
         LiveRange* range0 = LiveRange::get(*iter0);
         LiveRange* range1 = LiveRange::get(*iter1);
 
@@ -1401,13 +1409,13 @@ BacktrackingAllocator::tryAllocateRegister(PhysicalRegister& r, LiveBundle* bund
 
         if (JitSpewEnabled(JitSpew_RegAlloc)) {
             if (aliasedConflicting.length() == 1) {
-                LiveBundle* existing = aliasedConflicting[0];
+                mozilla::DebugOnly<LiveBundle*> existing = aliasedConflicting[0];
                 JitSpew(JitSpew_RegAlloc, "  %s collides with %s [weight %lu]",
                         r.reg.name(), existing->toString(), computeSpillWeight(existing));
             } else {
                 JitSpew(JitSpew_RegAlloc, "  %s collides with the following", r.reg.name());
                 for (size_t i = 0; i < aliasedConflicting.length(); i++) {
-                    LiveBundle* existing = aliasedConflicting[i];
+                    mozilla::DebugOnly<LiveBundle*> existing = aliasedConflicting[i];
                     JitSpew(JitSpew_RegAlloc, "      %s [weight %lu]",
                             existing->toString(), computeSpillWeight(existing));
                 }

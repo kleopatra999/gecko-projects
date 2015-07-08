@@ -19,6 +19,7 @@
 #include "mozilla/dom/ToJSValue.h"
 #include "mozilla/dom/workers/ServiceWorkerManager.h"
 #include "mozilla/EventStateManager.h"
+#include "mozilla/LoadInfo.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/StartupTimeline.h"
@@ -38,6 +39,7 @@
 #include "nsCURILoader.h"
 #include "nsDocShellCID.h"
 #include "nsDOMCID.h"
+#include "nsNetCID.h"
 #include "nsNetUtil.h"
 #include "mozilla/net/ReferrerPolicy.h"
 #include "nsRect.h"
@@ -182,18 +184,22 @@
 #include "nsIDOMNode.h"
 #include "nsIDocShellTreeOwner.h"
 #include "nsIHttpChannel.h"
+#include "nsIIDNService.h"
+#include "nsIInputStreamChannel.h"
+#include "nsINestedURI.h"
 #include "nsISHContainer.h"
 #include "nsISHistory.h"
 #include "nsISecureBrowserUI.h"
+#include "nsISocketProvider.h"
 #include "nsIStringBundle.h"
 #include "nsISupportsArray.h"
 #include "nsIURIFixup.h"
 #include "nsIURILoader.h"
+#include "nsIURL.h"
 #include "nsIWebBrowserFind.h"
 #include "nsIWidget.h"
 #include "mozilla/dom/EncodingUtils.h"
 #include "mozilla/dom/ScriptSettings.h"
-#include "mozilla/dom/URLSearchParams.h"
 #include "nsPerformance.h"
 
 #ifdef MOZ_TOOLKIT_SEARCH
@@ -825,7 +831,7 @@ IncreasePrivateDocShellCount()
 {
   gNumberOfPrivateDocShells++;
   if (gNumberOfPrivateDocShells > 1 ||
-      XRE_GetProcessType() != GeckoProcessType_Content) {
+      !XRE_IsContentProcess()) {
     return;
   }
 
@@ -839,7 +845,7 @@ DecreasePrivateDocShellCount()
   MOZ_ASSERT(gNumberOfPrivateDocShells > 0);
   gNumberOfPrivateDocShells--;
   if (!gNumberOfPrivateDocShells) {
-    if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    if (XRE_IsContentProcess()) {
       dom::ContentChild* cc = dom::ContentChild::GetSingleton();
       cc->SendPrivateDocShellsExist(false);
       return;
@@ -2021,24 +2027,6 @@ nsDocShell::SetCurrentURI(nsIURI* aURI, nsIRequest* aRequest,
   if (mLSHE) {
     mLSHE->GetIsSubFrame(&isSubFrame);
   }
-
-  // nsDocShell owns a URLSearchParams that is used by
-  // window.location.searchParams to be in sync with the current location.
-  if (!mURLSearchParams) {
-    mURLSearchParams = new URLSearchParams();
-  }
-
-  nsAutoCString search;
-
-  nsCOMPtr<nsIURL> url(do_QueryInterface(mCurrentURI));
-  if (url) {
-    nsresult rv = url->GetQuery(search);
-    if (NS_FAILED(rv)) {
-      NS_WARNING("Failed to get the query from a nsIURL.");
-    }
-  }
-
-  mURLSearchParams->ParseInput(search, nullptr);
 
   if (!isSubFrame && !isRoot) {
     /*
@@ -4604,8 +4592,7 @@ nsDocShell::GetDocument()
 nsPIDOMWindow*
 nsDocShell::GetWindow()
 {
-  NS_ENSURE_SUCCESS(EnsureScriptEnvironment(), nullptr);
-  return mScriptGlobal;
+  return NS_SUCCEEDED(EnsureScriptEnvironment()) ? mScriptGlobal : nullptr;
 }
 
 NS_IMETHODIMP
@@ -5040,7 +5027,7 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
           mInPrivateBrowsing ? nsISocketProvider::NO_PERMANENT_STORAGE : 0;
         bool isStsHost = false;
         bool isPinnedHost = false;
-        if (XRE_GetProcessType() == GeckoProcessType_Default) {
+        if (XRE_IsParentProcess()) {
           nsCOMPtr<nsISiteSecurityService> sss =
             do_GetService(NS_SSSERVICE_CONTRACTID, &rv);
           NS_ENSURE_SUCCESS(rv, rv);
@@ -5845,11 +5832,6 @@ nsDocShell::Destroy()
 
   mParentWidget = nullptr;
   mCurrentURI = nullptr;
-
-  if (mURLSearchParams) {
-    mURLSearchParams->RemoveObservers();
-    mURLSearchParams = nullptr;
-  }
 
   if (mScriptGlobal) {
     mScriptGlobal->DetachFromDocShell();
@@ -9473,7 +9455,7 @@ nsDocShell::CopyFavicon(nsIURI* aOldURI,
                         nsIURI* aNewURI,
                         bool aInPrivateBrowsing)
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     dom::ContentChild* contentChild = dom::ContentChild::GetSingleton();
     if (contentChild) {
       mozilla::ipc::URIParams oldURI, newURI;
@@ -11756,7 +11738,7 @@ nsDocShell::ShouldAddToSessionHistory(nsIURI* aURI)
   // should just do a spec compare, rather than two gets of the scheme and
   // then the path.  -Gagan
   nsresult rv;
-  nsAutoCString buf, pref;
+  nsAutoCString buf;
 
   rv = aURI->GetScheme(buf);
   if (NS_FAILED(rv)) {
@@ -11769,21 +11751,12 @@ nsDocShell::ShouldAddToSessionHistory(nsIURI* aURI)
       return false;
     }
 
-    if (buf.EqualsLiteral("blank")) {
+    if (buf.EqualsLiteral("blank") || buf.EqualsLiteral("newtab")) {
       return false;
     }
   }
 
-  rv = Preferences::GetDefaultCString("browser.newtab.url", &pref);
-
-  if (NS_FAILED(rv)) {
-    return true;
-  }
-
-  rv = aURI->GetSpec(buf);
-  NS_ENSURE_SUCCESS(rv, true);
-
-  return !buf.Equals(pref);
+  return true;
 }
 
 nsresult
@@ -13931,12 +13904,6 @@ nsDocShell::GetOpener()
   return opener;
 }
 
-URLSearchParams*
-nsDocShell::GetURLSearchParams()
-{
-  return mURLSearchParams;
-}
-
 class JavascriptTimelineMarker : public TimelineMarker
 {
 public:
@@ -14021,7 +13988,7 @@ nsDocShell::MaybeNotifyKeywordSearchLoading(const nsString& aProvider,
     return;
   }
 
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     dom::ContentChild* contentChild = dom::ContentChild::GetSingleton();
     if (contentChild) {
       contentChild->SendNotifyKeywordSearchLoading(aProvider, aKeyword);
@@ -14054,6 +14021,11 @@ nsDocShell::ShouldPrepareForIntercept(nsIURI* aURI, bool aIsNavigate,
   *aShouldIntercept = false;
   // Preffed off.
   if (!sInterceptionEnabled) {
+    return NS_OK;
+  }
+
+  // No in private browsing
+  if (mInPrivateBrowsing) {
     return NS_OK;
   }
 

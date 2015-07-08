@@ -70,6 +70,8 @@
 #include "nsCaret.h"
 #include "nsISelection.h"
 #include "nsDOMTokenList.h"
+#include "mozilla/RuleNodeCacheConditions.h"
+#include "nsCSSProps.h"
 
 // GetCurrentTime is defined in winbase.h as zero argument macro forwarding to
 // GetTickCount().
@@ -129,7 +131,7 @@ static void AddTransformFunctions(nsCSSValueList* aList,
     NS_ASSERTION(currElem.GetUnit() == eCSSUnit_Function,
                  "Stream should consist solely of functions!");
     nsCSSValue::Array* array = currElem.GetArrayValue();
-    bool canStoreInRuleTree = true;
+    RuleNodeCacheConditions conditions;
     switch (nsStyleTransformMatrix::TransformFunctionOf(array)) {
       case eCSSKeyword_rotatex:
       {
@@ -201,7 +203,7 @@ static void AddTransformFunctions(nsCSSValueList* aList,
       case eCSSKeyword_translatex:
       {
         double x = nsStyleTransformMatrix::ProcessTranslatePart(
-          array->Item(1), aContext, aPresContext, canStoreInRuleTree,
+          array->Item(1), aContext, aPresContext, conditions,
           &aRefBox, &TransformReferenceBox::Width);
         aFunctions.AppendElement(Translation(x, 0, 0));
         break;
@@ -209,7 +211,7 @@ static void AddTransformFunctions(nsCSSValueList* aList,
       case eCSSKeyword_translatey:
       {
         double y = nsStyleTransformMatrix::ProcessTranslatePart(
-          array->Item(1), aContext, aPresContext, canStoreInRuleTree,
+          array->Item(1), aContext, aPresContext, conditions,
           &aRefBox, &TransformReferenceBox::Height);
         aFunctions.AppendElement(Translation(0, y, 0));
         break;
@@ -217,7 +219,7 @@ static void AddTransformFunctions(nsCSSValueList* aList,
       case eCSSKeyword_translatez:
       {
         double z = nsStyleTransformMatrix::ProcessTranslatePart(
-          array->Item(1), aContext, aPresContext, canStoreInRuleTree,
+          array->Item(1), aContext, aPresContext, conditions,
           nullptr);
         aFunctions.AppendElement(Translation(0, 0, z));
         break;
@@ -225,13 +227,13 @@ static void AddTransformFunctions(nsCSSValueList* aList,
       case eCSSKeyword_translate:
       {
         double x = nsStyleTransformMatrix::ProcessTranslatePart(
-          array->Item(1), aContext, aPresContext, canStoreInRuleTree,
+          array->Item(1), aContext, aPresContext, conditions,
           &aRefBox, &TransformReferenceBox::Width);
         // translate(x) is shorthand for translate(x, 0)
         double y = 0;
         if (array->Count() == 3) {
            y = nsStyleTransformMatrix::ProcessTranslatePart(
-            array->Item(2), aContext, aPresContext, canStoreInRuleTree,
+            array->Item(2), aContext, aPresContext, conditions,
             &aRefBox, &TransformReferenceBox::Height);
         }
         aFunctions.AppendElement(Translation(x, y, 0));
@@ -240,13 +242,13 @@ static void AddTransformFunctions(nsCSSValueList* aList,
       case eCSSKeyword_translate3d:
       {
         double x = nsStyleTransformMatrix::ProcessTranslatePart(
-          array->Item(1), aContext, aPresContext, canStoreInRuleTree,
+          array->Item(1), aContext, aPresContext, conditions,
           &aRefBox, &TransformReferenceBox::Width);
         double y = nsStyleTransformMatrix::ProcessTranslatePart(
-          array->Item(2), aContext, aPresContext, canStoreInRuleTree,
+          array->Item(2), aContext, aPresContext, conditions,
           &aRefBox, &TransformReferenceBox::Height);
         double z = nsStyleTransformMatrix::ProcessTranslatePart(
-          array->Item(3), aContext, aPresContext, canStoreInRuleTree,
+          array->Item(3), aContext, aPresContext, conditions,
           nullptr);
 
         aFunctions.AppendElement(Translation(x, y, z));
@@ -325,7 +327,7 @@ static void AddTransformFunctions(nsCSSValueList* aList,
         nsStyleTransformMatrix::ProcessInterpolateMatrix(matrix, array,
                                                          aContext,
                                                          aPresContext,
-                                                         canStoreInRuleTree,
+                                                         conditions,
                                                          aRefBox);
         aFunctions.AppendElement(TransformMatrix(gfx::ToMatrix4x4(matrix)));
         break;
@@ -383,6 +385,7 @@ AddAnimationForProperty(nsIFrame* aFrame, const AnimationProperty& aProperty,
   animation->iterationCount() = timing.mIterationCount;
   animation->direction() = timing.mDirection;
   animation->property() = aProperty.mProperty;
+  animation->playbackRate() = aAnimation->PlaybackRate();
   animation->data() = aData;
 
   for (uint32_t segIdx = 0; segIdx < aProperty.mSegments.Length(); segIdx++) {
@@ -513,14 +516,11 @@ nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(Layer* aLayer,
     RestyleManager::GetMaxAnimationGenerationForFrame(aFrame);
   aLayer->SetAnimationGeneration(animationGeneration);
 
-  nsIContent* content = aFrame->GetContent();
-  if (!content) {
-    return;
-  }
+  nsPresContext* presContext = aFrame->PresContext();
   AnimationCollection* transitions =
-    nsTransitionManager::GetAnimationsForCompositor(content, aProperty);
+    presContext->TransitionManager()->GetAnimationsForCompositor(aFrame, aProperty);
   AnimationCollection* animations =
-    nsAnimationManager::GetAnimationsForCompositor(content, aProperty);
+    presContext->AnimationManager()->GetAnimationsForCompositor(aFrame, aProperty);
 
   if (!animations && !transitions) {
     return;
@@ -606,7 +606,6 @@ nsDisplayListBuilder::nsDisplayListBuilder(nsIFrame* aReferenceFrame,
       mCurrentFrame(aReferenceFrame),
       mCurrentReferenceFrame(aReferenceFrame),
       mCurrentAnimatedGeometryRoot(nullptr),
-      mWillChangeBudgetCalculated(false),
       mDirtyRect(-1,-1,-1,-1),
       mGlassDisplayItem(nullptr),
       mScrollInfoItemsForHoisting(nullptr),
@@ -721,8 +720,7 @@ void nsDisplayListBuilder::MarkOutOfFlowFrameForDisplay(nsIFrame* aDirtyFrame,
   nsRect overflowRect = aFrame->GetVisualOverflowRect();
 
   if (aFrame->IsTransformed() &&
-      nsLayoutUtils::HasAnimationsForCompositor(aFrame->GetContent(),
-                                                eCSSProperty_transform)) {
+      nsLayoutUtils::HasAnimationsForCompositor(aFrame, eCSSProperty_transform)) {
    /**
     * Add a fuzz factor to the overflow rectangle so that elements only just
     * out of view are pulled into the display list, so they can be
@@ -1174,44 +1172,32 @@ nsDisplayListBuilder::AdjustWindowDraggingRegion(nsIFrame* aFrame)
   }
 }
 
-void
-nsDisplayListBuilder::AddToWillChangeBudget(nsIFrame* aFrame, const nsSize& aRect) {
-  // Make sure that we don't query the budget before the display list is fully
-  // built and that the will change budget is locked in.
-  NS_ASSERTION(!mWillChangeBudgetCalculated,
-               "Can't modify the budget once it's been used.");
-
-  DocumentWillChangeBudget budget;
-
-  nsPresContext* key = aFrame->PresContext();
-  if (mWillChangeBudget.Contains(key)) {
-    mWillChangeBudget.Get(key, &budget);
-  }
-
+const uint32_t gWillChangeAreaMultiplier = 3;
+static uint32_t GetWillChangeCost(nsIFrame* aFrame,
+                                  const nsSize& aSize) {
   // There's significant overhead for each layer created from Gecko
   // (IPC+Shared Objects) and from the backend (like an OpenGL texture).
   // Therefore we set a minimum cost threshold of a 64x64 area.
   int minBudgetCost = 64 * 64;
 
-  budget.mBudget +=
+  uint32_t budgetCost =
     std::max(minBudgetCost,
-      nsPresContext::AppUnitsToIntCSSPixels(aRect.width) *
-      nsPresContext::AppUnitsToIntCSSPixels(aRect.height));
+      nsPresContext::AppUnitsToIntCSSPixels(aSize.width) *
+      nsPresContext::AppUnitsToIntCSSPixels(aSize.height));
 
-  mWillChangeBudget.Put(key, budget);
+  return budgetCost;
 }
 
 bool
-nsDisplayListBuilder::IsInWillChangeBudget(nsIFrame* aFrame) const {
-  uint32_t multiplier = 3;
-
-  mWillChangeBudgetCalculated = true;
+nsDisplayListBuilder::AddToWillChangeBudget(nsIFrame* aFrame,
+                                            const nsSize& aSize) {
+  if (mBudgetSet.Contains(aFrame)) {
+    return true; // Already accounted
+  }
 
   nsPresContext* key = aFrame->PresContext();
   if (!mWillChangeBudget.Contains(key)) {
-    NS_ASSERTION(false, "If we added nothing to our budget then this "
-                        "shouldn't be called.");
-    return false;
+    mWillChangeBudget.Put(key, DocumentWillChangeBudget());
   }
 
   DocumentWillChangeBudget budget;
@@ -1221,20 +1207,41 @@ nsDisplayListBuilder::IsInWillChangeBudget(nsIFrame* aFrame) const {
   uint32_t budgetLimit = nsPresContext::AppUnitsToIntCSSPixels(area.width) *
     nsPresContext::AppUnitsToIntCSSPixels(area.height);
 
-  bool onBudget = budget.mBudget / multiplier < budgetLimit;
-  if (!onBudget) {
+  uint32_t cost = GetWillChangeCost(aFrame, aSize);
+  bool onBudget = (budget.mBudget + cost) /
+                    gWillChangeAreaMultiplier < budgetLimit;
+
+  if (onBudget) {
+    budget.mBudget += cost;
+    mWillChangeBudget.Put(key, budget);
+    mBudgetSet.PutEntry(aFrame);
+  }
+
+  return onBudget;
+}
+
+bool
+nsDisplayListBuilder::IsInWillChangeBudget(nsIFrame* aFrame,
+                                           const nsSize& aSize) {
+  bool onBudget = AddToWillChangeBudget(aFrame, aSize);
+
+  if (onBudget) {
     nsString usageStr;
-    usageStr.AppendInt(budget.mBudget);
+    usageStr.AppendInt(GetWillChangeCost(aFrame, aSize));
 
     nsString multiplierStr;
-    multiplierStr.AppendInt(multiplier);
+    multiplierStr.AppendInt(gWillChangeAreaMultiplier);
 
     nsString limitStr;
+    nsRect area = aFrame->PresContext()->GetVisibleArea();
+    uint32_t budgetLimit = nsPresContext::AppUnitsToIntCSSPixels(area.width) *
+      nsPresContext::AppUnitsToIntCSSPixels(area.height);
     limitStr.AppendInt(budgetLimit);
 
     const char16_t* params[] = { usageStr.get(), multiplierStr.get(), limitStr.get() };
-    key->Document()->WarnOnceAbout(nsIDocument::eWillChangeBudget, false,
-                                   params, ArrayLength(params));
+    aFrame->PresContext()->Document()->WarnOnceAbout(
+      nsIDocument::eWillChangeBudget, false,
+      params, ArrayLength(params));
   }
   return onBudget;
 }
@@ -1644,7 +1651,7 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
   // updates, so calculate that now before we call EndTransaction.
   if (rootPresContext &&
       aBuilder->WillComputePluginGeometry() &&
-      XRE_GetProcessType() == GeckoProcessType_Content) {
+      XRE_IsContentProcess()) {
     rootPresContext->ComputePluginGeometryUpdates(aBuilder->RootReferenceFrame(), aBuilder, this);
     rootPresContext->CollectPluginGeometryUpdates(layerManager);
   }
@@ -2518,7 +2525,7 @@ nsDisplayBackgroundImage::ConfigureLayer(ImageLayer* aLayer,
   if (imageWidth > 0 && imageHeight > 0) {
     // We're actually using the ImageContainer. Let our frame know that it
     // should consider itself to have painted successfully.
-    nsDisplayBackgroundGeometry::UpdateDrawResult(this, DrawResult::SUCCESS);
+    nsDisplayBackgroundGeometry::UpdateDrawResult(this, mozilla::image::DrawResult::SUCCESS);
   }
 
   // XXX(seth): Right now we ignore aParameters.Scale() and
@@ -2695,7 +2702,7 @@ nsDisplayBackgroundImage::PaintInternal(nsDisplayListBuilder* aBuilder,
   uint32_t flags = aBuilder->GetBackgroundPaintFlags();
   CheckForBorderItem(this, flags);
 
-  DrawResult result =
+  mozilla::image::DrawResult result =
     nsCSSRendering::PaintBackground(mFrame->PresContext(), *aCtx, mFrame,
                                     aBounds,
                                     nsRect(offset, mFrame->GetSize()),
@@ -3212,6 +3219,7 @@ nsDisplayCaret::nsDisplayCaret(nsDisplayListBuilder* aBuilder,
   : nsDisplayItem(aBuilder, aCaretFrame)
   , mCaret(aBuilder->GetCaret())
   , mBounds(aBuilder->GetCaretRect() + ToReferenceFrame())
+  , mNeedsCustomScrollClip(false)
 {
   MOZ_COUNT_CTOR(nsDisplayCaret);
 }
@@ -3854,11 +3862,8 @@ nsDisplayOpacity::NeedsActiveLayer(nsDisplayListBuilder* aBuilder)
   if (ActiveLayerTracker::IsStyleAnimated(aBuilder, mFrame, eCSSProperty_opacity) &&
       !IsItemTooSmallForActiveLayer(this))
     return true;
-  if (mFrame->GetContent()) {
-    if (nsLayoutUtils::HasAnimationsForCompositor(mFrame->GetContent(),
-                                                  eCSSProperty_opacity)) {
-      return true;
-    }
+  if (nsLayoutUtils::HasAnimationsForCompositor(mFrame, eCSSProperty_opacity)) {
+    return true;
   }
   return false;
 }
@@ -4909,7 +4914,7 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
   }
 
   /* Get the matrix, then change its basis to factor in the origin. */
-  bool dummy;
+  RuleNodeCacheConditions dummy;
   gfx3DMatrix result;
   // Call IsSVGTransformed() regardless of the value of
   // disp->mSpecifiedTransform, since we still need any transformFromSVGParent.
@@ -5055,7 +5060,7 @@ nsDisplayTransform::ShouldPrerender(nsDisplayListBuilder* aBuilder) {
 
   const nsStyleDisplay* disp = mFrame->StyleDisplay();
   if ((disp->mWillChangeBitField & NS_STYLE_WILL_CHANGE_TRANSFORM) &&
-      aBuilder->IsInWillChangeBudget(mFrame)) {
+      aBuilder->IsInWillChangeBudget(mFrame, mFrame->GetSize())) {
     return true;
   }
 
@@ -5085,9 +5090,7 @@ nsDisplayTransform::ShouldPrerenderTransformedContent(nsDisplayListBuilder* aBui
   // might have only just had its transform animated in which case
   // the ActiveLayerManager may not have been notified yet.
   if (!ActiveLayerTracker::IsStyleMaybeAnimated(aFrame, eCSSProperty_transform) &&
-      (!aFrame->GetContent() ||
-       !nsLayoutUtils::HasAnimationsForCompositor(aFrame->GetContent(),
-                                                  eCSSProperty_transform))) {
+      !nsLayoutUtils::HasAnimationsForCompositor(aFrame, eCSSProperty_transform)) {
     if (aLogAnimations) {
       nsCString message;
       message.AppendLiteral("Performance warning: Async animation disabled because frame was not marked active for transform animation");
@@ -5243,11 +5246,8 @@ nsDisplayTransform::GetLayerState(nsDisplayListBuilder* aBuilder,
   if (ActiveLayerTracker::IsStyleAnimated(aBuilder, mFrame, eCSSProperty_transform) &&
       !IsItemTooSmallForActiveLayer(this))
     return LAYER_ACTIVE;
-  if (mFrame->GetContent()) {
-    if (nsLayoutUtils::HasAnimationsForCompositor(mFrame->GetContent(),
-                                                  eCSSProperty_transform)) {
-      return LAYER_ACTIVE;
-    }
+  if (nsLayoutUtils::HasAnimationsForCompositor(mFrame, eCSSProperty_transform)) {
+    return LAYER_ACTIVE;
   }
 
   const nsStyleDisplay* disp = mFrame->StyleDisplay();

@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+Components.utils.import("resource://gre/modules/AppConstants.jsm");
+
 var gPrivacyPane = {
 
   /**
@@ -31,6 +33,16 @@ var gPrivacyPane = {
     document.getElementById("trackingprotectionbox").hidden = false;
   },
 #endif
+
+  /**
+   * Linkify the Learn More link of the Private Browsing Mode Tracking
+   * Protection UI.
+   */
+  _initTrackingProtectionPBM: function () {
+    let link = document.getElementById("trackingProtectionPBMLearnMore");
+    let url = Services.urlFormatter.formatURLPref("app.support.baseURL") + "tracking-protection-pbm";
+    link.setAttribute("href", url);
+  },
 
   /**
    * Initialize autocomplete to ensure prefs are in sync.
@@ -71,6 +83,7 @@ var gPrivacyPane = {
 #ifdef NIGHTLY_BUILD
     this._initTrackingProtection();
 #endif
+    this._initTrackingProtectionPBM();
     this._initAutocomplete();
 
     setEventListener("privacy.sanitize.sanitizeOnShutdown", "change",
@@ -103,6 +116,8 @@ var gPrivacyPane = {
                      gPrivacyPane.showCookies);
     setEventListener("clearDataSettings", "command",
                      gPrivacyPane.showClearPrivateDataSettings);
+
+    document.getElementById("searchesSuggestion").hidden = !AppConstants.NIGHTLY_BUILD;
   },
 
   // HISTORY MODE

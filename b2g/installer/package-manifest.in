@@ -128,6 +128,7 @@
 #ifndef MOZ_FOLD_LIBS
 @BINPATH@/@DLL_PREFIX@mozsqlite3@DLL_SUFFIX@
 #endif
+@BINPATH@/@DLL_PREFIX@lgpllibs@DLL_SUFFIX@
 @RESPATH@/blocklist.xml
 @RESPATH@/ua-update.json
 #ifdef XP_UNIX
@@ -305,7 +306,6 @@
 @RESPATH@/components/plugin.xpt
 @RESPATH@/components/pref.xpt
 @RESPATH@/components/prefetch.xpt
-@RESPATH@/components/profile.xpt
 #ifdef MOZ_ENABLE_PROFILER_SPS
 @RESPATH@/components/profiler.xpt
 #endif
@@ -318,9 +318,7 @@
 @RESPATH@/components/services-crypto.xpt
 #endif
 @RESPATH@/components/services-crypto-component.xpt
-#ifdef MOZ_CAPTIVEDETECT
 @RESPATH@/components/captivedetect.xpt
-#endif
 @RESPATH@/components/shellservice.xpt
 @RESPATH@/components/shistory.xpt
 @RESPATH@/components/spellchecker.xpt
@@ -634,10 +632,8 @@
 @RESPATH@/components/HealthReportComponents.manifest
 @RESPATH@/components/HealthReportService.js
 #endif
-#ifdef MOZ_CAPTIVEDETECT
 @RESPATH@/components/CaptivePortalDetectComponents.manifest
 @RESPATH@/components/captivedetect.js
-#endif
 @RESPATH@/components/TelemetryStartup.js
 @RESPATH@/components/TelemetryStartup.manifest
 @RESPATH@/components/XULStore.js
@@ -697,6 +693,7 @@
 #ifdef MOZ_DEBUG
 @RESPATH@/components/TestInterfaceJS.js
 @RESPATH@/components/TestInterfaceJS.manifest
+@RESPATH@/components/TestInterfaceJSMaplike.js
 #endif
 
 @RESPATH@/components/PACGenerator.js

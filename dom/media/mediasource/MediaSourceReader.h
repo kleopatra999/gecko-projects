@@ -49,12 +49,11 @@ public:
 
   nsRefPtr<AudioDataPromise> RequestAudioData() override;
   nsRefPtr<VideoDataPromise>
-  RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThreshold) override;
+  RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThreshold, bool aForceDecodeAhead) override;
 
   virtual size_t SizeOfVideoQueueInFrames() override;
   virtual size_t SizeOfAudioQueueInFrames() override;
 
-  virtual bool IsDormantNeeded() override;
   virtual void ReleaseMediaResources() override;
 
   void OnAudioDecoded(AudioData* aSample);
@@ -124,12 +123,6 @@ public:
   nsRefPtr<ShutdownPromise> Shutdown() override;
 
   virtual void BreakCycles() override;
-
-  bool IsShutdown()
-  {
-    ReentrantMonitorAutoEnter decoderMon(mDecoder->GetReentrantMonitor());
-    return mDecoder->IsShutdown();
-  }
 
   // Return true if all of the active tracks contain data for the specified time.
   bool TrackBuffersContainTime(int64_t aTime);
@@ -219,9 +212,10 @@ private:
 
   // Return a decoder from the set available in aTrackDecoders that has data
   // available in the range requested by aTarget.
+  friend class TrackBuffer;
   already_AddRefed<SourceBufferDecoder> SelectDecoder(int64_t aTarget /* microseconds */,
                                                       int64_t aTolerance /* microseconds */,
-                                                      const nsTArray<nsRefPtr<SourceBufferDecoder>>& aTrackDecoders);
+                                                      TrackBuffer* aTrackBuffer);
   bool HaveData(int64_t aTarget, MediaData::Type aType);
   already_AddRefed<SourceBufferDecoder> FirstDecoder(MediaData::Type aType);
 
@@ -260,6 +254,8 @@ private:
   // These are read and written on the decode task queue threads.
   int64_t mLastAudioTime;
   int64_t mLastVideoTime;
+
+  bool mForceVideoDecodeAhead;
 
   MediaPromiseRequestHolder<SeekPromise> mAudioSeekRequest;
   MediaPromiseRequestHolder<SeekPromise> mVideoSeekRequest;

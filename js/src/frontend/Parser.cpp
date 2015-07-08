@@ -1916,8 +1916,10 @@ Parser<FullParseHandler>::checkFunctionDefinition(HandlePropertyName funName,
              */
             if (!pc->funcStmts) {
                 pc->funcStmts = alloc.new_<FuncStmtSet>(alloc);
-                if (!pc->funcStmts || !pc->funcStmts->init())
+                if (!pc->funcStmts || !pc->funcStmts->init()) {
+                    ReportOutOfMemory(context);
                     return false;
+                }
             }
             if (!pc->funcStmts->put(funName))
                 return false;
@@ -3472,7 +3474,7 @@ Parser<FullParseHandler>::checkDestructuringObject(BindData<FullParseHandler>* d
 
             target = member->pn_right;
         }
-        if (target->isKind(PNK_ASSIGN))
+        if (handler.isUnparenthesizedAssignment(target))
             target = target->pn_left;
 
         if (handler.isUnparenthesizedDestructuringPattern(target)) {
@@ -3510,7 +3512,7 @@ Parser<FullParseHandler>::checkDestructuringArray(BindData<FullParseHandler>* da
                 report(ParseError, false, target, JSMSG_BAD_DESTRUCT_TARGET);
                 return false;
             }
-        } else if (element->isKind(PNK_ASSIGN)) {
+        } else if (handler.isUnparenthesizedAssignment(element)) {
             target = element->pn_left;
         } else {
             target = element;

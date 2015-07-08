@@ -352,6 +352,13 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
       layer->SetInvalidRegion(common.invalidRegion());
       layer->SetFrameMetrics(common.metrics());
 
+      nsTArray<nsRefPtr<Layer>> maskLayers;
+      for (size_t i = 0; i < common.ancestorMaskLayersParent().Length(); i++) {
+        Layer* maskLayer = cast(common.ancestorMaskLayersParent().ElementAt(i))->AsLayer();
+        maskLayers.AppendElement(maskLayer);
+      }
+      layer->SetAncestorMaskLayers(maskLayers);
+
       typedef SpecificLayerAttributes Specific;
       const SpecificLayerAttributes& specific = attrs.specific();
       switch (specific.type()) {
@@ -574,7 +581,6 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
       if (!Attach(cast(op.layerParent()), host, true)) {
         return false;
       }
-
       host->SetCompositorID(mLayerManager->GetCompositor()->GetCompositorID());
       break;
     }
@@ -589,7 +595,7 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
 
   {
     AutoResolveRefLayers resolve(mShadowLayersManager->GetCompositionManager(this));
-    layer_manager()->EndTransaction(nullptr, nullptr, LayerManager::END_NO_IMMEDIATE_REDRAW);
+    layer_manager()->EndTransaction(TimeStamp(), LayerManager::END_NO_IMMEDIATE_REDRAW);
   }
 
   if (reply) {

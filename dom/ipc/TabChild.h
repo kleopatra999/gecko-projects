@@ -47,6 +47,7 @@ class RenderFrameChild;
 
 namespace layers {
 class APZEventState;
+class ImageCompositeNotification;
 struct SetTargetAPZCCallback;
 struct SetAllowedTouchBehaviorCallback;
 }
@@ -528,6 +529,10 @@ protected:
     virtual bool RecvRequestNotifyAfterRemotePaint() override;
 
     virtual bool RecvParentActivated(const bool& aActivated) override;
+
+    virtual bool RecvStopIMEStateManagement() override;
+    virtual bool RecvMenuKeyboardListenerInstalled(
+                   const bool& aInstalled) override;
 
 #ifdef MOZ_WIDGET_GONK
     void MaybeRequestPreinitCamera();

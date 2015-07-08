@@ -27,6 +27,19 @@
 
 namespace mozilla {
 
+#if defined(MOZ_GONK_MEDIACODEC) || defined(XP_WIN) || defined(MOZ_APPLEMEDIA) || defined(MOZ_FFMPEG)
+#define MP4_READER_DORMANT_HEURISTIC
+#else
+#undef MP4_READER_DORMANT_HEURISTIC
+#endif
+
+MP4Decoder::MP4Decoder()
+{
+#if defined(MP4_READER_DORMANT_HEURISTIC)
+  mDormantSupported = Preferences::GetBool("media.decoder.heuristic.dormant.enabled", false);
+#endif
+}
+
 MediaDecoderStateMachine* MP4Decoder::CreateStateMachine()
 {
   bool useFormatDecoder =
@@ -191,7 +204,7 @@ IsAndroidAvailable()
   return false;
 #else
   // We need android.media.MediaCodec which exists in API level 16 and higher.
-  return AndroidBridge::Bridge()->GetAPIVersion() >= 16;
+  return AndroidBridge::Bridge() && (AndroidBridge::Bridge()->GetAPIVersion() >= 16);
 #endif
 }
 

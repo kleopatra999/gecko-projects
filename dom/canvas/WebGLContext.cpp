@@ -1752,7 +1752,7 @@ WebGLContext::MakeContextCurrent() const
     gl->MakeCurrent();
 }
 
-mozilla::TemporaryRef<mozilla::gfx::SourceSurface>
+already_AddRefed<mozilla::gfx::SourceSurface>
 WebGLContext::GetSurfaceSnapshot(bool* out_premultAlpha)
 {
     if (!gl)
@@ -1823,9 +1823,6 @@ WebGLContext::TexImageFromVideoElement(const TexImageTarget texImageTarget,
                                        GLenum format, GLenum type,
                                        mozilla::dom::Element& elt)
 {
-    if (type == LOCAL_GL_HALF_FLOAT_OES)
-        type = LOCAL_GL_HALF_FLOAT;
-
     if (!ValidateTexImageFormatAndType(format, type,
                                        WebGLTexImageFunc::TexImage,
                                        WebGLTexDimensions::Tex2D))
@@ -1864,10 +1861,13 @@ WebGLContext::TexImageFromVideoElement(const TexImageTarget texImageTarget,
         }
     }
 
+    AutoLockImage lockedImage(container);
+    Image* srcImage = lockedImage.GetImage();
+    if (!srcImage) {
+      return false;
+    }
+
     gl->MakeCurrent();
-    nsRefPtr<mozilla::layers::Image> srcImage = container->LockCurrentImage();
-    if (!srcImage)
-        return false;
 
     WebGLTexture* tex = ActiveBoundTextureForTexImageTarget(texImageTarget);
 
@@ -1883,7 +1883,7 @@ WebGLContext::TexImageFromVideoElement(const TexImageTarget texImageTarget,
 
     const gl::OriginPos destOrigin = mPixelStoreFlipY ? gl::OriginPos::BottomLeft
                                                       : gl::OriginPos::TopLeft;
-    bool ok = gl->BlitHelper()->BlitImageToTexture(srcImage.get(),
+    bool ok = gl->BlitHelper()->BlitImageToTexture(srcImage,
                                                    srcImage->GetSize(),
                                                    tex->mGLName,
                                                    texImageTarget.get(),
@@ -1899,9 +1899,6 @@ WebGLContext::TexImageFromVideoElement(const TexImageTarget texImageTarget,
                           WebGLImageDataStatus::InitializedImageData);
         tex->Bind(TexImageTargetToTexTarget(texImageTarget));
     }
-
-    srcImage = nullptr;
-    container->UnlockCurrentImage();
     return ok;
 }
 

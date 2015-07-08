@@ -5591,6 +5591,9 @@ if test -n "$MOZ_VPX" -a -z "$MOZ_NATIVE_LIBVPX"; then
     else
       AC_MSG_WARN([No assembler or assembly support for libvpx. Using unoptimized C routines.])
     fi
+
+    dnl native libvpx no longer has vpx_mem_set_functions
+    AC_DEFINE(MOZ_VPX_NO_MEM_REPORTING)
 fi
 
 dnl ========================================================
@@ -8484,12 +8487,6 @@ dnl Build Services/CloudSync if required
 AC_SUBST(MOZ_SERVICES_CLOUDSYNC)
 if test -n "$MOZ_SERVICES_CLOUDSYNC"; then
   AC_DEFINE(MOZ_SERVICES_CLOUDSYNC)
-fi
-
-dnl Build Captive Portal Detector if required
-AC_SUBST(MOZ_CAPTIVEDETECT)
-if test -n "$MOZ_CAPTIVEDETECT"; then
-  AC_DEFINE(MOZ_CAPTIVEDETECT)
 fi
 
 dnl Build second screen and casting features for external devices if required

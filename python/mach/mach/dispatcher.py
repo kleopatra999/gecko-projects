@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from __future__ import unicode_literals
+from __future__ import absolute_import, unicode_literals
 
 import argparse
 import difflib
@@ -230,7 +230,7 @@ class CommandAction(argparse.Action):
                 setattr(command_namespace, name, extra)
             else:
                 setattr(command_namespace, name, options.get('default', []))
-        elif extra:
+        elif extra and handler.cls.__name__ != 'DeprecatedCommands':
             raise UnrecognizedArgumentError(command, extra)
 
     def _handle_main_help(self, parser, verbose):

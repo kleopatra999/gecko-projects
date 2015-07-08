@@ -574,10 +574,10 @@ static gint
 ensure_menu_popup_widget()
 {
     if (!gMenuPopupWidget) {
-        ensure_menu_bar_item_widget();
+        ensure_window_widget();
         gMenuPopupWidget = gtk_menu_new();
-        gtk_menu_item_set_submenu(GTK_MENU_ITEM(gMenuBarItemWidget),
-                                  gMenuPopupWidget);
+        gtk_menu_attach_to_widget(GTK_MENU(gMenuPopupWidget), gProtoWindow,
+                                  NULL);
         gtk_widget_realize(gMenuPopupWidget);
     }
     return MOZ_GTK_SUCCESS;
@@ -1568,7 +1568,7 @@ moz_gtk_treeview_expander_paint(cairo_t *cr, GdkRectangle* rect,
 
     /* Because the frame we get is of the entire treeview, we can't get the precise
      * event state of one expander, thus rendering hover and active feedback useless. */
-    state_flags = state->disabled ? GTK_STATE_INSENSITIVE : GTK_STATE_NORMAL;
+    state_flags = state->disabled ? GTK_STATE_FLAG_INSENSITIVE : GTK_STATE_FLAG_NORMAL;
 
     /* GTK_STATE_FLAG_ACTIVE controls expanded/colapsed state rendering
      * in gtk_render_expander()

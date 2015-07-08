@@ -36,6 +36,7 @@
 
     // Eslint built-in rules are documented at <http://eslint.org/docs/rules/>
     "camelcase": 0,               // TODO: Remove (use default)
+    "computed-property-spacing": [2, "never"],
     "consistent-return": 0,       // TODO: Remove (use default)
     dot-location: 0,              // [2, property],
     "eqeqeq": 0,                  // TBD. Might need to be separate for content & chrome
@@ -52,27 +53,28 @@
     "no-redeclare": 0,            // TODO: Remove (use default)
     "no-return-assign": 0,        // TODO: Remove (use default)
     "no-underscore-dangle": 0,    // Leave as 0. Commonly used for private variables.
+    "no-unexpected-multiline": 2,
     "no-unneeded-ternary": 2,
     "no-unused-expressions": 0,   // TODO: Remove (use default)
     "no-unused-vars": 0,          // TODO: Remove (use default)
     "no-use-before-define": 0,    // TODO: Remove (use default)
+    "object-curly-spacing": 0,    // [2, "always"],
     "quotes": [2, "double", "avoid-escape"],
+    "spaced-comment": [2, "always"],
     "strict": 0,                  // [2, "function"],
     // eslint-plugin-react rules. These are documented at
     // <https://github.com/yannickcr/eslint-plugin-react#list-of-supported-rules>
     "react/jsx-quotes": [2, "double", "avoid-escape"],
     "react/jsx-no-undef": 2,
-    // Need to fix instances where this is failing.
-    "react/jsx-sort-props": 0,
-    "react/jsx-sort-prop-types": 0,
+    "react/jsx-sort-props": 2,
+    "react/jsx-sort-prop-types": 2,
     "react/jsx-uses-vars": 2,
     // Need to fix the couple of instances which don't
     // currently pass this rule.
     "react/no-did-mount-set-state": 0,
     "react/no-did-update-set-state": 2,
     "react/no-unknown-property": 2,
-    // Need to fix instances where this is currently failing
-    "react/prop-types": 0,
+    "react/prop-types": 2,
     "react/self-closing-comp": 2,
     "react/wrap-multilines": 2,
     // Not worth it: React is defined globally

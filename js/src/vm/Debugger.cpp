@@ -806,6 +806,7 @@ Debugger::wrapDebuggeeValue(JSContext* cx, MutableHandleValue vp)
         RootedObject obj(cx, &vp.toObject());
 
         if (obj->is<JSFunction>()) {
+            MOZ_ASSERT(!IsInternalFunctionObject(*obj));
             RootedFunction fun(cx, &obj->as<JSFunction>());
             if (!EnsureFunctionHasScript(cx, fun))
                 return false;
@@ -2486,7 +2487,7 @@ Debugger::trace(JSTracer* trc)
      * frames.)
      */
     for (FrameMap::Range r = frames.all(); !r.empty(); r.popFront()) {
-        HeapPtrNativeObject& frameobj = r.front().value();
+        RelocatablePtrNativeObject& frameobj = r.front().value();
         MOZ_ASSERT(MaybeForwarded(frameobj.get())->getPrivate());
         TraceEdge(trc, &frameobj, "live Debugger.Frame");
     }
@@ -7020,7 +7021,7 @@ DebuggerObject_defineProperty(JSContext* cx, unsigned argc, Value* vp)
             return false;
 
         ErrorCopier ec(ac);
-        if (!StandardDefineProperty(cx, obj, id, desc))
+        if (!DefineProperty(cx, obj, id, desc))
             return false;
     }
 
@@ -7063,7 +7064,7 @@ DebuggerObject_defineProperties(JSContext* cx, unsigned argc, Value* vp)
 
         ErrorCopier ec(ac);
         for (size_t i = 0; i < n; i++) {
-            if (!StandardDefineProperty(cx, obj, ids[i], descs[i]))
+            if (!DefineProperty(cx, obj, ids[i], descs[i]))
                 return false;
         }
     }
@@ -7565,7 +7566,7 @@ DebuggerEnv_getType(JSContext* cx, unsigned argc, Value* vp)
     else
         s = "object";
 
-    JSAtom* str = Atomize(cx, s, strlen(s), InternAtom);
+    JSAtom* str = Atomize(cx, s, strlen(s), PinAtom);
     if (!str)
         return false;
     args.rval().setString(str);
@@ -7628,7 +7629,11 @@ DebuggerEnv_getCallee(JSContext* cx, unsigned argc, Value* vp)
     if (callobj.isForEval())
         return true;
 
-    args.rval().setObject(callobj.callee());
+    JSFunction& callee = callobj.callee();
+    if (IsInternalFunctionObject(callee))
+        return true;
+
+    args.rval().setObject(callee);
     if (!dbg->wrapDebuggeeValue(cx, args.rval()))
         return false;
     return true;
@@ -7755,6 +7760,16 @@ DebuggerEnv_getVariable(JSContext* cx, unsigned argc, Value* vp)
             if (!GetProperty(cx, env, env, id, &v))
                 return false;
         }
+    }
+
+    // When we've faked up scope chain objects for optimized-out scopes,
+    // declarative environments may contain internal JSFunction objects, which
+    // we shouldn't expose to the user.
+    if (v.isObject()) {
+        RootedObject obj(cx, &v.toObject());
+        if (obj->is<JSFunction>() &&
+            IsInternalFunctionObject(obj->as<JSFunction>()))
+            v.setMagic(JS_OPTIMIZED_OUT);
     }
 
     if (!dbg->wrapDebuggeeValue(cx, &v))

@@ -72,6 +72,7 @@
 #include "nsIDocShell.h"
 
 #include "nsNetUtil.h"
+#include "nsNetCID.h"
 
 #include "mozilla/Mutex.h"
 #include "mozilla/PluginLibrary.h"
@@ -249,7 +250,7 @@ nsNPAPIPlugin::PluginCrashed(const nsAString& pluginDumpID,
 bool
 nsNPAPIPlugin::RunPluginOOP(const nsPluginTag *aPluginTag)
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     return true;
   }
 
@@ -404,7 +405,7 @@ GetNewPluginLibrary(nsPluginTag *aPluginTag)
     return nullptr;
   }
 
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     return PluginModuleContentParent::LoadModule(aPluginTag->mId);
   }
 
@@ -681,7 +682,7 @@ doGetIdentifier(JSContext *cx, const NPUTF8* name)
 {
   NS_ConvertUTF8toUTF16 utf16name(name);
 
-  JSString *str = ::JS_InternUCStringN(cx, utf16name.get(), utf16name.Length());
+  JSString *str = ::JS_AtomizeAndPinUCStringN(cx, utf16name.get(), utf16name.Length());
 
   if (!str)
     return nullptr;
@@ -1066,7 +1067,7 @@ _destroystream(NPP npp, NPStream *pstream, NPError reason)
     // the reference until it is to be deleted here. Deleting the wrapper will
     // release the wrapped nsIOutputStream.
     //
-    // The NPStream the plugin references should always be a sub-object of it's own
+    // The NPStream the plugin references should always be a sub-object of its own
     // 'ndata', which is our nsNPAPIStramWrapper. See bug 548441.
     NS_ASSERTION((char*)streamWrapper <= (char*)pstream &&
                  ((char*)pstream) + sizeof(*pstream)
@@ -1084,23 +1085,7 @@ _destroystream(NPP npp, NPStream *pstream, NPError reason)
 void
 _status(NPP npp, const char *message)
 {
-  if (!NS_IsMainThread()) {
-    NPN_PLUGIN_LOG(PLUGIN_LOG_ALWAYS,("NPN_status called from the wrong thread\n"));
-    return;
-  }
-  NPN_PLUGIN_LOG(PLUGIN_LOG_NORMAL, ("NPN_Status: npp=%p, message=%s\n",
-                                     (void*)npp, message));
-
-  if (!npp || !npp->ndata) {
-    NS_WARNING("_status: npp or npp->ndata == 0");
-    return;
-  }
-
-  nsNPAPIPluginInstance *inst = (nsNPAPIPluginInstance*)npp->ndata;
-
-  PluginDestructionGuard guard(inst);
-
-  inst->ShowStatus(message);
+  // NPN_Status is no longer supported.
 }
 
 void
@@ -1248,13 +1233,9 @@ _getpluginelement(NPP npp)
   nsCOMPtr<nsIXPConnect> xpc(do_GetService(nsIXPConnect::GetCID()));
   NS_ENSURE_TRUE(xpc, nullptr);
 
-  nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
+  JS::RootedObject obj(cx);
   xpc->WrapNative(cx, ::JS::CurrentGlobalOrNull(cx), element,
-                  NS_GET_IID(nsIDOMElement),
-                  getter_AddRefs(holder));
-  NS_ENSURE_TRUE(holder, nullptr);
-
-  JS::Rooted<JSObject*> obj(cx, holder->GetJSObject());
+                  NS_GET_IID(nsIDOMElement), obj.address());
   NS_ENSURE_TRUE(obj, nullptr);
 
   return nsJSObjWrapper::GetNewOrUsed(npp, cx, obj);

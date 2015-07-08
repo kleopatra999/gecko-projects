@@ -31,6 +31,7 @@ using mozilla::dom::CrashReporterParent;
 using mozilla::ipc::GeckoChildProcessHost;
 
 #ifdef MOZ_CRASHREPORTER
+#include "nsPrintfCString.h"
 using CrashReporter::AnnotationTable;
 using CrashReporter::GetIDFromMinidump;
 #endif
@@ -182,7 +183,7 @@ GMPParent::LoadProcess()
   mState = GMPStateLoaded;
 
   // Hold a self ref while the child process is alive. This ensures that
-  // during shutdown the GMPParent stays we stay alive long enough to
+  // during shutdown the GMPParent stays alive long enough to
   // terminate the child process.
   MOZ_ASSERT(!mHoldingSelfRef);
   mHoldingSelfRef = true;
@@ -196,6 +197,11 @@ AbortWaitingForGMPAsyncShutdown(nsITimer* aTimer, void* aClosure)
 {
   NS_WARNING("Timed out waiting for GMP async shutdown!");
   GMPParent* parent = reinterpret_cast<GMPParent*>(aClosure);
+#if defined(MOZ_CRASHREPORTER)
+  CrashReporter::AnnotateCrashReport(
+    nsPrintfCString("AsyncPluginShutdown-%s@%p", parent->GetDisplayName().get(), parent),
+    NS_LITERAL_CSTRING("Timed out waiting for async shutdown"));
+#endif
   nsRefPtr<GeckoMediaPluginServiceParent> service =
     GeckoMediaPluginServiceParent::GetSingleton();
   if (service) {
@@ -206,6 +212,7 @@ AbortWaitingForGMPAsyncShutdown(nsITimer* aTimer, void* aClosure)
 nsresult
 GMPParent::EnsureAsyncShutdownTimeoutSet()
 {
+  MOZ_ASSERT(mAsyncShutdownRequired);
   if (mAsyncShutdownTimeout) {
     return NS_OK;
   }
@@ -229,9 +236,11 @@ GMPParent::EnsureAsyncShutdownTimeoutSet()
   if (service) {
     timeout = service->AsyncShutdownTimeoutMs();
   }
-  return mAsyncShutdownTimeout->InitWithFuncCallback(
+  rv = mAsyncShutdownTimeout->InitWithFuncCallback(
     &AbortWaitingForGMPAsyncShutdown, this, timeout,
     nsITimer::TYPE_ONE_SHOT);
+  unused << NS_WARN_IF(NS_FAILED(rv));
+  return rv;
 }
 
 bool
@@ -239,8 +248,20 @@ GMPParent::RecvPGMPContentChildDestroyed()
 {
   --mGMPContentChildCount;
   if (!IsUsed()) {
+#if defined(MOZ_CRASHREPORTER)
+    CrashReporter::AnnotateCrashReport(
+      nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+      NS_LITERAL_CSTRING("Content children destroyed"));
+#endif
     CloseIfUnused();
   }
+#if defined(MOZ_CRASHREPORTER)
+  else {
+    CrashReporter::AnnotateCrashReport(
+      nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+      nsPrintfCString("Content child destroyed, remaining: %u", mGMPContentChildCount));
+  }
+#endif
   return true;
 }
 
@@ -262,13 +283,31 @@ GMPParent::CloseIfUnused()
     if (mAsyncShutdownRequired) {
       if (!mAsyncShutdownInProgress) {
         LOGD("%s: sending async shutdown notification", __FUNCTION__);
+#if defined(MOZ_CRASHREPORTER)
+      CrashReporter::AnnotateCrashReport(
+        nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+        NS_LITERAL_CSTRING("Sent BeginAsyncShutdown"));
+#endif
         mAsyncShutdownInProgress = true;
-        if (!SendBeginAsyncShutdown() ||
-            NS_FAILED(EnsureAsyncShutdownTimeoutSet())) {
+        if (!SendBeginAsyncShutdown()) {
+#if defined(MOZ_CRASHREPORTER)
+          CrashReporter::AnnotateCrashReport(
+            nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+            NS_LITERAL_CSTRING("Could not send BeginAsyncShutdown - Aborting async shutdown"));
+#endif
+          AbortAsyncShutdown();
+        } else if (NS_FAILED(EnsureAsyncShutdownTimeoutSet())) {
+#if defined(MOZ_CRASHREPORTER)
+          CrashReporter::AnnotateCrashReport(
+            nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+            NS_LITERAL_CSTRING("Could not start timer after sending BeginAsyncShutdown - Aborting async shutdown"));
+#endif
           AbortAsyncShutdown();
         }
       }
     } else {
+      // No async-shutdown, kill async-shutdown timer started in CloseActive().
+      AbortAsyncShutdown();
       // Any async shutdown must be complete. Shutdown GMPStorage.
       for (size_t i = mStorage.Length(); i > 0; i--) {
         mStorage[i - 1]->Shutdown();
@@ -313,7 +352,43 @@ GMPParent::CloseActive(bool aDieWhenUnloaded)
     mState = GMPStateUnloading;
   }
   if (mState != GMPStateNotLoaded && IsUsed()) {
-    unused << SendCloseActive();
+#if defined(MOZ_CRASHREPORTER)
+    CrashReporter::AnnotateCrashReport(
+      nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+      nsPrintfCString("Sent CloseActive, content children to close: %u", mGMPContentChildCount));
+#endif
+    if (!SendCloseActive()) {
+#if defined(MOZ_CRASHREPORTER)
+      CrashReporter::AnnotateCrashReport(
+        nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+        NS_LITERAL_CSTRING("Could not send CloseActive - Aborting async shutdown"));
+#endif
+      AbortAsyncShutdown();
+    } else if (IsUsed()) {
+      // We're expecting RecvPGMPContentChildDestroyed's -> Start async-shutdown timer now if needed.
+      if (mAsyncShutdownRequired && NS_FAILED(EnsureAsyncShutdownTimeoutSet())) {
+#if defined(MOZ_CRASHREPORTER)
+        CrashReporter::AnnotateCrashReport(
+          nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+          NS_LITERAL_CSTRING("Could not start timer after sending CloseActive - Aborting async shutdown"));
+#endif
+        AbortAsyncShutdown();
+      }
+    } else {
+      // We're not expecting any RecvPGMPContentChildDestroyed
+      // -> Call CloseIfUnused() now, to run async shutdown if necessary.
+      // Note that CloseIfUnused() may have already been called from a prior
+      // RecvPGMPContentChildDestroyed(), however depending on the state at
+      // that time, it might not have proceeded with shutdown; And calling it
+      // again after shutdown is fine because after the first one we'll be in
+      // GMPStateNotLoaded.
+#if defined(MOZ_CRASHREPORTER)
+      CrashReporter::AnnotateCrashReport(
+        nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+        NS_LITERAL_CSTRING("Content children already destroyed"));
+#endif
+      CloseIfUnused();
+    }
   }
 }
 
@@ -568,6 +643,11 @@ GMPParent::ActorDestroy(ActorDestroyReason aWhy)
   if (AbnormalShutdown == aWhy) {
     nsRefPtr<GMPParent> self(this);
     if (mAsyncShutdownRequired) {
+#if defined(MOZ_CRASHREPORTER)
+      CrashReporter::AnnotateCrashReport(
+        nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+        NS_LITERAL_CSTRING("Actor destroyed"));
+#endif
       mService->AsyncShutdownComplete(this);
       mAsyncShutdownRequired = false;
     }
@@ -780,8 +860,7 @@ GMPParent::ReadGMPMetaData()
       }
     }
 
-    if (cap->mAPIName.EqualsLiteral(GMP_API_DECRYPTOR) ||
-        cap->mAPIName.EqualsLiteral(GMP_API_DECRYPTOR_COMPAT)) {
+    if (cap->mAPIName.EqualsLiteral(GMP_API_DECRYPTOR)) {
       mCanDecrypt = true;
 
 #if defined(XP_LINUX) && defined(MOZ_GMP_SANDBOX)
@@ -870,6 +949,11 @@ GMPParent::RecvAsyncShutdownComplete()
   LOGD("%s", __FUNCTION__);
 
   MOZ_ASSERT(mAsyncShutdownRequired);
+#if defined(MOZ_CRASHREPORTER)
+  CrashReporter::AnnotateCrashReport(
+    nsPrintfCString("AsyncPluginShutdown-%s@%p", GetDisplayName().get(), this),
+    NS_LITERAL_CSTRING("Received AsyncShutdownComplete"));
+#endif
   AbortAsyncShutdown();
   return true;
 }

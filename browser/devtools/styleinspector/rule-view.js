@@ -1158,6 +1158,7 @@ function CssRuleView(aInspector, aDoc, aStore, aPageStyle) {
   this._onSelectAll = this._onSelectAll.bind(this);
   this._onCopy = this._onCopy.bind(this);
   this._onCopyColor = this._onCopyColor.bind(this);
+  this._onCopyUrl = this._onCopyUrl.bind(this);
   this._onCopyImageDataUrl = this._onCopyImageDataUrl.bind(this);
   this._onCopyLocation = this._onCopyLocation.bind(this);
   this._onCopyPropertyDeclaration = this._onCopyPropertyDeclaration.bind(this);
@@ -1272,6 +1273,12 @@ CssRuleView.prototype = {
       label: "ruleView.contextmenu.copyColor",
       accesskey: "ruleView.contextmenu.copyColor.accessKey",
       command: this._onCopyColor
+    });
+
+    this.menuitemCopyUrl = createMenuItem(this._contextmenu, {
+      label: "styleinspector.contextmenu.copyUrl",
+      accesskey: "styleinspector.contextmenu.copyUrl.accessKey",
+      command: this._onCopyUrl
     });
 
     this.menuitemCopyImageDataUrl = createMenuItem(this._contextmenu, {
@@ -1469,6 +1476,7 @@ CssRuleView.prototype = {
 
     this.menuitemCopy.hidden = !copy;
     this.menuitemCopyColor.hidden = !this._isColorPopup();
+    this.menuitemCopyUrl.hidden = !this._isImageUrlPopup();
     this.menuitemCopyImageDataUrl.hidden = !this._isImageUrlPopup();
 
     this.menuitemCopyLocation.hidden = true;
@@ -1714,8 +1722,15 @@ CssRuleView.prototype = {
   },
 
   /**
+   * Retrieve the url for the selected image and copy it to the clipboard
+   */
+  _onCopyUrl: function() {
+    clipboardHelper.copyString(this._imageUrlToCopy);
+  },
+
+  /**
    * Retrieve the image data for the selected image url and copy it to
-  *  the clipboard
+   * the clipboard
    */
   _onCopyImageDataUrl: Task.async(function*() {
     let message;
@@ -2011,6 +2026,11 @@ CssRuleView.prototype = {
       // Destroy Copy Color menuitem.
       this.menuitemCopyColor.removeEventListener("command", this._onCopyColor);
       this.menuitemCopyColor = null;
+
+      // Destroy Copy URL menuitem.
+      this.menuitemCopyUrl.removeEventListener("command",
+        this._onCopyUrl);
+      this.menuitemCopyUrl = null;
 
       // Destroy Copy Data URI menuitem.
       this.menuitemCopyImageDataUrl.removeEventListener("command",
@@ -2710,7 +2730,8 @@ RuleEditor.prototype = {
     }
 
     this.selectorText = createChild(this.selectorContainer, "span", {
-      class: "ruleview-selector theme-fg-color3"
+      class: "ruleview-selector theme-fg-color3",
+      tabindex: this.isSelectorEditable ? "0" : "-1",
     });
 
     if (this.isSelectorEditable) {
@@ -2722,9 +2743,6 @@ RuleEditor.prototype = {
       editableField({
         element: this.selectorText,
         done: this._onSelectorDone,
-        stopOnShiftTab: true,
-        stopOnTab: true,
-        stopOnReturn: true
       });
     }
 
@@ -3001,14 +3019,16 @@ RuleEditor.prototype = {
    * Ignores the change if the user pressed escape, otherwise
    * commits it.
    *
-   * @param {string} aValue
+   * @param {string} value
    *        The value contained in the editor.
-   * @param {boolean} aCommit
+   * @param {boolean} commit
    *        True if the change should be applied.
+   * @param {number} direction
+   *        The move focus direction number.
    */
-  _onSelectorDone: function(aValue, aCommit) {
-    if (!aCommit || this.isEditing || aValue === "" ||
-        aValue === this.rule.selectorText) {
+  _onSelectorDone: function(value, commit, direction) {
+    if (!commit || this.isEditing || value === "" ||
+        value === this.rule.selectorText) {
       return;
     }
 
@@ -3020,7 +3040,7 @@ RuleEditor.prototype = {
 
     this.isEditing = true;
 
-    this.rule.domRule.modifySelector(element, aValue).then(response => {
+    this.rule.domRule.modifySelector(element, value).then(response => {
       this.isEditing = false;
 
       if (!supportsUnmatchedRules) {
@@ -3052,10 +3072,34 @@ RuleEditor.prototype = {
         ruleView.toggleSelectorHighlighter(ruleView.lastSelectorIcon,
           ruleView.highlightedSelector);
       }
+
+      this._moveSelectorFocus(newRule, direction);
     }).then(null, err => {
       this.isEditing = false;
       promiseWarn(err);
     });
+  },
+
+  /**
+   * Handle moving the focus change after pressing tab and return from the
+   * selector inplace editor. The focused element after a tab or return keypress
+   * is lost because the rule editor is replaced.
+   *
+   * @param {Rule} rule
+   *        The Rule object.
+   * @param {number} direction
+   *        The move focus direction number.
+   */
+  _moveSelectorFocus: function(rule, direction) {
+    if (!direction || direction == Ci.nsIFocusManager.MOVEFOCUS_BACKWARD) {
+      return;
+    }
+
+    if (rule.textProps.length > 0) {
+      rule.textProps[0].editor.nameSpan.click();
+    } else {
+      this.propertyList.click();
+    }
   }
 };
 

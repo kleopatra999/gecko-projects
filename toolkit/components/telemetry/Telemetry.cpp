@@ -1139,7 +1139,7 @@ FillRanges(JSContext *cx, JS::Handle<JSObject*> array, Histogram *h)
 {
   JS::Rooted<JS::Value> range(cx);
   for (size_t i = 0; i < h->bucket_count(); i++) {
-    range = INT_TO_JSVAL(h->ranges(i));
+    range.setInt32(h->ranges(i));
     if (!JS_DefineElement(cx, array, i, range, JSPROP_ENUMERATE))
       return false;
   }
@@ -1848,10 +1848,8 @@ TelemetryImpl::AsyncFetchTelemetryData(nsIFetchTelemetryDataCallback *aCallback)
 
 TelemetryImpl::TelemetryImpl():
 mHistogramMap(Telemetry::HistogramCount),
-mCanRecordBase(XRE_GetProcessType() == GeckoProcessType_Default ||
-               XRE_GetProcessType() == GeckoProcessType_Content),
-mCanRecordExtended(XRE_GetProcessType() == GeckoProcessType_Default ||
-                   XRE_GetProcessType() == GeckoProcessType_Content),
+mCanRecordBase(XRE_IsParentProcess() || XRE_IsContentProcess()),
+mCanRecordExtended(XRE_IsParentProcess() || XRE_IsContentProcess()),
 mHashMutex("Telemetry::mHashMutex"),
 mHangReportsMutex("Telemetry::mHangReportsMutex"),
 mThreadHangStatsMutex("Telemetry::mThreadHangStatsMutex"),

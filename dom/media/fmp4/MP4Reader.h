@@ -23,12 +23,6 @@ typedef std::deque<nsRefPtr<MediaRawData>> MediaSampleQueue;
 
 class MP4Stream;
 
-#if defined(MOZ_GONK_MEDIACODEC) || defined(XP_WIN) || defined(MOZ_APPLEMEDIA) || defined(MOZ_FFMPEG)
-#define MP4_READER_DORMANT_HEURISTIC
-#else
-#undef MP4_READER_DORMANT_HEURISTIC
-#endif
-
 class MP4Reader final : public MediaDecoderReader
 {
   typedef TrackInfo::TrackType TrackType;
@@ -44,7 +38,7 @@ public:
   virtual size_t SizeOfAudioQueueInFrames() override;
 
   virtual nsRefPtr<VideoDataPromise>
-  RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThreshold) override;
+  RequestVideoData(bool aSkipToNextKeyframe, int64_t aTimeThreshold, bool aForceDecodeAhead) override;
 
   virtual nsRefPtr<AudioDataPromise> RequestAudioData() override;
 
@@ -62,13 +56,15 @@ public:
   virtual bool IsMediaSeekable() override;
 
   virtual int64_t GetEvictionOffset(double aTime) override;
-  virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset) override;
+
+protected:
+  virtual void NotifyDataArrivedInternal(uint32_t aLength, int64_t aOffset) override;
+public:
 
   virtual media::TimeIntervals GetBuffered() override;
 
   // For Media Resource Management
   virtual void SetIdle() override;
-  virtual bool IsDormantNeeded() override;
   virtual void ReleaseMediaResources() override;
   virtual void SetSharedDecoderManager(SharedDecoderManager* aManager)
     override;
@@ -122,7 +118,7 @@ private:
   bool IsSupportedVideoMimeType(const nsACString& aMimeType);
   virtual bool IsWaitingOnCDMResource() override;
 
-  Microseconds GetNextKeyframeTime();
+  mp4_demuxer::Microseconds GetNextKeyframeTime();
   bool ShouldSkip(bool aSkipToNextKeyframe, int64_t aTimeThreshold);
 
   size_t SizeOfQueue(TrackType aTrack);
@@ -171,6 +167,7 @@ private:
       , mNumSamplesInput(0)
       , mNumSamplesOutput(0)
       , mDecodeAhead(aDecodeAhead)
+      , mForceDecodeAhead(false)
       , mActive(false)
       , mInputExhausted(false)
       , mError(false)
@@ -207,6 +204,7 @@ private:
     uint64_t mNumSamplesInput;
     uint64_t mNumSamplesOutput;
     uint32_t mDecodeAhead;
+    bool mForceDecodeAhead;
     // Whether this stream exists in the media.
     bool mActive;
     bool mInputExhausted;
@@ -274,10 +272,6 @@ private:
   int64_t mLastSeenEnd;
   Monitor mDemuxerMonitor;
   nsRefPtr<SharedDecoderManager> mSharedDecoderManager;
-
-#if defined(MP4_READER_DORMANT_HEURISTIC)
-  const bool mDormantEnabled;
-#endif
 };
 
 } // namespace mozilla

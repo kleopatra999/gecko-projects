@@ -2,10 +2,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, # You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from __future__ import print_function, unicode_literals
+from __future__ import absolute_import, print_function, unicode_literals
 
 import argparse
-import itertools
 import json
 import logging
 import operator
@@ -718,7 +717,8 @@ class GTestCommands(MachCommandBase):
               debugger_args):
 
         # We lazy build gtest because it's slow to link
-        self._run_make(directory="testing/gtest", target='gtest', ensure_exit_code=True)
+        self._run_make(directory="testing/gtest", target='gtest',
+                       print_directory=False, ensure_exit_code=True)
 
         app_path = self.get_binary_path('app')
         args = [app_path, '-unittest'];
@@ -941,7 +941,7 @@ class RunProgram(MachCommandBase):
     @CommandArgumentGroup('DMD')
     @CommandArgument('--dmd', action='store_true', group='DMD',
         help='Enable DMD. The following arguments have no effect without this.')
-    @CommandArgument('--mode', choices=['live', 'dark-matter', 'cumulative'], group='DMD',
+    @CommandArgument('--mode', choices=['live', 'dark-matter', 'cumulative', 'scan'], group='DMD',
          help='Profiling mode. The default is \'dark-matter\'.')
     @CommandArgument('--sample-below', default=None, type=str, group='DMD',
         help='Sample blocks smaller than this. Use 1 for no sampling. The default is 4093.')

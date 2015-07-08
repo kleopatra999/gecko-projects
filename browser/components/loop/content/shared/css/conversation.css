@@ -54,7 +54,7 @@
     margin-right: 16px;
   }
 
-.btn-screen-share-entry {
+.btn-edit-entry {
   float: right !important;
   border-left: 1px solid #5a5a5a;
 }
@@ -210,10 +210,15 @@
 }
 
 /* Screen share button */
+.btn-mute-edit,
 .btn-screen-share {
   position: relative;
-  background-image: url(../img/icons-16x16.svg#screen-white);
+  background-image: url(../img/icons-10x10.svg#edit-white);
   background-size: 16px 16px;
+}
+
+.btn-screen-share {
+  background-image: url(../img/icons-16x16.svg#screen-white);
   width: 42px;
 }
 
@@ -225,6 +230,10 @@
 .btn-screen-share.active {
   background-image: url(../img/icons-16x16.svg#screenmute-white);
   background-color: #6CB23E;
+}
+
+.btn-mute-edit.muted,
+.btn-screen-share.active {
   opacity: 1;
 }
 
@@ -930,7 +939,7 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
 }
 
 .room-context {
-  background: rgba(0,0,0,.6);
+  background: rgba(0,0,0,.8);
   border-top: 2px solid #444;
   border-bottom: 2px solid #444;
   padding: .5rem;
@@ -939,6 +948,9 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   left: 0;
   bottom: 0;
   width: 100%;
+  /* Stretch to the maximum available space whilst not covering the conversation
+     toolbar (26px). */
+  height: calc(100% - 26px);
   font-size: .9em;
   display: flex;
   flex-flow: column nowrap;
@@ -950,40 +962,12 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   z-index: 2;
 }
 
-.room-context.editMode {
-  /* Stretch to the maximum available space whilst not covering the conversation
-     toolbar (26px). */
-  height: calc(100% - 26px);
-}
-
 .room-invitation-overlay .room-context {
   position: relative;
   left: auto;
   bottom: auto;
   flex: 0 1 auto;
-}
-
-.room-invitation-overlay .room-context.editMode {
   height: 100%;
-}
-
-.room-context-content {
-  flex: 1 1 auto;
-  text-align: start;
-  display: flex;
-  flex-flow: row nowrap;
-  font-size: .9em;
-}
-
-.room-context-thumbnail {
-  /* 16px icon size + 3px border width. */
-  width: 19px;
-  max-height: 19px;
-  border: 3px solid #fff;
-  border-radius: 3px;
-  background-color: #fff;
-  -moz-margin-end: 1ch;
-  flex: 0 1 auto;
 }
 
 .room-context > .error-display-area.error {
@@ -1011,7 +995,7 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   margin-bottom: 1em;
 }
 
-.room-context-description,
+.room-context-label,
 .room-context > .checkbox-wrapper > label {
   color: #fff;
 }
@@ -1020,7 +1004,6 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   color: #707070;
 }
 
-.room-context-description,
 .room-context-comment {
   word-wrap: break-word;
 }
@@ -1079,8 +1062,7 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   align-self: flex-end;
 }
 
-.room-context-btn-close,
-.room-context-btn-edit {
+.room-context-btn-close {
   position: absolute;
   right: 8px;
   /* 8px offset + 2px border-top */
@@ -1096,29 +1078,14 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   cursor: pointer;
 }
 
-.room-context-btn-edit {
-  right: 20px;
-  background-image: url("../img/icons-10x10.svg#edit-darkergrey");
-}
-
-.room-context-btn-edit:hover,
-.room-context-btn-edit:hover:active {
-  background-image: url("../img/icons-10x10.svg#edit-active");
-}
-
 .room-context-btn-close:hover,
 .room-context-btn-close:hover:active {
   background-image: url("../img/icons-10x10.svg#close-active");
 }
 
-html[dir="rtl"] .room-context-btn-close,
-html[dir="rtl"] .room-context-btn-edit {
+html[dir="rtl"] .room-context-btn-close {
   right: auto;
   left: 8px;
-}
-
-html[dir="rtl"] .room-context-btn-edit {
-  left: 20px;
 }
 
 .media-layout {
@@ -1476,7 +1443,6 @@ html[dir="rtl"] .standalone .room-conversation-wrapper .room-inner-info-area {
   flex: 1 1 auto;
   max-height: 120px;
   min-height: 60px;
-  padding: .7em .5em 0;
 }
 
 .text-chat-box {
@@ -1491,24 +1457,65 @@ html[dir="rtl"] .standalone .room-conversation-wrapper .room-inner-info-area {
 }
 
 .text-chat-entry {
+  display: flex;
+  flex-direction: row;
+  margin-bottom: .5em;
   text-align: end;
-  margin-bottom: 1.5em;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  align-content: stretch;
+  align-items: flex-start;
 }
 
 .text-chat-entry > p {
-  border-width: 1px;
-  border-style: solid;
-  border-color: #0095dd;
-  border-radius: 10000px;
-  padding: .5em 1em;
+  position: relative;
+  z-index: 10;
   /* Drop the default margins from the 'p' element. */
   margin: 0;
-  /* inline-block stops the elements taking 100% of the text-chat-view width */
-  display: inline-block;
-  /* Split really long strings with no spaces appropriately, whilst limiting the
-     width to 100%. */
-  max-width: 100%;
+  padding: .7em;
+  /* leave some room for the chat bubble arrow */
+  max-width: 80%;
+  border-width: 1px;
+  border-style: solid;
+  border-color: #2ea4ff;
+  background: #fff;
   word-wrap: break-word;
+  word-wrap: break-word;
+  flex: 0 1 auto;
+  align-self: auto;
+}
+
+.text-chat-entry.sent > p,
+.text-chat-entry.received > p {
+  background: #fff;
+}
+
+.text-chat-entry.sent > p {
+  border-radius: 15px;
+  border-bottom-right-radius: 0;
+}
+
+.text-chat-entry.received > p {
+  border-radius: 15px;
+  border-top-left-radius: 0;
+}
+
+html[dir="rtl"] .text-chat-entry.sent > p {
+  border-radius: 15px;
+  border-bottom-left-radius: 0;
+}
+
+html[dir="rtl"] .text-chat-entry.received > p {
+  border-radius: 15px;
+  border-top-right-radius: 0;
+}
+
+.text-chat-entry.received > p {
+  order: 1;
+}
+
+.text-chat-entry.sent > p {
+  order: 1;
 }
 
 .text-chat-entry.received {
@@ -1519,8 +1526,114 @@ html[dir="rtl"] .standalone .room-conversation-wrapper .room-inner-info-area {
   border-color: #d8d8d8;
 }
 
-.text-chat-entry.special > p {
-  border: none;
+/* Text chat entry timestamp */
+.text-chat-entry-timestamp {
+  margin: 0 .2em;
+  color: #aaa;
+  font-style: italic;
+  font-size: .8em;
+  order: 0;
+  flex: 0 1 auto;
+  align-self: center;
+}
+
+/* Sent text chat entries should be on the right */
+.text-chat-entry.sent {
+  justify-content: flex-end;
+}
+
+.received > .text-chat-entry-timestamp {
+  order: 2;
+}
+
+.sent > .text-chat-entry-timestamp {
+  order: 0;
+}
+
+/* Pseudo element used to cover part between chat bubble and chat arrow. */
+.text-chat-entry > p:after {
+  position: absolute;
+  background: #fff;
+  content: "";
+}
+
+.text-chat-entry.sent > p:after {
+  right: -2px;
+  bottom: 0;
+  width: 15px;
+  height: 9px;
+  border-top-left-radius: 15px;
+  border-top-right-radius: 22px;
+}
+
+.text-chat-entry.received > p:after {
+  top: 0;
+  left: -2px;
+  width: 15px;
+  height: 9px;
+  border-bottom-left-radius: 22px;
+  border-bottom-right-radius: 15px;
+}
+
+html[dir="rtl"] .text-chat-entry.sent > p:after {
+  /* Reset */
+  right: auto;
+  left: -1px;
+  bottom: 0;
+  width: 15px;
+  height: 9px;
+}
+
+html[dir="rtl"] .text-chat-entry.received > p:after {
+  /* Reset */
+  left: auto;
+  top: 0;
+  right: -1px;
+  width: 15px;
+  height: 6px;
+}
+
+/* Text chat entry arrow */
+.text-chat-arrow {
+  width: 18px;
+  background-repeat: no-repeat;
+  flex: 0 1 auto;
+  position: relative;
+  z-index: 5;
+}
+
+.text-chat-entry.sent .text-chat-arrow {
+  margin-bottom: -1px;
+  margin-left: -11px;
+  height: 10px;
+  background-image: url("../img/chatbubble-arrow-right.svg");
+  order: 2;
+  align-self: flex-end;
+}
+
+.text-chat-entry.received .text-chat-arrow {
+  margin-left: 0;
+  margin-right: -9px;
+  height: 10px;
+  background-image: url("../img/chatbubble-arrow-left.svg");
+  order: 0;
+  align-self: auto;
+}
+
+html[dir="rtl"] .text-chat-arrow {
+  transform: scaleX(-1);
+}
+
+html[dir="rtl"] .text-chat-entry.sent .text-chat-arrow {
+  /* Reset margin. */
+  margin-left: 0;
+  margin-right: -11px;
+}
+
+html[dir="rtl"] .text-chat-entry.received .text-chat-arrow {
+  /* Reset margin. */
+  margin-right: 0;
+  margin-left: -10px;
 }
 
 .text-chat-entry.special.room-name {
@@ -1530,6 +1643,14 @@ html[dir="rtl"] .standalone .room-conversation-wrapper .room-inner-info-area {
   background-color: #E8F6FE;
   padding-bottom: 0;
   margin-bottom: 0;
+}
+
+.text-chat-entry.special.room-name p {
+  background: #E8F6FE;
+}
+
+.text-chat-entry.special > p {
+  border: none;
 }
 
 .text-chat-box {

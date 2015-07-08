@@ -33,6 +33,7 @@
 #include "xpcpublic.h"
 #include "nsObserverService.h"
 #include "nsFocusManager.h"
+#include "nsIInterfaceRequestorUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -140,7 +141,7 @@ static void
 MarkMessageManagers()
 {
   // The global message manager only exists in the root process.
-  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+  if (!XRE_IsParentProcess()) {
     return;
   }
   nsCOMPtr<nsIMessageBroadcaster> strongGlobalMM =
@@ -317,6 +318,8 @@ nsCCUncollectableMarker::Observe(nsISupports* aSubject, const char* aTopic,
                                  const char16_t* aData)
 {
   if (!strcmp(aTopic, "xpcom-shutdown")) {
+    Element::ClearContentUnbinder();
+
     nsCOMPtr<nsIObserverService> obs =
       mozilla::services::GetObserverService();
     if (!obs)
@@ -341,6 +344,9 @@ nsCCUncollectableMarker::Observe(nsISupports* aSubject, const char* aTopic,
     !strcmp(aTopic, "cycle-collector-forget-skippable");
 
   bool prepareForCC = !strcmp(aTopic, "cycle-collector-begin");
+  if (prepareForCC) {
+    Element::ClearContentUnbinder();
+  }
 
   // Increase generation to effectively unmark all current objects
   if (!++sGeneration) {

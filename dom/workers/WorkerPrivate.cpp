@@ -17,6 +17,7 @@
 #include "nsIDocShell.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIMemoryReporter.h"
+#include "nsINetworkInterceptController.h"
 #include "nsIPermissionManager.h"
 #include "nsIScriptError.h"
 #include "nsIScriptGlobalObject.h"
@@ -102,6 +103,7 @@
 #include "RuntimeService.h"
 #include "ScriptLoader.h"
 #include "ServiceWorkerManager.h"
+#include "ServiceWorkerWindowClient.h"
 #include "SharedWorker.h"
 #include "WorkerDebuggerManager.h"
 #include "WorkerFeature.h"
@@ -763,7 +765,14 @@ struct WorkerStructuredCloneCallbacks
   FreeTransfer(uint32_t aTag, JS::TransferableOwnership aOwnership,
                void *aContent, uint64_t aExtraData, void* aClosure)
   {
-    // Nothing to do.
+    if (aTag == SCTAG_DOM_MAP_MESSAGEPORT) {
+      MOZ_ASSERT(aClosure);
+      MOZ_ASSERT(!aContent);
+      auto* closure = static_cast<WorkerStructuredCloneClosure*>(aClosure);
+
+      MOZ_ASSERT(aExtraData < closure->mMessagePortIdentifiers.Length());
+      dom::MessagePort::ForceClose(closure->mMessagePortIdentifiers[aExtraData]);
+    }
   }
 };
 
@@ -2329,6 +2338,8 @@ WorkerLoadInfo::WorkerLoadInfo()
   , mIsInPrivilegedApp(false)
   , mIsInCertifiedApp(false)
   , mIndexedDBAllowed(false)
+  , mPrivateBrowsing(true)
+  , mServiceWorkersTestingInWindow(false)
 {
   MOZ_COUNT_CTOR(WorkerLoadInfo);
 }
@@ -2383,6 +2394,8 @@ WorkerLoadInfo::StealFrom(WorkerLoadInfo& aOther)
   mIsInPrivilegedApp = aOther.mIsInPrivilegedApp;
   mIsInCertifiedApp = aOther.mIsInCertifiedApp;
   mIndexedDBAllowed = aOther.mIndexedDBAllowed;
+  mPrivateBrowsing = aOther.mPrivateBrowsing;
+  mServiceWorkersTestingInWindow = aOther.mServiceWorkersTestingInWindow;
 }
 
 template <class Derived>
@@ -2692,7 +2705,7 @@ private:
 
     mAlreadyMappedToAddon = true;
 
-    if (XRE_GetProcessType() != GeckoProcessType_Default) {
+    if (!XRE_IsParentProcess()) {
       // Only try to access the service from the main process.
       return;
     }
@@ -3531,11 +3544,37 @@ WorkerPrivateParent<Derived>::DispatchMessageEventToMessagePort(
   AssertIsOnMainThread();
 
   JSAutoStructuredCloneBuffer buffer(Move(aBuffer));
+  const JSStructuredCloneCallbacks* callbacks =
+    WorkerStructuredCloneCallbacks(true);
+
+  class MOZ_STACK_CLASS AutoCloneBufferCleaner final
+  {
+  public:
+    AutoCloneBufferCleaner(JSAutoStructuredCloneBuffer& aBuffer,
+                           const JSStructuredCloneCallbacks* aCallbacks,
+                           WorkerStructuredCloneClosure& aClosure)
+      : mBuffer(aBuffer)
+      , mCallbacks(aCallbacks)
+      , mClosure(aClosure)
+    {}
+
+    ~AutoCloneBufferCleaner()
+    {
+      mBuffer.clear(mCallbacks, &mClosure);
+    }
+
+  private:
+    JSAutoStructuredCloneBuffer& mBuffer;
+    const JSStructuredCloneCallbacks* mCallbacks;
+    WorkerStructuredCloneClosure& mClosure;
+  };
 
   WorkerStructuredCloneClosure closure;
   closure.mClonedObjects.SwapElements(aClosure.mClonedObjects);
   MOZ_ASSERT(aClosure.mMessagePorts.IsEmpty());
   closure.mMessagePortIdentifiers.SwapElements(aClosure.mMessagePortIdentifiers);
+
+  AutoCloneBufferCleaner bufferCleaner(buffer, callbacks, closure);
 
   SharedWorker* sharedWorker;
   if (!mSharedWorkers.Get(aMessagePortSerial, &sharedWorker)) {
@@ -3563,8 +3602,6 @@ WorkerPrivateParent<Derived>::DispatchMessageEventToMessagePort(
                    &closure)) {
     return false;
   }
-
-  buffer.clear();
 
   nsRefPtr<MessageEvent> event = new MessageEvent(port, nullptr, nullptr);
   nsresult rv =
@@ -4156,6 +4193,7 @@ WorkerPrivateParent<Derived>::SetPrincipal(nsIPrincipal* aPrincipal,
   mLoadInfo.mLoadGroup = aLoadGroup;
 
   mLoadInfo.mPrincipalInfo = new PrincipalInfo();
+  mLoadInfo.mPrivateBrowsing = nsContentUtils::IsInPrivateBrowsing(aLoadGroup);
 
   MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
     PrincipalToPrincipalInfo(aPrincipal, mLoadInfo.mPrincipalInfo)));
@@ -4842,7 +4880,7 @@ WorkerPrivate::Constructor(JSContext* aCx,
 
     nsresult rv = GetLoadInfo(aCx, nullptr, parent, aScriptURL,
                               aIsChromeWorker, InheritLoadGroup,
-                              stackLoadInfo.ptr());
+                              aWorkerType, stackLoadInfo.ptr());
     if (NS_FAILED(rv)) {
       scriptloader::ReportLoadError(aCx, aScriptURL, rv, !parent);
       aRv.Throw(rv);
@@ -4900,6 +4938,7 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindow* aWindow,
                            WorkerPrivate* aParent, const nsAString& aScriptURL,
                            bool aIsChromeWorker,
                            LoadGroupBehavior aLoadGroupBehavior,
+                           WorkerType aWorkerType,
                            WorkerLoadInfo* aLoadInfo)
 {
   using namespace mozilla::dom::workers::scriptloader;
@@ -4957,6 +4996,9 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindow* aWindow,
     loadInfo.mFromWindow = aParent->IsFromWindow();
     loadInfo.mWindowID = aParent->WindowID();
     loadInfo.mIndexedDBAllowed = aParent->IsIndexedDBAllowed();
+    loadInfo.mPrivateBrowsing = aParent->IsInPrivateBrowsing();
+    loadInfo.mServiceWorkersTestingInWindow =
+      aParent->ServiceWorkersTestingInWindow();
   } else {
     AssertIsOnMainThread();
 
@@ -5001,6 +5043,9 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindow* aWindow,
       nsPIDOMWindow* outerWindow = globalWindow->GetOuterWindow();
       if (outerWindow) {
         loadInfo.mWindow = outerWindow->GetCurrentInnerWindow();
+        // TODO: fix this for SharedWorkers with multiple documents (bug 1177935)
+        loadInfo.mServiceWorkersTestingInWindow =
+          outerWindow->GetServiceWorkersTestingEnabled();
       }
 
       if (!loadInfo.mWindow ||
@@ -5076,6 +5121,7 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindow* aWindow,
       loadInfo.mFromWindow = true;
       loadInfo.mWindowID = globalWindow->WindowID();
       loadInfo.mIndexedDBAllowed = IDBFactory::AllowedForWindow(globalWindow);
+      loadInfo.mPrivateBrowsing = nsContentUtils::IsInPrivateBrowsing(document);
     } else {
       // Not a window
       MOZ_ASSERT(isChrome);
@@ -5117,6 +5163,7 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindow* aWindow,
       loadInfo.mFromWindow = false;
       loadInfo.mWindowID = UINT64_MAX;
       loadInfo.mIndexedDBAllowed = true;
+      loadInfo.mPrivateBrowsing = false;
     }
 
     MOZ_ASSERT(loadInfo.mPrincipal);
@@ -5145,6 +5192,7 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindow* aWindow,
     rv = ChannelFromScriptURLMainThread(loadInfo.mPrincipal, loadInfo.mBaseURI,
                                         document, loadInfo.mLoadGroup,
                                         aScriptURL,
+                                        ContentPolicyType(aWorkerType),
                                         getter_AddRefs(loadInfo.mChannel));
     NS_ENSURE_SUCCESS(rv, rv);
 
@@ -5962,11 +6010,13 @@ WorkerPrivate::AddFeature(JSContext* aCx, WorkerFeature* aFeature)
   }
 
   MOZ_ASSERT(!mFeatures.Contains(aFeature), "Already know about this one!");
-  mFeatures.AppendElement(aFeature);
 
-  return mFeatures.Length() == 1 ?
-         ModifyBusyCountFromWorker(aCx, true) :
-         true;
+  if (mFeatures.IsEmpty() && !ModifyBusyCountFromWorker(aCx, true)) {
+    return false;
+  }
+
+  mFeatures.AppendElement(aFeature);
+  return true;
 }
 
 void

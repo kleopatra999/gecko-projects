@@ -28,6 +28,9 @@
 #include "imgITools.h"
 #include "nsStringStream.h"
 #include "nsNetUtil.h"
+#include "nsIOutputStream.h"
+#include "nsNetCID.h"
+#include "prtime.h"
 #ifdef MOZ_PLACES
 #include "mozIAsyncFavicons.h"
 #endif
@@ -940,8 +943,8 @@ WinUtils::GetMouseInputSource()
 bool
 WinUtils::GetIsMouseFromTouch(uint32_t aEventType)
 {
-  const int MOZ_T_I_SIGNATURE = TABLET_INK_TOUCH | TABLET_INK_SIGNATURE;
-  const int MOZ_T_I_CHECK_TCH = TABLET_INK_TOUCH | TABLET_INK_CHECK;
+  const uint32_t MOZ_T_I_SIGNATURE = TABLET_INK_TOUCH | TABLET_INK_SIGNATURE;
+  const uint32_t MOZ_T_I_CHECK_TCH = TABLET_INK_TOUCH | TABLET_INK_CHECK;
   return ((aEventType == NS_MOUSE_MOVE ||
            aEventType == NS_MOUSE_BUTTON_DOWN ||
            aEventType == NS_MOUSE_BUTTON_UP) &&

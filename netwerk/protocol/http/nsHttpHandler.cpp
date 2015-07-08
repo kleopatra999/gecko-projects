@@ -29,7 +29,6 @@
 #include "nsCOMPtr.h"
 #include "nsNetCID.h"
 #include "prprf.h"
-#include "nsNetUtil.h"
 #include "nsAsyncRedirectVerifyHelper.h"
 #include "nsSocketTransportService2.h"
 #include "nsAlgorithm.h"
@@ -49,6 +48,8 @@
 #include "nsIParentalControlsService.h"
 #include "nsINetworkLinkService.h"
 #include "nsHttpChannelAuthProvider.h"
+#include "nsServiceManagerUtils.h"
+#include "nsComponentManagerUtils.h"
 
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/ipc/URIUtils.h"
@@ -182,6 +183,7 @@ nsHttpHandler::nsHttpHandler()
     , mParentalControlEnabled(false)
     , mTelemetryEnabled(false)
     , mAllowExperiments(true)
+    , mDebugObservations(false)
     , mHandlerActive(false)
     , mEnableSpdy(false)
     , mSpdyV31(true)
@@ -1439,6 +1441,15 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
         }
     }
 
+    // network.http.debug-observations
+    if (PREF_CHANGED("network.http.debug-observations")) {
+        cVar = false;
+        rv = prefs->GetBoolPref("network.http.debug-observations", &cVar);
+        if (NS_SUCCEEDED(rv)) {
+            mDebugObservations = cVar;
+        }
+    }
+
     //
     // Test HTTP Pipelining (bug796192)
     // If experiments are allowed and pipelining is Off,
@@ -2053,6 +2064,17 @@ nsHttpHandler::SpeculativeConnectInternal(nsIURI *aURI,
 
     if (!mHandlerActive)
         return NS_OK;
+
+    MOZ_ASSERT(NS_IsMainThread());
+    if (mDebugObservations && mObserverService) {
+        // this is basically used for test coverage of an otherwise 'hintable' feature
+        nsAutoCString spec;
+        aURI->GetSpec(spec);
+        spec.Append(anonymous ? NS_LITERAL_CSTRING("[A]") : NS_LITERAL_CSTRING("[.]"));
+        mObserverService->NotifyObservers(nullptr,
+                                          "speculative-connect-request",
+                                          NS_ConvertUTF8toUTF16(spec).get());
+    }
 
     nsISiteSecurityService* sss = gHttpHandler->GetSSService();
     bool isStsHost = false;

@@ -130,11 +130,11 @@
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIIOService.h"
-#include "nsIJSRuntimeService.h"
 #include "nsILineBreaker.h"
 #include "nsILoadContext.h"
 #include "nsILoadGroup.h"
 #include "nsIMemoryReporter.h"
+#include "nsIMIMEHeaderParam.h"
 #include "nsIMIMEService.h"
 #include "nsINode.h"
 #include "mozilla/dom/NodeInfo.h"
@@ -153,8 +153,10 @@
 #include "nsIScriptGlobalObject.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScriptSecurityManager.h"
+#include "nsIStreamConverterService.h"
 #include "nsIStringBundle.h"
 #include "nsIURI.h"
+#include "nsIURIWithPrincipal.h"
 #include "nsIURL.h"
 #include "nsIWebNavigation.h"
 #include "nsIWordBreaker.h"
@@ -2989,18 +2991,29 @@ nsContentUtils::IsInPrivateBrowsing(nsIDocument* aDoc)
   if (!aDoc) {
     return false;
   }
-  bool isPrivate = false;
+
   nsCOMPtr<nsILoadGroup> loadGroup = aDoc->GetDocumentLoadGroup();
-  nsCOMPtr<nsIInterfaceRequestor> callbacks;
   if (loadGroup) {
-    loadGroup->GetNotificationCallbacks(getter_AddRefs(callbacks));
-    if (callbacks) {
-      nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(callbacks);
-      isPrivate = loadContext && loadContext->UsePrivateBrowsing();
-    }
-  } else {
-    nsCOMPtr<nsIChannel> channel = aDoc->GetChannel();
-    isPrivate = channel && NS_UsePrivateBrowsing(channel);
+    return IsInPrivateBrowsing(loadGroup);
+  }
+
+  nsCOMPtr<nsIChannel> channel = aDoc->GetChannel();
+  return channel && NS_UsePrivateBrowsing(channel);
+}
+
+// static
+bool
+nsContentUtils::IsInPrivateBrowsing(nsILoadGroup* aLoadGroup)
+{
+  if (!aLoadGroup) {
+    return false;
+  }
+  bool isPrivate = false;
+  nsCOMPtr<nsIInterfaceRequestor> callbacks;
+  aLoadGroup->GetNotificationCallbacks(getter_AddRefs(callbacks));
+  if (callbacks) {
+    nsCOMPtr<nsILoadContext> loadContext = do_GetInterface(callbacks);
+    isPrivate = loadContext && loadContext->UsePrivateBrowsing();
   }
   return isPrivate;
 }
@@ -6490,6 +6503,19 @@ nsContentUtils::AllowXULXBLForPrincipal(nsIPrincipal* aPrincipal)
           IsSitePermAllow(aPrincipal, "allowXULXBL"));
 }
 
+bool
+nsContentUtils::IsPDFJSEnabled()
+{
+   nsCOMPtr<nsIStreamConverterService> convServ =
+     do_GetService("@mozilla.org/streamConverters;1");
+   nsresult rv = NS_ERROR_FAILURE;
+   bool canConvert = false;
+   if (convServ) {
+     rv = convServ->CanConvert("application/pdf", "text/html", &canConvert);
+   }
+   return NS_SUCCEEDED(rv) && canConvert;
+}
+
 already_AddRefed<nsIDocumentLoaderFactory>
 nsContentUtils::FindInternalContentViewer(const nsACString& aType,
                                           ContentViewerType* aLoaderType)
@@ -7861,4 +7887,55 @@ nsContentUtils::InternalContentPolicyTypeToExternal(nsContentPolicyType aType)
   default:
     return aType;
   }
+}
+
+
+nsresult
+nsContentUtils::SetFetchReferrerURIWithPolicy(nsIPrincipal* aPrincipal,
+                                              nsIDocument* aDoc,
+                                              nsIHttpChannel* aChannel)
+{
+  NS_ENSURE_ARG_POINTER(aPrincipal);
+  NS_ENSURE_ARG_POINTER(aChannel);
+
+  nsCOMPtr<nsIURI> principalURI;
+
+  if (IsSystemPrincipal(aPrincipal)) {
+    return NS_OK;
+  }
+
+  aPrincipal->GetURI(getter_AddRefs(principalURI));
+
+  if (!aDoc) {
+    return aChannel->SetReferrerWithPolicy(principalURI, net::RP_Default);
+  }
+
+  // If it weren't for history.push/replaceState, we could just use the
+  // principal's URI here.  But since we want changes to the URI effected
+  // by push/replaceState to be reflected in the XHR referrer, we have to
+  // be more clever.
+  //
+  // If the document's original URI (before any push/replaceStates) matches
+  // our principal, then we use the document's current URI (after
+  // push/replaceStates).  Otherwise (if the document is, say, a data:
+  // URI), we just use the principal's URI.
+  nsCOMPtr<nsIURI> docCurURI = aDoc->GetDocumentURI();
+  nsCOMPtr<nsIURI> docOrigURI = aDoc->GetOriginalURI();
+
+  nsCOMPtr<nsIURI> referrerURI;
+
+  if (principalURI && docCurURI && docOrigURI) {
+    bool equal = false;
+    principalURI->Equals(docOrigURI, &equal);
+    if (equal) {
+      referrerURI = docCurURI;
+    }
+  }
+
+  if (!referrerURI) {
+    referrerURI = principalURI;
+  }
+
+  net::ReferrerPolicy referrerPolicy = aDoc->GetReferrerPolicy();
+  return aChannel->SetReferrerWithPolicy(referrerURI, referrerPolicy);
 }

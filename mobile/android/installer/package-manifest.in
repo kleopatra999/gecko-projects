@@ -42,6 +42,7 @@
 @BINPATH@/@DLL_PREFIX@plds4@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@nspr4@DLL_SUFFIX@
 #endif
+@BINPATH@/@DLL_PREFIX@lgpllibs@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@omxplugin@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@omxplugingb@DLL_SUFFIX@
 @BINPATH@/@DLL_PREFIX@omxplugingb235@DLL_SUFFIX@
@@ -231,7 +232,6 @@
 @BINPATH@/components/plugin.xpt
 @BINPATH@/components/pref.xpt
 @BINPATH@/components/prefetch.xpt
-@BINPATH@/components/profile.xpt
 #ifdef MOZ_ENABLE_PROFILER_SPS
 @BINPATH@/components/profiler.xpt
 #endif
@@ -241,9 +241,7 @@
 @BINPATH@/components/saxparser.xpt
 @BINPATH@/components/sessionstore.xpt
 @BINPATH@/components/services-crypto-component.xpt
-#ifdef MOZ_CAPTIVEDETECT
 @BINPATH@/components/captivedetect.xpt
-#endif
 @BINPATH@/components/shellservice.xpt
 @BINPATH@/components/shistory.xpt
 @BINPATH@/components/spellchecker.xpt
@@ -438,10 +436,8 @@
 @BINPATH@/components/HealthReportService.js
 #endif
 
-#ifdef MOZ_CAPTIVEDETECT
 @BINPATH@/components/CaptivePortalDetectComponents.manifest
 @BINPATH@/components/captivedetect.js
-#endif
 
 #ifdef MOZ_WEBSPEECH
 @BINPATH@/components/dom_webspeechsynth.xpt
@@ -450,6 +446,7 @@
 #ifdef MOZ_DEBUG
 @BINPATH@/components/TestInterfaceJS.js
 @BINPATH@/components/TestInterfaceJS.manifest
+@BINPATH@/components/TestInterfaceJSMaplike.js
 #endif
 
 @BINPATH@/components/nsAsyncShutdown.manifest

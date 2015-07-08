@@ -32,6 +32,7 @@
 
 #include "asmjs/AsmJSSignalHandlers.h"
 #include "jit/arm/Simulator-arm.h"
+#include "jit/arm64/vixl/Simulator-vixl.h"
 #include "jit/JitCompartment.h"
 #include "jit/mips/Simulator-mips.h"
 #include "jit/PcScriptCache.h"
@@ -734,12 +735,6 @@ JSRuntime::updateMallocCounter(JS::Zone* zone, size_t nbytes)
     gc.updateMallocCounter(zone, nbytes);
 }
 
-JS_FRIEND_API(void)
-JSRuntime::onTooMuchMalloc()
-{
-    gc.onTooMuchMalloc();
-}
-
 JS_FRIEND_API(void*)
 JSRuntime::onOutOfMemory(AllocFunction allocFunc, size_t nbytes, void* reallocPtr,
                          JSContext* maybecx)
@@ -749,27 +744,29 @@ JSRuntime::onOutOfMemory(AllocFunction allocFunc, size_t nbytes, void* reallocPt
     if (isHeapBusy())
         return nullptr;
 
-    /*
-     * Retry when we are done with the background sweeping and have stopped
-     * all the allocations and released the empty GC chunks.
-     */
-    gc.onOutOfMallocMemory();
-    void* p;
-    switch (allocFunc) {
-      case AllocFunction::Malloc:
-        p = js_malloc(nbytes);
-        break;
-      case AllocFunction::Calloc:
-        p = js_calloc(nbytes);
-        break;
-      case AllocFunction::Realloc:
-        p = js_realloc(reallocPtr, nbytes);
-        break;
-      default:
-        MOZ_CRASH();
+    if (!oom::IsSimulatedOOMAllocation()) {
+        /*
+         * Retry when we are done with the background sweeping and have stopped
+         * all the allocations and released the empty GC chunks.
+         */
+        gc.onOutOfMallocMemory();
+        void* p;
+        switch (allocFunc) {
+          case AllocFunction::Malloc:
+            p = js_malloc(nbytes);
+            break;
+          case AllocFunction::Calloc:
+            p = js_calloc(nbytes);
+            break;
+          case AllocFunction::Realloc:
+            p = js_realloc(reallocPtr, nbytes);
+            break;
+          default:
+            MOZ_CRASH();
+        }
+        if (p)
+            return p;
     }
-    if (p)
-        return p;
 
     if (maybecx)
         ReportOutOfMemory(maybecx);

@@ -158,7 +158,10 @@ parent:
                       nsString aName,
                       nsString aFeatures,
                       nsString aBaseURI)
-      returns (bool windowOpened, FrameScriptInfo[] frameScripts, nsCString urlToLoad);
+      returns (nsresult rv,
+               bool windowOpened,
+               FrameScriptInfo[] frameScripts,
+               nsCString urlToLoad);
 
     sync SyncMessage(nsString aMessage, ClonedMessageData aData,
                      CpowEntry[] aCpows, Principal aPrincipal)
@@ -575,6 +578,18 @@ child:
     Deactivate();
 
     ParentActivated(bool aActivated);
+
+    /**
+     * StopIMEStateManagement() is called when the process loses focus and
+     * should stop managing IME state.
+     */
+    StopIMEStateManagement();
+
+    /**
+     * MenuKeyboardListenerInstalled() is called when menu keyboard listener
+     * is installed in the parent process.
+     */
+    MenuKeyboardListenerInstalled(bool aInstalled);
 
     /**
      * @see nsIDOMWindowUtils sendMouseEvent.

@@ -135,6 +135,12 @@ pref("dom.workers.sharedWorkers.enabled", true);
 // Service workers
 pref("dom.serviceWorkers.enabled", false);
 
+// Allow service workers to intercept network requests using the fetch event
+pref("dom.serviceWorkers.interception.enabled", false);
+
+// Allow service workers to intercept opaque (cross origin) responses
+pref("dom.serviceWorkers.interception.opaque.enabled", false);
+
 // Whether nonzero values can be returned from performance.timing.*
 pref("dom.enable_performance", true);
 
@@ -375,6 +381,7 @@ pref("media.navigator.permission.disabled", false);
 pref("media.peerconnection.default_iceservers", "[]");
 pref("media.peerconnection.ice.loopback", false); // Set only for testing in offline environments.
 pref("media.peerconnection.ice.tcp", false);
+pref("media.peerconnection.ice.link_local", false); // Set only for testing IPV6 in networks that don't assign IPV6 addresses
 pref("media.peerconnection.use_document_iceservers", true);
 pref("media.peerconnection.identity.enabled", true);
 pref("media.peerconnection.identity.timeout", 10000);
@@ -482,6 +489,10 @@ pref("media.autoplay.enabled", true);
 // The default number of decoded video frames that are enqueued in
 // MediaDecoderReader's mVideoQueue.
 pref("media.video-queue.default-size", 10);
+
+// The maximum number of queued frames to send to the compositor.
+// By default, send all of them.
+pref("media.video-queue.send-to-compositor-size", 9999);
 
 // Whether to disable the video stats to prevent fingerprinting
 pref("media.video_stats.enabled", true);
@@ -1272,6 +1283,9 @@ pref("network.http.referer.XOriginPolicy", 0);
 // Controls whether we send HTTPS referres to other HTTPS sites.
 // By default this is enabled for compatibility (see bug 141641)
 pref("network.http.sendSecureXSiteReferrer", true);
+
+// Controls whether referrer attributes in <a>, <img>, <area>, and <iframe> are honoured
+pref("network.http.enablePerElementReferrer", false);
 
 // Maximum number of consecutive redirects before aborting.
 pref("network.http.redirection-limit", 20);
@@ -2246,11 +2260,10 @@ pref("layout.css.scope-pseudo.enabled", true);
 pref("layout.css.background-blend-mode.enabled", true);
 
 // Is support for CSS vertical text enabled?
-#ifdef RELEASE_BUILD
-pref("layout.css.vertical-text.enabled", false);
-#else
 pref("layout.css.vertical-text.enabled", true);
-#endif
+
+// Is support for CSS text-combine-upright (tate-chu-yoko) enabled?
+pref("layout.css.text-combine-upright.enabled", false);
 
 // Is support for object-fit and object-position enabled?
 pref("layout.css.object-fit-and-position.enabled", true);
@@ -2324,11 +2337,7 @@ pref("layout.css.scroll-behavior.damping-ratio", "1.0");
 pref("layout.css.scroll-snap.enabled", true);
 
 // Is support for document.fonts enabled?
-#ifdef RELEASE_BUILD
-pref("layout.css.font-loading-api.enabled", false);
-#else
 pref("layout.css.font-loading-api.enabled", true);
-#endif
 
 // Are the MouseEvent.offsetX/Y properties enabled?
 pref("dom.mouseEvent.offsetXY.enabled", true);
@@ -4034,6 +4043,13 @@ pref("image.high_quality_downscaling.min_factor", 1000);
 // interpreted as number of decoded bytes.
 pref("image.high_quality_upscaling.max_size", 20971520);
 
+// The threshold for inferring that changes to an <img> element's |src|
+// attribute by JavaScript represent an animation, in milliseconds. If the |src|
+// attribute is changing more frequently than this value, then we enter a
+// special "animation mode" which is designed to eliminate flicker. Set to 0 to
+// disable.
+pref("image.infer-src-animation.threshold-ms", 2000);
+
 // Should we optimize away the surfaces of single-color images?
 pref("image.single-color-optimization.enabled", true);
 
@@ -4208,11 +4224,6 @@ pref("layers.offmainthreadcomposition.enabled", true);
 // 0  -> full-tilt mode: Recomposite even if not transaction occured.
 pref("layers.offmainthreadcomposition.frame-rate", -1);
 
-// Asynchonous video compositing using the ImageBridge IPDL protocol.
-// requires off-main-thread compositing.
-pref("layers.async-video.enabled", true);
-pref("layers.async-video-oop.enabled",true);
-
 #ifdef MOZ_WIDGET_UIKIT
 pref("layers.async-pan-zoom.enabled", true);
 #endif
@@ -4235,11 +4246,7 @@ pref("layers.offmainthreadcomposition.testing.enabled", false);
 pref("layers.offmainthreadcomposition.force-basic", false);
 
 // Whether to animate simple opacity and transforms on the compositor
-#ifdef RELEASE_BUILD
-pref("layers.offmainthreadcomposition.async-animations", false);
-#else
 pref("layers.offmainthreadcomposition.async-animations", true);
-#endif
 
 // Whether to log information about off main thread animations to stderr
 pref("layers.offmainthreadcomposition.log-animations", false);
@@ -4619,11 +4626,19 @@ pref("ui.touch_activation.duration_ms", 10);
 // actions when the fifo is written to.  Disable this in general.
 pref("memory_info_dumper.watch_fifo.enabled", false);
 
-#ifdef MOZ_CAPTIVEDETECT
+// If minInterval is 0, the check will only happen
+// when the service has a strong suspicion we are in a captive portal
+pref("network.captive-portal-service.minInterval", 60000); // 60 seconds
+pref("network.captive-portal-service.maxInterval", 1500000); // 25 minutes
+// Every 10 checks, the delay is increased by a factor of 5
+pref("network.captive-portal-service.backoffFactor", "5.0");
+pref("network.captive-portal-service.enabled", false);
+
+pref("captivedetect.canonicalURL", "http://detectportal.firefox.com/success.txt");
+pref("captivedetect.canonicalContent", "success\n");
 pref("captivedetect.maxWaitingTime", 5000);
 pref("captivedetect.pollingTime", 3000);
 pref("captivedetect.maxRetryCount", 5);
-#endif
 
 #ifdef RELEASE_BUILD
 pref("dom.forms.inputmode", false);
@@ -4774,11 +4789,7 @@ pref("camera.control.face_detection.enabled", true);
 
 
 // SW Cache API
-#ifdef RELEASE_BUILD
-pref("dom.caches.enabled", false);
-#else
 pref("dom.caches.enabled", true);
-#endif // RELEASE_BUILD
 
 #ifdef MOZ_WIDGET_GONK
 // Empirically, this is the value returned by hal::GetTotalSystemMemory()

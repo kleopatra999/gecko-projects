@@ -701,6 +701,9 @@ public:
   }
 };
 
+// A generic promise type that does the trick for simple use cases.
+typedef MediaPromise<bool, nsresult, /* IsExclusive = */ false> GenericPromise;
+
 /*
  * Class to encapsulate a promise for a particular role. Use this as the member
  * variable for a class whose method returns a promise.
@@ -907,6 +910,22 @@ protected:
   Arg2Type mArg2;
 };
 
+template<typename PromiseType, typename ThisType, typename Arg1Type, typename Arg2Type, typename Arg3Type>
+class MethodCallWithThreeArgs : public MethodCallBase<PromiseType>
+{
+public:
+  typedef nsRefPtr<PromiseType>(ThisType::*Type)(Arg1Type, Arg2Type, Arg3Type);
+  MethodCallWithThreeArgs(ThisType* aThisVal, Type aMethod, Arg1Type aArg1, Arg2Type aArg2, Arg3Type aArg3)
+    : mThisVal(aThisVal), mMethod(aMethod), mArg1(aArg1), mArg2(aArg2), mArg3(aArg3) {}
+  nsRefPtr<PromiseType> Invoke() override { return ((*mThisVal).*mMethod)(mArg1, mArg2, mArg3); }
+protected:
+  nsRefPtr<ThisType> mThisVal;
+  Type mMethod;
+  Arg1Type mArg1;
+  Arg2Type mArg2;
+  Arg3Type mArg3;
+};
+
 template<typename PromiseType>
 class ProxyRunnable : public nsRunnable
 {
@@ -967,6 +986,16 @@ ProxyMediaCall(AbstractThread* aTarget, ThisType* aThisVal, const char* aCallerN
 {
   typedef detail::MethodCallWithTwoArgs<PromiseType, ThisType, Arg1Type, Arg2Type> MethodCallType;
   MethodCallType* methodCall = new MethodCallType(aThisVal, aMethod, aArg1, aArg2);
+  return detail::ProxyInternal(aTarget, methodCall, aCallerName);
+}
+
+template<typename PromiseType, typename ThisType, typename Arg1Type, typename Arg2Type, typename Arg3Type>
+static nsRefPtr<PromiseType>
+ProxyMediaCall(AbstractThread* aTarget, ThisType* aThisVal, const char* aCallerName,
+               nsRefPtr<PromiseType>(ThisType::*aMethod)(Arg1Type, Arg2Type, Arg3Type), Arg1Type aArg1, Arg2Type aArg2, Arg3Type aArg3)
+{
+  typedef detail::MethodCallWithThreeArgs<PromiseType, ThisType, Arg1Type, Arg2Type, Arg3Type> MethodCallType;
+  MethodCallType* methodCall = new MethodCallType(aThisVal, aMethod, aArg1, aArg2, aArg3);
   return detail::ProxyInternal(aTarget, methodCall, aCallerName);
 }
 

@@ -22,8 +22,10 @@
     macro(ArrayType, ArrayType, "ArrayType") \
     macro(ArrayValues, ArrayValues, "ArrayValues") \
     macro(Async, Async, "Async") \
+    macro(breakdown, breakdown, "breakdown") \
     macro(buffer, buffer, "buffer") \
     macro(builder, builder, "builder") \
+    macro(by, by, "by") \
     macro(byteLength, byteLength, "byteLength") \
     macro(byteAlignment, byteAlignment, "byteAlignment") \
     macro(byteOffset, byteOffset, "byteOffset") \
@@ -85,6 +87,7 @@
     macro(float64, float64, "float64") \
     macro(float64x2, float64x2, "float64x2") \
     macro(forceInterpreter, forceInterpreter, "forceInterpreter") \
+    macro(forEach, forEach, "forEach") \
     macro(format, format, "format") \
     macro(frame, frame, "frame") \
     macro(from, from, "from") \
@@ -106,6 +109,8 @@
     macro(InitializeNumberFormat, InitializeNumberFormat, "InitializeNumberFormat") \
     macro(innermost, innermost, "innermost") \
     macro(input, input, "input") \
+    macro(int8x16, int8x16, "int8x16") \
+    macro(int16x8, int16x8, "int16x8") \
     macro(int32x4, int32x4, "int32x4") \
     macro(isFinite, isFinite, "isFinite") \
     macro(isNaN, isNaN, "isNaN") \
@@ -120,6 +125,7 @@
     macro(iteratorIntrinsic, iteratorIntrinsic, "__iterator__") \
     macro(join, join, "join") \
     macro(keys, keys, "keys") \
+    macro(label, label, "label") \
     macro(lastIndex, lastIndex, "lastIndex") \
     macro(LegacyGeneratorCloseInternal, LegacyGeneratorCloseInternal, "LegacyGeneratorCloseInternal") \
     macro(length, length, "length") \
@@ -147,6 +153,7 @@
     macro(NFKC, NFKC, "NFKC") \
     macro(NFKD, NFKD, "NFKD") \
     macro(nonincrementalReason, nonincrementalReason, "nonincrementalReason") \
+    macro(noStack, noStack, "noStack") \
     macro(noSuchMethod, noSuchMethod, "__noSuchMethod__") \
     macro(NumberFormat, NumberFormat, "NumberFormat") \
     macro(NumberFormatFormatGet, NumberFormatFormatGet, "Intl_NumberFormat_format_get") \
@@ -198,6 +205,7 @@
     macro(super, super, "super") \
     macro(target, target, "target") \
     macro(test, test, "test") \
+    macro(then, then, "then") \
     macro(throw, throw_, "throw") \
     macro(timestamp, timestamp, "timestamp") \
     macro(timeZone, timeZone, "timeZone") \

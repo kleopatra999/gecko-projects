@@ -12,6 +12,7 @@
 
 #include "nsHttpHandler.h"
 #include "nsMimeTypes.h"
+#include "nsNetCID.h"
 #include "nsNetUtil.h"
 
 #include "nsICachingChannel.h"
@@ -1536,15 +1537,6 @@ HttpBaseChannel::RedirectTo(nsIURI *newURI)
 //-----------------------------------------------------------------------------
 
 NS_IMETHODIMP
-HttpBaseChannel::ContinueBeginConnect()
-{
-  MOZ_ASSERT(XRE_GetProcessType() != GeckoProcessType_Default,
-             "The parent overrides this");
-  MOZ_ASSERT(false, "This method must be overridden");
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
 HttpBaseChannel::GetTopWindowURI(nsIURI **aTopWindowURI)
 {
   nsresult rv = NS_OK;
@@ -2192,7 +2184,7 @@ HttpBaseChannel::AddCookiesToRequest()
   }
 
   bool useCookieService =
-    (XRE_GetProcessType() == GeckoProcessType_Default);
+    (XRE_IsParentProcess());
   nsXPIDLCString cookie;
   if (useCookieService) {
     nsICookieService *cs = gHttpHandler->GetCookieService();

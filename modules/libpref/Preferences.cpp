@@ -23,6 +23,9 @@
 #include "nsIFile.h"
 #include "nsIInputStream.h"
 #include "nsIObserverService.h"
+#include "nsIOutputStream.h"
+#include "nsISafeOutputStream.h"
+#include "nsISimpleEnumerator.h"
 #include "nsIStringEnumerator.h"
 #include "nsIZipReader.h"
 #include "nsPrefBranch.h"
@@ -50,7 +53,7 @@
 
 #ifdef DEBUG
 #define ENSURE_MAIN_PROCESS(message, pref) do {                                \
-  if (MOZ_UNLIKELY(XRE_GetProcessType() != GeckoProcessType_Default)) {        \
+  if (MOZ_UNLIKELY(!XRE_IsParentProcess())) {        \
     nsPrintfCString msg("ENSURE_MAIN_PROCESS failed. %s %s", message, pref);   \
     NS_WARNING(msg.get());                                                     \
     return NS_ERROR_NOT_AVAILABLE;                                             \
@@ -58,7 +61,7 @@
 } while (0);
 #else
 #define ENSURE_MAIN_PROCESS(message, pref)                                     \
-  if (MOZ_UNLIKELY(XRE_GetProcessType() != GeckoProcessType_Default)) {        \
+  if (MOZ_UNLIKELY(!XRE_IsParentProcess())) {        \
     return NS_ERROR_NOT_AVAILABLE;                                             \
   }
 #endif
@@ -529,7 +532,7 @@ Preferences::Init()
   NS_ENSURE_SUCCESS(rv, rv);
 
   using mozilla::dom::ContentChild;
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     InfallibleTArray<PrefSetting> prefs;
     ContentChild::GetSingleton()->SendReadPrefsArray(&prefs);
 
@@ -580,7 +583,7 @@ NS_IMETHODIMP
 Preferences::Observe(nsISupports *aSubject, const char *aTopic,
                      const char16_t *someData)
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content)
+  if (XRE_IsContentProcess())
     return NS_ERROR_NOT_AVAILABLE;
 
   nsresult rv = NS_OK;
@@ -605,7 +608,7 @@ Preferences::Observe(nsISupports *aSubject, const char *aTopic,
 NS_IMETHODIMP
 Preferences::ReadUserPrefs(nsIFile *aFile)
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     NS_ERROR("cannot load prefs from content process");
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -635,7 +638,7 @@ Preferences::ReadUserPrefs(nsIFile *aFile)
 NS_IMETHODIMP
 Preferences::ResetPrefs()
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     NS_ERROR("cannot reset prefs from content process");
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -651,7 +654,7 @@ Preferences::ResetPrefs()
 NS_IMETHODIMP
 Preferences::ResetUserPrefs()
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     NS_ERROR("cannot reset user prefs from content process");
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -663,7 +666,7 @@ Preferences::ResetUserPrefs()
 NS_IMETHODIMP
 Preferences::SavePrefFile(nsIFile *aFile)
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     NS_ERROR("cannot save pref file from content process");
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -737,7 +740,11 @@ void
 Preferences::GetPreferences(InfallibleTArray<PrefSetting>* aPrefs)
 {
   aPrefs->SetCapacity(gHashTable->Capacity());
-  PL_DHashTableEnumerate(gHashTable, pref_GetPrefs, aPrefs);
+  for (auto iter = gHashTable->Iter(); !iter.Done(); iter.Next()) {
+    auto entry = static_cast<PrefHashEntry*>(iter.Get());
+    dom::PrefSetting *pref = aPrefs->AppendElement();
+    pref_GetPrefFromEntry(entry, pref);
+  }
 }
 
 NS_IMETHODIMP
@@ -958,12 +965,9 @@ Preferences::WritePrefFile(nsIFile* aFile)
 
   nsAutoArrayPtr<char*> valueArray(new char*[gHashTable->EntryCount()]);
   memset(valueArray, 0, gHashTable->EntryCount() * sizeof(char*));
-  pref_saveArgs saveArgs;
-  saveArgs.prefArray = valueArray;
-  saveArgs.saveTypes = SAVE_ALL;
 
   // get the lines that we're supposed to be writing to the file
-  PL_DHashTableEnumerate(gHashTable, pref_savePref, &saveArgs);
+  pref_savePrefs(gHashTable, valueArray);
 
   /* Sort the preferences to make a readable file on disk */
   NS_QuickSort(valueArray, gHashTable->EntryCount(), sizeof(char *),

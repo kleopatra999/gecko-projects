@@ -91,11 +91,13 @@ WEBIDL_FILES = [
     'CSPDictionaries.webidl',
     'CSPReport.webidl',
     'CSS.webidl',
+    'CSSAnimation.webidl',
     'CSSLexer.webidl',
     'CSSPrimitiveValue.webidl',
     'CSSRuleList.webidl',
     'CSSStyleDeclaration.webidl',
     'CSSStyleSheet.webidl',
+    'CSSTransition.webidl',
     'CSSValue.webidl',
     'CSSValueList.webidl',
     'DataContainerEvent.webidl',
@@ -184,6 +186,7 @@ WEBIDL_FILES = [
     'HTMLDocument.webidl',
     'HTMLElement.webidl',
     'HTMLEmbedElement.webidl',
+    'HTMLExtAppElement.webidl',
     'HTMLFieldSetElement.webidl',
     'HTMLFontElement.webidl',
     'HTMLFormControlsCollection.webidl',
@@ -288,6 +291,7 @@ WEBIDL_FILES = [
     'MediaStreamError.webidl',
     'MediaStreamTrack.webidl',
     'MediaTrackConstraintSet.webidl',
+    'MediaTrackSupportedConstraints.webidl',
     'MenuBoxObject.webidl',
     'MessageChannel.webidl',
     'MessageEvent.webidl',
@@ -370,6 +374,7 @@ WEBIDL_FILES = [
     'ResourceStatsManager.webidl',
     'Response.webidl',
     'RGBColor.webidl',
+    'RTCCertificate.webidl',
     'RTCConfiguration.webidl',
     'RTCIceCandidate.webidl',
     'RTCIdentityAssertion.webidl',
@@ -611,6 +616,7 @@ if CONFIG['MOZ_WEBSPEECH']:
         'SpeechRecognitionResult.webidl',
         'SpeechRecognitionResultList.webidl',
         'SpeechSynthesis.webidl',
+        'SpeechSynthesisErrorEvent.webidl',
         'SpeechSynthesisEvent.webidl',
         'SpeechSynthesisUtterance.webidl',
         'SpeechSynthesisVoice.webidl',
@@ -643,7 +649,9 @@ WEBIDL_FILES += [
 # We only expose our prefable test interfaces in debug builds, just to be on
 # the safe side.
 if CONFIG['MOZ_DEBUG']:
-    WEBIDL_FILES += ['TestInterfaceJS.webidl', 'TestInterfaceJSDictionaries.webidl']
+    WEBIDL_FILES += ['TestInterfaceJS.webidl',
+                     'TestInterfaceJSDictionaries.webidl',
+                     'TestInterfaceJSMaplikeSetlike.webidl']
 
 if CONFIG['MOZ_B2G_BT']:
     if CONFIG['MOZ_B2G_BT_API_V1']:
@@ -741,6 +749,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     'DOMTransactionEvent.webidl',
     'DownloadEvent.webidl',
     'ErrorEvent.webidl',
+    'ExternalAppEvent.webidl',
     'HashChangeEvent.webidl',
     'IccChangeEvent.webidl',
     'ImageCaptureErrorEvent.webidl',
@@ -786,6 +795,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
 if CONFIG['MOZ_WEBSPEECH']:
     GENERATED_EVENTS_WEBIDL_FILES += [
         'SpeechRecognitionEvent.webidl',
+        'SpeechSynthesisErrorEvent.webidl',
         'SpeechSynthesisEvent.webidl',
     ]
 

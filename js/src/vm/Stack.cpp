@@ -1377,26 +1377,6 @@ NonBuiltinScriptFrameIter::settle()
 
 /*****************************************************************************/
 
-JSObject*
-AbstractFramePtr::evalPrevScopeChain(JSContext* cx) const
-{
-    // Eval frames are not compiled by Ion, though their caller might be.
-    AllFramesIter iter(cx);
-    while (iter.isIon() || iter.abstractFramePtr() != *this)
-        ++iter;
-    ++iter;
-    return iter.scopeChain(cx);
-}
-
-bool
-AbstractFramePtr::hasPushedSPSFrame() const
-{
-    if (isInterpreterFrame())
-        return asInterpreterFrame()->hasPushedSPSFrame();
-    MOZ_ASSERT(isBaselineFrame());
-    return false;
-}
-
 jit::JitActivation::JitActivation(JSContext* cx, CalleeToken entryPoint, bool active)
   : Activation(cx, Jit),
     active_(active),

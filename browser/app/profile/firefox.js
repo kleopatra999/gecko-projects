@@ -340,6 +340,7 @@ pref("browser.urlbar.restrict.bookmark", "*");
 pref("browser.urlbar.restrict.tag", "+");
 pref("browser.urlbar.restrict.openpage", "%");
 pref("browser.urlbar.restrict.typed", "~");
+pref("browser.urlbar.restrict.searches", "$");
 pref("browser.urlbar.match.title", "#");
 pref("browser.urlbar.match.url", "@");
 
@@ -348,7 +349,11 @@ pref("browser.urlbar.match.url", "@");
 pref("browser.urlbar.suggest.history",              true);
 pref("browser.urlbar.suggest.bookmark",             true);
 pref("browser.urlbar.suggest.openpage",             true);
+#ifdef NIGHTLY_BUILD
 pref("browser.urlbar.suggest.searches",             true);
+#else
+pref("browser.urlbar.suggest.searches",             false);
+#endif
 
 // Restrictions to current suggestions can also be applied (intersection).
 // Typed suggestion works only if history is set to true.
@@ -416,6 +421,12 @@ pref("browser.search.showOneOffButtons", true);
 
 // comma seperated list of of engines to hide in the search panel.
 pref("browser.search.hiddenOneOffs", "");
+
+#ifdef XP_WIN
+pref("browser.search.redirectWindowsSearch", true);
+#else
+pref("browser.search.redirectWindowsSearch", false);
+#endif
 
 pref("browser.sessionhistory.max_entries", 50);
 
@@ -1660,8 +1671,6 @@ pref("prompts.tab_modal.enabled", true);
 // Whether the Panorama should animate going in/out of tabs
 pref("browser.panorama.animate_zoom", true);
 
-// Defines the url to be used for new tabs.
-pref("browser.newtab.url", "about:newtab");
 // Activates preloading of the new tab url.
 pref("browser.newtab.preload", true);
 
@@ -1673,6 +1682,9 @@ pref("browser.newtabpage.updateIntroShown", false);
 
 // Toggles the content of 'about:newtab'. Shows the grid when enabled.
 pref("browser.newtabpage.enabled", true);
+
+// Toggles the enhanced content of 'about:newtab'. Shows sponsored tiles.
+sticky_pref("browser.newtabpage.enhanced", true);
 
 // number of rows of newtab grid
 pref("browser.newtabpage.rows", 3);
@@ -1728,7 +1740,7 @@ pref("shumway.swf.whitelist", "http://www.areweflashyet.com/*.swf");
 pref("image.mem.max_decoded_image_kb", 256000);
 
 pref("loop.enabled", true);
-pref("loop.textChat.enabled", false);
+pref("loop.textChat.enabled", true);
 pref("loop.server", "https://loop.services.mozilla.com/v0");
 pref("loop.seenToS", "unseen");
 pref("loop.showPartnerLogo", true);
@@ -1800,7 +1812,11 @@ pref("geo.wifi.uri", "https://location.services.mozilla.com/v1/geolocate?key=%MO
 #endif
 
 #ifdef XP_MACOSX
+#ifdef RELEASE_BUILD
 pref("geo.provider.use_corelocation", false);
+#else
+pref("geo.provider.use_corelocation", true);
+#endif
 #endif
 
 #ifdef XP_WIN

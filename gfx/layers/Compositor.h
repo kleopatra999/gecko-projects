@@ -8,7 +8,7 @@
 
 #include "Units.h"                      // for ScreenPoint
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
-#include "mozilla/RefPtr.h"             // for TemporaryRef, RefCounted
+#include "mozilla/RefPtr.h"             // for already_AddRefed, RefCounted
 #include "mozilla/gfx/Point.h"          // for IntSize, Point
 #include "mozilla/gfx/Rect.h"           // for Rect, IntRect
 #include "mozilla/gfx/Types.h"          // for Float
@@ -191,7 +191,7 @@ public:
   {
   }
 
-  virtual TemporaryRef<DataTextureSource> CreateDataTextureSource(TextureFlags aFlags = TextureFlags::NO_FLAGS) = 0;
+  virtual already_AddRefed<DataTextureSource> CreateDataTextureSource(TextureFlags aFlags = TextureFlags::NO_FLAGS) = 0;
   virtual bool Initialize() = 0;
   virtual void Destroy() = 0;
 
@@ -229,6 +229,10 @@ public:
     mTarget = aTarget;
     mTargetBounds = aRect;
   }
+  gfx::DrawTarget* GetTargetContext() const
+  {
+    return mTarget;
+  }
   void ClearTargetContext()
   {
     mTarget = nullptr;
@@ -253,7 +257,7 @@ public:
    * Creates a Surface that can be used as a rendering target by this
    * compositor.
    */
-  virtual TemporaryRef<CompositingRenderTarget>
+  virtual already_AddRefed<CompositingRenderTarget>
   CreateRenderTarget(const gfx::IntRect& aRect, SurfaceInitMode aInit) = 0;
 
   /**
@@ -263,7 +267,7 @@ public:
    *
    * aSourcePoint specifies the point in aSource to copy data from.
    */
-  virtual TemporaryRef<CompositingRenderTarget>
+  virtual already_AddRefed<CompositingRenderTarget>
   CreateRenderTargetFromSource(const gfx::IntRect& aRect,
                                const CompositingRenderTarget* aSource,
                                const gfx::IntPoint& aSourcePoint) = 0;
@@ -478,9 +482,26 @@ public:
   ScreenRotation GetScreenRotation() const {
     return mScreenRotation;
   }
-
   void SetScreenRotation(ScreenRotation aRotation) {
     mScreenRotation = aRotation;
+  }
+
+  TimeStamp GetCompositionTime() const {
+    return mCompositionTime;
+  }
+  void SetCompositionTime(TimeStamp aTimeStamp) {
+    mCompositionTime = aTimeStamp;
+    mCompositeAgainTime = TimeStamp();
+  }
+
+  void CompositeAgainAt(TimeStamp aTimeStamp) {
+    if (mCompositeAgainTime.IsNull() ||
+        mCompositeAgainTime > aTimeStamp) {
+      mCompositeAgainTime = aTimeStamp;
+    }
+  }
+  TimeStamp GetCompositeAgainTime() const {
+    return mCompositeAgainTime;
   }
 
 protected:
@@ -496,6 +517,16 @@ protected:
    * Set the global Compositor backend, checking that one isn't already set.
    */
   static void SetBackend(LayersBackend backend);
+
+  /**
+   * Render time for the current composition.
+   */
+  TimeStamp mCompositionTime;
+  /**
+   * When nonnull, during rendering, some compositable indicated that it will
+   * change its rendering at this time (and this is the earliest such time).
+   */
+  TimeStamp mCompositeAgainTime;
 
   uint32_t mCompositorID;
   DiagnosticTypes mDiagnosticTypes;

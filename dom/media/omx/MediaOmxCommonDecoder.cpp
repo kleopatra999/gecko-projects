@@ -28,7 +28,9 @@ MediaOmxCommonDecoder::MediaOmxCommonDecoder()
   , mReader(nullptr)
   , mCanOffloadAudio(false)
   , mFallbackToStateMachine(false)
+  , mIsCaptured(false)
 {
+  mDormantSupported = true;
   if (!gMediaDecoderLog) {
     gMediaDecoderLog = PR_NewLogModule("MediaDecoder");
   }
@@ -47,8 +49,7 @@ bool
 MediaOmxCommonDecoder::CheckDecoderCanOffloadAudio()
 {
   return (mCanOffloadAudio && !mFallbackToStateMachine &&
-          !(GetStateMachine() && GetStateMachine()->GetDecodedStream()) &&
-          mPlaybackRate == 1.0);
+          !mIsCaptured && mPlaybackRate == 1.0);
 }
 
 void
@@ -181,6 +182,8 @@ MediaOmxCommonDecoder::AddOutputStream(ProcessedMediaStream* aStream,
                                        bool aFinishWhenEnded)
 {
   MOZ_ASSERT(NS_IsMainThread());
+
+  mIsCaptured = true;
 
   if (mAudioOffloadPlayer) {
     ResumeStateMachine();

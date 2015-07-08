@@ -14,45 +14,28 @@ loop.standaloneRoomViews = (function(mozL10n) {
   var sharedUtils = loop.shared.utils;
   var sharedViews = loop.shared.views;
 
-  var StandaloneRoomInfoArea = React.createClass({displayName: "StandaloneRoomInfoArea",
+  /**
+   * Handles display of failures, determining the correct messages and
+   * displaying the retry button at appropriate times.
+   */
+  var StandaloneRoomFailureView = React.createClass({displayName: "StandaloneRoomFailureView",
     propTypes: {
-      isFirefox: React.PropTypes.bool.isRequired,
-      activeRoomStore: React.PropTypes.oneOfType([
-        React.PropTypes.instanceOf(loop.store.ActiveRoomStore),
-        React.PropTypes.instanceOf(loop.store.FxOSActiveRoomStore)
-      ]).isRequired
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      // One of FAILURE_DETAILS.
+      failureReason: React.PropTypes.string
     },
 
-    onFeedbackSent: function() {
-      // We pass a tick to prevent React warnings regarding nested updates.
-      setTimeout(function() {
-        this.props.activeRoomStore.dispatchAction(new sharedActions.FeedbackComplete());
-      }.bind(this));
-    },
-
-    _renderCallToActionLink: function() {
-      if (this.props.isFirefox) {
-        return (
-          React.createElement("a", {href: loop.config.learnMoreUrl, className: "btn btn-info"}, 
-            mozL10n.get("rooms_room_full_call_to_action_label", {
-              clientShortname: mozL10n.get("clientShortname2")
-            })
-          )
-        );
-      }
-      return (
-        React.createElement("a", {href: loop.config.downloadFirefoxUrl, className: "btn btn-info"}, 
-          mozL10n.get("rooms_room_full_call_to_action_nonFx_label", {
-            brandShortname: mozL10n.get("brandShortname")
-          })
-        )
-      );
+    /**
+     * Handles when the retry button is pressed.
+     */
+    handleRetryButton: function() {
+      this.props.dispatcher.dispatch(new sharedActions.RetryAfterRoomFailure());
     },
 
     /**
      * @return String An appropriate string according to the failureReason.
      */
-    _getFailureString: function() {
+    getFailureString: function() {
       switch(this.props.failureReason) {
         case FAILURE_DETAILS.MEDIA_DENIED:
         // XXX Bug 1166824 should provide a better string for this.
@@ -65,9 +48,76 @@ loop.standaloneRoomViews = (function(mozL10n) {
       }
     },
 
+    /**
+     * This renders a retry button if one is necessary.
+     */
+    renderRetryButton: function() {
+      if (this.props.failureReason === FAILURE_DETAILS.EXPIRED_OR_INVALID) {
+        return null;
+      }
+
+      return (
+        React.createElement("button", {className: "btn btn-join btn-info", 
+                onClick: this.handleRetryButton}, 
+          mozL10n.get("retry_call_button")
+        )
+      );
+    },
+
+    render: function() {
+      return (
+        React.createElement("div", {className: "room-inner-info-area"}, 
+          React.createElement("p", {className: "failed-room-message"}, 
+            this.getFailureString()
+          ), 
+          this.renderRetryButton()
+        )
+      );
+    }
+  });
+
+  var StandaloneRoomInfoArea = React.createClass({displayName: "StandaloneRoomInfoArea",
+    propTypes: {
+      activeRoomStore: React.PropTypes.oneOfType([
+        React.PropTypes.instanceOf(loop.store.ActiveRoomStore),
+        React.PropTypes.instanceOf(loop.store.FxOSActiveRoomStore)
+      ]).isRequired,
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      failureReason: React.PropTypes.string,
+      isFirefox: React.PropTypes.bool.isRequired,
+      joinRoom: React.PropTypes.func.isRequired,
+      roomState: React.PropTypes.string.isRequired,
+      roomUsed: React.PropTypes.bool.isRequired
+    },
+
+    onFeedbackSent: function() {
+      // We pass a tick to prevent React warnings regarding nested updates.
+      setTimeout(function() {
+        this.props.activeRoomStore.dispatchAction(new sharedActions.FeedbackComplete());
+      }.bind(this));
+    },
+
+    _renderCallToActionLink: function() {
+      if (this.props.isFirefox) {
+        return (
+          React.createElement("a", {className: "btn btn-info", href: loop.config.learnMoreUrl}, 
+            mozL10n.get("rooms_room_full_call_to_action_label", {
+              clientShortname: mozL10n.get("clientShortname2")
+            })
+          )
+        );
+      }
+      return (
+        React.createElement("a", {className: "btn btn-info", href: loop.config.downloadFirefoxUrl}, 
+          mozL10n.get("rooms_room_full_call_to_action_nonFx_label", {
+            brandShortname: mozL10n.get("brandShortname")
+          })
+        )
+      );
+    },
+
     render: function() {
       switch(this.props.roomState) {
-        case ROOM_STATES.INIT:
         case ROOM_STATES.READY: {
           // XXX: In ENDED state, we should rather display the feedback form.
           return (
@@ -127,9 +177,8 @@ loop.standaloneRoomViews = (function(mozL10n) {
             return (
               React.createElement("div", {className: "ended-conversation"}, 
                 React.createElement(sharedViews.FeedbackView, {
-                  onAfterFeedbackReceived: this.onFeedbackSent, 
-                  noCloseText: true}
-                )
+                  noCloseText: true, 
+                  onAfterFeedbackReceived: this.onFeedbackSent})
               )
             );
           }
@@ -141,17 +190,13 @@ loop.standaloneRoomViews = (function(mozL10n) {
         }
         case ROOM_STATES.FAILED: {
           return (
-            React.createElement("div", {className: "room-inner-info-area"}, 
-              React.createElement("p", {className: "failed-room-message"}, 
-                this._getFailureString()
-              ), 
-              React.createElement("button", {className: "btn btn-join btn-info", 
-                      onClick: this.props.joinRoom}, 
-                mozL10n.get("retry_call_button")
-              )
-            )
+            React.createElement(StandaloneRoomFailureView, {
+              dispatcher: this.props.dispatcher, 
+              failureReason: this.props.failureReason})
           );
         }
+        case ROOM_STATES.INIT:
+        case ROOM_STATES.GATHER:
         default: {
           return null;
         }
@@ -248,6 +293,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
       // The poster URLs are for UI-showcase testing and development
       localPosterUrl: React.PropTypes.string,
       remotePosterUrl: React.PropTypes.string,
+      roomState: React.PropTypes.string,
       screenSharePosterUrl: React.PropTypes.string
     },
 
@@ -358,6 +404,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
           // the other party to connect
           return true;
 
+        case ROOM_STATES.FAILED:
         case ROOM_STATES.CLOSING:
           // the other person has shown up, so we don't want to show an avatar
           return true;
@@ -390,9 +437,9 @@ loop.standaloneRoomViews = (function(mozL10n) {
      * @private
      */
     _shouldRenderRemoteLoading: function() {
-      return this.state.roomState === ROOM_STATES.HAS_PARTICIPANTS &&
-             !this.state.remoteSrcVideoObject &&
-             !this.state.mediaConnected;
+      return !!(this.state.roomState === ROOM_STATES.HAS_PARTICIPANTS &&
+                !this.state.remoteSrcVideoObject &&
+                !this.state.mediaConnected);
     },
 
     /**
@@ -432,11 +479,12 @@ loop.standaloneRoomViews = (function(mozL10n) {
         React.createElement("div", {className: "room-conversation-wrapper"}, 
           React.createElement("div", {className: "beta-logo"}), 
           React.createElement(StandaloneRoomHeader, {dispatcher: this.props.dispatcher}), 
-          React.createElement(StandaloneRoomInfoArea, {roomState: this.state.roomState, 
+          React.createElement(StandaloneRoomInfoArea, {activeRoomStore: this.props.activeRoomStore, 
+                                  dispatcher: this.props.dispatcher, 
                                   failureReason: this.state.failureReason, 
-                                  joinRoom: this.joinRoom, 
                                   isFirefox: this.props.isFirefox, 
-                                  activeRoomStore: this.props.activeRoomStore, 
+                                  joinRoom: this.joinRoom, 
+                                  roomState: this.state.roomState, 
                                   roomUsed: this.state.used}), 
           React.createElement("div", {className: "media-layout"}, 
             React.createElement("div", {className: mediaWrapperClasses}, 
@@ -445,40 +493,42 @@ loop.standaloneRoomViews = (function(mozL10n) {
               ), 
               React.createElement("div", {className: remoteStreamClasses}, 
                 React.createElement(sharedViews.MediaView, {displayAvatar: !this.shouldRenderRemoteVideo(), 
-                  posterUrl: this.props.remotePosterUrl, 
                   isLoading: this._shouldRenderRemoteLoading(), 
                   mediaType: "remote", 
+                  posterUrl: this.props.remotePosterUrl, 
                   srcVideoObject: this.state.remoteSrcVideoObject})
               ), 
               React.createElement("div", {className: screenShareStreamClasses}, 
                 React.createElement(sharedViews.MediaView, {displayAvatar: false, 
-                  posterUrl: this.props.screenSharePosterUrl, 
                   isLoading: this._shouldRenderScreenShareLoading(), 
                   mediaType: "screen-share", 
+                  posterUrl: this.props.screenSharePosterUrl, 
                   srcVideoObject: this.state.screenShareVideoObject})
               ), 
-              React.createElement(sharedViews.TextChatView, {
+              React.createElement(sharedViews.chat.TextChatView, {
                 dispatcher: this.props.dispatcher, 
                 showAlways: true, 
-                showRoomName: true}), 
+                showRoomName: true, 
+                useDesktopPaths: false}), 
               React.createElement("div", {className: "local"}, 
                 React.createElement(sharedViews.MediaView, {displayAvatar: this.state.videoMuted, 
-                  posterUrl: this.props.localPosterUrl, 
                   isLoading: this._shouldRenderLocalLoading(), 
                   mediaType: "local", 
+                  posterUrl: this.props.localPosterUrl, 
                   srcVideoObject: this.state.localSrcVideoObject})
               )
             ), 
             React.createElement(sharedViews.ConversationToolbar, {
-              dispatcher: this.props.dispatcher, 
-              video: {enabled: !this.state.videoMuted,
-                      visible: this._roomIsActive()}, 
               audio: {enabled: !this.state.audioMuted,
                       visible: this._roomIsActive()}, 
-              publishStream: this.publishStream, 
+              dispatcher: this.props.dispatcher, 
+              edit: { visible: false, enabled: false}, 
+              enableHangup: this._roomIsActive(), 
               hangup: this.leaveRoom, 
               hangupButtonLabel: mozL10n.get("rooms_leave_button_label"), 
-              enableHangup: this._roomIsActive()})
+              publishStream: this.publishStream, 
+              video: {enabled: !this.state.videoMuted,
+                      visible: this._roomIsActive()}})
           ), 
           React.createElement(loop.fxOSMarketplaceViews.FxOSHiddenMarketplaceView, {
             marketplaceSrc: this.state.marketplaceSrc, 

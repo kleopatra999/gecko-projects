@@ -31,7 +31,6 @@
 
 #if defined(XP_WIN)
 #include "gfxWindowsPlatform.h"
-#include "gfxD2DSurface.h"
 #elif defined(XP_MACOSX)
 #include "gfxPlatformMac.h"
 #include "gfxQuartzSurface.h"
@@ -714,17 +713,13 @@ gfxPlatform::InitLayersIPC()
 
     AsyncTransactionTrackersHolder::Initialize();
 
-    if (XRE_GetProcessType() == GeckoProcessType_Default)
+    if (XRE_IsParentProcess())
     {
         mozilla::layers::CompositorParent::StartUp();
-#ifndef MOZ_WIDGET_GONK
-        if (gfxPrefs::AsyncVideoEnabled()) {
-            mozilla::layers::ImageBridgeChild::StartUp();
-        }
-#else
-        mozilla::layers::ImageBridgeChild::StartUp();
+#ifdef MOZ_WIDGET_GONK
         SharedBufferManagerChild::StartUp();
 #endif
+        mozilla::layers::ImageBridgeChild::StartUp();
     }
 }
 
@@ -736,7 +731,7 @@ gfxPlatform::ShutdownLayersIPC()
     }
     sLayersIPCIsUp = false;
 
-    if (XRE_GetProcessType() == GeckoProcessType_Default)
+    if (XRE_IsParentProcess())
     {
         // This must happen after the shutdown of media and widgets, which
         // are triggered by the NS_XPCOM_SHUTDOWN_OBSERVER_ID notification.
@@ -778,7 +773,7 @@ gfxPlatform::~gfxPlatform()
 
 cairo_user_data_key_t kDrawTarget;
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateDrawTargetForSurface(gfxASurface *aSurface, const IntSize& aSize)
 {
   SurfaceFormat format = Optimal2DFormatForContent(aSurface->GetContentType());
@@ -794,7 +789,7 @@ gfxPlatform::CreateDrawTargetForSurface(gfxASurface *aSurface, const IntSize& aS
 // This is a temporary function used by ContentClient to build a DrawTarget
 // around the gfxASurface. This should eventually be replaced by plumbing
 // the DrawTarget through directly
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateDrawTargetForUpdateSurface(gfxASurface *aSurface, const IntSize& aSize)
 {
 #ifdef XP_MACOSX
@@ -847,7 +842,7 @@ gfxPlatform::ClearSourceSurfaceForSurface(gfxASurface *aSurface)
   aSurface->SetData(&kSourceSurface, nullptr, nullptr);
 }
 
-/* static */ TemporaryRef<SourceSurface>
+/* static */ already_AddRefed<SourceSurface>
 gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurface)
 {
   if (!aSurface->CairoSurface() || aSurface->CairoStatus()) {
@@ -912,21 +907,6 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
 
   RefPtr<SourceSurface> srcBuffer;
 
-#ifdef XP_WIN
-  if (aSurface->GetType() == gfxSurfaceType::D2D &&
-      format != SurfaceFormat::A8) {
-    NativeSurface surf;
-    surf.mFormat = format;
-    surf.mType = NativeSurfaceType::D3D10_TEXTURE;
-    surf.mSurface = static_cast<gfxD2DSurface*>(aSurface)->GetTexture();
-    surf.mSize = aSurface->GetSize();
-    mozilla::gfx::DrawTarget *dt = static_cast<mozilla::gfx::DrawTarget*>(aSurface->GetData(&kDrawTarget));
-    if (dt) {
-      dt->Flush();
-    }
-    srcBuffer = aTarget->CreateSourceSurfaceFromNativeSurface(surf);
-  }
-#endif
   // Currently no other DrawTarget types implement CreateSourceSurfaceFromNativeSurface
 
   if (!srcBuffer) {
@@ -1003,7 +983,7 @@ gfxPlatform::GetSourceSurfaceForSurface(DrawTarget *aTarget, gfxASurface *aSurfa
   return srcBuffer.forget();
 }
 
-TemporaryRef<DataSourceSurface>
+already_AddRefed<DataSourceSurface>
 gfxPlatform::GetWrappedDataSourceSurface(gfxASurface* aSurface)
 {
   nsRefPtr<gfxImageSurface> image = aSurface->GetAsImageSurface();
@@ -1029,7 +1009,7 @@ gfxPlatform::GetWrappedDataSourceSurface(gfxASurface* aSurface)
   return result.forget();
 }
 
-TemporaryRef<ScaledFont>
+already_AddRefed<ScaledFont>
 gfxPlatform::GetScaledFontForFont(DrawTarget* aTarget, gfxFont *aFont)
 {
   NativeFont nativeFont;
@@ -1070,7 +1050,7 @@ gfxPlatform::ComputeTileSize()
 {
   // The tile size should be picked in the parent processes
   // and sent to the child processes over IPDL GetTileSize.
-  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+  if (!XRE_IsParentProcess()) {
     NS_RUNTIMEABORT("wrong process.");
   }
 
@@ -1202,7 +1182,7 @@ gfxPlatform::HasEnoughTotalSystemMemoryForSkiaGL()
   return true;
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateDrawTargetForBackend(BackendType aBackend, const IntSize& aSize, SurfaceFormat aFormat)
 {
   // There is a bunch of knowledge in the gfxPlatform heirarchy about how to
@@ -1226,7 +1206,7 @@ gfxPlatform::CreateDrawTargetForBackend(BackendType aBackend, const IntSize& aSi
   }
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateOffscreenCanvasDrawTarget(const IntSize& aSize, SurfaceFormat aFormat)
 {
   NS_ASSERTION(mPreferredCanvasBackend != BackendType::NONE, "No backend.");
@@ -1244,14 +1224,14 @@ gfxPlatform::CreateOffscreenCanvasDrawTarget(const IntSize& aSize, SurfaceFormat
 #endif
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateOffscreenContentDrawTarget(const IntSize& aSize, SurfaceFormat aFormat)
 {
   NS_ASSERTION(mPreferredCanvasBackend != BackendType::NONE, "No backend.");
   return CreateDrawTargetForBackend(mContentBackend, aSize, aFormat);
 }
 
-TemporaryRef<DrawTarget>
+already_AddRefed<DrawTarget>
 gfxPlatform::CreateDrawTargetForData(unsigned char* aData, const IntSize& aSize, int32_t aStride, SurfaceFormat aFormat)
 {
   NS_ASSERTION(mContentBackend != BackendType::NONE, "No backend.");
@@ -1388,58 +1368,6 @@ gfxPlatform::MakePlatformFont(const nsAString& aFontName,
         free((void*)aFontData);
     }
     return nullptr;
-}
-
-static void
-AppendGenericFontFromPref(nsString& aFonts, nsIAtom *aLangGroup, const char *aGenericName)
-{
-    NS_ENSURE_TRUE_VOID(Preferences::GetRootBranch());
-
-    nsAutoCString prefName, langGroupString;
-
-    aLangGroup->ToUTF8String(langGroupString);
-
-    nsAutoCString genericDotLang;
-    if (aGenericName) {
-        genericDotLang.Assign(aGenericName);
-    } else {
-        prefName.AssignLiteral("font.default.");
-        prefName.Append(langGroupString);
-        genericDotLang = Preferences::GetCString(prefName.get());
-    }
-
-    genericDotLang.Append('.');
-    genericDotLang.Append(langGroupString);
-
-    // fetch font.name.xxx value
-    prefName.AssignLiteral("font.name.");
-    prefName.Append(genericDotLang);
-    nsAdoptingString nameValue = Preferences::GetString(prefName.get());
-    if (nameValue) {
-        if (!aFonts.IsEmpty())
-            aFonts.AppendLiteral(", ");
-        aFonts += nameValue;
-    }
-
-    // fetch font.name-list.xxx value
-    prefName.AssignLiteral("font.name-list.");
-    prefName.Append(genericDotLang);
-    nsAdoptingString nameListValue = Preferences::GetString(prefName.get());
-    if (nameListValue && !nameListValue.Equals(nameValue)) {
-        if (!aFonts.IsEmpty())
-            aFonts.AppendLiteral(", ");
-        aFonts += nameListValue;
-    }
-}
-
-void
-gfxPlatform::GetPrefFonts(nsIAtom *aLanguage, nsString& aFonts, bool aAppendUnicode)
-{
-    aFonts.Truncate();
-
-    AppendGenericFontFromPref(aFonts, aLanguage, nullptr);
-    if (aAppendUnicode)
-        AppendGenericFontFromPref(aFonts, nsGkAtoms::Unicode, nullptr);
 }
 
 bool gfxPlatform::ForEachPrefFont(eFontPrefLang aLangArray[], uint32_t aLangArrayLen, PrefFontCallback aCallback,
@@ -2367,7 +2295,7 @@ gfxPlatform::DisableBufferRotation()
   sBufferRotationCheckPref = false;
 }
 
-TemporaryRef<ScaledFont>
+already_AddRefed<ScaledFont>
 gfxPlatform::GetScaledFontForFontWithCairoSkia(DrawTarget* aTarget, gfxFont* aFont)
 {
     NativeFont nativeFont;
@@ -2475,7 +2403,7 @@ gfxPlatform::GetApzSupportInfo(mozilla::widget::InfoObject& aObj)
 /*static*/ bool
 gfxPlatform::AsyncPanZoomEnabled()
 {
-#if !defined(MOZ_B2G) && !defined(MOZ_WIDGET_ANDROID)
+#if !defined(MOZ_B2G) && !defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_WIDGET_UIKIT)
   // For XUL applications (everything but B2G on mobile and desktop, and
   // Firefox on Android) we only want to use APZ when E10S is enabled. If
   // we ever get input events off the main thread we can consider relaxing

@@ -126,12 +126,14 @@ var FullScreen = {
         } else {
           let topWin = event.target.ownerDocument.defaultView.top;
           browser = gBrowser.getBrowserForContentWindow(topWin);
-          if (!browser) {
-            document.mozCancelFullScreen();
-            break;
-          }
         }
-        if (!this.enterDomFullscreen(browser)) {
+        if (!browser || !this.enterDomFullscreen(browser)) {
+          if (document.mozFullScreen) {
+            // MozDOMFullscreen:Entered is dispatched synchronously in
+            // fullscreen change, hence we have to avoid calling this
+            // method synchronously here.
+            setTimeout(() => document.mozCancelFullScreen(), 0);
+          }
           break;
         }
         // If it is a remote browser, send a message to ask the content
@@ -176,7 +178,6 @@ var FullScreen = {
     // active. If not, we exit fullscreen since the "full-screen document" isn't
     // actually visible now.
     if (gBrowser.selectedBrowser != aBrowser) {
-      document.mozCancelFullScreen();
       return false;
     }
 
@@ -184,7 +185,6 @@ var FullScreen = {
     if (focusManager.activeWindow != window) {
       // The top-level window has lost focus since the request to enter
       // full-screen was made. Cancel full-screen.
-      document.mozCancelFullScreen();
       return false;
     }
 
@@ -355,11 +355,10 @@ var FullScreen = {
                            "fullscreen",
                            Services.perms.ALLOW_ACTION,
                            Services.perms.EXPIRE_SESSION);
-        let host = uri.host;
         var onFullscreenchange = function onFullscreenchange(event) {
           if (event.target == document && document.mozFullScreenElement == null) {
             // The chrome document has left fullscreen. Remove the temporary permission grant.
-            Services.perms.remove(host, "fullscreen");
+            Services.perms.remove(uri, "fullscreen");
             document.removeEventListener("mozfullscreenchange", onFullscreenchange);
           }
         }
@@ -477,7 +476,6 @@ var FullScreen = {
     }
 
     // Track whether mouse is near the toolbox
-    this._isChromeCollapsed = false;
     if (trackMouse && !this.useLionFullScreen) {
       let rect = gBrowser.mPanelContainer.getBoundingClientRect();
       this._mouseTargetRect = {
@@ -488,6 +486,8 @@ var FullScreen = {
       };
       MousePosTracker.addListener(this);
     }
+
+    this._isChromeCollapsed = false;
   },
 
   hideNavToolbox: function (aAnimate = false) {

@@ -44,9 +44,6 @@ class InterpreterFrame;
 extern JS_FRIEND_API(void)
 JS_SetGrayGCRootsTracer(JSRuntime* rt, JSTraceDataOp traceOp, void* data);
 
-extern JS_FRIEND_API(JSString*)
-JS_GetAnonymousString(JSRuntime* rt);
-
 extern JS_FRIEND_API(JSObject*)
 JS_FindCompilationScope(JSContext* cx, JS::HandleObject obj);
 
@@ -677,15 +674,6 @@ IsOuterObject(JSObject* obj) {
 JS_FRIEND_API(bool)
 IsFunctionObject(JSObject* obj);
 
-JS_FRIEND_API(bool)
-IsScopeObject(JSObject* obj);
-
-JS_FRIEND_API(bool)
-IsCallObject(JSObject* obj);
-
-JS_FRIEND_API(bool)
-CanAccessObjectShape(JSObject* obj);
-
 static MOZ_ALWAYS_INLINE JSCompartment*
 GetObjectCompartment(JSObject* obj)
 {
@@ -697,11 +685,6 @@ GetGlobalForObjectCrossCompartment(JSObject* obj);
 
 JS_FRIEND_API(JSObject*)
 GetPrototypeNoProxy(JSObject* obj);
-
-// Sidestep the activeContext checking implicitly performed in
-// JS_SetPendingException.
-JS_FRIEND_API(void)
-SetPendingExceptionCrossContext(JSContext* cx, JS::HandleValue v);
 
 JS_FRIEND_API(void)
 AssertSameCompartment(JSContext* cx, JSObject* obj);
@@ -943,9 +926,6 @@ GetPropertyKeys(JSContext* cx, JS::HandleObject obj, unsigned flags, JS::AutoIdV
 
 JS_FRIEND_API(bool)
 AppendUnique(JSContext* cx, JS::AutoIdVector& base, JS::AutoIdVector& others);
-
-JS_FRIEND_API(bool)
-GetGeneric(JSContext* cx, JSObject* obj, JSObject* receiver, jsid id, JS::Value* vp);
 
 JS_FRIEND_API(bool)
 StringIsArrayIndex(JSLinearString* str, uint32_t* indexp);
@@ -2283,7 +2263,9 @@ class JSJitMethodCallArgs : protected JS::detail::CallArgsBase<JS::detail::NoUse
         return argv_[-2].toObject();
     }
 
-    // Add get() as needed
+    JS::HandleValue get(unsigned i) const {
+        return Base::get(i);
+    }
 };
 
 struct JSJitMethodCallArgsTraits
@@ -2792,14 +2774,6 @@ extern JS_FRIEND_API(JSObject*)
 GetObjectEnvironmentObjectForFunction(JSFunction* fun);
 
 /*
- * Get the stored principal of the stack frame this SavedFrame object
- * represents.  note that this is not the same thing as the object principal of
- * the object itself.  Do NOT pass a non-SavedFrame object here.
- */
-extern JS_FRIEND_API(JSPrincipals*)
-GetSavedFramePrincipals(JS::HandleObject savedFrame);
-
-/*
  * Get the first SavedFrame object in this SavedFrame stack whose principals are
  * subsumed by the cx's principals. If there is no such frame, return nullptr.
  *
@@ -2812,10 +2786,6 @@ GetFirstSubsumedSavedFrame(JSContext* cx, JS::HandleObject savedFrame);
 
 extern JS_FRIEND_API(bool)
 ReportIsNotFunction(JSContext* cx, JS::HandleValue v);
-
-extern JS_FRIEND_API(bool)
-DefineOwnProperty(JSContext* cx, JSObject* objArg, jsid idArg,
-                  JS::Handle<JSPropertyDescriptor> descriptor, JS::ObjectOpResult& result);
 
 extern JS_FRIEND_API(JSObject*)
 ConvertArgsToArray(JSContext* cx, const JS::CallArgs& args);

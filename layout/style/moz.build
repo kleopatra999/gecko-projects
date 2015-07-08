@@ -85,6 +85,8 @@ EXPORTS.mozilla += [
     'CSSVariableResolver.h',
     'CSSVariableValues.h',
     'IncrementalClearCOMRuleArray.h',
+    'RuleNodeCacheConditions.h',
+    'RuleProcessorCache.h',
     'StyleAnimationValue.h',
 ]
 
@@ -124,6 +126,7 @@ UNIFIED_SOURCES += [
     'Declaration.cpp',
     'ErrorReporter.cpp',
     'FontFace.cpp',
+    'FontFaceSet.cpp',
     'FontFaceSetIterator.cpp',
     'ImageLoader.cpp',
     'IncrementalClearCOMRuleArray.cpp',
@@ -163,15 +166,15 @@ UNIFIED_SOURCES += [
     'nsStyleTransformMatrix.cpp',
     'nsStyleUtil.cpp',
     'nsTransitionManager.cpp',
+    'RuleNodeCacheConditions.cpp',
+    'RuleProcessorCache.cpp',
     'StyleAnimationValue.cpp',
     'StyleRule.cpp',
     'SVGAttrAnimationRuleProcessor.cpp',
 ]
 
-# FontFaceSet.cpp needs to be built separately because it redefines LOG.
 # nsCSSRuleProcessor.cpp needs to be built separately because it uses plarena.h.
 SOURCES += [
-    'FontFaceSet.cpp',
     'nsCSSRuleProcessor.cpp',
 ]
 

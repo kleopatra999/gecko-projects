@@ -302,7 +302,7 @@ DisableGralloc(SurfaceFormat aFormat, const gfx::IntSize& aSizeHint)
 #endif
 
 static
-TemporaryRef<BufferTextureClient>
+already_AddRefed<BufferTextureClient>
 CreateBufferTextureClient(ISurfaceAllocator* aAllocator,
                           SurfaceFormat aFormat,
                           TextureFlags aTextureFlags,
@@ -321,7 +321,7 @@ CreateBufferTextureClient(ISurfaceAllocator* aAllocator,
 }
 
 // static
-TemporaryRef<TextureClient>
+already_AddRefed<TextureClient>
 TextureClient::CreateForDrawing(ISurfaceAllocator* aAllocator,
                                 gfx::SurfaceFormat aFormat,
                                 gfx::IntSize aSize,
@@ -344,7 +344,7 @@ TextureClient::CreateForDrawing(ISurfaceAllocator* aAllocator,
   if (parentBackend == LayersBackend::LAYERS_D3D11 &&
       (aMoz2DBackend == gfx::BackendType::DIRECT2D ||
         aMoz2DBackend == gfx::BackendType::DIRECT2D1_1) &&
-      gfxWindowsPlatform::GetPlatform()->GetD2DDevice() &&
+      gfxWindowsPlatform::GetPlatform()->GetD3D10Device() &&
       aSize.width <= maxTextureSize &&
       aSize.height <= maxTextureSize) {
     texture = new TextureClientD3D11(aAllocator, aFormat, aTextureFlags);
@@ -355,7 +355,7 @@ TextureClient::CreateForDrawing(ISurfaceAllocator* aAllocator,
       aSize.width <= maxTextureSize &&
       aSize.height <= maxTextureSize) {
     if (gfxWindowsPlatform::GetPlatform()->GetD3D9Device()) {
-      texture = new CairoTextureClientD3D9(aAllocator, aFormat, aTextureFlags);
+      texture = new TextureClientD3D9(aAllocator, aFormat, aTextureFlags);
     }
   }
 
@@ -428,7 +428,7 @@ TextureClient::CreateForDrawing(ISurfaceAllocator* aAllocator,
 }
 
 // static
-TemporaryRef<BufferTextureClient>
+already_AddRefed<BufferTextureClient>
 TextureClient::CreateForRawBufferAccess(ISurfaceAllocator* aAllocator,
                                         gfx::SurfaceFormat aFormat,
                                         gfx::IntSize aSize,
@@ -448,7 +448,7 @@ TextureClient::CreateForRawBufferAccess(ISurfaceAllocator* aAllocator,
 }
 
 // static
-TemporaryRef<BufferTextureClient>
+already_AddRefed<BufferTextureClient>
 TextureClient::CreateForYCbCr(ISurfaceAllocator* aAllocator,
                               gfx::IntSize aYSize,
                               gfx::IntSize aCbCrSize,
@@ -474,7 +474,7 @@ TextureClient::CreateForYCbCr(ISurfaceAllocator* aAllocator,
 }
 
 // static
-TemporaryRef<BufferTextureClient>
+already_AddRefed<BufferTextureClient>
 TextureClient::CreateWithBufferSize(ISurfaceAllocator* aAllocator,
                      gfx::SurfaceFormat aFormat,
                      size_t aSize,
@@ -755,7 +755,7 @@ BufferTextureClient::BufferTextureClient(ISurfaceAllocator* aAllocator,
 BufferTextureClient::~BufferTextureClient()
 {}
 
-TemporaryRef<TextureClient>
+already_AddRefed<TextureClient>
 BufferTextureClient::CreateSimilar(TextureFlags aFlags,
                                    TextureAllocationFlags aAllocFlags) const
 {
@@ -917,7 +917,7 @@ BufferTextureClient::GetLockedData() const
   return serializer.GetData();
 }
 
-TemporaryRef<SyncObject>
+already_AddRefed<SyncObject>
 SyncObject::CreateSyncObject(SyncHandle aHandle)
 {
   if (!aHandle) {

@@ -569,10 +569,12 @@ TileClient::Flip()
   if (mFrontBuffer && mFrontBuffer->GetIPDLActor() &&
       mCompositableClient && mCompositableClient->GetIPDLActor()) {
     // remove old buffer from CompositableHost
-    RefPtr<AsyncTransactionTracker> tracker = new RemoveTextureFromCompositableTracker();
+    RefPtr<AsyncTransactionWaiter> waiter = new AsyncTransactionWaiter();
+    RefPtr<AsyncTransactionTracker> tracker =
+        new RemoveTextureFromCompositableTracker(waiter);
     // Hold TextureClient until transaction complete.
     tracker->SetTextureClient(mFrontBuffer);
-    mFrontBuffer->SetRemoveFromCompositableTracker(tracker);
+    mFrontBuffer->SetRemoveFromCompositableWaiter(waiter);
     // RemoveTextureFromCompositableAsync() expects CompositorChild's presence.
     mManager->AsShadowForwarder()->RemoveTextureFromCompositableAsync(tracker,
                                                                       mCompositableClient,
@@ -667,10 +669,12 @@ TileClient::DiscardFrontBuffer()
     if (mFrontBuffer->GetIPDLActor() &&
         mCompositableClient && mCompositableClient->GetIPDLActor()) {
       // remove old buffer from CompositableHost
-      RefPtr<AsyncTransactionTracker> tracker = new RemoveTextureFromCompositableTracker();
+      RefPtr<AsyncTransactionWaiter> waiter = new AsyncTransactionWaiter();
+      RefPtr<AsyncTransactionTracker> tracker =
+          new RemoveTextureFromCompositableTracker(waiter);
       // Hold TextureClient until transaction complete.
       tracker->SetTextureClient(mFrontBuffer);
-      mFrontBuffer->SetRemoveFromCompositableTracker(tracker);
+      mFrontBuffer->SetRemoveFromCompositableWaiter(waiter);
       // RemoveTextureFromCompositableAsync() expects CompositorChild's presence.
       mManager->AsShadowForwarder()->RemoveTextureFromCompositableAsync(tracker,
                                                                         mCompositableClient,
@@ -1098,6 +1102,71 @@ ClientTiledLayerBuffer::UnlockTile(TileClient aTile)
   if (aTile.mBackBufferOnWhite && aTile.mBackBufferOnWhite->IsLocked()) {
     aTile.mBackBufferOnWhite->Unlock();
   }
+}
+
+void ClientTiledLayerBuffer::Update(const nsIntRegion& newValidRegion,
+                                    const nsIntRegion& aPaintRegion)
+{
+  const IntSize scaledTileSize = GetScaledTileSize();
+  const gfx::IntRect newBounds = newValidRegion.GetBounds();
+
+  const TilesPlacement oldTiles = mTiles;
+  const TilesPlacement newTiles(floor_div(newBounds.x, scaledTileSize.width),
+                          floor_div(newBounds.y, scaledTileSize.height),
+                          floor_div(GetTileStart(newBounds.x, scaledTileSize.width)
+                                    + newBounds.width, scaledTileSize.width) + 1,
+                          floor_div(GetTileStart(newBounds.y, scaledTileSize.height)
+                                    + newBounds.height, scaledTileSize.height) + 1);
+
+  const size_t oldTileCount = mRetainedTiles.Length();
+  const size_t newTileCount = newTiles.mSize.width * newTiles.mSize.height;
+
+  nsTArray<TileClient> oldRetainedTiles;
+  mRetainedTiles.SwapElements(oldRetainedTiles);
+  mRetainedTiles.SetLength(newTileCount);
+
+  for (size_t oldIndex = 0; oldIndex < oldTileCount; oldIndex++) {
+    const TileIntPoint tilePosition = oldTiles.TilePosition(oldIndex);
+    const size_t newIndex = newTiles.TileIndex(tilePosition);
+    // First, get the already existing tiles to the right place in the new array.
+    // Leave placeholders (default constructor) where there was no tile.
+    if (newTiles.HasTile(tilePosition)) {
+      mRetainedTiles[newIndex] = oldRetainedTiles[oldIndex];
+    } else {
+      // release tiles that we are not going to reuse before allocating new ones
+      // to avoid allocating unnecessarily.
+      oldRetainedTiles[oldIndex].Release();
+    }
+  }
+
+  oldRetainedTiles.Clear();
+
+  for (size_t i = 0; i < newTileCount; ++i) {
+    const TileIntPoint tilePosition = newTiles.TilePosition(i);
+
+    IntPoint tileOffset = GetTileOffset(tilePosition);
+    nsIntRegion tileDrawRegion = IntRect(tileOffset, scaledTileSize);
+    tileDrawRegion.AndWith(aPaintRegion);
+
+    if (tileDrawRegion.IsEmpty()) {
+      continue;
+    }
+
+    TileClient tile = mRetainedTiles[i];
+    tile = ValidateTile(tile, GetTileOffset(tilePosition),
+                        tileDrawRegion);
+
+    mRetainedTiles[i] = tile;
+  }
+
+  PostValidate(aPaintRegion);
+  for (size_t i = 0; i < mRetainedTiles.Length(); ++i) {
+    UnlockTile(mRetainedTiles[i]);
+  }
+
+  mTiles = newTiles;
+  mValidRegion = newValidRegion;
+  mPaintedRegion.OrWith(aPaintRegion);
 }
 
 TileClient

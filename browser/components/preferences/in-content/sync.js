@@ -129,6 +129,25 @@ let gSyncPane = {
     this._initProfileImageUI();
   },
 
+  _toggleComputerNameControls: function(editMode) {
+    let textbox = document.getElementById("fxaSyncComputerName");
+    textbox.className = editMode ? "" : "plain";
+    textbox.disabled = !editMode;
+    document.getElementById("fxaChangeDeviceName").hidden = editMode;
+    document.getElementById("fxaCancelChangeDeviceName").hidden = !editMode;
+    document.getElementById("fxaSaveChangeDeviceName").hidden = !editMode;
+  },
+
+  _updateComputerNameValue: function(save) {
+    let textbox = document.getElementById("fxaSyncComputerName");
+    if (save) {
+      Weave.Service.clientsEngine.localName = textbox.value;
+    }
+    else {
+      textbox.value = Weave.Service.clientsEngine.localName;
+    }
+  },
+
   _setupEventListeners: function() {
     function setEventListener(aId, aEventType, aCallback)
     {
@@ -160,6 +179,17 @@ let gSyncPane = {
     });
     setEventListener("syncComputerName", "change", function (e) {
       gSyncUtils.changeName(e.target);
+    });
+    setEventListener("fxaChangeDeviceName", "click", function () {
+      this._toggleComputerNameControls(true);
+    });
+    setEventListener("fxaCancelChangeDeviceName", "click", function () {
+      this._toggleComputerNameControls(false);
+      this._updateComputerNameValue(false);
+    });
+    setEventListener("fxaSaveChangeDeviceName", "click", function () {
+      this._toggleComputerNameControls(false);
+      this._updateComputerNameValue(true);
     });
     setEventListener("unlinkDevice", "click", function () {
       gSyncPane.startOver(true);
@@ -207,9 +237,6 @@ let gSyncPane = {
     setEventListener("rejectUnlinkFxaAccount", "click", function () {
       gSyncPane.unlinkFirefoxAccount(true);
     });
-    setEventListener("fxaSyncComputerName", "change", function (e) {
-      gSyncUtils.changeName(e.target);
-    });
     setEventListener("tosPP-small-ToS", "click", gSyncPane.openToS);
     setEventListener("tosPP-small-PP", "click", gSyncPane.openPrivacyPolicy);
     setEventListener("sync-migrate-upgrade", "click", function () {
@@ -249,11 +276,22 @@ let gSyncPane = {
     // service.fxAccountsEnabled is false iff sync is already configured for
     // the legacy provider.
     if (service.fxAccountsEnabled) {
+      let displayNameLabel = document.getElementById("fxaDisplayName");
+      let fxaEmailAddress1Label = document.getElementById("fxaEmailAddress1");
+      fxaEmailAddress1Label.hidden = false;
+      displayNameLabel.hidden = true;
+
       // unhide the reading-list engine if readinglist is enabled (note we do
       // it here as it must remain disabled for legacy sync users)
       if (Services.prefs.getBoolPref("browser.readinglist.enabled")) {
         document.getElementById("readinglist-engine").removeAttribute("hidden");
       }
+
+      let profileInfoEnabled;
+      try {
+        profileInfoEnabled = Services.prefs.getBoolPref("identity.fxaccounts.profile_image.enabled");
+      } catch (ex) {}
+
       // determine the fxa status...
       this.page = PAGE_PLEASE_WAIT;
 
@@ -286,7 +324,7 @@ let gSyncPane = {
           fxaLoginStatus.selectedIndex = FXA_LOGIN_VERIFIED;
           enginesListDisabled = false;
         }
-        document.getElementById("fxaEmailAddress1").textContent = data.email;
+        fxaEmailAddress1Label.textContent = data.email;
         document.getElementById("fxaEmailAddress2").textContent = data.email;
         document.getElementById("fxaEmailAddress3").textContent = data.email;
         document.getElementById("fxaSyncComputerName").value = Weave.Service.clientsEngine.localName;
@@ -303,25 +341,26 @@ let gSyncPane = {
         return data.verified;
       }).then(isVerified => {
         if (isVerified) {
-          let enabled;
-          try {
-            enabled = Services.prefs.getBoolPref("identity.fxaccounts.profile_image.enabled");
-          } catch (ex) {}
-          if (enabled) {
-            return fxAccounts.getSignedInUserProfile();
-          }
+          return fxAccounts.getSignedInUserProfile();
         }
       }).then(data => {
-        if (data && data.avatar) {
-          // Make sure the image is available before displaying it,
-          // as we don't want to overwrite the default profile image
-          // with a broken/unavailable image
-          let img = new Image();
-          img.onload = () => {
-            let bgImage = "url('" + data.avatar + "')";
-            document.getElementById("fxaProfileImage").style.backgroundImage = bgImage;
-          };
-          img.src = data.avatar;
+        if (data && profileInfoEnabled) {
+          if (data.displayName) {
+            fxaEmailAddress1Label.hidden = true;
+            displayNameLabel.hidden = false;
+            displayNameLabel.textContent = data.displayName;
+          }
+          if (data.avatar) {
+            // Make sure the image is available before displaying it,
+            // as we don't want to overwrite the default profile image
+            // with a broken/unavailable image
+            let img = new Image();
+            img.onload = () => {
+              let bgImage = "url('" + data.avatar + "')";
+              document.getElementById("fxaProfileImage").style.backgroundImage = bgImage;
+            };
+            img.src = data.avatar;
+          }
         }
       }, err => {
         FxAccountsCommon.log.error(err);
@@ -539,7 +578,6 @@ let gSyncPane = {
     }
     win.switchToTabHavingURI(url, true, options);
   },
-
 
   openPrivacyPolicy: function(aEvent) {
     aEvent.stopPropagation();

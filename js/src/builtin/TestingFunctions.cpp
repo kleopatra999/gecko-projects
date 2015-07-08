@@ -112,6 +112,14 @@ GetBuildConfiguration(JSContext* cx, unsigned argc, jsval* vp)
     if (!JS_SetProperty(cx, info, "arm-simulator", value))
         return false;
 
+#ifdef JS_SIMULATOR_ARM64
+    value = BooleanValue(true);
+#else
+    value = BooleanValue(false);
+#endif
+    if (!JS_SetProperty(cx, info, "arm64-simulator", value))
+        return false;
+
 #ifdef MOZ_ASAN
     value = BooleanValue(true);
 #else
@@ -2486,6 +2494,20 @@ GetConstructorName(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
+static bool
+AllocationMarker(JSContext* cx, unsigned argc, jsval* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    static const JSClass cls = { "AllocationMarker" };
+
+    RootedObject obj(cx, JS_NewObject(cx, &cls));
+    if (!obj)
+        return false;
+    args.rval().setObject(*obj);
+    return true;
+}
+
 static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gc", ::GC, 0, 0,
 "gc([obj] | 'compartment' [, 'shrinking'])",
@@ -2902,6 +2924,13 @@ gc::ZealModeHelpText),
 "getConstructorName(object)",
 "  If the given object was created with `new Ctor`, return the constructor's display name. "
 "  Otherwise, return null."),
+
+    JS_FN_HELP("allocationMarker", AllocationMarker, 0, 0,
+"allocationMarker()",
+"  Return a freshly allocated object whose [[Class]] name is\n"
+"  \"AllocationMarker\". Such objects are allocated only by calls\n"
+"  to this function, never implicitly by the system, making them\n"
+"  suitable for use in allocation tooling tests.\n"),
 
     JS_FS_HELP_END
 };

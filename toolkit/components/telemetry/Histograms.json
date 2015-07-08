@@ -2484,7 +2484,118 @@
     "kind": "exponential",
     "high": "60000",
     "n_buckets": 1000,
-    "description": "Time spend blocked on poll (ms)."
+    "description": "Time spent blocked on poll (ms)."
+  },
+  "PRCONNECT_BLOCKING_TIME_NORMAL": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Connect when we are not shutting down and there has been niether a network nor an offline state change in the last 60s (ms)."
+  },
+  "PRCONNECT_BLOCKING_TIME_SHUTDOWN": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Connect during a shutdown (ms)."
+  },
+  "PRCONNECT_BLOCKING_TIME_CONNECTIVITY_CHANGE": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Connect when there has been the connectiviy change in the last 60s (ms)."
+  },
+  "PRCONNECT_BLOCKING_TIME_LINK_CHANGE": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Connect when there has been a link change in the last 60s (ms)."
+  },
+  "PRCONNECT_BLOCKING_TIME_OFFLINE": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Connect when the offline state has changed in the last 60s (ms)."
+  },
+  "PRCONNECTCONTINUE_BLOCKING_TIME_NORMAL": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_ConnectContinue when we are not shutting down and there has been niether a network nor an offline state change in the last 60s (ms)."
+  },
+  "PRCONNECTCONTINUE_BLOCKING_TIME_SHUTDOWN": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_ConnectContinue during a shutdown (ms)."
+  },
+  "PRCONNECTCONTINUE_BLOCKING_TIME_CONNECTIVITY_CHANGE": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_ConnectContinue when there has been the connectivity change in the last 60s (ms)."
+  },
+  "PRCONNECTCONTINUE_BLOCKING_TIME_LINK_CHANGE": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_ConnectContinue when there has been a link change in the last 60s (ms)."
+  },
+  "PRCONNECTCONTINUE_BLOCKING_TIME_OFFLINE": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_ConnectContinue when the offline state has changed in the last 60s (ms)."
+  },
+  "PRCLOSE_BLOCKING_TIME_NORMAL": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Close when we are not shutting down and there has been niether a network nor an offline state change in the last 60s (ms)."
+  },
+  "PRCLOSE_BLOCKING_TIME_SHUTDOWN": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Close during a shutdown (ms)."
+  },
+  "PRCLOSE_BLOCKING_TIME_CONNECTIVITY_CHANGE": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Close when there has been the connectivity change in the last 60s (ms)."
+  },
+  "PRCLOSE_BLOCKING_TIME_LINK_CHANGE": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Close when there has been a link change in the last 60s (ms)."
+  },
+  "PRCLOSE_BLOCKING_TIME_OFFLINE": {
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "high": "60000",
+    "n_buckets": 1000,
+    "description": "Time spent blocked in PR_Close when the offline state has changed in the last 60s (ms)."
+  },
+  "IPV4_AND_IPV6_ADDRESS_CONNECTIVITY": {
+    "expires_in_version": "never",
+    "kind": "enumerated",
+    "n_values": 4,
+    "description": "Count the number of 0) successful connections to an ipv4 address, 1) failed connection an ipv4 address, 2) successful connection to an ipv6 address and 3) failed connections to an ipv6 address."
   },
   "URL_PATH_ENDS_IN_EXCLAMATION": {
     "expires_in_version": "never",
@@ -4837,6 +4948,12 @@
     "keyed" : true,
     "description" : "Exceptions thrown by add-ons"
   },
+  "IPC_TRANSACTION_CANCEL": {
+    "alert_emails": ["billm@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "boolean",
+    "description": "True when an IPC transaction is canceled"
+  },
   "MISBEHAVING_ADDONS_CPOW_TIME_MS": {
     "expires_in_version": "never",
     "kind": "exponential",
@@ -5241,6 +5358,12 @@
     "kind": "enumerated",
     "n_values": 700,
     "description": "The Shumway feature is used during movie execution"
+  },
+  "SHUMWAY_LOAD_RESOURCE_RESULT": {
+    "expires_in_version": "default",
+    "kind": "enumerated",
+    "n_values": 10,
+    "description": "The Shumway external resource loading result"
   },
   "SHUMWAY_FALLBACK": {
     "expires_in_version": "default",
@@ -7610,6 +7733,45 @@
     "releaseChannelCollection": "opt-out",
     "description": "Number of times the sharing feature has been enabled and disabled (0=WINDOW_ENABLED, 1=WINDOW_DISABLED, 2=BROWSER_ENABLED, 3=BROWSER_DISABLED)"
   },
+  "LOOP_SHARING_ROOM_URL": {
+    "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
+    "expires_in_version": "44",
+    "kind": "enumerated",
+    "n_values": 8,
+    "releaseChannelCollection": "opt-out",
+    "description": "Number of times a room URL is shared (0=COPY_FROM_PANEL, 1=COPY_FROM_CONVERSATION, 2=EMAIL_FROM_CALLFAILED, 3=EMAIL_FROM_CONVERSATION)"
+  },
+  "LOOP_ROOM_CREATE": {
+    "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
+    "expires_in_version": "44",
+    "kind": "enumerated",
+    "n_values": 4,
+    "releaseChannelCollection": "opt-out",
+    "description": "Number of times a room create action is performed (0=CREATE_SUCCESS, 1=CREATE_FAIL)"
+  },
+  "LOOP_ROOM_DELETE": {
+    "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
+    "expires_in_version": "44",
+    "kind": "enumerated",
+    "n_values": 4,
+    "releaseChannelCollection": "opt-out",
+    "description": "Number of times a room delete action is performed (0=DELETE_SUCCESS, 2=DELETE_FAIL)"
+  },
+  "LOOP_ROOM_CONTEXT_ADD": {
+    "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
+    "expires_in_version": "44",
+    "kind": "enumerated",
+    "n_values": 8,
+    "releaseChannelCollection": "opt-out",
+    "description": "Number of times a room context action is performed (0=ADD_FROM_PANEL, 1=ADD_FROM_CONVERSATION)"
+  },
+  "LOOP_ROOM_CONTEXT_CLICK": {
+    "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
+    "expires_in_version": "44",
+    "kind": "count",
+    "releaseChannelCollection": "opt-out",
+    "description": "Number times room context is clicked to visit the attached URL"
+  },
   "E10S_AUTOSTART": {
     "expires_in_version": "never",
     "kind": "boolean",
@@ -7830,11 +7992,27 @@
     "description": "Whether or not the Adobe EME GMP was expected to be resident on disk but mysteriously isn't.",
     "releaseChannelCollection": "opt-out"
   },
+  "VIDEO_ADOBE_GMP_MISSING_FILES": {
+    "alert_emails": ["cpearce@mozilla.com"],
+    "expires_in_version": "42",
+    "kind": "enumerated",
+    "n_values" : 8,
+    "description": "Adobe EME GMP files missing (0=none, or sum of: 1=library, 2=info, 4=voucher)",
+    "releaseChannelCollection": "opt-out"
+  },
   "VIDEO_OPENH264_GMP_DISAPPEARED": {
     "alert_emails": ["cpearce@mozilla.com", "rjesup@mozilla.com"],
     "expires_in_version": "42",
     "kind": "flag",
     "description": "Whether or not the OpenH264 GMP was expected to be resident on disk but mysteriously isn't.",
+    "releaseChannelCollection": "opt-out"
+  },
+  "VIDEO_OPENH264_GMP_MISSING_FILES": {
+    "alert_emails": ["cpearce@mozilla.com", "rjesup@mozilla.com"],
+    "expires_in_version": "42",
+    "kind": "enumerated",
+    "n_values" : 4,
+    "description": "OpenH264 GMP files missing (0=none, or sum of: 1=library, 2=info)",
     "releaseChannelCollection": "opt-out"
   },
   "FX_SANITIZE_TOTAL": {
@@ -8254,5 +8432,16 @@
     "n_values": 10,
     "releaseChannelCollection": "opt-out",
     "description": "Reports whether the graphics sanity test passed an OS snapshot test. 0=Pass, 1=Fail, 2=Error, 3=Timed out."
+  },
+  "NONLOWERCASE_NONHTML_ATTR_NODE_SET": {
+    "expires_in_version": "never",
+    "kind": "flag",
+    "description": "An Attr node that's not namespace-aware and was created from an HTML document is set on a non-HTML element and has a name containing uppercase ASCII chars"
+  },
+  "FENNEC_TITLE_IN_TITLEBAR_ENABLED": {
+    "alert_emails": ["michael.l.comella@gmail.com"],
+    "expires_in_version": "43",
+    "kind": "boolean",
+    "description": "Is the title shown in the url bar (as determined by the titlebar title or url preference)?"
   }
 }

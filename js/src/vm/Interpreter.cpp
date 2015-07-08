@@ -33,6 +33,7 @@
 #include "jsstr.h"
 
 #include "builtin/Eval.h"
+#include "jit/AtomicOperations.h"
 #include "jit/BaselineJIT.h"
 #include "jit/Ion.h"
 #include "jit/IonAnalysis.h"
@@ -47,6 +48,7 @@
 #include "jsfuninlines.h"
 #include "jsscriptinlines.h"
 
+#include "jit/AtomicOperations-inl.h"
 #include "jit/JitFrames-inl.h"
 #include "vm/Debugger-inl.h"
 #include "vm/NativeObject-inl.h"
@@ -4434,6 +4436,16 @@ js::UrshValues(JSContext* cx, MutableHandleValue lhs, MutableHandleValue rhs, Mu
 }
 
 bool
+js::AtomicIsLockFree(JSContext* cx, HandleValue in, int* out)
+{
+    int i;
+    if (!ToInt32(cx, in, &i))
+        return false;
+    *out = js::jit::AtomicOperations::isLockfree(i);
+    return true;
+}
+
+bool
 js::DeleteNameOperation(JSContext* cx, HandlePropertyName name, HandleObject scopeObj,
                         MutableHandleValue res)
 {
@@ -4810,13 +4822,5 @@ js::ReportUninitializedLexical(JSContext* cx, HandleScript script, jsbytecode* p
         name = ScopeCoordinateName(cx->runtime()->scopeCoordinateNameCache, script, pc);
     }
 
-    ReportUninitializedLexical(cx, name);
-}
-
-void
-js::ReportUninitializedLexical(JSContext* cx, HandleScript script, jsbytecode* pc, ScopeCoordinate sc)
-{
-    RootedPropertyName name(cx, ScopeCoordinateName(cx->runtime()->scopeCoordinateNameCache,
-                                                    script, pc));
     ReportUninitializedLexical(cx, name);
 }

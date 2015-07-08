@@ -587,6 +587,7 @@ class IonBuilder
                                             TypedObjectPrediction objTypeReprs,
                                             TypedObjectPrediction elemTypeReprs,
                                             int32_t elemSize);
+    TemporaryTypeSet* computeHeapType(const TemporaryTypeSet* objTypes, const jsid id);
 
     enum BoundsChecking { DoBoundsCheck, SkipBoundsCheck };
 
@@ -616,6 +617,7 @@ class IonBuilder
     MDefinition* addLexicalCheck(MDefinition* input);
 
     bool tryFoldInstanceOf(MDefinition* lhs, JSObject* protoObject);
+    bool hasOnProtoChain(TypeSet::ObjectKey* key, JSObject* protoObject, bool* hasOnProto);
 
     bool jsop_add(MDefinition* left, MDefinition* right);
     bool jsop_bitnot();
@@ -691,7 +693,7 @@ class IonBuilder
     bool jsop_isnoiter();
     bool jsop_iterend();
     bool jsop_in();
-    bool jsop_in_dense(JSValueType unboxedType);
+    bool jsop_in_dense(MDefinition* obj, MDefinition* id, JSValueType unboxedType);
     bool jsop_instanceof();
     bool jsop_getaliasedvar(ScopeCoordinate sc);
     bool jsop_setaliasedvar(ScopeCoordinate sc);
@@ -780,6 +782,7 @@ class IonBuilder
     InliningStatus inlineAtomicsStore(CallInfo& callInfo);
     InliningStatus inlineAtomicsFence(CallInfo& callInfo);
     InliningStatus inlineAtomicsBinop(CallInfo& callInfo, JSFunction* target);
+    InliningStatus inlineAtomicsIsLockFree(CallInfo& callInfo);
 
     // Slot intrinsics.
     InliningStatus inlineUnsafeSetReservedSlot(CallInfo& callInfo);
@@ -816,8 +819,8 @@ class IonBuilder
                                   MSimdBinaryComp::Operation op, SimdTypeDescr::Type compType);
     InliningStatus inlineUnarySimd(CallInfo& callInfo, JSNative native,
                                    MSimdUnaryArith::Operation op, SimdTypeDescr::Type type);
-    InliningStatus inlineSimdWith(CallInfo& callInfo, JSNative native, SimdLane lane,
-                                  SimdTypeDescr::Type type);
+    InliningStatus inlineSimdReplaceLane(CallInfo& callInfo, JSNative native,
+                                         SimdTypeDescr::Type type);
     InliningStatus inlineSimdSplat(CallInfo& callInfo, JSNative native, SimdTypeDescr::Type type);
     InliningStatus inlineSimdShuffle(CallInfo& callInfo, JSNative native, SimdTypeDescr::Type type,
                                      unsigned numVectors, unsigned numLanes);
@@ -925,8 +928,8 @@ class IonBuilder
     JSObject* testSingletonProperty(JSObject* obj, PropertyName* name);
     JSObject* testSingletonPropertyTypes(MDefinition* obj, PropertyName* name);
 
-    uint32_t getDefiniteSlot(TemporaryTypeSet* types, PropertyName* name, uint32_t* pnfixed,
-                             BaselineInspector::ObjectGroupVector& convertUnboxedGroups);
+    uint32_t getDefiniteSlot(TemporaryTypeSet* types, PropertyName* name, uint32_t* pnfixed);
+    MDefinition* convertUnboxedObjects(MDefinition* obj);
     MDefinition* convertUnboxedObjects(MDefinition* obj,
                                        const BaselineInspector::ObjectGroupVector& list);
     uint32_t getUnboxedOffset(TemporaryTypeSet* types, PropertyName* name,

@@ -46,6 +46,9 @@ class MediaOmxReader : public MediaOmxCommonReader
   bool mIsShutdown;
   MediaPromiseHolder<MediaDecoderReader::MetadataPromise> mMetadataPromise;
   MediaPromiseRequestHolder<MediaResourcePromise> mMediaResourceRequest;
+
+  MediaPromiseHolder<MediaDecoderReader::SeekPromise> mSeekPromise;
+  MediaPromiseRequestHolder<MediaDecoderReader::VideoDataPromise> mSeekRequest;
 protected:
   android::sp<android::OmxDecoder> mOmxDecoder;
   android::sp<android::MediaExtractor> mExtractor;
@@ -69,7 +72,16 @@ public:
 
   virtual nsresult Init(MediaDecoderReader* aCloneDonor);
 
-  virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset);
+protected:
+  virtual void NotifyDataArrivedInternal(uint32_t aLength, int64_t aOffset) override;
+public:
+
+  virtual nsresult ResetDecode()
+  {
+    mSeekRequest.DisconnectIfExists();
+    mSeekPromise.RejectIfExists(NS_OK, __func__);
+    return MediaDecoderReader::ResetDecode();
+  }
 
   virtual bool DecodeAudioData();
   virtual bool DecodeVideoFrame(bool &aKeyframeSkip,
@@ -85,7 +97,6 @@ public:
     return mHasVideo;
   }
 
-  virtual bool IsDormantNeeded() { return true;}
   virtual void ReleaseMediaResources();
 
   virtual nsRefPtr<MediaDecoderReader::MetadataPromise> AsyncReadMetadata() override;
@@ -114,7 +125,7 @@ private:
     return mIsShutdown;
   }
 
-  int64_t ProcessCachedData(int64_t aOffset, bool aWaitForCompletion);
+  int64_t ProcessCachedData(int64_t aOffset);
 
   already_AddRefed<AbstractMediaDecoder> SafeGetDecoder();
 };

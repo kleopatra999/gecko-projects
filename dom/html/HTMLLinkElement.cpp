@@ -24,7 +24,6 @@
 #include "nsIStyleSheet.h"
 #include "nsIStyleSheetLinkingElement.h"
 #include "nsIURL.h"
-#include "nsNetUtil.h"
 #include "nsPIDOMWindow.h"
 #include "nsReadableUtils.h"
 #include "nsStyleConsts.h"
@@ -316,7 +315,7 @@ HTMLLinkElement::UpdatePreconnect()
   if (owner) {
     nsCOMPtr<nsIURI> uri = GetHrefURI();
     if (uri) {
-      owner->MaybePreconnect(uri);
+        owner->MaybePreconnect(uri, GetCORSMode());
     }
   }
 }

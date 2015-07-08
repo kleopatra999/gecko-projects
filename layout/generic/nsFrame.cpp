@@ -53,7 +53,7 @@
 #include "nsRange.h"
 #include "nsITextControlFrame.h"
 #include "nsNameSpaceManager.h"
-#include "nsIPercentHeightObserver.h"
+#include "nsIPercentBSizeObserver.h"
 #include "nsStyleStructInlines.h"
 #include "FrameLayerBuilder.h"
 
@@ -1082,7 +1082,7 @@ nsIFrame::IsTransformed() const
           (StyleDisplay()->HasTransform(this) ||
            IsSVGTransformed() ||
            (mContent &&
-            nsLayoutUtils::HasAnimationsForCompositor(mContent,
+            nsLayoutUtils::HasAnimationsForCompositor(this,
                                                       eCSSProperty_transform) &&
             IsFrameOfType(eSupportsCSSTransforms) &&
             mContent->GetPrimaryFrame() == this)));
@@ -1096,7 +1096,7 @@ nsIFrame::HasOpacityInternal(float aThreshold) const
   return StyleDisplay()->mOpacity < aThreshold ||
          (displayStyle->mWillChangeBitField & NS_STYLE_WILL_CHANGE_OPACITY) ||
          (mContent &&
-           nsLayoutUtils::HasAnimationsForCompositor(mContent,
+           nsLayoutUtils::HasAnimationsForCompositor(this,
                                                      eCSSProperty_opacity) &&
            mContent->GetPrimaryFrame() == this);
 }
@@ -1946,7 +1946,7 @@ nsIFrame::BuildDisplayListForStackingContext(nsDisplayListBuilder* aBuilder,
   if (disp->mOpacity == 0.0 && aBuilder->IsForPainting() &&
       !aBuilder->WillComputePluginGeometry() &&
       !(disp->mWillChangeBitField & NS_STYLE_WILL_CHANGE_OPACITY) &&
-      !nsLayoutUtils::HasAnimations(mContent, eCSSProperty_opacity) &&
+      !nsLayoutUtils::HasAnimations(this, eCSSProperty_opacity) &&
       !needEventRegions) {
     return;
   }
@@ -4328,20 +4328,20 @@ nsFrame::ComputeSize(nsRenderingContext *aRenderingContext,
       GetMinimumWidgetSize(presContext, this, disp->mAppearance,
                            &widget, &canOverride);
 
-    // Dimensions from themed widgets are applied physically...
-    nsSize size;
-    size.width = presContext->DevPixelsToAppUnits(widget.width);
-    size.height = presContext->DevPixelsToAppUnits(widget.height);
+    // Convert themed widget's physical dimensions to logical coords
+    LogicalSize size(aWM,
+                     nsSize(presContext->DevPixelsToAppUnits(widget.width),
+                            presContext->DevPixelsToAppUnits(widget.height)));
 
     // GMWS() returns border-box; we need content-box
-    size.width -= aBorder.Width(aWM) + aPadding.Width(aWM);
-    size.height -= aBorder.Height(aWM) + aPadding.Height(aWM);
+    size.ISize(aWM) -= aBorder.ISize(aWM) + aPadding.ISize(aWM);
+    size.BSize(aWM) -= aBorder.BSize(aWM) + aPadding.BSize(aWM);
 
-    if (size.height > result.Height(aWM) || !canOverride) {
-      result.Height(aWM) = size.height;
+    if (size.BSize(aWM) > result.BSize(aWM) || !canOverride) {
+      result.BSize(aWM) = size.BSize(aWM);
     }
-    if (size.width > result.Width(aWM) || !canOverride) {
-      result.Width(aWM) = size.width;
+    if (size.ISize(aWM) > result.ISize(aWM) || !canOverride) {
+      result.ISize(aWM) = size.ISize(aWM);
     }
   }
 
@@ -4449,15 +4449,16 @@ nsFrame::DidReflow(nsPresContext*           aPresContext,
                 NS_FRAME_HAS_DIRTY_CHILDREN);
   }
 
-  // Notify the percent height observer if there is a percent height.
+  // Notify the percent bsize observer if there is a percent bsize.
   // The observer may be able to initiate another reflow with a computed
-  // height. This happens in the case where a table cell has no computed
-  // height but can fabricate one when the cell height is known.
-  if (aReflowState && aReflowState->mPercentHeightObserver &&
+  // bsize. This happens in the case where a table cell has no computed
+  // bsize but can fabricate one when the cell bsize is known.
+  if (aReflowState && aReflowState->mPercentBSizeObserver &&
       !GetPrevInFlow()) {
-    const nsStyleCoord &height = aReflowState->mStylePosition->mHeight;
-    if (height.HasPercent()) {
-      aReflowState->mPercentHeightObserver->NotifyPercentHeight(*aReflowState);
+    const nsStyleCoord &bsize =
+      aReflowState->mStylePosition->BSize(aReflowState->GetWritingMode());
+    if (bsize.HasPercent()) {
+      aReflowState->mPercentBSizeObserver->NotifyPercentBSize(*aReflowState);
     }
   }
 
@@ -5665,6 +5666,31 @@ nsIFrame::ListGeneric(nsACString& aTo, const char* aPrefix, uint32_t aFlags) con
     aTo += nsPrintfCString(" IBSplitPrevSibling=%p", IBprevsibling);
   }
   aTo += nsPrintfCString(" {%d,%d,%d,%d}", mRect.x, mRect.y, mRect.width, mRect.height);
+
+  mozilla::WritingMode wm = GetWritingMode();
+  if (wm.IsVertical() || !wm.IsBidiLTR()) {
+    aTo += nsPrintfCString(" wm=%s-%s: logical size={%d,%d}",
+                           wm.IsVertical() ? wm.IsVerticalLR() ? "vlr" : "vrl"
+                                           : "htb",
+                           wm.IsBidiLTR() ? "ltr" : "rtl",
+                           ISize(), BSize());
+  }
+
+  nsIFrame* parent = GetParent();
+  if (parent) {
+    WritingMode pWM = parent->GetWritingMode();
+    if (pWM.IsVertical() || !pWM.IsBidiLTR()) {
+      nscoord cw = parent->mRect.width;
+      LogicalRect lr(pWM, mRect, cw);
+      aTo += nsPrintfCString(" parent wm=%s-%s,width=%d,logicalRect={%d,%d,%d,%d}",
+                             pWM.IsVertical() ? pWM.IsVerticalLR()
+                                                ? "vlr" : "vrl"
+                                              : "htb",
+                             wm.IsBidiLTR() ? "ltr" : "rtl",
+                             cw, lr.IStart(pWM), lr.BStart(pWM),
+                             lr.ISize(pWM), lr.BSize(pWM));
+    }
+  }
   nsIFrame* f = const_cast<nsIFrame*>(this);
   if (f->HasOverflowAreas()) {
     nsRect vo = f->GetVisualOverflowRect();
@@ -7317,6 +7343,7 @@ UnionBorderBoxes(nsIFrame* aFrame, bool aApplyTransform,
   nsIAtom* fType = aFrame->GetType();
   if (nsFrame::ShouldApplyOverflowClipping(aFrame, disp) ||
       fType == nsGkAtoms::scrollFrame ||
+      fType == nsGkAtoms::listControlFrame ||
       fType == nsGkAtoms::svgOuterSVGFrame) {
     return u;
   }
@@ -9742,8 +9769,8 @@ static void DisplayReflowEnterPrint(nsPresContext*          aPresContext,
     if (aFrame->GetStateBits() & NS_FRAME_HAS_DIRTY_CHILDREN)
       printf("dirty-children ");
 
-    if (aReflowState.mFlags.mSpecialHeightReflow)
-      printf("special-height ");
+    if (aReflowState.mFlags.mSpecialBSizeReflow)
+      printf("special-bsize ");
 
     if (aReflowState.IsHResize())
       printf("h-resize ");

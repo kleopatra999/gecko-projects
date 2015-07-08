@@ -323,25 +323,30 @@ RTCPeerConnection.prototype = {
   __init: function(rtcConfig) {
     this._winID = this._win.QueryInterface(Ci.nsIInterfaceRequestor)
     .getInterface(Ci.nsIDOMWindowUtils).currentInnerWindowID;
-
     if (!rtcConfig.iceServers ||
         !Services.prefs.getBoolPref("media.peerconnection.use_document_iceservers")) {
-      rtcConfig.iceServers =
-        JSON.parse(Services.prefs.getCharPref("media.peerconnection.default_iceservers"));
-    }
-    // Normalize iceServers input
-    rtcConfig.iceServers.forEach(server => {
-      if (typeof server.urls === "string") {
-        server.urls = [server.urls];
-      } else if (!server.urls && server.url) {
-        // TODO: Remove support for legacy iceServer.url eventually (Bug 1116766)
-        server.urls = [server.url];
-        this.logWarning("RTCIceServer.url is deprecated! Use urls instead.", null, 0);
+      try {
+         rtcConfig.iceServers =
+           JSON.parse(Services.prefs.getCharPref("media.peerconnection.default_iceservers") || "[]");
+      } catch (e) {
+        this.logWarning(
+            "Ignoring invalid media.peerconnection.default_iceservers in about:config",
+             null, 0);
+        rtcConfig.iceServers = [];
       }
-    });
-    this._mustValidateRTCConfiguration(rtcConfig,
+      try {
+        this._mustValidateRTCConfiguration(rtcConfig,
+            "Ignoring invalid media.peerconnection.default_iceservers in about:config");
+      } catch (e) {
+        this.logWarning(e.message, null, 0);
+        rtcConfig.iceServers = [];
+      }
+    } else {
+      // This gets executed in the typical case when iceServers
+      // are passed in through the web page.
+      this._mustValidateRTCConfiguration(rtcConfig,
         "RTCPeerConnection constructor passed invalid RTCConfiguration");
-
+    }
     // Save the appId
     this._appId = Cu.getWebIDLCallerPrincipal().appId;
 
@@ -383,6 +388,7 @@ RTCPeerConnection.prototype = {
 
     this._impl.initialize(this._observer, this._win, rtcConfig,
                           Services.tm.currentThread);
+    this._initCertificate(rtcConfig.certificates);
     this._initIdp();
     _globalPCList.notifyLifecycleObservers(this, "initialized");
   },
@@ -394,6 +400,30 @@ RTCPeerConnection.prototype = {
           "InvalidStateError");
     }
     return this._pc;
+  },
+
+  _initCertificate: function(certificates) {
+    let certPromise;
+    if (certificates && certificates.length > 0) {
+      if (certificates.length > 1) {
+        throw new this._win.DOMException(
+          "RTCPeerConnection does not currently support multiple certificates",
+          "NotSupportedError");
+      }
+      let cert = certificates.find(c => c.expires.getTime() > Date.now());
+      if (!cert) {
+        throw new this._win.DOMException(
+          "Unable to create RTCPeerConnection with an expired certificate",
+          "InvalidParameterError");
+      }
+      certPromise = Promise.resolve(cert);
+    } else {
+      certPromise = this._win.mozRTCPeerConnection.generateCertificate({
+        name: "ECDSA", namedCurve: "P-256"
+      });
+    }
+    this._certificateReady = certPromise
+      .then(cert => this._impl.certificate = cert);
   },
 
   _initIdp: function() {
@@ -463,12 +493,23 @@ RTCPeerConnection.prototype = {
    *                   { urls: ["turn:turn1.x.org", "turn:turn2.x.org"],
    *                     username:"jib", credential:"mypass"} ] }
    *
-   * WebIDL normalizes structure for us, so we test well-formed stun/turn urls,
-   * but not validity of servers themselves, before passing along to C++.
-   *
+   * This function normalizes the structure of the input for rtcConfig.iceServers for us,
+   * so we test well-formed stun/turn urls before passing along to C++.
    *   msg - Error message to detail which array-entry failed, if any.
    */
   _mustValidateRTCConfiguration: function(rtcConfig, msg) {
+
+    // Normalize iceServers input
+    rtcConfig.iceServers.forEach(server => {
+      if (typeof server.urls === "string") {
+        server.urls = [server.urls];
+      } else if (!server.urls && server.url) {
+        // TODO: Remove support for legacy iceServer.url eventually (Bug 1116766)
+        server.urls = [server.url];
+        this.logWarning("RTCIceServer.url is deprecated! Use urls instead.", null, 0);
+      }
+    });
+
     let ios = Cc['@mozilla.org/network/io-service;1'].getService(Ci.nsIIOService);
 
     let nicerNewURI = uriStr => {
@@ -639,11 +680,13 @@ RTCPeerConnection.prototype = {
 
       let origin = Cu.getWebIDLCallerPrincipal().origin;
       return this._chain(() => {
-        let p = new this._win.Promise((resolve, reject) => {
-          this._onCreateOfferSuccess = resolve;
-          this._onCreateOfferFailure = reject;
-          this._impl.createOffer(options);
-        });
+        let p = this._certificateReady.then(
+          () => new this._win.Promise((resolve, reject) => {
+            this._onCreateOfferSuccess = resolve;
+            this._onCreateOfferFailure = reject;
+            this._impl.createOffer(options);
+          })
+        );
         p = this._addIdentityAssertion(p, origin);
         return p.then(
           sdp => new this._win.mozRTCSessionDescription({ type: "offer", sdp: sdp }));
@@ -655,22 +698,24 @@ RTCPeerConnection.prototype = {
     return this._legacyCatch(onSuccess, onError, () => {
       let origin = Cu.getWebIDLCallerPrincipal().origin;
       return this._chain(() => {
-        let p = new this._win.Promise((resolve, reject) => {
-        // We give up line-numbers in errors by doing this here, but do all
-        // state-checks inside the chain, to support the legacy feature that
-        // callers don't have to wait for setRemoteDescription to finish.
-        if (!this.remoteDescription) {
-          throw new this._win.DOMException("setRemoteDescription not called",
-                                           "InvalidStateError");
-        }
-        if (this.remoteDescription.type != "offer") {
-          throw new this._win.DOMException("No outstanding offer",
-                                           "InvalidStateError");
-        }
-        this._onCreateAnswerSuccess = resolve;
-        this._onCreateAnswerFailure = reject;
-        this._impl.createAnswer();
-        });
+        let p = this._certificateReady.then(
+          () => new this._win.Promise((resolve, reject) => {
+            // We give up line-numbers in errors by doing this here, but do all
+            // state-checks inside the chain, to support the legacy feature that
+            // callers don't have to wait for setRemoteDescription to finish.
+            if (!this.remoteDescription) {
+              throw new this._win.DOMException("setRemoteDescription not called",
+                                               "InvalidStateError");
+            }
+            if (this.remoteDescription.type != "offer") {
+              throw new this._win.DOMException("No outstanding offer",
+                                               "InvalidStateError");
+            }
+            this._onCreateAnswerSuccess = resolve;
+            this._onCreateAnswerFailure = reject;
+            this._impl.createAnswer();
+          })
+        );
         p = this._addIdentityAssertion(p, origin);
         return p.then(sdp => {
           return new this._win.mozRTCSessionDescription({ type: "answer", sdp: sdp });
@@ -678,7 +723,6 @@ RTCPeerConnection.prototype = {
       });
     });
   },
-
 
   setLocalDescription: function(desc, onSuccess, onError) {
     return this._legacyCatch(onSuccess, onError, () => {
@@ -802,9 +846,11 @@ RTCPeerConnection.prototype = {
 
   getIdentityAssertion: function() {
     let origin = Cu.getWebIDLCallerPrincipal().origin;
-    return this._chain(() => {
-      return this._localIdp.getIdentityAssertion(this._impl.fingerprint, origin);
-    });
+    return this._chain(
+      () => this._certificateReady.then(
+        () => this._localIdp.getIdentityAssertion(this._impl.fingerprint, origin)
+      )
+    );
   },
 
   updateIce: function(config) {

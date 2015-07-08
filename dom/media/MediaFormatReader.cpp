@@ -73,10 +73,6 @@ MediaFormatReader::MediaFormatReader(AbstractMediaDecoder* aDecoder,
   , mSeekable(false)
   , mIsEncrypted(false)
   , mTrackDemuxersMayBlock(false)
-  , mCachedTimeRangesStale(true)
-#if defined(READER_DORMANT_HEURISTIC)
-  , mDormantEnabled(Preferences::GetBool("media.decoder.heuristic.dormant.enabled", false))
-#endif
 {
   MOZ_ASSERT(aDemuxer);
   MOZ_COUNT_CTOR(MediaFormatReader);
@@ -525,7 +521,8 @@ MediaFormatReader::ShouldSkip(bool aSkipToNextKeyframe, media::TimeUnit aTimeThr
 
 nsRefPtr<MediaDecoderReader::VideoDataPromise>
 MediaFormatReader::RequestVideoData(bool aSkipToNextKeyframe,
-                                     int64_t aTimeThreshold)
+                                    int64_t aTimeThreshold,
+                                    bool aForceDecodeAhead)
 {
   MOZ_ASSERT(OnTaskQueue());
   MOZ_DIAGNOSTIC_ASSERT(mSeekPromise.IsEmpty(), "No sample requests allowed while seeking");
@@ -557,6 +554,7 @@ MediaFormatReader::RequestVideoData(bool aSkipToNextKeyframe,
 
   MOZ_ASSERT(HasVideo() && mPlatform && mVideo.mDecoder);
 
+  mVideo.mForceDecodeAhead = aForceDecodeAhead;
   media::TimeUnit timeThreshold{media::TimeUnit::FromMicroseconds(aTimeThreshold)};
   if (ShouldSkip(aSkipToNextKeyframe, timeThreshold)) {
     Flush(TrackInfo::kVideoTrack);
@@ -755,11 +753,12 @@ MediaFormatReader::NeedInput(DecoderData& aDecoder)
   // which overrides our "few more samples" threshold.
   return
     !aDecoder.mError &&
-    aDecoder.HasPromise() &&
+    (aDecoder.HasPromise() || aDecoder.mForceDecodeAhead) &&
     !aDecoder.mDemuxRequest.Exists() &&
     aDecoder.mOutput.IsEmpty() &&
     (aDecoder.mInputExhausted || !aDecoder.mQueuedSamples.IsEmpty() ||
      aDecoder.mTimeThreshold.isSome() ||
+     aDecoder.mForceDecodeAhead ||
      aDecoder.mNumSamplesInput - aDecoder.mNumSamplesOutput < aDecoder.mDecodeAhead);
 }
 
@@ -794,11 +793,8 @@ MediaFormatReader::UpdateReceivedNewData(TrackType aTrack)
   decoder.mWaitingForData = false;
   bool hasLastEnd;
   media::TimeUnit lastEnd = decoder.mTimeRanges.GetEnd(&hasLastEnd);
-  {
-    MonitorAutoLock lock(decoder.mMonitor);
-    // Update our cached TimeRange.
-    decoder.mTimeRanges = decoder.mTrackDemuxer->GetBuffered();
-  }
+  // Update our cached TimeRange.
+  decoder.mTimeRanges = decoder.mTrackDemuxer->GetBuffered();
   if (decoder.mTimeRanges.Length() &&
       (!hasLastEnd || decoder.mTimeRanges.GetEnd() > lastEnd)) {
     // New data was added after our previous end, we can clear the EOS flag.
@@ -1111,9 +1107,7 @@ nsresult
 MediaFormatReader::ResetDecode()
 {
   MOZ_ASSERT(OnTaskQueue());
-
   LOGV("");
-  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
 
   mAudio.mSeekRequest.DisconnectIfExists();
   mVideo.mSeekRequest.DisconnectIfExists();
@@ -1402,6 +1396,7 @@ MediaFormatReader::GetEvictionOffset(double aTime)
 media::TimeIntervals
 MediaFormatReader::GetBuffered()
 {
+  MOZ_ASSERT(OnTaskQueue());
   media::TimeIntervals videoti;
   media::TimeIntervals audioti;
   media::TimeIntervals intervals;
@@ -1412,69 +1407,31 @@ MediaFormatReader::GetBuffered()
   int64_t startTime;
   {
     ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
-    NS_ENSURE_TRUE(mStartTime >= 0, media::TimeIntervals());
-    startTime = mStartTime;
+    NS_ENSURE_TRUE(HaveStartTime(), media::TimeIntervals());
+    startTime = StartTime();
   }
-  if (NS_IsMainThread()) {
-    if (mCachedTimeRangesStale) {
-      MOZ_ASSERT(mMainThreadDemuxer);
-      if (!mDataRange.IsEmpty()) {
-        mMainThreadDemuxer->NotifyDataArrived(mDataRange.Length(), mDataRange.mStart);
-      }
-      if (mVideoTrackDemuxer) {
-        videoti = mVideoTrackDemuxer->GetBuffered();
-      }
-      if (mAudioTrackDemuxer) {
-        audioti = mAudioTrackDemuxer->GetBuffered();
-      }
-      if (HasAudio() && HasVideo()) {
-        mCachedTimeRanges = media::Intersection(Move(videoti), Move(audioti));
-      } else if (HasAudio()) {
-        mCachedTimeRanges = Move(audioti);
-      } else if (HasVideo()) {
-        mCachedTimeRanges = Move(videoti);
-      }
-      mDataRange = ByteInterval();
-      mCachedTimeRangesStale = false;
-    }
-    intervals = mCachedTimeRanges;
-  } else {
-    if (OnTaskQueue()) {
-      // Ensure we have up to date buffered time range.
-      if (HasVideo()) {
-        UpdateReceivedNewData(TrackType::kVideoTrack);
-      }
-      if (HasAudio()) {
-        UpdateReceivedNewData(TrackType::kAudioTrack);
-      }
-    }
-    if (HasVideo()) {
-      MonitorAutoLock lock(mVideo.mMonitor);
-      videoti = mVideo.mTimeRanges;
-    }
-    if (HasAudio()) {
-      MonitorAutoLock lock(mAudio.mMonitor);
-      audioti = mAudio.mTimeRanges;
-    }
-    if (HasAudio() && HasVideo()) {
-      intervals = media::Intersection(Move(videoti), Move(audioti));
-    } else if (HasAudio()) {
-      intervals = Move(audioti);
-    } else if (HasVideo()) {
-      intervals = Move(videoti);
-    }
+  // Ensure we have up to date buffered time range.
+  if (HasVideo()) {
+    UpdateReceivedNewData(TrackType::kVideoTrack);
+  }
+  if (HasAudio()) {
+    UpdateReceivedNewData(TrackType::kAudioTrack);
+  }
+  if (HasVideo()) {
+    videoti = mVideo.mTimeRanges;
+  }
+  if (HasAudio()) {
+    audioti = mAudio.mTimeRanges;
+  }
+  if (HasAudio() && HasVideo()) {
+    intervals = media::Intersection(Move(videoti), Move(audioti));
+  } else if (HasAudio()) {
+    intervals = Move(audioti);
+  } else if (HasVideo()) {
+    intervals = Move(videoti);
   }
 
   return intervals.Shift(media::TimeUnit::FromMicroseconds(-startTime));
-}
-
-bool MediaFormatReader::IsDormantNeeded()
-{
-#if defined(READER_DORMANT_HEURISTIC)
-  return mDormantEnabled;
-#else
-  return false;
-#endif
 }
 
 void MediaFormatReader::ReleaseMediaResources()
@@ -1539,51 +1496,43 @@ MediaFormatReader::NotifyDemuxer(uint32_t aLength, int64_t aOffset)
 }
 
 void
-MediaFormatReader::NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset)
+MediaFormatReader::NotifyDataArrivedInternal(uint32_t aLength, int64_t aOffset)
 {
-  MOZ_ASSERT(NS_IsMainThread());
-
-  MOZ_ASSERT(aBuffer || aLength);
-  if (mDataRange.IsEmpty()) {
-    mDataRange = ByteInterval(aOffset, aOffset + aLength);
-  } else {
-    mDataRange = mDataRange.Span(ByteInterval(aOffset, aOffset + aLength));
-  }
-  mCachedTimeRangesStale = true;
+  MOZ_ASSERT(OnTaskQueue());
+  MOZ_ASSERT(aLength);
 
   if (!mInitDone) {
     return;
   }
 
-  // Queue a task to notify our main demuxer.
-  RefPtr<nsIRunnable> task =
-    NS_NewRunnableMethodWithArgs<int32_t, uint64_t>(
-      this, &MediaFormatReader::NotifyDemuxer,
+  // Queue a task to notify our main thread demuxer.
+  nsCOMPtr<nsIRunnable> task =
+    NS_NewRunnableMethodWithArgs<uint32_t, int64_t>(
+      mMainThreadDemuxer, &MediaDataDemuxer::NotifyDataArrived,
       aLength, aOffset);
-  TaskQueue()->Dispatch(task.forget());
+  AbstractThread::MainThread()->Dispatch(task.forget());
+
+  NotifyDemuxer(aLength, aOffset);
 }
 
 void
 MediaFormatReader::NotifyDataRemoved()
 {
-  MOZ_ASSERT(NS_IsMainThread());
-
-  mDataRange = ByteInterval();
-  mCachedTimeRangesStale = true;
+  MOZ_ASSERT(OnTaskQueue());
 
   if (!mInitDone) {
     return;
   }
 
   MOZ_ASSERT(mMainThreadDemuxer);
-  mMainThreadDemuxer->NotifyDataRemoved();
 
-  // Queue a task to notify our main demuxer.
-  RefPtr<nsIRunnable> task =
-    NS_NewRunnableMethodWithArgs<int32_t, uint64_t>(
-      this, &MediaFormatReader::NotifyDemuxer,
-      0, 0);
-  TaskQueue()->Dispatch(task.forget());
+  // Queue a task to notify our main thread demuxer.
+  nsCOMPtr<nsIRunnable> task =
+    NS_NewRunnableMethod(
+      mMainThreadDemuxer, &MediaDataDemuxer::NotifyDataRemoved);
+  AbstractThread::MainThread()->Dispatch(task.forget());
+
+  NotifyDemuxer(0, 0);
 }
 
 bool

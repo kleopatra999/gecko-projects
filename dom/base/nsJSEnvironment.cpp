@@ -14,7 +14,6 @@
 #include "nsDOMCID.h"
 #include "nsIServiceManager.h"
 #include "nsIXPConnect.h"
-#include "nsIJSRuntimeService.h"
 #include "nsCOMPtr.h"
 #include "nsISupportsPrimitives.h"
 #include "nsReadableUtils.h"
@@ -35,7 +34,6 @@
 #include "mozilla/EventDispatcher.h"
 #include "nsIContent.h"
 #include "nsCycleCollector.h"
-#include "nsNetUtil.h"
 #include "nsXPCOMCIDInternal.h"
 #include "nsIXULRuntime.h"
 #include "nsTextFormatter.h"
@@ -62,6 +60,8 @@
 #ifdef MOZ_NFC
 #include "mozilla/dom/MozNDEFRecord.h"
 #endif // MOZ_NFC
+#include "mozilla/dom/RTCCertificate.h"
+#include "mozilla/dom/RTCCertificateBinding.h"
 #include "mozilla/dom/StructuredClone.h"
 #include "mozilla/dom/SubtleCryptoBinding.h"
 #include "mozilla/ipc/BackgroundUtils.h"
@@ -196,11 +196,6 @@ static bool sIncrementalCC = false;
 static bool sDidPaintAfterPreviousICCSlice = false;
 
 static nsScriptNameSpaceManager *gNameSpaceManager;
-
-static nsIJSRuntimeService *sRuntimeService;
-
-static const char kJSRuntimeServiceContractID[] =
-  "@mozilla.org/js/xpc/RuntimeService;1";
 
 static PRTime sFirstCollectionTime;
 
@@ -651,10 +646,8 @@ nsJSContext::~nsJSContext()
 
   if (!sContextCount && sDidShutdown) {
     // The last context is being deleted, and we're already in the
-    // process of shutting down, release the JS runtime service, and
-    // the security manager.
+    // process of shutting down, release the security manager.
 
-    NS_IF_RELEASE(sRuntimeService);
     NS_IF_RELEASE(sSecurityManager);
   }
 }
@@ -939,7 +932,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
       JSString *str = ::JS_NewStringCopyN(cx, data.get(), data.Length());
       NS_ENSURE_TRUE(str, NS_ERROR_OUT_OF_MEMORY);
 
-      *aArgv = STRING_TO_JSVAL(str);
+      aArgv->setString(str);
 
       break;
     }
@@ -957,7 +950,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
         ::JS_NewUCStringCopyN(cx, data.get(), data.Length());
       NS_ENSURE_TRUE(str, NS_ERROR_OUT_OF_MEMORY);
 
-      *aArgv = STRING_TO_JSVAL(str);
+      aArgv->setString(str);
       break;
     }
     case nsISupportsPrimitive::TYPE_PRBOOL : {
@@ -968,7 +961,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = BOOLEAN_TO_JSVAL(data);
+      aArgv->setBoolean(data);
 
       break;
     }
@@ -980,7 +973,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -992,7 +985,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -1004,7 +997,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -1019,7 +1012,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
       JSString *str = ::JS_NewStringCopyN(cx, &data, 1);
       NS_ENSURE_TRUE(str, NS_ERROR_OUT_OF_MEMORY);
 
-      *aArgv = STRING_TO_JSVAL(str);
+      aArgv->setString(str);
 
       break;
     }
@@ -1031,7 +1024,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -1043,7 +1036,7 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       p->GetData(&data);
 
-      *aArgv = INT_TO_JSVAL(data);
+      aArgv->setInt32(data);
 
       break;
     }
@@ -1100,12 +1093,12 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
     case nsISupportsPrimitive::TYPE_PRTIME :
     case nsISupportsPrimitive::TYPE_VOID : {
       NS_WARNING("Unsupported primitive type used");
-      *aArgv = JSVAL_NULL;
+      aArgv->setNull();
       break;
     }
     default : {
       NS_WARNING("Unknown primitive type used");
-      *aArgv = JSVAL_NULL;
+      aArgv->setNull();
       break;
     }
   }
@@ -2372,7 +2365,6 @@ mozilla::dom::StartupJSEnvironment()
   sNeedsFullCC = false;
   sNeedsGCAfterCC = false;
   gNameSpaceManager = nullptr;
-  sRuntimeService = nullptr;
   sRuntime = nullptr;
   sIsInitialized = false;
   sDidShutdown = false;
@@ -2556,6 +2548,25 @@ NS_DOMReadStructuredClone(JSContext* cx,
 #endif
   }
 
+  if (tag == SCTAG_DOM_RTC_CERTIFICATE) {
+    nsIGlobalObject *global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(cx));
+    if (!global) {
+      return nullptr;
+    }
+
+    // Prevent the return value from being trashed by a GC during ~nsRefPtr.
+    JS::Rooted<JSObject*> result(cx);
+    {
+      nsRefPtr<RTCCertificate> cert = new RTCCertificate(global);
+      if (!cert->ReadStructuredClone(reader)) {
+        result = nullptr;
+      } else {
+        result = cert->WrapObject(cx, nullptr);
+      }
+    }
+    return result;
+  }
+
   // Don't know what this is. Bail.
   xpc::Throw(cx, NS_ERROR_DOM_DATA_CLONE_ERR);
   return nullptr;
@@ -2578,6 +2589,13 @@ NS_DOMWriteStructuredClone(JSContext* cx,
   if (NS_SUCCEEDED(UNWRAP_OBJECT(CryptoKey, obj, key))) {
     return JS_WriteUint32Pair(writer, SCTAG_DOM_WEBCRYPTO_KEY, 0) &&
            key->WriteStructuredClone(writer);
+  }
+
+  // Handle WebRTC Certificate cloning
+  RTCCertificate* cert;
+  if (NS_SUCCEEDED(UNWRAP_OBJECT(RTCCertificate, obj, cert))) {
+    return JS_WriteUint32Pair(writer, SCTAG_DOM_RTC_CERTIFICATE, 0) &&
+           cert->WriteStructuredClone(writer);
   }
 
   if (xpc::IsReflector(obj)) {
@@ -2673,13 +2691,8 @@ nsJSContext::EnsureStatics()
     MOZ_CRASH();
   }
 
-  rv = CallGetService(kJSRuntimeServiceContractID, &sRuntimeService);
-  if (NS_FAILED(rv)) {
-    MOZ_CRASH();
-  }
-
-  rv = sRuntimeService->GetRuntime(&sRuntime);
-  if (NS_FAILED(rv)) {
+  sRuntime = xpc::GetJSRuntime();
+  if (!sRuntime) {
     MOZ_CRASH();
   }
 
@@ -2850,9 +2863,7 @@ mozilla::dom::ShutdownJSEnvironment()
 
   if (!sContextCount) {
     // We're being shutdown, and there are no more contexts
-    // alive, release the JS runtime service and the security manager.
-
-    NS_IF_RELEASE(sRuntimeService);
+    // alive, release the security manager.
     NS_IF_RELEASE(sSecurityManager);
   }
 

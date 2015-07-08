@@ -90,12 +90,20 @@ this.ForgetAboutSite = {
     const FLAG_CLEAR_ALL = phInterface.FLAG_CLEAR_ALL;
     let ph = Cc["@mozilla.org/plugin/host;1"].getService(phInterface);
     let tags = ph.getPluginTags();
+    let promises = [];
     for (let i = 0; i < tags.length; i++) {
-      try {
-        ph.clearSiteData(tags[i], aDomain, FLAG_CLEAR_ALL, -1);
-      } catch (e) {
-        // Ignore errors from the plugin
-      }
+      let promise = new Promise(resolve => {
+        let tag = tags[i];
+        try {
+          ph.clearSiteData(tags[i], aDomain, FLAG_CLEAR_ALL, -1, function(rv) {
+            resolve();
+          });
+        } catch (e) {
+          // Ignore errors from the plugin, but resolve the promise
+          resolve();
+        }
+      });
+      promises.push(promise);
     }
 
     // Downloads
@@ -133,7 +141,7 @@ this.ForgetAboutSite = {
     while (enumerator.hasMoreElements()) {
       let perm = enumerator.getNext().QueryInterface(Ci.nsIPermission);
       if (hasRootDomain(perm.host, aDomain))
-        pm.remove(perm.host, perm.type);
+        pm.removePermission(perm);
     }
 
     // Offline Storages
@@ -168,5 +176,6 @@ this.ForgetAboutSite = {
     let np = Cc["@mozilla.org/network/predictor;1"].
              getService(Ci.nsINetworkPredictor);
     np.reset();
+    return Promise.all(promises);
   }
 };

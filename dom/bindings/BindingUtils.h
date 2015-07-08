@@ -46,15 +46,6 @@ namespace mozilla {
 namespace dom {
 template<typename DataType> class MozMap;
 
-struct SelfRef
-{
-  SelfRef() : ptr(nullptr) {}
-  explicit SelfRef(nsISupports *p) : ptr(p) {}
-  ~SelfRef() { NS_IF_RELEASE(ptr); }
-
-  nsISupports* ptr;
-};
-
 nsresult
 UnwrapArgImpl(JS::Handle<JSObject*> src, const nsIID& iid, void** ppArg);
 
@@ -1731,9 +1722,9 @@ GetCallbackFromCallbackObject(T& aObj)
 }
 
 static inline bool
-InternJSString(JSContext* cx, jsid& id, const char* chars)
+AtomizeAndPinJSString(JSContext* cx, jsid& id, const char* chars)
 {
-  if (JSString *str = ::JS_InternString(cx, chars)) {
+  if (JSString *str = ::JS_AtomizeAndPinString(cx, chars)) {
     id = INTERNED_STRING_TO_JSID(cx, str);
     return true;
   }
@@ -2379,7 +2370,7 @@ inline bool
 AddStringToIDVector(JSContext* cx, JS::AutoIdVector& vector, const char* name)
 {
   return vector.growBy(1) &&
-         InternJSString(cx, *(vector[vector.length() - 1]).address(), name);
+         AtomizeAndPinJSString(cx, *(vector[vector.length() - 1]).address(), name);
 }
 
 // Implementation of the bits that XrayWrapper needs
@@ -3028,7 +3019,7 @@ CreateGlobal(JSContext* aCx, T* aNative, nsWrapperCache* aCache,
   JSAutoCompartment ac(aCx, aGlobal);
 
   {
-    js::SetReservedSlot(aGlobal, DOM_OBJECT_SLOT, PRIVATE_TO_JSVAL(aNative));
+    js::SetReservedSlot(aGlobal, DOM_OBJECT_SLOT, JS::PrivateValue(aNative));
     NS_ADDREF(aNative);
 
     aCache->SetWrapper(aGlobal);
@@ -3058,18 +3049,18 @@ CreateGlobal(JSContext* aCx, T* aNative, nsWrapperCache* aCache,
 }
 
 /*
- * Holds a jsid that is initialized to an interned string, with conversion to
- * Handle<jsid>.
+ * Holds a jsid that is initialized to a pinned string, with automatic
+ * conversion to Handle<jsid>, as it is held live forever by pinning.
  */
-class InternedStringId
+class PinnedStringId
 {
   jsid id;
 
  public:
-  InternedStringId() : id(JSID_VOID) {}
+  PinnedStringId() : id(JSID_VOID) {}
 
   bool init(JSContext *cx, const char *string) {
-    JSString* str = JS_InternString(cx, string);
+    JSString* str = JS_AtomizeAndPinString(cx, string);
     if (!str)
       return false;
     id = INTERNED_STRING_TO_JSID(cx, str);
@@ -3081,7 +3072,7 @@ class InternedStringId
   }
 
   operator JS::Handle<jsid> () {
-    /* This is safe because we have interned the string. */
+    /* This is safe because we have pinned the string. */
     return JS::Handle<jsid>::fromMarkedLocation(&id);
   }
 };
@@ -3247,6 +3238,29 @@ bool SystemGlobalResolve(JSContext* cx, JS::Handle<JSObject*> obj,
 // Exposed=System webidl annotations.  False return value means exception
 // thrown.
 bool SystemGlobalEnumerate(JSContext* cx, JS::Handle<JSObject*> obj);
+
+// Slot indexes for maplike/setlike forEach functions
+#define FOREACH_CALLBACK_SLOT 0
+#define FOREACH_MAPLIKEORSETLIKEOBJ_SLOT 1
+
+// Backing function for running .forEach() on maplike/setlike interfaces.
+// Unpacks callback and maplike/setlike object from reserved slots, then runs
+// callback for each key (and value, for maplikes)
+bool ForEachHandler(JSContext* aCx, unsigned aArgc, JS::Value* aVp);
+
+// Unpacks backing object (ES6 map/set) from the reserved slot of a reflector
+// for a maplike/setlike interface. If backing object does not exist, creates
+// backing object in the compartment of the reflector involved, making this safe
+// to use across compartments/via xrays. Return values of these methods will
+// always be in the context compartment.
+bool GetMaplikeBackingObject(JSContext* aCx, JS::Handle<JSObject*> aObj,
+                             size_t aSlotIndex,
+                             JS::MutableHandle<JSObject*> aBackingObj,
+                             bool* aBackingObjCreated);
+bool GetSetlikeBackingObject(JSContext* aCx, JS::Handle<JSObject*> aObj,
+                             size_t aSlotIndex,
+                             JS::MutableHandle<JSObject*> aBackingObj,
+                             bool* aBackingObjCreated);
 
 
 } // namespace dom

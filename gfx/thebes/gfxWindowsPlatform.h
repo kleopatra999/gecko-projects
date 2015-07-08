@@ -118,7 +118,7 @@ public:
       CreateOffscreenSurface(const IntSize& size,
                              gfxContentType contentType) override;
 
-    virtual mozilla::TemporaryRef<mozilla::gfx::ScaledFont>
+    virtual already_AddRefed<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont);
 
     enum RenderMode {
@@ -240,23 +240,21 @@ public:
     void OnDeviceManagerDestroy(mozilla::layers::DeviceManagerD3D9* aDeviceManager);
     mozilla::layers::DeviceManagerD3D9* GetD3D9DeviceManager();
     IDirect3DDevice9* GetD3D9Device();
-#ifdef CAIRO_HAS_D2D_SURFACE
-    cairo_device_t *GetD2DDevice() { return mD2DDevice; }
-    ID3D10Device1 *GetD3D10Device() { return mD2DDevice ? cairo_d2d_device_get_device(mD2DDevice) : nullptr; }
-#endif
+    ID3D10Device1 *GetD3D10Device() { return mD3D10Device; }
     ID3D11Device *GetD3D11Device();
     ID3D11Device *GetD3D11ContentDevice();
     // Device to be used on the ImageBridge thread
     ID3D11Device *GetD3D11ImageBridgeDevice();
 
     // Create a D3D11 device to be used for DXVA decoding.
-    mozilla::TemporaryRef<ID3D11Device> CreateD3D11DecoderDevice();
+    already_AddRefed<ID3D11Device> CreateD3D11DecoderDevice();
 
     mozilla::layers::ReadbackManagerD3D11* GetReadbackManager();
 
     static bool IsOptimus();
 
     bool IsWARP() { return mIsWARP; }
+    bool DoesD3D11TextureSharingWork() { return mDoesD3D11TextureSharingWork; }
 
     bool SupportsApzWheelInput() const override {
       return true;
@@ -290,11 +288,9 @@ private:
     nsRefPtr<IDWriteRenderingParams> mRenderingParams[TEXT_RENDERING_COUNT];
     DWRITE_MEASURING_MODE mMeasuringMode;
 #endif
-#ifdef CAIRO_HAS_D2D_SURFACE
-    cairo_device_t *mD2DDevice;
-#endif
     mozilla::RefPtr<IDXGIAdapter1> mAdapter;
     nsRefPtr<mozilla::layers::DeviceManagerD3D9> mDeviceManager;
+    mozilla::RefPtr<ID3D10Device1> mD3D10Device;
     mozilla::RefPtr<ID3D11Device> mD3D11Device;
     mozilla::RefPtr<ID3D11Device> mD3D11ContentDevice;
     mozilla::RefPtr<ID3D11Device> mD3D11ImageBridgeDevice;
@@ -307,8 +303,5 @@ private:
 
     virtual void GetPlatformCMSOutputProfile(void* &mem, size_t &size);
 };
-
-bool DoesD3D11TextureSharingWork(ID3D11Device *device);
-bool DoesD3D11DeviceWork(ID3D11Device *device);
 
 #endif /* GFX_WINDOWS_PLATFORM_H */

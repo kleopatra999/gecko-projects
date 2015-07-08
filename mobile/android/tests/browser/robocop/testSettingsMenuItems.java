@@ -7,8 +7,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import org.mozilla.gecko.R;
+import org.mozilla.gecko.Actions;
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.util.HardwareUtils;
+import org.mozilla.gecko.util.InputOptionsUtils;
 
 /** This patch tests the Sections present in the Settings Menu and the
  *  default values for them
@@ -29,7 +32,6 @@ public class testSettingsMenuItems extends PixelTest {
 
     // Privacy menu items.
     String[] PATH_PRIVACY;
-    String[] TRACKING_PROTECTION_LABEL_ARR;
     String[] MANAGE_LOGINS_ARR;
     String[][] OPTIONS_PRIVACY;
 
@@ -93,16 +95,15 @@ public class testSettingsMenuItems extends PixelTest {
         };
 
         PATH_PRIVACY = new String[] { mStringHelper.PRIVACY_SECTION_LABEL };
-        TRACKING_PROTECTION_LABEL_ARR = new String[] { mStringHelper.TRACKING_PROTECTION_LABEL };
         MANAGE_LOGINS_ARR = new String[] { mStringHelper.MANAGE_LOGINS_LABEL };
         OPTIONS_PRIVACY = new String[][] {
-                TRACKING_PROTECTION_LABEL_ARR,
+                { mStringHelper.TRACKING_PROTECTION_LABEL },
                 { mStringHelper.DNT_LABEL },
                 { mStringHelper.COOKIES_LABEL, "Enabled", "Enabled, excluding 3rd party", "Disabled" },
-                { mStringHelper.REMEMBER_PASSWORDS_LABEL },
+                { mStringHelper.REMEMBER_LOGINS_LABEL },
                 MANAGE_LOGINS_ARR,
                 { mStringHelper.MASTER_PASSWORD_LABEL },
-                { mStringHelper.CLEAR_PRIVATE_DATA_LABEL, "", "Browsing history", "Search history", "Downloads", "Form history", "Cookies & active logins", "Saved passwords", "Cache", "Offline website data", "Site settings", "Clear data" },
+                { mStringHelper.CLEAR_PRIVATE_DATA_LABEL, "", "Browsing history", "Search history", "Downloads", "Form history", "Cookies & active logins", mStringHelper.CLEAR_PRIVATE_DATA_LABEL, "Cache", "Offline website data", "Site settings", "Clear data" },
         };
 
         PATH_MOZILLA = new String[] { mStringHelper.MOZILLA_SECTION_LABEL };
@@ -193,7 +194,6 @@ public class testSettingsMenuItems extends PixelTest {
 
         if (!AppConstants.NIGHTLY_BUILD) {
             final List<String[]> privacy = settingsMap.get(PATH_PRIVACY);
-            privacy.remove(TRACKING_PROTECTION_LABEL_ARR);
             privacy.remove(MANAGE_LOGINS_ARR);
         }
 
@@ -224,6 +224,12 @@ public class testSettingsMenuItems extends PixelTest {
         // Tablet: we don't allow a page title option.
         if (HardwareUtils.isTablet()) {
             settingsMap.get(PATH_DISPLAY).remove(TITLE_BAR_LABEL_ARR);
+        }
+
+        // Voice input
+        if (AppConstants.NIGHTLY_BUILD && InputOptionsUtils.supportsVoiceRecognizer(this.getActivity().getApplicationContext(), this.getActivity().getResources().getString(R.string.voicesearch_prompt))) {
+            String[] voiceInputUi = { mStringHelper.VOICE_INPUT_TITLE_LABEL, mStringHelper.VOICE_INPUT_SUMMARY_LABEL };
+            settingsMap.get(PATH_DISPLAY).add(voiceInputUi);
         }
     }
 

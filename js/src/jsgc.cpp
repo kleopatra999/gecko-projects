@@ -1333,6 +1333,7 @@ GCRuntime::finish()
 
     /* Delete all remaining zones. */
     if (rt->gcInitialized) {
+        AutoSetThreadIsSweeping threadIsSweeping;
         for (ZonesIter zone(rt, WithAtoms); !zone.done(); zone.next()) {
             for (CompartmentsInZoneIter comp(zone); !comp.done(); comp.next())
                 js_delete(comp.get());
@@ -2256,6 +2257,7 @@ GCRuntime::sweepZoneAfterCompacting(Zone* zone)
         c->sweepJitCompartment(fop);
         c->sweepWeakMaps();
         c->sweepNativeIterators();
+        c->sweepTemplateObjects();
     }
 }
 
@@ -4926,6 +4928,7 @@ GCRuntime::beginSweepingZoneGroup()
                 c->sweepDebugScopes();
                 c->sweepJitCompartment(&fop);
                 c->sweepWeakMaps();
+                c->sweepTemplateObjects();
             }
 
             // Bug 1071218: the following two methods have not yet been

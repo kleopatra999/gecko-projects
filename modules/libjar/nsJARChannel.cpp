@@ -683,8 +683,6 @@ nsJARChannel::OverrideSecurityInfo(nsISupports* aSecurityInfo)
                      "This can only be called when we don't have a security info object already");
   MOZ_RELEASE_ASSERT(aSecurityInfo,
                      "This can only be called with a valid security info object");
-  MOZ_RELEASE_ASSERT(ShouldIntercept(),
-                     "This can only be called on channels that can be intercepted");
   mSecurityInfo = aSecurityInfo;
   return NS_OK;
 }
@@ -694,8 +692,6 @@ nsJARChannel::OverrideURI(nsIURI* aRedirectedURI)
 {
   MOZ_RELEASE_ASSERT(mLoadFlags & LOAD_REPLACE,
                      "This can only happen if the LOAD_REPLACE flag is set");
-  MOZ_RELEASE_ASSERT(ShouldIntercept(),
-                     "This can only be called on channels that can be intercepted");
   mAppURI = aRedirectedURI;
 }
 
@@ -924,6 +920,8 @@ nsJARChannel::OverrideWithSynthesizedResponse(nsIInputStream* aSynthesizedInput,
 
     SetContentType(aContentType);
 
+    mIsUnsafe = false;
+
     FinishAsyncOpen();
 
     rv = mSynthesizedResponsePump->AsyncRead(this, nullptr);
@@ -949,6 +947,9 @@ nsJARChannel::AsyncOpen(nsIStreamListener *listener, nsISupports *ctx)
     mListenerContext = ctx;
     mIsPending = true;
 
+// Bug 1171651 -  Disable the interception of app:// URIs in service workers
+//                on release builds
+#ifndef RELEASE_BUILD
     // Check if this channel should intercept the network request and prepare
     // for a possible synthesized response instead.
     if (ShouldIntercept()) {
@@ -971,6 +972,7 @@ nsJARChannel::AsyncOpen(nsIStreamListener *listener, nsISupports *ctx)
 
       return NS_OK;
     }
+#endif
 
     return ContinueAsyncOpen();
 }

@@ -60,7 +60,7 @@ static const uint32_t NodeIdSaltLength = 32;
 already_AddRefed<GeckoMediaPluginServiceParent>
 GeckoMediaPluginServiceParent::GetSingleton()
 {
-  MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
+  MOZ_ASSERT(XRE_IsParentProcess());
   nsRefPtr<GeckoMediaPluginService> service(
     GeckoMediaPluginServiceParent::GetGeckoMediaPluginService());
 #ifdef DEBUG
@@ -144,7 +144,7 @@ GeckoMediaPluginServiceParent::InitStorage()
   MOZ_ASSERT(NS_IsMainThread());
 
   // GMP storage should be used in the chrome process only.
-  if (XRE_GetProcessType() != GeckoProcessType_Default) {
+  if (!XRE_IsParentProcess()) {
     return NS_OK;
   }
 
@@ -666,13 +666,6 @@ GeckoMediaPluginServiceParent::SelectPluginForAPI(const nsACString& aNodeId,
       clone->SetNodeId(aNodeId);
     }
     return clone;
-  }
-
-  if (aAPI.EqualsLiteral(GMP_API_DECRYPTOR)) {
-    // XXX to remove in bug 1147692
-    return SelectPluginForAPI(aNodeId,
-                              NS_LITERAL_CSTRING(GMP_API_DECRYPTOR_COMPAT),
-                              aTags);
   }
 
   return nullptr;

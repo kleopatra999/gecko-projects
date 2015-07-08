@@ -955,7 +955,7 @@ void nsNPAPIPluginInstance::ReleaseContentTexture(nsNPAPIPluginInstance::Texture
   mContentTexture->Release(aTextureInfo);
 }
 
-TemporaryRef<AndroidSurfaceTexture> nsNPAPIPluginInstance::CreateSurfaceTexture()
+already_AddRefed<AndroidSurfaceTexture> nsNPAPIPluginInstance::CreateSurfaceTexture()
 {
   if (!EnsureGLContext())
     return nullptr;
@@ -978,7 +978,7 @@ TemporaryRef<AndroidSurfaceTexture> nsNPAPIPluginInstance::CreateSurfaceTexture(
 void nsNPAPIPluginInstance::OnSurfaceTextureFrameAvailable()
 {
   if (mRunning == RUNNING && mOwner)
-    AndroidBridge::Bridge()->ScheduleComposite();
+    AndroidBridge::Bridge()->InvalidateAndScheduleComposite();
 }
 
 void* nsNPAPIPluginInstance::AcquireContentWindow()
@@ -1603,15 +1603,6 @@ void
 nsNPAPIPluginInstance::SetOwner(nsPluginInstanceOwner *aOwner)
 {
   mOwner = aOwner;
-}
-
-nsresult
-nsNPAPIPluginInstance::ShowStatus(const char* message)
-{
-  if (mOwner)
-    return mOwner->ShowStatus(message);
-
-  return NS_ERROR_FAILURE;
 }
 
 nsresult

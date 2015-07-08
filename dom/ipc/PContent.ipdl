@@ -272,6 +272,12 @@ struct FileSystemCreateFileParams
   bool replace;
 };
 
+struct FileSystemGetDirectoryListingParams
+{
+  nsString filesystem;
+  nsString realPath;
+};
+
 struct FileSystemGetFileOrDirectoryParams
 {
   nsString filesystem;
@@ -296,6 +302,7 @@ union FileSystemParams
 {
   FileSystemCreateDirectoryParams;
   FileSystemCreateFileParams;
+  FileSystemGetDirectoryListingParams;
   FileSystemGetFileOrDirectoryParams;
   FileSystemRemoveParams;
 };
@@ -725,7 +732,7 @@ parent:
 
     sync PCrashReporter(NativeThreadId tid, uint32_t processType);
 
-    sync GetRandomValues(uint32_t length)
+    prio(urgent) sync GetRandomValues(uint32_t length)
         returns (uint8_t[] randomValues);
 
     async GetSystemMemory(uint64_t getterId);
@@ -735,7 +742,7 @@ parent:
 
     sync GetLookAndFeelCache(LookAndFeelInt[] lookAndFeelIntCache);
 
-    PHal();
+    prio(urgent) async PHal();
 
     PIcc(uint32_t serviceId);
 
@@ -969,6 +976,9 @@ parent:
                            int64_t fileId)
       returns (int32_t refCnt, int32_t dBRefCnt, int32_t sliceRefCnt,
                bool result);
+
+    // Use only for testing!
+    FlushPendingFileDeletions();
 
     /**
      * Tell the chrome process there is an creation of PBrowser.

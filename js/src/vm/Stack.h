@@ -236,12 +236,8 @@ class AbstractFramePtr
     inline void setIsDebuggee();
     inline void unsetIsDebuggee();
 
-    JSObject* evalPrevScopeChain(JSContext* cx) const;
-
     inline HandleValue returnValue() const;
     inline void setReturnValue(const Value& rval) const;
-
-    bool hasPushedSPSFrame() const;
 
     inline bool freshenBlock(JSContext* cx) const;
 

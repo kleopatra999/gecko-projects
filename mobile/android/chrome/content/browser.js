@@ -603,6 +603,13 @@ var BrowserApp = {
         InitLater(() => WebcompatReporter.init());
       }
 
+      InitLater(function () {
+        // title == 0 and url == 1. See:
+        //   https://mxr.mozilla.org/mozilla-central/source/mobile/android/base/resources/values/arrays.xml?rev=861e4bd9e7fe#153
+        const titleInTitlebarEnabled = Services.prefs.getIntPref("browser.chrome.titlebarMode") == 0;
+        Telemetry.addData("FENNEC_TITLE_IN_TITLEBAR_ENABLED", titleInTitlebarEnabled);
+      });
+
       InitLater(() => LightWeightThemeWebInstaller.init());
       InitLater(() => SpatialNavigation.init(BrowserApp.deck, null), window, "SpatialNavigation");
       InitLater(() => CastingApps.init(), window, "CastingApps");
@@ -1762,7 +1769,7 @@ var BrowserApp = {
               // Remove the current host from the 'trackingprotection' consumer
               // of the permission manager. This effectively removes this host
               // from the tracking protection white list (any list actually).
-              Services.perms.remove(browser.currentURI.host, "trackingprotection");
+              Services.perms.remove(browser.currentURI, "trackingprotection");
               Telemetry.addData("TRACKING_PROTECTION_EVENTS", 2);
             }
           }
@@ -3196,7 +3203,7 @@ var DesktopUserAgent = {
     // See https://developer.mozilla.org/en/Gecko_user_agent_string_reference
     this.DESKTOP_UA = Cc["@mozilla.org/network/protocol;1?name=http"]
                         .getService(Ci.nsIHttpProtocolHandler).userAgent
-                        .replace(/Android; [a-zA-Z]+/, "X11; Linux x86_64")
+                        .replace(/Android \d.+?; [a-zA-Z]+/, "X11; Linux x86_64")
                         .replace(/Gecko\/[0-9\.]+/, "Gecko/20100101");
   },
 

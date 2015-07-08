@@ -25,7 +25,7 @@ jsid s_length_id = JSID_VOID;
 bool
 DefineStaticJSVals(JSContext* cx)
 {
-  return InternJSString(cx, s_length_id, "length");
+  return AtomizeAndPinJSString(cx, s_length_id, "length");
 }
 
 const char DOMProxyHandler::family = 0;
@@ -181,12 +181,12 @@ DOMProxyHandler::defineProperty(JSContext* cx, JS::Handle<JSObject*> proxy, JS::
     return result.succeed();
   }
 
-  JSObject* expando = EnsureExpandoObject(cx, proxy);
+  JS::Rooted<JSObject*> expando(cx, EnsureExpandoObject(cx, proxy));
   if (!expando) {
     return false;
   }
 
-  if (!js::DefineOwnProperty(cx, expando, id, desc, result)) {
+  if (!JS_DefinePropertyById(cx, expando, id, desc, result)) {
     return false;
   }
   *defined = true;

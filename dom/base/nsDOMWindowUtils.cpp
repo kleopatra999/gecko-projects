@@ -101,6 +101,7 @@
 #include "nsIContentIterator.h"
 #include "nsIDOMStyleSheet.h"
 #include "nsIStyleSheet.h"
+#include "nsIStyleSheetService.h"
 #include "nsContentPermissionHelper.h"
 #include "nsNetUtil.h"
 
@@ -1478,7 +1479,7 @@ nsDOMWindowUtils::GetTranslationNodes(nsIDOMNode* aRoot,
   return NS_OK;
 }
 
-static TemporaryRef<DataSourceSurface>
+static already_AddRefed<DataSourceSurface>
 CanvasToDataSourceSurface(nsIDOMHTMLCanvasElement* aCanvas)
 {
   nsCOMPtr<nsINode> node = do_QueryInterface(aCanvas);
@@ -2984,6 +2985,24 @@ nsDOMWindowUtils::GetFileReferences(const nsAString& aDatabaseName, int64_t aId,
 }
 
 NS_IMETHODIMP
+nsDOMWindowUtils::FlushPendingFileDeletions()
+{
+  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+
+  using mozilla::dom::indexedDB::IndexedDatabaseManager;
+
+  nsRefPtr<IndexedDatabaseManager> mgr = IndexedDatabaseManager::Get();
+  if (mgr) {
+    nsresult rv = mgr->FlushPendingFileDeletions();
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return rv;
+    }
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDOMWindowUtils::IsIncrementalGCEnabled(JSContext* cx, bool* aResult)
 {
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
@@ -3178,7 +3197,10 @@ nsDOMWindowUtils::ExitFullscreen()
 {
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
 
-  nsIDocument::ExitFullscreen(nullptr, /* async */ false);
+  nsCOMPtr<nsIDocument> doc = GetDocument();
+  NS_ENSURE_STATE(doc);
+
+  nsIDocument::ExitFullscreen(doc, /* async */ false);
   return NS_OK;
 }
 
@@ -3518,6 +3540,7 @@ nsDOMWindowUtils::RequestCompositorProperty(const nsAString& property,
 NS_IMETHODIMP
 nsDOMWindowUtils::GetOMTAStyle(nsIDOMElement* aElement,
                                const nsAString& aProperty,
+                               const nsAString& aPseudoElement,
                                nsAString& aResult)
 {
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
@@ -3529,6 +3552,15 @@ nsDOMWindowUtils::GetOMTAStyle(nsIDOMElement* aElement,
 
   nsRefPtr<nsROCSSPrimitiveValue> cssValue = nullptr;
   nsIFrame* frame = element->GetPrimaryFrame();
+  if (frame && !aPseudoElement.IsEmpty()) {
+    if (aPseudoElement.EqualsLiteral("::before")) {
+      frame = nsLayoutUtils::GetBeforeFrame(frame);
+    } else if (aPseudoElement.EqualsLiteral("::after")) {
+      frame = nsLayoutUtils::GetAfterFrame(frame);
+    } else {
+      return NS_ERROR_INVALID_ARG;
+    }
+  }
   if (frame && nsLayoutUtils::AreAsyncAnimationsEnabled()) {
     if (aProperty.EqualsLiteral("opacity")) {
       Layer* layer =
@@ -3860,6 +3892,21 @@ nsDOMWindowUtils::LeaveChaosMode()
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
   ChaosMode::leaveChaosMode();
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::HasRuleProcessorUsedByMultipleStyleSets(uint32_t aSheetType,
+                                                          bool* aRetVal)
+{
+  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+
+  nsIPresShell* presShell = GetPresShell();
+  if (!presShell) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return presShell->HasRuleProcessorUsedByMultipleStyleSets(aSheetType,
+                                                            aRetVal);
 }
 
 NS_INTERFACE_MAP_BEGIN(nsTranslationNodeList)

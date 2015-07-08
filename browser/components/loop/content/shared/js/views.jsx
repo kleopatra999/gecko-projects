@@ -4,7 +4,7 @@
 
 var loop = loop || {};
 loop.shared = loop.shared || {};
-loop.shared.views = (function(_, l10n) {
+loop.shared.views = (function(_, mozL10n) {
   "use strict";
 
   var sharedActions = loop.shared.actions;
@@ -23,10 +23,11 @@ loop.shared.views = (function(_, l10n) {
    */
   var MediaControlButton = React.createClass({
     propTypes: {
-      scope: React.PropTypes.string.isRequired,
-      type: React.PropTypes.string.isRequired,
       action: React.PropTypes.func.isRequired,
       enabled: React.PropTypes.bool.isRequired,
+      scope: React.PropTypes.string.isRequired,
+      title: React.PropTypes.string,
+      type: React.PropTypes.string.isRequired,
       visible: React.PropTypes.bool.isRequired
     },
 
@@ -54,17 +55,21 @@ loop.shared.views = (function(_, l10n) {
     },
 
     _getTitle: function(enabled) {
+      if (this.props.title) {
+        return this.props.title;
+      }
+
       var prefix = this.props.enabled ? "mute" : "unmute";
       var suffix = "button_title";
       var msgId = [prefix, this.props.scope, this.props.type, suffix].join("_");
-      return l10n.get(msgId);
+      return mozL10n.get(msgId);
     },
 
     render: function() {
       return (
         <button className={this._getClasses()}
-                title={this._getTitle()}
-                onClick={this.handleClick}></button>
+                onClick={this.handleClick}
+                title={this._getTitle()}></button>
       );
     }
   });
@@ -83,8 +88,8 @@ loop.shared.views = (function(_, l10n) {
 
     propTypes: {
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
-      visible: React.PropTypes.bool.isRequired,
-      state: React.PropTypes.string.isRequired
+      state: React.PropTypes.string.isRequired,
+      visible: React.PropTypes.bool.isRequired
     },
 
     getInitialState: function() {
@@ -125,7 +130,7 @@ loop.shared.views = (function(_, l10n) {
       var prefix = this.props.state === SCREEN_SHARE_STATES.ACTIVE ?
         "active" : "inactive";
 
-      return l10n.get(prefix + "_screenshare_button_title");
+      return mozL10n.get(prefix + "_screenshare_button_title");
     },
 
     render: function() {
@@ -162,12 +167,12 @@ loop.shared.views = (function(_, l10n) {
                   title={this._getTitle()}>
             {isActive ? null : <span className="chevron"/>}
           </button>
-          <ul ref="menu" className={dropdownMenuClasses}>
+          <ul className={dropdownMenuClasses} ref="menu">
             <li onClick={this._handleShareTabs}>
-              {l10n.get("share_tabs_button_title2")}
+              {mozL10n.get("share_tabs_button_title2")}
             </li>
-            <li onClick={this._handleShareWindows} className={windowSharingClasses}>
-              {l10n.get("share_windows_button_title")}
+            <li className={windowSharingClasses} onClick={this._handleShareWindows}>
+              {mozL10n.get("share_windows_button_title")}
             </li>
           </ul>
         </div>
@@ -183,20 +188,23 @@ loop.shared.views = (function(_, l10n) {
       return {
         video: {enabled: true, visible: true},
         audio: {enabled: true, visible: true},
+        edit: {enabled: false, visible: false},
         screenShare: {state: SCREEN_SHARE_STATES.INACTIVE, visible: false},
         enableHangup: true
       };
     },
 
     propTypes: {
-      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
-      video: React.PropTypes.object.isRequired,
       audio: React.PropTypes.object.isRequired,
-      screenShare: React.PropTypes.object,
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      edit: React.PropTypes.object.isRequired,
+      enableHangup: React.PropTypes.bool,
       hangup: React.PropTypes.func.isRequired,
-      publishStream: React.PropTypes.func.isRequired,
       hangupButtonLabel: React.PropTypes.string,
-      enableHangup: React.PropTypes.bool
+      onEditClick: React.PropTypes.func,
+      publishStream: React.PropTypes.func.isRequired,
+      screenShare: React.PropTypes.object,
+      video: React.PropTypes.object.isRequired
     },
 
     handleClickHangup: function() {
@@ -211,36 +219,52 @@ loop.shared.views = (function(_, l10n) {
       this.props.publishStream("audio", !this.props.audio.enabled);
     },
 
+    handleToggleEdit: function() {
+      if (this.props.onEditClick) {
+        this.props.onEditClick(!this.props.edit.enabled);
+      }
+    },
+
     _getHangupButtonLabel: function() {
-      return this.props.hangupButtonLabel || l10n.get("hangup_button_caption2");
+      return this.props.hangupButtonLabel || mozL10n.get("hangup_button_caption2");
     },
 
     render: function() {
       return (
         <ul className="conversation-toolbar">
           <li className="conversation-toolbar-btn-box btn-hangup-entry">
-            <button className="btn btn-hangup" onClick={this.handleClickHangup}
-                    title={l10n.get("hangup_button_title")}
-                    disabled={!this.props.enableHangup}>
+            <button className="btn btn-hangup"
+                    disabled={!this.props.enableHangup}
+                    onClick={this.handleClickHangup}
+                    title={mozL10n.get("hangup_button_title")}>
               {this._getHangupButtonLabel()}
             </button>
           </li>
           <li className="conversation-toolbar-btn-box">
             <MediaControlButton action={this.handleToggleVideo}
                                 enabled={this.props.video.enabled}
-                                visible={this.props.video.visible}
-                                scope="local" type="video" />
+                                scope="local" type="video"
+                                visible={this.props.video.visible} />
           </li>
           <li className="conversation-toolbar-btn-box">
             <MediaControlButton action={this.handleToggleAudio}
                                 enabled={this.props.audio.enabled}
-                                visible={this.props.audio.visible}
-                                scope="local" type="audio" />
+                                scope="local" type="audio"
+                                visible={this.props.audio.visible} />
           </li>
-          <li className="conversation-toolbar-btn-box btn-screen-share-entry">
+          <li className="conversation-toolbar-btn-box">
             <ScreenShareControlButton dispatcher={this.props.dispatcher}
-                                      visible={this.props.screenShare.visible}
-                                      state={this.props.screenShare.state} />
+                                      state={this.props.screenShare.state}
+                                      visible={this.props.screenShare.visible} />
+          </li>
+          <li className="conversation-toolbar-btn-box btn-edit-entry">
+            <MediaControlButton action={this.handleToggleEdit}
+                                enabled={this.props.edit.enabled}
+                                scope="local"
+                                title={mozL10n.get(this.props.edit.enabled ?
+                                  "context_edit_tooltip" : "context_hide_tooltip")}
+                                type="edit"
+                                visible={this.props.edit.visible} />
           </li>
         </ul>
       );
@@ -258,11 +282,12 @@ loop.shared.views = (function(_, l10n) {
     ],
 
     propTypes: {
-      sdk: React.PropTypes.object.isRequired,
-      video: React.PropTypes.object,
       audio: React.PropTypes.object,
       initiate: React.PropTypes.bool,
-      isDesktop: React.PropTypes.bool
+      isDesktop: React.PropTypes.bool,
+      model: React.PropTypes.object.isRequired,
+      sdk: React.PropTypes.object.isRequired,
+      video: React.PropTypes.object
     },
 
     getDefaultProps: function() {
@@ -298,7 +323,7 @@ loop.shared.views = (function(_, l10n) {
           };
         }
 
-        this.listenTo(this.props.sdk, "exception", this._handleSdkException.bind(this));
+        this.listenTo(this.props.sdk, "exception", this._handleSdkException);
 
         this.listenTo(this.props.model, "session:connected",
                                         this._onSessionConnected);
@@ -400,14 +425,14 @@ loop.shared.views = (function(_, l10n) {
           audio: {enabled: ev.stream.hasAudio},
           video: {enabled: ev.stream.hasVideo}
         });
-      }.bind(this));
+      });
 
       this.listenTo(this.publisher, "streamDestroyed", function() {
         this.setState({
           audio: {enabled: false},
           video: {enabled: false}
         });
-      }.bind(this));
+      });
 
       this.props.model.publish(this.publisher);
     },
@@ -455,10 +480,11 @@ loop.shared.views = (function(_, l10n) {
               </div>
               <div className={localStreamClasses}></div>
             </div>
-            <ConversationToolbar video={this.state.video}
-                                 audio={this.state.audio}
-                                 publishStream={this.publishStream}
-                                 hangup={this.hangup} />
+            <ConversationToolbar
+              audio={this.state.audio}
+              hangup={this.hangup}
+              publishStream={this.publishStream}
+              video={this.state.video} />
           </div>
         </div>
       );
@@ -472,23 +498,23 @@ loop.shared.views = (function(_, l10n) {
     mixins: [Backbone.Events],
 
     propTypes: {
-      notification: React.PropTypes.object.isRequired,
-      key: React.PropTypes.number.isRequired
+      key: React.PropTypes.number.isRequired,
+      notification: React.PropTypes.object.isRequired
     },
 
     render: function() {
       var notification = this.props.notification;
       return (
         <div className="notificationContainer">
-          <div key={this.props.key}
-               className={"alert alert-" + notification.get("level")}>
+          <div className={"alert alert-" + notification.get("level")}
+            key={this.props.key}>
             <span className="message">{notification.get("message")}</span>
           </div>
           <div className={"detailsBar details-" + notification.get("level")}
                hidden={!notification.get("details")}>
             <button className="detailsButton btn-info"
-                    onClick={notification.get("detailsButtonCallback")}
-                    hidden={!notification.get("detailsButtonLabel") || !notification.get("detailsButtonCallback")}>
+                    hidden={!notification.get("detailsButtonLabel") || !notification.get("detailsButtonCallback")}
+                    onClick={notification.get("detailsButtonCallback")}>
               {notification.get("detailsButtonLabel")}
             </button>
             <span className="details">{notification.get("details")}</span>
@@ -505,8 +531,8 @@ loop.shared.views = (function(_, l10n) {
     mixins: [Backbone.Events, sharedMixins.DocumentVisibilityMixin],
 
     propTypes: {
-      notifications: React.PropTypes.object.isRequired,
-      clearOnDocumentHidden: React.PropTypes.bool
+      clearOnDocumentHidden: React.PropTypes.bool,
+      notifications: React.PropTypes.object.isRequired
     },
 
     getDefaultProps: function() {
@@ -516,7 +542,7 @@ loop.shared.views = (function(_, l10n) {
     componentDidMount: function() {
       this.listenTo(this.props.notifications, "reset add remove", function() {
         this.forceUpdate();
-      }.bind(this));
+      });
     },
 
     componentWillUnmount: function() {
@@ -553,11 +579,12 @@ loop.shared.views = (function(_, l10n) {
 
   var Button = React.createClass({
     propTypes: {
-      caption: React.PropTypes.string.isRequired,
-      onClick: React.PropTypes.func.isRequired,
-      disabled: React.PropTypes.bool,
       additionalClass: React.PropTypes.string,
-      htmlId: React.PropTypes.string
+      caption: React.PropTypes.string.isRequired,
+      children: React.PropTypes.element,
+      disabled: React.PropTypes.bool,
+      htmlId: React.PropTypes.string,
+      onClick: React.PropTypes.func.isRequired
     },
 
     getDefaultProps: function() {
@@ -575,10 +602,10 @@ loop.shared.views = (function(_, l10n) {
         classObject[this.props.additionalClass] = true;
       }
       return (
-        <button onClick={this.props.onClick}
+        <button className={cx(classObject)}
                 disabled={this.props.disabled}
                 id={this.props.htmlId}
-                className={cx(classObject)}>
+                onClick={this.props.onClick}>
           <span className="button-caption">{this.props.caption}</span>
           {this.props.children}
         </button>
@@ -587,8 +614,12 @@ loop.shared.views = (function(_, l10n) {
   });
 
   var ButtonGroup = React.createClass({
-    PropTypes: {
-      additionalClass: React.PropTypes.string
+    propTypes: {
+      additionalClass: React.PropTypes.string,
+      children: React.PropTypes.oneOfType([
+        React.PropTypes.element,
+        React.PropTypes.arrayOf(React.PropTypes.element)
+      ])
     },
 
     getDefaultProps: function() {
@@ -612,7 +643,7 @@ loop.shared.views = (function(_, l10n) {
   });
 
   var Checkbox = React.createClass({
-    PropTypes: {
+    propTypes: {
       additionalClass: React.PropTypes.string,
       checked: React.PropTypes.bool,
       disabled: React.PropTypes.bool,
@@ -732,7 +763,7 @@ loop.shared.views = (function(_, l10n) {
   var ContextUrlView = React.createClass({
     mixins: [React.addons.PureRenderMixin],
 
-    PropTypes: {
+    propTypes: {
       allowClick: React.PropTypes.bool.isRequired,
       description: React.PropTypes.string.isRequired,
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher),
@@ -763,7 +794,7 @@ loop.shared.views = (function(_, l10n) {
         return null;
       }
 
-      return <p>{l10n.get("context_inroom_label")}</p>;
+      return <p>{mozL10n.get("context_inroom_label")}</p>;
     },
 
     render: function() {
@@ -791,8 +822,8 @@ loop.shared.views = (function(_, l10n) {
             <span className="context-description">
               {this.props.description}
               <a className="context-url"
-                 onClick={this.handleLinkClick}
                  href={this.props.allowClick ? this.props.url : null}
+                 onClick={this.handleLinkClick}
                  rel="noreferrer"
                  target="_blank">{hostname}</a>
             </span>
@@ -811,12 +842,12 @@ loop.shared.views = (function(_, l10n) {
     // to use the pure render mixin here.
     mixins: [React.addons.PureRenderMixin],
 
-    PropTypes: {
+    propTypes: {
       displayAvatar: React.PropTypes.bool.isRequired,
       isLoading: React.PropTypes.bool.isRequired,
+      mediaType: React.PropTypes.string.isRequired,
       posterUrl: React.PropTypes.string,
       // Expecting "local" or "remote".
-      mediaType: React.PropTypes.string.isRequired,
       srcVideoObject: React.PropTypes.object
     },
 

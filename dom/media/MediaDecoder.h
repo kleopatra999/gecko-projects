@@ -277,7 +277,6 @@ public:
   typedef MediaPromise<SeekResolveValue, bool /* aIgnored */, /* IsExclusive = */ true> SeekPromise;
 
   NS_DECL_THREADSAFE_ISUPPORTS
-  NS_DECL_NSIOBSERVER
 
   // Enumeration for the valid play states (see mPlayState)
   enum PlayState {
@@ -340,7 +339,7 @@ public:
   }
   void SetResource(MediaResource* aResource)
   {
-    NS_ASSERTION(NS_IsMainThread(), "Should only be called on main thread");
+    MOZ_ASSERT(NS_IsMainThread());
     mResource = aResource;
   }
 
@@ -434,7 +433,8 @@ public:
 
   // Called as data arrives on the stream and is read into the cache.  Called
   // on the main thread only.
-  virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset) override;
+  virtual void NotifyDataArrived(uint32_t aLength, int64_t aOffset,
+                                 bool aThrottleUpdates) override;
 
   // Called by MediaResource when the principal of the resource has
   // changed. Called on main thread only.
@@ -454,6 +454,7 @@ public:
   // Call on the main thread only.
   virtual bool IsEndedOrShutdown() const;
 
+protected:
   // Updates the media duration. This is called while the media is being
   // played, calls before the media has reached loaded metadata are ignored.
   // The duration is assumed to be an estimate, and so a degree of
@@ -463,6 +464,7 @@ public:
   // changed, this causes a durationchanged event to fire to the media
   // element.
   void UpdateEstimatedMediaDuration(int64_t aDuration) override;
+public:
 
   // Set a flag indicating whether seeking is supported
   virtual void SetMediaSeekable(bool aMediaSeekable) override;
@@ -557,17 +559,21 @@ public:
   virtual void UpdatePlaybackRate();
 
   // Used to estimate rates of data passing through the decoder's channel.
-  // Records activity stopping on the channel. The monitor must be held.
-  virtual void NotifyPlaybackStarted() {
-    GetReentrantMonitor().AssertCurrentThreadIn();
-    mPlaybackStatistics->Start();
+  // Records activity stopping on the channel.
+  void DispatchPlaybackStarted() {
+    nsRefPtr<MediaDecoder> self = this;
+    nsCOMPtr<nsIRunnable> r =
+      NS_NewRunnableFunction([self] () { self->mPlaybackStatistics->Start(); });
+    AbstractThread::MainThread()->Dispatch(r.forget());
   }
 
   // Used to estimate rates of data passing through the decoder's channel.
-  // Records activity stopping on the channel. The monitor must be held.
-  virtual void NotifyPlaybackStopped() {
-    GetReentrantMonitor().AssertCurrentThreadIn();
-    mPlaybackStatistics->Stop();
+  // Records activity stopping on the channel.
+  void DispatchPlaybackStopped() {
+    nsRefPtr<MediaDecoder> self = this;
+    nsCOMPtr<nsIRunnable> r =
+      NS_NewRunnableFunction([self] () { self->mPlaybackStatistics->Stop(); });
+    AbstractThread::MainThread()->Dispatch(r.forget());
   }
 
   // The actual playback rate computation. The monitor must be held.
@@ -638,6 +644,7 @@ public:
 
   void OnSeekRejected()
   {
+    MOZ_ASSERT(NS_IsMainThread());
     mSeekRequest.Complete();
     mLogicallySeeking = false;
   }
@@ -648,7 +655,11 @@ public:
   void SeekingStarted(MediaDecoderEventVisibility aEventVisibility = MediaDecoderEventVisibility::Observable);
 
   void UpdateLogicalPosition(MediaDecoderEventVisibility aEventVisibility);
-  void UpdateLogicalPosition() { UpdateLogicalPosition(MediaDecoderEventVisibility::Observable); }
+  void UpdateLogicalPosition()
+  {
+    MOZ_ASSERT(NS_IsMainThread());
+    UpdateLogicalPosition(MediaDecoderEventVisibility::Observable);
+  }
 
   // Find the end of the cached data starting at the current decoder
   // position.
@@ -890,12 +901,24 @@ protected:
   // State-watching manager.
   WatchManager<MediaDecoder> mWatchManager;
 
+  // Buffered range, mirrored from the reader.
+  Mirror<media::TimeIntervals> mBuffered;
+
+  // Whether the state machine is shut down.
+  Mirror<bool> mStateMachineIsShutdown;
+
+  // Used by the ogg decoder to watch mStateMachineIsShutdown.
+  virtual void ShutdownBitChanged() {}
+
   // NextFrameStatus, mirrored from the state machine.
   Mirror<MediaDecoderOwner::NextFrameStatus> mNextFrameStatus;
 
   /******
    * The following members should be accessed with the decoder lock held.
    ******/
+
+  // Whether the decoder implementation supports dormant mode.
+  bool mDormantSupported;
 
   // Current decoding position in the stream. This is where the decoder
   // is up to consuming the stream. This is not adjusted during decoder

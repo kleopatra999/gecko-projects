@@ -105,7 +105,8 @@ public:
     return eglImage;
   }
 
-  virtual nsresult PostOutput(BufferInfo::Param aInfo, MediaFormat::Param aFormat, Microseconds aDuration) override {
+  virtual nsresult PostOutput(BufferInfo::Param aInfo, MediaFormat::Param aFormat,
+                              const media::TimeUnit& aDuration) override {
     if (!EnsureGLContext()) {
       return NS_ERROR_FAILURE;
     }
@@ -168,7 +169,7 @@ public:
                                  mImageContainer,
                                  offset,
                                  presentationTimeUs,
-                                 aDuration,
+                                 aDuration.ToMicroseconds(),
                                  img,
                                  isSync,
                                  presentationTimeUs,
@@ -196,8 +197,6 @@ protected:
 };
 
 class AudioDataDecoder : public MediaCodecDataDecoder {
-private:
-  uint8_t csd0[2];
 
 public:
   AudioDataDecoder(const AudioInfo& aConfig, MediaFormat::Param aFormat, MediaDataDecoderCallback* aCallback)
@@ -209,15 +208,15 @@ public:
     NS_ENSURE_SUCCESS_VOID(aFormat->GetByteBuffer(NS_LITERAL_STRING("csd-0"), &buffer));
 
     if (!buffer && aConfig.mCodecSpecificConfig->Length() >= 2) {
-      csd0[0] = (*aConfig.mCodecSpecificConfig)[0];
-      csd0[1] = (*aConfig.mCodecSpecificConfig)[1];
-
-      buffer = jni::Object::LocalRef::Adopt(env, env->NewDirectByteBuffer(csd0, 2));
+      buffer = jni::Object::LocalRef::Adopt(env, env->NewDirectByteBuffer(aConfig.mCodecSpecificConfig->Elements(),
+                                                                          aConfig.mCodecSpecificConfig->Length()));
       NS_ENSURE_SUCCESS_VOID(aFormat->SetByteBuffer(NS_LITERAL_STRING("csd-0"), buffer));
     }
   }
 
-  nsresult Output(BufferInfo::Param aInfo, void* aBuffer, MediaFormat::Param aFormat, Microseconds aDuration) {
+  nsresult Output(BufferInfo::Param aInfo, void* aBuffer,
+                  MediaFormat::Param aFormat,
+                  const media::TimeUnit& aDuration) {
     // The output on Android is always 16-bit signed
 
     nsresult rv;
@@ -243,7 +242,7 @@ public:
     NS_ENSURE_SUCCESS(rv = aInfo->PresentationTimeUs(&presentationTimeUs), rv);
 
     nsRefPtr<AudioData> data = new AudioData(offset, presentationTimeUs,
-                                             aDuration,
+                                             aDuration.ToMicroseconds(),
                                              numFrames,
                                              audio,
                                              numChannels,
@@ -489,7 +488,7 @@ void MediaCodecDataDecoder::DecoderLoop()
                                          sample->mTime, 0);
         HANDLE_DECODER_ERROR();
 
-        mDurations.push(sample->mDuration);
+        mDurations.push(media::TimeUnit::FromMicroseconds(sample->mDuration));
         sample = nullptr;
         outputDone = false;
       }
@@ -547,7 +546,7 @@ void MediaCodecDataDecoder::DecoderLoop()
 
         MOZ_ASSERT(!mDurations.empty(), "Should have had a duration queued");
 
-        Microseconds duration = 0;
+        media::TimeUnit duration;
         if (!mDurations.empty()) {
           duration = mDurations.front();
           mDurations.pop();

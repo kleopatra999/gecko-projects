@@ -31,6 +31,7 @@
 #include "mozilla/dom/WakeLock.h"
 #include "mozilla/dom/power/PowerManagerService.h"
 #include "nsIDocShellTreeOwner.h"
+#include "nsIInterfaceRequestorUtils.h"
 #include "nsIPermissionManager.h"
 #include "nsIScriptContext.h"
 #include "nsIScriptTimeoutHandler.h"
@@ -40,6 +41,7 @@
 #include "nsWindowMemoryReporter.h"
 #include "WindowNamedPropertiesHandler.h"
 #include "nsFrameSelection.h"
+#include "nsNetUtil.h"
 
 // Helper Classes
 #include "nsJSUtils.h"
@@ -3680,8 +3682,8 @@ nsPIDOMWindow::CreatePerformanceObjectIfNeeded()
 bool
 nsPIDOMWindow::GetAudioMuted() const
 {
-  if (!IsInnerWindow()) {
-    return mInnerWindow->GetAudioMuted();
+  if (IsInnerWindow()) {
+    return mOuterWindow->GetAudioMuted();
   }
 
   return mAudioMuted;
@@ -3690,8 +3692,8 @@ nsPIDOMWindow::GetAudioMuted() const
 void
 nsPIDOMWindow::SetAudioMuted(bool aMuted)
 {
-  if (!IsInnerWindow()) {
-    mInnerWindow->SetAudioMuted(aMuted);
+  if (IsInnerWindow()) {
+    mOuterWindow->SetAudioMuted(aMuted);
     return;
   }
 
@@ -3706,8 +3708,8 @@ nsPIDOMWindow::SetAudioMuted(bool aMuted)
 float
 nsPIDOMWindow::GetAudioVolume() const
 {
-  if (!IsInnerWindow()) {
-    return mInnerWindow->GetAudioVolume();
+  if (IsInnerWindow()) {
+    return mOuterWindow->GetAudioVolume();
   }
 
   return mAudioVolume;
@@ -3716,8 +3718,8 @@ nsPIDOMWindow::GetAudioVolume() const
 nsresult
 nsPIDOMWindow::SetAudioVolume(float aVolume)
 {
-  if (!IsInnerWindow()) {
-    return mInnerWindow->SetAudioVolume(aVolume);
+  if (IsInnerWindow()) {
+    return mOuterWindow->SetAudioVolume(aVolume);
   }
 
   if (aVolume < 0.0) {
@@ -3766,7 +3768,7 @@ nsPIDOMWindow::RefreshMediaElements()
 {
   nsRefPtr<AudioChannelService> service =
     AudioChannelService::GetOrCreateAudioChannelService();
-  service->RefreshAgentsVolume(this);
+  service->RefreshAgentsVolume(GetCurrentInnerWindow());
 }
 
 // nsISpeechSynthesisGetter
@@ -3911,7 +3913,6 @@ nsGlobalWindow::GetRealTop(nsIDOMWindow** aTop)
   if (IsInnerWindow()) {
     outer = GetOuterWindowInternal();
     if (!outer) {
-      NS_WARNING("No outer window available!");
       return NS_ERROR_NOT_INITIALIZED;
     }
   } else {
@@ -4315,40 +4316,6 @@ nsGlobalWindow::MayResolve(jsid aId)
   return name_struct;
 }
 
-struct GlobalNameEnumeratorClosure
-{
-  GlobalNameEnumeratorClosure(JSContext* aCx, nsGlobalWindow* aWindow,
-                              nsTArray<nsString>& aNames)
-    : mCx(aCx),
-      mWindow(aWindow),
-      mWrapper(aCx, aWindow->GetWrapper()),
-      mNames(aNames)
-  {
-  }
-
-  JSContext* mCx;
-  nsGlobalWindow* mWindow;
-  JS::Rooted<JSObject*> mWrapper;
-  nsTArray<nsString>& mNames;
-};
-
-static PLDHashOperator
-EnumerateGlobalName(const nsAString& aName,
-                    const nsGlobalNameStruct& aNameStruct,
-                    void* aClosure)
-{
-  GlobalNameEnumeratorClosure* closure =
-    static_cast<GlobalNameEnumeratorClosure*>(aClosure);
-
-  if (nsWindowSH::NameStructEnabled(closure->mCx, closure->mWindow, aName,
-                                    aNameStruct) &&
-      (!aNameStruct.mConstructorEnabled ||
-       aNameStruct.mConstructorEnabled(closure->mCx, closure->mWrapper))) {
-    closure->mNames.AppendElement(aName);
-  }
-  return PL_DHASH_NEXT;
-}
-
 void
 nsGlobalWindow::GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
                                     ErrorResult& aRv)
@@ -4358,8 +4325,16 @@ nsGlobalWindow::GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
 
   nsScriptNameSpaceManager* nameSpaceManager = GetNameSpaceManager();
   if (nameSpaceManager) {
-    GlobalNameEnumeratorClosure closure(aCx, this, aNames);
-    nameSpaceManager->EnumerateGlobalNames(EnumerateGlobalName, &closure);
+    JS::Rooted<JSObject*> wrapper(aCx, GetWrapper());
+    for (auto i = nameSpaceManager->GlobalNameIter(); !i.Done(); i.Next()) {
+      const GlobalNameMapEntry* entry = i.Get();
+      if (nsWindowSH::NameStructEnabled(aCx, this, entry->mKey,
+                                        entry->mGlobalName) &&
+          (!entry->mGlobalName.mConstructorEnabled ||
+           entry->mGlobalName.mConstructorEnabled(aCx, wrapper))) {
+        aNames.AppendElement(entry->mKey);
+      }
+    }
   }
 }
 
@@ -7591,18 +7566,6 @@ nsGlobalWindow::ClearInterval(int32_t aHandle)
 }
 
 NS_IMETHODIMP
-nsGlobalWindow::SetTimeout(int32_t *_retval)
-{
-  return SetTimeoutOrInterval(false, _retval);
-}
-
-NS_IMETHODIMP
-nsGlobalWindow::SetInterval(int32_t *_retval)
-{
-  return SetTimeoutOrInterval(true, _retval);
-}
-
-NS_IMETHODIMP
 nsGlobalWindow::SetResizable(bool aResizable)
 {
   // nop
@@ -8999,7 +8962,7 @@ nsGlobalWindow::ShowModalDialog(const nsAString& aUrl, nsIVariant* aArgument,
                             (aUrl, aArgument, aOptions, aError), aError,
                             nullptr);
 
-  if (!IsShowModalDialogEnabled() || XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (!IsShowModalDialogEnabled() || XRE_IsContentProcess()) {
     aError.Throw(NS_ERROR_NOT_AVAILABLE);
     return nullptr;
   }
@@ -10297,11 +10260,9 @@ nsGlobalWindow::GetSessionStorage(ErrorResult& aError)
       return nullptr;
     }
 
-    nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(docShell);
-
     nsCOMPtr<nsIDOMStorage> storage;
     aError = storageManager->CreateStorage(this, principal, documentURI,
-                                           loadContext && loadContext->UsePrivateBrowsing(),
+                                           IsPrivateBrowsing(),
                                            getter_AddRefs(storage));
     if (aError.Failed()) {
       return nullptr;
@@ -10377,12 +10338,9 @@ nsGlobalWindow::GetLocalStorage(ErrorResult& aError)
       mDoc->GetDocumentURI(documentURI);
     }
 
-    nsIDocShell* docShell = GetDocShell();
-    nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(docShell);
-
     nsCOMPtr<nsIDOMStorage> storage;
     aError = storageManager->CreateStorage(this, principal, documentURI,
-                                           loadContext && loadContext->UsePrivateBrowsing(),
+                                           IsPrivateBrowsing(),
                                            getter_AddRefs(storage));
     if (aError.Failed()) {
       return nullptr;
@@ -10512,8 +10470,17 @@ already_AddRefed<CacheStorage>
 nsGlobalWindow::GetCaches(ErrorResult& aRv)
 {
   if (!mCacheStorage) {
+    bool forceTrustedOrigin = false;
+    if (IsOuterWindow()) {
+      forceTrustedOrigin = GetServiceWorkersTestingEnabled();
+    } else {
+      nsRefPtr<nsGlobalWindow> outer = GetOuterWindowInternal();
+      forceTrustedOrigin = outer->GetServiceWorkersTestingEnabled();
+    }
     mCacheStorage = CacheStorage::CreateOnMainThread(cache::DEFAULT_NAMESPACE,
-                                                     this, GetPrincipal(), aRv);
+                                                     this, GetPrincipal(),
+                                                     IsPrivateBrowsing(),
+                                                     forceTrustedOrigin, aRv);
   }
 
   nsRefPtr<CacheStorage> ref = mCacheStorage;
@@ -10784,7 +10751,7 @@ nsGlobalWindow::ShowSlowScriptDialog()
   unsigned lineno;
   bool hasFrame = JS::DescribeScriptedCaller(cx, &filename, &lineno);
 
-  if (XRE_GetProcessType() == GeckoProcessType_Content &&
+  if (XRE_IsContentProcess() &&
       ProcessHangMonitor::Get()) {
     ProcessHangMonitor::SlowScriptAction action;
     nsRefPtr<ProcessHangMonitor> monitor = ProcessHangMonitor::Get();
@@ -11212,9 +11179,7 @@ nsGlobalWindow::Observe(nsISupports* aSubject, const char* aTopic,
       return NS_OK;
     }
 
-    nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(GetDocShell());
-    bool isPrivate = loadContext && loadContext->UsePrivateBrowsing();
-    if (changingStorage->IsPrivate() != isPrivate) {
+    if (changingStorage->IsPrivate() != IsPrivateBrowsing()) {
       return NS_OK;
     }
 
@@ -11945,50 +11910,6 @@ nsGlobalWindow::SetTimeoutOrInterval(nsIScriptTimeoutHandler *aHandler,
 
 }
 
-nsresult
-nsGlobalWindow::SetTimeoutOrInterval(bool aIsInterval, int32_t *aReturn)
-{
-  // This needs to forward to the inner window, but since the current
-  // inner may not be the inner in the calling scope, we need to treat
-  // this specially here as we don't want timeouts registered in a
-  // dying inner window to get registered and run on the current inner
-  // window. To get this right, we need to forward this call to the
-  // inner window that's calling window.setTimeout().
-
-  if (IsOuterWindow()) {
-    nsGlobalWindow* callerInner = CallerInnerWindow();
-    NS_ENSURE_TRUE(callerInner || nsContentUtils::IsCallerChrome(), NS_ERROR_NOT_AVAILABLE);
-
-    // If the caller and the callee share the same outer window,
-    // forward to the callee inner. Else, we forward to the current
-    // inner (e.g. someone is calling setTimeout() on a reference to
-    // some other window).
-
-    if (callerInner &&
-        callerInner->GetOuterWindow() == this &&
-        callerInner->IsInnerWindow()) {
-      return callerInner->SetTimeoutOrInterval(aIsInterval, aReturn);
-    }
-
-    FORWARD_TO_INNER(SetTimeoutOrInterval, (aIsInterval, aReturn),
-                     NS_ERROR_NOT_INITIALIZED);
-  }
-
-  int32_t interval = 0;
-  bool isInterval = aIsInterval;
-  nsCOMPtr<nsIScriptTimeoutHandler> handler;
-  nsresult rv = NS_CreateJSTimeoutHandler(this,
-                                          &isInterval,
-                                          &interval,
-                                          getter_AddRefs(handler));
-  if (!handler) {
-    *aReturn = 0;
-    return rv;
-  }
-
-  return SetTimeoutOrInterval(handler, interval, isInterval, aReturn);
-}
-
 int32_t
 nsGlobalWindow::SetTimeoutOrInterval(Function& aFunction, int32_t aTimeout,
                                      const Sequence<JS::Value>& aArguments,
@@ -12688,6 +12609,13 @@ nsGlobalWindow::SecurityCheckURL(const char *aURL)
   }
 
   return NS_OK;
+}
+
+bool
+nsGlobalWindow::IsPrivateBrowsing()
+{
+  nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(GetDocShell());
+  return loadContext && loadContext->UsePrivateBrowsing();
 }
 
 void

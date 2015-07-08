@@ -77,6 +77,7 @@
 // input type=file
 #include "mozilla/dom/File.h"
 #include "nsIFile.h"
+#include "nsNetCID.h"
 #include "nsNetUtil.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsIContentPrefService.h"
@@ -387,8 +388,8 @@ HTMLInputElement::nsFilePickerShownCallback::Done(int16_t aResult)
     while (NS_SUCCEEDED(iter->HasMoreElements(&hasMore)) && hasMore) {
       iter->GetNext(getter_AddRefs(tmp));
       nsCOMPtr<nsIDOMBlob> domBlob = do_QueryInterface(tmp);
-      NS_WARN_IF_FALSE(domBlob,
-                       "Null file object from FilePicker's file enumerator?");
+      MOZ_ASSERT(domBlob,
+                 "Null file object from FilePicker's file enumerator?");
       if (domBlob) {
         newFiles.AppendElement(static_cast<File*>(domBlob.get()));
       }
@@ -746,7 +747,7 @@ UploadLastDir::FetchDirectoryAndDisplayPicker(nsIDocument* aDoc,
     new UploadLastDir::ContentPrefCallback(aFilePicker, aFpCallback);
 
 #ifdef MOZ_B2G
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     prefCallback->HandleCompletion(nsIContentPrefCallback2::COMPLETE_ERROR);
     return NS_OK;
   }
@@ -777,7 +778,7 @@ UploadLastDir::StoreLastUsedDirectory(nsIDocument* aDoc, nsIFile* aDir)
   }
 
 #ifdef MOZ_B2G
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     return NS_OK;
   }
 #endif
@@ -878,9 +879,6 @@ HTMLInputElement::HTMLInputElement(already_AddRefed<mozilla::dom::NodeInfo>& aNo
 
 HTMLInputElement::~HTMLInputElement()
 {
-  if (mFileList) {
-    mFileList->Disconnect();
-  }
   if (mNumberControlSpinnerIsSpinning) {
     StopNumberControlSpinnerSpin();
   }
@@ -935,10 +933,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLInputElement,
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mValidity)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mControllers)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mFiles)
-  if (tmp->mFileList) {
-    tmp->mFileList->Disconnect();
-    tmp->mFileList = nullptr;
-  }
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mFileList)
   if (tmp->IsSingleLineTextControl(false)) {
     tmp->mInputData.mState->Unlink();
   }
@@ -2105,7 +2100,7 @@ HTMLInputElement::MozSetFileArray(const Sequence<OwningNonNull<File>>& aFiles)
 void
 HTMLInputElement::MozSetFileNameArray(const Sequence< nsString >& aFileNames, ErrorResult& aRv)
 {
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+  if (XRE_IsContentProcess()) {
     aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
     return;
   }

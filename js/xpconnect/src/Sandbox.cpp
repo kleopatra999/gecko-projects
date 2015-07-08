@@ -440,7 +440,7 @@ static bool
 sandbox_convert(JSContext* cx, HandleObject obj, JSType type, MutableHandleValue vp)
 {
     if (type == JSTYPE_OBJECT) {
-        vp.set(OBJECT_TO_JSVAL(obj));
+        vp.setObject(*obj);
         return true;
     }
 
@@ -916,7 +916,7 @@ xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj)
     if (CSS && !dom::CSSBinding::GetConstructorObject(cx, obj))
         return false;
 
-    if (indexedDB && AccessCheck::isChrome(obj) &&
+    if (indexedDB &&
         !IndexedDatabaseManager::DefineIndexedDB(cx, obj))
         return false;
 

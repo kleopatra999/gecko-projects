@@ -761,7 +761,7 @@ DOMStorageCache::StartDatabase()
     return sDatabase;
   }
 
-  if (XRE_GetProcessType() == GeckoProcessType_Default) {
+  if (XRE_IsParentProcess()) {
     nsAutoPtr<DOMStorageDBThread> db(new DOMStorageDBThread());
 
     nsresult rv = db->Init();
@@ -771,8 +771,11 @@ DOMStorageCache::StartDatabase()
 
     sDatabase = db.forget();
   } else {
+    // Use DOMLocalStorageManager::Ensure in case we're called from
+    // DOMSessionStorageManager's initializer and we haven't yet initialized the
+    // local storage manager.
     nsRefPtr<DOMStorageDBChild> db = new DOMStorageDBChild(
-        DOMLocalStorageManager::Self());
+        DOMLocalStorageManager::Ensure());
 
     nsresult rv = db->Init();
     if (NS_FAILED(rv)) {
@@ -803,7 +806,7 @@ DOMStorageCache::StopDatabase()
   sDatabaseDown = true;
 
   nsresult rv = sDatabase->Shutdown();
-  if (XRE_GetProcessType() == GeckoProcessType_Default) {
+  if (XRE_IsParentProcess()) {
     delete sDatabase;
   } else {
     DOMStorageDBChild* child = static_cast<DOMStorageDBChild*>(sDatabase);

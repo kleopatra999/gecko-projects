@@ -1333,7 +1333,7 @@ toolbarbutton[constrain-size="true"][cui-areatype="toolbar"] > .toolbarbutton-ba
 
   /* Active styling: transparent white over toolbar colors */
   #forward-button:hover:active:not(:-moz-lwtheme),
-  #back-button:hover:active:not(:-moz-lwtheme) {
+  #back-button:not([disabled="true"]):hover:active:not(:-moz-lwtheme) {
     background-image: linear-gradient(to bottom, rgba(255,255,255, 0.3), rgba(255,255,255, 0.4));
     background-color: transparent;
     box-shadow: none;
@@ -1759,6 +1759,27 @@ toolbarbutton[constrain-size="true"][cui-areatype="toolbar"] > .toolbarbutton-ba
 .urlbar-icon[open="true"],
 .urlbar-icon:hover:active {
   background-image: radial-gradient(circle closest-side, hsla(205,100%,70%,.3), transparent);
+}
+
+#urlbar-search-footer {
+  border-top: 1px solid hsla(210,4%,10%,.14);
+  background-color: hsla(210,4%,10%,.07);
+}
+
+#urlbar-search-settings {
+  -moz-appearance: none;
+  -moz-user-focus: ignore;
+  color: GrayText;
+  margin: 0;
+  padding: 8px 20px;
+}
+
+#urlbar-search-settings:hover {
+  background-color: hsla(210,4%,10%,.07);
+}
+
+#urlbar-search-settings:hover:active {
+  background-color: hsla(210,4%,10%,.12);
 }
 
 #urlbar-search-splitter {
@@ -2615,10 +2636,8 @@ toolbarbutton.chevron > .toolbarbutton-menu-dropmarker {
   }
 
   /* Background tab separators */
-  #tabbrowser-tabs[movingtab] > .tabbrowser-tab[beforeselected]:not([last-visible-tab])::after,
-  .tabbrowser-tab:not([visuallyselected]):not([afterselected-visible]):not([afterhovered]):not([first-visible-tab]):not(:hover)::before,
-  #tabbrowser-tabs:not([overflow]) > .tabbrowser-tab[last-visible-tab]:not([visuallyselected]):not([beforehovered]):not(:hover)::after {
-    background-image: url(chrome://browser/skin/tabbrowser/tab-separator@2x.png);
+  #TabsToolbar:not([brighttext]) {
+    --tab-separator-image: url(chrome://browser/skin/tabbrowser/tab-separator@2x.png);
   }
 }
 
@@ -2894,6 +2913,7 @@ toolbarbutton.chevron > .toolbarbutton-menu-dropmarker {
 .tabbrowser-arrowscrollbox > .scrollbutton-down:not([disabled]):hover:active,
 #TabsToolbar .toolbarbutton-1:not([type="menu-button"]):not([disabled=true]):hover:active,
 #TabsToolbar .toolbarbutton-1[type="menu"][open],
+#TabsToolbar .toolbarbutton-1[type="panel"][open],
 #TabsToolbar .toolbarbutton-1 > .toolbarbutton-menubutton-button:not([disabled=true]):hover:active,
 #TabsToolbar .toolbarbutton-1[open]:not([disabled=true]):hover > .toolbarbutton-menubutton-dropmarker {
   background-image: linear-gradient(transparent, rgba(0,0,0,.3)) !important;

@@ -72,14 +72,14 @@ protected:
 
   virtual PBroadcastChannelParent*
   AllocPBroadcastChannelParent(const PrincipalInfo& aPrincipalInfo,
-                               const nsString& aOrigin,
+                               const nsCString& aOrigin,
                                const nsString& aChannel,
                                const bool& aPrivateBrowsing) override;
 
   virtual bool
   RecvPBroadcastChannelConstructor(PBroadcastChannelParent* actor,
                                    const PrincipalInfo& aPrincipalInfo,
-                                   const nsString& origin,
+                                   const nsCString& origin,
                                    const nsString& channel,
                                    const bool& aPrivateBrowsing) override;
 
@@ -137,6 +137,11 @@ protected:
 
   virtual bool
   DeallocPMessagePortParent(PMessagePortParent* aActor) override;
+
+  virtual bool
+  RecvMessagePortForceClose(const nsID& aUUID,
+                            const nsID& aDestinationUUID,
+                            const uint32_t& aSequenceID) override;
 };
 
 } // namespace ipc

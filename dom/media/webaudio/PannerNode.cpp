@@ -63,9 +63,9 @@ public:
     , mLeftOverData(INT_MIN)
   {
     // HRTFDatabaseLoader needs to be fetched on the main thread.
-    TemporaryRef<HRTFDatabaseLoader> loader =
+    already_AddRefed<HRTFDatabaseLoader> loader =
       HRTFDatabaseLoader::createAndLoadAsynchronouslyIfNecessary(aNode->Context()->SampleRate());
-    mHRTFPanner = new HRTFPanner(aNode->Context()->SampleRate(), loader);
+    mHRTFPanner = new HRTFPanner(aNode->Context()->SampleRate(), Move(loader));
   }
 
   virtual void SetInt32Parameter(uint32_t aIndex, int32_t aParam) override
@@ -540,9 +540,10 @@ PannerNode::FindConnectedSources(AudioNode* aNode,
     // Recurse
     FindConnectedSources(inputNodes[i].mInputNode, aSources, aNodesSeen);
 
-    // Check if this node is an AudioBufferSourceNode
+    // Check if this node is an AudioBufferSourceNode that still have a stream,
+    // which means it has not finished playing.
     AudioBufferSourceNode* node = inputNodes[i].mInputNode->AsAudioBufferSourceNode();
-    if (node) {
+    if (node && node->GetStream()) {
       aSources.AppendElement(node);
     }
   }

@@ -42,6 +42,10 @@
 <!-- Device Settings -->
 <!ENTITY syncDeviceName.label       "Device Name:">
 <!ENTITY syncDeviceName.accesskey   "c">
+<!ENTITY fxaSyncDeviceName.label       "Device Name">
+<!ENTITY changeSyncDeviceName.label "Change Device Name…">
+<!ENTITY cancelChangeSyncDeviceName.label "Cancel">
+<!ENTITY saveChangeSyncDeviceName.label "Save">
 <!ENTITY unlinkDevice.label           "Unlink This Device">
 
 <!-- Footer stuff -->
@@ -70,6 +74,7 @@ both, to better adapt this sentence to their language.
 
 <!ENTITY notSignedIn.label           "You are not signed in.">
 <!ENTITY signIn.label                "Sign in">
+<!ENTITY profilePicture.tooltip      "Change profile picture">
 <!ENTITY manage.label                "Manage">
 <!ENTITY disconnect.label            "Disconnect…">
 <!ENTITY verify.label                "Verify Email">

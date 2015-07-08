@@ -50,7 +50,7 @@ exports.reportException = function reportException(aWho, aException) {
 
   dump(msg + "\n");
 
-  if (Cu.reportError) {
+  if (Cu && Cu.reportError) {
     /*
      * Note that the xpcshell test harness registers an observer for
      * console messages, so when we're running tests, this will cause
@@ -651,3 +651,17 @@ exports.settleAll = values => {
 
   return deferred.promise;
 };
+
+/**
+ * When the testing flag is set, various behaviors may be altered from
+ * production mode, typically to enable easier testing or enhanced debugging.
+ */
+let testing = false;
+Object.defineProperty(exports, "testing", {
+  get: function() {
+    return testing;
+  },
+  set: function(state) {
+    testing = state;
+  }
+});

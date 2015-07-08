@@ -16,7 +16,7 @@ The BuildReader contains basic logic for traversing a tree of mozbuild files.
 It does this by examining specific variables populated during execution.
 """
 
-from __future__ import print_function, unicode_literals
+from __future__ import absolute_import, print_function, unicode_literals
 
 import ast
 import inspect
@@ -146,9 +146,11 @@ def is_read_allowed(path, config):
     if mozpath.basedir(path, [topsrcdir]):
         return True
 
-    if config.external_source_dir and \
-            mozpath.basedir(path, [config.external_source_dir]):
-        return True
+    if config.external_source_dir:
+        external_dir = os.path.normcase(config.external_source_dir)
+        norm_path = os.path.normcase(path)
+        if mozpath.basedir(norm_path, [external_dir]):
+            return True
 
     return False
 
