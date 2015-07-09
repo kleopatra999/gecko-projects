@@ -4091,10 +4091,6 @@ var XULBrowserWindow = {
     return true;
   },
 
-  shouldAddToSessionHistory: function(aDocShell, aURI) {
-    return aURI.spec != NewTabURL.get();
-  },
-
   onProgressChange: function (aWebProgress, aRequest,
                               aCurSelfProgress, aMaxSelfProgress,
                               aCurTotalProgress, aMaxTotalProgress) {
@@ -6579,6 +6575,7 @@ var gIdentityHandler = {
   IDENTITY_MODE_IDENTIFIED                             : "verifiedIdentity", // High-quality identity information
   IDENTITY_MODE_DOMAIN_VERIFIED                        : "verifiedDomain",   // Minimal SSL CA-signed domain verification
   IDENTITY_MODE_UNKNOWN                                : "unknownIdentity",  // No trusted identity information
+  IDENTITY_MODE_USES_WEAK_CIPHER                       : "unknownIdentity weakCipher",  // SSL with RC4 cipher suite or SSL3
   IDENTITY_MODE_MIXED_DISPLAY_LOADED                   : "unknownIdentity mixedContent mixedDisplayContent",  // SSL with unauthenticated display content
   IDENTITY_MODE_MIXED_ACTIVE_LOADED                    : "unknownIdentity mixedContent mixedActiveContent",  // SSL with unauthenticated active (and perhaps also display) content
   IDENTITY_MODE_MIXED_DISPLAY_LOADED_ACTIVE_BLOCKED    : "unknownIdentity mixedContent mixedDisplayContentLoadedActiveBlocked",  // SSL with unauthenticated display content; unauthenticated active content is blocked.
@@ -6683,9 +6680,20 @@ var gIdentityHandler = {
     this._identityPopup.hidePopup();
   },
 
-  showSubView(name, anchor) {
+  toggleSubView(name, anchor) {
     let view = document.getElementById("identity-popup-multiView");
-    view.showSubView(`identity-popup-${name}View`, anchor);
+    if (view.showingSubView) {
+      view.showMainView();
+    } else {
+      view.showSubView(`identity-popup-${name}View`, anchor);
+    }
+
+    // If an element is focused that's not the anchor, clear the focus.
+    // Elements of hidden views have -moz-user-focus:ignore but setting that
+    // per CSS selector doesn't blur a focused element in those hidden views.
+    if (Services.focus.focusedElement != anchor) {
+      Services.focus.clearFocus(window);
+    }
   },
 
   /**
@@ -6762,8 +6770,10 @@ var gIdentityHandler = {
         this.setMode(this.IDENTITY_MODE_MIXED_ACTIVE_LOADED);
       } else if (state & nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT) {
         this.setMode(this.IDENTITY_MODE_MIXED_DISPLAY_LOADED_ACTIVE_BLOCKED);
-      } else {
+      } else if (state & nsIWebProgressListener.STATE_LOADED_MIXED_DISPLAY_CONTENT) {
         this.setMode(this.IDENTITY_MODE_MIXED_DISPLAY_LOADED);
+      } else {
+        this.setMode(this.IDENTITY_MODE_USES_WEAK_CIPHER);
       }
     } else {
       this.setMode(this.IDENTITY_MODE_UNKNOWN);
@@ -6995,9 +7005,12 @@ var gIdentityHandler = {
     case this.IDENTITY_MODE_UNKNOWN:
       supplemental = gNavigatorBundle.getString("identity.not_secure");
       break;
+    case this.IDENTITY_MODE_USES_WEAK_CIPHER:
+      supplemental = gNavigatorBundle.getString("identity.uses_weak_cipher");
+      break;
     case this.IDENTITY_MODE_MIXED_DISPLAY_LOADED:
     case this.IDENTITY_MODE_MIXED_DISPLAY_LOADED_ACTIVE_BLOCKED:
-      supplemental = gNavigatorBundle.getString("identity.broken_loaded");
+      supplemental = gNavigatorBundle.getString("identity.mixed_display_loaded");
       break;
     case this.IDENTITY_MODE_MIXED_ACTIVE_LOADED:
       supplemental = gNavigatorBundle.getString("identity.mixed_active_loaded2");
@@ -7054,9 +7067,26 @@ var gIdentityHandler = {
     this._identityPopup.openPopup(this._identityIcon, "bottomcenter topleft");
   },
 
-  onPopupShown : function(event) {
-    this._identityPopup.addEventListener("blur", this, true);
-    this._identityPopup.addEventListener("popuphidden", this);
+  onPopupShown(event) {
+    if (event.target == this._identityPopup) {
+      window.addEventListener("focus", this, true);
+    }
+  },
+
+  onPopupHidden(event) {
+    if (event.target == this._identityPopup) {
+      window.removeEventListener("focus", this, true);
+    }
+  },
+
+  handleEvent(event) {
+    let elem = document.activeElement;
+    let position = elem.compareDocumentPosition(this._identityPopup);
+
+    if (!(position & Node.DOCUMENT_POSITION_CONTAINS)) {
+      // Hide the panel when some element outside the panel received focus.
+      this._identityPopup.hidePopup();
+    }
   },
 
   onDragStart: function (event) {
@@ -7073,26 +7103,6 @@ var gIdentityHandler = {
     dt.setData("text/plain", value);
     dt.setData("text/html", htmlString);
     dt.setDragImage(gProxyFavIcon, 16, 16);
-  },
-
-  handleEvent: function (event) {
-    switch (event.type) {
-      case "blur":
-        // Focus hasn't moved yet, need to wait until after the blur event.
-        setTimeout(() => {
-          if (document.activeElement &&
-              document.activeElement.compareDocumentPosition(this._identityPopup) &
-                Node.DOCUMENT_POSITION_CONTAINS)
-            return;
-
-          this._identityPopup.hidePopup();
-        }, 0);
-        break;
-      case "popuphidden":
-        this._identityPopup.removeEventListener("blur", this, true);
-        this._identityPopup.removeEventListener("popuphidden", this);
-        break;
-    }
   },
 
   updateSitePermissions: function () {
