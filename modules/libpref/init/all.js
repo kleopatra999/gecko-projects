@@ -819,21 +819,15 @@ pref("toolkit.asyncshutdown.log", false);
 pref("devtools.errorconsole.deprecation_warnings", true);
 
 // Disable debugging chrome
-#ifdef MOZ_DEV_EDITION
-sticky_pref("devtools.chrome.enabled", true);
-#else
-sticky_pref("devtools.chrome.enabled", false);
-#endif
+pref("devtools.chrome.enabled", false);
 
 // Disable remote debugging protocol logging
 pref("devtools.debugger.log", false);
 pref("devtools.debugger.log.verbose", false);
+
 // Disable remote debugging connections
-#ifdef MOZ_DEV_EDITION
-sticky_pref("devtools.debugger.remote-enabled", true);
-#else
-sticky_pref("devtools.debugger.remote-enabled", false);
-#endif
+pref("devtools.debugger.remote-enabled", false);
+
 pref("devtools.debugger.remote-port", 6000);
 // Force debugger server binding on the loopback interface
 pref("devtools.debugger.force-local", true);
@@ -4820,9 +4814,13 @@ pref("dom.beforeAfterKeyboardEvent.enabled", false);
 pref("dom.presentation.enabled", false);
 pref("dom.presentation.tcp_server.debug", false);
 
-// Use raw ICU instead of CoreServices API in Unicode collation
 #ifdef XP_MACOSX
+// Use raw ICU instead of CoreServices API in Unicode collation
 pref("intl.collation.mac.use_icu", true);
+
+// Enable NSTextInput protocol for use with IMEs that have not
+// been updated to use the NSTextInputClient protocol.
+pref("intl.ime.nstextinput.enable", false);
 #endif
 
 // Enable meta-viewport support in remote APZ-enabled frames.
