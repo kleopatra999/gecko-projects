@@ -22,6 +22,12 @@ if test "$OS_ARCH" = "WINNT"; then
   fi
 fi
 
+if test "$OS_ARCH" = "WINNT" -o \
+        "$OS_ARCH" = "Darwin" -o \
+        "$OS_ARCH" = "Linux"; then
+  MOZ_VERIFY_MAR_SIGNATURE=1
+fi
+
 # Enable building ./signmar and running libmar signature tests
 MOZ_ENABLE_SIGNMAR=1
 

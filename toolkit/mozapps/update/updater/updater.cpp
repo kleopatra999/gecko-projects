@@ -3035,7 +3035,7 @@ int NS_main(int argc, NS_tchar **argv)
         // The elevated updater.exe is responsible for writing out the
         // update.status file.
         return 0;
-      } else if(useService) {
+      } else if (useService) {
         // The service command was launched. The service is responsible for
         // writing out the update.status file.
         if (updateLockFileHandle != INVALID_HANDLE_VALUE) {
@@ -3401,6 +3401,7 @@ int NS_main(int argc, NS_tchar **argv)
       LaunchMacPostProcess(gInstallDirPath);
     }
 #endif /* XP_MACOSX */
+
     LaunchCallbackApp(argv[5],
                       argc - callbackIndex,
                       argv + callbackIndex,
