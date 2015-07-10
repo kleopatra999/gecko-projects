@@ -2629,7 +2629,22 @@ int NS_main(int argc, NS_tchar **argv)
     putenv(const_cast<char*>("MOZ_OS_UPDATE="));
   }
 
-  LogInit(gPatchDirPath, NS_T("update.log"));
+  if (sReplaceRequest) {
+    // If we're attempting to replace the application, try to append to the
+    // log generated when staging the staged update.
+#if defined(XP_WIN) || defined(XP_MACOSX)
+    NS_tchar* logDir = gPatchDirPath;
+#else
+    NS_tchar logDir[MAXPATHLEN];
+    NS_tsnprintf(logDir, sizeof(logDir)/sizeof(logDir[0]),
+                 NS_T("%s/updated/updates"),
+                 gInstallDirPath);
+#endif
+
+    LogInitAppend(logDir, NS_T("last-update.log"), NS_T("update.log"));
+  } else {
+    LogInit(gPatchDirPath, NS_T("update.log"));
+  }
 
   if (!WriteStatusFile("applying")) {
     LOG(("failed setting status to 'applying'"));
