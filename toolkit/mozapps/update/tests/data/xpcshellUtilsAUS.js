@@ -2466,6 +2466,44 @@ function createUpdaterINI(aIsExeAsync) {
 }
 
 /**
+ * Gets the specified update log.
+ *
+ * @param   aLogLeafName
+ *          The leaf name of the log to get.
+ * @return  nsIFile for the update log.
+ */
+function getUpdateLog(aLogLeafName) {
+  let updateLog = getUpdatesDir();
+  if (aLogLeafName == FILE_UPDATE_LOG) {
+    updateLog.append(DIR_PATCH);
+  }
+  updateLog.append(aLogLeafName);
+  return updateLog;
+}
+
+/**
+ * Logs the contents of an update log.
+ *
+ * @param   aLogLeafName
+ *          The leaf name of the log.
+ */
+function logUpdateLog(aLogLeafName) {
+  let updateLog = getUpdateLog(aLogLeafName);
+  if (updateLog.exists()) {
+    // xpcshell tests won't display the entire contents so log each line.
+    let updateLogContents = readFileBytes(updateLog).replace(/\r\n/g, "\n");
+    updateLogContents = replaceLogPaths(updateLogContents);
+    let aryLogContents = updateLogContents.split("\n");
+    logTestInfo("contents of " + updateLog.path + ":");
+    aryLogContents.forEach(function RU_LC_FE(aLine) {
+      logTestInfo(aLine);
+    });
+  } else {
+    logTestInfo("update log doesn't exist, path: " + updateLog.path);
+  }
+}
+
+/**
  * Helper function that replaces the common part of paths in the update log's
  * contents with <test_dir_path> for paths to the the test directory and
  * <update_dir_path> for paths to the update directory. This is needed since
@@ -2578,7 +2616,7 @@ function checkUpdateLogContents(aCompareLogFile, aExcludeDistributionDir) {
     compareLogContents = readFileBytes(getTestDirFile(aCompareLogFile));
   }
   if (gSwitchApp) {
-    compareLogContents += LOG_SWITCH_SUCCESS;
+    compareLogContents = LOG_SWITCH_SUCCESS;
   }
   // The channel-prefs.js is defined in gTestFilesCommon which will always be
   // located to the end of gTestFiles.
@@ -2606,6 +2644,7 @@ function checkUpdateLogContents(aCompareLogFile, aExcludeDistributionDir) {
     Assert.ok(true, "the update log contents" + MSG_SHOULD_EQUAL);
   } else {
     logTestInfo("the update log contents are not correct");
+    logUpdateLog(FILE_UPDATE_LOG);
     let aryLog = updateLogContents.split("\n");
     let aryCompare = compareLogContents.split("\n");
     // Pushing an empty string to both arrays makes it so either array's length

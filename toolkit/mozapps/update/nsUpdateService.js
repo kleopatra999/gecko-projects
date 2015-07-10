@@ -81,6 +81,7 @@ const FILE_UPDATE_VERSION = "update.version";
 const FILE_UPDATE_ARCHIVE = "update.mar";
 const FILE_UPDATE_LINK    = "update.link";
 const FILE_UPDATE_LOG     = "update.log";
+const FILE_UPDATE_LOG_BAK = "update.log.bak";
 const FILE_UPDATES_DB     = "updates.xml";
 const FILE_UPDATE_ACTIVE  = "active-update.xml";
 const FILE_PERMS_TEST     = "update.test";
@@ -1115,12 +1116,12 @@ function cleanUpMozUpdaterDirs() {
 /**
  * Removes the contents of the Updates Directory
  *
- * @param aBackgroundUpdate Whether the update has been performed in the
- *        background.  If this is true, we move the update log file to the
- *        updated directory, so that it survives replacing the directories
- *        later on.
+ * @param aRemoveFiles
+ *        When this is true the files in the updates patch directory are removed
+ *        and the log files are renamed. When it is false only the log files are
+ *        renamed.
  */
-function cleanUpUpdatesDir(aBackgroundUpdate) {
+function cleanUpUpdatesDir(aRemoveFiles) {
   // Bail out if we don't have appropriate permissions
   let updateDir;
   try {
@@ -1133,14 +1134,16 @@ function cleanUpUpdatesDir(aBackgroundUpdate) {
   let file = updateDir.clone();
   file.append(FILE_UPDATE_LOG);
   if (file.exists()) {
-    let dir;
-    if (aBackgroundUpdate && getUpdateDirNoCreate([]).equals(getAppBaseDir())) {
-      dir = getUpdatesDirInApplyToDir();
-    } else {
-      dir = updateDir.parent;
-    }
+    let dir = updateDir.parent;
     let logFile = dir.clone();
-    logFile.append(FILE_LAST_LOG);
+    let updateLogBak = updateDir.clone();
+    updateLogBak.append(FILE_UPDATE_LOG_BAK);
+    if (updateLogBak.exists()) {
+      logFile = updateLogBak;
+    } else {
+      logFile.append(FILE_LAST_LOG);
+    }
+
     if (logFile.exists()) {
       try {
         logFile.moveTo(dir, FILE_BACKUP_LOG);
@@ -1158,7 +1161,7 @@ function cleanUpUpdatesDir(aBackgroundUpdate) {
     }
   }
 
-  if (!aBackgroundUpdate) {
+  if (aRemoveFiles) {
     let e = updateDir.directoryEntries;
     while (e.hasMoreElements()) {
       let f = e.getNext().QueryInterface(Ci.nsIFile);
@@ -1197,7 +1200,7 @@ function cleanupActiveUpdate() {
   um.saveUpdates();
 
   // Now trash the updates directory, since we're done with it
-  cleanUpUpdatesDir();
+  cleanUpUpdatesDir(true);
 }
 
 /**
@@ -1343,6 +1346,7 @@ function handleUpdateFailure(update, errorCode) {
     Cc["@mozilla.org/updates/update-prompt;1"].
       createInstance(Ci.nsIUpdatePrompt).
       showUpdateError(update);
+    cleanUpUpdatesDir(false);
     writeStatusFile(getUpdatesDir(), update.state = STATE_PENDING);
     return true;
   }
@@ -2222,6 +2226,10 @@ UpdateService.prototype = {
       handleFallbackToCompleteUpdate(update, false);
 
       prompter.showUpdateError(update);
+    }
+
+    if (Services.prefs.prefHasUserValue(PREF_APP_UPDATE_CANCELATIONS)) {
+      Services.prefs.clearUserPref(PREF_APP_UPDATE_CANCELATIONS);
     }
 
     // Now trash the MozUpdater directory created when replacing an install with
@@ -3104,7 +3112,7 @@ function UpdateManager() {
     // STATE_NONE. To recover from this situation clean the updates dir and
     // rewrite the active-update.xml file without the broken update.
     if (readStatusFile(getUpdatesDir()) == STATE_NONE) {
-      cleanUpUpdatesDir();
+      cleanUpUpdatesDir(true);
       this._writeUpdatesToXMLFile([], getUpdateFile([FILE_UPDATE_ACTIVE]));
     }
     else
@@ -3243,7 +3251,7 @@ UpdateManager.prototype = {
         this.saveUpdates();
 
         // Destroy the updates directory, since we're done with it.
-        cleanUpUpdatesDir();
+        cleanUpUpdatesDir(true);
       }
     }
     return this._activeUpdate;
@@ -3364,14 +3372,14 @@ UpdateManager.prototype = {
     if (!update) {
       return;
     }
-    var updateSucceeded = true;
+    let stageSucceeded = true;
     var status = readStatusFile(getUpdatesDir());
     pingStateAndStatusCodes(update, false, status);
     var parts = status.split(":");
     update.state = parts[0];
 
     if (update.state == STATE_FAILED && parts[1]) {
-      updateSucceeded = false;
+      stageSucceeded = false;
       if (!handleUpdateFailure(update, parts[1])) {
         handleFallbackToCompleteUpdate(update, true);
       }
@@ -3387,7 +3395,9 @@ UpdateManager.prototype = {
       // Destroy the updates directory, since we're done with it.
       // Make sure to not do this when the updater has fallen back to
       // non-staged updates.
-      cleanUpUpdatesDir(updateSucceeded);
+      cleanUpUpdatesDir(!stageSucceeded);
+    } else {
+      cleanUpUpdatesDir(false);
     }
 
     // Send an observer notification which the update wizard uses in
@@ -3411,6 +3421,7 @@ UpdateManager.prototype = {
       }
       return;
     }
+
     // Only prompt when the UI isn't already open.
     let windowType = getPref("getCharPref", PREF_APP_UPDATE_ALTWINDOWTYPE, null);
     if (Services.wm.getMostRecentWindow(UPDATE_WINDOW_NAME) ||
@@ -4317,7 +4328,7 @@ Downloader.prototype = {
           deleteActiveUpdate = true;
 
         // Destroy the updates directory, since we're done with it.
-        cleanUpUpdatesDir();
+        cleanUpUpdatesDir(true);
       }
     } else {
       if (status == Cr.NS_ERROR_OFFLINE) {
@@ -4377,7 +4388,7 @@ Downloader.prototype = {
         }
 
         // Destroy the updates directory, since we're done with it.
-        cleanUpUpdatesDir();
+        cleanUpUpdatesDir(true);
 
         deleteActiveUpdate = true;
       }
