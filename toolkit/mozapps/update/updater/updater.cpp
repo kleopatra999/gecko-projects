@@ -2125,8 +2125,8 @@ CopyInstallDirToDestDir()
 #ifndef XP_MACOSX
   skiplist.append(0, gInstallDirPath, NS_T("updated"));
   skiplist.append(1, gInstallDirPath, NS_T("updates/0"));
-#if defined(XP_WIN)
-  skiplist.append(1, gInstallDirPath, NS_T("updated.update_in_progress.lock"));
+#ifdef XP_WIN
+  skiplist.append(2, gInstallDirPath, NS_T("updated.update_in_progress.lock"));
 #endif
 #endif
 
@@ -2235,29 +2235,6 @@ ProcessReplaceRequest()
     // in returning an error specific for this failure.
     return rv;
   }
-
-#if defined(XP_UNIX) && !defined(XP_MACOSX) && !defined(MOZ_WIDGET_GONK)
-  // Copy the update files under the updates directory after a successful
-  // replace request so the old logs, etc. are present. After Linux uses an
-  // updates directory outside of the application directory these files will
-  // no longer need to be copied.
-  NS_tchar tmpLog[MAXPATHLEN];
-  NS_tchar destFile[MAXPATHLEN];
-  NS_tsnprintf(tmpLog, sizeof(tmpLog)/sizeof(tmpLog[0]),
-               NS_T("%s/updates/last-update.log"), tmpDir);
-  if (!NS_taccess(tmpLog, F_OK)) {
-    NS_tsnprintf(destFile, sizeof(destFile)/sizeof(destFile[0]),
-                 NS_T("%s/updates/last-update.log"), destDir);
-    rename_file(tmpLog, destFile, false);
-  }
-  NS_tsnprintf(tmpLog, sizeof(tmpLog)/sizeof(tmpLog[0]),
-               NS_T("%s/updates/backup-update.log"), tmpDir);
-  if (!NS_taccess(tmpLog, F_OK)) {
-    NS_tsnprintf(destFile, sizeof(destFile)/sizeof(destFile[0]),
-                 NS_T("%s/updates/backup-update.log"), destDir);
-    rename_file(tmpLog, destFile, false);
-  }
-#endif
 
   LOG(("Now, remove the tmpDir"));
   rv = ensure_remove_recursive(tmpDir, true);
