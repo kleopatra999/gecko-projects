@@ -2632,13 +2632,17 @@ int NS_main(int argc, NS_tchar **argv)
   if (sReplaceRequest) {
     // If we're attempting to replace the application, try to append to the
     // log generated when staging the staged update.
-#if defined(XP_WIN) || defined(XP_MACOSX)
+#ifdef XP_WIN
+    NS_tchar* logDir = gPatchDirPath;
+#else
+#ifdef XP_MACOSX
     NS_tchar* logDir = gPatchDirPath;
 #else
     NS_tchar logDir[MAXPATHLEN];
     NS_tsnprintf(logDir, sizeof(logDir)/sizeof(logDir[0]),
                  NS_T("%s/updated/updates"),
                  gInstallDirPath);
+#endif
 #endif
 
     LogInitAppend(logDir, NS_T("last-update.log"), NS_T("update.log"));
