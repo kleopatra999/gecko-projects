@@ -823,6 +823,7 @@ GK_ATOM(onMozScrolledAreaChanged, "onMozScrolledAreaChanged")
 GK_ATOM(onmoznetworkupload, "onmoznetworkupload")
 GK_ATOM(onmoznetworkdownload, "onmoznetworkdownload")
 GK_ATOM(onnewrdsgroup, "onnewrdsgroup")
+GK_ATOM(onnotificationclick, "onnotificationclick")
 GK_ATOM(onnoupdate, "onnoupdate")
 GK_ATOM(onobsolete, "onobsolete")
 GK_ATOM(ononline, "ononline")
@@ -2111,10 +2112,6 @@ GK_ATOM(x_orya, "x-orya")
 GK_ATOM(x_sinh, "x-sinh")
 GK_ATOM(x_telu, "x-telu")
 GK_ATOM(x_tibt, "x-tibt")
-
-// used in gfxGDIFontList.h
-GK_ATOM(ko_xxx, "ko-xxx")
-GK_ATOM(x_symbol, "x-symbol")
 
 // additional languages that have special case transformations
 GK_ATOM(az, "az")

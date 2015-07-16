@@ -42,6 +42,7 @@
 #include "WindowNamedPropertiesHandler.h"
 #include "nsFrameSelection.h"
 #include "nsNetUtil.h"
+#include "nsIConsoleService.h"
 
 // Helper Classes
 #include "nsJSUtils.h"
@@ -1562,6 +1563,12 @@ nsGlobalWindow::FreeInnerObjects()
 {
   NS_ASSERTION(IsInnerWindow(), "Don't free inner objects on an outer window");
 
+  // Prune messages related to this window in the console cache
+  nsCOMPtr<nsIConsoleService> console(do_GetService("@mozilla.org/consoleservice;1"));
+  if (console) {
+    console->ClearMessagesForWindowID(mWindowID);
+  }
+
   // Make sure that this is called before we null out the document and
   // other members that the window destroyed observers could
   // re-create.
@@ -2709,11 +2716,9 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
   // We wait to fire the debugger hook until the window is all set up and hooked
   // up with the outer. See bug 969156.
   if (createdInnerWindow) {
-    // AutoEntryScript required to invoke debugger hook, which is a
-    // Gecko-specific concept at present.
-    AutoEntryScript aes(newInnerWindow, "nsGlobalWindow report new global");
-    JS::Rooted<JSObject*> global(aes.cx(), newInnerWindow->GetWrapper());
-    JS_FireOnNewGlobalObject(aes.cx(), global);
+    nsContentUtils::AddScriptRunner(
+      NS_NewRunnableMethod(newInnerWindow,
+                           &nsGlobalWindow::FireOnNewGlobalObject));
   }
 
   if (newInnerWindow && !newInnerWindow->mHasNotifiedGlobalCreated && mDoc) {
@@ -3739,7 +3744,7 @@ void
 nsPIDOMWindow::RefreshMediaElements()
 {
   nsRefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
-  service->RefreshAgentsVolume(GetCurrentInnerWindow());
+  service->RefreshAgentsVolume(GetOuterWindow());
 }
 
 // nsISpeechSynthesisGetter
@@ -8790,6 +8795,18 @@ nsGlobalWindow::NotifyDOMWindowDestroyed(nsGlobalWindow* aWindow) {
   }
 }
 
+// Try to match compartments that are not web content by matching compartments
+// with principals that are either the system principal or an expanded principal.
+// This may not return true for all non-web-content compartments.
+struct BrowserCompartmentMatcher : public js::CompartmentFilter {
+  virtual bool match(JSCompartment* c) const override
+  {
+    nsCOMPtr<nsIPrincipal> pc = nsJSPrincipals::get(JS_GetCompartmentPrincipals(c));
+    return nsContentUtils::IsSystemOrExpandedPrincipal(pc);
+  }
+};
+
+
 class WindowDestroyedEvent : public nsRunnable
 {
 public:
@@ -8835,7 +8852,7 @@ public:
       // We only want to nuke wrappers for the chrome->content case
       if (obj && !js::IsSystemCompartment(js::GetObjectCompartment(obj))) {
         js::NukeCrossCompartmentWrappers(cx,
-                                         js::ChromeCompartmentsOnly(),
+                                         BrowserCompartmentMatcher(),
                                          js::SingleCompartment(js::GetObjectCompartment(obj)),
                                          window->IsInnerWindow() ? js::DontNukeWindowReferences :
                                                                    js::NukeWindowReferences);
@@ -14153,6 +14170,18 @@ nsGlobalWindow::SetReplaceableWindowCoord(JSContext* aCx,
   }
 
   (this->*aSetter)(value, aError);
+}
+
+void
+nsGlobalWindow::FireOnNewGlobalObject()
+{
+  MOZ_ASSERT(IsInnerWindow());
+
+  // AutoEntryScript required to invoke debugger hook, which is a
+  // Gecko-specific concept at present.
+  AutoEntryScript aes(this, "nsGlobalWindow report new global");
+  JS::Rooted<JSObject*> global(aes.cx(), GetWrapper());
+  JS_FireOnNewGlobalObject(aes.cx(), global);
 }
 
 #ifdef _WINDOWS_
