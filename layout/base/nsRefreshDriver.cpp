@@ -49,7 +49,6 @@
 #include "RestyleManager.h"
 #include "Layers.h"
 #include "imgIContainer.h"
-#include "nsIFrameRequestCallback.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "nsDocShell.h"
 #include "nsISimpleEnumerator.h"
@@ -1530,7 +1529,6 @@ nsRefreshDriver::RunFrameRequestCallbacks(int64_t aNowEpoch, TimeStamp aNowTime)
 
   if (!frameRequestCallbacks.IsEmpty()) {
     profiler_tracing("Paint", "Scripts", TRACING_INTERVAL_START);
-    int64_t eventTime = aNowEpoch / PR_USEC_PER_MSEC;
     for (const DocumentFrameCallbacks& docCallbacks : frameRequestCallbacks) {
       // XXXbz Bug 863140: GetInnerWindow can return the outer
       // window in some cases.
@@ -1543,15 +1541,10 @@ nsRefreshDriver::RunFrameRequestCallbacks(int64_t aNowEpoch, TimeStamp aNowTime)
         }
         // else window is partially torn down already
       }
-      for (const nsIDocument::FrameRequestCallbackHolder& holder :
-           docCallbacks.mCallbacks) {
-        nsAutoMicroTask mt;
-        if (holder.HasWebIDLCallback()) {
-          ErrorResult ignored;
-          holder.GetWebIDLCallback()->Call(timeStamp, ignored);
-        } else {
-          holder.GetXPCOMCallback()->Sample(eventTime);
-        }
+      for (auto& callback : docCallbacks.mCallbacks) {
+        ErrorResult ignored;
+        callback->Call(timeStamp, ignored);
+        ignored.SuppressException();
       }
     }
     profiler_tracing("Paint", "Scripts", TRACING_INTERVAL_END);
@@ -1688,54 +1681,58 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
         if (tracingStyleFlush) {
           profiler_tracing("Paint", "Styles", TRACING_INTERVAL_END);
         }
-      }
 
-      if (!nsLayoutUtils::AreAsyncAnimationsEnabled()) {
-        mPresContext->TickLastStyleUpdateForAllAnimations();
+        if (!nsLayoutUtils::AreAsyncAnimationsEnabled()) {
+          mPresContext->TickLastStyleUpdateForAllAnimations();
+        }
       }
     } else if  (i == 1) {
       // This is the Flush_Layout case.
-      if (mPresContext && mPresContext->GetPresShell()) {
-        bool tracingLayoutFlush = false;
-        nsAutoTArray<nsIPresShell*, 16> observers;
-        observers.AppendElements(mLayoutFlushObservers);
-        for (uint32_t j = observers.Length();
-             j && mPresContext && mPresContext->GetPresShell(); --j) {
-          // Make sure to not process observers which might have been removed
-          // during previous iterations.
-          nsIPresShell* shell = observers[j - 1];
-          if (!mLayoutFlushObservers.Contains(shell))
-            continue;
+      bool tracingLayoutFlush = false;
+      nsAutoTArray<nsIPresShell*, 16> observers;
+      observers.AppendElements(mLayoutFlushObservers);
+      for (uint32_t j = observers.Length();
+           j && mPresContext && mPresContext->GetPresShell(); --j) {
+        // Make sure to not process observers which might have been removed
+        // during previous iterations.
+        nsIPresShell* shell = observers[j - 1];
+        if (!mLayoutFlushObservers.Contains(shell))
+          continue;
 
-          if (!tracingLayoutFlush) {
-            tracingLayoutFlush = true;
-            profiler_tracing("Paint", "Reflow", mReflowCause, TRACING_INTERVAL_START);
-            mReflowCause = nullptr;
-          }
-
-          NS_ADDREF(shell);
-          mLayoutFlushObservers.RemoveElement(shell);
-          shell->mReflowScheduled = false;
-          shell->mSuppressInterruptibleReflows = false;
-          mozFlushType flushType = HasPendingAnimations(shell)
-                                 ? Flush_Layout
-                                 : Flush_InterruptibleLayout;
-          shell->FlushPendingNotifications(ChangesToFlush(flushType, false));
-          // Inform the FontFaceSet that we ticked, so that it can resolve its
-          // ready promise if it needs to.
-          nsPresContext* presContext = shell->GetPresContext();
-          if (presContext) {
-            presContext->NotifyFontFaceSetOnRefresh();
-          }
-          NS_RELEASE(shell);
+        if (!tracingLayoutFlush) {
+          tracingLayoutFlush = true;
+          profiler_tracing("Paint", "Reflow", mReflowCause, TRACING_INTERVAL_START);
+          mReflowCause = nullptr;
         }
 
-        mNeedToRecomputeVisibility = true;
-
-        if (tracingLayoutFlush) {
-          profiler_tracing("Paint", "Reflow", TRACING_INTERVAL_END);
+        NS_ADDREF(shell);
+        mLayoutFlushObservers.RemoveElement(shell);
+        shell->mReflowScheduled = false;
+        shell->mSuppressInterruptibleReflows = false;
+        mozFlushType flushType = HasPendingAnimations(shell)
+                               ? Flush_Layout
+                               : Flush_InterruptibleLayout;
+        shell->FlushPendingNotifications(ChangesToFlush(flushType, false));
+        // Inform the FontFaceSet that we ticked, so that it can resolve its
+        // ready promise if it needs to.
+        nsPresContext* presContext = shell->GetPresContext();
+        if (presContext) {
+          presContext->NotifyFontFaceSetOnRefresh();
         }
+        NS_RELEASE(shell);
       }
+
+      mNeedToRecomputeVisibility = true;
+
+      if (tracingLayoutFlush) {
+        profiler_tracing("Paint", "Reflow", TRACING_INTERVAL_END);
+      }
+    }
+
+    // The pres context may be destroyed during we do the flushing.
+    if (!mPresContext || !mPresContext->GetPresShell()) {
+      StopTimer();
+      return;
     }
   }
 
@@ -1765,8 +1762,16 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
     // script modifies the hashtable. Instead, we build a (local) array of
     // images to refresh, and then we refresh each image in that array.
     nsCOMArray<imgIContainer> imagesToRefresh(mRequests.Count());
-    mRequests.EnumerateEntries(nsRefreshDriver::ImageRequestEnumerator,
-                               &imagesToRefresh);
+
+    for (auto iter = mRequests.Iter(); !iter.Done(); iter.Next()) {
+      nsISupportsHashKey* entry = iter.Get();
+      auto req = static_cast<imgIRequest*>(entry->GetKey());
+      MOZ_ASSERT(req, "Unable to retrieve the image request");
+      nsCOMPtr<imgIContainer> image;
+      if (NS_SUCCEEDED(req->GetImage(getter_AddRefs(image)))) {
+        imagesToRefresh.AppendElement(image);
+      }
+    }
 
     for (uint32_t i = 0; i < imagesToRefresh.Length(); i++) {
       imagesToRefresh[i]->RequestRefresh(aNowTime);
@@ -1823,40 +1828,22 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
   NS_ASSERTION(mInRefresh, "Still in refresh");
 }
 
-/* static */ PLDHashOperator
-nsRefreshDriver::ImageRequestEnumerator(nsISupportsHashKey* aEntry,
-                                        void* aUserArg)
+void
+nsRefreshDriver::BeginRefreshingImages(RequestTable& aEntries,
+                                       ImageRequestParameters* aParms)
 {
-  nsCOMArray<imgIContainer>* imagesToRefresh =
-    static_cast<nsCOMArray<imgIContainer>*> (aUserArg);
-  imgIRequest* req = static_cast<imgIRequest*>(aEntry->GetKey());
-  MOZ_ASSERT(req, "Unable to retrieve the image request");
-  nsCOMPtr<imgIContainer> image;
-  if (NS_SUCCEEDED(req->GetImage(getter_AddRefs(image)))) {
-    imagesToRefresh->AppendElement(image);
+  for (auto iter = aEntries.Iter(); !iter.Done(); iter.Next()) {
+    auto req = static_cast<imgIRequest*>(iter.Get()->GetKey());
+    MOZ_ASSERT(req, "Unable to retrieve the image request");
+
+    aParms->mRequests->PutEntry(req);
+
+    nsCOMPtr<imgIContainer> image;
+    if (NS_SUCCEEDED(req->GetImage(getter_AddRefs(image)))) {
+      image->SetAnimationStartTime(aParms->mDesired);
+    }
   }
-
-  return PL_DHASH_NEXT;
-}
-
-/* static */ PLDHashOperator
-nsRefreshDriver::BeginRefreshingImages(nsISupportsHashKey* aEntry,
-                                       void* aUserArg)
-{
-  ImageRequestParameters* parms =
-    static_cast<ImageRequestParameters*> (aUserArg);
-
-  imgIRequest* req = static_cast<imgIRequest*>(aEntry->GetKey());
-  MOZ_ASSERT(req, "Unable to retrieve the image request");
-
-  parms->mRequests->PutEntry(req);
-
-  nsCOMPtr<imgIContainer> image;
-  if (NS_SUCCEEDED(req->GetImage(getter_AddRefs(image)))) {
-    image->SetAnimationStartTime(parms->mDesired);
-  }
-
-  return PL_DHASH_REMOVE;
+  aEntries.Clear();
 }
 
 /* static */ PLDHashOperator
@@ -1879,14 +1866,14 @@ nsRefreshDriver::StartTableRefresh(const uint32_t& aDelay,
     // to the main requests table.
     if (prevMultiple != static_cast<uint32_t>(curr.ToMilliseconds()) / aDelay) {
       parms->mDesired = start + TimeDuration::FromMilliseconds(prevMultiple * aDelay);
-      aData->mEntries.EnumerateEntries(nsRefreshDriver::BeginRefreshingImages, parms);
+      BeginRefreshingImages(aData->mEntries, parms);
     }
   } else {
     // This is the very first time we've drawn images with this time delay.
     // Set the animation start time to "now" and move all the images in this
     // table to the main requests table.
     parms->mDesired = parms->mCurrent;
-    aData->mEntries.EnumerateEntries(nsRefreshDriver::BeginRefreshingImages, parms);
+    BeginRefreshingImages(aData->mEntries, parms);
     aData->mStartTime.emplace(parms->mCurrent);
   }
 

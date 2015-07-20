@@ -14,11 +14,13 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "nsIObserverService.h"
+#include "WebGLActiveInfo.h"
 #include "WebGLBuffer.h"
 #include "WebGLContextUtils.h"
 #include "WebGLFramebuffer.h"
 #include "WebGLProgram.h"
 #include "WebGLRenderbuffer.h"
+#include "WebGLSampler.h"
 #include "WebGLShader.h"
 #include "WebGLTexture.h"
 #include "WebGLUniformLocation.h"
@@ -399,15 +401,8 @@ WebGLContext::ValidateFramebufferAttachment(const WebGLFramebuffer* fb, GLenum a
         return true;
     }
 
-    GLenum colorAttachCount = 1;
-    if (IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers))
-        colorAttachCount = mGLMaxColorAttachments;
-
-    if (attachment >= LOCAL_GL_COLOR_ATTACHMENT0 &&
-        attachment < GLenum(LOCAL_GL_COLOR_ATTACHMENT0 + colorAttachCount))
-    {
+    if (attachment >= LOCAL_GL_COLOR_ATTACHMENT0 && attachment <= LastColorAttachment())
         return true;
-    }
 
     ErrorInvalidEnum("%s: attachment: invalid enum value 0x%x.", funcName,
                      attachment);
@@ -1882,9 +1877,6 @@ WebGLContext::InitAndValidateGL()
             }
         }
     }
-
-    // Always 1 for GLES2
-    mMaxFramebufferColorAttachments = 1;
 
     if (gl->IsCompatibilityProfile()) {
         // gl_PointSize is always available in ES2 GLSL, but has to be

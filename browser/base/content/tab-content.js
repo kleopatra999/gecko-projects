@@ -268,6 +268,8 @@ let AboutPrivateBrowsingListener = {
   init(chromeGlobal) {
     chromeGlobal.addEventListener("AboutPrivateBrowsingOpenWindow", this,
                                   false, true);
+    chromeGlobal.addEventListener("AboutPrivateBrowsingEnableTrackingProtection", this,
+                                  false, true);
   },
 
   get isAboutPrivateBrowsing() {
@@ -281,6 +283,9 @@ let AboutPrivateBrowsingListener = {
     switch (aEvent.type) {
       case "AboutPrivateBrowsingOpenWindow":
         sendAsyncMessage("AboutPrivateBrowsing:OpenPrivateWindow");
+        break;
+      case "AboutPrivateBrowsingEnableTrackingProtection":
+        sendAsyncMessage("AboutPrivateBrowsing:EnableTrackingProtection");
         break;
     }
   },
@@ -624,8 +629,10 @@ let DOMFullscreenHandler = {
     addMessageListener("DOMFullscreen:Approved", this);
     addMessageListener("DOMFullscreen:CleanUp", this);
     addEventListener("MozDOMFullscreen:Request", this);
+    addEventListener("MozDOMFullscreen:Entered", this);
     addEventListener("MozDOMFullscreen:NewOrigin", this);
     addEventListener("MozDOMFullscreen:Exit", this);
+    addEventListener("MozDOMFullscreen:Exited", this);
   },
 
   get _windowUtils() {
@@ -676,6 +683,16 @@ let DOMFullscreenHandler = {
       }
       case "MozDOMFullscreen:Exit": {
         sendAsyncMessage("DOMFullscreen:Exit");
+        break;
+      }
+      case "MozDOMFullscreen:Entered":
+      case "MozDOMFullscreen:Exited": {
+        addEventListener("MozAfterPaint", this);
+        break;
+      }
+      case "MozAfterPaint": {
+        removeEventListener("MozAfterPaint", this);
+        sendAsyncMessage("DOMFullscreen:Painted");
         break;
       }
     }

@@ -23,6 +23,7 @@
 #ifdef MOZ_WEBM
 #include "WebMDecoder.h"
 #include "WebMReader.h"
+#include "WebMDemuxer.h"
 #endif
 #ifdef MOZ_RAW
 #include "RawDecoder.h"
@@ -282,10 +283,16 @@ static char const *const gMpegAudioCodecs[2] = {
 };
 
 #ifdef MOZ_OMX_WEBM_DECODER
-static char const *const gOMXWebMCodecs[4] = {
+static char const *const gOMXWebMCodecs[] = {
   "vorbis",
   "vp8",
   "vp8.0",
+  // Since Android KK, VP9 SW decoder is supported.
+  // http://developer.android.com/guide/appendix/media-formats.html
+#if ANDROID_VERSION > 18
+  "vp9",
+  "vp9.0",
+#endif
   nullptr
 };
 #endif //MOZ_OMX_WEBM_DECODER
@@ -692,7 +699,9 @@ MediaDecoderReader* DecoderTraits::CreateReader(const nsACString& aType, Abstrac
 #endif
 #ifdef MOZ_WEBM
   if (IsWebMType(aType)) {
-    decoderReader = new WebMReader(aDecoder);
+    decoderReader = Preferences::GetBool("media.format-reader.webm", true) ?
+      static_cast<MediaDecoderReader*>(new MediaFormatReader(aDecoder, new WebMDemuxer(aDecoder->GetResource()))) :
+      new WebMReader(aDecoder);
   } else
 #endif
 #ifdef MOZ_DIRECTSHOW
@@ -755,4 +764,4 @@ bool DecoderTraits::IsSupportedInVideoDocument(const nsACString& aType)
     false;
 }
 
-}
+} // namespace mozilla

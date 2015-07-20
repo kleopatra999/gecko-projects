@@ -33,6 +33,7 @@ browser.jar:
 *       skin/classic/browser/browser.css
 *       skin/classic/browser/devedition.css
 *       skin/classic/browser/browser-lightweightTheme.css
+        skin/classic/browser/caption-buttons.svg
         skin/classic/browser/click-to-play-warning-stripes.png
         skin/classic/browser/content-contextmenu.svg
         skin/classic/browser/drm-icon.svg                            (../shared/drm-icon.svg)
@@ -47,16 +48,13 @@ browser.jar:
         skin/classic/browser/heartbeat-star-off.svg                  (../shared/heartbeat-star-off.svg)
         skin/classic/browser/Info.png
         skin/classic/browser/Info-XP.png
-        skin/classic/browser/identity-icons-generic.png
-        skin/classic/browser/identity-icons-generic@2x.png
-        skin/classic/browser/identity-icons-https.png
-        skin/classic/browser/identity-icons-https@2x.png
-        skin/classic/browser/identity-icons-https-ev.png
-        skin/classic/browser/identity-icons-https-ev@2x.png
-        skin/classic/browser/identity-icons-https-mixed-active.png
-        skin/classic/browser/identity-icons-https-mixed-active@2x.png
-        skin/classic/browser/identity-icons-https-mixed-display.png
-        skin/classic/browser/identity-icons-https-mixed-display@2x.png
+        skin/classic/browser/identity-not-secure.svg                 (../shared/identity-block/identity-not-secure.svg)
+        skin/classic/browser/identity-secure.svg                     (../shared/identity-block/identity-secure.svg)
+        skin/classic/browser/identity-mixed-active-blocked.svg       (../shared/identity-block/identity-mixed-active-blocked.svg)
+        skin/classic/browser/identity-mixed-passive-loaded.svg       (../shared/identity-block/identity-mixed-passive-loaded.svg)
+        skin/classic/browser/identity-mixed-active-loaded.svg        (../shared/identity-block/identity-mixed-active-loaded.svg)
+        skin/classic/browser/tracking-protection-16.svg              (../shared/identity-block/tracking-protection-16.svg)
+        skin/classic/browser/tracking-protection-disabled-16.svg     (../shared/identity-block/tracking-protection-disabled-16.svg)
         skin/classic/browser/keyhole-forward-mask.svg
         skin/classic/browser/KUI-background.png
         skin/classic/browser/livemark-folder.png
@@ -65,6 +63,7 @@ browser.jar:
         skin/classic/browser/magnifier@2x.png                       (../shared/magnifier@2x.png)
         skin/classic/browser/mask.png                               (../shared/mask.png)
         skin/classic/browser/mask@2x.png                            (../shared/mask@2x.png)
+        skin/classic/browser/mask-and-shield.svg                    (../shared/mask-and-shield.svg)
         skin/classic/browser/menu-back.png
         skin/classic/browser/menu-back-XP.png
         skin/classic/browser/menu-forward.png
@@ -106,6 +105,8 @@ browser.jar:
         skin/classic/browser/privatebrowsing-mask-titlebar-XPVista7-tall.png
         skin/classic/browser/reload-stop-go.png
         skin/classic/browser/reload-stop-go@2x.png
+        skin/classic/browser/reload-stop-go-preWin10.png
+        skin/classic/browser/reload-stop-go-preWin10@2x.png
         skin/classic/browser/searchbar.css
         skin/classic/browser/searchbar-dropdown-arrow.png
         skin/classic/browser/searchbar-dropdown-arrow-XP.png
@@ -138,11 +139,13 @@ browser.jar:
         skin/classic/browser/undoCloseTab.png                        (../shared/undoCloseTab.png)
         skin/classic/browser/undoCloseTab@2x.png                     (../shared/undoCloseTab@2x.png)
         skin/classic/browser/update-badge.svg                        (../shared/update-badge.svg)
-        skin/classic/browser/urlbar-arrow.png
-        skin/classic/browser/urlbar-arrow@2x.png
+        skin/classic/browser/urlbar-arrow.png                        (../shared/urlbar-arrow.png)
+        skin/classic/browser/urlbar-arrow@2x.png                     (../shared/urlbar-arrow@2x.png)
         skin/classic/browser/urlbar-popup-blocked.png
         skin/classic/browser/urlbar-history-dropmarker.png
         skin/classic/browser/urlbar-history-dropmarker@2x.png
+        skin/classic/browser/urlbar-history-dropmarker-preWin10.png
+        skin/classic/browser/urlbar-history-dropmarker-preWin10@2x.png
         skin/classic/browser/session-restore.svg                     (../shared/incontent-icons/session-restore.svg)
         skin/classic/browser/tab-crashed.svg                         (../shared/incontent-icons/tab-crashed.svg)
         skin/classic/browser/welcome-back.svg                        (../shared/incontent-icons/welcome-back.svg)
@@ -187,15 +190,17 @@ browser.jar:
         skin/classic/browser/loop/toolbar-aero@2x.png                (loop/toolbar-aero@2x.png)
         skin/classic/browser/loop/toolbar-inverted.png               (loop/toolbar-inverted.png)
         skin/classic/browser/loop/toolbar-inverted@2x.png            (loop/toolbar-inverted@2x.png)
-        skin/classic/browser/loop/toolbar-XP.png                     (loop/toolbar-XP.png)
-        skin/classic/browser/loop/toolbar-XP@2x.png                  (loop/toolbar-XP@2x.png)
         skin/classic/browser/loop/toolbar-lunaSilver.png             (loop/toolbar-lunaSilver.png)
         skin/classic/browser/loop/toolbar-lunaSilver@2x.png          (loop/toolbar-lunaSilver@2x.png)
+        skin/classic/browser/loop/toolbar-win8.png                   (loop/toolbar-win8.png)
+        skin/classic/browser/loop/toolbar-win8@2x.png                (loop/toolbar-win8@2x.png)
+        skin/classic/browser/loop/toolbar-XP.png                     (loop/toolbar-XP.png)
+        skin/classic/browser/loop/toolbar-XP@2x.png                  (loop/toolbar-XP@2x.png)
 *       skin/classic/browser/controlcenter/panel.css                 (controlcenter/panel.css)
         skin/classic/browser/controlcenter/arrow-subview.svg  (../shared/controlcenter/arrow-subview.svg)
         skin/classic/browser/controlcenter/conn-not-secure.svg  (../shared/controlcenter/conn-not-secure.svg)
-        skin/classic/browser/controlcenter/conn-secure-dv.svg  (../shared/controlcenter/conn-secure-dv.svg)
-        skin/classic/browser/controlcenter/conn-secure-ev.svg  (../shared/controlcenter/conn-secure-ev.svg)
+        skin/classic/browser/controlcenter/conn-degraded.svg  (../shared/controlcenter/conn-degraded.svg)
+        skin/classic/browser/controlcenter/conn-secure.svg  (../shared/controlcenter/conn-secure.svg)
         skin/classic/browser/controlcenter/mcb-disabled.svg  (../shared/controlcenter/mcb-disabled.svg)
         skin/classic/browser/controlcenter/permissions.svg  (../shared/controlcenter/permissions.svg)
         skin/classic/browser/controlcenter/tracking-protection.svg                 (../shared/controlcenter/tracking-protection.svg)
@@ -246,10 +251,11 @@ browser.jar:
         skin/classic/browser/panic-panel/header-small@2x.png         (../shared/panic-panel/header-small@2x.png)
         skin/classic/browser/panic-panel/icons.png                   (../shared/panic-panel/icons.png)
         skin/classic/browser/panic-panel/icons@2x.png                (../shared/panic-panel/icons@2x.png)
+        skin/classic/browser/places/autocomplete-star.png            (places/autocomplete-star.png)
+        skin/classic/browser/places/autocomplete-star@2x.png         (places/autocomplete-star@2x.png)
+        skin/classic/browser/places/autocomplete-star-XPVista7.png   (places/autocomplete-star-XPVista7.png)
         skin/classic/browser/places/places.css                       (places/places.css)
 *       skin/classic/browser/places/organizer.css                    (places/organizer.css)
-        skin/classic/browser/places/bookmark.png                     (places/bookmark.png)
-        skin/classic/browser/places/bookmark-XP.png                  (places/bookmark-XP.png)
         skin/classic/browser/places/query.png                        (places/query.png)
         skin/classic/browser/places/query-XP.png                     (places/query-XP.png)
         skin/classic/browser/places/bookmarksMenu.png                (places/bookmarksMenu.png)
@@ -317,6 +323,8 @@ browser.jar:
         skin/classic/browser/tabbrowser/newtab-XPVista7@2x.png       (tabbrowser/newtab-XPVista7@2x.png)
         skin/classic/browser/tabbrowser/newtab-inverted.png          (tabbrowser/newtab-inverted.png)
         skin/classic/browser/tabbrowser/newtab-inverted@2x.png       (tabbrowser/newtab-inverted@2x.png)
+        skin/classic/browser/tabbrowser/newtab-inverted-XPVista7.png (tabbrowser/newtab-inverted-XPVista7.png)
+        skin/classic/browser/tabbrowser/newtab-inverted-XPVista7@2x.png (tabbrowser/newtab-inverted-XPVista7@2x.png)
         skin/classic/browser/tabbrowser/connecting.png               (tabbrowser/connecting.png)
         skin/classic/browser/tabbrowser/crashed.svg                  (../shared/tabbrowser/crashed.svg)
         skin/classic/browser/tabbrowser/loading.png                  (tabbrowser/loading.png)
@@ -364,6 +372,8 @@ browser.jar:
         skin/classic/browser/translation-16@2x.png                  (../shared/translation/translation-16@2x.png)
         skin/classic/browser/devedition/search.svg                  (../shared/devedition/search.svg)
         skin/classic/browser/devedition/urlbar-history-dropmarker.svg            (../shared/devedition/urlbar-history-dropmarker.svg)
+        skin/classic/browser/devedition/urlbar-arrow.png            (../shared/devedition/urlbar-arrow.png)
+        skin/classic/browser/devedition/urlbar-arrow@2x.png         (../shared/devedition/urlbar-arrow@2x.png)
 *       skin/classic/browser/devtools/common.css                    (../shared/devtools/common.css)
 *       skin/classic/browser/devtools/dark-theme.css                (../shared/devtools/dark-theme.css)
 *       skin/classic/browser/devtools/light-theme.css               (../shared/devtools/light-theme.css)
@@ -471,6 +481,12 @@ browser.jar:
         skin/classic/browser/devtools/debugger-blackbox@2x.png      (../shared/devtools/images/debugger-blackbox@2x.png)
         skin/classic/browser/devtools/debugger-prettyprint.png      (../shared/devtools/images/debugger-prettyprint.png)
         skin/classic/browser/devtools/debugger-prettyprint@2x.png   (../shared/devtools/images/debugger-prettyprint@2x.png)
+        skin/classic/browser/devtools/debugger-no-pause-exceptions.png  (../shared/devtools/images/debugger-no-pause-exceptions.png)
+        skin/classic/browser/devtools/debugger-no-pause-exceptions@2x.png (../shared/devtools/images/debugger-no-pause-exceptions@2x.png)
+        skin/classic/browser/devtools/debugger-pause-all-exceptions.png  (../shared/devtools/images/debugger-pause-all-exceptions.png)
+        skin/classic/browser/devtools/debugger-pause-all-exceptions@2x.png (../shared/devtools/images/debugger-pause-all-exceptions@2x.png)
+        skin/classic/browser/devtools/debugger-pause-uncaught-exceptions.png  (../shared/devtools/images/debugger-pause-uncaught-exceptions.png)
+        skin/classic/browser/devtools/debugger-pause-uncaught-exceptions@2x.png (../shared/devtools/images/debugger-pause-uncaught-exceptions@2x.png)
         skin/classic/browser/devtools/debugger-toggleBreakpoints.png  (../shared/devtools/images/debugger-toggleBreakpoints.png)
         skin/classic/browser/devtools/debugger-toggleBreakpoints@2x.png  (../shared/devtools/images/debugger-toggleBreakpoints@2x.png)
         skin/classic/browser/devtools/tracer-icon.png               (../shared/devtools/images/tracer-icon.png)
@@ -586,8 +602,7 @@ browser.jar:
 #ifdef E10S_TESTING_ONLY
         skin/classic/browser/e10s-64@2x.png (../shared/e10s-64@2x.png)
 #endif
-        skin/classic/browser/warning16.png                            (../shared/warning16.png)
-        skin/classic/browser/warning16@2x.png                         (../shared/warning16@2x.png)
+        skin/classic/browser/warning.svg                            (../shared/warning.svg)
 
 ../extensions/{972ce4c6-7e08-4474-a285-3208198ce6fd}/chrome.jar:
 % override chrome://browser/skin/page-livemarks.png                   chrome://browser/skin/feeds/feedIcon16.png
@@ -609,7 +624,6 @@ browser.jar:
 % override chrome://browser/skin/downloads/buttons.png                chrome://browser/skin/downloads/buttons-XP.png                    os=WINNT osversion<6
 % override chrome://browser/skin/feeds/feedIcon.png                   chrome://browser/skin/feeds/feedIcon-XP.png                       os=WINNT osversion<6
 % override chrome://browser/skin/feeds/feedIcon16.png                 chrome://browser/skin/feeds/feedIcon16-XP.png                     os=WINNT osversion<6
-% override chrome://browser/skin/places/bookmark.png                  chrome://browser/skin/places/bookmark-XP.png                      os=WINNT osversion<6
 % override chrome://browser/skin/places/query.png                     chrome://browser/skin/places/query-XP.png                         os=WINNT osversion<6
 % override chrome://browser/skin/places/bookmarksMenu.png             chrome://browser/skin/places/bookmarksMenu-XP.png                 os=WINNT osversion<6
 % override chrome://browser/skin/places/bookmarksToolbar.png          chrome://browser/skin/places/bookmarksToolbar-XP.png              os=WINNT osversion<6
@@ -636,10 +650,13 @@ browser.jar:
 % override chrome://browser/skin/syncProgress-toolbar.png             chrome://browser/skin/syncProgress-toolbar-XPVista7.png           os=WINNT osversion<=6.1
 % override chrome://browser/skin/syncProgress-toolbar@2x.png          chrome://browser/skin/syncProgress-toolbar-XPVista7@2x.png        os=WINNT osversion<=6.1
 % override chrome://browser/skin/toolbarbutton-dropdown-arrow.png     chrome://browser/skin/toolbarbutton-dropdown-arrow-XPVista7.png   os=WINNT osversion<=6.1
+% override chrome://browser/skin/places/autocomplete-star.png         chrome://browser/skin/places/autocomplete-star-XPVista7.png       os=WINNT osversion<=6.1
 % override chrome://browser/skin/tabbrowser/newtab.png                chrome://browser/skin/tabbrowser/newtab-XPVista7.png              os=WINNT osversion<=6.1
 % override chrome://browser/skin/tabbrowser/newtab@2x.png             chrome://browser/skin/tabbrowser/newtab-XPVista7@2x.png           os=WINNT osversion<=6.1
+% override chrome://browser/skin/tabbrowser/newtab-inverted.png       chrome://browser/skin/tabbrowser/newtab-inverted-XPVista7.png     os=WINNT osversion<=6.1
+% override chrome://browser/skin/tabbrowser/newtab-inverted@2x.png    chrome://browser/skin/tabbrowser/newtab-inverted-XPVista7@2x.png  os=WINNT osversion<=6.1
 % override chrome://browser/skin/tabbrowser/tab-arrow-left.png        chrome://browser/skin/tabbrowser/tab-arrow-left-XPVista7.png      os=WINNT osversion<=6.1
-% override chrome://browser/skin/tabbrowser/tab-arrow-left@2x.png     chrome://browser/skin/tabbrowser/tab-arrow-left-XPVista7@2x.png      os=WINNT osversion<=6.1
+% override chrome://browser/skin/tabbrowser/tab-arrow-left@2x.png     chrome://browser/skin/tabbrowser/tab-arrow-left-XPVista7@2x.png   os=WINNT osversion<=6.1
 
 % override chrome://browser/skin/menuPanel.png                        chrome://browser/skin/menuPanel-aero.png                          os=WINNT osversion=6
 % override chrome://browser/skin/menuPanel.png                        chrome://browser/skin/menuPanel-aero.png                          os=WINNT osversion=6.1
@@ -666,10 +683,19 @@ browser.jar:
 % override chrome://browser/skin/loop/toolbar.png                     chrome://browser/skin/loop/toolbar-XP.png                         os=WINNT osversion<6
 % override chrome://browser/skin/loop/toolbar.png                     chrome://browser/skin/loop/toolbar-aero.png                       os=WINNT osversion=6
 % override chrome://browser/skin/loop/toolbar.png                     chrome://browser/skin/loop/toolbar-aero.png                       os=WINNT osversion=6.1
+% override chrome://browser/skin/loop/toolbar.png                     chrome://browser/skin/loop/toolbar-win8.png                       os=WINNT osversion=6.2
+% override chrome://browser/skin/loop/toolbar.png                     chrome://browser/skin/loop/toolbar-win8.png                       os=WINNT osversion=6.3
 % override chrome://browser/skin/loop/toolbar@2x.png                  chrome://browser/skin/loop/toolbar-XP@2x.png                      os=WINNT osversion<6
 % override chrome://browser/skin/loop/toolbar@2x.png                  chrome://browser/skin/loop/toolbar-aero@2x.png                    os=WINNT osversion=6
 % override chrome://browser/skin/loop/toolbar@2x.png                  chrome://browser/skin/loop/toolbar-aero@2x.png                    os=WINNT osversion=6.1
+% override chrome://browser/skin/loop/toolbar@2x.png                  chrome://browser/skin/loop/toolbar-win8@2x.png                    os=WINNT osversion=6.2
+% override chrome://browser/skin/loop/toolbar@2x.png                  chrome://browser/skin/loop/toolbar-win8@2x.png                    os=WINNT osversion=6.3
 % override chrome://browser/skin/preferences/checkbox.png             chrome://browser/skin/preferences/checkbox-aero.png               os=WINNT osversion=6
 % override chrome://browser/skin/preferences/checkbox.png             chrome://browser/skin/preferences/checkbox-aero.png               os=WINNT osversion=6.1
 % override chrome://browser/skin/preferences/checkbox.png             chrome://browser/skin/preferences/checkbox-xp.png                 os=WINNT osversion<6
+
+% override chrome://browser/skin/reload-stop-go.png                   chrome://browser/skin/reload-stop-go-preWin10.png                 os=WINNT osversion<=6.3
+% override chrome://browser/skin/reload-stop-go@2x.png                chrome://browser/skin/reload-stop-go-preWin10@2x.png              os=WINNT osversion<=6.3
+% override chrome://browser/skin/urlbar-history-dropmarker.png        chrome://browser/skin/urlbar-history-dropmarker-preWin10.png      os=WINNT osversion<=6.3
+% override chrome://browser/skin/urlbar-history-dropmarker@2x.png     chrome://browser/skin/urlbar-history-dropmarker-preWin10@2x.png   os=WINNT osversion<=6.3
 

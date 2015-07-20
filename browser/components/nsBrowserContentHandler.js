@@ -742,18 +742,33 @@ nsDefaultCommandLineHandler.prototype = {
         // Searches in the Windows 10 task bar searchbox simply open the default browser
         // with a URL for a search on Bing. Here we extract the search term and use the
         // user's default search engine instead.
-        if (redirectWinSearch && uri.spec.startsWith("https://www.bing.com/search")) {
+        var uriScheme = "", uriHost = "", uriPath = "";
+        try {
+          uriScheme = uri.scheme;
+          uriHost = uri.host;
+          uriPath = uri.path;
+        } catch(e) {
+        }
+
+        // Most Windows searches are "https://www.bing.com/search...", but bug
+        // 1182308 reports a Chinese edition of Windows 10 using
+        // "http://cn.bing.com/search...", so be a bit flexible in what we match.
+        if (redirectWinSearch &&
+            (uriScheme == "http" || uriScheme == "https") &&
+            uriHost.endsWith(".bing.com") && uriPath.startsWith("/search")) {
           try {
             var url = uri.QueryInterface(Components.interfaces.nsIURL);
             var params = new URLSearchParams(url.query);
             // We don't want to rewrite all Bing URLs coming from external apps. Look
             // for the magic URL parm that's present in searches from the task bar.
-            // (Typed searches use "form=WNSGPH", Cortana voice searches use "FORM=WNSBOX")
+            // (Typed searches use "form=WNSGPH", Cortana voice searches use "FORM=WNSBOX"
+            // for direct results, or "FORM=WNSFC2" for "see more results on
+            // Bing.com")
             var formParam = params.get("form");
             if (!formParam) {
               formParam = params.get("FORM");
             }
-            if (formParam == "WNSGPH" || formParam == "WNSBOX") {
+            if (formParam == "WNSGPH" || formParam == "WNSBOX" || formParam == "WNSFC2") {
               var term = params.get("q");
               var ss = Components.classes["@mozilla.org/browser/search-service;1"]
                                  .getService(nsIBrowserSearchService);
