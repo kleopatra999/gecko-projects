@@ -333,13 +333,13 @@ WebGL2Context::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY
 void
 WebGL2Context::FramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer)
 {
-    MOZ_CRASH("Not Implemented.");
+    GenerateWarning("framebufferTextureLayer: Not Implemented.");
 }
 
 void
 WebGL2Context::GetInternalformatParameter(JSContext*, GLenum target, GLenum internalformat, GLenum pname, JS::MutableHandleValue retval)
 {
-    MOZ_CRASH("Not Implemented.");
+    GenerateWarning("getInternalformatParameter: Not Implemented.");
 }
 
 // Map attachments intended for the default buffer, to attachments for a non-
@@ -498,31 +498,38 @@ WebGL2Context::ReadBuffer(GLenum mode)
     if (IsContextLost())
         return;
 
-    MakeContextCurrent();
+    const bool isColorAttachment = (mode >= LOCAL_GL_COLOR_ATTACHMENT0 &&
+                                    mode <= LastColorAttachment());
+
+    if (mode != LOCAL_GL_NONE && mode != LOCAL_GL_BACK && !isColorAttachment) {
+        ErrorInvalidEnum("readBuffer: `mode` must be one of NONE, BACK, or "
+                         "COLOR_ATTACHMENTi. Was %s",
+                         EnumName(mode));
+        return;
+    }
 
     if (mBoundReadFramebuffer) {
-        bool isColorAttachment = (mode >= LOCAL_GL_COLOR_ATTACHMENT0 &&
-                                  mode <= LastColorAttachment());
         if (mode != LOCAL_GL_NONE &&
             !isColorAttachment)
         {
-            ErrorInvalidEnumInfo("readBuffer: If READ_FRAMEBUFFER is non-null,"
-                                 " `mode` must be COLOR_ATTACHMENTN or NONE."
-                                 " Was:", mode);
+            ErrorInvalidOperation("readBuffer: If READ_FRAMEBUFFER is non-null, `mode` "
+                                  "must be COLOR_ATTACHMENTi or NONE. Was %s",
+                                  EnumName(mode));
             return;
         }
 
+        MakeContextCurrent();
         gl->fReadBuffer(mode);
         return;
     }
 
     // Operating on the default framebuffer.
-
     if (mode != LOCAL_GL_NONE &&
         mode != LOCAL_GL_BACK)
     {
-        ErrorInvalidEnumInfo("readBuffer: If READ_FRAMEBUFFER is null, `mode`"
-                             " must be BACK or NONE. Was:", mode);
+        ErrorInvalidOperation("readBuffer: If READ_FRAMEBUFFER is null, `mode`"
+                              " must be BACK or NONE. Was %s",
+                              EnumName(mode));
         return;
     }
 

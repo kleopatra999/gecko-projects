@@ -36,10 +36,11 @@ extern PRLogModuleInfo* GetMediaSourceLog();
 
 #define EOS_FUZZ_US 125000
 
+namespace mozilla {
+
 using media::TimeIntervals;
 using media::Interval;
-
-namespace mozilla {
+using media::TimeUnit;
 
 TrackBuffer::TrackBuffer(MediaSourceDecoder* aParentDecoder, const nsACString& aType)
   : mParentDecoder(aParentDecoder)
@@ -298,7 +299,11 @@ TrackBuffer::AppendDataToCurrentResource(MediaByteBuffer* aData, uint32_t aDurat
 nsRefPtr<TrackBuffer::BufferedRangesUpdatedPromise>
 TrackBuffer::UpdateBufferedRanges(Interval<int64_t> aByteRange, bool aNotifyParent)
 {
-  if (aByteRange.Length()) {
+  if (!mParentDecoder) {
+    return BufferedRangesUpdatedPromise::CreateAndResolve(true, __func__);
+  }
+
+  if (mCurrentDecoder && aByteRange.Length()) {
     mCurrentDecoder->GetReader()->NotifyDataArrived(aByteRange);
   }
 

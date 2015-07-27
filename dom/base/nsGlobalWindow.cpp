@@ -144,7 +144,6 @@
 #include "nsMenuPopupFrame.h"
 #endif
 #include "mozilla/dom/CustomEvent.h"
-#include "nsIFrameRequestCallback.h"
 #include "nsIJARChannel.h"
 
 #include "xpcprivate.h"
@@ -760,6 +759,9 @@ nsOuterWindowProxy::getOwnPropertyDescriptor(JSContext* cx,
   }
   // else fall through to js::Wrapper
 
+  // When we change this to always claim the property is configurable (bug
+  // 1178639), update the comments in nsOuterWindowProxy::defineProperty
+  // accordingly.
   return js::Wrapper::getOwnPropertyDescriptor(cx, proxy, id, desc);
 }
 
@@ -778,13 +780,28 @@ nsOuterWindowProxy::defineProperty(JSContext* cx,
     return result.failCantDefineWindowElement();
   }
 
+#ifndef RELEASE_BUILD // To be turned on in bug 1178638.
   // For now, allow chrome code to define non-configurable properties
   // on windows, until we sort out what exactly the addon SDK is
   // doing.  In the meantime, this still allows us to test web compat
   // behavior.
-  if (false && !desc.configurable() && !nsContentUtils::IsCallerChrome()) {
+  if (desc.hasConfigurable() && !desc.configurable() &&
+      !nsContentUtils::IsCallerChrome()) {
     return ThrowErrorMessage(cx, MSG_DEFINE_NON_CONFIGURABLE_PROP_ON_WINDOW);
   }
+
+  // Note that if hasConfigurable() is false we do NOT want to
+  // setConfigurable(true).  That would make this code:
+  //
+  //   var x;
+  //   window.x = 5;
+  //
+  // fail, because the JS engine ends up converting the assignment into a define
+  // with !hasConfigurable(), but the var actually declared a non-configurable
+  // property on our underlying Window object, so the set would fail if we
+  // forced setConfigurable(true) here.  What we want to do instead is change
+  // getOwnPropertyDescriptor to always claim configurable.  See bug 1178639.
+#endif
 
   return js::Wrapper::defineProperty(cx, proxy, id, desc, result);
 }
@@ -3779,10 +3796,10 @@ nsGlobalWindow::GetParent(ErrorResult& aError)
 NS_IMETHODIMP
 nsGlobalWindow::GetScriptableParent(nsIDOMWindow** aParent)
 {
-  FORWARD_TO_INNER(GetScriptableParent, (aParent), NS_ERROR_UNEXPECTED);
+  FORWARD_TO_OUTER(GetScriptableParent, (aParent), NS_ERROR_UNEXPECTED);
 
   ErrorResult rv;
-  nsCOMPtr<nsIDOMWindow> parent = GetParent(rv);
+  nsCOMPtr<nsIDOMWindow> parent = GetParentOuter(rv);
   parent.forget(aParent);
 
   return rv.StealNSResult();
@@ -5485,47 +5502,8 @@ nsGlobalWindow::GetMozPaintCount(uint64_t* aResult)
   return rv.StealNSResult();
 }
 
-NS_IMETHODIMP
-nsGlobalWindow::MozRequestAnimationFrame(nsIFrameRequestCallback* aCallback,
-                                         int32_t *aHandle)
-{
-  FORWARD_TO_INNER(MozRequestAnimationFrame, (aCallback, aHandle), NS_ERROR_UNEXPECTED);
-
-  if (!aCallback) {
-    if (mDoc) {
-      mDoc->WarnOnceAbout(nsIDocument::eMozBeforePaint);
-    }
-    return NS_ERROR_XPC_BAD_CONVERT_JS;
-  }
-
-  ErrorResult rv;
-  nsIDocument::FrameRequestCallbackHolder holder(aCallback);
-  *aHandle = RequestAnimationFrame(holder, rv);
-
-  return rv.StealNSResult();
-}
-
 int32_t
 nsGlobalWindow::RequestAnimationFrame(FrameRequestCallback& aCallback,
-                                      ErrorResult& aError)
-{
-  MOZ_RELEASE_ASSERT(IsInnerWindow());
-
-  nsIDocument::FrameRequestCallbackHolder holder(&aCallback);
-  return RequestAnimationFrame(holder, aError);
-}
-
-int32_t
-nsGlobalWindow::MozRequestAnimationFrame(nsIFrameRequestCallback* aCallback,
-                                         ErrorResult& aError)
-{
-  MOZ_RELEASE_ASSERT(IsInnerWindow());
-  nsIDocument::FrameRequestCallbackHolder holder(aCallback);
-  return RequestAnimationFrame(holder, aError);
-}
-
-int32_t
-nsGlobalWindow::RequestAnimationFrame(const nsIDocument::FrameRequestCallbackHolder& aCallback,
                                       ErrorResult& aError)
 {
   MOZ_RELEASE_ASSERT(IsInnerWindow());
@@ -5563,20 +5541,6 @@ nsGlobalWindow::RequestAnimationFrame(JS::Handle<JS::Value> aCallback,
   return rv.StealNSResult();
 }
 
-NS_IMETHODIMP
-nsGlobalWindow::MozCancelRequestAnimationFrame(int32_t aHandle)
-{
-  FORWARD_TO_INNER(MozCancelRequestAnimationFrame, (aHandle), NS_ERROR_UNEXPECTED);
-  return CancelAnimationFrame(aHandle);
-}
-
-NS_IMETHODIMP
-nsGlobalWindow::MozCancelAnimationFrame(int32_t aHandle)
-{
-  FORWARD_TO_INNER(MozCancelAnimationFrame, (aHandle), NS_ERROR_UNEXPECTED);
-  return CancelAnimationFrame(aHandle);
-}
-
 void
 nsGlobalWindow::CancelAnimationFrame(int32_t aHandle, ErrorResult& aError)
 {
@@ -5596,34 +5560,6 @@ nsGlobalWindow::CancelAnimationFrame(int32_t aHandle)
 
   ErrorResult rv;
   CancelAnimationFrame(aHandle, rv);
-
-  return rv.StealNSResult();
-}
-
-int64_t
-nsGlobalWindow::GetMozAnimationStartTime(ErrorResult& aError)
-{
-  MOZ_RELEASE_ASSERT(IsInnerWindow());
-
-  if (mDoc) {
-    nsIPresShell* presShell = mDoc->GetShell();
-    if (presShell) {
-      return presShell->GetPresContext()->RefreshDriver()->
-        MostRecentRefreshEpochTime() / PR_USEC_PER_MSEC;
-    }
-  }
-
-  // If all else fails, just be compatible with Date.now()
-  return JS_Now() / PR_USEC_PER_MSEC;
-}
-
-NS_IMETHODIMP
-nsGlobalWindow::GetMozAnimationStartTime(int64_t *aTime)
-{
-  FORWARD_TO_INNER(GetMozAnimationStartTime, (aTime), NS_ERROR_UNEXPECTED);
-
-  ErrorResult rv;
-  *aTime = GetMozAnimationStartTime(rv);
 
   return rv.StealNSResult();
 }
@@ -6308,11 +6244,9 @@ FinishDOMFullscreenChange(nsIDocument* aDoc, bool aInDOMFullscreen)
     // Ask the document to handle any pending DOM fullscreen change.
     nsIDocument::HandlePendingFullscreenRequests(aDoc);
   } else {
-    // Force exit from DOM full-screen mode. This is so that if we're in
-    // DOM full-screen mode and the user exits full-screen mode with
-    // the browser full-screen mode toggle keyboard-shortcut, we'll detect
-    // that and leave DOM API full-screen mode too.
-    nsIDocument::ExitFullscreen(aDoc, /* async */ false);
+    // If the window is leaving fullscreen state, also ask the document
+    // to exit from DOM Fullscreen.
+    nsIDocument::ExitFullscreenInDocTree(aDoc);
   }
 }
 
@@ -8645,13 +8579,10 @@ nsGlobalWindow::PostMessageMozOuter(JSContext* aCx, JS::Handle<JS::Value> aMessa
                          providedPrincipal,
                          nsContentUtils::IsCallerChrome());
 
-  nsIPrincipal* principal = GetPrincipal();
   JS::Rooted<JS::Value> message(aCx, aMessage);
   JS::Rooted<JS::Value> transfer(aCx, aTransfer);
-  bool subsumes;
 
-  if (NS_FAILED(callerPrin->Subsumes(principal, &subsumes)) ||
-      !event->Write(aCx, message, transfer, subsumes, this)) {
+  if (!event->Write(aCx, message, transfer)) {
     aError.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
     return;
   }

@@ -4,6 +4,8 @@
 
 #filter substitution
 
+// For the all MOZ_MULET ifdef conditions in this file: see bug 1174234
+
 #ifndef MOZ_MULET
 pref("toolkit.defaultChromeURI", "chrome://b2g/content/shell.html");
 pref("browser.chromeURL", "chrome://b2g/content/");
@@ -334,7 +336,6 @@ pref("media.video-queue.default-size", 3);
 // optimize images' memory usage
 pref("image.downscale-during-decode.enabled", true);
 pref("image.mem.allow_locking_in_content_processes", true);
-pref("image.decode.retry-on-alloc-failure", true);
 // Limit the surface cache to 1/8 of main memory or 128MB, whichever is smaller.
 // Almost everything that was factored into 'max_decoded_image_kb' is now stored
 // in the surface cache.  1/8 of main memory is 32MB on a 256MB device, which is
@@ -458,7 +459,9 @@ pref("dom.ipc.processCount", 100000);
 
 pref("dom.ipc.browser_frames.oop_by_default", false);
 
+#ifndef MOZ_MULET
 pref("dom.meta-viewport.enabled", true);
+#endif
 
 // SMS/MMS
 pref("dom.sms.enabled", true);
@@ -624,7 +627,9 @@ pref("app.update.socket.maxErrors", 20);
 pref("app.update.log", true);
 
 // SystemUpdate API
+#ifdef MOZ_WIDGET_GONK
 pref("dom.system_update.active", "@mozilla.org/updates/update-prompt;1");
+#endif
 #else
 // Explicitly disable the shutdown watchdog.  It's enabled by default.
 // When the updater is disabled, we want to know about shutdown hangs.
@@ -1035,7 +1040,10 @@ pref("security.exthelperapp.disable_background_handling", true);
 pref("osfile.reset_worker_delay", 5000);
 
 // APZC preferences.
-//
+#ifdef MOZ_WIDGET_GONK
+pref("apz.allow_zooming", true);
+#endif
+
 // Gaia relies heavily on scroll events for now, so lets fire them
 // more often than the default value (100).
 pref("apz.asyncscroll.throttle", 40);
@@ -1110,9 +1118,6 @@ pref("services.mobileid.server.uri", "https://msisdn.services.mozilla.com");
 pref("dom.mapped_arraybuffer.enabled", true);
 #endif
 
-// BroadcastChannel API
-pref("dom.broadcastChannel.enabled", true);
-
 // SystemUpdate API
 pref("dom.system_update.enabled", true);
 
@@ -1156,3 +1161,6 @@ pref("dom.serviceWorkers.enabled", false);
 
 // Retain at most 10 processes' layers buffers
 pref("layers.compositor-lru-size", 10);
+
+// In B2G by deafult any AudioChannelAgent is muted when created.
+pref("dom.audiochannel.mutedByDefault", true);

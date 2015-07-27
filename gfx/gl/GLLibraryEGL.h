@@ -108,7 +108,8 @@ public:
     GLLibraryEGL()
         : mInitialized(false),
           mEGLLibrary(nullptr),
-          mIsANGLE(false)
+          mIsANGLE(false),
+          mIsWARP(false)
     {
     }
 
@@ -131,6 +132,7 @@ public:
         KHR_image,
         KHR_fence_sync,
         ANDROID_native_fence_sync,
+        EGL_ANDROID_image_crop,
         ANGLE_platform_angle,
         ANGLE_platform_angle_d3d,
         Extensions_Max
@@ -468,6 +470,10 @@ public:
         return mIsANGLE;
     }
 
+    bool IsWARP() const {
+        return mIsWARP;
+    }
+
     bool HasKHRImageBase() {
         return IsExtensionSupported(KHR_image) || IsExtensionSupported(KHR_image_base);
     }
@@ -488,7 +494,7 @@ public:
         return IsExtensionSupported(EXT_create_context_robustness);
     }
 
-    bool EnsureInitialized();
+    bool EnsureInitialized(bool forceAccel = false);
 
     void DumpEGLConfig(EGLConfig cfg);
     void DumpEGLConfigs();
@@ -618,6 +624,7 @@ private:
     EGLDisplay mEGLDisplay;
 
     bool mIsANGLE;
+    bool mIsWARP;
 };
 
 extern GLLibraryEGL sEGLLibrary;

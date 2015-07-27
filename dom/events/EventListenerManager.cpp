@@ -23,6 +23,7 @@
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
+#include "mozilla/TimelineConsumers.h"
 
 #include "EventListenerService.h"
 #include "nsCOMArray.h"
@@ -398,7 +399,8 @@ EventListenerManager::AddEventListenerInternal(
   }
 
   if (mIsMainThreadELM && mTarget) {
-    EventListenerService::NotifyAboutMainThreadListenerChange(mTarget);
+    EventListenerService::NotifyAboutMainThreadListenerChange(mTarget,
+                                                              aTypeAtom);
   }
 }
 
@@ -518,7 +520,8 @@ EventListenerManager::RemoveEventListenerInternal(
           mTarget->EventListenerRemoved(aUserType);
         }
         if (mIsMainThreadELM && mTarget) {
-          EventListenerService::NotifyAboutMainThreadListenerChange(mTarget);
+          EventListenerService::NotifyAboutMainThreadListenerChange(mTarget,
+                                                                    aUserType);
         }
 
         if (!deviceType
@@ -654,7 +657,7 @@ EventListenerManager::SetEventHandlerInternal(
       mTarget->EventListenerAdded(aName);
     }
     if (mIsMainThreadELM && mTarget) {
-      EventListenerService::NotifyAboutMainThreadListenerChange(mTarget);
+      EventListenerService::NotifyAboutMainThreadListenerChange(mTarget, aName);
     }
   }
 
@@ -784,7 +787,7 @@ EventListenerManager::RemoveEventHandler(nsIAtom* aName,
       mTarget->EventListenerRemoved(aName);
     }
     if (mIsMainThreadELM && mTarget) {
-      EventListenerService::NotifyAboutMainThreadListenerChange(mTarget);
+      EventListenerService::NotifyAboutMainThreadListenerChange(mTarget, aName);
     }
   }
 }
@@ -1122,7 +1125,7 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
           nsCOMPtr<nsIDocShell> docShell;
           bool isTimelineRecording = false;
           if (mIsMainThreadELM &&
-              nsDocShell::gProfileTimelineRecordingsCount > 0 &&
+              !TimelineConsumers::IsEmpty() &&
               listener->mListenerType != Listener::eNativeListener) {
             docShell = GetDocShellForTarget();
             if (docShell) {
@@ -1137,7 +1140,7 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
               mozilla::UniquePtr<TimelineMarker> marker =
                 MakeUnique<EventTimelineMarker>(ds, TRACING_INTERVAL_START,
                                                 phase, typeStr);
-              ds->AddProfileTimelineMarker(Move(marker));
+              TimelineConsumers::AddMarkerForDocShell(ds, Move(marker));
             }
           }
 
@@ -1148,7 +1151,7 @@ EventListenerManager::HandleEventInternal(nsPresContext* aPresContext,
 
           if (isTimelineRecording) {
             nsDocShell* ds = static_cast<nsDocShell*>(docShell.get());
-            ds->AddProfileTimelineMarker("DOMEvent", TRACING_INTERVAL_END);
+            TimelineConsumers::AddMarkerForDocShell(ds, "DOMEvent", TRACING_INTERVAL_END);
           }
         }
       }

@@ -2294,6 +2294,17 @@ RegisterWeakMemoryReporter(nsIMemoryReporter* aReporter)
 }
 
 nsresult
+UnregisterStrongMemoryReporter(nsIMemoryReporter* aReporter)
+{
+  nsCOMPtr<nsIMemoryReporterManager> mgr =
+    do_GetService("@mozilla.org/memory-reporter-manager;1");
+  if (!mgr) {
+    return NS_ERROR_FAILURE;
+  }
+  return mgr->UnregisterStrongReporter(aReporter);
+}
+
+nsresult
 UnregisterWeakMemoryReporter(nsIMemoryReporter* aReporter)
 {
   nsCOMPtr<nsIMemoryReporterManager> mgr =
@@ -2380,7 +2391,7 @@ public:
   NS_IMETHOD Callback(const nsACString& aProcess, const nsACString& aPath,
                       int32_t aKind, int32_t aUnits, int64_t aAmount,
                       const nsACString& aDescription,
-                      nsISupports* aData)
+                      nsISupports* aData) override
   {
     // Do nothing;  the reporter has already reported to DMD.
     return NS_OK;

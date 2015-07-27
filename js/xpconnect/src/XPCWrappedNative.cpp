@@ -39,18 +39,11 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(XPCWrappedNative)
 // collected then its mFlatJSObject will be cycle collected too and
 // finalization of the mFlatJSObject will unlink the JS objects (see
 // XPC_WN_NoHelper_Finalize and FlatJSObjectFinalized).
-NS_IMETHODIMP_(void)
-NS_CYCLE_COLLECTION_CLASSNAME(XPCWrappedNative)::Unlink(void* p)
-{
-    XPCWrappedNative* tmp = static_cast<XPCWrappedNative*>(p);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(XPCWrappedNative)
     tmp->ExpireWrapper();
-}
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_IMETHODIMP
-NS_CYCLE_COLLECTION_CLASSNAME(XPCWrappedNative)::Traverse
-   (void* p, nsCycleCollectionTraversalCallback& cb)
-{
-    XPCWrappedNative* tmp = static_cast<XPCWrappedNative*>(p);
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(XPCWrappedNative)
     if (!tmp->IsValid())
         return NS_OK;
 
@@ -91,8 +84,7 @@ NS_CYCLE_COLLECTION_CLASSNAME(XPCWrappedNative)::Traverse
 
     tmp->NoteTearoffs(cb);
 
-    return NS_OK;
-}
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 void
 XPCWrappedNative::Suspect(nsCycleCollectionNoteRootCallback& cb)
@@ -1299,7 +1291,7 @@ class MOZ_STACK_CLASS CallMethodHelper
     uint8_t mJSContextIndex; // TODO make const
     uint8_t mOptArgcIndex; // TODO make const
 
-    jsval* const mArgv;
+    Value* const mArgv;
     const uint32_t mArgc;
 
     MOZ_ALWAYS_INLINE bool
@@ -1559,7 +1551,7 @@ CallMethodHelper::GetOutParamSource(uint8_t paramIndex, MutableHandleValue srcp)
     if (paramInfo.IsOut() && !paramInfo.IsRetval()) {
         MOZ_ASSERT(paramIndex < mArgc || paramInfo.IsOptional(),
                    "Expected either enough arguments or an optional argument");
-        jsval arg = paramIndex < mArgc ? mArgv[paramIndex] : JS::NullValue();
+        Value arg = paramIndex < mArgc ? mArgv[paramIndex] : JS::NullValue();
         if (paramIndex < mArgc) {
             RootedObject obj(mCallContext);
             if (!arg.isPrimitive())
@@ -2040,7 +2032,7 @@ CallMethodHelper::CleanupParam(nsXPTCMiniVariant& param, nsXPTType& type)
 
     switch (type.TagPart()) {
         case nsXPTType::T_JSVAL:
-            js::RemoveRawValueRoot(mCallContext, (jsval*)&param.val);
+            js::RemoveRawValueRoot(mCallContext, (Value*)&param.val);
             break;
         case nsXPTType::T_INTERFACE:
         case nsXPTType::T_INTERFACE_IS:

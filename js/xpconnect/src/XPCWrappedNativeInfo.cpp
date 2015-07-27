@@ -27,7 +27,7 @@ XPCNativeMember::GetCallInfo(JSObject* funobj,
                              XPCNativeMember**    pMember)
 {
     funobj = js::UncheckedUnwrap(funobj);
-    jsval memberVal =
+    Value memberVal =
         js::GetFunctionNativeReserved(funobj,
                                       XPC_FUNCTION_NATIVE_MEMBER_SLOT);
 
@@ -40,7 +40,7 @@ XPCNativeMember::GetCallInfo(JSObject* funobj,
 bool
 XPCNativeMember::NewFunctionObject(XPCCallContext& ccx,
                                    XPCNativeInterface* iface, HandleObject parent,
-                                   jsval* pval)
+                                   Value* pval)
 {
     MOZ_ASSERT(!IsConstant(), "Only call this if you're sure this is not a constant!");
 
@@ -49,7 +49,7 @@ XPCNativeMember::NewFunctionObject(XPCCallContext& ccx,
 
 bool
 XPCNativeMember::Resolve(XPCCallContext& ccx, XPCNativeInterface* iface,
-                         HandleObject parent, jsval* vp)
+                         HandleObject parent, Value* vp)
 {
     MOZ_ASSERT(iface == GetInterface());
     if (IsConstant()) {
@@ -239,8 +239,8 @@ XPCNativeInterface::NewInstance(nsIInterfaceInfo* aInfo)
     if (mainProcessScriptableOnly && !XRE_IsParentProcess()) {
         nsCOMPtr<nsIConsoleService> console(do_GetService(NS_CONSOLESERVICE_CONTRACTID));
         if (console) {
-            char* intfNameChars;
-            aInfo->GetName(&intfNameChars);
+            const char* intfNameChars;
+            aInfo->GetNameShared(&intfNameChars);
             nsPrintfCString errorMsg("Use of %s in content process is deprecated.", intfNameChars);
 
             nsAutoString filename;
