@@ -83,6 +83,8 @@ GetUpdateLog()
 
 #ifdef XP_WIN
 #define UPDATER_BIN "updater.exe"
+#elif XP_MACOSX
+#define UPDATER_BIN "org.mozilla.updater"
 #else
 #define UPDATER_BIN "updater"
 #endif
@@ -957,13 +959,21 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
     _exit(0);
   }
 #elif defined(XP_MACOSX)
-  CommandLineServiceMac::SetupMacCommandLine(argc, argv, true);
-  // LaunchChildMac uses posix_spawnp and prefers the current
-  // architecture when launching. It doesn't require a
-  // null-terminated string but it doesn't matter if we pass one.
-  LaunchChildMac(argc, argv, 0, outpid);
-  if (restart) {
+  CommandLineServiceMac::SetupMacCommandLine(argc, argv, restart);
+  // We need to detect whether elevation is required for this update. This can
+  // occur when a first admin user installs the application, but another admin
+  // user attempts to update (see bug 394984).
+  if (restart && access(appFilePath.get(), W_OK) != 0) {
+    if (!LaunchElevatedUpdate(argc, argv, 0, outpid)) {
+      LOG(("Failed to launch elevated update!"));
+      exit(1);
+    }
     exit(0);
+  } else {
+    LaunchChildMac(argc, argv, 0, outpid);
+    if (restart) {
+      exit(0);
+    }
   }
 #else
   *outpid = PR_CreateProcess(updaterPath.get(), argv, nullptr, nullptr);

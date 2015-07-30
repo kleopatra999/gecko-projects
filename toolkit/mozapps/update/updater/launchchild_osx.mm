@@ -10,67 +10,24 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <spawn.h>
+#include <SystemConfiguration/SystemConfiguration.h>
 #include "readstrings.h"
 
-// Prefer the currently running architecture (this is the same as the
-// architecture that launched the updater) and fallback to CPU_TYPE_ANY if it
-// is no longer available after the update.
-static cpu_type_t pref_cpu_types[2] = {
-#if defined(__i386__)
-                                 CPU_TYPE_X86,
-#elif defined(__x86_64__)
-                                 CPU_TYPE_X86_64,
-#elif defined(__ppc__)
-                                 CPU_TYPE_POWERPC,
-#endif
-                                 CPU_TYPE_ANY };
-
-void LaunchChild(int argc, char **argv)
+void LaunchChild(int argc, const char** argv)
 {
-  // Initialize spawn attributes.
-  posix_spawnattr_t spawnattr;
-  if (posix_spawnattr_init(&spawnattr) != 0) {
-    printf("Failed to init posix spawn attribute.");
-    return;
-  }
-
-  // Set spawn attributes.
-  size_t attr_count = 2;
-  size_t attr_ocount = 0;
-  if (posix_spawnattr_setbinpref_np(&spawnattr, attr_count, pref_cpu_types, &attr_ocount) != 0 ||
-      attr_ocount != attr_count) {
-    printf("Failed to set binary preference on posix spawn attribute.");
-    posix_spawnattr_destroy(&spawnattr);
-    return;
-  }
-
-  // "posix_spawnp" uses null termination for arguments rather than a count.
-  // Note that we are not duplicating the argument strings themselves.
-  char** argv_copy = (char**)malloc((argc + 1) * sizeof(char*));
-  if (!argv_copy) {
-    printf("Failed to allocate memory for arguments.");
-    posix_spawnattr_destroy(&spawnattr);
-    return;
-  }
-  for (int i = 0; i < argc; i++) {
-    argv_copy[i] = argv[i];
-  }
-  argv_copy[argc] = NULL;
-
-  // Pass along our environment.
-  char** envp = NULL;
-  char*** cocoaEnvironment = _NSGetEnviron();
-  if (cocoaEnvironment) {
-    envp = *cocoaEnvironment;
-  }
-
-  int result = posix_spawnp(NULL, argv_copy[0], NULL, &spawnattr, argv_copy, envp);
-
-  free(argv_copy);
-  posix_spawnattr_destroy(&spawnattr);
-
-  if (result != 0) {
-    printf("Process spawn failed with code %d!", result);
+  @try {
+    NSString* launchPath = [NSString stringWithUTF8String:argv[0]];
+    NSMutableArray* arguments = [NSMutableArray arrayWithCapacity:argc];
+    for (int i = 1; i < argc; i++) {
+      [arguments addObject:[NSString stringWithUTF8String:argv[i]]];
+    }
+    NSTask* task = [[NSTask alloc] init];
+    [task setLaunchPath:launchPath];
+    [task setArguments:arguments];
+    [task launch];
+    [task release];
+  } @catch (NSException* e) {
+    // Ignore any expection.
   }
 }
 
@@ -135,4 +92,172 @@ LaunchMacPostProcess(const char* aAppBundle)
   [task release];
 
   [pool release];
+}
+
+void CleanupElevatedMacUpdate(bool aFailureOccurred)
+{
+  id updateServer = nil;
+  @try {
+    updateServer = (id)[NSConnection
+      rootProxyForConnectionWithRegisteredName:
+        @"org.mozilla.updater.server"
+      host:nil
+      usingNameServer:[NSSocketPortNameServer sharedInstance]];
+    if (aFailureOccurred &&
+        updateServer &&
+        [updateServer respondsToSelector:@selector(abort)]) {
+      [updateServer performSelector:@selector(abort)];
+    }
+    else if (updateServer &&
+             [updateServer respondsToSelector:@selector(shutdown)]) {
+      [updateServer performSelector:@selector(shutdown)];
+    }
+  } @catch (NSException* e) {
+    // Ignore exceptions.
+  }
+  NSFileManager* manager = [NSFileManager defaultManager];
+  [manager removeItemAtPath:@"/Library/PrivilegedHelperTools/org.mozilla.updater"
+                      error:nil];
+  [manager removeItemAtPath:@"/Library/LaunchDaemons/org.mozilla.updater.plist"
+                      error:nil];
+  const char* launchctlArgs[] = {"/bin/launchctl",
+                                 "remove",
+                                 "org.mozilla.updater"};
+  // The following will terminate the current process.
+  LaunchChild(3, launchctlArgs);
+}
+
+// Note: Caller is responsible for freeing argv.
+bool ObtainUpdaterArguments(int* argc, char*** argv)
+{
+  id updateServer = nil;
+  @try {
+    updateServer = (id)[NSConnection
+      rootProxyForConnectionWithRegisteredName:
+        @"org.mozilla.updater.server"
+      host:nil
+      usingNameServer:[NSSocketPortNameServer sharedInstance]];
+    if (!updateServer ||
+        ![updateServer respondsToSelector:@selector(getArguments)] ||
+        ![updateServer respondsToSelector:@selector(shutdown)]) {
+      NSLog(@"Server doesn't exist or doesn't provide correct selectors.");
+      // Let's try our best and clean up.
+      CleanupElevatedMacUpdate(true);
+      return false; // Won't actually get here due to CleanupElevatedMacUpdate.
+    }
+    NSArray* updaterArguments =
+      [updateServer performSelector:@selector(getArguments)];
+    *argc = [updaterArguments count];
+    char** tempArgv = (char**)malloc(sizeof(char*) * (*argc));
+    for (int i = 0; i < *argc; i++) {
+      int argLen = [[updaterArguments objectAtIndex:i] length] + 1;
+      tempArgv[i] = (char*)malloc(argLen);
+      strncpy(tempArgv[i], [[updaterArguments objectAtIndex:i] UTF8String],
+              argLen);
+    }
+    *argv = tempArgv;
+  } @catch (NSException* e) {
+    // Let's try our best and clean up.
+    CleanupElevatedMacUpdate(true);
+    return false; // Won't actually get here due to CleanupElevatedMacUpdate.
+  }
+  return true;
+}
+
+/**
+ * The ElevatedUpdateServer is launched from a non-elevated updater process.
+ * It allows an elevated updater process (usually a privileged helper tool) to
+ * connect to it and receive all the necessary arguments to complete a
+ * successful update.
+ */
+@interface ElevatedUpdateServer : NSObject
+{
+  NSArray* mUpdaterArguments;
+  BOOL mShouldKeepRunning;
+  BOOL mAborted;
+}
+- (id)initWithArgs:(NSArray*)args;
+- (BOOL)runServer;
+- (NSArray*)getArguments;
+- (void)abort;
+- (BOOL)wasAborted;
+- (void)shutdown;
+- (BOOL)shouldKeepRunning;
+@end
+
+@implementation ElevatedUpdateServer
+
+- (id)initWithArgs:(NSArray*)args
+{
+  self = [super init];
+  if (!self) {
+    return nil;
+  }
+  mUpdaterArguments = args;
+  mShouldKeepRunning = YES;
+  mAborted = NO;
+  return self;
+}
+
+- (BOOL)runServer
+{
+  NSPort* serverPort = [NSSocketPort port];
+  NSConnection* server = [NSConnection connectionWithReceivePort:serverPort
+                                                        sendPort:serverPort];
+  [server setRootObject:self];
+  if ([server registerName:@"org.mozilla.updater.server"
+            withNameServer:[NSSocketPortNameServer sharedInstance]] == NO) {
+    NSLog(@"Unable to register as DirectoryServer.");
+    NSLog(@"Is another copy running?");
+    return NO;
+  }
+
+  while ([self shouldKeepRunning] &&
+         [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                  beforeDate:[NSDate distantFuture]]);
+  return ![self wasAborted];
+}
+
+- (NSArray*)getArguments
+{
+  return mUpdaterArguments;
+}
+
+- (void)abort
+{
+  mAborted = YES;
+  [self shutdown];
+}
+
+- (BOOL)wasAborted
+{
+  return mAborted;
+}
+
+- (void)shutdown
+{
+  mShouldKeepRunning = NO;
+}
+
+- (BOOL)shouldKeepRunning
+{
+  return mShouldKeepRunning;
+}
+
+@end
+
+bool ServeElevatedUpdate(int argc, const char** argv)
+{
+  NSMutableArray* updaterArguments = [NSMutableArray arrayWithCapacity:argc];
+  for (int i = 0; i < argc; i++) {
+    [updaterArguments addObject:[NSString stringWithUTF8String:argv[i]]];
+  }
+
+  ElevatedUpdateServer* updater =
+    [[ElevatedUpdateServer alloc] initWithArgs:[updaterArguments copy]];
+  bool didSucceed =
+    [updater runServer] == YES ? true : false;
+
+  [updater release];
+  return didSucceed;
 }

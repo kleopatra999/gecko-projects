@@ -73,8 +73,11 @@
 
 #if defined(XP_MACOSX)
 // These functions are defined in launchchild_osx.mm
-void LaunchChild(int argc, char **argv);
+void LaunchChild(int argc, const char** argv);
 void LaunchMacPostProcess(const char* aAppBundle);
+void CleanupElevatedMacUpdate(bool aFailureOccurred);
+bool ObtainUpdaterArguments(int* argc, char*** argv);
+bool ServeElevatedUpdate(int argc, const char** argv);
 #endif
 
 #ifndef _O_BINARY
@@ -1964,7 +1967,7 @@ LaunchCallbackApp(const NS_tchar *workingDir,
 #if defined(USE_EXECV)
   execv(argv[0], argv);
 #elif defined(XP_MACOSX)
-  LaunchChild(argc, argv);
+  LaunchChild(argc, (const char**)argv);
 #elif defined(XP_WIN)
   // Do not allow the callback to run when running an update through the
   // service as session 0.  The unelevated updater.exe will do the launching.
@@ -2487,8 +2490,23 @@ UpdateThreadFunc(void *param)
   QuitProgressUI();
 }
 
+#ifdef XP_MACOSX
+void freeArguments(int argc, char** argv)
+{
+  for (int i = 0; i < argc; i++) {
+    free(argv[i]);
+  }
+  free(argv);
+}
+#endif
+
 int NS_main(int argc, NS_tchar **argv)
 {
+  // The callback is the remaining arguments starting at callbackIndex.
+  // The argument specified by callbackIndex is the callback executable and the
+  // argument prior to callbackIndex is the working directory.
+  const int callbackIndex = 6;
+
 #if defined(MOZ_WIDGET_GONK)
   if (EnvHasValue("LD_PRELOAD")) {
     // If the updater is launched with LD_PRELOAD set, then we wind up
@@ -2521,6 +2539,27 @@ int NS_main(int argc, NS_tchar **argv)
   }
 #endif
 
+#if defined(XP_MACOSX)
+  bool isElevated =
+    strstr(argv[0], "/Library/PrivilegedHelperTools/org.mozilla.updater") != 0;
+  bool requiresElevation = false;
+  if (isElevated) {
+    if (!ObtainUpdaterArguments(&argc, &argv)) {
+      // Won't actually get here because ObtainUpdaterArguments will terminate
+      // the current process on failure.
+      return 1;
+    }
+  } else {
+    requiresElevation = access(argv[callbackIndex], W_OK) != 0;
+  }
+#endif
+
+  // The directory containing the update information.
+  gPatchDirPath = argv[1];
+
+#ifdef XP_MACOSX
+  if (!requiresElevation) {
+#endif
   InitProgressUI(&argc, &argv);
 
   // To process an update the updater command line must at a minimum have the
@@ -2539,11 +2578,15 @@ int NS_main(int argc, NS_tchar **argv)
   // launched.
   if (argc < 4) {
     fprintf(stderr, "Usage: updater patch-dir install-dir apply-to-dir [wait-pid [callback-working-dir callback-path args...]]\n");
+#ifdef XP_MACOSX
+    if (isElevated) {
+      freeArguments(argc, argv);
+      CleanupElevatedMacUpdate(true);
+    }
+#endif
     return 1;
   }
 
-  // The directory containing the update information.
-  gPatchDirPath = argv[1];
   // The directory we're going to update to.
   // We copy this string because we need to remove trailing slashes.  The C++
   // standard says that it's always safe to write to strings pointed to by argv
@@ -2652,6 +2695,12 @@ int NS_main(int argc, NS_tchar **argv)
 
   if (!WriteStatusFile("applying")) {
     LOG(("failed setting status to 'applying'"));
+#ifdef XP_MACOSX
+    if (isElevated) {
+      freeArguments(argc, argv);
+      CleanupElevatedMacUpdate(true);
+    }
+#endif
     return 1;
   }
 
@@ -2746,11 +2795,6 @@ int NS_main(int argc, NS_tchar **argv)
     }
 #endif
   }
-
-  // The callback is the remaining arguments starting at callbackIndex.
-  // The argument specified by callbackIndex is the callback executable and the
-  // argument prior to callbackIndex is the working directory.
-  const int callbackIndex = 6;
 
 #if defined(XP_WIN)
   sUsingService = EnvHasValue("MOZ_USING_SERVICE");
@@ -3085,10 +3129,22 @@ int NS_main(int argc, NS_tchar **argv)
         // Try changing the current directory again
         if (NS_tchdir(gWorkingDirPath) != 0) {
           // OK, time to give up!
+#ifdef XP_MACOSX
+          if (isElevated) {
+            freeArguments(argc, argv);
+            CleanupElevatedMacUpdate(true);
+          }
+#endif
           return 1;
         }
       } else {
         // Failed to create the directory, bail out
+#ifdef XP_MACOSX
+        if (isElevated) {
+          freeArguments(argc, argv);
+          CleanupElevatedMacUpdate(true);
+        }
+#endif
         return 1;
       }
     }
@@ -3372,6 +3428,15 @@ int NS_main(int argc, NS_tchar **argv)
 
   LogFinish();
 
+#ifdef XP_MACOSX
+  } else { // if (!requiresElevation)
+    gSucceeded = ServeElevatedUpdate(argc, (const char**)argv);
+    if (!gSucceeded) {
+      WriteStatusFile(ELEVATION_CANCELED);
+    }
+  }
+#endif /* XP_MACOSX */
+
   if (argc > callbackIndex) {
 #if defined(XP_WIN)
     if (gSucceeded) {
@@ -3393,16 +3458,27 @@ int NS_main(int argc, NS_tchar **argv)
     EXIT_WHEN_ELEVATED(elevatedLockFilePath, updateLockFileHandle, 0);
 #endif /* XP_WIN */
 #ifdef XP_MACOSX
-    if (gSucceeded) {
-      LaunchMacPostProcess(gInstallDirPath);
-    }
+    if (!isElevated) {
+      if (gSucceeded) {
+        LaunchMacPostProcess(gInstallDirPath);
+      }
 #endif /* XP_MACOSX */
 
     LaunchCallbackApp(argv[5],
                       argc - callbackIndex,
                       argv + callbackIndex,
                       sUsingService);
+#ifdef XP_MACOSX
+    } // if (!isElevated)
+#endif
   }
+
+#ifdef XP_MACOSX
+  if (isElevated) {
+    freeArguments(argc, argv);
+    CleanupElevatedMacUpdate(false);
+  }
+#endif
 
   return gSucceeded ? 0 : 1;
 }
