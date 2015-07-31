@@ -108,7 +108,6 @@ BOOL InstallPrivilegedHelper()
   }
 
   BOOL result = NO;
-  NSError* error = nil;
   AuthorizationItem authItem    = { kSMRightBlessPrivilegedHelper, 0, NULL, 0 };
   AuthorizationRights authRights  = { 1, &authItem };
   AuthorizationFlags flags    = kAuthorizationFlagDefaults |
