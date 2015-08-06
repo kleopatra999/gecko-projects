@@ -23,4 +23,4 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'cocoa':
                 '-sectcreate',
                 '__TEXT',
                 '__launchd_plist',
-                SRCDIR + '/macbuild/Contents/Launchd.plist']
+                SRCDIR + '/Launchd.plist']
