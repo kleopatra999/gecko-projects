@@ -53,6 +53,7 @@ libs::
 	rsync -a -C --exclude '*.in' $(srcdir)/macbuild/Contents $(DIST)/bin/updater.app 
 	sed -e 's/%APP_NAME%/$(MOZ_APP_DISPLAYNAME)/' $(srcdir)/macbuild/Contents/Resources/English.lproj/InfoPlist.strings.in | \
 	  iconv -f UTF-8 -t UTF-16 > $(DIST)/bin/updater.app/Contents/Resources/English.lproj/InfoPlist.strings
+	sed -e 's/%MOZ_MACBUNDLE_ID%/$(MOZ_MACBUNDLE_ID)/' -e 's/%MAC_CERT_SUBJECT_OU%/$(MAC_CERT_SUBJECT_OU)/' $(srcdir)/macbuild/Contents/Info.plist.in > $(dist_dest)/Contents/Info.plist
 	$(NSINSTALL) -D $(DIST)/bin/updater.app/Contents/MacOS
 	$(NSINSTALL) $(DIST)/bin/org.mozilla.updater $(DIST)/bin/updater.app/Contents/MacOS
 	rm -f $(DIST)/bin/org.mozilla.updater
