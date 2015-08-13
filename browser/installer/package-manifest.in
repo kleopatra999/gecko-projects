@@ -39,6 +39,7 @@
 @APPNAME@/Contents/PkgInfo
 @RESPATH@/firefox.icns
 @RESPATH@/document.icns
+@RESPATH@/temp.icns
 @RESPATH@/@LPROJ_ROOT@.lproj/*
 #endif
 
