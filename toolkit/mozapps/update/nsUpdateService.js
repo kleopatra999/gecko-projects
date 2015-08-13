@@ -551,32 +551,22 @@ function getCanApplyUpdates() {
       let updateTestFile = getUpdateFile([FILE_PERMS_TEST]);
       LOG("getCanApplyUpdates - testing write access " + updateTestFile.path);
       testWriteAccess(updateTestFile, false);
-      if (AppConstants.platform == "macosx") {
-        // Check that the application bundle can be written to.
-        let appDirTestFile = getAppBaseDir();
-        appDirTestFile.append(FILE_PERMS_TEST);
-        LOG("getCanApplyUpdates - testing write access " + appDirTestFile.path);
-        if (appDirTestFile.exists()) {
-          appDirTestFile.remove(false);
-        }
-        appDirTestFile.create(Ci.nsILocalFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
-        appDirTestFile.remove(false);
-      } else if (AppConstants.platform == "win") {
+      if (AppConstants.platform == "win") {
         // Example windowsVersion:  Windows XP == 5.1
         let windowsVersion = Services.sysinfo.getProperty("version");
         LOG("getCanApplyUpdates - windowsVersion = " + windowsVersion);
 
-      /**
-       * For Vista, updates can be performed to a location requiring admin
-       * privileges by requesting elevation via the UAC prompt when launching
-       * updater.exe if the appDir is under the Program Files directory
-       * (e.g. C:\Program Files\) and UAC is turned on and  we can elevate
-       * (e.g. user has a split token).
-       *
-       * Note: this does note attempt to handle the case where UAC is turned on
-       * and the installation directory is in a restricted location that
-       * requires admin privileges to update other than Program Files.
-       */
+        /**
+         * For Vista, updates can be performed to a location requiring admin
+         * privileges by requesting elevation via the UAC prompt when launching
+         * updater.exe if the appDir is under the Program Files directory
+         * (e.g. C:\Program Files\) and UAC is turned on and  we can elevate
+         * (e.g. user has a split token).
+         *
+         * Note: this does note attempt to handle the case where UAC is turned on
+         * and the installation directory is in a restricted location that
+         * requires admin privileges to update other than Program Files.
+         */
         let userCanElevate = false;
 
         if (parseFloat(windowsVersion) >= 6) {
