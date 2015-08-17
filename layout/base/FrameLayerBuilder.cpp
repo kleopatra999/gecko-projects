@@ -1367,7 +1367,8 @@ public:
     mXScale(1.f), mYScale(1.f),
     mAppUnitsPerDevPixel(0),
     mTranslation(0, 0),
-    mAnimatedGeometryRootPosition(0, 0) {}
+    mAnimatedGeometryRootPosition(0, 0),
+    mNeedsRecomputeVisibility(false) {}
 
   /**
    * Record the number of clips in the PaintedLayer's mask layer.
@@ -1438,6 +1439,11 @@ public:
 
   nsRefPtr<ColorLayer> mColorLayer;
   nsRefPtr<ImageLayer> mImageLayer;
+
+  // True if the display items for this layer have changed and we need a call
+  // to RecomputeVisibilityForItems before painting them. This can be false
+  // during the latter iterations of progressive painting.
+  bool mNeedsRecomputeVisibility;
 };
 
 /*
@@ -2038,7 +2044,11 @@ ContainerState::GetLayerCreationHint(const nsIFrame* aAnimatedGeometryRoot)
   }
   nsIFrame* animatedGeometryRootParent = aAnimatedGeometryRoot->GetParent();
   nsIScrollableFrame* scrollable = do_QueryFrame(animatedGeometryRootParent);
-  if (scrollable && scrollable->WantAsyncScroll()) {
+  if (scrollable
+#ifdef MOZ_B2G
+      && scrollable->WantAsyncScroll()
+#endif
+     ) {
     // WantAsyncScroll() returns false when the frame has overflow:hidden,
     // so we won't create tiled layers for overflow:hidden frames even if
     // they have a display port. The main purpose of the WantAsyncScroll check
@@ -2065,7 +2075,7 @@ ContainerState::AttemptToRecyclePaintedLayer(const nsIFrame* aAnimatedGeometryRo
 
   // Check if the layer hint has changed and whether or not the layer should
   // be recreated because of it.
-  if (!mManager->IsOptimizedFor(layer, GetLayerCreationHint(aAnimatedGeometryRoot))) {
+  if (!layer->IsOptimizedFor(GetLayerCreationHint(aAnimatedGeometryRoot))) {
     return nullptr;
   }
 
@@ -2274,6 +2284,8 @@ ContainerState::PreparePaintedLayerForUse(PaintedLayer* aLayer,
   aLayer->SetBaseTransform(Matrix4x4::From2D(matrix));
 
   ComputeAndSetIgnoreInvalidationRect(aLayer, aData, aAnimatedGeometryRoot, mBuilder, pixOffset);
+
+  aData->mNeedsRecomputeVisibility = true;
 
   // FIXME: Temporary workaround for bug 681192 and bug 724786.
 #ifndef MOZ_WIDGET_ANDROID
@@ -3075,7 +3087,7 @@ void ContainerState::FinishPaintedLayerData(PaintedLayerData& aData, FindOpaqueB
       data->mLayer->SetEventRegions(EventRegions());
     }
   }
-  
+
   if (!layer) {
     // We couldn't optimize to an image layer or a color layer above.
     layer = data->mLayer;
@@ -5535,6 +5547,7 @@ private:
 FrameLayerBuilder::DrawPaintedLayer(PaintedLayer* aLayer,
                                    gfxContext* aContext,
                                    const nsIntRegion& aRegionToDraw,
+                                   const nsIntRegion* aDirtyRegion,
                                    DrawRegionClip aClip,
                                    const nsIntRegion& aRegionToInvalidate,
                                    void* aCallbackData)
@@ -5587,14 +5600,21 @@ FrameLayerBuilder::DrawPaintedLayer(PaintedLayer* aLayer,
   nsIntPoint offset = GetTranslationForPaintedLayer(aLayer);
   nsPresContext* presContext = entry->mContainerLayerFrame->PresContext();
 
-  if (!layerBuilder->GetContainingPaintedLayerData()) {
+  if (userData->mNeedsRecomputeVisibility &&
+      !layerBuilder->GetContainingPaintedLayerData()) {
     // Recompute visibility of items in our PaintedLayer. Note that this
     // recomputes visibility for all descendants of our display items too,
     // so there's no need to do this for the items in inactive PaintedLayers.
+    // If aDirtyRegion is non-null then recompute the visibility of the entire
+    // aDirtyRegion at once, rather of aRegionToDraw separately on each call.
     int32_t appUnitsPerDevPixel = presContext->AppUnitsPerDevPixel();
-    RecomputeVisibilityForItems(entry->mItems, builder, aRegionToDraw,
+    RecomputeVisibilityForItems(entry->mItems, builder,
+                                aDirtyRegion ? *aDirtyRegion : aRegionToDraw,
                                 offset, appUnitsPerDevPixel,
                                 userData->mXScale, userData->mYScale);
+    if (aDirtyRegion) {
+      userData->mNeedsRecomputeVisibility = false;
+    }
   }
 
   nsRenderingContext rc(aContext);
@@ -5657,7 +5677,7 @@ FrameLayerBuilder::DrawPaintedLayer(PaintedLayer* aLayer,
     if (isRecording) {
       mozilla::UniquePtr<TimelineMarker> marker =
         MakeUnique<LayerTimelineMarker>(docShell, aRegionToDraw);
-      docShell->AddProfileTimelineMarker(Move(marker));
+      TimelineConsumers::AddMarkerForDocShell(docShell, Move(marker));
     }
   }
 

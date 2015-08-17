@@ -19,6 +19,7 @@ Cu.import("resource://gre/modules/PromiseUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
 Cu.import("resource://gre/modules/ObjectUtils.jsm");
+Cu.import("resource://gre/modules/TelemetryController.jsm", this);
 
 const Utils = TelemetryUtils;
 
@@ -107,6 +108,7 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["devtools.debugger.remote-enabled", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["dom.ipc.plugins.asyncInit", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["dom.ipc.plugins.enabled", TelemetryEnvironment.RECORD_PREF_VALUE],
+  ["dom.ipc.processCount", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["experiments.manifest.uri", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["extensions.blocklist.enabled", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["extensions.blocklist.url", TelemetryEnvironment.RECORD_PREF_VALUE],
@@ -126,6 +128,7 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["layers.componentalpha.enabled", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["layers.d3d11.disable-warp", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["layers.d3d11.force-warp", TelemetryEnvironment.RECORD_PREF_VALUE],
+  ["layers.offmainthreadcomposition.enabled", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["layers.prefer-d3d9", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["layers.prefer-opengl", TelemetryEnvironment.RECORD_PREF_VALUE],
   ["layout.css.devPixelsPerPx", TelemetryEnvironment.RECORD_PREF_VALUE],
@@ -146,18 +149,19 @@ const PREF_DISTRIBUTION_ID = "distribution.id";
 const PREF_DISTRIBUTION_VERSION = "distribution.version";
 const PREF_DISTRIBUTOR = "app.distributor";
 const PREF_DISTRIBUTOR_CHANNEL = "app.distributor.channel";
-const PREF_E10S_ENABLED = "browser.tabs.remote.autostart";
 const PREF_HOTFIX_LASTVERSION = "extensions.hotfix.lastVersion";
 const PREF_APP_PARTNER_BRANCH = "app.partner.";
 const PREF_PARTNER_ID = "mozilla.partner.id";
 const PREF_TELEMETRY_ENABLED = "toolkit.telemetry.enabled";
 const PREF_UPDATE_ENABLED = "app.update.enabled";
 const PREF_UPDATE_AUTODOWNLOAD = "app.update.auto";
+const PREF_SEARCH_COHORT = "browser.search.cohort";
 
 const EXPERIMENTS_CHANGED_TOPIC = "experiments-changed";
 const SEARCH_ENGINE_MODIFIED_TOPIC = "browser-search-engine-modified";
 const SEARCH_SERVICE_TOPIC = "browser-search-service";
 const COMPOSITOR_CREATED_TOPIC = "compositor:created";
+const SANITY_TEST_FAILED_TOPIC = "graphics-sanity-test-failed";
 
 /**
  * Get the current browser.
@@ -811,6 +815,7 @@ EnvironmentCache.prototype = {
     Services.obs.addObserver(this, SEARCH_ENGINE_MODIFIED_TOPIC, false);
     Services.obs.addObserver(this, SEARCH_SERVICE_TOPIC, false);
     Services.obs.addObserver(this, COMPOSITOR_CREATED_TOPIC, false);
+    Services.obs.addObserver(this, SANITY_TEST_FAILED_TOPIC, false);
   },
 
   _removeObservers: function () {
@@ -818,6 +823,7 @@ EnvironmentCache.prototype = {
     Services.obs.removeObserver(this, SEARCH_ENGINE_MODIFIED_TOPIC);
     Services.obs.removeObserver(this, SEARCH_SERVICE_TOPIC);
     Services.obs.removeObserver(this, COMPOSITOR_CREATED_TOPIC);
+    Services.obs.removeObserver(this, SANITY_TEST_FAILED_TOPIC);
   },
 
   observe: function (aSubject, aTopic, aData) {
@@ -842,6 +848,9 @@ EnvironmentCache.prototype = {
         // least one off-main-thread-composited window. Thus we wait for the
         // first compositor to be created and then query nsIGfxInfo again.
         this._onCompositorCreated();
+        break;
+      case SANITY_TEST_FAILED_TOPIC:
+        this._onGraphicsSanityTestFailed(aData);
         break;
     }
   },
@@ -891,6 +900,10 @@ EnvironmentCache.prototype = {
     this._currentEnvironment.settings.defaultSearchEngine = this._getDefaultSearchEngine();
     this._currentEnvironment.settings.defaultSearchEngineData =
       Services.search.getDefaultEngineInfo();
+
+    // Record the cohort identifier used for search defaults A/B testing.
+    if (Services.prefs.prefHasUserValue(PREF_SEARCH_COHORT))
+      this._currentEnvironment.settings.searchCohort = Services.prefs.getCharPref(PREF_SEARCH_COHORT);
   },
 
   /**
@@ -916,6 +929,11 @@ EnvironmentCache.prototype = {
     } catch (e) {
       this._log.error("nsIGfxInfo.getFeatures() caught error", e);
     }
+  },
+
+  _onGraphicsSanityTestFailed: function (aData) {
+    let gfxData = this._currentEnvironment.system.gfx;
+    gfxData.sanityTestSnapshot = aData;
   },
 
   /**
@@ -994,8 +1012,9 @@ EnvironmentCache.prototype = {
 #ifndef MOZ_WIDGET_ANDROID
       isDefaultBrowser: this._isDefaultBrowser(),
 #endif
-      e10sEnabled: Preferences.get(PREF_E10S_ENABLED, false),
+      e10sEnabled: Services.appinfo.browserTabsRemoteAutostart,
       telemetryEnabled: Preferences.get(PREF_TELEMETRY_ENABLED, false),
+      isInOptoutSample: TelemetryController.isInOptoutSample,
       locale: getBrowserLocale(),
       update: {
         channel: updateChannel,

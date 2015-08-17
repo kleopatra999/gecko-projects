@@ -16,6 +16,7 @@ fails == 345369-2.html 345369-2-ref.html
 == 345369-4.html 345369-4-ref.html
 == 345369-5.html 345369-5-ref.html
 == 429974-1.html 429974-1-ref.html
+== 478834-1.html 478834-1-ref.html
 == 546048-1.html 546048-1-ref.html
 == 775350-1.html 775350-1-ref.html
 == 1114329.html 1114329-ref.html
@@ -35,6 +36,14 @@ fails == 345369-2.html 345369-2-ref.html
 == float-in-rtl-4b.html float-in-rtl-4-ref.html
 == float-in-rtl-4c.html float-in-rtl-4-ref.html
 == float-in-rtl-4d.html float-in-rtl-4-ref.html
+
+== bfc-displace-1a.html bfc-displace-1a-ref.html
+== bfc-displace-1b.html bfc-displace-1b-ref.html
+== bfc-displace-2a.html bfc-displace-2a-ref.html
+== bfc-displace-2b.html bfc-displace-2b-ref.html
+== bfc-displace-3a.html bfc-displace-3a-ref.html
+== bfc-displace-3b.html bfc-displace-3b-ref.html
+== bfc-shrink-1.html bfc-shrink-1-ref.html
 
 # Testcases that involve vertical writing mode.
 #

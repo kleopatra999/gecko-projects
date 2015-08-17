@@ -41,6 +41,7 @@
 #include "nsIApplicationCacheContainer.h"
 
 #include "nsIMemoryReporter.h"
+#include "DecoderFactory.h"
 #include "Image.h"
 #include "gfxPrefs.h"
 #include "prtime.h"
@@ -275,9 +276,10 @@ private:
         surfacePathPrefix.Append("@");
         surfacePathPrefix.AppendFloat(counter.Key().AnimationTime());
 
-        if (counter.Key().Flags() != imgIContainer::DECODE_FLAGS_DEFAULT) {
+        if (counter.Key().Flags() != DefaultSurfaceFlags()) {
           surfacePathPrefix.Append(", flags:");
-          surfacePathPrefix.AppendInt(counter.Key().Flags(), /* aRadix = */ 16);
+          surfacePathPrefix.AppendInt(uint32_t(counter.Key().Flags()),
+                                      /* aRadix = */ 16);
         }
       } else if (counter.Type() == SurfaceMemoryCounterType::COMPOSITING) {
         surfacePathPrefix.Append(", compositing frame");
@@ -788,7 +790,9 @@ NewImageChannel(nsIChannel** aResult,
     // we should always have a requestingNode, or we are loading something
     // outside a document, in which case the triggeringPrincipal
     // should always be the systemPrincipal.
-    MOZ_ASSERT(nsContentUtils::IsSystemPrincipal(triggeringPrincipal));
+    // However, there are two exceptions: one is Notifications and the
+    // other one is Favicons which create a channel in the parent prcoess
+    // in which case we can't get a requestingNode.
     rv = NS_NewChannel(aResult,
                        aURI,
                        triggeringPrincipal,
@@ -1313,7 +1317,6 @@ void imgLoader::ReadAcceptHeaderPref()
   }
 }
 
-/* void clearCache (in boolean chrome); */
 NS_IMETHODIMP
 imgLoader::ClearCache(bool chrome)
 {
@@ -1324,7 +1327,6 @@ imgLoader::ClearCache(bool chrome)
   }
 }
 
-/* void removeEntry(in nsIURI uri); */
 NS_IMETHODIMP
 imgLoader::RemoveEntry(nsIURI* aURI)
 {
@@ -1335,7 +1337,6 @@ imgLoader::RemoveEntry(nsIURI* aURI)
   return NS_ERROR_NOT_AVAILABLE;
 }
 
-/* imgIRequest findEntry(in nsIURI uri); */
 NS_IMETHODIMP
 imgLoader::FindEntryProperties(nsIURI* uri, nsIProperties** _retval)
 {
@@ -2475,7 +2476,8 @@ imgLoader::SupportImageWithMimeType(const char* aMimeType,
     return true;
   }
 
-  return Image::GetDecoderType(mimeType.get()) != Image::eDecoderType_unknown;
+  DecoderType type = DecoderFactory::GetDecoderType(mimeType.get());
+  return type != DecoderType::UNKNOWN;
 }
 
 NS_IMETHODIMP
@@ -2575,7 +2577,6 @@ ProxyListener::~ProxyListener()
 
 /** nsIRequestObserver methods **/
 
-/* void onStartRequest (in nsIRequest request, in nsISupports ctxt); */
 NS_IMETHODIMP
 ProxyListener::OnStartRequest(nsIRequest* aRequest, nsISupports* ctxt)
 {
@@ -2722,7 +2723,6 @@ imgCacheValidator::AddProxy(imgRequestProxy* aProxy)
 
 /** nsIRequestObserver methods **/
 
-/* void onStartRequest (in nsIRequest request, in nsISupports ctxt); */
 NS_IMETHODIMP
 imgCacheValidator::OnStartRequest(nsIRequest* aRequest, nsISupports* ctxt)
 {

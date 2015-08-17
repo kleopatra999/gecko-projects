@@ -76,6 +76,7 @@ var inChrome = typeof Components != "undefined" && "utils" in Components;
     MEDIA_DENIED: "reason-media-denied",
     NO_MEDIA: "reason-no-media",
     UNABLE_TO_PUBLISH_MEDIA: "unable-to-publish-media",
+    USER_UNAVAILABLE: "reason-user-unavailable",
     COULD_NOT_CONNECT: "reason-could-not-connect",
     NETWORK_DISCONNECTED: "reason-network-disconnected",
     EXPIRED_OR_INVALID: "reason-expired-or-invalid",
@@ -398,40 +399,25 @@ var inChrome = typeof Components != "undefined" && "utils" in Components;
     }
 
     var subject, body;
-    var brandShortname = mozL10n.get("brandShortname");
-    var clientShortname2 = mozL10n.get("clientShortname2");
-    var clientSuperShortname = mozL10n.get("clientSuperShortname");
-    var learnMoreUrl = mozLoop.getLoopPref("learnMoreUrl");
+    var footer = mozL10n.get("share_email_footer");
 
     if (contextDescription) {
-      subject = mozL10n.get("share_email_subject_context", {
-        clientShortname2: clientShortname2,
-        title: contextDescription
-      });
-      body = mozL10n.get("share_email_body_context", {
+      subject = mozL10n.get("share_email_subject6");
+      body = mozL10n.get("share_email_body_context2", {
         callUrl: callUrl,
-        brandShortname: brandShortname,
-        clientShortname2: clientShortname2,
-        clientSuperShortname: clientSuperShortname,
-        learnMoreUrl: learnMoreUrl,
         title: contextDescription
       });
     } else {
-      subject = mozL10n.get("share_email_subject5", {
-        clientShortname2: clientShortname2
-      });
-      body = mozL10n.get("share_email_body5", {
-        callUrl: callUrl,
-        brandShortname: brandShortname,
-        clientShortname2: clientShortname2,
-        clientSuperShortname: clientSuperShortname,
-        learnMoreUrl: learnMoreUrl
+      subject = mozL10n.get("share_email_subject6");
+      body = mozL10n.get("share_email_body6", {
+        callUrl: callUrl
       });
     }
-
+    var bodyFooter =  body + footer;
+    bodyFooter = bodyFooter.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
     mozLoop.composeEmail(
       subject,
-      body.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"),
+      bodyFooter,
       recipient
     );
 
@@ -446,7 +432,11 @@ var inChrome = typeof Components != "undefined" && "utils" in Components;
   // We can alias `subarray` to `slice` when the latter is not available, because
   // they're semantically identical.
   if (!Uint8Array.prototype.slice) {
+    /* eslint-disable */
+    // Eslint disabled for no-extend-native; Specific override needed for Firefox 37
+    // and earlier, also for other browsers.
     Uint8Array.prototype.slice = Uint8Array.prototype.subarray;
+    /* eslint-enable */
   }
 
   /**
@@ -698,7 +688,7 @@ var inChrome = typeof Components != "undefined" && "utils" in Components;
     var prop;
     for (var i = 0, lA = propsA.length; i < lA; ++i) {
       prop = propsA[i];
-      if (propsB.indexOf(prop) == -1) {
+      if (propsB.indexOf(prop) === -1) {
         diff.removed.push(prop);
       } else if (a[prop] !== b[prop]) {
         diff.updated.push(prop);
@@ -707,7 +697,7 @@ var inChrome = typeof Components != "undefined" && "utils" in Components;
 
     for (var j = 0, lB = propsB.length; j < lB; ++j) {
       prop = propsB[j];
-      if (propsA.indexOf(prop) == -1) {
+      if (propsA.indexOf(prop) === -1) {
         diff.added.push(prop);
       }
     }
@@ -734,6 +724,34 @@ var inChrome = typeof Components != "undefined" && "utils" in Components;
       }
     }
     return obj;
+  }
+
+  /**
+   * Truncate a string if it exceeds the length as defined in `maxLen`, which
+   * is defined as '72' characters by default. If the string needs trimming,
+   * it'll be suffixed with the unicode ellipsis char, \u2026.
+   *
+   * @param  {String} str    The string to truncate, if needed.
+   * @param  {Number} maxLen Maximum number of characters that the string is
+   *                         allowed to contain. Optional, defaults to 72.
+   * @return {String} Truncated version of `str`.
+   */
+  function truncate(str, maxLen) {
+    maxLen = maxLen || 72;
+
+    if (str.length > maxLen) {
+      var substring = str.substr(0, maxLen);
+      // XXX Due to the fact that we have two different l10n libraries.
+      var direction = mozL10n.getDirection ? mozL10n.getDirection() :
+                      mozL10n.language.direction;
+      if (direction === "rtl") {
+        return "…" + substring;
+      }
+
+      return substring + "…";
+    }
+
+    return str;
   }
 
   this.utils = {
@@ -764,6 +782,7 @@ var inChrome = typeof Components != "undefined" && "utils" in Components;
     strToUint8Array: strToUint8Array,
     Uint8ArrayToStr: Uint8ArrayToStr,
     objectDiff: objectDiff,
-    stripFalsyValues: stripFalsyValues
+    stripFalsyValues: stripFalsyValues,
+    truncate: truncate
   };
 }).call(inChrome ? this : loop.shared);

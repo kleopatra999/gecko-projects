@@ -1075,6 +1075,8 @@ BlobDataFromBlobImpl(BlobImpl* aBlobImpl, BlobData& aBlobData)
   const nsTArray<nsRefPtr<BlobImpl>>* subBlobs = aBlobImpl->GetSubBlobImpls();
 
   if (subBlobs) {
+    MOZ_ASSERT(subBlobs->Length());
+
     aBlobData = nsTArray<BlobData>();
 
     nsTArray<BlobData>& subBlobDatas = aBlobData.get_ArrayOfBlobData();
@@ -1097,8 +1099,6 @@ BlobDataFromBlobImpl(BlobImpl* aBlobImpl, BlobData& aBlobData)
     aBlobData = actor->ParentID();
     return;
   }
-
-  MOZ_ASSERT(aBlobImpl->IsMemoryFile());
 
   ErrorResult rv;
   nsCOMPtr<nsIInputStream> inputStream;
@@ -2154,6 +2154,9 @@ public:
   virtual void
   LookupAndCacheIsDirectory() override;
 
+  virtual void
+  SetIsDirectory(bool aIsDir) override;
+
   virtual bool
   IsDirectory() const override;
 
@@ -2942,6 +2945,13 @@ BlobParent::
 RemoteBlobImpl::LookupAndCacheIsDirectory()
 {
   return mBlobImpl->LookupAndCacheIsDirectory();
+}
+
+void
+BlobParent::
+RemoteBlobImpl::SetIsDirectory(bool aIsDir)
+{
+  return mBlobImpl->SetIsDirectory(aIsDir);
 }
 
 bool

@@ -378,8 +378,9 @@ function _setupDebuggerServer(breakpointFiles, callback) {
     prefs.setBoolPref("devtools.debugger.log.verbose", true);
   }
 
-  let {DebuggerServer, OriginalLocation} =
-    Components.utils.import('resource://gre/modules/devtools/dbg-server.jsm', {});
+  let { require } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+  let { DebuggerServer } = require("devtools/server/main");
+  let { OriginalLocation } = require("devtools/server/actors/common");
   DebuggerServer.init();
   DebuggerServer.addBrowserActors();
   DebuggerServer.addActors("resource://testing-common/dbg-actors.js");
@@ -1504,6 +1505,7 @@ try {
     prefs.setCharPref("media.gmp-manager.url.override", "http://%(server)s/dummy-gmp-manager.xml");
     prefs.setCharPref("browser.selfsupport.url", "https://%(server)s/selfsupport-dummy/");
     prefs.setCharPref("toolkit.telemetry.server", "https://%(server)s/telemetry-dummy");
+    prefs.setCharPref("browser.search.geoip.url", "https://%(server)s/geoip-dummy");
   }
 } catch (e) { }
 

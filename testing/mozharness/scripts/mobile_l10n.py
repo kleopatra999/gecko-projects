@@ -205,7 +205,7 @@ class MobileSingleLocale(MockMixin, LocalesMixin, ReleaseMixin,
         """
         if self.revision:
             return self.revision
-        r = re.compile(r"gecko_revision ([0-9a-f]{12}\+?)")
+        r = re.compile(r"gecko_revision ([0-9a-f]+\+?)")
         output = self._query_make_ident_output()
         for line in output.splitlines():
             m = r.match(line)
@@ -363,7 +363,6 @@ class MobileSingleLocale(MockMixin, LocalesMixin, ReleaseMixin,
         if self.config.get("tooltool_config"):
             self.tooltool_fetch(
                 self.config['tooltool_config']['manifest'],
-                bootstrap_cmd=self.config['tooltool_config']['bootstrap_cmd'],
                 output_dir=self.config['tooltool_config']['output_dir'] % self.query_abs_dirs(),
             )
         self._setup_configure()

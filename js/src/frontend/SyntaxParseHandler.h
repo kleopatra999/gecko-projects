@@ -173,6 +173,9 @@ class SyntaxParseHandler
 
     static Node null() { return NodeFailure; }
 
+    void prepareNodeForMutation(Node node) {}
+    void freeTree(Node node) {}
+
     void trace(JSTracer* trc) {}
 
     Node newName(PropertyName* name, uint32_t blockid, const TokenPos& pos, ExclusiveContext* cx) {
@@ -209,7 +212,7 @@ class SyntaxParseHandler
         return NodeGeneric;
     }
 
-    Node newCallSiteObject(uint32_t begin, unsigned blockidGen) {
+    Node newCallSiteObject(uint32_t begin) {
         return NodeGeneric;
     }
 
@@ -259,10 +262,8 @@ class SyntaxParseHandler
 
     // Expressions
 
-    Node newArrayComprehension(Node body, unsigned blockid, const TokenPos& pos) {
-        return NodeGeneric;
-    }
-    Node newArrayLiteral(uint32_t begin, unsigned blockid) { return NodeUnparenthesizedArray; }
+    Node newArrayComprehension(Node body, const TokenPos& pos) { return NodeGeneric; }
+    Node newArrayLiteral(uint32_t begin) { return NodeUnparenthesizedArray; }
     bool addElision(Node literal, const TokenPos& pos) { return true; }
     bool addSpreadElement(Node literal, uint32_t begin, Node inner) { return true; }
     void addArrayElement(Node literal, Node element) { }

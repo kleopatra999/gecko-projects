@@ -6,14 +6,14 @@
 
 /**
  * Tests the behaviour of the copy styles context menu items in the rule
- * view
+ * view.
  */
 
 XPCOMUtils.defineLazyGetter(this, "osString", function() {
   return Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).OS;
 });
 
-let TEST_URI = TEST_URL_ROOT + "doc_copystyles.html";
+const TEST_URI = TEST_URL_ROOT + "doc_copystyles.html";
 
 add_task(function*() {
   yield addTab(TEST_URI);
@@ -53,10 +53,38 @@ add_task(function*() {
       }
     },
     {
+      desc: "Test Copy Property Value with Priority",
+      node: ruleEditor.rule.textProps[3].editor.valueSpan,
+      menuItem: contextmenu.menuitemCopyPropertyValue,
+      expectedPattern: "#00F !important",
+      hidden: {
+        copyLocation: true,
+        copyPropertyDeclaration: false,
+        copyPropertyName: true,
+        copyPropertyValue: false,
+        copySelector: true,
+        copyRule: false
+      }
+    },
+    {
       desc: "Test Copy Property Declaration",
       node: ruleEditor.rule.textProps[2].editor.nameSpan,
       menuItem: contextmenu.menuitemCopyPropertyDeclaration,
       expectedPattern: "font-size: 12px;",
+      hidden: {
+        copyLocation: true,
+        copyPropertyDeclaration: false,
+        copyPropertyName: false,
+        copyPropertyValue: true,
+        copySelector: true,
+        copyRule: false
+      }
+    },
+    {
+      desc: "Test Copy Property Declaration with Priority",
+      node: ruleEditor.rule.textProps[3].editor.nameSpan,
+      menuItem: contextmenu.menuitemCopyPropertyDeclaration,
+      expectedPattern: "border-color: #00F !important;",
       hidden: {
         copyLocation: true,
         copyPropertyDeclaration: false,
@@ -74,6 +102,7 @@ add_task(function*() {
                        "\tcolor: #F00;[\\r\\n]+" +
                        "\tbackground-color: #00F;[\\r\\n]+" +
                        "\tfont-size: 12px;[\\r\\n]+" +
+                       "\tborder-color: #00F !important;[\\r\\n]+" +
                        "}",
       hidden: {
         copyLocation: true,
@@ -124,6 +153,7 @@ add_task(function*() {
                        "\t\/\\* color: #F00; \\*\/[\\r\\n]+" +
                        "\tbackground-color: #00F;[\\r\\n]+" +
                        "\tfont-size: 12px;[\\r\\n]+" +
+                       "\tborder-color: #00F !important;[\\r\\n]+" +
                        "}",
       hidden: {
         copyLocation: true,
@@ -166,7 +196,10 @@ function* checkCopyStyle(view, node, menuItem, expectedPattern, hidden) {
     {button: 2, type: "contextmenu"}, view.styleWindow);
   yield onPopup;
 
-  is(view._contextmenu.menuitemCopy.hidden, true, "Copy hidden is as expected: true");
+  ok(view._contextmenu.menuitemCopy.disabled,
+    "Copy disabled is as expected: true");
+  ok(!view._contextmenu.menuitemCopy.hidden,
+    "Copy hidden is as expected: false");
 
   is(view._contextmenu.menuitemCopyLocation.hidden,
      hidden.copyLocation,

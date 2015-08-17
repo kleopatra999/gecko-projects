@@ -96,6 +96,16 @@ static_assert(nsIHttpChannelInternal::CORS_MODE_CORS_WITH_FORCED_PREFLIGHT == st
 
 static StaticRefPtr<ServiceWorkerManager> gInstance;
 
+// Tracks the "dom.disable_open_click_delay" preference.  Modified on main
+// thread, read on worker threads. This is set once in the ServiceWorkerManager
+// constructor before any service workers are spawned.
+// It is updated every time a "notificationclick" event is dispatched. While
+// this is done without synchronization, at the worst, the thread will just get
+// an older value within which a popup is allowed to be displayed, which will
+// still be a valid value since it was set in the constructor. I (:nsm) don't
+// think this needs to be synchronized.
+Atomic<uint32_t> gDOMDisableOpenClickDelay(0);
+
 struct ServiceWorkerManager::RegistrationDataPerPrincipal
 {
   // Ordered list of scopes for glob matching.
@@ -386,6 +396,8 @@ ServiceWorkerManager::ServiceWorkerManager()
 {
   // Register this component to PBackground.
   MOZ_ALWAYS_TRUE(BackgroundChild::GetOrCreateForCurrentThread(this));
+
+  gDOMDisableOpenClickDelay = Preferences::GetInt("dom.disable_open_click_delay");
 }
 
 ServiceWorkerManager::~ServiceWorkerManager()
@@ -1614,15 +1626,16 @@ ServiceWorkerManager::AppendPendingOperation(nsIRunnable* aRunnable)
 
 namespace {
 // Just holds a ref to a ServiceWorker until the Promise is fulfilled.
-class KeepAliveHandler final : public PromiseNativeHandler
+class KeepAliveHandler : public PromiseNativeHandler
 {
   nsMainThreadPtrHandle<ServiceWorker> mServiceWorker;
 
+protected:
   virtual ~KeepAliveHandler()
   {}
 
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
 
   explicit KeepAliveHandler(const nsMainThreadPtrHandle<ServiceWorker>& aServiceWorker)
     : mServiceWorker(aServiceWorker)
@@ -1650,6 +1663,150 @@ public:
 };
 
 NS_IMPL_ISUPPORTS0(KeepAliveHandler)
+
+void
+DummyCallback(nsITimer* aTimer, void* aClosure)
+{
+  // Nothing.
+}
+
+class AllowWindowInteractionKeepAliveHandler;
+
+class ClearWindowAllowedRunnable final : public WorkerRunnable
+{
+public:
+  ClearWindowAllowedRunnable(WorkerPrivate* aWorkerPrivate,
+                             AllowWindowInteractionKeepAliveHandler* aHandler)
+  : WorkerRunnable(aWorkerPrivate, WorkerThreadUnchangedBusyCount)
+  , mHandler(aHandler)
+  { }
+
+private:
+  bool
+  PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override
+  {
+    // WorkerRunnable asserts that the dispatch is from parent thread if
+    // the busy count modification is WorkerThreadUnchangedBusyCount.
+    // Since this runnable will be dispatched from the timer thread, we override
+    // PreDispatch and PostDispatch to skip the check.
+    return true;
+  }
+
+  void
+  PostDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate,
+               bool aDispatchResult) override
+  {
+    // Silence bad assertions.
+  }
+
+  bool
+  WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override;
+
+  nsRefPtr<AllowWindowInteractionKeepAliveHandler> mHandler;
+};
+
+class AllowWindowInteractionKeepAliveHandler final : public KeepAliveHandler
+{
+  friend class ClearWindowAllowedRunnable;
+  nsCOMPtr<nsITimer> mTimer;
+
+  ~AllowWindowInteractionKeepAliveHandler()
+  {
+    MOZ_ASSERT(!mTimer);
+  }
+
+  void
+  ClearWindowAllowed(WorkerPrivate* aWorkerPrivate)
+  {
+    MOZ_ASSERT(aWorkerPrivate);
+    aWorkerPrivate->AssertIsOnWorkerThread();
+
+    if (mTimer) {
+      aWorkerPrivate->GlobalScope()->ConsumeWindowInteraction();
+      mTimer->Cancel();
+      mTimer = nullptr;
+      MOZ_ALWAYS_TRUE(aWorkerPrivate->ModifyBusyCountFromWorker(aWorkerPrivate->GetJSContext(), false));
+    }
+  }
+
+  void
+  StartClearWindowTimer(WorkerPrivate* aWorkerPrivate)
+  {
+    MOZ_ASSERT(aWorkerPrivate);
+    aWorkerPrivate->AssertIsOnWorkerThread();
+    MOZ_ASSERT(!mTimer);
+
+    nsresult rv;
+    nsCOMPtr<nsITimer> timer = do_CreateInstance(NS_TIMER_CONTRACTID, &rv);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return;
+    }
+
+    nsRefPtr<ClearWindowAllowedRunnable> r =
+      new ClearWindowAllowedRunnable(aWorkerPrivate, this);
+
+    nsRefPtr<TimerThreadEventTarget> target =
+      new TimerThreadEventTarget(aWorkerPrivate, r);
+
+    rv = timer->SetTarget(target);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return;
+    }
+
+    // The important stuff that *has* to be reversed.
+    if (NS_WARN_IF(!aWorkerPrivate->ModifyBusyCountFromWorker(aWorkerPrivate->GetJSContext(), true))) {
+      return;
+    }
+    aWorkerPrivate->GlobalScope()->AllowWindowInteraction();
+    timer.swap(mTimer);
+
+    // We swap first and then initialize the timer so that even if initializing
+    // fails, we still clean the busy count and interaction count correctly.
+    // The timer can't be initialized before modifying the busy count since the
+    // timer thread could run and call the timeout but the worker may
+    // already be terminating and modifying the busy count could fail.
+    rv = mTimer->InitWithFuncCallback(DummyCallback, nullptr, gDOMDisableOpenClickDelay, nsITimer::TYPE_ONE_SHOT);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      ClearWindowAllowed(aWorkerPrivate);
+      return;
+    }
+  }
+
+public:
+  NS_DECL_ISUPPORTS_INHERITED
+
+  AllowWindowInteractionKeepAliveHandler(const nsMainThreadPtrHandle<ServiceWorker>& aServiceWorker,
+                                         WorkerPrivate* aWorkerPrivate)
+    : KeepAliveHandler(aServiceWorker)
+  {
+    StartClearWindowTimer(aWorkerPrivate);
+  }
+
+  void
+  ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
+  {
+    WorkerPrivate* worker = GetWorkerPrivateFromContext(aCx);
+    ClearWindowAllowed(worker);
+    KeepAliveHandler::ResolvedCallback(aCx, aValue);
+  }
+
+  void
+  RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override
+  {
+    WorkerPrivate* worker = GetWorkerPrivateFromContext(aCx);
+    ClearWindowAllowed(worker);
+    KeepAliveHandler::RejectedCallback(aCx, aValue);
+  }
+};
+
+NS_IMPL_ISUPPORTS_INHERITED0(AllowWindowInteractionKeepAliveHandler, KeepAliveHandler)
+
+bool
+ClearWindowAllowedRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
+{
+  mHandler->ClearWindowAllowed(aWorkerPrivate);
+  return true;
+}
 
 // Returns a Promise if the event was successfully dispatched and no exceptions
 // were raised, otherwise returns null.
@@ -2167,7 +2324,8 @@ public:
     GlobalObject globalObj(aCx, aWorkerPrivate->GlobalScope()->GetWrapper());
 
     PushEventInit pei;
-    pei.mData.Construct(mData);
+    // FIXME(nsm): Bug 1149195.
+    // pei.mData.Construct(mData);
     pei.mBubbles = false;
     pei.mCancelable = true;
 
@@ -2216,14 +2374,10 @@ public:
 
     WorkerGlobalScope* globalScope = aWorkerPrivate->GlobalScope();
 
-    nsCOMPtr<nsIDOMEvent> event;
-    nsresult rv =
-      NS_NewDOMEvent(getter_AddRefs(event), globalScope, nullptr, nullptr);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return false;
-    }
+    nsRefPtr<Event> event = NS_NewDOMEvent(globalScope, nullptr, nullptr);
 
-    rv = event->InitEvent(NS_LITERAL_STRING("pushsubscriptionchange"), false, false);
+    nsresult rv = event->InitEvent(NS_LITERAL_STRING("pushsubscriptionchange"),
+                                   false, false);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return false;
     }
@@ -2252,7 +2406,7 @@ ServiceWorkerManager::SendPushEvent(const nsACString& aOriginAttributes,
 
   nsRefPtr<ServiceWorker> serviceWorker =
     CreateServiceWorkerForScope(attrs, aScope, nullptr /* failure runnable */);
-  if (!serviceWorker) {
+  if (NS_WARN_IF(!serviceWorker)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -2380,12 +2534,17 @@ public:
       return false;
     }
 
+    aWorkerPrivate->GlobalScope()->AllowWindowInteraction();
     event->SetTrusted(true);
     nsRefPtr<Promise> waitUntilPromise =
       DispatchExtendableEventOnWorkerScope(aCx, aWorkerPrivate->GlobalScope(), event);
+    // If the handler calls WaitUntil(), that will manage its own interaction
+    // 'stack'.
+    aWorkerPrivate->GlobalScope()->ConsumeWindowInteraction();
 
     if (waitUntilPromise) {
-      nsRefPtr<KeepAliveHandler> handler = new KeepAliveHandler(mServiceWorker);
+      nsRefPtr<AllowWindowInteractionKeepAliveHandler> handler =
+        new AllowWindowInteractionKeepAliveHandler(mServiceWorker, aWorkerPrivate);
       waitUntilPromise->AppendNativeHandler(handler);
     }
 
@@ -2410,6 +2569,8 @@ ServiceWorkerManager::SendNotificationClickEvent(const nsACString& aOriginSuffix
   if (!attrs.PopulateFromSuffix(aOriginSuffix)) {
     return NS_ERROR_INVALID_ARG;
   }
+
+  gDOMDisableOpenClickDelay = Preferences::GetInt("dom.disable_open_click_delay");
 
   nsRefPtr<ServiceWorker> serviceWorker =
     CreateServiceWorkerForScope(attrs, aScope, nullptr);
@@ -2793,6 +2954,7 @@ ServiceWorkerManager::HandleError(JSContext* aCx,
 {
   AssertIsOnMainThread();
   MOZ_ASSERT(aPrincipal);
+  MOZ_ASSERT(!JSREPORT_IS_WARNING(aFlags));
 
   nsAutoCString scopeKey;
   nsresult rv = PrincipalToScopeKey(aPrincipal, scopeKey);
@@ -4443,9 +4605,9 @@ HasRootDomain(nsIURI* aURI, const nsACString& aDomain)
   return prevChar == '.';
 }
 
-struct UnregisterIfMatchesHostOrPrincipalData
+struct UnregisterIfMatchesUserData final
 {
-  UnregisterIfMatchesHostOrPrincipalData(
+  UnregisterIfMatchesUserData(
     ServiceWorkerManager::RegistrationDataPerPrincipal* aRegistrationData,
     void* aUserData)
     : mRegistrationData(aRegistrationData)
@@ -4462,8 +4624,8 @@ UnregisterIfMatchesHost(const nsACString& aScope,
                         ServiceWorkerRegistrationInfo* aReg,
                         void* aPtr)
 {
-  UnregisterIfMatchesHostOrPrincipalData* data =
-    static_cast<UnregisterIfMatchesHostOrPrincipalData*>(aPtr);
+  UnregisterIfMatchesUserData* data =
+    static_cast<UnregisterIfMatchesUserData*>(aPtr);
 
   // We avoid setting toRemove = aReg by default since there is a possibility
   // of failure when data->mUserData is passed, in which case we don't want to
@@ -4495,25 +4657,76 @@ UnregisterIfMatchesHostPerPrincipal(const nsACString& aKey,
                                     ServiceWorkerManager::RegistrationDataPerPrincipal* aData,
                                     void* aUserData)
 {
-  UnregisterIfMatchesHostOrPrincipalData data(aData, aUserData);
+  UnregisterIfMatchesUserData data(aData, aUserData);
   aData->mInfos.EnumerateRead(UnregisterIfMatchesHost, &data);
   return PL_DHASH_NEXT;
 }
 
 PLDHashOperator
-UnregisterIfMatchesPrincipal(const nsACString& aScope,
-                             ServiceWorkerRegistrationInfo* aReg,
-                             void* aPtr)
+UnregisterIfMatchesClearPrivateDataParams(const nsACString& aScope,
+                                          ServiceWorkerRegistrationInfo* aReg,
+                                          void* aPtr)
 {
-  UnregisterIfMatchesHostOrPrincipalData* data =
-    static_cast<UnregisterIfMatchesHostOrPrincipalData*>(aPtr);
+  UnregisterIfMatchesUserData* data =
+    static_cast<UnregisterIfMatchesUserData*>(aPtr);
 
   if (data->mUserData) {
-    nsIPrincipal *principal = static_cast<nsIPrincipal*>(data->mUserData);
-    MOZ_ASSERT(principal);
+    mozIApplicationClearPrivateDataParams *params =
+      static_cast<mozIApplicationClearPrivateDataParams*>(data->mUserData);
+    MOZ_ASSERT(params);
     MOZ_ASSERT(aReg->mPrincipal);
-    bool equals;
-    aReg->mPrincipal->Equals(principal, &equals);
+
+    uint32_t appId;
+    nsresult rv = params->GetAppId(&appId);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return PL_DHASH_NEXT;
+    }
+
+    bool browserOnly;
+    rv = params->GetBrowserOnly(&browserOnly);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return PL_DHASH_NEXT;
+    }
+
+    bool equals = false;
+
+    if (browserOnly) {
+      // When we do a system wide "clear cookies and stored data" on B2G we get
+      // the "webapps-clear-data" notification with the System app appID and
+      // the browserOnly flag set to true.
+      // Web sites registering a service worker on B2G have a principal with the
+      // following information: web site origin + System app appId + inBrowser=1
+      // So we need to check if the service worker registration info contains
+      // the System app appID and the enabled inBrowser flag and in that case
+      // remove it from the registry.
+      equals = (appId == aReg->mPrincipal->GetAppId()) &&
+               aReg->mPrincipal->GetIsInBrowserElement();
+    } else {
+      // If we get the "webapps-clear-data" notification because of an app
+      // uninstallation, we need to check the full principal to get the match
+      // in the service workers registry. If we find a match, we unregister the
+      // worker.
+      nsCOMPtr<nsIAppsService> appsService =
+        do_GetService(APPS_SERVICE_CONTRACTID);
+      if (NS_WARN_IF(!appsService)) {
+        return PL_DHASH_NEXT;
+      }
+
+      nsCOMPtr<mozIApplication> app;
+      appsService->GetAppByLocalId(appId, getter_AddRefs(app));
+      if (NS_WARN_IF(!app)) {
+        return PL_DHASH_NEXT;
+      }
+
+      nsCOMPtr<nsIPrincipal> principal;
+      app->GetPrincipal(getter_AddRefs(principal));
+      if (NS_WARN_IF(!principal)) {
+        return PL_DHASH_NEXT;
+      }
+
+      aReg->mPrincipal->Equals(principal, &equals);
+    }
+
     if (equals) {
       nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
       swm->ForceUnregister(data->mRegistrationData, aReg);
@@ -4524,15 +4737,16 @@ UnregisterIfMatchesPrincipal(const nsACString& aScope,
 }
 
 PLDHashOperator
-UnregisterIfMatchesPrincipal(const nsACString& aKey,
+UnregisterIfMatchesClearPrivateDataParams(const nsACString& aKey,
                              ServiceWorkerManager::RegistrationDataPerPrincipal* aData,
                              void* aUserData)
 {
-  UnregisterIfMatchesHostOrPrincipalData data(aData, aUserData);
+  UnregisterIfMatchesUserData data(aData, aUserData);
   // We can use EnumerateRead because ForceUnregister (and Unregister) are async.
   // Otherwise doing some R/W operations on an hashtable during an EnumerateRead
   // will crash.
-  aData->mInfos.EnumerateRead(UnregisterIfMatchesPrincipal, &data);
+  aData->mInfos.EnumerateRead(UnregisterIfMatchesClearPrivateDataParams,
+                              &data);
   return PL_DHASH_NEXT;
 }
 
@@ -4749,14 +4963,15 @@ UpdateEachRegistration(const nsACString& aKey,
 }
 
 void
-ServiceWorkerManager::RemoveAllRegistrations(nsIPrincipal* aPrincipal)
+ServiceWorkerManager::RemoveAllRegistrations(
+    mozIApplicationClearPrivateDataParams* aParams)
 {
   AssertIsOnMainThread();
 
-  MOZ_ASSERT(aPrincipal);
+  MOZ_ASSERT(aParams);
 
-  mRegistrationInfos.EnumerateRead(UnregisterIfMatchesPrincipal,
-                                   aPrincipal);
+  mRegistrationInfos.EnumerateRead(UnregisterIfMatchesClearPrivateDataParams,
+                                   aParams);
 }
 
 static PLDHashOperator
@@ -4804,29 +5019,7 @@ ServiceWorkerManager::Observe(nsISupports* aSubject,
       return NS_OK;
     }
 
-    uint32_t appId;
-    nsresult rv = params->GetAppId(&appId);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    nsCOMPtr<nsIAppsService> appsService =
-      do_GetService(APPS_SERVICE_CONTRACTID);
-    if (NS_WARN_IF(!appsService)) {
-      return NS_OK;
-    }
-
-    nsCOMPtr<mozIApplication> app;
-    appsService->GetAppByLocalId(appId, getter_AddRefs(app));
-    if (NS_WARN_IF(!app)) {
-      return NS_OK;
-    }
-
-    nsCOMPtr<nsIPrincipal> principal;
-    app->GetPrincipal(getter_AddRefs(principal));
-    if (NS_WARN_IF(!principal)) {
-      return NS_OK;
-    }
-
-    RemoveAllRegistrations(principal);
+    RemoveAllRegistrations(params);
     return NS_OK;
   }
 

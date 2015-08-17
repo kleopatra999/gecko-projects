@@ -643,39 +643,6 @@ DataChannelWrapper.prototype = {
 
 
 /**
- * This class provides helpers around analysing the audio content in a stream
- * using WebAudio AnalyserNodes.
- *
- * @constructor
- * @param {object} stream
- *                 A MediaStream object whose audio track we shall analyse.
- */
-function AudioStreamAnalyser(stream) {
-  if (stream.getAudioTracks().length === 0) {
-    throw new Error("No audio track in stream");
-  }
-  this.stream = stream;
-  this.audioContext = new AudioContext();
-  this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
-  this.analyser = this.audioContext.createAnalyser();
-  this.sourceNode.connect(this.analyser);
-  this.data = new Uint8Array(this.analyser.frequencyBinCount);
-}
-
-AudioStreamAnalyser.prototype = {
-  /**
-   * Get an array of frequency domain data for our stream's audio track.
-   *
-   * @returns {array} A Uint8Array containing the frequency domain data.
-   */
-  getByteFrequencyData: function() {
-    this.analyser.getByteFrequencyData(this.data);
-    return this.data;
-  }
-};
-
-
-/**
  * This class acts as a wrapper around a PeerConnection instance.
  *
  * @constructor
@@ -846,7 +813,7 @@ PeerConnectionWrapper.prototype = {
 
     var element = createMediaElement(type, this.label + '_' + side + this.streams.length);
     this.mediaElements.push(element);
-    element.mozSrcObject = stream;
+    element.srcObject = stream;
     element.play();
 
     // Store local media elements so that we can stop them when done.
@@ -1222,18 +1189,15 @@ PeerConnectionWrapper.prototype = {
    *          resolves when connected, rejects on failure
    */
   waitForIceConnected : function() {
-    return new Promise((resolve, reject) => {
-      var iceConnectedChanged = () => {
-        if (this.isIceConnected()) {
-          delete this.ice_connection_callbacks.waitForIceConnected;
-          resolve();
-        } else if (! this.isIceConnectionPending()) {
-          delete this.ice_connection_callbacks.waitForIceConnected;
-          resolve();
-        }
+    return new Promise((resolve, reject) =>
+        this.ice_connection_callbacks.waitForIceConnected = () => {
+      if (this.isIceConnected()) {
+        delete this.ice_connection_callbacks.waitForIceConnected;
+        resolve();
+      } else if (!this.isIceConnectionPending()) {
+        delete this.ice_connection_callbacks.waitForIceConnected;
+        reject(new Error('ICE failed'));
       }
-
-      this.ice_connection_callbacks.waitForIceConnected = iceConnectedChanged;
     });
   },
 
@@ -1559,20 +1523,20 @@ PeerConnectionWrapper.prototype = {
    * @returns {Promise}
    *        A promise that resolves when we're receiving the tone from |from|.
    */
-  checkReceivingToneFrom : function(from) {
+  checkReceivingToneFrom : function(audiocontext, from) {
     var inputElem = from.localMediaElements[0];
 
     // As input we use the stream of |from|'s first available audio sender.
     var inputSenderTracks = from._pc.getSenders().map(sn => sn.track);
     var inputAudioStream = from._pc.getLocalStreams()
       .find(s => s.getAudioTracks().some(t => inputSenderTracks.some(t2 => t == t2)));
-    var inputAnalyser = new AudioStreamAnalyser(inputAudioStream);
+    var inputAnalyser = new AudioStreamAnalyser(audiocontext, inputAudioStream);
 
     // It would have been nice to have a working getReceivers() here, but until
     // we do, let's use what remote streams we have.
     var outputAudioStream = this._pc.getRemoteStreams()
       .find(s => s.getAudioTracks().length > 0);
-    var outputAnalyser = new AudioStreamAnalyser(outputAudioStream);
+    var outputAnalyser = new AudioStreamAnalyser(audiocontext, outputAudioStream);
 
     var maxWithIndex = (a, b, i) => (b >= a.value) ? { value: b, index: i } : a;
     var initial = { value: -1, index: -1 };
@@ -1745,13 +1709,18 @@ PeerConnectionWrapper.prototype = {
         rId = stats[name].remoteCandidateId;
       }
     });
-    info("checkStatsIceConnectionType verifying: local=" +
-         JSON.stringify(stats[lId]) + " remote=" + JSON.stringify(stats[rId]));
+    ok(typeof lId !== 'undefined', "Got local candidate ID " +
+       JSON.stringify(lId) + " for selected pair");
+    ok(typeof rId !== 'undefined', "Got remote candidate ID " +
+       JSON.stringify(rId) + " for selected pair");
     if ((typeof stats[lId] === 'undefined') ||
         (typeof stats[rId] === 'undefined')) {
-      info("checkStatsIceConnectionType failed to find candidatepair IDs");
+      ok(false, "failed to find candidatepair IDs or stats for local: " +
+         JSON.stringify(lId) + " remote: " + JSON.stringify(rId));
       return;
     }
+    info("checkStatsIceConnectionType verifying: local=" +
+         JSON.stringify(stats[lId]) + " remote=" + JSON.stringify(stats[rId]));
     var lType = stats[lId].candidateType;
     var rType = stats[rId].candidateType;
     var lIp = stats[lId].ipAddress;
@@ -1790,6 +1759,7 @@ PeerConnectionWrapper.prototype = {
       }
     });
     info("ICE connections according to stats: " + numIceConnections);
+    isnot(numIceConnections, 0, "Number of ICE connections according to stats is not zero");
     if (answer.sdp.includes('a=group:BUNDLE')) {
       is(numIceConnections, 1, "stats reports exactly 1 ICE connection");
     } else {

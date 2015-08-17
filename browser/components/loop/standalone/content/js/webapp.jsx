@@ -93,7 +93,7 @@ loop.webapp = (function($, _, OT, mozL10n) {
 
     render: function() {
       if (this.props.isFirefox) {
-        return <div />;
+        return null;
       }
       return (
         <div className="promote-firefox">
@@ -591,8 +591,6 @@ loop.webapp = (function($, _, OT, mozL10n) {
                                     currentStatus: mozL10n.get("status_conversation_ended")});
       return (
         <div className="ended-conversation">
-          <sharedViews.FeedbackView
-            onAfterFeedbackReceived={this.props.onAfterFeedbackReceived} />
           <sharedViews.ConversationView
             audio={{enabled: false, visible: false}}
             dispatcher={this.props.dispatcher}
@@ -651,8 +649,8 @@ loop.webapp = (function($, _, OT, mozL10n) {
         React.PropTypes.instanceOf(FxOSConversationModel)
       ]).isRequired,
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
-      notifications: React.PropTypes.instanceOf(sharedModels.NotificationCollection)
-                          .isRequired,
+      isFirefox: React.PropTypes.bool.isRequired,
+      notifications: React.PropTypes.instanceOf(sharedModels.NotificationCollection).isRequired,
       sdk: React.PropTypes.object.isRequired
     },
 
@@ -684,7 +682,6 @@ loop.webapp = (function($, _, OT, mozL10n) {
     },
 
     resetCallStatus: function() {
-      this.props.dispatcher.dispatch(new sharedActions.FeedbackComplete());
       return function() {
         this.setState({callStatus: "start"});
       }.bind(this);
@@ -741,7 +738,7 @@ loop.webapp = (function($, _, OT, mozL10n) {
         }
         case "expired": {
           return (
-            <CallUrlExpiredView />
+            <CallUrlExpiredView isFirefox={this.props.isFirefox}/>
           );
         }
         default: {
@@ -989,6 +986,7 @@ loop.webapp = (function($, _, OT, mozL10n) {
                client={this.props.client}
                conversation={this.props.conversation}
                dispatcher={this.props.dispatcher}
+               isFirefox={this.state.isFirefox}
                notifications={this.props.notifications}
                sdk={this.props.sdk} />
           );
@@ -1023,13 +1021,6 @@ loop.webapp = (function($, _, OT, mozL10n) {
 
     // Older non-flux based items.
     var notifications = new sharedModels.NotificationCollection();
-
-    var feedbackApiClient = new loop.FeedbackAPIClient(
-      loop.config.feedbackApiUrl, {
-        product: loop.config.feedbackProductName,
-        user_agent: navigator.userAgent,
-        url: document.location.origin
-      });
 
     // New flux items.
     var dispatcher = new loop.Dispatcher();
@@ -1067,21 +1058,11 @@ loop.webapp = (function($, _, OT, mozL10n) {
         sdkDriver: sdkDriver
     });
 
-    var feedbackClient = new loop.FeedbackAPIClient(
-      loop.config.feedbackApiUrl, {
-      product: loop.config.feedbackProductName,
-      user_agent: navigator.userAgent,
-      url: document.location.origin
-    });
-
     // Stores
     var standaloneAppStore = new loop.store.StandaloneAppStore({
       conversation: conversation,
       dispatcher: dispatcher,
       sdk: OT
-    });
-    var feedbackStore = new loop.store.FeedbackStore(dispatcher, {
-      feedbackClient: feedbackClient
     });
     var standaloneMetricsStore = new loop.store.StandaloneMetricsStore(dispatcher, {
       activeRoomStore: activeRoomStore
@@ -1092,7 +1073,6 @@ loop.webapp = (function($, _, OT, mozL10n) {
 
     loop.store.StoreMixin.register({
       activeRoomStore: activeRoomStore,
-      feedbackStore: feedbackStore,
       // This isn't used in any views, but is saved here to ensure it
       // is kept alive.
       standaloneMetricsStore: standaloneMetricsStore,

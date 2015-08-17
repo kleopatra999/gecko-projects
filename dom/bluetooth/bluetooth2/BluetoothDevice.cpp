@@ -9,7 +9,7 @@
 #include "BluetoothUtils.h"
 
 #include "mozilla/dom/BluetoothAttributeEvent.h"
-#include "mozilla/dom/BluetoothDevice2Binding.h"
+#include "mozilla/dom/BluetoothDeviceBinding.h"
 #include "mozilla/dom/bluetooth/BluetoothClassOfDevice.h"
 #include "mozilla/dom/bluetooth/BluetoothDevice.h"
 #include "mozilla/dom/bluetooth/BluetoothGatt.h"
@@ -293,13 +293,18 @@ BluetoothDevice::HandlePropertyChanged(const BluetoothValue& aValue)
     }
   }
 
+  if (types.IsEmpty()) {
+    // No device attribute changed
+    return;
+  }
+
   DispatchAttributeEvent(types);
 }
 
 void
 BluetoothDevice::DispatchAttributeEvent(const Sequence<nsString>& aTypes)
 {
-  NS_ENSURE_TRUE_VOID(aTypes.Length());
+  MOZ_ASSERT(!aTypes.IsEmpty());
 
   BluetoothAttributeEventInit init;
   init.mAttrs = aTypes;

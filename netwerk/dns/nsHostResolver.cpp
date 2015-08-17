@@ -347,7 +347,7 @@ nsHostRecord::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const
     n += addr_info ? addr_info->SizeOfIncludingThis(mallocSizeOf) : 0;
     n += mallocSizeOf(addr);
 
-    n += mBlacklistedItems.SizeOfExcludingThis(mallocSizeOf);
+    n += mBlacklistedItems.ShallowSizeOfExcludingThis(mallocSizeOf);
     for (size_t i = 0; i < mBlacklistedItems.Length(); i++) {
         n += mBlacklistedItems[i].SizeOfExcludingThisMustBeUnshared(mallocSizeOf);
     }
@@ -471,15 +471,6 @@ HostDB_ClearEntry(PLDHashTable *table,
         }
     }
 #endif
-
-    {
-        MutexAutoLock lock(he->rec->addr_info_lock);
-        if (he->rec->addr_info) {
-            delete hr->addr_info;
-            he->rec->addr_info = nullptr;
-        }
-    }
-
     NS_RELEASE(he->rec);
 }
 
@@ -862,12 +853,8 @@ nsHostResolver::ResolveHost(const char            *host,
                         LOG(("  Trying AF_UNSPEC entry for host [%s%s%s] af: %s.\n",
                              LOG_HOST(host, netInterface),
                              (af == PR_AF_INET) ? "AF_INET" : "AF_INET6"));
-                        // Ensure existing `addr_info` in `he` is cleared before
-                        // copying from `unSpecHe`.
-                        if (he->rec->addr_info) {
-                            delete he->rec->addr_info;
-                            he->rec->addr_info = nullptr;
-                        }
+
+                        he->rec->addr_info = nullptr;
                         if (unspecHe->rec->negative) {
                             he->rec->negative = unspecHe->rec->negative;
                             he->rec->CopyExpirationTimesAndFlagsFrom(unspecHe->rec);
@@ -1369,22 +1356,18 @@ nsHostResolver::CancelAsyncRequest(const char            *host,
     }
 }
 
-static size_t
-SizeOfHostDBEntExcludingThis(PLDHashEntryHdr* hdr, MallocSizeOf mallocSizeOf,
-                             void*)
-{
-    nsHostDBEnt* ent = static_cast<nsHostDBEnt*>(hdr);
-    return ent->rec->SizeOfIncludingThis(mallocSizeOf);
-}
-
 size_t
 nsHostResolver::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const
 {
     MutexAutoLock lock(mLock);
 
     size_t n = mallocSizeOf(this);
-    n += PL_DHashTableSizeOfExcludingThis(&mDB, SizeOfHostDBEntExcludingThis,
-                                          mallocSizeOf);
+
+    n += mDB.ShallowSizeOfExcludingThis(mallocSizeOf);
+    for (auto iter = mDB.ConstIter(); !iter.Done(); iter.Next()) {
+        auto entry = static_cast<nsHostDBEnt*>(iter.Get());
+        n += entry->rec->SizeOfIncludingThis(mallocSizeOf);
+    }
 
     // The following fields aren't measured.
     // - mHighQ, mMediumQ, mLowQ, mEvictionQ, because they just point to
@@ -1420,19 +1403,14 @@ nsHostResolver::ThreadFunc(void *arg)
         bool getTtl = false;
 #endif
 
-        // We need to remove IPv4 records manually
-        // because PR_GetAddrInfoByName doesn't support PR_AF_INET6.
-        bool disableIPv4 = rec->af == PR_AF_INET6;
-        uint16_t af = disableIPv4 ? PR_AF_UNSPEC : rec->af;
-        nsresult status = GetAddrInfo(rec->host, af, rec->flags, rec->netInterface,
+        nsresult status = GetAddrInfo(rec->host, rec->af, rec->flags, rec->netInterface,
                                       &ai, getTtl);
 #if defined(RES_RETRY_ON_FAILURE)
         if (NS_FAILED(status) && rs.Reset()) {
-            status = GetAddrInfo(rec->host, af, rec->flags, rec->netInterface, &ai,
+            status = GetAddrInfo(rec->host, rec->af, rec->flags, rec->netInterface, &ai,
                                  getTtl);
         }
 #endif
-
         TimeDuration elapsed = TimeStamp::Now() - startTime;
         uint32_t millis = static_cast<uint32_t>(elapsed.ToMilliseconds());
 

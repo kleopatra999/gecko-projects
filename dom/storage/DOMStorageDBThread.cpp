@@ -170,24 +170,13 @@ DOMStorageDBThread::ShouldPreloadScope(const nsACString& aScope)
   return mScopesHavingData.Contains(aScope);
 }
 
-namespace {
-
-PLDHashOperator
-GetScopesHavingDataEnum(nsCStringHashKey* aKey, void* aArg)
-{
-  InfallibleTArray<nsCString>* scopes =
-      static_cast<InfallibleTArray<nsCString>*>(aArg);
-  scopes->AppendElement(aKey->GetKey());
-  return PL_DHASH_NEXT;
-}
-
-} // namespace
-
 void
 DOMStorageDBThread::GetScopesHavingData(InfallibleTArray<nsCString>* aScopes)
 {
   MonitorAutoLock monitor(mThreadObserver->GetMonitor());
-  mScopesHavingData.EnumerateEntries(GetScopesHavingDataEnum, aScopes);
+  for (auto iter = mScopesHavingData.Iter(); !iter.Done(); iter.Next()) {
+    aScopes->AppendElement(iter.Get()->GetKey());
+  }
 }
 
 nsresult
@@ -198,16 +187,16 @@ DOMStorageDBThread::InsertDBOp(DOMStorageDBThread::DBOperation* aOperation)
   // Sentinel to don't forget to delete the operation when we exit early.
   nsAutoPtr<DOMStorageDBThread::DBOperation> opScope(aOperation);
 
-  if (mStopIOThread) {
-    // Thread use after shutdown demanded.
-    MOZ_ASSERT(false);
-    return NS_ERROR_NOT_INITIALIZED;
-  }
-
   if (NS_FAILED(mStatus)) {
     MonitorAutoUnlock unlock(mThreadObserver->GetMonitor());
     aOperation->Finalize(mStatus);
     return mStatus;
+  }
+
+  if (mStopIOThread) {
+    // Thread use after shutdown demanded.
+    MOZ_ASSERT(false);
+    return NS_ERROR_NOT_INITIALIZED;
   }
 
   switch (aOperation->Type()) {
@@ -373,15 +362,13 @@ DOMStorageDBThread::ThreadObserver::OnDispatchedEvent(nsIThreadInternal *thread)
 
 NS_IMETHODIMP
 DOMStorageDBThread::ThreadObserver::OnProcessNextEvent(nsIThreadInternal *thread,
-                                       bool mayWait,
-                                       uint32_t recursionDepth)
+                                       bool mayWait)
 {
   return NS_OK;
 }
 
 NS_IMETHODIMP
 DOMStorageDBThread::ThreadObserver::AfterProcessNextEvent(nsIThreadInternal *thread,
-                                          uint32_t recursionDepth,
                                           bool eventWasProcessed)
 {
   return NS_OK;

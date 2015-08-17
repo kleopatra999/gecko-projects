@@ -181,9 +181,10 @@ class OsiIndex
 //   .. locals ..
 
 // The descriptor is organized into three sections:
-// [ frame size | constructing bit | frame type ]
+// [ frame size | has cached saved frame bit | frame type ]
 // < highest - - - - - - - - - - - - - - lowest >
-static const uintptr_t FRAMESIZE_SHIFT = 4;
+static const uintptr_t FRAMESIZE_SHIFT = 5;
+static const uintptr_t HASCACHEDSAVEDFRAME_BIT = 1 << 4;
 static const uintptr_t FRAMETYPE_BITS = 4;
 
 // Ion frames have a few important numbers associated with them:
@@ -282,7 +283,7 @@ void UpdateJitActivationsForMinorGC(JSRuntime* rt, JSTracer* trc);
 static inline uint32_t
 MakeFrameDescriptor(uint32_t frameSize, FrameType type)
 {
-    return (frameSize << FRAMESIZE_SHIFT) | type;
+    return 0 | (frameSize << FRAMESIZE_SHIFT) | type;
 }
 
 // Returns the JSScript associated with the topmost JIT frame.
@@ -302,7 +303,7 @@ GetTopJitJSScript(JSContext* cx)
     return iter.script();
 }
 
-#ifdef JS_CODEGEN_MIPS
+#ifdef JS_CODEGEN_MIPS32
 uint8_t* alignDoubleSpillWithOffset(uint8_t* pointer, int32_t offset);
 #else
 inline uint8_t*
@@ -343,7 +344,13 @@ class CommonFrameLayout
         return descriptor_ >> FRAMESIZE_SHIFT;
     }
     void setFrameDescriptor(size_t size, FrameType type) {
-        descriptor_ = (size << FRAMESIZE_SHIFT) | type;
+        descriptor_ = 0 | (size << FRAMESIZE_SHIFT) | type;
+    }
+    bool hasCachedSavedFrame() const {
+        return descriptor_ & HASCACHEDSAVEDFRAME_BIT;
+    }
+    void setHasCachedSavedFrame() {
+        descriptor_ |= HASCACHEDSAVEDFRAME_BIT;
     }
     uint8_t* returnAddress() const {
         return returnAddress_;

@@ -660,9 +660,9 @@ class NativeObject : public JSObject
 
   private:
     static Shape* getChildPropertyOnDictionary(ExclusiveContext* cx, HandleNativeObject obj,
-                                               HandleShape parent, StackShape& child);
+                                               HandleShape parent, MutableHandle<StackShape> child);
     static Shape* getChildProperty(ExclusiveContext* cx, HandleNativeObject obj,
-                                   HandleShape parent, StackShape& child);
+                                   HandleShape parent, MutableHandle<StackShape> child);
 
   public:
     /* Add a property whose id is not yet in this scope. */
@@ -1312,7 +1312,7 @@ NativeGetElement(JSContext* cx, HandleNativeObject obj, uint32_t index, MutableH
 
 bool
 SetPropertyByDefining(JSContext* cx, HandleObject obj, HandleId id, HandleValue v,
-                      HandleValue receiver, bool objHasOwn, ObjectOpResult& result);
+                      HandleValue receiver, ObjectOpResult& result);
 
 bool
 SetPropertyOnProto(JSContext* cx, HandleObject obj, HandleId id, HandleValue v,

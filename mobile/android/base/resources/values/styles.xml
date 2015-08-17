@@ -90,10 +90,14 @@
         <item name="android:scaleType">fitCenter</item>
     </style>
 
-    <style name="Widget.MenuItemSecondaryActionBar">
+    <style name="Widget.MenuItemSecondaryActionBarBase">
         <item name="android:padding">8dip</item>
         <item name="android:background">@drawable/action_bar_button</item>
         <item name="android:scaleType">centerInside</item>
+    </style>
+
+    <style name="Widget.MenuItemSecondaryActionBar" parent="Widget.MenuItemSecondaryActionBarBase">
+        <!-- Overridden in large config -->
     </style>
 
     <style name="Widget.MenuItemActionView">
@@ -217,7 +221,7 @@
     </style>
 
     <style name="Widget.HomeListView" parent="Widget.ListView">
-        <item name="android:divider">#E7ECF0</item>
+        <item name="android:divider">@color/divider_light</item>
     </style>
 
     <style name="Widget.TopSitesListView" parent="Widget.BookmarksListView"/>
@@ -474,11 +478,14 @@
     </style>
 
     <!-- URL bar - Image Button -->
-    <style name="UrlBar.ImageButton" parent="UrlBar.Button">
-        <item name="android:layout_width">@dimen/browser_toolbar_height</item>
+    <style name="UrlBar.ImageButtonBase" parent="UrlBar.Button">
         <item name="android:scaleType">center</item>
         <item name="android:layout_gravity">center_vertical</item>
         <item name="android:background">@android:color/transparent</item>
+    </style>
+
+    <style name="UrlBar.ImageButton" parent="UrlBar.ImageButtonBase">
+        <item name="android:layout_width">@dimen/browser_toolbar_height</item>
     </style>
 
     <!-- URL bar - Image Button - Icon -->
@@ -552,7 +559,7 @@
     </style>
 
     <style name="Widget.RemoteTabsListView" parent="Widget.HomeListView">
-        <item name="android:childDivider">#E7ECF0</item>
+        <item name="android:childDivider">@color/divider_light</item>
         <item name="android:drawSelectorOnTop">true</item>
     </style>
 
@@ -757,7 +764,7 @@
     </style>
 
     <style name="TabInput.Tab">
-        <item name="android:background">@drawable/tabs_panel_indicator</item>
+        <item name="android:background">@drawable/tabs_strip_indicator</item>
         <item name="android:gravity">center</item>
         <item name="android:minHeight">@dimen/menu_item_row_height</item>
     </style>

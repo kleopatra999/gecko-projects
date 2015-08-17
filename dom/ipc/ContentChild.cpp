@@ -153,9 +153,9 @@
 #endif
 
 #ifdef MOZ_NUWA_PROCESS
-#include <setjmp.h>
 #include "ipc/Nuwa.h"
 #endif
+#include "NuwaChild.h"
 
 #ifdef MOZ_GAMEPAD
 #include "mozilla/dom/GamepadService.h"
@@ -171,6 +171,8 @@
 #include "mozilla/dom/FileSystemTaskBase.h"
 #include "mozilla/dom/bluetooth/PBluetoothChild.h"
 #include "mozilla/dom/PFMRadioChild.h"
+#include "mozilla/dom/PPresentationChild.h"
+#include "mozilla/dom/PresentationIPCService.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 
 #ifdef MOZ_WEBSPEECH
@@ -192,6 +194,8 @@
 #include "mozilla/widget/PuppetBidiKeyboard.h"
 #include "mozilla/RemoteSpellCheckEngineChild.h"
 #include "GMPServiceChild.h"
+#include "gfxPlatform.h"
+#include "nscore.h" // for NS_FREE_PERMANENT_DATA
 
 using namespace mozilla;
 using namespace mozilla::docshell;
@@ -218,19 +222,6 @@ using namespace mozilla::widget;
 using namespace mozilla::system;
 #endif
 using namespace mozilla::widget;
-
-#ifdef MOZ_NUWA_PROCESS
-static bool sNuwaForking = false;
-
-// The size of the reserved stack (in unsigned ints). It's used to reserve space
-// to push sigsetjmp() in NuwaCheckpointCurrentThread() to higher in the stack
-// so that after it returns and do other work we don't garble the stack we want
-// to preserve in NuwaCheckpointCurrentThread().
-#define RESERVED_INT_STACK 128
-
-// A sentinel value for checking whether RESERVED_INT_STACK is large enough.
-#define STACK_SENTINEL_VALUE 0xdeadbeef
-#endif
 
 namespace mozilla {
 namespace dom {
@@ -538,7 +529,7 @@ ContentChild* ContentChild::sSingleton;
 
 // Performs initialization that is not fork-safe, i.e. that must be done after
 // forking from the Nuwa process.
-static void
+void
 InitOnContentProcessCreated()
 {
 #ifdef MOZ_NUWA_PROCESS
@@ -621,7 +612,6 @@ ContentChild::Init(MessageLoop* aIOLoop,
                    IPC::Channel* aChannel)
 {
 #ifdef MOZ_WIDGET_GTK
-    // sigh
     gtk_init(nullptr, nullptr);
 #endif
 
@@ -772,6 +762,14 @@ ContentChild::AppendProcessId(nsACString& aName)
     }
     unsigned pid = getpid();
     aName.Append(nsPrintfCString("(pid %u)", pid));
+}
+
+void
+ContentChild::InitGraphicsDeviceData()
+{
+    // Initialize the graphics platform. This may contact the parent process
+    // to read device preferences.
+    gfxPlatform::GetPlatform();
 }
 
 void
@@ -1385,6 +1383,37 @@ ContentChild::SendPBlobConstructor(PBlobChild* aActor,
     return PContentChild::SendPBlobConstructor(aActor, aParams);
 }
 
+PPresentationChild*
+ContentChild::AllocPPresentationChild()
+{
+    NS_NOTREACHED("We should never be manually allocating PPresentationChild actors");
+    return nullptr;
+}
+
+bool
+ContentChild::DeallocPPresentationChild(PPresentationChild* aActor)
+{
+    delete aActor;
+    return true;
+}
+
+bool
+ContentChild::RecvNotifyPresentationReceiverLaunched(PBrowserChild* aIframe,
+                                                     const nsString& aSessionId)
+{
+    nsCOMPtr<nsIDocShell> docShell =
+        do_GetInterface(static_cast<TabChild*>(aIframe)->WebNavigation());
+    NS_WARN_IF(!docShell);
+
+    nsCOMPtr<nsIPresentationService> service =
+        do_GetService(PRESENTATION_SERVICE_CONTRACTID);
+    NS_WARN_IF(!service);
+
+    NS_WARN_IF(NS_FAILED(static_cast<PresentationIPCService*>(service.get())->MonitorResponderLoading(aSessionId, docShell)));
+
+    return true;
+}
+
 PCrashReporterChild*
 ContentChild::AllocPCrashReporterChild(const mozilla::dom::NativeThreadId& id,
                                        const uint32_t& processType)
@@ -1838,7 +1867,7 @@ ContentChild::DeallocPWebrtcGlobalChild(PWebrtcGlobalChild *aActor)
 
 bool
 ContentChild::RecvRegisterChrome(InfallibleTArray<ChromePackage>&& packages,
-                                 InfallibleTArray<ResourceMapping>&& resources,
+                                 InfallibleTArray<SubstitutionMapping>&& resources,
                                  InfallibleTArray<OverrideMapping>&& overrides,
                                  const nsCString& locale,
                                  const bool& reset)
@@ -1866,8 +1895,8 @@ ContentChild::RecvRegisterChromeItem(const ChromeRegistryItem& item)
             chromeRegistry->RegisterOverride(item.get_OverrideMapping());
             break;
 
-        case ChromeRegistryItem::TResourceMapping:
-            chromeRegistry->RegisterResource(item.get_ResourceMapping());
+        case ChromeRegistryItem::TSubstitutionMapping:
+            chromeRegistry->RegisterSubstitution(item.get_SubstitutionMapping());
             break;
 
         default:
@@ -1909,7 +1938,7 @@ ContentChild::ActorDestroy(ActorDestroyReason why)
         QuickExit();
     }
 
-#ifndef DEBUG
+#ifndef NS_FREE_PERMANENT_DATA
     // In release builds, there's no point in the content process
     // going through the full XPCOM shutdown path, because it doesn't
     // keep persistent state.
@@ -2205,8 +2234,25 @@ ContentChild::RecvCycleCollect()
 
 #ifdef MOZ_NUWA_PROCESS
 static void
-OnFinishNuwaPreparation ()
+OnFinishNuwaPreparation()
 {
+    // We want to ensure that the PBackground actor gets cloned in the Nuwa
+    // process before we freeze. Also, we have to do this to avoid deadlock.
+    // Protocols that are "opened" (e.g. PBackground, PCompositor) block the
+    // main thread to wait for the IPC thread during the open operation.
+    // NuwaSpawnWait() blocks the IPC thread to wait for the main thread when
+    // the Nuwa process is forked. Unless we ensure that the two cannot happen
+    // at the same time then we risk deadlock. Spinning the event loop here
+    // guarantees the ordering is safe for PBackground.
+    while (!BackgroundChild::GetForCurrentThread()) {
+        if (NS_WARN_IF(!NS_ProcessNextEvent())) {
+            return;
+        }
+    }
+
+    // This will create the actor.
+    unused << mozilla::dom::NuwaChild::GetSingleton();
+
     MakeNuwaProcess();
 }
 #endif
@@ -2492,87 +2538,6 @@ ContentChild::DeallocPOfflineCacheUpdateChild(POfflineCacheUpdateChild* actor)
     return true;
 }
 
-#ifdef MOZ_NUWA_PROCESS
-class CallNuwaSpawn : public nsRunnable
-{
-public:
-    NS_IMETHOD Run()
-    {
-        NuwaSpawn();
-        if (IsNuwaProcess()) {
-            return NS_OK;
-        }
-
-        // In the new process.
-        ContentChild* child = ContentChild::GetSingleton();
-        child->SetProcessName(NS_LITERAL_STRING("(Preallocated app)"), false);
-
-        // Perform other after-fork initializations.
-        InitOnContentProcessCreated();
-
-        return NS_OK;
-    }
-};
-
-static void
-DoNuwaFork()
-{
-    NuwaSpawnPrepare();       // NuwaSpawn will be blocked.
-
-    {
-        nsCOMPtr<nsIRunnable> callSpawn(new CallNuwaSpawn());
-        NS_DispatchToMainThread(callSpawn);
-    }
-
-    // IOThread should be blocked here for waiting NuwaSpawn().
-    NuwaSpawnWait();        // Now! NuwaSpawn can go.
-    // Here, we can make sure the spawning was finished.
-}
-
-/**
- * This function should keep IO thread in a stable state and freeze it
- * until the spawning is finished.
- */
-static void
-RunNuwaFork()
-{
-    if (NuwaCheckpointCurrentThread()) {
-      DoNuwaFork();
-    }
-}
-#endif
-
-bool
-ContentChild::RecvNuwaFork()
-{
-#ifdef MOZ_NUWA_PROCESS
-    if (sNuwaForking) {           // No reentry.
-        return true;
-    }
-    sNuwaForking = true;
-
-    // We want to ensure that the PBackground actor gets cloned in the Nuwa
-    // process before we freeze. Also, we have to do this to avoid deadlock.
-    // Protocols that are "opened" (e.g. PBackground, PCompositor) block the
-    // main thread to wait for the IPC thread during the open operation.
-    // NuwaSpawnWait() blocks the IPC thread to wait for the main thread when
-    // the Nuwa process is forked. Unless we ensure that the two cannot happen
-    // at the same time then we risk deadlock. Spinning the event loop here
-    // guarantees the ordering is safe for PBackground.
-    while (!BackgroundChild::GetForCurrentThread()) {
-        if (NS_WARN_IF(!NS_ProcessNextEvent())) {
-            return false;
-        }
-    }
-
-    MessageLoop* ioloop = XRE_GetIOMessageLoop();
-    ioloop->PostTask(FROM_HERE, NewRunnableFunction(RunNuwaFork));
-    return true;
-#else
-    return false; // Makes the underlying IPC channel abort.
-#endif
-}
-
 bool
 ContentChild::RecvOnAppThemeChanged()
 {
@@ -2609,6 +2574,18 @@ bool
 ContentChild::RecvStopProfiler()
 {
     profiler_stop();
+    return true;
+}
+
+bool
+ContentChild::RecvPauseProfiler(const bool& aPause)
+{
+    if (aPause) {
+        profiler_pause();
+    } else {
+        profiler_resume();
+    }
+
     return true;
 }
 
@@ -2893,112 +2870,15 @@ ContentChild::RecvEndDragSession(const bool& aDoneDrag,
   return true;
 }
 
+bool
+ContentChild::RecvTestGraphicsDeviceReset(const uint32_t& aResetReason)
+{
+#if defined(XP_WIN)
+  gfxPlatform::GetPlatform()->TestDeviceReset(DeviceResetReason(aResetReason));
+#endif
+  return true;
+}
+
 } // namespace dom
 } // namespace mozilla
 
-extern "C" {
-
-#if defined(MOZ_NUWA_PROCESS)
-NS_EXPORT void
-GetProtoFdInfos(NuwaProtoFdInfo* aInfoList,
-                size_t aInfoListSize,
-                size_t* aInfoSize)
-{
-    size_t i = 0;
-
-    mozilla::dom::ContentChild* content =
-        mozilla::dom::ContentChild::GetSingleton();
-    aInfoList[i].protoId = content->GetProtocolId();
-    aInfoList[i].originFd =
-        content->GetTransport()->GetFileDescriptor();
-    i++;
-
-    IToplevelProtocol* actors[NUWA_TOPLEVEL_MAX];
-    size_t count = content->GetOpenedActorsUnsafe(actors, ArrayLength(actors));
-    for (size_t j = 0; j < count; j++) {
-        IToplevelProtocol* actor = actors[j];
-        if (i >= aInfoListSize) {
-            NS_RUNTIMEABORT("Too many top level protocols!");
-        }
-
-        aInfoList[i].protoId = actor->GetProtocolId();
-        aInfoList[i].originFd =
-            actor->GetTransport()->GetFileDescriptor();
-        i++;
-    }
-
-    if (i > NUWA_TOPLEVEL_MAX) {
-        NS_RUNTIMEABORT("Too many top level protocols!");
-    }
-    *aInfoSize = i;
-}
-
-class RunAddNewIPCProcess : public nsRunnable
-{
-public:
-    RunAddNewIPCProcess(pid_t aPid,
-                        nsTArray<mozilla::ipc::ProtocolFdMapping>& aMaps)
-        : mPid(aPid)
-    {
-        mMaps.SwapElements(aMaps);
-    }
-
-    NS_IMETHOD Run()
-    {
-        mozilla::dom::ContentChild::GetSingleton()->
-            SendAddNewProcess(mPid, mMaps);
-
-        MOZ_ASSERT(sNuwaForking);
-        sNuwaForking = false;
-
-        return NS_OK;
-    }
-
-private:
-    pid_t mPid;
-    nsTArray<mozilla::ipc::ProtocolFdMapping> mMaps;
-};
-
-/**
- * AddNewIPCProcess() is called by Nuwa process to tell the parent
- * process that a new process is created.
- *
- * In the newly created process, ResetContentChildTransport() is called to
- * reset fd for the IPC Channel and the session.
- */
-NS_EXPORT void
-AddNewIPCProcess(pid_t aPid, NuwaProtoFdInfo* aInfoList, size_t aInfoListSize)
-{
-    nsTArray<mozilla::ipc::ProtocolFdMapping> maps;
-
-    for (size_t i = 0; i < aInfoListSize; i++) {
-        int _fd = aInfoList[i].newFds[NUWA_NEWFD_PARENT];
-        mozilla::ipc::FileDescriptor fd(_fd);
-        mozilla::ipc::ProtocolFdMapping map(aInfoList[i].protoId, fd);
-        maps.AppendElement(map);
-    }
-
-    nsRefPtr<RunAddNewIPCProcess> runner = new RunAddNewIPCProcess(aPid, maps);
-    NS_DispatchToMainThread(runner);
-}
-
-NS_EXPORT void
-OnNuwaProcessReady()
-{
-    mozilla::dom::ContentChild* content =
-        mozilla::dom::ContentChild::GetSingleton();
-    content->SendNuwaReady();
-}
-
-NS_EXPORT void
-AfterNuwaFork()
-{
-    SetCurrentProcessPrivileges(base::PRIVILEGES_DEFAULT);
-#if defined(XP_LINUX) && defined(MOZ_SANDBOX)
-    mozilla::SandboxEarlyInit(XRE_GetProcessType(), /* isNuwa: */ false);
-#endif
-}
-
-#endif // MOZ_NUWA_PROCESS
-
-}

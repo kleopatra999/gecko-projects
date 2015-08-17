@@ -10,6 +10,7 @@ describe("loop.shared.views.TextChatView", function () {
   var TestUtils = React.addons.TestUtils;
   var CHAT_MESSAGE_TYPES = loop.store.CHAT_MESSAGE_TYPES;
   var CHAT_CONTENT_TYPES = loop.store.CHAT_CONTENT_TYPES;
+  var fixtures = document.querySelector("#fixtures");
 
   var dispatcher, fakeSdkDriver, sandbox, store, fakeClock;
 
@@ -35,6 +36,7 @@ describe("loop.shared.views.TextChatView", function () {
 
   afterEach(function() {
     sandbox.restore();
+    React.unmountComponentAtNode(fixtures);
   });
 
   describe("TextChatEntriesView", function() {
@@ -52,29 +54,20 @@ describe("loop.shared.views.TextChatView", function () {
           _.extend(basicProps, extraProps)));
     }
 
+    function mountAsRealComponent(extraProps, container) {
+      var basicProps = {
+        dispatcher: dispatcher,
+        messageList: [],
+        useDesktopPaths: false
+      };
+
+      return React.render(
+        React.createElement(loop.shared.views.chat.TextChatEntriesView,
+          _.extend(basicProps, extraProps)), container);
+    }
+
     beforeEach(function() {
       store.setStoreState({ textChatEnabled: true });
-    });
-
-    it("should add an empty class when the list is empty", function() {
-      view = mountTestComponent({
-        messageList: []
-      });
-
-      expect(view.getDOMNode().classList.contains("text-chat-entries-empty")).eql(true);
-    });
-
-    it("should not add an empty class when the list is has items", function() {
-      view = mountTestComponent({
-        messageList: [{
-          type: CHAT_MESSAGE_TYPES.RECEIVED,
-          contentType: CHAT_CONTENT_TYPES.TEXT,
-          message: "Hello!",
-          receivedTimestamp: "2015-06-25T17:53:55.357Z"
-        }]
-      });
-
-      expect(view.getDOMNode().classList.contains("text-chat-entries-empty")).eql(false);
     });
 
     it("should render message entries when message were sent/ received", function() {
@@ -229,6 +222,115 @@ describe("loop.shared.views.TextChatView", function () {
       expect(node.querySelectorAll(".text-chat-entry-timestamp").length)
           .to.eql(1);
     });
+
+    describe("Scrolling", function() {
+      beforeEach(function() {
+        sandbox.stub(window, "requestAnimationFrame", function(callback) {
+          callback();
+        });
+
+        // We're using scrolling, so we need to mount as a real one.
+        view = mountAsRealComponent({}, fixtures);
+        sandbox.stub(view, "play");
+
+        // We need some basic styling to ensure scrolling.
+        view.getDOMNode().style.overflow = "scroll";
+        view.getDOMNode().style["max-height"] = "4ch";
+      });
+
+      it("should scroll when a text message is added", function() {
+        var messageList = [{
+          type: CHAT_MESSAGE_TYPES.RECEIVED,
+          contentType: CHAT_CONTENT_TYPES.TEXT,
+          message: "Hello!",
+          receivedTimestamp: "2015-06-25T17:53:55.357Z"
+        }];
+
+        view.setProps({ messageList: messageList });
+
+        node = view.getDOMNode();
+
+        expect(node.scrollTop).eql(node.scrollHeight - node.clientHeight);
+      });
+
+      it("should not scroll when a context tile is added", function() {
+        var messageList = [{
+          type: CHAT_MESSAGE_TYPES.SPECIAL,
+          contentType: CHAT_CONTENT_TYPES.CONTEXT,
+          message: "Awesome!",
+          extraData: {
+            location: "http://invalid.com"
+          }
+        }];
+
+        view.setProps({ messageList: messageList });
+
+        node = view.getDOMNode();
+
+        expect(node.scrollTop).eql(0);
+      });
+
+      it("should scroll when a message is received after a context tile", function() {
+        // The context tile.
+        var messageList = [{
+          type: CHAT_MESSAGE_TYPES.SPECIAL,
+          contentType: CHAT_CONTENT_TYPES.CONTEXT,
+          message: "Awesome!",
+          extraData: {
+            location: "http://invalid.com"
+          }
+        }];
+
+        view.setProps({ messageList: messageList });
+
+        // Now add a message. Don't use the same list as this is a shared object,
+        // that messes with React.
+        var messageList1 = [
+          messageList[0], {
+            type: CHAT_MESSAGE_TYPES.RECEIVED,
+            contentType: CHAT_CONTENT_TYPES.TEXT,
+            message: "Hello!",
+            receivedTimestamp: "2015-06-25T17:53:55.357Z"
+          }
+        ];
+
+        view.setProps({ messageList: messageList1 });
+
+        node = view.getDOMNode();
+
+        expect(node.scrollTop).eql(node.scrollHeight - node.clientHeight);
+
+      });
+
+      it("should not scroll when receiving a message and the scroll is not at the bottom", function() {
+        node = view.getDOMNode();
+
+        var messageList = [{
+          type: CHAT_MESSAGE_TYPES.RECEIVED,
+          contentType: CHAT_CONTENT_TYPES.TEXT,
+          message: "Hello!",
+          receivedTimestamp: "2015-06-25T17:53:55.357Z"
+        }];
+
+        view.setProps({ messageList: messageList });
+
+        node.scrollTop = 0;
+
+        // Don't use the same list as this is a shared object, that messes with React.
+        var messageList1 = [
+          messageList[0], {
+            type: CHAT_MESSAGE_TYPES.RECEIVED,
+            contentType: CHAT_CONTENT_TYPES.TEXT,
+            message: "Hello!",
+            receivedTimestamp: "2015-06-25T17:53:55.357Z"
+          }
+        ];
+
+        view.setProps({ messageList: messageList1 });
+
+        expect(node.scrollTop).eql(0);
+      });
+    });
   });
 
   describe("TextChatEntry", function() {
@@ -271,6 +373,21 @@ describe("loop.shared.views.TextChatView", function () {
 
       expect(node.querySelector(".text-chat-entry-timestamp")).to.not.eql(null);
     });
+
+    // note that this is really an integration test to be sure that we don't
+    // inadvertently regress using LinkifiedTextView.
+    it("should linkify a URL starting with http", function (){
+      view = mountTestComponent({
+        showTimestamp: true,
+        timestamp: "2015-06-23T22:48:39.738Z",
+        type: CHAT_MESSAGE_TYPES.RECEIVED,
+        contentType: CHAT_CONTENT_TYPES.TEXT,
+        message: "Check out http://example.com and see what you think..."
+      });
+      var node = view.getDOMNode();
+
+      expect(node.querySelector("a")).to.not.eql(null);
+    });
   });
 
   describe("TextChatView", function() {
@@ -291,10 +408,49 @@ describe("loop.shared.views.TextChatView", function () {
       // Fake server to catch all XHR requests.
       fakeServer = sinon.fakeServer.create();
       store.setStoreState({ textChatEnabled: true });
+
+      sandbox.stub(navigator.mozL10n, "get", function(string) {
+        return string;
+      });
     });
 
     afterEach(function() {
       fakeServer.restore();
+    });
+
+    it("should add a disabled class when text chat is disabled", function() {
+      view = mountTestComponent();
+
+      store.setStoreState({ textChatEnabled: false });
+
+      expect(view.getDOMNode().classList.contains("text-chat-disabled")).eql(true);
+    });
+
+    it("should not a disabled class when text chat is enabled", function() {
+      view = mountTestComponent();
+
+      store.setStoreState({ textChatEnabled: true });
+
+      expect(view.getDOMNode().classList.contains("text-chat-disabled")).eql(false);
+    });
+
+    it("should add an empty class when the entries list is empty", function() {
+      view = mountTestComponent();
+
+      expect(view.getDOMNode().classList.contains("text-chat-entries-empty")).eql(true);
+    });
+
+    it("should not add an empty class when the entries list is has items", function() {
+      view = mountTestComponent();
+
+      store.sendTextChatMessage({
+        contentType: CHAT_CONTENT_TYPES.TEXT,
+        message: "Hello!",
+        sentTimestamp: "1970-01-01T00:02:00.000Z",
+        receivedTimestamp: "1970-01-01T00:02:00.000Z"
+      });
+
+      expect(view.getDOMNode().classList.contains("text-chat-entries-empty")).eql(false);
     });
 
     it("should show timestamps from msgs sent more than 1 min apart", function() {
@@ -324,12 +480,6 @@ describe("loop.shared.views.TextChatView", function () {
 
       expect(node.querySelectorAll(".text-chat-entry-timestamp").length)
           .to.eql(2);
-    });
-
-    it("should display the view if no messages and text chat is enabled", function() {
-      view = mountTestComponent();
-
-      expect(view.getDOMNode()).not.eql(null);
     });
 
     it("should render message entries when message were sent/ received", function() {
@@ -458,6 +608,35 @@ describe("loop.shared.views.TextChatView", function () {
       });
 
       sinon.assert.notCalled(dispatcher.dispatch);
+    });
+
+    it("should show a placeholder when no messages have been sent", function() {
+      view = mountTestComponent();
+
+      store.receivedTextChatMessage({
+        contentType: CHAT_CONTENT_TYPES.TEXT,
+        message: "Foo",
+        sentTimestamp: "1970-01-01T00:03:00.000Z",
+        receivedTimestamp: "1970-01-01T00:03:00.000Z"
+      });
+
+      var textBox = view.getDOMNode().querySelector(".text-chat-box input");
+
+      expect(textBox.placeholder).contain("placeholder");
+    });
+
+    it("should not show a placeholder when messages have been sent", function() {
+      view = mountTestComponent();
+
+      store.sendTextChatMessage({
+        contentType: CHAT_CONTENT_TYPES.TEXT,
+        message: "Foo",
+        sentTimestamp: "2015-06-25T17:53:55.357Z"
+      });
+
+      var textBox = view.getDOMNode().querySelector(".text-chat-box input");
+
+      expect(textBox.placeholder).not.contain("placeholder");
     });
   });
 });

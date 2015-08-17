@@ -103,6 +103,7 @@ public:
   // Only touched on the worker thread.
   uint32_t mOuterEventStreamId;
   uint32_t mOuterChannelId;
+  uint32_t mOpenCount;
   uint64_t mLastLoaded;
   uint64_t mLastTotal;
   uint64_t mLastUploadLoaded;
@@ -112,7 +113,6 @@ public:
   bool mLastUploadLengthComputable;
   bool mSeenLoadStart;
   bool mSeenUploadLoadStart;
-  bool mOpening;
 
   // Only touched on the main thread.
   bool mUploadEventListenersAttached;
@@ -125,10 +125,10 @@ public:
   : mWorkerPrivate(nullptr), mXMLHttpRequestPrivate(aXHRPrivate),
     mMozAnon(aMozAnon), mMozSystem(aMozSystem),
     mInnerEventStreamId(0), mInnerChannelId(0), mOutstandingSendCount(0),
-    mOuterEventStreamId(0), mOuterChannelId(0), mLastLoaded(0), mLastTotal(0),
-    mLastUploadLoaded(0), mLastUploadTotal(0), mIsSyncXHR(false),
+    mOuterEventStreamId(0), mOuterChannelId(0), mOpenCount(0), mLastLoaded(0),
+    mLastTotal(0), mLastUploadLoaded(0), mLastUploadTotal(0), mIsSyncXHR(false),
     mLastLengthComputable(false), mLastUploadLengthComputable(false),
-    mSeenLoadStart(false), mSeenUploadLoadStart(false), mOpening(false),
+    mSeenLoadStart(false), mSeenUploadLoadStart(false),
     mUploadEventListenersAttached(false), mMainThreadSeenLoadStart(false),
     mInOpen(false), mArrayBufferResponseWasTransferred(false)
   { }
@@ -811,6 +811,7 @@ public:
   , mHasUploadListeners(aHasUploadListeners)
   {
     mClosure.mClonedObjects.SwapElements(aClosure.mClonedObjects);
+    mClosure.mClonedImages.SwapElements(aClosure.mClonedImages);
     MOZ_ASSERT(aClosure.mMessagePorts.IsEmpty());
     MOZ_ASSERT(aClosure.mMessagePortIdentifiers.IsEmpty());
   }
@@ -1228,15 +1229,14 @@ EventRunnable::PreDispatch(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
         if (doClone) {
           // Anything subject to GC must be cloned.
           const JSStructuredCloneCallbacks* callbacks =
-            aWorkerPrivate->IsChromeWorker() ?
-            workers::ChromeWorkerStructuredCloneCallbacks(true) :
-            workers::WorkerStructuredCloneCallbacks(true);
+            workers::WorkerStructuredCloneCallbacks();
 
           WorkerStructuredCloneClosure closure;
 
           if (mResponseBuffer.write(aCx, response, transferable, callbacks,
                                     &closure)) {
             mResponseClosure.mClonedObjects.SwapElements(closure.mClonedObjects);
+            mResponseClosure.mClonedImages.SwapElements(closure.mClonedImages);
             MOZ_ASSERT(mResponseClosure.mMessagePorts.IsEmpty());
             MOZ_ASSERT(mResponseClosure.mMessagePortIdentifiers.IsEmpty());
           } else {
@@ -1342,12 +1342,11 @@ EventRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
         JSAutoStructuredCloneBuffer responseBuffer(Move(mResponseBuffer));
 
         const JSStructuredCloneCallbacks* callbacks =
-          aWorkerPrivate->IsChromeWorker() ?
-          workers::ChromeWorkerStructuredCloneCallbacks(false) :
-          workers::WorkerStructuredCloneCallbacks(false);
+          workers::WorkerStructuredCloneCallbacks();
 
         WorkerStructuredCloneClosure closure;
         closure.mClonedObjects.SwapElements(mResponseClosure.mClonedObjects);
+        closure.mClonedImages.SwapElements(mResponseClosure.mClonedImages);
         MOZ_ASSERT(mResponseClosure.mMessagePorts.IsEmpty());
         MOZ_ASSERT(mResponseClosure.mMessagePortIdentifiers.IsEmpty());
 
@@ -1396,7 +1395,7 @@ EventRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
 
   MOZ_ASSERT(target);
 
-  nsCOMPtr<nsIDOMEvent> event;
+  nsRefPtr<Event> event;
   if (mProgressEvent) {
     ProgressEventInit init;
     init.mBubbles = false;
@@ -1408,7 +1407,7 @@ EventRunnable::WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
     event = ProgressEvent::Constructor(target, mType, init);
   }
   else {
-    NS_NewDOMEvent(getter_AddRefs(event), target, nullptr, nullptr);
+    event = NS_NewDOMEvent(target, nullptr, nullptr);
 
     if (event) {
       event->InitEvent(mType, false, false);
@@ -1528,9 +1527,7 @@ SendRunnable::MainThreadRun()
     nsresult rv = NS_OK;
 
     const JSStructuredCloneCallbacks* callbacks =
-      mWorkerPrivate->IsChromeWorker() ?
-      workers::ChromeWorkerStructuredCloneCallbacks(true) :
-      workers::WorkerStructuredCloneCallbacks(true);
+      workers::WorkerStructuredCloneCallbacks();
 
     JS::Rooted<JS::Value> body(cx);
     if (mBody.read(cx, &body, callbacks, &mClosure)) {
@@ -1799,13 +1796,10 @@ XMLHttpRequest::DispatchPrematureAbortEvent(EventTarget* aTarget,
     return;
   }
 
-  nsCOMPtr<nsIDOMEvent> event;
+  nsRefPtr<Event> event;
   if (aEventType.EqualsLiteral("readystatechange")) {
-    NS_NewDOMEvent(getter_AddRefs(event), aTarget, nullptr, nullptr);
-
-    if (event) {
-      event->InitEvent(aEventType, false, false);
-    }
+    event = NS_NewDOMEvent(aTarget, nullptr, nullptr);
+    event->InitEvent(aEventType, false, false);
   }
   else {
     ProgressEventInit init;
@@ -1859,7 +1853,7 @@ XMLHttpRequest::SendInternal(const nsAString& aStringBody,
   mWorkerPrivate->AssertIsOnWorkerThread();
 
   // No send() calls when open is running.
-  if (mProxy->mOpening) {
+  if (mProxy->mOpenCount) {
     aRv.Throw(NS_ERROR_FAILURE);
     return;
   }
@@ -1954,15 +1948,17 @@ XMLHttpRequest::Open(const nsACString& aMethod, const nsAString& aUrl,
                      mBackgroundRequest, mWithCredentials,
                      mTimeout);
 
-  mProxy->mOpening = true;
+  ++mProxy->mOpenCount;
   if (!runnable->Dispatch(mWorkerPrivate->GetJSContext())) {
-    mProxy->mOpening = false;
-    ReleaseProxy();
+    if (!--mProxy->mOpenCount) {
+      ReleaseProxy();
+    }
+
     aRv.Throw(NS_ERROR_FAILURE);
     return;
   }
 
-  mProxy->mOpening = false;
+  --mProxy->mOpenCount;
   mProxy->mIsSyncXHR = !aAsync;
 }
 
@@ -2170,9 +2166,7 @@ XMLHttpRequest::Send(JS::Handle<JSObject*> aBody, ErrorResult& aRv)
   }
 
   const JSStructuredCloneCallbacks* callbacks =
-    mWorkerPrivate->IsChromeWorker() ?
-    ChromeWorkerStructuredCloneCallbacks(false) :
-    WorkerStructuredCloneCallbacks(false);
+    WorkerStructuredCloneCallbacks();
 
   WorkerStructuredCloneClosure closure;
 
@@ -2216,9 +2210,7 @@ XMLHttpRequest::Send(Blob& aBody, ErrorResult& aRv)
   }
 
   const JSStructuredCloneCallbacks* callbacks =
-    mWorkerPrivate->IsChromeWorker() ?
-    ChromeWorkerStructuredCloneCallbacks(false) :
-    WorkerStructuredCloneCallbacks(false);
+    WorkerStructuredCloneCallbacks();
 
   WorkerStructuredCloneClosure closure;
 
@@ -2254,9 +2246,7 @@ XMLHttpRequest::Send(nsFormData& aBody, ErrorResult& aRv)
   }
 
   const JSStructuredCloneCallbacks* callbacks =
-    mWorkerPrivate->IsChromeWorker() ?
-    ChromeWorkerStructuredCloneCallbacks(false) :
-    WorkerStructuredCloneCallbacks(false);
+    WorkerStructuredCloneCallbacks();
 
   JSAutoStructuredCloneBuffer buffer;
   WorkerStructuredCloneClosure closure;

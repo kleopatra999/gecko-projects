@@ -58,6 +58,10 @@ typedef nsCSSProps::KTableValue KTableValue;
 // pref-backed bool values (hooked up in nsCSSParser::Startup)
 static bool sOpentypeSVGEnabled;
 static bool sUnprefixingServiceEnabled;
+#ifdef NIGHTLY_BUILD
+static bool sUnprefixingServiceGloballyWhitelisted;
+#endif
+static bool sMozGradientsEnabled;
 
 const uint32_t
 nsCSSProps::kParserVariantTable[eCSSProperty_COUNT_no_shorthands] = {
@@ -3736,8 +3740,16 @@ CSSParserImpl::ParseFontDescriptor(nsCSSFontFaceRule* aRule)
     return false;
   }
 
-  if (!ExpectEndProperty())
-    return false;
+  // Expect termination by ;, }, or EOF.
+  if (GetToken(true)) {
+    if (!mToken.IsSymbol(';') &&
+        !mToken.IsSymbol('}')) {
+      UngetToken();
+      REPORT_UNEXPECTED_TOKEN(PEExpectEndValue);
+      return false;
+    }
+    UngetToken();
+  }
 
   aRule->SetDesc(descID, value);
   return true;
@@ -6657,6 +6669,13 @@ CSSParserImpl::ShouldUseUnprefixingService()
     return false;
   }
 
+#ifdef NIGHTLY_BUILD
+  if (sUnprefixingServiceGloballyWhitelisted) {
+    // Unprefixing is globally whitelisted,
+    // so no need to check mSheetPrincipal.
+    return true;
+  }
+#endif
   // Unprefixing enabled; see if our principal is whitelisted for unprefixing.
   return mSheetPrincipal && mSheetPrincipal->IsOnCSSUnprefixingWhitelist();
 }
@@ -7408,7 +7427,8 @@ CSSParserImpl::ParseVariant(nsCSSValue& aValue,
     // a generated gradient
     nsDependentString tmp(tk->mIdent, 0);
     bool isLegacy = false;
-    if (StringBeginsWith(tmp, NS_LITERAL_STRING("-moz-"))) {
+    if (sMozGradientsEnabled &&
+        StringBeginsWith(tmp, NS_LITERAL_STRING("-moz-"))) {
       tmp.Rebind(tmp, 5);
       isLegacy = true;
     }
@@ -15667,6 +15687,12 @@ nsCSSParser::Startup()
                                "gfx.font_rendering.opentype_svg.enabled");
   Preferences::AddBoolVarCache(&sUnprefixingServiceEnabled,
                                "layout.css.unprefixing-service.enabled");
+#ifdef NIGHTLY_BUILD
+  Preferences::AddBoolVarCache(&sUnprefixingServiceGloballyWhitelisted,
+                               "layout.css.unprefixing-service.globally-whitelisted");
+#endif
+  Preferences::AddBoolVarCache(&sMozGradientsEnabled,
+                               "layout.css.prefixes.gradients");
 }
 
 nsCSSParser::nsCSSParser(mozilla::css::Loader* aLoader,

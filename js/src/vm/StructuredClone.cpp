@@ -41,6 +41,7 @@
 
 #include "builtin/MapObject.h"
 #include "js/Date.h"
+#include "js/TraceableHashTable.h"
 #include "vm/SharedArrayObject.h"
 #include "vm/TypedArrayObject.h"
 #include "vm/WrapperObject.h"
@@ -267,8 +268,9 @@ struct JSStructuredCloneWriter {
                                      Value tVal)
         : out(cx), objs(out.context()),
           counts(out.context()), entries(out.context()),
-          memory(out.context()), callbacks(cb), closure(cbClosure),
-          transferable(out.context(), tVal), transferableObjects(out.context()) { }
+          memory(out.context(), CloneMemory(out.context())), callbacks(cb),
+          closure(cbClosure), transferable(out.context(), tVal), transferableObjects(out.context())
+    {}
 
     ~JSStructuredCloneWriter();
 
@@ -283,6 +285,9 @@ struct JSStructuredCloneWriter {
     }
 
   private:
+    JSStructuredCloneWriter() = delete;
+    JSStructuredCloneWriter(const JSStructuredCloneWriter&) = delete;
+
     JSContext* context() { return out.context(); }
 
     bool writeTransferMap();
@@ -299,7 +304,7 @@ struct JSStructuredCloneWriter {
     bool traverseSet(HandleObject obj);
 
     bool parseTransferable();
-    bool reportErrorTransferable();
+    bool reportErrorTransferable(uint32_t errorId);
     bool transferOwnership();
 
     inline void checkStack();
@@ -324,8 +329,8 @@ struct JSStructuredCloneWriter {
     // The "memory" list described in the HTML5 internal structured cloning algorithm.
     // memory is a superset of objs; items are never removed from Memory
     // until a serialization operation is finished
-    typedef AutoObjectUnsigned32HashMap CloneMemory;
-    CloneMemory memory;
+    using CloneMemory = TraceableHashMap<JSObject*, uint32_t>;
+    Rooted<CloneMemory> memory;
 
     // The user defined callbacks that will be used for cloning.
     const JSStructuredCloneCallbacks* callbacks;
@@ -353,10 +358,14 @@ JS_STATIC_ASSERT(JS_SCTAG_USER_MIN <= JS_SCTAG_USER_MAX);
 JS_STATIC_ASSERT(Scalar::Int8 == 0);
 
 static void
-ReportErrorTransferable(JSContext* cx, const JSStructuredCloneCallbacks* callbacks)
+ReportErrorTransferable(JSContext* cx,
+                        const JSStructuredCloneCallbacks* callbacks,
+                        uint32_t errorId)
 {
     if (callbacks && callbacks->reportError)
-        callbacks->reportError(cx, JS_SCERR_TRANSFERABLE);
+        callbacks->reportError(cx, errorId);
+    else if (errorId == JS_SCERR_DUP_TRANSFERABLE)
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_SC_DUP_TRANSFERABLE);
     else
         JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_SC_NOT_TRANSFERABLE);
 }
@@ -736,12 +745,12 @@ JSStructuredCloneWriter::parseTransferable()
         return true;
 
     if (!transferable.isObject())
-        return reportErrorTransferable();
+        return reportErrorTransferable(JS_SCERR_TRANSFERABLE);
 
     JSContext* cx = context();
     RootedObject array(cx, &transferable.toObject());
     if (!JS_IsArrayObject(cx, array))
-        return reportErrorTransferable();
+        return reportErrorTransferable(JS_SCERR_TRANSFERABLE);
 
     uint32_t length;
     if (!JS_GetArrayLength(cx, array, &length)) {
@@ -755,13 +764,12 @@ JSStructuredCloneWriter::parseTransferable()
             return false;
 
         if (!v.isObject())
-            return reportErrorTransferable();
+            return reportErrorTransferable(JS_SCERR_TRANSFERABLE);
         RootedObject tObj(context(), &v.toObject());
 
         // No duplicates allowed
         if (std::find(transferableObjects.begin(), transferableObjects.end(), tObj) != transferableObjects.end()) {
-            JS_ReportErrorNumber(context(), GetErrorMessage, nullptr, JSMSG_SC_DUP_TRANSFERABLE);
-            return false;
+            return reportErrorTransferable(JS_SCERR_DUP_TRANSFERABLE);
         }
 
         if (!transferableObjects.append(tObj))
@@ -772,9 +780,9 @@ JSStructuredCloneWriter::parseTransferable()
 }
 
 bool
-JSStructuredCloneWriter::reportErrorTransferable()
+JSStructuredCloneWriter::reportErrorTransferable(uint32_t errorId)
 {
-    ReportErrorTransferable(context(), callbacks);
+    ReportErrorTransferable(context(), callbacks, errorId);
     return false;
 }
 
@@ -1175,7 +1183,7 @@ JSStructuredCloneWriter::transferOwnership()
             extraData = 0;
         } else {
             if (!callbacks || !callbacks->writeTransfer)
-                return reportErrorTransferable();
+                return reportErrorTransferable(JS_SCERR_TRANSFERABLE);
             if (!callbacks->writeTransfer(context(), obj, closure, &tag, &ownership, &content, &extraData))
                 return false;
             MOZ_ASSERT(tag > SCTAG_TRANSFER_MAP_PENDING_ENTRY);
@@ -1584,7 +1592,7 @@ JSStructuredCloneReader::startRead(MutableHandleValue vp)
         if (!in.readDouble(&d) || !checkDouble(d))
             return false;
         JS::ClippedTime t = JS::TimeClip(d);
-        if (!NumbersAreIdentical(d, t.value())) {
+        if (!NumbersAreIdentical(d, t.toDouble())) {
             JS_ReportErrorNumber(context(), GetErrorMessage, nullptr,
                                  JSMSG_SC_BAD_SERIALIZED_DATA, "date");
             return false;
@@ -1770,7 +1778,7 @@ JSStructuredCloneReader::readTransferMap()
             obj = SharedArrayBufferObject::New(context(), (SharedArrayRawBuffer*)content);
         } else {
             if (!callbacks || !callbacks->readTransfer) {
-                ReportErrorTransferable(cx, callbacks);
+                ReportErrorTransferable(cx, callbacks, JS_SCERR_TRANSFERABLE);
                 return false;
             }
             if (!callbacks->readTransfer(cx, this, tag, content, extraData, closure, &obj))

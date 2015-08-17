@@ -28,7 +28,7 @@
 #include "jsmath.h"
 #include "jsprf.h"
 #include "jsutil.h"
-#include "prmjtime.h"
+
 
 #include "asmjs/AsmJSLink.h"
 #include "asmjs/AsmJSModule.h"
@@ -45,6 +45,7 @@
 #endif
 #include "vm/HelperThreads.h"
 #include "vm/Interpreter.h"
+#include "vm/Time.h"
 
 #include "jsobjinlines.h"
 
@@ -484,7 +485,7 @@ PeekToken(AsmJSParser& parser, TokenKind* tkp)
             return false;
         if (tk != TOK_SEMI)
             break;
-        ts.consumeKnownToken(TOK_SEMI);
+        ts.consumeKnownToken(TOK_SEMI, TokenStream::Operand);
     }
     *tkp = tk;
     return true;
@@ -1604,7 +1605,8 @@ class MOZ_STACK_CLASS ModuleCompiler
         // delayed until the compilation is off the stack and more memory can be freed.
         gc::AutoSuppressGC nogc(cx_);
         TokenPos pos;
-        if (!tokenStream().peekTokenPos(&pos))
+        TokenStream::Modifier modifier = tokenStream().hasLookahead() ? tokenStream().getLookaheadModifier() : TokenStream::None;
+        if (!tokenStream().peekTokenPos(&pos, modifier))
             return false;
         return failOffset(pos.begin, str);
     }
@@ -3224,19 +3226,15 @@ class FunctionCompiler
                labeledContinues_.init();
     }
 
-    ~FunctionCompiler()
+    void checkPostconditions()
     {
-#ifdef DEBUG
-        if (!m().hasError() && cx()->isJSContext() && !cx()->asJSContext()->isExceptionPending()) {
-            MOZ_ASSERT(loopStack_.empty());
-            MOZ_ASSERT(unlabeledBreaks_.empty());
-            MOZ_ASSERT(unlabeledContinues_.empty());
-            MOZ_ASSERT(labeledBreaks_.empty());
-            MOZ_ASSERT(labeledContinues_.empty());
-            MOZ_ASSERT(inDeadCode());
-            MOZ_ASSERT(pc_ == func_.size(), "all bytecode must be consumed");
-        }
-#endif
+        MOZ_ASSERT(loopStack_.empty());
+        MOZ_ASSERT(unlabeledBreaks_.empty());
+        MOZ_ASSERT(unlabeledContinues_.empty());
+        MOZ_ASSERT(labeledBreaks_.empty());
+        MOZ_ASSERT(labeledContinues_.empty());
+        MOZ_ASSERT(inDeadCode());
+        MOZ_ASSERT(pc_ == func_.size(), "all bytecode must be consumed");
     }
 
     /************************* Read-only interface (after local scope setup) */
@@ -4243,11 +4241,17 @@ class FunctionCompiler
 
         // Prepare data structures
         alloc_  = lifo_.new_<TempAllocator>(&lifo_);
+        if (!alloc_)
+            return false;
         jitContext_.emplace(m_.cx(), alloc_);
 
         MOZ_ASSERT(numLocals == argTypes.length() + varInitializers.length());
         graph_  = lifo_.new_<MIRGraph>(alloc_);
+        if (!graph_)
+            return false;
         info_   = lifo_.new_<CompileInfo>(numLocals);
+        if (!info_)
+            return false;
         const OptimizationInfo* optimizationInfo = js_IonOptimizations.get(Optimization_AsmJS);
         const JitCompileOptions options;
         mirGen_ = lifo_.new_<MIRGenerator>(CompileCompartment::get(cx()->compartment()),
@@ -4256,6 +4260,8 @@ class FunctionCompiler
                                            &m().onOutOfBoundsLabel(),
                                            &m().onConversionErrorLabel(),
                                            m().usesSignalHandlersForOOB());
+        if (!mirGen_)
+            return false;
 
         if (!newBlock(/* pred = */ nullptr, 0, &curBlock_))
             return false;
@@ -4906,7 +4912,7 @@ CheckModuleProcessingDirectives(ModuleCompiler& m)
     TokenStream& ts = m.parser().tokenStream;
     while (true) {
         bool matched;
-        if (!ts.matchToken(&matched, TOK_STRING))
+        if (!ts.matchToken(&matched, TOK_STRING, TokenStream::Operand))
             return false;
         if (!matched)
             return true;
@@ -8497,7 +8503,7 @@ CheckComparison(FunctionBuilder& f, ParseNode* comp, Type* type)
     }
 
     I32 stmt;
-    if (lhsType.isSigned()) {
+    if (lhsType.isSigned() && rhsType.isSigned()) {
         switch (comp->getOp()) {
           case JSOP_EQ: stmt = I32::EqI32;  break;
           case JSOP_NE: stmt = I32::NeI32;  break;
@@ -8507,7 +8513,7 @@ CheckComparison(FunctionBuilder& f, ParseNode* comp, Type* type)
           case JSOP_GE: stmt = I32::SGeI32; break;
           default: MOZ_CRASH("unexpected comparison op");
         }
-    } else if (lhsType.isUnsigned()) {
+    } else if (lhsType.isUnsigned() && rhsType.isUnsigned()) {
         switch (comp->getOp()) {
           case JSOP_EQ: stmt = I32::EqI32;  break;
           case JSOP_NE: stmt = I32::NeI32;  break;
@@ -9772,12 +9778,12 @@ ParseFunction(ModuleCompiler& m, ParseNode** fnOut)
 {
     TokenStream& tokenStream = m.tokenStream();
 
-    tokenStream.consumeKnownToken(TOK_FUNCTION);
+    tokenStream.consumeKnownToken(TOK_FUNCTION, TokenStream::Operand);
 
     RootedPropertyName name(m.cx());
 
     TokenKind tk;
-    if (!tokenStream.getToken(&tk))
+    if (!tokenStream.getToken(&tk, TokenStream::Operand))
         return false;
     if (tk == TOK_NAME) {
         name = tokenStream.currentName();
@@ -9810,9 +9816,8 @@ ParseFunction(ModuleCompiler& m, ParseNode** fnOut)
 
     Directives newDirectives = directives;
     AsmJSParseContext funpc(&m.parser(), outerpc, fn, funbox, &newDirectives,
-                            outerpc->staticLevel + 1, outerpc->blockidGen,
                             /* blockScopeDepth = */ 0);
-    if (!funpc.init(tokenStream))
+    if (!funpc.init(m.parser()))
         return false;
 
     if (!m.parser().functionArgsAndBodyGeneric(InAllowed, YieldIsName, fn, fun, Statement)) {
@@ -9825,7 +9830,6 @@ ParseFunction(ModuleCompiler& m, ParseNode** fnOut)
     MOZ_ASSERT(!tokenStream.hadError());
     MOZ_ASSERT(directives == newDirectives);
 
-    outerpc->blockidGen = funpc.blockidGen;
     fn->pn_blockid = outerpc->blockid();
 
     *fnOut = fn;
@@ -10257,6 +10261,7 @@ EmitMIR(ModuleCompiler& m, const AsmFunction& function, LifoAlloc& lifo,
 
     jit::SpewBeginFunction(mir, nullptr);
 
+    f.checkPostconditions();
     return mir;
 }
 
@@ -10890,7 +10895,7 @@ static const LiveRegisterSet NonVolatileRegs =
                     FloatRegisterSet(FloatRegisters::NonVolatileMask));
 #endif
 
-#if defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_MIPS32)
 // Mips is using one more double slot due to stack alignment for double values.
 // Look at MacroAssembler::PushRegsInMask(RegisterSet set)
 static const unsigned FramePushedAfterSave = NonVolatileRegs.gprs().size() * sizeof(intptr_t) +
@@ -10916,7 +10921,7 @@ GenerateEntry(ModuleCompiler& m, unsigned exportIndex)
     // Save the return address if it wasn't already saved by the call insn.
 #if defined(JS_CODEGEN_ARM)
     masm.push(lr);
-#elif defined(JS_CODEGEN_MIPS)
+#elif defined(JS_CODEGEN_MIPS32)
     masm.push(ra);
 #elif defined(JS_CODEGEN_X86)
     static const unsigned EntryFrameSize = sizeof(void*);
@@ -10931,7 +10936,7 @@ GenerateEntry(ModuleCompiler& m, unsigned exportIndex)
     // ARM and MIPS have a globally-pinned GlobalReg (x64 uses RIP-relative
     // addressing, x86 uses immediates in effective addresses). For the
     // AsmJSGlobalRegBias addition, see Assembler-(mips,arm).h.
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     masm.movePtr(IntArgReg1, GlobalReg);
     masm.addPtr(Imm32(AsmJSGlobalRegBias), GlobalReg);
 #endif
@@ -11078,7 +11083,7 @@ GenerateEntry(ModuleCompiler& m, unsigned exportIndex)
     masm.move32(Imm32(true), ReturnReg);
     masm.ret();
 
-    return m.finishGeneratingEntry(exportIndex, &begin) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingEntry(exportIndex, &begin);
 }
 
 static void
@@ -11232,10 +11237,10 @@ GenerateFFIInterpExit(ModuleCompiler& m, const ModuleCompiler::ExitDescriptor& e
 
     Label profilingReturn;
     GenerateAsmJSExitEpilogue(masm, framePushed, AsmJSExit::SlowFFI, &profilingReturn);
-    return m.finishGeneratingInterpExit(exitIndex, &begin, &profilingReturn) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingInterpExit(exitIndex, &begin, &profilingReturn);
 }
 
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
 static const unsigned MaybeSavedGlobalReg = sizeof(void*);
 #else
 static const unsigned MaybeSavedGlobalReg = 0;
@@ -11279,7 +11284,7 @@ GenerateFFIIonExit(ModuleCompiler& m, const ModuleCompiler::ExitDescriptor& exit
     m.masm().append(AsmJSGlobalAccess(masm.leaRipRelative(callee), globalDataOffset));
 #elif defined(JS_CODEGEN_X86)
     m.masm().append(AsmJSGlobalAccess(masm.movlWithPatch(Imm32(0), callee), globalDataOffset));
-#elif defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#elif defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     masm.computeEffectiveAddress(Address(GlobalReg, globalDataOffset - AsmJSGlobalRegBias), callee);
 #endif
 
@@ -11315,7 +11320,7 @@ GenerateFFIIonExit(ModuleCompiler& m, const ModuleCompiler::ExitDescriptor& exit
     //    so they must be explicitly preserved. Only save GlobalReg since
     //    HeapReg must be reloaded (from global data) after the call since the
     //    heap may change during the FFI call.
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     static_assert(MaybeSavedGlobalReg == sizeof(void*), "stack frame accounting");
     masm.storePtr(GlobalReg, Address(masm.getStackPointer(), ionFrameBytes));
 #endif
@@ -11431,7 +11436,7 @@ GenerateFFIIonExit(ModuleCompiler& m, const ModuleCompiler::ExitDescriptor& exit
     }
 
     // Reload the global register since Ion code can clobber any register.
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     static_assert(MaybeSavedGlobalReg == sizeof(void*), "stack frame accounting");
     masm.loadPtr(Address(masm.getStackPointer(), ionFrameBytes), GlobalReg);
 #endif
@@ -11526,7 +11531,7 @@ GenerateFFIIonExit(ModuleCompiler& m, const ModuleCompiler::ExitDescriptor& exit
 
     MOZ_ASSERT(masm.framePushed() == 0);
 
-    return m.finishGeneratingJitExit(exitIndex, &begin, &profilingReturn) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingJitExit(exitIndex, &begin, &profilingReturn);
 }
 
 // See "asm.js FFI calls" comment above.
@@ -11648,7 +11653,7 @@ GenerateBuiltinThunk(ModuleCompiler& m, AsmJSExit::BuiltinKind builtin)
 
     Label profilingReturn;
     GenerateAsmJSExitEpilogue(masm, framePushed, AsmJSExit::Builtin(builtin), &profilingReturn);
-    return m.finishGeneratingBuiltinThunk(builtin, &begin, &profilingReturn) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingBuiltinThunk(builtin, &begin, &profilingReturn);
 }
 
 static bool
@@ -11656,7 +11661,7 @@ GenerateStackOverflowExit(ModuleCompiler& m, Label* throwLabel)
 {
     MacroAssembler& masm = m.masm();
     GenerateAsmJSStackOverflowExit(masm, &m.stackOverflowLabel(), throwLabel);
-    return m.finishGeneratingInlineStub(&m.stackOverflowLabel()) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingInlineStub(&m.stackOverflowLabel());
 }
 
 static bool
@@ -11670,7 +11675,7 @@ GenerateOnDetachedLabelExit(ModuleCompiler& m, Label* throwLabel)
     masm.call(AsmJSImmPtr(AsmJSImm_OnDetached));
     masm.jump(throwLabel);
 
-    return m.finishGeneratingInlineStub(&m.onDetachedLabel()) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingInlineStub(&m.onDetachedLabel());
 }
 
 static bool
@@ -11688,7 +11693,7 @@ GenerateExceptionLabelExit(ModuleCompiler& m, Label* throwLabel, Label* exit, As
     masm.call(AsmJSImmPtr(func));
     masm.jump(throwLabel);
 
-    return m.finishGeneratingInlineStub(exit) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingInlineStub(exit);
 }
 
 static const LiveRegisterSet AllRegsExceptSP(
@@ -11746,7 +11751,7 @@ GenerateAsyncInterruptExit(ModuleCompiler& m, Label* throwLabel)
     masm.PopRegsInMask(AllRegsExceptSP); // restore all GP/FP registers (except SP)
     masm.popFlags();              // after this, nothing that sets conditions
     masm.ret();                   // pop resumePC into PC
-#elif defined(JS_CODEGEN_MIPS)
+#elif defined(JS_CODEGEN_MIPS32)
     // Reserve space to store resumePC.
     masm.subFromStackPtr(Imm32(sizeof(intptr_t)));
     // set to zero so we can use masm.framePushed() below.
@@ -11854,7 +11859,7 @@ GenerateAsyncInterruptExit(ModuleCompiler& m, Label* throwLabel)
 # error "Unknown architecture!"
 #endif
 
-    return m.finishGeneratingInlineStub(&m.asyncInterruptLabel()) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingInlineStub(&m.asyncInterruptLabel());
 }
 
 static bool
@@ -11873,7 +11878,7 @@ GenerateSyncInterruptExit(ModuleCompiler& m, Label* throwLabel)
 
     Label profilingReturn;
     GenerateAsmJSExitEpilogue(masm, framePushed, AsmJSExit::Interrupt, &profilingReturn);
-    return m.finishGeneratingInterrupt(&m.syncInterruptLabel(), &profilingReturn) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingInterrupt(&m.syncInterruptLabel(), &profilingReturn);
 }
 
 // If an exception is thrown, simply pop all frames (since asm.js does not
@@ -11904,7 +11909,7 @@ GenerateThrowStub(ModuleCompiler& m, Label* throwLabel)
     masm.mov(ImmWord(0), ReturnReg);
     masm.ret();
 
-    return m.finishGeneratingInlineStub(throwLabel) && !masm.oom();
+    return !masm.oom() && m.finishGeneratingInlineStub(throwLabel);
 }
 
 static bool

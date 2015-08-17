@@ -110,7 +110,7 @@ EXPORTS += [
     'DOMMediaStream.h',
     'EncodedBufferCache.h',
     'FileBlockCache.h',
-    'GraphDriver.h',
+    'FlushableTaskQueue.h',
     'Intervals.h',
     'Latency.h',
     'MediaCache.h',
@@ -120,6 +120,7 @@ EXPORTS += [
     'MediaDecoderOwner.h',
     'MediaDecoderReader.h',
     'MediaDecoderStateMachine.h',
+    'MediaEventSource.h',
     'MediaFormatReader.h',
     'MediaInfo.h',
     'MediaMetadataManager.h',
@@ -138,7 +139,6 @@ EXPORTS += [
     'RtspMediaResource.h',
     'SelfRef.h',
     'SharedBuffer.h',
-    'SharedThreadPool.h',
     'StreamBuffer.h',
     'ThreadPoolCOMListener.h',
     'TimeUnits.h',
@@ -151,13 +151,10 @@ EXPORTS += [
 ]
 
 EXPORTS.mozilla += [
-    'AbstractThread.h',
     'MediaManager.h',
     'MozPromise.h',
     'StateMirroring.h',
     'StateWatching.h',
-    'TaskDispatcher.h',
-    'TaskQueue.h',
 ]
 
 EXPORTS.mozilla.media.webrtc += [
@@ -195,7 +192,7 @@ EXPORTS.mozilla.dom += [
 ]
 
 UNIFIED_SOURCES += [
-    'AbstractThread.cpp',
+    'AudioCaptureStream.cpp',
     'AudioChannelFormat.cpp',
     'AudioCompactor.cpp',
     'AudioSegment.cpp',
@@ -210,6 +207,7 @@ UNIFIED_SOURCES += [
     'DOMMediaStream.cpp',
     'EncodedBufferCache.cpp',
     'FileBlockCache.cpp',
+    'FlushableTaskQueue.cpp',
     'GetUserMediaRequest.cpp',
     'GraphDriver.cpp',
     'Latency.cpp',
@@ -235,9 +233,7 @@ UNIFIED_SOURCES += [
     'MP3Demuxer.cpp',
     'MP3FrameParser.cpp',
     'RtspMediaResource.cpp',
-    'SharedThreadPool.cpp',
     'StreamBuffer.cpp',
-    'TaskQueue.cpp',
     'TextTrack.cpp',
     'TextTrackCue.cpp',
     'TextTrackCueList.cpp',

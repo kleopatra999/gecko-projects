@@ -8,6 +8,7 @@
 #include "WMFDecoderModule.h"
 #include "WMFVideoMFTManager.h"
 #include "WMFAudioMFTManager.h"
+#include "MFTDecoder.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Services.h"
@@ -23,7 +24,6 @@
 
 namespace mozilla {
 
-static bool sIsWMFEnabled = false;
 static bool sDXVAEnabled = false;
 static int  sNumDecoderThreads = -1;
 static bool sIsIntelDecoderEnabled = false;
@@ -72,7 +72,6 @@ void
 WMFDecoderModule::Init()
 {
   MOZ_ASSERT(NS_IsMainThread(), "Must be on main thread.");
-  sIsWMFEnabled = Preferences::GetBool("media.windows-media-foundation.enabled", false);
   sDXVAEnabled = gfxPlatform::GetPlatform()->CanUseHardwareVideoDecoding();
   sIsIntelDecoderEnabled = Preferences::GetBool("media.webm.intel_decoder.enabled", false);
   SetNumOfDecoderThreads();
@@ -88,9 +87,7 @@ WMFDecoderModule::GetNumDecoderThreads()
 nsresult
 WMFDecoderModule::Startup()
 {
-  if (sIsWMFEnabled) {
-    mWMFInitialized = SUCCEEDED(wmf::MFStartup());
-  }
+  mWMFInitialized = SUCCEEDED(wmf::MFStartup());
   return mWMFInitialized ? NS_OK : NS_ERROR_FAILURE;
 }
 
@@ -101,13 +98,21 @@ WMFDecoderModule::CreateVideoDecoder(const VideoInfo& aConfig,
                                      FlushableTaskQueue* aVideoTaskQueue,
                                      MediaDataDecoderCallback* aCallback)
 {
+  nsAutoPtr<WMFVideoMFTManager> manager(
+    new WMFVideoMFTManager(aConfig,
+                           aLayersBackend,
+                           aImageContainer,
+                           sDXVAEnabled));
+
+  nsRefPtr<MFTDecoder> mft = manager->Init();
+
+  if (!mft) {
+    return nullptr;
+  }
+
   nsRefPtr<MediaDataDecoder> decoder =
-    new WMFMediaDataDecoder(new WMFVideoMFTManager(aConfig,
-                                                   aLayersBackend,
-                                                   aImageContainer,
-                                                   sDXVAEnabled && ShouldUseDXVA(aConfig)),
-                            aVideoTaskQueue,
-                            aCallback);
+    new WMFMediaDataDecoder(manager.forget(), mft, aVideoTaskQueue, aCallback);
+
   return decoder.forget();
 }
 
@@ -116,31 +121,16 @@ WMFDecoderModule::CreateAudioDecoder(const AudioInfo& aConfig,
                                      FlushableTaskQueue* aAudioTaskQueue,
                                      MediaDataDecoderCallback* aCallback)
 {
-  nsRefPtr<MediaDataDecoder> decoder =
-    new WMFMediaDataDecoder(new WMFAudioMFTManager(aConfig),
-                            aAudioTaskQueue,
-                            aCallback);
-  return decoder.forget();
-}
+  nsAutoPtr<WMFAudioMFTManager> manager(new WMFAudioMFTManager(aConfig));
+  nsRefPtr<MFTDecoder> mft = manager->Init();
 
-bool
-WMFDecoderModule::ShouldUseDXVA(const VideoInfo& aConfig) const
-{
-  static bool isAMD = false;
-  static bool initialized = false;
-  if (!initialized) {
-    nsCOMPtr<nsIGfxInfo> gfxInfo = services::GetGfxInfo();
-    nsAutoString vendor;
-    gfxInfo->GetAdapterVendorID(vendor);
-    isAMD = vendor.Equals(widget::GfxDriverInfo::GetDeviceVendor(widget::VendorAMD), nsCaseInsensitiveStringComparator()) ||
-            vendor.Equals(widget::GfxDriverInfo::GetDeviceVendor(widget::VendorATI), nsCaseInsensitiveStringComparator());
-    initialized = true;
+  if (!mft) {
+    return nullptr;
   }
-  if (!isAMD) {
-    return true;
-  }
-  // Don't use DXVA for 4k videos or above, since it seems to perform poorly.
-  return aConfig.mDisplay.width <= 1920 && aConfig.mDisplay.height <= 1200;
+
+  nsRefPtr<MediaDataDecoder> decoder =
+    new WMFMediaDataDecoder(manager.forget(), mft, aAudioTaskQueue, aCallback);
+  return decoder.forget();
 }
 
 bool
@@ -148,8 +138,7 @@ WMFDecoderModule::SupportsSharedDecoders(const VideoInfo& aConfig) const
 {
   // If DXVA is enabled, but we're not going to use it for this specific config, then
   // we can't use the shared decoder.
-  return !AgnosticMimeType(aConfig.mMimeType) &&
-    (!sDXVAEnabled || ShouldUseDXVA(aConfig));
+  return !AgnosticMimeType(aConfig.mMimeType);
 }
 
 bool

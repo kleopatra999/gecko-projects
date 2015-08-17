@@ -65,7 +65,7 @@ static unsigned int kDefaultTimeout = 7000;
 
 //TODO(nils@mozilla.com): This should get replaced with some non-external
 //solution like discussed in bug 860775.
-const std::string kDefaultStunServerAddress((char *)"52.11.16.249");
+const std::string kDefaultStunServerAddress((char *)"52.27.56.60");
 const std::string kDefaultStunServerHostname(
     (char *)"global.stun.twilio.com");
 const std::string kBogusStunServerHostname(
@@ -250,12 +250,14 @@ class SchedulableTrickleCandidate {
 
 class IceTestPeer : public sigslot::has_slots<> {
  public:
-
+  // TODO(ekr@rtfm.com): Convert to flags when NrIceCtx::Create() does.
+  // Bug 1193437.
   IceTestPeer(const std::string& name, bool offerer, bool set_priorities,
-              bool allow_loopback = false, bool enable_tcp = true) :
+              bool allow_loopback = false, bool enable_tcp = true,
+              bool allow_link_local = false, bool hide_non_default = false) :
       name_(name),
       ice_ctx_(NrIceCtx::Create(name, offerer, set_priorities, allow_loopback,
-                                enable_tcp)),
+                                enable_tcp, allow_link_local, hide_non_default)),
       streams_(),
       candidates_(),
       gathering_complete_(false),
@@ -701,7 +703,15 @@ class IceTestPeer : public sigslot::has_slots<> {
           ASSERT_EQ(expected_local_type_, local->type);
           ASSERT_EQ(expected_local_transport_, local->local_addr.transport);
           DumpCandidate("Remote ", *remote);
-          ASSERT_EQ(expected_remote_type_, remote->type);
+          /* Remote ICE TCP active candidates are always trickled with port 9
+             so they will get discovered as peer reflexive locally. */
+          if (expected_local_transport_ == kNrIceTransportTcp &&
+              expected_remote_type_ == NrIceCandidate::ICE_HOST) {
+            ASSERT_NE(NrIceCandidate::ICE_SERVER_REFLEXIVE, remote->type);
+            ASSERT_NE(NrIceCandidate::ICE_RELAYED, remote->type);
+          } else {
+            ASSERT_EQ(expected_remote_type_, remote->type);
+          }
           if (!expected_remote_addr_.empty()) {
             ASSERT_EQ(expected_remote_addr_, remote->cand_addr.host);
           }
@@ -1061,6 +1071,22 @@ class IceTestPeer : public sigslot::has_slots<> {
     SetControlling(NrIceCtx::ICE_CONTROLLED);
   }
 
+  nsresult GetDefaultCandidate(unsigned int stream, NrIceCandidate* cand) {
+    nsresult rv;
+
+    test_utils->sts_target()->Dispatch(
+        WrapRunnableRet(&rv, this,
+                        &IceTestPeer::GetDefaultCandidate_s,
+                        stream, cand),
+        NS_DISPATCH_SYNC);
+
+    return rv;
+  }
+
+  nsresult GetDefaultCandidate_s(unsigned int stream, NrIceCandidate* cand) {
+    return streams_[stream]->GetDefaultCandidate(1, cand);
+  }
+
  private:
   std::string name_;
   nsRefPtr<NrIceCtx> ice_ctx_;
@@ -1245,6 +1271,17 @@ class IceGatherTest : public ::testing::Test {
     return false;
   }
 
+  void DumpCandidates(unsigned int stream) {
+    std::vector<std::string> candidates = peer_->GetCandidates(stream);
+
+    std::cerr << "Candidates for stream " << stream << "->"
+              << candidates.size() << std::endl;
+
+    for (auto c : candidates) {
+      std::cerr << "Candidate: " << c << std::endl;
+    }
+  }
+
  protected:
   mozilla::ScopedDeletePtr<IceTestPeer> peer_;
 };
@@ -1288,24 +1325,28 @@ class IceConnectTest : public ::testing::Test {
     p2_->RemoveStream(index);
   }
 
-  void Init(bool set_priorities, bool allow_loopback, bool enable_tcp) {
+  void Init(bool set_priorities, bool allow_loopback, bool enable_tcp,
+            bool default_only = false) {
     if (!initted_) {
       p1_ = new IceTestPeer("P1", true, set_priorities, allow_loopback,
-                            enable_tcp);
+                            enable_tcp, false, default_only);
       p2_ = new IceTestPeer("P2", false, set_priorities, allow_loopback,
-                            enable_tcp);
+                            enable_tcp, false, default_only);
     }
     initted_ = true;
   }
 
-  bool Gather(unsigned int waitTime = kDefaultTimeout) {
+  bool Gather(unsigned int waitTime = kDefaultTimeout,
+              bool setupStunServers = true) {
     Init(false, false, false);
     if (use_nat_) {
       // If we enable nat simulation, but still use a real STUN server somewhere
       // on the internet, we will see failures if there is a real NAT in
       // addition to our simulated one, particularly if it disallows
       // hairpinning.
-      UseTestStunServer();
+      if (setupStunServers) {
+        UseTestStunServer();
+      }
       p1_->UseNat();
       p2_->UseNat();
       p1_->SetFilteringType(filtering_type_);
@@ -1314,13 +1355,13 @@ class IceConnectTest : public ::testing::Test {
       p2_->SetMappingType(mapping_type_);
       p1_->SetBlockUdp(block_udp_);
       p2_->SetBlockUdp(block_udp_);
-    } else {
+    } else if (setupStunServers) {
       std::vector<NrIceStunServer> stun_servers;
 
       stun_servers.push_back(*NrIceStunServer::Create(g_stun_server_address,
-        kDefaultStunServerPort, kNrIceTransportUdp));
+                                                      kDefaultStunServerPort, kNrIceTransportUdp));
       stun_servers.push_back(*NrIceStunServer::Create(g_stun_server_address,
-        kDefaultStunServerPort, kNrIceTransportTcp));
+                                                      kDefaultStunServerPort, kNrIceTransportTcp));
 
       p1_->SetStunServers(stun_servers);
       p2_->SetStunServers(stun_servers);
@@ -1645,6 +1686,19 @@ TEST_F(IceGatherTest, TestGatherFakeStunServerIpAddress) {
   Gather();
 }
 
+TEST_F(IceGatherTest, TestGatherStunServerIpAddressDefaultRouteOnly) {
+  if (g_stun_server_address.empty()) {
+    return;
+  }
+
+  peer_ = new IceTestPeer("P1", true, false, false, false, false, true);
+  peer_->AddStream(1);
+  peer_->SetStunServer(g_stun_server_address, kDefaultStunServerPort);
+  peer_->SetFakeResolver();
+  Gather();
+  ASSERT_FALSE(StreamHasMatchingCandidate(0, " host "));
+}
+
 TEST_F(IceGatherTest, TestGatherFakeStunServerHostname) {
   if (g_stun_server_hostname.empty()) {
     return;
@@ -1672,7 +1726,8 @@ TEST_F(IceGatherTest, TestGatherDNSStunServerIpAddress) {
   peer_->SetStunServer(g_stun_server_address, kDefaultStunServerPort);
   peer_->SetDNSResolver();
   Gather();
-  // TODO(jib@mozilla.com): ensure we get server reflexive candidates Bug 848094
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, " UDP "));
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "typ srflx raddr"));
 }
 
 TEST_F(IceGatherTest, TestGatherDNSStunServerIpAddressTcp) {
@@ -1685,6 +1740,11 @@ TEST_F(IceGatherTest, TestGatherDNSStunServerIpAddressTcp) {
     kNrIceTransportTcp);
   peer_->SetDNSResolver();
   Gather();
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "tcptype passive"));
+  ASSERT_FALSE(StreamHasMatchingCandidate(0, "tcptype passive", " 9 "));
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "tcptype so"));
+  ASSERT_FALSE(StreamHasMatchingCandidate(0, "tcptype so", " 9 "));
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "tcptype active", " 9 "));
 }
 
 TEST_F(IceGatherTest, TestGatherDNSStunServerHostname) {
@@ -1696,6 +1756,8 @@ TEST_F(IceGatherTest, TestGatherDNSStunServerHostname) {
   peer_->SetStunServer(g_stun_server_hostname, kDefaultStunServerPort);
   peer_->SetDNSResolver();
   Gather();
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, " UDP "));
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "typ srflx raddr"));
 }
 
 TEST_F(IceGatherTest, TestGatherDNSStunServerHostnameTcp) {
@@ -1704,6 +1766,11 @@ TEST_F(IceGatherTest, TestGatherDNSStunServerHostnameTcp) {
     kNrIceTransportTcp);
   peer_->SetDNSResolver();
   Gather();
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "tcptype passive"));
+  ASSERT_FALSE(StreamHasMatchingCandidate(0, "tcptype passive", " 9 "));
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "tcptype so"));
+  ASSERT_FALSE(StreamHasMatchingCandidate(0, "tcptype so", " 9 "));
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "tcptype active", " 9 "));
 }
 
 TEST_F(IceGatherTest, TestGatherDNSStunServerHostnameBothUdpTcp) {
@@ -1753,6 +1820,14 @@ TEST_F(IceGatherTest, TestGatherDNSStunBogusHostnameTcp) {
     kNrIceTransportTcp);
   peer_->SetDNSResolver();
   Gather();
+}
+
+TEST_F(IceGatherTest, TestDefaultCandidate) {
+  EnsurePeer();
+  peer_->SetStunServer(g_stun_server_hostname, kDefaultStunServerPort);
+  Gather();
+  NrIceCandidate default_candidate;
+  ASSERT_TRUE(NS_SUCCEEDED(peer_->GetDefaultCandidate(0, &default_candidate)));
 }
 
 TEST_F(IceGatherTest, TestGatherTurn) {
@@ -1908,6 +1983,37 @@ TEST_F(IceGatherTest, TestStunServerTrickle) {
   ASSERT_TRUE(StreamHasMatchingCandidate(0, "192.0.2.1"));
 }
 
+// Test default route only with our fake STUN server and
+// apparently NATted.
+TEST_F(IceGatherTest, TestFakeStunServerNatedDefaultRouteOnly) {
+  peer_ = new IceTestPeer("P1", true, false, false, false, false, true);
+  peer_->AddStream(1);
+  UseFakeStunUdpServerWithResponse("192.0.2.1", 3333);
+  Gather(0);
+  WaitForGather();
+  DumpCandidates(0);
+  ASSERT_FALSE(StreamHasMatchingCandidate(0, "host"));
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "srflx"));
+  NrIceCandidate default_candidate;
+  nsresult rv = peer_->GetDefaultCandidate(0, &default_candidate);
+  if (NS_SUCCEEDED(rv)) {
+    ASSERT_NE(NrIceCandidate::ICE_HOST, default_candidate.type);
+  }
+}
+
+// Test default route only with our fake STUN server and
+// apparently non-NATted.
+TEST_F(IceGatherTest, TestFakeStunServerNoNatDefaultRouteOnly) {
+  peer_ = new IceTestPeer("P1", true, false, false, false, false, true);
+  peer_->AddStream(1);
+  UseTestStunServer();
+  Gather(0);
+  WaitForGather();
+  DumpCandidates(0);
+  ASSERT_FALSE(StreamHasMatchingCandidate(0, "host"));
+  ASSERT_TRUE(StreamHasMatchingCandidate(0, "srflx"));
+}
+
 TEST_F(IceGatherTest, TestStunTcpServerTrickle) {
   UseFakeStunTcpServerWithResponse("192.0.3.1", 3333);
   TestStunTcpServer::GetInstance(AF_INET)->SetActive(false);
@@ -1978,6 +2084,16 @@ TEST_F(IceConnectTest, DISABLED_TestConnectTcpSo) {
   Connect();
 }
 
+// Disabled because this breaks with hairpinning.
+TEST_F(IceConnectTest, DISABLED_TestConnectDefaultRouteOnly) {
+  Init(false, false, false, true);
+  AddStream("first", 1);
+  ASSERT_TRUE(Gather());
+  SetExpectedTypes(NrIceCandidate::Type::ICE_SERVER_REFLEXIVE,
+    NrIceCandidate::Type::ICE_SERVER_REFLEXIVE, kNrIceTransportTcp);
+  Connect();
+}
+
 TEST_F(IceConnectTest, TestLoopbackOnlySortOf) {
   Init(false, true, false);
   AddStream("first", 1);
@@ -1986,7 +2102,6 @@ TEST_F(IceConnectTest, TestLoopbackOnlySortOf) {
   SetExpectedRemoteCandidateAddr("127.0.0.1");
   Connect();
 }
-
 
 TEST_F(IceConnectTest, TestConnectBothControllingP1Wins) {
   AddStream("first", 1);
@@ -2073,6 +2188,31 @@ TEST_F(IceConnectTest, TestGatherFullConeAutoPrioritize) {
 
 
 TEST_F(IceConnectTest, TestConnectFullCone) {
+  AddStream("first", 1);
+  UseNat();
+  SetFilteringType(TestNat::ENDPOINT_INDEPENDENT);
+  SetMappingType(TestNat::ENDPOINT_INDEPENDENT);
+  SetExpectedTypes(NrIceCandidate::Type::ICE_SERVER_REFLEXIVE,
+                   NrIceCandidate::Type::ICE_SERVER_REFLEXIVE);
+  ASSERT_TRUE(Gather());
+  Connect();
+}
+
+TEST_F(IceConnectTest, TestConnectNoNatRouteOnly) {
+  Init(false, false, false, true);
+  AddStream("first", 1);
+  UseTestStunServer();
+  // Because we are connecting from our host candidate to the
+  // other side's apparent srflx (which is also their host)
+  // we see a host/srflx pair.
+  SetExpectedTypes(NrIceCandidate::Type::ICE_HOST,
+                   NrIceCandidate::Type::ICE_SERVER_REFLEXIVE);
+  ASSERT_TRUE(Gather(kDefaultTimeout, false));
+  Connect();
+}
+
+TEST_F(IceConnectTest, TestConnectFullConeDefaultRouteOnly) {
+  Init(false, false, false, true);
   AddStream("first", 1);
   UseNat();
   SetFilteringType(TestNat::ENDPOINT_INDEPENDENT);
@@ -2901,7 +3041,7 @@ static std::string get_environment(const char *name) {
 
 int main(int argc, char **argv)
 {
-#ifdef LINUX
+#ifdef ANDROID
   // This test can cause intermittent oranges on the builders on Linux
   CHECK_ENVIRONMENT_FLAG("MOZ_WEBRTC_TESTS")
 #endif

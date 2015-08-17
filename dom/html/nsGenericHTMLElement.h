@@ -215,6 +215,13 @@ public:
     }
     return false;
   }
+
+  /**
+   * Returns the count of descendants (inclusive of this node) in
+   * the uncomposed document that are explicitly set as editable.
+   */
+  uint32_t EditableInclusiveDescendantCount();
+
   mozilla::dom::HTMLMenuElement* GetContextMenu() const;
   bool Spellcheck();
   void SetSpellcheck(bool aSpellcheck, mozilla::ErrorResult& aError)
@@ -231,17 +238,6 @@ public:
   void SetScrollgrab(bool aValue)
   {
     mScrollgrab = aValue;
-  }
-
-  mozilla::net::ReferrerPolicy
-  GetReferrerPolicy()
-  {
-    nsAutoString aPolicyString;
-    GetEnumAttr(nsGkAtoms::referrer, nullptr, aPolicyString);
-    if (aPolicyString.IsEmpty()) {
-      return mozilla::net::RP_Unset;
-    }
-    return mozilla::net::ReferrerPolicyFromString(aPolicyString);
   }
 
   /**
@@ -1366,7 +1362,7 @@ protected:
   virtual ~nsGenericHTMLFormElement();
 
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
+                                 nsAttrValueOrString* aValue,
                                  bool aNotify) override;
 
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,

@@ -8,15 +8,17 @@ const Cu = Components.utils;
 const Cr = Components.results;
 const CC = Components.Constructor;
 
-const { devtools } =
+const { require } =
   Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 const { Promise: promise } =
   Cu.import("resource://gre/modules/Promise.jsm", {});
 const { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
 
-const Services = devtools.require("Services");
-const DevToolsUtils = devtools.require("devtools/toolkit/DevToolsUtils.js");
-const xpcInspector = devtools.require("xpcInspector");
+const Services = require("Services");
+const DevToolsUtils = require("devtools/toolkit/DevToolsUtils.js");
+const xpcInspector = require("xpcInspector");
+const { DebuggerServer } = require("devtools/server/main");
+const { DebuggerClient } = require("devtools/toolkit/client/main");
 
 // We do not want to log packets by default, because in some tests,
 // we can be sending large amounts of data. The test harness has
@@ -28,19 +30,6 @@ const xpcInspector = devtools.require("xpcInspector");
 Services.prefs.setBoolPref("devtools.debugger.remote-enabled", true);
 // Fast timeout for TLS tests
 Services.prefs.setIntPref("devtools.remote.tls-handshake-timeout", 1000);
-
-function tryImport(url) {
-  try {
-    Cu.import(url);
-  } catch (e) {
-    dump("Error importing " + url + "\n");
-    dump(DevToolsUtils.safeErrorString(e) + "\n");
-    throw e;
-  }
-}
-
-tryImport("resource://gre/modules/devtools/dbg-server.jsm");
-tryImport("resource://gre/modules/devtools/dbg-client.jsm");
 
 // Convert an nsIScriptError 'aFlags' value into an appropriate string.
 function scriptErrorFlagsToKind(aFlags) {

@@ -108,7 +108,8 @@ public:
     GLLibraryEGL()
         : mInitialized(false),
           mEGLLibrary(nullptr),
-          mIsANGLE(false)
+          mIsANGLE(false),
+          mIsWARP(false)
     {
     }
 
@@ -412,14 +413,6 @@ public:
         return b;
     }
 
-    EGLBoolean fSurfaceReleaseSyncANGLE(EGLDisplay dpy, EGLSurface surface)
-    {
-        BEFORE_GL_CALL;
-        EGLBoolean b = mSymbols.fSurfaceReleaseSyncANGLE(dpy, surface);
-        AFTER_GL_CALL;
-        return b;
-    }
-
     EGLSync fCreateSync(EGLDisplay dpy, EGLenum type, const EGLint *attrib_list)
     {
         BEFORE_GL_CALL;
@@ -469,6 +462,10 @@ public:
         return mIsANGLE;
     }
 
+    bool IsWARP() const {
+        return mIsWARP;
+    }
+
     bool HasKHRImageBase() {
         return IsExtensionSupported(KHR_image) || IsExtensionSupported(KHR_image_base);
     }
@@ -489,7 +486,7 @@ public:
         return IsExtensionSupported(EXT_create_context_robustness);
     }
 
-    bool EnsureInitialized();
+    bool EnsureInitialized(bool forceAccel = false);
 
     void DumpEGLConfig(EGLConfig cfg);
     void DumpEGLConfigs();
@@ -566,9 +563,6 @@ public:
         typedef EGLBoolean (GLAPIENTRY * pfnQuerySurfacePointerANGLE)(EGLDisplay dpy, EGLSurface surface, EGLint attribute, void **value);
         pfnQuerySurfacePointerANGLE fQuerySurfacePointerANGLE;
 
-        typedef EGLBoolean (GLAPIENTRY * pfnSurfaceReleaseSyncANGLE)(EGLDisplay dpy, EGLSurface surface);
-        pfnSurfaceReleaseSyncANGLE fSurfaceReleaseSyncANGLE;
-
         typedef EGLSync (GLAPIENTRY * pfnCreateSync)(EGLDisplay dpy, EGLenum type, const EGLint *attrib_list);
         pfnCreateSync fCreateSync;
         typedef EGLBoolean (GLAPIENTRY * pfnDestroySync)(EGLDisplay dpy, EGLSync sync);
@@ -619,6 +613,7 @@ private:
     EGLDisplay mEGLDisplay;
 
     bool mIsANGLE;
+    bool mIsWARP;
 };
 
 extern GLLibraryEGL sEGLLibrary;

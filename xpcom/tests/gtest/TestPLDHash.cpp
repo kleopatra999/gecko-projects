@@ -78,7 +78,7 @@ void
 InitCapacityOk_InitialLengthTooBig()
 {
   PLDHashTable t(PL_DHashGetStubOps(), sizeof(PLDHashEntryStub),
-                 PL_DHASH_MAX_INITIAL_LENGTH + 1);
+                 PLDHashTable::kMaxInitialLength + 1);
 }
 
 void
@@ -92,11 +92,11 @@ InitCapacityOk_InitialEntryStoreTooBig()
 
 TEST(PLDHashTableTest, InitCapacityOk)
 {
-  // Try the largest allowed capacity.  With PL_DHASH_MAX_CAPACITY==1<<26, this
+  // Try the largest allowed capacity.  With kMaxCapacity==1<<26, this
   // would allocate (if we added an element) 0.5GB of entry store on 32-bit
   // platforms and 1GB on 64-bit platforms.
   PLDHashTable t1(PL_DHashGetStubOps(), sizeof(PLDHashEntryStub),
-                 PL_DHASH_MAX_INITIAL_LENGTH);
+                  PLDHashTable::kMaxInitialLength);
 
   // Try the largest allowed power-of-two entry store size, which is 2^31 bytes
   // (Note that the 2^23 *length* gets converted to a 2^24 *capacity*.)
@@ -137,10 +137,7 @@ TEST(PLDHashTableTest, LazyStorage)
     ASSERT_TRUE(false); // shouldn't hit this on an empty table
   }
 
-  // Using a null |mallocSizeOf| should be fine because it shouldn't be called
-  // for an empty table.
-  mozilla::MallocSizeOf mallocSizeOf = nullptr;
-  ASSERT_EQ(PL_DHashTableSizeOfExcludingThis(&t, nullptr, mallocSizeOf), 0u);
+  ASSERT_EQ(t.ShallowSizeOfExcludingThis(moz_malloc_size_of), 0u);
 }
 
 // A trivial hash function is good enough here. It's also super-fast for
@@ -314,7 +311,7 @@ TEST(PLDHashTableTest, Iterator)
     iter.Remove();
   }
   ASSERT_EQ(t.EntryCount(), 0u);
-  ASSERT_EQ(t.Capacity(), unsigned(PL_DHASH_MIN_CAPACITY));
+  ASSERT_EQ(t.Capacity(), unsigned(PLDHashTable::kMinCapacity));
 }
 
 // See bug 931062, we skip this test on Android due to OOM. Also, it's slow,
@@ -337,7 +334,8 @@ TEST(PLDHashTableTest, GrowToMaxCapacity)
 
   // We stop when the element count is 96.875% of PL_DHASH_MAX_SIZE (see
   // MaxLoadOnGrowthFailure()).
-  if (numInserted != PL_DHASH_MAX_CAPACITY - (PL_DHASH_MAX_CAPACITY >> 5)) {
+  if (numInserted !=
+      PLDHashTable::kMaxCapacity - (PLDHashTable::kMaxCapacity >> 5)) {
     delete t;
     ASSERT_TRUE(false);
   }

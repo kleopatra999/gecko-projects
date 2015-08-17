@@ -140,6 +140,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "AnimationEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "AnimationPlaybackEvent",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "AnimationTimeline", release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Attr",
@@ -207,6 +209,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "BluetoothGattDescriptor", b2g: true, permission: ["bluetooth"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "BluetoothGattServer", b2g: true, permission: ["bluetooth"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "BluetoothGattService", b2g: true, permission: ["bluetooth"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "BluetoothLeDeviceEvent", b2g: true, permission: ["bluetooth"]},
@@ -226,9 +230,9 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "BroadcastChannel",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "Cache", release: false},
+    "Cache",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "CacheStorage", release: false},
+    "CacheStorage",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "CallEvent", b2g: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -307,8 +311,6 @@ var interfaceNamesInGlobalScope =
     "CSSConditionRule",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CSSCounterStyleRule",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "CSSFontFaceLoadEvent", release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CSSFontFaceRule",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -464,9 +466,11 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "FormData",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "FontFace", release: false},
+    "FontFace",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "FontFaceSet", release: false},
+    "FontFaceSet",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "FontFaceSetLoadEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "GainNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -675,6 +679,8 @@ var interfaceNamesInGlobalScope =
     "IDBVersionChangeEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Image",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "ImageBitmap",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "ImageCapture", disabled: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -892,7 +898,11 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PeriodicWave",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "Permissions", nightly: true},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "PermissionSettings", b2g: true, permission: ["permissions"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "PermissionStatus", nightly: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "PhoneNumberService", permission: ["phonenumberservice"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -922,7 +932,9 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "PropertyNodeList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PushManager", b2g: false, android: false, release: false},
+    {name: "PushManager", b2g: false, android: false},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "PushSubscription", b2g: false, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "RadioNodeList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -958,11 +970,11 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Selection",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "ServiceWorker", release: false, b2g: false},
+    {name: "ServiceWorker", b2g: false, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "ServiceWorkerContainer", release: false, b2g: false},
+    {name: "ServiceWorkerContainer", b2g: false, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "ServiceWorkerRegistration", release: false, b2g: false},
+    {name: "ServiceWorkerRegistration", b2g: false, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "SettingsLock",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1269,6 +1281,8 @@ var interfaceNamesInGlobalScope =
     "TextMetrics",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "TextTrack",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "TextTrackCue",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "TextTrackCueList",
 // IMPORTANT: Do not change this list without review from a DOM peer!

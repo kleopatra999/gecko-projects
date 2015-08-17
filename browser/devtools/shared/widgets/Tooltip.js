@@ -19,9 +19,8 @@ const {colorUtils} = require("devtools/css-color");
 const Heritage = require("sdk/core/heritage");
 const {Eyedropper} = require("devtools/eyedropper/eyedropper");
 const Editor = require("devtools/sourceeditor/editor");
-const {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 
-devtools.lazyRequireGetter(this, "beautify", "devtools/jsbeautify");
+loader.lazyRequireGetter(this, "beautify", "devtools/jsbeautify");
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -1025,6 +1024,7 @@ SwatchBasedEditorTooltip.prototype = {
    * @param {object} callbacks
    *        Callbacks that will be executed when the editor wants to preview a
    *        value change, or revert a change, or commit a change.
+   *        - onShow: will be called when one of the swatch tooltip is shown
    *        - onPreview: will be called when one of the sub-classes calls
    *        preview
    *        - onRevert: will be called when the user ESCapes out of the tooltip
@@ -1032,6 +1032,9 @@ SwatchBasedEditorTooltip.prototype = {
    *        outside the tooltip.
    */
   addSwatch: function(swatchEl, callbacks={}) {
+    if (!callbacks.onShow) {
+      callbacks.onShow = function() {};
+    }
     if (!callbacks.onPreview) {
       callbacks.onPreview = function() {};
     }
@@ -1069,6 +1072,7 @@ SwatchBasedEditorTooltip.prototype = {
     if (swatch) {
       this.activeSwatch = event.target;
       this.show();
+      swatch.callbacks.onShow();
       event.stopPropagation();
     }
   },

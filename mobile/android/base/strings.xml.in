@@ -43,6 +43,7 @@
   <string name="firstrun_welcome_button_account">&onboard_start_button_account;</string>
   <string name="firstrun_welcome_button_browser">&onboard_start_button_browser;</string>
   <string name="firstrun_empty_contentDescription"></string>
+  <string name="firstrun_welcome_restricted">&onboard_start_restricted1;</string>
 
   <string name="bookmarks_title">&bookmarks_title;</string>
   <string name="history_title">&history_title;</string>
@@ -193,7 +194,7 @@
   <string name="pref_cookies_disabled">&pref_cookies_disabled;</string>
 
   <string name="pref_tracking_protection_title">&pref_tracking_protection_title;</string>
-  <string name="pref_tracking_protection_summary">&pref_tracking_protection_summary2;</string>
+  <string name="pref_tracking_protection_summary">&pref_tracking_protection_summary3;</string>
   <string name="pref_donottrack_title">&pref_donottrack_title;</string>
   <string name="pref_donottrack_summary">&pref_donottrack_summary;</string>
 
@@ -310,6 +311,8 @@
   <string name="stop">&stop;</string>
   <string name="site_security">&site_security;</string>
   <string name="close_tab">&close_tab;</string>
+  <string name="tab_audio_playing">&tab_audio_playing;</string>
+  <string name="tab_audio_muted">&tab_audio_muted;</string>
   <string name="new_tab_opened">&new_tab_opened;</string>
   <string name="new_private_tab_opened">&new_private_tab_opened;</string>
   <string name="switch_button_message">&switch_button_message;</string>
@@ -373,6 +376,9 @@
   <string name="pref_titlebar_mode">&pref_titlebar_mode;</string>
   <string name="pref_titlebar_mode_title">&pref_titlebar_mode_title;</string>
   <string name="pref_titlebar_mode_url">&pref_titlebar_mode_url;</string>
+
+  <string name="pref_prevent_magnifying_glass">&pref_prevent_magnifying_glass;</string>
+  <string name="pref_prevent_magnifying_glass_summary">&pref_prevent_magnifying_glass_summary;</string>
 
   <string name="pref_scroll_title_bar2">&pref_scroll_title_bar2;</string>
   <string name="pref_scroll_title_bar_summary">&pref_scroll_title_bar_summary;</string>
@@ -459,21 +465,26 @@
   <string name="bookmarkdefaults_title_marketplace">@bookmarks_marketplace@</string>
   <string name="bookmarkdefaults_url_marketplace">https://marketplace.firefox.com/</string>
 
+  <string name="bookmarkdefaults_title_restricted_webmaker">@bookmarks_restricted_webmaker@</string>
+  <string name="bookmarkdefaults_url_restricted_webmaker">https://webmaker.org/</string>
+
+  <string name="bookmarkdefaults_title_restricted_support">@bookmarks_restricted_support@</string>
+  <string name="bookmarkdefaults_url_restricted_support">https://support.mozilla.org/kb/kids</string>
+
   <!-- Site identity popup -->
-  <string name="identity_connected_to">&identity_connected_to;</string>
-  <string name="identity_run_by">&identity_run_by;</string>
-  <string name="identity_no_info">&identity_no_info;</string>
-  <string name="identity_not_encrypted">&identity_not_encrypted;</string>
-  <string name="identity_encrypted">&identity_encrypted;</string>
-  <string name="loaded_mixed_content_message">&loaded_mixed_content_message;</string>
-  <string name="blocked_mixed_content_message_top">&blocked_mixed_content_message_top;</string>
-  <string name="blocked_mixed_content_message_bottom">&blocked_mixed_content_message_bottom;</string>
+  <string name="identity_connection_secure">&identity_connection_secure;</string>
+  <string name="identity_connection_insecure">&identity_connection_insecure;</string>
+
+  <string name="mixed_content_blocked_all">&mixed_content_blocked_all1;</string>
+  <string name="mixed_content_blocked_some">&mixed_content_blocked_some1;</string>
+  <string name="mixed_content_display_loaded">&mixed_content_display_loaded1;</string>
+  <string name="mixed_content_protection_disabled">&mixed_content_protection_disabled1;</string>
 
   <string name="doorhanger_tracking_title">&doorhanger_tracking_title;</string>
   <string name="doorhanger_tracking_state_enabled">&doorhanger_tracking_state_enabled;</string>
   <string name="doorhanger_tracking_state_disabled">&doorhanger_tracking_state_disabled;</string>
-  <string name="doorhanger_tracking_message_enabled">&doorhanger_tracking_message_enabled;</string>
-  <string name="doorhanger_tracking_message_disabled">&doorhanger_tracking_message_disabled;</string>
+  <string name="doorhanger_tracking_message_enabled">&doorhanger_tracking_message_enabled1;</string>
+  <string name="doorhanger_tracking_message_disabled">&doorhanger_tracking_message_disabled2;</string>
 
   <string name="learn_more">&learn_more;</string>
   <string name="enable_protection">&enable_protection;</string>
@@ -540,10 +551,18 @@
 
   <!-- Voice search from the Awesome Bar -->
   <string name="voicesearch_prompt">&voicesearch_prompt;</string>
-  <string name="voicesearch_failed_title">&voicesearch_failed_title;</string>
-  <string name="voicesearch_failed_message">&voicesearch_failed_message;</string>
-  <string name="voicesearch_failed_message_recoverable">&voicesearch_failed_message_recoverable;</string>
-  <string name="voicesearch_failed_retry">&voicesearch_failed_retry;</string>
+
+  <!-- Restrictions -->
+  <string name="restriction_disallow_import_settings_title">&restriction_disallow_import_settings_title2;</string>
+  <string name="restriction_disallow_addons_title">&restriction_disallow_addons_title2;</string>
+  <string name="restriction_disallow_devtools_title">&restriction_disallow_devtools_title2;</string>
+  <string name="restriction_disallow_customize_home_title">&restriction_disallow_customize_home_title2;</string>
+  <string name="restriction_disallow_private_browsing_title">&restriction_disallow_private_browsing_title2;</string>
+  <string name="restriction_disallow_location_services_title">&restriction_disallow_location_services_title2;</string>
+  <string name="restriction_disallow_display_settings_title">&restriction_disallow_display_settings_title2;</string>
+  <string name="restriction_disallow_clear_history_title">&restriction_disallow_clear_history_title2;</string>
+  <string name="restriction_disallow_master_password_title">&restriction_disallow_master_password_title2;</string>
+  <string name="restriction_disallow_guest_browsing_title">&restriction_disallow_guest_browsing_title2;</string>
 
   <!-- Miscellaneous -->
   <string name="ellipsis">&ellipsis;</string>

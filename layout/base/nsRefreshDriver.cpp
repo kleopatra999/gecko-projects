@@ -63,6 +63,8 @@
 #include "mozilla/VsyncDispatcher.h"
 #include "nsThreadUtils.h"
 #include "mozilla/unused.h"
+#include "mozilla/TimelineConsumers.h"
+#include "nsAnimationManager.h"
 
 #ifdef MOZ_NUWA_PROCESS
 #include "ipc/Nuwa.h"
@@ -519,124 +521,6 @@ protected:
   }
 };
 
-#ifdef XP_WIN
-/*
- * Uses vsync timing on windows with DWM. Falls back dynamically to fixed rate if required.
- */
-class PreciseRefreshDriverTimerWindowsDwmVsync :
-  public PreciseRefreshDriverTimer
-{
-public:
-  // Checks if the vsync API is accessible.
-  static bool IsSupported()
-  {
-    return WinUtils::dwmGetCompositionTimingInfoPtr != nullptr;
-  }
-
-  PreciseRefreshDriverTimerWindowsDwmVsync(double aRate, bool aPreferHwTiming = false)
-    : PreciseRefreshDriverTimer(aRate)
-    , mPreferHwTiming(aPreferHwTiming)
-  {
-  }
-
-protected:
-  // Indicates we should try to adjust to the HW's timing (get rate from the OS or use vsync)
-  // This is typically true if the default refresh-rate value was not modified by the user.
-  bool mPreferHwTiming;
-
-  nsresult GetVBlankInfo(mozilla::TimeStamp &aLastVBlank, mozilla::TimeDuration &aInterval)
-  {
-    MOZ_ASSERT(WinUtils::dwmGetCompositionTimingInfoPtr,
-               "DwmGetCompositionTimingInfoPtr is unavailable (windows vsync)");
-
-    DWM_TIMING_INFO timingInfo;
-    timingInfo.cbSize = sizeof(DWM_TIMING_INFO);
-    HRESULT hr = WinUtils::dwmGetCompositionTimingInfoPtr(0, &timingInfo); // For the desktop window instead of a specific one.
-
-    if (FAILED(hr)) {
-      // This happens first time this is called.
-      return NS_ERROR_NOT_INITIALIZED;
-    }
-
-    LARGE_INTEGER time, freq;
-    ::QueryPerformanceCounter(&time);
-    ::QueryPerformanceFrequency(&freq);
-    aLastVBlank = TimeStamp::Now();
-    double secondsPassed = double(time.QuadPart - timingInfo.qpcVBlank) / double(freq.QuadPart);
-
-    aLastVBlank -= TimeDuration::FromSeconds(secondsPassed);
-    aInterval = TimeDuration::FromSeconds(double(timingInfo.qpcRefreshPeriod) / double(freq.QuadPart));
-
-    return NS_OK;
-  }
-
-  virtual void ScheduleNextTick(TimeStamp aNowTime)
-  {
-    static const TimeDuration kMinSaneInterval = TimeDuration::FromMilliseconds(3); // 330Hz
-    static const TimeDuration kMaxSaneInterval = TimeDuration::FromMilliseconds(44); // 23Hz
-    static const TimeDuration kNegativeMaxSaneInterval = TimeDuration::FromMilliseconds(-44); // Saves conversions for abs interval
-    TimeStamp lastVblank;
-    TimeDuration vblankInterval;
-
-    if (!mPreferHwTiming ||
-        NS_OK != GetVBlankInfo(lastVblank, vblankInterval) ||
-        vblankInterval > kMaxSaneInterval ||
-        vblankInterval < kMinSaneInterval ||
-        (aNowTime - lastVblank) > kMaxSaneInterval ||
-        (aNowTime - lastVblank) < kNegativeMaxSaneInterval) {
-      // Use the default timing without vsync
-      PreciseRefreshDriverTimer::ScheduleNextTick(aNowTime);
-      return;
-    }
-
-    TimeStamp newTarget = lastVblank + vblankInterval; // Base target
-
-    // However, timer callback might return early (or late, but that wouldn't bother us), and vblankInterval
-    // appears to be slightly (~1%) different on each call (probably the OS measuring recent actual interval[s])
-    // and since we don't want to re-target the same vsync, we keep advancing in vblank intervals until we find the
-    // next safe target (next vsync, but not within 10% interval of previous target).
-    // This is typically 0 or 1 iteration:
-    // If we're too early, next vsync would be the one we've already targeted (1 iteration).
-    // If the timer returned late, no iteration will be required.
-
-    const double kSameVsyncThreshold = 0.1;
-    while (newTarget <= mTargetTime + vblankInterval.MultDouble(kSameVsyncThreshold)) {
-      newTarget += vblankInterval;
-    }
-
-    // To make sure we always hit the same "side" of the signal:
-    // round the delay up (by adding 1, since we later floor) and add a little (10% by default).
-    // Note that newTarget doesn't change (and is the next vblank) as a reference when we're back.
-    static const double kDefaultPhaseShiftPercent = 10;
-    static const double phaseShiftFactor = 0.01 *
-      (Preferences::GetInt("layout.frame_rate.vsync.phasePercentage", kDefaultPhaseShiftPercent) % 100);
-
-    double phaseDelay = 1.0 + vblankInterval.ToMilliseconds() * phaseShiftFactor;
-
-    // ms until the next time we should tick
-    double delayMs = (newTarget - aNowTime).ToMilliseconds() + phaseDelay;
-
-    // Make sure the delay is never negative.
-    uint32_t delay = static_cast<uint32_t>(delayMs < 0 ? 0 : delayMs);
-
-    // log info & lateness
-    LOG("[%p] precise dwm-vsync timer last tick late by %f ms, next tick in %d ms",
-        this,
-        (aNowTime - mTargetTime).ToMilliseconds(),
-        delay);
-#ifndef ANDROID  /* bug 1142079 */
-    Telemetry::Accumulate(Telemetry::FX_REFRESH_DRIVER_FRAME_DELAY_MS, (aNowTime - mTargetTime).ToMilliseconds());
-#endif
-
-    // then schedule the timer
-    LOG("[%p] scheduling callback for %d ms (2)", this, delay);
-    mTimer->InitWithFuncCallback(TimerTick, this, delay, nsITimer::TYPE_ONE_SHOT);
-
-    mTargetTime = newTarget;
-  }
-};
-#endif
-
 /*
  * A RefreshDriverTimer for inactive documents.  When a new refresh driver is
  * added, the rate is reset to the base (normally 1s/1fps).  Every time
@@ -970,7 +854,7 @@ RefreshDriverTimer*
 nsRefreshDriver::ChooseTimer() const
 {
   if (mThrottled) {
-    if (!sThrottledRateTimer) 
+    if (!sThrottledRateTimer)
       sThrottledRateTimer = new InactiveRefreshDriverTimer(GetThrottledTimerInterval(),
                                                            DEFAULT_INACTIVE_TIMER_DISABLE_SECONDS * 1000.0);
     return sThrottledRateTimer;
@@ -983,11 +867,6 @@ nsRefreshDriver::ChooseTimer() const
     // Try to use vsync-base refresh timer first for sRegularRateTimer.
     CreateVsyncRefreshTimer();
 
-#ifdef XP_WIN
-    if (!sRegularRateTimer && PreciseRefreshDriverTimerWindowsDwmVsync::IsSupported()) {
-      sRegularRateTimer = new PreciseRefreshDriverTimerWindowsDwmVsync(rate, isDefault);
-    }
-#endif
     if (!sRegularRateTimer) {
       sRegularRateTimer = new PreciseRefreshDriverTimer(rate);
     }
@@ -1028,7 +907,7 @@ nsRefreshDriver::~nsRefreshDriver()
   MOZ_ASSERT(ObserverCount() == 0,
              "observers should have unregistered");
   MOZ_ASSERT(!mActiveTimer, "timer should be gone");
-  
+
   if (mRootRefresh) {
     mRootRefresh->RemoveRefreshObserver(this, Flush_Style);
     mRootRefresh = nullptr;
@@ -1413,7 +1292,7 @@ HasPendingAnimations(nsIPresShell* aShell)
 static void GetProfileTimelineSubDocShells(nsDocShell* aRootDocShell,
                                            nsTArray<nsDocShell*>& aShells)
 {
-  if (!aRootDocShell || nsDocShell::gProfileTimelineRecordingsCount == 0) {
+  if (!aRootDocShell || TimelineConsumers::IsEmpty()) {
     return;
   }
 
@@ -1466,8 +1345,72 @@ nsRefreshDriver::DispatchPendingEvents()
   }
 }
 
+namespace {
+  enum class AnimationEventType {
+    CSSAnimations,
+    CSSTransitions
+  };
+
+  struct DispatchAnimationEventParams {
+    AnimationEventType mEventType;
+    nsRefreshDriver* mRefreshDriver;
+  };
+}
+
+static bool
+DispatchAnimationEventsOnSubDocuments(nsIDocument* aDocument,
+                                      void* aParams)
+{
+  MOZ_ASSERT(aParams, "Animation event parameters should be set");
+  auto params = static_cast<DispatchAnimationEventParams*>(aParams);
+
+  nsIPresShell* shell = aDocument->GetShell();
+  if (!shell) {
+    return true;
+  }
+
+  nsPresContext* context = shell->GetPresContext();
+  if (!context || context->RefreshDriver() != params->mRefreshDriver) {
+    return true;
+  }
+
+  nsCOMPtr<nsIDocument> kungFuDeathGrip(aDocument);
+
+  if (params->mEventType == AnimationEventType::CSSAnimations) {
+    context->AnimationManager()->DispatchEvents();
+  } else {
+    context->TransitionManager()->DispatchEvents();
+  }
+  aDocument->EnumerateSubDocuments(DispatchAnimationEventsOnSubDocuments,
+                                   aParams);
+
+  return true;
+}
+
 void
-nsRefreshDriver::RunFrameRequestCallbacks(int64_t aNowEpoch, TimeStamp aNowTime)
+nsRefreshDriver::DispatchAnimationEvents()
+{
+  if (!mPresContext) {
+    return;
+  }
+
+  nsIDocument* doc = mPresContext->Document();
+
+  // Dispatch transition events first since transitions conceptually sit
+  // below animations in terms of compositing order.
+  DispatchAnimationEventParams params { AnimationEventType::CSSTransitions,
+                                        this };
+  DispatchAnimationEventsOnSubDocuments(doc, &params);
+  if (!mPresContext) {
+    return;
+  }
+
+  params.mEventType = AnimationEventType::CSSAnimations;
+  DispatchAnimationEventsOnSubDocuments(doc, &params);
+}
+
+void
+nsRefreshDriver::RunFrameRequestCallbacks(TimeStamp aNowTime)
 {
   // Grab all of our frame request callbacks up front.
   nsTArray<DocumentFrameCallbacks>
@@ -1641,8 +1584,9 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
     if (i == 0) {
       // This is the Flush_Style case.
 
+      DispatchAnimationEvents();
       DispatchPendingEvents();
-      RunFrameRequestCallbacks(aNowEpoch, aNowTime);
+      RunFrameRequestCallbacks(aNowTime);
 
       if (mPresContext && mPresContext->GetPresShell()) {
         bool tracingStyleFlush = false;
@@ -1789,7 +1733,7 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
     for (nsDocShell* docShell : profilingDocShells) {
       // For the sake of the profile timeline's simplicity, this is flagged as
       // paint even if it includes creating display lists
-      docShell->AddProfileTimelineMarker("Paint", TRACING_INTERVAL_START);
+      TimelineConsumers::AddMarkerForDocShell(docShell, "Paint", TRACING_INTERVAL_START);
     }
 #ifdef MOZ_DUMP_PAINTING
     if (nsLayoutUtils::InvalidationDebuggingIsEnabled()) {
@@ -1806,7 +1750,7 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
     }
 #endif
     for (nsDocShell* docShell : profilingDocShells) {
-      docShell->AddProfileTimelineMarker("Paint", TRACING_INTERVAL_END);
+      TimelineConsumers::AddMarkerForDocShell(docShell, "Paint", TRACING_INTERVAL_END);
     }
 
     if (nsContentUtils::XPConnect()) {
@@ -1824,6 +1768,8 @@ nsRefreshDriver::Tick(int64_t aNowEpoch, TimeStamp aNowTime)
     nsAPostRefreshObserver* observer = iter.GetNext();
     observer->DidRefresh();
   }
+
+  ConfigureHighPrecision();
 
   NS_ASSERTION(mInRefresh, "Still in refresh");
 }

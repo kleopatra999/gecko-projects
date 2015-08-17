@@ -88,6 +88,7 @@ public:
       mBuffer(Move(aData))
   {
     mClosure.mClonedObjects.SwapElements(aClosure.mClonedObjects);
+    mClosure.mClonedImages.SwapElements(aClosure.mClonedImages);
     MOZ_ASSERT(aClosure.mMessagePorts.IsEmpty());
     mClosure.mMessagePortIdentifiers.SwapElements(aClosure.mMessagePortIdentifiers);
   }
@@ -127,13 +128,14 @@ private:
     // cloning into worker when array goes out of scope.
     WorkerStructuredCloneClosure closure;
     closure.mClonedObjects.SwapElements(mClosure.mClonedObjects);
+    closure.mClonedImages.SwapElements(mClosure.mClonedImages);
     MOZ_ASSERT(mClosure.mMessagePorts.IsEmpty());
     closure.mMessagePortIdentifiers.SwapElements(mClosure.mMessagePortIdentifiers);
     closure.mParentWindow = do_QueryInterface(aTargetContainer->GetParentObject());
 
     JS::Rooted<JS::Value> messageData(aCx);
     if (!mBuffer.read(aCx, &messageData,
-                      WorkerStructuredCloneCallbacks(true), &closure)) {
+                      WorkerStructuredCloneCallbacks(), &closure)) {
       xpc::Throw(aCx, NS_ERROR_DOM_DATA_CLONE_ERR);
       return NS_ERROR_FAILURE;
     }
@@ -193,7 +195,7 @@ ServiceWorkerClient::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
     transferable.setObject(*array);
   }
 
-  const JSStructuredCloneCallbacks* callbacks = WorkerStructuredCloneCallbacks(false);
+  const JSStructuredCloneCallbacks* callbacks = WorkerStructuredCloneCallbacks();
 
   WorkerStructuredCloneClosure closure;
 

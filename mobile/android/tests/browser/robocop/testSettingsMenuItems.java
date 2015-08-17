@@ -206,7 +206,7 @@ public class testSettingsMenuItems extends PixelTest {
         }
 
         // Tab Queue
-        if (AppConstants.NIGHTLY_BUILD && AppConstants.MOZ_ANDROID_TAB_QUEUE) {
+        if (AppConstants.MOZ_ANDROID_TAB_QUEUE) {
             final String[] tabQueue = { mStringHelper.TAB_QUEUE_LABEL, mStringHelper.TAB_QUEUE_SUMMARY };
             settingsMap.get(PATH_CUSTOMIZE).add(tabQueue);
         }
@@ -229,9 +229,15 @@ public class testSettingsMenuItems extends PixelTest {
         }
 
         // Voice input
-        if (AppConstants.NIGHTLY_BUILD && InputOptionsUtils.supportsVoiceRecognizer(this.getActivity().getApplicationContext(), this.getActivity().getResources().getString(R.string.voicesearch_prompt))) {
+        if (InputOptionsUtils.supportsVoiceRecognizer(this.getActivity().getApplicationContext(), this.getActivity().getResources().getString(R.string.voicesearch_prompt))) {
             String[] voiceInputUi = { mStringHelper.VOICE_INPUT_TITLE_LABEL, mStringHelper.VOICE_INPUT_SUMMARY_LABEL };
             settingsMap.get(PATH_DISPLAY).add(voiceInputUi);
+        }
+
+        // QR Code input
+        if (InputOptionsUtils.supportsQrCodeReader(this.getActivity().getApplicationContext())) {
+            String[] qrCodeInputUi = { mStringHelper.QRCODE_INPUT_TITLE_LABEL, mStringHelper.QRCODE_INPUT_SUMMARY_LABEL };
+            settingsMap.get(PATH_DISPLAY).add(qrCodeInputUi);
         }
     }
 
@@ -293,8 +299,9 @@ public class testSettingsMenuItems extends PixelTest {
                 }
             }
 
-            // Navigate back if on a phone. Tablets shouldn't do this because they use headers and fragments.
-            if (mDevice.type.equals("phone")) {
+            // Navigate back if on a phone or small tablets. Large tablets
+            // shouldn't do this because they use headers and fragments.
+            if (mDevice.type.equals("phone") || HardwareUtils.isSmallTablet()) {
                 int menuDepth = menuPath.length;
                 while (menuDepth > 0) {
                     mSolo.goBack();

@@ -90,11 +90,27 @@ loop.standaloneRoomViews = (function(mozL10n) {
       roomUsed: React.PropTypes.bool.isRequired
     },
 
-    onFeedbackSent: function() {
-      // We pass a tick to prevent React warnings regarding nested updates.
-      setTimeout(function() {
-        this.props.activeRoomStore.dispatchAction(new sharedActions.FeedbackComplete());
-      }.bind(this));
+    componentDidMount: function() {
+      // Watch for messages from the waiting-tile iframe
+      window.addEventListener("message", this.recordTileClick);
+    },
+
+    componentWillUnmount: function() {
+      window.removeEventListener("message", this.recordTileClick);
+    },
+
+    recordTileClick: function(event) {
+      if (event.data === "tile-click") {
+        this.props.dispatcher.dispatch(new sharedActions.RecordClick({
+          linkInfo: "Tiles iframe click"
+        }));
+      }
+    },
+
+    recordTilesSupport: function() {
+      this.props.dispatcher.dispatch(new sharedActions.RecordClick({
+        linkInfo: "Tiles support link click"
+      }));
     },
 
     _renderCallToActionLink: function() {
@@ -118,8 +134,8 @@ loop.standaloneRoomViews = (function(mozL10n) {
 
     render: function() {
       switch(this.props.roomState) {
+        case ROOM_STATES.ENDED:
         case ROOM_STATES.READY: {
-          // XXX: In ENDED state, we should rather display the feedback form.
           return (
             React.createElement("div", {className: "room-inner-info-area"}, 
               React.createElement("button", {className: "btn btn-join btn-info", 
@@ -158,7 +174,17 @@ loop.standaloneRoomViews = (function(mozL10n) {
             React.createElement("div", {className: "room-inner-info-area"}, 
               React.createElement("p", {className: "empty-room-message"}, 
                 mozL10n.get("rooms_only_occupant_label")
-              )
+              ), 
+              React.createElement("p", {className: "room-waiting-area"}, 
+                mozL10n.get("rooms_read_while_wait_offer"), 
+                React.createElement("a", {href: loop.config.tilesSupportUrl, 
+                  onClick: this.recordTilesSupport, 
+                  rel: "noreferrer", 
+                  target: "_blank"}, 
+                  React.createElement("i", {className: "room-waiting-help"})
+                )
+              ), 
+              React.createElement("iframe", {className: "room-waiting-tile", src: loop.config.tilesIframeUrl})
             )
           );
         }
@@ -171,22 +197,6 @@ loop.standaloneRoomViews = (function(mozL10n) {
               React.createElement("p", null, this._renderCallToActionLink())
             )
           );
-        }
-        case ROOM_STATES.ENDED: {
-          if (this.props.roomUsed) {
-            return (
-              React.createElement("div", {className: "ended-conversation"}, 
-                React.createElement(sharedViews.FeedbackView, {
-                  noCloseText: true, 
-                  onAfterFeedbackReceived: this.onFeedbackSent})
-              )
-            );
-          }
-
-          // In case the room was not used (no one was here), we
-          // bypass the feedback form.
-          this.onFeedbackSent();
-          return null;
         }
         case ROOM_STATES.FAILED: {
           return (
@@ -280,10 +290,12 @@ loop.standaloneRoomViews = (function(mozL10n) {
       Backbone.Events,
       sharedMixins.MediaSetupMixin,
       sharedMixins.RoomsAudioMixin,
-      loop.store.StoreMixin("activeRoomStore")
+      sharedMixins.DocumentTitleMixin
     ],
 
     propTypes: {
+      // We pass conversationStore here rather than use the mixin, to allow
+      // easy configurability for the ui-showcase.
       activeRoomStore: React.PropTypes.oneOfType([
         React.PropTypes.instanceOf(loop.store.ActiveRoomStore),
         React.PropTypes.instanceOf(loop.store.FxOSActiveRoomStore)
@@ -305,6 +317,16 @@ loop.standaloneRoomViews = (function(mozL10n) {
       });
     },
 
+    componentWillMount: function() {
+      this.props.activeRoomStore.on("change", function() {
+        this.setState(this.props.activeRoomStore.getStoreState());
+      }, this);
+    },
+
+    componentWillUnmount: function() {
+      this.props.activeRoomStore.off("change", null, this);
+    },
+
     componentDidMount: function() {
       // Adding a class to the document body element from here to ease styling it.
       document.body.classList.add("is-standalone-room");
@@ -318,6 +340,14 @@ loop.standaloneRoomViews = (function(mozL10n) {
      * @param  {Object} nextState Next state object.
      */
     componentWillUpdate: function(nextProps, nextState) {
+      if (this.state.roomState !== ROOM_STATES.READY &&
+          nextState.roomState === ROOM_STATES.READY) {
+        this.setTitle(mozL10n.get("standalone_title_with_room_name", {
+          roomName: nextState.roomName || this.state.roomName,
+          clientShortname: mozL10n.get("clientShortname2")
+        }));
+      }
+
       if (this.state.roomState !== ROOM_STATES.MEDIA_WAIT &&
           nextState.roomState === ROOM_STATES.MEDIA_WAIT) {
         this.props.dispatcher.dispatch(new sharedActions.SetupStreamElements({
@@ -395,6 +425,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
           return true;
 
         case ROOM_STATES.READY:
+        case ROOM_STATES.GATHER:
         case ROOM_STATES.INIT:
         case ROOM_STATES.JOINING:
         case ROOM_STATES.SESSION_CONNECTED:
@@ -406,6 +437,8 @@ loop.standaloneRoomViews = (function(mozL10n) {
 
         case ROOM_STATES.FAILED:
         case ROOM_STATES.CLOSING:
+        case ROOM_STATES.FULL:
+        case ROOM_STATES.ENDED:
           // the other person has shown up, so we don't want to show an avatar
           return true;
 
@@ -424,7 +457,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
      * @returns {boolean}
      * @private
      */
-    _shouldRenderLocalLoading: function () {
+    _isLocalLoading: function () {
       return this.state.roomState === ROOM_STATES.MEDIA_WAIT &&
              !this.state.localSrcVideoObject;
     },
@@ -436,7 +469,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
      * @returns {boolean}
      * @private
      */
-    _shouldRenderRemoteLoading: function() {
+    _isRemoteLoading: function() {
       return !!(this.state.roomState === ROOM_STATES.HAS_PARTICIPANTS &&
                 !this.state.remoteSrcVideoObject &&
                 !this.state.mediaConnected);
@@ -449,74 +482,44 @@ loop.standaloneRoomViews = (function(mozL10n) {
      * @returns {boolean}
      * @private
      */
-    _shouldRenderScreenShareLoading: function() {
+    _isScreenShareLoading: function() {
       return this.state.receivingScreenShare &&
-             !this.state.screenShareVideoObject;
+             !this.state.screenShareVideoObject &&
+             !this.props.screenSharePosterUrl;
     },
 
     render: function() {
-      var displayScreenShare = this.state.receivingScreenShare ||
-        this.props.screenSharePosterUrl;
-
-      var remoteStreamClasses = React.addons.classSet({
-        "remote": true,
-        "focus-stream": !displayScreenShare
-      });
-
-      var screenShareStreamClasses = React.addons.classSet({
-        "screen": true,
-        "focus-stream": displayScreenShare
-      });
-
-      var mediaWrapperClasses = React.addons.classSet({
-        "media-wrapper": true,
-        "receiving-screen-share": displayScreenShare,
-        "showing-local-streams": this.state.localSrcVideoObject ||
-          this.props.localPosterUrl
-      });
+      var displayScreenShare = !!(this.state.receivingScreenShare ||
+        this.props.screenSharePosterUrl);
 
       return (
         React.createElement("div", {className: "room-conversation-wrapper standalone-room-wrapper"}, 
           React.createElement("div", {className: "beta-logo"}), 
           React.createElement(StandaloneRoomHeader, {dispatcher: this.props.dispatcher}), 
-          React.createElement(StandaloneRoomInfoArea, {activeRoomStore: this.props.activeRoomStore, 
-                                  dispatcher: this.props.dispatcher, 
-                                  failureReason: this.state.failureReason, 
-                                  isFirefox: this.props.isFirefox, 
-                                  joinRoom: this.joinRoom, 
-                                  roomState: this.state.roomState, 
-                                  roomUsed: this.state.used}), 
-          React.createElement("div", {className: "media-layout"}, 
-            React.createElement("div", {className: mediaWrapperClasses}, 
-              React.createElement("span", {className: "self-view-hidden-message"}, 
-                mozL10n.get("self_view_hidden_message")
-              ), 
-              React.createElement("div", {className: remoteStreamClasses}, 
-                React.createElement(sharedViews.MediaView, {displayAvatar: !this.shouldRenderRemoteVideo(), 
-                  isLoading: this._shouldRenderRemoteLoading(), 
-                  mediaType: "remote", 
-                  posterUrl: this.props.remotePosterUrl, 
-                  srcVideoObject: this.state.remoteSrcVideoObject})
-              ), 
-              React.createElement("div", {className: screenShareStreamClasses}, 
-                React.createElement(sharedViews.MediaView, {displayAvatar: false, 
-                  isLoading: this._shouldRenderScreenShareLoading(), 
-                  mediaType: "screen-share", 
-                  posterUrl: this.props.screenSharePosterUrl, 
-                  srcVideoObject: this.state.screenShareVideoObject})
-              ), 
-              React.createElement(sharedViews.chat.TextChatView, {
-                dispatcher: this.props.dispatcher, 
-                showRoomName: true, 
-                useDesktopPaths: false}), 
-              React.createElement("div", {className: "local"}, 
-                React.createElement(sharedViews.MediaView, {displayAvatar: this.state.videoMuted, 
-                  isLoading: this._shouldRenderLocalLoading(), 
-                  mediaType: "local", 
-                  posterUrl: this.props.localPosterUrl, 
-                  srcVideoObject: this.state.localSrcVideoObject})
-              )
-            )
+          React.createElement(sharedViews.MediaLayoutView, {
+            dispatcher: this.props.dispatcher, 
+            displayScreenShare: displayScreenShare, 
+            isLocalLoading: this._isLocalLoading(), 
+            isRemoteLoading: this._isRemoteLoading(), 
+            isScreenShareLoading: this._isScreenShareLoading(), 
+            localPosterUrl: this.props.localPosterUrl, 
+            localSrcVideoObject: this.state.localSrcVideoObject, 
+            localVideoMuted: this.state.videoMuted, 
+            matchMedia: this.state.matchMedia || window.matchMedia.bind(window), 
+            remotePosterUrl: this.props.remotePosterUrl, 
+            remoteSrcVideoObject: this.state.remoteSrcVideoObject, 
+            renderRemoteVideo: this.shouldRenderRemoteVideo(), 
+            screenSharePosterUrl: this.props.screenSharePosterUrl, 
+            screenShareVideoObject: this.state.screenShareVideoObject, 
+            showContextRoomName: true, 
+            useDesktopPaths: false}, 
+            React.createElement(StandaloneRoomInfoArea, {activeRoomStore: this.props.activeRoomStore, 
+              dispatcher: this.props.dispatcher, 
+              failureReason: this.state.failureReason, 
+              isFirefox: this.props.isFirefox, 
+              joinRoom: this.joinRoom, 
+              roomState: this.state.roomState, 
+              roomUsed: this.state.used})
           ), 
           React.createElement(sharedViews.ConversationToolbar, {
             audio: {enabled: !this.state.audioMuted,
@@ -541,6 +544,7 @@ loop.standaloneRoomViews = (function(mozL10n) {
   return {
     StandaloneRoomFooter: StandaloneRoomFooter,
     StandaloneRoomHeader: StandaloneRoomHeader,
+    StandaloneRoomInfoArea: StandaloneRoomInfoArea,
     StandaloneRoomView: StandaloneRoomView
   };
 })(navigator.mozL10n);

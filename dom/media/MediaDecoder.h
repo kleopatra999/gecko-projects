@@ -399,6 +399,8 @@ public:
   // The stream is initially blocked. The decoder is responsible for unblocking
   // it while it is playing back.
   virtual void AddOutputStream(ProcessedMediaStream* aStream, bool aFinishWhenEnded);
+  // Remove an output stream added with AddOutputStream.
+  virtual void RemoveOutputStream(MediaStream* aStream);
 
   // Return the duration of the video in seconds.
   virtual double GetDuration();
@@ -570,10 +572,6 @@ public:
   // The actual playback rate computation. The monitor must be held.
   virtual double ComputePlaybackRate(bool* aReliable);
 
-  // Return true when the media is same-origin with the element. The monitor
-  // must be held.
-  bool IsSameOriginMedia();
-
   // Returns true if we can play the entire media through without stopping
   // to buffer, given the current download and playback rates.
   bool CanPlayThrough();
@@ -584,7 +582,7 @@ public:
   // Send a new set of metadata to the state machine, to be dispatched to the
   // main thread to be presented when the |currentTime| of the media is greater
   // or equal to aPublishTime.
-  void QueueMetadata(int64_t aPublishTime,
+  void QueueMetadata(const media::TimeUnit& aPublishTime,
                      nsAutoPtr<MediaInfo> aInfo,
                      nsAutoPtr<MetadataTags> aTags) override;
 
@@ -621,13 +619,6 @@ public:
   // Removes all audio tracks and video tracks that are previously added into
   // the track list. Call on the main thread only.
   virtual void RemoveMediaTracks() override;
-
-  // Returns true if the this decoder is expecting any more data to arrive
-  // sometime in the not-too-distant future, either from the network or from
-  // an appendBuffer call on a MediaSource element.
-  //
-  // Acquires the monitor. Call from any thread.
-  virtual bool IsExpectingMoreData();
 
   // Called when the video has completed playing.
   // Call on the main thread only.
@@ -728,10 +719,6 @@ public:
 #ifdef MOZ_APPLEMEDIA
   static bool IsAppleMP3Enabled();
 #endif
-
-  // Schedules the state machine to run one cycle on the shared state
-  // machine thread. Main thread only.
-  nsresult ScheduleStateMachine();
 
   struct Statistics {
     // Estimate of the current playback rate (bytes/second).
@@ -951,10 +938,6 @@ protected:
   // True if the media is seekable (i.e. supports random access).
   bool mMediaSeekable;
 
-  // True if the media is same-origin with the element. Data can only be
-  // passed to MediaStreams when this is true.
-  bool mSameOriginMedia;
-
   /******
    * The following member variables can be accessed from any thread.
    ******/
@@ -1115,19 +1098,19 @@ protected:
   // This can only be changed on the main thread while holding the decoder
   // monitor. Thus, it can be safely read while holding the decoder monitor
   // OR on the main thread.
-  // Any change to the state on the main thread must call NotifyAll on the
-  // monitor so the decode thread can wake up.
   Canonical<PlayState> mPlayState;
 
   // This can only be changed on the main thread while holding the decoder
   // monitor. Thus, it can be safely read while holding the decoder monitor
   // OR on the main thread.
-  // Any change to the state must call NotifyAll on the monitor.
-  // This can only be PLAY_STATE_PAUSED or PLAY_STATE_PLAYING.
   Canonical<PlayState> mNextState;
 
   // True if the decoder is seeking.
   Canonical<bool> mLogicallySeeking;
+
+  // True if the media is same-origin with the element. Data can only be
+  // passed to MediaStreams when this is true.
+  Canonical<bool> mSameOriginMedia;
 
 public:
   AbstractCanonical<media::NullableTimeUnit>* CanonicalDurationOrNull() override;
@@ -1154,6 +1137,9 @@ public:
   }
   AbstractCanonical<bool>* CanonicalLogicallySeeking() {
     return &mLogicallySeeking;
+  }
+  AbstractCanonical<bool>* CanonicalSameOriginMedia() {
+    return &mSameOriginMedia;
   }
 };
 

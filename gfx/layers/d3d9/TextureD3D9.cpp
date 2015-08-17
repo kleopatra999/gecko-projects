@@ -498,35 +498,6 @@ TextureClientD3D9::Lock(OpenMode aMode)
 
   mIsLocked = true;
 
-  // Make sure that successful write-lock means we will have a DrawTarget to
-  // write into.
-  if (aMode & OpenMode::OPEN_WRITE) {
-    mDrawTarget = BorrowDrawTarget();
-    if (!mDrawTarget) {
-      Unlock();
-      return false;
-    }
-  }
-
-  if (mNeedsClear) {
-    mDrawTarget = BorrowDrawTarget();
-    if (!mDrawTarget) {
-      Unlock();
-      return false;
-    }
-    mDrawTarget->ClearRect(Rect(0, 0, GetSize().width, GetSize().height));
-    mNeedsClear = false;
-  }
-  if (mNeedsClearWhite) {
-    mDrawTarget = BorrowDrawTarget();
-    if (!mDrawTarget) {
-      Unlock();
-      return false;
-    }
-    mDrawTarget->FillRect(Rect(0, 0, GetSize().width, GetSize().height), ColorPattern(Color(1.0, 1.0, 1.0, 1.0)));
-    mNeedsClearWhite = false;
-  }
-
   return true;
 }
 
@@ -601,7 +572,59 @@ TextureClientD3D9::BorrowDrawTarget()
     mLockRect = true;
   }
 
+  if (mNeedsClear) {
+    mDrawTarget->ClearRect(Rect(0, 0, GetSize().width, GetSize().height));
+    mNeedsClear = false;
+  }
+  if (mNeedsClearWhite) {
+    mDrawTarget->FillRect(Rect(0, 0, GetSize().width, GetSize().height), ColorPattern(Color(1.0, 1.0, 1.0, 1.0)));
+    mNeedsClearWhite = false;
+  }
+
   return mDrawTarget;
+}
+
+void
+TextureClientD3D9::UpdateFromSurface(gfx::SourceSurface* aSurface)
+{
+  MOZ_ASSERT(mIsLocked && mD3D9Surface);
+
+  // gfxWindowsSurface don't support transparency so we can't use the d3d9
+  // windows surface optimization.
+  // Instead we have to use a gfxImageSurface and fallback for font drawing.
+  D3DLOCKED_RECT rect;
+  HRESULT hr = mD3D9Surface->LockRect(&rect, nullptr, 0);
+  if (FAILED(hr) || !rect.pBits) {
+    gfxCriticalError() << "Failed to lock rect borrowing the target in D3D9 " << hexa(hr);
+    return;
+  }
+
+  RefPtr<DataSourceSurface> srcSurf = aSurface->GetDataSurface();
+
+  if (!srcSurf) {
+    gfxCriticalError() << "Failed to GetDataSurface in UpdateFromSurface.";
+    return;
+  }
+
+  if (mSize != srcSurf->GetSize() || mFormat != srcSurf->GetFormat()) {
+    gfxCriticalError() << "Attempt to update texture client from a surface with a different size or format! This: " << mSize << " " << mFormat << " Other: " << srcSurf->GetSize() << " " << srcSurf->GetFormat();
+    return;
+  }
+
+  DataSourceSurface::MappedSurface sourceMap;
+  if (!srcSurf->Map(DataSourceSurface::READ, &sourceMap)) {
+    gfxCriticalError() << "Failed to map source surface for UpdateFromSurface.";
+    return;
+  }
+
+  for (int y = 0; y < srcSurf->GetSize().height; y++) {
+    memcpy((uint8_t*)rect.pBits + rect.Pitch * y,
+           sourceMap.mData + sourceMap.mStride * y,
+           srcSurf->GetSize().width * BytesPerPixel(srcSurf->GetFormat()));
+  }
+
+  srcSurf->Unmap();
+  mD3D9Surface->UnlockRect();
 }
 
 bool
@@ -652,22 +675,45 @@ already_AddRefed<SharedTextureClientD3D9>
 SharedTextureClientD3D9::Create(ISurfaceAllocator* aAllocator,
                                 gfx::SurfaceFormat aFormat,
                                 TextureFlags aFlags,
-                                IDirect3DTexture9* aTexture,
-                                HANDLE aSharedHandle,
-                                D3DSURFACE_DESC aDesc)
+                                IDirect3DDevice9* aDevice,
+                                const gfx::IntSize& aSize)
 {
-  RefPtr<SharedTextureClientD3D9> texture =
+  MOZ_ASSERT(aFormat == gfx::SurfaceFormat::B8G8R8X8);
+
+  RefPtr<IDirect3DTexture9> texture;
+  HANDLE shareHandle = nullptr;
+  HRESULT hr = aDevice->CreateTexture(aSize.width,
+                                      aSize.height,
+                                      1,
+                                      D3DUSAGE_RENDERTARGET,
+                                      D3DFMT_X8R8G8B8,
+                                      D3DPOOL_DEFAULT,
+                                      byRef(texture),
+                                      &shareHandle);
+  NS_ENSURE_TRUE(SUCCEEDED(hr) && shareHandle, nullptr);
+
+  RefPtr<SharedTextureClientD3D9> client =
     new SharedTextureClientD3D9(aAllocator,
                                 aFormat,
                                 aFlags);
-  MOZ_ASSERT(!texture->mTexture);
-  texture->mTexture = aTexture;
-  texture->mHandle = aSharedHandle;
-  texture->mDesc = aDesc;
-  if (texture->mTexture) {
-    gfxWindowsPlatform::sD3D9SharedTextureUsed += texture->mDesc.Width * texture->mDesc.Height * 4;
-  }
-  return texture.forget();
+
+  client->mDevice = aDevice;
+  client->mTexture = texture;
+  client->mHandle = shareHandle;
+  texture->GetLevelDesc(0, &client->mDesc);
+
+  gfxWindowsPlatform::sD3D9SharedTextureUsed += aSize.width * aSize.height * 4;
+  return client.forget();
+}
+
+already_AddRefed<IDirect3DSurface9>
+SharedTextureClientD3D9::GetD3D9Surface() const
+{
+  RefPtr<IDirect3DSurface9> textureSurface;
+  HRESULT hr = mTexture->GetSurfaceLevel(0, byRef(textureSurface));
+  NS_ENSURE_TRUE(SUCCEEDED(hr), nullptr);
+
+  return textureSurface.forget();
 }
 
 bool

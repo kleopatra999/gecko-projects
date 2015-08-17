@@ -69,7 +69,10 @@ TextTrack*
 TextTrackList::IndexedGetter(uint32_t aIndex, bool& aFound)
 {
   aFound = aIndex < mTextTracks.Length();
-  return aFound ? mTextTracks[aIndex] : nullptr;
+  if (!aFound) {
+    return nullptr;
+  }
+  return mTextTracks[aIndex];
 }
 
 TextTrack*
@@ -160,14 +163,9 @@ TextTrackList::DispatchTrackEvent(nsIDOMEvent* aEvent)
 void
 TextTrackList::CreateAndDispatchChangeEvent()
 {
-  nsCOMPtr<nsIDOMEvent> event;
-  nsresult rv = NS_NewDOMEvent(getter_AddRefs(event), this, nullptr, nullptr);
-  if (NS_FAILED(rv)) {
-    NS_WARNING("Failed to create the error event!");
-    return;
-  }
+  nsRefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
 
-  rv = event->InitEvent(NS_LITERAL_STRING("change"), false, false);
+  nsresult rv = event->InitEvent(NS_LITERAL_STRING("change"), false, false);
   if (NS_FAILED(rv)) {
     NS_WARNING("Failed to init the change event!");
     return;

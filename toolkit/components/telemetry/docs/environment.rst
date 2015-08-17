@@ -40,8 +40,9 @@ Structure::
           loadPath: <string>, // where the engine line is located; missing if no default
           submissionURL: <string> // missing if no default or for user-installed engines
         },
-        e10sEnabled: <bool>, // false on failure
+        e10sEnabled: <bool>, // whether e10s is on, i.e. browser tabs open by default in a different process
         telemetryEnabled: <bool>, // false on failure
+        isInOptoutSample: <bool>, // whether this client is part of the opt-out sample
         locale: <string>, // e.g. "it", null on failure
         update: {
           channel: <string>, // e.g. "release", null on failure
@@ -139,7 +140,8 @@ Structure::
               {
                 screenWidth: <number>,  // screen width in pixels
                 screenHeight: <number>, // screen height in pixels
-                refreshRate: <number>,  // refresh rate in hertz (present on Windows only)
+                refreshRate: <number>,  // refresh rate in hertz (present on Windows only).
+                                        //  (values <= 1 indicate an unknown value)
                 pseudoDisplay: <bool>,  // networked screen (present on Windows only)
                 scale: <number>,        // backing scale factor (present on Mac only)
               },
@@ -161,6 +163,8 @@ Structure::
                 warp: <bool>,           // Software rendering (WARP) mode was chosen.
                 textureSharing: <bool>  // Whether or not texture sharing works.
                 version: <number>,      // The D3D11 device feature level.
+                blacklisted: <bool>,    // Whether D3D11 is blacklisted; use to see whether WARP
+                                        // was blacklist induced or driver-failure induced.
               },
               "d2d" { // This feature is Windows-only.
                 status: <string>,
@@ -266,3 +270,8 @@ The object contains:
   For privacy, we don't record this for user-installed engines.
 
 ``loadPath`` and ``submissionURL`` are not present if ``name`` is ``NONE``.
+
+searchCohort
+~~~~~~~~~~~~
+
+If the user has been enrolled into a search default change experiment, this contains the string identifying the experiment the user is taking part in. Most user profiles will never be part of any search default change experiment, and will not send this value.

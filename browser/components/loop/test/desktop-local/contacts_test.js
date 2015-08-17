@@ -8,7 +8,8 @@ describe("loop.contacts", function() {
   var expect = chai.expect;
   var TestUtils = React.addons.TestUtils;
 
-  var fakeAddContactButtonText = "Fake Add Contact";
+  var fakeAddContactButtonText = "Fake Add Contact Button";
+  var fakeAddContactTitleText = "Fake Add Contact Title";
   var fakeEditContactButtonText = "Fake Edit Contact";
   var fakeDoneButtonText = "Fake Done";
   // The fake contacts array is copied each time mozLoop.contacts.getAll() is called.
@@ -76,25 +77,31 @@ describe("loop.contacts", function() {
   var notifications;
   var listView;
   var oldMozLoop = navigator.mozLoop;
+  var mozL10nGetSpy;
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
+
+    mozL10nGetSpy = sandbox.spy(document.mozL10n, "get");
+
     navigator.mozLoop = {
       getStrings: function(entityName) {
         var textContentValue = "fakeText";
-        if (entityName == "add_contact_button") {
+        if (entityName === "add_contact_title") {
+          textContentValue = fakeAddContactTitleText;
+        } else if (entityName === "add_contact_button") {
           textContentValue = fakeAddContactButtonText;
-        } else if (entityName == "edit_contact_title") {
+        } else if (entityName === "edit_contact_title") {
           textContentValue = fakeEditContactButtonText;
-        } else if (entityName == "edit_contact_done_button") {
+        } else if (entityName === "edit_contact_done_button") {
           textContentValue = fakeDoneButtonText;
         }
         return JSON.stringify({textContent: textContentValue});
       },
       getLoopPref: function(pref) {
-        if (pref == "contacts.gravatars.promo") {
+        if (pref === "contacts.gravatars.promo") {
           return true;
-        } else if (pref == "contacts.gravatars.show") {
+        } else if (pref === "contacts.gravatars.show") {
           return false;
         }
         return "";
@@ -111,6 +118,10 @@ describe("loop.contacts", function() {
           callback(null, [].concat(fakeContacts));
         },
         on: sandbox.stub()
+      },
+      calls: {
+        startDirectCall: function() {},
+        clearCallInProgress: function() {}
       }
     };
 
@@ -146,6 +157,7 @@ describe("loop.contacts", function() {
     it("should show the gravatars promo box", function() {
       listView = TestUtils.renderIntoDocument(
         React.createElement(loop.contacts.ContactsList, {
+          mozLoop: navigator.mozLoop,
           notifications: notifications,
           startForm: function() {}
         }));
@@ -157,16 +169,18 @@ describe("loop.contacts", function() {
     });
 
     it("should not show the gravatars promo box when the 'contacts.gravatars.promo' pref is set", function() {
-      navigator.mozLoop.getLoopPref = function(pref) {
-        if (pref == "contacts.gravatars.promo") {
+      sandbox.stub(navigator.mozLoop, "getLoopPref", function(pref) {
+        if (pref === "contacts.gravatars.promo") {
           return false;
-        } else if (pref == "contacts.gravatars.show") {
+        } else if (pref === "contacts.gravatars.show") {
           return true;
         }
         return "";
-      };
+      });
+
       listView = TestUtils.renderIntoDocument(
         React.createElement(loop.contacts.ContactsList, {
+          mozLoop: navigator.mozLoop,
           notifications: notifications,
           startForm: function() {}
         }));
@@ -180,6 +194,7 @@ describe("loop.contacts", function() {
     it("should hide the gravatars promo box when the 'use' button is clicked", function() {
       listView = TestUtils.renderIntoDocument(
         React.createElement(loop.contacts.ContactsList, {
+          mozLoop: navigator.mozLoop,
           notifications: notifications,
           startForm: function() {}
         }));
@@ -196,6 +211,7 @@ describe("loop.contacts", function() {
     it("should should set the prefs correctly when the 'use' button is clicked", function() {
       listView = TestUtils.renderIntoDocument(
         React.createElement(loop.contacts.ContactsList, {
+          mozLoop: navigator.mozLoop,
           notifications: notifications,
           startForm: function() {}
         }));
@@ -211,6 +227,7 @@ describe("loop.contacts", function() {
     it("should hide the gravatars promo box when the 'close' button is clicked", function() {
       listView = TestUtils.renderIntoDocument(
         React.createElement(loop.contacts.ContactsList, {
+          mozLoop: navigator.mozLoop,
           notifications: notifications,
           startForm: function() {}
         }));
@@ -225,6 +242,7 @@ describe("loop.contacts", function() {
     it("should set prefs correctly when the 'close' button is clicked", function() {
       listView = TestUtils.renderIntoDocument(
         React.createElement(loop.contacts.ContactsList, {
+          mozLoop: navigator.mozLoop,
           notifications: notifications,
           startForm: function() {}
         }));
@@ -239,21 +257,77 @@ describe("loop.contacts", function() {
   });
 
   describe("ContactsList", function () {
+    var node;
     beforeEach(function() {
-      navigator.mozLoop.calls = {
-        startDirectCall: sandbox.stub(),
-        clearCallInProgress: sandbox.stub()
-      };
-      navigator.mozLoop.contacts = {getAll: sandbox.stub()};
+      sandbox.stub(navigator.mozLoop.calls, "startDirectCall");
+      sandbox.stub(navigator.mozLoop.calls, "clearCallInProgress");
+    });
 
-      listView = TestUtils.renderIntoDocument(
-        React.createElement(loop.contacts.ContactsList, {
-          notifications: notifications,
-          startForm: function() {}
-        }));
+    describe("#RenderNoContacts", function() {
+      beforeEach(function() {
+        sandbox.stub(navigator.mozLoop.contacts, "getAll", function(cb) {
+          cb(null, []);
+        });
+        listView = TestUtils.renderIntoDocument(
+          React.createElement(loop.contacts.ContactsList, {
+            mozLoop: navigator.mozLoop,
+            notifications: notifications,
+            startForm: function() {}
+          }));
+        node = listView.getDOMNode();
+      });
+
+      it("should not show a contacts title if no contacts", function() {
+        expect(node.querySelector(".contact-list-title")).to.eql(null);
+        sinon.assert.neverCalledWith(mozL10nGetSpy, "contact_list_title");
+      });
+
+      it("should show the no contacts view", function() {
+        expect(node.querySelector(".contact-list-empty")).to.not.eql(null);
+      });
+
+      it("should display the no contacts strings", function() {
+        sinon.assert.calledWithExactly(mozL10nGetSpy,
+                                       "no_contacts_message_heading");
+        sinon.assert.calledWithExactly(mozL10nGetSpy,
+                                       "no_contacts_import_or_add");
+      });
+    });
+
+    describe("#RenderWithContacts", function() {
+      beforeEach(function() {
+        sandbox.stub(navigator.mozLoop.contacts, "getAll", function(cb) {
+          cb(null, [].concat(fakeContacts));
+        });
+        listView = TestUtils.renderIntoDocument(
+          React.createElement(loop.contacts.ContactsList, {
+            mozLoop: navigator.mozLoop,
+            notifications: notifications,
+            startForm: function() {}
+          }));
+        node = listView.getDOMNode();
+      });
+
+      it("should show a contacts title", function() {
+        expect(node.querySelector(".contact-list-title")).not.to.eql(null);
+        sinon.assert.calledWithExactly(mozL10nGetSpy, "contact_list_title");
+      });
     });
 
     describe("#handleContactAction", function() {
+      beforeEach(function() {
+        sandbox.stub(navigator.mozLoop.contacts, "getAll", function(cb) {
+          cb(null, []);
+        });
+        listView = TestUtils.renderIntoDocument(
+          React.createElement(loop.contacts.ContactsList, {
+            mozLoop: navigator.mozLoop,
+            notifications: notifications,
+            startForm: function() {}
+          }));
+        node = listView.getDOMNode();
+      });
+
       it("should call window.close when called with 'video-call' action",
         function() {
           listView.handleContactAction({}, "video-call");
@@ -270,6 +344,19 @@ describe("loop.contacts", function() {
     });
 
     describe("#handleImportButtonClick", function() {
+      beforeEach(function() {
+        sandbox.stub(navigator.mozLoop.contacts, "getAll", function(cb) {
+          cb(null, []);
+        });
+        listView = TestUtils.renderIntoDocument(
+          React.createElement(loop.contacts.ContactsList, {
+            mozLoop: navigator.mozLoop,
+            notifications: notifications,
+            startForm: function() {}
+          }));
+        node = listView.getDOMNode();
+      });
+
       it("should notify the end user from a succesful import", function() {
         sandbox.stub(notifications, "successL10n");
         navigator.mozLoop.startImport = function(opts, cb) {
@@ -316,7 +403,7 @@ describe("loop.contacts", function() {
 
           var header = view.getDOMNode().querySelector("header");
           expect(header).to.not.equal(null);
-          expect(header.textContent).to.eql(fakeAddContactButtonText);
+          expect(header.textContent).to.eql(fakeAddContactTitleText);
         });
 
         it("should render name input", function() {

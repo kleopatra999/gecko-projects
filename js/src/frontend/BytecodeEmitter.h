@@ -105,8 +105,6 @@ enum VarEmitOption {
 
 struct BytecodeEmitter
 {
-    typedef StmtInfoBCE StmtInfo;
-
     SharedContext* const sc;      /* context shared between parsing and bytecode generation */
 
     ExclusiveContext* const cx;
@@ -137,10 +135,7 @@ struct BytecodeEmitter
 
     HandleScript    evalCaller;     /* scripted caller info for eval and dbgapi */
 
-    StmtInfoBCE*    topStmt;       /* top of statement info stack */
-    StmtInfoBCE*    topScopeStmt;  /* top lexical scope statement */
-    Rooted<NestedScopeObject*> staticScope;
-                                    /* compile time scope chain */
+    StmtInfoStack<StmtInfoBCE> stmtStack;
 
     OwnedAtomIndexMapPtr atomIndices; /* literals indexed for mapping */
     unsigned        firstLine;      /* first line, for JSScript::initFromEmitter */
@@ -224,7 +219,17 @@ struct BytecodeEmitter
     bool init();
     bool updateLocalsToFrameSlots();
 
-    bool isAliasedName(ParseNode* pn);
+    StmtInfoBCE* innermostStmt() const { return stmtStack.innermost(); }
+    StmtInfoBCE* innermostScopeStmt() const { return stmtStack.innermostScopeStmt(); }
+    JSObject* innermostStaticScope() const;
+    JSObject* blockScopeOfDef(ParseNode* pn) const {
+        MOZ_ASSERT(pn->resolve());
+        return parser->blockScopes[pn->resolve()->pn_blockid];
+    }
+
+    uint32_t computeHops(ParseNode* pn, BytecodeEmitter** bceOfDefOut);
+    bool isAliasedName(BytecodeEmitter* bceOfDef, ParseNode* pn);
+    bool computeDefinitionIsAliased(BytecodeEmitter* bceOfDef, Definition* dn, JSOp* op);
 
     MOZ_ALWAYS_INLINE
     bool makeAtomIndex(JSAtom* atom, jsatomid* indexp) {
@@ -336,14 +341,6 @@ struct BytecodeEmitter
     void pushStatementInner(StmtInfoBCE* stmt, StmtType type, ptrdiff_t top);
     void pushLoopStatement(LoopStmtInfo* stmt, StmtType type, ptrdiff_t top);
 
-    // Return the enclosing lexical scope, which is the innermost enclosing static
-    // block object or compiler created function.
-    JSObject* enclosingStaticScope();
-
-    // Compute the number of nested scope objects that will actually be on the
-    // scope chain at runtime, given the current staticScope.
-    unsigned dynamicNestedScopeDepth();
-
     bool enterNestedScope(StmtInfoBCE* stmt, ObjectBox* objbox, StmtType stmtType);
     bool leaveNestedScope(StmtInfoBCE* stmt);
 
@@ -355,10 +352,6 @@ struct BytecodeEmitter
     bool lookupAliasedName(HandleScript script, PropertyName* name, uint32_t* pslot,
                            ParseNode* pn = nullptr);
     bool lookupAliasedNameSlot(PropertyName* name, ScopeCoordinate* sc);
-
-    // Use this function instead of assigning directly to 'hops' to guard for
-    // uint8_t overflows.
-    bool assignHops(ParseNode* pn, unsigned src, ScopeCoordinate* dst);
 
     // In a function, block-scoped locals go after the vars, and form part of the
     // fixed part of a stack frame.  Outside a function, there are no fixed vars,
@@ -375,22 +368,14 @@ struct BytecodeEmitter
 
     // Emit two bytecodes, an opcode (op) with a byte of immediate operand
     // (op1).
-    bool emit2(JSOp op, jsbytecode op1);
+    bool emit2(JSOp op, uint8_t op1);
 
     // Emit three bytecodes, an opcode with two bytes of immediate operands.
     bool emit3(JSOp op, jsbytecode op1, jsbytecode op2);
 
-    // Dup the var in operand stack slot "slot". The first item on the operand
-    // stack is one slot past the last fixed slot. The last (most recent) item is
-    // slot bce->stackDepth - 1.
-    //
-    // The instruction that is written (JSOP_DUPAT) switches the depth around so
-    // that it is addressed from the sp instead of from the fp. This is useful when
-    // you don't know the size of the fixed stack segment (nfixed), as is the case
-    // when compiling scripts (because each statement is parsed and compiled
-    // separately, but they all together form one script with one fixed stack
-    // frame).
-    bool emitDupAt(unsigned slot);
+    // Helper to emit JSOP_DUPAT. The argument is the value's depth on the
+    // JS stack, as measured from the top.
+    bool emitDupAt(unsigned slotFromTop);
 
     // Emit a bytecode followed by an uint16 immediate operand stored in
     // big-endian order.
@@ -432,7 +417,6 @@ struct BytecodeEmitter
     bool emitObjectPairOp(ObjectBox* objbox1, ObjectBox* objbox2, JSOp op);
     bool emitRegExp(uint32_t index);
 
-    bool arrowNeedsNewTarget();
     MOZ_NEVER_INLINE bool emitFunction(ParseNode* pn, bool needsProto = false);
     MOZ_NEVER_INLINE bool emitObject(ParseNode* pn);
 
@@ -592,10 +576,10 @@ struct BytecodeEmitter
     // iteration count). The stack after iteration will look like |ARRAY INDEX|.
     bool emitSpread();
 
-    // If type is STMT_FOR_OF_LOOP, emit bytecode for a for-of loop.
+    // If type is StmtType::FOR_OF_LOOP, emit bytecode for a for-of loop.
     // pn should be PNK_FOR, and pn->pn_left should be PNK_FOROF.
     //
-    // If type is STMT_SPREAD, emit bytecode for spread operator.
+    // If type is StmtType::SPREAD, emit bytecode for spread operator.
     // pn should be nullptr.
     //
     // Please refer the comment above emitSpread for additional information about

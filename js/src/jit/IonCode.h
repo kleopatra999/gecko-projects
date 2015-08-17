@@ -275,8 +275,6 @@ struct IonScript
     // The tracelogger event used to log the start/stop of this IonScript.
     TraceLoggerEvent traceLoggerScriptEvent_;
 
-    IonBuilder* pendingBuilder_;
-
   private:
     inline uint8_t* bottomBuffer() {
         return reinterpret_cast<uint8_t*>(this);
@@ -286,14 +284,6 @@ struct IonScript
     }
 
   public:
-
-    // SHOULD ONLY BE CALLED FROM JSScript
-    void setPendingBuilderPrivate(IonBuilder* builder) {
-        pendingBuilder_ = builder;
-    }
-    IonBuilder* pendingBuilder() const {
-        return pendingBuilder_;
-    }
 
     SnapshotOffset* bailoutTable() {
         return (SnapshotOffset*) &bottomBuffer()[bailoutTable_];
@@ -728,7 +718,7 @@ struct VMFunction;
 struct AutoFlushICache
 {
   private:
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     uintptr_t start_;
     uintptr_t stop_;
     const char* name_;

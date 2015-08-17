@@ -11,8 +11,8 @@ describe("loop.store.ActiveRoomStore", function () {
   var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
   var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
   var ROOM_INFO_FAILURES = loop.shared.utils.ROOM_INFO_FAILURES;
-  var sandbox, dispatcher, store, fakeMozLoop, fakeSdkDriver;
-  var fakeMultiplexGum;
+  var sandbox, dispatcher, store, fakeMozLoop, fakeSdkDriver, fakeMultiplexGum;
+  var standaloneMediaRestore;
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
@@ -52,9 +52,10 @@ describe("loop.store.ActiveRoomStore", function () {
     };
 
     fakeMultiplexGum = {
-        reset: sandbox.spy()
+      reset: sandbox.spy()
     };
 
+    standaloneMediaRestore = loop.standaloneMedia;
     loop.standaloneMedia = {
       multiplexGum: fakeMultiplexGum
     };
@@ -67,6 +68,7 @@ describe("loop.store.ActiveRoomStore", function () {
 
   afterEach(function() {
     sandbox.restore();
+    loop.standaloneMedia = standaloneMediaRestore;
   });
 
   describe("#constructor", function() {
@@ -316,9 +318,8 @@ describe("loop.store.ActiveRoomStore", function () {
         mozLoop: fakeMozLoop,
         sdkDriver: {}
       });
-      fakeMozLoop.rooms.get.
-        withArgs(fakeToken).
-        callsArgOnWith(1, // index of callback argument
+      fakeMozLoop.rooms.get.withArgs(fakeToken).callsArgOnWith(
+        1, // index of callback argument
         store, // |this| to call it on
         null, // args to call the callback with...
         fakeRoomData
@@ -333,8 +334,8 @@ describe("loop.store.ActiveRoomStore", function () {
           roomToken: fakeToken
         }));
 
-        expect(store.getStoreState()).
-          to.have.property("roomState", ROOM_STATES.GATHER);
+        expect(store.getStoreState()).to.have.property(
+          "roomState", ROOM_STATES.GATHER);
       });
 
     it("should dispatch an SetupRoomInfo action if the get is successful",
@@ -375,9 +376,8 @@ describe("loop.store.ActiveRoomStore", function () {
       function() {
 
         var fakeError = new Error("fake error");
-        fakeMozLoop.rooms.get.
-          withArgs(fakeToken).
-          callsArgOnWith(1, // index of callback argument
+        fakeMozLoop.rooms.get.withArgs(fakeToken).callsArgOnWith(
+          1, // index of callback argument
           store, // |this| to call it on
           fakeError); // args to call the callback with...
 
@@ -563,30 +563,6 @@ describe("loop.store.ActiveRoomStore", function () {
         sinon.assert.calledWithExactly(dispatcher.dispatch,
           new sharedActions.UpdateRoomInfo(expectedData));
       });
-    });
-  });
-
-  describe("#feedbackComplete", function() {
-    it("should set the room state to READY", function() {
-      store.setStoreState({
-        roomState: ROOM_STATES.ENDED,
-        used: true
-      });
-
-      store.feedbackComplete(new sharedActions.FeedbackComplete());
-
-      expect(store.getStoreState().roomState).eql(ROOM_STATES.READY);
-    });
-
-    it("should reset the 'used' state", function() {
-      store.setStoreState({
-        roomState: ROOM_STATES.ENDED,
-        used: true
-      });
-
-      store.feedbackComplete(new sharedActions.FeedbackComplete());
-
-      expect(store.getStoreState().used).eql(false);
     });
   });
 
@@ -938,26 +914,6 @@ describe("loop.store.ActiveRoomStore", function () {
       connectionFailureAction = new sharedActions.ConnectionFailure({
         reason: "FAIL"
       });
-    });
-
-    it("should retry publishing if on desktop, and in the videoMuted state", function() {
-      store._isDesktop = true;
-
-      store.connectionFailure(new sharedActions.ConnectionFailure({
-        reason: FAILURE_DETAILS.UNABLE_TO_PUBLISH_MEDIA
-      }));
-
-      sinon.assert.calledOnce(fakeSdkDriver.retryPublishWithoutVideo);
-    });
-
-    it("should set videoMuted to try when retrying publishing", function() {
-      store._isDesktop = true;
-
-      store.connectionFailure(new sharedActions.ConnectionFailure({
-        reason: FAILURE_DETAILS.UNABLE_TO_PUBLISH_MEDIA
-      }));
-
-      expect(store.getStoreState().videoMuted).eql(true);
     });
 
     it("should store the failure reason", function() {
@@ -1313,14 +1269,6 @@ describe("loop.store.ActiveRoomStore", function () {
       store.remotePeerConnected();
 
       expect(store.getStoreState().roomState).eql(ROOM_STATES.HAS_PARTICIPANTS);
-    });
-
-    it("should set the pref for ToS to `seen`", function() {
-      store.remotePeerConnected();
-
-      sinon.assert.calledOnce(fakeMozLoop.setLoopPref);
-      sinon.assert.calledWithExactly(fakeMozLoop.setLoopPref,
-        "seenToS", "seen");
     });
   });
 

@@ -141,6 +141,7 @@ user_pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
 // works. It just can't hit the default production endpoint.
 user_pref("datareporting.healthreport.documentServerURI", "http://%(server)s/healthreport/");
 user_pref("datareporting.healthreport.about.reportUrl", "http://%(server)s/abouthealthreport/");
+user_pref("datareporting.healthreport.about.reportUrlUnified", "http://%(server)s/abouthealthreport/v4/");
 
 // Make sure CSS error reporting is enabled for tests
 user_pref("layout.css.report_errors", true);
@@ -195,7 +196,6 @@ user_pref("browser.download.panel.shown", true);
 // Assume the about:newtab page's intro panels have been shown to not depend on
 // which test runs first and happens to open about:newtab
 user_pref("browser.newtabpage.introShown", true);
-user_pref("browser.newtabpage.updateIntroShown", true);
 
 // Tell the PBackground infrastructure to run a test at startup.
 user_pref("pbackground.testing", true);
@@ -314,8 +314,7 @@ user_pref("browser.tabs.remote.autostart.2", false);
 // Don't forceably kill content processes after a timeout
 user_pref("dom.ipc.tabs.shutdownTimeoutSecs", 0);
 
-// Avoid performing Reading List and Reader Mode intros during tests.
-user_pref("browser.readinglist.introShown", true);
+// Avoid performing Reader Mode intros during tests.
 user_pref("browser.reader.detectedFirstArticle", true);
 
 // Don't let PAC generator to set PAC, as mochitest framework has its own PAC
@@ -335,5 +334,9 @@ user_pref("media.webspeech.synth.test", true);
 // Turn off search suggestions in the location bar so as not to trigger network
 // connections.
 user_pref("browser.urlbar.suggest.searches", false);
+
+// Turn off the location bar search suggestions opt-in.  It interferes with
+// tests that don't expect it to be there.
+user_pref("browser.urlbar.userMadeSearchSuggestionsChoice", true);
 
 user_pref("dom.audiochannel.mutedByDefault", false);

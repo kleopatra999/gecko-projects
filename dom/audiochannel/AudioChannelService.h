@@ -26,7 +26,7 @@ namespace dom {
 class SpeakerManagerService;
 #endif
 
-#define NUMBER_OF_AUDIO_CHANNELS (uint32_t)AudioChannel::Publicnotification + 1
+#define NUMBER_OF_AUDIO_CHANNELS (uint32_t)AudioChannel::EndGuard_
 
 class AudioChannelService final : public nsIAudioChannelService
                                 , public nsIObserver
@@ -49,13 +49,16 @@ public:
    * Any audio channel agent that starts playing should register itself to
    * this service, sharing the AudioChannel.
    */
-  void RegisterAudioChannelAgent(AudioChannelAgent* aAgent, AudioChannel aChannel);
+  void RegisterAudioChannelAgent(AudioChannelAgent* aAgent,
+                                 uint32_t aNotifyPlayback,
+                                 AudioChannel aChannel);
 
   /**
    * Any audio channel agent that stops playing should unregister itself to
    * this service.
    */
-  void UnregisterAudioChannelAgent(AudioChannelAgent* aAgent);
+  void UnregisterAudioChannelAgent(AudioChannelAgent* aAgent,
+                                   uint32_t aNotifyPlayback);
 
   /**
    * Return the state to indicate this audioChannel for his window should keep
@@ -101,6 +104,14 @@ public:
   bool AnyAudioChannelIsActive();
 
   void RefreshAgentsVolume(nsPIDOMWindow* aWindow);
+
+  // This method needs to know the inner window that wants to capture audio. We
+  // group agents per top outer window, but we can have multiple innerWindow per
+  // top outerWindow (subiframes, etc.) and we have to identify all the agents
+  // just for a particular innerWindow.
+  void RefreshAgentsCapture(nsPIDOMWindow* aWindow,
+                            uint64_t aInnerWindowID);
+
 
 #ifdef MOZ_WIDGET_GONK
   void RegisterSpeakerManager(SpeakerManagerService* aSpeakerManager)

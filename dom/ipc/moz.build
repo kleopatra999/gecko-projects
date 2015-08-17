@@ -34,6 +34,8 @@ EXPORTS.mozilla.dom += [
     'FilePickerParent.h',
     'nsIContentChild.h',
     'nsIContentParent.h',
+    'NuwaChild.h',
+    'NuwaParent.h',
     'PermissionMessageUtils.h',
     'StructuredCloneUtils.h',
     'TabChild.h',
@@ -62,6 +64,8 @@ UNIFIED_SOURCES += [
     'FilePickerParent.cpp',
     'nsIContentChild.cpp',
     'nsIContentParent.cpp',
+    'NuwaChild.cpp',
+    'NuwaParent.cpp',
     'PermissionMessageUtils.cpp',
     'PreallocatedProcessManager.cpp',
     'ProcessPriorityManager.cpp',
@@ -101,6 +105,7 @@ IPDL_SOURCES += [
     'PDocumentRenderer.ipdl',
     'PFilePicker.ipdl',
     'PMemoryReportRequest.ipdl',
+    'PNuwa.ipdl',
     'PPluginWidget.ipdl',
     'PProcessHangMonitor.ipdl',
     'PScreenManager.ipdl',
@@ -124,6 +129,8 @@ LOCAL_INCLUDES += [
     '/docshell/base',
     '/dom/base',
     '/dom/bluetooth',
+    '/dom/bluetooth/bluetooth2',
+    '/dom/bluetooth/bluetooth2/ipc',
     '/dom/devicestorage',
     '/dom/filesystem',
     '/dom/fmradio/ipc',
@@ -161,17 +168,6 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gonk', 'qt'):
 
 if CONFIG['MOZ_TOOLKIT_SEARCH']:
     DEFINES['MOZ_TOOLKIT_SEARCH'] = True
-
-if CONFIG['MOZ_B2G_BT_API_V1']:
-    LOCAL_INCLUDES += [
-        '/dom/bluetooth/bluetooth1',
-        '/dom/bluetooth/bluetooth1/ipc',
-    ]
-else:
-    LOCAL_INCLUDES += [
-        '/dom/bluetooth/bluetooth2',
-        '/dom/bluetooth/bluetooth2/ipc',
-    ]
 
 JAR_MANIFESTS += ['jar.mn']
 

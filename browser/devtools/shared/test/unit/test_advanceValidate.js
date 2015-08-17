@@ -9,9 +9,8 @@
 
 const Cu = Components.utils;
 const Ci = Components.interfaces;
-let {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
-let require = devtools.require;
-let {_advanceValidate} = require("devtools/styleinspector/rule-view");
+let {require} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+let {advanceValidate} = require("devtools/styleinspector/utils");
 
 //                            1         2         3
 //                  0123456789012345678901234567890
@@ -19,8 +18,8 @@ let sampleInput = '\\symbol "string" url(somewhere)';
 
 function testInsertion(where, result, testName) {
   do_print(testName);
-  equal(_advanceValidate(Ci.nsIDOMKeyEvent.DOM_VK_SEMICOLON, sampleInput, where),
-        result, "testing _advanceValidate at " + where);
+  equal(advanceValidate(Ci.nsIDOMKeyEvent.DOM_VK_SEMICOLON, sampleInput, where),
+        result, "testing advanceValidate at " + where);
 }
 
 function run_test() {

@@ -9,7 +9,7 @@
 #include "mozilla/CheckedInt.h"
 #include "mozilla/dom/WebGL2RenderingContextBinding.h"
 #include "mozilla/dom/WebGLRenderingContextBinding.h"
-#include "nsRefPtr.h"
+#include "mozilla/nsRefPtr.h"
 #include "WebGLActiveInfo.h"
 #include "WebGLContext.h"
 #include "WebGLShader.h"
@@ -171,7 +171,7 @@ QueryProgramInfo(WebGLProgram* prog, gl::GLContext* gl)
 
     // Uniforms
 
-    const bool needsCheckForArrays = true;
+    const bool needsCheckForArrays = gl->WorkAroundDriverBugs();
 
     GLuint numActiveUniforms = 0;
     gl->fGetProgramiv(prog->mGLName, LOCAL_GL_ACTIVE_UNIFORMS,

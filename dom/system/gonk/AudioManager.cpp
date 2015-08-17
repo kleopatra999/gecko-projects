@@ -67,7 +67,7 @@ using namespace mozilla::dom::bluetooth;
 static void BinderDeadCallback(status_t aErr);
 static void InternalSetAudioRoutes(SwitchState aState);
 // Refer AudioService.java from Android
-static uint32_t sMaxStreamVolumeTbl[AUDIO_STREAM_CNT] = {
+static const uint32_t sMaxStreamVolumeTbl[AUDIO_STREAM_CNT] = {
   5,   // voice call
   15,  // system
   15,  // ring
@@ -94,7 +94,7 @@ static bool sA2dpSwitchDone = true;
 namespace mozilla {
 namespace dom {
 namespace gonk {
-static VolumeData gVolumeData[VOLUME_TOTAL_NUMBER] = {
+static const VolumeData gVolumeData[VOLUME_TOTAL_NUMBER] = {
   {"audio.volume.content",      VOLUME_MEDIA},
   {"audio.volume.notification", VOLUME_NOTIFICATION},
   {"audio.volume.alarm",        VOLUME_ALARM},
@@ -372,6 +372,17 @@ AudioManager::HandleBluetoothStatusChanged(nsISupports* aSubject,
                                           audioState, aAddress.get());
     AudioSystem::setDeviceConnectionState(AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET,
                                           audioState, aAddress.get());
+  } else if (!strcmp(aTopic, BLUETOOTH_HFP_NREC_STATUS_CHANGED_ID)) {
+      String8 cmd;
+      BluetoothHfpManagerBase* hfp =
+          static_cast<BluetoothHfpManagerBase*>(aSubject);
+      if (hfp->IsNrecEnabled()) {
+          cmd.setTo("bt_headset_name=<unknown>;bt_headset_nrec=on");
+          AudioSystem::setParameters(0, cmd);
+      } else {
+          cmd.setTo("bt_headset_name=<unknown>;bt_headset_nrec=off");
+          AudioSystem::setParameters(0, cmd);
+      }
   }
 #endif
 }
@@ -409,6 +420,7 @@ AudioManager::Observe(nsISupports* aSubject,
 {
   if ((strcmp(aTopic, BLUETOOTH_SCO_STATUS_CHANGED_ID) == 0) ||
       (strcmp(aTopic, BLUETOOTH_HFP_STATUS_CHANGED_ID) == 0) ||
+      (strcmp(aTopic, BLUETOOTH_HFP_NREC_STATUS_CHANGED_ID) == 0) ||
       (strcmp(aTopic, BLUETOOTH_A2DP_STATUS_CHANGED_ID) == 0)) {
     nsCString address = NS_ConvertUTF16toUTF8(nsDependentString(aData));
     if (address.IsEmpty()) {
@@ -553,6 +565,9 @@ AudioManager::AudioManager()
   if (NS_FAILED(obs->AddObserver(this, BLUETOOTH_HFP_STATUS_CHANGED_ID, false))) {
     NS_WARNING("Failed to add bluetooth hfp status changed observer!");
   }
+  if (NS_FAILED(obs->AddObserver(this, BLUETOOTH_HFP_NREC_STATUS_CHANGED_ID, false))) {
+    NS_WARNING("Failed to add bluetooth hfp NREC status changed observer!");
+  }
   if (NS_FAILED(obs->AddObserver(this, MOZ_SETTINGS_CHANGE_ID, false))) {
     NS_WARNING("Failed to add mozsettings-changed observer!");
   }
@@ -582,6 +597,9 @@ AudioManager::~AudioManager() {
   }
   if (NS_FAILED(obs->RemoveObserver(this, BLUETOOTH_HFP_STATUS_CHANGED_ID))) {
     NS_WARNING("Failed to remove bluetooth hfp status changed observer!");
+  }
+  if (NS_FAILED(obs->RemoveObserver(this, BLUETOOTH_HFP_NREC_STATUS_CHANGED_ID))) {
+    NS_WARNING("Failed to remove bluetooth hfp NREC status changed observer!");
   }
   if (NS_FAILED(obs->RemoveObserver(this, MOZ_SETTINGS_CHANGE_ID))) {
     NS_WARNING("Failed to remove mozsettings-changed observer!");
@@ -676,32 +694,6 @@ AudioManager::SetPhoneState(int32_t aState)
   }
 
   mPhoneState = aState;
-
-  if (mPhoneAudioAgent) {
-    mPhoneAudioAgent->NotifyStoppedPlaying();
-    mPhoneAudioAgent = nullptr;
-  }
-
-  if (aState == PHONE_STATE_IN_CALL || aState == PHONE_STATE_RINGTONE) {
-    mPhoneAudioAgent = do_CreateInstance("@mozilla.org/audiochannelagent;1");
-    MOZ_ASSERT(mPhoneAudioAgent);
-    if (aState == PHONE_STATE_IN_CALL) {
-      // Telephony doesn't be paused by any other channels.
-      mPhoneAudioAgent->Init(nullptr, (int32_t)AudioChannel::Telephony, nullptr);
-    } else {
-      mPhoneAudioAgent->Init(nullptr, (int32_t)AudioChannel::Ringer, nullptr);
-    }
-
-    // Telephony can always play.
-    float volume = 0.0;
-    bool muted = true;
-
-    nsresult rv = mPhoneAudioAgent->NotifyStartedPlaying(&volume, &muted);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-  }
-
   return NS_OK;
 }
 
@@ -763,7 +755,7 @@ nsresult
 AudioManager::ValidateVolumeIndex(uint32_t aCategory, uint32_t aIndex) const
 {
   uint32_t maxIndex = GetMaxVolumeByCategory(aCategory);
-  if (aIndex < 0 || aIndex > maxIndex) {
+  if (aIndex > maxIndex) {
     return NS_ERROR_FAILURE;
   }
   return NS_OK;
@@ -783,10 +775,6 @@ AudioManager::SetVolumeByCategory(uint32_t aCategory, uint32_t aIndex)
         }
       }
       status = SetStreamVolumeIndex(AUDIO_STREAM_MUSIC, aIndex);
-      if (NS_WARN_IF(NS_FAILED(status))) {
-        return status;
-      }
-      status = SetStreamVolumeIndex(AUDIO_STREAM_SYSTEM, aIndex);
       break;
     case VOLUME_NOTIFICATION:
       status = SetStreamVolumeIndex(AUDIO_STREAM_NOTIFICATION, aIndex);
@@ -794,6 +782,10 @@ AudioManager::SetVolumeByCategory(uint32_t aCategory, uint32_t aIndex)
         return status;
       }
       status = SetStreamVolumeIndex(AUDIO_STREAM_RING, aIndex);
+      if (NS_WARN_IF(NS_FAILED(status))) {
+        return status;
+      }
+      status = SetStreamVolumeIndex(AUDIO_STREAM_SYSTEM, aIndex);
       break;
     case VOLUME_ALARM:
       status = SetStreamVolumeIndex(AUDIO_STREAM_ALARM, aIndex);
@@ -814,12 +806,12 @@ AudioManager::GetVolumeByCategory(uint32_t aCategory) const
 {
   switch (static_cast<AudioVolumeCategories>(aCategory)) {
     case VOLUME_MEDIA:
-      MOZ_ASSERT(mCurrentStreamVolumeTbl[AUDIO_STREAM_MUSIC] ==
-                 mCurrentStreamVolumeTbl[AUDIO_STREAM_SYSTEM]);
       return mCurrentStreamVolumeTbl[AUDIO_STREAM_MUSIC];
     case VOLUME_NOTIFICATION:
       MOZ_ASSERT(mCurrentStreamVolumeTbl[AUDIO_STREAM_NOTIFICATION] ==
                  mCurrentStreamVolumeTbl[AUDIO_STREAM_RING]);
+      MOZ_ASSERT(mCurrentStreamVolumeTbl[AUDIO_STREAM_NOTIFICATION] ==
+                 mCurrentStreamVolumeTbl[AUDIO_STREAM_SYSTEM]);
       return mCurrentStreamVolumeTbl[AUDIO_STREAM_NOTIFICATION];
     case VOLUME_ALARM:
       return mCurrentStreamVolumeTbl[AUDIO_STREAM_ALARM];
@@ -838,12 +830,12 @@ AudioManager::GetMaxVolumeByCategory(uint32_t aCategory) const
 {
   switch (static_cast<AudioVolumeCategories>(aCategory)) {
     case VOLUME_MEDIA:
-      MOZ_ASSERT(sMaxStreamVolumeTbl[AUDIO_STREAM_MUSIC] ==
-                 sMaxStreamVolumeTbl[AUDIO_STREAM_SYSTEM]);
       return sMaxStreamVolumeTbl[AUDIO_STREAM_MUSIC];
     case VOLUME_NOTIFICATION:
       MOZ_ASSERT(sMaxStreamVolumeTbl[AUDIO_STREAM_NOTIFICATION] ==
                  sMaxStreamVolumeTbl[AUDIO_STREAM_RING]);
+      MOZ_ASSERT(sMaxStreamVolumeTbl[AUDIO_STREAM_NOTIFICATION] ==
+                 sMaxStreamVolumeTbl[AUDIO_STREAM_SYSTEM]);
       return sMaxStreamVolumeTbl[AUDIO_STREAM_NOTIFICATION];
     case VOLUME_ALARM:
       return sMaxStreamVolumeTbl[AUDIO_STREAM_ALARM];
@@ -871,6 +863,7 @@ AudioManager::SetAudioChannelVolume(uint32_t aChannel, uint32_t aIndex)
     case AudioChannel::Notification:
     case AudioChannel::Ringer:
     case AudioChannel::Publicnotification:
+    case AudioChannel::System:
       status = SetVolumeByCategory(VOLUME_NOTIFICATION, aIndex);
       break;
     case AudioChannel::Alarm:
@@ -901,6 +894,7 @@ AudioManager::GetAudioChannelVolume(uint32_t aChannel, uint32_t* aIndex)
     case AudioChannel::Notification:
     case AudioChannel::Ringer:
     case AudioChannel::Publicnotification:
+    case AudioChannel::System:
       *aIndex = GetVolumeByCategory(VOLUME_NOTIFICATION);
       break;
     case AudioChannel::Alarm:
@@ -931,6 +925,7 @@ AudioManager::GetMaxAudioChannelVolume(uint32_t aChannel, uint32_t* aMaxIndex)
     case AudioChannel::Notification:
     case AudioChannel::Ringer:
     case AudioChannel::Publicnotification:
+    case AudioChannel::System:
       *aMaxIndex = GetMaxVolumeByCategory(VOLUME_NOTIFICATION);
       break;
     case AudioChannel::Alarm:
@@ -947,7 +942,7 @@ AudioManager::GetMaxAudioChannelVolume(uint32_t aChannel, uint32_t* aMaxIndex)
 
 nsresult
 AudioManager::SetStreamVolumeIndex(int32_t aStream, uint32_t aIndex) {
-  if (aIndex < 0 || aIndex > sMaxStreamVolumeTbl[aStream]) {
+  if (aIndex > sMaxStreamVolumeTbl[aStream]) {
     return NS_ERROR_INVALID_ARG;
   }
   mCurrentStreamVolumeTbl[aStream] = aIndex;
@@ -1122,7 +1117,7 @@ AudioManager::UpdateProfileState(AudioOutputProfiles aProfile, bool aActive)
   // are other profiles. The bluetooth and headset have the same priotity.
   uint32_t profilesNum = mAudioProfiles.Length();
   MOZ_ASSERT(profilesNum == DEVICE_TOTAL_NUMBER, "Error profile numbers!");
-  for (uint32_t idx = profilesNum - 1; idx >= 0; --idx) {
+  for (int32_t idx = profilesNum - 1; idx >= 0; --idx) {
     if (mAudioProfiles[idx]->GetActive()) {
       mPresentProfile = static_cast<AudioOutputProfiles>(idx);
       break;

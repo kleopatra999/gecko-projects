@@ -10,6 +10,7 @@
 #include "nsTArrayForwardDeclare.h"
 #include "mozilla/Alignment.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Attributes.h"
 #include "mozilla/BinarySearch.h"
 #include "mozilla/fallible.h"
 #include "mozilla/MathAlgorithms.h"
@@ -308,13 +309,11 @@ struct nsTArray_SafeElementAtHelper<nsRefPtr<E>, Derived>
 };
 
 namespace mozilla {
-namespace dom {
 template<class T> class OwningNonNull;
-} // namespace dom
 } // namespace mozilla
 
 template<class E, class Derived>
-struct nsTArray_SafeElementAtHelper<mozilla::dom::OwningNonNull<E>, Derived>
+struct nsTArray_SafeElementAtHelper<mozilla::OwningNonNull<E>, Derived>
 {
   typedef E*     elem_type;
   typedef size_t index_type;
@@ -660,7 +659,7 @@ struct nsTArray_CopyWithConstructors
 // The default behaviour is to use memcpy/memmove for everything.
 //
 template<class E>
-struct nsTArray_CopyChooser
+struct MOZ_NEEDS_MEMMOVABLE_TYPE nsTArray_CopyChooser
 {
   typedef nsTArray_CopyWithMemutils Type;
 };
@@ -882,7 +881,9 @@ public:
   // @param aOther The array object to copy.
   self_type& operator=(const self_type& aOther)
   {
-    ReplaceElementsAt(0, Length(), aOther.Elements(), aOther.Length());
+    if (this != &aOther) {
+      ReplaceElementsAt(0, Length(), aOther.Elements(), aOther.Length());
+    }
     return *this;
   }
 
@@ -891,8 +892,10 @@ public:
   // @param other  The array object to move from.
   self_type& operator=(self_type&& aOther)
   {
-    Clear();
-    SwapElements(aOther);
+    if (this != &aOther) {
+      Clear();
+      SwapElements(aOther);
+    }
     return *this;
   }
 
@@ -936,8 +939,10 @@ public:
   }
 
   // @return The amount of memory used by this nsTArray_Impl, excluding
-  // sizeof(*this).
-  size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
+  // sizeof(*this). If you want to measure anything hanging off the array, you
+  // must iterate over the elements and measure them individually; hence the
+  // "Shallow" prefix.
+  size_t ShallowSizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
   {
     if (this->UsesAutoArrayBuffer() || Hdr() == EmptyHdr()) {
       return 0;
@@ -946,10 +951,12 @@ public:
   }
 
   // @return The amount of memory used by this nsTArray_Impl, including
-  // sizeof(*this).
-  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
+  // sizeof(*this). If you want to measure anything hanging off the array, you
+  // must iterate over the elements and measure them individually; hence the
+  // "Shallow" prefix.
+  size_t ShallowSizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
   {
-    return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
+    return aMallocSizeOf(this) + ShallowSizeOfExcludingThis(aMallocSizeOf);
   }
 
   //
@@ -1531,6 +1538,31 @@ public:
     return AppendElements<Item, Allocator, FallibleAlloc>(aArray);
   }
 
+  // Move all elements from another array to the end of this array.
+  // @return A pointer to the newly appended elements, or null on OOM.
+  template<class Item, class Allocator>
+  elem_type* AppendElements(nsTArray_Impl<Item, Allocator>&& aArray)
+  {
+    MOZ_ASSERT(&aArray != this, "argument must be different aArray");
+    if (Length() == 0) {
+      SwapElements(aArray);
+      return Elements();
+    }
+
+    index_type len = Length();
+    index_type otherLen = aArray.Length();
+    if (!Alloc::Successful(this->template EnsureCapacity<Alloc>(
+          len + otherLen, sizeof(elem_type)))) {
+      return nullptr;
+    }
+    copy_type::CopyElements(Elements() + len, aArray.Elements(), otherLen,
+                            sizeof(elem_type));
+    this->IncrementLength(otherLen);
+    aArray.template ShiftData<Alloc>(0, otherLen, 0, sizeof(elem_type),
+                                     MOZ_ALIGNOF(elem_type));
+    return Elements() + len;
+  }
+
   // Append a new element, move constructing if possible.
 protected:
   template<class Item, typename ActualAlloc = Alloc>
@@ -1597,32 +1629,6 @@ public:
   elem_type* AppendElement(const mozilla::fallible_t&)
   {
     return AppendElement<FallibleAlloc>();
-  }
-
-  // Move all elements from another array to the end of this array without
-  // calling copy constructors or destructors.
-  // @return A pointer to the newly appended elements, or null on OOM.
-  template<class Item, class Allocator>
-  elem_type* MoveElementsFrom(nsTArray_Impl<Item, Allocator>& aArray)
-  {
-    MOZ_ASSERT(&aArray != this, "argument must be different aArray");
-    index_type len = Length();
-    index_type otherLen = aArray.Length();
-    if (!Alloc::Successful(this->template EnsureCapacity<Alloc>(
-          len + otherLen, sizeof(elem_type)))) {
-      return nullptr;
-    }
-    copy_type::CopyElements(Elements() + len, aArray.Elements(), otherLen,
-                            sizeof(elem_type));
-    this->IncrementLength(otherLen);
-    aArray.template ShiftData<Alloc>(0, otherLen, 0, sizeof(elem_type),
-                                     MOZ_ALIGNOF(elem_type));
-    return Elements() + len;
-  }
-  template<class Item, class Allocator>
-  elem_type* MoveElementsFrom(nsTArray_Impl<Item, Allocator>&& aArray)
-  {
-    return MoveElementsFrom<Item, Allocator>(aArray);
   }
 
   // This method removes a range of elements from this array.
@@ -2118,7 +2124,6 @@ public:
   using base_type::InsertElementAt;
   using base_type::InsertElementsAt;
   using base_type::InsertElementSorted;
-  using base_type::MoveElementsFrom;
   using base_type::ReplaceElementsAt;
   using base_type::SetCapacity;
   using base_type::SetLength;
@@ -2183,7 +2188,7 @@ public:
 // You shouldn't use this class directly.
 //
 template<class TArrayBase, size_t N>
-class nsAutoArrayBase : public TArrayBase
+class MOZ_NON_MEMMOVABLE nsAutoArrayBase : public TArrayBase
 {
   static_assert(N != 0, "nsAutoArrayBase<TArrayBase, 0> should be specialized");
 public:
@@ -2219,7 +2224,7 @@ protected:
   }
 
   template<typename Allocator>
-  nsAutoArrayBase(nsTArray_Impl<elem_type, Allocator>&& aOther)
+  explicit nsAutoArrayBase(nsTArray_Impl<elem_type, Allocator>&& aOther)
   {
     Init();
     this->SwapElements(aOther);

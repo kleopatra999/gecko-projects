@@ -96,10 +96,10 @@
         <hbox align="center">
           <checkbox id="trackingProtection"
                     preference="privacy.trackingprotection.enabled"
-                    accesskey="&trackingProtection.accesskey;"
-                    label="&trackingProtection.label;" />
+                    accesskey="&trackingProtection5.accesskey;"
+                    label="&trackingProtection5.label;" />
           <image id="trackingProtectionImage"
-                 src="chrome://browser/skin/bad-content-blocked-16.png"/>
+                 src="chrome://browser/skin/tracking-protection-16.svg"/>
         </hbox>
         <hbox align="center"
               class="indent">
@@ -111,8 +111,8 @@
       <vbox>
         <hbox align="center">
           <checkbox id="privacyDoNotTrackCheckbox"
-                    label="&dntTrackingNotOkay.label2;"
-                    accesskey="&dntTrackingNotOkay.accesskey;"
+                    label="&dntTrackingNotOkay4.label;"
+                    accesskey="&dntTrackingNotOkay4.accesskey;"
                     preference="privacy.donottrackheader.enabled"/>
         </hbox>
         <hbox align="center"

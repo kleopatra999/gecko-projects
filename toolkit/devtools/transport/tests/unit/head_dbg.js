@@ -8,14 +8,14 @@ const Cu = Components.utils;
 const Cr = Components.results;
 const CC = Components.Constructor;
 
-const { devtools } =
+const { require } =
   Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 const { Promise: promise } =
   Cu.import("resource://gre/modules/Promise.jsm", {});
 const { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
 
-const Services = devtools.require("Services");
-const DevToolsUtils = devtools.require("devtools/toolkit/DevToolsUtils.js");
+const Services = require("Services");
+const DevToolsUtils = require("devtools/toolkit/DevToolsUtils.js");
 
 // We do not want to log packets by default, because in some tests,
 // we can be sending large amounts of data. The test harness has
@@ -26,19 +26,8 @@ const DevToolsUtils = devtools.require("devtools/toolkit/DevToolsUtils.js");
 // Enable remote debugging for the relevant tests.
 Services.prefs.setBoolPref("devtools.debugger.remote-enabled", true);
 
-function tryImport(url) {
-  try {
-    Cu.import(url);
-  } catch (e) {
-    dump("Error importing " + url + "\n");
-    dump(DevToolsUtils.safeErrorString(e) + "\n");
-    throw e;
-  }
-}
-
-tryImport("resource://gre/modules/devtools/dbg-server.jsm");
-tryImport("resource://gre/modules/devtools/dbg-client.jsm");
-tryImport("resource://gre/modules/devtools/Loader.jsm");
+const { DebuggerServer } = require("devtools/server/main");
+const { DebuggerClient } = require("devtools/toolkit/client/main");
 
 function testExceptionHook(ex) {
   try {

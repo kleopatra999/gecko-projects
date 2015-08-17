@@ -3,9 +3,9 @@
 
 #include <jni.h>
 
-#include "mozilla/Attributes.h"
 #include "mozilla/jni/Refs.h"
 #include "mozilla/jni/Types.h"
+#include "mozilla/jni/Utils.h"
 #include "AndroidBridge.h"
 
 namespace mozilla {
@@ -61,7 +61,7 @@ protected:
     static JNIEnv* BeginAccess()
     {
         JNIEnv* const env = Traits::isMultithreaded
-                ? GetJNIForThread() : AndroidBridge::GetJNIEnv();
+                ? GetEnvForThread() : GetGeckoThreadEnv();
 
         EnsureClassRef<class Traits::Owner>(env);
         return env;
@@ -151,7 +151,7 @@ class Method<Traits, void> : public Method<Traits, bool>
 public:
     template<typename... Args>
     static void Call(const Owner* cls, nsresult* rv,
-                     const Args&... args) override
+                     const Args&... args)
     {
         JNIEnv* const env = Base::BeginAccess();
 
@@ -180,7 +180,7 @@ class Constructor : protected Method<Traits, typename Traits::ReturnType> {
 public:
     template<typename... Args>
     static ReturnType Call(const Owner* cls, nsresult* rv,
-                           const Args&... args) override
+                           const Args&... args)
     {
         JNIEnv* const env = Base::BeginAccess();
 
@@ -205,12 +205,6 @@ class Field : public Accessor
     typedef class Traits::Owner Owner;
     typedef typename Traits::ReturnType GetterType;
     typedef typename Traits::SetterType SetterType;
-
-    template<typename T> struct RemoveRef { typedef T Type; };
-    template<typename T> struct RemoveRef<const T&> { typedef T Type; };
-
-    // Setter type without any const/& added
-    typedef typename RemoveRef<SetterType>::Type SetterBaseType;
 
 private:
 
@@ -262,13 +256,13 @@ public:
         JNIEnv* const env = BeginAccess();
 
         if (Traits::isStatic) {
-            (env->*TypeAdapter<SetterBaseType>::StaticSet)(
+            (env->*TypeAdapter<SetterType>::StaticSet)(
                     Owner::sClassRef, sID,
-                    TypeAdapter<SetterBaseType>::FromNative(env, val));
+                    TypeAdapter<SetterType>::FromNative(env, val));
         } else {
-            (env->*TypeAdapter<SetterBaseType>::Set)(
+            (env->*TypeAdapter<SetterType>::Set)(
                     cls->mInstance, sID,
-                    TypeAdapter<SetterBaseType>::FromNative(env, val));
+                    TypeAdapter<SetterType>::FromNative(env, val));
         }
 
         EndAccess(env, rv);

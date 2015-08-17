@@ -20,6 +20,7 @@
 #include "selfhosted.out.h"
 
 #include "builtin/Intl.h"
+#include "builtin/MapObject.h"
 #include "builtin/Object.h"
 #include "builtin/Reflect.h"
 #include "builtin/SelfHostingDefines.h"
@@ -27,6 +28,7 @@
 #include "builtin/TypedObject.h"
 #include "builtin/WeakSetObject.h"
 #include "gc/Marking.h"
+#include "js/Date.h"
 #include "vm/Compression.h"
 #include "vm/GeneratorObject.h"
 #include "vm/Interpreter.h"
@@ -476,6 +478,32 @@ js::intrinsic_IsArrayIterator(JSContext* cx, unsigned argc, Value* vp)
     MOZ_ASSERT(args[0].isObject());
 
     args.rval().setBoolean(args[0].toObject().is<ArrayIteratorObject>());
+    return true;
+}
+
+bool
+js::intrinsic_IsMapIterator(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    MOZ_ASSERT(args[0].isObject());
+
+    args.rval().setBoolean(args[0].toObject().is<MapIteratorObject>());
+    return true;
+}
+
+bool
+intrinsic_GetNextMapEntryForIterator(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 2);
+    MOZ_ASSERT(args[0].toObject().is<MapIteratorObject>());
+    MOZ_ASSERT(args[1].isObject());
+
+    Rooted<MapIteratorObject*> mapIterator(cx, &args[0].toObject().as<MapIteratorObject>());
+    RootedArrayObject result(cx, &args[1].toObject().as<ArrayObject>());
+
+    args.rval().setBoolean(MapIteratorObject::next(cx, mapIterator, result));
     return true;
 }
 
@@ -1274,6 +1302,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("std_Object_getOwnPropertyNames",      obj_getOwnPropertyNames,      1,0),
     JS_FN("std_Object_getOwnPropertyDescriptor", obj_getOwnPropertyDescriptor, 2,0),
     JS_FN("std_Object_hasOwnProperty",           obj_hasOwnProperty,           1,0),
+    JS_FN("std_Object_toString",                 obj_toString,                 0,0),
 
     JS_FN("std_Reflect_getPrototypeOf",          Reflect_getPrototypeOf,       1,0),
     JS_FN("std_Reflect_isExtensible",            Reflect_isExtensible,         1,0),
@@ -1340,6 +1369,11 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("IsArrayIterator",         intrinsic_IsArrayIterator,         1,0),
     JS_FN("CallArrayIteratorMethodIfWrapped",
           CallNonGenericSelfhostedMethod<Is<ArrayIteratorObject>>,      2,0),
+
+    JS_FN("IsMapIterator",           intrinsic_IsMapIterator,           1,0),
+    JS_FN("_GetNextMapEntryForIterator", intrinsic_GetNextMapEntryForIterator, 3,0),
+    JS_FN("CallMapIteratorMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<MapIteratorObject>>,        2,0),
 
 
     JS_FN("NewStringIterator",       intrinsic_NewStringIterator,       0,0),
@@ -1651,7 +1685,7 @@ CloneProperties(JSContext* cx, HandleNativeObject selfHostedObject, HandleObject
         }
     }
 
-    AutoShapeVector shapes(cx);
+    Rooted<ShapeVector> shapes(cx, ShapeVector(cx));
     for (Shape::Range<NoGC> range(selfHostedObject->lastProperty()); !range.empty(); range.popFront()) {
         Shape& shape = range.front();
         if (shape.enumerable() && !shapes.append(&shape))
@@ -1745,7 +1779,7 @@ CloneObject(JSContext* cx, HandleNativeObject selfHostedObject)
         MOZ_ASSERT(source->isPermanentAtom());
         clone = RegExpObject::createNoStatics(cx, source, reobj.getFlags(), nullptr, cx->tempLifoAlloc());
     } else if (selfHostedObject->is<DateObject>()) {
-        clone = JS_NewDateObjectMsec(cx, selfHostedObject->as<DateObject>().UTCTime().toNumber());
+        clone = JS::NewDateObject(cx, selfHostedObject->as<DateObject>().clippedTime());
     } else if (selfHostedObject->is<BooleanObject>()) {
         clone = BooleanObject::create(cx, selfHostedObject->as<BooleanObject>().unbox());
     } else if (selfHostedObject->is<NumberObject>()) {

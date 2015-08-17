@@ -68,6 +68,7 @@
 using namespace js;
 using namespace js::gc;
 
+using mozilla::ArrayLength;
 using mozilla::DebugOnly;
 using mozilla::NumberEqualsInt32;
 using mozilla::PodCopy;
@@ -372,15 +373,47 @@ ExecuteState::pushInterpreterFrame(JSContext* cx)
                                                               scopeChain_, type_, evalInFrame_);
 }
 namespace js {
-
 // Implementation of per-performance group performance measurement.
 //
 //
 // All mutable state is stored in `Runtime::stopwatch` (per-process
 // performance stats and logistics) and in `PerformanceGroup` (per
 // group performance stats).
-struct AutoStopwatch final
+class AutoStopwatch final
 {
+    // The context with which this object was initialized.
+    // Non-null.
+    JSContext* const cx_;
+
+    // An indication of the number of times we have entered the event
+    // loop.  Used only for comparison.
+    uint64_t iteration_;
+
+    // `true` if we are monitoring jank, `false` otherwise.
+    bool isMonitoringJank_;
+    // `true` if we are monitoring CPOW, `false` otherwise.
+    bool isMonitoringCPOW_;
+
+    // Timestamps captured while starting the stopwatch.
+    uint64_t userTimeStart_;
+    uint64_t systemTimeStart_;
+    uint64_t CPOWTimeStart_;
+
+   // The performance group shared by this compartment and possibly
+   // others, or `nullptr` if another AutoStopwatch is already in
+   // charge of monitoring that group.
+   mozilla::RefPtr<js::PerformanceGroup> sharedGroup_;
+
+   // The toplevel group, representing the entire process, or `nullptr`
+   // if another AutoStopwatch is already in charge of monitoring that group.
+   mozilla::RefPtr<js::PerformanceGroup> topGroup_;
+
+   // The performance group specific to this compartment, or
+   // `nullptr` if another AutoStopwatch is already in charge of
+   // monitoring that group.
+   mozilla::RefPtr<js::PerformanceGroup> ownGroup_;
+
+   public:
     // If the stopwatch is active, constructing an instance of
     // AutoStopwatch causes it to become the current owner of the
     // stopwatch.
@@ -389,120 +422,162 @@ struct AutoStopwatch final
     explicit inline AutoStopwatch(JSContext* cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : cx_(cx)
       , iteration_(0)
-      , isActive_(false)
-      , isTop_(false)
+      , isMonitoringJank_(false)
+      , isMonitoringCPOW_(false)
       , userTimeStart_(0)
       , systemTimeStart_(0)
       , CPOWTimeStart_(0)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
 
-        JSRuntime* runtime = JS_GetRuntime(cx_);
-        if (!runtime->stopwatch.isMonitoringJank())
+        JSCompartment* compartment = cx_->compartment();
+        if (compartment->scheduledForDestruction)
             return;
+
+        JSRuntime* runtime = cx_->runtime();
+        iteration_ = runtime->stopwatch.iteration;
+
+        sharedGroup_ = acquireGroup(compartment->performanceMonitoring.getSharedGroup(cx));
+        if (sharedGroup_)
+            topGroup_ = acquireGroup(runtime->stopwatch.performance.getOwnGroup());
+
+        if (runtime->stopwatch.isMonitoringPerCompartment())
+            ownGroup_ = acquireGroup(compartment->performanceMonitoring.getOwnGroup());
+
+        if (!sharedGroup_ && !ownGroup_) {
+            // We are not in charge of monitoring anything.
+            return;
+        }
+
+        enter();
+    }
+    ~AutoStopwatch()
+    {
+        if (!sharedGroup_ && !ownGroup_) {
+            // We are not in charge of monitoring anything.
+            // (isMonitoringForTop_ implies isMonitoringForGroup_,
+            // so we do not need to check it)
+            return;
+        }
 
         JSCompartment* compartment = cx_->compartment();
         if (compartment->scheduledForDestruction)
             return;
 
-        iteration_ = runtime->stopwatch.iteration;
-
-        PerformanceGroup *group = compartment->performanceMonitoring.getGroup(cx);
-        MOZ_ASSERT(group);
-
-        if (group->hasStopwatch(iteration_)) {
-            // Someone is already monitoring this group during this
-            // tick, no need for further monitoring.
-            return;
-        }
-
-        // Start the stopwatch.
-        if (!this->getTimes(runtime, &userTimeStart_, &systemTimeStart_))
-            return;
-        isActive_ = true;
-        CPOWTimeStart_ = runtime->stopwatch.performance.totalCPOWTime;
-
-        // We are now in charge of monitoring this group for the tick,
-        // until destruction of `this` or until we enter a nested event
-        // loop and `iteration_` is incremented.
-        group->acquireStopwatch(iteration_, this);
-
-        if (runtime->stopwatch.isEmpty) {
-            // This is the topmost stopwatch on the stack.
-            // It will be in charge of updating the per-process
-            // performance data.
-            runtime->stopwatch.isEmpty = false;
-            runtime->stopwatch.performance.ticks++;
-            isTop_ = true;
-        }
-    }
-    inline ~AutoStopwatch() {
-        if (!isActive_) {
-            // We are not in charge of monitoring anything.
-            return;
-        }
-
-        JSRuntime* runtime = JS_GetRuntime(cx_);
-        JSCompartment* compartment = cx_->compartment();
-
-        MOZ_ASSERT(!compartment->scheduledForDestruction);
-
-        if (!runtime->stopwatch.isMonitoringJank()) {
-            // Monitoring has been stopped while we were
-            // executing the code. Drop everything.
-            return;
-        }
-
+        JSRuntime* runtime = cx_->runtime();
         if (iteration_ != runtime->stopwatch.iteration) {
             // We have entered a nested event loop at some point.
             // Any information we may have is obsolete.
             return;
         }
 
-        PerformanceGroup *group = compartment->performanceMonitoring.getGroup(cx_);
-        MOZ_ASSERT(group);
+        releaseGroup(sharedGroup_);
+        releaseGroup(topGroup_);
+        releaseGroup(ownGroup_);
 
-        // Compute time spent.
-        group->releaseStopwatch(iteration_, this);
-        uint64_t userTimeEnd, systemTimeEnd;
-        if (!this->getTimes(runtime, &userTimeEnd, &systemTimeEnd))
+        // Finish and commit measures
+        exit();
+    }
+   private:
+    void enter() {
+        JSRuntime* runtime = cx_->runtime();
+
+        if (runtime->stopwatch.isMonitoringCPOW()) {
+            CPOWTimeStart_ = runtime->stopwatch.performance.getOwnGroup()->data.totalCPOWTime;
+            isMonitoringCPOW_ = true;
+        }
+
+        if (runtime->stopwatch.isMonitoringJank()) {
+            if (this->getTimes(runtime, &userTimeStart_, &systemTimeStart_)) {
+                isMonitoringJank_ = true;
+            }
+        }
+
+    }
+
+    void exit() {
+        JSRuntime* runtime = cx_->runtime();
+
+        uint64_t userTimeDelta = 0;
+        uint64_t systemTimeDelta = 0;
+        if (isMonitoringJank_ && runtime->stopwatch.isMonitoringJank()) {
+            // We were monitoring jank when we entered and we still are.
+            uint64_t userTimeEnd, systemTimeEnd;
+            if (!this->getTimes(runtime, &userTimeEnd, &systemTimeEnd)) {
+                // We make no attempt to recover from this error. If
+                // we bail out here, we lose nothing of value, plus
+                // I'm nearly sure that this error cannot happen in
+                // practice.
+                return;
+            }
+            userTimeDelta = userTimeEnd - userTimeStart_;
+            systemTimeDelta = systemTimeEnd - systemTimeStart_;
+        }
+
+        uint64_t CPOWTimeDelta = 0;
+        if (isMonitoringCPOW_ && runtime->stopwatch.isMonitoringCPOW()) {
+            // We were monitoring CPOW when we entered and we still are.
+            CPOWTimeDelta = runtime->stopwatch.performance.getOwnGroup()->data.totalCPOWTime - CPOWTimeStart_;
+
+        }
+        commitDeltasToGroups(userTimeDelta, systemTimeDelta, CPOWTimeDelta);
+    }
+
+    // Attempt to acquire a group
+    // If the group is `null` or if the group already has a stopwatch,
+    // do nothing and return `null`.
+    // Otherwise, bind the group to `this` for the current iteration
+    // and return `group`.
+    PerformanceGroup* acquireGroup(PerformanceGroup* group) {
+        if (!group)
+            return nullptr;
+
+        if (group->hasStopwatch(iteration_))
+            return nullptr;
+
+        group->acquireStopwatch(iteration_, this);
+        return group;
+    }
+
+    // Release a group.
+    // Noop if `group` is null or if `this` is not the stopwatch
+    // of `group` for the current iteration.
+    void releaseGroup(PerformanceGroup* group) {
+        if (group)
+            group->releaseStopwatch(iteration_, this);
+    }
+
+    void commitDeltasToGroups(uint64_t userTimeDelta, uint64_t systemTimeDelta,
+                              uint64_t CPOWTimeDelta) const {
+        applyDeltas(userTimeDelta, systemTimeDelta, CPOWTimeDelta, sharedGroup_);
+        applyDeltas(userTimeDelta, systemTimeDelta, CPOWTimeDelta, topGroup_);
+        applyDeltas(userTimeDelta, systemTimeDelta, CPOWTimeDelta, ownGroup_);
+    }
+
+    void applyDeltas(uint64_t userTimeDelta, uint64_t systemTimeDelta,
+                     uint64_t CPOWTimeDelta, PerformanceGroup* group) const {
+        if (!group)
             return;
 
-        uint64_t userTimeDelta = userTimeEnd - userTimeStart_;
-        uint64_t systemTimeDelta = systemTimeEnd - systemTimeStart_;
-        uint64_t CPOWTimeDelta = runtime->stopwatch.performance.totalCPOWTime - CPOWTimeStart_;
+        group->data.ticks++;
+
+        uint64_t totalTimeDelta = userTimeDelta + systemTimeDelta;
         group->data.totalUserTime += userTimeDelta;
         group->data.totalSystemTime += systemTimeDelta;
         group->data.totalCPOWTime += CPOWTimeDelta;
 
-        uint64_t totalTimeDelta = userTimeDelta + systemTimeDelta;
-        updateDurations(totalTimeDelta, group->data.durations);
-        group->data.ticks++;
+        // Update an array containing the number of times we have missed
+        // at least 2^0 successive ms, 2^1 successive ms, ...
+        // 2^i successive ms.
 
-        if (isTop_) {
-            // This is the topmost stopwatch on the stack.
-            // Record the timing information.
-            runtime->stopwatch.performance.totalUserTime = userTimeEnd;
-            runtime->stopwatch.performance.totalSystemTime = systemTimeEnd;
-            updateDurations(totalTimeDelta, runtime->stopwatch.performance.durations);
-            runtime->stopwatch.isEmpty = true;
-        }
-    }
-
- private:
-
-    // Update an array containing the number of times we have missed
-    // at least 2^0 successive ms, 2^1 successive ms, ...
-    // 2^i successive ms.
-    template<int N>
-    void updateDurations(uint64_t totalTimeDelta, uint64_t (&array)[N]) const {
         // Duration of one frame, i.e. 16ms in museconds
         size_t i = 0;
         uint64_t duration = 1000;
         for (i = 0, duration = 1000;
-             i < N && duration < totalTimeDelta;
-             ++i, duration *= 2) {
-            array[i]++;
+             i < ArrayLength(group->data.durations) && duration < totalTimeDelta;
+             ++i, duration *= 2)
+        {
+            group->data.durations[i]++;
         }
     }
 
@@ -585,31 +660,9 @@ struct AutoStopwatch final
         return true;
     }
 
-  private:
-    // The context with which this object was initialized.
-    // Non-null.
-    JSContext* const cx_;
 
-    // An indication of the number of times we have entered the event
-    // loop.  Used only for comparison.
-    uint64_t iteration_;
-
-    // `true` if this object is currently used to monitor performance,
-    // `false` otherwise, i.e. if the stopwatch mechanism is off or if
-    // another stopwatch is already in charge of monitoring for the
-    // same PerformanceGroup.
-    bool isActive_;
-
-    // `true` if this stopwatch is the topmost stopwatch on the stack
-    // for this event, `false` otherwise.
-    bool isTop_;
-
-    // Timestamps captured while starting the stopwatch.
-    uint64_t userTimeStart_;
-    uint64_t systemTimeStart_;
-    uint64_t CPOWTimeStart_;
-
-    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
+private:
+    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER;
 };
 
 } // namespace js
@@ -1897,7 +1950,7 @@ CASE(EnableInterruptsPseudoOpcode)
 
     if (script->hasScriptCounts()) {
         PCCounts counts = script->getPCCounts(REGS.pc);
-        counts.get(PCCounts::BASE_INTERP)++;
+        counts.numExec()++;
         moreInterrupts = true;
     }
 
@@ -1962,7 +2015,6 @@ CASE(EnableInterruptsPseudoOpcode)
 CASE(JSOP_NOP)
 CASE(JSOP_UNUSED2)
 CASE(JSOP_BACKPATCH)
-CASE(JSOP_UNUSED150)
 CASE(JSOP_UNUSED161)
 CASE(JSOP_UNUSED162)
 CASE(JSOP_UNUSED163)
@@ -2564,6 +2616,17 @@ CASE(JSOP_MOD)
     REGS.sp--;
 }
 END_CASE(JSOP_MOD)
+
+CASE(JSOP_POW)
+{
+    ReservedRooted<Value> lval(&rootValue0, REGS.sp[-2]);
+    ReservedRooted<Value> rval(&rootValue1, REGS.sp[-1]);
+    MutableHandleValue res = REGS.stackHandleAt(-2);
+    if (!math_pow_handle(cx, lval, rval, res))
+        goto error;
+    REGS.sp--;
+}
+END_CASE(JSOP_POW)
 
 CASE(JSOP_NOT)
 {
@@ -3939,9 +4002,9 @@ CASE(JSOP_INITHOMEOBJECT)
     MOZ_ASSERT(func->allowSuperProperty());
 
     /* Load the home object */
-    ReservedRooted<NativeObject*> obj(&rootNativeObject0);
-    obj = &REGS.sp[int(-2 - skipOver)].toObject().as<NativeObject>();
-    MOZ_ASSERT(obj->is<PlainObject>() || obj->is<JSFunction>());
+    ReservedRooted<JSObject*> obj(&rootObject0);
+    obj = &REGS.sp[int(-2 - skipOver)].toObject();
+    MOZ_ASSERT(obj->is<PlainObject>() || obj->is<UnboxedPlainObject>() || obj->is<JSFunction>());
 
     func->setExtendedSlot(FunctionExtended::METHOD_HOMEOBJECT_SLOT, ObjectValue(*obj));
 }

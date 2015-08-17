@@ -40,30 +40,6 @@ typedef RootedValueMap::Range RootRange;
 typedef RootedValueMap::Entry RootEntry;
 typedef RootedValueMap::Enum RootEnum;
 
-// Note: the following two functions cannot be static as long as we are using
-// GCC 4.4, since it requires template function parameters to have external
-// linkage.
-
-void
-MarkPropertyDescriptorRoot(JSTracer* trc, JSPropertyDescriptor* pd, const char* name)
-{
-    pd->trace(trc);
-}
-
-// We cannot instantiate (even indirectly) the abstract JS::DynamicTraceable.
-// Instead we cast to a ConcreteTraceable, then upcast before calling trace so
-// that we get the implementation defined dynamically in the vtable.
-struct ConcreteTraceable : public JS::DynamicTraceable
-{
-    void trace(JSTracer* trc) override {}
-};
-
-static void
-MarkDynamicTraceable(JSTracer* trc, ConcreteTraceable* t, const char* name)
-{
-    static_cast<JS::DynamicTraceable*>(t)->trace(trc);
-}
-
 template <typename T>
 using TraceFunction = void (*)(JSTracer* trc, T* ref, const char* name);
 
@@ -86,8 +62,7 @@ MarkExactStackRootsAcrossTypes(T context, JSTracer* trc)
     MarkExactStackRootList<JSObject*>(trc, context, "exact-object");
     MarkExactStackRootList<Shape*>(trc, context, "exact-shape");
     MarkExactStackRootList<BaseShape*>(trc, context, "exact-baseshape");
-    MarkExactStackRootList<ObjectGroup*>(
-        trc, context, "exact-objectgroup");
+    MarkExactStackRootList<ObjectGroup*>(trc, context, "exact-objectgroup");
     MarkExactStackRootList<JSString*>(trc, context, "exact-string");
     MarkExactStackRootList<JS::Symbol*>(trc, context, "exact-symbol");
     MarkExactStackRootList<jit::JitCode*>(trc, context, "exact-jitcode");
@@ -95,13 +70,8 @@ MarkExactStackRootsAcrossTypes(T context, JSTracer* trc)
     MarkExactStackRootList<LazyScript*>(trc, context, "exact-lazy-script");
     MarkExactStackRootList<jsid>(trc, context, "exact-id");
     MarkExactStackRootList<Value>(trc, context, "exact-value");
-    MarkExactStackRootList<JSPropertyDescriptor, MarkPropertyDescriptorRoot>(
-        trc, context, "JSPropertyDescriptor");
-    MarkExactStackRootList<JS::StaticTraceable,
-                           js::DispatchWrapper<JS::StaticTraceable>::TraceWrapped>(
-        trc, context, "StaticTraceable");
-    MarkExactStackRootList<ConcreteTraceable, MarkDynamicTraceable>(
-        trc, context, "DynamicTraceable");
+    MarkExactStackRootList<JS::Traceable, js::DispatchWrapper<JS::Traceable>::TraceWrapped>(
+        trc, context, "Traceable");
 }
 
 static void
@@ -112,13 +82,6 @@ MarkExactStackRoots(JSRuntime* rt, JSTracer* trc)
     MarkExactStackRootsAcrossTypes<PerThreadData*>(&rt->mainThread, trc);
 }
 
-void
-JS::AutoIdArray::trace(JSTracer* trc)
-{
-    MOZ_ASSERT(tag_ == IDARRAY);
-    TraceRange(trc, idArray->length, idArray->begin(), "JSAutoIdArray.idArray");
-}
-
 inline void
 AutoGCRooter::trace(JSTracer* trc)
 {
@@ -126,20 +89,6 @@ AutoGCRooter::trace(JSTracer* trc)
       case PARSER:
         frontend::MarkParser(trc, this);
         return;
-
-      case IDARRAY: {
-        JSIdArray* ida = static_cast<AutoIdArray*>(this)->idArray;
-        TraceRange(trc, ida->length, ida->begin(), "JS::AutoIdArray.idArray");
-        return;
-      }
-
-      case DESCVECTOR: {
-        AutoPropertyDescriptorVector::VectorImpl& descriptors =
-            static_cast<AutoPropertyDescriptorVector*>(this)->vector;
-        for (size_t i = 0, len = descriptors.length(); i < len; i++)
-            descriptors[i].trace(trc);
-        return;
-      }
 
       case VALVECTOR: {
         AutoValueVector::VectorImpl& vector = static_cast<AutoValueVector*>(this)->vector;
@@ -153,37 +102,9 @@ AutoGCRooter::trace(JSTracer* trc)
         return;
       }
 
-      case IDVALVECTOR: {
-        AutoIdValueVector::VectorImpl& vector = static_cast<AutoIdValueVector*>(this)->vector;
-        for (size_t i = 0; i < vector.length(); i++) {
-            TraceRoot(trc, &vector[i].id, "js::AutoIdValueVector id");
-            TraceRoot(trc, &vector[i].value, "js::AutoIdValueVector value");
-        }
-        return;
-      }
-
-      case SHAPEVECTOR: {
-        AutoShapeVector::VectorImpl& vector = static_cast<js::AutoShapeVector*>(this)->vector;
-        TraceRootRange(trc, vector.length(), const_cast<Shape**>(vector.begin()),
-                       "js::AutoShapeVector.vector");
-        return;
-      }
-
       case OBJVECTOR: {
         AutoObjectVector::VectorImpl& vector = static_cast<AutoObjectVector*>(this)->vector;
         TraceRootRange(trc, vector.length(), vector.begin(), "JS::AutoObjectVector.vector");
-        return;
-      }
-
-      case STRINGVECTOR: {
-        AutoStringVector::VectorImpl& vector = static_cast<AutoStringVector*>(this)->vector;
-        TraceRootRange(trc, vector.length(), vector.begin(), "js::AutoStringVector.vector");
-        return;
-      }
-
-      case NAMEVECTOR: {
-        AutoNameVector::VectorImpl& vector = static_cast<AutoNameVector*>(this)->vector;
-        TraceRootRange(trc, vector.length(), vector.begin(), "js::AutoNameVector.vector");
         return;
       }
 
@@ -200,24 +121,6 @@ AutoGCRooter::trace(JSTracer* trc)
       case SCRIPTVECTOR: {
         AutoScriptVector::VectorImpl& vector = static_cast<AutoScriptVector*>(this)->vector;
         TraceRootRange(trc, vector.length(), vector.begin(), "js::AutoScriptVector.vector");
-        return;
-      }
-
-      case OBJU32HASHMAP: {
-        AutoObjectUnsigned32HashMap* self = static_cast<AutoObjectUnsigned32HashMap*>(this);
-        AutoObjectUnsigned32HashMap::HashMapImpl& map = self->map;
-        for (AutoObjectUnsigned32HashMap::Enum e(map); !e.empty(); e.popFront()) {
-            JSObject* key = e.front().key();
-            TraceRoot(trc, &key, "AutoObjectUnsignedHashMap key");
-            if (key != e.front().key())
-                e.rekeyFront(key);
-        }
-        return;
-      }
-
-      case HASHABLEVALUE: {
-        AutoHashableValueRooter* rooter = static_cast<AutoHashableValueRooter*>(this);
-        rooter->trace(trc);
         return;
       }
 
@@ -282,12 +185,6 @@ AutoGCRooter::traceAllWrappers(JSTracer* trc)
 }
 
 void
-AutoHashableValueRooter::trace(JSTracer* trc)
-{
-    TraceRoot(trc, reinterpret_cast<Value*>(&value), "AutoHashableValueRooter");
-}
-
-void
 StackShape::trace(JSTracer* trc)
 {
     if (base)
@@ -330,11 +227,12 @@ struct PersistentRootedMarker
     typedef mozilla::LinkedList<Element> List;
     typedef void (*MarkFunc)(JSTracer* trc, T* ref, const char* name);
 
+    template <TraceFunction<T> TraceFn = TraceNullableRoot>
     static void
     markChain(JSTracer* trc, List& list, const char* name)
     {
         for (Element* r = list.getFirst(); r; r = r->getNext())
-            TraceNullableRoot(trc, r->address(), name);
+            TraceFn(trc, r->address(), name);
     }
 };
 
@@ -342,33 +240,41 @@ struct PersistentRootedMarker
 } // namespace js
 
 void
-js::gc::MarkPersistentRootedChains(JSTracer* trc)
+js::gc::MarkPersistentRootedChainsInLists(RootLists& roots, JSTracer* trc)
 {
-    JSRuntime* rt = trc->runtime();
-
-    PersistentRootedMarker<JSFunction*>::markChain(trc, rt->functionPersistentRooteds,
-                                                   "PersistentRooted<JSFunction*>");
-    PersistentRootedMarker<JSObject*>::markChain(trc, rt->objectPersistentRooteds,
+    PersistentRootedMarker<JSObject*>::markChain(trc, roots.getPersistentRootedList<JSObject*>(),
                                                  "PersistentRooted<JSObject*>");
-    PersistentRootedMarker<JSScript*>::markChain(trc, rt->scriptPersistentRooteds,
+    PersistentRootedMarker<JSScript*>::markChain(trc, roots.getPersistentRootedList<JSScript*>(),
                                                  "PersistentRooted<JSScript*>");
-    PersistentRootedMarker<JSString*>::markChain(trc, rt->stringPersistentRooteds,
+    PersistentRootedMarker<JSString*>::markChain(trc, roots.getPersistentRootedList<JSString*>(),
                                                  "PersistentRooted<JSString*>");
-    PersistentRootedMarker<jsid>::markChain(trc, rt->idPersistentRooteds,
+
+    PersistentRootedMarker<jsid>::markChain(trc, roots.getPersistentRootedList<jsid>(),
                                             "PersistentRooted<jsid>");
-    PersistentRootedMarker<Value>::markChain(trc, rt->valuePersistentRooteds,
+    PersistentRootedMarker<Value>::markChain(trc, roots.getPersistentRootedList<Value>(),
                                              "PersistentRooted<Value>");
+
+    PersistentRootedMarker<JS::Traceable>::markChain<
+        js::DispatchWrapper<JS::Traceable>::TraceWrapped>(trc,
+            reinterpret_cast<mozilla::LinkedList<JS::PersistentRooted<JS::Traceable>>&>(
+                roots.heapRoots_[THING_ROOT_TRACEABLE]),
+            "PersistentRooted<Traceable>");
 }
 
 void
-js::gc::GCRuntime::markRuntime(JSTracer* trc,
-                               TraceOrMarkRuntime traceOrMark,
-                               TraceRootsOrUsedSaved rootsSource)
+js::gc::MarkPersistentRootedChains(JSTracer* trc)
+{
+    for (ContextIter cx(trc->runtime()); !cx.done(); cx.next())
+        MarkPersistentRootedChainsInLists(cx->roots, trc);
+    MarkPersistentRootedChainsInLists(trc->runtime()->mainThread.roots, trc);
+}
+
+void
+js::gc::GCRuntime::markRuntime(JSTracer* trc, TraceOrMarkRuntime traceOrMark)
 {
     gcstats::AutoPhase ap(stats, gcstats::PHASE_MARK_ROOTS);
 
     MOZ_ASSERT(traceOrMark == TraceRuntime || traceOrMark == MarkRuntime);
-    MOZ_ASSERT(rootsSource == TraceRoots || rootsSource == UseSavedRoots);
 
     MOZ_ASSERT(!rt->mainThread.suppressGC);
 
@@ -395,18 +301,6 @@ js::gc::GCRuntime::markRuntime(JSTracer* trc,
         MarkPersistentRootedChains(trc);
     }
 
-    if (rt->asyncStackForNewActivations)
-        TraceRoot(trc, &rt->asyncStackForNewActivations, "asyncStackForNewActivations");
-
-    if (rt->asyncCauseForNewActivations)
-        TraceRoot(trc, &rt->asyncCauseForNewActivations, "asyncCauseForNewActivations");
-
-    if (rt->scriptAndCountsVector) {
-        ScriptAndCountsVector& vec = *rt->scriptAndCountsVector;
-        for (size_t i = 0; i < vec.length(); i++)
-            TraceRoot(trc, &vec[i].script, "scriptAndCountsVector");
-    }
-
     if (!rt->isBeingDestroyed() && !rt->isHeapMinorCollecting()) {
         gcstats::AutoPhase ap(stats, gcstats::PHASE_MARK_RUNTIME_DATA);
 
@@ -417,6 +311,9 @@ js::gc::GCRuntime::markRuntime(JSTracer* trc,
             jit::JitRuntime::Mark(trc);
         }
     }
+
+    if (rt->isHeapMinorCollecting())
+        jit::JitRuntime::MarkJitcodeGlobalTableUnconditionally(trc);
 
     for (ContextIter acx(rt); !acx.done(); acx.next())
         acx->mark(trc);
@@ -542,7 +439,7 @@ BufferGrayRootsTracer::onChild(const JS::GCCellPtr& thing)
         // objects and scripts. We rely on gray root buffering for this to work,
         // but we only need to worry about uncollected dead compartments during
         // incremental GCs (when we do gray root buffering).
-        CallTyped(SetMaybeAliveFunctor(), tenured, thing.kind());
+        DispatchTraceKindTyped(SetMaybeAliveFunctor(), tenured, thing.kind());
 
         if (!zone->gcGrayRoots.append(tenured))
             bufferingGrayRootsFailed = true;

@@ -31,6 +31,12 @@ template<class Cls> class GlobalRef;
 template<class Cls> struct ParamImpl { typedef Ref<Cls> Type; };
 template<class Cls> using Param = typename ParamImpl<Cls>::Type;
 
+namespace detail {
+
+template<class Cls> struct TypeAdapter;
+
+} // namespace detail
+
 
 // How exception during a JNI call should be treated.
 enum class ExceptionMode
@@ -82,23 +88,27 @@ public:
     typedef jni::LocalRef<Object>  LocalRef;
     typedef jni::GlobalRef<Object> GlobalRef;
     typedef const jni::Param<Object>& Param;
+
+    static constexpr char name[] = "java/lang/Object";
 };
 
 
 // Binding for a built-in object reference other than jobject.
 template<typename T>
-class TypedObject : public Object
+class TypedObject : public Class<TypedObject<T>>
 {
     typedef TypedObject<T> Self;
 
 protected:
-    TypedObject(jobject instance) : Object(instance) {}
+    TypedObject(jobject instance) : Class<TypedObject<T>>(instance) {}
 
 public:
     typedef jni::Ref<Self> Ref;
     typedef jni::LocalRef<Self>  LocalRef;
     typedef jni::GlobalRef<Self> GlobalRef;
     typedef const jni::Param<Self>& Param;
+
+    static const char name[];
 };
 
 // Define bindings for built-in types.
@@ -147,7 +157,7 @@ public:
     {
         // Treat two references of the same object as being the same.
         return Cls::mInstance == other.mInstance &&
-                GetJNIForThread()->IsSameObject(
+                GetEnvForThread()->IsSameObject(
                         Cls::mInstance, other.mInstance) != JNI_FALSE;
     }
 
@@ -206,6 +216,7 @@ class Ref : public RefBase<Cls, jobject>
     template<class C, typename T> friend class RefBase;
     friend class jni::LocalRef<Cls>;
     friend class jni::GlobalRef<Cls>;
+    friend class detail::TypeAdapter<Ref<Cls>>;
 
     typedef RefBase<Cls, jobject> Base;
 
@@ -239,6 +250,7 @@ class Ref<TypedObject<T>>
     friend class RefBase<TypedObject<T>, T>;
     friend class jni::LocalRef<TypedObject<T>>;
     friend class jni::GlobalRef<TypedObject<T>>;
+    friend class detail::TypeAdapter<Ref<TypedObject<T>>>;
 
     typedef RefBase<TypedObject<T>, T> Base;
 
@@ -257,6 +269,14 @@ namespace {
 // See explanation in LocalRef.
 template<class Cls> struct GenericObject { typedef Object Type; };
 template<> struct GenericObject<Object> { typedef struct {} Type; };
+template<class Cls> struct GenericLocalRef
+{
+    template<class C> struct Type : jni::Object {};
+};
+template<> struct GenericLocalRef<Object>
+{
+    template<class C> using Type = jni::LocalRef<C>;
+};
 
 } // namespace
 
@@ -273,6 +293,12 @@ private:
     // avoid this conflict, we use GenericObject, which is defined as Object for
     // LocalRef<non-Object> and defined as a dummy class for LocalRef<Object>.
     typedef typename GenericObject<Cls>::Type GenericObject;
+
+    // Similarly, GenericLocalRef is useed to convert LocalRef<Cls> to,
+    // LocalRef<Object>. It's defined as LocalRef<C> for Cls == Object,
+    // and defined as a dummy template class for Cls != Object.
+    template<class C> using GenericLocalRef
+            = typename GenericLocalRef<Cls>::template Type<C>;
 
     JNIEnv* const mEnv;
 
@@ -295,7 +321,7 @@ public:
     // when going out of scope.
     static LocalRef Adopt(jobject instance)
     {
-        return LocalRef(GetJNIForThread(), instance);
+        return LocalRef(GetEnvForThread(), instance);
     }
 
     static LocalRef Adopt(JNIEnv* env, jobject instance)
@@ -317,7 +343,7 @@ public:
         ref.mInstance = nullptr;
     }
 
-    explicit LocalRef(JNIEnv* env = GetJNIForThread())
+    explicit LocalRef(JNIEnv* env = GetEnvForThread())
         : Ref<Cls>(nullptr)
         , mEnv(env)
     {}
@@ -326,7 +352,7 @@ public:
     // which means creating a new local reference.
     MOZ_IMPLICIT LocalRef(const Ref<Cls>& ref)
         : Ref<Cls>(nullptr)
-        , mEnv(GetJNIForThread())
+        , mEnv(GetEnvForThread())
     {
         Ref<Cls>::mInstance = mEnv->NewLocalRef(ref.mInstance);
     }
@@ -340,10 +366,18 @@ public:
         ref.mInstance = nullptr;
     }
 
+    template<class C>
+    MOZ_IMPLICIT LocalRef(GenericLocalRef<C>&& ref)
+        : Ref<Cls>(ref.mInstance)
+        , mEnv(ref.mEnv)
+    {
+        ref.mInstance = nullptr;
+    }
+
     // Implicitly converts nullptr to LocalRef.
     MOZ_IMPLICIT LocalRef(decltype(nullptr))
         : Ref<Cls>(nullptr)
-        , mEnv(GetJNIForThread())
+        , mEnv(GetEnvForThread())
     {}
 
     ~LocalRef()
@@ -376,13 +410,20 @@ public:
 
     LocalRef<Cls>& operator=(const Ref<Cls>& ref)
     {
-        LocalRef<Cls> newRef(mEnv, ref.mInstance);
+        LocalRef<Cls> newRef(mEnv, mEnv->NewLocalRef(ref.mInstance));
         return swap(newRef);
     }
 
     LocalRef<Cls>& operator=(LocalRef<GenericObject>&& ref)
     {
-        LocalRef<Cls> newRef(mozilla::Forward<LocalRef<GenericObject>>(ref));
+        LocalRef<Cls> newRef(mozilla::Move(ref));
+        return swap(newRef);
+    }
+
+    template<class C>
+    LocalRef<Cls>& operator=(GenericLocalRef<C>&& ref)
+    {
+        LocalRef<Cls> newRef(mozilla::Move(ref));
         return swap(newRef);
     }
 
@@ -404,7 +445,7 @@ private:
             return nullptr;
         }
         if (!env) {
-            env = GetJNIForThread();
+            env = GetEnvForThread();
         }
         return env->NewGlobalRef(instance);
     }
@@ -424,7 +465,7 @@ public:
 
     // Copy constructor
     GlobalRef(const GlobalRef& ref)
-        : Ref<Cls>(ref.mInstance)
+        : Ref<Cls>(NewGlobalRef(nullptr, ref.mInstance))
     {}
 
     // Move constructor
@@ -450,7 +491,7 @@ public:
     ~GlobalRef()
     {
         if (Ref<Cls>::mInstance) {
-            JNIEnv* const env = GetJNIForThread();
+            JNIEnv* const env = GetEnvForThread();
             env->DeleteGlobalRef(Ref<Cls>::mInstance);
             Ref<Cls>::mInstance = nullptr;
         }
@@ -491,6 +532,7 @@ class Ref<String> : public RefBase<String, jstring>
     friend class RefBase<String, jstring>;
     friend class jni::LocalRef<String>;
     friend class jni::GlobalRef<String>;
+    friend class detail::TypeAdapter<Ref<String>>;
 
     typedef RefBase<TypedObject<jstring>, jstring> Base;
 
@@ -505,16 +547,16 @@ public:
     // Get the length of the jstring.
     size_t Length() const
     {
-        JNIEnv* const env = GetJNIForThread();
+        JNIEnv* const env = GetEnvForThread();
         return env->GetStringLength(Get());
     }
 
     // Convert jstring to a nsString.
     operator nsString() const
     {
-        MOZ_ASSERT(Object::mInstance);
+        MOZ_ASSERT(String::mInstance);
 
-        JNIEnv* const env = GetJNIForThread();
+        JNIEnv* const env = GetEnvForThread();
         const jchar* const str = env->GetStringChars(Get(), nullptr);
         const jsize len = env->GetStringLength(Get());
 
@@ -554,22 +596,22 @@ public:
         , mEnv(nullptr)
     {}
 
-    MOZ_IMPLICIT Type(const nsAString& str, JNIEnv* env = GetJNIForThread())
+    MOZ_IMPLICIT Type(const nsAString& str, JNIEnv* env = GetEnvForThread())
         : Ref<String>(GetString(env, str))
         , mEnv(env)
     {}
 
-    MOZ_IMPLICIT Type(const char16_t* str, JNIEnv* env = GetJNIForThread())
+    MOZ_IMPLICIT Type(const char16_t* str, JNIEnv* env = GetEnvForThread())
         : Ref<String>(GetString(env, nsDependentString(str)))
         , mEnv(env)
     {}
 
-    MOZ_IMPLICIT Type(const nsACString& str, JNIEnv* env = GetJNIForThread())
+    MOZ_IMPLICIT Type(const nsACString& str, JNIEnv* env = GetEnvForThread())
         : Ref<String>(GetString(env, NS_ConvertUTF8toUTF16(str)))
         , mEnv(env)
     {}
 
-    MOZ_IMPLICIT Type(const char* str, JNIEnv* env = GetJNIForThread())
+    MOZ_IMPLICIT Type(const char* str, JNIEnv* env = GetEnvForThread())
         : Ref<String>(GetString(env, NS_ConvertUTF8toUTF16(str)))
         , mEnv(env)
     {}
@@ -579,6 +621,14 @@ public:
         if (mEnv) {
             mEnv->DeleteLocalRef(Get());
         }
+    }
+
+    operator String::LocalRef() const
+    {
+        JNIEnv* const env = mEnv ? mEnv : GetEnvForThread();
+        // We can't return our existing ref because the returned
+        // LocalRef could be freed first, so we need a new local ref.
+        return String::LocalRef::Adopt(env, env->NewLocalRef(Get()));
     }
 };
 

@@ -75,6 +75,8 @@
 #include "GeckoTouchDispatcher.h"
 #endif
 
+#include "LayerScope.h"
+
 namespace mozilla {
 namespace layers {
 
@@ -680,7 +682,7 @@ CompositorParent::CompositorParent(nsIWidget* aWidget,
     mCompositorScheduler = new CompositorSoftwareTimerScheduler(this);
   }
 
-  gfxPlatform::GetPlatform()->ComputeTileSize();
+  LayerScope::SetPixelScale(mWidget->GetDefaultScale().scale);
 }
 
 bool
@@ -1180,8 +1182,9 @@ CompositorParent::CompositeToTarget(DrawTarget* aTarget, const gfx::IntRect* aRe
   // We're not really taking advantage of the stored composite-again-time here.
   // We might be able to skip the next few composites altogether. However,
   // that's a bit complex to implement and we'll get most of the advantage
-  // by skipping compositing when we detect there's nothing invalid.
-  if (!mCompositor->GetCompositeAgainTime().IsNull() ||
+  // by skipping compositing when we detect there's nothing invalid. This is why
+  // we do "composite until" rather than "composite again at".
+  if (!mCompositor->GetCompositeUntilTime().IsNull() ||
       mLayerManager->DebugOverlayWantsNextFrame()) {
     ScheduleComposition();
   }
@@ -1264,6 +1267,7 @@ CompositorParent::ShadowLayersUpdated(LayerTransactionParent* aLayerTree,
   // race condition.
   mLayerManager->UpdateRenderBounds(aTargetConfig.naturalBounds());
   mLayerManager->SetRegionToClear(aTargetConfig.clearRegion());
+  mLayerManager->GetCompositor()->SetScreenRotation(aTargetConfig.rotation());
 
   mCompositionManager->Updated(aIsFirstPaint, aTargetConfig);
   Layer* root = aLayerTree->GetRoot();
@@ -1729,7 +1733,6 @@ public:
     , mNotifyAfterRemotePaint(false)
   {
     MOZ_ASSERT(NS_IsMainThread());
-    gfxPlatform::GetPlatform()->ComputeTileSize();
   }
 
   // IToplevelProtocol::CloneToplevel()

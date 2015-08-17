@@ -66,7 +66,7 @@ this.SelectContentHelper.prototype = {
         break;
 
       case "Forms:DismissedDropDown":
-        if (this.initialSelection != this.element.item[this.element.selectedIndex]) {
+        if (this.initialSelection != this.element.item(this.element.selectedIndex)) {
           let event = this.element.ownerDocument.createEvent("Events");
           event.initEvent("change", true, true);
           this.element.dispatchEvent(event);
@@ -110,7 +110,7 @@ function buildOptionListForChildren(node) {
       }
 
       let info = {
-        tagName: child.tagName,
+        tagName: tagName,
         textContent: textContent,
         disabled: child.disabled,
         // We need to do this for every option element as each one can have

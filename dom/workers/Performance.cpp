@@ -33,7 +33,12 @@ Performance::Now() const
 {
   TimeDuration duration =
     TimeStamp::Now() - mWorkerPrivate->NowBaseTimeStamp();
-  return duration.ToMilliseconds();
+  double nowTime = duration.ToMilliseconds();
+  // Round down to the nearest 5us, because if the timer is too accurate people
+  // can do nasty timing attacks with it.  See similar code in the non-worker
+  // Performance implementation.
+  const double maxResolutionMs = 0.005;
+  return floor(nowTime / maxResolutionMs) * maxResolutionMs;
 }
 
 // To be removed once bug 1124165 lands
@@ -57,6 +62,16 @@ Performance::GetPerformanceTimingFromString(const nsAString& aProperty)
 
   MOZ_CRASH("IsPerformanceTimingAttribute and GetPerformanceTimingFromString are out of sync");
   return 0;
+}
+
+void
+Performance::InsertUserEntry(PerformanceEntry* aEntry)
+{
+  if (mWorkerPrivate->PerformanceLoggingEnabled()) {
+    PerformanceBase::LogEntry(aEntry,
+                              NS_ConvertUTF16toUTF8(mWorkerPrivate->ScriptURL()));
+  }
+  PerformanceBase::InsertUserEntry(aEntry);
 }
 
 DOMHighResTimeStamp

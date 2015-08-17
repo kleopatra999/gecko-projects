@@ -8,10 +8,7 @@
  * framed packet, i.e. when the length header is invalid.
  */
 
-Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
-Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
-
-const { RawPacket } = devtools.require("devtools/toolkit/transport/packets");
+const { RawPacket } = require("devtools/toolkit/transport/packets");
 
 function run_test() {
   do_print("Starting test at " + new Date().toTimeString());

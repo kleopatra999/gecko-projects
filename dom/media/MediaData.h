@@ -12,7 +12,7 @@
 #include "AudioSampleFormat.h"
 #include "nsIMemoryReporter.h"
 #include "SharedBuffer.h"
-#include "nsRefPtr.h"
+#include "mozilla/nsRefPtr.h"
 #include "nsTArray.h"
 
 namespace mozilla {
@@ -40,12 +40,14 @@ public:
   MediaData(Type aType,
             int64_t aOffset,
             int64_t aTimestamp,
-            int64_t aDuration)
+            int64_t aDuration,
+            uint32_t aFrames)
     : mType(aType)
     , mOffset(aOffset)
     , mTime(aTimestamp)
     , mTimecode(aTimestamp)
     , mDuration(aDuration)
+    , mFrames(aFrames)
     , mKeyframe(false)
     , mDiscontinuity(false)
   {}
@@ -66,6 +68,9 @@ public:
   // Duration of sample, in microseconds.
   int64_t mDuration;
 
+  // Amount of frames for contained data.
+  const uint32_t mFrames;
+
   bool mKeyframe;
 
   // True if this is the first sample after a gap or discontinuity in
@@ -79,13 +84,29 @@ public:
     mTime = mTime - aStartTime;
     return mTime >= 0;
   }
+
+  template <typename ReturnType>
+  const ReturnType* As() const
+  {
+    MOZ_ASSERT(this->mType == ReturnType::sType);
+    return static_cast<const ReturnType*>(this);
+  }
+
+  template <typename ReturnType>
+  ReturnType* As()
+  {
+    MOZ_ASSERT(this->mType == ReturnType::sType);
+    return static_cast<ReturnType*>(this);
+  }
+
 protected:
-  explicit MediaData(Type aType)
+  MediaData(Type aType, uint32_t aFrames)
     : mType(aType)
     , mOffset(0)
     , mTime(0)
     , mTimecode(0)
     , mDuration(0)
+    , mFrames(aFrames)
     , mKeyframe(false)
     , mDiscontinuity(false)
   {}
@@ -105,8 +126,7 @@ public:
             AudioDataValue* aData,
             uint32_t aChannels,
             uint32_t aRate)
-    : MediaData(sType, aOffset, aTime, aDuration)
-    , mFrames(aFrames)
+    : MediaData(sType, aOffset, aTime, aDuration, aFrames)
     , mChannels(aChannels)
     , mRate(aRate)
     , mAudioData(aData) {}
@@ -128,7 +148,6 @@ public:
   // If mAudioBuffer is null, creates it from mAudioData.
   void EnsureAudioBuffer();
 
-  const uint32_t mFrames;
   const uint32_t mChannels;
   const uint32_t mRate;
   // At least one of mAudioBuffer/mAudioData must be non-null.
@@ -289,7 +308,7 @@ public:
             bool aKeyframe,
             int64_t aTimecode,
             IntSize aDisplay,
-            int32_t aFrameID);
+            uint32_t aFrameID);
 
 protected:
   ~VideoData();
@@ -341,9 +360,9 @@ class MediaRawDataWriter
 {
 public:
   // Pointer to data or null if not-yet allocated
-  uint8_t* mData;
+  uint8_t* Data();
   // Writeable size of buffer.
-  size_t mSize;
+  size_t Size();
   // Writeable reference to MediaRawData::mCryptoInternal
   CryptoSample& mCrypto;
 
@@ -356,7 +375,7 @@ public:
   bool Prepend(const uint8_t* aData, size_t aSize);
   // Replace current content with aData.
   bool Replace(const uint8_t* aData, size_t aSize);
-  // Clear the memory buffer. Will set mData and mSize to 0.
+  // Clear the memory buffer. Will set target mData and mSize to 0.
   void Clear();
 
 private:
@@ -364,7 +383,6 @@ private:
   explicit MediaRawDataWriter(MediaRawData* aMediaRawData);
   bool EnsureSize(size_t aSize);
   MediaRawData* mTarget;
-  nsRefPtr<MediaByteBuffer> mBuffer;
 };
 
 class MediaRawData : public MediaData {
@@ -373,9 +391,13 @@ public:
   MediaRawData(const uint8_t* aData, size_t mSize);
 
   // Pointer to data or null if not-yet allocated
-  const uint8_t* mData;
+  const uint8_t* Data() const { return mData; }
   // Size of buffer.
-  size_t mSize;
+  size_t Size() const { return mSize; }
+  size_t ComputedSizeOfIncludingThis() const
+  {
+    return sizeof(*this) + mCapacity;
+  }
 
   const CryptoSample& mCrypto;
   nsRefPtr<MediaByteBuffer> mExtraData;
@@ -400,9 +422,11 @@ private:
   // read as required by some data decoders.
   // Returns false if memory couldn't be allocated.
   bool EnsureCapacity(size_t aSize);
-  nsRefPtr<MediaByteBuffer> mBuffer;
+  uint8_t* mData;
+  size_t mSize;
+  nsAutoArrayPtr<uint8_t> mBuffer;
+  uint32_t mCapacity;
   CryptoSample mCryptoInternal;
-  uint32_t mPadding;
   MediaRawData(const MediaRawData&); // Not implemented
 };
 

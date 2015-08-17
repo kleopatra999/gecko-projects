@@ -9,7 +9,7 @@
 #include "ContainerParser.h"
 #include "MediaData.h"
 #include "MediaSourceDecoder.h"
-#include "SharedThreadPool.h"
+#include "mozilla/SharedThreadPool.h"
 #include "mozilla/TaskQueue.h"
 #include "SourceBufferDecoder.h"
 #include "SourceBufferResource.h"
@@ -36,10 +36,11 @@ extern PRLogModuleInfo* GetMediaSourceLog();
 
 #define EOS_FUZZ_US 125000
 
+namespace mozilla {
+
 using media::TimeIntervals;
 using media::Interval;
-
-namespace mozilla {
+using media::TimeUnit;
 
 TrackBuffer::TrackBuffer(MediaSourceDecoder* aParentDecoder, const nsACString& aType)
   : mParentDecoder(aParentDecoder)

@@ -37,6 +37,7 @@ enum class SurfaceFormat : int8_t {
   R5G6B5,
   A8,
   YUV,
+  NV12,
   UNKNOWN
 };
 
@@ -47,6 +48,7 @@ inline bool IsOpaque(SurfaceFormat aFormat)
   case SurfaceFormat::R8G8B8X8:
   case SurfaceFormat::R5G6B5:
   case SurfaceFormat::YUV:
+  case SurfaceFormat::NV12:
     return true;
   default:
     return false;
@@ -264,6 +266,14 @@ public:
   {
     return uint32_t(b * 255.0f) | uint32_t(g * 255.0f) << 8 |
            uint32_t(r * 255.0f) << 16 | uint32_t(a * 255.0f) << 24;
+  }
+
+  bool operator==(const Color& aColor) const {
+    return r == aColor.r && g == aColor.g && b == aColor.b && a == aColor.a;
+  }
+
+  bool operator!=(const Color& aColor) const {
+    return !(*this == aColor);
   }
 
   Float r, g, b, a;

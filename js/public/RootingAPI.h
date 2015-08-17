@@ -11,6 +11,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/GuardObjects.h"
 #include "mozilla/LinkedList.h"
+#include "mozilla/Move.h"
 #include "mozilla/TypeTraits.h"
 
 #include "jspubtd.h"
@@ -383,8 +384,8 @@ class MOZ_NONHEAP_CLASS Handle : public js::HandleBase<T>
   public:
     /* Creates a handle from a handle of a type convertible to T. */
     template <typename S>
-    Handle(Handle<S> handle,
-           typename mozilla::EnableIf<mozilla::IsConvertible<S, T>::value, int>::Type dummy = 0)
+    MOZ_IMPLICIT Handle(Handle<S> handle,
+                        typename mozilla::EnableIf<mozilla::IsConvertible<S, T>::value, int>::Type dummy = 0)
     {
         static_assert(sizeof(Handle<T>) == sizeof(T*),
                       "Handle must be binary compatible with T*.");
@@ -427,19 +428,19 @@ class MOZ_NONHEAP_CLASS Handle : public js::HandleBase<T>
      */
     template <typename S>
     inline
-    Handle(const Rooted<S>& root,
-           typename mozilla::EnableIf<mozilla::IsConvertible<S, T>::value, int>::Type dummy = 0);
+    MOZ_IMPLICIT Handle(const Rooted<S>& root,
+                        typename mozilla::EnableIf<mozilla::IsConvertible<S, T>::value, int>::Type dummy = 0);
 
     template <typename S>
     inline
-    Handle(const PersistentRooted<S>& root,
-           typename mozilla::EnableIf<mozilla::IsConvertible<S, T>::value, int>::Type dummy = 0);
+    MOZ_IMPLICIT Handle(const PersistentRooted<S>& root,
+                        typename mozilla::EnableIf<mozilla::IsConvertible<S, T>::value, int>::Type dummy = 0);
 
     /* Construct a read only handle from a mutable handle. */
     template <typename S>
     inline
-    Handle(MutableHandle<S>& root,
-           typename mozilla::EnableIf<mozilla::IsConvertible<S, T>::value, int>::Type dummy = 0);
+    MOZ_IMPLICIT Handle(MutableHandle<S>& root,
+                        typename mozilla::EnableIf<mozilla::IsConvertible<S, T>::value, int>::Type dummy = 0);
 
     DECLARE_POINTER_COMPARISON_OPS(T);
     DECLARE_POINTER_CONSTREF_OPS(T);
@@ -566,26 +567,15 @@ struct GCMethods<JSFunction*>
 
 namespace JS {
 
-// If a class containing GC pointers has (or can gain) a vtable, then it can be
-// trivially used with Rooted/Handle/MutableHandle by deriving from
-// DynamicTraceable and overriding |void trace(JSTracer*)|.
-class DynamicTraceable
+// Non pointer types -- structs or classes that contain GC pointers, either as
+// a member or in a more complex container layout -- can also be stored in a
+// [Persistent]Rooted if it derives from JS::Traceable. A JS::Traceable stored
+// in a [Persistent]Rooted must implement the method:
+//     |static void trace(T*, JSTracer*)|
+class Traceable
 {
   public:
-    static js::ThingRootKind rootKind() { return js::THING_ROOT_DYNAMIC_TRACEABLE; }
-
-    virtual ~DynamicTraceable() {}
-    virtual void trace(JSTracer* trc) = 0;
-};
-
-// To use a static class or struct (e.g. not containing a vtable) as part of a
-// Rooted/Handle/MutableHandle, ensure that it derives from StaticTraceable
-// (i.e. so that automatic upcast via calls works) and ensure that a method
-// |static void trace(T*, JSTracer*)| exists on the class.
-class StaticTraceable
-{
-  public:
-    static js::ThingRootKind rootKind() { return js::THING_ROOT_STATIC_TRACEABLE; }
+    static js::ThingRootKind rootKind() { return js::THING_ROOT_TRACEABLE; }
 };
 
 } /* namespace JS */
@@ -595,8 +585,8 @@ namespace js {
 template <typename T>
 class DispatchWrapper
 {
-    static_assert(mozilla::IsBaseOf<JS::StaticTraceable, T>::value,
-                  "DispatchWrapper is intended only for usage with a StaticTraceable");
+    static_assert(mozilla::IsBaseOf<JS::Traceable, T>::value,
+                  "DispatchWrapper is intended only for usage with a Traceable");
 
     using TraceFn = void (*)(T*, JSTracer*);
     TraceFn tracer;
@@ -606,8 +596,13 @@ class DispatchWrapper
     T storage;
 
   public:
+    template <typename U>
+    MOZ_IMPLICIT DispatchWrapper(U&& initial)
+      : tracer(&T::trace),
+        storage(mozilla::Forward<U>(initial))
+    { }
+
     // Mimic a pointer type, so that we can drop into Rooted.
-    MOZ_IMPLICIT DispatchWrapper(const T& initial) : tracer(&T::trace), storage(initial) {}
     T* operator &() { return &storage; }
     const T* operator &() const { return &storage; }
     operator T&() { return storage; }
@@ -615,12 +610,36 @@ class DispatchWrapper
 
     // Trace the contained storage (of unknown type) using the trace function
     // we set aside when we did know the type.
-    static void TraceWrapped(JSTracer* trc, JS::StaticTraceable* thingp, const char* name) {
+    static void TraceWrapped(JSTracer* trc, JS::Traceable* thingp, const char* name) {
         auto wrapper = reinterpret_cast<DispatchWrapper*>(
                            uintptr_t(thingp) - offsetof(DispatchWrapper, storage));
         wrapper->tracer(&wrapper->storage, trc);
     }
 };
+
+inline RootLists&
+RootListsForRootingContext(JSContext* cx)
+{
+    return ContextFriendFields::get(cx)->roots;
+}
+
+inline RootLists&
+RootListsForRootingContext(js::ContextFriendFields* cx)
+{
+    return cx->roots;
+}
+
+inline RootLists&
+RootListsForRootingContext(JSRuntime* rt)
+{
+    return PerThreadDataFriendFields::getMainThread(rt)->roots;
+}
+
+inline RootLists&
+RootListsForRootingContext(js::PerThreadDataFriendFields* pt)
+{
+    return pt->roots;
+}
 
 } /* namespace js */
 
@@ -637,82 +656,34 @@ namespace JS {
 template <typename T>
 class MOZ_STACK_CLASS Rooted : public js::RootedBase<T>
 {
-    static_assert(!mozilla::IsConvertible<T, StaticTraceable*>::value &&
-                  !mozilla::IsConvertible<T, DynamicTraceable*>::value,
+    static_assert(!mozilla::IsConvertible<T, Traceable*>::value,
                   "Rooted takes pointer or Traceable types but not Traceable* type");
 
     /* Note: CX is a subclass of either ContextFriendFields or PerThreadDataFriendFields. */
-    template <typename CX>
-    void init(CX* cx) {
+    void registerWithRootLists(js::RootLists& roots) {
         js::ThingRootKind kind = js::RootKind<T>::rootKind();
-        this->stack = &cx->roots.stackRoots_[kind];
+        this->stack = &roots.stackRoots_[kind];
         this->prev = *stack;
         *stack = reinterpret_cast<Rooted<void*>*>(this);
     }
 
   public:
-    explicit Rooted(JSContext* cx
+    template <typename RootingContext>
+    explicit Rooted(const RootingContext& cx
                     MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : ptr(js::GCMethods<T>::initial())
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        init(js::ContextFriendFields::get(cx));
+        registerWithRootLists(js::RootListsForRootingContext(cx));
     }
 
-    Rooted(JSContext* cx, const T& initial
+    template <typename RootingContext, typename S>
+    Rooted(const RootingContext& cx, S&& initial
            MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : ptr(initial)
+      : ptr(mozilla::Forward<S>(initial))
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        init(js::ContextFriendFields::get(cx));
-    }
-
-    explicit Rooted(js::ContextFriendFields* cx
-                    MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : ptr(js::GCMethods<T>::initial())
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        init(cx);
-    }
-
-    Rooted(js::ContextFriendFields* cx, const T& initial
-           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : ptr(initial)
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        init(cx);
-    }
-
-    explicit Rooted(js::PerThreadDataFriendFields* pt
-                    MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : ptr(js::GCMethods<T>::initial())
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        init(pt);
-    }
-
-    Rooted(js::PerThreadDataFriendFields* pt, const T& initial
-           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : ptr(initial)
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        init(pt);
-    }
-
-    explicit Rooted(JSRuntime* rt
-                    MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : ptr(js::GCMethods<T>::initial())
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        init(js::PerThreadDataFriendFields::getMainThread(rt));
-    }
-
-    Rooted(JSRuntime* rt, const T& initial
-           MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : ptr(initial)
-    {
-        MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        init(js::PerThreadDataFriendFields::getMainThread(rt));
+        registerWithRootLists(js::RootListsForRootingContext(cx));
     }
 
     ~Rooted() {
@@ -748,13 +719,13 @@ class MOZ_STACK_CLASS Rooted : public js::RootedBase<T>
     /*
      * For pointer types, the TraceKind for tracing is based on the list it is
      * in (selected via rootKind), so no additional storage is required here.
-     * All StaticTraceable, however, share the same list, so the function to
+     * All Traceable, however, share the same list, so the function to
      * call for tracing is stored adjacent to the struct. Since C++ cannot
      * templatize on storage class, this is implemented via the wrapper class
      * DispatchWrapper.
      */
     using MaybeWrapped = typename mozilla::Conditional<
-        mozilla::IsBaseOf<StaticTraceable, T>::value,
+        mozilla::IsBaseOf<Traceable, T>::value,
         js::DispatchWrapper<T>,
         T>::Type;
     MaybeWrapped ptr;
@@ -810,16 +781,16 @@ class FakeRooted : public RootedBase<T>
 {
   public:
     template <typename CX>
-    FakeRooted(CX* cx
-               MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit FakeRooted(CX* cx
+                        MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : ptr(GCMethods<T>::initial())
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
     }
 
     template <typename CX>
-    FakeRooted(CX* cx, T initial
-               MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
+    explicit FakeRooted(CX* cx, T initial
+                        MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
       : ptr(initial)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
@@ -1022,31 +993,37 @@ class PersistentRooted : public js::PersistentRootedBase<T>,
 
     friend struct js::gc::PersistentRootedMarker<T>;
 
-    friend void js::gc::FinishPersistentRootedChains(JSRuntime* rt);
+    friend void js::gc::FinishPersistentRootedChains(js::RootLists&);
 
-    void registerWithRuntime(JSRuntime* rt) {
+    void registerWithRootLists(js::RootLists& roots) {
         MOZ_ASSERT(!initialized());
-        JS::shadow::Runtime* srt = JS::shadow::Runtime::asShadowRuntime(rt);
-        srt->getPersistentRootedList<T>().insertBack(this);
+        js::ThingRootKind kind = js::RootKind<T>::rootKind();
+        roots.heapRoots_[kind].insertBack(reinterpret_cast<JS::PersistentRooted<void*>*>(this));
+        // Until marking and destruction support the full set, we assert that
+        // we don't try to add any unsupported types.
+        MOZ_ASSERT(kind == js::THING_ROOT_OBJECT ||
+                   kind == js::THING_ROOT_SCRIPT ||
+                   kind == js::THING_ROOT_STRING ||
+                   kind == js::THING_ROOT_ID ||
+                   kind == js::THING_ROOT_VALUE ||
+                   kind == js::THING_ROOT_TRACEABLE);
     }
 
   public:
     PersistentRooted() : ptr(js::GCMethods<T>::initial()) {}
 
-    explicit PersistentRooted(JSContext* cx) {
-        init(cx);
+    template <typename RootingContext>
+    explicit PersistentRooted(const RootingContext& cx)
+      : ptr(js::GCMethods<T>::initial())
+    {
+        registerWithRootLists(js::RootListsForRootingContext(cx));
     }
 
-    PersistentRooted(JSContext* cx, T initial) {
-        init(cx, initial);
-    }
-
-    explicit PersistentRooted(JSRuntime* rt) {
-        init(rt);
-    }
-
-    PersistentRooted(JSRuntime* rt, T initial) {
-        init(rt, initial);
+    template <typename RootingContext, typename U>
+    PersistentRooted(const RootingContext& cx, U&& initial)
+      : ptr(mozilla::Forward<U>(initial))
+    {
+        registerWithRootLists(js::RootListsForRootingContext(cx));
     }
 
     PersistentRooted(const PersistentRooted& rhs)
@@ -1068,22 +1045,15 @@ class PersistentRooted : public js::PersistentRootedBase<T>,
         return ListBase::isInList();
     }
 
-    void init(JSContext* cx) {
+    template <typename RootingContext>
+    void init(const RootingContext& cx) {
         init(cx, js::GCMethods<T>::initial());
     }
 
-    void init(JSContext* cx, T initial) {
-        ptr = initial;
-        registerWithRuntime(js::GetRuntime(cx));
-    }
-
-    void init(JSRuntime* rt) {
-        init(rt, js::GCMethods<T>::initial());
-    }
-
-    void init(JSRuntime* rt, T initial) {
-        ptr = initial;
-        registerWithRuntime(rt);
+    template <typename RootingContext, typename U>
+    void init(const RootingContext& cx, U&& initial) {
+        ptr = mozilla::Forward<U>(initial);
+        registerWithRootLists(js::RootListsForRootingContext(cx));
     }
 
     void reset() {
@@ -1097,7 +1067,18 @@ class PersistentRooted : public js::PersistentRootedBase<T>,
     DECLARE_POINTER_CONSTREF_OPS(T);
     DECLARE_POINTER_ASSIGN_OPS(PersistentRooted, T);
     DECLARE_NONPOINTER_ACCESSOR_METHODS(ptr);
-    DECLARE_NONPOINTER_MUTABLE_ACCESSOR_METHODS(ptr);
+
+    // These are the same as DECLARE_NONPOINTER_MUTABLE_ACCESSOR_METHODS, except
+    // they check that |this| is initialized in case the caller later stores
+    // something in |ptr|.
+    T* address() {
+        MOZ_ASSERT(initialized());
+        return &ptr;
+    }
+    T& get() {
+        MOZ_ASSERT(initialized());
+        return ptr;
+    }
 
   private:
     void set(T value) {
@@ -1105,7 +1086,13 @@ class PersistentRooted : public js::PersistentRootedBase<T>,
         ptr = value;
     }
 
-    T ptr;
+    // See the comment above Rooted::ptr.
+    using MaybeWrapped = typename mozilla::Conditional<
+        mozilla::IsBaseOf<Traceable, T>::value,
+        js::DispatchWrapper<T>,
+        T>::Type;
+
+    MaybeWrapped ptr;
 };
 
 class JS_PUBLIC_API(ObjectPtr)

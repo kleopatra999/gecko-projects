@@ -42,6 +42,7 @@
 #include "mozilla/dom/ExternalHelperAppParent.h"
 #include "mozilla/dom/FileSystemRequestParent.h"
 #include "mozilla/dom/GeolocationBinding.h"
+#include "mozilla/dom/NuwaParent.h"
 #include "mozilla/dom/PContentBridgeParent.h"
 #include "mozilla/dom/PContentPermissionRequestParent.h"
 #include "mozilla/dom/PCycleCollectWithLogsParent.h"
@@ -56,6 +57,8 @@
 #include "mozilla/dom/mobileconnection/MobileConnectionParent.h"
 #include "mozilla/dom/mobilemessage/SmsParent.h"
 #include "mozilla/dom/power/PowerManagerService.h"
+#include "mozilla/dom/PresentationParent.h"
+#include "mozilla/dom/PPresentationParent.h"
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "mozilla/dom/telephony/TelephonyParent.h"
 #include "mozilla/dom/time/DateCacheCleaner.h"
@@ -75,6 +78,7 @@
 #include "mozilla/layers/SharedBufferManagerParent.h"
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/media/MediaParent.h"
+#include "mozilla/Move.h"
 #include "mozilla/net/NeckoParent.h"
 #include "mozilla/plugins/PluginBridge.h"
 #include "mozilla/Preferences.h"
@@ -669,6 +673,8 @@ static const char* sObserverTopics[] = {
 #ifdef MOZ_ENABLE_PROFILER_SPS
     "profiler-started",
     "profiler-stopped",
+    "profiler-paused",
+    "profiler-resumed",
     "profiler-subprocess-gather",
     "profiler-subprocess",
 #endif
@@ -1119,12 +1125,15 @@ ContentParent::RecvGetBlocklistState(const uint32_t& aPluginId,
 
     nsRefPtr<nsPluginHost> pluginHost = nsPluginHost::GetInst();
     if (!pluginHost) {
+        NS_WARNING("Plugin host not found");
         return false;
     }
     nsPluginTag* tag =  pluginHost->PluginWithId(aPluginId);
 
     if (!tag) {
-        return false;
+        // Default state is blocked anyway
+        NS_WARNING("Plugin tag not found. This should never happen, but to avoid a crash we're forcibly blocking it");
+        return true;
     }
 
     return NS_SUCCEEDED(tag->GetBlocklistState(aState));
@@ -2072,6 +2081,10 @@ ContentParent::ActorDestroy(ActorDestroyReason why)
                               SEND_SHUTDOWN_MESSAGE));
     }
     cpm->RemoveContentProcess(this->ChildID());
+
+    if (mDriverCrashGuard) {
+      mDriverCrashGuard->NotifyCrashed();
+    }
 }
 
 void
@@ -2836,47 +2849,54 @@ ContentParent::RecvDataStoreGetStores(
   return true;
 }
 
-bool
-ContentParent::RecvNuwaReady()
+void
+ContentParent::ForkNewProcess(bool aBlocking)
 {
 #ifdef MOZ_NUWA_PROCESS
-    if (!IsNuwaProcess()) {
-        NS_ERROR(
-            nsPrintfCString(
-                "Terminating child process %d for unauthorized IPC message: NuwaReady",
-                Pid()).get());
+  uint32_t pid;
+  auto fds = MakeUnique<nsTArray<ProtocolFdMapping>>();
 
-        KillHard("NuwaReady");
-        return false;
-    }
-    sNuwaReady = true;
-    PreallocatedProcessManager::OnNuwaReady();
-    return true;
+  MOZ_ASSERT(IsNuwaProcess() && mNuwaParent);
+
+  if (mNuwaParent->ForkNewProcess(pid, mozilla::Move(fds), aBlocking)) {
+    OnNewProcessCreated(pid, mozilla::Move(fds));
+  }
 #else
-    NS_ERROR("ContentParent::RecvNuwaReady() not implemented!");
-    return false;
+  NS_ERROR("ContentParent::ForkNewProcess() not implemented!");
 #endif
 }
 
-bool
-ContentParent::RecvAddNewProcess(const uint32_t& aPid,
-                                 InfallibleTArray<ProtocolFdMapping>&& aFds)
+void
+ContentParent::OnNuwaReady()
 {
 #ifdef MOZ_NUWA_PROCESS
-    if (!IsNuwaProcess()) {
-        NS_ERROR(
-            nsPrintfCString(
-                "Terminating child process %d for unauthorized IPC message: "
-                "AddNewProcess(%d)", Pid(), aPid).get());
+    // Protection from unauthorized IPC message is done in PNuwa protocol.
+    // Just assert that this actor is really for the Nuwa process.
+    MOZ_ASSERT(IsNuwaProcess());
 
-        KillHard("AddNewProcess");
-        return false;
-    }
+    sNuwaReady = true;
+    PreallocatedProcessManager::OnNuwaReady();
+    return;
+#else
+    NS_ERROR("ContentParent::OnNuwaReady() not implemented!");
+    return;
+#endif
+}
+
+void
+ContentParent::OnNewProcessCreated(uint32_t aPid,
+                                   UniquePtr<nsTArray<ProtocolFdMapping>>&& aFds)
+{
+#ifdef MOZ_NUWA_PROCESS
+    // Protection from unauthorized IPC message is done in PNuwa protocol.
+    // Just assert that this actor is really for the Nuwa process.
+    MOZ_ASSERT(IsNuwaProcess());
+
     nsRefPtr<ContentParent> content;
     content = new ContentParent(this,
                                 MAGIC_PREALLOCATED_APP_MANIFEST_URL,
                                 aPid,
-                                Move(aFds));
+                                Move(*aFds.get()));
     content->Init();
 
     size_t numNuwaPrefUpdates = sNuwaPrefUpdates ?
@@ -2904,10 +2924,10 @@ ContentParent::RecvAddNewProcess(const uint32_t& aPid,
                "Unexpected values");
 
     PreallocatedProcessManager::PublishSpareProcess(content);
-    return true;
+    return;
 #else
-    NS_ERROR("ContentParent::RecvAddNewProcess() not implemented!");
-    return false;
+    NS_ERROR("ContentParent::OnNewProcessCreated() not implemented!");
+    return;
 #endif
 }
 
@@ -3112,6 +3132,12 @@ ContentParent::Observe(nsISupports* aSubject,
     }
     else if (!strcmp(aTopic, "profiler-stopped")) {
         unused << SendStopProfiler();
+    }
+    else if (!strcmp(aTopic, "profiler-paused")) {
+        unused << SendPauseProfiler(true);
+    }
+    else if (!strcmp(aTopic, "profiler-resumed")) {
+        unused << SendPauseProfiler(false);
     }
     else if (!strcmp(aTopic, "profiler-subprocess-gather")) {
         mGatherer = static_cast<ProfileGatherer*>(aSubject);
@@ -3870,6 +3896,27 @@ ContentParent::DeallocPFMRadioParent(PFMRadioParent* aActor)
 #endif
 }
 
+PPresentationParent*
+ContentParent::AllocPPresentationParent()
+{
+  nsRefPtr<PresentationParent> actor = new PresentationParent();
+  return actor.forget().take();
+}
+
+bool
+ContentParent::DeallocPPresentationParent(PPresentationParent* aActor)
+{
+  nsRefPtr<PresentationParent> actor =
+    dont_AddRef(static_cast<PresentationParent*>(aActor));
+  return true;
+}
+
+bool
+ContentParent::RecvPPresentationConstructor(PPresentationParent* aActor)
+{
+  return static_cast<PresentationParent*>(aActor)->Init();
+}
+
 asmjscache::PAsmJSCacheEntryParent*
 ContentParent::AllocPAsmJSCacheEntryParent(
                                     const asmjscache::OpenMode& aOpenMode,
@@ -4284,13 +4331,14 @@ ContentParent::GetConsoleService()
         return mConsoleService.get();
     }
 
+    // XXXkhuey everything about this is terrible.
     // Get the ConsoleService by CID rather than ContractID, so that we
     // can cast the returned pointer to an nsConsoleService (rather than
     // just an nsIConsoleService). This allows us to call the non-idl function
     // nsConsoleService::LogMessageWithMode.
     NS_DEFINE_CID(consoleServiceCID, NS_CONSOLESERVICE_CID);
-    nsCOMPtr<nsConsoleService>  consoleService(do_GetService(consoleServiceCID));
-    mConsoleService = consoleService;
+    nsCOMPtr<nsIConsoleService> consoleService(do_GetService(consoleServiceCID));
+    mConsoleService = static_cast<nsConsoleService*>(consoleService.get());
     return mConsoleService.get();
 }
 
@@ -5125,6 +5173,52 @@ ContentParent::RecvProfile(const nsCString& aProfile)
     mGatherer = nullptr;
 #endif
     return true;
+}
+
+bool
+ContentParent::RecvGetGraphicsDeviceInitData(DeviceInitData* aOut)
+{
+  gfxPlatform::GetPlatform()->GetDeviceInitData(aOut);
+  return true;
+}
+
+bool
+ContentParent::RecvBeginDriverCrashGuard(const uint32_t& aGuardType, bool* aOutCrashed)
+{
+  // Only one driver crash guard should be active at a time, per-process.
+  MOZ_ASSERT(!mDriverCrashGuard);
+
+  UniquePtr<gfx::DriverCrashGuard> guard;
+  switch (gfx::CrashGuardType(aGuardType)) {
+    case gfx::CrashGuardType::D3D11Layers:
+      guard = MakeUnique<gfx::D3D11LayersCrashGuard>(this);
+      break;
+    case gfx::CrashGuardType::D3D9Video:
+      guard = MakeUnique<gfx::D3D9VideoCrashGuard>(this);
+      break;
+    case gfx::CrashGuardType::GLContext:
+      guard = MakeUnique<gfx::GLContextCrashGuard>(this);
+      break;
+    default:
+      MOZ_ASSERT_UNREACHABLE("unknown crash guard type");
+      return false;
+  }
+
+  if (guard->Crashed()) {
+    *aOutCrashed = true;
+    return true;
+  }
+
+  *aOutCrashed = false;
+  mDriverCrashGuard = Move(guard);
+  return true;
+}
+
+bool
+ContentParent::RecvEndDriverCrashGuard(const uint32_t& aGuardType)
+{
+  mDriverCrashGuard = nullptr;
+  return true;
 }
 
 } // namespace dom

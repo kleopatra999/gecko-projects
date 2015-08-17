@@ -32,7 +32,6 @@ class AudioOutputObserver;
  */
 struct StreamUpdate
 {
-  int64_t mGraphUpdateIndex;
   nsRefPtr<MediaStream> mStream;
   StreamTime mNextMainThreadCurrentTime;
   bool mNextMainThreadFinished;
@@ -55,8 +54,8 @@ public:
     MOZ_COUNT_DTOR(ControlMessage);
   }
   // Do the action of this message on the MediaStreamGraph thread. Any actions
-  // affecting graph processing should take effect at mStateComputedTime.
-  // All stream data for times < mStateComputedTime has already been
+  // affecting graph processing should take effect at mProcessedTime.
+  // All stream data for times < mProcessedTime has already been
   // computed.
   virtual void Run() = 0;
   // When we're shutting down the application, most messages are ignored but
@@ -75,7 +74,6 @@ protected:
 class MessageBlock
 {
 public:
-  int64_t mGraphUpdateIndex;
   nsTArray<nsAutoPtr<ControlMessage> > mMessages;
 };
 
@@ -175,8 +173,7 @@ public:
    */
   void DoIteration();
 
-  bool OneIteration(GraphTime aFrom, GraphTime aTo,
-                    GraphTime aStateFrom, GraphTime aStateEnd);
+  bool OneIteration(GraphTime aStateEnd);
 
   bool Running() const
   {
@@ -389,10 +386,6 @@ public:
   GraphTime StreamTimeToGraphTime(MediaStream* aStream, StreamTime aTime,
                                   uint32_t aFlags = 0);
   /**
-   * Get the current audio position of the stream's audio output.
-   */
-  GraphTime GetAudioPosition(MediaStream* aStream);
-  /**
    * Call NotifyHaveCurrentData on aStream's listeners.
    */
   void NotifyHasCurrentData(MediaStream* aStream);
@@ -428,11 +421,6 @@ public:
     return mStreams.IsEmpty() && mSuspendedStreams.IsEmpty() && mPortCount == 0;
   }
 
-  // For use by control messages, on graph thread only.
-  /**
-   * Identify which graph update index we are currently processing.
-   */
-  int64_t GetProcessingGraphUpdateIndex() const { return mProcessingGraphUpdateIndex; }
   /**
    * Add aStream to the graph and initializes its graph-specific state.
    */
@@ -459,7 +447,8 @@ public:
 
   double MediaTimeToSeconds(GraphTime aTime) const
   {
-    NS_ASSERTION(0 <= aTime && aTime <= STREAM_TIME_MAX, "Bad time");
+    NS_ASSERTION(aTime > -STREAM_TIME_MAX && aTime <= STREAM_TIME_MAX,
+                 "Bad time");
     return static_cast<double>(aTime)/GraphRate();
   }
 
@@ -532,6 +521,13 @@ public:
     }
   }
 
+  // Capture Stream API. This allows to get a mixed-down output for a window.
+  void RegisterCaptureStreamForWindow(uint64_t aWindowId,
+                                      ProcessedMediaStream* aCaptureStream);
+  void UnregisterCaptureStreamForWindow(uint64_t aWindowId);
+  already_AddRefed<MediaInputPort>
+  ConnectToCaptureStream(uint64_t aWindowId, MediaStream* aMediaStream);
+
   // Data members
   //
   /**
@@ -566,13 +562,20 @@ public:
    */
   uint32_t mFirstCycleBreaker;
   /**
+   * Blocking decisions have been computed up to this time.
+   * Between each iteration, this is the same as mProcessedTime.
+   */
+  GraphTime mStateComputedTime = 0;
+  /**
+   * All stream contents have been computed up to this time.
+   * The next batch of updates from the main thread will be processed
+   * at this time.  This is behind mStateComputedTime during processing.
+   */
+  GraphTime mProcessedTime = 0;
+  /**
    * Date of the last time we updated the main thread with the graph state.
    */
   TimeStamp mLastMainThreadUpdate;
-  /**
-   * Which update batch we are currently processing.
-   */
-  int64_t mProcessingGraphUpdateIndex;
   /**
    * Number of active MediaInputPorts
    */
@@ -755,6 +758,16 @@ private:
    * Used to pass memory report information across threads.
    */
   nsTArray<AudioNodeSizes> mAudioStreamSizes;
+
+  struct WindowAndStream
+  {
+    uint64_t mWindowId;
+    nsRefPtr<ProcessedMediaStream> mCaptureStreamSink;
+  };
+  /**
+   * Stream for window audio capture.
+   */
+  nsTArray<WindowAndStream> mWindowCaptureStreams;
   /**
    * Indicates that the MSG thread should gather data for a memory report.
    */

@@ -4,12 +4,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_bluetooth_bluetoothservicebluedroid_h__
-#define mozilla_dom_bluetooth_bluetoothservicebluedroid_h__
+#ifndef mozilla_dom_bluetooth_bluedroid_BluetoothServiceBluedroid_h
+#define mozilla_dom_bluetooth_bluedroid_BluetoothServiceBluedroid_h
 
 #include "BluetoothCommon.h"
 #include "BluetoothInterface.h"
 #include "BluetoothService.h"
+#include "nsDataHashtable.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
 
@@ -22,11 +23,7 @@ class BluetoothServiceBluedroid : public BluetoothService
   class DisableResultHandler;
   class EnableResultHandler;
   class GetRemoteDevicePropertiesResultHandler;
-#ifndef MOZ_B2G_BT_API_V1
   class GetRemoteServicesResultHandler;
-#else
-  // Missing in Bluetooth v1
-#endif
   class InitResultHandler;
   class PinReplyResultHandler;
   class ProfileDeinitResultHandler;
@@ -37,24 +34,16 @@ class BluetoothServiceBluedroid : public BluetoothService
   class SspReplyResultHandler;
   class StartDiscoveryResultHandler;
 
+  class GetDeviceRequest;
+
 public:
   BluetoothServiceBluedroid();
   ~BluetoothServiceBluedroid();
 
-#ifndef MOZ_B2G_BT_API_V1
   virtual nsresult StartInternal(BluetoothReplyRunnable* aRunnable);
   virtual nsresult StopInternal(BluetoothReplyRunnable* aRunnable);
-#else
-  virtual nsresult StartInternal();
-  virtual nsresult StopInternal();
-#endif
 
-#ifndef MOZ_B2G_BT_API_V1
   virtual nsresult GetAdaptersInternal(BluetoothReplyRunnable* aRunnable);
-#else
-  virtual nsresult GetDefaultAdapterPathInternal(
-    BluetoothReplyRunnable* aRunnable);
-#endif
 
   virtual nsresult
   GetConnectedDevicePropertiesInternal(uint16_t aProfileId,
@@ -64,13 +53,9 @@ public:
   GetPairedDevicePropertiesInternal(const nsTArray<nsString>& aDeviceAddress,
                                     BluetoothReplyRunnable* aRunnable);
 
-#ifndef MOZ_B2G_BT_API_V1
   virtual nsresult
   FetchUuidsInternal(const nsAString& aDeviceAddress,
                      BluetoothReplyRunnable* aRunnable) override;
-#else
-  // Missing in Bluetooth v1
-#endif
 
   virtual void StartDiscoveryInternal(BluetoothReplyRunnable* aRunnable);
   virtual void StopDiscoveryInternal(BluetoothReplyRunnable* aRunnable);
@@ -98,7 +83,6 @@ public:
   RemoveDeviceInternal(const nsAString& aDeviceObjectPath,
                        BluetoothReplyRunnable* aRunnable);
 
-#ifndef MOZ_B2G_BT_API_V1
   virtual void
   PinReplyInternal(const nsAString& aDeviceAddress,
                    bool aAccept,
@@ -124,48 +108,12 @@ public:
   SetPairingConfirmationInternal(const nsAString& aDeviceAddress,
                                  bool aConfirm,
                                  BluetoothReplyRunnable* aRunnable);
-#else
-  virtual bool
-  SetAuthorizationInternal(const nsAString& aDeviceAddress, bool aAllow,
-                           BluetoothReplyRunnable* aRunnable);
-
-  virtual bool
-  SetPinCodeInternal(const nsAString& aDeviceAddress,
-                     const nsAString& aPinCode,
-                     BluetoothReplyRunnable* aRunnable);
-
-  virtual bool
-  SetPasskeyInternal(const nsAString& aDeviceAddress,
-                     uint32_t aPasskey,
-                     BluetoothReplyRunnable* aRunnable);
-
-  virtual bool
-  SetPairingConfirmationInternal(const nsAString& aDeviceAddress,
-                                 bool aConfirm,
-                                 BluetoothReplyRunnable* aRunnable);
-#endif
-
-#ifndef MOZ_B2G_BT_API_V1
-  // Missing in Bluetooth v2
-#else
-  virtual nsresult
-  PrepareAdapterInternal();
-#endif
 
   virtual void
   Connect(const nsAString& aDeviceAddress,
           uint32_t aCod,
           uint16_t aServiceUuid,
           BluetoothReplyRunnable* aRunnable);
-
-#ifndef MOZ_B2G_BT_API_V1
-  virtual bool
-  IsConnected(uint16_t aProfileId);
-#else
-  virtual void
-  IsConnected(const uint16_t aServiceUuid,
-              BluetoothReplyRunnable* aRunnable) override;
-#endif
 
   virtual void
   Disconnect(const nsAString& aDeviceAddress, uint16_t aServiceUuid,
@@ -240,7 +188,6 @@ public:
   // GATT Client
   //
 
-#ifndef MOZ_B2G_BT_API_V1
   virtual void StartLeScanInternal(const nsTArray<nsString>& aServiceUuids,
                                    BluetoothReplyRunnable* aRunnable);
 
@@ -316,9 +263,6 @@ public:
     const BluetoothGattId& aDescriptorId,
     const nsTArray<uint8_t>& aValue,
     BluetoothReplyRunnable* aRunnable) override;
-#else
-  // Missing in Bluetooth v1
-#endif
 
   //
   // Bluetooth notifications
@@ -380,19 +324,36 @@ protected:
                                 uint16_t aServiceUuid, uint32_t aCod = 0);
   static void NextBluetoothProfileController();
 
-#ifndef MOZ_B2G_BT_API_V1
-  // Missing in Bluetooth v2
-#else
-  static bool EnsureBluetoothHalLoad();
+  // Adapter properties
+  nsString mBdAddress;
+  nsString mBdName;
+  bool mEnabled;
+  bool mDiscoverable;
+  bool mDiscovering;
+  nsTArray<nsString> mBondedAddresses;
 
-  static void ClassToIcon(uint32_t aClass, nsAString& aRetIcon);
+  // Backend error recovery
+  bool mIsRestart;
+  bool mIsFirstTimeToggleOffBt;
 
-  uint16_t UuidToServiceClassInt(const BluetoothUuid& mUuid);
+  // Runnable arrays
+  nsTArray<nsRefPtr<BluetoothReplyRunnable>> mChangeAdapterStateRunnables;
+  nsTArray<nsRefPtr<BluetoothReplyRunnable>> mSetAdapterPropertyRunnables;
+  nsTArray<nsRefPtr<BluetoothReplyRunnable>> mChangeDiscoveryRunnables;
+  nsTArray<nsRefPtr<BluetoothReplyRunnable>> mFetchUuidsRunnables;
+  nsTArray<nsRefPtr<BluetoothReplyRunnable>> mCreateBondRunnables;
+  nsTArray<nsRefPtr<BluetoothReplyRunnable>> mRemoveBondRunnables;
 
-  static bool IsConnected(const nsAString& aRemoteBdAddr);
-#endif
+  // Array of get device requests. Each request remembers
+  // 1) remaining device count to receive properties,
+  // 2) received remote device properties, and
+  // 3) runnable to reply success/error
+  nsTArray<GetDeviceRequest> mGetDeviceRequests;
+
+  // <address, name> mapping table for remote devices
+  nsDataHashtable<nsStringHashKey, nsString> mDeviceNameMap;
 };
 
 END_BLUETOOTH_NAMESPACE
 
-#endif
+#endif // mozilla_dom_bluetooth_bluedroid_BluetoothServiceBluedroid_h

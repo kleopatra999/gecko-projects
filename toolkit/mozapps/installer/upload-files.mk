@@ -392,6 +392,7 @@ INNER_MAKE_GECKOLIBS_AAR= \
     --revision $(geckoaar-revision) \
     --topsrcdir '$(topsrcdir)' \
     --distdir '$(_ABS_DIST)' \
+    --appname '$(MOZ_APP_NAME)' \
     '$(_ABS_DIST)'
 else
 INNER_MAKE_GECKOLIBS_AAR=echo 'Android geckolibs.aar packaging requires packaging geckoview'
@@ -469,6 +470,7 @@ INNER_MAKE_PACKAGE	= \
   ( cd $(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH) && \
     unzip -o $(_ABS_DIST)/gecko.ap_ && \
     rm $(_ABS_DIST)/gecko.ap_ && \
+    $(ZIP) -r9D $(_ABS_DIST)/gecko.ap_ assets && \
     $(ZIP) $(if $(ALREADY_SZIPPED),-0 ,$(if $(MOZ_ENABLE_SZIP),-0 ))$(_ABS_DIST)/gecko.ap_ $(ASSET_SO_LIBRARIES) && \
     $(ZIP) -r9D $(_ABS_DIST)/gecko.ap_ $(DIST_FILES) -x $(NON_DIST_FILES) $(SZIP_LIBRARIES) && \
     $(if $(filter-out ./,$(OMNIJAR_DIR)), \
@@ -502,29 +504,10 @@ endif
 
 ifeq ($(MOZ_PKG_FORMAT),DMG)
 PKG_SUFFIX	= .dmg
-PKG_DMG_FLAGS	=
-ifneq (,$(MOZ_PKG_MAC_DSSTORE))
-PKG_DMG_FLAGS += --copy '$(MOZ_PKG_MAC_DSSTORE):/.DS_Store'
-endif
-ifneq (,$(MOZ_PKG_MAC_BACKGROUND))
-PKG_DMG_FLAGS += --mkdir /.background --copy '$(MOZ_PKG_MAC_BACKGROUND):/.background'
-endif
-ifneq (,$(MOZ_PKG_MAC_ICON))
-PKG_DMG_FLAGS += --icon '$(MOZ_PKG_MAC_ICON)'
-endif
-ifneq (,$(MOZ_PKG_MAC_RSRC))
-PKG_DMG_FLAGS += --resource '$(MOZ_PKG_MAC_RSRC)'
-endif
-ifneq (,$(MOZ_PKG_MAC_EXTRA))
-PKG_DMG_FLAGS += $(MOZ_PKG_MAC_EXTRA)
-endif
+
 _ABS_MOZSRCDIR = $(shell cd $(MOZILLA_DIR) && pwd)
-ifndef PKG_DMG_SOURCE
 PKG_DMG_SOURCE = $(STAGEPATH)$(MOZ_PKG_DIR)
-endif
-INNER_MAKE_PACKAGE	= $(_ABS_MOZSRCDIR)/build/package/mac_osx/pkg-dmg \
-  --source '$(PKG_DMG_SOURCE)' --target '$(PACKAGE)' \
-  --volname '$(MOZ_APP_DISPLAYNAME)' $(PKG_DMG_FLAGS)
+INNER_MAKE_PACKAGE	= $(call py_action,make_dmg,'$(PKG_DMG_SOURCE)' '$(PACKAGE)')
 INNER_UNMAKE_PACKAGE	= \
   set -ex; \
   rm -rf $(_ABS_DIST)/unpack.tmp; \
@@ -614,7 +597,6 @@ NO_PKG_FILES += \
 	certutil* \
 	pk12util* \
 	BadCertServer* \
-	ClientAuthServer* \
 	OCSPStaplingServer* \
 	GenerateOCSPResponse* \
 	chrome/chrome.rdf \
@@ -756,6 +738,13 @@ endif
 ifdef MOZ_CODE_COVERAGE
 UPLOAD_FILES += \
   $(call QUOTED_WILDCARD,$(DIST)/$(PKG_PATH)$(CODE_COVERAGE_ARCHIVE_BASENAME).zip)
+endif
+
+ifdef UNIFY_DIST
+UNIFY_ARCH := $(notdir $(patsubst %/,%,$(dir $(UNIFY_DIST))))
+UPLOAD_FILES += \
+  $(wildcard $(UNIFY_DIST)/$(SDK_PATH)$(PKG_BASENAME)-$(UNIFY_ARCH).sdk$(SDK_SUFFIX)) \
+  $(wildcard $(UNIFY_DIST)/$(SDK_PATH)$(PKG_BASENAME)-$(UNIFY_ARCH).sdk$(SDK_SUFFIX).asc)
 endif
 
 SIGN_CHECKSUM_CMD=

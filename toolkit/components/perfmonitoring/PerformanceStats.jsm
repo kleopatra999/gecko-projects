@@ -49,7 +49,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "finalizer",
 // and that we can release/close the probes it holds.
 const FINALIZATION_TOPIC = "performancemonitor-finalize";
 
-const PROPERTIES_META_IMMUTABLE = ["addonId", "isSystem", "isChildProcess", "groupId"];
+const PROPERTIES_META_IMMUTABLE = ["addonId", "isSystem", "isChildProcess", "groupId", "processId"];
 const PROPERTIES_META = [...PROPERTIES_META_IMMUTABLE, "windowId", "title", "name"];
 
 // How long we wait for children processes to respond.
@@ -79,6 +79,7 @@ Probe.prototype = {
   acquire: function() {
     if (this._counter == 0) {
       this._impl.isActive = true;
+      Process.broadcast("acquire", [this._name]);
     }
     this._counter++;
   },
@@ -92,6 +93,7 @@ Probe.prototype = {
     this._counter--;
     if (this._counter == 0) {
       this._impl.isActive = false;
+      Process.broadcast("release", [this._name]);
     }
   },
 
@@ -144,6 +146,16 @@ Probe.prototype = {
       return a;
     }
     return this._impl.subtract(a, b);
+  },
+
+  importChildCompartments: function(parent, children) {
+    if (!Array.isArray(children)) {
+      throw new TypeError();
+    }
+    if (!parent || !(parent instanceof PerformanceData)) {
+      throw new TypeError();
+    }
+    return this._impl.importChildCompartments(parent, children);
   },
 
   /**
@@ -228,7 +240,8 @@ let Probes = {
       }
       result.longestDuration = lastNonZero(result.durations);
       return result;
-    }
+    },
+    importChildCompartments: function() { /* nothing to do */ },
   }),
 
   /**
@@ -258,7 +271,8 @@ let Probes = {
       return {
         totalCPOWTime: a.totalCPOWTime - b.totalCPOWTime
       };
-    }
+    },
+    importChildCompartments: function() { /* nothing to do */ },
   }),
 
   /**
@@ -287,76 +301,31 @@ let Probes = {
       return {
         ticks: a.ticks - b.ticks
       };
-    }
+    },
+    importChildCompartments: function() { /* nothing to do */ },
   }),
 
-  "jank-content": new Probe("jank-content", {
-    _isActive: false,
+  compartments: new Probe("compartments", {
     set isActive(x) {
-      this._isActive = x;
-      if (x) {
-        Process.broadcast("acquire", ["jank"]);
-      } else {
-        Process.broadcast("release", ["jank"]);
-      }
+      performanceStatsService.isMonitoringPerCompartment = x;
     },
     get isActive() {
-      return this._isActive;
+      return performanceStatsService.isMonitoringPerCompartment;
     },
     extract: function(xpcom) {
-      return {};
+      return null;
     },
     isEqual: function(a, b) {
       return true;
     },
     subtract: function(a, b) {
-      return null;
-    }
-  }),
-
-  "cpow-content": new Probe("cpow-content", {
-    _isActive: false,
-    set isActive(x) {
-      this._isActive = x;
-      if (x) {
-        Process.broadcast("acquire", ["cpow"]);
-      } else {
-        Process.broadcast("release", ["cpow"]);
-      }
-    },
-    get isActive() {
-      return this._isActive;
-    },
-    extract: function(xpcom) {
-      return {};
-    },
-    isEqual: function(a, b) {
       return true;
     },
-    subtract: function(a, b) {
-      return null;
-    }
-  }),
-
-  "ticks-content": new Probe("ticks-content", {
-    set isActive(x) {
-      // Ignore: This probe is always active.
+    importChildCompartments: function(parent, children) {
+      parent.children = children;
     },
-    get isActive() {
-      return true;
-    },
-    extract: function(xpcom) {
-      return {};
-    },
-    isEqual: function(a, b) {
-      return true;
-    },
-    subtract: function(a, b) {
-      return null;
-    }
   }),
 };
-
 
 /**
  * A monitor for a set of probes.
@@ -657,16 +626,32 @@ function PerformanceDiff(current, old = null) {
 function Snapshot({xpcom, childProcesses, probes}) {
   this.componentsData = [];
 
-  // Parent process
+  // Current process
   if (xpcom) {
+    let children = new Map();
     let enumeration = xpcom.getComponentsData().enumerate();
     while (enumeration.hasMoreElements()) {
       let xpcom = enumeration.getNext().QueryInterface(Ci.nsIPerformanceStats);
-      this.componentsData.push(new PerformanceData({xpcom, probes}));
+      let stat = new PerformanceData({xpcom, probes});
+      if (!stat.parentId) {
+        this.componentsData.push(stat);
+      } else {
+        let siblings = children.get(stat.parentId);
+        if (!siblings) {
+          children.set(stat.parentId, (siblings = []));
+        }
+        siblings.push(stat);
+      }
+    }
+
+    for (let parent of this.componentsData) {
+      for (let probe of probes) {
+        probe.importChildCompartments(parent, children.get(parent.groupId) || []);
+      }
     }
   }
 
-  // Content processes
+  // Child processes
   if (childProcesses) {
     for (let {componentsData} of childProcesses) {
       // We are only interested in `componentsData` for the time being.
@@ -683,33 +668,24 @@ function Snapshot({xpcom, childProcesses, probes}) {
  * Communication with other processes
  */
 let Process = {
-  // `true` once communications have been initialized
-  _initialized: false,
-
-  // the message manager
-  _loader: null,
-
   // a counter used to match responses to requests
   _idcounter: 0,
-
+  _loader: null,
   /**
    * If we are in a child process, return `null`.
    * Otherwise, return the global parent process message manager
    * and load the script to connect to children processes.
    */
   get loader() {
-    if (this._initialized) {
-      return this._loader;
-    }
-    this._initialized = true;
-    this._loader = Services.ppmm;
-    if (!this._loader) {
-      // We are in a child process.
+    if (isContent) {
       return null;
     }
-    this._loader.loadProcessScript("resource://gre/modules/PerformanceStats-content.js",
+    if (this._loader) {
+      return this._loader;
+    }
+    Services.ppmm.loadProcessScript("resource://gre/modules/PerformanceStats-content.js",
       true/*including future processes*/);
-    return this._loader;
+    return this._loader = Services.ppmm;
   },
 
   /**
@@ -751,21 +727,12 @@ let Process = {
     let collected = [];
     let deferred = PromiseUtils.defer();
 
-    // The content script may be loaded more than once (bug 1184115).
-    // To avoid double-responses, we keep track of who has already responded.
-    // Note that we could it on the other end, at the expense of implementing
-    // an additional .jsm just for that purpose.
-    let responders = new Set();
     let observer = function({data, target}) {
       if (data.id != id) {
         // Collision between two collections,
         // ignore the other one.
         return;
       }
-      if (responders.has(target)) {
-        return;
-      }
-      responders.add(target);
       if (data.data) {
         collected.push(data.data)
       }

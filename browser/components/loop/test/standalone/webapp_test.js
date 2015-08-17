@@ -17,20 +17,20 @@ describe("loop.webapp", function() {
       stubGetPermsAndCacheMedia,
       fakeAudioXHR,
       dispatcher,
+      mozL10nGet,
       WEBSOCKET_REASONS = loop.shared.utils.WEBSOCKET_REASONS;
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
     dispatcher = new loop.Dispatcher();
     notifications = new sharedModels.NotificationCollection();
-    loop.store.StoreMixin.register({
-      feedbackStore: new loop.store.FeedbackStore(dispatcher, {
-        feedbackClient: {}
-      })
-    });
 
     stubGetPermsAndCacheMedia = sandbox.stub(
       loop.standaloneMedia._MultiplexGum.prototype, "getPermsAndCacheMedia");
+
+    mozL10nGet = sandbox.stub(navigator.mozL10n, "get", function(x) {
+      return "translated:" + x;
+    });
 
     fakeAudioXHR = {
       open: sinon.spy(),
@@ -52,10 +52,20 @@ describe("loop.webapp", function() {
   });
 
   describe("#init", function() {
+    var loopConfigRestore;
+
     beforeEach(function() {
       sandbox.stub(React, "render");
-      loop.config.feedbackApiUrl = "http://fake.invalid";
+      loopConfigRestore = loop.config;
+      loop.config = {
+        feedbackApiUrl: "http://fake.invalid",
+        serverUrl: "http://fake.invalid"
+      };
       sandbox.stub(loop.Dispatcher.prototype, "dispatch");
+    });
+
+    afterEach(function() {
+      loop.config = loopConfigRestore;
     });
 
     it("should create the WebappRootView", function() {
@@ -109,6 +119,7 @@ describe("loop.webapp", function() {
       ocView = mountTestComponent({
         client: client,
         conversation: conversation,
+        isFirefox: true,
         notifications: notifications,
         sdk: {
           on: sandbox.stub()
@@ -672,8 +683,7 @@ describe("loop.webapp", function() {
 
     it("should display the UnsupportedDeviceView for `unsupportedDevice` window type",
       function() {
-        standaloneAppStore.setStoreState({windowType: "unsupportedDevice"});
-
+        standaloneAppStore.setStoreState({windowType: "unsupportedDevice", unsupportedPlatform: "ios"});
         var webappRootView = mountTestComponent();
 
         TestUtils.findRenderedComponentWithType(webappRootView,
@@ -682,7 +692,7 @@ describe("loop.webapp", function() {
 
     it("should display the UnsupportedBrowserView for `unsupportedBrowser` window type",
       function() {
-        standaloneAppStore.setStoreState({windowType: "unsupportedBrowser"});
+        standaloneAppStore.setStoreState({windowType: "unsupportedBrowser", isFirefox: false});
 
         var webappRootView = mountTestComponent();
 
@@ -692,7 +702,7 @@ describe("loop.webapp", function() {
 
     it("should display the OutgoingConversationView for `outgoing` window type",
       function() {
-        standaloneAppStore.setStoreState({windowType: "outgoing"});
+        standaloneAppStore.setStoreState({windowType: "outgoing", isFirefox: true});
 
         var webappRootView = mountTestComponent();
 
@@ -702,7 +712,7 @@ describe("loop.webapp", function() {
 
     it("should display the StandaloneRoomView for `room` window type",
       function() {
-        standaloneAppStore.setStoreState({windowType: "room"});
+        standaloneAppStore.setStoreState({windowType: "room", isFirefox: true});
 
         var webappRootView = mountTestComponent();
 
@@ -711,7 +721,7 @@ describe("loop.webapp", function() {
       });
 
     it("should display the HomeView for `home` window type", function() {
-        standaloneAppStore.setStoreState({windowType: "home"});
+        standaloneAppStore.setStoreState({windowType: "home", isFirefox: true});
 
         var webappRootView = mountTestComponent();
 
@@ -1077,10 +1087,6 @@ describe("loop.webapp", function() {
     it("should render a ConversationView", function() {
       TestUtils.findRenderedComponentWithType(view, sharedViews.ConversationView);
     });
-
-    it("should render a FeedbackView", function() {
-      TestUtils.findRenderedComponentWithType(view, sharedViews.FeedbackView);
-    });
   });
 
   describe("PromoteFirefoxView", function() {
@@ -1089,19 +1095,19 @@ describe("loop.webapp", function() {
         var comp = TestUtils.renderIntoDocument(
           React.createElement(loop.webapp.PromoteFirefoxView, {
             isFirefox: true
-          }));
+        }));
 
-        expect(comp.getDOMNode().querySelectorAll("h3").length).eql(0);
+        expect(comp.getDOMNode()).eql(null);
       });
 
       it("should render when not using Firefox", function() {
         var comp = TestUtils.renderIntoDocument(
-          React.createElement(
-            loop.webapp.PromoteFirefoxView, {
+          React.createElement(loop.webapp.PromoteFirefoxView, {
               isFirefox: false
-            }));
+        }));
 
-        expect(comp.getDOMNode().querySelectorAll("h3").length).eql(1);
+        sinon.assert.calledWith(mozL10nGet, "promote_firefox_hello_heading");
+        sinon.assert.calledWith(mozL10nGet, "get_firefox_button");
       });
     });
   });

@@ -132,7 +132,7 @@ public:
     if (observerService) {
       observerService->NotifyObservers(
         ToSupports(mWindow),
-        "media-playback",
+        "audio-playback",
         mActive ? NS_LITERAL_STRING("active").get()
                 : NS_LITERAL_STRING("inactive").get());
     }
@@ -233,6 +233,7 @@ AudioChannelService::~AudioChannelService()
 
 void
 AudioChannelService::RegisterAudioChannelAgent(AudioChannelAgent* aAgent,
+                                               uint32_t aNotifyPlayback,
                                                AudioChannel aChannel)
 {
   uint64_t windowID = aAgent->WindowID();
@@ -253,7 +254,8 @@ AudioChannelService::RegisterAudioChannelAgent(AudioChannelAgent* aAgent,
   }
 
   // If this is the first agent for this window, we must notify the observers.
-  if (winData->mAgents.Length() == 1) {
+  if (aNotifyPlayback == nsIAudioChannelAgent::AUDIO_AGENT_NOTIFY &&
+      winData->mAgents.Length() == 1) {
     nsRefPtr<MediaPlaybackRunnable> runnable =
       new MediaPlaybackRunnable(aAgent->Window(), true /* active */);
     NS_DispatchToCurrentThread(runnable);
@@ -263,7 +265,8 @@ AudioChannelService::RegisterAudioChannelAgent(AudioChannelAgent* aAgent,
 }
 
 void
-AudioChannelService::UnregisterAudioChannelAgent(AudioChannelAgent* aAgent)
+AudioChannelService::UnregisterAudioChannelAgent(AudioChannelAgent* aAgent,
+                                                 uint32_t aNotifyPlayback)
 {
   AudioChannelWindow* winData = GetWindowData(aAgent->WindowID());
   if (!winData) {
@@ -295,7 +298,8 @@ AudioChannelService::UnregisterAudioChannelAgent(AudioChannelAgent* aAgent)
 #endif
 
   // If this is the last agent for this window, we must notify the observers.
-  if (winData->mAgents.IsEmpty()) {
+  if (aNotifyPlayback == nsIAudioChannelAgent::AUDIO_AGENT_NOTIFY &&
+      winData->mAgents.IsEmpty()) {
     nsRefPtr<MediaPlaybackRunnable> runnable =
       new MediaPlaybackRunnable(aAgent->Window(), false /* active */);
     NS_DispatchToCurrentThread(runnable);
@@ -543,6 +547,38 @@ AudioChannelService::RefreshAgentsVolume(nsPIDOMWindow* aWindow)
     iter(winData->mAgents);
   while (iter.HasMore()) {
     iter.GetNext()->WindowVolumeChanged();
+  }
+}
+
+void
+AudioChannelService::RefreshAgentsCapture(nsPIDOMWindow* aWindow,
+                                          uint64_t aInnerWindowID)
+{
+  MOZ_ASSERT(aWindow);
+  MOZ_ASSERT(aWindow->IsOuterWindow());
+
+  nsCOMPtr<nsIDOMWindow> topWindow;
+  aWindow->GetScriptableTop(getter_AddRefs(topWindow));
+  nsCOMPtr<nsPIDOMWindow> pTopWindow = do_QueryInterface(topWindow);
+  if (!pTopWindow) {
+    return;
+  }
+
+  AudioChannelWindow* winData = GetWindowData(pTopWindow->WindowID());
+
+  // This can happen, but only during shutdown, because the the outer window
+  // changes ScriptableTop, so that its ID is different.
+  // In this case either we are capturing, and it's too late because the window
+  // has been closed anyways, or we are un-capturing, and everything has already
+  // been cleaned up by the HTMLMediaElements or the AudioContexts.
+  if (!winData) {
+    return;
+  }
+
+  nsTObserverArray<AudioChannelAgent*>::ForwardIterator
+    iter(winData->mAgents);
+  while (iter.HasMore()) {
+    iter.GetNext()->WindowAudioCaptureChanged(aInnerWindowID);
   }
 }
 

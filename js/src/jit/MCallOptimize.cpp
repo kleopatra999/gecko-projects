@@ -19,6 +19,7 @@
 
 #include "jsscriptinlines.h"
 
+#include "jit/shared/Lowering-shared-inl.h"
 #include "vm/NativeObject-inl.h"
 #include "vm/StringObject-inl.h"
 #include "vm/UnboxedObject-inl.h"
@@ -223,6 +224,8 @@ IonBuilder::inlineNativeCall(CallInfo& callInfo, JSFunction* target)
         return inlineSubstringKernel(callInfo);
     if (native == intrinsic_IsArrayIterator)
         return inlineHasClass(callInfo, &ArrayIteratorObject::class_);
+    if (native == intrinsic_IsMapIterator)
+        return inlineHasClass(callInfo, &MapIteratorObject::class_);
     if (native == intrinsic_IsStringIterator)
         return inlineHasClass(callInfo, &StringIteratorObject::class_);
 
@@ -771,14 +774,13 @@ IonBuilder::inlineArrayPush(CallInfo& callInfo)
         trackOptimizationOutcome(TrackedOutcome::NeedsTypeBarrier);
         return InliningStatus_NotInlined;
     }
-    MOZ_ASSERT(obj == callInfo.thisArg() && value == callInfo.getArg(0));
 
     if (getInlineReturnType() != MIRType_Int32)
         return InliningStatus_NotInlined;
-    if (callInfo.thisArg()->type() != MIRType_Object)
+    if (obj->type() != MIRType_Object)
         return InliningStatus_NotInlined;
 
-    TemporaryTypeSet* thisTypes = callInfo.thisArg()->resultTypeSet();
+    TemporaryTypeSet* thisTypes = obj->resultTypeSet();
     if (!thisTypes)
         return InliningStatus_NotInlined;
     const Class* clasp = thisTypes->getKnownClass(constraints());
@@ -805,13 +807,12 @@ IonBuilder::inlineArrayPush(CallInfo& callInfo)
 
     JSValueType unboxedType = JSVAL_TYPE_MAGIC;
     if (clasp == &UnboxedArrayObject::class_) {
-        unboxedType = UnboxedArrayElementType(constraints(), callInfo.thisArg(), nullptr);
+        unboxedType = UnboxedArrayElementType(constraints(), obj, nullptr);
         if (unboxedType == JSVAL_TYPE_MAGIC)
             return InliningStatus_NotInlined;
     }
 
     callInfo.setImplicitlyUsedUnchecked();
-    value = callInfo.getArg(0);
 
     if (conversion == TemporaryTypeSet::AlwaysConvertToDoubles ||
         conversion == TemporaryTypeSet::MaybeConvertToDoubles)
@@ -936,6 +937,13 @@ IonBuilder::inlineArrayConcat(CallInfo& callInfo)
         HeapTypeSetKey elemTypes = key->property(JSID_VOID);
         if (!elemTypes.knownSubset(constraints(), thisElemTypes))
             return InliningStatus_NotInlined;
+
+        if (thisGroup->clasp() == &UnboxedArrayObject::class_ &&
+            !CanStoreUnboxedType(alloc(), thisGroup->unboxedLayout().elementType(),
+                                 MIRType_Value, elemTypes.maybeTypes()))
+        {
+            return InliningStatus_NotInlined;
+        }
     }
 
     // Inline the call.
@@ -1347,17 +1355,11 @@ IonBuilder::inlineMathHypot(CallInfo& callInfo)
 }
 
 IonBuilder::InliningStatus
-IonBuilder::inlineMathPow(CallInfo& callInfo)
+IonBuilder::inlineMathPowHelper(MDefinition* lhs, MDefinition* rhs, MIRType outputType)
 {
-    if (callInfo.argc() != 2 || callInfo.constructing()) {
-        trackOptimizationOutcome(TrackedOutcome::CantInlineNativeBadForm);
-        return InliningStatus_NotInlined;
-    }
-
     // Typechecking.
-    MIRType baseType = callInfo.getArg(0)->type();
-    MIRType powerType = callInfo.getArg(1)->type();
-    MIRType outputType = getInlineReturnType();
+    MIRType baseType = lhs->type();
+    MIRType powerType = rhs->type();
 
     if (outputType != MIRType_Int32 && outputType != MIRType_Double)
         return InliningStatus_NotInlined;
@@ -1366,17 +1368,13 @@ IonBuilder::inlineMathPow(CallInfo& callInfo)
     if (!IsNumberType(powerType))
         return InliningStatus_NotInlined;
 
-    callInfo.setImplicitlyUsedUnchecked();
-
-    MDefinition* base = callInfo.getArg(0);
-    MDefinition* power = callInfo.getArg(1);
+    MDefinition* base = lhs;
+    MDefinition* power = rhs;
     MDefinition* output = nullptr;
 
     // Optimize some constant powers.
-    if (callInfo.getArg(1)->isConstantValue() &&
-        callInfo.getArg(1)->constantValue().isNumber())
-    {
-        double pow = callInfo.getArg(1)->constantValue().toNumber();
+    if (rhs->isConstantValue() && rhs->constantValue().isNumber()) {
+        double pow = rhs->constantValue().toNumber();
 
         // Math.pow(x, 0.5) is a sqrt with edge-case detection.
         if (pow == 0.5) {
@@ -1449,6 +1447,23 @@ IonBuilder::inlineMathPow(CallInfo& callInfo)
 
     current->push(output);
     return InliningStatus_Inlined;
+}
+
+IonBuilder::InliningStatus
+IonBuilder::inlineMathPow(CallInfo& callInfo)
+{
+    if (callInfo.argc() != 2 || callInfo.constructing()) {
+        trackOptimizationOutcome(TrackedOutcome::CantInlineNativeBadForm);
+        return InliningStatus_NotInlined;
+    }
+
+    IonBuilder::InliningStatus status =
+        inlineMathPowHelper(callInfo.getArg(0), callInfo.getArg(1), getInlineReturnType());
+
+    if (status == IonBuilder::InliningStatus_Inlined)
+        callInfo.setImplicitlyUsedUnchecked();
+
+    return status;
 }
 
 IonBuilder::InliningStatus
@@ -2901,7 +2916,7 @@ IonBuilder::inlineAtomicsStore(CallInfo& callInfo)
     }
     MStoreUnboxedScalar* store =
         MStoreUnboxedScalar::New(alloc(), elements, index, toWrite, arrayType,
-                                 DoesRequireMemoryBarrier);
+                                 MStoreUnboxedScalar::TruncateInput, DoesRequireMemoryBarrier);
     current->add(store);
     current->push(value);
 
@@ -3414,7 +3429,7 @@ IonBuilder::prepareForSimdLoadStore(CallInfo& callInfo, Scalar::Type simdType, M
         MAdd* addedIndex = MAdd::New(alloc(), *index, suppSlots);
         // We're fine even with the add overflows, as long as the generated code
         // for the bounds check uses an unsigned comparison.
-        addedIndex->setInt32();
+        addedIndex->setInt32Specialization();
         current->add(addedIndex);
         indexForBoundsCheck = addedIndex;
     }
@@ -3473,7 +3488,8 @@ IonBuilder::inlineSimdStore(CallInfo& callInfo, JSNative native, SimdTypeDescr::
 
     MDefinition* valueToWrite = callInfo.getArg(2);
     MStoreUnboxedScalar* store = MStoreUnboxedScalar::New(alloc(), elements, index,
-                                                          valueToWrite, arrayType);
+                                                          valueToWrite, arrayType,
+                                                          MStoreUnboxedScalar::TruncateInput);
     store->setSimdWrite(simdType, numElems);
 
     current->add(store);

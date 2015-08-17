@@ -47,19 +47,19 @@ OpusDataDecoder::Shutdown()
   return NS_OK;
 }
 
-nsresult
+nsRefPtr<MediaDataDecoder::InitPromise>
 OpusDataDecoder::Init()
 {
   size_t length = mInfo.mCodecSpecificConfig->Length();
   uint8_t *p = mInfo.mCodecSpecificConfig->Elements();
   if (length < sizeof(uint64_t)) {
-    return NS_ERROR_FAILURE;
+    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
   }
   int64_t codecDelay = BigEndian::readUint64(p);
   length -= sizeof(uint64_t);
   p += sizeof(uint64_t);
   if (NS_FAILED(DecodeHeader(p, length))) {
-    return NS_ERROR_FAILURE;
+    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
   }
 
   int r;
@@ -75,7 +75,7 @@ OpusDataDecoder::Init()
   if (codecDelay != FramesToUsecs(mOpusParser->mPreSkip,
                                   mOpusParser->mRate).value()) {
     NS_WARNING("Invalid Opus header: CodecDelay and pre-skip do not match!");
-    return NS_ERROR_FAILURE;
+    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
   }
 
   if (mInfo.mRate != (uint32_t)mOpusParser->mRate) {
@@ -85,7 +85,8 @@ OpusDataDecoder::Init()
     NS_WARNING("Invalid Opus header: container and codec channels do not match!");
   }
 
-  return r == OPUS_OK ? NS_OK : NS_ERROR_FAILURE;
+  return r == OPUS_OK ? InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__)
+                      : InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
 }
 
 nsresult
@@ -149,15 +150,15 @@ OpusDataDecoder::DoDecode(MediaRawData* aSample)
   }
 
   // Maximum value is 63*2880, so there's no chance of overflow.
-  int32_t frames_number = opus_packet_get_nb_frames(aSample->mData,
-                                                    aSample->mSize);
+  int32_t frames_number = opus_packet_get_nb_frames(aSample->Data(),
+                                                    aSample->Size());
   if (frames_number <= 0) {
     OPUS_DEBUG("Invalid packet header: r=%ld length=%ld",
-               frames_number, aSample->mSize);
+               frames_number, aSample->Size());
     return -1;
   }
 
-  int32_t samples = opus_packet_get_samples_per_frame(aSample->mData,
+  int32_t samples = opus_packet_get_samples_per_frame(aSample->Data(),
                                            opus_int32(mOpusParser->mRate));
 
 
@@ -173,11 +174,11 @@ OpusDataDecoder::DoDecode(MediaRawData* aSample)
   // Decode to the appropriate sample type.
 #ifdef MOZ_SAMPLE_TYPE_FLOAT32
   int ret = opus_multistream_decode_float(mOpusDecoder,
-                                          aSample->mData, aSample->mSize,
+                                          aSample->Data(), aSample->Size(),
                                           buffer, frames, false);
 #else
   int ret = opus_multistream_decode(mOpusDecoder,
-                                    aSample->mData, aSample->mSize,
+                                    aSample->Data(), aSample->Size(),
                                     buffer, frames, false);
 #endif
   if (ret < 0) {

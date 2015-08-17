@@ -19,6 +19,8 @@
 
 #include <algorithm>
 
+using namespace mozilla::gfx;
+
 namespace mozilla {
 namespace image {
 
@@ -47,11 +49,6 @@ GetPNGDecoderAccountingLog()
 #  define MOZ_PNG_MAX_DIMENSION 32767
 #endif
 
-// For size decodes
-#define WIDTH_OFFSET 16
-#define HEIGHT_OFFSET (WIDTH_OFFSET + 4)
-#define BYTES_NEEDED_FOR_DIMENSIONS (HEIGHT_OFFSET + 4)
-
 nsPNGDecoder::AnimFrameInfo::AnimFrameInfo()
  : mDispose(DisposalMethod::KEEP)
  , mBlend(BlendMethod::OVER)
@@ -59,32 +56,33 @@ nsPNGDecoder::AnimFrameInfo::AnimFrameInfo()
 { }
 
 #ifdef PNG_APNG_SUPPORTED
+
+int32_t GetNextFrameDelay(png_structp aPNG, png_infop aInfo)
+{
+  // Delay, in seconds, is delayNum / delayDen.
+  png_uint_16 delayNum = png_get_next_frame_delay_num(aPNG, aInfo);
+  png_uint_16 delayDen = png_get_next_frame_delay_den(aPNG, aInfo);
+
+  if (delayNum == 0) {
+    return 0; // SetFrameTimeout() will set to a minimum.
+  }
+
+  if (delayDen == 0) {
+    delayDen = 100; // So says the APNG spec.
+  }
+
+  // Need to cast delay_num to float to have a proper division and
+  // the result to int to avoid a compiler warning.
+  return static_cast<int32_t>(static_cast<double>(delayNum) * 1000 / delayDen);
+}
+
 nsPNGDecoder::AnimFrameInfo::AnimFrameInfo(png_structp aPNG, png_infop aInfo)
  : mDispose(DisposalMethod::KEEP)
  , mBlend(BlendMethod::OVER)
  , mTimeout(0)
 {
-  png_uint_16 delay_num, delay_den;
-  // delay, in seconds is delay_num/delay_den
-  png_byte dispose_op;
-  png_byte blend_op;
-  delay_num = png_get_next_frame_delay_num(aPNG, aInfo);
-  delay_den = png_get_next_frame_delay_den(aPNG, aInfo);
-  dispose_op = png_get_next_frame_dispose_op(aPNG, aInfo);
-  blend_op = png_get_next_frame_blend_op(aPNG, aInfo);
-
-  if (delay_num == 0) {
-    mTimeout = 0; // SetFrameTimeout() will set to a minimum
-  } else {
-    if (delay_den == 0) {
-      delay_den = 100; // so says the APNG spec
-    }
-
-    // Need to cast delay_num to float to have a proper division and
-    // the result to int to avoid compiler warning
-    mTimeout = static_cast<int32_t>(static_cast<double>(delay_num) *
-                                    1000 / delay_den);
-  }
+  png_byte dispose_op = png_get_next_frame_dispose_op(aPNG, aInfo);
+  png_byte blend_op = png_get_next_frame_blend_op(aPNG, aInfo);
 
   if (dispose_op == PNG_DISPOSE_OP_PREVIOUS) {
     mDispose = DisposalMethod::RESTORE_PREVIOUS;
@@ -99,6 +97,8 @@ nsPNGDecoder::AnimFrameInfo::AnimFrameInfo(png_structp aPNG, png_infop aInfo)
   } else {
     mBlend = BlendMethod::OVER;
   }
+
+  mTimeout = GetNextFrameDelay(aPNG, aInfo);
 }
 #endif
 
@@ -115,6 +115,7 @@ nsPNGDecoder::nsPNGDecoder(RasterImage* aImage)
    mHeaderBytesRead(0), mCMSMode(0),
    mChannels(0), mFrameIsHidden(false),
    mDisablePremultipliedAlpha(false),
+   mSuccessfulEarlyFinish(false),
    mNumFrames(0)
 {
 }
@@ -140,6 +141,20 @@ nsPNGDecoder::~nsPNGDecoder()
   }
 }
 
+void
+nsPNGDecoder::CheckForTransparency(SurfaceFormat aFormat,
+                                   const IntRect& aFrameRect)
+{
+  // Check if the image has a transparent color in its palette.
+  if (aFormat == SurfaceFormat::B8G8R8A8) {
+    PostHasTransparency();
+  }
+
+  // PNGs shouldn't have first-frame padding.
+  MOZ_ASSERT_IF(mNumFrames == 0,
+                IntRect(IntPoint(), GetSize()).IsEqualEdges(aFrameRect));
+}
+
 // CreateFrame() is used for both simple and animated images
 nsresult
 nsPNGDecoder::CreateFrame(png_uint_32 aXOffset, png_uint_32 aYOffset,
@@ -147,18 +162,10 @@ nsPNGDecoder::CreateFrame(png_uint_32 aXOffset, png_uint_32 aYOffset,
                           gfx::SurfaceFormat aFormat)
 {
   MOZ_ASSERT(HasSize());
+  MOZ_ASSERT(!IsMetadataDecode());
 
-  if (aFormat == gfx::SurfaceFormat::B8G8R8A8) {
-    PostHasTransparency();
-  }
-
-  nsIntRect frameRect(aXOffset, aYOffset, aWidth, aHeight);
-  if (mNumFrames == 0 &&
-      !nsIntRect(nsIntPoint(), GetSize()).IsEqualEdges(frameRect)) {
-    // We need padding on the first frame, which means that we don't draw into
-    // part of the image at all. Report that as transparency.
-    PostHasTransparency();
-  }
+  IntRect frameRect(aXOffset, aYOffset, aWidth, aHeight);
+  CheckForTransparency(aFormat, frameRect);
 
   // XXX(seth): Some tests depend on the first frame of PNGs being B8G8R8A8.
   // This is something we should fix.
@@ -176,9 +183,8 @@ nsPNGDecoder::CreateFrame(png_uint_32 aXOffset, png_uint_32 aYOffset,
 
   MOZ_LOG(GetPNGDecoderAccountingLog(), LogLevel::Debug,
          ("PNGDecoderAccounting: nsPNGDecoder::CreateFrame -- created "
-          "image frame with %dx%d pixels in container %p",
-          aWidth, aHeight,
-          &mImage));
+          "image frame with %dx%d pixels for decoder %p",
+          aWidth, aHeight, this));
 
 #ifdef PNG_APNG_SUPPORTED
   if (png_get_valid(mPNG, mInfo, PNG_INFO_acTL)) {
@@ -226,17 +232,12 @@ nsPNGDecoder::EndImageFrame()
 void
 nsPNGDecoder::InitInternal()
 {
-  // For size decodes, we don't need to initialize the png decoder
-  if (IsSizeDecode()) {
-    return;
-  }
-
   mCMSMode = gfxPlatform::GetCMSMode();
-  if (GetDecodeFlags() & imgIContainer::FLAG_DECODE_NO_COLORSPACE_CONVERSION) {
+  if (GetSurfaceFlags() & SurfaceFlags::NO_COLORSPACE_CONVERSION) {
     mCMSMode = eCMSMode_Off;
   }
   mDisablePremultipliedAlpha =
-    GetDecodeFlags() & imgIContainer::FLAG_DECODE_NO_PREMULTIPLY_ALPHA;
+    bool(GetSurfaceFlags() & SurfaceFlags::NO_PREMULTIPLY_ALPHA);
 
 #ifdef PNG_HANDLE_AS_UNKNOWN_SUPPORTED
   static png_byte color_chunks[]=
@@ -256,8 +257,6 @@ nsPNGDecoder::InitInternal()
         116,  73,  77,  69, '\0',   // tIME
         122,  84,  88, 116, '\0'};  // zTXt
 #endif
-
-  // For full decodes, do png init stuff
 
   // Initialize the container's source image header
   // Always decode to 24 bit pixdepth
@@ -279,7 +278,7 @@ nsPNGDecoder::InitInternal()
 
 #ifdef PNG_HANDLE_AS_UNKNOWN_SUPPORTED
   // Ignore unused chunks
-  if (mCMSMode == eCMSMode_Off) {
+  if (mCMSMode == eCMSMode_Off || IsMetadataDecode()) {
     png_set_keep_unknown_chunks(mPNG, 1, color_chunks, 2);
   }
 
@@ -321,73 +320,24 @@ nsPNGDecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
 {
   MOZ_ASSERT(!HasError(), "Shouldn't call WriteInternal after error!");
 
-  // If we only want width/height, we don't need to go through libpng
-  if (IsSizeDecode()) {
+  // libpng uses setjmp/longjmp for error handling. Set it up.
+  if (setjmp(png_jmpbuf(mPNG))) {
 
-    // Are we done?
-    if (mHeaderBytesRead == BYTES_NEEDED_FOR_DIMENSIONS) {
-      return;
+    // We exited early. If mSuccessfulEarlyFinish isn't true, then we
+    // encountered an error. We might not really know what caused it, but it
+    // makes more sense to blame the data.
+    if (!mSuccessfulEarlyFinish && !HasError()) {
+      PostDataError();
     }
 
-    // Scan the header for the width and height bytes
-    uint32_t pos = 0;
-    const uint8_t* bptr = (uint8_t*)aBuffer;
-
-    while (pos < aCount && mHeaderBytesRead < BYTES_NEEDED_FOR_DIMENSIONS) {
-      // Verify the signature bytes
-      if (mHeaderBytesRead < sizeof(pngSignatureBytes)) {
-        if (bptr[pos] != nsPNGDecoder::pngSignatureBytes[mHeaderBytesRead]) {
-          PostDataError();
-          return;
-        }
-      }
-
-      // Get width and height bytes into the buffer
-      if ((mHeaderBytesRead >= WIDTH_OFFSET) &&
-          (mHeaderBytesRead < BYTES_NEEDED_FOR_DIMENSIONS)) {
-        mSizeBytes[mHeaderBytesRead - WIDTH_OFFSET] = bptr[pos];
-      }
-      pos ++;
-      mHeaderBytesRead ++;
-    }
-
-    // If we're done now, verify the data and set up the container
-    if (mHeaderBytesRead == BYTES_NEEDED_FOR_DIMENSIONS) {
-
-      // Grab the width and height, accounting for endianness (thanks libpng!)
-      uint32_t width = png_get_uint_32(mSizeBytes);
-      uint32_t height = png_get_uint_32(mSizeBytes + 4);
-
-      // Too big?
-      if ((width > MOZ_PNG_MAX_DIMENSION) || (height > MOZ_PNG_MAX_DIMENSION)) {
-        PostDataError();
-        return;
-      }
-
-      // Post our size to the superclass
-      PostSize(width, height);
-    }
-
-  // Otherwise, we're doing a standard decode
-  } else {
-
-    // libpng uses setjmp/longjmp for error handling - set the buffer
-    if (setjmp(png_jmpbuf(mPNG))) {
-
-      // We might not really know what caused the error, but it makes more
-      // sense to blame the data.
-      if (!HasError()) {
-        PostDataError();
-      }
-
-      png_destroy_read_struct(&mPNG, &mInfo, nullptr);
-      return;
-    }
-
-    // Pass the data off to libpng
-    png_process_data(mPNG, mInfo, (unsigned char*)aBuffer, aCount);
-
+    png_destroy_read_struct(&mPNG, &mInfo, nullptr);
+    return;
   }
+
+  // Pass the data off to libpng.
+  png_process_data(mPNG, mInfo,
+                   reinterpret_cast<unsigned char*>(const_cast<char*>((aBuffer))),
+                   aCount);
 }
 
 // Sets up gamma pre-correction in libpng before our callback gets called.
@@ -649,7 +599,24 @@ nsPNGDecoder::info_callback(png_structp png_ptr, png_infop info_ptr)
   }
 
 #ifdef PNG_APNG_SUPPORTED
-  if (png_get_valid(png_ptr, info_ptr, PNG_INFO_acTL)) {
+  bool isAnimated = png_get_valid(png_ptr, info_ptr, PNG_INFO_acTL);
+  if (isAnimated) {
+    decoder->PostIsAnimated(GetNextFrameDelay(png_ptr, info_ptr));
+  }
+#endif
+
+  if (decoder->IsMetadataDecode()) {
+    decoder->CheckForTransparency(decoder->format,
+                                  IntRect(0, 0, width, height));
+
+    // We have the metadata we're looking for, so we don't need to decode any
+    // further.
+    decoder->mSuccessfulEarlyFinish = true;
+    png_longjmp(decoder->mPNG, 1);
+  }
+
+#ifdef PNG_APNG_SUPPORTED
+  if (isAnimated) {
     png_set_progressive_frame_fn(png_ptr, nsPNGDecoder::frame_info_callback,
                                  nullptr);
   }
@@ -827,6 +794,14 @@ nsPNGDecoder::frame_info_callback(png_structp png_ptr, png_uint_32 frame_num)
 
   // old frame is done
   decoder->EndImageFrame();
+
+  if (!decoder->mFrameIsHidden && decoder->IsFirstFrameDecode()) {
+    // We're about to get a second non-hidden frame, but we only want the first.
+    // Stop decoding now.
+    decoder->PostDecodeDone();
+    decoder->mSuccessfulEarlyFinish = true;
+    png_longjmp(decoder->mPNG, 1);
+  }
 
   // Only the first frame can be hidden, so unhide unconditionally here.
   decoder->mFrameIsHidden = false;

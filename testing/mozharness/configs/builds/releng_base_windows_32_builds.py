@@ -36,7 +36,7 @@ config = {
                 'c:\\mozilla-build\\buildbotve\\scripts\\buildbot'
             ],
             'puppet_location': [
-                sys.executable,
+                'c:\\mozilla-build\\buildbot-0.8.4-pre-moz6\\Scripts\\python.exe',
                 'c:\\mozilla-build\\buildbot-0.8.4-pre-moz6\\scripts\\buildbot'
             ]
         },
@@ -74,6 +74,7 @@ config = {
     'base_name': 'WINNT_5.2_%(branch)s',
     'platform': 'win32',
     'stage_platform': 'win32',
+    'publish_nightly_en_US_routes': True,
     'env': {
         'MOZBUILD_STATE_PATH': os.path.join(os.getcwd(), '.mozbuild'),
         'MOZ_AUTOMATION': '1',

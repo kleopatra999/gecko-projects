@@ -49,6 +49,7 @@ class DataSourceSurface;
 class ScaledFont;
 class DrawEventRecorder;
 class VsyncSource;
+class DeviceInitData;
 
 inline uint32_t
 BackendTypeBit(BackendType b)
@@ -306,12 +307,6 @@ public:
     int GetTileWidth();
     int GetTileHeight();
     void SetTileSize(int aWidth, int aHeight);
-    /**
-     * Calling this function will compute and set the ideal tile size for the
-     * platform. This should only be called in the parent process; child processes
-     * should be updated via SetTileSize to match the value computed in the parent.
-     */
-    void ComputeTileSize();
 
     /**
      * Rebuilds the any cached system font lists
@@ -485,7 +480,8 @@ public:
     virtual bool CanUseHardwareVideoDecoding();
     static bool CanUseDirect3D11ANGLE();
 
-    // Returns whether or not layers acceleration should be used.
+    // Returns whether or not layers acceleration should be used. This should
+    // only be called on the parent process.
     bool ShouldUseLayersAcceleration();
 
     // Returns a prioritized list of all available compositor backends.
@@ -642,6 +638,14 @@ public:
       return mCompositorBackend;
     }
 
+    // Trigger a test-driven graphics device reset.
+    virtual void TestDeviceReset(DeviceResetReason aReason)
+    {}
+
+    // Return information on how child processes should initialize graphics
+    // devices. Currently this is only used on Windows.
+    virtual void GetDeviceInitData(mozilla::gfx::DeviceInitData* aOut);
+
 protected:
     gfxPlatform();
     virtual ~gfxPlatform();
@@ -673,6 +677,17 @@ protected:
      */
     void InitBackendPrefs(uint32_t aCanvasBitmask, mozilla::gfx::BackendType aCanvasDefault,
                           uint32_t aContentBitmask, mozilla::gfx::BackendType aContentDefault);
+
+    /**
+     * If in a child process, triggers a refresh of device preferences.
+     */
+    void UpdateDeviceInitData();
+
+    /**
+     * Called when new device preferences are available.
+     */
+    virtual void SetDeviceInitData(mozilla::gfx::DeviceInitData& aData)
+    {}
 
     /**
      * returns the first backend named in the pref gfx.canvas.azure.backends
@@ -738,6 +753,13 @@ private:
     friend void RecordingPrefChanged(const char *aPrefName, void *aClosure);
 
     virtual void GetPlatformCMSOutputProfile(void *&mem, size_t &size);
+
+    /**
+     * Calling this function will compute and set the ideal tile size for the
+     * platform. This will only have an effect in the parent process; child processes
+     * should be updated via SetTileSize to match the value computed in the parent.
+     */
+    void ComputeTileSize();
 
     nsRefPtr<gfxASurface> mScreenReferenceSurface;
     nsTArray<uint32_t> mCJKPrefLangs;

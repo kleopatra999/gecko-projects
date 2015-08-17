@@ -50,6 +50,7 @@
 #include "jsscriptinlines.h"
 
 #include "jit/JitFrames-inl.h"
+#include "jit/shared/Lowering-shared-inl.h"
 #include "vm/Debugger-inl.h"
 #include "vm/ScopeObject-inl.h"
 
@@ -467,8 +468,11 @@ void
 jit::FinishOffThreadBuilder(JSContext* cx, IonBuilder* builder)
 {
     // Clean the references to the pending IonBuilder, if we just finished it.
-    if (builder->script()->hasIonScript() && builder->script()->pendingIonBuilder() == builder)
-        builder->script()->setPendingIonBuilder(cx, nullptr);
+    if (builder->script()->baselineScript()->hasPendingIonBuilder() &&
+        builder->script()->baselineScript()->pendingIonBuilder() == builder)
+    {
+        builder->script()->baselineScript()->removePendingIonBuilder(builder->script());
+    }
 
     // If the builder is still in one of the helper thread list, then remove it.
     if (builder->isInList())
@@ -565,21 +569,13 @@ LinkBackgroundCodeGen(JSContext* cx, IonBuilder* builder,
     return LinkCodeGen(cx, builder, codegen, scripts, info);
 }
 
-uint8_t*
-jit::LazyLinkTopActivation(JSContext* cx)
+void
+jit::LazyLink(JSContext* cx, HandleScript calleeScript)
 {
-    JitActivationIterator iter(cx->runtime());
-    AutoLazyLinkExitFrame lazyLinkExitFrame(iter->asJit());
-
-    // First frame should be an exit frame.
-    JitFrameIterator it(iter);
-    LazyLinkExitFrameLayout* ll = it.exitFrame()->as<LazyLinkExitFrameLayout>();
-    RootedScript calleeScript(cx, ScriptFromCalleeToken(ll->jsFrame()->calleeToken()));
-
-
     // Get the pending builder from the Ion frame.
-    IonBuilder* builder = calleeScript->ionScript()->pendingBuilder();
-    calleeScript->setPendingIonBuilder(cx, nullptr);
+    MOZ_ASSERT(calleeScript->hasBaselineScript());
+    IonBuilder* builder = calleeScript->baselineScript()->pendingIonBuilder();
+    calleeScript->baselineScript()->removePendingIonBuilder(calleeScript);
 
     // See PrepareForDebuggerOnIonCompilationHook
     AutoScriptVector debugScripts(cx);
@@ -605,6 +601,20 @@ jit::LazyLinkTopActivation(JSContext* cx)
 
     MOZ_ASSERT(calleeScript->hasBaselineScript());
     MOZ_ASSERT(calleeScript->baselineOrIonRawPointer());
+}
+
+uint8_t*
+jit::LazyLinkTopActivation(JSContext* cx)
+{
+    JitActivationIterator iter(cx->runtime());
+    AutoLazyLinkExitFrame lazyLinkExitFrame(iter->asJit());
+
+    // First frame should be an exit frame.
+    JitFrameIterator it(iter);
+    LazyLinkExitFrameLayout* ll = it.exitFrame()->as<LazyLinkExitFrameLayout>();
+    RootedScript calleeScript(cx, ScriptFromCalleeToken(ll->jsFrame()->calleeToken()));
+
+    LazyLink(cx, calleeScript);
 
     return calleeScript->baselineOrIonRawPointer();
 }
@@ -620,10 +630,22 @@ JitRuntime::Mark(JSTracer* trc)
     }
 }
 
+/* static */ void
+JitRuntime::MarkJitcodeGlobalTableUnconditionally(JSTracer* trc)
+{
+    if (trc->runtime()->spsProfiler.enabled() &&
+        trc->runtime()->hasJitRuntime() &&
+        trc->runtime()->jitRuntime()->hasJitcodeGlobalTable())
+    {
+        trc->runtime()->jitRuntime()->getJitcodeGlobalTable()->markUnconditionally(trc);
+    }
+}
+
 /* static */ bool
 JitRuntime::MarkJitcodeGlobalTableIteratively(JSTracer* trc)
 {
-    if (trc->runtime()->hasJitRuntime() &&
+    if (trc->runtime()->spsProfiler.enabled() &&
+        trc->runtime()->hasJitRuntime() &&
         trc->runtime()->jitRuntime()->hasJitcodeGlobalTable())
     {
         return trc->runtime()->jitRuntime()->getJitcodeGlobalTable()->markIteratively(trc);
@@ -876,8 +898,7 @@ IonScript::IonScript()
     backedgeEntries_(0),
     invalidationCount_(0),
     recompileInfo_(),
-    osrPcMismatchCounter_(0),
-    pendingBuilder_(nullptr)
+    osrPcMismatchCounter_(0)
 {
 }
 
@@ -1197,9 +1218,6 @@ IonScript::Trace(JSTracer* trc, IonScript* script)
 void
 IonScript::Destroy(FreeOp* fop, IonScript* script)
 {
-    if (script->pendingBuilder())
-        jit::FinishOffThreadBuilder(nullptr, script->pendingBuilder());
-
     script->unlinkFromRuntime(fop);
     fop->free_(script);
 }
@@ -1750,44 +1768,12 @@ GetFinishedBuilder(JSContext* cx, GlobalHelperThreadState::IonBuilderVector& fin
     return nullptr;
 }
 
-static bool
-IsBuilderScriptOnStack(JSContext* cx, IonBuilder* builder)
-{
-    for (JitActivationIterator iter(cx->runtime()); !iter.done(); ++iter) {
-        for (JitFrameIterator it(iter); !it.done(); ++it) {
-            if (!it.isIonJS())
-                continue;
-            if (it.checkInvalidation())
-                continue;
-
-            JSScript* script = it.script();
-            if (builder->script() == script)
-                return true;
-        }
-    }
-
-    return false;
-}
-
 void
 AttachFinishedCompilations(JSContext* cx)
 {
     JitCompartment* ion = cx->compartment()->jitCompartment();
     if (!ion)
         return;
-
-    LifoAlloc* debuggerAlloc = cx->new_<LifoAlloc>(TempAllocator::PreferredLifoChunkSize);
-    if (!debuggerAlloc) {
-        // Silently ignore OOM during code generation. The caller is
-        // InvokeInterruptCallback, which always runs at a nondeterministic
-        // time. It's not OK to throw a catchable exception from there.
-        cx->clearPendingException();
-        return;
-    }
-
-    // See PrepareForDebuggerOnIonCompilationHook
-    AutoScriptVector debugScripts(cx);
-    OnIonCompilationVector onIonCompilationVector(cx);
 
     {
         AutoEnterAnalysis enterTypes(cx);
@@ -1803,52 +1789,13 @@ AttachFinishedCompilations(JSContext* cx)
             if (!builder)
                 break;
 
-            // Try to defer linking if the script is on the stack, to postpone
-            // invalidating them.
-            if (builder->script()->hasIonScript() && IsBuilderScriptOnStack(cx, builder)) {
-                builder->script()->setPendingIonBuilder(cx, builder);
-                HelperThreadState().ionLazyLinkList().insertFront(builder);
-                continue;
-            }
-
-            AutoUnlockHelperThreadState unlock;
-
-            OnIonCompilationInfo info(debuggerAlloc);
-            if (!LinkBackgroundCodeGen(cx, builder, &debugScripts, &info)) {
-                // Silently ignore OOM during code generation. The caller is
-                // InvokeInterruptCallback, which always runs at a
-                // nondeterministic time. It's not OK to throw a catchable
-                // exception from there.
-                cx->clearPendingException();
-            }
-
-            if (info.filled()) {
-                if (!onIonCompilationVector.append(info))
-                    cx->clearPendingException();
-            }
-
-            FinishOffThreadBuilder(cx, builder);
-        }
-    }
-
-    for (size_t i = 0; i < onIonCompilationVector.length(); i++) {
-        OnIonCompilationInfo& info = onIonCompilationVector[i];
-
-        // As it is easier to root a vector, instead of a vector of vector, we
-        // slice for each compilation.
-        AutoScriptVector sliceScripts(cx);
-        if (!sliceScripts.reserve(info.numBlocks)) {
-            cx->clearPendingException();
+            JSScript* script = builder->script();
+            MOZ_ASSERT(script->hasBaselineScript());
+            script->baselineScript()->setPendingIonBuilder(cx, script, builder);
+            HelperThreadState().ionLazyLinkList().insertFront(builder);
             continue;
         }
-
-        for (size_t b = 0; b < info.numBlocks; b++)
-            sliceScripts.infallibleAppend(debugScripts[info.scriptIndex + b]);
-
-        Debugger::onIonCompilation(cx, sliceScripts, info.graph);
     }
-
-    js_delete(debuggerAlloc);
 }
 
 static void
@@ -2202,8 +2149,8 @@ Compile(JSContext* cx, HandleScript script, BaselineFrame* osrFrame, jsbytecode*
     if (optimizationLevel == Optimization_DontCompile)
         return Method_Skipped;
 
-    IonScript* scriptIon = script->maybeIonScript();
-    if (scriptIon) {
+    if (script->hasIonScript()) {
+        IonScript* scriptIon = script->ionScript();
         if (!scriptIon->method())
             return Method_CantCompile;
 
@@ -2218,6 +2165,14 @@ Compile(JSContext* cx, HandleScript script, BaselineFrame* osrFrame, jsbytecode*
 
         if (osrPc)
             scriptIon->resetOsrPcMismatchCounter();
+
+        recompile = true;
+    }
+
+    if (script->baselineScript()->hasPendingIonBuilder()) {
+        IonBuilder* buildIon = script->baselineScript()->pendingIonBuilder();
+        if (optimizationLevel <= buildIon->optimizationInfo().level() && !forceRecompile)
+            return Method_Compiled;
 
         recompile = true;
     }
@@ -2260,7 +2215,7 @@ jit::OffThreadCompilationAvailable(JSContext* cx)
 // Decide if a transition from interpreter execution to Ion code should occur.
 // May compile or recompile the target JSScript.
 MethodStatus
-jit::CanEnterAtBranch(JSContext* cx, JSScript* script, BaselineFrame* osrFrame, jsbytecode* pc)
+jit::CanEnterAtBranch(JSContext* cx, HandleScript script, BaselineFrame* osrFrame, jsbytecode* pc)
 {
     MOZ_ASSERT(jit::IsIonEnabled(cx));
     MOZ_ASSERT((JSOp)*pc == JSOP_LOOPENTRY);
@@ -2287,6 +2242,11 @@ jit::CanEnterAtBranch(JSContext* cx, JSScript* script, BaselineFrame* osrFrame, 
         ForbidCompilation(cx, script);
         return Method_CantCompile;
     }
+
+    // Check if the jitcode still needs to get linked and do this
+    // to have a valid IonScript.
+    if (script->baselineScript()->hasPendingIonBuilder())
+        LazyLink(cx, script);
 
     // By default a recompilation doesn't happen on osr mismatch.
     // Decide if we want to force a recompilation if this happens too much.
@@ -2316,7 +2276,7 @@ jit::CanEnterAtBranch(JSContext* cx, JSScript* script, BaselineFrame* osrFrame, 
     // This can happen when there was still an IonScript available and a
     // background compilation started, but hasn't finished yet.
     // Or when we didn't force a recompile.
-    if (pc != script->ionScript()->osrPc())
+    if (script->hasIonScript() && pc != script->ionScript()->osrPc())
         return Method_Skipped;
 
     return Method_Compiled;
@@ -2382,6 +2342,12 @@ jit::CanEnter(JSContext* cx, RunState& state)
         if (status == Method_CantCompile)
             ForbidCompilation(cx, rscript);
         return status;
+    }
+
+    if (state.script()->baselineScript()->hasPendingIonBuilder()) {
+        LazyLink(cx, state.script());
+        if (!state.script()->hasIonScript())
+            return jit::Method_Skipped;
     }
 
     return Method_Compiled;
@@ -2893,8 +2859,10 @@ jit::IonScript::invalidate(JSContext* cx, bool resetUses, const char* reason)
 {
     JitSpew(JitSpew_IonInvalidate, " Invalidate IonScript %p: %s", this, reason);
     RecompileInfoVector list;
-    if (!list.append(recompileInfo()))
+    if (!list.append(recompileInfo())) {
+        ReportOutOfMemory(cx);
         return false;
+    }
     Invalidate(cx, list, resetUses, true);
     return true;
 }
@@ -2927,8 +2895,10 @@ jit::Invalidate(JSContext* cx, JSScript* script, bool resetUses, bool cancelOffT
 
     RecompileInfoVector scripts;
     MOZ_ASSERT(script->hasIonScript());
-    if (!scripts.append(script->ionScript()->recompileInfo()))
+    if (!scripts.append(script->ionScript()->recompileInfo())) {
+        ReportOutOfMemory(cx);
         return false;
+    }
 
     Invalidate(cx, scripts, resetUses, cancelOffThread);
     return true;
@@ -3002,7 +2972,7 @@ PerThreadData::setAutoFlushICache(AutoFlushICache* afc)
 void
 AutoFlushICache::setRange(uintptr_t start, size_t len)
 {
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     AutoFlushICache* afc = TlsPerThreadData.get()->PerThreadData::autoFlushICache();
     MOZ_ASSERT(afc);
     MOZ_ASSERT(!afc->start_);
@@ -3035,7 +3005,7 @@ AutoFlushICache::setRange(uintptr_t start, size_t len)
 void
 AutoFlushICache::flush(uintptr_t start, size_t len)
 {
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     PerThreadData* pt = TlsPerThreadData.get();
     AutoFlushICache* afc = pt ? pt->PerThreadData::autoFlushICache() : nullptr;
     if (!afc) {
@@ -3062,7 +3032,7 @@ AutoFlushICache::flush(uintptr_t start, size_t len)
 void
 AutoFlushICache::setInhibit()
 {
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     AutoFlushICache* afc = TlsPerThreadData.get()->PerThreadData::autoFlushICache();
     MOZ_ASSERT(afc);
     MOZ_ASSERT(afc->start_);
@@ -3089,14 +3059,14 @@ AutoFlushICache::setInhibit()
 // the respective AutoFlushICache dynamic context.
 //
 AutoFlushICache::AutoFlushICache(const char* nonce, bool inhibit)
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
   : start_(0),
     stop_(0),
     name_(nonce),
     inhibit_(inhibit)
 #endif
 {
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     PerThreadData* pt = TlsPerThreadData.get();
     AutoFlushICache* afc = pt->PerThreadData::autoFlushICache();
     if (afc)
@@ -3111,7 +3081,7 @@ AutoFlushICache::AutoFlushICache(const char* nonce, bool inhibit)
 
 AutoFlushICache::~AutoFlushICache()
 {
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
     PerThreadData* pt = TlsPerThreadData.get();
     MOZ_ASSERT(pt->PerThreadData::autoFlushICache() == this);
 

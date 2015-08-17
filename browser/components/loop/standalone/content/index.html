@@ -51,7 +51,12 @@
           insertScript("//www.google-analytics.com/analytics.js");
 
           window.ga("create", "UA-36116321-15", "auto");
-          window.ga("set", "anonymizeIp", true);
+          /* Don't send conversation ids to GA, by specifying our own location. */
+          window.ga("set", {
+            "location": document.location.origin + "/conversation/",
+            "anonymizeIp": true,
+            "title": "Link Clicker"
+          });
           window.ga("send", "pageview");
         }
       })();
@@ -134,7 +139,6 @@
     <script type="text/javascript" src="shared/js/crypto.js"></script>
     <script type="text/javascript" src="shared/js/models.js"></script>
     <script type="text/javascript" src="shared/js/mixins.js"></script>
-    <script type="text/javascript" src="shared/js/feedbackApiClient.js"></script>
     <script type="text/javascript" src="shared/js/actions.js"></script>
     <script type="text/javascript" src="shared/js/validate.js"></script>
     <script type="text/javascript" src="shared/js/dispatcher.js"></script>
@@ -144,11 +148,11 @@
     <script type="text/javascript" src="shared/js/roomStates.js"></script>
     <script type="text/javascript" src="shared/js/fxOSActiveRoomStore.js"></script>
     <script type="text/javascript" src="shared/js/activeRoomStore.js"></script>
-    <script type="text/javascript" src="shared/js/feedbackStore.js"></script>
     <script type="text/javascript" src="shared/js/views.js"></script>
-    <script type="text/javascript" src="shared/js/feedbackViews.js"></script>
     <script type="text/javascript" src="shared/js/textChatStore.js"></script>
     <script type="text/javascript" src="shared/js/textChatView.js"></script>
+    <script type="text/javascript" src="shared/js/urlRegExps.js"></script>
+    <script type="text/javascript" src="shared/js/linkifiedTextView.js"></script>
     <script type="text/javascript" src="js/standaloneAppStore.js"></script>
     <script type="text/javascript" src="js/standaloneClient.js"></script>
     <script type="text/javascript" src="js/standaloneMozLoop.js"></script>

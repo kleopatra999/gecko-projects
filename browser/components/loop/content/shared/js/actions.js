@@ -80,7 +80,6 @@ loop.shared.actions = (function() {
      * a contact can't be reached.
      */
     FetchRoomEmailLink: Action.define("fetchRoomEmailLink", {
-      roomOwner: String,
       roomName: String
     }),
 
@@ -307,8 +306,7 @@ loop.shared.actions = (function() {
     CreateRoom: Action.define("createRoom", {
       // The localized template to use to name the new room
       // (eg. "Conversation {{conversationLabel}}").
-      nameTemplate: String,
-      roomOwner: String
+      nameTemplate: String
       // See https://wiki.mozilla.org/Loop/Architecture/Context#Format_of_context.value
       // urls: Object - Optional
     }),
@@ -521,16 +519,15 @@ loop.shared.actions = (function() {
     }),
 
     /**
-     * Used to indicate that the feedback cycle is completed and the countdown
-     * finished.
-     */
-    FeedbackComplete: Action.define("feedbackComplete", {
-    }),
-
-    /**
      * Used to indicate the user wishes to leave the room.
      */
     LeaveRoom: Action.define("leaveRoom", {
+    }),
+
+    /**
+     * Signals that the feedback view should be rendered.
+     */
+    ShowFeedbackForm: Action.define("showFeedbackForm", {
     }),
 
     /**
@@ -542,28 +539,6 @@ loop.shared.actions = (function() {
       // record what users are clicking, just the information about the fact
       // they clicked the link in that spot (e.g. "Shared URL").
       linkInfo: String
-    }),
-
-    /**
-     * Requires detailed information on sad feedback.
-     */
-    RequireFeedbackDetails: Action.define("requireFeedbackDetails", {
-    }),
-
-    /**
-     * Send feedback data.
-     */
-    SendFeedback: Action.define("sendFeedback", {
-      happy: Boolean,
-      category: String,
-      description: String
-    }),
-
-    /**
-     * Reacts on feedback submission error.
-     */
-    SendFeedbackError: Action.define("sendFeedbackError", {
-      error: Error
     }),
 
     /**

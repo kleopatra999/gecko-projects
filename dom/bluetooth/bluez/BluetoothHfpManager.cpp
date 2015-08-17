@@ -651,9 +651,10 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
 
   JS::Rooted<JS::Value> value(nsContentUtils::RootingCxForThread());
   voiceInfo->GetRelSignalStrength(&value);
-  NS_ENSURE_TRUE_VOID(value.isNumber());
-  uint8_t signal = ceil(value.toNumber() / 20.0);
-  UpdateCIND(CINDType::SIGNAL, signal);
+  if (value.isNumber()) {
+    uint8_t signal = ceil(value.toNumber() / 20.0);
+    UpdateCIND(CINDType::SIGNAL, signal);
+  }
 
   /**
    * Possible return values for mode are:
@@ -667,7 +668,10 @@ BluetoothHfpManager::HandleVoiceConnectionChanged(uint32_t aClientId)
 
   nsCOMPtr<nsIMobileNetworkInfo> network;
   voiceInfo->GetNetwork(getter_AddRefs(network));
-  NS_ENSURE_TRUE_VOID(network);
+  if (!network) {
+    BT_LOGD("Unable to get network information");
+    return;
+  }
   network->GetLongName(mOperatorName);
 
   // According to GSM 07.07, "<format> indicates if the format is alphanumeric
@@ -2099,6 +2103,15 @@ BluetoothHfpManager::OnDisconnect(const nsAString& aErrorStr)
 
   nsRefPtr<BluetoothProfileController> controller = mController.forget();
   controller->NotifyCompletion(aErrorStr);
+}
+
+bool
+BluetoothHfpManager::IsNrecEnabled()
+{
+  // Add this function and return default value to avoid build break
+  // since NREC function isn't developed in bluez yet.
+  // Please see Bug 825149 for more information.
+  return HFP_NREC_STARTED;
 }
 
 NS_IMPL_ISUPPORTS(BluetoothHfpManager, nsIObserver)

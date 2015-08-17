@@ -40,11 +40,6 @@ const kUDP_WAKEUP_WS_STATUS_CODE = 4774;  // WebSocket Close status code sent
                                           // by server to signal that it can
                                           // wake client up using UDP.
 
-const kWS_MAX_WENTDOWN = 2;
-
-// 1 minute is the least allowed ping interval
-const kWS_MIN_PING_INTERVAL = 60000;
-
 const prefs = new Preferences("dom.push.");
 
 this.EXPORTED_SYMBOLS = ["PushServiceWebSocket"];
@@ -271,12 +266,6 @@ this.PushServiceWebSocket = {
   _upperLimit: 0,
 
   /**
-   * Count the times WebSocket goes down without receiving Pings
-   * so we can re-enable the ping recalculation algorithm
-   */
-  _wsWentDownCounter: 0,
-
-  /**
    * Sends a message to the Push Server through an open websocket.
    * typeof(msg) shall be an object
    */
@@ -445,11 +434,6 @@ this.PushServiceWebSocket = {
       return;
     }
 
-    if (!wsWentDown) {
-      debug('Setting websocket down counter to 0');
-      this._wsWentDownCounter = 0;
-    }
-
     if (!this._recalculatePing && !wsWentDown) {
       debug('We do not need to recalculate the ping now, based on previous ' +
             'data');
@@ -495,27 +479,6 @@ this.PushServiceWebSocket = {
 
     let nextPingInterval;
     let lastTriedPingInterval = prefs.get('pingInterval');
-
-    if (!this._recalculatePing && wsWentDown) {
-      debug('Websocket disconnected without ping adaptative algorithm running');
-      this._wsWentDownCounter++;
-      if (this._wsWentDownCounter > kWS_MAX_WENTDOWN) {
-        debug('Too many disconnects. Reenabling ping adaptative algoritm');
-        this._wsWentDownCounter = 0;
-        this._recalculatePing = true;
-        this._lastGoodPingInterval = Math.floor(lastTriedPingInterval / 2);
-        if (this._lastGoodPingInterval < kWS_MIN_PING_INTERVAL) {
-          nextPingInterval = kWS_MIN_PING_INTERVAL;
-        } else {
-          nextPingInterval = this._lastGoodPingInterval;
-        }
-        prefs.set('pingInterval', nextPingInterval);
-        this._save(ns, nextPingInterval);
-        return;
-      }
-
-      debug('We do not need to recalculate the ping, based on previous data');
-    }
 
     if (wsWentDown) {
       debug('The WebSocket was disconnected, calculating next ping');
@@ -567,10 +530,6 @@ this.PushServiceWebSocket = {
     debug('Setting the pingInterval to ' + nextPingInterval);
     prefs.set('pingInterval', nextPingInterval);
 
-    this._save(ns, nextPingInterval);
-  },
-
-  _save: function(ns, nextPingInterval){
     //Save values for our current network
     if (ns.ip) {
       prefs.set('pingInterval.mobile', nextPingInterval);
@@ -1256,8 +1215,8 @@ let PushNetworkInfo = {
 
       let nm = Cc["@mozilla.org/network/manager;1"]
                  .getService(Ci.nsINetworkManager);
-      if (nm.active &&
-          nm.active.type == Ci.nsINetworkInterface.NETWORK_TYPE_MOBILE) {
+      if (nm.activeNetworkInfo &&
+          nm.activeNetworkInfo.type == Ci.nsINetworkInfo.NETWORK_TYPE_MOBILE) {
         let iccService = Cc["@mozilla.org/icc/iccservice;1"]
                            .getService(Ci.nsIIccService);
         // TODO: Bug 927721 - PushService for multi-sim
@@ -1273,7 +1232,7 @@ let PushNetworkInfo = {
 
           let ips = {};
           let prefixLengths = {};
-          nm.active.getAddresses(ips, prefixLengths);
+          nm.activeNetworkInfo.getAddresses(ips, prefixLengths);
 
           return {
             mcc: iccInfo.mcc,

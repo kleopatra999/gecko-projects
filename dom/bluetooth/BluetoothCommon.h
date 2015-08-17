@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_bluetooth_bluetoothcommon_h
-#define mozilla_dom_bluetooth_bluetoothcommon_h
+#ifndef mozilla_dom_bluetooth_BluetoothCommon_h
+#define mozilla_dom_bluetooth_BluetoothCommon_h
 
 #include "mozilla/Compiler.h"
 #include "mozilla/Observer.h"
@@ -57,13 +57,13 @@ extern bool gBluetoothDebugFlag;
  */
 #define BT_LOGR(msg, ...)                                            \
   __android_log_print(ANDROID_LOG_INFO, "GeckoBluetooth",            \
-                      "%s: " msg, __FUNCTION__, ##__VA_ARGS__)       \
+                      "%s: " msg, __FUNCTION__, ##__VA_ARGS__)
 
 /**
  * Prints DEBUG build warnings, which show in DEBUG build only.
  */
 #define BT_WARNING(args...)                                          \
-  NS_WARNING(nsPrintfCString(args).get())                            \
+  NS_WARNING(nsPrintfCString(args).get())
 
 #else
 #define BT_LOGD(msg, ...)                                            \
@@ -94,6 +94,18 @@ extern bool gBluetoothDebugFlag;
                                                    BluetoothValue(value)))
 
 /**
+ * Convert an enum value to string and append it to a fallible array.
+ */
+#define BT_APPEND_ENUM_STRING_FALLIBLE(array, enumType, enumValue)   \
+  do {                                                               \
+    uint32_t index = uint32_t(enumValue);                            \
+    nsAutoString name;                                               \
+    name.AssignASCII(enumType##Values::strings[index].value,         \
+                     enumType##Values::strings[index].length);       \
+    array.AppendElement(name, mozilla::fallible);                    \
+  } while(0)
+
+/**
  * Ensure success of system message broadcast with void return.
  */
 #define BT_ENSURE_TRUE_VOID_BROADCAST_SYSMSG(type, parameters)       \
@@ -104,30 +116,6 @@ extern bool gBluetoothDebugFlag;
       return;                                                        \
     }                                                                \
   } while(0)
-
-/**
- * Convert an enum value to string then append it to an array.
- */
-#define BT_APPEND_ENUM_STRING(array, enumType, enumValue)            \
-  do {                                                               \
-    uint32_t index = uint32_t(enumValue);                            \
-    nsAutoString name;                                               \
-    name.AssignASCII(enumType##Values::strings[index].value,         \
-                     enumType##Values::strings[index].length);       \
-    array.AppendElement(name);                                       \
-  } while(0)                                                         \
-
-/**
- * Convert an enum value to string then append it to a fallible array.
- */
-#define BT_APPEND_ENUM_STRING_FALLIBLE(array, enumType, enumValue)   \
-  do {                                                               \
-    uint32_t index = uint32_t(enumValue);                            \
-    nsAutoString name;                                               \
-    name.AssignASCII(enumType##Values::strings[index].value,         \
-                     enumType##Values::strings[index].length);       \
-    array.AppendElement(name, mozilla::fallible);                    \
-  } while(0)                                                         \
 
 /**
  * Resolve |promise| with |ret| if |x| is false.
@@ -153,6 +141,12 @@ extern bool gBluetoothDebugFlag;
     }                                                                \
   } while(0)
 
+/**
+ * Reject |promise| with |ret| if nsresult |rv| is not successful.
+ */
+#define BT_ENSURE_SUCCESS_REJECT(rv, promise, ret)                   \
+  BT_ENSURE_TRUE_REJECT(NS_SUCCEEDED(rv), promise, ret)
+
 #define BEGIN_BLUETOOTH_NAMESPACE \
   namespace mozilla { namespace dom { namespace bluetooth {
 #define END_BLUETOOTH_NAMESPACE \
@@ -172,6 +166,7 @@ extern bool gBluetoothDebugFlag;
  */
 #define BLUETOOTH_A2DP_STATUS_CHANGED_ID "bluetooth-a2dp-status-changed"
 #define BLUETOOTH_HFP_STATUS_CHANGED_ID  "bluetooth-hfp-status-changed"
+#define BLUETOOTH_HFP_NREC_STATUS_CHANGED_ID  "bluetooth-hfp-nrec-status-changed"
 #define BLUETOOTH_HID_STATUS_CHANGED_ID  "bluetooth-hid-status-changed"
 #define BLUETOOTH_SCO_STATUS_CHANGED_ID  "bluetooth-sco-status-changed"
 
@@ -193,31 +188,16 @@ extern bool gBluetoothDebugFlag;
 #define PAIRING_REQ_TYPE_CONSENT              "pairingconsentreq"
 
 /**
- * When the pair status of a Bluetooth device is changed, we'll dispatch an
- * event.
- *
- * TODO: remove with bluetooth1
- */
-#define PAIRED_STATUS_CHANGED_ID             "pairedstatuschanged"
-
-/**
- * This event would be fired when discovery procedure starts or stops.
- *
- * TODO: remove with bluetooth1
- */
-#define DISCOVERY_STATE_CHANGED_ID           "discoverystatechanged"
-
-/**
  * System message to launch bluetooth app if no pairing listener is ready to
  * receive pairing requests.
  */
 #define SYS_MSG_BT_PAIRING_REQ                "bluetooth-pairing-request"
 
 /**
- * The app origin of bluetooth app, which is responsible for listening pairing
- * requests.
+ * The preference name of bluetooth app origin of bluetooth app. The default
+ * value is defined in b2g/app/b2g.js.
  */
-#define BLUETOOTH_APP_ORIGIN                  "app://bluetooth.gaiamobile.org"
+#define PREF_BLUETOOTH_APP_ORIGIN             "dom.bluetooth.app-origin"
 
 /**
  * When a remote device gets paired / unpaired with local bluetooth adapter or
@@ -814,4 +794,4 @@ enum BluetoothGapDataType {
 
 END_BLUETOOTH_NAMESPACE
 
-#endif // mozilla_dom_bluetooth_bluetoothcommon_h__
+#endif // mozilla_dom_bluetooth_BluetoothCommon_h

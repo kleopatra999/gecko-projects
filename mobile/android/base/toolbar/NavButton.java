@@ -5,6 +5,7 @@
 package org.mozilla.gecko.toolbar;
 
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.util.ColorUtils;
 
 import android.content.Context;
 import android.content.res.Resources;
@@ -27,8 +28,8 @@ abstract class NavButton extends ShapedButton {
         super(context, attrs);
 
         final Resources res = getResources();
-        mBorderColor = res.getColor(R.color.disabled_grey);
-        mBorderColorPrivate = res.getColor(R.color.toolbar_icon_grey);
+        mBorderColor = ColorUtils.getColor(context, R.color.disabled_grey);
+        mBorderColorPrivate = ColorUtils.getColor(context, R.color.toolbar_icon_grey);
         mBorderWidth = res.getDimension(R.dimen.nav_button_border_width);
 
         // Paint to draw the border.
@@ -57,11 +58,10 @@ abstract class NavButton extends ShapedButton {
         canvas.drawPath(mBorderPath, mBorderPaint);
     }
 
-    // The drawable is constructed as per @drawable/new_tablet_url_bar_nav_button.
+    // The drawable is constructed as per @drawable/url_bar_nav_button.
     @Override
     public void onLightweightThemeChanged() {
-        final Drawable drawable = BrowserToolbar.getLightweightThemeDrawable(this, getResources(),
-                getTheme(), R.color.toolbar_grey);
+        final Drawable drawable = BrowserToolbar.getLightweightThemeDrawable(this, getTheme(), R.color.toolbar_grey);
 
         if (drawable == null) {
             return;
@@ -80,6 +80,6 @@ abstract class NavButton extends ShapedButton {
 
     @Override
     public void onLightweightThemeReset() {
-        setBackgroundResource(R.drawable.new_tablet_url_bar_nav_button);
+        setBackgroundResource(R.drawable.url_bar_nav_button);
     }
 }

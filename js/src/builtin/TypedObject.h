@@ -421,11 +421,6 @@ class ArrayTypeDescr : public ComplexTypeDescr
         return getReservedSlot(JS_DESCR_SLOT_ARRAY_ELEM_TYPE).toObject().as<TypeDescr>();
     }
 
-    TypeDescr& maybeForwardedElementType() const {
-        JSObject* elemType = &getReservedSlot(JS_DESCR_SLOT_ARRAY_ELEM_TYPE).toObject();
-        return MaybeForwarded(elemType)->as<TypeDescr>();
-    }
-
     int32_t length() const {
         return getReservedSlot(JS_DESCR_SLOT_ARRAY_LENGTH).toInt32();
     }
@@ -490,10 +485,6 @@ class StructTypeDescr : public ComplexTypeDescr
     ArrayObject& fieldInfoObject(size_t slot) const {
         return getReservedSlot(slot).toObject().as<ArrayObject>();
     }
-
-    ArrayObject& maybeForwardedFieldInfoObject(size_t slot) const {
-        return MaybeForwarded(&getReservedSlot(slot).toObject())->as<ArrayObject>();
-    }
 };
 
 typedef Handle<StructTypeDescr*> HandleStructTypeDescr;
@@ -553,23 +544,16 @@ class TypedObject : public JSObject
     static bool obj_deleteProperty(JSContext* cx, HandleObject obj, HandleId id,
                                    ObjectOpResult& result);
 
-    static bool obj_enumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties);
+    static bool obj_enumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties,
+                              bool enumerableOnly);
 
   public:
     TypedProto& typedProto() const {
         return getProto()->as<TypedProto>();
     }
 
-    TypedProto& maybeForwardedTypedProto() const {
-        return MaybeForwarded(getProto())->as<TypedProto>();
-    }
-
     TypeDescr& typeDescr() const {
         return group()->typeDescr();
-    }
-
-    TypeDescr& maybeForwardedTypeDescr() const {
-        return MaybeForwarded(&typeDescr())->as<TypeDescr>();
     }
 
     int32_t offset() const;

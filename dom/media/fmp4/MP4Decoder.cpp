@@ -5,7 +5,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "MP4Decoder.h"
-#include "MP4Reader.h"
 #include "MediaDecoderStateMachine.h"
 #include "MediaFormatReader.h"
 #include "MP4Demuxer.h"
@@ -42,11 +41,7 @@ MP4Decoder::MP4Decoder()
 
 MediaDecoderStateMachine* MP4Decoder::CreateStateMachine()
 {
-  bool useFormatDecoder =
-    Preferences::GetBool("media.format-reader.mp4", true);
-  nsRefPtr<MediaDecoderReader> reader = useFormatDecoder ?
-    static_cast<MediaDecoderReader*>(new MediaFormatReader(this, new MP4Demuxer(GetResource()))) :
-    static_cast<MediaDecoderReader*>(new MP4Reader(this));
+  MediaDecoderReader* reader = new MediaFormatReader(this, new MP4Demuxer(GetResource()));
 
   return new MediaDecoderStateMachine(this, reader);
 }
@@ -58,8 +53,8 @@ MP4Decoder::SetCDMProxy(CDMProxy* aProxy)
   nsresult rv = MediaDecoder::SetCDMProxy(aProxy);
   NS_ENSURE_SUCCESS(rv, rv);
   if (aProxy) {
-    // The MP4Reader can't decrypt EME content until it has a CDMProxy,
-    // and the CDMProxy knows the capabilities of the CDM. The MP4Reader
+    // The MediaFormatReader can't decrypt EME content until it has a CDMProxy,
+    // and the CDMProxy knows the capabilities of the CDM. The MediaFormatReader
     // remains in "waiting for resources" state until then.
     CDMCaps::AutoLock caps(aProxy->Capabilites());
     nsCOMPtr<nsIRunnable> task(
@@ -76,8 +71,9 @@ IsSupportedAudioCodec(const nsAString& aCodec,
                       bool& aOutContainsMP3)
 {
   // AAC-LC or HE-AAC in M4A.
-  aOutContainsAAC = aCodec.EqualsASCII("mp4a.40.2") ||
-                    aCodec.EqualsASCII("mp4a.40.5");
+  aOutContainsAAC = aCodec.EqualsASCII("mp4a.40.2")     // MPEG4 AAC-LC
+                    || aCodec.EqualsASCII("mp4a.40.5")  // MPEG4 HE-AAC
+                    || aCodec.EqualsASCII("mp4a.67");   // MPEG2 AAC-LC
   if (aOutContainsAAC) {
     return true;
   }
@@ -264,7 +260,8 @@ CreateTestH264Decoder(layers::LayersBackend aBackend,
   aConfig.mId = 1;
   aConfig.mDuration = 40000;
   aConfig.mMediaTime = 0;
-  aConfig.mDisplay = aConfig.mImage = nsIntSize(64, 64);
+  aConfig.mDisplay = nsIntSize(64, 64);
+  aConfig.mImage = nsIntRect(0, 0, 64, 64);
   aConfig.mExtraData = new MediaByteBuffer();
   aConfig.mExtraData->AppendElements(sTestH264ExtraData,
                                      MOZ_ARRAY_LENGTH(sTestH264ExtraData));
@@ -281,22 +278,20 @@ CreateTestH264Decoder(layers::LayersBackend aBackend,
   if (!decoder) {
     return nullptr;
   }
-  nsresult rv = decoder->Init();
-  NS_ENSURE_SUCCESS(rv, nullptr);
 
   return decoder.forget();
 }
 
 /* static */ bool
-MP4Decoder::IsVideoAccelerated(layers::LayersBackend aBackend)
+MP4Decoder::IsVideoAccelerated(layers::LayersBackend aBackend, nsACString& aFailureReason)
 {
   VideoInfo config;
   nsRefPtr<MediaDataDecoder> decoder(CreateTestH264Decoder(aBackend, config));
   if (!decoder) {
+    aFailureReason.AssignLiteral("Failed to create H264 decoder");
     return false;
   }
-  bool result = decoder->IsHardwareAccelerated();
-  decoder->Shutdown();
+  bool result = decoder->IsHardwareAccelerated(aFailureReason);
   return result;
 }
 
@@ -339,8 +334,6 @@ CreateTestAACDecoder(AudioInfo& aConfig)
   if (!decoder) {
     return nullptr;
   }
-  nsresult rv = decoder->Init();
-  NS_ENSURE_SUCCESS(rv, nullptr);
 
   return decoder.forget();
 }
@@ -379,7 +372,6 @@ MP4Decoder::CanCreateAACDecoder()
                                     MOZ_ARRAY_LENGTH(sTestAACExtraData));
   nsRefPtr<MediaDataDecoder> decoder(CreateTestAACDecoder(config));
   if (decoder) {
-    decoder->Shutdown();
     result = true;
   }
   haveCachedResult = true;

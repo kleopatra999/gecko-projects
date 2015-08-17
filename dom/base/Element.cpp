@@ -140,6 +140,7 @@
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/VRDevice.h"
 #include "nsComputedDOMStyle.h"
+#include "mozilla/Preferences.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -1391,6 +1392,21 @@ Element::GetElementsByClassName(const nsAString& aClassNames,
   return NS_OK;
 }
 
+/**
+ * Returns the count of descendants (inclusive of aContent) in
+ * the uncomposed document that are explicitly set as editable.
+ */
+static uint32_t
+EditableInclusiveDescendantCount(nsIContent* aContent)
+{
+  auto htmlElem = nsGenericHTMLElement::FromContent(aContent);
+  if (htmlElem) {
+    return htmlElem->EditableInclusiveDescendantCount();
+  }
+
+  return aContent->EditableDescendantCount();
+}
+
 nsresult
 Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                     nsIContent* aBindingParent,
@@ -1462,6 +1478,8 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
   }
 
   bool hadForceXBL = HasFlag(NODE_FORCE_XBL_BINDINGS);
+
+  bool hadParent = !!GetParentNode();
 
   // Now set the parent and set the "Force attach xbl" flag if needed.
   if (aParent) {
@@ -1554,6 +1572,8 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     SetDirOnBind(this, aParent);
   }
 
+  uint32_t editableDescendantCount = 0;
+
   // If NODE_FORCE_XBL_BINDINGS was set we might have anonymous children
   // that also need to be told that they are moving.
   nsresult rv;
@@ -1570,6 +1590,8 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
            child = child->GetNextSibling()) {
         rv = child->BindToTree(aDocument, this, this, allowScripts);
         NS_ENSURE_SUCCESS(rv, rv);
+
+        editableDescendantCount += EditableInclusiveDescendantCount(child);
       }
     }
   }
@@ -1582,6 +1604,28 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
     rv = child->BindToTree(aDocument, this, aBindingParent,
                            aCompileEventHandlers);
     NS_ENSURE_SUCCESS(rv, rv);
+
+    editableDescendantCount += EditableInclusiveDescendantCount(child);
+  }
+
+  if (aDocument) {
+    // Update our editable descendant count because we don't keep track of it
+    // for content that is not in the uncomposed document.
+    MOZ_ASSERT(EditableDescendantCount() == 0);
+    ChangeEditableDescendantCount(editableDescendantCount);
+
+    if (!hadParent) {
+      uint32_t editableDescendantChange = EditableInclusiveDescendantCount(this);
+      if (editableDescendantChange != 0) {
+      // If we are binding a subtree root to the document, we need to update
+      // the editable descendant count of all the ancestors.
+        nsIContent* parent = GetParent();
+        while (parent) {
+          parent->ChangeEditableDescendantCount(editableDescendantChange);
+          parent = parent->GetParent();
+        }
+      }
+    }
   }
 
   nsNodeUtils::ParentChainChanged(this);
@@ -1685,6 +1729,20 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
     if (HasPointerLock()) {
       nsIDocument::UnlockPointer();
     }
+
+    if (GetParent() && GetParent()->IsInUncomposedDoc()) {
+      // Update the editable descendant count in the ancestors before we
+      // lose the reference to the parent.
+      int32_t editableDescendantChange = -1 * EditableInclusiveDescendantCount(this);
+      if (editableDescendantChange != 0) {
+        nsIContent* parent = GetParent();
+        while (parent) {
+          parent->ChangeEditableDescendantCount(editableDescendantChange);
+          parent = parent->GetParent();
+        }
+      }
+    }
+
     if (GetParent()) {
       nsINode* p = mParent;
       mParent = nullptr;
@@ -1695,6 +1753,10 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
     SetParentIsContent(false);
   }
   ClearInDocument();
+
+  // Editable descendant count only counts descendants that
+  // are in the uncomposed document.
+  ResetEditableDescendantCount();
 
   if (aNullParent || !mParent->IsInShadowTree()) {
     UnsetFlags(NODE_IS_IN_SHADOW_TREE);
@@ -2180,9 +2242,11 @@ Element::SetAttr(int32_t aNamespaceID, nsIAtom* aName,
 
   nsresult rv = BeforeSetAttr(aNamespaceID, aName, &value, aNotify);
   NS_ENSURE_SUCCESS(rv, rv);
+  nsAttrValue* preparsedAttrValue = value.GetStoredAttrValue();
 
   if (aNotify) {
-    nsNodeUtils::AttributeWillChange(this, aNamespaceID, aName, modType);
+    nsNodeUtils::AttributeWillChange(this, aNamespaceID, aName, modType,
+                                     preparsedAttrValue);
   }
 
   // Hold a script blocker while calling ParseAttribute since that can call
@@ -2190,6 +2254,11 @@ Element::SetAttr(int32_t aNamespaceID, nsIAtom* aName,
   nsAutoScriptBlocker scriptBlocker;
 
   nsAttrValue attrValue;
+  if (preparsedAttrValue) {
+    attrValue.SwapValueWith(*preparsedAttrValue);
+  }
+  // Even the value was pre-parsed in BeforeSetAttr, we still need to call
+  // ParseAttribute because it can have side effects.
   if (!ParseAttribute(aNamespaceID, aName, aValue, attrValue)) {
     attrValue.SetTo(aValue);
   }
@@ -2229,7 +2298,8 @@ Element::SetParsedAttr(int32_t aNamespaceID, nsIAtom* aName,
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (aNotify) {
-    nsNodeUtils::AttributeWillChange(this, aNamespaceID, aName, modType);
+    nsNodeUtils::AttributeWillChange(this, aNamespaceID, aName, modType,
+                                     &aParsedValue);
   }
 
   return SetAttrAndNotify(aNamespaceID, aName, aPrefix, oldValue,
@@ -2256,10 +2326,10 @@ Element::SetAttrAndNotify(int32_t aNamespaceID,
   nsMutationGuard::DidMutate();
 
   // Copy aParsedValue for later use since it will be lost when we call
-  // SetAndTakeMappedAttr below
-  nsAttrValue aValueForAfterSetAttr;
+  // SetAndSwapMappedAttr below
+  nsAttrValue valueForAfterSetAttr;
   if (aCallAfterSetAttr) {
-    aValueForAfterSetAttr.SetTo(aParsedValue);
+    valueForAfterSetAttr.SetTo(aParsedValue);
   }
 
   bool hadValidDir = false;
@@ -2275,7 +2345,7 @@ Element::SetAttrAndNotify(int32_t aNamespaceID,
     // stuff to Element?
     if (!IsAttributeMapped(aName) ||
         !SetMappedAttribute(document, aName, aParsedValue, &rv)) {
-      rv = mAttrsAndChildren.SetAndTakeAttr(aName, aParsedValue);
+      rv = mAttrsAndChildren.SetAndSwapAttr(aName, aParsedValue);
     }
   }
   else {
@@ -2284,8 +2354,13 @@ Element::SetAttrAndNotify(int32_t aNamespaceID,
                                                    aNamespaceID,
                                                    nsIDOMNode::ATTRIBUTE_NODE);
 
-    rv = mAttrsAndChildren.SetAndTakeAttr(ni, aParsedValue);
+    rv = mAttrsAndChildren.SetAndSwapAttr(ni, aParsedValue);
   }
+
+  // If the old value owns its own data, we know it is OK to keep using it.
+  const nsAttrValue* oldValue =
+      aParsedValue.StoresOwnData() ? &aParsedValue : &aOldValue;
+
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (document || HasFlag(NODE_FORCE_XBL_BINDINGS)) {
@@ -2299,8 +2374,8 @@ Element::SetAttrAndNotify(int32_t aNamespaceID,
 
   nsIDocument* ownerDoc = OwnerDoc();
   if (ownerDoc && GetCustomElementData()) {
-    nsCOMPtr<nsIAtom> oldValueAtom = aOldValue.GetAsAtom();
-    nsCOMPtr<nsIAtom> newValueAtom = aValueForAfterSetAttr.GetAsAtom();
+    nsCOMPtr<nsIAtom> oldValueAtom = oldValue->GetAsAtom();
+    nsCOMPtr<nsIAtom> newValueAtom = valueForAfterSetAttr.GetAsAtom();
     LifecycleCallbackArgs args = {
       nsDependentAtomString(aName),
       aModType == nsIDOMMutationEvent::ADDITION ?
@@ -2312,17 +2387,21 @@ Element::SetAttrAndNotify(int32_t aNamespaceID,
   }
 
   if (aCallAfterSetAttr) {
-    rv = AfterSetAttr(aNamespaceID, aName, &aValueForAfterSetAttr, aNotify);
+    rv = AfterSetAttr(aNamespaceID, aName, &valueForAfterSetAttr, aNotify);
     NS_ENSURE_SUCCESS(rv, rv);
 
     if (aNamespaceID == kNameSpaceID_None && aName == nsGkAtoms::dir) {
-      OnSetDirAttr(this, &aValueForAfterSetAttr,
+      OnSetDirAttr(this, &valueForAfterSetAttr,
                    hadValidDir, hadDirAuto, aNotify);
     }
   }
 
   if (aNotify) {
-    nsNodeUtils::AttributeChanged(this, aNamespaceID, aName, aModType);
+    // Don't pass aOldValue to AttributeChanged since it may not be reliable.
+    // Callers only compute aOldValue under certain conditions which may not
+    // be triggered by all nsIMutationObservers.
+    nsNodeUtils::AttributeChanged(this, aNamespaceID, aName, aModType,
+        oldValue == &aParsedValue ? &aParsedValue : nullptr);
   }
 
   if (aFireMutation) {
@@ -2340,8 +2419,8 @@ Element::SetAttrAndNotify(int32_t aNamespaceID,
     if (!newValue.IsEmpty()) {
       mutation.mNewAttrValue = do_GetAtom(newValue);
     }
-    if (!aOldValue.IsEmptyString()) {
-      mutation.mPrevAttrValue = aOldValue.GetAsAtom();
+    if (!oldValue->IsEmptyString()) {
+      mutation.mPrevAttrValue = oldValue->GetAsAtom();
     }
     mutation.mAttrChange = aModType;
 
@@ -2349,6 +2428,25 @@ Element::SetAttrAndNotify(int32_t aNamespaceID,
     (new AsyncEventDispatcher(this, mutation))->RunDOMEventWhenSafe();
   }
 
+  return NS_OK;
+}
+
+nsresult
+Element::BeforeSetAttr(int32_t aNamespaceID, nsIAtom* aName,
+                       nsAttrValueOrString* aValue, bool aNotify)
+{
+  if (aNamespaceID == kNameSpaceID_None) {
+    if (aName == nsGkAtoms::_class) {
+      // aValue->GetAttrValue will only be non-null here when this is called
+      // via Element::SetParsedAttr. This shouldn't happen for "class", but
+      // this will handle it.
+      if (aValue && !aValue->GetAttrValue()) {
+        nsAttrValue attr;
+        attr.ParseAtomArray(aValue->String());
+        aValue->TakeParsedValue(attr);
+      }
+    }
+  }
   return NS_OK;
 }
 
@@ -2361,7 +2459,7 @@ Element::ParseAttribute(int32_t aNamespaceID,
   if (aNamespaceID == kNameSpaceID_None) {
     if (aAttribute == nsGkAtoms::_class) {
       SetFlags(NODE_MAY_HAVE_CLASS);
-      aResult.ParseAtomArray(aValue);
+      // Result should have been preparsed above.
       return true;
     }
     if (aAttribute == nsGkAtoms::id) {
@@ -2468,7 +2566,8 @@ Element::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aName,
 
   if (aNotify) {
     nsNodeUtils::AttributeWillChange(this, aNameSpaceID, aName,
-                                     nsIDOMMutationEvent::REMOVAL);
+                                     nsIDOMMutationEvent::REMOVAL,
+                                     nullptr);
   }
 
   bool hasMutationListeners = aNotify &&
@@ -2534,8 +2633,10 @@ Element::UnsetAttr(int32_t aNameSpaceID, nsIAtom* aName,
   }
 
   if (aNotify) {
+    // We can always pass oldValue here since there is no new value which could
+    // have corrupted it.
     nsNodeUtils::AttributeChanged(this, aNameSpaceID, aName,
-                                  nsIDOMMutationEvent::REMOVAL);
+                                  nsIDOMMutationEvent::REMOVAL, &oldValue);
   }
 
   rv = AfterSetAttr(aNameSpaceID, aName, nullptr, aNotify);
@@ -3116,10 +3217,6 @@ GetFullScreenError(nsIDocument* aDoc)
     return "FullScreenDeniedNotInputDriven";
   }
 
-  if (nsContentUtils::IsSitePermDeny(aDoc->NodePrincipal(), "fullscreen")) {
-    return "FullScreenDeniedBlocked";
-  }
-
   return nullptr;
 }
 
@@ -3484,4 +3581,17 @@ Element::FontSizeInflation()
   }
 
   return 1.0;
+}
+
+net::ReferrerPolicy
+Element::GetReferrerPolicy()
+{
+  if (Preferences::GetBool("network.http.enablePerElementReferrer", false) &&
+      IsHTMLElement()) {
+    const nsAttrValue* referrerValue = GetParsedAttr(nsGkAtoms::referrer);
+    if (referrerValue && referrerValue->Type() == nsAttrValue::eEnum) {
+      return net::ReferrerPolicy(referrerValue->GetEnumValue());
+    }
+  }
+  return net::RP_Unset;
 }

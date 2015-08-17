@@ -195,10 +195,10 @@ public:
   }
   void GetReferrer(nsAString& aReferrer)
   {
-    GetEnumAttr(nsGkAtoms::referrer, nullptr, aReferrer);
+    GetHTMLAttr(nsGkAtoms::referrer, aReferrer);
   }
 
-  mozilla::net::ReferrerPolicy
+  net::ReferrerPolicy
   GetImageReferrerPolicy() override
   {
     return GetReferrerPolicy();
@@ -334,7 +334,7 @@ protected:
   void UpdateFormOwner();
 
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
+                                 nsAttrValueOrString* aValue,
                                  bool aNotify) override;
 
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,

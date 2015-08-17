@@ -283,6 +283,8 @@ def run_test_harness(options):
     if options is None:
         raise ValueError("Invalid options specified, use --help for a list of valid options")
 
+    options.runByDir = False
+
     dm = options.dm
     auto.setDeviceManager(dm)
     mochitest = MochiRemote(auto, dm, options)
@@ -303,7 +305,8 @@ def run_test_harness(options):
     auto.setRemoteLog(options.remoteLogFile)
     auto.setServerInfo(options.webServer, options.httpPort, options.sslPort)
 
-    mochitest.printDeviceInfo()
+    if options.log_mach is None:
+        mochitest.printDeviceInfo()
 
     # Add Android version (SDK level) to mozinfo so that manifest entries
     # can be conditional on android_version.
@@ -341,7 +344,8 @@ def run_test_harness(options):
             pass
         retVal = 1
 
-    mochitest.printDeviceInfo(printLogcat=True)
+    if options.log_mach is None:
+        mochitest.printDeviceInfo(printLogcat=True)
 
     message_logger.finish()
 

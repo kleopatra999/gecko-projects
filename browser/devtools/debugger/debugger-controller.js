@@ -103,7 +103,10 @@ Cu.import("resource:///modules/devtools/VariablesView.jsm");
 Cu.import("resource:///modules/devtools/VariablesViewController.jsm");
 Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
 
-const require = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools.require;
+const {require} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+const {TargetFactory} = require("devtools/framework/target");
+const {Toolbox} = require("devtools/framework/toolbox")
+const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
 const promise = require("devtools/toolkit/deprecated-sync-thenables");
 const Editor = require("devtools/sourceeditor/editor");
 const DebuggerEditor = require("devtools/sourceeditor/debugger.js");
@@ -116,12 +119,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
 XPCOMUtils.defineLazyModuleGetter(this, "Parser",
   "resource:///modules/devtools/Parser.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "devtools",
-  "resource://gre/modules/devtools/Loader.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "DevToolsUtils",
-  "resource://gre/modules/devtools/DevToolsUtils.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "ShortcutUtils",
   "resource://gre/modules/ShortcutUtils.jsm");
 
@@ -130,7 +127,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
 
 Object.defineProperty(this, "NetworkHelper", {
   get: function() {
-    return devtools.require("devtools/toolkit/webconsole/network-helper");
+    return require("devtools/toolkit/webconsole/network-helper");
   },
   configurable: true,
   enumerable: true
@@ -495,9 +492,9 @@ Workers.prototype = {
 
   _onWorkerSelect: function (workerActor) {
     let workerClient = this._workerClients.get(workerActor);
-    gDevTools.showToolbox(devtools.TargetFactory.forWorker(workerClient),
+    gDevTools.showToolbox(TargetFactory.forWorker(workerClient),
                           "jsdebugger",
-                          devtools.Toolbox.HostType.WINDOW);
+                          Toolbox.HostType.WINDOW);
   }
 };
 
@@ -2186,7 +2183,8 @@ let Prefs = new ViewHelpers.Prefs("devtools", {
   autoPrettyPrint: ["Bool", "debugger.auto-pretty-print"],
   workersEnabled: ["Bool", "debugger.workers"],
   editorTabSize: ["Int", "editor.tabsize"],
-  autoBlackBox: ["Bool", "debugger.auto-black-box"]
+  autoBlackBox: ["Bool", "debugger.auto-black-box"],
+  promiseDebuggerEnabled: ["Bool", "debugger.promise"]
 });
 
 /**

@@ -112,9 +112,9 @@ const size_t gStackSize = 8192;
 
 #define NS_FULL_GC_DELAY            60000 // ms
 
-// The amount of time to wait from the user being idle to starting a shrinking
-// GC.
-#define NS_SHRINKING_GC_DELAY       15000 // ms
+// The default amount of time to wait from the user being idle to starting a
+// shrinking GC.
+#define NS_DEAULT_INACTIVE_GC_DELAY 300000 // ms
 
 // Maximum amount of time that should elapse between incremental GC slices
 #define NS_INTERSLICE_GC_DELAY      100 // ms
@@ -221,6 +221,7 @@ static bool sGCOnMemoryPressure;
 // after NS_SHRINKING_GC_DELAY ms later, if the appropriate pref is set.
 
 static bool sCompactOnUserInactive;
+static uint32_t sCompactOnUserInactiveDelay = NS_DEAULT_INACTIVE_GC_DELAY;
 static bool sIsCompactingOnUserInactive = false;
 
 // In testing, we call RunNextCollectorTimer() to ensure that the collectors are run more
@@ -1553,7 +1554,7 @@ nsJSContext::RunCycleCollectorSlice()
 
   // Decide how long we want to budget for this slice. By default,
   // use an unlimited budget.
-  js::SliceBudget budget;
+  js::SliceBudget budget = js::SliceBudget::unlimited();
 
   if (sIncrementalCC) {
     if (gCCStats.mBeginTime.IsNull()) {
@@ -2097,7 +2098,7 @@ nsJSContext::PokeShrinkingGC()
   }
 
   sShrinkingGCTimer->InitWithFuncCallback(ShrinkingGCTimerFired, nullptr,
-                                          NS_SHRINKING_GC_DELAY,
+                                          sCompactOnUserInactiveDelay,
                                           nsITimer::TYPE_ONE_SHOT);
 }
 
@@ -2493,7 +2494,13 @@ NS_DOMReadStructuredClone(JSContext* cx,
 {
   if (tag == SCTAG_DOM_IMAGEDATA) {
     return ReadStructuredCloneImageData(cx, reader);
-  } else if (tag == SCTAG_DOM_WEBCRYPTO_KEY) {
+  }
+
+  if (tag == SCTAG_DOM_WEBCRYPTO_KEY) {
+    if (!NS_IsMainThread()) {
+      return nullptr;
+    }
+
     nsIGlobalObject *global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(cx));
     if (!global) {
       return nullptr;
@@ -2510,9 +2517,15 @@ NS_DOMReadStructuredClone(JSContext* cx,
       }
     }
     return result;
-  } else if (tag == SCTAG_DOM_NULL_PRINCIPAL ||
-             tag == SCTAG_DOM_SYSTEM_PRINCIPAL ||
-             tag == SCTAG_DOM_CONTENT_PRINCIPAL) {
+  }
+
+  if (tag == SCTAG_DOM_NULL_PRINCIPAL ||
+      tag == SCTAG_DOM_SYSTEM_PRINCIPAL ||
+      tag == SCTAG_DOM_CONTENT_PRINCIPAL) {
+    if (!NS_IsMainThread()) {
+      return nullptr;
+    }
+
     mozilla::ipc::PrincipalInfo info;
     if (tag == SCTAG_DOM_SYSTEM_PRINCIPAL) {
       info = mozilla::ipc::SystemPrincipalInfo();
@@ -2550,8 +2563,14 @@ NS_DOMReadStructuredClone(JSContext* cx,
     }
 
     return result.toObjectOrNull();
-  } else if (tag == SCTAG_DOM_NFC_NDEF) {
+  }
+
 #ifdef MOZ_NFC
+  if (tag == SCTAG_DOM_NFC_NDEF) {
+    if (!NS_IsMainThread()) {
+      return nullptr;
+    }
+
     nsIGlobalObject *global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(cx));
     if (!global) {
       return nullptr;
@@ -2565,13 +2584,15 @@ NS_DOMReadStructuredClone(JSContext* cx,
                ndefRecord->WrapObject(cx, nullptr) : nullptr;
     }
     return result;
-#else
-    return nullptr;
-#endif
   }
+#endif
 
-  if (tag == SCTAG_DOM_RTC_CERTIFICATE) {
 #ifdef MOZ_WEBRTC
+  if (tag == SCTAG_DOM_RTC_CERTIFICATE) {
+    if (!NS_IsMainThread()) {
+      return nullptr;
+    }
+
     nsIGlobalObject *global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(cx));
     if (!global) {
       return nullptr;
@@ -2588,10 +2609,8 @@ NS_DOMReadStructuredClone(JSContext* cx,
       }
     }
     return result;
-#else
-    return nullptr;
-#endif
   }
+#endif
 
   // Don't know what this is. Bail.
   xpc::Throw(cx, NS_ERROR_DOM_DATA_CLONE_ERR);
@@ -2613,6 +2632,7 @@ NS_DOMWriteStructuredClone(JSContext* cx,
   // Handle Key cloning
   CryptoKey* key;
   if (NS_SUCCEEDED(UNWRAP_OBJECT(CryptoKey, obj, key))) {
+    MOZ_ASSERT(NS_IsMainThread(), "This object should not be exposed outside the main-thread.");
     return JS_WriteUint32Pair(writer, SCTAG_DOM_WEBCRYPTO_KEY, 0) &&
            key->WriteStructuredClone(writer);
   }
@@ -2621,12 +2641,13 @@ NS_DOMWriteStructuredClone(JSContext* cx,
   // Handle WebRTC Certificate cloning
   RTCCertificate* cert;
   if (NS_SUCCEEDED(UNWRAP_OBJECT(RTCCertificate, obj, cert))) {
+    MOZ_ASSERT(NS_IsMainThread(), "This object should not be exposed outside the main-thread.");
     return JS_WriteUint32Pair(writer, SCTAG_DOM_RTC_CERTIFICATE, 0) &&
            cert->WriteStructuredClone(writer);
   }
 #endif
 
-  if (xpc::IsReflector(obj)) {
+  if (NS_IsMainThread() && xpc::IsReflector(obj)) {
     nsCOMPtr<nsISupports> base = xpc::UnwrapReflectorToISupports(obj);
     nsCOMPtr<nsIPrincipal> principal = do_QueryInterface(base);
     if (principal) {
@@ -2654,6 +2675,7 @@ NS_DOMWriteStructuredClone(JSContext* cx,
 #ifdef MOZ_NFC
   MozNDEFRecord* ndefRecord;
   if (NS_SUCCEEDED(UNWRAP_OBJECT(MozNDEFRecord, obj, ndefRecord))) {
+    MOZ_ASSERT(NS_IsMainThread(), "This object should not be exposed outside the main-thread.");
     return JS_WriteUint32Pair(writer, SCTAG_DOM_NFC_NDEF, 0) &&
            ndefRecord->WriteStructuredClone(cx, writer);
   }
@@ -2833,6 +2855,10 @@ nsJSContext::EnsureStatics()
   Preferences::AddBoolVarCache(&sCompactOnUserInactive,
                                "javascript.options.compact_on_user_inactive",
                                true);
+
+  Preferences::AddUintVarCache(&sCompactOnUserInactiveDelay,
+                               "javascript.options.compact_on_user_inactive_delay",
+                               NS_DEAULT_INACTIVE_GC_DELAY);
 
   nsIObserver* observer = new nsJSEnvironmentObserver();
   obs->AddObserver(observer, "memory-pressure", false);
@@ -3019,7 +3045,6 @@ NS_IMETHODIMP nsJSArgArray::GetLength(uint32_t *aLength)
   return NS_OK;
 }
 
-/* void queryElementAt (in unsigned long index, in nsIIDRef uuid, [iid_is (uuid), retval] out nsQIResult result); */
 NS_IMETHODIMP nsJSArgArray::QueryElementAt(uint32_t index, const nsIID & uuid, void * *result)
 {
   *result = nullptr;
@@ -3036,13 +3061,11 @@ NS_IMETHODIMP nsJSArgArray::QueryElementAt(uint32_t index, const nsIID & uuid, v
   return NS_ERROR_NO_INTERFACE;
 }
 
-/* unsigned long indexOf (in unsigned long startIndex, in nsISupports element); */
 NS_IMETHODIMP nsJSArgArray::IndexOf(uint32_t startIndex, nsISupports *element, uint32_t *_retval)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-/* nsISimpleEnumerator enumerate (); */
 NS_IMETHODIMP nsJSArgArray::Enumerate(nsISimpleEnumerator **_retval)
 {
   return NS_ERROR_NOT_IMPLEMENTED;

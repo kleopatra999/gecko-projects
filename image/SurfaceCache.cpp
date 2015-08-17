@@ -19,6 +19,7 @@
 #include "mozilla/Pair.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/Tuple.h"
 #include "nsIMemoryReporter.h"
 #include "gfx2DGlue.h"
 #include "gfxPattern.h"  // Workaround for flaw in bug 921753 part 2.
@@ -207,13 +208,10 @@ public:
       if (aCachedSurface->mSurface) {
         counter.SubframeSize() = Some(aCachedSurface->mSurface->GetSize());
 
-        size_t heap = aCachedSurface->mSurface
-          ->SizeOfExcludingThis(gfxMemoryLocation::IN_PROCESS_HEAP,
-                                mMallocSizeOf);
+        size_t heap = 0, nonHeap = 0;
+        aCachedSurface->mSurface->AddSizeOfExcludingThis(mMallocSizeOf,
+                                                         heap, nonHeap);
         counter.Values().SetDecodedHeap(heap);
-
-        size_t nonHeap = aCachedSurface->mSurface
-          ->SizeOfExcludingThis(gfxMemoryLocation::IN_PROCESS_NONHEAP, nullptr);
         counter.Values().SetDecodedNonHeap(nonHeap);
       }
 
@@ -283,10 +281,9 @@ public:
     return surface.forget();
   }
 
-  MOZ_WARN_UNUSED_RESULT  // See bug 1185044.
   Pair<already_AddRefed<CachedSurface>, MatchType>
   LookupBestMatch(const SurfaceKey&      aSurfaceKey,
-                  const Maybe<uint32_t>& aAlternateFlags)
+                  const Maybe<SurfaceFlags>& aAlternateFlags)
   {
     // Try for an exact match first.
     nsRefPtr<CachedSurface> exactMatch;
@@ -338,13 +335,13 @@ private:
   struct MatchContext
   {
     MatchContext(const SurfaceKey& aIdealKey,
-                 const Maybe<uint32_t>& aAlternateFlags)
+                 const Maybe<SurfaceFlags>& aAlternateFlags)
       : mIdealKey(aIdealKey)
       , mAlternateFlags(aAlternateFlags)
     { }
 
     const SurfaceKey& mIdealKey;
-    const Maybe<uint32_t> mAlternateFlags;
+    const Maybe<SurfaceFlags> mAlternateFlags;
     nsRefPtr<CachedSurface> mBestMatch;
   };
 
@@ -647,7 +644,7 @@ public:
 
   LookupResult LookupBestMatch(const ImageKey         aImageKey,
                                const SurfaceKey&      aSurfaceKey,
-                               const Maybe<uint32_t>& aAlternateFlags)
+                               const Maybe<SurfaceFlags>& aAlternateFlags)
   {
     nsRefPtr<ImageSurfaceCache> cache = GetImageCache(aImageKey);
     if (!cache) {
@@ -665,11 +662,8 @@ public:
     DrawableFrameRef ref;
     MatchType matchType = MatchType::NOT_FOUND;
     while (true) {
-      // XXX(seth): This code is begging for std::tie. See bug 1184385.
-      Pair<already_AddRefed<CachedSurface>, MatchType> lookupResult =
+      Tie(surface, matchType) =
         cache->LookupBestMatch(aSurfaceKey, aAlternateFlags);
-      surface = lookupResult.first();
-      matchType = lookupResult.second();
 
       if (!surface) {
         return LookupResult(matchType);  // Lookup in the per-image cache missed.
@@ -1066,7 +1060,8 @@ SurfaceCache::Shutdown()
 /* static */ LookupResult
 SurfaceCache::Lookup(const ImageKey         aImageKey,
                      const SurfaceKey&      aSurfaceKey,
-                     const Maybe<uint32_t>& aAlternateFlags /* = Nothing() */)
+                     const Maybe<SurfaceFlags>& aAlternateFlags
+                       /* = Nothing() */)
 {
   if (!sInstance) {
     return LookupResult(MatchType::NOT_FOUND);
@@ -1086,7 +1081,7 @@ SurfaceCache::Lookup(const ImageKey         aImageKey,
 /* static */ LookupResult
 SurfaceCache::LookupBestMatch(const ImageKey         aImageKey,
                               const SurfaceKey&      aSurfaceKey,
-                              const Maybe<uint32_t>& aAlternateFlags
+                              const Maybe<SurfaceFlags>& aAlternateFlags
                                 /* = Nothing() */)
 {
   if (!sInstance) {

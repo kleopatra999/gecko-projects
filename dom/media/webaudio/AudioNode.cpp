@@ -97,16 +97,16 @@ AudioNode::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
   // - mStream
   size_t amount = 0;
 
-  amount += mInputNodes.SizeOfExcludingThis(aMallocSizeOf);
+  amount += mInputNodes.ShallowSizeOfExcludingThis(aMallocSizeOf);
   for (size_t i = 0; i < mInputNodes.Length(); i++) {
     amount += mInputNodes[i].SizeOfExcludingThis(aMallocSizeOf);
   }
 
   // Just measure the array. The entire audio node graph is measured via the
   // MediaStreamGraph's streams, so we don't want to double-count the elements.
-  amount += mOutputNodes.SizeOfExcludingThis(aMallocSizeOf);
+  amount += mOutputNodes.ShallowSizeOfExcludingThis(aMallocSizeOf);
 
-  amount += mOutputParams.SizeOfExcludingThis(aMallocSizeOf);
+  amount += mOutputParams.ShallowSizeOfExcludingThis(aMallocSizeOf);
   for (size_t i = 0; i < mOutputParams.Length(); i++) {
     amount += mOutputParams[i]->SizeOfIncludingThis(aMallocSizeOf);
   }
@@ -173,6 +173,8 @@ AudioNode::DisconnectFromGraph()
     // It doesn't matter which one we remove, since we're going to remove all
     // entries for this node anyway.
     output->mInputNodes.RemoveElementAt(inputIndex);
+    // This effects of this connection will remain.
+    output->NotifyHasPhantomInput();
   }
 
   while (!mOutputParams.IsEmpty()) {
@@ -227,6 +229,7 @@ AudioNode::Connect(AudioNode& aDestination, uint32_t aOutput,
                             static_cast<uint16_t>(aInput),
                             static_cast<uint16_t>(aOutput));
   }
+  aDestination.NotifyInputsChanged();
 
   // This connection may have connected a panner and a source.
   Context()->UpdatePannerSource();
@@ -294,9 +297,10 @@ AudioNode::SendThreeDPointParameterToStream(uint32_t aIndex, const ThreeDPoint& 
 void
 AudioNode::SendChannelMixingParametersToStream()
 {
-  MOZ_ASSERT(mStream, "How come we don't have a stream here?");
-  mStream->SetChannelMixingParameters(mChannelCount, mChannelCountMode,
-                                 mChannelInterpretation);
+  if (mStream) {
+    mStream->SetChannelMixingParameters(mChannelCount, mChannelCountMode,
+                                        mChannelInterpretation);
+  }
 }
 
 void
@@ -350,6 +354,7 @@ AudioNode::Disconnect(uint32_t aOutput, ErrorResult& aRv)
         // could be for different output ports.
         nsRefPtr<AudioNode> output = mOutputNodes[i].forget();
         mOutputNodes.RemoveElementAt(i);
+        output->NotifyInputsChanged();
         if (mStream) {
           nsRefPtr<nsIRunnable> runnable = new RunnableRelease(output.forget());
           mStream->RunAfterPendingUpdates(runnable.forget());
@@ -422,8 +427,9 @@ AudioNode::SetPassThrough(bool aPassThrough)
 {
   MOZ_ASSERT(NumberOfInputs() <= 1 && NumberOfOutputs() == 1);
   mPassThrough = aPassThrough;
-  MOZ_ASSERT(mStream, "How come we don't have a stream here?");
-  mStream->SetPassThrough(mPassThrough);
+  if (mStream) {
+    mStream->SetPassThrough(mPassThrough);
+  }
 }
 
 } // namespace dom

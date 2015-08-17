@@ -11,6 +11,7 @@
 #include "LayerManagerComposite.h"      // for LayerManagerComposite, etc
 #include "Layers.h"                     // for Layer, ContainerLayer, etc
 #include "gfxPoint.h"                   // for gfxPoint, gfxSize
+#include "gfxPrefs.h"                   // for gfxPrefs
 #include "mozilla/StyleAnimationValue.h" // for StyleAnimationValue, etc
 #include "mozilla/WidgetUtils.h"        // for ComputeTransformForRotation
 #include "mozilla/dom/KeyframeEffect.h" // for KeyframeEffectReadOnly
@@ -32,6 +33,7 @@
 #include "nsTArray.h"                   // for nsTArray, nsTArray_Impl, etc
 #include "nsTArrayForwardDeclare.h"     // for InfallibleTArray
 #include "UnitTransforms.h"             // for TransformTo
+#include "gfxPrefs.h"
 #if defined(MOZ_WIDGET_ANDROID)
 # include <android/log.h>
 # include "AndroidBridge.h"
@@ -408,7 +410,7 @@ SampleValue(float aPortion, Animation& aAnimation, StyleAnimationValue& aStart,
                                                      transformOrigin,
                                                      perspectiveOrigin,
                                                      data.perspective());
-  gfx3DMatrix transform =
+  Matrix4x4 transform =
     nsDisplayTransform::GetResultingTransformMatrix(props, origin,
                                                     data.appUnitsPerDevPixel(),
                                                     &data.bounds());
@@ -417,10 +419,10 @@ SampleValue(float aPortion, Animation& aAnimation, StyleAnimationValue& aStart,
             NS_round(NSAppUnitsToFloatPixels(origin.y, data.appUnitsPerDevPixel())),
             0.0f);
 
-  transform.Translate(scaledOrigin);
+  transform.PreTranslate(scaledOrigin);
 
   InfallibleTArray<TransformFunction> functions;
-  functions.AppendElement(TransformMatrix(ToMatrix4x4(transform)));
+  functions.AppendElement(TransformMatrix(transform));
   *aValue = functions;
 }
 

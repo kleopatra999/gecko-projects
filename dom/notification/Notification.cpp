@@ -5,46 +5,49 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/Notification.h"
+
+#include "mozilla/Move.h"
+#include "mozilla/OwningNonNull.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/Services.h"
+#include "mozilla/unused.h"
+
 #include "mozilla/dom/AppNotificationServiceOptionsBinding.h"
 #include "mozilla/dom/BindingUtils.h"
-#include "mozilla/dom/OwningNonNull.h"
+#include "mozilla/dom/NotificationEvent.h"
+#include "mozilla/dom/PermissionMessageUtils.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseWorkerProxy.h"
-#include "mozilla/Move.h"
-#include "mozilla/Preferences.h"
-#include "mozilla/unused.h"
+#include "mozilla/dom/ServiceWorkerGlobalScopeBinding.h"
+
+#include "nsContentPermissionHelper.h"
 #include "nsContentUtils.h"
+#include "nsDOMJSUtils.h"
+#include "nsGlobalWindow.h"
 #include "nsIAlertsService.h"
 #include "nsIAppsService.h"
 #include "nsIContentPermissionPrompt.h"
 #include "nsIDocument.h"
+#include "nsILoadContext.h"
 #include "nsINotificationStorage.h"
 #include "nsIPermissionManager.h"
+#include "nsIScriptSecurityManager.h"
 #include "nsIServiceWorkerManager.h"
 #include "nsIUUIDGenerator.h"
+#include "nsIXPConnect.h"
+#include "nsNetUtil.h"
+#include "nsProxyRelease.h"
 #include "nsServiceManagerUtils.h"
 #include "nsStructuredCloneContainer.h"
 #include "nsToolkitCompsCID.h"
-#include "nsGlobalWindow.h"
-#include "nsDOMJSUtils.h"
-#include "nsProxyRelease.h"
-#include "nsNetUtil.h"
-#include "nsIScriptSecurityManager.h"
-#include "nsIXPConnect.h"
-#include "mozilla/dom/ServiceWorkerGlobalScopeBinding.h"
-#include "mozilla/dom/NotificationEvent.h"
-#include "mozilla/dom/PermissionMessageUtils.h"
-#include "mozilla/Services.h"
-#include "nsContentPermissionHelper.h"
-#include "nsILoadContext.h"
-#ifdef MOZ_B2G
-#include "nsIDOMDesktopNotification.h"
-#endif
-
 #include "ServiceWorkerManager.h"
 #include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
 #include "WorkerScope.h"
+
+#ifdef MOZ_B2G
+#include "nsIDOMDesktopNotification.h"
+#endif
 
 namespace mozilla {
 namespace dom {
@@ -69,8 +72,6 @@ class ScopeCheckingGetCallback : public nsINotificationStorageCallback
 {
   const nsString mScope;
 public:
-  NS_DECL_ISUPPORTS
-
   explicit ScopeCheckingGetCallback(const nsAString& aScope)
     : mScope(aScope)
   {}
@@ -120,8 +121,6 @@ protected:
 
   nsTArray<NotificationStrings> mStrings;
 };
-
-NS_IMPL_ISUPPORTS(ScopeCheckingGetCallback, nsINotificationStorageCallback)
 
 class NotificationStorageCallback final : public ScopeCheckingGetCallback
 {
@@ -190,7 +189,9 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(NotificationStorageCallback)
 NS_IMPL_CYCLE_COLLECTION(NotificationStorageCallback, mWindow, mPromise);
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(NotificationStorageCallback)
-NS_INTERFACE_MAP_END_INHERITING(ScopeCheckingGetCallback)
+  NS_INTERFACE_MAP_ENTRY(nsINotificationStorageCallback)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
+NS_INTERFACE_MAP_END
 
 class NotificationGetRunnable final : public nsRunnable
 {
@@ -698,8 +699,8 @@ Notification::Notification(nsIGlobalObject* aGlobal, const nsAString& aID,
   : DOMEventTargetHelper(),
     mWorkerPrivate(nullptr), mObserver(nullptr),
     mID(aID), mTitle(aTitle), mBody(aBody), mDir(aDir), mLang(aLang),
-    mTag(aTag), mIconUrl(aIconUrl), mBehavior(aBehavior), mIsClosed(false),
-    mIsStored(false), mTaskCount(0)
+    mTag(aTag), mIconUrl(aIconUrl), mBehavior(aBehavior), mData(JS::NullValue()),
+    mIsClosed(false), mIsStored(false), mTaskCount(0)
 {
   if (NS_IsMainThread()) {
     // We can only call this on the main thread because
@@ -829,13 +830,6 @@ Notification::PersistNotification()
   nsString alertName;
   GetAlertName(alertName);
 
-  nsString dataString;
-  nsCOMPtr<nsIStructuredCloneContainer> scContainer;
-  scContainer = GetDataCloneContainer();
-  if (scContainer) {
-    scContainer->GetDataAsBase64(dataString);
-  }
-
   nsAutoString behavior;
   if (!mBehavior.ToJSON(behavior)) {
     return NS_ERROR_FAILURE;
@@ -850,7 +844,7 @@ Notification::PersistNotification()
                                 mTag,
                                 mIconUrl,
                                 alertName,
-                                dataString,
+                                mDataAsBase64,
                                 behavior,
                                 mScope);
 
@@ -915,6 +909,8 @@ Notification::CreateInternal(nsIGlobalObject* aGlobal,
 
 Notification::~Notification()
 {
+  mData.setUndefined();
+  mozilla::DropJSObjects(this);
   AssertIsOnTargetThread();
   MOZ_ASSERT(!mFeature);
   MOZ_ASSERT(!mTempRef);
@@ -922,14 +918,15 @@ Notification::~Notification()
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(Notification)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(Notification, DOMEventTargetHelper)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mData)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mDataObjectContainer)
+  tmp->mData.setUndefined();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(Notification, DOMEventTargetHelper)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mData)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDataObjectContainer)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(Notification, DOMEventTargetHelper)
+  NS_IMPL_CYCLE_COLLECTION_TRACE_JSVAL_MEMBER_CALLBACK(mData);
+NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_IMPL_ADDREF_INHERITED(Notification, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(Notification, DOMEventTargetHelper)
@@ -1080,8 +1077,7 @@ bool
 Notification::DispatchClickEvent()
 {
   AssertIsOnTargetThread();
-  nsCOMPtr<nsIDOMEvent> event;
-  NS_NewDOMEvent(getter_AddRefs(event), this, nullptr, nullptr);
+  nsRefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
   nsresult rv = event->InitEvent(NS_LITERAL_STRING("click"), false, true);
   NS_ENSURE_SUCCESS(rv, false);
   event->SetTrusted(true);
@@ -1396,13 +1392,6 @@ Notification::ShowInternal()
   }
   MOZ_ASSERT(observer);
 
-  // mDataObjectContainer might be uninitialized here because the notification
-  // was constructed with an undefined data property.
-  nsString dataStr;
-  if (mDataObjectContainer) {
-    mDataObjectContainer->GetDataAsBase64(dataStr);
-  }
-
 #ifdef MOZ_B2G
   nsCOMPtr<nsIAppNotificationService> appNotifier =
     do_GetService("@mozilla.org/system-alerts-service;1");
@@ -1430,7 +1419,7 @@ Notification::ShowInternal()
         ops.mDir = DirectionToString(mDir);
         ops.mLang = mLang;
         ops.mTag = mTag;
-        ops.mData = dataStr;
+        ops.mData = mDataAsBase64;
         ops.mMozbehavior = mBehavior;
         ops.mMozbehavior.mSoundFile = soundUrl;
 
@@ -1473,7 +1462,7 @@ Notification::ShowInternal()
   alertService->ShowAlertNotification(iconUrl, mTitle, mBody, true,
                                       uniqueCookie, observer, alertName,
                                       DirectionToString(mDir), mLang,
-                                      dataStr, GetPrincipal(),
+                                      mDataAsBase64, GetPrincipal(),
                                       inPrivateBrowsing);
 }
 
@@ -1766,7 +1755,7 @@ class WorkerGetCallback final : public ScopeCheckingGetCallback
 {
   nsRefPtr<PromiseWorkerProxy> mPromiseProxy;
 public:
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_ISUPPORTS
 
   WorkerGetCallback(PromiseWorkerProxy* aProxy, const nsAString& aScope)
     : ScopeCheckingGetCallback(aScope), mPromiseProxy(aProxy)
@@ -1808,7 +1797,7 @@ private:
   {}
 };
 
-NS_IMPL_ISUPPORTS_INHERITED0(WorkerGetCallback, ScopeCheckingGetCallback)
+NS_IMPL_ISUPPORTS(WorkerGetCallback, nsINotificationStorageCallback)
 
 class WorkerGetRunnable final : public nsRunnable
 {
@@ -1979,52 +1968,76 @@ Notification::GetOrigin(nsIPrincipal* aPrincipal, nsString& aOrigin)
   return NS_OK;
 }
 
-nsIStructuredCloneContainer* Notification::GetDataCloneContainer()
-{
-  return mDataObjectContainer;
-}
-
 void
 Notification::GetData(JSContext* aCx,
                       JS::MutableHandle<JS::Value> aRetval)
 {
-  if (!mData && mDataObjectContainer) {
+  if (mData.isNull() && !mDataAsBase64.IsEmpty()) {
     nsresult rv;
-    rv = mDataObjectContainer->DeserializeToVariant(aCx, getter_AddRefs(mData));
+    nsRefPtr<nsStructuredCloneContainer> container =
+      new nsStructuredCloneContainer();
+    rv = container->InitFromBase64(mDataAsBase64, JS_STRUCTURED_CLONE_VERSION,
+                                   aCx);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       aRetval.setNull();
       return;
     }
+
+    JS::Rooted<JS::Value> data(aCx);
+    rv = container->DeserializeToJsval(aCx, &data);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      aRetval.setNull();
+      return;
+    }
+
+    if (data.isGCThing()) {
+      mozilla::HoldJSObjects(this);
+    }
+    mData = data;
   }
-  if (!mData) {
+  if (mData.isNull()) {
     aRetval.setNull();
     return;
   }
-  VariantToJsval(aCx, mData, aRetval);
+
+  JS::ExposeValueToActiveJS(mData);
+  aRetval.set(mData);
 }
 
 void
 Notification::InitFromJSVal(JSContext* aCx, JS::Handle<JS::Value> aData,
                             ErrorResult& aRv)
 {
-  if (mDataObjectContainer || aData.isNull()) {
+  if (!mDataAsBase64.IsEmpty() || aData.isNull()) {
     return;
   }
-  mDataObjectContainer = new nsStructuredCloneContainer();
-  aRv = mDataObjectContainer->InitFromJSVal(aData, aCx);
+  nsRefPtr<nsStructuredCloneContainer> dataObjectContainer =
+    new nsStructuredCloneContainer();
+  aRv = dataObjectContainer->InitFromJSVal(aData, aCx);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
+
+  dataObjectContainer->GetDataAsBase64(mDataAsBase64);
 }
 
 void Notification::InitFromBase64(JSContext* aCx, const nsAString& aData,
                                   ErrorResult& aRv)
 {
-  if (mDataObjectContainer || aData.IsEmpty()) {
+  if (!mDataAsBase64.IsEmpty() || aData.IsEmpty()) {
     return;
   }
 
-  auto container = new nsStructuredCloneContainer();
+  // To and fro to ensure it is valid base64.
+  nsRefPtr<nsStructuredCloneContainer> container =
+    new nsStructuredCloneContainer();
   aRv = container->InitFromBase64(aData, JS_STRUCTURED_CLONE_VERSION,
                                   aCx);
-  mDataObjectContainer = container;
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
+
+  container->GetDataAsBase64(mDataAsBase64);
 }
 
 bool
@@ -2074,11 +2087,13 @@ class CloseNotificationRunnable final
   : public WorkerMainThreadRunnable
 {
   Notification* mNotification;
+  bool mHadObserver;
 
   public:
   explicit CloseNotificationRunnable(Notification* aNotification)
     : WorkerMainThreadRunnable(aNotification->mWorkerPrivate)
     , mNotification(aNotification)
+    , mHadObserver(false)
   {}
 
   bool
@@ -2088,26 +2103,54 @@ class CloseNotificationRunnable final
       // The Notify() take's responsibility of releasing the Notification.
       mNotification->mObserver->ForgetNotification();
       mNotification->mObserver = nullptr;
+      mHadObserver = true;
     }
     mNotification->CloseInternal();
     return true;
+  }
+
+  bool
+  HadObserver()
+  {
+    return mHadObserver;
   }
 };
 
 bool
 NotificationFeature::Notify(JSContext* aCx, Status aStatus)
 {
-  MOZ_ASSERT(aStatus >= Canceling);
+  if (aStatus >= Canceling) {
+    // CloseNotificationRunnable blocks the worker by pushing a sync event loop
+    // on the stack. Meanwhile, WorkerControlRunnables dispatched to the worker
+    // can still continue running. One of these is
+    // ReleaseNotificationControlRunnable that releases the notification,
+    // invalidating the notification and this feature. We hold this reference to
+    // keep the notification valid until we are done with it.
+    //
+    // An example of when the control runnable could get dispatched to the
+    // worker is if a Notification is created and the worker is immediately
+    // closed, but there is no permission to show it so that the main thread
+    // immediately drops the NotificationRef. In this case, this function blocks
+    // on the main thread, but the main thread dispatches the control runnable,
+    // invalidating mNotification.
+    nsRefPtr<Notification> kungFuDeathGrip = mNotification;
 
-  // Dispatched to main thread, blocks on closing the Notification.
-  nsRefPtr<CloseNotificationRunnable> r =
-    new CloseNotificationRunnable(mNotification);
-  r->Dispatch(aCx);
+    // Dispatched to main thread, blocks on closing the Notification.
+    nsRefPtr<CloseNotificationRunnable> r =
+      new CloseNotificationRunnable(mNotification);
+    r->Dispatch(aCx);
 
-  mNotification->ReleaseObject();
-  // From this point we cannot touch properties of this feature because
-  // ReleaseObject() may have led to the notification going away and the
-  // notification owns this feature!
+    // Only call ReleaseObject() to match the observer's NotificationRef
+    // ownership (since CloseNotificationRunnable asked the observer to drop the
+    // reference to the notification).
+    if (r->HadObserver()) {
+      mNotification->ReleaseObject();
+    }
+
+    // From this point we cannot touch properties of this feature because
+    // ReleaseObject() may have led to the notification going away and the
+    // notification owns this feature!
+  }
   return true;
 }
 
@@ -2118,8 +2161,13 @@ Notification::RegisterFeature()
   mWorkerPrivate->AssertIsOnWorkerThread();
   MOZ_ASSERT(!mFeature);
   mFeature = MakeUnique<NotificationFeature>(this);
-  return mWorkerPrivate->AddFeature(mWorkerPrivate->GetJSContext(),
-                                    mFeature.get());
+  bool added = mWorkerPrivate->AddFeature(mWorkerPrivate->GetJSContext(),
+                                          mFeature.get());
+  if (!added) {
+    mFeature = nullptr;
+  }
+
+  return added;
 }
 
 void
@@ -2291,14 +2339,14 @@ Notification::CreateAndShow(nsIGlobalObject* aGlobal,
   // Make a structured clone of the aOptions.mData object
   JS::Rooted<JS::Value> data(cx, aOptions.mData);
   notification->InitFromJSVal(cx, data, aRv);
-  if (aRv.Failed()) {
+  if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
 
   notification->SetScope(aScope);
 
   auto ref = MakeUnique<NotificationRef>(notification);
-  if (!ref->Initialized()) {
+  if (NS_WARN_IF(!ref->Initialized())) {
     aRv.Throw(NS_ERROR_DOM_ABORT_ERR);
     return nullptr;
   }

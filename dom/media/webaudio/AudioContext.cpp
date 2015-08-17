@@ -6,40 +6,43 @@
 
 #include "AudioContext.h"
 
-#include "nsPIDOMWindow.h"
+#include "blink/PeriodicWave.h"
+
 #include "mozilla/ErrorResult.h"
+#include "mozilla/OwningNonNull.h"
+
 #include "mozilla/dom/AnalyserNode.h"
-#include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/dom/AudioContextBinding.h"
+#include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/dom/OfflineAudioContextBinding.h"
-#include "mozilla/dom/OwningNonNull.h"
-#include "MediaStreamGraph.h"
+#include "mozilla/dom/Promise.h"
+
+#include "AudioBuffer.h"
+#include "AudioBufferSourceNode.h"
 #include "AudioChannelService.h"
 #include "AudioDestinationNode.h"
-#include "AudioBufferSourceNode.h"
-#include "AudioBuffer.h"
-#include "GainNode.h"
-#include "MediaElementAudioSourceNode.h"
-#include "MediaStreamAudioSourceNode.h"
-#include "DelayNode.h"
-#include "PannerNode.h"
 #include "AudioListener.h"
-#include "DynamicsCompressorNode.h"
+#include "AudioStream.h"
 #include "BiquadFilterNode.h"
-#include "ScriptProcessorNode.h"
-#include "StereoPannerNode.h"
 #include "ChannelMergerNode.h"
 #include "ChannelSplitterNode.h"
-#include "MediaStreamAudioDestinationNode.h"
-#include "WaveShaperNode.h"
-#include "PeriodicWave.h"
 #include "ConvolverNode.h"
-#include "OscillatorNode.h"
+#include "DelayNode.h"
+#include "DynamicsCompressorNode.h"
+#include "GainNode.h"
+#include "MediaElementAudioSourceNode.h"
+#include "MediaStreamAudioDestinationNode.h"
+#include "MediaStreamAudioSourceNode.h"
+#include "MediaStreamGraph.h"
 #include "nsNetCID.h"
-#include "blink/PeriodicWave.h"
 #include "nsNetUtil.h"
-#include "AudioStream.h"
-#include "mozilla/dom/Promise.h"
+#include "nsPIDOMWindow.h"
+#include "OscillatorNode.h"
+#include "PannerNode.h"
+#include "PeriodicWave.h"
+#include "ScriptProcessorNode.h"
+#include "StereoPannerNode.h"
+#include "WaveShaperNode.h"
 
 namespace mozilla {
 namespace dom {
@@ -101,12 +104,17 @@ AudioContext::AudioContext(nsPIDOMWindow* aWindow,
   , mIsShutDown(false)
   , mCloseCalled(false)
 {
-  aWindow->AddAudioContext(this);
+  bool mute = aWindow->AddAudioContext(this);
 
   // Note: AudioDestinationNode needs an AudioContext that must already be
   // bound to the window.
   mDestination = new AudioDestinationNode(this, aIsOffline, aChannel,
                                           aNumberOfChannels, aLength, aSampleRate);
+
+  // The context can't be muted until it has a destination.
+  if (mute) {
+    Mute();
+  }
 }
 
 void
@@ -1031,12 +1039,12 @@ AudioContext::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const
   if (mListener) {
     amount += mListener->SizeOfIncludingThis(aMallocSizeOf);
   }
-  amount += mDecodeJobs.SizeOfExcludingThis(aMallocSizeOf);
+  amount += mDecodeJobs.ShallowSizeOfExcludingThis(aMallocSizeOf);
   for (uint32_t i = 0; i < mDecodeJobs.Length(); ++i) {
     amount += mDecodeJobs[i]->SizeOfIncludingThis(aMallocSizeOf);
   }
-  amount += mActiveNodes.SizeOfExcludingThis(nullptr, aMallocSizeOf);
-  amount += mPannerNodes.SizeOfExcludingThis(nullptr, aMallocSizeOf);
+  amount += mActiveNodes.ShallowSizeOfExcludingThis(aMallocSizeOf);
+  amount += mPannerNodes.ShallowSizeOfExcludingThis(aMallocSizeOf);
   return amount;
 }
 

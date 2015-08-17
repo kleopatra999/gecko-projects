@@ -20,8 +20,10 @@ sys.path.insert(1, os.path.dirname(sys.path[0]))
 
 from mozharness.base.script import PreScriptAction
 from mozharness.mozilla.testing.firefox_ui_tests import FirefoxUITests
+from mozharness.mozilla.buildbot import TBPL_SUCCESS, TBPL_WARNING, EXIT_STATUS_DICT
 
 INSTALLER_SUFFIXES = ('.tar.bz2', '.zip', '.dmg', '.exe', '.apk', '.tar.gz')
+
 
 class FirefoxUIUpdates(FirefoxUITests):
     # This will be a list containing one item per release based on configs
@@ -53,7 +55,6 @@ class FirefoxUIUpdates(FirefoxUITests):
                     'symbols, or the url of a zip file containing symbols.',
         }],
     ]
-
 
     def __init__(self):
         config_options = [
@@ -98,6 +99,10 @@ class FirefoxUIUpdates(FirefoxUITests):
                 'dest': 'installer_path',
                 'help': 'Point to an installer to test against.',
             }],
+            [['--limit-locales'], {
+                'dest': 'limit_locales',
+                'help': 'Limit the number of locales to run.',
+            }],
         ] + copy.deepcopy(self.harness_extra_args)
 
         super(FirefoxUIUpdates, self).__init__(
@@ -114,6 +119,8 @@ class FirefoxUIUpdates(FirefoxUITests):
 
         dirs = self.query_abs_dirs()
 
+        self.limit_locales = int(self.config.get('limit_locales'))
+
         if self.config.get('tools_tag') is None:
             # We want to make sure that anyone trying to reproduce a job will
             # is using the exact tools tag for reproducibility's sake
@@ -123,6 +130,7 @@ class FirefoxUIUpdates(FirefoxUITests):
         self.tools_tag = self.config['tools_tag']
 
         if self.config.get('update_verify_config'):
+            self.update_verify_config = self.config['update_verify_config']
             self.updates_config_file = os.path.join(
                 dirs['abs_tools_dir'], 'release', 'updates',
                 self.config['update_verify_config']
@@ -141,7 +149,6 @@ class FirefoxUIUpdates(FirefoxUITests):
 
         assert 'update_verify_config' in self.config or self.installer_url or self.installer_path, \
             'Either specify --update-verify-config, --installer-url or --installer-path.'
-
 
     def query_abs_dirs(self):
         if self.abs_dirs:
@@ -173,7 +180,6 @@ class FirefoxUIUpdates(FirefoxUITests):
             revision=self.tools_tag,
             vcs='hgtool'
         )
-
 
     def determine_testing_configuration(self):
         '''
@@ -217,8 +223,8 @@ class FirefoxUIUpdates(FirefoxUITests):
         self.channel = uvc.channel
 
         # Filter out any releases that are less than Gecko 38
-        uvc.releases = [r for r in uvc.releases \
-                if int(r["release"].split('.')[0]) >= 38]
+        uvc.releases = [r for r in uvc.releases
+                        if int(r["release"].split('.')[0]) >= 38]
 
         temp_releases = []
         for rel_info in uvc.releases:
@@ -239,7 +245,6 @@ class FirefoxUIUpdates(FirefoxUITests):
 
         self.releases = chunked_config.releases
 
-
     def _modify_url(self, rel_info):
         # This is a temporary hack to find crash symbols. It should be replaced
         # with something that doesn't make wild guesses about where symbol
@@ -251,9 +256,10 @@ class FirefoxUIUpdates(FirefoxUITests):
         version = (re.search('/firefox/releases/(%s.*)\/.*\/.*\/.*' % rel_info['release'], installer_from)).group(1)
 
         temp_from = installer_from.replace(version, '%s-candidates/build%s' % (version, self.config["build_number"]), 1).replace('releases', 'candidates')
+        temp_url = rel_info["ftp_server_from"] + urllib.quote(temp_from.replace('%locale%', 'en-US'))
+        self.info('Installer url under stage/candidates dir %s' % temp_url)
 
-        return rel_info["ftp_server_from"] + urllib.quote(temp_from.replace('%locale%', 'en-US'))
-
+        return temp_url
 
     def _query_symbols_url(self, installer_url):
         for suffix in INSTALLER_SUFFIXES:
@@ -262,12 +268,14 @@ class FirefoxUIUpdates(FirefoxUITests):
                 continue
 
         if symbols_url:
+            self.info('Candidate symbols_url: %s' % symbols_url)
             if not symbols_url.startswith('http'):
                 return symbols_url
 
             try:
                 # Let's see if the symbols are available
-                return urllib2.urlopen(symbols_url)
+                urllib2.urlopen(symbols_url)
+                return symbols_url
 
             except urllib2.HTTPError, e:
                 self.warning("%s - %s" % (str(e), symbols_url))
@@ -275,12 +283,10 @@ class FirefoxUIUpdates(FirefoxUITests):
         else:
             self.fatal("Can't figure out symbols_url from installer_url %s!" % installer_url)
 
-
     @PreScriptAction('run-tests')
     def _pre_run_tests(self, action):
         if self.releases is None and not (self.installer_url or self.installer_path):
             self.fatal('You need to call --determine-testing-configuration as well.')
-
 
     def _run_test(self, installer_path, symbols_url=None, update_channel=None, cleanup=True,
                   marionette_port=2828):
@@ -291,7 +297,7 @@ class FirefoxUIUpdates(FirefoxUITests):
         env = self.query_env(avoid_host_env=True)
         bin_dir = os.path.dirname(self.query_python_path())
         fx_ui_tests_bin = os.path.join(bin_dir, 'firefox-ui-update')
-        gecko_log=os.path.join(dirs['abs_work_dir'], 'gecko.log')
+        gecko_log = os.path.join(dirs['abs_work_dir'], 'gecko.log')
 
         # Build the command
         cmd = [
@@ -319,6 +325,9 @@ class FirefoxUIUpdates(FirefoxUITests):
 
         # Return more output if we fail
         if return_code != 0:
+            self.info('Internally this is the command fx-ui-updates executed')
+            self.info('%s' % ' '.join(map(str, cmd)))
+
             if os.path.exists(gecko_log):
                 contents = self.read_from_file(gecko_log, verbose=False)
                 self.warning('== Dumping gecko output ==')
@@ -338,7 +347,6 @@ class FirefoxUIUpdates(FirefoxUITests):
                     os.remove(filepath)
 
         return return_code
-
 
     def run_tests(self):
         dirs = self.query_abs_dirs()
@@ -361,6 +369,7 @@ class FirefoxUIUpdates(FirefoxUITests):
         else:
             results = {}
 
+            locales_counter = 0
             for rel_info in sorted(self.releases, key=lambda release: release['build_id']):
                 build_id = rel_info['build_id']
                 results[build_id] = {}
@@ -371,26 +380,31 @@ class FirefoxUIUpdates(FirefoxUITests):
                     len(rel_info['locales'])
                 ))
 
-                if self.config['dry_run']:
-                    continue
-
                 # Each locale gets a fresh port to avoid address in use errors in case of
                 # tests that time out unexpectedly.
                 marionette_port = 2827
                 for locale in rel_info['locales']:
+                    locales_counter += 1
                     self.info("Running %s %s" % (build_id, locale))
+
+                    if locales_counter > self.limit_locales:
+                        self.info("We have reached the limit of locales we were intending to run")
+                        break
+
+                    if self.config['dry_run']:
+                        continue
 
                     # Safe temp hack to determine symbols URL from en-US build1 in the candidates dir
                     ftp_candidates_installer_url = self._modify_url(rel_info)
                     symbols_url = self._query_symbols_url(installer_url=ftp_candidates_installer_url)
 
                     # Determine from where to download the file
-                    url = '%s/%s' % (
+                    installer_url = '%s/%s' % (
                         rel_info['ftp_server_from'],
                         urllib.quote(rel_info['from'].replace('%locale%', locale))
                     )
                     installer_path = self.download_file(
-                        url=url,
+                        url=installer_url,
                         parent_dir=dirs['abs_work_dir']
                     )
 
@@ -403,30 +417,51 @@ class FirefoxUIUpdates(FirefoxUITests):
                         marionette_port=marionette_port)
 
                     if retcode != 0:
-                        self.warning('FAIL: firefox-ui-update has failed.' )
-                        self.info('You can run the following command on the same machine to reproduce the issue:')
-                        self.info('python scripts/firefox_ui_updates.py --cfg generic_releng_config.py '
-                                  '--firefox-ui-branch %s --update-verify-config %s '
-                                  '--tools-tag %s --installer-url %s '
-                                  '--determine-testing-configuration --run-tests '
-                                  % (self.firefox_ui_branch, self.updates_config_file, self.tools_tag, url))
-                        self.info('If you want to run this on your development machine:')
-                        self.info('python scripts/firefox_ui_updates.py '
-                                  '--firefox-ui-branch %s --update-verify-config %s '
-                                  '--tools-tag %s --installer-url %s '
-                                  '--cfg developer_config.py '
-                                  % (self.firefox_ui_branch, self.updates_config_file, self.tools_tag, url))
+                        self.warning('FAIL: firefox-ui-update has failed.')
+
+                        base_cmd = 'python scripts/firefox_ui_updates.py'
+                        for c in self.config['config_files']:
+                            base_cmd += ' --cfg %s' % c
+
+                        base_cmd += ' --firefox-ui-branch %s --update-verify-config %s --tools-tag %s' % \
+                            (self.firefox_ui_branch, self.update_verify_config, self.tools_tag)
+
+                        base_cmd += ' --installer-url %s' % installer_url
+                        if symbols_url:
+                            base_cmd += ' --symbols-path %s' % symbols_url
+
+                        self.info('You can run the *specific* locale on the same machine with:')
+                        self.info('%s' % base_cmd)
+
+                        self.info('You can run the *specific* locale on *your* machine with:')
+                        self.info('%s --cfg developer_config.py' % base_cmd)
 
                     results[build_id][locale] = retcode
 
-            self.info("Firefox UI update tests failed locales:")
+                    self.info("Completed %s %s with return code: %s" % (build_id, locale, retcode))
+
+                if locales_counter > self.limit_locales:
+                    break
+
+            # Determine which locales have failed and set scripts exit code
+            exit_status = TBPL_SUCCESS
             for build_id in sorted(results.keys()):
-                self.info(build_id)
                 failed_locales = []
                 for locale in sorted(results[build_id].keys()):
                     if results[build_id][locale] != 0:
                         failed_locales.append(locale)
-                self.info("  %s" % (', '.join(failed_locales)))
+
+                if failed_locales:
+                    if exit_status == TBPL_SUCCESS:
+                        self.info("")
+                        self.info("SUMMARY - Firefox UI update tests failed locales:")
+                        self.info("=================================================")
+                        exit_status = TBPL_WARNING
+
+                    self.info(build_id)
+                    self.info("  %s" % (', '.join(failed_locales)))
+
+            self.return_code = EXIT_STATUS_DICT[exit_status]
 
 
 if __name__ == '__main__':

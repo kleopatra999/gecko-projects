@@ -547,8 +547,12 @@ public:
   }
 
   already_AddRefed<MediaSource> GetMozMediaSourceObject() const;
-  already_AddRefed<DOMMediaStream> GetMozSrcObject() const;
+  already_AddRefed<DOMMediaStream> GetSrcObject() const;
+  void SetSrcObject(DOMMediaStream& aValue);
+  void SetSrcObject(DOMMediaStream* aValue);
 
+  // TODO: remove prefixed versions soon (1183495).
+  already_AddRefed<DOMMediaStream> GetMozSrcObject() const;
   void SetMozSrcObject(DOMMediaStream& aValue);
   void SetMozSrcObject(DOMMediaStream* aValue);
 
@@ -1074,6 +1078,9 @@ protected:
   // Holds a reference to a MediaInputPort connecting mSrcStream to mPlaybackStream.
   nsRefPtr<MediaInputPort> mPlaybackStreamInputPort;
 
+  // Holds a reference to the stream connecting this stream to the capture sink.
+  nsRefPtr<MediaInputPort> mCaptureStreamPort;
+
   // Holds a reference to a stream with mSrcStream as input but intended for
   // playback. Used so we don't block playback of other video elements
   // playing the same mSrcStream.
@@ -1283,6 +1290,9 @@ protected:
   // True if the sound is being captured.
   bool mAudioCaptured;
 
+  // True if the sound is being captured by the window.
+  bool mAudioCapturedByWindow;
+
   // If TRUE then the media element was actively playing before the currently
   // in progress seeking. If FALSE then the media element is either not seeking
   // or was not actively playing before the current seek. Used to decide whether
@@ -1456,6 +1466,10 @@ private:
 
   // Time spent between video load and video playback.
   TimeDurationAccumulator mJoinLatency;
+
+  // Indicates if user has interacted with the element.
+  // Used to block autoplay when disabled.
+  bool mHasUserInteraction;
 };
 
 } // namespace dom

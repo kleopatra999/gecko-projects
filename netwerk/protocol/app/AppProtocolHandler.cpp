@@ -111,6 +111,10 @@ DummyChannel::Open2(nsIInputStream** aStream)
 
 NS_IMETHODIMP DummyChannel::AsyncOpen(nsIStreamListener* aListener, nsISupports* aContext)
 {
+  MOZ_ASSERT(!mLoadInfo || mLoadInfo->GetSecurityMode() == 0 ||
+             mLoadInfo->GetInitialSecurityCheckDone(),
+             "security flags in loadInfo but asyncOpen2() not called");
+
   mListener = aListener;
   mListenerContext = aContext;
   mPending = true;
@@ -154,11 +158,6 @@ NS_IMETHODIMP DummyChannel::GetJarFile(nsIFile* *aFile)
 }
 
 NS_IMETHODIMP DummyChannel::GetZipEntry(nsIZipEntry* *aEntry)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP DummyChannel::EnsureChildFd()
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }

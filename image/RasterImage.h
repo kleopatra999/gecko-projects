@@ -26,6 +26,7 @@
 #include "LookupResult.h"
 #include "nsThreadUtils.h"
 #include "DecodePool.h"
+#include "DecoderFactory.h"
 #include "Orientation.h"
 #include "nsIObserver.h"
 #include "mozilla/Attributes.h"
@@ -131,18 +132,8 @@ namespace image {
 
 class Decoder;
 class FrameAnimator;
+class ImageMetadata;
 class SourceBuffer;
-
-/**
- * Given a set of imgIContainer FLAG_* flags, returns those flags that can
- * affect the output of decoders.
- */
-inline MOZ_CONSTEXPR uint32_t
-DecodeFlags(uint32_t aFlags)
-{
-  return aFlags & (imgIContainer::FLAG_DECODE_NO_PREMULTIPLY_ALPHA |
-                   imgIContainer::FLAG_DECODE_NO_COLORSPACE_CONVERSION);
-}
 
 class RasterImage final : public ImageResource
                         , public nsIProperties
@@ -169,12 +160,6 @@ public:
   // Methods inherited from Image
   virtual void OnSurfaceDiscarded() override;
 
-  // Raster-specific methods
-  static NS_METHOD WriteToSourceBuffer(nsIInputStream* aIn, void* aClosure,
-                                       const char* aFromRawSegment,
-                                       uint32_t aToOffset, uint32_t aCount,
-                                       uint32_t* aWriteCount);
-
   /* The total number of frames in this image. */
   uint32_t GetNumFrames() const { return mFrameCount; }
 
@@ -193,24 +178,6 @@ public:
 
   void OnAddedFrame(uint32_t aNewFrameCount, const nsIntRect& aNewRefreshArea);
 
-  /** Sets the size and inherent orientation of the container. This should only
-   * be called by the decoder. This function may be called multiple times, but
-   * will throw an error if subsequent calls do not match the first.
-   */
-  nsresult SetSize(int32_t aWidth, int32_t aHeight, Orientation aOrientation);
-
-  /**
-   * Number of times to loop the image.
-   * @note -1 means forever.
-   */
-  void     SetLoopCount(int32_t aLoopCount);
-
-  /// Notification that the entire image has been decoded.
-  void OnDecodingComplete(bool aIsAnimated);
-
-  /// Helper method for OnDecodingComplete.
-  void MarkAnimationDecoded();
-
   /**
    * Sends the provided progress notifications to ProgressTracker.
    *
@@ -218,13 +185,13 @@ public:
    *
    * @param aProgress    The progress notifications to send.
    * @param aInvalidRect An invalidation rect to send.
-   * @param aFlags       The decode flags used by the decoder that generated
-   *                     these notifications, or DECODE_FLAGS_DEFAULT if the
+   * @param aFlags       The surface flags used by the decoder that generated
+   *                     these notifications, or DefaultSurfaceFlags() if the
    *                     notifications don't come from a decoder.
    */
   void NotifyProgress(Progress aProgress,
                       const nsIntRect& aInvalidRect = nsIntRect(),
-                      uint32_t aFlags = DECODE_FLAGS_DEFAULT);
+                      SurfaceFlags aSurfaceFlags = DefaultSurfaceFlags());
 
   /**
    * Records telemetry and does final teardown of the provided decoder.
@@ -232,6 +199,9 @@ public:
    * Main-thread only.
    */
   void FinalizeDecoder(Decoder* aDecoder);
+
+  // Helper method for FinalizeDecoder.
+  void ReportDecoderError(Decoder* aDecoder);
 
 
   //////////////////////////////////////////////////////////////////////////////
@@ -268,16 +238,9 @@ public:
     mRequestedResolution = requestedResolution;
   }
 
-  nsIntSize GetRequestedResolution() {
-    return mRequestedResolution;
-  }
   /* Provide a hint for the requested dimension of the resulting image. */
   void SetRequestedSampleSize(int requestedSampleSize) {
     mRequestedSampleSize = requestedSampleSize;
-  }
-
-  int GetRequestedSampleSize() {
-    return mRequestedSampleSize;
   }
 
  nsCString GetURIString() {
@@ -315,10 +278,6 @@ private:
 
   nsIntRect GetFirstFrameRect();
 
-  size_t
-    SizeOfDecodedWithComputedFallbackIfHeap(gfxMemoryLocation aLocation,
-                                            MallocSizeOf aMallocSizeOf) const;
-
   Pair<DrawResult, nsRefPtr<layers::Image>>
     GetCurrentImage(layers::ImageContainer* aContainer, uint32_t aFlags);
 
@@ -339,19 +298,36 @@ private:
 
   /**
    * Creates and runs a decoder, either synchronously or asynchronously
-   * according to @aFlags. Passes the provided target size @aSize and decode
-   * flags @aFlags to CreateDecoder. If a size decode is desired, pass Nothing
-   * for @aSize.
+   * according to @aFlags. Decodes at the provided target size @aSize, using
+   * decode flags @aFlags.
+   *
+   * It's an error to call Decode() before this image's intrinsic size is
+   * available. A metadata decode must successfully complete first.
+   *
+   * If downscale-during-decode is not enabled for this image (i.e., if
+   * mDownscaleDuringDecode is false), it is an error to pass an @aSize value
+   * different from this image's intrinsic size.
    */
-  NS_IMETHOD Decode(const Maybe<nsIntSize>& aSize, uint32_t aFlags);
+  NS_IMETHOD Decode(const gfx::IntSize& aSize, uint32_t aFlags);
 
   /**
-   * Creates a new decoder with a target size of @aSize and decode flags
-   * specified by @aFlags. If a size decode is desired, pass Nothing() for
-   * @aSize.
+   * Creates and runs a metadata decoder, either synchronously or
+   * asynchronously according to @aFlags.
    */
-  already_AddRefed<Decoder> CreateDecoder(const Maybe<nsIntSize>& aSize,
-                                          uint32_t aFlags);
+  NS_IMETHOD DecodeMetadata(uint32_t aFlags);
+
+  /**
+   * Sets the size, inherent orientation, animation metadata, and other
+   * information about the image gathered during decoding.
+   *
+   * This function may be called multiple times, but will throw an error if
+   * subsequent calls do not match the first.
+   *
+   * @param aMetadata The metadata to set on this image.
+   * @param aFromMetadataDecode True if this metadata came from a metadata
+   *                            decode; false if it came from a full decode.
+   */
+  nsresult SetMetadata(const ImageMetadata& aMetadata, bool aFromMetadataDecode);
 
   /**
    * In catastrophic circumstances like a GPU driver crash, we may lose our
@@ -375,8 +351,8 @@ private: // data
   // Image locking.
   uint32_t                   mLockCount;
 
-  // Source data members
-  nsCString                  mSourceDataMimeType;
+  // The type of decoder this image needs. Computed from the MIME type in Init().
+  DecoderType                mDecoderType;
 
   // How many times we've decoded this image.
   // This is currently only used for statistics
@@ -407,9 +383,6 @@ private: // data
   // The number of frames this image has.
   uint32_t                   mFrameCount;
 
-  // The number of times we've retried decoding this image.
-  uint8_t                    mRetryCount;
-
   // Boolean flags (clustered together to conserve space):
   bool                       mHasSize:1;       // Has SetSize() been called?
   bool                       mTransient:1;     // Is the image short-lived?
@@ -428,8 +401,8 @@ private: // data
   // of frames, or no more owning request
   bool                       mAnimationFinished:1;
 
-  // Whether, once we are done doing a size decode, we should immediately kick
-  // off a full decode.
+  // Whether, once we are done doing a metadata decode, we should immediately
+  // kick off a full decode.
   bool                       mWantFullDecode:1;
 
   TimeStamp mDrawStartTime;

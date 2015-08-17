@@ -744,7 +744,8 @@ IMEContentObserver::AttributeWillChange(nsIDocument* aDocument,
                                         dom::Element* aElement,
                                         int32_t aNameSpaceID,
                                         nsIAtom* aAttribute,
-                                        int32_t aModType)
+                                        int32_t aModType,
+                                        const nsAttrValue* aNewValue)
 {
   nsIContent *content = GetContentBR(aElement);
   mPreAttrChangeLength = content ?
@@ -756,7 +757,8 @@ IMEContentObserver::AttributeChanged(nsIDocument* aDocument,
                                      dom::Element* aElement,
                                      int32_t aNameSpaceID,
                                      nsIAtom* aAttribute,
-                                     int32_t aModType)
+                                     int32_t aModType,
+                                     const nsAttrValue* aOldValue)
 {
   mEndOfAddedTextCache.Clear();
   mStartOfRemovingTextRangeCache.Clear();
@@ -1074,10 +1076,8 @@ IMEContentObserver::SelectionChangeEvent::Run()
   }
 
   IMENotification notification(NOTIFY_IME_OF_SELECTION_CHANGE);
-  notification.mSelectionChangeData.mOffset =
-    selection.mReply.mOffset;
-  notification.mSelectionChangeData.mLength =
-    selection.mReply.mString.Length();
+  notification.mSelectionChangeData.mOffset = selection.mReply.mOffset;
+  *notification.mSelectionChangeData.mString = selection.mReply.mString;
   notification.mSelectionChangeData.SetWritingMode(
                                       selection.GetWritingMode());
   notification.mSelectionChangeData.mReversed = selection.mReply.mReversed;

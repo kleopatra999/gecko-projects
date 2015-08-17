@@ -15,7 +15,7 @@
 #include "nsCOMPtr.h"
 #include "nsISupportsImpl.h"  // for NS_INLINE_DECL_REFCOUNTING
 #include "nsIWeakReferenceUtils.h"  // for nsWeakPtr
-#include "nsRefPtr.h"
+#include "mozilla/nsRefPtr.h"
 
 template <class> class nsCOMPtr;
 class nsIDocument;
@@ -71,8 +71,7 @@ public:
                              int aArg);
 private:
   ~APZEventState();
-  bool SendPendingTouchPreventedResponse(bool aPreventDefault,
-                                         const ScrollableLayerGuid& aGuid);
+  bool SendPendingTouchPreventedResponse(bool aPreventDefault);
   already_AddRefed<nsIWidget> GetWidget() const;
 private:
   nsWeakPtr mWidget;

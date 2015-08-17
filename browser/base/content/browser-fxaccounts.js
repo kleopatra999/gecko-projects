@@ -33,6 +33,7 @@ let gFxAccounts = {
       "weave:service:setup-complete",
       "weave:ui:login:error",
       "fxa-migration:state-changed",
+      this.FxAccountsCommon.ONLOGIN_NOTIFICATION,
       this.FxAccountsCommon.ONVERIFIED_NOTIFICATION,
       this.FxAccountsCommon.ONLOGOUT_NOTIFICATION,
       "weave:notification:removed",
@@ -110,14 +111,7 @@ let gFxAccounts = {
     // notified of fxa-migration:state-changed in response if necessary.
     Services.obs.notifyObservers(null, "fxa-migration:state-request", null);
 
-    let contentUri = Services.urlFormatter.formatURLPref("identity.fxaccounts.remote.webchannel.uri");
-    // The FxAccountsWebChannel listens for events and updates
-    // the state machine accordingly.
-    let fxAccountsWebChannel = new FxAccountsWebChannel({
-      content_uri: contentUri,
-      channel_id: this.FxAccountsCommon.WEBCHANNEL_ID
-    });
-
+    EnsureFxAccountsWebChannel();
     this._initialized = true;
 
     this.updateUI();
@@ -229,10 +223,11 @@ let gFxAccounts = {
     this.updateMigrationNotification();
   },
 
+  // Note that updateAppMenuItem() returns a Promise that's only used by tests.
   updateAppMenuItem: function () {
     if (this._migrationInfo) {
       this.updateAppMenuItemForMigration();
-      return;
+      return Promise.resolve();
     }
 
     let profileInfoEnabled = false;
@@ -246,9 +241,12 @@ let gFxAccounts = {
       // fxAccountsEnabled is false because migration has not yet finished.  In
       // that case, hide the button.  We'll get another notification with a null
       // state once migration is complete.
+      this.panelUIFooter.hidden = true;
       this.panelUIFooter.removeAttribute("fxastatus");
-      return;
+      return Promise.resolve();
     }
+
+    this.panelUIFooter.hidden = false;
 
     // Make sure the button is disabled in customization mode.
     if (this._inCustomizationMode) {
@@ -279,6 +277,7 @@ let gFxAccounts = {
       this.panelUIFooter.removeAttribute("fxastatus");
       this.panelUIFooter.removeAttribute("fxaprofileimage");
       this.panelUIAvatar.style.removeProperty("list-style-image");
+      let showErrorBadge = false;
 
       if (!this._inCustomizationMode && userData) {
         // At this point we consider the user as logged-in (but still can be in an error state)
@@ -287,6 +286,7 @@ let gFxAccounts = {
           this.panelUIFooter.setAttribute("fxastatus", "error");
           this.panelUILabel.setAttribute("label", errorLabel);
           this.panelUIStatus.setAttribute("tooltiptext", tooltipDescription);
+          showErrorBadge = true;
         } else {
           this.panelUIFooter.setAttribute("fxastatus", "signedin");
           this.panelUILabel.setAttribute("label", userData.email);
@@ -295,6 +295,11 @@ let gFxAccounts = {
         if (profileInfoEnabled) {
           this.panelUIFooter.setAttribute("fxaprofileimage", "enabled");
         }
+      }
+      if (showErrorBadge) {
+        gMenuButtonBadgeManager.addBadge(gMenuButtonBadgeManager.BADGEID_FXA, "fxa-needs-authentication");
+      } else {
+        gMenuButtonBadgeManager.removeBadge(gMenuButtonBadgeManager.BADGEID_FXA);
       }
     }
 
@@ -315,12 +320,18 @@ let gFxAccounts = {
       }
     }
 
-    // Calling getSignedInUserProfile() without a user logged in causes log
-    // noise that looks like an actual error...
-    fxAccounts.getSignedInUser().then(userData => {
+    return fxAccounts.getSignedInUser().then(userData => {
       // userData may be null here when the user is not signed-in, but that's expected
       updateWithUserData(userData);
-      return userData ? fxAccounts.getSignedInUserProfile() : null;
+      // unverified users cause us to spew log errors fetching an OAuth token
+      // to fetch the profile, so don't even try in that case.
+      if (!userData || !userData.verified || !profileInfoEnabled) {
+        return null; // don't even try to grab the profile.
+      }
+      return fxAccounts.getSignedInUserProfile().catch(err => {
+        // Not fetching the profile is sad but the FxA logs will already have noise.
+        return null;
+      });
     }).then(profile => {
       if (!profile) {
         return;
@@ -331,7 +342,7 @@ let gFxAccounts = {
       // The most likely scenario is a user logged out, so reflect that.
       // Bug 995134 calls for better errors so we could retry if we were
       // sure this was the failure reason.
-      this.FxAccountsCommon.log.error("Error updating FxA profile", error);
+      this.FxAccountsCommon.log.error("Error updating FxA account info", error);
       updateWithUserData(null);
     });
   },
@@ -482,5 +493,5 @@ XPCOMUtils.defineLazyGetter(gFxAccounts, "FxAccountsCommon", function () {
 XPCOMUtils.defineLazyModuleGetter(gFxAccounts, "fxaMigrator",
   "resource://services-sync/FxaMigrator.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsWebChannel",
+XPCOMUtils.defineLazyModuleGetter(this, "EnsureFxAccountsWebChannel",
   "resource://gre/modules/FxAccountsWebChannel.jsm");

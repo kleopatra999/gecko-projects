@@ -18,6 +18,7 @@ const GRAB_DELAY = 400;
 const DRAG_DROP_AUTOSCROLL_EDGE_DISTANCE = 50;
 const DRAG_DROP_MIN_AUTOSCROLL_SPEED = 5;
 const DRAG_DROP_MAX_AUTOSCROLL_SPEED = 15;
+const AUTOCOMPLETE_POPUP_PANEL_ID = "markupview_autoCompletePopup";
 
 const {UndoStack} = require("devtools/shared/undo");
 const {editableField, InplaceEditor} = require("devtools/shared/inplace-editor");
@@ -31,8 +32,8 @@ const {setTimeout, clearTimeout, setInterval, clearInterval} = require("sdk/time
 const {parseAttribute} = require("devtools/shared/node-attribute-parser");
 const ELLIPSIS = Services.prefs.getComplexValue("intl.ellipsis", Ci.nsIPrefLocalizedString).data;
 const {Task} = require("resource://gre/modules/Task.jsm");
+const LayoutHelpers = require("devtools/toolkit/layout-helpers");
 
-Cu.import("resource://gre/modules/devtools/LayoutHelpers.jsm");
 Cu.import("resource://gre/modules/devtools/Templater.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -85,7 +86,10 @@ function MarkupView(aInspector, aFrame, aControllerWindow) {
   // Creating the popup to be used to show CSS suggestions.
   let options = {
     autoSelect: true,
-    theme: "auto"
+    theme: "auto",
+    // panelId option prevents the markupView autocomplete popup from
+    // sharing XUL elements with other views, such as ruleView (see Bug 1191093)
+    panelId: AUTOCOMPLETE_POPUP_PANEL_ID
   };
   this.popup = new AutocompletePopup(this.doc.defaultView.parent.document, options);
 
@@ -1466,11 +1470,6 @@ MarkupView.prototype = {
 
     this._destroyer = promise.resolve();
 
-    // Note that if the toolbox is closed, this will work fine, but will fail
-    // in case the browser is closed and will trigger a noSuchActor message.
-    // We ignore the promise that |_hideBoxModel| returns, since we should still
-    // proceed with the rest of destruction if it fails.
-    this._hideBoxModel();
     this._clearBriefBoxModelTimer();
 
     this._elt.removeEventListener("click", this._onMouseClick, false);
@@ -1931,6 +1930,16 @@ MarkupContainer.prototype = {
     // focus.
     if (!target.closest(".editor [tabindex]")) {
       event.preventDefault();
+    }
+
+    let isMiddleClick = event.button === 1;
+    let isMetaClick = event.button === 0 && (event.metaKey || event.ctrlKey);
+
+    if (isMiddleClick || isMetaClick) {
+      let link = target.dataset.link;
+      let type = target.dataset.type;
+      this.markup._inspector.followAttributeLink(type, link);
+      return;
     }
 
     // Start dragging the container after a delay.
@@ -2729,11 +2738,10 @@ ElementEditor.prototype = {
     // Create links in the attribute value, and collapse long attributes if
     // needed.
     let collapse = value => {
-      if (value.match(COLLAPSE_DATA_URL_REGEX)) {
+      if (value && value.match(COLLAPSE_DATA_URL_REGEX)) {
         return truncateString(value, COLLAPSE_DATA_URL_LENGTH);
-      } else {
-        return truncateString(value, COLLAPSE_ATTRIBUTE_LENGTH);
       }
+      return truncateString(value, COLLAPSE_ATTRIBUTE_LENGTH);
     };
 
     val.innerHTML = "";
@@ -2911,7 +2919,7 @@ function nodeDocument(node) {
 }
 
 function truncateString(str, maxLength) {
-  if (str.length <= maxLength) {
+  if (!str || str.length <= maxLength) {
     return str;
   }
 

@@ -1,6 +1,7 @@
 Cu.import("resource://gre/modules/Services.jsm");
-let { DebuggerServer } = Cu.import("resource://gre/modules/devtools/dbg-server.jsm", {});
-let { DebuggerClient } = Cu.import("resource://gre/modules/devtools/dbg-client.jsm", {});
+let { require } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+let { DebuggerServer } = require("devtools/server/main");
+let { DebuggerClient } = require("devtools/toolkit/client/main");
 let { RemoteDebugger } = Cu.import("resource://webapprt/modules/RemoteDebugger.jsm", {});
 
 function test() {
@@ -18,7 +19,6 @@ function test() {
         ok(aResponse.tabs[0].gcliActor, "gcliActor set");
         ok(aResponse.tabs[0].styleEditorActor, "styleEditorActor set");
         ok(aResponse.tabs[0].inspectorActor, "inspectorActor set");
-        ok(aResponse.tabs[0].traceActor, "traceActor set");
         ok(aResponse.deviceActor, "deviceActor set");
 
         client.close(() => {

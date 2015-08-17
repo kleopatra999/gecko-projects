@@ -271,7 +271,7 @@ function doSearch(searchTerm, cmdLine) {
   var ss = Components.classes["@mozilla.org/browser/search-service;1"]
                      .getService(nsIBrowserSearchService);
 
-  var submission = ss.defaultEngine.getSubmission(searchTerm);
+  var submission = ss.defaultEngine.getSubmission(searchTerm, null, "system");
 
   // fill our nsISupportsArray with uri-as-wstring, null, null, postData
   var sa = Components.classes["@mozilla.org/supports-array;1"]
@@ -548,6 +548,23 @@ nsBrowserContentHandler.prototype = {
     if (overridePage == "about:blank")
       overridePage = "";
 
+    // Temporary override page for users who are running Firefox on Windows 10 for their first time.
+    let platformVersion = Services.sysinfo.getProperty("version");
+    if (AppConstants.platform == "win" &&
+        Services.vc.compare(platformVersion, "10") == 0 &&
+        !Services.prefs.getBoolPref("browser.usedOnWindows10")) {
+      Services.prefs.setBoolPref("browser.usedOnWindows10", true);
+      let firstUseOnWindows10URL = Services.urlFormatter.formatURLPref("browser.usedOnWindows10.introURL");
+
+      if (firstUseOnWindows10URL && firstUseOnWindows10URL.length) {
+        if (overridePage) {
+          overridePage += "|" + firstUseOnWindows10URL;
+        } else {
+          overridePage = firstUseOnWindows10URL;
+        }
+      }
+    }
+
     var startPage = "";
     try {
       var choice = prefb.getIntPref("browser.startup.page");
@@ -772,7 +789,7 @@ nsDefaultCommandLineHandler.prototype = {
               var term = params.get("q");
               var ss = Components.classes["@mozilla.org/browser/search-service;1"]
                                  .getService(nsIBrowserSearchService);
-              var submission = ss.defaultEngine.getSubmission(term, null, "searchbar");
+              var submission = ss.defaultEngine.getSubmission(term, null, "system");
               uri = submission.uri;
             }
           } catch (e) {

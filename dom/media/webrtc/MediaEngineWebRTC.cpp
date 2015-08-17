@@ -130,7 +130,9 @@ MediaEngineWebRTC::EnumerateVideoDevices(dom::MediaSourceEnum aMediaSource,
 
 #ifdef MOZ_WIDGET_ANDROID
   // get the JVM
-  JavaVM *jvm = mozilla::AndroidBridge::Bridge()->GetVM();
+  JavaVM* jvm;
+  JNIEnv* const env = jni::GetEnvForThread();
+  MOZ_ALWAYS_TRUE(!env->GetJavaVM(&jvm));
 
   if (webrtc::VideoEngine::SetAndroidObjects(jvm) != 0) {
     LOG(("VieCapture:SetAndroidObjects Failed"));
@@ -291,12 +293,20 @@ MediaEngineWebRTC::EnumerateAudioDevices(dom::MediaSourceEnum aMediaSource,
   // We spawn threads to handle gUM runnables, so we must protect the member vars
   MutexAutoLock lock(mMutex);
 
+  if (aMediaSource == dom::MediaSourceEnum::AudioCapture) {
+    nsRefPtr<MediaEngineWebRTCAudioCaptureSource> audioCaptureSource =
+      new MediaEngineWebRTCAudioCaptureSource(nullptr);
+    aASources->AppendElement(audioCaptureSource);
+    return;
+  }
+
 #ifdef MOZ_WIDGET_ANDROID
   jobject context = mozilla::AndroidBridge::Bridge()->GetGlobalContextRef();
 
   // get the JVM
-  JavaVM *jvm = mozilla::AndroidBridge::Bridge()->GetVM();
-  JNIEnv *env = GetJNIForThread();
+  JavaVM* jvm;
+  JNIEnv* const env = jni::GetEnvForThread();
+  MOZ_ALWAYS_TRUE(!env->GetJavaVM(&jvm));
 
   if (webrtc::VoiceEngine::SetAndroidObjects(jvm, env, (void*)context) != 0) {
     LOG(("VoiceEngine:SetAndroidObjects Failed"));
@@ -358,15 +368,14 @@ MediaEngineWebRTC::EnumerateAudioDevices(dom::MediaSourceEnum aMediaSource,
       strcpy(uniqueId,deviceName); // safe given assert and initialization/error-check
     }
 
-    nsRefPtr<MediaEngineWebRTCAudioSource> aSource;
+    nsRefPtr<MediaEngineAudioSource> aSource;
     NS_ConvertUTF8toUTF16 uuid(uniqueId);
     if (mAudioSources.Get(uuid, getter_AddRefs(aSource))) {
       // We've already seen this device, just append.
       aASources->AppendElement(aSource.get());
     } else {
-      aSource = new MediaEngineWebRTCAudioSource(
-        mThread, mVoiceEngine, i, deviceName, uniqueId
-      );
+      aSource = new MediaEngineWebRTCMicrophoneSource(mThread, mVoiceEngine, i,
+                                                      deviceName, uniqueId);
       mAudioSources.Put(uuid, aSource); // Hashtable takes ownership.
       aASources->AppendElement(aSource);
     }
@@ -385,9 +394,8 @@ ClearVideoSource (const nsAString&, // unused
 }
 
 static PLDHashOperator
-ClearAudioSource (const nsAString&, // unused
-                  MediaEngineWebRTCAudioSource* aData,
-                  void *userArg)
+ClearAudioSource(const nsAString &, // unused
+                 MediaEngineAudioSource *aData, void *userArg)
 {
   if (aData) {
     aData->Shutdown();

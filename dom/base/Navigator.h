@@ -51,6 +51,8 @@ class ServiceWorkerContainer;
 namespace mozilla {
 namespace dom {
 
+class Permissions;
+
 namespace battery {
 class BatteryManager;
 } // namespace battery
@@ -95,6 +97,7 @@ class Voicemail;
 class TVManager;
 class InputPortManager;
 class DeviceStorageAreaListener;
+class Presentation;
 
 namespace time {
 class TimeManager;
@@ -153,6 +156,7 @@ public:
                               const nsAString& aTitle, ErrorResult& aRv);
   nsMimeTypeArray* GetMimeTypes(ErrorResult& aRv);
   nsPluginArray* GetPlugins(ErrorResult& aRv);
+  Permissions* GetPermissions(ErrorResult& aRv);
   // The XPCOM GetDoNotTrack is ok
   Geolocation* GetGeolocation(ErrorResult& aRv);
   battery::BatteryManager* GetBattery(ErrorResult& aRv);
@@ -265,6 +269,8 @@ public:
   system::AudioChannelManager* GetMozAudioChannelManager(ErrorResult& aRv);
 #endif // MOZ_AUDIO_CHANNEL_MANAGER
 
+  Presentation* GetPresentation(ErrorResult& aRv);
+
   bool SendBeacon(const nsAString& aUrl,
                   const Nullable<ArrayBufferViewOrBlobOrStringOrFormData>& aData,
                   ErrorResult& aRv);
@@ -353,6 +359,7 @@ private:
 
   nsRefPtr<nsMimeTypeArray> mMimeTypes;
   nsRefPtr<nsPluginArray> mPlugins;
+  nsRefPtr<Permissions> mPermissions;
   nsRefPtr<Geolocation> mGeolocation;
   nsRefPtr<DesktopNotificationCenter> mNotification;
   nsRefPtr<battery::BatteryManager> mBatteryManager;
@@ -385,6 +392,7 @@ private:
   nsRefPtr<ServiceWorkerContainer> mServiceWorkerContainer;
   nsCOMPtr<nsPIDOMWindow> mWindow;
   nsRefPtr<DeviceStorageAreaListener> mDeviceStorageAreaListener;
+  nsRefPtr<Presentation> mPresentation;
 
   // Hashtable for saving cached objects DoResolve created, so we don't create
   // the object twice if asked for it twice, whether due to use of "delete" or

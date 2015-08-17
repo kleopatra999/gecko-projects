@@ -4,12 +4,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_bluetooth_bluetoothdevice_h__
-#define mozilla_dom_bluetooth_bluetoothdevice_h__
+#ifndef mozilla_dom_bluetooth_BluetoothDevice_h
+#define mozilla_dom_bluetooth_BluetoothDevice_h
 
 #include "mozilla/Attributes.h"
 #include "mozilla/DOMEventTargetHelper.h"
-#include "mozilla/dom/BluetoothDevice2Binding.h"
+#include "mozilla/dom/BluetoothDeviceBinding.h"
 #include "mozilla/dom/bluetooth/BluetoothCommon.h"
 #include "nsString.h"
 #include "nsCOMPtr.h"
@@ -117,6 +117,8 @@ private:
 
   /**
    * Fire BluetoothAttributeEvent to trigger onattributechanged event handler.
+   *
+   * @param aTypes [in] Array of changed attributes. Must be non-empty.
    */
   void DispatchAttributeEvent(const Sequence<nsString>& aTypes);
 
@@ -152,7 +154,7 @@ private:
    *
    * @param aAdvData [in] advertising data which provided by the LeScan result.
    */
-   void UpdatePropertiesFromAdvData(const nsTArray<uint8_t>& aAdvData);
+  void UpdatePropertiesFromAdvData(const nsTArray<uint8_t>& aAdvData);
 
   /****************************************************************************
    * Variables
@@ -242,4 +244,4 @@ public:
   }
 };
 
-#endif
+#endif // mozilla_dom_bluetooth_BluetoothDevice_h

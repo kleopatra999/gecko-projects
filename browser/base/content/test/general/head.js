@@ -9,6 +9,27 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesTestUtils",
   "resource://testing-common/PlacesTestUtils.jsm");
 
+/**
+ * Wait for a <notification> to be closed then call the specified callback.
+ */
+function waitForNotificationClose(notification, cb) {
+  let parent = notification.parentNode;
+
+  let observer = new MutationObserver(function onMutatations(mutations) {
+    for (let mutation of mutations) {
+      for (let i = 0; i < mutation.removedNodes.length; i++) {
+        let node = mutation.removedNodes.item(i);
+        if (node != notification) {
+          continue;
+        }
+        observer.disconnect();
+        cb();
+      }
+    }
+  });
+  observer.observe(parent, {childList: true});
+}
+
 function closeAllNotifications () {
   let notificationBox = document.getElementById("global-notificationbox");
 
@@ -737,6 +758,66 @@ function assertWebRTCIndicatorStatus(expected) {
   }
 }
 
+/**
+ * Test the state of the identity box and control center to make
+ * sure they are correctly showing the expected mixed content states.
+ *
+ * @param tabbrowser
+ * @param Object states
+ *        MUST include the following properties:
+ *        {
+ *           activeLoaded: true|false,
+ *           activeBlocked: true|false,
+ *           passiveLoaded: true|false,
+ *        }
+ */
+function assertMixedContentBlockingState(tabbrowser, states = {}) {
+  if (!tabbrowser || !("activeLoaded" in states) ||
+      !("activeBlocked" in states) || !("passiveLoaded" in states))  {
+    throw new Error("assertMixedContentBlockingState requires a browser and a states object");
+  }
+
+  let {passiveLoaded,activeLoaded,activeBlocked} = states;
+  let {gIdentityHandler} = tabbrowser.ownerGlobal;
+  let doc = tabbrowser.ownerDocument;
+  let identityBox = gIdentityHandler._identityBox;
+  let classList = identityBox.classList;
+
+  // Make sure the identity box UI has the correct mixedcontent states
+  is(classList.contains("mixedActiveContent"), activeLoaded,
+      "identityBox has expected class for activeLoaded");
+  is(classList.contains("mixedActiveBlocked"), activeBlocked && !passiveLoaded,
+      "identityBox has expected class for activeBlocked && !passiveLoaded");
+  is(classList.contains("mixedDisplayContent"), passiveLoaded && !activeLoaded,
+     "identityBox has expected class for passiveLoaded && activeLoaded");
+  is(classList.contains("mixedDisplayContentLoadedActiveBlocked"), passiveLoaded && activeBlocked,
+     "identityBox has expected class for passiveLoaded && activeBlocked");
+  is (classList.contains("mixedContent"), activeBlocked || activeLoaded || passiveLoaded,
+     "identityBox is showing no mixed content");
+
+  // Make sure the identity popup has the correct mixedcontent states
+  gIdentityHandler._identityBox.click();
+  let popupAttr = doc.getElementById("identity-popup").getAttribute("mixedcontent");
+  let bodyAttr = doc.getElementById("identity-popup-securityView-body").getAttribute("mixedcontent");
+
+  is(popupAttr.contains("active-loaded"), activeLoaded,
+      "identity-popup has expected attr for activeLoaded");
+  is(bodyAttr.contains("active-loaded"), activeLoaded,
+      "securityView-body has expected attr for activeLoaded");
+
+  is(popupAttr.contains("active-blocked"), activeBlocked,
+      "identity-popup has expected attr for activeBlocked");
+  is(bodyAttr.contains("active-blocked"), activeBlocked,
+      "securityView-body has expected attr for activeBlocked");
+
+  is(popupAttr.contains("passive-loaded"), passiveLoaded,
+      "identity-popup has expected attr for passiveLoaded");
+  is(bodyAttr.contains("passive-loaded"), passiveLoaded,
+      "securityView-body has expected attr for passiveLoaded");
+
+  gIdentityHandler._identityPopup.hidden = true;
+}
+
 function makeActionURI(action, params) {
   let url = "moz-action:" + action + "," + JSON.stringify(params);
   return NetUtil.newURI(url);
@@ -860,4 +941,52 @@ function promiseTopicObserved(aTopic)
         resolve({subject: aSubject, data: aData});
       }, aTopic, false);
   });
+}
+
+function promiseNewSearchEngine(basename) {
+  return new Promise((resolve, reject) => {
+    info("Waiting for engine to be added: " + basename);
+    let url = getRootDirectory(gTestPath) + basename;
+    Services.search.addEngine(url, Ci.nsISearchEngine.TYPE_MOZSEARCH, "",
+                              false, {
+      onSuccess: function (engine) {
+        info("Search engine added: " + basename);
+        registerCleanupFunction(() => Services.search.removeEngine(engine));
+        resolve(engine);
+      },
+      onError: function (errCode) {
+        Assert.ok(false, "addEngine failed with error code " + errCode);
+        reject();
+      },
+    });
+  });
+}
+
+// Compares the security state of the page with what is expected
+function isSecurityState(expectedState) {
+  let ui = gTestBrowser.securityUI;
+  if (!ui) {
+    ok(false, "No security UI to get the security state");
+    return;
+  }
+
+  const wpl = Components.interfaces.nsIWebProgressListener;
+
+  // determine the security state
+  let isSecure = ui.state & wpl.STATE_IS_SECURE;
+  let isBroken = ui.state & wpl.STATE_IS_BROKEN;
+  let isInsecure = ui.state & wpl.STATE_IS_INSECURE;
+
+  let actualState;
+  if (isSecure && !(isBroken || isInsecure)) {
+    actualState = "secure";
+  } else if (isBroken && !(isSecure || isInsecure)) {
+    actualState = "broken";
+  } else if (isInsecure && !(isSecure || isBroken)) {
+    actualState = "insecure";
+  } else {
+    actualState = "unknown";
+  }
+
+  is(expectedState, actualState, "Expected state " + expectedState + " and the actual state is " + actualState + ".");
 }

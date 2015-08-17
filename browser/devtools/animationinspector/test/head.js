@@ -6,13 +6,12 @@
 
 const Cu = Components.utils;
 const {gDevTools} = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
-const {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
-const {require} = devtools;
+const {require} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
-const TargetFactory = devtools.TargetFactory;
+const {TargetFactory} = require("devtools/framework/target");
 const {console} = Cu.import("resource://gre/modules/devtools/Console.jsm", {});
 const {ViewHelpers} = Cu.import("resource:///modules/devtools/ViewHelpers.jsm", {});
-const DevToolsUtils = devtools.require("devtools/toolkit/DevToolsUtils");
+const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
 
 // All tests are asynchronous
 waitForExplicitFinish();
@@ -463,3 +462,26 @@ let getAnimationPlayerState = Task.async(function*(selector, animationIndex=0) {
 function isNodeVisible(node) {
   return !!node.getClientRects().length;
 }
+
+/**
+ * Wait for all AnimationTargetNode instances to be fully loaded
+ * (fetched their related actor and rendered), and return them.
+ * @param {AnimationsPanel} panel
+ * @return {Array} all AnimationTargetNode instances
+ */
+let waitForAllAnimationTargets = Task.async(function*(panel) {
+  let targets = [];
+  if (panel.animationsTimelineComponent) {
+    targets = targets.concat(panel.animationsTimelineComponent.targetNodes);
+  }
+  if (panel.playerWidgets) {
+    targets = targets.concat(panel.playerWidgets.map(w => w.targetNodeComponent));
+  }
+  yield promise.all(targets.map(t => {
+    if (!t.nodeFront) {
+      return t.once("target-retrieved");
+    }
+    return false;
+  }));
+  return targets;
+});

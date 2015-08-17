@@ -688,8 +688,10 @@ RecompileBaselineScriptForDebugMode(JSContext* cx, JSScript* script,
     _(Call_ScriptedApplyArray)                  \
     _(Call_ScriptedApplyArguments)              \
     _(Call_ScriptedFunCall)                     \
-    _(GetElem_NativePrototypeCallNative)        \
-    _(GetElem_NativePrototypeCallScripted)      \
+    _(GetElem_NativePrototypeCallNativeName)    \
+    _(GetElem_NativePrototypeCallNativeSymbol)  \
+    _(GetElem_NativePrototypeCallScriptedName)  \
+    _(GetElem_NativePrototypeCallScriptedSymbol) \
     _(GetProp_CallScripted)                     \
     _(GetProp_CallNative)                       \
     _(GetProp_CallDOMProxyNative)               \
@@ -798,8 +800,10 @@ InvalidateScriptsInZone(JSContext* cx, Zone* zone, const Vector<DebugModeOSREntr
             continue;
 
         if (script->hasIonScript()) {
-            if (!invalid.append(script->ionScript()->recompileInfo()))
+            if (!invalid.append(script->ionScript()->recompileInfo())) {
+                ReportOutOfMemory(cx);
                 return false;
+            }
         }
 
         // Cancel off-thread Ion compile for anything that has a

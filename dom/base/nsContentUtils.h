@@ -325,6 +325,23 @@ public:
    */
   static uint16_t ReverseDocumentPosition(uint16_t aDocumentPosition);
 
+  /**
+   * Returns a subdocument for aDocument with a particular outer window ID.
+   *
+   * @param aDocument
+   *        The document whose subdocuments will be searched.
+   * @param aOuterWindowID
+   *        The outer window ID for the subdocument to be found. This must
+   *        be a value greater than 0.
+   * @return nsIDocument*
+   *        A pointer to the found nsIDocument. nullptr if the subdocument
+   *        cannot be found, or if either aDocument or aOuterWindowId were
+   *        invalid. If the outer window ID belongs to aDocument itself, this
+   *        will return a pointer to aDocument.
+   */
+  static nsIDocument* GetSubdocumentWithOuterWindowId(nsIDocument *aDocument,
+                                                      uint64_t aOuterWindowId);
+
   static uint32_t CopyNewlineNormalizedUnicodeTo(const nsAString& aSource,
                                                  uint32_t aSrcOffset,
                                                  char16_t* aDest,
@@ -1598,12 +1615,6 @@ public:
   static void WarnScriptWasIgnored(nsIDocument* aDocument);
 
   /**
-   * Whether to assert that RunInStableState() succeeds, or ignore failure,
-   * which may happen late in shutdown.
-   */
-  enum class DispatchFailureHandling { AssertSuccess, IgnoreFailure };
-
-  /**
    * Add a "synchronous section", in the form of an nsIRunnable run once the
    * event loop has reached a "stable state". |aRunnable| must not cause any
    * queued events to be processed (i.e. must not spin the event loop).
@@ -1614,9 +1625,19 @@ public:
    * finishes. If called multiple times per task/event, all the runnables will
    * be executed, in the order in which RunInStableState() was called.
    */
-  static void RunInStableState(already_AddRefed<nsIRunnable> aRunnable,
-                               DispatchFailureHandling aHandling =
-                                 DispatchFailureHandling::AssertSuccess);
+  static void RunInStableState(already_AddRefed<nsIRunnable> aRunnable);
+
+  /* Add a "synchronous section", in the form of an nsIRunnable run once the
+   * event loop has reached a "metastable state". |aRunnable| must not cause any
+   * queued events to be processed (i.e. must not spin the event loop).
+   * We've reached a metastable state when the currently executing task or
+   * microtask has finished.  This is not specced at this time.
+   * In practice this runs aRunnable once the currently executing task or
+   * microtask finishes.  If called multiple times per microtask, all the
+   * runnables will be executed, in the order in which RunInMetastableState()
+   * was called
+   */
+  static void RunInMetastableState(already_AddRefed<nsIRunnable> aRunnable);
 
   /**
    * Retrieve information about the viewport as a data structure.
@@ -1946,6 +1967,14 @@ public:
   static bool IsResourceTimingEnabled()
   {
     return sIsResourceTimingEnabled;
+  }
+
+  /*
+   * Returns true if notification should be sent for peformance timing events.
+   */
+  static bool SendPerformanceTimingNotifications()
+  {
+    return sSendPerformanceTimingNotifications;
   }
 
   /*
@@ -2439,6 +2468,8 @@ public:
                                                 nsIDocument* aDoc,
                                                 nsIHttpChannel* aChannel);
 
+  static bool PushEnabled(JSContext* aCx, JSObject* aObj);
+
 private:
   static bool InitializeEventTable();
 
@@ -2542,6 +2573,7 @@ private:
   static bool sEncodeDecodeURLHash;
   static bool sGettersDecodeURLHash;
   static bool sPrivacyResistFingerprinting;
+  static bool sSendPerformanceTimingNotifications;
 
   static nsHtml5StringParser* sHTMLFragmentParser;
   static nsIParser* sXMLFragmentParser;

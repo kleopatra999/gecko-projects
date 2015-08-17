@@ -51,6 +51,7 @@
 #include "mozilla/dom/TextDecoder.h"
 #include "mozilla/dom/TouchEvent.h"
 #include "mozilla/dom/ShadowRoot.h"
+#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStateManager.h"
@@ -93,7 +94,6 @@
 #include "nsHostObjectProtocolHandler.h"
 #include "nsHtml5Module.h"
 #include "nsHtml5StringParser.h"
-#include "nsIAppShell.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
 #include "nsICategoryManager.h"
 #include "nsIChannelEventSink.h"
@@ -261,6 +261,7 @@ bool nsContentUtils::sIsExperimentalAutocompleteEnabled = false;
 bool nsContentUtils::sEncodeDecodeURLHash = false;
 bool nsContentUtils::sGettersDecodeURLHash = false;
 bool nsContentUtils::sPrivacyResistFingerprinting = false;
+bool nsContentUtils::sSendPerformanceTimingNotifications = false;
 
 uint32_t nsContentUtils::sHandlingInputTimeout = 1000;
 
@@ -344,7 +345,6 @@ namespace {
 
 static NS_DEFINE_CID(kParserServiceCID, NS_PARSERSERVICE_CID);
 static NS_DEFINE_CID(kCParserCID, NS_PARSER_CID);
-static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
 
 static PLDHashTable* sEventListenerManagersHash;
 
@@ -363,8 +363,8 @@ public:
     // We don't measure the |EventListenerManager| objects pointed to by the
     // entries because those references are non-owning.
     int64_t amount = sEventListenerManagersHash
-                   ? PL_DHashTableSizeOfExcludingThis(
-                       sEventListenerManagersHash, nullptr, MallocSizeOf)
+                   ? sEventListenerManagersHash->ShallowSizeOfIncludingThis(
+                       MallocSizeOf)
                    : 0;
 
     return MOZ_COLLECT_REPORT(
@@ -551,6 +551,9 @@ nsContentUtils::Init()
   Preferences::AddUintVarCache(&sHandlingInputTimeout,
                                "dom.event.handling-user-input-time-limit",
                                1000);
+
+  Preferences::AddBoolVarCache(&sSendPerformanceTimingNotifications,
+                               "dom.performance.enable_notify_performance_timing", false);
 
 #if !(defined(DEBUG) || defined(MOZ_ENABLE_JS_DUMP))
   Preferences::AddBoolVarCache(&sDOMWindowDumpEnabled,
@@ -3846,6 +3849,30 @@ nsContentUtils::MatchElementId(nsIContent *aContent, const nsAString& aId)
   return MatchElementId(aContent, id);
 }
 
+/* static */
+nsIDocument*
+nsContentUtils::GetSubdocumentWithOuterWindowId(nsIDocument *aDocument,
+                                                uint64_t aOuterWindowId)
+{
+  if (!aDocument || !aOuterWindowId) {
+    return nullptr;
+  }
+
+  nsCOMPtr<nsPIDOMWindow> window = nsGlobalWindow::GetOuterWindowWithId(aOuterWindowId);
+  if (!window) {
+    return nullptr;
+  }
+
+  nsCOMPtr<nsIDocument> foundDoc = window->GetDoc();
+  if (nsContentUtils::ContentIsCrossDocDescendantOf(foundDoc, aDocument)) {
+    // Note that ContentIsCrossDocDescendantOf will return true if
+    // foundDoc == aDocument.
+    return foundDoc;
+  }
+
+  return nullptr;
+}
+
 // Convert the string from the given encoding to Unicode.
 /* static */
 nsresult
@@ -5202,16 +5229,18 @@ nsContentUtils::AddScriptRunner(nsIRunnable* aRunnable)
 
 /* static */
 void
-nsContentUtils::RunInStableState(already_AddRefed<nsIRunnable> aRunnable,
-                                 DispatchFailureHandling aHandling)
+nsContentUtils::RunInStableState(already_AddRefed<nsIRunnable> aRunnable)
 {
-  nsCOMPtr<nsIRunnable> runnable = aRunnable;
-  nsCOMPtr<nsIAppShell> appShell(do_GetService(kAppShellCID));
-  if (!appShell) {
-    MOZ_ASSERT(aHandling == DispatchFailureHandling::IgnoreFailure);
-    return;
-  }
-  appShell->RunInStableState(runnable.forget());
+  MOZ_ASSERT(CycleCollectedJSRuntime::Get(), "Must be on a script thread!");
+  CycleCollectedJSRuntime::Get()->RunInStableState(Move(aRunnable));
+}
+
+/* static */
+void
+nsContentUtils::RunInMetastableState(already_AddRefed<nsIRunnable> aRunnable)
+{
+  MOZ_ASSERT(CycleCollectedJSRuntime::Get(), "Must be on a script thread!");
+  CycleCollectedJSRuntime::Get()->RunInMetastableState(Move(aRunnable));
 }
 
 void
@@ -7464,8 +7493,11 @@ nsContentUtils::TransferableToIPCTransferable(nsITransferable* aTransferable,
           if (file) {
             blobImpl = new BlobImplFile(file, false);
             ErrorResult rv;
+            // Ensure that file data is cached no that the content process
+            // has this data available to it when passed over:
             blobImpl->GetSize(rv);
             blobImpl->GetLastModified(rv);
+            blobImpl->LookupAndCacheIsDirectory();
           } else {
             blobImpl = do_QueryInterface(data);
           }
@@ -7915,6 +7947,10 @@ nsContentUtils::InternalContentPolicyTypeToExternal(nsContentPolicyType aType)
   case nsIContentPolicy::TYPE_INTERNAL_TRACK:
     return nsIContentPolicy::TYPE_MEDIA;
 
+  case nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST:
+  case nsIContentPolicy::TYPE_INTERNAL_EVENTSOURCE:
+    return nsIContentPolicy::TYPE_XMLHTTPREQUEST;
+
   default:
     return aType;
   }
@@ -7969,4 +8005,23 @@ nsContentUtils::SetFetchReferrerURIWithPolicy(nsIPrincipal* aPrincipal,
 
   net::ReferrerPolicy referrerPolicy = aDoc->GetReferrerPolicy();
   return aChannel->SetReferrerWithPolicy(referrerURI, referrerPolicy);
+}
+
+// static
+bool
+nsContentUtils::PushEnabled(JSContext* aCx, JSObject* aObj)
+{
+  if (NS_IsMainThread()) {
+    return Preferences::GetBool("dom.push.enabled", false);
+  }
+
+  using namespace workers;
+
+  // Otherwise, check the pref via the WorkerPrivate
+  WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
+  if (!workerPrivate) {
+    return false;
+  }
+
+  return workerPrivate->PushEnabled();
 }

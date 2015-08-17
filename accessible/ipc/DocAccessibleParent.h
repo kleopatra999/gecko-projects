@@ -72,6 +72,7 @@ public:
   void Destroy();
   virtual void ActorDestroy(ActorDestroyReason aWhy) override
   {
+    CheckDocTree();
     if (!mShutdown)
       Destroy();
   }
@@ -151,8 +152,6 @@ private:
                       const nsTArray<AccessibleData>& aNewTree, uint32_t aIdx,
                       uint32_t aIdxInParent);
   void CheckDocTree() const;
-
-  static PLDHashOperator ShutdownAccessibles(ProxyEntry* entry, void* unused);
 
   nsTArray<DocAccessibleParent*> mChildDocs;
   DocAccessibleParent* mParentDoc;

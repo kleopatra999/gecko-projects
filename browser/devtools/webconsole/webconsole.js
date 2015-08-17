@@ -28,8 +28,8 @@ loader.lazyGetter(this, "Messages",
                   () => require("devtools/webconsole/console-output").Messages);
 loader.lazyGetter(this, "asyncStorage",
                   () => require("devtools/toolkit/shared/async-storage"));
-loader.lazyImporter(this, "EnvironmentClient", "resource://gre/modules/devtools/dbg-client.jsm");
-loader.lazyImporter(this, "ObjectClient", "resource://gre/modules/devtools/dbg-client.jsm");
+loader.lazyRequireGetter(this, "EnvironmentClient", "devtools/toolkit/client/main", true);
+loader.lazyRequireGetter(this, "ObjectClient", "devtools/toolkit/client/main", true);
 loader.lazyImporter(this, "VariablesView", "resource:///modules/devtools/VariablesView.jsm");
 loader.lazyImporter(this, "VariablesViewController", "resource:///modules/devtools/VariablesViewController.jsm");
 loader.lazyImporter(this, "PluralForm", "resource://gre/modules/PluralForm.jsm");
@@ -42,7 +42,11 @@ const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
 const MIXED_CONTENT_LEARN_MORE = "https://developer.mozilla.org/docs/Security/MixedContent";
 
+const TRACKING_PROTECTION_LEARN_MORE = "https://developer.mozilla.org/Firefox/Privacy/Tracking_Protection";
+
 const INSECURE_PASSWORDS_LEARN_MORE = "https://developer.mozilla.org/docs/Security/InsecurePasswords";
+
+const PUBLIC_KEY_PINS_LEARN_MORE = "https://developer.mozilla.org/docs/Web/Security/Public_Key_Pinning";
 
 const STRICT_TRANSPORT_SECURITY_LEARN_MORE = "https://developer.mozilla.org/docs/Security/HTTP_Strict_Transport_Security";
 
@@ -61,7 +65,7 @@ const SEARCH_DELAY = 200;
 // The number of lines that are displayed in the console output by default, for
 // each category. The user can change this number by adjusting the hidden
 // "devtools.hud.loglimit.{network,cssparser,exception,console}" preferences.
-const DEFAULT_LOG_LIMIT = 200;
+const DEFAULT_LOG_LIMIT = 1000;
 
 // The various categories of messages. We start numbering at zero so we can
 // use these as indexes into the MESSAGE_PREFERENCE_KEYS matrix below.
@@ -1666,22 +1670,28 @@ WebConsoleFrame.prototype = {
   {
     let url;
     switch (aScriptError.category) {
-     case "Insecure Password Field":
-       url = INSECURE_PASSWORDS_LEARN_MORE;
-     break;
-     case "Mixed Content Message":
-     case "Mixed Content Blocker":
-      url = MIXED_CONTENT_LEARN_MORE;
-     break;
-     case "Invalid HSTS Headers":
-      url = STRICT_TRANSPORT_SECURITY_LEARN_MORE;
-     break;
-     case "SHA-1 Signature":
-      url = WEAK_SIGNATURE_ALGORITHM_LEARN_MORE;
-     break;
-     default:
-      // Unknown category. Return without adding more info node.
-      return;
+      case "Insecure Password Field":
+        url = INSECURE_PASSWORDS_LEARN_MORE;
+        break;
+      case "Mixed Content Message":
+      case "Mixed Content Blocker":
+        url = MIXED_CONTENT_LEARN_MORE;
+        break;
+      case "Invalid HPKP Headers":
+        url = PUBLIC_KEY_PINS_LEARN_MORE;
+        break;
+      case "Invalid HSTS Headers":
+        url = STRICT_TRANSPORT_SECURITY_LEARN_MORE;
+        break;
+      case "SHA-1 Signature":
+        url = WEAK_SIGNATURE_ALGORITHM_LEARN_MORE;
+        break;
+      case "Tracking Protection":
+        url = TRACKING_PROTECTION_LEARN_MORE;
+        break;
+      default:
+        // Unknown category. Return without adding more info node.
+        return;
     }
 
     this.addLearnMoreWarningNode(aNode, url);
@@ -4797,6 +4807,7 @@ var Utils = {
       case "CORS":
       case "Iframe Sandbox":
       case "Tracking Protection":
+      case "Sub-resource Integrity":
         return CATEGORY_SECURITY;
 
       default:

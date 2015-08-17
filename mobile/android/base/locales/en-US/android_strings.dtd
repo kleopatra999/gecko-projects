@@ -10,6 +10,7 @@
 <!ENTITY  onboard_start_subtext3 "Make your mobile Web browsing experience truly your own.">
 <!ENTITY  onboard_start_button_account "Sign in to &brandShortName;">
 <!ENTITY  onboard_start_button_browser "Start Browsing">
+<!ENTITY  onboard_start_restricted1 "Stay safe and in control with this simplified version of &brandShortName;.">
 
 <!-- Localization note: These are used as the titles of different pages on the home screen.
      They are automatically converted to all caps by the Android platform. -->
@@ -68,6 +69,8 @@
 <!ENTITY edit_mode_cancel "Cancel">
 
 <!ENTITY close_tab "Close Tab">
+<!ENTITY tab_audio_playing "This tab is playing audio">
+<!ENTITY tab_audio_muted "This tab has been muted">
 <!ENTITY one_tab "1 tab">
 <!-- Localization note (num_tabs2) : Number of tabs is always more than one.
      We can't use android plural forms, sadly. See bug #753859. -->
@@ -195,7 +198,7 @@
 <!ENTITY pref_cookies_disabled "Disabled">
 
 <!ENTITY pref_tracking_protection_title "Tracking protection">
-<!ENTITY pref_tracking_protection_summary2 "Actively block tracking elements in Private Browsing">
+<!ENTITY pref_tracking_protection_summary3 "Enabled in Private Browsing">
 <!ENTITY pref_donottrack_title "Do not track">
 <!ENTITY pref_donottrack_summary "&brandShortName; will tell sites that you do not want to be tracked">
 
@@ -408,6 +411,11 @@ size. -->
 <!ENTITY pref_titlebar_mode_title "Show page title">
 <!ENTITY pref_titlebar_mode_url "Show page address">
 
+<!-- Localization note (pref_prevent_magnifying_glass): Label for setting that controls
+     whether or not the magnifying glass is disabled. -->
+<!ENTITY pref_prevent_magnifying_glass "Disable magnifying glass ">
+<!ENTITY pref_prevent_magnifying_glass_summary "Prevent magnifying glass for use in resolving ambiguous screen touches">
+
 <!-- Localization note (pref_scroll_title_bar2): Label for setting that controls
      whether or not the dynamic toolbar is enabled. -->
 <!ENTITY pref_scroll_title_bar2 "Full-screen browsing">
@@ -552,22 +560,21 @@ The layout of the identity dialog prevents combining this into a single string w
 substitution variables.  If it is difficult to translate the sense of the string
 with that structure, consider a translation which ignores the preceding domain and
 just addresses the organization to follow, e.g. "This site is run by " -->
-<!ENTITY identity_run_by "which is run by">
-<!ENTITY identity_no_info "This website does not supply identity information.">
-<!ENTITY identity_not_encrypted "Your connection to this website is not encrypted.">
-<!ENTITY identity_encrypted "Encrypted">
+<!ENTITY identity_connection_secure "Secure Connection">
+<!ENTITY identity_connection_insecure "Insecure connection">
 
 <!-- Mixed content notifications in site identity popup -->
-<!ENTITY loaded_mixed_content_message "This page is displaying content that isn\'t secure.">
-<!ENTITY blocked_mixed_content_message_top "&brandShortName; has blocked content that isn\'t secure.">
-<!ENTITY blocked_mixed_content_message_bottom "Most websites will still work properly even when this content is blocked.">
+<!ENTITY mixed_content_blocked_all1 "&brandShortName; has blocked insecure content on this page.">
+<!ENTITY mixed_content_blocked_some1 "&brandShortName; has blocked some of the insecure content on this page.">
+<!ENTITY mixed_content_display_loaded1 "Parts of this page are not secure (such as images).">
+<!ENTITY mixed_content_protection_disabled1 "You have disabled protection from insecure content.">
 
 <!-- Tracking content notifications in site identity popup -->
 <!ENTITY doorhanger_tracking_title "Tracking protection">
 <!ENTITY doorhanger_tracking_state_enabled "Enabled">
 <!ENTITY doorhanger_tracking_state_disabled "Disabled">
-<!ENTITY doorhanger_tracking_message_enabled "Blocking tracking elements that may affect your browsing experience.">
-<!ENTITY doorhanger_tracking_message_disabled "Attempts to track your online behavior are not being blocked.">
+<!ENTITY doorhanger_tracking_message_enabled1 "Attempts to track your online behavior have been blocked.">
+<!ENTITY doorhanger_tracking_message_disabled2 "This page includes elements that may track your browsing.">
 
 <!-- Common mixed and tracking content strings in site identity popup -->
 <!ENTITY learn_more "Learn More">
@@ -653,10 +660,6 @@ just addresses the organization to follow, e.g. "This site is run by " -->
 
 <!-- Voice search in the awesome bar -->
 <!ENTITY voicesearch_prompt "Speak now">
-<!ENTITY voicesearch_failed_title "&brandShortName; Voice Search">
-<!ENTITY voicesearch_failed_message "There is a problem with voice search right now. Please try later.">
-<!ENTITY voicesearch_failed_message_recoverable "Sorry! We could not recognize your words. Please try again.">
-<!ENTITY voicesearch_failed_retry "Try again">
 
 <!-- Localization note (remote_tabs_last_synced): the variable is replaced by a
      "relative time span string" produced by Android.  This string describes the
@@ -682,3 +685,18 @@ just addresses the organization to follow, e.g. "This site is run by " -->
      desktop Firefox via WebIDE), so you just need to aim this device at the QR
      code. -->
 <!ENTITY devtools_auth_scan_header "Scanning for the QR code displayed on your other device">
+
+<!-- Restrictions -->
+<!-- Localization note: These are restrictions the device owner (e.g. parent) can enable for
+     a restricted profile (e.g. child). Used inside the Android settings UI. -->
+<!ENTITY restriction_disallow_import_settings_title2 "Disable \'Import from Android\'">
+<!ENTITY restriction_disallow_addons_title2 "Disable add-on installation">
+<!ENTITY restriction_disallow_devtools_title2 "Disable developer tools">
+<!ENTITY restriction_disallow_customize_home_title2 "Disable Home customization">
+<!ENTITY restriction_disallow_private_browsing_title2 "Disable Private Browsing">
+<!ENTITY restriction_disallow_location_services_title2 "Disable Location Services">
+<!ENTITY restriction_disallow_display_settings_title2 "Disable Display settings">
+<!ENTITY restriction_disallow_clear_history_title2 "Disable \'Clear browsing history\'">
+<!ENTITY restriction_disallow_master_password_title2 "Disable master password">
+<!ENTITY restriction_disallow_guest_browsing_title2 "Disable Guest Browsing">
+

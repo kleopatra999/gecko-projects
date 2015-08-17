@@ -30,6 +30,11 @@
 
   <color name="url_bar_shadow_private">#7878A5</color>
 
+  <!-- Restricted profiles palette -->
+
+  <color name="restricted_profile_background_gold">#ffffcb51</color>
+  <color name="restricted_profile_background_green">#1aaa86</color>
+
   <!-- Non-palette colors -->
 
   <!-- Synced w/ toolbar_grey -->
@@ -116,6 +121,7 @@
 
   <color name="panel_image_item_background">#D1D9E1</color>
   <color name="panel_icon_item_title_background">#32000000</color>
+  <color name="panel_tab_text_normal">#FFBFBFBF</color>
 
   <!-- Swipe to refresh colors for dynamic panel -->
   <color name="swipe_refresh_orange">#FFFFC26C</color>
@@ -145,5 +151,7 @@
   <!-- Top sites thumbnail colors -->
   <color name="top_site_default">#FFECF0F3</color>
   <color name="top_site_border">#FFCFD9E1</color>
+
+  <color name="private_active_text">#FFFFFF</color>
 
 </resources>

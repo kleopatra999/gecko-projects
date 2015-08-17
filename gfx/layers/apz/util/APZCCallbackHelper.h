@@ -68,6 +68,10 @@ public:
                                              uint32_t* aPresShellIdOut,
                                              FrameMetrics::ViewID* aViewIdOut);
 
+    /* Initialize a zero-margin displayport on the root document element of the
+       given presShell. */
+    static void InitializeRootDisplayport(nsIPresShell* aPresShell);
+
     /* Tell layout to perform scroll snapping for the scrollable frame with the
      * given scroll id. aDestination specifies the expected landing position of
      * a current fling or scrolling animation that should be used to select
@@ -80,6 +84,9 @@ public:
        that it accepts future scroll offset updates from APZ. */
     static void AcknowledgeScrollUpdate(const FrameMetrics::ViewID& aScrollId,
                                         const uint32_t& aScrollGeneration);
+
+    /* Get the pres shell associated with the root content document enclosing |aContent|. */
+    static nsIPresShell* GetRootContentDocumentPresShellForContent(nsIContent* aContent);
 
     /* Apply an "input transform" to the given |aInput| and return the transformed value.
        The input transform applied is the one for the content element corresponding to

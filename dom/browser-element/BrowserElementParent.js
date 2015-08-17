@@ -184,6 +184,8 @@ BrowserElementParent.prototype = {
       "got-contentdimensions": this._gotDOMRequestResult,
       "got-can-go-back": this._gotDOMRequestResult,
       "got-can-go-forward": this._gotDOMRequestResult,
+      "got-muted": this._gotDOMRequestResult,
+      "got-volume": this._gotDOMRequestResult,
       "requested-dom-fullscreen": this._requestedDOMFullscreen,
       "fullscreen-origin-change": this._fullscreenOriginChange,
       "exit-dom-fullscreen": this._exitDomFullscreen,
@@ -203,7 +205,7 @@ BrowserElementParent.prototype = {
     };
 
     let mmSecuritySensitiveCalls = {
-      "mediaplaybackchange": this._fireEventFromMsg,
+      "audioplaybackchange": this._fireEventFromMsg,
       "showmodalprompt": this._handleShowModalPrompt,
       "contextmenu": this._fireCtxMenuEvent,
       "securitychange": this._fireEventFromMsg,
@@ -232,6 +234,8 @@ BrowserElementParent.prototype = {
                  .apply(self, arguments);
       }
     });
+
+    this._mm.loadFrameScript("chrome://global/content/extensions.js", true);
   },
 
   /**
@@ -450,6 +454,7 @@ BrowserElementParent.prototype = {
   //  - collapsed: Indicate current selection is collapsed or not.
   //  - caretVisible: Indicate the caret visiibility.
   //  - selectionVisible: Indicate current selection is visible or not.
+  //  - selectionEditable: Indicate current selection is editable or not.
   _handleCaretStateChanged: function(data) {
     let evt = this._createEvent('caretstatechanged', data.json,
                                 /* cancelable = */ false);
@@ -662,6 +667,22 @@ BrowserElementParent.prototype = {
 
   clearMatch: defineNoReturnMethod(function() {
     return this._sendAsyncMsg('clear-match');
+  }),
+
+  mute: defineNoReturnMethod(function() {
+    this._sendAsyncMsg('mute');
+  }),
+
+  unmute: defineNoReturnMethod(function() {
+    this._sendAsyncMsg('unmute');
+  }),
+
+  getMuted: defineDOMRequestMethod('get-muted'),
+
+  getVolume: defineDOMRequestMethod('get-volume'),
+
+  setVolume: defineNoReturnMethod(function(volume) {
+    this._sendAsyncMsg('set-volume', {volume});
   }),
 
   goBack: defineNoReturnMethod(function() {

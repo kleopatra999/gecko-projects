@@ -870,6 +870,24 @@ moz_gtk_splitter_get_metrics(gint orientation, gint* size)
 }
 
 static gint
+moz_gtk_window_paint(cairo_t *cr, GdkRectangle* rect,
+                     GtkTextDirection direction)
+{
+    GtkStyleContext* style;
+
+    ensure_window_widget();
+    gtk_widget_set_direction(gProtoWindow, direction);
+
+    style = gtk_widget_get_style_context(gProtoWindow);	
+    gtk_style_context_save(style);
+    gtk_style_context_add_class(style, GTK_STYLE_CLASS_BACKGROUND);
+    gtk_render_background(style, cr, rect->x, rect->y, rect->width, rect->height);
+    gtk_style_context_restore(style);
+
+    return MOZ_GTK_SUCCESS;
+}
+
+static gint
 moz_gtk_button_paint(cairo_t *cr, GdkRectangle* rect,
                      GtkWidgetState* state,
                      GtkReliefStyle relief, GtkWidget* widget,
@@ -901,9 +919,7 @@ moz_gtk_button_paint(cairo_t *cr, GdkRectangle* rect,
         y += default_top;
         width -= (default_left + default_right);
         height -= (default_top + default_bottom);
-    }
- 
-    if (relief != GTK_RELIEF_NONE || state->depressed ||
+    } else if (relief != GTK_RELIEF_NONE || state->depressed ||
         (state_flags & GTK_STATE_FLAG_PRELIGHT)) {
         /* the following line can trigger an assertion (Crux theme)
            file ../../gdk/gdkwindow.c: line 1846 (gdk_window_clear_area):
@@ -1270,7 +1286,7 @@ moz_gtk_scale_paint(cairo_t *cr, GdkRectangle* rect,
                     GtkOrientation flags, GtkTextDirection direction)
 {
   GtkStateFlags state_flags = GetStateFlagsFromGtkWidgetState(state);
-  gint x = 0, y = 0;
+  gint x, y, width, height, min_width, min_height;
   GtkStyleContext* style;
   GtkWidget* widget;
   GtkBorder margin;
@@ -1278,23 +1294,29 @@ moz_gtk_scale_paint(cairo_t *cr, GdkRectangle* rect,
   ensure_scale_widget();
   widget = ((flags == GTK_ORIENTATION_HORIZONTAL) ? gHScaleWidget : gVScaleWidget);
   gtk_widget_set_direction(widget, direction);
+  moz_gtk_get_scale_metrics(flags, &min_width, &min_height);
 
   style = gtk_widget_get_style_context(widget);
   gtk_style_context_save(style);
-  gtk_style_context_add_class(style, GTK_STYLE_CLASS_SCALE);
+  gtk_style_context_add_class(style, GTK_STYLE_CLASS_TROUGH);
   gtk_style_context_get_margin(style, state_flags, &margin); 
 
+  // Clamp the dimension perpendicular to the direction that the slider crosses
+  // to the minimum size.
   if (flags == GTK_ORIENTATION_HORIZONTAL) {
-    x = margin.left;
-    y++;
-  }
-  else {
-    x++;
-    y = margin.top;
+    width = rect->width - (margin.left + margin.right);
+    height = min_height - (margin.top + margin.bottom);
+    x = rect->x + margin.left;
+    y = rect->y + (rect->height - height)/2;
+  } else {
+    width = min_width - (margin.left + margin.right);
+    height = rect->height - (margin.top + margin.bottom);
+    x = rect->x + (rect->width - width)/2;
+    y = rect->y + margin.top;
   }
 
-  gtk_render_frame(style, cr, rect->x + x, rect->y + y,
-                   rect->width - 2*x, rect->height - 2*y);
+  gtk_render_background(style, cr, x, y, width, height);
+  gtk_render_frame(style, cr, x, y, width, height);
 
   if (state->focused)
     gtk_render_focus(style, cr, 
@@ -2385,6 +2407,10 @@ moz_gtk_menu_popup_paint(cairo_t *cr, GdkRectangle* rect,
     ensure_menu_popup_widget();
     gtk_widget_set_direction(gMenuPopupWidget, direction);
 
+    // Draw a backing toplevel. This fixes themes that don't provide a menu
+    // background, and depend on the GtkMenu's implementation window to provide it.
+    moz_gtk_window_paint(cr, rect, direction);
+
     style = gtk_widget_get_style_context(gMenuPopupWidget);
     gtk_style_context_save(style);
     gtk_style_context_add_class(style, GTK_STYLE_CLASS_MENU);
@@ -2577,24 +2603,6 @@ moz_gtk_check_menu_item_paint(cairo_t *cr, GdkRectangle* rect,
     return MOZ_GTK_SUCCESS;
 }
 
-static gint
-moz_gtk_window_paint(cairo_t *cr, GdkRectangle* rect,
-                     GtkTextDirection direction)
-{
-    GtkStyleContext* style;
-
-    ensure_window_widget();
-    gtk_widget_set_direction(gProtoWindow, direction);
-
-    style = gtk_widget_get_style_context(gProtoWindow);	
-    gtk_style_context_save(style);
-    gtk_style_context_add_class(style, GTK_STYLE_CLASS_BACKGROUND);
-    gtk_render_background(style, cr, rect->x, rect->y, rect->width, rect->height);
-    gtk_style_context_restore(style);
-
-    return MOZ_GTK_SUCCESS;
-}
-
 static void
 moz_gtk_add_style_border(GtkStyleContext* style,
                          gint* left, gint* top, gint* right, gint* bottom)
@@ -2634,6 +2642,7 @@ moz_gtk_get_widget_border(GtkThemeWidgetType widget, gint* left, gint* top,
 
     switch (widget) {
     case MOZ_GTK_BUTTON:
+    case MOZ_GTK_TOOLBAR_BUTTON:
         {
             ensure_button_widget();
             style = gtk_widget_get_style_context(gButtonWidget);
@@ -2643,7 +2652,15 @@ moz_gtk_get_widget_border(GtkThemeWidgetType widget, gint* left, gint* top,
             /* Don't add this padding in HTML, otherwise the buttons will
                become too big and stuff the layout. */
             if (!inhtml) {
+                if (widget == MOZ_GTK_TOOLBAR_BUTTON) {
+                    gtk_style_context_save(style);
+                    gtk_style_context_add_class(style, "image-button");
+                }
+              
                 moz_gtk_add_style_padding(style, left, top, right, bottom);
+                
+                if (widget == MOZ_GTK_TOOLBAR_BUTTON)
+                    gtk_style_context_restore(style);
             }
 
             moz_gtk_add_style_border(style, left, top, right, bottom);
@@ -3013,6 +3030,25 @@ moz_gtk_get_menu_separator_height(gint *size)
     return MOZ_GTK_SUCCESS;
 }
 
+void
+moz_gtk_get_scale_metrics(GtkOrientation orient, gint* scale_width,
+                          gint* scale_height)
+{
+  gint thumb_length, thumb_height, trough_border;
+  GtkWidget* widget = orient == GTK_ORIENTATION_HORIZONTAL ?
+                      gHScaleWidget : gVScaleWidget;
+  moz_gtk_get_scalethumb_metrics(orient, &thumb_length, &thumb_height);
+  gtk_widget_style_get(widget, "trough-border", &trough_border, NULL);
+
+  if (orient == GTK_ORIENTATION_HORIZONTAL) {
+      *scale_width = thumb_length + trough_border * 2;
+      *scale_height = thumb_height + trough_border * 2;
+  } else {
+      *scale_width = thumb_height + trough_border * 2;
+      *scale_height = thumb_length + trough_border * 2;
+  }
+}
+
 gint
 moz_gtk_get_scalethumb_metrics(GtkOrientation orient, gint* thumb_length, gint* thumb_height)
 {
@@ -3086,6 +3122,7 @@ moz_gtk_widget_paint(GtkThemeWidgetType widget, cairo_t *cr,
 
     switch (widget) {
     case MOZ_GTK_BUTTON:
+    case MOZ_GTK_TOOLBAR_BUTTON:
         if (state->depressed) {
             ensure_toggle_button_widget();
             return moz_gtk_button_paint(cr, rect, state,

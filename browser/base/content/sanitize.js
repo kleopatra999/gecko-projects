@@ -447,26 +447,6 @@ Sanitizer.prototype = {
       }
     },
 
-    passwords: {
-      clear: function ()
-      {
-        TelemetryStopwatch.start("FX_SANITIZE_PASSWORDS");
-        var pwmgr = Components.classes["@mozilla.org/login-manager;1"]
-                              .getService(Components.interfaces.nsILoginManager);
-        // Passwords are timeless, and don't respect the timeSpan setting
-        pwmgr.removeAllLogins();
-        TelemetryStopwatch.finish("FX_SANITIZE_PASSWORDS");
-      },
-
-      get canClear()
-      {
-        var pwmgr = Components.classes["@mozilla.org/login-manager;1"]
-                              .getService(Components.interfaces.nsILoginManager);
-        var count = pwmgr.countLogins("", "", ""); // count all logins
-        return (count > 0);
-      }
-    },
-
     sessions: {
       clear: function ()
       {
@@ -536,9 +516,13 @@ Sanitizer.prototype = {
         sss.clearAll();
 
         // Clear all push notification subscriptions
-        var push = Cc["@mozilla.org/push/NotificationService;1"]
-                    .getService(Ci.nsIPushNotificationService);
-        push.clearAll();
+        try {
+          var push = Cc["@mozilla.org/push/NotificationService;1"]
+                      .getService(Ci.nsIPushNotificationService);
+          push.clearAll();
+        } catch (e) {
+          dump("Web Push may not be available.\n");
+        }
 
         TelemetryStopwatch.finish("FX_SANITIZE_SITESETTINGS");
       },
@@ -785,6 +769,20 @@ Sanitizer._checkAndSanitize = function()
   const prefs = Sanitizer.prefs;
   if (prefs.getBoolPref(Sanitizer.prefShutdown) &&
       !prefs.prefHasUserValue(Sanitizer.prefDidShutdown)) {
+
+    // One time migration to remove support for the clear saved passwords on exit feature.
+    if (!Services.prefs.getBoolPref("privacy.sanitize.migrateClearSavedPwdsOnExit")) {
+      let deprecatedPref = "privacy.clearOnShutdown.passwords";
+      let doUpdate = Services.prefs.prefHasUserValue(deprecatedPref) &&
+                     Services.prefs.getBoolPref(deprecatedPref);
+      if (doUpdate) {
+        Services.logins.removeAllLogins();
+        Services.prefs.setBoolPref("signon.rememberSignons", false);
+      }
+      Services.prefs.clearUserPref(deprecatedPref);
+      Services.prefs.setBoolPref("privacy.sanitize.migrateClearSavedPwdsOnExit", true);
+    }
+
     // this is a shutdown or a startup after an unclean exit
     var s = new Sanitizer();
     s.prefDomain = "privacy.clearOnShutdown.";

@@ -146,21 +146,6 @@ loop.store = loop.store || {};
      * @param {sharedActions.ConnectionFailure} actionData The action data.
      */
     connectionFailure: function(actionData) {
-      /**
-       * XXX This is a workaround for desktop machines that do not have a
-       * camera installed. As we don't yet have device enumeration, when
-       * we do, this can be removed (bug 1138851), and the sdk should handle it.
-       */
-      if (this._isDesktop &&
-          actionData.reason === FAILURE_DETAILS.UNABLE_TO_PUBLISH_MEDIA &&
-          this.getStoreState().videoMuted === false) {
-        // We failed to publish with media, so due to the bug, we try again without
-        // video.
-        this.setStoreState({videoMuted: true});
-        this.sdkDriver.retryPublishWithoutVideo();
-        return;
-      }
-
       this._endSession();
       this.setStoreState({
         callState: CALL_STATES.TERMINATED,
@@ -436,8 +421,9 @@ loop.store = loop.store || {};
      */
     fetchRoomEmailLink: function(actionData) {
       this.mozLoop.rooms.create({
-        roomName: actionData.roomName,
-        roomOwner: actionData.roomOwner,
+        decryptedContext: {
+          roomName: actionData.roomName
+        },
         maxSize: loop.store.MAX_ROOM_CREATION_SIZE,
         expiresIn: loop.store.DEFAULT_EXPIRES_IN
       }, function(err, createdRoomData) {
@@ -547,9 +533,9 @@ loop.store = loop.store || {};
         function(err, result) {
           if (err) {
             console.error("Failed to get outgoing call data", err);
-            var failureReason = "setup";
-            if (err.errno == REST_ERRNOS.USER_UNAVAILABLE) {
-              failureReason = REST_ERRNOS.USER_UNAVAILABLE;
+            var failureReason = FAILURE_DETAILS.UNKNOWN;
+            if (err.errno === REST_ERRNOS.USER_UNAVAILABLE) {
+              failureReason = FAILURE_DETAILS.USER_UNAVAILABLE;
             }
             this.dispatcher.dispatch(
               new sharedActions.ConnectionFailure({reason: failureReason}));

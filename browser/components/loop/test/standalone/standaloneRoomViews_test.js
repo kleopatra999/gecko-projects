@@ -14,8 +14,10 @@ describe("loop.standaloneRoomViews", function() {
   var ROOM_INFO_FAILURES = loop.shared.utils.ROOM_INFO_FAILURES;
   var sharedActions = loop.shared.actions;
   var sharedUtils = loop.shared.utils;
+  var fixtures = document.querySelector("#fixtures");
 
-  var sandbox, dispatcher, activeRoomStore, feedbackStore, dispatch;
+  var sandbox, dispatcher, activeRoomStore, dispatch;
+  var fakeWindow;
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
@@ -28,23 +30,38 @@ describe("loop.standaloneRoomViews", function() {
     var textChatStore = new loop.store.TextChatStore(dispatcher, {
       sdkDriver: {}
     });
-    feedbackStore = new loop.store.FeedbackStore(dispatcher, {
-      feedbackClient: {}
-    });
     loop.store.StoreMixin.register({
       activeRoomStore: activeRoomStore,
-      feedbackStore: feedbackStore,
       textChatStore: textChatStore
     });
 
     sandbox.useFakeTimers();
+    fakeWindow = {
+      close: sandbox.stub(),
+      addEventListener: function() {},
+      document: { addEventListener: function(){} },
+      setTimeout: function(callback) { callback(); }
+    };
+    loop.shared.mixins.setRootObject(fakeWindow);
+
+
+    sandbox.stub(navigator.mozL10n, "get", function(key, args) {
+      switch(key) {
+        case "standalone_title_with_room_name":
+          return args.roomName + " — " + args.clientShortname;
+        default:
+          return key;
+      }
+    });
 
     // Prevents audio request errors in the test console.
     sandbox.useFakeXMLHttpRequest();
   });
 
   afterEach(function() {
+    loop.shared.mixins.setRootObject(window);
     sandbox.restore();
+    React.unmountComponentAtNode(fixtures);
   });
 
   describe("StandaloneRoomHeader", function() {
@@ -69,6 +86,39 @@ describe("loop.standaloneRoomViews", function() {
     });
   });
 
+  describe("StandaloneRoomInfoArea in fixture", function() {
+    it("should dispatch a RecordClick action when the tile is clicked", function(done) {
+      // Point the iframe to a page that will auto-"click"
+      loop.config.tilesIframeUrl = "data:text/html,<script>parent.postMessage('tile-click', '*');</script>";
+
+      // Render the iframe into the fixture to cause it to load
+      React.render(
+        React.createElement(
+          loop.standaloneRoomViews.StandaloneRoomInfoArea, {
+            activeRoomStore: activeRoomStore,
+            dispatcher: dispatcher,
+            isFirefox: true,
+            joinRoom: sandbox.stub(),
+            roomState: ROOM_STATES.JOINED,
+            roomUsed: false
+          }), fixtures);
+
+      // Wait for the iframe to load and trigger a message that should also
+      // cause the RecordClick action
+      window.addEventListener("message", function onMessage() {
+        window.removeEventListener("message", onMessage);
+
+        sinon.assert.calledOnce(dispatcher.dispatch);
+        sinon.assert.calledWithExactly(dispatcher.dispatch,
+          new sharedActions.RecordClick({
+            linkInfo: "Tiles iframe click"
+          }));
+
+        done();
+      });
+    });
+  });
+
   describe("StandaloneRoomView", function() {
     function mountTestComponent() {
       return TestUtils.renderIntoDocument(
@@ -87,6 +137,14 @@ describe("loop.standaloneRoomViews", function() {
     }
 
     describe("#componentWillUpdate", function() {
+      it("should set document.title to roomName and brand name when the READY state is dispatched", function() {
+        activeRoomStore.setStoreState({roomName: "fakeName", roomState: ROOM_STATES.INIT});
+        var view = mountTestComponent();
+        activeRoomStore.setStoreState({roomState: ROOM_STATES.READY});
+
+        expect(fakeWindow.document.title).to.equal("fakeName — clientShortname2");
+      });
+
       it("should dispatch a `SetupStreamElements` action when the MEDIA_WAIT state " +
         "is entered", function() {
           activeRoomStore.setStoreState({roomState: ROOM_STATES.READY});
@@ -173,6 +231,33 @@ describe("loop.standaloneRoomViews", function() {
             expect(view.getDOMNode().querySelector(".empty-room-message"))
               .eql(null);
           });
+      });
+
+      describe("Empty room tile offer", function() {
+        it("should display a waiting room message and tile iframe on JOINED", function() {
+          var DUMMY_TILE_URL = "http://tile/";
+          loop.config.tilesIframeUrl = DUMMY_TILE_URL;
+          activeRoomStore.setStoreState({roomState: ROOM_STATES.JOINED});
+
+          expect(view.getDOMNode().querySelector(".room-waiting-area")).not.eql(null);
+
+          var tile = view.getDOMNode().querySelector(".room-waiting-tile");
+          expect(tile).not.eql(null);
+          expect(tile.src).eql(DUMMY_TILE_URL);
+        });
+
+        it("should dispatch a RecordClick action when the tile support link is clicked", function() {
+          activeRoomStore.setStoreState({roomState: ROOM_STATES.JOINED});
+
+          TestUtils.Simulate.click(view.getDOMNode().querySelector(".room-waiting-area a"));
+
+          sinon.assert.calledOnce(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.RecordClick({
+              linkInfo: "Tiles support link click"
+            }));
+        });
+
       });
 
       describe("Prompt media message", function() {
@@ -435,7 +520,7 @@ describe("loop.standaloneRoomViews", function() {
           "remoteSrcVideoObject is false, mediaConnected is true", function() {
           activeRoomStore.setStoreState({
             roomState: ROOM_STATES.HAS_PARTICIPANTS,
-            remoteSrcVideoObject: false,
+            remoteSrcVideoObject: null,
             remoteVideoEnabled: false,
             mediaConnected: true
           });
@@ -501,38 +586,6 @@ describe("loop.standaloneRoomViews", function() {
         });
       });
 
-      describe("Feedback", function() {
-        beforeEach(function() {
-          activeRoomStore.setStoreState({
-            roomState: ROOM_STATES.ENDED,
-            used: true
-          });
-        });
-
-        it("should display a feedback form when the user leaves the room",
-          function() {
-            expect(view.getDOMNode().querySelector(".faces")).not.eql(null);
-          });
-
-        it("should dispatch a `FeedbackComplete` action after feedback is sent",
-          function() {
-            feedbackStore.setStoreState({feedbackState: FEEDBACK_STATES.SENT});
-
-            sandbox.clock.tick(
-              loop.shared.views.WINDOW_AUTOCLOSE_TIMEOUT_IN_SECONDS * 1000 + 1000);
-
-            sinon.assert.calledOnce(dispatch);
-            sinon.assert.calledWithExactly(dispatch, new sharedActions.FeedbackComplete());
-          });
-
-        it("should NOT display a feedback form if the room has not been used",
-          function() {
-            activeRoomStore.setStoreState({used: false});
-            expect(view.getDOMNode().querySelector(".faces")).eql(null);
-          });
-
-      });
-
       describe("Mute", function() {
         it("should render a local avatar if video is muted",
           function() {
@@ -553,8 +606,8 @@ describe("loop.standaloneRoomViews", function() {
               videoMuted: true
             });
 
-            expect(view.getDOMNode().querySelector(".local .avatar")).
-              not.eql(null);
+            expect(view.getDOMNode().querySelector(".local .avatar")).not.eql(
+              null);
           });
       });
 

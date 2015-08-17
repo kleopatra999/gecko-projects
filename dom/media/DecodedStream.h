@@ -7,82 +7,34 @@
 #ifndef DecodedStream_h_
 #define DecodedStream_h_
 
-#include "nsRefPtr.h"
 #include "nsTArray.h"
 #include "MediaInfo.h"
 
+#include "mozilla/CheckedInt.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/MozPromise.h"
+#include "mozilla/nsRefPtr.h"
+#include "mozilla/ReentrantMonitor.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/gfx/Point.h"
-#include "mozilla/CheckedInt.h"
-#include "mozilla/ReentrantMonitor.h"
-#include "mozilla/Maybe.h"
 
 namespace mozilla {
 
-class AudioData;
-class VideoData;
-class AudioSegment;
-class MediaStream;
-class MediaInputPort;
-class SourceMediaStream;
-class ProcessedMediaStream;
 class DecodedStream;
-class DecodedStreamGraphListener;
-class OutputStreamListener;
-class ReentrantMonitor;
+class DecodedStreamData;
+class MediaData;
+class MediaInputPort;
+class MediaStream;
 class MediaStreamGraph;
+class OutputStreamListener;
+class ProcessedMediaStream;
+class ReentrantMonitor;
 
 template <class T> class MediaQueue;
 
 namespace layers {
 class Image;
 } // namespace layers
-
-/*
- * All MediaStream-related data is protected by the decoder's monitor.
- * We have at most one DecodedStreamDaata per MediaDecoder. Its stream
- * is used as the input for each ProcessedMediaStream created by calls to
- * captureStream(UntilEnded). Seeking creates a new source stream, as does
- * replaying after the input as ended. In the latter case, the new source is
- * not connected to streams created by captureStreamUntilEnded.
- */
-class DecodedStreamData {
-public:
-  DecodedStreamData(SourceMediaStream* aStream, bool aPlaying);
-  ~DecodedStreamData();
-  bool IsFinished() const;
-  int64_t GetPosition() const;
-  void SetPlaying(bool aPlaying);
-
-  /* The following group of fields are protected by the decoder's monitor
-   * and can be read or written on any thread.
-   */
-  // Count of audio frames written to the stream
-  int64_t mAudioFramesWritten;
-  // mNextVideoTime is the end timestamp for the last packet sent to the stream.
-  // Therefore video packets starting at or after this time need to be copied
-  // to the output stream.
-  int64_t mNextVideoTime; // microseconds
-  int64_t mNextAudioTime; // microseconds
-  // The last video image sent to the stream. Useful if we need to replicate
-  // the image.
-  nsRefPtr<layers::Image> mLastVideoImage;
-  gfx::IntSize mLastVideoImageDisplaySize;
-  // This is set to true when the stream is initialized (audio and
-  // video tracks added).
-  bool mStreamInitialized;
-  bool mHaveSentFinish;
-  bool mHaveSentFinishAudio;
-  bool mHaveSentFinishVideo;
-
-  // The decoder is responsible for calling Destroy() on this stream.
-  const nsRefPtr<SourceMediaStream> mStream;
-  nsRefPtr<DecodedStreamGraphListener> mListener;
-  bool mPlaying;
-  // True if we need to send a compensation video frame to ensure the
-  // StreamTime going forward.
-  bool mEOSVideoCompensation;
-};
 
 class OutputStreamData {
 public:
@@ -97,12 +49,16 @@ public:
 class DecodedStream {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(DecodedStream);
 public:
-  DecodedStream(MediaQueue<AudioData>& aAudioQueue,
-                MediaQueue<VideoData>& aVideoQueue);
+  DecodedStream(MediaQueue<MediaData>& aAudioQueue,
+                MediaQueue<MediaData>& aVideoQueue);
 
   // Mimic MDSM::StartAudioThread.
   // Must be called before any calls to SendData().
-  void StartPlayback(int64_t aStartTime, const MediaInfo& aInfo);
+  //
+  // Return a promise which will be resolved when the stream is finished
+  // or rejected if any error.
+  nsRefPtr<GenericPromise> StartPlayback(int64_t aStartTime,
+                                         const MediaInfo& aInfo);
   // Mimic MDSM::StopAudioThread.
   void StopPlayback();
 
@@ -110,16 +66,20 @@ public:
   void RecreateData();
   void Connect(ProcessedMediaStream* aStream, bool aFinishWhenEnded);
   void Remove(MediaStream* aStream);
+
   void SetPlaying(bool aPlaying);
+  void SetVolume(double aVolume);
+  void SetSameOrigin(bool aSameOrigin);
+
   int64_t AudioEndTime() const;
   int64_t GetPosition() const;
   bool IsFinished() const;
+  bool HasConsumers() const;
 
-  // Return true if stream is finished.
-  bool SendData(double aVolume, bool aIsSameOrigin);
+  void SendData();
 
 protected:
-  virtual ~DecodedStream() {}
+  virtual ~DecodedStream();
 
 private:
   ReentrantMonitor& GetReentrantMonitor() const;
@@ -145,11 +105,14 @@ private:
   mutable ReentrantMonitor mMonitor;
 
   bool mPlaying;
+  double mVolume;
+  bool mSameOrigin;
+
   Maybe<int64_t> mStartTime;
   MediaInfo mInfo;
 
-  MediaQueue<AudioData>& mAudioQueue;
-  MediaQueue<VideoData>& mVideoQueue;
+  MediaQueue<MediaData>& mAudioQueue;
+  MediaQueue<MediaData>& mVideoQueue;
 };
 
 } // namespace mozilla

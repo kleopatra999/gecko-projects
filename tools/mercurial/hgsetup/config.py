@@ -183,10 +183,15 @@ class MercurialConfig(object):
 
     def get_bugzilla_credentials(self):
         if 'bugzilla' not in self._c:
-            return None, None
+            return None, None, None, None
 
         b = self._c['bugzilla']
-        return b.get('username', None), b.get('password', None)
+        return (
+            b.get('username', None),
+            b.get('password', None),
+            b.get('userid', None),
+            b.get('cookie', None),
+        )
 
     def set_bugzilla_credentials(self, username, password):
         b = self._c.setdefault('bugzilla', {})

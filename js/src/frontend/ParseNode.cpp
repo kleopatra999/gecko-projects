@@ -272,6 +272,7 @@ PushNodeChildren(ParseNode* pn, NodeStack* stack)
       case PNK_MULASSIGN:
       case PNK_DIVASSIGN:
       case PNK_MODASSIGN:
+      case PNK_POWASSIGN:
       // ...and a few others.
       case PNK_ELEM:
       case PNK_IMPORT_SPEC:
@@ -478,6 +479,7 @@ PushNodeChildren(ParseNode* pn, NodeStack* stack)
       case PNK_STAR:
       case PNK_DIV:
       case PNK_MOD:
+      case PNK_POW:
       case PNK_COMMA:
       case PNK_NEW:
       case PNK_CALL:
@@ -611,7 +613,18 @@ ParseNode::appendOrCreateList(ParseNodeKind kind, JSOp op, ParseNode* left, Pars
         // processing such a tree, exactly implemented that way, would blow the
         // the stack.  We use a list node that uses O(1) stack to represent
         // such operations: (+ a b c).
-        if (left->isKind(kind) && left->isOp(op) && (js_CodeSpec[op].format & JOF_LEFTASSOC)) {
+        //
+        // (**) is right-associative; per spec |a ** b ** c| parses as
+        // (** a (** b c)). But we treat this the same way, creating a list
+        // node: (** a b c). All consumers must understand that this must be
+        // processed with a right fold, whereas the list (+ a b c) must be
+        // processed with a left fold because (+) is left-associative.
+        //
+        if (left->isKind(kind) &&
+            left->isOp(op) &&
+            (js_CodeSpec[op].format & JOF_LEFTASSOC ||
+             (kind == PNK_POW && !left->pn_parens)))
+        {
             ListNode* list = &left->as<ListNode>();
 
             list->append(right);
@@ -669,15 +682,17 @@ Parser<FullParseHandler>::cloneParseTree(ParseNode* opn)
     switch (pn->getArity()) {
 #define NULLCHECK(e)    JS_BEGIN_MACRO if (!(e)) return nullptr; JS_END_MACRO
 
-      case PN_CODE:
-        NULLCHECK(pn->pn_funbox = newFunctionBox(pn, opn->pn_funbox->function(), pc,
+      case PN_CODE: {
+        RootedFunction fun(context, opn->pn_funbox->function());
+        NULLCHECK(pn->pn_funbox = newFunctionBox(pn, fun, pc,
                                                  Directives(/* strict = */ opn->pn_funbox->strict()),
                                                  opn->pn_funbox->generatorKind()));
         NULLCHECK(pn->pn_body = cloneParseTree(opn->pn_body));
-        pn->pn_cookie = opn->pn_cookie;
+        pn->pn_scopecoord = opn->pn_scopecoord;
         pn->pn_dflags = opn->pn_dflags;
         pn->pn_blockid = opn->pn_blockid;
         break;
+      }
 
       case PN_LIST:
         pn->makeEmpty();
@@ -864,7 +879,7 @@ Parser<FullParseHandler>::cloneLeftHandSide(ParseNode* opn)
         pn->pn_expr = nullptr;
         if (opn->isDefn()) {
             /* We copied some definition-specific state into pn. Clear it out. */
-            pn->pn_cookie.makeFree();
+            pn->pn_scopecoord.makeFree();
             pn->pn_dflags &= ~(PND_LEXICAL | PND_BOUND);
             pn->setDefn(false);
 
@@ -1142,8 +1157,12 @@ ObjectBox::trace(JSTracer* trc)
     ObjectBox* box = this;
     while (box) {
         TraceRoot(trc, &box->object, "parser.object");
-        if (box->isFunctionBox())
-            box->asFunctionBox()->bindings.trace(trc);
+        if (box->isFunctionBox()) {
+            FunctionBox* funbox = box->asFunctionBox();
+            funbox->bindings.trace(trc);
+            if (funbox->staticScope_)
+                TraceRoot(trc, &funbox->staticScope_, "funbox-staticScope");
+        }
         box = box->traceLink;
     }
 }

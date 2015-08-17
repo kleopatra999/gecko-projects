@@ -185,6 +185,9 @@ public:
   float GetAudioVolume() const;
   nsresult SetAudioVolume(float aVolume);
 
+  bool GetAudioCaptured() const;
+  nsresult SetAudioCapture(bool aCapture);
+
   virtual void SetServiceWorkersTestingEnabled(bool aEnabled)
   {
     MOZ_ASSERT(IsOuterWindow());
@@ -464,7 +467,11 @@ public:
     // Toggling the fullscreen mode requires trusted context.
     eForFullscreenMode,
     // Fullscreen API is the API provided to untrusted content.
-    eForFullscreenAPI
+    eForFullscreenAPI,
+    // This reason can only be used with exiting fullscreen.
+    // It is otherwise identical to eForFullscreenAPI except it would
+    // suppress the fullscreen transition.
+    eForForceExitFullscreen
   };
 
   /**
@@ -715,7 +722,7 @@ public:
                         const nsAString& aPopupWindowFeatures) = 0;
 
   // Inner windows only.
-  void AddAudioContext(mozilla::dom::AudioContext* aAudioContext);
+  bool AddAudioContext(mozilla::dom::AudioContext* aAudioContext);
   void RemoveAudioContext(mozilla::dom::AudioContext* aAudioContext);
   void MuteAudioContexts();
   void UnmuteAudioContexts();
@@ -821,6 +828,8 @@ protected:
 
   bool                   mAudioMuted;
   float                  mAudioVolume;
+
+  bool                   mAudioCaptured;
 
   // current desktop mode flag.
   bool                   mDesktopModeViewport;
