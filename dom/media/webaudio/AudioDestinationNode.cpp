@@ -243,7 +243,8 @@ public:
   explicit DestinationNodeEngine(AudioDestinationNode* aNode)
     : AudioNodeEngine(aNode)
     , mVolume(1.0f)
-    , mLastInputMuted(false)
+    , mLastInputMuted(true)
+    , mSuspended(false)
   {
     MOZ_ASSERT(aNode);
   }
@@ -255,6 +256,10 @@ public:
   {
     *aOutput = aInput;
     aOutput->mVolume *= mVolume;
+
+    if (mSuspended) {
+      return;
+    }
 
     bool newInputMuted = aInput.IsNull() || aInput.IsMuted();
     if (newInputMuted != mLastInputMuted) {
@@ -274,8 +279,19 @@ public:
     }
   }
 
+  virtual void SetInt32Parameter(uint32_t aIndex, int32_t aParam) override
+  {
+    if (aIndex == SUSPENDED) {
+      mSuspended = !!aParam;
+      if (mSuspended) {
+        mLastInputMuted = true;
+      }
+    }
+  }
+
   enum Parameters {
     VOLUME,
+    SUSPENDED,
   };
 
   virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const override
@@ -286,12 +302,8 @@ public:
 private:
   float mVolume;
   bool mLastInputMuted;
+  bool mSuspended;
 };
-
-static bool UseAudioChannelService()
-{
-  return Preferences::GetBool("media.useAudioChannelService");
-}
 
 static bool UseAudioChannelAPI()
 {
@@ -334,7 +346,11 @@ AudioDestinationNode::AudioDestinationNode(AudioContext* aContext,
                                                              aLength, aSampleRate) :
                             static_cast<AudioNodeEngine*>(new DestinationNodeEngine(this));
 
-  mStream = graph->CreateAudioNodeStream(engine, MediaStreamGraph::EXTERNAL_STREAM);
+  AudioNodeStream::Flags flags =
+    AudioNodeStream::NEED_MAIN_THREAD_CURRENT_TIME |
+    AudioNodeStream::NEED_MAIN_THREAD_FINISHED |
+    AudioNodeStream::EXTERNAL_OUTPUT;
+  mStream = AudioNodeStream::Create(graph, engine, flags);
   mStream->AddMainThreadListener(this);
   mStream->AddAudioOutput(&gWebAudioOutputKey);
 
@@ -452,6 +468,20 @@ AudioDestinationNode::Unmute()
 }
 
 void
+AudioDestinationNode::Suspend()
+{
+  DestroyAudioChannelAgent();
+  SendInt32ParameterToStream(DestinationNodeEngine::SUSPENDED, 1);
+}
+
+void
+AudioDestinationNode::Resume()
+{
+  CreateAudioChannelAgent();
+  SendInt32ParameterToStream(DestinationNodeEngine::SUSPENDED, 0);
+}
+
+void
 AudioDestinationNode::OfflineShutdown()
 {
   MOZ_ASSERT(Context() && Context()->IsOffline(),
@@ -512,7 +542,12 @@ AudioDestinationNode::WindowAudioCaptureChanged()
     return NS_OK;
   }
 
-  bool captured = GetOwner()->GetAudioCaptured();
+  nsCOMPtr<nsPIDOMWindow> ownerWindow = GetOwner();
+  if (!ownerWindow) {
+    return NS_OK;
+  }
+
+  bool captured = ownerWindow->GetAudioCaptured();
 
   if (captured != mCaptured) {
     if (captured) {
@@ -561,10 +596,6 @@ AudioDestinationNode::SetMozAudioChannelType(AudioChannel aValue, ErrorResult& a
 bool
 AudioDestinationNode::CheckAudioChannelPermissions(AudioChannel aValue)
 {
-  if (!UseAudioChannelService()) {
-    return true;
-  }
-
   // Only normal channel doesn't need permission.
   if (aValue == AudioChannel::Normal) {
     return true;
@@ -600,7 +631,7 @@ AudioDestinationNode::CheckAudioChannelPermissions(AudioChannel aValue)
 void
 AudioDestinationNode::CreateAudioChannelAgent()
 {
-  if (mIsOffline || !UseAudioChannelService()) {
+  if (mIsOffline) {
     return;
   }
 
@@ -612,10 +643,6 @@ AudioDestinationNode::CreateAudioChannelAgent()
   mAudioChannelAgent->InitWithWeakCallback(GetOwner(),
                                            static_cast<int32_t>(mAudioChannel),
                                            this);
-
-  // The AudioChannelAgent must start playing immediately in order to avoid
-  // race conditions with mozinterruptbegin/end events.
-  InputMuted(false);
 
   WindowAudioCaptureChanged();
 }
@@ -692,7 +719,10 @@ AudioDestinationNode::InputMuted(bool aMuted)
   MOZ_ASSERT(Context() && !Context()->IsOffline());
 
   if (!mAudioChannelAgent) {
-    return;
+    if (aMuted) {
+      return;
+    }
+    CreateAudioChannelAgent();
   }
 
   if (aMuted) {

@@ -160,6 +160,10 @@ FetchDriver::ContinueFetch(bool aCORSFlag)
       (mRequest->UnsafeRequest() && (!mRequest->HasSimpleMethod() || !mRequest->Headers()->HasOnlySimpleHeaders()))) {
     corsPreflight = true;
   }
+  // The Request constructor should ensure that no-cors requests have simple
+  // method and headers, so we should never attempt to preflight for such
+  // Requests.
+  MOZ_ASSERT_IF(mRequest->Mode() == RequestMode::No_cors, !corsPreflight);
 
   mRequest->SetResponseTainting(InternalRequest::RESPONSETAINT_CORS);
   return HttpFetch(true /* aCORSFlag */, corsPreflight);
@@ -259,37 +263,50 @@ FetchDriver::BasicFetch()
     nsAutoCString method;
     mRequest->GetMethod(method);
     if (method.LowerCaseEqualsASCII("get")) {
-      // Use nsDataHandler directly so that we can extract the content type.
-      // XXX(nsm): Is there a way to acquire the charset without such tight
-      // coupling with the DataHandler? nsIProtocolHandler does not provide
-      // anything similar.
-      nsAutoCString contentType, contentCharset, dataBuffer, hashRef;
-      bool isBase64;
-      rv = nsDataHandler::ParseURI(url,
-                                   contentType,
-                                   contentCharset,
-                                   isBase64,
-                                   dataBuffer,
-                                   hashRef);
-      if (NS_SUCCEEDED(rv)) {
-        ErrorResult result;
-        nsRefPtr<InternalResponse> response = new InternalResponse(200, NS_LITERAL_CSTRING("OK"));
-        if (!contentCharset.IsEmpty()) {
-          contentType.Append(";charset=");
-          contentType.Append(contentCharset);
-        }
+      nsresult rv;
+      nsCOMPtr<nsIProtocolHandler> dataHandler =
+        do_GetService(NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "data", &rv);
 
-        response->Headers()->Append(NS_LITERAL_CSTRING("Content-Type"), contentType, result);
-        if (!result.Failed()) {
-          nsCOMPtr<nsIInputStream> stream;
-          rv = NS_NewCStringInputStream(getter_AddRefs(stream), dataBuffer);
-          if (NS_SUCCEEDED(rv)) {
-            response->SetBody(stream);
-            BeginResponse(response);
-            return SucceedWithResponse();
-          }
-        }
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return FailWithNetworkError();
       }
+
+      nsCOMPtr<nsIChannel> channel;
+      rv = dataHandler->NewChannel(uri, getter_AddRefs(channel));
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return FailWithNetworkError();
+      }
+
+      nsCOMPtr<nsIInputStream> stream;
+      rv = channel->Open(getter_AddRefs(stream));
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return FailWithNetworkError();
+      }
+
+      // nsDataChannel will parse the data URI when it is Open()ed and set the
+      // correct content type and charset.
+      nsAutoCString contentType;
+      if (NS_SUCCEEDED(channel->GetContentType(contentType))) {
+        nsAutoCString charset;
+        if (NS_SUCCEEDED(channel->GetContentCharset(charset)) && !charset.IsEmpty()) {
+          contentType.AppendLiteral(";charset=");
+          contentType.Append(charset);
+        }
+      } else {
+        NS_WARNING("Could not get content type from data channel");
+      }
+
+      nsRefPtr<InternalResponse> response = new InternalResponse(200, NS_LITERAL_CSTRING("OK"));
+      ErrorResult result;
+      response->Headers()->Append(NS_LITERAL_CSTRING("Content-Type"), contentType, result);
+      if (NS_WARN_IF(result.Failed())) {
+        FailWithNetworkError();
+        return result.StealNSResult();
+      }
+
+      response->SetBody(stream);
+      BeginResponse(response);
+      return SucceedWithResponse();
     }
 
     return FailWithNetworkError();
@@ -541,6 +558,8 @@ FetchDriver::HttpFetch(bool aCORSFlag, bool aCORSPreflightFlag, bool aAuthentica
   // unsafeHeaders so they can be verified against the response's
   // "Access-Control-Allow-Headers" header.
   if (aCORSPreflightFlag) {
+    MOZ_ASSERT(mRequest->Mode() != RequestMode::No_cors,
+               "FetchDriver::ContinueFetch() should ensure that the request is not no-cors");
     nsCOMPtr<nsIChannel> preflightChannel;
     nsAutoTArray<nsCString, 5> unsafeHeaders;
     mRequest->Headers()->GetUnsafeHeaders(unsafeHeaders);

@@ -141,15 +141,33 @@ TextEventDispatcher::DispatchEvent(nsIWidget* aWidget,
                                    WidgetGUIEvent& aEvent,
                                    nsEventStatus& aStatus)
 {
+  MOZ_ASSERT(!aEvent.AsInputEvent(), "Use DispatchInputEvent()");
+
+  nsRefPtr<TextEventDispatcher> kungFuDeathGrip(this);
+  nsCOMPtr<nsIWidget> widget(aWidget);
+  mDispatchingEvent++;
+  nsresult rv = widget->DispatchEvent(&aEvent, aStatus);
+  mDispatchingEvent--;
+  return rv;
+}
+
+nsresult
+TextEventDispatcher::DispatchInputEvent(nsIWidget* aWidget,
+                                        WidgetInputEvent& aEvent,
+                                        nsEventStatus& aStatus,
+                                        DispatchTo aDispatchTo)
+{
   nsRefPtr<TextEventDispatcher> kungFuDeathGrip(this);
   nsCOMPtr<nsIWidget> widget(aWidget);
   mDispatchingEvent++;
 
+  // If the event is dispatched via nsIWidget::DispatchInputEvent(), it
+  // sends the event to the parent process first since APZ needs to handle it
+  // first.  However, some callers (e.g., keyboard apps on B2G and tests
+  // expecting synchronous dispatch) don't want this to do that.
   nsresult rv = NS_OK;
-  if (aEvent.AsInputEvent() &&
-      (!aEvent.mFlags.mIsSynthesizedForTests || gfxPrefs::TestEventsAsyncEnabled()))
-  {
-    aStatus = widget->DispatchInputEvent(aEvent.AsInputEvent());
+  if (aDispatchTo == eDispatchToParentProcess) {
+    aStatus = widget->DispatchInputEvent(&aEvent);
   } else {
     rv = widget->DispatchEvent(&aEvent, aStatus);
   }
@@ -250,8 +268,8 @@ TextEventDispatcher::CommitComposition(nsEventStatus& aStatus,
   // End current composition and make this free for other IMEs.
   mIsComposing = false;
 
-  uint32_t message = aCommitString ? NS_COMPOSITION_COMMIT :
-                                     NS_COMPOSITION_COMMIT_AS_IS;
+  EventMessage message = aCommitString ? NS_COMPOSITION_COMMIT :
+                                         NS_COMPOSITION_COMMIT_AS_IS;
   WidgetCompositionEvent compositionCommitEvent(true, message, widget);
   InitEvent(compositionCommitEvent);
   if (message == NS_COMPOSITION_COMMIT) {
@@ -284,18 +302,21 @@ TextEventDispatcher::NotifyIME(const IMENotification& aIMENotification)
 
 bool
 TextEventDispatcher::DispatchKeyboardEvent(
-                       uint32_t aMessage,
+                       EventMessage aMessage,
                        const WidgetKeyboardEvent& aKeyboardEvent,
-                       nsEventStatus& aStatus)
+                       nsEventStatus& aStatus,
+                       DispatchTo aDispatchTo)
 {
-  return DispatchKeyboardEventInternal(aMessage, aKeyboardEvent, aStatus);
+  return DispatchKeyboardEventInternal(aMessage, aKeyboardEvent, aStatus,
+                                       aDispatchTo);
 }
 
 bool
 TextEventDispatcher::DispatchKeyboardEventInternal(
-                       uint32_t aMessage,
+                       EventMessage aMessage,
                        const WidgetKeyboardEvent& aKeyboardEvent,
                        nsEventStatus& aStatus,
+                       DispatchTo aDispatchTo,
                        uint32_t aIndexOfKeypress)
 {
   MOZ_ASSERT(aMessage == NS_KEY_DOWN || aMessage == NS_KEY_UP ||
@@ -374,14 +395,15 @@ TextEventDispatcher::DispatchKeyboardEventInternal(
   keyEvent.mPluginEvent.Clear();
   // TODO: Manage mUniqueId here.
 
-  DispatchEvent(mWidget, keyEvent, aStatus);
+  DispatchInputEvent(mWidget, keyEvent, aStatus, aDispatchTo);
   return true;
 }
 
 bool
 TextEventDispatcher::MaybeDispatchKeypressEvents(
                        const WidgetKeyboardEvent& aKeyboardEvent,
-                       nsEventStatus& aStatus)
+                       nsEventStatus& aStatus,
+                       DispatchTo aDispatchTo)
 {
   // If the key event was consumed, keypress event shouldn't be fired.
   if (aStatus == nsEventStatus_eConsumeNoDefault) {
@@ -401,7 +423,7 @@ TextEventDispatcher::MaybeDispatchKeypressEvents(
   for (size_t i = 0; i < keypressCount; i++) {
     aStatus = nsEventStatus_eIgnore;
     if (!DispatchKeyboardEventInternal(NS_KEY_PRESS, aKeyboardEvent,
-                                       aStatus, i)) {
+                                       aStatus, aDispatchTo, i)) {
       // The widget must have been gone.
       break;
     }

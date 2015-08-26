@@ -54,8 +54,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
                                   "resource://gre/modules/LightweightThemeManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Pocket",
                                   "resource:///modules/Pocket.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "NewTabURL",
-                                  "resource:///modules/NewTabURL.jsm");
 
 // Can't use XPCOMUtils for these because the scripts try to define the variables
 // on window, and so the defineProperty inside defineLazyGetter fails.
@@ -1255,6 +1253,7 @@ var gBrowserInit = {
     Services.obs.addObserver(gXPInstallObserver, "addon-install-disabled", false);
     Services.obs.addObserver(gXPInstallObserver, "addon-install-started", false);
     Services.obs.addObserver(gXPInstallObserver, "addon-install-blocked", false);
+    Services.obs.addObserver(gXPInstallObserver, "addon-install-origin-blocked", false);
     Services.obs.addObserver(gXPInstallObserver, "addon-install-failed", false);
     Services.obs.addObserver(gXPInstallObserver, "addon-install-confirmation", false);
     Services.obs.addObserver(gXPInstallObserver, "addon-install-complete", false);
@@ -1296,7 +1295,6 @@ var gBrowserInit = {
 
     var homeButton = document.getElementById("home-button");
     gHomeButton.updateTooltip(homeButton);
-    gHomeButton.updatePersonalToolbarStyle(homeButton);
 
     let safeMode = document.getElementById("helpSafeMode");
     if (Services.appinfo.inSafeMode) {
@@ -1572,6 +1570,7 @@ var gBrowserInit = {
       Services.obs.removeObserver(gXPInstallObserver, "addon-install-disabled");
       Services.obs.removeObserver(gXPInstallObserver, "addon-install-started");
       Services.obs.removeObserver(gXPInstallObserver, "addon-install-blocked");
+      Services.obs.removeObserver(gXPInstallObserver, "addon-install-origin-blocked");
       Services.obs.removeObserver(gXPInstallObserver, "addon-install-failed");
       Services.obs.removeObserver(gXPInstallObserver, "addon-install-confirmation");
       Services.obs.removeObserver(gXPInstallObserver, "addon-install-complete");
@@ -2414,7 +2413,7 @@ function BrowserPageInfo(doc, initialTab, imageElement, frameOuterWindowID) {
               frameOuterWindowID: frameOuterWindowID};
   var windows = Services.wm.getEnumerator("Browser:page-info");
 
-  var documentURL = doc ? doc.location : window.gBrowser.selectedBrowser.contentDocumentAsCPOW.location;
+  var documentURL = doc ? doc.location : window.gBrowser.selectedBrowser.currentURI.spec;
 
   // Check for windows matching the url
   while (windows.hasMoreElements()) {
@@ -5388,17 +5387,6 @@ var gHomeButton = {
 
     return url;
   },
-
-  updatePersonalToolbarStyle: function (homeButton)
-  {
-    if (!homeButton)
-      homeButton = document.getElementById("home-button");
-    if (homeButton)
-      homeButton.className = homeButton.parentNode.id == "PersonalToolbar"
-                               || homeButton.parentNode.parentNode.id == "PersonalToolbar" ?
-                             homeButton.className.replace("toolbarbutton-1", "bookmark-item") :
-                             homeButton.className.replace("bookmark-item", "toolbarbutton-1");
-  },
 };
 
 const nodeToTooltipMap = {
@@ -7065,10 +7053,10 @@ var gIdentityHandler = {
     mixedcontent = mixedcontent.join(" ");
 
     // We have no specific flags for weak ciphers (yet). If a connection is
-    // broken and we can't detect any mixed active content loaded then it's
-    // a weak cipher.
+    // broken and we can't detect any mixed content loaded then it's a weak
+    // cipher.
     let ciphers = "";
-    if (isBroken && !isMixedActiveContentLoaded) {
+    if (isBroken && !isMixedActiveContentLoaded && !isMixedPassiveContentLoaded) {
       ciphers = "weak";
     }
 
@@ -7091,6 +7079,7 @@ var gIdentityHandler = {
       updateAttribute(element, "connection", connection);
       updateAttribute(element, "ciphers", ciphers);
       updateAttribute(element, "mixedcontent", mixedcontent);
+      updateAttribute(element, "isbroken", isBroken);
     }
 
     // Initialize the optional strings to empty values
@@ -7577,6 +7566,16 @@ var TabContextMenu = {
     // Hide "Move to Group" if it's a pinned tab.
     document.getElementById("context_tabViewMenu").hidden =
       (this.contextTab.pinned || !TabView.firstUseExperienced);
+
+    // Adjust the state of the toggle mute menu item.
+    let toggleMute = document.getElementById("context_toggleMuteTab");
+    if (this.contextTab.hasAttribute("muted")) {
+      toggleMute.label = gNavigatorBundle.getString("unmuteTab.label");
+      toggleMute.accessKey = gNavigatorBundle.getString("unmuteTab.accesskey");
+    } else {
+      toggleMute.label = gNavigatorBundle.getString("muteTab.label");
+      toggleMute.accessKey = gNavigatorBundle.getString("muteTab.accesskey");
+    }
   }
 };
 

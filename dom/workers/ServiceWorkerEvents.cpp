@@ -395,14 +395,34 @@ ExtendableEvent::ExtendableEvent(EventTarget* aOwner)
 }
 
 void
-ExtendableEvent::WaitUntil(Promise& aPromise)
+ExtendableEvent::WaitUntil(Promise& aPromise, ErrorResult& aRv)
 {
   MOZ_ASSERT(!NS_IsMainThread());
 
-  // Only first caller counts.
-  if (EventPhase() == AT_TARGET && !mPromise) {
-    mPromise = &aPromise;
+  if (EventPhase() == nsIDOMEvent::NONE) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return;
   }
+
+  mPromises.AppendElement(&aPromise);
+}
+
+already_AddRefed<Promise>
+ExtendableEvent::GetPromise()
+{
+  WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
+  MOZ_ASSERT(worker);
+  worker->AssertIsOnWorkerThread();
+
+  GlobalObject global(worker->GetJSContext(), worker->GlobalScope()->GetGlobalJSObject());
+
+  ErrorResult result;
+  nsRefPtr<Promise> p = Promise::All(global, Move(mPromises), result);
+  if (NS_WARN_IF(result.Failed())) {
+    return nullptr;
+  }
+
+  return p.forget();
 }
 
 NS_IMPL_ADDREF_INHERITED(ExtendableEvent, Event)
@@ -411,7 +431,7 @@ NS_IMPL_RELEASE_INHERITED(ExtendableEvent, Event)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(ExtendableEvent)
 NS_INTERFACE_MAP_END_INHERITING(Event)
 
-NS_IMPL_CYCLE_COLLECTION_INHERITED(ExtendableEvent, Event, mPromise)
+NS_IMPL_CYCLE_COLLECTION_INHERITED(ExtendableEvent, Event, mPromises)
 
 #ifndef MOZ_SIMPLEPUSH
 

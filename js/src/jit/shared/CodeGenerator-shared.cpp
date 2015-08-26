@@ -55,6 +55,7 @@ CodeGeneratorShared::CodeGeneratorShared(MIRGenerator* gen, LIRGraph* graph, Mac
     lastOsiPointOffset_(0),
     safepoints_(graph->totalSlotCount(), (gen->info().nargs() + 1) * sizeof(Value)),
     returnLabel_(),
+    stubSpace_(),
     nativeToBytecodeMap_(nullptr),
     nativeToBytecodeMapSize_(0),
     nativeToBytecodeTableOffset_(0),
@@ -1451,7 +1452,7 @@ CodeGeneratorShared::visitOutOfLineTruncateSlow(OutOfLineTruncateSlow* ool)
     }
 #endif
 
-    masm.setupUnalignedABICall(1, dest);
+    masm.setupUnalignedABICall(dest);
     masm.passABIArg(src, MoveOp::DOUBLE);
     if (gen->compilingAsmJS())
         masm.callWithABI(AsmJSImm_ToInt32);
@@ -1574,7 +1575,7 @@ CodeGeneratorShared::jumpToBlock(MBasicBlock* mir)
         // Note: the backedge is initially a jump to the next instruction.
         // It will be patched to the target block's label during link().
         RepatchLabel rejoin;
-        CodeOffsetJump backedge = masm.backedgeJump(&rejoin);
+        CodeOffsetJump backedge = masm.backedgeJump(&rejoin, mir->lir()->label());
         masm.bind(&rejoin);
 
         masm.propagateOOM(patchableBackedges_.append(PatchableBackedgeInfo(backedge, mir->lir()->label(), oolEntry)));
@@ -1595,7 +1596,7 @@ CodeGeneratorShared::jumpToBlock(MBasicBlock* mir, Assembler::Condition cond)
         // Note: the backedge is initially a jump to the next instruction.
         // It will be patched to the target block's label during link().
         RepatchLabel rejoin;
-        CodeOffsetJump backedge = masm.jumpWithPatch(&rejoin, cond);
+        CodeOffsetJump backedge = masm.jumpWithPatch(&rejoin, cond, mir->lir()->label());
         masm.bind(&rejoin);
 
         masm.propagateOOM(patchableBackedges_.append(PatchableBackedgeInfo(backedge, mir->lir()->label(), oolEntry)));

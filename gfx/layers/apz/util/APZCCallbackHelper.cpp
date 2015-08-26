@@ -487,7 +487,7 @@ APZCCallbackHelper::DispatchWidgetEvent(WidgetGUIEvent& aEvent)
 }
 
 nsEventStatus
-APZCCallbackHelper::DispatchSynthesizedMouseEvent(uint32_t aMsg,
+APZCCallbackHelper::DispatchSynthesizedMouseEvent(EventMessage aMsg,
                                                   uint64_t aTime,
                                                   const LayoutDevicePoint& aRefPoint,
                                                   Modifiers aModifiers,
@@ -809,6 +809,27 @@ APZCCallbackHelper::NotifyFlushComplete()
   MOZ_ASSERT(observerService);
   observerService->NotifyObservers(nullptr, "apz-repaints-flushed", nullptr);
 }
+
+static int32_t sActiveSuppressDisplayport = 0;
+
+void
+APZCCallbackHelper::SuppressDisplayport(const bool& aEnabled)
+{
+  if (aEnabled) {
+    sActiveSuppressDisplayport++;
+  } else {
+    sActiveSuppressDisplayport--;
+  }
+
+  MOZ_ASSERT(sActiveSuppressDisplayport >= 0);
+}
+
+bool
+APZCCallbackHelper::IsDisplayportSuppressed()
+{
+  return sActiveSuppressDisplayport > 0;
+}
+
 
 } // namespace layers
 } // namespace mozilla

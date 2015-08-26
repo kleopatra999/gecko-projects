@@ -2581,12 +2581,22 @@ TSFTextStore::RecordCompositionUpdateAction()
   }
 
   // The caret position has to be collapsed.
-  LONG caretPosition = currentSel.MaxOffset();
-  caretPosition -= mComposition.mStart;
-  TextRange caretRange;
-  caretRange.mStartOffset = caretRange.mEndOffset = uint32_t(caretPosition);
-  caretRange.mRangeType = NS_TEXTRANGE_CARETPOSITION;
-  action->mRanges->AppendElement(caretRange);
+  uint32_t caretPosition =
+    static_cast<uint32_t>(currentSel.MaxOffset() - mComposition.mStart);
+
+  // If caret is in the target clause and it doesn't have specific style,
+  // the target clause will be painted as normal selection range.  Since caret
+  // shouldn't be in selection range on Windows, we shouldn't append caret
+  // range in such case.
+  const TextRange* targetClause = action->mRanges->GetTargetClause();
+  if (!targetClause || targetClause->mRangeStyle.IsDefined() ||
+      caretPosition < targetClause->mStartOffset ||
+      caretPosition > targetClause->mEndOffset) {
+    TextRange caretRange;
+    caretRange.mStartOffset = caretRange.mEndOffset = caretPosition;
+    caretRange.mRangeType = NS_TEXTRANGE_CARETPOSITION;
+    action->mRanges->AppendElement(caretRange);
+  }
 
   action->mIncomplete = false;
 
@@ -4498,7 +4508,7 @@ TSFTextStore::NotifyTSFOfTextChange(const TS_TEXTCHANGE& aTextChange)
 nsresult
 TSFTextStore::OnSelectionChangeInternal(const IMENotification& aIMENotification)
 {
-  const IMENotification::SelectionChangeData& selectionChangeData =
+  const IMENotification::SelectionChangeDataBase& selectionChangeData =
     aIMENotification.mSelectionChangeData;
   MOZ_LOG(sTextStoreLog, LogLevel::Debug,
          ("TSF: 0x%p   TSFTextStore::OnSelectionChangeInternal("

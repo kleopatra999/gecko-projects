@@ -70,6 +70,33 @@ function* test_mute_tab(tab, icon, expectMuted) {
   return mutedPromise;
 }
 
+function get_tab_attributes(tab) {
+  const ss = Cc["@mozilla.org/browser/sessionstore;1"].getService(Ci.nsISessionStore);
+  let {attributes} = JSON.parse(ss.getTabState(tab));
+  return attributes;
+}
+
+function* test_muting_using_menu(tab, expectMuted) {
+  // Show the popup menu
+  let contextMenu = document.getElementById("tabContextMenu");
+  let popupShownPromise = BrowserTestUtils.waitForEvent(contextMenu, "popupshown");
+  EventUtils.synthesizeMouseAtCenter(tab, {type: "contextmenu", button: 2});
+  yield popupShownPromise;
+
+  // Check the menu
+  let expectedLabel = expectMuted ? "Unmute Tab" : "Mute Tab";
+  let toggleMute = document.getElementById("context_toggleMuteTab");
+  is(toggleMute.label, expectedLabel, "Correct label expected");
+  is(toggleMute.accessKey, "M", "Correct accessKey expected");
+
+  // Click on the menu and wait for the tab to be muted.
+  let mutedPromise = get_wait_for_mute_promise(tab, !expectMuted);
+  let popupHiddenPromise = BrowserTestUtils.waitForEvent(contextMenu, "popuphidden");
+  EventUtils.synthesizeMouseAtCenter(toggleMute, {});
+  yield popupHiddenPromise;
+  yield mutedPromise;
+}
+
 function* test_playing_icon_on_tab(tab, browser, isPinned) {
   let icon = document.getAnonymousElementByAttribute(tab, "anonid",
                                                      isPinned ? "overlay-icon" : "soundplaying-icon");
@@ -83,11 +110,17 @@ function* test_playing_icon_on_tab(tab, browser, isPinned) {
 
   yield test_tooltip(icon, "Mute tab");
 
+  ok(!("muted" in get_tab_attributes(tab)), "No muted attribute should be persisted");
+
   yield test_mute_tab(tab, icon, true);
+
+  ok("muted" in get_tab_attributes(tab), "Muted attribute should be persisted");
 
   yield test_tooltip(icon, "Unmute tab");
 
   yield test_mute_tab(tab, icon, false);
+
+  ok(!("muted" in get_tab_attributes(tab)), "No muted attribute should be persisted");
 
   yield test_tooltip(icon, "Mute tab");
 
@@ -108,6 +141,12 @@ function* test_playing_icon_on_tab(tab, browser, isPinned) {
 
   ok(!tab.hasAttribute("muted") &&
      !tab.hasAttribute("soundplaying"), "Tab should not be be muted or playing");
+
+  // Make sure it's possible to mute using the context menu.
+  yield test_muting_using_menu(tab, false);
+
+  // Make sure it's possible to unmute using the context menu.
+  yield test_muting_using_menu(tab, true);
 }
 
 function* test_swapped_browser(oldTab, newBrowser, isPlaying) {
@@ -160,9 +199,6 @@ function* test_browser_swapping(tab, browser) {
     url: "about:blank",
   }, function*(newBrowser) {
     yield test_swapped_browser(tab, newBrowser, true)
-
-    // FIXME: this is needed to work around bug 1190903.
-    yield new Promise(resolve => setTimeout(resolve, 3000));
 
     // Now, test swapping with a muted but not playing tab.
     // Note that the tab remains muted, so we only need to pause playback.
@@ -351,7 +387,6 @@ function* test_on_browser(browser) {
 add_task(function*() {
   yield new Promise((resolve) => {
     SpecialPowers.pushPrefEnv({"set": [
-                                ["media.useAudioChannelService", true],
                                 ["browser.tabs.showAudioPlayingIcon", true],
                               ]}, resolve);
   });

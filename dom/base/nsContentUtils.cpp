@@ -254,6 +254,7 @@ bool nsContentUtils::sInitialized = false;
 bool nsContentUtils::sIsFullScreenApiEnabled = false;
 bool nsContentUtils::sTrustedFullScreenOnly = true;
 bool nsContentUtils::sIsCutCopyAllowed = true;
+bool nsContentUtils::sIsFrameTimingPrefEnabled = false;
 bool nsContentUtils::sIsPerformanceTimingEnabled = false;
 bool nsContentUtils::sIsResourceTimingEnabled = false;
 bool nsContentUtils::sIsUserTimingLoggingEnabled = false;
@@ -536,6 +537,9 @@ nsContentUtils::Init()
   Preferences::AddBoolVarCache(&sIsUserTimingLoggingEnabled,
                                "dom.performance.enable_user_timing_logging", false);
 
+  Preferences::AddBoolVarCache(&sIsFrameTimingPrefEnabled,
+                               "dom.enable_frame_timing", true);
+
   Preferences::AddBoolVarCache(&sIsExperimentalAutocompleteEnabled,
                                "dom.forms.autocomplete.experimental", false);
 
@@ -662,15 +666,15 @@ nsContentUtils::InitializeModifierStrings()
 }
 
 // Because of SVG/SMIL we have several atoms mapped to the same
-// id, but we can rely on ID_TO_EVENT to map id to only one atom.
+// id, but we can rely on MESSAGE_TO_EVENT to map id to only one atom.
 static bool
 ShouldAddEventToStringEventTable(const EventNameMapping& aMapping)
 {
-  switch(aMapping.mId) {
-#define ID_TO_EVENT(name_, id_, type_, struct_) \
-  case id_: return nsGkAtoms::on##name_ == aMapping.mAtom;
+  switch(aMapping.mMessage) {
+#define MESSAGE_TO_EVENT(name_, message_, type_, struct_) \
+  case message_: return nsGkAtoms::on##name_ == aMapping.mAtom;
 #include "mozilla/EventNameList.h"
-#undef ID_TO_EVENT
+#undef MESSAGE_TO_EVENT
   default:
     break;
   }
@@ -683,8 +687,8 @@ nsContentUtils::InitializeEventTable() {
   NS_ASSERTION(!sStringEventTable, "EventTable already initialized!");
 
   static const EventNameMapping eventArray[] = {
-#define EVENT(name_,  _id, _type, _class)          \
-    { nsGkAtoms::on##name_, _id, _type, _class },
+#define EVENT(name_,  _message, _type, _class)          \
+    { nsGkAtoms::on##name_, _type, _message, _class },
 #define WINDOW_ONLY_EVENT EVENT
 #define NON_IDL_EVENT EVENT
 #include "mozilla/EventNameList.h"
@@ -720,9 +724,9 @@ nsContentUtils::InitializeTouchEventTable()
   if (!sEventTableInitialized && sAtomEventTable && sStringEventTable) {
     sEventTableInitialized = true;
     static const EventNameMapping touchEventArray[] = {
-#define EVENT(name_,  _id, _type, _class)
-#define TOUCH_EVENT(name_,  _id, _type, _class)      \
-      { nsGkAtoms::on##name_, _id, _type, _class },
+#define EVENT(name_,  _message, _type, _class)
+#define TOUCH_EVENT(name_,  _message, _type, _class)      \
+      { nsGkAtoms::on##name_, _type, _message, _class },
 #include "mozilla/EventNameList.h"
 #undef TOUCH_EVENT
 #undef EVENT
@@ -1336,6 +1340,7 @@ nsContentUtils::ParseSandboxAttributeToFlags(const nsAttrValue* sandboxAttr)
                | SANDBOXED_SCRIPTS
                | SANDBOXED_AUTOMATIC_FEATURES
                | SANDBOXED_POINTER_LOCK
+               | SANDBOXED_ORIENTATION_LOCK
                | SANDBOXED_DOMAIN;
 
 // Macro for updating the flag according to the keywords
@@ -1347,6 +1352,7 @@ nsContentUtils::ParseSandboxAttributeToFlags(const nsAttrValue* sandboxAttr)
   IF_KEYWORD(allowscripts, SANDBOXED_SCRIPTS | SANDBOXED_AUTOMATIC_FEATURES)
   IF_KEYWORD(allowtopnavigation, SANDBOXED_TOPLEVEL_NAVIGATION)
   IF_KEYWORD(allowpointerlock, SANDBOXED_POINTER_LOCK)
+  IF_KEYWORD(alloworientationlock, SANDBOXED_ORIENTATION_LOCK)
   IF_KEYWORD(allowpopups, SANDBOXED_AUXILIARY_NAVIGATION)
 
   return out;
@@ -1729,7 +1735,7 @@ nsContentUtils::GetOfflineAppManifest(nsIDocument *aDocument, nsIURI **aURI)
 
   // Manifest URIs can't have fragment identifiers.
   if (manifestSpec.IsEmpty() ||
-      manifestSpec.FindChar('#') != kNotFound) {
+      manifestSpec.Contains('#')) {
     return;
   }
 
@@ -3649,13 +3655,13 @@ nsContentUtils::IsEventAttributeName(nsIAtom* aName, int32_t aType)
 }
 
 // static
-uint32_t
-nsContentUtils::GetEventId(nsIAtom* aName)
+EventMessage
+nsContentUtils::GetEventMessage(nsIAtom* aName)
 {
   if (aName) {
     EventNameMapping mapping;
     if (sAtomEventTable->Get(aName, &mapping)) {
-      return mapping.mId;
+      return mapping.mMessage;
     }
   }
 
@@ -3674,14 +3680,15 @@ nsContentUtils::GetEventClassID(const nsAString& aName)
 }
 
 nsIAtom*
-nsContentUtils::GetEventIdAndAtom(const nsAString& aName,
-                                  mozilla::EventClassID aEventClassID,
-                                  uint32_t* aEventID)
+nsContentUtils::GetEventMessageAndAtom(const nsAString& aName,
+                                       mozilla::EventClassID aEventClassID,
+                                       EventMessage* aEventMessage)
 {
   EventNameMapping mapping;
   if (sStringEventTable->Get(aName, &mapping)) {
-    *aEventID = mapping.mEventClassID == aEventClassID ? mapping.mId :
-                                                         NS_USER_DEFINED_EVENT;
+    *aEventMessage =
+      mapping.mEventClassID == aEventClassID ? mapping.mMessage :
+                                               NS_USER_DEFINED_EVENT;
     return mapping.mAtom;
   }
 
@@ -3694,11 +3701,11 @@ nsContentUtils::GetEventIdAndAtom(const nsAString& aName,
     }
   }
 
-  *aEventID = NS_USER_DEFINED_EVENT;
+  *aEventMessage = NS_USER_DEFINED_EVENT;
   nsCOMPtr<nsIAtom> atom = do_GetAtom(NS_LITERAL_STRING("on") + aName);
   sUserDefinedEvents->AppendObject(atom);
   mapping.mAtom = atom;
-  mapping.mId = NS_USER_DEFINED_EVENT;
+  mapping.mMessage = NS_USER_DEFINED_EVENT;
   mapping.mType = EventNameType_None;
   mapping.mEventClassID = eBasicEventClass;
   sStringEventTable->Put(aName, mapping);
@@ -5440,8 +5447,8 @@ nsContentUtils::SetDataTransferInEvent(WidgetDragEvent* aDragEvent)
   // For draggesture and dragstart events, the data transfer object is
   // created before the event fires, so it should already be set. For other
   // drag events, get the object from the drag session.
-  NS_ASSERTION(aDragEvent->message != NS_DRAGDROP_GESTURE &&
-               aDragEvent->message != NS_DRAGDROP_START,
+  NS_ASSERTION(aDragEvent->mMessage != NS_DRAGDROP_GESTURE &&
+               aDragEvent->mMessage != NS_DRAGDROP_START,
                "draggesture event created without a dataTransfer");
 
   nsCOMPtr<nsIDragSession> dragSession = GetDragSession();
@@ -5460,20 +5467,22 @@ nsContentUtils::SetDataTransferInEvent(WidgetDragEvent* aDragEvent)
     // means, for instance calling the drag service directly, or a drag
     // from another application. In either case, a new dataTransfer should
     // be created that reflects the data.
-    initialDataTransfer = new DataTransfer(aDragEvent->target, aDragEvent->message, true, -1);
+    initialDataTransfer =
+      new DataTransfer(aDragEvent->target, aDragEvent->mMessage, true, -1);
 
     // now set it in the drag session so we don't need to create it again
     dragSession->SetDataTransfer(initialDataTransfer);
   }
 
   bool isCrossDomainSubFrameDrop = false;
-  if (aDragEvent->message == NS_DRAGDROP_DROP ||
-      aDragEvent->message == NS_DRAGDROP_DRAGDROP) {
+  if (aDragEvent->mMessage == NS_DRAGDROP_DROP ||
+      aDragEvent->mMessage == NS_DRAGDROP_DRAGDROP) {
     isCrossDomainSubFrameDrop = CheckForSubFrameDrop(dragSession, aDragEvent);
   }
 
   // each event should use a clone of the original dataTransfer.
-  initialDataTransfer->Clone(aDragEvent->target, aDragEvent->message, aDragEvent->userCancelled,
+  initialDataTransfer->Clone(aDragEvent->target, aDragEvent->mMessage,
+                             aDragEvent->userCancelled,
                              isCrossDomainSubFrameDrop,
                              getter_AddRefs(aDragEvent->dataTransfer));
   NS_ENSURE_TRUE(aDragEvent->dataTransfer, NS_ERROR_OUT_OF_MEMORY);
@@ -5481,16 +5490,16 @@ nsContentUtils::SetDataTransferInEvent(WidgetDragEvent* aDragEvent)
   // for the dragenter and dragover events, initialize the drop effect
   // from the drop action, which platform specific widget code sets before
   // the event is fired based on the keyboard state.
-  if (aDragEvent->message == NS_DRAGDROP_ENTER ||
-      aDragEvent->message == NS_DRAGDROP_OVER) {
+  if (aDragEvent->mMessage == NS_DRAGDROP_ENTER ||
+      aDragEvent->mMessage == NS_DRAGDROP_OVER) {
     uint32_t action, effectAllowed;
     dragSession->GetDragAction(&action);
     aDragEvent->dataTransfer->GetEffectAllowedInt(&effectAllowed);
     aDragEvent->dataTransfer->SetDropEffectInt(FilterDropEffect(action, effectAllowed));
   }
-  else if (aDragEvent->message == NS_DRAGDROP_DROP ||
-           aDragEvent->message == NS_DRAGDROP_DRAGDROP ||
-           aDragEvent->message == NS_DRAGDROP_END) {
+  else if (aDragEvent->mMessage == NS_DRAGDROP_DROP ||
+           aDragEvent->mMessage == NS_DRAGDROP_DRAGDROP ||
+           aDragEvent->mMessage == NS_DRAGDROP_END) {
     // For the drop and dragend events, set the drop effect based on the
     // last value that the dropEffect had. This will have been set in
     // EventStateManager::PostHandleEvent for the last dragenter or
@@ -6576,6 +6585,20 @@ nsContentUtils::IsPDFJSEnabled()
    return NS_SUCCEEDED(rv) && canConvert;
 }
 
+bool
+nsContentUtils::IsSWFPlayerEnabled()
+{
+   nsCOMPtr<nsIStreamConverterService> convServ =
+     do_GetService("@mozilla.org/streamConverters;1");
+   nsresult rv = NS_ERROR_FAILURE;
+   bool canConvert = false;
+   if (convServ) {
+     rv = convServ->CanConvert("application/x-shockwave-flash",
+                               "text/html", &canConvert);
+   }
+   return NS_SUCCEEDED(rv) && canConvert;
+}
+
 already_AddRefed<nsIDocumentLoaderFactory>
 nsContentUtils::FindInternalContentViewer(const nsACString& aType,
                                           ContentViewerType* aLoaderType)
@@ -6758,6 +6781,13 @@ nsContentUtils::IsCutCopyAllowed()
   return (!IsCutCopyRestricted() &&
           EventStateManager::IsHandlingUserInput()) ||
          IsCallerChrome();
+}
+
+/* static */
+bool
+nsContentUtils::IsFrameTimingEnabled()
+{
+  return sIsFrameTimingPrefEnabled;
 }
 
 /* static */
@@ -7677,7 +7707,7 @@ nsContentUtils::SendKeyEvent(nsIWidget* aWidget,
   if (!aWidget)
     return NS_ERROR_FAILURE;
 
-  int32_t msg;
+  EventMessage msg;
   if (aType.EqualsLiteral("keydown"))
     msg = NS_KEY_DOWN;
   else if (aType.EqualsLiteral("keyup"))
@@ -7790,7 +7820,7 @@ nsContentUtils::SendMouseEvent(nsCOMPtr<nsIPresShell> aPresShell,
   if (!widget)
     return NS_ERROR_FAILURE;
 
-  int32_t msg;
+  EventMessage msg;
   bool contextMenuKey = false;
   if (aType.EqualsLiteral("mousedown"))
     msg = NS_MOUSE_BUTTON_DOWN;

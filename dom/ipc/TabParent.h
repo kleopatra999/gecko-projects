@@ -179,7 +179,7 @@ public:
                                                bool* aConsumedByIME) override;
     virtual bool RecvNotifyIMEPositionChange(const ContentCache& aContentCache,
                                              const widget::IMENotification& aEventMessage) override;
-    virtual bool RecvOnEventNeedingAckHandled(const uint32_t& aMessage) override;
+    virtual bool RecvOnEventNeedingAckHandled(const EventMessage& aMessage) override;
     virtual bool RecvEndIMEComposition(const bool& aCancel,
                                        bool* aNoCompositionEvent,
                                        nsString* aComposition) override;
@@ -482,7 +482,7 @@ protected:
 
     nsIntRect mRect;
     ScreenIntSize mDimensions;
-    ScreenOrientation mOrientation;
+    ScreenOrientationInternal mOrientation;
     float mDPI;
     CSSToLayoutDeviceScale mDefaultScale;
     bool mUpdatedDimensions;
@@ -609,6 +609,8 @@ private:
     nsRefPtr<nsIPresShell> mPresShellWithRefreshListener;
 
     bool mHasContentOpener;
+
+    DebugOnly<int32_t> mActiveSupressDisplayportCount;
 private:
     // This is used when APZ needs to find the TabParent associated with a layer
     // to dispatch events.

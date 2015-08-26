@@ -63,6 +63,7 @@
 #include "mozilla/dom/PromiseDebugging.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/StructuredClone.h"
+#include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/WebCryptoCommon.h"
 #include "mozilla/dom/WorkerBinding.h"
 #include "mozilla/dom/WorkerDebuggerGlobalScopeBinding.h"
@@ -1146,7 +1147,7 @@ public:
     nsresult rv =
       event->InitMessageEvent(NS_LITERAL_STRING("message"),
                               false /* non-bubbling */,
-                              true /* cancelable */,
+                              false /* non-cancelable */,
                               messageData,
                               EmptyString(),
                               EmptyString(),
@@ -1365,6 +1366,7 @@ class ReportErrorRunnable final : public WorkerRunnable
   uint32_t mColumnNumber;
   uint32_t mFlags;
   uint32_t mErrorNumber;
+  JSExnType mExnType;
 
 public:
   // aWorkerPrivate is the worker thread we're on (or the main thread, if null)
@@ -1376,7 +1378,7 @@ public:
               const nsString& aMessage, const nsString& aFilename,
               const nsString& aLine, uint32_t aLineNumber,
               uint32_t aColumnNumber, uint32_t aFlags,
-              uint32_t aErrorNumber, uint64_t aInnerWindowId)
+              uint32_t aErrorNumber, JSExnType aExnType, uint64_t aInnerWindowId)
   {
     if (aWorkerPrivate) {
       aWorkerPrivate->AssertIsOnWorkerThread();
@@ -1481,7 +1483,7 @@ public:
       nsRefPtr<ReportErrorRunnable> runnable =
         new ReportErrorRunnable(aWorkerPrivate, aMessage, aFilename, aLine,
                                 aLineNumber, aColumnNumber, aFlags,
-                                aErrorNumber);
+                                aErrorNumber, aExnType);
       return runnable->Dispatch(aCx);
     }
 
@@ -1495,11 +1497,12 @@ private:
   ReportErrorRunnable(WorkerPrivate* aWorkerPrivate, const nsString& aMessage,
                       const nsString& aFilename, const nsString& aLine,
                       uint32_t aLineNumber, uint32_t aColumnNumber,
-                      uint32_t aFlags, uint32_t aErrorNumber)
+                      uint32_t aFlags, uint32_t aErrorNumber,
+                      JSExnType aExnType)
   : WorkerRunnable(aWorkerPrivate, ParentThreadUnchangedBusyCount),
     mMessage(aMessage), mFilename(aFilename), mLine(aLine),
     mLineNumber(aLineNumber), mColumnNumber(aColumnNumber), mFlags(aFlags),
-    mErrorNumber(aErrorNumber)
+    mErrorNumber(aErrorNumber), mExnType(aExnType)
   { }
 
   virtual void
@@ -1543,7 +1546,7 @@ private:
                                           aWorkerPrivate->ScriptURL(),
                                           mMessage,
                                           mFilename, mLine, mLineNumber,
-                                          mColumnNumber, mFlags);
+                                          mColumnNumber, mFlags, mExnType);
           if (handled) {
             return true;
           }
@@ -1572,7 +1575,7 @@ private:
 
     return ReportError(aCx, parent, fireAtScope, aWorkerPrivate, mMessage,
                        mFilename, mLine, mLineNumber, mColumnNumber, mFlags,
-                       mErrorNumber, innerWindowId);
+                       mErrorNumber, mExnType, innerWindowId);
   }
 };
 
@@ -2395,8 +2398,9 @@ InterfaceRequestor::GetAnyLiveTabChild()
     nsCOMPtr<nsITabChild> tabChild =
       do_QueryReferent(mTabChildList.LastElement());
 
-    // Does this tab child still exist?  If so, return it.  We are done.
-    if (tabChild) {
+    // Does this tab child still exist?  If so, return it.  We are done.  If the
+    // PBrowser actor is no longer useful, don't bother returning this tab.
+    if (tabChild && !static_cast<TabChild*>(tabChild.get())->IsDestroyed()) {
       return tabChild.forget();
     }
 
@@ -6381,6 +6385,7 @@ WorkerPrivate::ReportError(JSContext* aCx, const char* aMessage,
 
   nsString message, filename, line;
   uint32_t lineNumber, columnNumber, flags, errorNumber;
+  JSExnType exnType = JSEXN_ERR;
 
   if (aReport) {
     // ErrorEvent objects don't have a |name| field the way ES |Error| objects
@@ -6402,6 +6407,8 @@ WorkerPrivate::ReportError(JSContext* aCx, const char* aMessage,
     columnNumber = aReport->uctokenptr - aReport->uclinebuf;
     flags = aReport->flags;
     errorNumber = aReport->errorNumber;
+    MOZ_ASSERT(aReport->exnType >= JSEXN_NONE && aReport->exnType < JSEXN_LIMIT);
+    exnType = JSExnType(aReport->exnType);
   }
   else {
     lineNumber = columnNumber = errorNumber = 0;
@@ -6423,7 +6430,7 @@ WorkerPrivate::ReportError(JSContext* aCx, const char* aMessage,
 
   if (!ReportErrorRunnable::ReportError(aCx, this, fireAtScope, nullptr, message,
                                         filename, line, lineNumber,
-                                        columnNumber, flags, errorNumber, 0)) {
+                                        columnNumber, flags, errorNumber, exnType, 0)) {
     JS_ReportPendingException(aCx);
   }
 

@@ -53,7 +53,7 @@ using struct nsRect from "nsRect.h";
 using class mozilla::WidgetSelectionEvent from "ipc/nsGUIEventIPC.h";
 using class mozilla::WidgetTouchEvent from "ipc/nsGUIEventIPC.h";
 using struct mozilla::dom::RemoteDOMEvent from "mozilla/dom/TabMessageUtils.h";
-using mozilla::dom::ScreenOrientation from "mozilla/dom/ScreenOrientation.h";
+using mozilla::dom::ScreenOrientationInternal from "mozilla/dom/ScreenOrientation.h";
 using struct mozilla::layers::TextureFactoryIdentifier from "mozilla/layers/CompositorTypes.h";
 using mozilla::CSSPoint from "Units.h";
 using mozilla::CSSToScreenScale from "Units.h";
@@ -65,6 +65,7 @@ using mozilla::layers::TouchBehaviorFlags from "mozilla/layers/APZUtils.h";
 using nsIWidget::TouchPointerState from "nsIWidget.h";
 using struct LookAndFeelInt from "mozilla/widget/WidgetMessageUtils.h";
 using struct mozilla::OwningSerializedStructuredCloneBuffer from "ipc/IPCMessageUtils.h";
+using mozilla::EventMessage from "mozilla/EventForwards.h";
 using nsEventStatus from "mozilla/EventForwards.h";
 
 namespace mozilla {
@@ -276,7 +277,7 @@ parent:
      *
      * message      The message value of the handled event.
      */
-    prio(urgent) async OnEventNeedingAckHandled(uint32_t message);
+    prio(urgent) async OnEventNeedingAckHandled(EventMessage message);
 
     /**
      * Tells chrome to start plugin IME.  If this results in a string getting
@@ -578,7 +579,8 @@ child:
 
     CacheFileDescriptor(nsString path, FileDescriptor fd);
 
-    UpdateDimensions(CSSRect rect, CSSSize size, ScreenOrientation orientation,
+    UpdateDimensions(CSSRect rect, CSSSize size,
+                     ScreenOrientationInternal orientation,
                      LayoutDeviceIntPoint chromeDisp) compressall;
 
     UpdateFrame(FrameMetrics frame);
@@ -707,6 +709,17 @@ child:
      * Tell the child to update its docShell's active state.
      */
     SetIsDocShellActive(bool aIsActive);
+
+    /**
+     * Notify the child that it shouldn't paint the offscreen displayport.
+     * This is useful to speed up interactive operations over async
+     * scrolling performance like resize, tabswitch, pageload.
+     *
+     * Each enable call must be matched with a disable call. The child
+     * will remain in the suppress mode as long as there's
+     * a single unmatched call.
+     */
+    async SuppressDisplayport(bool aEnabled);
 
     /**
      * Navigate by key (Tab/Shift+Tab/F6/Shift+f6).

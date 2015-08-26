@@ -122,6 +122,7 @@
 #include "nsPrintfCString.h"
 #include "mozilla/Preferences.h"
 #include "nsISound.h"
+#include "SystemTimeConverter.h"
 #include "WinTaskbar.h"
 #include "WinUtils.h"
 #include "WidgetUtils.h"
@@ -247,8 +248,28 @@ int             nsWindow::sTrimOnMinimize         = 2;
 
 TriStateBool nsWindow::sHasBogusPopupsDropShadowOnMultiMonitor = TRI_UNKNOWN;
 
-DWORD           nsWindow::sFirstEventTime = 0;
-TimeStamp       nsWindow::sFirstEventTimeStamp = TimeStamp();
+namespace mozilla {
+
+class CurrentWindowsTimeGetter {
+public:
+  DWORD GetCurrentTime() const
+  {
+    return ::GetTickCount();
+  }
+
+  void GetTimeAsyncForPossibleBackwardsSkew(const TimeStamp& aNow)
+  {
+    // FIXME: Get time async
+  }
+};
+
+} // namespace mozilla
+
+static SystemTimeConverter<DWORD>&
+TimeConverter() {
+  static SystemTimeConverter<DWORD> timeConverterSingleton;
+  return timeConverterSingleton;
+}
 
 /**************************************************************
  *
@@ -297,10 +318,6 @@ static bool gIsPointerEventsEnabled = false;
 // to DOM target conversions for these, we cache responses for a given
 // coordinate this many milliseconds:
 #define HITTEST_CACHE_LIFETIME_MS 50
-
-// Times attached to messages wrap when they overflow
-static const DWORD kEventTimeRange = std::numeric_limits<DWORD>::max();
-static const DWORD kEventTimeHalfRange = kEventTimeRange / 2;
 
 
 /**************************************************************
@@ -3864,7 +3881,7 @@ NS_IMETHODIMP nsWindow::DispatchEvent(WidgetGUIEvent* event,
   return NS_OK;
 }
 
-bool nsWindow::DispatchStandardEvent(uint32_t aMsg)
+bool nsWindow::DispatchStandardEvent(EventMessage aMsg)
 {
   WidgetGUIEvent event(true, aMsg, this);
   InitEvent(event);
@@ -3974,9 +3991,10 @@ bool nsWindow::DispatchPluginEvent(UINT aMessage,
 }
 
 // Deal with all sort of mouse event
-bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
-                                    LPARAM lParam, bool aIsContextMenuKey,
-                                    int16_t aButton, uint16_t aInputSource)
+bool
+nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
+                             LPARAM lParam, bool aIsContextMenuKey,
+                             int16_t aButton, uint16_t aInputSource)
 {
   bool result = false;
 
@@ -3986,7 +4004,7 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
     return result;
   }
 
-  if (mTouchWindow && WinUtils::GetIsMouseFromTouch(aEventType)) {
+  if (mTouchWindow && WinUtils::GetIsMouseFromTouch(aEventMessage)) {
     // If mTouchWindow is true, then we must have APZ enabled and be
     // feeding it raw touch events. In that case we don't need to
     // send touch-generated mouse events to content.
@@ -4004,7 +4022,7 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
     InkCollector::sInkCollector->SetTarget(mWnd);
   }
 
-  switch (aEventType) {
+  switch (aEventMessage) {
     case NS_MOUSE_BUTTON_DOWN:
       CaptureMouse(true);
       break;
@@ -4027,10 +4045,10 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
   eventPoint.x = GET_X_LPARAM(lParam);
   eventPoint.y = GET_Y_LPARAM(lParam);
 
-  WidgetMouseEvent event(true, aEventType, this, WidgetMouseEvent::eReal,
+  WidgetMouseEvent event(true, aEventMessage, this, WidgetMouseEvent::eReal,
                          aIsContextMenuKey ? WidgetMouseEvent::eContextMenuKey :
                                              WidgetMouseEvent::eNormal);
-  if (aEventType == NS_CONTEXTMENU && aIsContextMenuKey) {
+  if (aEventMessage == NS_CONTEXTMENU && aIsContextMenuKey) {
     nsIntPoint zero(0, 0);
     InitEvent(event, &zero);
   } else {
@@ -4048,8 +4066,7 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
   nsIntPoint mpScreen = eventPoint + WidgetToScreenOffsetUntyped();
 
   // Suppress mouse moves caused by widget creation
-  if (aEventType == NS_MOUSE_MOVE) 
-  {
+  if (aEventMessage == NS_MOUSE_MOVE) {
     if ((sLastMouseMovePoint.x == mpScreen.x) && (sLastMouseMovePoint.y == mpScreen.y))
       return result;
     sLastMouseMovePoint.x = mpScreen.x;
@@ -4079,36 +4096,43 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
   // We're going to time double-clicks from mouse *up* to next mouse *down*
   LONG curMsgTime = ::GetMessageTime();
 
-  if (aEventType == NS_MOUSE_DOUBLECLICK) {
-    event.message = NS_MOUSE_BUTTON_DOWN;
-    event.button = aButton;
-    sLastClickCount = 2;
-    sLastMouseDownTime = curMsgTime;
-  }
-  else if (aEventType == NS_MOUSE_BUTTON_UP) {
-    // remember when this happened for the next mouse down
-    sLastMousePoint.x = eventPoint.x;
-    sLastMousePoint.y = eventPoint.y;
-    sLastMouseButton = eventButton;
-  }
-  else if (aEventType == NS_MOUSE_BUTTON_DOWN) {
-    // now look to see if we want to convert this to a double- or triple-click
-    if (((curMsgTime - sLastMouseDownTime) < (LONG)::GetDoubleClickTime()) && insideMovementThreshold &&
-        eventButton == sLastMouseButton) {
-      sLastClickCount ++;
-    } else {
-      // reset the click count, to count *this* click
-      sLastClickCount = 1;
-    }
-    // Set last Click time on MouseDown only
-    sLastMouseDownTime = curMsgTime;
-  }
-  else if (aEventType == NS_MOUSE_MOVE && !insideMovementThreshold) {
-    sLastClickCount = 0;
-  }
-  else if (aEventType == NS_MOUSE_EXIT_WIDGET) {
-    event.exit = IsTopLevelMouseExit(mWnd) ?
-                   WidgetMouseEvent::eTopLevel : WidgetMouseEvent::eChild;
+  switch (aEventMessage) {
+    case NS_MOUSE_DOUBLECLICK:
+      event.mMessage = NS_MOUSE_BUTTON_DOWN;
+      event.button = aButton;
+      sLastClickCount = 2;
+      sLastMouseDownTime = curMsgTime;
+      break;
+    case NS_MOUSE_BUTTON_UP:
+      // remember when this happened for the next mouse down
+      sLastMousePoint.x = eventPoint.x;
+      sLastMousePoint.y = eventPoint.y;
+      sLastMouseButton = eventButton;
+      break;
+    case NS_MOUSE_BUTTON_DOWN:
+      // now look to see if we want to convert this to a double- or triple-click
+      if (((curMsgTime - sLastMouseDownTime) < (LONG)::GetDoubleClickTime()) &&
+          insideMovementThreshold &&
+          eventButton == sLastMouseButton) {
+        sLastClickCount ++;
+      } else {
+        // reset the click count, to count *this* click
+        sLastClickCount = 1;
+      }
+      // Set last Click time on MouseDown only
+      sLastMouseDownTime = curMsgTime;
+      break;
+    case NS_MOUSE_MOVE:
+      if (!insideMovementThreshold) {
+        sLastClickCount = 0;
+      }
+      break;
+    case NS_MOUSE_EXIT_WIDGET:
+      event.exit = IsTopLevelMouseExit(mWnd) ?
+                     WidgetMouseEvent::eTopLevel : WidgetMouseEvent::eChild;
+      break;
+    default:
+      break;
   }
   event.clickCount = sLastClickCount;
 
@@ -4119,8 +4143,7 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
 
   NPEvent pluginEvent;
 
-  switch (aEventType)
-  {
+  switch (aEventMessage) {
     case NS_MOUSE_BUTTON_DOWN:
       switch (aButton) {
         case WidgetMouseEvent::eLeftButton:
@@ -4186,7 +4209,7 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
   if (mWidgetListener) {
     if (nsToolkit::gMouseTrailer)
       nsToolkit::gMouseTrailer->Disable();
-    if (aEventType == NS_MOUSE_MOVE) {
+    if (aEventMessage == NS_MOUSE_MOVE) {
       if (nsToolkit::gMouseTrailer && !sIsInMouseCapture) {
         nsToolkit::gMouseTrailer->SetMouseTrailerWindow(mWnd);
       }
@@ -4212,7 +4235,7 @@ bool nsWindow::DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
           }
         }
       }
-    } else if (aEventType == NS_MOUSE_EXIT_WIDGET) {
+    } else if (aEventMessage == NS_MOUSE_EXIT_WIDGET) {
       if (sCurrentWindow == this) {
         sCurrentWindow = nullptr;
       }
@@ -5857,102 +5880,11 @@ nsWindow::ClientMarginHitTestPoint(int32_t mx, int32_t my)
 TimeStamp
 nsWindow::GetMessageTimeStamp(LONG aEventTime)
 {
-  // Conversion from native event time to timestamp is complicated by the fact
-  // that native event time wraps. Also, for consistency's sake we avoid calling
-  // ::GetTickCount() each time and for performance reasons we only use the
-  // TimeStamp::NowLoRes except when recording the first event's time.
-
-  // We currently require the event time to be passed in. This is an interim
-  // measure to avoid calling GetMessageTime twice for each event--once when
-  // storing the time directly and once when converting to a timestamp.
-  //
-  // Once we no longer store both a time and a timestamp on each event we can
-  // perform the call to GetMessageTime here instead.
   DWORD eventTime = static_cast<DWORD>(aEventTime);
 
-  // Record first event time
-  if (sFirstEventTimeStamp.IsNull()) {
-    nsWindow::UpdateFirstEventTime(eventTime);
-  }
-  TimeStamp roughlyNow = TimeStamp::NowLoRes();
-
-  // If the event time is before the first event time there are two
-  // possibilities:
-  //
-  //   a) Event time has wrapped
-  //   b) The initial events were not delivered strictly in time order
-  //
-  // I'm not sure if (b) ever happens but even if it doesn't currently occur,
-  // it could come about if we change the way we fetch events.
-  //
-  // We can tell we have (b) if the event time is a little bit before the first
-  // event (i.e. less than half the range) and the timestamp is only a little
-  // bit past the first event timestamp (again less than half the range).
-  // In that case we should adjust the first event time so it really is the
-  // first event time.
-  if (eventTime < sFirstEventTime &&
-      sFirstEventTime - eventTime < kEventTimeHalfRange &&
-      roughlyNow - sFirstEventTimeStamp <
-        TimeDuration::FromMilliseconds(kEventTimeHalfRange)) {
-    UpdateFirstEventTime(eventTime);
-  }
-
-  double timeSinceFirstEvent =
-    sFirstEventTime <= eventTime
-      ? eventTime - sFirstEventTime
-      : static_cast<double>(kEventTimeRange) + eventTime - sFirstEventTime;
-  TimeStamp eventTimeStamp =
-    sFirstEventTimeStamp + TimeDuration::FromMilliseconds(timeSinceFirstEvent);
-
-  // Event time may have wrapped several times since we recorded the first
-  // event time (it wraps every ~50 days) so we extend eventTimeStamp as
-  // needed.
-  double timesWrapped =
-    (roughlyNow - sFirstEventTimeStamp).ToMilliseconds() / kEventTimeRange;
-  int32_t cyclesToAdd = static_cast<int32_t>(timesWrapped); // floor
-
-  // There is some imprecision in the above calculation since we are using
-  // TimeStamp::NowLoRes and sFirstEventTime and sFirstEventTimeStamp may not
-  // be *exactly* the same moment. It is possible we think that time
-  // has *just* wrapped based on comparing timestamps, but actually the
-  // event time is *just about* to wrap; or vice versa.
-  // In the following, we detect this situation and adjust cyclesToAdd as
-  // necessary.
-  double intervalFraction = fmod(timesWrapped, 1.0);
-
-  // If our rough calculation of how many times we've wrapped based on comparing
-  // timestamps says we've just wrapped (specifically, less 10% past the wrap
-  // point), but the event time is just before the wrap point (again, within
-  // 10%), then we need to reduce the number of wraps by 1.
-  if (intervalFraction < 0.1 && timeSinceFirstEvent > kEventTimeRange * 0.9) {
-    cyclesToAdd--;
-  // Likewise, if our rough calculation says we've just wrapped but actually the
-  // event time is just after the wrap point, we need to add an extra wrap.
-  } else if (intervalFraction > 0.9 &&
-             timeSinceFirstEvent < kEventTimeRange * 0.1) {
-    cyclesToAdd++;
-  }
-
-  if (cyclesToAdd > 0) {
-    eventTimeStamp +=
-      TimeDuration::FromMilliseconds(kEventTimeRange * cyclesToAdd);
-  }
-
-  return eventTimeStamp;
-}
-
-void
-nsWindow::UpdateFirstEventTime(DWORD aEventTime)
-{
-  sFirstEventTime = aEventTime;
-  DWORD currentTime = ::GetTickCount();
-  TimeStamp currentTimeStamp = TimeStamp::Now();
-  double timeSinceFirstEvent =
-    aEventTime <= currentTime
-      ? currentTime - aEventTime
-      : static_cast<double>(kEventTimeRange) + currentTime - aEventTime;
-  sFirstEventTimeStamp =
-    currentTimeStamp - TimeDuration::FromMilliseconds(timeSinceFirstEvent);
+  CurrentWindowsTimeGetter getCurrentTime;
+  return TimeConverter().GetTimeStampFromSystemTime(aEventTime,
+                                                    getCurrentTime);
 }
 
 void nsWindow::PostSleepWakeNotification(const bool aIsSleepMode)
@@ -6535,7 +6467,7 @@ bool nsWindow::OnGesture(WPARAM wParam, LPARAM lParam)
   }
 
   // Other gestures translate into simple gesture events:
-  WidgetSimpleGestureEvent event(true, 0, this);
+  WidgetSimpleGestureEvent event(true, NS_EVENT_NULL, this);
   if ( !mGesture.ProcessGestureMessage(mWnd, wParam, lParam, event) ) {
     return false; // fall through to DefWndProc
   }

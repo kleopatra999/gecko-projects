@@ -48,9 +48,11 @@ EXTRA_PP_JS_MODULES += [
     'InterAppCommService.jsm',
     'OperatorApps.jsm',
     'ScriptPreloader.jsm',
-    'TrustedHostedAppsUtils.jsm',
     'Webapps.jsm',
 ]
+
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']
 
 FAIL_ON_WARNINGS = True
 

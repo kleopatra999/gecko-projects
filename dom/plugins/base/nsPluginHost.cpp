@@ -1101,18 +1101,6 @@ nsPluginHost::GetBlocklistStateForType(const nsACString &aMimeType,
 }
 
 NS_IMETHODIMP
-nsPluginHost::IsPluginOOP(const nsACString& aMimeType,
-                          bool* aResult)
-{
-  nsPluginTag* tag = FindNativePluginForType(aMimeType, true);
-  if (!tag) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-  *aResult = nsNPAPIPlugin::RunPluginOOP(tag);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsPluginHost::GetPermissionStringForType(const nsACString &aMimeType,
                                          uint32_t aExcludeFlags,
                                          nsACString &aPermissionString)
@@ -1342,35 +1330,11 @@ nsPluginHost::FindNativePluginForExtension(const nsACString & aExtension,
   return preferredPlugin;
 }
 
-static nsresult CreateNPAPIPlugin(nsPluginTag *aPluginTag,
-                                  nsNPAPIPlugin **aOutNPAPIPlugin)
-{
-  // If this is an in-process plugin we'll need to load it here if we haven't already.
-  if (!nsNPAPIPlugin::RunPluginOOP(aPluginTag)) {
-    if (aPluginTag->mFullPath.IsEmpty())
-      return NS_ERROR_FAILURE;
-    nsCOMPtr<nsIFile> file = do_CreateInstance("@mozilla.org/file/local;1");
-    file->InitWithPath(NS_ConvertUTF8toUTF16(aPluginTag->mFullPath));
-    nsPluginFile pluginFile(file);
-    PRLibrary* pluginLibrary = nullptr;
-
-    if (NS_FAILED(pluginFile.LoadPlugin(&pluginLibrary)) || !pluginLibrary)
-      return NS_ERROR_FAILURE;
-
-    aPluginTag->mLibrary = pluginLibrary;
-  }
-
-  nsresult rv;
-  rv = nsNPAPIPlugin::CreatePlugin(aPluginTag, aOutNPAPIPlugin);
-
-  return rv;
-}
-
 nsresult nsPluginHost::EnsurePluginLoaded(nsPluginTag* aPluginTag)
 {
   nsRefPtr<nsNPAPIPlugin> plugin = aPluginTag->mPlugin;
   if (!plugin) {
-    nsresult rv = CreateNPAPIPlugin(aPluginTag, getter_AddRefs(plugin));
+    nsresult rv = nsNPAPIPlugin::CreatePlugin(aPluginTag, getter_AddRefs(plugin));
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -1632,58 +1596,6 @@ nsPluginHost::UnregisterFakePlugin(const nsACString& aHandlerURI)
   }
 
   return NS_OK;
-}
-
-NS_IMETHODIMP
-nsPluginHost::RegisterPlayPreviewMimeType(const nsACString& mimeType,
-                                          bool ignoreCTP,
-                                          const nsACString& redirectURL,
-                                          const nsACString& whitelist)
-{
-  nsAutoCString mt(mimeType);
-  nsAutoCString url(redirectURL);
-  if (url.Length() == 0) {
-    // using default play preview iframe URL, if redirectURL is not specified
-    url.AssignLiteral("data:application/x-moz-playpreview;,");
-    url.Append(mimeType);
-  }
-  nsAutoCString wl(whitelist);
-
-  nsRefPtr<nsPluginPlayPreviewInfo> playPreview =
-    new nsPluginPlayPreviewInfo(mt.get(), ignoreCTP, url.get(), wl.get());
-  mPlayPreviewMimeTypes.AppendElement(playPreview);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsPluginHost::UnregisterPlayPreviewMimeType(const nsACString& mimeType)
-{
-  nsAutoCString mimeTypeToRemove(mimeType);
-  for (uint32_t i = mPlayPreviewMimeTypes.Length(); i > 0; i--) {
-    nsRefPtr<nsPluginPlayPreviewInfo> pp = mPlayPreviewMimeTypes[i - 1];
-    if (PL_strcasecmp(pp.get()->mMimeType.get(), mimeTypeToRemove.get()) == 0) {
-      mPlayPreviewMimeTypes.RemoveElementAt(i - 1);
-      break;
-    }
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsPluginHost::GetPlayPreviewInfo(const nsACString& mimeType,
-                                 nsIPluginPlayPreviewInfo** aResult)
-{
-  nsAutoCString mimeTypeToFind(mimeType);
-  for (uint32_t i = 0; i < mPlayPreviewMimeTypes.Length(); i++) {
-    nsRefPtr<nsPluginPlayPreviewInfo> pp = mPlayPreviewMimeTypes[i];
-    if (PL_strcasecmp(pp.get()->mMimeType.get(), mimeTypeToFind.get()) == 0) {
-      *aResult = new nsPluginPlayPreviewInfo(pp.get());
-      NS_ADDREF(*aResult);
-      return NS_OK;
-    }
-  }
-  *aResult = nullptr;
-  return NS_ERROR_NOT_AVAILABLE;
 }
 
 // FIXME-jsplugins Is this method actually needed?
@@ -2320,14 +2232,6 @@ nsresult nsPluginHost::ScanPluginsDirectory(nsIFile *pluginsDir,
       *aPluginsChanged = true;
     }
 
-    // Avoid adding different versions of the same plugin if they are running
-    // in-process, otherwise we risk undefined behaviour.
-    if (!nsNPAPIPlugin::RunPluginOOP(pluginTag)) {
-      if (HaveSamePlugin(pluginTag)) {
-        continue;
-      }
-    }
-
     // Don't add the same plugin again if it hasn't changed
     if (nsPluginTag* duplicate = FirstPluginWithPath(pluginTag->mFullPath)) {
       if (pluginTag->mLastModifiedTime == duplicate->mLastModifiedTime) {
@@ -2737,12 +2641,6 @@ nsPluginHost::FindPluginsForContent(uint32_t aPluginEpoch,
     /// FIXME-jsplugins - We need to cleanup the various plugintag classes
     /// to be more sane and avoid this dance
     nsPluginTag *tag = static_cast<nsPluginTag *>(basetag.get());
-
-    if (!nsNPAPIPlugin::RunPluginOOP(tag)) {
-      // Don't expose non-OOP plugins to content processes since we have no way
-      // to bridge them over.
-      continue;
-    }
 
     aPlugins->AppendElement(PluginTag(tag->mId,
                                       tag->Name(),
@@ -3564,7 +3462,6 @@ nsPluginHost::AddHeadersToChannel(const char *aHeadersData,
       return rv;
     }
   }
-  return rv;
 }
 
 nsresult

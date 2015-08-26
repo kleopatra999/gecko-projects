@@ -95,7 +95,6 @@ APZCTreeManager::APZCTreeManager()
       mTreeLock("APZCTreeLock"),
       mHitResultForInputBlock(HitNothing),
       mRetainedTouchIdentifier(-1),
-      mTouchCount(0),
       mApzcTreeLog("apzctree")
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -716,39 +715,22 @@ APZCTreeManager::ProcessTouchInput(MultiTouchInput& aInput,
                                    uint64_t* aOutInputBlockId)
 {
   if (aInput.mType == MultiTouchInput::MULTITOUCH_START) {
-    // If we are in an overscrolled state and a second finger goes down,
+    // If we are panned into overscroll and a second finger goes down,
     // ignore that second touch point completely. The touch-start for it is
     // dropped completely; subsequent touch events until the touch-end for it
     // will have this touch point filtered out.
-    if (mApzcForInputBlock && BuildOverscrollHandoffChain(mApzcForInputBlock)->HasOverscrolledApzc()) {
+    // (By contrast, if we're in overscroll but not panning, such as after
+    // putting two fingers down during an overscroll animation, we process the
+    // second touch and proceed to pinch.)
+    if (mApzcForInputBlock && BuildOverscrollHandoffChain(mApzcForInputBlock)->HasApzcPannedIntoOverscroll()) {
       if (mRetainedTouchIdentifier == -1) {
         mRetainedTouchIdentifier = mApzcForInputBlock->GetLastTouchIdentifier();
       }
       return nsEventStatus_eConsumeNoDefault;
     }
 
-    // NS_TOUCH_START event contains all active touches of the current
-    // session thus resetting mTouchCount.
-    mTouchCount = aInput.mTouches.Length();
     mHitResultForInputBlock = HitNothing;
-    nsRefPtr<AsyncPanZoomController> apzc = GetTouchInputBlockAPZC(aInput, &mHitResultForInputBlock);
-    // XXX the following check assumes mHitResultForInputBlock == HitLayer
-    // (and that mApzcForInputBlock was the confirmed target of the previous
-    // input block). Eventually it would be better to move this into InputQueue
-    // and have it auto-generated when we start processing events in a new
-    // event block.
-    if (apzc != mApzcForInputBlock) {
-      // If we're moving to a different APZC as our input target, then send a cancel event
-      // to the old one so that it clears its internal state. Otherwise it could get left
-      // in the middle of a panning touch block (for example) and not clean up properly.
-      if (mApzcForInputBlock) {
-        MultiTouchInput cancel(MultiTouchInput::MULTITOUCH_CANCEL, 0, TimeStamp::Now(), 0);
-        mInputQueue->ReceiveInputEvent(mApzcForInputBlock,
-            /* aTargetConfirmed = */ true, cancel, nullptr);
-      }
-      mApzcForInputBlock = apzc;
-    }
-
+    mApzcForInputBlock = GetTouchInputBlockAPZC(aInput, &mHitResultForInputBlock);
   } else if (mApzcForInputBlock) {
     APZCTM_LOG("Re-using APZC %p as continuation of event block\n", mApzcForInputBlock.get());
   }
@@ -799,21 +781,11 @@ APZCTreeManager::ProcessTouchInput(MultiTouchInput& aInput,
     }
   }
 
-  if (aInput.mType == MultiTouchInput::MULTITOUCH_END) {
-    if (mTouchCount >= aInput.mTouches.Length()) {
-      // NS_TOUCH_END event contains only released touches thus decrementing.
-      mTouchCount -= aInput.mTouches.Length();
-    } else {
-      NS_WARNING("Got an unexpected touchend/touchcancel");
-      mTouchCount = 0;
-    }
-  } else if (aInput.mType == MultiTouchInput::MULTITOUCH_CANCEL) {
-    mTouchCount = 0;
-  }
+  mTouchCounter.Update(aInput);
 
   // If it's the end of the touch sequence then clear out variables so we
   // don't keep dangling references and leak things.
-  if (mTouchCount == 0) {
+  if (mTouchCounter.GetActiveTouchCount() == 0) {
     mApzcForInputBlock = nullptr;
     mHitResultForInputBlock = HitNothing;
     mRetainedTouchIdentifier = -1;
@@ -851,7 +823,7 @@ APZCTreeManager::UpdateWheelTransaction(WidgetInputEvent& aEvent)
     return;
   }
 
-  switch (aEvent.message) {
+  switch (aEvent.mMessage) {
    case NS_MOUSE_MOVE:
    case NS_DRAGDROP_OVER: {
      WidgetMouseEvent* mouseEvent = aEvent.AsMouseEvent();
@@ -875,6 +847,8 @@ APZCTreeManager::UpdateWheelTransaction(WidgetInputEvent& aEvent)
    case NS_DRAGDROP_DROP:
      txn->EndTransaction();
      return;
+   default:
+     break;
   }
 }
 

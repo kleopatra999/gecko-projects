@@ -195,12 +195,7 @@ class MacroAssemblerNone : public Assembler
 
     template <typename T> void call(T) { MOZ_CRASH(); }
     template <typename T, typename S> void call(T, S) { MOZ_CRASH(); }
-    template <typename T> void callWithABI(T, MoveOp::Type v = MoveOp::GENERAL) { MOZ_CRASH(); }
     void callAndPushReturnAddress(Label* label) { MOZ_CRASH(); }
-
-    void setupAlignedABICall(uint32_t) { MOZ_CRASH(); }
-    void setupUnalignedABICall(uint32_t, Register) { MOZ_CRASH(); }
-    template <typename T> void passABIArg(T, MoveOp::Type v = MoveOp::GENERAL) { MOZ_CRASH(); }
 
     void callWithExitFrame(Label*) { MOZ_CRASH(); }
     void callWithExitFrame(JitCode*) { MOZ_CRASH(); }
@@ -238,9 +233,9 @@ class MacroAssemblerNone : public Assembler
     template <typename T> void Pop(T) { MOZ_CRASH(); }
     template <typename T> CodeOffsetLabel pushWithPatch(T) { MOZ_CRASH(); }
 
-    CodeOffsetJump jumpWithPatch(RepatchLabel*) { MOZ_CRASH(); }
-    CodeOffsetJump jumpWithPatch(RepatchLabel*, Condition) { MOZ_CRASH(); }
-    CodeOffsetJump backedgeJump(RepatchLabel* label) { MOZ_CRASH(); }
+    CodeOffsetJump jumpWithPatch(RepatchLabel*, Label* doc = nullptr) { MOZ_CRASH(); }
+    CodeOffsetJump jumpWithPatch(RepatchLabel*, Condition, Label* doc = nullptr) { MOZ_CRASH(); }
+    CodeOffsetJump backedgeJump(RepatchLabel* label, Label* doc = nullptr) { MOZ_CRASH(); }
     template <typename T, typename S>
     CodeOffsetJump branchPtrWithPatch(Condition, T, S, RepatchLabel*) { MOZ_CRASH(); }
 
