@@ -36,15 +36,18 @@ function ThreadNode(thread, options = {}) {
   this.calls = [];
   this.duration = options.endTime - options.startTime;
   this.nodeType = "Thread";
+  // Total bytesize of all allocations if enabled
+  this.byteSize = 0;
+  this.youngestFrameByteSize = 0;
 
-  let { samples, stackTable, frameTable, stringTable, allocationsTable } = thread;
+  let { samples, stackTable, frameTable, stringTable } = thread;
 
   // Nothing to do if there are no samples.
   if (samples.data.length === 0) {
     return;
   }
 
-  this._buildInverted(samples, stackTable, frameTable, stringTable, allocationsTable, options);
+  this._buildInverted(samples, stackTable, frameTable, stringTable, options);
   if (!options.invertTree) {
     this._uninvert();
   }
@@ -67,9 +70,6 @@ ThreadNode.prototype = {
    *        The table of deduplicated frames from the backend.
    * @param object stringTable
    *        The table of deduplicated strings from the backend.
-   * @param object allocationsTable
-   *        The table of allocation counts from the backend. Indexed by frame
-   *        index.
    * @param object options
    *        Additional supported options
    *          - number startTime
@@ -77,7 +77,7 @@ ThreadNode.prototype = {
    *          - boolean contentOnly [optional]
    *          - boolean invertTree [optional]
    */
-  _buildInverted: function buildInverted(samples, stackTable, frameTable, stringTable, allocationsTable, options) {
+  _buildInverted: function buildInverted(samples, stackTable, frameTable, stringTable, options) {
     function getOrAddFrameNode(calls, isLeaf, frameKey, inflatedFrame, isMetaCategory, leafTable) {
       // Insert the inflated frame into the call tree at the current level.
       let frameNode;
@@ -111,6 +111,7 @@ ThreadNode.prototype = {
 
     const SAMPLE_STACK_SLOT = samples.schema.stack;
     const SAMPLE_TIME_SLOT = samples.schema.time;
+    const SAMPLE_BYTESIZE_SLOT = samples.schema.size;
 
     const STACK_PREFIX_SLOT = stackTable.schema.prefix;
     const STACK_FRAME_SLOT = stackTable.schema.frame;
@@ -137,9 +138,14 @@ ThreadNode.prototype = {
       isMetaCategoryOut: false
     };
 
+    let byteSize = 0;
     for (let i = 0; i < samplesData.length; i++) {
       let sample = samplesData[i];
       let sampleTime = sample[SAMPLE_TIME_SLOT];
+
+      if (SAMPLE_BYTESIZE_SLOT !== void 0) {
+        byteSize = sample[SAMPLE_BYTESIZE_SLOT];
+      }
 
       // A sample's end time is considered to be its time of sampling. Its
       // start time is the sampling time of the previous sample.
@@ -203,7 +209,7 @@ ThreadNode.prototype = {
 
         // Inflate the frame.
         let inflatedFrame = getOrAddInflatedFrame(inflatedFrameCache, frameIndex, frameTable,
-                                                  stringTable, allocationsTable);
+                                                  stringTable);
 
         // Compute the frame key.
         mutableFrameKeyOptions.isRoot = stackIndex === null;
@@ -230,11 +236,18 @@ ThreadNode.prototype = {
             frameNode._addOptimizations(inflatedFrame.optimizations, inflatedFrame.implementation,
                                         sampleTime, stringTable);
           }
+
+          if (byteSize) {
+            frameNode.youngestFrameByteSize += byteSize;
+          }
         }
 
         // Don't overcount flattened recursive frames.
         if (!shouldFlatten) {
           frameNode.samples++;
+          if (byteSize) {
+            frameNode.byteSize += byteSize;
+          }
         }
 
         prevFrameKey = frameKey;
@@ -244,6 +257,9 @@ ThreadNode.prototype = {
 
       this.samples++;
       this.sampleTimes.push(sampleTime);
+      if (byteSize) {
+        this.byteSize += byteSize;
+      }
     }
   },
 
@@ -251,18 +267,18 @@ ThreadNode.prototype = {
    * Uninverts the call tree after its having been built.
    */
   _uninvert: function uninvert() {
-    function mergeOrAddFrameNode(calls, node, samples) {
+    function mergeOrAddFrameNode(calls, node, samples, size) {
       // Unlike the inverted call tree, we don't use a root table for the top
       // level, as in general, there are many fewer entry points than
       // leaves. Instead, linear search is used regardless of level.
       for (let i = 0; i < calls.length; i++) {
         if (calls[i].key === node.key) {
           let foundNode = calls[i];
-          foundNode._merge(node, samples);
+          foundNode._merge(node, samples, size);
           return foundNode.calls;
         }
       }
-      let copy = node._clone(samples);
+      let copy = node._clone(samples, size);
       calls.push(copy);
       return copy.calls;
     }
@@ -281,11 +297,13 @@ ThreadNode.prototype = {
       let node = entry.node;
       let calls = node.calls;
       let callSamples = 0;
+      let callByteSize = 0;
 
       // Continue the depth-first walk.
       for (let i = 0; i < calls.length; i++) {
         workstack.push({ node: calls[i], level: entry.level + 1 });
         callSamples += calls[i].samples;
+        callByteSize += calls[i].byteSize;
       }
 
       // The sample delta is used to distinguish stacks.
@@ -310,12 +328,13 @@ ThreadNode.prototype = {
       // Note that bottoming out is a degenerate where callSamples = 0.
 
       let samplesDelta = node.samples - callSamples;
+      let byteSizeDelta = node.byteSize - callByteSize;
       if (samplesDelta > 0) {
         // Reverse the spine and add them to the uninverted call tree.
         let uninvertedCalls = rootCalls;
         for (let level = entry.level; level > 0; level--) {
           let callee = spine[level];
-          uninvertedCalls = mergeOrAddFrameNode(uninvertedCalls, callee.node, samplesDelta);
+          uninvertedCalls = mergeOrAddFrameNode(uninvertedCalls, callee.node, samplesDelta, byteSizeDelta);
         }
       }
     }
@@ -382,11 +401,10 @@ ThreadNode.prototype = {
  *        Whether or not this is a platform node that should appear as a
  *        generalized meta category or not.
  */
-function FrameNode(frameKey, { location, line, category, allocations, isContent }, isMetaCategory) {
+function FrameNode(frameKey, { location, line, category, isContent }, isMetaCategory) {
   this.key = frameKey;
   this.location = location;
   this.line = line;
-  this.allocations = allocations;
   this.youngestFrameSamples = 0;
   this.samples = 0;
   this.calls = [];
@@ -397,6 +415,8 @@ function FrameNode(frameKey, { location, line, category, allocations, isContent 
   this.isMetaCategory = !!isMetaCategory;
   this.category = category;
   this.nodeType = "Frame";
+  this.byteSize = 0;
+  this.youngestFrameByteSize = 0;
 }
 
 FrameNode.prototype = {
@@ -433,20 +453,25 @@ FrameNode.prototype = {
     }
   },
 
-  _clone: function (samples) {
+  _clone: function (samples, size) {
     let newNode = new FrameNode(this.key, this, this.isMetaCategory);
-    newNode._merge(this, samples);
+    newNode._merge(this, samples, size);
     return newNode;
   },
 
-  _merge: function (otherNode, samples) {
+  _merge: function (otherNode, samples, size) {
     if (this === otherNode) {
       return;
     }
 
     this.samples += samples;
+    this.byteSize += size;
     if (otherNode.youngestFrameSamples > 0) {
       this.youngestFrameSamples += samples;
+    }
+
+    if (otherNode.youngestFrameByteSize > 0) {
+      this.youngestFrameByteSize += otherNode.youngestFrameByteSize;
     }
 
     if (otherNode._optimizations) {

@@ -14,9 +14,6 @@
         <attr name="menuItemActionBarStyle" format="reference"/>
 
         <!-- Style for MenuItemActionBar -->
-        <attr name="menuItemActionBarStyleNewTablet" format="reference"/>
-
-        <!-- Style for MenuItemActionBar -->
         <attr name="menuItemActionModeStyle" format="reference"/>
 
         <!-- Style for MenuItemActionView -->
@@ -194,6 +191,16 @@
         <attr name="drawable" format="reference" />
         <attr name="enabledText" format="string" />
         <attr name="disabledText" format="string" />
+    </declare-styleable>
+
+    <declare-styleable name="ThemedView">
+        <!-- A reimplementation of android:tintList which is
+             otherwise only available on API 21+.
+
+             Using this attribute is mutually exclusive with android:tint
+             and setting colorFilters in code. This is because on pre-Lollipop,
+             android:tint and DrawableCompat.tint* uses colorFilters under the hood. -->
+        <attr name="drawableTintList" format="color" />
     </declare-styleable>
 
 </resources>

@@ -112,6 +112,26 @@ def decorate_task_treeherder_routes(task, suffix):
     for env in treeheder_env:
         task['routes'].append('{}.{}'.format(TREEHERDER_ROUTES[env], suffix))
 
+def decorate_task_json_routes(build, task, json_routes, parameters):
+    """
+    Decorate the given task with routes.json routes.
+
+    :param dict task: task definition.
+    :param json_routes: the list of routes to use from routes.json
+    :param parameters: dictionary of parameters to use in route templates
+    """
+    fmt = parameters.copy()
+    fmt.update({
+        'build_product': task['extra']['build_product'],
+        'build_name': build['build_name'],
+        'build_type': build['build_type'],
+    })
+    routes = task.get('routes', [])
+    for route in json_routes:
+        routes.append(route.format(**fmt))
+
+    task['routes'] = routes
+
 def configure_dependent_task(task_path, parameters, taskid, templates, build_treeherder_config):
     """
     Configure a build dependent task. This is shared between post-build and test tasks.
@@ -154,6 +174,20 @@ def configure_dependent_task(task_path, parameters, taskid, templates, build_tre
         task['task']['scopes'] = []
 
     return task
+
+def set_interactive_task(task, interactive):
+    r"""Make the task interactive.
+
+    :param task: task definition.
+    :param interactive: True if the task should be interactive.
+    """
+    if not interactive:
+        return
+
+    payload = task["task"]["payload"]
+    if "features" not in payload:
+        payload["features"] = {}
+    payload["features"]["interactive"] = True
 
 @CommandProvider
 class DecisionTask(object):
@@ -235,9 +269,15 @@ class Graph(object):
         help='email address of who owns this graph')
     @CommandArgument('--extend-graph',
         action="store_true", dest="ci", help='Omit create graph arguments')
+    @CommandArgument('--interactive',
+        required=False,
+        default=False,
+        action="store_true",
+        dest="interactive",
+        help="Run the tasks with the interactive feature enabled")
     def create_graph(self, **params):
         from taskcluster_graph.commit_parser import parse_commit
-        from taskcluster_graph.slugid import slugid
+        from slugid import nice as slugid
         from taskcluster_graph.from_now import (
             json_time_from_now,
             current_json_time,
@@ -263,10 +303,15 @@ class Graph(object):
         jobs = templates.load(job_path, {})
 
         job_graph = parse_commit(message, jobs)
+
+        # once everything uses in-tree mozharness (bug 1187706), this can go away.
         mozharness = load_mozharness_info()
+
+        cmdline_interactive = params.get('interactive', False)
 
         # Template parameters used when expanding the graph
         parameters = dict(gaia_info().items() + {
+            'index': 'index',
             'project': project,
             'pushlog_id': params.get('pushlog_id', 0),
             'docker_image': docker_image,
@@ -289,6 +334,12 @@ class Graph(object):
             params.get('revision_hash', '')
         )
 
+        routes_file = os.path.join(ROOT, 'routes.json')
+        with open(routes_file) as f:
+            contents = json.load(f)
+            json_routes = contents['routes']
+            # TODO: Nightly and/or l10n routes
+
         # Task graph we are generating for taskcluster...
         graph = {
             'tasks': [],
@@ -308,16 +359,19 @@ class Graph(object):
         }
 
         for build in job_graph:
+            interactive = cmdline_interactive or build["interactive"]
             build_parameters = dict(parameters)
             build_parameters['build_slugid'] = slugid()
             build_task = templates.load(build['task'], build_parameters)
-
-            if 'routes' not in build_task['task']:
-                build_task['task']['routes'] = []
+            set_interactive_task(build_task, interactive)
 
             if params['revision_hash']:
                 decorate_task_treeherder_routes(build_task['task'],
                                                 treeherder_route)
+                decorate_task_json_routes(build,
+                                          build_task['task'],
+                                          json_routes,
+                                          build_parameters)
 
             # Ensure each build graph is valid after construction.
             taskcluster_graph.build_task.validate(build_task)
@@ -382,6 +436,7 @@ class Graph(object):
                                                      slugid(),
                                                      templates,
                                                      build_treeherder_config)
+                set_interactive_task(post_task, interactive)
                 graph['tasks'].append(post_task)
 
             for test in build['dependents']:
@@ -413,6 +468,7 @@ class Graph(object):
                                                          slugid(),
                                                          templates,
                                                          build_treeherder_config)
+                    set_interactive_task(test_task, interactive)
 
                     if params['revision_hash']:
                         decorate_task_treeherder_routes(
@@ -455,6 +511,12 @@ class CIBuild(object):
         help='email address of who owns this graph')
     @CommandArgument('build_task',
         help='path to build task definition')
+    @CommandArgument('--interactive',
+        required=False,
+        default=False,
+        action="store_true",
+        dest="interactive",
+        help="Run the task with the interactive feature enabled")
     def create_ci_build(self, **params):
         from taskcluster_graph.templates import Templates
         import taskcluster_graph.build_task
@@ -488,6 +550,7 @@ class CIBuild(object):
 
         try:
             build_task = templates.load(params['build_task'], build_parameters)
+            set_interactive_task(build_task, params.get('interactive', False))
         except IOError:
             sys.stderr.write(
                 "Could not load build task file.  Ensure path is a relative " \

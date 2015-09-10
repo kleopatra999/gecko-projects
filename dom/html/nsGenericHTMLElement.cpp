@@ -525,6 +525,14 @@ nsGenericHTMLElement::IntrinsicState() const
   return state;
 }
 
+uint32_t
+nsGenericHTMLElement::EditableInclusiveDescendantCount()
+{
+  bool isEditable = IsInUncomposedDoc() && HasFlag(NODE_IS_EDITABLE) &&
+    GetContentEditableValue() == eTrue;
+  return EditableDescendantCount() + isEditable;
+}
+
 nsresult
 nsGenericHTMLElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                                  nsIContent* aBindingParent,
@@ -548,6 +556,7 @@ nsGenericHTMLElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
       aDocument->
         AddToNameTable(this, GetParsedAttr(nsGkAtoms::name)->GetAtomValue());
     }
+
     if (HasFlag(NODE_IS_EDITABLE) && GetContentEditableValue() == eTrue) {
       nsCOMPtr<nsIHTMLDocument> htmlDocument = do_QueryInterface(aDocument);
       if (htmlDocument) {
@@ -2119,7 +2128,7 @@ nsGenericHTMLFormElement::UnbindFromTree(bool aDeep, bool aNullParent)
 
 nsresult
 nsGenericHTMLFormElement::BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                        const nsAttrValueOrString* aValue,
+                                        nsAttrValueOrString* aValue,
                                         bool aNotify)
 {
   if (aNameSpaceID == kNameSpaceID_None) {
@@ -2241,9 +2250,8 @@ nsresult
 nsGenericHTMLFormElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
 {
   if (aVisitor.mEvent->mFlags.mIsTrusted) {
-    switch (aVisitor.mEvent->message) {
-      case NS_FOCUS_CONTENT:
-      {
+    switch (aVisitor.mEvent->mMessage) {
+      case eFocus: {
         // Check to see if focus has bubbled up from a form control's
         // child textfield or button.  If that's the case, don't focus
         // this parent file control -- leave focus on the child.
@@ -2253,13 +2261,14 @@ nsGenericHTMLFormElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
           formControlFrame->SetFocus(true, true);
         break;
       }
-      case NS_BLUR_CONTENT:
-      {
+      case eBlur: {
         nsIFormControlFrame* formControlFrame = GetFormControlFrame(true);
         if (formControlFrame)
           formControlFrame->SetFocus(false, false);
         break;
       }
+      default:
+        break;
     }
   }
 
@@ -2445,8 +2454,8 @@ nsGenericHTMLFormElement::FormIdUpdated(Element* aOldElement,
 }
 
 bool 
-nsGenericHTMLFormElement::IsElementDisabledForEvents(uint32_t aMessage, 
-                                                    nsIFrame* aFrame)
+nsGenericHTMLFormElement::IsElementDisabledForEvents(EventMessage aMessage,
+                                                     nsIFrame* aFrame)
 {
   bool disabled = IsDisabled();
   if (!disabled && aFrame) {
@@ -2455,7 +2464,7 @@ nsGenericHTMLFormElement::IsElementDisabledForEvents(uint32_t aMessage,
       uiStyle->mUserInput == NS_STYLE_USER_INPUT_DISABLED;
 
   }
-  return disabled && aMessage != NS_MOUSE_MOVE;
+  return disabled && aMessage != eMouseMove;
 }
 
 void
@@ -2644,7 +2653,7 @@ nsGenericHTMLElement::Click()
   // called from chrome JS. Mark this event trusted if Click()
   // is called from chrome code.
   WidgetMouseEvent event(nsContentUtils::IsCallerChrome(),
-                         NS_MOUSE_CLICK, nullptr, WidgetMouseEvent::eReal);
+                         eMouseClick, nullptr, WidgetMouseEvent::eReal);
   event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
 
   EventDispatcher::Dispatch(static_cast<nsIContent*>(this), context, &event);
@@ -2746,7 +2755,7 @@ nsGenericHTMLElement::PerformAccesskey(bool aKeyCausesActivation,
 
   if (aKeyCausesActivation) {
     // Click on it if the users prefs indicate to do so.
-    WidgetMouseEvent event(aIsTrustedEvent, NS_MOUSE_CLICK, nullptr,
+    WidgetMouseEvent event(aIsTrustedEvent, eMouseClick, nullptr,
                            WidgetMouseEvent::eReal);
     event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_KEYBOARD;
 
@@ -2916,6 +2925,12 @@ nsGenericHTMLElement::ChangeEditableState(int32_t aChange)
       do_QueryInterface(document);
     if (htmlDocument) {
       htmlDocument->ChangeContentEditableCount(this, aChange);
+    }
+
+    nsIContent* parent = GetParent();
+    while (parent) {
+      parent->ChangeEditableDescendantCount(aChange);
+      parent = parent->GetParent();
     }
   }
 

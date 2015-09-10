@@ -9,8 +9,6 @@ SimpleTest.waitForExplicitFinish();
 browserElementTestHelpers.setEnabledPref(true);
 browserElementTestHelpers.addPermission();
 
-SpecialPowers.setBoolPref("media.useAudioChannelService", true);
-
 function noaudio() {
   var iframe = document.createElement('iframe');
   iframe.setAttribute('mozbrowser', 'true');
@@ -18,6 +16,12 @@ function noaudio() {
   iframe.src = 'http://example.org/tests/dom/browser-element/mochitest/file_empty.html';
 
   function noaudio_loadend() {
+    ok("mute" in iframe, "iframe.mute exists");
+    ok("unmute" in iframe, "iframe.unmute exists");
+    ok("getMuted" in iframe, "iframe.getMuted exists");
+    ok("getVolume" in iframe, "iframe.getVolume exists");
+    ok("setVolume" in iframe, "iframe.setVolume exists");
+
     ok("allowedAudioChannels" in iframe, "allowedAudioChannels exist");
     var channels = iframe.allowedAudioChannels;
     is(channels.length, 1, "1 audio channel by default");
@@ -38,6 +42,42 @@ function noaudio() {
         is(e.target.result, 1.0, "The default volume should be 1.0");
         r();
       }
+    })
+
+    .then(function() {
+      return new Promise(function(resolve) {
+        iframe.mute();
+        iframe.getMuted()
+          .then(result => is(result, true, "iframe.getMuted should be true."))
+          .then(resolve);
+      });
+    })
+
+    .then(function() {
+      return new Promise(function(resolve) {
+        iframe.unmute();
+        iframe.getMuted()
+          .then(result => is(result, false, "iframe.getMuted should be false."))
+          .then(resolve);
+      });
+    })
+
+    .then(function() {
+      return new Promise(function(resolve) {
+        iframe.setVolume(0);
+        iframe.getVolume()
+          .then(result => is(result, 0, "iframe.getVolume should be 0."))
+          .then(resolve);
+      });
+    })
+
+    .then(function() {
+      return new Promise(function(resolve) {
+        iframe.setVolume(1);
+        iframe.getVolume()
+          .then(result => is(result, 1, "iframe.getVolume should be 1."))
+          .then(resolve);
+      });
     })
 
     .then(function() {
@@ -109,6 +149,12 @@ function audio() {
   iframe.src = 'http://example.org/tests/dom/browser-element/mochitest/iframe_file_audio.html';
 
   function audio_loadend() {
+    ok("mute" in iframe, "iframe.mute exists");
+    ok("unmute" in iframe, "iframe.unmute exists");
+    ok("getMuted" in iframe, "iframe.getMuted exists");
+    ok("getVolume" in iframe, "iframe.getVolume exists");
+    ok("setVolume" in iframe, "iframe.setVolume exists");
+
     ok("allowedAudioChannels" in iframe, "allowedAudioChannels exist");
     var channels = iframe.allowedAudioChannels;
     is(channels.length, 1, "1 audio channel by default");

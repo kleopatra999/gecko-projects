@@ -52,6 +52,11 @@
  */
 #  define MOZ_HAVE_NEVER_INLINE          __declspec(noinline)
 #  define MOZ_HAVE_NORETURN              __declspec(noreturn)
+#  if _MSC_VER >= 1900
+#    define MOZ_HAVE_CXX11_CONSTEXPR
+#    define MOZ_HAVE_CXX11_CONSTEXPR_IN_TEMPLATES
+#    define MOZ_HAVE_EXPLICIT_CONVERSION
+#  endif
 #  ifdef __clang__
      /* clang-cl probably supports constexpr and explicit conversions. */
 #    if __has_extension(cxx_constexpr)
@@ -394,10 +399,15 @@
  * MOZ_NONHEAP_CLASS: Applies to all classes. Any class with this annotation is
  *   expected to live on the stack or in static storage, so it is a compile-time
  *   error to use it, or an array of such objects, as the type of a new
- *   expression (unless placement new is being used). If a member of another
- *   class uses this class, or if another class inherits from this class, then
- *   it is considered to be a non-heap class as well, although this attribute
- *   need not be provided in such cases.
+ *   expression. If a member of another class uses this class, or if another
+ *   class inherits from this class, then it is considered to be a non-heap class
+ *   as well, although this attribute need not be provided in such cases.
+ * MOZ_HEAP_CLASS: Applies to all classes. Any class with this annotation is
+ *   expected to live on the heap, so it is a compile-time error to use it, or
+ *   an array of such objects, as the type of a variable declaration, or as a
+ *   temporary object. If a member of another class uses this class, or if
+ *   another class inherits from this class, then it is considered to be a heap
+ *   class as well, although this attribute need not be provided in such cases.
  * MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS: Applies to all classes that are
  *   intended to prevent introducing static initializers.  This attribute
  *   currently makes it a compile-time error to instantiate these classes
@@ -463,11 +473,20 @@
  *   template arguments are required to be safe to move in memory using
  *   memmove().  Passing MOZ_NON_MEMMOVABLE types to these templates is a
  *   compile time error.
+ * MOZ_INHERIT_TYPE_ANNOTATIONS_FROM_TEMPLATE_ARGS: Applies to template class
+ *   declarations where an instance of the template should be considered, for
+ *   static analysis purposes, to inherit any type annotations (such as
+ *   MOZ_MUST_USE and MOZ_STACK_CLASS) from its template arguments.
+ * MOZ_NON_AUTOABLE: Applies to class declarations. Makes it a compile time error to
+ *   use `auto` in place of this type in variable declarations.  This is intended to
+ *   be used with types which are intended to be implicitly constructed into other
+ *   other types before being assigned to variables.
  */
 #ifdef MOZ_CLANG_PLUGIN
 #  define MOZ_MUST_OVERRIDE __attribute__((annotate("moz_must_override")))
 #  define MOZ_STACK_CLASS __attribute__((annotate("moz_stack_class")))
 #  define MOZ_NONHEAP_CLASS __attribute__((annotate("moz_nonheap_class")))
+#  define MOZ_HEAP_CLASS __attribute__((annotate("moz_heap_class")))
 #  define MOZ_TRIVIAL_CTOR_DTOR __attribute__((annotate("moz_trivial_ctor_dtor")))
 #  ifdef DEBUG
      /* in debug builds, these classes do have non-trivial constructors. */
@@ -486,6 +505,9 @@
 #  define MOZ_NEEDS_NO_VTABLE_TYPE __attribute__((annotate("moz_needs_no_vtable_type")))
 #  define MOZ_NON_MEMMOVABLE __attribute__((annotate("moz_non_memmovable")))
 #  define MOZ_NEEDS_MEMMOVABLE_TYPE __attribute__((annotate("moz_needs_memmovable_type")))
+#  define MOZ_INHERIT_TYPE_ANNOTATIONS_FROM_TEMPLATE_ARGS \
+    __attribute__((annotate("moz_inherit_type_annotations_from_template_args")))
+#  define MOZ_NON_AUTOABLE __attribute__((annotate("moz_non_autoable")))
 /*
  * It turns out that clang doesn't like void func() __attribute__ {} without a
  * warning, so use pragmas to disable the warning. This code won't work on GCC
@@ -500,6 +522,7 @@
 #  define MOZ_MUST_OVERRIDE /* nothing */
 #  define MOZ_STACK_CLASS /* nothing */
 #  define MOZ_NONHEAP_CLASS /* nothing */
+#  define MOZ_HEAP_CLASS /* nothing */
 #  define MOZ_TRIVIAL_CTOR_DTOR /* nothing */
 #  define MOZ_ONLY_USED_TO_AVOID_STATIC_CONSTRUCTORS /* nothing */
 #  define MOZ_IMPLICIT /* nothing */
@@ -513,7 +536,25 @@
 #  define MOZ_NEEDS_NO_VTABLE_TYPE /* nothing */
 #  define MOZ_NON_MEMMOVABLE /* nothing */
 #  define MOZ_NEEDS_MEMMOVABLE_TYPE /* nothing */
+#  define MOZ_INHERIT_TYPE_ANNOTATIONS_FROM_TEMPLATE_ARGS /* nothing */
+#  define MOZ_NON_AUTOABLE /* nothing */
 #endif /* MOZ_CLANG_PLUGIN */
+
+/*
+ * MOZ_HAVE_REF_QUALIFIERS is defined for compilers that support C++11's rvalue
+ * qualifier, "&&".
+ */
+#if defined(_MSC_VER) && _MSC_VER >= 1900
+#  define MOZ_HAVE_REF_QUALIFIERS
+#elif defined(__clang__)
+// All supported Clang versions
+#  define MOZ_HAVE_REF_QUALIFIERS
+#elif defined(__GNUC__)
+#  include "mozilla/Compiler.h"
+#  if MOZ_GCC_VERSION_AT_LEAST(4, 8, 1)
+#    define MOZ_HAVE_REF_QUALIFIERS
+#  endif
+#endif
 
 #endif /* __cplusplus */
 

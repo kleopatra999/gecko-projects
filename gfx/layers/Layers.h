@@ -25,6 +25,7 @@
 #include "mozilla/RefPtr.h"             // for already_AddRefed
 #include "mozilla/StyleAnimationValue.h" // for StyleAnimationValue, etc
 #include "mozilla/TimeStamp.h"          // for TimeStamp, TimeDuration
+#include "mozilla/UniquePtr.h"          // for UniquePtr
 #include "mozilla/gfx/BaseMargin.h"     // for BaseMargin
 #include "mozilla/gfx/BasePoint.h"      // for BasePoint
 #include "mozilla/gfx/Point.h"          // for IntSize
@@ -258,11 +259,11 @@ public:
    * The callee must draw all of aRegionToDraw.
    * This region is relative to 0,0 in the PaintedLayer.
    *
-   * aDirtyRegion contains the region that is due to be painted at some point,
-   * even though only aRegionToDraw should be drawn during this call.
-   * They will often be equal, but aDirtyRegion may be larger, for example
-   * when painting progressively. aRegionToDraw must be entirely contained
-   * within aDirtyRegion.
+   * aDirtyRegion, if non-null, contains the total region that is due to be
+   * painted during the transaction, even though only aRegionToDraw should
+   * be drawn during this call. The sum of every aRegionToDraw over the
+   * course of the transaction must equal aDirtyRegion. aDirtyRegion can be
+   * null if the total dirty region is unknown.
    *
    * aRegionToInvalidate contains a region whose contents have been
    * changed by the layer manager and which must therefore be invalidated.
@@ -284,7 +285,7 @@ public:
   typedef void (* DrawPaintedLayerCallback)(PaintedLayer* aLayer,
                                            gfxContext* aContext,
                                            const nsIntRegion& aRegionToDraw,
-                                           const nsIntRegion& aDirtyRegion,
+                                           const nsIntRegion* aDirtyRegion,
                                            DrawRegionClip aClip,
                                            const nsIntRegion& aRegionToInvalidate,
                                            void* aCallbackData);
@@ -1150,36 +1151,29 @@ public:
 
   /**
    * CONSTRUCTION PHASE ONLY
-   * If a layer is "fixed position", this determines which point on the layer
-   * is considered the "anchor" point, that is, the point which remains in the
-   * same position when compositing the layer tree with a transformation
-   * (such as when asynchronously scrolling and zooming).
+   * If a layer represents a fixed position element, this data is stored on the
+   * layer for use by the compositor.
+   *
+   *   - |aScrollId| identifies the scroll frame that this element is fixed
+   *     with respect to.
+   *
+   *   - |aAnchor| is the point on the layer that is considered the "anchor"
+   *     point, that is, the point which remains in the same position when
+   *     compositing the layer tree with a transformation (such as when
+   *     asynchronously scrolling and zooming).
    */
-  void SetFixedPositionAnchor(const LayerPoint& aAnchor)
+  void SetFixedPositionData(FrameMetrics::ViewID aScrollId,
+                            const LayerPoint& aAnchor)
   {
-    if (mAnchor != aAnchor) {
-      MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) FixedPositionAnchor", this));
-      mAnchor = aAnchor;
-      Mutated();
-    }
-  }
-
-  /**
-   * CONSTRUCTION PHASE ONLY
-   * If a layer represents a fixed position element or elements that are on
-   * a document that has had fixed position element margins set on it, these
-   * will be mirrored here. This allows for asynchronous animation of the
-   * margins by reconciling the difference between this value and a value that
-   * is updated more frequently.
-   * If the left or top margins are negative, it means that the elements this
-   * layer represents are auto-positioned, and so fixed position margins should
-   * not have an effect on the corresponding axis.
-   */
-  void SetFixedPositionMargins(const LayerMargin& aMargins)
-  {
-    if (mMargins != aMargins) {
-      MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) FixedPositionMargins", this));
-      mMargins = aMargins;
+    if (!mFixedPositionData ||
+        mFixedPositionData->mScrollId != aScrollId ||
+        mFixedPositionData->mAnchor != aAnchor) {
+      MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) FixedPositionData", this));
+      if (!mFixedPositionData) {
+        mFixedPositionData = MakeUnique<FixedPositionData>();
+      }
+      mFixedPositionData->mScrollId = aScrollId;
+      mFixedPositionData->mAnchor = aAnchor;
       Mutated();
     }
   }
@@ -1271,8 +1265,8 @@ public:
   virtual float GetPostYScale() const { return mPostYScale; }
   bool GetIsFixedPosition() { return mIsFixedPosition; }
   bool GetIsStickyPosition() { return mStickyPositionData; }
-  LayerPoint GetFixedPositionAnchor() { return mAnchor; }
-  const LayerMargin& GetFixedPositionMargins() { return mMargins; }
+  FrameMetrics::ViewID GetFixedPositionScrollContainerId() { return mFixedPositionData ? mFixedPositionData->mScrollId : FrameMetrics::NULL_SCROLL_ID; }
+  LayerPoint GetFixedPositionAnchor() { return mFixedPositionData ? mFixedPositionData->mAnchor : LayerPoint(); }
   FrameMetrics::ViewID GetStickyScrollContainerId() { return mStickyPositionData->mScrollId; }
   const LayerRect& GetStickyScrollRangeOuter() { return mStickyPositionData->mOuter; }
   const LayerRect& GetStickyScrollRangeInner() { return mStickyPositionData->mInner; }
@@ -1583,6 +1577,16 @@ public:
   // instead of a StringStream. It is also internally used to implement Dump();
   virtual void DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent);
 
+  /**
+   * Store display list log.
+   */
+  void SetDisplayListLog(const char *log);
+
+  /**
+   * Return display list log.
+   */
+  void GetDisplayListLog(nsCString& log);
+
   static bool IsLogEnabled() { return LayerManager::IsLogEnabled(); }
 
   /**
@@ -1763,8 +1767,11 @@ protected:
   uint32_t mContentFlags;
   bool mUseTileSourceRect;
   bool mIsFixedPosition;
-  LayerPoint mAnchor;
-  LayerMargin mMargins;
+  struct FixedPositionData {
+    FrameMetrics::ViewID mScrollId;
+    LayerPoint mAnchor;
+  };
+  UniquePtr<FixedPositionData> mFixedPositionData;
   struct StickyPositionData {
     FrameMetrics::ViewID mScrollId;
     LayerRect mOuter;
@@ -1785,6 +1792,8 @@ protected:
 #ifdef MOZ_DUMP_PAINTING
   nsTArray<nsCString> mExtraDumpInfo;
 #endif
+  // Store display list log.
+  nsCString mDisplayListLog;
 };
 
 /**

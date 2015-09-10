@@ -88,8 +88,7 @@
 #include "nsViewportInfo.h"
 #include "nsIFormControl.h"
 #include "nsIScriptError.h"
-#include "nsIAppShell.h"
-#include "nsWidgetsCID.h"
+//#include "nsWidgetsCID.h"
 #include "FrameLayerBuilder.h"
 #include "nsDisplayList.h"
 #include "nsROCSSPrimitiveValue.h"
@@ -104,6 +103,9 @@
 #include "nsIStyleSheetService.h"
 #include "nsContentPermissionHelper.h"
 #include "nsNetUtil.h"
+#include "nsDocument.h"
+#include "HTMLImageElement.h"
+#include "mozilla/css/ImageLoader.h"
 
 #ifdef XP_WIN
 #undef GetClassName
@@ -117,8 +119,6 @@ using namespace mozilla::widget;
 using namespace mozilla::gfx;
 
 class gfxContext;
-
-static NS_DEFINE_CID(kAppShellCID, NS_APPSHELL_CID);
 
 NS_INTERFACE_MAP_BEGIN(nsDOMWindowUtils)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIDOMWindowUtils)
@@ -296,25 +296,6 @@ nsDOMWindowUtils::UpdateLayerTree()
           nsIPresShell::PAINT_LAYERS | nsIPresShell::PAINT_SYNC_DECODE_IMAGES);
     }
   }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMWindowUtils::SetCSSViewport(float aWidthPx, float aHeightPx)
-{
-  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
-
-  if (!(aWidthPx >= 0.0 && aHeightPx >= 0.0)) {
-    return NS_ERROR_ILLEGAL_VALUE;
-  }
-
-  nsIPresShell* presShell = GetPresShell();
-  if (!presShell) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsLayoutUtils::SetCSSViewport(presShell, CSSSize(aWidthPx, aHeightPx));
-
   return NS_OK;
 }
 
@@ -700,17 +681,17 @@ nsDOMWindowUtils::SendPointerEventCommon(const nsAString& aType,
     return NS_ERROR_FAILURE;
   }
 
-  int32_t msg;
+  EventMessage msg;
   if (aType.EqualsLiteral("pointerdown")) {
-    msg = NS_POINTER_DOWN;
+    msg = ePointerDown;
   } else if (aType.EqualsLiteral("pointerup")) {
-    msg = NS_POINTER_UP;
+    msg = ePointerUp;
   } else if (aType.EqualsLiteral("pointermove")) {
-    msg = NS_POINTER_MOVE;
+    msg = ePointerMove;
   } else if (aType.EqualsLiteral("pointerover")) {
-    msg = NS_POINTER_OVER;
+    msg = ePointerOver;
   } else if (aType.EqualsLiteral("pointerout")) {
-    msg = NS_POINTER_OUT;
+    msg = ePointerOut;
   } else {
     return NS_ERROR_FAILURE;
   }
@@ -979,7 +960,7 @@ nsDOMWindowUtils::SendTouchEventCommon(const nsAString& aType,
   if (!widget) {
     return NS_ERROR_NULL_POINTER;
   }
-  int32_t msg;
+  EventMessage msg;
   if (aType.EqualsLiteral("touchstart")) {
     msg = NS_TOUCH_START;
   } else if (aType.EqualsLiteral("touchmove")) {
@@ -1314,8 +1295,10 @@ nsDOMWindowUtils::SendSimpleGestureEvent(const nsAString& aType,
   if (!widget)
     return NS_ERROR_FAILURE;
 
-  int32_t msg;
-  if (aType.EqualsLiteral("MozSwipeGestureStart"))
+  EventMessage msg;
+  if (aType.EqualsLiteral("MozSwipeGestureMayStart"))
+    msg = NS_SIMPLE_GESTURE_SWIPE_MAY_START;
+  else if (aType.EqualsLiteral("MozSwipeGestureStart"))
     msg = NS_SIMPLE_GESTURE_SWIPE_START;
   else if (aType.EqualsLiteral("MozSwipeGestureUpdate"))
     msg = NS_SIMPLE_GESTURE_SWIPE_UPDATE;
@@ -1941,13 +1924,28 @@ nsDOMWindowUtils::SendQueryContentEvent(uint32_t aType,
     return NS_ERROR_FAILURE;
   }
 
-  if (aType != NS_QUERY_SELECTED_TEXT &&
-      aType != NS_QUERY_TEXT_CONTENT &&
-      aType != NS_QUERY_CARET_RECT &&
-      aType != NS_QUERY_TEXT_RECT &&
-      aType != NS_QUERY_EDITOR_RECT &&
-      aType != NS_QUERY_CHARACTER_AT_POINT) {
-    return NS_ERROR_INVALID_ARG;
+  EventMessage message;
+  switch (aType) {
+    case QUERY_SELECTED_TEXT:
+      message = NS_QUERY_SELECTED_TEXT;
+      break;
+    case QUERY_TEXT_CONTENT:
+      message = NS_QUERY_TEXT_CONTENT;
+      break;
+    case QUERY_CARET_RECT:
+      message = NS_QUERY_CARET_RECT;
+      break;
+    case QUERY_TEXT_RECT:
+      message = NS_QUERY_TEXT_RECT;
+      break;
+    case QUERY_EDITOR_RECT:
+      message = NS_QUERY_EDITOR_RECT;
+      break;
+    case QUERY_CHARACTER_AT_POINT:
+      message = NS_QUERY_CHARACTER_AT_POINT;
+      break;
+    default:
+      return NS_ERROR_INVALID_ARG;
   }
 
   nsCOMPtr<nsIWidget> targetWidget = widget;
@@ -1956,7 +1954,7 @@ nsDOMWindowUtils::SendQueryContentEvent(uint32_t aType,
   bool useNativeLineBreak =
     !(aAdditionalFlags & QUERY_CONTENT_FLAG_USE_XP_LINE_BREAK);
 
-  if (aType == QUERY_CHARACTER_AT_POINT) {
+  if (message == NS_QUERY_CHARACTER_AT_POINT) {
     // Looking for the widget at the point.
     WidgetQueryContentEvent dummyEvent(true, NS_QUERY_CONTENT_STATE, widget);
     dummyEvent.mUseNativeLineBreak = useNativeLineBreak;
@@ -1983,10 +1981,10 @@ nsDOMWindowUtils::SendQueryContentEvent(uint32_t aType,
 
   pt += widget->WidgetToScreenOffset() - targetWidget->WidgetToScreenOffset();
 
-  WidgetQueryContentEvent queryEvent(true, aType, targetWidget);
+  WidgetQueryContentEvent queryEvent(true, message, targetWidget);
   InitEvent(queryEvent, &pt);
 
-  switch (aType) {
+  switch (message) {
     case NS_QUERY_TEXT_CONTENT:
       queryEvent.InitForQueryTextContent(aOffset, aLength, useNativeLineBreak);
       break;
@@ -2028,7 +2026,7 @@ nsDOMWindowUtils::SendSelectionSetEvent(uint32_t aOffset,
     return NS_ERROR_FAILURE;
   }
 
-  WidgetSelectionEvent selectionEvent(true, NS_SELECTION_SET, widget);
+  WidgetSelectionEvent selectionEvent(true, eSetSelection, widget);
   InitEvent(selectionEvent);
 
   selectionEvent.mOffset = aOffset;
@@ -2056,7 +2054,7 @@ nsDOMWindowUtils::SendContentCommandEvent(const nsAString& aType,
   if (!widget)
     return NS_ERROR_FAILURE;
 
-  int32_t msg;
+  EventMessage msg;
   if (aType.EqualsLiteral("cut"))
     msg = NS_CONTENT_COMMAND_CUT;
   else if (aType.EqualsLiteral("copy"))
@@ -2264,7 +2262,7 @@ nsDOMWindowUtils::GetLayerManagerRemote(bool* retval)
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::GetSupportsHardwareH264Decoding(bool* retval)
+nsDOMWindowUtils::GetSupportsHardwareH264Decoding(nsAString& aRetval)
 {
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
 
@@ -2277,9 +2275,15 @@ nsDOMWindowUtils::GetSupportsHardwareH264Decoding(bool* retval)
   if (!mgr)
     return NS_ERROR_FAILURE;
 
-  *retval = MP4Decoder::IsVideoAccelerated(mgr->GetCompositorBackendType());
+  nsCString failureReason;
+  if (MP4Decoder::IsVideoAccelerated(mgr->GetCompositorBackendType(), failureReason)) {
+    aRetval.AssignLiteral("Yes");
+  } else {
+    aRetval.AssignLiteral("No; ");
+    AppendUTF8toUTF16(failureReason, aRetval);
+  }
 #else
-  *retval = false;
+  aRetval.AssignLiteral("No; Compiled without MP4 support.");
 #endif
   return NS_OK;
 }
@@ -3160,30 +3164,6 @@ nsDOMWindowUtils::SetScrollPositionClampingScrollPortSize(float aWidth, float aH
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsDOMWindowUtils::SetContentDocumentFixedPositionMargins(float aTop, float aRight,
-                                                         float aBottom, float aLeft)
-{
-  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
-
-  if (!(aTop >= 0.0f && aRight >= 0.0f && aBottom >= 0.0f && aLeft >= 0.0f)) {
-    return NS_ERROR_ILLEGAL_VALUE;
-  }
-
-  nsIPresShell* presShell = GetPresShell();
-  if (!presShell) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsMargin margins(nsPresContext::CSSPixelsToAppUnits(aTop),
-                   nsPresContext::CSSPixelsToAppUnits(aRight),
-                   nsPresContext::CSSPixelsToAppUnits(aBottom),
-                   nsPresContext::CSSPixelsToAppUnits(aLeft));
-  presShell->SetContentDocumentFixedPositionMargins(margins);
-
-  return NS_OK;
-}
-
 nsresult
 nsDOMWindowUtils::RemoteFrameFullscreenChanged(nsIDOMElement* aFrameElement)
 {
@@ -3208,6 +3188,93 @@ nsDOMWindowUtils::RemoteFrameFullscreenReverted()
   return NS_OK;
 }
 
+class MOZ_STACK_CLASS FullscreenChangePrepare
+{
+public:
+  FullscreenChangePrepare(nsIPresShell* aPresShell,
+                          const nsSize& aSize, nsSize* aOldSize = nullptr)
+    : mPresShell(aPresShell)
+  {
+    if (mPresShell) {
+      mPresShell->SetIsInFullscreenChange(true);
+    }
+    if (aSize.IsEmpty()) {
+      return;
+    }
+    if (nsViewManager* viewManager = mPresShell->GetViewManager()) {
+      if (aOldSize) {
+        viewManager->GetWindowDimensions(&aOldSize->width, &aOldSize->height);
+      }
+      viewManager->SetWindowDimensions(aSize.width, aSize.height);
+    }
+  }
+
+  ~FullscreenChangePrepare()
+  {
+    if (mPresShell) {
+      mPresShell->SetIsInFullscreenChange(false);
+    }
+  }
+
+private:
+  nsCOMPtr<nsIPresShell> mPresShell;
+};
+
+class OldWindowSize : public LinkedListElement<OldWindowSize>
+{
+public:
+  static void Set(nsPIDOMWindow* aWindow, const nsSize& aSize)
+  {
+    OldWindowSize* item = GetItem(aWindow);
+    if (item) {
+      item->mSize = aSize;
+    } else if (aWindow) {
+      item = new OldWindowSize(do_GetWeakReference(aWindow), aSize);
+      sList.insertBack(item);
+    }
+  }
+
+  static nsSize GetAndRemove(nsPIDOMWindow* aWindow)
+  {
+    nsSize result;
+    if (OldWindowSize* item = GetItem(aWindow)) {
+      result = item->mSize;
+      delete item;
+    }
+    return result;
+  }
+
+private:
+  explicit OldWindowSize(already_AddRefed<nsIWeakReference>&& aWindow,
+                         const nsSize& aSize)
+    : mWindow(Move(aWindow)), mSize(aSize) { }
+  ~OldWindowSize() { };
+
+  static OldWindowSize* GetItem(nsPIDOMWindow* aWindow)
+  {
+    OldWindowSize* item = sList.getFirst();
+    while (item) {
+      nsCOMPtr<nsPIDOMWindow> window = do_QueryReferent(item->mWindow);
+      if (!window) {
+        OldWindowSize* thisItem = item;
+        item = thisItem->getNext();
+        delete thisItem;
+        continue;
+      }
+      if (window == aWindow) {
+        break;
+      }
+    }
+    return item;
+  }
+
+  static LinkedList<OldWindowSize> sList;
+  nsWeakPtr mWindow;
+  nsSize mSize;
+};
+
+LinkedList<OldWindowSize> OldWindowSize::sList;
+
 NS_IMETHODIMP
 nsDOMWindowUtils::HandleFullscreenRequests(bool* aRetVal)
 {
@@ -3215,6 +3282,18 @@ nsDOMWindowUtils::HandleFullscreenRequests(bool* aRetVal)
 
   nsCOMPtr<nsIDocument> doc = GetDocument();
   NS_ENSURE_STATE(doc);
+
+  // Notify the pres shell that we are starting fullscreen change, and
+  // set the window dimensions in advance. Since the resize message
+  // comes after the fullscreen change call, doing so could avoid an
+  // extra resize reflow after this point.
+  nsRect screenRect;
+  if (nsPresContext* presContext = GetPresContext()) {
+    presContext->DeviceContext()->GetRect(screenRect);
+  }
+  nsSize oldSize;
+  FullscreenChangePrepare prepare(GetPresShell(), screenRect.Size(), &oldSize);
+  OldWindowSize::Set(doc->GetWindow(), oldSize);
 
   *aRetVal = nsIDocument::HandlePendingFullscreenRequests(doc);
   return NS_OK;
@@ -3227,6 +3306,16 @@ nsDOMWindowUtils::ExitFullscreen()
 
   nsCOMPtr<nsIDocument> doc = GetDocument();
   NS_ENSURE_STATE(doc);
+  if (!doc->IsFullScreenDoc()) {
+    return NS_OK;
+  }
+
+  // Notify the pres shell that we are starting fullscreen change, and
+  // set the window dimensions in advance. Since the resize message
+  // comes after the fullscreen change call, doing so could avoid an
+  // extra resize reflow after this point.
+  FullscreenChangePrepare prepare(
+    GetPresShell(), OldWindowSize::GetAndRemove(doc->GetWindow()));
 
   nsIDocument::ExitFullscreenInDocTree(doc);
   return NS_OK;
@@ -3471,7 +3560,7 @@ nsDOMWindowUtils::IsNodeDisabledForEvents(nsIDOMNode* aNode, bool* aRetVal)
   while (node) {
     if (node->IsNodeOfType(nsINode::eHTML_FORM_CONTROL)) {
       nsCOMPtr<nsIFormControl> fc = do_QueryInterface(node);
-      if (fc && fc->IsDisabledForEvents(NS_EVENT_NULL)) {
+      if (fc && fc->IsDisabledForEvents(eVoidEvent)) {
         *aRetVal = true;
         break;
       }
@@ -3526,30 +3615,6 @@ nsDOMWindowUtils::DispatchEventToChromeOnly(nsIDOMEventTarget* aTarget,
   aEvent->GetInternalNSEvent()->mFlags.mOnlyChromeDispatch = true;
   aTarget->DispatchEvent(aEvent, aRetVal);
   return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMWindowUtils::RunInStableState(nsIRunnable *aRunnable)
-{
-  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
-
-  nsCOMPtr<nsIRunnable> runnable = aRunnable;
-  nsContentUtils::RunInStableState(runnable.forget());
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDOMWindowUtils::RunBeforeNextEvent(nsIRunnable *runnable)
-{
-  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
-
-  nsCOMPtr<nsIAppShell> appShell(do_GetService(kAppShellCID));
-  if (!appShell) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
-  return appShell->RunBeforeNextEvent(runnable);
 }
 
 NS_IMETHODIMP
@@ -3941,6 +4006,30 @@ nsDOMWindowUtils::LeaveChaosMode()
 }
 
 NS_IMETHODIMP
+nsDOMWindowUtils::ForceUseCounterFlush(nsIDOMNode *aNode)
+{
+  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+  NS_ENSURE_ARG_POINTER(aNode);
+
+  if (nsCOMPtr<nsIDocument> doc = do_QueryInterface(aNode)) {
+    mozilla::css::ImageLoader* loader = doc->StyleImageLoader();
+    loader->FlushUseCounters();
+
+    static_cast<nsDocument*>(doc.get())->ReportUseCounters();
+    return NS_OK;
+  }
+
+  if (nsCOMPtr<nsIContent> content = do_QueryInterface(aNode)) {
+    if (HTMLImageElement* img = HTMLImageElement::FromContent(content)) {
+      img->FlushUseCounters();
+      return NS_OK;
+    }
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDOMWindowUtils::HasRuleProcessorUsedByMultipleStyleSets(uint32_t aSheetType,
                                                           bool* aRetVal)
 {
@@ -3953,6 +4042,21 @@ nsDOMWindowUtils::HasRuleProcessorUsedByMultipleStyleSets(uint32_t aSheetType,
 
   return presShell->HasRuleProcessorUsedByMultipleStyleSets(aSheetType,
                                                             aRetVal);
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::SetNextPaintSyncId(int32_t aSyncId)
+{
+  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+  if (nsIWidget* widget = GetWidget()) {
+    nsRefPtr<LayerManager> lm = widget->GetLayerManager();
+    if (lm && lm->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
+      ClientLayerManager* clm = static_cast<ClientLayerManager*>(lm.get());
+      clm->SetNextPaintSyncId(aSyncId);
+    }
+  }
+
+  return NS_OK;
 }
 
 NS_INTERFACE_MAP_BEGIN(nsTranslationNodeList)

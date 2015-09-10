@@ -10,13 +10,13 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Variant.h"
 
-#include "prmjtime.h"
 #include "builtin/RegExp.h"
 #include "gc/Barrier.h"
 #include "gc/Zone.h"
 #include "vm/GlobalObject.h"
 #include "vm/PIC.h"
 #include "vm/SavedStacks.h"
+#include "vm/Time.h"
 
 namespace js {
 
@@ -700,8 +700,8 @@ struct JSCompartment
   private:
     js::jit::JitCompartment* jitCompartment_;
 
-    js::ReadBarriered<js::ArgumentsObject*> normalArgumentsTemplate_;
-    js::ReadBarriered<js::ArgumentsObject*> strictArgumentsTemplate_;
+    js::ReadBarriered<js::ArgumentsObject*> mappedArgumentsTemplate_;
+    js::ReadBarriered<js::ArgumentsObject*> unmappedArgumentsTemplate_;
 
   public:
     bool ensureJitCompartmentExists(JSContext* cx);
@@ -722,7 +722,7 @@ struct JSCompartment
         DeprecatedLanguageExtensionCount
     };
 
-    js::ArgumentsObject* getOrCreateArgumentsTemplateObject(JSContext* cx, bool strict);
+    js::ArgumentsObject* getOrCreateArgumentsTemplateObject(JSContext* cx, bool mapped);
 
   private:
     // Used for collecting telemetry on SpiderMonkey's deprecated language extensions.

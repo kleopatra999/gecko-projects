@@ -14,6 +14,7 @@ import java.util.Locale;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
@@ -28,7 +29,6 @@ import org.mozilla.gecko.db.BrowserContract.History;
 import org.mozilla.gecko.db.BrowserContract.URLColumns;
 import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
 import org.mozilla.gecko.home.SearchLoader.SearchCursorLoader;
-import org.mozilla.gecko.mozglue.RobocopTarget;
 import org.mozilla.gecko.toolbar.AutocompleteHandler;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.StringUtils;
@@ -51,7 +51,6 @@ import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.ViewGroup;
 import android.view.ViewStub;
-import android.view.WindowManager;
 import android.view.WindowManager.LayoutParams;
 import android.view.animation.AccelerateInterpolator;
 import android.view.animation.Animation;
@@ -912,7 +911,7 @@ public class BrowserSearch extends HomeFragment
 
                 final SearchEngine engine = mSearchEngines.get(position);
                 final boolean animate = (mAnimateSuggestions && engine.hasSuggestions());
-                row.updateFromSearchEngine(engine, animate);
+                row.updateSuggestions(mSuggestionsEnabled, engine, mSearchTerm, animate);
                 if (animate) {
                     // Only animate suggestions the first time they are shown
                     mAnimateSuggestions = false;

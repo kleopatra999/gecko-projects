@@ -51,6 +51,16 @@
 #include "nsParserConstants.h"
 #include "nsSandboxFlags.h"
 
+static PRLogModuleInfo*
+GetSriLog()
+{
+  static PRLogModuleInfo *gSriPRLog;
+  if (!gSriPRLog) {
+    gSriPRLog = PR_NewLogModule("SRI");
+  }
+  return gSriPRLog;
+}
+
 using namespace mozilla;
 
 PRLogModuleInfo* gContentSinkLogModuleInfo;
@@ -75,12 +85,14 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsContentSink)
   }
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mParser)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mCSSLoader)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mNodeInfoManager)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mScriptLoader)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsContentSink)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocument)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParser)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCSSLoader)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mNodeInfoManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mScriptLoader)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
@@ -750,12 +762,23 @@ nsContentSink::ProcessStyleLink(nsIContent* aElement,
                aElement->NodeType() == nsIDOMNode::PROCESSING_INSTRUCTION_NODE,
                "We only expect processing instructions here");
 
+  nsAutoString integrity;
+  if (aElement) {
+    aElement->GetAttr(kNameSpaceID_None, nsGkAtoms::integrity, integrity);
+  }
+  if (!integrity.IsEmpty()) {
+    MOZ_LOG(GetSriLog(), mozilla::LogLevel::Debug,
+            ("nsContentSink::ProcessStyleLink, integrity=%s",
+             NS_ConvertUTF16toUTF8(integrity).get()));
+  }
+
   // If this is a fragment parser, we don't want to observe.
   // We don't support CORS for processing instructions
   bool isAlternate;
   rv = mCSSLoader->LoadStyleLink(aElement, url, aTitle, aMedia, aAlternate,
                                  CORS_NONE, mDocument->GetReferrerPolicy(),
-                                 mRunsToCompletion ? nullptr : this, &isAlternate);
+                                 integrity, mRunsToCompletion ? nullptr : this,
+                                 &isAlternate);
   NS_ENSURE_SUCCESS(rv, rv);
   
   if (!isAlternate && !mRunsToCompletion) {

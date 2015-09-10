@@ -269,7 +269,7 @@ public:
 
   IntervalSet(SelfType&& aOther)
   {
-    mIntervals.MoveElementsFrom(Move(aOther.mIntervals));
+    mIntervals.AppendElements(Move(aOther.mIntervals));
   }
 
   explicit IntervalSet(const ElemType& aOther)
@@ -379,7 +379,7 @@ public:
       normalized.AppendElement(Move(mIntervals[i]));
     }
     mIntervals.Clear();
-    mIntervals.MoveElementsFrom(Move(normalized));
+    mIntervals.AppendElements(Move(normalized));
 
     return *this;
   }
@@ -429,8 +429,8 @@ public:
     }
     T firstEnd = std::max(mIntervals[0].mStart, aInterval.mStart);
     T secondStart = std::min(mIntervals.LastElement().mEnd, aInterval.mEnd);
-    ElemType startInterval(mIntervals[0].mStart, firstEnd, aInterval.mFuzz);
-    ElemType endInterval(secondStart, mIntervals.LastElement().mEnd, aInterval.mFuzz);
+    ElemType startInterval(mIntervals[0].mStart, firstEnd);
+    ElemType endInterval(secondStart, mIntervals.LastElement().mEnd);
     SelfType intervals(Move(startInterval));
     intervals += Move(endInterval);
     return Intersection(intervals);
@@ -482,7 +482,7 @@ public:
       }
     }
     mIntervals.Clear();
-    mIntervals.MoveElementsFrom(Move(intersection));
+    mIntervals.AppendElements(Move(intersection));
     return *this;
   }
 
@@ -682,7 +682,7 @@ private:
       normalized.AppendElement(Move(current));
 
       mIntervals.Clear();
-      mIntervals.MoveElementsFrom(Move(normalized));
+      mIntervals.AppendElements(Move(normalized));
     }
   }
 

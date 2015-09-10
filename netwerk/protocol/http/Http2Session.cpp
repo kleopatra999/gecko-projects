@@ -25,7 +25,7 @@
 #include "nsHttp.h"
 #include "nsHttpHandler.h"
 #include "nsHttpConnection.h"
-#include "nsILoadGroup.h"
+#include "nsISchedulingContext.h"
 #include "nsISSLSocketControl.h"
 #include "nsISSLStatus.h"
 #include "nsISSLStatusProvider.h"
@@ -1047,10 +1047,10 @@ Http2Session::CleanupStream(Http2Stream *aStream, nsresult aResult,
       Http2PushedStream *pushStream = static_cast<Http2PushedStream *>(aStream);
       nsAutoCString hashKey;
       pushStream->GetHashKey(hashKey);
-      nsILoadGroupConnectionInfo *loadGroupCI = aStream->LoadGroupConnectionInfo();
-      if (loadGroupCI) {
+      nsISchedulingContext *schedulingContext = aStream->SchedulingContext();
+      if (schedulingContext) {
         SpdyPushCache *cache = nullptr;
-        loadGroupCI->GetSpdyPushCache(&cache);
+        schedulingContext->GetSpdyPushCache(&cache);
         if (cache) {
           Http2PushedStream *trash = cache->RemovePushedStreamHttp2(hashKey);
           LOG3(("Http2Session::CleanupStream %p aStream=%p pushStream=%p trash=%p",
@@ -1152,9 +1152,12 @@ Http2Session::ParsePadding(uint8_t &paddingControlBytes, uint16_t &paddingLength
   if (mInputFrameFlags & kFlag_PADDED) {
     paddingLength = *reinterpret_cast<uint8_t *>(mInputFrameBuffer + kFrameHeaderBytes);
     paddingControlBytes = 1;
+  } else {
+    paddingLength = 0;
+    paddingControlBytes = 0;
   }
 
-  if (paddingLength > mInputFrameDataSize) {
+  if (static_cast<uint32_t>(paddingLength + paddingControlBytes) > mInputFrameDataSize) {
     // This is fatal to the session
     LOG3(("Http2Session::ParsePadding %p stream 0x%x PROTOCOL_ERROR "
           "paddingLength %d > frame size %d\n",
@@ -1211,6 +1214,11 @@ Http2Session::RecvHeaders(Http2Session *self)
         self->mInputFrameFlags & kFlag_PRIORITY,
         paddingLength,
         self->mInputFrameFlags & kFlag_PADDED));
+
+  if ((paddingControlBytes + priorityLen + paddingLength) > self->mInputFrameDataSize) {
+    // This is fatal to the session
+    RETURN_SESSION_ERROR(self, PROTOCOL_ERROR);
+  }
 
   if (!self->mInputFrameDataStream) {
     // Cannot find stream. We can continue the session, but we need to
@@ -1557,11 +1565,11 @@ Http2Session::RecvPushPromise(Http2Session *self)
     self->mContinuedPromiseStream = promisedID;
   }
 
-  if (paddingLength > self->mInputFrameDataSize) {
+  if ((paddingControlBytes + promiseLen + paddingLength) > self->mInputFrameDataSize) {
     // This is fatal to the session
     LOG3(("Http2Session::RecvPushPromise %p ID 0x%X assoc ID 0x%X "
-          "PROTOCOL_ERROR paddingLength %d > frame size %d\n",
-          self, promisedID, associatedID, paddingLength,
+          "PROTOCOL_ERROR extra %d > frame size %d\n",
+          self, promisedID, associatedID, (paddingControlBytes + promiseLen + paddingLength),
           self->mInputFrameDataSize));
     RETURN_SESSION_ERROR(self, PROTOCOL_ERROR);
   }
@@ -1608,12 +1616,12 @@ Http2Session::RecvPushPromise(Http2Session *self)
     LOG3(("Http2Session::RecvPushPromise %p lookup associated ID failed.\n", self));
     self->GenerateRstStream(PROTOCOL_ERROR, promisedID);
   } else {
-    nsILoadGroupConnectionInfo *loadGroupCI = associatedStream->LoadGroupConnectionInfo();
-    if (loadGroupCI) {
-      loadGroupCI->GetSpdyPushCache(&cache);
+    nsISchedulingContext *schedulingContext = associatedStream->SchedulingContext();
+    if (schedulingContext) {
+      schedulingContext->GetSpdyPushCache(&cache);
       if (!cache) {
         cache = new SpdyPushCache();
-        if (!cache || NS_FAILED(loadGroupCI->SetSpdyPushCache(cache))) {
+        if (!cache || NS_FAILED(schedulingContext->SetSpdyPushCache(cache))) {
           delete cache;
           cache = nullptr;
         }
@@ -1621,7 +1629,7 @@ Http2Session::RecvPushPromise(Http2Session *self)
     }
     if (!cache) {
       // this is unexpected, but we can handle it just by refusing the push
-      LOG3(("Http2Session::RecvPushPromise Push Recevied without loadgroup cache\n"));
+      LOG3(("Http2Session::RecvPushPromise Push Recevied without push cache\n"));
       self->GenerateRstStream(REFUSED_STREAM_ERROR, promisedID);
     } else {
       resetStream = false;

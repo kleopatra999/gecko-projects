@@ -35,6 +35,7 @@
 #include "nsIInputStream.h"
 #include "nsITransport.h"
 #include "nsIOService.h"
+#include "nsISchedulingContext.h"
 #include <algorithm>
 
 #ifdef MOZ_WIDGET_GONK
@@ -106,6 +107,7 @@ nsHttpTransaction::nsHttpTransaction()
     , mPipelinePosition(0)
     , mCapsToClear(0)
     , mHttpVersion(NS_HTTP_VERSION_UNKNOWN)
+    , mHttpResponseCode(0)
     , mClosed(false)
     , mConnected(false)
     , mHaveStatusLine(false)
@@ -980,7 +982,8 @@ nsHttpTransaction::Close(nsresult reason)
 
         NS_WARNING("Partial transfer, incomplete HTTP response received");
 
-        if (mHttpVersion >= NS_HTTP_VERSION_1_1) {
+        if ((mHttpResponseCode / 100 == 2) &&
+            (mHttpVersion >= NS_HTTP_VERSION_1_1)) {
             FrameCheckLevel clevel = gHttpHandler->GetEnforceH1Framing();
             if (clevel >= FRAMECHECK_BARELY) {
                 if ((clevel == FRAMECHECK_STRICT) ||
@@ -1533,6 +1536,7 @@ nsHttpTransaction::HandleContentStart()
         // Save http version, mResponseHead isn't available anymore after
         // TakeResponseHead() is called
         mHttpVersion = mResponseHead->Version();
+        mHttpResponseCode = mResponseHead->Status();
 
         // notify the connection, give it a chance to cause a reset.
         bool reset = false;
@@ -1848,10 +1852,10 @@ nsHttpTransaction::CancelPipeline(uint32_t reason)
 
 
 void
-nsHttpTransaction::SetLoadGroupConnectionInfo(nsILoadGroupConnectionInfo *aLoadGroupCI)
+nsHttpTransaction::SetSchedulingContext(nsISchedulingContext *aSchedulingContext)
 {
-    LOG(("nsHttpTransaction %p SetLoadGroupConnectionInfo %p\n", this, aLoadGroupCI));
-    mLoadGroupCI = aLoadGroupCI;
+    LOG(("nsHttpTransaction %p SetSchedulingContext %p\n", this, aSchedulingContext));
+    mSchedulingContext = aSchedulingContext;
 }
 
 // Called when the transaction marked for blocking is associated with a connection
@@ -1866,32 +1870,32 @@ nsHttpTransaction::DispatchedAsBlocking()
 
     LOG(("nsHttpTransaction %p dispatched as blocking\n", this));
 
-    if (!mLoadGroupCI)
+    if (!mSchedulingContext)
         return;
 
     LOG(("nsHttpTransaction adding blocking transaction %p from "
-         "loadgroup %p\n", this, mLoadGroupCI.get()));
+         "scheduling context %p\n", this, mSchedulingContext.get()));
 
-    mLoadGroupCI->AddBlockingTransaction();
+    mSchedulingContext->AddBlockingTransaction();
     mDispatchedAsBlocking = true;
 }
 
 void
 nsHttpTransaction::RemoveDispatchedAsBlocking()
 {
-    if (!mLoadGroupCI || !mDispatchedAsBlocking)
+    if (!mSchedulingContext || !mDispatchedAsBlocking)
         return;
 
     uint32_t blockers = 0;
-    nsresult rv = mLoadGroupCI->RemoveBlockingTransaction(&blockers);
+    nsresult rv = mSchedulingContext->RemoveBlockingTransaction(&blockers);
 
     LOG(("nsHttpTransaction removing blocking transaction %p from "
-         "loadgroup %p. %d blockers remain.\n", this,
-         mLoadGroupCI.get(), blockers));
+         "scheduling context %p. %d blockers remain.\n", this,
+         mSchedulingContext.get(), blockers));
 
     if (NS_SUCCEEDED(rv) && !blockers) {
         LOG(("nsHttpTransaction %p triggering release of blocked channels "
-             " with loadgroupci=%p\n", this, mLoadGroupCI.get()));
+             " with scheduling context=%p\n", this, mSchedulingContext.get()));
         gHttpHandler->ConnMgr()->ProcessPendingQ();
     }
 
@@ -1902,9 +1906,9 @@ void
 nsHttpTransaction::ReleaseBlockingTransaction()
 {
     RemoveDispatchedAsBlocking();
-    LOG(("nsHttpTransaction %p loadgroupci set to null "
-         "in ReleaseBlockingTransaction() - was %p\n", this, mLoadGroupCI.get()));
-    mLoadGroupCI = nullptr;
+    LOG(("nsHttpTransaction %p scheduling context set to null "
+         "in ReleaseBlockingTransaction() - was %p\n", this, mSchedulingContext.get()));
+    mSchedulingContext = nullptr;
 }
 
 void

@@ -35,7 +35,7 @@
 #include "nsCycleCollectionNoteRootCallback.h"
 #include "nsCycleCollector.h"
 #include "nsScriptLoader.h"
-#include "jsfriendapi.h"
+#include "jsapi.h"
 #include "jsprf.h"
 #include "js/MemoryMetrics.h"
 #include "mozilla/dom/GeneratedAtomList.h"
@@ -2507,14 +2507,6 @@ ReportJSRuntimeExplicitTreeStats(const JS::RuntimeStats& rtStats,
         KIND_HEAP, rtStats.runtime.gc.storeBufferWholeCells,
         "Whole cells in the store buffer.");
 
-    RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/gc/store-buffer/reloc-vals"),
-        KIND_HEAP, rtStats.runtime.gc.storeBufferRelocVals,
-        "Relocatable values in the store buffer.");
-
-    RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/gc/store-buffer/reloc-cells"),
-        KIND_HEAP, rtStats.runtime.gc.storeBufferRelocCells,
-        "Relocatable cells in the store buffer.");
-
     RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/gc/store-buffer/generics"),
         KIND_HEAP, rtStats.runtime.gc.storeBufferGenerics,
         "Generic things in the store buffer.");
@@ -3572,6 +3564,66 @@ XPCJSRuntime::NoteCustomGCThingXPCOMChildren(const js::Class* clasp, JSObject* o
     NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "xpc_GetJSPrivate(obj)->mNative");
     cb.NoteXPCOMChild(to->GetNative());
     return true;
+}
+
+void
+XPCJSRuntime::BeforeProcessTask(bool aMightBlock)
+{
+    MOZ_ASSERT(NS_IsMainThread());
+
+    // If ProcessNextEvent was called during a Promise "then" callback, we
+    // must process any pending microtasks before blocking in the event loop,
+    // otherwise we may deadlock until an event enters the queue later.
+    if (aMightBlock) {
+        if (Promise::PerformMicroTaskCheckpoint()) {
+            // If any microtask was processed, we post a dummy event in order to
+            // force the ProcessNextEvent call not to block.  This is required
+            // to support nested event loops implemented using a pattern like
+            // "while (condition) thread.processNextEvent(true)", in case the
+            // condition is triggered here by a Promise "then" callback.
+
+            class DummyRunnable : public nsRunnable {
+            public:
+                NS_IMETHOD Run() { return NS_OK; }
+            };
+
+            NS_DispatchToMainThread(new DummyRunnable());
+        }
+    }
+
+    // Start the slow script timer.
+    mSlowScriptCheckpoint = mozilla::TimeStamp::NowLoRes();
+    mSlowScriptSecondHalf = false;
+
+    // As we may be entering a nested event loop, we need to
+    // cancel any ongoing performance measurement.
+    js::ResetPerformanceMonitoring(Get()->Runtime());
+
+    // Push a null JSContext so that we don't see any script during
+    // event processing.
+    PushNullJSContext();
+
+    CycleCollectedJSRuntime::BeforeProcessTask(aMightBlock);
+}
+
+void
+XPCJSRuntime::AfterProcessTask(uint32_t aNewRecursionDepth)
+{
+    // Now that we're back to the event loop, reset the slow script checkpoint.
+    mSlowScriptCheckpoint = mozilla::TimeStamp();
+    mSlowScriptSecondHalf = false;
+
+    // Call cycle collector occasionally.
+    MOZ_ASSERT(NS_IsMainThread());
+    nsJSContext::MaybePokeCC();
+
+    CycleCollectedJSRuntime::AfterProcessTask(aNewRecursionDepth);
+
+    // Now that we are certain that the event is complete,
+    // we can flush any ongoing performance measurement.
+    js::FlushPerformanceMonitoring(Get()->Runtime());
+
+    PopNullJSContext();
 }
 
 /***************************************************************************/

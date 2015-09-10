@@ -63,7 +63,7 @@ try {
   runningInParent = Components.classes["@mozilla.org/xre/runtime;1"].
                     getService(Components.interfaces.nsIXULRuntime).processType
                     == Components.interfaces.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
-} 
+}
 catch (e) { }
 
 // Only if building of places is enabled.
@@ -127,7 +127,8 @@ try {
       return this;
     },
     observe : function (msg) {
-      do_print("CONSOLE_MESSAGE: (" + levelNames[msg.logLevel] + ") " + msg.toString());
+      if (typeof do_print === "function")
+        do_print("CONSOLE_MESSAGE: (" + levelNames[msg.logLevel] + ") " + msg.toString());
     }
   };
   Components.classes["@mozilla.org/consoleservice;1"]
@@ -378,8 +379,9 @@ function _setupDebuggerServer(breakpointFiles, callback) {
     prefs.setBoolPref("devtools.debugger.log.verbose", true);
   }
 
-  let {DebuggerServer, OriginalLocation} =
-    Components.utils.import('resource://gre/modules/devtools/dbg-server.jsm', {});
+  let { require } = Components.utils.import("resource://gre/modules/devtools/Loader.jsm", {});
+  let { DebuggerServer } = require("devtools/server/main");
+  let { OriginalLocation } = require("devtools/server/actors/common");
   DebuggerServer.init();
   DebuggerServer.addBrowserActors();
   DebuggerServer.addActors("resource://testing-common/dbg-actors.js");
@@ -503,7 +505,7 @@ function _execute_test() {
     do_test_pending("MAIN run_test");
     // Check if run_test() is defined. If defined, run it.
     // Else, call run_next_test() directly to invoke tests
-    // added by add_test() and add_task().  
+    // added by add_test() and add_task().
     if (typeof run_test === "function") {
       run_test();
     } else {
@@ -1214,6 +1216,7 @@ function do_load_child_test_harness()
   let command =
         "const _HEAD_JS_PATH=" + uneval(_HEAD_JS_PATH) + "; "
       + "const _HEAD_FILES=" + uneval(_HEAD_FILES) + "; "
+      + "const _MOZINFO_JS_PATH=" + uneval(_MOZINFO_JS_PATH) + "; "
       + "const _TAIL_FILES=" + uneval(_TAIL_FILES) + "; "
       + "const _TEST_NAME=" + uneval(_TEST_NAME) + "; "
       // We'll need more magic to get the debugger working in the child
@@ -1431,7 +1434,7 @@ function run_next_test()
                     "run_next_test() should not be called from inside add_task() " +
                     "under any circumstances!");
   }
- 
+
   function _run_next_test()
   {
     if (_gTestIndex < _gTests.length) {
@@ -1519,3 +1522,29 @@ try {
     prefs.deleteBranch("browser.devedition.theme.enabled");
   }
 } catch (e) { }
+
+function _load_mozinfo() {
+  let mozinfoFile = Components.classes["@mozilla.org/file/local;1"]
+    .createInstance(Components.interfaces.nsIFile);
+  mozinfoFile.initWithPath(_MOZINFO_JS_PATH);
+  let stream = Components.classes["@mozilla.org/network/file-input-stream;1"]
+    .createInstance(Components.interfaces.nsIFileInputStream);
+  stream.init(mozinfoFile, -1, 0, 0);
+  let json = Components.classes["@mozilla.org/dom/json;1"]
+    .createInstance(Components.interfaces.nsIJSON);
+  let mozinfo = json.decodeFromStream(stream, stream.available());
+  stream.close();
+  return mozinfo;
+}
+
+Object.defineProperty(this, "mozinfo", {
+  configurable: true,
+  get() {
+    let _mozinfo = _load_mozinfo();
+    Object.defineProperty(this, "mozinfo", {
+      configurable: false,
+      value: _mozinfo
+    });
+    return _mozinfo;
+  }
+});

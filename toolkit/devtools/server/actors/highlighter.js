@@ -11,6 +11,7 @@ const {Arg, Option, method, RetVal} = protocol;
 const events = require("sdk/event/core");
 const Heritage = require("sdk/core/heritage");
 const EventEmitter = require("devtools/toolkit/event-emitter");
+const LayoutHelpers = require("devtools/toolkit/layout-helpers");
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 loader.lazyRequireGetter(this, "CssLogic",
@@ -20,8 +21,6 @@ loader.lazyRequireGetter(this, "setIgnoreLayoutChanges",
 loader.lazyGetter(this, "DOMUtils", function() {
   return Cc["@mozilla.org/inspector/dom-utils;1"].getService(Ci.inIDOMUtils);
 });
-loader.lazyImporter(this, "LayoutHelpers",
-  "resource://gre/modules/devtools/LayoutHelpers.jsm");
 
 // FIXME: add ":visited" and ":link" after bug 713106 is fixed
 const PSEUDO_CLASSES = [":hover", ":active", ":focus"];
@@ -533,14 +532,14 @@ let CustomHighlighterActor = exports.CustomHighlighterActor = protocol.ActorClas
    * is destroyed.
    */
   finalize: method(function() {
-    if (this._highlighterEnv) {
-      this._highlighterEnv.destroy();
-      this._highlighterEnv = null;
-    }
-
     if (this._highlighter) {
       this._highlighter.destroy();
       this._highlighter = null;
+    }
+
+    if (this._highlighterEnv) {
+      this._highlighterEnv.destroy();
+      this._highlighterEnv = null;
     }
   }, {
     oneway: true
@@ -2741,12 +2740,13 @@ exports.GeometryEditorHighlighter = GeometryEditorHighlighter;
  * graduations, useful for users to quickly check distances
  */
 function RulersHighlighter(highlighterEnv) {
-  this.win = highlighterEnv.window;
+  this.env = highlighterEnv;
   this.markup = new CanvasFrameAnonymousContentHelper(highlighterEnv,
     this._buildMarkup.bind(this));
 
-  this.win.addEventListener("scroll", this, true);
-  this.win.addEventListener("pagehide", this, true);
+  let { pageListenerTarget } = highlighterEnv;
+  pageListenerTarget.addEventListener("scroll", this);
+  pageListenerTarget.addEventListener("pagehide", this);
 }
 
 RulersHighlighter.prototype = {
@@ -2755,8 +2755,8 @@ RulersHighlighter.prototype = {
   ID_CLASS_PREFIX: "rulers-highlighter-",
 
   _buildMarkup: function() {
+    let { window } = this.env;
     let prefix = this.ID_CLASS_PREFIX;
-    let window = this.win;
 
     function createRuler(axis, size) {
       let width, height;
@@ -2934,11 +2934,53 @@ RulersHighlighter.prototype = {
                         .setAttribute("transform", `translate(0, ${-scrollY})`);
   },
 
+  _update: function() {
+    let { window } = this.env;
+
+    setIgnoreLayoutChanges(true);
+
+    let zoom = LayoutHelpers.getCurrentZoom(window);
+    let isZoomChanged = zoom !== this._zoom;
+
+    if (isZoomChanged) {
+      this._zoom = zoom;
+      this.updateViewport();
+    }
+
+    setIgnoreLayoutChanges(false, window.document.documentElement);
+
+    this._rafID = window.requestAnimationFrame(() => this._update());
+  },
+
+  _cancelUpdate: function() {
+    if (this._rafID) {
+      this.env.window.cancelAnimationFrame(this._rafID);
+      this._rafID = 0;
+    }
+  },
+  updateViewport: function() {
+    let { devicePixelRatio } = this.env.window;
+
+    // Because `devicePixelRatio` is affected by zoom (see bug 809788),
+    // in order to get the "real" device pixel ratio, we need divide by `zoom`
+    let pixelRatio = devicePixelRatio / this._zoom;
+
+    // The "real" device pixel ratio is used to calculate the max stroke
+    // width we can actually assign: on retina, for instance, it would be 0.5,
+    // where on non high dpi monitor would be 1.
+    let minWidth = 1 / pixelRatio;
+    let strokeWidth = Math.min(minWidth, minWidth / this._zoom);
+
+    this.markup.getElement(this.ID_CLASS_PREFIX + "root").setAttribute("style",
+      `stroke-width:${strokeWidth};`);
+  },
+
   destroy: function() {
     this.hide();
 
-    this.win.removeEventListener("scroll", this, true);
-    this.win.removeEventListener("pagehide", this, true);
+    let { pageListenerTarget } = this.env;
+    pageListenerTarget.removeEventListener("scroll", this);
+    pageListenerTarget.removeEventListener("pagehide", this);
 
     this.markup.destroy();
 
@@ -2948,12 +2990,17 @@ RulersHighlighter.prototype = {
   show: function() {
     this.markup.removeAttributeForElement(this.ID_CLASS_PREFIX + "elements",
       "hidden");
+
+    this._update();
+
     return true;
   },
 
   hide: function() {
     this.markup.setAttributeForElement(this.ID_CLASS_PREFIX + "elements",
       "hidden", "true");
+
+    this._cancelUpdate();
   }
 };
 

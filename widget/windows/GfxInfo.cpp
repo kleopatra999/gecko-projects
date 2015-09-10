@@ -29,9 +29,7 @@ using namespace mozilla;
 using namespace mozilla::widget;
 
 #ifdef DEBUG
-NS_IMPL_ISUPPORTS_INHERITED(GfxInfo, GfxInfoBase, nsIGfxInfo2, nsIGfxInfoDebug)
-#else
-NS_IMPL_ISUPPORTS_INHERITED(GfxInfo, GfxInfoBase, nsIGfxInfo2)
+NS_IMPL_ISUPPORTS_INHERITED(GfxInfo, GfxInfoBase, nsIGfxInfoDebug)
 #endif
 
 static const uint32_t allWindowsVersions = 0xffffffff;
@@ -59,7 +57,6 @@ GfxInfo::GetDWriteEnabled(bool *aEnabled)
   return NS_OK;
 }
 
-/* readonly attribute DOMString DWriteVersion; */
 NS_IMETHODIMP
 GfxInfo::GetDWriteVersion(nsAString & aDwriteVersion)
 {
@@ -70,7 +67,6 @@ GfxInfo::GetDWriteVersion(nsAString & aDwriteVersion)
 #define PIXEL_STRUCT_RGB  1
 #define PIXEL_STRUCT_BGR  2
 
-/* readonly attribute DOMString cleartypeParameters; */
 NS_IMETHODIMP
 GfxInfo::GetCleartypeParameters(nsAString & aCleartypeParams)
 {
@@ -224,7 +220,7 @@ enum {
   kWindows7 = 0x60001,
   kWindows8 = 0x60002,
   kWindows8_1 = 0x60003,
-  kWindows10 = 0x60004
+  kWindows10 = 0xA0000
 };
 
 static int32_t
@@ -564,12 +560,9 @@ GfxInfo::Init()
 
   AddCrashReportAnnotations();
 
-  GetCountryCode();
-
   return rv;
 }
 
-/* readonly attribute DOMString adapterDescription; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDescription(nsAString & aAdapterDescription)
 {
@@ -577,7 +570,6 @@ GfxInfo::GetAdapterDescription(nsAString & aAdapterDescription)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDescription2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDescription2(nsAString & aAdapterDescription)
 {
@@ -585,7 +577,6 @@ GfxInfo::GetAdapterDescription2(nsAString & aAdapterDescription)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterRAM; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterRAM(nsAString & aAdapterRAM)
 {
@@ -594,7 +585,6 @@ GfxInfo::GetAdapterRAM(nsAString & aAdapterRAM)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterRAM2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterRAM2(nsAString & aAdapterRAM)
 {
@@ -606,7 +596,6 @@ GfxInfo::GetAdapterRAM2(nsAString & aAdapterRAM)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriver; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriver(nsAString & aAdapterDriver)
 {
@@ -615,7 +604,6 @@ GfxInfo::GetAdapterDriver(nsAString & aAdapterDriver)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriver2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriver2(nsAString & aAdapterDriver)
 {
@@ -627,7 +615,6 @@ GfxInfo::GetAdapterDriver2(nsAString & aAdapterDriver)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverVersion; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverVersion(nsAString & aAdapterDriverVersion)
 {
@@ -635,7 +622,6 @@ GfxInfo::GetAdapterDriverVersion(nsAString & aAdapterDriverVersion)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverDate; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverDate(nsAString & aAdapterDriverDate)
 {
@@ -643,7 +629,6 @@ GfxInfo::GetAdapterDriverDate(nsAString & aAdapterDriverDate)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverVersion2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverVersion2(nsAString & aAdapterDriverVersion)
 {
@@ -651,7 +636,6 @@ GfxInfo::GetAdapterDriverVersion2(nsAString & aAdapterDriverVersion)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverDate2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverDate2(nsAString & aAdapterDriverDate)
 {
@@ -659,7 +643,6 @@ GfxInfo::GetAdapterDriverDate2(nsAString & aAdapterDriverDate)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterVendorID; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterVendorID(nsAString & aAdapterVendorID)
 {
@@ -667,7 +650,6 @@ GfxInfo::GetAdapterVendorID(nsAString & aAdapterVendorID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterVendorID2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterVendorID2(nsAString & aAdapterVendorID)
 {
@@ -675,7 +657,6 @@ GfxInfo::GetAdapterVendorID2(nsAString & aAdapterVendorID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDeviceID; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDeviceID(nsAString & aAdapterDeviceID)
 {
@@ -683,7 +664,6 @@ GfxInfo::GetAdapterDeviceID(nsAString & aAdapterDeviceID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDeviceID2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDeviceID2(nsAString & aAdapterDeviceID)
 {
@@ -691,7 +671,6 @@ GfxInfo::GetAdapterDeviceID2(nsAString & aAdapterDeviceID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterSubsysID; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterSubsysID(nsAString & aAdapterSubsysID)
 {
@@ -699,7 +678,6 @@ GfxInfo::GetAdapterSubsysID(nsAString & aAdapterSubsysID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterSubsysID2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterSubsysID2(nsAString & aAdapterSubsysID)
 {
@@ -707,7 +685,6 @@ GfxInfo::GetAdapterSubsysID2(nsAString & aAdapterSubsysID)
   return NS_OK;
 }
 
-/* readonly attribute boolean isGPU2Active; */
 NS_IMETHODIMP
 GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active)
 {
@@ -731,15 +708,6 @@ CheckForCiscoVPN() {
   }
 }
 #endif
-
-/* interface nsIGfxInfo2 */
-/* readonly attribute DOMString countryCode; */
-NS_IMETHODIMP
-GfxInfo::GetCountryCode(nsAString& aCountryCode)
-{
-  aCountryCode = mCountryCode;
-  return NS_OK;
-}
 
 void
 GfxInfo::AddCrashReportAnnotations()
@@ -820,28 +788,6 @@ GfxInfo::AddCrashReportAnnotations()
   CrashReporter::AppendAppNotesToCrashReport(note);
 
 #endif
-}
-
-void
-GfxInfo::GetCountryCode()
-{
-  GEOID geoid = GetUserGeoID(GEOCLASS_NATION);
-  if (geoid == GEOID_NOT_AVAILABLE) {
-    return;
-  }
-  // Get required length
-  int numChars = GetGeoInfoW(geoid, GEO_ISO2, nullptr, 0, 0);
-  if (!numChars) {
-    return;
-  }
-  // Now get the string for real
-  mCountryCode.SetLength(numChars);
-  numChars = GetGeoInfoW(geoid, GEO_ISO2, wwc(mCountryCode.BeginWriting()),
-                         mCountryCode.Length(), 0);
-  if (numChars) {
-    // numChars includes null terminator
-    mCountryCode.Truncate(numChars - 1);
-  }
 }
 
 static OperatingSystem
@@ -1290,7 +1236,7 @@ GfxInfo::DescribeFeatures(JSContext* aCx, JS::Handle<JSObject*> aObj)
     val = JS::BooleanValue(platform->IsWARP());
     JS_SetProperty(aCx, obj, "warp", val);
 
-    val = JS::BooleanValue(platform->DoesD3D11TextureSharingWork());
+    val = JS::BooleanValue(platform->CompositorD3D11TextureSharingWorks());
     JS_SetProperty(aCx, obj, "textureSharing", val);
 
     val = JS::BooleanValue(!platform->CanUseDirect3D11());
@@ -1315,28 +1261,24 @@ GfxInfo::DescribeFeatures(JSContext* aCx, JS::Handle<JSObject*> aObj)
 
 // Implement nsIGfxInfoDebug
 
-/* void spoofVendorID (in DOMString aVendorID); */
 NS_IMETHODIMP GfxInfo::SpoofVendorID(const nsAString & aVendorID)
 {
   mAdapterVendorID = aVendorID;
   return NS_OK;
 }
 
-/* void spoofDeviceID (in unsigned long aDeviceID); */
 NS_IMETHODIMP GfxInfo::SpoofDeviceID(const nsAString & aDeviceID)
 {
   mAdapterDeviceID = aDeviceID;
   return NS_OK;
 }
 
-/* void spoofDriverVersion (in DOMString aDriverVersion); */
 NS_IMETHODIMP GfxInfo::SpoofDriverVersion(const nsAString & aDriverVersion)
 {
   mDriverVersion = aDriverVersion;
   return NS_OK;
 }
 
-/* void spoofOSVersion (in unsigned long aVersion); */
 NS_IMETHODIMP GfxInfo::SpoofOSVersion(uint32_t aVersion)
 {
   mWindowsVersion = aVersion;

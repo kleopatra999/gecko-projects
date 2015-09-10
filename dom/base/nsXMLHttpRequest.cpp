@@ -580,7 +580,6 @@ nsXMLHttpRequest::SizeOfEventTargetIncludingThis(
   // - lots
 }
 
-/* readonly attribute nsIChannel channel; */
 NS_IMETHODIMP
 nsXMLHttpRequest::GetChannel(nsIChannel **aChannel)
 {
@@ -602,7 +601,6 @@ static void LogMessage(const char* aWarning, nsPIDOMWindow* aWindow)
                                   aWarning);
 }
 
-/* readonly attribute nsIDOMDocument responseXML; */
 NS_IMETHODIMP
 nsXMLHttpRequest::GetResponseXML(nsIDOMDocument **aResponseXML)
 {
@@ -716,7 +714,6 @@ nsXMLHttpRequest::AppendToResponseText(const char * aSrcBuffer,
   return NS_OK;
 }
 
-/* readonly attribute AString responseText; */
 NS_IMETHODIMP
 nsXMLHttpRequest::GetResponseText(nsAString& aResponseText)
 {
@@ -834,7 +831,6 @@ nsXMLHttpRequest::CreatePartialBlob()
   mResponseBlob = mBlobSet->GetBlobInternal(GetOwner(), contentType);
 }
 
-/* attribute AString responseType; */
 NS_IMETHODIMP nsXMLHttpRequest::GetResponseType(nsAString& aResponseType)
 {
   switch (mResponseType) {
@@ -895,7 +891,6 @@ nsXMLHttpRequest::StaticAssertions()
 }
 #endif
 
-/* attribute AString responseType; */
 NS_IMETHODIMP nsXMLHttpRequest::SetResponseType(const nsAString& aResponseType)
 {
   nsXMLHttpRequest::ResponseTypeEnum responseType;
@@ -964,7 +959,6 @@ nsXMLHttpRequest::SetResponseType(nsXMLHttpRequest::ResponseTypeEnum aResponseTy
 
 }
 
-/* readonly attribute jsval response; */
 NS_IMETHODIMP
 nsXMLHttpRequest::GetResponse(JSContext *aCx, JS::MutableHandle<JS::Value> aResult)
 {
@@ -1093,7 +1087,6 @@ nsXMLHttpRequest::IsDeniedCrossSiteRequest()
   return false;
 }
 
-/* readonly attribute AString responseURL; */
 void
 nsXMLHttpRequest::GetResponseURL(nsAString& aUrl)
 {
@@ -1122,7 +1115,6 @@ nsXMLHttpRequest::GetResponseURL(nsAString& aUrl)
   CopyUTF8toUTF16(temp, aUrl);
 }
 
-/* readonly attribute unsigned long status; */
 NS_IMETHODIMP
 nsXMLHttpRequest::GetStatus(uint32_t *aStatus)
 {
@@ -1259,7 +1251,6 @@ nsXMLHttpRequest::CloseRequestWithError(const nsAString& aType,
   mState &= ~XML_HTTP_REQUEST_SYNCLOOPING;
 }
 
-/* void abort (); */
 void
 nsXMLHttpRequest::Abort()
 {
@@ -1329,7 +1320,6 @@ nsXMLHttpRequest::IsSafeHeader(const nsACString& header, nsIHttpChannel* httpCha
   return isSafe;
 }
 
-/* ByteString getAllResponseHeaders(); */
 IMPL_CSTRING_GETTER(GetAllResponseHeaders)
 void
 nsXMLHttpRequest::GetAllResponseHeaders(nsCString& aResponseHeaders)
@@ -1477,12 +1467,8 @@ nsXMLHttpRequest::GetLoadGroup() const
 nsresult
 nsXMLHttpRequest::CreateReadystatechangeEvent(nsIDOMEvent** aDOMEvent)
 {
-  nsresult rv = EventDispatcher::CreateEvent(this, nullptr, nullptr,
-                                             NS_LITERAL_STRING("Events"),
-                                             aDOMEvent);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
+  nsRefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
+  event.forget(aDOMEvent);
 
   (*aDOMEvent)->InitEvent(NS_LITERAL_STRING(READYSTATE_STR),
                           false, false);
@@ -1721,7 +1707,7 @@ nsXMLHttpRequest::Open(const nsACString& inMethod, const nsACString& url,
   rv = CheckInnerWindowCorrectness();
   NS_ENSURE_SUCCESS(rv, rv);
   int16_t shouldLoad = nsIContentPolicy::ACCEPT;
-  rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_XMLHTTPREQUEST,
+  rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST,
                                  uri,
                                  mPrincipal,
                                  doc,
@@ -1775,7 +1761,7 @@ nsXMLHttpRequest::Open(const nsACString& inMethod, const nsACString& url,
                        uri,
                        doc,
                        secFlags,
-                       nsIContentPolicy::TYPE_XMLHTTPREQUEST,
+                       nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST,
                        loadGroup,
                        nullptr,   // aCallbacks
                        nsIRequest::LOAD_BACKGROUND);
@@ -1785,7 +1771,7 @@ nsXMLHttpRequest::Open(const nsACString& inMethod, const nsACString& url,
                        uri,
                        mPrincipal,
                        secFlags,
-                       nsIContentPolicy::TYPE_XMLHTTPREQUEST,
+                       nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST,
                        loadGroup,
                        nullptr,   // aCallbacks
                        nsIRequest::LOAD_BACKGROUND);
@@ -1984,7 +1970,6 @@ nsXMLHttpRequest::OnDataAvailable(nsIRequest *request,
   return NS_OK;
 }
 
-/* void onStartRequest (in nsIRequest request, in nsISupports ctxt); */
 NS_IMETHODIMP
 nsXMLHttpRequest::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
 {
@@ -2219,7 +2204,6 @@ nsXMLHttpRequest::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
   return NS_OK;
 }
 
-/* void onStopRequest (in nsIRequest request, in nsISupports ctxt, in nsresult status, in wstring statusArg); */
 NS_IMETHODIMP
 nsXMLHttpRequest::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult status)
 {
@@ -2634,7 +2618,6 @@ nsXMLHttpRequest::GetRequestBody(nsIVariant* aVariant,
   return NS_OK;
 }
 
-/* void send (in nsIVariant aBody); */
 NS_IMETHODIMP
 nsXMLHttpRequest::Send(nsIVariant *aBody)
 {
@@ -2892,26 +2875,22 @@ nsXMLHttpRequest::Send(nsIVariant* aVariant, const Nullable<RequestBody>& aBody)
   NS_ASSERTION(listener != this,
                "Using an object as a listener that can't be exposed to JS");
 
-  // Bypass the network cache in cases where it makes no sense:
-  // POST responses are always unique, and we provide no API that would
-  // allow our consumers to specify a "cache key" to access old POST
-  // responses, so they are not worth caching.
-  if (method.EqualsLiteral("POST")) {
-    AddLoadFlags(mChannel,
-        nsIRequest::LOAD_BYPASS_CACHE | nsIRequest::INHIBIT_CACHING);
-  } else {
-    // When we are sync loading, we need to bypass the local cache when it would
-    // otherwise block us waiting for exclusive access to the cache.  If we don't
-    // do this, then we could dead lock in some cases (see bug 309424).
-    //
-    // Also don't block on the cache entry on async if it is busy - favoring parallelism
-    // over cache hit rate for xhr. This does not disable the cache everywhere -
-    // only in cases where more than one channel for the same URI is accessed
-    // simultanously.
+  // When we are sync loading, we need to bypass the local cache when it would
+  // otherwise block us waiting for exclusive access to the cache.  If we don't
+  // do this, then we could dead lock in some cases (see bug 309424).
+  //
+  // Also don't block on the cache entry on async if it is busy - favoring parallelism
+  // over cache hit rate for xhr. This does not disable the cache everywhere -
+  // only in cases where more than one channel for the same URI is accessed
+  // simultanously.
 
-    AddLoadFlags(mChannel,
-                 nsICachingChannel::LOAD_BYPASS_LOCAL_CACHE_IF_BUSY);
-  }
+  AddLoadFlags(mChannel,
+               nsICachingChannel::LOAD_BYPASS_LOCAL_CACHE_IF_BUSY);
+
+  // While it would be optimal to bypass the cache in case of POST requests
+  // since they are never cached, our ServiceWorker interception implementation
+  // on single-process systems is implemented via the HTTP cache, so DO NOT
+  // bypass the cache based on method!
 
   // Since we expect XML data, set the type hint accordingly
   // if the channel doesn't know any content type.
@@ -2952,14 +2931,6 @@ nsXMLHttpRequest::Send(nsIVariant* aVariant, const Nullable<RequestBody>& aBody)
         if (scheme.LowerCaseEqualsLiteral("app") ||
             scheme.LowerCaseEqualsLiteral("jar")) {
           mIsMappedArrayBuffer = true;
-          if (!XRE_IsParentProcess()) {
-            nsCOMPtr<nsIJARChannel> jarChannel = do_QueryInterface(mChannel);
-            // For memory mapping from child process, we need to get file
-            // descriptor of the JAR file opened remotely on the parent proess.
-            // Set this to make sure that file descriptor can be obtained by
-            // child process.
-            jarChannel->EnsureChildFd();
-          }
         }
       }
     }
@@ -3046,7 +3017,6 @@ nsXMLHttpRequest::Send(nsIVariant* aVariant, const Nullable<RequestBody>& aBody)
   return rv;
 }
 
-/* void setRequestHeader (in ByteString header, in ByteString value); */
 // http://dvcs.w3.org/hg/xhr/raw-file/tip/Overview.html#dom-xmlhttprequest-setrequestheader
 NS_IMETHODIMP
 nsXMLHttpRequest::SetRequestHeader(const nsACString& header,
@@ -3134,8 +3104,13 @@ nsXMLHttpRequest::SetRequestHeader(const nsACString& header,
     mergeHeaders = false;
   }
 
-  // Merge headers depending on what we decided above.
-  nsresult rv = httpChannel->SetRequestHeader(header, value, mergeHeaders);
+  nsresult rv;
+  if (value.IsEmpty()) {
+    rv = httpChannel->SetEmptyRequestHeader(header);
+  } else {
+    // Merge headers depending on what we decided above.
+    rv = httpChannel->SetRequestHeader(header, value, mergeHeaders);
+  }
   if (rv == NS_ERROR_INVALID_ARG) {
     return NS_ERROR_DOM_SYNTAX_ERR;
   }
@@ -3152,7 +3127,6 @@ nsXMLHttpRequest::SetRequestHeader(const nsACString& header,
   return rv;
 }
 
-/* attribute unsigned long timeout; */
 NS_IMETHODIMP
 nsXMLHttpRequest::GetTimeout(uint32_t *aTimeout)
 {
@@ -3216,7 +3190,6 @@ nsXMLHttpRequest::StartTimeoutTimer()
   );
 }
 
-/* readonly attribute unsigned short readyState; */
 NS_IMETHODIMP
 nsXMLHttpRequest::GetReadyState(uint16_t *aState)
 {
@@ -3244,7 +3217,6 @@ nsXMLHttpRequest::ReadyState()
   return DONE;
 }
 
-/* void overrideMimeType(in DOMString mimetype); */
 NS_IMETHODIMP
 nsXMLHttpRequest::SlowOverrideMimeType(const nsAString& aMimeType)
 {
@@ -3252,7 +3224,6 @@ nsXMLHttpRequest::SlowOverrideMimeType(const nsAString& aMimeType)
   return NS_OK;
 }
 
-/* attribute boolean mozBackgroundRequest; */
 NS_IMETHODIMP
 nsXMLHttpRequest::GetMozBackgroundRequest(bool *_retval)
 {
@@ -3295,7 +3266,6 @@ nsXMLHttpRequest::SetMozBackgroundRequest(bool aMozBackgroundRequest, nsresult& 
   }
 }
 
-/* attribute boolean withCredentials; */
 NS_IMETHODIMP
 nsXMLHttpRequest::GetWithCredentials(bool *_retval)
 {
@@ -3481,9 +3451,13 @@ nsXMLHttpRequest::OnRedirectVerifyCallback(nsresult result)
       // Ensure all original headers are duplicated for the new channel (bug #553888)
       for (uint32_t i = mModifiedRequestHeaders.Length(); i > 0; ) {
         --i;
-        httpChannel->SetRequestHeader(mModifiedRequestHeaders[i].header,
-                                      mModifiedRequestHeaders[i].value,
-                                      false);
+        if (mModifiedRequestHeaders[i].value.IsEmpty()) {
+          httpChannel->SetEmptyRequestHeader(mModifiedRequestHeaders[i].header);
+        } else {
+          httpChannel->SetRequestHeader(mModifiedRequestHeaders[i].header,
+                                        mModifiedRequestHeaders[i].value,
+                                        false);
+        }
       }
     }
   } else {

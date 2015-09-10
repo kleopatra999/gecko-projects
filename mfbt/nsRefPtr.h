@@ -18,9 +18,8 @@
 class nsCOMPtr_helper;
 
 namespace mozilla {
-namespace dom {
 template<class T> class OwningNonNull;
-} // namespace dom
+template<class T> class RefPtr;
 } // namespace mozilla
 
 template <class T>
@@ -31,16 +30,9 @@ private:
   assign_with_AddRef(T* aRawPtr)
   {
     if (aRawPtr) {
-      aRawPtr->AddRef();
+      AddRefTraits<T>::AddRef(aRawPtr);
     }
     assign_assuming_AddRef(aRawPtr);
-  }
-
-  void**
-  begin_assignment()
-  {
-    assign_assuming_AddRef(0);
-    return reinterpret_cast<void**>(&mRawPtr);
   }
 
   void
@@ -49,7 +41,7 @@ private:
     T* oldPtr = mRawPtr;
     mRawPtr = aNewPtr;
     if (oldPtr) {
-      oldPtr->Release();
+      AddRefTraits<T>::Release(oldPtr);
     }
   }
 
@@ -62,7 +54,7 @@ public:
   ~nsRefPtr()
   {
     if (mRawPtr) {
-      mRawPtr->Release();
+      AddRefTraits<T>::Release(mRawPtr);
     }
   }
 
@@ -79,7 +71,7 @@ public:
     // copy-constructor
   {
     if (mRawPtr) {
-      mRawPtr->AddRef();
+      AddRefTraits<T>::AddRef(mRawPtr);
     }
   }
 
@@ -95,7 +87,7 @@ public:
     : mRawPtr(aRawPtr)
   {
     if (mRawPtr) {
-      mRawPtr->AddRef();
+      AddRefTraits<T>::AddRef(mRawPtr);
     }
   }
 
@@ -114,6 +106,16 @@ public:
   }
 
   template <typename I>
+  MOZ_IMPLICIT nsRefPtr(const nsRefPtr<I>& aSmartPtr)
+    : mRawPtr(aSmartPtr.get())
+    // copy-construct from a smart pointer with a related pointer type
+  {
+    if (mRawPtr) {
+      AddRefTraits<T>::AddRef(mRawPtr);
+    }
+  }
+
+  template <typename I>
   MOZ_IMPLICIT nsRefPtr(nsRefPtr<I>&& aSmartPtr)
     : mRawPtr(aSmartPtr.forget().take())
     // construct from |Move(nsRefPtr<SomeSubclassOfT>)|.
@@ -124,7 +126,11 @@ public:
 
   // Defined in OwningNonNull.h
   template<class U>
-  MOZ_IMPLICIT nsRefPtr(const mozilla::dom::OwningNonNull<U>& aOther);
+  MOZ_IMPLICIT nsRefPtr(const mozilla::OwningNonNull<U>& aOther);
+
+  // Defined in RefPtr.h
+  template<class U>
+  MOZ_IMPLICIT nsRefPtr(mozilla::RefPtr<U>&& aOther);
 
   // Assignment operators
 
@@ -133,6 +139,15 @@ public:
   // copy assignment operator
   {
     assign_with_AddRef(aRhs.mRawPtr);
+    return *this;
+  }
+
+  template <typename I>
+  nsRefPtr<T>&
+  operator=(const nsRefPtr<I>& aRhs)
+  // assign from an nsRefPtr of a related pointer type
+  {
+    assign_with_AddRef(aRhs.get());
     return *this;
   }
 
@@ -175,7 +190,12 @@ public:
   // Defined in OwningNonNull.h
   template<class U>
   nsRefPtr<T>&
-  operator=(const mozilla::dom::OwningNonNull<U>& aOther);
+  operator=(const mozilla::OwningNonNull<U>& aOther);
+
+  // Defined in RefPtr.h
+  template<class U>
+  nsRefPtr<T>&
+  operator=(mozilla::RefPtr<U>&& aOther);
 
   // Other pointer operators
 
@@ -231,6 +251,9 @@ public:
   }
 
   operator T*() const
+#ifdef MOZ_HAVE_REF_QUALIFIERS
+  &
+#endif
   /*
     ...makes an |nsRefPtr| act like its underlying raw pointer type whenever it
     is used in a context where a raw pointer is expected.  It is this operator
@@ -243,6 +266,19 @@ public:
     return get();
   }
 
+#ifdef MOZ_HAVE_REF_QUALIFIERS
+  // Don't allow implicit conversion of temporary nsRefPtr to raw pointer,
+  // because the refcount might be one and the pointer will immediately become
+  // invalid.
+  operator T*() const && = delete;
+
+  // These are needed to avoid the deleted operator above.  XXX Why is operator!
+  // needed separately?  Shouldn't the compiler prefer using the non-deleted
+  // operator bool instead of the deleted operator T*?
+  explicit operator bool() const { return !!mRawPtr; }
+  bool operator!() const { return !mRawPtr; }
+#endif
+
   T*
   operator->() const MOZ_NO_ADDREF_RELEASE_ON_RETURN
   {
@@ -251,19 +287,32 @@ public:
     return get();
   }
 
-  // This operator is needed for gcc <= 4.0.* and for Sun Studio; it
-  // causes internal compiler errors for some MSVC versions.  (It's not
-  // clear to me whether it should be needed.)
-#ifndef _MSC_VER
-  template <class U, class V>
-  U&
-  operator->*(U V::* aMember)
+  template <typename R, typename... Args>
+  class Proxy
+  {
+    typedef R (T::*member_function)(Args...);
+    T* mRawPtr;
+    member_function mFunction;
+  public:
+    Proxy(T* aRawPtr, member_function aFunction)
+      : mRawPtr(aRawPtr),
+        mFunction(aFunction)
+    {
+    }
+    template<typename... ActualArgs>
+    R operator()(ActualArgs&&... aArgs)
+    {
+      return ((*mRawPtr).*mFunction)(mozilla::Forward<ActualArgs>(aArgs)...);
+    }
+  };
+
+  template <typename R, typename... Args>
+  Proxy<R, Args...> operator->*(R (T::*aFptr)(Args...)) const
   {
     MOZ_ASSERT(mRawPtr != 0,
                "You can't dereference a NULL nsRefPtr with operator->*().");
-    return get()->*aMember;
+    return Proxy<R, Args...>(get(), aFptr);
   }
-#endif
 
   nsRefPtr<T>*
   get_address()
@@ -296,6 +345,37 @@ public:
     assign_assuming_AddRef(0);
     return reinterpret_cast<T**>(&mRawPtr);
   }
+private:
+  // This helper class makes |nsRefPtr<const T>| possible by casting away
+  // the constness from the pointer when calling AddRef() and Release().
+  //
+  // This is necessary because AddRef() and Release() implementations can't
+  // generally expected to be const themselves (without heavy use of |mutable|
+  // and |const_cast| in their own implementations).
+  //
+  // This should be sound because while |nsRefPtr<const T>| provides a
+  // const view of an object, the object itself should not be const (it
+  // would have to be allocated as |new const T| or similar to be const).
+  template<class U>
+  struct AddRefTraits
+  {
+    static void AddRef(U* aPtr) {
+      aPtr->AddRef();
+    }
+    static void Release(U* aPtr) {
+      aPtr->Release();
+    }
+  };
+  template<class U>
+  struct AddRefTraits<const U>
+  {
+    static void AddRef(const U* aPtr) {
+      const_cast<U*>(aPtr)->AddRef();
+    }
+    static void Release(const U* aPtr) {
+      const_cast<U*>(aPtr)->Release();
+    }
+  };
 };
 
 class nsCycleCollectionTraversalCallback;
@@ -471,42 +551,34 @@ operator!=(U* aLhs, const nsRefPtr<T>& aRhs)
   return const_cast<const U*>(aLhs) != static_cast<const T*>(aRhs.get());
 }
 
-namespace detail {
-class nsRefPtrZero;
-} // namespace detail
-
-// Comparing an |nsRefPtr| to |0|
+// Comparing an |nsRefPtr| to |nullptr|
 
 template <class T>
 inline bool
-operator==(const nsRefPtr<T>& aLhs, ::detail::nsRefPtrZero* aRhs)
-// specifically to allow |smartPtr == 0|
+operator==(const nsRefPtr<T>& aLhs, decltype(nullptr))
 {
-  return static_cast<const void*>(aLhs.get()) == reinterpret_cast<const void*>(aRhs);
+  return aLhs.get() == nullptr;
 }
 
 template <class T>
 inline bool
-operator==(::detail::nsRefPtrZero* aLhs, const nsRefPtr<T>& aRhs)
-// specifically to allow |0 == smartPtr|
+operator==(decltype(nullptr), const nsRefPtr<T>& aRhs)
 {
-  return reinterpret_cast<const void*>(aLhs) == static_cast<const void*>(aRhs.get());
+  return nullptr == aRhs.get();
 }
 
 template <class T>
 inline bool
-operator!=(const nsRefPtr<T>& aLhs, ::detail::nsRefPtrZero* aRhs)
-// specifically to allow |smartPtr != 0|
+operator!=(const nsRefPtr<T>& aLhs, decltype(nullptr))
 {
-  return static_cast<const void*>(aLhs.get()) != reinterpret_cast<const void*>(aRhs);
+  return aLhs.get() != nullptr;
 }
 
 template <class T>
 inline bool
-operator!=(::detail::nsRefPtrZero* aLhs, const nsRefPtr<T>& aRhs)
-// specifically to allow |0 != smartPtr|
+operator!=(decltype(nullptr), const nsRefPtr<T>& aRhs)
 {
-  return reinterpret_cast<const void*>(aLhs) != static_cast<const void*>(aRhs.get());
+  return nullptr != aRhs.get();
 }
 
 /*****************************************************************************/

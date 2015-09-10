@@ -103,8 +103,9 @@ class GlobalHelperThreadState
 
     GlobalHelperThreadState();
 
-    void ensureInitialized();
+    bool ensureInitialized();
     void finish();
+    void finishThreads();
 
     void lock();
     void unlock();
@@ -351,7 +352,7 @@ void
 DestroyHelperThreadsState();
 
 // Initialize helper threads unless already initialized.
-void
+bool
 EnsureHelperThreadsInitialized();
 
 // This allows the JS shell to override GetCPUCount() when passed the
@@ -443,7 +444,7 @@ struct AsmJSParallelTask
 {
     JSRuntime* runtime;     // Associated runtime.
     LifoAlloc lifo;         // Provider of all heap memory used for compilation.
-    void* func;             // Really, a ModuleCompiler::Func*
+    void* func;             // Really, an AsmFunction*
     jit::MIRGenerator* mir; // Passed from main thread to helper.
     jit::LIRGraph* lir;     // Passed from helper to main thread.
     unsigned compileTime;
@@ -479,6 +480,9 @@ struct ParseTask
     // point where FinishOffThreadScript is called, which will destroy the
     // ParseTask.
     JSScript* script;
+
+    // Holds the ScriptSourceObject generated for the script compilation.
+    ScriptSourceObject* sourceObject;
 
     // Any errors or warnings produced during compilation. These are reported
     // when finishing the script.

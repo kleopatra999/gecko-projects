@@ -101,13 +101,33 @@
   border-image-source: linear-gradient(transparent, rgba(100%,100%,100%,.2) 20%, rgba(100%,100%,100%,.2) 80%, transparent);
 }
 
-#PanelUI-menu-button[update-status="succeeded"] > .toolbarbutton-badge-stack > .toolbarbutton-badge {
+#PanelUI-menu-button[badge-status] > .toolbarbutton-badge-stack > .toolbarbutton-badge {
   display: -moz-box;
-  background-image: url(chrome://browser/skin/update-badge.svg);
-  background-color: #74BF43;
   height: 10px;
   width: 10px;
+  background-size: contain;
   border: none;
+}
+
+#PanelUI-menu-button[badge-status="update-succeeded"] > .toolbarbutton-badge-stack > .toolbarbutton-badge {
+  background: #74BF43 url(chrome://browser/skin/update-badge.svg) no-repeat center;
+  height: 13px;
+}
+
+#PanelUI-menu-button[badge-status="update-failed"] > .toolbarbutton-badge-stack > .toolbarbutton-badge {
+  background: #D90000 url(chrome://browser/skin/update-badge-failed.svg) no-repeat center;
+  height: 13px;
+}
+
+#PanelUI-menu-button[badge-status="fxa-needs-authentication"] > .toolbarbutton-badge-stack > .toolbarbutton-badge {
+  background: transparent url(chrome://browser/skin/warning.svg) no-repeat center;
+  height: 13px;
+  box-shadow: none;
+  filter: drop-shadow(0 1px 0 hsla(206, 50%, 10%, .15));
+}
+
+#PanelUI-menu-button[badge-status="fxa-needs-authentication"] > .toolbarbutton-badge-stack > .toolbarbutton-badge:-moz-window-inactive {
+  filter: none;
 }
 
 .panel-subviews {
@@ -513,6 +533,27 @@ toolbarpaletteitem[place="palette"] > toolbaritem > toolbarbutton {
   top: 25%;
 }
 
+#PanelUI-update-status[update-status]::after {
+  content: "";
+  width: 14px;
+  height: 14px;
+  margin-right: 16.5px;
+  box-shadow: 0px 1px 0px rgba(255, 255, 255, 0.2) inset, 0px -1px 0px rgba(0, 0, 0, 0.1) inset, 0px 1px 0px rgba(12, 27, 38, 0.2);
+  border-radius: 2px;
+  background-size: contain;
+  display: -moz-box;
+}
+
+#PanelUI-update-status[update-status="succeeded"]::after {
+  background-image: url(chrome://browser/skin/update-badge.svg);
+  background-color: #74BF43;
+}
+
+#PanelUI-update-status[update-status="failed"]::after {
+  background-image: url(chrome://browser/skin/update-badge-failed.svg);
+  background-color: #D90000;
+}
+
 #PanelUI-fxa-status {
   display: flex;
   flex: 1 1 0%;
@@ -520,7 +561,7 @@ toolbarpaletteitem[place="palette"] > toolbaritem > toolbarbutton {
 }
 
 #PanelUI-footer-inner,
-#PanelUI-footer-fxa {
+#PanelUI-footer-fxa:not([hidden]) {
   display: flex;
   border-top: 1px solid hsla(210,4%,10%,.14);
 }
@@ -702,7 +743,7 @@ toolbarpaletteitem[place="palette"] > toolbaritem > toolbarbutton {
 }
 
 #PanelUI-footer-fxa[fxaprofileimage="enabled"] > #PanelUI-fxa-status > #PanelUI-fxa-avatar {
-  list-style-image: url(chrome://browser/skin/fxa/default-profile-image.svg);
+  list-style-image: url(chrome://browser/skin/fxa/default-avatar.png)
 }
 
 #PanelUI-customize:hover,
@@ -1181,19 +1222,9 @@ toolbarpaletteitem[haswideitem][place="panel"] + toolbarpaletteitem[haswideitem]
   border-bottom-left-radius: 0;
 }
 
-.toolbaritem-combined-buttons > separator {
-  -moz-appearance: none;
-  width: 3px;
-  -moz-box-align: stretch;
-  background-image: linear-gradient(to bottom, transparent, hsla(0,0%,100%,.3) 40%, hsla(0,0%,100%,.3) 60%, transparent),
-                    linear-gradient(to bottom, transparent, hsla(210,54%,20%,.15) 40%, hsla(210,54%,20%,.15) 60%, transparent),
-                    linear-gradient(to bottom, transparent, hsla(0,0%,100%,.3) 40%, hsla(0,0%,100%,.3) 60%, transparent);
-  background-size: 1px, 1px, 1px;
-  background-position: 0 0, 1px 0, 2px 0;
-  background-repeat: no-repeat;
-}
-
 .toolbaritem-combined-buttons@inAnyPanel@ > separator {
+  -moz-appearance: none;
+  -moz-box-align: stretch;
   margin: .5em 0;
   width: 1px;
   height: auto;
@@ -1496,6 +1527,10 @@ menuitem[checked="true"].subviewbutton > .menu-iconic-left {
 
   #PanelUI-update-status {
     list-style-image: url(chrome://branding/content/icon32.png);
+  }
+
+  #PanelUI-footer-fxa[fxaprofileimage="enabled"] > #PanelUI-fxa-status > #PanelUI-fxa-avatar {
+    list-style-image: url(chrome://browser/skin/fxa/default-avatar@2x.png)
   }
 
   #PanelUI-fxa-label,

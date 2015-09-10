@@ -5,12 +5,9 @@ const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
-const { DebuggerServer } = Cu.import("resource://gre/modules/devtools/dbg-server.jsm");
-const { DebuggerClient } = Cu.import("resource://gre/modules/devtools/dbg-client.jsm");
-const {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
-const {require} = devtools;
-
-
+const { require } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+const { DebuggerClient } = require("devtools/toolkit/client/main");
+const { DebuggerServer } = require("devtools/server/main");
 const { FileUtils } = Cu.import("resource://gre/modules/FileUtils.jsm");
 const { Services } = Cu.import("resource://gre/modules/Services.jsm");
 

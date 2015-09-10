@@ -55,13 +55,16 @@ let CERTIFICATE_ERROR_PAGE_PREF = 'security.alternate_certificate_error_page';
 
 const OBSERVED_EVENTS = [
   'xpcom-shutdown',
-  'media-playback',
-  'activity-done'
+  'audio-playback',
+  'activity-done',
+  'invalid-widget'
 ];
 
 const COMMAND_MAP = {
   'cut': 'cmd_cut',
   'copy': 'cmd_copyAndCollapseToEnd',
+  'copyImage': 'cmd_copyImage',
+  'copyLink': 'cmd_copyLink',
   'paste': 'cmd_paste',
   'selectall': 'cmd_selectAll'
 };
@@ -221,6 +224,11 @@ BrowserElementChild.prototype = {
       "send-touch-event": this._recvSendTouchEvent,
       "get-can-go-back": this._recvCanGoBack,
       "get-can-go-forward": this._recvCanGoForward,
+      "mute": this._recvMute.bind(this),
+      "unmute": this._recvUnmute.bind(this),
+      "get-muted": this._recvGetMuted.bind(this),
+      "set-volume": this._recvSetVolume.bind(this),
+      "get-volume": this._recvGetVolume.bind(this),
       "go-back": this._recvGoBack,
       "go-forward": this._recvGoForward,
       "reload": this._recvReload,
@@ -282,7 +290,7 @@ BrowserElementChild.prototype = {
     // Ignore notifications not about our document.  (Note that |content| /can/
     // be null; see bug 874900.)
 
-    if (topic !== 'activity-done' && topic !== 'media-playback' &&
+    if (topic !== 'activity-done' && topic !== 'audio-playback' &&
         (!content || subject !== content.document)) {
       return;
     }
@@ -292,13 +300,16 @@ BrowserElementChild.prototype = {
       case 'activity-done':
         sendAsyncMsg('activitydone', { success: (data == 'activity-success') });
         break;
-      case 'media-playback':
+      case 'audio-playback':
         if (subject === content) {
-          sendAsyncMsg('mediaplaybackchange', { _payload_: data });
+          sendAsyncMsg('audioplaybackchange', { _payload_: data });
         }
         break;
       case 'xpcom-shutdown':
         this._shuttingDown = true;
+        break;
+      case 'invalid-widget':
+        sendAsyncMsg('error', { type: 'invalid-widget' });
         break;
     }
   },
@@ -559,33 +570,42 @@ BrowserElementChild.prototype = {
       return;
     }
 
-    if (!e.target.name) {
+    var name = e.target.name;
+    var property = e.target.getAttributeNS(null, "property");
+
+    if (!name && !property) {
       return;
     }
 
-    debug('Got metaChanged: (' + e.target.name + ') ' + e.target.content);
+    debug('Got metaChanged: (' + (name || property) + ') ' +
+          e.target.content);
 
     let handlers = {
-      'viewmode': this._genericMetaHandler.bind(null, 'viewmode'),
-      'theme-color': this._genericMetaHandler.bind(null, 'theme-color'),
-      'theme-group': this._genericMetaHandler.bind(null, 'theme-group'),
+      'viewmode': this._genericMetaHandler,
+      'theme-color': this._genericMetaHandler,
+      'theme-group': this._genericMetaHandler,
       'application-name': this._applicationNameChangedHandler
     };
+    let handler = handlers[name];
 
-    let handler = handlers[e.target.name];
+    if ((property || name).match(/^og:/)) {
+      name = property || name;
+      handler = this._genericMetaHandler;
+    }
+
     if (handler) {
-      handler(e.type, e.target);
+      handler(name, e.type, e.target);
     }
   },
 
-  _applicationNameChangedHandler: function(eventType, target) {
+  _applicationNameChangedHandler: function(name, eventType, target) {
     if (eventType !== 'DOMMetaAdded') {
       // Bug 1037448 - Decide what to do when <meta name="application-name">
       // changes
       return;
     }
 
-    let meta = { name: 'application-name',
+    let meta = { name: name,
                  content: target.content };
 
     let lang;
@@ -846,6 +866,17 @@ BrowserElementChild.prototype = {
     var elem = e.target;
     var menuData = {systemTargets: [], contextmenu: null};
     var ctxMenuId = null;
+    var copyableElements = {
+      image: false,
+      link: false,
+      hasElements: function() {
+        return this.image || this.link;
+      }
+    };
+
+    // Set the event target as the copy image command needs it to
+    // determine what was context-clicked on.
+    docShell.contentViewer.QueryInterface(Ci.nsIContentViewerEdit).setCommandNode(elem);
 
     while (elem && elem.parentNode) {
       var ctxData = this._getSystemCtxMenuData(elem);
@@ -859,14 +890,23 @@ BrowserElementChild.prototype = {
       if (!ctxMenuId && 'hasAttribute' in elem && elem.hasAttribute('contextmenu')) {
         ctxMenuId = elem.getAttribute('contextmenu');
       }
+
+      // Enable copy image/link option
+      if (elem.nodeName == 'IMG') {
+        copyableElements.image = true;
+      } else if (elem.nodeName == 'A') {
+        copyableElements.link = true;
+      }
+
       elem = elem.parentNode;
     }
 
-    if (ctxMenuId) {
-      var menu = e.target.ownerDocument.getElementById(ctxMenuId);
-      if (menu) {
-        menuData.contextmenu = this._buildMenuObj(menu, '');
+    if (ctxMenuId || copyableElements.hasElements()) {
+      var menu = null;
+      if (ctxMenuId) {
+        menu = e.target.ownerDocument.getElementById(ctxMenuId);
       }
+      menuData.contextmenu = this._buildMenuObj(menu, '', copyableElements);
     }
 
     // Pass along the position where the context menu should be located
@@ -1199,31 +1239,54 @@ BrowserElementChild.prototype = {
 
   _recvFireCtxCallback: function(data) {
     debug("Received fireCtxCallback message: (" + data.json.menuitem + ")");
-    // We silently ignore if the embedder uses an incorrect id in the callback
-    if (data.json.menuitem in this._ctxHandlers) {
+
+    if (data.json.menuitem == 'copy-image') {
+      // Set command
+      data.json.command = 'copyImage';
+      this._recvDoCommand(data);
+    } else if (data.json.menuitem == 'copy-link') {
+      // Set command
+      data.json.command = 'copyLink';
+      this._recvDoCommand(data);
+    } else if (data.json.menuitem in this._ctxHandlers) {
       this._ctxHandlers[data.json.menuitem].click();
       this._ctxHandlers = {};
     } else {
+      // We silently ignore if the embedder uses an incorrect id in the callback
       debug("Ignored invalid contextmenu invocation");
     }
   },
 
-  _buildMenuObj: function(menu, idPrefix) {
+  _buildMenuObj: function(menu, idPrefix, copyableElements) {
     var menuObj = {type: 'menu', items: []};
-    this._maybeCopyAttribute(menu, menuObj, 'label');
+    // Customized context menu
+    if (menu) {
+      this._maybeCopyAttribute(menu, menuObj, 'label');
 
-    for (var i = 0, child; child = menu.children[i++];) {
-      if (child.nodeName === 'MENU') {
-        menuObj.items.push(this._buildMenuObj(child, idPrefix + i + '_'));
-      } else if (child.nodeName === 'MENUITEM') {
-        var id = this._ctxCounter + '_' + idPrefix + i;
-        var menuitem = {id: id, type: 'menuitem'};
-        this._maybeCopyAttribute(child, menuitem, 'label');
-        this._maybeCopyAttribute(child, menuitem, 'icon');
-        this._ctxHandlers[id] = child;
-        menuObj.items.push(menuitem);
+      for (var i = 0, child; child = menu.children[i++];) {
+        if (child.nodeName === 'MENU') {
+          menuObj.items.push(this._buildMenuObj(child, idPrefix + i + '_', false));
+        } else if (child.nodeName === 'MENUITEM') {
+          var id = this._ctxCounter + '_' + idPrefix + i;
+          var menuitem = {id: id, type: 'menuitem'};
+          this._maybeCopyAttribute(child, menuitem, 'label');
+          this._maybeCopyAttribute(child, menuitem, 'icon');
+          this._ctxHandlers[id] = child;
+          menuObj.items.push(menuitem);
+        }
       }
     }
+    // Note: Display "Copy Link" first in order to make sure "Copy Image" is
+    //       put together with other image options if elem is an image link.
+    // "Copy Link" menu item
+    if (copyableElements.link) {
+      menuObj.items.push({id: 'copy-link'});
+    }
+    // "Copy Image" menu item
+    if (copyableElements.image) {
+      menuObj.items.push({id: 'copy-image'});
+    }
+
     return menuObj;
   },
 
@@ -1293,6 +1356,32 @@ BrowserElementChild.prototype = {
     sendAsyncMsg('got-can-go-forward', {
       id: data.json.id,
       successRv: webNav.canGoForward
+    });
+  },
+
+  _recvMute: function(data) {
+    this._windowUtils.audioMuted = true;
+  },
+
+  _recvUnmute: function(data) {
+    this._windowUtils.audioMuted = false;
+  },
+
+  _recvGetMuted: function(data) {
+    sendAsyncMsg('got-muted', {
+      id: data.json.id,
+      successRv: this._windowUtils.audioMuted
+    });
+  },
+
+  _recvSetVolume: function(data) {
+    this._windowUtils.audioVolume = data.json.volume;
+  },
+
+  _recvGetVolume: function(data) {
+    sendAsyncMsg('got-volume', {
+      id: data.json.id,
+      successRv: this._windowUtils.audioVolume
     });
   },
 
@@ -1628,30 +1717,54 @@ BrowserElementChild.prototype = {
         return;
       }
 
-      var stateDesc;
+      var securityStateDesc;
       if (state & Ci.nsIWebProgressListener.STATE_IS_SECURE) {
-        stateDesc = 'secure';
+        securityStateDesc = 'secure';
       }
       else if (state & Ci.nsIWebProgressListener.STATE_IS_BROKEN) {
-        stateDesc = 'broken';
+        securityStateDesc = 'broken';
       }
       else if (state & Ci.nsIWebProgressListener.STATE_IS_INSECURE) {
-        stateDesc = 'insecure';
-      }
-      else if (state & Ci.nsIWebProgressListener.STATE_LOADED_TRACKING_CONTENT) {
-        stateDesc = 'loaded_tracking_content';
-      }
-      else if (state & Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT) {
-        stateDesc = 'blocked_tracking_content';
+        securityStateDesc = 'insecure';
       }
       else {
         debug("Unexpected securitychange state!");
-        stateDesc = '???';
+        securityStateDesc = '???';
+      }
+
+      var trackingStateDesc;
+      if (state & Ci.nsIWebProgressListener.STATE_LOADED_TRACKING_CONTENT) {
+        trackingStateDesc = 'loaded_tracking_content';
+      }
+      else if (state & Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT) {
+        trackingStateDesc = 'blocked_tracking_content';
+      }
+
+      var mixedStateDesc;
+      if (state & Ci.nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT) {
+        mixedStateDesc = 'blocked_mixed_active_content';
+      }
+      else if (state & Ci.nsIWebProgressListener.STATE_LOADED_MIXED_ACTIVE_CONTENT) {
+        // Note that STATE_LOADED_MIXED_ACTIVE_CONTENT implies STATE_IS_BROKEN
+        mixedStateDesc = 'loaded_mixed_active_content';
       }
 
       var isEV = !!(state & Ci.nsIWebProgressListener.STATE_IDENTITY_EV_TOPLEVEL);
+      var isTrackingContent = !!(state &
+        (Ci.nsIWebProgressListener.STATE_BLOCKED_TRACKING_CONTENT |
+        Ci.nsIWebProgressListener.STATE_LOADED_TRACKING_CONTENT));
+      var isMixedContent = !!(state &
+        (Ci.nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT |
+        Ci.nsIWebProgressListener.STATE_LOADED_MIXED_ACTIVE_CONTENT));
 
-      sendAsyncMsg('securitychange', { state: stateDesc, extendedValidation: isEV });
+      sendAsyncMsg('securitychange', {
+        state: securityStateDesc,
+        trackingState: trackingStateDesc,
+        mixedState: mixedStateDesc,
+        extendedValidation: isEV,
+        trackingContent: isTrackingContent,
+        mixedContent: isMixedContent,
+      });
     },
 
     onStatusChange: function(webProgress, request, status, message) {},
@@ -1672,5 +1785,13 @@ BrowserElementChild.prototype = {
   }
 };
 
-var api = new BrowserElementChild();
-
+var api = null;
+if ('DoPreloadPostfork' in this && typeof this.DoPreloadPostfork === 'function') {
+  // If we are preloaded, instantiate BrowserElementChild after a content
+  // process is forked.
+  this.DoPreloadPostfork(function() {
+    api = new BrowserElementChild();
+  });
+} else {
+  api = new BrowserElementChild();
+}

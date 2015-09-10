@@ -10,6 +10,7 @@
 #include "gfxPrefs.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/TabParent.h"
+#include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/layers/LayerTransactionChild.h"
 #include "mozilla/layers/ShadowLayers.h"
 #include "mozilla/TouchEvents.h"
@@ -31,6 +32,8 @@ namespace mozilla {
 namespace layers {
 
 using dom::TabParent;
+
+uint64_t APZCCallbackHelper::sLastTargetAPZCNotificationInputBlock = uint64_t(-1);
 
 static void
 AdjustDisplayPortForScrollDelta(mozilla::layers::FrameMetrics& aFrameMetrics,
@@ -264,7 +267,7 @@ APZCCallbackHelper::GetOrCreateScrollIdentifiers(nsIContent* aContent,
                                                  FrameMetrics::ViewID* aViewIdOut)
 {
     if (!aContent) {
-        return false;
+      return false;
     }
     *aViewIdOut = nsLayoutUtils::FindOrCreateIDFor(aContent);
     if (nsCOMPtr<nsIPresShell> shell = GetPresShell(aContent)) {
@@ -392,8 +395,8 @@ APZCCallbackHelper::AcknowledgeScrollUpdate(const FrameMetrics::ViewID& aScrollI
     }
 }
 
-static nsIPresShell*
-GetRootContentDocumentPresShellForContent(nsIContent* aContent)
+nsIPresShell*
+APZCCallbackHelper::GetRootContentDocumentPresShellForContent(nsIContent* aContent)
 {
     nsIDocument* doc = aContent->GetComposedDoc();
     if (!doc) {
@@ -487,14 +490,14 @@ APZCCallbackHelper::DispatchWidgetEvent(WidgetGUIEvent& aEvent)
 }
 
 nsEventStatus
-APZCCallbackHelper::DispatchSynthesizedMouseEvent(uint32_t aMsg,
+APZCCallbackHelper::DispatchSynthesizedMouseEvent(EventMessage aMsg,
                                                   uint64_t aTime,
                                                   const LayoutDevicePoint& aRefPoint,
                                                   Modifiers aModifiers,
                                                   nsIWidget* aWidget)
 {
-  MOZ_ASSERT(aMsg == NS_MOUSE_MOVE || aMsg == NS_MOUSE_BUTTON_DOWN ||
-             aMsg == NS_MOUSE_BUTTON_UP || aMsg == NS_MOUSE_MOZLONGTAP);
+  MOZ_ASSERT(aMsg == eMouseMove || aMsg == eMouseDown ||
+             aMsg == eMouseUp || aMsg == eMouseLongTap);
 
   WidgetMouseEvent event(true, aMsg, nullptr,
                          WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
@@ -503,7 +506,7 @@ APZCCallbackHelper::DispatchSynthesizedMouseEvent(uint32_t aMsg,
   event.button = WidgetMouseEvent::eLeftButton;
   event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
   event.ignoreRootScrollFrame = true;
-  if (aMsg != NS_MOUSE_MOVE) {
+  if (aMsg != eMouseMove) {
     event.clickCount = 1;
   }
   event.modifiers = aModifiers;
@@ -543,9 +546,9 @@ APZCCallbackHelper::FireSingleTapEvent(const LayoutDevicePoint& aPoint,
   APZCCH_LOG("Dispatching single-tap component events to %s\n",
     Stringify(aPoint).c_str());
   int time = 0;
-  DispatchSynthesizedMouseEvent(NS_MOUSE_MOVE, time, aPoint, aModifiers, aWidget);
-  DispatchSynthesizedMouseEvent(NS_MOUSE_BUTTON_DOWN, time, aPoint, aModifiers, aWidget);
-  DispatchSynthesizedMouseEvent(NS_MOUSE_BUTTON_UP, time, aPoint, aModifiers, aWidget);
+  DispatchSynthesizedMouseEvent(eMouseMove, time, aPoint, aModifiers, aWidget);
+  DispatchSynthesizedMouseEvent(eMouseDown, time, aPoint, aModifiers, aWidget);
+  DispatchSynthesizedMouseEvent(eMouseUp, time, aPoint, aModifiers, aWidget);
 }
 
 static nsIScrollableFrame*
@@ -630,8 +633,23 @@ PrepareForSetTargetAPZCNotification(nsIWidget* aWidget,
     return false;
   }
 
+  if (!scrollAncestor) {
+    MOZ_ASSERT(false);  // If you hit this, please file a bug with STR.
+
+    // Attempt some sort of graceful handling based on a theory as to why we
+    // reach this point...
+    // If we get here, the document element is non-null, valid, but doesn't have
+    // a displayport. It's possible that the init code in ChromeProcessController
+    // failed for some reason, or the document element got swapped out at some
+    // later time. In this case let's try to set a displayport on the document
+    // element again and bail out on this operation.
+    APZCCH_LOG("Widget %p's document element %p didn't have a displayport\n",
+        aWidget, dpElement.get());
+    APZCCallbackHelper::InitializeRootDisplayport(aRootFrame->PresContext()->PresShell());
+    return false;
+  }
+
   APZCCH_LOG("%p didn't have a displayport, so setting one...\n", dpElement.get());
-  MOZ_ASSERT(scrollAncestor);
   return nsLayoutUtils::CalculateAndSetDisplayPortMargins(
       scrollAncestor, nsLayoutUtils::RepaintMode::Repaint);
 }
@@ -726,6 +744,16 @@ APZCCallbackHelper::SendSetTargetAPZCNotification(nsIWidget* aWidget,
   if (!aWidget || !aDocument) {
     return;
   }
+  if (aInputBlockId == sLastTargetAPZCNotificationInputBlock) {
+    // We have already confirmed the target APZC for a previous event of this
+    // input block. If we activated a scroll frame for this input block,
+    // sending another target APZC confirmation would be harmful, as it might
+    // race the original confirmation (which needs to go through a layers
+    // transaction).
+    APZCCH_LOG("Not resending target APZC confirmation for input block %" PRIu64 "\n", aInputBlockId);
+    return;
+  }
+  sLastTargetAPZCNotificationInputBlock = aInputBlockId;
   if (nsIPresShell* shell = aDocument->GetShell()) {
     if (nsIFrame* rootFrame = shell->GetRootFrame()) {
       bool waitForRefresh = false;
@@ -794,6 +822,27 @@ APZCCallbackHelper::NotifyFlushComplete()
   MOZ_ASSERT(observerService);
   observerService->NotifyObservers(nullptr, "apz-repaints-flushed", nullptr);
 }
+
+static int32_t sActiveSuppressDisplayport = 0;
+
+void
+APZCCallbackHelper::SuppressDisplayport(const bool& aEnabled)
+{
+  if (aEnabled) {
+    sActiveSuppressDisplayport++;
+  } else {
+    sActiveSuppressDisplayport--;
+  }
+
+  MOZ_ASSERT(sActiveSuppressDisplayport >= 0);
+}
+
+bool
+APZCCallbackHelper::IsDisplayportSuppressed()
+{
+  return sActiveSuppressDisplayport > 0;
+}
+
 
 } // namespace layers
 } // namespace mozilla

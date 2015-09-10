@@ -19,7 +19,6 @@
 <!ENTITY formatD "&#037;d">
 ]>
 
-#includesubst @BOOKMARKSPATH@
 <resources>
   <string name="moz_app_displayname">@MOZ_APP_DISPLAYNAME@</string>
   <string name="android_package_name">@ANDROID_PACKAGE_NAME@</string>
@@ -43,6 +42,7 @@
   <string name="firstrun_welcome_button_account">&onboard_start_button_account;</string>
   <string name="firstrun_welcome_button_browser">&onboard_start_button_browser;</string>
   <string name="firstrun_empty_contentDescription"></string>
+  <string name="firstrun_welcome_restricted">&onboard_start_restricted1;</string>
 
   <string name="bookmarks_title">&bookmarks_title;</string>
   <string name="history_title">&history_title;</string>
@@ -87,13 +87,15 @@
 
   <string name="history_today_section">&history_today_section;</string>
   <string name="history_yesterday_section">&history_yesterday_section;</string>
-  <string name="history_week_section">&history_week_section2;</string>
-  <string name="history_older_section">&history_older_section2;</string>
+  <string name="history_week_section">&history_week_section3;</string>
+  <string name="history_this_month_section">&history_this_month_section;</string>
+  <string name="history_older_section">&history_older_section3;</string>
 
   <string name="share">&share;</string>
   <string name="share_title">&share_title;</string>
   <string name="share_image_failed">&share_image_failed;</string>
   <string name="save_as_pdf">&save_as_pdf;</string>
+  <string name="print">&print;</string>
   <string name="find_in_page">&find_in_page;</string>
   <string name="find_matchcase">&find_matchcase;</string>
   <string name="desktop_mode">&desktop_mode;</string>
@@ -193,7 +195,7 @@
   <string name="pref_cookies_disabled">&pref_cookies_disabled;</string>
 
   <string name="pref_tracking_protection_title">&pref_tracking_protection_title;</string>
-  <string name="pref_tracking_protection_summary">&pref_tracking_protection_summary2;</string>
+  <string name="pref_tracking_protection_summary">&pref_tracking_protection_summary3;</string>
   <string name="pref_donottrack_title">&pref_donottrack_title;</string>
   <string name="pref_donottrack_summary">&pref_donottrack_summary;</string>
 
@@ -226,7 +228,6 @@
   <string name="pref_voice_input_summary">&pref_voice_input_summary;</string>
   <string name="pref_qrcode_enabled">&pref_qrcode_enabled;</string>
   <string name="pref_qrcode_enabled_summary">&pref_qrcode_enabled_summary;</string>
-  <string name="pref_reflow_on_zoom">&pref_reflow_on_zoom4;</string>
   <string name="pref_restore">&pref_restore;</string>
   <string name="pref_restore_always">&pref_restore_always;</string>
   <string name="pref_restore_quit">&pref_restore_quit;</string>
@@ -313,6 +314,7 @@
   <string name="new_tab_opened">&new_tab_opened;</string>
   <string name="new_private_tab_opened">&new_private_tab_opened;</string>
   <string name="switch_button_message">&switch_button_message;</string>
+  <string name="tab_title_prefix_is_playing_audio">&tab_title_prefix_is_playing_audio;</string>
   <string name="one_tab">&one_tab;</string>
   <string name="num_tabs">&num_tabs2;</string>
   <string name="addons">&addons;</string>
@@ -357,6 +359,8 @@
   <string name="contextmenu_top_sites_pin">&contextmenu_top_sites_pin;</string>
   <string name="contextmenu_top_sites_unpin">&contextmenu_top_sites_unpin;</string>
   <string name="contextmenu_add_search_engine">&contextmenu_add_search_engine;</string>
+  <string name="contextmenu_mark_read">&contextmenu_mark_read;</string>
+  <string name="contextmenu_mark_unread">&contextmenu_mark_unread;</string>
 
   <string name="doorhanger_login_no_username">&doorhanger_login_no_username;</string>
   <string name="doorhanger_login_edit_title">&doorhanger_login_edit_title;</string>
@@ -373,6 +377,9 @@
   <string name="pref_titlebar_mode">&pref_titlebar_mode;</string>
   <string name="pref_titlebar_mode_title">&pref_titlebar_mode_title;</string>
   <string name="pref_titlebar_mode_url">&pref_titlebar_mode_url;</string>
+
+  <string name="pref_magnifying_glass_enabled">&pref_magnifying_glass_enabled;</string>
+  <string name="pref_magnifying_glass_enabled_summary">&pref_magnifying_glass_enabled_summary;</string>
 
   <string name="pref_scroll_title_bar2">&pref_scroll_title_bar2;</string>
   <string name="pref_scroll_title_bar_summary">&pref_scroll_title_bar_summary;</string>
@@ -444,33 +451,41 @@
 
   <!-- Default bookmarks. We used to use bookmark titles shared with XUL from mobile's
        profile/bookmarks.inc (see bug 964946). Don't expose the URLs to L10N. -->
-  <string name="bookmarkdefaults_title_aboutfirefox">@bookmarks_aboutBrowser@</string>
+  <string name="bookmarkdefaults_title_aboutfirefox">&bookmarks_about_browser;</string>
   <string name="bookmarkdefaults_url_aboutfirefox">about:firefox</string>
 
   <!-- Icon is automatically generated from R.drawable.bookmarkdefaults_favicon_addons -->
-  <string name="bookmarkdefaults_title_addons">@bookmarks_addons@</string>
+  <string name="bookmarkdefaults_title_addons">&bookmarks_addons;</string>
   <string name="bookmarkdefaults_url_addons">https://addons.mozilla.org/android/</string>
 
   <!-- Icon is automatically generated from R.drawable.bookmarkdefaults_favicon_support -->
-  <string name="bookmarkdefaults_title_support">@bookmarks_support@</string>
+  <string name="bookmarkdefaults_title_support">&bookmarks_support;</string>
   <string name="bookmarkdefaults_url_support">https://support.mozilla.org/products/mobile</string>
 
   <!-- Icon is automatically generated from R.drawable.bookmarkdefaults_favicon_marketplace -->
-  <string name="bookmarkdefaults_title_marketplace">@bookmarks_marketplace@</string>
+  <string name="bookmarkdefaults_title_marketplace">&bookmarks_marketplace;</string>
   <string name="bookmarkdefaults_url_marketplace">https://marketplace.firefox.com/</string>
+
+  <string name="bookmarkdefaults_title_restricted_webmaker">&bookmarks_restricted_webmaker;</string>
+  <string name="bookmarkdefaults_url_restricted_webmaker">https://webmaker.org/</string>
+
+  <string name="bookmarkdefaults_title_restricted_support">&bookmarks_restricted_support;</string>
+  <string name="bookmarkdefaults_url_restricted_support">https://support.mozilla.org/kb/kids</string>
 
   <!-- Site identity popup -->
   <string name="identity_connection_secure">&identity_connection_secure;</string>
   <string name="identity_connection_insecure">&identity_connection_insecure;</string>
 
-  <string name="mixed_content_blocked_all">&mixed_content_blocked_all;</string>
-  <string name="mixed_content_protection_disabled">&mixed_content_protection_disabled;</string>
+  <string name="mixed_content_blocked_all">&mixed_content_blocked_all1;</string>
+  <string name="mixed_content_blocked_some">&mixed_content_blocked_some1;</string>
+  <string name="mixed_content_display_loaded">&mixed_content_display_loaded1;</string>
+  <string name="mixed_content_protection_disabled">&mixed_content_protection_disabled1;</string>
 
   <string name="doorhanger_tracking_title">&doorhanger_tracking_title;</string>
   <string name="doorhanger_tracking_state_enabled">&doorhanger_tracking_state_enabled;</string>
   <string name="doorhanger_tracking_state_disabled">&doorhanger_tracking_state_disabled;</string>
   <string name="doorhanger_tracking_message_enabled">&doorhanger_tracking_message_enabled1;</string>
-  <string name="doorhanger_tracking_message_disabled">&doorhanger_tracking_message_disabled1;</string>
+  <string name="doorhanger_tracking_message_disabled">&doorhanger_tracking_message_disabled2;</string>
 
   <string name="learn_more">&learn_more;</string>
   <string name="enable_protection">&enable_protection;</string>
@@ -539,16 +554,16 @@
   <string name="voicesearch_prompt">&voicesearch_prompt;</string>
 
   <!-- Restrictions -->
-  <string name="restriction_disallow_tools_menu_title">&restriction_disallow_tools_menu_title;</string>
-  <string name="restriction_disallow_tools_menu_description">&restriction_disallow_tools_menu_description;</string>
-  <string name="restriction_disallow_report_site_issue_title">&restriction_disallow_report_site_issue_title;</string>
-  <string name="restriction_disallow_report_site_issue_description">&restriction_disallow_report_site_issue_description;</string>
-  <string name="restriction_disallow_import_settings_title">&restriction_disallow_import_settings_title;</string>
-  <string name="restriction_disallow_import_settings_description">&restriction_disallow_import_settings_description;</string>
-  <string name="restriction_disallow_addons_title">&restriction_disallow_addons_title;</string>
-  <string name="restriction_disallow_addons_description">&restriction_disallow_addons_description;</string>
-  <string name="restriction_disallow_apps_title">&restriction_disallow_apps_title;</string>
-  <string name="restriction_disallow_apps_description">&restriction_disallow_apps_description;</string>
+  <string name="restriction_disallow_import_settings_title">&restriction_disallow_import_settings_title2;</string>
+  <string name="restriction_disallow_addons_title">&restriction_disallow_addons_title2;</string>
+  <string name="restriction_disallow_devtools_title">&restriction_disallow_devtools_title2;</string>
+  <string name="restriction_disallow_customize_home_title">&restriction_disallow_customize_home_title2;</string>
+  <string name="restriction_disallow_private_browsing_title">&restriction_disallow_private_browsing_title2;</string>
+  <string name="restriction_disallow_location_services_title">&restriction_disallow_location_services_title2;</string>
+  <string name="restriction_disallow_display_settings_title">&restriction_disallow_display_settings_title2;</string>
+  <string name="restriction_disallow_clear_history_title">&restriction_disallow_clear_history_title2;</string>
+  <string name="restriction_disallow_master_password_title">&restriction_disallow_master_password_title2;</string>
+  <string name="restriction_disallow_guest_browsing_title">&restriction_disallow_guest_browsing_title2;</string>
 
   <!-- Miscellaneous -->
   <string name="ellipsis">&ellipsis;</string>

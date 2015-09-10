@@ -122,8 +122,6 @@ using dom::MediaStreamError;
 using dom::GetUserMediaRequest;
 using dom::Sequence;
 using dom::OwningBooleanOrMediaTrackConstraints;
-using dom::SupportedAudioConstraints;
-using dom::SupportedVideoConstraints;
 using media::Pledge;
 using media::NewRunnableFrom;
 using media::NewTaskFrom;
@@ -482,12 +480,13 @@ public:
   CreateTrackUnionStream(nsIDOMWindow* aWindow,
                          GetUserMediaCallbackMediaStreamListener* aListener,
                          MediaEngineSource* aAudioSource,
-                         MediaEngineSource* aVideoSource)
+                         MediaEngineSource* aVideoSource,
+                         MediaStreamGraph* aMSG)
   {
     nsRefPtr<nsDOMUserMediaStream> stream = new nsDOMUserMediaStream(aListener,
                                                                      aAudioSource,
                                                                      aVideoSource);
-    stream->InitTrackUnionStream(aWindow);
+    stream->InitTrackUnionStream(aWindow, aMSG);
     return stream.forget();
   }
 
@@ -786,7 +785,13 @@ public:
     }
 #endif
 
-    MediaStreamGraph* msg = MediaStreamGraph::GetInstance();
+    MediaStreamGraph::GraphDriverType graphDriverType =
+      mAudioSource ? MediaStreamGraph::AUDIO_THREAD_DRIVER
+                   : MediaStreamGraph::SYSTEM_THREAD_DRIVER;
+    MediaStreamGraph* msg =
+      MediaStreamGraph::GetInstance(graphDriverType,
+                                    dom::AudioChannel::Normal);
+
     nsRefPtr<SourceMediaStream> stream = msg->CreateSourceStream(nullptr);
 
     nsRefPtr<DOMLocalMediaStream> domStream;
@@ -796,7 +801,7 @@ public:
     // them down instead.
     if (mAudioSource &&
         mAudioSource->GetMediaSource() == dom::MediaSourceEnum::AudioCapture) {
-      domStream = DOMLocalMediaStream::CreateAudioCaptureStream(window);
+      domStream = DOMLocalMediaStream::CreateAudioCaptureStream(window, msg);
       // It should be possible to pipe the capture stream to anything. CORS is
       // not a problem here, we got explicit user content.
       domStream->SetPrincipal(window->GetExtantDoc()->NodePrincipal());
@@ -808,7 +813,8 @@ public:
       // avoid us blocking
       nsRefPtr<nsDOMUserMediaStream> trackunion =
         nsDOMUserMediaStream::CreateTrackUnionStream(window, mListener,
-                                                     mAudioSource, mVideoSource);
+                                                     mAudioSource, mVideoSource,
+                                                     msg);
       trackunion->GetStream()->AsProcessedStream()->SetAutofinish(true);
       nsRefPtr<MediaInputPort> port = trackunion->GetStream()->AsProcessedStream()->
         AllocateInputPort(stream, MediaInputPort::FLAG_BLOCK_OUTPUT);
@@ -994,7 +1000,7 @@ ApplyConstraints(const MediaTrackConstraints &aConstraints,
         }
       }
       if (!aSources.Length()) {
-        aSources.MoveElementsFrom(rejects);
+        aSources.AppendElements(Move(rejects));
         aggregateConstraints.RemoveElementAt(aggregateConstraints.Length() - 1);
       }
     }
@@ -1372,6 +1378,8 @@ MediaManager::IsInMediaThread()
 // NOTE: never Dispatch(....,NS_DISPATCH_SYNC) to the MediaManager
 // thread from the MainThread, as we NS_DISPATCH_SYNC to MainThread
 // from MediaManager thread.
+
+// Guaranteed never to return nullptr.
 /* static */  MediaManager*
 MediaManager::Get() {
   if (!sSingleton) {
@@ -1690,11 +1698,11 @@ MediaManager::GetUserMedia(nsPIDOMWindow* aWindow,
     }
 
     if (vc.mAdvanced.WasPassed() && videoType != dom::MediaSourceEnum::Camera) {
-      // iterate through advanced, forcing mediaSource to match "root"
-      const char *camera = EnumToASCII(dom::MediaSourceEnumValues::strings,
-                                       dom::MediaSourceEnum::Camera);
+      // iterate through advanced, forcing all unset mediaSources to match "root"
+      const char *unset = EnumToASCII(dom::MediaSourceEnumValues::strings,
+                                      dom::MediaSourceEnum::Camera);
       for (MediaTrackConstraintSet& cs : vc.mAdvanced.Value()) {
-        if (cs.mMediaSource.EqualsASCII(camera)) {
+        if (cs.mMediaSource.EqualsASCII(unset)) {
           cs.mMediaSource = vc.mMediaSource;
         }
       }
@@ -1729,15 +1737,46 @@ MediaManager::GetUserMedia(nsPIDOMWindow* aWindow,
     audioType = StringToEnum(dom::MediaSourceEnumValues::strings,
                              ac.mMediaSource,
                              audioType);
-    // Only enable AudioCapture if the pref is enabled. If it's not, we can deny
-    // right away.
-    if (audioType == dom::MediaSourceEnum::AudioCapture &&
-        !Preferences::GetBool("media.getusermedia.audiocapture.enabled")) {
-      nsRefPtr<MediaStreamError> error =
-        new MediaStreamError(aWindow,
-            NS_LITERAL_STRING("PermissionDeniedError"));
-      onFailure->OnError(error);
-      return NS_OK;
+    // Work around WebIDL default since spec uses same dictionary w/audio & video.
+    if (audioType == dom::MediaSourceEnum::Camera) {
+      audioType = dom::MediaSourceEnum::Microphone;
+      ac.mMediaSource.AssignASCII(EnumToASCII(dom::MediaSourceEnumValues::strings,
+                                              audioType));
+    }
+
+    switch (audioType) {
+      case dom::MediaSourceEnum::Microphone:
+        break;
+
+      case dom::MediaSourceEnum::AudioCapture:
+        // Only enable AudioCapture if the pref is enabled. If it's not, we can
+        // deny right away.
+        if (!Preferences::GetBool("media.getusermedia.audiocapture.enabled")) {
+          nsRefPtr<MediaStreamError> error =
+            new MediaStreamError(aWindow,
+                                 NS_LITERAL_STRING("PermissionDeniedError"));
+          onFailure->OnError(error);
+          return NS_OK;
+        }
+        break;
+
+      case dom::MediaSourceEnum::Other:
+      default: {
+        nsRefPtr<MediaStreamError> error =
+            new MediaStreamError(aWindow, NS_LITERAL_STRING("NotFoundError"));
+        onFailure->OnError(error);
+        return NS_OK;
+      }
+    }
+    if (ac.mAdvanced.WasPassed()) {
+      // iterate through advanced, forcing all unset mediaSources to match "root"
+      const char *unset = EnumToASCII(dom::MediaSourceEnumValues::strings,
+                                      dom::MediaSourceEnum::Camera);
+      for (MediaTrackConstraintSet& cs : ac.mAdvanced.Value()) {
+        if (cs.mMediaSource.EqualsASCII(unset)) {
+          cs.mMediaSource = ac.mMediaSource;
+        }
+      }
     }
   }
   StreamListeners* listeners = AddWindowID(windowID);
@@ -2029,7 +2068,14 @@ MediaManager::EnumerateDevices(nsPIDOMWindow* aWindow,
   nsCOMPtr<nsIDOMGetUserMediaErrorCallback> onFailure(aOnFailure);
   uint64_t windowId = aWindow->WindowID();
 
-  AddWindowID(windowId);
+  StreamListeners* listeners = AddWindowID(windowId);
+
+  // Create a disabled listener to act as a placeholder
+  nsRefPtr<GetUserMediaCallbackMediaStreamListener> listener =
+    new GetUserMediaCallbackMediaStreamListener(mMediaThread, windowId);
+
+  // No need for locking because we always do this in the main thread.
+  listeners->AppendElement(listener);
 
   bool fake = Preferences::GetBool("media.navigator.streams.fake");
 
@@ -2037,11 +2083,15 @@ MediaManager::EnumerateDevices(nsPIDOMWindow* aWindow,
                                                      dom::MediaSourceEnum::Camera,
                                                      dom::MediaSourceEnum::Microphone,
                                                      fake);
-  p->Then([onSuccess](SourceSet*& aDevices) mutable {
+  p->Then([onSuccess, windowId, listener](SourceSet*& aDevices) mutable {
     ScopedDeletePtr<SourceSet> devices(aDevices); // grab result
+    nsRefPtr<MediaManager> mgr = MediaManager_GetInstance();
+    mgr->RemoveFromWindowList(windowId, listener);
     nsCOMPtr<nsIWritableVariant> array = MediaManager_ToJSArray(*devices);
     onSuccess->OnSuccess(array);
-  }, [onFailure](MediaStreamError& reason) mutable {
+  }, [onFailure, windowId, listener](MediaStreamError& reason) mutable {
+    nsRefPtr<MediaManager> mgr = MediaManager_GetInstance();
+    mgr->RemoveFromWindowList(windowId, listener);
     onFailure->OnError(&reason);
   });
   return NS_OK;
@@ -2800,7 +2850,10 @@ GetUserMediaCallbackMediaStreamListener::StopSharing()
     nsCOMPtr<nsPIDOMWindow> window = nsGlobalWindow::GetInnerWindowWithId(mWindowID);
     MOZ_ASSERT(window);
     window->SetAudioCapture(false);
-    MediaStreamGraph::GetInstance()->UnregisterCaptureStreamForWindow(mWindowID);
+    MediaStreamGraph* graph =
+      MediaStreamGraph::GetInstance(MediaStreamGraph::AUDIO_THREAD_DRIVER,
+                                    dom::AudioChannel::Normal);
+    graph->UnregisterCaptureStreamForWindow(mWindowID);
     mStream->Destroy();
   }
 }
@@ -2818,8 +2871,8 @@ GetUserMediaCallbackMediaStreamListener::StopTrack(TrackID aID, bool aIsAudio)
     MediaManager::PostTask(FROM_HERE,
       new MediaOperationTask(MEDIA_STOP_TRACK,
                              this, nullptr, nullptr,
-                             aIsAudio  ? mAudioSource : nullptr,
-                             !aIsAudio ? mVideoSource : nullptr,
+                             aIsAudio  ? mAudioSource.get() : nullptr,
+                             !aIsAudio ? mVideoSource.get() : nullptr,
                              mFinished, mWindowID, nullptr));
   } else {
     LOG(("gUM track %d ended, but we don't have type %s",

@@ -8,6 +8,7 @@
 #define mozilla_AppleVDADecoder_h
 
 #include "PlatformDecoderModule.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "MP4Decoder.h"
 #include "nsIThread.h"
@@ -70,20 +71,27 @@ public:
                   MediaDataDecoderCallback* aCallback,
                   layers::ImageContainer* aImageContainer);
   virtual ~AppleVDADecoder();
-  virtual nsresult Init() override;
+  virtual nsRefPtr<InitPromise> Init() override;
   virtual nsresult Input(MediaRawData* aSample) override;
   virtual nsresult Flush() override;
   virtual nsresult Drain() override;
   virtual nsresult Shutdown() override;
-  virtual bool IsHardwareAccelerated() const override
+  virtual bool IsHardwareAccelerated(nsACString& aFailureReason) const override
   {
     return true;
   }
 
+  // Access from the taskqueue and the decoder's thread.
+  // OutputFrame is thread-safe.
   nsresult OutputFrame(CVPixelBufferRef aImage,
-                       nsAutoPtr<AppleFrameRef> aFrameRef);
+                       AppleFrameRef aFrameRef);
 
- protected:
+protected:
+  // Flush and Drain operation, always run
+  virtual void ProcessFlush();
+  virtual void ProcessDrain();
+  virtual void ProcessShutdown();
+
   AppleFrameRef* CreateAppleFrameRef(const MediaRawData* aSample);
   void DrainReorderedFrames();
   void ClearReorderedFrames();
@@ -93,21 +101,42 @@ public:
   nsRefPtr<FlushableTaskQueue> mTaskQueue;
   MediaDataDecoderCallback* mCallback;
   nsRefPtr<layers::ImageContainer> mImageContainer;
-  ReorderQueue mReorderQueue;
   uint32_t mPictureWidth;
   uint32_t mPictureHeight;
   uint32_t mDisplayWidth;
   uint32_t mDisplayHeight;
+  // Accessed on multiple threads, but only set in constructor.
   uint32_t mMaxRefFrames;
+  // Increased when Input is called, and decreased when ProcessFrame runs.
+  // Reaching 0 indicates that there's no pending Input.
+  Atomic<uint32_t> mInputIncoming;
+  Atomic<bool> mIsShutDown;
+
+  const bool mUseSoftwareImages;
+  const bool mIs106;
+
+  // Number of times a sample was queued via Input(). Will be decreased upon
+  // the decoder's callback being invoked.
+  // This is used to calculate how many frames has been buffered by the decoder.
+  Atomic<uint32_t> mQueuedSamples;
+
+  // For wait on mIsFlushing during Shutdown() process.
+  // Protects mReorderQueue.
+  Monitor mMonitor;
+  // Set on reader/decode thread calling Flush() to indicate that output is
+  // not required and so input samples on mTaskQueue need not be processed.
+  // Cleared on mTaskQueue in ProcessDrain().
+  Atomic<bool> mIsFlushing;
+  ReorderQueue mReorderQueue;
 
 private:
   VDADecoder mDecoder;
-  bool mIs106;
+
+  // Method to set up the decompression session.
+  nsresult InitializeSession();
 
   // Method to pass a frame to VideoToolbox for decoding.
   nsresult SubmitFrame(MediaRawData* aSample);
-  // Method to set up the decompression session.
-  nsresult InitializeSession();
   CFDictionaryRef CreateDecoderSpecification();
 };
 

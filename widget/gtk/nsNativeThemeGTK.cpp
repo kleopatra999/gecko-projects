@@ -391,11 +391,15 @@ nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
 
   switch (aWidgetType) {
   case NS_THEME_BUTTON:
+    if (aWidgetFlags)
+      *aWidgetFlags = GTK_RELIEF_NORMAL;
+    aGtkWidgetType = MOZ_GTK_BUTTON;
+    break;
   case NS_THEME_TOOLBAR_BUTTON:
   case NS_THEME_TOOLBAR_DUAL_BUTTON:
     if (aWidgetFlags)
-      *aWidgetFlags = (aWidgetType == NS_THEME_BUTTON) ? GTK_RELIEF_NORMAL : GTK_RELIEF_NONE;
-    aGtkWidgetType = MOZ_GTK_BUTTON;
+      *aWidgetFlags = GTK_RELIEF_NONE;
+    aGtkWidgetType = MOZ_GTK_TOOLBAR_BUTTON;
     break;
   case NS_THEME_FOCUS_OUTLINE:
     aGtkWidgetType = MOZ_GTK_ENTRY;
@@ -679,6 +683,9 @@ nsNativeThemeGTK::GetGtkWidgetAndState(uint8_t aWidgetType, nsIFrame* aFrame,
   case NS_THEME_WINDOW:
   case NS_THEME_DIALOG:
     aGtkWidgetType = MOZ_GTK_WINDOW;
+    break;
+  case NS_THEME_GTK_INFO_BAR:
+    aGtkWidgetType = MOZ_GTK_INFO_BAR;
     break;
   default:
     return false;
@@ -1456,6 +1463,19 @@ nsNativeThemeGTK::GetMinimumWidgetSize(nsPresContext* aPresContext,
         *aIsOverridable = false;
       }
       break;
+    case NS_THEME_RANGE:
+      {
+        gint scale_width, scale_height;
+
+        moz_gtk_get_scale_metrics(IsRangeHorizontal(aFrame) ?
+            GTK_ORIENTATION_HORIZONTAL : GTK_ORIENTATION_VERTICAL,
+            &scale_width, &scale_height);
+        aResult->width = scale_width;
+        aResult->height = scale_height;
+
+        *aIsOverridable = true;
+      }
+      break;
     case NS_THEME_SCALE_THUMB_HORIZONTAL:
     case NS_THEME_SCALE_THUMB_VERTICAL:
       {
@@ -1756,6 +1776,9 @@ nsNativeThemeGTK::ThemeSupportsWidget(nsPresContext* aPresContext,
   case NS_THEME_SPLITTER:
   case NS_THEME_WINDOW:
   case NS_THEME_DIALOG:
+#if (MOZ_WIDGET_GTK == 3)
+  case NS_THEME_GTK_INFO_BAR:
+#endif
     return !IsWidgetStyled(aPresContext, aFrame, aWidgetType);
 
   case NS_THEME_DROPDOWN_BUTTON:

@@ -25,10 +25,10 @@
 #include "imgIScriptedNotificationObserver.h"
 #include "gfxPlatform.h"
 
-using namespace mozilla;
-using namespace mozilla::image;
 using namespace mozilla::gfx;
 
+namespace mozilla {
+namespace image {
 /* ========== imgITools implementation ========== */
 
 
@@ -61,6 +61,8 @@ imgTools::DecodeImage(nsIInputStream* aInStr,
                       const nsACString& aMimeType,
                       imgIContainer** aContainer)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   nsresult rv;
 
   NS_ENSURE_ARG_POINTER(aInStr);
@@ -347,3 +349,6 @@ imgTools::GetImgCacheForDocument(nsIDOMDocument* aDoc, imgICache** aCache)
   NS_ENSURE_SUCCESS(rv, rv);
   return CallQueryInterface(loader, aCache);
 }
+
+} // namespace image
+} // namespace mozilla

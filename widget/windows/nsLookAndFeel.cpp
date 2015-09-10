@@ -487,6 +487,10 @@ nsLookAndFeel::GetIntImpl(IntID aID, int32_t &aResult)
     case eIntID_ScrollbarFadeDuration:
         aResult = 350;
         break;
+    case eIntID_ContextMenuOffsetVertical:
+    case eIntID_ContextMenuOffsetHorizontal:
+        aResult = 2;
+        break;
     default:
         aResult = 0;
         res = NS_ERROR_FAILURE;
@@ -562,6 +566,8 @@ GetSysFontInfo(HDC aHDC, LookAndFeel::FontID anID,
     case LookAndFeel::eFont_Widget:
     case LookAndFeel::eFont_Dialog:
     case LookAndFeel::eFont_Button:
+    case LookAndFeel::eFont_Field:
+    case LookAndFeel::eFont_List:
       // XXX It's not clear to me whether this is exactly the right
       // set of LookAndFeel values to map to the dialog font; we may
       // want to add or remove cases here after reviewing the visual

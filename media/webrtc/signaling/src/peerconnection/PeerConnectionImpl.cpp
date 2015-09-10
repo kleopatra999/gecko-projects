@@ -87,6 +87,7 @@
 #include "AudioStreamTrack.h"
 #include "VideoStreamTrack.h"
 #include "nsIScriptGlobalObject.h"
+#include "MediaStreamGraph.h"
 #include "DOMMediaStream.h"
 #include "rlogringbuffer.h"
 #include "WebrtcGlobalInformation.h"
@@ -380,6 +381,7 @@ PeerConnectionImpl::PeerConnectionImpl(const GlobalObject* aGlobal)
   , mIdentity(nullptr)
 #endif
   , mPrivacyRequested(false)
+  , mIsLoop(false)
   , mSTSThread(nullptr)
   , mAllowIceLoopback(false)
   , mAllowIceLinkLocal(false)
@@ -442,9 +444,12 @@ PeerConnectionImpl::~PeerConnectionImpl()
 already_AddRefed<DOMMediaStream>
 PeerConnectionImpl::MakeMediaStream()
 {
-  nsRefPtr<DOMMediaStream> stream =
-    DOMMediaStream::CreateSourceStream(GetWindow());
+  MediaStreamGraph* graph =
+    MediaStreamGraph::GetInstance(MediaStreamGraph::AUDIO_THREAD_DRIVER,
+                                  AudioChannel::Normal);
 
+  nsRefPtr<DOMMediaStream> stream =
+    DOMMediaStream::CreateSourceStream(GetWindow(), graph);
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
   // Make the stream data (audio/video samples) accessible to the receiving page.
   // We're only certain that privacy hasn't been requested if we're connected.
@@ -518,6 +523,20 @@ PeerConnectionConfiguration::Init(const RTCConfiguration& aSrc)
       break;
     case dom::RTCBundlePolicy::Max_bundle:
       setBundlePolicy(kBundleMaxBundle);
+      break;
+    default:
+      MOZ_CRASH();
+  }
+
+  switch (aSrc.mIceTransportPolicy) {
+    case dom::RTCIceTransportPolicy::None:
+      setIceTransportPolicy(NrIceCtx::ICE_POLICY_NONE);
+      break;
+    case dom::RTCIceTransportPolicy::Relay:
+      setIceTransportPolicy(NrIceCtx::ICE_POLICY_RELAY);
+      break;
+    case dom::RTCIceTransportPolicy::All:
+      setIceTransportPolicy(NrIceCtx::ICE_POLICY_ALL);
       break;
     default:
       MOZ_CRASH();
@@ -679,6 +698,12 @@ PeerConnectionImpl::Initialize(PeerConnectionObserver& aObserver,
     location->Release();
 
     CopyUTF16toUTF8(locationAStr, locationCStr);
+#define HELLO_CLICKER_URL_START "https://hello.firefox.com/"
+#define HELLO_INITIATOR_URL_START "about:loop"
+    mIsLoop = (strncmp(HELLO_CLICKER_URL_START, locationCStr.get(),
+                       strlen(HELLO_CLICKER_URL_START)) == 0) ||
+              (strncmp(HELLO_INITIATOR_URL_START, locationCStr.get(),
+                       strlen(HELLO_INITIATOR_URL_START)) == 0);
   }
 
   PR_snprintf(
@@ -738,7 +763,8 @@ PeerConnectionImpl::Initialize(PeerConnectionObserver& aObserver,
 
   // Initialize the media object.
   res = mMedia->Init(aConfiguration.getStunServers(),
-                     aConfiguration.getTurnServers());
+                     aConfiguration.getTurnServers(),
+                     aConfiguration.getIceTransportPolicy());
   if (NS_FAILED(res)) {
     CSFLogError(logTag, "%s: Couldn't initialize media object", __FUNCTION__);
     return res;
@@ -1037,9 +1063,13 @@ PeerConnectionImpl::ConfigureJsepSessionCodecs() {
 
           }
 
-          videoCodec.mUseTmmbr = false;
+          // TMMBR is enabled from a pref in about:config
+          bool useTmmbr = false;
           branch->GetBoolPref("media.navigator.video.use_tmmbr",
-            &videoCodec.mUseTmmbr);
+            &useTmmbr);
+          if (useTmmbr) {
+            videoCodec.EnableTmmbr();
+          }
         }
         break;
       case SdpMediaSection::kText:
@@ -2467,7 +2497,9 @@ PeerConnectionImpl::ShutdownMedia()
   // End of call to be recorded in Telemetry
   if (!mStartTime.IsNull()){
     TimeDuration timeDelta = TimeStamp::Now() - mStartTime;
-    Telemetry::Accumulate(Telemetry::WEBRTC_CALL_DURATION, timeDelta.ToSeconds());
+    Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_CALL_DURATION :
+                                    Telemetry::WEBRTC_CALL_DURATION,
+                          timeDelta.ToSeconds());
   }
 #endif
 
@@ -2643,15 +2675,11 @@ PeerConnectionImpl::CandidateReady(const std::string& candidate,
                                    uint16_t level) {
   PC_AUTO_ENTER_API_CALL_VOID_RETURN(false);
 
-  // TODO: What about mid? Is this something that we will choose, or will
-  // JsepSession choose for us? If the latter, we'll need to make it an
-  // outparam or something. Bug 1051052.
   std::string mid;
-
   bool skipped = false;
   nsresult res = mJsepSession->AddLocalIceCandidate(candidate,
-                                                    mid,
                                                     level,
+                                                    &mid,
                                                     &skipped);
 
   if (NS_FAILED(res)) {
@@ -2663,6 +2691,7 @@ PeerConnectionImpl::CandidateReady(const std::string& candidate,
                         candidate.c_str(),
                         static_cast<unsigned>(level),
                         errorString.c_str());
+    return;
   }
 
   if (skipped) {
@@ -2749,10 +2778,12 @@ void PeerConnectionImpl::IceConnectionStateChange(
     if (!mIceStartTime.IsNull()){
       TimeDuration timeDelta = TimeStamp::Now() - mIceStartTime;
       if (isSucceeded(domState)) {
-        Telemetry::Accumulate(Telemetry::WEBRTC_ICE_SUCCESS_TIME,
+        Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_ICE_SUCCESS_TIME :
+                                        Telemetry::WEBRTC_ICE_SUCCESS_TIME,
                               timeDelta.ToMilliseconds());
       } else if (isFailed(domState)) {
-        Telemetry::Accumulate(Telemetry::WEBRTC_ICE_FAILURE_TIME,
+        Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_ICE_FAILURE_TIME :
+                                        Telemetry::WEBRTC_ICE_FAILURE_TIME,
                               timeDelta.ToMilliseconds());
       }
     }
@@ -2912,6 +2943,7 @@ PeerConnectionImpl::BuildStatsQuery_m(
 
   query->iceStartTime = mIceStartTime;
   query->failed = isFailed(mIceConnectionState);
+  query->isHello = mIsLoop;
 
   // Populate SDP on main
   if (query->internalStats) {
@@ -3370,8 +3402,11 @@ PeerConnectionImpl::startCallTelem() {
   mStartTime = TimeStamp::Now();
 
   // Increment session call counter
+  // If we want to track Loop calls independently here, we need two mConnectionCounters
   int &cnt = PeerConnectionCtx::GetInstance()->mConnectionCounter;
-  Telemetry::GetHistogramById(Telemetry::WEBRTC_CALL_COUNT)->Subtract(cnt);
+  if (cnt > 0) {
+    Telemetry::GetHistogramById(Telemetry::WEBRTC_CALL_COUNT)->Subtract(cnt);
+  }
   cnt++;
   Telemetry::GetHistogramById(Telemetry::WEBRTC_CALL_COUNT)->Add(cnt);
 }

@@ -1,0 +1,423 @@
+/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/**
+ * This header file lists up all event messages and their values.
+ * Before including this header file, you should define
+ * NS_EVENT_MESSAGE(aMessage, aValue)
+ */
+
+NS_EVENT_MESSAGE(eVoidEvent,            0)
+
+// This is a dummy event message for all event listener implementation in
+// EventListenerManager.
+NS_EVENT_MESSAGE(eAllEvents,            1)
+
+NS_EVENT_MESSAGE(eWindowEventFirst,     100)
+// Widget may be destroyed
+NS_EVENT_MESSAGE(eWindowClose,          eWindowEventFirst + 1)
+
+NS_EVENT_MESSAGE(eKeyPress,             eWindowEventFirst + 31)
+NS_EVENT_MESSAGE(eKeyUp,                eWindowEventFirst + 32)
+NS_EVENT_MESSAGE(eKeyDown,              eWindowEventFirst + 33)
+
+NS_EVENT_MESSAGE(eBeforeKeyDown,        eWindowEventFirst + 34)
+NS_EVENT_MESSAGE(eAfterKeyDown,         eWindowEventFirst + 35)
+NS_EVENT_MESSAGE(eBeforeKeyUp,          eWindowEventFirst + 36)
+NS_EVENT_MESSAGE(eAfterKeyUp,           eWindowEventFirst + 37)
+
+NS_EVENT_MESSAGE(eResize,               eWindowEventFirst + 60)
+NS_EVENT_MESSAGE(eScroll,               eWindowEventFirst + 61)
+
+// A plugin was clicked or otherwise focused. ePluginActivate should be
+// used when the window is not active. ePluginFocus should be used when
+// the window is active. In the latter case, the dispatcher of the event
+// is expected to ensure that the plugin's widget is focused beforehand.
+NS_EVENT_MESSAGE(ePluginActivate,       eWindowEventFirst + 62)
+NS_EVENT_MESSAGE(ePluginFocus,          eWindowEventFirst + 63)
+
+NS_EVENT_MESSAGE(eOffline,              eWindowEventFirst + 64)
+NS_EVENT_MESSAGE(eOnline,               eWindowEventFirst + 65)
+
+// NS_BEFORERESIZE_EVENT used to be here (eWindowEventFirst + 66)
+
+NS_EVENT_MESSAGE(eLanguageChange,       eWindowEventFirst + 70)
+
+NS_EVENT_MESSAGE(eMouseEventFirst,      300)
+NS_EVENT_MESSAGE(eMouseMove,            eMouseEventFirst)
+NS_EVENT_MESSAGE(eMouseUp,              eMouseEventFirst + 1)
+NS_EVENT_MESSAGE(eMouseDown,            eMouseEventFirst + 2)
+NS_EVENT_MESSAGE(eMouseEnterIntoWidget, eMouseEventFirst + 22)
+NS_EVENT_MESSAGE(eMouseExitFromWidget,  eMouseEventFirst + 23)
+NS_EVENT_MESSAGE(eMouseDoubleClick,     eMouseEventFirst + 24)
+NS_EVENT_MESSAGE(eMouseClick,           eMouseEventFirst + 27)
+// eMouseActivate is fired when the widget is activated by a click.
+NS_EVENT_MESSAGE(eMouseActivate,        eMouseEventFirst + 30)
+NS_EVENT_MESSAGE(eMouseOver,            eMouseEventFirst + 31)
+NS_EVENT_MESSAGE(eMouseOut,             eMouseEventFirst + 32)
+NS_EVENT_MESSAGE(eMouseHitTest,         eMouseEventFirst + 33)
+NS_EVENT_MESSAGE(eMouseEnter,           eMouseEventFirst + 34)
+NS_EVENT_MESSAGE(eMouseLeave,           eMouseEventFirst + 35)
+NS_EVENT_MESSAGE(eMouseLongTap,         eMouseEventFirst + 36)
+
+// Pointer spec events
+NS_EVENT_MESSAGE(ePointerEventFirst,    4400)
+NS_EVENT_MESSAGE(ePointerMove,          ePointerEventFirst)
+NS_EVENT_MESSAGE(ePointerUp,            ePointerEventFirst + 1)
+NS_EVENT_MESSAGE(ePointerDown,          ePointerEventFirst + 2)
+NS_EVENT_MESSAGE(ePointerOver,          ePointerEventFirst + 22)
+NS_EVENT_MESSAGE(ePointerOut,           ePointerEventFirst + 23)
+NS_EVENT_MESSAGE(ePointerEnter,         ePointerEventFirst + 24)
+NS_EVENT_MESSAGE(ePointerLeave,         ePointerEventFirst + 25)
+NS_EVENT_MESSAGE(ePointerCancel,        ePointerEventFirst + 26)
+NS_EVENT_MESSAGE(ePointerGotCapture,    ePointerEventFirst + 27)
+NS_EVENT_MESSAGE(ePointerLostCapture,   ePointerEventFirst + 28)
+NS_EVENT_MESSAGE(ePointerEventLast,     ePointerLostCapture)
+
+NS_EVENT_MESSAGE(eContextMenuFirst,     500)
+NS_EVENT_MESSAGE(eContextMenu,          eContextMenuFirst)
+
+NS_EVENT_MESSAGE(eStreamEventFirst,     1100)
+NS_EVENT_MESSAGE(eLoad,                 eStreamEventFirst)
+NS_EVENT_MESSAGE(eUnload,               eStreamEventFirst + 1)
+NS_EVENT_MESSAGE(eHashChange,           eStreamEventFirst + 2)
+NS_EVENT_MESSAGE(eImageAbort,           eStreamEventFirst + 3)
+NS_EVENT_MESSAGE(eLoadError,            eStreamEventFirst + 4)
+NS_EVENT_MESSAGE(ePopState,             eStreamEventFirst + 5)
+NS_EVENT_MESSAGE(eBeforeUnload,         eStreamEventFirst + 6)
+NS_EVENT_MESSAGE(eReadyStateChange,     eStreamEventFirst + 8)
+ 
+NS_EVENT_MESSAGE(eFormEventFirst,       1200)
+NS_EVENT_MESSAGE(eFormSubmit,           eFormEventFirst)
+NS_EVENT_MESSAGE(eFormReset,            eFormEventFirst + 1)
+NS_EVENT_MESSAGE(eFormChange,           eFormEventFirst + 2)
+NS_EVENT_MESSAGE(eFormSelect,           eFormEventFirst + 3)
+NS_EVENT_MESSAGE(eFormInvalid,          eFormEventFirst + 4)
+
+//Need separate focus/blur notifications for non-native widgets
+NS_EVENT_MESSAGE(eFocusEventFirst,      1300)
+NS_EVENT_MESSAGE(eFocus,                eFocusEventFirst)
+NS_EVENT_MESSAGE(eBlur,                 eFocusEventFirst + 1)
+
+NS_EVENT_MESSAGE(eDragDropEventFirst,   1400)
+NS_EVENT_MESSAGE(eDragEnter,            eDragDropEventFirst)
+NS_EVENT_MESSAGE(eDragOver,             eDragDropEventFirst + 1)
+NS_EVENT_MESSAGE(eDragExit,             eDragDropEventFirst + 2)
+NS_EVENT_MESSAGE(eLegacyDragDrop,       eDragDropEventFirst + 3)
+NS_EVENT_MESSAGE(eLegacyDragGesture,    eDragDropEventFirst + 4)
+NS_EVENT_MESSAGE(eDrag,                 eDragDropEventFirst + 5)
+NS_EVENT_MESSAGE(eDragEnd,              eDragDropEventFirst + 6)
+NS_EVENT_MESSAGE(eDragStart,            eDragDropEventFirst + 7)
+NS_EVENT_MESSAGE(eDrop,                 eDragDropEventFirst + 8)
+NS_EVENT_MESSAGE(eDragLeave,            eDragDropEventFirst + 9)
+NS_EVENT_MESSAGE(eDragDropEventLast,    eDragLeave)
+
+// XUL specific events
+NS_EVENT_MESSAGE(eXULEventFirst,        1500)
+NS_EVENT_MESSAGE(eXULPopupShowing,      eXULEventFirst)
+NS_EVENT_MESSAGE(eXULPopupShown,        eXULEventFirst + 1)
+NS_EVENT_MESSAGE(eXULPopupHiding,       eXULEventFirst + 2)
+NS_EVENT_MESSAGE(eXULPopupHidden,       eXULEventFirst + 3)
+NS_EVENT_MESSAGE(eXULBroadcast,         eXULEventFirst + 5)
+NS_EVENT_MESSAGE(eXULCommandUpdate,     eXULEventFirst + 6)
+
+// Scroll events
+NS_EVENT_MESSAGE(NS_MOUSE_SCROLL_START, 1600)
+NS_EVENT_MESSAGE(NS_MOUSE_SCROLL,       NS_MOUSE_SCROLL_START)
+NS_EVENT_MESSAGE(NS_MOUSE_PIXEL_SCROLL, NS_MOUSE_SCROLL_START + 1)
+
+NS_EVENT_MESSAGE(NS_SCROLLPORT_START,     1700)
+NS_EVENT_MESSAGE(NS_SCROLLPORT_UNDERFLOW, NS_SCROLLPORT_START)
+NS_EVENT_MESSAGE(NS_SCROLLPORT_OVERFLOW,  NS_SCROLLPORT_START + 1)
+
+NS_EVENT_MESSAGE(eLegacyMutationEventFirst,       1800)
+NS_EVENT_MESSAGE(eLegacySubtreeModified,          eLegacyMutationEventFirst)
+NS_EVENT_MESSAGE(eLegacyNodeInserted,             eLegacyMutationEventFirst + 1)
+NS_EVENT_MESSAGE(eLegacyNodeRemoved,              eLegacyMutationEventFirst + 2)
+NS_EVENT_MESSAGE(eLegacyNodeRemovedFromDocument,  eLegacyMutationEventFirst + 3)
+NS_EVENT_MESSAGE(eLegacyNodeInsertedIntoDocument, eLegacyMutationEventFirst + 4)
+NS_EVENT_MESSAGE(eLegacyAttrModified,             eLegacyMutationEventFirst + 5)
+NS_EVENT_MESSAGE(eLegacyCharacterDataModified,    eLegacyMutationEventFirst + 6)
+NS_EVENT_MESSAGE(eLegacyMutationEventLast,        eLegacyCharacterDataModified)
+
+NS_EVENT_MESSAGE(NS_USER_DEFINED_EVENT, 2000)
+ 
+// composition events
+NS_EVENT_MESSAGE(NS_COMPOSITION_EVENT_START,  2200)
+NS_EVENT_MESSAGE(NS_COMPOSITION_START,        NS_COMPOSITION_EVENT_START)
+// NS_COMPOSITION_END is the message for DOM compositionend event.
+// This event should NOT be dispatched from widget if NS_COMPOSITION_COMMIT
+// is available.
+NS_EVENT_MESSAGE(NS_COMPOSITION_END,          NS_COMPOSITION_EVENT_START + 1)
+// NS_COMPOSITION_UPDATE is the message for DOM compositionupdate event.
+// This event should NOT be dispatched from widget since it will be dispatched
+// by mozilla::TextComposition automatically if NS_COMPOSITION_CHANGE event
+// will change composition string.
+NS_EVENT_MESSAGE(NS_COMPOSITION_UPDATE,       NS_COMPOSITION_EVENT_START + 2)
+// NS_COMPOSITION_CHANGE is the message for representing a change of
+// composition string.  This should be dispatched from widget even if
+// composition string isn't changed but the ranges are changed.  This causes
+// a DOM "text" event which is a non-standard DOM event.
+NS_EVENT_MESSAGE(NS_COMPOSITION_CHANGE,       NS_COMPOSITION_EVENT_START + 3)
+// NS_COMPOSITION_COMMIT_AS_IS is the message for representing a commit of
+// composition string.  TextComposition will commit composition with the
+// last data.  TextComposition will dispatch this event to the DOM tree as
+// NS_COMPOSITION_CHANGE without clause information.  After that,
+// NS_COMPOSITION_END will be dispatched automatically.
+// Its mData and mRanges should be empty and nullptr.
+NS_EVENT_MESSAGE(NS_COMPOSITION_COMMIT_AS_IS, NS_COMPOSITION_EVENT_START + 4)
+// NS_COMPOSITION_COMMIT is the message for representing a commit of
+// composition string with its mData value.  TextComposition will dispatch this
+// event to the DOM tree as NS_COMPOSITION_CHANGE without clause information.
+// After that, NS_COMPOSITION_END will be dispatched automatically.
+// Its mRanges should be nullptr.
+NS_EVENT_MESSAGE(NS_COMPOSITION_COMMIT,       NS_COMPOSITION_EVENT_START + 5)
+
+// Following events are defined for deprecated DOM events which are using
+// InternalUIEvent class.
+NS_EVENT_MESSAGE(eLegacyUIEventFirst,   2500)
+// DOMActivate (mapped with the DOM event and used internally)
+NS_EVENT_MESSAGE(eLegacyDOMActivate,    eLegacyUIEventFirst)
+// DOMFocusIn (only mapped with the DOM event)
+NS_EVENT_MESSAGE(eLegacyDOMFocusIn,     eLegacyUIEventFirst + 1)
+// DOMFocusOut (only mapped with the DOM event)
+NS_EVENT_MESSAGE(eLegacyDOMFocusOut,    eLegacyUIEventFirst + 2)
+
+// pagetransition events
+NS_EVENT_MESSAGE(ePageTransitionEventFirst, 2700)
+NS_EVENT_MESSAGE(ePageShow,                 ePageTransitionEventFirst + 1)
+NS_EVENT_MESSAGE(ePageHide,                 ePageTransitionEventFirst + 2)
+
+// SVG events
+NS_EVENT_MESSAGE(eSVGEventFirst,        2800)
+NS_EVENT_MESSAGE(eSVGLoad,              eSVGEventFirst)
+NS_EVENT_MESSAGE(eSVGUnload,            eSVGEventFirst + 1)
+NS_EVENT_MESSAGE(eSVGResize,            eSVGEventFirst + 4)
+NS_EVENT_MESSAGE(eSVGScroll,            eSVGEventFirst + 5)
+
+// SVG Zoom events
+NS_EVENT_MESSAGE(eSVGZoomEventFirst,    2900)
+NS_EVENT_MESSAGE(eSVGZoom,              eSVGZoomEventFirst)
+
+// XUL command events
+NS_EVENT_MESSAGE(eXULCommandEventFirst, 3000)
+NS_EVENT_MESSAGE(eXULCommand,           eXULCommandEventFirst)
+
+// Cut, copy, paste events
+NS_EVENT_MESSAGE(eClipboardEventFirst,  3100)
+NS_EVENT_MESSAGE(eCopy,                 eClipboardEventFirst)
+NS_EVENT_MESSAGE(eCut,                  eClipboardEventFirst + 1)
+NS_EVENT_MESSAGE(ePaste,                eClipboardEventFirst + 2)
+
+// Query the content information
+NS_EVENT_MESSAGE(NS_QUERY_CONTENT_EVENT_START,       3200)
+// Query for the selected text information, it return the selection offset,
+// selection length and selected text.
+NS_EVENT_MESSAGE(NS_QUERY_SELECTED_TEXT,             NS_QUERY_CONTENT_EVENT_START)
+// Query for the text content of specified range, it returns actual lengh (if
+// the specified range is too long) and the text of the specified range.
+// Returns the entire text if requested length > actual length.
+NS_EVENT_MESSAGE(NS_QUERY_TEXT_CONTENT,              NS_QUERY_CONTENT_EVENT_START + 1)
+// Query for the caret rect of nth insertion point. The offset of the result is
+// relative position from the top level widget.
+NS_EVENT_MESSAGE(NS_QUERY_CARET_RECT,                NS_QUERY_CONTENT_EVENT_START + 3)
+// Query for the bounding rect of a range of characters. This works on any
+// valid character range given offset and length. Result is relative to top
+// level widget coordinates
+NS_EVENT_MESSAGE(NS_QUERY_TEXT_RECT,                 NS_QUERY_CONTENT_EVENT_START + 4)
+// Query for the bounding rect of the current focused frame. Result is relative
+// to top level widget coordinates
+NS_EVENT_MESSAGE(NS_QUERY_EDITOR_RECT,               NS_QUERY_CONTENT_EVENT_START + 5)
+// Query for the current state of the content. The particular members of
+// mReply that are set for each query content event will be valid on success.
+NS_EVENT_MESSAGE(NS_QUERY_CONTENT_STATE,             NS_QUERY_CONTENT_EVENT_START + 6)
+// Query for the selection in the form of a nsITransferable.
+NS_EVENT_MESSAGE(NS_QUERY_SELECTION_AS_TRANSFERABLE, NS_QUERY_CONTENT_EVENT_START + 7)
+// Query for character at a point.  This returns the character offset, its
+// rect and also tentative caret point if the point is clicked.  The point is
+// specified by Event::refPoint.
+NS_EVENT_MESSAGE(NS_QUERY_CHARACTER_AT_POINT,        NS_QUERY_CONTENT_EVENT_START + 8)
+// Query if the DOM element under Event::refPoint belongs to our widget
+// or not.
+NS_EVENT_MESSAGE(NS_QUERY_DOM_WIDGET_HITTEST,        NS_QUERY_CONTENT_EVENT_START + 9)
+
+// Video events
+NS_EVENT_MESSAGE(eMediaEventFirst,      3300)
+NS_EVENT_MESSAGE(eLoadStart,            eMediaEventFirst)
+NS_EVENT_MESSAGE(eProgress,             eMediaEventFirst + 1)
+NS_EVENT_MESSAGE(eSuspend,              eMediaEventFirst + 2)
+NS_EVENT_MESSAGE(eEmptied,              eMediaEventFirst + 3)
+NS_EVENT_MESSAGE(eStalled,              eMediaEventFirst + 4)
+NS_EVENT_MESSAGE(ePlay,                 eMediaEventFirst + 5)
+NS_EVENT_MESSAGE(ePause,                eMediaEventFirst + 6)
+NS_EVENT_MESSAGE(eLoadedMetaData,       eMediaEventFirst + 7)
+NS_EVENT_MESSAGE(eLoadedData,           eMediaEventFirst + 8)
+NS_EVENT_MESSAGE(eWaiting,              eMediaEventFirst + 9)
+NS_EVENT_MESSAGE(ePlaying,              eMediaEventFirst + 10)
+NS_EVENT_MESSAGE(eCanPlay,              eMediaEventFirst + 11)
+NS_EVENT_MESSAGE(eCanPlayThrough,       eMediaEventFirst + 12)
+NS_EVENT_MESSAGE(eSeeking,              eMediaEventFirst + 13)
+NS_EVENT_MESSAGE(eSeeked,               eMediaEventFirst + 14)
+NS_EVENT_MESSAGE(eTimeUpdate,           eMediaEventFirst + 15)
+NS_EVENT_MESSAGE(eEnded,                eMediaEventFirst + 16)
+NS_EVENT_MESSAGE(eRateChange,           eMediaEventFirst + 17)
+NS_EVENT_MESSAGE(eDurationChange,       eMediaEventFirst + 18)
+NS_EVENT_MESSAGE(eVolumeChange,         eMediaEventFirst + 19)
+
+// paint notification events
+NS_EVENT_MESSAGE(NS_NOTIFYPAINT_START,  3400)
+NS_EVENT_MESSAGE(NS_AFTERPAINT,         NS_NOTIFYPAINT_START)
+
+// Simple gesture events
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_EVENT_START,    3500)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_SWIPE_MAY_START,NS_SIMPLE_GESTURE_EVENT_START)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_SWIPE_START,    NS_SIMPLE_GESTURE_EVENT_START + 1)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_SWIPE_UPDATE,   NS_SIMPLE_GESTURE_EVENT_START + 2)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_SWIPE_END,      NS_SIMPLE_GESTURE_EVENT_START + 3)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_SWIPE,          NS_SIMPLE_GESTURE_EVENT_START + 4)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_MAGNIFY_START,  NS_SIMPLE_GESTURE_EVENT_START + 5)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_MAGNIFY_UPDATE, NS_SIMPLE_GESTURE_EVENT_START + 6)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_MAGNIFY,        NS_SIMPLE_GESTURE_EVENT_START + 7)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_ROTATE_START,   NS_SIMPLE_GESTURE_EVENT_START + 8)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_ROTATE_UPDATE,  NS_SIMPLE_GESTURE_EVENT_START + 9)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_ROTATE,         NS_SIMPLE_GESTURE_EVENT_START + 10)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_TAP,            NS_SIMPLE_GESTURE_EVENT_START + 11)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_PRESSTAP,       NS_SIMPLE_GESTURE_EVENT_START + 12)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_EDGE_STARTED,   NS_SIMPLE_GESTURE_EVENT_START + 13)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_EDGE_CANCELED,  NS_SIMPLE_GESTURE_EVENT_START + 14)
+NS_EVENT_MESSAGE(NS_SIMPLE_GESTURE_EDGE_COMPLETED, NS_SIMPLE_GESTURE_EVENT_START + 15)
+
+// These are used to send native events to plugins.
+NS_EVENT_MESSAGE(ePluginEventFirst,     3600)
+NS_EVENT_MESSAGE(ePluginInputEvent,     ePluginEventFirst)
+
+// Events to manipulate selection (WidgetSelectionEvent)
+NS_EVENT_MESSAGE(eSelectionEventFirst,  3700)
+// Clear any previous selection and set the given range as the selection
+NS_EVENT_MESSAGE(eSetSelection,         eSelectionEventFirst)
+
+// Events of commands for the contents
+NS_EVENT_MESSAGE(NS_CONTENT_COMMAND_EVENT_START,        3800)
+NS_EVENT_MESSAGE(NS_CONTENT_COMMAND_CUT,                NS_CONTENT_COMMAND_EVENT_START)
+NS_EVENT_MESSAGE(NS_CONTENT_COMMAND_COPY,               NS_CONTENT_COMMAND_EVENT_START + 1)
+NS_EVENT_MESSAGE(NS_CONTENT_COMMAND_PASTE,              NS_CONTENT_COMMAND_EVENT_START + 2)
+NS_EVENT_MESSAGE(NS_CONTENT_COMMAND_DELETE,             NS_CONTENT_COMMAND_EVENT_START + 3)
+NS_EVENT_MESSAGE(NS_CONTENT_COMMAND_UNDO,               NS_CONTENT_COMMAND_EVENT_START + 4)
+NS_EVENT_MESSAGE(NS_CONTENT_COMMAND_REDO,               NS_CONTENT_COMMAND_EVENT_START + 5)
+NS_EVENT_MESSAGE(NS_CONTENT_COMMAND_PASTE_TRANSFERABLE, NS_CONTENT_COMMAND_EVENT_START + 6)
+// NS_CONTENT_COMMAND_SCROLL scrolls the nearest scrollable element to the
+// currently focused content or latest DOM selection. This would normally be
+// the same element scrolled by keyboard scroll commands, except that this event
+// will scroll an element scrollable in either direction.  I.e., if the nearest
+// scrollable ancestor element can only be scrolled vertically, and horizontal
+// scrolling is requested using this event, no scrolling will occur.
+NS_EVENT_MESSAGE(NS_CONTENT_COMMAND_SCROLL,             NS_CONTENT_COMMAND_EVENT_START+7)
+
+// Event to gesture notification
+NS_EVENT_MESSAGE(NS_GESTURENOTIFY_EVENT_START, 3900)
+
+NS_EVENT_MESSAGE(NS_ORIENTATION_EVENT,  4000)
+
+NS_EVENT_MESSAGE(NS_SCROLLAREA_EVENT_START, 4100)
+NS_EVENT_MESSAGE(NS_SCROLLEDAREACHANGED, NS_SCROLLAREA_EVENT_START)
+
+NS_EVENT_MESSAGE(NS_TRANSITION_EVENT_START, 4200)
+NS_EVENT_MESSAGE(NS_TRANSITION_END,     NS_TRANSITION_EVENT_START)
+
+NS_EVENT_MESSAGE(NS_ANIMATION_EVENT_START, 4250)
+NS_EVENT_MESSAGE(NS_ANIMATION_START,     NS_ANIMATION_EVENT_START)
+NS_EVENT_MESSAGE(NS_ANIMATION_END,       NS_ANIMATION_EVENT_START + 1)
+NS_EVENT_MESSAGE(NS_ANIMATION_ITERATION, NS_ANIMATION_EVENT_START + 2)
+
+NS_EVENT_MESSAGE(NS_SMIL_TIME_EVENT_START, 4300)
+NS_EVENT_MESSAGE(NS_SMIL_BEGIN,         NS_SMIL_TIME_EVENT_START)
+NS_EVENT_MESSAGE(NS_SMIL_END,           NS_SMIL_TIME_EVENT_START + 1)
+NS_EVENT_MESSAGE(NS_SMIL_REPEAT,        NS_SMIL_TIME_EVENT_START + 2)
+
+NS_EVENT_MESSAGE(NS_WEBAUDIO_EVENT_START, 4350)
+NS_EVENT_MESSAGE(NS_AUDIO_PROCESS,      NS_WEBAUDIO_EVENT_START)
+NS_EVENT_MESSAGE(NS_AUDIO_COMPLETE,     NS_WEBAUDIO_EVENT_START + 1)
+
+// script notification events
+NS_EVENT_MESSAGE(NS_NOTIFYSCRIPT_START,    4500)
+NS_EVENT_MESSAGE(NS_BEFORE_SCRIPT_EXECUTE, NS_NOTIFYSCRIPT_START)
+NS_EVENT_MESSAGE(NS_AFTER_SCRIPT_EXECUTE,  NS_NOTIFYSCRIPT_START + 1)
+
+NS_EVENT_MESSAGE(NS_PRINT_EVENT_START,  4600)
+NS_EVENT_MESSAGE(NS_BEFOREPRINT,        NS_PRINT_EVENT_START)
+NS_EVENT_MESSAGE(NS_AFTERPRINT,         NS_PRINT_EVENT_START + 1)
+
+NS_EVENT_MESSAGE(NS_MESSAGE_EVENT_START, 4700)
+NS_EVENT_MESSAGE(NS_MESSAGE,            NS_MESSAGE_EVENT_START)
+
+// Open and close events
+NS_EVENT_MESSAGE(NS_OPENCLOSE_EVENT_START, 4800)
+NS_EVENT_MESSAGE(NS_OPEN,                NS_OPENCLOSE_EVENT_START)
+NS_EVENT_MESSAGE(NS_CLOSE,               NS_OPENCLOSE_EVENT_START+1)
+
+// Device motion and orientation
+NS_EVENT_MESSAGE(NS_DEVICE_ORIENTATION_START, 4900)
+NS_EVENT_MESSAGE(NS_DEVICE_ORIENTATION,  NS_DEVICE_ORIENTATION_START)
+NS_EVENT_MESSAGE(NS_DEVICE_MOTION,       NS_DEVICE_ORIENTATION_START + 1)
+NS_EVENT_MESSAGE(NS_DEVICE_PROXIMITY,    NS_DEVICE_ORIENTATION_START + 2)
+NS_EVENT_MESSAGE(NS_USER_PROXIMITY,      NS_DEVICE_ORIENTATION_START + 3)
+NS_EVENT_MESSAGE(NS_DEVICE_LIGHT,        NS_DEVICE_ORIENTATION_START + 4)
+
+NS_EVENT_MESSAGE(NS_SHOW_EVENT,          5000)
+
+// Fullscreen DOM API
+NS_EVENT_MESSAGE(NS_FULL_SCREEN_START,   5100)
+NS_EVENT_MESSAGE(NS_FULLSCREENCHANGE,    NS_FULL_SCREEN_START)
+NS_EVENT_MESSAGE(NS_FULLSCREENERROR,     NS_FULL_SCREEN_START + 1)
+
+NS_EVENT_MESSAGE(NS_TOUCH_EVENT_START,   5200)
+NS_EVENT_MESSAGE(NS_TOUCH_START,         NS_TOUCH_EVENT_START)
+NS_EVENT_MESSAGE(NS_TOUCH_MOVE,          NS_TOUCH_EVENT_START + 1)
+NS_EVENT_MESSAGE(NS_TOUCH_END,           NS_TOUCH_EVENT_START + 2)
+NS_EVENT_MESSAGE(NS_TOUCH_CANCEL,        NS_TOUCH_EVENT_START + 3)
+
+// Pointerlock DOM API
+NS_EVENT_MESSAGE(NS_POINTERLOCK_START,   5300)
+NS_EVENT_MESSAGE(NS_POINTERLOCKCHANGE,   NS_POINTERLOCK_START)
+NS_EVENT_MESSAGE(NS_POINTERLOCKERROR,    NS_POINTERLOCK_START + 1)
+
+NS_EVENT_MESSAGE(NS_WHEEL_EVENT_START,   5400)
+NS_EVENT_MESSAGE(NS_WHEEL_WHEEL,         NS_WHEEL_EVENT_START)
+NS_EVENT_MESSAGE(NS_WHEEL_START,         NS_WHEEL_EVENT_START + 1)
+NS_EVENT_MESSAGE(NS_WHEEL_STOP,          NS_WHEEL_EVENT_START + 2)
+
+//System time is changed
+NS_EVENT_MESSAGE(NS_MOZ_TIME_CHANGE_EVENT, 5500)
+
+// Network packet events.
+NS_EVENT_MESSAGE(NS_NETWORK_EVENT_START,    5600)
+NS_EVENT_MESSAGE(NS_NETWORK_UPLOAD_EVENT,   NS_NETWORK_EVENT_START + 1)
+NS_EVENT_MESSAGE(NS_NETWORK_DOWNLOAD_EVENT, NS_NETWORK_EVENT_START + 2)
+
+// MediaRecorder events.
+NS_EVENT_MESSAGE(NS_MEDIARECORDER_EVENT_START, 5700)
+NS_EVENT_MESSAGE(NS_MEDIARECORDER_DATAAVAILABLE, NS_MEDIARECORDER_EVENT_START + 1)
+NS_EVENT_MESSAGE(NS_MEDIARECORDER_WARNING,       NS_MEDIARECORDER_EVENT_START + 2)
+NS_EVENT_MESSAGE(NS_MEDIARECORDER_STOP,          NS_MEDIARECORDER_EVENT_START + 3)
+
+// SpeakerManager events
+NS_EVENT_MESSAGE(NS_SPEAKERMANAGER_EVENT_START, 5800)
+NS_EVENT_MESSAGE(NS_SPEAKERMANAGER_SPEAKERFORCEDCHANGE, NS_SPEAKERMANAGER_EVENT_START + 1)
+
+#ifdef MOZ_GAMEPAD
+// Gamepad input events
+NS_EVENT_MESSAGE(NS_GAMEPAD_START,        6000)
+NS_EVENT_MESSAGE(NS_GAMEPAD_BUTTONDOWN,   NS_GAMEPAD_START)
+NS_EVENT_MESSAGE(NS_GAMEPAD_BUTTONUP,     NS_GAMEPAD_START + 1)
+NS_EVENT_MESSAGE(NS_GAMEPAD_AXISMOVE,     NS_GAMEPAD_START + 2)
+NS_EVENT_MESSAGE(NS_GAMEPAD_CONNECTED,    NS_GAMEPAD_START + 3)
+NS_EVENT_MESSAGE(NS_GAMEPAD_DISCONNECTED, NS_GAMEPAD_START + 4)
+// Keep this defined to the same value as the event above
+NS_EVENT_MESSAGE(NS_GAMEPAD_END,          NS_GAMEPAD_START + 4)
+#endif
+
+// input and beforeinput events.
+NS_EVENT_MESSAGE(NS_EDITOR_EVENT_START,   6100)
+NS_EVENT_MESSAGE(NS_EDITOR_INPUT,         NS_EDITOR_EVENT_START)

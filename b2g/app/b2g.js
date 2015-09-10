@@ -102,7 +102,6 @@ pref("network.predictor.max-db-size", 2097152); // bytes
 pref("network.predictor.preserve", 50); // percentage of predictor data to keep when cleaning up
 
 /* session history */
-pref("browser.sessionhistory.max_total_viewers", 1);
 pref("browser.sessionhistory.max_entries", 50);
 pref("browser.sessionhistory.contentViewerTimeout", 360);
 
@@ -203,6 +202,9 @@ pref("privacy.item.syncAccount", true);
 pref("geo.provider.use_mls", false);
 pref("geo.cell.scan", true);
 pref("geo.wifi.uri", "https://location.services.mozilla.com/v1/geolocate?key=%MOZILLA_API_KEY%");
+
+// base url for the stumbler
+pref("geo.stumbler.url", "https://location.services.mozilla.com/v1/geosubmit?key=%MOZILLA_API_KEY%");
 
 // enable geo
 pref("geo.enabled", true);
@@ -353,49 +355,29 @@ pref("dom.w3c_touch_events.enabled", 1);
 pref("dom.w3c_touch_events.safetyX", 0); // escape borders in units of 1/240"
 pref("dom.w3c_touch_events.safetyY", 120); // escape borders in units of 1/240"
 
-// W3C draft pointer events
-pref("dom.w3c_pointer_events.enabled", false);
-// W3C touch-action css property (related to touch and pointer events)
-pref("layout.css.touch_action.enabled", false);
-
 #ifdef MOZ_SAFE_BROWSING
-// Safe browsing does nothing unless this pref is set
 pref("browser.safebrowsing.enabled", false);
-
 // Prevent loading of pages identified as malware
 pref("browser.safebrowsing.malware.enabled", false);
-
+pref("browser.safebrowsing.downloads.enabled", false);
+pref("browser.safebrowsing.downloads.remote.enabled", false);
+pref("browser.safebrowsing.downloads.remote.timeout_ms", 10000);
 pref("browser.safebrowsing.debug", false);
-pref("browser.safebrowsing.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
-pref("browser.safebrowsing.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
+
+pref("browser.safebrowsing.provider.google.lists", "goog-badbinurl-shavar,goog-downloadwhite-digest256,goog-phish-shavar,goog-malware-shavar,goog-unwanted-shavar");
+pref("browser.safebrowsing.provider.google.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
+pref("browser.safebrowsing.provider.google.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
+pref("browser.safebrowsing.provider.google.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
+pref("browser.safebrowsing.provider.google.appRepURL", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
+
 pref("browser.safebrowsing.reportPhishMistakeURL", "https://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportPhishURL", "https://%LOCALE%.phish-report.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportMalwareMistakeURL", "https://%LOCALE%.malware-error.mozilla.com/?hl=%LOCALE%&url=");
-pref("browser.safebrowsing.appRepURL", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
 
 pref("browser.safebrowsing.id", "Firefox");
 
 // Tables for application reputation.
 pref("urlclassifier.downloadBlockTable", "goog-badbinurl-shavar");
-
-// Non-enhanced mode (local url lists) URL list to check for updates
-pref("browser.safebrowsing.provider.0.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client={moz:client}&appver={moz:version}&pver=2.2&key=%GOOGLE_API_KEY%");
-
-pref("browser.safebrowsing.dataProvider", 0);
-
-// Does the provider name need to be localizable?
-pref("browser.safebrowsing.provider.0.name", "Google");
-pref("browser.safebrowsing.provider.0.reportURL", "https://safebrowsing.google.com/safebrowsing/report?");
-pref("browser.safebrowsing.provider.0.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client={moz:client}&appver={moz:version}&pver=2.2");
-
-// HTML report pages
-pref("browser.safebrowsing.provider.0.reportGenericURL", "http://{moz:locale}.phish-generic.mozilla.com/?hl={moz:locale}");
-pref("browser.safebrowsing.provider.0.reportErrorURL", "http://{moz:locale}.phish-error.mozilla.com/?hl={moz:locale}");
-pref("browser.safebrowsing.provider.0.reportPhishURL", "http://{moz:locale}.phish-report.mozilla.com/?hl={moz:locale}");
-pref("browser.safebrowsing.provider.0.reportMalwareURL", "http://{moz:locale}.malware-report.mozilla.com/?hl={moz:locale}");
-pref("browser.safebrowsing.provider.0.reportMalwareErrorURL", "http://{moz:locale}.malware-error.mozilla.com/?hl={moz:locale}");
-
-// FAQ URLs
 
 // The number of random entries to send with a gethash request.
 pref("urlclassifier.gethashnoise", 4);
@@ -407,9 +389,6 @@ pref("urlclassifier.gethash.timeout_ms", 5000);
 // a gethash request will be forced to check that the result is still in
 // the database.
 pref("urlclassifier.max-complete-age", 2700);
-
-// URL for checking the reason for a malware warning.
-pref("browser.safebrowsing.malware.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
 
 // Tracking protection
 pref("privacy.trackingprotection.enabled", true);
@@ -437,8 +416,6 @@ pref("browser.dom.window.dump.enabled", false);
 // Default Content Security Policy to apply to certified apps.
 // If you change this CSP, make sure to update the fast path in nsCSPService.cpp
 pref("security.apps.certified.CSP.default", "default-src * data: blob:; script-src 'self'; object-src 'none'; style-src 'self' 'unsafe-inline' app://theme.gaiamobile.org");
-// Default Content Security Policy to apply to trusted apps.
-pref("security.apps.trusted.CSP.default", "default-src * data: blob:; object-src 'none'; frame-src 'none'");
 
 // handle links targeting new windows
 // 1=current window/tab, 2=new window, 3=new tab in most recent window
@@ -606,7 +583,7 @@ pref("app.update.incompatible.mode", 0);
 pref("app.update.staging.enabled", true);
 pref("app.update.service.enabled", true);
 
-pref("app.update.url", "https://aus4.mozilla.org/update/3/%PRODUCT%/%VERSION%/%BUILD_ID%/%PRODUCT_DEVICE%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
+pref("app.update.url", "https://aus5.mozilla.org/update/3/%PRODUCT%/%VERSION%/%BUILD_ID%/%PRODUCT_DEVICE%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
 pref("app.update.channel", "@MOZ_UPDATE_CHANNEL@");
 
 // Interval at which update manifest is fetched.  In units of seconds.
@@ -928,8 +905,6 @@ pref("general.useragent.updates.retry", 86400); // 1 day
 // Device ID can be composed of letter, numbers, hyphen ("-") and dot (".")
 pref("general.useragent.device_id", "");
 
-// Make <audio> and <video> talk to the AudioChannelService.
-pref("media.useAudioChannelService", true);
 // Add Mozilla AudioChannel APIs.
 pref("media.useAudioChannelAPI", true);
 
@@ -996,6 +971,9 @@ pref("gfx.canvas.max-size-for-skia-gl", -1);
 // enable fence with readpixels for SurfaceStream
 pref("gfx.gralloc.fence-with-readpixels", true);
 
+// enable screen mirroring to external display
+pref("gfx.screen-mirroring.enabled", true);
+
 // The url of the page used to display network error details.
 pref("b2g.neterror.url", "net_error.html");
 
@@ -1016,7 +994,6 @@ pref("media.webspeech.synth.enabled", true);
 
 // Enable Web Speech recognition API
 pref("media.webspeech.recognition.enable", true);
-pref("media.webspeech.service.default", "pocketsphinx");
 
 // Downloads API
 pref("dom.mozDownloads.enabled", true);
@@ -1146,16 +1123,14 @@ pref("dom.mozSettings.allowForceReadOnly", false);
 // RequestSync API is enabled by default on B2G.
 pref("dom.requestSync.enabled", true);
 
-// Resample touch events on b2g
-pref("gfx.touch.resample", true);
-
 // Comma separated list of activity names that can only be provided by
 // the system app in dev mode.
 pref("dom.activities.developer_mode_only", "import-app");
 
 // mulet apparently loads firefox.js as well as b2g.js, so we have to explicitly
-// disable serviceworkers here to get them disabled in mulet.
+// disable serviceworkers and push here to get them disabled in mulet.
 pref("dom.serviceWorkers.enabled", false);
+pref("dom.push.enabled", false);
 
 // Retain at most 10 processes' layers buffers
 pref("layers.compositor-lru-size", 10);
@@ -1165,3 +1140,13 @@ pref("dom.vr.cardboard.enabled", true);
 
 // In B2G by deafult any AudioChannelAgent is muted when created.
 pref("dom.audiochannel.mutedByDefault", true);
+
+// The app origin of bluetooth app, which is responsible for listening pairing
+// requests.
+pref("dom.bluetooth.app-origin", "app://bluetooth.gaiamobile.org");
+
+// Default device name for Presentation API
+pref("dom.presentation.device.name", "Firefox OS");
+
+// Enable notification of performance timing
+pref("dom.performance.enable_notify_performance_timing", true);

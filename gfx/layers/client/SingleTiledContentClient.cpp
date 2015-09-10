@@ -96,7 +96,7 @@ already_AddRefed<TextureClient>
 ClientSingleTiledLayerBuffer::GetTextureClient()
 {
   return mCompositableClient->CreateTextureClientForDrawing(
-    gfx::ImageFormatToSurfaceFormat(mFormat), mSize, gfx::BackendType::NONE,
+    gfx::ImageFormatToSurfaceFormat(mFormat), mSize, BackendSelector::Content,
     TextureFlags::IMMEDIATE_UPLOAD);
 }
 
@@ -181,12 +181,12 @@ ClientSingleTiledLayerBuffer::PaintThebes(const nsIntRegion& aNewValidRegion,
     nsRefPtr<gfxContext> ctx = new gfxContext(dt);
     ctx->SetMatrix(ctx->CurrentMatrix().Translate(-mTilingOrigin.x, -mTilingOrigin.y));
 
-    aCallback(mPaintedLayer, ctx, paintRegion, paintRegion, DrawRegionClip::DRAW, nsIntRegion(), aCallbackData);
+    aCallback(mPaintedLayer, ctx, paintRegion, &paintRegion, DrawRegionClip::DRAW, nsIntRegion(), aCallbackData);
   }
 
   // Mark the area we just drew into the back buffer as invalid in the front buffer as they're
   // now out of sync.
-  mTile.mInvalidFront.OrWith(paintRegion);
+  mTile.mInvalidFront.OrWith(tileDirtyRegion);
 
   // The new buffer is now validated, remove the dirty region from it.
   mTile.mInvalidBack.SubOut(tileDirtyRegion);

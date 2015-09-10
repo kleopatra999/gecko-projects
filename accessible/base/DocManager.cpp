@@ -455,8 +455,6 @@ DocManager::CreateDocOrRootAccessible(nsIDocument* aDocument)
                              ApplicationAcc());
 
     if (IPCAccessibilityActive()) {
-      DocAccessibleChild* ipcDoc = new DocAccessibleChild(docAcc);
-      docAcc->SetIPCDoc(ipcDoc);
       nsIDocShell* docShell = aDocument->GetDocShell();
       if (docShell) {
         nsCOMPtr<nsITabChild> tabChild = do_GetInterface(docShell);
@@ -465,6 +463,8 @@ DocManager::CreateDocOrRootAccessible(nsIDocument* aDocument)
         // differently.  It may be that this will cause us to fail to notify
         // the parent process about important accessible documents.
         if (tabChild) {
+          DocAccessibleChild* ipcDoc = new DocAccessibleChild(docAcc);
+          docAcc->SetIPCDoc(ipcDoc);
           static_cast<TabChild*>(tabChild.get())->
             SendPDocAccessibleConstructor(ipcDoc, nullptr, 0);
         }
@@ -559,5 +559,5 @@ DocManager::RemoteDocAdded(DocAccessibleParent* aDoc)
   MOZ_ASSERT(!sRemoteDocuments->Contains(aDoc),
       "How did we already have the doc!");
   sRemoteDocuments->AppendElement(aDoc);
-  ProxyCreated(aDoc, 0);
+  ProxyCreated(aDoc, Interfaces::DOCUMENT | Interfaces::HYPERTEXT);
 }

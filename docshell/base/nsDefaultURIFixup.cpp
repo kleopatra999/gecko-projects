@@ -47,7 +47,6 @@ nsDefaultURIFixup::~nsDefaultURIFixup()
 {
 }
 
-/* nsIURI createExposableURI (in nsIURI aURI); */
 NS_IMETHODIMP
 nsDefaultURIFixup::CreateExposableURI(nsIURI* aURI, nsIURI** aReturn)
 {
@@ -111,7 +110,6 @@ nsDefaultURIFixup::CreateExposableURI(nsIURI* aURI, nsIURI** aReturn)
   return NS_OK;
 }
 
-/* nsIURI createFixupURI (in nsAUTF8String aURIText, in unsigned long aFixupFlags); */
 NS_IMETHODIMP
 nsDefaultURIFixup::CreateFixupURI(const nsACString& aStringURI,
                                   uint32_t aFixupFlags,
@@ -667,7 +665,7 @@ nsDefaultURIFixup::ConvertFileToStringURI(const nsACString& aIn,
 
 #if defined(XP_WIN)
   // Check for \ in the url-string or just a drive (PC)
-  if (kNotFound != aIn.FindChar('\\') ||
+  if (aIn.Contains('\\') ||
       (aIn.Length() == 2 && (aIn.Last() == ':' || aIn.Last() == '|'))) {
     attemptFixup = true;
   }

@@ -184,6 +184,10 @@ destroying the MediaDecoder object.
 #if !defined(MediaDecoder_h_)
 #define MediaDecoder_h_
 
+#ifdef MOZ_EME
+#include "mozilla/CDMProxy.h"
+#endif
+
 #include "mozilla/MozPromise.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/StateMirroring.h"
@@ -191,20 +195,19 @@ destroying the MediaDecoder object.
 
 #include "mozilla/dom/AudioChannelBinding.h"
 
-#include "nsISupports.h"
+#include "necko-config.h"
+#include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 #include "nsIObserver.h"
-#include "nsAutoPtr.h"
+#include "nsISupports.h"
 #include "nsITimer.h"
-#include "MediaResource.h"
-#include "MediaDecoderOwner.h"
-#include "MediaStreamGraph.h"
+
 #include "AbstractMediaDecoder.h"
-#include "DecodedStream.h"
-#include "necko-config.h"
-#ifdef MOZ_EME
-#include "mozilla/CDMProxy.h"
-#endif
+#include "MediaDecoderOwner.h"
+#include "MediaEventSource.h"
+#include "MediaMetadataManager.h"
+#include "MediaResource.h"
+#include "MediaStreamGraph.h"
 #include "TimeUnits.h"
 
 class nsIStreamListener;
@@ -572,23 +575,12 @@ public:
   // The actual playback rate computation. The monitor must be held.
   virtual double ComputePlaybackRate(bool* aReliable);
 
-  // Return true when the media is same-origin with the element. The monitor
-  // must be held.
-  bool IsSameOriginMedia();
-
   // Returns true if we can play the entire media through without stopping
   // to buffer, given the current download and playback rates.
   bool CanPlayThrough();
 
   void SetAudioChannel(dom::AudioChannel aChannel) { mAudioChannel = aChannel; }
   dom::AudioChannel GetAudioChannel() { return mAudioChannel; }
-
-  // Send a new set of metadata to the state machine, to be dispatched to the
-  // main thread to be presented when the |currentTime| of the media is greater
-  // or equal to aPublishTime.
-  void QueueMetadata(int64_t aPublishTime,
-                     nsAutoPtr<MediaInfo> aInfo,
-                     nsAutoPtr<MetadataTags> aTags) override;
 
   /******
    * The following methods must only be called on the main
@@ -622,7 +614,7 @@ public:
 
   // Removes all audio tracks and video tracks that are previously added into
   // the track list. Call on the main thread only.
-  virtual void RemoveMediaTracks() override;
+  void RemoveMediaTracks();
 
   // Called when the video has completed playing.
   // Call on the main thread only.
@@ -942,10 +934,6 @@ protected:
   // True if the media is seekable (i.e. supports random access).
   bool mMediaSeekable;
 
-  // True if the media is same-origin with the element. Data can only be
-  // passed to MediaStreams when this is true.
-  bool mSameOriginMedia;
-
   /******
    * The following member variables can be accessed from any thread.
    ******/
@@ -996,6 +984,8 @@ protected:
   void UnpinForSeek();
 
   const char* PlayStateStr();
+
+  void OnMetadataUpdate(TimedMetadata&& aMetadata);
 
   // This should only ever be accessed from the main thread.
   // It is set in Init and cleared in Shutdown when the element goes away.
@@ -1067,6 +1057,9 @@ protected:
   // Timer to schedule updating dormant state.
   nsCOMPtr<nsITimer> mDormantTimer;
 
+  // A listener to receive metadata updates from MDSM.
+  MediaEventListener mTimedMetadataListener;
+
 protected:
   // Whether the state machine is shut down.
   Mirror<bool> mStateMachineIsShutdown;
@@ -1106,19 +1099,19 @@ protected:
   // This can only be changed on the main thread while holding the decoder
   // monitor. Thus, it can be safely read while holding the decoder monitor
   // OR on the main thread.
-  // Any change to the state on the main thread must call NotifyAll on the
-  // monitor so the decode thread can wake up.
   Canonical<PlayState> mPlayState;
 
   // This can only be changed on the main thread while holding the decoder
   // monitor. Thus, it can be safely read while holding the decoder monitor
   // OR on the main thread.
-  // Any change to the state must call NotifyAll on the monitor.
-  // This can only be PLAY_STATE_PAUSED or PLAY_STATE_PLAYING.
   Canonical<PlayState> mNextState;
 
   // True if the decoder is seeking.
   Canonical<bool> mLogicallySeeking;
+
+  // True if the media is same-origin with the element. Data can only be
+  // passed to MediaStreams when this is true.
+  Canonical<bool> mSameOriginMedia;
 
 public:
   AbstractCanonical<media::NullableTimeUnit>* CanonicalDurationOrNull() override;
@@ -1145,6 +1138,9 @@ public:
   }
   AbstractCanonical<bool>* CanonicalLogicallySeeking() {
     return &mLogicallySeeking;
+  }
+  AbstractCanonical<bool>* CanonicalSameOriginMedia() {
+    return &mSameOriginMedia;
   }
 };
 

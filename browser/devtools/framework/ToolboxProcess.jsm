@@ -12,19 +12,15 @@ const CHROME_DEBUGGER_PROFILE_NAME = "chrome_debugger_profile";
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm")
-
-XPCOMUtils.defineLazyModuleGetter(this, "DevToolsLoader",
-  "resource://gre/modules/devtools/Loader.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "devtools",
-  "resource://gre/modules/devtools/Loader.jsm");
+const { require, DevToolsLoader } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 
 XPCOMUtils.defineLazyGetter(this, "Telemetry", function () {
-  return devtools.require("devtools/shared/telemetry");
+  return require("devtools/shared/telemetry");
 });
 XPCOMUtils.defineLazyGetter(this, "EventEmitter", function () {
-  return devtools.require("devtools/toolkit/event-emitter");
+  return require("devtools/toolkit/event-emitter");
 });
-const { Promise: promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
+const promise = require("promise");
 
 this.EXPORTED_SYMBOLS = ["BrowserToolboxProcess"];
 

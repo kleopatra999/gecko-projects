@@ -13,6 +13,7 @@
 #include "mozilla/TimeStamp.h" // for TimeStamp, TimeDuration
 #include "mozilla/dom/AnimationBinding.h" // for AnimationPlayState
 #include "mozilla/dom/AnimationTimeline.h" // for AnimationTimeline
+#include "mozilla/DOMEventTargetHelper.h" // for DOMEventTargetHelper
 #include "mozilla/dom/KeyframeEffect.h" // for KeyframeEffectReadOnly
 #include "mozilla/dom/Promise.h" // for Promise
 #include "nsCSSProperty.h" // for nsCSSProperty
@@ -35,11 +36,10 @@ class nsIDocument;
 class nsPresContext;
 
 namespace mozilla {
+
 struct AnimationCollection;
-namespace css {
 class AnimValuesStyleRule;
 class CommonAnimationManager;
-} // namespace css
 
 namespace dom {
 
@@ -47,27 +47,27 @@ class CSSAnimation;
 class CSSTransition;
 
 class Animation
-  : public nsISupports
-  , public nsWrapperCache
+  : public DOMEventTargetHelper
 {
 protected:
   virtual ~Animation() {}
 
 public:
   explicit Animation(nsIGlobalObject* aGlobal)
-    : mGlobal(aGlobal)
+    : DOMEventTargetHelper(aGlobal)
     , mPlaybackRate(1.0)
     , mPendingState(PendingState::NotPending)
     , mSequenceNum(kUnsequenced)
     , mIsRunningOnCompositor(false)
-    , mIsPreviousStateFinished(false)
     , mFinishedAtLastComposeStyle(false)
     , mIsRelevant(false)
+    , mFinishedIsResolved(false)
   {
   }
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(Animation)
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(Animation,
+                                           DOMEventTargetHelper)
 
   AnimationTimeline* GetParentObject() const { return mTimeline; }
   virtual JSObject* WrapObject(JSContext* aCx,
@@ -110,6 +110,8 @@ public:
   virtual void Pause(ErrorResult& aRv);
   virtual void Reverse(ErrorResult& aRv);
   bool IsRunningOnCompositor() const { return mIsRunningOnCompositor; }
+  IMPL_EVENT_HANDLER(finish);
+  IMPL_EVENT_HANDLER(cancel);
 
   // Wrapper functions for Animation DOM methods when called
   // from script.
@@ -138,7 +140,7 @@ public:
 
   virtual void CancelFromStyle() { DoCancel(); }
 
-  void Tick();
+  virtual void Tick();
 
   /**
    * Set the time to use for starting or pausing a pending animation.
@@ -292,9 +294,25 @@ public:
    * the style rule on the next refresh driver tick as well (because it
    * is running and has an effect to sample).
    */
-  void ComposeStyle(nsRefPtr<css::AnimValuesStyleRule>& aStyleRule,
+  void ComposeStyle(nsRefPtr<AnimValuesStyleRule>& aStyleRule,
                     nsCSSPropertySet& aSetProperties,
                     bool& aNeedsRefreshes);
+
+
+  // FIXME: Because we currently determine if we need refresh driver ticks
+  // during restyling (specifically ComposeStyle above) and not necessarily
+  // during a refresh driver tick, we can arrive at a situation where we
+  // have finished running an animation but are waiting until the next tick
+  // to queue the final end event. This method tells us when we are in that
+  // situation so we can avoid unregistering from the refresh driver until
+  // we've finished dispatching events.
+  //
+  // This is a temporary measure until bug 1195180 is done and we can do all
+  // our registering and unregistering within a tick callback.
+  virtual bool HasEndEventToQueue() const { return false; }
+
+  void NotifyEffectTimingUpdated();
+
 protected:
   void SilentlySetCurrentTime(const TimeDuration& aNewCurrentTime);
   void SilentlySetPlaybackRate(double aPlaybackRate);
@@ -323,11 +341,23 @@ protected:
     DidSeek
   };
 
-  void UpdateTiming(SeekFlag aSeekFlag);
-  void UpdateFinishedState(SeekFlag aSeekFlag);
+  enum class SyncNotifyFlag {
+    Sync,
+    Async
+  };
+
+  void UpdateTiming(SeekFlag aSeekFlag,
+                    SyncNotifyFlag aSyncNotifyFlag);
+  void UpdateFinishedState(SeekFlag aSeekFlag,
+                           SyncNotifyFlag aSyncNotifyFlag);
   void UpdateEffect();
   void FlushStyle() const;
   void PostUpdate();
+  void ResetFinishedPromise();
+  void MaybeResolveFinishedPromise();
+  void DoFinishNotification(SyncNotifyFlag aSyncNotifyFlag);
+  void DoFinishNotificationImmediately();
+  void DispatchPlaybackEvent(const nsAString& aName);
 
   /**
    * Remove this animation from the pending animation tracker and reset
@@ -341,10 +371,9 @@ protected:
 
   nsIDocument* GetRenderedDocument() const;
   nsPresContext* GetPresContext() const;
-  virtual css::CommonAnimationManager* GetAnimationManager() const = 0;
+  virtual CommonAnimationManager* GetAnimationManager() const = 0;
   AnimationCollection* GetCollection() const;
 
-  nsCOMPtr<nsIGlobalObject> mGlobal;
   nsRefPtr<AnimationTimeline> mTimeline;
   nsRefPtr<KeyframeEffectReadOnly> mEffect;
   // The beginning of the delay period.
@@ -385,13 +414,17 @@ protected:
   uint64_t mSequenceNum;
 
   bool mIsRunningOnCompositor;
-  // Indicates whether we were in the finished state during our
-  // most recent unthrottled sample (our last ComposeStyle call).
-  bool mIsPreviousStateFinished; // Spec calls this "previous finished state"
   bool mFinishedAtLastComposeStyle;
   // Indicates that the animation should be exposed in an element's
   // getAnimations() list.
   bool mIsRelevant;
+
+  nsRevocableEventPtr<nsRunnableMethod<Animation>> mFinishNotificationTask;
+  // True if mFinished is resolved or would be resolved if mFinished has
+  // yet to be created. This is not set when mFinished is rejected since
+  // in that case mFinished is immediately reset to represent a new current
+  // finished promise.
+  bool mFinishedIsResolved;
 };
 
 } // namespace dom

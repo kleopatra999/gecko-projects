@@ -20,7 +20,7 @@
 #include "js/Class.h"
 
 #if JS_STACK_GROWTH_DIRECTION > 0
-# define JS_CHECK_STACK_SIZE(limit, sp) (MOZ_LIKELY(((uintptr_t)(sp) < (limit)))
+# define JS_CHECK_STACK_SIZE(limit, sp) (MOZ_LIKELY((uintptr_t)(sp) < (limit)))
 #else
 # define JS_CHECK_STACK_SIZE(limit, sp) (MOZ_LIKELY((uintptr_t)(sp) > (limit)))
 #endif
@@ -315,7 +315,6 @@ namespace js {
         name,                                                                           \
         js::Class::NON_NATIVE |                                                         \
             JSCLASS_IS_PROXY |                                                          \
-            JSCLASS_IMPLEMENTS_BARRIERS |                                               \
             JSCLASS_DELAY_METADATA_CALLBACK |                                           \
             flags,                                                                      \
         nullptr,                 /* addProperty */                                      \
@@ -1052,6 +1051,15 @@ GetPCCountScriptSummary(JSContext* cx, size_t script);
 
 JS_FRIEND_API(JSString*)
 GetPCCountScriptContents(JSContext* cx, size_t script);
+
+// Generate lcov trace file content for the current compartment, and allocate a
+// new buffer and return the content in it, the size of the newly allocated
+// content within the buffer would be set to the length out-param.
+//
+// In case of out-of-memory, this function returns nullptr and does not set any
+// value to the length out-param.
+JS_FRIEND_API(char*)
+GetCodeCoverageSummary(JSContext* cx, size_t* length);
 
 JS_FRIEND_API(bool)
 ContextHasOutstandingRequests(const JSContext* cx);
@@ -2128,6 +2136,16 @@ JS_FRIEND_API(bool)
 JS_IsDataViewObject(JSObject* obj);
 
 /*
+ * Create a new DataView using the given ArrayBuffer for storage. The given
+ * buffer must be an ArrayBuffer (or a cross-compartment wrapper of an
+ * ArrayBuffer), and the offset and length must fit within the bounds of the
+ * arrayBuffer. Currently, nullptr will be returned and an exception will be
+ * thrown if these conditions do not hold, but do not depend on that behavior.
+ */
+JS_FRIEND_API(JSObject*)
+JS_NewDataView(JSContext* cx, JS::HandleObject arrayBuffer, uint32_t byteOffset, int32_t byteLength);
+
+/*
  * Return the byte offset of a data view into its array buffer. |obj| must be a
  * DataView.
  *
@@ -2184,6 +2202,12 @@ WatchGuts(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::HandleObject
  */
 extern JS_FRIEND_API(bool)
 UnwatchGuts(JSContext* cx, JS::HandleObject obj, JS::HandleId id);
+
+namespace jit {
+
+enum class InlinableNative : uint16_t;
+
+} // namespace jit
 
 } // namespace js
 
@@ -2298,6 +2322,7 @@ struct JSJitInfo {
         Setter,
         Method,
         StaticMethod,
+        InlinableNative,
         // Must be last
         OpTypeCount
     };
@@ -2384,7 +2409,11 @@ struct JSJitInfo {
         JSNative staticMethod;
     };
 
-    uint16_t protoID;
+    union {
+        uint16_t protoID;
+        js::jit::InlinableNative inlinableNative;
+    };
+
     uint16_t depth;
 
     // These fields are carefully packed to take up 4 bytes.  If you need more

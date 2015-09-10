@@ -338,8 +338,8 @@ describe("loop.OTSdkDriver", function () {
       driver.connectSession(_.extend(sessionData,
                                      {sendTwoWayMediaTelemetry: true}));
 
-      expect(driver._getTwoWayMediaStartTime()).to.
-        eql(driver.CONNECTION_START_TIME_UNINITIALIZED);
+      expect(driver._getTwoWayMediaStartTime()).to.eql(
+        driver.CONNECTION_START_TIME_UNINITIALIZED);
     });
 
     describe("On connection complete", function() {
@@ -413,6 +413,66 @@ describe("loop.OTSdkDriver", function () {
       sinon.assert.calledOnce(session.disconnect);
     });
 
+    it("should unsubscribe to all the publisher events that were subscribed to in #setupStreamElements", function() {
+      var subscribedEvents = [];
+
+      // First find out which events were subscribed to.
+      sandbox.stub(publisher, "on", function(eventName) {
+        subscribedEvents.push(eventName);
+      });
+
+      driver.setupStreamElements(new sharedActions.SetupStreamElements({
+        publisherConfig: publisherConfig
+      }));
+
+      // Now disconnect, checking for any unexpected unsubscribes, or any missed
+      // unsubscribes.
+      sandbox.stub(publisher, "off", function(eventNames) {
+        var events = eventNames.split(" ");
+
+        events.forEach(function(eventName) {
+          var index = subscribedEvents.indexOf(eventName);
+
+          expect(index).not.eql(-1);
+
+          subscribedEvents.splice(index, 1);
+        });
+      });
+
+      driver.disconnectSession();
+
+      expect(subscribedEvents).eql([]);
+    });
+
+    it("should unsubscribe to all the subscriber events that were subscribed to in #connectSession", function() {
+      var subscribedEvents = [];
+
+      // First find out which events were subscribed to.
+      sandbox.stub(session, "on", function(eventName) {
+        subscribedEvents.push(eventName);
+      });
+
+      driver.connectSession(sessionData);
+
+      // Now disconnect, checking for any unexpected unsubscribes, or any missed
+      // unsubscribes.
+      sandbox.stub(session, "off", function(eventNames) {
+        var events = eventNames.split(" ");
+
+        events.forEach(function(eventName) {
+          var index = subscribedEvents.indexOf(eventName);
+
+          expect(index).not.eql(-1);
+
+          subscribedEvents.splice(index, 1);
+        });
+      });
+
+      driver.disconnectSession();
+
+      expect(subscribedEvents).eql([]);
+    });
+
     it("should dispatch a DataChannelsAvailable action with available = false", function() {
       driver.disconnectSession();
 
@@ -456,8 +516,8 @@ describe("loop.OTSdkDriver", function () {
 
       driver.disconnectSession();
 
-      expect(driver._getTwoWayMediaStartTime()).to.
-        eql(driver.CONNECTION_START_TIME_UNINITIALIZED);
+      expect(driver._getTwoWayMediaStartTime()).to.eql(
+        driver.CONNECTION_START_TIME_UNINITIALIZED);
     });
   });
 
@@ -473,8 +533,8 @@ describe("loop.OTSdkDriver", function () {
       var endTimeMS = 3;
       driver._noteConnectionLengthIfNeeded(startTimeMS, endTimeMS);
 
-      expect(driver._getTwoWayMediaStartTime()).to.
-        eql(driver.CONNECTION_START_TIME_ALREADY_NOTED);
+      expect(driver._getTwoWayMediaStartTime()).to.eql(
+        driver.CONNECTION_START_TIME_ALREADY_NOTED);
     });
 
     it("should call mozLoop.noteConnectionLength with SHORTER_THAN_10S for calls less than 10s", function() {

@@ -8,12 +8,16 @@
 #define gc_Marking_h
 
 #include "mozilla/DebugOnly.h"
+#include "mozilla/HashFunctions.h"
+#include "mozilla/Move.h"
 
 #include "jsfriendapi.h"
 
+#include "ds/OrderedHashTable.h"
 #include "gc/Heap.h"
 #include "gc/Tracer.h"
 #include "js/GCAPI.h"
+#include "js/HeapAPI.h"
 #include "js/SliceBudget.h"
 #include "js/TracingAPI.h"
 
@@ -36,9 +40,9 @@ static const size_t NON_INCREMENTAL_MARK_STACK_BASE_CAPACITY = 4096;
 static const size_t INCREMENTAL_MARK_STACK_BASE_CAPACITY = 32768;
 
 /*
- * When the native stack is low, the GC does not call JS_TraceChildren to mark
+ * When the native stack is low, the GC does not call js::TraceChildren to mark
  * the reachable "children" of the thing. Rather the thing is put aside and
- * JS_TraceChildren is called later with more space on the C stack.
+ * js::TraceChildren is called later with more space on the C stack.
  *
  * To implement such delayed marking of the children with minimal overhead for
  * the normal case of sufficient native stack, the code adds a field per arena.
@@ -132,6 +136,35 @@ class MarkStack
     size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 };
 
+class WeakMapBase;
+
+namespace gc {
+
+struct WeakKeyTableHashPolicy {
+    typedef JS::GCCellPtr Lookup;
+    static HashNumber hash(const Lookup& v) { return mozilla::HashGeneric(v.asCell()); }
+    static bool match(const JS::GCCellPtr& k, const Lookup& l) { return k == l; }
+    static bool isEmpty(const JS::GCCellPtr& v) { return !v; }
+    static void makeEmpty(JS::GCCellPtr* vp) { *vp = nullptr; }
+};
+
+struct WeakMarkable {
+    WeakMapBase* weakmap;
+    JS::GCCellPtr key;
+
+    WeakMarkable(WeakMapBase* weakmapArg, JS::GCCellPtr keyArg)
+      : weakmap(weakmapArg), key(keyArg) {}
+};
+
+typedef Vector<WeakMarkable, 2, js::SystemAllocPolicy> WeakEntryVector;
+
+typedef OrderedHashMap<JS::GCCellPtr,
+                       WeakEntryVector,
+                       WeakKeyTableHashPolicy,
+                       js::SystemAllocPolicy> WeakKeyTable;
+
+} /* namespace gc */
+
 class GCMarker : public JSTracer
 {
   public:
@@ -173,6 +206,23 @@ class GCMarker : public JSTracer
     }
     uint32_t markColor() const { return color; }
 
+    void enterWeakMarkingMode();
+
+    void leaveWeakMarkingMode() {
+        MOZ_ASSERT_IF(weakMapAction() == ExpandWeakMaps && !linearWeakMarkingDisabled_, tag_ == TracerKindTag::WeakMarking);
+        tag_ = TracerKindTag::Marking;
+
+        // Table is expensive to maintain when not in weak marking mode, so
+        // we'll rebuild it upon entry rather than allow it to contain stale
+        // data.
+        weakKeys.clear();
+    }
+
+    void abortLinearWeakMarking() {
+        leaveWeakMarkingMode();
+        linearWeakMarkingDisabled_ = true;
+    }
+
     void delayMarkingArena(gc::ArenaHeader* aheader);
     void delayMarkingChildren(const void* thing);
     void markDelayedChildren(gc::ArenaHeader* aheader);
@@ -195,6 +245,14 @@ class GCMarker : public JSTracer
     bool shouldCheckCompartments() { return strictCompartmentChecking; }
 #endif
 
+    void markEphemeronValues(gc::Cell* markedCell, gc::WeakEntryVector& entry);
+
+    /*
+     * Mapping from not yet marked keys to a vector of all values that the key
+     * maps to in any live weak map.
+     */
+    gc::WeakKeyTable weakKeys;
+
   private:
 #ifdef DEBUG
     void checkZone(void* p);
@@ -213,6 +271,7 @@ class GCMarker : public JSTracer
         GroupTag,
         SavedValueArrayTag,
         JitCodeTag,
+        ScriptTag,
         LastTag = JitCodeTag
     };
 
@@ -230,6 +289,8 @@ class GCMarker : public JSTracer
     template <typename T> void markAndTraceChildren(T* thing);
     template <typename T> void markAndPush(StackTag tag, T* thing);
     template <typename T> void markAndScan(T* thing);
+    template <typename T> void markPotentialEphemeronKeyHelper(T oldThing);
+    template <typename T> void markPotentialEphemeronKey(T* oldThing);
     void eagerlyMarkChildren(JSLinearString* str);
     void eagerlyMarkChildren(JSRope* rope);
     void eagerlyMarkChildren(JSString* str);
@@ -286,6 +347,12 @@ class GCMarker : public JSTracer
 
     /* Pointer to the top of the stack of arenas we are delaying marking on. */
     js::gc::ArenaHeader* unmarkedArenaStackTop;
+
+    /*
+     * If the weakKeys table OOMs, disable the linear algorithm and fall back
+     * to iterating until the next GC.
+     */
+    bool linearWeakMarkingDisabled_;
 
     /* Count of arenas that are currently in the stack. */
     mozilla::DebugOnly<size_t> markLaterArenas;

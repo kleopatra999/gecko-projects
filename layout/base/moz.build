@@ -40,6 +40,10 @@ with Files('nsChangeHint.h'):
 with Files('nsBidi*'):
     BUG_COMPONENT = ('Core', 'Layout: Text')
 
+for caret_file in ('AccessibleCaret*', 'TouchCaret*', 'SelectionCarets*'):
+    with Files(caret_file):
+        BUG_COMPONENT = ('Core', 'Selection')
+
 XPIDL_SOURCES += [
     'nsIStyleSheetService.idl',
 ]
@@ -156,8 +160,6 @@ SOURCES += [
 
 if CONFIG['ENABLE_TESTS']:
     DIRS += ['gtest']
-
-FAIL_ON_WARNINGS = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 

@@ -76,6 +76,7 @@ public:
               IPC::Channel* aChannel);
     void InitProcessAttributes();
     void InitXPCOM();
+    void InitGraphicsDeviceData();
 
     static ContentChild* GetSingleton() {
         return sSingleton;
@@ -271,12 +272,11 @@ public:
     virtual PFMRadioChild* AllocPFMRadioChild() override;
     virtual bool DeallocPFMRadioChild(PFMRadioChild* aActor) override;
 
-    virtual PAsmJSCacheEntryChild* AllocPAsmJSCacheEntryChild(
-                                 const asmjscache::OpenMode& aOpenMode,
-                                 const asmjscache::WriteParams& aWriteParams,
-                                 const IPC::Principal& aPrincipal) override;
-    virtual bool DeallocPAsmJSCacheEntryChild(
-                                    PAsmJSCacheEntryChild* aActor) override;
+    virtual PPresentationChild* AllocPPresentationChild() override;
+    virtual bool DeallocPPresentationChild(PPresentationChild* aActor) override;
+    virtual bool RecvNotifyPresentationReceiverLaunched(PBrowserChild* aIframe,
+                                                        const nsString& aSessionId) override;
+    virtual bool RecvNotifyPresentationReceiverCleanUp(const nsString& aSessionId) override;
 
     virtual PSpeechSynthesisChild* AllocPSpeechSynthesisChild() override;
     virtual bool DeallocPSpeechSynthesisChild(PSpeechSynthesisChild* aActor) override;
@@ -362,8 +362,6 @@ public:
                                       const bool& aIsRemovable,
                                       const bool& aIsHotSwappable) override;
     virtual bool RecvVolumeRemoved(const nsString& aFsName) override;
-
-    virtual bool RecvNuwaFork() override;
 
     virtual bool
     RecvNotifyProcessPriorityChanged(const hal::ProcessPriority& aPriority) override;
@@ -469,6 +467,8 @@ public:
 
     virtual bool RecvGamepadUpdate(const GamepadChangeEvent& aGamepadEvent) override;
 
+    virtual bool RecvTestGraphicsDeviceReset(const uint32_t& aResetReason) override;
+
 private:
     virtual void ActorDestroy(ActorDestroyReason why) override;
 
@@ -514,6 +514,9 @@ private:
 
     DISALLOW_EVIL_CONSTRUCTORS(ContentChild);
 };
+
+void
+InitOnContentProcessCreated();
 
 uint64_t
 NextWindowID();

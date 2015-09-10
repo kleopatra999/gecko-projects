@@ -266,9 +266,10 @@ nsICODecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
   }
 
   uint16_t colorDepth = 0;
-  nsIntSize prefSize = mImage->GetRequestedResolution();
-  if (prefSize.width == 0 && prefSize.height == 0) {
-    prefSize.SizeTo(PREFICONSIZE, PREFICONSIZE);
+
+  // If we didn't get a #-moz-resolution, default to PREFICONSIZE.
+  if (mResolution.width == 0 && mResolution.height == 0) {
+    mResolution.SizeTo(PREFICONSIZE, PREFICONSIZE);
   }
 
   // A measure of the difference in size between the entry we've found
@@ -306,8 +307,8 @@ nsICODecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
       // Calculate the delta between this image's size and the desired size,
       // so we can see if it is better than our current-best option.
       // In the case of several equally-good images, we use the last one.
-      int32_t delta = (e.mWidth == 0 ? 256 : e.mWidth) - prefSize.width +
-                      (e.mHeight == 0 ? 256 : e.mHeight) - prefSize.height;
+      int32_t delta = (e.mWidth == 0 ? 256 : e.mWidth) - mResolution.width +
+                      (e.mHeight == 0 ? 256 : e.mHeight) - mResolution.height;
       if (e.mBitCount >= colorDepth &&
           ((diff < 0 && delta >= diff) || (delta >= 0 && delta <= diff))) {
         diff = delta;
@@ -359,7 +360,8 @@ nsICODecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
     if (mIsPNG) {
       mContainedDecoder = new nsPNGDecoder(mImage);
       mContainedDecoder->SetMetadataDecode(IsMetadataDecode());
-      mContainedDecoder->SetSendPartialInvalidations(mSendPartialInvalidations);
+      mContainedDecoder->SetDecoderFlags(GetDecoderFlags());
+      mContainedDecoder->SetSurfaceFlags(GetSurfaceFlags());
       mContainedDecoder->Init();
       if (!WriteToContainedDecoder(mSignature, PNGSIGNATURESIZE)) {
         return;
@@ -374,8 +376,8 @@ nsICODecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
     }
 
     if (!HasSize() && mContainedDecoder->HasSize()) {
-      PostSize(mContainedDecoder->GetImageMetadata().GetWidth(),
-               mContainedDecoder->GetImageMetadata().GetHeight());
+      nsIntSize size = mContainedDecoder->GetSize();
+      PostSize(size.width, size.height);
     }
 
     mPos += aCount;
@@ -436,7 +438,8 @@ nsICODecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
     mContainedDecoder = bmpDecoder;
     bmpDecoder->SetUseAlphaData(true);
     mContainedDecoder->SetMetadataDecode(IsMetadataDecode());
-    mContainedDecoder->SetSendPartialInvalidations(mSendPartialInvalidations);
+    mContainedDecoder->SetDecoderFlags(GetDecoderFlags());
+    mContainedDecoder->SetSurfaceFlags(GetSurfaceFlags());
     mContainedDecoder->Init();
 
     // The ICO format when containing a BMP does not include the 14 byte
@@ -472,8 +475,8 @@ nsICODecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
       return;
     }
 
-    PostSize(mContainedDecoder->GetImageMetadata().GetWidth(),
-             mContainedDecoder->GetImageMetadata().GetHeight());
+    nsIntSize size = mContainedDecoder->GetSize();
+    PostSize(size.width, size.height);
 
     // We have the size. If we're doing a metadata decode, we're done.
     if (IsMetadataDecode()) {
@@ -529,14 +532,14 @@ nsICODecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
     // If the bitmap is fully processed, treat any left over data as the ICO's
     // 'AND buffer mask' which appears after the bitmap resource.
     if (!mIsPNG && mPos >= bmpDataEnd) {
+      nsRefPtr<nsBMPDecoder> bmpDecoder =
+        static_cast<nsBMPDecoder*>(mContainedDecoder.get());
+
       // There may be an optional AND bit mask after the data.  This is
       // only used if the alpha data is not already set. The alpha data
       // is used for 32bpp bitmaps as per the comment in ICODecoder.h
       // The alpha mask should be checked in all other cases.
-      if (static_cast<nsBMPDecoder*>(mContainedDecoder.get())->
-            GetBitsPerPixel() != 32 ||
-          !static_cast<nsBMPDecoder*>(mContainedDecoder.get())->
-            HasAlphaData()) {
+      if (bmpDecoder->GetBitsPerPixel() != 32 || !bmpDecoder->HasAlphaData()) {
         uint32_t rowSize = ((GetRealWidth() + 31) / 32) * 4; // + 31 to round up
         if (mPos == bmpDataEnd) {
           mPos++;
@@ -570,9 +573,7 @@ nsICODecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
             mCurLine--;
             mRowBytes = 0;
 
-            uint32_t* imageData =
-              static_cast<nsBMPDecoder*>(mContainedDecoder.get())->
-                                           GetImageData();
+            uint32_t* imageData = bmpDecoder->GetImageData();
             if (!imageData) {
               PostDataError();
               return;
@@ -598,7 +599,8 @@ nsICODecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
         // If any bits are set in sawTransparency, then we know at least one
         // pixel was transparent.
         if (sawTransparency) {
-            PostHasTransparency();
+          PostHasTransparency();
+          bmpDecoder->SetHasAlphaData();
         }
       }
     }

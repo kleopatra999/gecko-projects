@@ -149,7 +149,7 @@ public:
   NS_IMETHOD SaveState() override;
   virtual bool RestoreState(nsPresState* aState) override;
   virtual bool AllowDrop() override;
-  virtual bool IsDisabledForEvents(uint32_t aMessage) override;
+  virtual bool IsDisabledForEvents(EventMessage aMessage) override;
 
   virtual void FieldSetDisabledChanged(bool aNotify) override;
 
@@ -865,7 +865,7 @@ protected:
    * Called when an attribute is about to be changed
    */
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
+                                 nsAttrValueOrString* aValue,
                                  bool aNotify) override;
   /**
    * Called when an attribute has just been changed

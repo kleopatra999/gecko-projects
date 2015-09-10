@@ -357,15 +357,15 @@ Debugger::Debugger(JSContext* cx, NativeObject* dbg)
   : object(dbg),
     uncaughtExceptionHook(nullptr),
     enabled(true),
+    allowUnobservedAsmJS(false),
     observedGCs(cx),
+    tenurePromotionsLog(cx),
     trackingTenurePromotions(false),
-    tenurePromotionsLogLength(0),
     maxTenurePromotionsLogLength(DEFAULT_MAX_LOG_LENGTH),
     tenurePromotionsLogOverflowed(false),
-    allowUnobservedAsmJS(false),
+    allocationsLog(cx),
     trackingAllocationSites(false),
     allocationSamplingProbability(1.0),
-    allocationsLogLength(0),
     maxAllocationsLogLength(DEFAULT_MAX_LOG_LENGTH),
     allocationsLogOverflowed(false),
     frames(cx->runtime()),
@@ -390,8 +390,8 @@ Debugger::Debugger(JSContext* cx, NativeObject* dbg)
 Debugger::~Debugger()
 {
     MOZ_ASSERT_IF(debuggees.initialized(), debuggees.empty());
-    emptyAllocationsLog();
-    emptyTenurePromotionsLog();
+    allocationsLog.clear();
+    tenurePromotionsLog.clear();
 
     /*
      * Since the inactive state for this link is a singleton cycle, it's always
@@ -1701,7 +1701,7 @@ Debugger::isDebuggee(const JSCompartment* compartment) const
     return compartment->isDebuggee() && debuggees.has(compartment->maybeGlobal());
 }
 
-Debugger::TenurePromotionsEntry::TenurePromotionsEntry(JSRuntime* rt, JSObject& obj, double when)
+Debugger::TenurePromotionsLogEntry::TenurePromotionsLogEntry(JSRuntime* rt, JSObject& obj, double when)
   : className(obj.getClass()->name),
     when(when),
     frame(getObjectAllocationSite(obj)),
@@ -1712,42 +1712,16 @@ Debugger::TenurePromotionsEntry::TenurePromotionsEntry(JSRuntime* rt, JSObject& 
 void
 Debugger::logTenurePromotion(JSRuntime* rt, JSObject& obj, double when)
 {
-    auto* entry = js_new<TenurePromotionsEntry>(rt, obj, when);
-    if (!entry)
+    if (!tenurePromotionsLog.emplaceBack(rt, obj, when))
         CrashAtUnhandlableOOM("Debugger::logTenurePromotion");
 
-    tenurePromotionsLog.insertBack(entry);
-    if (tenurePromotionsLogLength >= maxTenurePromotionsLogLength) {
-        js_delete(tenurePromotionsLog.popFirst());
+    if (tenurePromotionsLog.length() > maxTenurePromotionsLogLength) {
+        if (!tenurePromotionsLog.popFront())
+            CrashAtUnhandlableOOM("Debugger::logTenurePromotion");
+        MOZ_ASSERT(tenurePromotionsLog.length() == maxTenurePromotionsLogLength);
         tenurePromotionsLogOverflowed = true;
-    } else {
-        tenurePromotionsLogLength++;
     }
 }
-
-/* static */ Debugger::AllocationSite*
-Debugger::AllocationSite::create(JSContext* cx, HandleObject frame, double when, HandleObject obj)
-{
-    assertSameCompartment(cx, frame);
-
-    RootedAtom ctorName(cx);
-    {
-        AutoCompartment ac(cx, obj);
-        if (!obj->constructorDisplayAtom(cx, &ctorName))
-            return nullptr;
-    }
-
-    AllocationSite* allocSite = cx->new_<AllocationSite>(frame, when);
-    if (!allocSite)
-        return nullptr;
-
-    allocSite->className = obj->getClass()->name;
-    allocSite->ctorName = ctorName.get();
-    allocSite->size = JS::ubi::Node(obj.get()).size(cx->runtime()->debuggerMallocSizeOf);
-
-    return allocSite;
-}
-
 
 bool
 Debugger::appendAllocationSite(JSContext* cx, HandleObject obj, HandleSavedFrame frame,
@@ -1760,36 +1734,32 @@ Debugger::appendAllocationSite(JSContext* cx, HandleObject obj, HandleSavedFrame
     if (!cx->compartment()->wrap(cx, &wrappedFrame))
         return false;
 
-    AllocationSite* allocSite = AllocationSite::create(cx, wrappedFrame, when, obj);
-    if (!allocSite)
+    RootedAtom ctorName(cx);
+    {
+        AutoCompartment ac(cx, obj);
+        if (!obj->constructorDisplayAtom(cx, &ctorName))
+            return false;
+    }
+
+    auto className = obj->getClass()->name;
+    auto size = JS::ubi::Node(obj.get()).size(cx->runtime()->debuggerMallocSizeOf);
+    auto inNursery = gc::IsInsideNursery(obj);
+
+    if (!allocationsLog.emplaceBack(wrappedFrame, when, className, ctorName, size, inNursery)) {
+        ReportOutOfMemory(cx);
         return false;
+    }
 
-    allocationsLog.insertBack(allocSite);
-
-    if (allocationsLogLength >= maxAllocationsLogLength) {
-        js_delete(allocationsLog.popFirst());
+    if (allocationsLog.length() > maxAllocationsLogLength) {
+        if (!allocationsLog.popFront()) {
+            ReportOutOfMemory(cx);
+            return false;
+        }
+        MOZ_ASSERT(allocationsLog.length() == maxAllocationsLogLength);
         allocationsLogOverflowed = true;
-    } else {
-        allocationsLogLength++;
     }
 
     return true;
-}
-
-void
-Debugger::emptyAllocationsLog()
-{
-    while (!allocationsLog.isEmpty())
-        js_delete(allocationsLog.popFirst());
-    allocationsLogLength = 0;
-}
-
-void
-Debugger::emptyTenurePromotionsLog()
-{
-    while (!tenurePromotionsLog.isEmpty())
-        js_delete(tenurePromotionsLog.popFirst());
-    tenurePromotionsLogLength = 0;
 }
 
 JSTrapStatus
@@ -1996,6 +1966,7 @@ Debugger::updateExecutionObservabilityOfFrames(JSContext* cx, const ExecutionObs
         }
     }
 
+    AbstractFramePtr oldestEnabledFrame;
     for (ScriptFrameIter iter(cx, ScriptFrameIter::ALL_CONTEXTS,
                               ScriptFrameIter::GO_THROUGH_SAVED);
          !iter.done();
@@ -2003,7 +1974,10 @@ Debugger::updateExecutionObservabilityOfFrames(JSContext* cx, const ExecutionObs
     {
         if (obs.shouldMarkAsDebuggee(iter)) {
             if (observing) {
-                iter.abstractFramePtr().setIsDebuggee();
+                if (!iter.abstractFramePtr().isDebuggee()) {
+                    oldestEnabledFrame = iter.abstractFramePtr();
+                    oldestEnabledFrame.setIsDebuggee();
+                }
             } else {
 #ifdef DEBUG
                 // Debugger.Frame lifetimes are managed by the debug epilogue,
@@ -2016,6 +1990,13 @@ Debugger::updateExecutionObservabilityOfFrames(JSContext* cx, const ExecutionObs
             }
         }
     }
+
+    // See comment in unsetPrevUpToDateUntil.
+    if (oldestEnabledFrame) {
+        AutoCompartment ac(cx, oldestEnabledFrame.compartment());
+        DebugScopes::unsetPrevUpToDateUntil(cx, oldestEnabledFrame);
+    }
+
     return true;
 }
 
@@ -2332,7 +2313,7 @@ Debugger::removeAllocationsTrackingForAllDebuggees()
     for (WeakGlobalObjectSet::Range r = debuggees.all(); !r.empty(); r.popFront()) {
         Debugger::removeAllocationsTracking(*r.front().get());
     }
-    emptyAllocationsLog();
+    allocationsLog.clear();
 }
 
 
@@ -2351,19 +2332,7 @@ Debugger::markCrossCompartmentEdges(JSTracer* trc)
     // `Debugger::logTenurePromotion`, we can't hold onto CCWs inside the log,
     // and instead have unwrapped cross-compartment edges. We need to be sure to
     // mark those here.
-    traceTenurePromotionsLog(trc);
-}
-
-/*
- * Trace every entry in the promoted to tenured heap log.
- */
-void
-Debugger::traceTenurePromotionsLog(JSTracer* trc)
-{
-    for (TenurePromotionsEntry* e = tenurePromotionsLog.getFirst(); e; e = e->getNext()) {
-        if (e->frame)
-            TraceEdge(trc, &e->frame, "Debugger::tenurePromotionsLog SavedFrame");
-    }
+    TenurePromotionsLog::trace(&tenurePromotionsLog, trc);
 }
 
 /*
@@ -2544,17 +2513,8 @@ Debugger::trace(JSTracer* trc)
         TraceEdge(trc, &frameobj, "live Debugger.Frame");
     }
 
-    /*
-     * Mark every allocation site in our allocation log.
-     */
-    for (AllocationSite* s = allocationsLog.getFirst(); s; s = s->getNext()) {
-        if (s->frame)
-            TraceEdge(trc, &s->frame, "allocation log SavedFrame");
-        if (s->ctorName)
-            TraceEdge(trc, &s->ctorName, "allocation log constructor name");
-    }
-
-    traceTenurePromotionsLog(trc);
+    AllocationsLog::trace(&allocationsLog, trc);
+    TenurePromotionsLog::trace(&tenurePromotionsLog, trc);
 
     /* Trace the weak map from JSScript instances to Debugger.Script objects. */
     scripts.trace(trc);
@@ -2634,7 +2594,7 @@ Debugger::finalize(FreeOp* fop, JSObject* obj)
 
 const Class Debugger::jsclass = {
     "Debugger",
-    JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS |
+    JSCLASS_HAS_PRIVATE |
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUG_COUNT),
     nullptr, nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr, Debugger::finalize,
@@ -3869,8 +3829,11 @@ class MOZ_STACK_CLASS Debugger::ScriptQuery
             if (p) {
                 /* Is our newly found script deeper than the last one we found? */
                 JSScript* incumbent = p->value();
-                if (script->staticLevel() > incumbent->staticLevel())
+                if (StaticScopeChainLength(script->innermostStaticScope()) >
+                    StaticScopeChainLength(incumbent->innermostStaticScope()))
+                {
                     p->value() = script;
+                }
             } else {
                 /*
                  * This is the first matching script we've encountered for this
@@ -4520,7 +4483,7 @@ DebuggerScript_trace(JSTracer* trc, JSObject* obj)
 
 const Class DebuggerScript_class = {
     "Script",
-    JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS |
+    JSCLASS_HAS_PRIVATE |
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUGSCRIPT_COUNT),
     nullptr, nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr, nullptr,
@@ -4698,14 +4661,6 @@ DebuggerScript_getSourceLength(JSContext* cx, unsigned argc, Value* vp)
 {
     THIS_DEBUGSCRIPT_SCRIPT(cx, argc, vp, "(get sourceEnd)", args, obj, script);
     args.rval().setNumber(uint32_t(script->sourceEnd() - script->sourceStart()));
-    return true;
-}
-
-static bool
-DebuggerScript_getStaticLevel(JSContext* cx, unsigned argc, Value* vp)
-{
-    THIS_DEBUGSCRIPT_SCRIPT(cx, argc, vp, "(get staticLevel)", args, obj, script);
-    args.rval().setNumber(uint32_t(script->staticLevel()));
     return true;
 }
 
@@ -5492,7 +5447,6 @@ static const JSPropertySpec DebuggerScript_properties[] = {
     JS_PSG("source", DebuggerScript_getSource, 0),
     JS_PSG("sourceStart", DebuggerScript_getSourceStart, 0),
     JS_PSG("sourceLength", DebuggerScript_getSourceLength, 0),
-    JS_PSG("staticLevel", DebuggerScript_getStaticLevel, 0),
     JS_PSG("global", DebuggerScript_getGlobal, 0),
     JS_PS_END
 };
@@ -5537,7 +5491,7 @@ DebuggerSource_trace(JSTracer* trc, JSObject* obj)
 
 const Class DebuggerSource_class = {
     "Source",
-    JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS |
+    JSCLASS_HAS_PRIVATE |
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUGSOURCE_COUNT),
     nullptr, nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr, nullptr,
@@ -6390,9 +6344,21 @@ EvaluateInEnv(JSContext* cx, Handle<Env*> env, HandleValue thisv, AbstractFrameP
     Rooted<ScopeObject*> enclosingStaticScope(cx);
     if (!env->is<GlobalObject>())
         enclosingStaticScope = StaticNonSyntacticScopeObjects::create(cx, nullptr);
-    Rooted<StaticEvalObject*> staticScope(cx, StaticEvalObject::create(cx, enclosingStaticScope));
-    if (!staticScope)
-        return false;
+
+    // Do not consider executeInGlobal{WithBindings} as an eval, but instead
+    // as executing a series of statements at the global level. This is to
+    // circumvent the fresh lexical scope that all eval have, so that the
+    // users of executeInGlobal, like the web console, may add new bindings to
+    // the global scope.
+    Rooted<ScopeObject*> staticScope(cx);
+    if (frame) {
+        staticScope = StaticEvalObject::create(cx, enclosingStaticScope);
+        if (!staticScope)
+            return false;
+    } else {
+        staticScope = enclosingStaticScope;
+    }
+
     CompileOptions options(cx);
     options.setIsRunOnce(true)
            .setForEval(true)
@@ -6405,16 +6371,18 @@ EvaluateInEnv(JSContext* cx, Handle<Env*> env, HandleValue thisv, AbstractFrameP
     SourceBufferHolder srcBuf(chars.start().get(), chars.length(), SourceBufferHolder::NoOwnership);
     RootedScript script(cx, frontend::CompileScript(cx, &cx->tempLifoAlloc(), env, staticScope,
                                                     callerScript, options, srcBuf,
-                                                    /* source = */ nullptr,
-                                                    /* staticLevel = */ frame ? 1 : 0));
+                                                    /* source = */ nullptr));
     if (!script)
         return false;
 
-    if (script->strict())
-        staticScope->setStrict();
+    // Again, executeInGlobal is not considered eval.
+    if (frame) {
+        if (script->strict())
+            staticScope->as<StaticEvalObject>().setStrict();
+        script->setActiveEval();
+    }
 
-    script->setActiveEval();
-    ExecuteType type = !frame ? EXECUTE_DEBUG_GLOBAL : EXECUTE_DEBUG;
+    ExecuteType type = !frame ? EXECUTE_GLOBAL : EXECUTE_DEBUG;
     return ExecuteKernel(cx, script, *env, thisv, NullValue(), type, frame, rval.address());
 }
 
@@ -6649,7 +6617,7 @@ DebuggerObject_trace(JSTracer* trc, JSObject* obj)
 
 const Class DebuggerObject_class = {
     "Object",
-    JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS |
+    JSCLASS_HAS_PRIVATE |
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUGOBJECT_COUNT),
     nullptr, nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr, nullptr,
@@ -7001,7 +6969,7 @@ null(CallArgs& args)
     return true;
 }
 
-/* static */ JSObject*
+/* static */ SavedFrame*
 Debugger::getObjectAllocationSite(JSObject& obj)
 {
     JSObject* metadata = GetObjectMetadata(&obj);
@@ -7010,7 +6978,7 @@ Debugger::getObjectAllocationSite(JSObject& obj)
 
     MOZ_ASSERT(!metadata->is<WrapperObject>());
     return SavedFrame::isSavedFrameAndNotProto(*metadata)
-        ? metadata
+        ? &metadata->as<SavedFrame>()
         : nullptr;
 }
 
@@ -7171,7 +7139,7 @@ DebuggerObject_defineProperties(JSContext* cx, unsigned argc, Value* vp)
         return false;
 
     AutoIdVector ids(cx);
-    AutoPropertyDescriptorVector descs(cx);
+    Rooted<PropertyDescriptorVector> descs(cx, PropertyDescriptorVector(cx));
     if (!ReadPropertyDescriptors(cx, props, false, &ids, &descs))
         return false;
     size_t n = ids.length();
@@ -7466,29 +7434,30 @@ RequireGlobalObject(JSContext* cx, HandleValue dbgobj, HandleObject referent)
 }
 
 static bool
-DebuggerObject_evalInGlobal(JSContext* cx, unsigned argc, Value* vp)
+DebuggerObject_executeInGlobal(JSContext* cx, unsigned argc, Value* vp)
 {
-    THIS_DEBUGOBJECT_OWNER_REFERENT(cx, argc, vp, "evalInGlobal", args, dbg, referent);
-    if (!args.requireAtLeast(cx, "Debugger.Object.prototype.evalInGlobal", 1))
+    THIS_DEBUGOBJECT_OWNER_REFERENT(cx, argc, vp, "executeInGlobal", args, dbg, referent);
+    if (!args.requireAtLeast(cx, "Debugger.Object.prototype.executeInGlobal", 1))
         return false;
     if (!RequireGlobalObject(cx, args.thisv(), referent))
         return false;
 
-    return DebuggerGenericEval(cx, "Debugger.Object.prototype.evalInGlobal",
+    return DebuggerGenericEval(cx, "Debugger.Object.prototype.executeInGlobal",
                                args[0], EvalWithDefaultBindings, JS::UndefinedHandleValue,
                                args.get(1), args.rval(), dbg, referent, nullptr);
 }
 
 static bool
-DebuggerObject_evalInGlobalWithBindings(JSContext* cx, unsigned argc, Value* vp)
+DebuggerObject_executeInGlobalWithBindings(JSContext* cx, unsigned argc, Value* vp)
 {
-    THIS_DEBUGOBJECT_OWNER_REFERENT(cx, argc, vp, "evalInGlobalWithBindings", args, dbg, referent);
-    if (!args.requireAtLeast(cx, "Debugger.Object.prototype.evalInGlobalWithBindings", 2))
+    THIS_DEBUGOBJECT_OWNER_REFERENT(cx, argc, vp, "executeInGlobalWithBindings", args, dbg,
+                                    referent);
+    if (!args.requireAtLeast(cx, "Debugger.Object.prototype.executeInGlobalWithBindings", 2))
         return false;
     if (!RequireGlobalObject(cx, args.thisv(), referent))
         return false;
 
-    return DebuggerGenericEval(cx, "Debugger.Object.prototype.evalInGlobalWithBindings",
+    return DebuggerGenericEval(cx, "Debugger.Object.prototype.executeInGlobalWithBindings",
                                args[0], EvalHasExtraBindings, args[1], args.get(2),
                                args.rval(), dbg, referent, nullptr);
 }
@@ -7568,8 +7537,8 @@ static const JSFunctionSpec DebuggerObject_methods[] = {
     JS_FN("apply", DebuggerObject_apply, 0, 0),
     JS_FN("call", DebuggerObject_call, 0, 0),
     JS_FN("makeDebuggeeValue", DebuggerObject_makeDebuggeeValue, 1, 0),
-    JS_FN("evalInGlobal", DebuggerObject_evalInGlobal, 1, 0),
-    JS_FN("evalInGlobalWithBindings", DebuggerObject_evalInGlobalWithBindings, 2, 0),
+    JS_FN("executeInGlobal", DebuggerObject_executeInGlobal, 1, 0),
+    JS_FN("executeInGlobalWithBindings", DebuggerObject_executeInGlobalWithBindings, 2, 0),
     JS_FN("unwrap", DebuggerObject_unwrap, 0, 0),
     JS_FN("unsafeDereference", DebuggerObject_unsafeDereference, 0, 0),
     JS_FS_END
@@ -7594,7 +7563,7 @@ DebuggerEnv_trace(JSTracer* trc, JSObject* obj)
 
 const Class DebuggerEnv_class = {
     "Environment",
-    JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS |
+    JSCLASS_HAS_PRIVATE |
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_DEBUGENV_COUNT),
     nullptr, nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr, nullptr,
@@ -8154,17 +8123,19 @@ JS::dbg::onPromiseSettled(JSContext* cx, HandleObject promise)
 }
 
 JS_PUBLIC_API(bool)
-JS::dbg::IsDebugger(const JSObject& obj)
+JS::dbg::IsDebugger(JSObject& obj)
 {
-    return js::GetObjectClass(&obj) == &Debugger::jsclass &&
-           js::Debugger::fromJSObject(&obj) != nullptr;
+    JSObject* unwrapped = CheckedUnwrap(&obj);
+    return unwrapped &&
+           js::GetObjectClass(unwrapped) == &Debugger::jsclass &&
+           js::Debugger::fromJSObject(unwrapped) != nullptr;
 }
 
 JS_PUBLIC_API(bool)
-JS::dbg::GetDebuggeeGlobals(JSContext* cx, const JSObject& dbgObj, AutoObjectVector& vector)
+JS::dbg::GetDebuggeeGlobals(JSContext* cx, JSObject& dbgObj, AutoObjectVector& vector)
 {
     MOZ_ASSERT(IsDebugger(dbgObj));
-    js::Debugger* dbg = js::Debugger::fromJSObject(&dbgObj);
+    js::Debugger* dbg = js::Debugger::fromJSObject(CheckedUnwrap(&dbgObj));
 
     if (!vector.reserve(vector.length() + dbg->debuggees.count())) {
         JS_ReportOutOfMemory(cx);
@@ -8230,9 +8201,11 @@ JSObject*
 GarbageCollectionEvent::toJSObject(JSContext* cx) const
 {
     RootedObject obj(cx, NewBuiltinClassInstance<PlainObject>(cx));
+    RootedValue gcCycleNumberVal(cx, NumberValue(majorGCNumber_));
     if (!obj ||
         !DefineStringProperty(cx, obj, cx->names().nonincrementalReason, nonincrementalReason) ||
-        !DefineStringProperty(cx, obj, cx->names().reason, reason))
+        !DefineStringProperty(cx, obj, cx->names().reason, reason) ||
+        !DefineProperty(cx, obj, cx->names().gcCycleNumber, gcCycleNumberVal))
     {
         return nullptr;
     }

@@ -91,7 +91,9 @@ struct HttpChannelOpenArgs
   OptionalFileDescriptorSet   fds;
   OptionalLoadInfoArgs        loadInfo;
   OptionalHttpResponseHead    synthesizedResponseHead;
+  nsCString                   synthesizedSecurityInfoSerialization;
   uint32_t                    cacheKey;
+  nsCString                   schedulingContextID;
 };
 
 struct HttpChannelConnectArgs

@@ -9,6 +9,7 @@
 
 #include "jsobj.h"
 
+#include "builtin/SelfHostingDefines.h"
 #include "vm/Runtime.h"
 
 namespace js {
@@ -21,7 +22,8 @@ namespace js {
  *
  * All values except ropes are hashable as-is.
  */
-class HashableValue {
+class HashableValue : public JS::Traceable
+{
     PreBarrieredValue value;
 
   public:
@@ -40,34 +42,21 @@ class HashableValue {
     bool operator==(const HashableValue& other) const;
     HashableValue mark(JSTracer* trc) const;
     Value get() const { return value.get(); }
+
+    static void trace(HashableValue* value, JSTracer* trc) {
+        TraceEdge(trc, &value->value, "HashableValue");
+    }
 };
 
-class AutoHashableValueRooter : private JS::AutoGCRooter
-{
+template <>
+class RootedBase<HashableValue> {
   public:
-    explicit AutoHashableValueRooter(JSContext* cx
-                                     MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-        : JS::AutoGCRooter(cx, HASHABLEVALUE)
-        {
-            MOZ_GUARD_OBJECT_NOTIFIER_INIT;
-        }
-
     bool setValue(JSContext* cx, HandleValue v) {
-        return value.setValue(cx, v);
+        return static_cast<JS::Rooted<HashableValue>*>(this)->get().setValue(cx, v);
     }
-
-    operator const HashableValue & () {
-        return value;
+    Value value() const {
+        return static_cast<const JS::Rooted<HashableValue>*>(this)->get().get();
     }
-
-    Value get() const { return value.get(); }
-
-    friend void JS::AutoGCRooter::trace(JSTracer* trc);
-    void trace(JSTracer* trc);
-
-  private:
-    HashableValue value;
-    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
 template <class Key, class Value, class OrderedHashPolicy, class AllocPolicy>
@@ -88,6 +77,13 @@ typedef OrderedHashSet<HashableValue,
 class MapObject : public NativeObject {
   public:
     enum IteratorKind { Keys, Values, Entries };
+    static_assert(Keys == ITEM_KIND_KEY,
+                  "IteratorKind Keys must match self-hosting define for item kind key.");
+    static_assert(Values == ITEM_KIND_VALUE,
+                  "IteratorKind Values must match self-hosting define for item kind value.");
+    static_assert(Entries == ITEM_KIND_KEY_AND_VALUE,
+                  "IteratorKind Entries must match self-hosting define for item kind "
+                  "key-and-value.");
 
     static JSObject* initClass(JSContext* cx, JSObject* obj);
     static const Class class_;
@@ -126,24 +122,50 @@ class MapObject : public NativeObject {
     static bool is(HandleValue v);
     static bool is(HandleObject o);
 
-    static bool iterator_impl(JSContext* cx, CallArgs args, IteratorKind kind);
+    static bool iterator_impl(JSContext* cx, const CallArgs& args, IteratorKind kind);
 
-    static bool size_impl(JSContext* cx, CallArgs args);
+    static bool size_impl(JSContext* cx, const CallArgs& args);
     static bool size(JSContext* cx, unsigned argc, Value* vp);
-    static bool get_impl(JSContext* cx, CallArgs args);
+    static bool get_impl(JSContext* cx, const CallArgs& args);
     static bool get(JSContext* cx, unsigned argc, Value* vp);
-    static bool has_impl(JSContext* cx, CallArgs args);
-    static bool set_impl(JSContext* cx, CallArgs args);
+    static bool has_impl(JSContext* cx, const CallArgs& args);
+    static bool set_impl(JSContext* cx, const CallArgs& args);
     static bool set(JSContext* cx, unsigned argc, Value* vp);
-    static bool delete_impl(JSContext* cx, CallArgs args);
+    static bool delete_impl(JSContext* cx, const CallArgs& args);
     static bool delete_(JSContext* cx, unsigned argc, Value* vp);
-    static bool keys_impl(JSContext* cx, CallArgs args);
+    static bool keys_impl(JSContext* cx, const CallArgs& args);
     static bool keys(JSContext* cx, unsigned argc, Value* vp);
-    static bool values_impl(JSContext* cx, CallArgs args);
+    static bool values_impl(JSContext* cx, const CallArgs& args);
     static bool values(JSContext* cx, unsigned argc, Value* vp);
-    static bool entries_impl(JSContext* cx, CallArgs args);
-    static bool clear_impl(JSContext* cx, CallArgs args);
+    static bool entries_impl(JSContext* cx, const CallArgs& args);
+    static bool clear_impl(JSContext* cx, const CallArgs& args);
     static bool clear(JSContext* cx, unsigned argc, Value* vp);
+};
+
+class MapIteratorObject : public NativeObject
+{
+  public:
+    static const Class class_;
+
+    enum { TargetSlot, RangeSlot, KindSlot, SlotCount };
+
+    static_assert(TargetSlot == ITERATOR_SLOT_TARGET,
+                  "TargetSlot must match self-hosting define for iterated object slot.");
+    static_assert(RangeSlot == ITERATOR_SLOT_RANGE,
+                  "RangeSlot must match self-hosting define for range or index slot.");
+    static_assert(KindSlot == ITERATOR_SLOT_ITEM_KIND,
+                  "KindSlot must match self-hosting define for item kind slot.");
+
+    static const JSFunctionSpec methods[];
+    static MapIteratorObject* create(JSContext* cx, HandleObject mapobj, ValueMap* data,
+                                     MapObject::IteratorKind kind);
+    static void finalize(FreeOp* fop, JSObject* obj);
+
+    static bool next(JSContext* cx, Handle<MapIteratorObject*> mapIterator,
+                     HandleArrayObject resultPairObj);
+
+  private:
+    inline MapObject::IteratorKind kind() const;
 };
 
 class SetObject : public NativeObject {
@@ -180,19 +202,19 @@ class SetObject : public NativeObject {
     static bool is(HandleValue v);
     static bool is(HandleObject o);
 
-    static bool iterator_impl(JSContext* cx, CallArgs args, IteratorKind kind);
+    static bool iterator_impl(JSContext* cx, const CallArgs& args, IteratorKind kind);
 
-    static bool size_impl(JSContext* cx, CallArgs args);
+    static bool size_impl(JSContext* cx, const CallArgs& args);
     static bool size(JSContext* cx, unsigned argc, Value* vp);
-    static bool has_impl(JSContext* cx, CallArgs args);
-    static bool add_impl(JSContext* cx, CallArgs args);
+    static bool has_impl(JSContext* cx, const CallArgs& args);
+    static bool add_impl(JSContext* cx, const CallArgs& args);
     static bool add(JSContext* cx, unsigned argc, Value* vp);
-    static bool delete_impl(JSContext* cx, CallArgs args);
+    static bool delete_impl(JSContext* cx, const CallArgs& args);
     static bool delete_(JSContext* cx, unsigned argc, Value* vp);
-    static bool values_impl(JSContext* cx, CallArgs args);
-    static bool entries_impl(JSContext* cx, CallArgs args);
+    static bool values_impl(JSContext* cx, const CallArgs& args);
+    static bool entries_impl(JSContext* cx, const CallArgs& args);
     static bool entries(JSContext* cx, unsigned argc, Value* vp);
-    static bool clear_impl(JSContext* cx, CallArgs args);
+    static bool clear_impl(JSContext* cx, const CallArgs& args);
     static bool clear(JSContext* cx, unsigned argc, Value* vp);
 };
 

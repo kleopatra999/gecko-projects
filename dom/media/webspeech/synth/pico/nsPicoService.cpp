@@ -409,6 +409,12 @@ PicoCallbackRunnable::OnCancel()
   return NS_OK;
 }
 
+NS_IMETHODIMP
+PicoCallbackRunnable::OnVolumeChanged(float aVolume)
+{
+  return NS_OK;
+}
+
 NS_INTERFACE_MAP_BEGIN(nsPicoService)
   NS_INTERFACE_MAP_ENTRY(nsISpeechService)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
@@ -519,9 +525,11 @@ PicoAddVoiceTraverser(const nsAString& aUri,
   name.AssignLiteral("Pico ");
   name.Append(aVoice->mLanguage);
 
+  // This service is multi-threaded and can handle more than one utterance at a
+  // time before previous utterances end. So, aQueuesUtterances == false
   DebugOnly<nsresult> rv =
     data->mRegistry->AddVoice(
-      data->mService, aUri, name, aVoice->mLanguage, true);
+      data->mService, aUri, name, aVoice->mLanguage, true, false);
   NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Failed to add voice");
 
   return PL_DHASH_NEXT;

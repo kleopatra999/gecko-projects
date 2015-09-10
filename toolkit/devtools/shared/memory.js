@@ -14,6 +14,9 @@ loader.lazyRequireGetter(this, "DeferredTask",
   "resource://gre/modules/DeferredTask.jsm", true);
 loader.lazyRequireGetter(this, "StackFrameCache",
   "devtools/server/actors/utils/stack", true);
+loader.lazyRequireGetter(this, "ThreadSafeChromeUtils");
+loader.lazyRequireGetter(this, "HeapSnapshotFileUtils",
+  "devtools/toolkit/heapsnapshot/HeapSnapshotFileUtils");
 
 /**
  * A class that returns memory data for a parent actor's window.
@@ -62,7 +65,6 @@ let Memory = exports.Memory = Class({
     return this._dbg;
   },
 
-
   /**
    * Attach to this MemoryBridge.
    *
@@ -95,7 +97,7 @@ let Memory = exports.Memory = Class({
 
   _clearDebuggees: function() {
     if (this._dbg) {
-      if (this.dbg.memory.trackingAllocationSites) {
+      if (this.isRecordingAllocations()) {
         this.dbg.memory.drainAllocationsLog();
       }
       this._clearFrames();
@@ -104,7 +106,7 @@ let Memory = exports.Memory = Class({
   },
 
   _clearFrames: function() {
-    if (this.dbg.memory.trackingAllocationSites) {
+    if (this.isRecordingAllocations()) {
       this._frameCache.clearFrames();
     }
   },
@@ -114,13 +116,33 @@ let Memory = exports.Memory = Class({
    */
   _onWindowReady: function({ isTopLevel }) {
     if (this.state == "attached") {
-      if (isTopLevel && this.dbg.memory.trackingAllocationSites) {
+      if (isTopLevel && this.isRecordingAllocations()) {
         this._clearDebuggees();
         this._frameCache.initFrames();
       }
       this.dbg.addDebuggees();
     }
   },
+
+  /**
+   * Returns a boolean indicating whether or not allocation
+   * sites are being tracked.
+   */
+  isRecordingAllocations: function () {
+    return this.dbg.memory.trackingAllocationSites;
+  },
+
+  /**
+   * Save a heap snapshot scoped to the current debuggees' portion of the heap
+   * graph.
+   *
+   * @returns {String} The snapshot id.
+   */
+  saveHeapSnapshot: expectState("attached", function () {
+    const path = HeapSnapshotFileUtils.getNewUniqueHeapSnapshotTempFilePath();
+    ThreadSafeChromeUtils.saveHeapSnapshot(path, { debugger: this.dbg });
+    return HeapSnapshotFileUtils.getSnapshotIdFromPath(path);
+  }, "saveHeapSnapshot"),
 
   /**
    * Take a census of the heap. See js/src/doc/Debugger/Debugger.Memory.md for
@@ -138,16 +160,16 @@ let Memory = exports.Memory = Class({
    *                 Must be between 0 and 1 -- defaults to 1.
    * @param {number} options.maxLogLength
    *                 The maximum number of allocation events to keep in the
-   *                 log. If new allocs occur while at capacity, oldest allocs are lost.
-   *                 Must fit in a 32 bit signed integer.
+   *                 log. If new allocs occur while at capacity, oldest
+   *                 allocations are lost. Must fit in a 32 bit signed integer.
    * @param {number} options.drainAllocationsTimeout
    *                 A number in milliseconds of how often, at least, an `allocation` event
    *                 gets emitted (and drained), and also emits and drains on every GC event,
    *                 resetting the timer.
    */
   startRecordingAllocations: expectState("attached", function(options = {}) {
-    if (this.dbg.memory.trackingAllocationSites) {
-      return Date.now();
+    if (this.isRecordingAllocations()) {
+      return this._getCurrentTime();
     }
 
     this._frameCache.initFrames();
@@ -171,13 +193,16 @@ let Memory = exports.Memory = Class({
     }
     this.dbg.memory.trackingAllocationSites = true;
 
-    return Date.now();
+    return this._getCurrentTime();
   }, `starting recording allocations`),
 
   /**
    * Stop recording allocation sites.
    */
   stopRecordingAllocations: expectState("attached", function() {
+    if (!this.isRecordingAllocations()) {
+      return this._getCurrentTime();
+    }
     this.dbg.memory.trackingAllocationSites = false;
     this._clearFrames();
 
@@ -186,7 +211,7 @@ let Memory = exports.Memory = Class({
       this._poller = null;
     }
 
-    return Date.now();
+    return this._getCurrentTime();
   }, `stopping recording allocations`),
 
   /**
@@ -215,6 +240,11 @@ let Memory = exports.Memory = Class({
    *                <timestamp for allocations[1]>,
    *                ...
    *              ],
+   *              allocationSizes: [
+   *                <bytesize for allocations[0]>,
+   *                <bytesize for allocations[1]>,
+   *                ...
+   *              ],
    *              frames: [
    *                {
    *                  line: <line number for this frame>,
@@ -225,12 +255,6 @@ let Memory = exports.Memory = Class({
    *                },
    *                ...
    *              ],
-   *              counts: [
-   *                <number of allocations in frames[0]>,
-   *                <number of allocations in frames[1]>,
-   *                <number of allocations in frames[2]>,
-   *                ...
-   *              ]
    *            }
    *
    *          The timestamps' unit is microseconds since the epoch.
@@ -242,9 +266,6 @@ let Memory = exports.Memory = Class({
    *          unique, persistent id for its frame.
    *
    *          Additionally, the root node (null) is always at index 0.
-   *
-   *          Note that the allocation counts include "self" allocations only,
-   *          and don't account for allocations in child frames.
    *
    *          We use the indices into the "frames" array to avoid repeating the
    *          description of duplicate stack frames both when listing
@@ -272,10 +293,10 @@ let Memory = exports.Memory = Class({
     const allocations = this.dbg.memory.drainAllocationsLog()
     const packet = {
       allocations: [],
-      allocationsTimestamps: []
+      allocationsTimestamps: [],
+      allocationSizes: [],
     };
-
-    for (let { frame: stack, timestamp } of allocations) {
+    for (let { frame: stack, timestamp, size } of allocations) {
       if (stack && Cu.isDeadWrapper(stack)) {
         continue;
       }
@@ -283,7 +304,7 @@ let Memory = exports.Memory = Class({
       // Safe because SavedFrames are frozen/immutable.
       let waived = Cu.waiveXrays(stack);
 
-      // Ensure that we have a form, count, and index for new allocations
+      // Ensure that we have a form, size, and index for new allocations
       // because we potentially haven't seen some or all of them yet. After this
       // loop, we can rely on the fact that every frame we deal with already has
       // its metadata stored.
@@ -291,6 +312,7 @@ let Memory = exports.Memory = Class({
 
       packet.allocations.push(index);
       packet.allocationsTimestamps.push(timestamp);
+      packet.allocationSizes.push(size);
     }
 
     return this._frameCache.updateFramePacket(packet);
@@ -380,4 +402,12 @@ let Memory = exports.Memory = Class({
     events.emit(this, "allocations", this.getAllocations());
     this._poller.arm();
   },
+
+  /**
+   * Accesses the docshell to return the current process time.
+   */
+  _getCurrentTime: function () {
+    return (this.parent.isRootActor ? this.parent.docShell : this.parent.originalDocShell).now();
+  },
+
 });

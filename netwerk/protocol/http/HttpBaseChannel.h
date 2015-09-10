@@ -138,6 +138,7 @@ public:
   NS_IMETHOD GetRequestHeader(const nsACString& aHeader, nsACString& aValue) override;
   NS_IMETHOD SetRequestHeader(const nsACString& aHeader,
                               const nsACString& aValue, bool aMerge) override;
+  NS_IMETHOD SetEmptyRequestHeader(const nsACString& aHeader) override;
   NS_IMETHOD VisitRequestHeaders(nsIHttpHeaderVisitor *visitor) override;
   NS_IMETHOD GetResponseHeader(const nsACString &header, nsACString &value) override;
   NS_IMETHOD SetResponseHeader(const nsACString& header,
@@ -156,6 +157,8 @@ public:
   NS_IMETHOD GetResponseStatusText(nsACString& aValue) override;
   NS_IMETHOD GetRequestSucceeded(bool *aValue) override;
   NS_IMETHOD RedirectTo(nsIURI *newURI) override;
+  NS_IMETHOD GetSchedulingContextID(nsID *aSCID) override;
+  NS_IMETHOD SetSchedulingContextID(const nsID aSCID) override;
 
   // nsIHttpChannelInternal
   NS_IMETHOD GetDocumentURI(nsIURI **aDocumentURI) override;
@@ -193,6 +196,8 @@ public:
   NS_IMETHOD SetCorsIncludeCredentials(bool aInclude) override;
   NS_IMETHOD GetCorsMode(uint32_t* aCorsMode) override;
   NS_IMETHOD SetCorsMode(uint32_t aCorsMode) override;
+  NS_IMETHOD GetRedirectMode(uint32_t* aRedirectMode) override;
+  NS_IMETHOD SetRedirectMode(uint32_t aRedirectMode) override;
   NS_IMETHOD GetTopWindowURI(nsIURI **aTopWindowURI) override;
   NS_IMETHOD GetProxyURI(nsIURI **proxyURI) override;
 
@@ -379,6 +384,9 @@ protected:
   // True if this channel should skip any interception checks
   uint32_t                          mForceNoIntercept           : 1;
 
+  // True if this channel was intercepted and could receive a synthesized response.
+  uint32_t                          mResponseCouldBeSynthesized : 1;
+
   // Current suspension depth for this channel object
   uint32_t                          mSuspendCount;
 
@@ -424,6 +432,7 @@ protected:
 
   bool mCorsIncludeCredentials;
   uint32_t mCorsMode;
+  uint32_t mRedirectMode;
 
   // This parameter is used to ensure that we do not call OnStartRequest more
   // than once.
@@ -431,6 +440,9 @@ protected:
 
   // The network interface id that's associated with this channel.
   nsCString mNetworkInterfaceId;
+
+  nsID mSchedulingContextID;
+  bool EnsureSchedulingContextID();
 };
 
 // Share some code while working around C++'s absurd inability to handle casting

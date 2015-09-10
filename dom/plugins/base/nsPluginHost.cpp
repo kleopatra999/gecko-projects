@@ -88,7 +88,6 @@
 #include "nsIWeakReferenceUtils.h"
 #include "nsIPresShell.h"
 #include "nsPluginNativeWindow.h"
-#include "nsIScriptSecurityManager.h"
 #include "nsIContentPolicy.h"
 #include "nsContentPolicyUtils.h"
 #include "mozilla/TimeStamp.h"
@@ -516,31 +515,24 @@ nsresult nsPluginHost::GetURLWithHeaders(nsNPAPIPluginInstance* pluginInst,
 {
   // we can only send a stream back to the plugin (as specified by a
   // null target) if we also have a nsNPAPIPluginStreamListener to talk to
-  if (!target && !streamListener)
+  if (!target && !streamListener) {
     return NS_ERROR_ILLEGAL_VALUE;
+  }
 
-  nsresult rv = DoURLLoadSecurityCheck(pluginInst, url);
-  if (NS_FAILED(rv))
-    return rv;
+  nsresult rv = NS_OK;
 
   if (target) {
     nsRefPtr<nsPluginInstanceOwner> owner = pluginInst->GetOwner();
     if (owner) {
-      if ((0 == PL_strcmp(target, "newwindow")) ||
-          (0 == PL_strcmp(target, "_new")))
-        target = "_blank";
-      else if (0 == PL_strcmp(target, "_current"))
-        target = "_self";
-
-      rv = owner->GetURL(url, target, nullptr, nullptr, 0);
+      rv = owner->GetURL(url, target, nullptr, nullptr, 0, true);
     }
   }
 
-  if (streamListener)
+  if (streamListener) {
     rv = NewPluginURLStream(NS_ConvertUTF8toUTF16(url), pluginInst,
                             streamListener, nullptr,
                             getHeaders, getHeadersLength);
-
+  }
   return rv;
 }
 
@@ -566,10 +558,6 @@ nsresult nsPluginHost::PostURL(nsISupports* pluginInst,
     return NS_ERROR_ILLEGAL_VALUE;
 
   nsNPAPIPluginInstance* instance = static_cast<nsNPAPIPluginInstance*>(pluginInst);
-
-  rv = DoURLLoadSecurityCheck(instance, url);
-  if (NS_FAILED(rv))
-    return rv;
 
   nsCOMPtr<nsIInputStream> postStream;
   if (isFile) {
@@ -614,23 +602,17 @@ nsresult nsPluginHost::PostURL(nsISupports* pluginInst,
   if (target) {
     nsRefPtr<nsPluginInstanceOwner> owner = instance->GetOwner();
     if (owner) {
-      if ((0 == PL_strcmp(target, "newwindow")) ||
-          (0 == PL_strcmp(target, "_new"))) {
-        target = "_blank";
-      } else if (0 == PL_strcmp(target, "_current")) {
-        target = "_self";
-      }
       rv = owner->GetURL(url, target, postStream,
-                         (void*)postHeaders, postHeadersLength);
+                         (void*)postHeaders, postHeadersLength, true);
     }
   }
 
   // if we don't have a target, just create a stream.
-  if (streamListener)
+  if (streamListener) {
     rv = NewPluginURLStream(NS_ConvertUTF8toUTF16(url), instance,
                             streamListener,
                             postStream, postHeaders, postHeadersLength);
-
+  }
   return rv;
 }
 
@@ -1116,18 +1098,6 @@ nsPluginHost::GetBlocklistStateForType(const nsACString &aMimeType,
                                     getter_AddRefs(tag));
   NS_ENSURE_SUCCESS(rv, rv);
   return tag->GetBlocklistState(aState);
-}
-
-NS_IMETHODIMP
-nsPluginHost::IsPluginOOP(const nsACString& aMimeType,
-                          bool* aResult)
-{
-  nsPluginTag* tag = FindNativePluginForType(aMimeType, true);
-  if (!tag) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-  *aResult = nsNPAPIPlugin::RunPluginOOP(tag);
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -1650,58 +1620,6 @@ nsPluginHost::UnregisterFakePlugin(const nsACString& aHandlerURI)
   }
 
   return NS_OK;
-}
-
-NS_IMETHODIMP
-nsPluginHost::RegisterPlayPreviewMimeType(const nsACString& mimeType,
-                                          bool ignoreCTP,
-                                          const nsACString& redirectURL,
-                                          const nsACString& whitelist)
-{
-  nsAutoCString mt(mimeType);
-  nsAutoCString url(redirectURL);
-  if (url.Length() == 0) {
-    // using default play preview iframe URL, if redirectURL is not specified
-    url.AssignLiteral("data:application/x-moz-playpreview;,");
-    url.Append(mimeType);
-  }
-  nsAutoCString wl(whitelist);
-
-  nsRefPtr<nsPluginPlayPreviewInfo> playPreview =
-    new nsPluginPlayPreviewInfo(mt.get(), ignoreCTP, url.get(), wl.get());
-  mPlayPreviewMimeTypes.AppendElement(playPreview);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsPluginHost::UnregisterPlayPreviewMimeType(const nsACString& mimeType)
-{
-  nsAutoCString mimeTypeToRemove(mimeType);
-  for (uint32_t i = mPlayPreviewMimeTypes.Length(); i > 0; i--) {
-    nsRefPtr<nsPluginPlayPreviewInfo> pp = mPlayPreviewMimeTypes[i - 1];
-    if (PL_strcasecmp(pp.get()->mMimeType.get(), mimeTypeToRemove.get()) == 0) {
-      mPlayPreviewMimeTypes.RemoveElementAt(i - 1);
-      break;
-    }
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsPluginHost::GetPlayPreviewInfo(const nsACString& mimeType,
-                                 nsIPluginPlayPreviewInfo** aResult)
-{
-  nsAutoCString mimeTypeToFind(mimeType);
-  for (uint32_t i = 0; i < mPlayPreviewMimeTypes.Length(); i++) {
-    nsRefPtr<nsPluginPlayPreviewInfo> pp = mPlayPreviewMimeTypes[i];
-    if (PL_strcasecmp(pp.get()->mMimeType.get(), mimeTypeToFind.get()) == 0) {
-      *aResult = new nsPluginPlayPreviewInfo(pp.get());
-      NS_ADDREF(*aResult);
-      return NS_OK;
-    }
-  }
-  *aResult = nullptr;
-  return NS_ERROR_NOT_AVAILABLE;
 }
 
 // FIXME-jsplugins Is this method actually needed?
@@ -2756,12 +2674,6 @@ nsPluginHost::FindPluginsForContent(uint32_t aPluginEpoch,
     /// to be more sane and avoid this dance
     nsPluginTag *tag = static_cast<nsPluginTag *>(basetag.get());
 
-    if (!nsNPAPIPlugin::RunPluginOOP(tag)) {
-      // Don't expose non-OOP plugins to content processes since we have no way
-      // to bridge them over.
-      continue;
-    }
-
     aPlugins->AppendElement(PluginTag(tag->mId,
                                       tag->Name(),
                                       tag->Description(),
@@ -3434,8 +3346,13 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
     absUrl.Assign(aURL);
 
   rv = NS_NewURI(getter_AddRefs(url), absUrl);
-  if (NS_FAILED(rv))
-    return rv;
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsRefPtr<nsPluginStreamListenerPeer> listenerPeer = new nsPluginStreamListenerPeer();
+  NS_ENSURE_TRUE(listenerPeer, NS_ERROR_OUT_OF_MEMORY);
+
+  rv = listenerPeer->Initialize(url, aInstance, aListener);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIDOMElement> element;
   nsCOMPtr<nsIDocument> doc;
@@ -3443,63 +3360,24 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
     owner->GetDOMElement(getter_AddRefs(element));
     owner->GetDocument(getter_AddRefs(doc));
   }
-  nsCOMPtr<nsIPrincipal> principal = doc ? doc->NodePrincipal() : nullptr;
 
-  int16_t shouldLoad = nsIContentPolicy::ACCEPT;
-  rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_OBJECT_SUBREQUEST,
-                                 url,
-                                 principal,
-                                 element,
-                                 EmptyCString(), //mime guess
-                                 nullptr,         //extra
-                                 &shouldLoad);
-  if (NS_FAILED(rv))
-    return rv;
-  if (NS_CP_REJECTED(shouldLoad)) {
-    // Disallowed by content policy
-    return NS_ERROR_CONTENT_BLOCKED;
-  }
+  nsCOMPtr<nsINode> requestingNode(do_QueryInterface(element));
+  NS_ENSURE_TRUE(requestingNode, NS_ERROR_FAILURE);
 
-  nsRefPtr<nsPluginStreamListenerPeer> listenerPeer = new nsPluginStreamListenerPeer();
-  if (!listenerPeer)
-    return NS_ERROR_OUT_OF_MEMORY;
-
-  rv = listenerPeer->Initialize(url, aInstance, aListener);
-  if (NS_FAILED(rv))
-    return rv;
-
+  nsCOMPtr<nsIChannel> channel;
   // @arg loadgroup:
   // do not add this internal plugin's channel on the
   // load group otherwise this channel could be canceled
   // form |nsDocShell::OnLinkClickSync| bug 166613
-  nsCOMPtr<nsIChannel> channel;
-  nsCOMPtr<nsINode> requestingNode(do_QueryInterface(element));
-  if (requestingNode) {
-    rv = NS_NewChannel(getter_AddRefs(channel),
-                       url,
-                       requestingNode,
-                       nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL,
-                       nsIContentPolicy::TYPE_OBJECT_SUBREQUEST,
-                       nullptr,  // aLoadGroup
-                       listenerPeer);
-  }
-  else {
-    // in this else branch we really don't know where the load is coming
-    // from and in fact should use something better than just using
-    // a nullPrincipal as the loadingPrincipal.
-    principal = nsNullPrincipal::Create();
-    NS_ENSURE_TRUE(principal, NS_ERROR_FAILURE);
-    rv = NS_NewChannel(getter_AddRefs(channel),
-                       url,
-                       principal,
-                       nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL,
-                       nsIContentPolicy::TYPE_OBJECT_SUBREQUEST,
-                       nullptr,  // aLoadGroup
-                       listenerPeer);
-  }
-
-  if (NS_FAILED(rv))
-    return rv;
+  rv = NS_NewChannel(getter_AddRefs(channel),
+                     url,
+                     requestingNode,
+                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS |
+                     nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL,
+                     nsIContentPolicy::TYPE_OBJECT_SUBREQUEST,
+                     nullptr,  // aLoadGroup
+                     listenerPeer);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   if (doc) {
     // And if it's a script allow it to execute against the
@@ -3559,49 +3437,10 @@ nsresult nsPluginHost::NewPluginURLStream(const nsString& aURL,
       NS_ENSURE_SUCCESS(rv,rv);
     }
   }
-  rv = channel->AsyncOpen(listenerPeer, nullptr);
+  rv = channel->AsyncOpen2(listenerPeer);
   if (NS_SUCCEEDED(rv))
     listenerPeer->TrackRequest(channel);
   return rv;
-}
-
-// Called by GetURL and PostURL
-nsresult
-nsPluginHost::DoURLLoadSecurityCheck(nsNPAPIPluginInstance *aInstance,
-                                     const char* aURL)
-{
-  if (!aURL || *aURL == '\0')
-    return NS_OK;
-
-  // get the base URI for the plugin element
-  nsRefPtr<nsPluginInstanceOwner> owner = aInstance->GetOwner();
-  if (!owner)
-    return NS_ERROR_FAILURE;
-
-  nsCOMPtr<nsIURI> baseURI = owner->GetBaseURI();
-  if (!baseURI)
-    return NS_ERROR_FAILURE;
-
-  // Create an absolute URL for the target in case the target is relative
-  nsCOMPtr<nsIURI> targetURL;
-  NS_NewURI(getter_AddRefs(targetURL), aURL, baseURI);
-  if (!targetURL)
-    return NS_ERROR_FAILURE;
-
-  nsCOMPtr<nsIDocument> doc;
-  owner->GetDocument(getter_AddRefs(doc));
-  if (!doc)
-    return NS_ERROR_FAILURE;
-
-  nsresult rv;
-  nsCOMPtr<nsIScriptSecurityManager> secMan(
-    do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID, &rv));
-  if (NS_FAILED(rv))
-    return rv;
-
-  return secMan->CheckLoadURIWithPrincipal(doc->NodePrincipal(), targetURL,
-                                           nsIScriptSecurityManager::STANDARD);
-
 }
 
 nsresult
@@ -3655,7 +3494,6 @@ nsPluginHost::AddHeadersToChannel(const char *aHeadersData,
       return rv;
     }
   }
-  return rv;
 }
 
 nsresult

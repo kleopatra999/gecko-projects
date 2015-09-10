@@ -18,10 +18,12 @@ PRLogModuleInfo* GetDemuxerLog();
 namespace mozilla {
 
 WMFMediaDataDecoder::WMFMediaDataDecoder(MFTManager* aMFTManager,
+                                         MFTDecoder* aDecoder,
                                          FlushableTaskQueue* aTaskQueue,
                                          MediaDataDecoderCallback* aCallback)
   : mTaskQueue(aTaskQueue)
   , mCallback(aCallback)
+  , mDecoder(aDecoder)
   , mMFTManager(aMFTManager)
   , mMonitor("WMFMediaDataDecoder")
   , mIsFlushing(false)
@@ -33,22 +35,20 @@ WMFMediaDataDecoder::~WMFMediaDataDecoder()
 {
 }
 
-nsresult
+nsRefPtr<MediaDataDecoder::InitPromise>
 WMFMediaDataDecoder::Init()
 {
-  MOZ_ASSERT(!mDecoder);
   MOZ_ASSERT(!mIsShutDown);
 
-  mDecoder = mMFTManager->Init();
-  NS_ENSURE_TRUE(mDecoder, NS_ERROR_FAILURE);
-
-  return NS_OK;
+  return mDecoder ?
+           InitPromise::CreateAndResolve(mMFTManager->GetType(), __func__) :
+           InitPromise::CreateAndReject(MediaDataDecoder::DecoderFailureReason::INIT_ERROR, __func__);
 }
 
 // A single telemetry sample is reported for each MediaDataDecoder object
 // that has detected error or produced output successfully.
 static void
-SendTelemetry(HRESULT hr)
+SendTelemetry(unsigned long hr)
 {
   // Collapse the error codes into a range of 0-0xff that can be viewed in
   // telemetry histograms.  For most MF_E_* errors, unique samples are used,
@@ -234,10 +234,10 @@ WMFMediaDataDecoder::Drain()
 }
 
 bool
-WMFMediaDataDecoder::IsHardwareAccelerated() const {
+WMFMediaDataDecoder::IsHardwareAccelerated(nsACString& aFailureReason) const {
   MOZ_ASSERT(!mIsShutDown);
 
-  return mMFTManager && mMFTManager->IsHardwareAccelerated();
+  return mMFTManager && mMFTManager->IsHardwareAccelerated(aFailureReason);
 }
 
 } // namespace mozilla

@@ -12,7 +12,6 @@
 #include "prlink.h"
 #include "prclist.h"
 #include "nsIPluginTag.h"
-#include "nsPluginPlayPreviewInfo.h"
 #include "nsPluginsDir.h"
 #include "nsPluginDirServiceProvider.h"
 #include "nsAutoPtr.h"
@@ -179,10 +178,6 @@ public:
                     bool forceJSEnabled = false,
                     uint32_t getHeadersLength = 0,
                     const char* getHeaders = nullptr);
-
-  nsresult
-  DoURLLoadSecurityCheck(nsNPAPIPluginInstance *aInstance,
-                         const char* aURL);
 
   nsresult
   AddHeadersToChannel(const char *aHeadersData, uint32_t aHeadersDataLen,
@@ -373,7 +368,6 @@ private:
   nsRefPtr<nsPluginTag> mPlugins;
   nsRefPtr<nsPluginTag> mCachedPlugins;
   nsRefPtr<nsInvalidPluginTag> mInvalidPlugins;
-  nsTArray< nsRefPtr<nsPluginPlayPreviewInfo> > mPlayPreviewMimeTypes;
 
   nsTArray< nsRefPtr<nsFakePluginTag> > mFakePlugins;
 

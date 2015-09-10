@@ -451,6 +451,8 @@ CompositorOGL::PrepareViewport(CompositingRenderTargetOGL* aRenderTarget)
   // Set the viewport correctly.
   mGLContext->fViewport(0, 0, size.width, size.height);
 
+  mRenderBound = Rect(0, 0, size.width, size.height);
+
   mViewportSize = size;
 
   if (!aRenderTarget->HasComplexProjection()) {
@@ -629,8 +631,6 @@ CompositorOGL::BeginFrame(const nsIntRegion& aInvalidRegion,
     *aRenderBoundsOut = rect;
   }
 
-  mRenderBoundsOut = rect;
-
   GLint width = rect.width;
   GLint height = rect.height;
 
@@ -668,9 +668,14 @@ CompositorOGL::BeginFrame(const nsIntRegion& aInvalidRegion,
   // assumes scissor is enabled while it does clears.
   mGLContext->fEnable(LOCAL_GL_SCISSOR_TEST);
 
+  // Prefer the native windowing system's provided window size for the viewport.
+  IntSize viewportSize = mGLContext->GetTargetSize().valueOr(mWidgetSize);
+  if (viewportSize != mWidgetSize) {
+    mGLContext->fScissor(0, 0, viewportSize.width, viewportSize.height);
+  }
+
   RefPtr<CompositingRenderTargetOGL> rt =
-    CompositingRenderTargetOGL::RenderTargetForWindow(this,
-                                                      IntSize(width, height));
+    CompositingRenderTargetOGL::RenderTargetForWindow(this, viewportSize);
   SetRenderTarget(rt);
 
 #ifdef DEBUG
@@ -806,6 +811,10 @@ CompositorOGL::GetShaderConfigFor(Effect *aEffect,
     break;
   case EffectTypes::YCBCR:
     config.SetYCbCr(true);
+    break;
+  case EffectTypes::NV12:
+    config.SetNV12(true);
+    config.SetTextureTarget(LOCAL_GL_TEXTURE_RECTANGLE_ARB);
     break;
   case EffectTypes::COMPONENT_ALPHA:
   {
@@ -978,13 +987,16 @@ CompositorOGL::DrawQuad(const Rect& aRect,
 
   // XXX: This doesn't handle 3D transforms. It also doesn't handled rotated
   //      quads. Fix me.
-  Rect destRect = aTransform.TransformBounds(aRect);
+  Rect destRect = aTransform.TransformAndClipBounds(aRect, aClipRect);
   mPixelsFilled += destRect.width * destRect.height;
+
+  IntPoint offset = mCurrentRenderTarget->GetOrigin();
 
   // Do a simple culling if this rect is out of target buffer.
   // Inflate a small size to avoid some numerical imprecision issue.
   destRect.Inflate(1, 1);
-  if (!mRenderBoundsOut.Intersects(destRect)) {
+  destRect.MoveBy(-offset);
+  if (!mRenderBound.Intersects(destRect)) {
     return;
   }
 
@@ -1083,7 +1095,6 @@ CompositorOGL::DrawQuad(const Rect& aRect,
       program->SetColorMatrix(effectColorMatrix->mColorMatrix);
   }
 
-  IntPoint offset = mCurrentRenderTarget->GetOrigin();
   program->SetRenderOffset(offset.x, offset.y);
   LayerScope::SetRenderOffset(offset.x, offset.y);
 
@@ -1246,6 +1257,40 @@ CompositorOGL::DrawQuad(const Rect& aRect,
                                      sourceYCbCr->GetSubSource(Y));
     }
     break;
+  case EffectTypes::NV12: {
+      EffectNV12* effectNV12 =
+        static_cast<EffectNV12*>(aEffectChain.mPrimaryEffect.get());
+      TextureSource* sourceNV12 = effectNV12->mTexture;
+      const int Y = 0, CbCr = 1;
+      TextureSourceOGL* sourceY =  sourceNV12->GetSubSource(Y)->AsSourceOGL();
+      TextureSourceOGL* sourceCbCr = sourceNV12->GetSubSource(CbCr)->AsSourceOGL();
+
+      if (!sourceY || !sourceCbCr) {
+        NS_WARNING("Invalid layer texture.");
+        return;
+      }
+
+      sourceY->BindTexture(LOCAL_GL_TEXTURE0, effectNV12->mFilter);
+      sourceCbCr->BindTexture(LOCAL_GL_TEXTURE1, effectNV12->mFilter);
+
+      if (config.mFeatures & ENABLE_TEXTURE_RECT) {
+        // This is used by IOSurface that use 0,0...w,h coordinate rather then 0,0..1,1.
+        program->SetCbCrTexCoordMultiplier(sourceCbCr->GetSize().width, sourceCbCr->GetSize().height);
+      }
+
+      program->SetNV12TextureUnits(Y, CbCr);
+      program->SetTextureTransform(Matrix4x4());
+
+      if (maskType != MaskType::MaskNone) {
+        BindMaskForProgram(program, sourceMask, LOCAL_GL_TEXTURE2, maskQuadTransform);
+      }
+      didSetBlendMode = SetBlendMode(gl(), blendMode);
+      BindAndDrawQuadWithTextureRect(program,
+                                     aRect,
+                                     effectNV12->mTextureCoords,
+                                     sourceNV12->GetSubSource(Y));
+    }
+    break;
   case EffectTypes::RENDER_TARGET: {
       EffectRenderTarget* effectRenderTarget =
         static_cast<EffectRenderTarget*>(aEffectChain.mPrimaryEffect.get());
@@ -1389,13 +1434,21 @@ CompositorOGL::EndFrame()
     return;
   }
 
-  mCurrentRenderTarget = nullptr;
-
   if (mTexturePool) {
     mTexturePool->EndFrame();
   }
 
-  mGLContext->SwapBuffers();
+  // If our window size changed during composition, we should discard the frame.
+  // We don't need to worry about rescheduling a composite, as widget
+  // implementations handle this in their expose event listeners.
+  // See bug 1184534. TODO: implement this for single-buffered targets?
+  IntSize targetSize = mGLContext->GetTargetSize().valueOr(mViewportSize);
+  if (!(mCurrentRenderTarget->IsWindow() && targetSize != mViewportSize)) {
+    mGLContext->SwapBuffers();
+  }
+
+  mCurrentRenderTarget = nullptr;
+
   mGLContext->fBindBuffer(LOCAL_GL_ARRAY_BUFFER, 0);
 
   // Unbind all textures
@@ -1420,7 +1473,7 @@ CompositorOGL::EndFrame()
 
 #if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
 void
-CompositorOGL::SetDispAcquireFence(Layer* aLayer)
+CompositorOGL::SetDispAcquireFence(Layer* aLayer, nsIWidget* aWidget)
 {
   // OpenGL does not provide ReleaseFence for rendering.
   // Instead use DispAcquireFence as layer buffer's ReleaseFence
@@ -1429,10 +1482,10 @@ CompositorOGL::SetDispAcquireFence(Layer* aLayer)
   // AcquireFence will be signaled when a buffer's content is available.
   // See Bug 974152.
 
-  if (!aLayer) {
+  if (!aLayer || !aWidget) {
     return;
   }
-  nsWindow* window = static_cast<nsWindow*>(mWidget);
+  nsWindow* window = static_cast<nsWindow*>(aWidget);
   RefPtr<FenceHandle::FdObj> fence = new FenceHandle::FdObj(
       window->GetScreen()->GetPrevDispAcquireFd());
   mReleaseFenceHandle.Merge(FenceHandle(fence));
@@ -1451,7 +1504,7 @@ CompositorOGL::GetReleaseFence()
 
 #else
 void
-CompositorOGL::SetDispAcquireFence(Layer* aLayer)
+CompositorOGL::SetDispAcquireFence(Layer* aLayer, nsIWidget* aWidget)
 {
 }
 
@@ -1614,7 +1667,7 @@ CompositorOGL::BindAndDrawQuads(ShaderProgramOGL *aProg,
   // We are using GL_TRIANGLES here because the Mac Intel drivers fail to properly
   // process uniform arrays with GL_TRIANGLE_STRIP. Go figure.
   mGLContext->fDrawArrays(LOCAL_GL_TRIANGLES, 0, 6 * aQuads);
-  LayerScope::SetLayerRects(aQuads, aLayerRects);
+  LayerScope::SetDrawRects(aQuads, aLayerRects, aTextureRects);
 }
 
 GLBlitTextureImageHelper*

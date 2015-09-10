@@ -27,8 +27,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
  * For the sake of simplicity, rather than attempting to map each PerformanceMonitor
  * of the parent to a PerformanceMonitor in each child process, we maintain a single
  * PerformanceMonitor in each child process. Probes activation/deactivation for this
- * monitor is controlled by the activation/deactivation of probes marked as "-content"
- * in the parent.
+ * monitor is controlled by the activation/deactivation of probes in the parent.
  *
  * In the parent, this is always an empty monitor.
  */
@@ -80,8 +79,9 @@ Services.cpmm.addMessageListener("performance-stats-service-release", function(m
   if (!isContent) {
     return;
   }
+
   // Keep only the probes that do not appear in the payload
-  let probes = gMonitor.getProbeNames
+  let probes = gMonitor.probeNames
     .filter(x => msg.data.payload.indexOf(x) == -1);
   gMonitor = PerformanceStats.getMonitor(probes);
 });

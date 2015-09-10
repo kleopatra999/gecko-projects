@@ -55,8 +55,8 @@ bool nsMixedContentBlocker::sBlockMixedDisplay = false;
 class nsMixedContentEvent : public nsRunnable
 {
 public:
-  nsMixedContentEvent(nsISupports *aContext, MixedContentTypes aType)
-    : mContext(aContext), mType(aType)
+  nsMixedContentEvent(nsISupports *aContext, MixedContentTypes aType, bool aRootHasSecureConnection)
+    : mContext(aContext), mType(aType), mRootHasSecureConnection(aRootHasSecureConnection)
   {}
 
   NS_IMETHOD Run()
@@ -85,6 +85,21 @@ public:
     nsCOMPtr<nsIDocument> rootDoc = do_GetInterface(sameTypeRoot);
     NS_ASSERTION(rootDoc, "No root document from document shell root tree item.");
 
+    // Get eventSink and the current security state from the docShell
+    nsCOMPtr<nsISecurityEventSink> eventSink = do_QueryInterface(docShell);
+    NS_ASSERTION(eventSink, "No eventSink from docShell.");
+    nsCOMPtr<nsIDocShell> rootShell = do_GetInterface(sameTypeRoot);
+    NS_ASSERTION(rootShell, "No root docshell from document shell root tree item.");
+    uint32_t state = nsIWebProgressListener::STATE_IS_BROKEN;
+    nsCOMPtr<nsISecureBrowserUI> securityUI;
+    rootShell->GetSecurityUI(getter_AddRefs(securityUI));
+    // If there is no securityUI, document doesn't have a security state to
+    // update.  But we still want to set the document flags, so we don't return
+    // early.
+    nsresult stateRV;
+    if (securityUI) {
+      stateRV = securityUI->GetState(&state);
+    }
 
     if (mType == eMixedScript) {
        // See if the pref will change here. If it will, only then do we need to call OnSecurityChange() to update the UI.
@@ -94,18 +109,26 @@ public:
        rootDoc->SetHasMixedActiveContentLoaded(true);
 
       // Update the security UI in the tab with the allowed mixed active content
-      nsCOMPtr<nsISecurityEventSink> eventSink = do_QueryInterface(docShell);
-      if (eventSink) {
-        // If mixed display content is loaded, make sure to include that in the state.
-        if (rootDoc->GetHasMixedDisplayContentLoaded()) {
-          eventSink->OnSecurityChange(mContext,
-                                      (nsIWebProgressListener::STATE_IS_BROKEN |
-                                       nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT |
-                                       nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT));
+      if (securityUI) {
+        // Bug 1182551 - before changing the security state to broken, check
+        // that the root is actually secure.
+        if (mRootHasSecureConnection) {
+          // If mixed display content is loaded, make sure to include that in the state.
+          if (rootDoc->GetHasMixedDisplayContentLoaded()) {
+            eventSink->OnSecurityChange(mContext,
+                                        (nsIWebProgressListener::STATE_IS_BROKEN |
+                                         nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT |
+                                         nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT));
+          } else {
+            eventSink->OnSecurityChange(mContext,
+                                        (nsIWebProgressListener::STATE_IS_BROKEN |
+                                         nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT));
+          }
         } else {
-          eventSink->OnSecurityChange(mContext,
-                                      (nsIWebProgressListener::STATE_IS_BROKEN |
-                                       nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT));
+          // root not secure, mixed active content loaded in an https subframe
+          if (NS_SUCCEEDED(stateRV)) {
+            eventSink->OnSecurityChange(mContext, (state | nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT));
+          }
         }
       }
 
@@ -117,17 +140,25 @@ public:
       rootDoc->SetHasMixedDisplayContentLoaded(true);
 
       // Update the security UI in the tab with the allowed mixed display content.
-      nsCOMPtr<nsISecurityEventSink> eventSink = do_QueryInterface(docShell);
-      if (eventSink) {
+      if (securityUI) {
+        // Bug 1182551 - before changing the security state to broken, check
+        // that the root is actually secure.
+        if (mRootHasSecureConnection) {
         // If mixed active content is loaded, make sure to include that in the state.
-        if (rootDoc->GetHasMixedActiveContentLoaded()) {
-          eventSink->OnSecurityChange(mContext,
-                                      (nsIWebProgressListener::STATE_IS_BROKEN |
-                                       nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT |
-                                       nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT));
+          if (rootDoc->GetHasMixedActiveContentLoaded()) {
+            eventSink->OnSecurityChange(mContext,
+                                        (nsIWebProgressListener::STATE_IS_BROKEN |
+                                         nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT |
+                                         nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT));
+          } else {
+            eventSink->OnSecurityChange(mContext, (nsIWebProgressListener::STATE_IS_BROKEN |
+                                                   nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT));
+          }
         } else {
-          eventSink->OnSecurityChange(mContext, (nsIWebProgressListener::STATE_IS_BROKEN |
-          nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT));
+          // root not secure, mixed display content loaded in an https subframe
+          if (NS_SUCCEEDED(stateRV)) {
+            eventSink->OnSecurityChange(mContext, (state | nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT));
+          }
         }
       }
     }
@@ -141,6 +172,9 @@ private:
 
   // The type of mixed content detected, e.g. active or display
   const MixedContentTypes mType;
+
+  // Indicates whether the top level load is https or not.
+  bool mRootHasSecureConnection;
 };
 
 
@@ -372,16 +406,15 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
   // Also, PING requests have no bearing on the rendering or operation of
   // the page when used as designed, so even though they are lower risk than
   // scripts, blocking them is basically risk-free as far as compatibility is
-  // concerned.  Ping is turned off by default in Firefox, so unless a user
-  // opts into ping, no request will be made.  Categorizing this as Mixed
-  // Display Content for now, but this is subject to change.
+  // concerned.
   //
   // TYPE_STYLESHEET: XSLT stylesheets can insert scripts. CSS positioning
   // and other advanced CSS features can possibly be exploited to cause
   // spoofing attacks (e.g. make a "grant permission" button look like a
   // "refuse permission" button).
   //
-  // TYPE_BEACON: Beacon requests are similar to TYPE_PING, but are default on.
+  // TYPE_BEACON: Beacon requests are similar to TYPE_PING, and are blocked by
+  // default.
   //
   // TYPE_WEBSOCKET: The Websockets API requires browsers to
   // reject mixed-content websockets: "If secure is false but the origin of
@@ -425,23 +458,23 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
     case TYPE_IMAGE:
     case TYPE_MEDIA:
     case TYPE_OBJECT_SUBREQUEST:
-    case TYPE_PING:
-    case TYPE_BEACON:
       classification = eMixedDisplay;
       break;
 
     // Active content (or content with a low value/risk-of-blocking ratio)
     // that has been explicitly evaluated; listed here for documentation
     // purposes and to avoid the assertion and warning for the default case.
-    case TYPE_IMAGESET:
+    case TYPE_BEACON:
     case TYPE_CSP_REPORT:
     case TYPE_DTD:
     case TYPE_FETCH:
     case TYPE_FONT:
+    case TYPE_IMAGESET:
     case TYPE_OBJECT:
     case TYPE_SCRIPT:
     case TYPE_STYLESHEET:
     case TYPE_SUBDOCUMENT:
+    case TYPE_PING:
     case TYPE_WEB_MANIFEST:
     case TYPE_XBL:
     case TYPE_XMLHTTPREQUEST:
@@ -674,7 +707,7 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
   NS_ASSERTION(eventSink, "No eventSink from docShell.");
   nsCOMPtr<nsIDocShell> rootShell = do_GetInterface(sameTypeRoot);
   NS_ASSERTION(rootShell, "No root docshell from document shell root tree item.");
-  uint32_t State = nsIWebProgressListener::STATE_IS_BROKEN;
+  uint32_t state = nsIWebProgressListener::STATE_IS_BROKEN;
   nsCOMPtr<nsISecureBrowserUI> securityUI;
   rootShell->GetSecurityUI(getter_AddRefs(securityUI));
   // If there is no securityUI, document doesn't have a security state.
@@ -683,7 +716,7 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
     *aDecision = nsIContentPolicy::ACCEPT;
     return NS_OK;
   }
-  nsresult stateRV = securityUI->GetState(&State);
+  nsresult stateRV = securityUI->GetState(&state);
 
   // If the content is display content, and the pref says display content should be blocked, block it.
   if (sBlockMixedDisplay && classification == eMixedDisplay) {
@@ -713,7 +746,7 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
         // User has overriden the pref and the root is not https;
         // mixed display content was allowed on an https subframe.
         if (NS_SUCCEEDED(stateRV)) {
-          eventSink->OnSecurityChange(aRequestingContext, (State | nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT));
+          eventSink->OnSecurityChange(aRequestingContext, (state | nsIWebProgressListener::STATE_LOADED_MIXED_DISPLAY_CONTENT));
          }
       }
     } else {
@@ -721,7 +754,7 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
       LogMixedContentMessage(classification, aContentLocation, rootDoc, eBlocked);
       if (!rootDoc->GetHasMixedDisplayContentBlocked() && NS_SUCCEEDED(stateRV)) {
         rootDoc->SetHasMixedDisplayContentBlocked(true);
-        eventSink->OnSecurityChange(aRequestingContext, (State | nsIWebProgressListener::STATE_BLOCKED_MIXED_DISPLAY_CONTENT));
+        eventSink->OnSecurityChange(aRequestingContext, (state | nsIWebProgressListener::STATE_BLOCKED_MIXED_DISPLAY_CONTENT));
       }
     }
     return NS_OK;
@@ -756,7 +789,7 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
         // User has already overriden the pref and the root is not https;
         // mixed active content was allowed on an https subframe.
         if (NS_SUCCEEDED(stateRV)) {
-          eventSink->OnSecurityChange(aRequestingContext, (State | nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT));
+          eventSink->OnSecurityChange(aRequestingContext, (state | nsIWebProgressListener::STATE_LOADED_MIXED_ACTIVE_CONTENT));
         }
         return NS_OK;
       }
@@ -773,7 +806,7 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
       // The user has not overriden the pref, so make sure they still have an option by calling eventSink
       // which will invoke the doorhanger
       if (NS_SUCCEEDED(stateRV)) {
-         eventSink->OnSecurityChange(aRequestingContext, (State | nsIWebProgressListener::STATE_BLOCKED_MIXED_ACTIVE_CONTENT));
+         eventSink->OnSecurityChange(aRequestingContext, (state | nsIWebProgressListener::STATE_BLOCKED_MIXED_ACTIVE_CONTENT));
       }
       return NS_OK;
     }
@@ -787,7 +820,7 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
     // Fire the event from a script runner as it is unsafe to run script
     // from within ShouldLoad
     nsContentUtils::AddScriptRunner(
-      new nsMixedContentEvent(aRequestingContext, classification));
+      new nsMixedContentEvent(aRequestingContext, classification, rootHasSecureConnection));
     *aDecision = ACCEPT;
     return NS_OK;
   }

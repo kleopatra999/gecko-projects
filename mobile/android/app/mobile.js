@@ -285,10 +285,6 @@ pref("privacy.trackingprotection.pbmode.enabled", true);
 pref("browser.search.suggest.enabled", false);
 pref("browser.search.suggest.prompted", false);
 
-// Tell the search service to load search plugins from the locale JAR
-pref("browser.search.loadFromJars", true);
-pref("browser.search.jarURIs", "chrome://browser/locale/searchplugins/");
-
 // tell the search service that we don't really expose the "current engine"
 pref("browser.search.noCurrentEngine", true);
 
@@ -414,8 +410,11 @@ pref("font.size.inflation.minTwips", 0);
 // When true, zooming will be enabled on all sites, even ones that declare user-scalable=no.
 pref("browser.ui.zoom.force-user-scalable", false);
 
-pref("ui.zoomedview.disabled", false);
-pref("ui.zoomedview.limitReadableSize", 8);  // value in layer pixels
+pref("ui.zoomedview.enabled", true);
+pref("ui.zoomedview.keepLimitSize", 16); // value in layer pixels, used to not keep the large elements in the cluster list (Bug 1191041)
+pref("ui.zoomedview.limitReadableSize", 8); // value in layer pixels
+pref("ui.zoomedview.defaultZoomFactor", 2);
+pref("ui.zoomedview.simplified", true); // Do not display all the zoomed view controls
 
 pref("ui.touch.radius.enabled", false);
 pref("ui.touch.radius.leftmm", 3);
@@ -432,8 +431,9 @@ pref("ui.mouse.radius.bottommm", 2);
 pref("ui.mouse.radius.visitedWeight", 120);
 pref("ui.mouse.radius.reposition", true);
 
-// The percentage of the screen that needs to be scrolled before margins are exposed.
-pref("browser.ui.show-margins-threshold", 10);
+// The percentage of the screen that needs to be scrolled before toolbar
+// manipulation is allowed.
+pref("browser.ui.scroll-toolbar-threshold", 10);
 
 // Maximum distance from the point where the user pressed where we still
 // look for text to select
@@ -522,7 +522,7 @@ pref("app.update.timerMinimumDelay", 30); // seconds
 // used by update service to decide whether or not to
 // automatically download an update
 pref("app.update.autodownload", "wifi");
-pref("app.update.url.android", "https://aus4.mozilla.org/update/4/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/%MOZ_VERSION%/update.xml");
+pref("app.update.url.android", "https://aus5.mozilla.org/update/4/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/%MOZ_VERSION%/update.xml");
 
 #ifdef MOZ_UPDATER
 /* prefs used specifically for updating the app */
@@ -544,8 +544,8 @@ pref("layers.offmainthreadcomposition.enabled", true);
 pref("layers.async-video.enabled", true);
 #ifdef MOZ_ANDROID_APZ
 pref("layers.async-pan-zoom.enabled", true);
-pref("apz.allow_zooming", true);
 #endif
+pref("apz.allow_zooming", true);
 pref("layers.progressive-paint", true);
 pref("layers.low-precision-buffer", true);
 pref("layers.low-precision-resolution", "0.25");
@@ -607,14 +607,20 @@ pref("dom.w3c_touch_events.enabled", 1);
 #ifdef MOZ_SAFE_BROWSING
 pref("browser.safebrowsing.enabled", true);
 pref("browser.safebrowsing.malware.enabled", true);
+pref("browser.safebrowsing.downloads.enabled", false);
+pref("browser.safebrowsing.downloads.remote.enabled", false);
+pref("browser.safebrowsing.downloads.remote.timeout_ms", 10000);
 pref("browser.safebrowsing.debug", false);
 
-pref("browser.safebrowsing.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
-pref("browser.safebrowsing.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
+pref("browser.safebrowsing.provider.google.lists", "goog-badbinurl-shavar,goog-downloadwhite-digest256,goog-phish-shavar,goog-malware-shavar,goog-unwanted-shavar");
+pref("browser.safebrowsing.provider.google.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
+pref("browser.safebrowsing.provider.google.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
+pref("browser.safebrowsing.provider.google.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
+pref("browser.safebrowsing.provider.google.appRepURL", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
+
 pref("browser.safebrowsing.reportPhishMistakeURL", "https://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportPhishURL", "https://%LOCALE%.phish-report.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportMalwareMistakeURL", "https://%LOCALE%.malware-error.mozilla.com/?hl=%LOCALE%&url=");
-pref("browser.safebrowsing.malware.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
 
 pref("browser.safebrowsing.id", @MOZ_APP_UA_NAME@);
 
@@ -924,11 +930,7 @@ pref("consoleservice.logcat", false);
 pref("consoleservice.logcat", true);
 #endif
 
-// Enable Service Workers for Android on non-release builds
-#ifndef RELEASE_BUILD
-pref("dom.serviceWorkers.enabled", true);
-pref("dom.serviceWorkers.interception.enabled", true);
-#endif
-
 // Enable Cardboard VR on mobile, assuming VR at all is enabled
 pref("dom.vr.cardboard.enabled", true);
+
+pref("browser.tabs.showAudioPlayingIcon", true);

@@ -44,6 +44,8 @@ public:
   {
   }
 
+  virtual ~JsepSessionImpl();
+
   // Implement JsepSession methods.
   virtual nsresult Init() override;
 
@@ -80,7 +82,7 @@ public:
   virtual std::vector<JsepCodecDescription*>&
   Codecs() override
   {
-    return mCodecs.values;
+    return mSupportedCodecs.values;
   }
 
   virtual nsresult ReplaceTrack(const std::string& oldStreamId,
@@ -119,8 +121,8 @@ public:
                                          uint16_t level) override;
 
   virtual nsresult AddLocalIceCandidate(const std::string& candidate,
-                                        const std::string& mid,
                                         uint16_t level,
+                                        std::string* mid,
                                         bool* skipped) override;
 
   virtual nsresult EndOfLocalCandidates(const std::string& defaultCandidateAddr,
@@ -180,6 +182,13 @@ private:
   // Non-const so it can set mLastError
   nsresult CreateGenericSDP(UniquePtr<Sdp>* sdp);
   void AddCodecs(SdpMediaSection* msection) const;
+  void PopulateCodecsByLevel(size_t numLevels);
+  void UpdateCodecsForOffer(size_t level);
+  void ResetNonNegotiatedCodecs(size_t level);
+  void GetNegotiatedPayloadTypes(size_t level,
+                                 std::set<uint16_t>* types) const;
+  void EnsureNoDuplicatePayloadTypes(size_t level);
+  std::vector<JsepCodecDescription*> CreateCodecClones() const;
   void AddExtmap(SdpMediaSection* msection) const;
   void AddMid(const std::string& mid, SdpMediaSection* msection) const;
   void AddLocalIds(const JsepTrack& track, SdpMediaSection* msection) const;
@@ -189,7 +198,7 @@ private:
   const std::vector<SdpExtmapAttributeList::Extmap>* GetRtpExtensions(
       SdpMediaSection::MediaType type) const;
 
-  PtrVector<JsepCodecDescription> GetCommonCodecs(
+  std::vector<JsepCodecDescription*> GetCommonCodecs(
       const SdpMediaSection& offerMsection);
   void AddCommonExtmaps(const SdpMediaSection& remoteMsection,
                         SdpMediaSection* msection);
@@ -217,14 +226,14 @@ private:
                                    const UniquePtr<Sdp>& remote);
   nsresult AddTransportAttributes(SdpMediaSection* msection,
                                   SdpSetupAttribute::Role dtlsRole);
-  nsresult SetupTransportParams(const Sdp& oldAnswer,
-                                const Sdp& newOffer,
-                                Sdp* newLocal);
-  nsresult AddOfferMSections(const JsepOfferOptions& options, Sdp* sdp);
+  nsresult CopyPreviousTransportParams(const Sdp& oldAnswer,
+                                       const Sdp& newOffer,
+                                       Sdp* newLocal);
+  nsresult SetupOfferMSections(const JsepOfferOptions& options, Sdp* sdp);
   // Non-const so it can assign m-line index to tracks
-  nsresult AddOfferMSectionsByType(SdpMediaSection::MediaType type,
-                                   Maybe<size_t> offerToReceive,
-                                   Sdp* sdp);
+  nsresult SetupOfferMSectionsByType(SdpMediaSection::MediaType type,
+                                     Maybe<size_t> offerToReceive,
+                                     Sdp* sdp);
   nsresult BindLocalTracks(SdpMediaSection::MediaType mediatype,
                            Sdp* sdp);
   nsresult BindTrackToMsection(JsepSendingTrack* track,
@@ -238,15 +247,16 @@ private:
   nsresult AddRecvonlyMsections(SdpMediaSection::MediaType mediatype,
                                 size_t count,
                                 Sdp* sdp);
-  nsresult CreateReoffer(const Sdp& oldLocalSdp,
-                         const Sdp& oldAnswer,
-                         Sdp* newSdp);
+  nsresult AddReofferMsections(const Sdp& oldLocalSdp,
+                               const Sdp& oldAnswer,
+                               Sdp* newSdp);
   void SetupBundle(Sdp* sdp) const;
   nsresult GetRemoteIds(const Sdp& sdp,
                         const SdpMediaSection& msection,
                         std::string* streamId,
                         std::string* trackId);
   nsresult CreateOfferMSection(SdpMediaSection::MediaType type,
+                               SdpMediaSection::Protocol proto,
                                SdpDirectionAttribute::Direction direction,
                                Sdp* sdp);
   nsresult GetFreeMsectionForSend(SdpMediaSection::MediaType type,
@@ -280,7 +290,6 @@ private:
 
   nsresult GetNegotiatedBundledMids(SdpHelper::BundledMids* bundledMids);
 
-  void DisableMsection(Sdp* sdp, SdpMediaSection* msection) const;
   nsresult EnableOfferMsection(SdpMediaSection* msection);
 
   nsresult SetUniquePayloadTypes();
@@ -326,7 +335,11 @@ private:
   UniquePtr<Sdp> mCurrentRemoteDescription;
   UniquePtr<Sdp> mPendingLocalDescription;
   UniquePtr<Sdp> mPendingRemoteDescription;
-  PtrVector<JsepCodecDescription> mCodecs;
+  PtrVector<JsepCodecDescription> mSupportedCodecs;
+  // For each level, contains a full clone of
+  // mSupportedCodecs. If any have been negotiated, this negotiation is taken
+  // into account.
+  std::vector<std::vector<JsepCodecDescription*>> mCodecsByLevel;
   std::string mLastError;
   SipccSdpParser mParser;
   SdpHelper mSdpHelper;

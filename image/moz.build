@@ -5,6 +5,8 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 DIRS += ['build', 'decoders', 'encoders']
+if CONFIG['ENABLE_TESTS']:
+    DIRS += ['test/gtest']
 
 with Files('**'):
     BUG_COMPONENT = ('Core', 'ImageLib')
@@ -44,6 +46,7 @@ EXPORTS += [
     'IProgressObserver.h',
     'Orientation.h',
     'SurfaceCache.h',
+    'SurfaceFlags.h',
 ]
 
 UNIFIED_SOURCES += [
@@ -57,7 +60,6 @@ UNIFIED_SOURCES += [
     'Image.cpp',
     'ImageCacheKey.cpp',
     'ImageFactory.cpp',
-    'ImageMetadata.cpp',
     'ImageOps.cpp',
     'ImageWrapper.cpp',
     'imgFrame.cpp',
@@ -83,8 +85,6 @@ SOURCES += [
     'RasterImage.cpp',
 ]
 
-FAIL_ON_WARNINGS = True
-
 include('/ipc/chromium/chromium-config.mozbuild')
 
 FINAL_LIBRARY = 'xul'
@@ -107,3 +107,6 @@ LOCAL_INCLUDES += [
 
 # Because imgFrame.cpp includes "cairo.h"
 CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
+
+LOCAL_INCLUDES += CONFIG['SKIA_INCLUDES']
+

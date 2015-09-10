@@ -11,6 +11,8 @@
 
 BEGIN_BLUETOOTH_NAMESPACE
 
+using namespace mozilla::ipc;
+
 //
 // Socket module
 //
@@ -164,9 +166,9 @@ BluetoothDaemonSocketModule::HandleSvc(const DaemonSocketPDUHeader& aHeader,
     const DaemonSocketPDUHeader&,
     DaemonSocketPDU&,
     BluetoothSocketResultHandler*) = {
-    INIT_ARRAY_AT(0x00, &BluetoothDaemonSocketModule::ErrorRsp),
-    INIT_ARRAY_AT(0x01, &BluetoothDaemonSocketModule::ListenRsp),
-    INIT_ARRAY_AT(0x02, &BluetoothDaemonSocketModule::ConnectRsp),
+    [0x00] = &BluetoothDaemonSocketModule::ErrorRsp,
+    [0x01] = &BluetoothDaemonSocketModule::ListenRsp,
+    [0x02] = &BluetoothDaemonSocketModule::ConnectRsp
   };
 
   if (NS_WARN_IF(MOZ_ARRAY_LENGTH(HandleRsp) <= aHeader.mOpcode) ||
@@ -189,8 +191,13 @@ nsresult
 BluetoothDaemonSocketModule::Send(DaemonSocketPDU* aPDU,
                                   BluetoothSocketResultHandler* aRes)
 {
-  aRes->AddRef(); // Keep reference for response
-  return Send(aPDU, static_cast<void*>(aRes));
+  nsRefPtr<BluetoothSocketResultHandler> res(aRes);
+  nsresult rv = Send(aPDU, static_cast<void*>(res.get()));
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  unused << res.forget(); // Keep reference for response
+  return NS_OK;
 }
 
 uint8_t

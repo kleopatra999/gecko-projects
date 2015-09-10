@@ -25,8 +25,11 @@ class ContainerParser;
 class MediaByteBuffer;
 class MediaRawData;
 class MediaSourceDemuxer;
-class SourceBuffer;
 class SourceBufferResource;
+
+namespace dom {
+  class SourceBufferAttributes;
+}
 
 class TrackBuffersManager : public SourceBufferContentManager {
 public:
@@ -35,7 +38,9 @@ public:
   typedef MediaData::Type MediaType;
   typedef nsTArray<nsRefPtr<MediaRawData>> TrackBuffer;
 
-  TrackBuffersManager(dom::SourceBuffer* aParent, MediaSourceDecoder* aParentDecoder, const nsACString& aType);
+  TrackBuffersManager(dom::SourceBufferAttributes* aAttributes,
+                      MediaSourceDecoder* aParentDecoder,
+                      const nsACString& aType);
 
   bool AppendData(MediaByteBuffer* aData,
                   media::TimeUnit aTimestampOffset) override;
@@ -108,6 +113,7 @@ private:
   void InitializationSegmentReceived();
   void ShutdownDemuxers();
   void CreateDemuxerforMIMEType();
+  void ResetDemuxingState();
   void NeedMoreData();
   void RejectAppend(nsresult aRejectValue, const char* aName);
   // Will return a promise that will be resolved once all frames of the current
@@ -146,6 +152,8 @@ private:
   // TODO: Unused for now.
   Atomic<bool> mBufferFull;
   bool mFirstInitializationSegmentReceived;
+  // Set to true once a new segment is started.
+  bool mNewMediaSegmentStarted;
   bool mActiveTrack;
   Maybe<media::TimeUnit> mGroupStartTimestamp;
   media::TimeUnit mGroupEndTimestamp;
@@ -154,20 +162,28 @@ private:
   // ContainerParser objects and methods.
   // Those are used to parse the incoming input buffer.
 
-  // Recreate the ContainerParser and only feed it with the previous init
-  // segment found.
-  void RecreateParser();
+  // Recreate the ContainerParser and if aReuseInitData is true then
+  // feed it with the previous init segment found.
+  void RecreateParser(bool aReuseInitData);
   nsAutoPtr<ContainerParser> mParser;
 
   // Demuxer objects and methods.
+  void AppendDataToCurrentInputBuffer(MediaByteBuffer* aData);
   nsRefPtr<MediaByteBuffer> mInitData;
+  // Temporary input buffer to handle partial media segment header.
+  // We store the current input buffer content into it should we need to
+  // reinitialize the demuxer once we have some samples and a discontinuity is
+  // detected.
+  nsRefPtr<MediaByteBuffer> mPendingInputBuffer;
   nsRefPtr<SourceBufferResource> mCurrentInputBuffer;
   nsRefPtr<MediaDataDemuxer> mInputDemuxer;
   // Length already processed in current media segment.
   uint32_t mProcessedInput;
+  Maybe<media::TimeUnit> mLastParsedEndTime;
 
   void OnDemuxerInitDone(nsresult);
   void OnDemuxerInitFailed(DemuxerFailureReason aFailure);
+  void OnDemuxerResetDone(nsresult);
   MozPromiseRequestHolder<MediaDataDemuxer::InitPromise> mDemuxerInitRequest;
   bool mEncrypted;
 
@@ -224,6 +240,9 @@ private:
     bool mNeedRandomAccessPoint;
     nsRefPtr<MediaTrackDemuxer> mDemuxer;
     MozPromiseRequestHolder<MediaTrackDemuxer::SamplesPromise> mDemuxRequest;
+    // Highest end timestamp of the last media segment demuxed.
+    media::TimeUnit mLastParsedEndTime;
+
     // If set, position where the next contiguous frame will be inserted.
     // If a discontinuity is detected, it will be unset and recalculated upon
     // the next insertion.
@@ -314,9 +333,8 @@ private:
   void RestoreCachedVariables();
 
   // Strong references to external objects.
-  nsMainThreadPtrHandle<dom::SourceBuffer> mParent;
+  nsRefPtr<dom::SourceBufferAttributes> mSourceBufferAttributes;
   nsMainThreadPtrHandle<MediaSourceDecoder> mParentDecoder;
-  nsRefPtr<MediaSourceDemuxer> mMediaSourceDemuxer;
 
   // MediaSource duration mirrored from MediaDecoder on the main thread..
   Mirror<Maybe<double>> mMediaSourceDuration;

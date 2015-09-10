@@ -41,16 +41,23 @@ add_task(function*() {
       previousState = state;
       if (expected === 0) {
         player.off(player.AUTO_REFRESH_EVENT, onNewState);
-        resolve();
+
+        info("Stop the auto-refresh");
+        player.stopAutoRefresh();
+
+        if (player.pendingRefreshStatePromise) {
+          // A new request was fired before we had chance to stop it. Wait for
+          // it to complete.
+          player.pendingRefreshStatePromise.then(resolve);
+        } else {
+          resolve();
+        }
       }
     };
     player.on(player.AUTO_REFRESH_EVENT, onNewState);
   });
 
   yield onAllEventsReceived;
-
-  info("Stop the auto-refresh");
-  player.stopAutoRefresh();
 
   yield closeDebuggerClient(client);
   gBrowser.removeCurrentTab();

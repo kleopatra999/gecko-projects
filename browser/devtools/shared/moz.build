@@ -31,6 +31,8 @@ EXTRA_JS_MODULES.devtools += [
 
 EXTRA_JS_MODULES.devtools.shared += [
     'autocomplete-popup.js',
+    'browser-loader.js',
+    'create-dispatcher.js',
     'devices.js',
     'doorhanger.js',
     'frame-script-utils.js',
@@ -46,6 +48,15 @@ EXTRA_JS_MODULES.devtools.shared += [
     'theme.js',
     'undo.js'
 ]
+
+EXTRA_JS_MODULES.devtools.shared.content += [
+    'content/react.js'
+]
+
+if CONFIG['DEBUG_JS_MODULES']:
+    EXTRA_JS_MODULES.devtools.shared.content += [
+        'content/react-dev.js'
+    ]
 
 EXTRA_JS_MODULES.devtools.shared.widgets += [
     'widgets/BarGraphWidget.js',
@@ -63,3 +74,5 @@ EXTRA_JS_MODULES.devtools.shared.widgets += [
     'widgets/Tooltip.js',
     'widgets/TreeWidget.js',
 ]
+
+DIRS += ['fluxify']

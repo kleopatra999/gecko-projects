@@ -124,8 +124,8 @@ public:
   NS_IMETHOD              PlaceBehind(nsTopLevelWidgetZPlacement aPlacement,
                                       nsIWidget *aWidget, bool aActivate) override;
 
-  NS_IMETHOD              SetSizeMode(int32_t aMode) override;
-  virtual int32_t         SizeMode() override
+  NS_IMETHOD              SetSizeMode(nsSizeMode aMode) override;
+  virtual nsSizeMode      SizeMode() override
   {
     return mSizeMode;
   }
@@ -502,9 +502,7 @@ protected:
   nsRefPtr<WidgetShutdownObserver> mShutdownObserver;
   nsRefPtr<TextEventDispatcher> mTextEventDispatcher;
   nsCursor          mCursor;
-  bool              mUpdateCursor;
   nsBorderStyle     mBorderStyle;
-  bool              mUseAttachedEvents;
   nsIntRect         mBounds;
   nsIntRect*        mOriginalBounds;
   // When this pointer is null, the widget is not clipped
@@ -514,6 +512,10 @@ protected:
   nsPopupLevel      mPopupLevel;
   nsPopupType       mPopupType;
   SizeConstraints   mSizeConstraints;
+
+  bool              mUpdateCursor;
+  bool              mUseAttachedEvents;
+  bool              mIMEHasFocus;
 
   static nsIRollupListener* gRollupListener;
 

@@ -132,18 +132,8 @@ namespace image {
 
 class Decoder;
 class FrameAnimator;
+class ImageMetadata;
 class SourceBuffer;
-
-/**
- * Given a set of imgIContainer FLAG_* flags, returns those flags that can
- * affect the output of decoders.
- */
-inline MOZ_CONSTEXPR uint32_t
-DecodeFlags(uint32_t aFlags)
-{
-  return aFlags & (imgIContainer::FLAG_DECODE_NO_PREMULTIPLY_ALPHA |
-                   imgIContainer::FLAG_DECODE_NO_COLORSPACE_CONVERSION);
-}
 
 class RasterImage final : public ImageResource
                         , public nsIProperties
@@ -170,12 +160,6 @@ public:
   // Methods inherited from Image
   virtual void OnSurfaceDiscarded() override;
 
-  // Raster-specific methods
-  static NS_METHOD WriteToSourceBuffer(nsIInputStream* aIn, void* aClosure,
-                                       const char* aFromRawSegment,
-                                       uint32_t aToOffset, uint32_t aCount,
-                                       uint32_t* aWriteCount);
-
   /* The total number of frames in this image. */
   uint32_t GetNumFrames() const { return mFrameCount; }
 
@@ -194,24 +178,6 @@ public:
 
   void OnAddedFrame(uint32_t aNewFrameCount, const nsIntRect& aNewRefreshArea);
 
-  /** Sets the size and inherent orientation of the container. This should only
-   * be called by the decoder. This function may be called multiple times, but
-   * will throw an error if subsequent calls do not match the first.
-   */
-  nsresult SetSize(int32_t aWidth, int32_t aHeight, Orientation aOrientation);
-
-  /**
-   * Number of times to loop the image.
-   * @note -1 means forever.
-   */
-  void     SetLoopCount(int32_t aLoopCount);
-
-  /// Notification that the entire image has been decoded.
-  void OnDecodingComplete(bool aIsAnimated);
-
-  /// Helper method for OnDecodingComplete.
-  void MarkAnimationDecoded();
-
   /**
    * Sends the provided progress notifications to ProgressTracker.
    *
@@ -219,13 +185,13 @@ public:
    *
    * @param aProgress    The progress notifications to send.
    * @param aInvalidRect An invalidation rect to send.
-   * @param aFlags       The decode flags used by the decoder that generated
-   *                     these notifications, or DECODE_FLAGS_DEFAULT if the
+   * @param aFlags       The surface flags used by the decoder that generated
+   *                     these notifications, or DefaultSurfaceFlags() if the
    *                     notifications don't come from a decoder.
    */
   void NotifyProgress(Progress aProgress,
                       const nsIntRect& aInvalidRect = nsIntRect(),
-                      uint32_t aFlags = DECODE_FLAGS_DEFAULT);
+                      SurfaceFlags aSurfaceFlags = DefaultSurfaceFlags());
 
   /**
    * Records telemetry and does final teardown of the provided decoder.
@@ -233,6 +199,9 @@ public:
    * Main-thread only.
    */
   void FinalizeDecoder(Decoder* aDecoder);
+
+  // Helper method for FinalizeDecoder.
+  void ReportDecoderError(Decoder* aDecoder);
 
 
   //////////////////////////////////////////////////////////////////////////////
@@ -269,16 +238,9 @@ public:
     mRequestedResolution = requestedResolution;
   }
 
-  nsIntSize GetRequestedResolution() {
-    return mRequestedResolution;
-  }
   /* Provide a hint for the requested dimension of the resulting image. */
   void SetRequestedSampleSize(int requestedSampleSize) {
     mRequestedSampleSize = requestedSampleSize;
-  }
-
-  int GetRequestedSampleSize() {
-    return mRequestedSampleSize;
   }
 
  nsCString GetURIString() {
@@ -355,11 +317,30 @@ private:
   NS_IMETHOD DecodeMetadata(uint32_t aFlags);
 
   /**
-   * In catastrophic circumstances like a GPU driver crash, we may lose our
-   * frames even if they're locked. RecoverFromLossOfFrames discards all
-   * existing frames and redecodes using the provided @aSize and @aFlags.
+   * Sets the size, inherent orientation, animation metadata, and other
+   * information about the image gathered during decoding.
+   *
+   * This function may be called multiple times, but will throw an error if
+   * subsequent calls do not match the first.
+   *
+   * @param aMetadata The metadata to set on this image.
+   * @param aFromMetadataDecode True if this metadata came from a metadata
+   *                            decode; false if it came from a full decode.
    */
-  void RecoverFromLossOfFrames(const nsIntSize& aSize, uint32_t aFlags);
+  void SetMetadata(const ImageMetadata& aMetadata, bool aFromMetadataDecode);
+
+  /**
+   * In catastrophic circumstances like a GPU driver crash, the contents of our
+   * frames may become invalid.  If the information we gathered during the
+   * metadata decode proves to be wrong due to image corruption, the frames we
+   * have may violate this class's invariants. Either way, we need to
+   * immediately discard the invalid frames and redecode so that callers don't
+   * perceive that we've entered an invalid state. 
+   *
+   * RecoverFromInvalidFrames discards all existing frames and redecodes using
+   * the provided @aSize and @aFlags.
+   */
+  void RecoverFromInvalidFrames(const nsIntSize& aSize, uint32_t aFlags);
 
 private: // data
   nsIntSize                  mSize;

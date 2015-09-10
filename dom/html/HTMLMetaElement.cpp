@@ -56,6 +56,13 @@ HTMLMetaElement::AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
   if (aNameSpaceID == kNameSpaceID_None) {
     if (aName == nsGkAtoms::content) {
       nsIDocument *document = GetUncomposedDoc();
+      if (document && AttrValueIs(kNameSpaceID_None, nsGkAtoms::name,
+                                  nsGkAtoms::viewport, eIgnoreCase)) {
+        nsAutoString content;
+        nsresult rv = GetContent(content);
+        NS_ENSURE_SUCCESS(rv, rv);
+        nsContentUtils::ProcessViewportInfo(document, content);
+      }
       CreateAndDispatchEvent(document, NS_LITERAL_STRING("DOMMetaChanged"));
     }
   }
@@ -115,7 +122,7 @@ HTMLMetaElement::CreateAndDispatchEvent(nsIDocument* aDoc,
 
   nsRefPtr<AsyncEventDispatcher> asyncDispatcher =
     new AsyncEventDispatcher(this, aEventName, true, true);
-  asyncDispatcher->PostDOMEvent();
+  asyncDispatcher->RunDOMEventWhenSafe();
 }
 
 JSObject*

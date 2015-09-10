@@ -53,14 +53,18 @@ public:
 
   }
 
-  nsresult Init() override {
+  nsRefPtr<InitPromise> Init() override {
     mSurfaceTexture = AndroidSurfaceTexture::Create();
     if (!mSurfaceTexture) {
       NS_WARNING("Failed to create SurfaceTexture for video decode\n");
-      return NS_ERROR_FAILURE;
+      return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
     }
 
-    return InitDecoder(mSurfaceTexture->JavaSurface());
+    if (NS_FAILED(InitDecoder(mSurfaceTexture->JavaSurface()))) {
+      return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+    }
+
+    return InitPromise::CreateAndResolve(TrackInfo::kVideoTrack, __func__);
   }
 
   void Cleanup() override {
@@ -202,7 +206,7 @@ public:
   AudioDataDecoder(const AudioInfo& aConfig, MediaFormat::Param aFormat, MediaDataDecoderCallback* aCallback)
     : MediaCodecDataDecoder(MediaData::Type::AUDIO_DATA, aConfig.mMimeType, aFormat, aCallback)
   {
-    JNIEnv* env = GetJNIForThread();
+    JNIEnv* const env = jni::GetEnvForThread();
 
     jni::Object::LocalRef buffer(env);
     NS_ENSURE_SUCCESS_VOID(aFormat->GetByteBuffer(NS_LITERAL_STRING("csd-0"), &buffer));
@@ -255,11 +259,21 @@ public:
 
 bool AndroidDecoderModule::SupportsMimeType(const nsACString& aMimeType)
 {
+  if (!AndroidBridge::Bridge() || (AndroidBridge::Bridge()->GetAPIVersion() < 16)) {
+    return false;
+  }
+
   if (aMimeType.EqualsLiteral("video/mp4") ||
       aMimeType.EqualsLiteral("video/avc")) {
     return true;
   }
-  return static_cast<bool>(mozilla::CreateDecoder(aMimeType));
+
+  MediaCodec::LocalRef ref = mozilla::CreateDecoder(aMimeType);
+  if (!ref) {
+    return false;
+  }
+  ref->Release();
+  return true;
 }
 
 already_AddRefed<MediaDataDecoder>
@@ -339,9 +353,17 @@ MediaCodecDataDecoder::~MediaCodecDataDecoder()
   Shutdown();
 }
 
-nsresult MediaCodecDataDecoder::Init()
+nsRefPtr<MediaDataDecoder::InitPromise> MediaCodecDataDecoder::Init()
 {
-  return InitDecoder(nullptr);
+  nsresult rv = InitDecoder(nullptr);
+
+  TrackInfo::TrackType type =
+    (mType == MediaData::AUDIO_DATA ? TrackInfo::TrackType::kAudioTrack
+                                    : TrackInfo::TrackType::kVideoTrack);
+
+  return NS_SUCCEEDED(rv) ?
+           InitPromise::CreateAndResolve(type, __func__) :
+           InitPromise::CreateAndReject(MediaDataDecoder::DecoderFailureReason::INIT_ERROR, __func__);
 }
 
 nsresult MediaCodecDataDecoder::InitDecoder(Surface::Param aSurface)
@@ -371,6 +393,10 @@ nsresult MediaCodecDataDecoder::InitDecoder(Surface::Param aSurface)
 #define HANDLE_DECODER_ERROR() \
   if (NS_FAILED(res)) { \
     NS_WARNING("exiting decoder loop due to exception"); \
+    if (mDraining) { \
+      ENVOKE_CALLBACK(DrainComplete); \
+      mDraining = false; \
+    } \
     ENVOKE_CALLBACK(Error); \
     break; \
   }
@@ -405,7 +431,7 @@ void MediaCodecDataDecoder::DecoderLoop()
   bool draining = false;
   bool waitingEOF = false;
 
-  AutoLocalJNIFrame frame(GetJNIForThread(), 1);
+  AutoLocalJNIFrame frame(jni::GetEnvForThread(), 1);
   nsRefPtr<MediaRawData> sample;
 
   MediaFormat::LocalRef outputFormat(frame.GetEnv());
@@ -473,7 +499,7 @@ void MediaCodecDataDecoder::DecoderLoop()
 
         void* directBuffer = frame.GetEnv()->GetDirectBufferAddress(buffer.Get());
 
-        MOZ_ASSERT(frame.GetEnv()->GetDirectBufferCapacity(buffer.Get()) >= sample->mSize,
+        MOZ_ASSERT(frame.GetEnv()->GetDirectBufferCapacity(buffer.Get()) >= sample->Size(),
           "Decoder buffer is not large enough for sample");
 
         {
@@ -482,9 +508,9 @@ void MediaCodecDataDecoder::DecoderLoop()
           mQueue.pop();
         }
 
-        PodCopy((uint8_t*)directBuffer, sample->mData, sample->mSize);
+        PodCopy((uint8_t*)directBuffer, sample->Data(), sample->Size());
 
-        res = mDecoder->QueueInputBuffer(inputIndex, 0, sample->mSize,
+        res = mDecoder->QueueInputBuffer(inputIndex, 0, sample->Size(),
                                          sample->mTime, 0);
         HANDLE_DECODER_ERROR();
 

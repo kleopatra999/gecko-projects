@@ -25,6 +25,7 @@
 #include "mozilla/net/ReferrerPolicy.h"  // for member
 #include "nsWeakReference.h"
 #include "mozilla/dom/DocumentBinding.h"
+#include "mozilla/UseCounter.h"
 #include "mozilla/WeakPtr.h"
 #include "Units.h"
 #include "nsExpirationTracker.h"
@@ -94,6 +95,7 @@ class ErrorResult;
 class EventStates;
 class PendingAnimationTracker;
 class SVGAttrAnimationRuleProcessor;
+template<typename> class OwningNonNull;
 
 namespace css {
 class Loader;
@@ -131,7 +133,9 @@ class MediaQueryList;
 class GlobalObject;
 class NodeFilter;
 class NodeIterator;
+enum class OrientationType : uint32_t;
 class ProcessingInstruction;
+class Promise;
 class StyleSheetList;
 class SVGDocument;
 class Touch;
@@ -142,7 +146,6 @@ class XPathEvaluator;
 class XPathExpression;
 class XPathNSResolver;
 class XPathResult;
-template<typename> class OwningNonNull;
 template<typename> class Sequence;
 
 template<typename, typename> class CallbackObjectHolder;
@@ -152,8 +155,8 @@ typedef CallbackObjectHolder<NodeFilter, nsIDOMNodeFilter> NodeFilterHolder;
 } // namespace mozilla
 
 #define NS_IDOCUMENT_IID \
-{ 0xbbce44c8, 0x22fe, 0x404f, \
-  { 0x9e, 0x71, 0x23, 0x1d, 0xf4, 0xcc, 0x8e, 0x34 } }
+{ 0x292450a1, 0x285e, 0x4a09, \
+  { 0x9a, 0xf9, 0x61, 0xf9, 0xb1, 0xbd, 0x27, 0xcc } }
 
 // Enum for requesting a particular type of document when creating a doc
 enum DocumentFlavor {
@@ -1182,15 +1185,6 @@ public:
   static void AsyncExitFullscreen(nsIDocument* aDocument);
 
   /**
-   * Handles one single fullscreen request, updates `aHandled` if the request
-   * is handled, and returns whether this request should be removed from the
-   * request queue.
-   */
-  static bool HandlePendingFullscreenRequest(const FullscreenRequest& aRequest,
-                                             nsIDocShellTreeItem* aRootShell,
-                                             bool* aHandled);
-
-  /**
    * Handles any pending fullscreen in aDocument or its subdocuments.
    *
    * Returns whether there is any fullscreen request handled.
@@ -1201,6 +1195,14 @@ public:
 
   static void UnlockPointer(nsIDocument* aDoc = nullptr);
 
+  // ScreenOrientation related APIs
+
+  virtual void SetCurrentOrientation(mozilla::dom::OrientationType aType,
+                                     uint16_t aAngle) = 0;
+  virtual uint16_t CurrentOrientationAngle() const = 0;
+  virtual mozilla::dom::OrientationType CurrentOrientationType() const = 0;
+  virtual void SetOrientationPendingPromise(mozilla::dom::Promise* aPromise) = 0;
+  virtual mozilla::dom::Promise* GetOrientationPendingPromise() const = 0;
 
   //----------------------------------------------------------------------
 
@@ -1372,10 +1374,11 @@ public:
 
   /**
    * Create an element with the specified name, prefix and namespace ID.
+   * Returns null if element name parsing failed.
    */
-  virtual nsresult CreateElem(const nsAString& aName, nsIAtom *aPrefix,
-                              int32_t aNamespaceID,
-                              nsIContent** aResult) = 0;
+  virtual already_AddRefed<Element> CreateElem(const nsAString& aName,
+                                               nsIAtom* aPrefix,
+                                               int32_t aNamespaceID) = 0;
 
   /**
    * Get the security info (i.e. SSL state etc) that the document got
@@ -1713,7 +1716,7 @@ public:
 
   bool IsResourceDoc() const {
     return IsBeingUsedAsImage() || // Are we a helper-doc for an SVG image?
-      !!mDisplayDocument;          // Are we an external resource doc?
+      mHasDisplayDocument;         // Are we an external resource doc?
   }
 
   /**
@@ -1733,15 +1736,17 @@ public:
    */
   void SetDisplayDocument(nsIDocument* aDisplayDocument)
   {
-    NS_PRECONDITION(!GetShell() &&
-                    !GetContainer() &&
-                    !GetWindow(),
-                    "Shouldn't set mDisplayDocument on documents that already "
-                    "have a presentation or a docshell or a window");
-    NS_PRECONDITION(aDisplayDocument != this, "Should be different document");
-    NS_PRECONDITION(!aDisplayDocument->GetDisplayDocument(),
-                    "Display documents should not nest");
+    MOZ_ASSERT(!GetShell() &&
+               !GetContainer() &&
+               !GetWindow(),
+               "Shouldn't set mDisplayDocument on documents that already "
+               "have a presentation or a docshell or a window");
+    MOZ_ASSERT(aDisplayDocument, "Must not be null");
+    MOZ_ASSERT(aDisplayDocument != this, "Should be different document");
+    MOZ_ASSERT(!aDisplayDocument->GetDisplayDocument(),
+               "Display documents should not nest");
     mDisplayDocument = aDisplayDocument;
+    mHasDisplayDocument = !!aDisplayDocument;
   }
 
   /**
@@ -1760,7 +1765,7 @@ public:
     virtual ~ExternalResourceLoad() {}
 
     void AddObserver(nsIObserver* aObserver) {
-      NS_PRECONDITION(aObserver, "Must have observer");
+      MOZ_ASSERT(aObserver, "Must have observer");
       mObservers.AppendElement(aObserver);
     }
 
@@ -2023,7 +2028,8 @@ public:
    */
   virtual void PreloadStyle(nsIURI* aURI, const nsAString& aCharset,
                             const nsAString& aCrossOriginAttr,
-                            ReferrerPolicyEnum aReferrerPolicy) = 0;
+                            ReferrerPolicyEnum aReferrerPolicy,
+                            const nsAString& aIntegrity) = 0;
 
   /**
    * Called by the chrome registry to load style sheets.  Can be put
@@ -2314,6 +2320,8 @@ public:
     eAttributeChanged
   };
 
+  nsIDocument* GetTopLevelContentDocument();
+
   /**
    * Registers an unresolved custom element that is a candidate for
    * upgrade when the definition is registered via registerElement.
@@ -2512,9 +2520,9 @@ public:
   already_AddRefed<mozilla::dom::TouchList> CreateTouchList();
   already_AddRefed<mozilla::dom::TouchList>
     CreateTouchList(mozilla::dom::Touch& aTouch,
-                    const mozilla::dom::Sequence<mozilla::dom::OwningNonNull<mozilla::dom::Touch> >& aTouches);
+                    const mozilla::dom::Sequence<mozilla::OwningNonNull<mozilla::dom::Touch> >& aTouches);
   already_AddRefed<mozilla::dom::TouchList>
-    CreateTouchList(const mozilla::dom::Sequence<mozilla::dom::OwningNonNull<mozilla::dom::Touch> >& aTouches);
+    CreateTouchList(const mozilla::dom::Sequence<mozilla::OwningNonNull<mozilla::dom::Touch> >& aTouches);
 
   void SetStyleSheetChangeEventsEnabled(bool aValue)
   {
@@ -2576,6 +2584,41 @@ public:
   mozilla::dom::FontFaceSet* Fonts();
 
   bool DidFireDOMContentLoaded() const { return mDidFireDOMContentLoaded; }
+
+  void SetDocumentUseCounter(mozilla::UseCounter aUseCounter)
+  {
+    if (!mUseCounters[aUseCounter]) {
+      mUseCounters[aUseCounter] = true;
+    }
+  }
+
+  void SetPageUseCounter(mozilla::UseCounter aUseCounter);
+
+  void SetDocumentAndPageUseCounter(mozilla::UseCounter aUseCounter)
+  {
+    SetDocumentUseCounter(aUseCounter);
+    SetPageUseCounter(aUseCounter);
+  }
+
+  void PropagateUseCounters(nsIDocument* aParentDocument);
+
+protected:
+  bool GetUseCounter(mozilla::UseCounter aUseCounter)
+  {
+    return mUseCounters[aUseCounter];
+  }
+
+  void SetChildDocumentUseCounter(mozilla::UseCounter aUseCounter)
+  {
+    if (!mChildDocumentUseCounters[aUseCounter]) {
+      mChildDocumentUseCounters[aUseCounter] = true;
+    }
+  }
+
+  bool GetChildDocumentUseCounter(mozilla::UseCounter aUseCounter)
+  {
+    return mChildDocumentUseCounters[aUseCounter];
+  }
 
 private:
   mutable std::bitset<eDeprecatedOperationCount> mDeprecationWarnedAbout;
@@ -2694,136 +2737,134 @@ protected:
   mozilla::dom::VisibilityState mVisibilityState;
 
   // True if BIDI is enabled.
-  bool mBidiEnabled;
+  bool mBidiEnabled : 1;
   // True if a MathML element has ever been owned by this document.
-  bool mMathMLEnabled;
+  bool mMathMLEnabled : 1;
 
   // True if this document is the initial document for a window.  This should
   // basically be true only for documents that exist in newly-opened windows or
   // documents created to satisfy a GetDocument() on a window when there's no
   // document in it.
-  bool mIsInitialDocumentInWindow;
+  bool mIsInitialDocumentInWindow : 1;
 
   // True if we're loaded as data and therefor has any dangerous stuff, such
   // as scripts and plugins, disabled.
-  bool mLoadedAsData;
+  bool mLoadedAsData : 1;
 
   // This flag is only set in XMLDocument, for e.g. documents used in XBL. We
   // don't want animations to play in such documents, so we need to store the
   // flag here so that we can check it in nsDocument::GetAnimationController.
-  bool mLoadedAsInteractiveData;
+  bool mLoadedAsInteractiveData : 1;
 
   // If true, whoever is creating the document has gotten it to the
   // point where it's safe to start layout on it.
-  bool mMayStartLayout;
+  bool mMayStartLayout : 1;
 
   // True iff we've ever fired a DOMTitleChanged event for this document
-  bool mHaveFiredTitleChange;
+  bool mHaveFiredTitleChange : 1;
 
   // True iff IsShowing() should be returning true
-  bool mIsShowing;
+  bool mIsShowing : 1;
 
   // True iff the document "page" is not hidden (i.e. currently in the
   // bfcache)
-  bool mVisible;
+  bool mVisible : 1;
 
   // True if our content viewer has been removed from the docshell
   // (it may still be displayed, but in zombie state). Form control data
   // has been saved.
-  bool mRemovedFromDocShell;
+  bool mRemovedFromDocShell : 1;
 
   // True iff DNS prefetch is allowed for this document.  Note that if the
   // document has no window, DNS prefetch won't be performed no matter what.
-  bool mAllowDNSPrefetch;
+  bool mAllowDNSPrefetch : 1;
 
   // True when this document is a static clone of a normal document
-  bool mIsStaticDocument;
+  bool mIsStaticDocument : 1;
 
   // True while this document is being cloned to a static document.
-  bool mCreatingStaticClone;
+  bool mCreatingStaticClone : 1;
 
   // True iff the document is being unlinked or deleted.
-  bool mInUnlinkOrDeletion;
+  bool mInUnlinkOrDeletion : 1;
 
   // True if document has ever had script handling object.
-  bool mHasHadScriptHandlingObject;
+  bool mHasHadScriptHandlingObject : 1;
 
   // True if we're an SVG document being used as an image.
-  bool mIsBeingUsedAsImage;
+  bool mIsBeingUsedAsImage : 1;
 
   // True is this document is synthetic : stand alone image, video, audio
   // file, etc.
-  bool mIsSyntheticDocument;
+  bool mIsSyntheticDocument : 1;
 
   // True if this document has links whose state needs updating
-  bool mHasLinksToUpdate;
+  bool mHasLinksToUpdate : 1;
 
   // True if a layout flush might not be a no-op
-  bool mNeedLayoutFlush;
+  bool mNeedLayoutFlush : 1;
 
   // True if a style flush might not be a no-op
-  bool mNeedStyleFlush;
+  bool mNeedStyleFlush : 1;
 
   // True if a DOMMutationObserver is perhaps attached to a node in the document.
-  bool mMayHaveDOMMutationObservers;
+  bool mMayHaveDOMMutationObservers : 1;
 
   // True if an nsIAnimationObserver is perhaps attached to a node in the document.
-  bool mMayHaveAnimationObservers;
+  bool mMayHaveAnimationObservers : 1;
 
   // True if a document has loaded Mixed Active Script (see nsMixedContentBlocker.cpp)
-  bool mHasMixedActiveContentLoaded;
+  bool mHasMixedActiveContentLoaded : 1;
 
   // True if a document has blocked Mixed Active Script (see nsMixedContentBlocker.cpp)
-  bool mHasMixedActiveContentBlocked;
+  bool mHasMixedActiveContentBlocked : 1;
 
   // True if a document has loaded Mixed Display/Passive Content (see nsMixedContentBlocker.cpp)
-  bool mHasMixedDisplayContentLoaded;
+  bool mHasMixedDisplayContentLoaded : 1;
 
   // True if a document has blocked Mixed Display/Passive Content (see nsMixedContentBlocker.cpp)
-  bool mHasMixedDisplayContentBlocked;
+  bool mHasMixedDisplayContentBlocked : 1;
 
   // True if a document has blocked Tracking Content
-  bool mHasTrackingContentBlocked;
+  bool mHasTrackingContentBlocked : 1;
 
   // True if a document has loaded Tracking Content
-  bool mHasTrackingContentLoaded;
+  bool mHasTrackingContentLoaded : 1;
 
   // True if DisallowBFCaching has been called on this document.
-  bool mBFCacheDisallowed;
+  bool mBFCacheDisallowed : 1;
 
   // If true, we have an input encoding.  If this is false, then the
   // document was created entirely in memory
-  bool mHaveInputEncoding;
+  bool mHaveInputEncoding : 1;
 
-  bool mHasHadDefaultView;
+  bool mHasHadDefaultView : 1;
 
   // Whether style sheet change events will be dispatched for this document
-  bool mStyleSheetChangeEventsEnabled;
+  bool mStyleSheetChangeEventsEnabled : 1;
 
   // Whether the document was created by a srcdoc iframe.
-  bool mIsSrcdocDocument;
+  bool mIsSrcdocDocument : 1;
 
   // Records whether we've done a document.open. If this is true, it's possible
   // for nodes from this document to have outdated wrappers in their wrapper
   // caches.
-  bool mDidDocumentOpen;
+  bool mDidDocumentOpen : 1;
 
-#ifdef DEBUG
-  /**
-   * This is true while FlushPendingLinkUpdates executes.  Calls to
-   * [Un]RegisterPendingLinkUpdate will assert when this is true.
-   */
-  bool mIsLinkUpdateRegistrationsForbidden;
-#endif
+  // Whether this document has a display document and thus is considered to
+  // be a resource document.  Normally this is the same as !!mDisplayDocument,
+  // but mDisplayDocument is cleared during Unlink.  mHasDisplayDocument is
+  // valid in the document's destructor.
+  bool mHasDisplayDocument : 1;
 
   // Is the current mFontFaceSet valid?
-  bool mFontFaceSetDirty;
+  bool mFontFaceSetDirty : 1;
 
   // Has GetUserFontSet() been called?
-  bool mGetUserFontSetCalled;
+  bool mGetUserFontSetCalled : 1;
 
   // Do we currently have an event posted to call FlushUserFontSet?
-  bool mPostedFlushUserFontSet;
+  bool mPostedFlushUserFontSet : 1;
 
   enum Type {
     eUnknown, // should never be used
@@ -2834,17 +2875,25 @@ protected:
     eXUL
   };
 
-  uint8_t mType;
+  Type mType;
 
   uint8_t mDefaultElementType;
 
-  enum {
+  enum Tri {
     eTriUnset = 0,
     eTriFalse,
     eTriTrue
   };
 
-  uint8_t mAllowXULXBL;
+  Tri mAllowXULXBL;
+
+#ifdef DEBUG
+  /**
+   * This is true while FlushPendingLinkUpdates executes.  Calls to
+   * [Un]RegisterPendingLinkUpdate will assert when this is true.
+   */
+  bool mIsLinkUpdateRegistrationsForbidden;
+#endif
 
   // The document's script global object, the object from which the
   // document can get its script context and scope. This is the
@@ -2954,6 +3003,14 @@ protected:
 
   // Our live MediaQueryLists
   PRCList mDOMMediaQueryLists;
+
+  // Flags for use counters used directly by this document.
+  std::bitset<mozilla::eUseCounter_Count> mUseCounters;
+  // Flags for use counters used by any child documents of this document.
+  std::bitset<mozilla::eUseCounter_Count> mChildDocumentUseCounters;
+  // Flags for whether we've notified our top-level "page" of a use counter
+  // for this child document.
+  std::bitset<mozilla::eUseCounter_Count> mNotifiedPageForUseCounter;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIDocument, NS_IDOCUMENT_IID)

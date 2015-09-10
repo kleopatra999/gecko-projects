@@ -5,8 +5,6 @@
  * Tests if the performance tool can import profiler data from the
  * original profiler tool (Performance Recording v1, and Profiler data v2) and the correct views and graphs are loaded.
  */
-let RecordingUtils = devtools.require("devtools/performance/recording-utils");
-
 let TICKS_DATA = (function () {
   let ticks = [];
   for (let i = 0; i < 100; i++) {
@@ -108,10 +106,10 @@ let test = Task.async(function*() {
   ok(true, "The imported data was re-rendered.");
 
   // Ensure that only framerate and js calltree/flamegraph view are available
-  is($("#overview-pane").hidden, false, "overview graph container still shown");
-  is($("#memory-overview").hidden, true, "memory graph hidden");
-  is($("#markers-overview").hidden, true, "markers overview graph hidden");
-  is($("#time-framerate").hidden, false, "fps graph shown");
+  is(isVisible($("#overview-pane")), true, "overview graph container still shown");
+  is(isVisible($("#memory-overview")), false, "memory graph hidden");
+  is(isVisible($("#markers-overview")), false, "markers overview graph hidden");
+  is(isVisible($("#time-framerate")), true, "fps graph shown");
   is($("#select-waterfall-view").hidden, true, "waterfall button hidden");
   is($("#select-js-calltree-view").hidden, false, "jscalltree button shown");
   is($("#select-js-flamegraph-view").hidden, false, "jsflamegraph button shown");
@@ -130,7 +128,7 @@ let test = Task.async(function*() {
     memory: [].toSource(),
     ticks: TICKS_DATA.toSource(),
     profile: RecordingUtils.deflateProfile(JSON.parse(JSON.stringify(PROFILER_DATA))).toSource(),
-    allocations: ({sites:[], timestamps:[], frames:[], counts:[]}).toSource(),
+    allocations: ({sites:[], timestamps:[], frames:[], sizes: []}).toSource(),
     withTicks: true,
     withMemory: false,
     sampleFrequency: void 0

@@ -11,6 +11,7 @@
 
 #include "nsAttrAndChildArray.h"
 
+#include "mozilla/CheckedInt.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/MemoryReporting.h"
 
@@ -22,6 +23,8 @@
 #include "nsUnicharUtils.h"
 #include "nsAutoPtr.h"
 #include "nsContentUtils.h" // nsAutoScriptBlocker
+
+using mozilla::CheckedUint32;
 
 /*
 CACHE_POINTER_SHIFT indicates how many steps to downshift the |this| pointer.
@@ -387,14 +390,12 @@ nsAttrAndChildArray::AttrAt(uint32_t aPos) const
 }
 
 nsresult
-nsAttrAndChildArray::SetAndTakeAttr(nsIAtom* aLocalName, nsAttrValue& aValue)
+nsAttrAndChildArray::SetAndSwapAttr(nsIAtom* aLocalName, nsAttrValue& aValue)
 {
   uint32_t i, slotCount = AttrSlotCount();
   for (i = 0; i < slotCount && AttrSlotIsTaken(i); ++i) {
     if (ATTRS(mImpl)[i].mName.Equals(aLocalName)) {
-      ATTRS(mImpl)[i].mValue.Reset();
       ATTRS(mImpl)[i].mValue.SwapValueWith(aValue);
-
       return NS_OK;
     }
   }
@@ -414,12 +415,12 @@ nsAttrAndChildArray::SetAndTakeAttr(nsIAtom* aLocalName, nsAttrValue& aValue)
 }
 
 nsresult
-nsAttrAndChildArray::SetAndTakeAttr(mozilla::dom::NodeInfo* aName, nsAttrValue& aValue)
+nsAttrAndChildArray::SetAndSwapAttr(mozilla::dom::NodeInfo* aName, nsAttrValue& aValue)
 {
   int32_t namespaceID = aName->NamespaceID();
   nsIAtom* localName = aName->NameAtom();
   if (namespaceID == kNameSpaceID_None) {
-    return SetAndTakeAttr(localName, aValue);
+    return SetAndSwapAttr(localName, aValue);
   }
 
   uint32_t i, slotCount = AttrSlotCount();

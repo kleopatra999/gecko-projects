@@ -265,6 +265,12 @@ public:
                                 const nsAString& aMediaAttr,
                                 nsAString& aResult);
 
+  /**
+   * If this image's src pointers to an SVG document, flush the SVG document's
+   * use counters to telemetry.  Only used for testing purposes.
+   */
+  void FlushUseCounters();
+
 protected:
   virtual ~HTMLImageElement();
 
@@ -334,7 +340,7 @@ protected:
   void UpdateFormOwner();
 
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
+                                 nsAttrValueOrString* aValue,
                                  bool aNotify) override;
 
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,

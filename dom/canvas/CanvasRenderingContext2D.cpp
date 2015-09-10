@@ -76,6 +76,7 @@
 #include "mozilla/CheckedInt.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/ImageBitmap.h"
 #include "mozilla/dom/ImageData.h"
 #include "mozilla/dom/PBrowserParent.h"
 #include "mozilla/dom/ToJSValue.h"
@@ -1013,7 +1014,7 @@ CanvasRenderingContext2D::ParseColor(const nsAString& aString,
     *aColor = value.GetColorValue();
   } else {
     // otherwise resolve it
-    nsIPresShell* presShell = GetPresShell();
+    nsCOMPtr<nsIPresShell> presShell = GetPresShell();
     nsRefPtr<nsStyleContext> parentContext;
     if (mCanvasElement && mCanvasElement->IsInDoc()) {
       // Inherit from the canvas element.
@@ -1203,6 +1204,9 @@ bool CanvasRenderingContext2D::SwitchRenderingMode(RenderingMode aRenderingMode)
     transform = mTarget->GetTransform();
   } else {
     MOZ_ASSERT(mBufferProvider);
+    // When mBufferProvider is true but we have no mTarget, our current state's
+    // transform is always valid. See ReturnTarget().
+    transform = CurrentState().transform;
     snapshot = mBufferProvider->GetSnapshot();
   }
   mTarget = nullptr;
@@ -1727,7 +1731,11 @@ CanvasRenderingContext2D::Scale(double x, double y, ErrorResult& error)
   }
 
   Matrix newMatrix = mTarget->GetTransform();
-  mTarget->SetTransform(newMatrix.PreScale(x, y));
+  newMatrix.PreScale(x, y);
+  if (!newMatrix.IsFinite()) {
+    return;
+  }
+  mTarget->SetTransform(newMatrix);
 }
 
 void
@@ -1739,8 +1747,11 @@ CanvasRenderingContext2D::Rotate(double angle, ErrorResult& error)
     return;
   }
 
-  Matrix rotation = Matrix::Rotation(angle);
-  mTarget->SetTransform(rotation * mTarget->GetTransform());
+  Matrix newMatrix = Matrix::Rotation(angle) * mTarget->GetTransform();
+  if (!newMatrix.IsFinite()) {
+    return;
+  }
+  mTarget->SetTransform(newMatrix);
 }
 
 void
@@ -1752,7 +1763,12 @@ CanvasRenderingContext2D::Translate(double x, double y, ErrorResult& error)
     return;
   }
 
-  mTarget->SetTransform(Matrix(mTarget->GetTransform()).PreTranslate(x, y));
+  Matrix newMatrix = mTarget->GetTransform();
+  newMatrix.PreTranslate(x, y);
+  if (!newMatrix.IsFinite()) {
+    return;
+  }
+  mTarget->SetTransform(newMatrix);
 }
 
 void
@@ -1766,8 +1782,12 @@ CanvasRenderingContext2D::Transform(double m11, double m12, double m21,
     return;
   }
 
-  Matrix matrix(m11, m12, m21, m22, dx, dy);
-  mTarget->SetTransform(matrix * mTarget->GetTransform());
+  Matrix newMatrix(m11, m12, m21, m22, dx, dy);
+  newMatrix *= mTarget->GetTransform();
+  if (!newMatrix.IsFinite()) {
+    return;
+  }
+  mTarget->SetTransform(newMatrix);
 }
 
 void
@@ -1783,6 +1803,9 @@ CanvasRenderingContext2D::SetTransform(double m11, double m12,
   }
 
   Matrix matrix(m11, m12, m21, m22, dx, dy);
+  if (!matrix.IsFinite()) {
+    return;
+  }
   mTarget->SetTransform(matrix);
 }
 
@@ -1988,7 +2011,7 @@ CanvasRenderingContext2D::CreateRadialGradient(double x0, double y0, double r0,
 }
 
 already_AddRefed<CanvasPattern>
-CanvasRenderingContext2D::CreatePattern(const HTMLImageOrCanvasOrVideoElement& element,
+CanvasRenderingContext2D::CreatePattern(const CanvasImageSource& source,
                                         const nsAString& repeat,
                                         ErrorResult& error)
 {
@@ -2009,8 +2032,8 @@ CanvasRenderingContext2D::CreatePattern(const HTMLImageOrCanvasOrVideoElement& e
   }
 
   Element* htmlElement;
-  if (element.IsHTMLCanvasElement()) {
-    HTMLCanvasElement* canvas = &element.GetAsHTMLCanvasElement();
+  if (source.IsHTMLCanvasElement()) {
+    HTMLCanvasElement* canvas = &source.GetAsHTMLCanvasElement();
     htmlElement = canvas;
 
     nsIntSize size = canvas->GetSize();
@@ -2030,16 +2053,29 @@ CanvasRenderingContext2D::CreatePattern(const HTMLImageOrCanvasOrVideoElement& e
 
       return pat.forget();
     }
-  } else if (element.IsHTMLImageElement()) {
-    HTMLImageElement* img = &element.GetAsHTMLImageElement();
+  } else if (source.IsHTMLImageElement()) {
+    HTMLImageElement* img = &source.GetAsHTMLImageElement();
     if (img->IntrinsicState().HasState(NS_EVENT_STATE_BROKEN)) {
       error.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
       return nullptr;
     }
 
     htmlElement = img;
+  } else if (source.IsHTMLVideoElement()) {
+    htmlElement = &source.GetAsHTMLVideoElement();
   } else {
-    htmlElement = &element.GetAsHTMLVideoElement();
+    // Special case for ImageBitmap
+    ImageBitmap& imgBitmap = source.GetAsImageBitmap();
+    EnsureTarget();
+    RefPtr<SourceSurface> srcSurf = imgBitmap.PrepareForDrawTarget(mTarget);
+
+    // An ImageBitmap never taints others so we set principalForSecurityCheck to
+    // nullptr and set CORSUsed to true for passing the security check in
+    // CanvasUtils::DoDrawImageSecurityCheck().
+    nsRefPtr<CanvasPattern> pat =
+      new CanvasPattern(this, srcSurf, repeatMode, nullptr, false, true);
+
+    return pat.forget();
   }
 
   EnsureTarget();
@@ -2137,9 +2173,15 @@ GetFontParentStyleContext(Element* aElement, nsIPresShell* presShell,
                           ErrorResult& error)
 {
   if (aElement && aElement->IsInDoc()) {
-    // inherit from the canvas element
-    return nsComputedDOMStyle::GetStyleContextForElement(aElement, nullptr,
-                                                         presShell);
+    // Inherit from the canvas element.
+    nsRefPtr<nsStyleContext> result =
+      nsComputedDOMStyle::GetStyleContextForElement(aElement, nullptr,
+                                                    presShell);
+    if (!result) {
+      error.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+    return result.forget();
   }
 
   // otherwise inherit from default (10px sans-serif)
@@ -2154,7 +2196,14 @@ GetFontParentStyleContext(Element* aElement, nsIPresShell* presShell,
 
   nsTArray<nsCOMPtr<nsIStyleRule>> parentRules;
   parentRules.AppendElement(parentRule);
-  return presShell->StyleSet()->ResolveStyleForRules(nullptr, parentRules);
+  nsRefPtr<nsStyleContext> result =
+    presShell->StyleSet()->ResolveStyleForRules(nullptr, parentRules);
+
+  if (!result) {
+    error.Throw(NS_ERROR_FAILURE);
+    return nullptr;
+  }
+  return result.forget();
 }
 
 static bool
@@ -2207,6 +2256,12 @@ GetFontStyleContext(Element* aElement, const nsAString& aFont,
     error.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
+
+  MOZ_RELEASE_ASSERT(parentContext,
+                     "GetFontParentStyleContext should have returned an error if it couldn't get a parent context.");
+
+  MOZ_ASSERT(!presShell->IsDestroying(),
+             "GetFontParentStyleContext should have returned an error if the presshell is being destroyed.");
 
   nsTArray<nsCOMPtr<nsIStyleRule>> rules;
   rules.AppendElement(rule);
@@ -2285,7 +2340,7 @@ CanvasRenderingContext2D::ParseFilter(const nsAString& aString,
     return false;
   }
 
-  nsIPresShell* presShell = GetPresShell();
+  nsCOMPtr<nsIPresShell> presShell = GetPresShell();
   if (!presShell) {
     error.Throw(NS_ERROR_FAILURE);
     return false;
@@ -3021,6 +3076,13 @@ void
 CanvasRenderingContext2D::SetFont(const nsAString& font,
                                   ErrorResult& error)
 {
+  SetFontInternal(font, error);
+}
+
+bool
+CanvasRenderingContext2D::SetFontInternal(const nsAString& font,
+                                          ErrorResult& error)
+{
   /*
     * If font is defined with relative units (e.g. ems) and the parent
     * style context changes in between calls, setting the font to the
@@ -3032,20 +3094,20 @@ CanvasRenderingContext2D::SetFont(const nsAString& font,
   if (!mCanvasElement && !mDocShell) {
     NS_WARNING("Canvas element must be non-null or a docshell must be provided");
     error.Throw(NS_ERROR_FAILURE);
-    return;
+    return false;
   }
 
-  nsIPresShell* presShell = GetPresShell();
+  nsCOMPtr<nsIPresShell> presShell = GetPresShell();
   if (!presShell) {
     error.Throw(NS_ERROR_FAILURE);
-    return;
+    return false;
   }
 
   nsString usedFont;
   nsRefPtr<nsStyleContext> sc =
     GetFontStyleContext(mCanvasElement, font, presShell, usedFont, error);
   if (!sc) {
-    return;
+    return false;
   }
 
   const nsStyleFont* fontStyle = sc->StyleFont();
@@ -3085,6 +3147,8 @@ CanvasRenderingContext2D::SetFont(const nsAString& font,
   CurrentState().fontFont.size = fontStyle->mSize;
   CurrentState().fontLanguage = fontStyle->mLanguage;
   CurrentState().fontExplicitLanguage = fontStyle->mExplicitLanguage;
+
+  return true;
 }
 
 void
@@ -3679,7 +3743,12 @@ CanvasRenderingContext2D::DrawOrMeasureText(const nsAString& aRawText,
   }
 
   gfxFontGroup* currentFontStyle = GetCurrentFontStyle();
-  NS_ASSERTION(currentFontStyle, "font group is null");
+  if (!currentFontStyle) {
+    return NS_ERROR_FAILURE;
+  }
+
+  MOZ_ASSERT(!presShell->IsDestroying(),
+             "GetCurrentFontStyle() should have returned null if the presshell is being destroyed");
 
   // ensure user font set is up to date
   currentFontStyle->
@@ -3877,8 +3946,9 @@ gfxFontGroup *CanvasRenderingContext2D::GetCurrentFontStyle()
     ErrorResult err;
     NS_NAMED_LITERAL_STRING(kDefaultFontStyle, "10px sans-serif");
     static float kDefaultFontSize = 10.0;
-    SetFont(kDefaultFontStyle, err);
-    if (err.Failed()) {
+    nsCOMPtr<nsIPresShell> presShell = GetPresShell();
+    bool fontUpdated = SetFontInternal(kDefaultFontStyle, err);
+    if (err.Failed() || !fontUpdated) {
       gfxFontStyle style;
       style.size = kDefaultFontSize;
       CurrentState().fontGroup =
@@ -3887,9 +3957,7 @@ gfxFontGroup *CanvasRenderingContext2D::GetCurrentFontStyle()
                                                     nullptr);
       if (CurrentState().fontGroup) {
         CurrentState().font = kDefaultFontStyle;
-
-        nsIPresShell* presShell = GetPresShell();
-        if (presShell) {
+        if (presShell && !presShell->IsDestroying()) {
           CurrentState().fontGroup->SetTextPerfMetrics(
             presShell->GetPresContext()->GetTextPerfMetrics());
         }
@@ -3897,7 +3965,6 @@ gfxFontGroup *CanvasRenderingContext2D::GetCurrentFontStyle()
         NS_ERROR("Default canvas font is invalid");
       }
     }
-
   }
 
   return CurrentState().fontGroup;
@@ -4238,7 +4305,7 @@ CanvasRenderingContext2D::CachedSurfaceFromElement(Element* aElement)
 // are all passed in.
 
 void
-CanvasRenderingContext2D::DrawImage(const HTMLImageOrCanvasOrVideoElement& image,
+CanvasRenderingContext2D::DrawImage(const CanvasImageSource& image,
                                     double sx, double sy, double sw,
                                     double sh, double dx, double dy,
                                     double dw, double dh,
@@ -4254,7 +4321,7 @@ CanvasRenderingContext2D::DrawImage(const HTMLImageOrCanvasOrVideoElement& image
   RefPtr<SourceSurface> srcSurf;
   gfx::IntSize imgSize;
 
-  Element* element;
+  Element* element = nullptr;
 
   EnsureTarget();
   if (image.IsHTMLCanvasElement()) {
@@ -4265,7 +4332,17 @@ CanvasRenderingContext2D::DrawImage(const HTMLImageOrCanvasOrVideoElement& image
       error.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
       return;
     }
-  } else {
+  } else if (image.IsImageBitmap()) {
+    ImageBitmap& imageBitmap = image.GetAsImageBitmap();
+    srcSurf = imageBitmap.PrepareForDrawTarget(mTarget);
+
+    if (!srcSurf) {
+      return;
+    }
+
+    imgSize = gfx::IntSize(imageBitmap.Width(), imageBitmap.Height());
+  }
+  else {
     if (image.IsHTMLImageElement()) {
       HTMLImageElement* img = &image.GetAsHTMLImageElement();
       element = img;
@@ -5422,12 +5499,7 @@ CanvasRenderingContext2D::GetBufferProvider(LayerManager* aManager)
     return nullptr;
   }
 
-  mBufferProvider = aManager->CreatePersistentBufferProvider(mTarget->GetSize(), mTarget->GetFormat());
-
-  RefPtr<SourceSurface> surf = mTarget->Snapshot();
-
-  mTarget = mBufferProvider->GetDT(IntRect(IntPoint(), mTarget->GetSize()));
-  mTarget->CopySurface(surf, IntRect(IntPoint(), mTarget->GetSize()), IntPoint());
+  mBufferProvider = new PersistentBufferProviderBasic(mTarget);
 
   return mBufferProvider;
 }

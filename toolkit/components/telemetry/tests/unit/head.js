@@ -8,11 +8,15 @@ Cu.import("resource://gre/modules/Services.jsm", this);
 Cu.import("resource://gre/modules/PromiseUtils.jsm", this);
 Cu.import("resource://gre/modules/Task.jsm", this);
 Cu.import("resource://testing-common/httpd.js", this);
+Cu.import("resource://gre/modules/AppConstants.jsm");
 
-const gIsWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
-const gIsMac = ("@mozilla.org/xpcom/mac-utils;1" in Cc);
-const gIsAndroid =  ("@mozilla.org/android/bridge;1" in Cc);
-const gIsGonk = ("@mozilla.org/cellbroadcast/gonkservice;1" in Cc);
+const gIsWindows = AppConstants.platform == "win";
+const gIsMac = AppConstants.platform == "macosx";
+const gIsAndroid = AppConstants.platform == "android";
+const gIsGonk = AppConstants.platform == "gonk";
+const gIsLinux = AppConstants.platform == "linux";
+
+const Telemetry = Cc["@mozilla.org/base/telemetry;1"].getService(Ci.nsITelemetry);
 
 const MILLISECONDS_PER_MINUTE = 60 * 1000;
 const MILLISECONDS_PER_HOUR = 60 * MILLISECONDS_PER_MINUTE;
@@ -272,6 +276,16 @@ function fakeGeneratePingId(func) {
   module.Policy.generatePingId = func;
 }
 
+function fakeCachedClientId(uuid) {
+  let module = Cu.import("resource://gre/modules/TelemetryController.jsm");
+  module.Policy.getCachedClientID = () => uuid;
+}
+
+function fakeIsUnifiedOptin(isOptin) {
+  let module = Cu.import("resource://gre/modules/TelemetryController.jsm");
+  module.Policy.isUnifiedOptin = () => isOptin;
+}
+
 // Return a date that is |offset| ms in the future from |date|.
 function futureDate(date, offset) {
   return new Date(date.getTime() + offset);
@@ -287,6 +301,27 @@ function promiseRejects(promise) {
   return promise.then(() => false, () => true);
 }
 
+// Generates a random string of at least a specific length.
+function generateRandomString(length) {
+  let string = "";
+
+  while (string.length < length) {
+    string += Math.random().toString(36);
+  }
+
+  return string.substring(0, length);
+}
+
+// Short-hand for retrieving the histogram with that id.
+function getHistogram(histogramId) {
+  return Telemetry.getHistogramById(histogramId);
+}
+
+// Short-hand for retrieving the snapshot of the Histogram with that id.
+function getSnapshot(histogramId) {
+  return Telemetry.getHistogramById(histogramId).snapshot();
+}
+
 if (runningInParent) {
   // Set logging preferences for all the tests.
   Services.prefs.setCharPref("toolkit.telemetry.log.level", "Trace");
@@ -294,6 +329,8 @@ if (runningInParent) {
   Services.prefs.setBoolPref("toolkit.telemetry.archive.enabled", true);
   // Telemetry xpcshell tests cannot show the infobar.
   Services.prefs.setBoolPref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
+  // FHR uploads should be enabled.
+  Services.prefs.setBoolPref("datareporting.healthreport.uploadEnabled", true);
 
   fakePingSendTimer((callback, timeout) => {
     Services.tm.mainThread.dispatch(() => callback(), Ci.nsIThread.DISPATCH_NORMAL);

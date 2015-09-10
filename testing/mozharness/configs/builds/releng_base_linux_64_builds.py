@@ -30,7 +30,7 @@ config = {
     'app_ini_path': '%(obj_dir)s/dist/bin/application.ini',
     # decides whether we want to use moz_sign_cmd in env
     'enable_signing': True,
-    'purge_skip': ['info', 'rel-*:45d', 'tb-rel-*:45d'],
+    'purge_skip': ['info', 'rel-*:10d', 'tb-rel-*:10d'],
     'purge_basedirs':  ["/mock/users/cltbld/home/cltbld/build"],
     # mock shtuff
     'mock_mozilla_dir':  '/builds/mock_mozilla',
@@ -62,6 +62,7 @@ config = {
     'base_name': 'Linux_x86-64_%(branch)s',
     'platform': 'linux64',
     'stage_platform': 'linux64',
+    'publish_nightly_en_US_routes': True,
     'use_platform_in_symbols_extra_buildid': True,
     'env': {
         'MOZBUILD_STATE_PATH': os.path.join(os.getcwd(), '.mozbuild'),

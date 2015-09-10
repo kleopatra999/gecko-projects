@@ -6,14 +6,14 @@
 
 /**
  * Tests the behaviour of the copy styles context menu items in the rule
- * view
+ * view.
  */
 
 XPCOMUtils.defineLazyGetter(this, "osString", function() {
   return Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime).OS;
 });
 
-let TEST_URI = TEST_URL_ROOT + "doc_copystyles.html";
+const TEST_URI = TEST_URL_ROOT + "doc_copystyles.html";
 
 add_task(function*() {
   yield addTab(TEST_URI);
@@ -196,7 +196,10 @@ function* checkCopyStyle(view, node, menuItem, expectedPattern, hidden) {
     {button: 2, type: "contextmenu"}, view.styleWindow);
   yield onPopup;
 
-  is(view._contextmenu.menuitemCopy.hidden, true, "Copy hidden is as expected: true");
+  ok(view._contextmenu.menuitemCopy.disabled,
+    "Copy disabled is as expected: true");
+  ok(!view._contextmenu.menuitemCopy.hidden,
+    "Copy hidden is as expected: false");
 
   is(view._contextmenu.menuitemCopyLocation.hidden,
      hidden.copyLocation,

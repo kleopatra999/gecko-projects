@@ -11,9 +11,8 @@ Cu.import("resource:///modules/devtools/SideMenuWidget.jsm");
 Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
 Cu.import("resource://gre/modules/devtools/Console.jsm");
 
-const devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
-const { require } = devtools;
-const promise = Cu.import("resource://gre/modules/Promise.jsm", {}).Promise;
+const { require } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+const promise = require("promise");
 const EventEmitter = require("devtools/toolkit/event-emitter");
 const { CallWatcherFront } = require("devtools/server/actors/call-watcher");
 const { CanvasFront } = require("devtools/server/actors/canvas");

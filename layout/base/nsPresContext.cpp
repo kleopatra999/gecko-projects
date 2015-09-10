@@ -57,7 +57,7 @@
 #include "nsRefreshDriver.h"
 #include "Layers.h"
 #include "ClientLayerManager.h"
-#include "nsIDOMEvent.h"
+#include "mozilla/dom/NotifyPaintEvent.h"
 #include "gfxPrefs.h"
 #include "nsIDOMChromeWindow.h"
 #include "nsFrameLoader.h"
@@ -360,6 +360,7 @@ nsPresContext::LastRelease()
 NS_IMPL_CYCLE_COLLECTION_CLASS(nsPresContext)
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsPresContext)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAnimationManager);
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocument);
   // NS_IMPL_CYCLE_COLLECTION_TRAVERSE_RAWPTR(mDeviceContext); // not xpcom
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEventManager);
@@ -372,6 +373,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsPresContext)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsPresContext)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAnimationManager);
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument);
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDeviceContext); // worth bothering?
   // NS_RELEASE(tmp->mLanguage); // an atom
@@ -926,16 +928,16 @@ nsPresContext::PreferenceChanged(const char* aPrefName)
   // we use a zero-delay timer to coalesce multiple pref updates
   if (!mPrefChangedTimer)
   {
-    mPrefChangedTimer = do_CreateInstance("@mozilla.org/timer;1");
-    if (!mPrefChangedTimer)
-      return;
     // We will end up calling InvalidatePreferenceSheets one from each pres
     // context, but all it's doing is clearing its cached sheet pointers,
     // so it won't be wastefully recreating the sheet multiple times.
     // The first pres context that has its mPrefChangedTimer called will
     // be the one to cause the reconstruction of the pref style sheet.
     nsLayoutStylesheetCache::InvalidatePreferenceSheets();
-    mPrefChangedTimer->InitWithFuncCallback(nsPresContext::PrefChangedUpdateTimerCallback, (void*)this, 0, nsITimer::TYPE_ONE_SHOT);
+    mPrefChangedTimer = CreateTimer(PrefChangedUpdateTimerCallback, 0);
+    if (!mPrefChangedTimer) {
+      return;
+    }
   }
   if (prefName.EqualsLiteral("nglayout.debug.paint_flashing") ||
       prefName.EqualsLiteral("nglayout.debug.paint_flashing_chrome")) {
@@ -948,6 +950,12 @@ void
 nsPresContext::UpdateAfterPreferencesChanged()
 {
   mPrefChangedTimer = nullptr;
+
+  if (!mContainer) {
+    // Delay updating until there is a container
+    mNeedsPrefUpdate = true;
+    return;
+  }
 
   nsCOMPtr<nsIDocShellTreeItem> docShell(mContainer);
   if (docShell && nsIDocShellTreeItem::typeChrome == docShell->ItemType()) {
@@ -1570,7 +1578,15 @@ void
 nsPresContext::SetContainer(nsIDocShell* aDocShell)
 {
   if (aDocShell) {
+    NS_ASSERTION(!(mContainer && mNeedsPrefUpdate),
+                 "Should only need pref update if mContainer is null.");
     mContainer = static_cast<nsDocShell*>(aDocShell);
+    if (mNeedsPrefUpdate) {
+      if (!mPrefChangedTimer) {
+        mPrefChangedTimer = CreateTimer(PrefChangedUpdateTimerCallback, 0);
+      }
+      mNeedsPrefUpdate = false;
+    }
   } else {
     mContainer = WeakPtr<nsDocShell>();
   }
@@ -2099,7 +2115,8 @@ nsPresContext::UpdateIsChrome()
 }
 
 /* virtual */ bool
-nsPresContext::HasAuthorSpecifiedRules(nsIFrame *aFrame, uint32_t ruleTypeMask) const
+nsPresContext::HasAuthorSpecifiedRules(const nsIFrame *aFrame,
+                                       uint32_t ruleTypeMask) const
 {
   return
     nsRuleNode::HasAuthorSpecifiedRules(aFrame->StyleContext(),
@@ -2239,23 +2256,21 @@ nsPresContext::FireDOMPaintEvent(nsInvalidateRequestList* aList)
   }
   // Events sent to the window get propagated to the chrome event handler
   // automatically.
-  nsCOMPtr<nsIDOMEvent> event;
+  //
   // This will empty our list in case dispatching the event causes more damage
   // (hopefully it won't, or we're likely to get an infinite loop! At least
   // it won't be blocking app execution though).
-  NS_NewDOMNotifyPaintEvent(getter_AddRefs(event), eventTarget, this, nullptr,
-                            NS_AFTERPAINT, aList);
-  if (!event) {
-    return;
-  }
+  nsRefPtr<NotifyPaintEvent> event =
+    NS_NewDOMNotifyPaintEvent(eventTarget, this, nullptr, NS_AFTERPAINT,
+                              aList);
 
   // Even if we're not telling the window about the event (so eventTarget is
   // the chrome event handler, not the window), the window is still
   // logically the event target.
   event->SetTarget(eventTarget);
   event->SetTrusted(true);
-  EventDispatcher::DispatchDOMEvent(dispatchTarget, nullptr, event, this,
-                                    nullptr);
+  EventDispatcher::DispatchDOMEvent(dispatchTarget, nullptr,
+                                    static_cast<Event*>(event), this, nullptr);
 }
 
 static bool
@@ -2529,6 +2544,22 @@ bool
 nsPresContext::HasCachedStyleData()
 {
   return mShell && mShell->StyleSet()->HasCachedStyleData();
+}
+
+already_AddRefed<nsITimer>
+nsPresContext::CreateTimer(nsTimerCallbackFunc aCallback,
+                           uint32_t aDelay)
+{
+  nsCOMPtr<nsITimer> timer = do_CreateInstance("@mozilla.org/timer;1");
+  if (timer) {
+    nsresult rv = timer->InitWithFuncCallback(aCallback, this, aDelay,
+                                              nsITimer::TYPE_ONE_SHOT);
+    if (NS_SUCCEEDED(rv)) {
+      return timer.forget();
+    }
+  }
+
+  return nullptr;
 }
 
 static bool sGotInterruptEnv = false;
@@ -2920,13 +2951,8 @@ nsRootPresContext::InitApplyPluginGeometryTimer()
   // so set a backup timer to do this too.  We want to make sure this
   // won't fire before our normal paint notifications, if those would
   // update the geometry, so set it for double the refresh driver interval.
-  mApplyPluginGeometryTimer = do_CreateInstance("@mozilla.org/timer;1");
-  if (mApplyPluginGeometryTimer) {
-    mApplyPluginGeometryTimer->
-      InitWithFuncCallback(ApplyPluginGeometryUpdatesCallback, this,
-                           nsRefreshDriver::DefaultInterval() * 2,
-                           nsITimer::TYPE_ONE_SHOT);
-  }
+  mApplyPluginGeometryTimer = CreateTimer(ApplyPluginGeometryUpdatesCallback,
+                                          nsRefreshDriver::DefaultInterval() * 2);
 }
 
 void
@@ -3096,11 +3122,8 @@ nsRootPresContext::EnsureEventualDidPaintEvent()
 {
   if (mNotifyDidPaintTimer)
     return;
-  mNotifyDidPaintTimer = do_CreateInstance("@mozilla.org/timer;1");
-  if (!mNotifyDidPaintTimer)
-    return;
-  mNotifyDidPaintTimer->InitWithFuncCallback(NotifyDidPaintForSubtreeCallback,
-                                             (void*)this, 100, nsITimer::TYPE_ONE_SHOT);
+
+  mNotifyDidPaintTimer = CreateTimer(NotifyDidPaintForSubtreeCallback, 100);
 }
 
 void

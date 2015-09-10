@@ -91,7 +91,7 @@ public:
   }
 
   void
-  RespondWith(const ResponseOrPromise& aArg, ErrorResult& aRv);
+  RespondWith(Promise& aArg, ErrorResult& aRv);
 
   already_AddRefed<Promise>
   ForwardTo(const nsAString& aUrl);
@@ -102,7 +102,7 @@ public:
 
 class ExtendableEvent : public Event
 {
-  nsRefPtr<Promise> mPromise;
+  nsTArray<nsRefPtr<Promise>> mPromises;
 
 protected:
   explicit ExtendableEvent(mozilla::dom::EventTarget* aOwner);
@@ -141,14 +141,10 @@ public:
   }
 
   void
-  WaitUntil(Promise& aPromise);
+  WaitUntil(Promise& aPromise, ErrorResult& aRv);
 
   already_AddRefed<Promise>
-  GetPromise() const
-  {
-    nsRefPtr<Promise> p = mPromise;
-    return p.forget();
-  }
+  GetPromise();
 
   virtual ExtendableEvent* AsExtendableEvent() override
   {
@@ -189,7 +185,8 @@ private:
 
 class PushEvent final : public ExtendableEvent
 {
-  nsRefPtr<PushMessageData> mData;
+  // FIXME(nsm): Bug 1149195.
+  // nsRefPtr<PushMessageData> mData;
   nsMainThreadPtrHandle<ServiceWorker> mServiceWorker;
 
 protected:
@@ -197,8 +194,8 @@ protected:
   ~PushEvent() {}
 
 public:
-  NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(PushEvent, ExtendableEvent)
+  // FIXME(nsm): Bug 1149195.
+  // Add cycle collection macros once data is re-exposed.
   NS_FORWARD_TO_EVENT
 
   virtual JSObject* WrapObjectInternal(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
@@ -215,9 +212,10 @@ public:
     bool trusted = e->Init(aOwner);
     e->InitEvent(aType, aOptions.mBubbles, aOptions.mCancelable);
     e->SetTrusted(trusted);
-    if(aOptions.mData.WasPassed()){
-      e->mData = new PushMessageData(aOptions.mData.Value());
-    }
+    // FIXME(nsm): Bug 1149195.
+    //if(aOptions.mData.WasPassed()){
+    //  e->mData = new PushMessageData(aOptions.mData.Value());
+    //}
     return e.forget();
   }
 
@@ -238,7 +236,9 @@ public:
 
   PushMessageData* Data()
   {
-    return mData;
+    // FIXME(nsm): Bug 1149195.
+    MOZ_CRASH("Should not be called!");
+    return nullptr;
   }
 };
 #endif /* ! MOZ_SIMPLEPUSH */

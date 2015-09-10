@@ -37,6 +37,7 @@ class Rooted;
 class JS_FRIEND_API(CompileOptions);
 class JS_FRIEND_API(ReadOnlyCompileOptions);
 class JS_FRIEND_API(OwningCompileOptions);
+class JS_FRIEND_API(TransitiveCompileOptions);
 class JS_PUBLIC_API(CompartmentOptions);
 
 class Value;
@@ -47,7 +48,6 @@ struct Zone;
 namespace js {
 struct ContextFriendFields;
 class RootLists;
-class Shape;
 } // namespace js
 
 /*
@@ -94,7 +94,6 @@ struct JSCrossCompartmentCall;
 class JSErrorReport;
 struct JSExceptionState;
 struct JSFunctionSpec;
-struct JSIdArray;
 struct JSLocaleCallbacks;
 struct JSObjectMap;
 struct JSPrincipals;
@@ -219,17 +218,10 @@ class JS_PUBLIC_API(AutoGCRooter)
     enum {
         VALARRAY =     -2, /* js::AutoValueArray */
         PARSER =       -3, /* js::frontend::Parser */
-        SHAPEVECTOR =  -4, /* js::AutoShapeVector */
-        IDARRAY =      -6, /* js::AutoIdArray */
-        DESCVECTOR =   -7, /* js::AutoPropertyDescriptorVector */
         VALVECTOR =   -10, /* js::AutoValueVector */
         IDVECTOR =    -11, /* js::AutoIdVector */
-        IDVALVECTOR = -12, /* js::AutoIdValueVector */
         OBJVECTOR =   -14, /* js::AutoObjectVector */
-        STRINGVECTOR =-15, /* js::AutoStringVector */
         SCRIPTVECTOR =-16, /* js::AutoScriptVector */
-        NAMEVECTOR =  -17, /* js::AutoNameVector */
-        HASHABLEVALUE=-18, /* js::HashableValue */
         IONMASM =     -19, /* js::jit::MacroAssembler */
         WRAPVECTOR =  -20, /* js::AutoWrapperVector */
         WRAPPER =     -21, /* js::AutoWrapperRooter */
@@ -241,9 +233,6 @@ class JS_PUBLIC_API(AutoGCRooter)
     static ptrdiff_t GetTag(const jsid& id) { return IDVECTOR; }
     static ptrdiff_t GetTag(JSObject* obj) { return OBJVECTOR; }
     static ptrdiff_t GetTag(JSScript* script) { return SCRIPTVECTOR; }
-    static ptrdiff_t GetTag(JSString* string) { return STRINGVECTOR; }
-    static ptrdiff_t GetTag(js::Shape* shape) { return SHAPEVECTOR; }
-    static ptrdiff_t GetTag(const JSPropertyDescriptor& pd) { return DESCVECTOR; }
 
   private:
     AutoGCRooter ** const stackTop;
@@ -285,8 +274,7 @@ enum ThingRootKind
     THING_ROOT_LAZY_SCRIPT,
     THING_ROOT_ID,
     THING_ROOT_VALUE,
-    THING_ROOT_STATIC_TRACEABLE,
-    THING_ROOT_DYNAMIC_TRACEABLE,
+    THING_ROOT_TRACEABLE,
     THING_ROOT_LIMIT
 };
 

@@ -21,10 +21,10 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
 Cu.import("resource://gre/modules/devtools/event-emitter.js");
-const { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
-const DevToolsUtils = devtools.require("devtools/toolkit/DevToolsUtils");
 Cu.import("resource://gre/modules/Task.jsm");
-let {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
+const { require } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
+const promise = require("promise");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PluralForm",
   "resource://gre/modules/PluralForm.jsm");
@@ -35,7 +35,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "clipboardHelper",
 
 Object.defineProperty(this, "WebConsoleUtils", {
   get: function() {
-    return devtools.require("devtools/toolkit/webconsole/utils").Utils;
+    return require("devtools/toolkit/webconsole/utils").Utils;
   },
   configurable: true,
   enumerable: true
@@ -43,7 +43,7 @@ Object.defineProperty(this, "WebConsoleUtils", {
 
 Object.defineProperty(this, "NetworkHelper", {
   get: function() {
-    return devtools.require("devtools/toolkit/webconsole/network-helper");
+    return require("devtools/toolkit/webconsole/network-helper");
   },
   configurable: true,
   enumerable: true
@@ -547,7 +547,7 @@ VariablesView.prototype = {
    *        The variable or property to search for.
    */
   _doSearch: function(aToken) {
-    if (this.controller.supportsSearch()) {
+    if (this.controller && this.controller.supportsSearch()) {
       // Retrieve the main Scope in which we add attributes
       let scope = this._store[0]._store.get("");
       if (!aToken) {

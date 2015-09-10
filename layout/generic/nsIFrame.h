@@ -34,6 +34,7 @@
 #include "nsITheme.h"
 #include "nsLayoutUtils.h"
 #include "nsQueryFrame.h"
+#include "nsStringGlue.h"
 #include "nsStyleContext.h"
 #include "nsStyleStruct.h"
 
@@ -147,6 +148,12 @@ typedef uint32_t nsSplittableType;
 // NOTE: there are assumptions all over that these have the same value, namely NS_UNCONSTRAINEDSIZE
 //       if any are changed to be a value other than NS_UNCONSTRAINEDSIZE
 //       at least update AdjustComputedHeight/Width and test ad nauseum
+
+// 1 million CSS pixels less than our max app unit measure.
+// For reflowing with an "infinite" available inline space per [css-sizing].
+// (reflowing with an NS_UNCONSTRAINEDSIZE available inline size isn't allowed
+//  and leads to assertions)
+#define INFINITE_ISIZE_COORD nscoord(NS_MAXSIZE - (1000000*60))
 
 //----------------------------------------------------------------------
 
@@ -3225,6 +3232,11 @@ public:
     fputs(t.get(), out);
   }
   void ListTag(nsACString& aTo) const;
+  nsAutoCString ListTag() const {
+    nsAutoCString tag;
+    ListTag(tag);
+    return tag;
+  }
   static void ListTag(nsACString& aTo, const nsIFrame* aFrame);
   void ListGeneric(nsACString& aTo, const char* aPrefix = "", uint32_t aFlags = 0) const;
   enum {

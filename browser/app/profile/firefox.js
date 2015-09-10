@@ -71,8 +71,8 @@ pref("extensions.hotfix.certs.2.sha1Fingerprint", "39:E7:2B:7A:5B:CF:37:78:F9:5D
 // See the SCOPE constants in AddonManager.jsm for values to use here.
 pref("extensions.autoDisableScopes", 15);
 
-// Don't require signed add-ons by default
-pref("xpinstall.signatures.required", false);
+// Require signed add-ons by default
+pref("xpinstall.signatures.required", true);
 pref("xpinstall.signatures.devInfoURL", "https://wiki.mozilla.org/Addons/Extension_Signing");
 
 // Dictionary download preference
@@ -142,7 +142,7 @@ pref("app.update.badge", false);
 pref("app.update.staging.enabled", true);
 
 // Update service URL:
-pref("app.update.url", "https://aus4.mozilla.org/update/3/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
+pref("app.update.url", "https://aus5.mozilla.org/update/3/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
 // app.update.url.manual is in branding section
 // app.update.url.details is in branding section
 
@@ -228,6 +228,8 @@ pref("general.autoScroll", true);
 pref("browser.shell.checkDefaultBrowser", true);
 pref("browser.shell.shortcutFavicons",true);
 pref("browser.shell.mostRecentDateSetAsDefault", "");
+pref("browser.shell.skipDefaultBrowserCheck", true);
+pref("browser.shell.defaultBrowserCheckCount", 0);
 
 // 0 = blank, 1 = home (browser.startup.homepage), 2 = last visited page, 3 = resume previous browser session
 // The behavior of option 3 is detailed at: http://wiki.mozilla.org/Session_Restore
@@ -271,8 +273,13 @@ pref("browser.urlbar.doubleClickSelectsAll", false);
 pref("browser.urlbar.autoFill", true);
 pref("browser.urlbar.autoFill.typed", true);
 
+#ifdef NIGHTLY_BUILD
 // Use the new unifiedComplete component
 pref("browser.urlbar.unifiedcomplete", true);
+#else
+// Don't use the new unifiedComplete component
+pref("browser.urlbar.unifiedcomplete", false);
+#endif
 
 // 0: Match anywhere (e.g., middle of words)
 // 1: Match on word boundaries and then try matching anywhere
@@ -305,11 +312,8 @@ pref("browser.urlbar.match.url", "@");
 pref("browser.urlbar.suggest.history",              true);
 pref("browser.urlbar.suggest.bookmark",             true);
 pref("browser.urlbar.suggest.openpage",             true);
-#ifdef NIGHTLY_BUILD
-pref("browser.urlbar.suggest.searches",             true);
-#else
 pref("browser.urlbar.suggest.searches",             false);
-#endif
+pref("browser.urlbar.userMadeSearchSuggestionsChoice", false);
 
 // Limit the number of characters sent to the current search engine to fetch
 // suggestions.
@@ -352,10 +356,6 @@ pref("browser.helperApps.deleteTempFileOnExit", true);
 // search engines URL
 pref("browser.search.searchEnginesURL",      "https://addons.mozilla.org/%LOCALE%/firefox/search-engines/");
 
-// Tell the search service to load search plugins from the locale JAR
-pref("browser.search.loadFromJars", true);
-pref("browser.search.jarURIs", "chrome://browser/locale/searchplugins/");
-
 // pointer to the default engine name
 pref("browser.search.defaultenginename",      "chrome://browser-region/locale/region.properties");
 
@@ -381,8 +381,6 @@ pref("browser.search.openintab", false);
 
 // context menu searches open in the foreground
 pref("browser.search.context.loadInBackground", false);
-
-pref("browser.search.showOneOffButtons", true);
 
 // comma seperated list of of engines to hide in the search panel.
 pref("browser.search.hiddenOneOffs", "");
@@ -452,11 +450,7 @@ pref("browser.tabs.drawInTitlebar", true);
 // false  return to the adjacent tab (old default)
 pref("browser.tabs.selectOwnerOnClose", true);
 
-#ifdef RELEASE_BUILD
-pref("browser.tabs.showAudioPlayingIcon", false);
-#else
 pref("browser.tabs.showAudioPlayingIcon", true);
-#endif
 
 pref("browser.ctrlTab.previews", false);
 
@@ -491,16 +485,9 @@ pref("dom.disable_window_move_resize",            false);
 // prevent JS from monkeying with window focus, etc
 pref("dom.disable_window_flip",                   true);
 
-// Disable touch events on Desktop Firefox by default
-// until they are properly supported (bug 736048)
+// Disable touch events on Desktop Firefox by default until they are properly
+// supported (bug 736048)
 pref("dom.w3c_touch_events.enabled",        0);
-
-#ifdef NIGHTLY_BUILD
-// W3C draft pointer events
-pref("dom.w3c_pointer_events.enabled", true);
-// W3C touch-action css property (related to touch and pointer events)
-pref("layout.css.touch_action.enabled", true);
-#endif
 
 // popups.policy 1=allow,2=reject
 pref("privacy.popups.policy",               1);
@@ -649,9 +636,6 @@ pref("accessibility.typeaheadfind", false);
 pref("accessibility.typeaheadfind.timeout", 5000);
 pref("accessibility.typeaheadfind.linksonly", false);
 pref("accessibility.typeaheadfind.flashBar", 1);
-
-// plugin finder service url
-pref("pfs.datasource.url", "https://pfs.mozilla.org/plugins/PluginFinderService.php?mimetype=%PLUGIN_MIMETYPE%&appID=%APP_ID%&appVersion=%APP_VERSION%&clientOS=%CLIENT_OS%&chromeLocale=%CHROME_LOCALE%&appRelease=%APP_RELEASE%");
 
 pref("plugins.update.url", "https://www.mozilla.org/%LOCALE%/plugincheck/?utm_source=firefox-browser&utm_medium=firefox-browser&utm_campaign=plugincheck-update");
 pref("plugins.update.notifyUser", false);
@@ -862,9 +846,6 @@ pref("browser.preferences.instantApply", false);
 pref("browser.preferences.instantApply", true);
 #endif
 
-// Toggles between the two Preferences implementations, pop-up window and in-content
-pref("browser.preferences.inContent", true);
-
 pref("browser.download.show_plugins_in_list", true);
 pref("browser.download.hide_plugins_without_extensions", true);
 
@@ -973,15 +954,15 @@ pref("browser.safebrowsing.downloads.remote.enabled", true);
 pref("browser.safebrowsing.downloads.remote.timeout_ms", 10000);
 pref("browser.safebrowsing.debug", false);
 
-pref("browser.safebrowsing.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
-pref("browser.safebrowsing.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
+pref("browser.safebrowsing.provider.google.lists", "goog-badbinurl-shavar,goog-downloadwhite-digest256,goog-phish-shavar,goog-malware-shavar,goog-unwanted-shavar");
+pref("browser.safebrowsing.provider.google.updateURL", "https://safebrowsing.google.com/safebrowsing/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2&key=%GOOGLE_API_KEY%");
+pref("browser.safebrowsing.provider.google.gethashURL", "https://safebrowsing.google.com/safebrowsing/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
+pref("browser.safebrowsing.provider.google.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
+pref("browser.safebrowsing.provider.google.appRepURL", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
+
 pref("browser.safebrowsing.reportPhishMistakeURL", "https://%LOCALE%.phish-error.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportPhishURL", "https://%LOCALE%.phish-report.mozilla.com/?hl=%LOCALE%&url=");
 pref("browser.safebrowsing.reportMalwareMistakeURL", "https://%LOCALE%.malware-error.mozilla.com/?hl=%LOCALE%&url=");
-pref("browser.safebrowsing.malware.reportURL", "https://safebrowsing.google.com/safebrowsing/diagnostic?client=%NAME%&hl=%LOCALE%&site=");
-
-pref("browser.safebrowsing.appRepURL", "https://sb-ssl.google.com/safebrowsing/clientreport/download?key=%GOOGLE_API_KEY%");
-
 #ifdef MOZILLA_OFFICIAL
 // Normally the "client ID" sent in updates is appinfo.name, but for
 // official Firefox releases from Mozilla we use a special identifier.
@@ -1162,14 +1143,6 @@ pref("browser.flash-protected-mode-flip.enable", false);
 // Whether we've already flipped protected mode automatically
 pref("browser.flash-protected-mode-flip.done", false);
 
-#ifdef XP_MACOSX
-// On mac, the default pref is per-architecture
-pref("dom.ipc.plugins.enabled.i386", true);
-pref("dom.ipc.plugins.enabled.x86_64", true);
-#else
-pref("dom.ipc.plugins.enabled", true);
-#endif
-
 pref("dom.ipc.shims.enabledWarnings", false);
 
 // Start the browser in e10s mode
@@ -1194,7 +1167,12 @@ pref("security.sandbox.windows.log", false);
 // 3 - the strongest settings we seem to be able to use without breaking
 //     everything, but will probably cause some functionality restrictions
 pref("dom.ipc.plugins.sandbox-level.default", 0);
+#if defined(_AMD64_)
+// The lines in PluginModuleParent.cpp should be changed in line with this.
+pref("dom.ipc.plugins.sandbox-level.flash", 2);
+#else
 pref("dom.ipc.plugins.sandbox-level.flash", 0);
+#endif
 
 #if defined(MOZ_CONTENT_SANDBOX)
 // This controls the strength of the Windows content process sandbox for testing
@@ -1320,6 +1298,7 @@ pref("services.sync.prefs.sync.privacy.clearOnShutdown.siteSettings", true);
 pref("services.sync.prefs.sync.privacy.donottrackheader.enabled", true);
 pref("services.sync.prefs.sync.privacy.sanitize.sanitizeOnShutdown", true);
 pref("services.sync.prefs.sync.privacy.trackingprotection.enabled", true);
+pref("services.sync.prefs.sync.privacy.trackingprotection.pbmode.enabled", true);
 pref("services.sync.prefs.sync.security.OCSP.enabled", true);
 pref("services.sync.prefs.sync.security.OCSP.require", true);
 pref("services.sync.prefs.sync.security.default_personal_cert", true);
@@ -1437,6 +1416,9 @@ pref("devtools.debugger.ui.variables-sorting-enabled", true);
 pref("devtools.debugger.ui.variables-only-enum-visible", false);
 pref("devtools.debugger.ui.variables-searchbox-visible", false);
 
+// Enable the Memory tools
+pref("devtools.memory.enabled", false);
+
 // Enable the Performance tools
 pref("devtools.performance.enabled", true);
 
@@ -1445,7 +1427,7 @@ pref("devtools.performance.memory.sample-probability", "0.05");
 // Can't go higher than this without causing internal allocation overflows while
 // serializing the allocations data over the RDP.
 pref("devtools.performance.memory.max-log-length", 125000);
-pref("devtools.performance.timeline.hidden-markers", "[]");
+pref("devtools.performance.timeline.hidden-markers", "[\"Composite\"]");
 pref("devtools.performance.profiler.buffer-size", 10000000);
 pref("devtools.performance.profiler.sample-frequency-khz", 1);
 pref("devtools.performance.ui.invert-call-tree", true);
@@ -1457,6 +1439,12 @@ pref("devtools.performance.ui.enable-memory", false);
 pref("devtools.performance.ui.enable-allocations", false);
 pref("devtools.performance.ui.enable-framerate", true);
 pref("devtools.performance.ui.enable-jit-optimizations", false);
+pref("devtools.performance.ui.show-triggers-for-gc-types",
+  "TOO_MUCH_MALLOC ALLOC_TRIGGER LAST_DITCH EAGER_ALLOC_TRIGGER");
+
+// Temporary pref disabling memory flame views
+// TODO remove once we have flame charts via bug 1148663
+pref("devtools.performance.ui.enable-memory-flame", false);
 
 // Enable experimental options in the UI only in Nightly
 #if defined(NIGHTLY_BUILD)
@@ -1564,6 +1552,10 @@ pref("devtools.webconsole.filter.secwarn", true);
 pref("devtools.webconsole.filter.serviceworkers", false);
 pref("devtools.webconsole.filter.sharedworkers", false);
 pref("devtools.webconsole.filter.windowlessworkers", false);
+pref("devtools.webconsole.filter.servererror", false);
+pref("devtools.webconsole.filter.serverwarn", false);
+pref("devtools.webconsole.filter.serverinfo", false);
+pref("devtools.webconsole.filter.serverlog", false);
 
 // Remember the Browser Console filters
 pref("devtools.browserconsole.filter.network", true);
@@ -1585,6 +1577,10 @@ pref("devtools.browserconsole.filter.secwarn", true);
 pref("devtools.browserconsole.filter.serviceworkers", true);
 pref("devtools.browserconsole.filter.sharedworkers", true);
 pref("devtools.browserconsole.filter.windowlessworkers", true);
+pref("devtools.browserconsole.filter.servererror", false);
+pref("devtools.browserconsole.filter.serverwarn", false);
+pref("devtools.browserconsole.filter.serverinfo", false);
+pref("devtools.browserconsole.filter.serverlog", false);
 
 // Text size in the Web Console. Use 0 for the system default size.
 pref("devtools.webconsole.fontSize", 0);
@@ -1603,11 +1599,12 @@ pref("devtools.webconsole.persistlog", false);
 pref("devtools.webconsole.timestampMessages", false);
 
 // The number of lines that are displayed in the web console for the Net,
-// CSS, JS and Web Developer categories.
-pref("devtools.hud.loglimit.network", 200);
-pref("devtools.hud.loglimit.cssparser", 200);
-pref("devtools.hud.loglimit.exception", 200);
-pref("devtools.hud.loglimit.console", 200);
+// CSS, JS and Web Developer categories. These defaults should be kept in sync
+// with DEFAULT_LOG_LIMIT in the webconsole frontend.
+pref("devtools.hud.loglimit.network", 1000);
+pref("devtools.hud.loglimit.cssparser", 1000);
+pref("devtools.hud.loglimit.exception", 1000);
+pref("devtools.hud.loglimit.console", 1000);
 
 // By how many times eyedropper will magnify pixels
 pref("devtools.eyedropper.zoom", 6);
@@ -1690,13 +1687,7 @@ pref("pdfjs.previousHandler.alwaysAskBeforeHandling", false);
 
 // Shumway is only bundled in Nightly.
 #ifdef NIGHTLY_BUILD
-// By default, Shumway (SWF player) is only enabled for whitelisted SWFs on Windows + OS X.
-#ifdef UNIX_BUT_NOT_MAC
 pref("shumway.disabled", true);
-#else
-pref("shumway.disabled", false);
-pref("shumway.swf.whitelist", "http://www.areweflashyet.com/*.swf");
-#endif
 #endif
 
 // The maximum amount of decoded image data we'll willingly keep around (we
@@ -1707,8 +1698,6 @@ pref("image.mem.max_decoded_image_kb", 256000);
 pref("loop.enabled", true);
 pref("loop.textChat.enabled", true);
 pref("loop.server", "https://loop.services.mozilla.com/v0");
-pref("loop.seenToS", "unseen");
-pref("loop.showPartnerLogo", true);
 pref("loop.gettingStarted.seen", false);
 pref("loop.gettingStarted.url", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/hello/start/");
 pref("loop.gettingStarted.resumeOnFirstJoin", false);
@@ -1730,7 +1719,7 @@ pref("loop.debug.sdk", false);
 pref("loop.debug.twoWayMediaTelemetry", false);
 pref("loop.feedback.dateLastSeenSec", 0);
 pref("loop.feedback.periodSec", 15770000); // 6 months.
-pref("loop.feedback.formURL", "http://www.surveygizmo.com/s3/2227372/Firefox-Hello-Product-Survey");
+pref("loop.feedback.formURL", "https://www.mozilla.org/firefox/hello/npssurvey/");
 #ifdef DEBUG
 pref("loop.CSP", "default-src 'self' about: file: chrome: http://localhost:*; img-src * data:; font-src 'none'; connect-src wss://*.tokbox.com https://*.opentok.com https://*.tokbox.com wss://*.mozilla.com https://*.mozilla.org wss://*.mozaws.net http://localhost:* ws://localhost:*; media-src blob:");
 #else
@@ -1868,6 +1857,8 @@ pref("browser.translation.engine", "bing");
 // Telemetry settings.
 // Determines if Telemetry pings can be archived locally.
 pref("toolkit.telemetry.archive.enabled", true);
+// Whether we enable opt-out Telemetry for a sample of the release population.
+pref("toolkit.telemetry.optoutSample", true);
 
 // Telemetry experiments settings.
 pref("experiments.enabled", true);
@@ -1884,12 +1875,11 @@ pref("browser.apps.URL", "https://marketplace.firefox.com/discovery/");
 #ifdef NIGHTLY_BUILD
 pref("browser.polaris.enabled", false);
 pref("privacy.trackingprotection.ui.enabled", false);
-pref("privacy.trackingprotection.introURL", "https://support.mozilla.org/kb/tracking-protection-firefox");
 #endif
 pref("privacy.trackingprotection.introCount", 0);
-pref("privacy.trackingprotection.introURL", "https://support.mozilla.org/kb/tracking-protection-firefox");
+pref("privacy.trackingprotection.introURL", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/tracking-protection-pbm");
 
-#ifdef NIGHTLY_BUILD
+#ifndef RELEASE_BUILD
 // At the moment, autostart.2 is used, while autostart.1 is unused.
 // We leave it here set to false to reset users' defaults and allow
 // us to change everybody to true in the future, when desired.
@@ -1927,14 +1917,13 @@ pref("dom.ipc.reportProcessHangs", false);
 pref("dom.ipc.reportProcessHangs", true);
 #endif
 
-pref("browser.readinglist.enabled", false);
-pref("browser.readinglist.sidebarEverOpened", false);
-pref("readinglist.scheduler.enabled", false);
-pref("readinglist.server", "https://readinglist.services.mozilla.com/v1");
-
 pref("browser.reader.detectedFirstArticle", false);
 // Don't limit how many nodes we care about on desktop:
 pref("reader.parse-node-limit", 0);
+
+// On desktop, we want the URLs to be included here for ease of debugging,
+// and because (normally) these errors are not persisted anywhere.
+pref("reader.errors.includeURLs", true);
 
 pref("browser.pocket.enabled", true);
 pref("browser.pocket.api", "api.getpocket.com");
@@ -1943,10 +1932,20 @@ pref("browser.pocket.oAuthConsumerKey", "40249-e88c401e1b1f2242d9e441c4");
 pref("browser.pocket.useLocaleList", true);
 pref("browser.pocket.enabledLocales", "cs de en-GB en-US en-ZA es-ES es-MX fr hu it ja ja-JP-mac ko nl pl pt-BR pt-PT ru zh-CN zh-TW");
 
+// View source tabs are only enabled by default for Dev. Ed and Nightly.
+#ifdef RELEASE_BUILD
+pref("view_source.tab", false);
+#else
 pref("view_source.tab", true);
+#endif
 
-// Enable Service Workers for desktop on non-release builds
-#ifndef RELEASE_BUILD
+// Enable ServiceWorkers for Push API consumers.
+// Interception is still disabled.
 pref("dom.serviceWorkers.enabled", true);
+
+#ifdef NIGHTLY_BUILD
 pref("dom.serviceWorkers.interception.enabled", true);
 #endif
+
+// Enable Push API.
+pref("dom.push.enabled", true);

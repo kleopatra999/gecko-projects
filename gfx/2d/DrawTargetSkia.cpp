@@ -8,24 +8,24 @@
 #include "SourceSurfaceSkia.h"
 #include "ScaledFontBase.h"
 #include "ScaledFontCairo.h"
-#include "skia/SkGpuDevice.h"
-#include "skia/SkBitmapDevice.h"
+#include "skia/include/core/SkBitmapDevice.h"
 #include "FilterNodeSoftware.h"
+#include "HelpersSkia.h"
 
 #ifdef USE_SKIA_GPU
-#include "skia/SkGpuDevice.h"
-#include "skia/GrGLInterface.h"
+#include "skia/include/gpu/SkGpuDevice.h"
+#include "skia/include/gpu/gl/GrGLInterface.h"
 #endif
 
-#include "skia/SkTypeface.h"
-#include "skia/SkGradientShader.h"
-#include "skia/SkBlurDrawLooper.h"
-#include "skia/SkBlurMaskFilter.h"
-#include "skia/SkColorFilter.h"
-#include "skia/SkDropShadowImageFilter.h"
-#include "skia/SkLayerRasterizer.h"
-#include "skia/SkLayerDrawLooper.h"
-#include "skia/SkDashPathEffect.h"
+#include "skia/include/core/SkTypeface.h"
+#include "skia/include/effects/SkGradientShader.h"
+#include "skia/include/effects/SkBlurDrawLooper.h"
+#include "skia/include/effects/SkBlurMaskFilter.h"
+#include "skia/include/core/SkColorFilter.h"
+#include "skia/include/effects/SkDropShadowImageFilter.h"
+#include "skia/include/effects/SkLayerRasterizer.h"
+#include "skia/include/effects/SkLayerDrawLooper.h"
+#include "skia/include/effects/SkDashPathEffect.h"
 #include "Logging.h"
 #include "Tools.h"
 #include "DataSurfaceHelpers.h"
@@ -572,23 +572,17 @@ DrawTargetSkia::FillGlyphs(ScaledFont *aFont,
   paint.mPaint.setLCDRenderText(shouldLCDRenderText);
 
   if (aRenderingOptions && aRenderingOptions->GetType() == FontType::CAIRO) {
-    switch (static_cast<const GlyphRenderingOptionsCairo*>(aRenderingOptions)->GetHinting()) {
-      case FontHinting::NONE:
-        paint.mPaint.setHinting(SkPaint::kNo_Hinting);
-        break;
-      case FontHinting::LIGHT:
-        paint.mPaint.setHinting(SkPaint::kSlight_Hinting);
-        break;
-      case FontHinting::NORMAL:
-        paint.mPaint.setHinting(SkPaint::kNormal_Hinting);
-        break;
-      case FontHinting::FULL:
-        paint.mPaint.setHinting(SkPaint::kFull_Hinting);
-        break;
+    const GlyphRenderingOptionsCairo* cairoOptions =
+      static_cast<const GlyphRenderingOptionsCairo*>(aRenderingOptions);
+
+    paint.mPaint.setHinting(GfxHintingToSkiaHinting(cairoOptions->GetHinting()));
+
+    if (cairoOptions->GetAutoHinting()) {
+      paint.mPaint.setAutohinted(true);
     }
 
-    if (static_cast<const GlyphRenderingOptionsCairo*>(aRenderingOptions)->GetAutoHinting()) {
-      paint.mPaint.setAutohinted(true);
+    if (cairoOptions->GetAntialiasMode() == AntialiasMode::NONE) {
+      paint.mPaint.setAntiAlias(false);
     }
   } else if (aFont->GetType() == FontType::MAC && shouldLCDRenderText) {
     // SkFontHost_mac only supports subpixel antialiasing when hinting is turned off.

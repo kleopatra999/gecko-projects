@@ -58,6 +58,9 @@ typedef nsCSSProps::KTableValue KTableValue;
 // pref-backed bool values (hooked up in nsCSSParser::Startup)
 static bool sOpentypeSVGEnabled;
 static bool sUnprefixingServiceEnabled;
+#ifdef NIGHTLY_BUILD
+static bool sUnprefixingServiceGloballyWhitelisted;
+#endif
 static bool sMozGradientsEnabled;
 
 const uint32_t
@@ -111,6 +114,8 @@ public:
   ~CSSParserImpl();
 
   nsresult SetStyleSheet(CSSStyleSheet* aSheet);
+
+  nsIDocument* GetDocument();
 
   nsresult SetQuirkMode(bool aQuirkMode);
 
@@ -1368,6 +1373,15 @@ CSSParserImpl::SetStyleSheet(CSSStyleSheet* aSheet)
   return NS_OK;
 }
 
+nsIDocument*
+CSSParserImpl::GetDocument()
+{
+  if (!mSheet) {
+    return nullptr;
+  }
+  return mSheet->GetDocument();
+}
+
 nsresult
 CSSParserImpl::SetQuirkMode(bool aQuirkMode)
 {
@@ -1714,7 +1728,8 @@ CSSParserImpl::ParseProperty(const nsCSSProperty aPropID,
       aDeclaration->ExpandTo(&mData);
       *aChanged = mData.TransferFromBlock(mTempData, aPropID,
                                           PropertyEnabledState(), aIsImportant,
-                                          true, false, aDeclaration);
+                                          true, false, aDeclaration,
+                                          GetDocument());
       aDeclaration->CompressFrom(&mData);
     }
     CLEAR_ERROR();
@@ -6666,6 +6681,13 @@ CSSParserImpl::ShouldUseUnprefixingService()
     return false;
   }
 
+#ifdef NIGHTLY_BUILD
+  if (sUnprefixingServiceGloballyWhitelisted) {
+    // Unprefixing is globally whitelisted,
+    // so no need to check mSheetPrincipal.
+    return true;
+  }
+#endif
   // Unprefixing enabled; see if our principal is whitelisted for unprefixing.
   return mSheetPrincipal && mSheetPrincipal->IsOnCSSUnprefixingWhitelist();
 }
@@ -6967,7 +6989,7 @@ CSSParserImpl::ParseDeclaration(css::Declaration* aDeclaration,
                                          PropertyEnabledState(),
                                          status == ePriority_Important,
                                          false, aMustCallValueAppended,
-                                         aDeclaration);
+                                         aDeclaration, GetDocument());
   }
 
   return true;
@@ -12148,12 +12170,6 @@ CSSParserImpl::ParseCursor()
 bool
 CSSParserImpl::ParseFont()
 {
-  static const nsCSSProperty fontIDs[] = {
-    eCSSProperty_font_style,
-    eCSSProperty_font_variant_caps,
-    eCSSProperty_font_weight
-  };
-
   nsCSSValue  family;
   if (ParseVariant(family, VARIANT_HK, nsCSSProps::kFontKTable)) {
     if (eCSSUnit_Inherit == family.GetUnit() ||
@@ -12202,35 +12218,60 @@ CSSParserImpl::ParseFont()
     return true;
   }
 
-  // Get optional font-style, font-variant and font-weight (in any order)
-  const int32_t numProps = 3;
+  // Get optional font-style, font-variant, font-weight, font-stretch
+  // (in any order)
+
+  // Indexes into fontIDs[] and values[] arrays.
+  const int kFontStyleIndex = 0;
+  const int kFontVariantIndex = 1;
+  const int kFontWeightIndex = 2;
+  const int kFontStretchIndex = 3;
+
+  // The order of the initializers here must match the order of the indexes
+  // defined above!
+  static const nsCSSProperty fontIDs[] = {
+    eCSSProperty_font_style,
+    eCSSProperty_font_variant_caps,
+    eCSSProperty_font_weight,
+    eCSSProperty_font_stretch
+  };
+
+  const int32_t numProps = MOZ_ARRAY_LENGTH(fontIDs);
   nsCSSValue  values[numProps];
   int32_t found = ParseChoice(values, fontIDs, numProps);
   if (found < 0 ||
-      eCSSUnit_Inherit == values[0].GetUnit() ||
-      eCSSUnit_Initial == values[0].GetUnit() ||
-      eCSSUnit_Unset == values[0].GetUnit()) { // illegal data
+      eCSSUnit_Inherit == values[kFontStyleIndex].GetUnit() ||
+      eCSSUnit_Initial == values[kFontStyleIndex].GetUnit() ||
+      eCSSUnit_Unset == values[kFontStyleIndex].GetUnit()) { // illegal data
     return false;
   }
-  if ((found & 1) == 0) {
+  if ((found & (1 << kFontStyleIndex)) == 0) {
     // Provide default font-style
-    values[0].SetIntValue(NS_FONT_STYLE_NORMAL, eCSSUnit_Enumerated);
+    values[kFontStyleIndex].SetIntValue(NS_FONT_STYLE_NORMAL,
+                                        eCSSUnit_Enumerated);
   }
-  if ((found & 2) == 0) {
+  if ((found & (1 << kFontVariantIndex)) == 0) {
     // Provide default font-variant
-    values[1].SetNormalValue();
+    values[kFontVariantIndex].SetNormalValue();
   } else {
-    if (values[1].GetUnit() == eCSSUnit_Enumerated &&
-        values[1].GetIntValue() != NS_FONT_VARIANT_CAPS_SMALLCAPS) {
+    if (values[kFontVariantIndex].GetUnit() == eCSSUnit_Enumerated &&
+        values[kFontVariantIndex].GetIntValue() !=
+        NS_FONT_VARIANT_CAPS_SMALLCAPS) {
       // only normal or small-caps is allowed in font shorthand
       // this also assumes other values for font-variant-caps never overlap
       // possible values for style or weight
       return false;
     }
   }
-  if ((found & 4) == 0) {
+  if ((found & (1 << kFontWeightIndex)) == 0) {
     // Provide default font-weight
-    values[2].SetIntValue(NS_FONT_WEIGHT_NORMAL, eCSSUnit_Enumerated);
+    values[kFontWeightIndex].SetIntValue(NS_FONT_WEIGHT_NORMAL,
+                                         eCSSUnit_Enumerated);
+  }
+  if ((found & (1 << kFontStretchIndex)) == 0) {
+    // Provide default font-stretch
+    values[kFontStretchIndex].SetIntValue(NS_FONT_STRETCH_NORMAL,
+                                          eCSSUnit_Enumerated);
   }
 
   // Get mandatory font-size
@@ -12261,13 +12302,12 @@ CSSParserImpl::ParseFont()
         eCSSUnit_Unset != family.GetUnit()) {
       AppendValue(eCSSProperty__x_system_font, nsCSSValue(eCSSUnit_None));
       AppendValue(eCSSProperty_font_family, family);
-      AppendValue(eCSSProperty_font_style, values[0]);
-      AppendValue(eCSSProperty_font_variant_caps, values[1]);
-      AppendValue(eCSSProperty_font_weight, values[2]);
+      AppendValue(eCSSProperty_font_style, values[kFontStyleIndex]);
+      AppendValue(eCSSProperty_font_variant_caps, values[kFontVariantIndex]);
+      AppendValue(eCSSProperty_font_weight, values[kFontWeightIndex]);
       AppendValue(eCSSProperty_font_size, size);
       AppendValue(eCSSProperty_line_height, lineHeight);
-      AppendValue(eCSSProperty_font_stretch,
-                  nsCSSValue(NS_FONT_STRETCH_NORMAL, eCSSUnit_Enumerated));
+      AppendValue(eCSSProperty_font_stretch, values[kFontStretchIndex]);
       AppendValue(eCSSProperty_font_size_adjust, nsCSSValue(eCSSUnit_None));
       AppendValue(eCSSProperty_font_feature_settings, nsCSSValue(eCSSUnit_Normal));
       AppendValue(eCSSProperty_font_language_override, nsCSSValue(eCSSUnit_Normal));
@@ -14028,7 +14068,8 @@ bool CSSParserImpl::ParseWillChange()
 
     nsString str;
     value.GetStringValue(str);
-    if (str.LowerCaseEqualsLiteral("default")) {
+    if (str.LowerCaseEqualsLiteral("default") ||
+        str.LowerCaseEqualsLiteral("will-change")) {
       return false;
     }
 
@@ -15677,6 +15718,10 @@ nsCSSParser::Startup()
                                "gfx.font_rendering.opentype_svg.enabled");
   Preferences::AddBoolVarCache(&sUnprefixingServiceEnabled,
                                "layout.css.unprefixing-service.enabled");
+#ifdef NIGHTLY_BUILD
+  Preferences::AddBoolVarCache(&sUnprefixingServiceGloballyWhitelisted,
+                               "layout.css.unprefixing-service.globally-whitelisted");
+#endif
   Preferences::AddBoolVarCache(&sMozGradientsEnabled,
                                "layout.css.prefixes.gradients");
 }

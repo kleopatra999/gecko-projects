@@ -9,6 +9,7 @@ describe("loop.store.ConversationStore", function () {
   var WS_STATES = loop.store.WS_STATES;
   var CALL_TYPES = loop.shared.utils.CALL_TYPES;
   var WEBSOCKET_REASONS = loop.shared.utils.WEBSOCKET_REASONS;
+  var REST_ERRNOS = loop.shared.utils.REST_ERRNOS;
   var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
   var sharedActions = loop.shared.actions;
   var sharedUtils = loop.shared.utils;
@@ -387,11 +388,10 @@ describe("loop.store.ConversationStore", function () {
           connectPromise.then(function() {
             checkFailures(done, function() {
               sinon.assert.calledOnce(dispatcher.dispatch);
-              // Can't use instanceof here, as that matches any action
-              sinon.assert.calledWithMatch(dispatcher.dispatch,
-                sinon.match.hasOwn("name", "connectionProgress"));
-              sinon.assert.calledWithMatch(dispatcher.dispatch,
-                sinon.match.hasOwn("wsState", WS_STATES.INIT));
+              sinon.assert.calledWithExactly(dispatcher.dispatch,
+                new sharedActions.ConnectionProgress({
+                  wsState: WS_STATES.INIT
+                }));
             });
           }, function() {
             done(new Error("Promise should have been resolve, not rejected"));
@@ -406,11 +406,10 @@ describe("loop.store.ConversationStore", function () {
           }, function() {
             checkFailures(done, function() {
               sinon.assert.calledOnce(dispatcher.dispatch);
-              // Can't use instanceof here, as that matches any action
-              sinon.assert.calledWithMatch(dispatcher.dispatch,
-                sinon.match.hasOwn("name", "connectionFailure"));
-              sinon.assert.calledWithMatch(dispatcher.dispatch,
-                sinon.match.hasOwn("reason", "websocket-setup"));
+              sinon.assert.calledOnce(dispatcher.dispatch,
+                new sharedActions.ConnectionFailure({
+                  reason: "websocket-setup"
+                }));
              });
           });
         });
@@ -535,7 +534,23 @@ describe("loop.store.ConversationStore", function () {
           sinon.assert.calledWithMatch(dispatcher.dispatch,
             sinon.match.hasOwn("name", "connectionFailure"));
           sinon.assert.calledWithMatch(dispatcher.dispatch,
-            sinon.match.hasOwn("reason", "setup"));
+            sinon.match.hasOwn("reason", FAILURE_DETAILS.UNKNOWN));
+        });
+
+        it("should dispatch a connection failure action on failure with user unavailable", function() {
+          client.setupOutgoingCall.callsArgWith(2, {
+            errno: REST_ERRNOS.USER_UNAVAILABLE
+          });
+
+          store.setupWindowData(
+            new sharedActions.SetupWindowData(fakeSetupWindowData));
+
+          sinon.assert.calledOnce(dispatcher.dispatch);
+          // Can't use instanceof here, as that matches any action
+          sinon.assert.calledWithMatch(dispatcher.dispatch,
+            sinon.match.hasOwn("name", "connectionFailure"));
+          sinon.assert.calledWithMatch(dispatcher.dispatch,
+            sinon.match.hasOwn("reason", FAILURE_DETAILS.USER_UNAVAILABLE));
         });
       });
     });
@@ -1026,14 +1041,14 @@ describe("loop.store.ConversationStore", function () {
   describe("#fetchRoomEmailLink", function() {
     it("should request a new call url to the server", function() {
       store.fetchRoomEmailLink(new sharedActions.FetchRoomEmailLink({
-        roomOwner: "bob@invalid.tld",
         roomName: "FakeRoomName"
       }));
 
       sinon.assert.calledOnce(fakeMozLoop.rooms.create);
       sinon.assert.calledWithMatch(fakeMozLoop.rooms.create, {
-        roomOwner: "bob@invalid.tld",
-        roomName: "FakeRoomName"
+        decryptedContext: {
+          roomName: "FakeRoomName"
+        }
       });
     });
 
@@ -1043,7 +1058,6 @@ describe("loop.store.ConversationStore", function () {
           cb(null, {roomUrl: "http://fake.invalid/"});
         };
         store.fetchRoomEmailLink(new sharedActions.FetchRoomEmailLink({
-          roomOwner: "bob@invalid.tld",
           roomName: "FakeRoomName"
         }));
 
@@ -1059,7 +1073,6 @@ describe("loop.store.ConversationStore", function () {
           cb(new Error("error"));
         };
         store.fetchRoomEmailLink(new sharedActions.FetchRoomEmailLink({
-          roomOwner: "bob@invalid.tld",
           roomName: "FakeRoomName"
         }));
 
@@ -1122,24 +1135,6 @@ describe("loop.store.ConversationStore", function () {
         sandbox.stub(dispatcher, "dispatch");
       });
 
-      it("should dispatch a connection failure action on 'terminate' for outgoing calls", function() {
-        store.setStoreState({
-          outgoing: true
-        });
-
-        store._websocket.trigger("progress", {
-          state: WS_STATES.TERMINATED,
-          reason: WEBSOCKET_REASONS.REJECT
-        });
-
-        sinon.assert.calledOnce(dispatcher.dispatch);
-        // Can't use instanceof here, as that matches any action
-        sinon.assert.calledWithMatch(dispatcher.dispatch,
-          sinon.match.hasOwn("name", "connectionFailure"));
-        sinon.assert.calledWithMatch(dispatcher.dispatch,
-          sinon.match.hasOwn("reason", WEBSOCKET_REASONS.REJECT));
-      });
-
       it("should dispatch a connection failure action on 'terminate' for incoming calls if the previous state was not 'alerting' or 'init'", function() {
         store.setStoreState({
           outgoing: false
@@ -1151,7 +1146,6 @@ describe("loop.store.ConversationStore", function () {
         }, WS_STATES.CONNECTING);
 
         sinon.assert.calledOnce(dispatcher.dispatch);
-        // Can't use instanceof here, as that matches any action
         sinon.assert.calledWithExactly(dispatcher.dispatch,
           new sharedActions.ConnectionFailure({
             reason: WEBSOCKET_REASONS.CANCEL
@@ -1169,7 +1163,6 @@ describe("loop.store.ConversationStore", function () {
         }, WS_STATES.INIT);
 
         sinon.assert.calledOnce(dispatcher.dispatch);
-        // Can't use instanceof here, as that matches any action
         sinon.assert.calledWithExactly(dispatcher.dispatch,
           new sharedActions.CancelCall({}));
       });
@@ -1185,7 +1178,6 @@ describe("loop.store.ConversationStore", function () {
         }, WS_STATES.ALERTING);
 
         sinon.assert.calledOnce(dispatcher.dispatch);
-        // Can't use instanceof here, as that matches any action
         sinon.assert.calledWithExactly(dispatcher.dispatch,
           new sharedActions.CancelCall({}));
       });
@@ -1194,11 +1186,57 @@ describe("loop.store.ConversationStore", function () {
         store._websocket.trigger("progress", {state: WS_STATES.ALERTING});
 
         sinon.assert.calledOnce(dispatcher.dispatch);
-        // Can't use instanceof here, as that matches any action
-        sinon.assert.calledWithMatch(dispatcher.dispatch,
-          sinon.match.hasOwn("name", "connectionProgress"));
-        sinon.assert.calledWithMatch(dispatcher.dispatch,
-          sinon.match.hasOwn("wsState", WS_STATES.ALERTING));
+        sinon.assert.calledWithExactly(dispatcher.dispatch,
+          new sharedActions.ConnectionProgress({
+            wsState: WS_STATES.ALERTING
+          }));
+      });
+
+      describe("Outgoing Calls, handling 'terminate'", function() {
+        beforeEach(function() {
+          store.setStoreState({
+            outgoing: true
+          });
+        });
+
+        it("should dispatch a connection failure action", function() {
+          store._websocket.trigger("progress", {
+            state: WS_STATES.TERMINATED,
+            reason: WEBSOCKET_REASONS.MEDIA_FAIL
+          });
+
+          sinon.assert.calledOnce(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.ConnectionFailure({
+              reason: WEBSOCKET_REASONS.MEDIA_FAIL
+            }));
+        });
+
+        it("should dispatch an action with user unavailable if the websocket reports busy", function() {
+          store._websocket.trigger("progress", {
+            state: WS_STATES.TERMINATED,
+            reason: WEBSOCKET_REASONS.BUSY
+          });
+
+          sinon.assert.calledOnce(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.ConnectionFailure({
+              reason: FAILURE_DETAILS.USER_UNAVAILABLE
+            }));
+        });
+
+        it("should dispatch an action with user unavailable if the websocket reports reject", function() {
+          store._websocket.trigger("progress", {
+            state: WS_STATES.TERMINATED,
+            reason: WEBSOCKET_REASONS.REJECT
+          });
+
+          sinon.assert.calledOnce(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.ConnectionFailure({
+              reason: FAILURE_DETAILS.USER_UNAVAILABLE
+            }));
+        });
       });
     });
   });

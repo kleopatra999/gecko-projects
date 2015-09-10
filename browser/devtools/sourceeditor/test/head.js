@@ -4,10 +4,9 @@
 
 "use strict";
 
-const { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
-const { require } = devtools;
+const { require } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
 const Editor  = require("devtools/sourceeditor/editor");
-const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
+const promise = require("promise");
 const DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
 
 DevToolsUtils.testing = true;

@@ -34,7 +34,11 @@ public:
 
   virtual void Shutdown() override;
 
-  virtual bool IsHardwareAccelerated() const override;
+  virtual bool IsHardwareAccelerated(nsACString& aFailureReason) const override;
+
+  virtual TrackInfo::TrackType GetType() override {
+    return TrackInfo::kVideoTrack;
+  }
 
 private:
 
@@ -52,6 +56,10 @@ private:
                               int64_t aStreamOffset,
                               VideoData** aOutVideoData);
 
+  HRESULT SetDecoderMediaTypes();
+
+  bool MaybeToggleDXVA(IMFMediaType* aType);
+
   // Video frame geometry.
   VideoInfo mVideoInfo;
   uint32_t mVideoStride;
@@ -63,9 +71,14 @@ private:
   RefPtr<layers::ImageContainer> mImageContainer;
   nsAutoPtr<DXVA2Manager> mDXVA2Manager;
 
+  RefPtr<IMFSample> mLastInput;
+  float mLastDuration;
+
   const bool mDXVAEnabled;
   const layers::LayersBackend mLayersBackend;
   bool mUseHwAccel;
+
+  nsCString mDXVAFailureReason;
 
   enum StreamType {
     Unknown,

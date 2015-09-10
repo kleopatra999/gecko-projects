@@ -129,6 +129,7 @@ class SpidermonkeyBuild(MockMixin,
                                 'upload_remote_basepath': None,
                                 'enable_try_uploads': True,
                                 'source': None,
+                                'stage_product': 'firefox',
                             },
         )
 
@@ -220,7 +221,7 @@ class SpidermonkeyBuild(MockMixin,
             # None.
             revision = self.config.get('revision')
 
-        return revision[0:12] if revision else None
+        return revision
 
     def query_branch(self):
         if self.buildbot_config and 'properties' in self.buildbot_config:
@@ -348,6 +349,14 @@ class SpidermonkeyBuild(MockMixin,
 
     def checkout_tools(self):
         dirs = self.query_abs_dirs()
+
+        # If running from within a directory also passed as the --source dir,
+        # this has the danger of clobbering <source>/tools/
+        if self.config['source']:
+            srcdir = self.config['source']
+            if os.path.samefile(srcdir, os.path.dirname(dirs['abs_tools_dir'])):
+                raise Exception("Cannot run from source checkout to avoid overwriting subdirs")
+
         rev = self.vcs_checkout(
             vcs='hg',  # Don't have hgtool.py yet
             repo=self.config['tools_repo'],

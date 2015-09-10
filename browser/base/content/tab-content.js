@@ -9,6 +9,7 @@ let {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/ExtensionContent.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "E10SUtils",
   "resource:///modules/E10SUtils.jsm");
@@ -158,10 +159,6 @@ let AboutHomeListener = {
     addEventListener("click", this, true);
     addEventListener("pagehide", this, true);
 
-    if (!Services.prefs.getBoolPref("browser.search.showOneOffButtons")) {
-      doc.documentElement.setAttribute("searchUIConfiguration", "oldsearchui");
-    }
-
     sendAsyncMessage("AboutHome:RequestUpdate");
   },
 
@@ -234,7 +231,7 @@ let AboutPrivateBrowsingListener = {
   init(chromeGlobal) {
     chromeGlobal.addEventListener("AboutPrivateBrowsingOpenWindow", this,
                                   false, true);
-    chromeGlobal.addEventListener("AboutPrivateBrowsingEnableTrackingProtection", this,
+    chromeGlobal.addEventListener("AboutPrivateBrowsingToggleTrackingProtection", this,
                                   false, true);
   },
 
@@ -250,8 +247,8 @@ let AboutPrivateBrowsingListener = {
       case "AboutPrivateBrowsingOpenWindow":
         sendAsyncMessage("AboutPrivateBrowsing:OpenPrivateWindow");
         break;
-      case "AboutPrivateBrowsingEnableTrackingProtection":
-        sendAsyncMessage("AboutPrivateBrowsing:EnableTrackingProtection");
+      case "AboutPrivateBrowsingToggleTrackingProtection":
+        sendAsyncMessage("AboutPrivateBrowsing:ToggleTrackingProtection");
         break;
     }
   },
@@ -285,6 +282,9 @@ let AboutReaderListener = {
   },
 
   get isAboutReader() {
+    if (!content) {
+      return false;
+    }
     return content.document.documentURI.startsWith("about:reader");
   },
 
@@ -328,7 +328,7 @@ let AboutReaderListener = {
 
   /**
    * NB: this function will update the state of the reader button asynchronously
-   * after the next mozAfterPaint call (assuming reader mode is enabled and 
+   * after the next mozAfterPaint call (assuming reader mode is enabled and
    * this is a suitable document). Calling it on things which won't be
    * painted is not going to work.
    */
@@ -645,6 +645,12 @@ let DOMFullscreenHandler = {
       case "MozDOMFullscreen:Entered":
       case "MozDOMFullscreen:Exited": {
         addEventListener("MozAfterPaint", this);
+        if (!content || !content.document.mozFullScreen) {
+          // If we receive any fullscreen change event, and find we are
+          // actually not in fullscreen, also ask the parent to exit to
+          // ensure that the parent always exits fullscreen when we do.
+          sendAsyncMessage("DOMFullscreen:Exit");
+        }
         break;
       }
       case "MozAfterPaint": {
@@ -656,3 +662,8 @@ let DOMFullscreenHandler = {
   }
 };
 DOMFullscreenHandler.init();
+
+ExtensionContent.init(this);
+addEventListener("unload", () => {
+  ExtensionContent.uninit(this);
+});

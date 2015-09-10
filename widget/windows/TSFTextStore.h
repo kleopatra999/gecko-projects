@@ -511,7 +511,7 @@ protected:
       COMPOSITION_START,
       COMPOSITION_UPDATE,
       COMPOSITION_END,
-      SELECTION_SET
+      SET_SELECTION
     };
     ActionType mType;
     // For compositionstart and selectionset
@@ -621,6 +621,8 @@ protected:
       mText = aText;
       if (mComposition.IsComposing()) {
         mLastCompositionString = mComposition.mString;
+      } else {
+        mLastCompositionString.Truncate();
       }
       mMinTextModifiedOffset = NOT_MODIFIED;
       mInitialized = true;
@@ -646,6 +648,16 @@ protected:
     {
       MOZ_ASSERT(mInitialized);
       return mText;
+    }
+    const nsString& LastCompositionString() const
+    {
+      MOZ_ASSERT(mInitialized);
+      return mLastCompositionString;
+    }
+    uint32_t MinTextModifiedOffset() const
+    {
+      MOZ_ASSERT(mInitialized);
+      return mMinTextModifiedOffset;
     }
 
     // Returns true if layout of the character at the aOffset has not been
@@ -781,9 +793,9 @@ protected:
   // During the documet is locked, we shouldn't destroy the instance.
   // If this is true, the instance will be destroyed after unlocked.
   bool                         mPendingDestroy;
-  // If this is true, MaybeFlushPendingNotifications() will clear the
+  // If this is false, MaybeFlushPendingNotifications() will clear the
   // mLockedContent.
-  bool                         mPendingClearLockedContent;
+  bool                         mDeferClearingLockedContent;
   // While there is native caret, this is true.  Otherwise, false.
   bool                         mNativeCaretIsCreated;
   // While the instance is dispatching events, the event may not be handled
@@ -823,10 +835,14 @@ protected:
 
   // Enables/Disables hack for specific TIP.
   static bool sCreateNativeCaretForATOK;
+  static bool sDoNotReturnNoLayoutErrorToMSSimplifiedTIP;
+  static bool sDoNotReturnNoLayoutErrorToMSTraditionalTIP;
   static bool sDoNotReturnNoLayoutErrorToFreeChangJie;
   static bool sDoNotReturnNoLayoutErrorToEasyChangjei;
   static bool sDoNotReturnNoLayoutErrorToGoogleJaInputAtFirstChar;
   static bool sDoNotReturnNoLayoutErrorToGoogleJaInputAtCaret;
+  static bool sHackQueryInsertForMSSimplifiedTIP;
+  static bool sHackQueryInsertForMSTraditionalTIP;
 };
 
 } // namespace widget

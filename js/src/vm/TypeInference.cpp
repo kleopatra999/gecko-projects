@@ -19,7 +19,6 @@
 #include "jsprf.h"
 #include "jsscript.h"
 #include "jsstr.h"
-#include "prmjtime.h"
 
 #include "gc/Marking.h"
 #include "jit/BaselineJIT.h"
@@ -32,6 +31,7 @@
 #include "vm/HelperThreads.h"
 #include "vm/Opcodes.h"
 #include "vm/Shape.h"
+#include "vm/Time.h"
 #include "vm/UnboxedObject.h"
 
 #include "jsatominlines.h"
@@ -3312,6 +3312,19 @@ PreliminaryObjectArray::registerNewObject(JSObject* res)
     MOZ_CRASH("There should be room for registering the new object");
 }
 
+void
+PreliminaryObjectArray::unregisterObject(JSObject* obj)
+{
+    for (size_t i = 0; i < COUNT; i++) {
+        if (objects[i] == obj) {
+            objects[i] = nullptr;
+            return;
+        }
+    }
+
+    MOZ_CRASH("The object should be in the array");
+}
+
 bool
 PreliminaryObjectArray::full() const
 {
@@ -3339,8 +3352,25 @@ PreliminaryObjectArray::sweep()
     // destroyed.
     for (size_t i = 0; i < COUNT; i++) {
         JSObject** ptr = &objects[i];
-        if (*ptr && IsAboutToBeFinalizedUnbarriered(ptr))
+        if (*ptr && IsAboutToBeFinalizedUnbarriered(ptr)) {
+            // Before we clear this reference, change the object's group to the
+            // Object.prototype group. This is done to ensure JSObject::finalize
+            // sees a NativeObject Class even if we change the current group's
+            // Class to one of the unboxed object classes in the meantime. If
+            // the compartment's global is dead, we don't do anything as the
+            // group's Class is not going to change in that case.
+            JSObject* obj = *ptr;
+            GlobalObject* global = obj->compartment()->maybeGlobal();
+            if (global && !obj->isSingleton()) {
+                JSObject* objectProto = GetBuiltinPrototypePure(global, JSProto_Object);
+                obj->setGroup(objectProto->groupRaw());
+                MOZ_ASSERT(obj->is<NativeObject>());
+                MOZ_ASSERT(obj->getClass() == objectProto->getClass());
+                MOZ_ASSERT(!obj->getClass()->finalize);
+            }
+
             *ptr = nullptr;
+        }
     }
 }
 
@@ -3458,7 +3488,7 @@ PreliminaryObjectArrayWithTemplate::maybeAnalyze(ExclusiveContext* cx, ObjectGro
 
 // Make a TypeNewScript for |group|, and set it up to hold the preliminary
 // objects created with the group.
-/* static */ void
+/* static */ bool
 TypeNewScript::make(JSContext* cx, ObjectGroup* group, JSFunction* fun)
 {
     MOZ_ASSERT(cx->zone()->types.activeAnalysis);
@@ -3466,21 +3496,22 @@ TypeNewScript::make(JSContext* cx, ObjectGroup* group, JSFunction* fun)
     MOZ_ASSERT(!group->maybeUnboxedLayout());
 
     if (group->unknownProperties())
-        return;
+        return true;
 
     ScopedJSDeletePtr<TypeNewScript> newScript(cx->new_<TypeNewScript>());
     if (!newScript)
-        return;
+        return false;
 
     newScript->function_ = fun;
 
     newScript->preliminaryObjects = group->zone()->new_<PreliminaryObjectArray>();
     if (!newScript->preliminaryObjects)
-        return;
+        return true;
 
     group->setNewScript(newScript.forget());
 
     gc::TraceTypeNewScript(group);
+    return true;
 }
 
 // Make a TypeNewScript with the same initializer list as |newScript| but with

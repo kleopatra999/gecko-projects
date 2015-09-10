@@ -35,7 +35,6 @@
 #ifdef XP_MACOSX
 ; Mac bundle stuff
 @APPNAME@/Contents/Info.plist
-@APPNAME@/Contents/Library/LaunchServices
 @APPNAME@/Contents/PkgInfo
 @RESPATH@/firefox.icns
 @RESPATH@/document.icns
@@ -125,7 +124,7 @@
 #endif
 #endif
 #ifdef MOZ_REPLACE_MALLOC
-#ifndef MOZ_JEMALLOC3
+#ifndef MOZ_JEMALLOC4
 @BINPATH@/@DLL_PREFIX@replace_jemalloc@DLL_SUFFIX@
 #endif
 #endif
@@ -490,14 +489,12 @@
 @RESPATH@/browser/components/FirefoxProfileMigrator.js
 #ifdef XP_WIN
 @RESPATH@/browser/components/360seProfileMigrator.js
+@RESPATH@/browser/components/EdgeProfileMigrator.js
 @RESPATH@/browser/components/IEProfileMigrator.js
 @RESPATH@/browser/components/SafariProfileMigrator.js
 #endif
 #ifdef XP_MACOSX
 @RESPATH@/browser/components/SafariProfileMigrator.js
-#endif
-#ifdef MOZ_ENABLE_DBUS
-@RESPATH@/components/@DLL_PREFIX@dbusservice@DLL_SUFFIX@
 #endif
 #ifdef MOZ_ENABLE_GNOME_COMPONENT
 @RESPATH@/components/@DLL_PREFIX@mozgnome@DLL_SUFFIX@

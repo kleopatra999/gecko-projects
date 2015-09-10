@@ -52,6 +52,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsSize.h"
 #include "nsCheapSets.h"
+#include "mozilla/dom/ImageBitmapSource.h"
 
 #define DEFAULT_HOME_PAGE "www.mozilla.org"
 #define PREF_BROWSER_STARTUP_HOMEPAGE "browser.startup.homepage"
@@ -129,7 +130,7 @@ class VRHMDInfo;
 } // namespace mozilla
 
 extern already_AddRefed<nsIScriptTimeoutHandler>
-NS_CreateJSTimeoutHandler(nsGlobalWindow *aWindow,
+NS_CreateJSTimeoutHandler(JSContext* aCx, nsGlobalWindow *aWindow,
                           mozilla::dom::Function& aFunction,
                           const mozilla::dom::Sequence<JS::Value>& aArguments,
                           mozilla::ErrorResult& aError);
@@ -497,6 +498,8 @@ public:
     FullscreenReason aReason, bool aIsFullscreen,
     mozilla::gfx::VRHMDInfo *aHMD = nullptr) override final;
   virtual void FinishFullscreenChange(bool aIsFullscreen) override final;
+  void SetWidgetFullscreen(FullscreenReason aReason, bool aIsFullscreen,
+                           nsIWidget* aWidget, nsIScreen* aScreen);
   bool FullScreen() const;
 
   // Inner windows only.
@@ -676,8 +679,9 @@ public:
 
 #ifdef MOZ_B2G
   // Inner windows only.
-  virtual void EnableNetworkEvent(uint32_t aType) override;
-  virtual void DisableNetworkEvent(uint32_t aType) override;
+  virtual void EnableNetworkEvent(mozilla::EventMessage aEventMessage) override;
+  virtual void DisableNetworkEvent(
+                 mozilla::EventMessage aEventMessage) override;
 #endif // MOZ_B2G
 
   virtual nsresult SetArguments(nsIArray* aArguments) override;
@@ -1132,6 +1136,15 @@ public:
     GetContent(aCx, aRetval, aError);
   }
 
+  already_AddRefed<mozilla::dom::Promise>
+  CreateImageBitmap(const mozilla::dom::ImageBitmapSource& aImage,
+                    mozilla::ErrorResult& aRv);
+
+  already_AddRefed<mozilla::dom::Promise>
+  CreateImageBitmap(const mozilla::dom::ImageBitmapSource& aImage,
+                    int32_t aSx, int32_t aSy, int32_t aSw, int32_t aSh,
+                    mozilla::ErrorResult& aRv);
+
   // ChromeWindow bits.  Do NOT call these unless your window is in
   // fact an nsGlobalChromeWindow.
   uint16_t WindowState();
@@ -1381,7 +1394,8 @@ public:
   nsresult SetTimeoutOrInterval(nsIScriptTimeoutHandler *aHandler,
                                 int32_t interval,
                                 bool aIsInterval, int32_t* aReturn) override;
-  int32_t SetTimeoutOrInterval(mozilla::dom::Function& aFunction,
+  int32_t SetTimeoutOrInterval(JSContext* aCx,
+                               mozilla::dom::Function& aFunction,
                                int32_t aTimeout,
                                const mozilla::dom::Sequence<JS::Value>& aArguments,
                                bool aIsInterval, mozilla::ErrorResult& aError);
@@ -1496,7 +1510,7 @@ public:
   bool WindowExists(const nsAString& aName, bool aLookForCallerOnJSStack);
 
   already_AddRefed<nsIWidget> GetMainWidget();
-  nsIWidget* GetNearestWidget();
+  nsIWidget* GetNearestWidget() const;
 
   void Freeze()
   {
@@ -1620,13 +1634,6 @@ private:
   void DisconnectEventTargetObjects();
 
 protected:
-  // When adding new member variables, be careful not to create cycles
-  // through JavaScript.  If there is any chance that a member variable
-  // could own objects that are implemented in JavaScript, then those
-  // objects will keep the global object (this object) alive.  To prevent
-  // these cycles, ownership of such members must be released in
-  // |CleanUp| and |DetachFromDocShell|.
-
   // This member is also used on both inner and outer windows, but
   // for slightly different purposes. On inner windows it means the
   // inner window is held onto by session history and should not

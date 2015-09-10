@@ -176,7 +176,8 @@ static bool
 NPObjWrapper_GetProperty(JSContext *cx, JS::Handle<JSObject*> obj, JS::Handle<jsid> id, JS::MutableHandle<JS::Value> vp);
 
 static bool
-NPObjWrapper_Enumerate(JSContext *cx, JS::Handle<JSObject*> obj, JS::AutoIdVector &properties);
+NPObjWrapper_Enumerate(JSContext *cx, JS::Handle<JSObject*> obj, JS::AutoIdVector &properties,
+                       bool enumerableOnly);
 
 static bool
 NPObjWrapper_Resolve(JSContext *cx, JS::Handle<JSObject*> obj, JS::Handle<jsid> id,
@@ -205,7 +206,7 @@ CreateNPObjectMember(NPP npp, JSContext *cx, JSObject *obj, NPObject* npobj,
 const static js::Class sNPObjectJSWrapperClass =
   {
     NPRUNTIME_JSCLASS_NAME,
-    JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS,
+    JSCLASS_HAS_PRIVATE,
     NPObjWrapper_AddProperty,
     NPObjWrapper_DelProperty,
     NPObjWrapper_GetProperty,
@@ -263,7 +264,7 @@ NPObjectMember_Trace(JSTracer *trc, JSObject *obj);
 
 static const JSClass sNPObjectMemberClass =
   {
-    "NPObject Ambiguous Member class", JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS,
+    "NPObject Ambiguous Member class", JSCLASS_HAS_PRIVATE,
     nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr, NPObjectMember_Convert,
     NPObjectMember_Finalize, NPObjectMember_Call,
@@ -1031,8 +1032,8 @@ nsJSObjWrapper::NP_Enumerate(NPObject *npobj, NPIdentifier **idarray,
   JS::Rooted<JSObject*> jsobj(cx, npjsobj->mJSObj);
   JSAutoCompartment ac(cx, jsobj);
 
-  JS::AutoIdArray ida(cx, JS_Enumerate(cx, jsobj));
-  if (!ida) {
+  JS::Rooted<JS::IdVector> ida(cx, JS::IdVector(cx));
+  if (!JS_Enumerate(cx, jsobj, &ida)) {
     return false;
   }
 
@@ -1615,7 +1616,7 @@ CallNPMethod(JSContext *cx, unsigned argc, JS::Value *vp)
 
 static bool
 NPObjWrapper_Enumerate(JSContext *cx, JS::Handle<JSObject*> obj,
-                       JS::AutoIdVector &properties)
+                       JS::AutoIdVector &properties, bool enumerableOnly)
 {
   NPObject *npobj = GetNPObject(cx, obj);
   if (!npobj || !npobj->_class) {

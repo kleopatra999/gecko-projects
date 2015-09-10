@@ -36,6 +36,7 @@
 #include "nsNPAPIPlugin.h"
 #include "nsPrintfCString.h"
 #include "prsystem.h"
+#include "PluginQuirks.h"
 #include "GeckoProfiler.h"
 #include "nsPluginTags.h"
 #include "nsUnicharUtils.h"
@@ -206,8 +207,9 @@ namespace {
 class PluginModuleMapping : public PRCList
 {
 public:
-    explicit PluginModuleMapping(uint32_t aPluginId)
+    explicit PluginModuleMapping(uint32_t aPluginId, bool aAllowAsyncInit)
         : mPluginId(aPluginId)
+        , mAllowAsyncInit(aAllowAsyncInit)
         , mProcessIdValid(false)
         , mModule(nullptr)
         , mChannelOpened(false)
@@ -239,7 +241,7 @@ public:
     GetModule()
     {
         if (!mModule) {
-            mModule = new PluginModuleContentParent();
+            mModule = new PluginModuleContentParent(mAllowAsyncInit);
         }
         return mModule;
     }
@@ -332,6 +334,7 @@ private:
     }
 
     uint32_t mPluginId;
+    bool mAllowAsyncInit;
     bool mProcessIdValid;
     base::ProcessId mProcessId;
     PluginModuleContentParent* mModule;
@@ -371,10 +374,12 @@ mozilla::plugins::TerminatePlugin(uint32_t aPluginId,
 }
 
 /* static */ PluginLibrary*
-PluginModuleContentParent::LoadModule(uint32_t aPluginId)
+PluginModuleContentParent::LoadModule(uint32_t aPluginId,
+                                      nsPluginTag* aPluginTag)
 {
     PluginModuleMapping::NotifyLoadingModule loadingModule;
-    nsAutoPtr<PluginModuleMapping> mapping(new PluginModuleMapping(aPluginId));
+    nsAutoPtr<PluginModuleMapping> mapping(
+            new PluginModuleMapping(aPluginId, aPluginTag->mSupportsAsyncInit));
 
     MOZ_ASSERT(XRE_IsContentProcess());
 
@@ -490,10 +495,21 @@ PluginModuleChromeParent::LoadModule(const char* aFilePath, uint32_t aPluginId,
     if (NS_FAILED(Preferences::GetInt(sandboxPref.get(), &sandboxLevel))) {
       sandboxLevel = Preferences::GetInt("dom.ipc.plugins.sandbox-level.default");
     }
+
+#if defined(_AMD64_)
+    // As level 2 is now the default NPAPI sandbox level for 64-bit flash, we
+    // don't want to allow a lower setting unless this environment variable is
+    // set. This should be changed if the firefox.js pref file is changed.
+    if (aPluginTag->mIsFlashPlugin &&
+        !PR_GetEnv("MOZ_ALLOW_WEAKER_SANDBOX") && sandboxLevel < 2) {
+        sandboxLevel = 2;
+    }
+#endif
 #endif
 
-    nsAutoPtr<PluginModuleChromeParent> parent(new PluginModuleChromeParent(aFilePath, aPluginId,
-                                                                            sandboxLevel));
+    nsAutoPtr<PluginModuleChromeParent> parent(
+            new PluginModuleChromeParent(aFilePath, aPluginId, sandboxLevel,
+                                         aPluginTag->mSupportsAsyncInit));
     UniquePtr<LaunchCompleteTask> onLaunchedRunnable(new LaunchedTask(parent));
     parent->mSubprocess->SetCallRunnableImmediately(!parent->mIsStartingAsync);
     TimeStamp launchStart = TimeStamp::Now();
@@ -624,8 +640,9 @@ PluginModuleChromeParent::WaitForIPCConnection()
     return true;
 }
 
-PluginModuleParent::PluginModuleParent(bool aIsChrome)
-    : mIsChrome(aIsChrome)
+PluginModuleParent::PluginModuleParent(bool aIsChrome, bool aAllowAsyncInit)
+    : mQuirks(QUIRKS_NOT_INITIALIZED)
+    , mIsChrome(aIsChrome)
     , mShutdown(false)
     , mHadLocalInstance(false)
     , mClearSiteDataSupported(false)
@@ -641,7 +658,8 @@ PluginModuleParent::PluginModuleParent(bool aIsChrome)
     , mAsyncNewRv(NS_ERROR_NOT_INITIALIZED)
 {
 #if defined(XP_WIN) || defined(XP_MACOSX) || defined(MOZ_WIDGET_GTK)
-    mIsStartingAsync = Preferences::GetBool(kAsyncInitPref, false);
+    mIsStartingAsync = aAllowAsyncInit &&
+                       Preferences::GetBool(kAsyncInitPref, false);
 #if defined(MOZ_CRASHREPORTER)
     CrashReporter::AnnotateCrashReport(NS_LITERAL_CSTRING("AsyncPluginInit"),
                                        mIsStartingAsync ?
@@ -664,8 +682,8 @@ PluginModuleParent::~PluginModuleParent()
     }
 }
 
-PluginModuleContentParent::PluginModuleContentParent()
-    : PluginModuleParent(false)
+PluginModuleContentParent::PluginModuleContentParent(bool aAllowAsyncInit)
+    : PluginModuleParent(false, aAllowAsyncInit)
 {
     Preferences::RegisterCallback(TimeoutChanged, kContentTimeoutPref, this);
 }
@@ -679,8 +697,9 @@ bool PluginModuleChromeParent::sInstantiated = false;
 
 PluginModuleChromeParent::PluginModuleChromeParent(const char* aFilePath,
                                                    uint32_t aPluginId,
-                                                   int32_t aSandboxLevel)
-    : PluginModuleParent(true)
+                                                   int32_t aSandboxLevel,
+                                                   bool aAllowAsyncInit)
+    : PluginModuleParent(true, aAllowAsyncInit)
     , mSubprocess(new PluginProcessParent(aFilePath))
     , mPluginId(aPluginId)
     , mChromeTaskFactory(this)
@@ -1343,8 +1362,19 @@ PluginModuleParent::GetPluginDetails()
     }
     mPluginName = pluginTag->Name();
     mPluginVersion = pluginTag->Version();
+    mPluginFilename = pluginTag->FileName();
     mIsFlashPlugin = pluginTag->mIsFlashPlugin;
     return true;
+}
+
+void
+PluginModuleParent::InitQuirksModes(const nsCString& aMimeType)
+{
+    if (mQuirks != QUIRKS_NOT_INITIALIZED) {
+      return;
+    }
+
+    mQuirks = GetQuirksFromMimeTypeAndFilename(aMimeType, mPluginFilename);
 }
 
 #ifdef XP_WIN
@@ -2539,6 +2569,7 @@ PluginModuleParent::NPP_New(NPMIMEType pluginType, NPP instance,
 
     if (mPluginName.IsEmpty()) {
         GetPluginDetails();
+        InitQuirksModes(nsDependentCString(pluginType));
         /** mTimeBlocked measures the time that the main thread has been blocked
          *  on plugin module initialization. As implemented, this is the sum of
          *  plugin-container launch + toolhelp32 snapshot + NP_Initialize.

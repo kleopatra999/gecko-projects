@@ -24,8 +24,6 @@ XPCOMUtils.defineLazyGetter(this, "gDatareportingService",
           .getService(Ci.nsISupports)
           .wrappedJSObject);
 
-const Telemetry = Cc["@mozilla.org/base/telemetry;1"].getService(Ci.nsITelemetry);
-
 // We increment TelemetryStorage's MAX_PING_FILE_AGE and
 // OVERDUE_PING_FILE_AGE by 1 minute so that our test pings exceed
 // those points in time, even taking into account file system imprecision.
@@ -39,6 +37,8 @@ const OLD_FORMAT_PINGS = 4;
 const RECENT_PINGS = 4;
 
 const TOTAL_EXPECTED_PINGS = OVERDUE_PINGS + RECENT_PINGS + OLD_FORMAT_PINGS;
+
+const PREF_FHR_UPLOAD = "datareporting.healthreport.uploadEnabled";
 
 let gCreatedPings = 0;
 let gSeenPings = 0;
@@ -61,7 +61,7 @@ let createSavedPings = Task.async(function* (aPingInfos) {
 
   for (let type in aPingInfos) {
     let num = aPingInfos[type].num;
-    let age = now - aPingInfos[type].age;
+    let age = now - (aPingInfos[type].age || 0);
     for (let i = 0; i < num; ++i) {
       let pingId = yield TelemetryController.addPendingPing("test-ping", {}, { overwrite: true });
       if (aPingInfos[type].age) {
@@ -181,6 +181,9 @@ function run_test() {
  * |TelemetryController.testSaveDirectoryToFile| could fail.
  */
 add_task(function* setupEnvironment() {
+  // The following tests assume this pref to be true by default.
+  Services.prefs.setBoolPref(PREF_FHR_UPLOAD, true);
+
   yield TelemetryController.setup();
 
   let directory = TelemetryStorage.pingDirectoryPath;
@@ -273,6 +276,57 @@ add_task(function* test_overdue_old_format() {
   yield clearPendingPings();
 });
 
+add_task(function* test_corrupted_pending_pings() {
+  const TEST_TYPE = "test_corrupted";
+
+  Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_READ").clear();
+  Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_PARSE").clear();
+
+  // Save a pending ping and get its id.
+  let pendingPingId = yield TelemetryController.addPendingPing(TEST_TYPE, {}, {});
+
+  // Try to load it: there should be no error.
+  yield TelemetryStorage.loadPendingPing(pendingPingId);
+
+  let h = Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_READ").snapshot();
+  Assert.equal(h.sum, 0, "Telemetry must not report a pending ping load failure");
+  h = Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_PARSE").snapshot();
+  Assert.equal(h.sum, 0, "Telemetry must not report a pending ping parse failure");
+
+  // Delete it from the disk, so that its id will be kept in the cache but it will
+  // fail loading the file.
+  yield OS.File.remove(getSavePathForPingId(pendingPingId));
+
+  // Try to load a pending ping which isn't there anymore.
+  yield Assert.rejects(TelemetryStorage.loadPendingPing(pendingPingId),
+                       "Telemetry must fail loading a ping which isn't there");
+
+  h = Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_READ").snapshot();
+  Assert.equal(h.sum, 1, "Telemetry must report a pending ping load failure");
+  h = Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_PARSE").snapshot();
+  Assert.equal(h.sum, 0, "Telemetry must not report a pending ping parse failure");
+
+  // Save a new ping, so that it gets in the pending pings cache.
+  pendingPingId = yield TelemetryController.addPendingPing(TEST_TYPE, {}, {});
+  // Overwrite it with a corrupted JSON file and then try to load it.
+  const INVALID_JSON = "{ invalid,JSON { {1}";
+  yield OS.File.writeAtomic(getSavePathForPingId(pendingPingId), INVALID_JSON, { encoding: "utf-8" });
+
+  // Try to load the ping with the corrupted JSON content.
+  yield Assert.rejects(TelemetryStorage.loadPendingPing(pendingPingId),
+                       "Telemetry must fail loading a corrupted ping");
+
+  h = Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_READ").snapshot();
+  Assert.equal(h.sum, 1, "Telemetry must report a pending ping load failure");
+  h = Telemetry.getHistogramById("TELEMETRY_PENDING_LOAD_FAILURE_PARSE").snapshot();
+  Assert.equal(h.sum, 1, "Telemetry must report a pending ping parse failure");
+
+  let exists = yield OS.File.exists(getSavePathForPingId(pendingPingId));
+  Assert.ok(!exists, "The unparseable ping should have been removed");
+
+  yield clearPendingPings();
+});
+
 /**
  * Create some recent and overdue pings and verify that they get sent.
  */
@@ -351,7 +405,6 @@ add_task(function* test_overdue_old_format() {
 
 add_task(function* test_pendingPingsQuota() {
   const PING_TYPE = "foo";
-  const PREF_FHR_UPLOAD = "datareporting.healthreport.uploadEnabled";
 
   // Disable upload so pings don't get sent and removed from the pending pings directory.
   Services.prefs.setBoolPref(PREF_FHR_UPLOAD, false);
@@ -462,6 +515,48 @@ add_task(function* test_pendingPingsQuota() {
   yield TelemetryController.reset();
   yield TelemetryStorage.testPendingQuotaTaskPromise();
   yield checkPendingPings();
+
+  const OVERSIZED_PING_ID = "9b21ec8f-f762-4d28-a2c1-44e1c4694f24";
+  // Create a pending oversized ping.
+  const OVERSIZED_PING = {
+    id: OVERSIZED_PING_ID,
+    type: PING_TYPE,
+    creationDate: (new Date()).toISOString(),
+    // Generate a 2MB string to use as the ping payload.
+    payload: generateRandomString(2 * 1024 * 1024),
+  };
+  yield TelemetryStorage.savePendingPing(OVERSIZED_PING);
+
+  // Reset the histograms.
+  Telemetry.getHistogramById("TELEMETRY_PING_SIZE_EXCEEDED_PENDING").clear();
+  Telemetry.getHistogramById("TELEMETRY_DISCARDED_PENDING_PINGS_SIZE_MB").clear();
+
+  // Try to manually load the oversized ping.
+  yield Assert.rejects(TelemetryStorage.loadPendingPing(OVERSIZED_PING_ID),
+                       "The oversized ping should have been pruned.");
+  Assert.ok(!(yield OS.File.exists(getSavePathForPingId(OVERSIZED_PING_ID))),
+            "The ping should not be on the disk anymore.");
+
+  // Make sure we're correctly updating the related histograms.
+  h = Telemetry.getHistogramById("TELEMETRY_PING_SIZE_EXCEEDED_PENDING").snapshot();
+  Assert.equal(h.sum, 1, "Telemetry must report 1 oversized ping in the pending pings directory.");
+  h = Telemetry.getHistogramById("TELEMETRY_DISCARDED_PENDING_PINGS_SIZE_MB").snapshot();
+  Assert.equal(h.counts[2], 1, "Telemetry must report a 2MB, oversized, ping.");
+
+  // Save the ping again to check if it gets pruned when scanning the pings directory.
+  yield TelemetryStorage.savePendingPing(OVERSIZED_PING);
+  expectedPrunedPings.push(OVERSIZED_PING_ID);
+
+  // Scan the pending pings directory.
+  yield TelemetryController.reset();
+  yield TelemetryStorage.testPendingQuotaTaskPromise();
+  yield checkPendingPings();
+
+  // Make sure we're correctly updating the related histograms.
+  h = Telemetry.getHistogramById("TELEMETRY_PING_SIZE_EXCEEDED_PENDING").snapshot();
+  Assert.equal(h.sum, 2, "Telemetry must report 1 oversized ping in the pending pings directory.");
+  h = Telemetry.getHistogramById("TELEMETRY_DISCARDED_PENDING_PINGS_SIZE_MB").snapshot();
+  Assert.equal(h.counts[2], 2, "Telemetry must report two 2MB, oversized, pings.");
 
   Services.prefs.setBoolPref(PREF_FHR_UPLOAD, true);
 });

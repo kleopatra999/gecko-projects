@@ -9,7 +9,9 @@
 #include "nsHttpNTLMAuth.h"
 #include "nsIAuthModule.h"
 #include "nsCOMPtr.h"
+#include "nsServiceManagerUtils.h"
 #include "plbase64.h"
+#include "plstr.h"
 #include "prnetdb.h"
 
 //-----------------------------------------------------------------------------
@@ -103,7 +105,7 @@ IsNonFqdn(nsIURI *uri)
         return false;
 
     // return true if host does not contain a dot and is not an ip address
-    return !host.IsEmpty() && host.FindChar('.') == kNotFound &&
+    return !host.IsEmpty() && !host.Contains('.') &&
            PR_StringToNetAddr(host.BeginReading(), &addr) != PR_SUCCESS;
 }
 

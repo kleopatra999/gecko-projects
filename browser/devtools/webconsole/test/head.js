@@ -7,10 +7,10 @@
 
 let {gDevTools} = Cu.import("resource:///modules/devtools/gDevTools.jsm", {});
 let {console} = Cu.import("resource://gre/modules/devtools/Console.jsm", {});
-let {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 let {Task} = Cu.import("resource://gre/modules/Task.jsm", {});
-let {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
-let {require, TargetFactory} = devtools;
+let {require} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+let promise = require("promise");
+let {TargetFactory} = require("devtools/framework/target");
 let {Utils: WebConsoleUtils} = require("devtools/toolkit/webconsole/utils");
 let {Messages} = require("devtools/webconsole/console-output");
 let DevToolsUtils = require("devtools/toolkit/DevToolsUtils");
@@ -28,6 +28,7 @@ const CATEGORY_WEBDEV = 3;
 const CATEGORY_INPUT = 4;
 const CATEGORY_OUTPUT = 5;
 const CATEGORY_SECURITY = 6;
+const CATEGORY_SERVER = 7;
 
 // The possible message severities.
 const SEVERITY_ERROR = 0;
@@ -1078,7 +1079,7 @@ function waitForMessages(options) {
         let file = frame.querySelector(".message-location").title;
         if (!checkText(expected.file, file)) {
           ok(false, "frame #" + i + " does not match file name: " +
-                    expected.file);
+                    expected.file + " != " + file);
           displayErrorContext(rule, element);
           return false;
         }
@@ -1088,7 +1089,7 @@ function waitForMessages(options) {
         let fn = frame.querySelector(".function").textContent;
         if (!checkText(expected.fn, fn)) {
           ok(false, "frame #" + i + " does not match the function name: " +
-                    expected.fn);
+                    expected.fn + " != " + fn);
           displayErrorContext(rule, element);
           return false;
         }
@@ -1098,7 +1099,7 @@ function waitForMessages(options) {
         let line = frame.querySelector(".message-location").sourceLine;
         if (!checkText(expected.line, line)) {
           ok(false, "frame #" + i + " does not match the line number: " +
-                    expected.line);
+                    expected.line + " != " + line);
           displayErrorContext(rule, element);
           return false;
         }

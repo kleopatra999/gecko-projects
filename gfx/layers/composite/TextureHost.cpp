@@ -131,7 +131,10 @@ TextureHost::SendDeleteIPDLActor(PTextureParent* actor)
 TextureHost*
 TextureHost::AsTextureHost(PTextureParent* actor)
 {
-  return actor? static_cast<TextureParent*>(actor)->mTextureHost : nullptr;
+  if (!actor) {
+    return nullptr;
+  }
+  return static_cast<TextureParent*>(actor)->mTextureHost;
 }
 
 PTextureParent*
@@ -296,10 +299,13 @@ TextureHost::TextureHost(TextureFlags aFlags)
     : mActor(nullptr)
     , mFlags(aFlags)
     , mCompositableCount(0)
-{}
+{
+  MOZ_COUNT_CTOR(TextureHost);
+}
 
 TextureHost::~TextureHost()
 {
+  MOZ_COUNT_DTOR(TextureHost);
 }
 
 void TextureHost::Finalize()

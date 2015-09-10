@@ -56,7 +56,7 @@ ConvertDefinitionToDouble(TempAllocator& alloc, MDefinition* def, MInstruction* 
 }
 
 static bool
-CheckUsesAreFloat32Consumers(MInstruction* ins)
+CheckUsesAreFloat32Consumers(const MInstruction* ins)
 {
     bool allConsumerUses = true;
     for (MUseDefIterator use(ins); allConsumerUses && use; use++)
@@ -112,6 +112,8 @@ EvaluateConstantOperands(TempAllocator& alloc, MBinaryInstruction* ins, bool* pt
 {
     MDefinition* left = ins->getOperand(0);
     MDefinition* right = ins->getOperand(1);
+
+    MOZ_ASSERT(IsNumberType(left->type()) && IsNumberType(right->type()));
 
     if (!left->isConstantValue() || !right->isConstantValue())
         return nullptr;
@@ -1856,6 +1858,40 @@ jit::EqualTypes(MIRType type1, TemporaryTypeSet* typeset1,
     return typeset1->equals(typeset2);
 }
 
+// Tests whether input/inputTypes can always be stored to an unboxed
+// object/array property with the given unboxed type.
+bool
+jit::CanStoreUnboxedType(TempAllocator& alloc,
+                         JSValueType unboxedType, MIRType input, TypeSet* inputTypes)
+{
+    TemporaryTypeSet types;
+
+    switch (unboxedType) {
+      case JSVAL_TYPE_BOOLEAN:
+      case JSVAL_TYPE_INT32:
+      case JSVAL_TYPE_DOUBLE:
+      case JSVAL_TYPE_STRING:
+        types.addType(TypeSet::PrimitiveType(unboxedType), alloc.lifoAlloc());
+        break;
+
+      case JSVAL_TYPE_OBJECT:
+        types.addType(TypeSet::AnyObjectType(), alloc.lifoAlloc());
+        types.addType(TypeSet::NullType(), alloc.lifoAlloc());
+        break;
+
+      default:
+        MOZ_CRASH("Bad unboxed type");
+    }
+
+    return TypeSetIncludes(&types, input, inputTypes);
+}
+
+static bool
+CanStoreUnboxedType(TempAllocator& alloc, JSValueType unboxedType, MDefinition* value)
+{
+    return CanStoreUnboxedType(alloc, unboxedType, value->type(), value->resultTypeSet());
+}
+
 bool
 MPhi::specializeType()
 {
@@ -1960,15 +1996,6 @@ MCall::addArg(size_t argnum, MDefinition* arg)
     // It cannot be checked for consistency until all arguments are added.
     // FixedList doesn't initialize its elements, so do an unchecked init.
     initOperand(argnum + NumNonArgumentOperands, arg);
-}
-
-void
-MBitNot::infer()
-{
-    if (getOperand(0)->mightBeType(MIRType_Object) || getOperand(0)->mightBeType(MIRType_Symbol))
-        specialization_ = MIRType_None;
-    else
-        specialization_ = MIRType_Int32;
 }
 
 static inline bool
@@ -2202,6 +2229,51 @@ NeedNegativeZeroCheck(MDefinition* def)
     return false;
 }
 
+MBinaryArithInstruction*
+MBinaryArithInstruction::New(TempAllocator& alloc, Opcode op,
+                             MDefinition* left, MDefinition* right)
+{
+    switch (op) {
+      case Op_Add:
+        return MAdd::New(alloc, left, right);
+      case Op_Sub:
+        return MSub::New(alloc, left, right);
+      case Op_Mul:
+        return MMul::New(alloc, left, right);
+      case Op_Div:
+        return MDiv::New(alloc, left, right);
+      case Op_Mod:
+        return MMod::New(alloc, left, right);
+      default:
+        MOZ_CRASH("unexpected binary opcode");
+    }
+}
+
+void
+MBinaryArithInstruction::setNumberSpecialization(TempAllocator& alloc, BaselineInspector* inspector,
+                                                 jsbytecode* pc)
+{
+    setSpecialization(MIRType_Double);
+
+    // Try to specialize as int32.
+    if (getOperand(0)->type() == MIRType_Int32 && getOperand(1)->type() == MIRType_Int32) {
+        bool seenDouble = inspector->hasSeenDoubleResult(pc);
+
+        // Use int32 specialization if the operation doesn't overflow on its
+        // constant operands and if the operation has never overflowed.
+        if (!seenDouble && !constantDoubleResult(alloc))
+            setInt32Specialization();
+    }
+}
+
+bool
+MBinaryArithInstruction::constantDoubleResult(TempAllocator& alloc)
+{
+    bool typeChange = false;
+    EvaluateConstantOperands(alloc, this, &typeChange);
+    return typeChange;
+}
+
 MDefinition*
 MBinaryArithInstruction::foldsTo(TempAllocator& alloc)
 {
@@ -2240,6 +2312,23 @@ MBinaryArithInstruction::foldsTo(TempAllocator& alloc)
     }
 
     return this;
+}
+
+void
+MFilterTypeSet::trySpecializeFloat32(TempAllocator& alloc)
+{
+    MDefinition* in = input();
+    if (in->type() != MIRType_Float32)
+        return;
+
+    setResultType(MIRType_Float32);
+}
+
+bool
+MFilterTypeSet::canConsumeFloat32(MUse* operand) const
+{
+    MOZ_ASSERT(getUseFor(0) == operand);
+    return CheckUsesAreFloat32Consumers(this);
 }
 
 void
@@ -2601,95 +2690,6 @@ SimpleArithOperand(MDefinition* op)
         && !op->mightBeType(MIRType_MagicOptimizedArguments)
         && !op->mightBeType(MIRType_MagicHole)
         && !op->mightBeType(MIRType_MagicIsConstructing);
-}
-
-void
-MBinaryArithInstruction::infer(TempAllocator& alloc, BaselineInspector* inspector, jsbytecode* pc)
-{
-    MOZ_ASSERT(this->type() == MIRType_Value);
-
-    specialization_ = MIRType_None;
-
-    // Anything complex - strings, symbols, and objects - are not specialized
-    // unless baseline type hints suggest it might be profitable
-    if (!SimpleArithOperand(getOperand(0)) || !SimpleArithOperand(getOperand(1)))
-        return inferFallback(inspector, pc);
-
-    // Retrieve type information of lhs and rhs.
-    MIRType lhs = getOperand(0)->type();
-    MIRType rhs = getOperand(1)->type();
-
-    // Guess a result type based on the inputs.
-    // Don't specialize for neither-integer-nor-double results.
-    if (lhs == MIRType_Int32 && rhs == MIRType_Int32)
-        setResultType(MIRType_Int32);
-    // Double operations are prioritary over float32 operations (i.e. if any operand needs
-    // a double as an input, convert all operands to doubles)
-    else if (IsFloatingPointType(lhs) || IsFloatingPointType(rhs))
-        setResultType(MIRType_Double);
-    else
-        return inferFallback(inspector, pc);
-
-    // If the operation has ever overflowed, use a double specialization.
-    if (inspector->hasSeenDoubleResult(pc))
-        setResultType(MIRType_Double);
-
-    // If the operation will always overflow on its constant operands, use a
-    // double specialization so that it can be constant folded later.
-    if ((isMul() || isDiv()) && lhs == MIRType_Int32 && rhs == MIRType_Int32) {
-        bool typeChange = false;
-        EvaluateConstantOperands(alloc, this, &typeChange);
-        if (typeChange)
-            setResultType(MIRType_Double);
-    }
-
-    MOZ_ASSERT(lhs < MIRType_String || lhs == MIRType_Value);
-    MOZ_ASSERT(rhs < MIRType_String || rhs == MIRType_Value);
-
-    MIRType rval = this->type();
-
-    // Don't specialize values when result isn't double
-    if (lhs == MIRType_Value || rhs == MIRType_Value) {
-        if (!IsFloatingPointType(rval)) {
-            specialization_ = MIRType_None;
-            return;
-        }
-    }
-
-    // Don't specialize as int32 if one of the operands is undefined,
-    // since ToNumber(undefined) is NaN.
-    if (rval == MIRType_Int32 && (lhs == MIRType_Undefined || rhs == MIRType_Undefined)) {
-        specialization_ = MIRType_None;
-        return;
-    }
-
-    specialization_ = rval;
-
-    if (isAdd() || isMul())
-        setCommutative();
-    setResultType(rval);
-}
-
-void
-MBinaryArithInstruction::inferFallback(BaselineInspector* inspector,
-                                       jsbytecode* pc)
-{
-    // Try to specialize based on what baseline observed in practice.
-    specialization_ = inspector->expectedBinaryArithSpecialization(pc);
-    if (specialization_ != MIRType_None) {
-        setResultType(specialization_);
-        return;
-    }
-
-    // If we can't specialize because we have no type information at all for
-    // the lhs or rhs, mark the binary instruction as having no possible types
-    // either to avoid degrading subsequent analysis.
-    if (getOperand(0)->emptyResultTypeSet() || getOperand(1)->emptyResultTypeSet()) {
-        LifoAlloc* alloc = GetJitContext()->temp->lifoAlloc();
-        TemporaryTypeSet* types = alloc->new_<TemporaryTypeSet>();
-        if (types)
-            setResultTypeSet(types);
-    }
 }
 
 static bool
@@ -4358,25 +4358,38 @@ MaybeUnwrapElements(const MDefinition* elementsOrObj)
     return elementsOrObj->toElements();
 }
 
+static inline const MDefinition*
+GetElementsObject(const MDefinition* elementsOrObj)
+{
+    if (elementsOrObj->type() == MIRType_Object)
+        return elementsOrObj;
+
+    const MDefinition* elements = MaybeUnwrapElements(elementsOrObj);
+    if (elements)
+        return elements->toElements()->input();
+
+    return nullptr;
+}
+
 // Gets the MDefinition of the target Object for the given store operation.
 static inline const MDefinition*
 GetStoreObject(const MDefinition* store)
 {
     switch (store->op()) {
-      case MDefinition::Op_StoreElement: {
-        const MDefinition* elementsOrObj = store->toStoreElement()->elements();
-        if (elementsOrObj->type() == MIRType_Object)
-            return elementsOrObj;
-
-        const MDefinition* elements = MaybeUnwrapElements(elementsOrObj);
-        if (elements)
-            return elements->toElements()->input();
-
-        return nullptr;
-      }
+      case MDefinition::Op_StoreElement:
+        return GetElementsObject(store->toStoreElement()->elements());
 
       case MDefinition::Op_StoreElementHole:
         return store->toStoreElementHole()->object();
+
+      case MDefinition::Op_StoreUnboxedObjectOrNull:
+        return GetElementsObject(store->toStoreUnboxedObjectOrNull()->elements());
+
+      case MDefinition::Op_StoreUnboxedString:
+        return GetElementsObject(store->toStoreUnboxedString()->elements());
+
+      case MDefinition::Op_StoreUnboxedScalar:
+        return GetElementsObject(store->toStoreUnboxedScalar()->elements());
 
       default:
         return nullptr;
@@ -4436,6 +4449,30 @@ bool
 MInitializedLength::mightAlias(const MDefinition* store) const
 {
     return GenericLoadMightAlias(elements(), store);
+}
+
+bool
+MLoadUnboxedObjectOrNull::mightAlias(const MDefinition* store) const
+{
+    return GenericLoadMightAlias(elements(), store);
+}
+
+bool
+MLoadUnboxedString::mightAlias(const MDefinition* store) const
+{
+    return GenericLoadMightAlias(elements(), store);
+}
+
+bool
+MLoadUnboxedScalar::mightAlias(const MDefinition* store) const
+{
+    return GenericLoadMightAlias(elements(), store);
+}
+
+bool
+MUnboxedArrayInitializedLength::mightAlias(const MDefinition* store) const
+{
+    return GenericLoadMightAlias(object(), store);
 }
 
 bool
@@ -4988,15 +5025,46 @@ PropertyReadNeedsTypeBarrier(CompilerConstraintList* constraints,
     return BarrierKind::NoBarrier;
 }
 
+static bool
+ObjectSubsumes(TypeSet::ObjectKey* first, TypeSet::ObjectKey* second)
+{
+    if (first->isSingleton() ||
+        second->isSingleton() ||
+        first->clasp() != second->clasp() ||
+        first->unknownProperties() ||
+        second->unknownProperties())
+    {
+        return false;
+    }
+
+    if (first->clasp() == &ArrayObject::class_) {
+        HeapTypeSetKey firstElements = first->property(JSID_VOID);
+        HeapTypeSetKey secondElements = second->property(JSID_VOID);
+
+        return firstElements.maybeTypes() && secondElements.maybeTypes() &&
+               firstElements.maybeTypes()->equals(secondElements.maybeTypes());
+    }
+
+    if (first->clasp() == &UnboxedArrayObject::class_) {
+        return first->group()->unboxedLayout().elementType() ==
+               second->group()->unboxedLayout().elementType();
+    }
+
+    return false;
+}
+
 BarrierKind
 jit::PropertyReadNeedsTypeBarrier(JSContext* propertycx,
                                   CompilerConstraintList* constraints,
                                   TypeSet::ObjectKey* key, PropertyName* name,
                                   TemporaryTypeSet* observed, bool updateObserved)
 {
+    if (!updateObserved)
+        return PropertyReadNeedsTypeBarrier(constraints, key, name, observed);
+
     // If this access has never executed, try to add types to the observed set
     // according to any property which exists on the object or its prototype.
-    if (updateObserved && observed->empty() && name) {
+    if (observed->empty() && name) {
         JSObject* obj;
         if (key->isSingleton())
             obj = key->singleton();
@@ -5026,6 +5094,30 @@ jit::PropertyReadNeedsTypeBarrier(JSContext* propertycx,
             }
 
             obj = obj->getProto();
+        }
+    }
+
+    // If any objects which could be observed are similar to ones that have
+    // already been observed, add them to the observed type set.
+    if (!key->unknownProperties()) {
+        HeapTypeSetKey property = key->property(name ? NameToId(name) : JSID_VOID);
+
+        if (property.maybeTypes() && !property.maybeTypes()->unknownObject()) {
+            for (size_t i = 0; i < property.maybeTypes()->getObjectCount(); i++) {
+                TypeSet::ObjectKey* key = property.maybeTypes()->getObject(i);
+                if (!key || observed->unknownObject())
+                    continue;
+
+                for (size_t j = 0; j < observed->getObjectCount(); j++) {
+                    TypeSet::ObjectKey* observedKey = observed->getObject(j);
+                    if (observedKey && ObjectSubsumes(observedKey, key)) {
+                        // Note: the return value here is ignored.
+                        observed->addType(TypeSet::ObjectType(key),
+                                          GetJitContext()->temp->lifoAlloc());
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -5413,6 +5505,20 @@ jit::PropertyWriteNeedsTypeBarrier(TempAllocator& alloc, CompilerConstraintList*
             success = TryAddTypeBarrierForWrite(alloc, constraints, current, types, name, pvalue,
                                                 implicitType);
             break;
+        }
+
+        // Perform additional filtering to make sure that any unboxed property
+        // being written can accommodate the value.
+        if (key->isGroup() && key->group()->maybeUnboxedLayout()) {
+            const UnboxedLayout& layout = key->group()->unboxedLayout();
+            if (name) {
+                const UnboxedLayout::Property* property = layout.lookup(name);
+                if (property && !CanStoreUnboxedType(alloc, property->type, *pvalue))
+                    return true;
+            } else {
+                if (layout.isArray() && !CanStoreUnboxedType(alloc, layout.elementType(), *pvalue))
+                    return true;
+            }
         }
     }
 

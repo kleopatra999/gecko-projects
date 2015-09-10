@@ -174,7 +174,6 @@ nsHttpHandler::nsHttpHandler()
     , mProduct("Gecko")
     , mCompatFirefoxEnabled(false)
     , mUserAgentIsDirty(true)
-    , mUseCache(true)
     , mPromptTempRedirect(true)
     , mSendSecureXSiteReferrer(true)
     , mEnablePersistentHttpsCaching(false)
@@ -325,6 +324,9 @@ nsHttpHandler::Init()
 
     rv = InitConnectionMgr();
     if (NS_FAILED(rv)) return rv;
+
+    mSchedulingContextService =
+        do_GetService("@mozilla.org/network/scheduling-context-service;1");
 
 #ifdef ANDROID
     mProductSub.AssignLiteral(MOZILLA_UAVERSION);
@@ -1149,13 +1151,6 @@ nsHttpHandler::PrefsChanged(nsIPrefBranch *prefs, const char *pref)
                                   getter_Copies(acceptEncodings));
         if (NS_SUCCEEDED(rv))
             SetAcceptEncodings(acceptEncodings);
-    }
-
-    if (PREF_CHANGED(HTTP_PREF("use-cache"))) {
-        rv = prefs->GetBoolPref(HTTP_PREF("use-cache"), &cVar);
-        if (NS_SUCCEEDED(rv)) {
-            mUseCache = cVar;
-        }
     }
 
     if (PREF_CHANGED(HTTP_PREF("default-socket-type"))) {

@@ -66,7 +66,7 @@ class XPCShellRunner(MozbuildObject):
                  debugger=None, debuggerArgs=None, debuggerInteractive=None,
                  jsDebugger=False, jsDebuggerPort=None,
                  rerun_failures=False, test_objects=None, verbose=False,
-                 log=None, test_tags=None,
+                 log=None, test_tags=None, dump_tests=None,
                  # ignore parameters from other platforms' options
                  **kwargs):
         """Runs an individual xpcshell test."""
@@ -78,8 +78,9 @@ class XPCShellRunner(MozbuildObject):
         if build_path not in sys.path:
             sys.path.append(build_path)
 
-        if not os.path.isfile(os.path.join(self.topsrcdir, 'build', 'automationutils.py')):
-            sys.path.append(os.path.join(self.topsrcdir, 'mozilla', 'build'))
+        src_build_path = os.path.join(self.topsrcdir, 'mozilla', 'build')
+        if os.path.isdir(src_build_path):
+            sys.path.append(src_build_path)
 
         if test_paths == 'all':
             self.run_suite(interactive=interactive,
@@ -88,7 +89,7 @@ class XPCShellRunner(MozbuildObject):
                            debuggerInteractive=debuggerInteractive,
                            jsDebugger=jsDebugger, jsDebuggerPort=jsDebuggerPort,
                            rerun_failures=rerun_failures,
-                           verbose=verbose, log=log, test_tags=test_tags)
+                           verbose=verbose, log=log, test_tags=test_tags, dump_tests=dump_tests)
             return
         elif test_paths:
             test_paths = [self._wrap_path_argument(p).relpath() for p in test_paths]
@@ -124,6 +125,7 @@ class XPCShellRunner(MozbuildObject):
             'verbose': verbose,
             'log': log,
             'test_tags': test_tags,
+            'dump_tests': dump_tests,
         }
 
         return self._run_xpcshell_harness(**args)
@@ -133,7 +135,8 @@ class XPCShellRunner(MozbuildObject):
                               keep_going=False, sequential=False,
                               debugger=None, debuggerArgs=None, debuggerInteractive=None,
                               jsDebugger=False, jsDebuggerPort=None,
-                              rerun_failures=False, verbose=False, log=None, test_tags=None):
+                              rerun_failures=False, verbose=False, log=None, test_tags=None,
+                              dump_tests=None):
 
         # Obtain a reference to the xpcshell test runner.
         import runxpcshelltests
@@ -172,6 +175,7 @@ class XPCShellRunner(MozbuildObject):
             'jsDebugger': jsDebugger,
             'jsDebuggerPort': jsDebuggerPort,
             'test_tags': test_tags,
+            'dump_tests': dump_tests,
             'utility_path': self.bindir,
         }
 
@@ -275,7 +279,7 @@ class AndroidXPCShellRunner(MozbuildObject):
             else:
                 raise Exception("You must specify an APK")
 
-        if test_paths == ['all']:
+        if test_paths == 'all':
             testdirs = []
             options.testPath = None
             options.verbose = False
@@ -446,6 +450,8 @@ class MachCommands(MachCommandBase):
         help='Filter out tests that don\'t have the given tag. Can be used '
              'multiple times in which case the test must contain at least one '
              'of the given tags.')
+    @CommandArgument('--dump-tests', default=None, type=str, dest='dump_tests',
+        help='Specify path to a filename to dump all the tests that will be run')
     @CommandArgument('--devicemanager', default='adb', type=str,
         help='(Android) Type of devicemanager to use for communication: adb or sut')
     @CommandArgument('--ip', type=str, default=None,
@@ -477,6 +483,8 @@ class MachCommands(MachCommandBase):
                                                              {"verbose": True})
 
         if conditions.is_android(self):
+            from mozrunner.devices.android_device import verify_android_device
+            verify_android_device(self)
             xpcshell = self._spawn(AndroidXPCShellRunner)
         elif conditions.is_b2g(self):
             xpcshell = self._spawn(B2GXPCShellRunner)

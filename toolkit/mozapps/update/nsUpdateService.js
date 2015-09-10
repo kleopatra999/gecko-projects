@@ -551,22 +551,32 @@ function getCanApplyUpdates() {
       let updateTestFile = getUpdateFile([FILE_PERMS_TEST]);
       LOG("getCanApplyUpdates - testing write access " + updateTestFile.path);
       testWriteAccess(updateTestFile, false);
-      if (AppConstants.platform == "win") {
+      if (AppConstants.platform == "macosx") {
+        // Check that the application bundle can be written to.
+        let appDirTestFile = getAppBaseDir();
+        appDirTestFile.append(FILE_PERMS_TEST);
+        LOG("getCanApplyUpdates - testing write access " + appDirTestFile.path);
+        if (appDirTestFile.exists()) {
+          appDirTestFile.remove(false);
+        }
+        appDirTestFile.create(Ci.nsILocalFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
+        appDirTestFile.remove(false);
+      } else if (AppConstants.platform == "win") {
         // Example windowsVersion:  Windows XP == 5.1
         let windowsVersion = Services.sysinfo.getProperty("version");
         LOG("getCanApplyUpdates - windowsVersion = " + windowsVersion);
 
-        /**
-         * For Vista, updates can be performed to a location requiring admin
-         * privileges by requesting elevation via the UAC prompt when launching
-         * updater.exe if the appDir is under the Program Files directory
-         * (e.g. C:\Program Files\) and UAC is turned on and  we can elevate
-         * (e.g. user has a split token).
-         *
-         * Note: this does note attempt to handle the case where UAC is turned on
-         * and the installation directory is in a restricted location that
-         * requires admin privileges to update other than Program Files.
-         */
+      /**
+       * For Vista, updates can be performed to a location requiring admin
+       * privileges by requesting elevation via the UAC prompt when launching
+       * updater.exe if the appDir is under the Program Files directory
+       * (e.g. C:\Program Files\) and UAC is turned on and  we can elevate
+       * (e.g. user has a split token).
+       *
+       * Note: this does note attempt to handle the case where UAC is turned on
+       * and the installation directory is in a restricted location that
+       * requires admin privileges to update other than Program Files.
+       */
         let userCanElevate = false;
 
         if (parseFloat(windowsVersion) >= 6) {
@@ -1069,10 +1079,9 @@ function shouldUseService() {
 }
 
 /**
- * Determines if the service is is installed and enabled or not.
+ * Determines if the service is is installed.
  *
- * @return  true if the service should be used for updates,
- *          is installed and enabled.
+ * @return  true if the service is installed.
  */
 function isServiceInstalled() {
   if (AppConstants.MOZ_MAINTENANCE_SERVICE && AppConstants.platform == "win") {
@@ -1252,7 +1261,7 @@ function getLocale() {
                                       Services.scriptSecurityManager.getSystemPrincipal(),
                                       null,      // aTriggeringPrincipal
                                       Ci.nsILoadInfo.SEC_NORMAL,
-                                      Ci.nsIContentPolicy.TYPE_DATAREQUEST);
+                                      Ci.nsIContentPolicy.TYPE_INTERNAL_XMLHTTPREQUEST);
     try {
       var inputStream = channel.open();
       gLocale = readStringFromInputStream(inputStream);
@@ -3863,6 +3872,13 @@ Downloader.prototype = {
     }
 
     LOG("Downloader:_verifyDownload downloaded size == expected size.");
+
+    // The hash check is not necessary when mar signatures are used to verify
+    // the downloaded mar file.
+    if (AppConstants.MOZ_VERIFY_MAR_SIGNATURE) {
+      return true;
+    }
+
     let fileStream = Cc["@mozilla.org/network/file-input-stream;1"].
                      createInstance(Ci.nsIFileInputStream);
     fileStream.init(destination, FileUtils.MODE_RDONLY, FileUtils.PERMS_FILE, 0);

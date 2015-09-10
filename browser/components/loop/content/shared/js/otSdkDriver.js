@@ -272,14 +272,17 @@ loop.OTSdkDriver = (function() {
       }));
 
       if (this.session) {
-        this.session.off("sessionDisconnected streamCreated streamDestroyed connectionCreated connectionDestroyed streamPropertyChanged");
+        this.session.off("sessionDisconnected streamCreated streamDestroyed " +
+                         "connectionCreated connectionDestroyed " +
+                         "streamPropertyChanged signal:readyForDataChannel");
         this.session.disconnect();
         delete this.session;
 
         this._notifyMetricsEvent("Session.connectionDestroyed", "local");
       }
       if (this.publisher) {
-        this.publisher.off("accessAllowed accessDenied accessDialogOpened streamCreated");
+        this.publisher.off("accessAllowed accessDenied accessDialogOpened " +
+                           "streamCreated streamDestroyed");
         this.publisher.destroy();
         delete this.publisher;
       }
@@ -923,9 +926,9 @@ loop.OTSdkDriver = (function() {
      * Handles publishing of property changes to a stream.
      */
     _onStreamPropertyChanged: function(event) {
-      if (event.changedProperty == STREAM_PROPERTIES.VIDEO_DIMENSIONS) {
+      if (event.changedProperty === STREAM_PROPERTIES.VIDEO_DIMENSIONS) {
         this.dispatcher.dispatch(new sharedActions.VideoDimensionsChanged({
-          isLocal: event.stream.connection.id == this.session.connection.id,
+          isLocal: event.stream.connection.id === this.session.connection.id,
           videoType: event.stream.videoType,
           dimensions: event.stream[STREAM_PROPERTIES.VIDEO_DIMENSIONS]
         }));
@@ -1084,8 +1087,8 @@ loop.OTSdkDriver = (function() {
         return;
       }
 
-      if (startTime == this.CONNECTION_START_TIME_ALREADY_NOTED ||
-          startTime == this.CONNECTION_START_TIME_UNINITIALIZED ||
+      if (startTime === this.CONNECTION_START_TIME_ALREADY_NOTED ||
+          startTime === this.CONNECTION_START_TIME_UNINITIALIZED ||
           startTime > endTime) {
         if (this._debugTwoWayMediaTelemetry) {
           console.log("_noteConnectionLengthIfNeeded called with " +
@@ -1111,7 +1114,7 @@ loop.OTSdkDriver = (function() {
      * be running in the standalone client and return immediately.
      *
      * @param  {String}  type    Type of sharing that was flipped. May be 'window'
-     *                           or 'tab'.
+     *                           or 'browser'.
      * @param  {Boolean} enabled Flag that tells us if the feature was flipped on
      *                           or off.
      * @private

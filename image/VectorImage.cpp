@@ -32,6 +32,7 @@
 #include "SVGDocumentWrapper.h"
 #include "nsIDOMEventListener.h"
 #include "SurfaceCache.h"
+#include "nsDocument.h"
 
 // undef the GetCurrentTime macro defined in WinBase.h from the MS Platform SDK
 #undef GetCurrentTime
@@ -492,7 +493,6 @@ VectorImage::SetAnimationStartTime(const TimeStamp& aTime)
 // imgIContainer methods
 
 //******************************************************************************
-/* readonly attribute int32_t width; */
 NS_IMETHODIMP
 VectorImage::GetWidth(int32_t* aWidth)
 {
@@ -508,7 +508,6 @@ VectorImage::GetWidth(int32_t* aWidth)
 }
 
 //******************************************************************************
-/* [notxpcom] void requestRefresh ([const] in TimeStamp aTime); */
 NS_IMETHODIMP_(void)
 VectorImage::RequestRefresh(const TimeStamp& aTime)
 {
@@ -558,7 +557,6 @@ VectorImage::GetImageSpaceInvalidationRect(const IntRect& aRect)
 }
 
 //******************************************************************************
-/* readonly attribute int32_t height; */
 NS_IMETHODIMP
 VectorImage::GetHeight(int32_t* aHeight)
 {
@@ -574,7 +572,6 @@ VectorImage::GetHeight(int32_t* aHeight)
 }
 
 //******************************************************************************
-/* [noscript] readonly attribute nsSize intrinsicSize; */
 NS_IMETHODIMP
 VectorImage::GetIntrinsicSize(nsSize* aSize)
 {
@@ -600,7 +597,6 @@ VectorImage::GetIntrinsicSize(nsSize* aSize)
 }
 
 //******************************************************************************
-/* [noscript] readonly attribute nsSize intrinsicRatio; */
 NS_IMETHODIMP
 VectorImage::GetIntrinsicRatio(nsSize* aRatio)
 {
@@ -624,7 +620,6 @@ VectorImage::GetOrientation()
 }
 
 //******************************************************************************
-/* readonly attribute unsigned short type; */
 NS_IMETHODIMP
 VectorImage::GetType(uint16_t* aType)
 {
@@ -635,7 +630,6 @@ VectorImage::GetType(uint16_t* aType)
 }
 
 //******************************************************************************
-/* readonly attribute boolean animated; */
 NS_IMETHODIMP
 VectorImage::GetAnimated(bool* aAnimated)
 {
@@ -648,7 +642,6 @@ VectorImage::GetAnimated(bool* aAnimated)
 }
 
 //******************************************************************************
-/* [notxpcom] int32_t getFirstFrameDelay (); */
 int32_t
 VectorImage::GetFirstFrameDelay()
 {
@@ -730,7 +723,6 @@ VectorImage::IsImageContainerAvailable(LayerManager* aManager, uint32_t aFlags)
 }
 
 //******************************************************************************
-/* [noscript] ImageContainer getImageContainer(); */
 NS_IMETHODIMP_(already_AddRefed<ImageContainer>)
 VectorImage::GetImageContainer(LayerManager* aManager, uint32_t aFlags)
 {
@@ -958,7 +950,7 @@ VectorImage::RecoverFromLossOfSurfaces()
 }
 
 //******************************************************************************
-/* void requestDecode() */
+
 NS_IMETHODIMP
 VectorImage::RequestDecode()
 {
@@ -983,7 +975,7 @@ VectorImage::RequestDecodeForSize(const nsIntSize& aSize, uint32_t aFlags)
 }
 
 //******************************************************************************
-/* void lockImage() */
+
 NS_IMETHODIMP
 VectorImage::LockImage()
 {
@@ -1004,7 +996,7 @@ VectorImage::LockImage()
 }
 
 //******************************************************************************
-/* void unlockImage() */
+
 NS_IMETHODIMP
 VectorImage::UnlockImage()
 {
@@ -1030,7 +1022,7 @@ VectorImage::UnlockImage()
 }
 
 //******************************************************************************
-/* void requestDiscard() */
+
 NS_IMETHODIMP
 VectorImage::RequestDiscard()
 {
@@ -1055,7 +1047,6 @@ VectorImage::OnSurfaceDiscarded()
 }
 
 //******************************************************************************
-/* void resetAnimation (); */
 NS_IMETHODIMP
 VectorImage::ResetAnimation()
 {
@@ -1085,7 +1076,6 @@ VectorImage::GetFrameIndex(uint32_t aWhichFrame)
 // nsIRequestObserver methods
 
 //******************************************************************************
-/* void onStartRequest(in nsIRequest request, in nsISupports ctxt); */
 NS_IMETHODIMP
 VectorImage::OnStartRequest(nsIRequest* aRequest, nsISupports* aCtxt)
 {
@@ -1258,6 +1248,24 @@ VectorImage::InvalidateObserversOnNextRefreshDriverTick()
     mHasPendingInvalidation = true;
   } else {
     SendInvalidationNotifications();
+  }
+}
+
+void
+VectorImage::PropagateUseCounters(nsIDocument* aParentDocument)
+{
+  nsIDocument* doc = mSVGDocumentWrapper->GetDocument();
+  if (doc) {
+    doc->PropagateUseCounters(aParentDocument);
+  }
+}
+
+void
+VectorImage::ReportUseCounters()
+{
+  nsIDocument* doc = mSVGDocumentWrapper->GetDocument();
+  if (doc) {
+    static_cast<nsDocument*>(doc)->ReportUseCounters();
   }
 }
 

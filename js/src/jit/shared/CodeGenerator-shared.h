@@ -85,6 +85,11 @@ class CodeGeneratorShared : public LElementVisitor
     Label invalidate_;
     CodeOffsetLabel invalidateEpilogueData_;
 
+    // Label for the common return path.
+    NonAssertingLabel returnLabel_;
+
+    FallbackICStubSpace stubSpace_;
+
     js::Vector<SafepointIndex, 0, SystemAllocPolicy> safepointIndices_;
     js::Vector<OsiIndex, 0, SystemAllocPolicy> osiIndices_;
 
@@ -450,6 +455,9 @@ class CodeGeneratorShared : public LElementVisitor
     ReciprocalMulConstants computeDivisionConstants(uint32_t d, int maxLog);
 
   protected:
+    bool generatePrologue();
+    bool generateEpilogue();
+
     void addOutOfLineCode(OutOfLineCode* code, const MInstruction* mir);
     void addOutOfLineCode(OutOfLineCode* code, const BytecodeSite* site);
     bool generateOutOfLineCode();
@@ -463,7 +471,7 @@ class CodeGeneratorShared : public LElementVisitor
     void jumpToBlock(MBasicBlock* mir);
 
 // This function is not used for MIPS. MIPS has branchToBlock.
-#ifndef JS_CODEGEN_MIPS
+#ifndef JS_CODEGEN_MIPS32
     void jumpToBlock(MBasicBlock* mir, Assembler::Condition cond);
 #endif
 

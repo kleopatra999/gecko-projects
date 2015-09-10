@@ -97,16 +97,16 @@ AudioNode::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
   // - mStream
   size_t amount = 0;
 
-  amount += mInputNodes.SizeOfExcludingThis(aMallocSizeOf);
+  amount += mInputNodes.ShallowSizeOfExcludingThis(aMallocSizeOf);
   for (size_t i = 0; i < mInputNodes.Length(); i++) {
     amount += mInputNodes[i].SizeOfExcludingThis(aMallocSizeOf);
   }
 
   // Just measure the array. The entire audio node graph is measured via the
   // MediaStreamGraph's streams, so we don't want to double-count the elements.
-  amount += mOutputNodes.SizeOfExcludingThis(aMallocSizeOf);
+  amount += mOutputNodes.ShallowSizeOfExcludingThis(aMallocSizeOf);
 
-  amount += mOutputParams.SizeOfExcludingThis(aMallocSizeOf);
+  amount += mOutputParams.ShallowSizeOfExcludingThis(aMallocSizeOf);
   for (size_t i = 0; i < mOutputParams.Length(); i++) {
     amount += mOutputParams[i]->SizeOfIncludingThis(aMallocSizeOf);
   }
@@ -173,6 +173,8 @@ AudioNode::DisconnectFromGraph()
     // It doesn't matter which one we remove, since we're going to remove all
     // entries for this node anyway.
     output->mInputNodes.RemoveElementAt(inputIndex);
+    // This effects of this connection will remain.
+    output->NotifyHasPhantomInput();
   }
 
   while (!mOutputParams.IsEmpty()) {
@@ -223,10 +225,11 @@ AudioNode::Connect(AudioNode& aDestination, uint32_t aOutput,
     MOZ_ASSERT(aInput <= UINT16_MAX, "Unexpected large input port number");
     MOZ_ASSERT(aOutput <= UINT16_MAX, "Unexpected large output port number");
     input->mStreamPort = destinationStream->
-      AllocateInputPort(mStream, MediaInputPort::FLAG_BLOCK_INPUT,
+      AllocateInputPort(mStream, 0,
                             static_cast<uint16_t>(aInput),
                             static_cast<uint16_t>(aOutput));
   }
+  aDestination.NotifyInputsChanged();
 
   // This connection may have connected a panner and a source.
   Context()->UpdatePannerSource();
@@ -265,8 +268,7 @@ AudioNode::Connect(AudioParam& aDestination, uint32_t aOutput,
     // Setup our stream as an input to the AudioParam's stream
     MOZ_ASSERT(aOutput <= UINT16_MAX, "Unexpected large output port number");
     input->mStreamPort =
-      ps->AllocateInputPort(mStream, MediaInputPort::FLAG_BLOCK_INPUT,
-                            0, static_cast<uint16_t>(aOutput));
+      ps->AllocateInputPort(mStream, 0, 0, static_cast<uint16_t>(aOutput));
   }
 }
 
@@ -351,6 +353,7 @@ AudioNode::Disconnect(uint32_t aOutput, ErrorResult& aRv)
         // could be for different output ports.
         nsRefPtr<AudioNode> output = mOutputNodes[i].forget();
         mOutputNodes.RemoveElementAt(i);
+        output->NotifyInputsChanged();
         if (mStream) {
           nsRefPtr<nsIRunnable> runnable = new RunnableRelease(output.forget());
           mStream->RunAfterPendingUpdates(runnable.forget());

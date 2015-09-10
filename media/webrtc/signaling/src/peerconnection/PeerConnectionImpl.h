@@ -149,7 +149,9 @@ class PCUuidGenerator : public mozilla::JsepUuidGenerator {
 class PeerConnectionConfiguration
 {
 public:
-  PeerConnectionConfiguration() : mBundlePolicy(kBundleBalanced) {}
+  PeerConnectionConfiguration()
+  : mBundlePolicy(kBundleBalanced),
+    mIceTransportPolicy(NrIceCtx::ICE_POLICY_ALL) {}
 
   bool addStunServer(const std::string& addr, uint16_t port,
                      const char* transport)
@@ -186,6 +188,8 @@ public:
   const std::vector<NrIceTurnServer>& getTurnServers() const { return mTurnServers; }
   void setBundlePolicy(JsepBundlePolicy policy) { mBundlePolicy = policy;}
   JsepBundlePolicy getBundlePolicy() const { return mBundlePolicy; }
+  void setIceTransportPolicy(NrIceCtx::Policy policy) { mIceTransportPolicy = policy;}
+  NrIceCtx::Policy getIceTransportPolicy() const { return mIceTransportPolicy; }
 
 #ifndef MOZILLA_EXTERNAL_LINKAGE
   nsresult Init(const RTCConfiguration& aSrc);
@@ -196,6 +200,7 @@ private:
   std::vector<NrIceStunServer> mStunServers;
   std::vector<NrIceTurnServer> mTurnServers;
   JsepBundlePolicy mBundlePolicy;
+  NrIceCtx::Policy mIceTransportPolicy;
 };
 
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
@@ -209,6 +214,7 @@ class RTCStatsQuery {
     std::string error;
     // A timestamp to help with telemetry.
     mozilla::TimeStamp iceStartTime;
+    bool isHello;
     // Just for convenience, maybe integrate into the report later
     bool failed;
 
@@ -415,7 +421,7 @@ public:
 
   NS_IMETHODIMP_TO_ERRORRESULT(AddTrack, ErrorResult &rv,
       mozilla::dom::MediaStreamTrack& aTrack,
-      const mozilla::dom::Sequence<mozilla::dom::OwningNonNull<DOMMediaStream>>& aStreams)
+      const mozilla::dom::Sequence<mozilla::OwningNonNull<DOMMediaStream>>& aStreams)
   {
     rv = AddTrack(aTrack, aStreams);
   }
@@ -470,6 +476,8 @@ public:
     return NS_OK;
   }
 #endif
+
+  bool IsLoop() const { return mIsLoop; }
 
   // this method checks to see if we've made a promise to protect media.
   bool PrivacyRequested() const { return mPrivacyRequested; }
@@ -738,6 +746,7 @@ private:
 
   // A name for this PC that we are willing to expose to content.
   std::string mName;
+  bool mIsLoop; // For telemetry; doesn't have to be 100% right
 
   // The target to run stuff on
   nsCOMPtr<nsIEventTarget> mSTSThread;

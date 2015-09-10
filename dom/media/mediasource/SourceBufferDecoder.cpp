@@ -11,10 +11,6 @@
 #include "MediaDecoderReader.h"
 
 extern PRLogModuleInfo* GetMediaSourceLog();
-/* Polyfill __func__ on MSVC to pass to the log. */
-#ifdef _MSC_VER
-#define __func__ __FUNCTION__
-#endif
 
 #define MSE_DEBUG(arg, ...) MOZ_LOG(GetMediaSourceLog(), mozilla::LogLevel::Debug, ("SourceBufferDecoder(%p:%s)::%s: " arg, this, mResource->GetContentType().get(), __func__, ##__VA_ARGS__))
 
@@ -95,20 +91,6 @@ SourceBufferDecoder::MetadataLoaded(nsAutoPtr<MediaInfo> aInfo,
 void
 SourceBufferDecoder::FirstFrameLoaded(nsAutoPtr<MediaInfo> aInfo,
                                       MediaDecoderEventVisibility aEventVisibility)
-{
-  MSE_DEBUG("UNIMPLEMENTED");
-}
-
-void
-SourceBufferDecoder::QueueMetadata(int64_t aTime,
-                                   nsAutoPtr<MediaInfo> aInfo,
-                                   nsAutoPtr<MetadataTags> aTags)
-{
-  MSE_DEBUG("UNIMPLEMENTED");
-}
-
-void
-SourceBufferDecoder::RemoveMediaTracks()
 {
   MSE_DEBUG("UNIMPLEMENTED");
 }

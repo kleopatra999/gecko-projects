@@ -24,6 +24,7 @@ class nsIPrefBranch;
 class nsICancelable;
 class nsICookieService;
 class nsIIOService;
+class nsISchedulingContextService;
 class nsISiteSecurityService;
 class nsIStreamConverterService;
 class nsITimer;
@@ -166,7 +167,6 @@ public:
     nsHttpConnectionMgr *ConnMgr()   { return mConnMgr; }
 
     // cache support
-    bool UseCache() const { return mUseCache; }
     uint32_t GenerateUniqueID() { return ++mLastUniqueID; }
     uint32_t SessionStartTime() { return mSessionStartTime; }
 
@@ -336,6 +336,11 @@ public:
     void SetCacheSkippedUntil(TimeStamp arg) { mCacheSkippedUntil = arg; }
     void ClearCacheSkippedUntil() { mCacheSkippedUntil = TimeStamp(); }
 
+    nsISchedulingContextService *GetSchedulingContextService()
+    {
+        return mSchedulingContextService.get();
+    }
+
 private:
     virtual ~nsHttpHandler();
 
@@ -452,7 +457,6 @@ private:
     nsXPIDLCString mUserAgentOverride;
     bool           mUserAgentIsDirty; // true if mUserAgent should be rebuilt
 
-    bool           mUseCache;
 
     bool           mPromptTempRedirect;
     // mSendSecureXSiteReferrer: default is false,
@@ -542,6 +546,8 @@ private:
     // if true, generate NS_ERROR_PARTIAL_TRANSFER for h1 responses with
     // incorrect content lengths or malformed chunked encodings
     FrameCheckLevel mEnforceH1Framing;
+
+    nsCOMPtr<nsISchedulingContextService> mSchedulingContextService;
 
 private:
     // For Rate Pacing Certain Network Events. Only assign this pointer on

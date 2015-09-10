@@ -15,10 +15,13 @@
  */
 
 #include "GonkGPSGeolocationProvider.h"
+#include "mozstumbler/MozStumbler.h"
 
 #include <pthread.h>
 #include <hardware/gps.h>
 
+#include "GeolocationUtil.h"
+#include "mozstumbler/MozStumbler.h"
 #include "mozilla/Constants.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
@@ -87,6 +90,7 @@ AGpsCallbacks GonkGPSGeolocationProvider::mAGPSCallbacks;
 AGpsRilCallbacks GonkGPSGeolocationProvider::mAGPSRILCallbacks;
 #endif // MOZ_B2G_RIL
 
+
 void
 GonkGPSGeolocationProvider::LocationCallback(GpsLocation* location)
 {
@@ -134,18 +138,94 @@ GonkGPSGeolocationProvider::LocationCallback(GpsLocation* location)
   // current time, most notably: the geolocation service which respects maximumAge
   // set in the DOM JS.
 
+  if (gDebug_isLoggingEnabled) {
+    nsContentUtils::LogMessageToConsole("geo: GPS got a fix (%f, %f). accuracy: %f",
+                                        location->latitude,
+                                        location->longitude,
+                                        location->accuracy);
+  }
 
-  NS_DispatchToMainThread(new UpdateLocationEvent(somewhere));
+  nsRefPtr<UpdateLocationEvent> event = new UpdateLocationEvent(somewhere);
+  NS_DispatchToMainThread(event);
+
+  MozStumble(somewhere);
 }
 
 void
 GonkGPSGeolocationProvider::StatusCallback(GpsStatus* status)
 {
+  if (gDebug_isLoggingEnabled) {
+    switch (status->status) {
+      case GPS_STATUS_NONE:
+        nsContentUtils::LogMessageToConsole("geo: GPS_STATUS_NONE\n");
+        break;
+      case GPS_STATUS_SESSION_BEGIN:
+        nsContentUtils::LogMessageToConsole("geo: GPS_STATUS_SESSION_BEGIN\n");
+        break;
+      case GPS_STATUS_SESSION_END:
+        nsContentUtils::LogMessageToConsole("geo: GPS_STATUS_SESSION_END\n");
+        break;
+      case GPS_STATUS_ENGINE_ON:
+        nsContentUtils::LogMessageToConsole("geo: GPS_STATUS_ENGINE_ON\n");
+        break;
+      case GPS_STATUS_ENGINE_OFF:
+        nsContentUtils::LogMessageToConsole("geo: GPS_STATUS_ENGINE_OFF\n");
+        break;
+      default:
+        nsContentUtils::LogMessageToConsole("geo: Unknown GPS status\n");
+        break;
+    }
+  }
 }
 
 void
 GonkGPSGeolocationProvider::SvStatusCallback(GpsSvStatus* sv_info)
 {
+  if (gDebug_isLoggingEnabled) {
+    static int numSvs = 0;
+    static uint32_t numEphemeris = 0;
+    static uint32_t numAlmanac = 0;
+    static uint32_t numUsedInFix = 0;
+
+    unsigned int i = 1;
+    uint32_t svAlmanacCount = 0;
+    for (i = 1; i > 0; i <<= 1) {
+      if (i & sv_info->almanac_mask) {
+        svAlmanacCount++;
+      }
+    }
+
+    uint32_t svEphemerisCount = 0;
+    for (i = 1; i > 0; i <<= 1) {
+      if (i & sv_info->ephemeris_mask) {
+        svEphemerisCount++;
+      }
+    }
+
+    uint32_t svUsedCount = 0;
+    for (i = 1; i > 0; i <<= 1) {
+      if (i & sv_info->used_in_fix_mask) {
+        svUsedCount++;
+      }
+    }
+
+    // Log the message only if the the status changed.
+    if (sv_info->num_svs != numSvs ||
+        svAlmanacCount != numAlmanac ||
+        svEphemerisCount != numEphemeris ||
+        svUsedCount != numUsedInFix) {
+
+      nsContentUtils::LogMessageToConsole(
+        "geo: Number of SVs have (visibility, almanac, ephemeris): (%d, %d, %d)."
+        "  %d of these SVs were used in fix.\n",
+        sv_info->num_svs, svAlmanacCount, svEphemerisCount, svUsedCount);
+
+      numSvs = sv_info->num_svs;
+      numAlmanac = svAlmanacCount;
+      numEphemeris = svEphemerisCount;
+      numUsedInFix = svUsedCount;
+    }
+  }
 }
 
 void
@@ -813,23 +893,7 @@ GonkGPSGeolocationProvider::NetworkLocationUpdate::Update(nsIDOMGeoPosition *pos
   static double sLastMLSPosLon = 0;
 
   if (0 != sLastMLSPosLon || 0 != sLastMLSPosLat) {
-    // Use spherical law of cosines to calculate difference
-    // Not quite as correct as the Haversine but simpler and cheaper
-    // Should the following be a utility function? Others might need this calc.
-    const double radsInDeg = M_PI / 180.0;
-    const double rNewLat = lat * radsInDeg;
-    const double rNewLon = lon * radsInDeg;
-    const double rOldLat = sLastMLSPosLat * radsInDeg;
-    const double rOldLon = sLastMLSPosLon * radsInDeg;
-    // WGS84 equatorial radius of earth = 6378137m
-    double cosDelta = (sin(rNewLat) * sin(rOldLat)) +
-                      (cos(rNewLat) * cos(rOldLat) * cos(rOldLon - rNewLon));
-    if (cosDelta > 1.0) {
-      cosDelta = 1.0;
-    } else if (cosDelta < -1.0) {
-      cosDelta = -1.0;
-    }
-    delta = acos(cosDelta) * 6378137;
+    delta = CalculateDeltaInMeter(lat, lon, sLastMLSPosLat, sLastMLSPosLon);
   }
 
   sLastMLSPosLat = lat;

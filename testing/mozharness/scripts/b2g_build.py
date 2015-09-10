@@ -114,6 +114,10 @@ class B2GBuild(LocalesMixin, PurgeMixin,
             "dest": "platform",
             "help": "the platform used by balrog submmiter.",
         }],
+        [["--gecko-objdir"], {
+            "dest": "gecko_objdir",
+            "help": "Specifies the gecko object directory.",
+        }],
     ]
 
     def __init__(self, require_config_file=False, config={},
@@ -157,7 +161,8 @@ class B2GBuild(LocalesMixin, PurgeMixin,
         )
 
         dirs = self.query_abs_dirs()
-        self.objdir = os.path.join(dirs['work_dir'], 'objdir-gecko')
+        self.objdir = self.config.get("gecko_objdir",
+                os.path.join(dirs['work_dir'], 'objdir-gecko'))
         self.abs_dirs['abs_obj_dir'] = self.objdir
         if self.config.get("update_type", "ota") == "fota":
             self.make_updates_cmd = ['./build.sh', 'gecko-update-fota']
@@ -524,7 +529,8 @@ class B2GBuild(LocalesMixin, PurgeMixin,
         cmd = ['./build.sh']
         if target is not None:
             # Workaround bug 984061
-            if target == 'package-tests':
+            # wcosta: blobfree builds also should run with -j1
+            if target in ('package-tests', 'blobfree'):
                 cmd.append('-j1')
             else:
                 # Ensure we always utilize the correct number of cores
@@ -555,6 +561,9 @@ class B2GBuild(LocalesMixin, PurgeMixin,
             env['PATH'] += ':%s' % os.path.join(dirs['compare_locales_dir'], 'scripts')
             env['PYTHONPATH'] = os.environ.get('PYTHONPATH', '')
             env['PYTHONPATH'] += ':%s' % os.path.join(dirs['compare_locales_dir'], 'lib')
+
+        with open(os.path.join(dirs['work_dir'], '.userconfig'), 'w') as cfg:
+            cfg.write('GECKO_OBJDIR={0}'.format(self.objdir))
 
         self.enable_mock()
         if self.config['ccache']:
@@ -710,6 +719,18 @@ class B2GBuild(LocalesMixin, PurgeMixin,
                     files.append(f)
                 if base_pattern in public_upload_patterns:
                     public_files.append(f)
+
+        device_name = self.config['target'].split('-')[0]
+        blobfree_zip = os.path.join(
+                        dirs['work_dir'],
+                        'out',
+                        'target',
+                        'product',
+                        device_name,
+                        device_name + '.blobfree-dist.zip')
+
+        if os.path.exists(blobfree_zip):
+            public_files.append(blobfree_zip)
 
         for base_f in files + public_files:
             f = base_f

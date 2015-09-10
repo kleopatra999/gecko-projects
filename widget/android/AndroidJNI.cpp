@@ -30,6 +30,7 @@
 #endif
 
 #include "mozilla/unused.h"
+#include "mozilla/MathAlgorithms.h"
 #include "mozilla/UniquePtr.h"
 
 #include "mozilla/dom/SmsMessage.h"
@@ -64,13 +65,6 @@ Java_org_mozilla_gecko_GeckoAppShell_registerJavaUiThread(JNIEnv *jenv, jclass j
 }
 
 NS_EXPORT void JNICALL
-Java_org_mozilla_gecko_GeckoAppShell_nativeInit(JNIEnv *jenv, jclass, jobject clsLoader, jobject msgQueue)
-{
-    AndroidBridge::ConstructBridge(
-            jenv, jni::Object::Ref::From(clsLoader), jni::Object::Ref::From(msgQueue));
-}
-
-NS_EXPORT void JNICALL
 Java_org_mozilla_gecko_GeckoAppShell_notifyGeckoOfEvent(JNIEnv *jenv, jclass jc, jobject event)
 {
     // poke the appshell
@@ -83,7 +77,7 @@ Java_org_mozilla_gecko_GeckoAppShell_notifyGeckoObservers(JNIEnv *aEnv, jclass,
                                                          jstring aTopic, jstring aData)
 {
     if (!NS_IsMainThread()) {
-        AndroidBridge::ThrowException(aEnv,
+        jni::ThrowException(aEnv,
             "java/lang/IllegalThreadStateException", "Not on Gecko main thread");
         return;
     }
@@ -91,7 +85,7 @@ Java_org_mozilla_gecko_GeckoAppShell_notifyGeckoObservers(JNIEnv *aEnv, jclass,
     nsCOMPtr<nsIObserverService> obsServ =
         mozilla::services::GetObserverService();
     if (!obsServ) {
-        AndroidBridge::ThrowException(aEnv,
+        jni::ThrowException(aEnv,
             "java/lang/IllegalStateException", "No observer service");
         return;
     }
@@ -706,20 +700,6 @@ Java_org_mozilla_gecko_GeckoAppShell_notifyFilePickerResult(JNIEnv* jenv, jclass
     NS_DispatchToMainThread(runnable);
 }
 
-static int
-NextPowerOfTwo(int value) {
-    // code taken from http://acius2.blogspot.com/2007/11/calculating-next-power-of-2.html
-    if (0 == value--) {
-        return 1;
-    }
-    value = (value >> 1) | value;
-    value = (value >> 2) | value;
-    value = (value >> 4) | value;
-    value = (value >> 8) | value;
-    value = (value >> 16) | value;
-    return value + 1;
-}
-
 #define MAX_LOCK_ATTEMPTS 10
 
 static bool LockWindowWithRetry(void* window, unsigned char** bits, int* width, int* height, int* format, int* stride)
@@ -778,8 +758,8 @@ Java_org_mozilla_gecko_GeckoAppShell_getSurfaceBits(JNIEnv* jenv, jclass, jobjec
         goto cleanup;
     }
 
-    dstWidth = NextPowerOfTwo(srcWidth);
-    dstHeight = NextPowerOfTwo(srcHeight);
+    dstWidth = mozilla::RoundUpPow2(srcWidth);
+    dstHeight = mozilla::RoundUpPow2(srcHeight);
     dstSize = dstWidth * dstHeight * bpp;
 
     bitsCopy = (unsigned char*)malloc(dstSize);
@@ -840,7 +820,7 @@ Java_org_mozilla_gecko_GeckoAppShell_onFullScreenPluginHidden(JNIEnv* jenv, jcla
       ExitFullScreenRunnable(jobject view) : mView(view) {}
 
       NS_IMETHODIMP Run() {
-        JNIEnv* env = AndroidBridge::GetJNIEnv();
+        JNIEnv* const env = jni::GetGeckoThreadEnv();
         nsPluginInstanceOwner::ExitFullScreen(mView);
         env->DeleteGlobalRef(mView);
         return NS_OK;

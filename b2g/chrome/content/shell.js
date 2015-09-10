@@ -23,6 +23,7 @@ Cu.import('resource://gre/modules/SystemUpdateService.jsm');
 Cu.import('resource://gre/modules/NetworkStatsService.jsm');
 Cu.import('resource://gre/modules/ResourceStatsService.jsm');
 #endif
+Cu.import('resource://gre/modules/KillSwitchMain.jsm');
 
 // Identity
 Cu.import('resource://gre/modules/SignInToWebsite.jsm');
@@ -75,6 +76,9 @@ XPCOMUtils.defineLazyServiceGetter(Services, 'captivePortalDetector',
 XPCOMUtils.defineLazyModuleGetter(this, "SafeBrowsing",
               "resource://gre/modules/SafeBrowsing.jsm");
 #endif
+
+XPCOMUtils.defineLazyModuleGetter(this, "SafeMode",
+                                  "resource://gre/modules/SafeMode.jsm");
 
 window.performance.measure('gecko-shell-jsm-loaded', 'gecko-shell-loadstart');
 
@@ -231,18 +235,27 @@ var shell = {
   },
 
   bootstrap: function() {
+#ifdef MOZ_B2GDROID
+    Cc["@mozilla.org/b2g/b2gdroid-setup;1"]
+      .getService(Ci.nsIObserver).observe(window, "shell-startup", null);
+#endif
+
     window.performance.mark('gecko-shell-bootstrap');
-    let startManifestURL =
-      Cc['@mozilla.org/commandlinehandler/general-startup;1?type=b2gbootstrap']
-        .getService(Ci.nsISupports).wrappedJSObject.startManifestURL;
-    if (startManifestURL) {
-      Cu.import('resource://gre/modules/Bootstraper.jsm');
-      Bootstraper.ensureSystemAppInstall(startManifestURL)
-                 .then(this.start.bind(this))
-                 .catch(Bootstraper.bailout);
-    } else {
-      this.start();
-    }
+
+    // Before anything, check if we want to start in safe mode.
+    SafeMode.check(window).then(() => {
+      let startManifestURL =
+        Cc['@mozilla.org/commandlinehandler/general-startup;1?type=b2gbootstrap']
+          .getService(Ci.nsISupports).wrappedJSObject.startManifestURL;
+      if (startManifestURL) {
+        Cu.import('resource://gre/modules/Bootstraper.jsm');
+        Bootstraper.ensureSystemAppInstall(startManifestURL)
+                   .then(this.start.bind(this))
+                   .catch(Bootstraper.bailout);
+      } else {
+        this.start();
+      }
+    });
   },
 
   start: function shell_start() {
@@ -585,7 +598,7 @@ var shell = {
         // TODO: We should get the `isActive` state from evt.isActive.
         // Then we don't need to do `channel.isActive()` here.
         channel.isActive().onsuccess = function(evt) {
-          this.sendChromeEvent({
+          SystemAppProxy._sendCustomEvent('mozSystemWindowChromeEvent', {
             type: 'system-audiochannel-state-changed',
             name: channel.name,
             isActive: evt.target.result
@@ -697,7 +710,8 @@ var shell = {
   },
 
   handleCmdLine: function shell_handleCmdLine() {
-#ifndef MOZ_WIDGET_GONK
+  // This isn't supported on devices.
+#ifndef ANDROID
     let b2gcmds = Cc["@mozilla.org/commandlinehandler/general-startup;1?type=b2gcmds"]
                     .getService(Ci.nsISupports);
     let args = b2gcmds.wrappedJSObject.cmdLine;
@@ -737,6 +751,14 @@ Services.obs.addObserver(function onBluetoothVolumeChange(subject, topic, data) 
 Services.obs.addObserver(function(subject, topic, data) {
   shell.sendCustomEvent('mozmemorypressure');
 }, 'memory-pressure', false);
+
+let permissionMap = new Map([
+  ['unknown', Services.perms.UNKNOWN_ACTION],
+  ['allow', Services.perms.ALLOW_ACTION],
+  ['deny', Services.perms.DENY_ACTION],
+  ['prompt', Services.perms.PROMPT_ACTION],
+]);
+let permissionMapRev = new Map(Array.from(permissionMap.entries()).reverse());
 
 var CustomEventManager = {
   init: function custevt_init() {
@@ -782,6 +804,22 @@ var CustomEventManager = {
       case 'copypaste-do-command':
         Services.obs.notifyObservers({ wrappedJSObject: shell.contentBrowser },
                                      'ask-children-to-execute-copypaste-command', detail.cmd);
+        break;
+      case 'add-permission':
+        Services.perms.add(Services.io.newURI(detail.uri, null, null),
+                           detail.permissionType, permissionMap.get(detail.permission));
+        break;
+      case 'remove-permission':
+        Services.perms.remove(Services.io.newURI(detail.uri, null, null),
+                              detail.permissionType);
+        break;
+      case 'test-permission':
+        let result = Services.perms.testExactPermission(
+          Services.io.newURI(detail.uri, null, null), detail.permissionType);
+        // Not equal check here because we want to prevent default only if it's not set
+        if (result !== permissionMapRev.get(detail.permission)) {
+          evt.preventDefault();
+        }
         break;
     }
   }
@@ -1029,6 +1067,7 @@ window.addEventListener('ContentStart', function update_onContentStart() {
   Cu.import('resource://gre/modules/WebappsUpdater.jsm');
   WebappsUpdater.handleContentStart(shell);
 
+#ifdef MOZ_UPDATER
   let promptCc = Cc["@mozilla.org/updates/update-prompt;1"];
   if (!promptCc) {
     return;
@@ -1040,6 +1079,7 @@ window.addEventListener('ContentStart', function update_onContentStart() {
   }
 
   updatePrompt.wrappedJSObject.handleContentStart(shell);
+#endif
 });
 
 (function geolocationStatusTracker() {

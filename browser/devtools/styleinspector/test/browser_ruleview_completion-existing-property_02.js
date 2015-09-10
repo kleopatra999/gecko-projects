@@ -4,8 +4,8 @@
 
 "use strict";
 
-// Test that CSS property names and values are autocompleted and cycled correctly
-// when editing existing properties in the rule view
+// Tests that CSS property names and values are autocompleted and cycled
+// correctly when editing existing properties in the rule view.
 
 // format :
 //  [
@@ -36,13 +36,21 @@ let testData = [
   ["VK_RETURN", {}, null, -1, 0]
 ];
 
-let TEST_URL = "data:text/html;charset=utf-8,<h1 style='color: red'>Filename: " +
-               "browser_bug894376_css_value_completion_existing_property_value_pair.js</h1>";
+const TEST_URI = "<h1 style='color: red'>Header</h1>";
 
 add_task(function*() {
-  yield addTab(TEST_URL);
+  yield addTab("data:text/html;charset=utf-8," + encodeURIComponent(TEST_URI));
   let {toolbox, inspector, view} = yield openRuleView();
 
+  info("Test autocompletion after 1st page load");
+  yield runAutocompletionTest(toolbox, inspector, view);
+
+  info("Test autocompletion after page navigation");
+  yield reloadPage(inspector);
+  yield runAutocompletionTest(toolbox, inspector, view);
+});
+
+function* runAutocompletionTest(toolbox, inspector, view) {
   info("Selecting the test node");
   yield selectNode("h1", inspector);
 
@@ -51,15 +59,16 @@ add_task(function*() {
   let editor = yield focusEditableField(view, value);
 
   info("Starting to test for css property completion");
-  for (let i = 0; i < testData.length; i ++) {
+  for (let i = 0; i < testData.length; i++) {
     // Re-define the editor at each iteration, because the focus may have moved
     // from property to value and back
     editor = inplaceEditor(view.styleDocument.activeElement);
     yield testCompletion(testData[i], editor, view);
   }
-});
+}
 
-function* testCompletion([key, modifiers, completion, index, total], editor, view) {
+function* testCompletion([key, modifiers, completion, index, total], editor,
+    view) {
   info("Pressing key " + key);
   info("Expecting " + completion + ", " + index + ", " + total);
 
@@ -94,7 +103,8 @@ function* testCompletion([key, modifiers, completion, index, total], editor, vie
   if (total == 0) {
     ok(!(editor.popup && editor.popup.isOpen), "Popup is closed");
   } else {
-    ok(editor.popup._panel.state == "open" || editor.popup._panel.state == "showing", "Popup is open");
+    ok(editor.popup._panel.state == "open" ||
+       editor.popup._panel.state == "showing", "Popup is open");
     is(editor.popup.getItems().length, total, "Number of suggestions match");
     is(editor.popup.selectedIndex, index, "Correct item is selected");
   }

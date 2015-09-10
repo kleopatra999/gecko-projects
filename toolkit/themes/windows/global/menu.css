@@ -103,9 +103,16 @@ menucaption > .menu-iconic-text {
 
 menu.menu-iconic > .menu-iconic-left,
 menuitem.menuitem-iconic > .menu-iconic-left,
-.splitmenu-menuitem[iconic="true"] > .menu-iconic-left {
+.splitmenu-menuitem[iconic="true"] > .menu-iconic-left,
+menuitem[endimage] > .menu-iconic-right {
   -moz-appearance: menuimage;
   padding-top: 2px;
+}
+
+menuitem[endimage] > .menu-iconic-right > .menu-iconic-icon {
+  -moz-margin-start: 2px;
+  -moz-margin-end: 5px;
+  width: 16px;
 }
 
 /* ..... menu arrow box ..... */
@@ -216,7 +223,6 @@ menulist > menupopup > menuitem > .menu-iconic-left,
 menulist > menupopup > menucaption > .menu-iconic-left,
 menulist > menupopup > menu > .menu-iconic-left {
   display: none;
-  padding-top: 0px;
 }
 
 menulist > menupopup > menuitem > label,

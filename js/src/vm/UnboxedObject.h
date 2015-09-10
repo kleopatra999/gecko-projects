@@ -129,7 +129,7 @@ class UnboxedLayout : public mozilla::LinkedListElement<UnboxedLayout>
         constructorCode_.init(nullptr);
     }
 
-    bool isArray() {
+    bool isArray() const {
         return elementType_ != JSVAL_TYPE_MAGIC;
     }
 
@@ -262,7 +262,8 @@ class UnboxedPlainObject : public JSObject
     static bool obj_deleteProperty(JSContext* cx, HandleObject obj, HandleId id,
                                    ObjectOpResult& result);
 
-    static bool obj_enumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties);
+    static bool obj_enumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties,
+                              bool enumerableOnly);
     static bool obj_watch(JSContext* cx, HandleObject obj, HandleId id, HandleObject callable);
 
     inline const UnboxedLayout& layout() const;
@@ -397,7 +398,8 @@ class UnboxedArrayObject : public JSObject
     static bool obj_deleteProperty(JSContext* cx, HandleObject obj, HandleId id,
                                    ObjectOpResult& result);
 
-    static bool obj_enumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties);
+    static bool obj_enumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties,
+                              bool enumerableOnly);
     static bool obj_watch(JSContext* cx, HandleObject obj, HandleId id, HandleObject callable);
 
     inline const UnboxedLayout& layout() const;
@@ -418,6 +420,10 @@ class UnboxedArrayObject : public JSObject
     static UnboxedArrayObject* create(ExclusiveContext* cx, HandleObjectGroup group,
                                       uint32_t length, NewObjectKind newKind,
                                       uint32_t maxLength = MaximumCapacity);
+
+    static bool convertToNativeWithGroup(ExclusiveContext* cx, JSObject* obj,
+                                         ObjectGroup* group, Shape* shape);
+    bool convertInt32ToDouble(ExclusiveContext* cx, ObjectGroup* group);
 
     void fillAfterConvert(ExclusiveContext* cx,
                           const AutoValueVector& values, size_t* valueCursor);

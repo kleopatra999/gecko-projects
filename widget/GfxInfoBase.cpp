@@ -97,11 +97,7 @@ using namespace mozilla::widget;
 using namespace mozilla::gfx;
 using namespace mozilla;
 
-#ifdef XP_MACOSX
-NS_IMPL_ISUPPORTS(GfxInfoBase, nsIGfxInfo, nsIGfxInfo2, nsIObserver, nsISupportsWeakReference)
-#else
 NS_IMPL_ISUPPORTS(GfxInfoBase, nsIGfxInfo, nsIObserver, nsISupportsWeakReference)
-#endif
 
 #define BLACKLIST_PREF_BRANCH "gfx.blacklist."
 #define SUGGESTED_VERSION_PREF BLACKLIST_PREF_BRANCH "suggested-driver-version"
@@ -719,9 +715,10 @@ GfxInfoBase::FindBlocklistedDeviceInList(const nsTArray<GfxDriverInfo>& info,
   uint32_t i = 0;
   for (; i < info.Length(); i++) {
     // Do the operating system check first, no point in getting the driver
-    // info if we won't need to use it. Note we also catch and skips the
-    // application version mismatches that would leave operating system
-    // set to unknown.
+    // info if we won't need to use it.  If the OS of the system we are running
+    // on is unknown, we still let DRIVER_OS_ALL catch and disable it; 
+    // if the OS of the downloadable entry is unknown, we skip the entry
+    // as invalid.
     if (info[i].mOperatingSystem == DRIVER_OS_UNKNOWN ||
         (info[i].mOperatingSystem != DRIVER_OS_ALL &&
          info[i].mOperatingSystem != os))
@@ -1042,7 +1039,6 @@ GfxInfoBase::LogFailure(const nsACString &failure)
   gfxCriticalError(CriticalLog::DefaultOptions(false)) << "(LF) " << failure.BeginReading();
 }
 
-/* void getFailures (out unsigned long failureCount, [optional, array, size_is (failureCount)] out long indices, [array, size_is (failureCount), retval] out string failures); */
 /* XPConnect method of returning arrays is very ugly. Would not recommend. */
 NS_IMETHODIMP GfxInfoBase::GetFailures(uint32_t* failureCount,
                                        int32_t** indices,

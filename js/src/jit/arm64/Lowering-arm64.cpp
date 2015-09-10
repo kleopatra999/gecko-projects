@@ -18,14 +18,7 @@ using namespace js::jit;
 using mozilla::FloorLog2;
 
 void
-LIRGeneratorARM64::useBox(LInstruction* lir, size_t n, MDefinition* mir,
-                          LUse::Policy policy, bool useAtStart)
-{
-    MOZ_CRASH("useBox");
-}
-
-void
-LIRGeneratorARM64::useBoxFixed(LInstruction* lir, size_t n, MDefinition* mir, Register reg1, Register)
+LIRGeneratorARM64::useBoxFixed(LInstruction* lir, size_t n, MDefinition* mir, Register reg1, Register,                               bool useAtStart)
 {
     MOZ_CRASH("useBoxFixed");
 }

@@ -6,16 +6,18 @@
 
 #include "nsDOMMutationObserver.h"
 
-#include "mozilla/dom/OwningNonNull.h"
-#include "nsError.h"
-#include "nsIScriptGlobalObject.h"
-#include "nsContentUtils.h"
-#include "nsThreadUtils.h"
-#include "nsIDOMMutationEvent.h"
-#include "nsTextFragment.h"
-#include "nsServiceManagerUtils.h"
+#include "mozilla/OwningNonNull.h"
+
 #include "mozilla/dom/Animation.h"
 #include "mozilla/dom/KeyframeEffect.h"
+
+#include "nsContentUtils.h"
+#include "nsError.h"
+#include "nsIDOMMutationEvent.h"
+#include "nsIScriptGlobalObject.h"
+#include "nsServiceManagerUtils.h"
+#include "nsTextFragment.h"
+#include "nsThreadUtils.h"
 
 using mozilla::dom::Animation;
 
@@ -117,7 +119,8 @@ nsMutationReceiver::AttributeWillChange(nsIDocument* aDocument,
                                         mozilla::dom::Element* aElement,
                                         int32_t aNameSpaceID,
                                         nsIAtom* aAttribute,
-                                        int32_t aModType)
+                                        int32_t aModType,
+                                        const nsAttrValue* aNewValue)
 {
   if (nsAutoMutationBatch::IsBatching() ||
       !ObservesAttr(RegisterTarget(), aElement, aNameSpaceID, aAttribute)) {
@@ -363,19 +366,18 @@ nsAnimationReceiver::RecordAnimationMutation(Animation* aAnimation,
   }
 
   if (nsAutoAnimationMutationBatch::IsBatching()) {
-    if (nsAutoAnimationMutationBatch::GetBatchTarget() != animationTarget) {
-      return;
-    }
-
     switch (aMutationType) {
       case eAnimationMutation_Added:
-        nsAutoAnimationMutationBatch::AnimationAdded(aAnimation);
+        nsAutoAnimationMutationBatch::AnimationAdded(aAnimation,
+                                                     animationTarget);
         break;
       case eAnimationMutation_Changed:
-        nsAutoAnimationMutationBatch::AnimationChanged(aAnimation);
+        nsAutoAnimationMutationBatch::AnimationChanged(aAnimation,
+                                                       animationTarget);
         break;
       case eAnimationMutation_Removed:
-        nsAutoAnimationMutationBatch::AnimationRemoved(aAnimation);
+        nsAutoAnimationMutationBatch::AnimationRemoved(aAnimation,
+                                                       animationTarget);
         break;
     }
 
@@ -785,7 +787,7 @@ nsDOMMutationObserver::HandleMutation()
     return;
   }
 
-  mozilla::dom::Sequence<mozilla::dom::OwningNonNull<nsDOMMutationRecord> >
+  mozilla::dom::Sequence<mozilla::OwningNonNull<nsDOMMutationRecord> >
     mutations;
   if (mutations.SetCapacity(mPendingMutationCount, mozilla::fallible)) {
     // We can't use TakeRecords easily here, because it deals with a
@@ -1056,32 +1058,46 @@ nsAutoAnimationMutationBatch::Done()
     return;
   }
 
-  sCurrentBatch = mPreviousBatch;
+  sCurrentBatch = nullptr;
   if (mObservers.IsEmpty()) {
     nsDOMMutationObserver::LeaveMutationHandling();
     // Nothing to do.
     return;
   }
 
-  for (nsDOMMutationObserver* ob : mObservers) {
-    nsRefPtr<nsDOMMutationRecord> m =
-      new nsDOMMutationRecord(nsGkAtoms::animations, ob->GetParentObject());
-    m->mTarget = mBatchTarget;
+  mBatchTargets.Sort(TreeOrderComparator());
 
-    for (const Entry& e : mEntries) {
-      if (e.mState == eState_Added) {
-        m->mAddedAnimations.AppendElement(e.mAnimation);
-      } else if (e.mState == eState_Removed) {
-        m->mRemovedAnimations.AppendElement(e.mAnimation);
-      } else if (e.mState == eState_RemainedPresent && e.mChanged) {
-        m->mChangedAnimations.AppendElement(e.mAnimation);
+  for (nsDOMMutationObserver* ob : mObservers) {
+    bool didAddRecords = false;
+
+    for (nsINode* target : mBatchTargets) {
+      EntryArray* entries = mEntryTable.Get(target);
+      MOZ_ASSERT(entries,
+        "Targets in entry table and targets list should match");
+
+      nsRefPtr<nsDOMMutationRecord> m =
+        new nsDOMMutationRecord(nsGkAtoms::animations, ob->GetParentObject());
+      m->mTarget = target;
+
+      for (const Entry& e : *entries) {
+        if (e.mState == eState_Added) {
+          m->mAddedAnimations.AppendElement(e.mAnimation);
+        } else if (e.mState == eState_Removed) {
+          m->mRemovedAnimations.AppendElement(e.mAnimation);
+        } else if (e.mState == eState_RemainedPresent && e.mChanged) {
+          m->mChangedAnimations.AppendElement(e.mAnimation);
+        }
+      }
+
+      if (!m->mAddedAnimations.IsEmpty() ||
+          !m->mChangedAnimations.IsEmpty() ||
+          !m->mRemovedAnimations.IsEmpty()) {
+        ob->AppendMutationRecord(m.forget());
+        didAddRecords = true;
       }
     }
 
-    if (!m->mAddedAnimations.IsEmpty() ||
-        !m->mChangedAnimations.IsEmpty() ||
-        !m->mRemovedAnimations.IsEmpty()) {
-      ob->AppendMutationRecord(m.forget());
+    if (didAddRecords) {
       ob->ScheduleForRun();
     }
   }

@@ -28,7 +28,8 @@ PostMessageEvent::PostMessageEvent(nsGlobalWindow* aSource,
                                    nsGlobalWindow* aTargetWindow,
                                    nsIPrincipal* aProvidedPrincipal,
                                    bool aTrustedCaller)
-: StructuredCloneHelper(CloningSupported, TransferringSupported),
+: StructuredCloneHelper(CloningSupported, TransferringSupported,
+                        SameProcessSameThread),
   mSource(aSource),
   mCallerOrigin(aCallerOrigin),
   mTargetWindow(aTargetWindow),
@@ -94,10 +95,13 @@ PostMessageEvent::Run()
     }
   }
 
+  ErrorResult rv;
   JS::Rooted<JS::Value> messageData(cx);
   nsCOMPtr<nsPIDOMWindow> window = targetWindow.get();
-  if (!Read(window, cx, &messageData)) {
-    return NS_ERROR_DOM_DATA_CLONE_ERR;
+
+  Read(window, cx, &messageData, rv);
+  if (NS_WARN_IF(rv.Failed())) {
+    return rv.StealNSResult();
   }
 
   // Create the event
@@ -110,8 +114,11 @@ PostMessageEvent::Run()
                           false /*cancelable */, messageData, mCallerOrigin,
                           EmptyString(), mSource);
 
+  nsTArray<nsRefPtr<MessagePortBase>> ports;
+  TakeTransferredPorts(ports);
+
   event->SetPorts(new MessagePortList(static_cast<dom::Event*>(event.get()),
-                                      GetTransferredPorts()));
+                                      ports));
 
   // We can't simply call dispatchEvent on the window because doing so ends
   // up flipping the trusted bit on the event, and we don't want that to

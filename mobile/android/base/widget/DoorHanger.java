@@ -19,6 +19,7 @@ import android.widget.TextView;
 import org.json.JSONObject;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Tabs;
+import org.mozilla.gecko.util.ColorUtils;
 
 public abstract class DoorHanger extends LinearLayout {
 
@@ -28,13 +29,12 @@ public abstract class DoorHanger extends LinearLayout {
             case LOGIN:
                 return new LoginDoorHanger(context, config);
             case TRACKING:
-            case MIXED_CONTENT:
                 return new ContentSecurityDoorHanger(context, config, type);
         }
         return new DefaultDoorHanger(context, config, type);
     }
 
-    public static enum Type { DEFAULT, LOGIN, TRACKING, MIXED_CONTENT, GEOLOCATION }
+    public static enum Type { DEFAULT, LOGIN, TRACKING, GEOLOCATION }
 
     public interface OnButtonClickListener {
         public void onButtonClick(JSONObject response, DoorHanger doorhanger);
@@ -91,7 +91,7 @@ public abstract class DoorHanger extends LinearLayout {
         mPositiveButton = (Button) findViewById(R.id.doorhanger_button_positive);
         mOnButtonClickListener = config.getButtonClickListener();
 
-        mDividerColor = mResources.getColor(R.color.divider_light);
+        mDividerColor = ColorUtils.getColor(context, R.color.divider_light);
 
         final ViewStub contentStub = (ViewStub) findViewById(R.id.content);
         contentStub.setLayoutResource(getContentResource());

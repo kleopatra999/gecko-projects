@@ -2490,7 +2490,7 @@ var gCSSProperties = {
                      "font-kerning", "font-synthesis", "font-variant-alternates", "font-variant-caps", "font-variant-east-asian",
                      "font-variant-ligatures", "font-variant-numeric", "font-variant-position" ],
     initial_values: [ (gInitialFontFamilyIsSansSerif ? "medium sans-serif" : "medium serif") ],
-    other_values: [ "large serif", "9px fantasy", "bold italic small-caps 24px/1.4 Times New Roman, serif", "small inherit roman", "small roman inherit",
+    other_values: [ "large serif", "9px fantasy", "condensed bold italic small-caps 24px/1.4 Times New Roman, serif", "small inherit roman", "small roman inherit",
       // system fonts
       "caption", "icon", "menu", "message-box", "small-caption", "status-bar",
       // Gecko-specific system fonts
@@ -6384,7 +6384,7 @@ if (SpecialPowers.getBoolPref("layout.css.will-change.enabled")) {
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "auto" ],
     other_values: [ "scroll-position", "contents", "transform", "opacity", "scroll-position, transform", "transform, opacity", "contents, transform", "property-that-doesnt-exist-yet" ],
-    invalid_values: [ "none", "all", "default", "auto, scroll-position", "scroll-position, auto", "transform scroll-position", ",", "trailing," ]
+    invalid_values: [ "none", "all", "default", "auto, scroll-position", "scroll-position, auto", "transform scroll-position", ",", "trailing,", "will-change", "transform, will-change" ]
   };
 }
 

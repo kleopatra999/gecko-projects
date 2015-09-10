@@ -32,7 +32,6 @@ class AudioOutputObserver;
  */
 struct StreamUpdate
 {
-  int64_t mGraphUpdateIndex;
   nsRefPtr<MediaStream> mStream;
   StreamTime mNextMainThreadCurrentTime;
   bool mNextMainThreadFinished;
@@ -55,8 +54,8 @@ public:
     MOZ_COUNT_DTOR(ControlMessage);
   }
   // Do the action of this message on the MediaStreamGraph thread. Any actions
-  // affecting graph processing should take effect at mStateComputedTime.
-  // All stream data for times < mStateComputedTime has already been
+  // affecting graph processing should take effect at mProcessedTime.
+  // All stream data for times < mProcessedTime has already been
   // computed.
   virtual void Run() = 0;
   // When we're shutting down the application, most messages are ignored but
@@ -75,7 +74,6 @@ protected:
 class MessageBlock
 {
 public:
-  int64_t mGraphUpdateIndex;
   nsTArray<nsAutoPtr<ControlMessage> > mMessages;
 };
 
@@ -95,16 +93,16 @@ public:
   NS_DECL_NSIMEMORYREPORTER
 
   /**
-   * Set aRealtime to true in order to create a MediaStreamGraph which provides
-   * support for real-time audio and video.  Set it to false in order to create
-   * a non-realtime instance which just churns through its inputs and produces
-   * output.  Those objects currently only support audio, and are used to
-   * implement OfflineAudioContext.  They do not support MediaStream inputs.
+   * Use aGraphDriverRequested with SYSTEM_THREAD_DRIVER or AUDIO_THREAD_DRIVER
+   * to create a MediaStreamGraph which provides support for real-time audio
+   * and/or video.  Set it to false in order to create a non-realtime instance
+   * which just churns through its inputs and produces output.  Those objects
+   * currently only support audio, and are used to implement
+   * OfflineAudioContext.  They do not support MediaStream inputs.
    */
-  explicit MediaStreamGraphImpl(bool aRealtime,
+  explicit MediaStreamGraphImpl(GraphDriverType aGraphDriverRequested,
                                 TrackRate aSampleRate,
-                                bool aStartWithAudioDriver = false,
-                                dom::AudioChannel aChannel = dom::AudioChannel::Normal);
+                                dom::AudioChannel aChannel);
 
   /**
    * Unregisters memory reporting and deletes this instance. This should be
@@ -175,8 +173,7 @@ public:
    */
   void DoIteration();
 
-  bool OneIteration(GraphTime aFrom, GraphTime aTo,
-                    GraphTime aStateFrom, GraphTime aStateEnd);
+  bool OneIteration(GraphTime aStateEnd);
 
   bool Running() const
   {
@@ -389,10 +386,6 @@ public:
   GraphTime StreamTimeToGraphTime(MediaStream* aStream, StreamTime aTime,
                                   uint32_t aFlags = 0);
   /**
-   * Get the current audio position of the stream's audio output.
-   */
-  GraphTime GetAudioPosition(MediaStream* aStream);
-  /**
    * Call NotifyHaveCurrentData on aStream's listeners.
    */
   void NotifyHasCurrentData(MediaStream* aStream);
@@ -428,20 +421,15 @@ public:
     return mStreams.IsEmpty() && mSuspendedStreams.IsEmpty() && mPortCount == 0;
   }
 
-  // For use by control messages, on graph thread only.
-  /**
-   * Identify which graph update index we are currently processing.
-   */
-  int64_t GetProcessingGraphUpdateIndex() const { return mProcessingGraphUpdateIndex; }
   /**
    * Add aStream to the graph and initializes its graph-specific state.
    */
-  void AddStream(MediaStream* aStream);
+  void AddStreamGraphThread(MediaStream* aStream);
   /**
    * Remove aStream from the graph. Ensures that pending messages about the
    * stream back to the main thread are flushed.
    */
-  void RemoveStream(MediaStream* aStream);
+  void RemoveStreamGraphThread(MediaStream* aStream);
   /**
    * Remove aPort from the graph and release it.
    */
@@ -459,7 +447,8 @@ public:
 
   double MediaTimeToSeconds(GraphTime aTime) const
   {
-    NS_ASSERTION(0 <= aTime && aTime <= STREAM_TIME_MAX, "Bad time");
+    NS_ASSERTION(aTime > -STREAM_TIME_MAX && aTime <= STREAM_TIME_MAX,
+                 "Bad time");
     return static_cast<double>(aTime)/GraphRate();
   }
 
@@ -539,6 +528,56 @@ public:
   already_AddRefed<MediaInputPort>
   ConnectToCaptureStream(uint64_t aWindowId, MediaStream* aMediaStream);
 
+  class StreamSet {
+  public:
+    class iterator {
+    public:
+      explicit iterator(MediaStreamGraphImpl& aGraph)
+        : mGraph(&aGraph), mArrayNum(-1), mArrayIndex(0)
+      {
+        ++(*this);
+      }
+      iterator() : mGraph(nullptr), mArrayNum(2), mArrayIndex(0) {}
+      MediaStream* operator*()
+      {
+        return Array()->ElementAt(mArrayIndex);
+      }
+      iterator operator++()
+      {
+        ++mArrayIndex;
+        while (mArrayNum < 2 &&
+          (mArrayNum < 0 || mArrayIndex >= Array()->Length())) {
+          ++mArrayNum;
+          mArrayIndex = 0;
+        }
+        return *this;
+      }
+      bool operator==(const iterator& aOther) const
+      {
+        return mArrayNum == aOther.mArrayNum && mArrayIndex == aOther.mArrayIndex;
+      }
+      bool operator!=(const iterator& aOther) const
+      {
+        return !(*this == aOther);
+      }
+    private:
+      nsTArray<MediaStream*>* Array()
+      {
+        return mArrayNum == 0 ? &mGraph->mStreams : &mGraph->mSuspendedStreams;
+      }
+      MediaStreamGraphImpl* mGraph;
+      int mArrayNum;
+      uint32_t mArrayIndex;
+    };
+
+    explicit StreamSet(MediaStreamGraphImpl& aGraph) : mGraph(aGraph) {}
+    iterator begin() { return iterator(mGraph); }
+    iterator end() { return iterator(); }
+  private:
+    MediaStreamGraphImpl& mGraph;
+  };
+  StreamSet AllStreams() { return StreamSet(*this); }
+
   // Data members
   //
   /**
@@ -573,13 +612,20 @@ public:
    */
   uint32_t mFirstCycleBreaker;
   /**
+   * Blocking decisions have been computed up to this time.
+   * Between each iteration, this is the same as mProcessedTime.
+   */
+  GraphTime mStateComputedTime = 0;
+  /**
+   * All stream contents have been computed up to this time.
+   * The next batch of updates from the main thread will be processed
+   * at this time.  This is behind mStateComputedTime during processing.
+   */
+  GraphTime mProcessedTime = 0;
+  /**
    * Date of the last time we updated the main thread with the graph state.
    */
   TimeStamp mLastMainThreadUpdate;
-  /**
-   * Which update batch we are currently processing.
-   */
-  int64_t mProcessingGraphUpdateIndex;
   /**
    * Number of active MediaInputPorts
    */

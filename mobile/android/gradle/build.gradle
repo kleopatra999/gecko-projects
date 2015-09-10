@@ -59,3 +59,25 @@ task generateCodeAndResources(type:Exec) {
         }
     }
 }
+
+afterEvaluate {
+    subprojects {
+        if (!hasProperty('android')) {
+            return
+        }
+        android.applicationVariants.all {
+            checkManifest.dependsOn rootProject.generateCodeAndResources
+        }
+        android.libraryVariants.all {
+            checkManifest.dependsOn rootProject.generateCodeAndResources
+        }
+    }
+}
+
+apply plugin: 'idea'
+
+idea {
+    project {
+        languageLevel = '1.7'
+    }
+}

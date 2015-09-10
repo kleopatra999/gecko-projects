@@ -58,6 +58,7 @@
 #include "nsTArray.h"
 #include "nsILocaleService.h"
 #include "nsIObserverService.h"
+#include "nsIScreenManager.h"
 #include "MainThreadUtils.h"
 #ifdef MOZ_CRASHREPORTER
 #include "nsExceptionHandler.h"
@@ -90,8 +91,10 @@
 
 #include "mozilla/Hal.h"
 #ifdef USE_SKIA
-#include "skia/SkGraphics.h"
+#include "skia/include/core/SkGraphics.h"
 # ifdef USE_SKIA_GPU
+#  include "skia/include/gpu/GrContext.h"
+#  include "skia/include/gpu/gl/GrGLInterface.h"
 #  include "SkiaGLGlue.h"
 # endif
 #endif
@@ -110,6 +113,8 @@ class mozilla::gl::SkiaGLGlue : public GenericAtomicRefCounted {
 #include "nsIXULRuntime.h"
 #include "VsyncSource.h"
 #include "SoftwareVsyncSource.h"
+#include "nscore.h" // for NS_FREE_PERMANENT_DATA
+#include "mozilla/dom/ContentChild.h"
 
 namespace mozilla {
 namespace layers {
@@ -258,7 +263,7 @@ void CrashStatsLogForwarder::UpdateCrashReport()
            mCrashCriticalKey.get(), message.str().c_str());
   }
 }
-  
+
 void CrashStatsLogForwarder::Log(const std::string& aString)
 {
   MutexAutoLock lock(mMutex);
@@ -501,6 +506,8 @@ gfxPlatform::Init()
     InitLayersAccelerationPrefs();
     InitLayersIPC();
 
+    gPlatform->ComputeTileSize();
+
     nsresult rv;
 
     bool usePlatformFontList = true;
@@ -573,7 +580,7 @@ gfxPlatform::Init()
 
     RegisterStrongMemoryReporter(new GfxMemoryImageReporter());
 
-    if (XRE_IsParentProcess() && gfxPrefs::HardwareVsyncEnabled()) {
+    if (XRE_IsParentProcess()) {
       gPlatform->mVsyncSource = gPlatform->CreateHardwareVsyncSource();
     }
 }
@@ -644,7 +651,7 @@ gfxPlatform::Shutdown()
 #endif
 
     // This is a bit iffy - we're assuming that we were the ones that set the
-    // log forwarder in the Factory, so that it's our responsibility to 
+    // log forwarder in the Factory, so that it's our responsibility to
     // delete it.
     delete mozilla::gfx::Factory::GetLogForwarder();
     mozilla::gfx::Factory::SetLogForwarder(nullptr);
@@ -713,7 +720,7 @@ gfxPlatform::~gfxPlatform()
     // cairo_debug_* function unconditionally.
     //
     // because cairo can assert and thus crash on shutdown, don't do this in release builds
-#if defined(DEBUG) || defined(NS_BUILD_REFCNT_LOGGING) || defined(MOZ_VALGRIND)
+#ifdef NS_FREE_PERMANENT_DATA
 #ifdef USE_SKIA
     // must do Skia cleanup before Cairo cleanup, because Skia may be referencing
     // Cairo objects e.g. through SkCairoFTTypeface
@@ -999,7 +1006,7 @@ gfxPlatform::ComputeTileSize()
   // The tile size should be picked in the parent processes
   // and sent to the child processes over IPDL GetTileSize.
   if (!XRE_IsParentProcess()) {
-    NS_RUNTIMEABORT("wrong process.");
+    return;
   }
 
   int32_t w = gfxPrefs::LayersTileWidth();
@@ -1022,6 +1029,24 @@ gfxPlatform::ComputeTileSize()
     }
 #endif
   }
+
+#ifdef XP_MACOSX
+  // Use double sized tiles for HiDPI screens.
+  nsCOMPtr<nsIScreenManager> screenManager =
+    do_GetService("@mozilla.org/gfx/screenmanager;1");
+  if (screenManager) {
+    nsCOMPtr<nsIScreen> primaryScreen;
+    screenManager->GetPrimaryScreen(getter_AddRefs(primaryScreen));
+    double scaleFactor = 1.0;
+    if (primaryScreen) {
+      primaryScreen->GetContentsScaleFactor(&scaleFactor);
+    }
+    if (scaleFactor > 1.0) {
+      w *= 2;
+      h *= 2;
+    }
+  }
+#endif
 
   SetTileSize(w, h);
 }
@@ -1184,7 +1209,7 @@ gfxPlatform::CreateDrawTargetForData(unsigned char* aData, const IntSize& aSize,
   NS_ASSERTION(mContentBackend != BackendType::NONE, "No backend.");
 
   BackendType backendType = mContentBackend;
-  
+
   if (!Factory::DoesBackendSupportDataDrawtarget(mContentBackend)) {
     backendType = BackendType::CAIRO;
   }
@@ -2040,26 +2065,19 @@ gfxPlatform::GetLog(eGfxLog aWhichLog)
     switch (aWhichLog) {
     case eGfxLog_fontlist:
         return sFontlistLog;
-        break;
     case eGfxLog_fontinit:
         return sFontInitLog;
-        break;
     case eGfxLog_textrun:
         return sTextrunLog;
-        break;
     case eGfxLog_textrunui:
         return sTextrunuiLog;
-        break;
     case eGfxLog_cmapdata:
         return sCmapDataLog;
-        break;
     case eGfxLog_textperf:
         return sTextPerfLog;
-        break;
-    default:
-        break;
     }
 
+    MOZ_ASSERT_UNREACHABLE("Unexpected log type");
     return nullptr;
 }
 
@@ -2469,4 +2487,25 @@ gfxPlatform::NotifyCompositorCreated(LayersBackend aBackend)
   if (nsCOMPtr<nsIObserverService> obsvc = services::GetObserverService()) {
     obsvc->NotifyObservers(nullptr, "compositor:created", nullptr);
   }
+}
+
+void
+gfxPlatform::GetDeviceInitData(mozilla::gfx::DeviceInitData* aOut)
+{
+  MOZ_ASSERT(XRE_IsParentProcess());
+  aOut->useAcceleration() = ShouldUseLayersAcceleration();
+}
+
+void
+gfxPlatform::UpdateDeviceInitData()
+{
+  if (XRE_IsParentProcess()) {
+    // The parent process figures out device initialization on its own.
+    return;
+  }
+
+  mozilla::gfx::DeviceInitData data;
+  mozilla::dom::ContentChild::GetSingleton()->SendGetGraphicsDeviceInitData(&data);
+
+  SetDeviceInitData(data);
 }

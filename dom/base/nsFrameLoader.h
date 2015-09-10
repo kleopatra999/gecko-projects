@@ -24,12 +24,14 @@
 #include "mozilla/Attributes.h"
 #include "nsStubMutationObserver.h"
 #include "Units.h"
+#include "nsIWebBrowserPersistable.h"
 
 class nsIURI;
 class nsSubDocumentFrame;
 class nsView;
 class nsIInProcessContentFrameMessageManager;
 class AutoResetInShow;
+class AutoResetInFrameSwap;
 class nsITabParent;
 class nsIDocShellTreeItem;
 class nsIDocShellTreeOwner;
@@ -39,8 +41,8 @@ namespace mozilla {
 namespace dom {
 class ContentParent;
 class PBrowserParent;
+class StructuredCloneIPCHelper;
 class TabParent;
-struct StructuredCloneData;
 } // namespace dom
 
 namespace layout {
@@ -53,10 +55,12 @@ typedef struct _GtkWidget GtkWidget;
 #endif
 
 class nsFrameLoader final : public nsIFrameLoader,
+                            public nsIWebBrowserPersistable,
                             public nsStubMutationObserver,
                             public mozilla::dom::ipc::MessageManagerCallback
 {
   friend class AutoResetInShow;
+  friend class AutoResetInFrameSwap;
   typedef mozilla::dom::PBrowserParent PBrowserParent;
   typedef mozilla::dom::TabParent TabParent;
   typedef mozilla::layout::RenderFrameParent RenderFrameParent;
@@ -69,6 +73,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsFrameLoader, nsIFrameLoader)
   NS_DECL_NSIFRAMELOADER
   NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
+  NS_DECL_NSIWEBBROWSERPERSISTABLE
   nsresult CheckForRecursiveLoad(nsIURI* aURI);
   nsresult ReallyStartLoading();
   void StartDestroy();
@@ -85,7 +90,7 @@ public:
                                           bool aRunInGlobalScope) override;
   virtual bool DoSendAsyncMessage(JSContext* aCx,
                                   const nsAString& aMessage,
-                                  const mozilla::dom::StructuredCloneData& aData,
+                                  mozilla::dom::StructuredCloneIPCHelper& aHelper,
                                   JS::Handle<JSObject *> aCpows,
                                   nsIPrincipal* aPrincipal) override;
   virtual bool CheckPermission(const nsAString& aPermission) override;
@@ -176,6 +181,8 @@ public:
    */
   void SetRemoteBrowser(nsITabParent* aTabParent);
 
+  nsresult SwapRemoteBrowser(nsITabParent* aTabParent);
+
   /**
    * Stashes a detached view on the frame loader. We do this when we're
    * destroying the nsSubDocumentFrame. If the nsSubdocumentFrame is
@@ -221,6 +228,11 @@ private:
   void SetOwnerContent(mozilla::dom::Element* aContent);
 
   bool ShouldUseRemoteProcess();
+
+  /**
+   * Return true if the frame is a remote frame. Return false otherwise
+   */
+  bool IsRemoteFrame();
 
   /**
    * Is this a frameloader for a bona fide <iframe mozbrowser> or
@@ -270,6 +282,7 @@ private:
    */
   nsresult MaybeCreateDocShell();
   nsresult EnsureMessageManager();
+  nsresult ReallyLoadFrameScripts();
 
   // Updates the subdocument position and size. This gets called only
   // when we have our own in-process DocShell.

@@ -15,12 +15,12 @@ using namespace js;
 using namespace js::jit;
 
 void
-LIRGeneratorX64::useBoxFixed(LInstruction* lir, size_t n, MDefinition* mir, Register reg1, Register)
+LIRGeneratorX64::useBoxFixed(LInstruction* lir, size_t n, MDefinition* mir, Register reg1, Register, bool useAtStart)
 {
     MOZ_ASSERT(mir->type() == MIRType_Value);
 
     ensureDefined(mir);
-    lir->setOperand(n, LUse(reg1, mir->virtualRegister()));
+    lir->setOperand(n, LUse(reg1, mir->virtualRegister(), useAtStart));
 }
 
 LAllocation
@@ -61,7 +61,7 @@ LIRGeneratorX64::visitBox(MBox* box)
     if (opd->isConstant()) {
         define(new(alloc()) LValue(opd->toConstant()->value()), box, LDefinition(LDefinition::BOX));
     } else {
-        LBox* ins = new(alloc()) LBox(opd->type(), useRegister(opd));
+        LBox* ins = new(alloc()) LBox(useRegister(opd), opd->type());
         define(ins, box, LDefinition(LDefinition::BOX));
     }
 }

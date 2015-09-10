@@ -18,8 +18,8 @@
 #include "ImageContainer.h"
 #include "gfxPrefs.h"
 #ifdef MOZ_ENABLE_SKIA
-#include "skia/SkCanvas.h"              // for SkCanvas
-#include "skia/SkBitmapDevice.h"        // for SkBitmapDevice
+#include "skia/include/core/SkCanvas.h"              // for SkCanvas
+#include "skia/include/core/SkBitmapDevice.h"        // for SkBitmapDevice
 #else
 #define PIXMAN_DONT_DEFINE_STDINT
 #include "pixman.h"                     // for pixman_f_transform, etc
@@ -358,12 +358,7 @@ BasicCompositor::DrawQuad(const gfx::Rect& aRect,
     dest->SetTransform(Matrix::Translation(-aRect.x, -aRect.y));
 
     // Get the bounds post-transform.
-    new3DTransform = aTransform;
-    gfxRect bounds = ThebesRect(aRect);
-    bounds.TransformBounds(new3DTransform);
-    bounds.IntersectRect(bounds, gfxRect(offset.x, offset.y, buffer->GetSize().width, buffer->GetSize().height));
-
-    transformBounds = ToRect(bounds);
+    transformBounds = aTransform.TransformAndClipBounds(aRect, Rect(offset.x, offset.y, buffer->GetSize().width, buffer->GetSize().height));
     transformBounds.RoundOut();
 
     // Propagate the coordinate offset to our 2D draw target.
@@ -371,7 +366,7 @@ BasicCompositor::DrawQuad(const gfx::Rect& aRect,
 
     // When we apply the 3D transformation, we do it against a temporary
     // surface, so undo the coordinate offset.
-    new3DTransform = Matrix4x4::Translation(aRect.x, aRect.y, 0) * new3DTransform;
+    new3DTransform = Matrix4x4::Translation(aRect.x, aRect.y, 0) * aTransform;
   }
 
   newTransform.PostTranslate(-offset.x, -offset.y);

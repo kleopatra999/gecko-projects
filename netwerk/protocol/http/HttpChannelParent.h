@@ -118,7 +118,9 @@ protected:
                    const OptionalFileDescriptorSet& aFds,
                    const OptionalLoadInfoArgs& aLoadInfoArgs,
                    const OptionalHttpResponseHead& aSynthesizedResponseHead,
-                   const uint32_t&            aCacheKey);
+                   const nsCString&           aSecurityInfoSerialization,
+                   const uint32_t&            aCacheKey,
+                   const nsCString&           aSchedulingContextID);
 
   virtual bool RecvSetPriority(const uint16_t& priority) override;
   virtual bool RecvSetClassOfService(const uint32_t& cos) override;
@@ -156,6 +158,18 @@ protected:
                                  const nsAString& aMessageCategory) override;
 
 private:
+  void UpdateAndSerializeSecurityInfo(nsACString& aSerializedSecurityInfoOut);
+
+  void DivertOnDataAvailable(const nsCString& data,
+                             const uint64_t& offset,
+                             const uint32_t& count);
+  void DivertOnStopRequest(const nsresult& statusCode);
+  void DivertComplete();
+
+  friend class DivertDataAvailableEvent;
+  friend class DivertStopRequestEvent;
+  friend class DivertCompleteEvent;
+
   nsRefPtr<nsHttpChannel>       mChannel;
   nsCOMPtr<nsICacheEntry>       mCacheEntry;
   nsCOMPtr<nsIAssociatedContentSecurity>  mAssociatedContentSecurity;
@@ -209,6 +223,8 @@ private:
 
   // Handle to the channel wrapper if this channel has been intercepted.
   nsCOMPtr<nsIInterceptedChannel> mInterceptedChannel;
+
+  nsRefPtr<ChannelEventQueue> mEventQ;
 };
 
 } // namespace net

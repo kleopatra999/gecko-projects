@@ -10,8 +10,9 @@
 #include <ctime>
 #include "gfxPrefs.h"
 #include "image_operations.h"
+#include "mozilla/SSE.h"
 #include "convolver.h"
-#include "skia/SkTypes.h"
+#include "skia/include/core/SkTypes.h"
 
 using std::max;
 using std::swap;
@@ -26,6 +27,7 @@ Downscaler::Downscaler(const nsIntSize& aTargetSize)
   , mYFilter(MakeUnique<skia::ConvolutionFilter1D>())
   , mWindowCapacity(0)
   , mHasAlpha(true)
+  , mFlipVertically(false)
 {
   MOZ_ASSERT(gfxPrefs::ImageDownscaleDuringDecodeEnabled(),
              "Downscaling even though downscale-during-decode is disabled?");
@@ -56,7 +58,8 @@ Downscaler::ReleaseWindow()
 nsresult
 Downscaler::BeginFrame(const nsIntSize& aOriginalSize,
                        uint8_t* aOutputBuffer,
-                       bool aHasAlpha)
+                       bool aHasAlpha,
+                       bool aFlipVertically /* = false */)
 {
   MOZ_ASSERT(aOutputBuffer);
   MOZ_ASSERT(mTargetSize != aOriginalSize,
@@ -73,6 +76,7 @@ Downscaler::BeginFrame(const nsIntSize& aOriginalSize,
                    double(mOriginalSize.height) / mTargetSize.height);
   mOutputBuffer = aOutputBuffer;
   mHasAlpha = aHasAlpha;
+  mFlipVertically = aFlipVertically;
 
   ResetForNextProgressivePass();
   ReleaseWindow();
@@ -90,7 +94,8 @@ Downscaler::BeginFrame(const nsIntSize& aOriginalSize,
                                mYFilter.get());
 
   // Allocate the buffer, which contains scanlines of the original image.
-  mRowBuffer = MakeUnique<uint8_t[]>(mOriginalSize.width * sizeof(uint32_t));
+  // pad by 15 to handle overreads by the simd code
+  mRowBuffer = MakeUnique<uint8_t[]>(mOriginalSize.width * sizeof(uint32_t) + 15);
   if (MOZ_UNLIKELY(!mRowBuffer)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -105,7 +110,8 @@ Downscaler::BeginFrame(const nsIntSize& aOriginalSize,
   }
 
   bool anyAllocationFailed = false;
-  const int rowSize = mTargetSize.width * sizeof(uint32_t);
+  // pad by 15 to handle overreads by the simd code
+  const int rowSize = mTargetSize.width * sizeof(uint32_t) + 15;
   for (int32_t i = 0; i < mWindowCapacity; ++i) {
     mWindow[i] = new uint8_t[rowSize];
     anyAllocationFailed = anyAllocationFailed || mWindow[i] == nullptr;
@@ -143,6 +149,16 @@ GetFilterOffsetAndLength(UniquePtr<skia::ConvolutionFilter1D>& aFilter,
 }
 
 void
+Downscaler::ClearRow(uint32_t aStartingAtCol)
+{
+  MOZ_ASSERT(int64_t(mOriginalSize.width) > int64_t(aStartingAtCol));
+  uint32_t bytesToClear = (mOriginalSize.width - aStartingAtCol)
+                        * sizeof(uint32_t);
+  memset(mRowBuffer.get() + (aStartingAtCol * sizeof(uint32_t)),
+         0, bytesToClear);
+}
+
+void
 Downscaler::CommitRow()
 {
   MOZ_ASSERT(mOutputBuffer, "Should have a current frame");
@@ -159,7 +175,7 @@ Downscaler::CommitRow()
   if (mCurrentInLine == inLineToRead) {
     skia::ConvolveHorizontally(mRowBuffer.get(), *mXFilter,
                                mWindow[mLinesInBuffer++], mHasAlpha,
-                               /* use_sse2 = */ true);
+                               supports_sse2());
   }
 
   MOZ_ASSERT(mCurrentOutLine < mTargetSize.height,
@@ -195,9 +211,18 @@ Downscaler::TakeInvalidRect()
   DownscalerInvalidRect invalidRect;
 
   // Compute the target size invalid rect.
-  invalidRect.mTargetSizeRect =
-    nsIntRect(0, mPrevInvalidatedLine,
+  if (mFlipVertically) {
+    // We need to flip it. This will implicitly flip the original size invalid
+    // rect, since we compute it by scaling this rect.
+    invalidRect.mTargetSizeRect =
+      IntRect(0, mTargetSize.height - mCurrentOutLine,
               mTargetSize.width, mCurrentOutLine - mPrevInvalidatedLine);
+  } else {
+    invalidRect.mTargetSizeRect =
+      IntRect(0, mPrevInvalidatedLine,
+              mTargetSize.width, mCurrentOutLine - mPrevInvalidatedLine);
+  }
+
   mPrevInvalidatedLine = mCurrentOutLine;
 
   // Compute the original size invalid rect.
@@ -222,11 +247,16 @@ Downscaler::DownscaleInputLine()
   auto filterValues =
     mYFilter->FilterForValue(mCurrentOutLine, &filterOffset, &filterLength);
 
+  int32_t currentOutLine = mFlipVertically
+                         ? mTargetSize.height - (mCurrentOutLine + 1)
+                         : mCurrentOutLine;
+  MOZ_ASSERT(currentOutLine >= 0);
+
   uint8_t* outputLine =
-    &mOutputBuffer[mCurrentOutLine * mTargetSize.width * sizeof(uint32_t)];
+    &mOutputBuffer[currentOutLine * mTargetSize.width * sizeof(uint32_t)];
   skia::ConvolveVertically(static_cast<const FilterValue*>(filterValues),
                            filterLength, mWindow.get(), mXFilter->num_values(),
-                           outputLine, mHasAlpha, /* use_sse2 = */ true);
+                           outputLine, mHasAlpha, supports_sse2());
 
   mCurrentOutLine += 1;
 

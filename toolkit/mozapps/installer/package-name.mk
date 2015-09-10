@@ -135,6 +135,7 @@ XPC_TEST_PACKAGE = $(PKG_BASENAME).xpcshell.tests.zip
 MOCHITEST_PACKAGE = $(PKG_BASENAME).mochitest.tests.zip
 REFTEST_PACKAGE = $(PKG_BASENAME).reftest.tests.zip
 WP_TEST_PACKAGE = $(PKG_BASENAME).web-platform.tests.zip
+TALOS_PACKAGE = $(PKG_BASENAME).talos.tests.zip
 
 ifneq (,$(wildcard $(DIST)/bin/application.ini))
 BUILDID = $(shell $(PYTHON) $(MOZILLA_DIR)/config/printconfigsetting.py $(DIST)/bin/application.ini App BuildID)
@@ -147,7 +148,7 @@ ifndef INCLUDED_RCS_MK
   include $(MOZILLA_DIR)/config/makefiles/makeutils.mk
 endif
 
-MOZ_SOURCE_STAMP = $(firstword $(shell hg -R $(MOZILLA_DIR) parent --template="{node|short}\n" 2>/dev/null))
+MOZ_SOURCE_STAMP = $(firstword $(shell hg -R $(MOZILLA_DIR) parent --template="{node}\n" 2>/dev/null))
 
 ###########################################################################
 # bug: 746277 - preserve existing functionality.

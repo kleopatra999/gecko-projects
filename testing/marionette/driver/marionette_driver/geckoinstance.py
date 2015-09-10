@@ -27,8 +27,15 @@ class GeckoInstance(object):
                       "browser.startup.page": 0,
                       "browser.tabs.remote.autostart.1": False,
                       "browser.tabs.remote.autostart.2": False,
+                      "browser.urlbar.userMadeSearchSuggestionsChoice": True,
                       "browser.warnOnQuit": False,
                       "dom.ipc.reportProcessHangs": False,
+                      "datareporting.healthreport.service.enabled": False,
+                      "datareporting.healthreport.uploadEnabled": False,
+                      "datareporting.healthreport.service.firstRun": False,
+                      "datareporting.healthreport.logging.consoleEnabled": False,
+                      "datareporting.policy.dataSubmissionEnabled": False,
+                      "datareporting.policy.dataSubmissionPolicyAccepted": False,
                       "focusmanager.testmode": True,
                       "startup.homepage_welcome_url": "about:blank"}
 

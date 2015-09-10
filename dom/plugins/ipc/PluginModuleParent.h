@@ -97,7 +97,7 @@ protected:
     DeallocPPluginInstanceParent(PPluginInstanceParent* aActor) override;
 
 public:
-    explicit PluginModuleParent(bool aIsChrome);
+    explicit PluginModuleParent(bool aIsChrome, bool aAllowAsyncInit);
     virtual ~PluginModuleParent();
 
     bool RemovePendingSurrogate(const nsRefPtr<PluginAsyncSurrogate>& aSurrogate);
@@ -136,6 +136,8 @@ public:
     virtual void SetHasLocalInstance() override {
         mHadLocalInstance = true;
     }
+
+    int GetQuirks() { return mQuirks; }
 
 protected:
     virtual mozilla::ipc::RacyInterruptPolicy
@@ -278,6 +280,10 @@ private:
     std::map<uint64_t, nsCOMPtr<nsIClearSiteDataCallback>> mClearSiteDataCallbacks;
     std::map<uint64_t, nsCOMPtr<nsIGetSitesWithDataCallback>> mSitesWithDataCallbacks;
 
+    nsCString mPluginFilename;
+    int mQuirks;
+    void InitQuirksModes(const nsCString& aMimeType);
+
 public:
 
 #if defined(XP_MACOSX)
@@ -338,9 +344,9 @@ protected:
 class PluginModuleContentParent : public PluginModuleParent
 {
   public:
-    explicit PluginModuleContentParent();
+    explicit PluginModuleContentParent(bool aAllowAsyncInit);
 
-    static PluginLibrary* LoadModule(uint32_t aPluginId);
+    static PluginLibrary* LoadModule(uint32_t aPluginId, nsPluginTag* aPluginTag);
 
     static PluginModuleContentParent* Initialize(mozilla::ipc::Transport* aTransport,
                                                  base::ProcessId aOtherProcess);
@@ -491,7 +497,8 @@ private:
 
     // aFilePath is UTF8, not native!
     explicit PluginModuleChromeParent(const char* aFilePath, uint32_t aPluginId,
-                                      int32_t aSandboxLevel);
+                                      int32_t aSandboxLevel,
+                                      bool aAllowAsyncInit);
 
     CrashReporterParent* CrashReporter();
 

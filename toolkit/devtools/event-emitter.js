@@ -11,10 +11,10 @@
     factory.call(this, require, exports, module);
   } else { // Cu.import
       const Cu = Components.utils;
-      const { devtools } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+      const { require } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
       this.isWorker = false;
       this.promise = Cu.import("resource://gre/modules/Promise.jsm", {}).Promise;
-      factory.call(this, devtools.require, this, { exports: this });
+      factory.call(this, require, this, { exports: this });
       this.EXPORTED_SYMBOLS = ["EventEmitter"];
   }
 }).call(this, function (require, exports, module) {
@@ -86,10 +86,10 @@ EventEmitter.prototype = {
   once: function EventEmitter_once(aEvent, aListener) {
     let deferred = promise.defer();
 
-    let handler = (aEvent, aFirstArg) => {
+    let handler = (aEvent, aFirstArg, ...aRest) => {
       this.off(aEvent, handler);
       if (aListener) {
-        aListener.apply(null, arguments);
+        aListener.apply(null, [aEvent, aFirstArg, ...aRest]);
       }
       deferred.resolve(aFirstArg);
     };

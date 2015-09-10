@@ -230,6 +230,7 @@ JSObject::isQualifiedVarObj() const
     MOZ_ASSERT_IF(rv,
                   is<js::GlobalObject>() ||
                   is<js::CallObject>() ||
+                  is<js::ModuleEnvironmentObject>() ||
                   is<js::NonSyntacticVariablesObject>() ||
                   (is<js::DynamicWithObject>() && !as<js::DynamicWithObject>().isSyntactic()));
     return rv;
@@ -621,8 +622,6 @@ IsInternalFunctionObject(JSObject& funobj)
                   fun.isInterpreted() || fun.isAsmJSNative());
     return fun.isLambda() && fun.isInterpreted() && !fun.environment();
 }
-
-typedef AutoVectorRooter<PropertyDescriptor> AutoPropertyDescriptorVector;
 
 /*
  * Make an object with the specified prototype. If parent is null, it will

@@ -4,7 +4,7 @@
 
 if [ $TARGET == "aries" -o $TARGET == "shinano" ]; then
   # caching objects might be dangerous for some devices (aka aries)
-  rm -rf $WORKSPACE/B2G/objdir*
+  rm -rf $gecko_objdir
   rm -rf $WORKSPACE/B2G/out
 fi
 
@@ -40,24 +40,7 @@ $WORKSPACE/gecko/testing/mozharness/scripts/b2g_build.py \
   --checkout-revision=$GECKO_HEAD_REV \
   --repo=$WORKSPACE/gecko \
   --platform $PLATFORM \
+  --gecko-objdir=$gecko_objdir \
   --complete-mar-url https://queue.taskcluster.net/v1/task/$TASK_ID/runs/$RUN_ID/artifacts/public/build/$mar_file
 
-# Don't cache backups
-rm -rf $WORKSPACE/B2G/backup-*
-rm -f balrog_credentials
-
-mkdir -p $HOME/artifacts
-mkdir -p $HOME/artifacts-public
-
-mv $WORKSPACE/B2G/upload-public/$mar_file $HOME/artifacts-public/
-mv $WORKSPACE/B2G/upload/sources.xml $HOME/artifacts/sources.xml
-mv $WORKSPACE/B2G/upload/b2g-*.android-arm.tar.gz $HOME/artifacts/b2g-android-arm.tar.gz
-mv $WORKSPACE/B2G/upload/${TARGET}.zip $HOME/artifacts/${TARGET}.zip
-mv $WORKSPACE/B2G/upload/gaia.zip $HOME/artifacts/gaia.zip
-
-if [ -f $WORKSPACE/B2G/upload/b2g-*.crashreporter-symbols.zip ]; then
-  mv $WORKSPACE/B2G/upload/b2g-*.crashreporter-symbols.zip $HOME/artifacts/b2g-crashreporter-symbols.zip
-fi
-
-ccache -s
-
+. post-build.sh

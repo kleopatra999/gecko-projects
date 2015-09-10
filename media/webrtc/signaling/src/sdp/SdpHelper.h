@@ -49,6 +49,9 @@ class SdpHelper {
         const Sdp& sdp,
         std::vector<SdpGroupAttributeList::Group>* groups) const;
 
+    nsresult GetMidFromLevel(const Sdp& sdp,
+                             uint16_t level,
+                             std::string* mid);
     nsresult GetIdsFromMsid(const Sdp& sdp,
                             const SdpMediaSection& msection,
                             std::string* streamId,
@@ -62,6 +65,13 @@ class SdpHelper {
                                const std::string& candidate,
                                const std::string& mid,
                                uint16_t level);
+    void SetDefaultAddresses(const std::string& defaultCandidateAddr,
+                             uint16_t defaultCandidatePort,
+                             const std::string& defaultRtcpCandidateAddr,
+                             uint16_t defaultRtcpCandidatePort,
+                             Sdp* sdp,
+                             uint16_t level,
+                             BundledMids bundledMids);
     void SetDefaultAddresses(const std::string& defaultCandidateAddr,
                              uint16_t defaultCandidatePort,
                              const std::string& defaultRtcpCandidateAddr,
@@ -91,6 +101,11 @@ class SdpHelper {
           std::string* aErrorString);
 
     static bool GetPtAsInt(const std::string& ptString, uint16_t* ptOutparam);
+
+    void AddCommonExtmaps(
+        const SdpMediaSection& remoteMsection,
+        const std::vector<SdpExtmapAttributeList::Extmap>& localExtensions,
+        SdpMediaSection* localMsection);
 
   private:
     std::string& mLastError;

@@ -35,9 +35,11 @@ ImageFactory::Initialize()
 static bool
 ShouldDownscaleDuringDecode(const nsCString& aMimeType)
 {
-  return aMimeType.EqualsLiteral(IMAGE_JPEG) ||
-         aMimeType.EqualsLiteral(IMAGE_JPG) ||
-         aMimeType.EqualsLiteral(IMAGE_PJPEG);
+  DecoderType type = DecoderFactory::GetDecoderType(aMimeType.get());
+  return type == DecoderType::JPEG ||
+         type == DecoderType::ICON ||
+         type == DecoderType::PNG ||
+         type == DecoderType::BMP;
 }
 
 static uint32_t
@@ -118,15 +120,14 @@ ImageFactory::CreateImage(nsIRequest* aRequest,
   }
 }
 
-// Marks an image as having an error before returning it. Used with macros like
-// NS_ENSURE_SUCCESS, since we guarantee to always return an image even if an
-// error occurs, but callers need to be able to tell that this happened.
+// Marks an image as having an error before returning it.
 template <typename T>
 static already_AddRefed<Image>
-BadImage(nsRefPtr<T>& image)
+BadImage(const char* aMessage, nsRefPtr<T>& aImage)
 {
-  image->SetHasError();
-  return image.forget();
+  NS_WARNING(aMessage);
+  aImage->SetHasError();
+  return aImage.forget();
 }
 
 /* static */ already_AddRefed<Image>
@@ -141,7 +142,9 @@ ImageFactory::CreateAnonymousImage(const nsCString& aMimeType)
   newImage->SetProgressTracker(newTracker);
 
   rv = newImage->Init(aMimeType.get(), Image::INIT_FLAG_SYNC_LOAD);
-  NS_ENSURE_SUCCESS(rv, BadImage(newImage));
+  if (NS_FAILED(rv)) {
+    return BadImage("RasterImage::Init failed", newImage);
+  }
 
   return newImage.forget();
 }
@@ -221,30 +224,6 @@ ImageFactory::CreateRasterImage(nsIRequest* aRequest,
   aProgressTracker->SetImage(newImage);
   newImage->SetProgressTracker(aProgressTracker);
 
-  rv = newImage->Init(aMimeType.get(), aImageFlags);
-  NS_ENSURE_SUCCESS(rv, BadImage(newImage));
-
-  newImage->SetInnerWindowID(aInnerWindowId);
-
-  uint32_t len = GetContentSize(aRequest);
-
-  // Pass anything usable on so that the RasterImage can preallocate
-  // its source buffer.
-  if (len > 0) {
-    // Bound by something reasonable
-    uint32_t sizeHint = std::min<uint32_t>(len, 20000000);
-    rv = newImage->SetSourceSizeHint(sizeHint);
-    if (NS_FAILED(rv)) {
-      // Flush memory, try to get some back, and try again.
-      rv = nsMemory::HeapMinimize(true);
-      nsresult rv2 = newImage->SetSourceSizeHint(sizeHint);
-      // If we've still failed at this point, things are going downhill.
-      if (NS_FAILED(rv) || NS_FAILED(rv2)) {
-        NS_WARNING("About to hit OOM in imagelib!");
-      }
-    }
-  }
-
   nsAutoCString ref;
   aURI->GetRef(ref);
   net::nsMediaFragmentURIParser parser(ref);
@@ -268,6 +247,32 @@ ImageFactory::CreateRasterImage(nsIRequest* aRequest,
       }
   }
 
+  rv = newImage->Init(aMimeType.get(), aImageFlags);
+  if (NS_FAILED(rv)) {
+    return BadImage("RasterImage::Init failed", newImage);
+  }
+
+  newImage->SetInnerWindowID(aInnerWindowId);
+
+  uint32_t len = GetContentSize(aRequest);
+
+  // Pass anything usable on so that the RasterImage can preallocate
+  // its source buffer.
+  if (len > 0) {
+    // Bound by something reasonable
+    uint32_t sizeHint = std::min<uint32_t>(len, 20000000);
+    rv = newImage->SetSourceSizeHint(sizeHint);
+    if (NS_FAILED(rv)) {
+      // Flush memory, try to get some back, and try again.
+      rv = nsMemory::HeapMinimize(true);
+      nsresult rv2 = newImage->SetSourceSizeHint(sizeHint);
+      // If we've still failed at this point, things are going downhill.
+      if (NS_FAILED(rv) || NS_FAILED(rv2)) {
+        NS_WARNING("About to hit OOM in imagelib!");
+      }
+    }
+  }
+
   return newImage.forget();
 }
 
@@ -288,12 +293,16 @@ ImageFactory::CreateVectorImage(nsIRequest* aRequest,
   newImage->SetProgressTracker(aProgressTracker);
 
   rv = newImage->Init(aMimeType.get(), aImageFlags);
-  NS_ENSURE_SUCCESS(rv, BadImage(newImage));
+  if (NS_FAILED(rv)) {
+    return BadImage("VectorImage::Init failed", newImage);
+  }
 
   newImage->SetInnerWindowID(aInnerWindowId);
 
   rv = newImage->OnStartRequest(aRequest, nullptr);
-  NS_ENSURE_SUCCESS(rv, BadImage(newImage));
+  if (NS_FAILED(rv)) {
+    return BadImage("VectorImage::OnStartRequest failed", newImage);
+  }
 
   return newImage.forget();
 }

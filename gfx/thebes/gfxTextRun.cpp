@@ -23,9 +23,14 @@
 #include "nsStyleConsts.h"
 #include "mozilla/Likely.h"
 #include "gfx2DGlue.h"
+#include "mozilla/gfx/Logging.h"        // for gfxCriticalError
 
 #if defined(MOZ_WIDGET_GTK)
 #include "gfxPlatformGtk.h" // xxx - for UseFcFontList
+#endif
+
+#ifdef XP_WIN
+#include "gfxWindowsPlatform.h"
 #endif
 
 #include "cairo.h"
@@ -1487,7 +1492,7 @@ gfxTextRun::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf)
 {
     // The second arg is how much gfxTextRun::AllocateStorage would have
     // allocated.
-    size_t total = mGlyphRuns.SizeOfExcludingThis(aMallocSizeOf);
+    size_t total = mGlyphRuns.ShallowSizeOfExcludingThis(aMallocSizeOf);
 
     if (mDetailedGlyphs) {
         total += mDetailedGlyphs->SizeOfIncludingThis(aMallocSizeOf);
@@ -1875,6 +1880,12 @@ gfxFontGroup::GetDefaultFont()
         }
     }
 
+    uint32_t numInits, loaderState;
+    pfl->GetFontlistInitInfo(numInits, loaderState);
+    NS_ASSERTION(numInits != 0,
+                 "must initialize system fontlist before getting default font!");
+
+    uint32_t numFonts = 0;
     if (!mDefaultFont) {
         // Try for a "font of last resort...."
         // Because an empty font list would be Really Bad for later code
@@ -1883,8 +1894,8 @@ gfxFontGroup::GetDefaultFont()
         // (see bug 554544)
         nsAutoTArray<nsRefPtr<gfxFontFamily>,200> families;
         pfl->GetFontFamilyList(families);
-        uint32_t count = families.Length();
-        for (uint32_t i = 0; i < count; ++i) {
+        uint32_t numFonts = families.Length();
+        for (uint32_t i = 0; i < numFonts; ++i) {
             gfxFontEntry *fe = families[i]->FindFontForStyle(mStyle,
                                                              needsBold);
             if (fe) {
@@ -1899,6 +1910,19 @@ gfxFontGroup::GetDefaultFont()
     if (!mDefaultFont) {
         // an empty font list at this point is fatal; we're not going to
         // be able to do even the most basic layout operations
+
+        // annotate crash report with fontlist info
+        nsAutoCString fontInitInfo;
+        fontInitInfo.AppendPrintf("no fonts - init: %d fonts: %d loader: %d",
+                                  numInits, numFonts, loaderState);
+#ifdef XP_WIN
+        bool dwriteEnabled = gfxWindowsPlatform::GetPlatform()->DWriteEnabled();
+        double upTime = (double) GetTickCount();
+        fontInitInfo.AppendPrintf(" backend: %s system-uptime: %9.3f sec",
+                                  dwriteEnabled ? "directwrite" : "gdi", upTime/1000);
+#endif
+        gfxCriticalError() << fontInitInfo.get();
+
         char msg[256]; // CHECK buffer length if revising message below
         nsAutoString families;
         mFamilyList.ToString(families);
@@ -2628,9 +2652,6 @@ gfxFontGroup::FindNonItalicFaceForChar(gfxFontFamily* aFamily, uint32_t aCh)
     }
 
     nsRefPtr<gfxFont> font = fe->FindOrMakeFont(&mStyle, needsBold);
-    if (!font->Valid()) {
-        return nullptr;
-    }
     return font.forget();
 }
 
@@ -3245,7 +3266,7 @@ gfxMissingFontRecorder::Flush()
             }
             mNotifiedFonts[i] |= (1 << j);
             if (!fontNeeded.IsEmpty()) {
-                fontNeeded.Append(PRUnichar(','));
+                fontNeeded.Append(char16_t(','));
             }
             uint32_t tag = GetScriptTagForCode(i * 32 + j);
             fontNeeded.Append(char16_t(tag >> 24));

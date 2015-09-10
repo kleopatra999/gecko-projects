@@ -36,6 +36,7 @@
 #include "nsPrintfCString.h"            // for nsPrintfCString
 #include "nsStyleStruct.h"              // for nsTimingFunction, etc
 #include "protobuf/LayerScopePacket.pb.h"
+#include "mozilla/Compression.h"
 
 uint8_t gLayerManagerLayerBuilder;
 
@@ -51,6 +52,7 @@ FILEOrDefault(FILE* aFile)
 typedef FrameMetrics::ViewID ViewID;
 
 using namespace mozilla::gfx;
+using namespace mozilla::Compression;
 
 //--------------------------------------------------
 // LayerManager
@@ -163,12 +165,12 @@ LayerManager::CreatePersistentBufferProvider(const mozilla::gfx::IntSize &aSize,
                                              mozilla::gfx::SurfaceFormat aFormat)
 {
   RefPtr<PersistentBufferProviderBasic> bufferProvider =
-    new PersistentBufferProviderBasic(this, aSize, aFormat,
+    new PersistentBufferProviderBasic(aSize, aFormat,
                                       gfxPlatform::GetPlatform()->GetPreferredCanvasBackend());
 
   if (!bufferProvider->IsValid()) {
     bufferProvider =
-      new PersistentBufferProviderBasic(this, aSize, aFormat,
+      new PersistentBufferProviderBasic(aSize, aFormat,
                                         gfxPlatform::GetPlatform()->GetFallbackCanvasBackend());
   }
 
@@ -217,7 +219,7 @@ Layer::Layer(LayerManager* aManager, void* aImplData) :
   mContentFlags(0),
   mUseTileSourceRect(false),
   mIsFixedPosition(false),
-  mMargins(0, 0, 0, 0),
+  mFixedPositionData(nullptr),
   mStickyPositionData(nullptr),
   mScrollbarTargetId(FrameMetrics::NULL_SCROLL_ID),
   mScrollbarDirection(ScrollDirection::NONE),
@@ -225,10 +227,14 @@ Layer::Layer(LayerManager* aManager, void* aImplData) :
   mIsScrollbarContainer(false),
   mDebugColorIndex(0),
   mAnimationGeneration(0)
-{}
+{
+  MOZ_COUNT_CTOR(Layer);
+}
 
 Layer::~Layer()
-{}
+{
+  MOZ_COUNT_DTOR(Layer);
+}
 
 Animation*
 Layer::AddAnimation()
@@ -818,9 +824,10 @@ Layer::ApplyPendingUpdatesForThisTransaction()
 const float
 Layer::GetLocalOpacity()
 {
-   if (LayerComposite* shadow = AsLayerComposite())
-    return shadow->GetShadowOpacity();
-  return mOpacity;
+  float opacity = mOpacity;
+  if (LayerComposite* shadow = AsLayerComposite())
+    opacity = shadow->GetShadowOpacity();
+  return std::min(std::max(opacity, 0.0f), 1.0f);
 }
 
 float
@@ -989,10 +996,14 @@ ContainerLayer::ContainerLayer(LayerManager* aManager, void* aImplData)
     mChildrenChanged(false),
     mEventRegionsOverride(EventRegionsOverride::NoOverride)
 {
+  MOZ_COUNT_CTOR(ContainerLayer);
   mContentFlags = 0; // Clear NO_TEXT, NO_TEXT_OVER_TRANSPARENT
 }
 
-ContainerLayer::~ContainerLayer() {}
+ContainerLayer::~ContainerLayer()
+{
+  MOZ_COUNT_DTOR(ContainerLayer);
+}
 
 bool
 ContainerLayer::InsertAfter(Layer* aChild, Layer* aAfter)
@@ -1178,14 +1189,14 @@ ContainerLayer::SortChildrenBy3DZOrder(nsTArray<Layer*>& aArray)
     } else {
       if (toSort.Length() > 0) {
         SortLayersBy3DZOrder(toSort);
-        aArray.MoveElementsFrom(toSort);
+        aArray.AppendElements(Move(toSort));
       }
       aArray.AppendElement(l);
     }
   }
   if (toSort.Length() > 0) {
     SortLayersBy3DZOrder(toSort);
-    aArray.MoveElementsFrom(toSort);
+    aArray.AppendElements(Move(toSort));
   }
 }
 
@@ -1213,12 +1224,30 @@ ContainerLayer::DefaultComputeEffectiveTransforms(const Matrix4x4& aTransformToS
     } else {
       useIntermediateSurface = false;
       gfx::Matrix contTransform;
-      if (!mEffectiveTransform.Is2D(&contTransform) ||
+      bool checkClipRect = false;
+      bool checkMaskLayers = false;
+
+      if (!mEffectiveTransform.Is2D(&contTransform)) {
+        // In 3D case, always check if we should use IntermediateSurface.
+        checkClipRect = true;
+        checkMaskLayers = true;
+      } else {
 #ifdef MOZ_GFX_OPTIMIZE_MOBILE
-        !contTransform.PreservesAxisAlignedRectangles()) {
+        if (!contTransform.PreservesAxisAlignedRectangles()) {
 #else
-        gfx::ThebesMatrix(contTransform).HasNonIntegerTranslation()) {
+        if (gfx::ThebesMatrix(contTransform).HasNonIntegerTranslation()) {
 #endif
+          checkClipRect = true;
+        }
+        /* In 2D case, only translation and/or positive scaling can be done w/o using IntermediateSurface.
+         * Otherwise, when rotation or flip happen, we should check whether to use IntermediateSurface.
+         */
+        if (contTransform.HasNonAxisAlignedTransform() || contTransform.HasNegativeScaling()) {
+          checkMaskLayers = true;
+        }
+      }
+
+      if (checkClipRect || checkMaskLayers) {
         for (Layer* child = GetFirstChild(); child; child = child->GetNextSibling()) {
           const Maybe<ParentLayerIntRect>& clipRect = child->GetEffectiveClipRect();
           /* We can't (easily) forward our transform to children with a non-empty clip
@@ -1226,8 +1255,11 @@ ContainerLayer::DefaultComputeEffectiveTransforms(const Matrix4x4& aTransformToS
            * the calculations performed by CalculateScissorRect above.
            * Nor for a child with a mask layer.
            */
-          if ((clipRect && !clipRect->IsEmpty() && !child->GetVisibleRegion().IsEmpty()) ||
-              child->HasMaskLayers()) {
+          if (checkClipRect && (clipRect && !clipRect->IsEmpty() && !child->GetVisibleRegion().IsEmpty())) {
+            useIntermediateSurface = true;
+            break;
+          }
+          if (checkMaskLayers && child->HasMaskLayers()) {
             useIntermediateSurface = true;
             break;
           }
@@ -1584,6 +1616,35 @@ Layer::Dump(layerscope::LayersPacket* aPacket, const void* aParent)
 }
 
 void
+Layer::SetDisplayListLog(const char* log)
+{
+  if (gfxUtils::DumpDisplayList()) {
+    mDisplayListLog = log;
+  }
+}
+
+void
+Layer::GetDisplayListLog(nsCString& log)
+{
+  log.SetLength(0);
+
+  if (gfxUtils::DumpDisplayList()) {
+    // This function returns a plain text string which consists of two things
+    //   1. DisplayList log.
+    //   2. Memory address of this layer.
+    // We know the target layer of each display item by information in #1.
+    // Here is an example of a Text display item line log in #1
+    //   Text p=0xa9850c00 f=0x0xaa405b00(.....
+    // f keeps the address of the target client layer of a display item.
+    // For LayerScope, display-item-to-client-layer mapping is not enough since
+    // LayerScope, which lives in the chrome process, knows only composite layers.
+    // As so, we need display-item-to-client-layer-to-layer-composite
+    // mapping. That's the reason we insert #2 into the log
+    log.AppendPrintf("0x%p\n%s",(void*) this, mDisplayListLog.get());
+  }
+}
+
+void
 Layer::Log(const char* aPrefix)
 {
   if (!IsLogEnabled())
@@ -1662,9 +1723,10 @@ Layer::PrintInfo(std::stringstream& aStream, const char* aPrefix)
     aStream << nsPrintfCString(" [hscrollbar=%lld]", GetScrollbarTargetContainerId()).get();
   }
   if (GetIsFixedPosition()) {
-    aStream << nsPrintfCString(" [isFixedPosition anchor=%s margin=%f,%f,%f,%f]",
-                     ToString(mAnchor).c_str(),
-                     mMargins.top, mMargins.right, mMargins.bottom, mMargins.left).get();
+    LayerPoint anchor = GetFixedPositionAnchor();
+    aStream << nsPrintfCString(" [isFixedPosition scrollId=%d anchor=%s]",
+                     GetFixedPositionScrollContainerId(),
+                     ToString(anchor).c_str()).get();
   }
   if (GetIsStickyPosition()) {
     aStream << nsPrintfCString(" [isStickyPosition scrollId=%d outer=%f,%f %fx%f "
@@ -1799,9 +1861,21 @@ Layer::DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent)
                       LayersPacket::Layer::HORIZONTAL);
     layer->set_barid(GetScrollbarTargetContainerId());
   }
+
   // Mask layer
   if (mMaskLayer) {
     layer->set_mask(reinterpret_cast<uint64_t>(mMaskLayer.get()));
+  }
+
+  // DisplayList log.
+  if (mDisplayListLog.Length() > 0) {
+    layer->set_displaylistloglength(mDisplayListLog.Length());
+    auto compressedData =
+      MakeUnique<char[]>(LZ4::maxCompressedSize(mDisplayListLog.Length()));
+    int compressedSize = LZ4::compress((char*)mDisplayListLog.get(),
+                                       mDisplayListLog.Length(),
+                                       compressedData.get());
+    layer->set_displaylistlog(compressedData.get(), compressedSize);
   }
 }
 

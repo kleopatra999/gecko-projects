@@ -157,18 +157,6 @@ NS_IMETHODIMP nsDeviceContextSpecGTK::GetSurfaceForPrinter(gfxASurface **aSurfac
       // There is nothing to detect on Print Preview, use PS.
       format = nsIPrintSettings::kOutputFormatPS;
     } else {
-      const gchar* fmtGTK = gtk_print_settings_get(mGtkPrintSettings, GTK_PRINT_SETTINGS_OUTPUT_FILE_FORMAT);
-      if (fmtGTK) {
-        if (nsDependentCString(fmtGTK).EqualsIgnoreCase("pdf")) {
-          format = nsIPrintSettings::kOutputFormatPDF;
-        } else {
-          format = nsIPrintSettings::kOutputFormatPS;
-        }
-      }
-    }
-
-    // If we haven't found the format at this point, we're sunk. :(
-    if (format == nsIPrintSettings::kOutputFormatNative) {
       return NS_ERROR_FAILURE;
     }
   }
@@ -408,7 +396,6 @@ NS_IMETHODIMP nsPrinterEnumeratorGTK::GetPrinterNameList(nsIStringEnumerator **a
   return NS_NewAdoptingStringEnumerator(aPrinterNameList, printers);
 }
 
-/* readonly attribute wstring defaultPrinterName; */
 NS_IMETHODIMP nsPrinterEnumeratorGTK::GetDefaultPrinterName(char16_t **aDefaultPrinterName)
 {
   DO_PR_DEBUG_LOG(("nsPrinterEnumeratorGTK::GetDefaultPrinterName()\n"));
@@ -420,7 +407,6 @@ NS_IMETHODIMP nsPrinterEnumeratorGTK::GetDefaultPrinterName(char16_t **aDefaultP
   return NS_OK;
 }
 
-/* void initPrintSettingsFromPrinter (in wstring aPrinterName, in nsIPrintSettings aPrintSettings); */
 NS_IMETHODIMP nsPrinterEnumeratorGTK::InitPrintSettingsFromPrinter(const char16_t *aPrinterName, nsIPrintSettings *aPrintSettings)
 {
   DO_PR_DEBUG_LOG(("nsPrinterEnumeratorGTK::InitPrintSettingsFromPrinter()"));

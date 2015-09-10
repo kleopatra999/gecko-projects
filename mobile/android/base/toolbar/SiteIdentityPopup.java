@@ -27,6 +27,7 @@ import org.mozilla.gecko.SiteIdentity.MixedMode;
 import org.mozilla.gecko.SiteIdentity.TrackingMode;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
+import org.mozilla.gecko.util.ColorUtils;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.gecko.widget.AnchoredPopup;
@@ -50,10 +51,12 @@ import org.mozilla.gecko.widget.SiteLogins;
  */
 public class SiteIdentityPopup extends AnchoredPopup implements GeckoEventListener {
 
-    public static enum ButtonType { DISABLE, ENABLE, KEEP_BLOCKING, CANCEL, COPY };
+    public static enum ButtonType { DISABLE, ENABLE, KEEP_BLOCKING, CANCEL, COPY }
 
     private static final String LOGTAG = "GeckoSiteIdentityPopup";
 
+    private static final String MIXED_CONTENT_SUPPORT_URL =
+        "https://support.mozilla.org/kb/how-does-insecure-content-affect-safety-android";
     private static final String TRACKING_CONTENT_SUPPORT_URL =
         "https://support.mozilla.org/kb/firefox-android-tracking-protection";
 
@@ -74,6 +77,7 @@ public class SiteIdentityPopup extends AnchoredPopup implements GeckoEventListen
     private TextView mOwner;
     private TextView mOwnerSupplemental;
     private TextView mVerifier;
+    private TextView mLink;
     private TextView mSiteSettingsLink;
 
     private View mDivider;
@@ -117,6 +121,14 @@ public class SiteIdentityPopup extends AnchoredPopup implements GeckoEventListen
         mOwnerSupplemental = (TextView) mIdentityKnownContainer.findViewById(R.id.owner_supplemental);
         mVerifier = (TextView) mIdentityKnownContainer.findViewById(R.id.verifier);
         mDivider = mIdentity.findViewById(R.id.divider_doorhanger);
+
+        mLink = (TextView) mIdentity.findViewById(R.id.site_identity_link);
+        mLink.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                Tabs.getInstance().loadUrlInTab(MIXED_CONTENT_SUPPORT_URL);
+            }
+        });
 
         mSiteSettingsLink = (TextView) mIdentity.findViewById(R.id.site_settings_link);
     }
@@ -285,40 +297,81 @@ public class SiteIdentityPopup extends AnchoredPopup implements GeckoEventListen
         mIdentityKnownContainer.setVisibility(identityInfoVisibility);
     }
 
+    /**
+     * Update the Site Identity content to reflect connection state.
+     *
+     * The connection state should reflect the combination of:
+     * a) Connection encryption
+     * b) Mixed Content state (Active/Display Mixed content, loaded, blocked, none, etc)
+     * and update the icons and strings to inform the user of that state.
+     *
+     * @param siteIdentity SiteIdentity information about the connection.
+     */
     private void updateConnectionState(final SiteIdentity siteIdentity) {
-        if (siteIdentity.getEncrypted()) {
-            mIcon.setImageResource(R.drawable.lock_secure);
-
-            mSecurityState.setTextColor(mResources.getColor(R.color.affirmative_green));
-            final Drawable stateIcon = ContextCompat.getDrawable(mContext, R.drawable.img_check);
-            stateIcon.setBounds(0, 0, stateIcon.getIntrinsicWidth()/2, stateIcon.getIntrinsicHeight()/2);
-            mSecurityState.setCompoundDrawables(stateIcon, null, null, null);
-            mSecurityState.setCompoundDrawablePadding((int) mResources.getDimension(R.dimen.doorhanger_drawable_padding));
-            mSecurityState.setText(R.string.identity_connection_secure);
-
-            if (siteIdentity.getMixedMode() == MixedMode.MIXED_CONTENT_BLOCKED) {
-                mMixedContentActivity.setVisibility(View.VISIBLE);
-                mMixedContentActivity.setText(R.string.mixed_content_blocked_all);
-            } else {
-                mMixedContentActivity.setVisibility(View.GONE);
-            }
-        } else {
-            if (siteIdentity.getMixedMode() == MixedMode.MIXED_CONTENT_LOADED) {
+        if (!siteIdentity.isSecure()) {
+            if (siteIdentity.getMixedModeActive() == MixedMode.MIXED_CONTENT_LOADED) {
+                // Active Mixed Content loaded because user has disabled blocking.
                 mIcon.setImageResource(R.drawable.lock_disabled);
+                clearSecurityStateIcon();
                 mMixedContentActivity.setVisibility(View.VISIBLE);
                 mMixedContentActivity.setText(R.string.mixed_content_protection_disabled);
+
+                mLink.setVisibility(View.VISIBLE);
+            } else if (siteIdentity.getMixedModeDisplay() == MixedMode.MIXED_CONTENT_LOADED) {
+                // Passive Mixed Content loaded.
+                mIcon.setImageResource(R.drawable.lock_inactive);
+                setSecurityStateIcon(R.drawable.warning_major, 1);
+                mMixedContentActivity.setVisibility(View.VISIBLE);
+                if (siteIdentity.getMixedModeActive() == MixedMode.MIXED_CONTENT_BLOCKED) {
+                    mMixedContentActivity.setText(R.string.mixed_content_blocked_some);
+                } else {
+                    mMixedContentActivity.setText(R.string.mixed_content_display_loaded);
+                }
+                mLink.setVisibility(View.VISIBLE);
+
             } else {
+                // Unencrypted connection with no mixed content.
                 mIcon.setImageResource(R.drawable.globe_light);
+                clearSecurityStateIcon();
+
                 mMixedContentActivity.setVisibility(View.GONE);
+                mLink.setVisibility(View.GONE);
             }
 
             mSecurityState.setText(R.string.identity_connection_insecure);
-            mSecurityState.setTextColor(mResources.getColor(R.color.placeholder_active_grey));
-            mSecurityState.setCompoundDrawablesWithIntrinsicBounds(0, 0, 0, 0);
-            mSecurityState.setCompoundDrawablePadding(0);
+            mSecurityState.setTextColor(ColorUtils.getColor(mContext, R.color.placeholder_active_grey));
+        } else {
+            // Connection is secure.
+            mIcon.setImageResource(R.drawable.lock_secure);
+
+            setSecurityStateIcon(R.drawable.img_check, 2);
+            mSecurityState.setTextColor(ColorUtils.getColor(mContext, R.color.affirmative_green));
+            mSecurityState.setText(R.string.identity_connection_secure);
+
+            // Mixed content has been blocked, if present.
+            if (siteIdentity.getMixedModeActive() == MixedMode.MIXED_CONTENT_BLOCKED ||
+                siteIdentity.getMixedModeDisplay() == MixedMode.MIXED_CONTENT_BLOCKED) {
+                mMixedContentActivity.setVisibility(View.VISIBLE);
+                mMixedContentActivity.setText(R.string.mixed_content_blocked_all);
+                mLink.setVisibility(View.VISIBLE);
+            } else {
+                mMixedContentActivity.setVisibility(View.GONE);
+                mLink.setVisibility(View.GONE);
+            }
         }
     }
 
+    private void clearSecurityStateIcon() {
+        mSecurityState.setCompoundDrawablePadding(0);
+        mSecurityState.setCompoundDrawables(null, null, null, null);
+    }
+
+    private void setSecurityStateIcon(int resource, int factor) {
+        final Drawable stateIcon = ContextCompat.getDrawable(mContext, resource);
+        stateIcon.setBounds(0, 0, stateIcon.getIntrinsicWidth()/factor, stateIcon.getIntrinsicHeight()/factor);
+        mSecurityState.setCompoundDrawables(stateIcon, null, null, null);
+        mSecurityState.setCompoundDrawablePadding((int) mResources.getDimension(R.dimen.doorhanger_drawable_padding));
+    }
     private void updateIdentityInformation(final SiteIdentity siteIdentity) {
         String owner = siteIdentity.getOwner();
         if (owner == null) {

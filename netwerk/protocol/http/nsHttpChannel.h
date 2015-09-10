@@ -233,7 +233,9 @@ public: /* internal necko use only */
     };
 
     void MarkIntercepted();
+    NS_IMETHOD GetResponseSynthesized(bool* aSynthesized) override;
     bool AwaitingCacheCallbacks();
+    void SetCouldBeSynthesized();
 
 protected:
     virtual ~nsHttpChannel();
@@ -248,7 +250,7 @@ private:
     nsresult Connect();
     void     SpeculativeConnect();
     nsresult SetupTransaction();
-    void     SetupTransactionLoadGroupInfo();
+    void     SetupTransactionSchedulingContext();
     nsresult CallOnStartRequest();
     nsresult ProcessResponse();
     nsresult ContinueProcessResponse(nsresult);

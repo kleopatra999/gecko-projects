@@ -18,6 +18,7 @@ def Libxul(name):
     DELAYLOAD_DLLS += [
         'comdlg32.dll',
         'dbghelp.dll',
+        'PowrProf.dll',
         'psapi.dll',
         'rasapi32.dll',
         'rasdlg.dll',
@@ -90,8 +91,6 @@ if CONFIG['OS_ARCH'] == 'WINNT' and not CONFIG['GNU_CC']:
     LOCAL_INCLUDES += [
         '/xpcom/base',
     ]
-
-FAIL_ON_WARNINGS = True
 
 DIRS += ['gtest']
 

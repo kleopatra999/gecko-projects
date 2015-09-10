@@ -28,6 +28,8 @@ class CodeGenerator;
 class CallInfo;
 class BaselineFrameInspector;
 
+enum class InlinableNative : uint16_t;
+
 // Records information about a baseline frame for compilation that is stable
 // when later used off thread.
 BaselineFrameInspector*
@@ -374,6 +376,8 @@ class IonBuilder
     // Creates a MDefinition based on the given def improved with type as TypeSet.
     MDefinition* ensureDefiniteTypeSet(MDefinition* def, TemporaryTypeSet* types);
 
+    void maybeMarkEmpty(MDefinition* ins);
+
     JSObject* getSingletonPrototype(JSFunction* target);
 
     MDefinition* createThisScripted(MDefinition* callee);
@@ -480,6 +484,17 @@ class IonBuilder
     bool setPropTryCache(bool* emitted, MDefinition* obj,
                          PropertyName* name, MDefinition* value,
                          bool barrier, TemporaryTypeSet* objTypes);
+
+    // jsop_binary_arith helpers.
+    MBinaryArithInstruction* binaryArithInstruction(JSOp op, MDefinition* left, MDefinition* right);
+    bool binaryArithTryConcat(bool* emitted, JSOp op, MDefinition* left, MDefinition* right);
+    bool binaryArithTrySpecialized(bool* emitted, JSOp op, MDefinition* left, MDefinition* right);
+    bool binaryArithTrySpecializedOnBaselineInspector(bool* emitted, JSOp op, MDefinition* left,
+                                                      MDefinition* right);
+    bool arithTrySharedStub(bool* emitted, JSOp op, MDefinition* left, MDefinition* right);
+
+    // jsop_bitnot helpers.
+    bool bitnotTrySpecialized(bool* emitted, MDefinition* input);
 
     // binary data lookup helpers.
     TypedObjectPrediction typedObjectPrediction(MDefinition* typedObj);
@@ -622,8 +637,8 @@ class IonBuilder
     bool jsop_add(MDefinition* left, MDefinition* right);
     bool jsop_bitnot();
     bool jsop_bitop(JSOp op);
-    bool jsop_binary(JSOp op);
-    bool jsop_binary(JSOp op, MDefinition* left, MDefinition* right);
+    bool jsop_binary_arith(JSOp op);
+    bool jsop_binary_arith(JSOp op, MDefinition* left, MDefinition* right);
     bool jsop_pow();
     bool jsop_pos();
     bool jsop_neg();
@@ -739,6 +754,7 @@ class IonBuilder
 
     // Array natives.
     InliningStatus inlineArray(CallInfo& callInfo);
+    InliningStatus inlineArrayIsArray(CallInfo& callInfo);
     InliningStatus inlineArrayPopShift(CallInfo& callInfo, MArrayPopShift::Mode mode);
     InliningStatus inlineArrayPush(CallInfo& callInfo);
     InliningStatus inlineArrayConcat(CallInfo& callInfo);
@@ -787,7 +803,7 @@ class IonBuilder
     InliningStatus inlineAtomicsLoad(CallInfo& callInfo);
     InliningStatus inlineAtomicsStore(CallInfo& callInfo);
     InliningStatus inlineAtomicsFence(CallInfo& callInfo);
-    InliningStatus inlineAtomicsBinop(CallInfo& callInfo, JSFunction* target);
+    InliningStatus inlineAtomicsBinop(CallInfo& callInfo, InlinableNative target);
     InliningStatus inlineAtomicsIsLockFree(CallInfo& callInfo);
 
     // Slot intrinsics.

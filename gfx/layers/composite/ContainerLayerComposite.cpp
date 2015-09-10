@@ -212,24 +212,26 @@ ContainerRenderVR(ContainerT* aContainer,
       // from WebGL (and maybe depth video?)
       compositor->SetRenderTarget(surface);
       aContainer->ReplaceEffectiveTransform(origTransform);
-      
+
       // If this native-VR child layer does not have sizes that match
       // the eye resolution (that is, returned by the recommended
       // render rect from the HMD device), then we need to scale it
       // up/down.
-      nsIntRect layerBounds;
+      Rect layerBounds;
       // XXX this is a hack! Canvas layers aren't reporting the
       // proper bounds here (visible region bounds are 0,0,0,0)
       // and I'm not sure if this is the bounds we want anyway.
       if (layer->GetType() == Layer::TYPE_CANVAS) {
-        layerBounds = static_cast<CanvasLayer*>(layer)->GetBounds();
+        layerBounds = ToRect(static_cast<CanvasLayer*>(layer)->GetBounds());
       } else {
-        layerBounds = layer->GetEffectiveVisibleRegion().GetBounds();
+        layerBounds = ToRect(layer->GetEffectiveVisibleRegion().GetBounds());
       }
-      DUMP("  layer %p [type %d] bounds [%d %d %d %d] surfaceRect [%d %d %d %d]\n", layer, (int) layer->GetType(),
-           XYWH(layerBounds), XYWH(surfaceRect));
-      
       const gfx::Matrix4x4 childTransform = layer->GetEffectiveTransform();
+      layerBounds = childTransform.TransformBounds(layerBounds);
+
+      DUMP("  layer %p [type %d] bounds [%f %f %f %f] surfaceRect [%d %d %d %d]\n", layer, (int) layer->GetType(),
+           XYWH(layerBounds), XYWH(surfaceRect));
+
       bool restoreTransform = false;
       if ((layerBounds.width != 0 && layerBounds.height != 0) &&
           (layerBounds.width != surfaceRect.width ||
@@ -239,8 +241,8 @@ ContainerRenderVR(ContainerT* aContainer,
              surfaceRect.width / float(layerBounds.width),
              surfaceRect.height / float(layerBounds.height));
         gfx::Matrix4x4 scaledChildTransform(childTransform);
-        scaledChildTransform.PreScale(surfaceRect.width / float(layerBounds.width),
-                                      surfaceRect.height / float(layerBounds.height),
+        scaledChildTransform.PreScale(surfaceRect.width / layerBounds.width,
+                                      surfaceRect.height / layerBounds.height,
                                       1.0f);
 
         layer->ReplaceEffectiveTransform(scaledChildTransform);
@@ -446,9 +448,15 @@ RenderMinimap(ContainerT* aContainer, LayerManagerComposite* aManager,
 
   // Rects
   const FrameMetrics& fm = aLayer->GetFrameMetrics(0);
+  ParentLayerRect compositionBounds = fm.GetCompositionBounds();
   LayerRect scrollRect = fm.GetScrollableRect() * fm.LayersPixelsPerCSSPixel();
-  LayerRect viewRect = ParentLayerRect(scrollOffset, fm.GetCompositionBounds().Size()) / LayerToParentLayerScale(1);
+  LayerRect viewRect = ParentLayerRect(scrollOffset, compositionBounds.Size()) / LayerToParentLayerScale(1);
   LayerRect dp = (fm.GetDisplayPort() + fm.GetScrollOffset()) * fm.LayersPixelsPerCSSPixel();
+
+  // Don't render trivial minimap. They can show up from textboxes and other tiny frames.
+  if (viewRect.width < 64 && viewRect.height < 64) {
+    return;
+  }
 
   // Compute a scale with an appropriate aspect ratio
   // We allocate up to 100px of width and the height of this layer.
@@ -460,7 +468,7 @@ RenderMinimap(ContainerT* aContainer, LayerManagerComposite* aManager,
   scaleFactor = std::min(scaleFactorX, scaleFactorY);
 
   Matrix4x4 transform = Matrix4x4::Scaling(scaleFactor, scaleFactor, 1);
-  transform.PostTranslate(horizontalPadding, verticalPadding, 0);
+  transform.PostTranslate(horizontalPadding + compositionBounds.x, verticalPadding + compositionBounds.y, 0);
 
   Rect clipRect = aContainer->GetEffectiveTransform().TransformBounds(
                     transform.TransformBounds(scrollRect.ToUnknownRect()));
@@ -471,6 +479,7 @@ RenderMinimap(ContainerT* aContainer, LayerManagerComposite* aManager,
   r = transform.TransformBounds(scrollRect.ToUnknownRect());
   compositor->FillRect(r, backgroundColor, clipRect, aContainer->GetEffectiveTransform());
 
+  /* Disabled because on long pages SlowDrawRect becomes a bottleneck.
   int tileW = gfxPrefs::LayersTileWidth();
   int tileH = gfxPrefs::LayersTileHeight();
 
@@ -484,13 +493,16 @@ RenderMinimap(ContainerT* aContainer, LayerManagerComposite* aManager,
       compositor->SlowDrawRect(r, tileBorderColor, clipRect, aContainer->GetEffectiveTransform());
     }
   }
+  */
 
   r = transform.TransformBounds(scrollRect.ToUnknownRect());
   compositor->SlowDrawRect(r, pageBorderColor, clipRect, aContainer->GetEffectiveTransform());
   r = transform.TransformBounds(dp.ToUnknownRect());
+  compositor->FillRect(r, tileActiveColor, clipRect, aContainer->GetEffectiveTransform());
+  r = transform.TransformBounds(dp.ToUnknownRect());
   compositor->SlowDrawRect(r, displayPortColor, clipRect, aContainer->GetEffectiveTransform());
   r = transform.TransformBounds(viewRect.ToUnknownRect());
-  compositor->SlowDrawRect(r, viewPortColor, clipRect, aContainer->GetEffectiveTransform());
+  compositor->SlowDrawRect(r, viewPortColor, clipRect, aContainer->GetEffectiveTransform(), 2);
 }
 
 
@@ -510,6 +522,9 @@ RenderLayers(ContainerT* aContainer,
     gfxRGBA color;
     if ((layer->GetContentFlags() & Layer::CONTENT_OPAQUE) &&
         LayerHasCheckerboardingAPZC(layer, &color)) {
+      if (gfxPrefs::APZHighlightCheckerboardedAreas()) {
+        color = gfxRGBA(255 / 255.0, 188 / 255.0, 217 / 255.0, 1);  // "Cotton Candy"
+      }
       // Ideally we would want to intersect the checkerboard region from the APZ with the layer bounds
       // and only fill in that area. However the layer bounds takes into account the base translation
       // for the painted layer whereas the checkerboard region does not. One does not simply

@@ -4,15 +4,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_bluetooth_bluetoothdaemonhandsfreeinterface_h
-#define mozilla_dom_bluetooth_bluetoothdaemonhandsfreeinterface_h
+#ifndef mozilla_dom_bluetooth_bluedroid_BluetoothDaemonHandsfreeInterface_h
+#define mozilla_dom_bluetooth_bluedroid_BluetoothDaemonHandsfreeInterface_h
 
 #include "BluetoothDaemonHelpers.h"
 #include "BluetoothInterface.h"
-#include "BluetoothInterfaceHelpers.h"
 #include "mozilla/ipc/DaemonRunnables.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
+
+using mozilla::ipc::DaemonSocketPDU;
+using mozilla::ipc::DaemonSocketPDUHeader;
 
 class BluetoothSetupResultHandler;
 
@@ -290,6 +292,11 @@ protected:
     NotificationHandlerWrapper, void, nsString, const nsAString&>
     KeyPressedNotification;
 
+  typedef mozilla::ipc::DaemonNotificationRunnable2<
+    NotificationHandlerWrapper, void, BluetoothHandsfreeWbsConfig, nsString,
+    BluetoothHandsfreeWbsConfig, const nsAString&>
+    WbsNotification;
+
   class ConnectionStateInitOp;
   class AudioStateInitOp;
   class VoiceRecognitionInitOp;
@@ -307,6 +314,7 @@ protected:
   class VolumeInitOp;
   class UnknownAtInitOp;
   class KeyPressedInitOp;
+  class WbsInitOp;
 
   void ConnectionStateNtf(const DaemonSocketPDUHeader& aHeader,
                           DaemonSocketPDU& aPDU);
@@ -355,6 +363,9 @@ protected:
 
   void KeyPressedNtf(const DaemonSocketPDUHeader& aHeader,
                      DaemonSocketPDU& aPDU);
+
+  void WbsNtf(const DaemonSocketPDUHeader& aHeader,
+              DaemonSocketPDU& aPDU);
 
   void HandleNtf(const DaemonSocketPDUHeader& aHeader,
                  DaemonSocketPDU& aPDU,
@@ -469,4 +480,4 @@ private:
 
 END_BLUETOOTH_NAMESPACE
 
-#endif
+#endif // mozilla_dom_bluetooth_bluedroid_BluetoothDaemonHandsfreeInterface_h

@@ -171,8 +171,7 @@ HwcComposer2D::RegisterHwcEventCallback()
         &HookVsync,         // 2nd: void (*vsync)(...)
         &HookHotplug        // 3rd: void (*hotplug)(...)
     };
-    mHasHWVsync = mHal->RegisterHwcEventCallback(cHWCProcs) &&
-                  gfxPrefs::HardwareVsyncEnabled();
+    mHasHWVsync = mHal->RegisterHwcEventCallback(cHWCProcs);
     return mHasHWVsync;
 }
 
@@ -685,13 +684,15 @@ HwcComposer2D::TryHwComposition(nsScreenGonk* aScreen)
                 case HWC_BLIT:
                     blitComposite = true;
                     break;
-                case HWC_OVERLAY:
+                case HWC_OVERLAY: {
                     // HWC will compose HWC_OVERLAY layers in partial
                     // Overlay Composition, set layer composition flag
                     // on mapped LayerComposite to skip GPU composition
                     mHwcLayerMap[k]->SetLayerComposited(true);
+
+                    uint8_t opacity = std::min(0xFF, (int)(mHwcLayerMap[k]->GetLayer()->GetEffectiveOpacity() * 256.0));
                     if ((mList->hwLayers[k].hints & HWC_HINT_CLEAR_FB) &&
-                        (mList->hwLayers[k].blending == HWC_BLENDING_NONE)) {
+                        (opacity == 0xFF)) {
                         // Clear visible rect on FB with transparent pixels.
                         hwc_rect_t r = mList->hwLayers[k].displayFrame;
                         mHwcLayerMap[k]->SetClearRect(nsIntRect(r.left, r.top,
@@ -699,6 +700,7 @@ HwcComposer2D::TryHwComposition(nsScreenGonk* aScreen)
                                                                 r.bottom - r.top));
                     }
                     break;
+                }
                 default:
                     break;
             }
@@ -748,6 +750,9 @@ HwcComposer2D::Render(nsIWidget* aWidget)
         mList->hwLayers[mList->numHwLayers - 1].handle = dispSurface->lastHandle;
         mList->hwLayers[mList->numHwLayers - 1].acquireFenceFd = dispSurface->GetPrevDispAcquireFd();
     } else {
+        // Update screen rect to handle a case that TryRenderWithHwc() is not called.
+        mScreenRect = screen->GetNaturalBounds();
+
         mList->flags = HWC_GEOMETRY_CHANGED;
         mList->numHwLayers = 2;
         mList->hwLayers[0].hints = 0;
@@ -770,7 +775,8 @@ HwcComposer2D::Prepare(buffer_handle_t dispHandle, int fence, nsScreenGonk* scre
     if (mPrepared) {
         LOGE("Multiple hwc prepare calls!");
     }
-    mHal->Prepare(mList, screen->GetDisplayType(), dispHandle, fence);
+    hwc_rect_t dispRect = {0, 0, mScreenRect.width, mScreenRect.height};
+    mHal->Prepare(mList, screen->GetDisplayType(), dispRect, dispHandle, fence);
     mPrepared = true;
 }
 
@@ -837,14 +843,7 @@ bool
 HwcComposer2D::Render(nsIWidget* aWidget)
 {
     nsScreenGonk* screen = static_cast<nsWindow*>(aWidget)->GetScreen();
-    GetGonkDisplay()->SwapBuffers(screen->GetEGLDisplay(), screen->GetEGLSurface());
-
-    if (!mHal->HasHwc()) {
-        return true;
-    }
-
-    mHal->Prepare(nullptr, screen->GetDisplayType(), nullptr, -1);
-    return !mHal->Set(nullptr, screen->GetDisplayType());
+    return GetGonkDisplay()->SwapBuffers(screen->GetEGLDisplay(), screen->GetEGLSurface());
 }
 #endif
 

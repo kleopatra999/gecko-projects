@@ -410,7 +410,7 @@ MediaEngineGonkVideoSource::DeallocImpl() {
 
 // The same algorithm from bug 840244
 static int
-GetRotateAmount(ScreenOrientation aScreen, int aCameraMountAngle, bool aBackCamera) {
+GetRotateAmount(ScreenOrientationInternal aScreen, int aCameraMountAngle, bool aBackCamera) {
   int screenAngle = 0;
   switch (aScreen) {
     case eScreenOrientation_PortraitPrimary:
@@ -750,11 +750,11 @@ MediaEngineGonkVideoSource::RotateImage(layers::Image* aImage, uint32_t aWidth, 
   layers::GrallocImage* videoImage = static_cast<layers::GrallocImage*>(image.get());
   MOZ_ASSERT(mTextureClientAllocator);
   RefPtr<layers::TextureClient> textureClient
-    = mTextureClientAllocator->CreateOrRecycleForDrawing(gfx::SurfaceFormat::YUV,
-                                                         gfx::IntSize(dstWidth, dstHeight),
-                                                         gfx::BackendType::NONE,
-                                                         layers::TextureFlags::DEFAULT,
-                                                         layers::ALLOC_DISALLOW_BUFFERTEXTURECLIENT);
+    = mTextureClientAllocator->CreateOrRecycle(gfx::SurfaceFormat::YUV,
+                                               gfx::IntSize(dstWidth, dstHeight),
+                                               layers::BackendSelector::Content,
+                                               layers::TextureFlags::DEFAULT,
+                                               layers::ALLOC_DISALLOW_BUFFERTEXTURECLIENT);
   if (textureClient) {
     RefPtr<layers::GrallocTextureClientOGL> grallocTextureClient =
       static_cast<layers::GrallocTextureClientOGL*>(textureClient.get());

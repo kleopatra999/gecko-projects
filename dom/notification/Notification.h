@@ -17,7 +17,6 @@
 #include "nsCycleCollectionParticipant.h"
 
 class nsIPrincipal;
-class nsIStructuredCloneContainer;
 class nsIVariant;
 
 namespace mozilla {
@@ -90,22 +89,12 @@ public:
  * Note that the Notification's JS wrapper does it's standard
  * AddRef()/Release() and is not affected by any of this.
  *
- * There is one case related to the WorkerNotificationObserver having to
- * dispatch WorkerRunnables to the worker thread which will use the
- * Notification object. We can end up in a situation where an event runnable is
- * dispatched to the worker, gets queued in the worker's event queue, but then,
- * the worker yields to the main thread. Here the main thread observer is
- * destroyed, which frees its NotificationRef. The NotificationRef dispatches
- * a ControlRunnable to the worker, which runs before the event runnable,
- * leading to the event runnable possibly not having a valid Notification
- * reference.
- * We solve this problem by having WorkerNotificationObserver's dtor
- * dispatching a standard WorkerRunnable to do the release (this guarantees the
- * ordering of the release is after the event runnables). All WorkerRunnables
- * that get dispatched successfully are guaranteed to run on the worker before
- * it shuts down. If that dispatch fails, the standard ControlRunnable based
- * shutdown is acceptable since the already dispatched event runnables have
- * already run or canceled (the worker is already past Running).
+ * Since the worker event queue can have runnables that will dispatch events on
+ * the Notification, the NotificationRef destructor will first try to release
+ * the Notification by dispatching a normal runnable to the worker so that it is
+ * queued after any event runnables. If that dispatch fails, it means the worker
+ * is no longer running and queued WorkerRunnables will be canceled, so we
+ * dispatch a control runnable instead.
  *
  */
 class Notification : public DOMEventTargetHelper
@@ -126,7 +115,7 @@ public:
   IMPL_EVENT_HANDLER(close)
 
   NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(Notification, DOMEventTargetHelper)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(Notification, DOMEventTargetHelper)
 
   static bool PrefEnabled(JSContext* aCx, JSObject* aObj);
   // Returns if Notification.get() is allowed for the current global.
@@ -204,8 +193,6 @@ public:
   {
     return mIsStored;
   }
-
-  nsIStructuredCloneContainer* GetDataCloneContainer();
 
   static bool RequestPermissionEnabledForScope(JSContext* aCx, JSObject* /* unused */);
 
@@ -359,11 +346,11 @@ protected:
   const nsString mLang;
   const nsString mTag;
   const nsString mIconUrl;
-  nsCOMPtr<nsIStructuredCloneContainer> mDataObjectContainer;
+  nsString mDataAsBase64;
   const NotificationBehavior mBehavior;
 
   // It's null until GetData is first called
-  nsCOMPtr<nsIVariant> mData;
+  JS::Heap<JS::Value> mData;
 
   nsString mAlertName;
   nsString mScope;

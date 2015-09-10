@@ -70,8 +70,6 @@ const DATAREPORTING_DIR = "datareporting";
 const ABORTED_PING_FILE_NAME = "aborted-session-ping";
 const ABORTED_SESSION_UPDATE_INTERVAL_MS = 5 * 60 * 1000;
 
-const Telemetry = Cc["@mozilla.org/base/telemetry;1"].getService(Ci.nsITelemetry);
-
 XPCOMUtils.defineLazyGetter(this, "DATAREPORTING_PATH", function() {
   return OS.Path.join(OS.Constants.Path.profileDir, DATAREPORTING_DIR);
 });
@@ -933,6 +931,7 @@ add_task(function* test_dailyDuplication() {
     return;
   }
 
+  clearPendingPings();
   PingServer.clearRequests();
 
   let schedulerTickCallback = null;
@@ -1049,7 +1048,7 @@ add_task(function* test_environmentChange() {
   Preferences.reset(PREF_TEST);
 
   const PREFS_TO_WATCH = new Map([
-    [PREF_TEST, TelemetryEnvironment.RECORD_PREF_VALUE],
+    [PREF_TEST, {what: TelemetryEnvironment.RECORD_PREF_VALUE}],
   ]);
 
   // Setup.
@@ -1138,6 +1137,9 @@ add_task(function* test_savedSessionData() {
   // Create the directory which will contain the data file, if it doesn't already
   // exist.
   yield OS.File.makeDir(DATAREPORTING_PATH);
+  getHistogram("TELEMETRY_SESSIONDATA_FAILED_LOAD").clear();
+  getHistogram("TELEMETRY_SESSIONDATA_FAILED_PARSE").clear();
+  getHistogram("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").clear();
 
   // Write test data to the session data file.
   const dataFilePath = OS.Path.join(DATAREPORTING_PATH, "session-state.json");
@@ -1151,7 +1153,7 @@ add_task(function* test_savedSessionData() {
   const PREF_TEST = "toolkit.telemetry.test.pref1";
   Preferences.reset(PREF_TEST);
   const PREFS_TO_WATCH = new Map([
-    [PREF_TEST, TelemetryEnvironment.RECORD_PREF_VALUE],
+    [PREF_TEST, {what: TelemetryEnvironment.RECORD_PREF_VALUE}],
   ]);
 
   // We expect one new subsession when starting TelemetrySession and one after triggering
@@ -1168,8 +1170,11 @@ add_task(function* test_savedSessionData() {
 
   // Start TelemetrySession so that it loads the session data file.
   yield TelemetrySession.reset();
-  // Watch a test preference, trigger and environment change and wait for it to propagate.
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_LOAD").sum);
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_PARSE").sum);
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").sum);
 
+  // Watch a test preference, trigger and environment change and wait for it to propagate.
   // _watchPreferences triggers a subsession notification
   fakeNow(new Date(2050, 1, 1, 12, 0, 0));
   TelemetryEnvironment._watchPreferences(PREFS_TO_WATCH);
@@ -1204,6 +1209,9 @@ add_task(function* test_sessionData_ShortSession() {
   // Shut down Telemetry and remove the session state file.
   yield TelemetrySession.shutdown();
   yield OS.File.remove(SESSION_STATE_PATH, { ignoreAbsent: true });
+  getHistogram("TELEMETRY_SESSIONDATA_FAILED_LOAD").clear();
+  getHistogram("TELEMETRY_SESSIONDATA_FAILED_PARSE").clear();
+  getHistogram("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").clear();
 
   const expectedSessionUUID = "ff602e52-47a1-b7e8-4c1a-ffffffffc87a";
   const expectedSubsessionUUID = "009fd1ad-b85e-4817-b3e5-000000003785";
@@ -1213,6 +1221,10 @@ add_task(function* test_sessionData_ShortSession() {
   // short sessions. We expect the profile subsession counter to be 1.
   TelemetrySession.reset();
   yield TelemetrySession.shutdown();
+
+  Assert.equal(1, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_LOAD").sum);
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_PARSE").sum);
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").sum);
 
   // Restore the UUID generation functions.
   fakeGenerateUUID(generateUUID, generateUUID);
@@ -1226,15 +1238,34 @@ add_task(function* test_sessionData_ShortSession() {
   Assert.equal(payload.info.profileSubsessionCounter, 2);
   Assert.equal(payload.info.previousSessionId, expectedSessionUUID);
   Assert.equal(payload.info.previousSubsessionId, expectedSubsessionUUID);
+  Assert.equal(1, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_LOAD").sum);
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_PARSE").sum);
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").sum);
 });
 
 add_task(function* test_invalidSessionData() {
   // Create the directory which will contain the data file, if it doesn't already
   // exist.
   yield OS.File.makeDir(DATAREPORTING_PATH);
+  getHistogram("TELEMETRY_SESSIONDATA_FAILED_LOAD").clear();
+  getHistogram("TELEMETRY_SESSIONDATA_FAILED_PARSE").clear();
+  getHistogram("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").clear();
 
-  // Write test data to the session data file.
+  // Write test data to the session data file. This should fail to parse.
   const dataFilePath = OS.Path.join(DATAREPORTING_PATH, "session-state.json");
+  const unparseableData = "{asdf:@äü";
+  OS.File.writeAtomic(dataFilePath, unparseableData,
+                      {encoding: "utf-8", tmpPath: dataFilePath + ".tmp"});
+
+  // Start TelemetrySession so that it loads the session data file.
+  yield TelemetrySession.reset();
+
+  // The session data file should not load. Only expect the current subsession.
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_LOAD").sum);
+  Assert.equal(1, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_PARSE").sum);
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").sum);
+
+  // Write test data to the session data file. This should fail validation.
   const sessionState = {
     profileSubsessionCounter: "not-a-number?",
     someOtherField: 12,
@@ -1246,10 +1277,16 @@ add_task(function* test_invalidSessionData() {
   const expectedSessionUUID = "ff602e52-47a1-b7e8-4c1a-ffffffffc87a";
   const expectedSubsessionUUID = "009fd1ad-b85e-4817-b3e5-000000003785";
   fakeGenerateUUID(() => expectedSessionUUID, () => expectedSubsessionUUID);
+
   // Start TelemetrySession so that it loads the session data file.
   yield TelemetrySession.reset();
+
   let payload = TelemetrySession.getPayload();
   Assert.equal(payload.info.profileSubsessionCounter, expectedSubsessions);
+  Assert.equal(0, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_LOAD").sum);
+  Assert.equal(1, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_PARSE").sum);
+  Assert.equal(1, getSnapshot("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").sum);
+
   yield TelemetrySession.shutdown();
 
   // Restore the UUID generator so we don't mess with other tests.
@@ -1431,6 +1468,8 @@ add_task(function* test_schedulerComputerSleep() {
 
   const ABORTED_FILE = OS.Path.join(DATAREPORTING_PATH, ABORTED_PING_FILE_NAME);
 
+  clearPendingPings();
+  yield TelemetrySend.reset();
   PingServer.clearRequests();
 
   // Remove any aborted-session ping from the previous tests.
@@ -1469,7 +1508,7 @@ add_task(function* test_schedulerEnvironmentReschedules() {
   const PREF_TEST = "toolkit.telemetry.test.pref1";
   Preferences.reset(PREF_TEST);
   const PREFS_TO_WATCH = new Map([
-    [PREF_TEST, TelemetryEnvironment.RECORD_PREF_VALUE],
+    [PREF_TEST, {what: TelemetryEnvironment.RECORD_PREF_VALUE}],
   ]);
 
   yield clearPendingPings();
@@ -1639,6 +1678,106 @@ add_task(function* test_schedulerUserIdle() {
   fakeNow(now);
   fakeIdleNotification("idle");
   Assert.equal(schedulerTimeout, 10 * 60 * 1000);
+
+  yield TelemetrySession.shutdown();
+});
+
+add_task(function* test_DailyDueAndIdle() {
+  if (gIsAndroid || gIsGonk) {
+    // We don't have the aborted session or the daily ping here.
+    return;
+  }
+
+  yield TelemetrySession.reset();
+  clearPendingPings();
+  PingServer.clearRequests();
+
+  let receivedPingRequest = null;
+  // Register a ping handler that will assert when receiving multiple daily pings.
+  PingServer.registerPingHandler(req => {
+    Assert.ok(!receivedPingRequest, "Telemetry must only send one daily ping.");
+    receivedPingRequest = req;
+  });
+
+  let schedulerTickCallback = null;
+  let now = new Date(2030, 1, 1, 0, 0, 0);
+  fakeNow(now);
+  // Fake scheduler functions to control daily collection flow in tests.
+  fakeSchedulerTimer(callback => schedulerTickCallback = callback, () => {});
+  yield TelemetrySession.setup();
+
+  // Trigger the daily ping.
+  let firstDailyDue = new Date(2030, 1, 2, 0, 0, 0);
+  fakeNow(firstDailyDue);
+
+  // Run a scheduler tick: it should trigger the daily ping.
+  Assert.ok(!!schedulerTickCallback);
+  let tickPromise = schedulerTickCallback();
+
+  // Send an idle and then an active user notification.
+  fakeIdleNotification("idle");
+  fakeIdleNotification("active");
+
+  // Wait on the tick promise.
+  yield tickPromise;
+
+  yield TelemetrySend.testWaitOnOutgoingPings();
+
+  // Decode the ping contained in the request and check that's a daily ping.
+  Assert.ok(receivedPingRequest, "Telemetry must send one daily ping.");
+  const receivedPing = decodeRequestPayload(receivedPingRequest);
+  checkPingFormat(receivedPing, PING_TYPE_MAIN, true, true);
+  Assert.equal(receivedPing.payload.info.reason, REASON_DAILY);
+
+  yield TelemetrySession.shutdown();
+});
+
+add_task(function* test_userIdleAndSchedlerTick() {
+  if (gIsAndroid || gIsGonk) {
+    // We don't have the aborted session or the daily ping here.
+    return;
+  }
+
+  yield TelemetrySession.reset();
+  clearPendingPings();
+  PingServer.clearRequests();
+
+  let receivedPingRequest = null;
+  // Register a ping handler that will assert when receiving multiple daily pings.
+  PingServer.registerPingHandler(req => {
+    Assert.ok(!receivedPingRequest, "Telemetry must only send one daily ping.");
+    receivedPingRequest = req;
+  });
+
+  let schedulerTickCallback = null;
+  let now = new Date(2030, 1, 1, 0, 0, 0);
+  fakeNow(now);
+  // Fake scheduler functions to control daily collection flow in tests.
+  fakeSchedulerTimer(callback => schedulerTickCallback = callback, () => {});
+  yield TelemetrySession.setup();
+
+  // Move the current date/time to midnight.
+  let firstDailyDue = new Date(2030, 1, 2, 0, 0, 0);
+  fakeNow(firstDailyDue);
+
+  // The active notification should trigger a scheduler tick. The latter will send the
+  // due daily ping.
+  fakeIdleNotification("active");
+
+  // Immediately running another tick should not send a daily ping again.
+  Assert.ok(!!schedulerTickCallback);
+  yield schedulerTickCallback();
+
+  // A new "idle" notification should not send a new daily ping.
+  fakeIdleNotification("idle");
+
+  yield TelemetrySend.testWaitOnOutgoingPings();
+
+  // Decode the ping contained in the request and check that's a daily ping.
+  Assert.ok(receivedPingRequest, "Telemetry must send one daily ping.");
+  const receivedPing = decodeRequestPayload(receivedPingRequest);
+  checkPingFormat(receivedPing, PING_TYPE_MAIN, true, true);
+  Assert.equal(receivedPing.payload.info.reason, REASON_DAILY);
 
   yield TelemetrySession.shutdown();
 });

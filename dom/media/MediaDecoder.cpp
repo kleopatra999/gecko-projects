@@ -129,13 +129,9 @@ void
 MediaDecoder::InitStatics()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  AbstractThread::InitStatics();
-  SharedThreadPool::InitStatics();
 
   // Log modules.
   gMediaDecoderLog = PR_NewLogModule("MediaDecoder");
-  gMozPromiseLog = PR_NewLogModule("MozPromise");
-  gStateWatchingLog = PR_NewLogModule("StateWatching");
   gMediaTimerLog = PR_NewLogModule("MediaTimer");
   gMediaSampleLog = PR_NewLogModule("MediaSample");
 }
@@ -163,9 +159,8 @@ bool
 MediaDecoder::IsHeuristicDormantSupported() const
 {
   return
-#if defined(MOZ_EME) && defined(RELEASE_BUILD)
-    // We disallow dormant for encrypted media on Beta and Release until
-    // bug 1181864 is fixed.
+#if defined(MOZ_EME)
+    // We disallow dormant for encrypted media until bug 1181864 is fixed.
     mInfo &&
     !mInfo->IsEncrypted() &&
 #endif
@@ -367,7 +362,6 @@ MediaDecoder::MediaDecoder() :
   mLogicalPosition(0.0),
   mDuration(std::numeric_limits<double>::quiet_NaN()),
   mMediaSeekable(true),
-  mSameOriginMedia(false),
   mReentrantMonitor("media.decoder"),
   mIgnoreProgressData(false),
   mInfiniteStream(false),
@@ -413,7 +407,9 @@ MediaDecoder::MediaDecoder() :
   mNextState(AbstractThread::MainThread(), PLAY_STATE_PAUSED,
              "MediaDecoder::mNextState (Canonical)"),
   mLogicallySeeking(AbstractThread::MainThread(), false,
-                    "MediaDecoder::mLogicallySeeking (Canonical)")
+                    "MediaDecoder::mLogicallySeeking (Canonical)"),
+  mSameOriginMedia(AbstractThread::MainThread(), false,
+                   "MediaDecoder::mSameOriginMedia (Canonical)")
 {
   MOZ_COUNT_CTOR(MediaDecoder);
   MOZ_ASSERT(NS_IsMainThread());
@@ -467,6 +463,7 @@ void MediaDecoder::Shutdown()
   // the asynchronous shutdown in nsDestroyStateMachine won't deadlock.
   if (mDecoderStateMachine) {
     mDecoderStateMachine->DispatchShutdown();
+    mTimedMetadataListener.Disconnect();
   }
 
   // Force any outstanding seek and byterange requests to complete
@@ -533,7 +530,7 @@ nsresult MediaDecoder::InitializeStateMachine(MediaDecoder* aCloneDonor)
 
   MediaDecoder* cloneDonor = static_cast<MediaDecoder*>(aCloneDonor);
   nsresult rv = mDecoderStateMachine->Init(
-      cloneDonor ? cloneDonor->mDecoderStateMachine : nullptr);
+      cloneDonor ? cloneDonor->mDecoderStateMachine.get() : nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
   // If some parameters got set before the state machine got created,
@@ -549,6 +546,8 @@ void MediaDecoder::SetStateMachineParameters()
   if (mMinimizePreroll) {
     mDecoderStateMachine->DispatchMinimizePrerollUntilPlaybackStarts();
   }
+  mTimedMetadataListener = mDecoderStateMachine->TimedMetadataEvent().Connect(
+    AbstractThread::MainThread(), this, &MediaDecoder::OnMetadataUpdate);
 }
 
 void MediaDecoder::SetMinimizePrerollUntilPlaybackStarts()
@@ -620,9 +619,9 @@ void MediaDecoder::CallSeek(const SeekTarget& aTarget)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mSeekRequest.DisconnectIfExists();
-  mSeekRequest.Begin(ProxyMediaCall(mDecoderStateMachine->OwnerThread(),
-                                    mDecoderStateMachine.get(), __func__,
-                                    &MediaDecoderStateMachine::Seek, aTarget)
+  mSeekRequest.Begin(InvokeAsync(mDecoderStateMachine->OwnerThread(),
+                                 mDecoderStateMachine.get(), __func__,
+                                 &MediaDecoderStateMachine::Seek, aTarget)
     ->Then(AbstractThread::MainThread(), __func__, this,
            &MediaDecoder::OnSeekResolved, &MediaDecoder::OnSeekRejected));
 }
@@ -639,13 +638,15 @@ already_AddRefed<nsIPrincipal> MediaDecoder::GetCurrentPrincipal()
   return mResource ? mResource->GetCurrentPrincipal() : nullptr;
 }
 
-void MediaDecoder::QueueMetadata(int64_t aPublishTime,
-                                 nsAutoPtr<MediaInfo> aInfo,
-                                 nsAutoPtr<MetadataTags> aTags)
+void MediaDecoder::OnMetadataUpdate(TimedMetadata&& aMetadata)
 {
-  MOZ_ASSERT(OnDecodeTaskQueue());
-  GetReentrantMonitor().AssertCurrentThreadIn();
-  mDecoderStateMachine->QueueMetadata(aPublishTime, aInfo, aTags);
+  MOZ_ASSERT(NS_IsMainThread());
+  RemoveMediaTracks();
+  MetadataLoaded(nsAutoPtr<MediaInfo>(new MediaInfo(*aMetadata.mInfo)),
+                 Move(aMetadata.mTags),
+                 MediaDecoderEventVisibility::Observable);
+  FirstFrameLoaded(Move(aMetadata.mInfo),
+                   MediaDecoderEventVisibility::Observable);
 }
 
 void MediaDecoder::MetadataLoaded(nsAutoPtr<MediaInfo> aInfo,
@@ -775,12 +776,6 @@ void MediaDecoder::UpdateSameOriginStatus(bool aSameOrigin)
   MOZ_ASSERT(NS_IsMainThread());
   ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   mSameOriginMedia = aSameOrigin;
-}
-
-bool MediaDecoder::IsSameOriginMedia()
-{
-  GetReentrantMonitor().AssertCurrentThreadIn();
-  return mSameOriginMedia;
 }
 
 bool MediaDecoder::IsSeeking() const
@@ -1020,7 +1015,6 @@ void MediaDecoder::ChangeState(PlayState aState)
   }
 
   if (mPlayState == PLAY_STATE_SHUTDOWN) {
-    GetReentrantMonitor().NotifyAll();
     return;
   }
 
@@ -1037,8 +1031,6 @@ void MediaDecoder::ChangeState(PlayState aState)
   CancelDormantTimer();
   // Start dormant timer if necessary
   StartDormantTimer();
-
-  GetReentrantMonitor().NotifyAll();
 }
 
 void MediaDecoder::UpdateLogicalPosition(MediaDecoderEventVisibility aEventVisibility)

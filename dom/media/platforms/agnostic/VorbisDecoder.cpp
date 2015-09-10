@@ -6,6 +6,7 @@
 
 #include "VorbisDecoder.h"
 #include "VorbisUtils.h"
+#include "XiphExtradata.h"
 
 #include "mozilla/PodOperations.h"
 #include "nsAutoPtr.h"
@@ -63,7 +64,7 @@ VorbisDataDecoder::Shutdown()
   return NS_OK;
 }
 
-nsresult
+nsRefPtr<MediaDataDecoder::InitPromise>
 VorbisDataDecoder::Init()
 {
   vorbis_info_init(&mVorbisInfo);
@@ -71,35 +72,29 @@ VorbisDataDecoder::Init()
   PodZero(&mVorbisDsp);
   PodZero(&mVorbisBlock);
 
-  size_t available = mInfo.mCodecSpecificConfig->Length();
-  uint8_t *p = mInfo.mCodecSpecificConfig->Elements();
-  for(int i = 0; i < 3; i++) {
-    if (available < 2) {
-      return NS_ERROR_FAILURE;
+  nsAutoTArray<unsigned char*,4> headers;
+  nsAutoTArray<size_t,4> headerLens;
+  if (!XiphExtradataToHeaders(headers, headerLens,
+                              mInfo.mCodecSpecificConfig->Elements(),
+                              mInfo.mCodecSpecificConfig->Length())) {
+    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
+  }
+  for (size_t i = 0; i < headers.Length(); i++) {
+    if (NS_FAILED(DecodeHeader(headers[i], headerLens[i]))) {
+      return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
     }
-    available -= 2;
-    size_t length = BigEndian::readUint16(p);
-    p += 2;
-    if (available < length) {
-      return NS_ERROR_FAILURE;
-    }
-    available -= length;
-    if (NS_FAILED(DecodeHeader((const unsigned char*)p, length))) {
-        return NS_ERROR_FAILURE;
-    }
-    p += length;
   }
 
   MOZ_ASSERT(mPacketCount == 3);
 
   int r = vorbis_synthesis_init(&mVorbisDsp, &mVorbisInfo);
   if (r) {
-    return NS_ERROR_FAILURE;
+    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
   }
 
   r = vorbis_block_init(&mVorbisDsp, &mVorbisBlock);
   if (r) {
-    return NS_ERROR_FAILURE;
+    return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
   }
 
   if (mInfo.mRate != (uint32_t)mVorbisDsp.vi->rate) {
@@ -111,7 +106,7 @@ VorbisDataDecoder::Init()
         ("Invalid Vorbis header: container and codec channels do not match!"));
   }
 
-  return NS_OK;
+  return InitPromise::CreateAndResolve(TrackInfo::kAudioTrack, __func__);
 }
 
 nsresult
@@ -152,8 +147,8 @@ VorbisDataDecoder::Decode(MediaRawData* aSample)
 int
 VorbisDataDecoder::DoDecode(MediaRawData* aSample)
 {
-  const unsigned char* aData = aSample->mData;
-  size_t aLength = aSample->mSize;
+  const unsigned char* aData = aSample->Data();
+  size_t aLength = aSample->Size();
   int64_t aOffset = aSample->mOffset;
   uint64_t aTstampUsecs = aSample->mTime;
   int64_t aTotalFrames = 0;

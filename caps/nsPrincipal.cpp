@@ -120,7 +120,7 @@ nsPrincipal::GetOriginForURI(nsIURI* aURI, nsACString& aOrigin)
   bool isChrome;
   nsresult rv = origin->SchemeIs("chrome", &isChrome);
   if (NS_SUCCEEDED(rv) && !isChrome) {
-    rv = origin->GetAsciiHost(hostPort);
+    rv = origin->GetAsciiHostPort(hostPort);
     // Some implementations return an empty string, treat it as no support
     // for asciiHost by that implementation.
     if (hostPort.IsEmpty()) {
@@ -153,17 +153,7 @@ nsPrincipal::GetOriginForURI(nsIURI* aURI, nsACString& aOrigin)
     return NS_OK;
   }
 
-  int32_t port;
   if (NS_SUCCEEDED(rv) && !isChrome) {
-    rv = origin->GetPort(&port);
-  }
-
-  if (NS_SUCCEEDED(rv) && !isChrome) {
-    if (port != -1) {
-      hostPort.Append(':');
-      hostPort.AppendInt(port, 10);
-    }
-
     rv = origin->GetScheme(aOrigin);
     NS_ENSURE_SUCCESS(rv, rv);
     aOrigin.AppendLiteral("://");

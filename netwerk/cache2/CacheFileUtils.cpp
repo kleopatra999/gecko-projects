@@ -258,7 +258,7 @@ AppendTagWithValue(nsACString & aTarget, char const aTag, nsCSubstring const & a
   // First check the value string to save some memory copying
   // for cases we don't need to escape at all (most likely).
   if (!aValue.IsEmpty()) {
-    if (aValue.FindChar(',') == kNotFound) {
+    if (!aValue.Contains(',')) {
       // No need to escape
       aTarget.Append(aValue);
     } else {
@@ -415,7 +415,7 @@ ValidityMap::Clear()
 size_t
 ValidityMap::SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const
 {
-  return mMap.SizeOfExcludingThis(mallocSizeOf);
+  return mMap.ShallowSizeOfExcludingThis(mallocSizeOf);
 }
 
 ValidityPair&

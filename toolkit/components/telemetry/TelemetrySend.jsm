@@ -113,6 +113,20 @@ function isDeletionPing(aPing) {
   return isV4PingFormat(aPing) && (aPing.type == PING_TYPE_DELETION);
 }
 
+/**
+ * Save the provided ping as a pending ping. If it's a deletion ping, save it
+ * to a special location.
+ * @param {Object} aPing The ping to save.
+ * @return {Promise} A promise resolved when the ping is saved.
+ */
+function savePing(aPing) {
+  if (isDeletionPing(aPing)) {
+    return TelemetryStorage.saveDeletionPing(aPing);
+  } else {
+    return TelemetryStorage.savePendingPing(aPing);
+  }
+}
+
 function tomorrow(date) {
   let d = new Date(date);
   d.setDate(d.getDate() + 1);
@@ -673,7 +687,7 @@ let TelemetrySendImpl = {
       // Sending is disabled or throttled, add this to the persisted pending pings.
       this._log.trace("submitPing - can't send ping now, persisting to disk - " +
                       "canSendNow: " + this.canSendNow);
-      return TelemetryStorage.savePendingPing(ping);
+      return savePing(ping);
     }
 
     // Let the scheduler trigger sending pings if possible.
@@ -716,11 +730,7 @@ let TelemetrySendImpl = {
         } catch (ex) {
           this._log.info("sendPings - ping " + ping.id + " not sent, saving to disk", ex);
           // Deletion pings must be saved to a special location.
-          if (isDeletionPing(ping)) {
-            yield TelemetryStorage.saveDeletionPing(ping);
-          } else {
-            yield TelemetryStorage.savePendingPing(ping);
-          }
+          yield savePing(ping);
         } finally {
           this._currentPings.delete(ping.id);
         }
@@ -901,6 +911,7 @@ let TelemetrySendImpl = {
         // 4XX means that something with the request was broken.
         this._log.error("_doPing - error submitting to " + url + ", status: " + status
                         + " - ping request broken?");
+        Telemetry.getHistogramById("TELEMETRY_PING_EVICTED_FOR_SERVER_ERRORS").add();
         // TODO: we should handle this better, but for now we should avoid resubmitting
         // broken requests by pretending success.
         success = true;
@@ -927,6 +938,19 @@ let TelemetrySendImpl = {
     let utf8Payload = converter.ConvertFromUnicode(JSON.stringify(networkPayload));
     utf8Payload += converter.Finish();
     Telemetry.getHistogramById("TELEMETRY_STRINGIFY").add(new Date() - startTime);
+
+    // Check the size and drop pings which are too big.
+    const pingSizeBytes = utf8Payload.length;
+    if (pingSizeBytes > TelemetryStorage.MAXIMUM_PING_SIZE) {
+      this._log.error("_doPing - submitted ping exceeds the size limit, size: " + pingSizeBytes);
+      Telemetry.getHistogramById("TELEMETRY_PING_SIZE_EXCEEDED_SEND").add();
+      Telemetry.getHistogramById("TELEMETRY_DISCARDED_SEND_PINGS_SIZE_MB")
+               .add(Math.floor(pingSizeBytes / 1024 / 1024));
+      // We don't need to call |request.abort()| as it was not sent yet.
+      this._pendingPingRequests.delete(id);
+      return TelemetryStorage.removePendingPing(id);
+    }
+
     let payloadStream = Cc["@mozilla.org/io/string-input-stream;1"]
                         .createInstance(Ci.nsIStringInputStream);
     startTime = new Date();
@@ -1008,7 +1032,7 @@ let TelemetrySendImpl = {
   _persistCurrentPings: Task.async(function*() {
     for (let [id, ping] of this._currentPings) {
       try {
-        yield TelemetryStorage.savePendingPing(ping);
+        yield savePing(ping);
         this._log.trace("_persistCurrentPings - saved ping " + id);
       } catch (ex) {
         this._log.error("_persistCurrentPings - failed to save ping " + id, ex);

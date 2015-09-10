@@ -103,6 +103,13 @@ SapiCallback::OnCancel()
   return NS_OK;
 }
 
+NS_IMETHODIMP
+SapiCallback::OnVolumeChanged(float aVolume)
+{
+  mSapiClient->SetVolume(static_cast<USHORT>(aVolume * 100));
+  return NS_OK;
+}
+
 void
 SapiCallback::OnSpeechEvent(const SPEVENT& speechEvent)
 {
@@ -278,8 +285,11 @@ SapiService::RegisterVoices()
     uri.AppendLiteral("?");
     uri.Append(locale);
 
+    // This service can only speak one utterance at a time, se we set
+    // aQueuesUtterances to true in order to track global state and schedule
+    // access to this service.
     rv = registry->AddVoice(this, uri, nsDependentString(description), locale,
-                            true);
+                            true, true);
     CoTaskMemFree(description);
     if (NS_FAILED(rv)) {
       continue;

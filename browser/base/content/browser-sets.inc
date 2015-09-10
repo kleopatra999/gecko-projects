@@ -22,7 +22,7 @@
 
     <command id="cmd_newNavigatorTab" oncommand="BrowserOpenNewTabOrWindow(event);" reserved="true"/>
     <command id="Browser:OpenFile"  oncommand="BrowserOpenFileWindow();"/>
-    <command id="Browser:SavePage" oncommand="saveDocument(gBrowser.selectedBrowser.contentDocumentAsCPOW);"/>
+    <command id="Browser:SavePage" oncommand="saveBrowser(gBrowser.selectedBrowser);"/>
 
     <command id="Browser:SendLink"
              oncommand="MailIntegration.sendLinkForBrowser(gBrowser.selectedBrowser);"/>
@@ -32,13 +32,14 @@
     <command id="cmd_printPreview" oncommand="PrintUtils.printPreview(PrintPreviewListener);"/>
     <command id="cmd_close" oncommand="BrowserCloseTabOrWindow()" reserved="true"/>
     <command id="cmd_closeWindow" oncommand="BrowserTryToCloseWindow()" reserved="true"/>
+    <command id="cmd_toggleMute" oncommand="gBrowser.selectedTab.toggleMuteAudio()"/>
     <command id="cmd_CustomizeToolbars" oncommand="BrowserCustomizeToolbar()"/>
     <command id="cmd_quitApplication" oncommand="goQuitApplication()" reserved="true"/>
 
 
     <commandset id="editMenuCommands"/>
 
-    <command id="View:PageSource" oncommand="BrowserViewSource(window.gBrowser.selectedBrowser);" observes="isImage"/>
+    <command id="View:PageSource" oncommand="BrowserViewSource(window.gBrowser.selectedBrowser);" observes="canViewSource"/>
     <command id="View:PageInfo" oncommand="BrowserPageInfo();"/>
     <command id="View:FullScreen" oncommand="BrowserFullScreen();"/>
     <command id="View:ReaderView" oncommand="ReaderParent.toggleReaderMode(event);"/>
@@ -146,11 +147,6 @@
                  sidebarurl="chrome://browser/content/history/history-panel.xul"
                  oncommand="SidebarUI.toggle('viewHistorySidebar');"/>
 
-    <broadcaster id="readingListSidebar" hidden="true" autoCheck="false" disabled="true"
-                 sidebartitle="&readingList.label;" type="checkbox" group="sidebar"
-                 sidebarurl="chrome://browser/content/readinglist/sidebar.xhtml"
-                 oncommand="SidebarUI.toggle('readingListSidebar');"/>
-
     <broadcaster id="viewWebPanelsSidebar" autoCheck="false"
                  type="checkbox" group="sidebar" sidebarurl="chrome://browser/content/web-panels.xul"
                  oncommand="SidebarUI.toggle('viewWebPanelsSidebar');"/>
@@ -178,6 +174,7 @@
                  oncommand="gPopupBlockerObserver.dontShowMessage();"/>
     <broadcaster id="blockedPopupsSeparator"/>
     <broadcaster id="isImage"/>
+    <broadcaster id="canViewSource"/>
     <broadcaster id="isFrameImage"/>
     <broadcaster id="singleFeedMenuitemState" disabled="true"/>
     <broadcaster id="multipleFeedsMenuState" hidden="true"/>
@@ -235,7 +232,9 @@
     <broadcaster id="devtoolsMenuBroadcaster_PageSource"
                  label="&pageSourceCmd.label;"
                  key="key_viewSource"
-                 command="View:PageSource"/>
+                 command="View:PageSource">
+      <observes element="canViewSource" attribute="disabled"/>
+    </broadcaster>
     <broadcaster id="devtoolsMenuBroadcaster_ErrorConsole"
                  label="&errorConsoleCmd.label;"
                  command="Tools:ErrorConsole"/>
@@ -321,6 +320,7 @@
     <key id="printKb" key="&printCmd.commandkey;" command="cmd_print"  modifiers="accel"/>
     <key id="key_close" key="&closeCmd.key;" command="cmd_close" modifiers="accel"/>
     <key id="key_closeWindow" key="&closeCmd.key;" command="cmd_closeWindow" modifiers="accel,shift"/>
+    <key id="key_toggleMute" key="&toggleMuteCmd.key;" command="cmd_toggleMute" modifiers="control"/>
     <key id="key_undo"
          key="&undoCmd.key;"
          modifiers="accel"/>
@@ -420,11 +420,6 @@
          modifiers="accel"
 #endif
          command="viewHistorySidebar"/>
-
-    <key id="key_readingListSidebar"
-         key="&readingList.sidebar.commandKey;"
-         modifiers="accel,alt"
-         command="readingListSidebar"/>
 
     <key id="key_fullZoomReduce"  key="&fullZoomReduceCmd.commandkey;"   command="cmd_fullZoomReduce"  modifiers="accel"/>
     <key                          key="&fullZoomReduceCmd.commandkey2;"  command="cmd_fullZoomReduce"  modifiers="accel"/>

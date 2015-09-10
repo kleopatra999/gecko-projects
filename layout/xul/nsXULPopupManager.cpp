@@ -263,7 +263,10 @@ nsXULPopupManager::Rollup(uint32_t aCount, bool aFlush,
       // position, but the only thing that would happen is that the mouse
       // event will get consumed, so here only a quick coordinates check is
       // done rather than a slower complete check of what is at that location.
-      if (anchorRect.Contains(*pos)) {
+      nsPresContext* presContext = item->Frame()->PresContext();
+      nsIntPoint posCSSPixels(presContext->DevPixelsToIntCSSPixels(pos->x),
+                              presContext->DevPixelsToIntCSSPixels(pos->y));
+      if (anchorRect.Contains(posCSSPixels)) {
         if (consumeResult == ConsumeOutsideClicks_ParentOnly) {
           consume = true;
         }
@@ -1115,7 +1118,7 @@ nsXULPopupManager::HidePopupCallback(nsIContent* aPopup,
   // send the popuphidden event synchronously. This event has no default
   // behaviour.
   nsEventStatus status = nsEventStatus_eIgnore;
-  WidgetMouseEvent event(true, NS_XUL_POPUP_HIDDEN, nullptr,
+  WidgetMouseEvent event(true, eXULPopupHidden, nullptr,
                          WidgetMouseEvent::eReal);
   EventDispatcher::Dispatch(aPopup, aPopupFrame->PresContext(),
                             &event, nullptr, &status);
@@ -1351,7 +1354,7 @@ nsXULPopupManager::FirePopupShowingEvent(nsIContent* aPopup,
   mOpeningPopup = aPopup;
 
   nsEventStatus status = nsEventStatus_eIgnore;
-  WidgetMouseEvent event(true, NS_XUL_POPUP_SHOWING, nullptr,
+  WidgetMouseEvent event(true, eXULPopupShowing, nullptr,
                          WidgetMouseEvent::eReal);
 
   // coordinates are relative to the root widget
@@ -1431,7 +1434,7 @@ nsXULPopupManager::FirePopupHidingEvent(nsIContent* aPopup,
   nsCOMPtr<nsIPresShell> presShell = aPresContext->PresShell();
 
   nsEventStatus status = nsEventStatus_eIgnore;
-  WidgetMouseEvent event(true, NS_XUL_POPUP_HIDING, nullptr,
+  WidgetMouseEvent event(true, eXULPopupHiding, nullptr,
                          WidgetMouseEvent::eReal);
   EventDispatcher::Dispatch(aPopup, aPresContext, &event, nullptr, &status);
 

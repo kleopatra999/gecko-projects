@@ -10,6 +10,7 @@ loader.lazyRequireGetter(this, "events", "sdk/event/core");
 loader.lazyRequireGetter(this, "EventTarget", "sdk/event/target", true);
 loader.lazyRequireGetter(this, "DevToolsUtils", "devtools/toolkit/DevToolsUtils.js");
 loader.lazyRequireGetter(this, "DeferredTask", "resource://gre/modules/DeferredTask.jsm", true);
+loader.lazyRequireGetter(this, "Task", "resource://gre/modules/Task.jsm", true);
 
 // Events piped from system observers to Profiler instances.
 const PROFILER_SYSTEM_EVENTS = [
@@ -287,6 +288,7 @@ const ProfilerManager = (function () {
      *   - "console-api-profiler"
      *   - "profiler-started"
      *   - "profiler-stopped"
+     *   - "profiler-status"
      *
      * The ProfilerManager listens to all events, and individual
      * consumers filter which events they are interested in.

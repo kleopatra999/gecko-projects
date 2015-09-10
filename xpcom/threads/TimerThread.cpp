@@ -31,8 +31,7 @@ TimerThread::TimerThread() :
   mShutdown(false),
   mWaiting(false),
   mNotified(false),
-  mSleeping(false),
-  mLastTimerEventLoopRun(TimeStamp::Now())
+  mSleeping(false)
 {
 }
 
@@ -393,7 +392,6 @@ struct IntervalComparator
 
 } // namespace
 
-/* void Run(); */
 NS_IMETHODIMP
 TimerThread::Run()
 {
@@ -442,7 +440,6 @@ TimerThread::Run()
     } else {
       waitFor = PR_INTERVAL_NO_TIMEOUT;
       TimeStamp now = TimeStamp::Now();
-      mLastTimerEventLoopRun = now;
       nsTimerImpl* timer = nullptr;
 
       if (!mTimers.IsEmpty()) {
@@ -710,16 +707,9 @@ TimerThread::PostTimerEvent(already_AddRefed<nsTimerImpl> aTimerRef)
   }
 
   // If this is a repeating precise timer, we need to calculate the time for
-  // the next timer to fire before we make the callback.
+  // the next timer to fire before we make the callback. But don't re-arm.
   if (timer->IsRepeatingPrecisely()) {
     timer->SetDelayInternal(timer->mDelay);
-
-    // But only re-arm REPEATING_PRECISE timers.
-    if (timer->mType == nsTimerImpl::TYPE_REPEATING_PRECISE) {
-      if (AddTimerInternal(timer) == -1) {
-        return timer.forget();
-      }
-    }
   }
 
 #ifdef MOZ_TASK_TRACER
@@ -755,7 +745,6 @@ TimerThread::DoBeforeSleep()
 {
   // Mainthread
   MonitorAutoLock lock(mMonitor);
-  mLastTimerEventLoopRun = TimeStamp::Now();
   mSleeping = true;
 }
 
@@ -764,33 +753,16 @@ void
 TimerThread::DoAfterSleep()
 {
   // Mainthread
-  TimeStamp now = TimeStamp::Now();
-
   MonitorAutoLock lock(mMonitor);
-
-  // an over-estimate of time slept, usually small
-  TimeDuration slept = now - mLastTimerEventLoopRun;
-
-  // Adjust all old timers to expire roughly similar times in the future
-  // compared to when we went to sleep, by adding the time we slept to the
-  // target time. It's slightly possible a few will end up slightly in the
-  // past and fire immediately, but ordering should be preserved.  All
-  // timers retain the exact same order (and relative times) as before
-  // going to sleep.
-  for (uint32_t i = 0; i < mTimers.Length(); i ++) {
-    nsTimerImpl* timer = mTimers[i];
-    timer->mTimeout += slept;
-  }
   mSleeping = false;
-  mLastTimerEventLoopRun = now;
 
-  // Wake up the timer thread to process the updated array
+  // Wake up the timer thread to re-process the array to ensure the sleep delay is correct,
+  // and fire any expired timers (perhaps quite a few)
   mNotified = true;
   mMonitor.Notify();
 }
 
 
-/* void observe (in nsISupports aSubject, in string aTopic, in wstring aData); */
 NS_IMETHODIMP
 TimerThread::Observe(nsISupports* /* aSubject */, const char* aTopic,
                      const char16_t* /* aData */)

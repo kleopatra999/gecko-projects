@@ -6,8 +6,7 @@
  * icon is next to the frame with optimizations
  */
 
-const RecordingUtils = devtools.require("devtools/performance/recording-utils");
-const { CATEGORY_MASK } = devtools.require("devtools/performance/global");
+let { CATEGORY_MASK } = require("devtools/performance/global");
 
 function* spawnTest() {
   let { panel } = yield initPerformance(SIMPLE_URL);

@@ -945,10 +945,10 @@ EmitGetterCall(JSContext* cx, MacroAssembler& masm,
 
         if (!masm.icBuildOOLFakeExitFrame(returnAddr, aic))
             return false;
-        masm.enterFakeExitFrame(IonOOLNativeExitFrameLayout::Token());
+        masm.enterFakeExitFrame(IonOOLNativeExitFrameLayoutToken);
 
         // Construct and execute call.
-        masm.setupUnalignedABICall(3, scratchReg);
+        masm.setupUnalignedABICall(scratchReg);
         masm.passABIArg(argJSContextReg);
         masm.passABIArg(argUintNReg);
         masm.passABIArg(argVpReg);
@@ -1003,10 +1003,10 @@ EmitGetterCall(JSContext* cx, MacroAssembler& masm,
 
         if (!masm.icBuildOOLFakeExitFrame(returnAddr, aic))
             return false;
-        masm.enterFakeExitFrame(IonOOLPropertyOpExitFrameLayout::Token());
+        masm.enterFakeExitFrame(IonOOLPropertyOpExitFrameLayoutToken);
 
         // Make the call.
-        masm.setupUnalignedABICall(4, scratchReg);
+        masm.setupUnalignedABICall(scratchReg);
         masm.passABIArg(argJSContextReg);
         masm.passABIArg(argObjReg);
         masm.passABIArg(argIdReg);
@@ -1482,6 +1482,9 @@ GetPropertyIC::tryAttachUnboxedArrayLength(JSContext* cx, HandleScript outerScri
     if (obj->as<UnboxedArrayObject>().length() > INT32_MAX)
         return true;
 
+    if (!allowArrayLength(cx))
+        return true;
+
     *emitted = true;
 
     MacroAssembler masm(cx, ion, outerScript, profilerLeavePc_);
@@ -1583,10 +1586,10 @@ EmitCallProxyGet(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& at
 
     if (!masm.icBuildOOLFakeExitFrame(returnAddr, aic))
         return false;
-    masm.enterFakeExitFrame(IonOOLProxyExitFrameLayout::Token());
+    masm.enterFakeExitFrame(IonOOLProxyExitFrameLayoutToken);
 
     // Make the call.
-    masm.setupUnalignedABICall(5, scratch);
+    masm.setupUnalignedABICall(scratch);
     masm.passABIArg(argJSContextReg);
     masm.passABIArg(argProxyReg);
     masm.passABIArg(argProxyReg);
@@ -1855,7 +1858,7 @@ GetPropertyIC::tryAttachArgumentsLength(JSContext* cx, HandleScript outerScript,
     if (!(outputType == MIRType_Value || outputType == MIRType_Int32))
         return true;
 
-    if (hasArgumentsLengthStub(obj->is<StrictArgumentsObject>()))
+    if (hasArgumentsLengthStub(obj->is<MappedArgumentsObject>()))
         return true;
 
     *emitted = true;
@@ -1875,10 +1878,7 @@ GetPropertyIC::tryAttachArgumentsLength(JSContext* cx, HandleScript outerScript,
     }
     MOZ_ASSERT(object() != tmpReg);
 
-    const Class* clasp = obj->is<StrictArgumentsObject>() ? &StrictArgumentsObject::class_
-                                                          : &NormalArgumentsObject::class_;
-
-    masm.branchTestObjClass(Assembler::NotEqual, object(), tmpReg, clasp, &failures);
+    masm.branchTestObjClass(Assembler::NotEqual, object(), tmpReg, obj->getClass(), &failures);
 
     // Get initial ArgsObj length value, test if length has been overridden.
     masm.unboxInt32(Address(object(), ArgumentsObject::getInitialLengthSlotOffset()), tmpReg);
@@ -1898,16 +1898,16 @@ GetPropertyIC::tryAttachArgumentsLength(JSContext* cx, HandleScript outerScript,
     masm.bind(&failures);
     attacher.jumpNextStub(masm);
 
-    if (obj->is<StrictArgumentsObject>()) {
-        MOZ_ASSERT(!hasStrictArgumentsLengthStub_);
-        hasStrictArgumentsLengthStub_ = true;
-        return linkAndAttachStub(cx, masm, attacher, ion, "ArgsObj length (strict)",
+    if (obj->is<UnmappedArgumentsObject>()) {
+        MOZ_ASSERT(!hasUnmappedArgumentsLengthStub_);
+        hasUnmappedArgumentsLengthStub_ = true;
+        return linkAndAttachStub(cx, masm, attacher, ion, "ArgsObj length (unmapped)",
                                  JS::TrackedOutcome::ICGetPropStub_ArgumentsLength);
     }
 
-    MOZ_ASSERT(!hasNormalArgumentsLengthStub_);
-    hasNormalArgumentsLengthStub_ = true;
-    return linkAndAttachStub(cx, masm, attacher, ion, "ArgsObj length (normal)",
+    MOZ_ASSERT(!hasMappedArgumentsLengthStub_);
+    hasMappedArgumentsLengthStub_ = true;
+    return linkAndAttachStub(cx, masm, attacher, ion, "ArgsObj length (mapped)",
                                  JS::TrackedOutcome::ICGetPropStub_ArgumentsLength);
 }
 
@@ -2025,8 +2025,8 @@ GetPropertyIC::reset(ReprotectCode reprotect)
     IonCache::reset(reprotect);
     hasTypedArrayLengthStub_ = false;
     hasSharedTypedArrayLengthStub_ = false;
-    hasStrictArgumentsLengthStub_ = false;
-    hasNormalArgumentsLengthStub_ = false;
+    hasMappedArgumentsLengthStub_ = false;
+    hasUnmappedArgumentsLengthStub_ = false;
     hasGenericProxyStub_ = false;
 }
 
@@ -2222,7 +2222,7 @@ EmitObjectOpResultCheck(MacroAssembler& masm, Label* failure, bool strict,
     masm.computeEffectiveAddress(
         Address(masm.getStackPointer(), FrameLayout::offsetOfObjectOpResult()),
         argResultReg);
-    masm.setupUnalignedABICall(5, scratchReg);
+    masm.setupUnalignedABICall(scratchReg);
     masm.passABIArg(argJSContextReg);
     masm.passABIArg(argObjReg);
     masm.passABIArg(argIdReg);
@@ -2294,10 +2294,10 @@ EmitCallProxySet(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& at
 
     if (!masm.icBuildOOLFakeExitFrame(returnAddr, aic))
         return false;
-    masm.enterFakeExitFrame(IonOOLProxyExitFrameLayout::Token());
+    masm.enterFakeExitFrame(IonOOLProxyExitFrameLayoutToken);
 
     // Make the call.
-    masm.setupUnalignedABICall(5, scratch);
+    masm.setupUnalignedABICall(scratch);
     masm.passABIArg(argJSContextReg);
     masm.passABIArg(argProxyReg);
     masm.passABIArg(argIdReg);
@@ -2503,10 +2503,10 @@ GenerateCallSetter(JSContext* cx, IonScript* ion, MacroAssembler& masm,
 
         if (!masm.icBuildOOLFakeExitFrame(returnAddr, aic))
             return false;
-        masm.enterFakeExitFrame(IonOOLNativeExitFrameLayout::Token());
+        masm.enterFakeExitFrame(IonOOLNativeExitFrameLayoutToken);
 
         // Make the call
-        masm.setupUnalignedABICall(3, scratchReg);
+        masm.setupUnalignedABICall(scratchReg);
         masm.passABIArg(argJSContextReg);
         masm.passABIArg(argUintNReg);
         masm.passABIArg(argVpReg);
@@ -2567,10 +2567,10 @@ GenerateCallSetter(JSContext* cx, IonScript* ion, MacroAssembler& masm,
 
         if (!masm.icBuildOOLFakeExitFrame(returnAddr, aic))
             return false;
-        masm.enterFakeExitFrame(IonOOLSetterOpExitFrameLayout::Token());
+        masm.enterFakeExitFrame(IonOOLSetterOpExitFrameLayoutToken);
 
         // Make the call.
-        masm.setupUnalignedABICall(5, scratchReg);
+        masm.setupUnalignedABICall(scratchReg);
         masm.passABIArg(argJSContextReg);
         masm.passABIArg(argObjReg);
         masm.passABIArg(argIdReg);
@@ -2815,7 +2815,7 @@ GenerateAddSlot(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& att
             masm.loadPtr(Address(object, UnboxedPlainObject::offsetOfExpando()), object);
         }
 
-        masm.setupUnalignedABICall(3, temp1);
+        masm.setupUnalignedABICall(temp1);
         masm.loadJSContext(temp1);
         masm.passABIArg(temp1);
         masm.passABIArg(object);
@@ -3123,12 +3123,7 @@ GenerateSetUnboxed(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& 
             MOZ_ASSERT(!UnboxedTypeNeedsPreBarrier(unboxedType));
     }
 
-    // If unboxed objects in this group have have never been converted to
-    // native objects then the type set check performed above ensures the value
-    // being written can be stored in the unboxed object.
-    Label* storeFailure = obj->group()->unboxedLayout().nativeGroup() ? &failure : nullptr;
-
-    masm.storeUnboxedProperty(address, unboxedType, value, storeFailure);
+    masm.storeUnboxedProperty(address, unboxedType, value, &failure);
 
     attacher.jumpRejoin(masm);
 
@@ -3314,7 +3309,8 @@ SetPropertyIC::update(JSContext* cx, HandleScript outerScript, size_t cacheIndex
     }
 
     RootedShape oldShape(cx, obj->maybeShape());
-    if (!oldShape) {
+    if (obj->is<UnboxedPlainObject>()) {
+        MOZ_ASSERT(!oldShape);
         if (UnboxedExpandoObject* expando = obj->as<UnboxedPlainObject>().maybeExpando())
             oldShape = expando->lastProperty();
     }
@@ -3468,7 +3464,7 @@ GetElementIC::attachGetProp(JSContext* cx, HandleScript outerScript, IonScript* 
     if (!volatileRegs.has(objReg))
         masm.push(objReg);
 
-    masm.setupUnalignedABICall(2, scratch);
+    masm.setupUnalignedABICall(scratch);
     masm.movePtr(ImmGCPtr(name), objReg);
     masm.passABIArg(objReg);
     masm.unboxString(val, scratch);
@@ -3825,7 +3821,7 @@ GenerateGetTypedOrUnboxedArrayElement(JSContext* cx, MacroAssembler& masm,
 
         Register temp = regs.takeAnyGeneral();
 
-        masm.setupUnalignedABICall(1, temp);
+        masm.setupUnalignedABICall(temp);
         masm.passABIArg(str);
         masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, GetIndexFromString));
         masm.mov(ReturnReg, indexReg);
@@ -3932,10 +3928,7 @@ GetElementIC::attachArgumentsElement(JSContext* cx, HandleScript outerScript, Io
     Register tmpReg = output().scratchReg().gpr();
     MOZ_ASSERT(tmpReg != InvalidReg);
 
-    const Class* clasp = obj->is<StrictArgumentsObject>() ? &StrictArgumentsObject::class_
-                                                          : &NormalArgumentsObject::class_;
-
-    masm.branchTestObjClass(Assembler::NotEqual, object(), tmpReg, clasp, &failures);
+    masm.branchTestObjClass(Assembler::NotEqual, object(), tmpReg, obj->getClass(), &failures);
 
     // Get initial ArgsObj length value, test if length has been overridden.
     masm.unboxInt32(Address(object(), ArgumentsObject::getInitialLengthSlotOffset()), tmpReg);
@@ -4017,18 +4010,17 @@ GetElementIC::attachArgumentsElement(JSContext* cx, HandleScript outerScript, Io
     masm.bind(&failures);
     attacher.jumpNextStub(masm);
 
-
-    if (obj->is<StrictArgumentsObject>()) {
-        MOZ_ASSERT(!hasStrictArgumentsStub_);
-        hasStrictArgumentsStub_ = true;
-        return linkAndAttachStub(cx, masm, attacher, ion, "ArgsObj element (strict)",
-                                 JS::TrackedOutcome::ICGetElemStub_ArgsElementStrict);
+    if (obj->is<UnmappedArgumentsObject>()) {
+        MOZ_ASSERT(!hasUnmappedArgumentsStub_);
+        hasUnmappedArgumentsStub_ = true;
+        return linkAndAttachStub(cx, masm, attacher, ion, "ArgsObj element (unmapped)",
+                                 JS::TrackedOutcome::ICGetElemStub_ArgsElementUnmapped);
     }
 
-    MOZ_ASSERT(!hasNormalArgumentsStub_);
-    hasNormalArgumentsStub_ = true;
-    return linkAndAttachStub(cx, masm, attacher, ion, "ArgsObj element (normal)",
-                             JS::TrackedOutcome::ICGetElemStub_ArgsElement);
+    MOZ_ASSERT(!hasMappedArgumentsStub_);
+    hasMappedArgumentsStub_ = true;
+    return linkAndAttachStub(cx, masm, attacher, ion, "ArgsObj element (mapped)",
+                             JS::TrackedOutcome::ICGetElemStub_ArgsElementMapped);
 }
 
 bool
@@ -4059,7 +4051,7 @@ GetElementIC::update(JSContext* cx, HandleScript outerScript, size_t cacheIndex,
     bool attachedStub = false;
     if (cache.canAttachStub()) {
         if (IsOptimizableArgumentsObjectForGetElem(obj, idval) &&
-            !cache.hasArgumentsStub(obj->is<StrictArgumentsObject>()) &&
+            !cache.hasArgumentsStub(obj->is<MappedArgumentsObject>()) &&
             (cache.index().hasValue() ||
              cache.index().type() == MIRType_Int32) &&
             (cache.output().hasValue() || !cache.output().typedReg().isFloat()))
@@ -4117,8 +4109,8 @@ GetElementIC::reset(ReprotectCode reprotect)
 {
     IonCache::reset(reprotect);
     hasDenseStub_ = false;
-    hasStrictArgumentsStub_ = false;
-    hasNormalArgumentsStub_ = false;
+    hasMappedArgumentsStub_ = false;
+    hasUnmappedArgumentsStub_ = false;
 }
 
 static bool

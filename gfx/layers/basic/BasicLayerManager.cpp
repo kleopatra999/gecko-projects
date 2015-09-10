@@ -46,8 +46,8 @@
 #include "nsRegion.h"                   // for nsIntRegion, etc
 #include "nsTArray.h"                   // for nsAutoTArray
 #ifdef MOZ_ENABLE_SKIA
-#include "skia/SkCanvas.h"              // for SkCanvas
-#include "skia/SkBitmapDevice.h"        // for SkBitmapDevice
+#include "skia/include/core/SkCanvas.h"         // for SkCanvas
+#include "skia/include/core/SkBitmapDevice.h"   // for SkBitmapDevice
 #else
 #define PIXMAN_DONT_DEFINE_STDINT
 #include "pixman.h"                     // for pixman_f_transform, etc
@@ -761,14 +761,12 @@ Transform3D(RefPtr<SourceSurface> aSource,
             const Matrix4x4& aTransform,
             gfxRect& aDestRect)
 {
-  // Find the transformed rectangle of our layer.
-  gfxRect offsetRect = aBounds;
-  offsetRect.TransformBounds(aTransform);
-
-  // Intersect the transformed layer with the destination rectangle.
+  // Find the transformed rectangle of our layer, intersected with the
+  // destination rectangle.
   // This is in device space since we have an identity transform set on aTarget.
-  aDestRect = aDest->GetClipExtents();
-  aDestRect.IntersectRect(aDestRect, offsetRect);
+  aDestRect = ThebesRect(aTransform.TransformAndClipBounds(
+                ToRectDouble(aBounds),
+                ToRectDouble(aDest->GetClipExtents())));
   aDestRect.RoundOut();
 
   // Create a surface the size of the transformed object.

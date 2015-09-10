@@ -85,6 +85,9 @@ public:
     static void AcknowledgeScrollUpdate(const FrameMetrics::ViewID& aScrollId,
                                         const uint32_t& aScrollGeneration);
 
+    /* Get the pres shell associated with the root content document enclosing |aContent|. */
+    static nsIPresShell* GetRootContentDocumentPresShellForContent(nsIContent* aContent);
+
     /* Apply an "input transform" to the given |aInput| and return the transformed value.
        The input transform applied is the one for the content element corresponding to
        |aGuid|; this is populated in a previous call to UpdateCallbackTransform. See that
@@ -116,7 +119,7 @@ public:
 
     /* Synthesize a mouse event with the given parameters, and dispatch it
      * via the given widget. */
-    static nsEventStatus DispatchSynthesizedMouseEvent(uint32_t aMsg,
+    static nsEventStatus DispatchSynthesizedMouseEvent(EventMessage aMsg,
                                                        uint64_t aTime,
                                                        const LayoutDevicePoint& aRefPoint,
                                                        Modifiers aModifiers,
@@ -166,6 +169,13 @@ public:
 
     /* Notify content that the repaint flush is complete. */
     static void NotifyFlushComplete();
+
+    /* Temporarily ignore the Displayport for better paint performance. */
+    static void SuppressDisplayport(const bool& aEnabled);
+    static bool IsDisplayportSuppressed();
+
+private:
+  static uint64_t sLastTargetAPZCNotificationInputBlock;
 };
 
 } // namespace layers

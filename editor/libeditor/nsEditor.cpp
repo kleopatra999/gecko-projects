@@ -147,6 +147,7 @@ nsEditor::nsEditor()
 ,  mDidPostCreate(false)
 ,  mDispatchInputEvent(true)
 ,  mIsInEditAction(false)
+,  mHidingCaret(false)
 {
 }
 
@@ -158,6 +159,8 @@ nsEditor::~nsEditor()
     mComposition->OnEditorDestroyed();
     mComposition = nullptr;
   }
+  // If this editor is still hiding the caret, we need to restore it.
+  HideCaret(false);
   mTxnMgr = nullptr;
 
   delete mPhonetic;
@@ -464,6 +467,8 @@ nsEditor::PreDestroy(bool aDestroyingFrames)
 
   // Unregister event listeners
   RemoveEventListeners();
+  // If this editor is still hiding the caret, we need to restore it.
+  HideCaret(false);
   mActionListeners.Clear();
   mEditorObservers.Clear();
   mDocStateListeners.Clear();
@@ -600,7 +605,6 @@ nsEditor::GetWidget()
   return widget.forget();
 }
 
-/* attribute string contentsMIMEType; */
 NS_IMETHODIMP
 nsEditor::GetContentsMIMEType(char * *aContentsMIMEType)
 {
@@ -628,7 +632,9 @@ nsEditor::GetSelectionController(nsISelectionController **aSel)
     nsCOMPtr<nsIPresShell> presShell = GetPresShell();
     selCon = do_QueryInterface(presShell);
   }
-  NS_ENSURE_TRUE(selCon, NS_ERROR_NOT_INITIALIZED);
+  if (!selCon) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
   NS_ADDREF(*aSel = selCon);
   return NS_OK;
 }
@@ -655,7 +661,9 @@ nsEditor::GetSelection(int16_t aSelectionType, nsISelection** aSelection)
   *aSelection = nullptr;
   nsCOMPtr<nsISelectionController> selcon;
   GetSelectionController(getter_AddRefs(selcon));
-  NS_ENSURE_TRUE(selcon, NS_ERROR_NOT_INITIALIZED);
+  if (!selcon) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
   return selcon->GetSelection(aSelectionType, aSelection);  // does an addref
 }
 
@@ -664,7 +672,9 @@ nsEditor::GetSelection(int16_t aSelectionType)
 {
   nsCOMPtr<nsISelection> sel;
   nsresult res = GetSelection(aSelectionType, getter_AddRefs(sel));
-  NS_ENSURE_SUCCESS(res, nullptr);
+  if (NS_FAILED(res)) {
+    return nullptr;
+  }
 
   return static_cast<Selection*>(sel.get());
 }
@@ -1832,7 +1842,7 @@ void
 nsEditor::NotifyEditorObservers(NotificationForEditorObservers aNotification)
 {
   // Copy the observers since EditAction()s can modify mEditorObservers.
-  nsTArray<mozilla::dom::OwningNonNull<nsIEditorObserver>> observers(mEditorObservers);
+  nsTArray<mozilla::OwningNonNull<nsIEditorObserver>> observers(mEditorObservers);
   switch (aNotification) {
     case eNotifyEditorObserversOfEnd:
       mIsInEditAction = false;
@@ -1847,6 +1857,9 @@ nsEditor::NotifyEditorObservers(NotificationForEditorObservers aNotification)
       FireInputEvent();
       break;
     case eNotifyEditorObserversOfBefore:
+      if (NS_WARN_IF(mIsInEditAction)) {
+        break;
+      }
       mIsInEditAction = true;
       for (auto& observer : observers) {
         observer->BeforeEditAction();
@@ -2059,6 +2072,10 @@ nsEditor::EndIMEComposition()
                    "nsIAbsorbingTransaction::Commit() failed");
     }
   }
+
+  // Composition string may have hidden the caret.  Therefore, we need to
+  // cancel it here.
+  HideCaret(false);
 
   /* reset the data we need to construct a transaction */
   mIMETextNode = nullptr;
@@ -3832,6 +3849,33 @@ nsEditor::IsPreformatted(nsIDOMNode *aNode, bool *aResult)
 //                a new element, for instance, if that's why you were splitting
 //                the node.
 //
+int32_t
+nsEditor::SplitNodeDeep(nsIContent& aNode, nsIContent& aSplitPointParent,
+                        int32_t aSplitPointOffset,
+                        EmptyContainers aEmptyContainers,
+                        nsIContent** outLeftNode,
+                        nsIContent** outRightNode)
+{
+  int32_t offset;
+  nsCOMPtr<nsIDOMNode> leftNodeDOM, rightNodeDOM;
+  nsresult res = SplitNodeDeep(aNode.AsDOMNode(),
+      aSplitPointParent.AsDOMNode(), aSplitPointOffset, &offset,
+      aEmptyContainers == EmptyContainers::no, address_of(leftNodeDOM),
+      address_of(rightNodeDOM));
+  NS_ENSURE_SUCCESS(res, -1);
+  if (outLeftNode) {
+    nsCOMPtr<nsIContent> leftNode = do_QueryInterface(leftNodeDOM);
+    MOZ_ASSERT(!leftNodeDOM || leftNode);
+    leftNode.forget(outLeftNode);
+  }
+  if (outRightNode) {
+    nsCOMPtr<nsIContent> rightNode = do_QueryInterface(rightNodeDOM);
+    MOZ_ASSERT(!rightNodeDOM || rightNode);
+    rightNode.forget(outRightNode);
+  }
+  return offset;
+}
+
 nsresult
 nsEditor::SplitNodeDeep(nsIDOMNode *aNode,
                         nsIDOMNode *aSplitPointParent,
@@ -4620,11 +4664,8 @@ nsEditor::CreateHTMLContent(nsIAtom* aTag)
     return nullptr;
   }
 
-  nsCOMPtr<nsIContent> ret;
-  nsresult res = doc->CreateElem(nsDependentAtomString(aTag), nullptr,
-                                 kNameSpaceID_XHTML, getter_AddRefs(ret));
-  NS_ENSURE_SUCCESS(res, nullptr);
-  return dont_AddRef(ret.forget().take()->AsElement());
+  return doc->CreateElem(nsDependentAtomString(aTag), nullptr,
+                         kNameSpaceID_XHTML);
 }
 
 nsresult
@@ -4657,7 +4698,7 @@ nsEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
   WidgetKeyboardEvent* nativeKeyEvent =
     aKeyEvent->GetInternalNSEvent()->AsKeyboardEvent();
   NS_ENSURE_TRUE(nativeKeyEvent, NS_ERROR_UNEXPECTED);
-  NS_ASSERTION(nativeKeyEvent->message == NS_KEY_PRESS,
+  NS_ASSERTION(nativeKeyEvent->mMessage == eKeyPress,
                "HandleKeyPressEvent gets non-keypress event");
 
   // if we are readonly or disabled, then do nothing.
@@ -5113,7 +5154,7 @@ nsEditor::IsAcceptableInputEvent(nsIDOMEvent* aEvent)
   // strange event order.
   bool needsWidget = false;
   WidgetGUIEvent* widgetGUIEvent = nullptr;
-  switch (widgetEvent->message) {
+  switch (widgetEvent->mMessage) {
     case NS_USER_DEFINED_EVENT:
       // If events are not created with proper event interface, their message
       // are initialized with NS_USER_DEFINED_EVENT.  Let's ignore such event.
@@ -5228,4 +5269,24 @@ nsEditor::GetIMESelectionStartOffsetIn(nsINode* aTextNode)
     }
   }
   return minOffset < INT32_MAX ? minOffset : -1;
+}
+
+void
+nsEditor::HideCaret(bool aHide)
+{
+  if (mHidingCaret == aHide) {
+    return;
+  }
+
+  nsCOMPtr<nsIPresShell> presShell = GetPresShell();
+  NS_ENSURE_TRUE_VOID(presShell);
+  nsRefPtr<nsCaret> caret = presShell->GetCaret();
+  NS_ENSURE_TRUE_VOID(caret);
+
+  mHidingCaret = aHide;
+  if (aHide) {
+    caret->AddForceHide();
+  } else {
+    caret->RemoveForceHide();
+  }
 }

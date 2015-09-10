@@ -167,6 +167,7 @@ static_assert(MAX_WORKERS_PER_DOMAIN >= 1,
 #define PREF_INTERCEPTION_ENABLED      "dom.serviceWorkers.interception.enabled"
 #define PREF_INTERCEPTION_OPAQUE_ENABLED "dom.serviceWorkers.interception.opaque.enabled"
 #define PREF_PUSH_ENABLED              "dom.push.enabled"
+#define PREF_REQUESTCONTEXT_ENABLED    "dom.requestcontext.enabled"
 
 namespace {
 
@@ -995,6 +996,15 @@ public:
     }
   }
 
+  virtual void AfterProcessTask(uint32_t aRecursionDepth) override
+  {
+    // Only perform the Promise microtask checkpoint on the outermost event
+    // loop.  Don't run it, for example, during sync XHR or importScripts.
+    if (aRecursionDepth == 2) {
+      CycleCollectedJSRuntime::AfterProcessTask(aRecursionDepth);
+    }
+  }
+
 private:
   WorkerPrivate* mWorkerPrivate;
 };
@@ -1447,9 +1457,8 @@ RuntimeService::RegisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
     Telemetry::Accumulate(Telemetry::SERVICE_WORKER_SPAWN_ATTEMPTS, 1);
   }
 
-  bool isSharedOrServiceWorker = aWorkerPrivate->IsSharedWorker() ||
-                                 aWorkerPrivate->IsServiceWorker();
-  if (isSharedOrServiceWorker) {
+  const bool isSharedWorker = aWorkerPrivate->IsSharedWorker();
+  if (isSharedWorker || isServiceWorker) {
     AssertIsOnMainThread();
 
     nsCOMPtr<nsIURI> scriptURI = aWorkerPrivate->GetResolvedScriptURI();
@@ -1466,7 +1475,7 @@ RuntimeService::RegisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
   }
 
   bool exemptFromPerDomainMax = false;
-  if (aWorkerPrivate->IsServiceWorker()) {
+  if (isServiceWorker) {
     AssertIsOnMainThread();
     exemptFromPerDomainMax = Preferences::GetBool("dom.serviceWorkers.exemptFromPerDomainMax",
                                                   false);
@@ -1494,7 +1503,7 @@ RuntimeService::RegisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
 
     if (queued) {
       domainInfo->mQueuedWorkers.AppendElement(aWorkerPrivate);
-      if (isServiceWorker) {
+      if (isServiceWorker || isSharedWorker) {
         AssertIsOnMainThread();
         // ServiceWorker spawn gets queued due to hitting max workers per domain
         // limit so let's log a warning.
@@ -1505,7 +1514,8 @@ RuntimeService::RegisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
                                         aWorkerPrivate->GetDocument(),
                                         nsContentUtils::eDOM_PROPERTIES,
                                         "HittingMaxWorkersPerDomain");
-        Telemetry::Accumulate(Telemetry::SERVICE_WORKER_SPAWN_GETS_QUEUED, 1);
+        Telemetry::Accumulate(isSharedWorker ? Telemetry::SHARED_WORKER_SPAWN_GETS_QUEUED
+                                             : Telemetry::SERVICE_WORKER_SPAWN_GETS_QUEUED, 1);
       }
     }
     else if (parent) {
@@ -1518,7 +1528,7 @@ RuntimeService::RegisterWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
       domainInfo->mActiveWorkers.AppendElement(aWorkerPrivate);
     }
 
-    if (isSharedOrServiceWorker) {
+    if (isSharedWorker || isServiceWorker) {
       const nsCString& sharedWorkerName = aWorkerPrivate->SharedWorkerName();
       const nsCString& cacheName =
         aWorkerPrivate->IsServiceWorker() ?
@@ -1954,6 +1964,10 @@ RuntimeService::Init()
                                   WorkerPrefChanged,
                                   PREF_PUSH_ENABLED,
                                   reinterpret_cast<void *>(WORKERPREF_PUSH))) ||
+      NS_FAILED(Preferences::RegisterCallbackAndCall(
+                                  WorkerPrefChanged,
+                                  PREF_REQUESTCONTEXT_ENABLED,
+                                  reinterpret_cast<void *>(WORKERPREF_REQUESTCONTEXT))) ||
       NS_FAILED(Preferences::RegisterCallback(LoadRuntimeOptions,
                                               PREF_JS_OPTIONS_PREFIX,
                                               nullptr)) ||
@@ -2185,6 +2199,10 @@ RuntimeService::Cleanup()
                                   WorkerPrefChanged,
                                   PREF_PUSH_ENABLED,
                                   reinterpret_cast<void *>(WORKERPREF_PUSH))) ||
+        NS_FAILED(Preferences::UnregisterCallback(
+                                  WorkerPrefChanged,
+                                  PREF_REQUESTCONTEXT_ENABLED,
+                                  reinterpret_cast<void *>(WORKERPREF_REQUESTCONTEXT))) ||
 #if DUMP_CONTROLLED_BY_PREF
         NS_FAILED(Preferences::UnregisterCallback(
                                   WorkerPrefChanged,
@@ -2735,6 +2753,7 @@ RuntimeService::WorkerPrefChanged(const char* aPrefName, void* aClosure)
     case WORKERPREF_SERVICEWORKERS:
     case WORKERPREF_SERVICEWORKERS_TESTING:
     case WORKERPREF_PUSH:
+    case WORKERPREF_REQUESTCONTEXT:
       sDefaultPreferences[key] = Preferences::GetBool(aPrefName, false);
       break;
 

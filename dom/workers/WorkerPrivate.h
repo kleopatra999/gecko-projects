@@ -28,12 +28,10 @@
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
 #include "nsTObserverArray.h"
-#include "mozilla/dom/StructuredCloneTags.h"
 
 #include "Queue.h"
 #include "WorkerFeature.h"
 
-class JSAutoStructuredCloneBuffer;
 class nsIChannel;
 class nsIDocument;
 class nsIEventTarget;
@@ -52,6 +50,7 @@ struct RuntimeStats;
 namespace mozilla {
 namespace dom {
 class Function;
+class StructuredCloneHelper;
 } // namespace dom
 namespace ipc {
 class PrincipalInfo;
@@ -74,7 +73,6 @@ class WorkerDebuggerGlobalScope;
 class WorkerGlobalScope;
 class WorkerPrivate;
 class WorkerRunnable;
-class WorkerStructuredCloneClosure;
 class WorkerThread;
 
 // SharedMutex is a small wrapper around an (internal) reference-counted Mutex
@@ -350,8 +348,7 @@ public:
   DispatchMessageEventToMessagePort(
                                JSContext* aCx,
                                uint64_t aMessagePortSerial,
-                               JSAutoStructuredCloneBuffer&& aBuffer,
-                               WorkerStructuredCloneClosure& aClosure);
+                               StructuredCloneHelper& aHelper);
 
   void
   UpdateRuntimeOptions(JSContext* aCx,
@@ -503,14 +500,12 @@ public:
   const ChannelInfo&
   GetChannelInfo() const
   {
-    MOZ_ASSERT(IsServiceWorker());
     return mLoadInfo.mChannelInfo;
   }
 
   void
   SetChannelInfo(const ChannelInfo& aChannelInfo)
   {
-    MOZ_ASSERT(IsServiceWorker());
     AssertIsOnMainThread();
     MOZ_ASSERT(!mLoadInfo.mChannelInfo.IsInitialized());
     MOZ_ASSERT(aChannelInfo.IsInitialized());
@@ -771,9 +766,9 @@ public:
   }
 
   bool
-  IsIndexedDBAllowed() const
+  IsStorageAllowed() const
   {
-    return mLoadInfo.mIndexedDBAllowed;
+    return mLoadInfo.mStorageAllowed;
   }
 
   bool
@@ -948,9 +943,6 @@ class WorkerPrivate : public WorkerPrivateParent<WorkerPrivate>
   // AssertValidSyncLoop function iterates it on other threads. Therefore
   // modifications are done with mMutex held *only* in DEBUG builds.
   nsTArray<nsAutoPtr<SyncLoopInfo>> mSyncLoopStack;
-
-  struct PreemptingRunnableInfo;
-  nsTArray<PreemptingRunnableInfo> mPreemptingRunnableInfos;
 
   nsCOMPtr<nsITimer> mTimer;
 
@@ -1336,6 +1328,13 @@ public:
   }
 
   bool
+  RequestContextEnabled() const
+  {
+    AssertIsOnWorkerThread();
+    return mPreferences[WORKERPREF_REQUESTCONTEXT];
+  }
+
+  bool
   OnLine() const
   {
     AssertIsOnWorkerThread();
@@ -1355,10 +1354,10 @@ public:
   ClearMainEventQueue(WorkerRanOrNot aRanOrNot);
 
   void
-  OnProcessNextEvent(uint32_t aRecursionDepth);
+  OnProcessNextEvent();
 
   void
-  AfterProcessNextEvent(uint32_t aRecursionDepth);
+  AfterProcessNextEvent();
 
   void
   AssertValidSyncLoop(nsIEventTarget* aSyncLoopTarget)
@@ -1384,11 +1383,6 @@ public:
     AssertIsOnWorkerThread();
     return mWorkerScriptExecutedSuccessfully;
   }
-
-  // Just like nsIAppShell::RunBeforeNextEvent. May only be called on the worker
-  // thread.
-  bool
-  RunBeforeNextEvent(nsIRunnable* aRunnable);
 
   void
   MaybeDispatchLoadFailedRunnable();
@@ -1512,20 +1506,6 @@ IsCurrentThreadRunningChromeWorker();
 JSContext*
 GetCurrentThreadJSContext();
 
-enum WorkerStructuredDataType
-{
-  DOMWORKER_SCTAG_BLOB = SCTAG_DOM_MAX,
-  DOMWORKER_SCTAG_FORMDATA = SCTAG_DOM_MAX + 1,
-
-  DOMWORKER_SCTAG_END
-};
-
-const JSStructuredCloneCallbacks*
-WorkerStructuredCloneCallbacks(bool aMainRuntime);
-
-const JSStructuredCloneCallbacks*
-ChromeWorkerStructuredCloneCallbacks(bool aMainRuntime);
-
 class AutoSyncLoopHolder
 {
   WorkerPrivate* mWorkerPrivate;
@@ -1566,6 +1546,30 @@ public:
   {
     return mTarget;
   }
+};
+
+class TimerThreadEventTarget final : public nsIEventTarget
+{
+  ~TimerThreadEventTarget();
+
+  WorkerPrivate* mWorkerPrivate;
+  nsRefPtr<WorkerRunnable> mWorkerRunnable;
+public:
+  NS_DECL_THREADSAFE_ISUPPORTS
+
+  TimerThreadEventTarget(WorkerPrivate* aWorkerPrivate,
+                         WorkerRunnable* aWorkerRunnable);
+
+protected:
+  NS_IMETHOD
+  DispatchFromScript(nsIRunnable* aRunnable, uint32_t aFlags) override;
+
+
+  NS_IMETHOD
+  Dispatch(already_AddRefed<nsIRunnable>&& aRunnable, uint32_t aFlags) override;
+
+  NS_IMETHOD
+  IsOnCurrentThread(bool* aIsOnCurrentThread) override;
 };
 
 END_WORKERS_NAMESPACE

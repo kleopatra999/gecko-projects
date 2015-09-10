@@ -135,7 +135,7 @@ public:
     // Future: properly measure speex memory
     amount += aMallocSizeOf(mUpSampler);
     amount += aMallocSizeOf(mDownSampler);
-    amount += mBuffer.SizeOfExcludingThis(aMallocSizeOf);
+    amount += mBuffer.ShallowSizeOfExcludingThis(aMallocSizeOf);
     return amount;
   }
 
@@ -215,11 +215,11 @@ public:
   }
 
   virtual void ProcessBlock(AudioNodeStream* aStream,
-                            const AudioChunk& aInput,
-                            AudioChunk* aOutput,
+                            const AudioBlock& aInput,
+                            AudioBlock* aOutput,
                             bool* aFinished) override
   {
-    uint32_t channelCount = aInput.mChannelData.Length();
+    uint32_t channelCount = aInput.ChannelCount();
     if (!mCurve.Length() || !channelCount) {
       // Optimize the case where we don't have a curve buffer,
       // or the input is null.
@@ -227,7 +227,7 @@ public:
       return;
     }
 
-    AllocateAudioBlock(channelCount, aOutput);
+    aOutput->AllocateChannels(channelCount);
     for (uint32_t i = 0; i < channelCount; ++i) {
       float* scaledSample = (float *)(aInput.mChannelData[i]);
       AudioBlockInPlaceScale(scaledSample, aInput.mVolume);
@@ -261,7 +261,7 @@ public:
   virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override
   {
     size_t amount = AudioNodeEngine::SizeOfExcludingThis(aMallocSizeOf);
-    amount += mCurve.SizeOfExcludingThis(aMallocSizeOf);
+    amount += mCurve.ShallowSizeOfExcludingThis(aMallocSizeOf);
     amount += mResampler.SizeOfExcludingThis(aMallocSizeOf);
     return amount;
   }
@@ -288,7 +288,8 @@ WaveShaperNode::WaveShaperNode(AudioContext* aContext)
   mozilla::HoldJSObjects(this);
 
   WaveShaperNodeEngine* engine = new WaveShaperNodeEngine(this);
-  mStream = aContext->Graph()->CreateAudioNodeStream(engine, MediaStreamGraph::INTERNAL_STREAM);
+  mStream = AudioNodeStream::Create(aContext->Graph(), engine,
+                                    AudioNodeStream::NO_STREAM_FLAGS);
 }
 
 WaveShaperNode::~WaveShaperNode()

@@ -252,12 +252,184 @@ describe("loop.shared.views", function() {
       });
   });
 
-  describe("ConversationToolbar", function() {
-    var hangup, publishStream;
+  describe("SettingsControlButton", function() {
+    var fakeMozLoop;
+    var support_url = "https://support.com";
+    var feedback_url = "https://feedback.com";
+
+    beforeEach(function() {
+      fakeMozLoop = {
+        openURL: sandbox.stub(),
+        setLoopPref: sandbox.stub(),
+        getLoopPref: function (prefName) {
+          switch (prefName) {
+            case "support_url":
+              return support_url;
+            case "feedback.formURL":
+              return feedback_url;
+            default:
+              return prefName;
+          }
+        }
+      };
+    });
 
     function mountTestComponent(props) {
       props = _.extend({
-        dispatcher: dispatcher
+        mozLoop: fakeMozLoop
+      }, props);
+
+      return TestUtils.renderIntoDocument(
+        React.createElement(sharedViews.SettingsControlButton, props));
+    }
+
+    it("should render a visible button", function() {
+      var settingsMenuItems = [{ id: "feedback" }];
+      var comp = mountTestComponent({ menuItems: settingsMenuItems} );
+
+      var node = comp.getDOMNode().querySelector(".btn-settings");
+      expect(node.classList.contains("hide")).eql(false);
+    });
+
+    it("should not render anything", function() {
+      var comp = mountTestComponent();
+      expect(comp.getDOMNode()).to.eql(null);
+    });
+
+    it("should not show an indefined menu option", function() {
+      var settingsMenuItems = [
+        { id: "not Defined" },
+        { id: "help" }
+      ];
+      var comp = mountTestComponent({ menuItems: settingsMenuItems} );
+      var menuItems = comp.getDOMNode().querySelectorAll(".settings-menu > li");
+      expect(menuItems).to.have.length.of(1);
+    });
+
+    it("should not render anythin if not exists any valid item to show", function() {
+      var settingsMenuItems = [
+        { id: "not Defined" },
+        { id: "another wrong menu item" }
+      ];
+      var comp = mountTestComponent({ menuItems: settingsMenuItems} );
+      expect(comp.getDOMNode()).to.eql(null);
+    });
+
+    it("should show the settings dropdown on click", function() {
+      var settingsMenuItems = [{ id: "feedback" }];
+      var comp = mountTestComponent({ menuItems: settingsMenuItems} );
+
+      expect(comp.state.showMenu).eql(false);
+      TestUtils.Simulate.click(comp.getDOMNode().querySelector(".btn-settings"));
+
+      expect(comp.state.showMenu).eql(true);
+    });
+
+    it("should have a `menu-below` class on the dropdown when the prop is set.", function() {
+      var settingsMenuItems = [
+        { id: "help" }
+      ];
+      var comp = mountTestComponent({
+        menuBelow: true,
+        menuItems: settingsMenuItems
+      });
+      var menuItems = comp.getDOMNode().querySelector(".settings-menu");
+
+      expect(menuItems.classList.contains("menu-below")).eql(true);
+    });
+
+    it("should not have a `menu-below` class on the dropdown when the prop is not set.", function() {
+      var settingsMenuItems = [
+        { id: "help" }
+      ];
+      var comp = mountTestComponent({
+        menuItems: settingsMenuItems
+      });
+      var menuItems = comp.getDOMNode().querySelector(".settings-menu");
+
+      expect(menuItems.classList.contains("menu-below")).eql(false);
+    });
+
+    it("should show edit Context on menu when the option is enabled", function() {
+      var settingsMenuItems = [
+        {
+          id: "edit",
+          enabled: true,
+          visible: true,
+          onClick: function() {}
+        }
+      ];
+      var comp = mountTestComponent({ menuItems: settingsMenuItems} );
+
+      var node = comp.getDOMNode().querySelector(".settings-menu > li.entry-settings-edit");
+      expect(node.classList.contains("hide")).eql(false);
+    });
+
+    it("should hide edit Context on menu when the option is not visible", function() {
+      var settingsMenuItems = [
+        {
+          id: "edit",
+          enabled: false,
+          visible: false,
+          onClick: function() {}
+        }
+      ];
+      var comp = mountTestComponent({ menuItems: settingsMenuItems} );
+
+      var node = comp.getDOMNode().querySelector(".settings-menu > li.entry-settings-edit");
+      expect(node.classList.contains("hide")).eql(true);
+    });
+
+    it("should call onClick method when the edit context menu item is clicked", function() {
+      var onClickCalled = false;
+      var settingsMenuItems = [
+        {
+          id: "edit",
+          enabled: true,
+          visible: true,
+          onClick: sandbox.stub()
+        }
+      ];
+      var comp = mountTestComponent({ menuItems: settingsMenuItems} );
+
+      TestUtils.Simulate.click(comp.getDOMNode().querySelector(".settings-menu > li.entry-settings-edit"));
+      sinon.assert.calledOnce(settingsMenuItems[0].onClick);
+    });
+
+    it("should open a tab to the feedback url when the feedback menu item is clicked", function() {
+      var settingsMenuItems = [
+        { id: "feedback" },
+        { id: "help" }
+      ];
+      var comp = mountTestComponent({ menuItems: settingsMenuItems} );
+
+      TestUtils.Simulate.click(comp.getDOMNode().querySelector(".settings-menu > li:first-child"));
+
+      sinon.assert.calledOnce(fakeMozLoop.openURL);
+      sinon.assert.calledWithExactly(fakeMozLoop.openURL, feedback_url);
+    });
+
+    it("should open a tab to the support url when the support menu item is clicked", function() {
+      var settingsMenuItems = [
+        { id: "feedback" },
+        { id: "help" }
+      ];
+      var comp = mountTestComponent({ menuItems: settingsMenuItems} );
+
+      TestUtils.Simulate.click(comp.getDOMNode().querySelector(".settings-menu > li:last-child"));
+
+      sinon.assert.calledOnce(fakeMozLoop.openURL);
+      sinon.assert.calledWithExactly(fakeMozLoop.openURL, support_url);
+    });
+  });
+
+  describe("ConversationToolbar", function() {
+    var clock, hangup, publishStream;
+
+    function mountTestComponent(props) {
+      props = _.extend({
+        dispatcher: dispatcher,
+        mozLoop: {}
       }, props || {});
       return TestUtils.renderIntoDocument(
         React.createElement(sharedViews.ConversationToolbar, props));
@@ -266,6 +438,47 @@ describe("loop.shared.views", function() {
     beforeEach(function() {
       hangup = sandbox.stub();
       publishStream = sandbox.stub();
+      clock = sinon.useFakeTimers();
+    });
+
+    afterEach(function() {
+      clock.restore();
+    });
+
+    it("should start no idle", function() {
+      var comp = mountTestComponent({
+        hangupButtonLabel: "foo",
+        hangup: hangup,
+        publishStream: publishStream
+      });
+      expect(comp.getDOMNode().classList.contains("idle")).eql(false);
+    });
+
+    it("should be on idle state after 6 seconds", function() {
+      var comp = mountTestComponent({
+        hangupButtonLabel: "foo",
+        hangup: hangup,
+        publishStream: publishStream
+      });
+      expect(comp.getDOMNode().classList.contains("idle")).eql(false);
+
+      clock.tick(6001);
+      expect(comp.getDOMNode().classList.contains("idle")).eql(true);
+    });
+
+    it("should remove idle state when the user moves the mouse", function() {
+      var comp = mountTestComponent({
+        hangupButtonLabel: "foo",
+        hangup: hangup,
+        publishStream: publishStream
+      });
+
+      clock.tick(6001);
+      expect(comp.getDOMNode().classList.contains("idle")).eql(true);
+
+      document.body.dispatchEvent(new CustomEvent("mousemove"));
+
+      expect(comp.getDOMNode().classList.contains("idle")).eql(false);
     });
 
     it("should accept a hangupButtonLabel optional prop", function() {
@@ -366,7 +579,8 @@ describe("loop.shared.views", function() {
 
     function mountTestComponent(props) {
       props = _.extend({
-        dispatcher: dispatcher
+        dispatcher: dispatcher,
+        mozLoop: {}
       }, props || {});
       return TestUtils.renderIntoDocument(
         React.createElement(sharedViews.ConversationView, props));
@@ -418,6 +632,23 @@ describe("loop.shared.views", function() {
         });
 
         sinon.assert.calledOnce(model.startSession);
+      });
+
+      // Test loop.shared.utils.findParentNode.
+      // Added here to take advantage of having markup.
+      it("should find '.video-layout-wrapper'", function() {
+        var view = mountTestComponent({
+          initiate: false,
+          sdk: fakeSDK,
+          model: model,
+          video: {enabled: true}
+        });
+        var menu = view.getDOMNode().querySelector(".btn-hangup-entry");
+
+        var result = loop.shared.utils.findParentNode(menu,
+                                                      "video-layout-wrapper");
+
+        expect(result.classList.contains("video-layout-wrapper")).to.eql(true);
       });
 
       it("shouldn't start a session if initiate is false", function() {
@@ -752,7 +983,7 @@ describe("loop.shared.views", function() {
         view = mountTestComponent({ label: "Some label" });
 
         var node = view.getDOMNode();
-        expect(node.lastChild.localName).to.eql("label");
+        expect(node.lastChild.localName).to.eql("div");
         expect(node.lastChild.textContent).to.eql("Some label");
       });
 
@@ -784,6 +1015,26 @@ describe("loop.shared.views", function() {
 
         var checkbox = view.getDOMNode().querySelector(".checkbox");
         expect(checkbox.classList.contains("checked")).eql(false);
+      });
+
+      it("should add an ellipsis class when the prop is set", function() {
+        view = mountTestComponent({
+          label: "Some label",
+          useEllipsis: true
+        });
+
+        var label = view.getDOMNode().querySelector(".checkbox-label");
+        expect(label.classList.contains("ellipsis")).eql(true);
+      });
+
+      it("should not add an ellipsis class when the prop is not set", function() {
+        view = mountTestComponent({
+          label: "Some label",
+          useEllipsis: false
+        });
+
+        var label = view.getDOMNode().querySelector(".checkbox-label");
+        expect(label.classList.contains("ellipsis")).eql(false);
       });
     });
 
@@ -850,6 +1101,28 @@ describe("loop.shared.views", function() {
         React.createElement(sharedViews.ContextUrlView, props));
     }
 
+    it("should set a clicks-allowed class if clicks are allowed", function() {
+      view = mountTestComponent({
+        allowClick: true,
+        url: "http://wonderful.invalid"
+      });
+
+      var wrapper = view.getDOMNode().querySelector(".context-wrapper");
+
+      expect(wrapper.classList.contains("clicks-allowed")).eql(true);
+    });
+
+    it("should not set a clicks-allowed class if clicks are not allowed", function() {
+      view = mountTestComponent({
+        allowClick: false,
+        url: "http://wonderful.invalid"
+      });
+
+      var wrapper = view.getDOMNode().querySelector(".context-wrapper");
+
+      expect(wrapper.classList.contains("clicks-allowed")).eql(false);
+    });
+
     it("should display nothing if the url is invalid", function() {
       view = mountTestComponent({
         url: "fjrTykyw"
@@ -900,7 +1173,7 @@ describe("loop.shared.views", function() {
         url: "http://wonderful.invalid"
       });
 
-      expect(view.getDOMNode().querySelector(".context-url").href)
+      expect(view.getDOMNode().querySelector(".context-wrapper").href)
         .eql("http://wonderful.invalid/");
     });
 
@@ -910,7 +1183,7 @@ describe("loop.shared.views", function() {
         url: "http://wonderful.invalid"
       });
 
-      var linkNode = view.getDOMNode().querySelector(".context-url");
+      var linkNode = view.getDOMNode().querySelector(".context-wrapper");
 
       TestUtils.Simulate.click(linkNode);
 
@@ -919,6 +1192,19 @@ describe("loop.shared.views", function() {
         new sharedActions.RecordClick({
           linkInfo: "Shared URL"
         }));
+    });
+
+    it("should not dispatch an action if clicks are not allowed", function() {
+      view = mountTestComponent({
+        allowClick: false,
+        url: "http://wonderful.invalid"
+      });
+
+      var linkNode = view.getDOMNode().querySelector(".context-wrapper");
+
+      TestUtils.Simulate.click(linkNode);
+
+      sinon.assert.notCalled(dispatcher.dispatch);
     });
   });
 

@@ -608,40 +608,6 @@ WebGLContext::ValidateTexImageFormat(GLenum format, WebGLTexImageFunc func,
 }
 
 /**
- * Check if the given texture target is valid for TexImage.
- */
-bool
-WebGLContext::ValidateTexImageTarget(GLenum target, WebGLTexImageFunc func,
-                                     WebGLTexDimensions dims)
-{
-    switch (dims) {
-    case WebGLTexDimensions::Tex2D:
-        if (target == LOCAL_GL_TEXTURE_2D ||
-            IsTexImageCubemapTarget(target))
-        {
-            return true;
-        }
-
-        ErrorInvalidEnumWithName(this, "invalid target", target, func, dims);
-        return false;
-
-    case WebGLTexDimensions::Tex3D:
-        if (target == LOCAL_GL_TEXTURE_3D)
-        {
-            return true;
-        }
-
-        ErrorInvalidEnumWithName(this, "invalid target", target, func, dims);
-        return false;
-
-    default:
-        MOZ_ASSERT(false, "ValidateTexImageTarget: Invalid dims");
-    }
-
-    return false;
-}
-
-/**
  * Return true if type is a valid texture image type for source,
  * taking into account enabled WebGL extensions.
  */
@@ -1686,6 +1652,11 @@ WebGLContext::InitAndValidateGL()
 {
     if (!gl)
         return false;
+
+    // Unconditionally create a new format usage authority. This is
+    // important when restoring contexts and extensions need to add
+    // formats back into the authority.
+    mFormatUsage = CreateFormatUsage();
 
     GLenum error = gl->fGetError();
     if (error != LOCAL_GL_NO_ERROR) {

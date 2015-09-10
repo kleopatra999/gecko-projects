@@ -6,12 +6,16 @@
 
 #include "BroadcastChannelParent.h"
 #include "FileDescriptorSetParent.h"
+#include "CamerasParent.h"
+#include "mozilla/media/MediaParent.h"
 #include "mozilla/AppProcessChecker.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/dom/ContentParent.h"
+#include "mozilla/dom/NuwaParent.h"
 #include "mozilla/dom/PBlobParent.h"
 #include "mozilla/dom/MessagePortParent.h"
 #include "mozilla/dom/ServiceWorkerRegistrar.h"
+#include "mozilla/dom/asmjscache/AsmJSCache.h"
 #include "mozilla/dom/cache/ActorUtils.h"
 #include "mozilla/dom/indexedDB/ActorsParent.h"
 #include "mozilla/dom/ipc/BlobParent.h"
@@ -37,11 +41,14 @@
 #endif
 
 using mozilla::ipc::AssertIsOnBackgroundThread;
+using mozilla::dom::asmjscache::PAsmJSCacheEntryParent;
 using mozilla::dom::cache::PCacheParent;
 using mozilla::dom::cache::PCacheStorageParent;
 using mozilla::dom::cache::PCacheStreamControlParent;
 using mozilla::dom::MessagePortParent;
 using mozilla::dom::PMessagePortParent;
+using mozilla::dom::PNuwaParent;
+using mozilla::dom::NuwaParent;
 using mozilla::dom::UDPSocketParent;
 
 namespace {
@@ -233,6 +240,24 @@ BackgroundParentImpl::DeallocPFileDescriptorSetParent(
   return true;
 }
 
+PNuwaParent*
+BackgroundParentImpl::AllocPNuwaParent()
+{
+  return mozilla::dom::NuwaParent::Alloc();
+}
+
+bool
+BackgroundParentImpl::RecvPNuwaConstructor(PNuwaParent* aActor)
+{
+  return mozilla::dom::NuwaParent::ActorConstructed(aActor);
+}
+
+bool
+BackgroundParentImpl::DeallocPNuwaParent(PNuwaParent *aActor)
+{
+  return mozilla::dom::NuwaParent::Dealloc(aActor);
+}
+
 BackgroundParentImpl::PVsyncParent*
 BackgroundParentImpl::AllocPVsyncParent()
 {
@@ -256,6 +281,29 @@ BackgroundParentImpl::DeallocPVsyncParent(PVsyncParent* aActor)
   // This actor already has one ref-count. Please check AllocPVsyncParent().
   nsRefPtr<mozilla::layout::VsyncParent> actor =
       dont_AddRef(static_cast<mozilla::layout::VsyncParent*>(aActor));
+  return true;
+}
+
+camera::PCamerasParent*
+BackgroundParentImpl::AllocPCamerasParent()
+{
+  AssertIsInMainProcess();
+  AssertIsOnBackgroundThread();
+
+  nsRefPtr<mozilla::camera::CamerasParent> actor =
+      mozilla::camera::CamerasParent::Create();
+  return actor.forget().take();
+}
+
+bool
+BackgroundParentImpl::DeallocPCamerasParent(camera::PCamerasParent *aActor)
+{
+  AssertIsInMainProcess();
+  AssertIsOnBackgroundThread();
+  MOZ_ASSERT(aActor);
+
+  nsRefPtr<mozilla::camera::CamerasParent> actor =
+      dont_AddRef(static_cast<mozilla::camera::CamerasParent*>(aActor));
   return true;
 }
 
@@ -355,8 +403,7 @@ BackgroundParentImpl::AllocPBroadcastChannelParent(
   AssertIsInMainProcess();
   AssertIsOnBackgroundThread();
 
-  return new BroadcastChannelParent(aPrincipalInfo, aOrigin, aChannel,
-                                    aPrivateBrowsing);
+  return new BroadcastChannelParent(aOrigin, aChannel, aPrivateBrowsing);
 }
 
 namespace {
@@ -597,6 +644,30 @@ BackgroundParentImpl::RecvMessagePortForceClose(const nsID& aUUID,
   AssertIsOnBackgroundThread();
 
   return MessagePortParent::ForceClose(aUUID, aDestinationUUID, aSequenceID);
+}
+
+PAsmJSCacheEntryParent*
+BackgroundParentImpl::AllocPAsmJSCacheEntryParent(
+                               const dom::asmjscache::OpenMode& aOpenMode,
+                               const dom::asmjscache::WriteParams& aWriteParams,
+                               const PrincipalInfo& aPrincipalInfo)
+{
+  AssertIsInMainProcess();
+  AssertIsOnBackgroundThread();
+
+  return
+    dom::asmjscache::AllocEntryParent(aOpenMode, aWriteParams, aPrincipalInfo);
+}
+
+bool
+BackgroundParentImpl::DeallocPAsmJSCacheEntryParent(
+                                                 PAsmJSCacheEntryParent* aActor)
+{
+  AssertIsInMainProcess();
+  AssertIsOnBackgroundThread();
+
+  dom::asmjscache::DeallocEntryParent(aActor);
+  return true;
 }
 
 } // namespace ipc

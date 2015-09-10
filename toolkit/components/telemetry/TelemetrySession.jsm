@@ -44,7 +44,7 @@ const REASON_SHUTDOWN = "shutdown";
 const ENVIRONMENT_CHANGE_LISTENER = "TelemetrySession::onEnvironmentChange";
 
 const MS_IN_ONE_HOUR  = 60 * 60 * 1000;
-const MIN_SUBSESSION_LENGTH_MS = 10 * 60 * 1000;
+const MIN_SUBSESSION_LENGTH_MS = Preferences.get("toolkit.telemetry.minSubsessionLength", 10 * 60) * 1000;
 
 // This is the HG changeset of the Histogram.json file, used to associate
 // submitted ping data with its histogram definition (bug 832007)
@@ -75,30 +75,24 @@ const IS_UNIFIED_TELEMETRY = Preferences.get(PREF_UNIFIED, false);
 // Maximum number of content payloads that we are willing to store.
 const MAX_NUM_CONTENT_PAYLOADS = 10;
 
-// Do not gather data more than once a minute
-const TELEMETRY_INTERVAL = 60000;
+// Do not gather data more than once a minute (ms)
+const TELEMETRY_INTERVAL = 60 * 1000;
 // Delay before intializing telemetry (ms)
-const TELEMETRY_DELAY = 60000;
+const TELEMETRY_DELAY = Preferences.get("toolkit.telemetry.initDelay", 60) * 1000;
 // Delay before initializing telemetry if we're testing (ms)
 const TELEMETRY_TEST_DELAY = 100;
 // Execute a scheduler tick every 5 minutes.
-const SCHEDULER_TICK_INTERVAL_MS = 5 * 60 * 1000;
+const SCHEDULER_TICK_INTERVAL_MS = Preferences.get("toolkit.telemetry.scheduler.tickInterval", 5 * 60) * 1000;
 // When user is idle, execute a scheduler tick every 60 minutes.
-const SCHEDULER_TICK_IDLE_INTERVAL_MS = 60 * 60 * 1000;
-// The maximum number of times a scheduled operation can fail.
-const SCHEDULER_RETRY_ATTEMPTS = 3;
+const SCHEDULER_TICK_IDLE_INTERVAL_MS = Preferences.get("toolkit.telemetry.scheduler.idleTickInterval", 60 * 60) * 1000;
 
 // The tolerance we have when checking if it's midnight (15 minutes).
 const SCHEDULER_MIDNIGHT_TOLERANCE_MS = 15 * 60 * 1000;
 
-// Coalesce the daily and aborted-session pings if they are both due within
-// two minutes from each other.
-const SCHEDULER_COALESCE_THRESHOLD_MS = 2 * 60 * 1000;
-
 // Seconds of idle time before pinging.
 // On idle-daily a gather-telemetry notification is fired, during it probes can
 // start asynchronous tasks to gather data.
-const IDLE_TIMEOUT_SECONDS = 5 * 60;
+const IDLE_TIMEOUT_SECONDS = Preferences.get("toolkit.telemetry.idleTimeout", 5 * 60);
 
 // The frequency at which we persist session data to the disk to prevent data loss
 // in case of aborted sessions (currently 5 minutes).
@@ -381,9 +375,6 @@ let TelemetryScheduler = {
 
   _log: null,
 
-  // The number of times a daily ping fails.
-  _dailyPingRetryAttempts: 0,
-
   // The timer which drives the scheduler.
   _schedulerTimer: null,
   // The interval used by the scheduler timer.
@@ -546,8 +537,8 @@ let TelemetryScheduler = {
 
     if (shouldSendDaily) {
       this._log.trace("_schedulerTickLogic - Daily ping due.");
-      return Impl._sendDailyPing().then(() => this._dailyPingSucceeded(now),
-                                        () => this._dailyPingFailed(now));
+      this._lastDailyPingTime = now;
+      return Impl._sendDailyPing();
     }
 
     // Check if the aborted-session ping is due. If a daily ping was saved above, it was
@@ -561,10 +552,6 @@ let TelemetryScheduler = {
 
     // No ping is due.
     this._log.trace("_schedulerTickLogic - No ping due.");
-    // It's possible, because of sleeps, that we're no longer within midnight tolerance for
-    // daily pings. Because of that, daily retry attempts would not be 0 on the next midnight.
-    // Reset that count on do-nothing ticks.
-    this._dailyPingRetryAttempts = 0;
     return Promise.resolve();
   },
 
@@ -595,33 +582,6 @@ let TelemetryScheduler = {
     }
 
     this._rescheduleTimeout();
-  },
-
-  /**
-   * Called when a scheduled operation successfully completes (ping sent or saved).
-   * @param {Number} now The current time, in milliseconds.
-   */
-  _dailyPingSucceeded: function(now) {
-    this._log.trace("_dailyPingSucceeded");
-    this._lastDailyPingTime = now;
-    this._dailyPingRetryAttempts = 0;
-  },
-
-  /**
-   * Called when a scheduled operation fails (ping sent or saved).
-   * @param {Number} now The current time, in milliseconds.
-   */
-  _dailyPingFailed: function(now) {
-    this._log.error("_dailyPingFailed");
-    this._dailyPingRetryAttempts++;
-
-    // If we reach the maximum number of retry attempts for a daily ping, log the error
-    // and skip this daily ping.
-    if (this._dailyPingRetryAttempts >= SCHEDULER_RETRY_ATTEMPTS) {
-      this._log.error("_pingFailed - The daily ping failed too many times. Skipping it.");
-      this._dailyPingRetryAttempts = 0;
-      this._lastDailyPingTime = now;
-    }
   },
 
   /**
@@ -760,14 +720,6 @@ this.TelemetrySession = Object.freeze({
   observe: function (aSubject, aTopic, aData) {
     return Impl.observe(aSubject, aTopic, aData);
   },
-  /**
-   * The client id send with the telemetry ping.
-   *
-   * @return The client id as string, or null.
-   */
-   get clientID() {
-    return Impl.clientID;
-   },
 });
 
 let Impl = {
@@ -905,12 +857,6 @@ let Impl = {
 
     for (let ioCounter in this._startupIO)
       ret[ioCounter] = this._startupIO[ioCounter];
-
-    let hasPingBeenSent = false;
-    try {
-      hasPingBeenSent = Telemetry.getHistogramById("TELEMETRY_SUCCESS").snapshot().sum > 0;
-    } catch(e) {
-    }
 
     ret.savedPings = TelemetryStorage.pendingPingCount;
 
@@ -1894,8 +1840,8 @@ let Impl = {
     // Also save the payload as an aborted session. If we delay this, aborted-session can
     // lag behind for the profileSubsessionCounter and other state, complicating analysis.
     if (IS_UNIFIED_TELEMETRY) {
-      let abortedPromise = this._saveAbortedSessionPing(payload);
-      promise = promise.then(() => abortedPromise);
+      this._saveAbortedSessionPing(payload)
+          .catch(e => this._log.error("_sendDailyPing - Failed to save the aborted session ping", e));
     }
 
     return promise;
@@ -1907,29 +1853,45 @@ let Impl = {
    *                            loading has completed, with false otherwise.
    */
   _loadSessionData: Task.async(function* () {
-    let dataFile = OS.Path.join(OS.Constants.Path.profileDir, DATAREPORTING_DIRECTORY,
-                                SESSION_STATE_FILE_NAME);
+    const dataFile = OS.Path.join(OS.Constants.Path.profileDir, DATAREPORTING_DIRECTORY,
+                                  SESSION_STATE_FILE_NAME);
 
-    // Try to load info about the previous session from the state file.
+    let content;
     try {
-      let data = yield CommonUtils.readJSON(dataFile);
-      if (data &&
-          "profileSubsessionCounter" in data &&
-          typeof(data.profileSubsessionCounter) == "number" &&
-          "subsessionId" in data && "sessionId" in data) {
-        this._previousSessionId = data.sessionId;
-        this._previousSubsessionId = data.subsessionId;
-        // Add |_subsessionCounter| to the |_profileSubsessionCounter| to account for
-        // new subsession while loading still takes place. This will always be exactly
-        // 1 - the current subsessions.
-        this._profileSubsessionCounter = data.profileSubsessionCounter +
-                                         this._subsessionCounter;
-        return true;
-      }
-    } catch (e) {
-      this._log.info("_loadSessionData - Cannot load session data file " + dataFile, e);
+      content = yield OS.File.read(dataFile, { encoding: "utf-8" });
+    } catch (ex) {
+      this._log.info("_loadSessionData - can not load session data file", ex);
+      Telemetry.getHistogramById("TELEMETRY_SESSIONDATA_FAILED_LOAD").add(1);
+      return false;
     }
-    return false;
+
+    let data;
+    try {
+      data = JSON.parse(content);
+    } catch (ex) {
+      this._log.error("_loadSessionData - failed to parse session data", ex);
+      Telemetry.getHistogramById("TELEMETRY_SESSIONDATA_FAILED_PARSE").add(1);
+      return false;
+    }
+
+    if (!data ||
+        !("profileSubsessionCounter" in data) ||
+        !(typeof(data.profileSubsessionCounter) == "number") ||
+        !("subsessionId" in data) || !("sessionId" in data)) {
+      this._log.error("_loadSessionData - session data is invalid");
+      Telemetry.getHistogramById("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").add(1);
+      return false;
+    }
+
+    this._previousSessionId = data.sessionId;
+    this._previousSubsessionId = data.subsessionId;
+    // Add |_subsessionCounter| to the |_profileSubsessionCounter| to account for
+    // new subsession while loading still takes place. This will always be exactly
+    // 1 - the current subsessions.
+    this._profileSubsessionCounter = data.profileSubsessionCounter +
+                                     this._subsessionCounter;
+
+    return true;
   }),
 
   /**
@@ -1955,6 +1917,7 @@ let Impl = {
       yield CommonUtils.writeJSON(sessionData, filePath);
     } catch(e) {
       this._log.error("_saveSessionData - Failed to write session data to " + filePath, e);
+      Telemetry.getHistogramById("TELEMETRY_SESSIONDATA_FAILED_SAVE").add(1);
     }
   }),
 
