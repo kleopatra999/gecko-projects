@@ -55,9 +55,11 @@ struct JitOptions
     bool disableInlining;
     bool disableLicm;
     bool disableLoopUnrolling;
+    bool disableInstructionReordering;
     bool disableRangeAnalysis;
     bool disableScalarReplacement;
     bool disableSharedStubs;
+    bool disableSincos;
     bool disableSink;
     bool eagerCompilation;
     bool forceInlineCaches;

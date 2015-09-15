@@ -106,6 +106,11 @@ private:
     virtual void run(const MatchFinder::MatchResult &Result);
   };
 
+  class NoExplicitMoveConstructorChecker : public MatchFinder::MatchCallback {
+  public:
+    virtual void run(const MatchFinder::MatchResult &Result);
+  };
+
   ScopeChecker scopeChecker;
   ArithmeticArgChecker arithmeticArgChecker;
   TrivialCtorDtorChecker trivialCtorDtorChecker;
@@ -118,6 +123,7 @@ private:
   NonMemMovableChecker nonMemMovableChecker;
   ExplicitImplicitChecker explicitImplicitChecker;
   NoAutoTypeChecker noAutoTypeChecker;
+  NoExplicitMoveConstructorChecker noExplicitMoveConstructorChecker;
   MatchFinder astMatcher;
 };
 
@@ -278,8 +284,12 @@ static CustomTypeAnnotation NonHeapClass =
     CustomTypeAnnotation("moz_nonheap_class", "non-heap");
 static CustomTypeAnnotation HeapClass =
     CustomTypeAnnotation("moz_heap_class", "heap");
+static CustomTypeAnnotation NonTemporaryClass =
+    CustomTypeAnnotation("moz_non_temporary_class", "non-temporary");
 static CustomTypeAnnotation MustUse =
     CustomTypeAnnotation("moz_must_use", "must-use");
+static CustomTypeAnnotation NonMemMovable =
+  CustomTypeAnnotation("moz_non_memmovable", "non-memmove()able");
 
 class MozChecker : public ASTConsumer, public RecursiveASTVisitor<MozChecker> {
   DiagnosticsEngine &Diag;
@@ -474,92 +484,6 @@ bool isClassRefCounted(QualType T) {
   return clazz ? isClassRefCounted(clazz) : false;
 }
 
-/// A cached data of whether classes are memmovable, and if not, what
-/// declaration
-/// makes them non-movable
-typedef DenseMap<const CXXRecordDecl *, const CXXRecordDecl *>
-    InferredMovability;
-InferredMovability inferredMovability;
-
-bool isClassNonMemMovable(QualType T);
-const CXXRecordDecl *isClassNonMemMovableWorker(QualType T);
-
-const CXXRecordDecl *isClassNonMemMovableWorker(const CXXRecordDecl *D) {
-  // If we have a definition, then we want to standardize our reference to point
-  // to the definition node. If we don't have a definition, that means that
-  // either
-  // we only have a forward declaration of the type in our file, or we are being
-  // passed a template argument which is not used, and thus never instantiated
-  // by
-  // clang.
-  // As the argument isn't used, we can't memmove it (as we don't know it's
-  // size),
-  // which means not reporting an error is OK.
-  if (!D->hasDefinition()) {
-    return 0;
-  }
-  D = D->getDefinition();
-
-  // Are we explicitly marked as non-memmovable class?
-  if (MozChecker::hasCustomAnnotation(D, "moz_non_memmovable")) {
-    return D;
-  }
-
-  // Look through all base cases to figure out if the parent is a non-memmovable
-  // class.
-  for (CXXRecordDecl::base_class_const_iterator base = D->bases_begin();
-       base != D->bases_end(); ++base) {
-    const CXXRecordDecl *result = isClassNonMemMovableWorker(base->getType());
-    if (result) {
-      return result;
-    }
-  }
-
-  // Look through all members to figure out if a member is a non-memmovable
-  // class.
-  for (RecordDecl::field_iterator field = D->field_begin(), e = D->field_end();
-       field != e; ++field) {
-    const CXXRecordDecl *result = isClassNonMemMovableWorker(field->getType());
-    if (result) {
-      return result;
-    }
-  }
-
-  return 0;
-}
-
-const CXXRecordDecl *isClassNonMemMovableWorker(QualType T) {
-  while (const ArrayType *arrTy = T->getAsArrayTypeUnsafe())
-    T = arrTy->getElementType();
-  const CXXRecordDecl *clazz = T->getAsCXXRecordDecl();
-  return clazz ? isClassNonMemMovableWorker(clazz) : 0;
-}
-
-bool isClassNonMemMovable(const CXXRecordDecl *D) {
-  InferredMovability::iterator it = inferredMovability.find(D);
-  if (it != inferredMovability.end())
-    return !!it->second;
-  const CXXRecordDecl *result = isClassNonMemMovableWorker(D);
-  inferredMovability.insert(std::make_pair(D, result));
-  return !!result;
-}
-
-bool isClassNonMemMovable(QualType T) {
-  while (const ArrayType *arrTy = T->getAsArrayTypeUnsafe())
-    T = arrTy->getElementType();
-  const CXXRecordDecl *clazz = T->getAsCXXRecordDecl();
-  return clazz ? isClassNonMemMovable(clazz) : false;
-}
-
-const CXXRecordDecl *findWhyClassIsNonMemMovable(QualType T) {
-  while (const ArrayType *arrTy = T->getAsArrayTypeUnsafe())
-    T = arrTy->getElementType();
-  CXXRecordDecl *clazz = T->getAsCXXRecordDecl();
-  InferredMovability::iterator it = inferredMovability.find(clazz);
-  assert(it != inferredMovability.end());
-  return it->second;
-}
-
 template <class T> bool IsInSystemHeader(const ASTContext &AC, const T &D) {
   auto &SourceManager = AC.getSourceManager();
   auto ExpansionLoc = SourceManager.getExpansionLoc(D.getLocStart());
@@ -708,33 +632,6 @@ AST_MATCHER(MemberExpr, isAddRefOrRelease) {
 /// This matcher will select classes which are refcounted.
 AST_MATCHER(QualType, isRefCounted) { return isClassRefCounted(Node); }
 
-#if CLANG_VERSION_FULL < 304
-
-/// The 'equalsBoundeNode' matcher was added in clang 3.4.
-/// Since infra runs clang 3.3, we polyfill it here.
-AST_POLYMORPHIC_MATCHER_P(equalsBoundNode, std::string, ID) {
-  BoundNodesTree bindings = Builder->build();
-  bool haveMatchingResult = false;
-  struct Visitor : public BoundNodesTree::Visitor {
-    const NodeType &Node;
-    std::string ID;
-    bool &haveMatchingResult;
-    Visitor(const NodeType &Node, const std::string &ID,
-            bool &haveMatchingResult)
-        : Node(Node), ID(ID), haveMatchingResult(haveMatchingResult) {}
-    void visitMatch(const BoundNodes &BoundNodesView) override {
-      if (BoundNodesView.getNodeAs<NodeType>(ID) == &Node) {
-        haveMatchingResult = true;
-      }
-    }
-  };
-  Visitor visitor(Node, ID, haveMatchingResult);
-  bindings.visitMatches(&visitor);
-  return haveMatchingResult;
-}
-
-#endif
-
 AST_MATCHER(CXXRecordDecl, hasRefCntMember) {
   return isClassRefCounted(&Node) && getClassRefCntMember(&Node);
 }
@@ -746,7 +643,9 @@ AST_MATCHER(CXXRecordDecl, hasNeedsNoVTableTypeAttr) {
 }
 
 /// This matcher will select classes which are non-memmovable
-AST_MATCHER(QualType, isNonMemMovable) { return isClassNonMemMovable(Node); }
+AST_MATCHER(QualType, isNonMemMovable) {
+  return NonMemMovable.hasEffectiveAnnotation(Node);
+}
 
 /// This matcher will select classes which require a memmovable template arg
 AST_MATCHER(CXXRecordDecl, needsMemMovable) {
@@ -783,6 +682,10 @@ AST_MATCHER(QualType, autoNonAutoableType) {
     }
   }
   return false;
+}
+
+AST_MATCHER(CXXConstructorDecl, isExplicitMoveConstructor) {
+  return Node.isExplicit() && Node.isMoveConstructor();
 }
 }
 }
@@ -830,6 +733,7 @@ void CustomTypeAnnotation::dumpAnnotationReason(DiagnosticsEngine &Diag,
       break;
     }
     default:
+      // FIXME (bug 1203263): note the original annotation.
       return;
     }
 
@@ -943,6 +847,7 @@ DiagnosticsMatcher::DiagnosticsMatcher() {
   astMatcher.addMatcher(
       callExpr(callee(functionDecl(heapAllocator()))).bind("node"),
       &scopeChecker);
+  astMatcher.addMatcher(parmVarDecl().bind("parm_vardecl"), &scopeChecker);
 
   astMatcher.addMatcher(
       callExpr(allOf(hasDeclaration(noArithmeticExprInArgs()),
@@ -1019,13 +924,7 @@ DiagnosticsMatcher::DiagnosticsMatcher() {
   // lambda, where the declaration they reference is not inside the lambda.
   // This excludes arguments and local variables, leaving only captured
   // variables.
-  astMatcher.addMatcher(
-      lambdaExpr(hasDescendant(
-                     declRefExpr(hasType(pointerType(pointee(isRefCounted()))),
-                                 to(decl().bind("decl")))
-                         .bind("declref")),
-                 unless(hasDescendant(decl(equalsBoundNode("decl"))))),
-      &refCountedInsideLambdaChecker);
+  astMatcher.addMatcher(lambdaExpr().bind("lambda"), &refCountedInsideLambdaChecker);
 
   // Older clang versions such as the ones used on the infra recognize these
   // conversions as 'operator _Bool', but newer clang versions recognize these
@@ -1063,6 +962,9 @@ DiagnosticsMatcher::DiagnosticsMatcher() {
 
   astMatcher.addMatcher(varDecl(hasType(autoNonAutoableType())).bind("node"),
                         &noAutoTypeChecker);
+
+  astMatcher.addMatcher(constructorDecl(isExplicitMoveConstructor()).bind("node"),
+                        &noExplicitMoveConstructorChecker);
 }
 
 // These enum variants determine whether an allocation has occured in the code.
@@ -1074,6 +976,12 @@ enum AllocationVariety {
   AV_Heap,
 };
 
+// XXX Currently the Decl* in the AutomaticTemporaryMap is unused, but it
+// probably will be used at some point in the future, in order to produce better
+// error messages.
+typedef DenseMap<const MaterializeTemporaryExpr *, const Decl *> AutomaticTemporaryMap;
+AutomaticTemporaryMap AutomaticTemporaries;
+
 void DiagnosticsMatcher::ScopeChecker::run(
     const MatchFinder::MatchResult &Result) {
   DiagnosticsEngine &Diag = Result.Context->getDiagnostics();
@@ -1082,6 +990,20 @@ void DiagnosticsMatcher::ScopeChecker::run(
   AllocationVariety Variety = AV_None;
   SourceLocation Loc;
   QualType T;
+
+  if (const ParmVarDecl *D = Result.Nodes.getNodeAs<ParmVarDecl>("parm_vardecl")) {
+    if (const Expr *Default = D->getDefaultArg()) {
+      if (const MaterializeTemporaryExpr *E = dyn_cast<MaterializeTemporaryExpr>(Default)) {
+        // We have just found a ParmVarDecl which has, as its default argument,
+        // a MaterializeTemporaryExpr. We mark that MaterializeTemporaryExpr as
+        // automatic, by adding it to the AutomaticTemporaryMap.
+        // Reporting on this type will occur when the MaterializeTemporaryExpr
+        // is matched against.
+        AutomaticTemporaries[E] = D;
+      }
+    }
+    return;
+  }
 
   // Determine the type of allocation which we detected
   if (const VarDecl *D = Result.Nodes.getNodeAs<VarDecl>("node")) {
@@ -1101,9 +1023,39 @@ void DiagnosticsMatcher::ScopeChecker::run(
       T = E->getAllocatedType();
       Loc = E->getLocStart();
     }
-  } else if (const Expr *E =
+  } else if (const MaterializeTemporaryExpr *E =
                  Result.Nodes.getNodeAs<MaterializeTemporaryExpr>("node")) {
-    Variety = AV_Temporary;
+    // Temporaries can actually have varying storage durations, due to temporary
+    // lifetime extension. We consider the allocation variety of this temporary
+    // to be the same as the allocation variety of its lifetime.
+
+    // XXX We maybe should mark these lifetimes as being due to a temporary
+    // which has had its lifetime extended, to improve the error messages.
+    switch (E->getStorageDuration()) {
+    case SD_FullExpression:
+      {
+        // Check if this temporary is allocated as a default argument!
+        // if it is, we want to pretend that it is automatic.
+        AutomaticTemporaryMap::iterator AutomaticTemporary = AutomaticTemporaries.find(E);
+        if (AutomaticTemporary != AutomaticTemporaries.end()) {
+          Variety = AV_Automatic;
+        } else {
+          Variety = AV_Temporary;
+        }
+      }
+      break;
+    case SD_Automatic:
+      Variety = AV_Automatic;
+      break;
+    case SD_Thread:
+    case SD_Static:
+      Variety = AV_Global;
+      break;
+    case SD_Dynamic:
+      assert(false && "I don't think that this ever should occur...");
+      Variety = AV_Heap;
+      break;
+    }
     T = E->getType().getUnqualifiedType();
     Loc = E->getLocStart();
   } else if (const CallExpr *E = Result.Nodes.getNodeAs<CallExpr>("node")) {
@@ -1125,6 +1077,8 @@ void DiagnosticsMatcher::ScopeChecker::run(
       DiagnosticIDs::Error, "variable of type %0 only valid on the heap");
   unsigned NonHeapID = Diag.getDiagnosticIDs()->getCustomDiagID(
       DiagnosticIDs::Error, "variable of type %0 is not valid on the heap");
+  unsigned NonTemporaryID = Diag.getDiagnosticIDs()->getCustomDiagID(
+      DiagnosticIDs::Error, "variable of type %0 is not valid in a temporary");
 
   unsigned StackNoteID = Diag.getDiagnosticIDs()->getCustomDiagID(
       DiagnosticIDs::Note,
@@ -1154,6 +1108,8 @@ void DiagnosticsMatcher::ScopeChecker::run(
   case AV_Temporary:
     GlobalClass.reportErrorIfPresent(Diag, T, Loc, GlobalID, TemporaryNoteID);
     HeapClass.reportErrorIfPresent(Diag, T, Loc, HeapID, TemporaryNoteID);
+    NonTemporaryClass.reportErrorIfPresent(Diag, T, Loc,
+                                           NonTemporaryID, TemporaryNoteID);
     break;
 
   case AV_Heap:
@@ -1252,11 +1208,19 @@ void DiagnosticsMatcher::RefCountedInsideLambdaChecker::run(
       "Refcounted variable %0 of type %1 cannot be captured by a lambda");
   unsigned noteID = Diag.getDiagnosticIDs()->getCustomDiagID(
       DiagnosticIDs::Note, "Please consider using a smart pointer");
-  const DeclRefExpr *declref = Result.Nodes.getNodeAs<DeclRefExpr>("declref");
+  const LambdaExpr *Lambda = Result.Nodes.getNodeAs<LambdaExpr>("lambda");
 
-  Diag.Report(declref->getLocStart(), errorID)
-      << declref->getFoundDecl() << declref->getType()->getPointeeType();
-  Diag.Report(declref->getLocStart(), noteID);
+  for (const LambdaCapture Capture : Lambda->captures()) {
+    if (Capture.capturesVariable()) {
+      QualType Pointee = Capture.getCapturedVar()->getType()->getPointeeType();
+
+      if (!Pointee.isNull() && isClassRefCounted(Pointee)) {
+        Diag.Report(Capture.getLocation(), errorID)
+          << Capture.getCapturedVar() << Pointee;
+        Diag.Report(Capture.getLocation(), noteID);
+      }
+    }
+  }
 }
 
 void DiagnosticsMatcher::ExplicitOperatorBoolChecker::run(
@@ -1348,11 +1312,6 @@ void DiagnosticsMatcher::NonMemMovableChecker::run(
       "Cannot instantiate %0 with non-memmovable template argument %1");
   unsigned note1ID = Diag.getDiagnosticIDs()->getCustomDiagID(
       DiagnosticIDs::Note, "instantiation of %0 requested here");
-  unsigned note2ID = Diag.getDiagnosticIDs()->getCustomDiagID(
-      DiagnosticIDs::Note, "%0 is non-memmovable because of the "
-                           "MOZ_NON_MEMMOVABLE annotation on %1");
-  unsigned note3ID =
-      Diag.getDiagnosticIDs()->getCustomDiagID(DiagnosticIDs::Note, "%0");
 
   // Get the specialization
   const ClassTemplateSpecializationDecl *specialization =
@@ -1366,8 +1325,7 @@ void DiagnosticsMatcher::NonMemMovableChecker::run(
       specialization->getTemplateInstantiationArgs();
   for (unsigned i = 0; i < args.size(); ++i) {
     QualType argType = args[i].getAsType();
-    if (isClassNonMemMovable(args[i].getAsType())) {
-      const CXXRecordDecl *reason = findWhyClassIsNonMemMovable(argType);
+    if (NonMemMovable.hasEffectiveAnnotation(args[i].getAsType())) {
       Diag.Report(specialization->getLocation(), errorID) << specialization
                                                           << argType;
       // XXX It would be really nice if we could get the instantiation stack
@@ -1380,7 +1338,7 @@ void DiagnosticsMatcher::NonMemMovableChecker::run(
       // cases won't
       // be useful)
       Diag.Report(requestLoc, note1ID) << specialization;
-      Diag.Report(reason->getLocation(), note2ID) << argType << reason;
+      NonMemMovable.dumpAnnotationReason(Diag, argType, requestLoc);
     }
   }
 }
@@ -1417,6 +1375,20 @@ void DiagnosticsMatcher::NoAutoTypeChecker::run(
 
   Diag.Report(D->getLocation(), ErrorID) << D->getType();
   Diag.Report(D->getLocation(), NoteID);
+}
+
+void DiagnosticsMatcher::NoExplicitMoveConstructorChecker::run(
+    const MatchFinder::MatchResult &Result) {
+  DiagnosticsEngine &Diag = Result.Context->getDiagnostics();
+  unsigned ErrorID = Diag.getDiagnosticIDs()->getCustomDiagID(
+      DiagnosticIDs::Error, "Move constructors may not be marked explicit");
+
+  // Everything we needed to know was checked in the matcher - we just report
+  // the error here
+  const CXXConstructorDecl *D =
+    Result.Nodes.getNodeAs<CXXConstructorDecl>("node");
+
+  Diag.Report(D->getLocation(), ErrorID);
 }
 
 class MozCheckAction : public PluginASTAction {

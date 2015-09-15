@@ -14,7 +14,7 @@ const {Cc, Ci, Cu} = require("chrome");
 const ToolDefinitions = require("main").Tools;
 const {CssLogic} = require("devtools/styleinspector/css-logic");
 const {ELEMENT_STYLE} = require("devtools/server/actors/styles");
-const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
+const promise = require("promise");
 const {setTimeout, clearTimeout} = Cu.import("resource://gre/modules/Timer.jsm", {});
 const {OutputParser} = require("devtools/output-parser");
 const {PrefObserver, PREF_ORIG_SOURCES} = require("devtools/styleeditor/utils");
@@ -955,6 +955,7 @@ PropertyView.prototype = {
       let keyEvent = Ci.nsIDOMKeyEvent;
       if (event.keyCode === keyEvent.DOM_VK_F1) {
         this.mdnLinkClick();
+        event.preventDefault();
       }
       if (event.keyCode === keyEvent.DOM_VK_RETURN ||
         event.keyCode === keyEvent.DOM_VK_SPACE) {

@@ -10,6 +10,7 @@ describe("loop.conversation", function() {
   var TestUtils = React.addons.TestUtils;
   var sharedActions = loop.shared.actions;
   var sharedModels = loop.shared.models;
+  var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
   var fakeWindow, sandbox, getLoopPrefStub, setLoopPrefStub, mozL10nGet;
 
   beforeEach(function() {
@@ -138,8 +139,9 @@ describe("loop.conversation", function() {
   });
 
   describe("AppControllerView", function() {
-    var conversationStore, client, ccView, dispatcher;
+    var conversationStore, activeRoomStore, client, ccView, dispatcher;
     var conversationAppStore, roomStore, feedbackPeriodMs = 15770000000;
+    var ROOM_STATES = loop.store.ROOM_STATES;
 
     function mountTestComponent() {
       return TestUtils.renderIntoDocument(
@@ -169,8 +171,13 @@ describe("loop.conversation", function() {
         }]
       }});
 
+      activeRoomStore = new loop.store.ActiveRoomStore(dispatcher, {
+        mozLoop: {},
+        sdkDriver: {}
+      });
       roomStore = new loop.store.RoomStore(dispatcher, {
-        mozLoop: navigator.mozLoop
+        mozLoop: navigator.mozLoop,
+        activeRoomStore: activeRoomStore
       });
       conversationAppStore = new loop.store.ConversationAppStore({
         dispatcher: dispatcher,
@@ -207,6 +214,7 @@ describe("loop.conversation", function() {
 
     it("should display the RoomView for rooms", function() {
       conversationAppStore.setStoreState({windowType: "room"});
+      activeRoomStore.setStoreState({roomState: ROOM_STATES.READY});
 
       ccView = mountTestComponent();
 
@@ -214,13 +222,20 @@ describe("loop.conversation", function() {
         loop.roomViews.DesktopRoomConversationView);
     });
 
-    it("should display the GenericFailureView for failures", function() {
-      conversationAppStore.setStoreState({windowType: "failed"});
+    it("should display the DirectCallFailureView for failures", function() {
+      conversationAppStore.setStoreState({
+        contact: {},
+        outgoing: false,
+        windowType: "failed"
+      });
+      conversationStore.setStoreState({
+        callStateReason: FAILURE_DETAILS.UNKNOWN
+      });
 
       ccView = mountTestComponent();
 
       TestUtils.findRenderedComponentWithType(ccView,
-        loop.conversationViews.GenericFailureView);
+        loop.conversationViews.DirectCallFailureView);
     });
 
     it("should set the correct title when rendering feedback view", function() {

@@ -102,14 +102,7 @@
   text-shadow: none !important;
 }
 
-/* This rule is specific to the dark theme, because we only set the dropdown image there */
-:root[devtoolstheme="dark"] .searchbar-dropmarker-image {
-  /* Reset image-region from the windows theme */
-  -moz-image-region: auto !important;
-  /* Add margin otherwise it looks weird */
-  -moz-margin-start: 2px;
-}
-
+:root[devtoolstheme="dark"] .findbar-closebutton,
 /* Tab styling - make sure to use an inverted icon for the selected tab
    (brighttext only covers the unselected tabs) */
 .tab-close-button[visuallyselected=true] {
@@ -117,6 +110,7 @@
 }
 
 @media (min-resolution: 1.1dppx) {
+  :root[devtoolstheme="dark"] .findbar-closebutton,
   .tab-close-button[visuallyselected=true] {
     list-style-image: url("chrome://global/skin/icons/close-inverted@2x.png");
   }
@@ -237,6 +231,33 @@
   #main-window[sizemode=normal]:not([customizing]) #TabsToolbar {
     padding-left: 0;
     padding-right: 0;
+  }
+}
+
+/* Restored windows get an artificial border on windows, because the lwtheme background
+ * overlaps the regular window border. That isn't the case for us, so we avoid painting
+ * over the native border with our custom borders: */
+#browser-panel {
+  /* These are !important to avoid specificity-wars with the selectors that add borders here. */
+  background-image: none !important;
+  border-top: none !important;
+}
+
+#navigator-toolbox {
+  /* The side borders on the toolbox also look out-of-place because we don't paint over
+   * the native background color at all, and these are !important for the same reason as above. */
+  border-left: none !important;
+  border-right: none !important;
+}
+
+@media (-moz-os-version: windows-vista),
+       (-moz-os-version: windows-win7),
+       (-moz-os-version: windows-win8) {
+  /* And then we add them back on toolbars so that they don't look borderless: */
+  #main-window:not([customizing])[sizemode=normal] #navigator-toolbox::after,
+  #main-window:not([customizing])[sizemode=normal] #navigator-toolbox > toolbar:not(#toolbar-menubar):not(#TabsToolbar) {
+    border-left: 1px solid hsla(209,67%,12%,0.35);
+    border-right: 1px solid hsla(209,67%,12%,0.35);
   }
 }
 

@@ -11,9 +11,10 @@ describe("loop.roomViews", function () {
   var sharedViews = loop.shared.views;
   var ROOM_STATES = loop.store.ROOM_STATES;
   var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
+  var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
 
-  var sandbox, dispatcher, roomStore, activeRoomStore, fakeWindow,
-    fakeMozLoop, fakeContextURL;
+  var sandbox, dispatcher, roomStore, activeRoomStore, view;
+  var fakeWindow, fakeMozLoop, fakeContextURL;
   var favicon = "data:image/x-icon;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
 
   beforeEach(function() {
@@ -22,7 +23,9 @@ describe("loop.roomViews", function () {
     dispatcher = new loop.Dispatcher();
 
     fakeMozLoop = {
-      getAudioBlob: sinon.stub(),
+      getAudioBlob: sinon.spy(function(name, callback) {
+        callback(null, new Blob([new ArrayBuffer(10)], {type: "audio/ogg"}));
+      }),
       getLoopPref: sinon.stub(),
       getSelectedTabMetadata: sinon.stub().callsArgWith(0, {
         favicon: favicon,
@@ -84,11 +87,13 @@ describe("loop.roomViews", function () {
       location: "http://invalid.com",
       thumbnail: "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
     };
+    sandbox.stub(dispatcher, "dispatch");
   });
 
   afterEach(function() {
     sandbox.restore();
     loop.shared.mixins.setRootObject(window);
+    view = null;
   });
 
   describe("ActiveRoomStoreMixin", function() {
@@ -128,17 +133,59 @@ describe("loop.roomViews", function () {
     });
   });
 
-  describe("DesktopRoomInvitationView", function() {
-    var view;
+  describe("RoomFailureView", function() {
+    var fakeAudio;
+
+    function mountTestComponent(props) {
+      props = _.extend({
+        dispatcher: dispatcher,
+        failureReason: FAILURE_DETAILS.UNKNOWN,
+        mozLoop: fakeMozLoop
+      });
+      return TestUtils.renderIntoDocument(
+        React.createElement(loop.roomViews.RoomFailureView, props));
+    }
 
     beforeEach(function() {
-      sandbox.stub(dispatcher, "dispatch");
+      fakeAudio = {
+        play: sinon.spy(),
+        pause: sinon.spy(),
+        removeAttribute: sinon.spy()
+      };
+      sandbox.stub(window, "Audio").returns(fakeAudio);
     });
 
-    afterEach(function() {
-      view = null;
+    it("should render the FailureInfoView", function() {
+      view = mountTestComponent();
+
+      TestUtils.findRenderedComponentWithType(view,
+        loop.conversationViews.FailureInfoView);
     });
 
+    it("should dispatch a JoinRoom action when the rejoin call button is pressed", function() {
+      view = mountTestComponent();
+
+      var rejoinBtn = view.getDOMNode().querySelector(".btn-rejoin");
+
+      React.addons.TestUtils.Simulate.click(rejoinBtn);
+
+      sinon.assert.calledOnce(dispatcher.dispatch);
+      sinon.assert.calledWithExactly(dispatcher.dispatch,
+        new sharedActions.JoinRoom());
+    });
+
+    it("should play a failure sound, once", function() {
+      view = mountTestComponent();
+
+      sinon.assert.calledOnce(fakeMozLoop.getAudioBlob);
+      sinon.assert.calledWithExactly(fakeMozLoop.getAudioBlob,
+                                     "failure", sinon.match.func);
+      sinon.assert.calledOnce(fakeAudio.play);
+      expect(fakeAudio.loop).to.equal(false);
+    });
+  });
+
+  describe("DesktopRoomInvitationView", function() {
     function mountTestComponent(props) {
       props = _.extend({
         dispatcher: dispatcher,
@@ -290,10 +337,9 @@ describe("loop.roomViews", function () {
   });
 
   describe("DesktopRoomConversationView", function() {
-    var view, onCallTerminatedStub;
+    var onCallTerminatedStub;
 
     beforeEach(function() {
-      sandbox.stub(dispatcher, "dispatch");
       fakeMozLoop.getLoopPref = function(prefName) {
         if (prefName === "contextInConversations.enabled") {
           return true;
@@ -444,24 +490,30 @@ describe("loop.roomViews", function () {
         expect(fakeWindow.document.title).to.equal("fakeName");
       });
 
-      it("should render the GenericFailureView if the roomState is `FAILED`",
+      it("should render the RoomFailureView if the roomState is `FAILED`",
         function() {
-          activeRoomStore.setStoreState({roomState: ROOM_STATES.FAILED});
+          activeRoomStore.setStoreState({
+            failureReason: FAILURE_DETAILS.UNKNOWN,
+            roomState: ROOM_STATES.FAILED
+          });
 
           view = mountTestComponent();
 
           TestUtils.findRenderedComponentWithType(view,
-            loop.conversationViews.GenericFailureView);
+            loop.roomViews.RoomFailureView);
         });
 
-      it("should render the GenericFailureView if the roomState is `FULL`",
+      it("should render the RoomFailureView if the roomState is `FULL`",
         function() {
-          activeRoomStore.setStoreState({roomState: ROOM_STATES.FULL});
+          activeRoomStore.setStoreState({
+            failureReason: FAILURE_DETAILS.UNKNOWN,
+            roomState: ROOM_STATES.FULL
+          });
 
           view = mountTestComponent();
 
           TestUtils.findRenderedComponentWithType(view,
-            loop.conversationViews.GenericFailureView);
+            loop.roomViews.RoomFailureView);
         });
 
       it("should render the DesktopRoomInvitationView if roomState is `JOINED`",
@@ -470,8 +522,51 @@ describe("loop.roomViews", function () {
 
           view = mountTestComponent();
 
+          expect(TestUtils.findRenderedComponentWithType(view,
+            loop.roomViews.DesktopRoomInvitationView).getDOMNode()).to.not.eql(null);
+        });
+
+      it("should render the DesktopRoomInvitationView if roomState is `JOINED` with just owner",
+        function() {
+          activeRoomStore.setStoreState({
+            participants: [{owner: true}],
+            roomState: ROOM_STATES.JOINED
+          });
+
+          view = mountTestComponent();
+
+          expect(TestUtils.findRenderedComponentWithType(view,
+            loop.roomViews.DesktopRoomInvitationView).getDOMNode()).to.not.eql(null);
+        });
+
+      it("should render the DesktopRoomConversationView if roomState is `JOINED` with remote participant",
+        function() {
+          activeRoomStore.setStoreState({
+            participants: [{}],
+            roomState: ROOM_STATES.JOINED
+          });
+
+          view = mountTestComponent();
+
           TestUtils.findRenderedComponentWithType(view,
-            loop.roomViews.DesktopRoomInvitationView);
+            loop.roomViews.DesktopRoomConversationView);
+          expect(TestUtils.findRenderedComponentWithType(view,
+            loop.roomViews.DesktopRoomInvitationView).getDOMNode()).to.eql(null);
+        });
+
+      it("should render the DesktopRoomConversationView if roomState is `JOINED` with participants",
+        function() {
+          activeRoomStore.setStoreState({
+            participants: [{owner: true}, {}],
+            roomState: ROOM_STATES.JOINED
+          });
+
+          view = mountTestComponent();
+
+          TestUtils.findRenderedComponentWithType(view,
+            loop.roomViews.DesktopRoomConversationView);
+          expect(TestUtils.findRenderedComponentWithType(view,
+            loop.roomViews.DesktopRoomInvitationView).getDOMNode()).to.eql(null);
         });
 
       it("should render the DesktopRoomConversationView if roomState is `HAS_PARTICIPANTS`",
@@ -482,6 +577,8 @@ describe("loop.roomViews", function () {
 
           TestUtils.findRenderedComponentWithType(view,
             loop.roomViews.DesktopRoomConversationView);
+          expect(TestUtils.findRenderedComponentWithType(view,
+            loop.roomViews.DesktopRoomInvitationView).getDOMNode()).to.eql(null);
         });
 
       it("should call onCallTerminated when the call ended", function() {
@@ -497,11 +594,11 @@ describe("loop.roomViews", function () {
         sinon.assert.calledOnce(onCallTerminatedStub);
       });
 
-      it("should display loading spinner when localSrcVideoObject is null",
+      it("should display loading spinner when localSrcMediaElement is null",
          function() {
            activeRoomStore.setStoreState({
              roomState: ROOM_STATES.MEDIA_WAIT,
-             localSrcVideoObject: null
+             localSrcMediaElement: null
            });
 
            view = mountTestComponent();
@@ -514,7 +611,7 @@ describe("loop.roomViews", function () {
          function() {
            activeRoomStore.setStoreState({
              roomState: ROOM_STATES.MEDIA_WAIT,
-             localSrcVideoObject: { fake: "video" }
+             localSrcMediaElement: { fake: "video" }
            });
 
            view = mountTestComponent();
@@ -527,7 +624,7 @@ describe("loop.roomViews", function () {
          function() {
            activeRoomStore.setStoreState({
              roomState: ROOM_STATES.HAS_PARTICIPANTS,
-             remoteSrcVideoObject: null
+             remoteSrcMediaElement: null
            });
 
            view = mountTestComponent();
@@ -540,7 +637,7 @@ describe("loop.roomViews", function () {
          function() {
            activeRoomStore.setStoreState({
              roomState: ROOM_STATES.HAS_PARTICIPANTS,
-             remoteSrcVideoObject: { fake: "video" }
+             remoteSrcMediaElement: { fake: "video" }
            });
 
            view = mountTestComponent();
@@ -567,7 +664,7 @@ describe("loop.roomViews", function () {
           roomState: ROOM_STATES.HAS_PARTICIPANTS,
           mediaConnected: true,
           remoteVideoEnabled: true,
-          remoteSrcVideoObject: { fake: 1 }
+          remoteSrcMediaElement: { fake: 1 }
         });
 
         view = mountTestComponent();
@@ -587,7 +684,7 @@ describe("loop.roomViews", function () {
 
       it("should display the local video when the stream is enabled", function() {
         activeRoomStore.setStoreState({
-          localSrcVideoObject: { fake: 1 },
+          localSrcMediaElement: { fake: 1 },
           videoMuted: false
         });
 
@@ -605,7 +702,7 @@ describe("loop.roomViews", function () {
 
         expect(node.querySelector(".room-context")).to.eql(null);
 
-        var editButton = node.querySelector(".btn-mute-edit");
+        var editButton = node.querySelector(".settings-menu > li.entry-settings-edit");
         React.addons.TestUtils.Simulate.click(editButton);
 
         expect(view.getDOMNode().querySelector(".room-context")).to.not.eql(null);
@@ -614,7 +711,7 @@ describe("loop.roomViews", function () {
       it("should hide the form when the edit button is clicked again", function() {
         view = mountTestComponent();
 
-        var editButton = view.getDOMNode().querySelector(".btn-mute-edit");
+        var editButton = view.getDOMNode().querySelector(".settings-menu > li.entry-settings-edit");
         React.addons.TestUtils.Simulate.click(editButton);
 
         // Click again.
@@ -626,11 +723,9 @@ describe("loop.roomViews", function () {
   });
 
   describe("SocialShareDropdown", function() {
-    var view, fakeProvider;
+    var fakeProvider;
 
     beforeEach(function() {
-      sandbox.stub(dispatcher, "dispatch");
-
       fakeProvider = {
         name: "foo",
         origin: "https://foo",
@@ -639,7 +734,7 @@ describe("loop.roomViews", function () {
     });
 
     afterEach(function() {
-      view = fakeProvider = null;
+      fakeProvider = null;
     });
 
     function mountTestComponent(props) {
@@ -722,12 +817,6 @@ describe("loop.roomViews", function () {
   });
 
   describe("DesktopRoomEditContextView", function() {
-    var view;
-
-    afterEach(function() {
-      view = null;
-    });
-
     function mountTestComponent(props) {
       props = _.extend({
         dispatcher: dispatcher,
@@ -812,8 +901,6 @@ describe("loop.roomViews", function () {
       var roomNameBox;
 
       beforeEach(function() {
-        sandbox.stub(dispatcher, "dispatch");
-
         view = mountTestComponent({
           editMode: true,
           roomData: {

@@ -120,7 +120,8 @@ protected:
                    const OptionalHttpResponseHead& aSynthesizedResponseHead,
                    const nsCString&           aSecurityInfoSerialization,
                    const uint32_t&            aCacheKey,
-                   const nsCString&           aSchedulingContextID);
+                   const nsCString&           aSchedulingContextID,
+                   const OptionalCorsPreflightArgs& aCorsPreflightArgs);
 
   virtual bool RecvSetPriority(const uint16_t& priority) override;
   virtual bool RecvSetClassOfService(const uint32_t& cos) override;
@@ -140,6 +141,8 @@ protected:
                                          const uint32_t& count) override;
   virtual bool RecvDivertOnStopRequest(const nsresult& statusCode) override;
   virtual bool RecvDivertComplete() override;
+  virtual bool RecvRemoveCorsPreflightCacheEntry(const URIParams& uri,
+                                                 const mozilla::ipc::PrincipalInfo& requestingPrincipal) override;
   virtual void ActorDestroy(ActorDestroyReason why) override;
 
   // Supporting function for ADivertableParentChannel.
@@ -158,6 +161,18 @@ protected:
                                  const nsAString& aMessageCategory) override;
 
 private:
+  void UpdateAndSerializeSecurityInfo(nsACString& aSerializedSecurityInfoOut);
+
+  void DivertOnDataAvailable(const nsCString& data,
+                             const uint64_t& offset,
+                             const uint32_t& count);
+  void DivertOnStopRequest(const nsresult& statusCode);
+  void DivertComplete();
+
+  friend class DivertDataAvailableEvent;
+  friend class DivertStopRequestEvent;
+  friend class DivertCompleteEvent;
+
   nsRefPtr<nsHttpChannel>       mChannel;
   nsCOMPtr<nsICacheEntry>       mCacheEntry;
   nsCOMPtr<nsIAssociatedContentSecurity>  mAssociatedContentSecurity;
@@ -211,6 +226,8 @@ private:
 
   // Handle to the channel wrapper if this channel has been intercepted.
   nsCOMPtr<nsIInterceptedChannel> mInterceptedChannel;
+
+  nsRefPtr<ChannelEventQueue> mEventQ;
 };
 
 } // namespace net

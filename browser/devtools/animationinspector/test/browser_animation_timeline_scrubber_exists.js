@@ -15,6 +15,4 @@ add_task(function*() {
 
   ok(scrubberEl, "The scrubber element exists");
   ok(scrubberEl.classList.contains("scrubber"), "It has the right classname");
-  is(parseInt(timeline.win.getComputedStyle(scrubberEl).left, 10), 0,
-     "It's positioned to the left by default");
 });

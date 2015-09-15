@@ -311,6 +311,7 @@ class BuildOptionParser(object):
         'asan': 'builds/releng_sub_%s_configs/%s_asan.py',
         'tsan': 'builds/releng_sub_%s_configs/%s_tsan.py',
         'b2g-debug': 'b2g/releng_sub_%s_configs/%s_debug.py',
+        'cross-debug': 'builds/releng_sub_%s_configs/%s_cross_debug.py',
         'debug': 'builds/releng_sub_%s_configs/%s_debug.py',
         'asan-and-debug': 'builds/releng_sub_%s_configs/%s_asan_and_debug.py',
         'stat-and-debug': 'builds/releng_sub_%s_configs/%s_stat_and_debug.py',
@@ -1241,7 +1242,7 @@ or run without that action (ie: --no-{action})"
 
     def _query_props_set_by_mach(self, console_output=True, error_level=FATAL):
         mach_properties_path = os.path.join(
-            self.query_abs_dirs()['abs_obj_dir'], 'mach_build_properties.json'
+            self.query_abs_dirs()['abs_obj_dir'], 'dist', 'mach_build_properties.json'
         )
         self.info("setting properties set by mach build. Looking in path: %s"
                   % mach_properties_path)
@@ -1262,9 +1263,7 @@ or run without that action (ie: --no-{action})"
                 if prop != 'UNKNOWN':
                     self.set_buildbot_property(key, prop, write_to_file=True)
         else:
-            self.log("Could not determine path for build properties. "
-                     "Does this exist: `%s` ?" % mach_properties_path,
-                     level=error_level)
+            self.info("No mach_build_properties.json found - not importing properties.")
 
     def generate_build_props(self, console_output=True, halt_on_failure=False):
         """sets props found from mach build and, in addition, buildid,
@@ -1509,10 +1508,31 @@ or run without that action (ie: --no-{action})"
         dirs = self.query_abs_dirs()
         paths = [
             (packageName, os.path.join(dirs['abs_obj_dir'], 'dist', packageName)),
-            ('libxul.so', os.path.join(dirs['abs_obj_dir'], 'dist', 'bin', 'libxul.so')),
             ('omni.ja', os.path.join(dirs['abs_obj_dir'], 'dist', 'fennec', 'assets', 'omni.ja')),
             ('classes.dex', os.path.join(dirs['abs_obj_dir'], 'dist', 'fennec', 'classes.dex'))
         ]
+
+        # Find a stripped version of libxul if possible
+        def find_file(rootPath, fileName):
+            for root, dirs, files in os.walk(rootPath):
+               for file in files:
+                   if file == fileName:
+                        return (fileName, os.path.join(root, file))
+            return None
+
+        # Check in the firefox and fennec dist dirs
+        libxul = None
+        dist_root = os.path.join(dirs['abs_obj_dir'], 'dist')
+        for dist in ('firefox', 'fennec', 'b2g'):
+            libxul = find_file(os.path.join(dist_root, dist), 'libxul.so')
+            if libxul:
+                break
+
+        if libxul:
+            paths.append(libxul)
+        else:
+            paths.append( ('libxul.so', os.path.join(dirs['abs_obj_dir'], 'dist', 'bin', 'libxul.so')) )
+
         for (name, path) in paths:
             if os.path.exists(path):
                 self.info('TinderboxPrint: Size of %s<br/>%s bytes\n' % (name, self.query_filesize(path)))
@@ -1623,7 +1643,7 @@ or run without that action (ie: --no-{action})"
         self._run_tooltool()
         self._create_mozbuild_dir()
         mach_props = os.path.join(
-            self.query_abs_dirs()['abs_obj_dir'], 'mach_build_properties.json'
+            self.query_abs_dirs()['abs_obj_dir'], 'dist', 'mach_build_properties.json'
         )
         if os.path.exists(mach_props):
             self.info("Removing previous mach property file: %s" % mach_props)

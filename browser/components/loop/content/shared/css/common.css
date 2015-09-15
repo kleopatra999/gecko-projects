@@ -453,11 +453,11 @@ html[dir="rtl"] .dropdown-menu {
 }
 
 .dropdown-menu-item:first-child {
-  padding-top: .8rem;
+  padding-top: .5rem;
 }
 
 .dropdown-menu-item:last-child {
-  padding-bottom: .8rem;
+  padding-bottom: .5rem;
 }
 
 .dropdown-menu-item:first-child:hover {
@@ -522,6 +522,17 @@ html[dir="rtl"] .checkbox {
 
 .checkbox.checked.disabled {
   background-image: url("../img/check.svg#check-disabled");
+}
+
+.checkbox-label.ellipsis {
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  text-align: left;
+}
+
+html[dir="rtl"] .checkbox-label.ellipsis {
+  text-align: right;
 }
 
 /* ContextUrlView classes */

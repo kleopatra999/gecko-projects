@@ -30,6 +30,7 @@ flags:
     - aries-dogfood
     - android-api-11
     - linux64
+    - macosx64
 
   tests:
     - cppunit
@@ -42,8 +43,6 @@ flags:
     - gaia-unit
     - gaia-unit-oop
     - gaia-ui-test-sanity
-    - gaia-ui-test-oop
-    - gaia-ui-test-accessibility
     - gaia-ui-test-functional
     - gaia-ui-test-functional-dsds
     - gaia-ui-test-unit

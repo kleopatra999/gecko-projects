@@ -46,12 +46,11 @@
   --toolbarbutton-active-boxshadow: none;
   --toolbarbutton-active-bordercolor: rgba(25,33,38,.8);
   --toolbarbutton-checkedhover-backgroundcolor: #1D4F73;
-  --toolbarbutton-combined-boxshadow: none;
-  --toolbarbutton-combined-backgroundimage: linear-gradient(#5F6670 0, #5F6670 18px);
 
   /* Url and search bars */
   --url-and-searchbar-background-color: #171B1F;
   --url-and-searchbar-color: #fff;
+  --urlbar-separator-color: #5F6670;
   --urlbar-dropmarker-url: url("chrome://browser/skin/devedition/urlbar-history-dropmarker.svg");
   --urlbar-dropmarker-region: rect(0px, 11px, 14px, 0px);
   --urlbar-dropmarker-hover-region: rect(0, 22px, 14px, 11px);
@@ -60,19 +59,12 @@
   --urlbar-dropmarker-2x-region: rect(0px, 11px, 14px, 0px);
   --urlbar-dropmarker-hover-2x-region: rect(0, 22px, 14px, 11px);
   --urlbar-dropmarker-active-2x-region: rect(0px, 33px, 14px, 22px);
-  --search-button-image: url("chrome://browser/skin/devedition/search.svg#search-icon-inverted");
 }
 
 :root[devtoolstheme="dark"] #identity-box {
-  --identity-box-border-color: #5F6670;
   --identity-box-chrome-color: #46afe3;
   --identity-box-verified-background-color: transparent;
   --identity-box-selected-background-color: rgba(231,230,230,.2);
-}
-
-:root[devtoolstheme="dark"] .searchbar-dropmarker-image {
-  --searchbar-dropmarker-url: url("chrome://browser/skin/devtools/dropmarker.svg");
-  --searchbar-dropmarker-2x-url: url("chrome://browser/skin/devtools/dropmarker.svg");
 }
 
 :root[devtoolstheme="light"] {
@@ -107,11 +99,6 @@
   --toolbarbutton-active-boxshadow: none;
   --toolbarbutton-active-bordercolor: rgba(0,0,0,0.15);
   --toolbarbutton-checkedhover-backgroundcolor: #d7d7d8;
-  --toolbarbutton-combined-boxshadow: none;
-  --toolbarbutton-combined-backgroundimage: linear-gradient(rgba(0,0,0,0.1) 0, rgba(0,0,0,0.1) 18px);
-
-  /* Url and search bars */
-  --search-button-image: url("chrome://browser/skin/devedition/search.svg#search-icon");
 }
 
 /* Give some space to drag the window around while customizing
@@ -273,20 +260,15 @@ window:not([chromehidden~="toolbar"]) #urlbar-wrapper {
   -moz-image-region: rect(0, 54px, 18px, 36px);
 }
 
-searchbar:not([oneoffui]) .search-go-button {
-   /* !important is needed because searchbar.css is loaded after this */
-  -moz-image-region: auto !important;
-  list-style-image: var(--search-button-image);
-}
-
 .tab-background {
   visibility: hidden;
 }
 
-
-#TabsToolbar {
-  --tab-separator-margin: 0;
-  --tab-separator-opacity: 0.2 !important;
+/* Tab separators */
+.tabbrowser-tab::after,
+.tabbrowser-tab::before {
+  background: currentColor;
+  opacity: 0.2 !important;
 }
 
 .tabbrowser-arrowscrollbox > .scrollbutton-down,

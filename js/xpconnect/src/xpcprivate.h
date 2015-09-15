@@ -210,7 +210,7 @@ extern const char XPC_XPCONNECT_CONTRACTID[];
     return (result || !src) ? NS_OK : NS_ERROR_OUT_OF_MEMORY
 
 
-#define WRAPPER_FLAGS (JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS )
+#define WRAPPER_FLAGS JSCLASS_HAS_PRIVATE
 
 #define INVALID_OBJECT ((JSObject*)1)
 
@@ -3040,7 +3040,7 @@ private:
 /******************************************************************************
  * Handles pre/post script processing.
  */
-class MOZ_STACK_CLASS AutoScriptEvaluate
+class MOZ_RAII AutoScriptEvaluate
 {
 public:
     /**
@@ -3077,7 +3077,7 @@ private:
 };
 
 /***************************************************************************/
-class MOZ_STACK_CLASS AutoResolveName
+class MOZ_RAII AutoResolveName
 {
 public:
     AutoResolveName(XPCCallContext& ccx, JS::HandleId name
@@ -3418,6 +3418,7 @@ struct GlobalProperties {
     bool crypto : 1;
     bool rtcIdentityProvider : 1;
     bool fetch : 1;
+    bool caches : 1;
 };
 
 // Infallible.

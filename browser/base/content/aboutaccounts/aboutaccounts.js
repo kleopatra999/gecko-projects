@@ -127,12 +127,15 @@ let wrapper = {
       url += (url.includes("?") ? "&" : "?") + urlParamStr;
     }
     this.url = url;
-    iframe.src = url;
+    // Set the iframe's location with loadURI/LOAD_FLAGS_BYPASS_HISTORY to
+    // avoid having a new history entry being added.
+    let webNav = iframe.frameLoader.docShell.QueryInterface(Ci.nsIWebNavigation);
+    webNav.loadURI(url, Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_HISTORY, null, null, null);
   },
 
   retry: function () {
     let webNav = this.iframe.frameLoader.docShell.QueryInterface(Ci.nsIWebNavigation);
-    webNav.loadURI(this.url, null, null, null, null);
+    webNav.loadURI(this.url, Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_HISTORY, null, null, null);
   },
 
   iframeListener: {
@@ -258,22 +261,6 @@ let wrapper = {
   },
 
   /**
-   * onSessionStatus sends the currently signed in user's credentials
-   * to the jelly.
-   */
-  onSessionStatus: function () {
-    log("Received: 'session_status'.");
-
-    fxAccounts.getSignedInUser().then(
-      (accountData) => {
-        updateDisplayedEmail(accountData);
-        this.injectData("message", { status: "session_status", data: accountData });
-      },
-      (err) => this.injectData("message", { status: "error", error: err })
-    );
-  },
-
-  /**
    * onSignOut handler erases the current user's session from the fxaccounts service
    */
   onSignOut: function () {
@@ -295,9 +282,6 @@ let wrapper = {
         break;
       case "can_link_account":
         this.onCanLinkAccount(data);
-        break;
-      case "session_status":
-        this.onSessionStatus(data);
         break;
       case "sign_out":
         this.onSignOut(data);

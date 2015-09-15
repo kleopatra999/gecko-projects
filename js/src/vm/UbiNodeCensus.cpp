@@ -6,6 +6,12 @@
 
 #include "js/UbiNodeCensus.h"
 
+#include "jscntxt.h"
+#include "jscompartment.h"
+#include "jsobjinlines.h"
+
+using namespace js;
+
 namespace JS {
 namespace ubi {
 
@@ -206,13 +212,19 @@ ByCoarseType::count(CountBase& countBase, const Node& node)
     Count& count = static_cast<Count&>(countBase);
     count.total_++;
 
-    if (node.is<JSObject>())
+    switch (node.coarseType()) {
+      case JS::ubi::CoarseType::Object:
         return count.objects->count(node);
-    if (node.is<JSScript>() || node.is<LazyScript>() || node.is<jit::JitCode>())
+      case JS::ubi::CoarseType::Script:
         return count.scripts->count(node);
-    if (node.is<JSString>())
+      case JS::ubi::CoarseType::String:
         return count.strings->count(node);
-    return count.other->count(node);
+      case JS::ubi::CoarseType::Other:
+        return count.other->count(node);
+      default:
+        MOZ_CRASH("bad JS::ubi::CoarseType in JS::ubi::ByCoarseType::count");
+        return false;
+    }
 }
 
 bool
@@ -489,6 +501,7 @@ ByUbinodeType::count(CountBase& countBase, const Node& node)
     count.total_++;
 
     const char16_t* key = node.typeName();
+    MOZ_ASSERT(key);
     Table::AddPtr p = count.table.lookupForAdd(key);
     if (!p) {
         CountBasePtr typesCount(entryType->makeCount());

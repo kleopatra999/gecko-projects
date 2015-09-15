@@ -88,15 +88,6 @@
           <vbox id="identity-popup-permission-list"/>
         </vbox>
       </hbox>
-
-      <spacer flex="1"/>
-
-      <!-- More Information Button -->
-      <hbox id="identity-popup-button-container" align="center">
-        <button id="identity-popup-more-info-button" flex="1"
-                label="&identity.moreInfoLinkText2;"
-                oncommand="gIdentityHandler.handleMoreInfoClick(event);"/>
-      </hbox>
     </panelview>
 
     <!-- Security SubView -->
@@ -158,7 +149,12 @@
                 label="&identity.enableMixedContentBlocking.label;"
                 accesskey="&identity.enableMixedContentBlocking.accesskey;"
                 oncommand="gIdentityHandler.enableMixedContentProtection()"/>
+
+        <!-- More Security Information -->
+        <button label="&identity.moreInfoLinkText2;"
+                oncommand="gIdentityHandler.handleMoreInfoClick(event);"/>
       </vbox>
+
     </panelview>
   </panelmultiview>
 </panel>

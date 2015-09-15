@@ -82,7 +82,6 @@ using JS::AutoVectorRooter;
 typedef AutoVectorRooter<Value> AutoValueVector;
 typedef AutoVectorRooter<jsid> AutoIdVector;
 typedef AutoVectorRooter<JSObject*> AutoObjectVector;
-typedef AutoVectorRooter<JSScript*> AutoScriptVector;
 
 using JS::ValueVector;
 using JS::IdVector;
@@ -100,6 +99,7 @@ using JS::NativeImpl;
 using JS::OwningCompileOptions;
 using JS::ReadOnlyCompileOptions;
 using JS::SourceBufferHolder;
+using JS::TransitiveCompileOptions;
 
 using JS::Rooted;
 using JS::RootedFunction;

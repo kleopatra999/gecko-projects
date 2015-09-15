@@ -158,6 +158,7 @@ static void
 TransformClipRect(Layer* aLayer,
                   const Matrix4x4& aTransform)
 {
+  MOZ_ASSERT(aTransform.Is2D());
   const Maybe<ParentLayerIntRect>& clipRect = aLayer->AsLayerComposite()->GetShadowClipRect();
   if (clipRect) {
     ParentLayerIntRect transformed = TransformTo<ParentLayerPixel>(aTransform, *clipRect);
@@ -584,21 +585,45 @@ AdjustForClip(const Matrix4x4& asyncTransform, Layer* aLayer)
   return result;
 }
 
+static void
+ExpandRootClipRect(Layer* aLayer, const ScreenMargin& aFixedLayerMargins)
+{
+  // For Fennec we want to expand the root scrollable layer clip rect based on
+  // the fixed position margins. In particular, we want this while the dynamic
+  // toolbar is in the process of sliding offscreen and the area of the
+  // LayerView visible to the user is larger than the viewport size that Gecko
+  // knows about (and therefore larger than the clip rect). We could also just
+  // clear the clip rect on aLayer entirely but this seems more precise.
+  Maybe<ParentLayerIntRect> rootClipRect = aLayer->AsLayerComposite()->GetShadowClipRect();
+  if (rootClipRect && aFixedLayerMargins != ScreenMargin()) {
+#ifndef MOZ_WIDGET_ANDROID
+    // We should never enter here on anything other than Fennec, since
+    // aFixedLayerMargins should be empty everywhere else.
+    MOZ_ASSERT(false);
+#endif
+    ParentLayerRect rect(rootClipRect.value());
+    rect.Deflate(ViewAs<ParentLayerPixel>(aFixedLayerMargins,
+      PixelCastJustification::ScreenIsParentLayerForRoot));
+    aLayer->AsLayerComposite()->SetShadowClipRect(Some(RoundedOut(rect)));
+  }
+}
+
 bool
-AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer)
+AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer,
+                                                          bool* aOutFoundRoot)
 {
   bool appliedTransform = false;
   for (Layer* child = aLayer->GetFirstChild();
       child; child = child->GetNextSibling()) {
     appliedTransform |=
-      ApplyAsyncContentTransformToTree(child);
+      ApplyAsyncContentTransformToTree(child, aOutFoundRoot);
   }
 
   Matrix4x4 oldTransform = aLayer->GetTransform();
 
   Matrix4x4 combinedAsyncTransform;
   bool hasAsyncTransform = false;
-  ScreenMargin fixedLayerMargins(0, 0, 0, 0);
+  ScreenMargin fixedLayerMargins;
 
   // Each layer has multiple clips. Its local clip, which must move with async
   // transforms, and its scrollframe clips, which are the clips between each
@@ -641,28 +666,49 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer)
     }
 
     const FrameMetrics& metrics = aLayer->GetFrameMetrics(i);
-    // TODO: When we enable APZ on Fennec, we'll need to call SyncFrameMetrics here.
-    // When doing so, it might be useful to look at how it was called here before
-    // bug 1036967 removed the (dead) call.
 
 #if defined(MOZ_ANDROID_APZ)
-    if (mIsFirstPaint) {
-      CSSToLayerScale geckoZoom = metrics.LayersPixelsPerCSSPixel().ToScaleFactor();
-      LayerIntPoint scrollOffsetLayerPixels = RoundedToInt(metrics.GetScrollOffset() * geckoZoom);
-      mContentRect = metrics.GetScrollableRect();
-      SetFirstPaintViewport(scrollOffsetLayerPixels,
-                            geckoZoom,
-                            mContentRect);
+    // If we find a metrics which is the root content doc, use that. If not, use
+    // the root layer. Since this function recurses on children first we should
+    // only end up using the root layer if the entire tree was devoid of a
+    // root content metrics. This is a temporary solution; in the long term we
+    // should not need the root content metrics at all. See bug 1201529 comment
+    // 6 for details.
+    if (!(*aOutFoundRoot)) {
+      *aOutFoundRoot = metrics.IsRootContent() ||       /* RCD */
+            (aLayer->GetParent() == nullptr &&          /* rootmost metrics */
+             i + 1 >= aLayer->GetFrameMetricsCount());
+      if (*aOutFoundRoot) {
+        CSSToLayerScale geckoZoom = metrics.LayersPixelsPerCSSPixel().ToScaleFactor();
+        if (mIsFirstPaint) {
+          LayerIntPoint scrollOffsetLayerPixels = RoundedToInt(metrics.GetScrollOffset() * geckoZoom);
+          mContentRect = metrics.GetScrollableRect();
+          SetFirstPaintViewport(scrollOffsetLayerPixels,
+                                geckoZoom,
+                                mContentRect);
+        } else {
+          // Compute the painted displayport in document-relative CSS pixels.
+          CSSRect displayPort(metrics.GetCriticalDisplayPort().IsEmpty() ?
+              metrics.GetDisplayPort() :
+              metrics.GetCriticalDisplayPort());
+          displayPort += metrics.GetScrollOffset();
+          SyncFrameMetrics(scrollOffset,
+              geckoZoom * asyncTransformWithoutOverscroll.mScale,
+              metrics.GetScrollableRect(), displayPort, geckoZoom, mLayersUpdated,
+              mPaintSyncId, fixedLayerMargins);
+        }
+        mIsFirstPaint = false;
+        mLayersUpdated = false;
+        mPaintSyncId = 0;
+      }
     }
 #endif
-
-    mIsFirstPaint = false;
-    mLayersUpdated = false;
 
     // Transform the current local clip by this APZC's async transform. If we're
     // using containerful scrolling, then the clip is not part of the scrolled
     // frame and should not be transformed.
     if (asyncClip && !metrics.UsesContainerScrolling()) {
+      MOZ_ASSERT(asyncTransform.Is2D());
       asyncClip = Some(TransformTo<ParentLayerPixel>(asyncTransform, *asyncClip));
     }
 
@@ -731,6 +777,8 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer)
 
     appliedTransform = true;
   }
+
+  ExpandRootClipRect(aLayer, fixedLayerMargins);
 
   if (aLayer->GetScrollbarDirection() != Layer::NONE) {
     ApplyAsyncTransformToScrollbar(aLayer);
@@ -1090,24 +1138,7 @@ AsyncCompositionManager::TransformScrollableLayer(Layer* aLayer)
   AlignFixedAndStickyLayers(aLayer, aLayer, metrics.GetScrollId(), oldTransform,
                             aLayer->GetLocalTransform(), fixedLayerMargins);
 
-  // For Fennec we want to expand the root scrollable layer clip rect based on
-  // the fixed position margins. In particular, we want this while the dynamic
-  // toolbar is in the process of sliding offscreen and the area of the
-  // LayerView visible to the user is larger than the viewport size that Gecko
-  // knows about (and therefore larger than the clip rect). We could also just
-  // clear the clip rect on aLayer entirely but this seems more precise.
-  Maybe<ParentLayerIntRect> rootClipRect = aLayer->AsLayerComposite()->GetShadowClipRect();
-  if (rootClipRect && fixedLayerMargins != ScreenMargin()) {
-#ifndef MOZ_WIDGET_ANDROID
-    // We should never enter here on anything other than Fennec, since
-    // fixedLayerMargins should be empty everywhere else.
-    MOZ_ASSERT(false);
-#endif
-    ParentLayerRect rect(rootClipRect.value());
-    rect.Deflate(ViewAs<ParentLayerPixel>(fixedLayerMargins,
-      PixelCastJustification::ScreenIsParentLayerForRoot));
-    aLayer->AsLayerComposite()->SetShadowClipRect(Some(RoundedOut(rect)));
-  }
+  ExpandRootClipRect(aLayer, fixedLayerMargins);
 }
 
 void
@@ -1147,7 +1178,12 @@ AsyncCompositionManager::TransformShadowTree(TimeStamp aCurrentFrame,
     // its own platform-specific async rendering that is done partially
     // in Gecko and partially in Java.
     wantNextFrame |= SampleAPZAnimations(LayerMetricsWrapper(root), aCurrentFrame);
-    if (!ApplyAsyncContentTransformToTree(root)) {
+    bool foundRoot = false;
+    if (ApplyAsyncContentTransformToTree(root, &foundRoot)) {
+#if defined(MOZ_ANDROID_APZ)
+      MOZ_ASSERT(foundRoot);
+#endif
+    } else {
       nsAutoTArray<Layer*,1> scrollableLayers;
 #ifdef MOZ_WIDGET_ANDROID
       mLayerManager->GetRootScrollableLayers(scrollableLayers);
@@ -1216,18 +1252,18 @@ AsyncCompositionManager::SyncViewportInfo(const LayerIntRect& aDisplayPort,
 
 void
 AsyncCompositionManager::SyncFrameMetrics(const ParentLayerPoint& aScrollOffset,
-                                          float aZoom,
+                                          const CSSToParentLayerScale& aZoom,
                                           const CSSRect& aCssPageRect,
-                                          bool aLayersUpdated,
                                           const CSSRect& aDisplayPort,
-                                          const CSSToLayerScale& aDisplayResolution,
-                                          bool aIsFirstPaint,
+                                          const CSSToLayerScale& aPaintedResolution,
+                                          bool aLayersUpdated,
+                                          int32_t aPaintSyncId,
                                           ScreenMargin& aFixedLayerMargins)
 {
 #ifdef MOZ_WIDGET_ANDROID
   AndroidBridge::Bridge()->SyncFrameMetrics(aScrollOffset, aZoom, aCssPageRect,
-                                            aLayersUpdated, aDisplayPort,
-                                            aDisplayResolution, aIsFirstPaint,
+                                            aDisplayPort, aPaintedResolution,
+                                            aLayersUpdated, aPaintSyncId,
                                             aFixedLayerMargins);
 #endif
 }

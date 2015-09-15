@@ -72,19 +72,21 @@ EmitChangeICReturnAddress(MacroAssembler& masm, Register reg)
 inline void
 EmitBaselineTailCallVM(JitCode* target, MacroAssembler& masm, uint32_t argSize)
 {
+    ScratchRegisterScope scratch(masm);
+
     // We an assume during this that R0 and R1 have been pushed.
-    masm.movq(BaselineFrameReg, ScratchReg);
-    masm.addq(Imm32(BaselineFrame::FramePointerOffset), ScratchReg);
-    masm.subq(BaselineStackReg, ScratchReg);
+    masm.movq(BaselineFrameReg, scratch);
+    masm.addq(Imm32(BaselineFrame::FramePointerOffset), scratch);
+    masm.subq(BaselineStackReg, scratch);
 
     // Store frame size without VMFunction arguments for GC marking.
-    masm.movq(ScratchReg, rdx);
+    masm.movq(scratch, rdx);
     masm.subq(Imm32(argSize), rdx);
     masm.store32(rdx, Address(BaselineFrameReg, BaselineFrame::reverseOffsetOfFrameSize()));
 
     // Push frame descriptor and perform the tail call.
-    masm.makeFrameDescriptor(ScratchReg, JitFrame_BaselineJS);
-    masm.push(ScratchReg);
+    masm.makeFrameDescriptor(scratch, JitFrame_BaselineJS);
+    masm.push(scratch);
     masm.push(ICTailCallReg);
     masm.jmp(target);
 }
@@ -92,13 +94,20 @@ EmitBaselineTailCallVM(JitCode* target, MacroAssembler& masm, uint32_t argSize)
 inline void
 EmitIonTailCallVM(JitCode* target, MacroAssembler& masm, uint32_t stackSize)
 {
-    masm.movq(Operand(esp, stackSize), ScratchReg);
-    masm.shrq(Imm32(FRAMESIZE_SHIFT), ScratchReg);
-    masm.addq(Imm32(stackSize + JitStubFrameLayout::Size() - sizeof(intptr_t)), ScratchReg);
+    // For tail calls, find the already pushed JitFrame_IonJS signifying the
+    // end of the Ion frame. Retrieve the length of the frame and repush
+    // JitFrame_IonJS with the extra stacksize, rendering the original
+    // JitFrame_IonJS obsolete.
+
+    ScratchRegisterScope scratch(masm);
+
+    masm.loadPtr(Address(esp, stackSize), scratch);
+    masm.shrq(Imm32(FRAMESIZE_SHIFT), scratch);
+    masm.addq(Imm32(stackSize + JitStubFrameLayout::Size() - sizeof(intptr_t)), scratch);
 
     // Push frame descriptor and perform the tail call.
-    masm.makeFrameDescriptor(ScratchReg, JitFrame_IonJS);
-    masm.push(ScratchReg);
+    masm.makeFrameDescriptor(scratch, JitFrame_IonJS);
+    masm.push(scratch);
     masm.push(ICTailCallReg);
     masm.jmp(target);
 }
@@ -118,8 +127,9 @@ EmitBaselineCreateStubFrameDescriptor(MacroAssembler& masm, Register reg)
 inline void
 EmitBaselineCallVM(JitCode* target, MacroAssembler& masm)
 {
-    EmitBaselineCreateStubFrameDescriptor(masm, ScratchReg);
-    masm.push(ScratchReg);
+    ScratchRegisterScope scratch(masm);
+    EmitBaselineCreateStubFrameDescriptor(masm, scratch);
+    masm.push(scratch);
     masm.call(target);
 }
 
@@ -147,19 +157,21 @@ EmitBaselineEnterStubFrame(MacroAssembler& masm, Register)
 {
     EmitRestoreTailCallReg(masm);
 
-    // Compute frame size.
-    masm.movq(BaselineFrameReg, ScratchReg);
-    masm.addq(Imm32(BaselineFrame::FramePointerOffset), ScratchReg);
-    masm.subq(BaselineStackReg, ScratchReg);
+    ScratchRegisterScope scratch(masm);
 
-    masm.store32(ScratchReg, Address(BaselineFrameReg, BaselineFrame::reverseOffsetOfFrameSize()));
+    // Compute frame size.
+    masm.movq(BaselineFrameReg, scratch);
+    masm.addq(Imm32(BaselineFrame::FramePointerOffset), scratch);
+    masm.subq(BaselineStackReg, scratch);
+
+    masm.store32(scratch, Address(BaselineFrameReg, BaselineFrame::reverseOffsetOfFrameSize()));
 
     // Note: when making changes here,  don't forget to update STUB_FRAME_SIZE
     // if needed.
 
     // Push frame descriptor and return address.
-    masm.makeFrameDescriptor(ScratchReg, JitFrame_BaselineJS);
-    masm.push(ScratchReg);
+    masm.makeFrameDescriptor(scratch, JitFrame_BaselineJS);
+    masm.push(scratch);
     masm.push(ICTailCallReg);
 
     // Save old frame pointer, stack pointer and stub reg.
@@ -184,9 +196,10 @@ EmitBaselineLeaveStubFrame(MacroAssembler& masm, bool calledIntoIon = false)
     // If we performed a VM call, the descriptor has been popped already so
     // in that case we use the frame pointer.
     if (calledIntoIon) {
-        masm.pop(ScratchReg);
-        masm.shrq(Imm32(FRAMESIZE_SHIFT), ScratchReg);
-        masm.addq(ScratchReg, BaselineStackReg);
+        ScratchRegisterScope scratch(masm);
+        masm.pop(scratch);
+        masm.shrq(Imm32(FRAMESIZE_SHIFT), scratch);
+        masm.addq(scratch, BaselineStackReg);
     } else {
         masm.mov(BaselineFrameReg, BaselineStackReg);
     }

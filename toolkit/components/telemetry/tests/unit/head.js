@@ -8,11 +8,13 @@ Cu.import("resource://gre/modules/Services.jsm", this);
 Cu.import("resource://gre/modules/PromiseUtils.jsm", this);
 Cu.import("resource://gre/modules/Task.jsm", this);
 Cu.import("resource://testing-common/httpd.js", this);
+Cu.import("resource://gre/modules/AppConstants.jsm");
 
-const gIsWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
-const gIsMac = ("@mozilla.org/xpcom/mac-utils;1" in Cc);
-const gIsAndroid =  ("@mozilla.org/android/bridge;1" in Cc);
-const gIsGonk = ("@mozilla.org/cellbroadcast/gonkservice;1" in Cc);
+const gIsWindows = AppConstants.platform == "win";
+const gIsMac = AppConstants.platform == "macosx";
+const gIsAndroid = AppConstants.platform == "android";
+const gIsGonk = AppConstants.platform == "gonk";
+const gIsLinux = AppConstants.platform == "linux";
 
 const Telemetry = Cc["@mozilla.org/base/telemetry;1"].getService(Ci.nsITelemetry);
 
@@ -327,6 +329,8 @@ if (runningInParent) {
   Services.prefs.setBoolPref("toolkit.telemetry.archive.enabled", true);
   // Telemetry xpcshell tests cannot show the infobar.
   Services.prefs.setBoolPref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
+  // FHR uploads should be enabled.
+  Services.prefs.setBoolPref("datareporting.healthreport.uploadEnabled", true);
 
   fakePingSendTimer((callback, timeout) => {
     Services.tm.mainThread.dispatch(() => callback(), Ci.nsIThread.DISPATCH_NORMAL);

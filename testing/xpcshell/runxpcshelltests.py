@@ -66,6 +66,7 @@ from manifestparser.filters import chunk_by_slice, tags
 from mozlog import commandline
 import mozcrash
 import mozinfo
+from mozrunner.utils import get_stack_fixer_function
 
 # --------------------------------------------------------------
 
@@ -90,39 +91,6 @@ def cleanup_encoding(s):
         s = s.decode('utf-8', 'replace')
     # Replace all C0 and C1 control characters with \xNN escapes.
     return _cleanup_encoding_re.sub(_cleanup_encoding_repl, s)
-
-def find_stack_fixer(mozinfo, utility_dir, symbols_path):
-    # This is mostly taken from the equivalent in runreftest.py, itself similar
-    # to the mochitest version. It's not a huge amount of code, but deduping it
-    # might be nice. This version is indepenent of an enclosing harness class,
-    # so should easily be movable to a shared location.
-    if not mozinfo.info.get('debug'):
-        return None
-
-    def import_stack_fixer_module(module_name):
-        sys.path.insert(0, utility_dir)
-        module = importlib.import_module(module_name)
-        sys.path.pop(0)
-        return module
-
-    stack_fixer_function = None
-
-    if symbols_path and os.path.exists(symbols_path):
-        # Run each line through a function in fix_stack_using_bpsyms.py (uses breakpad symbol files).
-        # This method is preferred for Tinderbox builds, since native symbols may have been stripped.
-        stack_fixer_module = import_stack_fixer_module('fix_stack_using_bpsyms')
-        stack_fixer_function = lambda line: stack_fixer_module.fixSymbols(line, symbols_path)
-    elif mozinfo.isMac:
-        # Run each line through fix_macosx_stack.py (uses atos).
-        # This method is preferred for developer machines, so we don't have to run "make buildsymbols".
-        stack_fixer_module = import_stack_fixer_module('fix_macosx_stack')
-        stack_fixer_function = stack_fixer_module.fixSymbols
-    elif mozinfo.isLinux:
-        stack_fixer_module = import_stack_fixer_module('fix_linux_stack')
-        stack_fixer_function = stack_fixer_module.fixSymbols
-
-    return stack_fixer_function
-
 
 """ Control-C handling """
 gotSIGINT = False
@@ -837,6 +805,15 @@ class XPCShellTests(object):
                            "combination of filters: {}".format(
                                 mp.fmt_filters()))
 
+        if self.dump_tests:
+            self.dump_tests = os.path.expanduser(self.dump_tests)
+            assert os.path.exists(os.path.dirname(self.dump_tests))
+            with open(self.dump_tests, 'w') as dumpFile:
+                dumpFile.write(json.dumps({'active_tests': self.alltests}))
+
+            self.log.info("Dumping active_tests to %s file." % self.dump_tests)
+            sys.exit()
+
     def setAbsPath(self):
         """
           Set the absolute path for xpcshell, httpdjspath and xrepath.
@@ -1076,7 +1053,7 @@ class XPCShellTests(object):
                  testsRootDir=None, testingModulesDir=None, pluginsPath=None,
                  testClass=XPCShellTestThread, failureManifest=None,
                  log=None, stream=None, jsDebugger=False, jsDebuggerPort=0,
-                 test_tags=None, utility_path=None, **otherOptions):
+                 test_tags=None, dump_tests=None, utility_path=None, **otherOptions):
         """Run xpcshell tests.
 
         |xpcshell|, is the xpcshell executable to use to run the tests.
@@ -1160,6 +1137,7 @@ class XPCShellTests(object):
         self.manifest = manifest
         self.testdirs = testdirs
         self.testPath = testPath
+        self.dump_tests = dump_tests
         self.interactive = interactive
         self.verbose = verbose
         self.keepGoing = keepGoing
@@ -1209,9 +1187,7 @@ class XPCShellTests(object):
 
         self.stack_fixer_function = None
         if utility_path and os.path.exists(utility_path):
-            self.stack_fixer_function = find_stack_fixer(mozinfo,
-                                                         utility_path,
-                                                         self.symbolsPath)
+            self.stack_fixer_function = get_stack_fixer_function(utility_path, self.symbolsPath)
 
         # buildEnvironment() needs mozInfo, so we call it after mozInfo is initialized.
         self.buildEnvironment()
@@ -1473,6 +1449,9 @@ class XPCShellOptions(OptionParser):
         self.add_option("--logfiles",
                         action="store_true", dest="logfiles", default=True,
                         help="create log files (default, only used to override --no-logfiles)")
+        self.add_option("--dump-tests",
+                        type="string", dest="dump_tests", default=None,
+                        help="Specify path to a filename to dump all the tests that will be run")
         self.add_option("--manifest",
                         type="string", dest="manifest", default=None,
                         help="Manifest of test directories to use")

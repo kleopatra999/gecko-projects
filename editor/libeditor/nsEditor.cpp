@@ -148,6 +148,7 @@ nsEditor::nsEditor()
 ,  mDispatchInputEvent(true)
 ,  mIsInEditAction(false)
 ,  mHidingCaret(false)
+,  mObservingDictionaryUpdates(false)
 {
 }
 
@@ -254,7 +255,7 @@ nsEditor::Init(nsIDOMDocument *aDoc, nsIContent *aRoot,
   // recreated with same content. Therefore, we need to forget mIMETextNode,
   // but we need to keep storing mIMETextOffset and mIMETextLength becuase
   // they are necessary to restore IME selection and replacing composing string
-  // when this receives NS_COMPOSITION_CHANGE event next time.
+  // when this receives eCompositionChange event next time.
   if (mIMETextNode && !mIMETextNode->IsInComposedDoc()) {
     mIMETextNode = nullptr;
   }
@@ -307,7 +308,7 @@ nsEditor::PostCreate()
     nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
     if (obs) {
       obs->AddObserver(this,
-                       SPELLCHECK_DICTIONARY_UPDATE_NOTIFICATION,
+                       SPELLCHECK_DICTIONARY_REMOVE_NOTIFICATION,
                        false);
     }
   }
@@ -451,6 +452,8 @@ nsEditor::PreDestroy(bool aDestroyingFrames)
   if (obs) {
     obs->RemoveObserver(this,
                         SPELLCHECK_DICTIONARY_UPDATE_NOTIFICATION);
+    obs->RemoveObserver(this,
+                        SPELLCHECK_DICTIONARY_REMOVE_NOTIFICATION);
   }
 
   // Let spellchecker clean up its observers etc. It is important not to
@@ -1315,7 +1318,9 @@ NS_IMETHODIMP nsEditor::Observe(nsISupports* aSubj, const char *aTopic,
                                 const char16_t *aData)
 {
   NS_ASSERTION(!strcmp(aTopic,
-                       SPELLCHECK_DICTIONARY_UPDATE_NOTIFICATION),
+                       SPELLCHECK_DICTIONARY_UPDATE_NOTIFICATION) ||
+               !strcmp(aTopic,
+                       SPELLCHECK_DICTIONARY_REMOVE_NOTIFICATION),
                "Unexpected observer topic");
 
   // When mozInlineSpellChecker::CanEnableInlineSpellChecking changes
@@ -1822,7 +1827,7 @@ public:
 
     // Even if the change is caused by untrusted event, we need to dispatch
     // trusted input event since it's a fact.
-    InternalEditorInputEvent inputEvent(true, NS_EDITOR_INPUT, widget);
+    InternalEditorInputEvent inputEvent(true, eEditorInput, widget);
     inputEvent.time = static_cast<uint64_t>(PR_Now() / 1000);
     inputEvent.mIsComposing = mIsComposing;
     nsEventStatus status = nsEventStatus_eIgnore;
@@ -1857,6 +1862,9 @@ nsEditor::NotifyEditorObservers(NotificationForEditorObservers aNotification)
       FireInputEvent();
       break;
     case eNotifyEditorObserversOfBefore:
+      if (NS_WARN_IF(mIsInEditAction)) {
+        break;
+      }
       mIsInEditAction = true;
       for (auto& observer : observers) {
         observer->BeforeEditAction();
@@ -4695,7 +4703,7 @@ nsEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
   WidgetKeyboardEvent* nativeKeyEvent =
     aKeyEvent->GetInternalNSEvent()->AsKeyboardEvent();
   NS_ENSURE_TRUE(nativeKeyEvent, NS_ERROR_UNEXPECTED);
-  NS_ASSERTION(nativeKeyEvent->mMessage == NS_KEY_PRESS,
+  NS_ASSERTION(nativeKeyEvent->mMessage == eKeyPress,
                "HandleKeyPressEvent gets non-keypress event");
 
   // if we are readonly or disabled, then do nothing.
@@ -5152,15 +5160,15 @@ nsEditor::IsAcceptableInputEvent(nsIDOMEvent* aEvent)
   bool needsWidget = false;
   WidgetGUIEvent* widgetGUIEvent = nullptr;
   switch (widgetEvent->mMessage) {
-    case NS_USER_DEFINED_EVENT:
+    case eUnidentifiedEvent:
       // If events are not created with proper event interface, their message
-      // are initialized with NS_USER_DEFINED_EVENT.  Let's ignore such event.
+      // are initialized with eUnidentifiedEvent.  Let's ignore such event.
       return false;
-    case NS_COMPOSITION_START:
-    case NS_COMPOSITION_END:
-    case NS_COMPOSITION_UPDATE:
-    case NS_COMPOSITION_CHANGE:
-    case NS_COMPOSITION_COMMIT_AS_IS:
+    case eCompositionStart:
+    case eCompositionEnd:
+    case eCompositionUpdate:
+    case eCompositionChange:
+    case eCompositionCommitAsIs:
       // Don't allow composition events whose internal event are not
       // WidgetCompositionEvent.
       widgetGUIEvent = aEvent->GetInternalNSEvent()->AsCompositionEvent();
@@ -5197,6 +5205,29 @@ nsEditor::OnFocus(nsIDOMEventTarget* aFocusEventTarget)
   if (mInlineSpellChecker) {
     mInlineSpellChecker->UpdateCurrentDictionary();
   }
+}
+
+void
+nsEditor::StartWatchingDictionaryChanges()
+{
+  if (!mObservingDictionaryUpdates) {
+    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+    if (obs) {
+      obs->AddObserver(this, SPELLCHECK_DICTIONARY_UPDATE_NOTIFICATION, false);
+    }
+    mObservingDictionaryUpdates = true;
+  }
+}
+
+void
+nsEditor::StopWatchingDictionaryChanges()
+{
+  // Removing an observer that wasn't added doesn't cause any harm.
+  nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+  if (obs) {
+    obs->RemoveObserver(this, SPELLCHECK_DICTIONARY_UPDATE_NOTIFICATION);
+  }
+  mObservingDictionaryUpdates = false;
 }
 
 NS_IMETHODIMP

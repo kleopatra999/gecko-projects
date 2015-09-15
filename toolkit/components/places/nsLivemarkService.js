@@ -528,7 +528,7 @@ Livemark.prototype = {
                       createInstance(Ci.nsILoadGroup);
       let channel = NetUtil.newChannel({
         uri: this.feedURI.spec,
-        loadingPrincipal: Services.scriptSecurityManager.getNoAppCodebasePrincipal(this.feedURI),
+        loadingPrincipal: Services.scriptSecurityManager.createCodebasePrincipal(this.feedURI, {}),
         contentPolicyType: Ci.nsIContentPolicy.TYPE_INTERNAL_XMLHTTPREQUEST
       }).QueryInterface(Ci.nsIHttpChannel);
       channel.loadGroup = loadgroup;
@@ -652,8 +652,8 @@ Livemark.prototype = {
         let nodes = this._nodes.get(container);
         for (let node of nodes) {
           // Workaround for bug 449811.
-          localObserver = observer;
-          localNode = node;
+          let localObserver = observer;
+          let localNode = node;
           if (!aURI || node.uri == aURI.spec) {
             Services.tm.mainThread.dispatch(() => {
               localObserver.nodeHistoryDetailsChanged(localNode, 0, aVisitedStatus);

@@ -6,6 +6,7 @@
 
 #include "mozilla/dom/ChannelInfo.h"
 #include "nsCOMPtr.h"
+#include "nsContentUtils.h"
 #include "nsIChannel.h"
 #include "nsIDocument.h"
 #include "nsIHttpChannel.h"
@@ -69,7 +70,21 @@ ChannelInfo::InitFromChannel(nsIChannel* aChannel)
 }
 
 void
-ChannelInfo::InitFromIPCChannelInfo(const ipc::IPCChannelInfo& aChannelInfo)
+ChannelInfo::InitFromChromeGlobal(nsIGlobalObject* aGlobal)
+{
+  MOZ_ASSERT(!mInited, "Cannot initialize the object twice");
+  MOZ_ASSERT(aGlobal);
+
+  MOZ_RELEASE_ASSERT(
+    nsContentUtils::IsSystemPrincipal(aGlobal->PrincipalOrNull()));
+
+  mSecurityInfo.Truncate();
+  mRedirected = false;
+  mInited = true;
+}
+
+void
+ChannelInfo::InitFromIPCChannelInfo(const mozilla::ipc::IPCChannelInfo& aChannelInfo)
 {
   MOZ_ASSERT(!mInited, "Cannot initialize the object twice");
 
@@ -157,7 +172,7 @@ ChannelInfo::ResurrectInfoOnChannel(nsIChannel* aChannel)
   return NS_OK;
 }
 
-ipc::IPCChannelInfo
+mozilla::ipc::IPCChannelInfo
 ChannelInfo::AsIPCChannelInfo() const
 {
   // This may be called when mInited is false, for example if we try to store

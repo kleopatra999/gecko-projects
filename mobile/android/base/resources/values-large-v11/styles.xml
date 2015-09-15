@@ -15,10 +15,6 @@
         <item name="drawableTintList">@color/action_bar_menu_item_colors</item>
     </style>
 
-    <style name="UrlBar.ImageButton.TabCount">
-        <item name="android:background">@drawable/tabs_count</item>
-    </style>
-
     <style name="UrlBar.Button.Container">
         <item name="android:layout_marginTop">6dp</item>
         <item name="android:layout_marginBottom">6dp</item>
@@ -62,10 +58,6 @@
         <item name="android:paddingBottom">21dp</item>
         <item name="android:paddingLeft">@dimen/tablet_browser_toolbar_menu_item_padding_horizontal</item>
         <item name="android:paddingRight">@dimen/tablet_browser_toolbar_menu_item_padding_horizontal</item>
-    </style>
-
-    <style name="Widget.MenuItemSecondaryActionBar" parent="Widget.MenuItemSecondaryActionBarBase">
-        <item name="drawableTintList">@color/action_bar_secondary_menu_item_colors</item>
     </style>
 
     <style name="Widget.BookmarksListView" parent="Widget.HomeListView">

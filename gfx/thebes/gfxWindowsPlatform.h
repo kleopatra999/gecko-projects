@@ -182,9 +182,11 @@ public:
 
     nsresult GetStandardFamilyName(const nsAString& aFontName, nsAString& aFamilyName);
 
-    gfxFontGroup *CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
-                                  const gfxFontStyle *aStyle,
-                                  gfxUserFontSet *aUserFontSet);
+    gfxFontGroup*
+    CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
+                    const gfxFontStyle *aStyle,
+                    gfxTextPerfMetrics* aTextPerf,
+                    gfxUserFontSet *aUserFontSet) override;
 
     /**
      * Look up a local platform font using the full font face name (needed to support @font-face src local() )
@@ -317,12 +319,15 @@ private:
     mozilla::gfx::FeatureStatus CheckD3D11Support(bool* aCanUseHardware);
     mozilla::gfx::FeatureStatus CheckD2DSupport();
     mozilla::gfx::FeatureStatus CheckD2D1Support();
-    void AttemptD3D11DeviceCreation();
-    void AttemptWARPDeviceCreation();
-    void AttemptD3D11ImageBridgeDeviceCreation();
-    bool AttemptD3D11ContentDeviceCreation();
+    mozilla::gfx::FeatureStatus AttemptD3D11DeviceCreation();
+    mozilla::gfx::FeatureStatus AttemptWARPDeviceCreation();
+    mozilla::gfx::FeatureStatus AttemptD3D11ImageBridgeDeviceCreation();
+    mozilla::gfx::FeatureStatus AttemptD3D11ContentDeviceCreation();
     bool CanUseD3D11ImageBridge();
     bool ContentAdapterIsParentAdapter(ID3D11Device* device);
+
+    void DisableD3D11AfterCrash();
+    void ResetD3D11Devices();
 
     IDXGIAdapter1 *GetDXGIAdapter();
     bool IsDeviceReset(HRESULT hr, DeviceResetReason* aReason);

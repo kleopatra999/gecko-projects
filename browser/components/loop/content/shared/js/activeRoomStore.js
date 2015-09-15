@@ -5,6 +5,33 @@
 var loop = loop || {};
 loop.store = loop.store || {};
 
+loop.store.ROOM_STATES = {
+    // The initial state of the room
+    INIT: "room-init",
+    // The store is gathering the room data
+    GATHER: "room-gather",
+    // The store has got the room data
+    READY: "room-ready",
+    // Obtaining media from the user
+    MEDIA_WAIT: "room-media-wait",
+    // Joining the room is taking place
+    JOINING: "room-joining",
+    // The room is known to be joined on the loop-server
+    JOINED: "room-joined",
+    // The room is connected to the sdk server.
+    SESSION_CONNECTED: "room-session-connected",
+    // There are participants in the room.
+    HAS_PARTICIPANTS: "room-has-participants",
+    // There was an issue with the room
+    FAILED: "room-failed",
+    // The room is full
+    FULL: "room-full",
+    // The room conversation has ended, displays the feedback view.
+    ENDED: "room-ended",
+    // The window is closing
+    CLOSING: "room-closing"
+};
+
 loop.store.ActiveRoomStore = (function() {
   "use strict";
 
@@ -24,6 +51,7 @@ loop.store.ActiveRoomStore = (function() {
   var OPTIONAL_ROOMINFO_FIELDS = {
     urls: "roomContextUrls",
     description: "roomDescription",
+    participants: "participants",
     roomInfoFailure: "roomInfoFailure",
     roomName: "roomName",
     roomState: "roomState"
@@ -78,15 +106,15 @@ loop.store.ActiveRoomStore = (function() {
      */
     _statesToResetOnLeave: [
       "audioMuted",
-      "localSrcVideoObject",
+      "localSrcMediaElement",
       "localVideoDimensions",
       "mediaConnected",
       "receivingScreenShare",
-      "remoteSrcVideoObject",
+      "remoteSrcMediaElement",
       "remoteVideoDimensions",
       "remoteVideoEnabled",
       "screenSharingState",
-      "screenShareVideoObject",
+      "screenShareMediaElement",
       "videoMuted"
     ],
 
@@ -224,9 +252,9 @@ loop.store.ActiveRoomStore = (function() {
         "windowUnload",
         "leaveRoom",
         "feedbackComplete",
-        "localVideoEnabled",
-        "remoteVideoEnabled",
-        "remoteVideoDisabled",
+        "mediaStreamCreated",
+        "mediaStreamDestroyed",
+        "remoteVideoStatus",
         "videoDimensionsChanged",
         "startScreenShare",
         "endScreenShare",
@@ -269,11 +297,11 @@ loop.store.ActiveRoomStore = (function() {
           }
 
           this.dispatchAction(new sharedActions.SetupRoomInfo({
+            participants: roomData.participants,
             roomToken: actionData.roomToken,
             roomContextUrls: roomData.decryptedContext.urls,
             roomDescription: roomData.decryptedContext.description,
             roomName: roomData.decryptedContext.roomName,
-            roomOwner: roomData.roomOwner,
             roomUrl: roomData.roomUrl,
             socialShareProviders: this._mozLoop.getSocialShareProviders()
           }));
@@ -325,7 +353,6 @@ loop.store.ActiveRoomStore = (function() {
         }
 
         var roomInfoData = new sharedActions.UpdateRoomInfo({
-          roomOwner: result.roomOwner,
           roomUrl: result.roomUrl
         });
 
@@ -393,10 +420,10 @@ loop.store.ActiveRoomStore = (function() {
       }
 
       this.setStoreState({
+        participants: actionData.participants,
         roomContextUrls: actionData.roomContextUrls,
         roomDescription: actionData.roomDescription,
         roomName: actionData.roomName,
-        roomOwner: actionData.roomOwner,
         roomState: ROOM_STATES.READY,
         roomToken: actionData.roomToken,
         roomUrl: actionData.roomUrl,
@@ -420,13 +447,12 @@ loop.store.ActiveRoomStore = (function() {
      */
     updateRoomInfo: function(actionData) {
       var newState = {
-        roomOwner: actionData.roomOwner,
         roomUrl: actionData.roomUrl
       };
       // Iterate over the optional fields that _may_ be present on the actionData
       // object.
       Object.keys(OPTIONAL_ROOMINFO_FIELDS).forEach(function(field) {
-        if (actionData[field]) {
+        if (actionData[field] !== undefined) {
           newState[OPTIONAL_ROOMINFO_FIELDS[field]] = actionData[field];
         }
       });
@@ -455,8 +481,8 @@ loop.store.ActiveRoomStore = (function() {
       this.dispatchAction(new sharedActions.UpdateRoomInfo({
         urls: roomData.decryptedContext.urls,
         description: roomData.decryptedContext.description,
+        participants: roomData.participants,
         roomName: roomData.decryptedContext.roomName,
-        roomOwner: roomData.roomOwner,
         roomUrl: roomData.roomUrl
       }));
     },
@@ -606,31 +632,52 @@ loop.store.ActiveRoomStore = (function() {
     },
 
     /**
-     * Records the local video object for the room.
+     * Handles a media stream being created. This may be a local or a remote stream.
      *
-     * @param {sharedActions.LocalVideoEnabled} actionData
+     * @param {sharedActions.MediaStreamCreated} actionData
      */
-    localVideoEnabled: function(actionData) {
-      this.setStoreState({localSrcVideoObject: actionData.srcVideoObject});
-    },
+    mediaStreamCreated: function(actionData) {
+      if (actionData.isLocal) {
+        this.setStoreState({
+          localVideoEnabled: actionData.hasVideo,
+          localSrcMediaElement: actionData.srcMediaElement
+        });
+        return;
+      }
 
-    /**
-     * Records the remote video object for the room.
-     *
-     * @param  {sharedActions.RemoteVideoEnabled} actionData
-     */
-    remoteVideoEnabled: function(actionData) {
       this.setStoreState({
-        remoteVideoEnabled: true,
-        remoteSrcVideoObject: actionData.srcVideoObject
+        remoteVideoEnabled: actionData.hasVideo,
+        remoteSrcMediaElement: actionData.srcMediaElement
       });
     },
 
     /**
-     * Records when remote video is disabled (e.g. due to mute).
+     * Handles a media stream being destroyed. This may be a local or a remote stream.
+     *
+     * @param {sharedActions.MediaStreamDestroyed} actionData
      */
-    remoteVideoDisabled: function() {
-      this.setStoreState({remoteVideoEnabled: false});
+    mediaStreamDestroyed: function(actionData) {
+      if (actionData.isLocal) {
+        this.setStoreState({
+          localSrcMediaElement: null
+        });
+        return;
+      }
+
+      this.setStoreState({
+        remoteSrcMediaElement: null
+      });
+    },
+
+    /**
+     * Handles a remote stream having video enabled or disabled.
+     *
+     * @param {sharedActions.RemoteVideoStatus} actionData
+     */
+    remoteVideoStatus: function(actionData) {
+      this.setStoreState({
+        remoteVideoEnabled: actionData.videoEnabled
+      });
     },
 
     /**
@@ -666,13 +713,13 @@ loop.store.ActiveRoomStore = (function() {
         this.setStoreState({
           receivingScreenShare: actionData.receiving,
           remoteVideoDimensions: newDimensions,
-          screenShareVideoObject: null
+          screenShareMediaElement: null
         });
       } else {
         this.setStoreState({
           receivingScreenShare: actionData.receiving,
-          screenShareVideoObject: actionData.srcVideoObject ?
-                                  actionData.srcVideoObject : null
+          screenShareMediaElement: actionData.srcMediaElement ?
+                                  actionData.srcMediaElement : null
         });
       }
     },
@@ -770,9 +817,19 @@ loop.store.ActiveRoomStore = (function() {
      * one participantleaves.
      */
     remotePeerDisconnected: function() {
+      // Update the participants to just the owner.
+      var participants = this.getStoreState("participants");
+      if (participants) {
+        participants = participants.filter(function(participant) {
+          return participant.owner;
+        });
+      }
+
       this.setStoreState({
+        mediaConnected: false,
+        participants: participants,
         roomState: ROOM_STATES.SESSION_CONNECTED,
-        remoteSrcVideoObject: null
+        remoteSrcMediaElement: null
       });
     },
 

@@ -100,6 +100,7 @@ class CallbackFunction;
 struct FullscreenRequest : public LinkedListElement<FullscreenRequest>
 {
   explicit FullscreenRequest(Element* aElement);
+  FullscreenRequest(const FullscreenRequest&) = delete;
   ~FullscreenRequest();
 
   Element* GetElement() const { return mElement; }
@@ -1769,6 +1770,9 @@ private:
   // requestAnimationFrame, if it's OK to do so.
   void MaybeRescheduleAnimationFrameNotifications();
 
+  // Returns true if the scheme for the url for this document is "about"
+  bool IsAboutPage();
+
   // These are not implemented and not supported.
   nsDocument(const nsDocument& aOther);
   nsDocument& operator=(const nsDocument& aOther);
@@ -1846,7 +1850,6 @@ private:
 
   enum ViewportType {
     DisplayWidthHeight,
-    DisplayWidthHeightNoZoom,
     Specified,
     Unknown
   };

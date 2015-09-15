@@ -9,12 +9,14 @@
 
 #include "Compatibility.h"
 #include "DocAccessible-inl.h"
+#include "mozilla/a11y/DocAccessibleParent.h"
 #include "EnumVariant.h"
 #include "nsAccUtils.h"
 #include "nsCoreUtils.h"
 #include "nsIAccessibleEvent.h"
 #include "nsWinUtils.h"
 #include "mozilla/a11y/ProxyAccessible.h"
+#include "ProxyWrappers.h"
 #include "ServiceProvider.h"
 #include "Relation.h"
 #include "Role.h"
@@ -58,8 +60,6 @@ static gAccessibles = 0;
 
 #ifdef _WIN64
 IDSet AccessibleWrap::sIDGen;
-
-static const uint32_t kNoID = 0;
 #endif
 
 static const int32_t kIEnumVariantDisconnected = -1;
@@ -1274,6 +1274,22 @@ AccessibleWrap::HandleAccEvent(AccEvent* aEvent)
   return NS_OK;
 }
 
+DocProxyAccessibleWrap*
+AccessibleWrap::DocProxyWrapper() const
+{
+  MOZ_ASSERT(IsProxy());
+
+  ProxyAccessible* proxy = Proxy();
+  if (!proxy) {
+    return nullptr;
+  }
+
+  AccessibleWrap* acc = WrapperFor(proxy->Document());
+  MOZ_ASSERT(acc->IsDoc());
+
+ return static_cast<DocProxyAccessibleWrap*>(acc);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // AccessibleWrap
 
@@ -1287,7 +1303,7 @@ AccessibleWrap::GetChildIDFor(Accessible* aAccessible)
   // the event occurred on.
 
 #ifdef _WIN64
-  if (!aAccessible || !aAccessible->Document())
+  if (!aAccessible || (!aAccessible->Document() && !aAccessible->IsProxy()))
     return 0;
 
   uint32_t* id = & static_cast<AccessibleWrap*>(aAccessible)->mID;
@@ -1295,48 +1311,81 @@ AccessibleWrap::GetChildIDFor(Accessible* aAccessible)
     return *id;
 
   *id = sIDGen.GetID();
-  DocAccessibleWrap* doc =
-    static_cast<DocAccessibleWrap*>(aAccessible->Document());
-  doc->AddID(*id, static_cast<AccessibleWrap*>(aAccessible));
+
+  if (aAccessible->IsProxy()) {
+    DocProxyAccessibleWrap* doc =
+      static_cast<AccessibleWrap*>(aAccessible)->DocProxyWrapper();
+    doc->AddID(*id, static_cast<AccessibleWrap*>(aAccessible));
+  } else {
+    DocAccessibleWrap* doc =
+      static_cast<DocAccessibleWrap*>(aAccessible->Document());
+    doc->AddID(*id, static_cast<AccessibleWrap*>(aAccessible));
+  }
 
   return *id;
 #else
-  return - reinterpret_cast<intptr_t>(aAccessible);
+  int32_t id = - reinterpret_cast<intptr_t>(aAccessible);
+  if (aAccessible->IsProxy()) {
+    DocProxyAccessibleWrap* doc =
+      static_cast<AccessibleWrap*>(aAccessible)->DocProxyWrapper();
+    doc->AddID(id, static_cast<AccessibleWrap*>(aAccessible));
+  }
+
+  return id;
 #endif
 }
 
 HWND
 AccessibleWrap::GetHWNDFor(Accessible* aAccessible)
 {
-  if (aAccessible) {
-    DocAccessible* document = aAccessible->Document();
-    if(!document)
-      return nullptr;
+  if (!aAccessible) {
+    return nullptr;
+  }
 
-    // Popup lives in own windows, use its HWND until the popup window is
-    // hidden to make old JAWS versions work with collapsed comboboxes (see
-    // discussion in bug 379678).
-    nsIFrame* frame = aAccessible->GetFrame();
-    if (frame) {
-      nsIWidget* widget = frame->GetNearestWidget();
-      if (widget && widget->IsVisible()) {
-        nsIPresShell* shell = document->PresShell();
-        nsViewManager* vm = shell->GetViewManager();
-        if (vm) {
-          nsCOMPtr<nsIWidget> rootWidget;
-          vm->GetRootWidget(getter_AddRefs(rootWidget));
-          // Make sure the accessible belongs to popup. If not then use
-          // document HWND (which might be different from root widget in the
-          // case of window emulation).
-          if (rootWidget != widget)
-            return static_cast<HWND>(widget->GetNativeData(NS_NATIVE_WINDOW));
-        }
-      }
+  // Accessibles in child processes are said to have the HWND of the window
+  // their tab is within.  Popups are always in the parent process, and so
+  // never proxied, which means this is basically correct.
+  if (aAccessible->IsProxy()) {
+    ProxyAccessible* proxy = aAccessible->Proxy();
+    if (!proxy) {
+      return nullptr;
     }
 
-    return static_cast<HWND>(document->GetNativeWindow());
+    Accessible* outerDoc = proxy->OuterDocOfRemoteBrowser();
+    NS_ASSERTION(outerDoc, "no outer doc for accessible remote tab!");
+    if (!outerDoc) {
+      return nullptr;
+    }
+
+    return GetHWNDFor(outerDoc);
   }
-  return nullptr;
+
+  DocAccessible* document = aAccessible->Document();
+  if(!document)
+    return nullptr;
+
+  // Popup lives in own windows, use its HWND until the popup window is
+  // hidden to make old JAWS versions work with collapsed comboboxes (see
+  // discussion in bug 379678).
+  nsIFrame* frame = aAccessible->GetFrame();
+  if (frame) {
+    nsIWidget* widget = frame->GetNearestWidget();
+    if (widget && widget->IsVisible()) {
+      nsIPresShell* shell = document->PresShell();
+      nsViewManager* vm = shell->GetViewManager();
+      if (vm) {
+        nsCOMPtr<nsIWidget> rootWidget;
+        vm->GetRootWidget(getter_AddRefs(rootWidget));
+        // Make sure the accessible belongs to popup. If not then use
+        // document HWND (which might be different from root widget in the
+        // case of window emulation).
+        if (rootWidget != widget)
+          return static_cast<HWND>(widget->GetNativeData(NS_NATIVE_WINDOW));
+      }
+    }
+  }
+
+  return static_cast<HWND>(document->GetNativeWindow());
 }
 
 IDispatch*

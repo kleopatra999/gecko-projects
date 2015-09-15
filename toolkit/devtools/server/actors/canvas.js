@@ -5,7 +5,7 @@
 
 const {Cc, Ci, Cu, Cr} = require("chrome");
 const events = require("sdk/event/core");
-const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
+const promise = require("promise");
 const protocol = require("devtools/server/protocol");
 const {CallWatcherActor, CallWatcherFront} = require("devtools/server/actors/call-watcher");
 const DevToolsUtils = require("devtools/toolkit/DevToolsUtils.js");
@@ -316,6 +316,7 @@ let CanvasActor = exports.CanvasActor = protocol.ActorClass({
 
     this._recordingContainsDrawCall = false;
     this._callWatcher.eraseRecording();
+    this._callWatcher.initFrameStartTimestamp();
     this._callWatcher.resumeRecording();
 
     let deferred = this._currentAnimationFrameSnapshot = promise.defer();

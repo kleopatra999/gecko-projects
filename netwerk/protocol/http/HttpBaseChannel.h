@@ -138,7 +138,9 @@ public:
   NS_IMETHOD GetRequestHeader(const nsACString& aHeader, nsACString& aValue) override;
   NS_IMETHOD SetRequestHeader(const nsACString& aHeader,
                               const nsACString& aValue, bool aMerge) override;
+  NS_IMETHOD SetEmptyRequestHeader(const nsACString& aHeader) override;
   NS_IMETHOD VisitRequestHeaders(nsIHttpHeaderVisitor *visitor) override;
+  NS_IMETHOD VisitNonDefaultRequestHeaders(nsIHttpHeaderVisitor *visitor) override;
   NS_IMETHOD GetResponseHeader(const nsACString &header, nsACString &value) override;
   NS_IMETHOD SetResponseHeader(const nsACString& header,
                                const nsACString& value, bool merge) override;
@@ -195,8 +197,13 @@ public:
   NS_IMETHOD SetCorsIncludeCredentials(bool aInclude) override;
   NS_IMETHOD GetCorsMode(uint32_t* aCorsMode) override;
   NS_IMETHOD SetCorsMode(uint32_t aCorsMode) override;
+  NS_IMETHOD GetRedirectMode(uint32_t* aRedirectMode) override;
+  NS_IMETHOD SetRedirectMode(uint32_t aRedirectMode) override;
   NS_IMETHOD GetTopWindowURI(nsIURI **aTopWindowURI) override;
   NS_IMETHOD GetProxyURI(nsIURI **proxyURI) override;
+  NS_IMETHOD SetCorsPreflightParameters(const nsTArray<nsCString>& unsafeHeaders,
+                                        bool aWithCredentials,
+                                        nsIPrincipal* aPrincipal) override;
 
   inline void CleanRedirectCacheChainIfNecessary()
   {
@@ -429,6 +436,7 @@ protected:
 
   bool mCorsIncludeCredentials;
   uint32_t mCorsMode;
+  uint32_t mRedirectMode;
 
   // This parameter is used to ensure that we do not call OnStartRequest more
   // than once.
@@ -439,6 +447,11 @@ protected:
 
   nsID mSchedulingContextID;
   bool EnsureSchedulingContextID();
+
+  bool                              mRequireCORSPreflight;
+  bool                              mWithCredentials;
+  nsTArray<nsCString>               mUnsafeHeaders;
+  nsCOMPtr<nsIPrincipal>            mPreflightPrincipal;
 };
 
 // Share some code while working around C++'s absurd inability to handle casting

@@ -67,49 +67,19 @@ static_assert(1 << defaultShift == sizeof(JS::Value), "The defaultShift is wrong
 
 class MacroAssemblerMIPS : public Assembler
 {
-  public:
-    // higher level tag testing code
-    Operand ToPayload(Operand base);
-    Address ToPayload(Address base) {
-        return ToPayload(Operand(base)).toAddress();
-    }
   protected:
-    Operand ToType(Operand base);
-    Address ToType(Address base) {
-        return ToType(Operand(base)).toAddress();
-    }
+    // Perform a downcast. Should be removed by Bug 996602.
+    MacroAssembler& asMasm();
+    const MacroAssembler& asMasm() const;
+
+    void branchWithCode(InstImm code, Label* label, JumpKind jumpKind);
+    Condition ma_cmp(Register rd, Register lhs, Register rhs, Condition c);
+
+    void compareFloatingPoint(FloatFormat fmt, FloatRegister lhs, FloatRegister rhs,
+                              DoubleCondition c, FloatTestKind* testKind,
+                              FPConditionBit fcc = FCC0);
 
   public:
-
-    void convertBoolToInt32(Register source, Register dest);
-    void convertInt32ToDouble(Register src, FloatRegister dest);
-    void convertInt32ToDouble(const Address& src, FloatRegister dest);
-    void convertInt32ToDouble(const BaseIndex& src, FloatRegister dest);
-    void convertUInt32ToDouble(Register src, FloatRegister dest);
-    void convertUInt32ToFloat32(Register src, FloatRegister dest);
-    void convertDoubleToFloat32(FloatRegister src, FloatRegister dest);
-    void branchTruncateDouble(FloatRegister src, Register dest, Label* fail);
-    void convertDoubleToInt32(FloatRegister src, Register dest, Label* fail,
-                              bool negativeZeroCheck = true);
-    void convertFloat32ToInt32(FloatRegister src, Register dest, Label* fail,
-                               bool negativeZeroCheck = true);
-
-    void convertFloat32ToDouble(FloatRegister src, FloatRegister dest);
-    void branchTruncateFloat32(FloatRegister src, Register dest, Label* fail);
-    void convertInt32ToFloat32(Register src, FloatRegister dest);
-    void convertInt32ToFloat32(const Address& src, FloatRegister dest);
-
-
-    void addDouble(FloatRegister src, FloatRegister dest);
-    void subDouble(FloatRegister src, FloatRegister dest);
-    void mulDouble(FloatRegister src, FloatRegister dest);
-    void divDouble(FloatRegister src, FloatRegister dest);
-
-    void negateDouble(FloatRegister reg);
-    void inc64(AbsoluteAddress dest);
-
-  public:
-
     void ma_move(Register rd, Register rs);
 
     void ma_li(Register dest, ImmGCPtr ptr);
@@ -118,7 +88,9 @@ class MacroAssemblerMIPS : public Assembler
 
     void ma_li(Register dest, Imm32 imm);
     void ma_liPatchable(Register dest, Imm32 imm);
+    void ma_li(Register dest, ImmWord imm);
     void ma_liPatchable(Register dest, ImmPtr imm);
+    void ma_liPatchable(Register dest, ImmWord imm);
 
     // Shift operations
     void ma_sll(Register rd, Register rt, Imm32 shift);
@@ -140,19 +112,16 @@ class MacroAssemblerMIPS : public Assembler
 
     // and
     void ma_and(Register rd, Register rs);
-    void ma_and(Register rd, Register rs, Register rt);
     void ma_and(Register rd, Imm32 imm);
     void ma_and(Register rd, Register rs, Imm32 imm);
 
     // or
     void ma_or(Register rd, Register rs);
-    void ma_or(Register rd, Register rs, Register rt);
     void ma_or(Register rd, Imm32 imm);
     void ma_or(Register rd, Register rs, Imm32 imm);
 
     // xor
     void ma_xor(Register rd, Register rs);
-    void ma_xor(Register rd, Register rs, Register rt);
     void ma_xor(Register rd, Imm32 imm);
     void ma_xor(Register rd, Register rs, Imm32 imm);
 
@@ -170,30 +139,15 @@ class MacroAssemblerMIPS : public Assembler
     void ma_store(Imm32 imm, const BaseIndex& dest, LoadStoreSize size = SizeWord,
                   LoadStoreExtension extension = SignExtend);
 
-    void computeScaledAddress(const BaseIndex& address, Register dest);
-
-    void computeEffectiveAddress(const Address& address, Register dest) {
-        ma_addu(dest, address.base, Imm32(address.offset));
-    }
-
-    void computeEffectiveAddress(const BaseIndex& address, Register dest) {
-        computeScaledAddress(address, dest);
-        if (address.offset) {
-            ma_addu(dest, dest, Imm32(address.offset));
-        }
-    }
-
     // arithmetic based ops
     // add
     void ma_addu(Register rd, Register rs, Imm32 imm);
-    void ma_addu(Register rd, Register rs, Register rt);
     void ma_addu(Register rd, Register rs);
     void ma_addu(Register rd, Imm32 imm);
     void ma_addTestOverflow(Register rd, Register rs, Register rt, Label* overflow);
     void ma_addTestOverflow(Register rd, Register rs, Imm32 imm, Label* overflow);
 
     // subtract
-    void ma_subu(Register rd, Register rs, Register rt);
     void ma_subu(Register rd, Register rs, Imm32 imm);
     void ma_subu(Register rd, Imm32 imm);
     void ma_subTestOverflow(Register rd, Register rs, Register rt, Label* overflow);
@@ -228,7 +182,7 @@ class MacroAssemblerMIPS : public Assembler
     void ma_b(Register lhs, Register rhs, Label* l, Condition c, JumpKind jumpKind = LongJump);
     void ma_b(Register lhs, Imm32 imm, Label* l, Condition c, JumpKind jumpKind = LongJump);
     void ma_b(Register lhs, ImmPtr imm, Label* l, Condition c, JumpKind jumpKind = LongJump) {
-        ma_b(lhs, Imm32(uint32_t(imm.value)), l, c, jumpKind);
+        ma_b(lhs, ImmWord(uintptr_t(imm.value)), l, c, jumpKind);
     }
     void ma_b(Register lhs, ImmGCPtr imm, Label* l, Condition c, JumpKind jumpKind = LongJump) {
         MOZ_ASSERT(lhs != ScratchRegister);
@@ -249,7 +203,7 @@ class MacroAssemblerMIPS : public Assembler
     void ma_b(Address addr, ImmGCPtr imm, Label* l, Condition c, JumpKind jumpKind = LongJump);
     void ma_b(Address addr, Register rhs, Label* l, Condition c, JumpKind jumpKind = LongJump) {
         MOZ_ASSERT(rhs != ScratchRegister);
-        ma_lw(ScratchRegister, addr);
+        ma_load(ScratchRegister, addr, SizeWord);
         ma_b(ScratchRegister, rhs, l, c, jumpKind);
     }
 
@@ -280,6 +234,24 @@ class MacroAssemblerMIPS : public Assembler
     void ma_bc1d(FloatRegister lhs, FloatRegister rhs, Label* label, DoubleCondition c,
                  JumpKind jumpKind = LongJump, FPConditionBit fcc = FCC0);
 
+    void ma_call(ImmPtr dest);
+
+    void ma_jump(ImmPtr dest);
+
+    void ma_cmp_set(Register dst, Register lhs, Register rhs, Condition c);
+    void ma_cmp_set(Register dst, Register lhs, Imm32 imm, Condition c);
+    void ma_cmp_set(Register dst, Register lhs, ImmPtr imm, Condition c) {
+        ma_cmp_set(dst, lhs, Imm32(uint32_t(imm.value)), c);
+    }
+    void ma_cmp_set(Register rd, Register rs, Address addr, Condition c);
+    void ma_cmp_set(Register dst, Address lhs, Register rhs, Condition c);
+    void ma_cmp_set(Register dst, Address lhs, ImmPtr imm, Condition c) {
+        ma_lw(ScratchRegister, lhs);
+        ma_li(SecondScratchReg, Imm32(uint32_t(imm.value)));
+        ma_cmp_set(dst, ScratchRegister, SecondScratchReg, c);
+    }
+    void ma_cmp_set_double(Register dst, FloatRegister lhs, FloatRegister rhs, DoubleCondition c);
+    void ma_cmp_set_float32(Register dst, FloatRegister lhs, FloatRegister rhs, DoubleCondition c);
 
     // These fuctions abstract the access to high part of the double precision
     // float register. It is intended to work on both 32 bit and 64 bit
@@ -305,65 +277,66 @@ class MacroAssemblerMIPS : public Assembler
     void moveFromFloat32(FloatRegister src, Register dest) {
         as_mfc1(dest, src);
     }
-
-  protected:
-    void branchWithCode(InstImm code, Label* label, JumpKind jumpKind);
-    Condition ma_cmp(Register rd, Register lhs, Register rhs, Condition c);
-
-    void compareFloatingPoint(FloatFormat fmt, FloatRegister lhs, FloatRegister rhs,
-                              DoubleCondition c, FloatTestKind* testKind,
-                              FPConditionBit fcc = FCC0);
-
-  public:
-    // calls an ion function, assuming that the stack is currently not 8 byte aligned
-    void ma_callJitHalfPush(const Register reg);
-    void ma_callJitHalfPush(Label* label);
-
-    void ma_call(ImmPtr dest);
-
-    void ma_jump(ImmPtr dest);
-
-    void ma_cmp_set(Register dst, Register lhs, Register rhs, Condition c);
-    void ma_cmp_set(Register dst, Register lhs, Imm32 imm, Condition c);
-    void ma_cmp_set(Register dst, Register lhs, ImmPtr imm, Condition c) {
-        ma_cmp_set(dst, lhs, Imm32(uint32_t(imm.value)), c);
-    }
-    void ma_cmp_set(Register rd, Register rs, Address addr, Condition c);
-    void ma_cmp_set(Register dst, Address lhs, Register rhs, Condition c);
-    void ma_cmp_set(Register dst, Address lhs, ImmPtr imm, Condition c) {
-        ma_lw(ScratchRegister, lhs);
-        ma_li(SecondScratchReg, Imm32(uint32_t(imm.value)));
-        ma_cmp_set(dst, ScratchRegister, SecondScratchReg, c);
-    }
-    void ma_cmp_set_double(Register dst, FloatRegister lhs, FloatRegister rhs, DoubleCondition c);
-    void ma_cmp_set_float32(Register dst, FloatRegister lhs, FloatRegister rhs, DoubleCondition c);
 };
 
 class MacroAssembler;
 
 class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
 {
-  private:
-    // Perform a downcast. Should be removed by Bug 996602.
-    MacroAssembler& asMasm();
-    const MacroAssembler& asMasm() const;
-
   public:
+    using MacroAssemblerMIPS::call;
+
     MacroAssemblerMIPSCompat()
     { }
 
-  public:
-    using MacroAssemblerMIPS::call;
+    void convertBoolToInt32(Register source, Register dest);
+    void convertInt32ToDouble(Register src, FloatRegister dest);
+    void convertInt32ToDouble(const Address& src, FloatRegister dest);
+    void convertInt32ToDouble(const BaseIndex& src, FloatRegister dest);
+    void convertUInt32ToDouble(Register src, FloatRegister dest);
+    void convertUInt32ToFloat32(Register src, FloatRegister dest);
+    void convertDoubleToFloat32(FloatRegister src, FloatRegister dest);
+    void branchTruncateDouble(FloatRegister src, Register dest, Label* fail);
+    void convertDoubleToInt32(FloatRegister src, Register dest, Label* fail,
+                              bool negativeZeroCheck = true);
+    void convertFloat32ToInt32(FloatRegister src, Register dest, Label* fail,
+                               bool negativeZeroCheck = true);
+
+    void convertFloat32ToDouble(FloatRegister src, FloatRegister dest);
+    void branchTruncateFloat32(FloatRegister src, Register dest, Label* fail);
+    void convertInt32ToFloat32(Register src, FloatRegister dest);
+    void convertInt32ToFloat32(const Address& src, FloatRegister dest);
+
+    void addDouble(FloatRegister src, FloatRegister dest);
+    void subDouble(FloatRegister src, FloatRegister dest);
+    void mulDouble(FloatRegister src, FloatRegister dest);
+    void divDouble(FloatRegister src, FloatRegister dest);
+
+    void negateDouble(FloatRegister reg);
+    void inc64(AbsoluteAddress dest);
+
+    void computeScaledAddress(const BaseIndex& address, Register dest);
+
+    void computeEffectiveAddress(const Address& address, Register dest) {
+        ma_addu(dest, address.base, Imm32(address.offset));
+    }
+
+    void computeEffectiveAddress(const BaseIndex& address, Register dest) {
+        computeScaledAddress(address, dest);
+        if (address.offset) {
+            addPtr(Imm32(address.offset), dest);
+        }
+    }
 
     void j(Label* dest) {
         ma_b(dest);
     }
 
     void mov(Register src, Register dest) {
-        as_or(dest, src, zero);
+        as_ori(dest, src, 0);
     }
     void mov(ImmWord imm, Register dest) {
-        ma_li(dest, Imm32(imm.value));
+        ma_li(dest, imm);
     }
     void mov(ImmPtr imm, Register dest) {
         mov(ImmWord(uintptr_t(imm.value)), dest);
@@ -375,14 +348,10 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         MOZ_CRASH("NYI-IC");
     }
 
-    void callAndPushReturnAddress(Label* label) {
-        ma_callJitHalfPush(label);
-    }
-
     void branch(JitCode* c) {
         BufferOffset bo = m_buffer.nextOffset();
         addPendingJump(bo, ImmPtr(c->raw()), Relocation::JITCODE);
-        ma_liPatchable(ScratchRegister, Imm32((uint32_t)c->raw()));
+        ma_liPatchable(ScratchRegister, ImmPtr(c->raw()));
         as_jr(ScratchRegister);
         as_nop();
     }
@@ -400,8 +369,8 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
     }
     void retn(Imm32 n) {
         // pc <- [sp]; sp += n
-        ma_lw(ra, Address(StackPointer, 0));
-        ma_addu(StackPointer, StackPointer, n);
+        loadPtr(Address(StackPointer, 0), ra);
+        addPtr(n, StackPointer);
         as_jr(ra);
         as_nop();
     }
@@ -410,7 +379,7 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         ma_push(ScratchRegister);
     }
     void push(ImmWord imm) {
-        ma_li(ScratchRegister, Imm32(imm.value));
+        ma_li(ScratchRegister, imm);
         ma_push(ScratchRegister);
     }
     void push(ImmGCPtr imm) {
@@ -418,7 +387,7 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         ma_push(ScratchRegister);
     }
     void push(const Address& address) {
-        ma_lw(ScratchRegister, address);
+        loadPtr(address, ScratchRegister);
         ma_push(ScratchRegister);
     }
     void push(Register reg) {
@@ -456,7 +425,7 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
 
     CodeOffsetLabel movWithPatch(ImmWord imm, Register dest) {
         CodeOffsetLabel label = CodeOffsetLabel(currentOffset());
-        ma_liPatchable(dest, Imm32(imm.value));
+        ma_liPatchable(dest, imm);
         return label;
     }
     CodeOffsetLabel movWithPatch(ImmPtr imm, Register dest) {
@@ -471,7 +440,7 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         as_nop();
     }
     void jump(const Address& address) {
-        ma_lw(ScratchRegister, address);
+        loadPtr(address, ScratchRegister);
         as_jr(ScratchRegister);
         as_nop();
     }
@@ -588,11 +557,11 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         }
     }
     void branch32(Condition cond, const Address& lhs, Register rhs, Label* label) {
-        ma_lw(ScratchRegister, lhs);
-        ma_b(ScratchRegister, rhs, label, cond);
+        load32(lhs, SecondScratchReg);
+        ma_b(SecondScratchReg, rhs, label, cond);
     }
     void branch32(Condition cond, const Address& lhs, Imm32 rhs, Label* label) {
-        ma_lw(SecondScratchReg, lhs);
+        load32(lhs, SecondScratchReg);
         ma_b(SecondScratchReg, rhs, label, cond);
     }
     void branch32(Condition cond, const BaseIndex& lhs, Imm32 rhs, Label* label) {
@@ -600,7 +569,8 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         ma_b(SecondScratchReg, rhs, label, cond);
     }
     void branchPtr(Condition cond, const Address& lhs, Register rhs, Label* label) {
-        branch32(cond, lhs, rhs, label);
+        loadPtr(lhs, SecondScratchReg);
+        ma_b(SecondScratchReg, rhs, label, cond);
     }
 
     void branchPrivatePtr(Condition cond, const Address& lhs, ImmPtr ptr, Label* label) {
@@ -682,51 +652,69 @@ class MacroAssemblerMIPSCompat : public MacroAssemblerMIPS
         branchTest32(cond, lhs, ScratchRegister, label);
     }
     void branchTest32(Condition cond, const Address& address, Imm32 imm, Label* label) {
-        ma_lw(SecondScratchReg, address);
+        load32(address, SecondScratchReg);
         branchTest32(cond, SecondScratchReg, imm, label);
     }
     void branchTest32(Condition cond, AbsoluteAddress address, Imm32 imm, Label* label) {
-        loadPtr(address, ScratchRegister);
+        load32(address, ScratchRegister);
         branchTest32(cond, ScratchRegister, imm, label);
     }
     void branchTestPtr(Condition cond, Register lhs, Register rhs, Label* label) {
-        branchTest32(cond, lhs, rhs, label);
+        MOZ_ASSERT(cond == Zero || cond == NonZero || cond == Signed || cond == NotSigned);
+        if (lhs == rhs) {
+            ma_b(lhs, rhs, label, cond);
+        } else {
+            as_and(ScratchRegister, lhs, rhs);
+            ma_b(ScratchRegister, ScratchRegister, label, cond);
+        }
     }
     void branchTestPtr(Condition cond, Register lhs, const Imm32 rhs, Label* label) {
-        branchTest32(cond, lhs, rhs, label);
+        ma_li(ScratchRegister, rhs);
+        branchTestPtr(cond, lhs, ScratchRegister, label);
     }
     void branchTestPtr(Condition cond, const Address& lhs, Imm32 imm, Label* label) {
-        branchTest32(cond, lhs, imm, label);
+        loadPtr(lhs, SecondScratchReg);
+        branchTestPtr(cond, SecondScratchReg, imm, label);
     }
     void branchPtr(Condition cond, Register lhs, Register rhs, Label* label) {
         ma_b(lhs, rhs, label, cond);
     }
     void branchPtr(Condition cond, Register lhs, ImmGCPtr ptr, Label* label) {
-        ma_li(ScratchRegister, ptr);
-        ma_b(lhs, ScratchRegister, label, cond);
+        ma_b(lhs, ptr, label, cond);
     }
     void branchPtr(Condition cond, Register lhs, ImmWord imm, Label* label) {
-        ma_b(lhs, Imm32(imm.value), label, cond);
+        ma_b(lhs, imm, label, cond);
     }
     void branchPtr(Condition cond, Register lhs, ImmPtr imm, Label* label) {
-        branchPtr(cond, lhs, ImmWord(uintptr_t(imm.value)), label);
+        ma_b(lhs, imm, label, cond);
     }
     void branchPtr(Condition cond, Register lhs, AsmJSImmPtr imm, Label* label) {
-        movePtr(imm, ScratchRegister);
-        branchPtr(cond, lhs, ScratchRegister, label);
+        movePtr(imm, SecondScratchReg);
+        ma_b(lhs, SecondScratchReg, label, cond);
     }
     void branchPtr(Condition cond, Register lhs, Imm32 imm, Label* label) {
         ma_b(lhs, imm, label, cond);
     }
     void decBranchPtr(Condition cond, Register lhs, Imm32 imm, Label* label) {
         subPtr(imm, lhs);
-        branch32(cond, lhs, Imm32(0), label);
+        branchPtr(cond, lhs, Imm32(0), label);
     }
 
-protected:
+    // higher level tag testing code
+    Operand ToPayload(Operand base);
+    Address ToPayload(Address base) {
+        return ToPayload(Operand(base)).toAddress();
+    }
+
+  protected:
+    Operand ToType(Operand base);
+    Address ToType(Address base) {
+        return ToType(Operand(base)).toAddress();
+    }
+
     uint32_t getType(const Value& val);
     void moveData(const Value& val, Register data);
-public:
+  public:
     void moveValue(const Value& val, Register type, Register data);
 
     CodeOffsetJump backedgeJump(RepatchLabel* label, Label* documentation = nullptr);
@@ -753,43 +741,41 @@ public:
         return off;
     }
     void branchPtr(Condition cond, Address addr, ImmGCPtr ptr, Label* label) {
-        ma_lw(SecondScratchReg, addr);
-        ma_li(ScratchRegister, ptr);
-        ma_b(SecondScratchReg, ScratchRegister, label, cond);
+        loadPtr(addr, SecondScratchReg);
+        ma_b(SecondScratchReg, ptr, label, cond);
     }
 
     void branchPtr(Condition cond, Address addr, ImmWord ptr, Label* label) {
-        ma_lw(SecondScratchReg, addr);
-        ma_b(SecondScratchReg, Imm32(ptr.value), label, cond);
+        loadPtr(addr, SecondScratchReg);
+        ma_b(SecondScratchReg, ptr, label, cond);
     }
     void branchPtr(Condition cond, Address addr, ImmPtr ptr, Label* label) {
-        branchPtr(cond, addr, ImmWord(uintptr_t(ptr.value)), label);
+        loadPtr(addr, SecondScratchReg);
+        ma_b(SecondScratchReg, ptr, label, cond);
     }
     void branchPtr(Condition cond, AbsoluteAddress addr, Register ptr, Label* label) {
-        loadPtr(addr, ScratchRegister);
-        ma_b(ScratchRegister, ptr, label, cond);
+        loadPtr(addr, SecondScratchReg);
+        ma_b(SecondScratchReg, ptr, label, cond);
     }
     void branchPtr(Condition cond, AbsoluteAddress addr, ImmWord ptr, Label* label) {
-        loadPtr(addr, ScratchRegister);
-        ma_b(ScratchRegister, Imm32(ptr.value), label, cond);
+        loadPtr(addr, SecondScratchReg);
+        ma_b(SecondScratchReg, ptr, label, cond);
     }
-    void branchPtr(Condition cond, AsmJSAbsoluteAddress addr, Register ptr,
-                   Label* label) {
-        loadPtr(addr, ScratchRegister);
-        ma_b(ScratchRegister, ptr, label, cond);
+    void branchPtr(Condition cond, AsmJSAbsoluteAddress addr, Register ptr, Label* label) {
+        loadPtr(addr, SecondScratchReg);
+        ma_b(SecondScratchReg, ptr, label, cond);
     }
     void branch32(Condition cond, AbsoluteAddress lhs, Imm32 rhs, Label* label) {
-        loadPtr(lhs, SecondScratchReg); // ma_b might use scratch
+        load32(lhs, SecondScratchReg);
         ma_b(SecondScratchReg, rhs, label, cond);
     }
     void branch32(Condition cond, AbsoluteAddress lhs, Register rhs, Label* label) {
-        loadPtr(lhs, ScratchRegister);
-        ma_b(ScratchRegister, rhs, label, cond);
+        load32(lhs, SecondScratchReg);
+        ma_b(SecondScratchReg, rhs, label, cond);
     }
-    void branch32(Condition cond, AsmJSAbsoluteAddress addr, Imm32 imm,
-                  Label* label) {
-        loadPtr(addr, ScratchRegister);
-        ma_b(ScratchRegister, imm, label, cond);
+    void branch32(Condition cond, AsmJSAbsoluteAddress addr, Imm32 imm, Label* label) {
+        load32(addr, SecondScratchReg);
+        ma_b(SecondScratchReg, imm, label, cond);
     }
 
     void loadUnboxedValue(Address address, MIRType type, AnyRegister dest) {
@@ -814,7 +800,7 @@ public:
     void storeUnboxedPayload(ValueOperand value, T address, size_t nbytes) {
         switch (nbytes) {
           case 4:
-            storePtr(value.payloadReg(), address);
+            store32(value.payloadReg(), address);
             return;
           case 1:
             store8(value.payloadReg(), address);
@@ -889,11 +875,6 @@ public:
     void storePayload(Register src, const BaseIndex& dest);
     void storeTypeTag(ImmTag tag, Address dest);
     void storeTypeTag(ImmTag tag, const BaseIndex& dest);
-
-    void makeFrameDescriptor(Register frameSizeReg, FrameType type) {
-        ma_sll(frameSizeReg, frameSizeReg, Imm32(FRAMESIZE_SHIFT));
-        ma_or(frameSizeReg, frameSizeReg, Imm32(type));
-    }
 
     void handleFailureWithHandlerTail(void* handler);
 
@@ -1117,19 +1098,6 @@ public:
         MOZ_CRASH("NYI");
     }
 
-    // Builds an exit frame on the stack, with a return address to an internal
-    // non-function. Returns offset to be passed to markSafepointAt().
-    void buildFakeExitFrame(Register scratch, uint32_t* offset);
-
-    void callWithExitFrame(Label* target);
-    void callWithExitFrame(JitCode* target);
-    void callWithExitFrame(JitCode* target, Register dynStack);
-
-    // Makes a call using the only two methods that it is sane for indep code
-    // to make a call.
-    void callJit(Register callee);
-    void callJitFromAsmJS(Register callee) { callJit(callee); }
-
     void add32(Register src, Register dest);
     void add32(Imm32 imm, Register dest);
     void add32(Imm32 imm, const Address& dest);
@@ -1166,24 +1134,9 @@ public:
         }
     }
 
-    void and32(Register src, Register dest);
-    void and32(Imm32 imm, Register dest);
-    void and32(Imm32 imm, const Address& dest);
-    void and32(const Address& src, Register dest);
-    void or32(Imm32 imm, Register dest);
-    void or32(Imm32 imm, const Address& dest);
-    void or32(Register src, Register dest);
-    void xor32(Imm32 imm, Register dest);
-    void xorPtr(Imm32 imm, Register dest);
-    void xorPtr(Register src, Register dest);
-    void orPtr(Imm32 imm, Register dest);
-    void orPtr(Register src, Register dest);
-    void andPtr(Imm32 imm, Register dest);
-    void andPtr(Register src, Register dest);
     void addPtr(Register src, Register dest);
     void subPtr(Register src, Register dest);
     void addPtr(const Address& src, Register dest);
-    void not32(Register reg);
 
     void move32(Imm32 imm, Register dest);
     void move32(Register src, Register dest);
@@ -1209,6 +1162,7 @@ public:
     void load32(const Address& address, Register dest);
     void load32(const BaseIndex& address, Register dest);
     void load32(AbsoluteAddress address, Register dest);
+    void load32(AsmJSAbsoluteAddress address, Register dest);
 
     void loadPtr(const Address& address, Register dest);
     void loadPtr(const BaseIndex& src, Register dest);
@@ -1416,7 +1370,7 @@ public:
 
     BufferOffset ma_BoundsCheck(Register bounded) {
         BufferOffset bo = m_buffer.nextOffset();
-        ma_liPatchable(bounded, Imm32(0));
+        ma_liPatchable(bounded, ImmWord(0));
         return bo;
     }
 

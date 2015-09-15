@@ -38,6 +38,7 @@ config = {
         "reftest": "runreftest.py",
         "xpcshell": "runxpcshelltests.py",
         "cppunittest": "runcppunittests.py",
+        "gtest": "rungtests.py",
         "jittest": "jit_test.py",
         "mozbase": "test.py",
         "mozmill": "runtestlist.py",
@@ -49,6 +50,7 @@ config = {
         "reftest": ["reftest/*", "jsreftest/*"],
         "xpcshell": ["xpcshell/*"],
         "cppunittest": ["cppunittest/*"],
+        "gtest": ["gtest/*"],
         "jittest": ["jit-test/*"],
         "mozbase": ["mozbase/*"],
         "mozmill": ["mozmill/*"],
@@ -99,6 +101,7 @@ config = {
         "mozmill": {
             "options": [
                 "--binary=%(binary_path)s",
+                "--testing-modules-dir=test/modules",
                 "--symbols-path=%(symbols_path)s"
             ],
             "run_filename": "runtestlist.py",
@@ -138,16 +141,20 @@ config = {
             ],
             "run_filename": "runxpcshelltests.py",
             "testsdir": "xpcshell"
-        }
+        },
+        "gtest": {
+            "options": [
+                "--xre-path=%(abs_res_dir)s",
+                "--cwd=%(gtest_dir)s",
+                "--symbols-path=%(symbols_path)s",
+                "%(binary_path)s",
+            ],
+            "run_filename": "rungtests.py",
+        },
     },
     # local mochi suites
     "all_mochitest_suites":
     {
-        "plain1": ["--total-chunks=5", "--this-chunk=1", "--chunk-by-dir=4"],
-        "plain2": ["--total-chunks=5", "--this-chunk=2", "--chunk-by-dir=4"],
-        "plain3": ["--total-chunks=5", "--this-chunk=3", "--chunk-by-dir=4"],
-        "plain4": ["--total-chunks=5", "--this-chunk=4", "--chunk-by-dir=4"],
-        "plain5": ["--total-chunks=5", "--this-chunk=5", "--chunk-by-dir=4"],
         "plain": [],
         "plain-chunked": ["--chunk-by-dir=4"],
         "mochitest-push": ["--subsuite=push"],
@@ -195,6 +202,9 @@ config = {
     },
     "all_cppunittest_suites": {
         "cppunittest": ['tests/cppunittest']
+    },
+    "all_gtest_suites": {
+        "gtest": []
     },
     "all_jittest_suites": {
         "jittest": []

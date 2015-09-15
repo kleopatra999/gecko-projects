@@ -36,7 +36,7 @@ XPCOMUtils.defineLazyGetter(this, 'MemoryFront', function() {
 
 Cu.import('resource://gre/modules/Frames.jsm');
 
-let _telemetryDebug = false;
+let _telemetryDebug = true;
 
 function telemetryDebug(...args) {
   if (_telemetryDebug) {
@@ -193,6 +193,7 @@ function Target(frame, actor) {
   this._frame = frame;
   this.actor = actor;
   this.metrics = new Map();
+  this._appName = null;
 }
 
 Target.prototype = {
@@ -206,6 +207,41 @@ Target.prototype = {
 
   get manifest() {
     return this._frame.appManifestURL;
+  },
+
+  get appName() {
+
+    if (this._appName) {
+      return this._appName;
+    }
+
+    let manifest = this.manifest;
+    if (!manifest) {
+      let msg = DEVELOPER_HUD_LOG_PREFIX + ': Unable to determine app for telemetry metric. src: ' +
+                this.frame.src;
+      console.error(msg);
+      return null;
+    }
+
+    // "communications" apps are a special case
+    if (manifest.indexOf('communications') === -1) {
+      let start = manifest.indexOf('/') + 2;
+      let end = manifest.indexOf('.', start);
+      this._appName = manifest.substring(start, end).toLowerCase();
+    } else {
+      let src = this.frame.src;
+      if (src) {
+        // e.g., `app://communications.gaiamobile.org/contacts/index.html`
+        let parts = src.split('/');
+        let APP = 3;
+        let EXPECTED_PARTS_LENGTH = 5;
+        if (parts.length === EXPECTED_PARTS_LENGTH) {
+          this._appName = parts[APP];
+        }
+      }
+    }
+
+    return this._appName;
   },
 
   /**
@@ -337,17 +373,10 @@ Target.prototype = {
       return;
     }
 
-    if (!this.appName) {
-      let manifest = this.manifest;
-      if (!manifest) {
-        return;
-      }
-      let start = manifest.indexOf('/') + 2;
-      let end = manifest.indexOf('.', start);
-      this.appName = manifest.substring(start, end).toLowerCase();
-    }
-
     metric.appName = this.appName;
+    if (!metric.appName) {
+      return;
+    }
 
     let metricName = metric.name.toUpperCase();
     let metricAppName = metric.appName.toUpperCase();
@@ -358,6 +387,7 @@ Target.prototype = {
         if (keyed) {
           keyed.add(metric.appName, parseInt(metric.value, 10));
           developerHUD._histograms.add(keyedMetricName);
+          telemetryDebug(keyedMetricName, metric.value, metric.appName);
         }
       } catch(err) {
         console.error('Histogram error is metricname added to histograms.json:'
@@ -366,18 +396,34 @@ Target.prototype = {
     } else {
       let histogramName = CUSTOM_HISTOGRAM_PREFIX + metricAppName + '_'
         + metricName;
-      if (!developerHUD._customHistograms.has(histogramName)) {
-        try {
-          Services.telemetry.registerAddonHistogram(metricAppName,
-            CUSTOM_HISTOGRAM_PREFIX + metricName,
-            Services.telemetry.HISTOGRAM_LINEAR, 1, 10000, 10);
-          developerHUD._customHistograms.add(histogramName);
-        } catch(err) {
-          console.error('Histogram error: ' + err);
-        }
+      // This is a call to add a value to an existing histogram.
+      if (typeof metric.value !== 'undefined') {
+        Services.telemetry.getAddonHistogram(metricAppName,
+          CUSTOM_HISTOGRAM_PREFIX + metricName).add(parseInt(metric.value, 10));
+        telemetryDebug(histogramName, metric.value);
+        return;
       }
-      Services.telemetry.getAddonHistogram(metricAppName,
-        CUSTOM_HISTOGRAM_PREFIX + metricName).add(parseInt(metric.value, 10));
+
+      // The histogram already exists and are not adding data to it.
+      if (developerHUD._customHistograms.has(histogramName)) {
+        return;
+      }
+
+      // This is a call to create a new histogram.
+      try {
+        let metricType = parseInt(metric.type, 10);
+        if (metricType === Services.telemetry.HISTOGRAM_COUNT) {
+          Services.telemetry.registerAddonHistogram(metricAppName,
+            CUSTOM_HISTOGRAM_PREFIX + metricName, metricType);
+        } else {
+          Services.telemetry.registerAddonHistogram(metricAppName,
+            CUSTOM_HISTOGRAM_PREFIX + metricName, metricType, metric.min,
+            metric.max, metric.buckets);
+        }
+        developerHUD._customHistograms.add(histogramName);
+      } catch (err) {
+        console.error('Histogram error: ' + err);
+      }
     }
   }
 };
@@ -516,9 +562,9 @@ let consoleWatcher = {
             this.handleTelemetryMessage(target, packet);
 
             // Currently, informational log entries are tracked only by
-            // advanced telemetry. Nonetheless, for consistency, we
-            // continue here and let the function return normally, when it
-            // concludes 'info' entries are not being watched.
+            // telemetry. Nonetheless, for consistency, we continue here
+            // and let the function return normally, when it concludes 'info'
+            // entries are not being watched.
             metric.name = 'info';
             break;
 
@@ -547,6 +593,25 @@ let consoleWatcher = {
 
       default:
         return;
+    }
+
+    if (developerHUD._telemetry) {
+      // Always record telemetry for these metrics.
+      if (metric.name === 'errors' || metric.name === 'warnings' || metric.name === 'reflows') {
+        let value = target.metrics.get(metric.name);
+        metric.value = (value || 0) + 1;
+        target._logHistogram(metric);
+
+        // Telemetry has already been recorded.
+        metric.skipTelemetry = true;
+
+        // If the metric is not being watched, persist the incremented value.
+        // If the metric is being watched, `target.bump` will increment the value
+        // of the metric and will persist the incremented value.
+        if (!this._watching[metric.name]) {
+          target.metrics.set(metric.name, metric.value);
+        }
+      }
     }
 
     if (!this._watching[metric.name]) {
@@ -588,24 +653,40 @@ let consoleWatcher = {
     let TELEMETRY_IDENTIFIER_IDX = 0;
     let NAME_IDX = 1;
     let VALUE_IDX = 2;
+    let TYPE_IDX = 2;
+    let MIN_IDX = 3;
+    let MAX_IDX = 4;
+    let BUCKETS_IDX = 5;
+    let MAX_CUSTOM_ARGS = 6;
+    let MIN_CUSTOM_ARGS = 3;
 
     if (telemetryData[TELEMETRY_IDENTIFIER_IDX] != 'telemetry' ||
-        telemetryData.length < 3 || telemetryData.length > 4) {
+        telemetryData.length < MIN_CUSTOM_ARGS ||
+        telemetryData.length > MAX_CUSTOM_ARGS) {
       return;
     }
 
     let metric = {
-      name: telemetryData[NAME_IDX],
-      value: telemetryData[VALUE_IDX]
+      name: telemetryData[NAME_IDX]
     };
-    if (metric.name == 'MGMT') {
-      if (metric.value == 'TIMETOSHIP') {
+
+    if (metric.name === 'MGMT') {
+      metric.value = telemetryData[VALUE_IDX];
+      if (metric.value === 'TIMETOSHIP') {
         telemetryDebug('Received a Ship event');
         target._sendTelemetryData();
-      } else if (metric.value == 'CLEARMETRICS') {
+      } else if (metric.value === 'CLEARMETRICS') {
         target._clearTelemetryData();
       }
     } else {
+      if (telemetryData.length === MIN_CUSTOM_ARGS) {
+        metric.value = telemetryData[VALUE_IDX];
+      } else if (telemetryData.length === MAX_CUSTOM_ARGS) {
+        metric.type = telemetryData[TYPE_IDX];
+        metric.min = telemetryData[MIN_IDX];
+        metric.max = telemetryData[MAX_IDX];
+        metric.buckets = telemetryData[BUCKETS_IDX];
+      }
       metric.custom = true;
       target._logHistogram(metric);
     }
@@ -684,9 +765,25 @@ let performanceEntriesWatcher = {
   _fronts: new Map(),
   _appLaunchName: null,
   _appLaunchStartTime: null,
+  _supported: [
+    'contentInteractive',
+    'navigationInteractive',
+    'navigationLoaded',
+    'visuallyLoaded',
+    'fullyLoaded',
+    'mediaEnumerated',
+    'scanEnd'
+  ],
 
   init(client) {
     this._client = client;
+    let setting = 'devtools.telemetry.supported_performance_marks';
+    let defaultValue = this._supported.join(',');
+
+    SettingsListener.observe(setting, defaultValue, supported => {
+      let value = supported || defaultValue;
+      this._supported = value.split(',');
+    });
   },
 
   trackTarget(target) {
@@ -702,38 +799,56 @@ let performanceEntriesWatcher = {
     front.start();
 
     front.on('entry', detail => {
-      if (detail.type === 'mark') {
-        let name = detail.name;
-        let epoch = detail.epoch;
-        let CHARS_UNTIL_APP_NAME = 7; // '@app://'
 
-        // FIXME There is a potential race condition that can result
-        // in some performance entries being disregarded. See bug 1189942.
-        if (name.indexOf('appLaunch') != -1) {
-          let appStartPos = name.indexOf('@app') + CHARS_UNTIL_APP_NAME;
-          let length = (name.indexOf('.') - appStartPos);
-          this._appLaunchName = name.substr(appStartPos, length);
-          this._appLaunchStartTime = epoch;
-        } else {
-          let origin = detail.origin;
-          origin = origin.substr(0, origin.indexOf('.'));
-          if (this._appLaunchName === origin) {
-            let time = epoch - this._appLaunchStartTime;
-            let eventName = 'app-startup-time-' + name;
-
-            // Events based on performance marks are for telemetry only, they are
-            // not displayed in the HUD front end.
-            target._logHistogram({name: eventName, value: time});
-
-            memoryWatcher.front(target).residentUnique().then(value => {
-              eventName = 'app-memory-' + name;
-              target._logHistogram({name: eventName, value: value});
-            }, err => {
-              console.error(err);
-            });
-          }
-        }
+      // Only process performance marks.
+      if (detail.type !== 'mark') {
+        return;
       }
+
+      let name = detail.name;
+      let epoch = detail.epoch;
+
+      // FIXME There is a potential race condition that can result
+      // in some performance entries being disregarded. See bug 1189942.
+      //
+      // If this is an "app launch" mark, record the app that was
+      // launched and the epoch of when it was launched.
+      if (name.indexOf('appLaunch') !== -1) {
+        let CHARS_UNTIL_APP_NAME = 7; // '@app://'
+        let startPos = name.indexOf('@app') + CHARS_UNTIL_APP_NAME;
+        let endPos = name.indexOf('.');
+        this._appLaunchName = name.slice(startPos, endPos);
+        this._appLaunchStartTime = epoch;
+        return;
+      }
+
+      // Only process supported performance marks
+      if (this._supported.indexOf(name) === -1) {
+        return;
+      }
+
+      let origin = detail.origin;
+      origin = origin.slice(0, origin.indexOf('.'));
+
+      // Continue if the performance mark corresponds to the app
+      // for which we have recorded app launch information.
+      if (this._appLaunchName !== origin) {
+        return;
+      }
+
+      let time = epoch - this._appLaunchStartTime;
+      let eventName = 'app_startup_time_' + name;
+
+      // Events based on performance marks are for telemetry only, they are
+      // not displayed in the HUD front end.
+      target._logHistogram({name: eventName, value: time});
+
+      memoryWatcher.front(target).residentUnique().then(value => {
+        eventName = 'app_memory_' + name;
+        target._logHistogram({name: eventName, value: value});
+      }, err => {
+        console.error(err);
+      });
     });
   },
 

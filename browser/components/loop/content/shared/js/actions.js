@@ -200,6 +200,12 @@ loop.shared.actions = (function() {
     }),
 
     /**
+     * Used for notifying that a waiting tile was shown.
+     */
+    TileShown: Action.define("tileShown", {
+    }),
+
+    /**
      * Used for notifying that local media has been obtained.
      */
     GotMediaPermission: Action.define("gotMediaPermission", {
@@ -222,39 +228,31 @@ loop.shared.actions = (function() {
     }),
 
     /**
-     * Video has been enabled from the remote sender.
+     * A stream from local or remote media has been created.
+     */
+    MediaStreamCreated: Action.define("mediaStreamCreated", {
+      hasVideo: Boolean,
+      isLocal: Boolean,
+      srcMediaElement: Object
+    }),
+
+    /**
+     * A stream from local or remote media has been destroyed.
+     */
+    MediaStreamDestroyed: Action.define("mediaStreamDestroyed", {
+      isLocal: Boolean
+    }),
+
+    /**
+     * Used to inform that the remote stream has enabled or disabled the video
+     * part of the stream.
      *
-     * XXX somewhat tangled up with remote video muting semantics; see bug
-     * 1171969
-     *
-     * @note if/when we want to untangle this, we'll may want to include the
-     *       reason provided by the SDK and documented hereI:
+     * @note We'll may want to include the future the reason provided by the SDK
+     *       and documented here:
      *       https://tokbox.com/opentok/libraries/client/js/reference/VideoEnabledChangedEvent.html
      */
-    RemoteVideoEnabled: Action.define("remoteVideoEnabled", {
-      /* The SDK video object that the views will be copying the remote
-         stream from. */
-      srcVideoObject: Object
-    }),
-
-    /**
-     * Video has been disabled by the remote sender.
-     *
-     *  @see RemoteVideoEnabled
-     */
-    RemoteVideoDisabled: Action.define("remoteVideoDisabled", {
-    }),
-
-    /**
-     * Video from the local camera has been enabled.
-     *
-     * XXX we should implement a LocalVideoDisabled action to cleanly prevent
-     * leakage; see bug 1171978 for details
-     */
-    LocalVideoEnabled: Action.define("localVideoEnabled", {
-      /* The SDK video object that the views will be copying the remote
-         stream from. */
-      srcVideoObject: Object
+    RemoteVideoStatus: Action.define("remoteVideoStatus", {
+      videoEnabled: Boolean
     }),
 
     /**
@@ -296,7 +294,7 @@ loop.shared.actions = (function() {
      */
     ReceivingScreenShare: Action.define("receivingScreenShare", {
       receiving: Boolean
-      // srcVideoObject: Object (only present if receiving is true)
+      // srcMediaElement: Object (only present if receiving is true)
     }),
 
     /**
@@ -462,7 +460,6 @@ loop.shared.actions = (function() {
       // roomContextUrls: Array - Optional.
       // roomDescription: String - Optional.
       // roomName: String - Optional.
-      roomOwner: String,
       roomToken: String,
       roomUrl: String,
       socialShareProviders: Array
@@ -477,7 +474,6 @@ loop.shared.actions = (function() {
     UpdateRoomInfo: Action.define("updateRoomInfo", {
       // description: String - Optional.
       // roomName: String - Optional.
-      roomOwner: String,
       roomUrl: String
       // urls: Array - Optional.
       // See https://wiki.mozilla.org/Loop/Architecture/Context#Format_of_context.value

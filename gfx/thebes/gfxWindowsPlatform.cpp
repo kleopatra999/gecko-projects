@@ -489,12 +489,9 @@ gfxWindowsPlatform::HandleDeviceReset()
   }
 
   // Remove devices and adapters.
+  ResetD3D11Devices();
   mD3D10Device = nullptr;
-  mD3D11Device = nullptr;
-  mD3D11ContentDevice = nullptr;
-  mD3D11ImageBridgeDevice = nullptr;
   mAdapter = nullptr;
-  Factory::SetDirect3D11Device(nullptr);
   Factory::SetDirect3D10Device(nullptr);
 
   // Reset local state. Note: we leave feature status variables as-is. They
@@ -1027,9 +1024,10 @@ gfxWindowsPlatform::GetStandardFamilyName(const nsAString& aFontName, nsAString&
 gfxFontGroup *
 gfxWindowsPlatform::CreateFontGroup(const FontFamilyList& aFontFamilyList,
                                     const gfxFontStyle *aStyle,
+                                    gfxTextPerfMetrics* aTextPerf,
                                     gfxUserFontSet *aUserFontSet)
 {
-    return new gfxFontGroup(aFontFamilyList, aStyle, aUserFontSet);
+    return new gfxFontGroup(aFontFamilyList, aStyle, aTextPerf, aUserFontSet);
 }
 
 gfxFontEntry* 
@@ -1652,7 +1650,7 @@ gfxWindowsPlatform::GetDXGIAdapter()
   return mAdapter;
 }
 
-bool CouldD3D11DeviceWork()
+bool DoesD3D11DeviceWork()
 {
   static bool checked = false;
   static bool result = false;
@@ -1731,12 +1729,13 @@ CheckForAdapterMismatch(ID3D11Device *device)
   }
 }
 
-void CheckIfRenderTargetViewNeedsRecreating(ID3D11Device *device)
+bool DoesRenderTargetViewNeedsRecreating(ID3D11Device *device)
 {
+    bool result = false;
     // CreateTexture2D is known to crash on lower feature levels, see bugs
     // 1170211 and 1089413.
     if (device->GetFeatureLevel() < D3D_FEATURE_LEVEL_10_0) {
-        return;
+        return true;
     }
 
     nsRefPtr<ID3D11DeviceContext> deviceContext;
@@ -1758,9 +1757,17 @@ void CheckIfRenderTargetViewNeedsRecreating(ID3D11Device *device)
     offscreenTextureDesc.CPUAccessFlags = 0;
     offscreenTextureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
 
-    HRESULT result = device->CreateTexture2D(&offscreenTextureDesc, NULL, getter_AddRefs(offscreenTexture));
+    HRESULT hr = device->CreateTexture2D(&offscreenTextureDesc, NULL, getter_AddRefs(offscreenTexture));
+    if (FAILED(hr)) {
+        gfxCriticalNote << "DoesRecreatingCreateTexture2DFail";
+        return false;
+    }
 
-    result = offscreenTexture->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)getter_AddRefs(keyedMutex));
+    hr = offscreenTexture->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)getter_AddRefs(keyedMutex));
+    if (FAILED(hr)) {
+        gfxCriticalNote << "DoesRecreatingKeyedMutexFailed";
+        return false;
+    }
 
     D3D11_RENDER_TARGET_VIEW_DESC offscreenRTVDesc;
     offscreenRTVDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -1768,7 +1775,11 @@ void CheckIfRenderTargetViewNeedsRecreating(ID3D11Device *device)
     offscreenRTVDesc.Texture2D.MipSlice = 0;
 
     nsRefPtr<ID3D11RenderTargetView> offscreenRTView;
-    result = device->CreateRenderTargetView(offscreenTexture, &offscreenRTVDesc, getter_AddRefs(offscreenRTView));
+    hr = device->CreateRenderTargetView(offscreenTexture, &offscreenRTVDesc, getter_AddRefs(offscreenRTView));
+    if (FAILED(hr)) {
+        gfxCriticalNote << "DoesRecreatingCreateRenderTargetViewFailed";
+        return false;
+    }
 
     // Acquire and clear
     keyedMutex->AcquireSync(0, INFINITE);
@@ -1789,12 +1800,20 @@ void CheckIfRenderTargetViewNeedsRecreating(ID3D11Device *device)
     desc.MiscFlags = 0;
     desc.BindFlags = 0;
     ID3D11Texture2D* cpuTexture;
-    device->CreateTexture2D(&desc, NULL, &cpuTexture);
+    hr = device->CreateTexture2D(&desc, NULL, &cpuTexture);
+    if (FAILED(hr)) {
+        gfxCriticalNote << "DoesRecreatingCreateCPUTextureFailed";
+        return false;
+    }
 
     deviceContext->CopyResource(cpuTexture, offscreenTexture);
 
     D3D11_MAPPED_SUBRESOURCE mapped;
-    deviceContext->Map(cpuTexture, 0, D3D11_MAP_READ, 0, &mapped);
+    hr = deviceContext->Map(cpuTexture, 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr)) {
+        gfxCriticalNote << "DoesRecreatingMapFailed " << hexa(hr);
+        return false;
+    }
     int resultColor = *(int*)mapped.pData;
     deviceContext->Unmap(cpuTexture, 0);
     cpuTexture->Release();
@@ -1803,13 +1822,14 @@ void CheckIfRenderTargetViewNeedsRecreating(ID3D11Device *device)
     // match the clear
     if (resultColor != 0xffffff00) {
         gfxCriticalNote << "RenderTargetViewNeedsRecreating";
-        gANGLESupportsD3D11 = false;
+        result = true;
     }
 
     keyedMutex->ReleaseSync(0);
 
     // It seems like this may only happen when we're using the NVIDIA gpu
     CheckForAdapterMismatch(device);
+    return result;
 }
 
 
@@ -1974,17 +1994,12 @@ gfxWindowsPlatform::CheckD3D11Support(bool* aCanUseHardware)
 // be used within InitializeD3D11.
 decltype(D3D11CreateDevice)* sD3D11CreateDeviceFn = nullptr;
 
-void
+FeatureStatus
 gfxWindowsPlatform::AttemptD3D11DeviceCreation()
 {
-  if (!CouldD3D11DeviceWork()) {
-    mD3D11Device = nullptr;
-    return;
-  }
-
   RefPtr<IDXGIAdapter1> adapter = GetDXGIAdapter();
   if (!adapter) {
-    return;
+    return FeatureStatus::Unavailable;
   }
 
   HRESULT hr = E_INVALIDARG;
@@ -1999,27 +2014,36 @@ gfxWindowsPlatform::AttemptD3D11DeviceCreation()
                            D3D11_SDK_VERSION, byRef(mD3D11Device), nullptr, nullptr);
   } MOZ_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
     gfxCriticalError() << "Crash during D3D11 device creation";
-    return;
+    return FeatureStatus::Crashed;
   }
 
-  if (FAILED(hr)) {
-    gfxCriticalError() << "D3D11 device creation failed" << hexa(hr);
-    return;
+  if (FAILED(hr) || !mD3D11Device) {
+    mD3D11Device = nullptr;
+    gfxCriticalError() << "D3D11 device creation failed: " << hexa(hr);
+    return FeatureStatus::Failed;
+  }
+  if (!DoesD3D11DeviceWork()) {
+    mD3D11Device = nullptr;
+    return FeatureStatus::Blocked;
   }
   if (!mD3D11Device) {
-    return;
+    return FeatureStatus::Failed;
   }
-
-  CheckIfRenderTargetViewNeedsRecreating(mD3D11Device);
 
   // Only test this when not using WARP since it can fail and cause
   // GetDeviceRemovedReason to return weird values.
   mCompositorD3D11TextureSharingWorks = ::DoesD3D11TextureSharingWork(mD3D11Device);
+
+  if (!mCompositorD3D11TextureSharingWorks || !DoesRenderTargetViewNeedsRecreating(mD3D11Device)) {
+      gANGLESupportsD3D11 = false;
+  }
+
   mD3D11Device->SetExceptionMode(0);
   mIsWARP = false;
+  return FeatureStatus::Available;
 }
 
-void
+FeatureStatus
 gfxWindowsPlatform::AttemptWARPDeviceCreation()
 {
   ScopedGfxFeatureReporter reporterWARP("D3D11-WARP", gfxPrefs::LayersD3D11ForceWARP());
@@ -2037,14 +2061,13 @@ gfxWindowsPlatform::AttemptWARPDeviceCreation()
     if (FAILED(hr)) {
       // This should always succeed... in theory.
       gfxCriticalError() << "Failed to initialize WARP D3D11 device! " << hexa(hr);
-      return;
+      return FeatureStatus::Failed;
     }
 
     reporterWARP.SetSuccessful();
   } MOZ_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
     gfxCriticalError() << "Exception occurred initializing WARP D3D11 device!";
-    return;
-
+    return FeatureStatus::Crashed;
   }
 
   // Only test for texture sharing on Windows 8 since it puts the device into
@@ -2054,6 +2077,7 @@ gfxWindowsPlatform::AttemptWARPDeviceCreation()
   }
   mD3D11Device->SetExceptionMode(0);
   mIsWARP = true;
+  return FeatureStatus::Available;
 }
 
 bool
@@ -2079,14 +2103,14 @@ gfxWindowsPlatform::ContentAdapterIsParentAdapter(ID3D11Device* device)
   return true;
 }
 
-bool
+FeatureStatus
 gfxWindowsPlatform::AttemptD3D11ContentDeviceCreation()
 {
   RefPtr<IDXGIAdapter1> adapter;
   if (!mIsWARP) {
     adapter = GetDXGIAdapter();
     if (!adapter) {
-      return false;
+      return FeatureStatus::Unavailable;
     }
   }
 
@@ -2100,11 +2124,11 @@ gfxWindowsPlatform::AttemptD3D11ContentDeviceCreation()
                            mFeatureLevels.Elements(), mFeatureLevels.Length(),
                            D3D11_SDK_VERSION, byRef(mD3D11ContentDevice), nullptr, nullptr);
   } MOZ_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
-    return false;
+    return FeatureStatus::Crashed;
   }
 
   if (FAILED(hr)) {
-    return false;
+    return FeatureStatus::Failed;
   }
 
   // InitializeD2D() will abort early if the compositor device did not support
@@ -2118,7 +2142,7 @@ gfxWindowsPlatform::AttemptD3D11ContentDeviceCreation()
         !ContentAdapterIsParentAdapter(mD3D11ContentDevice))
     {
       mD3D11ContentDevice = nullptr;
-      return false;
+      return FeatureStatus::Failed;
     }
   }
 
@@ -2129,10 +2153,10 @@ gfxWindowsPlatform::AttemptD3D11ContentDeviceCreation()
   multi->SetMultithreadProtected(TRUE);
 
   Factory::SetDirect3D11Device(mD3D11ContentDevice);
-  return true;
+  return FeatureStatus::Available;
 }
 
-void
+FeatureStatus
 gfxWindowsPlatform::AttemptD3D11ImageBridgeDeviceCreation()
 {
   HRESULT hr = E_INVALIDARG;
@@ -2143,11 +2167,11 @@ gfxWindowsPlatform::AttemptD3D11ImageBridgeDeviceCreation()
                            mFeatureLevels.Elements(), mFeatureLevels.Length(),
                            D3D11_SDK_VERSION, byRef(mD3D11ImageBridgeDevice), nullptr, nullptr);
   } MOZ_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-    return;
+    return FeatureStatus::Crashed;
   }
 
   if (FAILED(hr)) {
-    return;
+    return FeatureStatus::Failed;
   }
 
   mD3D11ImageBridgeDevice->SetExceptionMode(0);
@@ -2155,8 +2179,9 @@ gfxWindowsPlatform::AttemptD3D11ImageBridgeDeviceCreation()
       (XRE_IsContentProcess() && !ContentAdapterIsParentAdapter(mD3D11ImageBridgeDevice)))
   {
     mD3D11ImageBridgeDevice = nullptr;
-    return;
+    return FeatureStatus::Failed;
   }
+  return FeatureStatus::Available;
 }
 
 void
@@ -2266,37 +2291,65 @@ gfxWindowsPlatform::InitializeD3D11()
   if (XRE_IsParentProcess()) {
     // First try to create a hardware accelerated device.
     if (canUseHardware) {
-      AttemptD3D11DeviceCreation();
+      mD3D11Status = AttemptD3D11DeviceCreation();
+      if (mD3D11Status == FeatureStatus::Crashed) {
+        return;
+      }
     }
 
     // If that failed, see if we can use WARP.
-    if (!mD3D11Device && CanUseWARP()) {
-      AttemptWARPDeviceCreation();
+    if (!mD3D11Device) {
+      if (!CanUseWARP()) {
+        mD3D11Status = FeatureStatus::Blocked;
+        return;
+      }
+      mD3D11Status = AttemptWARPDeviceCreation();
     }
 
+    // If we still have no device by now, exit.
     if (!mD3D11Device) {
-      // Nothing more we can do.
-      mD3D11Status = FeatureStatus::Failed;
+      MOZ_ASSERT(IsFeatureStatusFailure(mD3D11Status));
       return;
     }
+
+    // Either device creation function should have returned Available.
+    MOZ_ASSERT(mD3D11Status == FeatureStatus::Available);
   } else {
     // Child processes do not need a compositor, but they do need to know
     // whether the parent process is using WARP and whether or not texture
     // sharing works.
     mIsWARP = !canUseHardware;
     mCompositorD3D11TextureSharingWorks = GetParentDevicePrefs().d3d11TextureSharingWorks();
+    mD3D11Status = FeatureStatus::Available;
   }
 
-  mD3D11Status = FeatureStatus::Available;
-
   if (CanUseD3D11ImageBridge()) {
-    AttemptD3D11ImageBridgeDeviceCreation();
+    if (AttemptD3D11ImageBridgeDeviceCreation() == FeatureStatus::Crashed) {
+      DisableD3D11AfterCrash();
+      return;
+    }
   }
 
   // We leak these everywhere and we need them our entire runtime anyway, let's
   // leak it here as well. We keep the pointer to sD3D11CreateDeviceFn around
   // as well for D2D1 and device resets.
   d3d11Module.disown();
+}
+
+void
+gfxWindowsPlatform::DisableD3D11AfterCrash()
+{
+  mD3D11Status = FeatureStatus::Crashed;
+  ResetD3D11Devices();
+}
+
+void
+gfxWindowsPlatform::ResetD3D11Devices()
+{
+  mD3D11Device = nullptr;
+  mD3D11ContentDevice = nullptr;
+  mD3D11ImageBridgeDevice = nullptr;
+  Factory::SetDirect3D11Device(nullptr);
 }
 
 static bool
@@ -2417,22 +2470,21 @@ gfxWindowsPlatform::InitializeD2D1()
     return;
   }
 
-  if (!AttemptD3D11ContentDeviceCreation()) {
-    mD2D1Status = FeatureStatus::Failed;
+  mD2D1Status = AttemptD3D11ContentDeviceCreation();
+  if (IsFeatureStatusFailure(mD2D1Status)) {
+    if (mD2D1Status == FeatureStatus::Crashed) {
+      DisableD3D11AfterCrash();
+    }
     return;
   }
 
-  mD2D1Status = FeatureStatus::Available;
+  MOZ_ASSERT(mD2D1Status == FeatureStatus::Available);
   d2d1_1.SetSuccessful();
 }
 
 already_AddRefed<ID3D11Device>
 gfxWindowsPlatform::CreateD3D11DecoderDevice()
 {
-  if (!CouldD3D11DeviceWork()) {
-    return nullptr;
-  }
-
   nsModuleHandle d3d11Module(LoadLibrarySystem32(L"d3d11.dll"));
   decltype(D3D11CreateDevice)* d3d11CreateDevice = (decltype(D3D11CreateDevice)*)
     GetProcAddress(d3d11Module, "D3D11CreateDevice");
@@ -2470,7 +2522,7 @@ gfxWindowsPlatform::CreateD3D11DecoderDevice()
     return nullptr;
   }
 
-  if (FAILED(hr)) {
+  if (FAILED(hr) || !DoesD3D11DeviceWork()) {
     return nullptr;
   }
 

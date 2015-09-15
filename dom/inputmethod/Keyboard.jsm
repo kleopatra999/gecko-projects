@@ -36,15 +36,6 @@ let Utils = {
     return mm;
   },
   checkPermissionForMM: function u_checkPermissionForMM(mm, permName) {
-    let testing = false;
-    try {
-      testing = Services.prefs.getBoolPref("dom.mozInputMethod.testing");
-    } catch (e) { }
-
-    if (testing) {
-      return true;
-    }
-
     return mm.assertPermission(permName);
   }
 };
@@ -54,8 +45,10 @@ this.Keyboard = {
   _keyboardMM: null,  // The keyboard app message manager.
   _keyboardID: -1,    // The keyboard app's ID number. -1 = invalid
   _nextKeyboardID: 0, // The ID number counter.
-  _systemMessageName: [
-    'SetValue', 'RemoveFocus', 'SetSelectedOption', 'SetSelectedOptions'
+  _supportsSwitchingTypes: [],
+  _systemMessageNames: [
+    'SetValue', 'RemoveFocus', 'SetSelectedOption', 'SetSelectedOptions',
+    'SetSupportsSwitchingTypes'
   ],
 
   _messageNames: [
@@ -79,6 +72,12 @@ this.Keyboard = {
   },
 
   sendToForm: function(name, data) {
+    if (!this.formMM) {
+      dump("Keyboard.jsm: Attempt to send message " + name +
+        " to form but no message manager exists.\n");
+
+      return;
+    }
     try {
       this.formMM.sendAsyncMessage(name, data);
     } catch(e) { }
@@ -100,7 +99,7 @@ this.Keyboard = {
       ppmm.addMessageListener('Keyboard:' + name, this);
     }
 
-    for (let name of this._systemMessageName) {
+    for (let name of this._systemMessageNames) {
       ppmm.addMessageListener('System:' + name, this);
     }
 
@@ -119,11 +118,11 @@ this.Keyboard = {
     }
 
     if (topic == 'oop-frameloader-crashed' ||
-	topic == 'message-manager-close') {
+	      topic == 'message-manager-close') {
       if (this.formMM == mm) {
         // The application has been closed unexpectingly. Let's tell the
         // keyboard app that the focus has been lost.
-        this.sendToKeyboard('Keyboard:FocusChange', { 'type': 'blur' });
+        this.sendToKeyboard('Keyboard:Blur', {});
         // Notify system app to hide keyboard.
         SystemAppProxy.dispatchEvent({
           type: 'inputmethod-contextchange',
@@ -140,7 +139,8 @@ this.Keyboard = {
   },
 
   initFormsFrameScript: function(mm) {
-    mm.addMessageListener('Forms:Input', this);
+    mm.addMessageListener('Forms:Focus', this);
+    mm.addMessageListener('Forms:Blur', this);
     mm.addMessageListener('Forms:SelectionChange', this);
     mm.addMessageListener('Forms:GetText:Result:OK', this);
     mm.addMessageListener('Forms:GetText:Result:Error', this);
@@ -160,28 +160,26 @@ this.Keyboard = {
     // If we get a 'Keyboard:XXX'/'System:XXX' message, check that the sender
     // has the required permission.
     let mm;
-    let isKeyboardRegistration = msg.name == "Keyboard:Register" ||
-                                 msg.name == "Keyboard:Unregister";
-    if (msg.name.indexOf("Keyboard:") === 0 ||
-        msg.name.indexOf("System:") === 0) {
-      if (!this.formMM && !isKeyboardRegistration) {
-        return;
-      }
 
+    // Assert the permission based on the prefix of the message.
+    let permName;
+    if (msg.name.startsWith("Keyboard:")) {
+      permName = "input";
+    } else if (msg.name.startsWith("System:")) {
+      permName = "input-manage";
+    }
+
+    // There is no permission to check (nor we need to get the mm)
+    // for Form: messages.
+    if (permName) {
       mm = Utils.getMMFromMessage(msg);
-
-      // That should never happen.
       if (!mm) {
-        dump("!! No message manager found for " + msg.name);
+        dump("Keyboard.jsm: Message " + msg.name + " has no message manager.");
         return;
       }
-
-      let perm = (msg.name.indexOf("Keyboard:") === 0) ? "input"
-                                                       : "input-manage";
-
-      if (!isKeyboardRegistration && !Utils.checkPermissionForMM(mm, perm)) {
-        dump("Keyboard message " + msg.name +
-        " from a content process with no '" + perm + "' privileges.");
+      if (!Utils.checkPermissionForMM(mm, permName)) {
+        dump("Keyboard.jsm: Message " + msg.name +
+          " from a content process with no '" + permName + "' privileges.");
         return;
       }
     }
@@ -201,8 +199,11 @@ this.Keyboard = {
     }
 
     switch (msg.name) {
-      case 'Forms:Input':
-        this.handleFocusChange(msg);
+      case 'Forms:Focus':
+        this.handleFocus(msg);
+        break;
+      case 'Forms:Blur':
+        this.handleBlur(msg);
         break;
       case 'Forms:SelectionChange':
       case 'Forms:GetText:Result:OK':
@@ -233,6 +234,9 @@ this.Keyboard = {
         break;
       case 'System:SetSelectedOptions':
         this.setSelectedOption(msg);
+        break;
+      case 'System:SetSupportsSwitchingTypes':
+        this.setSupportsSwitchingTypes(msg);
         break;
       case 'Keyboard:SetSelectionRange':
         this.setSelectionRange(msg);
@@ -283,48 +287,50 @@ this.Keyboard = {
     }
   },
 
-  forwardEvent: function keyboardForwardEvent(newEventName, msg) {
+  handleFocus: function keyboardHandleFocus(msg) {
+    // Set the formMM to the new message manager received.
     let mm = msg.target.QueryInterface(Ci.nsIFrameLoaderOwner)
                 .frameLoader.messageManager;
-    if (newEventName === 'Keyboard:FocusChange') {
-      if (msg.data.type !== 'blur') { // Focus on a new input field
-        // Set the formMM to the new message manager so that
-        // message gets to the right form now on.
-        this.formMM = mm;
-      } else { // input is blurred
-        // A blur message can't be sent to the keyboard if the focus has
-        // already been taken away at first place.
-        // This check is here to prevent problem caused by out-of-order
-        // ipc messages from two processes.
-        if (mm !== this.formMM) {
-          return false;
-        }
+    this.formMM = mm;
 
-        this.formMM = null;
-      }
-    }
-
-    this.sendToKeyboard(newEventName, msg.data);
-    return true;
-  },
-
-  handleFocusChange: function keyboardHandleFocusChange(msg) {
-    let isSent = this.forwardEvent('Keyboard:FocusChange', msg);
-
-    if (!isSent) {
-      return;
-    }
+    this.forwardEvent('Keyboard:Focus', msg);
 
     // Chrome event, used also to render value selectors; that's why we need
     // the info about choices / min / max here as well...
     SystemAppProxy.dispatchEvent({
       type: 'inputmethod-contextchange',
-      inputType: msg.data.type,
+      inputType: msg.data.inputType,
       value: msg.data.value,
       choices: JSON.stringify(msg.data.choices),
       min: msg.data.min,
       max: msg.data.max
     });
+  },
+
+  handleBlur: function keyboardHandleBlur(msg) {
+    let mm = msg.target.QueryInterface(Ci.nsIFrameLoaderOwner)
+                .frameLoader.messageManager;
+    // A blur message can't be sent to the keyboard if the focus has
+    // already been taken away at first place.
+    // This check is here to prevent problem caused by out-of-order
+    // ipc messages from two processes.
+    if (mm !== this.formMM) {
+      return;
+    }
+
+    // unset formMM
+    this.formMM = null;
+
+    this.forwardEvent('Keyboard:Blur', msg);
+
+    SystemAppProxy.dispatchEvent({
+      type: 'inputmethod-contextchange',
+      inputType: 'blur'
+    });
+  },
+
+  forwardEvent: function keyboardForwardEvent(newEventName, msg) {
+    this.sendToKeyboard(newEventName, msg.data);
   },
 
   setSelectedOption: function keyboardSetSelectedOption(msg) {
@@ -344,6 +350,10 @@ this.Keyboard = {
   },
 
   removeFocus: function keyboardRemoveFocus() {
+    if (!this.formMM) {
+      return;
+    }
+
     this.sendToForm('Forms:Select:Blur', {});
   },
 
@@ -372,9 +382,13 @@ this.Keyboard = {
   },
 
   getContext: function keyboardGetContext(msg) {
-    if (this._layouts) {
-      this.sendToKeyboard('Keyboard:LayoutsChange', this._layouts);
+    if (!this.formMM) {
+      return;
     }
+
+    this.sendToKeyboard('Keyboard:SupportsSwitchingTypesChange', {
+      types: this._supportsSwitchingTypes
+    });
 
     this.sendToForm('Forms:GetContext', msg.data);
   },
@@ -387,17 +401,28 @@ this.Keyboard = {
     this.sendToForm('Forms:EndComposition', msg.data);
   },
 
-  /**
-   * Get the number of keyboard layouts active from keyboard_manager
-   */
-  _layouts: null,
-  setLayouts: function keyboardSetLayoutCount(layouts) {
+  setSupportsSwitchingTypes: function setSupportsSwitchingTypes(msg) {
+    this._supportsSwitchingTypes = msg.data.types;
+    this.sendToKeyboard('Keyboard:SupportsSwitchingTypesChange', msg.data);
+  },
+  // XXX: To be removed with mozContentEvent support from shell.js
+  setLayouts: function keyboardSetLayouts(layouts) {
     // The input method plugins may not have loaded yet,
     // cache the layouts so on init we can respond immediately instead
     // of going back and forth between keyboard_manager
-    this._layouts = layouts;
+    var types = [];
 
-    this.sendToKeyboard('Keyboard:LayoutsChange', layouts);
+    Object.keys(layouts).forEach((type) => {
+      if (layouts[type] > 1) {
+        types.push(type);
+      }
+    });
+
+    this._supportsSwitchingTypes = types;
+
+    this.sendToKeyboard('Keyboard:SupportsSwitchingTypesChange', {
+      types: types
+    });
   }
 };
 

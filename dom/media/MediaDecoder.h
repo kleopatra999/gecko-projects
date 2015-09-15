@@ -184,6 +184,10 @@ destroying the MediaDecoder object.
 #if !defined(MediaDecoder_h_)
 #define MediaDecoder_h_
 
+#ifdef MOZ_EME
+#include "mozilla/CDMProxy.h"
+#endif
+
 #include "mozilla/MozPromise.h"
 #include "mozilla/ReentrantMonitor.h"
 #include "mozilla/StateMirroring.h"
@@ -191,20 +195,20 @@ destroying the MediaDecoder object.
 
 #include "mozilla/dom/AudioChannelBinding.h"
 
-#include "nsISupports.h"
+#include "necko-config.h"
+#include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 #include "nsIObserver.h"
-#include "nsAutoPtr.h"
+#include "nsISupports.h"
 #include "nsITimer.h"
-#include "MediaResource.h"
-#include "MediaDecoderOwner.h"
-#include "MediaStreamGraph.h"
+
 #include "AbstractMediaDecoder.h"
-#include "DecodedStream.h"
-#include "necko-config.h"
-#ifdef MOZ_EME
-#include "mozilla/CDMProxy.h"
-#endif
+#include "MediaDecoderOwner.h"
+#include "MediaEventSource.h"
+#include "MediaMetadataManager.h"
+#include "MediaResource.h"
+#include "MediaStatistics.h"
+#include "MediaStreamGraph.h"
 #include "TimeUnits.h"
 
 class nsIStreamListener;
@@ -564,13 +568,15 @@ public:
   // Records activity stopping on the channel.
   void DispatchPlaybackStopped() {
     nsRefPtr<MediaDecoder> self = this;
-    nsCOMPtr<nsIRunnable> r =
-      NS_NewRunnableFunction([self] () { self->mPlaybackStatistics->Stop(); });
+    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([self] () {
+      self->mPlaybackStatistics->Stop();
+      self->ComputePlaybackRate();
+    });
     AbstractThread::MainThread()->Dispatch(r.forget());
   }
 
   // The actual playback rate computation. The monitor must be held.
-  virtual double ComputePlaybackRate(bool* aReliable);
+  void ComputePlaybackRate();
 
   // Returns true if we can play the entire media through without stopping
   // to buffer, given the current download and playback rates.
@@ -578,13 +584,6 @@ public:
 
   void SetAudioChannel(dom::AudioChannel aChannel) { mAudioChannel = aChannel; }
   dom::AudioChannel GetAudioChannel() { return mAudioChannel; }
-
-  // Send a new set of metadata to the state machine, to be dispatched to the
-  // main thread to be presented when the |currentTime| of the media is greater
-  // or equal to aPublishTime.
-  void QueueMetadata(const media::TimeUnit& aPublishTime,
-                     nsAutoPtr<MediaInfo> aInfo,
-                     nsAutoPtr<MetadataTags> aTags) override;
 
   /******
    * The following methods must only be called on the main
@@ -618,7 +617,7 @@ public:
 
   // Removes all audio tracks and video tracks that are previously added into
   // the track list. Call on the main thread only.
-  virtual void RemoveMediaTracks() override;
+  void RemoveMediaTracks();
 
   // Called when the video has completed playing.
   // Call on the main thread only.
@@ -654,10 +653,6 @@ public:
   // Find the end of the cached data starting at the current decoder
   // position.
   int64_t GetDownloadPosition();
-
-  // Updates the approximate byte offset which playback has reached. This is
-  // used to calculate the readyState transitions.
-  void UpdatePlaybackOffset(int64_t aOffset);
 
   // Provide access to the state machine object
   MediaDecoderStateMachine* GetStateMachine() const;
@@ -720,37 +715,11 @@ public:
   static bool IsAppleMP3Enabled();
 #endif
 
-  struct Statistics {
-    // Estimate of the current playback rate (bytes/second).
-    double mPlaybackRate;
-    // Estimate of the current download rate (bytes/second). This
-    // ignores time that the channel was paused by Gecko.
-    double mDownloadRate;
-    // Total length of media stream in bytes; -1 if not known
-    int64_t mTotalBytes;
-    // Current position of the download, in bytes. This is the offset of
-    // the first uncached byte after the decoder position.
-    int64_t mDownloadPosition;
-    // Current position of decoding, in bytes (how much of the stream
-    // has been consumed)
-    int64_t mDecoderPosition;
-    // Current position of playback, in bytes
-    int64_t mPlaybackPosition;
-    // If false, then mDownloadRate cannot be considered a reliable
-    // estimate (probably because the download has only been running
-    // a short time).
-    bool mDownloadRateReliable;
-    // If false, then mPlaybackRate cannot be considered a reliable
-    // estimate (probably because playback has only been running
-    // a short time).
-    bool mPlaybackRateReliable;
-  };
-
   // Return statistics. This is used for progress events and other things.
   // This can be called from any thread. It's only a snapshot of the
   // current state, since other threads might be changing the state
   // at any time.
-  virtual Statistics GetStatistics();
+  MediaStatistics GetStatistics();
 
   // Frame decoding/painting related performance counters.
   // Threadsafe.
@@ -908,17 +877,6 @@ protected:
   // Whether the decoder implementation supports dormant mode.
   bool mDormantSupported;
 
-  // Current decoding position in the stream. This is where the decoder
-  // is up to consuming the stream. This is not adjusted during decoder
-  // seek operations, but it's updated at the end when we start playing
-  // back again.
-  int64_t mDecoderPosition;
-  // Current playback position in the stream. This is (approximately)
-  // where we're up to playing back the stream. This is not adjusted
-  // during decoder seek operations, but it's updated at the end when we
-  // start playing back again.
-  int64_t mPlaybackPosition;
-
   // The logical playback position of the media resource in units of
   // seconds. This corresponds to the "official position" in HTML5. Note that
   // we need to store this as a double, rather than an int64_t (like
@@ -988,6 +946,8 @@ protected:
   void UnpinForSeek();
 
   const char* PlayStateStr();
+
+  void OnMetadataUpdate(TimedMetadata&& aMetadata);
 
   // This should only ever be accessed from the main thread.
   // It is set in Init and cleared in Shutdown when the element goes away.
@@ -1059,6 +1019,9 @@ protected:
   // Timer to schedule updating dormant state.
   nsCOMPtr<nsITimer> mDormantTimer;
 
+  // A listener to receive metadata updates from MDSM.
+  MediaEventListener mTimedMetadataListener;
+
 protected:
   // Whether the state machine is shut down.
   Mirror<bool> mStateMachineIsShutdown;
@@ -1074,6 +1037,12 @@ protected:
 
   // Duration of the media resource according to the state machine.
   Mirror<media::NullableTimeUnit> mStateMachineDuration;
+
+  // Current playback position in the stream. This is (approximately)
+  // where we're up to playing back the stream. This is not adjusted
+  // during decoder seek operations, but it's updated at the end when we
+  // start playing back again.
+  Mirror<int64_t> mPlaybackPosition;
 
   // Volume of playback.  0.0 = muted. 1.0 = full volume.
   Canonical<double> mVolume;
@@ -1112,6 +1081,18 @@ protected:
   // passed to MediaStreams when this is true.
   Canonical<bool> mSameOriginMedia;
 
+  // Estimate of the current playback rate (bytes/second).
+  Canonical<double> mPlaybackBytesPerSecond;
+
+  // True if mPlaybackBytesPerSecond is a reliable estimate.
+  Canonical<bool> mPlaybackRateReliable;
+
+  // Current decoding position in the stream. This is where the decoder
+  // is up to consuming the stream. This is not adjusted during decoder
+  // seek operations, but it's updated at the end when we start playing
+  // back again.
+  Canonical<int64_t> mDecoderPosition;
+
 public:
   AbstractCanonical<media::NullableTimeUnit>* CanonicalDurationOrNull() override;
   AbstractCanonical<double>* CanonicalVolume() {
@@ -1140,6 +1121,15 @@ public:
   }
   AbstractCanonical<bool>* CanonicalSameOriginMedia() {
     return &mSameOriginMedia;
+  }
+  AbstractCanonical<double>* CanonicalPlaybackBytesPerSecond() {
+    return &mPlaybackBytesPerSecond;
+  }
+  AbstractCanonical<bool>* CanonicalPlaybackRateReliable() {
+    return &mPlaybackRateReliable;
+  }
+  AbstractCanonical<int64_t>* CanonicalDecoderPosition() {
+    return &mDecoderPosition;
   }
 };
 

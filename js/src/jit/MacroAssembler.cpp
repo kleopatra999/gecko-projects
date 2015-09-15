@@ -535,257 +535,6 @@ template void
 MacroAssembler::atomicExchangeToTypedIntArray(Scalar::Type arrayType, const BaseIndex& mem,
                                               Register value, Register temp, AnyRegister output);
 
-template<typename S, typename T>
-void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType, const S& value,
-                                           const T& mem, Register temp1, Register temp2, AnyRegister output)
-{
-    // Uint8Clamped is explicitly not supported here
-    switch (arrayType) {
-      case Scalar::Int8:
-        switch (op) {
-          case AtomicFetchAddOp:
-            atomicFetchAdd8SignExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchSubOp:
-            atomicFetchSub8SignExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchAndOp:
-            atomicFetchAnd8SignExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchOrOp:
-            atomicFetchOr8SignExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchXorOp:
-            atomicFetchXor8SignExtend(value, mem, temp1, output.gpr());
-            break;
-          default:
-            MOZ_CRASH("Invalid typed array atomic operation");
-        }
-        break;
-      case Scalar::Uint8:
-        switch (op) {
-          case AtomicFetchAddOp:
-            atomicFetchAdd8ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchSubOp:
-            atomicFetchSub8ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchAndOp:
-            atomicFetchAnd8ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchOrOp:
-            atomicFetchOr8ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchXorOp:
-            atomicFetchXor8ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          default:
-            MOZ_CRASH("Invalid typed array atomic operation");
-        }
-        break;
-      case Scalar::Int16:
-        switch (op) {
-          case AtomicFetchAddOp:
-            atomicFetchAdd16SignExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchSubOp:
-            atomicFetchSub16SignExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchAndOp:
-            atomicFetchAnd16SignExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchOrOp:
-            atomicFetchOr16SignExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchXorOp:
-            atomicFetchXor16SignExtend(value, mem, temp1, output.gpr());
-            break;
-          default:
-            MOZ_CRASH("Invalid typed array atomic operation");
-        }
-        break;
-      case Scalar::Uint16:
-        switch (op) {
-          case AtomicFetchAddOp:
-            atomicFetchAdd16ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchSubOp:
-            atomicFetchSub16ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchAndOp:
-            atomicFetchAnd16ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchOrOp:
-            atomicFetchOr16ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchXorOp:
-            atomicFetchXor16ZeroExtend(value, mem, temp1, output.gpr());
-            break;
-          default:
-            MOZ_CRASH("Invalid typed array atomic operation");
-        }
-        break;
-      case Scalar::Int32:
-        switch (op) {
-          case AtomicFetchAddOp:
-            atomicFetchAdd32(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchSubOp:
-            atomicFetchSub32(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchAndOp:
-            atomicFetchAnd32(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchOrOp:
-            atomicFetchOr32(value, mem, temp1, output.gpr());
-            break;
-          case AtomicFetchXorOp:
-            atomicFetchXor32(value, mem, temp1, output.gpr());
-            break;
-          default:
-            MOZ_CRASH("Invalid typed array atomic operation");
-        }
-        break;
-      case Scalar::Uint32:
-        // At the moment, the code in MCallOptimize.cpp requires the output
-        // type to be double for uint32 arrays.  See bug 1077305.
-        MOZ_ASSERT(output.isFloat());
-        switch (op) {
-          case AtomicFetchAddOp:
-            atomicFetchAdd32(value, mem, InvalidReg, temp1);
-            break;
-          case AtomicFetchSubOp:
-            atomicFetchSub32(value, mem, InvalidReg, temp1);
-            break;
-          case AtomicFetchAndOp:
-            atomicFetchAnd32(value, mem, temp2, temp1);
-            break;
-          case AtomicFetchOrOp:
-            atomicFetchOr32(value, mem, temp2, temp1);
-            break;
-          case AtomicFetchXorOp:
-            atomicFetchXor32(value, mem, temp2, temp1);
-            break;
-          default:
-            MOZ_CRASH("Invalid typed array atomic operation");
-        }
-        convertUInt32ToDouble(temp1, output.fpu());
-        break;
-      default:
-        MOZ_CRASH("Invalid typed array type");
-    }
-}
-
-template void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
-                                           const Imm32& value, const Address& mem,
-                                           Register temp1, Register temp2, AnyRegister output);
-template void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
-                                           const Imm32& value, const BaseIndex& mem,
-                                           Register temp1, Register temp2, AnyRegister output);
-template void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
-                                           const Register& value, const Address& mem,
-                                           Register temp1, Register temp2, AnyRegister output);
-template void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
-                                           const Register& value, const BaseIndex& mem,
-                                           Register temp1, Register temp2, AnyRegister output);
-
-// Binary operation for effect, result discarded.
-template<typename S, typename T>
-void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType, const S& value,
-                                           const T& mem)
-{
-    // Uint8Clamped is explicitly not supported here
-    switch (arrayType) {
-      case Scalar::Int8:
-      case Scalar::Uint8:
-        switch (op) {
-          case AtomicFetchAddOp:
-            atomicAdd8(value, mem);
-            break;
-          case AtomicFetchSubOp:
-            atomicSub8(value, mem);
-            break;
-          case AtomicFetchAndOp:
-            atomicAnd8(value, mem);
-            break;
-          case AtomicFetchOrOp:
-            atomicOr8(value, mem);
-            break;
-          case AtomicFetchXorOp:
-            atomicXor8(value, mem);
-            break;
-          default:
-            MOZ_CRASH("Invalid typed array atomic operation");
-        }
-        break;
-      case Scalar::Int16:
-      case Scalar::Uint16:
-        switch (op) {
-          case AtomicFetchAddOp:
-            atomicAdd16(value, mem);
-            break;
-          case AtomicFetchSubOp:
-            atomicSub16(value, mem);
-            break;
-          case AtomicFetchAndOp:
-            atomicAnd16(value, mem);
-            break;
-          case AtomicFetchOrOp:
-            atomicOr16(value, mem);
-            break;
-          case AtomicFetchXorOp:
-            atomicXor16(value, mem);
-            break;
-          default:
-            MOZ_CRASH("Invalid typed array atomic operation");
-        }
-        break;
-      case Scalar::Int32:
-      case Scalar::Uint32:
-        switch (op) {
-          case AtomicFetchAddOp:
-            atomicAdd32(value, mem);
-            break;
-          case AtomicFetchSubOp:
-            atomicSub32(value, mem);
-            break;
-          case AtomicFetchAndOp:
-            atomicAnd32(value, mem);
-            break;
-          case AtomicFetchOrOp:
-            atomicOr32(value, mem);
-            break;
-          case AtomicFetchXorOp:
-            atomicXor32(value, mem);
-            break;
-          default:
-            MOZ_CRASH("Invalid typed array atomic operation");
-        }
-        break;
-      default:
-        MOZ_CRASH("Invalid typed array type");
-    }
-}
-
-template void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
-                                           const Imm32& value, const Address& mem);
-template void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
-                                           const Imm32& value, const BaseIndex& mem);
-template void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
-                                           const Register& value, const Address& mem);
-template void
-MacroAssembler::atomicBinopToTypedIntArray(AtomicOp op, Scalar::Type arrayType,
-                                           const Register& value, const BaseIndex& mem);
-
 template <typename T>
 void
 MacroAssembler::loadUnboxedProperty(T address, JSValueType type, TypedOrValueRegister output)
@@ -1588,15 +1337,6 @@ MacroAssembler::loadStringChar(Register str, Register index, Register output)
     bind(&done);
 }
 
-// Save an exit frame (which must be aligned to the stack pointer) to
-// PerThreadData::jitTop of the main thread.
-void
-MacroAssembler::linkExitFrame()
-{
-    AbsoluteAddress jitTop(GetJitContext()->runtime->addressOfJitTop());
-    storeStackPtr(jitTop);
-}
-
 static void
 BailoutReportOverRecursed(JSContext* cx)
 {
@@ -1667,7 +1407,7 @@ MacroAssembler::generateBailoutTail(Register scratch, Register bailoutInfo)
         push(temp);
         push(Address(bailoutInfo, offsetof(BaselineBailoutInfo, resumeAddr)));
         // No GC things to mark on the stack, push a bare token.
-        enterFakeExitFrame(ExitFrameLayout::BareToken());
+        enterFakeExitFrame(ExitFrameLayoutBareToken);
 
         // If monitorStub is non-null, handle resumeAddr appropriately.
         Label noMonitor;
@@ -2365,24 +2105,8 @@ void
 MacroAssembler::link(JitCode* code)
 {
     MOZ_ASSERT(!oom());
-    // If this code can transition to C++ code and witness a GC, then we need to store
-    // the JitCode onto the stack in order to GC it correctly.  exitCodePatch should
-    // be unset if the code never needed to push its JitCode*.
-    if (hasEnteredExitFrame()) {
-        exitCodePatch_.fixup(this);
-        PatchDataWithValueCheck(CodeLocationLabel(code, exitCodePatch_),
-                                ImmPtr(code),
-                                ImmPtr((void*)-1));
-    }
-
-    // Fix up the code pointers to be written for locations where profilerCallSite
-    // emitted moves of RIP to a register.
-    for (size_t i = 0; i < profilerCallSites_.length(); i++) {
-        CodeOffsetLabel offset = profilerCallSites_[i];
-        offset.fixup(this);
-        CodeLocationLabel location(code, offset);
-        PatchDataWithValueCheck(location, ImmPtr(location.raw()), ImmPtr((void*)-1));
-    }
+    linkSelfReference(code);
+    linkProfilerCallSites(code);
 }
 
 void
@@ -2436,29 +2160,41 @@ MacroAssembler::branchEqualTypeIfNeeded(MIRType type, MDefinition* maybeDef, Reg
     }
 }
 
-void
-MacroAssembler::profilerPreCallImpl()
+MacroAssembler::AutoProfilerCallInstrumentation::AutoProfilerCallInstrumentation(
+    MacroAssembler& masm
+    MOZ_GUARD_OBJECT_NOTIFIER_PARAM_IN_IMPL)
 {
+    MOZ_GUARD_OBJECT_NOTIFIER_INIT;
+    if (!masm.emitProfilingInstrumentation_)
+        return;
+
     Register reg = CallTempReg0;
     Register reg2 = CallTempReg1;
-    push(reg);
-    push(reg2);
-    profilerPreCallImpl(reg, reg2);
-    pop(reg2);
-    pop(reg);
-}
+    masm.push(reg);
+    masm.push(reg2);
 
-void
-MacroAssembler::profilerPreCallImpl(Register reg, Register reg2)
-{
     JitContext* icx = GetJitContext();
     AbsoluteAddress profilingActivation(icx->runtime->addressOfProfilingActivation());
 
-    CodeOffsetLabel label = movWithPatch(ImmWord(uintptr_t(-1)), reg);
-    loadPtr(profilingActivation, reg2);
-    storePtr(reg, Address(reg2, JitActivation::offsetOfLastProfilingCallSite()));
+    CodeOffsetLabel label = masm.movWithPatch(ImmWord(uintptr_t(-1)), reg);
+    masm.loadPtr(profilingActivation, reg2);
+    masm.storePtr(reg, Address(reg2, JitActivation::offsetOfLastProfilingCallSite()));
 
-    appendProfilerCallSite(label);
+    masm.appendProfilerCallSite(label);
+
+    masm.pop(reg2);
+    masm.pop(reg);
+}
+
+void
+MacroAssembler::linkProfilerCallSites(JitCode* code)
+{
+    for (size_t i = 0; i < profilerCallSites_.length(); i++) {
+        CodeOffsetLabel offset = profilerCallSites_[i];
+        offset.fixup(this);
+        CodeLocationLabel location(code, offset);
+        PatchDataWithValueCheck(location, ImmPtr(location.raw()), ImmPtr((void*)-1));
+    }
 }
 
 void
@@ -2546,11 +2282,11 @@ MacroAssembler::alignJitStackBasedOnNArgs(uint32_t nargs)
 
 MacroAssembler::MacroAssembler(JSContext* cx, IonScript* ion,
                                JSScript* script, jsbytecode* pc)
-  : emitProfilingInstrumentation_(false),
-    framePushed_(0)
+  : framePushed_(0),
 #ifdef DEBUG
-  , inCall_(false)
+    inCall_(false),
 #endif
+    emitProfilingInstrumentation_(false)
 {
     constructRoot(cx);
     jitContext_.emplace(cx, (js::jit::TempAllocator*)nullptr);
@@ -2566,7 +2302,7 @@ MacroAssembler::MacroAssembler(JSContext* cx, IonScript* ion,
     if (ion) {
         setFramePushed(ion->frameSize());
         if (pc && cx->runtime()->spsProfiler.enabled())
-            emitProfilingInstrumentation_ = true;
+            enableProfilingInstrumentation();
     }
 }
 
@@ -2576,6 +2312,9 @@ MacroAssembler::resetForNewCodeGenerator(TempAllocator& alloc)
     setFramePushed(0);
     moveResolver_.clearTempObjectPool();
     moveResolver_.setAllocator(alloc);
+#ifdef DEBUG
+    debugTrackedRegisters_.clear();
+#endif
 }
 
 MacroAssembler::AfterICSaveLive
@@ -2871,4 +2610,58 @@ MacroAssembler::callWithABINoProfiler(AsmJSImmPtr imm, MoveOp::Type result)
     callWithABIPost(stackAdjust, result);
 }
 
+// ===============================================================
+// Exit frame footer.
+
+void
+MacroAssembler::linkExitFrame()
+{
+    AbsoluteAddress jitTop(GetJitContext()->runtime->addressOfJitTop());
+    storeStackPtr(jitTop);
+}
+
+void
+MacroAssembler::linkSelfReference(JitCode* code)
+{
+    // If this code can transition to C++ code and witness a GC, then we need to store
+    // the JitCode onto the stack in order to GC it correctly.  exitCodePatch should
+    // be unset if the code never needed to push its JitCode*.
+    if (hasSelfReference()) {
+        selfReferencePatch_.fixup(this);
+        PatchDataWithValueCheck(CodeLocationLabel(code, selfReferencePatch_),
+                                ImmPtr(code),
+                                ImmPtr((void*)-1));
+    }
+}
+
 //}}} check_macroassembler_style
+
+namespace js {
+namespace jit {
+
+#ifdef DEBUG
+template <class RegisterType>
+AutoGenericRegisterScope<RegisterType>::AutoGenericRegisterScope(MacroAssembler& masm, RegisterType reg)
+  : RegisterType(reg), masm_(masm)
+{
+    masm.debugTrackedRegisters_.add(reg);
+}
+
+template AutoGenericRegisterScope<Register>::AutoGenericRegisterScope(MacroAssembler& masm, Register reg);
+template AutoGenericRegisterScope<FloatRegister>::AutoGenericRegisterScope(MacroAssembler& masm, FloatRegister reg);
+#endif // DEBUG
+
+#ifdef DEBUG
+template <class RegisterType>
+AutoGenericRegisterScope<RegisterType>::~AutoGenericRegisterScope()
+{
+    const RegisterType& reg = *dynamic_cast<RegisterType*>(this);
+    masm_.debugTrackedRegisters_.take(reg);
+}
+
+template AutoGenericRegisterScope<Register>::~AutoGenericRegisterScope();
+template AutoGenericRegisterScope<FloatRegister>::~AutoGenericRegisterScope();
+#endif // DEBUG
+
+} // namespace jit
+} // namespace js

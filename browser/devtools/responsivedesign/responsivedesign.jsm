@@ -12,7 +12,6 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource:///modules/devtools/gDevTools.jsm");
 Cu.import("resource://gre/modules/devtools/event-emitter.js");
 Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
-let { Promise: promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
 XPCOMUtils.defineLazyModuleGetter(this, "SystemAppProxy",
                                   "resource://gre/modules/SystemAppProxy.jsm");
 
@@ -21,6 +20,7 @@ let Telemetry = require("devtools/shared/telemetry");
 let { showDoorhanger } = require("devtools/shared/doorhanger");
 let { TouchEventSimulator } = require("devtools/toolkit/touch/simulator");
 let { Task } = require("resource://gre/modules/Task.jsm");
+let promise = require("promise");
 
 this.EXPORTED_SYMBOLS = ["ResponsiveUIManager"];
 
@@ -389,6 +389,7 @@ ResponsiveUI.prototype = {
     // Toolbar
     this.toolbar = this.chromeDoc.createElement("toolbar");
     this.toolbar.className = "devtools-responsiveui-toolbar";
+    this.toolbar.setAttribute("fullscreentoolbar", "true");
 
     this.menulist = this.chromeDoc.createElement("menulist");
     this.menulist.className = "devtools-responsiveui-menulist";

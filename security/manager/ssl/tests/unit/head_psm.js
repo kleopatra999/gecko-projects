@@ -37,6 +37,7 @@ const PRErrorCodeSuccess = 0;
 // Sort in numerical order
 const SEC_ERROR_INVALID_TIME                            = SEC_ERROR_BASE +   8;
 const SEC_ERROR_BAD_DER                                 = SEC_ERROR_BASE +   9;
+const SEC_ERROR_BAD_SIGNATURE                           = SEC_ERROR_BASE +  10;
 const SEC_ERROR_EXPIRED_CERTIFICATE                     = SEC_ERROR_BASE +  11;
 const SEC_ERROR_REVOKED_CERTIFICATE                     = SEC_ERROR_BASE +  12; // -8180
 const SEC_ERROR_UNKNOWN_ISSUER                          = SEC_ERROR_BASE +  13;
@@ -150,6 +151,20 @@ function getXPCOMStatusFromNSS(statusNSS) {
   let nssErrorsService = Cc["@mozilla.org/nss_errors_service;1"]
                            .getService(Ci.nsINSSErrorsService);
   return nssErrorsService.getXPCOMFromNSSError(statusNSS);
+}
+
+// certdb implements nsIX509CertDB. See nsIX509CertDB.idl for documentation.
+// In particular, hostname is optional.
+function checkCertErrorGenericAtTime(certdb, cert, expectedError, usage, time,
+                                     /*optional*/ hasEVPolicy,
+                                     /*optional*/ hostname) {
+  do_print(`cert cn=${cert.commonName}`);
+  do_print(`cert issuer cn=${cert.issuerCommonName}`);
+  let verifiedChain = {};
+  let error = certdb.verifyCertAtTime(cert, usage, NO_FLAGS, hostname, time,
+                                      verifiedChain, hasEVPolicy || {});
+  Assert.equal(error, expectedError,
+               "Actual and expected error should match");
 }
 
 // certdb implements nsIX509CertDB. See nsIX509CertDB.idl for documentation.

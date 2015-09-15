@@ -20,6 +20,7 @@ EXTRA_JS_MODULES += [
     'PushService.jsm',
     'PushServiceChildPreload.jsm',
     'PushServiceHttp2.jsm',
+    'PushServiceHttp2Crypto.jsm',
 ]
 
 MOCHITEST_MANIFESTS += [
@@ -40,8 +41,6 @@ UNIFIED_SOURCES += [
 
 if CONFIG['GNU_CXX']:
     CXXFLAGS += ['-Wshadow']
-
-FAIL_ON_WARNINGS = True
 
 LOCAL_INCLUDES += [
     '../workers',

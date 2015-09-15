@@ -268,6 +268,14 @@ function checkSettingsSection(data) {
                  f + " must have the correct type.");
   }
 
+  // Check "addonCompatibilityCheckEnabled" separately, as it is not available
+  // on Gonk.
+  if (gIsGonk) {
+    Assert.ok(!("addonCompatibilityCheckEnabled" in data.settings), "Must not be available on Gonk.");
+  } else {
+    Assert.equal(data.settings.addonCompatibilityCheckEnabled, AddonManager.checkCompatibility);
+  }
+
   // Check "isDefaultBrowser" separately, as it is not available on Android an can either be
   // null or boolean on other platforms.
   if (gIsAndroid) {
@@ -357,9 +365,40 @@ function checkSystemSection(data) {
   }
 
   Assert.ok(Number.isFinite(data.system.memoryMB), "MemoryMB must be a number.");
-  if (gIsWindows) {
-    Assert.equal(typeof data.system.isWow64, "boolean",
-              "isWow64 must be available on Windows and have the correct type.");
+
+  if (gIsWindows || gIsMac || gIsLinux) {
+    let EXTRA_CPU_FIELDS = ["cores", "model", "family", "stepping",
+			    "l2cacheKB", "l3cacheKB", "speedMHz", "vendor"];
+
+    for (let f of EXTRA_CPU_FIELDS) {
+      // Note this is testing TelemetryEnvironment.js only, not that the
+      // values are valid - null is the fallback.
+      Assert.ok(f in data.system.cpu, f + " must be available under cpu.");
+    }
+
+    if (gIsWindows) {
+      Assert.equal(typeof data.system.isWow64, "boolean",
+             "isWow64 must be available on Windows and have the correct type.");
+      Assert.ok("virtualMaxMB" in data.system, "virtualMaxMB must be available.");
+      Assert.ok(Number.isFinite(data.system.virtualMaxMB),
+                "virtualMaxMB must be a number.");
+    }
+
+    // We insist these are available
+    for (let f of ["cores"]) {
+	Assert.ok(!(f in data.system.cpu) ||
+		  Number.isFinite(data.system.cpu[f]),
+		  f + " must be a number if non null.");
+    }
+
+    // These should be numbers if they are not null
+    for (let f of ["model", "family", "stepping", "l2cacheKB",
+		   "l3cacheKB", "speedMHz"]) {
+	Assert.ok(!(f in data.system.cpu) ||
+		  data.system.cpu[f] === null ||
+		  Number.isFinite(data.system.cpu[f]),
+		  f + " must be a number if non null.");
+    }
   }
 
   let cpuData = data.system.cpu;
@@ -463,7 +502,7 @@ function checkActiveAddon(data){
     hasBinaryComponents: "boolean",
     installDay: "number",
     updateDay: "number",
-    signedState: "number",
+    signedState: mozinfo.addon_signing ? "number" : "undefined",
   };
 
   for (let f in EXPECTED_ADDON_FIELDS_TYPES) {
@@ -888,7 +927,7 @@ add_task(function* test_addonsAndPlugins() {
     hasBinaryComponents: false,
     installDay: ADDON_INSTALL_DATE,
     updateDay: ADDON_INSTALL_DATE,
-    signedState: AddonManager.SIGNEDSTATE_MISSING,
+    signedState: mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_MISSING : AddonManager.SIGNEDSTATE_NOT_REQUIRED,
   };
 
   const EXPECTED_PLUGIN_DATA = {
@@ -952,7 +991,7 @@ add_task(function* test_signedAddon() {
     hasBinaryComponents: false,
     installDay: ADDON_INSTALL_DATE,
     updateDay: ADDON_INSTALL_DATE,
-    signedState: AddonManager.SIGNEDSTATE_SIGNED,
+    signedState: mozinfo.addon_signing ? AddonManager.SIGNEDSTATE_SIGNED : AddonManager.SIGNEDSTATE_NOT_REQUIRED,
   };
 
   // Set the clock in the future so our changes don't get throttled.
@@ -1028,9 +1067,11 @@ add_task(function* test_defaultSearchEngine() {
 
   // Load the engines definitions from a custom JAR file: that's needed so that
   // the search provider reports an engine identifier.
-  let defaultBranch = Services.prefs.getDefaultBranch(null);
-  defaultBranch.setCharPref("browser.search.jarURIs", "chrome://testsearchplugin/locale/searchplugins/");
-  defaultBranch.setBoolPref("browser.search.loadFromJars", true);
+  let url = "chrome://testsearchplugin/locale/searchplugins/";
+  let resProt = Services.io.getProtocolHandler("resource")
+                        .QueryInterface(Ci.nsIResProtocolHandler);
+  resProt.setSubstitution("search-plugins",
+                          Services.io.newURI(url, null, null));
 
   // Initialize the search service.
   yield new Promise(resolve => Services.search.init(resolve));

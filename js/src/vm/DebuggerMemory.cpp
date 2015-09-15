@@ -75,7 +75,7 @@ DebuggerMemory::construct(JSContext* cx, unsigned argc, Value* vp)
 
 /* static */ const Class DebuggerMemory::class_ = {
     "Memory",
-    JSCLASS_HAS_PRIVATE | JSCLASS_IMPLEMENTS_BARRIERS |
+    JSCLASS_HAS_PRIVATE |
     JSCLASS_HAS_RESERVED_SLOTS(JSSLOT_COUNT)
 };
 
@@ -226,6 +226,10 @@ DebuggerMemory::drainAllocationsLog(JSContext* cx, unsigned argc, Value* vp)
 
         RootedValue size(cx, NumberValue(entry.size));
         if (!DefineProperty(cx, obj, cx->names().size, size))
+            return false;
+
+        RootedValue inNursery(cx, BooleanValue(entry.inNursery));
+        if (!DefineProperty(cx, obj, cx->names().inNursery, inNursery))
             return false;
 
         result->setDenseElement(i, ObjectValue(*obj));

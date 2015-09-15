@@ -74,6 +74,50 @@ loop.roomViews = (function(mozL10n) {
     }
   };
 
+  /**
+   * Something went wrong view. Displayed when there's a big problem.
+   */
+  var RoomFailureView = React.createClass({
+    mixins: [ sharedMixins.AudioMixin ],
+
+    propTypes: {
+      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      failureReason: React.PropTypes.string,
+      mozLoop: React.PropTypes.object.isRequired
+    },
+
+    componentDidMount: function() {
+      this.play("failure");
+    },
+
+    handleRejoinCall: function() {
+      this.props.dispatcher.dispatch(new sharedActions.JoinRoom());
+    },
+
+    render: function() {
+      var settingsMenuItems = [
+        { id: "feedback" },
+        { id: "help" }
+      ];
+      return (
+        <div className="room-failure">
+          <loop.conversationViews.FailureInfoView
+            failureReason={this.props.failureReason} />
+          <div className="btn-group call-action-group">
+            <button className="btn btn-info btn-rejoin"
+                    onClick={this.handleRejoinCall}>
+              {mozL10n.get("rejoin_button")}
+            </button>
+          </div>
+          <loop.shared.views.SettingsControlButton
+            menuBelow={true}
+            menuItems={settingsMenuItems}
+            mozLoop={this.props.mozLoop} />
+        </div>
+      );
+    }
+  });
+
   var SocialShareDropdown = React.createClass({
     propTypes: {
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
@@ -491,6 +535,7 @@ loop.roomViews = (function(mozL10n) {
             disabled={checked}
             label={checkboxLabel}
             onChange={this.handleCheckboxChange}
+            useEllipsis={true}
             value={location} />
           <form onSubmit={this.handleFormSubmit}>
             <input className="room-context-name"
@@ -508,7 +553,7 @@ loop.roomViews = (function(mozL10n) {
             <textarea className="room-context-comments"
               onKeyDown={this.handleTextareaKeyDown}
               placeholder={mozL10n.get("context_edit_comments_placeholder")}
-              rows="3" type="text"
+              rows="2" type="text"
               valueLink={this.linkState("newRoomDescription")} />
           </form>
           <button className="btn btn-info"
@@ -592,8 +637,20 @@ loop.roomViews = (function(mozL10n) {
         }));
     },
 
+    /**
+     * Determine if the invitation controls should be shown.
+     *
+     * @return {Boolean} True if there's no guests.
+     */
     _shouldRenderInvitationOverlay: function() {
-      return (this.state.roomState !== ROOM_STATES.HAS_PARTICIPANTS);
+      var hasGuests = typeof this.state.participants === "object" &&
+        this.state.participants.filter(function(participant) {
+          return !participant.owner;
+        }).length > 0;
+
+      // Don't show if the room has participants whether from the room state or
+      // there being non-owner guests in the participants array.
+      return this.state.roomState !== ROOM_STATES.HAS_PARTICIPANTS && !hasGuests;
     },
 
     /**
@@ -650,7 +707,7 @@ loop.roomViews = (function(mozL10n) {
      */
     _isLocalLoading: function () {
       return this.state.roomState === ROOM_STATES.MEDIA_WAIT &&
-             !this.state.localSrcVideoObject;
+             !this.state.localSrcMediaElement;
     },
 
     /**
@@ -662,7 +719,7 @@ loop.roomViews = (function(mozL10n) {
      */
     _isRemoteLoading: function() {
       return !!(this.state.roomState === ROOM_STATES.HAS_PARTICIPANTS &&
-                !this.state.remoteSrcVideoObject &&
+                !this.state.remoteSrcMediaElement &&
                 !this.state.mediaConnected);
     },
 
@@ -713,9 +770,10 @@ loop.roomViews = (function(mozL10n) {
           // Note: While rooms are set to hold a maximum of 2 participants, the
           //       FULL case should never happen on desktop.
           return (
-            <loop.conversationViews.GenericFailureView
-              cancelCall={this.closeWindow}
-              failureReason={this.state.failureReason} />
+            <RoomFailureView
+              dispatcher={this.props.dispatcher}
+              failureReason={this.state.failureReason}
+              mozLoop={this.props.mozLoop} />
           );
         }
         case ROOM_STATES.ENDED: {
@@ -724,6 +782,16 @@ loop.roomViews = (function(mozL10n) {
           return null;
         }
         default: {
+          var settingsMenuItems = [
+            {
+              id: "edit",
+              enabled: !this.state.showEditContext,
+              visible: this.state.contextEnabled,
+              onClick: this.handleEditContextClick
+            },
+            { id: "feedback" },
+            { id: "help" }
+          ];
           return (
             <div className="room-conversation-wrapper desktop-room-wrapper">
               <sharedViews.MediaLayoutView
@@ -733,24 +801,24 @@ loop.roomViews = (function(mozL10n) {
                 isRemoteLoading={this._isRemoteLoading()}
                 isScreenShareLoading={false}
                 localPosterUrl={this.props.localPosterUrl}
-                localSrcVideoObject={this.state.localSrcVideoObject}
+                localSrcMediaElement={this.state.localSrcMediaElement}
                 localVideoMuted={this.state.videoMuted}
                 matchMedia={this.state.matchMedia || window.matchMedia.bind(window)}
                 remotePosterUrl={this.props.remotePosterUrl}
-                remoteSrcVideoObject={this.state.remoteSrcVideoObject}
+                remoteSrcMediaElement={this.state.remoteSrcMediaElement}
                 renderRemoteVideo={this.shouldRenderRemoteVideo()}
+                screenShareMediaElement={this.state.screenShareMediaElement}
                 screenSharePosterUrl={null}
-                screenShareVideoObject={this.state.screenShareVideoObject}
                 showContextRoomName={false}
                 useDesktopPaths={true}>
                 <sharedViews.ConversationToolbar
                   audio={{enabled: !this.state.audioMuted, visible: true}}
                   dispatcher={this.props.dispatcher}
-                  edit={{ visible: this.state.contextEnabled, enabled: !this.state.showEditContext }}
                   hangup={this.leaveRoom}
-                  onEditClick={this.handleEditContextClick}
+                  mozLoop={this.props.mozLoop}
                   publishStream={this.publishStream}
                   screenShare={screenShareData}
+                  settingsMenuItems={settingsMenuItems}
                   video={{enabled: !this.state.videoMuted, visible: true}} />
                 <DesktopRoomInvitationView
                   dispatcher={this.props.dispatcher}
@@ -781,6 +849,7 @@ loop.roomViews = (function(mozL10n) {
 
   return {
     ActiveRoomStoreMixin: ActiveRoomStoreMixin,
+    RoomFailureView: RoomFailureView,
     SocialShareDropdown: SocialShareDropdown,
     DesktopRoomEditContextView: DesktopRoomEditContextView,
     DesktopRoomConversationView: DesktopRoomConversationView,

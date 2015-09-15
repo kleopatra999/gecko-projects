@@ -915,7 +915,7 @@ IMContextWrapper::OnSelectionChange(nsWindow* aCaller,
 
     // The focused editor might have placeholder text with normal text node.
     // In such case, the text node must be removed from a compositionstart
-    // event handler.  So, we're dispatching NS_COMPOSITION_START,
+    // event handler.  So, we're dispatching eCompositionStart,
     // we should ignore selection change notification.
     if (mCompositionState == eCompositionState_CompositionStartDispatched) {
         if (NS_WARN_IF(!mSelection.IsValid())) {
@@ -1303,7 +1303,7 @@ IMContextWrapper::DispatchCompositionStart(GtkIMContext* aContext)
         ("GTKIM: %p   DispatchCompositionStart(), FAILED, mCompositionStart=%u",
          this, mCompositionStart));
     mCompositionState = eCompositionState_CompositionStartDispatched;
-    WidgetCompositionEvent compEvent(true, NS_COMPOSITION_START,
+    WidgetCompositionEvent compEvent(true, eCompositionStart,
                                      mLastFocusedWindow);
     InitEvent(compEvent);
     nsCOMPtr<nsIWidget> kungFuDeathGrip = mLastFocusedWindow;
@@ -1364,7 +1364,7 @@ IMContextWrapper::DispatchCompositionChangeEvent(
         }
     }
 
-    WidgetCompositionEvent compositionChangeEvent(true, NS_COMPOSITION_CHANGE,
+    WidgetCompositionEvent compositionChangeEvent(true, eCompositionChange,
                                                   mLastFocusedWindow);
     InitEvent(compositionChangeEvent);
 
@@ -1439,8 +1439,8 @@ IMContextWrapper::DispatchCompositionCommitEvent(
 
     nsRefPtr<nsWindow> lastFocusedWindow(mLastFocusedWindow);
 
-    EventMessage message = aCommitString ? NS_COMPOSITION_COMMIT :
-                                           NS_COMPOSITION_COMMIT_AS_IS;
+    EventMessage message = aCommitString ? eCompositionCommit :
+                                           eCompositionCommitAsIs;
     mCompositionState = eCompositionState_NotComposing;
     mCompositionStart = UINT32_MAX;
     mCompositionTargetRange.Clear();
@@ -1449,7 +1449,7 @@ IMContextWrapper::DispatchCompositionCommitEvent(
     WidgetCompositionEvent compositionCommitEvent(true, message,
                                                   mLastFocusedWindow);
     InitEvent(compositionCommitEvent);
-    if (message == NS_COMPOSITION_COMMIT) {
+    if (message == eCompositionCommit) {
         compositionCommitEvent.mData = *aCommitString;
     }
 
@@ -1810,8 +1810,8 @@ IMContextWrapper::SetCursorPosition(GtkIMContext* aContext)
     }
 
     WidgetQueryContentEvent charRect(true,
-                                     useCaret ? NS_QUERY_CARET_RECT :
-                                                NS_QUERY_TEXT_RECT,
+                                     useCaret ? eQueryCaretRect :
+                                                eQueryTextRect,
                                      mLastFocusedWindow);
     if (useCaret) {
         charRect.InitForQueryCaretRect(mSelection.mOffset);
@@ -1833,7 +1833,7 @@ IMContextWrapper::SetCursorPosition(GtkIMContext* aContext)
     if (!charRect.mSucceeded) {
         MOZ_LOG(gGtkIMLog, LogLevel::Error,
             ("GTKIM: %p   SetCursorPosition(), FAILED, %s was failed",
-             this, useCaret ? "NS_QUERY_CARET_RECT" : "NS_QUERY_TEXT_RECT"));
+             this, useCaret ? "eQueryCaretRect" : "eQueryTextRect"));
         return;
     }
 
@@ -1909,8 +1909,7 @@ IMContextWrapper::GetCurrentParagraph(nsAString& aText,
     }
 
     // Get all text contents of the focused editor
-    WidgetQueryContentEvent queryTextContentEvent(true,
-                                                  NS_QUERY_TEXT_CONTENT,
+    WidgetQueryContentEvent queryTextContentEvent(true, eQueryTextContent,
                                                   mLastFocusedWindow);
     queryTextContentEvent.InitForQueryTextContent(0, UINT32_MAX);
     mLastFocusedWindow->DispatchEvent(&queryTextContentEvent, status);
@@ -2006,8 +2005,7 @@ IMContextWrapper::DeleteText(GtkIMContext* aContext,
     }
 
     // Get all text contents of the focused editor
-    WidgetQueryContentEvent queryTextContentEvent(true,
-                                                  NS_QUERY_TEXT_CONTENT,
+    WidgetQueryContentEvent queryTextContentEvent(true, eQueryTextContent,
                                                   mLastFocusedWindow);
     queryTextContentEvent.InitForQueryTextContent(0, UINT32_MAX);
     mLastFocusedWindow->DispatchEvent(&queryTextContentEvent, status);
@@ -2053,7 +2051,7 @@ IMContextWrapper::DeleteText(GtkIMContext* aContext,
         g_utf8_offset_to_pointer(utf8Str.get(), endInUTF8Characters);
 
     // Set selection to delete
-    WidgetSelectionEvent selectionEvent(true, NS_SELECTION_SET,
+    WidgetSelectionEvent selectionEvent(true, eSetSelection,
                                         mLastFocusedWindow);
 
     nsDependentCSubstring utf8StrBeforeOffset(utf8Str, 0,
@@ -2082,8 +2080,7 @@ IMContextWrapper::DeleteText(GtkIMContext* aContext,
     }
 
     // Delete the selection
-    WidgetContentCommandEvent contentCommandEvent(true,
-                                                  NS_CONTENT_COMMAND_DELETE,
+    WidgetContentCommandEvent contentCommandEvent(true, eContentCommandDelete,
                                                   mLastFocusedWindow);
     mLastFocusedWindow->DispatchEvent(&contentCommandEvent, status);
 
@@ -2152,7 +2149,7 @@ IMContextWrapper::EnsureToCacheSelection(nsAString* aSelectedString)
     }
 
     nsEventStatus status;
-    WidgetQueryContentEvent selection(true, NS_QUERY_SELECTED_TEXT,
+    WidgetQueryContentEvent selection(true, eQuerySelectedText,
                                       mLastFocusedWindow);
     InitEvent(selection);
     mLastFocusedWindow->DispatchEvent(&selection, status);
@@ -2201,7 +2198,7 @@ IMContextWrapper::Selection::Assign(const IMENotification& aIMENotification)
 void
 IMContextWrapper::Selection::Assign(const WidgetQueryContentEvent& aEvent)
 {
-    MOZ_ASSERT(aEvent.mMessage == NS_QUERY_SELECTED_TEXT);
+    MOZ_ASSERT(aEvent.mMessage == eQuerySelectedText);
     MOZ_ASSERT(aEvent.mSucceeded);
     mOffset = aEvent.mReply.mOffset;
     mLength = aEvent.mReply.mString.Length();

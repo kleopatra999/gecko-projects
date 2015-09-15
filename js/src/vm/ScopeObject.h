@@ -217,7 +217,7 @@ ScopeCoordinateFunctionScript(JSScript* script, jsbytecode* pc);
  *     |   |   |   |
  *     |   |   |  StaticEvalObject  Placeholder so eval scopes may be iterated through
  *     |   |   |
- *     |   |  DeclEnvObject         Holds name of recursive/heavyweight named lambda
+ *     |   |  DeclEnvObject         Holds name of recursive/needsCallObject named lambda
  *     |   |
  *     |  CallObject                Scope of entire function or strict eval
  *     |   |
@@ -438,6 +438,7 @@ class StaticEvalObject : public ScopeObject
     // Indirect evals terminate in the global at run time, and has no static
     // enclosing scope.
     bool isDirect() const {
+        MOZ_ASSERT_IF(!getReservedSlot(SCOPE_CHAIN_SLOT).isObject(), !isStrict());
         return getReservedSlot(SCOPE_CHAIN_SLOT).isObject();
     }
 };
@@ -643,6 +644,14 @@ class StaticBlockObject : public BlockObject
      */
     inline StaticBlockObject* enclosingBlock() const;
 
+    StaticEvalObject* maybeEnclosingEval() const {
+        if (JSObject* enclosing = enclosingStaticScope()) {
+            if (enclosing->is<StaticEvalObject>())
+                return &enclosing->as<StaticEvalObject>();
+        }
+        return nullptr;
+    }
+
     uint32_t localOffset() {
         return getReservedSlot(LOCAL_OFFSET_SLOT).toPrivateUint32();
     }
@@ -816,7 +825,7 @@ CloneNestedScopeObject(JSContext* cx, HandleObject enclosingScope, Handle<Nested
 // whether the current scope is within the extent of this initial frame.
 // Here, "frame" means a single activation of: a function, eval, or global
 // code.
-class ScopeIter
+class MOZ_RAII ScopeIter
 {
     StaticScopeIter<CanGC> ssi_;
     RootedObject scope_;

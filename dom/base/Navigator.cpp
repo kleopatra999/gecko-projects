@@ -68,6 +68,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsIStringStream.h"
 #include "nsIHttpChannel.h"
+#include "nsIHttpChannelInternal.h"
 #include "TimeManager.h"
 #include "DeviceStorage.h"
 #include "nsIDOMNavigatorSystemMessages.h"
@@ -1322,18 +1323,24 @@ Navigator::SendBeacon(const nsAString& aUrl,
     nsCOMPtr<nsIInterfaceRequestor> soc = nsContentUtils::SameOriginChecker();
     channel->SetNotificationCallbacks(soc);
 
-    nsCOMPtr<nsIChannel> preflightChannel;
+    nsCOMPtr<nsIHttpChannelInternal> internalChannel =
+      do_QueryInterface(channel);
+    if (!internalChannel) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return false;
+    }
     nsTArray<nsCString> unsafeHeaders;
     unsafeHeaders.AppendElement(NS_LITERAL_CSTRING("Content-Type"));
-    rv = NS_StartCORSPreflight(channel,
-                               beaconListener,
-                               doc->NodePrincipal(),
-                               true,
-                               unsafeHeaders,
-                               getter_AddRefs(preflightChannel));
-  } else {
-    rv = channel->AsyncOpen2(beaconListener);
+    rv = internalChannel->SetCorsPreflightParameters(unsafeHeaders,
+                                                     true,
+                                                     doc->NodePrincipal());
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      aRv.Throw(rv);
+      return false;
+    }
   }
+
+  rv = channel->AsyncOpen2(beaconListener);
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
     return false;
@@ -1597,6 +1604,14 @@ Navigator::HasFeature(const nsAString& aName, ErrorResult& aRv)
   if (aRv.Failed()) {
     return nullptr;
   }
+
+  // Hardcoded web-extensions feature which is b2g specific.
+#ifdef MOZ_B2G
+  if (aName.EqualsLiteral("web-extensions")) {
+    p->MaybeResolve(true);
+    return p.forget();
+  }
+#endif
 
   // Hardcoded manifest features. Some are still b2g specific.
   const char manifestFeatures[][64] = {
@@ -2467,24 +2482,6 @@ Navigator::HasUserMediaSupport(JSContext* /* unused */,
          Preferences::GetBool("media.peerconnection.enabled", false);
 }
 #endif // MOZ_MEDIA_NAVIGATOR
-
-/* static */
-bool
-Navigator::HasInputMethodSupport(JSContext* /* unused */,
-                                 JSObject* aGlobal)
-{
-  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(aGlobal);
-  if (!win || !Preferences::GetBool("dom.mozInputMethod.enabled", false)) {
-    return false;
-  }
-
-  if (Preferences::GetBool("dom.mozInputMethod.testing", false)) {
-    return true;
-  }
-
-  return CheckPermission(win, "input") ||
-         CheckPermission(win, "input-manage");
-}
 
 /* static */
 bool

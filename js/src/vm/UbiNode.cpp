@@ -42,6 +42,7 @@ using JS::HandleValue;
 using JS::Value;
 using JS::ZoneSet;
 using JS::ubi::AtomOrTwoByteChars;
+using JS::ubi::CoarseType;
 using JS::ubi::Concrete;
 using JS::ubi::Edge;
 using JS::ubi::EdgeRange;
@@ -144,6 +145,7 @@ StackFrame::functionDisplayNameLength()
 }
 
 // All operations on null ubi::Nodes crash.
+CoarseType Concrete<void>::coarseType() const      { MOZ_CRASH("null ubi::Node"); }
 const char16_t* Concrete<void>::typeName() const   { MOZ_CRASH("null ubi::Node"); }
 JS::Zone* Concrete<void>::zone() const             { MOZ_CRASH("null ubi::Node"); }
 JSCompartment* Concrete<void>::compartment() const { MOZ_CRASH("null ubi::Node"); }
@@ -153,7 +155,7 @@ Concrete<void>::edges(JSContext*, bool) const {
     MOZ_CRASH("null ubi::Node");
 }
 
-size_t
+Node::Size
 Concrete<void>::size(mozilla::MallocSizeOf mallocSizeof) const
 {
     MOZ_CRASH("null ubi::Node");
@@ -278,7 +280,7 @@ class SimpleEdgeRange : public EdgeRange {
 
     bool init(JSContext* cx, void* thing, JS::TraceKind kind, bool wantNames = true) {
         SimpleEdgeVectorTracer tracer(cx, &edges, wantNames);
-        JS_TraceChildren(&tracer, thing, kind);
+        js::TraceChildren(&tracer, thing, kind);
         settle();
         return tracer.okay;
     }

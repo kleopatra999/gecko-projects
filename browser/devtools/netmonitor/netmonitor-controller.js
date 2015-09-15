@@ -118,7 +118,7 @@ Cu.import("resource:///modules/devtools/VariablesViewController.jsm");
 Cu.import("resource:///modules/devtools/ViewHelpers.jsm");
 
 const {require} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
-const promise = Cu.import("resource://gre/modules/Promise.jsm", {}).Promise;
+const promise = require("promise");
 const EventEmitter = require("devtools/toolkit/event-emitter");
 const Editor = require("devtools/sourceeditor/editor");
 const {Tooltip} = require("devtools/shared/widgets/Tooltip");
@@ -320,6 +320,37 @@ let NetMonitorController = {
     }
     this._currentActivity = ACTIVITY_TYPE.NONE;
     return promise.reject(new Error("Invalid activity type"));
+  },
+
+  /**
+   * Selects the specified request in the waterfall and opens the details view.
+   *
+   * @param string requestId
+   *        The actor ID of the request to inspect.
+   * @return object
+   *         A promise resolved once the task finishes.
+   */
+  inspectRequest: function(requestId) {
+    // Look for the request in the existing ones or wait for it to appear, if
+    // the network monitor is still loading.
+    let deferred = promise.defer();
+    let request = null;
+    let inspector = function() {
+      let predicate = i => i.value === requestId;
+      request = NetMonitorView.RequestsMenu.getItemForPredicate(predicate);
+      if (request) {
+        window.off(EVENTS.REQUEST_ADDED, inspector);
+        NetMonitorView.RequestsMenu.filterOn("all");
+        NetMonitorView.RequestsMenu.selectedItem = request;
+        deferred.resolve();
+      }
+    }
+
+    inspector();
+    if (!request) {
+      window.on(EVENTS.REQUEST_ADDED, inspector);
+    }
+    return deferred.promise;
   },
 
   /**
