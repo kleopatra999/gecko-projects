@@ -24,7 +24,7 @@ config = {
 
     },
     'env': {
-        'PATH': '%(PATH)s:' + 'C:/mozilla-build/Git/bin',
+        'PATH': '%(PATH)s;' + 'C:/mozilla-build/Git/bin',
     },
 
     "find_links": [
