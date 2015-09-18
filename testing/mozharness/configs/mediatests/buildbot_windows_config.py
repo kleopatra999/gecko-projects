@@ -17,8 +17,14 @@ config = {
         'mozinstall': ['%s/build/venv/scripts/python' % os.getcwd(),
                        '%s/build/venv/scripts/mozinstall-script.py' % os.getcwd()],
         'tooltool.py': [sys.executable, 'C:/mozilla-build/tooltool.py'],
-        'gittool.py': [sys.executable, os.path.join(external_tools_path, 'gittool.py')],
+        'gittool.py': [sys.executable,
+                       os.path.join(external_tools_path, 'gittool.py')],
+        'hgtool.py': [sys.executable,
+                      os.path.join(external_tools_path, 'hgtool.py')],
 
+    },
+    'env': {
+        'PATH': '%(PATH)s:' + 'C:/mozilla-build/Git/bin',
     },
 
     "find_links": [
