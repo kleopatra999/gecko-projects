@@ -157,15 +157,14 @@ class FirefoxMediaTestsBase(TestingMixin, VCSToolsScript):
     @PreScriptAction('create-virtualenv')
     def _pre_create_virtualenv(self, action):
         dirs = self.query_abs_dirs()
-        # cwd is $workspace/build
+        requirements_file = os.path.join(dirs['firefox_media_dir'],
+                                         'requirements.txt')
+        if os.path.isfile(requirements_file):
+            self.register_virtualenv_module(requirements=[requirements_file])
         self.register_virtualenv_module(name='firefox-ui-tests',
-                                        url=dirs['firefox_ui_dir'],
-                                        method='pip',
-                                        editable='true')
+                                        url=dirs['firefox_ui_dir'])
         self.register_virtualenv_module(name='firefox-media-tests',
-                                        url=dirs['firefox_media_dir'],
-                                        method='pip',
-                                        editable='true')
+                                        url=dirs['firefox_media_dir'])
 
     def query_abs_dirs(self):
         if self.abs_dirs:
