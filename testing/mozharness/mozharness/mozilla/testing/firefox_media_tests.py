@@ -208,7 +208,12 @@ class FirefoxMediaTestsBase(TestingMixin, VCSToolsScript):
         if not self.binary_path:
             self.fatal("Binary path could not be determined. "
                        "Should be set by default during 'install' action.")
-        cmd = ['firefox-media-tests']
+        dirs = self.query_abs_dirs()
+        venv_python_path = self.query_python_path()
+        runner_script = os.path.join(dirs['firefox_media_dir'],
+                                     'media_test_harness',
+                                     'runtests.py')
+        cmd = [venv_python_path, runner_script]
         cmd += ['--binary', self.binary_path]
         if self.symbols_path:
             cmd += ['--symbols-path', self.symbols_path]
