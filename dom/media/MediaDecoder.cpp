@@ -112,30 +112,34 @@ public:
 
 StaticRefPtr<MediaMemoryTracker> MediaMemoryTracker::sUniqueInstance;
 
+#if defined(PR_LOGGING)
 PRLogModuleInfo* gStateWatchingLog;
 PRLogModuleInfo* gMozPromiseLog;
 PRLogModuleInfo* gMediaTimerLog;
 PRLogModuleInfo* gMediaSampleLog;
+#endif
 
 void
 MediaDecoder::InitStatics()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
+#if defined(PR_LOGGING)
   // Log modules.
   gMediaDecoderLog = PR_NewLogModule("MediaDecoder");
   gMediaTimerLog = PR_NewLogModule("MediaTimer");
   gMediaSampleLog = PR_NewLogModule("MediaSample");
+#endif
 }
 
 NS_IMPL_ISUPPORTS(MediaMemoryTracker, nsIMemoryReporter)
 
 NS_IMPL_ISUPPORTS0(MediaDecoder)
 
-void MediaDecoder::NotifyOwnerActivityChanged()
+void
+MediaDecoder::NotifyOwnerActivityChanged()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
 
   if (!mOwner) {
     NS_WARNING("MediaDecoder without a decoder owner, can't update dormant");
@@ -150,6 +154,8 @@ void MediaDecoder::NotifyOwnerActivityChanged()
 bool
 MediaDecoder::IsHeuristicDormantSupported() const
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   return
 #if defined(MOZ_EME)
     // We disallow dormant for encrypted media until bug 1181864 is fixed.
@@ -159,10 +165,10 @@ MediaDecoder::IsHeuristicDormantSupported() const
     mIsHeuristicDormantSupported;
 }
 
-void MediaDecoder::UpdateDormantState(bool aDormantTimeout, bool aActivity)
+void
+MediaDecoder::UpdateDormantState(bool aDormantTimeout, bool aActivity)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  GetReentrantMonitor().AssertCurrentThreadIn();
 
   if (!mDecoderStateMachine ||
       mPlayState == PLAY_STATE_SHUTDOWN ||
@@ -217,13 +223,7 @@ void MediaDecoder::UpdateDormantState(bool aDormantTimeout, bool aActivity)
   if (mIsDormant) {
     DECODER_LOG("UpdateDormantState() entering DORMANT state");
     // enter dormant state
-    RefPtr<nsRunnable> event =
-      NS_NewRunnableMethodWithArg<bool>(
-        mDecoderStateMachine,
-        &MediaDecoderStateMachine::SetDormant,
-        true);
-    mDecoderStateMachine->OwnerThread()->Dispatch(event.forget());
-
+    mDecoderStateMachine->DispatchSetDormant(true);
     if (IsEnded()) {
       mWasEndedWhenEnteredDormant = true;
     }
@@ -232,27 +232,22 @@ void MediaDecoder::UpdateDormantState(bool aDormantTimeout, bool aActivity)
   } else {
     DECODER_LOG("UpdateDormantState() leaving DORMANT state");
     // exit dormant state
-    // trigger to state machine.
-    RefPtr<nsRunnable> event =
-      NS_NewRunnableMethodWithArg<bool>(
-        mDecoderStateMachine,
-        &MediaDecoderStateMachine::SetDormant,
-        false);
-    mDecoderStateMachine->OwnerThread()->Dispatch(event.forget());
+    mDecoderStateMachine->DispatchSetDormant(false);
   }
 }
 
-void MediaDecoder::DormantTimerExpired(nsITimer* aTimer, void* aClosure)
+void
+MediaDecoder::DormantTimerExpired(nsITimer* aTimer, void* aClosure)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aClosure);
   MediaDecoder* decoder = static_cast<MediaDecoder*>(aClosure);
-  ReentrantMonitorAutoEnter mon(decoder->GetReentrantMonitor());
   decoder->UpdateDormantState(true /* aDormantTimeout */,
                               false /* aActivity */);
 }
 
-void MediaDecoder::StartDormantTimer()
+void
+MediaDecoder::StartDormantTimer()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (!IsHeuristicDormantSupported()) {
@@ -278,7 +273,8 @@ void MediaDecoder::StartDormantTimer()
                                       nsITimer::TYPE_ONE_SHOT);
 }
 
-void MediaDecoder::CancelDormantTimer()
+void
+MediaDecoder::CancelDormantTimer()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mDormantTimer) {
@@ -286,10 +282,10 @@ void MediaDecoder::CancelDormantTimer()
   }
 }
 
-void MediaDecoder::Pause()
+void
+MediaDecoder::Pause()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   if (mPlayState == PLAY_STATE_LOADING ||
       IsEnded()) {
     mNextState = PLAY_STATE_PAUSED;
@@ -299,28 +295,32 @@ void MediaDecoder::Pause()
   ChangeState(PLAY_STATE_PAUSED);
 }
 
-void MediaDecoder::SetVolume(double aVolume)
+void
+MediaDecoder::SetVolume(double aVolume)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mVolume = aVolume;
 }
 
-void MediaDecoder::AddOutputStream(ProcessedMediaStream* aStream,
-                                   bool aFinishWhenEnded)
+void
+MediaDecoder::AddOutputStream(ProcessedMediaStream* aStream,
+                              bool aFinishWhenEnded)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mDecoderStateMachine, "Must be called after Load().");
   mDecoderStateMachine->AddOutputStream(aStream, aFinishWhenEnded);
 }
 
-void MediaDecoder::RemoveOutputStream(MediaStream* aStream)
+void
+MediaDecoder::RemoveOutputStream(MediaStream* aStream)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mDecoderStateMachine, "Must be called after Load().");
   mDecoderStateMachine->RemoveOutputStream(aStream);
 }
 
-double MediaDecoder::GetDuration()
+double
+MediaDecoder::GetDuration()
 {
   MOZ_ASSERT(NS_IsMainThread());
   return mDuration;
@@ -333,14 +333,16 @@ MediaDecoder::CanonicalDurationOrNull()
   return mDecoderStateMachine->CanonicalDuration();
 }
 
-void MediaDecoder::SetInfinite(bool aInfinite)
+void
+MediaDecoder::SetInfinite(bool aInfinite)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mInfiniteStream = aInfinite;
   DurationChanged();
 }
 
-bool MediaDecoder::IsInfinite()
+bool
+MediaDecoder::IsInfinite()
 {
   MOZ_ASSERT(NS_IsMainThread());
   return mInfiniteStream;
@@ -351,8 +353,10 @@ MediaDecoder::MediaDecoder() :
   mDormantSupported(false),
   mLogicalPosition(0.0),
   mDuration(std::numeric_limits<double>::quiet_NaN()),
-  mMediaSeekable(true),
   mReentrantMonitor("media.decoder"),
+#ifdef MOZ_EME
+  mCDMProxyPromise(mCDMProxyPromiseHolder.Ensure(__func__)),
+#endif
   mIgnoreProgressData(false),
   mInfiniteStream(false),
   mOwner(nullptr),
@@ -407,7 +411,9 @@ MediaDecoder::MediaDecoder() :
   mPlaybackRateReliable(AbstractThread::MainThread(), true,
                         "MediaDecoder::mPlaybackRateReliable (Canonical)"),
   mDecoderPosition(AbstractThread::MainThread(), 0,
-                   "MediaDecoder::mDecoderPosition (Canonical)")
+                   "MediaDecoder::mDecoderPosition (Canonical)"),
+  mMediaSeekable(AbstractThread::MainThread(), true,
+                 "MediaDecoder::mMediaSeekable (Canonical)")
 {
   MOZ_COUNT_CTOR(MediaDecoder);
   MOZ_ASSERT(NS_IsMainThread());
@@ -438,7 +444,8 @@ MediaDecoder::MediaDecoder() :
   mWatchManager.Watch(mLogicallySeeking, &MediaDecoder::SeekingChanged);
 }
 
-bool MediaDecoder::Init(MediaDecoderOwner* aOwner)
+bool
+MediaDecoder::Init(MediaDecoderOwner* aOwner)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mOwner = aOwner;
@@ -447,7 +454,8 @@ bool MediaDecoder::Init(MediaDecoderOwner* aOwner)
   return true;
 }
 
-void MediaDecoder::Shutdown()
+void
+MediaDecoder::Shutdown()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -455,6 +463,10 @@ void MediaDecoder::Shutdown()
     return;
 
   mShuttingDown = true;
+
+#ifdef MOZ_EME
+  mCDMProxyPromiseHolder.RejectIfExists(true, __func__);
+#endif
 
   // This changes the decoder state to SHUTDOWN and does other things
   // necessary to unblock the state machine thread if it's blocked, so
@@ -487,27 +499,19 @@ MediaDecoder::~MediaDecoder()
   MOZ_COUNT_DTOR(MediaDecoder);
 }
 
-nsresult MediaDecoder::OpenResource(nsIStreamListener** aStreamListener)
+nsresult
+MediaDecoder::OpenResource(nsIStreamListener** aStreamListener)
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (aStreamListener) {
     *aStreamListener = nullptr;
   }
-
-  {
-    // Hold the lock while we do this to set proper lock ordering
-    // expectations for dynamic deadlock detectors: decoder lock(s)
-    // should be grabbed before the cache lock
-    ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-
-    nsresult rv = mResource->Open(aStreamListener);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
-  return NS_OK;
+  return mResource->Open(aStreamListener);
 }
 
-nsresult MediaDecoder::Load(nsIStreamListener** aStreamListener,
-                            MediaDecoder* aCloneDonor)
+nsresult
+MediaDecoder::Load(nsIStreamListener** aStreamListener,
+                   MediaDecoder* aCloneDonor)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mResource, "Can't load without a MediaResource");
@@ -521,7 +525,8 @@ nsresult MediaDecoder::Load(nsIStreamListener** aStreamListener,
   return InitializeStateMachine(aCloneDonor);
 }
 
-nsresult MediaDecoder::InitializeStateMachine(MediaDecoder* aCloneDonor)
+nsresult
+MediaDecoder::InitializeStateMachine(MediaDecoder* aCloneDonor)
 {
   MOZ_ASSERT(NS_IsMainThread());
   NS_ASSERTION(mDecoderStateMachine, "Cannot initialize null state machine!");
@@ -538,7 +543,8 @@ nsresult MediaDecoder::InitializeStateMachine(MediaDecoder* aCloneDonor)
   return NS_OK;
 }
 
-void MediaDecoder::SetStateMachineParameters()
+void
+MediaDecoder::SetStateMachineParameters()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mMinimizePreroll) {
@@ -548,7 +554,8 @@ void MediaDecoder::SetStateMachineParameters()
     AbstractThread::MainThread(), this, &MediaDecoder::OnMetadataUpdate);
 }
 
-void MediaDecoder::SetMinimizePrerollUntilPlaybackStarts()
+void
+MediaDecoder::SetMinimizePrerollUntilPlaybackStarts()
 {
   MOZ_ASSERT(NS_IsMainThread());
   DECODER_LOG("SetMinimizePrerollUntilPlaybackStarts()");
@@ -559,10 +566,10 @@ void MediaDecoder::SetMinimizePrerollUntilPlaybackStarts()
   MOZ_DIAGNOSTIC_ASSERT(!mDecoderStateMachine);
 }
 
-nsresult MediaDecoder::Play()
+nsresult
+MediaDecoder::Play()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   UpdateDormantState(false /* aDormantTimeout */, true /* aActivity */);
 
   NS_ASSERTION(mDecoderStateMachine != nullptr, "Should have state machine.");
@@ -581,10 +588,10 @@ nsresult MediaDecoder::Play()
   return NS_OK;
 }
 
-nsresult MediaDecoder::Seek(double aTime, SeekTarget::Type aSeekType)
+nsresult
+MediaDecoder::Seek(double aTime, SeekTarget::Type aSeekType)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   NS_ENSURE_TRUE(!mShuttingDown, NS_ERROR_FAILURE);
 
   UpdateDormantState(false /* aDormantTimeout */, true /* aActivity */);
@@ -613,30 +620,33 @@ nsresult MediaDecoder::Seek(double aTime, SeekTarget::Type aSeekType)
   return NS_OK;
 }
 
-void MediaDecoder::CallSeek(const SeekTarget& aTarget)
+void
+MediaDecoder::CallSeek(const SeekTarget& aTarget)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mSeekRequest.DisconnectIfExists();
-  mSeekRequest.Begin(InvokeAsync(mDecoderStateMachine->OwnerThread(),
-                                 mDecoderStateMachine.get(), __func__,
-                                 &MediaDecoderStateMachine::Seek, aTarget)
+  mSeekRequest.Begin(
+    mDecoderStateMachine->InvokeSeek(aTarget)
     ->Then(AbstractThread::MainThread(), __func__, this,
            &MediaDecoder::OnSeekResolved, &MediaDecoder::OnSeekRejected));
 }
 
-double MediaDecoder::GetCurrentTime()
+double
+MediaDecoder::GetCurrentTime()
 {
   MOZ_ASSERT(NS_IsMainThread());
   return mLogicalPosition;
 }
 
-already_AddRefed<nsIPrincipal> MediaDecoder::GetCurrentPrincipal()
+already_AddRefed<nsIPrincipal>
+MediaDecoder::GetCurrentPrincipal()
 {
   MOZ_ASSERT(NS_IsMainThread());
   return mResource ? mResource->GetCurrentPrincipal() : nullptr;
 }
 
-void MediaDecoder::OnMetadataUpdate(TimedMetadata&& aMetadata)
+void
+MediaDecoder::OnMetadataUpdate(TimedMetadata&& aMetadata)
 {
   MOZ_ASSERT(NS_IsMainThread());
   RemoveMediaTracks();
@@ -647,9 +657,10 @@ void MediaDecoder::OnMetadataUpdate(TimedMetadata&& aMetadata)
                    MediaDecoderEventVisibility::Observable);
 }
 
-void MediaDecoder::MetadataLoaded(nsAutoPtr<MediaInfo> aInfo,
-                                  nsAutoPtr<MetadataTags> aTags,
-                                  MediaDecoderEventVisibility aEventVisibility)
+void
+MediaDecoder::MetadataLoaded(nsAutoPtr<MediaInfo> aInfo,
+                             nsAutoPtr<MetadataTags> aTags,
+                             MediaDecoderEventVisibility aEventVisibility)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -690,8 +701,9 @@ MediaDecoder::PlayStateStr()
   }
 }
 
-void MediaDecoder::FirstFrameLoaded(nsAutoPtr<MediaInfo> aInfo,
-                                    MediaDecoderEventVisibility aEventVisibility)
+void
+MediaDecoder::FirstFrameLoaded(nsAutoPtr<MediaInfo> aInfo,
+                               MediaDecoderEventVisibility aEventVisibility)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -728,7 +740,8 @@ void MediaDecoder::FirstFrameLoaded(nsAutoPtr<MediaInfo> aInfo,
   NotifySuspendedStatusChanged();
 }
 
-void MediaDecoder::ResetConnectionState()
+void
+MediaDecoder::ResetConnectionState()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mShuttingDown)
@@ -745,7 +758,8 @@ void MediaDecoder::ResetConnectionState()
   Shutdown();
 }
 
-void MediaDecoder::NetworkError()
+void
+MediaDecoder::NetworkError()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mShuttingDown)
@@ -757,7 +771,8 @@ void MediaDecoder::NetworkError()
   Shutdown();
 }
 
-void MediaDecoder::DecodeError()
+void
+MediaDecoder::DecodeError()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mShuttingDown)
@@ -769,33 +784,37 @@ void MediaDecoder::DecodeError()
   Shutdown();
 }
 
-void MediaDecoder::UpdateSameOriginStatus(bool aSameOrigin)
+void
+MediaDecoder::UpdateSameOriginStatus(bool aSameOrigin)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   mSameOriginMedia = aSameOrigin;
 }
 
-bool MediaDecoder::IsSeeking() const
+bool
+MediaDecoder::IsSeeking() const
 {
   MOZ_ASSERT(NS_IsMainThread());
   return mLogicallySeeking;
 }
 
-bool MediaDecoder::IsEndedOrShutdown() const
+bool
+MediaDecoder::IsEndedOrShutdown() const
 {
   MOZ_ASSERT(NS_IsMainThread());
   return IsEnded() || mPlayState == PLAY_STATE_SHUTDOWN;
 }
 
-bool MediaDecoder::IsEnded() const
+bool
+MediaDecoder::IsEnded() const
 {
   MOZ_ASSERT(NS_IsMainThread());
   return mPlayState == PLAY_STATE_ENDED ||
          (mWasEndedWhenEnteredDormant && (mPlayState != PLAY_STATE_SHUTDOWN));
 }
 
-void MediaDecoder::PlaybackEnded()
+void
+MediaDecoder::PlaybackEnded()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -823,7 +842,6 @@ MediaStatistics
 MediaDecoder::GetStatistics()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   MOZ_ASSERT(mResource);
 
   MediaStatistics result;
@@ -841,7 +859,6 @@ void
 MediaDecoder::ComputePlaybackRate()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   MOZ_ASSERT(mResource);
 
   int64_t length = mResource->GetLength();
@@ -860,7 +877,6 @@ void
 MediaDecoder::UpdatePlaybackRate()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  GetReentrantMonitor().AssertCurrentThreadIn();
   MOZ_ASSERT(mResource);
 
   ComputePlaybackRate();
@@ -878,7 +894,8 @@ MediaDecoder::UpdatePlaybackRate()
   mResource->SetPlaybackRate(rate);
 }
 
-void MediaDecoder::NotifySuspendedStatusChanged()
+void
+MediaDecoder::NotifySuspendedStatusChanged()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mResource && mOwner) {
@@ -887,19 +904,18 @@ void MediaDecoder::NotifySuspendedStatusChanged()
   }
 }
 
-void MediaDecoder::NotifyBytesDownloaded()
+void
+MediaDecoder::NotifyBytesDownloaded()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  {
-    ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-    UpdatePlaybackRate();
-  }
+  UpdatePlaybackRate();
   if (mOwner) {
     mOwner->DownloadProgressed();
   }
 }
 
-void MediaDecoder::NotifyDownloadEnded(nsresult aStatus)
+void
+MediaDecoder::NotifyDownloadEnded(nsresult aStatus)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -913,10 +929,7 @@ void MediaDecoder::NotifyDownloadEnded(nsresult aStatus)
     return;
   }
 
-  {
-    ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-    UpdatePlaybackRate();
-  }
+  UpdatePlaybackRate();
 
   if (NS_SUCCEEDED(aStatus)) {
     // A final progress event will be fired by the MediaResource calling
@@ -928,7 +941,8 @@ void MediaDecoder::NotifyDownloadEnded(nsresult aStatus)
   }
 }
 
-void MediaDecoder::NotifyPrincipalChanged()
+void
+MediaDecoder::NotifyPrincipalChanged()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mOwner) {
@@ -936,7 +950,8 @@ void MediaDecoder::NotifyPrincipalChanged()
   }
 }
 
-void MediaDecoder::NotifyBytesConsumed(int64_t aBytes, int64_t aOffset)
+void
+MediaDecoder::NotifyBytesConsumed(int64_t aBytes, int64_t aOffset)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -945,14 +960,14 @@ void MediaDecoder::NotifyBytesConsumed(int64_t aBytes, int64_t aOffset)
   }
 
   MOZ_ASSERT(mDecoderStateMachine);
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   if (aOffset >= mDecoderPosition) {
     mPlaybackStatistics->AddBytes(aBytes);
   }
   mDecoderPosition = aOffset + aBytes;
 }
 
-void MediaDecoder::OnSeekResolved(SeekResolveValue aVal)
+void
+MediaDecoder::OnSeekResolved(SeekResolveValue aVal)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mSeekRequest.Complete();
@@ -962,8 +977,6 @@ void MediaDecoder::OnSeekResolved(SeekResolveValue aVal)
 
   bool fireEnded = false;
   {
-    ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-
     // An additional seek was requested while the current seek was
     // in operation.
     UnpinForSeek();
@@ -986,7 +999,8 @@ void MediaDecoder::OnSeekResolved(SeekResolveValue aVal)
   }
 }
 
-void MediaDecoder::SeekingStarted(MediaDecoderEventVisibility aEventVisibility)
+void
+MediaDecoder::SeekingStarted(MediaDecoderEventVisibility aEventVisibility)
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mShuttingDown)
@@ -999,10 +1013,10 @@ void MediaDecoder::SeekingStarted(MediaDecoderEventVisibility aEventVisibility)
   }
 }
 
-void MediaDecoder::ChangeState(PlayState aState)
+void
+MediaDecoder::ChangeState(PlayState aState)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
 
   if (mNextState == aState) {
     mNextState = PLAY_STATE_PAUSED;
@@ -1027,7 +1041,8 @@ void MediaDecoder::ChangeState(PlayState aState)
   StartDormantTimer();
 }
 
-void MediaDecoder::UpdateLogicalPosition(MediaDecoderEventVisibility aEventVisibility)
+void
+MediaDecoder::UpdateLogicalPosition(MediaDecoderEventVisibility aEventVisibility)
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mShuttingDown)
@@ -1054,10 +1069,10 @@ void MediaDecoder::UpdateLogicalPosition(MediaDecoderEventVisibility aEventVisib
   }
 }
 
-void MediaDecoder::DurationChanged()
+void
+MediaDecoder::DurationChanged()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
 
   double oldDuration = mDuration;
   if (IsInfinite()) {
@@ -1089,7 +1104,8 @@ void MediaDecoder::DurationChanged()
   }
 }
 
-void MediaDecoder::UpdateEstimatedMediaDuration(int64_t aDuration)
+void
+MediaDecoder::UpdateEstimatedMediaDuration(int64_t aDuration)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -1109,26 +1125,29 @@ void MediaDecoder::UpdateEstimatedMediaDuration(int64_t aDuration)
   mEstimatedDuration = Some(TimeUnit::FromMicroseconds(aDuration));
 }
 
-void MediaDecoder::SetMediaSeekable(bool aMediaSeekable) {
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
+void
+MediaDecoder::SetMediaSeekable(bool aMediaSeekable) {
+  MOZ_ASSERT(NS_IsMainThread());
   mMediaSeekable = aMediaSeekable;
 }
 
 bool
 MediaDecoder::IsTransportSeekable()
 {
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
+  MOZ_ASSERT(NS_IsMainThread());
   return GetResource()->IsTransportSeekable();
 }
 
-bool MediaDecoder::IsMediaSeekable()
+bool
+MediaDecoder::IsMediaSeekable()
 {
+  MOZ_ASSERT(NS_IsMainThread());
   NS_ENSURE_TRUE(GetStateMachine(), false);
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   return mMediaSeekable;
 }
 
-media::TimeIntervals MediaDecoder::GetSeekable()
+media::TimeIntervals
+MediaDecoder::GetSeekable()
 {
   MOZ_ASSERT(NS_IsMainThread());
   // We can seek in buffered range if the media is seekable. Also, we can seek
@@ -1147,7 +1166,8 @@ media::TimeIntervals MediaDecoder::GetSeekable()
   }
 }
 
-void MediaDecoder::SetFragmentEndTime(double aTime)
+void
+MediaDecoder::SetFragmentEndTime(double aTime)
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mDecoderStateMachine) {
@@ -1155,7 +1175,8 @@ void MediaDecoder::SetFragmentEndTime(double aTime)
   }
 }
 
-void MediaDecoder::Suspend()
+void
+MediaDecoder::Suspend()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mResource) {
@@ -1163,7 +1184,8 @@ void MediaDecoder::Suspend()
   }
 }
 
-void MediaDecoder::Resume(bool aForceBuffering)
+void
+MediaDecoder::Resume(bool aForceBuffering)
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mResource) {
@@ -1176,7 +1198,8 @@ void MediaDecoder::Resume(bool aForceBuffering)
   }
 }
 
-void MediaDecoder::SetLoadInBackground(bool aLoadInBackground)
+void
+MediaDecoder::SetLoadInBackground(bool aLoadInBackground)
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (mResource) {
@@ -1184,12 +1207,14 @@ void MediaDecoder::SetLoadInBackground(bool aLoadInBackground)
   }
 }
 
-bool MediaDecoder::OnStateMachineTaskQueue() const
+bool
+MediaDecoder::OnStateMachineTaskQueue() const
 {
   return mDecoderStateMachine->OnTaskQueue();
 }
 
-void MediaDecoder::SetPlaybackRate(double aPlaybackRate)
+void
+MediaDecoder::SetPlaybackRate(double aPlaybackRate)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mPlaybackRate = aPlaybackRate;
@@ -1207,13 +1232,15 @@ void MediaDecoder::SetPlaybackRate(double aPlaybackRate)
   }
 }
 
-void MediaDecoder::SetPreservesPitch(bool aPreservesPitch)
+void
+MediaDecoder::SetPreservesPitch(bool aPreservesPitch)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mPreservesPitch = aPreservesPitch;
 }
 
-bool MediaDecoder::OnDecodeTaskQueue() const {
+bool
+MediaDecoder::OnDecodeTaskQueue() const {
   NS_WARN_IF_FALSE(mDecoderStateMachine, "mDecoderStateMachine is null");
   return mDecoderStateMachine ? mDecoderStateMachine->OnDecodeTaskQueue() : false;
 }
@@ -1242,23 +1269,22 @@ MediaDecoder::SetStateMachine(MediaDecoderStateMachine* aStateMachine)
   }
 }
 
-ReentrantMonitor& MediaDecoder::GetReentrantMonitor() {
-  return mReentrantMonitor;
-}
-
-ImageContainer* MediaDecoder::GetImageContainer()
+ImageContainer*
+MediaDecoder::GetImageContainer()
 {
   return mVideoFrameContainer ? mVideoFrameContainer->GetImageContainer() : nullptr;
 }
 
-void MediaDecoder::InvalidateWithFlags(uint32_t aFlags)
+void
+MediaDecoder::InvalidateWithFlags(uint32_t aFlags)
 {
   if (mVideoFrameContainer) {
     mVideoFrameContainer->InvalidateWithFlags(aFlags);
   }
 }
 
-void MediaDecoder::Invalidate()
+void
+MediaDecoder::Invalidate()
 {
   if (mVideoFrameContainer) {
     mVideoFrameContainer->Invalidate();
@@ -1267,12 +1293,14 @@ void MediaDecoder::Invalidate()
 
 // Constructs the time ranges representing what segments of the media
 // are buffered and playable.
-media::TimeIntervals MediaDecoder::GetBuffered() {
+media::TimeIntervals
+MediaDecoder::GetBuffered() {
   MOZ_ASSERT(NS_IsMainThread());
   return mBuffered.Ref();
 }
 
-size_t MediaDecoder::SizeOfVideoQueue() {
+size_t
+MediaDecoder::SizeOfVideoQueue() {
   MOZ_ASSERT(NS_IsMainThread());
   if (mDecoderStateMachine) {
     return mDecoderStateMachine->SizeOfVideoQueue();
@@ -1280,7 +1308,8 @@ size_t MediaDecoder::SizeOfVideoQueue() {
   return 0;
 }
 
-size_t MediaDecoder::SizeOfAudioQueue() {
+size_t
+MediaDecoder::SizeOfAudioQueue() {
   MOZ_ASSERT(NS_IsMainThread());
   if (mDecoderStateMachine) {
     return mDecoderStateMachine->SizeOfAudioQueue();
@@ -1288,7 +1317,10 @@ size_t MediaDecoder::SizeOfAudioQueue() {
   return 0;
 }
 
-void MediaDecoder::NotifyDataArrived(uint32_t aLength, int64_t aOffset, bool aThrottleUpdates) {
+void
+MediaDecoder::NotifyDataArrived(uint32_t aLength,
+                                int64_t aOffset,
+                                bool aThrottleUpdates) {
   MOZ_ASSERT(NS_IsMainThread());
 
   if (mDecoderStateMachine) {
@@ -1301,38 +1333,27 @@ void MediaDecoder::NotifyDataArrived(uint32_t aLength, int64_t aOffset, bool aTh
 }
 
 // Provide access to the state machine object
-MediaDecoderStateMachine* MediaDecoder::GetStateMachine() const {
+MediaDecoderStateMachine*
+MediaDecoder::GetStateMachine() const {
+  MOZ_ASSERT(NS_IsMainThread());
   return mDecoderStateMachine;
 }
 
-void
-MediaDecoder::NotifyWaitingForResourcesStatusChanged()
-{
-  if (mDecoderStateMachine) {
-    RefPtr<nsRunnable> task =
-      NS_NewRunnableMethod(mDecoderStateMachine,
-                           &MediaDecoderStateMachine::NotifyWaitingForResourcesStatusChanged);
-    mDecoderStateMachine->OwnerThread()->Dispatch(task.forget());
-  }
-}
-
-bool MediaDecoder::IsShutdown() const {
-  MOZ_ASSERT(NS_IsMainThread());
-  NS_ENSURE_TRUE(GetStateMachine(), true);
-  return mStateMachineIsShutdown;
-}
-
 // Drop reference to state machine.  Only called during shutdown dance.
-void MediaDecoder::BreakCycles() {
+void
+MediaDecoder::BreakCycles() {
+  MOZ_ASSERT(NS_IsMainThread());
   SetStateMachine(nullptr);
 }
 
-MediaDecoderOwner* MediaDecoder::GetMediaOwner() const
+MediaDecoderOwner*
+MediaDecoder::GetMediaOwner() const
 {
   return mOwner;
 }
 
-void MediaDecoder::FireTimeUpdate()
+void
+MediaDecoder::FireTimeUpdate()
 {
   MOZ_ASSERT(NS_IsMainThread());
   if (!mOwner)
@@ -1340,7 +1361,8 @@ void MediaDecoder::FireTimeUpdate()
   mOwner->FireTimeUpdate(true);
 }
 
-void MediaDecoder::PinForSeek()
+void
+MediaDecoder::PinForSeek()
 {
   MOZ_ASSERT(NS_IsMainThread());
   MediaResource* resource = GetResource();
@@ -1351,7 +1373,8 @@ void MediaDecoder::PinForSeek()
   resource->Pin();
 }
 
-void MediaDecoder::UnpinForSeek()
+void
+MediaDecoder::UnpinForSeek()
 {
   MOZ_ASSERT(NS_IsMainThread());
   MediaResource* resource = GetResource();
@@ -1371,22 +1394,30 @@ MediaDecoder::CanPlayThrough()
 }
 
 #ifdef MOZ_EME
-nsresult
+nsRefPtr<MediaDecoder::CDMProxyPromise>
+MediaDecoder::RequestCDMProxy() const
+{
+  return mCDMProxyPromise;
+}
+
+void
 MediaDecoder::SetCDMProxy(CDMProxy* aProxy)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
-  mProxy = aProxy;
-  // Awaken any readers waiting for the proxy.
-  NotifyWaitingForResourcesStatusChanged();
-  return NS_OK;
-}
 
-CDMProxy*
-MediaDecoder::GetCDMProxy()
-{
-  GetReentrantMonitor().AssertCurrentThreadIn();
-  return mProxy;
+  nsRefPtr<CDMProxy> proxy = aProxy;
+  {
+    CDMCaps::AutoLock caps(aProxy->Capabilites());
+    if (!caps.AreCapsKnown()) {
+      nsRefPtr<MediaDecoder> self = this;
+      nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([=] () {
+        self->mCDMProxyPromiseHolder.ResolveIfExists(proxy, __func__);
+      });
+      caps.CallOnMainThreadWhenCapsAvailable(r);
+      return;
+    }
+  }
+  mCDMProxyPromiseHolder.ResolveIfExists(proxy, __func__);
 }
 #endif
 

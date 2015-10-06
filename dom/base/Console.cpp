@@ -10,7 +10,7 @@
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/Exceptions.h"
 #include "mozilla/dom/File.h"
-#include "mozilla/dom/StructuredCloneHelper.h"
+#include "mozilla/dom/StructuredCloneHolder.h"
 #include "mozilla/dom/ToJSValue.h"
 #include "mozilla/Maybe.h"
 #include "nsCycleCollectionParticipant.h"
@@ -18,6 +18,7 @@
 #include "nsDOMNavigationTiming.h"
 #include "nsGlobalWindow.h"
 #include "nsJSUtils.h"
+#include "nsNetUtil.h"
 #include "nsPerformance.h"
 #include "ScriptSettings.h"
 #include "WorkerPrivate.h"
@@ -34,6 +35,7 @@
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsILoadContext.h"
 #include "nsIProgrammingLanguage.h"
+#include "nsISensitiveInfoHiddenURI.h"
 #include "nsIServiceManager.h"
 #include "nsISupportsPrimitives.h"
 #include "nsIWebNavigation.h"
@@ -196,7 +198,7 @@ private:
 
 class ConsoleRunnable : public nsRunnable
                       , public WorkerFeature
-                      , public StructuredCloneHelperInternal
+                      , public StructuredCloneHolderBase
 {
 public:
   explicit ConsoleRunnable(Console* aConsole)
@@ -209,8 +211,8 @@ public:
   virtual
   ~ConsoleRunnable()
   {
-    // Shutdown the StructuredCloneHelperInternal class.
-    Shutdown();
+    // Clear the StructuredCloneHolderBase class.
+    Clear();
   }
 
   bool
@@ -350,10 +352,10 @@ protected:
   RunConsole(JSContext* aCx, nsPIDOMWindow* aOuterWindow,
              nsPIDOMWindow* aInnerWindow) = 0;
 
-  virtual JSObject* ReadCallback(JSContext* aCx,
-                                 JSStructuredCloneReader* aReader,
-                                 uint32_t aTag,
-                                 uint32_t aIndex) override
+  virtual JSObject* CustomReadHandler(JSContext* aCx,
+                                      JSStructuredCloneReader* aReader,
+                                      uint32_t aTag,
+                                      uint32_t aIndex) override
   {
     AssertIsOnMainThread();
 
@@ -376,9 +378,9 @@ protected:
     return nullptr;
   }
 
-  virtual bool WriteCallback(JSContext* aCx,
-                             JSStructuredCloneWriter* aWriter,
-                             JS::Handle<JSObject*> aObj) override
+  virtual bool CustomWriteHandler(JSContext* aCx,
+                                  JSStructuredCloneWriter* aWriter,
+                                  JS::Handle<JSObject*> aObj) override
   {
     nsRefPtr<Blob> blob;
     if (NS_SUCCEEDED(UNWRAP_OBJECT(Blob, aObj, blob)) &&
@@ -534,7 +536,6 @@ private:
 
     MOZ_ASSERT(argumentsValue.isObject());
     JS::Rooted<JSObject*> argumentsObj(aCx, &argumentsValue.toObject());
-    MOZ_ASSERT(JS_IsArrayObject(aCx, argumentsObj));
 
     uint32_t length;
     if (!JS_GetArrayLength(aCx, argumentsObj, &length)) {
@@ -629,7 +630,6 @@ private:
 
     MOZ_ASSERT(argumentsValue.isObject());
     JS::Rooted<JSObject*> argumentsObj(aCx, &argumentsValue.toObject());
-    MOZ_ASSERT(JS_IsArrayObject(aCx, argumentsObj));
 
     uint32_t length;
     if (!JS_GetArrayLength(aCx, argumentsObj, &length)) {
@@ -1210,6 +1210,19 @@ Console::ProcessCallData(ConsoleCallData* aData)
 
   event.mLevel = aData->mMethodString;
   event.mFilename = frame.mFilename;
+
+  nsCOMPtr<nsIURI> filenameURI;
+  nsAutoCString pass;
+  if (NS_SUCCEEDED(NS_NewURI(getter_AddRefs(filenameURI), frame.mFilename)) &&
+      NS_SUCCEEDED(filenameURI->GetPassword(pass)) && !pass.IsEmpty()) {
+    nsCOMPtr<nsISensitiveInfoHiddenURI> safeURI = do_QueryInterface(filenameURI);
+    nsAutoCString spec;
+    if (safeURI &&
+        NS_SUCCEEDED(safeURI->GetSensitiveInfoHiddenSpec(spec))) {
+      CopyUTF8toUTF16(spec, event.mFilename);
+    }
+  }
+
   event.mLineNumber = frame.mLineNumber;
   event.mColumnNumber = frame.mColumnNumber;
   event.mFunctionName = frame.mFunctionName;

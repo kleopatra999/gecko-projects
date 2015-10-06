@@ -1174,12 +1174,10 @@ pref("dom.ipc.plugins.sandbox-level.flash", 0);
 // This controls the strength of the Windows content process sandbox for testing
 // purposes. This will require a restart.
 // On windows these levels are:
-// 0 - sandbox with USER_NON_ADMIN access token level
-// 1 - level 0 plus low integrity
-// 2 - a policy that we can reasonably call an effective sandbox
-// 3 - an equivalent basic policy to the Chromium renderer processes
+// See - security/sandbox/win/src/sandboxbroker/sandboxBroker.cpp
+// SetSecurityLevelForContentProcess() for what the different settings mean.
 #if defined(NIGHTLY_BUILD)
-pref("security.sandbox.content.level", 1);
+pref("security.sandbox.content.level", 2);
 #else
 pref("security.sandbox.content.level", 0);
 #endif
@@ -1344,7 +1342,7 @@ pref("devtools.toolbox.sidebar.width", 500);
 pref("devtools.toolbox.host", "bottom");
 pref("devtools.toolbox.previousHost", "side");
 pref("devtools.toolbox.selectedTool", "webconsole");
-pref("devtools.toolbox.toolbarSpec", '["splitconsole", "paintflashing toggle","tilt toggle","scratchpad","resize toggle","eyedropper","screenshot --fullpage", "rulers"]');
+pref("devtools.toolbox.toolbarSpec", '["splitconsole", "paintflashing toggle","tilt toggle","scratchpad","resize toggle","eyedropper","screenshot --fullpage", "rulers", "measure"]');
 pref("devtools.toolbox.sideEnabled", true);
 pref("devtools.toolbox.zoomValue", "1");
 pref("devtools.toolbox.splitconsoleEnabled", false);
@@ -1361,14 +1359,13 @@ pref("devtools.command-button-responsive.enabled", true);
 pref("devtools.command-button-eyedropper.enabled", false);
 pref("devtools.command-button-screenshot.enabled", false);
 pref("devtools.command-button-rulers.enabled", false);
+pref("devtools.command-button-measure.enabled", false);
 
 // Inspector preferences
 // Enable the Inspector
 pref("devtools.inspector.enabled", true);
 // What was the last active sidebar in the inspector
 pref("devtools.inspector.activeSidebar", "ruleview");
-// Enable the markup preview
-pref("devtools.inspector.markupPreview", false);
 pref("devtools.inspector.remote", false);
 // Collapse pseudo-elements by default in the rule-view
 pref("devtools.inspector.show_pseudo_elements", false);
@@ -1380,8 +1377,6 @@ pref("devtools.inspector.showUserAgentStyles", false);
 pref("devtools.inspector.showAllAnonymousContent", false);
 // Enable the MDN docs tooltip
 pref("devtools.inspector.mdnDocsTooltip.enabled", true);
-// Show the new animation inspector UI
-pref("devtools.inspector.animationInspectorV3", false);
 
 // DevTools default color unit
 pref("devtools.defaultColorUnit", "hex");
@@ -1695,6 +1690,7 @@ pref("image.mem.max_decoded_image_kb", 256000);
 pref("loop.enabled", true);
 pref("loop.textChat.enabled", true);
 pref("loop.server", "https://loop.services.mozilla.com/v0");
+pref("loop.linkClicker.url", "https://hello.firefox.com/");
 pref("loop.gettingStarted.seen", false);
 pref("loop.gettingStarted.url", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/hello/start/");
 pref("loop.gettingStarted.resumeOnFirstJoin", false);
@@ -1762,18 +1758,10 @@ pref("plain_text.wrap_long_lines", true);
 pref("dom.debug.propagate_gesture_events_through_content", false);
 
 // The request URL of the GeoLocation backend.
-#ifdef RELEASE_BUILD
-pref("geo.wifi.uri", "https://www.googleapis.com/geolocation/v1/geolocate?key=%GOOGLE_API_KEY%");
-#else
 pref("geo.wifi.uri", "https://location.services.mozilla.com/v1/geolocate?key=%MOZILLA_API_KEY%");
-#endif
 
 #ifdef XP_MACOSX
-#ifdef RELEASE_BUILD
-pref("geo.provider.use_corelocation", false);
-#else
 pref("geo.provider.use_corelocation", true);
-#endif
 #endif
 
 #ifdef XP_WIN
@@ -1837,6 +1825,10 @@ pref("ui.key.menuAccessKeyFocuses", true);
 pref("media.eme.enabled", true);
 pref("media.eme.apiVisible", true);
 
+// Whether we should run a test-pattern through EME GMPs before assuming they'll
+// decode H.264.
+pref("media.gmp.trial-create.enabled", true);
+
 #ifdef MOZ_ADOBE_EME
 pref("browser.eme.ui.enabled", true);
 pref("media.gmp-eme-adobe.enabled", true);
@@ -1877,7 +1869,10 @@ pref("browser.polaris.enabled", false);
 pref("privacy.trackingprotection.ui.enabled", false);
 #endif
 pref("privacy.trackingprotection.introCount", 0);
-pref("privacy.trackingprotection.introURL", "https://support.mozilla.org/1/firefox/%VERSION%/%OS%/%LOCALE%/tracking-protection-pbm");
+pref("privacy.trackingprotection.introURL", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/tracking-protection/start/");
+
+// Enable Contextual Identity Containers
+pref("privacy.userContext.enabled", false);
 
 #ifndef RELEASE_BUILD
 // At the moment, autostart.2 is used, while autostart.1 is unused.
@@ -1887,8 +1882,14 @@ pref("browser.tabs.remote.autostart.1", false);
 pref("browser.tabs.remote.autostart.2", true);
 #endif
 
+// For the about:tabcrashed page
+pref("browser.tabs.crashReporting.sendReport", true);
+pref("browser.tabs.crashReporting.includeURL", false);
+pref("browser.tabs.crashReporting.emailMe", false);
+pref("browser.tabs.crashReporting.email", "");
+
 #ifdef NIGHTLY_BUILD
-#if defined(XP_MACOSX) || defined(XP_WIN)
+#ifndef MOZ_MULET
 pref("layers.async-pan-zoom.enabled", true);
 #endif
 #endif
@@ -1932,20 +1933,21 @@ pref("browser.pocket.oAuthConsumerKey", "40249-e88c401e1b1f2242d9e441c4");
 pref("browser.pocket.useLocaleList", true);
 pref("browser.pocket.enabledLocales", "cs de en-GB en-US en-ZA es-ES es-MX fr hu it ja ja-JP-mac ko nl pl pt-BR pt-PT ru zh-CN zh-TW");
 
-// View source tabs are only enabled by default for Dev. Ed and Nightly.
-#ifdef RELEASE_BUILD
-pref("view_source.tab", false);
-#else
 pref("view_source.tab", true);
-#endif
 
 // Enable ServiceWorkers for Push API consumers.
-// Interception is still disabled.
+// Interception is still disabled on beta and release.
 pref("dom.serviceWorkers.enabled", true);
 
-#ifdef NIGHTLY_BUILD
+#ifndef RELEASE_BUILD
 pref("dom.serviceWorkers.interception.enabled", true);
 #endif
 
 // Enable Push API.
 pref("dom.push.enabled", true);
+
+// These are the thumbnail width/height set in about:newtab.
+// If you change this, ENSURE IT IS THE SAME SIZE SET
+// by about:newtab. These values are in CSS pixels.
+pref("toolkit.pageThumbs.minWidth", 280);
+pref("toolkit.pageThumbs.minHeight", 190);

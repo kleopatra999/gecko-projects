@@ -14,7 +14,7 @@ const SPONSORED_TAG_BUFFER = 2; // 2px buffer to clip off top of sponsored tag
 /**
  * This singleton represents the grid that contains all sites.
  */
-let gGrid = {
+var gGrid = {
   /**
    * The DOM node of the grid.
    */
@@ -52,7 +52,7 @@ let gGrid = {
     this._createSiteFragment();
 
     gLinks.populateCache(() => {
-      this.refresh();
+      this._refreshGrid();
       this._ready = true;
 
       // If fetching links took longer than loading the page itself then
@@ -109,9 +109,20 @@ let gGrid = {
   },
 
   /**
+   * Renders and resizes the gird. _resizeGrid() call is needed to ensure
+   * that scrollbar disappears when the bottom row becomes empty following
+   * the block action, or tile display is turmed off via cog menu
+   */
+
+  refresh() {
+    this._refreshGrid();
+    this._resizeGrid();
+  },
+
+  /**
    * Renders the grid, including cells and sites.
    */
-  refresh() {
+  _refreshGrid() {
     let cell = document.createElementNS(HTML_NAMESPACE, "div");
     cell.classList.add("newtab-cell");
 

@@ -87,6 +87,8 @@
 #include "ScopedNSSTypes.h"
 #include "nsNullPrincipal.h"
 #include "nsIPackagedAppService.h"
+#include "nsIDeprecationWarner.h"
+#include "nsIDocument.h"
 
 namespace mozilla { namespace net {
 
@@ -2822,8 +2824,7 @@ nsHttpChannel::ContinueProcessFallback(nsresult rv)
     NS_ENSURE_SUCCESS(rv, rv);
 
     if (mLoadFlags & LOAD_INITIAL_DOCUMENT_URI) {
-        Telemetry::Accumulate(Telemetry::HTTP_OFFLINE_CACHE_DOCUMENT_LOAD,
-                              true);
+        MaybeWarnAboutAppCache();
     }
 
     // close down this channel
@@ -2896,8 +2897,9 @@ nsHttpChannel::OpenCacheEntry(bool isHttps)
         return NS_OK;
 
     // Pick up an application cache from the notification
-    // callbacks if available
-    if (!mApplicationCache && mInheritApplicationCache) {
+    // callbacks if available and if we are not an intercepted channel.
+    if (!PossiblyIntercepted() && !mApplicationCache &&
+        mInheritApplicationCache) {
         nsCOMPtr<nsIApplicationCacheContainer> appCacheContainer;
         GetCallback(appCacheContainer);
 
@@ -3622,8 +3624,7 @@ nsHttpChannel::OnOfflineCacheEntryAvailable(nsICacheEntry *aEntry,
         mCacheEntryIsWriteOnly = false;
 
         if (mLoadFlags & LOAD_INITIAL_DOCUMENT_URI && !mApplicationCacheForWrite) {
-            Telemetry::Accumulate(Telemetry::HTTP_OFFLINE_CACHE_DOCUMENT_LOAD,
-                                  true);
+            MaybeWarnAboutAppCache();
         }
 
         return NS_OK;
@@ -4852,6 +4853,7 @@ NS_INTERFACE_MAP_BEGIN(nsHttpChannel)
     NS_INTERFACE_MAP_ENTRY(nsIChannel)
     NS_INTERFACE_MAP_ENTRY(nsIRequestObserver)
     NS_INTERFACE_MAP_ENTRY(nsIStreamListener)
+    NS_INTERFACE_MAP_ENTRY(nsIPackagedAppChannelListener)
     NS_INTERFACE_MAP_ENTRY(nsIHttpChannel)
     NS_INTERFACE_MAP_ENTRY(nsICacheInfoChannel)
     NS_INTERFACE_MAP_ENTRY(nsICachingChannel)
@@ -5659,6 +5661,25 @@ NS_IMETHODIMP
 nsHttpChannel::GetRequestMethod(nsACString& aMethod)
 {
     return HttpBaseChannel::GetRequestMethod(aMethod);
+}
+
+//-----------------------------------------------------------------------------
+// nsHttpChannel::nsIPackagedAppChannelListener
+//-----------------------------------------------------------------------------
+
+NS_IMETHODIMP
+nsHttpChannel::OnStartSignedPackageRequest(const nsACString& aPackageId)
+{
+    nsCOMPtr<nsIPackagedAppChannelListener> listener;
+    NS_QueryNotificationCallbacks(this, listener);
+
+    if (listener) {
+        listener->OnStartSignedPackageRequest(aPackageId);
+    } else {
+        LOG(("nsHttpChannel::OnStartSignedPackageRequest [this=%p], no listener on %p", this, mListener.get()));
+    }
+
+    return NS_OK;
 }
 
 //-----------------------------------------------------------------------------
@@ -7023,6 +7044,24 @@ nsHttpChannel::OnPreflightFailed(nsresult aError)
     CloseCacheEntry(true);
     AsyncAbort(aError);
     return NS_OK;
+}
+
+void
+nsHttpChannel::MaybeWarnAboutAppCache()
+{
+    // First, accumulate a telemetry ping about appcache usage.
+    Telemetry::Accumulate(Telemetry::HTTP_OFFLINE_CACHE_DOCUMENT_LOAD,
+                          true);
+
+    // Then, issue a deprecation warning if service worker interception is
+    // enabled.
+    if (nsContentUtils::ServiceWorkerInterceptionEnabled()) {
+        nsCOMPtr<nsIDeprecationWarner> warner;
+        GetCallback(warner);
+        if (warner) {
+            warner->IssueWarning(nsIDocument::eAppCache, false);
+        }
+    }
 }
 
 } // namespace net

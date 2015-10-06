@@ -62,6 +62,7 @@ static bool sUnprefixingServiceEnabled;
 static bool sUnprefixingServiceGloballyWhitelisted;
 #endif
 static bool sMozGradientsEnabled;
+static bool sControlCharVisibility;
 
 const uint32_t
 nsCSSProps::kParserVariantTable[eCSSProperty_COUNT_no_shorthands] = {
@@ -129,7 +130,8 @@ public:
                       nsIURI*          aBaseURI,
                       nsIPrincipal*    aSheetPrincipal,
                       uint32_t         aLineNumber,
-                      bool             aAllowUnsafeRules);
+                      bool             aAllowUnsafeRules,
+                      LoaderReusableStyleSheets* aReusableSheets);
 
   nsresult ParseStyleAttribute(const nsAString&  aAttributeValue,
                                nsIURI*           aDocURL,
@@ -320,6 +322,9 @@ public:
     nsCSSProps::EnabledState enabledState = nsCSSProps::eEnabledForAllContent;
     if (mUnsafeRulesEnabled) {
       enabledState |= nsCSSProps::eEnabledInUASheets;
+    }
+    if (mIsChrome) {
+      enabledState |= nsCSSProps::eEnabledInChrome;
     }
     return enabledState;
   }
@@ -1174,6 +1179,9 @@ protected:
   // Used for @import rules
   mozilla::css::Loader* mChildLoader; // not ref counted, it owns us
 
+  // Any sheets we may reuse when parsing an @import.
+  LoaderReusableStyleSheets* mReusableSheets;
+
   // Sheet section we're in.  This is used to enforce correct ordering of the
   // various rule types (eg the fact that a @charset rule must come before
   // anything else).  Note that there are checks of similar things in various
@@ -1203,6 +1211,9 @@ protected:
 
   // True if unsafe rules should be allowed
   bool mUnsafeRulesEnabled : 1;
+
+  // True if we are in parsing rules for the chrome.
+  bool mIsChrome : 1;
 
   // True if viewport units should be allowed.
   bool mViewportUnitsEnabled : 1;
@@ -1293,6 +1304,9 @@ static void AppendRuleToSheet(css::Rule* aRule, void* aParser)
 #define REPORT_UNEXPECTED_P(msg_, param_) \
   { if (!mSuppressErrors) mReporter->ReportUnexpected(#msg_, param_); }
 
+#define REPORT_UNEXPECTED_P_V(msg_, param_, value_) \
+  { if (!mSuppressErrors) mReporter->ReportUnexpected(#msg_, param_, value_); }
+
 #define REPORT_UNEXPECTED_TOKEN(msg_) \
   { if (!mSuppressErrors) mReporter->ReportUnexpected(#msg_, mToken); }
 
@@ -1319,6 +1333,7 @@ CSSParserImpl::CSSParserImpl()
     mScanner(nullptr),
     mReporter(nullptr),
     mChildLoader(nullptr),
+    mReusableSheets(nullptr),
     mSection(eCSSSection_Charset),
     mNameSpaceMap(nullptr),
     mHavePushBack(false),
@@ -1326,6 +1341,7 @@ CSSParserImpl::CSSParserImpl()
     mHashlessColorQuirk(false),
     mUnitlessLengthQuirk(false),
     mUnsafeRulesEnabled(false),
+    mIsChrome(false),
     mViewportUnitsEnabled(true),
     mHTMLMediaMode(false),
     mParsingCompoundProperty(false),
@@ -1431,7 +1447,8 @@ CSSParserImpl::ParseSheet(const nsAString& aInput,
                           nsIURI*          aBaseURI,
                           nsIPrincipal*    aSheetPrincipal,
                           uint32_t         aLineNumber,
-                          bool             aAllowUnsafeRules)
+                          bool             aAllowUnsafeRules,
+                          LoaderReusableStyleSheets* aReusableSheets)
 {
   NS_PRECONDITION(aSheetPrincipal, "Must have principal here!");
   NS_PRECONDITION(aBaseURI, "need base URI");
@@ -1477,6 +1494,8 @@ CSSParserImpl::ParseSheet(const nsAString& aInput,
   }
 
   mUnsafeRulesEnabled = aAllowUnsafeRules;
+  mIsChrome = nsContentUtils::IsSystemPrincipal(aSheetPrincipal);
+  mReusableSheets = aReusableSheets;
 
   nsCSSToken* tk = &mToken;
   for (;;) {
@@ -1500,6 +1519,8 @@ CSSParserImpl::ParseSheet(const nsAString& aInput,
   ReleaseScanner();
 
   mUnsafeRulesEnabled = false;
+  mIsChrome = false;
+  mReusableSheets = nullptr;
 
   // XXX check for low level errors
   return NS_OK;
@@ -1675,10 +1696,7 @@ CSSParserImpl::ParseProperty(const nsCSSProperty aPropID,
 
   // Check for unknown or preffed off properties
   if (eCSSProperty_UNKNOWN == aPropID ||
-      !(nsCSSProps::IsEnabled(aPropID) ||
-        (mUnsafeRulesEnabled &&
-         nsCSSProps::PropHasFlags(aPropID,
-                                  CSS_PROPERTY_ALWAYS_ENABLED_IN_UA_SHEETS)))) {
+      !nsCSSProps::IsEnabled(aPropID, PropertyEnabledState())) {
     NS_ConvertASCIItoUTF16 propName(nsCSSProps::GetStringValue(aPropID));
     REPORT_UNEXPECTED_P(PEUnknownProperty, propName);
     REPORT_UNEXPECTED(PEDeclDropped);
@@ -2145,6 +2163,7 @@ SeparatorRequiredBetweenTokens(nsCSSTokenSerializationType aToken1,
              aToken2 == eCSSTokenSerialization_URange ||
              aToken2 == eCSSTokenSerialization_CDC;
     case eCSSTokenSerialization_Symbol_Hash:
+    case eCSSTokenSerialization_Symbol_Minus:
       return aToken2 == eCSSTokenSerialization_Ident ||
              aToken2 == eCSSTokenSerialization_Function ||
              aToken2 == eCSSTokenSerialization_URL_or_BadURL ||
@@ -2153,7 +2172,6 @@ SeparatorRequiredBetweenTokens(nsCSSTokenSerializationType aToken1,
              aToken2 == eCSSTokenSerialization_Percentage ||
              aToken2 == eCSSTokenSerialization_Dimension ||
              aToken2 == eCSSTokenSerialization_URange;
-    case eCSSTokenSerialization_Symbol_Minus:
     case eCSSTokenSerialization_Number:
       return aToken2 == eCSSTokenSerialization_Ident ||
              aToken2 == eCSSTokenSerialization_Function ||
@@ -2675,7 +2693,8 @@ CSSParserImpl::ParsePropertyWithVariableReferences(
     if (!valid) {
       NS_ConvertASCIItoUTF16 propName(nsCSSProps::GetStringValue(
                                                               propertyToParse));
-      REPORT_UNEXPECTED_P(PEValueWithVariablesParsingError, propName);
+      REPORT_UNEXPECTED_P_V(PEValueWithVariablesParsingErrorInValue,
+                            propName, expandedValue);
       if (nsCSSProps::IsInherited(aPropertyID)) {
         REPORT_UNEXPECTED(PEValueWithVariablesFallbackInherit);
       } else {
@@ -2982,7 +3001,8 @@ CSSParserImpl::ParseAtRule(RuleAppendFunc aAppendFunc,
     parseFunc = &CSSParserImpl::ParsePageRule;
     newSection = eCSSSection_General;
 
-  } else if ((nsCSSProps::IsEnabled(eCSSPropertyAlias_MozAnimation) &&
+  } else if ((nsCSSProps::IsEnabled(eCSSPropertyAlias_MozAnimation,
+                                    PropertyEnabledState()) &&
               mToken.mIdent.LowerCaseEqualsLiteral("-moz-keyframes")) ||
              mToken.mIdent.LowerCaseEqualsLiteral("keyframes")) {
     parseFunc = &CSSParserImpl::ParseKeyframesRule;
@@ -3440,7 +3460,7 @@ CSSParserImpl::ProcessImport(const nsString& aURLSpec,
   }
 
   if (mChildLoader) {
-    mChildLoader->LoadChildSheet(mSheet, url, aMedia, rule);
+    mChildLoader->LoadChildSheet(mSheet, url, aMedia, rule, mReusableSheets);
   }
 }
 
@@ -10353,12 +10373,6 @@ CSSParserImpl::ParseBoxProperty(nsCSSValue& aValue,
     return false;
   }
 
-  if (aPropID == eCSSProperty_script_level ||
-      aPropID == eCSSProperty_math_display) {
-    MOZ_ASSERT(false, "must not be called for unsafe properties");
-    return false;
-  }
-
   if (variant & ~(VARIANT_AHKLP | VARIANT_COLOR | VARIANT_CALC)) {
     MOZ_ASSERT(false, "must only be called for properties that take certain "
                       "variants");
@@ -10446,15 +10460,6 @@ CSSParserImpl::ParseSingleValueProperty(nsCSSValue& aValue,
     MOZ_ASSERT(false, "not a single value property");
     return false;
   }
-
-  // We only allow 'script-level' when unsafe rules are enabled, because
-  // otherwise it could interfere with rulenode optimizations if used in
-  // a non-MathML-enabled document. We also only allow math-display when
-  // unsafe rules are enabled.
-  if (!mUnsafeRulesEnabled &&
-      (aPropID == eCSSProperty_script_level ||
-       aPropID == eCSSProperty_math_display))
-    return false;
 
   const KTableValue* kwtable = nsCSSProps::kKeywordTableTable[aPropID];
   uint32_t restrictions = nsCSSProps::ValueRestrictions(aPropID);
@@ -14679,12 +14684,11 @@ CSSParserImpl::ParseTransitionStepTimingFunctionValues(nsCSSValue& aValue)
     return false;
   }
 
-  int32_t type = NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_END;
+  int32_t type = -1;  // indicates an implicit end value
   if (ExpectSymbol(',', true)) {
     if (!GetToken(true)) {
       return false;
     }
-    type = -1;
     if (mToken.mType == eCSSToken_Ident) {
       if (mToken.mIdent.LowerCaseEqualsLiteral("start")) {
         type = NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_START;
@@ -15710,6 +15714,8 @@ nsCSSParser::Startup()
 #endif
   Preferences::AddBoolVarCache(&sMozGradientsEnabled,
                                "layout.css.prefixes.gradients");
+  Preferences::AddBoolVarCache(&sControlCharVisibility,
+                               "layout.css.control-characters.visible");
 }
 
 nsCSSParser::nsCSSParser(mozilla::css::Loader* aLoader,
@@ -15785,11 +15791,12 @@ nsCSSParser::ParseSheet(const nsAString& aInput,
                         nsIURI*          aBaseURI,
                         nsIPrincipal*    aSheetPrincipal,
                         uint32_t         aLineNumber,
-                        bool             aAllowUnsafeRules)
+                        bool             aAllowUnsafeRules,
+                        LoaderReusableStyleSheets* aReusableSheets)
 {
   return static_cast<CSSParserImpl*>(mImpl)->
     ParseSheet(aInput, aSheetURI, aBaseURI, aSheetPrincipal, aLineNumber,
-               aAllowUnsafeRules);
+               aAllowUnsafeRules, aReusableSheets);
 }
 
 nsresult
@@ -16040,4 +16047,13 @@ nsCSSParser::IsValueValidForProperty(const nsCSSProperty aPropID,
 {
   return static_cast<CSSParserImpl*>(mImpl)->
     IsValueValidForProperty(aPropID, aPropValue);
+}
+
+/* static */
+uint8_t
+nsCSSParser::ControlCharVisibilityDefault()
+{
+  return sControlCharVisibility
+    ? NS_STYLE_CONTROL_CHARACTER_VISIBILITY_VISIBLE
+    : NS_STYLE_CONTROL_CHARACTER_VISIBILITY_HIDDEN;
 }

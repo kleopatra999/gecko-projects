@@ -199,7 +199,7 @@ class MOZ_RAII AutoSetNewObjectMetadata : private JS::CustomAutoRooter
     virtual void trace(JSTracer* trc) override {
         if (prevState_.is<PendingMetadata>()) {
             TraceRoot(trc,
-                      prevState_.as<PendingMetadata>().unsafeGet(),
+                      prevState_.as<PendingMetadata>().unsafeUnbarrieredForTracing(),
                       "Object pending metadata");
         }
     }
@@ -454,9 +454,6 @@ struct JSCompartment
      */
     JSObject*                    gcIncomingGrayPointers;
 
-    /* Linked list of live weakmaps in this compartment. */
-    js::WeakMapBase*             gcWeakMapList;
-
   private:
     /* Whether to preserve JIT code on non-shrinking GCs. */
     bool                         gcPreserveJitCode;
@@ -465,13 +462,15 @@ struct JSCompartment
         IsDebuggee = 1 << 0,
         DebuggerObservesAllExecution = 1 << 1,
         DebuggerObservesAsmJS = 1 << 2,
-        DebuggerNeedsDelazification = 1 << 3
+        DebuggerObservesCoverage = 1 << 3,
+        DebuggerNeedsDelazification = 1 << 4
     };
 
     unsigned                     debugModeBits;
 
     static const unsigned DebuggerObservesMask = IsDebuggee |
                                                  DebuggerObservesAllExecution |
+                                                 DebuggerObservesCoverage |
                                                  DebuggerObservesAsmJS;
 
     void updateDebuggerObservesFlag(unsigned flag);
@@ -544,7 +543,6 @@ struct JSCompartment
     void sweepJitCompartment(js::FreeOp* fop);
     void sweepRegExps();
     void sweepDebugScopes();
-    void sweepWeakMaps();
     void sweepNativeIterators();
     void sweepTemplateObjects();
 
@@ -652,6 +650,23 @@ struct JSCompartment
         updateDebuggerObservesFlag(DebuggerObservesAsmJS);
     }
 
+    // True if this compartment's global is a debuggee of some Debugger object
+    // whose collectCoverageInfo flag is true.
+    bool debuggerObservesCoverage() const {
+        static const unsigned Mask = DebuggerObservesCoverage;
+        return (debugModeBits & Mask) == Mask;
+    }
+    void updateDebuggerObservesCoverage();
+
+    // The code coverage can be enabled either for each compartment, with the
+    // Debugger API, or for the entire runtime.
+    bool collectCoverage() const {
+        return debuggerObservesCoverage() ||
+               runtimeFromAnyThread()->profilingScripts ||
+               runtimeFromAnyThread()->lcovOutput.isEnabled();
+    }
+    void clearScriptCounts();
+
     bool needsDelazificationForDebugger() const {
         return debugModeBits & DebuggerNeedsDelazification;
     }
@@ -732,6 +747,11 @@ struct JSCompartment
 
   public:
     void addTelemetry(const char* filename, DeprecatedLanguageExtension e);
+
+  public:
+    // Aggregated output used to collect JSScript hit counts when code coverage
+    // is enabled.
+    js::coverage::LCovCompartment lcovOutput;
 };
 
 inline bool

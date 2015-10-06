@@ -8,6 +8,8 @@
 
 #include "mozilla/dom/Element.h"
 
+NS_IMPL_ISUPPORTS(nsContentSecurityManager, nsIContentSecurityManager)
+
 nsresult
 ValidateSecurityFlags(nsILoadInfo* aLoadInfo)
 {
@@ -207,9 +209,17 @@ DoContentSecurityChecks(nsIURI* aURI, nsILoadInfo* aLoadInfo)
     }
 
     case nsIContentPolicy::TYPE_WEBSOCKET:
-    case nsIContentPolicy::TYPE_CSP_REPORT:
-    case nsIContentPolicy::TYPE_XSLT: {
+    case nsIContentPolicy::TYPE_CSP_REPORT: {
       MOZ_ASSERT(false, "contentPolicyType not supported yet");
+      break;
+    }
+
+    case nsIContentPolicy::TYPE_XSLT: {
+      mimeTypeGuess = NS_LITERAL_CSTRING("application/xml");
+      requestingContext = aLoadInfo->LoadingNode();
+      MOZ_ASSERT(!requestingContext ||
+                 requestingContext->NodeType() == nsIDOMNode::DOCUMENT_NODE,
+                 "type_xslt requires requestingContext of type Document");
       break;
     }
 
@@ -343,5 +353,21 @@ nsContentSecurityManager::doContentSecurityCheck(nsIChannel* aChannel,
   NS_ENSURE_SUCCESS(rv, rv);
 
   // all security checks passed - lets allow the load
+  return NS_OK;
+}
+
+
+// ==== nsIContentSecurityManager implementation =====
+
+NS_IMETHODIMP
+nsContentSecurityManager::PerformSecurityCheck(nsIChannel* aChannel,
+                                               nsIStreamListener* aStreamListener,
+                                               nsIStreamListener** outStreamListener)
+{
+  nsCOMPtr<nsIStreamListener> inAndOutListener = aStreamListener;
+  nsresult rv = doContentSecurityCheck(aChannel, inAndOutListener);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  inAndOutListener.forget(outStreamListener);
   return NS_OK;
 }

@@ -72,7 +72,7 @@ const LIVEMARK_CONTAINER = 2;
 const ACTION_EDIT = 0;
 const ACTION_ADD = 1;
 
-let elementsHeight = new Map();
+var elementsHeight = new Map();
 
 var BookmarkPropertiesPanel = {
 
@@ -607,7 +607,7 @@ var BookmarkPropertiesPanel = {
     let folderGuid = yield PlacesUtils.promiseItemGuid(container);
     let bm = yield PlacesUtils.bookmarks.fetch({
       parentGuid: folderGuid,
-      index: PlacesUtils.bookmarks.DEFAULT_INDEX
+      index: index
     });
     this._itemId = yield PlacesUtils.promiseItemId(bm.guid);
 

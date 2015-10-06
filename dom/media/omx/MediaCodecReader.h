@@ -27,6 +27,8 @@
 #include <ui/Fence.h>
 #endif
 
+#include "MP3FrameParser.h"
+
 namespace android {
 struct ALooper;
 struct AMessage;
@@ -397,11 +399,6 @@ private:
   void WaitFenceAndReleaseOutputBuffer();
 
   void ReleaseRecycledTextureClients();
-  static PLDHashOperator ReleaseTextureClient(TextureClient* aClient,
-                                              size_t& aIndex,
-                                              void* aUserArg);
-  PLDHashOperator ReleaseTextureClient(TextureClient* aClient,
-                                       size_t& aIndex);
 
   void ReleaseAllTextureClients();
 
@@ -441,6 +438,8 @@ private:
     FenceHandle mReleaseFence;
   };
   nsTArray<ReleaseItem> mPendingReleaseItems;
+
+  NotifyDataArrivedFilter mFilter;
 };
 
 } // namespace mozilla

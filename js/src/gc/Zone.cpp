@@ -27,6 +27,7 @@ JS::Zone::Zone(JSRuntime* rt)
     debuggers(nullptr),
     arenas(rt),
     types(this),
+    gcWeakMapList(nullptr),
     compartments(),
     gcGrayRoots(),
     gcMallocBytes(0),
@@ -65,7 +66,7 @@ Zone::~Zone()
 bool Zone::init(bool isSystemArg)
 {
     isSystem = isSystemArg;
-    return gcZoneGroupEdges.init();
+    return uniqueIds_.init() && gcZoneGroupEdges.init();
 }
 
 void
@@ -155,7 +156,6 @@ Zone::logPromotionsToTenured()
     awaitingTenureLogging.clear();
 }
 
-
 void
 Zone::sweepBreakpoints(FreeOp* fop)
 {
@@ -204,6 +204,13 @@ Zone::sweepBreakpoints(FreeOp* fop)
 }
 
 void
+Zone::sweepWeakMaps()
+{
+    /* Finalize unreachable (key,value) pairs in all weak maps. */
+    WeakMapBase::sweepZone(this);
+}
+
+void
 Zone::discardJitCode(FreeOp* fop)
 {
     if (!jitZone())
@@ -248,6 +255,15 @@ Zone::discardJitCode(FreeOp* fop)
         jitZone()->optimizedStubSpace()->free();
     }
 }
+
+#ifdef JSGC_HASH_TABLE_CHECKS
+void
+JS::Zone::checkUniqueIdTableAfterMovingGC()
+{
+    for (UniqueIdMap::Enum e(uniqueIds_); !e.empty(); e.popFront())
+        js::gc::CheckGCThingAfterMovingGC(e.front().key());
+}
+#endif
 
 uint64_t
 Zone::gcNumber()

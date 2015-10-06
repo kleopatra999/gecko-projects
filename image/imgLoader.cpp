@@ -618,7 +618,7 @@ ShouldLoadCachedImage(imgRequest* aImgRequest,
   nsresult rv;
 
   int16_t decision = nsIContentPolicy::REJECT_REQUEST;
-  rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_IMAGE,
+  rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_INTERNAL_IMAGE,
                                  contentLocation,
                                  aLoadingPrincipal,
                                  aLoadingContext,
@@ -1069,7 +1069,8 @@ protected:
 };
 
 imgCacheExpirationTracker::imgCacheExpirationTracker()
- : nsExpirationTracker<imgCacheEntry, 3>(TIMEOUT_SECONDS * 1000)
+ : nsExpirationTracker<imgCacheEntry, 3>(TIMEOUT_SECONDS * 1000,
+                                         "imgCacheExpirationTracker")
 { }
 
 void
@@ -1980,7 +1981,7 @@ imgLoader::LoadImageXPCOM(nsIURI* aURI,
 {
     // Optional parameter, so defaults to 0 (== TYPE_INVALID)
     if (!aContentPolicyType) {
-      aContentPolicyType = nsIContentPolicy::TYPE_IMAGE;
+      aContentPolicyType = nsIContentPolicy::TYPE_INTERNAL_IMAGE;
     }
     imgRequestProxy* proxy;
     ReferrerPolicy refpol = ReferrerPolicyFromString(aReferrerPolicy);

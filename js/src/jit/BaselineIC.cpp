@@ -33,6 +33,7 @@
 #include "jsboolinlines.h"
 #include "jsscriptinlines.h"
 
+#include "jit/AtomicOperations-inl.h"
 #include "jit/JitFrames-inl.h"
 #include "jit/MacroAssembler-inl.h"
 #include "jit/shared/Lowering-shared-inl.h"
@@ -3689,7 +3690,11 @@ DoSetElemFallback(JSContext* cx, BaselineFrame* frame, ICSetElem_Fallback* stub_
         if (!InitElemOperation(cx, obj, index, rhs))
             return false;
     } else if (op == JSOP_INITELEM_ARRAY) {
-        MOZ_ASSERT(uint32_t(index.toInt32()) == GET_UINT24(pc));
+        MOZ_ASSERT(uint32_t(index.toInt32()) <= INT32_MAX,
+                   "the bytecode emitter must fail to compile code that would "
+                   "produce JSOP_INITELEM_ARRAY with an index exceeding "
+                   "int32_t range");
+        MOZ_ASSERT(uint32_t(index.toInt32()) == GET_UINT32(pc));
         if (!InitArrayElemOperation(cx, pc, obj, index.toInt32(), rhs))
             return false;
     } else if (op == JSOP_INITELEM_INC) {
@@ -6869,8 +6874,9 @@ ICGetProp_DOMProxyShadowed::Compiler::getStub(ICStubSpace* space)
 static bool
 ProxyGet(JSContext* cx, HandleObject proxy, HandlePropertyName name, MutableHandleValue vp)
 {
+    RootedValue receiver(cx, ObjectValue(*proxy));
     RootedId id(cx, NameToId(name));
-    return Proxy::get(cx, proxy, proxy, id, vp);
+    return Proxy::get(cx, proxy, receiver, id, vp);
 }
 
 typedef bool (*ProxyGetFn)(JSContext* cx, HandleObject proxy, HandlePropertyName name,
@@ -11099,10 +11105,17 @@ ICGetElem_NativePrototypeCallNative<T>::Clone(JSContext* cx,
                                               ICGetElem_NativePrototypeCallNative<T>& other)
 {
     return ICStub::New<ICGetElem_NativePrototypeCallNative<T>>(cx, space, other.jitCode(),
-                firstMonitorStub, other.receiverGuard(), other.key().unsafeGet(), other.accessType(),
+                firstMonitorStub, other.receiverGuard(), &other.key().get(), other.accessType(),
                 other.needsAtomize(), other.getter(), other.pcOffset_, other.holder(),
                 other.holderShape());
 }
+
+template ICGetElem_NativePrototypeCallNative<JS::Symbol*>*
+ICGetElem_NativePrototypeCallNative<JS::Symbol*>::Clone(JSContext*, ICStubSpace*, ICStub*,
+                                          ICGetElem_NativePrototypeCallNative<JS::Symbol*>&);
+template ICGetElem_NativePrototypeCallNative<js::PropertyName*>*
+ICGetElem_NativePrototypeCallNative<js::PropertyName*>::Clone(JSContext*, ICStubSpace*, ICStub*,
+                                          ICGetElem_NativePrototypeCallNative<js::PropertyName*>&);
 
 template <class T>
 /* static */ ICGetElem_NativePrototypeCallScripted<T>*
@@ -11112,10 +11125,17 @@ ICGetElem_NativePrototypeCallScripted<T>::Clone(JSContext* cx,
                                                 ICGetElem_NativePrototypeCallScripted<T>& other)
 {
     return ICStub::New<ICGetElem_NativePrototypeCallScripted<T>>(cx, space, other.jitCode(),
-                firstMonitorStub, other.receiverGuard(), other.key().unsafeGet(), other.accessType(),
+                firstMonitorStub, other.receiverGuard(), &other.key().get(), other.accessType(),
                 other.needsAtomize(), other.getter(), other.pcOffset_, other.holder(),
                 other.holderShape());
 }
+
+template ICGetElem_NativePrototypeCallScripted<JS::Symbol*>*
+ICGetElem_NativePrototypeCallScripted<JS::Symbol*>::Clone(JSContext*, ICStubSpace*, ICStub*,
+                                        ICGetElem_NativePrototypeCallScripted<JS::Symbol*>&);
+template ICGetElem_NativePrototypeCallScripted<js::PropertyName*>*
+ICGetElem_NativePrototypeCallScripted<js::PropertyName*>::Clone(JSContext*, ICStubSpace*, ICStub*,
+                                        ICGetElem_NativePrototypeCallScripted<js::PropertyName*>&);
 
 ICGetElem_Dense::ICGetElem_Dense(JitCode* stubCode, ICStub* firstMonitorStub, Shape* shape)
     : ICMonitoredStub(GetElem_Dense, stubCode, firstMonitorStub),

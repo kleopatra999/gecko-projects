@@ -300,7 +300,7 @@ mozJSComponentLoader::ReallyInit()
     // results in getting the wrong value.
     // But we don't want that on Firefox Mulet as it break most Firefox JSMs...
     // Also disable on debug builds to break js components that rely on this.
-#if defined(MOZ_B2G) && !defined(MOZ_MULET) && !defined(DEBUG)
+#if defined(MOZ_B2G) && !defined(MOZ_MULET) && !defined(MOZ_B2GDROID) && !defined(DEBUG)
     mReuseLoaderGlobal = true;
 #endif
 
@@ -348,6 +348,7 @@ mozJSComponentLoader::LoadModule(FileLocation& aFile)
 
     dom::AutoJSAPI jsapi;
     jsapi.Init();
+    jsapi.TakeOwnershipOfErrorReporting();
     JSContext* cx = jsapi.cx();
 
     nsAutoPtr<ModuleEntry> entry(new ModuleEntry(cx));
@@ -628,6 +629,7 @@ mozJSComponentLoader::ObjectForLocation(ComponentLoaderInfo& aInfo,
 
     dom::AutoJSAPI jsapi;
     jsapi.Init();
+    jsapi.TakeOwnershipOfErrorReporting();
     JSContext* cx = jsapi.cx();
 
     bool realFile = false;
@@ -957,6 +959,7 @@ mozJSComponentLoader::UnloadModules()
 
         dom::AutoJSAPI jsapi;
         jsapi.Init();
+        jsapi.TakeOwnershipOfErrorReporting();
         JSContext* cx = jsapi.cx();
         RootedObject global(cx, mLoaderGlobal->GetJSObject());
         if (global) {
@@ -1170,6 +1173,7 @@ mozJSComponentLoader::ImportInto(const nsACString& aLocation,
         // not an AutoEntryScript.
         dom::AutoJSAPI jsapi;
         jsapi.Init();
+        jsapi.TakeOwnershipOfErrorReporting();
         JSContext* cx = jsapi.cx();
         JSAutoCompartment ac(cx, mod->obj);
 
@@ -1181,7 +1185,11 @@ mozJSComponentLoader::ImportInto(const nsACString& aLocation,
                                   PromiseFlatCString(aLocation).get());
         }
 
-        if (!JS_IsArrayObject(cx, symbols)) {
+        bool isArray;
+        if (!JS_IsArrayObject(cx, symbols, &isArray)) {
+            return NS_ERROR_FAILURE;
+        }
+        if (!isArray) {
             return ReportOnCaller(cxhelper, ERROR_NOT_AN_ARRAY,
                                   PromiseFlatCString(aLocation).get());
         }

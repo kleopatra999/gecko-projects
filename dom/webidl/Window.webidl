@@ -31,7 +31,7 @@ typedef any Transferable;
   [Replaceable, Constant, StoreInSlot,
    CrossOriginReadable] readonly attribute Window self;
   [Unforgeable, StoreInSlot, Pure] readonly attribute Document? document;
-  [Throws] attribute DOMString name; 
+  [Throws] attribute DOMString name;
   [PutForwards=href, Unforgeable, Throws,
    CrossOriginReadable, CrossOriginWritable] readonly attribute Location? location;
   [Throws] readonly attribute History history;
@@ -65,7 +65,7 @@ typedef any Transferable;
   getter object (DOMString name);
 
   // the user agent
-  [Throws] readonly attribute Navigator navigator; 
+  [Throws] readonly attribute Navigator navigator;
 #ifdef HAVE_SIDEBAR
   [Replaceable, Throws] readonly attribute External external;
 #endif
@@ -343,7 +343,7 @@ partial interface Window {
    * This property exists because static attributes don't yet work for
    * JS-implemented WebIDL (see bugs 1058606 and 863952). With this hack, we
    * can use `MozSelfSupport.something(...)`, which will continue to work
-   * after we ditch this property and switch to static attributes. See 
+   * after we ditch this property and switch to static attributes. See
    */
   [ChromeOnly, Throws] readonly attribute MozSelfSupport MozSelfSupport;
 
@@ -407,7 +407,7 @@ partial interface Window {
 #ifdef HAVE_SIDEBAR
 // Mozilla extension
 partial interface Window {
-  [Replaceable, Throws]
+  [Replaceable, Throws, UseCounter]
   readonly attribute (External or WindowProxy) sidebar;
 };
 #endif

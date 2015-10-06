@@ -8,6 +8,7 @@
 
 #include <stdarg.h>
 
+#include "GLContextTypes.h"
 #include "GLDefs.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/CheckedInt.h"
@@ -24,6 +25,7 @@
 #include "nsLayoutUtils.h"
 #include "nsTArray.h"
 #include "nsWrapperCache.h"
+#include "SurfaceTypes.h"
 
 #ifdef XP_MACOSX
 #include "ForceDiscreteGPUHelperCGL.h"
@@ -213,10 +215,9 @@ public:
     NS_DECL_NSIDOMWEBGLRENDERINGCONTEXT
 
     // nsICanvasRenderingContextInternal
-#ifdef DEBUG
     virtual int32_t GetWidth() const override;
     virtual int32_t GetHeight() const override;
-#endif
+
     NS_IMETHOD SetDimensions(int32_t width, int32_t height) override;
     NS_IMETHOD InitializeWithSurface(nsIDocShell*, gfxASurface*, int32_t,
                                      int32_t) override
@@ -315,6 +316,10 @@ public:
     // Note that 'clean' here refers to its invalidation state, not the
     // contents of the buffer.
     void MarkContextClean() override { mInvalidated = false; }
+
+    void MarkContextCleanForFrameCapture() override { mCapturedFrameInvalidated = false; }
+
+    bool IsContextCleanForFrameCapture() override { return !mCapturedFrameInvalidated; }
 
     gl::GLContext* GL() const { return gl; }
 
@@ -808,6 +813,7 @@ private:
     realGLboolean mDitherEnabled;
     realGLboolean mRasterizerDiscardEnabled;
     realGLboolean mScissorTestEnabled;
+    realGLboolean mDepthTestEnabled;
     realGLboolean mStencilTestEnabled;
 
     bool ValidateCapabilityEnum(GLenum cap, const char* info);
@@ -1034,6 +1040,7 @@ protected:
     WebGLContextOptions mOptions;
 
     bool mInvalidated;
+    bool mCapturedFrameInvalidated;
     bool mResetLayer;
     bool mOptionsFrozen;
     bool mMinCapability;
@@ -1148,11 +1155,19 @@ public:
 protected:
     bool InitWebGL2();
 
+    bool CreateAndInitGL(bool forceEnabled);
+    bool ResizeBackbuffer(uint32_t width, uint32_t height);
+
+    typedef already_AddRefed<gl::GLContext> FnCreateGL_T(const gl::SurfaceCaps& caps,
+                                                         gl::CreateContextFlags flags,
+                                                         WebGLContext* webgl);
+
+    bool CreateAndInitGLWith(FnCreateGL_T fnCreateGL, const gl::SurfaceCaps& baseCaps,
+                             gl::CreateContextFlags flags);
+
     // -------------------------------------------------------------------------
     // Validation functions (implemented in WebGLContextValidate.cpp)
-    bool CreateOffscreenGL(bool forceEnabled);
     bool InitAndValidateGL();
-    bool ResizeBackbuffer(uint32_t width, uint32_t height);
     bool ValidateBlendEquationEnum(GLenum cap, const char* info);
     bool ValidateBlendFuncDstEnum(GLenum mode, const char* info);
     bool ValidateBlendFuncSrcEnum(GLenum mode, const char* info);
@@ -1438,11 +1453,13 @@ protected:
     uint64_t mLastUseIndex;
 
     bool mNeedsFakeNoAlpha;
+    bool mNeedsFakeNoDepth;
     bool mNeedsFakeNoStencil;
 
     struct ScopedMaskWorkaround {
         WebGLContext& mWebGL;
         const bool mFakeNoAlpha;
+        const bool mFakeNoDepth;
         const bool mFakeNoStencil;
 
         static bool ShouldFakeNoAlpha(WebGLContext& webgl) {
@@ -1451,6 +1468,13 @@ protected:
             return !webgl.mBoundDrawFramebuffer &&
                    webgl.mNeedsFakeNoAlpha &&
                    webgl.mColorWriteMask[3] != false;
+        }
+
+        static bool ShouldFakeNoDepth(WebGLContext& webgl) {
+            // We should only be doing this if we're about to draw to the backbuffer.
+            return !webgl.mBoundDrawFramebuffer &&
+                   webgl.mNeedsFakeNoDepth &&
+                   webgl.mDepthTestEnabled;
         }
 
         static bool ShouldFakeNoStencil(WebGLContext& webgl) {

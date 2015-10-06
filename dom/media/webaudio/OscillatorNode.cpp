@@ -57,21 +57,22 @@ public:
     START,
     STOP,
   };
-  void SetTimelineParameter(uint32_t aIndex,
-                            const AudioParamTimeline& aValue,
-                            TrackRate aSampleRate) override
+  void RecvTimelineEvent(uint32_t aIndex,
+                         AudioTimelineEvent& aEvent) override
   {
     mRecomputeParameters = true;
+
+    MOZ_ASSERT(mDestination);
+
+    WebAudioUtils::ConvertAudioTimelineEventToTicks(aEvent,
+                                                    mDestination);
+
     switch (aIndex) {
     case FREQUENCY:
-      MOZ_ASSERT(mSource && mDestination);
-      mFrequency = aValue;
-      WebAudioUtils::ConvertAudioParamToTicks(mFrequency, mSource, mDestination);
+      mFrequency.InsertEvent<int64_t>(aEvent);
       break;
     case DETUNE:
-      MOZ_ASSERT(mSource && mDestination);
-      mDetune = aValue;
-      WebAudioUtils::ConvertAudioParamToTicks(mDetune, mSource, mDestination);
+      mDetune.InsertEvent<int64_t>(aEvent);
       break;
     default:
       NS_ERROR("Bad OscillatorNodeEngine TimelineParameter");
@@ -81,7 +82,10 @@ public:
   virtual void SetStreamTimeParameter(uint32_t aIndex, StreamTime aParam) override
   {
     switch (aIndex) {
-    case START: mStart = aParam; break;
+    case START:
+      mStart = aParam;
+      mSource->SetActive();
+      break;
     case STOP: mStop = aParam; break;
     default:
       NS_ERROR("Bad OscillatorNodeEngine StreamTimeParameter");
@@ -148,14 +152,16 @@ public:
     }
   }
 
-  void UpdateParametersIfNeeded(StreamTime ticks, size_t count)
+  // Returns true if the final frequency (and thus the phase increment) changed,
+  // false otherwise. This allow some optimizations at callsite.
+  bool UpdateParametersIfNeeded(StreamTime ticks, size_t count)
   {
     double frequency, detune;
 
     // Shortcut if frequency-related AudioParam are not automated, and we
     // already have computed the frequency information and related parameters.
     if (!ParametersMayNeedUpdate()) {
-      return;
+      return false;
     }
 
     bool simpleFrequency = mFrequency.HasSimpleValue();
@@ -172,11 +178,17 @@ public:
       detune = mDetune.GetValueAtTime(ticks, count);
     }
 
-    mFinalFrequency = frequency * pow(2., detune / 1200.);
-    float signalPeriod = mSource->SampleRate() / mFinalFrequency;
+    float finalFrequency = frequency * pow(2., detune / 1200.);
+    float signalPeriod = mSource->SampleRate() / finalFrequency;
     mRecomputeParameters = false;
 
     mPhaseIncrement = 2 * M_PI / signalPeriod;
+
+    if (finalFrequency != mFinalFrequency) {
+      mFinalFrequency = finalFrequency;
+      return true;
+    }
+    return false;
   }
 
   void FillBounds(float* output, StreamTime ticks,
@@ -204,6 +216,8 @@ public:
   void ComputeSine(float * aOutput, StreamTime ticks, uint32_t aStart, uint32_t aEnd)
   {
     for (uint32_t i = aStart; i < aEnd; ++i) {
+      // We ignore the return value, changing the frequency has no impact on
+      // performances here.
       UpdateParametersIfNeeded(ticks, i);
 
       aOutput[i] = sin(mPhase);
@@ -238,7 +252,7 @@ public:
     // mPhase runs [0,periodicWaveSize) here instead of [0,2*M_PI).
     float basePhaseIncrement = mPeriodicWave->rateScale();
 
-    UpdateParametersIfNeeded(ticks, aStart);
+    bool needToFetchWaveData = UpdateParametersIfNeeded(ticks, aStart);
 
     bool parametersMayNeedUpdate = ParametersMayNeedUpdate();
     mPeriodicWave->waveDataForFundamentalFrequency(mFinalFrequency,
@@ -248,11 +262,13 @@ public:
 
     for (uint32_t i = aStart; i < aEnd; ++i) {
       if (parametersMayNeedUpdate) {
-        mPeriodicWave->waveDataForFundamentalFrequency(mFinalFrequency,
-                                                       lowerWaveData,
-                                                       higherWaveData,
-                                                       tableInterpolationFactor);
-        UpdateParametersIfNeeded(ticks, i);
+        if (needToFetchWaveData) {
+          mPeriodicWave->waveDataForFundamentalFrequency(mFinalFrequency,
+                                                         lowerWaveData,
+                                                         higherWaveData,
+                                                         tableInterpolationFactor);
+        }
+        needToFetchWaveData = UpdateParametersIfNeeded(ticks, i);
       }
       // Bilinear interpolation between adjacent samples in each table.
       float floorPhase = floorf(mPhase);
@@ -283,13 +299,14 @@ public:
   }
 
   virtual void ProcessBlock(AudioNodeStream* aStream,
+                            GraphTime aFrom,
                             const AudioBlock& aInput,
                             AudioBlock* aOutput,
                             bool* aFinished) override
   {
     MOZ_ASSERT(mSource == aStream, "Invalid source stream");
 
-    StreamTime ticks = aStream->GetCurrentPosition();
+    StreamTime ticks = mDestination->GraphTimeToStreamTime(aFrom);
     if (mStart == -1) {
       ComputeSilence(aOutput);
       return;
@@ -328,6 +345,12 @@ public:
         ComputeSilence(aOutput);
     };
 
+  }
+
+  virtual bool IsActive() const override
+  {
+    // start() has been called.
+    return mStart != -1;
   }
 
   virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override
@@ -379,12 +402,13 @@ OscillatorNode::OscillatorNode(AudioContext* aContext)
               ChannelCountMode::Max,
               ChannelInterpretation::Speakers)
   , mType(OscillatorType::Sine)
-  , mFrequency(new AudioParam(this, SendFrequencyToStream, 440.0f, "frequency"))
-  , mDetune(new AudioParam(this, SendDetuneToStream, 0.0f, "detune"))
+  , mFrequency(new AudioParam(this, OscillatorNodeEngine::FREQUENCY,
+                              440.0f, "frequency"))
+  , mDetune(new AudioParam(this, OscillatorNodeEngine::DETUNE, 0.0f, "detune"))
   , mStartCalled(false)
 {
   OscillatorNodeEngine* engine = new OscillatorNodeEngine(this, aContext->Destination());
-  mStream = AudioNodeStream::Create(aContext->Graph(), engine,
+  mStream = AudioNodeStream::Create(aContext, engine,
                                     AudioNodeStream::NEED_MAIN_THREAD_FINISHED);
   engine->SetSourceStream(mStream);
   mStream->AddMainThreadListener(this);
@@ -427,26 +451,6 @@ OscillatorNode::DestroyMediaStream()
     mStream->RemoveMainThreadListener(this);
   }
   AudioNode::DestroyMediaStream();
-}
-
-void
-OscillatorNode::SendFrequencyToStream(AudioNode* aNode)
-{
-  OscillatorNode* This = static_cast<OscillatorNode*>(aNode);
-  if (!This->mStream) {
-    return;
-  }
-  SendTimelineParameterToStream(This, OscillatorNodeEngine::FREQUENCY, *This->mFrequency);
-}
-
-void
-OscillatorNode::SendDetuneToStream(AudioNode* aNode)
-{
-  OscillatorNode* This = static_cast<OscillatorNode*>(aNode);
-  if (!This->mStream) {
-    return;
-  }
-  SendTimelineParameterToStream(This, OscillatorNodeEngine::DETUNE, *This->mDetune);
 }
 
 void

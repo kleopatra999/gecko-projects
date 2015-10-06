@@ -1417,7 +1417,7 @@ HTMLInputElement::GetValueInternal(nsAString& aValue) const
       return NS_OK;
 
     case VALUE_MODE_FILENAME:
-      if (nsContentUtils::IsCallerChrome()) {
+      if (nsContentUtils::LegacyIsCallerChromeOrNativeCode()) {
 #ifndef MOZ_CHILD_PERMISSIONS
         aValue.Assign(mFirstFilePath);
 #else
@@ -2202,10 +2202,6 @@ HTMLInputElement::MozIsTextField(bool aExcludePassword, bool* aResult)
 NS_IMETHODIMP
 HTMLInputElement::SetUserInput(const nsAString& aValue)
 {
-  if (!nsContentUtils::IsCallerChrome()) {
-    return NS_ERROR_DOM_SECURITY_ERR;
-  }
-
   if (mType == NS_FORM_INPUT_FILE)
   {
     Sequence<nsString> list;
@@ -2526,6 +2522,9 @@ HTMLInputElement::UpdateFileList()
       }
     }
   }
+
+  // Make sure we (lazily) create a new Promise for GetFilesAndDirectories:
+  mFilesAndDirectoriesPromise = nullptr;
 
   return NS_OK;
 }
@@ -2991,7 +2990,7 @@ HTMLInputElement::DispatchSelectEvent(nsPresContext* aPresContext)
 
   // If already handling select event, don't dispatch a second.
   if (!mHandlingSelectEvent) {
-    WidgetEvent event(nsContentUtils::IsCallerChrome(), eFormSelect);
+    WidgetEvent event(nsContentUtils::LegacyIsCallerChromeOrNativeCode(), eFormSelect);
 
     mHandlingSelectEvent = true;
     EventDispatcher::Dispatch(static_cast<nsIContent*>(this),
@@ -4884,6 +4883,15 @@ MakeOrReuseFileSystem(const nsAString& aNewLocalRootPath,
 already_AddRefed<Promise>
 HTMLInputElement::GetFilesAndDirectories(ErrorResult& aRv)
 {
+  if (mType != NS_FORM_INPUT_FILE) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
+    return nullptr;
+  }
+
+  if (mFilesAndDirectoriesPromise) {
+    return nsRefPtr<Promise>(mFilesAndDirectoriesPromise).forget();
+  }
+
   nsCOMPtr<nsIGlobalObject> global = OwnerDoc()->GetScopeObject();
   MOZ_ASSERT(global);
   if (!global) {
@@ -4931,6 +4939,11 @@ HTMLInputElement::GetFilesAndDirectories(ErrorResult& aRv)
   }
 
   p->MaybeResolve(filesAndDirsSeq);
+
+  // Cache the Promise so that repeat getFilesAndDirectories() calls return
+  // the same Promise and array of File and Directory objects until the user
+  // picks different files/directories:
+  mFilesAndDirectoriesPromise = p;
 
   return p.forget();
 }

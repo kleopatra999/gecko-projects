@@ -17,12 +17,13 @@
   </project>
   <project name="rilproxy" path="rilproxy" remote="b2g" revision="5ef30994f4778b4052e58a4383dbe7890048c87e"/>
   <project name="fake-libdvm" path="dalvik" remote="b2g" revision="d50ae982b19f42f0b66d08b9eb306be81687869f"/>
-  <project name="gaia" path="gaia" remote="mozillaorg" revision="d2e5c49440bf8410ae747b15c0dd11c54053ef3e"/>
-  <project name="gonk-misc" path="gonk-misc" remote="b2g" revision="e9e2923fd6cab93cf88b4b9ada82225e44fe6635"/>
-  <project name="moztt" path="external/moztt" remote="b2g" revision="f5d65f5b17d9766d7925aefd0486a1e526ae9bf0"/>
-  <project name="apitrace" path="external/apitrace" remote="apitrace" revision="fb28def18ceb2516c460c4bd5825d2dc656c7818"/>
-  <project name="valgrind" path="external/valgrind" remote="b2g" revision="daa61633c32b9606f58799a3186395fd2bbb8d8c"/>
-  <project name="vex" path="external/VEX" remote="b2g" revision="47f031c320888fe9f3e656602588565b52d43010"/>
+  <project name="fake-qemu-kernel" path="prebuilts/qemu-kernel" remote="b2g" revision="939b377d55a2f081d94029a30a75d05e5a20daf3"/>
+  <project name="gaia" path="gaia" remote="mozillaorg" revision="0019347fbaedc9d54f2f3436fff17aeb22968174"/>
+  <project name="gonk-misc" path="gonk-misc" remote="b2g" revision="7e0fe55ac52323eace5a6119ab2b911fc4f64495"/>
+  <project name="moztt" path="external/moztt" remote="b2g" revision="31a7849fe9a8b743d6f5e5facc212f0ef9d57499"/>
+  <project name="apitrace" path="external/apitrace" remote="apitrace" revision="f004530b30a63c08a16d82536858600446b2abf5"/>
+  <project name="valgrind" path="external/valgrind" remote="b2g" revision="5f931350fbc87c3df9db8b0ceb37734b8b471593"/>
+  <project name="vex" path="external/VEX" remote="b2g" revision="48d8c7c950745f1b166b42125e6f0d3293d71636"/>
   <!-- Stock Android things -->
   <project groups="linux" name="platform/prebuilts/clang/linux-x86/3.1" path="prebuilts/clang/linux-x86/3.1" revision="5c45f43419d5582949284eee9cef0c43d866e03b"/>
   <project groups="linux" name="platform/prebuilts/clang/linux-x86/3.2" path="prebuilts/clang/linux-x86/3.2" revision="3748b4168e7bd8d46457d4b6786003bc6a5223ce"/>
@@ -114,7 +115,6 @@
   <project name="platform/ndk" path="ndk" revision="7666b97bbaf1d645cdd6b4430a367b7a2bb53369"/>
   <project name="platform/prebuilts/misc" path="prebuilts/misc" revision="f6ab40b3257abc07741188fd173ac392575cc8d2"/>
   <project name="platform/prebuilts/ndk" path="prebuilts/ndk" revision="e52099755d0bd3a579130eefe8e58066cc6c0cb6"/>
-  <project name="platform_prebuilts_qemu-kernel" path="prebuilts/qemu-kernel" remote="b2g" revision="02c32feb2fe97037be0ac4dace3a6a5025ac895d"/>
   <project name="platform/prebuilts/sdk" path="prebuilts/sdk" revision="842e33e43a55ea44833b9e23e4d180fa17c843af"/>
   <project name="platform/prebuilts/tools" path="prebuilts/tools" revision="5db24726f0f42124304195a6bdea129039eeeaeb"/>
   <project name="platform/system/bluetooth" path="system/bluetooth" revision="930ae098543881f47eac054677726ee4b998b2f8"/>

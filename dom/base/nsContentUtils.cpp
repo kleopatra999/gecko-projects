@@ -52,6 +52,7 @@
 #include "mozilla/dom/TouchEvent.h"
 #include "mozilla/dom/ShadowRoot.h"
 #include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/workers/ServiceWorkerManager.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStateManager.h"
@@ -267,6 +268,7 @@ bool nsContentUtils::sEncodeDecodeURLHash = false;
 bool nsContentUtils::sGettersDecodeURLHash = false;
 bool nsContentUtils::sPrivacyResistFingerprinting = false;
 bool nsContentUtils::sSendPerformanceTimingNotifications = false;
+bool nsContentUtils::sSWInterceptionEnabled = false;
 
 uint32_t nsContentUtils::sHandlingInputTimeout = 1000;
 
@@ -508,9 +510,9 @@ nsContentUtils::Init()
   if (!sEventListenerManagersHash) {
     static const PLDHashTableOps hash_table_ops =
     {
-      PL_DHashVoidPtrKeyStub,
-      PL_DHashMatchEntryStub,
-      PL_DHashMoveEntryStub,
+      PLDHashTable::HashVoidPtrKeyStub,
+      PLDHashTable::MatchEntryStub,
+      PLDHashTable::MoveEntryStub,
       EventListenerManagerHashClearEntry,
       EventListenerManagerHashInitEntry
     };
@@ -558,6 +560,10 @@ nsContentUtils::Init()
 
   Preferences::AddBoolVarCache(&sPrivacyResistFingerprinting,
                                "privacy.resistFingerprinting", false);
+
+  Preferences::AddBoolVarCache(&sSWInterceptionEnabled,
+                               "dom.serviceWorkers.interception.enabled",
+                               false);
 
   Preferences::AddUintVarCache(&sHandlingInputTimeout,
                                "dom.event.handling-user-input-time-limit",
@@ -1737,9 +1743,37 @@ nsContentUtils::ParseLegacyFontSize(const nsAString& aValue)
 }
 
 /* static */
+bool
+nsContentUtils::IsControlledByServiceWorker(nsIDocument* aDocument)
+{
+  if (!ServiceWorkerInterceptionEnabled() ||
+      nsContentUtils::IsInPrivateBrowsing(aDocument)) {
+    return false;
+  }
+
+  nsRefPtr<workers::ServiceWorkerManager> swm =
+    workers::ServiceWorkerManager::GetInstance();
+  MOZ_ASSERT(swm);
+
+  ErrorResult rv;
+  bool controlled = swm->IsControlled(aDocument, rv);
+  NS_WARN_IF(rv.Failed());
+
+  return !rv.Failed() && controlled;
+}
+
+/* static */
 void
 nsContentUtils::GetOfflineAppManifest(nsIDocument *aDocument, nsIURI **aURI)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aDocument);
+  *aURI = nullptr;
+
+  if (IsControlledByServiceWorker(aDocument)) {
+    return;
+  }
+
   Element* docElement = aDocument->GetRootElement();
   if (!docElement) {
     return;
@@ -1921,9 +1955,6 @@ nsContentUtils::CheckSameOrigin(const nsINode* aTrustedNode,
 {
   MOZ_ASSERT(aTrustedNode);
   MOZ_ASSERT(unTrustedNode);
-  if (IsCallerChrome()) {
-    return NS_OK;
-  }
 
   /*
    * Get hold of each node's principal
@@ -2679,6 +2710,7 @@ nsContentUtils::SubjectPrincipal()
   MOZ_ASSERT(NS_IsMainThread());
   JSContext* cx = GetCurrentJSContext();
   if (!cx) {
+    Telemetry::Accumulate(Telemetry::SUBJECT_PRINCIPAL_ACCESSED_WITHOUT_SCRIPT_ON_STACK, true);
     return GetSystemPrincipal();
   }
 
@@ -3570,6 +3602,8 @@ nsContentUtils::IsChildOfSameType(nsIDocument* aDoc)
 bool
 nsContentUtils::IsPlainTextType(const nsACString& aContentType)
 {
+  // NOTE: if you add a type here, add it to the CONTENTDLF_CATEGORIES
+  // define in nsContentDLF.h as well.
   return aContentType.EqualsLiteral(TEXT_PLAIN) ||
          aContentType.EqualsLiteral(TEXT_CSS) ||
          aContentType.EqualsLiteral(TEXT_CACHE_MANIFEST) ||
@@ -3578,7 +3612,9 @@ nsContentUtils::IsPlainTextType(const nsACString& aContentType)
          aContentType.EqualsLiteral(TEXT_ECMASCRIPT) ||
          aContentType.EqualsLiteral(APPLICATION_ECMASCRIPT) ||
          aContentType.EqualsLiteral(TEXT_JAVASCRIPT) ||
-         aContentType.EqualsLiteral(APPLICATION_JSON);
+         aContentType.EqualsLiteral(APPLICATION_JSON) ||
+         aContentType.EqualsLiteral(TEXT_JSON) ||
+         aContentType.EqualsLiteral(TEXT_VTT);
 }
 
 bool
@@ -4122,9 +4158,8 @@ nsContentUtils::TraverseListenerManager(nsINode *aNode,
     return;
   }
 
-  EventListenerManagerMapEntry *entry =
-    static_cast<EventListenerManagerMapEntry *>
-               (PL_DHashTableSearch(sEventListenerManagersHash, aNode));
+  auto entry = static_cast<EventListenerManagerMapEntry*>
+                          (sEventListenerManagersHash->Search(aNode));
   if (entry) {
     CycleCollectionNoteChild(cb, entry->mListenerManager.get(),
                              "[via hash] mListenerManager");
@@ -4141,9 +4176,9 @@ nsContentUtils::GetListenerManagerForNode(nsINode *aNode)
     return nullptr;
   }
 
-  EventListenerManagerMapEntry *entry =
-    static_cast<EventListenerManagerMapEntry *>
-      (PL_DHashTableAdd(sEventListenerManagersHash, aNode, fallible));
+  auto entry =
+    static_cast<EventListenerManagerMapEntry*>
+               (sEventListenerManagersHash->Add(aNode, fallible));
 
   if (!entry) {
     return nullptr;
@@ -4172,9 +4207,8 @@ nsContentUtils::GetExistingListenerManagerForNode(const nsINode *aNode)
     return nullptr;
   }
 
-  EventListenerManagerMapEntry *entry =
-    static_cast<EventListenerManagerMapEntry *>
-               (PL_DHashTableSearch(sEventListenerManagersHash, aNode));
+  auto entry = static_cast<EventListenerManagerMapEntry*>
+                          (sEventListenerManagersHash->Search(aNode));
   if (entry) {
     return entry->mListenerManager;
   }
@@ -4187,15 +4221,14 @@ void
 nsContentUtils::RemoveListenerManager(nsINode *aNode)
 {
   if (sEventListenerManagersHash) {
-    EventListenerManagerMapEntry *entry =
-      static_cast<EventListenerManagerMapEntry *>
-                 (PL_DHashTableSearch(sEventListenerManagersHash, aNode));
+    auto entry = static_cast<EventListenerManagerMapEntry*>
+                            (sEventListenerManagersHash->Search(aNode));
     if (entry) {
       nsRefPtr<EventListenerManager> listenerManager;
       listenerManager.swap(entry->mListenerManager);
       // Remove the entry and *then* do operations that could cause further
       // modification of sEventListenerManagersHash.  See bug 334177.
-      PL_DHashTableRawRemove(sEventListenerManagersHash, entry);
+      sEventListenerManagersHash->RawRemove(entry);
       if (listenerManager) {
         listenerManager->Disconnect();
       }
@@ -5233,7 +5266,6 @@ nsContentUtils::LeaveMicroTask()
   MOZ_ASSERT(NS_IsMainThread());
   if (--sMicroTaskLevel == 0) {
     PerformMainThreadMicroTaskCheckpoint();
-    nsDocument::ProcessBaseElementQueue();
   }
 }
 
@@ -6071,7 +6103,7 @@ nsContentTypeParser::GetParameter(const char* aParameterName, nsAString& aResult
 bool
 nsContentUtils::CanAccessNativeAnon()
 {
-  return IsCallerChrome() || IsCallerContentXBL();
+  return LegacyIsCallerChromeOrNativeCode() || IsCallerContentXBL();
 }
 
 /* static */ nsresult
@@ -7791,23 +7823,26 @@ nsContentUtils::SendMouseEvent(nsCOMPtr<nsIPresShell> aPresShell,
 
   EventMessage msg;
   bool contextMenuKey = false;
-  if (aType.EqualsLiteral("mousedown"))
+  if (aType.EqualsLiteral("mousedown")) {
     msg = eMouseDown;
-  else if (aType.EqualsLiteral("mouseup"))
+  } else if (aType.EqualsLiteral("mouseup")) {
     msg = eMouseUp;
-  else if (aType.EqualsLiteral("mousemove"))
+  } else if (aType.EqualsLiteral("mousemove")) {
     msg = eMouseMove;
-  else if (aType.EqualsLiteral("mouseover"))
+  } else if (aType.EqualsLiteral("mouseover")) {
     msg = eMouseEnterIntoWidget;
-  else if (aType.EqualsLiteral("mouseout"))
+  } else if (aType.EqualsLiteral("mouseout")) {
     msg = eMouseExitFromWidget;
-  else if (aType.EqualsLiteral("contextmenu")) {
+  } else if (aType.EqualsLiteral("mouselongtap")) {
+    msg = eMouseLongTap;
+  } else if (aType.EqualsLiteral("contextmenu")) {
     msg = eContextMenu;
     contextMenuKey = (aButton == 0);
-  } else if (aType.EqualsLiteral("MozMouseHittest"))
+  } else if (aType.EqualsLiteral("MozMouseHittest")) {
     msg = eMouseHitTest;
-  else
+  } else {
     return NS_ERROR_FAILURE;
+  }
 
   if (aInputSourceArg == nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN) {
     aInputSourceArg = nsIDOMMouseEvent::MOZ_SOURCE_MOUSE;
@@ -7929,8 +7964,10 @@ nsContentUtils::InternalContentPolicyTypeToExternal(nsContentPolicyType aType)
 {
   switch (aType) {
   case nsIContentPolicy::TYPE_INTERNAL_SCRIPT:
+  case nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD:
   case nsIContentPolicy::TYPE_INTERNAL_WORKER:
   case nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER:
+  case nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER:
     return nsIContentPolicy::TYPE_SCRIPT;
 
   case nsIContentPolicy::TYPE_INTERNAL_EMBED:
@@ -7950,11 +7987,46 @@ nsContentUtils::InternalContentPolicyTypeToExternal(nsContentPolicyType aType)
   case nsIContentPolicy::TYPE_INTERNAL_EVENTSOURCE:
     return nsIContentPolicy::TYPE_XMLHTTPREQUEST;
 
+  case nsIContentPolicy::TYPE_INTERNAL_IMAGE:
+  case nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD:
+    return nsIContentPolicy::TYPE_IMAGE;
+
+  case nsIContentPolicy::TYPE_INTERNAL_STYLESHEET:
+  case nsIContentPolicy::TYPE_INTERNAL_STYLESHEET_PRELOAD:
+    return nsIContentPolicy::TYPE_STYLESHEET;
+
   default:
     return aType;
   }
 }
 
+/* static */
+nsContentPolicyType
+nsContentUtils::InternalContentPolicyTypeToExternalOrScript(nsContentPolicyType aType)
+{
+  switch (aType) {
+  case nsIContentPolicy::TYPE_INTERNAL_SCRIPT:
+  case nsIContentPolicy::TYPE_INTERNAL_WORKER:
+  case nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER:
+  case nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER:
+    return aType;
+
+  default:
+    return InternalContentPolicyTypeToExternal(aType);
+  }
+}
+
+/* static */
+nsContentPolicyType
+nsContentUtils::InternalContentPolicyTypeToExternalOrPreload(nsContentPolicyType aType)
+{
+  if (aType == nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD ||
+      aType == nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD ||
+      aType == nsIContentPolicy::TYPE_INTERNAL_STYLESHEET_PRELOAD) {
+    return aType;
+  }
+  return InternalContentPolicyTypeToExternal(aType);
+}
 
 nsresult
 nsContentUtils::SetFetchReferrerURIWithPolicy(nsIPrincipal* aPrincipal,
@@ -8025,6 +8097,14 @@ nsContentUtils::PushEnabled(JSContext* aCx, JSObject* aObj)
   return workerPrivate->PushEnabled();
 }
 
+// static
+bool
+nsContentUtils::IsWorkerLoad(nsContentPolicyType aType)
+{
+  return aType == nsIContentPolicy::TYPE_INTERNAL_WORKER ||
+         aType == nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER;
+}
+
 // static, public
 nsContentUtils::StorageAccess
 nsContentUtils::StorageAllowedForWindow(nsPIDOMWindow* aWindow)
@@ -8086,28 +8166,37 @@ nsContentUtils::InternalStorageAllowedForPrincipal(nsIPrincipal* aPrincipal,
     access = std::min(StorageAccess::eSessionScoped, access);
   }
 
-  // If the caller is chrome privileged, then it is allowed to access any
-  // storage it likes, no matter whether the storage for that window/principal
-  // would normally be permitted.
-  if (IsSystemPrincipal(SubjectPrincipal())) {
-    return access;
-  }
-
-  if (!SubjectPrincipal()->Subsumes(aPrincipal)) {
-    NS_WARNING("A principal is attempting to access storage for a principal "
-               "which it doesn't subsume!");
-    return StorageAccess::eDeny;
-  }
-
   // About URIs are allowed to access storage, even if they don't have chrome
   // privileges. If this is not desired, than the consumer will have to
   // implement their own restriction functionality.
+  //
+  // This is due to backwards-compatibility and the state of storage access before
+  // the introducton of nsContentUtils::InternalStorageAllowedForPrincipal:
+  //
+  // BEFORE:
+  // localStorage, caches: allowed in 3rd-party iframes always
+  // IndexedDB: allowed in 3rd-party iframes only if 3rd party URI is an about:
+  //   URI within a specific whitelist
+  //
+  // AFTER:
+  // localStorage, caches: allowed in 3rd-party iframes by default. Preference
+  //   can be set to disable in 3rd-party, which will not disallow in about: URIs.
+  // IndexedDB: allowed in 3rd-party iframes by default. Preference can be set to
+  //   disable in 3rd-party, which will disallow in about: URIs, unless they are
+  //   within a specific whitelist.
+  //
+  // This means that behavior for storage with internal about: URIs should not be
+  // affected, which is desireable due to the lack of automated testing for about:
+  // URIs with these preferences set, and the importance of the correct functioning
+  // of these URIs even with custom preferences.
   nsCOMPtr<nsIURI> uri;
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(aPrincipal->GetURI(getter_AddRefs(uri))));
-  bool isAbout = false;
-  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(uri->SchemeIs("about", &isAbout)));
-  if (isAbout) {
-    return access;
+  nsresult rv = aPrincipal->GetURI(getter_AddRefs(uri));
+  if (NS_SUCCEEDED(rv) && uri) {
+    bool isAbout = false;
+    MOZ_ALWAYS_TRUE(NS_SUCCEEDED(uri->SchemeIs("about", &isAbout)));
+    if (isAbout) {
+      return access;
+    }
   }
 
   nsCOMPtr<nsIPermissionManager> permissionManager =

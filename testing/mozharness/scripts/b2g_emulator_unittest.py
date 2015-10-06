@@ -273,14 +273,20 @@ class B2GEmulatorTest(TestingMixin, VCSMixin, BaseScript, BlobUploadMixin):
         }
 
         if suite not in self.config["suite_definitions"]:
-            self.fatal("Key '%s' not defined in the config!" % suite)
+            self.fatal("'%s' not defined in the config!" % suite)
 
-        options = self.config["suite_definitions"][suite]["options"]
-        if options:
-            for option in options:
-                option = option % str_format_values
-                if not option.endswith('None'):
-                    cmd.append(option)
+        try_options, try_tests = self.try_args(suite)
+
+        options = self.query_options(self.config["suite_definitions"][suite]["options"],
+                                     try_options,
+                                     str_format_values=str_format_values)
+        cmd.extend(opt for opt in options if not opt.endswith('None'))
+
+        tests = self.query_tests_args(self.config["suite_definitions"][suite].get("tests"),
+                                      try_tests,
+                                      str_format_values=str_format_values)
+        cmd.extend(opt for opt in tests if not opt.endswith('None'))
+
         return cmd
 
     def _query_adb(self):
@@ -337,7 +343,6 @@ class B2GEmulatorTest(TestingMixin, VCSMixin, BaseScript, BlobUploadMixin):
 
         cmd = self._query_abs_base_cmd(suite)
         cwd = dirs['abs_%s_dir' % suite]
-        cmd = self.append_harness_extra_args(cmd)
 
         # TODO we probably have to move some of the code in
         # scripts/desktop_unittest.py and scripts/marionette.py to

@@ -803,10 +803,10 @@ PtrToNodeMatchEntry(PLDHashTable* aTable,
 }
 
 static PLDHashTableOps PtrNodeOps = {
-  PL_DHashVoidPtrKeyStub,
+  PLDHashTable::HashVoidPtrKeyStub,
   PtrToNodeMatchEntry,
-  PL_DHashMoveEntryStub,
-  PL_DHashClearEntryStub,
+  PLDHashTable::MoveEntryStub,
+  PLDHashTable::ClearEntryStub,
   nullptr
 };
 
@@ -868,10 +868,9 @@ public:
   }
 #endif
 
-  PtrToNodeEntry* FindNodeEntry(void* aPtr);
   PtrInfo* FindNode(void* aPtr);
   PtrToNodeEntry* AddNodeToMap(void* aPtr);
-  void RemoveNodeFromMap(PtrToNodeEntry* aPtr);
+  void RemoveObjectFromMap(void* aObject);
 
   uint32_t MapCount() const
   {
@@ -893,14 +892,13 @@ public:
 
     return n;
   }
-};
 
-PtrToNodeEntry*
-CCGraph::FindNodeEntry(void* aPtr)
-{
-  return
-    static_cast<PtrToNodeEntry*>(PL_DHashTableSearch(&mPtrToNodeMap, aPtr));
-}
+private:
+  PtrToNodeEntry* FindNodeEntry(void* aPtr)
+  {
+    return static_cast<PtrToNodeEntry*>(mPtrToNodeMap.Search(aPtr));
+  }
+};
 
 PtrInfo*
 CCGraph::FindNode(void* aPtr)
@@ -917,8 +915,7 @@ CCGraph::AddNodeToMap(void* aPtr)
     return nullptr;
   }
 
-  PtrToNodeEntry* e = static_cast<PtrToNodeEntry*>
-    (PL_DHashTableAdd(&mPtrToNodeMap, aPtr, fallible));
+  auto e = static_cast<PtrToNodeEntry*>(mPtrToNodeMap.Add(aPtr, fallible));
   if (!e) {
     mOutOfMemory = true;
     MOZ_ASSERT(false, "Ran out of memory while building cycle collector graph");
@@ -928,9 +925,16 @@ CCGraph::AddNodeToMap(void* aPtr)
 }
 
 void
-CCGraph::RemoveNodeFromMap(PtrToNodeEntry* aEntry)
+CCGraph::RemoveObjectFromMap(void* aObj)
 {
-  mPtrToNodeMap.RemoveEntry(aEntry);
+  PtrToNodeEntry* e = FindNodeEntry(aObj);
+  PtrInfo* pinfo = e ? e->mNode : nullptr;
+  if (pinfo) {
+    mPtrToNodeMap.RemoveEntry(e);
+
+    pinfo->mPointer = nullptr;
+    pinfo->mParticipant = nullptr;
+  }
 }
 
 
@@ -1252,9 +1256,11 @@ class JSPurpleBuffer;
 
 class nsCycleCollector : public nsIMemoryReporter
 {
+public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIMEMORYREPORTER
 
+private:
   bool mActivelyCollecting;
   bool mFreeingSnowWhite;
   // mScanInProgress should be false when we're collecting white objects.
@@ -1323,6 +1329,8 @@ public:
                nsICycleCollectorListener* aManualListener,
                bool aPreferShorterSlices = false);
   void Shutdown();
+
+  bool IsIdle() const { return mIncrementalPhase == IdlePhase; }
 
   void SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf,
                            size_t* aObjectSize,
@@ -2829,7 +2837,7 @@ nsCycleCollector::ForgetSkippable(bool aRemoveChildlessNodes,
 
   // If we remove things from the purple buffer during graph building, we may
   // lose track of an object that was mutated during graph building.
-  MOZ_ASSERT(mIncrementalPhase == IdlePhase);
+  MOZ_ASSERT(IsIdle());
 
   if (mJSRuntime) {
     mJSRuntime->PrepareForForgetSkippable();
@@ -3297,7 +3305,7 @@ nsCycleCollector::CollectWhite()
   }
   timeLog.Checkpoint("CollectWhite::Unroot");
 
-  nsCycleCollector_dispatchDeferredDeletion(false);
+  nsCycleCollector_dispatchDeferredDeletion(false, true);
   timeLog.Checkpoint("CollectWhite::dispatchDeferredDeletion");
 
   mIncrementalPhase = CleanupPhase;
@@ -3579,7 +3587,7 @@ nsCycleCollector::Collect(ccType aCCType,
     marker.emplace("nsCycleCollector::Collect");
   }
 
-  bool startedIdle = (mIncrementalPhase == IdlePhase);
+  bool startedIdle = IsIdle();
   bool collectedAny = false;
 
   // If the CC started idle, it will call BeginCollection, which
@@ -3647,13 +3655,13 @@ nsCycleCollector::Collect(ccType aCCType,
     // We were in the middle of an incremental CC (using its own listener).
     // Somebody has forced a CC, so after having finished out the current CC,
     // run the CC again using the new listener.
-    MOZ_ASSERT(mIncrementalPhase == IdlePhase);
+    MOZ_ASSERT(IsIdle());
     if (Collect(aCCType, aBudget, aManualListener)) {
       collectedAny = true;
     }
   }
 
-  MOZ_ASSERT_IF(aCCType != SliceCC, mIncrementalPhase == IdlePhase);
+  MOZ_ASSERT_IF(aCCType != SliceCC, IsIdle());
 
   return collectedAny;
 }
@@ -3665,7 +3673,7 @@ nsCycleCollector::Collect(ccType aCCType,
 void
 nsCycleCollector::PrepareForGarbageCollection()
 {
-  if (mIncrementalPhase == IdlePhase) {
+  if (IsIdle()) {
     MOZ_ASSERT(mGraph.IsEmpty(), "Non-empty graph when idle");
     MOZ_ASSERT(!mBuilder, "Non-null builder when idle");
     if (mJSPurpleBuffer) {
@@ -3680,7 +3688,7 @@ nsCycleCollector::PrepareForGarbageCollection()
 void
 nsCycleCollector::FinishAnyCurrentCollection()
 {
-  if (mIncrementalPhase == IdlePhase) {
+  if (IsIdle()) {
     return;
   }
 
@@ -3693,7 +3701,7 @@ nsCycleCollector::FinishAnyCurrentCollection()
   // current CC if we're reentering the CC at some point past
   // graph building. We need to be past the point where the CC will
   // look at JS objects so that it is safe to GC.
-  MOZ_ASSERT(mIncrementalPhase == IdlePhase ||
+  MOZ_ASSERT(IsIdle() ||
              (mActivelyCollecting && mIncrementalPhase != GraphBuildingPhase),
              "Reentered CC during graph building");
 }
@@ -3738,7 +3746,7 @@ nsCycleCollector::BeginCollection(ccType aCCType,
                                   nsICycleCollectorListener* aManualListener)
 {
   TimeLog timeLog;
-  MOZ_ASSERT(mIncrementalPhase == IdlePhase);
+  MOZ_ASSERT(IsIdle());
 
   mCollectionStart = TimeStamp::Now();
 
@@ -3830,7 +3838,7 @@ nsCycleCollector::Shutdown()
   // Always delete snow white objects.
   FreeSnowWhite(true);
 
-#ifndef DEBUG
+#ifndef NS_FREE_PERMANENT_DATA
   if (PR_GetEnv("MOZ_CC_RUN_DURING_SHUTDOWN"))
 #endif
   {
@@ -3841,18 +3849,11 @@ nsCycleCollector::Shutdown()
 void
 nsCycleCollector::RemoveObjectFromGraph(void* aObj)
 {
-  if (mIncrementalPhase == IdlePhase) {
+  if (IsIdle()) {
     return;
   }
 
-  PtrToNodeEntry* e = mGraph.FindNodeEntry(aObj);
-  PtrInfo* pinfo = e ? e->mNode : nullptr;
-  if (pinfo) {
-    mGraph.RemoveNodeFromMap(e);
-
-    pinfo->mPointer = nullptr;
-    pinfo->mParticipant = nullptr;
-  }
+  mGraph.RemoveObjectFromMap(aObj);
 }
 
 void
@@ -4058,11 +4059,11 @@ nsCycleCollector_forgetSkippable(bool aRemoveChildlessNodes,
 }
 
 void
-nsCycleCollector_dispatchDeferredDeletion(bool aContinuation)
+nsCycleCollector_dispatchDeferredDeletion(bool aContinuation, bool aPurge)
 {
   CycleCollectedJSRuntime* rt = CycleCollectedJSRuntime::Get();
   if (rt) {
-    rt->DispatchDeferredDeletion(aContinuation);
+    rt->DispatchDeferredDeletion(aContinuation, aPurge);
   }
 }
 

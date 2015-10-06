@@ -2,14 +2,15 @@
 * License, v. 2.0. If a copy of the MPL was not distributed with this file,
 * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-let Ci = Components.interfaces, Cc = Components.classes, Cu = Components.utils;
+var Ci = Components.interfaces, Cc = Components.classes, Cu = Components.utils;
 
+Cu.import("resource://services-common/utils.js"); /*global: CommonUtils */
 Cu.import("resource://gre/modules/Messaging.jsm");
-Cu.import("resource://gre/modules/Services.jsm")
+Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/TelemetryStopwatch.jsm");
 
-XPCOMUtils.defineLazyGetter(window, "gChromeWin", function()
+XPCOMUtils.defineLazyGetter(window, "gChromeWin", () =>
   window.QueryInterface(Ci.nsIInterfaceRequestor)
     .getInterface(Ci.nsIWebNavigation)
     .QueryInterface(Ci.nsIDocShellTreeItem)
@@ -21,9 +22,9 @@ XPCOMUtils.defineLazyGetter(window, "gChromeWin", function()
 XPCOMUtils.defineLazyModuleGetter(this, "Prompt",
                                   "resource://gre/modules/Prompt.jsm");
 
-let debug = Cu.import("resource://gre/modules/AndroidLog.jsm", {}).AndroidLog.d.bind(null, "AboutLogins");
+var debug = Cu.import("resource://gre/modules/AndroidLog.jsm", {}).AndroidLog.d.bind(null, "AboutLogins");
 
-let gStringBundle = Services.strings.createBundle("chrome://browser/locale/aboutLogins.properties");
+var gStringBundle = Services.strings.createBundle("chrome://browser/locale/aboutLogins.properties");
 
 function copyStringAndToast(string, notifyString) {
   try {
@@ -44,44 +45,102 @@ const LOGIN_VIEWED = 1;
 const LOGIN_EDITED = 2;
 const LOGIN_PW_TOGGLED = 3;
 
-let Logins = {
+var Logins = {
   _logins: [],
   _filterTimer: null,
   _selectedLogin: null,
 
-  _getLogins: function() {
-    let logins;
+  // Load the logins list, displaying interstitial UI (see
+  // #logins-list-loading-body) while loading.  There are careful
+  // jank-avoiding measures taken in this function; be careful when
+  // modifying it!
+  //
+  // Returns a Promise that resolves to the list of logins, ordered by
+  // hostname.
+  _promiseLogins: function() {
     let contentBody = document.getElementById("content-body");
     let emptyBody = document.getElementById("empty-body");
     let filterIcon = document.getElementById("filter-button");
 
-    this._toggleListBody(true);
-    emptyBody.classList.add("hidden");
-
-    try {
-      TelemetryStopwatch.start("PWMGR_ABOUT_LOGINS_GET_ALL_LOGINS_MS");
-      logins = Services.logins.getAllLogins();
-      TelemetryStopwatch.finish("PWMGR_ABOUT_LOGINS_GET_ALL_LOGINS_MS");
-    } catch(e) {
-      // Master password was not entered
-      debug("Master password permissions error: " + e);
-      logins = [];
-    }
-    this._toggleListBody(false);
-
-    if (!logins.length) {
-      emptyBody.classList.remove("hidden");
-
-      filterIcon.classList.add("hidden");
-      contentBody.classList.add("hidden");
-    } else {
+    let showSpinner = () => {
+      this._toggleListBody(true);
       emptyBody.classList.add("hidden");
+    };
 
-      filterIcon.classList.remove("hidden");
-    }
+    let getAllLogins = () => {
+      let logins = [];
+      try {
+        TelemetryStopwatch.start("PWMGR_ABOUT_LOGINS_GET_ALL_LOGINS_MS");
+        logins = Services.logins.getAllLogins();
+        TelemetryStopwatch.finish("PWMGR_ABOUT_LOGINS_GET_ALL_LOGINS_MS");
+      } catch(e) {
+        // It's likely that the Master Password was not entered; give
+        // a hint to the next person.
+        throw new Error("Possible Master Password permissions error: " + e.toString());
+      }
 
-    logins.sort((a, b) => a.hostname.localeCompare(b.hostname));
-    return this._logins = logins;
+      logins.sort((a, b) => a.hostname.localeCompare(b.hostname));
+
+      return logins;
+    };
+
+    let hideSpinner = (logins) => {
+      this._toggleListBody(false);
+
+      if (!logins.length) {
+        contentBody.classList.add("hidden");
+        filterIcon.classList.add("hidden");
+        emptyBody.classList.remove("hidden");
+      } else {
+        contentBody.classList.remove("hidden");
+        emptyBody.classList.add("hidden");
+      }
+
+      return logins;
+    };
+
+    // Return a promise that is resolved after a paint.
+    let waitForPaint = () => {
+      // We're changing 'display'.  We need to wait for the new value to take
+      // effect; otherwise, we'll block and never paint a change.  Since
+      // requestAnimationFrame callback is generally triggered *before* any
+      // style flush and layout, we wait for two animation frames.  This
+      // approach was cribbed from
+      // https://dxr.mozilla.org/mozilla-central/rev/5abe3c4deab94270440422c850bbeaf512b1f38d/browser/base/content/browser-fullScreen.js?offset=0#469.
+      return new Promise(function(resolve, reject) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      });
+    };
+
+    // getAllLogins janks the main-thread.  We need to paint before that jank;
+    // by throwing the janky load onto the next tick, we paint the spinner; the
+    // spinner is CSS animated off-main-thread.
+    return Promise.resolve()
+      .then(showSpinner)
+      .then(waitForPaint)
+      .then(getAllLogins)
+      .then(hideSpinner);
+  },
+
+  // Reload the logins list, displaying interstitial UI while loading.
+  // Update the stored and displayed list upon completion.
+  _reloadList: function() {
+    this._promiseLogins()
+      .then((logins) => {
+        this._logins = logins;
+        this._loadList(logins);
+      })
+      .catch((e) => {
+        // There's no way to recover from errors, sadly.  Log and make
+        // it obvious that something is up.
+        this._logins = [];
+        debug("Failed to _reloadList!");
+        Cu.reportError(e);
+      });
   },
 
   _toggleListBody: function(isLoading) {
@@ -95,7 +154,6 @@ let Logins = {
       loadingBody.classList.add("hidden");
       contentBody.classList.remove("hidden");
     }
-
   },
 
   init: function () {
@@ -104,8 +162,6 @@ let Logins = {
     Services.obs.addObserver(this, "passwordmgr-storage-changed", false);
     document.getElementById("update-btn").addEventListener("click", this._onSaveEditLogin.bind(this), false);
     document.getElementById("password-btn").addEventListener("click", this._onPasswordBtn.bind(this), false);
-
-    this._loadList(this._getLogins());
 
     let filterInput = document.getElementById("filter-input");
     let filterContainer = document.getElementById("filter-input-container");
@@ -147,6 +203,8 @@ let Logins = {
     this._showList();
 
     this._updatePasswordBtn(true);
+
+    this._reloadList();
   },
 
   uninit: function () {
@@ -439,8 +497,7 @@ let Logins = {
   observe: function (subject, topic, data) {
     switch(topic) {
       case "passwordmgr-storage-changed": {
-        // Reload logins content.
-        this._loadList(this._getLogins());
+        this._reloadList();
         break;
       }
     }

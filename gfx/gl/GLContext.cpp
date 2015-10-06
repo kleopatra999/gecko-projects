@@ -39,7 +39,6 @@
 
 #ifdef XP_MACOSX
 #include <CoreServices/CoreServices.h>
-#include "gfxColor.h"
 #endif
 
 #if defined(MOZ_WIDGET_COCOA)
@@ -306,7 +305,6 @@ GLContext::GLContext(const SurfaceCaps& caps,
     mRenderer(GLRenderer::Other),
     mHasRobustness(false),
     mTopError(LOCAL_GL_NO_ERROR),
-    mLocalErrorScope(nullptr),
     mSharedContext(sharedContext),
     mCaps(caps),
     mScreen(nullptr),
@@ -316,6 +314,7 @@ GLContext::GLContext(const SurfaceCaps& caps,
     mMaxTextureImageSize(0),
     mMaxRenderbufferSize(0),
     mNeedsTextureSizeChecks(false),
+    mNeedsFlushBeforeDeleteFB(false),
     mWorkAroundDriverBugs(true),
     mHeavyGLCallsSinceLastFlush(false)
 {
@@ -616,6 +615,7 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
                 "Adreno (TM) 200",
                 "Adreno (TM) 205",
                 "Adreno (TM) 320",
+                "Adreno (TM) 420",
                 "PowerVR SGX 530",
                 "PowerVR SGX 540",
                 "NVIDIA Tegra",
@@ -1607,6 +1607,12 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
             mNeedsTextureSizeChecks = true;
         }
 #endif
+        if (mWorkAroundDriverBugs &&
+            Renderer() == GLRenderer::AdrenoTM420) {
+            // see bug 1194923. Calling glFlush before glDeleteFramebuffers
+            // prevents occasional driver crash.
+            mNeedsFlushBeforeDeleteFB = true;
+        }
 
         mMaxTextureImageSize = mMaxTextureSize;
 
@@ -2851,6 +2857,11 @@ GLContext::fDeleteFramebuffers(GLsizei n, const GLuint* names)
         }
     }
 
+    // Avoid crash by flushing before glDeleteFramebuffers. See bug 1194923.
+    if (mNeedsFlushBeforeDeleteFB) {
+        fFlush();
+    }
+
     if (n == 1 && *names == 0) {
         // Deleting framebuffer 0 causes hangs on the DROID. See bug 623228.
     } else {
@@ -2925,6 +2936,60 @@ GLContext::IsDrawingToDefaultFramebuffer()
 {
     return Screen()->IsDrawFramebufferDefault();
 }
+
+GLuint
+CreateTexture(GLContext* aGL, GLenum aInternalFormat, GLenum aFormat,
+              GLenum aType, const gfx::IntSize& aSize, bool linear)
+{
+    GLuint tex = 0;
+    aGL->fGenTextures(1, &tex);
+    ScopedBindTexture autoTex(aGL, tex);
+
+    aGL->fTexParameteri(LOCAL_GL_TEXTURE_2D,
+                        LOCAL_GL_TEXTURE_MIN_FILTER, linear ? LOCAL_GL_LINEAR
+                                                            : LOCAL_GL_NEAREST);
+    aGL->fTexParameteri(LOCAL_GL_TEXTURE_2D,
+                        LOCAL_GL_TEXTURE_MAG_FILTER, linear ? LOCAL_GL_LINEAR
+                                                            : LOCAL_GL_NEAREST);
+    aGL->fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_WRAP_S,
+                        LOCAL_GL_CLAMP_TO_EDGE);
+    aGL->fTexParameteri(LOCAL_GL_TEXTURE_2D, LOCAL_GL_TEXTURE_WRAP_T,
+                        LOCAL_GL_CLAMP_TO_EDGE);
+
+    aGL->fTexImage2D(LOCAL_GL_TEXTURE_2D,
+                     0,
+                     aInternalFormat,
+                     aSize.width, aSize.height,
+                     0,
+                     aFormat,
+                     aType,
+                     nullptr);
+
+    return tex;
+}
+
+GLuint
+CreateTextureForOffscreen(GLContext* aGL, const GLFormats& aFormats,
+                          const gfx::IntSize& aSize)
+{
+    MOZ_ASSERT(aFormats.color_texInternalFormat);
+    MOZ_ASSERT(aFormats.color_texFormat);
+    MOZ_ASSERT(aFormats.color_texType);
+
+    GLenum internalFormat = aFormats.color_texInternalFormat;
+    GLenum unpackFormat = aFormats.color_texFormat;
+    GLenum unpackType = aFormats.color_texType;
+    if (aGL->IsANGLE()) {
+        MOZ_ASSERT(internalFormat == LOCAL_GL_RGBA);
+        MOZ_ASSERT(unpackFormat == LOCAL_GL_RGBA);
+        MOZ_ASSERT(unpackType == LOCAL_GL_UNSIGNED_BYTE);
+        internalFormat = LOCAL_GL_BGRA_EXT;
+        unpackFormat = LOCAL_GL_BGRA_EXT;
+    }
+
+    return CreateTexture(aGL, internalFormat, unpackFormat, unpackType, aSize);
+}
+
 
 } /* namespace gl */
 } /* namespace mozilla */

@@ -125,6 +125,8 @@ MOZ_ARG_WITH_STRING(dist-dir,
     TOP_DIST=dist)
 AC_SUBST(TOP_DIST)
 
+MOZ_BUILD_BACKEND
+
 MOZ_DEFAULT_COMPILER
 
 COMPILE_ENVIRONMENT=1
@@ -302,6 +304,8 @@ fi
 MOZ_TOOL_VARIABLES
 
 MOZ_CHECK_COMPILER_WRAPPER
+
+MOZ_RUST_SUPPORT
 
 dnl Special win32 checks
 dnl ========================================================
@@ -3621,8 +3625,6 @@ AC_SUBST(FILTER)
 AC_SUBST(BIN_FLAGS)
 AC_SUBST(MOZ_DEBUG)
 AC_SUBST(MOZ_DEBUG_SYMBOLS)
-AC_SUBST(MOZ_DEBUG_ENABLE_DEFS)
-AC_SUBST(MOZ_DEBUG_DISABLE_DEFS)
 AC_SUBST(MOZ_DEBUG_LDFLAGS)
 AC_SUBST(WARNINGS_AS_ERRORS)
 AC_SUBST(MOZ_JPROF)
@@ -3765,7 +3767,12 @@ dnl Set various defines and substitutions
 dnl ========================================================
 
 if test "$OS_ARCH" = "Darwin"; then
-  AC_DEFINE(XP_MACOSX)
+  if test -n "$MOZ_IOS"; then
+    AC_DEFINE(XP_IOS)
+  else
+    AC_DEFINE(XP_MACOSX)
+  fi
+  AC_DEFINE(XP_DARWIN)
   AC_DEFINE(XP_UNIX)
 elif test "$OS_ARCH" != "WINNT"; then
   AC_DEFINE(XP_UNIX)

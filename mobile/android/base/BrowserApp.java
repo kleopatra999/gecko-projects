@@ -6,11 +6,11 @@
 package org.mozilla.gecko;
 
 import org.mozilla.gecko.annotation.RobocopTarget;
+import org.mozilla.gecko.AdjustConstants;
 import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.DynamicToolbar.PinReason;
 import org.mozilla.gecko.DynamicToolbar.VisibilityTransition;
 import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
-import org.mozilla.gecko.PrintHelper;
 import org.mozilla.gecko.Tabs.TabEvents;
 import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.TransitionsTracker;
@@ -24,13 +24,6 @@ import org.mozilla.gecko.favicons.LoadFaviconTask;
 import org.mozilla.gecko.favicons.OnFaviconLoadedListener;
 import org.mozilla.gecko.favicons.decoders.IconDirectoryEntry;
 import org.mozilla.gecko.firstrun.FirstrunPane;
-import org.mozilla.gecko.fxa.FirefoxAccounts;
-import org.mozilla.gecko.fxa.FxAccountConstants;
-import org.mozilla.gecko.fxa.activities.FxAccountGetStartedActivity;
-import org.mozilla.gecko.fxa.authenticator.AndroidFxAccount;
-import org.mozilla.gecko.fxa.login.Engaged;
-import org.mozilla.gecko.fxa.login.State;
-import org.mozilla.gecko.gfx.BitmapUtils;
 import org.mozilla.gecko.gfx.DynamicToolbarAnimator;
 import org.mozilla.gecko.gfx.ImmutableViewportMetrics;
 import org.mozilla.gecko.gfx.LayerView;
@@ -57,9 +50,7 @@ import org.mozilla.gecko.preferences.GeckoPreferences;
 import org.mozilla.gecko.prompts.Prompt;
 import org.mozilla.gecko.prompts.PromptListItem;
 import org.mozilla.gecko.restrictions.Restriction;
-import org.mozilla.gecko.sync.Utils;
 import org.mozilla.gecko.sync.repositories.android.FennecTabsRepository;
-import org.mozilla.gecko.sync.setup.SyncAccounts;
 import org.mozilla.gecko.tabqueue.TabQueueHelper;
 import org.mozilla.gecko.tabqueue.TabQueuePrompt;
 import org.mozilla.gecko.tabs.TabHistoryController;
@@ -105,7 +96,6 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.graphics.drawable.BitmapDrawable;
-import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.nfc.NdefMessage;
 import android.nfc.NdefRecord;
@@ -261,6 +251,8 @@ public class BrowserApp extends GeckoApp
     private BrowserHealthReporter mBrowserHealthReporter;
 
     private ReadingListHelper mReadingListHelper;
+
+    private AccountsHelper mAccountsHelper;
 
     // The tab to be selected on editing mode exit.
     private Integer mTargetTabForEditingMode;
@@ -677,7 +669,7 @@ public class BrowserApp extends GeckoApp
                     return true;
 
                 case KeyEvent.KEYCODE_R:
-                    tab.doReload();
+                    tab.doReload(false);
                     return true;
 
                 case KeyEvent.KEYCODE_PERIOD:
@@ -839,12 +831,9 @@ public class BrowserApp extends GeckoApp
             "Menu:Update",
             "LightweightTheme:Update",
             "Search:Keyword",
-            "Prompt:ShowTop",
-            "Accounts:Exist");
+            "Prompt:ShowTop");
 
         EventDispatcher.getInstance().registerGeckoThreadListener((NativeEventListener)this,
-            "Accounts:Create",
-            "Accounts:CreateFirefoxAccountFromJSON",
             "CharEncoding:Data",
             "CharEncoding:State",
             "Favicon:CacheLoad",
@@ -872,6 +861,14 @@ public class BrowserApp extends GeckoApp
         mOrderedBroadcastHelper = new OrderedBroadcastHelper(appContext);
         mBrowserHealthReporter = new BrowserHealthReporter();
         mReadingListHelper = new ReadingListHelper(appContext, getProfile(), this);
+        mAccountsHelper = new AccountsHelper(appContext, getProfile());
+
+        if (AppConstants.MOZ_INSTALL_TRACKING) {
+            final SharedPreferences prefs = GeckoSharedPrefs.forApp(this);
+            if (prefs.getBoolean(GeckoPreferences.PREFS_HEALTHREPORT_UPLOAD_ENABLED, true)) {
+                AdjustConstants.getAdjustHelper().onCreate(this, AdjustConstants.MOZ_INSTALL_TRACKING_ADJUST_SDK_APP_TOKEN);
+            }
+        }
 
         if (AppConstants.MOZ_ANDROID_BEAM) {
             NfcAdapter nfc = NfcAdapter.getDefaultAdapter(this);
@@ -993,7 +990,7 @@ public class BrowserApp extends GeckoApp
 
     @Override
     protected void processTabQueue() {
-        if (AppConstants.MOZ_ANDROID_TAB_QUEUE && mInitialized) {
+        if (TabQueueHelper.TAB_QUEUE_ENABLED && mInitialized) {
             ThreadUtils.postToBackgroundThread(new Runnable() {
                 @Override
                 public void run() {
@@ -1415,6 +1412,12 @@ public class BrowserApp extends GeckoApp
             mReadingListHelper.uninit();
             mReadingListHelper = null;
         }
+
+        if (mAccountsHelper != null) {
+            mAccountsHelper.uninit();
+            mAccountsHelper = null;
+        }
+
         if (mZoomedView != null) {
             mZoomedView.destroy();
         }
@@ -1424,12 +1427,9 @@ public class BrowserApp extends GeckoApp
             "Menu:Update",
             "LightweightTheme:Update",
             "Search:Keyword",
-            "Prompt:ShowTop",
-            "Accounts:Exist");
+            "Prompt:ShowTop");
 
         EventDispatcher.getInstance().unregisterGeckoThreadListener((NativeEventListener) this,
-            "Accounts:Create",
-            "Accounts:CreateFirefoxAccountFromJSON",
             "CharEncoding:Data",
             "CharEncoding:State",
             "Favicon:CacheLoad",
@@ -1688,53 +1688,7 @@ public class BrowserApp extends GeckoApp
     @Override
     public void handleMessage(final String event, final NativeJSObject message,
                               final EventCallback callback) {
-        if ("Accounts:CreateFirefoxAccountFromJSON".equals(event)) {
-            AndroidFxAccount fxAccount = null;
-            try {
-                final NativeJSObject json = message.getObject("json");
-                final String email = json.getString("email");
-                final String uid = json.getString("uid");
-                final boolean verified = json.optBoolean("verified", false);
-                final byte[] unwrapkB = Utils.hex2Byte(json.getString("unwrapBKey"));
-                final byte[] sessionToken = Utils.hex2Byte(json.getString("sessionToken"));
-                final byte[] keyFetchToken = Utils.hex2Byte(json.getString("keyFetchToken"));
-                final String authServerEndpoint =
-                    json.optString("authServerEndpoint", FxAccountConstants.DEFAULT_AUTH_SERVER_ENDPOINT);
-                final String tokenServerEndpoint =
-                    json.optString("tokenServerEndpoint", FxAccountConstants.DEFAULT_TOKEN_SERVER_ENDPOINT);
-                final String profileServerEndpoint =
-                    json.optString("profileServerEndpoint", FxAccountConstants.DEFAULT_PROFILE_SERVER_ENDPOINT);
-                // TODO: handle choose what to Sync.
-                State state = new Engaged(email, uid, verified, unwrapkB, sessionToken, keyFetchToken);
-                fxAccount = AndroidFxAccount.addAndroidAccount(this,
-                        email,
-                        getProfile().getName(),
-                        authServerEndpoint,
-                        tokenServerEndpoint,
-                        profileServerEndpoint,
-                        state,
-                        AndroidFxAccount.DEFAULT_AUTHORITIES_TO_SYNC_AUTOMATICALLY_MAP);
-            } catch (Exception e) {
-                Log.w(LOGTAG, "Got exception creating Firefox Account from JSON; ignoring.", e);
-                if (callback == null) {
-                    callback.sendError("Could not create Firefox Account from JSON: " + e.toString());
-                }
-            }
-            if (callback != null) {
-                callback.sendSuccess(fxAccount != null);
-            }
-
-        } else if ("Accounts:Create".equals(event)) {
-            // Do exactly the same thing as if you tapped 'Sync' in Settings.
-            final Intent intent = new Intent(getContext(), FxAccountGetStartedActivity.class);
-            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            final NativeJSObject extras = message.optObject("extras", null);
-            if (extras != null) {
-                intent.putExtra("extras", extras.toString());
-            }
-            getContext().startActivity(intent);
-
-        } else if ("CharEncoding:Data".equals(event)) {
+        if ("CharEncoding:Data".equals(event)) {
             final NativeJSObject[] charsets = message.getObjectArray("charsets");
             final int selected = message.getInt("selected");
 
@@ -1861,6 +1815,11 @@ public class BrowserApp extends GeckoApp
             Telemetry.addToHistogram("FENNEC_TABQUEUE_ENABLED", (TabQueueHelper.isTabQueueEnabled(BrowserApp.this) ? 1 : 0));
             if (Versions.feature16Plus) {
                 Telemetry.addToHistogram("BROWSER_IS_ASSIST_DEFAULT", (isDefaultBrowser(Intent.ACTION_ASSIST) ? 1 : 0));
+            }
+
+            final SharedPreferences sharedPrefs = GeckoSharedPrefs.forApp(BrowserApp.this);
+            if (sharedPrefs.getBoolean(GeckoPreferences.PREFS_OPEN_URLS_IN_PRIVATE, false)) {
+                Telemetry.addToHistogram("FENNEC_OPEN_URLS_IN_PRIVATE", 1);
             }
         } else if ("Updater:Launch".equals(event)) {
             handleUpdaterLaunch();
@@ -2033,24 +1992,6 @@ public class BrowserApp extends GeckoApp
                 bringToFrontIntent.setClassName(AppConstants.ANDROID_PACKAGE_NAME, AppConstants.MOZ_ANDROID_BROWSER_INTENT_CLASS);
                 bringToFrontIntent.setFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
                 startActivity(bringToFrontIntent);
-            } else if (event.equals("Accounts:Exist")) {
-                final String kind = message.getString("kind");
-                final JSONObject response = new JSONObject();
-
-                if ("any".equals(kind)) {
-                    response.put("exists", SyncAccounts.syncAccountsExist(getContext()) ||
-                                           FirefoxAccounts.firefoxAccountsExist(getContext()));
-                    EventDispatcher.sendResponse(message, response);
-                } else if ("fxa".equals(kind)) {
-                    response.put("exists", FirefoxAccounts.firefoxAccountsExist(getContext()));
-                    EventDispatcher.sendResponse(message, response);
-                } else if ("sync11".equals(kind)) {
-                    response.put("exists", SyncAccounts.syncAccountsExist(getContext()));
-                    EventDispatcher.sendResponse(message, response);
-                } else {
-                    response.put("error", "Unknown kind");
-                    EventDispatcher.sendError(message, response);
-                }
             } else {
                 super.handleMessage(event, message);
             }
@@ -2650,7 +2591,7 @@ public class BrowserApp extends GeckoApp
         if (mFirstrunPane == null) {
             final ViewStub firstrunPagerStub = (ViewStub) findViewById(R.id.firstrun_pager_stub);
             mFirstrunPane = (FirstrunPane) firstrunPagerStub.inflate();
-            mFirstrunPane.load(getSupportFragmentManager());
+            mFirstrunPane.load(getApplicationContext(), getSupportFragmentManager());
             mFirstrunPane.registerOnFinishListener(new FirstrunPane.OnFinishListener() {
                 @Override
                 public void onFinish() {
@@ -2820,7 +2761,16 @@ public class BrowserApp extends GeckoApp
         // prevents this issue.
         fm.executePendingTransactions();
 
-        fm.beginTransaction().add(R.id.search_container, mBrowserSearch, BROWSER_SEARCH_TAG).commitAllowingStateLoss();
+        Fragment f = fm.findFragmentById(R.id.search_container);
+
+        // checking if fragment is already present
+        if (f != null) {
+            fm.beginTransaction().show(f).commitAllowingStateLoss();
+            mBrowserSearch.resetScrollState();
+        } else {
+            // add fragment if not already present
+            fm.beginTransaction().add(R.id.search_container, mBrowserSearch, BROWSER_SEARCH_TAG).commitAllowingStateLoss();
+        }
         mBrowserSearch.setUserVisibleHint(true);
 
         // We want to adjust the window size when the keyboard appears to bring the
@@ -2846,7 +2796,7 @@ public class BrowserApp extends GeckoApp
         mBrowserSearchContainer.setVisibility(View.INVISIBLE);
 
         getSupportFragmentManager().beginTransaction()
-                .remove(mBrowserSearch).commitAllowingStateLoss();
+                .hide(mBrowserSearch).commitAllowingStateLoss();
         mBrowserSearch.setUserVisibleHint(false);
 
         getWindow().setBackgroundDrawable(null);
@@ -3359,7 +3309,7 @@ public class BrowserApp extends GeckoApp
                                tab.getContentType().startsWith("video/")));
         saveAsPDF.setEnabled(allowPDF);
         print.setEnabled(allowPDF);
-        print.setVisible(Versions.feature19Plus && AppConstants.NIGHTLY_BUILD);
+        print.setVisible(Versions.feature19Plus);
 
         // Disable find in page for about:home, since it won't work on Java content.
         findInPage.setEnabled(!isAboutHome(tab));
@@ -3460,7 +3410,7 @@ public class BrowserApp extends GeckoApp
         if (itemId == R.id.reload) {
             tab = Tabs.getInstance().getSelectedTab();
             if (tab != null)
-                tab.doReload();
+                tab.doReload(false);
             return true;
         }
 
@@ -3577,6 +3527,21 @@ public class BrowserApp extends GeckoApp
         return super.onOptionsItemSelected(item);
     }
 
+    @Override
+    public boolean onMenuItemLongClick(MenuItem item) {
+        if (item.getItemId() == R.id.reload) {
+            Tab tab = Tabs.getInstance().getSelectedTab();
+            if (tab != null) {
+                tab.doReload(true);
+
+                Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.MENU, "reload_force");
+            }
+            return true;
+        }
+
+        return super.onMenuItemLongClick(item);
+    }
+
     public void showGuestModeDialog(final GuestModeDialog type) {
         final Prompt ps = new Prompt(this, new Prompt.PromptCallback() {
             @Override
@@ -3682,7 +3647,7 @@ public class BrowserApp extends GeckoApp
         }
 
         // If the user has clicked the tab queue notification then load the tabs.
-        if (AppConstants.MOZ_ANDROID_TAB_QUEUE && mInitialized && isTabQueueAction) {
+        if (TabQueueHelper.TAB_QUEUE_ENABLED && mInitialized && isTabQueueAction) {
             Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.NOTIFICATION, "tabqueue");
             ThreadUtils.postToBackgroundThread(new Runnable() {
                 @Override
@@ -3724,9 +3689,9 @@ public class BrowserApp extends GeckoApp
             @Override
             public void run() {
                 // We only want to show the prompt if the browser has been opened from an external url
-                if (AppConstants.MOZ_ANDROID_TAB_QUEUE && mInitialized
-                                                       && Intent.ACTION_VIEW.equals(intent.getAction())
-                                                       && TabQueueHelper.shouldShowTabQueuePrompt(BrowserApp.this)) {
+                if (TabQueueHelper.TAB_QUEUE_ENABLED && mInitialized
+                                                     && Intent.ACTION_VIEW.equals(intent.getAction())
+                                                     && TabQueueHelper.shouldShowTabQueuePrompt(BrowserApp.this)) {
                     Intent promptIntent = new Intent(BrowserApp.this, TabQueuePrompt.class);
                     startActivityForResult(promptIntent, ACTIVITY_REQUEST_TAB_QUEUE);
                 }

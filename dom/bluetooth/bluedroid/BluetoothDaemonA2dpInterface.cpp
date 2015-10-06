@@ -5,7 +5,6 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "BluetoothDaemonA2dpInterface.h"
-#include "BluetoothDaemonSetupInterface.h"
 #include "mozilla/unused.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
@@ -28,25 +27,14 @@ BluetoothDaemonA2dpModule::SetNotificationHandler(
   sNotificationHandler = aNotificationHandler;
 }
 
-nsresult
-BluetoothDaemonA2dpModule::Send(DaemonSocketPDU* aPDU,
-                                BluetoothA2dpResultHandler* aRes)
-{
-  nsRefPtr<BluetoothA2dpResultHandler> res(aRes);
-  nsresult rv = Send(aPDU, static_cast<void*>(res.get()));
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-  unused << res.forget(); // Keep reference for response
-  return NS_OK;
-}
-
 void
 BluetoothDaemonA2dpModule::HandleSvc(const DaemonSocketPDUHeader& aHeader,
-                                     DaemonSocketPDU& aPDU, void* aUserData)
+                                     DaemonSocketPDU& aPDU,
+                                     DaemonSocketResultHandler* aRes)
 {
   static void (BluetoothDaemonA2dpModule::* const HandleOp[])(
-    const DaemonSocketPDUHeader&, DaemonSocketPDU&, void*) = {
+    const DaemonSocketPDUHeader&, DaemonSocketPDU&,
+    DaemonSocketResultHandler*) = {
     [0] = &BluetoothDaemonA2dpModule::HandleRsp,
     [1] = &BluetoothDaemonA2dpModule::HandleNtf
   };
@@ -56,7 +44,7 @@ BluetoothDaemonA2dpModule::HandleSvc(const DaemonSocketPDUHeader& aHeader,
   // negate twice to map bit to 0/1
   unsigned int isNtf = !!(aHeader.mOpcode & 0x80);
 
-  (this->*(HandleOp[isNtf]))(aHeader, aPDU, aUserData);
+  (this->*(HandleOp[isNtf]))(aHeader, aPDU, aRes);
 }
 
 // Commands
@@ -64,15 +52,14 @@ BluetoothDaemonA2dpModule::HandleSvc(const DaemonSocketPDUHeader& aHeader,
 
 nsresult
 BluetoothDaemonA2dpModule::ConnectCmd(
-  const nsAString& aRemoteAddr, BluetoothA2dpResultHandler* aRes)
+  const BluetoothAddress& aRemoteAddr, BluetoothA2dpResultHandler* aRes)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
   nsAutoPtr<DaemonSocketPDU> pdu(new DaemonSocketPDU(SERVICE_ID,
-                                                           OPCODE_CONNECT,
-                                                           6)); // Address
-  nsresult rv = PackPDU(
-    PackConversion<nsAString, BluetoothAddress>(aRemoteAddr), *pdu);
+                                                     OPCODE_CONNECT,
+                                                     6)); // Address
+  nsresult rv = PackPDU(aRemoteAddr, *pdu);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -86,15 +73,14 @@ BluetoothDaemonA2dpModule::ConnectCmd(
 
 nsresult
 BluetoothDaemonA2dpModule::DisconnectCmd(
-  const nsAString& aRemoteAddr, BluetoothA2dpResultHandler* aRes)
+  const BluetoothAddress& aRemoteAddr, BluetoothA2dpResultHandler* aRes)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
   nsAutoPtr<DaemonSocketPDU> pdu(new DaemonSocketPDU(SERVICE_ID,
-                                                           OPCODE_DISCONNECT,
-                                                           6)); // Address
-  nsresult rv = PackPDU(
-    PackConversion<nsAString, BluetoothAddress>(aRemoteAddr), *pdu);
+                                                     OPCODE_DISCONNECT,
+                                                     6)); // Address
+  nsresult rv = PackPDU(aRemoteAddr, *pdu);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -139,7 +125,7 @@ BluetoothDaemonA2dpModule::DisconnectRsp(
 void
 BluetoothDaemonA2dpModule::HandleRsp(
   const DaemonSocketPDUHeader& aHeader, DaemonSocketPDU& aPDU,
-  void* aUserData)
+  DaemonSocketResultHandler* aRes)
 {
   static void (BluetoothDaemonA2dpModule::* const HandleRsp[])(
     const DaemonSocketPDUHeader&,
@@ -158,8 +144,7 @@ BluetoothDaemonA2dpModule::HandleRsp(
   }
 
   nsRefPtr<BluetoothA2dpResultHandler> res =
-    already_AddRefed<BluetoothA2dpResultHandler>(
-      static_cast<BluetoothA2dpResultHandler*>(aUserData));
+    static_cast<BluetoothA2dpResultHandler*>(aRes);
 
   if (!res) {
     return; // Return early if no result handler has been set for response
@@ -185,77 +170,14 @@ public:
   }
 };
 
-// Init operator class for ConnectionStateNotification
-class BluetoothDaemonA2dpModule::ConnectionStateInitOp final
-  : private PDUInitOp
-{
-public:
-  ConnectionStateInitOp(DaemonSocketPDU& aPDU)
-    : PDUInitOp(aPDU)
-  { }
-
-  nsresult
-  operator () (BluetoothA2dpConnectionState& aArg1, nsString& aArg2) const
-  {
-    DaemonSocketPDU& pdu = GetPDU();
-
-    /* Read state */
-    nsresult rv = UnpackPDU(pdu, aArg1);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-
-    /* Read address */
-    rv = UnpackPDU(
-      pdu, UnpackConversion<BluetoothAddress, nsAString>(aArg2));
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    WarnAboutTrailingData();
-    return NS_OK;
-  }
-};
-
 void
 BluetoothDaemonA2dpModule::ConnectionStateNtf(
   const DaemonSocketPDUHeader& aHeader, DaemonSocketPDU& aPDU)
 {
   ConnectionStateNotification::Dispatch(
     &BluetoothA2dpNotificationHandler::ConnectionStateNotification,
-    ConnectionStateInitOp(aPDU));
+    UnpackPDUInitOp(aPDU));
 }
-
-// Init operator class for AudioStateNotification
-class BluetoothDaemonA2dpModule::AudioStateInitOp final
-  : private PDUInitOp
-{
-public:
-  AudioStateInitOp(DaemonSocketPDU& aPDU)
-    : PDUInitOp(aPDU)
-  { }
-
-  nsresult
-  operator () (BluetoothA2dpAudioState& aArg1,
-               nsString& aArg2) const
-  {
-    DaemonSocketPDU& pdu = GetPDU();
-
-    /* Read state */
-    nsresult rv = UnpackPDU(pdu, aArg1);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-
-    /* Read address */
-    rv = UnpackPDU(
-      pdu, UnpackConversion<BluetoothAddress, nsAString>(aArg2));
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    WarnAboutTrailingData();
-    return NS_OK;
-  }
-};
 
 void
 BluetoothDaemonA2dpModule::AudioStateNtf(
@@ -263,45 +185,8 @@ BluetoothDaemonA2dpModule::AudioStateNtf(
 {
   AudioStateNotification::Dispatch(
     &BluetoothA2dpNotificationHandler::AudioStateNotification,
-    AudioStateInitOp(aPDU));
+    UnpackPDUInitOp(aPDU));
 }
-
-// Init operator class for AudioConfigNotification
-class BluetoothDaemonA2dpModule::AudioConfigInitOp final
-  : private PDUInitOp
-{
-public:
-  AudioConfigInitOp(DaemonSocketPDU& aPDU)
-    : PDUInitOp(aPDU)
-  { }
-
-  nsresult
-  operator () (nsString& aArg1, uint32_t aArg2, uint8_t aArg3) const
-  {
-    DaemonSocketPDU& pdu = GetPDU();
-
-    /* Read address */
-    nsresult rv = UnpackPDU(
-      pdu, UnpackConversion<BluetoothAddress, nsAString>(aArg1));
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-
-    /* Read sample rate */
-    rv = UnpackPDU(pdu, aArg2);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-
-    /* Read channel count */
-    rv = UnpackPDU(pdu, aArg3);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    WarnAboutTrailingData();
-    return NS_OK;
-  }
-};
 
 void
 BluetoothDaemonA2dpModule::AudioConfigNtf(
@@ -309,13 +194,13 @@ BluetoothDaemonA2dpModule::AudioConfigNtf(
 {
   AudioConfigNotification::Dispatch(
     &BluetoothA2dpNotificationHandler::AudioConfigNotification,
-    AudioConfigInitOp(aPDU));
+    UnpackPDUInitOp(aPDU));
 }
 
 void
 BluetoothDaemonA2dpModule::HandleNtf(
   const DaemonSocketPDUHeader& aHeader, DaemonSocketPDU& aPDU,
-  void* aUserData)
+  DaemonSocketResultHandler* aRes)
 {
   static void (BluetoothDaemonA2dpModule::* const HandleNtf[])(
     const DaemonSocketPDUHeader&, DaemonSocketPDU&) = {
@@ -459,7 +344,7 @@ BluetoothDaemonA2dpInterface::Cleanup(
 
 void
 BluetoothDaemonA2dpInterface::Connect(
-  const nsAString& aBdAddr, BluetoothA2dpResultHandler* aRes)
+  const BluetoothAddress& aBdAddr, BluetoothA2dpResultHandler* aRes)
 {
   MOZ_ASSERT(mModule);
 
@@ -471,7 +356,7 @@ BluetoothDaemonA2dpInterface::Connect(
 
 void
 BluetoothDaemonA2dpInterface::Disconnect(
-  const nsAString& aBdAddr, BluetoothA2dpResultHandler* aRes)
+  const BluetoothAddress& aBdAddr, BluetoothA2dpResultHandler* aRes)
 {
   MOZ_ASSERT(mModule);
 

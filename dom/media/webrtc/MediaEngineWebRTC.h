@@ -84,6 +84,9 @@ public:
   }
   nsresult Start(SourceMediaStream* aMediaStream, TrackID aId) override;
   nsresult Stop(SourceMediaStream* aMediaStream, TrackID aId) override;
+  nsresult Restart(const dom::MediaTrackConstraints& aConstraints,
+                   const MediaEnginePrefs &aPrefs,
+                   const nsString& aDeviceId) override;
   void SetDirectListeners(bool aDirect) override
   {}
   nsresult Config(bool aEchoOn, uint32_t aEcho, bool aAgcOn,
@@ -134,6 +137,7 @@ public:
     , mChannel(-1)
     , mInitDone(false)
     , mStarted(false)
+    , mSampleFrequency(MediaEngine::DEFAULT_SAMPLE_RATE)
     , mEchoOn(false), mAgcOn(false), mNoiseOn(false)
     , mEchoCancel(webrtc::kEcDefault)
     , mAGC(webrtc::kAgcDefault)
@@ -155,6 +159,9 @@ public:
   virtual nsresult Deallocate() override;
   virtual nsresult Start(SourceMediaStream* aStream, TrackID aID) override;
   virtual nsresult Stop(SourceMediaStream* aSource, TrackID aID) override;
+  virtual nsresult Restart(const dom::MediaTrackConstraints& aConstraints,
+                           const MediaEnginePrefs &aPrefs,
+                           const nsString& aDeviceId) override;
   virtual void SetDirectListeners(bool aHasDirectListeners) override {};
   virtual nsresult Config(bool aEchoOn, uint32_t aEcho,
                           bool aAgcOn, uint32_t aAGC,
@@ -219,6 +226,7 @@ private:
   nsString mDeviceName;
   nsCString mDeviceUUID;
 
+  uint32_t mSampleFrequency;
   bool mEchoOn, mAgcOn, mNoiseOn;
   webrtc::EcModes  mEchoCancel;
   webrtc::AgcModes mAGC;

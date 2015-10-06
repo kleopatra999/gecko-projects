@@ -6,7 +6,6 @@
 #ifndef GFX_UTILS_H
 #define GFX_UTILS_H
 
-#include "gfxColor.h"
 #include "gfxTypes.h"
 #include "GraphicsFilter.h"
 #include "imgIContainer.h"
@@ -161,9 +160,7 @@ public:
     /**
      * Clears surface to aColor (which defaults to transparent black).
      */
-    static void ClearThebesSurface(gfxASurface* aSurface,
-                                   mozilla::gfx::IntRect* aRect = nullptr,
-                                   const gfxRGBA& aColor = gfxRGBA(0.0, 0.0, 0.0, 0.0));
+    static void ClearThebesSurface(gfxASurface* aSurface);
 
     /**
      * Creates a copy of aSurface, but having the SurfaceFormat aFormat.
@@ -296,6 +293,12 @@ public:
     static bool sDumpPaintingIntermediate;
     static bool sDumpPaintingToFile;
     static bool sDumpPaintItems;
+    // TODO: Dumping compositor textures is broken pretty badly. For example,
+    //       on Linux it crashes because TextureHost::GetAsSurface() returns
+    //       null. Expect to have to fix things like this if you turn it on.
+    //       Meanwhile, content-side texture dumping (conditioned on
+    //       sDumpPainting) is a good replacement.
+    static bool sDumpCompositorTextures;
     static FILE* sDumpPaintFile;
 };
 
@@ -311,7 +314,6 @@ namespace gfx {
  */
 Color ToDeviceColor(Color aColor);
 Color ToDeviceColor(nscolor aColor);
-Color ToDeviceColor(const gfxRGBA& aColor);
 
 /* These techniques are suggested by "Bit Twiddling Hacks"
  */

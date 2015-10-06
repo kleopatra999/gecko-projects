@@ -13,6 +13,7 @@
  */
 #include "cairo-win32.h"
 
+#include "gfxCrashReporterUtils.h"
 #include "gfxFontUtils.h"
 #include "gfxWindowsSurface.h"
 #include "gfxFont.h"
@@ -139,8 +140,6 @@ public:
         RENDER_MODE_MAX
     };
 
-    int GetScreenDepth() const;
-
     RenderMode GetRenderMode() { return mRenderMode; }
     void SetRenderMode(RenderMode rmode) { mRenderMode = rmode; }
 
@@ -215,6 +214,8 @@ public:
 
     virtual bool DidRenderingDeviceReset(DeviceResetReason* aResetReason = nullptr);
 
+    mozilla::gfx::BackendType GetContentBackendFor(mozilla::layers::LayersBackend aLayers) override;
+
     // ClearType is not always enabled even when available (e.g. Windows XP)
     // if either of these prefs are enabled and apply, use ClearType rendering
     bool UseClearTypeForDownloadableFonts();
@@ -251,6 +252,9 @@ public:
 
     // Create a D3D11 device to be used for DXVA decoding.
     already_AddRefed<ID3D11Device> CreateD3D11DecoderDevice();
+    bool CreateD3D11DecoderDeviceHelper(
+      IDXGIAdapter1* aAdapter, mozilla::RefPtr<ID3D11Device>& aDevice,
+      HRESULT& aResOut);
 
     mozilla::layers::ReadbackManagerD3D11* GetReadbackManager();
 
@@ -319,10 +323,21 @@ private:
     mozilla::gfx::FeatureStatus CheckD3D11Support(bool* aCanUseHardware);
     mozilla::gfx::FeatureStatus CheckD2DSupport();
     mozilla::gfx::FeatureStatus CheckD2D1Support();
+
     mozilla::gfx::FeatureStatus AttemptD3D11DeviceCreation();
+    bool AttemptD3D11DeviceCreationHelper(
+        IDXGIAdapter1* aAdapter, HRESULT& aResOut);
+
     mozilla::gfx::FeatureStatus AttemptWARPDeviceCreation();
+    bool AttemptWARPDeviceCreationHelper(
+        mozilla::ScopedGfxFeatureReporter& aReporterWARP, HRESULT& aResOut);
+
     mozilla::gfx::FeatureStatus AttemptD3D11ImageBridgeDeviceCreation();
+
     mozilla::gfx::FeatureStatus AttemptD3D11ContentDeviceCreation();
+    bool AttemptD3D11ContentDeviceCreationHelper(
+        IDXGIAdapter1* aAdapter, HRESULT& aResOut);
+
     bool CanUseD3D11ImageBridge();
     bool ContentAdapterIsParentAdapter(ID3D11Device* device);
 

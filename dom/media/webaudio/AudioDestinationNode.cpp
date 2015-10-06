@@ -46,6 +46,7 @@ public:
   }
 
   virtual void ProcessBlock(AudioNodeStream* aStream,
+                            GraphTime aFrom,
                             const AudioBlock& aInput,
                             AudioBlock* aOutput,
                             bool* aFinished) override
@@ -111,6 +112,14 @@ public:
       *aFinished = true;
     }
   }
+
+  virtual bool IsActive() const override
+  {
+    // Keep processing to track stream time, which is used for all timelines
+    // associated with the same AudioContext.
+    return true;
+  }
+
 
   class OnCompleteTask final : public nsRunnable
   {
@@ -233,6 +242,7 @@ public:
   }
 
   virtual void ProcessBlock(AudioNodeStream* aStream,
+                            GraphTime aFrom,
                             const AudioBlock& aInput,
                             AudioBlock* aOutput,
                             bool* aFinished) override
@@ -253,6 +263,16 @@ public:
       aStream->Graph()->
         DispatchToMainThreadAfterStreamStateUpdate(runnable.forget());
     }
+  }
+
+  virtual bool IsActive() const override
+  {
+    // Keep processing to track stream time, which is used for all timelines
+    // associated with the same AudioContext.  If there are no other engines
+    // for the AudioContext, then this could return false to suspend the
+    // stream, but the stream is blocked anyway through
+    // AudioDestinationNode::SetIsOnlyNodeForContext().
+    return true;
   }
 
   virtual void SetDoubleParameter(uint32_t aIndex, double aParam) override
@@ -315,7 +335,6 @@ AudioDestinationNode::AudioDestinationNode(AudioContext* aContext,
   , mAudioChannel(AudioChannel::Normal)
   , mIsOffline(aIsOffline)
   , mAudioChannelAgentPlaying(false)
-  , mExtraCurrentTime(0)
   , mExtraCurrentTimeSinceLastStartedBlocking(0)
   , mExtraCurrentTimeUpdatedSinceLastStableState(false)
   , mCaptured(false)
@@ -332,7 +351,7 @@ AudioDestinationNode::AudioDestinationNode(AudioContext* aContext,
     AudioNodeStream::NEED_MAIN_THREAD_CURRENT_TIME |
     AudioNodeStream::NEED_MAIN_THREAD_FINISHED |
     AudioNodeStream::EXTERNAL_OUTPUT;
-  mStream = AudioNodeStream::Create(graph, engine, flags);
+  mStream = AudioNodeStream::Create(aContext, engine, flags, graph);
   mStream->AddMainThreadListener(this);
   mStream->AddAudioOutput(&gWebAudioOutputKey);
 
@@ -645,17 +664,20 @@ AudioDestinationNode::ScheduleStableStateNotification()
   nsContentUtils::RunInStableState(event.forget());
 }
 
-double
+StreamTime
 AudioDestinationNode::ExtraCurrentTime()
 {
   if (!mStartedBlockingDueToBeingOnlyNode.IsNull() &&
       !mExtraCurrentTimeUpdatedSinceLastStableState) {
     mExtraCurrentTimeUpdatedSinceLastStableState = true;
-    mExtraCurrentTimeSinceLastStartedBlocking =
+    // Round to nearest processing block.
+    double seconds =
       (TimeStamp::Now() - mStartedBlockingDueToBeingOnlyNode).ToSeconds();
+    mExtraCurrentTimeSinceLastStartedBlocking = WEBAUDIO_BLOCK_SIZE *
+      StreamTime(seconds * Context()->SampleRate() / WEBAUDIO_BLOCK_SIZE + 0.5);
     ScheduleStableStateNotification();
   }
-  return mExtraCurrentTime + mExtraCurrentTimeSinceLastStartedBlocking;
+  return mExtraCurrentTimeSinceLastStartedBlocking;
 }
 
 void
@@ -680,7 +702,7 @@ AudioDestinationNode::SetIsOnlyNodeForContext(bool aIsOnlyNode)
   }
 
   if (aIsOnlyNode) {
-    mStream->ChangeExplicitBlockerCount(1);
+    mStream->Suspend();
     mStartedBlockingDueToBeingOnlyNode = TimeStamp::Now();
     // Don't do an update of mExtraCurrentTimeSinceLastStartedBlocking until the next stable state.
     mExtraCurrentTimeUpdatedSinceLastStableState = true;
@@ -688,9 +710,8 @@ AudioDestinationNode::SetIsOnlyNodeForContext(bool aIsOnlyNode)
   } else {
     // Force update of mExtraCurrentTimeSinceLastStartedBlocking if necessary
     ExtraCurrentTime();
-    mExtraCurrentTime += mExtraCurrentTimeSinceLastStartedBlocking;
+    mStream->AdvanceAndResume(mExtraCurrentTimeSinceLastStartedBlocking);
     mExtraCurrentTimeSinceLastStartedBlocking = 0;
-    mStream->ChangeExplicitBlockerCount(-1);
     mStartedBlockingDueToBeingOnlyNode = TimeStamp();
   }
 }

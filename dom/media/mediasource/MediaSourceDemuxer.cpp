@@ -47,8 +47,25 @@ MediaSourceDemuxer::AttemptInit()
   if (ScanSourceBuffersForContent()) {
     return InitPromise::CreateAndResolve(NS_OK, __func__);
   }
-  return InitPromise::CreateAndReject(DemuxerFailureReason::WAITING_FOR_DATA,
-                                      __func__);
+
+  nsRefPtr<InitPromise> p = mInitPromise.Ensure(__func__);
+
+  return p;
+}
+
+void MediaSourceDemuxer::NotifyDataArrived(uint32_t aLength, int64_t aOffset)
+{
+  nsRefPtr<MediaSourceDemuxer> self = this;
+  nsCOMPtr<nsIRunnable> task =
+    NS_NewRunnableFunction([self] () {
+      if (self->mInitPromise.IsEmpty()) {
+        return;
+      }
+      if (self->ScanSourceBuffersForContent()) {
+        self->mInitPromise.ResolveIfExists(NS_OK, __func__);
+      }
+    });
+  GetTaskQueue()->Dispatch(task.forget());
 }
 
 bool
@@ -213,6 +230,7 @@ MediaSourceDemuxer::GetManager(TrackType aTrack)
 
 MediaSourceDemuxer::~MediaSourceDemuxer()
 {
+  mInitPromise.RejectIfExists(DemuxerFailureReason::SHUTDOWN, __func__);
   mTaskQueue->BeginShutdown();
   mTaskQueue = nullptr;
 }
@@ -291,7 +309,7 @@ MediaSourceTrackDemuxer::Reset()
   nsRefPtr<MediaSourceTrackDemuxer> self = this;
   nsCOMPtr<nsIRunnable> task =
     NS_NewRunnableFunction([self] () {
-      self->mManager->Seek(self->mType, TimeUnit());
+      self->mManager->Seek(self->mType, TimeUnit(), TimeUnit());
       {
         MonitorAutoLock mon(self->mMonitor);
         self->mNextRandomAccessPoint =
@@ -315,13 +333,6 @@ MediaSourceTrackDemuxer::SkipToNextRandomAccessPoint(media::TimeUnit aTimeThresh
   return InvokeAsync(mParent->GetTaskQueue(), this, __func__,
                      &MediaSourceTrackDemuxer::DoSkipToNextRandomAccessPoint,
                      aTimeThreshold);
-}
-
-int64_t
-MediaSourceTrackDemuxer::GetEvictionOffset(media::TimeUnit aTime)
-{
-  // Unused.
-  return 0;
 }
 
 media::TimeIntervals
@@ -353,7 +364,8 @@ MediaSourceTrackDemuxer::DoSeek(media::TimeUnit aTime)
     return SeekPromise::CreateAndReject(DemuxerFailureReason::WAITING_FOR_DATA,
                                         __func__);
   }
-  TimeUnit seekTime = mManager->Seek(mType, aTime);
+  TimeUnit seekTime =
+    mManager->Seek(mType, aTime, TimeUnit::FromMicroseconds(EOS_FUZZ_US));
   {
     MonitorAutoLock mon(mMonitor);
     mNextRandomAccessPoint = mManager->GetNextRandomAccessPoint(mType);

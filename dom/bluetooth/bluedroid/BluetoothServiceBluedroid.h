@@ -8,6 +8,7 @@
 #define mozilla_dom_bluetooth_bluedroid_BluetoothServiceBluedroid_h
 
 #include "BluetoothCommon.h"
+#include "BluetoothHashKeys.h"
 #include "BluetoothInterface.h"
 #include "BluetoothService.h"
 #include "nsDataHashtable.h"
@@ -310,6 +311,74 @@ public:
   UnregisterGattServerInternal(int aServerIf,
                                BluetoothReplyRunnable* aRunnable) override;
 
+  virtual void
+  GattServerAddServiceInternal(
+    const nsAString& aAppUuid,
+    const BluetoothGattServiceId& aServiceId,
+    uint16_t aHandleCount,
+    BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
+  GattServerAddIncludedServiceInternal(
+    const nsAString& aAppUuid,
+    const BluetoothAttributeHandle& aServiceHandle,
+    const BluetoothAttributeHandle& aIncludedServiceHandle,
+    BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
+  GattServerAddCharacteristicInternal(
+    const nsAString& aAppUuid,
+    const BluetoothAttributeHandle& aServiceHandle,
+    const BluetoothUuid& aCharacteristicUuid,
+    BluetoothGattAttrPerm aPermissions,
+    BluetoothGattCharProp aProperties,
+    BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
+  GattServerAddDescriptorInternal(
+    const nsAString& aAppUuid,
+    const BluetoothAttributeHandle& aServiceHandle,
+    const BluetoothAttributeHandle& aCharacteristicHandle,
+    const BluetoothUuid& aDescriptorUuid,
+    BluetoothGattAttrPerm aPermissions,
+    BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
+  GattServerRemoveServiceInternal(
+    const nsAString& aAppUuid,
+    const BluetoothAttributeHandle& aServiceHandle,
+    BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
+  GattServerStartServiceInternal(
+    const nsAString& aAppUuid,
+    const BluetoothAttributeHandle& aServiceHandle,
+    BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
+  GattServerStopServiceInternal(
+    const nsAString& aAppUuid,
+    const BluetoothAttributeHandle& aServiceHandle,
+    BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
+  GattServerSendResponseInternal(
+    const nsAString& aAppUuid,
+    const nsAString& aAddress,
+    uint16_t aStatus,
+    int32_t aRequestId,
+    const BluetoothGattResponse& aRsp,
+    BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
+  GattServerSendIndicationInternal(
+    const nsAString& aAppUuid,
+    const nsAString& aAddress,
+    const BluetoothAttributeHandle& aCharacteristicHandle,
+    bool aConfirm,
+    const nsTArray<uint8_t>& aValue,
+    BluetoothReplyRunnable* aRunnable) override;
+
   //
   // Bluetooth notifications
   //
@@ -320,7 +389,7 @@ public:
     const BluetoothProperty* aProperties) override;
 
   virtual void RemoteDevicePropertiesNotification(
-    BluetoothStatus aStatus, const nsAString& aBdAddr,
+    BluetoothStatus aStatus, const BluetoothAddress& aBdAddr,
     int aNumProperties, const BluetoothProperty* aProperties) override;
 
   virtual void DeviceFoundNotification(
@@ -328,21 +397,21 @@ public:
 
   virtual void DiscoveryStateChangedNotification(bool aState) override;
 
-  virtual void PinRequestNotification(const nsAString& aRemoteBdAddr,
-                                      const nsAString& aBdName,
+  virtual void PinRequestNotification(const BluetoothAddress& aRemoteBdAddr,
+                                      const BluetoothRemoteName& aBdName,
                                       uint32_t aCod) override;
-  virtual void SspRequestNotification(const nsAString& aRemoteBdAddr,
-                                      const nsAString& aBdName,
+  virtual void SspRequestNotification(const BluetoothAddress& aRemoteBdAddr,
+                                      const BluetoothRemoteName& aBdName,
                                       uint32_t aCod,
                                       BluetoothSspVariant aPairingVariant,
                                       uint32_t aPasskey) override;
 
   virtual void BondStateChangedNotification(
-    BluetoothStatus aStatus, const nsAString& aRemoteBdAddr,
+    BluetoothStatus aStatus, const BluetoothAddress& aRemoteBdAddr,
     BluetoothBondState aState) override;
-  virtual void AclStateChangedNotification(BluetoothStatus aStatus,
-                                           const nsAString& aRemoteBdAddr,
-                                           bool aState) override;
+  virtual void AclStateChangedNotification(
+    BluetoothStatus aStatus, const BluetoothAddress& aRemoteBdAddr,
+    BluetoothAclState aState) override;
 
   virtual void DutModeRecvNotification(uint16_t aOpcode,
                                        const uint8_t* aBuf,
@@ -371,12 +440,12 @@ protected:
   static void NextBluetoothProfileController();
 
   // Adapter properties
-  nsString mBdAddress;
+  BluetoothAddress mBdAddress;
   nsString mBdName;
   bool mEnabled;
   bool mDiscoverable;
   bool mDiscovering;
-  nsTArray<nsString> mBondedAddresses;
+  nsTArray<BluetoothAddress> mBondedAddresses;
 
   // Backend error recovery
   bool mIsRestart;
@@ -397,7 +466,7 @@ protected:
   nsTArray<GetDeviceRequest> mGetDeviceRequests;
 
   // <address, name> mapping table for remote devices
-  nsDataHashtable<nsStringHashKey, nsString> mDeviceNameMap;
+  nsDataHashtable<BluetoothAddressHashKey, nsString> mDeviceNameMap;
 
   // Arrays for SDP operations
   nsTArray<GetRemoteServiceRecordRequest> mGetRemoteServiceRecordArray;

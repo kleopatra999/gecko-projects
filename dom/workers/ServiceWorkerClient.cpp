@@ -10,6 +10,8 @@
 
 #include "mozilla/dom/MessageEvent.h"
 #include "mozilla/dom/Navigator.h"
+#include "mozilla/dom/ServiceWorkerMessageEvent.h"
+#include "mozilla/dom/ServiceWorkerMessageEventBinding.h"
 #include "nsGlobalWindow.h"
 #include "nsIDocument.h"
 #include "WorkerPrivate.h"
@@ -74,13 +76,13 @@ namespace {
 
 class ServiceWorkerClientPostMessageRunnable final
   : public nsRunnable
-  , public StructuredCloneHelper
+  , public StructuredCloneHolder
 {
   uint64_t mWindowId;
 
 public:
   explicit ServiceWorkerClientPostMessageRunnable(uint64_t aWindowId)
-    : StructuredCloneHelper(CloningSupported, TransferringSupported,
+    : StructuredCloneHolder(CloningSupported, TransferringSupported,
                             SameProcessDifferentThread)
     , mWindowId(aWindowId)
   {}
@@ -124,22 +126,27 @@ private:
       return NS_ERROR_FAILURE;
     }
 
-    nsRefPtr<MessageEvent> event = new MessageEvent(aTargetContainer,
-                                                    nullptr, nullptr);
-    rv = event->InitMessageEvent(NS_LITERAL_STRING("message"),
-                                 false /* non-bubbling */,
-                                 false /* not cancelable */,
-                                 messageData,
-                                 EmptyString(),
-                                 EmptyString(),
-                                 nullptr);
-    if (NS_WARN_IF(rv.Failed())) {
-      xpc::Throw(aCx, rv.StealNSResult());
-      return NS_ERROR_FAILURE;
+    RootedDictionary<ServiceWorkerMessageEventInit> init(aCx);
+
+    init.mData = messageData;
+    init.mOrigin.Construct(EmptyString());
+    init.mLastEventId.Construct(EmptyString());
+    init.mPorts.Construct();
+    init.mPorts.Value().SetNull();
+
+    nsRefPtr<ServiceWorker> serviceWorker = aTargetContainer->GetController();
+    init.mSource.Construct();
+    if (serviceWorker) {
+      init.mSource.Value().SetValue().SetAsServiceWorker() = serviceWorker;
+    } else {
+      init.mSource.Value().SetNull();
     }
 
-    nsTArray<nsRefPtr<MessagePortBase>> ports;
-    TakeTransferredPorts(ports);
+    nsRefPtr<ServiceWorkerMessageEvent> event =
+      ServiceWorkerMessageEvent::Constructor(aTargetContainer,
+                                             NS_LITERAL_STRING("message"), init, rv);
+
+    nsTArray<nsRefPtr<MessagePort>> ports = TakeTransferredPorts();
 
     nsRefPtr<MessagePortList> portList =
       new MessagePortList(static_cast<dom::Event*>(event.get()),

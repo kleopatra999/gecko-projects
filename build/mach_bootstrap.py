@@ -131,6 +131,7 @@ MACH_MODULES = [
     'python/mozbuild/mozbuild/mach_commands.py',
     'python/mozbuild/mozbuild/backend/mach_commands.py',
     'python/mozbuild/mozbuild/compilation/codecomplete.py',
+    'python/mozbuild/mozbuild/compilation/database.py',
     'python/mozbuild/mozbuild/frontend/mach_commands.py',
     'services/common/tests/mach_commands.py',
     'testing/luciddream/mach_commands.py',
@@ -145,6 +146,7 @@ MACH_MODULES = [
     'tools/docs/mach_commands.py',
     'tools/mercurial/mach_commands.py',
     'tools/mach_commands.py',
+    'tools/power/mach_commands.py',
     'mobile/android/mach_commands.py',
 ]
 

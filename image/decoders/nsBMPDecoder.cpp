@@ -64,20 +64,6 @@ nsBMPDecoder::~nsBMPDecoder()
   }
 }
 
-nsresult
-nsBMPDecoder::SetTargetSize(const nsIntSize& aSize)
-{
-  // Make sure the size is reasonable.
-  if (MOZ_UNLIKELY(aSize.width <= 0 || aSize.height <= 0)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // Create a downscaler that we'll filter our output through.
-  mDownscaler.emplace(aSize);
-
-  return NS_OK;
-}
-
 // Sets whether or not the BMP will use alpha data
 void
 nsBMPDecoder::SetUseAlphaData(bool useAlphaData)
@@ -475,7 +461,8 @@ nsBMPDecoder::WriteInternal(const char* aBuffer, uint32_t aCount)
       if (mDownscaler) {
         // BMPs store their rows in reverse order, so the downscaler needs to
         // reverse them again when writing its output.
-        rv = mDownscaler->BeginFrame(GetSize(), mImageData, hasTransparency,
+        rv = mDownscaler->BeginFrame(GetSize(), Nothing(),
+                                     mImageData, hasTransparency,
                                      /* aFlipVertically = */ true);
         if (NS_FAILED(rv)) {
           return;

@@ -85,7 +85,7 @@
 #include "nsXPCOM.h"
 #include "nsILayoutHistoryState.h"
 #include "nsILineIterator.h" // for ScrollContentIntoView
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "mozilla/dom/BeforeAfterKeyboardEventBinding.h"
 #include "mozilla/dom/Touch.h"
 #include "mozilla/dom/PointerEventBinding.h"
@@ -163,6 +163,7 @@
 #include "Layers.h"
 #include "LayerTreeInvalidation.h"
 #include "mozilla/css/ImageLoader.h"
+#include "mozilla/dom/DocumentTimeline.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Telemetry.h"
 #include "nsCanvasFrame.h"
@@ -972,6 +973,9 @@ PresShell::Init(nsIDocument* aDocument,
     animCtrl->NotifyRefreshDriverCreated(GetPresContext()->RefreshDriver());
   }
 
+  mDocument->Timeline()->NotifyRefreshDriverCreated(GetPresContext()->
+                                                      RefreshDriver());
+
   // Get our activeness from the docShell.
   QueryIsActive();
 
@@ -1043,6 +1047,7 @@ LogTextPerfStats(gfxTextPerfMetrics* aTextPerf,
             "word-cache-space: %d word-cache-long: %d "
             "pref-fallbacks: %d system-fallbacks: %d "
             "textruns-const: %d textruns-destr: %d "
+            "generic-lookups: %d "
             "cumulative-textruns-destr: %d\n",
             prefix, aTextPerf->reflowCount, aCounts.numChars,
             (aURL ? aURL : ""),
@@ -1052,6 +1057,7 @@ LogTextPerfStats(gfxTextPerfMetrics* aTextPerf,
             aCounts.wordCacheSpaceRules, aCounts.wordCacheLong,
             aCounts.fallbackPrefs, aCounts.fallbackSystem,
             aCounts.textrunConst, aCounts.textrunDestr,
+            aCounts.genericLookups,
             aTextPerf->cumulative.textrunDestr));
   } else {
     MOZ_LOG(tpLog, logLevel,
@@ -1062,6 +1068,7 @@ LogTextPerfStats(gfxTextPerfMetrics* aTextPerf,
             "word-cache-space: %d word-cache-long: %d "
             "pref-fallbacks: %d system-fallbacks: %d "
             "textruns-const: %d textruns-destr: %d "
+            "generic-lookups: %d "
             "cumulative-textruns-destr: %d\n",
             prefix, aTextPerf->reflowCount, aCounts.numChars,
             aCounts.numContentTextRuns, aCounts.numChromeTextRuns,
@@ -1070,6 +1077,7 @@ LogTextPerfStats(gfxTextPerfMetrics* aTextPerf,
             aCounts.wordCacheSpaceRules, aCounts.wordCacheLong,
             aCounts.fallbackPrefs, aCounts.fallbackSystem,
             aCounts.textrunConst, aCounts.textrunDestr,
+            aCounts.genericLookups,
             aTextPerf->cumulative.textrunDestr));
   }
 }
@@ -1231,6 +1239,23 @@ PresShell::Destroy()
     mViewManager = nullptr;
   }
 
+  // mFrameArena will be destroyed soon.  Clear out any ArenaRefPtrs
+  // pointing to objects in the arena now.  This is done:
+  //
+  //   (a) before mFrameArena's destructor runs so that our
+  //       mPresArenaAllocCount gets down to 0 and doesn't trip the assertion
+  //       in ~PresShell,
+  //   (b) before the mPresContext->SetShell(nullptr) below, so
+  //       that when we clear the ArenaRefPtrs they'll still be able to
+  //       get back to this PresShell to deregister themselves (e.g. note
+  //       how nsStyleContext::Arena returns the PresShell got from its
+  //       rule node's nsPresContext, which would return null if we'd already
+  //       called mPresContext->SetShell(nullptr)), and
+  //   (c) before the mStyleSet->BeginShutdown() call just below, so that
+  //       the nsStyleContexts don't complain they're being destroyed later
+  //       than the rule tree is.
+  mFrameArena.ClearArenaRefPtrs();
+
   mStyleSet->BeginShutdown();
   nsRefreshDriver* rd = GetPresContext()->RefreshDriver();
 
@@ -1244,6 +1269,8 @@ PresShell::Destroy()
     if (mDocument->HasAnimationController()) {
       mDocument->GetAnimationController()->NotifyRefreshDriverDestroying(rd);
     }
+
+    mDocument->Timeline()->NotifyRefreshDriverDestroying(rd);
   }
 
   if (mPresContext) {
@@ -1731,9 +1758,9 @@ PresShell::Initialize(nscoord aWidth, nscoord aHeight)
         Preferences::GetInt("nglayout.initialpaint.delay",
                             PAINTLOCK_EVENT_DELAY);
 
-      mPaintSuppressionTimer->InitWithFuncCallback(sPaintSuppressionCallback,
-                                                   this, delay,
-                                                   nsITimer::TYPE_ONE_SHOT);
+      mPaintSuppressionTimer->InitWithNamedFuncCallback(
+        sPaintSuppressionCallback, this, delay, nsITimer::TYPE_ONE_SHOT,
+        "PresShell::sPaintSuppressionCallback");
     }
   }
 
@@ -4624,26 +4651,26 @@ PresShell::RenderDocument(const nsRect& aRect, uint32_t aFlags,
   nsIFrame* rootFrame = mFrameConstructor->GetRootFrame();
   if (!rootFrame) {
     // Nothing to paint, just fill the rect
-    aThebesContext->SetColor(gfxRGBA(aBackgroundColor));
+    aThebesContext->SetColor(Color::FromABGR(aBackgroundColor));
     aThebesContext->Fill();
     return NS_OK;
   }
 
   gfxContextAutoSaveRestore save(aThebesContext);
 
-  gfxContext::GraphicsOperator oldOperator = aThebesContext->CurrentOperator();
-  if (oldOperator == gfxContext::OPERATOR_OVER) {
+  CompositionOp oldOp = aThebesContext->CurrentOp();
+  if (oldOp == CompositionOp::OP_OVER) {
     // Clip to the destination rectangle before we push the group,
     // to limit the size of the temporary surface
     aThebesContext->Clip();
   }
 
   // we want the window to be composited as a single image using
-  // whatever operator was set; set OPERATOR_OVER here, which is
+  // whatever operator was set; set OP_OVER here, which is
   // either already the case, or overrides the operator in a group.
   // the original operator will be present when we PopGroup.
-  // we can avoid using a temporary surface if we're using OPERATOR_OVER
-  bool needsGroup = oldOperator != gfxContext::OPERATOR_OVER;
+  // we can avoid using a temporary surface if we're using OP_OVER
+  bool needsGroup = oldOp != CompositionOp::OP_OVER;
 
   if (needsGroup) {
     aThebesContext->PushGroup(NS_GET_A(aBackgroundColor) == 0xff ?
@@ -4651,14 +4678,14 @@ PresShell::RenderDocument(const nsRect& aRect, uint32_t aFlags,
                               gfxContentType::COLOR_ALPHA);
     aThebesContext->Save();
 
-    if (oldOperator != gfxContext::OPERATOR_OVER) {
+    if (oldOp != CompositionOp::OP_OVER) {
       // Clip now while we paint to the temporary surface. For
       // non-source-bounded operators (e.g., SOURCE), we need to do clip
       // here after we've pushed the group, so that eventually popping
       // the group and painting it will be able to clear the entire
       // destination surface.
       aThebesContext->Clip();
-      aThebesContext->SetOperator(gfxContext::OPERATOR_OVER);
+      aThebesContext->SetOp(CompositionOp::OP_OVER);
     }
   }
 
@@ -5276,11 +5303,6 @@ void PresShell::UpdateCanvasBackground()
   if (!FrameConstructor()->GetRootElementFrame()) {
     mCanvasBackgroundColor = GetDefaultBackgroundColorToDraw();
   }
-  if (XRE_IsContentProcess() && mPresContext->IsRoot()) {
-    if (TabChild* tabChild = TabChild::GetFrom(this)) {
-      tabChild->SetBackgroundColor(mCanvasBackgroundColor);
-    }
-  }
 }
 
 nscolor PresShell::ComputeBackstopColor(nsView* aDisplayRoot)
@@ -5706,7 +5728,7 @@ PresShell::MarkImagesInSubtreeVisible(nsIFrame* aFrame, const nsRect& aRect)
     rect = scrollFrame->ExpandRectToNearlyVisible(rect);
   }
 
-  bool preserves3DChildren = aFrame->Preserves3DChildren();
+  bool preserves3DChildren = aFrame->Extend3DContext();
 
   // we assume all images in popups are visible elsewhere, so we skip them here
   const nsIFrame::ChildListIDs skip(nsIFrame::kPopupList |
@@ -5724,7 +5746,7 @@ PresShell::MarkImagesInSubtreeVisible(nsIFrame* aFrame, const nsRect& aRect)
       }
       if (child->IsTransformed()) {
         // for children of a preserve3d element we just pass down the same dirty rect
-        if (!preserves3DChildren || !child->Preserves3D()) {
+        if (!preserves3DChildren || !child->Combines3DTransformWithAncestors()) {
           const nsRect overflow = child->GetVisualOverflowRectRelativeToSelf();
           nsRect out;
           if (nsDisplayTransform::UntransformRect(r, overflow, child, nsPoint(0,0), &out)) {
@@ -6144,7 +6166,7 @@ PresShell::Paint(nsView*        aViewToPaint,
     nsIntRect bounds =
       pc->GetVisibleArea().ToOutsidePixels(pc->AppUnitsPerDevPixel());
     bgcolor = NS_ComposeColors(bgcolor, mCanvasBackgroundColor);
-    root->SetColor(bgcolor);
+    root->SetColor(Color::FromABGR(bgcolor));
     root->SetVisibleRegion(bounds);
     layerManager->SetRoot(root);
   }
@@ -9369,6 +9391,11 @@ PresShell::Observe(nsISupports* aSubject,
                    const char* aTopic,
                    const char16_t* aData)
 {
+  if (mIsDestroying) {
+    NS_WARNING("our observers should have been unregistered by now");
+    return NS_OK;
+  }
+
 #ifdef MOZ_XUL
   if (!nsCRT::strcmp(aTopic, "chrome-flush-skin-caches")) {
     nsIFrame *rootFrame = mFrameConstructor->GetRootFrame();
@@ -10216,23 +10243,23 @@ void ReflowCountMgr::PaintCount(const char*     aName,
       fm->SetTextRunRTL(false);
       width = fm->GetWidth(buf, len, aRenderingContext);;
 
-      uint32_t color;
-      uint32_t color2;
+      Color color;
+      Color color2;
       if (aColor != 0) {
-        color  = aColor;
-        color2 = NS_RGB(0,0,0);
+        color  = Color::FromABGR(aColor);
+        color2 = Color(0.f, 0.f, 0.f);
       } else {
-        uint8_t rc = 0, gc = 0, bc = 0;
+        gfx::Float rc = 0.f, gc = 0.f, bc = 0.f;
         if (counter->mCount < 5) {
-          rc = 255;
-          gc = 255;
-        } else if ( counter->mCount < 11) {
-          gc = 255;
+          rc = 1.f;
+          gc = 1.f;
+        } else if (counter->mCount < 11) {
+          gc = 1.f;
         } else {
-          rc = 255;
+          rc = 1.f;
         }
-        color  = NS_RGB(rc,gc,bc);
-        color2 = NS_RGB(rc/2,gc/2,bc/2);
+        color  = Color(rc, gc, bc);
+        color2 = Color(rc/2, gc/2, bc/2);
       }
 
       nsRect rect(0,0, width+15, height+15);

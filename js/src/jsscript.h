@@ -489,6 +489,11 @@ class ScriptCounts
     jit::IonScriptCounts* ionCounts_;
 };
 
+// Note: The key of this hash map is a weak reference to a JSScript.  We do not
+// use the WeakMap implementation provided in jsweakmap.h because it would be
+// collected at the beginning of the sweeping of the compartment, thus before
+// the calls to the JSScript::finalize function which are used to aggregate code
+// coverage results on the compartment.
 typedef HashMap<JSScript*,
                 ScriptCounts,
                 DefaultHasher<JSScript*>,
@@ -1154,6 +1159,10 @@ class JSScript : public js::gc::TenuredCell
     // keep it from relazifying.
     bool doNotRelazify_:1;
 
+    // Script contains inner functions. Used to check if we can relazify the
+    // script.
+    bool hasInnerFunctions_:1;
+
     bool needsHomeObject_:1;
 
     bool isDerivedClassConstructor_:1;
@@ -1483,6 +1492,14 @@ class JSScript : public js::gc::TenuredCell
         doNotRelazify_ = b;
     }
 
+    void setHasInnerFunctions(bool b) {
+        hasInnerFunctions_ = b;
+    }
+
+    bool hasInnerFunctions() const {
+        return hasInnerFunctions_;
+    }
+
     bool hasAnyIonScript() const {
         return hasIonScript();
     }
@@ -1545,7 +1562,7 @@ class JSScript : public js::gc::TenuredCell
     }
 
     bool isRelazifiable() const {
-        return (selfHosted() || lazyScript) && !types_ &&
+        return (selfHosted() || lazyScript) && !hasInnerFunctions_ && !types_ &&
                !isGenerator() && !hasBaselineScript() && !hasAnyIonScript() &&
                !hasScriptCounts() && !doNotRelazify_;
     }
@@ -1600,6 +1617,18 @@ class JSScript : public js::gc::TenuredCell
     /* Return whether this script was compiled for 'eval' */
     bool isForEval() { return isCachedEval() || isActiveEval(); }
 
+    /*
+     * Return whether this script is a top-level script.
+     *
+     * If we evaluate some code which contains a syntax error, then we might
+     * produce a JSScript which has no associated bytecode. Testing with
+     * |code()| filters out this kind of scripts.
+     *
+     * If this script has a function associated to it, then it is not the
+     * top-level of a file.
+     */
+    bool isTopLevel() { return code() && !functionNonDelazifying(); }
+
     /* Ensure the script has a TypeScript. */
     inline bool ensureHasTypes(JSContext* cx);
 
@@ -1639,6 +1668,8 @@ class JSScript : public js::gc::TenuredCell
     js::jit::IonScriptCounts* getIonCounts();
     void releaseScriptCounts(js::ScriptCounts* counts);
     void destroyScriptCounts(js::FreeOp* fop);
+    // The entry should be removed after using this function.
+    void takeOverScriptCountsMapEntry(js::ScriptCounts* entryValue);
 
     jsbytecode* main() {
         return code() + mainOffset();
@@ -2442,6 +2473,7 @@ namespace ubi {
 template<>
 struct Concrete<js::LazyScript> : TracerConcrete<js::LazyScript> {
     CoarseType coarseType() const final { return CoarseType::Script; }
+    Size size(mozilla::MallocSizeOf mallocSizeOf) const override;
 
   protected:
     explicit Concrete(js::LazyScript *ptr) : TracerConcrete<js::LazyScript>(ptr) { }

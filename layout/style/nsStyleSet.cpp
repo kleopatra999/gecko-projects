@@ -260,6 +260,10 @@ nsStyleSet::BeginReconstruct()
   NS_ASSERTION(!mInReconstruct, "Unmatched begin/end?");
   NS_ASSERTION(mRuleTree, "Reconstructing before first construction?");
 
+  // Clear any ArenaRefPtr-managed style contexts, as we don't want them
+  // held on to after the rule tree has been reconstructed.
+  PresContext()->PresShell()->ClearArenaRefPtrs(eArenaObjectID_nsStyleContext);
+
   // Create a new rule tree root
   nsRuleNode* newTree = nsRuleNode::CreateRootNode(mRuleTree->PresContext());
 
@@ -385,6 +389,8 @@ SortStyleSheetsByScope(nsTArray<CSSStyleSheet*>& aSheets)
 nsresult
 nsStyleSet::GatherRuleProcessors(sheetType aType)
 {
+  NS_ENSURE_FALSE(mInShutdown, NS_ERROR_FAILURE);
+
   // We might be in GatherRuleProcessors because we are dropping a sheet,
   // resulting in an nsCSSSelector being destroyed.  Tell the
   // RestyleManager for each document we're used in so that they can

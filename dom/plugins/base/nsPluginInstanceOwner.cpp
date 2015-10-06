@@ -2587,7 +2587,7 @@ void nsPluginInstanceOwner::Paint(gfxContext* aContext,
       aFrameRect.width  != pluginSurface->Width() ||
       aFrameRect.height != pluginSurface->Height()) {
 
-    pluginSurface = new gfxImageSurface(gfxIntSize(aFrameRect.width, aFrameRect.height),
+    pluginSurface = new gfxImageSurface(gfx::IntSize(aFrameRect.width, aFrameRect.height),
                                         gfxImageFormat::ARGB32);
     if (!pluginSurface)
       return;
@@ -2617,7 +2617,7 @@ void nsPluginInstanceOwner::Paint(gfxContext* aContext,
 
   mInstance->HandleEvent(&event, nullptr);
 
-  aContext->SetOperator(gfxContext::OPERATOR_SOURCE);
+  aContext->SetOp(gfx::CompositionOp::OP_SOURCE);
   aContext->SetSource(pluginSurface, gfxPoint(aFrameRect.x, aFrameRect.y));
   aContext->Clip(aFrameRect);
   aContext->Paint();

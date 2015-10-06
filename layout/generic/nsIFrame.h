@@ -1247,18 +1247,22 @@ public:
                                 Matrix *aFromParentTransforms = nullptr) const;
 
   /**
-   * Returns whether this frame will attempt to preserve the 3d transforms of its
+   * Returns whether this frame will attempt to extend the 3d transforms of its
    * children. This requires transform-style: preserve-3d, as well as no clipping
    * or svg effects.
    */
-  bool Preserves3DChildren() const;
+  bool Extend3DContext() const;
 
   /**
-   * Returns whether this frame has a parent that Preserves3DChildren() and has
+   * Returns whether this frame has a parent that Extend3DContext() and has
    * its own transform (or hidden backface) to be combined with the parent's
    * transform.
    */
-  bool Preserves3D() const;
+  bool Combines3DTransformWithAncestors() const;
+
+  bool IsPreserve3DLeaf() const {
+    return Combines3DTransformWithAncestors() && !Extend3DContext();
+  }
 
   bool HasPerspective() const;
 
@@ -3024,11 +3028,24 @@ NS_PTR_TO_INT32(frame->Properties().Get(nsIFrame::ParagraphDepthProperty()))
   }
 
   /**
+   * Return whether this frame keeps track of overflow areas. (Frames for
+   * non-display SVG elements -- e.g. <clipPath> -- do not maintain overflow
+   * areas, because they're never painted.)
+   */
+  bool FrameMaintainsOverflow() const {
+    return !HasAllStateBits(NS_FRAME_SVG_LAYOUT | NS_FRAME_IS_NONDISPLAY);
+  }
+
+  /**
    * Returns the content node within the anonymous content that this frame
    * generated and which corresponds to the specified pseudo-element type,
    * or nullptr if there is no such anonymous content.
    */
   virtual mozilla::dom::Element* GetPseudoElement(nsCSSPseudoElements::Type aType);
+
+  bool BackfaceIsHidden() {
+    return StyleDisplay()->BackfaceIsHidden();
+  }
 
 protected:
   // Members

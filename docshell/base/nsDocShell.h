@@ -18,6 +18,7 @@
 #include "nsIContentViewerContainer.h"
 #include "nsIDOMStorageManager.h"
 #include "nsDocLoader.h"
+#include "mozilla/BasePrincipal.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
 #include "mozilla/TimeStamp.h"
@@ -58,6 +59,7 @@
 #include "prtime.h"
 #include "nsRect.h"
 #include "Units.h"
+#include "nsIDeprecationWarner.h"
 
 namespace mozilla {
 namespace dom {
@@ -145,6 +147,7 @@ class nsDocShell final
   , public nsIClipboardCommands
   , public nsIDOMStorageManager
   , public nsINetworkInterceptController
+  , public nsIDeprecationWarner
   , public mozilla::SupportsWeakPtr<nsDocShell>
 {
   friend class nsDSURIContentListener;
@@ -176,6 +179,7 @@ public:
   NS_DECL_NSICLIPBOARDCOMMANDS
   NS_DECL_NSIWEBSHELLSERVICES
   NS_DECL_NSINETWORKINTERCEPTCONTROLLER
+  NS_DECL_NSIDEPRECATIONWARNER
   NS_FORWARD_SAFE_NSIDOMSTORAGEMANAGER(TopSessionStorageManager())
 
   NS_IMETHOD Stop() override
@@ -227,6 +231,7 @@ public:
   NS_IMETHOD SetPrivateBrowsing(bool) override;
   NS_IMETHOD GetUseRemoteTabs(bool*) override;
   NS_IMETHOD SetRemoteTabs(bool) override;
+  NS_IMETHOD GetOriginAttributes(JS::MutableHandle<JS::Value>) override;
 
   // Restores a cached presentation from history (mLSHE).
   // This method swaps out the content viewer and simulates loads for
@@ -265,6 +270,8 @@ public:
   }
   bool InFrameSwap();
 
+  mozilla::OriginAttributes GetOriginAttributes();
+
 private:
   // An observed docshell wrapper is created when recording markers is enabled.
   mozilla::UniquePtr<mozilla::ObservedDocShell> mObserved;
@@ -291,6 +298,11 @@ public:
   static void CopyFavicon(nsIURI* aOldURI,
                           nsIURI* aNewURI,
                           bool aInPrivateBrowsing);
+
+  static nsDocShell* Cast(nsIDocShell* aDocShell)
+  {
+    return static_cast<nsDocShell*>(aDocShell);
+  }
 
 protected:
   virtual ~nsDocShell();
@@ -329,7 +341,12 @@ protected:
   // not have an owner on the channel should just pass null.
   // If aSrcdoc is not void, the load will be considered as a srcdoc load,
   // and the contents of aSrcdoc will be loaded instead of aURI.
+  // aOriginalURI will be set as the originalURI on the channel that does the
+  // load. If aOriginalURI is null, aURI will be set as the originalURI.
+  // If aLoadReplace is true, OLOAD_REPLACE flag will be set to the nsIChannel.
   nsresult DoURILoad(nsIURI* aURI,
+                     nsIURI* aOriginalURI,
+                     bool aLoadReplace,
                      nsIURI* aReferrer,
                      bool aSendReferrer,
                      uint32_t aReferrerPolicy,
@@ -886,9 +903,6 @@ protected:
 
   // Cached value of the "browser.xul.error_pages.enabled" preference.
   static bool sUseErrorPages;
-
-  // Cached value of the "dom.serviceWorkers.interception.enabled" preference.
-  static bool sInterceptionEnabled;
 
   bool mCreated;
   bool mAllowSubframes;

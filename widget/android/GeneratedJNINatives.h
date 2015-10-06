@@ -37,6 +37,36 @@ template<class Impl>
 constexpr JNINativeMethod ANRReporter::Natives<Impl>::methods[];
 
 template<class Impl>
+class AlarmReceiver::Natives : public mozilla::jni::NativeImpl<AlarmReceiver, Impl>
+{
+public:
+    static constexpr JNINativeMethod methods[] = {
+
+        mozilla::jni::MakeNativeMethod<AlarmReceiver::NotifyAlarmFired_t>(
+                mozilla::jni::NativeStub<AlarmReceiver::NotifyAlarmFired_t, Impl>
+                ::template Wrap<&Impl::NotifyAlarmFired>)
+    };
+};
+
+template<class Impl>
+constexpr JNINativeMethod AlarmReceiver::Natives<Impl>::methods[];
+
+template<class Impl>
+class GeckoJavaSampler::Natives : public mozilla::jni::NativeImpl<GeckoJavaSampler, Impl>
+{
+public:
+    static constexpr JNINativeMethod methods[] = {
+
+        mozilla::jni::MakeNativeMethod<GeckoJavaSampler::GetProfilerTime_t>(
+                mozilla::jni::NativeStub<GeckoJavaSampler::GetProfilerTime_t, Impl>
+                ::template Wrap<&Impl::GetProfilerTime>)
+    };
+};
+
+template<class Impl>
+constexpr JNINativeMethod GeckoJavaSampler::Natives<Impl>::methods[];
+
+template<class Impl>
 class GeckoThread::Natives : public mozilla::jni::NativeImpl<GeckoThread, Impl>
 {
 public:
@@ -50,6 +80,44 @@ public:
 
 template<class Impl>
 constexpr JNINativeMethod GeckoThread::Natives<Impl>::methods[];
+
+template<class Impl>
+class GeckoView::Window::Natives : public mozilla::jni::NativeImpl<Window, Impl>
+{
+public:
+    static constexpr JNINativeMethod methods[] = {
+
+        mozilla::jni::MakeNativeMethod<GeckoView::Window::DisposeNative_t>(
+                mozilla::jni::NativeStub<GeckoView::Window::DisposeNative_t, Impl>
+                ::template Wrap<&Impl::DisposeNative>),
+
+        mozilla::jni::MakeNativeMethod<GeckoView::Window::Open_t>(
+                mozilla::jni::NativeStub<GeckoView::Window::Open_t, Impl>
+                ::template Wrap<&Impl::Open>)
+    };
+};
+
+template<class Impl>
+constexpr JNINativeMethod GeckoView::Window::Natives<Impl>::methods[];
+
+template<class Impl>
+class PrefsHelper::Natives : public mozilla::jni::NativeImpl<PrefsHelper, Impl>
+{
+public:
+    static constexpr JNINativeMethod methods[] = {
+
+        mozilla::jni::MakeNativeMethod<PrefsHelper::GetPrefsById_t>(
+                mozilla::jni::NativeStub<PrefsHelper::GetPrefsById_t, Impl>
+                ::template Wrap<&Impl::GetPrefsById>),
+
+        mozilla::jni::MakeNativeMethod<PrefsHelper::RemovePrefsObserver_t>(
+                mozilla::jni::NativeStub<PrefsHelper::RemovePrefsObserver_t, Impl>
+                ::template Wrap<&Impl::RemovePrefsObserver>)
+    };
+};
+
+template<class Impl>
+constexpr JNINativeMethod PrefsHelper::Natives<Impl>::methods[];
 
 template<class Impl>
 class NativeJSContainer::Natives : public mozilla::jni::NativeImpl<NativeJSContainer, Impl>

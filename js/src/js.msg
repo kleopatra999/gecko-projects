@@ -54,6 +54,8 @@ MSG_DEF(JSMSG_CANT_TRUNCATE_ARRAY,     0, JSEXN_TYPEERR, "can't delete non-confi
 MSG_DEF(JSMSG_NOT_FUNCTION,            1, JSEXN_TYPEERR, "{0} is not a function")
 MSG_DEF(JSMSG_NOT_CONSTRUCTOR,         1, JSEXN_TYPEERR, "{0} is not a constructor")
 MSG_DEF(JSMSG_CANT_CONVERT_TO,         2, JSEXN_TYPEERR, "can't convert {0} to {1}")
+MSG_DEF(JSMSG_TOPRIMITIVE_NOT_CALLABLE, 2, JSEXN_TYPEERR, "can't convert {0} to {1}: its [Symbol.toPrimitive] property is not a function")
+MSG_DEF(JSMSG_TOPRIMITIVE_RETURNED_OBJECT, 2, JSEXN_TYPEERR, "can't convert {0} to {1}: its [Symbol.toPrimitive] method returned an object")
 MSG_DEF(JSMSG_NO_PROPERTIES,           1, JSEXN_TYPEERR, "{0} has no properties")
 MSG_DEF(JSMSG_BAD_REGEXP_FLAG,         1, JSEXN_SYNTAXERR, "invalid regular expression flag {0}")
 MSG_DEF(JSMSG_ARG_INDEX_OUT_OF_RANGE,  1, JSEXN_RANGEERR, "argument {0} accesses an index that is out of range")
@@ -342,6 +344,7 @@ MSG_DEF(JSMSG_BAD_COLUMN_NUMBER,       0, JSEXN_RANGEERR, "column number out of 
 MSG_DEF(JSMSG_COMPUTED_NAME_IN_PATTERN,0, JSEXN_SYNTAXERR, "computed property names aren't supported in this destructuring declaration")
 MSG_DEF(JSMSG_DEFAULT_IN_PATTERN,      0, JSEXN_SYNTAXERR, "destructuring defaults aren't supported in this destructuring declaration")
 MSG_DEF(JSMSG_BAD_NEWTARGET,           0, JSEXN_SYNTAXERR, "new.target only allowed in non-exotic functions")
+MSG_DEF(JSMSG_ESCAPED_KEYWORD,         0, JSEXN_SYNTAXERR, "keywords must be written literally, without embedded escapes")
 
 // asm.js
 MSG_DEF(JSMSG_USE_ASM_TYPE_FAIL,       1, JSEXN_TYPEERR, "asm.js type error: {0}")
@@ -504,3 +507,10 @@ MSG_DEF(JSMSG_NO_INDEXED_SETTER,         2, JSEXN_TYPEERR, "{0} doesn't have an 
 
 // Super
 MSG_DEF(JSMSG_CANT_DELETE_SUPER, 0, JSEXN_REFERENCEERR, "invalid delete involving 'super'")
+
+// Modules
+MSG_DEF(JSMSG_BAD_DEFAULT_EXPORT,        0, JSEXN_SYNTAXERR, "default export cannot be provided by export *")
+MSG_DEF(JSMSG_MISSING_INDIRECT_EXPORT,   0, JSEXN_SYNTAXERR, "indirect export not found")
+MSG_DEF(JSMSG_AMBIGUOUS_INDIRECT_EXPORT, 0, JSEXN_SYNTAXERR, "ambiguous indirect export")
+MSG_DEF(JSMSG_MISSING_IMPORT,            0, JSEXN_SYNTAXERR, "import not found")
+MSG_DEF(JSMSG_AMBIGUOUS_IMPORT,          0, JSEXN_SYNTAXERR, "ambiguous import")

@@ -607,7 +607,7 @@ SpecialPowersAPI.prototype = {
       // in order to properly log these assertions and notify
       // all usefull log observers
       let window = this.window.get();
-      let parentRunner, repr = function (o) o;
+      let parentRunner, repr = o => o;
       if (window) {
         window = window.wrappedJSObject;
         parentRunner = window.TestRunner;
@@ -2060,6 +2060,8 @@ SpecialPowersAPI.prototype = {
 
     let sp = this;
     let extension = {
+      id,
+
       startup() {
         sp._sendAsyncMessage("SPStartupExtension", {id});
         return startupPromise;
@@ -2096,6 +2098,10 @@ SpecialPowersAPI.prototype = {
 
     this._addMessageListener("SPExtensionMessage", listener);
     return extension;
+  },
+
+  invalidateExtensionStorageCache: function() {
+    this.notifyObserversInParentProcess(null, "extension-invalidate-storage-cache", "");
   },
 };
 

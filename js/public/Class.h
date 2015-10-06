@@ -46,6 +46,37 @@ template <typename T>
 class AutoVectorRooter;
 typedef AutoVectorRooter<jsid> AutoIdVector;
 
+// The answer to a successful query as to whether an object is an Array per
+// ES6's internal |IsArray| operation (as exposed by |Array.isArray|).
+enum class IsArrayAnswer
+{
+    Array,
+    NotArray,
+    RevokedProxy
+};
+
+// ES6 7.2.2.
+//
+// Returns false on failure, otherwise returns true and sets |*isArray|
+// indicating whether the object passes ECMAScript's IsArray test.  This is the
+// same test performed by |Array.isArray|.
+//
+// This is NOT the same as asking whether |obj| is an Array or a wrapper around
+// one.  If |obj| is a proxy created by |Proxy.revocable()| and has been
+// revoked, or if |obj| is a proxy whose target (at any number of hops) is a
+// revoked proxy, this method throws a TypeError and returns false.
+extern JS_PUBLIC_API(bool)
+IsArray(JSContext* cx, HandleObject obj, bool* isArray);
+
+// Identical to IsArray above, but the nature of the object (if successfully
+// determined) is communicated via |*answer|.  In particular this method
+// returns true and sets |*answer = IsArrayAnswer::RevokedProxy| when called on
+// a revoked proxy.
+//
+// Most users will want the overload above, not this one.
+extern JS_PUBLIC_API(bool)
+IsArray(JSContext* cx, HandleObject obj, IsArrayAnswer* answer);
+
 /*
  * Per ES6, the [[DefineOwnProperty]] internal method has three different
  * possible outcomes:
@@ -299,12 +330,6 @@ typedef bool
 typedef bool
 (* JSMayResolveOp)(const JSAtomState& names, jsid id, JSObject* maybeObj);
 
-// Convert obj to the given type, returning true with the resulting value in
-// *vp on success, and returning false on error or exception.
-typedef bool
-(* JSConvertOp)(JSContext* cx, JS::HandleObject obj, JSType type,
-                JS::MutableHandleValue vp);
-
 // Finalize obj, which the garbage collector has determined to be unreachable
 // from other live objects or from GC roots.  Obviously, finalizers must never
 // store a reference to obj.
@@ -358,7 +383,7 @@ typedef bool
 typedef bool
 (* HasPropertyOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id, bool* foundp);
 typedef bool
-(* GetPropertyOp)(JSContext* cx, JS::HandleObject obj, JS::HandleObject receiver, JS::HandleId id,
+(* GetPropertyOp)(JSContext* cx, JS::HandleObject obj, JS::HandleValue receiver, JS::HandleId id,
                   JS::MutableHandleValue vp);
 typedef bool
 (* SetPropertyOp)(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue v,
@@ -439,7 +464,6 @@ typedef void
     JSEnumerateOp       enumerate;                                            \
     JSResolveOp         resolve;                                              \
     JSMayResolveOp      mayResolve;                                           \
-    JSConvertOp         convert;                                              \
     FinalizeOpType      finalize;                                             \
     JSNative            call;                                                 \
     JSHasInstanceOp     hasInstance;                                          \
@@ -672,7 +696,8 @@ struct JSClass {
 // the beginning of every global object's slots for use by the
 // application.
 #define JSCLASS_GLOBAL_APPLICATION_SLOTS 5
-#define JSCLASS_GLOBAL_SLOT_COUNT      (JSCLASS_GLOBAL_APPLICATION_SLOTS + JSProto_LIMIT * 3 + 32)
+#define JSCLASS_GLOBAL_SLOT_COUNT                                             \
+    (JSCLASS_GLOBAL_APPLICATION_SLOTS + JSProto_LIMIT * 3 + 35)
 #define JSCLASS_GLOBAL_FLAGS_WITH_SLOTS(n)                                    \
     (JSCLASS_IS_GLOBAL | JSCLASS_HAS_RESERVED_SLOTS(JSCLASS_GLOBAL_SLOT_COUNT + (n)))
 #define JSCLASS_GLOBAL_FLAGS                                                  \
@@ -766,8 +791,6 @@ static_assert(offsetof(JSClass, resolve) == offsetof(Class, resolve),
               "Class and JSClass must be consistent");
 static_assert(offsetof(JSClass, mayResolve) == offsetof(Class, mayResolve),
               "Class and JSClass must be consistent");
-static_assert(offsetof(JSClass, convert) == offsetof(Class, convert),
-              "Class and JSClass must be consistent");
 static_assert(offsetof(JSClass, finalize) == offsetof(Class, finalize),
               "Class and JSClass must be consistent");
 static_assert(offsetof(JSClass, call) == offsetof(Class, call),
@@ -802,23 +825,9 @@ enum ESClassValue {
     ESClass_Boolean, ESClass_RegExp, ESClass_ArrayBuffer, ESClass_SharedArrayBuffer,
     ESClass_Date, ESClass_Set, ESClass_Map,
 
-    // Special snowflake for the ES6 IsArray method.
-    // Please don't use it without calling that function.
-    ESClass_IsArray
+    // None of the above.
+    ESClass_Other
 };
-
-/*
- * Return whether the given object has the given [[Class]] internal property
- * value. Beware, this query says nothing about the js::Class of the JSObject
- * so the caller must not assume anything about obj's representation (e.g., obj
- * may be a proxy).
- */
-inline bool
-ObjectClassIs(JSObject& obj, ESClassValue classValue, JSContext* cx);
-
-/* Just a helper that checks v.isObject before calling ObjectClassIs. */
-inline bool
-IsObjectWithClass(const JS::Value& v, ESClassValue classValue, JSContext* cx);
 
 /* Fills |vp| with the unboxed value for boxed types, or undefined otherwise. */
 inline bool

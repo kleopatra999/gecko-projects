@@ -397,20 +397,17 @@ IsSafeImageTransformComponent(gfxFloat aValue)
  * alpha channel or their alpha channel is uniformly opaque.
  * This differs per render mode.
  */
-static gfxContext::GraphicsOperator
-OptimalFillOperator()
+static CompositionOp
+OptimalFillOp()
 {
 #ifdef XP_WIN
     if (gfxWindowsPlatform::GetPlatform()->GetRenderMode() ==
         gfxWindowsPlatform::RENDER_DIRECT2D) {
         // D2D -really- hates operator source.
-        return gfxContext::OPERATOR_OVER;
-    } else {
-#endif
-        return gfxContext::OPERATOR_SOURCE;
-#ifdef XP_WIN
+        return CompositionOp::OP_OVER;
     }
 #endif
+    return CompositionOp::OP_SOURCE;
 }
 
 // EXTEND_PAD won't help us here; we have to create a temporary surface to hold
@@ -455,7 +452,7 @@ CreateSamplingRestrictedDrawable(gfxDrawable* aDrawable,
     }
 
     nsRefPtr<gfxContext> tmpCtx = new gfxContext(target);
-    tmpCtx->SetOperator(OptimalFillOperator());
+    tmpCtx->SetOp(OptimalFillOp());
     aDrawable->Draw(tmpCtx, needed - needed.TopLeft(), true,
                     GraphicsFilter::FILTER_FAST, 1.0, gfxMatrix::Translation(needed.TopLeft()));
     RefPtr<SourceSurface> surface = target->Snapshot();
@@ -506,7 +503,7 @@ struct MOZ_STACK_CLASS AutoCairoPixmanBugWorkaround
         mContext->Clip(bounds);
         mContext->SetMatrix(currentMatrix);
         mContext->PushGroup(gfxContentType::COLOR_ALPHA);
-        mContext->SetOperator(gfxContext::OPERATOR_OVER);
+        mContext->SetOp(CompositionOp::OP_OVER);
 
         mPushedGroup = true;
     }
@@ -663,8 +660,8 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
     return false;
   }
 
-  gfxIntSize scaledImageSize((int32_t)scaledImageRect.width,
-                             (int32_t)scaledImageRect.height);
+  IntSize scaledImageSize((int32_t)scaledImageRect.width,
+                          (int32_t)scaledImageRect.height);
   if (scaledImageSize.width != scaledImageRect.width ||
       scaledImageSize.height != scaledImageRect.height) {
     // If the scaled image isn't pixel aligned, we'll get artifacts
@@ -694,9 +691,8 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
     withoutScale.PreScale(1.0 / scaleFactor.width, 1.0 / scaleFactor.height);
     aContext->SetMatrix(ThebesMatrix(withoutScale));
 
-    DrawOptions drawOptions(aOpacity,
-        CompositionOpForOp(aContext->CurrentOperator()),
-        aContext->CurrentAntialiasMode());
+    DrawOptions drawOptions(aOpacity, aContext->CurrentOp(),
+                            aContext->CurrentAntialiasMode());
 
     SurfacePattern scaledImagePattern(scaledImage, ExtendMode::REPEAT,
                                       Matrix(), ToFilter(aFilter));
@@ -1105,9 +1101,7 @@ gfxUtils::ConvertYCbCrToRGB(const PlanarYCbCrData& aData,
   }
 }
 
-/* static */ void gfxUtils::ClearThebesSurface(gfxASurface* aSurface,
-                                               IntRect* aRect,
-                                               const gfxRGBA& aColor)
+/* static */ void gfxUtils::ClearThebesSurface(gfxASurface* aSurface)
 {
   if (aSurface->CairoStatus()) {
     return;
@@ -1117,14 +1111,9 @@ gfxUtils::ConvertYCbCrToRGB(const PlanarYCbCrData& aData,
     return;
   }
   cairo_t* ctx = cairo_create(surf);
-  cairo_set_source_rgba(ctx, aColor.r, aColor.g, aColor.b, aColor.a);
+  cairo_set_source_rgba(ctx, 0.0, 0.0, 0.0, 0.0);
   cairo_set_operator(ctx, CAIRO_OPERATOR_SOURCE);
-  IntRect bounds;
-  if (aRect) {
-    bounds = *aRect;
-  } else {
-    bounds = IntRect(nsIntPoint(0, 0), aSurface->GetSize());
-  }
+  IntRect bounds(nsIntPoint(0, 0), aSurface->GetSize());
   cairo_rectangle(ctx, bounds.x, bounds.y, bounds.width, bounds.height);
   cairo_fill(ctx);
   cairo_destroy(ctx);
@@ -1566,11 +1555,13 @@ bool gfxUtils::sDumpPainting = getenv("MOZ_DUMP_PAINT") != 0;
 bool gfxUtils::sDumpPaintingIntermediate = getenv("MOZ_DUMP_PAINT_INTERMEDIATE") != 0;
 bool gfxUtils::sDumpPaintingToFile = getenv("MOZ_DUMP_PAINT_TO_FILE") != 0;
 bool gfxUtils::sDumpPaintItems = getenv("MOZ_DUMP_PAINT_ITEMS") != 0;
+bool gfxUtils::sDumpCompositorTextures = getenv("MOZ_DUMP_COMPOSITOR_TEXTURES") != 0;
 #else
 bool gfxUtils::sDumpPainting = false;
 bool gfxUtils::sDumpPaintingIntermediate = false;
 bool gfxUtils::sDumpPaintingToFile = false;
 bool gfxUtils::sDumpPaintItems = false;
+bool gfxUtils::sDumpCompositorTextures = false;
 #endif
 
 namespace mozilla {
@@ -1596,11 +1587,6 @@ Color ToDeviceColor(Color aColor)
 Color ToDeviceColor(nscolor aColor)
 {
   return ToDeviceColor(Color::FromABGR(aColor));
-}
-
-Color ToDeviceColor(const gfxRGBA& aColor)
-{
-  return ToDeviceColor(ToColor(aColor));
 }
 
 } // namespace gfx

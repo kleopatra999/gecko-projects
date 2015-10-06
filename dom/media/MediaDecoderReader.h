@@ -20,8 +20,8 @@
 
 namespace mozilla {
 
+class CDMProxy;
 class MediaDecoderReader;
-class SharedDecoderManager;
 
 struct WaitForDataRejectValue
 {
@@ -49,7 +49,6 @@ private:
 
 enum class ReadMetadataFailureReason : int8_t
 {
-  WAITING_FOR_RESOURCES,
   METADATA_ERROR
 };
 
@@ -95,15 +94,9 @@ public:
   // on failure.
   virtual nsresult Init(MediaDecoderReader* aCloneDonor) = 0;
 
-  // True if this reader is waiting media resource allocation
-  virtual bool IsWaitingMediaResources() { return false; }
-  // True if this reader is waiting for a Content Decryption Module to become
-  // available.
-  virtual bool IsWaitingOnCDMResource() { return false; }
   // Release media resources they should be released in dormant state
   // The reader can be made usable again by calling ReadMetadata().
   virtual void ReleaseMediaResources() {};
-  virtual void SetSharedDecoderManager(SharedDecoderManager* aManager) {}
   // Breaks reference-counted cycles. Called during shutdown.
   // WARNING: If you override this, you must call the base implementation
   // in your override.
@@ -115,7 +108,7 @@ public:
   // thread.
   virtual nsRefPtr<ShutdownPromise> Shutdown();
 
-  virtual bool OnTaskQueue()
+  virtual bool OnTaskQueue() const
   {
     return OwnerThread()->IsCurrentThreadIn();
   }
@@ -196,6 +189,10 @@ public:
   // activate the decoder if necessary. The state machine only needs to know
   // when to call SetIdle().
   virtual void SetIdle() { }
+
+#ifdef MOZ_EME
+  virtual void SetCDMProxy(CDMProxy* aProxy) {}
+#endif
 
   // Tell the reader that the data decoded are not for direct playback, so it
   // can accept more files, in particular those which have more channels than
@@ -280,7 +277,6 @@ public:
 
   // Notify the reader that data from the resource was evicted (MediaSource only)
   virtual void NotifyDataRemoved() {}
-  virtual int64_t GetEvictionOffset(double aTime) { return -1; }
 
   virtual MediaQueue<AudioData>& AudioQueue() { return mAudioQueue; }
   virtual MediaQueue<VideoData>& VideoQueue() { return mVideoQueue; }
@@ -312,7 +308,7 @@ public:
     OwnerThread()->Dispatch(r.forget());
   }
 
-  TaskQueue* OwnerThread() {
+  TaskQueue* OwnerThread() const {
     return mTaskQueue;
   }
 

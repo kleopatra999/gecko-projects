@@ -550,6 +550,8 @@ public:
   bool PluginCrash(uint32_t aPluginID,
                    const nsAString& aPluginName);
 
+  void RecordEndOfCallTelemetry() const;
+
   nsresult InitializeDataChannel();
 
   NS_IMETHODIMP_TO_ERRORRESULT_RETREF(nsDOMDataChannel,
@@ -673,6 +675,15 @@ private:
       const mozilla::JsepApplicationCodecDescription** codec,
       uint16_t* level) const;
 
+  static void DeferredAddTrackToJsepSession(const std::string& pcHandle,
+                                            SdpMediaSection::MediaType type,
+                                            const std::string& streamId,
+                                            const std::string& trackId);
+
+  nsresult AddTrackToJsepSession(SdpMediaSection::MediaType type,
+                                 const std::string& streamId,
+                                 const std::string& trackId);
+
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
   static void GetStatsForPCObserver_s(
       const std::string& pcHandle,
@@ -777,6 +788,7 @@ private:
   // Bug 840728.
   int mNumAudioStreams;
   int mNumVideoStreams;
+  bool mHaveConfiguredCodecs;
 
   bool mHaveDataStream;
 
@@ -785,6 +797,10 @@ private:
   bool mTrickle;
 
   bool mShouldSuppressNegotiationNeeded;
+
+  // storage for Telemetry data
+  uint16_t mMaxReceiving[SdpMediaSection::kMediaTypes];
+  uint16_t mMaxSending[SdpMediaSection::kMediaTypes];
 
 public:
   //these are temporary until the DataChannel Listen/Connect API is removed

@@ -29,7 +29,7 @@
   --toolbarbutton-active-bordercolor: rgb(154,154,154);
   --toolbarbutton-active-background: rgba(154,154,154,.5) linear-gradient(hsla(0,0%,100%,.7), hsla(0,0%,100%,.4));
 
-  --toolbarbutton-checkedhover-backgroundcolor: rgba(90%,90%,90%,.4);
+  --toolbarbutton-checkedhover-backgroundcolor: rgba(154,154,154,.15);
 
   --identity-box-verified-background-color: #fff;
 
@@ -331,7 +331,7 @@ menuitem.bookmark-item {
 }
 
 /* Stock icons for the menu bar items */
-menuitem:not([type]):not(.menuitem-tooltip):not(.menuitem-iconic-tooltip):not([endimage]) {
+menuitem:not([type]):not(.menuitem-tooltip):not(.menuitem-iconic-tooltip) {
   -moz-binding: url("chrome://global/content/bindings/menu.xml#menuitem-iconic");
 }
 
@@ -890,6 +890,11 @@ toolbarbutton[constrain-size="true"][cui-areatype="toolbar"] > .toolbarbutton-ba
 
 .urlbar-history-dropmarker {
   -moz-appearance: toolbarbutton-dropdown;
+  transition: opacity 0.15s ease;
+}
+
+#urlbar:not(:hover) > .urlbar-textbox-container > .urlbar-history-dropmarker {
+  opacity: 0;
 }
 
 #urlbar-container {
@@ -1593,7 +1598,7 @@ richlistitem[type~="action"][actiontype="switchtab"] > .ac-url-box > .ac-action-
 }
 
 #TabsToolbar .toolbarbutton-1 {
-  margin-bottom: var(--navbar-tab-toolbar-highlight-overlap);
+  margin-bottom: var(--tab-toolbar-navbar-overlap);
 }
 
 #alltabs-button {
@@ -1629,6 +1634,22 @@ richlistitem[type~="action"][actiontype="switchtab"] > .ac-url-box > .ac-action-
 .alltabs-item[tabIsVisible] {
   /* box-shadow instead of background-color to work around native styling */
   box-shadow: inset -5px 0 ThreeDShadow;
+}
+
+.alltabs-endimage[muted] {
+  list-style-image: url(chrome://browser/skin/tabbrowser/tab-audio.svg#tab-audio-menu-muted);
+}
+
+.alltabs-endimage[soundplaying] {
+  list-style-image: url(chrome://browser/skin/tabbrowser/tab-audio.svg#tab-audio-menu);
+}
+
+menuitem:hover > hbox > .alltabs-endimage[muted] {
+  list-style-image: url(chrome://browser/skin/tabbrowser/tab-audio.svg#tab-audio-menu-muted-hover);
+}
+
+menuitem:hover > hbox > .alltabs-endimage[soundplaying] {
+  list-style-image: url(chrome://browser/skin/tabbrowser/tab-audio.svg#tab-audio-menu-hover);
 }
 
 /* Sidebar */
@@ -1712,16 +1733,14 @@ toolbarbutton.chevron > .toolbarbutton-icon {
   margin-top: 1em;
 }
 
-#sync-error-panel-title,
 #sync-start-panel-title {
   font-size: 120%;
   font-weight: bold;
   margin-bottom: 5px;
 }
 
-#sync-start-panel-subtitle,
-#sync-error-panel-subtitle {
-  margin: 0;
+#sync-start-panel-subtitle {
+  margin-bottom: 0;
 }
 
 /* Status panel */
@@ -1751,8 +1770,8 @@ toolbarbutton.chevron > .toolbarbutton-icon {
 }
 
 %include ../shared/fullscreen/warning.inc.css
-%include ../shared/devtools/responsivedesign.inc.css
-%include ../shared/devtools/commandline.inc.css
+%include ../../../devtools/client/themes/responsivedesign.inc.css
+%include ../../../devtools/client/themes/commandline.inc.css
 %include ../shared/plugin-doorhanger.inc.css
 %include ../shared/login-doorhanger.inc.css
 
@@ -1817,39 +1836,6 @@ toolbarbutton.chevron > .toolbarbutton-icon {
 }
 
 %include ../shared/social/chat.inc.css
-
-.chat-titlebar {
-  background-color: #d9d9d9;
-  background-image: linear-gradient(@toolbarHighlight@, transparent);
-}
-
-.chat-titlebar[selected] {
-  background-color: #f0f0f0;
-}
-
-.chatbar-button {
-  -moz-appearance: none;
-  background-color: #d9d9d9;
-  background-image: linear-gradient(@toolbarHighlight@, transparent);
-}
-
-.chatbar-button > .toolbarbutton-icon {
-  -moz-margin-end: 0;
-}
-
-.chatbar-button:hover,
-.chatbar-button[open="true"] {
-  background-color: #f0f0f0;
-}
-
-.chatbar-button[activity] {
-  background-image: radial-gradient(circle farthest-corner at center 3px, rgb(233,242,252) 3%, rgba(172,206,255,0.75) 40%, rgba(87,151,201,0.5) 80%, transparent);
-}
-
-chatbox {
-  border-top-left-radius: 2.5px;
-  border-top-right-radius: 2.5px;
-}
 
 /* Customization mode */
 
@@ -1958,3 +1944,5 @@ chatbox {
 .browser-action-panel > .panel-arrowcontainer > .panel-arrowcontent {
   padding: 0;
 }
+
+%include ../shared/usercontext/usercontext.inc.css

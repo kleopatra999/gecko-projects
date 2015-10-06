@@ -155,8 +155,8 @@ typedef CallbackObjectHolder<NodeFilter, nsIDOMNodeFilter> NodeFilterHolder;
 } // namespace mozilla
 
 #define NS_IDOCUMENT_IID \
-{ 0x292450a1, 0x285e, 0x4a09, \
-  { 0x9a, 0xf9, 0x61, 0xf9, 0xb1, 0xbd, 0x27, 0xcc } }
+{ 0x72391609, 0x673d, 0x4bec, \
+  { 0xbd, 0x75, 0x64, 0xbf, 0x1f, 0x6a, 0x6b, 0x5e } }
 
 // Enum for requesting a particular type of document when creating a doc
 enum DocumentFlavor {
@@ -2602,6 +2602,16 @@ public:
 
   void PropagateUseCounters(nsIDocument* aParentDocument);
 
+  void SetUserHasInteracted(bool aUserHasInteracted)
+  {
+    mUserHasInteracted = aUserHasInteracted;
+  }
+
+  bool UserHasInteracted()
+  {
+    return mUserHasInteracted;
+  }
+
 protected:
   bool GetUseCounter(mozilla::UseCounter aUseCounter)
   {
@@ -2834,10 +2844,6 @@ protected:
   // True if DisallowBFCaching has been called on this document.
   bool mBFCacheDisallowed : 1;
 
-  // If true, we have an input encoding.  If this is false, then the
-  // document was created entirely in memory
-  bool mHaveInputEncoding : 1;
-
   bool mHasHadDefaultView : 1;
 
   // Whether style sheet change events will be dispatched for this document
@@ -3011,6 +3017,9 @@ protected:
   // Flags for whether we've notified our top-level "page" of a use counter
   // for this child document.
   std::bitset<mozilla::eUseCounter_Count> mNotifiedPageForUseCounter;
+
+  // Whether the user has interacted with the document or not:
+  bool mUserHasInteracted;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIDocument, NS_IDOCUMENT_IID)

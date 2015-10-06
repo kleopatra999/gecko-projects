@@ -10,6 +10,7 @@
 
 #include "nsScriptLoader.h"
 
+#include "prsystem.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "xpcpublic.h"
@@ -113,6 +114,7 @@ nsScriptLoadRequestList::Contains(nsScriptLoadRequest* aElem)
 nsScriptLoader::nsScriptLoader(nsIDocument *aDocument)
   : mDocument(aDocument),
     mBlockerCount(0),
+    mNumberOfProcessors(0),
     mEnabled(true),
     mDeferEnabled(false),
     mDocumentParsingDone(false),
@@ -223,10 +225,15 @@ nsresult
 nsScriptLoader::CheckContentPolicy(nsIDocument* aDocument,
                                    nsISupports *aContext,
                                    nsIURI *aURI,
-                                   const nsAString &aType)
+                                   const nsAString &aType,
+                                   bool aIsPreLoad)
 {
+  nsContentPolicyType contentPolicyType = aIsPreLoad
+                                          ? nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD
+                                          : nsIContentPolicy::TYPE_INTERNAL_SCRIPT;
+
   int16_t shouldLoad = nsIContentPolicy::ACCEPT;
-  nsresult rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_INTERNAL_SCRIPT,
+  nsresult rv = NS_CheckContentLoadPolicy(contentPolicyType,
                                           aURI,
                                           aDocument->NodePrincipal(),
                                           aContext,
@@ -249,7 +256,8 @@ nsresult
 nsScriptLoader::ShouldLoadScript(nsIDocument* aDocument,
                                  nsISupports* aContext,
                                  nsIURI* aURI,
-                                 const nsAString &aType)
+                                 const nsAString &aType,
+                                 bool aIsPreLoad)
 {
   // Check that the containing page is allowed to load this URI.
   nsresult rv = nsContentUtils::GetSecurityManager()->
@@ -259,7 +267,7 @@ nsScriptLoader::ShouldLoadScript(nsIDocument* aDocument,
   NS_ENSURE_SUCCESS(rv, rv);
 
   // After the security manager, the content-policy stuff gets a veto
-  rv = CheckContentPolicy(aDocument, aContext, aURI, aType);
+  rv = CheckContentPolicy(aDocument, aContext, aURI, aType, aIsPreLoad);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -274,7 +282,7 @@ nsScriptLoader::StartLoad(nsScriptLoadRequest *aRequest, const nsAString &aType,
   nsISupports *context = aRequest->mElement.get()
                          ? static_cast<nsISupports *>(aRequest->mElement.get())
                          : static_cast<nsISupports *>(mDocument);
-  nsresult rv = ShouldLoadScript(mDocument, context, aRequest->mURI, aType);
+  nsresult rv = ShouldLoadScript(mDocument, context, aRequest->mURI, aType, aRequest->IsPreload());
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -296,12 +304,16 @@ nsScriptLoader::StartLoad(nsScriptLoadRequest *aRequest, const nsAString &aType,
     return NS_OK;
   }
 
+  nsContentPolicyType contentPolicyType = aRequest->IsPreload()
+                                          ? nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD
+                                          : nsIContentPolicy::TYPE_INTERNAL_SCRIPT;
+
   nsCOMPtr<nsIChannel> channel;
   rv = NS_NewChannel(getter_AddRefs(channel),
                      aRequest->mURI,
                      mDocument,
                      nsILoadInfo::SEC_NORMAL,
-                     nsIContentPolicy::TYPE_INTERNAL_SCRIPT,
+                     contentPolicyType,
                      loadGroup,
                      prompter,
                      nsIRequest::LOAD_NORMAL |
@@ -436,99 +448,21 @@ CSPAllowsInlineScript(nsIScriptElement *aElement, nsIDocument *aDocument)
     return true;
   }
 
-  // An inline script can be allowed because all inline scripts are allowed,
-  // or else because it is whitelisted by a nonce-source or hash-source. This
-  // is a logical OR between whitelisting methods, so the allowInlineScript
-  // outparam can be reused for each check as long as we stop checking as soon
-  // as it is set to true. This also optimizes performance by avoiding the
-  // overhead of unnecessary checks.
-  bool allowInlineScript = true;
-  nsAutoTArray<unsigned short, 3> violations;
-
-  bool reportInlineViolation = false;
-  rv = csp->GetAllowsInlineScript(&reportInlineViolation, &allowInlineScript);
-  NS_ENSURE_SUCCESS(rv, false);
-  if (reportInlineViolation) {
-    violations.AppendElement(static_cast<unsigned short>(
-          nsIContentSecurityPolicy::VIOLATION_TYPE_INLINE_SCRIPT));
-  }
-
+  // query the nonce
+  nsCOMPtr<nsIContent> scriptContent = do_QueryInterface(aElement);
   nsAutoString nonce;
-  if (!allowInlineScript) {
-    nsCOMPtr<nsIContent> scriptContent = do_QueryInterface(aElement);
-    bool foundNonce = scriptContent->GetAttr(kNameSpaceID_None,
-                                             nsGkAtoms::nonce, nonce);
-    if (foundNonce) {
-      bool reportNonceViolation;
-      rv = csp->GetAllowsNonce(nonce, nsIContentPolicy::TYPE_SCRIPT,
-                               &reportNonceViolation, &allowInlineScript);
-      NS_ENSURE_SUCCESS(rv, false);
-      if (reportNonceViolation) {
-        violations.AppendElement(static_cast<unsigned short>(
-              nsIContentSecurityPolicy::VIOLATION_TYPE_NONCE_SCRIPT));
-      }
-    }
-  }
+  scriptContent->GetAttr(kNameSpaceID_None, nsGkAtoms::nonce, nonce);
 
-  if (!allowInlineScript) {
-    bool reportHashViolation;
-    nsAutoString scriptText;
-    aElement->GetScriptText(scriptText);
-    rv = csp->GetAllowsHash(scriptText, nsIContentPolicy::TYPE_SCRIPT,
-                            &reportHashViolation, &allowInlineScript);
-    NS_ENSURE_SUCCESS(rv, false);
-    if (reportHashViolation) {
-      violations.AppendElement(static_cast<unsigned short>(
-            nsIContentSecurityPolicy::VIOLATION_TYPE_HASH_SCRIPT));
-    }
-  }
+  // query the scripttext
+  nsAutoString scriptText;
+  aElement->GetScriptText(scriptText);
 
-  // What violation(s) should be reported?
-  //
-  // 1. If the script tag has a nonce attribute, and the nonce does not match
-  // the policy, report VIOLATION_TYPE_NONCE_SCRIPT.
-  // 2. If the policy has at least one hash-source, and the hashed contents of
-  // the script tag did not match any of them, report VIOLATION_TYPE_HASH_SCRIPT
-  // 3. Otherwise, report VIOLATION_TYPE_INLINE_SCRIPT if appropriate.
-  //
-  // 1 and 2 may occur together, 3 should only occur by itself. Naturally,
-  // every VIOLATION_TYPE_NONCE_SCRIPT and VIOLATION_TYPE_HASH_SCRIPT are also
-  // VIOLATION_TYPE_INLINE_SCRIPT, but reporting the
-  // VIOLATION_TYPE_INLINE_SCRIPT is redundant and does not help the developer.
-  if (!violations.IsEmpty()) {
-    MOZ_ASSERT(violations[0] == nsIContentSecurityPolicy::VIOLATION_TYPE_INLINE_SCRIPT,
-               "How did we get any violations without an initial inline script violation?");
-    // gather information to log with violation report
-    nsIURI* uri = aDocument->GetDocumentURI();
-    nsAutoCString asciiSpec;
-    uri->GetAsciiSpec(asciiSpec);
-    nsAutoString scriptText;
-    aElement->GetScriptText(scriptText);
-    nsAutoString scriptSample(scriptText);
-
-    // cap the length of the script sample at 40 chars
-    if (scriptSample.Length() > 40) {
-      scriptSample.Truncate(40);
-      scriptSample.AppendLiteral("...");
-    }
-
-    for (uint32_t i = 0; i < violations.Length(); i++) {
-      // Skip reporting the redundant inline script violation if there are
-      // other (nonce and/or hash violations) as well.
-      if (i > 0 || violations.Length() == 1) {
-        csp->LogViolationDetails(violations[i], NS_ConvertUTF8toUTF16(asciiSpec),
-                                 scriptSample, aElement->GetScriptLineNumber(),
-                                 nonce, scriptText);
-      }
-    }
-  }
-
-  if (!allowInlineScript) {
-    NS_ASSERTION(!violations.IsEmpty(),
-        "CSP blocked inline script but is not reporting a violation");
-   return false;
-  }
-  return true;
+  bool allowInlineScript = false;
+  rv = csp->GetAllowsInline(nsIContentPolicy::TYPE_SCRIPT,
+                            nonce, scriptText,
+                            aElement->GetScriptLineNumber(),
+                            &allowInlineScript);
+  return allowInlineScript;
 }
 
 bool
@@ -608,7 +542,7 @@ nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
       if (elementCharset.Equals(preloadCharset) &&
           ourCORSMode == request->mCORSMode &&
           ourRefPolicy == request->mReferrerPolicy) {
-        rv = CheckContentPolicy(mDocument, aElement, request->mURI, type);
+        rv = CheckContentPolicy(mDocument, aElement, request->mURI, type, false);
         NS_ENSURE_SUCCESS(rv, false);
       } else {
         // Drop the preload
@@ -665,7 +599,7 @@ nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
         // loop gets a chance to spin.
 
         // KVKV TODO: Instead of processing immediately, try off-thread-parsing
-        // it and only schedule a ProcessRequest if that fails.
+        // it and only schedule a pending ProcessRequest if that fails.
         ProcessPendingRequestsAsync();
       } else {
         mLoadingAsyncRequests.AppendElement(request);
@@ -714,6 +648,7 @@ nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
       }
       return true;
     }
+
     if (request->IsDoneLoading() && ReadyToExecuteScripts()) {
       // The request has already been loaded and there are no pending style
       // sheets. If the script comes from the network stream, cheat for
@@ -732,6 +667,7 @@ nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
       ProcessPendingRequestsAsync();
       return true;
     }
+
     // The script hasn't loaded yet or there's a style sheet blocking it.
     // The script will be run when it loads or the style sheet loads.
     NS_ASSERTION(!mParserBlockingRequest,
@@ -830,6 +766,23 @@ nsScriptLoader::ProcessOffThreadRequest(nsScriptLoadRequest* aRequest)
 {
   MOZ_ASSERT(aRequest->mProgress == nsScriptLoadRequest::Progress_Compiling);
   aRequest->mProgress = nsScriptLoadRequest::Progress_DoneCompiling;
+  if (aRequest == mParserBlockingRequest) {
+    if (!ReadyToExecuteScripts()) {
+      // If not ready to execute scripts, schedule an async call to
+      // ProcessPendingRequests to handle it.
+      ProcessPendingRequestsAsync();
+      return NS_OK;
+    }
+
+    // Same logic as in top of ProcessPendingRequests.
+    mParserBlockingRequest = nullptr;
+    UnblockParser(aRequest);
+    ProcessRequest(aRequest);
+    mDocument->UnblockOnload(false);
+    ContinueParserAsync(aRequest);
+    return NS_OK;
+  }
+
   nsresult rv = ProcessRequest(aRequest);
   mDocument->UnblockOnload(false);
   return rv;
@@ -878,9 +831,10 @@ OffThreadScriptLoaderCallback(void *aToken, void *aCallbackData)
 }
 
 nsresult
-nsScriptLoader::AttemptAsyncScriptParse(nsScriptLoadRequest* aRequest)
+nsScriptLoader::AttemptAsyncScriptCompile(nsScriptLoadRequest* aRequest)
 {
-  if (!aRequest->mElement->GetScriptAsync() || aRequest->mIsInline) {
+  // Don't off-thread compile inline scripts.
+  if (aRequest->mIsInline) {
     return NS_ERROR_FAILURE;
   }
 
@@ -921,7 +875,8 @@ nsScriptLoader::AttemptAsyncScriptParse(nsScriptLoadRequest* aRequest)
 }
 
 nsresult
-nsScriptLoader::CompileOffThreadOrProcessRequest(nsScriptLoadRequest* aRequest)
+nsScriptLoader::CompileOffThreadOrProcessRequest(nsScriptLoadRequest* aRequest,
+                                                 bool* oCompiledOffThread)
 {
   NS_ASSERTION(nsContentUtils::IsSafeToRunScript(),
                "Processing requests when running scripts is unsafe.");
@@ -930,8 +885,11 @@ nsScriptLoader::CompileOffThreadOrProcessRequest(nsScriptLoadRequest* aRequest)
   NS_ASSERTION(!aRequest->InCompilingStage(),
                "Candidate for off-thread compile is already in compiling stage.");
 
-  nsresult rv = AttemptAsyncScriptParse(aRequest);
+  nsresult rv = AttemptAsyncScriptCompile(aRequest);
   if (rv != NS_ERROR_FAILURE) {
+    if (oCompiledOffThread && rv == NS_OK) {
+      *oCompiledOffThread = true;
+    }
     return rv;
   }
 
@@ -1222,8 +1180,12 @@ nsScriptLoader::ProcessPendingRequests()
       mParserBlockingRequest->IsReadyToRun() &&
       ReadyToExecuteScripts()) {
     request.swap(mParserBlockingRequest);
+    bool offThreadCompiled = request->mProgress == nsScriptLoadRequest::Progress_DoneCompiling;
     UnblockParser(request);
     ProcessRequest(request);
+    if (offThreadCompiled) {
+      mDocument->UnblockOnload(false);
+    }
     ContinueParserAsync(request);
   }
 
@@ -1542,6 +1504,18 @@ nsScriptLoader::ContinueParserAsync(nsScriptLoadRequest* aParserBlockingRequest)
   aParserBlockingRequest->mElement->ContinueParserAsync();
 }
 
+uint32_t
+nsScriptLoader::NumberOfProcessors()
+{
+  if (mNumberOfProcessors > 0)
+    return mNumberOfProcessors;
+
+  int32_t numProcs = PR_GetNumberOfProcessors();
+  if (numProcs > 0)
+    mNumberOfProcessors = numProcs;
+  return mNumberOfProcessors;
+}
+
 nsresult
 nsScriptLoader::PrepareLoadedRequest(nsScriptLoadRequest* aRequest,
                                      nsIStreamLoader* aLoader,
@@ -1626,6 +1600,23 @@ nsScriptLoader::PrepareLoadedRequest(nsScriptLoadRequest* aRequest,
 
   // Mark this as loaded
   aRequest->mProgress = nsScriptLoadRequest::Progress_DoneLoading;
+
+  // If this is currently blocking the parser, attempt to compile it off-main-thread.
+  if (aRequest == mParserBlockingRequest && (NumberOfProcessors() > 1)) {
+    nsresult rv = AttemptAsyncScriptCompile(aRequest);
+    if (rv == NS_OK) {
+      NS_ASSERTION(aRequest->mProgress == nsScriptLoadRequest::Progress_Compiling,
+          "Request should be off-thread compiling now.");
+      return NS_OK;
+    }
+
+    // If off-thread compile errored, return the error.
+    if (rv != NS_ERROR_FAILURE) {
+      return rv;
+    }
+
+    // If off-thread compile was rejected, continue with regular processing.
+  }
 
   // And if it's async, move it to the loaded list.  aRequest->mIsAsync really
   // _should_ be in a list, but the consequences if it's not are bad enough we

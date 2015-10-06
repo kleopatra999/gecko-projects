@@ -29,6 +29,7 @@
 #include "jsfuninlines.h"
 #include "jsgcinlines.h"
 #include "jsobjinlines.h"
+#include "jsscriptinlines.h"
 
 using namespace js;
 using namespace js::gc;
@@ -66,7 +67,6 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     objectMetadataTable(nullptr),
     lazyArrayBuffers(nullptr),
     gcIncomingGrayPointers(nullptr),
-    gcWeakMapList(nullptr),
     gcPreserveJitCode(options.preserveJitCode()),
     debugModeBits(0),
     rngState(0),
@@ -80,7 +80,8 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     maybeAlive(true),
     jitCompartment_(nullptr),
     mappedArgumentsTemplate_(nullptr),
-    unmappedArgumentsTemplate_(nullptr)
+    unmappedArgumentsTemplate_(nullptr),
+    lcovOutput()
 {
     PodArrayZero(sawDeprecatedLanguageExtension);
     runtime_->numCompartments++;
@@ -90,6 +91,11 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
 JSCompartment::~JSCompartment()
 {
     reportTelemetry();
+
+    // Write the code coverage information in a file.
+    JSRuntime* rt = runtimeFromMainThread();
+    if (rt->lcovOutput.isEnabled())
+        rt->lcovOutput.writeLCovResult(lcovOutput);
 
     js_delete(jitCompartment_);
     js_delete(watchpointMap);
@@ -530,7 +536,7 @@ JSCompartment::traceRoots(JSTracer* trc, js::gc::GCRuntime::TraceOrMarkRuntime t
 {
     if (objectMetadataState.is<PendingMetadata>()) {
         TraceRoot(trc,
-                  objectMetadataState.as<PendingMetadata>().unsafeGet(),
+                  objectMetadataState.as<PendingMetadata>().unsafeUnbarrieredForTracing(),
                   "on-stack object pending metadata");
     }
 
@@ -544,7 +550,7 @@ JSCompartment::traceRoots(JSTracer* trc, js::gc::GCRuntime::TraceOrMarkRuntime t
         // If a compartment is on-stack, we mark its global so that
         // JSContext::global() remains valid.
         if (enterCompartmentDepth && global_.unbarrieredGet())
-            TraceRoot(trc, global_.unsafeGet(), "on-stack compartment global");
+            TraceRoot(trc, global_.unsafeUnbarrieredForTracing(), "on-stack compartment global");
     }
 
     // Nothing below here needs to be treated as a root if we aren't marking
@@ -567,6 +573,32 @@ JSCompartment::traceRoots(JSTracer* trc, js::gc::GCRuntime::TraceOrMarkRuntime t
 
     if (objectMetadataTable)
         objectMetadataTable->trace(trc);
+
+    // If code coverage is only enabled with the Debugger or the LCovOutput,
+    // then the following comment holds.
+    //
+    // The scriptCountsMap maps JSScript weak-pointers to ScriptCounts
+    // structures. It uses a HashMap instead of a WeakMap, so that we can keep
+    // the data alive for the JSScript::finalize call. Thus, we do not trace the
+    // keys of the HashMap to avoid adding a strong reference to the JSScript
+    // pointers. Additionally, we assert that the JSScripts have not been moved
+    // in JSCompartment::fixupAfterMovingGC.
+    //
+    // If the code coverage is either enabled with the --dump-bytecode command
+    // line option, or with the PCCount JSFriend API functions, then we mark the
+    // keys of the map to hold the JSScript alive.
+    if (scriptCountsMap &&
+        trc->runtime()->profilingScripts &&
+        !trc->runtime()->isHeapMinorCollecting())
+    {
+        MOZ_ASSERT_IF(!trc->runtime()->isBeingDestroyed(), collectCoverage());
+        for (ScriptCountsMap::Range r = scriptCountsMap->all(); !r.empty(); r.popFront()) {
+            JSScript* script = const_cast<JSScript*>(r.front().key());
+            MOZ_ASSERT(script->hasScriptCounts());
+            TraceRoot(trc, &script, "profilingScripts");
+            MOZ_ASSERT(script == r.front().key(), "const_cast is only a work-around");
+        }
+    }
 }
 
 void
@@ -645,13 +677,6 @@ JSCompartment::sweepDebugScopes()
     JSRuntime* rt = runtimeFromAnyThread();
     if (debugScopes)
         debugScopes->sweep(rt);
-}
-
-void
-JSCompartment::sweepWeakMaps()
-{
-    /* Finalize unreachable (key,value) pairs in all weak maps. */
-    WeakMapBase::sweepCompartment(this);
 }
 
 void
@@ -745,6 +770,18 @@ JSCompartment::fixupAfterMovingGC()
     fixupGlobal();
     fixupInitialShapeTable();
     objectGroups.fixupTablesAfterMovingGC();
+
+#ifdef DEBUG
+    // Assert that none of the JSScript pointers, which are used as key of the
+    // scriptCountsMap HashMap are moved. We do not mark these keys because we
+    // need weak references. We do not use a WeakMap because these entries would
+    // be collected before the JSScript::finalize calls which is used to
+    // summarized the content of the code coverage.
+    if (scriptCountsMap) {
+        for (ScriptCountsMap::Range r = scriptCountsMap->all(); !r.empty(); r.popFront())
+            MOZ_ASSERT(!IsForwarded(r.front().key()));
+    }
+#endif
 }
 
 void
@@ -772,7 +809,6 @@ JSCompartment::clearTables()
     MOZ_ASSERT(crossCompartmentWrappers.empty());
     MOZ_ASSERT(!jitCompartment_);
     MOZ_ASSERT(!debugScopes);
-    MOZ_ASSERT(!gcWeakMapList);
     MOZ_ASSERT(enumerators->next() == enumerators);
     MOZ_ASSERT(regExps.empty());
 
@@ -808,14 +844,15 @@ JSCompartment::setNewObjectMetadata(JSContext* cx, JSObject* obj)
     assertSameCompartment(cx, this, obj);
 
     if (JSObject* metadata = objectMetadataCallback(cx, obj)) {
+        AutoEnterOOMUnsafeRegion oomUnsafe;
         assertSameCompartment(cx, metadata);
         if (!objectMetadataTable) {
             objectMetadataTable = cx->new_<ObjectWeakMap>(cx);
             if (!objectMetadataTable || !objectMetadataTable->init())
-                CrashAtUnhandlableOOM("setNewObjectMetadata");
+                oomUnsafe.crash("setNewObjectMetadata");
         }
         if (!objectMetadataTable->add(cx, obj, metadata))
-            CrashAtUnhandlableOOM("setNewObjectMetadata");
+            oomUnsafe.crash("setNewObjectMetadata");
     }
 }
 
@@ -924,14 +961,15 @@ JSCompartment::updateDebuggerObservesFlag(unsigned flag)
 {
     MOZ_ASSERT(isDebuggee());
     MOZ_ASSERT(flag == DebuggerObservesAllExecution ||
+               flag == DebuggerObservesCoverage ||
                flag == DebuggerObservesAsmJS);
 
     const GlobalObject::DebuggerVector* v = maybeGlobal()->getDebuggers();
     for (Debugger * const* p = v->begin(); p != v->end(); p++) {
         Debugger* dbg = *p;
-        if (flag == DebuggerObservesAllExecution
-            ? dbg->observesAllExecution()
-            : dbg->observesAsmJS())
+        if (flag == DebuggerObservesAllExecution ? dbg->observesAllExecution() :
+            flag == DebuggerObservesCoverage ? dbg->observesCoverage() :
+            dbg->observesAsmJS())
         {
             debugModeBits |= flag;
             return;
@@ -948,6 +986,48 @@ JSCompartment::unsetIsDebuggee()
         debugModeBits &= ~DebuggerObservesMask;
         DebugScopes::onCompartmentUnsetIsDebuggee(this);
     }
+}
+
+void
+JSCompartment::updateDebuggerObservesCoverage()
+{
+    bool previousState = debuggerObservesCoverage();
+    updateDebuggerObservesFlag(DebuggerObservesCoverage);
+    if (previousState == debuggerObservesCoverage())
+        return;
+
+    if (debuggerObservesCoverage()) {
+        // Interrupt any running interpreter frame. The scriptCounts are
+        // allocated on demand when a script resume its execution.
+        for (ActivationIterator iter(runtimeFromMainThread()); !iter.done(); ++iter) {
+            if (iter->isInterpreter())
+                iter->asInterpreter()->enableInterruptsUnconditionally();
+        }
+        return;
+    }
+
+    // If code coverage is enabled by any other means, keep it.
+    if (collectCoverage())
+        return;
+
+    clearScriptCounts();
+}
+
+void
+JSCompartment::clearScriptCounts()
+{
+    if (!scriptCountsMap)
+        return;
+
+    // Clear all hasScriptCounts_ flags of JSScript, in order to release all
+    // ScriptCounts entry of the current compartment.
+    for (ScriptCountsMap::Range r = scriptCountsMap->all(); !r.empty(); r.popFront()) {
+        ScriptCounts* value = &r.front().value();
+        r.front().key()->takeOverScriptCountsMapEntry(value);
+    }
+
+    js_delete(scriptCountsMap);
+    scriptCountsMap = nullptr;
 }
 
 void

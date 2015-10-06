@@ -239,16 +239,14 @@ NS_NewXULDocument(nsIXULDocument** result)
     if (! result)
         return NS_ERROR_NULL_POINTER;
 
-    XULDocument* doc = new XULDocument();
-    NS_ADDREF(doc);
+    nsRefPtr<XULDocument> doc = new XULDocument();
 
     nsresult rv;
     if (NS_FAILED(rv = doc->Init())) {
-        NS_RELEASE(doc);
         return rv;
     }
 
-    *result = doc;
+    doc.forget(result);
     return NS_OK;
 }
 
@@ -392,8 +390,6 @@ XULDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
     mDocumentLoadGroup = do_GetWeakReference(aLoadGroup);
 
     mChannel = aChannel;
-
-    mHaveInputEncoding = true;
 
     // Get the URI.  Note that this should match nsDocShell::OnLoadingSite
     nsresult rv =
@@ -752,9 +748,9 @@ XULDocument::AddBroadcastListenerFor(Element& aBroadcaster, Element& aListener,
     }
 
     static const PLDHashTableOps gOps = {
-        PL_DHashVoidPtrKeyStub,
-        PL_DHashMatchEntryStub,
-        PL_DHashMoveEntryStub,
+        PLDHashTable::HashVoidPtrKeyStub,
+        PLDHashTable::MatchEntryStub,
+        PLDHashTable::MoveEntryStub,
         ClearBroadcasterMapEntry,
         nullptr
     };
@@ -763,13 +759,11 @@ XULDocument::AddBroadcastListenerFor(Element& aBroadcaster, Element& aListener,
         mBroadcasterMap = new PLDHashTable(&gOps, sizeof(BroadcasterMapEntry));
     }
 
-    BroadcasterMapEntry* entry =
-        static_cast<BroadcasterMapEntry*>
-                   (PL_DHashTableSearch(mBroadcasterMap, &aBroadcaster));
-
+    auto entry = static_cast<BroadcasterMapEntry*>
+                            (mBroadcasterMap->Search(&aBroadcaster));
     if (!entry) {
         entry = static_cast<BroadcasterMapEntry*>
-            (PL_DHashTableAdd(mBroadcasterMap, &aBroadcaster, fallible));
+                           (mBroadcasterMap->Add(&aBroadcaster, fallible));
 
         if (! entry) {
             aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
@@ -824,10 +818,8 @@ XULDocument::RemoveBroadcastListenerFor(Element& aBroadcaster,
     if (! mBroadcasterMap)
         return;
 
-    BroadcasterMapEntry* entry =
-        static_cast<BroadcasterMapEntry*>
-                   (PL_DHashTableSearch(mBroadcasterMap, &aBroadcaster));
-
+    auto entry = static_cast<BroadcasterMapEntry*>
+                            (mBroadcasterMap->Search(&aBroadcaster));
     if (entry) {
         nsCOMPtr<nsIAtom> attr = do_GetAtom(aAttr);
         for (size_t i = entry->mListeners.Length() - 1; i != (size_t)-1; --i) {
@@ -924,6 +916,23 @@ XULDocument::AttributeWillChange(nsIDocument* aDocument,
     }
 }
 
+static bool
+ShouldPersistAttribute(nsIDocument* aDocument, Element* aElement)
+{
+    if (aElement->IsXULElement(nsGkAtoms::window)) {
+        if (nsCOMPtr<nsPIDOMWindow> window = aDocument->GetWindow()) {
+            bool isFullscreen;
+            window->GetFullScreen(&isFullscreen);
+            if (isFullscreen) {
+                // Don't persist attributes if it is window element and
+                // we are in fullscreen state.
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 void
 XULDocument::AttributeChanged(nsIDocument* aDocument,
                               Element* aElement, int32_t aNameSpaceID,
@@ -944,9 +953,8 @@ XULDocument::AttributeChanged(nsIDocument* aDocument,
     // Synchronize broadcast listeners
     if (mBroadcasterMap &&
         CanBroadcast(aNameSpaceID, aAttribute)) {
-        BroadcasterMapEntry* entry =
-            static_cast<BroadcasterMapEntry*>
-                       (PL_DHashTableSearch(mBroadcasterMap, aElement));
+        auto entry = static_cast<BroadcasterMapEntry*>
+                                (mBroadcasterMap->Search(aElement));
 
         if (entry) {
             // We've got listeners: push the value.
@@ -999,18 +1007,19 @@ XULDocument::AttributeChanged(nsIDocument* aDocument,
     bool listener, resolved;
     CheckBroadcasterHookup(aElement, &listener, &resolved);
 
-    // See if there is anything we need to persist in the localstore.
-    //
-    // XXX Namespace handling broken :-(
-    nsAutoString persist;
-    aElement->GetAttr(kNameSpaceID_None, nsGkAtoms::persist, persist);
-    if (!persist.IsEmpty()) {
-        // XXXldb This should check that it's a token, not just a substring.
-        if (persist.Find(nsDependentAtomString(aAttribute)) >= 0) {
+    if (ShouldPersistAttribute(aDocument, aElement)) {
+        // See if there is anything we need to persist in the localstore.
+        //
+        // XXX Namespace handling broken :-(
+        nsString persist;
+        aElement->GetAttr(kNameSpaceID_None, nsGkAtoms::persist, persist);
+        if (!persist.IsEmpty() &&
+            // XXXldb This should check that it's a token, not just a substring.
+            persist.Find(nsDependentAtomString(aAttribute)) >= 0) {
             nsContentUtils::AddScriptRunner(NS_NewRunnableMethodWithArgs
-              <nsIContent*, int32_t, nsIAtom*>
-              (this, &XULDocument::DoPersist, aElement, kNameSpaceID_None,
-               aAttribute));
+                <nsIContent*, int32_t, nsIAtom*>
+                (this, &XULDocument::DoPersist, aElement,
+                 kNameSpaceID_None, aAttribute));
         }
     }
 }
@@ -2546,25 +2555,12 @@ XULDocument::LoadOverlayInternal(nsIURI* aURI, bool aIsDynamic,
     if (aIsDynamic)
         mResolutionPhase = nsForwardReference::eStart;
 
-    // Chrome documents are allowed to load overlays from anywhere.
-    // In all other cases, the overlay is only allowed to load if
-    // the master document and prototype document have the same origin.
-
-    bool documentIsChrome = IsChromeURI(mDocumentURI);
-    if (!documentIsChrome) {
-        // Make sure we're allowed to load this overlay.
-        rv = NodePrincipal()->CheckMayLoad(aURI, true, false);
-        if (NS_FAILED(rv)) {
-            *aFailureFromContent = true;
-            return rv;
-        }
-    }
-
     // Look in the prototype cache for the prototype document with
     // the specified overlay URI. Only use the cache if the containing
     // document is chrome otherwise it may not have a system principal and
     // the cached document will, see bug 565610.
     bool overlayIsChrome = IsChromeURI(aURI);
+    bool documentIsChrome = IsChromeURI(mDocumentURI);
     mCurrentPrototype = overlayIsChrome && documentIsChrome ?
         nsXULPrototypeCache::GetInstance()->GetPrototype(aURI) : nullptr;
 
@@ -2634,11 +2630,10 @@ XULDocument::LoadOverlayInternal(nsIURI* aURI, bool aIsDynamic,
         // Add an observer to the parser; this'll get called when
         // Necko fires its On[Start|Stop]Request() notifications,
         // and will let us recover from a missing overlay.
-        ParserObserver* parserObserver =
+        nsRefPtr<ParserObserver> parserObserver =
             new ParserObserver(this, mCurrentPrototype);
-        NS_ADDREF(parserObserver);
         parser->Parse(aURI, parserObserver);
-        NS_RELEASE(parserObserver);
+        parserObserver = nullptr;
 
         nsCOMPtr<nsILoadGroup> group = do_QueryReferent(mDocumentLoadGroup);
         nsCOMPtr<nsIChannel> channel;
@@ -2649,12 +2644,13 @@ XULDocument::LoadOverlayInternal(nsIURI* aURI, bool aIsDynamic,
         rv = NS_NewChannel(getter_AddRefs(channel),
                            aURI,
                            NodePrincipal(),
+                           nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS |
                            nsILoadInfo::SEC_FORCE_INHERIT_PRINCIPAL,
                            nsIContentPolicy::TYPE_OTHER,
                            group);
 
         if (NS_SUCCEEDED(rv)) {
-            rv = channel->AsyncOpen(listener, nullptr);
+            rv = channel->AsyncOpen2(listener);
         }
 
         if (NS_FAILED(rv)) {
@@ -3255,7 +3251,8 @@ XULDocument::LoadScript(nsXULPrototypeScript* aScriptProto, bool* aBlock)
                             this,
                             static_cast<nsIDocument*>(this),
                             aScriptProto->mSrcURI,
-                            NS_LITERAL_STRING("application/x-javascript"));
+                            NS_LITERAL_STRING("application/x-javascript"),
+                            false);
     if (NS_FAILED(rv)) {
       *aBlock = false;
       return rv;
@@ -4106,8 +4103,8 @@ XULDocument::BroadcastAttributeChangeFromOverlay(nsIContent* aNode,
     if (!aNode->IsElement())
         return rv;
 
-    BroadcasterMapEntry* entry = static_cast<BroadcasterMapEntry*>
-        (PL_DHashTableSearch(mBroadcasterMap, aNode->AsElement()));
+    auto entry = static_cast<BroadcasterMapEntry*>
+                            (mBroadcasterMap->Search(aNode->AsElement()));
     if (!entry)
         return rv;
 

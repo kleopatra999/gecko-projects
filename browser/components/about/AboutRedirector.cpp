@@ -99,9 +99,12 @@ static RedirEntry kRedirMap[] = {
 #endif
   { "accounts", "chrome://browser/content/aboutaccounts/aboutaccounts.xhtml",
     nsIAboutModule::ALLOW_SCRIPT },
-  { "app-manager", "chrome://browser/content/devtools/app-manager/index.xul",
+  { "app-manager", "chrome://devtools/content/app-manager/content/index.xul",
     nsIAboutModule::ALLOW_SCRIPT },
   { "customizing", "chrome://browser/content/customizableui/aboutCustomizing.xul",
+    nsIAboutModule::ALLOW_SCRIPT },
+  {
+    "debugging", "chrome://devtools/content/aboutdebugging/aboutdebugging.xhtml",
     nsIAboutModule::ALLOW_SCRIPT },
   { "loopconversation", "chrome://browser/content/loop/conversation.html",
     nsIAboutModule::URI_SAFE_FOR_UNTRUSTED_CONTENT |

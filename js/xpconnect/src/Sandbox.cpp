@@ -441,17 +441,6 @@ sandbox_moved(JSObject* obj, const JSObject* old)
 }
 
 static bool
-sandbox_convert(JSContext* cx, HandleObject obj, JSType type, MutableHandleValue vp)
-{
-    if (type == JSTYPE_OBJECT) {
-        vp.setObject(*obj);
-        return true;
-    }
-
-    return OrdinaryToPrimitive(cx, obj, type, vp);
-}
-
-static bool
 writeToProto_setProperty(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
                          JS::MutableHandleValue vp, JS::ObjectOpResult& result)
 {
@@ -569,7 +558,7 @@ static const js::Class SandboxClass = {
     nullptr, nullptr, nullptr, nullptr,
     sandbox_enumerate, sandbox_resolve,
     nullptr,        /* mayResolve */
-    sandbox_convert,  sandbox_finalize,
+    sandbox_finalize,
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
     JS_NULL_CLASS_SPEC,
     {
@@ -590,7 +579,7 @@ static const js::Class SandboxWriteToProtoClass = {
     sandbox_addProperty, nullptr, nullptr, nullptr,
     sandbox_enumerate, sandbox_resolve,
     nullptr,        /* mayResolve */
-    sandbox_convert,  sandbox_finalize,
+    sandbox_finalize,
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
     JS_NULL_CLASS_SPEC,
     {
@@ -828,7 +817,7 @@ xpc::SandboxProxyHandler::hasOwn(JSContext* cx, JS::Handle<JSObject*> proxy,
 
 bool
 xpc::SandboxProxyHandler::get(JSContext* cx, JS::Handle<JSObject*> proxy,
-                              JS::Handle<JSObject*> receiver,
+                              JS::Handle<JS::Value> receiver,
                               JS::Handle<jsid> id,
                               JS::MutableHandle<Value> vp) const
 {
@@ -863,8 +852,6 @@ xpc::SandboxProxyHandler::enumerate(JSContext* cx, JS::Handle<JSObject*> proxy,
 bool
 xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj)
 {
-    MOZ_ASSERT(JS_IsArrayObject(cx, obj));
-
     uint32_t length;
     bool ok = JS_GetArrayLength(cx, obj, &length);
     NS_ENSURE_TRUE(ok, false);
@@ -1248,10 +1235,9 @@ GetExpandedPrincipal(JSContext* cx, HandleObject arrayObj, nsIExpandedPrincipal*
     MOZ_ASSERT(out);
     uint32_t length;
 
-    if (!JS_IsArrayObject(cx, arrayObj) ||
-        !JS_GetArrayLength(cx, arrayObj, &length) ||
-        !length)
-    {
+    if (!JS_GetArrayLength(cx, arrayObj, &length))
+        return false;
+    if (!length) {
         // We need a whitelist of principals or uri strings to create an
         // expanded principal, if we got an empty array or something else
         // report error.
@@ -1481,7 +1467,10 @@ SandboxOptions::ParseGlobalProperties()
     }
 
     RootedObject ctors(mCx, &value.toObject());
-    if (!JS_IsArrayObject(mCx, ctors)) {
+    bool isArray;
+    if (!JS_IsArrayObject(mCx, ctors, &isArray))
+        return false;
+    if (!isArray) {
         JS_ReportError(mCx, "Expected an array value for wantGlobalProperties");
         return false;
     }
@@ -1577,7 +1566,10 @@ nsXPCComponents_utils_Sandbox::CallOrConstruct(nsIXPConnectWrappedNative* wrappe
         prinOrSop = principal;
     } else if (args[0].isObject()) {
         RootedObject obj(cx, &args[0].toObject());
-        if (JS_IsArrayObject(cx, obj)) {
+        bool isArray;
+        if (!JS_IsArrayObject(cx, obj, &isArray)) {
+            ok = false;
+        } else if (isArray) {
             ok = GetExpandedPrincipal(cx, obj, getter_AddRefs(expanded));
             prinOrSop = expanded;
         } else {

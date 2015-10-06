@@ -215,6 +215,38 @@ GeckoMediaPluginServiceChild::UpdateTrialCreateState(const nsAString& aKeySystem
   return NS_OK;
 }
 
+void
+GeckoMediaPluginServiceChild::CrashPluginNow(uint32_t aPluginId, GMPCrashReason aReason)
+{
+  if (NS_GetCurrentThread() != mGMPThread) {
+    mGMPThread->Dispatch(NS_NewRunnableMethodWithArgs<uint32_t, GMPCrashReason>(
+      this, &GeckoMediaPluginServiceChild::CrashPluginNow,
+      aPluginId, aReason), NS_DISPATCH_NORMAL);
+    return;
+  }
+
+  class Callback : public GetServiceChildCallback
+  {
+  public:
+    Callback(uint32_t aPluginId, GMPCrashReason aReason)
+      : mPluginId(aPluginId)
+      , mReason(aReason)
+    { }
+
+    virtual void Done(GMPServiceChild* aService) override
+    {
+      aService->SendCrashPluginNow(mPluginId, mReason);
+    }
+
+  private:
+    uint32_t mPluginId;
+    GMPCrashReason mReason;
+  };
+
+  UniquePtr<GetServiceChildCallback> callback(new Callback(aPluginId, aReason));
+  GetServiceChild(Move(callback));
+}
+
 NS_IMETHODIMP
 GeckoMediaPluginServiceChild::Observe(nsISupports* aSubject,
                                       const char* aTopic,
@@ -311,34 +343,26 @@ GMPServiceChild::GetBridgedGMPContentParent(ProcessId aOtherPid,
   mContentParents.Get(aOtherPid, aGMPContentParent);
 }
 
-static PLDHashOperator
-FindAndRemoveGMPContentParent(const uint64_t& aKey,
-                              nsRefPtr<GMPContentParent>& aData,
-                              void* aUserArg)
-{
-  return aData == aUserArg ?
-         (PLDHashOperator)(PL_DHASH_STOP | PL_DHASH_REMOVE) :
-         PL_DHASH_NEXT;
-}
-
 void
 GMPServiceChild::RemoveGMPContentParent(GMPContentParent* aGMPContentParent)
 {
-  mContentParents.Enumerate(FindAndRemoveGMPContentParent, aGMPContentParent);
-}
-
-static PLDHashOperator
-FillProcessIDArray(const uint64_t& aKey, GMPContentParent*, void* aUserArg)
-{
-  static_cast<nsTArray<base::ProcessId>*>(aUserArg)->AppendElement(aKey);
-  return PL_DHASH_NEXT;
+  for (auto iter = mContentParents.Iter(); !iter.Done(); iter.Next()) {
+    nsRefPtr<GMPContentParent>& parent = iter.Data();
+    if (parent == aGMPContentParent) {
+      iter.Remove();
+      break;
+    }
+  }
 }
 
 void
 GMPServiceChild::GetAlreadyBridgedTo(nsTArray<base::ProcessId>& aAlreadyBridgedTo)
 {
   aAlreadyBridgedTo.SetCapacity(mContentParents.Count());
-  mContentParents.EnumerateRead(FillProcessIDArray, &aAlreadyBridgedTo);
+  for (auto iter = mContentParents.Iter(); !iter.Done(); iter.Next()) {
+    const uint64_t& id = iter.Key();
+    aAlreadyBridgedTo.AppendElement(id);
+  }
 }
 
 class OpenPGMPServiceChild : public nsRunnable

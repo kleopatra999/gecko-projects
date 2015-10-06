@@ -135,6 +135,7 @@ public:
   }
 
   virtual void ProcessBlock(AudioNodeStream* aStream,
+                            GraphTime aFrom,
                             const AudioBlock& aInput,
                             AudioBlock* aOutput,
                             bool *aFinished) override
@@ -149,6 +150,7 @@ public:
       } else {
         if (mLeftOverData != INT_MIN) {
           mLeftOverData = INT_MIN;
+          aStream->CheckForInactive();
           mHRTFPanner->reset();
 
           nsRefPtr<PlayingRefChangeHandler> refchanged =
@@ -156,7 +158,7 @@ public:
           aStream->Graph()->
             DispatchToMainThreadAfterStreamStateUpdate(refchanged.forget());
         }
-        *aOutput = aInput;
+        aOutput->SetNull(WEBAUDIO_BLOCK_SIZE);
         return;
       }
     } else if (mPanningModelFunction == &PannerNodeEngine::HRTFPanningFunction) {
@@ -170,6 +172,11 @@ public:
     }
 
     (this->*mPanningModelFunction)(aInput, aOutput);
+  }
+
+  virtual bool IsActive() const override
+  {
+    return mLeftOverData != INT_MIN;
   }
 
   void ComputeAzimuthAndElevation(float& aAzimuth, float& aElevation);
@@ -240,7 +247,7 @@ PannerNode::PannerNode(AudioContext* aContext)
   , mConeOuterAngle(360.)
   , mConeOuterGain(0.)
 {
-  mStream = AudioNodeStream::Create(aContext->Graph(),
+  mStream = AudioNodeStream::Create(aContext,
                                     new PannerNodeEngine(this),
                                     AudioNodeStream::NO_STREAM_FLAGS);
   // We should register once we have set up our stream and engine.

@@ -9,7 +9,7 @@ describe("loop.shared.views.TextChatView", function () {
   var sharedViews = loop.shared.views;
   var TestUtils = React.addons.TestUtils;
   var CHAT_MESSAGE_TYPES = loop.store.CHAT_MESSAGE_TYPES;
-  var CHAT_CONTENT_TYPES = loop.store.CHAT_CONTENT_TYPES;
+  var CHAT_CONTENT_TYPES = loop.shared.utils.CHAT_CONTENT_TYPES;
   var fixtures = document.querySelector("#fixtures");
 
   var dispatcher, fakeSdkDriver, sandbox, store, fakeClock;
@@ -580,7 +580,7 @@ describe("loop.shared.views.TextChatView", function () {
       var node = view.getDOMNode();
       expect(node.querySelector(".text-chat-entries")).to.not.eql(null);
 
-      var entries = node.querySelectorAll(".text-chat-entry");
+      var entries = node.querySelectorAll(".text-chat-header");
       expect(entries.length).eql(1);
       expect(entries[0].classList.contains("special")).eql(true);
       expect(entries[0].classList.contains("room-name")).eql(true);

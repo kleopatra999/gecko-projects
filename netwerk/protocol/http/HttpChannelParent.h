@@ -21,6 +21,8 @@
 #include "nsIAuthPromptProvider.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "nsINetworkInterceptController.h"
+#include "nsIDeprecationWarner.h"
+#include "nsIPackagedAppChannelListener.h"
 
 class nsICacheEntry;
 class nsIAssociatedContentSecurity;
@@ -43,7 +45,9 @@ class HttpChannelParent final : public PHttpChannelParent
                               , public ADivertableParentChannel
                               , public nsIAuthPromptProvider
                               , public nsINetworkInterceptController
+                              , public nsIDeprecationWarner
                               , public DisconnectableParent
+                              , public nsIPackagedAppChannelListener
                               , public HttpChannelSecurityWarningReporter
 {
   virtual ~HttpChannelParent();
@@ -52,12 +56,14 @@ public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
+  NS_DECL_NSIPACKAGEDAPPCHANNELLISTENER
   NS_DECL_NSIPARENTCHANNEL
   NS_DECL_NSIPARENTREDIRECTINGCHANNEL
   NS_DECL_NSIPROGRESSEVENTSINK
   NS_DECL_NSIINTERFACEREQUESTOR
   NS_DECL_NSIAUTHPROMPTPROVIDER
   NS_DECL_NSINETWORKINTERCEPTCONTROLLER
+  NS_DECL_NSIDEPRECATIONWARNER
 
   HttpChannelParent(const dom::PBrowserOrId& iframeEmbedding,
                     nsILoadContext* aLoadContext,
@@ -121,7 +127,8 @@ protected:
                    const nsCString&           aSecurityInfoSerialization,
                    const uint32_t&            aCacheKey,
                    const nsCString&           aSchedulingContextID,
-                   const OptionalCorsPreflightArgs& aCorsPreflightArgs);
+                   const OptionalCorsPreflightArgs& aCorsPreflightArgs,
+                   const uint32_t&            aInitialRwin);
 
   virtual bool RecvSetPriority(const uint16_t& priority) override;
   virtual bool RecvSetClassOfService(const uint32_t& cos) override;
@@ -169,9 +176,12 @@ private:
   void DivertOnStopRequest(const nsresult& statusCode);
   void DivertComplete();
 
+  void SynthesizeResponse(nsIInterceptedChannel* aChannel);
+
   friend class DivertDataAvailableEvent;
   friend class DivertStopRequestEvent;
   friend class DivertCompleteEvent;
+  friend class ResponseSynthesizer;
 
   nsRefPtr<nsHttpChannel>       mChannel;
   nsCOMPtr<nsICacheEntry>       mCacheEntry;

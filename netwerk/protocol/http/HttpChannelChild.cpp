@@ -34,6 +34,7 @@
 #include "nsPerformance.h"
 #include "mozIThirdPartyUtil.h"
 #include "nsContentSecurityManager.h"
+#include "nsIDeprecationWarner.h"
 
 #ifdef OS_POSIX
 #include "chrome/common/file_descriptor_set_posix.h"
@@ -1719,6 +1720,7 @@ HttpChannelChild::ContinueAsyncOpen()
   openArgs.appCacheClientID() = appCacheClientId;
   openArgs.allowSpdy() = mAllowSpdy;
   openArgs.allowAltSvc() = mAllowAltSvc;
+  openArgs.initialRwin() = mInitialRwin;
 
   uint32_t cacheKey = 0;
   if (mCacheKey) {
@@ -2270,8 +2272,7 @@ HttpChannelChild::OverrideWithSynthesizedResponse(nsAutoPtr<nsHttpResponseHead>&
   mResponseHead = aResponseHead;
   mSynthesizedResponse = true;
 
-  uint16_t status = mResponseHead->Status();
-  if (status != 200 && status != 404) {
+  if (WillRedirect(mResponseHead)) {
     // Continue with the original cross-process request
     nsresult rv = ContinueAsyncOpen();
     NS_ENSURE_SUCCESS_VOID(rv);
@@ -2317,6 +2318,18 @@ HttpChannelChild::ForceIntercepted()
 {
   mShouldParentIntercept = true;
   return NS_OK;
+}
+
+bool
+HttpChannelChild::RecvIssueDeprecationWarning(const uint32_t& warning,
+                                              const bool& asError)
+{
+  nsCOMPtr<nsIDeprecationWarner> warner;
+  GetCallback(warner);
+  if (warner) {
+    warner->IssueWarning(warning, asError);
+  }
+  return true;
 }
 
 } // namespace net

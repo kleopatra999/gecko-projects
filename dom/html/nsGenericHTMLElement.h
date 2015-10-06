@@ -409,7 +409,7 @@ public:
   NS_IMETHOD GetItemId(nsAString& aId) final override {
     nsString id;
     GetItemId(id);
-    aId.Assign(aId);
+    aId.Assign(id);
     return NS_OK;
   }
   NS_IMETHOD SetItemId(const nsAString& aId) final override {
@@ -597,7 +597,7 @@ public:
   virtual bool IsHTMLFocusable(bool aWithMouse,
                                bool *aIsFocusable,
                                int32_t *aTabIndex);
-  virtual void PerformAccesskey(bool aKeyCausesActivation,
+  virtual bool PerformAccesskey(bool aKeyCausesActivation,
                                 bool aIsTrustedEvent) override;
 
   /**

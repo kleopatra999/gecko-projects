@@ -994,14 +994,6 @@ nsFrameConstructorState::nsFrameConstructorState(nsIPresShell* aPresShell,
 
 nsFrameConstructorState::~nsFrameConstructorState()
 {
-  // Frame order comparison functions only work properly when the placeholders
-  // have been inserted into the frame tree. So for example if we have a new float
-  // containing the placeholder for a new abs-pos frame, and we process the abs-pos
-  // insertion first, then we won't be able to find the right place to insert in
-  // in the abs-pos list. So put floats in first, because they can contain placeholders
-  // for abs-pos and fixed-pos items whose containing blocks are outside the floats.
-  // Then put abs-pos frames in, because they can contain placeholders for fixed-pos
-  // items whose containing block is outside the abs-pos frames.
   MOZ_COUNT_DTOR(nsFrameConstructorState);
   ProcessFrameInsertions(mFloatedItems, nsIFrame::kFloatList);
   ProcessFrameInsertions(mAbsoluteItems, nsIFrame::kAbsoluteList);
@@ -1270,6 +1262,11 @@ nsFrameConstructorState::ProcessFrameInsertions(nsAbsoluteItems& aFrameItems,
     } else {
       containingBlock->SetInitialChildList(aChildListID, aFrameItems);
     }
+  } else if (aChildListID == nsIFrame::kFixedList ||
+             aChildListID == nsIFrame::kAbsoluteList) {
+    // The order is not important for abs-pos/fixed-pos frame list, just
+    // append the frame items to the list directly.
+    mFrameManager->AppendFrames(containingBlock, aChildListID, aFrameItems);
   } else {
     // Note that whether the frame construction context is doing an append or
     // not is not helpful here, since it could be appending to some frame in
@@ -2292,100 +2289,6 @@ NeedFrameFor(const nsFrameConstructorState& aState,
  * END TABLE SECTION
  ***********************************************/
 
-static bool CheckOverflow(nsPresContext* aPresContext,
-                            const nsStyleDisplay* aDisplay)
-{
-  if (aDisplay->mOverflowX == NS_STYLE_OVERFLOW_VISIBLE &&
-      aDisplay->mScrollBehavior == NS_STYLE_SCROLL_BEHAVIOR_AUTO &&
-      aDisplay->mScrollSnapTypeX == NS_STYLE_SCROLL_SNAP_TYPE_NONE &&
-      aDisplay->mScrollSnapTypeY == NS_STYLE_SCROLL_SNAP_TYPE_NONE &&
-      aDisplay->mScrollSnapPointsX == nsStyleCoord(eStyleUnit_None) &&
-      aDisplay->mScrollSnapPointsY == nsStyleCoord(eStyleUnit_None) &&
-      !aDisplay->mScrollSnapDestination.mXPosition.mHasPercent &&
-      !aDisplay->mScrollSnapDestination.mYPosition.mHasPercent &&
-      aDisplay->mScrollSnapDestination.mXPosition.mLength == 0 &&
-      aDisplay->mScrollSnapDestination.mYPosition.mLength == 0) {
-    return false;
-  }
-
-  if (aDisplay->mOverflowX == NS_STYLE_OVERFLOW_CLIP) {
-    aPresContext->SetViewportScrollbarStylesOverride(
-                                    ScrollbarStyles(NS_STYLE_OVERFLOW_HIDDEN,
-                                                    NS_STYLE_OVERFLOW_HIDDEN,
-                                                    aDisplay));
-  } else {
-    aPresContext->SetViewportScrollbarStylesOverride(
-                                    ScrollbarStyles(aDisplay));
-  }
-  return true;
-}
-
-/**
- * This checks the root element and the HTML BODY, if any, for an "overflow" property
- * that should be applied to the viewport. If one is found then we return the
- * element that we took the overflow from (which should then be treated as
- * "overflow:visible"), and we store the overflow style in the prescontext.
- * @return if scroll was propagated from some content node, the content node it
- *         was propagated from.
- */
-nsIContent*
-nsCSSFrameConstructor::PropagateScrollToViewport()
-{
-  // Set default
-  nsPresContext* presContext = mPresShell->GetPresContext();
-  presContext->SetViewportScrollbarStylesOverride(
-                             ScrollbarStyles(NS_STYLE_OVERFLOW_AUTO,
-                                             NS_STYLE_OVERFLOW_AUTO));
-
-  // We never mess with the viewport scroll state
-  // when printing or in print preview
-  if (presContext->IsPaginated()) {
-    return nullptr;
-  }
-
-  Element* docElement = mDocument->GetRootElement();
-
-  // Check the style on the document root element
-  nsStyleSet *styleSet = mPresShell->StyleSet();
-  nsRefPtr<nsStyleContext> rootStyle;
-  rootStyle = styleSet->ResolveStyleFor(docElement, nullptr);
-  if (CheckOverflow(presContext, rootStyle->StyleDisplay())) {
-    // tell caller we stole the overflow style from the root element
-    return docElement;
-  }
-
-  // Don't look in the BODY for non-HTML documents or HTML documents
-  // with non-HTML roots
-  // XXX this should be earlier; we shouldn't even look at the document root
-  // for non-HTML documents. Fix this once we support explicit CSS styling
-  // of the viewport
-  // XXX what about XHTML?
-  nsCOMPtr<nsIDOMHTMLDocument> htmlDoc(do_QueryInterface(mDocument));
-  if (!htmlDoc || !docElement->IsHTMLElement()) {
-    return nullptr;
-  }
-
-  nsCOMPtr<nsIDOMHTMLElement> body;
-  htmlDoc->GetBody(getter_AddRefs(body));
-  nsCOMPtr<nsIContent> bodyElement = do_QueryInterface(body);
-
-  if (!bodyElement ||
-      !bodyElement->NodeInfo()->Equals(nsGkAtoms::body)) {
-    // The body is not a <body> tag, it's a <frameset>.
-    return nullptr;
-  }
-
-  nsRefPtr<nsStyleContext> bodyStyle;
-  bodyStyle = styleSet->ResolveStyleFor(bodyElement->AsElement(), rootStyle);
-
-  if (CheckOverflow(presContext, bodyStyle->StyleDisplay())) {
-    // tell caller we stole the overflow style from the body element
-    return bodyElement;
-  }
-
-  return nullptr;
-}
-
 nsIFrame*
 nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocElement,
                                                 nsILayoutHistoryState*   aFrameState)
@@ -2404,13 +2307,13 @@ nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocEle
     GetRootFrame()->SetStyleContextWithoutNotification(sc);
   }
 
-  // Make sure to call PropagateScrollToViewport before
+  // Make sure to call UpdateViewportScrollbarStylesOverride before
   // SetUpDocElementContainingBlock, since it sets up our scrollbar state
   // properly.
-#ifdef DEBUG
-  nsIContent* propagatedScrollFrom =
-#endif
-    PropagateScrollToViewport();
+  DebugOnly<nsIContent*> propagatedScrollFrom;
+  if (nsPresContext* presContext = mPresShell->GetPresContext()) {
+    propagatedScrollFrom = presContext->UpdateViewportScrollbarStylesOverride();
+  }
 
   SetUpDocElementContainingBlock(aDocElement);
 
@@ -2484,12 +2387,10 @@ nsCSSFrameConstructor::ConstructDocElementFrame(Element*                 aDocEle
 
   // --------- IF SCROLLABLE WRAP IN SCROLLFRAME --------
 
-#ifdef DEBUG
   NS_ASSERTION(!display->IsScrollableOverflow() ||
                state.mPresContext->IsPaginated() ||
                propagatedScrollFrom == aDocElement,
                "Scrollbars should have been propagated to the viewport");
-#endif
 
   if (MOZ_UNLIKELY(display->mDisplay == NS_STYLE_DISPLAY_NONE)) {
     SetUndisplayedContent(aDocElement, styleContext);
@@ -4522,8 +4423,10 @@ nsCSSFrameConstructor::FindDisplayData(const nsStyleDisplay* aDisplay,
   // make this function static.
   bool propagatedScrollToViewport = false;
   if (aElement->IsHTMLElement(nsGkAtoms::body)) {
-    propagatedScrollToViewport =
-      PropagateScrollToViewport() == aElement;
+    if (nsPresContext* presContext = mPresShell->GetPresContext()) {
+      propagatedScrollToViewport =
+        presContext->UpdateViewportScrollbarStylesOverride() == aElement;
+    }
   }
 
   NS_ASSERTION(!propagatedScrollToViewport ||

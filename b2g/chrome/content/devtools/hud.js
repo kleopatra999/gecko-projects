@@ -10,16 +10,16 @@ const DEVELOPER_HUD_LOG_PREFIX = 'DeveloperHUD';
 const CUSTOM_HISTOGRAM_PREFIX = 'DEVTOOLS_HUD_CUSTOM_';
 
 XPCOMUtils.defineLazyGetter(this, 'devtools', function() {
-  const {devtools} = Cu.import('resource://gre/modules/devtools/Loader.jsm', {});
+  const {devtools} = Cu.import('resource://gre/modules/devtools/shared/Loader.jsm', {});
   return devtools;
 });
 
 XPCOMUtils.defineLazyGetter(this, 'DebuggerClient', function() {
-  return devtools.require('devtools/toolkit/client/main').DebuggerClient;
+  return devtools.require('devtools/shared/client/main').DebuggerClient;
 });
 
 XPCOMUtils.defineLazyGetter(this, 'WebConsoleUtils', function() {
-  return devtools.require('devtools/toolkit/webconsole/utils').Utils;
+  return devtools.require('devtools/shared/webconsole/utils').Utils;
 });
 
 XPCOMUtils.defineLazyGetter(this, 'EventLoopLagFront', function() {
@@ -36,7 +36,7 @@ XPCOMUtils.defineLazyGetter(this, 'MemoryFront', function() {
 
 Cu.import('resource://gre/modules/Frames.jsm');
 
-let _telemetryDebug = true;
+var _telemetryDebug = true;
 
 function telemetryDebug(...args) {
   if (_telemetryDebug) {
@@ -50,7 +50,7 @@ function telemetryDebug(...args) {
  * showing visual debug information about apps. Each widget corresponds to a
  * metric as tracked by a metric watcher (e.g. consoleWatcher).
  */
-let developerHUD = {
+var developerHUD = {
 
   _targets: new Map(),
   _histograms: new Set(),
@@ -190,7 +190,7 @@ let developerHUD = {
  * metrics, and how to notify the front-end when metrics have changed.
  */
 function Target(frame, actor) {
-  this._frame = frame;
+  this.frame = frame;
   this.actor = actor;
   this.metrics = new Map();
   this._appName = null;
@@ -198,15 +198,8 @@ function Target(frame, actor) {
 
 Target.prototype = {
 
-  get frame() {
-    let frame = this._frame;
-    let systemapp = document.querySelector('#systemapp');
-
-    return (frame === systemapp ? getContentWindow() : frame);
-  },
-
   get manifest() {
-    return this._frame.appManifestURL;
+    return this.frame.appManifestURL;
   },
 
   get appName() {
@@ -433,7 +426,7 @@ Target.prototype = {
  * The Console Watcher tracks the following metrics in apps: reflows, warnings,
  * and errors, with security errors reported separately.
  */
-let consoleWatcher = {
+var consoleWatcher = {
 
   _client: null,
   _targets: new Map(),
@@ -695,7 +688,7 @@ let consoleWatcher = {
 developerHUD.registerWatcher(consoleWatcher);
 
 
-let eventLoopLagWatcher = {
+var eventLoopLagWatcher = {
   _client: null,
   _fronts: new Map(),
   _active: false,
@@ -760,7 +753,7 @@ developerHUD.registerWatcher(eventLoopLagWatcher);
  * to the app-launch epoch and emits an "app-start-time-<performance mark name>"
  * event containing the delta.
  */
-let performanceEntriesWatcher = {
+var performanceEntriesWatcher = {
   _client: null,
   _fronts: new Map(),
   _appLaunchName: null,
@@ -781,8 +774,7 @@ let performanceEntriesWatcher = {
     let defaultValue = this._supported.join(',');
 
     SettingsListener.observe(setting, defaultValue, supported => {
-      let value = supported || defaultValue;
-      this._supported = value.split(',');
+      this._supported = supported.split(',');
     });
   },
 
@@ -865,7 +857,7 @@ developerHUD.registerWatcher(performanceEntriesWatcher);
 /**
  * The Memory Watcher uses devtools actors to track memory usage.
  */
-let memoryWatcher = {
+var memoryWatcher = {
 
   _client: null,
   _fronts: new Map(),

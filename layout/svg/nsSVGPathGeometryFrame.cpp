@@ -351,8 +351,23 @@ nsSVGPathGeometryFrame::GetFrameForPoint(const gfxPoint& aPoint)
 nsRect
 nsSVGPathGeometryFrame::GetCoveredRegion()
 {
+  gfxMatrix canvasTM = GetCanvasTM();
+  if (canvasTM.PreservesAxisAlignedRectangles()) {
+    return nsSVGUtils::TransformFrameRectToOuterSVG(
+             mRect, canvasTM, PresContext());
+  }
+
+  // To get tight bounds we need to compute directly in outer SVG coordinates
+  uint32_t flags = nsSVGUtils::eBBoxIncludeFill |
+                   nsSVGUtils::eBBoxIncludeStroke |
+                   nsSVGUtils::eBBoxIncludeMarkers;
+  gfxRect extent =
+    GetBBoxContribution(ToMatrix(canvasTM), flags).ToThebesRect();
+  nsRect region = nsLayoutUtils::RoundGfxRectToAppRect(
+                    extent, PresContext()->AppUnitsPerCSSPixel());
+
   return nsSVGUtils::TransformFrameRectToOuterSVG(
-           mRect, GetCanvasTM(), PresContext());
+                       region, gfxMatrix(), PresContext());
 }
 
 void
@@ -487,6 +502,9 @@ nsSVGPathGeometryFrame::GetBBoxContribution(const Matrix &aToBBoxUserspace,
   if (getStroke &&
       nsSVGUtils::GetNonScalingStrokeTransform(this, &userToOuterSVG)) {
     Matrix moz2dUserToOuterSVG = ToMatrix(userToOuterSVG);
+    if (moz2dUserToOuterSVG.IsSingular()) {
+      return bbox;
+    }
     gotSimpleBounds = element->GetGeometryBounds(&simpleBounds,
                                                  strokeOptions,
                                                  aToBBoxUserspace,

@@ -13,6 +13,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
+import java.net.MalformedURLException;
 import java.net.Proxy;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -56,6 +59,7 @@ import org.mozilla.gecko.util.ThreadUtils;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
@@ -81,6 +85,7 @@ import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.hardware.display.DisplayManager;
 import android.hardware.Sensor;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
@@ -107,6 +112,7 @@ import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.ContextThemeWrapper;
+import android.view.Display;
 import android.view.HapticFeedbackConstants;
 import android.view.Surface;
 import android.view.SurfaceView;
@@ -596,6 +602,31 @@ public class GeckoAppShell
     @WrapForJNI
     public static void enableLocationHighAccuracy(final boolean enable) {
         locationHighAccuracyEnabled = enable;
+    }
+
+    @WrapForJNI
+    public static boolean setAlarm(int aSeconds, int aNanoSeconds) {
+        AlarmManager am = (AlarmManager)
+            getContext().getSystemService(Context.ALARM_SERVICE);
+
+        Intent intent = new Intent(getContext(), AlarmReceiver.class);
+        PendingIntent pi = PendingIntent.getBroadcast(getContext(), 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+
+        // AlarmManager only supports millisecond precision
+        long time = ((long)aSeconds * 1000) + ((long)aNanoSeconds/1_000_000L);
+        am.setExact(AlarmManager.RTC_WAKEUP, time, pi);
+
+        return true;
+    }
+
+    @WrapForJNI
+    public static void disableAlarm() {
+        AlarmManager am = (AlarmManager)
+            getContext().getSystemService(Context.ALARM_SERVICE);
+
+        Intent intent = new Intent(getContext(), AlarmReceiver.class);
+        PendingIntent pi = PendingIntent.getBroadcast(getContext(), 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+        am.cancel(pi);
     }
 
     @WrapForJNI
@@ -2592,6 +2623,55 @@ public class GeckoAppShell
         return connection.getInputStream();
     }
 
+    private static class BitmapConnection extends URLConnection {
+        private Bitmap bitmap;
+
+        BitmapConnection(Bitmap b) throws MalformedURLException, IOException {
+            super(null);
+            bitmap = b;
+        }
+
+        @Override
+        public void connect() {}
+
+        @Override
+        public InputStream getInputStream() throws IOException {
+            return new BitmapInputStream();
+        }
+
+        @Override
+        public String getContentType() {
+            return "image/png";
+        }
+
+        private final class BitmapInputStream extends PipedInputStream {
+            private boolean mHaveConnected = false;
+
+            @Override
+            public synchronized int read(byte[] buffer, int byteOffset, int byteCount)
+                                    throws IOException {
+                if (mHaveConnected) {
+                    return super.read(buffer, byteOffset, byteCount);
+                }
+
+                final PipedOutputStream output = new PipedOutputStream();
+                connect(output);
+                ThreadUtils.postToBackgroundThread(
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            try {
+                                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output);
+                                output.close();
+                            } catch (IOException ioe) {}
+                        }
+                    });
+                mHaveConnected = true;
+                return super.read(buffer, byteOffset, byteCount);
+            }
+        }
+    }
+
     @WrapForJNI(allowMultithread = true, narrowChars = true)
     static URLConnection getConnection(String url) {
         try {
@@ -2600,6 +2680,23 @@ public class GeckoAppShell
                 spec = url.substring(10);
             } else {
                 spec = url.substring(8);
+            }
+
+            // Check if we are loading a package icon.
+            try {
+                if (spec.startsWith("icon/")) {
+                    String[] splits = spec.split("/");
+                    if (splits.length != 2) {
+                        return null;
+                    }
+                    final String pkg = splits[1];
+                    final PackageManager pm = getContext().getPackageManager();
+                    final Drawable d = pm.getApplicationIcon(pkg);
+                    final Bitmap bitmap = BitmapUtils.getBitmapFromDrawable(d);
+                    return new BitmapConnection(bitmap);
+                }
+            } catch(Exception ex) {
+                Log.e(LOGTAG, "error", ex);
             }
 
             // if the colon got stripped, put it back
@@ -2670,5 +2767,11 @@ public class GeckoAppShell
             return 1;
         }
         return 0;
+    }
+
+    @WrapForJNI
+    static Rect getScreenSize() {
+        Display disp = getGeckoInterface().getActivity().getWindowManager().getDefaultDisplay();
+        return new Rect(0, 0, disp.getWidth(), disp.getHeight());
     }
 }

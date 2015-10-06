@@ -218,6 +218,13 @@ ViewSourceChrome.prototype = {
   },
 
   /**
+   * Getter for the nsIWebNavigation of the view source browser.
+   */
+  get webNav() {
+    return this.browser.webNavigation;
+  },
+
+  /**
    * Send the browser forward in its history.
    */
   goForward() {
@@ -691,12 +698,12 @@ ViewSourceChrome.prototype = {
   },
 };
 
-let viewSourceChrome = new ViewSourceChrome();
+var viewSourceChrome = new ViewSourceChrome();
 
 /**
  * PrintUtils uses this to make Print Preview work.
  */
-let PrintPreviewListener = {
+var PrintPreviewListener = {
   _ppBrowser: null,
 
   getPrintPreviewBrowser() {

@@ -19,7 +19,6 @@
 #include "nsPromiseFlatString.h"
 
 #include <jni.h>
-#include <string.h>
 
 using namespace mozilla;
 using namespace mozilla::gl;
@@ -34,10 +33,21 @@ namespace mozilla {
     NS_WARNING("callback not set"); \
   }
 
+static const char* TranslateMimeType(const nsACString& aMimeType)
+{
+  if (aMimeType.EqualsLiteral("video/webm; codecs=vp8")) {
+    return "video/x-vnd.on2.vp8";
+  } else if (aMimeType.EqualsLiteral("video/webm; codecs=vp9")) {
+    return "video/x-vnd.on2.vp9";
+  }
+  return PromiseFlatCString(aMimeType).get();
+}
+
 static MediaCodec::LocalRef CreateDecoder(const nsACString& aMimeType)
 {
   MediaCodec::LocalRef codec;
-  NS_ENSURE_SUCCESS(MediaCodec::CreateDecoderByType(PromiseFlatCString(aMimeType).get(), &codec), nullptr);
+  NS_ENSURE_SUCCESS(MediaCodec::CreateDecoderByType(TranslateMimeType(aMimeType),
+                    &codec), nullptr);
   return codec;
 }
 
@@ -71,13 +81,15 @@ public:
     mGLContext = nullptr;
   }
 
-  virtual nsresult Input(MediaRawData* aSample) override {
+  nsresult Input(MediaRawData* aSample) override {
     return MediaCodecDataDecoder::Input(aSample);
   }
 
   bool WantCopy() {
-    // Allocating a texture is incredibly slow on PowerVR
-    return mGLContext->Vendor() != GLVendor::Imagination;
+    // Allocating a texture is incredibly slow on PowerVR and may fail on
+    // emulators, see bug 1190379.
+    return mGLContext->Vendor() != GLVendor::Imagination &&
+           mGLContext->Renderer() != GLRenderer::AndroidEmulator;
   }
 
   EGLImage CopySurface(layers::Image* img) {
@@ -100,7 +112,7 @@ public:
       LOCAL_EGL_NONE, LOCAL_EGL_NONE
     };
 
-    EGLContext eglContext = static_cast<GLContextEGL*>(mGLContext.get())->GetEGLContext();
+    EGLContext eglContext = static_cast<GLContextEGL*>(mGLContext.get())->mContext;
     EGLImage eglImage = sEGLLibrary.fCreateImage(EGL_DISPLAY(), eglContext,
                                                  LOCAL_EGL_GL_TEXTURE_2D_KHR,
                                                  (EGLClientBuffer)tex, attribs);
@@ -109,8 +121,8 @@ public:
     return eglImage;
   }
 
-  virtual nsresult PostOutput(BufferInfo::Param aInfo, MediaFormat::Param aFormat,
-                              const media::TimeUnit& aDuration) override {
+  nsresult PostOutput(BufferInfo::Param aInfo, MediaFormat::Param aFormat,
+                      const media::TimeUnit& aDuration) override {
     if (!EnsureGLContext()) {
       return NS_ERROR_FAILURE;
     }
@@ -287,7 +299,7 @@ AndroidDecoderModule::CreateVideoDecoder(
   MediaFormat::LocalRef format;
 
   NS_ENSURE_SUCCESS(MediaFormat::CreateVideoFormat(
-      aConfig.mMimeType,
+      TranslateMimeType(aConfig.mMimeType),
       aConfig.mDisplay.width,
       aConfig.mDisplay.height,
       &format), nullptr);

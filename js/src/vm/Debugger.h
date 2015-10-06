@@ -82,12 +82,16 @@ class DebuggerWeakMap : private WeakMap<PreBarriered<UnbarrieredKey>, Relocatabl
                     RuntimeAllocPolicy> CountMap;
 
     CountMap zoneCounts;
+    JSCompartment* compartment;
 
   public:
     typedef WeakMap<Key, Value, DefaultHasher<Key> > Base;
 
     explicit DebuggerWeakMap(JSContext* cx)
-        : Base(cx), zoneCounts(cx->runtime()) { }
+        : Base(cx),
+          zoneCounts(cx->runtime()),
+          compartment(cx->compartment())
+    { }
 
     ~DebuggerWeakMap() {
         // If our owning Debugger fails construction after already initializing
@@ -121,7 +125,7 @@ class DebuggerWeakMap : private WeakMap<PreBarriered<UnbarrieredKey>, Relocatabl
 
     template<typename KeyInput, typename ValueInput>
     bool relookupOrAdd(AddPtr& p, const KeyInput& k, const ValueInput& v) {
-        MOZ_ASSERT(v->compartment() == Base::compartment);
+        MOZ_ASSERT(v->compartment() == this->compartment);
         MOZ_ASSERT(!k->compartment()->options_.mergeable());
         MOZ_ASSERT_IF(!InvisibleKeysOk, !k->compartment()->options_.invisibleToDebugger());
         MOZ_ASSERT(!Base::has(k));
@@ -340,6 +344,10 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     js::HeapPtrObject uncaughtExceptionHook; /* Strong reference. */
     bool enabled;
     bool allowUnobservedAsmJS;
+
+    // Wether to enable code coverage on the Debuggee.
+    bool collectCoverageInfo;
+
     JSCList breakpoints;                /* Circular list of all js::Breakpoints in this debugger */
 
     // The set of GC numbers for which one or more of this Debugger's observed
@@ -368,7 +376,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     /*
      * Recompute the set of debuggee zones based on the set of debuggee globals.
      */
-    bool recomputeDebuggeeZoneSet();
+    void recomputeDebuggeeZoneSet();
 
     /*
      * Return true if there is an existing object metadata callback for the
@@ -545,6 +553,8 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static bool setUncaughtExceptionHook(JSContext* cx, unsigned argc, Value* vp);
     static bool getAllowUnobservedAsmJS(JSContext* cx, unsigned argc, Value* vp);
     static bool setAllowUnobservedAsmJS(JSContext* cx, unsigned argc, Value* vp);
+    static bool getCollectCoverageInfo(JSContext* cx, unsigned argc, Value* vp);
+    static bool setCollectCoverageInfo(JSContext* cx, unsigned argc, Value* vp);
     static bool getMemory(JSContext* cx, unsigned argc, Value* vp);
     static bool getOnIonCompilation(JSContext* cx, unsigned argc, Value* vp);
     static bool setOnIonCompilation(JSContext* cx, unsigned argc, Value* vp);
@@ -594,6 +604,10 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     // execution of its debuggees.
     IsObserving observesAsmJS() const;
 
+    // Whether the Debugger instance needs to observe coverage of any JavaScript
+    // execution.
+    IsObserving observesCoverage() const;
+
   private:
     static bool ensureExecutionObservabilityOfFrame(JSContext* cx, AbstractFramePtr frame);
     static bool ensureExecutionObservabilityOfCompartment(JSContext* cx, JSCompartment* comp);
@@ -601,6 +615,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static bool hookObservesAllExecution(Hook which);
 
     bool updateObservesAllExecutionOnDebuggees(JSContext* cx, IsObserving observing);
+    bool updateObservesCoverageOnDebuggees(JSContext* cx, IsObserving observing);
     void updateObservesAsmJSOnDebuggees(IsObserving observing);
 
     JSObject* getHook(Hook hook) const;

@@ -24,7 +24,7 @@ Cu.import("resource://gre/modules/Services.jsm");
  * titles, tags and tests that a given search term matches certain pages.
  */
 
-let current_test = 0;
+var current_test = 0;
 
 function AutoCompleteInput(aSearches) {
   this.searches = aSearches;
@@ -44,7 +44,7 @@ AutoCompleteInput.prototype = {
   onSearchComplete: function() {},
   setSelectedIndex: function() {},
   get searchCount() { return this.searches.length; },
-  getSearchAt: function(aIndex) this.searches[aIndex],
+  getSearchAt: function(aIndex) { return this.searches[aIndex]; },
   QueryInterface: XPCOMUtils.generateQI([
     Ci.nsIAutoCompleteInput,
     Ci.nsIAutoCompletePopup,
@@ -55,7 +55,7 @@ function toURI(aSpec) {
   return uri(aSpec);
 }
 
-let appendTags = true;
+var appendTags = true;
 // Helper to turn off tag matching in results
 function ignoreTags()
 {
@@ -105,7 +105,7 @@ function ensure_results(aSearch, aExpected)
         uri = toURI(kURIs[uri]).spec;
         title = kTitles[title];
         if (tags && appendTags)
-          title += " \u2013 " + tags.map(function(aTag) kTitles[aTag]);
+          title += " \u2013 " + tags.map(aTag => kTitles[aTag]);
         print("Checking against expected '" + uri + "', '" + title + "'...");
 
         // Got a match on both uri and title?
@@ -157,12 +157,12 @@ var prefs = Cc["@mozilla.org/preferences-service;1"].
             getService(Ci.nsIPrefBranch);
 
 // Some date not too long ago
-let gDate = new Date(Date.now() - 1000 * 60 * 60) * 1000;
+var gDate = new Date(Date.now() - 1000 * 60 * 60) * 1000;
 // Store the page info for each uri
-let gPages = [];
+var gPages = [];
 
 // Initialization tasks to be run before the next test
-let gNextTestSetupTasks = [];
+var gNextTestSetupTasks = [];
 
 /**
  * Adds a page, and creates various properties for it depending on the
@@ -235,7 +235,7 @@ function* task_addPageBook(aURI, aTitle, aBook, aTags, aKey, aTransitionType, aN
     // Add tags if we need to
     if (aTags != undefined && aTags.length > 0) {
       // Convert each tag index into the title
-      let tags = aTags.map(function(aTag) kTitles[aTag]);
+      let tags = aTags.map(aTag => kTitles[aTag]);
       tagsvc.tagURI(uri, tags);
       out.push("\ntags=" + tags);
     }
@@ -280,7 +280,7 @@ function run_test() {
     // should return reliable resultsets, thus we have to wait.
     yield PlacesTestUtils.promiseAsyncUpdates();
 
-  }).then(function () ensure_results(search, expected),
+  }).then(() => ensure_results(search, expected),
           do_report_unexpected_exception);
 }
 

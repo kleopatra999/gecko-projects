@@ -85,6 +85,7 @@
 #include "jscompartmentinlines.h"
 #include "jsobjinlines.h"
 
+#include "vm/ErrorObject-inl.h"
 #include "vm/Interpreter-inl.h"
 #include "vm/Stack-inl.h"
 
@@ -213,7 +214,7 @@ NewGlobalObject(JSContext* cx, JS::CompartmentOptions& options,
  * The 'newGlobal' function takes an option indicating which principal the
  * new global should have; 'evaluate' does for the new code.
  */
-class ShellPrincipals: public JSPrincipals {
+class ShellPrincipals final : public JSPrincipals {
     uint32_t bits;
 
     static uint32_t getBits(JSPrincipals* p) {
@@ -225,6 +226,11 @@ class ShellPrincipals: public JSPrincipals {
   public:
     explicit ShellPrincipals(uint32_t bits, int32_t refcount = 0) : bits(bits) {
         this->refcount = refcount;
+    }
+
+    bool write(JSContext* cx, JSStructuredCloneWriter* writer) override {
+        MOZ_ASSERT(false, "not implemented");
+        return false;
     }
 
     static void destroy(JSPrincipals* principals) {
@@ -714,6 +720,8 @@ Options(JSContext* cx, unsigned argc, Value* vp)
             JS::RuntimeOptionsRef(cx).toggleExtraWarnings();
         else if (strcmp(opt.ptr(), "werror") == 0)
             JS::RuntimeOptionsRef(cx).toggleWerror();
+        else if (strcmp(opt.ptr(), "throw_on_asmjs_validation_failure") == 0)
+            JS::RuntimeOptionsRef(cx).toggleThrowOnAsmJSValidationFailure();
         else if (strcmp(opt.ptr(), "strict_mode") == 0)
             JS::RuntimeOptionsRef(cx).toggleStrictMode();
         else {
@@ -734,6 +742,10 @@ Options(JSContext* cx, unsigned argc, Value* vp)
     }
     if (names && oldRuntimeOptions.werror()) {
         names = JS_sprintf_append(names, "%s%s", found ? "," : "", "werror");
+        found = true;
+    }
+    if (names && oldRuntimeOptions.throwOnAsmJSValidationFailure()) {
+        names = JS_sprintf_append(names, "%s%s", found ? "," : "", "throw_on_asmjs_validation_failure");
         found = true;
     }
     if (names && oldRuntimeOptions.strictMode()) {
@@ -2396,7 +2408,7 @@ static const JSClass sandbox_class = {
     JSCLASS_GLOBAL_FLAGS,
     nullptr, nullptr, nullptr, nullptr,
     sandbox_enumerate, sandbox_resolve,
-    nullptr, nullptr, nullptr,
+    nullptr, nullptr,
     nullptr, nullptr, nullptr,
     JS_GlobalObjectTraceHook
 };
@@ -2604,7 +2616,8 @@ EvalInWorker(JSContext* cx, unsigned argc, Value* vp)
         return false;
 
     PRThread* thread = PR_CreateThread(PR_USER_THREAD, WorkerMain, input,
-                                       PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD, PR_JOINABLE_THREAD, 0);
+                                       PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD, PR_JOINABLE_THREAD,
+                                       gMaxStackSize + 128 * 1024);
     if (!thread || !workerThreads.append(thread))
         return false;
 
@@ -3102,6 +3115,29 @@ ParseModule(JSContext* cx, unsigned argc, Value* vp)
         return false;
 
     args.rval().setObject(*module);
+    return true;
+}
+
+static bool
+SetModuleResolveHook(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (args.length() != 1) {
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr,
+                             JSMSG_MORE_ARGS_NEEDED, "setModuleResolveHook", "0", "s");
+        return false;
+    }
+
+    if (!args[0].isObject() || !args[0].toObject().is<JSFunction>()) {
+        const char* typeName = InformalValueTypeName(args[0]);
+        JS_ReportError(cx, "expected hook function, got %s", typeName);
+        return false;
+    }
+
+    RootedFunction hook(cx, &args[0].toObject().as<JSFunction>());
+    Rooted<GlobalObject*> global(cx, cx->global());
+    global->setModuleResolveHook(hook);
+    args.rval().setUndefined();
     return true;
 }
 
@@ -4667,6 +4703,12 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "parseModule(code)",
 "  Parses source text as a module and returns a Module object."),
 
+    JS_FN_HELP("setModuleResolveHook", SetModuleResolveHook, 1, 0,
+"setModuleResolveHook(function(module, specifier) {})",
+"  Set the HostResolveImportedModule hook to |function|.\n"
+"  This hook is used to look up a previously loaded module object.  It should\n"
+"  be implemented by the module loader."),
+
     JS_FN_HELP("parse", Parse, 1, 0,
 "parse(code)",
 "  Parses a string, potentially throwing."),
@@ -5102,6 +5144,41 @@ CreateLastWarningObject(JSContext* cx, JSErrorReport* report)
     return true;
 }
 
+static bool
+PrintStackTrace(JSContext* cx, HandleValue exn)
+{
+    if (!exn.isObject())
+        return false;
+
+    Maybe<JSAutoCompartment> ac;
+    RootedObject exnObj(cx, &exn.toObject());
+    if (IsCrossCompartmentWrapper(exnObj)) {
+        exnObj = UncheckedUnwrap(exnObj);
+        ac.emplace(cx, exnObj);
+    }
+
+    // Ignore non-ErrorObject thrown by |throw| statement.
+    if (!exnObj->is<ErrorObject>())
+        return true;
+
+    RootedObject stackObj(cx, exnObj->as<ErrorObject>().stack());
+    if (!stackObj)
+        return false;
+
+    RootedString stackStr(cx);
+    if (!BuildStackString(cx, stackObj, &stackStr, 2))
+        return false;
+
+    UniquePtr<char[], JS::FreePolicy> stack(JS_EncodeStringToUTF8(cx, stackStr));
+    if (!stack)
+        return false;
+
+    fputs("Stack:\n", gErrFile);
+    fputs(stack.get(), gErrFile);
+
+    return true;
+}
+
 void
 js::shell::my_ErrorReporter(JSContext* cx, const char* message, JSErrorReport* report)
 {
@@ -5114,7 +5191,19 @@ js::shell::my_ErrorReporter(JSContext* cx, const char* message, JSErrorReport* r
         savedExc.restore();
     }
 
+    // Get exception object before printing and clearing exception.
+    RootedValue exn(cx);
+    if (JS_IsExceptionPending(cx))
+        (void) JS_GetPendingException(cx, &exn);
+
     gGotError = PrintError(cx, gErrFile, message, report, reportWarnings);
+    if (!exn.isUndefined()) {
+        JS::AutoSaveExceptionState savedExc(cx);
+        if (!PrintStackTrace(cx, exn))
+            fputs("(Unable to print stack trace)\n", gOutFile);
+        savedExc.restore();
+    }
+
     if (report->exnType != JSEXN_NONE && !JSREPORT_IS_WARNING(report->flags)) {
         if (report->errorNumber == JSMSG_OUT_OF_MEMORY) {
             gExitCode = EXITCODE_OUT_OF_MEMORY;
@@ -5164,7 +5253,7 @@ static const JSClass global_class = {
     "global", JSCLASS_GLOBAL_FLAGS,
     nullptr, nullptr, nullptr, nullptr,
     global_enumerate, global_resolve, global_mayResolve,
-    nullptr, nullptr,
+    nullptr,
     nullptr, nullptr, nullptr,
     JS_GlobalObjectTraceHook
 };
@@ -6100,6 +6189,8 @@ SetWorkerRuntimeOptions(JSRuntime* rt)
     if (*gZealStr)
         rt->gc.parseAndSetZeal(gZealStr);
 #endif
+
+    JS_SetNativeStackQuota(rt, gMaxStackSize);
 }
 
 static int

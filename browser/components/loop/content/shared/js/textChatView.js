@@ -12,7 +12,7 @@ loop.shared.views.chat = (function(mozL10n) {
   var sharedMixins = loop.shared.mixins;
   var sharedViews = loop.shared.views;
   var CHAT_MESSAGE_TYPES = loop.store.CHAT_MESSAGE_TYPES;
-  var CHAT_CONTENT_TYPES = loop.store.CHAT_CONTENT_TYPES;
+  var CHAT_CONTENT_TYPES = loop.shared.utils.CHAT_CONTENT_TYPES;
 
   /**
    * Renders an individual entry for the text chat entries view.
@@ -81,7 +81,7 @@ loop.shared.views.chat = (function(mozL10n) {
 
     render: function() {
       return (
-        React.createElement("div", {className: "text-chat-entry special room-name"}, 
+        React.createElement("div", {className: "text-chat-header special room-name"}, 
           React.createElement("p", null, mozL10n.get("rooms_welcome_title", {conversationName: this.props.message}))
         )
       );

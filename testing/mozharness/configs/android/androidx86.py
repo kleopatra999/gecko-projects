@@ -119,7 +119,8 @@ config = {
         },
         "xpcshell": {
             "run_filename": "remotexpcshelltests.py",
-            "options": ["--deviceIP=%(device_ip)s",
+            "options": ["--dm_trans=sut",
+                        "--deviceIP=%(device_ip)s",
                         "--devicePort=%(device_port)s",
                         "--xre-path=%(xre_path)s",
                         "--testing-modules-dir=%(modules_dir)s",
@@ -135,8 +136,11 @@ config = {
     "test_suite_definitions": {
         "jsreftest": {
             "category": "reftest",
-            "extra_args": ["../jsreftest/tests/jstests.list",
-                "--extra-profile-file=jsreftest/tests/user.js"]
+            "tests": ["../jsreftest/tests/jstests.list"],
+            "extra_args": [
+                "--suite=jstestbrowser",
+                "--extra-profile-file=jsreftest/tests/user.js"
+            ]
         },
         "mochitest-1": {
             "category": "mochitest",
@@ -152,22 +156,33 @@ config = {
         },
         "reftest-1": {
             "category": "reftest",
-            "extra_args": ["--total-chunks=3", "--this-chunk=1",
-                "tests/layout/reftests/reftest.list"]
+            "extra_args": [
+                "--suite=reftest",
+                "--total-chunks=3",
+                "--this-chunk=1",
+            ],
+            "tests": ["tests/layout/reftests/reftest.list"],
         },
         "reftest-2": {
-            "category": "reftest",
-            "extra_args": ["--total-chunks=3", "--this-chunk=2",
-                "tests/layout/reftests/reftest.list"]
+            "extra_args": [
+                "--suite=reftest",
+                "--total-chunks=3",
+                "--this-chunk=2",
+            ],
+            "tests": ["tests/layout/reftests/reftest.list"],
         },
         "reftest-3": {
-            "category": "reftest",
-            "extra_args": ["--total-chunks=3", "--this-chunk=3",
-                "tests/layout/reftests/reftest.list"]
+            "extra_args": [
+                "--suite=reftest",
+                "--total-chunks=3",
+                "--this-chunk=3",
+            ],
+            "tests": ["tests/layout/reftests/reftest.list"],
         },
         "crashtest": {
             "category": "reftest",
-            "extra_args": ["tests/testing/crashtest/crashtests.list"]
+            "extra_args": ["--suite=crashtest"],
+            "tests": ["tests/testing/crashtest/crashtests.list"]
         },
         "xpcshell": {
             "category": "xpcshell",

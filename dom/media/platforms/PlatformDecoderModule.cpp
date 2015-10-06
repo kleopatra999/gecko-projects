@@ -40,6 +40,14 @@
 #include "VorbisDecoder.h"
 #include "VPXDecoder.h"
 
+PRLogModuleInfo* GetPDMLog() {
+  static PRLogModuleInfo* log = nullptr;
+  if (!log) {
+    log = PR_NewLogModule("PlatformDecoderModule");
+  }
+  return log;
+}
+
 namespace mozilla {
 
 extern already_AddRefed<PlatformDecoderModule> CreateAgnosticDecoderModule();
@@ -165,11 +173,9 @@ PlatformDecoderModule::CreatePDM()
   return m.forget();
 #endif
 #ifdef MOZ_FFMPEG
-  if (sFFmpegDecoderEnabled) {
-    nsRefPtr<PlatformDecoderModule> m = FFmpegRuntimeLinker::CreateDecoderModule();
-    if (m) {
-      return m.forget();
-    }
+  nsRefPtr<PlatformDecoderModule> mffmpeg = FFmpegRuntimeLinker::CreateDecoderModule();
+  if (mffmpeg) {
+    return mffmpeg.forget();
   }
 #endif
 #ifdef MOZ_APPLEMEDIA
@@ -234,12 +240,20 @@ PlatformDecoderModule::CreateDecoder(const TrackInfo& aConfig,
   }
 
   if (H264Converter::IsH264(aConfig)) {
-    m = new H264Converter(this,
+    nsRefPtr<H264Converter> h
+      = new H264Converter(this,
                           *aConfig.GetAsVideoInfo(),
                           aLayersBackend,
                           aImageContainer,
                           aTaskQueue,
                           callback);
+    const nsresult rv = h->GetLastError();
+    if (NS_SUCCEEDED(rv) || rv == NS_ERROR_NOT_INITIALIZED) {
+      // The H264Converter either successfully created the wrapped decoder,
+      // or there wasn't enough AVCC data to do so. Otherwise, there was some
+      // problem, for example WMF DLLs were missing.
+      m = h.forget();
+    }
   } else if (!hasPlatformDecoder && VPXDecoder::IsVPX(aConfig.mMimeType)) {
     m = new VPXDecoder(*aConfig.GetAsVideoInfo(),
                        aImageContainer,

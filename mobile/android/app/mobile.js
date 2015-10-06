@@ -69,7 +69,6 @@ pref("browser.cache.memory_limit", 5120); // 5 MB
 
 /* image cache prefs */
 pref("image.cache.size", 1048576); // bytes
-pref("image.high_quality_downscaling.enabled", false);
 
 /* offline cache prefs */
 pref("browser.offline-apps.notify", true);
@@ -351,6 +350,9 @@ pref("browser.link.open_newwindow", 3);
 // 0=force all new windows to tabs, 1=don't force, 2=only force those with no features set
 pref("browser.link.open_newwindow.restriction", 0);
 
+// Image blocking policy
+pref("browser.image_blocking.enabled", false);
+
 // controls which bits of private data to clear. by default we clear them all.
 pref("privacy.item.cache", true);
 pref("privacy.item.cookies", true);
@@ -566,10 +568,6 @@ pref("layers.low-precision-opacity", "1.0");
 // work harder keep scrolling smooth and memory low.
 pref("layers.max-active", 20);
 
-// Temporarily disable support for offsetX/Y to work around Google Maps bug
-// (bug 1150284)
-pref("dom.mouseEvent.offsetXY.enabled", false);
-
 pref("notification.feature.enabled", true);
 pref("dom.webnotifications.enabled", true);
 
@@ -594,7 +592,6 @@ pref("media.cache_readahead_limit", 30);
 pref("media.video-queue.default-size", 3);
 
 // Enable the MediaCodec PlatformDecoderModule by default.
-pref("media.fragmented-mp4.exposed", true);
 pref("media.fragmented-mp4.enabled", true);
 pref("media.fragmented-mp4.android-media-codec.enabled", true);
 pref("media.fragmented-mp4.android-media-codec.preferred", true);
@@ -949,3 +946,15 @@ pref("browser.tabs.showAudioPlayingIcon", true);
 pref("dom.serviceWorkers.enabled", true);
 pref("dom.serviceWorkers.interception.enabled", true);
 #endif
+
+// The remote content URL where FxAccountsWebChannel messages originate.  Must use HTTPS.
+pref("identity.fxaccounts.remote.webchannel.uri", "https://accounts.firefox.com");
+
+// The remote URL of the Firefox Account profile server.
+pref("identity.fxaccounts.remote.profile.uri", "https://profile.accounts.firefox.com/v1");
+
+// The remote URL of the Firefox Account oauth server.
+pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com/v1"); 
+
+// Token server used by Firefox Account-authenticated Sync.
+pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");

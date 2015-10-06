@@ -106,11 +106,11 @@ XPCOMUtils.defineLazyGetter(this, "libcutils", function() {
 // from the AndroidLog module so it gets the "debug" priority and a log tag.
 // We always report debug messages on Android because it's unnecessary
 // to restrict reporting, per bug 1003469.
-let debug = Cu.import("resource://gre/modules/AndroidLog.jsm", {})
+var debug = Cu.import("resource://gre/modules/AndroidLog.jsm", {})
               .AndroidLog.d.bind(null, "Webapps");
 #else
 // Elsewhere, report debug messages only if dom.mozApps.debug is set to true.
-let debug;
+var debug;
 function debugPrefObserver() {
   debug = Services.prefs.getBoolPref("dom.mozApps.debug")
             ? (aMsg) => dump("-*- Webapps.jsm : " + aMsg + "\n")
@@ -195,10 +195,10 @@ const STORE_ID_PENDING_PREFIX = "#unknownID#";
 
 this.DOMApplicationRegistry = {
   // pseudo-constants for the different application kinds.
-  get kPackaged()       "packaged",
-  get kHosted()         "hosted",
-  get kHostedAppcache() "hosted-appcache",
-  get kAndroid()        "android-native",
+  get kPackaged()       { return "packaged"; },
+  get kHosted()         { return "hosted"; },
+  get kHostedAppcache() { return "hosted-appcache"; },
+  get kAndroid()        { return "android-native"; },
 
   // Path to the webapps.json file where we store the registry data.
   appsFile: null,
@@ -1989,8 +1989,12 @@ this.DOMApplicationRegistry = {
         },
         id: aApp.id
       });
+      let appURI = NetUtil.newURI(aApp.origin, null, null);
+      let principal =
+        Services.scriptSecurityManager.createCodebasePrincipal(appURI,
+                                                               {appId: aApp.localId});
       let cacheUpdate = updateSvc.scheduleAppUpdate(
-        appcacheURI, docURI, aApp.localId, false, aProfileDir);
+        appcacheURI, docURI, principal, aApp.localId, false, aProfileDir);
 
       // We save the download details for potential further usage like
       // cancelling it.
@@ -2139,8 +2143,12 @@ this.DOMApplicationRegistry = {
           new ManifestHelper(manifest, aData.origin, aData.manifestURL);
         debug("onlyCheckAppCache - launch updateSvc.checkForUpdate for " +
               helper.fullAppcachePath());
+        let appURI = NetUtil.newURI(aApp.origin, null, null);
+        let principal =
+          Services.scriptSecurityManager.createCodebasePrincipal(appURI,
+                                                                 {appId: aApp.localId});
         updateSvc.checkForUpdate(Services.io.newURI(helper.fullAppcachePath(), null, null),
-                                 app.localId, false, updateObserver);
+                                 principal, app.localId, false, updateObserver);
       });
       return;
     }
@@ -2409,9 +2417,13 @@ this.DOMApplicationRegistry = {
             manifest.fullAppcachePath());
 
       let updateDeferred = Promise.defer();
+      let appURI = NetUtil.newURI(aApp.origin, null, null);
+      let principal =
+        Services.scriptSecurityManager.createCodebasePrincipal(appURI,
+                                                               {appId: aApp.localId});
 
       updateSvc.checkForUpdate(Services.io.newURI(manifest.fullAppcachePath(), null, null),
-                               aApp.localId, false,
+                               principal, aApp.localId, false,
                                (aSubject, aTopic, aData) => updateDeferred.resolve(aTopic));
 
       let topic = yield updateDeferred.promise;
@@ -3468,6 +3480,10 @@ this.DOMApplicationRegistry = {
       // nsILoadContext
       appId: aOldApp.installerAppId,
       isInBrowserElement: aOldApp.installerIsBrowser,
+      originAttributes: {
+        appId: aOldApp.installerAppId,
+        inBrowser: aOldApp.installerIsBrowser
+      },
       usePrivateBrowsing: false,
       isContent: false,
       associatedWindow: null,
@@ -4697,6 +4713,13 @@ this.DOMApplicationRegistry = {
     return OS.Path.dirname(this.appsFile);
   },
 
+  updateDataStoreEntriesFromLocalId: function(aLocalId) {
+    let app = appsService.getAppByLocalId(aLocalId);
+    if (app) {
+      this.updateDataStoreForApp(app.id);
+    }
+  },
+
   _isLaunchable: function(aApp) {
     if (this.allAppsLaunchable)
       return true;
@@ -4802,7 +4825,7 @@ this.DOMApplicationRegistry = {
 /**
  * Appcache download observer
  */
-let AppcacheObserver = function(aApp) {
+var AppcacheObserver = function(aApp) {
   debug("Creating AppcacheObserver for " + aApp.origin +
         " - " + aApp.installState);
   this.app = aApp;

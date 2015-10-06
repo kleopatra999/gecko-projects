@@ -31,7 +31,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "SelfSupportBackend",
 
 var nativeConsole = console;
 XPCOMUtils.defineLazyModuleGetter(this, "console",
-  "resource://gre/modules/devtools/Console.jsm");
+  "resource://gre/modules/devtools/shared/Console.jsm");
 
 const SIMPLETEST_OVERRIDES =
   ["ok", "is", "isnot", "todo", "todo_is", "todo_isnot", "info", "expectAssertions", "requestCompleteLog"];
@@ -53,7 +53,7 @@ function b2gStart() {
   webNav.loadURI(url, null, null, null, null);
 }
 
-let TabDestroyObserver = {
+var TabDestroyObserver = {
   outstanding: new Set(),
   promiseResolver: null,
 
@@ -288,7 +288,7 @@ Tester.prototype = {
     // Replace the last tab with a fresh one
     if (window.gBrowser) {
       gBrowser.addTab("about:blank", { skipAnimation: true });
-      gBrowser.removeCurrentTab();
+      gBrowser.removeTab(gBrowser.selectedTab, { skipPermitUnload: true });
       gBrowser.stop();
     }
 
@@ -328,9 +328,9 @@ Tester.prototype = {
   finish: function Tester_finish(aSkipSummary) {
     this.Promise.Debugging.flushUncaughtErrors();
 
-    var passCount = this.tests.reduce(function(a, f) a + f.passCount, 0);
-    var failCount = this.tests.reduce(function(a, f) a + f.failCount, 0);
-    var todoCount = this.tests.reduce(function(a, f) a + f.todoCount, 0);
+    var passCount = this.tests.reduce((a, f) => a + f.passCount, 0);
+    var failCount = this.tests.reduce((a, f) => a + f.failCount, 0);
+    var todoCount = this.tests.reduce((a, f) => a + f.todoCount, 0);
 
     if (this.repeat > 0) {
       --this.repeat;
@@ -479,6 +479,8 @@ Tester.prototype = {
       // for its own purposes, nulling it out it will go back to the default
       // behavior of returning the last opened popup.
       document.popupNode = null;
+
+      yield new Promise(resolve => SpecialPowers.flushPrefEnv(resolve));
 
       // Notify a long running test problem if it didn't end up in a timeout.
       if (this.currentTest.unexpectedTimeouts && !this.currentTest.timedOut) {

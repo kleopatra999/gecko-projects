@@ -124,6 +124,7 @@ if CONFIG['MOZ_JPROF']:
 DIRS += [
     '/tools/power',
     '/tools/profiler',
+    '/tools/memory-profiler',
     '/xpfe/components',
 ]
 
@@ -142,6 +143,8 @@ if CONFIG['MOZ_PREF_EXTENSIONS']:
     DIRS += ['/extensions/pref']
 
 DIRS += [
+    '/devtools/server',
+    '/devtools/shared',
     '/services',
     '/startupcache',
     '/js/ductwork/debugger',

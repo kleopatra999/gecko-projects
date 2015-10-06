@@ -418,10 +418,9 @@ public:
 
   nsresult Redraw();
 
-#ifdef DEBUG
-    virtual int32_t GetWidth() const override;
-    virtual int32_t GetHeight() const override;
-#endif
+  virtual int32_t GetWidth() const override;
+  virtual int32_t GetHeight() const override;
+
   // nsICanvasRenderingContextInternal
   /**
     * Gets the pres shell from either the canvas element or the doc shell
@@ -460,6 +459,8 @@ public:
                                                LayerManager *aManager) override;
   virtual bool ShouldForceInactiveLayer(LayerManager *aManager) override;
   void MarkContextClean() override;
+  void MarkContextCleanForFrameCapture() override;
+  bool IsContextCleanForFrameCapture() override;
   NS_IMETHOD SetIsIPC(bool isIPC) override;
   // this rect is in canvas device space
   void Redraw(const mozilla::gfx::Rect &r);
@@ -716,6 +717,9 @@ protected:
   bool mResetLayer;
   // This is needed for drawing in drawAsyncXULElement
   bool mIPC;
+  // True if the current DrawTarget is using skia-gl, used so we can avoid
+  // requesting the DT from mBufferProvider to check.
+  bool mIsSkiaGL;
 
   nsTArray<CanvasRenderingContext2DUserData*> mUserDatas;
 
@@ -748,6 +752,13 @@ protected:
     * many more Redraw calls.
     */
   bool mPredictManyRedrawCalls;
+
+  /**
+   * Flag to avoid unnecessary surface copies to FrameCaptureListeners in the
+   * case when the canvas is not currently being drawn into and not rendered
+   * but canvas capturing is still ongoing.
+   */
+  bool mIsCapturedFrameInvalid;
 
   // This is stored after GetThebesSurface has been called once to avoid
   // excessive ThebesSurface initialization overhead.

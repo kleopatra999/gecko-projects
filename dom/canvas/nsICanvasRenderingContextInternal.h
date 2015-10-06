@@ -80,11 +80,9 @@ public:
     return mCanvasElement;
   }
 
-#ifdef DEBUG
-    // Useful for testing
-    virtual int32_t GetWidth() const = 0;
-    virtual int32_t GetHeight() const = 0;
-#endif
+  // Dimensions of the canvas, in pixels.
+  virtual int32_t GetWidth() const = 0;
+  virtual int32_t GetHeight() const = 0;
 
   // Sets the dimensions of the canvas, in pixels.  Called
   // whenever the size of the element changes.
@@ -135,6 +133,13 @@ public:
   virtual bool ShouldForceInactiveLayer(LayerManager *manager) { return false; }
 
   virtual void MarkContextClean() = 0;
+
+  // Called when a frame is captured.
+  virtual void MarkContextCleanForFrameCapture() = 0;
+
+  // Whether the context is clean or has been invalidated since the last frame
+  // was captured.
+  virtual bool IsContextCleanForFrameCapture() = 0;
 
   // Redraw the dirty rectangle of this canvas.
   NS_IMETHOD Redraw(const gfxRect &dirty) = 0;

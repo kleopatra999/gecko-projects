@@ -21,6 +21,8 @@
 extern PRLogModuleInfo* GetSpeechSynthLog();
 #define LOG(type, msg) MOZ_LOG(GetSpeechSynthLog(), type, msg)
 
+#define AUDIO_TRACK 1
+
 namespace mozilla {
 namespace dom {
 
@@ -193,7 +195,7 @@ nsSpeechTask::Setup(nsISpeechTaskCallback* aCallback,
   mChannels = aChannels;
 
   AudioSegment* segment = new AudioSegment();
-  mStream->AddAudioTrack(1, aRate, 0, segment);
+  mStream->AddAudioTrack(AUDIO_TRACK, aRate, 0, segment);
   mStream->AddAudioOutput(this);
   mStream->SetAudioOutputVolume(this, mVolume);
 
@@ -246,8 +248,14 @@ nsSpeechTask::SendAudio(JS::Handle<JS::Value> aData, JS::Handle<JS::Value> aLand
   // Allow either Int16Array or plain JS Array
   if (JS_IsInt16Array(darray)) {
     tsrc = darray;
-  } else if (JS_IsArrayObject(aCx, darray)) {
-    tsrc = JS_NewInt16ArrayFromArray(aCx, darray);
+  } else {
+    bool isArray;
+    if (!JS_IsArrayObject(aCx, darray, &isArray)) {
+      return NS_ERROR_UNEXPECTED;
+    }
+    if (isArray) {
+      tsrc = JS_NewInt16ArrayFromArray(aCx, darray);
+    }
   }
 
   if (!tsrc) {
@@ -563,7 +571,7 @@ nsSpeechTask::Pause()
   }
 
   if (mStream) {
-    mStream->ChangeExplicitBlockerCount(1);
+    mStream->Suspend();
   }
 
   if (!mInited) {
@@ -586,7 +594,7 @@ nsSpeechTask::Resume()
   }
 
   if (mStream) {
-    mStream->ChangeExplicitBlockerCount(-1);
+    mStream->Resume();
   }
 
   if (mPrePaused) {
@@ -612,7 +620,7 @@ nsSpeechTask::Cancel()
   }
 
   if (mStream) {
-    mStream->ChangeExplicitBlockerCount(1);
+    mStream->Suspend();
   }
 
   if (!mInited) {
@@ -628,7 +636,7 @@ void
 nsSpeechTask::ForceEnd()
 {
   if (mStream) {
-    mStream->ChangeExplicitBlockerCount(1);
+    mStream->Suspend();
   }
 
   if (!mInited) {

@@ -277,9 +277,10 @@ class LifoAlloc
 
     MOZ_ALWAYS_INLINE
     void* allocInfallible(size_t n) {
+        AutoEnterOOMUnsafeRegion oomUnsafe;
         if (void* result = allocImpl(n))
             return result;
-        CrashAtUnhandlableOOM("LifoAlloc::allocInfallible");
+        oomUnsafe.crash("LifoAlloc::allocInfallible");
         return nullptr;
     }
 
@@ -530,7 +531,7 @@ class LifoAllocPolicy
       : alloc_(alloc)
     {}
     template <typename T>
-    T* pod_malloc(size_t numElems) {
+    T* maybe_pod_malloc(size_t numElems) {
         if (MOZ_UNLIKELY(numElems & mozilla::tl::MulOverflowMask<sizeof(T)>::value))
             return nullptr;
         size_t bytes = numElems * sizeof(T);
@@ -538,7 +539,7 @@ class LifoAllocPolicy
         return static_cast<T*>(p);
     }
     template <typename T>
-    T* pod_calloc(size_t numElems) {
+    T* maybe_pod_calloc(size_t numElems) {
         T* p = pod_malloc<T>(numElems);
         if (fb == Fallible && !p)
             return nullptr;
@@ -546,7 +547,7 @@ class LifoAllocPolicy
         return p;
     }
     template <typename T>
-    T* pod_realloc(T* p, size_t oldSize, size_t newSize) {
+    T* maybe_pod_realloc(T* p, size_t oldSize, size_t newSize) {
         T* n = pod_malloc<T>(newSize);
         if (fb == Fallible && !n)
             return nullptr;
@@ -554,9 +555,24 @@ class LifoAllocPolicy
         memcpy(n, p, Min(oldSize * sizeof(T), newSize * sizeof(T)));
         return n;
     }
+    template <typename T>
+    T* pod_malloc(size_t numElems) {
+        return maybe_pod_malloc<T>(numElems);
+    }
+    template <typename T>
+    T* pod_calloc(size_t numElems) {
+        return maybe_pod_calloc<T>(numElems);
+    }
+    template <typename T>
+    T* pod_realloc(T* p, size_t oldSize, size_t newSize) {
+        return maybe_pod_realloc<T>(p, oldSize, newSize);
+    }
     void free_(void* p) {
     }
     void reportAllocOverflow() const {
+    }
+    bool checkSimulatedOOM() const {
+        return fb == Infallible || !js::oom::ShouldFailWithOOM();
     }
 };
 

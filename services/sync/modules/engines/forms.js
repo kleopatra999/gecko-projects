@@ -30,7 +30,7 @@ FormRec.prototype = {
 Utils.deferGetSet(FormRec, "cleartext", ["name", "value"]);
 
 
-let FormWrapper = {
+var FormWrapper = {
   _log: Log.repository.getLogger("Sync.Engine.Forms"),
 
   _getEntryCols: ["fieldname", "value"],
@@ -109,7 +109,9 @@ FormEngine.prototype = {
 
   syncPriority: 6,
 
-  get prefName() "history",
+  get prefName() {
+    return "history";
+  },
 
   _findDupe: function _findDupe(item) {
     return FormWrapper.getGUID(item.name, item.value);

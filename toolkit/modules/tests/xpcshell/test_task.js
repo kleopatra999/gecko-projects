@@ -28,7 +28,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
  */
 function promiseResolvedLater(aValue) {
   let deferred = Promise.defer();
-  Services.tm.mainThread.dispatch(function () deferred.resolve(aValue),
+  Services.tm.mainThread.dispatch(() => deferred.resolve(aValue),
                                   Ci.nsIThread.DISPATCH_NORMAL);
   return deferred.promise;
 }
@@ -391,7 +391,7 @@ add_test(function test_async_throw_on_function_in_place_of_promise()
 
 // Backup Task.Debuggin.maintainStack.
 // Will be restored by `exit_stack_tests`.
-let maintainStack;
+var maintainStack;
 add_test(function enter_stack_tests() {
   maintainStack = Task.Debugging.maintainStack;
   Task.Debugging.maintainStack = true;

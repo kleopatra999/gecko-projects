@@ -19,15 +19,6 @@ namespace mozilla {
 
 typedef MozPromiseRequestHolder<CDMProxy::DecryptPromise> DecryptPromiseRequestHolder;
 
-static PLDHashOperator
-DropDecryptPromises(MediaRawData* aKey,
-                    nsAutoPtr<DecryptPromiseRequestHolder>& aData,
-                    void* aUserArg)
-{
-  aData->DisconnectIfExists();
-  return PL_DHASH_REMOVE;
-}
-
 class EMEDecryptor : public MediaDataDecoder {
 
 public:
@@ -45,12 +36,12 @@ public:
   {
   }
 
-  virtual nsRefPtr<InitPromise> Init() override {
+  nsRefPtr<InitPromise> Init() override {
     MOZ_ASSERT(!mIsShutdown);
     return mDecoder->Init();
   }
 
-  virtual nsresult Input(MediaRawData* aSample) override {
+  nsresult Input(MediaRawData* aSample) override {
     MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
     MOZ_ASSERT(!mIsShutdown);
     if (mSamplesWaitingForKey->WaitIfKeyNotUsable(aSample)) {
@@ -104,26 +95,34 @@ public:
     }
   }
 
-  virtual nsresult Flush() override {
+  nsresult Flush() override {
     MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
     MOZ_ASSERT(!mIsShutdown);
-    mDecrypts.Enumerate(&DropDecryptPromises, nullptr);
+    for (auto iter = mDecrypts.Iter(); !iter.Done(); iter.Next()) {
+      nsAutoPtr<DecryptPromiseRequestHolder>& holder = iter.Data();
+      holder->DisconnectIfExists();
+      iter.Remove();
+    }
     nsresult rv = mDecoder->Flush();
     unused << NS_WARN_IF(NS_FAILED(rv));
     mSamplesWaitingForKey->Flush();
     return rv;
   }
 
-  virtual nsresult Drain() override {
+  nsresult Drain() override {
     MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
     MOZ_ASSERT(!mIsShutdown);
-    mDecrypts.Enumerate(&DropDecryptPromises, nullptr);
+    for (auto iter = mDecrypts.Iter(); !iter.Done(); iter.Next()) {
+      nsAutoPtr<DecryptPromiseRequestHolder>& holder = iter.Data();
+      holder->DisconnectIfExists();
+      iter.Remove();
+    }
     nsresult rv = mDecoder->Drain();
     unused << NS_WARN_IF(NS_FAILED(rv));
     return rv;
   }
 
-  virtual nsresult Shutdown() override {
+  nsresult Shutdown() override {
     MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
     MOZ_ASSERT(!mIsShutdown);
     mIsShutdown = true;
@@ -157,8 +156,8 @@ public:
   {
   }
 
-  virtual nsresult Input(MediaRawData* aSample) override;
-  virtual nsresult Shutdown() override;
+  nsresult Input(MediaRawData* aSample) override;
+  nsresult Shutdown() override;
 
 private:
   nsRefPtr<SamplesWaitingForKey> mSamplesWaitingForKey;

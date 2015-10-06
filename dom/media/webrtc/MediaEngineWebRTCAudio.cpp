@@ -19,9 +19,8 @@
 #define ENCODING "L16"
 #define DEFAULT_PORT 5555
 
-#define SAMPLE_RATE 256000
-#define SAMPLE_FREQUENCY 16000
-#define SAMPLE_LENGTH ((SAMPLE_FREQUENCY*10)/1000)
+#define SAMPLE_RATE(freq) ((freq)*2*8) // bps, 16-bit samples
+#define SAMPLE_LENGTH(freq) (((freq)*10)/1000)
 
 // These are restrictions from the webrtc.org code
 #define MAX_CHANNELS 2
@@ -345,7 +344,7 @@ MediaEngineWebRTCMicrophoneSource::Start(SourceMediaStream *aStream,
   }
 
   AudioSegment* segment = new AudioSegment();
-  aStream->AddAudioTrack(aID, SAMPLE_FREQUENCY, 0, segment, SourceMediaStream::ADDTRACK_QUEUED);
+  aStream->AddAudioTrack(aID, mSampleFrequency, 0, segment, SourceMediaStream::ADDTRACK_QUEUED);
 
   // XXX Make this based on the pref.
   aStream->RegisterForAudioMixing();
@@ -422,6 +421,14 @@ MediaEngineWebRTCMicrophoneSource::Stop(SourceMediaStream *aSource, TrackID aID)
   return NS_OK;
 }
 
+nsresult
+MediaEngineWebRTCMicrophoneSource::Restart(const dom::MediaTrackConstraints& aConstraints,
+                                           const MediaEnginePrefs &aPrefs,
+                                           const nsString& aDeviceId)
+{
+  return NS_OK;
+}
+
 void
 MediaEngineWebRTCMicrophoneSource::NotifyPull(MediaStreamGraph *aGraph,
                                               SourceMediaStream *aSource,
@@ -462,6 +469,9 @@ MediaEngineWebRTCMicrophoneSource::Init()
     return;
   }
 
+  mSampleFrequency = MediaEngine::DEFAULT_SAMPLE_RATE;
+  LOG(("%s: sampling rate %u", __FUNCTION__, mSampleFrequency));
+
   // Check for availability.
   ScopedCustomReleasePtr<webrtc::VoEHardware> ptrVoEHw(webrtc::VoEHardware::GetInterface(mVoiceEngine));
   if (!ptrVoEHw || ptrVoEHw->SetRecordingDevice(mCapIndex)) {
@@ -487,9 +497,10 @@ MediaEngineWebRTCMicrophoneSource::Init()
   webrtc::CodecInst codec;
   strcpy(codec.plname, ENCODING);
   codec.channels = CHANNELS;
-  codec.rate = SAMPLE_RATE;
-  codec.plfreq = SAMPLE_FREQUENCY;
-  codec.pacsize = SAMPLE_LENGTH;
+  MOZ_ASSERT(mSampleFrequency == 16000 || mSampleFrequency == 32000);
+  codec.rate = SAMPLE_RATE(mSampleFrequency);
+  codec.plfreq = mSampleFrequency;
+  codec.pacsize = SAMPLE_LENGTH(mSampleFrequency);
   codec.pltype = 0; // Default payload type
 
   if (!ptrVoECodec->SetSendCodec(mChannel, codec)) {
@@ -661,6 +672,15 @@ MediaEngineWebRTCAudioCaptureSource::Stop(SourceMediaStream *aMediaStream,
                                           TrackID aId)
 {
   aMediaStream->EndAllTrackAndFinish();
+  return NS_OK;
+}
+
+nsresult
+MediaEngineWebRTCAudioCaptureSource::Restart(
+    const dom::MediaTrackConstraints& aConstraints,
+    const MediaEnginePrefs &aPrefs,
+    const nsString& aDeviceId)
+{
   return NS_OK;
 }
 

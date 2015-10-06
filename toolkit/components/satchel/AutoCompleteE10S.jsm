@@ -16,7 +16,7 @@ Cu.import("resource://gre/modules/nsFormAutoCompleteResult.jsm");
 
 // nsITreeView implementation that feeds the autocomplete popup
 // with the search data.
-let AutoCompleteE10SView = {
+var AutoCompleteE10SView = {
   // nsISupports
   QueryInterface: XPCOMUtils.generateQI([Ci.nsITreeView,
                                          Ci.nsIAutoCompleteController]),
@@ -56,7 +56,9 @@ let AutoCompleteE10SView = {
   getColumnProperties: function(column) { return ""; },
 
   // nsIAutoCompleteController
-  get matchCount() this.rowCount,
+  get matchCount() {
+    return this.rowCount;
+  },
 
   handleEnter: function(aIsPopupSelection) {
     AutoCompleteE10S.handleEnter(aIsPopupSelection);

@@ -1199,6 +1199,41 @@ AccessibleWrap::GetNativeInterface(void** aOutAccessible)
   NS_ADDREF_THIS();
 }
 
+void
+AccessibleWrap::FireWinEvent(Accessible* aTarget, uint32_t aEventType)
+{
+  static_assert(sizeof(gWinEventMap)/sizeof(gWinEventMap[0]) == nsIAccessibleEvent::EVENT_LAST_ENTRY,
+                "MSAA event map skewed");
+
+  NS_ASSERTION(aEventType > 0 && aEventType < ArrayLength(gWinEventMap), "invalid event type");
+
+  uint32_t winEvent = gWinEventMap[aEventType];
+  if (!winEvent)
+    return;
+
+  int32_t childID = GetChildIDFor(aTarget);
+  if (!childID)
+    return; // Can't fire an event without a child ID
+
+  HWND hwnd = GetHWNDFor(aTarget);
+  if (!hwnd) {
+    return;
+  }
+
+  // Fire MSAA event for client area window.
+  ::NotifyWinEvent(winEvent, hwnd, OBJID_CLIENT, childID);
+
+  // JAWS announces collapsed combobox navigation based on focus events.
+  if (aEventType == nsIAccessibleEvent::EVENT_SELECTION &&
+      Compatibility::IsJAWS()) {
+    roles::Role role = aTarget->IsProxy() ? aTarget->Proxy()->Role() :
+      aTarget->Role();
+    if (role == roles::COMBOBOX_OPTION) {
+      ::NotifyWinEvent(EVENT_OBJECT_FOCUS, hwnd, OBJID_CLIENT, childID);
+    }
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Accessible
 
@@ -1214,15 +1249,6 @@ AccessibleWrap::HandleAccEvent(AccEvent* aEvent)
 
   uint32_t eventType = aEvent->GetEventType();
 
-  static_assert(sizeof(gWinEventMap)/sizeof(gWinEventMap[0]) == nsIAccessibleEvent::EVENT_LAST_ENTRY,
-                "MSAA event map skewed");
-
-  NS_ENSURE_TRUE(eventType > 0 && eventType < ArrayLength(gWinEventMap), NS_ERROR_FAILURE);
-
-  uint32_t winEvent = gWinEventMap[eventType];
-  if (!winEvent)
-    return NS_OK;
-
   // Means we're not active.
   NS_ENSURE_TRUE(!IsDefunct(), NS_ERROR_FAILURE);
 
@@ -1235,41 +1261,7 @@ AccessibleWrap::HandleAccEvent(AccEvent* aEvent)
     UpdateSystemCaretFor(accessible);
   }
 
-  int32_t childID = GetChildIDFor(accessible); // get the id for the accessible
-  if (!childID)
-    return NS_OK; // Can't fire an event without a child ID
-
-  HWND hWnd = GetHWNDFor(accessible);
-  NS_ENSURE_TRUE(hWnd, NS_ERROR_FAILURE);
-
-  nsAutoString tag;
-  nsAutoCString id;
-  nsIContent* cnt = accessible->GetContent();
-  if (cnt) {
-    cnt->NodeInfo()->NameAtom()->ToString(tag);
-    nsIAtom* aid = cnt->GetID();
-    if (aid)
-      aid->ToUTF8String(id);
-  }
-
-#ifdef A11Y_LOG
-  if (logging::IsEnabled(logging::ePlatforms)) {
-    printf("\n\nMSAA event: event: %d, target: %s@id='%s', childid: %d, hwnd: %p\n\n",
-           eventType, NS_ConvertUTF16toUTF8(tag).get(), id.get(),
-           childID, hWnd);
-  }
-#endif
-
-  // Fire MSAA event for client area window.
-  ::NotifyWinEvent(winEvent, hWnd, OBJID_CLIENT, childID);
-
-  // JAWS announces collapsed combobox navigation based on focus events.
-  if (Compatibility::IsJAWS()) {
-    if (eventType == nsIAccessibleEvent::EVENT_SELECTION &&
-      accessible->Role() == roles::COMBOBOX_OPTION) {
-      ::NotifyWinEvent(EVENT_OBJECT_FOCUS, hWnd, OBJID_CLIENT, childID);
-    }
-  }
+  FireWinEvent(accessible, eventType);
 
   return NS_OK;
 }
@@ -1302,8 +1294,12 @@ AccessibleWrap::GetChildIDFor(Accessible* aAccessible)
   // so that the 3rd party application can call back and get the IAccessible
   // the event occurred on.
 
+  if (!aAccessible) {
+    return 0;
+  }
+
 #ifdef _WIN64
-  if (!aAccessible || (!aAccessible->Document() && !aAccessible->IsProxy()))
+  if (!aAccessible->Document() && !aAccessible->IsProxy())
     return 0;
 
   uint32_t* id = & static_cast<AccessibleWrap*>(aAccessible)->mID;
@@ -1420,6 +1416,27 @@ GetAccessibleInSubtree(DocAccessible* aDoc, uint32_t aID)
   }
 #endif
 
+static AccessibleWrap*
+GetProxiedAccessibleInSubtree(const DocAccessibleParent* aDoc, uint32_t aID)
+{
+  auto wrapper = static_cast<DocProxyAccessibleWrap*>(WrapperFor(aDoc));
+  AccessibleWrap* child = wrapper->GetAccessibleByID(aID);
+  if (child) {
+    return child;
+  }
+
+  size_t childDocs = aDoc->ChildDocCount();
+  for (size_t i = 0; i < childDocs; i++) {
+    const DocAccessibleParent* childDoc = aDoc->ChildDocAt(i);
+    child = GetProxiedAccessibleInSubtree(childDoc, aID);
+    if (child) {
+      return child;
+    }
+  }
+
+  return nullptr;
+}
+
 Accessible*
 AccessibleWrap::GetXPAccessibleFor(const VARIANT& aVarChild)
 {
@@ -1430,33 +1447,32 @@ AccessibleWrap::GetXPAccessibleFor(const VARIANT& aVarChild)
   if (aVarChild.lVal == CHILDID_SELF)
     return this;
 
-  if (IsProxy()) {
-    if (Proxy()->MustPruneChildren())
-      return nullptr;
-
-    if (aVarChild.lVal > 0)
-      return WrapperFor(Proxy()->ChildAt(aVarChild.lVal - 1));
-
-    // XXX Don't implement negative child ids for now because annoying, and
-    // doesn't seem to be speced.
+  if (IsProxy() ? Proxy()->MustPruneChildren() : nsAccUtils::MustPrune(this)) {
     return nullptr;
   }
 
-  if (nsAccUtils::MustPrune(this))
-    return nullptr;
+  if (aVarChild.lVal > 0) {
+    // Gecko child indices are 0-based in contrast to indices used in MSAA.
+    if (IsProxy()) {
+      return WrapperFor(Proxy()->ChildAt(aVarChild.lVal - 1));
+    } else {
+      return GetChildAt(aVarChild.lVal - 1);
+    }
+  }
 
   // If lVal negative then it is treated as child ID and we should look for
   // accessible through whole accessible subtree including subdocuments.
   // Otherwise we treat lVal as index in parent.
-
-  if (aVarChild.lVal < 0) {
-    // Convert child ID to unique ID.
+  // Convert child ID to unique ID.
+  // First handle the case that both this accessible and the id'd one are in
+  // this process.
+  if (!IsProxy()) {
     void* uniqueID = reinterpret_cast<void*>(-aVarChild.lVal);
 
     DocAccessible* document = Document();
     Accessible* child =
 #ifdef _WIN64
-    GetAccessibleInSubtree(document, static_cast<uint32_t>(aVarChild.lVal));
+      GetAccessibleInSubtree(document, static_cast<uint32_t>(aVarChild.lVal));
 #else
       document->GetAccessibleByUniqueIDInSubtree(uniqueID);
 #endif
@@ -1474,12 +1490,65 @@ AccessibleWrap::GetXPAccessibleFor(const VARIANT& aVarChild)
 
       parent = parent->Parent();
     }
+  }
+
+  // Now see about the case that both this accessible and the target one are
+  // proxied.
+  uint32_t id = aVarChild.lVal;
+  if (IsProxy()) {
+    DocAccessibleParent* proxyDoc = Proxy()->Document();
+    AccessibleWrap* wrapper = GetProxiedAccessibleInSubtree(proxyDoc, id);
+    MOZ_ASSERT(wrapper->IsProxy());
+
+    ProxyAccessible* parent = wrapper->Proxy();
+    while (parent && parent != proxyDoc) {
+      if (parent == this->Proxy()) {
+        return wrapper;
+      }
+
+      parent = parent->Parent();
+    }
 
     return nullptr;
   }
 
-  // Gecko child indices are 0-based in contrast to indices used in MSAA.
-  return GetChildAt(aVarChild.lVal - 1);
+  // Finally we need to handle the case that this accessible is in the main
+  // process, but the target is proxied.  This is the case when the target
+  // accessible is in a child document of this one.
+  DocAccessibleParent* proxyDoc = nullptr;
+  DocAccessible* doc = Document();
+  const nsTArray<DocAccessibleParent*>* remoteDocs =
+    DocManager::TopLevelRemoteDocs();
+  if (!remoteDocs) {
+    return nullptr;
+  }
+
+  size_t docCount = remoteDocs->Length();
+  for (size_t i = 0; i < docCount; i++) {
+    Accessible* outerDoc = remoteDocs->ElementAt(i)->OuterDocOfRemoteBrowser();
+    if (!outerDoc) {
+      continue;
+    }
+
+    if (outerDoc->Document() != doc) {
+      continue;
+    }
+
+    Accessible* parent = outerDoc;
+    while (parent && parent != doc) {
+      if (parent == this) {
+        AccessibleWrap* proxyWrapper =
+          GetProxiedAccessibleInSubtree(remoteDocs->ElementAt(i), id);
+        if (proxyWrapper) {
+          return proxyWrapper;
+        }
+      }
+
+      parent = parent->Parent();
+    }
+  }
+
+  return nullptr;
 }
 
 void

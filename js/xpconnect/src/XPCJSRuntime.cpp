@@ -57,6 +57,10 @@
 #include "nsExceptionHandler.h"
 #endif
 
+#if defined(MOZ_JEMALLOC4)
+#include "mozmemory.h"
+#endif
+
 using namespace mozilla;
 using namespace xpc;
 using namespace JS;
@@ -146,26 +150,40 @@ public:
               mActive = false;
           }
       } else {
+#if defined(MOZ_JEMALLOC4)
+          if (mPurge) {
+              /* Jemalloc purges dirty pages regularly during free() when the
+               * ratio of dirty pages compared to active pages is higher than
+               * 1 << lg_dirty_mult. A high ratio can have an impact on
+               * performance, so we use the default ratio of 8, but force a
+               * regular purge of all remaining dirty pages, after cycle
+               * collection. */
+              Telemetry::AutoTimer<Telemetry::MEMORY_FREE_PURGED_PAGES_MS> timer;
+              jemalloc_free_dirty_pages();
+          }
+#endif
           mActive = false;
       }
       return NS_OK;
   }
 
-  void Dispatch(bool aContinuation = false)
+  void Dispatch(bool aContinuation = false, bool aPurge = false)
   {
       if (mContinuation) {
           mContinuation = aContinuation;
       }
+      mPurge = aPurge;
       if (!mActive && NS_SUCCEEDED(NS_DispatchToCurrentThread(this))) {
           mActive = true;
       }
   }
 
-  AsyncFreeSnowWhite() : mContinuation(false), mActive(false) {}
+  AsyncFreeSnowWhite() : mContinuation(false), mActive(false), mPurge(false) {}
 
 public:
   bool mContinuation;
   bool mActive;
+  bool mPurge;
 };
 
 namespace xpc {
@@ -630,9 +648,9 @@ XPCJSRuntime::EndCycleCollectionCallback(CycleCollectorResults& aResults)
 }
 
 void
-XPCJSRuntime::DispatchDeferredDeletion(bool aContinuation)
+XPCJSRuntime::DispatchDeferredDeletion(bool aContinuation, bool aPurge)
 {
-    mAsyncSnowWhiteFreer->Dispatch(aContinuation);
+    mAsyncSnowWhiteFreer->Dispatch(aContinuation, aPurge);
 }
 
 void
@@ -1495,6 +1513,8 @@ ReloadPrefsCallback(const char* pref, void* data)
     bool useBaseline = Preferences::GetBool(JS_OPTIONS_DOT_STR "baselinejit") && !safeMode;
     bool useIon = Preferences::GetBool(JS_OPTIONS_DOT_STR "ion") && !safeMode;
     bool useAsmJS = Preferences::GetBool(JS_OPTIONS_DOT_STR "asmjs") && !safeMode;
+    bool throwOnAsmJSValidationFailure = Preferences::GetBool(JS_OPTIONS_DOT_STR
+                                                              "throw_on_asmjs_validation_failure");
     bool useNativeRegExp = Preferences::GetBool(JS_OPTIONS_DOT_STR "native_regexp") && !safeMode;
 
     bool parallelParsing = Preferences::GetBool(JS_OPTIONS_DOT_STR "parallel_parsing");
@@ -1518,6 +1538,7 @@ ReloadPrefsCallback(const char* pref, void* data)
     JS::RuntimeOptionsRef(rt).setBaseline(useBaseline)
                              .setIon(useIon)
                              .setAsmJS(useAsmJS)
+                             .setThrowOnAsmJSValidationFailure(throwOnAsmJSValidationFailure)
                              .setNativeRegExp(useNativeRegExp)
                              .setAsyncStack(useAsyncStack)
                              .setWerror(werror)
@@ -1882,6 +1903,10 @@ ReportZoneStats(const JS::ZoneStats& zStats,
     ZCREPORT_GC_BYTES(pathPrefix + NS_LITERAL_CSTRING("unused-gc-things"),
         zStats.unusedGCThings.totalSize(),
         "Unused GC thing cells within non-empty arenas.");
+
+    ZCREPORT_BYTES(pathPrefix + NS_LITERAL_CSTRING("unique-id-map"),
+        zStats.uniqueIdMap,
+        "Address-independent cell identities.");
 
     ZCREPORT_GC_BYTES(pathPrefix + NS_LITERAL_CSTRING("lazy-scripts/gc-heap"),
         zStats.lazyScriptsGCHeap,
@@ -3146,7 +3171,7 @@ ReadSourceFromFilename(JSContext* cx, const char* filename, char16_t** src, size
     rv = NS_NewChannel(getter_AddRefs(scriptChannel),
                        uri,
                        nsContentUtils::GetSystemPrincipal(),
-                       nsILoadInfo::SEC_NORMAL,
+                       nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                        nsIContentPolicy::TYPE_OTHER);
     NS_ENSURE_SUCCESS(rv, rv);
 
@@ -3165,7 +3190,7 @@ ReadSourceFromFilename(JSContext* cx, const char* filename, char16_t** src, size
     scriptChannel->SetContentType(NS_LITERAL_CSTRING("text/plain"));
 
     nsCOMPtr<nsIInputStream> scriptStream;
-    rv = scriptChannel->Open(getter_AddRefs(scriptStream));
+    rv = scriptChannel->Open2(getter_AddRefs(scriptStream));
     NS_ENSURE_SUCCESS(rv, rv);
 
     uint64_t rawLen;

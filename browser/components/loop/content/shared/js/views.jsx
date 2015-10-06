@@ -120,10 +120,12 @@ loop.shared.views = (function(_, mozL10n) {
 
     _handleShareTabs: function() {
       this._startScreenShare("browser");
+      this.hideDropdownMenu();
     },
 
     _handleShareWindows: function() {
       this._startScreenShare("window");
+      this.hideDropdownMenu();
     },
 
     _getTitle: function() {
@@ -150,12 +152,12 @@ loop.shared.views = (function(_, mozL10n) {
         "disabled": this.props.state === SCREEN_SHARE_STATES.PENDING
       });
       var dropdownMenuClasses = cx({
-        "native-dropdown-menu": true,
-        "conversation-window-dropdown": true,
-        "hide": !this.state.showMenu,
-        "visually-hidden": true
+        "screen-share-menu": true,
+        "dropdown-menu": true,
+        "hide": !this.state.showMenu
       });
       var windowSharingClasses = cx({
+        "dropdown-menu-item": true,
         "disabled": this.state.windowSharingDisabled
       });
 
@@ -163,12 +165,12 @@ loop.shared.views = (function(_, mozL10n) {
         <div>
           <button className={screenShareClasses}
                   onClick={this.handleClick}
-                  ref="menu-button"
+                  ref="anchor"
                   title={this._getTitle()}>
             {isActive ? null : <span className="chevron"/>}
           </button>
           <ul className={dropdownMenuClasses} ref="menu">
-            <li onClick={this._handleShareTabs}>
+            <li className="dropdown-menu-item" onClick={this._handleShareTabs}>
               {mozL10n.get("share_tabs_button_title2")}
             </li>
             <li className={windowSharingClasses} onClick={this._handleShareWindows}>
@@ -203,11 +205,48 @@ loop.shared.views = (function(_, mozL10n) {
     },
 
     /**
-     * Show or hide the settings menu
+     * Reposition Menu if cropped
+     *
+     * Added to reposition the menu if it is cropped on the left side because of
+     * a long text string. This function measures how much the menu is cropped
+     * on the left or right and adjusts the coordinates so the menu isn't cropped.
+     * Also, sets the left style to auto, to prevent complexity in calculations
+     *
+     * The dropdownmenu mixin needs to be revamped, along with all components
+     * using dropdown menus. Components should be utilizing a global function
+     * for menu positions and it should be consistent throughout.
+     *
      */
-    handleClick: function(event) {
-      event.preventDefault();
-      this.toggleDropdownMenu();
+    _repositionMenu: function() {
+      if (this.refs.menu && this.state.showMenu) {
+        var menuNode = this.refs.menu && this.refs.menu.getDOMNode();
+
+        if (menuNode) {
+          // Amount of pixels that the dropdown needs to stay away from the edges
+          // of the page body. Copied from the mixin.
+          var boundOffset = 4;
+          var menuNodeRect = menuNode.getBoundingClientRect();
+          var menuComputedStyle = window.getComputedStyle(menuNode);
+          var documentBody = this.getDOMNode().ownerDocument.body;
+          var bodyRect = documentBody.getBoundingClientRect();
+          var menuLeft = parseFloat(menuNodeRect.left);
+          var menuRight = parseFloat(menuNodeRect.right);
+          var bodyRight = parseFloat(bodyRect.right);
+
+          menuNode.style.left = "auto";
+
+          // If menu is too close or cropped on left, move right
+          if (menuLeft < -boundOffset) {
+            menuNode.style.right =
+              (parseFloat(menuComputedStyle.right) + menuLeft - boundOffset) + "px";
+          }
+          // If menu is too close or cropped on right, move left
+          if (menuRight > bodyRight - boundOffset) {
+            menuNode.style.right =
+              (parseFloat(menuComputedStyle.right) + (menuRight - bodyRight) + boundOffset) + "px";
+          }
+        }
+      }
     },
 
     /**
@@ -339,7 +378,8 @@ loop.shared.views = (function(_, mozL10n) {
         audio: {enabled: true, visible: true},
         screenShare: {state: SCREEN_SHARE_STATES.INACTIVE, visible: false},
         settingsMenuItems: null,
-        enableHangup: true
+        enableHangup: true,
+        showHangup: true
       };
     },
 
@@ -359,6 +399,8 @@ loop.shared.views = (function(_, mozL10n) {
       publishStream: React.PropTypes.func.isRequired,
       screenShare: React.PropTypes.object,
       settingsMenuItems: React.PropTypes.array,
+      show: React.PropTypes.bool.isRequired,
+      showHangup: React.PropTypes.bool,
       video: React.PropTypes.object.isRequired
     },
 
@@ -440,6 +482,10 @@ loop.shared.views = (function(_, mozL10n) {
     },
 
     render: function() {
+      if (!this.props.show) {
+        return null;
+      }
+
       var cx = React.addons.classSet;
       var conversationToolbarCssClasses = cx({
         "conversation-toolbar": true,
@@ -451,14 +497,17 @@ loop.shared.views = (function(_, mozL10n) {
       });
       return (
         <ul className={conversationToolbarCssClasses}>
-          <li className="conversation-toolbar-btn-box btn-hangup-entry">
-            <button className="btn btn-hangup"
-                    disabled={!this.props.enableHangup}
-                    onClick={this.handleClickHangup}
-                    title={mozL10n.get("hangup_button_title")}>
-              {this._getHangupButtonLabel()}
-            </button>
-          </li>
+          {
+            this.props.showHangup ?
+            <li className="conversation-toolbar-btn-box btn-hangup-entry">
+              <button className="btn btn-hangup"
+                      disabled={!this.props.enableHangup}
+                      onClick={this.handleClickHangup}
+                      title={mozL10n.get("hangup_button_title")}>
+                {this._getHangupButtonLabel()}
+              </button>
+            </li> : null
+          }
           <li className="conversation-toolbar-btn-box">
             <div className={mediaButtonGroupCssClasses}>
                 <MediaControlButton action={this.handleToggleVideo}
@@ -481,232 +530,6 @@ loop.shared.views = (function(_, mozL10n) {
                                    mozLoop={this.props.mozLoop} />
           </li>
         </ul>
-      );
-    }
-  });
-
-  /**
-   * Conversation view.
-   */
-  var ConversationView = React.createClass({
-    mixins: [
-      Backbone.Events,
-      sharedMixins.AudioMixin,
-      sharedMixins.MediaSetupMixin
-    ],
-
-    propTypes: {
-      audio: React.PropTypes.object,
-      dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
-      initiate: React.PropTypes.bool,
-      isDesktop: React.PropTypes.bool,
-      model: React.PropTypes.object.isRequired,
-      mozLoop: React.PropTypes.object,
-      sdk: React.PropTypes.object.isRequired,
-      video: React.PropTypes.object
-    },
-
-    getDefaultProps: function() {
-      return {
-        initiate: true,
-        isDesktop: false,
-        video: {enabled: true, visible: true},
-        audio: {enabled: true, visible: true}
-      };
-    },
-
-    getInitialState: function() {
-      return {
-        video: this.props.video,
-        audio: this.props.audio
-      };
-    },
-
-    componentDidMount: function() {
-      if (this.props.initiate) {
-        /**
-         * XXX This is a workaround for desktop machines that do not have a
-         * camera installed. As we don't yet have device enumeration, when
-         * we do, this can be removed (bug 1138851), and the sdk should handle it.
-         */
-        if (this.props.isDesktop &&
-            !window.MediaStreamTrack.getSources) {
-          // If there's no getSources function, the sdk defines its own and caches
-          // the result. So here we define the "normal" one which doesn't get cached, so
-          // we can change it later.
-          window.MediaStreamTrack.getSources = function(callback) {
-            callback([{kind: "audio"}, {kind: "video"}]);
-          };
-        }
-
-        this.listenTo(this.props.sdk, "exception", this._handleSdkException);
-
-        this.listenTo(this.props.model, "session:connected",
-                                        this._onSessionConnected);
-        this.listenTo(this.props.model, "session:stream-created",
-                                        this._streamCreated);
-        this.listenTo(this.props.model, ["session:peer-hungup",
-                                         "session:network-disconnected",
-                                         "session:ended"].join(" "),
-                                         this.stopPublishing);
-        this.props.model.startSession();
-      }
-    },
-
-    componentWillUnmount: function() {
-      // Unregister all local event listeners
-      this.stopListening();
-      this.hangup();
-    },
-
-    hangup: function() {
-      this.stopPublishing();
-      this.props.model.endSession();
-    },
-
-    _onSessionConnected: function(event) {
-      this.startPublishing(event);
-      this.play("connected");
-    },
-
-    /**
-     * Subscribes and attaches each created stream to a DOM element.
-     *
-     * XXX: for now we only support a single remote stream, hence a single DOM
-     *      element.
-     *
-     * http://tokbox.com/opentok/libraries/client/js/reference/StreamEvent.html
-     *
-     * @param  {StreamEvent} event
-     */
-    _streamCreated: function(event) {
-      var incoming = this.getDOMNode().querySelector(".remote");
-      this.props.model.subscribe(event.stream, incoming,
-        this.getDefaultPublisherConfig({
-          publishVideo: this.props.video.enabled
-        }));
-    },
-
-    /**
-     * Handles the SDK Exception event.
-     *
-     * https://tokbox.com/opentok/libraries/client/js/reference/ExceptionEvent.html
-     *
-     * @param {ExceptionEvent} event
-     */
-    _handleSdkException: function(event) {
-      /**
-       * XXX This is a workaround for desktop machines that do not have a
-       * camera installed. As we don't yet have device enumeration, when
-       * we do, this can be removed (bug 1138851), and the sdk should handle it.
-       */
-      if (this.publisher &&
-          event.code === OT.ExceptionCodes.UNABLE_TO_PUBLISH &&
-          event.message === "GetUserMedia" &&
-          this.state.video.enabled) {
-        this.state.video.enabled = false;
-
-        window.MediaStreamTrack.getSources = function(callback) {
-          callback([{kind: "audio"}]);
-        };
-
-        this.stopListening(this.publisher);
-        this.publisher.destroy();
-        this.startPublishing();
-      }
-    },
-
-    /**
-     * Publishes remote streams available once a session is connected.
-     *
-     * http://tokbox.com/opentok/libraries/client/js/reference/SessionConnectEvent.html
-     *
-     * @param  {SessionConnectEvent} event
-     */
-    startPublishing: function(event) {
-      var outgoing = this.getDOMNode().querySelector(".local");
-
-      // XXX move this into its StreamingVideo component?
-      this.publisher = this.props.sdk.initPublisher(
-        outgoing, this.getDefaultPublisherConfig({publishVideo: this.props.video.enabled}));
-
-      // Suppress OT GuM custom dialog, see bug 1018875
-      this.listenTo(this.publisher, "accessDialogOpened accessDenied",
-                    function(ev) {
-                      ev.preventDefault();
-                    });
-
-      this.listenTo(this.publisher, "streamCreated", function(ev) {
-        this.setState({
-          audio: {enabled: ev.stream.hasAudio},
-          video: {enabled: ev.stream.hasVideo}
-        });
-      });
-
-      this.listenTo(this.publisher, "streamDestroyed", function() {
-        this.setState({
-          audio: {enabled: false},
-          video: {enabled: false}
-        });
-      });
-
-      this.props.model.publish(this.publisher);
-    },
-
-    /**
-     * Toggles streaming status for a given stream type.
-     *
-     * @param  {String}  type     Stream type ("audio" or "video").
-     * @param  {Boolean} enabled  Enabled stream flag.
-     */
-    publishStream: function(type, enabled) {
-      if (type === "audio") {
-        this.publisher.publishAudio(enabled);
-        this.setState({audio: {enabled: enabled}});
-      } else {
-        this.publisher.publishVideo(enabled);
-        this.setState({video: {enabled: enabled}});
-      }
-    },
-
-    /**
-     * Unpublishes local stream.
-     */
-    stopPublishing: function() {
-      if (this.publisher) {
-        // Unregister listeners for publisher events
-        this.stopListening(this.publisher);
-
-        this.props.model.session.unpublish(this.publisher);
-      }
-    },
-
-    render: function() {
-      var localStreamClasses = React.addons.classSet({
-        local: true,
-        "local-stream": true,
-        "local-stream-audio": !this.state.video.enabled
-      });
-      return (
-        <div className="video-layout-wrapper">
-          <div className="conversation in-call">
-            <div className="media nested">
-              <div className="video_wrapper remote_wrapper">
-                <div className="video_inner remote focus-stream">
-                  <ConversationToolbar
-                    audio={this.state.audio}
-                    dispatcher={this.props.dispatcher}
-                    hangup={this.hangup}
-                    mozLoop={this.props.mozLoop}
-                    publishStream={this.publishStream}
-                    video={this.state.video} />
-                </div>
-              </div>
-              <div className={localStreamClasses}></div>
-
-            </div>
-          </div>
-        </div>
       );
     }
   });
@@ -1024,7 +847,7 @@ loop.shared.views = (function(_, mozL10n) {
         return null;
       }
 
-      return <p>{mozL10n.get("context_inroom_label")}</p>;
+      return <p>{mozL10n.get("context_inroom_label2")}</p>;
     },
 
     render: function() {
@@ -1322,7 +1145,6 @@ loop.shared.views = (function(_, mozL10n) {
     ButtonGroup: ButtonGroup,
     Checkbox: Checkbox,
     ContextUrlView: ContextUrlView,
-    ConversationView: ConversationView,
     ConversationToolbar: ConversationToolbar,
     MediaControlButton: MediaControlButton,
     MediaLayoutView: MediaLayoutView,

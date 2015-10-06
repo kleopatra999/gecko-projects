@@ -1238,7 +1238,9 @@ Element::RemoveAttributeNode(Attr& aAttribute,
   }
 
   OwnerDoc()->WarnOnceAbout(nsIDocument::eRemoveAttributeNode);
-  return Attributes()->RemoveNamedItem(aAttribute.NodeName(), aError);
+  nsAutoString nameSpaceURI;
+  aAttribute.NodeInfo()->GetNamespaceURI(nameSpaceURI);
+  return Attributes()->RemoveNamedItemNS(nameSpaceURI, aAttribute.NodeInfo()->LocalName(), aError);
 }
 
 void
@@ -1629,6 +1631,9 @@ Element::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
   }
 
   nsNodeUtils::ParentChainChanged(this);
+  if (!hadParent && IsRootOfNativeAnonymousSubtree()) {
+    nsNodeUtils::NativeAnonymousChildListChange(this, false);
+  }
 
   if (HasID()) {
     AddToIdTable(DoGetID());
@@ -1743,10 +1748,13 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
       }
     }
 
+    if (this->IsRootOfNativeAnonymousSubtree()) {
+      nsNodeUtils::NativeAnonymousChildListChange(this, true);
+    }
+
     if (GetParent()) {
-      nsINode* p = mParent;
-      mParent = nullptr;
-      NS_RELEASE(p);
+      nsRefPtr<nsINode> p;
+      p.swap(mParent);
     } else {
       mParent = nullptr;
     }
@@ -3257,14 +3265,22 @@ Element::MozRequestFullScreen(JSContext* aCx, JS::Handle<JS::Value> aOptions,
   // We need to check if options is convertible to a dict first before
   // trying to init fsOptions; otherwise Init() would throw, and we want to
   // silently ignore non-dictionary values
-  if (aCx && IsConvertibleToDictionary(aCx, aOptions)) {
-    if (!fsOptions.Init(aCx, aOptions)) {
+  if (aCx) {
+    bool convertible;
+    if (!IsConvertibleToDictionary(aCx, aOptions, &convertible)) {
       aError.Throw(NS_ERROR_FAILURE);
       return;
     }
 
-    if (fsOptions.mVrDisplay) {
-      request->mVRHMDDevice = fsOptions.mVrDisplay->GetHMD();
+    if (convertible) {
+      if (!fsOptions.Init(aCx, aOptions)) {
+        aError.Throw(NS_ERROR_FAILURE);
+        return;
+      }
+
+      if (fsOptions.mVrDisplay) {
+        request->mVRHMDDevice = fsOptions.mVrDisplay->GetHMD();
+      }
     }
   }
 

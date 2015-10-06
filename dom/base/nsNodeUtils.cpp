@@ -13,7 +13,7 @@
 #include "nsIDocument.h"
 #include "mozilla/EventListenerManager.h"
 #include "nsIXPConnect.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "nsIDOMAttr.h"
 #include "nsCOMArray.h"
 #include "nsPIDOMWindow.h"
@@ -165,6 +165,15 @@ nsNodeUtils::ContentAppended(nsIContent* aContainer,
   IMPL_MUTATION_NOTIFICATION(ContentAppended, aContainer,
                              (doc, aContainer, aFirstNewContent,
                               aNewIndexInContainer));
+}
+
+void
+nsNodeUtils::NativeAnonymousChildListChange(nsIContent* aContent,
+                                            bool aIsRemove)
+{
+  nsIDocument* doc = aContent->OwnerDoc();
+  IMPL_MUTATION_NOTIFICATION(NativeAnonymousChildListChange, aContent,
+                            (doc, aContent, aIsRemove));
 }
 
 void

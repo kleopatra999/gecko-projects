@@ -10,7 +10,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "WebNavigation",
                                   "resource://gre/modules/WebNavigation.jsm");
 
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
-let {
+var {
   SingletonEventManager,
   ignoreEvent,
   runSafe,
@@ -45,7 +45,7 @@ function WebNavigationEventManager(context, eventName)
         return;
       }
 
-      return runSafe(context, callback, data2);
+      runSafe(context, callback, data2);
     };
 
     WebNavigation[eventName].addListener(listener);

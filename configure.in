@@ -137,6 +137,8 @@ MOZ_BUILD_ROOT=`pwd -W 2>/dev/null || pwd`
 
 MOZ_PYTHON
 
+MOZ_BUILD_BACKEND
+
 MOZ_DEFAULT_COMPILER
 
 COMPILE_ENVIRONMENT=1
@@ -412,35 +414,7 @@ MOZ_TOOL_VARIABLES
 
 MOZ_CHECK_COMPILER_WRAPPER
 
-MOZ_PATH_PROG(RUSTC, rustc)
-if test -n "$RUSTC"; then
-  AC_MSG_CHECKING([rustc version])
-  RUSTC_VERSION=`$RUSTC --version | cut -d ' ' -f 2`
-  # Parse out semversion elements.
-  _RUSTC_MAJOR_VERSION=`echo ${RUSTC_VERSION} | cut -d . -f 1`
-  _RUSTC_MINOR_VERSION=`echo ${RUSTC_VERSION} | cut -d . -f 2`
-  _RUSTC_EXTRA_VERSION=`echo ${RUSTC_VERSION} | cut -d . -f 3 | cut -d + -f 1`
-  _RUSTC_PATCH_VERSION=`echo ${_RUSTC_EXTRA_VERSION} | cut -d '-' -f 1`
-  AC_MSG_RESULT([$RUSTC_VERSION (v${_RUSTC_MAJOR_VERSION}.${_RUSTC_MINOR_VERSION}.${_RUSTC_PATCH_VERSION})])
-fi
-MOZ_ARG_ENABLE_BOOL([rust],
-                    [  --enable-rust           Include Rust language sources],
-                    [MOZ_RUST=1],
-                    [MOZ_RUST= ])
-if test -z "$RUSTC" -a -n "$MOZ_RUST"; then
-  AC_MSG_ERROR([Rust compiler not found.
-    To compile rust language sources, you must have 'rustc' in your path.
-    See http://www.rust-lang.org/ for more information.])
-fi
-if test -n "$MOZ_RUST" && test -z "$_RUSTC_MAJOR_VERSION" -o \
-  "$_RUSTC_MAJOR_VERSION" -lt 1; then
-  AC_MSG_ERROR([Rust compiler ${RUSTC_VERSION} is too old.
-    To compile Rust language sources please install at least
-    version 1.0 of the 'rustc' toolchain and make sure it is
-    first in your path.
-    You can verify this by typing 'rustc --version'.])
-fi
-AC_SUBST(MOZ_RUST)
+MOZ_RUST_SUPPORT
 
 dnl ========================================================
 dnl Check for MacOS deployment target version
@@ -851,6 +825,7 @@ MOZ_PATH_PROG(RPMBUILD, rpmbuild, :)
 AC_SUBST(RPMBUILD)
 
 MOZ_PATH_PROG(GENISOIMAGE, genisoimage, :)
+MOZ_PATH_PROG(DSYMUTIL, dsymutil, llvm-dsymutil :)
 
 if test "$COMPILE_ENVIRONMENT"; then
 
@@ -1995,6 +1970,7 @@ case "$target" in
         AC_DEFINE(XP_IOS)
         AC_DEFINE(XP_DARWIN)
         _PLATFORM_DEFAULT_TOOLKIT='cairo-uikit'
+        direct_nspr_config=1
     else
         AC_DEFINE(XP_MACOSX)
         AC_DEFINE(XP_DARWIN)
@@ -2239,9 +2215,6 @@ ia64*-hpux*)
         # the same thing as C4244, we disable C4267, too.
         # MSVC warning C4345 warns of newly conformant behavior as of VS2003.
         # MSVC warning C4351 warns of newly conformant behavior as of VS2005.
-        # MSVC warning C4482 warns when an enum value is refered specifing the
-        # name of the enum itself.  This behavior is allowed in C++11, and the
-        # warning has been removed in VS2012.
         # MSVC warning C4800 warns when a value is implicitly cast to bool,
         # because this also forces narrowing to a single byte, which can be a
         # perf hit.  But this matters so little in practice (and often we want
@@ -2249,7 +2222,7 @@ ia64*-hpux*)
         # MSVC warning C4819 warns some UTF-8 characters (e.g. copyright sign)
         # on non-Western system locales even if it is in a comment.
         CFLAGS="$CFLAGS -wd4244 -wd4267 -wd4819"
-        CXXFLAGS="$CXXFLAGS -wd4251 -wd4244 -wd4267 -wd4345 -wd4351 -wd4482 -wd4800 -wd4819"
+        CXXFLAGS="$CXXFLAGS -wd4251 -wd4244 -wd4267 -wd4345 -wd4351 -wd4800 -wd4819"
         if test -n "$CLANG_CL"; then
             # Suppress the clang-cl warning for the inline 'new' and 'delete' in mozalloc
             CXXFLAGS="$CXXFLAGS -Wno-inline-new-delete"
@@ -4031,19 +4004,27 @@ esac
 case "$MOZ_BUILD_APP" in
 browser)
   AC_DEFINE(MOZ_PHOENIX)
+
+  BUILD_BACKENDS="$BUILD_BACKENDS FasterMake"
   ;;
 
 xulrunner)
   AC_DEFINE(MOZ_XULRUNNER)
   ;;
-b2g)
-  AC_DEFINE(MOZ_B2G)
-  ;;
-b2g/dev)
-  AC_DEFINE(MOZ_B2G)
-  AC_DEFINE(MOZ_MULET)
-  ;;
 esac
+
+if test -n "$MOZ_B2G"; then
+    AC_DEFINE(MOZ_B2G)
+fi
+
+# Graphene is a desktop runtime for running applications with a HTML UI.
+if test -n "$MOZ_GRAPHENE"; then
+    AC_DEFINE(MOZ_GRAPHENE)
+fi
+
+if test -n "$MOZ_MULET"; then
+    AC_DEFINE(MOZ_MULET)
+fi
 
 if test -n "$MOZ_B2GDROID"; then
     AC_DEFINE(MOZ_B2GDROID)
@@ -4069,14 +4050,13 @@ WINNT|Darwin|Android)
 esac
 
 dnl ========================================================
-dnl Check Android SDK version depending on mobile target.
+dnl Ensure Android SDK and build-tools versions depending on
+dnl mobile target.
 dnl ========================================================
 
 if test -z "$gonkdir" ; then
-    # Minimum Android SDK API Level we require.
     case "$MOZ_BUILD_APP" in
     mobile/android | mobile/android/b2gdroid)
-        android_min_api_level=20
         case "$target" in
         *-android*|*-linuxandroid*)
             :
@@ -4086,10 +4066,10 @@ if test -z "$gonkdir" ; then
              See https://wiki.mozilla.org/Mobile/Fennec/Android#Setup_Fennec_mozconfig for more information about the necessary options])
             ;;
         esac
+
+        MOZ_ANDROID_SDK(23, 23.0.1)
         ;;
     esac
-
-    MOZ_ANDROID_SDK($android_min_api_level)
 fi
 
 dnl ========================================================
@@ -4777,6 +4757,21 @@ then
     fi
 fi
 AC_SUBST(MOZ_ENABLE_DBUS)
+
+dnl ========================================================
+dnl = speech-dispatcher support
+dnl ========================================================
+
+if test "$MOZ_ENABLE_GTK" -o "$MOZ_ENABLE_QT"
+then
+    MOZ_SYNTH_SPEECHD=1
+
+    MOZ_ARG_DISABLE_BOOL(synth-speechd,
+    [  --disable-synth-speechd Disable speech-dispatcher support ],
+        MOZ_SYNTH_SPEECHD=,
+        MOZ_SYNTH_SPEECHD=1)
+fi
+AC_SUBST(MOZ_SYNTH_SPEECHD)
 
 dnl ========================================================
 dnl = Enable Android History instead of Places
@@ -6054,7 +6049,7 @@ MOZ_ARG_DISABLE_BOOL(crashreporter,
     [MOZ_CRASHREPORTER=],
     [MOZ_CRASHREPORTER=F # Force enable breakpad])
 
-if test "$OS_ARCH" != "$HOST_OS_ARCH" -a "$OS_ARCH" != "WINNT"; then
+if test "$OS_ARCH" != "$HOST_OS_ARCH" -a "$OS_ARCH" != "WINNT" -a "$OS_ARCH" != "Darwin"; then
   if test "$MOZ_CRASHREPORTER" = F; then
     AC_MSG_ERROR([Cannot --enable-crashreporter, as breakpad tools do not support compiling on $HOST_OS_ARCH while targeting $OS_ARCH.])
   fi
@@ -6291,9 +6286,6 @@ if test `echo "$MOZ_EXTENSIONS" | grep -c gio` -ne 0; then
     MOZ_EXTENSIONS=`echo $MOZ_EXTENSIONS | sed -e 's|gio||'`
 fi
 AC_SUBST(MOZ_GIO_COMPONENT)
-
-dnl Remove dupes
-MOZ_EXTENSIONS=`$PYTHON ${srcdir}/build/unix/uniq.py ${MOZ_EXTENSIONS}`
 
 dnl Ensure every extension exists, to avoid mostly-inscrutable error messages
 dnl when trying to build a nonexistent extension.
@@ -7514,6 +7506,16 @@ if test -n "$MOZ_REFLOW_PERF"; then
 fi
 
 dnl ========================================================
+dnl = Horizon build options - set default preferences for
+dnl   the horizon project. Horizon is a browser built on
+dnl   top of the graphene runtime.
+dnl ========================================================
+if test -n "$MOZ_HORIZON"; then
+    AC_DEFINE(MOZ_HORIZON)
+fi
+AC_SUBST(MOZ_HORIZON)
+
+dnl ========================================================
 dnl = Offer a way to disable the startup cache
 dnl ========================================================
 
@@ -8365,8 +8367,6 @@ MOZ_ARG_ENABLE_STRING(necko-protocols,
     fi
 done],
     NECKO_PROTOCOLS="$NECKO_PROTOCOLS_DEFAULT")
-dnl Remove dupes
-NECKO_PROTOCOLS=`$PYTHON ${srcdir}/build/unix/uniq.py ${NECKO_PROTOCOLS}`
 AC_SUBST_SET(NECKO_PROTOCOLS)
 for p in $NECKO_PROTOCOLS; do
     AC_DEFINE_UNQUOTED(NECKO_PROTOCOL_$p)
@@ -8546,11 +8546,9 @@ AC_SUBST(MOZ_AUTH_EXTENSION)
 AC_SUBST(MOZ_PREF_EXTENSIONS)
 AC_SUBST(MOZ_DEBUG)
 AC_SUBST(MOZ_DEBUG_SYMBOLS)
-AC_SUBST(MOZ_DEBUG_ENABLE_DEFS)
-AC_SUBST(MOZ_DEBUG_DISABLE_DEFS)
 AC_SUBST(MOZ_DEBUG_LDFLAGS)
 AC_SUBST(WARNINGS_AS_ERRORS)
-AC_SUBST(MOZ_EXTENSIONS)
+AC_SUBST_SET(MOZ_EXTENSIONS)
 AC_SUBST(MOZ_ENABLE_PROFILER_SPS)
 AC_SUBST(MOZ_JPROF)
 AC_SUBST(MOZ_INSTRUMENTS)
@@ -8720,6 +8718,10 @@ AC_SUBST(MOZ_CHILD_PROCESS_BUNDLE)
 # "Profile" field, which controls profile location.
 # - MOZ_APP_ID: When set, used for application.ini's "ID" field, and
 # crash reporter server url.
+# - MOZ_APP_ANDROID_VERSION_CODE: On android, "android:versionCode" for
+# the main application is set to the value of this variable.  If not
+# set, it falls back to a Mozilla-specific value derived from the
+# build ID.
 # - MOZ_PROFILE_MIGRATOR: When set, enables profile migrator.
 
 if test -z "$MOZ_APP_NAME"; then
@@ -8763,6 +8765,7 @@ AC_SUBST(MOZ_APP_BASENAME)
 AC_SUBST(MOZ_APP_VENDOR)
 AC_SUBST(MOZ_APP_PROFILE)
 AC_SUBST(MOZ_APP_ID)
+AC_SUBST(MOZ_APP_ANDROID_VERSION_CODE)
 AC_SUBST(MAR_CHANNEL_ID)
 AC_SUBST(ACCEPTED_MAR_CHANNEL_IDS)
 AC_SUBST(MOZ_PROFILE_MIGRATOR)
@@ -8785,9 +8788,9 @@ AC_SUBST(MOZ_PKG_SPECIAL)
 AC_SUBST(MOZ_SIMPLE_PACKAGE_NAME)
 
 AC_SUBST(MOZILLA_OFFICIAL)
-
-# Build revisions should always be present in official builds
 if test "$MOZILLA_OFFICIAL"; then
+    AC_DEFINE(MOZILLA_OFFICIAL)
+    # Build revisions should always be present in official builds
     MOZ_INCLUDE_SOURCE_INFO=1
 fi
 

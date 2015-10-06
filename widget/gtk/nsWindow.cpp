@@ -401,13 +401,13 @@ NS_IMPL_ISUPPORTS_INHERITED0(nsWindow, nsBaseWidget)
 
 nsWindow::nsWindow()
 {
-    mIsTopLevel       = false;
-    mIsDestroyed      = false;
-    mListenForResizes = false;
-    mIsShown          = false;
-    mNeedsShow        = false;
-    mEnabled          = true;
-    mCreated          = false;
+    mIsTopLevel          = false;
+    mIsDestroyed         = false;
+    mListenForResizes    = false;
+    mIsShown             = false;
+    mNeedsShow           = false;
+    mEnabled             = true;
+    mCreated             = false;
 
     mContainer           = nullptr;
     mGdkWindow           = nullptr;
@@ -423,6 +423,11 @@ nsWindow::nsWindow()
 
 #ifdef MOZ_X11
     mOldFocusWindow      = 0;
+
+    mXDisplay = nullptr;
+    mXWindow  = None;
+    mXVisual  = nullptr;
+    mXDepth   = 0;
 #endif /* MOZ_X11 */
     mPluginType          = PluginType_NONE;
 
@@ -511,12 +516,11 @@ nsWindow::DispatchDeactivateEvent(void)
 void
 nsWindow::DispatchResized(int32_t aWidth, int32_t aHeight)
 {
-    nsIWidgetListener *listeners[] =
-        { mWidgetListener, mAttachedWidgetListener };
-    for (size_t i = 0; i < ArrayLength(listeners); ++i) {
-        if (listeners[i]) {
-            listeners[i]->WindowResized(this, aWidth, aHeight);
-        }
+    if (mWidgetListener) {
+        mWidgetListener->WindowResized(this, aWidth, aHeight);
+    }
+    if (mAttachedWidgetListener) {
+        mAttachedWidgetListener->WindowResized(this, aWidth, aHeight);
     }
 }
 
@@ -721,10 +725,6 @@ nsWindow::Destroy(void)
         gPluginFocusWindow->LoseNonXEmbedPluginFocus();
     }
 #endif /* MOZ_X11 && MOZ_WIDGET_GTK2 */
-  
-    // Destroy thebes surface now. Badness can happen if we destroy
-    // the surface after its X Window.
-    mThebesSurface = nullptr;
 
     GtkWidget *owningWidget = GetMozContainerWidget();
     if (mShell) {
@@ -1814,16 +1814,16 @@ nsWindow::CaptureMouse(bool aCapture)
     if (!mGdkWindow)
         return NS_OK;
 
-    if (!mShell)
+    if (!mContainer)
         return NS_ERROR_FAILURE;
 
     if (aCapture) {
-        gtk_grab_add(mShell);
+        gtk_grab_add(GTK_WIDGET(mContainer));
         GrabPointer(GetLastUserInputTime());
     }
     else {
         ReleaseGrabs();
-        gtk_grab_remove(mShell);
+        gtk_grab_remove(GTK_WIDGET(mContainer));
     }
 
     return NS_OK;
@@ -1836,7 +1836,7 @@ nsWindow::CaptureRollupEvents(nsIRollupListener *aListener,
     if (!mGdkWindow)
         return NS_OK;
 
-    if (!mShell)
+    if (!mContainer)
         return NS_ERROR_FAILURE;
 
     LOG(("CaptureRollupEvents %p %i\n", this, int(aDoCapture)));
@@ -1850,12 +1850,7 @@ nsWindow::CaptureRollupEvents(nsIRollupListener *aListener,
             // (panels with type="drag").
             GdkWindowTypeHint gdkTypeHint = gtk_window_get_type_hint(GTK_WINDOW(mShell));
             if (gdkTypeHint != GDK_WINDOW_TYPE_HINT_DND) {
-              // This widget grab ensures that a Gecko GtkWidget receives mouse
-              // events even when embedded in non-Gecko-owned GtkWidgets.
-              // The grab is placed on the toplevel GtkWindow instead of the
-              // MozContainer to avoid double dispatch of keyboard events
-              // (bug 707623).
-              gtk_grab_add(mShell);
+              gtk_grab_add(GTK_WIDGET(mContainer));
               GrabPointer(GetLastUserInputTime());
             }
         }
@@ -1867,7 +1862,7 @@ nsWindow::CaptureRollupEvents(nsIRollupListener *aListener,
         // There may not have been a drag in process when aDoCapture was set,
         // so make sure to remove any added grab.  This is a no-op if the grab
         // was not added to this widget.
-        gtk_grab_remove(mShell);
+        gtk_grab_remove(GTK_WIDGET(mContainer));
         gRollupListener = nullptr;
     }
 
@@ -2171,7 +2166,7 @@ nsWindow::OnExposeEvent(cairo_t *cr)
         return TRUE;
     }
 
-    RefPtr<DrawTarget> dt = StartRemoteDrawing();
+    RefPtr<DrawTarget> dt = GetDrawTarget(region);
     if(!dt) {
         return FALSE;
     }
@@ -2242,7 +2237,7 @@ nsWindow::OnExposeEvent(cairo_t *cr)
 
                 UpdateAlpha(pattern, boundsRect);
 
-                ctx->SetOperator(gfxContext::OPERATOR_SOURCE);
+                ctx->SetOp(CompositionOp::OP_SOURCE);
                 ctx->SetPattern(pattern);
                 ctx->Paint();
             }
@@ -2250,7 +2245,7 @@ nsWindow::OnExposeEvent(cairo_t *cr)
     }
 #  ifdef MOZ_HAVE_SHMIMAGE
     if (mShmImage && MOZ_LIKELY(!mIsDestroyed)) {
-        mShmImage->Put(mGdkWindow, region);
+      mShmImage->Put(mXDisplay, mXWindow, region);
     }
 #  endif  // MOZ_HAVE_SHMIMAGE
 #endif // MOZ_X11
@@ -3091,12 +3086,7 @@ nsWindow::OnKeyPressEvent(GdkEventKey *aEvent)
         }
     }
 
-    // If the event was consumed, return.
-    if (status == nsEventStatus_eConsumeNoDefault) {
-        return TRUE;
-    }
-
-    return FALSE;
+    return TRUE;
 }
 
 gboolean
@@ -3112,14 +3102,9 @@ nsWindow::OnKeyReleaseEvent(GdkEventKey *aEvent)
     WidgetKeyboardEvent event(true, eKeyUp, this);
     KeymapWrapper::InitKeyEvent(event, aEvent);
 
-    nsEventStatus status = DispatchInputEvent(&event);
+    (void)DispatchInputEvent(&event);
 
-    // If the event was consumed, return.
-    if (status == nsEventStatus_eConsumeNoDefault) {
-        return TRUE;
-    }
-
-    return FALSE;
+    return TRUE;
 }
 
 void
@@ -3602,16 +3587,32 @@ nsWindow::Create(nsIWidget        *aParent,
             g_object_unref(group);
         }
 
-        // Prevent GtkWindow from painting a background to flicker.
-        gtk_widget_set_app_paintable(mShell, TRUE);
-
         // Create a container to hold child windows and child GtkWidgets.
         GtkWidget *container = moz_container_new();
         mContainer = MOZ_CONTAINER(container);
-        // Use mShell's window for drawing and events.
-        gtk_widget_set_has_window(container, FALSE);
-        eventWidget = mShell;
+
+#if (MOZ_WIDGET_GTK == 2)
+        bool containerHasWindow = false;
+#else
+        // "csd" style is set when widget is realized so we need to call
+        // it explicitly now.
+        gtk_widget_realize(mShell);
+
+        // We can't draw directly to top-level window when client side
+        // decorations are enabled. We use container with GdkWindow instead.
+        GtkStyleContext* style = gtk_widget_get_style_context(mShell);
+        bool containerHasWindow = gtk_style_context_has_class(style, "csd");
+#endif
+        if (!containerHasWindow) {
+            // Use mShell's window for drawing and events.
+            gtk_widget_set_has_window(container, FALSE);
+            // Prevent GtkWindow from painting a background to flicker.
+            gtk_widget_set_app_paintable(mShell, TRUE);
+        }
+        // Set up event widget
+        eventWidget = containerHasWindow ? container : mShell;
         gtk_widget_add_events(eventWidget, kEvents);
+
         gtk_container_add(GTK_CONTAINER(mShell), container);
         gtk_widget_realize(container);
 
@@ -3620,7 +3621,7 @@ nsWindow::Create(nsIWidget        *aParent,
         gtk_widget_grab_focus(container);
 
         // the drawing window
-        mGdkWindow = gtk_widget_get_window(mShell);
+        mGdkWindow = gtk_widget_get_window(eventWidget);
 
         if (mWindowType == eWindowType_popup) {
             // gdk does not automatically set the cursor for "temporary"
@@ -3828,9 +3829,12 @@ nsWindow::Create(nsIWidget        *aParent,
 
 #ifdef MOZ_X11
     if (mGdkWindow) {
-      // force creation of native window via internal call to gdk_window_ensure_native
-      // in case it was not created already
-      gdk_x11_window_get_xid(mGdkWindow);
+      mXDisplay = GDK_WINDOW_XDISPLAY(mGdkWindow);
+      mXWindow = gdk_x11_window_get_xid(mGdkWindow);
+
+      GdkVisual* gdkVisual = gdk_window_get_visual(mGdkWindow);
+      mXVisual = gdk_x11_visual_get_xvisual(gdkVisual);
+      mXDepth = gdk_visual_get_depth(gdkVisual);
     }
 #endif
 
@@ -6283,7 +6287,7 @@ nsWindow::GetSurfaceForGdkDrawable(GdkDrawable* aDrawable,
         Visual* xVisual = gdk_x11_visual_get_xvisual(visual);
 
         result = new gfxXlibSurface(xDisplay, xDrawable, xVisual,
-                                    gfxIntSize(aSize.width, aSize.height));
+                                    IntSize(aSize.width, aSize.height));
     } else {
         // no visual? we must be using an xrender format.  Find a format
         // for this depth.
@@ -6301,7 +6305,7 @@ nsWindow::GetSurfaceForGdkDrawable(GdkDrawable* aDrawable,
         }
 
         result = new gfxXlibSurface(xScreen, xDrawable, pf,
-                                    gfxIntSize(aSize.width, aSize.height));
+                                    IntSize(aSize.width, aSize.height));
     }
 
     return result.forget();
@@ -6309,31 +6313,43 @@ nsWindow::GetSurfaceForGdkDrawable(GdkDrawable* aDrawable,
 #endif
 
 already_AddRefed<DrawTarget>
-nsWindow::StartRemoteDrawing()
+nsWindow::GetDrawTarget(const nsIntRegion& aRegion)
 {
-  gfxASurface *surf = GetThebesSurface();
-  if (!surf) {
+  if (!mGdkWindow) {
     return nullptr;
   }
 
-  nsIntSize size = surf->GetSize();
+  nsIntRect bounds = aRegion.GetBounds();
+  IntSize size(bounds.XMost(), bounds.YMost());
   if (size.width <= 0 || size.height <= 0) {
     return nullptr;
   }
 
-  gfxPlatform *platform = gfxPlatform::GetPlatform();
-  if (platform->SupportsAzureContentForType(BackendType::CAIRO) ||
-      surf->GetType() == gfxSurfaceType::Xlib) {
-    return platform->CreateDrawTargetForSurface(surf, size);
-  } else if (platform->SupportsAzureContentForType(BackendType::SKIA) &&
-             surf->GetType() == gfxSurfaceType::Image) {
-    gfxImageSurface* imgSurf = static_cast<gfxImageSurface*>(surf);
-    SurfaceFormat format = ImageFormatToSurfaceFormat(imgSurf->Format());
-    return platform->CreateDrawTargetForData(
-                     imgSurf->Data(), size, imgSurf->Stride(), format);
-  } else {
-    return nullptr;
+  RefPtr<DrawTarget> dt;
+
+#ifdef MOZ_X11
+#  ifdef MOZ_HAVE_SHMIMAGE
+  if (nsShmImage::UseShm()) {
+    dt = nsShmImage::EnsureShmImage(size,
+                                    mXDisplay, mXVisual, mXDepth,
+                                    mShmImage);
   }
+#  endif  // MOZ_HAVE_SHMIMAGE
+  if (!dt) {
+    RefPtr<gfxXlibSurface> surf = new gfxXlibSurface(mXDisplay, mXWindow, mXVisual, size);
+    if (!surf->CairoStatus()) {
+      dt = gfxPlatform::GetPlatform()->CreateDrawTargetForSurface(surf.get(), surf->GetSize());
+    }
+  }
+#endif // MOZ_X11
+
+  return dt.forget();
+}
+
+already_AddRefed<DrawTarget>
+nsWindow::StartRemoteDrawingInRegion(nsIntRegion& aInvalidRegion)
+{
+  return GetDrawTarget(aInvalidRegion);
 }
 
 void
@@ -6345,71 +6361,9 @@ nsWindow::EndRemoteDrawingInRegion(DrawTarget* aDrawTarget, nsIntRegion& aInvali
     return;
   }
 
-  if (mThebesSurface) {
-    aInvalidRegion.AndWith(nsIntRect(nsIntPoint(0, 0), mThebesSurface->GetSize()));
-  }
-
-  mShmImage->Put(mGdkWindow, aInvalidRegion);
-
+  mShmImage->Put(mXDisplay, mXWindow, aInvalidRegion);
 #  endif // MOZ_HAVE_SHMIMAGE
 #endif // MOZ_X11
-}
-
-// return the gfxASurface for rendering to this widget
-gfxASurface*
-nsWindow::GetThebesSurface()
-{
-    if (!mGdkWindow)
-        return nullptr;
-
-#ifdef MOZ_X11
-    gint width, height;
-
-#if (MOZ_WIDGET_GTK == 2)
-    gdk_drawable_get_size(GDK_DRAWABLE(mGdkWindow), &width, &height);
-#else
-    width = GdkCoordToDevicePixels(gdk_window_get_width(mGdkWindow));
-    height = GdkCoordToDevicePixels(gdk_window_get_height(mGdkWindow));
-#endif
-
-    // Owen Taylor says this is the right thing to do!
-    width = std::min(32767, width);
-    height = std::min(32767, height);
-    gfxIntSize size(width, height);
-
-    GdkVisual *gdkVisual = gdk_window_get_visual(mGdkWindow);
-    Visual* visual = gdk_x11_visual_get_xvisual(gdkVisual);
-
-#  ifdef MOZ_HAVE_SHMIMAGE
-    bool usingShm = false;
-    if (nsShmImage::UseShm()) {
-        // EnsureShmImage() is a dangerous interface, but we guarantee
-        // that the thebes surface and the shmimage have the same
-        // lifetime
-        mThebesSurface =
-            nsShmImage::EnsureShmImage(size,
-                                       visual, gdk_visual_get_depth(gdkVisual),
-                                       mShmImage);
-        usingShm = mThebesSurface != nullptr;
-    }
-    if (!usingShm)
-#  endif  // MOZ_HAVE_SHMIMAGE
-    {
-        mThebesSurface = new gfxXlibSurface
-            (GDK_WINDOW_XDISPLAY(mGdkWindow),
-             gdk_x11_window_get_xid(mGdkWindow),
-             visual,
-             size);
-    }
-#endif // MOZ_X11
-
-    // if the surface creation is reporting an error, then
-    // we don't have a surface to give back
-    if (mThebesSurface && mThebesSurface->CairoStatus() != 0) {
-        mThebesSurface = nullptr;
-    }
-
-    return mThebesSurface;
 }
 
 // Code shared begin BeginMoveDrag and BeginResizeDrag
@@ -6542,6 +6496,11 @@ nsWindow::GetLayerManager(PLayerTransactionChild* aShadowManager,
                           LayerManagerPersistence aPersistence,
                           bool* aAllowRetaining)
 {
+    if (mIsDestroyed) {
+      // Prevent external code from triggering the re-creation of the LayerManager/Compositor
+      // during shutdown. Just return what we currently have, which is most likely null.
+      return mLayerManager;
+    }
     if (!mLayerManager && eTransparencyTransparent == GetTransparencyMode()) {
         mLayerManager = CreateBasicLayerManager();
     }

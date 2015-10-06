@@ -4,6 +4,28 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+// Utility function. Returns true if the given boolean pref...
+//  (a) exists and (b) is set to true.
+// Otherwise, returns false.
+//
+// This function also reports a test failure if the pref isn't set at all. This
+// ensures that we remove pref-checks from mochitests (instead of accidentally
+// disabling the tests that are controlled by that check) when we remove a
+// mature feature's pref from the rest of the codebase.
+function IsCSSPropertyPrefEnabled(prefName)
+{
+  try {
+    if (SpecialPowers.getBoolPref(prefName)) {
+      return true;
+    }
+  } catch (ex) {
+    ok(false, "Failed to look up property-controlling pref '" +
+       prefName + "' (" + ex + ")");
+  }
+
+  return false;
+}
+
 // True longhand properties.
 const CSS_TYPE_LONGHAND = 0;
 
@@ -43,6 +65,12 @@ const CSS_TYPE_SHORTHAND_AND_LONGHAND = 2;
 //   unbalanced_values: Things that are not values for the property and
 //     should be rejected, and which also contain unbalanced constructs
 //     that should absorb what follows
+//
+// Note: By default, an alias is assumed to accept/reject the same values as
+// the property that it aliases, and to have the same prerequisites. So, if
+// "alias_for" is set, the "*_values" and "prerequisites" fields can simply
+// be omitted, and they'll be populated automatically to match the aliased
+// property's fields.
 
 // Helper functions used to construct gCSSProperties.
 
@@ -595,7 +623,7 @@ var gCSSProperties = {
     type: CSS_TYPE_TRUE_SHORTHAND,
     subproperties: [ "animation-name", "animation-duration", "animation-timing-function", "animation-delay", "animation-direction", "animation-fill-mode", "animation-iteration-count", "animation-play-state" ],
     initial_values: [ "none none 0s 0s ease normal running 1.0", "none", "0s", "ease", "normal", "running", "1.0" ],
-    other_values: [ "bounce 1s linear 2s", "bounce 1s 2s linear", "bounce linear 1s 2s", "linear bounce 1s 2s", "linear 1s bounce 2s", "linear 1s 2s bounce", "1s bounce linear 2s", "1s bounce 2s linear", "1s 2s bounce linear", "1s linear bounce 2s", "1s linear 2s bounce", "1s 2s linear bounce", "bounce linear 1s", "bounce 1s linear", "linear bounce 1s", "linear 1s bounce", "1s bounce linear", "1s linear bounce", "1s 2s bounce", "1s bounce 2s", "bounce 1s 2s", "1s 2s linear", "1s linear 2s", "linear 1s 2s", "bounce 1s", "1s bounce", "linear 1s", "1s linear", "1s 2s", "2s 1s", "bounce", "linear", "1s", "height", "2s", "ease-in-out", "2s ease-in", "opacity linear", "ease-out 2s", "2s color, 1s bounce, 500ms height linear, 1s opacity 4s cubic-bezier(0.0, 0.1, 1.0, 1.0)", "1s \\32bounce linear 2s", "1s -bounce linear 2s", "1s -\\32bounce linear 2s", "1s \\32 0bounce linear 2s", "1s -\\32 0bounce linear 2s", "1s \\2bounce linear 2s", "1s -\\2bounce linear 2s", "2s, 1s bounce", "1s bounce, 2s", "2s all, 1s bounce", "1s bounce, 2s all", "1s bounce, 2s none", "2s none, 1s bounce", "2s bounce, 1s all", "2s all, 1s bounce" ],
+    other_values: [ "none none 0s 0s cubic-bezier(0.25, 0.1, 0.25, 1.0) normal running 1.0", "bounce 1s linear 2s", "bounce 1s 2s linear", "bounce linear 1s 2s", "linear bounce 1s 2s", "linear 1s bounce 2s", "linear 1s 2s bounce", "1s bounce linear 2s", "1s bounce 2s linear", "1s 2s bounce linear", "1s linear bounce 2s", "1s linear 2s bounce", "1s 2s linear bounce", "bounce linear 1s", "bounce 1s linear", "linear bounce 1s", "linear 1s bounce", "1s bounce linear", "1s linear bounce", "1s 2s bounce", "1s bounce 2s", "bounce 1s 2s", "1s 2s linear", "1s linear 2s", "linear 1s 2s", "bounce 1s", "1s bounce", "linear 1s", "1s linear", "1s 2s", "2s 1s", "bounce", "linear", "1s", "height", "2s", "ease-in-out", "2s ease-in", "opacity linear", "ease-out 2s", "2s color, 1s bounce, 500ms height linear, 1s opacity 4s cubic-bezier(0.0, 0.1, 1.0, 1.0)", "1s \\32bounce linear 2s", "1s -bounce linear 2s", "1s -\\32bounce linear 2s", "1s \\32 0bounce linear 2s", "1s -\\32 0bounce linear 2s", "1s \\2bounce linear 2s", "1s -\\2bounce linear 2s", "2s, 1s bounce", "1s bounce, 2s", "2s all, 1s bounce", "1s bounce, 2s all", "1s bounce, 2s none", "2s none, 1s bounce", "2s bounce, 1s all", "2s all, 1s bounce" ],
     invalid_values: [  "2s inherit", "inherit 2s", "2s bounce, 1s inherit", "2s inherit, 1s bounce", "2s initial", "2s all,, 1s bounce", "2s all, , 1s bounce" ]
   },
   "animation-delay": {
@@ -660,8 +688,8 @@ var gCSSProperties = {
     domProp: "animationTimingFunction",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: [ "ease", "cubic-bezier(0.25, 0.1, 0.25, 1.0)" ],
-    other_values: [ "linear", "ease-in", "ease-out", "ease-in-out", "linear, ease-in, cubic-bezier(0.1, 0.2, 0.8, 0.9)", "cubic-bezier(0.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.25, 1.5, 0.75, -0.5)", "step-start", "step-end", "steps(1)", "steps(2, start)", "steps(386)", "steps(3, end)" ],
+    initial_values: [ "ease" ],
+    other_values: [ "cubic-bezier(0.25, 0.1, 0.25, 1.0)", "linear", "ease-in", "ease-out", "ease-in-out", "linear, ease-in, cubic-bezier(0.1, 0.2, 0.8, 0.9)", "cubic-bezier(0.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.25, 1.5, 0.75, -0.5)", "step-start", "step-end", "steps(1)", "steps(2, start)", "steps(386)", "steps(3, end)" ],
     invalid_values: [ "none", "auto", "cubic-bezier(0.25, 0.1, 0.25)", "cubic-bezier(0.25, 0.1, 0.25, 0.25, 1.0)", "cubic-bezier(-0.5, 0.5, 0.5, 0.5)", "cubic-bezier(1.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.5, 0.5, -0.5, 0.5)", "cubic-bezier(0.5, 0.5, 1.5, 0.5)", "steps(2, step-end)", "steps(0)", "steps(-2)", "steps(0, step-end, 1)" ]
   },
   "-moz-appearance": {
@@ -1056,9 +1084,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "box-sizing",
     subproperties: [ "box-sizing" ],
-    initial_values: [ "content-box" ],
-    other_values: [ "border-box" ],
-    invalid_values: [ "margin-box", "content", "padding", "border", "margin" ]
   },
   "-moz-columns": {
     domProp: "MozColumns",
@@ -1449,7 +1474,7 @@ var gCSSProperties = {
     /* no subproperties */
     /* auto may or may not be initial */
     initial_values: [ "0", "0px", "0%", "0em", "0ex", "calc(0pt)", "calc(0% + 0px)" ],
-    other_values: [ "1px", "3em",
+    other_values: [ "1px", "3em", "5%",
       "calc(2px)",
       "calc(-2px)",
       "calc(50%)",
@@ -1457,7 +1482,7 @@ var gCSSProperties = {
       "calc(25px*3)",
       "calc(3*25px + 50%)",
     ],
-    invalid_values: [ "5" ]
+    invalid_values: [ "5", "..25px", ".+5px", ".px", "-.px", "++5px", "-+4px", "+-3px", "--7px", "+-.6px", "-+.5px", "++.7px", "--.4px" ],
   },
   "margin-inline-start": {
     domProp: "marginInlineStart",
@@ -1468,7 +1493,7 @@ var gCSSProperties = {
     /* no subproperties */
     /* auto may or may not be initial */
     initial_values: [ "0", "0px", "0%", "0em", "0ex", "calc(0pt)", "calc(0% + 0px)" ],
-    other_values: [ "1px", "3em",
+    other_values: [ "1px", "3em", "5%",
       "calc(2px)",
       "calc(-2px)",
       "calc(50%)",
@@ -1476,7 +1501,7 @@ var gCSSProperties = {
       "calc(25px*3)",
       "calc(3*25px + 50%)",
     ],
-    invalid_values: [ "5" ]
+    invalid_values: [ "5", "..25px", ".+5px", ".px", "-.px", "++5px", "-+4px", "+-3px", "--7px", "+-.6px", "-+.5px", "++.7px", "--.4px" ],
   },
   "-moz-outline-radius": {
     domProp: "MozOutlineRadius",
@@ -1584,7 +1609,7 @@ var gCSSProperties = {
     get_computed: logical_box_prop_get_computed,
     /* no subproperties */
     initial_values: [ "0", "0px", "0%", "0em", "0ex", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
-    other_values: [ "1px", "3em",
+    other_values: [ "1px", "3em", "5%",
       "calc(2px)",
       "calc(50%)",
       "calc(3*25px)",
@@ -1601,7 +1626,7 @@ var gCSSProperties = {
     get_computed: logical_box_prop_get_computed,
     /* no subproperties */
     initial_values: [ "0", "0px", "0%", "0em", "0ex", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
-    other_values: [ "1px", "3em",
+    other_values: [ "1px", "3em", "5%",
       "calc(2px)",
       "calc(50%)",
       "calc(3*25px)",
@@ -1817,22 +1842,6 @@ var gCSSProperties = {
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "auto" ],
     other_values: [ "none", "text", "element", "elements", "all", "toggle", "tri-state", "-moz-all", "-moz-none" ],
-    invalid_values: []
-  },
-  "-moz-window-dragging": {
-    domProp: "MozWindowDragging",
-    inherited: true,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "no-drag" ],
-    other_values: [ "drag" ],
-    invalid_values: [ "none" ]
-  },
-  "-moz-window-shadow": {
-    domProp: "MozWindowShadow",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "default" ],
-    other_values: [ "none", "menu", "tooltip", "sheet" ],
     invalid_values: []
   },
   "background": {
@@ -2365,8 +2374,8 @@ var gCSSProperties = {
     domProp: "captionSide",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
-    initial_values: [ "block-start" ],
-    other_values: [ "block-end", "inline-start", "inline-end", "block-start-outside", "block-end-outside", "top", "bottom", "left", "right", "top-outside", "bottom-outside" ],
+    initial_values: [ "top" ],
+    other_values: [ "bottom", "left", "right", "top-outside", "bottom-outside" ],
     invalid_values: []
   },
   "clear": {
@@ -3448,7 +3457,7 @@ var gCSSProperties = {
     type: CSS_TYPE_TRUE_SHORTHAND,
     subproperties: [ "transition-property", "transition-duration", "transition-timing-function", "transition-delay" ],
     initial_values: [ "all 0s ease 0s", "all", "0s", "0s 0s", "ease" ],
-    other_values: [ "width 1s linear 2s", "width 1s 2s linear", "width linear 1s 2s", "linear width 1s 2s", "linear 1s width 2s", "linear 1s 2s width", "1s width linear 2s", "1s width 2s linear", "1s 2s width linear", "1s linear width 2s", "1s linear 2s width", "1s 2s linear width", "width linear 1s", "width 1s linear", "linear width 1s", "linear 1s width", "1s width linear", "1s linear width", "1s 2s width", "1s width 2s", "width 1s 2s", "1s 2s linear", "1s linear 2s", "linear 1s 2s", "width 1s", "1s width", "linear 1s", "1s linear", "1s 2s", "2s 1s", "width", "linear", "1s", "height", "2s", "ease-in-out", "2s ease-in", "opacity linear", "ease-out 2s", "2s color, 1s width, 500ms height linear, 1s opacity 4s cubic-bezier(0.0, 0.1, 1.0, 1.0)", "1s \\32width linear 2s", "1s -width linear 2s", "1s -\\32width linear 2s", "1s \\32 0width linear 2s", "1s -\\32 0width linear 2s", "1s \\2width linear 2s", "1s -\\2width linear 2s", "2s, 1s width", "1s width, 2s", "2s all, 1s width", "1s width, 2s all", "2s all, 1s width", "2s width, 1s all" ],
+    other_values: [ "all 0s cubic-bezier(0.25, 0.1, 0.25, 1.0) 0s", "width 1s linear 2s", "width 1s 2s linear", "width linear 1s 2s", "linear width 1s 2s", "linear 1s width 2s", "linear 1s 2s width", "1s width linear 2s", "1s width 2s linear", "1s 2s width linear", "1s linear width 2s", "1s linear 2s width", "1s 2s linear width", "width linear 1s", "width 1s linear", "linear width 1s", "linear 1s width", "1s width linear", "1s linear width", "1s 2s width", "1s width 2s", "width 1s 2s", "1s 2s linear", "1s linear 2s", "linear 1s 2s", "width 1s", "1s width", "linear 1s", "1s linear", "1s 2s", "2s 1s", "width", "linear", "1s", "height", "2s", "ease-in-out", "2s ease-in", "opacity linear", "ease-out 2s", "2s color, 1s width, 500ms height linear, 1s opacity 4s cubic-bezier(0.0, 0.1, 1.0, 1.0)", "1s \\32width linear 2s", "1s -width linear 2s", "1s -\\32width linear 2s", "1s \\32 0width linear 2s", "1s -\\32 0width linear 2s", "1s \\2width linear 2s", "1s -\\2width linear 2s", "2s, 1s width", "1s width, 2s", "2s all, 1s width", "1s width, 2s all", "2s all, 1s width", "2s width, 1s all" ],
     invalid_values: [ "1s width, 2s none", "2s none, 1s width", "2s inherit", "inherit 2s", "2s width, 1s inherit", "2s inherit, 1s width", "2s initial", "1s width,,2s color", "1s width, ,2s color" ]
   },
   "transition-delay": {
@@ -3479,8 +3488,8 @@ var gCSSProperties = {
     domProp: "transitionTimingFunction",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: [ "ease", "cubic-bezier(0.25, 0.1, 0.25, 1.0)" ],
-    other_values: [ "linear", "ease-in", "ease-out", "ease-in-out", "linear, ease-in, cubic-bezier(0.1, 0.2, 0.8, 0.9)", "cubic-bezier(0.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.25, 1.5, 0.75, -0.5)", "step-start", "step-end", "steps(1)", "steps(2, start)", "steps(386)", "steps(3, end)" ],
+    initial_values: [ "ease" ],
+    other_values: [ "cubic-bezier(0.25, 0.1, 0.25, 1.0)", "linear", "ease-in", "ease-out", "ease-in-out", "linear, ease-in, cubic-bezier(0.1, 0.2, 0.8, 0.9)", "cubic-bezier(0.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.25, 1.5, 0.75, -0.5)", "step-start", "step-end", "steps(1)", "steps(2, start)", "steps(386)", "steps(3, end)" ],
     invalid_values: [ "none", "auto", "cubic-bezier(0.25, 0.1, 0.25)", "cubic-bezier(0.25, 0.1, 0.25, 0.25, 1.0)", "cubic-bezier(-0.5, 0.5, 0.5, 0.5)", "cubic-bezier(1.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.5, 0.5, -0.5, 0.5)", "cubic-bezier(0.5, 0.5, 1.5, 0.5)", "steps(2, step-end)", "steps(0)", "steps(-2)", "steps(0, step-end, 1)" ]
   },
   "unicode-bidi": {
@@ -4194,8 +4203,9 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "transform",
     subproperties: [ "transform" ],
-    prerequisites: { "width": "300px", "height": "50px" },
-    initial_values: [ "none" ],
+    // NOTE: We specify other_values & invalid_values explicitly here (instead
+    // of deferring to "transform") because we accept some legacy syntax as
+    // valid for "-moz-transform" but not for "transform".
     other_values: [ "translatex(1px)", "translatex(4em)",
       "translatex(-4px)", "translatex(3px)",
       "translatex(0px) translatex(1px) translatex(2px) translatex(3px) translatex(4px)",
@@ -4264,30 +4274,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "transform-origin",
     subproperties: [ "transform-origin" ],
-    prerequisites: { "width": "10px", "height": "10px", "display": "block"},
-    initial_values: [ "50% 50%", "center", "center center" ],
-    other_values: [ "25% 25%", "6px 5px", "20% 3em", "0 0", "0in 1in",
-            "top", "bottom","top left", "top right",
-            "top center", "center left", "center right",
-            "bottom left", "bottom right", "bottom center",
-            "20% center", "6px center", "13in bottom",
-            "left 50px", "right 13%", "center 40px",
-      "calc(20px)",
-      "calc(20px) 10px",
-      "10px calc(20px)",
-      "calc(20px) 25%",
-      "25% calc(20px)",
-      "calc(20px) calc(20px)",
-      "calc(20px + 1em) calc(20px / 2)",
-      "calc(20px + 50%) calc(50% - 10px)",
-      "calc(-20px) calc(-50%)",
-      "calc(-20%) calc(-50%)",
-      "6px 5px 5px",
-      "top center 10px"
-    ],
-    invalid_values: ["red", "auto", "none", "0.5 0.5", "40px #0000ff",
-             "border", "center red", "right diagonal",
-             "#00ffff bottom"]
   },
   "-moz-perspective-origin": {
     domProp: "MozPerspectiveOrigin",
@@ -4295,27 +4281,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "perspective-origin",
     subproperties: [ "perspective-origin" ],
-    prerequisites: { "width": "10px", "height": "10px", "display": "block"},
-    initial_values: [ "50% 50%", "center", "center center" ],
-    other_values: [ "25% 25%", "6px 5px", "20% 3em", "0 0", "0in 1in",
-                    "top", "bottom","top left", "top right",
-                    "top center", "center left", "center right",
-                    "bottom left", "bottom right", "bottom center",
-                    "20% center", "6px center", "13in bottom",
-                    "left 50px", "right 13%", "center 40px",
-                    "calc(20px)",
-                    "calc(20px) 10px",
-                    "10px calc(20px)",
-                    "calc(20px) 25%",
-                    "25% calc(20px)",
-                    "calc(20px) calc(20px)",
-                    "calc(20px + 1em) calc(20px / 2)",
-                    "calc(20px + 50%) calc(50% - 10px)",
-                    "calc(-20px) calc(-50%)",
-                    "calc(-20%) calc(-50%)" ],
-    invalid_values: [ "red", "auto", "none", "0.5 0.5", "40px #0000ff",
-                      "border", "center red", "right diagonal",
-                      "#00ffff bottom"]
   },
   "-moz-perspective": {
     domProp: "MozPerspective",
@@ -4323,9 +4288,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "perspective",
     subproperties: [ "perspective" ],
-    initial_values: [ "none" ],
-    other_values: [ "1000px", "500.2px" ],
-    invalid_values: [ "pants", "200", "0", "-100px", "-27.2em" ]
   },
   "-moz-backface-visibility": {
     domProp: "MozBackfaceVisibility",
@@ -4333,19 +4295,12 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "backface-visibility",
     subproperties: [ "backface-visibility" ],
-    initial_values: [ "visible" ],
-    other_values: [ "hidden" ],
-    invalid_values: [ "collapse" ]
   },
   "-moz-transform-style": {
     domProp: "MozTransformStyle",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "transform-style",
-    subproperties: [ "transform-style" ],
-    initial_values: [ "flat" ],
-    other_values: [ "preserve-3d" ],
-    invalid_values: []
   },
   "-moz-border-image": {
     domProp: "MozBorderImage",
@@ -4353,36 +4308,6 @@ var gCSSProperties = {
     type: CSS_TYPE_TRUE_SHORTHAND,
     alias_for: "border-image",
     subproperties: [ "border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat" ],
-    initial_values: [ "none" ],
-    other_values: [ "url('border.png') 27 27 27 27",
-            "url('border.png') 27",
-            "stretch url('border.png')",
-            "url('border.png') 27 fill",
-            "url('border.png') 27 27 27 27 repeat",
-            "repeat url('border.png') 27 27 27 27",
-            "url('border.png') repeat 27 27 27 27",
-            "url('border.png') fill 27 27 27 27 repeat",
-            "url('border.png') 27 27 27 27 / 1em",
-            "27 27 27 27 / 1em url('border.png') ",
-            "url('border.png') 27 27 27 27 / 10 10 10 / 10 10 repeat",
-            "repeat 27 27 27 27 / 10 10 10 / 10 10 url('border.png')",
-            "url('border.png') 27 27 27 27 / / 10 10 1em",
-            "fill 27 27 27 27 / / 10 10 1em url('border.png')",
-            "url('border.png') 27 27 27 27 / 1em 1em 1em 1em repeat",
-            "url('border.png') 27 27 27 27 / 1em 1em 1em 1em stretch round" ],
-    invalid_values: [ "url('border.png') 27 27 27 27 27",
-              "url('border.png') 27 27 27 27 / 1em 1em 1em 1em 1em",
-              "url('border.png') 27 27 27 27 /",
-              "url('border.png') fill",
-              "url('border.png') fill repeat",
-              "fill repeat",
-              "url('border.png') fill / 1em",
-              "url('border.png') / repeat",
-              "url('border.png') 1 /",
-              "url('border.png') 1 / /",
-              "1 / url('border.png')",
-              "url('border.png') / 1",
-              "url('border.png') / / 1"]
   },
   "-moz-transition": {
     domProp: "MozTransition",
@@ -4390,9 +4315,6 @@ var gCSSProperties = {
     type: CSS_TYPE_TRUE_SHORTHAND,
     alias_for: "transition",
     subproperties: [ "transition-property", "transition-duration", "transition-timing-function", "transition-delay" ],
-    initial_values: [ "all 0s ease 0s", "all", "0s", "0s 0s", "ease" ],
-    other_values: [ "width 1s linear 2s", "width 1s 2s linear", "width linear 1s 2s", "linear width 1s 2s", "linear 1s width 2s", "linear 1s 2s width", "1s width linear 2s", "1s width 2s linear", "1s 2s width linear", "1s linear width 2s", "1s linear 2s width", "1s 2s linear width", "width linear 1s", "width 1s linear", "linear width 1s", "linear 1s width", "1s width linear", "1s linear width", "1s 2s width", "1s width 2s", "width 1s 2s", "1s 2s linear", "1s linear 2s", "linear 1s 2s", "width 1s", "1s width", "linear 1s", "1s linear", "1s 2s", "2s 1s", "width", "linear", "1s", "height", "2s", "ease-in-out", "2s ease-in", "opacity linear", "ease-out 2s", "2s color, 1s width, 500ms height linear, 1s opacity 4s cubic-bezier(0.0, 0.1, 1.0, 1.0)", "1s \\32width linear 2s", "1s -width linear 2s", "1s -\\32width linear 2s", "1s \\32 0width linear 2s", "1s -\\32 0width linear 2s", "1s \\2width linear 2s", "1s -\\2width linear 2s", "2s, 1s width", "1s width, 2s", "2s all, 1s width", "1s width, 2s all", "2s all, 1s width", "2s width, 1s all" ],
-    invalid_values: [ "1s width, 2s none", "2s none, 1s width", "2s inherit", "inherit 2s", "2s width, 1s inherit", "2s inherit, 1s width", "2s initial" ]
   },
   "-moz-transition-delay": {
     domProp: "MozTransitionDelay",
@@ -4400,9 +4322,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "transition-delay",
     subproperties: [ "transition-delay" ],
-    initial_values: [ "0s", "0ms" ],
-    other_values: [ "1s", "250ms", "-100ms", "-1s", "1s, 250ms, 2.3s"],
-    invalid_values: [ "0", "0px" ]
   },
   "-moz-transition-duration": {
     domProp: "MozTransitionDuration",
@@ -4410,9 +4329,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "transition-duration",
     subproperties: [ "transition-duration" ],
-    initial_values: [ "0s", "0ms" ],
-    other_values: [ "1s", "250ms", "1s, 250ms, 2.3s"],
-    invalid_values: [ "0", "0px", "-1ms", "-2s" ]
   },
   "-moz-transition-property": {
     domProp: "MozTransitionProperty",
@@ -4420,9 +4336,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "transition-property",
     subproperties: [ "transition-property" ],
-    initial_values: [ "all" ],
-    other_values: [ "none", "left", "top", "color", "width, height, opacity", "foobar", "auto", "\\32width", "-width", "-\\32width", "\\32 0width", "-\\32 0width", "\\2width", "-\\2width", "all, all", "all, color", "color, all" ],
-    invalid_values: [ "none, none", "color, none", "none, color", "inherit, color", "color, inherit", "initial, color", "color, initial", "none, color", "color, none" ]
   },
   "-moz-transition-timing-function": {
     domProp: "MozTransitionTimingFunction",
@@ -4430,9 +4343,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "transition-timing-function",
     subproperties: [ "transition-timing-function" ],
-    initial_values: [ "ease", "cubic-bezier(0.25, 0.1, 0.25, 1.0)" ],
-    other_values: [ "linear", "ease-in", "ease-out", "ease-in-out", "linear, ease-in, cubic-bezier(0.1, 0.2, 0.8, 0.9)", "cubic-bezier(0.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.25, 1.5, 0.75, -0.5)", "step-start", "step-end", "steps(1)", "steps(2, start)", "steps(386)", "steps(3, end)" ],
-    invalid_values: [ "none", "auto", "cubic-bezier(0.25, 0.1, 0.25)", "cubic-bezier(0.25, 0.1, 0.25, 0.25, 1.0)", "cubic-bezier(-0.5, 0.5, 0.5, 0.5)", "cubic-bezier(1.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.5, 0.5, -0.5, 0.5)", "cubic-bezier(0.5, 0.5, 1.5, 0.5)", "steps(2, step-end)", "steps(0)", "steps(-2)", "steps(0, step-end, 1)" ]
   },
   "-moz-animation": {
     domProp: "MozAnimation",
@@ -4440,9 +4350,6 @@ var gCSSProperties = {
     type: CSS_TYPE_TRUE_SHORTHAND,
     alias_for: "animation",
     subproperties: [ "animation-name", "animation-duration", "animation-timing-function", "animation-delay", "animation-direction", "animation-fill-mode", "animation-iteration-count", "animation-play-state" ],
-    initial_values: [ "none none 0s 0s ease normal running 1.0", "none", "0s", "ease", "normal", "running", "1.0" ],
-    other_values: [ "bounce 1s linear 2s", "bounce 1s 2s linear", "bounce linear 1s 2s", "linear bounce 1s 2s", "linear 1s bounce 2s", "linear 1s 2s bounce", "1s bounce linear 2s", "1s bounce 2s linear", "1s 2s bounce linear", "1s linear bounce 2s", "1s linear 2s bounce", "1s 2s linear bounce", "bounce linear 1s", "bounce 1s linear", "linear bounce 1s", "linear 1s bounce", "1s bounce linear", "1s linear bounce", "1s 2s bounce", "1s bounce 2s", "bounce 1s 2s", "1s 2s linear", "1s linear 2s", "linear 1s 2s", "bounce 1s", "1s bounce", "linear 1s", "1s linear", "1s 2s", "2s 1s", "bounce", "linear", "1s", "height", "2s", "ease-in-out", "2s ease-in", "opacity linear", "ease-out 2s", "2s color, 1s bounce, 500ms height linear, 1s opacity 4s cubic-bezier(0.0, 0.1, 1.0, 1.0)", "1s \\32bounce linear 2s", "1s -bounce linear 2s", "1s -\\32bounce linear 2s", "1s \\32 0bounce linear 2s", "1s -\\32 0bounce linear 2s", "1s \\2bounce linear 2s", "1s -\\2bounce linear 2s", "2s, 1s bounce", "1s bounce, 2s", "2s all, 1s bounce", "1s bounce, 2s all", "1s bounce, 2s none", "2s none, 1s bounce", "2s bounce, 1s all", "2s all, 1s bounce" ],
-    invalid_values: [  "2s inherit", "inherit 2s", "2s bounce, 1s inherit", "2s inherit, 1s bounce", "2s initial" ]
   },
   "-moz-animation-delay": {
     domProp: "MozAnimationDelay",
@@ -4450,9 +4357,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "animation-delay",
     subproperties: [ "animation-delay" ],
-    initial_values: [ "0s", "0ms" ],
-    other_values: [ "1s", "250ms", "-100ms", "-1s", "1s, 250ms, 2.3s"],
-    invalid_values: [ "0", "0px" ]
   },
   "-moz-animation-direction": {
     domProp: "MozAnimationDirection",
@@ -4460,9 +4364,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "animation-direction",
     subproperties: [ "animation-direction" ],
-    initial_values: [ "normal" ],
-    other_values: [ "alternate", "normal, alternate", "alternate, normal", "normal, normal", "normal, normal, normal", "reverse", "alternate-reverse", "normal, reverse, alternate-reverse, alternate" ],
-    invalid_values: [ "normal normal", "inherit, normal", "reverse-alternate" ]
   },
   "-moz-animation-duration": {
     domProp: "MozAnimationDuration",
@@ -4470,9 +4371,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "animation-duration",
     subproperties: [ "animation-duration" ],
-    initial_values: [ "0s", "0ms" ],
-    other_values: [ "1s", "250ms", "1s, 250ms, 2.3s"],
-    invalid_values: [ "0", "0px", "-1ms", "-2s" ]
   },
   "-moz-animation-fill-mode": {
     domProp: "MozAnimationFillMode",
@@ -4480,9 +4378,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "animation-fill-mode",
     subproperties: [ "animation-fill-mode" ],
-    initial_values: [ "none" ],
-    other_values: [ "forwards", "backwards", "both", "none, none", "forwards, backwards", "forwards, none", "none, both" ],
-    invalid_values: [ "all"]
   },
   "-moz-animation-iteration-count": {
     domProp: "MozAnimationIterationCount",
@@ -4490,11 +4385,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "animation-iteration-count",
     subproperties: [ "animation-iteration-count" ],
-    initial_values: [ "1" ],
-    other_values: [ "infinite", "0", "0.5", "7.75", "-0.0", "1, 2, 3", "infinite, 2", "1, infinite" ],
-    // negatives forbidden per
-    // http://lists.w3.org/Archives/Public/www-style/2011Mar/0355.html
-    invalid_values: [ "none", "-1", "-0.5", "-1, infinite", "infinite, -3" ]
   },
   "-moz-animation-name": {
     domProp: "MozAnimationName",
@@ -4502,9 +4392,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "animation-name",
     subproperties: [ "animation-name" ],
-    initial_values: [ "none" ],
-    other_values: [ "all", "ball", "mall", "color", "bounce, bubble, opacity", "foobar", "auto", "\\32bounce", "-bounce", "-\\32bounce", "\\32 0bounce", "-\\32 0bounce", "\\2bounce", "-\\2bounce" ],
-    invalid_values: [ "bounce, initial", "initial, bounce", "bounce, inherit", "inherit, bounce" ]
   },
   "-moz-animation-play-state": {
     domProp: "MozAnimationPlayState",
@@ -4512,9 +4399,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "animation-play-state",
     subproperties: [ "animation-play-state" ],
-    initial_values: [ "running" ],
-    other_values: [ "paused", "running, running", "paused, running", "paused, paused", "running, paused", "paused, running, running, running, paused, running" ],
-    invalid_values: [ "0" ]
   },
   "-moz-animation-timing-function": {
     domProp: "MozAnimationTimingFunction",
@@ -4522,9 +4406,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "animation-timing-function",
     subproperties: [ "animation-timing-function" ],
-    initial_values: [ "ease", "cubic-bezier(0.25, 0.1, 0.25, 1.0)" ],
-    other_values: [ "linear", "ease-in", "ease-out", "ease-in-out", "linear, ease-in, cubic-bezier(0.1, 0.2, 0.8, 0.9)", "cubic-bezier(0.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.25, 1.5, 0.75, -0.5)", "step-start", "step-end", "steps(1)", "steps(2, start)", "steps(386)", "steps(3, end)" ],
-    invalid_values: [ "none", "auto", "cubic-bezier(0.25, 0.1, 0.25)", "cubic-bezier(0.25, 0.1, 0.25, 0.25, 1.0)", "cubic-bezier(-0.5, 0.5, 0.5, 0.5)", "cubic-bezier(1.5, 0.5, 0.5, 0.5)", "cubic-bezier(0.5, 0.5, -0.5, 0.5)", "cubic-bezier(0.5, 0.5, 1.5, 0.5)", "steps(2, step-end)", "steps(0)", "steps(-2)", "steps(0, step-end, 1)" ]
   },
   "-moz-font-feature-settings": {
     domProp: "MozFontFeatureSettings",
@@ -4532,20 +4413,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "font-feature-settings",
     subproperties: [ "font-feature-settings" ],
-    initial_values: [ "normal" ],
-    other_values: [
-      "'liga' on", "'liga'", "\"liga\" 1", "'liga', 'clig' 1",
-      "\"liga\" off", "\"liga\" 0", '"cv01" 3, "cv02" 4',
-      '"cswh", "smcp" off, "salt" 4', '"cswh" 1, "smcp" off, "salt" 4',
-      '"cswh" 0, \'blah\', "liga", "smcp" off, "salt" 4',
-      '"liga"        ,"smcp" 0         , "blah"'
-    ],
-    invalid_values: [
-      'liga', 'liga 1', 'liga normal', '"liga" normal', 'normal liga',
-      'normal "liga"', 'normal, "liga"', '"liga=1"', "'foobar' on",
-      '"blahblah" 0', '"liga" 3.14', '"liga" 1 3.14', '"liga" 1 normal',
-      '"liga" 1 off', '"liga" on off', '"liga" , 0 "smcp"', '"liga" "smcp"'
-    ]
   },
   "-moz-font-language-override": {
     domProp: "MozFontLanguageOverride",
@@ -4553,9 +4420,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "font-language-override",
     subproperties: [ "font-language-override" ],
-    initial_values: [ "normal" ],
-    other_values: [ "'ENG'", "'TRK'", "\"TRK\"", "'N\\'Ko'" ],
-    invalid_values: [ "TRK", "ja" ]
   },
   "-moz-hyphens": {
     domProp: "MozHyphens",
@@ -4563,9 +4427,6 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "hyphens",
     subproperties: [ "hyphens" ],
-    initial_values: [ "manual" ],
-    other_values: [ "none", "auto" ],
-    invalid_values: []
   }
 }
 
@@ -4577,12 +4438,24 @@ function logical_axis_prop_get_computed(cs, property)
   var orientation = writingMode.substring(0, writingMode.indexOf("-"));
 
   var mappings = {
-    "block-size":      { horizontal: "height",     vertical: "width"      },
-    "inline-size":     { horizontal: "width",      vertical: "height"     },
-    "max-block-size":  { horizontal: "max-height", vertical: "max-width"  },
-    "max-inline-size": { horizontal: "max-width",  vertical: "max-height" },
-    "min-block-size":  { horizontal: "min-height", vertical: "min-width"  },
-    "min-inline-size": { horizontal: "min-width",  vertical: "min-height" },
+    "block-size":      { horizontal: "height",
+                         vertical:   "width",
+                         sideways:   "width"      },
+    "inline-size":     { horizontal: "width",
+                         vertical:   "height",
+                         sideways:   "height"     },
+    "max-block-size":  { horizontal: "max-height",
+                         vertical:   "max-width",
+                         sideways:   "max-width"  },
+    "max-inline-size": { horizontal: "max-width",
+                         vertical:   "max-height",
+                         sideways:   "max-height" },
+    "min-block-size":  { horizontal: "min-height",
+                         vertical:   "min-width",
+                         sideways:   "min-width"  },
+    "min-inline-size": { horizontal: "min-width",
+                         vertical:   "min-height",
+                         sideways:   "min-height" },
   };
 
   if (!mappings[property]) {
@@ -4601,51 +4474,42 @@ function logical_box_prop_get_computed(cs, property)
 {
   // http://dev.w3.org/csswg/css-writing-modes-3/#logical-to-physical
 
-  // Use defaults for these two properties in case the vertical text
-  // pref (which they live behind) is turned off.
+  // Use default for writing-mode in case the vertical text
+  // pref (which it lives behind) is turned off.
   var writingMode = cs.getPropertyValue("writing-mode") || "horizontal-tb";
-  var textOrientation = cs.getPropertyValue("text-orientation") || "mixed";
 
   var direction = cs.getPropertyValue("direction");
-
-  // We only need to distinguish between text-orientation values of
-  // sideways-left and {mixed,upright,sideways-right} (which we will
-  // call "others").
-
-  if (textOrientation == "sideways") {
-    // text-orientation does not contribute to the logical to physical
-    // mapping when writing-mode is horizontal-tb, so it doesn't matter
-    // that we convert it to sideways-left in that case.
-    textOrientation = writingMode == "vertical-rl" ? "others" : "sideways-left";
-  } else if (textOrientation != "sideways-left") {
-    textOrientation = "others";
-  }
 
   // keys in blockMappings are writing-mode values
   var blockMappings = {
     "horizontal-tb": { "start": "top",   "end": "bottom" },
     "vertical-rl":   { "start": "right", "end": "left"   },
     "vertical-lr":   { "start": "left",  "end": "right"  },
+    "sideways-rl":   { "start": "right", "end": "left"   },
+    "sideways-lr":   { "start": "left",  "end": "right"  },
   };
 
   // keys in inlineMappings are regular expressions that match against
-  // a {writing-mode,text-orientation,direction} triple as a space-
-  // separated string
+  // a {writing-mode,direction} pair as a space-separated string
   var inlineMappings = {
-    "horizontal-tb \\S+ ltr":        { "start": "left",   "end": "right"  },
-    "horizontal-tb \\S+ rtl":        { "start": "right",  "end": "left"   },
-    "vertical-.. sideways-left ltr": { "start": "bottom", "end": "top"    },
-    "vertical-.. sideways-left rtl": { "start": "top",    "end": "bottom" },
-    "vertical-.. others ltr":        { "start": "top",    "end": "bottom" },
-    "vertical-.. others rtl":        { "start": "bottom", "end": "top"    },
+    "horizontal-tb ltr": { "start": "left",   "end": "right"  },
+    "horizontal-tb rtl": { "start": "right",  "end": "left"   },
+    "vertical-.. ltr":   { "start": "bottom", "end": "top"    },
+    "vertical-.. rtl":   { "start": "top",    "end": "bottom" },
+    "vertical-.. ltr":   { "start": "top",    "end": "bottom" },
+    "vertical-.. rtl":   { "start": "bottom", "end": "top"    },
+    "sideways-lr ltr":   { "start": "bottom", "end": "top"    },
+    "sideways-lr rtl":   { "start": "top",    "end": "bottom" },
+    "sideways-rl ltr":   { "start": "top",    "end": "bottom" },
+    "sideways-rl rtl":   { "start": "bottom", "end": "top"    },
   };
 
   var blockMapping = blockMappings[writingMode];
   var inlineMapping;
 
   // test each regular expression in inlineMappings against the
-  // {writing-mode,text-orientation,direction} triple
-  var key = `${writingMode} ${textOrientation} ${direction}`;
+  // {writing-mode,direction} pair
+  var key = `${writingMode} ${direction}`;
   for (var k in inlineMappings) {
     if (new RegExp(k).test(key)) {
       inlineMapping = inlineMappings[k];
@@ -4701,7 +4565,7 @@ function get_computed_value(cs, property)
   return cs.getPropertyValue(property);
 }
 
-if (SpecialPowers.getBoolPref("layout.css.touch_action.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.touch_action.enabled")) {
     gCSSProperties["touch-action"] = {
         domProp: "touchAction",
         inherited: false,
@@ -4721,14 +4585,14 @@ if (SpecialPowers.getBoolPref("layout.css.touch_action.enabled")) {
     };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.vertical-text.enabled")) {
   var verticalTextProperties = {
     "writing-mode": {
       domProp: "writingMode",
       inherited: true,
       type: CSS_TYPE_LONGHAND,
-      initial_values: [ "horizontal-tb" ],
-      other_values: [ "vertical-lr", "vertical-rl" ],
+      initial_values: [ "horizontal-tb", "lr", "lr-tb", "rl", "rl-tb" ],
+      other_values: [ "vertical-lr", "vertical-rl", "sideways-rl", "sideways-lr", "tb", "tb-rl" ],
       invalid_values: [ "10px", "30%", "justify", "auto", "1em" ]
     },
     "text-orientation": {
@@ -4736,8 +4600,8 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       inherited: true,
       type: CSS_TYPE_LONGHAND,
       initial_values: [ "mixed" ],
-      other_values: [ "upright", "sideways-right" ],
-      invalid_values: [ "none", "3em", "sideways", "sideways-left" ] /* sideways, sideways-left not yet supported */
+      other_values: [ "upright", "sideways", "sideways-right" ], /* sideways-right alias for backward compatibility */
+      invalid_values: [ "none", "3em", "sideways-left" ] /* sideways-left removed from CSS Writing Modes */
     },
     "border-block-end": {
       domProp: "borderBlockEnd",
@@ -4864,9 +4728,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_TRUE_SHORTHAND,
       alias_for: "border-inline-end",
       subproperties: [ "-moz-border-end-color", "-moz-border-end-style", "-moz-border-end-width" ],
-      initial_values: [ "none", "medium", "currentColor", "thin", "none medium currentcolor" ],
-      other_values: [ "solid", "green", "medium solid", "green solid", "10px solid", "thick solid", "5px green none" ],
-      invalid_values: [ "5%", "5", "5 green none" ]
     },
     "-moz-border-end-color": {
       domProp: "MozBorderEndColor",
@@ -4874,9 +4735,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "border-inline-end-color",
       get_computed: logical_box_prop_get_computed,
-      initial_values: [ "currentColor" ],
-      other_values: [ "green", "rgba(255,128,0,0.5)", "transparent" ],
-      invalid_values: [ "#0", "#00", "#0000", "#00000", "#0000000", "#00000000", "#000000000", "000000" ]
     },
     "-moz-border-end-style": {
       domProp: "MozBorderEndStyle",
@@ -4884,10 +4742,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "border-inline-end-style",
       get_computed: logical_box_prop_get_computed,
-      /* XXX hidden is sometimes the same as initial */
-      initial_values: [ "none" ],
-      other_values: [ "solid", "dashed", "dotted", "double", "outset", "inset", "groove", "ridge" ],
-      invalid_values: []
     },
     "-moz-border-end-width": {
       domProp: "MozBorderEndWidth",
@@ -4895,19 +4749,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "border-inline-end-width",
       get_computed: logical_box_prop_get_computed,
-      prerequisites: { "-moz-border-end-style": "solid" },
-      initial_values: [ "medium", "3px", "calc(4px - 1px)" ],
-      other_values: [ "thin", "thick", "1px", "2em",
-        "calc(2px)",
-        "calc(-2px)",
-        "calc(0em)",
-        "calc(0px)",
-        "calc(5em)",
-        "calc(3*25px)",
-        "calc(25px*3)",
-        "calc(3*25px + 5em)",
-      ],
-      invalid_values: [ "5%", "5" ]
     },
     "-moz-border-start": {
       domProp: "MozBorderStart",
@@ -4915,9 +4756,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_TRUE_SHORTHAND,
       alias_for: "border-inline-start",
       subproperties: [ "-moz-border-start-color", "-moz-border-start-style", "-moz-border-start-width" ],
-      initial_values: [ "none", "medium", "currentColor", "thin", "none medium currentcolor" ],
-      other_values: [ "solid", "green", "medium solid", "green solid", "10px solid", "thick solid", "5px green none" ],
-      invalid_values: [ "5%", "5", "5 green solid" ]
     },
     "-moz-border-start-color": {
       domProp: "MozBorderStartColor",
@@ -4925,9 +4763,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "border-inline-start-color",
       get_computed: logical_box_prop_get_computed,
-      initial_values: [ "currentColor" ],
-      other_values: [ "green", "rgba(255,128,0,0.5)", "transparent" ],
-      invalid_values: [ "#0", "#00", "#0000", "#00000", "#0000000", "#00000000", "#000000000", "000000" ]
     },
     "-moz-border-start-style": {
       domProp: "MozBorderStartStyle",
@@ -4935,10 +4770,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "border-inline-start-style",
       get_computed: logical_box_prop_get_computed,
-      /* XXX hidden is sometimes the same as initial */
-      initial_values: [ "none" ],
-      other_values: [ "solid", "dashed", "dotted", "double", "outset", "inset", "groove", "ridge" ],
-      invalid_values: []
     },
     "-moz-border-start-width": {
       domProp: "MozBorderStartWidth",
@@ -4946,19 +4777,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "border-inline-start-width",
       get_computed: logical_box_prop_get_computed,
-      prerequisites: { "-moz-border-start-style": "solid" },
-      initial_values: [ "medium", "3px", "calc(4px - 1px)" ],
-      other_values: [ "thin", "thick", "1px", "2em",
-        "calc(2px)",
-        "calc(-2px)",
-        "calc(0em)",
-        "calc(0px)",
-        "calc(5em)",
-        "calc(3*25px)",
-        "calc(25px*3)",
-        "calc(3*25px + 5em)",
-      ],
-      invalid_values: [ "5%", "5" ]
     },
     "inline-size": {
       domProp: "inlineSize",
@@ -5029,17 +4847,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "margin-inline-end",
       get_computed: logical_box_prop_get_computed,
-      /* XXX testing auto has prerequisites */
-      initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)" ],
-      other_values: [ "1px", "2em", "5%",
-        "calc(2px)",
-        "calc(-2px)",
-        "calc(50%)",
-        "calc(3*25px)",
-        "calc(25px*3)",
-        "calc(3*25px + 50%)",
-      ],
-      invalid_values: [ "..25px", ".+5px", ".px", "-.px", "++5px", "-+4px", "+-3px", "--7px", "+-.6px", "-+.5px", "++.7px", "--.4px" ],
     },
     "-moz-margin-start": {
       domProp: "MozMarginStart",
@@ -5047,17 +4854,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "margin-inline-start",
       get_computed: logical_box_prop_get_computed,
-      /* XXX testing auto has prerequisites */
-      initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)" ],
-      other_values: [ "1px", "2em", "5%",
-        "calc(2px)",
-        "calc(-2px)",
-        "calc(50%)",
-        "calc(3*25px)",
-        "calc(25px*3)",
-        "calc(3*25px + 50%)",
-      ],
-      invalid_values: [ "..25px", ".+5px", ".px", "-.px", "++5px", "-+4px", "+-3px", "--7px", "+-.6px", "-+.5px", "++.7px", "--.4px" ],
     },
     "max-block-size": {
       domProp: "maxBlockSize",
@@ -5257,15 +5053,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "padding-inline-end",
       get_computed: logical_box_prop_get_computed,
-      initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
-      other_values: [ "1px", "2em", "5%",
-        "calc(2px)",
-        "calc(50%)",
-        "calc(3*25px)",
-        "calc(25px*3)",
-        "calc(3*25px + 50%)",
-      ],
-      invalid_values: [ ],
     },
     "-moz-padding-start": {
       domProp: "MozPaddingStart",
@@ -5273,15 +5060,6 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
       type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
       alias_for: "padding-inline-start",
       get_computed: logical_box_prop_get_computed,
-      initial_values: [ "0", "0px", "0%", "calc(0pt)", "calc(0% + 0px)", "calc(-3px)", "calc(-1%)" ],
-      other_values: [ "1px", "2em", "5%",
-        "calc(2px)",
-        "calc(50%)",
-        "calc(3*25px)",
-        "calc(25px*3)",
-        "calc(3*25px + 50%)",
-      ],
-      invalid_values: [ ],
     },
   };
   for (var prop in verticalTextProperties) {
@@ -5302,7 +5080,7 @@ if (SpecialPowers.getBoolPref("layout.css.vertical-text.enabled")) {
   });
 }
 
-if (SpecialPowers.getBoolPref("layout.css.text-combine-upright.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.text-combine-upright.enabled")) {
   gCSSProperties["text-combine-upright"] = {
     domProp: "textCombineUpright",
     inherited: true,
@@ -5315,7 +5093,7 @@ if (SpecialPowers.getBoolPref("layout.css.text-combine-upright.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.masking.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.masking.enabled")) {
   gCSSProperties["mask-type"] = {
     domProp: "maskType",
     inherited: false,
@@ -5326,7 +5104,7 @@ if (SpecialPowers.getBoolPref("layout.css.masking.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("svg.paint-order.enabled")) {
+if (IsCSSPropertyPrefEnabled("svg.paint-order.enabled")) {
   gCSSProperties["paint-order"] = {
     domProp: "paintOrder",
     inherited: true,
@@ -5337,7 +5115,7 @@ if (SpecialPowers.getBoolPref("svg.paint-order.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("svg.transform-origin.enabled")) {
+if (IsCSSPropertyPrefEnabled("svg.transform-box.enabled")) {
   gCSSProperties["transform-box"] = {
     domProp: "transformBox",
     inherited: false,
@@ -5348,7 +5126,7 @@ if (SpecialPowers.getBoolPref("svg.transform-origin.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.clip-path-shapes.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.clip-path-shapes.enabled")) {
   gCSSProperties["clip-path"] = {
     domProp: "clipPath",
     inherited: false,
@@ -5527,7 +5305,7 @@ if (SpecialPowers.getBoolPref("layout.css.clip-path-shapes.enabled")) {
 }
 
 
-if (SpecialPowers.getBoolPref("layout.css.filters.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.filters.enabled")) {
   gCSSProperties["filter"] = {
     domProp: "filter",
     inherited: false,
@@ -5762,7 +5540,7 @@ if (SpecialPowers.getBoolPref("layout.css.filters.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.ruby.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.ruby.enabled")) {
   // Using unshift to add these values at the beginning.
   // Adding them to the end would trigger bug 1038905. The "unshift" should be
   // changed to a "push" when this bug is resolved.
@@ -5794,7 +5572,7 @@ if (SpecialPowers.getBoolPref("layout.css.ruby.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.grid.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.grid.enabled")) {
   gCSSProperties["display"].other_values.push("grid", "inline-grid");
   gCSSProperties["grid-auto-flow"] = {
     domProp: "gridAutoFlow",
@@ -6226,11 +6004,11 @@ if (SpecialPowers.getBoolPref("layout.css.grid.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.display-contents.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.display-contents.enabled")) {
   gCSSProperties["display"].other_values.push("contents");
 }
 
-if (SpecialPowers.getBoolPref("layout.css.contain.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.contain.enabled")) {
   gCSSProperties["contain"] = {
     domProp: "contain",
     inherited: false,
@@ -6270,7 +6048,7 @@ if (SpecialPowers.getBoolPref("layout.css.contain.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.image-orientation.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.image-orientation.enabled")) {
   gCSSProperties["image-orientation"] = {
     domProp: "imageOrientation",
     inherited: true,
@@ -6345,7 +6123,7 @@ if (SpecialPowers.getBoolPref("layout.css.image-orientation.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.osx-font-smoothing.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.osx-font-smoothing.enabled")) {
   gCSSProperties["-moz-osx-font-smoothing"] = {
     domProp: "MozOsxFontSmoothing",
     inherited: true,
@@ -6356,11 +6134,11 @@ if (SpecialPowers.getBoolPref("layout.css.osx-font-smoothing.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.sticky.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.sticky.enabled")) {
   gCSSProperties["position"].other_values.push("sticky");
 }
 
-if (SpecialPowers.getBoolPref("layout.css.mix-blend-mode.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.mix-blend-mode.enabled")) {
   gCSSProperties["mix-blend-mode"] = {
     domProp: "mixBlendMode",
     inherited: false,
@@ -6372,7 +6150,7 @@ if (SpecialPowers.getBoolPref("layout.css.mix-blend-mode.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.isolation.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.isolation.enabled")) {
   gCSSProperties["isolation"] = {
     domProp: "isolation",
     inherited: false,
@@ -6383,7 +6161,7 @@ if (SpecialPowers.getBoolPref("layout.css.isolation.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.background-blend-mode.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.background-blend-mode.enabled")) {
   gCSSProperties["background-blend-mode"] = {
     domProp: "backgroundBlendMode",
     inherited: false,
@@ -6395,7 +6173,7 @@ if (SpecialPowers.getBoolPref("layout.css.background-blend-mode.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.object-fit-and-position.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.object-fit-and-position.enabled")) {
   gCSSProperties["object-fit"] = {
     domProp: "objectFit",
     inherited: false,
@@ -6447,7 +6225,7 @@ if (SpecialPowers.getBoolPref("layout.css.object-fit-and-position.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.overflow-clip-box.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.overflow-clip-box.enabled")) {
   gCSSProperties["overflow-clip-box"] = {
     domProp: "overflowClipBox",
     inherited: false,
@@ -6458,7 +6236,7 @@ if (SpecialPowers.getBoolPref("layout.css.overflow-clip-box.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.box-decoration-break.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.box-decoration-break.enabled")) {
   gCSSProperties["box-decoration-break"] = {
     domProp: "boxDecorationBreak",
     inherited: false,
@@ -6469,7 +6247,7 @@ if (SpecialPowers.getBoolPref("layout.css.box-decoration-break.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.scroll-behavior.property-enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.scroll-behavior.property-enabled")) {
   gCSSProperties["scroll-behavior"] = {
     domProp: "scrollBehavior",
     inherited: false,
@@ -6480,7 +6258,7 @@ if (SpecialPowers.getBoolPref("layout.css.scroll-behavior.property-enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.scroll-snap.enabled")) {
+if (IsCSSPropertyPrefEnabled("layout.css.scroll-snap.enabled")) {
   gCSSProperties["scroll-snap-coordinate"] = {
     domProp: "scrollSnapCoordinate",
     inherited: false,
@@ -6559,8 +6337,9 @@ if (SpecialPowers.getBoolPref("layout.css.scroll-snap.enabled")) {
   };
 }
 
-if (SpecialPowers.getBoolPref("layout.css.unset-value.enabled")) {
-  gCSSProperties["animation-direction"].invalid_values.push("normal, unset");
+if (IsCSSPropertyPrefEnabled("layout.css.unset-value.enabled")) {
+  gCSSProperties["animation"].invalid_values.push("2s unset");
+  gCSSProperties["animation-direction"].invalid_values.push("normal, unset", "unset, normal");
   gCSSProperties["animation-name"].invalid_values.push("bounce, unset", "unset, bounce");
   gCSSProperties["-moz-border-bottom-colors"].invalid_values.push("red unset", "unset red");
   gCSSProperties["-moz-border-left-colors"].invalid_values.push("red unset", "unset red");
@@ -6582,17 +6361,61 @@ if (SpecialPowers.getBoolPref("layout.css.unset-value.enabled")) {
   gCSSProperties["text-shadow"].invalid_values.push("unset, 2px 2px", "2px 2px, unset");
   gCSSProperties["transition"].invalid_values.push("2s unset");
   gCSSProperties["transition-property"].invalid_values.push("unset, color", "color, unset");
-  gCSSProperties["-moz-transition"].invalid_values.push("2s unset");
-  gCSSProperties["-moz-transition-property"].invalid_values.push("unset, color", "color, unset");
-  gCSSProperties["-moz-animation"].invalid_values.push("2s unset");
-  gCSSProperties["-moz-animation-direction"].invalid_values.push("unset, normal");
-  gCSSProperties["-moz-animation-name"].invalid_values.push("bounce, unset", "unset, bounce");
-  if (SpecialPowers.getBoolPref("layout.css.filters.enabled")) {
+  if (IsCSSPropertyPrefEnabled("layout.css.filters.enabled")) {
     gCSSProperties["filter"].invalid_values.push("drop-shadow(unset, 2px 2px)", "drop-shadow(2px 2px, unset)");
   }
-  if (SpecialPowers.getBoolPref("layout.css.text-align-true-value.enabled")) {
+  if (IsCSSPropertyPrefEnabled("layout.css.text-align-true-value.enabled")) {
     gCSSProperties["text-align"].other_values.push("true left");
   } else {
     gCSSProperties["text-align"].invalid_values.push("true left");
   }
+}
+
+// Copy aliased properties' fields from their alias targets.
+for (var prop in gCSSProperties) {
+  var entry = gCSSProperties[prop];
+  if (entry.alias_for) {
+    var aliasTargetEntry = gCSSProperties[entry.alias_for];
+    if (!aliasTargetEntry) {
+      ok(false,
+         "Alias '" + prop + "' alias_for field, '" + entry.alias_for + "', " +
+         "must be set to a recognized CSS property in gCSSProperties");
+    } else {
+      // Copy 'values' fields & 'prerequisites' field from aliasTargetEntry:
+      var fieldsToCopy =
+          ["initial_values", "other_values", "invalid_values",
+           "quirks_values", "unbalanced_values",
+           "prerequisites"];
+
+      fieldsToCopy.forEach(function(fieldName) {
+        // (Don't copy the field if the alias already has something there,
+        // or if the aliased property doesn't have anything to copy.)
+        if (!(fieldName in entry) &&
+            fieldName in aliasTargetEntry) {
+          entry[fieldName] = aliasTargetEntry[fieldName]
+        }
+      });
+    }
+  }
+}
+
+if (false) {
+  // TODO These properties are chrome-only, and are not exposed via CSSOM.
+  // We may still want to find a way to test them. See bug 1206999.
+  gCSSProperties["-moz-window-dragging"] = {
+    //domProp: "MozWindowDragging",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "no-drag" ],
+    other_values: [ "drag" ],
+    invalid_values: [ "none" ]
+  };
+  gCSSProperties["-moz-window-shadow"] = {
+    //domProp: "MozWindowShadow",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "default" ],
+    other_values: [ "none", "menu", "tooltip", "sheet" ],
+    invalid_values: []
+  };
 }

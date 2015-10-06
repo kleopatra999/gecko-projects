@@ -203,6 +203,7 @@ destroying the MediaDecoder object.
 #include "nsITimer.h"
 
 #include "AbstractMediaDecoder.h"
+#include "FrameStatistics.h"
 #include "MediaDecoderOwner.h"
 #include "MediaEventSource.h"
 #include "MediaMetadataManager.h"
@@ -382,8 +383,6 @@ public:
   // Adjust the speed of the playback, optionally with pitch correction,
   virtual void SetVolume(double aVolume);
 
-  virtual void NotifyWaitingForResourcesStatusChanged() override;
-
   virtual void SetPlaybackRate(double aPlaybackRate);
   void SetPreservesPitch(bool aPreservesPitch);
 
@@ -522,15 +521,8 @@ public:
 
   bool OnDecodeTaskQueue() const override;
 
-  MediaDecoderStateMachine* GetStateMachine() { return mDecoderStateMachine; }
+  MediaDecoderStateMachine* GetStateMachine() const;
   void SetStateMachine(MediaDecoderStateMachine* aStateMachine);
-
-  // Returns the monitor for other threads to synchronise access to
-  // state.
-  ReentrantMonitor& GetReentrantMonitor() override;
-
-  // Returns true if the decoder is shut down
-  bool IsShutdown() const final override;
 
   // Constructs the time ranges representing what segments of the media
   // are buffered and playable.
@@ -654,9 +646,6 @@ public:
   // position.
   int64_t GetDownloadPosition();
 
-  // Provide access to the state machine object
-  MediaDecoderStateMachine* GetStateMachine() const;
-
   // Drop reference to state machine.  Only called during shutdown dance.
   virtual void BreakCycles();
 
@@ -669,11 +658,13 @@ public:
   MediaDecoderOwner* GetOwner() override;
 
 #ifdef MOZ_EME
-  // This takes the decoder monitor.
-  virtual nsresult SetCDMProxy(CDMProxy* aProxy) override;
+  typedef MozPromise<nsRefPtr<CDMProxy>, bool /* aIgnored */, /* IsExclusive = */ true> CDMProxyPromise;
 
-  // Decoder monitor must be held.
-  virtual CDMProxy* GetCDMProxy() override;
+  // Resolved when a CDMProxy is available and the capabilities are known or
+  // rejected when this decoder is about to shut down.
+  nsRefPtr<CDMProxyPromise> RequestCDMProxy() const;
+
+  void SetCDMProxy(CDMProxy* aProxy);
 #endif
 
 #ifdef MOZ_RAW
@@ -720,99 +711,6 @@ public:
   // current state, since other threads might be changing the state
   // at any time.
   MediaStatistics GetStatistics();
-
-  // Frame decoding/painting related performance counters.
-  // Threadsafe.
-  class FrameStatistics {
-  public:
-
-    FrameStatistics() :
-        mReentrantMonitor("MediaDecoder::FrameStats"),
-        mParsedFrames(0),
-        mDecodedFrames(0),
-        mPresentedFrames(0),
-        mDroppedFrames(0),
-        mCorruptFrames(0) {}
-
-    // Returns number of frames which have been parsed from the media.
-    // Can be called on any thread.
-    uint32_t GetParsedFrames() {
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      return mParsedFrames;
-    }
-
-    // Returns the number of parsed frames which have been decoded.
-    // Can be called on any thread.
-    uint32_t GetDecodedFrames() {
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      return mDecodedFrames;
-    }
-
-    // Returns the number of decoded frames which have been sent to the rendering
-    // pipeline for painting ("presented").
-    // Can be called on any thread.
-    uint32_t GetPresentedFrames() {
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      return mPresentedFrames;
-    }
-
-    // Number of frames that have been skipped because they have missed their
-    // compoisition deadline.
-    uint32_t GetDroppedFrames() {
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      return mDroppedFrames + mCorruptFrames;
-    }
-
-    uint32_t GetCorruptedFrames() {
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      return mCorruptFrames;
-    }
-
-    // Increments the parsed and decoded frame counters by the passed in counts.
-    // Can be called on any thread.
-    void NotifyDecodedFrames(uint32_t aParsed, uint32_t aDecoded,
-                             uint32_t aDropped) {
-      if (aParsed == 0 && aDecoded == 0 && aDropped == 0)
-        return;
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      mParsedFrames += aParsed;
-      mDecodedFrames += aDecoded;
-      mDroppedFrames += aDropped;
-    }
-
-    // Increments the presented frame counters.
-    // Can be called on any thread.
-    void NotifyPresentedFrame() {
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      ++mPresentedFrames;
-    }
-
-    void NotifyCorruptFrame() {
-      ReentrantMonitorAutoEnter mon(mReentrantMonitor);
-      ++mCorruptFrames;
-    }
-
-  private:
-
-    // ReentrantMonitor to protect access of playback statistics.
-    ReentrantMonitor mReentrantMonitor;
-
-    // Number of frames parsed and demuxed from media.
-    // Access protected by mReentrantMonitor.
-    uint32_t mParsedFrames;
-
-    // Number of parsed frames which were actually decoded.
-    // Access protected by mReentrantMonitor.
-    uint32_t mDecodedFrames;
-
-    // Number of decoded frames which were actually sent down the rendering
-    // pipeline to be painted ("presented"). Access protected by mReentrantMonitor.
-    uint32_t mPresentedFrames;
-
-    uint32_t mDroppedFrames;
-
-    uint32_t mCorruptFrames;
-  };
 
   // Return the frame decode/paint related statistics.
   FrameStatistics& GetFrameStatistics() { return mFrameStats; }
@@ -893,9 +791,6 @@ protected:
   // Official duration of the media resource as observed by script.
   double mDuration;
 
-  // True if the media is seekable (i.e. supports random access).
-  bool mMediaSeekable;
-
   /******
    * The following member variables can be accessed from any thread.
    ******/
@@ -919,7 +814,8 @@ private:
   ReentrantMonitor mReentrantMonitor;
 
 #ifdef MOZ_EME
-  nsRefPtr<CDMProxy> mProxy;
+  MozPromiseHolder<CDMProxyPromise> mCDMProxyPromiseHolder;
+  nsRefPtr<CDMProxyPromise> mCDMProxyPromise;
 #endif
 
 protected:
@@ -1093,6 +989,9 @@ protected:
   // back again.
   Canonical<int64_t> mDecoderPosition;
 
+  // True if the media is seekable (i.e. supports random access).
+  Canonical<bool> mMediaSeekable;
+
 public:
   AbstractCanonical<media::NullableTimeUnit>* CanonicalDurationOrNull() override;
   AbstractCanonical<double>* CanonicalVolume() {
@@ -1130,6 +1029,9 @@ public:
   }
   AbstractCanonical<int64_t>* CanonicalDecoderPosition() {
     return &mDecoderPosition;
+  }
+  AbstractCanonical<bool>* CanonicalMediaSeekable() {
+    return &mMediaSeekable;
   }
 };
 

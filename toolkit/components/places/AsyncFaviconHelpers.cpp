@@ -399,7 +399,7 @@ AsyncFetchAndSetIconForPage::start(nsIURI* aFaviconURI,
 
   if (iconKey) {
     icon = iconKey->iconData;
-    favicons->mUnassociatedIcons.RemoveEntry(aFaviconURI);
+    favicons->mUnassociatedIcons.RemoveEntry(iconKey);
   } else {
     icon.fetchMode = aFetchMode;
     rv = aFaviconURI->GetSpec(icon.spec);
@@ -532,7 +532,7 @@ AsyncFetchAndSetIconFromNetwork::Run()
                      iconURI,
                      nsContentUtils::GetSystemPrincipal(),
                      nsILoadInfo::SEC_NORMAL,
-                     nsIContentPolicy::TYPE_IMAGE);
+                     nsIContentPolicy::TYPE_INTERNAL_IMAGE);
 
   NS_ENSURE_SUCCESS(rv, rv);
   nsCOMPtr<nsIInterfaceRequestor> listenerRequestor =

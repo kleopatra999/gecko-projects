@@ -169,6 +169,9 @@ static const Class js_NoSuchMethodClass = {
 bool
 js::OnUnknownMethod(JSContext* cx, HandleObject obj, Value idval_, MutableHandleValue vp)
 {
+    if (!cx->runtime()->options().noSuchMethod())
+        return true;
+
     RootedValue idval(cx, idval_);
 
     RootedValue value(cx);
@@ -255,7 +258,9 @@ GetPropertyOperation(JSContext* cx, InterpreterFrame* fp, HandleScript script, j
     }
 
     MOZ_ASSERT(op == JSOP_GETPROP || op == JSOP_LENGTH);
-    return GetProperty(cx, lval, name, vp);
+    // Copy lval, because it might alias vp.
+    RootedValue v(cx, lval);
+    return GetProperty(cx, v, name, vp);
 }
 
 static inline bool
@@ -916,7 +921,7 @@ js::InternalConstructWithProvidedThis(JSContext* cx, HandleValue fval, HandleVal
 }
 
 bool
-js::InvokeGetter(JSContext* cx, JSObject* obj, Value fval, MutableHandleValue rval)
+js::InvokeGetter(JSContext* cx, const Value& thisv, Value fval, MutableHandleValue rval)
 {
     /*
      * Invoke could result in another try to get or set the same id again, see
@@ -924,7 +929,7 @@ js::InvokeGetter(JSContext* cx, JSObject* obj, Value fval, MutableHandleValue rv
      */
     JS_CHECK_RECURSION(cx, return false);
 
-    return Invoke(cx, ObjectValue(*obj), fval, 0, nullptr, rval);
+    return Invoke(cx, thisv, fval, 0, nullptr, rval);
 }
 
 bool
@@ -1008,7 +1013,8 @@ js::Execute(JSContext* cx, HandleScript script, JSObject& scopeChainArg, Value* 
         return false;
     Value thisv = ObjectValue(*thisObj);
 
-    return ExecuteKernel(cx, script, *scopeChain, thisv, NullValue(), EXECUTE_GLOBAL,
+    ExecuteType type = script->module() ? EXECUTE_MODULE : EXECUTE_GLOBAL;
+    return ExecuteKernel(cx, script, *scopeChain, thisv, NullValue(), type,
                          NullFramePtr() /* evalInFrame */, rval);
 }
 
@@ -1960,7 +1966,7 @@ Interpret(JSContext* cx, RunState& state)
         MOZ_CRASH("bad Debugger::onEnterFrame status");
     }
 
-    if (cx->runtime()->profilingScripts)
+    if (cx->compartment()->collectCoverage())
         activation.enableInterruptsUnconditionally();
 
     // Enter the interpreter loop starting at the current pc.
@@ -1973,9 +1979,8 @@ CASE(EnableInterruptsPseudoOpcode)
     bool moreInterrupts = false;
     jsbytecode op = *REGS.pc;
 
-    if (cx->runtime()->profilingScripts) {
-        if (!script->hasScriptCounts())
-            script->initScriptCounts(cx);
+    if (!script->hasScriptCounts() && cx->compartment()->collectCoverage()) {
+        script->initScriptCounts(cx);
         moreInterrupts = true;
     }
 
@@ -3604,7 +3609,8 @@ END_CASE(JSOP_NEWINIT)
 CASE(JSOP_NEWARRAY)
 CASE(JSOP_SPREADCALLARRAY)
 {
-    JSObject* obj = NewArrayOperation(cx, script, REGS.pc, GET_UINT24(REGS.pc));
+    uint32_t length = GET_UINT32(REGS.pc);
+    JSObject* obj = NewArrayOperation(cx, script, REGS.pc, length);
     if (!obj)
         goto error;
     PUSH_OBJECT(*obj);
@@ -3700,7 +3706,7 @@ CASE(JSOP_INITELEM_ARRAY)
 
     ReservedRooted<JSObject*> obj(&rootObject0, &REGS.sp[-2].toObject());
 
-    uint32_t index = GET_UINT24(REGS.pc);
+    uint32_t index = GET_UINT32(REGS.pc);
     if (!InitArrayElemOperation(cx, REGS.pc, obj, index, val))
         goto error;
 
@@ -4191,7 +4197,7 @@ js::GetProperty(JSContext* cx, HandleValue v, HandlePropertyName name, MutableHa
             proto = GlobalObject::getOrCreateSymbolPrototype(cx, cx->global());
         }
         if (!proto)
-             return false;
+            return false;
 
         if (GetPropertyPure(cx, proto, NameToId(name), vp.address()))
             return true;
@@ -4201,7 +4207,9 @@ js::GetProperty(JSContext* cx, HandleValue v, HandlePropertyName name, MutableHa
     if (!obj)
         return false;
 
-    return GetProperty(cx, obj, obj, name, vp);
+    // Bug 603201: Pass primitive receiver here.
+    RootedValue receiver(cx, ObjectValue(*obj));
+    return GetProperty(cx, obj, receiver, name, vp);
 }
 
 bool

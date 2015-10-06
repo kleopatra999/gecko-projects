@@ -31,7 +31,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "FxAccountsProfile",
   "resource://gre/modules/FxAccountsProfile.jsm");
 
 // All properties exposed by the public FxAccounts API.
-let publicProperties = [
+var publicProperties = [
   "accountStatus",
   "getAccountsClient",
   "getAccountsSignInURI",
@@ -72,7 +72,7 @@ let publicProperties = [
 // }
 // If the state has changed between the function being called and the promise
 // being resolved, the .resolve() call will actually be rejected.
-let AccountState = this.AccountState = function(storageManager) {
+var AccountState = this.AccountState = function(storageManager) {
   this.storageManager = storageManager;
   this.promiseInitialized = this.storageManager.getAccountData().then(data => {
     this.oauthTokens = data && data.oauthTokens ? data.oauthTokens : {};
@@ -88,7 +88,9 @@ AccountState.prototype = {
   whenKeysReadyDeferred: null,
 
   // If the storage manager has been nuked then we are no longer current.
-  get isCurrent() this.storageManager != null,
+  get isCurrent() {
+    return this.storageManager != null;
+  },
 
   abort() {
     if (this.whenVerifiedDeferred) {
@@ -489,6 +491,7 @@ FxAccountsInternal.prototype = {
       // really something we should commit to? Why not let the write happen in
       // the background? Already does for updateAccountData ;)
       return currentAccountState.promiseInitialized.then(() => {
+        Services.telemetry.getHistogramById("FXA_CONFIGURED").add(1);
         this.notifyObservers(ONLOGIN_NOTIFICATION);
         if (!this.isUserEmailVerified(credentials)) {
           this.startVerifiedCheck(credentials);
@@ -650,7 +653,10 @@ FxAccountsInternal.prototype = {
   },
 
   _signOutServer: function signOutServer(sessionToken) {
-    return this.fxAccountsClient.signOut(sessionToken);
+    // For now we assume the service being logged out from is Sync - we might
+    // need to revisit this when this FxA code is used in a context that
+    // isn't Sync.
+    return this.fxAccountsClient.signOut(sessionToken, {service: "sync"});
   },
 
   /**
@@ -899,8 +905,11 @@ FxAccountsInternal.prototype = {
     let currentState = this.currentAccountState;
     return currentState.getUserAccountData()
       .then(data => {
-        if (data && !this.isUserEmailVerified(data)) {
-          this.pollEmailStatus(currentState, data.sessionToken, "start");
+        if (data) {
+          Services.telemetry.getHistogramById("FXA_CONFIGURED").add(1);
+          if (!this.isUserEmailVerified(data)) {
+            this.pollEmailStatus(currentState, data.sessionToken, "start");
+          }
         }
         return data;
       });

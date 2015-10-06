@@ -17,7 +17,7 @@ var tests = [
   {
     name: "normal domain",
     location: "http://test1.example.org/",
-    effectiveHost: "example.org"
+    effectiveHost: "test1.example.org"
   },
   {
     name: "view-source",
@@ -33,17 +33,17 @@ var tests = [
   {
     name: "IDN subdomain",
     location: "http://sub1." + idnDomain + "/",
-    effectiveHost: idnDomain
+    effectiveHost: "sub1." + idnDomain
   },
   {
     name: "subdomain with port",
     location: "http://sub1.test1.example.org:8000/",
-    effectiveHost: "example.org"
+    effectiveHost: "sub1.test1.example.org"
   },
   {
     name: "subdomain HTTPS",
     location: "https://test1.example.com/",
-    effectiveHost: "example.com",
+    effectiveHost: "test1.example.com",
     isHTTPS: true
   },
   {
@@ -59,11 +59,11 @@ var tests = [
   },
 ]
 
-let gCurrentTest, gCurrentTestIndex = -1, gTestDesc;
+var gCurrentTest, gCurrentTestIndex = -1, gTestDesc;
 // Go through the tests in both directions, to add additional coverage for
 // transitions between different states.
-let gForward = true;
-let gCheckETLD = false;
+var gForward = true;
+var gCheckETLD = false;
 function nextTest() {
   if (!gCheckETLD) {
     if (gForward)
@@ -107,7 +107,8 @@ function checkResult() {
   // getEffectiveHost can't be called for all modes
   if (gCurrentTest.effectiveHost === null) {
     let identityBox = document.getElementById("identity-box");
-    is(identityBox.className == gIdentityHandler.IDENTITY_MODE_UNKNOWN || identityBox.className == gIdentityHandler.IDENTITY_MODE_CHROMEUI, true, "mode matched");
+    ok(identityBox.className == "unknownIdentity" ||
+       identityBox.className == "chromeUI", "mode matched");
   } else {
     is(gIdentityHandler.getEffectiveHost(), gCurrentTest.effectiveHost, "effectiveHost matches for test " + gTestDesc);
   }

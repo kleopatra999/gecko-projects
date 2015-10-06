@@ -11,9 +11,8 @@
 #include <sys/types.h>                  // for int32_t, int64_t
 #include "FrameMetrics.h"               // for FrameMetrics
 #include "Units.h"                      // for LayerMargin, LayerPoint, ParentLayerIntRect
-#include "gfxContext.h"                 // for GraphicsOperator
+#include "gfxContext.h"
 #include "gfxTypes.h"
-#include "gfxColor.h"                   // for gfxRGBA
 #include "GraphicsFilter.h"             // for GraphicsFilter
 #include "gfxPoint.h"                   // for gfxPoint
 #include "gfxRect.h"                    // for gfxRect
@@ -259,11 +258,12 @@ public:
    * The callee must draw all of aRegionToDraw.
    * This region is relative to 0,0 in the PaintedLayer.
    *
-   * aDirtyRegion, if non-null, contains the total region that is due to be
-   * painted during the transaction, even though only aRegionToDraw should
-   * be drawn during this call. The sum of every aRegionToDraw over the
-   * course of the transaction must equal aDirtyRegion. aDirtyRegion can be
-   * null if the total dirty region is unknown.
+   * aDirtyRegion should contain the total region that is be due to be painted
+   * during the transaction, even though only aRegionToDraw should be drawn
+   * during this call. aRegionToDraw must be entirely contained within
+   * aDirtyRegion. If the total dirty region is unknown it is okay to pass a
+   * subregion of the total dirty region, e.g. just aRegionToDraw, though it
+   * may not be as efficient.
    *
    * aRegionToInvalidate contains a region whose contents have been
    * changed by the layer manager and which must therefore be invalidated.
@@ -285,7 +285,7 @@ public:
   typedef void (* DrawPaintedLayerCallback)(PaintedLayer* aLayer,
                                            gfxContext* aContext,
                                            const nsIntRegion& aRegionToDraw,
-                                           const nsIntRegion* aDirtyRegion,
+                                           const nsIntRegion& aDirtyRegion,
                                            DrawRegionClip aClip,
                                            const nsIntRegion& aRegionToInvalidate,
                                            void* aCallbackData);
@@ -784,7 +784,7 @@ public:
      * If this is set then this layer is part of a preserve-3d group, and should
      * be sorted with sibling layers that are also part of the same group.
      */
-    CONTENT_PRESERVE_3D = 0x08,
+    CONTENT_EXTEND_3D_CONTEXT = 0x08,
     /**
      * This indicates that the transform may be changed on during an empty
      * transaction where there is no possibility of redrawing the content, so the
@@ -804,7 +804,13 @@ public:
      * This is for internal layout/FrameLayerBuilder usage only until flattening
      * code is obsoleted. See bug 633097
      */
-    CONTENT_DISABLE_FLATTENING = 0x40
+    CONTENT_DISABLE_FLATTENING = 0x40,
+
+    /**
+     * This layer is hidden if the backface of the layer is visible
+     * to user.
+     */
+    CONTENT_BACKFACE_HIDDEN = 0x80
   };
   /**
    * CONSTRUCTION PHASE ONLY
@@ -969,11 +975,6 @@ public:
       mMixBlendMode = aMixBlendMode;
       Mutated();
     }
-  }
-
-  void DeprecatedSetMixBlendMode(gfxContext::GraphicsOperator aMixBlendMode)
-  {
-    SetMixBlendMode(gfx::CompositionOpForOp(aMixBlendMode));
   }
 
   void SetForceIsolatedGroup(bool aForceIsolatedGroup)
@@ -1161,19 +1162,27 @@ public:
    *     point, that is, the point which remains in the same position when
    *     compositing the layer tree with a transformation (such as when
    *     asynchronously scrolling and zooming).
+   *
+   *   - |aIsClipFixed| is true if this layer's clip rect and mask layer
+   *     should also remain fixed during async scrolling/animations.
+   *     This is the case for fixed position layers, but not for
+   *     fixed background layers.
    */
   void SetFixedPositionData(FrameMetrics::ViewID aScrollId,
-                            const LayerPoint& aAnchor)
+                            const LayerPoint& aAnchor,
+                            bool aIsClipFixed)
   {
     if (!mFixedPositionData ||
         mFixedPositionData->mScrollId != aScrollId ||
-        mFixedPositionData->mAnchor != aAnchor) {
+        mFixedPositionData->mAnchor != aAnchor ||
+        mFixedPositionData->mIsClipFixed != aIsClipFixed) {
       MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) FixedPositionData", this));
       if (!mFixedPositionData) {
         mFixedPositionData = MakeUnique<FixedPositionData>();
       }
       mFixedPositionData->mScrollId = aScrollId;
       mFixedPositionData->mAnchor = aAnchor;
+      mFixedPositionData->mIsClipFixed = aIsClipFixed;
       Mutated();
     }
   }
@@ -1267,6 +1276,7 @@ public:
   bool GetIsStickyPosition() { return mStickyPositionData; }
   FrameMetrics::ViewID GetFixedPositionScrollContainerId() { return mFixedPositionData ? mFixedPositionData->mScrollId : FrameMetrics::NULL_SCROLL_ID; }
   LayerPoint GetFixedPositionAnchor() { return mFixedPositionData ? mFixedPositionData->mAnchor : LayerPoint(); }
+  bool IsClipFixed() { return mFixedPositionData ? mFixedPositionData->mIsClipFixed : false; }
   FrameMetrics::ViewID GetStickyScrollContainerId() { return mStickyPositionData->mScrollId; }
   const LayerRect& GetStickyScrollRangeOuter() { return mStickyPositionData->mOuter; }
   const LayerRect& GetStickyScrollRangeInner() { return mStickyPositionData->mInner; }
@@ -1368,6 +1378,11 @@ public:
     return SurfaceMode::SURFACE_SINGLE_CHANNEL_ALPHA;
   }
 
+  // Returns true if this layer can be treated as opaque for visibility
+  // computation. A layer may be non-opaque for visibility even if it
+  // is not transparent, for example, if it has a mix-blend-mode.
+  bool IsOpaqueForVisibility();
+
   /**
    * This setter can be used anytime. The user data for all keys is
    * initially null. Ownership pases to the layer manager.
@@ -1454,6 +1469,26 @@ public:
   const Maybe<ParentLayerIntRect>& GetEffectiveClipRect();
   const nsIntRegion& GetEffectiveVisibleRegion();
 
+  bool Extend3DContext() {
+    return GetContentFlags() & CONTENT_EXTEND_3D_CONTEXT;
+  }
+  bool Is3DContextLeaf() {
+    return !Extend3DContext() && GetParent() &&
+      reinterpret_cast<Layer*>(GetParent())->Extend3DContext();
+  }
+  /**
+   * It is true if the user can see the back of the layer and the
+   * backface is hidden.  The compositor should skip the layer if the
+   * result is true.
+   */
+  bool IsBackfaceHidden();
+  bool IsVisible() {
+    // For containers extending 3D context, visible region
+    // is meaningless, since they are just intermediate result of
+    // content.
+    return !GetEffectiveVisibleRegion().IsEmpty() || Extend3DContext();
+  }
+
   /**
    * Returns the product of the opacities of this layer and all ancestors up
    * to and excluding the nearest ancestor that has UseIntermediateSurface() set.
@@ -1464,7 +1499,6 @@ public:
    * Returns the blendmode of this layer.
    */
   gfx::CompositionOp GetEffectiveMixBlendMode();
-  gfxContext::GraphicsOperator DeprecatedGetEffectiveMixBlendMode();
 
   /**
    * This returns the effective transform computed by
@@ -1770,6 +1804,7 @@ protected:
   struct FixedPositionData {
     FrameMetrics::ViewID mScrollId;
     LayerPoint mAnchor;
+    bool mIsClipFixed;
   };
   UniquePtr<FixedPositionData> mFixedPositionData;
   struct StickyPositionData {
@@ -1851,8 +1886,16 @@ public:
                  "Residual transform can only be a translation");
     if (!gfx::ThebesPoint(residual.GetTranslation()).WithinEpsilonOf(mResidualTranslation, 1e-3f)) {
       mResidualTranslation = gfx::ThebesPoint(residual.GetTranslation());
-      NS_ASSERTION(-0.5 <= mResidualTranslation.x && mResidualTranslation.x < 0.5 &&
-                   -0.5 <= mResidualTranslation.y && mResidualTranslation.y < 0.5,
+      DebugOnly<mozilla::gfx::Point> transformedOrig =
+        idealTransform * mozilla::gfx::Point();
+#ifdef DEBUG
+      DebugOnly<mozilla::gfx::Point> transformed =
+        idealTransform * mozilla::gfx::Point(mResidualTranslation.x,
+                                             mResidualTranslation.y) -
+        *&transformedOrig;
+#endif
+      NS_ASSERTION(-0.5 <= (&transformed)->x && (&transformed)->x < 0.5 &&
+                   -0.5 <= (&transformed)->y && (&transformed)->y < 0.5,
                    "Residual translation out of range");
       mValidRegion.SetEmpty();
     }
@@ -2097,6 +2140,8 @@ protected:
   void DidInsertChild(Layer* aLayer);
   void DidRemoveChild(Layer* aLayer);
 
+  void Collect3DContextLeaves(nsTArray<Layer*>& aToSort);
+
   ContainerLayer(LayerManager* aManager, void* aImplData);
 
   /**
@@ -2121,6 +2166,12 @@ protected:
   virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) override;
 
   virtual void DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent) override;
+
+  /**
+   * True for if the container start a new 3D context extended by one
+   * or more children.
+   */
+  bool Creates3DContextWithExtendingChildren();
 
   Layer* mFirstChild;
   Layer* mLastChild;
@@ -2158,7 +2209,7 @@ public:
    * CONSTRUCTION PHASE ONLY
    * Set the color of the layer.
    */
-  virtual void SetColor(const gfxRGBA& aColor)
+  virtual void SetColor(const gfx::Color& aColor)
   {
     if (mColor != aColor) {
       MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) Color", this));
@@ -2181,7 +2232,7 @@ public:
   }
 
   // This getter can be used anytime.
-  virtual const gfxRGBA& GetColor() { return mColor; }
+  virtual const gfx::Color& GetColor() { return mColor; }
 
   MOZ_LAYER_DECL_NAME("ColorLayer", TYPE_COLOR)
 
@@ -2194,8 +2245,8 @@ public:
 
 protected:
   ColorLayer(LayerManager* aManager, void* aImplData)
-    : Layer(aManager, aImplData),
-      mColor(0.0, 0.0, 0.0, 0.0)
+    : Layer(aManager, aImplData)
+    , mColor()
   {}
 
   virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) override;
@@ -2203,7 +2254,7 @@ protected:
   virtual void DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent) override;
 
   gfx::IntRect mBounds;
-  gfxRGBA mColor;
+  gfx::Color mColor;
 };
 
 /**
@@ -2485,7 +2536,6 @@ protected:
 
   virtual void DumpPacket(layerscope::LayersPacket* aPacket, const void* aParent) override;
 
-  Layer* mTempReferent;
   // 0 is a special value that means "no ID".
   uint64_t mId;
 };

@@ -11,6 +11,7 @@
 #include "WebMDemuxer.h"
 #include "WebMBufferedParser.h"
 #include "gfx2DGlue.h"
+#include "mozilla/Endian.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/SharedThreadPool.h"
 #include "MediaDataDemuxer.h"
@@ -182,18 +183,6 @@ WebMDemuxer::InitBufferedState()
   mBufferedState = new WebMBufferedState;
 }
 
-already_AddRefed<MediaDataDemuxer>
-WebMDemuxer::Clone() const
-{
-  nsRefPtr<WebMDemuxer> demuxer = new WebMDemuxer(mResource.GetResource());
-  demuxer->InitBufferedState();
-  if (NS_FAILED(demuxer->ReadMetadata())) {
-    NS_WARNING("Couldn't recreate WebMDemuxer");
-    return nullptr;
-  }
-  return demuxer.forget();
-}
-
 bool
 WebMDemuxer::HasTrackType(TrackInfo::TrackType aType) const
 {
@@ -301,7 +290,7 @@ WebMDemuxer::ReadMetadata()
       return NS_ERROR_FAILURE;
     }
     int type = nestegg_track_type(mContext, track);
-    if (type == NESTEGG_TRACK_VIDEO) {
+    if (type == NESTEGG_TRACK_VIDEO && !mHasVideo) {
       nestegg_video_params params;
       r = nestegg_track_video_params(mContext, track, &params);
       if (r == -1) {
@@ -376,7 +365,7 @@ WebMDemuxer::ReadMetadata()
       if (!r) {
         mInfo.mVideo.mDuration = media::TimeUnit::FromNanoseconds(duration).ToMicroseconds();
       }
-    } else if (type == NESTEGG_TRACK_AUDIO) {
+    } else if (type == NESTEGG_TRACK_AUDIO && !mHasAudio) {
       nestegg_audio_params params;
       r = nestegg_track_audio_params(mContext, track, &params);
       if (r == -1) {
@@ -996,17 +985,6 @@ WebMTrackDemuxer::SkipToNextRandomAccessPoint(media::TimeUnit aTimeThreshold)
     SkipFailureHolder failure(DemuxerFailureReason::END_OF_STREAM, parsed);
     return SkipAccessPointPromise::CreateAndReject(Move(failure), __func__);
   }
-}
-
-int64_t
-WebMTrackDemuxer::GetEvictionOffset(media::TimeUnit aTime)
-{
-  int64_t offset;
-  if (!mParent->GetOffsetForTime(aTime.ToNanoseconds(), &offset)) {
-    return 0;
-  }
-
-  return offset;
 }
 
 media::TimeIntervals

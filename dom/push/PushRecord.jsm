@@ -19,8 +19,6 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
-                                  "resource://gre/modules/BrowserUtils.jsm");
 
 this.EXPORTED_SYMBOLS = ["PushRecord"];
 
@@ -44,7 +42,10 @@ function PushRecord(props) {
   this.originAttributes = props.originAttributes;
   this.pushCount = props.pushCount || 0;
   this.lastPush = props.lastPush || 0;
+  this.p256dhPublicKey = props.p256dhPublicKey;
+  this.p256dhPrivateKey = props.p256dhPrivateKey;
   this.setQuota(props.quota);
+  this.ctime = (typeof props.ctime === "number") ? props.ctime : 0;
 }
 
 PushRecord.prototype = {
@@ -74,11 +75,17 @@ PushRecord.prototype = {
         Math.round(8 * Math.pow(daysElapsed, -0.8)),
         prefs.get("maxQuotaPerSubscription")
       );
+      Services.telemetry.getHistogramById("PUSH_API_QUOTA_RESET_TO").add(currentQuota - 1);
     } else {
       // The user hasn't visited the site since the last notification.
       currentQuota = this.quota;
     }
     this.quota = Math.max(currentQuota - 1, 0);
+    // We check for ctime > 0 to skip older records that did not have ctime.
+    if (this.isExpired() && this.ctime > 0) {
+      let duration = Date.now() - this.ctime;
+      Services.telemetry.getHistogramById("PUSH_API_QUOTA_EXPIRATION_TIME").add(duration / 1000);
+    }
   },
 
   receivedPush(lastVisit) {
@@ -154,20 +161,12 @@ PushRecord.prototype = {
   },
 
   /**
-   * Returns the push permission state for the principal associated with
-   * this registration.
-   */
-  pushPermission() {
-    return Services.perms.testExactPermissionFromPrincipal(
-           this.principal, "push");
-  },
-
-  /**
    * Indicates whether the registration can deliver push messages to its
    * associated service worker.
    */
   hasPermission() {
-    let permission = this.pushPermission();
+    let permission = Services.perms.testExactPermissionFromPrincipal(
+      this.principal, "desktop-notification");
     return permission == Ci.nsIPermissionManager.ALLOW_ACTION;
   },
 
@@ -184,19 +183,21 @@ PushRecord.prototype = {
       pushEndpoint: this.pushEndpoint,
       lastPush: this.lastPush,
       pushCount: this.pushCount,
+      p256dhKey: this.p256dhPublicKey,
     };
   },
 
   toRegister() {
     return {
       pushEndpoint: this.pushEndpoint,
+      p256dhKey: this.p256dhPublicKey,
     };
   },
 };
 
 // Define lazy getters for the principal and scope URI. IndexedDB can't store
 // `nsIPrincipal` objects, so we keep them in a private weak map.
-let principals = new WeakMap();
+var principals = new WeakMap();
 Object.defineProperties(PushRecord.prototype, {
   principal: {
     get() {
@@ -207,7 +208,7 @@ Object.defineProperties(PushRecord.prototype, {
           // Allow tests to omit origin attributes.
           url += this.originAttributes;
         }
-        principal = BrowserUtils.principalFromOrigin(url);
+        principal = Services.scriptSecurityManager.createCodebasePrincipalFromOrigin(url);
         principals.set(this, principal);
       }
       return principal;

@@ -6,11 +6,21 @@
 <!ENTITY  no_space_to_start_error "There is not enough space available for &brandShortName; to start.">
 <!ENTITY  error_loading_file "An error occurred when trying to load files required to run &brandShortName;">
 
+<!ENTITY firstrun_panel_title_welcome "Welcome">
 <!ENTITY  onboard_start_message3 "Browse with &brandShortName;">
 <!ENTITY  onboard_start_subtext3 "Make your mobile Web browsing experience truly your own.">
 <!ENTITY  onboard_start_button_account "Sign in to &brandShortName;">
 <!ENTITY  onboard_start_button_browser "Start Browsing">
+<!ENTITY firstrun_button_next "Next">
+
 <!ENTITY  onboard_start_restricted1 "Stay safe and in control with this simplified version of &brandShortName;.">
+
+<!ENTITY firstrun_import_title "Import">
+<!ENTITY firstrun_import_message "Welcome to &brandShortName;">
+<!ENTITY firstrun_import_subtext "Import your bookmarks and history from another browser.">
+<!ENTITY firstrun_import_action "Transfer to &brandShortName;">
+<!ENTITY firstrun_import_dialog_button "Transfer">
+<!ENTITY firstrun_import_progress_title "Transferring">
 
 <!-- Localization note: These are used as the titles of different pages on the home screen.
      They are automatically converted to all caps by the Android platform. -->
@@ -207,10 +217,17 @@
 <!ENTITY pref_cookies_not_accept_foreign "Enabled, excluding 3rd party">
 <!ENTITY pref_cookies_disabled "Disabled">
 
+<!ENTITY pref_tap_to_load_images_title "Tap-to-load images">
+<!ENTITY pref_tap_to_load_images_summary2 "Load images only when you long press them">
+
 <!ENTITY pref_tracking_protection_title "Tracking protection">
 <!ENTITY pref_tracking_protection_summary3 "Enabled in Private Browsing">
 <!ENTITY pref_donottrack_title "Do not track">
 <!ENTITY pref_donottrack_summary "&brandShortName; will tell sites that you do not want to be tracked">
+
+<!ENTITY pref_tracking_protection_enabled "Enabled">
+<!ENTITY pref_tracking_protection_enabled_pb "Enabled in Private Browsing">
+<!ENTITY pref_tracking_protection_disabled "Disabled">
 
 <!ENTITY tracking_protection_prompt_title "Now with Tracking Protection">
 <!ENTITY tracking_protection_prompt_text "Actively block tracking elements so you don\'t have to worry.">
@@ -280,6 +297,7 @@ size. -->
 <!ENTITY pref_sync "Sync">
 <!ENTITY pref_sync_summary2 "Sync your tabs, bookmarks, logins, history">
 <!ENTITY pref_search_suggestions "Show search suggestions">
+<!ENTITY pref_history_search_suggestions "Show search history">
 <!ENTITY pref_import_android "Import from Android">
 <!ENTITY pref_import_android_summary "Import bookmarks and history from the native browser">
 <!ENTITY pref_private_data_history2 "Browsing history">
@@ -485,8 +503,6 @@ size. -->
 <!ENTITY button_set "Set">
 <!ENTITY button_clear "Clear">
 <!ENTITY button_copy "Copy">
-
-<!ENTITY firstrun_panel_title_welcome "Welcome">
 
 <!ENTITY home_top_sites_title "Top Sites">
 <!-- Localization note (home_top_sites_add): This string is used as placeholder
@@ -713,8 +729,6 @@ just addresses the organization to follow, e.g. "This site is run by " -->
 <!ENTITY restriction_disallow_guest_browsing_title2 "Disable Guest Browsing">
 
 <!-- Default Bookmarks titles-->
-<!-- LOCALIZATION NOTE (bookmarks_title): title for the folder that will contains the default bookmarks -->
-<!ENTITY bookmarks_title "Mobile">
 <!-- LOCALIZATION NOTE (bookmarks_about_browser): link title for about:fennec -->
 <!ENTITY bookmarks_about_browser "Firefox: About your browser">
 <!-- LOCALIZATION NOTE (bookmarks_addons): link title for https://addons.mozilla.org/en-US/mobile -->
@@ -723,7 +737,7 @@ just addresses the organization to follow, e.g. "This site is run by " -->
 <!ENTITY bookmarks_support "Firefox: Support">
 <!--LOCALIZATION NOTE (bookmarks_marketplace):link title for https://marketplace.firefox.com -->
 <!ENTITY bookmarks_marketplace "Firefox Marketplace">
-<!-- LOCALIZATION NOTE (bookmarks_restricted_support): link title for https://support.mozilla.org/kb/kids -->
-<!ENTITY bookmarks_restricted_support "Firefox Help and Support for a simplified kid-friendly version of Firefox">
+<!-- LOCALIZATION NOTE (bookmarks_restricted_support): link title for https://support.mozilla.org/kb/controlledaccess -->
+<!ENTITY bookmarks_restricted_support2 "Firefox Help and Support for restricted profiles on Android tablets">
 <!-- LOCALIZATION NOTE (bookmarks_restricted_webmaker):link title for https://webmaker.org -->
 <!ENTITY bookmarks_restricted_webmaker "Learn the Web: Mozilla Webmaker">

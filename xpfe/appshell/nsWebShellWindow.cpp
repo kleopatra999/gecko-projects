@@ -213,7 +213,7 @@ nsresult nsWebShellWindow::Initialize(nsIXULWindow* aParent,
   // and then blowing it away with a second one, which can cause problems for the
   // top-level chrome window case. See bug 789773.
   if (nsContentUtils::IsInitialized()) { // Sometimes this happens really early  See bug 793370.
-    rv = mDocShell->CreateAboutBlankContentViewer(nsContentUtils::SubjectPrincipal());
+    rv = mDocShell->CreateAboutBlankContentViewer(nsContentUtils::SubjectPrincipalOrSystemIfNativeCaller());
     NS_ENSURE_SUCCESS(rv, rv);
     nsCOMPtr<nsIDocument> doc = mDocShell ? mDocShell->GetDocument() : nullptr;
     NS_ENSURE_TRUE(!!doc, NS_ERROR_FAILURE);
@@ -419,8 +419,8 @@ nsWebShellWindow::WindowActivated()
     fm->WindowRaised(window);
 
   if (mChromeLoaded) {
-    PersistentAttributesDirty(PAD_POSITION | PAD_SIZE | PAD_MISC);
-    SavePersistentAttributes();
+    SetAttributesDirty(PAD_POSITION | PAD_SIZE | PAD_MISC);
+    SaveAttributes();
    }
 }
 
@@ -512,14 +512,14 @@ nsWebShellWindow::SetPersistenceTimer(uint32_t aDirtyFlags)
   mSPTimer->InitWithCallback(callback, SIZE_PERSISTENCE_TIMEOUT,
                              nsITimer::TYPE_ONE_SHOT);
 
-  PersistentAttributesDirty(aDirtyFlags);
+  SetAttributesDirty(aDirtyFlags);
 }
 
 void
 nsWebShellWindow::FirePersistenceTimer()
 {
   MutexAutoLock lock(mSPTimerLock);
-  SavePersistentAttributes();
+  SaveAttributes();
 }
 
 
@@ -772,7 +772,7 @@ NS_IMETHODIMP nsWebShellWindow::Destroy()
     MutexAutoLock lock(mSPTimerLock);
     if (mSPTimer) {
       mSPTimer->Cancel();
-      SavePersistentAttributes();
+      SaveAttributes();
       mSPTimer = nullptr;
     }
   }

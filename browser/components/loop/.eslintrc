@@ -20,7 +20,7 @@
     "console": false,
     "loop": true,
     "MozActivity": false,
-    "mozRTCSessionDescription": false,
+    "RTCSessionDescription": false,
     "OT": false,
     "performance": false,
     "Promise": false,

@@ -104,12 +104,6 @@ SpammyLayoutWarningsEnabled()
 }
 #endif
 
-static inline nsIFrame*
-GetTransformRootFrame(nsIFrame* aFrame)
-{
-  return nsLayoutUtils::GetTransformRootFrame(aFrame);
-}
-
 static inline CSSAngle
 MakeCSSAngle(const nsCSSValue& aValue)
 {
@@ -346,13 +340,13 @@ static void AddTransformFunctions(nsCSSValueList* aList,
 static TimingFunction
 ToTimingFunction(const ComputedTimingFunction& aCTF)
 {
-  if (aCTF.GetType() == nsTimingFunction::Function) {
+  if (aCTF.HasSpline()) {
     const nsSMILKeySpline* spline = aCTF.GetFunction();
     return TimingFunction(CubicBezierFunction(spline->X1(), spline->Y1(),
                                               spline->X2(), spline->Y2()));
   }
 
-  uint32_t type = aCTF.GetType() == nsTimingFunction::StepStart ? 1 : 2;
+  uint32_t type = aCTF.GetType() == nsTimingFunction::Type::StepStart ? 1 : 2;
   return TimingFunction(StepFunction(aCTF.GetSteps(), type));
 }
 
@@ -473,7 +467,7 @@ AddAnimationsForProperty(nsIFrame* aFrame, nsCSSProperty aProperty,
     }
 
     AddAnimationForProperty(aFrame, *property, anim, aLayer, aData, aPending);
-    anim->SetIsRunningOnCompositor();
+    effect->SetIsRunningOnCompositor(aProperty, true);
   }
 }
 
@@ -522,11 +516,16 @@ nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(Layer* aLayer,
   aLayer->SetAnimationGeneration(animationGeneration);
 
   nsPresContext* presContext = aFrame->PresContext();
+  presContext->TransitionManager()->ClearIsRunningOnCompositor(aFrame,
+                                                               aProperty);
+  presContext->AnimationManager()->ClearIsRunningOnCompositor(aFrame,
+                                                              aProperty);
   AnimationCollection* transitions =
-    presContext->TransitionManager()->GetAnimationsForCompositor(aFrame, aProperty);
+    presContext->TransitionManager()->GetAnimationsForCompositor(aFrame,
+                                                                 aProperty);
   AnimationCollection* animations =
-    presContext->AnimationManager()->GetAnimationsForCompositor(aFrame, aProperty);
-
+    presContext->AnimationManager()->GetAnimationsForCompositor(aFrame,
+                                                                aProperty);
   if (!animations && !transitions) {
     return;
   }
@@ -552,7 +551,7 @@ nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(Layer* aLayer,
     // XXX Performance here isn't ideal for SVG. We'd prefer to avoid resolving
     // the dimensions of refBox. That said, we only get here if there are CSS
     // animations or transitions on this element, and that is likely to be a
-    // lot rarer that transforms on SVG (the frequency of which drives the need
+    // lot rarer than transforms on SVG (the frequency of which drives the need
     // for TransformReferenceBox).
     TransformReferenceBox refBox(aFrame);
     nsRect bounds(0, 0, refBox.Width(), refBox.Height());
@@ -573,12 +572,17 @@ nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(Layer* aLayer,
     }
     nsPoint origin;
     if (aItem) {
+      // This branch is for display items to leverage the cache of
+      // nsDisplayListBuilder.
       origin = aItem->ToReferenceFrame();
     } else {
-      // transform display items used a reference frame computed from
-      // their GetTransformRootFrame().
+      // This branch is running for restyling.
+      // Animations are animated at the coordination of the reference
+      // frame outside, not the given frame itself.  The given frame
+      // is also reference frame too, so the parent's reference frame
+      // are used.
       nsIFrame* referenceFrame =
-        nsLayoutUtils::GetReferenceFrame(GetTransformRootFrame(aFrame));
+        nsLayoutUtils::GetReferenceFrame(nsLayoutUtils::GetCrossDocParentFrame(aFrame));
       origin = aFrame->GetOffsetToCrossDoc(referenceFrame);
     }
 
@@ -677,8 +681,7 @@ static void MarkFrameForDisplay(nsIFrame* aFrame, nsIFrame* aStopAtFrame) {
 void nsDisplayListBuilder::SetContainsBlendMode(uint8_t aBlendMode)
 {
   MOZ_ASSERT(aBlendMode != NS_STYLE_BLEND_NORMAL);
-  gfxContext::GraphicsOperator op = nsCSSRendering::GetGFXBlendMode(aBlendMode);
-  mContainedBlendModes += gfx::CompositionOpForOp(op);
+  mContainedBlendModes += nsCSSRendering::GetGFXBlendMode(aBlendMode);
 }
 
 bool nsDisplayListBuilder::NeedToForceTransparentSurfaceForItem(nsDisplayItem* aItem)
@@ -919,6 +922,17 @@ nsDisplayListBuilder::MarkFramesForDisplayList(nsIFrame* aDirtyFrame,
   }
 }
 
+/**
+ * Mark all preserve-3d children with
+ * NS_FRAME_FORCE_DISPLAY_LIST_DESCEND_INTO to make sure
+ * nsFrame::BuildDisplayListForChild() would visit them.  Also compute
+ * dirty rect for preserve-3d children.
+ *
+ * @param aDirtyFrame is the frame to mark children extending context.
+ * @param aDirtyRect is the same as the dirty rect of the root of the
+ *                   current 3D context, but be translated relative to
+ *                   the aDirtyFrame.
+ */
 void
 nsDisplayListBuilder::MarkPreserve3DFramesForDisplayList(nsIFrame* aDirtyFrame, const nsRect& aDirtyRect)
 {
@@ -929,10 +943,9 @@ nsDisplayListBuilder::MarkPreserve3DFramesForDisplayList(nsIFrame* aDirtyFrame, 
     nsFrameList::Enumerator childFrames(lists.CurrentList());
     for (; !childFrames.AtEnd(); childFrames.Next()) {
       nsIFrame *child = childFrames.get();
-      if (child->Preserves3D()) {
+      if (child->Combines3DTransformWithAncestors()) {
         mFramesMarkedForDisplay.AppendElement(child);
         nsRect dirty = aDirtyRect - child->GetOffsetTo(aDirtyFrame);
-
         child->Properties().Set(nsDisplayListBuilder::Preserve3DDirtyRectProperty(),
                            new nsRect(dirty));
 
@@ -1454,6 +1467,23 @@ TriggerPendingAnimations(nsIDocument* aDocument,
                                          const_cast<TimeStamp*>(&aReadyTime));
 }
 
+LayerManager*
+nsDisplayListBuilder::GetWidgetLayerManager(nsView** aView, bool* aAllowRetaining)
+{
+  nsView* view = RootReferenceFrame()->GetView();
+  if (aView) {
+    *aView = view;
+  }
+  if (RootReferenceFrame() != nsLayoutUtils::GetDisplayRootFrame(RootReferenceFrame())) {
+    return nullptr;
+  }
+  nsIWidget* window = RootReferenceFrame()->GetNearestWidget();
+  if (window) {
+    return window->GetLayerManager(aAllowRetaining);
+  }
+  return nullptr;
+}
+
 /**
  * We paint by executing a layer manager transaction, constructing a
  * single layer representing the display list, and then making it the
@@ -1471,17 +1501,10 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
   bool doBeginTransaction = true;
   nsView *view = nullptr;
   if (aFlags & PAINT_USE_WIDGET_LAYERS) {
-    nsIFrame* rootReferenceFrame = aBuilder->RootReferenceFrame();
-    view = rootReferenceFrame->GetView();
-    NS_ASSERTION(rootReferenceFrame == nsLayoutUtils::GetDisplayRootFrame(rootReferenceFrame),
-                 "Reference frame must be a display root for us to use the layer manager");
-    nsIWidget* window = rootReferenceFrame->GetNearestWidget();
-    if (window) {
-      layerManager = window->GetLayerManager(&allowRetaining);
-      if (layerManager) {
-        doBeginTransaction = !(aFlags & PAINT_EXISTING_TRANSACTION);
-        widgetTransaction = true;
-      }
+    layerManager = aBuilder->GetWidgetLayerManager(&view, &allowRetaining);
+    if (layerManager) {
+      doBeginTransaction = !(aFlags & PAINT_EXISTING_TRANSACTION);
+      widgetTransaction = true;
     }
   }
   if (!layerManager) {
@@ -1500,10 +1523,6 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
 
   if (aFlags & PAINT_COMPRESSED) {
     layerBuilder->SetLayerTreeCompressionMode();
-  }
-
-  if (aFlags & PAINT_FLUSH_LAYERS) {
-    FrameLayerBuilder::InvalidateAllLayers(layerManager);
   }
 
   if (doBeginTransaction) {
@@ -1706,10 +1725,6 @@ already_AddRefed<LayerManager> nsDisplayList::PaintRoot(nsDisplayListBuilder* aB
     }
   }
 
-  if (aFlags & PAINT_FLUSH_LAYERS) {
-    FrameLayerBuilder::InvalidateAllLayers(layerManager);
-  }
-
   layerManager->SetUserData(&gLayerManagerLayerBuilder, oldBuilder);
   return layerManager.forget();
 }
@@ -1825,7 +1840,10 @@ void nsDisplayList::HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
 
     bool snap;
     nsRect r = item->GetBounds(aBuilder, &snap).Intersect(aRect);
-    if (item->GetClip().MayIntersect(r)) {
+    bool alwaysIntersect =
+      item->Frame()->Combines3DTransformWithAncestors() &&
+      item->GetType() == nsDisplayItem::TYPE_TRANSFORM;
+    if (alwaysIntersect || item->GetClip().MayIntersect(r)) {
       nsAutoTArray<nsIFrame*, 16> outFrames;
       item->HitTest(aBuilder, aRect, aState, &outFrames);
 
@@ -1833,7 +1851,7 @@ void nsDisplayList::HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
       // so we can sort them later, otherwise we add them directly to the output list.
       nsTArray<nsIFrame*> *writeFrames = aOutFrames;
       if (item->GetType() == nsDisplayItem::TYPE_TRANSFORM &&
-          item->Frame()->Preserves3D()) {
+          item->Frame()->Combines3DTransformWithAncestors()) {
         if (outFrames.Length()) {
           nsDisplayTransform *transform = static_cast<nsDisplayTransform*>(item);
           nsPoint point = aRect.TopLeft();
@@ -2350,18 +2368,25 @@ nsDisplayBackgroundImage::IsSingleFixedPositionImage(nsDisplayListBuilder* aBuil
 }
 
 bool
-nsDisplayBackgroundImage::ShouldFixToViewport(LayerManager* aManager)
+nsDisplayBackgroundImage::IsNonEmptyFixedImage() const
+{
+  return mBackgroundStyle->mLayers[mLayer].mAttachment == NS_STYLE_BG_ATTACHMENT_FIXED &&
+         !mBackgroundStyle->mLayers[mLayer].mImage.IsEmpty();
+}
+
+bool
+nsDisplayBackgroundImage::ShouldFixToViewport(nsDisplayListBuilder* aBuilder)
 {
   // APZ needs background-attachment:fixed images layerized for correctness.
+  nsRefPtr<LayerManager> layerManager = aBuilder->GetWidgetLayerManager();
   if (!nsLayoutUtils::UsesAsyncScrolling(mFrame) &&
-      aManager && aManager->ShouldAvoidComponentAlphaLayers()) {
+      layerManager && layerManager->ShouldAvoidComponentAlphaLayers()) {
     return false;
   }
 
   // Put background-attachment:fixed background images in their own
   // compositing layer.
-  return mBackgroundStyle->mLayers[mLayer].mAttachment == NS_STYLE_BG_ATTACHMENT_FIXED &&
-         !mBackgroundStyle->mLayers[mLayer].mImage.IsEmpty();
+  return IsNonEmptyFixedImage();
 }
 
 bool
@@ -2777,6 +2802,15 @@ nsDisplayBackgroundImage::GetBoundsInternal(nsDisplayListBuilder* aBuilder) {
   if (mFrame->GetType() == nsGkAtoms::canvasFrame) {
     nsCanvasFrame* frame = static_cast<nsCanvasFrame*>(mFrame);
     clipRect = frame->CanvasArea() + ToReferenceFrame();
+  } else if (nsLayoutUtils::UsesAsyncScrolling(mFrame) && IsNonEmptyFixedImage()) {
+    // If this is a background-attachment:fixed image, and APZ is enabled,
+    // async scrolling could reveal additional areas of the image, so don't
+    // clip it beyond clipping to the document's viewport.
+    nsIFrame* rootFrame = presContext->PresShell()->GetRootFrame();
+    nsRect rootRect = rootFrame->GetRectRelativeToSelf();
+    if (nsLayoutUtils::TransformRect(rootFrame, mFrame, rootRect) == nsLayoutUtils::TRANSFORM_SUCCEEDED) {
+      clipRect = rootRect + aBuilder->ToReferenceFrame(mFrame);
+    }
   }
   const nsStyleBackground::Layer& layer = mBackgroundStyle->mLayers[mLayer];
   return nsCSSRendering::GetBackgroundLayerRect(presContext, mFrame,
@@ -2973,7 +3007,7 @@ void
 nsDisplayBackgroundColor::Paint(nsDisplayListBuilder* aBuilder,
                                 nsRenderingContext* aCtx)
 {
-  if (mColor == NS_RGBA(0, 0, 0, 0)) {
+  if (mColor == Color()) {
     return;
   }
 
@@ -3027,7 +3061,7 @@ nsDisplayBackgroundColor::GetOpaqueRegion(nsDisplayListBuilder* aBuilder,
 bool
 nsDisplayBackgroundColor::IsUniform(nsDisplayListBuilder* aBuilder, nscolor* aColor)
 {
-  *aColor = NS_RGBA_FROM_GFXRGBA(mColor);
+  *aColor = mColor.ToABGR();
   return true;
 }
 
@@ -3064,7 +3098,7 @@ nsDisplayClearBackground::BuildLayer(nsDisplayListBuilder* aBuilder,
     if (!layer)
       return nullptr;
   }
-  layer->SetColor(NS_RGBA(0, 0, 0, 0));
+  layer->SetColor(Color());
   layer->SetMixBlendMode(gfx::CompositionOp::OP_SOURCE);
 
   bool snap;
@@ -3540,34 +3574,21 @@ nsDisplayWrapList::nsDisplayWrapList(nsDisplayListBuilder* aBuilder,
     return;
   }
 
-  // If the frame is a preserve-3d parent, then we will create transforms
-  // inside this list afterwards (see WrapPreserve3DList in nsFrame.cpp).
-  // In this case we will always be outside of the transform, so share
-  // our parents reference frame.
-  if (aFrame->Preserves3DChildren()) {
-    mReferenceFrame = 
-      aBuilder->FindReferenceFrameFor(GetTransformRootFrame(aFrame));
-    mToReferenceFrame = aFrame->GetOffsetToCrossDoc(mReferenceFrame);
-  } else {
-    // If we're a transformed frame, then we need to find out if we're inside
-    // the nsDisplayTransform or outside of it. Frames inside the transform
-    // need mReferenceFrame == mFrame, outside needs the next ancestor
-    // reference frame.
-    // If we're inside the transform, then the nsDisplayItem constructor
-    // will have done the right thing.
-    // If we're outside the transform, then we should have only one child
-    // (since nsDisplayTransform wraps all actual content), and that child
-    // will have the correct reference frame set (since nsDisplayTransform
-    // handles this explictly).
-    //
-    // Preserve-3d can cause us to have multiple nsDisplayTransform
-    // children.
-    nsDisplayItem *i = mList.GetBottom();
-    if (i && (!i->GetAbove() || i->GetType() == TYPE_TRANSFORM) &&
-        i->Frame() == mFrame) {
-      mReferenceFrame = i->ReferenceFrame();
-      mToReferenceFrame = i->ToReferenceFrame();
-    }
+  // If we're a transformed frame, then we need to find out if we're inside
+  // the nsDisplayTransform or outside of it. Frames inside the transform
+  // need mReferenceFrame == mFrame, outside needs the next ancestor
+  // reference frame.
+  // If we're inside the transform, then the nsDisplayItem constructor
+  // will have done the right thing.
+  // If we're outside the transform, then we should have only one child
+  // (since nsDisplayTransform wraps all actual content), and that child
+  // will have the correct reference frame set (since nsDisplayTransform
+  // handles this explictly).
+  nsDisplayItem *i = mList.GetBottom();
+  if (i && (!i->GetAbove() || i->GetType() == TYPE_TRANSFORM) &&
+      i->Frame() == mFrame) {
+    mReferenceFrame = i->ReferenceFrame();
+    mToReferenceFrame = i->ToReferenceFrame();
   }
   mVisibleRect = aBuilder->GetDirtyRect() +
       aBuilder->GetCurrentFrameOffsetToReferenceFrame();
@@ -3590,16 +3611,10 @@ nsDisplayWrapList::nsDisplayWrapList(nsDisplayListBuilder* aBuilder,
     return;
   }
 
-  if (aFrame->Preserves3DChildren()) {
-    mReferenceFrame = 
-      aBuilder->FindReferenceFrameFor(GetTransformRootFrame(aFrame));
-    mToReferenceFrame = aFrame->GetOffsetToCrossDoc(mReferenceFrame);
-  } else {
-    // See the previous nsDisplayWrapList constructor
-    if (aItem->Frame() == aFrame) {
-      mReferenceFrame = aItem->ReferenceFrame();
-      mToReferenceFrame = aItem->ToReferenceFrame();
-    }
+  // See the previous nsDisplayWrapList constructor
+  if (aItem->Frame() == aFrame) {
+    mReferenceFrame = aItem->ReferenceFrame();
+    mToReferenceFrame = aItem->ToReferenceFrame();
   }
   mVisibleRect = aBuilder->GetDirtyRect() +
       aBuilder->GetCurrentFrameOffsetToReferenceFrame();
@@ -3683,7 +3698,7 @@ RequiredLayerStateForChildren(nsDisplayListBuilder* aBuilder,
   LayerState result = LAYER_INACTIVE;
   for (nsDisplayItem* i = aList.GetBottom(); i; i = i->GetAbove()) {
     if (result == LAYER_INACTIVE &&
-        nsLayoutUtils::GetAnimatedGeometryRootFor(i, aBuilder, aManager) !=
+        nsLayoutUtils::GetAnimatedGeometryRootFor(i, aBuilder) !=
           aExpectedAnimatedGeometryRootForChildren) {
       result = LAYER_ACTIVE;
     }
@@ -3942,7 +3957,7 @@ nsDisplayOpacity::GetLayerState(nsDisplayListBuilder* aBuilder,
     return LAYER_ACTIVE;
 
   return RequiredLayerStateForChildren(aBuilder, aManager, aParameters, mList,
-    nsLayoutUtils::GetAnimatedGeometryRootFor(this, aBuilder, aManager));
+    nsLayoutUtils::GetAnimatedGeometryRootFor(this, aBuilder));
 }
 
 bool
@@ -4005,11 +4020,11 @@ nsDisplayMixBlendMode::GetLayerState(nsDisplayListBuilder* aBuilder,
                                      LayerManager* aManager,
                                      const ContainerLayerParameters& aParameters)
 {
-  gfxContext::GraphicsOperator op = nsCSSRendering::GetGFXBlendMode(mFrame->StyleDisplay()->mMixBlendMode);
-  if (aManager->SupportsMixBlendMode(gfx::CompositionOpForOp(op))) {
-    return LAYER_ACTIVE;
-  }
-  return LAYER_INACTIVE;
+  CompositionOp op =
+    nsCSSRendering::GetGFXBlendMode(mFrame->StyleDisplay()->mMixBlendMode);
+  return aManager->SupportsMixBlendMode(op)
+       ? LAYER_ACTIVE
+       : LAYER_INACTIVE;
 }
 
 // nsDisplayMixBlendMode uses layers for rendering
@@ -4027,7 +4042,7 @@ nsDisplayMixBlendMode::BuildLayer(nsDisplayListBuilder* aBuilder,
     return nullptr;
   }
 
-  container->DeprecatedSetMixBlendMode(nsCSSRendering::GetGFXBlendMode(mFrame->StyleDisplay()->mMixBlendMode));
+  container->SetMixBlendMode(nsCSSRendering::GetGFXBlendMode(mFrame->StyleDisplay()->mMixBlendMode));
 
   return container.forget();
 }
@@ -4389,7 +4404,7 @@ nsDisplayStickyPosition::BuildLayer(nsDisplayListBuilder* aBuilder,
 
   nsLayoutUtils::SetFixedPositionLayerData(layer, scrollFrame,
     nsRect(scrollFrame->GetOffsetToCrossDoc(ReferenceFrame()), scrollFrameSize),
-    mFrame, presContext, aContainerParameters);
+    mFrame, presContext, aContainerParameters, /* clip is fixed = */ true);
 
   ViewID scrollId = nsLayoutUtils::FindOrCreateIDFor(
     stickyScrollContainer->ScrollFrame()->GetScrolledFrame()->GetContent());
@@ -4638,24 +4653,27 @@ nsDisplayTransform::nsDisplayTransform(nsDisplayListBuilder* aBuilder,
                                        nsIFrame *aFrame, nsDisplayList *aList,
                                        const nsRect& aChildrenVisibleRect,
                                        ComputeTransformFunction aTransformGetter,
-                                       uint32_t aIndex) 
+                                       uint32_t aIndex)
   : nsDisplayItem(aBuilder, aFrame)
   , mStoredList(aBuilder, aFrame, aList)
   , mTransformGetter(aTransformGetter)
   , mChildrenVisibleRect(aChildrenVisibleRect)
   , mIndex(aIndex)
+  , mNoExtendContext(false)
+  , mHasPresetTransform(false)
+  , mTransformPreserves3DInited(false)
 {
   MOZ_COUNT_CTOR(nsDisplayTransform);
   MOZ_ASSERT(aFrame, "Must have a frame!");
-  MOZ_ASSERT(!aFrame->IsTransformed(), "Can't specify a transform getter for a transformed frame!");
   Init(aBuilder);
 }
 
 void
 nsDisplayTransform::SetReferenceFrameToAncestor(nsDisplayListBuilder* aBuilder)
 {
+  nsIFrame *outerFrame = nsLayoutUtils::GetCrossDocParentFrame(mFrame);
   mReferenceFrame =
-    aBuilder->FindReferenceFrameFor(GetTransformRootFrame(mFrame));
+    aBuilder->FindReferenceFrameFor(outerFrame);
   mToReferenceFrame = mFrame->GetOffsetToCrossDoc(mReferenceFrame);
   mVisibleRect = aBuilder->GetDirtyRect() + mToReferenceFrame;
 }
@@ -4688,6 +4706,9 @@ nsDisplayTransform::nsDisplayTransform(nsDisplayListBuilder* aBuilder,
   , mTransformGetter(nullptr)
   , mChildrenVisibleRect(aChildrenVisibleRect)
   , mIndex(aIndex)
+  , mNoExtendContext(false)
+  , mHasPresetTransform(false)
+  , mTransformPreserves3DInited(false)
 {
   MOZ_COUNT_CTOR(nsDisplayTransform);
   MOZ_ASSERT(aFrame, "Must have a frame!");
@@ -4704,6 +4725,9 @@ nsDisplayTransform::nsDisplayTransform(nsDisplayListBuilder* aBuilder,
   , mTransformGetter(nullptr)
   , mChildrenVisibleRect(aChildrenVisibleRect)
   , mIndex(aIndex)
+  , mNoExtendContext(false)
+  , mHasPresetTransform(false)
+  , mTransformPreserves3DInited(false)
 {
   MOZ_COUNT_CTOR(nsDisplayTransform);
   MOZ_ASSERT(aFrame, "Must have a frame!");
@@ -4711,7 +4735,27 @@ nsDisplayTransform::nsDisplayTransform(nsDisplayListBuilder* aBuilder,
   Init(aBuilder);
 }
 
-/* Returns the delta specified by the -moz-transform-origin property.
+nsDisplayTransform::nsDisplayTransform(nsDisplayListBuilder* aBuilder,
+                                       nsIFrame *aFrame, nsDisplayList *aList,
+                                       const nsRect& aChildrenVisibleRect,
+                                       const Matrix4x4& aTransform,
+                                       uint32_t aIndex)
+  : nsDisplayItem(aBuilder, aFrame)
+  , mStoredList(aBuilder, aFrame, aList)
+  , mTransform(aTransform)
+  , mTransformGetter(nullptr)
+  , mChildrenVisibleRect(aChildrenVisibleRect)
+  , mIndex(aIndex)
+  , mNoExtendContext(false)
+  , mHasPresetTransform(true)
+  , mTransformPreserves3DInited(false)
+{
+  MOZ_COUNT_CTOR(nsDisplayTransform);
+  MOZ_ASSERT(aFrame, "Must have a frame!");
+  Init(aBuilder);
+}
+
+/* Returns the delta specified by the transform-origin property.
  * This is a positive delta, meaning that it indicates the direction to move
  * to get from (0, 0) of the frame to the transform origin.  This function is
  * called off the main thread.
@@ -4722,14 +4766,16 @@ nsDisplayTransform::GetDeltaToTransformOrigin(const nsIFrame* aFrame,
                                               const nsRect* aBoundsOverride)
 {
   NS_PRECONDITION(aFrame, "Can't get delta for a null frame!");
-  NS_PRECONDITION(aFrame->IsTransformed() || aFrame->StyleDisplay()->BackfaceIsHidden(),
+  NS_PRECONDITION(aFrame->IsTransformed() ||
+                  aFrame->StyleDisplay()->BackfaceIsHidden() ||
+                  aFrame->Combines3DTransformWithAncestors(),
                   "Shouldn't get a delta for an untransformed frame!");
 
   if (!aFrame->IsTransformed()) {
     return Point3D();
   }
 
-  /* For both of the coordinates, if the value of -moz-transform is a
+  /* For both of the coordinates, if the value of transform is a
    * percentage, it's relative to the size of the frame.  Otherwise, if it's
    * a distance, it's already computed for us!
    */
@@ -4753,7 +4799,7 @@ nsDisplayTransform::GetDeltaToTransformOrigin(const nsIFrame* aFrame,
     { &TransformReferenceBox::X, &TransformReferenceBox::Y };
 
   for (uint8_t index = 0; index < 2; ++index) {
-    /* If the -moz-transform-origin specifies a percentage, take the percentage
+    /* If the transform-origin specifies a percentage, take the percentage
      * of the size of the box.
      */
     const nsStyleCoord &coord = display->mTransformOrigin[index];
@@ -4797,7 +4843,9 @@ nsDisplayTransform::GetDeltaToPerspectiveOrigin(const nsIFrame* aFrame,
                                                 float aAppUnitsPerPixel)
 {
   NS_PRECONDITION(aFrame, "Can't get delta for a null frame!");
-  NS_PRECONDITION(aFrame->IsTransformed() || aFrame->StyleDisplay()->BackfaceIsHidden(),
+  NS_PRECONDITION(aFrame->IsTransformed() ||
+                  aFrame->StyleDisplay()->BackfaceIsHidden() ||
+                  aFrame->Combines3DTransformWithAncestors(),
                   "Shouldn't get a delta for an untransformed frame!");
 
   if (!aFrame->IsTransformed()) {
@@ -4826,7 +4874,7 @@ nsDisplayTransform::GetDeltaToPerspectiveOrigin(const nsIFrame* aFrame,
     { &TransformReferenceBox::Width, &TransformReferenceBox::Height };
 
   for (uint8_t index = 0; index < 2; ++index) {
-    /* If the -moz-transform-origin specifies a percentage, take the percentage
+    /* If the transform-origin specifies a percentage, take the percentage
      * of the size of the box.
      */
     const nsStyleCoord &coord = display->mPerspectiveOrigin[index];
@@ -4878,7 +4926,7 @@ nsDisplayTransform::FrameTransformProperties::FrameTransformProperties(const nsI
   }
 }
 
-/* Wraps up the -moz-transform matrix in a change-of-basis matrix pair that
+/* Wraps up the transform matrix in a change-of-basis matrix pair that
  * translates from local coordinate space to transform coordinate space, then
  * hands it back.
  */
@@ -4890,7 +4938,7 @@ nsDisplayTransform::GetResultingTransformMatrix(const FrameTransformProperties& 
                                                 nsIFrame** aOutAncestor)
 {
   return GetResultingTransformMatrixInternal(aProperties, aOrigin, aAppUnitsPerPixel,
-                                             aBoundsOverride, aOutAncestor, false);
+                                             aBoundsOverride, aOutAncestor, false, false);
 }
  
 Matrix4x4
@@ -4907,7 +4955,24 @@ nsDisplayTransform::GetResultingTransformMatrix(const nsIFrame* aFrame,
 
   return GetResultingTransformMatrixInternal(props, aOrigin, aAppUnitsPerPixel,
                                              aBoundsOverride, aOutAncestor,
-                                             aOffsetByOrigin);
+                                             aOffsetByOrigin, false);
+}
+
+Matrix4x4
+nsDisplayTransform::GetResultingTransformMatrixP3D(const nsIFrame* aFrame,
+                                                   const nsPoint& aOrigin,
+                                                   float aAppUnitsPerPixel,
+                                                   const nsRect* aBoundsOverride,
+                                                   nsIFrame** aOutAncestor,
+                                                   bool aOffsetByOrigin)
+{
+  FrameTransformProperties props(aFrame,
+                                 aAppUnitsPerPixel,
+                                 aBoundsOverride);
+
+  return GetResultingTransformMatrixInternal(props, aOrigin, aAppUnitsPerPixel,
+                                             aBoundsOverride, aOutAncestor,
+                                             aOffsetByOrigin, true);
 }
 
 Matrix4x4
@@ -4916,7 +4981,8 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
                                                         float aAppUnitsPerPixel,
                                                         const nsRect* aBoundsOverride,
                                                         nsIFrame** aOutAncestor,
-                                                        bool aOffsetByOrigin)
+                                                        bool aOffsetByOrigin,
+                                                        bool aDoPreserves3D)
 {
   const nsIFrame *frame = aProperties.mFrame;
 
@@ -4973,7 +5039,7 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
     result = result * perspective;
   }
 
-  /* Account for the -moz-transform-origin property by translating the
+  /* Account for the transform-origin property by translating the
    * coordinate space to the new origin.
    */
   Point3D newOrigin =
@@ -5031,11 +5097,11 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
     }
   }
 
-  if (frame && frame->Preserves3D()) {
+  if (aDoPreserves3D && frame && frame->Combines3DTransformWithAncestors()) {
     // Include the transform set on our parent
     NS_ASSERTION(frame->GetParent() &&
                  frame->GetParent()->IsTransformed() &&
-                 frame->GetParent()->Preserves3DChildren(),
+                 frame->GetParent()->Extend3DContext(),
                  "Preserve3D mismatch!");
     FrameTransformProperties props(frame->GetParent(),
                                    aAppUnitsPerPixel,
@@ -5049,7 +5115,8 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
       GetResultingTransformMatrixInternal(props,
                                           aOrigin - frame->GetPosition(),
                                           aAppUnitsPerPixel, nullptr,
-                                          aOutAncestor, !frame->IsTransformed());
+                                          aOutAncestor, !frame->IsTransformed(),
+                                          aDoPreserves3D);
     result = result * parent;
   }
 
@@ -5189,7 +5256,10 @@ nsDisplayTransform::GetTransform()
     if (mTransformGetter) {
       mTransform = mTransformGetter(mFrame, scale);
       mTransform.ChangeBasis(newOrigin.x, newOrigin.y, newOrigin.z);
-    } else {
+    } else if (!mHasPresetTransform) {
+      bool isReference =
+        mFrame->IsTransformed() ||
+        mFrame->Combines3DTransformWithAncestors() || mFrame->Extend3DContext();
       /**
        * Passing true as the final argument means that we want to shift the
        * coordinates to be relative to our reference frame instead of relative
@@ -5197,31 +5267,55 @@ nsDisplayTransform::GetTransform()
        * When we have preserve-3d, our reference frame is already guaranteed
        * to be an ancestor of the preserve-3d chain, so we only need to do
        * this once.
+       * For preserve-3d leaf, itself is a refrence frame.
        */
       mTransform = GetResultingTransformMatrix(mFrame, ToReferenceFrame(),
                                                scale, nullptr, nullptr,
-                                               mFrame->IsTransformed());
+                                               isReference);
     }
   }
   return mTransform;
 }
 
+const Matrix4x4&
+nsDisplayTransform::GetAccumulatedPreserved3DTransform()
+{
+  // XXX: should go back to fix mTransformGetter.
+  if (!mTransformPreserves3DInited) {
+    mTransformPreserves3DInited = true;
+    if (!mFrame->Combines3DTransformWithAncestors()) {
+      mTransformPreserves3D = GetTransform();
+      return mTransformPreserves3D;
+    }
+    float scale = mFrame->PresContext()->AppUnitsPerDevPixel();
+    bool isReference =
+      mFrame->IsTransformed() ||
+      mFrame->Combines3DTransformWithAncestors() || mFrame->Extend3DContext();
+    mTransformPreserves3D =
+      GetResultingTransformMatrixP3D(mFrame, ToReferenceFrame(), scale,
+                                     nullptr, nullptr, isReference);
+  }
+  return mTransformPreserves3D;
+}
+
 bool
 nsDisplayTransform::ShouldBuildLayerEvenIfInvisible(nsDisplayListBuilder* aBuilder)
 {
-  return ShouldPrerender(aBuilder);
+  // The visible rect of a Preserves-3D frame is just an intermediate
+  // result.  It should always build a layer to make sure it is
+  // rendering correctly.
+  return ShouldPrerender(aBuilder) || mFrame->Combines3DTransformWithAncestors();
 }
 
 already_AddRefed<Layer> nsDisplayTransform::BuildLayer(nsDisplayListBuilder *aBuilder,
                                                        LayerManager *aManager,
                                                        const ContainerLayerParameters& aContainerParameters)
 {
+  /* For frames without transform, it would not be removed for
+   * backface hidden here.  But, it would be removed by the init
+   * function of nsDisplayTransform.
+   */
   const Matrix4x4& newTransformMatrix = GetTransform();
-
-  if (mFrame->StyleDisplay()->mBackfaceVisibility == NS_STYLE_BACKFACE_VISIBILITY_HIDDEN &&
-      newTransformMatrix.IsBackfaceVisible()) {
-    return nullptr;
-  }
 
   uint32_t flags = ShouldPrerender(aBuilder) ?
     FrameLayerBuilder::CONTAINER_NOT_CLIPPED_BY_ANCESTORS : 0;
@@ -5236,10 +5330,10 @@ already_AddRefed<Layer> nsDisplayTransform::BuildLayer(nsDisplayListBuilder *aBu
 
   // Add the preserve-3d flag for this layer, BuildContainerLayerFor clears all flags,
   // so we never need to explicitely unset this flag.
-  if (mFrame->Preserves3D() || mFrame->Preserves3DChildren()) {
-    container->SetContentFlags(container->GetContentFlags() | Layer::CONTENT_PRESERVE_3D);
+  if (mFrame->Extend3DContext() && !mNoExtendContext) {
+    container->SetContentFlags(container->GetContentFlags() | Layer::CONTENT_EXTEND_3D_CONTEXT);
   } else {
-    container->SetContentFlags(container->GetContentFlags() & ~Layer::CONTENT_PRESERVE_3D);
+    container->SetContentFlags(container->GetContentFlags() & ~Layer::CONTENT_EXTEND_3D_CONTEXT);
   }
 
   nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(container, aBuilder,
@@ -5262,7 +5356,7 @@ nsDisplayTransform::GetLayerState(nsDisplayListBuilder* aBuilder,
                                   const ContainerLayerParameters& aParameters) {
   // If the transform is 3d, or the layer takes part in preserve-3d sorting
   // then we *always* want this to be an active layer.
-  if (!GetTransform().Is2D() || mFrame->Preserves3D()) {
+  if (!GetTransform().Is2D() || mFrame->Combines3DTransformWithAncestors()) {
     return LAYER_ACTIVE_FORCE;
   }
   // Here we check if the *post-transform* bounds of this item are big enough
@@ -5329,7 +5423,7 @@ void nsDisplayTransform::HitTest(nsDisplayListBuilder *aBuilder,
   float factor = mFrame->PresContext()->AppUnitsPerDevPixel();
   Matrix4x4 matrix = GetTransform();
 
-  if (!IsFrameVisible(mFrame, matrix)) {
+  if (!IsFrameVisible(mFrame, GetAccumulatedPreserved3DTransform())) {
     return;
   }
 
@@ -5406,7 +5500,8 @@ nsDisplayTransform::GetHitDepthAtPoint(nsDisplayListBuilder* aBuilder, const nsP
   float factor = mFrame->PresContext()->AppUnitsPerDevPixel();
   Matrix4x4 matrix = GetTransform();
 
-  NS_ASSERTION(IsFrameVisible(mFrame, matrix), "We can't have hit a frame that isn't visible!");
+  NS_ASSERTION(IsFrameVisible(mFrame, GetAccumulatedPreserved3DTransform()),
+               "We can't have hit a frame that isn't visible!");
 
   Matrix4x4 inverse = matrix;
   inverse.Invert();
@@ -5425,15 +5520,59 @@ nsDisplayTransform::GetHitDepthAtPoint(nsDisplayListBuilder* aBuilder, const nsP
  */
 nsRect nsDisplayTransform::GetBounds(nsDisplayListBuilder *aBuilder, bool* aSnap)
 {
+  /* For some cases, the transform would make an empty bounds, but it
+   * may be turned back again to get a non-empty bounds.  We should
+   * not depend on transforming bounds level by level.
+   *
+   * Here, it applies accumulated transforms on the leaf frames of the
+   * 3d rendering context, and track and accmulate bounds at
+   * nsDisplayListBuilder.
+   */
+  nsDisplayListBuilder::AutoAccumulateTransform accTransform(aBuilder);
+  Maybe<nsDisplayListBuilder::AutoAccumulateRect> accRect;
+  bool startPreserves3D =
+    mFrame->Extend3DContext() && !mFrame->Combines3DTransformWithAncestors();
+
+  if (!mFrame->Combines3DTransformWithAncestors()) {
+    accTransform.StartRoot();
+  }
+
+  accTransform.Accumulate(GetTransform());
+  if (startPreserves3D) {
+    accRect.emplace(aBuilder);
+  }
+
+  /* For Preserves3D, it is bounds of only children as leaf frames.
+   * For non-leaf frames, their bounds are accumulated and kept at
+   * nsDisplayListBuilder.
+   */
   nsRect untransformedBounds = MaybePrerender() ?
     mFrame->GetVisualOverflowRectRelativeToSelf() :
     mStoredList.GetBounds(aBuilder, aSnap);
   *aSnap = false;
   // GetTransform always operates in dev pixels.
   float factor = mFrame->PresContext()->AppUnitsPerDevPixel();
-  return nsLayoutUtils::MatrixTransformRect(untransformedBounds,
-                                            GetTransform(),
-                                            factor);
+  nsRect rect =
+    nsLayoutUtils::MatrixTransformRect(untransformedBounds,
+                                       accTransform.GetCurrentTransform(),
+                                       factor);
+
+  if (mFrame->Combines3DTransformWithAncestors()) {
+    if (!mFrame->Extend3DContext() &&
+        !aBuilder->GetAccumulatedRectLevels()) {
+      // For preserve-3d, only leaf frames and frames start
+      // preserve-3d chain have non-empty bounds.
+      return rect;
+    }
+    aBuilder->AccumulateRect(rect);
+    return nsRect();
+  }
+
+  if (startPreserves3D) {
+    rect.UnionRect(rect, aBuilder->GetAccumulatedRect());
+  }
+
+  return rect;
 }
 
 /* The transform is opaque iff the transform consists solely of scales and
@@ -5559,14 +5698,18 @@ nsDisplayTransform::TryMerge(nsDisplayListBuilder *aBuilder,
 nsRect nsDisplayTransform::TransformRect(const nsRect &aUntransformedBounds,
                                          const nsIFrame* aFrame,
                                          const nsPoint &aOrigin,
-                                         const nsRect* aBoundsOverride)
+                                         const nsRect* aBoundsOverride,
+                                         bool aPreserves3D)
 {
   NS_PRECONDITION(aFrame, "Can't take the transform based on a null frame!");
 
   float factor = aFrame->PresContext()->AppUnitsPerDevPixel();
   return nsLayoutUtils::MatrixTransformRect
     (aUntransformedBounds,
-     GetResultingTransformMatrix(aFrame, aOrigin, factor, aBoundsOverride),
+     (aPreserves3D ?
+      GetResultingTransformMatrixP3D(aFrame, aOrigin, factor,
+                                     aBoundsOverride) :
+      GetResultingTransformMatrix(aFrame, aOrigin, factor, aBoundsOverride)),
      factor);
 }
 
@@ -5580,7 +5723,7 @@ nsRect nsDisplayTransform::TransformRectOut(const nsRect &aUntransformedBounds,
   float factor = aFrame->PresContext()->AppUnitsPerDevPixel();
   return nsLayoutUtils::MatrixTransformRectOut
     (aUntransformedBounds,
-     GetResultingTransformMatrix(aFrame, aOrigin, factor, aBoundsOverride),
+     GetResultingTransformMatrixP3D(aFrame, aOrigin, factor, aBoundsOverride),
      factor);
 }
 
@@ -5588,13 +5731,16 @@ bool nsDisplayTransform::UntransformRect(const nsRect &aTransformedBounds,
                                          const nsRect &aChildBounds,
                                          const nsIFrame* aFrame,
                                          const nsPoint &aOrigin,
-                                         nsRect *aOutRect)
+                                         nsRect *aOutRect,
+                                         bool aPreserves3D)
 {
   NS_PRECONDITION(aFrame, "Can't take the transform based on a null frame!");
 
   float factor = aFrame->PresContext()->AppUnitsPerDevPixel();
 
-  Matrix4x4 transform = GetResultingTransformMatrix(aFrame, aOrigin, factor, nullptr);
+  Matrix4x4 transform = aPreserves3D ?
+    GetResultingTransformMatrixP3D(aFrame, aOrigin, factor, nullptr) :
+    GetResultingTransformMatrix(aFrame, aOrigin, factor, nullptr);
   if (transform.IsSingular()) {
     return false;
   }

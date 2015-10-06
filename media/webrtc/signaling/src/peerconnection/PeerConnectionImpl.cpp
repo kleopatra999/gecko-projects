@@ -242,7 +242,7 @@ public:
       // Start currentTime from the point where this stream was successfully
       // returned.
       aStream->SetLogicalStreamStartTime(
-          aStream->GetStream()->GetCurrentTime());
+          aStream->GetPlaybackStream()->GetCurrentTime());
 
       JSErrorResult rv;
       CSFLogInfo(logTag, "Calling OnAddStream(%s)", streamId.c_str());
@@ -389,6 +389,7 @@ PeerConnectionImpl::PeerConnectionImpl(const GlobalObject* aGlobal)
   , mUuidGen(MakeUnique<PCUuidGenerator>())
   , mNumAudioStreams(0)
   , mNumVideoStreams(0)
+  , mHaveConfiguredCodecs(false)
   , mHaveDataStream(false)
   , mAddCandidateErrorCount(0)
   , mTrickle(true) // TODO(ekr@rtfm.com): Use pref
@@ -409,6 +410,8 @@ PeerConnectionImpl::PeerConnectionImpl(const GlobalObject* aGlobal)
   mAllowIceLinkLocal = Preferences::GetBool(
     "media.peerconnection.ice.link_local", false);
 #endif
+  memset(mMaxReceiving, 0, sizeof(mMaxReceiving));
+  memset(mMaxSending, 0, sizeof(mMaxSending));
 }
 
 PeerConnectionImpl::~PeerConnectionImpl()
@@ -468,7 +471,7 @@ PeerConnectionImpl::MakeMediaStream()
   }
 #endif
 
-  CSFLogDebug(logTag, "Created media stream %p, inner: %p", stream.get(), stream->GetStream());
+  CSFLogDebug(logTag, "Created media stream %p, inner: %p", stream.get(), stream->GetInputStream());
 
   return stream.forget();
 }
@@ -620,12 +623,6 @@ PeerConnectionConfiguration::AddIceServer(const RTCIceServer &aServer)
     if (isTurn || isTurns) {
       NS_ConvertUTF16toUTF8 credential(aServer.mCredential);
       NS_ConvertUTF16toUTF8 username(aServer.mUsername);
-
-      // Bug 1039655 - TURN TCP is not e10s ready
-      if ((transport == kNrIceTransportTcp) &&
-          (!XRE_IsParentProcess())) {
-        continue;
-      }
 
       if (!addTurnServer(host.get(), port,
                          username.get(),
@@ -929,6 +926,11 @@ class CompareCodecPriority {
 
 nsresult
 PeerConnectionImpl::ConfigureJsepSessionCodecs() {
+  if (mHaveConfiguredCodecs) {
+    return NS_OK;
+  }
+  mHaveConfiguredCodecs = true;
+
 #if !defined(MOZILLA_XPCOMRT_API)
   nsresult res;
   nsCOMPtr<nsIPrefService> prefs =
@@ -1150,15 +1152,8 @@ PeerConnectionImpl::GetDatachannelParameters(
       for (size_t i = 0;
            i < trackPair.mSending->GetNegotiatedDetails()->GetCodecCount();
            ++i) {
-        const JsepCodecDescription* codec;
-        nsresult res =
-          trackPair.mSending->GetNegotiatedDetails()->GetCodec(i, &codec);
-
-        if (NS_FAILED(res)) {
-          CSFLogError(logTag, "%s: Failed getting codec for m=application.",
-                              __FUNCTION__);
-          continue;
-        }
+        const JsepCodecDescription* codec =
+          trackPair.mSending->GetNegotiatedDetails()->GetCodec(i);
 
         if (codec->mType != SdpMediaSection::kApplication) {
           CSFLogError(logTag, "%s: Codec type for m=application was %u, this "
@@ -1194,6 +1189,63 @@ PeerConnectionImpl::GetDatachannelParameters(
   return NS_OK;
 }
 
+/* static */
+void
+PeerConnectionImpl::DeferredAddTrackToJsepSession(
+    const std::string& pcHandle,
+    SdpMediaSection::MediaType type,
+    const std::string& streamId,
+    const std::string& trackId)
+{
+  PeerConnectionWrapper wrapper(pcHandle);
+
+  if (wrapper.impl()) {
+    if (!PeerConnectionCtx::GetInstance()->isReady()) {
+      MOZ_CRASH("Why is DeferredAddTrackToJsepSession being executed when the "
+                "PeerConnectionCtx isn't ready?");
+    }
+    wrapper.impl()->AddTrackToJsepSession(type, streamId, trackId);
+  }
+}
+
+nsresult
+PeerConnectionImpl::AddTrackToJsepSession(SdpMediaSection::MediaType type,
+                                          const std::string& streamId,
+                                          const std::string& trackId)
+{
+  if (!PeerConnectionCtx::GetInstance()->isReady()) {
+    // We are not ready to configure codecs for this track. We need to defer.
+    PeerConnectionCtx::GetInstance()->queueJSEPOperation(
+        WrapRunnableNM(DeferredAddTrackToJsepSession,
+                       mHandle,
+                       type,
+                       streamId,
+                       trackId));
+    return NS_OK;
+  }
+
+  nsresult res = ConfigureJsepSessionCodecs();
+  if (NS_FAILED(res)) {
+    CSFLogError(logTag, "Failed to configure codecs");
+    return res;
+  }
+
+  res = mJsepSession->AddTrack(
+      new JsepTrack(type, streamId, trackId, sdp::kSend));
+
+  if (NS_FAILED(res)) {
+    std::string errorString = mJsepSession->GetLastError();
+    CSFLogError(logTag, "%s (%s) : pc = %s, error = %s",
+                __FUNCTION__,
+                type == SdpMediaSection::kAudio ? "audio" : "video",
+                mHandle.c_str(),
+                errorString.c_str());
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
+}
+
 nsresult
 PeerConnectionImpl::InitializeDataChannel()
 {
@@ -1217,7 +1269,7 @@ PeerConnectionImpl::InitializeDataChannel()
     channels = MAX_NUM_STREAMS;
   }
 
-  rv = EnsureDataConnection(codec->mChannels);
+  rv = EnsureDataConnection(channels);
   if (NS_SUCCEEDED(rv)) {
     uint16_t localport = 5000;
     uint16_t remoteport = 0;
@@ -1319,7 +1371,7 @@ PeerConnectionImpl::CreateDataChannel(const nsAString& aLabel,
           mozilla::SdpMediaSection::kApplication,
           streamId,
           trackId,
-          JsepTrack::kJsepTrackSending));
+          sdp::kSend));
 
     rv = mJsepSession->AddTrack(track);
     if (NS_FAILED(rv)) {
@@ -2077,6 +2129,7 @@ PeerConnectionImpl::AddTrack(MediaStreamTrack& aTrack,
     CSFLogError(logTag, "%s: At least one stream arg required", __FUNCTION__);
     return NS_ERROR_FAILURE;
   }
+
   return AddTrack(aTrack, aStreams[0]);
 }
 
@@ -2105,16 +2158,9 @@ PeerConnectionImpl::AddTrack(MediaStreamTrack& aTrack,
   }
 
   if (aTrack.AsAudioStreamTrack()) {
-    res = mJsepSession->AddTrack(new JsepTrack(
-        mozilla::SdpMediaSection::kAudio,
-        streamId,
-        trackId,
-        JsepTrack::kJsepTrackSending));
+    res = AddTrackToJsepSession(SdpMediaSection::kAudio, streamId, trackId);
     if (NS_FAILED(res)) {
-      std::string errorString = mJsepSession->GetLastError();
-      CSFLogError(logTag, "%s (audio) : pc = %s, error = %s",
-                  __FUNCTION__, mHandle.c_str(), errorString.c_str());
-      return NS_ERROR_FAILURE;
+      return res;
     }
     mNumAudioStreams++;
   }
@@ -2128,16 +2174,9 @@ PeerConnectionImpl::AddTrack(MediaStreamTrack& aTrack,
     }
 #endif
 
-    res = mJsepSession->AddTrack(new JsepTrack(
-        mozilla::SdpMediaSection::kVideo,
-        streamId,
-        trackId,
-        JsepTrack::kJsepTrackSending));
+    res = AddTrackToJsepSession(SdpMediaSection::kVideo, streamId, trackId);
     if (NS_FAILED(res)) {
-      std::string errorString = mJsepSession->GetLastError();
-      CSFLogError(logTag, "%s (video) : pc = %s, error = %s",
-                  __FUNCTION__, mHandle.c_str(), errorString.c_str());
-      return NS_ERROR_FAILURE;
+      return res;
     }
     mNumVideoStreams++;
   }
@@ -2449,6 +2488,57 @@ PeerConnectionImpl::PluginCrash(uint32_t aPluginID,
   return true;
 }
 
+void
+PeerConnectionImpl::RecordEndOfCallTelemetry() const
+{
+#if !defined(MOZILLA_EXTERNAL_LINKAGE)
+  // Bitmask used for WEBRTC/LOOP_CALL_TYPE telemetry reporting
+  static const uint32_t kAudioTypeMask = 1;
+  static const uint32_t kVideoTypeMask = 2;
+  static const uint32_t kDataChannelTypeMask = 4;
+
+  // Report end-of-call Telemetry
+  if (mJsepSession->GetNegotiations() > 0) {
+    Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_RENEGOTIATIONS :
+                          Telemetry::WEBRTC_RENEGOTIATIONS,
+                          mJsepSession->GetNegotiations()-1);
+  }
+  Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_MAX_VIDEO_SEND_TRACK :
+                        Telemetry::WEBRTC_MAX_VIDEO_SEND_TRACK,
+                        mMaxSending[SdpMediaSection::MediaType::kVideo]);
+  Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_MAX_VIDEO_RECEIVE_TRACK :
+                        Telemetry::WEBRTC_MAX_VIDEO_RECEIVE_TRACK,
+                        mMaxReceiving[SdpMediaSection::MediaType::kVideo]);
+  Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_MAX_AUDIO_SEND_TRACK :
+                        Telemetry::WEBRTC_MAX_AUDIO_SEND_TRACK,
+                        mMaxSending[SdpMediaSection::MediaType::kAudio]);
+  Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_MAX_AUDIO_RECEIVE_TRACK :
+                        Telemetry::WEBRTC_MAX_AUDIO_RECEIVE_TRACK,
+                        mMaxReceiving[SdpMediaSection::MediaType::kAudio]);
+  // DataChannels appear in both Sending and Receiving
+  Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_DATACHANNEL_NEGOTIATED :
+                        Telemetry::WEBRTC_DATACHANNEL_NEGOTIATED,
+                        mMaxSending[SdpMediaSection::MediaType::kApplication]);
+  // Enumerated/bitmask: 1 = Audio, 2 = Video, 4 = DataChannel
+  // A/V = 3, A/V/D = 7, etc
+  uint32_t type = 0;
+  if (mMaxSending[SdpMediaSection::MediaType::kAudio] ||
+      mMaxReceiving[SdpMediaSection::MediaType::kAudio]) {
+    type = kAudioTypeMask;
+  }
+  if (mMaxSending[SdpMediaSection::MediaType::kVideo] ||
+      mMaxReceiving[SdpMediaSection::MediaType::kVideo]) {
+    type |= kVideoTypeMask;
+  }
+  if (mMaxSending[SdpMediaSection::MediaType::kApplication]) {
+    type |= kDataChannelTypeMask;
+  }
+  Telemetry::Accumulate(mIsLoop ? Telemetry::LOOP_CALL_TYPE :
+                        Telemetry::WEBRTC_CALL_TYPE,
+                        type);
+#endif
+}
+
 nsresult
 PeerConnectionImpl::CloseInt()
 {
@@ -2459,6 +2549,7 @@ PeerConnectionImpl::CloseInt()
   // transitioned to connected. As a bonus, this allows us to detect race
   // conditions where a stats dispatch happens right as the PC closes.
   RecordLongtermICEStatistics();
+  RecordEndOfCallTelemetry();
   CSFLogInfo(logTag, "%s: Closing PeerConnectionImpl %s; "
              "ending call", __FUNCTION__, mHandle.c_str());
   if (mJsepSession) {
@@ -2548,6 +2639,23 @@ PeerConnectionImpl::SetSignalingState_m(PCImplSignalingState aSignalingState,
         fireNegotiationNeeded = true;
       }
     }
+
+    // Telemetry: record info on the current state of streams/renegotiations/etc
+    // Note: this code gets run on rollbacks as well!
+
+    // Update the max channels used with each direction for each type
+    uint16_t receiving[SdpMediaSection::kMediaTypes];
+    uint16_t sending[SdpMediaSection::kMediaTypes];
+    mJsepSession->CountTracks(receiving, sending);
+    for (size_t i = 0; i < SdpMediaSection::kMediaTypes; i++) {
+      if (mMaxReceiving[i] < receiving[i]) {
+        mMaxReceiving[i] = receiving[i];
+      }
+      if (mMaxSending[i] < sending[i]) {
+        mMaxSending[i] = sending[i];
+      }
+    }
+
   } else {
     mShouldSuppressNegotiationNeeded = true;
   }

@@ -94,6 +94,11 @@ checkAndLogStatementPerformance(sqlite3_stmt *aStatement)
   if (::strstr(sql, "/* do not warn (bug "))
     return;
 
+  // CREATE INDEX always sorts (sorting is a necessary step in creating
+  // an index).  So ignore the warning there.
+  if (::strstr(sql, "CREATE INDEX") || ::strstr(sql, "CREATE UNIQUE INDEX"))
+    return;
+
   nsAutoCString message("Suboptimal indexes for the SQL statement ");
 #ifdef MOZ_STORAGE_SORTWARNING_SQL_DUMP
   message.Append('`');
@@ -136,10 +141,14 @@ convertJSValToVariant(
   if (aValue.isObject()) {
     JS::Rooted<JSObject*> obj(aCtx, &aValue.toObject());
     // We only support Date instances, all others fail.
-    if (!js::DateIsValid(aCtx, obj))
+    bool valid;
+    if (!js::DateIsValid(aCtx, obj, &valid) || !valid)
       return nullptr;
 
-    double msecd = js::DateGetMsecSinceEpoch(aCtx, obj);
+    double msecd;
+    if (!js::DateGetMsecSinceEpoch(aCtx, obj, &msecd))
+      return nullptr;
+
     msecd *= 1000.0;
     int64_t msec = msecd;
 

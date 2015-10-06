@@ -720,7 +720,7 @@ nsPermissionManager::AppClearDataObserverInit()
 // nsPermissionManager Implementation
 
 #define PERMISSIONS_FILE_NAME "permissions.sqlite"
-#define HOSTS_SCHEMA_VERSION 8
+#define HOSTS_SCHEMA_VERSION 9
 
 #define HOSTPERM_FILE_NAME "hostperm.1"
 
@@ -1343,6 +1343,33 @@ nsPermissionManager::InitDB(bool aRemoveFile)
         // Even if we didn't perform the migration, we want to bump the schema
         // version to 8.
         rv = mDBConn->SetSchemaVersion(8);
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // fall through to the next upgrade
+
+    // The version 8-9 migration removes the unnecessary backup moz-hosts database contents.
+    // as the data no longer needs to be migrated
+    case 8:
+      {
+        // We only want to clear out the old table if it is a backup. If it isn't a backup,
+        // we don't need to touch it.
+        bool hostsIsBackupExists = false;
+        mDBConn->TableExists(NS_LITERAL_CSTRING("moz_hosts_is_backup"),
+                             &hostsIsBackupExists);
+        if (hostsIsBackupExists) {
+          // Delete everything from the backup, we want to keep around the table so that
+          // you can still downgrade and not break things, but we don't need to keep the
+          // rows around.
+          rv = mDBConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING("DELETE FROM moz_hosts"));
+          NS_ENSURE_SUCCESS(rv, rv);
+
+          // The table is no longer a backup, so get rid of it.
+          rv = mDBConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING("DROP TABLE moz_hosts_is_backup"));
+          NS_ENSURE_SUCCESS(rv, rv);
+        }
+
+        rv = mDBConn->SetSchemaVersion(9);
         NS_ENSURE_SUCCESS(rv, rv);
       }
 
@@ -2636,12 +2663,12 @@ nsPermissionManager::ImportDefaults()
   rv = NS_NewChannel(getter_AddRefs(channel),
                      defaultsURI,
                      nsContentUtils::GetSystemPrincipal(),
-                     nsILoadInfo::SEC_NORMAL,
+                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                      nsIContentPolicy::TYPE_OTHER);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<nsIInputStream> inputStream;
-  rv = channel->Open(getter_AddRefs(inputStream));
+  rv = channel->Open2(getter_AddRefs(inputStream));
   NS_ENSURE_SUCCESS(rv, rv);
 
   rv = _DoImport(inputStream, nullptr);

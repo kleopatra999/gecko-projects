@@ -275,7 +275,11 @@ GetJSArrayFromJSValue(JS::Handle<JS::Value> aValue,
                       uint32_t* _arrayLength) {
   if (aValue.isObjectOrNull()) {
     JS::Rooted<JSObject*> val(aCtx, aValue.toObjectOrNull());
-    if (JS_IsArrayObject(aCtx, val)) {
+    bool isArray;
+    if (!JS_IsArrayObject(aCtx, val, &isArray)) {
+      return NS_ERROR_UNEXPECTED;
+    }
+    if (isArray) {
       _array.set(val);
       (void)JS_GetArrayLength(aCtx, _array, _arrayLength);
       NS_ENSURE_ARG(*_arrayLength > 0);
@@ -456,9 +460,6 @@ GetJSObjectFromArray(JSContext* aCtx,
                      uint32_t aIndex,
                      JS::MutableHandle<JSObject*> objOut)
 {
-  NS_PRECONDITION(JS_IsArrayObject(aCtx, aArray),
-                  "Must provide an object that is an array!");
-
   JS::Rooted<JS::Value> value(aCtx);
   bool rc = JS_GetElement(aCtx, aArray, aIndex, &value);
   NS_ENSURE_TRUE(rc, NS_ERROR_UNEXPECTED);
@@ -987,8 +988,8 @@ private:
   {
     MOZ_ASSERT(NS_IsMainThread(), "This should be called on the main thread");
 
-    (void)mPlaces.SwapElements(aPlaces);
-    (void)mReferrers.SetLength(mPlaces.Length());
+    mPlaces.SwapElements(aPlaces);
+    mReferrers.SetLength(mPlaces.Length());
 
     for (nsTArray<VisitData>::size_type i = 0; i < mPlaces.Length(); i++) {
       mReferrers[i].spec = mPlaces[i].referrerSpec;
@@ -2010,7 +2011,7 @@ History::NotifyVisited(nsIURI* aURI)
   }
 
   // All the registered nodes can now be removed for this URI.
-  mObservers.RemoveEntry(aURI);
+  mObservers.RemoveEntry(key);
   return NS_OK;
 }
 
@@ -2880,7 +2881,13 @@ History::UpdatePlaces(JS::Handle<JS::Value> aPlaceInfos,
       NS_ENSURE_TRUE(rc, NS_ERROR_UNEXPECTED);
       if (!visitsVal.isPrimitive()) {
         visits = visitsVal.toObjectOrNull();
-        NS_ENSURE_ARG(JS_IsArrayObject(aCtx, visits));
+        bool isArray;
+        if (!JS_IsArrayObject(aCtx, visits, &isArray)) {
+          return NS_ERROR_UNEXPECTED;
+        }
+        if (!isArray) {
+          return NS_ERROR_INVALID_ARG;
+        }
       }
     }
     NS_ENSURE_ARG(visits);

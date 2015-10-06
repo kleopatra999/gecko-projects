@@ -23,6 +23,7 @@
 #include "mozilla/LookAndFeel.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/ProcessHangMonitorIPC.h"
+#include "mozilla/devtools/HeapSnapshotTempFileHelperChild.h"
 #include "mozilla/docshell/OfflineCacheUpdateChild.h"
 #include "mozilla/dom/ContentBridgeChild.h"
 #include "mozilla/dom/ContentBridgeParent.h"
@@ -52,6 +53,7 @@
 #include "mozilla/widget/WidgetMessageUtils.h"
 #include "mozilla/media/MediaChild.h"
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/WebBrowserPersistDocumentChild.h"
 
 #if defined(MOZ_CONTENT_SANDBOX)
 #if defined(XP_WIN)
@@ -436,6 +438,9 @@ ConsoleListener::Observe(nsIConsoleMessage* aMessage)
         // errors in particular share the memory for long lines with
         // repeated errors, but the IPC communication we're about to do
         // will break that sharing, so we better truncate now.
+        if (sourceName.Length() > 1000) {
+            sourceName.Truncate(1000);
+        }
         if (sourceLine.Length() > 1000) {
             sourceLine.Truncate(1000);
         }
@@ -641,10 +646,6 @@ ContentChild::Init(MessageLoop* aIOLoop,
       return false;
     }
     sSingleton = this;
-
-    // Make sure there's an nsAutoScriptBlocker on the stack when dispatching
-    // urgent messages.
-    GetIPCChannel()->BlockScripts();
 
     // If communications with the parent have broken down, take the process
     // down so it's not hanging around.
@@ -1453,6 +1454,20 @@ ContentChild::DeallocPHalChild(PHalChild* aHal)
     return true;
 }
 
+devtools::PHeapSnapshotTempFileHelperChild*
+ContentChild::AllocPHeapSnapshotTempFileHelperChild()
+{
+    return devtools::HeapSnapshotTempFileHelperChild::Create();
+}
+
+bool
+ContentChild::DeallocPHeapSnapshotTempFileHelperChild(
+    devtools::PHeapSnapshotTempFileHelperChild* aHeapSnapshotHelper)
+{
+    delete aHeapSnapshotHelper;
+    return true;
+}
+
 PIccChild*
 ContentChild::SendPIccConstructor(PIccChild* aActor,
                                   const uint32_t& aServiceId)
@@ -2162,7 +2177,7 @@ ContentChild::RecvAddPermission(const IPC::Permission& permission)
 }
 
 bool
-ContentChild::RecvScreenSizeChanged(const gfxIntSize& size)
+ContentChild::RecvScreenSizeChanged(const gfx::IntSize& size)
 {
 #ifdef ANDROID
     mScreenSize = size;
@@ -2503,6 +2518,7 @@ ContentChild::RecvUnregisterSheet(const URIParams& aURI, const uint32_t& aType)
 POfflineCacheUpdateChild*
 ContentChild::AllocPOfflineCacheUpdateChild(const URIParams& manifestURI,
                                             const URIParams& documentURI,
+                                            const PrincipalInfo& aLoadingPrincipalInfo,
                                             const bool& stickDocument,
                                             const TabId& aTabId)
 {
@@ -2742,6 +2758,45 @@ ContentChild::DeallocPContentPermissionRequestChild(PContentPermissionRequestChi
     auto child = static_cast<RemotePermissionRequest*>(actor);
     child->IPDLRelease();
     return true;
+}
+
+PWebBrowserPersistDocumentChild*
+ContentChild::AllocPWebBrowserPersistDocumentChild(PBrowserChild* aBrowser,
+                                                   const uint64_t& aOuterWindowID)
+{
+  return new WebBrowserPersistDocumentChild();
+}
+
+bool
+ContentChild::RecvPWebBrowserPersistDocumentConstructor(PWebBrowserPersistDocumentChild *aActor,
+                                                        PBrowserChild* aBrowser,
+                                                        const uint64_t& aOuterWindowID)
+{
+  if (NS_WARN_IF(!aBrowser)) {
+    return false;
+  }
+  nsCOMPtr<nsIDocument> rootDoc =
+    static_cast<TabChild*>(aBrowser)->GetDocument();
+  nsCOMPtr<nsIDocument> foundDoc;
+  if (aOuterWindowID) {
+    foundDoc = nsContentUtils::GetSubdocumentWithOuterWindowId(rootDoc, aOuterWindowID);
+  } else {
+    foundDoc = rootDoc;
+  }
+
+  if (!foundDoc) {
+    aActor->SendInitFailure(NS_ERROR_NO_CONTENT);
+  } else {
+    static_cast<WebBrowserPersistDocumentChild*>(aActor)->Start(foundDoc);
+  }
+  return true;
+}
+
+bool
+ContentChild::DeallocPWebBrowserPersistDocumentChild(PWebBrowserPersistDocumentChild* aActor)
+{
+  delete aActor;
+  return true;
 }
 
 bool

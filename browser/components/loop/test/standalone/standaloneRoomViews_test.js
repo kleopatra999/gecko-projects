@@ -17,7 +17,7 @@ describe("loop.standaloneRoomViews", function() {
   var fixtures = document.querySelector("#fixtures");
 
   var sandbox, dispatcher, activeRoomStore, dispatch;
-  var clock, fakeWindow;
+  var clock, fakeWindow, view;
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
@@ -49,6 +49,8 @@ describe("loop.standaloneRoomViews", function() {
       switch(key) {
         case "standalone_title_with_room_name":
           return args.roomName + " — " + args.clientShortname;
+        case "legal_text_and_links":
+          return args.terms_of_use_url + " " + args.privacy_notice_url;
         default:
           return key;
       }
@@ -63,6 +65,146 @@ describe("loop.standaloneRoomViews", function() {
     sandbox.restore();
     clock.restore();
     React.unmountComponentAtNode(fixtures);
+    view = null;
+  });
+
+
+  describe("TosView", function() {
+    var origConfig, node;
+
+    function mountTestComponent() {
+      return TestUtils.renderIntoDocument(
+        React.createElement(
+          loop.standaloneRoomViews.ToSView, {
+            dispatcher: dispatcher
+          }));
+    }
+
+    beforeEach(function() {
+      origConfig = loop.config;
+      loop.config = {
+        legalWebsiteUrl: "http://fakelegal/",
+        privacyWebsiteUrl: "http://fakeprivacy/"
+      };
+
+      view = mountTestComponent();
+      node = view.getDOMNode();
+    });
+
+    afterEach(function() {
+      loop.config = origConfig;
+    });
+
+    it("should dispatch a link click action when the ToS link is clicked", function() {
+      // [0] is the first link, the legal one.
+      var link = node.querySelectorAll("a")[0];
+
+      TestUtils.Simulate.click(node, { target: link });
+
+      sinon.assert.calledOnce(dispatcher.dispatch);
+      sinon.assert.calledWithExactly(dispatcher.dispatch,
+        new sharedActions.RecordClick({
+          linkInfo: loop.config.legalWebsiteUrl
+        }));
+    });
+
+    it("should dispatch a link click action when the Privacy link is clicked", function() {
+      // [0] is the first link, the legal one.
+      var link = node.querySelectorAll("a")[1];
+
+      TestUtils.Simulate.click(node, { target: link });
+
+      sinon.assert.calledOnce(dispatcher.dispatch);
+      sinon.assert.calledWithExactly(dispatcher.dispatch,
+        new sharedActions.RecordClick({
+          linkInfo: loop.config.privacyWebsiteUrl
+        }));
+    });
+
+    it("should not dispatch an action when the text is clicked", function() {
+      TestUtils.Simulate.click(node, { target: node });
+
+      sinon.assert.notCalled(dispatcher.dispatch);
+    });
+  });
+
+  describe("StandaloneHandleUserAgentView", function() {
+    function mountTestComponent() {
+      return TestUtils.renderIntoDocument(
+        React.createElement(
+          loop.standaloneRoomViews.StandaloneHandleUserAgentView, {
+            dispatcher: dispatcher
+          }));
+    }
+
+    it("should display a join room button if the state is not ROOM_JOINED", function() {
+      activeRoomStore.setStoreState({
+        roomState: ROOM_STATES.READY
+      });
+
+      view = mountTestComponent();
+      var button = view.getDOMNode().querySelector(".info-panel > button");
+
+      expect(button.textContent).eql("rooms_room_join_label");
+    });
+
+    it("should dispatch a JoinRoom action when the join room button is clicked", function() {
+      activeRoomStore.setStoreState({
+        roomState: ROOM_STATES.READY
+      });
+
+      view = mountTestComponent();
+      var button = view.getDOMNode().querySelector(".info-panel > button");
+
+      TestUtils.Simulate.click(button);
+
+      sinon.assert.calledOnce(dispatcher.dispatch);
+      sinon.assert.calledWithExactly(dispatcher.dispatch, new sharedActions.JoinRoom());
+    });
+
+    it("should display a enjoy your conversation button if the state is ROOM_JOINED", function() {
+      activeRoomStore.setStoreState({
+        roomState: ROOM_STATES.JOINED
+      });
+
+      view = mountTestComponent();
+      var button = view.getDOMNode().querySelector(".info-panel > button");
+
+      expect(button.textContent).eql("rooms_room_joined_own_conversation_label");
+    });
+
+    it("should disable the enjoy your conversation button if the state is ROOM_JOINED", function() {
+      activeRoomStore.setStoreState({
+        roomState: ROOM_STATES.JOINED
+      });
+
+      view = mountTestComponent();
+      var button = view.getDOMNode().querySelector(".info-panel > button");
+
+      expect(button.classList.contains("disabled")).eql(true);
+    });
+
+    it("should not display a join button if there is a failure reason", function() {
+      activeRoomStore.setStoreState({
+        failureReason: FAILURE_DETAILS.ROOM_ALREADY_OPEN
+      });
+
+      view = mountTestComponent();
+      var button = view.getDOMNode().querySelector(".info-panel > button");
+
+      expect(button).eql(null);
+    });
+
+    it("should display a room already joined message if opening failed", function() {
+      activeRoomStore.setStoreState({
+        failureReason: FAILURE_DETAILS.ROOM_ALREADY_OPEN
+      });
+
+      view = mountTestComponent();
+      var text = view.getDOMNode().querySelector(".failure");
+
+      expect(text.textContent).eql("rooms_already_joined");
+    });
   });
 
   describe("StandaloneRoomHeader", function() {
@@ -75,7 +217,7 @@ describe("loop.standaloneRoomViews", function() {
     }
 
     it("should dispatch a RecordClick action when the support link is clicked", function() {
-      var view = mountTestComponent();
+      view = mountTestComponent();
 
       TestUtils.Simulate.click(view.getDOMNode().querySelector("a"));
 
@@ -87,13 +229,93 @@ describe("loop.standaloneRoomViews", function() {
     });
   });
 
+  describe("StandaloneRoomFailureView", function() {
+    function mountTestComponent(extraProps) {
+      var props = _.extend({
+        dispatcher: dispatcher
+      }, extraProps);
+      return TestUtils.renderIntoDocument(
+        React.createElement(
+          loop.standaloneRoomViews.StandaloneRoomFailureView, props));
+    }
+
+    beforeEach(function() {
+      activeRoomStore.setStoreState({ roomState: ROOM_STATES.FAILED });
+    });
+
+    it("should display a status error message if not reason is supplied", function() {
+      view = mountTestComponent();
+
+      expect(view.getDOMNode().querySelector(".failed-room-message").textContent)
+        .eql("status_error");
+    });
+
+    it("should display a denied message on MEDIA_DENIED", function() {
+      view = mountTestComponent({ failureReason: FAILURE_DETAILS.MEDIA_DENIED });
+
+      expect(view.getDOMNode().querySelector(".failed-room-message").textContent)
+        .eql("rooms_media_denied_message");
+    });
+
+    it("should display a denied message on NO_MEDIA", function() {
+      view = mountTestComponent({ failureReason: FAILURE_DETAILS.NO_MEDIA });
+
+      expect(view.getDOMNode().querySelector(".failed-room-message").textContent)
+        .eql("rooms_media_denied_message");
+    });
+
+    it("should display an unavailable message on EXPIRED_OR_INVALID", function() {
+      view = mountTestComponent({ failureReason: FAILURE_DETAILS.EXPIRED_OR_INVALID });
+
+      expect(view.getDOMNode().querySelector(".failed-room-message").textContent)
+        .eql("rooms_unavailable_notification_message");
+    });
+
+    it("should display an tos failure message on TOS_FAILURE", function() {
+      view = mountTestComponent({ failureReason: FAILURE_DETAILS.TOS_FAILURE });
+
+      expect(view.getDOMNode().querySelector(".failed-room-message").textContent)
+        .eql("tos_failure_message");
+    });
+
+    it("should not display a retry button when the failure reason is expired or invalid", function() {
+      view = mountTestComponent({ failureReason: FAILURE_DETAILS.EXPIRED_OR_INVALID });
+
+      expect(view.getDOMNode().querySelector(".btn-info")).eql(null);
+    });
+
+    it("should not display a retry button when the failure reason is tos failure", function() {
+      view = mountTestComponent({ failureReason: FAILURE_DETAILS.TOS_FAILURE });
+
+      expect(view.getDOMNode().querySelector(".btn-info")).eql(null);
+    });
+
+    it("should display a retry button for any other reason", function() {
+      view = mountTestComponent({ failureReason: FAILURE_DETAILS.NO_MEDIA });
+
+      expect(view.getDOMNode().querySelector(".btn-info")).not.eql(null);
+    });
+
+    it("should dispatch a RetryAfterRoomFailure action when the retry button is pressed", function() {
+      view = mountTestComponent({ failureReason: FAILURE_DETAILS.NO_MEDIA });
+
+      var button = view.getDOMNode().querySelector(".btn-info");
+
+      TestUtils.Simulate.click(button);
+
+      sinon.assert.calledOnce(dispatcher.dispatch);
+      sinon.assert.calledWithExactly(dispatcher.dispatch,
+        new sharedActions.RetryAfterRoomFailure());
+    });
+  });
+
   describe("StandaloneRoomInfoArea in fixture", function() {
     it("should dispatch a RecordClick action when the tile is clicked", function(done) {
       // Point the iframe to a page that will auto-"click"
       loop.config.tilesIframeUrl = "data:text/html,<script>parent.postMessage('tile-click', '*');</script>";
 
       // Render the iframe into the fixture to cause it to load
-      var view = React.render(
+      view = React.render(
         React.createElement(
           loop.standaloneRoomViews.StandaloneRoomInfoArea, {
             activeRoomStore: activeRoomStore,
@@ -135,7 +357,7 @@ describe("loop.standaloneRoomViews", function() {
       }));
     }
 
-    function expectActionDispatched(view) {
+    function expectActionDispatched() {
       sinon.assert.calledOnce(dispatch);
       sinon.assert.calledWithExactly(dispatch,
         sinon.match.instanceOf(sharedActions.SetupStreamElements));
@@ -144,16 +366,24 @@ describe("loop.standaloneRoomViews", function() {
     describe("#componentWillUpdate", function() {
       it("should set document.title to roomName and brand name when the READY state is dispatched", function() {
         activeRoomStore.setStoreState({roomName: "fakeName", roomState: ROOM_STATES.INIT});
-        var view = mountTestComponent();
+        view = mountTestComponent();
         activeRoomStore.setStoreState({roomState: ROOM_STATES.READY});
 
         expect(fakeWindow.document.title).to.equal("fakeName — clientShortname2");
       });
 
+      it("should set document.title brand name when there is no context available", function() {
+        activeRoomStore.setStoreState({roomState: ROOM_STATES.INIT});
+        view = mountTestComponent();
+        activeRoomStore.setStoreState({roomState: ROOM_STATES.READY});
+
+        expect(fakeWindow.document.title).to.equal("clientShortname2");
+      });
+
       it("should dispatch a `SetupStreamElements` action when the MEDIA_WAIT state " +
         "is entered", function() {
           activeRoomStore.setStoreState({roomState: ROOM_STATES.READY});
-          var view = mountTestComponent();
+          view = mountTestComponent();
 
           activeRoomStore.setStoreState({roomState: ROOM_STATES.MEDIA_WAIT});
 
@@ -163,7 +393,7 @@ describe("loop.standaloneRoomViews", function() {
       it("should dispatch a `SetupStreamElements` action on MEDIA_WAIT state is " +
         "re-entered", function() {
           activeRoomStore.setStoreState({roomState: ROOM_STATES.ENDED});
-          var view = mountTestComponent();
+          view = mountTestComponent();
 
           activeRoomStore.setStoreState({roomState: ROOM_STATES.MEDIA_WAIT});
 
@@ -172,8 +402,6 @@ describe("loop.standaloneRoomViews", function() {
     });
 
     describe("#componentDidUpdate", function() {
-      var view;
-
       beforeEach(function() {
         view = mountTestComponent();
         activeRoomStore.setStoreState({roomState: ROOM_STATES.JOINING});
@@ -223,8 +451,6 @@ describe("loop.standaloneRoomViews", function() {
     });
 
     describe("#componentWillReceiveProps", function() {
-      var view;
-
       beforeEach(function() {
         view = mountTestComponent();
 
@@ -280,8 +506,6 @@ describe("loop.standaloneRoomViews", function() {
     });
 
     describe("#publishStream", function() {
-      var view;
-
       beforeEach(function() {
         view = mountTestComponent();
         view.setState({
@@ -314,8 +538,6 @@ describe("loop.standaloneRoomViews", function() {
     });
 
     describe("#render", function() {
-      var view;
-
       beforeEach(function() {
         view = mountTestComponent();
         activeRoomStore.setStoreState({roomState: ROOM_STATES.JOINING});
@@ -424,35 +646,22 @@ describe("loop.standaloneRoomViews", function() {
       });
 
       describe("Failed room message", function() {
-        beforeEach(function() {
+        it("should display the StandaloneRoomFailureView", function() {
           activeRoomStore.setStoreState({ roomState: ROOM_STATES.FAILED });
+
+          TestUtils.findRenderedComponentWithType(view,
+            loop.standaloneRoomViews.StandaloneRoomFailureView);
         });
 
-        it("should display a failed room message on FAILED", function() {
-          expect(view.getDOMNode().querySelector(".failed-room-message"))
-            .not.eql(null);
-        });
-
-        it("should display a retry button", function() {
-          expect(view.getDOMNode().querySelector(".btn-info")).not.eql(null);
-        });
-
-        it("should not display a retry button when the failure reason is expired or invalid", function() {
+        it("should display ICE failure message", function() {
           activeRoomStore.setStoreState({
-            failureReason: FAILURE_DETAILS.EXPIRED_OR_INVALID
+            roomState: ROOM_STATES.FAILED,
+            failureReason: FAILURE_DETAILS.ICE_FAILED
           });
 
-          expect(view.getDOMNode().querySelector(".btn-info")).eql(null);
-        });
-
-        it("should dispatch a RetryAfterRoomFailure action when the retry button is pressed", function() {
-          var button = view.getDOMNode().querySelector(".btn-info");
-
-          TestUtils.Simulate.click(button);
-
-          sinon.assert.calledOnce(dispatcher.dispatch);
-          sinon.assert.calledWithExactly(dispatcher.dispatch,
-            new sharedActions.RetryAfterRoomFailure());
+          var ice_failed_message = view.getDOMNode().querySelector(".failed-room-message").textContent;
+          expect(ice_failed_message).eql("rooms_ice_failure_message");
+          expect(view.getDOMNode().querySelector(".btn-info")).not.eql(null);
         });
       });
 
@@ -753,6 +962,49 @@ describe("loop.standaloneRoomViews", function() {
               null);
           });
       });
+    });
+  });
+
+  describe("StandaloneRoomControllerView", function() {
+    function mountTestComponent() {
+      return TestUtils.renderIntoDocument(
+        React.createElement(
+          loop.standaloneRoomViews.StandaloneRoomControllerView, {
+        dispatcher: dispatcher,
+        isFirefox: true
+      }));
+    }
+
+    it("should not display anything if it is not known if Firefox can handle the room", function() {
+      activeRoomStore.setStoreState({
+        userAgentHandlesRoom: undefined
+      });
+
+      view = mountTestComponent();
+
+      expect(view.getDOMNode()).eql(null);
+    });
+
+    it("should render StandaloneHandleUserAgentView if Firefox can handle the room", function() {
+      activeRoomStore.setStoreState({
+        userAgentHandlesRoom: true
+      });
+
+      view = mountTestComponent();
+
+      TestUtils.findRenderedComponentWithType(view,
+        loop.standaloneRoomViews.StandaloneHandleUserAgentView);
+    });
+
+    it("should render StandaloneRoomView if Firefox cannot handle the room", function() {
+      activeRoomStore.setStoreState({
+        userAgentHandlesRoom: false
+      });
+
+      view = mountTestComponent();
+
+      TestUtils.findRenderedComponentWithType(view,
+        loop.standaloneRoomViews.StandaloneRoomView);
     });
   });
 });

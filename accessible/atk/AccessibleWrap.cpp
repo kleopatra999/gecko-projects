@@ -827,7 +827,15 @@ getChildCountCB(AtkObject *aAtkObj)
       return 0;
     }
 
-    return static_cast<gint>(accWrap->EmbeddedChildCount());
+    uint32_t count = accWrap->EmbeddedChildCount();
+    if (count) {
+      return static_cast<gint>(count);
+    }
+
+    OuterDocAccessible* outerDoc = accWrap->AsOuterDoc();
+    if (outerDoc && outerDoc->RemoteChildDoc()) {
+      return 1;
+    }
   }
 
   ProxyAccessible* proxy = GetProxy(aAtkObj);
@@ -1107,6 +1115,10 @@ GetInterfacesForProxy(ProxyAccessible* aProxy, uint32_t aInterfaces)
   if (aInterfaces & Interfaces::DOCUMENT)
     interfaces |= 1 << MAI_INTERFACE_DOCUMENT;
 
+  if (aInterfaces & Interfaces::SELECTION) {
+    interfaces |= 1 << MAI_INTERFACE_SELECTION;
+  }
+
   return interfaces;
 }
 
@@ -1243,6 +1255,11 @@ AccessibleWrap::HandleAccEvent(AccEvent* aEvent)
       g_signal_emit_by_name(atkObj, "selection_changed");
       break;
     }
+
+    case nsIAccessibleEvent::EVENT_ALERT:
+      // A hack using state change showing events as alert events.
+      atk_object_notify_state_change(atkObj, ATK_STATE_SHOWING, true);
+      break;
 
     case nsIAccessibleEvent::EVENT_TEXT_SELECTION_CHANGED:
         g_signal_emit_by_name(atkObj, "text_selection_changed");

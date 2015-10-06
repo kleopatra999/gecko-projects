@@ -130,7 +130,7 @@ DynamicImage::GetHeight(int32_t* aHeight)
 NS_IMETHODIMP
 DynamicImage::GetIntrinsicSize(nsSize* aSize)
 {
-  gfxIntSize intSize(mDrawable->Size());
+  IntSize intSize(mDrawable->Size());
   *aSize = nsSize(intSize.width, intSize.height);
   return NS_OK;
 }
@@ -138,7 +138,7 @@ DynamicImage::GetIntrinsicSize(nsSize* aSize)
 NS_IMETHODIMP
 DynamicImage::GetIntrinsicRatio(nsSize* aSize)
 {
-  gfxIntSize intSize(mDrawable->Size());
+  IntSize intSize(mDrawable->Size());
   *aSize = nsSize(intSize.width, intSize.height);
   return NS_OK;
 }
@@ -167,11 +167,19 @@ NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
 DynamicImage::GetFrame(uint32_t aWhichFrame,
                        uint32_t aFlags)
 {
-  gfxIntSize size(mDrawable->Size());
+  IntSize size(mDrawable->Size());
+  return GetFrameAtSize(IntSize(size.width, size.height),
+                        aWhichFrame,
+                        aFlags);
+}
 
+NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
+DynamicImage::GetFrameAtSize(const IntSize& aSize,
+                             uint32_t aWhichFrame,
+                             uint32_t aFlags)
+{
   RefPtr<DrawTarget> dt = gfxPlatform::GetPlatform()->
-    CreateOffscreenContentDrawTarget(IntSize(size.width, size.height),
-                                     SurfaceFormat::B8G8R8A8);
+    CreateOffscreenContentDrawTarget(aSize, SurfaceFormat::B8G8R8A8);
   if (!dt) {
     gfxWarning() <<
       "DynamicImage::GetFrame failed in CreateOffscreenContentDrawTarget";
@@ -179,7 +187,7 @@ DynamicImage::GetFrame(uint32_t aWhichFrame,
   }
   nsRefPtr<gfxContext> context = new gfxContext(dt);
 
-  auto result = Draw(context, size, ImageRegion::Create(size),
+  auto result = Draw(context, aSize, ImageRegion::Create(aSize),
                      aWhichFrame, GraphicsFilter::FILTER_NEAREST,
                      Nothing(), aFlags);
 
@@ -217,7 +225,7 @@ DynamicImage::Draw(gfxContext* aContext,
 {
   MOZ_ASSERT(!aSize.IsEmpty(), "Unexpected empty size");
 
-  gfxIntSize drawableSize(mDrawable->Size());
+  IntSize drawableSize(mDrawable->Size());
 
   if (aSize == drawableSize) {
     gfxUtils::DrawPixelSnapped(aContext, mDrawable, drawableSize, aRegion,
@@ -319,7 +327,7 @@ DynamicImage::OptimalImageSizeForDest(const gfxSize& aDest,
                                       uint32_t aWhichFrame,
                                       GraphicsFilter aFilter, uint32_t aFlags)
 {
-  gfxIntSize size(mDrawable->Size());
+  IntSize size(mDrawable->Size());
   return nsIntSize(size.width, size.height);
 }
 

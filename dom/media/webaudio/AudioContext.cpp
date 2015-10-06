@@ -98,11 +98,11 @@ AudioContext::AudioContext(nsPIDOMWindow* aWindow,
   , mSampleRate(GetSampleRateForAudioContext(aIsOffline, aSampleRate))
   , mAudioContextState(AudioContextState::Suspended)
   , mNumberOfChannels(aNumberOfChannels)
-  , mNodeCount(0)
   , mIsOffline(aIsOffline)
   , mIsStarted(!aIsOffline)
   , mIsShutDown(false)
   , mCloseCalled(false)
+  , mSuspendCalled(false)
 {
   bool mute = aWindow->AddAudioContext(this);
 
@@ -669,8 +669,8 @@ double
 AudioContext::CurrentTime() const
 {
   MediaStream* stream = Destination()->Stream();
-  return StreamTimeToDOMTime(stream->
-                             StreamTimeToSeconds(stream->GetCurrentTime()));
+  return stream->StreamTimeToSeconds(stream->GetCurrentTime() +
+                                     Destination()->ExtraCurrentTime());
 }
 
 void
@@ -692,11 +692,6 @@ AudioContext::Shutdown()
   if (mIsOffline && mDestination) {
     mDestination->OfflineShutdown();
   }
-}
-
-AudioContextState AudioContext::State() const
-{
-  return mAudioContextState;
 }
 
 StateChangeTask::StateChangeTask(AudioContext* aAudioContext,
@@ -830,6 +825,19 @@ AudioContext::OnStateChanged(void* aPromise, AudioContextState aNewState)
   mAudioContextState = aNewState;
 }
 
+nsTArray<MediaStream*>
+AudioContext::GetAllStreams() const
+{
+  nsTArray<MediaStream*> streams;
+  for (auto iter = mAllNodes.ConstIter(); !iter.Done(); iter.Next()) {
+    MediaStream* s = iter.Get()->GetKey()->GetStream();
+    if (s) {
+      streams.AppendElement(s);
+    }
+  }
+  return streams;
+}
+
 already_AddRefed<Promise>
 AudioContext::Suspend(ErrorResult& aRv)
 {
@@ -858,8 +866,20 @@ AudioContext::Suspend(ErrorResult& aRv)
   Destination()->Suspend();
 
   mPromiseGripArray.AppendElement(promise);
+
+  nsTArray<MediaStream*> streams;
+  // If mSuspendCalled is true then we already suspended all our streams,
+  // so don't suspend them again (since suspend(); suspend(); resume(); should
+  // cancel both suspends). But we still need to do ApplyAudioContextOperation
+  // to ensure our new promise is resolved.
+  if (!mSuspendCalled) {
+    streams = GetAllStreams();
+  }
   Graph()->ApplyAudioContextOperation(DestinationStream()->AsAudioNodeStream(),
+                                      streams,
                                       AudioContextOperation::Suspend, promise);
+
+  mSuspendCalled = true;
 
   return promise.forget();
 }
@@ -892,9 +912,20 @@ AudioContext::Resume(ErrorResult& aRv)
 
   Destination()->Resume();
 
+  nsTArray<MediaStream*> streams;
+  // If mSuspendCalled is false then we already resumed all our streams,
+  // so don't resume them again (since suspend(); resume(); resume(); should
+  // be OK). But we still need to do ApplyAudioContextOperation
+  // to ensure our new promise is resolved.
+  if (mSuspendCalled) {
+    streams = GetAllStreams();
+  }
   mPromiseGripArray.AppendElement(promise);
   Graph()->ApplyAudioContextOperation(DestinationStream()->AsAudioNodeStream(),
+                                      streams,
                                       AudioContextOperation::Resume, promise);
+
+  mSuspendCalled = false;
 
   return promise.forget();
 }
@@ -919,8 +950,6 @@ AudioContext::Close(ErrorResult& aRv)
     return promise.forget();
   }
 
-  mCloseCalled = true;
-
   if (Destination()) {
     Destination()->DestroyAudioChannelAgent();
   }
@@ -931,24 +960,43 @@ AudioContext::Close(ErrorResult& aRv)
   // this point, so we need extra null-checks.
   MediaStream* ds = DestinationStream();
   if (ds) {
-    Graph()->ApplyAudioContextOperation(ds->AsAudioNodeStream(),
+    nsTArray<MediaStream*> streams;
+    // If mSuspendCalled or mCloseCalled are true then we already suspended
+    // all our streams, so don't suspend them again. But we still need to do
+    // ApplyAudioContextOperation to ensure our new promise is resolved.
+    if (!mSuspendCalled && !mCloseCalled) {
+      streams = GetAllStreams();
+    }
+    Graph()->ApplyAudioContextOperation(ds->AsAudioNodeStream(), streams,
                                         AudioContextOperation::Close, promise);
   }
+  mCloseCalled = true;
+
   return promise.forget();
 }
 
 void
-AudioContext::UpdateNodeCount(int32_t aDelta)
+AudioContext::RegisterNode(AudioNode* aNode)
 {
-  bool firstNode = mNodeCount == 0;
-  mNodeCount += aDelta;
-  MOZ_ASSERT(mNodeCount >= 0);
+  MOZ_ASSERT(!mAllNodes.Contains(aNode));
+  mAllNodes.PutEntry(aNode);
   // mDestinationNode may be null when we're destroying nodes unlinked by CC.
   // Skipping unnecessary calls after shutdown avoids RunInStableState events
   // getting stuck in CycleCollectedJSRuntime during final cycle collection
   // (bug 1200514).
-  if (!firstNode && mDestination && !mIsShutDown) {
-    mDestination->SetIsOnlyNodeForContext(mNodeCount == 1);
+  if (mDestination && !mIsShutDown) {
+    mDestination->SetIsOnlyNodeForContext(mAllNodes.Count() == 1);
+  }
+}
+
+void
+AudioContext::UnregisterNode(AudioNode* aNode)
+{
+  MOZ_ASSERT(mAllNodes.Contains(aNode));
+  mAllNodes.RemoveEntry(aNode);
+  // mDestinationNode may be null when we're destroying nodes unlinked by CC
+  if (mDestination) {
+    mDestination->SetIsOnlyNodeForContext(mAllNodes.Count() == 1);
   }
 }
 
@@ -1044,12 +1092,6 @@ AudioContext::CollectReports(nsIHandleReportCallback* aHandleReport,
   int64_t amount = SizeOfIncludingThis(MallocSizeOf);
   return MOZ_COLLECT_REPORT("explicit/webaudio/audiocontext", KIND_HEAP, UNITS_BYTES,
                             amount, "Memory used by AudioContext objects (Web Audio).");
-}
-
-double
-AudioContext::ExtraCurrentTime() const
-{
-  return mDestination->ExtraCurrentTime();
 }
 
 BasicWaveFormCache*

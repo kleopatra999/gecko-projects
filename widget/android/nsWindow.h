@@ -15,6 +15,7 @@
 #include "mozilla/EventForwards.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/TextRange.h"
+#include "mozilla/UniquePtr.h"
 
 struct ANPEvent;
 
@@ -43,8 +44,14 @@ public:
 
     NS_DECL_ISUPPORTS_INHERITED
 
+    static void InitNatives();
+    class Natives;
+    // Object that implements native GeckoView calls;
+    // nullptr for nsWindows that were not opened from GeckoView.
+    mozilla::UniquePtr<Natives> mNatives;
+
     static void OnGlobalAndroidEvent(mozilla::AndroidGeckoEvent *ae);
-    static gfxIntSize GetAndroidScreenBounds();
+    static mozilla::gfx::IntSize GetAndroidScreenBounds();
     static nsWindow* TopWindow();
 
     bool OnContextmenuEvent(mozilla::AndroidGeckoEvent *ae);
@@ -55,7 +62,7 @@ public:
     void OnKeyEvent(mozilla::AndroidGeckoEvent *ae);
     void OnIMEEvent(mozilla::AndroidGeckoEvent *ae);
 
-    void OnSizeChanged(const gfxIntSize& aSize);
+    void OnSizeChanged(const mozilla::gfx::IntSize& aSize);
 
     void InitEvent(mozilla::WidgetGUIEvent& event, nsIntPoint* aPoint = 0);
 

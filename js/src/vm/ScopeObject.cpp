@@ -12,11 +12,12 @@
 #include "jscompartment.h"
 #include "jsiter.h"
 
+#include "builtin/ModuleObject.h"
+
 #include "vm/ArgumentsObject.h"
 #include "vm/GlobalObject.h"
 #include "vm/ProxyObject.h"
 #include "vm/Shape.h"
-#include "vm/WeakMapObject.h"
 #include "vm/Xdr.h"
 
 #include "jsatominlines.h"
@@ -316,7 +317,34 @@ const Class CallObject::class_ = {
 const Class ModuleEnvironmentObject::class_ = {
     "ModuleEnvironmentObject",
     JSCLASS_HAS_RESERVED_SLOTS(ModuleEnvironmentObject::RESERVED_SLOTS) |
-    JSCLASS_IS_ANONYMOUS
+    JSCLASS_IS_ANONYMOUS,
+    nullptr,        /* addProperty */
+    nullptr,        /* delProperty */
+    nullptr,        /* getProperty */
+    nullptr,        /* setProperty */
+    nullptr,        /* enumerate   */
+    nullptr,        /* resolve     */
+    nullptr,        /* mayResolve  */
+    nullptr,        /* finalize    */
+    nullptr,        /* call        */
+    nullptr,        /* hasInstance */
+    nullptr,        /* construct   */
+    nullptr,        /* trace       */
+    JS_NULL_CLASS_SPEC,
+    JS_NULL_CLASS_EXT,
+    {
+        ModuleEnvironmentObject::lookupProperty,
+        nullptr,                                             /* defineProperty */
+        ModuleEnvironmentObject::hasProperty,
+        ModuleEnvironmentObject::getProperty,
+        ModuleEnvironmentObject::setProperty,
+        ModuleEnvironmentObject::getOwnPropertyDescriptor,
+        ModuleEnvironmentObject::deleteProperty,
+        nullptr, nullptr,                                    /* watch/unwatch */
+        nullptr,                                             /* getElements */
+        ModuleEnvironmentObject::enumerate,
+        nullptr                                              /* thisObject */
+    }
 };
 
 /* static */ ModuleEnvironmentObject*
@@ -338,7 +366,7 @@ ModuleEnvironmentObject::create(ExclusiveContext* cx, HandleModuleObject module)
     if (!obj)
         return nullptr;
 
-    Rooted<ModuleEnvironmentObject*> scope(cx, &obj->as<ModuleEnvironmentObject>());
+    RootedModuleEnvironmentObject scope(cx, &obj->as<ModuleEnvironmentObject>());
 
     // Set uninitialized lexicals even on template objects, as Ion will use
     // copy over the template object's slot values in the fast path.
@@ -356,9 +384,137 @@ ModuleEnvironmentObject::create(ExclusiveContext* cx, HandleModuleObject module)
 }
 
 ModuleObject&
-ModuleEnvironmentObject::module() const
+ModuleEnvironmentObject::module()
 {
     return getReservedSlot(MODULE_SLOT).toObject().as<ModuleObject>();
+}
+
+IndirectBindingMap&
+ModuleEnvironmentObject::importBindings()
+{
+    return module().importBindings();
+}
+
+bool
+ModuleEnvironmentObject::createImportBinding(JSContext*cx, HandleAtom importName,
+                                             HandleModuleObject module, HandleAtom exportName)
+{
+    RootedId importNameId(cx, AtomToId(importName));
+    RootedId exportNameId(cx, AtomToId(exportName));
+    Rooted<ModuleEnvironmentObject*> env(cx, module->environment());
+
+#ifdef DEBUG
+    bool found = false;
+    if (!HasProperty(cx, env, exportNameId, &found))
+        return false;
+    MOZ_ASSERT(found);
+#endif
+
+    IndirectBinding binding(env, exportNameId);
+    if (!importBindings().putNew(importNameId, binding)) {
+        ReportOutOfMemory(cx);
+        return false;
+    }
+
+    return true;
+}
+
+/* static */ bool
+ModuleEnvironmentObject::lookupProperty(JSContext* cx, HandleObject obj, HandleId id,
+                                        MutableHandleObject objp, MutableHandleShape propp)
+{
+    if (IndirectBindingMap::Ptr p =
+        obj->as<ModuleEnvironmentObject>().importBindings().lookup(id))
+    {
+        RootedObject target(cx, p->value().environment);
+        RootedId name(cx, p->value().localName);
+        return LookupProperty(cx, target, name, objp, propp);
+    }
+
+    RootedNativeObject target(cx, &obj->as<NativeObject>());
+    if (!NativeLookupOwnProperty<CanGC>(cx, target, id, propp))
+        return false;
+
+    objp.set(obj);
+    return true;
+}
+
+/* static */ bool
+ModuleEnvironmentObject::hasProperty(JSContext* cx, HandleObject obj, HandleId id, bool* foundp)
+{
+    if (obj->as<ModuleEnvironmentObject>().importBindings().has(id)) {
+        *foundp = true;
+        return true;
+    }
+
+    RootedNativeObject self(cx, &obj->as<NativeObject>());
+    return NativeHasProperty(cx, self, id, foundp);
+}
+
+/* static */ bool
+ModuleEnvironmentObject::getProperty(JSContext* cx, HandleObject obj, HandleValue receiver,
+                                     HandleId id, MutableHandleValue vp)
+{
+    if (IndirectBindingMap::Ptr p =
+        obj->as<ModuleEnvironmentObject>().importBindings().lookup(id))
+    {
+        RootedObject target(cx, p->value().environment);
+        RootedId name(cx, p->value().localName);
+        return GetProperty(cx, target, target, name, vp);
+    }
+
+    RootedNativeObject self(cx, &obj->as<NativeObject>());
+    return NativeGetProperty(cx, self, receiver, id, vp);
+}
+
+/* static */ bool
+ModuleEnvironmentObject::setProperty(JSContext* cx, HandleObject obj, HandleId id, HandleValue v,
+                                     HandleValue receiver, JS::ObjectOpResult& result)
+{
+    RootedModuleEnvironmentObject self(cx, &obj->as<ModuleEnvironmentObject>());
+    if (self->importBindings().has(id))
+        return result.failReadOnly();
+
+    return NativeSetProperty(cx, self, id, v, receiver, Qualified, result);
+}
+
+/* static */ bool
+ModuleEnvironmentObject::getOwnPropertyDescriptor(JSContext* cx, HandleObject obj, HandleId id,
+                                                  MutableHandle<JSPropertyDescriptor> desc)
+{
+    // We never call this hook on scope objects.
+    MOZ_CRASH();
+}
+
+/* static */ bool
+ModuleEnvironmentObject::deleteProperty(JSContext* cx, HandleObject obj, HandleId id,
+                                        ObjectOpResult& result)
+{
+    return result.failCantDelete();
+}
+
+/* static */ bool
+ModuleEnvironmentObject::enumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties,
+                                   bool enumerableOnly)
+{
+    RootedModuleEnvironmentObject self(cx, &obj->as<ModuleEnvironmentObject>());
+    const IndirectBindingMap& bs(self->importBindings());
+
+    MOZ_ASSERT(properties.length() == 0);
+    size_t count = bs.count() + self->slotSpan() - RESERVED_SLOTS;
+    if (!properties.reserve(count)) {
+        ReportOutOfMemory(cx);
+        return false;
+    }
+
+    for (auto r = bs.all(); !r.empty(); r.popFront())
+        properties.infallibleAppend(r.front().key());
+
+    for (Shape::Range<NoGC> r(self->lastProperty()); !r.empty(); r.popFront())
+        properties.infallibleAppend(r.front().propid());
+
+    MOZ_ASSERT(properties.length() == count);
+    return true;
 }
 
 /*****************************************************************************/
@@ -504,11 +660,14 @@ with_HasProperty(JSContext* cx, HandleObject obj, HandleId id, bool* foundp)
 }
 
 static bool
-with_GetProperty(JSContext* cx, HandleObject obj, HandleObject receiver, HandleId id,
+with_GetProperty(JSContext* cx, HandleObject obj, HandleValue receiver, HandleId id,
                  MutableHandleValue vp)
 {
     RootedObject actual(cx, &obj->as<DynamicWithObject>().object());
-    return GetProperty(cx, actual, actual, id, vp);
+    RootedValue actualReceiver(cx, receiver);
+    if (receiver.isObject() && &receiver.toObject() == obj)
+        actualReceiver.setObject(*actual);
+    return GetProperty(cx, actual, actualReceiver, id, vp);
 }
 
 static bool
@@ -560,7 +719,6 @@ const Class DynamicWithObject::class_ = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     nullptr, /* finalize */
     nullptr, /* call */
     nullptr, /* hasInstance */
@@ -982,7 +1140,7 @@ uninitialized_HasProperty(JSContext* cx, HandleObject obj, HandleId id, bool* fo
 }
 
 static bool
-uninitialized_GetProperty(JSContext* cx, HandleObject obj, HandleObject receiver, HandleId id,
+uninitialized_GetProperty(JSContext* cx, HandleObject obj, HandleValue receiver, HandleId id,
                           MutableHandleValue vp)
 {
     ReportUninitializedLexicalId(cx, id);
@@ -1023,7 +1181,6 @@ const Class UninitializedLexicalObject::class_ = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     nullptr, /* finalize */
     nullptr, /* call */
     nullptr, /* hasInstance */
@@ -1123,7 +1280,9 @@ ScopeIter::settle()
         MOZ_ASSERT(ssi_.type() == StaticScopeIter<CanGC>::Block);
         incrementStaticScopeIter();
         MOZ_ASSERT(ssi_.type() == StaticScopeIter<CanGC>::Eval);
+        MOZ_ASSERT(maybeStaticScope() == frame_.script()->enclosingStaticScope());
         incrementStaticScopeIter();
+        frame_ = NullFramePtr();
     }
 
     // Check if we have left the extent of the initial frame after we've
@@ -1624,7 +1783,7 @@ class DebugScopeProxy : public BaseProxyHandler
         return true;
     }
 
-    bool get(JSContext* cx, HandleObject proxy, HandleObject receiver, HandleId id,
+    bool get(JSContext* cx, HandleObject proxy, HandleValue receiver, HandleId id,
              MutableHandleValue vp) const override
     {
         Rooted<DebugScopeObject*> debugScope(cx, &proxy->as<DebugScopeObject>());
@@ -1947,8 +2106,7 @@ DebugScopes::sweep(JSRuntime* rt)
      * released more eagerly.
      */
     for (MissingScopeMap::Enum e(missingScopes); !e.empty(); e.popFront()) {
-        DebugScopeObject** debugScope = e.front().value().unsafeGet();
-        if (IsAboutToBeFinalizedUnbarriered(debugScope)) {
+        if (IsAboutToBeFinalized(&e.front().value())) {
             /*
              * Note that onPopCall and onPopBlock rely on missingScopes to find
              * scope objects that we synthesized for the debugger's sake, and
@@ -1966,7 +2124,7 @@ DebugScopes::sweep(JSRuntime* rt)
              * Thus, we must explicitly remove the entries from both liveScopes
              * and missingScopes here.
              */
-            liveScopes.remove(&(*debugScope)->scope());
+            liveScopes.remove(&e.front().value()->scope());
             e.removeFront();
         } else {
             MissingScopeKey key = e.front().key();

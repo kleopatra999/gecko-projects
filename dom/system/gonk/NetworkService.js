@@ -37,7 +37,7 @@ const NETD_COMMAND_UNSOLICITED  = 600;
 
 const WIFI_CTRL_INTERFACE = "wl0.1";
 
-let debug;
+var debug;
 function updateDebug() {
   let debugPref = false; // set default value here.
   try {
@@ -801,6 +801,20 @@ NetworkService.prototype = {
       });
     });
   },
+
+  setMtu: function (aInterfaceName, aMtu, aCallback) {
+    debug("Set MTU on " + aInterfaceName + ": " + aMtu);
+
+    let params = {
+      cmd: "setMtu",
+      ifname: aInterfaceName,
+      mtu: aMtu
+    };
+
+    this.controlMessage(params, function(aResult) {
+      aCallback.nativeCommandResult(!aResult.error);
+    });
+  }
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([NetworkService]);

@@ -13,6 +13,7 @@
 #include "nsISupports.h"
 #include "nsXPCOM.h"
 #include "nsContentPolicyUtils.h"
+#include "mozilla/dom/nsCSPService.h"
 #include "nsContentPolicy.h"
 #include "nsIURI.h"
 #include "nsIDocShell.h"
@@ -23,6 +24,7 @@
 #include "nsILoadContext.h"
 #include "nsCOMArray.h"
 #include "nsContentUtils.h"
+#include "mozilla/dom/nsMixedContentBlocker.h"
 
 using mozilla::LogLevel;
 
@@ -119,6 +121,18 @@ nsContentPolicy::CheckPolicy(CPMethod          policyMethod,
     nsContentPolicyType externalType =
         nsContentUtils::InternalContentPolicyTypeToExternal(contentType);
 
+    nsContentPolicyType externalTypeOrScript =
+        nsContentUtils::InternalContentPolicyTypeToExternalOrScript(contentType);
+
+    nsContentPolicyType externalTypeOrPreload =
+       nsContentUtils::InternalContentPolicyTypeToExternalOrPreload(contentType);
+
+    nsCOMPtr<nsIContentPolicy> mixedContentBlocker =
+        do_GetService(NS_MIXEDCONTENTBLOCKER_CONTRACTID);
+
+    nsCOMPtr<nsIContentPolicy> cspService =
+      do_GetService(CSPSERVICE_CONTRACTID);
+
     /* 
      * Enumerate mPolicies and ask each of them, taking the logical AND of
      * their permissions.
@@ -129,7 +143,24 @@ nsContentPolicy::CheckPolicy(CPMethod          policyMethod,
     int32_t count = entries.Count();
     for (int32_t i = 0; i < count; i++) {
         /* check the appropriate policy */
-        rv = (entries[i]->*policyMethod)(externalType, contentLocation,
+        // Send the internal content policy type to the mixed content blocker
+        // which needs to know about TYPE_INTERNAL_WORKER,
+        // TYPE_INTERNAL_SHARED_WORKER and TYPE_INTERNAL_SERVICE_WORKER.
+        bool isMixedContentBlocker = mixedContentBlocker == entries[i];
+        nsContentPolicyType type = externalType;
+        if (isMixedContentBlocker) {
+            type = externalTypeOrScript;
+        }
+        // Send the internal content policy type for CSP which needs to
+        // know about preloads, in particular:
+        // * TYPE_INTERNAL_SCRIPT_PRELOAD
+        // * TYPE_INTERNAL_IMAGE_PRELOAD
+        // * TYPE_INTERNAL_STYLESHEET_PRELOAD
+        bool isCSP = cspService == entries[i];
+        if (isCSP) {
+          type = externalTypeOrPreload;
+        }
+        rv = (entries[i]->*policyMethod)(type, contentLocation,
                                          requestingLocation, requestingContext,
                                          mimeType, extra, requestPrincipal,
                                          decision);

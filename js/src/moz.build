@@ -129,8 +129,9 @@ EXPORTS.js += [
     '../public/TrackedOptimizationInfo.h',
     '../public/TypeDecls.h',
     '../public/UbiNode.h',
+    '../public/UbiNodeBreadthFirst.h',
     '../public/UbiNodeCensus.h',
-    '../public/UbiNodeTraverse.h',
+    '../public/UbiNodePostOrder.h',
     '../public/Utility.h',
     '../public/Value.h',
     '../public/Vector.h',
@@ -138,6 +139,7 @@ EXPORTS.js += [
 ]
 
 UNIFIED_SOURCES += [
+    'asmjs/AsmJSCompile.cpp',
     'asmjs/AsmJSFrameIterator.cpp',
     'asmjs/AsmJSLink.cpp',
     'asmjs/AsmJSModule.cpp',
@@ -156,6 +158,7 @@ UNIFIED_SOURCES += [
     'builtin/SymbolObject.cpp',
     'builtin/TestingFunctions.cpp',
     'builtin/TypedObject.cpp',
+    'builtin/WeakMapObject.cpp',
     'builtin/WeakSetObject.cpp',
     'devtools/sharkctl.cpp',
     'ds/LifoAlloc.cpp',
@@ -172,6 +175,7 @@ UNIFIED_SOURCES += [
     'gc/Iteration.cpp',
     'gc/Marking.cpp',
     'gc/Memory.cpp',
+    'gc/MemoryProfiler.cpp',
     'gc/Nursery.cpp',
     'gc/RootMarking.cpp',
     'gc/Statistics.cpp',
@@ -284,6 +288,7 @@ UNIFIED_SOURCES += [
     'vm/ArrayBufferObject.cpp',
     'vm/CallNonGenericMethod.cpp',
     'vm/CharacterEncoding.cpp',
+    'vm/CodeCoverage.cpp',
     'vm/Compression.cpp',
     'vm/DateTime.cpp',
     'vm/Debugger.cpp',
@@ -320,6 +325,7 @@ UNIFIED_SOURCES += [
     'vm/StringBuffer.cpp',
     'vm/StructuredClone.cpp',
     'vm/Symbol.cpp',
+    'vm/TaggedProto.cpp',
     'vm/Time.cpp',
     'vm/TypedArrayObject.cpp',
     'vm/TypeInference.cpp',
@@ -435,6 +441,11 @@ elif CONFIG['JS_CODEGEN_ARM']:
         UNIFIED_SOURCES += [
             'jit/arm/Simulator-arm.cpp'
         ]
+    elif CONFIG['OS_ARCH'] == 'Darwin':
+        SOURCES += [
+            'jit/arm/llvm-compiler-rt/arm/aeabi_idivmod.S',
+            'jit/arm/llvm-compiler-rt/arm/aeabi_uidivmod.S',
+        ]
 elif CONFIG['JS_CODEGEN_ARM64']:
     UNIFIED_SOURCES += [
         'jit/arm64/Architecture-arm64.cpp',
@@ -468,6 +479,12 @@ elif CONFIG['JS_CODEGEN_MIPS32']:
     UNIFIED_SOURCES += [
         'jit/mips-shared/Architecture-mips-shared.cpp',
         'jit/mips-shared/Assembler-mips-shared.cpp',
+        'jit/mips-shared/Bailouts-mips-shared.cpp',
+        'jit/mips-shared/BaselineCompiler-mips-shared.cpp',
+        'jit/mips-shared/BaselineIC-mips-shared.cpp',
+        'jit/mips-shared/CodeGenerator-mips-shared.cpp',
+        'jit/mips-shared/Lowering-mips-shared.cpp',
+        'jit/mips-shared/MoveEmitter-mips-shared.cpp',
     ]
     if CONFIG['JS_CODEGEN_MIPS32']:
         UNIFIED_SOURCES += [

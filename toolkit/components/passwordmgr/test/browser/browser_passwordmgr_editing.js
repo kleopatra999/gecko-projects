@@ -2,10 +2,10 @@ const { ContentTaskUtils } = Cu.import("resource://testing-common/ContentTaskUti
 const TIME_INTERVAL = 500;
 const PWMGR_DLG = "chrome://passwordmgr/content/passwordManager.xul";
 
-let doc;
-let pwmgr;
-let pwmgrdlg;
-let signonsTree;
+var doc;
+var pwmgr;
+var pwmgrdlg;
+var signonsTree;
 
 function addLogin(site, username, password) {
   let nsLoginInfo = new Components.Constructor("@mozilla.org/login-manager/loginInfo;1",
@@ -30,11 +30,6 @@ function synthesizeDblClickOnCell(aTree, column, row) {
   // Simulate the double click.
   EventUtils.synthesizeMouse(aTree.body, x, y, { clickCount: 2 },
                              aTree.ownerDocument.defaultView);
-}
-
-function* togglePasswords() {
-  pwmgrdlg.document.querySelector("#togglePasswords").doCommand();
-  yield new Promise(resolve => waitForFocus(resolve, pwmgrdlg));
 }
 
 function* editUsernamePromises(site, oldUsername, newUsername) {
@@ -114,9 +109,7 @@ add_task(function* test_edit_multiple_logins() {
   function* testLoginChange(site, oldUsername, oldPassword, newUsername, newPassword) {
     addLogin(site, oldUsername, oldPassword);
     yield* editUsernamePromises(site, oldUsername, newUsername);
-    yield* togglePasswords();
     yield* editPasswordPromises(site, oldPassword, newPassword);
-    yield* togglePasswords();
   }
 
   yield* testLoginChange("http://c.tn/", "userC", "passC", "usernameC", "passwordC");

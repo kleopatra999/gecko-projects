@@ -42,6 +42,7 @@
 #include "WorkerRunnable.h"
 #include "WorkerScope.h"
 #include "Workers.h"
+#include "FetchUtil.h"
 
 namespace mozilla {
 namespace dom {
@@ -248,7 +249,7 @@ MainThreadFetchResolver::OnResponseAvailableInternal(InternalResponse* aResponse
     mPromise->MaybeResolve(mResponse);
   } else {
     ErrorResult result;
-    result.ThrowTypeError(MSG_FETCH_FAILED);
+    result.ThrowTypeError<MSG_FETCH_FAILED>();
     mPromise->MaybeReject(result);
   }
 }
@@ -287,7 +288,7 @@ public:
       promise->MaybeResolve(response);
     } else {
       ErrorResult result;
-      result.ThrowTypeError(MSG_FETCH_FAILED);
+      result.ThrowTypeError<MSG_FETCH_FAILED>();
       promise->MaybeReject(result);
     }
     return true;
@@ -909,53 +910,6 @@ ExtractByteStreamFromBody(const ArrayBufferOrArrayBufferViewOrBlobOrFormDataOrUS
 }
 
 namespace {
-class StreamDecoder final
-{
-  nsCOMPtr<nsIUnicodeDecoder> mDecoder;
-  nsString mDecoded;
-
-public:
-  StreamDecoder()
-    : mDecoder(EncodingUtils::DecoderForEncoding("UTF-8"))
-  {
-    MOZ_ASSERT(mDecoder);
-  }
-
-  nsresult
-  AppendText(const char* aSrcBuffer, uint32_t aSrcBufferLen)
-  {
-    int32_t destBufferLen;
-    nsresult rv =
-      mDecoder->GetMaxLength(aSrcBuffer, aSrcBufferLen, &destBufferLen);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
-
-    if (!mDecoded.SetCapacity(mDecoded.Length() + destBufferLen, fallible)) {
-      return NS_ERROR_OUT_OF_MEMORY;
-    }
-
-    char16_t* destBuffer = mDecoded.BeginWriting() + mDecoded.Length();
-    int32_t totalChars = mDecoded.Length();
-
-    int32_t srcLen = (int32_t) aSrcBufferLen;
-    int32_t outLen = destBufferLen;
-    rv = mDecoder->Convert(aSrcBuffer, &srcLen, destBuffer, &outLen);
-    MOZ_ASSERT(NS_SUCCEEDED(rv));
-
-    totalChars += outLen;
-    mDecoded.SetLength(totalChars);
-
-    return NS_OK;
-  }
-
-  nsString&
-  GetText()
-  {
-    return mDecoded;
-  }
-};
-
 /*
  * Called on successfully reading the complete stream.
  */
@@ -1097,17 +1051,15 @@ public:
 
     uint8_t* nonconstResult = const_cast<uint8_t*>(aResult);
     if (mFetchBody->mWorkerPrivate) {
-      // This way if the runnable dispatch fails, the body is still released.
-      AutoFailConsumeBody<Derived> autoFail(mFetchBody);
       nsRefPtr<ContinueConsumeBodyRunnable<Derived>> r =
         new ContinueConsumeBodyRunnable<Derived>(mFetchBody,
                                         aStatus,
                                         aResultLength,
                                         nonconstResult);
       AutoSafeJSContext cx;
-      if (r->Dispatch(cx)) {
-        autoFail.DontFail();
-      } else {
+      if (!r->Dispatch(cx)) {
+        // XXXcatalinb: The worker is shutting down, the pump will be canceled
+        // by FetchBodyFeature::Notify.
         NS_WARNING("Could not dispatch ConsumeBodyRunnable");
         // Return failure so that aResult is freed.
         return NS_ERROR_FAILURE;
@@ -1177,10 +1129,12 @@ class FetchBodyFeature final : public workers::WorkerFeature
   // This is addrefed before the feature is created, and is released in ContinueConsumeBody()
   // so we can hold a rawptr.
   FetchBody<Derived>* mBody;
+  bool mWasNotified;
 
 public:
   explicit FetchBodyFeature(FetchBody<Derived>* aBody)
     : mBody(aBody)
+    , mWasNotified(false)
   { }
 
   ~FetchBodyFeature()
@@ -1189,7 +1143,10 @@ public:
   bool Notify(JSContext* aCx, workers::Status aStatus) override
   {
     MOZ_ASSERT(aStatus > workers::Running);
-    mBody->ContinueConsumeBody(NS_BINDING_ABORTED, 0, nullptr);
+    if (!mWasNotified) {
+      mWasNotified = true;
+      mBody->ContinueConsumeBody(NS_BINDING_ABORTED, 0, nullptr);
+    }
     return true;
   }
 };
@@ -1436,128 +1393,81 @@ FetchBody<Derived>::ContinueConsumeBody(nsresult aStatus, uint32_t aResultLength
   jsapi.Init(DerivedClass()->GetParentObject());
   JSContext* cx = jsapi.cx();
 
+  ErrorResult error;
+
   switch (mConsumeType) {
     case CONSUME_ARRAYBUFFER: {
       JS::Rooted<JSObject*> arrayBuffer(cx);
-      arrayBuffer = JS_NewArrayBufferWithContents(cx, aResultLength, reinterpret_cast<void *>(aResult));
-      if (!arrayBuffer) {
-        JS_ClearPendingException(cx);
-        localPromise->MaybeReject(NS_ERROR_DOM_UNKNOWN_ERR);
-        NS_WARNING("OUT OF MEMORY");
-        return;
-      }
+      FetchUtil::ConsumeArrayBuffer(cx, &arrayBuffer, aResultLength, aResult,
+                                    error);
 
-      JS::Rooted<JS::Value> val(cx);
-      val.setObjectOrNull(arrayBuffer);
-      localPromise->MaybeResolve(cx, val);
-      // ArrayBuffer takes over ownership.
-      autoFree.Reset();
-      return;
+      error.WouldReportJSException();
+      if (!error.Failed()) {
+        JS::Rooted<JS::Value> val(cx);
+        val.setObjectOrNull(arrayBuffer);
+
+        localPromise->MaybeResolve(cx, val);
+        // ArrayBuffer takes over ownership.
+        autoFree.Reset();
+      }
+      break;
     }
     case CONSUME_BLOB: {
-      nsRefPtr<dom::Blob> blob =
-        Blob::CreateMemoryBlob(DerivedClass()->GetParentObject(),
-                               reinterpret_cast<void *>(aResult), aResultLength,
-                               NS_ConvertUTF8toUTF16(mMimeType));
-
-      if (!blob) {
-        localPromise->MaybeReject(NS_ERROR_DOM_UNKNOWN_ERR);
-        return;
+      nsRefPtr<dom::Blob> blob = FetchUtil::ConsumeBlob(
+        DerivedClass()->GetParentObject(), NS_ConvertUTF8toUTF16(mMimeType),
+        aResultLength, aResult, error);
+      error.WouldReportJSException();
+      if (!error.Failed()) {
+        localPromise->MaybeResolve(blob);
+        // File takes over ownership.
+        autoFree.Reset();
       }
-
-      localPromise->MaybeResolve(blob);
-      // File takes over ownership.
-      autoFree.Reset();
-      return;
+      break;
     }
     case CONSUME_FORMDATA: {
       nsCString data;
       data.Adopt(reinterpret_cast<char*>(aResult), aResultLength);
       autoFree.Reset();
 
-      NS_NAMED_LITERAL_CSTRING(formDataMimeType, "multipart/form-data");
-
-      // Allow semicolon separated boundary/encoding suffix like multipart/form-data; boundary=
-      // but disallow multipart/form-datafoobar.
-      bool isValidFormDataMimeType = StringBeginsWith(mMimeType, formDataMimeType);
-
-      if (isValidFormDataMimeType && mMimeType.Length() > formDataMimeType.Length()) {
-        isValidFormDataMimeType = mMimeType[formDataMimeType.Length()] == ';';
-      }
-
-      if (isValidFormDataMimeType) {
-        FormDataParser parser(mMimeType, data, DerivedClass()->GetParentObject());
-        if (!parser.Parse()) {
-          ErrorResult result;
-          result.ThrowTypeError(MSG_BAD_FORMDATA);
-          localPromise->MaybeReject(result);
-          return;
-        }
-
-        nsRefPtr<nsFormData> fd = parser.FormData();
-        MOZ_ASSERT(fd);
+      nsRefPtr<nsFormData> fd = FetchUtil::ConsumeFormData(
+        DerivedClass()->GetParentObject(),
+        mMimeType, data, error);
+      if (!error.Failed()) {
         localPromise->MaybeResolve(fd);
-      } else {
-        NS_NAMED_LITERAL_CSTRING(urlDataMimeType, "application/x-www-form-urlencoded");
-        bool isValidUrlEncodedMimeType = StringBeginsWith(mMimeType, urlDataMimeType);
-
-        if (isValidUrlEncodedMimeType && mMimeType.Length() > urlDataMimeType.Length()) {
-          isValidUrlEncodedMimeType = mMimeType[urlDataMimeType.Length()] == ';';
-        }
-
-        if (isValidUrlEncodedMimeType) {
-          URLParams params;
-          params.ParseInput(data);
-
-          nsRefPtr<nsFormData> fd = new nsFormData(DerivedClass()->GetParentObject());
-          FillFormIterator iterator(fd);
-          DebugOnly<bool> status = params.ForEach(iterator);
-          MOZ_ASSERT(status);
-
-          localPromise->MaybeResolve(fd);
-        } else {
-          ErrorResult result;
-          result.ThrowTypeError(MSG_BAD_FORMDATA);
-          localPromise->MaybeReject(result);
-        }
       }
-      return;
+      break;
     }
     case CONSUME_TEXT:
       // fall through handles early exit.
     case CONSUME_JSON: {
-      StreamDecoder decoder;
-      decoder.AppendText(reinterpret_cast<char*>(aResult), aResultLength);
-
-      nsString& decoded = decoder.GetText();
-      if (mConsumeType == CONSUME_TEXT) {
-        localPromise->MaybeResolve(decoded);
-        return;
-      }
-
-      AutoForceSetExceptionOnContext forceExn(cx);
-      JS::Rooted<JS::Value> json(cx);
-      if (!JS_ParseJSON(cx, decoded.get(), decoded.Length(), &json)) {
-        if (!JS_IsExceptionPending(cx)) {
-          localPromise->MaybeReject(NS_ERROR_DOM_UNKNOWN_ERR);
-          return;
+      nsString decoded;
+      if (NS_SUCCEEDED(FetchUtil::ConsumeText(aResultLength, aResult, decoded))) {
+        if (mConsumeType == CONSUME_TEXT) {
+          localPromise->MaybeResolve(decoded);
+        } else {
+          JS::Rooted<JS::Value> json(cx);
+          FetchUtil::ConsumeJson(cx, &json, decoded, error);
+          if (!error.Failed()) {
+            localPromise->MaybeResolve(cx, json);
+          }
         }
-
-        JS::Rooted<JS::Value> exn(cx);
-        DebugOnly<bool> gotException = JS_GetPendingException(cx, &exn);
-        MOZ_ASSERT(gotException);
-
-        JS_ClearPendingException(cx);
-        localPromise->MaybeReject(cx, exn);
-        return;
-      }
-
-      localPromise->MaybeResolve(cx, json);
-      return;
+      };
+      break;
     }
+    default:
+      NS_NOTREACHED("Unexpected consume body type");
   }
 
-  NS_NOTREACHED("Unexpected consume body type");
+  error.WouldReportJSException();
+  if (error.Failed()) {
+    if (error.IsJSException()) {
+      JS::Rooted<JS::Value> exn(cx);
+      error.StealJSException(cx, &exn);
+      localPromise->MaybeReject(cx, exn);
+    } else {
+      localPromise->MaybeReject(error);
+    }
+  }
 }
 
 template <class Derived>
@@ -1566,7 +1476,7 @@ FetchBody<Derived>::ConsumeBody(ConsumeType aType, ErrorResult& aRv)
 {
   mConsumeType = aType;
   if (BodyUsed()) {
-    aRv.ThrowTypeError(MSG_FETCH_BODY_CONSUMED_ERROR);
+    aRv.ThrowTypeError<MSG_FETCH_BODY_CONSUMED_ERROR>();
     return nullptr;
   }
 
@@ -1622,5 +1532,6 @@ FetchBody<Request>::SetMimeType();
 template
 void
 FetchBody<Response>::SetMimeType();
+
 } // namespace dom
 } // namespace mozilla

@@ -198,13 +198,6 @@ TextureClientD3D11::TextureClientD3D11(ISurfaceAllocator* aAllocator,
 
 TextureClientD3D11::~TextureClientD3D11()
 {
-  if (mActor) {
-    if (mTexture) {
-      KeepUntilFullDeallocation(MakeUnique<TKeepAlive<ID3D11Texture2D>>(mTexture));
-    } else if (mTexture10) {
-      KeepUntilFullDeallocation(MakeUnique<TKeepAlive<ID3D10Texture2D>>(mTexture10));
-    }
-  }
 #ifdef DEBUG
   // An Azure DrawTarget needs to be locked when it gets nullptr'ed as this is
   // when it calls EndDraw. This EndDraw should not execute anything so it
@@ -226,6 +219,18 @@ TextureClientD3D11::~TextureClientD3D11()
     }
   }
 #endif
+}
+
+void
+TextureClientD3D11::FinalizeOnIPDLThread()
+{
+  if (mActor) {
+    if (mTexture) {
+      KeepUntilFullDeallocation(MakeUnique<TKeepAlive<ID3D11Texture2D>>(mTexture));
+    } else if (mTexture10) {
+      KeepUntilFullDeallocation(MakeUnique<TKeepAlive<ID3D10Texture2D>>(mTexture10));
+    }
+  }
 }
 
 // static
@@ -574,7 +579,8 @@ TextureClientD3D11::AllocateForSurface(gfx::IntSize aSize, TextureAllocationFlag
 
   // When we're not on the main thread we're not going to be using Direct2D
   // to access the contents of this texture client so we will always use D3D11.
-  bool haveD3d11Backend = windowsPlatform->GetContentBackend() == BackendType::DIRECT2D1_1 || !NS_IsMainThread();
+  BackendType backend = windowsPlatform->GetContentBackendFor(LayersBackend::LAYERS_D3D11);
+  bool haveD3d11Backend = (backend == BackendType::DIRECT2D1_1) || !NS_IsMainThread();
 
   if (haveD3d11Backend) {
     if (!AllocateD3D11Surface(d3d11device, aSize)) {
@@ -657,10 +663,15 @@ protected:
 
 DXGIYCbCrTextureClient::~DXGIYCbCrTextureClient()
 {
+  MOZ_COUNT_DTOR(DXGIYCbCrTextureClient);
+}
+
+void
+DXGIYCbCrTextureClient::FinalizeOnIPDLThread()
+{
   if (mHoldRefs[0] && mActor) {
     KeepUntilFullDeallocation(MakeUnique<YCbCrKeepAliveD3D11>(mHoldRefs), true);
   }
-  MOZ_COUNT_DTOR(DXGIYCbCrTextureClient);
 }
 
 // static

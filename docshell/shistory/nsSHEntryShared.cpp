@@ -38,7 +38,7 @@ class HistoryTracker final : public HistoryTrackerBase
 {
 public:
   explicit HistoryTracker(uint32_t aTimeout)
-    : HistoryTrackerBase(1000 * aTimeout / 2)
+    : HistoryTrackerBase(1000 * aTimeout / 2, "HistoryTracker")
   {
   }
 
@@ -329,6 +329,13 @@ nsSHEntryShared::AttributeWillChange(nsIDocument* aDocument,
                                      nsIAtom* aAttribute,
                                      int32_t aModType,
                                      const nsAttrValue* aNewValue)
+{
+}
+
+void
+nsSHEntryShared::NativeAnonymousChildListChange(nsIDocument* aDocument,
+                                                nsIContent* aContent,
+                                                bool aIsRemove)
 {
 }
 

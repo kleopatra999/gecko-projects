@@ -9,7 +9,6 @@
 #include "mozilla/Casting.h"
 #include "mozilla/DebugOnly.h"
 
-#include "jsmath.h"
 #include "jsnum.h"
 
 #include "jit/IonCaches.h"
@@ -302,7 +301,7 @@ CodeGeneratorX86::visitLoadTypedArrayElementStatic(LLoadTypedArrayElementStatic*
             bailoutIf(Assembler::AboveOrEqual, ins->snapshot());
     }
 
-    Operand srcAddr(ptr, int32_t(mir->base()) + int32_t(offset));
+    Operand srcAddr(ptr, int32_t(mir->base().asValue()) + int32_t(offset));
     load(accessType, srcAddr, out);
     if (accessType == Scalar::Float64)
         masm.canonicalizeDouble(ToFloatRegister(out));
@@ -507,7 +506,7 @@ CodeGeneratorX86::visitStoreTypedArrayElementStatic(LStoreTypedArrayElementStati
     uint32_t offset = mir->offset();
 
     if (!mir->needsBoundsCheck()) {
-        Operand dstAddr(ptr, int32_t(mir->base()) + int32_t(offset));
+        Operand dstAddr(ptr, int32_t(mir->base().asValue()) + int32_t(offset));
         store(accessType, value, dstAddr);
         return;
     }
@@ -517,7 +516,7 @@ CodeGeneratorX86::visitStoreTypedArrayElementStatic(LStoreTypedArrayElementStati
     Label rejoin;
     masm.j(Assembler::AboveOrEqual, &rejoin);
 
-    Operand dstAddr(ptr, (int32_t) mir->base());
+    Operand dstAddr(ptr, int32_t(mir->base().asValue()));
     store(accessType, value, dstAddr);
     masm.bind(&rejoin);
 }
@@ -637,7 +636,7 @@ CodeGeneratorX86::visitAsmJSStoreHeap(LAsmJSStoreHeap* ins)
         if (mir->isAtomicAccess())
             jumpTo = gen->outOfBoundsLabel();
         else
-            rejoin = jumpTo = alloc().lifoAlloc()->new_<Label>();
+            rejoin = jumpTo = alloc().lifoAlloc()->newInfallible<Label>();
         maybeCmpOffset = emitAsmJSBoundsCheckBranch(mir, mir, ToRegister(ptr), jumpTo);
     }
 
@@ -1104,19 +1103,4 @@ CodeGeneratorX86::visitOutOfLineTruncateFloat32(OutOfLineTruncateFloat32* ool)
     }
 
     masm.jump(ool->rejoin());
-}
-
-void
-CodeGeneratorX86::visitRandom(LRandom* ins)
-{
-    Register temp = ToRegister(ins->temp());
-    Register temp2 = ToRegister(ins->temp2());
-
-    masm.loadJSContext(temp);
-
-    masm.setupUnalignedABICall(temp2);
-    masm.passABIArg(temp);
-    masm.callWithABI(JS_FUNC_TO_DATA_PTR(void*, math_random_no_outparam), MoveOp::DOUBLE);
-
-    MOZ_ASSERT(ToFloatRegister(ins->output()) == ReturnDoubleReg);
 }

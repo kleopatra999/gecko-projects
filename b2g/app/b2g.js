@@ -62,7 +62,6 @@ pref("browser.cache.memory_limit", 2048); // 2 MB
 
 /* image cache prefs */
 pref("image.cache.size", 1048576); // bytes
-pref("image.high_quality_downscaling.enabled", false);
 pref("canvas.image.cache.limit", 20971520); // 20 MB
 
 /* offline cache prefs */
@@ -226,10 +225,6 @@ pref("dom.max_script_run_time", 0);
 pref("dom.max_chrome_script_run_time", 0);
 pref("dom.max_child_script_run_time", 0);
 
-// Temporarily disable support for offsetX/Y to work around Google Maps bug
-// (bug 1150284)
-pref("dom.mouseEvent.offsetXY.enabled", false);
-
 // plugins
 pref("plugin.disable", true);
 pref("dom.ipc.plugins.enabled", true);
@@ -330,7 +325,6 @@ pref("media.fragmented-mp4.gonk.enabled", true);
 //Encrypted media extensions.
 pref("media.eme.enabled", true);
 pref("media.eme.apiVisible", true);
-
 // The default number of decoded video frames that are enqueued in
 // MediaDecoderReader's mVideoQueue.
 pref("media.video-queue.default-size", 3);
@@ -391,7 +385,7 @@ pref("urlclassifier.gethash.timeout_ms", 5000);
 pref("urlclassifier.max-complete-age", 2700);
 
 // Tracking protection
-pref("privacy.trackingprotection.enabled", true);
+pref("privacy.trackingprotection.enabled", false);
 pref("privacy.trackingprotection.pbmode.enabled", false);
 
 #endif
@@ -436,7 +430,7 @@ pref("dom.ipc.processCount", 100000);
 
 pref("dom.ipc.browser_frames.oop_by_default", false);
 
-#ifndef MOZ_MULET
+#if !defined(MOZ_MULET) && !defined(MOZ_GRAPHENE)
 pref("dom.meta-viewport.enabled", true);
 #endif
 
@@ -959,7 +953,7 @@ pref("devtools.debugger.unix-domain-socket", "/data/local/debugger-socket");
 // falling back to Skia/software for smaller canvases
 #ifdef MOZ_WIDGET_GONK
 pref("gfx.canvas.azure.backends", "skia");
-pref("gfx.canvas.azure.accelerated", true);
+pref("gfx.canvas.azure.accelerated", false);
 #endif
 
 // Turn on dynamic cache size for Skia
@@ -1072,14 +1066,13 @@ pref("dom.wakelock.enabled", true);
 // Enable webapps add-ons
 pref("dom.apps.customization.enabled", true);
 
-// Original caret implementation on collapsed selection.
-pref("touchcaret.enabled", false);
-
-// Original caret implementation on non-collapsed selection.
-pref("selectioncaret.enabled", false);
-
 // New implementation to unify touch-caret and selection-carets.
 pref("layout.accessiblecaret.enabled", true);
+
+// APZ on real devices supports long tap events.
+#ifdef MOZ_WIDGET_GONK
+pref("layout.accessiblecaret.use_long_tap_injector", false);
+#endif
 
 // Enable sync and mozId with Firefox Accounts.
 pref("services.sync.fxaccounts.enabled", true);
@@ -1150,3 +1143,12 @@ pref("dom.presentation.device.name", "Firefox OS");
 
 // Enable notification of performance timing
 pref("dom.performance.enable_notify_performance_timing", true);
+
+// Multi-screen
+pref("b2g.multiscreen.chrome_remote_url", "chrome://b2g/content/shell_remote.html");
+pref("b2g.multiscreen.system_remote_url", "index_remote.html");
+
+// Because we can't have nice things.
+#ifdef MOZ_GRAPHENE
+#include ../graphene/graphene.js
+#endif

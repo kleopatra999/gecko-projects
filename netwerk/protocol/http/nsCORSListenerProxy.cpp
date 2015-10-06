@@ -41,6 +41,7 @@
 #include "nsINetworkInterceptController.h"
 #include "nsNullPrincipal.h"
 #include "nsICorsPreflightCallback.h"
+#include "mozilla/LoadInfo.h"
 #include <algorithm>
 
 using namespace mozilla;
@@ -516,8 +517,10 @@ nsCORSListenerProxy::OnStartRequest(nsIRequest* aRequest,
             do_QueryInterface(channel);
           if (httpChannelChild) {
             rv = httpChannelChild->RemoveCorsPreflightCacheEntry(uri, mRequestingPrincipal);
-            if (NS_WARN_IF(NS_FAILED(rv))) {
-              return rv;
+            if (NS_FAILED(rv)) {
+              // Only warn here to ensure we fall through the request Cancel()
+              // and outer listener OnStartRequest() calls.
+              NS_WARNING("Failed to remove CORS preflight cache entry!");
             }
           }
         }
@@ -754,8 +757,9 @@ nsCORSListenerProxy::AsyncOnChannelRedirect(nsIChannel *aOldChannel,
             do_QueryInterface(aOldChannel);
           if (httpChannelChild) {
             rv = httpChannelChild->RemoveCorsPreflightCacheEntry(oldURI, mRequestingPrincipal);
-            if (NS_WARN_IF(NS_FAILED(rv))) {
-              return rv;
+            if (NS_FAILED(rv)) {
+              // Only warn here to ensure we call the channel Cancel() below
+              NS_WARNING("Failed to remove CORS preflight cache entry!");
             }
           }
         }
@@ -1307,11 +1311,14 @@ nsCORSListenerProxy::StartCORSPreflight(nsIChannel* aRequestChannel,
   nsresult rv = NS_GetFinalChannelURI(aRequestChannel, getter_AddRefs(uri));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsILoadInfo> loadInfo = aRequestChannel->GetLoadInfo();
-  MOZ_ASSERT(loadInfo, "can not perform CORS preflight without a loadInfo");
-  if (!loadInfo) {
+  nsCOMPtr<nsILoadInfo> originalLoadInfo = aRequestChannel->GetLoadInfo();
+  MOZ_ASSERT(originalLoadInfo, "can not perform CORS preflight without a loadInfo");
+  if (!originalLoadInfo) {
     return NS_ERROR_FAILURE;
   }
+
+  nsCOMPtr<nsILoadInfo> loadInfo = static_cast<mozilla::LoadInfo*>
+    (originalLoadInfo.get())->Clone();
 
   nsSecurityFlags securityMode = loadInfo->GetSecurityMode();
 

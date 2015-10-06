@@ -81,7 +81,7 @@ static const char kDigiCert_High_Assurance_EV_Root_CAFingerprint[] =
 
 /* End Entity Test Cert */
 static const char kEnd_Entity_Test_CertFingerprint[] =
-  "lzCakFt+nADIfIkgk+UE/EQ9SaT2nay2yu2iykVbvV8=";
+  "VCIlmPM9NkgFQtrs4Oa5TeFcDu6MWRTKSNdePEhOgD8=";
 
 /* Entrust Root Certification Authority */
 static const char kEntrust_Root_Certification_AuthorityFingerprint[] =
@@ -1035,6 +1035,7 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "passwords.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "pinningtest.appspot.com", true, false, false, -1, &kPinset_test },
   { "pixel.facebook.com", true, false, false, -1, &kPinset_facebook },
+  { "pixel.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "platform.twitter.com", true, false, false, -1, &kPinset_twitterCDN },
   { "play.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "plus.google.com", true, false, false, -1, &kPinset_google_root_pems },
@@ -1092,8 +1093,8 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "ytimg.com", true, false, false, -1, &kPinset_google_root_pems },
 };
 
-// Pinning Preload List Length = 363;
+// Pinning Preload List Length = 364;
 
 static const int32_t kUnknownId = -1;
 
-static const PRTime kPreloadPKPinsExpirationTime = INT64_C(1450521025692000);
+static const PRTime kPreloadPKPinsExpirationTime = INT64_C(1452335707689000);

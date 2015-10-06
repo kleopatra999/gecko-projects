@@ -59,16 +59,6 @@ function whenDelayedStartupFinished(aWindow, aCallback) {
   }, "browser-delayed-startup-finished", false);
 }
 
-function findChromeWindowByURI(aURI) {
-  let windows = Services.wm.getEnumerator(null);
-  while (windows.hasMoreElements()) {
-    let win = windows.getNext();
-    if (win.location.href == aURI)
-      return win;
-  }
-  return null;
-}
-
 function updateTabContextMenu(tab) {
   let menu = document.getElementById("tabContextMenu");
   if (!tab)
@@ -484,7 +474,7 @@ function waitForDocLoadComplete(aBrowser=gBrowser) {
 waitForDocLoadComplete.listeners = new Set();
 registerCleanupFunction(() => waitForDocLoadComplete.listeners.clear());
 
-let FullZoomHelper = {
+var FullZoomHelper = {
 
   selectTabAndWaitForLocationChange: function selectTabAndWaitForLocationChange(tab) {
     if (!tab)
@@ -806,7 +796,6 @@ function assertMixedContentBlockingState(tabbrowser, states = {}) {
     ok(!classList.contains("mixedActiveBlocked"), "No MCB icon on HTTP page");
     ok(!classList.contains("mixedDisplayContent"), "No MCB icon on HTTP page");
     ok(!classList.contains("mixedDisplayContentLoadedActiveBlocked"), "No MCB icon on HTTP page");
-    ok(!classList.contains("mixedContent"), "No MCB icon on HTTP page");
   } else {
     // Make sure the identity box UI has the correct mixedcontent states and icons
     is(classList.contains("mixedActiveContent"), activeLoaded,
@@ -817,8 +806,6 @@ function assertMixedContentBlockingState(tabbrowser, states = {}) {
        "identityBox has expected class for passiveLoaded && !(activeLoaded || activeBlocked)");
     is(classList.contains("mixedDisplayContentLoadedActiveBlocked"), passiveLoaded && activeBlocked,
        "identityBox has expected class for passiveLoaded && activeBlocked");
-    is (classList.contains("mixedContent"), activeBlocked || activeLoaded || passiveLoaded,
-       "identityBox has expected class for mixed content");
 
     if (activeLoaded) {
       is(identityBoxImage, "url(\"chrome://browser/skin/identity-mixed-active-loaded.svg\")",
@@ -1033,8 +1020,7 @@ function promiseNewSearchEngine(basename) {
   return new Promise((resolve, reject) => {
     info("Waiting for engine to be added: " + basename);
     let url = getRootDirectory(gTestPath) + basename;
-    Services.search.addEngine(url, Ci.nsISearchEngine.TYPE_MOZSEARCH, "",
-                              false, {
+    Services.search.addEngine(url, null, "", false, {
       onSuccess: function (engine) {
         info("Search engine added: " + basename);
         registerCleanupFunction(() => Services.search.removeEngine(engine));
@@ -1075,4 +1061,35 @@ function isSecurityState(expectedState) {
   }
 
   is(expectedState, actualState, "Expected state " + expectedState + " and the actual state is " + actualState + ".");
+}
+
+/**
+ * Resolves when a bookmark with the given uri is added.
+ */
+function promiseOnBookmarkItemAdded(aExpectedURI) {
+  return new Promise((resolve, reject) => {
+    let bookmarksObserver = {
+      onItemAdded: function (aItemId, aFolderId, aIndex, aItemType, aURI) {
+        info("Added a bookmark to " + aURI.spec);
+        PlacesUtils.bookmarks.removeObserver(bookmarksObserver);
+        if (aURI.equals(aExpectedURI)) {
+          resolve();
+        }
+        else {
+          reject(new Error("Added an unexpected bookmark"));
+        }
+      },
+      onBeginUpdateBatch: function () {},
+      onEndUpdateBatch: function () {},
+      onItemRemoved: function () {},
+      onItemChanged: function () {},
+      onItemVisited: function () {},
+      onItemMoved: function () {},
+      QueryInterface: XPCOMUtils.generateQI([
+        Ci.nsINavBookmarkObserver,
+      ])
+    };
+    info("Waiting for a bookmark to be added");
+    PlacesUtils.bookmarks.addObserver(bookmarksObserver, false);
+  });
 }

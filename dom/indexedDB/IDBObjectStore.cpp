@@ -34,7 +34,7 @@
 #include "mozilla/dom/IDBMutableFileBinding.h"
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/IDBObjectStoreBinding.h"
-#include "mozilla/dom/StructuredCloneHelper.h"
+#include "mozilla/dom/StructuredCloneHolder.h"
 #include "mozilla/dom/StructuredCloneTags.h"
 #include "mozilla/dom/indexedDB/PBackgroundIDBSharedTypes.h"
 #include "mozilla/dom/ipc/BlobChild.h"
@@ -367,7 +367,7 @@ StructuredCloneWriteCallback(JSContext* aCx,
     }
   }
 
-  return StructuredCloneHelper::WriteFullySerializableObjects(aCx, aWriter, aObj);
+  return StructuredCloneHolder::WriteFullySerializableObjects(aCx, aWriter, aObj);
 }
 
 nsresult
@@ -893,7 +893,7 @@ CommonStructuredCloneReadCallback(JSContext* aCx,
     return result;
   }
 
-  return StructuredCloneHelper::ReadFullySerializableObjects(aCx, aReader,
+  return StructuredCloneHolder::ReadFullySerializableObjects(aCx, aReader,
                                                              aTag, aData);
 }
 
@@ -1001,7 +1001,12 @@ IDBObjectStore::AppendIndexUpdateInfo(
     return NS_OK;
   }
 
-  if (JS_IsArrayObject(aCx, val)) {
+  bool isArray;
+  if (!JS_IsArrayObject(aCx, val, &isArray)) {
+    IDB_REPORT_INTERNAL_ERR();
+    return NS_ERROR_DOM_INDEXEDDB_UNKNOWN_ERR;
+  }
+  if (isArray) {
     JS::Rooted<JSObject*> array(aCx, &val.toObject());
     uint32_t arrayLength;
     if (NS_WARN_IF(!JS_GetArrayLength(aCx, array, &arrayLength))) {
@@ -1104,7 +1109,7 @@ IDBObjectStore::DeserializeValue(JSContext* aCx,
     nullptr
   };
 
-  // FIXME: Consider to use StructuredCloneHelper here and in other
+  // FIXME: Consider to use StructuredCloneHolder here and in other
   //        deserializing methods.
   if (!JS_ReadStructuredClone(aCx, data, dataLen, JS_STRUCTURED_CLONE_VERSION,
                               aValue, &callbacks, &aCloneReadInfo)) {

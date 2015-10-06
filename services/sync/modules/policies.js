@@ -61,20 +61,40 @@ SyncScheduler.prototype = {
   },
 
   // nextSync is in milliseconds, but prefs can't hold that much
-  get nextSync() Svc.Prefs.get("nextSync", 0) * 1000,
-  set nextSync(value) Svc.Prefs.set("nextSync", Math.floor(value / 1000)),
+  get nextSync() {
+    return Svc.Prefs.get("nextSync", 0) * 1000;
+  },
+  set nextSync(value) {
+    Svc.Prefs.set("nextSync", Math.floor(value / 1000));
+  },
 
-  get syncInterval() Svc.Prefs.get("syncInterval", this.singleDeviceInterval),
-  set syncInterval(value) Svc.Prefs.set("syncInterval", value),
+  get syncInterval() {
+    return Svc.Prefs.get("syncInterval", this.singleDeviceInterval);
+  },
+  set syncInterval(value) {
+    Svc.Prefs.set("syncInterval", value);
+  },
 
-  get syncThreshold() Svc.Prefs.get("syncThreshold", SINGLE_USER_THRESHOLD),
-  set syncThreshold(value) Svc.Prefs.set("syncThreshold", value),
+  get syncThreshold() {
+    return Svc.Prefs.get("syncThreshold", SINGLE_USER_THRESHOLD);
+  },
+  set syncThreshold(value) {
+    Svc.Prefs.set("syncThreshold", value);
+  },
 
-  get globalScore() Svc.Prefs.get("globalScore", 0),
-  set globalScore(value) Svc.Prefs.set("globalScore", value),
+  get globalScore() {
+    return Svc.Prefs.get("globalScore", 0);
+  },
+  set globalScore(value) {
+    Svc.Prefs.set("globalScore", value);
+  },
 
-  get numClients() Svc.Prefs.get("numClients", 0),
-  set numClients(value) Svc.Prefs.set("numClients", value),
+  get numClients() {
+    return Svc.Prefs.get("numClients", 0);
+  },
+  set numClients(value) {
+    Svc.Prefs.set("numClients", value);
+  },
 
   init: function init() {
     this._log.level = Log.Level[Svc.Prefs.get("log.logger.service.main")];
@@ -596,10 +616,13 @@ ErrorHandler.prototype = {
         let exception = subject;  // exception thrown by engine's sync() method
         let engine_name = data;   // engine name that threw the exception
 
-        this.checkServerError(exception);
+        this.checkServerError(exception, "engines/" + engine_name);
 
         Status.engines = [engine_name, exception.failureCode || ENGINE_UNKNOWN_FAIL];
         this._log.debug(engine_name + " failed: " + Utils.exceptionStr(exception));
+
+        Services.telemetry.getKeyedHistogramById("WEAVE_ENGINE_SYNC_ERRORS")
+                          .add(engine_name);
         break;
       case "weave:service:login:error":
         this._log.error("Sync encountered a login error");
@@ -846,7 +869,7 @@ ErrorHandler.prototype = {
    *
    * This method also looks for "side-channel" warnings.
    */
-  checkServerError: function (resp) {
+  checkServerError: function (resp, cause) {
     switch (resp.status) {
       case 200:
       case 404:
@@ -876,6 +899,9 @@ ErrorHandler.prototype = {
         break;
 
       case 401:
+        Services.telemetry.getKeyedHistogramById(
+          "WEAVE_STORAGE_AUTH_ERRORS").add(cause);
+
         this.service.logout();
         this._log.info("Got 401 response; resetting clusterURL.");
         Svc.Prefs.reset("clusterURL");

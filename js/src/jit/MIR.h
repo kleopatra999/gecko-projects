@@ -27,6 +27,7 @@
 #include "jit/TypePolicy.h"
 #include "vm/ArrayObject.h"
 #include "vm/ScopeObject.h"
+#include "vm/SharedMem.h"
 #include "vm/TypedArrayCommon.h"
 #include "vm/UnboxedObject.h"
 
@@ -795,7 +796,7 @@ class MDefinition : public MNode
     MIR_OPCODE_LIST(OPCODE_CASTS)
 #   undef OPCODE_CASTS
 
-    bool isConstantValue() {
+    bool isConstantValue() const {
         return isConstant() || (isBox() && getOperand(0)->isConstant());
     }
     const Value& constantValue();
@@ -1853,6 +1854,7 @@ class MSimdGeneralShuffle :
 
         setResultType(type);
         specialization_ = type;
+        setGuard(); // throws if lane index is out of bounds
         setMovable();
     }
 
@@ -2904,8 +2906,8 @@ class MNewArray
     public NoTypePolicy::Data
 {
   private:
-    // Number of space to allocate for the array.
-    uint32_t count_;
+    // Number of elements to allocate for the array.
+    uint32_t length_;
 
     // Heap where the array should be allocated.
     gc::InitialHeap initialHeap_;
@@ -2915,21 +2917,21 @@ class MNewArray
 
     jsbytecode* pc_;
 
-    MNewArray(CompilerConstraintList* constraints, uint32_t count, MConstant* templateConst,
+    MNewArray(CompilerConstraintList* constraints, uint32_t length, MConstant* templateConst,
               gc::InitialHeap initialHeap, jsbytecode* pc);
 
   public:
     INSTRUCTION_HEADER(NewArray)
 
     static MNewArray* New(TempAllocator& alloc, CompilerConstraintList* constraints,
-                          uint32_t count, MConstant* templateConst,
+                          uint32_t length, MConstant* templateConst,
                           gc::InitialHeap initialHeap, jsbytecode* pc)
     {
-        return new(alloc) MNewArray(constraints, count, templateConst, initialHeap, pc);
+        return new(alloc) MNewArray(constraints, length, templateConst, initialHeap, pc);
     }
 
-    uint32_t count() const {
-        return count_;
+    uint32_t length() const {
+        return length_;
     }
 
     JSObject* templateObject() const {
@@ -7772,13 +7774,13 @@ class MElements
     ALLOW_CLONE(MElements)
 };
 
-// A constant value for some object's array elements or typed array elements.
+// A constant value for some object's typed array elements.
 class MConstantElements : public MNullaryInstruction
 {
-    void* value_;
+    SharedMem<void*> value_;
 
   protected:
-    explicit MConstantElements(void* v)
+    explicit MConstantElements(SharedMem<void*> v)
       : value_(v)
     {
         setResultType(MIRType_Elements);
@@ -7787,18 +7789,18 @@ class MConstantElements : public MNullaryInstruction
 
   public:
     INSTRUCTION_HEADER(ConstantElements)
-    static MConstantElements* New(TempAllocator& alloc, void* v) {
+    static MConstantElements* New(TempAllocator& alloc, SharedMem<void*> v) {
         return new(alloc) MConstantElements(v);
     }
 
-    void* value() const {
+    SharedMem<void*> value() const {
         return value_;
     }
 
     void printOpcode(GenericPrinter& out) const override;
 
     HashNumber valueHash() const override {
-        return (HashNumber)(size_t) value_;
+        return (HashNumber)(size_t) value_.asValue();
     }
 
     bool congruentTo(const MDefinition* ins) const override {
@@ -9647,7 +9649,7 @@ class MLoadTypedArrayElementStatic
     Scalar::Type accessType() const {
         return AnyTypedArrayType(someTypedArray_);
     }
-    void* base() const;
+    SharedMem<void*> base() const;
     size_t length() const;
 
     MDefinition* ptr() const { return getOperand(0); }
@@ -9911,7 +9913,7 @@ class MStoreTypedArrayElementStatic :
         return writeType();
     }
 
-    void* base() const;
+    SharedMem<void*> base() const;
     size_t length() const;
 
     MDefinition* ptr() const { return getOperand(0); }
@@ -12370,7 +12372,7 @@ class MFilterTypeSet
     void computeRange(TempAllocator& alloc) override;
 
     bool isFloat32Commutative() const override { return true; }
-    bool canProduceFloat32() const override { return input()->canProduceFloat32(); }
+    bool canProduceFloat32() const override;
     bool canConsumeFloat32(MUse* operand) const override;
     void trySpecializeFloat32(TempAllocator& alloc) override;
 };
@@ -12426,6 +12428,12 @@ class MTypeBarrier
             return false;
         if (input()->type() == MIRType_Value)
             return false;
+        if (input()->type() == MIRType_ObjectOrNull) {
+            // The ObjectOrNull optimization is only performed when the
+            // barrier's type is MIRType_Null.
+            MOZ_ASSERT(type == MIRType_Null);
+            return false;
+        }
         return input()->type() != type;
     }
 

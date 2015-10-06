@@ -529,10 +529,10 @@ class TypedObject : public JSObject
 
     static bool obj_hasProperty(JSContext* cx, HandleObject obj, HandleId id, bool* foundp);
 
-    static bool obj_getProperty(JSContext* cx, HandleObject obj, HandleObject receiver,
+    static bool obj_getProperty(JSContext* cx, HandleObject obj, HandleValue receiver,
                                 HandleId id, MutableHandleValue vp);
 
-    static bool obj_getElement(JSContext* cx, HandleObject obj, HandleObject receiver,
+    static bool obj_getElement(JSContext* cx, HandleObject obj, HandleValue receiver,
                                uint32_t index, MutableHandleValue vp);
 
     static bool obj_setProperty(JSContext* cx, HandleObject obj, HandleId id, HandleValue v,
@@ -593,7 +593,7 @@ class TypedObject : public JSObject
     static bool GetBuffer(JSContext* cx, unsigned argc, Value* vp);
     static bool GetByteOffset(JSContext* cx, unsigned argc, Value* vp);
 
-    Shape** addressOfShapeFromGC() { return shape_.unsafeGet(); }
+    Shape** addressOfShapeFromGC() { return shape_.unsafeUnbarrieredForTracing(); }
 };
 
 typedef Handle<TypedObject*> HandleTypedObject;

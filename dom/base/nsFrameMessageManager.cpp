@@ -518,16 +518,9 @@ nsFrameMessageManager::LoadScript(const nsAString& aURL,
                                   bool aRunInGlobalScope)
 {
   if (aAllowDelayedLoad) {
-    if (IsGlobal() || IsBroadcaster()) {
-      // Cache for future windows or frames
-      mPendingScripts.AppendElement(aURL);
-      mPendingScriptsGlobalStates.AppendElement(aRunInGlobalScope);
-    } else if (!mCallback) {
-      // We're frame message manager, which isn't connected yet.
-      mPendingScripts.AppendElement(aURL);
-      mPendingScriptsGlobalStates.AppendElement(aRunInGlobalScope);
-      return NS_OK;
-    }
+    // Cache for future windows or frames
+    mPendingScripts.AppendElement(aURL);
+    mPendingScriptsGlobalStates.AppendElement(aRunInGlobalScope);
   }
 
   if (mCallback) {
@@ -1327,6 +1320,13 @@ nsFrameMessageManager::LoadPendingScripts(nsFrameMessageManager* aManager,
 }
 
 void
+nsFrameMessageManager::LoadPendingScripts()
+{
+  nsRefPtr<nsFrameMessageManager> kungfuDeathGrip = this;
+  LoadPendingScripts(this, this);
+}
+
+void
 nsFrameMessageManager::SetCallback(MessageManagerCallback* aCallback)
 {
   MOZ_ASSERT(!mIsBroadcaster || !mCallback,
@@ -1806,25 +1806,21 @@ nsMessageManagerScriptExecutor::TryCacheLoadAndCompileScript(
       if (!JS::Compile(cx, options, srcBuf, &script)) {
         return;
       }
-    } else {
-      // We're going to run these against some non-global scope.
-      if (!JS::CompileForNonSyntacticScope(cx, options, srcBuf, &script)) {
-        return;
-      }
+    // We're going to run these against some non-global scope.
+    } else if (!JS::CompileForNonSyntacticScope(cx, options, srcBuf, &script)) {
+      return;
     }
 
+    MOZ_ASSERT(script);
     aScriptp.set(script);
 
     nsAutoCString scheme;
     uri->GetScheme(scheme);
     // We don't cache data: scripts!
     if (aShouldCache && !scheme.EqualsLiteral("data")) {
-      nsMessageManagerScriptHolder* holder;
-
       // Root the object also for caching.
-      if (script) {
-        holder = new nsMessageManagerScriptHolder(cx, script, aRunInGlobalScope);
-      }
+      nsMessageManagerScriptHolder* holder =
+        new nsMessageManagerScriptHolder(cx, script, aRunInGlobalScope);
       sCachedScripts->Put(aURL, holder);
     }
   }

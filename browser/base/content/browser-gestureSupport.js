@@ -13,7 +13,7 @@
 // chrome-only, we must listen for the simple gesture events during
 // the capturing phase and call stopPropagation on every event.
 
-let gGestureSupport = {
+var gGestureSupport = {
   _currentRotation: 0,
   _lastRotateDelta: 0,
   _rotateMomentumThreshold: .75,
@@ -54,7 +54,7 @@ let gGestureSupport = {
     }
 
     // Create a preference object with some defaults
-    let def = function(aThreshold, aLatched)
+    let def = (aThreshold, aLatched) =>
       ({ threshold: aThreshold, latched: !!aLatched });
 
     switch (aEvent.type) {
@@ -571,7 +571,7 @@ let gGestureSupport = {
 };
 
 // History Swipe Animation Support (bug 678392)
-let gHistorySwipeAnimation = {
+var gHistorySwipeAnimation = {
 
   active: false,
   isLTR: false,

@@ -393,13 +393,13 @@ var FullScreen = {
         textElem.setAttribute("hidden", true);
       } else {
         textElem.removeAttribute("hidden");
-        let hostLabel = document.getElementById("fullscreen-domain");
+        let hostElem = document.getElementById("fullscreen-domain");
         // Document's principal's URI has a host. Display a warning including it.
         let utils = {};
         Cu.import("resource://gre/modules/DownloadUtils.jsm", utils);
-        hostLabel.value = utils.DownloadUtils.getURIHost(uri.spec)[0];
+        hostElem.textContent = utils.DownloadUtils.getURIHost(uri.spec)[0];
       }
-      this._element.className = gIdentityHandler.getMode();
+      this._element.className = gIdentityHandler.fullscreenWarningClassName;
 
       // User should be allowed to explicitly disable
       // the prompt if they really want.

@@ -27,6 +27,8 @@
 #include "nsNSSShutDown.h"
 #include "nsXULAppAPI.h"
 
+#include "mozilla/Telemetry.h"
+
 //These defines are taken from the PKCS#11 spec
 #define CKM_RSA_PKCS_KEY_PAIR_GEN     0x00000000
 #define CKM_DH_PKCS_KEY_PAIR_GEN      0x00000020
@@ -464,6 +466,55 @@ loser:
       return rv;
 }
 
+
+void
+GatherKeygenTelemetry(uint32_t keyGenMechanism, int keysize, char* curve)
+{
+  if (keyGenMechanism == CKM_RSA_PKCS_KEY_PAIR_GEN) {
+    if (keysize > 8196 || keysize < 0) {
+      return;
+    }
+
+    nsCString telemetryValue("rsa");
+    telemetryValue.AppendPrintf("%d", keysize);
+    mozilla::Telemetry::Accumulate(
+        mozilla::Telemetry::KEYGEN_GENERATED_KEY_TYPE, telemetryValue);
+  } else if (keyGenMechanism == CKM_EC_KEY_PAIR_GEN) {
+    nsCString secp384r1 = NS_LITERAL_CSTRING("secp384r1");
+    nsCString secp256r1 = NS_LITERAL_CSTRING("secp256r1");
+
+    SECKEYECParams* decoded = decode_ec_params(curve);
+    if (!decoded) {
+      switch (keysize) {
+        case 2048:
+          mozilla::Telemetry::Accumulate(
+              mozilla::Telemetry::KEYGEN_GENERATED_KEY_TYPE, secp384r1);
+          break;
+        case 1024:
+        case 512:
+          mozilla::Telemetry::Accumulate(
+              mozilla::Telemetry::KEYGEN_GENERATED_KEY_TYPE, secp256r1);
+          break;
+      }
+    } else {
+      SECITEM_FreeItem(decoded, true);
+      if (secp384r1.EqualsIgnoreCase(curve, secp384r1.Length())) {
+          mozilla::Telemetry::Accumulate(
+              mozilla::Telemetry::KEYGEN_GENERATED_KEY_TYPE, secp384r1);
+      } else if (secp256r1.EqualsIgnoreCase(curve, secp256r1.Length())) {
+          mozilla::Telemetry::Accumulate(
+              mozilla::Telemetry::KEYGEN_GENERATED_KEY_TYPE, secp256r1);
+      } else {
+        mozilla::Telemetry::Accumulate(
+            mozilla::Telemetry::KEYGEN_GENERATED_KEY_TYPE, NS_LITERAL_CSTRING("other_ec"));
+      }
+    }
+  } else if (keyGenMechanism == CKM_DSA_KEY_PAIR_GEN) {
+    MOZ_CRASH("DSA key generation is currently unimplemented");
+    return;
+  }
+}
+
 nsresult
 nsKeygenFormProcessor::GetPublicKey(const nsAString& aValue,
                                     const nsAString& aChallenge,
@@ -481,7 +532,7 @@ nsKeygenFormProcessor::GetPublicKey(const nsAString& aValue,
     PK11RSAGenParams rsaParams;
     SECOidTag algTag;
     int keysize = 0;
-    void *params;
+    void *params = nullptr;
     SECKEYPrivateKey *privateKey = nullptr;
     SECKEYPublicKey *publicKey = nullptr;
     CERTSubjectPublicKeyInfo *spkInfo = nullptr;
@@ -733,6 +784,8 @@ nsKeygenFormProcessor::GetPublicKey(const nsAString& aValue,
     free(keystring);
 
     rv = NS_OK;
+
+    GatherKeygenTelemetry(keyGenMechanism, keysize, keyparamsString);
 loser:
     if ( sec_rv != SECSuccess ) {
         if ( privateKey ) {
@@ -765,6 +818,12 @@ loser:
     }
     if (pkac.challenge.data) {
         free(pkac.challenge.data);
+    }
+    // If params is non-null and doesn't point to rsaParams, it was allocated
+    // in decode_ec_params. We have to free this memory.
+    if (params && params != &rsaParams) {
+        SECITEM_FreeItem(static_cast<SECItem*>(params), true);
+        params = nullptr;
     }
     return rv;
 }

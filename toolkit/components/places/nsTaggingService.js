@@ -522,7 +522,9 @@ TagAutoCompleteResult.prototype = {
     return this._results.length;
   },
 
-  get typeAheadResult() false,
+  get typeAheadResult() {
+    return false;
+  },
 
   /**
    * Get the value of the result at the given index
@@ -703,5 +705,5 @@ TagAutoCompleteSearch.prototype = {
   ])
 };
 
-let component = [TaggingService, TagAutoCompleteSearch];
+var component = [TaggingService, TagAutoCompleteSearch];
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory(component);

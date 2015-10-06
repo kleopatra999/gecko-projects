@@ -4,10 +4,10 @@
 
 "use strict";
 
-let Cu = Components.utils;
-let Ci = Components.interfaces;
-let Cc = Components.classes;
-let Cr = Components.results;
+var Cu = Components.utils;
+var Ci = Components.interfaces;
+var Cc = Components.classes;
+var Cr = Components.results;
 
 /* BrowserElementParent injects script to listen for certain events in the
  * child.  We then listen to messages from the child script and take
@@ -77,8 +77,6 @@ function BrowserElementParent() {
   Services.obs.addObserver(this, 'oop-frameloader-crashed', /* ownsWeak = */ true);
   Services.obs.addObserver(this, 'copypaste-docommand', /* ownsWeak = */ true);
   Services.obs.addObserver(this, 'ask-children-to-execute-copypaste-command', /* ownsWeak = */ true);
-  Services.obs.addObserver(this, 'frameloader-message-manager-will-change', /* ownsWeak = */ true);
-  Services.obs.addObserver(this, 'frameloader-message-manager-changed', /* ownsWeak = */ true);
 }
 
 BrowserElementParent.prototype = {
@@ -210,7 +208,8 @@ BrowserElementParent.prototype = {
       "got-set-audio-channel-volume": this._gotDOMRequestResult,
       "got-audio-channel-muted": this._gotDOMRequestResult,
       "got-set-audio-channel-muted": this._gotDOMRequestResult,
-      "got-is-audio-channel-active": this._gotDOMRequestResult
+      "got-is-audio-channel-active": this._gotDOMRequestResult,
+      "got-structured-data": this._gotDOMRequestResult
     };
 
     let mmSecuritySensitiveCalls = {
@@ -459,6 +458,8 @@ BrowserElementParent.prototype = {
   //  - caretVisible: Indicate the caret visiibility.
   //  - selectionVisible: Indicate current selection is visible or not.
   //  - selectionEditable: Indicate current selection is editable or not.
+  //  - selectedTextContent: Contains current selected text content, which is
+  //                         equivalent to the string returned by Selection.toString().
   _handleCaretStateChanged: function(data) {
     let evt = this._createEvent('caretstatechanged', data.json,
                                 /* cancelable = */ false);
@@ -838,15 +839,12 @@ BrowserElementParent.prototype = {
         debug('Malformed referrer -- ' + e);
       }
 
-      // TODO Bug 1165466: use originAttributes from nsILoadContext.
-      let attrs = {appId: this._frameLoader.loadContext.appId,
-                   inBrowser: this._frameLoader.loadContext.isInBrowserElement};
       // This simply returns null if there is no principal available
       // for the requested uri. This is an acceptable fallback when
       // calling newChannelFromURI2.
       principal =
         Services.scriptSecurityManager.createCodebasePrincipal(
-          referrer, attrs);
+          referrer, this._frameLoader.loadContext.originAttributes);
     }
 
     debug('Using principal? ' + !!principal);
@@ -1033,6 +1031,8 @@ BrowserElementParent.prototype = {
                                 {audioChannel: aAudioChannel});
   },
 
+  getStructuredData: defineDOMRequestMethod('get-structured-data'),
+
   /**
    * Called when the visibility of the window which owns this iframe changes.
    */
@@ -1107,16 +1107,6 @@ BrowserElementParent.prototype = {
     case 'ask-children-to-execute-copypaste-command':
       if (this._isAlive() && this._frameElement == subject.wrappedJSObject) {
         this._sendAsyncMsg('copypaste-do-command', { command: data });
-      }
-      break;
-    case 'frameloader-message-manager-will-change':
-      if (this._isAlive() && subject == this._frameLoader) {
-        this._removeMessageListener();
-      }
-      break;
-    case 'frameloader-message-manager-changed':
-      if (this._isAlive() && subject == this._frameLoader) {
-        this._setupMessageListener();
       }
       break;
     default:

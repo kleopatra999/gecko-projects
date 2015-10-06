@@ -28,6 +28,7 @@
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
+#include "nsIDocument.h"
 #include "nsIGlobalObject.h"
 #include "nsIXPConnect.h"
 #include "nsJSUtils.h"
@@ -254,31 +255,49 @@ UnwrapObject(JSObject* obj, U& value)
 }
 
 inline bool
-IsNotDateOrRegExp(JSContext* cx, JS::Handle<JSObject*> obj)
+IsNotDateOrRegExp(JSContext* cx, JS::Handle<JSObject*> obj,
+                  bool* notDateOrRegExp)
 {
   MOZ_ASSERT(obj);
-  return !JS_ObjectIsDate(cx, obj) && !JS_ObjectIsRegExp(cx, obj);
+
+  js::ESClassValue cls;
+  if (!js::GetBuiltinClass(cx, obj, &cls)) {
+    return false;
+  }
+
+  *notDateOrRegExp = cls != js::ESClass_Date && cls != js::ESClass_RegExp;
+  return true;
 }
 
 MOZ_ALWAYS_INLINE bool
 IsObjectValueConvertibleToDictionary(JSContext* cx,
-                                     JS::Handle<JS::Value> objVal)
+                                     JS::Handle<JS::Value> objVal,
+                                     bool* convertible)
 {
   JS::Rooted<JSObject*> obj(cx, &objVal.toObject());
-  return IsNotDateOrRegExp(cx, obj);
+  return IsNotDateOrRegExp(cx, obj, convertible);
 }
 
 MOZ_ALWAYS_INLINE bool
-IsConvertibleToDictionary(JSContext* cx, JS::Handle<JS::Value> val)
+IsConvertibleToDictionary(JSContext* cx, JS::Handle<JS::Value> val,
+                          bool* convertible)
 {
-  return val.isNullOrUndefined() ||
-    (val.isObject() && IsObjectValueConvertibleToDictionary(cx, val));
+  if (val.isNullOrUndefined()) {
+    *convertible = true;
+    return true;
+  }
+  if (!val.isObject()) {
+    *convertible = false;
+    return true;
+  }
+  return IsObjectValueConvertibleToDictionary(cx, val, convertible);
 }
 
 MOZ_ALWAYS_INLINE bool
-IsConvertibleToCallbackInterface(JSContext* cx, JS::Handle<JSObject*> obj)
+IsConvertibleToCallbackInterface(JSContext* cx, JS::Handle<JSObject*> obj,
+                                 bool* convertible)
 {
-  return IsNotDateOrRegExp(cx, obj);
+  return IsNotDateOrRegExp(cx, obj, convertible);
 }
 
 // The items in the protoAndIfaceCache are indexed by the prototypes::id::ID,
@@ -1847,8 +1866,8 @@ ThrowConstructorWithoutNew(JSContext* cx, const char* name);
 
 bool
 GetPropertyOnPrototype(JSContext* cx, JS::Handle<JSObject*> proxy,
-                       JS::Handle<jsid> id, bool* found,
-                       JS::MutableHandle<JS::Value> vp);
+                       JS::Handle<JS::Value> receiver, JS::Handle<jsid> id,
+                       bool* found, JS::MutableHandle<JS::Value> vp);
 
 //
 bool
@@ -3323,6 +3342,11 @@ GetDesiredProto(JSContext* aCx, const JS::CallArgs& aCallArgs,
 void
 SetDocumentAndPageUseCounter(JSContext* aCx, JSObject* aObject,
                              UseCounter aUseCounter);
+
+// Warnings
+void
+DeprecationWarning(JSContext* aCx, JSObject* aObject,
+                   nsIDocument::DeprecatedOperations aOperation);
 
 } // namespace dom
 } // namespace mozilla

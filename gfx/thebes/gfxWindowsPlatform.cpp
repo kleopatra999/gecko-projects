@@ -194,7 +194,7 @@ public:
         IDXGIAdapter *DXGIAdapter;
 
         HMODULE gdi32Handle;
-        PFND3DKMTQS queryD3DKMTStatistics;
+        PFND3DKMTQS queryD3DKMTStatistics = nullptr;
 
         // GPU memory reporting is not available before Windows 7
         if (!IsWin7OrLater())
@@ -512,12 +512,14 @@ gfxWindowsPlatform::HandleDeviceReset()
   return true;
 }
 
+static const BackendType SOFTWARE_BACKEND = BackendType::CAIRO;
+
 void
 gfxWindowsPlatform::UpdateBackendPrefs()
 {
-  uint32_t canvasMask = BackendTypeBit(BackendType::CAIRO);
-  uint32_t contentMask = BackendTypeBit(BackendType::CAIRO);
-  BackendType defaultBackend = BackendType::CAIRO;
+  uint32_t canvasMask = BackendTypeBit(SOFTWARE_BACKEND);
+  uint32_t contentMask = BackendTypeBit(SOFTWARE_BACKEND);
+  BackendType defaultBackend = SOFTWARE_BACKEND;
   if (GetD2DStatus() == FeatureStatus::Available) {
     mRenderMode = RENDER_DIRECT2D;
     canvasMask |= BackendTypeBit(BackendType::DIRECT2D);
@@ -548,6 +550,17 @@ gfxWindowsPlatform::UpdateRenderMode()
     mScreenReferenceDrawTarget =
       CreateOffscreenContentDrawTarget(IntSize(1, 1), SurfaceFormat::B8G8R8A8);
   }
+}
+
+mozilla::gfx::BackendType
+gfxWindowsPlatform::GetContentBackendFor(mozilla::layers::LayersBackend aLayers)
+{
+  if (aLayers == LayersBackend::LAYERS_D3D11) {
+    return gfxPlatform::GetDefaultContentBackend();
+  }
+
+  // If we're not accelerated with D3D11, never use D2D.
+  return SOFTWARE_BACKEND;
 }
 
 #ifdef CAIRO_HAS_D2D_SURFACE
@@ -598,6 +611,10 @@ gfxWindowsPlatform::CreateDevice(nsRefPtr<IDXGIAdapter1> &adapter1,
 void
 gfxWindowsPlatform::VerifyD2DDevice(bool aAttemptForce)
 {
+  if (!Factory::SupportsD2D1() && !gfxPrefs::Direct2DAllow1_0()) {
+    return;
+  }
+
 #ifdef CAIRO_HAS_D2D_SURFACE
     if (mD3D10Device) {
         if (SUCCEEDED(mD3D10Device->GetDeviceRemovedReason())) {
@@ -1592,26 +1609,6 @@ gfxWindowsPlatform::IsOptimus()
     return knowIsOptimus;
 }
 
-int
-gfxWindowsPlatform::GetScreenDepth() const
-{
-    // if the system doesn't have all displays with the same
-    // pixel format, just return 24 and move on with life.
-    if (!GetSystemMetrics(SM_SAMEDISPLAYFORMAT))
-        return 24;
-
-    HDC hdc = GetDC(nullptr);
-    if (!hdc)
-        return 24;
-
-    int depth = GetDeviceCaps(hdc, BITSPIXEL) *
-                GetDeviceCaps(hdc, PLANES);
-
-    ReleaseDC(nullptr, hdc);
-
-    return depth;
-}
-
 IDXGIAdapter1*
 gfxWindowsPlatform::GetDXGIAdapter()
 {
@@ -1994,6 +1991,25 @@ gfxWindowsPlatform::CheckD3D11Support(bool* aCanUseHardware)
 // be used within InitializeD3D11.
 decltype(D3D11CreateDevice)* sD3D11CreateDeviceFn = nullptr;
 
+bool
+gfxWindowsPlatform::AttemptD3D11DeviceCreationHelper(
+  IDXGIAdapter1* aAdapter, HRESULT& aResOut)
+{
+  MOZ_SEH_TRY {
+    aResOut =
+      sD3D11CreateDeviceFn(
+        aAdapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+        // Use D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS
+        // to prevent bug 1092260. IE 11 also uses this flag.
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
+        mFeatureLevels.Elements(), mFeatureLevels.Length(),
+        D3D11_SDK_VERSION, byRef(mD3D11Device), nullptr, nullptr);
+  } MOZ_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+  return true;
+}
+
 FeatureStatus
 gfxWindowsPlatform::AttemptD3D11DeviceCreation()
 {
@@ -2002,17 +2018,8 @@ gfxWindowsPlatform::AttemptD3D11DeviceCreation()
     return FeatureStatus::Unavailable;
   }
 
-  HRESULT hr = E_INVALIDARG;
-  MOZ_SEH_TRY {
-    hr =
-      sD3D11CreateDeviceFn(adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
-                           // Use
-                           // D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS
-                           // to prevent bug 1092260. IE 11 also uses this flag.
-                           D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
-                           mFeatureLevels.Elements(), mFeatureLevels.Length(),
-                           D3D11_SDK_VERSION, byRef(mD3D11Device), nullptr, nullptr);
-  } MOZ_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+  HRESULT hr;
+  if (!AttemptD3D11DeviceCreationHelper(adapter, hr)) {
     gfxCriticalError() << "Crash during D3D11 device creation";
     return FeatureStatus::Crashed;
   }
@@ -2043,31 +2050,42 @@ gfxWindowsPlatform::AttemptD3D11DeviceCreation()
   return FeatureStatus::Available;
 }
 
+bool
+gfxWindowsPlatform::AttemptWARPDeviceCreationHelper(
+  ScopedGfxFeatureReporter& aReporterWARP, HRESULT& aResOut)
+{
+  MOZ_SEH_TRY {
+    aResOut =
+      sD3D11CreateDeviceFn(
+        nullptr, D3D_DRIVER_TYPE_WARP, nullptr,
+        // Use D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS
+        // to prevent bug 1092260. IE 11 also uses this flag.
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        mFeatureLevels.Elements(), mFeatureLevels.Length(),
+        D3D11_SDK_VERSION, byRef(mD3D11Device), nullptr, nullptr);
+
+    aReporterWARP.SetSuccessful();
+  } MOZ_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+  return true;
+}
+
 FeatureStatus
 gfxWindowsPlatform::AttemptWARPDeviceCreation()
 {
   ScopedGfxFeatureReporter reporterWARP("D3D11-WARP", gfxPrefs::LayersD3D11ForceWARP());
 
-  MOZ_SEH_TRY {
-    HRESULT hr =
-      sD3D11CreateDeviceFn(nullptr, D3D_DRIVER_TYPE_WARP, nullptr,
-                           // Use
-                           // D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS
-                           // to prevent bug 1092260. IE 11 also uses this flag.
-                           D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                           mFeatureLevels.Elements(), mFeatureLevels.Length(),
-                           D3D11_SDK_VERSION, byRef(mD3D11Device), nullptr, nullptr);
-
-    if (FAILED(hr)) {
-      // This should always succeed... in theory.
-      gfxCriticalError() << "Failed to initialize WARP D3D11 device! " << hexa(hr);
-      return FeatureStatus::Failed;
-    }
-
-    reporterWARP.SetSuccessful();
-  } MOZ_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+  HRESULT hr;
+  if (!AttemptWARPDeviceCreationHelper(reporterWARP, hr)) {
     gfxCriticalError() << "Exception occurred initializing WARP D3D11 device!";
     return FeatureStatus::Crashed;
+  }
+
+  if (FAILED(hr)) {
+    // This should always succeed... in theory.
+    gfxCriticalError() << "Failed to initialize WARP D3D11 device! " << hexa(hr);
+    return FeatureStatus::Failed;
   }
 
   // Only test for texture sharing on Windows 8 since it puts the device into
@@ -2103,6 +2121,24 @@ gfxWindowsPlatform::ContentAdapterIsParentAdapter(ID3D11Device* device)
   return true;
 }
 
+bool
+gfxWindowsPlatform::AttemptD3D11ContentDeviceCreationHelper(
+  IDXGIAdapter1* aAdapter, HRESULT& aResOut)
+{
+  MOZ_SEH_TRY {
+    aResOut =
+      sD3D11CreateDeviceFn(
+        aAdapter, mIsWARP ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_UNKNOWN,
+        nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        mFeatureLevels.Elements(), mFeatureLevels.Length(),
+        D3D11_SDK_VERSION, byRef(mD3D11ContentDevice), nullptr, nullptr);
+
+  } MOZ_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+  return true;
+}
+
 FeatureStatus
 gfxWindowsPlatform::AttemptD3D11ContentDeviceCreation()
 {
@@ -2114,16 +2150,8 @@ gfxWindowsPlatform::AttemptD3D11ContentDeviceCreation()
     }
   }
 
-  HRESULT hr = E_INVALIDARG;
-  MOZ_SEH_TRY {
-    hr =
-      sD3D11CreateDeviceFn(adapter,
-                           mIsWARP ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_UNKNOWN,
-                           nullptr,
-                           D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                           mFeatureLevels.Elements(), mFeatureLevels.Length(),
-                           D3D11_SDK_VERSION, byRef(mD3D11ContentDevice), nullptr, nullptr);
-  } MOZ_SEH_EXCEPT (EXCEPTION_EXECUTE_HANDLER) {
+  HRESULT hr;
+  if (!AttemptD3D11ContentDeviceCreationHelper(adapter, hr)) {
     return FeatureStatus::Crashed;
   }
 
@@ -2220,6 +2248,15 @@ gfxWindowsPlatform::InitializeDevices()
   InitializeD3D11();
   if (mD3D11Status == FeatureStatus::Available) {
     InitializeD2D();
+  }
+
+  // Usually we want D2D in order to use DWrite, but if the users have it
+  // forced, we'll let them have it, as unsupported configuration.
+  if (gfxPrefs::DirectWriteFontRenderingForceEnabled() &&
+      IsFeatureStatusFailure(mD2DStatus) &&
+      !mDWriteFactory) {
+    gfxCriticalNote << "Attempting DWrite without D2D support";
+    InitDWriteSupport();
   }
 }
 
@@ -2399,6 +2436,12 @@ gfxWindowsPlatform::CheckD2DSupport()
   if (!IsVistaOrLater()) {
     return FeatureStatus::Unavailable;
   }
+
+  // Normally we don't use D2D content drawing when using WARP. However if
+  // WARP is force-enabled, we will let Direct2D use WARP as well.
+  if (mIsWARP && !gfxPrefs::LayersD3D11ForceWARP()) {
+    return FeatureStatus::Blocked;
+  }
   return FeatureStatus::Available;
 }
 
@@ -2427,6 +2470,7 @@ gfxWindowsPlatform::InitializeD2D()
   // Initialize D2D 1.0.
   VerifyD2DDevice(gfxPrefs::Direct2DForceEnabled());
   if (!mD3D10Device) {
+    mDWriteFactory = nullptr;
     mD2DStatus = FeatureStatus::Failed;
     return;
   }
@@ -2451,11 +2495,6 @@ gfxWindowsPlatform::CheckD2D1Support()
   }
   if (!gfxPrefs::Direct2DUse1_1()) {
     return FeatureStatus::Disabled;
-  }
-  // Normally we don't use D2D content drawing when using WARP. However if
-  // WARP is force-enabled, we will let Direct2D use WARP as well.
-  if (mIsWARP && !gfxPrefs::LayersD3D11ForceWARP()) {
-    return FeatureStatus::Blocked;
   }
   return FeatureStatus::Available;
 }
@@ -2482,26 +2521,31 @@ gfxWindowsPlatform::InitializeD2D1()
   d2d1_1.SetSuccessful();
 }
 
+bool
+gfxWindowsPlatform::CreateD3D11DecoderDeviceHelper(
+  IDXGIAdapter1* aAdapter, RefPtr<ID3D11Device>& aDevice, HRESULT& aResOut)
+{
+  MOZ_SEH_TRY{
+    aResOut =
+      sD3D11CreateDeviceFn(
+        aAdapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+        D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+        mFeatureLevels.Elements(), mFeatureLevels.Length(),
+        D3D11_SDK_VERSION, byRef(aDevice), nullptr, nullptr);
+
+  } MOZ_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+    return false;
+  }
+  return true;
+}
+
 already_AddRefed<ID3D11Device>
 gfxWindowsPlatform::CreateD3D11DecoderDevice()
 {
-  nsModuleHandle d3d11Module(LoadLibrarySystem32(L"d3d11.dll"));
-  decltype(D3D11CreateDevice)* d3d11CreateDevice = (decltype(D3D11CreateDevice)*)
-    GetProcAddress(d3d11Module, "D3D11CreateDevice");
-
-   if (!d3d11CreateDevice) {
+   if (!sD3D11CreateDeviceFn) {
     // We should just be on Windows Vista or XP in this case.
     return nullptr;
   }
-
-  nsTArray<D3D_FEATURE_LEVEL> featureLevels;
-  if (IsWin8OrLater()) {
-    featureLevels.AppendElement(D3D_FEATURE_LEVEL_11_1);
-  }
-  featureLevels.AppendElement(D3D_FEATURE_LEVEL_11_0);
-  featureLevels.AppendElement(D3D_FEATURE_LEVEL_10_1);
-  featureLevels.AppendElement(D3D_FEATURE_LEVEL_10_0);
-  featureLevels.AppendElement(D3D_FEATURE_LEVEL_9_3);
 
   RefPtr<IDXGIAdapter1> adapter = GetDXGIAdapter();
 
@@ -2509,16 +2553,10 @@ gfxWindowsPlatform::CreateD3D11DecoderDevice()
     return nullptr;
   }
 
-  HRESULT hr = E_INVALIDARG;
-
   RefPtr<ID3D11Device> device;
 
-  MOZ_SEH_TRY{
-    hr = d3d11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
-                           D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
-                           featureLevels.Elements(), featureLevels.Length(),
-                           D3D11_SDK_VERSION, byRef(device), nullptr, nullptr);
-  } MOZ_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+  HRESULT hr;
+  if (!CreateD3D11DecoderDeviceHelper(adapter, device, hr)) {
     return nullptr;
   }
 

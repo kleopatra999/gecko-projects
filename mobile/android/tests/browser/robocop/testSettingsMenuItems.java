@@ -10,6 +10,7 @@ import java.util.Map.Entry;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Actions;
 import org.mozilla.gecko.AppConstants;
+import org.mozilla.gecko.tabqueue.TabQueueHelper;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.InputOptionsUtils;
 
@@ -152,7 +153,6 @@ public class testSettingsMenuItems extends PixelTest {
         // Waiting for page title to appear to be sure that is fully loaded before opening the menu
         mAsserter.ok(mSolo.waitForText(mStringHelper.TITLE_PLACE_HOLDER), "about:home did not load",
                 mStringHelper.TITLE_PLACE_HOLDER);
-        verifyUrl(mStringHelper.ABOUT_HOME_URL);
 
         selectMenuItem(mStringHelper.SETTINGS_LABEL);
         mAsserter.ok(mSolo.waitForText(mStringHelper.SETTINGS_LABEL),
@@ -198,7 +198,7 @@ public class testSettingsMenuItems extends PixelTest {
         }
 
         // Tab Queue
-        if (AppConstants.MOZ_ANDROID_TAB_QUEUE) {
+        if (TabQueueHelper.TAB_QUEUE_ENABLED) {
             final String[] tabQueue = { mStringHelper.TAB_QUEUE_LABEL, mStringHelper.TAB_QUEUE_SUMMARY };
             settingsMap.get(PATH_CUSTOMIZE).add(tabQueue);
         }

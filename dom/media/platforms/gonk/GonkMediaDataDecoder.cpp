@@ -12,8 +12,8 @@
 #include <android/log.h>
 #define GMDD_LOG(...) __android_log_print(ANDROID_LOG_DEBUG, "GonkMediaDataDecoder", __VA_ARGS__)
 
-PRLogModuleInfo* GetDemuxerLog();
-#define LOG(...) MOZ_LOG(GetDemuxerLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
+extern PRLogModuleInfo* GetPDMLog();
+#define LOG(...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 
 using namespace android;
 
@@ -61,7 +61,12 @@ GonkMediaDataDecoder::Init()
 nsresult
 GonkMediaDataDecoder::Shutdown()
 {
-  return mManager->Shutdown();
+  nsresult rv = mManager->Shutdown();
+
+  // Because codec allocated runnable and init promise is at reader TaskQueue,
+  // so manager needs to be destroyed at reader TaskQueue to prevent racing.
+  mManager = nullptr;
+  return rv;
 }
 
 // Inserts data into the decoder's pipeline.

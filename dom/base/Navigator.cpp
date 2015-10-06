@@ -43,6 +43,7 @@
 #include "mozilla/dom/Permissions.h"
 #include "mozilla/dom/Presentation.h"
 #include "mozilla/dom/ServiceWorkerContainer.h"
+#include "mozilla/dom/TCPSocket.h"
 #include "mozilla/dom/Telephony.h"
 #include "mozilla/dom/Voicemail.h"
 #include "mozilla/dom/TVManager.h"
@@ -1805,6 +1806,13 @@ Navigator::GetInputPortManager(ErrorResult& aRv)
   return mInputPortManager;
 }
 
+already_AddRefed<LegacyMozTCPSocket>
+Navigator::MozTCPSocket()
+{
+  nsRefPtr<LegacyMozTCPSocket> socket = new LegacyMozTCPSocket(GetWindow());
+  return socket.forget();
+}
+
 #ifdef MOZ_B2G
 already_AddRefed<Promise>
 Navigator::GetMobileIdAssertion(const MobileIdOptions& aOptions,
@@ -2833,8 +2841,11 @@ Navigator::RequestMediaKeySystemAccess(const nsAString& aKeySystem,
   EME_LOG(logMsg.get());
 
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
-  nsRefPtr<DetailedPromise> promise = DetailedPromise::Create(go, aRv,
-    NS_LITERAL_CSTRING("navigator.requestMediaKeySystemAccess"));
+  nsRefPtr<DetailedPromise> promise =
+    DetailedPromise::Create(go, aRv,
+      NS_LITERAL_CSTRING("navigator.requestMediaKeySystemAccess"),
+      Telemetry::VIDEO_EME_REQUEST_SUCCESS_LATENCY_MS,
+      Telemetry::VIDEO_EME_REQUEST_FAILURE_LATENCY_MS);
   if (aRv.Failed()) {
     return nullptr;
   }

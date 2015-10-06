@@ -11,6 +11,7 @@
 #include "nsIInputStream.h"
 #include "nsILineInputStream.h"
 #include "nsIObserverService.h"
+#include "nsIOutputStream.h"
 #include "nsISafeOutputStream.h"
 
 #include "MainThreadUtils.h"
@@ -332,7 +333,7 @@ ServiceWorkerRegistrar::ReadData()
 
     GET_LINE(line);
     entry->principal() =
-      mozilla::ipc::ContentPrincipalInfo(attrs.mAppId, attrs.mInBrowser, line);
+      mozilla::ipc::ContentPrincipalInfo(attrs, line);
 
     GET_LINE(entry->scope());
     GET_LINE(entry->scriptSpec());
@@ -547,9 +548,8 @@ ServiceWorkerRegistrar::WriteData()
     const mozilla::ipc::ContentPrincipalInfo& cInfo =
       info.get_ContentPrincipalInfo();
 
-    OriginAttributes attrs(cInfo.appId(), cInfo.isInBrowserElement());
     nsAutoCString suffix;
-    attrs.CreateSuffix(suffix);
+    cInfo.attrs().CreateSuffix(suffix);
 
     buffer.Truncate();
     buffer.Append(suffix.get());

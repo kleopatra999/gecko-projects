@@ -161,13 +161,16 @@ public class TabsPanel extends LinearLayout
             }
         });
 
-        mNavBackButton = (ImageButton) findViewById(R.id.nav_back);
-        mNavBackButton.setOnClickListener(new Button.OnClickListener() {
+        if (AppConstants.NIGHTLY_BUILD || HardwareUtils.isTablet()) {
+            ViewStub backButtonStub = (ViewStub) findViewById(R.id.nav_back_stub);
+            mNavBackButton = (ImageButton) backButtonStub.inflate( );
+            mNavBackButton.setOnClickListener(new Button.OnClickListener() {
                 @Override
                 public void onClick(View view) {
                     mActivity.onBackPressed();
                 }
             });
+        }
     }
 
     public void showMenu() {
@@ -259,12 +262,12 @@ public class TabsPanel extends LinearLayout
 
             // This allows us to accommodate varying height tab previews across different devices.
             // We should be able to remove once we remove the list view and remove the chrome again
-            return  resources.getDimensionPixelSize(R.dimen.tab_thumbnail_height
-                  + resources.getDimensionPixelSize(R.dimen.tab_title_height)
-                  + 2 * (resources.getDimensionPixelSize(R.dimen.tab_highlight_stroke_width)
-                         + resources.getDimensionPixelSize(R.dimen.tab_vertical_padding)
-                         + resources.getDimensionPixelSize(R.dimen.tab_thumbnail_padding)
-                         + resources.getDimensionPixelSize(R.dimen.tab_thumbnail_margin)));
+            return resources.getDimensionPixelSize(R.dimen.tab_thumbnail_height)
+                 + resources.getDimensionPixelSize(R.dimen.tab_title_height)
+                 + 2 * (resources.getDimensionPixelSize(R.dimen.tab_highlight_stroke_width)
+                      + resources.getDimensionPixelSize(R.dimen.tab_vertical_padding)
+                      + resources.getDimensionPixelSize(R.dimen.tab_thumbnail_padding)
+                      + resources.getDimensionPixelSize(R.dimen.tab_thumbnail_margin));
         }
 
         Rect windowRect = new Rect();

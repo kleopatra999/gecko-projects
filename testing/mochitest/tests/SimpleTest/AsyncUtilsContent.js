@@ -6,7 +6,7 @@
 // Set up a dummy environment so that EventUtils works. We need to be careful to
 // pass a window object into each EventUtils method we call rather than having
 // it rely on the |window| global.
-let EventUtils = {};
+var EventUtils = {};
 EventUtils.window = {};
 EventUtils.parent = EventUtils.window;
 EventUtils._EU_Ci = Components.interfaces;
@@ -18,6 +18,13 @@ addMessageListener("Test:SynthesizeMouse", (message) => {
   let target = data.target;
   if (typeof target == "string") {
     target = content.document.querySelector(target);
+  }
+  else if (typeof data.targetFn == "string") {
+    let runnablestr = `
+      (() => {
+        return (${data.targetFn});
+      })();`
+    target = eval(runnablestr)();
   }
   else {
     target = message.objects.object;

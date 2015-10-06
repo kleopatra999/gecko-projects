@@ -90,6 +90,19 @@ MacroAssemblerARM::convertUInt32ToDouble(Register src, FloatRegister dest_)
     as_vcvt(dest, dest.uintOverlay());
 }
 
+static const double TO_DOUBLE_HIGH_SCALE = 0x100000000;
+
+void
+MacroAssemblerARMCompat::convertUInt64ToDouble(Register64 src, Register temp, FloatRegister dest)
+{
+    convertUInt32ToDouble(src.high, dest);
+    movePtr(ImmPtr(&TO_DOUBLE_HIGH_SCALE), ScratchRegister);
+    loadDouble(Address(ScratchRegister, 0), ScratchDoubleReg);
+    mulDouble(ScratchDoubleReg, dest);
+    convertUInt32ToDouble(src.low, ScratchDoubleReg);
+    addDouble(ScratchDoubleReg, dest);
+}
+
 void
 MacroAssemblerARM::convertUInt32ToFloat32(Register src, FloatRegister dest_)
 {
@@ -287,20 +300,19 @@ MacroAssemblerARM::alu_dbl(Register src1, Imm32 imm, Register dest, ALUOp op,
 {
     if ((s == SetCC && ! condsAreSafe(op)) || !can_dbl(op))
         return false;
+
     ALUOp interop = getDestVariant(op);
     Imm8::TwoImm8mData both = Imm8::EncodeTwoImms(imm.value);
     if (both.fst.invalid)
         return false;
-
-    ScratchRegisterScope scratch(asMasm());
 
     // For the most part, there is no good reason to set the condition codes for
     // the first instruction. We can do better things if the second instruction
     // doesn't have a dest, such as check for overflow by doing first operation
     // don't do second operation if first operation overflowed. This preserves
     // the overflow condition code. Unfortunately, it is horribly brittle.
-    as_alu(scratch, src1, Operand2(both.fst), interop, LeaveCC, c);
-    as_alu(dest, scratch, Operand2(both.snd), op, s, c);
+    as_alu(dest, src1, Operand2(both.fst), interop, LeaveCC, c);
+    as_alu(dest, dest, Operand2(both.snd), op, s, c);
     return true;
 }
 
@@ -2002,15 +2014,13 @@ MacroAssemblerARMCompat::load8ZeroExtend(const BaseIndex& src, Register dest)
     Register base = src.base;
     uint32_t scale = Imm32::ShiftOf(src.scale).value;
 
-    ScratchRegisterScope scratch(asMasm());
-
-    if (src.offset != 0) {
-        ma_mov(base, scratch);
-        base = scratch;
-        ma_add(base, Imm32(src.offset), base);
+    if (src.offset == 0) {
+        ma_ldrb(DTRAddr(base, DtrRegImmShift(src.index, LSL, scale)), dest);
+    } else {
+        ScratchRegisterScope scratch(asMasm());
+        ma_add(base, Imm32(src.offset), scratch);
+        ma_ldrb(DTRAddr(scratch, DtrRegImmShift(src.index, LSL, scale)), dest);
     }
-    ma_ldrb(DTRAddr(base, DtrRegImmShift(src.index, LSL, scale)), dest);
-
 }
 
 void
@@ -3372,6 +3382,22 @@ MacroAssemblerARMCompat::storeUnboxedValue(ConstantOrRegister value, MIRType val
 template void
 MacroAssemblerARMCompat::storeUnboxedValue(ConstantOrRegister value, MIRType valueType, const BaseIndex& dest,
                                            MIRType slotType);
+
+
+void
+MacroAssemblerARMCompat::branchTest64(Condition cond, Register64 lhs, Register64 rhs,
+                                      Register temp, Label* label)
+{
+    if (cond == Assembler::Zero) {
+        MOZ_ASSERT(lhs.low == rhs.low);
+        MOZ_ASSERT(lhs.high == rhs.high);
+        mov(lhs.low, ScratchRegister);
+        asMasm().or32(lhs.high, ScratchRegister);
+        branchTestPtr(cond, ScratchRegister, ScratchRegister, label);
+    } else {
+        MOZ_CRASH("Unsupported condition");
+    }
+}
 
 void
 MacroAssemblerARMCompat::moveValue(const Value& val, Register type, Register data)

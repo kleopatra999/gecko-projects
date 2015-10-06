@@ -25,24 +25,19 @@ echo "running as" $(id)
 
 : WORKSPACE                     ${WORKSPACE:=/home/worker/workspace}
 
-# files to be "uploaded" (moved to ~/artifacts) from obj-firefox/dist
-: DIST_UPLOADS                  ${DIST_UPLOADS:=""}
-# files which will be be prefixed with target before being sent to artifacts
-# e.g. DIST_TARGET_UPLOADS="a.zip" runs mv v2.0.a.zip mv artifacts/target.a.zip
-: DIST_TARGET_UPLOADS           ${DIST_TARGET_UPLOADS:=""}
+# some linux variants, e.g. b2gdroid, require gaia
+: CHECKOUT_GAIA                      ${CHECKOUT_GAIA:=false}
 
 set -v
-
-# Don't run the upload step; this is passed through mozharness to mach.  Once
-# the mozharness scripts are not run in Buildbot anymore, this can be moved to
-# Mozharness (or the upload step removed from mach entirely)
-export MOZ_AUTOMATION_UPLOAD=0
 
 export MOZ_CRASHREPORTER_NO_REPORT=1
 export MOZ_OBJDIR=obj-firefox
 export MOZ_SYMBOLS_EXTRA_BUILDID=linux64
-export POST_SYMBOL_UPLOAD_CMD=/usr/local/bin/post-symbol-upload.py
 export TINDERBOX_OUTPUT=1
+
+# use "simple" package names so that they can be hard-coded in the task's
+# extras.locations
+export MOZ_SIMPLE_PACKAGE_NAME=target
 
 # Ensure that in tree libraries can be found
 export LIBRARY_PATH=$LIBRARY_PATH:$WORKSPACE/src/obj-firefox:$WORKSPACE/src/gcc/lib64
@@ -95,6 +90,16 @@ if [ -n "${MH_CUSTOM_BUILD_VARIANT_CFG}" ]; then
     custom_build_variant_cfg_flag="--custom-build-variant-cfg=${MH_CUSTOM_BUILD_VARIANT_CFG}"
 fi
 
+if [ "$CHECKOUT_GAIA" = true ]; then
+    pull_gaia=$GECKO_DIR/testing/taskcluster/scripts/builder/pull-gaia.sh
+    gaia_props=$GECKO_DIR/testing/taskcluster/scripts/builder/gaia_props.py
+    gaia_dir=$WORKSPACE/build/gaia
+
+    $pull_gaia $GECKO_DIR $gaia_dir $gaia_props
+    rm -f $GECKO_DIR/gaia
+    ln -s $gaia_dir $GECKO_DIR/gaia
+fi
+
 set +x
 # mozharness scripts look for the relengapi token at this location, so put it there,
 # if specified
@@ -136,20 +141,3 @@ python2.7 $WORKSPACE/build/src/testing/${MOZHARNESS_SCRIPT} ${config_cmds} \
   --no-action=generate-build-stats \
   --branch=${MH_BRANCH} \
   --build-pool=${MH_BUILD_POOL}
-
-mkdir -p /home/worker/artifacts
-
-# upload auxiliary files
-cd $WORKSPACE/build/src/obj-firefox/dist
-
-for file in $DIST_UPLOADS
-do
-    mv $file $HOME/artifacts/$file
-done
-
-# Discard version numbers from packaged files, they just make it hard to write
-# the right filename in the task payload where artifacts are declared
-for file in $DIST_TARGET_UPLOADS
-do
-    mv *.$file $HOME/artifacts/target.$file
-done

@@ -1782,7 +1782,9 @@ public:
   // That's 4 generations of 1s each.
   enum { TIMEOUT_MS = 1000 };
   ScrollFrameActivityTracker()
-    : nsExpirationTracker<ScrollFrameHelper,4>(TIMEOUT_MS) {}
+    : nsExpirationTracker<ScrollFrameHelper,4>(TIMEOUT_MS,
+                                               "ScrollFrameActivityTracker")
+  {}
   ~ScrollFrameActivityTracker() {
     AgeAllGenerations();
   }
@@ -2776,6 +2778,53 @@ ClipListsExceptCaret(nsDisplayListCollection* aLists,
   ClipItemsExceptCaret(aLists->Content(), aBuilder, aClipFrame, clip, aUsingDisplayPort);
 }
 
+bool
+ScrollFrameHelper::IsUsingDisplayPort(const nsDisplayListBuilder* aBuilder) const
+{
+  return aBuilder->IsPaintingToWindow() &&
+    nsLayoutUtils::GetDisplayPort(mOuter->GetContent());
+}
+
+bool
+ScrollFrameHelper::WillUseDisplayPort(const nsDisplayListBuilder* aBuilder) const
+{
+  bool wantsDisplayPort = nsLayoutUtils::WantDisplayPort(aBuilder, mOuter);
+
+  if (mIsRoot && gfxPrefs::LayoutUseContainersForRootFrames()) {
+    // This condition mirrors the calls to GetOrMaybeCreateDisplayPort in
+    // nsSubDocumentFrame::BuildDisplayList and nsLayoutUtils::PaintFrame.
+    if (wantsDisplayPort) {
+      return true;
+    }
+  }
+
+  // The following conditions mirror the checks in BuildDisplayList
+
+  if (IsUsingDisplayPort(aBuilder)) {
+    return true;
+  }
+
+  if (aBuilder->GetIgnoreScrollFrame() == mOuter || IsIgnoringViewportClipping()) {
+    return false;
+  }
+
+  return wantsDisplayPort;
+}
+
+bool
+ScrollFrameHelper::WillBuildScrollableLayer(const nsDisplayListBuilder* aBuilder) const
+{
+  if (WillUseDisplayPort(aBuilder)) {
+    return true;
+  }
+
+  if (aBuilder->GetIgnoreScrollFrame() == mOuter || IsIgnoringViewportClipping()) {
+    return false;
+  }
+
+  return nsContentUtils::HasScrollgrab(mOuter->GetContent());
+}
+
 void
 ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                     const nsRect&           aDirtyRect,
@@ -2816,24 +2865,24 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   bool createLayersForScrollbars = mIsRoot &&
     mOuter->PresContext()->IsRootContentDocument();
 
+  bool usingDisplayPort = IsUsingDisplayPort(aBuilder);
+  mShouldBuildScrollableLayer = WillBuildScrollableLayer(aBuilder);
+
   if (aBuilder->GetIgnoreScrollFrame() == mOuter || IsIgnoringViewportClipping()) {
     // Root scrollframes have FrameMetrics and clipping on their container
     // layers, so don't apply clipping again.
     mAddClipRectToLayer = false;
 
-    // If we are a root scroll frame that has a display port we want to add
-    // scrollbars, they will be children of the scrollable layer, but they get
-    // adjusted by the APZC automatically.
-    bool usingDisplayPort = aBuilder->IsPaintingToWindow() &&
-        nsLayoutUtils::GetDisplayPort(mOuter->GetContent());
-
     if (usingDisplayPort) {
       // There is a display port for this frame, so we want to appear as having
       // active scrolling, so that animated geometry roots are assigned correctly.
-      mShouldBuildScrollableLayer = true;
+      MOZ_ASSERT(mShouldBuildScrollableLayer);
       mIsScrollableLayerInRootContainer = true;
     }
 
+    // If we are a root scroll frame that has a display port we want to add
+    // scrollbars, they will be children of the scrollable layer, but they get
+    // adjusted by the APZC automatically.
     bool addScrollBars = mIsRoot && usingDisplayPort && !aBuilder->IsForEventDelivery();
 
     if (addScrollBars) {
@@ -2873,45 +2922,27 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   nsRect dirtyRect = aDirtyRect.Intersect(mScrollPort);
 
   nsRect displayPort;
-  bool usingDisplayport = false;
   if (aBuilder->IsPaintingToWindow()) {
-    bool wasUsingDisplayPort = nsLayoutUtils::GetDisplayPort(mOuter->GetContent(), nullptr);
+    bool wasUsingDisplayPort = usingDisplayPort;
 
-    if (mIsRoot) {
-      if (gfxPrefs::LayoutUseContainersForRootFrames()) {
-        // For a root frame in a container, just get the value of the existing
-        // display port if any.
-        usingDisplayport = nsLayoutUtils::GetDisplayPort(mOuter->GetContent(), &displayPort);
-      } else {
-        // Override the value of the display port base rect, and possibly create a
-        // display port if there isn't one already.
-        nsRect displayportBase = dirtyRect;
-        if (mIsRoot && mOuter->PresContext()->IsRootContentDocument()) {
-          displayportBase =
-            nsRect(nsPoint(0, 0), nsLayoutUtils::CalculateCompositionSizeForFrame(mOuter));
-        }
-        usingDisplayport = nsLayoutUtils::GetOrMaybeCreateDisplayPort(
-              *aBuilder, mOuter, displayportBase, &displayPort);
-      }
+    if (mIsRoot && gfxPrefs::LayoutUseContainersForRootFrames()) {
+      // For a root frame in a container, just get the value of the existing
+      // display port if any.
+      usingDisplayPort = nsLayoutUtils::GetDisplayPort(mOuter->GetContent(), &displayPort);
     } else {
-      // For a non-root scroll frame, override the value of the display port
-      // base rect, and possibly create a display port if there isn't one
-      // already. For root scroll frame, nsLayoutUtils::PaintFrame or
-      // nsSubDocumentFrame::BuildDisplayList takes care of this.
+      // Override the value of the display port base rect, and possibly create a
+      // display port if there isn't one already.
       nsRect displayportBase = dirtyRect;
-      usingDisplayport = nsLayoutUtils::GetOrMaybeCreateDisplayPort(
-          *aBuilder, mOuter, displayportBase, &displayPort);
-    }
-
-    bool usingLowPrecision = gfxPrefs::UseLowPrecisionBuffer();
-    if (usingDisplayport && usingLowPrecision) {
-      // If we have low-res painting enabled we should check the critical displayport too
-      nsRect critDp;
-      nsLayoutUtils::GetCriticalDisplayPort(mOuter->GetContent(), &critDp);
+      if (mIsRoot && mOuter->PresContext()->IsRootContentDocument()) {
+        displayportBase =
+          nsRect(nsPoint(0, 0), nsLayoutUtils::CalculateCompositionSizeForFrame(mOuter));
+      }
+      usingDisplayPort = nsLayoutUtils::GetOrMaybeCreateDisplayPort(
+            *aBuilder, mOuter, displayportBase, &displayPort);
     }
 
     // Override the dirty rectangle if the displayport has been set.
-    if (usingDisplayport) {
+    if (usingDisplayPort) {
       dirtyRect = displayPort;
 
       // The cached animated geometry root for the display builder is out of
@@ -2931,7 +2962,7 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   // document.
   // If the element is marked 'scrollgrab', also force building of a layer
   // so that APZ can implement scroll grabbing.
-  mShouldBuildScrollableLayer = usingDisplayport || nsContentUtils::HasScrollgrab(mOuter->GetContent());
+  MOZ_ASSERT(mShouldBuildScrollableLayer == (usingDisplayPort || nsContentUtils::HasScrollgrab(mOuter->GetContent())));
   bool shouldBuildLayer = false;
   if (mShouldBuildScrollableLayer) {
     shouldBuildLayer = true;
@@ -2954,7 +2985,7 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   // Note that this does not apply for overlay scrollbars; those are drawn
   // in the positioned-elements layer on top of everything else by the call
   // to AppendScrollPartsTo(..., true) further down.
-  AppendScrollPartsTo(aBuilder, aDirtyRect, aLists, usingDisplayport,
+  AppendScrollPartsTo(aBuilder, aDirtyRect, aLists, usingDisplayPort,
                       createLayersForScrollbars, false);
 
   if (aBuilder->IsForImageVisibility()) {
@@ -3015,7 +3046,7 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     // clipStatePtr will always point to the innermost used one.
     DisplayListClipState::AutoSaveRestore clipState(aBuilder);
     DisplayListClipState::AutoSaveRestore* clipStatePtr = &clipState;
-    if (!mIsRoot || !usingDisplayport) {
+    if (!mIsRoot || !usingDisplayPort) {
       nsRect clip = mScrollPort + aBuilder->ToReferenceFrame(mOuter);
       nscoord radii[8];
       bool haveRadii = mOuter->GetPaddingBoxBorderRadii(radii);
@@ -3040,7 +3071,7 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     }
 
     Maybe<DisplayListClipState::AutoSaveRestore> clipStateNonCaret;
-    if (usingDisplayport) {
+    if (usingDisplayPort) {
       // Capture the clip state of the parent scroll frame. This will be saved
       // on FrameMetrics for layers with this frame as their animated geoemetry
       // root.
@@ -3096,7 +3127,7 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
 
   if (contentBoxClipForNonCaretContent) {
     ClipListsExceptCaret(&scrolledContent, aBuilder, mScrolledFrame,
-                         *contentBoxClipForNonCaretContent, usingDisplayport);
+                         *contentBoxClipForNonCaretContent, usingDisplayPort);
   }
 
   if (shouldBuildLayer) {
@@ -3132,7 +3163,7 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     }
   }
   // Now display overlay scrollbars and the resizer, if we have one.
-  AppendScrollPartsTo(aBuilder, aDirtyRect, scrolledContent, usingDisplayport,
+  AppendScrollPartsTo(aBuilder, aDirtyRect, scrolledContent, usingDisplayPort,
                       createLayersForScrollbars, true);
   scrolledContent.MoveTo(aLists);
 }
@@ -4435,7 +4466,8 @@ ScrollFrameHelper::IsScrollingActive(nsDisplayListBuilder* aBuilder) const
 
   return mHasBeenScrolledRecently ||
         IsAlwaysActive() ||
-        mShouldBuildScrollableLayer;
+        mShouldBuildScrollableLayer ||
+        WillBuildScrollableLayer(aBuilder);
 }
 
 /**
@@ -5681,7 +5713,7 @@ ScrollFrameHelper::GetSnapPointForDestination(nsIScrollableFrame::ScrollUnit aUn
   }
   if (styles.mScrollSnapPointsY.GetUnit() != eStyleUnit_None) {
     nscoord interval = nsRuleNode::ComputeCoordPercentCalc(styles.mScrollSnapPointsY,
-                                                           scrollPortSize.width);
+                                                           scrollPortSize.height);
     calcSnapPoints.AddHorizontalEdgeInterval(scrollRange, interval, destPos.y);
   }
 

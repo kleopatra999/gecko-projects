@@ -729,19 +729,19 @@ loop.panel = (function(_, mozL10n) {
             className="dropdown-menu-item"
             onClick={this.props.handleCopyButtonClick}
             ref="copyButton">
-            {mozL10n.get("copy_url_button2")}
+            {mozL10n.get("copy_link_menuitem")}
           </li>
           <li
             className="dropdown-menu-item"
             onClick={this.props.handleEmailButtonClick}
             ref="emailButton">
-            {mozL10n.get("email_link_button")}
+            {mozL10n.get("email_link_menuitem")}
           </li>
           <li
             className="dropdown-menu-item"
             onClick={this.props.handleDeleteButtonClick}
             ref="deleteButton">
-            {mozL10n.get("rooms_list_delete_tooltip")}
+            {mozL10n.get("delete_conversation_menuitem")}
           </li>
         </ul>
       );
@@ -975,7 +975,7 @@ loop.panel = (function(_, mozL10n) {
         <div className="new-room-view">
           <div className={contextClasses}>
             <Checkbox checked={this.state.checked}
-                      label={mozL10n.get("context_inroom_label")}
+                      label={mozL10n.get("context_inroom_label2")}
                       onChange={this.onCheckboxChange} />
             <sharedViews.ContextUrlView
               allowClick={false}

@@ -226,7 +226,7 @@ function add_preference(aURI)
   let cp = Cc["@mozilla.org/content-pref/service;1"].
              getService(Ci.nsIContentPrefService2);
   cp.set(aURI.spec, PREFERENCE_NAME, "foo", null, {
-    handleCompletion: function() deferred.resolve()
+    handleCompletion: () => deferred.resolve()
   });
   return deferred.promise;
 }
@@ -244,8 +244,8 @@ function preference_exists(aURI)
              getService(Ci.nsIContentPrefService2);
   let exists = false;
   cp.getByDomainAndName(aURI.spec, PREFERENCE_NAME, null, {
-    handleResult: function() exists = true,
-    handleCompletion: function() deferred.resolve(exists)
+    handleResult: () => exists = true,
+    handleCompletion: () => deferred.resolve(exists)
   });
   return deferred.promise;
 }
@@ -588,7 +588,7 @@ function test_storage_cleared()
   do_check_eq(s[2].length, 1);
 }
 
-let tests = [
+var tests = [
   // History
   test_history_cleared_with_direct_match,
   test_history_cleared_with_subdomain,

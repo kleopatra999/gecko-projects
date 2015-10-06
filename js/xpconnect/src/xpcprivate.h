@@ -96,7 +96,7 @@
 #include "xpcpublic.h"
 #include "js/TracingAPI.h"
 #include "js/WeakMapPtr.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "nscore.h"
 #include "nsXPCOM.h"
 #include "nsAutoPtr.h"
@@ -554,7 +554,7 @@ public:
     void PrepareForForgetSkippable() override;
     void BeginCycleCollectionCallback() override;
     void EndCycleCollectionCallback(mozilla::CycleCollectorResults& aResults) override;
-    void DispatchDeferredDeletion(bool continuation) override;
+    void DispatchDeferredDeletion(bool aContinuation, bool aPurge = false) override;
 
     void CustomGCCallback(JSGCStatus status) override;
     void CustomOutOfMemoryCallback() override;
@@ -3029,6 +3029,7 @@ public:
                     const char* category) override;
 
     NS_IMETHOD GetStack(JS::MutableHandleValue) override;
+    NS_IMETHOD ToString(nsACString& aResult) override;
 
 private:
     virtual ~nsScriptErrorWithStack();

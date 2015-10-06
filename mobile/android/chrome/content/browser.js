@@ -4,10 +4,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-let Cc = Components.classes;
-let Ci = Components.interfaces;
-let Cu = Components.utils;
-let Cr = Components.results;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
+var Cr = Components.results;
 
 Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -60,6 +60,9 @@ if (AppConstants.MOZ_SAFE_BROWSING) {
   XPCOMUtils.defineLazyModuleGetter(this, "SafeBrowsing",
                                     "resource://gre/modules/SafeBrowsing.jsm");
 }
+
+XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
+                                  "resource://gre/modules/BrowserUtils.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
@@ -118,7 +121,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "GMPInstallManager",
 
 XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode", "resource://gre/modules/ReaderMode.jsm");
 
-let lazilyLoadedBrowserScripts = [
+var lazilyLoadedBrowserScripts = [
   ["SelectHelper", "chrome://browser/content/SelectHelper.js"],
   ["InputWidgetHelper", "chrome://browser/content/InputWidgetHelper.js"],
   ["MasterPassword", "chrome://browser/content/MasterPassword.js"],
@@ -143,7 +146,7 @@ lazilyLoadedBrowserScripts.forEach(function (aScript) {
   });
 });
 
-let lazilyLoadedObserverScripts = [
+var lazilyLoadedObserverScripts = [
   ["MemoryObserver", ["memory-pressure", "Memory:Dump"], "chrome://browser/content/MemoryObserver.js"],
   ["ConsoleAPI", ["console-api-log-event"], "chrome://browser/content/ConsoleAPI.js"],
   ["FindHelper", ["FindInPage:Opened", "FindInPage:Closed", "Tab:Selected"], "chrome://browser/content/FindHelper.js"],
@@ -355,7 +358,7 @@ function resolveGeckoURI(aURI) {
 /**
  * Cache of commonly used string bundles.
  */
-let Strings = {
+var Strings = {
   init: function () {
     XPCOMUtils.defineLazyGetter(Strings, "brand", () => Services.strings.createBundle("chrome://branding/locale/brand.properties"));
     XPCOMUtils.defineLazyGetter(Strings, "browser", () => Services.strings.createBundle("chrome://browser/locale/browser.properties"));
@@ -492,14 +495,11 @@ var BrowserApp = {
     Tabs.init();
     SearchEngines.init();
 
-    let url = null;
     if ("arguments" in window) {
       if (window.arguments[0])
-        url = window.arguments[0];
+        gScreenWidth = window.arguments[0];
       if (window.arguments[1])
-        gScreenWidth = window.arguments[1];
-      if (window.arguments[2])
-        gScreenHeight = window.arguments[2];
+        gScreenHeight = window.arguments[1];
     }
 
     // XXX maybe we don't do this if the launch was kicked off from external
@@ -519,6 +519,16 @@ var BrowserApp = {
       Services.prefs.setIntPref("extensions.enabledScopes", 1);
       Services.prefs.setIntPref("extensions.autoDisableScopes", 1);
       Services.prefs.setBoolPref("xpinstall.enabled", false);
+    } else if (ParentalControls.parentalControlsEnabled) {
+      Services.prefs.clearUserPref("extensions.enabledScopes");
+      Services.prefs.clearUserPref("extensions.autoDisableScopes");
+      Services.prefs.setBoolPref("xpinstall.enabled", true);
+    }
+
+    let sysInfo = Cc["@mozilla.org/system-info;1"].getService(Ci.nsIPropertyBag2);
+    if (sysInfo.get("version") < 16) {
+      let defaults = Services.prefs.getDefaultBranch(null);
+      defaults.setBoolPref("media.autoplay.enabled", false);
     }
 
     try {
@@ -546,6 +556,22 @@ var BrowserApp = {
       InitLater(() => AccessFu.attach(window), window, "AccessFu");
     }
 
+    if (!AppConstants.MOZ_ANDROID_NATIVE_ACCOUNT_UI) {
+      // We can't delay registering WebChannel listeners: if the first page is
+      // about:accounts, which can happen when starting the Firefox Account flow
+      // from the first run experience, or via the Firefox Account Status
+      // Activity, we can and do miss messages from the fxa-content-server.
+      // However, we never allow suitably restricted profiles from listening to
+      // fxa-content-server messages.
+      if (ParentalControls.isAllowed(ParentalControls.MODIFY_ACCOUNTS)) {
+        console.log("browser.js: loading Firefox Accounts WebChannel");
+        Cu.import("resource://gre/modules/FxAccountsWebChannel.jsm");
+        EnsureFxAccountsWebChannel();
+      } else {
+        console.log("browser.js: not loading Firefox Accounts WebChannel; this profile cannot connect to Firefox Accounts.");
+      }
+    }
+
     // Notify Java that Gecko has loaded.
     Messaging.sendRequest({ type: "Gecko:Ready" });
 
@@ -562,6 +588,8 @@ var BrowserApp = {
         InitLater(() => ShumwayUtils.init(), window, "ShumwayUtils");
         InitLater(() => Telemetry.addData("TRACKING_PROTECTION_ENABLED",
             Services.prefs.getBoolPref("privacy.trackingprotection.enabled")));
+        InitLater(() => Telemetry.addData("TRACKING_PROTECTION_PBM_DISABLED",
+            !Services.prefs.getBoolPref("privacy.trackingprotection.pbmode.enabled")));
         InitLater(() => WebcompatReporter.init());
       }
 
@@ -951,6 +979,14 @@ var BrowserApp = {
                                       filePickerTitleKey, null, aTarget.ownerDocument.documentURIObject,
                                       aTarget.ownerDocument, true, null);
       });
+
+    NativeWindow.contextmenus.add(stringGetter("contextmenu.showImage"),
+      NativeWindow.contextmenus.imageBlockingPolicyContext,
+      function(target) {
+        UITelemetry.addEvent("action.1", "contextmenu", null, "web_show_image");
+        target.setAttribute("data-ctv-show", "true");
+        target.setAttribute("src", target.getAttribute("data-ctv-src"));
+    });
   },
 
   onAppUpdated: function() {
@@ -1325,23 +1361,13 @@ var BrowserApp = {
       this.gmpInstallManager.uninit();
     }
 
-    // Figure out if there's at least one other browser window around.
-    let lastBrowser = true;
-    let e = Services.wm.getEnumerator("navigator:browser");
-    while (e.hasMoreElements() && lastBrowser) {
-      let win = e.getNext();
-      if (!win.closed && win != window)
-        lastBrowser = false;
-    }
+    // Notify all windows that an application quit has been requested.
+    let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"].createInstance(Ci.nsISupportsPRBool);
+    Services.obs.notifyObservers(cancelQuit, "quit-application-requested", "restart");
 
-    if (lastBrowser) {
-      // Let everyone know we are closing the last browser window
-      let closingCanceled = Cc["@mozilla.org/supports-PRBool;1"].createInstance(Ci.nsISupportsPRBool);
-      Services.obs.notifyObservers(closingCanceled, "browser-lastwindow-close-requested", null);
-      if (closingCanceled.data)
-        return;
-
-      Services.obs.notifyObservers(null, "browser-lastwindow-close-granted", null);
+    // Quit aborted.
+    if (cancelQuit.data) {
+      return;
     }
 
     // Tell session store to forget about this window
@@ -1351,8 +1377,8 @@ var BrowserApp = {
     }
 
     BrowserApp.sanitize(aClear.sanitize, function() {
-      window.QueryInterface(Ci.nsIDOMChromeWindow).minimize();
-      window.close();
+      let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"].getService(Ci.nsIAppStartup);
+      appStartup.quit(Ci.nsIAppStartup.eForceQuit);
     });
   },
 
@@ -1387,6 +1413,11 @@ var BrowserApp = {
       this.getPreferences(aRequestId, [aPref], 1);
     }, this);
   },
+
+  // These values come from pref_tracking_protection_entries in arrays.xml.
+  PREF_TRACKING_PROTECTION_ENABLED: "2",
+  PREF_TRACKING_PROTECTION_ENABLED_PB: "1",
+  PREF_TRACKING_PROTECTION_DISABLED: "0",
 
   handlePreferencesRequest: function handlePreferencesRequest(aRequestId,
                                                               aPrefNames,
@@ -1426,6 +1457,18 @@ var BrowserApp = {
           pref.value = MasterPassword.enabled;
           prefs.push(pref);
           continue;
+        case "privacy.trackingprotection.state": {
+          pref.type = "string";
+          if (Services.prefs.getBoolPref("privacy.trackingprotection.enabled")) {
+            pref.value = this.PREF_TRACKING_PROTECTION_ENABLED;
+          } else if (Services.prefs.getBoolPref("privacy.trackingprotection.pbmode.enabled")) {
+            pref.value = this.PREF_TRACKING_PROTECTION_ENABLED_PB;
+          } else {
+            pref.value = this.PREF_TRACKING_PROTECTION_DISABLED;
+          }
+          prefs.push(pref);
+          continue;
+        }
         // Crash reporter submit pref must be fetched from nsICrashReporter service.
         case "datareporting.crashreporter.submitEnabled":
           let crashReporterBuilt = "nsICrashReporter" in Ci && Services.appinfo instanceof Ci.nsICrashReporter;
@@ -1508,6 +1551,29 @@ var BrowserApp = {
           MasterPassword.setPassword(json.value);
         return;
 
+      // "privacy.trackingprotection.state" is not a "real" pref name, but it's used in the setting menu.
+      // By default "privacy.trackingprotection.pbmode.enabled" is true,
+      // and "privacy.trackingprotection.enabled" is false.
+      case "privacy.trackingprotection.state": {
+        switch (json.value) {
+          // Tracking protection disabled.
+          case this.PREF_TRACKING_PROTECTION_DISABLED:
+            Services.prefs.setBoolPref("privacy.trackingprotection.pbmode.enabled", false);
+            Services.prefs.setBoolPref("privacy.trackingprotection.enabled", false);
+            break;
+          // Tracking protection only in private browsing,
+          case this.PREF_TRACKING_PROTECTION_ENABLED_PB:
+            Services.prefs.setBoolPref("privacy.trackingprotection.pbmode.enabled", true);
+            Services.prefs.setBoolPref("privacy.trackingprotection.enabled", false);
+            break;
+          // Tracking protection everywhere.
+          case this.PREF_TRACKING_PROTECTION_ENABLED:
+            Services.prefs.setBoolPref("privacy.trackingprotection.pbmode.enabled", true);
+            Services.prefs.setBoolPref("privacy.trackingprotection.enabled", true);
+            break;
+        }
+        return;
+      }
       // Enabling or disabling suggestions will prevent future prompts
       case SearchEngines.PREF_SUGGEST_ENABLED:
         Services.prefs.setBoolPref(SearchEngines.PREF_SUGGEST_PROMPTED, true);
@@ -1705,11 +1771,16 @@ var BrowserApp = {
           break;
 
       case "Session:Reload": {
-        let flags = Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY | Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE;
+        let flags = Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_PROXY;
 
         // Check to see if this is a message to enable/disable mixed content blocking.
         if (aData) {
           let data = JSON.parse(aData);
+
+          if (data.bypassCache) {
+            flags |= Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE;
+          }
+
           if (data.contentType === "tracking") {
             // Convert document URI into the format used by
             // nsChannelClassifier::ShouldEnableTrackingProtection
@@ -2508,6 +2579,23 @@ var NativeWindow = {
       matches: function mediaSaveableContextMatches(aElement) {
         return (aElement instanceof HTMLVideoElement ||
                aElement instanceof HTMLAudioElement);
+      }
+    },
+
+    imageBlockingPolicyContext: {
+      matches: function imageBlockingPolicyContextMatches(aElement) {
+        if (!Services.prefs.getBoolPref("browser.image_blocking.enabled")) {
+          return false;
+        }
+
+        if (aElement instanceof Ci.nsIDOMHTMLImageElement) {
+          // Only show the menuitem if we are blocking the image
+          if (aElement.getAttribute("data-ctv-show") == "true") {
+            return false;
+          }
+          return true;
+        }
+        return false;
       }
     },
 
@@ -3351,16 +3439,20 @@ nsBrowserAccess.prototype = {
   isTabContentWindow: function(aWindow) {
     return BrowserApp.getBrowserForWindow(aWindow) != null;
   },
+
+  canClose() {
+    return BrowserUtils.canCloseWindow(window);
+  },
 };
 
 
 // track the last known screen size so that new tabs
 // get created with the right size rather than being 1x1
-let gScreenWidth = 1;
-let gScreenHeight = 1;
+var gScreenWidth = 1;
+var gScreenHeight = 1;
 
 // The URL where suggested tile clicks are posted.
-let gTilesReportURL = null;
+var gTilesReportURL = null;
 
 function Tab(aURL, aParams) {
   this.filter = null;
@@ -3595,6 +3687,9 @@ Tab.prototype = {
       return;
 
     let url = currentURI.spec;
+    // We need LOAD_FLAGS_BYPASS_CACHE here since we're changing the User-Agent
+    // string, and servers typically don't use the Vary: User-Agent header, so
+    // not doing this means that we'd get some of the previously cached content.
     let flags = Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE |
                 Ci.nsIWebNavigation.LOAD_FLAGS_REPLACE_HISTORY;
     if (this.originalURI && !this.originalURI.equals(currentURI)) {
@@ -4798,10 +4893,12 @@ var BrowserEventHandler = {
         break;
 
       case "Gesture:SingleTap": {
+        let focusedElement = null;
         try {
           // If the element was previously focused, show the caret attached to it.
           let element = this._highlightElement;
-          if (element && element == BrowserApp.getFocusedInput(BrowserApp.selectedBrowser)) {
+          focusedElement = BrowserApp.getFocusedInput(BrowserApp.selectedBrowser);
+          if (element && element == focusedElement) {
             let result = SelectionHandler.attachCaret(element);
             if (result !== SelectionHandler.ERROR_NONE) {
               dump("Unexpected failure during caret attach: " + result);
@@ -4815,6 +4912,17 @@ var BrowserEventHandler = {
         let {x, y} = data;
 
         if (this._inCluster && this._clickInZoomedView != true) {
+          // If there is a focused element, the display of the zoomed view won't remove the focus.
+          // In this case, the form assistant linked to the focused element will never be closed.
+          // To avoid this situation, the focus is moved and the form assistant is closed.
+          if (focusedElement) {
+            try {
+              Services.focus.moveFocus(BrowserApp.selectedBrowser.contentWindow, null, Services.focus.MOVEFOCUS_ROOT, 0);
+            } catch(e) {
+              Cu.reportError(e);
+            }
+            Messaging.sendRequest({ type: "FormAssist:Hide" });
+          }
           this._clusterClicked(x, y);
         } else {
           if (this._clickInZoomedView != true) {
@@ -5537,7 +5645,7 @@ var FormAssistant = {
  * An object to watch for Gecko status changes -- add-on installs, pref changes
  * -- and reflect them back to Java.
  */
-let HealthReportStatusListener = {
+var HealthReportStatusListener = {
   PREF_ACCEPT_LANG: "intl.accept_languages",
   PREF_BLOCKLIST_ENABLED: "extensions.blocklist.enabled",
 
@@ -6539,15 +6647,14 @@ var IdentityHandler = {
   },
 
   /**
-   * Return the eTLD+1 version of the current hostname
+   * Attempt to provide proper IDN treatment for host names
    */
   getEffectiveHost: function getEffectiveHost() {
     if (!this._IDNService)
       this._IDNService = Cc["@mozilla.org/network/idn-service;1"]
                          .getService(Ci.nsIIDNService);
     try {
-      let baseDomain = Services.eTLD.getBaseDomainFromHost(this._lastLocation.hostname);
-      return this._IDNService.convertToDisplayIDN(baseDomain, {});
+      return this._IDNService.convertToDisplayIDN(this._uri.host, {});
     } catch (e) {
       // If something goes wrong (e.g. hostname is an IP address) just fail back
       // to the full domain.

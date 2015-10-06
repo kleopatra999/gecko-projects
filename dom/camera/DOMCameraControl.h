@@ -71,6 +71,8 @@ public:
 
   nsPIDOMWindow* GetParentObject() const { return mWindow; }
 
+  MediaStream* GetCameraStream() const override;
+
   // Attributes.
   void GetEffect(nsString& aEffect, ErrorResult& aRv);
   void SetEffect(const nsAString& aEffect, ErrorResult& aRv);
@@ -143,6 +145,7 @@ public:
   IMPL_EVENT_HANDLER(focus)
   IMPL_EVENT_HANDLER(picture)
   IMPL_EVENT_HANDLER(configurationchange)
+  IMPL_EVENT_HANDLER(poster)
 
 protected:
   virtual ~nsDOMCameraControl();

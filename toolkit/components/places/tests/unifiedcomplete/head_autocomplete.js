@@ -102,8 +102,8 @@ AutoCompleteInput.prototype = {
   onSearchBegin: function () {},
   onSearchComplete: function () {},
 
-  onTextEntered: function() false,
-  onTextReverted: function() false,
+  onTextEntered: () => false,
+  onTextReverted: () => false,
 
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIAutoCompleteInput])
 }
@@ -261,7 +261,7 @@ function* check_autocomplete(test) {
   }
 }
 
-let addBookmark = Task.async(function* (aBookmarkObj) {
+var addBookmark = Task.async(function* (aBookmarkObj) {
   Assert.ok(!!aBookmarkObj.uri, "Bookmark object contains an uri");
   let parentId = aBookmarkObj.parentId ? aBookmarkObj.parentId
                                        : PlacesUtils.unfiledBookmarksFolderId;
@@ -442,8 +442,7 @@ function* addTestEngine(basename, httpServer=undefined) {
     }, "browser-search-engine-modified", false);
 
     do_print("Adding engine from URL: " + dataUrl + basename);
-    Services.search.addEngine(dataUrl + basename,
-                              Ci.nsISearchEngine.DATA_XML, null, false);
+    Services.search.addEngine(dataUrl + basename, null, null, false);
   });
 }
 

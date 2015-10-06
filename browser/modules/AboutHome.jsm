@@ -4,9 +4,9 @@
 
 "use strict";
 
-let Cc = Components.classes;
-let Ci = Components.interfaces;
-let Cu = Components.utils;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
 
 this.EXPORTED_SYMBOLS = [ "AboutHomeUtils", "AboutHome" ];
 
@@ -89,7 +89,7 @@ XPCOMUtils.defineLazyGetter(AboutHomeUtils, "snippetsURL", function() {
  * about:home needs to do something chrome-privileged, it sends a
  * message that's handled here.
  */
-let AboutHome = {
+var AboutHome = {
   MESSAGES: [
     "AboutHome:RestorePreviousSession",
     "AboutHome:Downloads",
@@ -143,21 +143,7 @@ let AboutHome = {
         break;
 
       case "AboutHome:Sync":
-        let weave = Cc["@mozilla.org/weave/service;1"]
-                      .getService(Ci.nsISupports)
-                      .wrappedJSObject;
-
-        if (weave.fxAccountsEnabled) {
-          fxAccounts.getSignedInUser().then(userData => {
-            if (userData) {
-              window.openPreferences("paneSync");
-            } else {
-              window.loadURI("about:accounts?entrypoint=abouthome");
-            }
-          });
-        } else {
-          window.openPreferences("paneSync");
-        }
+        window.openPreferences("paneSync", { urlParams: { entrypoint: "abouthome" } });
         break;
 
       case "AboutHome:Settings":

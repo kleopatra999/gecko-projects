@@ -12,6 +12,12 @@ const Cr = Components.results;
 
 const {PushDB} = Cu.import("resource://gre/modules/PushDB.jsm");
 const {PushRecord} = Cu.import("resource://gre/modules/PushRecord.jsm");
+const {
+  PushCrypto,
+  base64UrlDecode,
+  getEncryptionKeyParams,
+  getEncryptionParams,
+} = Cu.import("resource://gre/modules/PushCrypto.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
@@ -33,7 +39,7 @@ var threadManager = Cc["@mozilla.org/thread-manager;1"]
                       .getService(Ci.nsIThreadManager);
 
 const kPUSHWSDB_DB_NAME = "pushapi";
-const kPUSHWSDB_DB_VERSION = 4; // Change this if the IndexedDB format changes
+const kPUSHWSDB_DB_VERSION = 5; // Change this if the IndexedDB format changes
 const kPUSHWSDB_STORE_NAME = "pushapi";
 
 const kUDP_WAKEUP_WS_STATUS_CODE = 4774;  // WebSocket Close status code sent
@@ -45,7 +51,28 @@ const prefs = new Preferences("dom.push.");
 this.EXPORTED_SYMBOLS = ["PushServiceWebSocket"];
 
 // Don't modify this, instead set dom.push.debug.
-let gDebuggingEnabled = true;
+var gDebuggingEnabled = true;
+
+function getCryptoParams(headers) {
+  if (!headers) {
+    return null;
+  }
+  var keymap = getEncryptionKeyParams(headers.encryption_key);
+  if (!keymap) {
+    return null;
+  }
+  var enc = getEncryptionParams(headers.encryption);
+  if (!enc || !enc.keyid) {
+    return null;
+  }
+  var dh = keymap[enc.keyid];
+  var salt = enc.salt;
+  var rs = (enc.rs)? parseInt(enc.rs, 10) : 4096;
+  if (!dh || !salt || isNaN(rs) || (rs <= 1)) {
+    return null;
+  }
+  return {dh, salt, rs};
+}
 
 function debug(s) {
   if (gDebuggingEnabled) {
@@ -136,11 +163,14 @@ this.PushServiceWebSocket = {
   observe: function(aSubject, aTopic, aData) {
 
     switch (aTopic) {
-      case "nsPref:changed":
-        if (aData == "dom.push.debug") {
-          gDebuggingEnabled = prefs.get("debug");
-        }
-        break;
+    case "nsPref:changed":
+      if (aData == "dom.push.debug") {
+        gDebuggingEnabled = prefs.get("debug");
+      } else if (aData == "dom.push.userAgentID") {
+        this._shutdownWS();
+        this._reconnectAfterBackoff();
+      }
+      break;
     case "timer-callback":
       if (aSubject == this._requestTimeoutTimer) {
         if (Object.keys(this._pendingRequests).length === 0) {
@@ -265,6 +295,9 @@ this.PushServiceWebSocket = {
    */
   _upperLimit: 0,
 
+  /** Indicates whether the server supports Web Push-style message delivery. */
+  _dataEnabled: false,
+
   /**
    * Sends a message to the Push Server through an open websocket.
    * typeof(msg) shall be an object
@@ -316,6 +349,8 @@ this.PushServiceWebSocket = {
     this._currentState = STATE_SHUT_DOWN;
     this._willBeWokenUpByUDP = false;
 
+    prefs.ignore("userAgentID", this);
+
     if (this._wsListener) {
       this._wsListener._pushService = null;
     }
@@ -340,6 +375,7 @@ this.PushServiceWebSocket = {
   },
 
   uninit: function() {
+    prefs.ignore("debug", this);
 
     if (this._udpServer) {
       this._udpServer.close();
@@ -356,6 +392,8 @@ this.PushServiceWebSocket = {
     }
 
     this._mainPushService = null;
+
+    this._dataEnabled = false;
   },
 
   /**
@@ -749,21 +787,39 @@ this.PushServiceWebSocket = {
       return;
     }
 
-    function finishHandshake() {
-      this._UAID = reply.uaid;
-      this._currentState = STATE_READY;
+    let notifyRequestQueue = () => {
       if (this._notifyRequestQueue) {
         this._notifyRequestQueue();
         this._notifyRequestQueue = null;
+      }
+    };
+
+    function finishHandshake() {
+      this._UAID = reply.uaid;
+      this._currentState = STATE_READY;
+      prefs.observe("userAgentID", this);
+
+      this._dataEnabled = !!reply.use_webpush;
+      if (this._dataEnabled) {
+        this._mainPushService.getAllUnexpired().then(records =>
+          Promise.all(records.map(record =>
+            this._mainPushService.ensureP256dhKey(record).catch(error => {
+              debug("finishHandshake: Error updating record " + record.keyID);
+            })
+          ))
+        ).then(notifyRequestQueue);
+      } else {
+        notifyRequestQueue();
       }
     }
 
     // By this point we've got a UAID from the server that we are ready to
     // accept.
     //
-    // If we already had a valid UAID before, we have to ask apps to
-    // re-register.
-    if (this._UAID && this._UAID != reply.uaid) {
+    // We unconditionally drop all existing registrations and notify service
+    // workers if we receive a new UAID. This ensures we expunge all stale
+    // registrations if the `userAgentID` pref is reset.
+    if (this._UAID != reply.uaid) {
       debug("got new UAID: all re-register");
 
       this._mainPushService.dropRegistrations()
@@ -811,12 +867,46 @@ this.PushServiceWebSocket = {
         originAttributes: tmp.record.originAttributes,
         version: null,
         quota: tmp.record.maxQuota,
+        ctime: Date.now(),
       });
       dump("PushWebSocket " +  JSON.stringify(record));
+      Services.telemetry.getHistogramById("PUSH_API_SUBSCRIBE_WS_TIME").add(Date.now() - tmp.ctime);
       tmp.resolve(record);
     } else {
       tmp.reject(reply);
     }
+  },
+
+  _handleDataUpdate: function(update) {
+    let promise;
+    if (typeof update.channelID != "string") {
+      debug("handleDataUpdate: Discarding message without channel ID");
+      return;
+    }
+    if (typeof update.data != "string") {
+      promise = this._mainPushService.receivedPushMessage(
+        update.channelID,
+        null,
+        null,
+        record => record
+      );
+    } else {
+      let params = getCryptoParams(update.headers);
+      if (!params) {
+        debug("handleDataUpdate: Discarding invalid encrypted message");
+        return;
+      }
+      let message = base64UrlDecode(update.data);
+      promise = this._mainPushService.receivedPushMessage(
+        update.channelID,
+        message,
+        params,
+        record => record
+      );
+    }
+    promise.then(() => this._sendAck(update.channelID)).catch(err => {
+      debug("handleDataUpdate: Error delivering message: " + err);
+    });
   },
 
   /**
@@ -824,6 +914,11 @@ this.PushServiceWebSocket = {
    */
   _handleNotificationReply: function(reply) {
     debug("handleNotificationReply()");
+    if (this._dataEnabled) {
+      this._handleDataUpdate(reply);
+      return;
+    }
+
     if (typeof reply.updates !== 'object') {
       debug("No 'updates' field in response. Type = " + typeof reply.updates);
       return;
@@ -900,6 +995,16 @@ this.PushServiceWebSocket = {
                                                  ctime: Date.now()
                                                 };
         this._queueRequest(data);
+      }).then(record => {
+        if (!this._dataEnabled) {
+          return record;
+        }
+        return PushCrypto.generateKeys()
+          .then(([publicKey, privateKey]) => {
+            record.p256dhPublicKey = publicKey;
+            record.p256dhPrivateKey = privateKey;
+            return record;
+          });
       });
     }
 
@@ -959,7 +1064,7 @@ this.PushServiceWebSocket = {
   _receivedUpdate: function(aChannelID, aLatestVersion) {
     debug("Updating: " + aChannelID + " -> " + aLatestVersion);
 
-    this._mainPushService.receivedPushMessage(aChannelID, "", record => {
+    this._mainPushService.receivedPushMessage(aChannelID, null, null, record => {
       if (record.version === null ||
           record.version < aLatestVersion) {
         debug("Version changed for " + aChannelID + ": " + aLatestVersion);
@@ -988,6 +1093,7 @@ this.PushServiceWebSocket = {
 
     let data = {
       messageType: "hello",
+      use_webpush: true,
     };
 
     if (this._UAID) {
@@ -1200,7 +1306,7 @@ this.PushServiceWebSocket = {
   },
 };
 
-let PushNetworkInfo = {
+var PushNetworkInfo = {
   /**
    * Returns information about MCC-MNC and the IP of the current connection.
    */

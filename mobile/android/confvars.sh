@@ -5,7 +5,8 @@
 MOZ_APP_BASENAME=Fennec
 MOZ_APP_VENDOR=Mozilla
 
-MOZ_APP_VERSION=43.0a1
+MOZ_APP_VERSION=$FIREFOX_VERSION
+MOZ_APP_VERSION_DISPLAY=$FIREFOX_VERSION_DISPLAY
 MOZ_APP_UA_NAME=Firefox
 
 MOZ_BRANDING_DIRECTORY=mobile/android/branding/unofficial
@@ -116,4 +117,9 @@ MOZ_ADDON_SIGNING=1
 # usage of the framework.
 if test "$NIGHTLY_BUILD"; then
   MOZ_SWITCHBOARD=1
+fi
+
+# Use native Firefox Accounts UI after Nightly.
+if ! test "$NIGHTLY_BUILD"; then
+MOZ_ANDROID_NATIVE_ACCOUNT_UI=1
 fi

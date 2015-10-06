@@ -98,8 +98,6 @@ public:
 
   Element* GetOwnerElement(ErrorResult& aRv);
 
-  bool IsNSAware() const { return mNsAware; }
-
 protected:
   virtual Element* GetNameSpaceElement() override
   {
@@ -109,8 +107,6 @@ protected:
   static bool sInitialized;
 
 private:
-  already_AddRefed<nsIAtom> GetNameAtom(nsIContent* aContent);
-
   nsString mValue;
 };
 

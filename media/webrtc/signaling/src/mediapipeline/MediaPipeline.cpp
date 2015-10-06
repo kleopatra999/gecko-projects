@@ -48,6 +48,9 @@
 
 #include "logging.h"
 
+// Should come from MediaEngineWebRTC.h, but that's a pain to include here
+#define DEFAULT_SAMPLE_RATE 32000
+
 using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::layers;
@@ -680,7 +683,7 @@ nsresult MediaPipelineTransmit::ReplaceTrack(DOMMediaStream *domstream,
                                              const std::string& track_id) {
   // MainThread, checked in calls we make
   MOZ_MTLOG(ML_DEBUG, "Reattaching pipeline " << description_ << " to stream "
-            << static_cast<void *>(domstream->GetStream())
+            << static_cast<void *>(domstream->GetOwnedStream())
             << " track " << track_id << " conduit type=" <<
             (conduit_->type() == MediaSessionConduit::AUDIO ?"audio":"video"));
 
@@ -688,7 +691,7 @@ nsresult MediaPipelineTransmit::ReplaceTrack(DOMMediaStream *domstream,
     DetachMediaStream();
   }
   domstream_ = domstream; // Detach clears it
-  stream_ = domstream->GetStream();
+  stream_ = domstream->GetOwnedStream();
   // Unsets the track id after RemoveListener() takes effect.
   listener_->UnsetTrackId(stream_->GraphImpl());
   track_id_ = track_id;
@@ -865,7 +868,9 @@ void MediaPipelineTransmit::PipelineListener::
 NotifyQueuedTrackChanges(MediaStreamGraph* graph, TrackID tid,
                          StreamTime offset,
                          uint32_t events,
-                         const MediaSegment& queued_media) {
+                         const MediaSegment& queued_media,
+                         MediaStream* aInputStream,
+                         TrackID aInputTrackID) {
   MOZ_MTLOG(ML_DEBUG, "MediaPipeline::NotifyQueuedTrackChanges()");
 
   // ignore non-direct data if we're also getting direct data
@@ -1332,7 +1337,7 @@ void GenericReceiveListener::AddSelf(MediaSegment* segment) {
 MediaPipelineReceiveAudio::PipelineListener::PipelineListener(
     SourceMediaStream * source, TrackID track_id,
     const RefPtr<MediaSessionConduit>& conduit, bool queue_track)
-  : GenericReceiveListener(source, track_id, 16000, queue_track), // XXX rate assumption
+  : GenericReceiveListener(source, track_id, DEFAULT_SAMPLE_RATE, queue_track), // XXX rate assumption
     conduit_(conduit)
 {
   MOZ_ASSERT(track_rate_%100 == 0);

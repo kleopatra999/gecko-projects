@@ -160,6 +160,8 @@ public:
   NS_IMETHOD RedirectTo(nsIURI *newURI) override;
   NS_IMETHOD GetSchedulingContextID(nsID *aSCID) override;
   NS_IMETHOD SetSchedulingContextID(const nsID aSCID) override;
+  NS_IMETHOD GetIsMainDocumentChannel(bool* aValue) override;
+  NS_IMETHOD SetIsMainDocumentChannel(bool aValue) override;
 
   // nsIHttpChannelInternal
   NS_IMETHOD GetDocumentURI(nsIURI **aDocumentURI) override;
@@ -188,6 +190,8 @@ public:
   NS_IMETHOD TakeAllSecurityMessages(nsCOMArray<nsISecurityConsoleMessage> &aMessages) override;
   NS_IMETHOD GetResponseTimeoutEnabled(bool *aEnable) override;
   NS_IMETHOD SetResponseTimeoutEnabled(bool aEnable) override;
+  NS_IMETHOD GetInitialRwin(uint32_t* aRwin) override;
+  NS_IMETHOD SetInitialRwin(uint32_t aRwin) override;
   NS_IMETHOD GetNetworkInterfaceId(nsACString& aNetworkInterfaceId) override;
   NS_IMETHOD SetNetworkInterfaceId(const nsACString& aNetworkInterfaceId) override;
   NS_IMETHOD ForcePending(bool aForcePending) override;
@@ -254,7 +258,6 @@ public:
     const NetAddr& GetPeerAddr() { return mPeerAddr; }
 
     nsresult OverrideSecurityInfo(nsISupports* aSecurityInfo);
-    nsresult OverrideURI(nsIURI* aRedirectedURI);
 
 public: /* Necko internal use only... */
     bool IsNavigation();
@@ -268,6 +271,10 @@ public: /* Necko internal use only... */
     // mListenerContext.
     nsresult DoApplyContentConversions(nsIStreamListener *aNextListener,
                                        nsIStreamListener **aNewNextListener);
+
+    // Callback on main thread when NS_AsyncCopy() is finished populating
+    // the new mUploadStream.
+    void EnsureUploadStreamIsCloneableComplete(nsresult aStatus);
 
 protected:
   nsCOMArray<nsISecurityConsoleMessage> mSecurityConsoleMessages;
@@ -329,6 +336,7 @@ protected:
 
   nsHttpRequestHead                 mRequestHead;
   nsCOMPtr<nsIInputStream>          mUploadStream;
+  nsCOMPtr<nsIRunnable>             mUploadCloneableCallback;
   nsAutoPtr<nsHttpResponseHead>     mResponseHead;
   nsRefPtr<nsHttpConnectionInfo>    mConnectionInfo;
   nsCOMPtr<nsIProxyInfo>            mProxyInfo;
@@ -394,6 +402,9 @@ protected:
   // Current suspension depth for this channel object
   uint32_t                          mSuspendCount;
 
+  // Per channel transport window override (0 means no override)
+  uint32_t                          mInitialRwin;
+
   nsCOMPtr<nsIURI>                  mAPIRedirectToURI;
   nsAutoPtr<nsTArray<nsCString> >   mRedirectedCachekeys;
 
@@ -452,6 +463,8 @@ protected:
   bool                              mWithCredentials;
   nsTArray<nsCString>               mUnsafeHeaders;
   nsCOMPtr<nsIPrincipal>            mPreflightPrincipal;
+
+  bool mForceMainDocumentChannel;
 };
 
 // Share some code while working around C++'s absurd inability to handle casting

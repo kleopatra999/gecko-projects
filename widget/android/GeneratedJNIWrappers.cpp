@@ -21,6 +21,11 @@ constexpr char ANRReporter::ReleaseNativeStack_t::signature[];
 constexpr char ANRReporter::RequestNativeStack_t::name[];
 constexpr char ANRReporter::RequestNativeStack_t::signature[];
 
+constexpr char AlarmReceiver::name[];
+
+constexpr char AlarmReceiver::NotifyAlarmFired_t::name[];
+constexpr char AlarmReceiver::NotifyAlarmFired_t::signature[];
+
 constexpr char DownloadsIntegration::name[];
 
 constexpr char DownloadsIntegration::ScanMedia_t::name[];
@@ -135,6 +140,14 @@ constexpr char GeckoAppShell::DeleteMessageWrapper_t::signature[];
 auto GeckoAppShell::DeleteMessageWrapper(int32_t a0, int32_t a1) -> void
 {
     return mozilla::jni::Method<DeleteMessageWrapper_t>::Call(nullptr, nullptr, a0, a1);
+}
+
+constexpr char GeckoAppShell::DisableAlarm_t::name[];
+constexpr char GeckoAppShell::DisableAlarm_t::signature[];
+
+auto GeckoAppShell::DisableAlarm() -> void
+{
+    return mozilla::jni::Method<DisableAlarm_t>::Call(nullptr, nullptr);
 }
 
 constexpr char GeckoAppShell::DisableBatteryNotifications_t::name[];
@@ -393,6 +406,14 @@ auto GeckoAppShell::GetScreenOrientationWrapper() -> int16_t
     return mozilla::jni::Method<GetScreenOrientationWrapper_t>::Call(nullptr, nullptr);
 }
 
+constexpr char GeckoAppShell::GetScreenSize_t::name[];
+constexpr char GeckoAppShell::GetScreenSize_t::signature[];
+
+auto GeckoAppShell::GetScreenSize() -> mozilla::jni::Object::LocalRef
+{
+    return mozilla::jni::Method<GetScreenSize_t>::Call(nullptr, nullptr);
+}
+
 constexpr char GeckoAppShell::GetShowPasswordSetting_t::name[];
 constexpr char GeckoAppShell::GetShowPasswordSetting_t::signature[];
 
@@ -609,6 +630,14 @@ auto GeckoAppShell::SendMessageWrapper(mozilla::jni::String::Param a0, mozilla::
     return mozilla::jni::Method<SendMessageWrapper_t>::Call(nullptr, nullptr, a0, a1, a2);
 }
 
+constexpr char GeckoAppShell::SetAlarm_t::name[];
+constexpr char GeckoAppShell::SetAlarm_t::signature[];
+
+auto GeckoAppShell::SetAlarm(int32_t a0, int32_t a1) -> bool
+{
+    return mozilla::jni::Method<SetAlarm_t>::Call(nullptr, nullptr, a0, a1);
+}
+
 constexpr char GeckoAppShell::SetFullScreen_t::name[];
 constexpr char GeckoAppShell::SetFullScreen_t::signature[];
 
@@ -714,6 +743,9 @@ auto GeckoJavaSampler::GetFrameNameJavaProfilingWrapper(int32_t a0, int32_t a1, 
 {
     return mozilla::jni::Method<GetFrameNameJavaProfilingWrapper_t>::Call(nullptr, nullptr, a0, a1, a2);
 }
+
+constexpr char GeckoJavaSampler::GetProfilerTime_t::name[];
+constexpr char GeckoJavaSampler::GetProfilerTime_t::signature[];
 
 constexpr char GeckoJavaSampler::GetSampleTimeJavaProfiling_t::name[];
 constexpr char GeckoJavaSampler::GetSampleTimeJavaProfiling_t::signature[];
@@ -934,6 +966,32 @@ auto GeckoThread::State::RUNNING() -> State::LocalRef
 {
     return mozilla::jni::Field<RUNNING_t>::Get(nullptr, nullptr);
 }
+
+constexpr char GeckoView::name[];
+
+constexpr char GeckoView::Window::name[];
+
+constexpr char GeckoView::Window::New_t::name[];
+constexpr char GeckoView::Window::New_t::signature[];
+
+auto GeckoView::Window::New() -> Window::LocalRef
+{
+    return mozilla::jni::Constructor<New_t>::Call(nullptr, nullptr);
+}
+
+constexpr char GeckoView::Window::DisposeNative_t::name[];
+constexpr char GeckoView::Window::DisposeNative_t::signature[];
+
+constexpr char GeckoView::Window::Open_t::name[];
+constexpr char GeckoView::Window::Open_t::signature[];
+
+constexpr char PrefsHelper::name[];
+
+constexpr char PrefsHelper::GetPrefsById_t::name[];
+constexpr char PrefsHelper::GetPrefsById_t::signature[];
+
+constexpr char PrefsHelper::RemovePrefsObserver_t::name[];
+constexpr char PrefsHelper::RemovePrefsObserver_t::signature[];
 
 constexpr char RestrictedProfiles::name[];
 

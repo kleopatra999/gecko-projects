@@ -23,6 +23,7 @@ Cu.import("resource://gre/modules/DeferredTask.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
+Cu.import("resource://gre/modules/AppConstants.jsm");
 
 const Utils = TelemetryUtils;
 
@@ -80,8 +81,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "TelemetryEnvironment",
                                   "resource://gre/modules/TelemetryEnvironment.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SessionRecorder",
                                   "resource://gre/modules/SessionRecorder.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
-                                  "resource://gre/modules/UpdateChannel.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
+                                  "resource://gre/modules/UpdateUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryArchive",
                                   "resource://gre/modules/TelemetryArchive.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetrySession",
@@ -118,8 +119,8 @@ function crc32(str) {
  * Setup Telemetry logging. This function also gets called when loggin related
  * preferences change.
  */
-let gLogger = null;
-let gLogAppenderDump = null;
+var gLogger = null;
+var gLogAppenderDump = null;
 function configureLogging() {
   if (!gLogger) {
     gLogger = Log.repository.getLogger(LOGGER_NAME);
@@ -150,7 +151,7 @@ function configureLogging() {
 /**
  * This is a policy object used to override behavior for testing.
  */
-let Policy = {
+var Policy = {
   now: () => new Date(),
   generatePingId: () => Utils.generateUUID(),
   getCachedClientID: () => ClientID.getCachedClientID(),
@@ -364,7 +365,7 @@ this.TelemetryController = Object.freeze({
   },
 });
 
-let Impl = {
+var Impl = {
   _initialized: false,
   _initStarted: false, // Whether we started setting up TelemetryController.
   _logger: null,
@@ -412,7 +413,7 @@ let Impl = {
 
     let updateChannel = null;
     try {
-      updateChannel = UpdateChannel.get(false);
+      updateChannel = UpdateUtils.getUpdateChannel(false);
     } catch (e) {
       this._log.trace("assemblePing - Unable to get update channel.", e);
     }
@@ -674,18 +675,18 @@ let Impl = {
     const isOptout = IS_UNIFIED_TELEMETRY && (!Policy.isUnifiedOptin() || this._isInOptoutSample());
     Telemetry.canRecordBase = enabled || isOptout;
 
-#ifdef MOZILLA_OFFICIAL
-    // Enable extended telemetry if:
-    //  * the telemetry preference is set and
-    //  * this is an official build or we are in test-mode
-    // We only do the latter check for official builds so that e.g. developer builds
-    // still enable Telemetry based on prefs.
-    Telemetry.canRecordExtended = enabled && (Telemetry.isOfficialTelemetry || this._testMode);
-#else
-    // Turn off extended telemetry recording if disabled by preferences or if base/telemetry
-    // telemetry recording is off.
-    Telemetry.canRecordExtended = enabled;
-#endif
+    if (AppConstants.MOZILLA_OFFICIAL) {
+      // Enable extended telemetry if:
+      //  * the telemetry preference is set and
+      //  * this is an official build or we are in test-mode
+      // We only do the latter check for official builds so that e.g. developer builds
+      // still enable Telemetry based on prefs.
+      Telemetry.canRecordExtended = enabled && (Telemetry.isOfficialTelemetry || this._testMode);
+    } else {
+      // Turn off extended telemetry recording if disabled by preferences or if base/telemetry
+      // telemetry recording is off.
+      Telemetry.canRecordExtended = enabled;
+    }
 
     this._log.config("enableTelemetryRecording - canRecordBase:" + Telemetry.canRecordBase +
                      ", canRecordExtended: " + Telemetry.canRecordExtended);
@@ -908,9 +909,25 @@ let Impl = {
       // There's nothing we should do if we are enabling upload.
       return;
     }
-    // Send the deletion ping.
-    this._log.trace("_onUploadPrefChange - Sending deletion ping.");
-    this.submitExternalPing(PING_TYPE_DELETION, {}, { addClientId: true });
+
+    let p = Task.spawn(function*() {
+      try {
+        // Clear the current pings.
+        yield TelemetrySend.clearCurrentPings();
+
+        // Remove all the pending pings, but not the deletion ping.
+        yield TelemetryStorage.runRemovePendingPingsTask();
+      } catch (e) {
+        this._log.error("_onUploadPrefChange - error clearing pending pings", e);
+      } finally {
+        // Always send the deletion ping.
+        this._log.trace("_onUploadPrefChange - Sending deletion ping.");
+        this.submitExternalPing(PING_TYPE_DELETION, {}, { addClientId: true });
+      }
+    }.bind(this));
+
+    this._shutdownBarrier.client.addBlocker(
+      "TelemetryController: removing pending pings after data upload was disabled", p);
   },
 
   _attachObservers: function() {

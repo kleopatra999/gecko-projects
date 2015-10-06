@@ -401,6 +401,11 @@ loop.conversationViews = (function(mozL10n) {
         case FAILURE_DETAILS.NO_MEDIA:
         case FAILURE_DETAILS.UNABLE_TO_PUBLISH_MEDIA:
           return mozL10n.get("no_media_failure_message");
+        case FAILURE_DETAILS.TOS_FAILURE:
+          return mozL10n.get("tos_failure_message",
+            { clientShortname: mozL10n.get("clientShortname2") });
+        case FAILURE_DETAILS.ICE_FAILED:
+          return mozL10n.get("ice_failure_message");
         default:
           return mozL10n.get("generic_failure_message");
       }
@@ -576,6 +581,7 @@ loop.conversationViews = (function(mozL10n) {
     propTypes: {
       // local
       audio: React.PropTypes.object,
+      chatWindowDetached: React.PropTypes.bool.isRequired,
       // We pass conversationStore here rather than use the mixin, to allow
       // easy configurability for the ui-showcase.
       conversationStore: React.PropTypes.instanceOf(loop.store.ConversationStore).isRequired,
@@ -712,13 +718,15 @@ loop.conversationViews = (function(mozL10n) {
             screenSharePosterUrl: null, 
             showContextRoomName: false, 
             useDesktopPaths: true}, 
-            React.createElement(loop.shared.views.ConversationToolbar, {
+            React.createElement(sharedViews.ConversationToolbar, {
               audio: this.props.audio, 
               dispatcher: this.props.dispatcher, 
               hangup: this.hangup, 
               mozLoop: this.props.mozLoop, 
               publishStream: this.publishStream, 
               settingsMenuItems: settingsMenuItems, 
+              show: true, 
+              showHangup: this.props.chatWindowDetached, 
               video: this.props.video})
           )
         )
@@ -739,6 +747,7 @@ loop.conversationViews = (function(mozL10n) {
     ],
 
     propTypes: {
+      chatWindowDetached: React.PropTypes.bool.isRequired,
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
       mozLoop: React.PropTypes.object.isRequired,
       onCallTerminated: React.PropTypes.func.isRequired
@@ -818,6 +827,7 @@ loop.conversationViews = (function(mozL10n) {
         case CALL_STATES.ONGOING: {
           return (React.createElement(OngoingConversationView, {
             audio: { enabled: !this.state.audioMuted, visible: true}, 
+            chatWindowDetached: this.props.chatWindowDetached, 
             conversationStore: this.getStore(), 
             dispatcher: this.props.dispatcher, 
             mediaConnected: this.state.mediaConnected, 

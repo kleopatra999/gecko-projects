@@ -2,9 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-let SocialService = Cu.import("resource://gre/modules/SocialService.jsm", {}).SocialService;
+var SocialService = Cu.import("resource://gre/modules/SocialService.jsm", {}).SocialService;
 
-let manifests = [
+var manifests = [
   {
     name: "provider@example.com",
     origin: "https://example.com",
@@ -28,14 +28,14 @@ let manifests = [
   }
 ];
 
-let ports = [];
+var ports = [];
 function getProviderPort(provider) {
   let port = provider.getWorkerPort();
   ok(port, "provider has a port");
   ports.push(port);
   return port;
 }
-let chatId = 0;
+var chatId = 0;
 function openChat(provider, callback) {
   let chatUrl = provider.origin + "/browser/browser/base/content/test/social/social_chat.html";
   let port = getProviderPort(provider);
@@ -253,12 +253,12 @@ var tests = {
       let port1 = openChat(Social.providers[1], function() {
         let port2 = openChat(Social.providers[2], function() {
           let chats = document.getElementById("pinnedchats");
-          waitForCondition(function() chats.children.length == Social.providers.length,
+          waitForCondition(() => chats.children.length == Social.providers.length,
             function() {
               ok(true, "one chat window per provider opened");
               // test logout of a single provider
               port2.postMessage({topic: "test-logout"});
-              waitForCondition(function() chats.children.length == Social.providers.length - 1,
+              waitForCondition(() => chats.children.length == Social.providers.length - 1,
                 function() {
                   Task.spawn(closeAllChats).then(next);
                 },
@@ -288,7 +288,7 @@ var tests = {
           ok(true, "got a chat window opened");
           if (opened) {
             port.postMessage({topic: "test-logout"});
-            waitForCondition(function() document.getElementById("pinnedchats").firstChild == null,
+            waitForCondition(() => document.getElementById("pinnedchats").firstChild == null,
                              function() {
                               next();
                              },

@@ -54,7 +54,6 @@
 #include "ImageContainer.h"
 #include "mozilla/Telemetry.h"
 #include "gfxUtils.h"
-#include "gfxColor.h"
 #include "gfxGradientCache.h"
 #include "GraphicsFilter.h"
 #include "nsInlineFrame.h"
@@ -391,15 +390,15 @@ protected:
   }
 };
 
-// A resolved color stop --- with a specific position along the gradient line,
-// and a Thebes color
+// A resolved color stop, with a specific position along the gradient line and
+// a color.
 struct ColorStop {
   ColorStop(): mPosition(0), mIsMidpoint(false) {}
-  ColorStop(double aPosition, bool aIsMidPoint, gfxRGBA aColor) :
+  ColorStop(double aPosition, bool aIsMidPoint, const Color& aColor) :
     mPosition(aPosition), mIsMidpoint(aIsMidPoint), mColor(aColor) {}
   double mPosition; // along the gradient line; 0=start, 1=end
   bool mIsMidpoint;
-  gfxRGBA mColor;
+  Color mColor;
 };
 
 /* Local functions */
@@ -1323,7 +1322,7 @@ nsCSSRendering::PaintBoxShadowOuter(nsPresContext* aPresContext,
     else
       shadowColor = aForFrame->StyleColor()->mColor;
 
-    gfxRGBA gfxShadowColor(shadowColor);
+    Color gfxShadowColor(Color::FromABGR(shadowColor));
     gfxShadowColor.a *= aOpacity;
 
     if (nativeTheme) {
@@ -1581,29 +1580,22 @@ nsCSSRendering::PaintBoxShadowInner(nsPresContext* aPresContext,
     gfxContext* renderContext = aRenderingContext.ThebesContext();
     DrawTarget* drawTarget = renderContext->GetDrawTarget();
     nsContextBoxBlur blurringArea;
-    gfxContext* shadowContext =
-      blurringArea.Init(shadowPaintRect, 0, blurRadius, twipsPerPixel,
-                        renderContext, aDirtyRect, &skipGfxRect);
-    if (!shadowContext)
-      continue;
-    DrawTarget* shadowDT = shadowContext->GetDrawTarget();
-
-    // shadowContext is owned by either blurringArea or aRenderingContext.
-    MOZ_ASSERT(shadowContext == renderContext ||
-               shadowContext == blurringArea.GetContext());
-
-    // Set the shadow color; if not specified, use the foreground color
-    Color shadowColor = Color::FromABGR(shadowItem->mHasColor ?
-                                          shadowItem->mColor :
-                                          aForFrame->StyleColor()->mColor);
-    renderContext->Save();
-    renderContext->SetColor(ThebesColor(shadowColor));
 
     // Clip the context to the area of the frame's padding rect, so no part of the
     // shadow is painted outside. Also cut out anything beyond where the inset shadow
     // will be.
     Rect shadowGfxRect = NSRectToRect(paddingRect, twipsPerPixel);
     shadowGfxRect.Round();
+
+    // Set the shadow color; if not specified, use the foreground color
+    Color shadowColor = Color::FromABGR(shadowItem->mHasColor ?
+                                          shadowItem->mColor :
+                                          aForFrame->StyleColor()->mColor);
+
+    renderContext->Save();
+
+    // This clips the outside border radius.
+    // clipRectRadii is the border radius inside the inset shadow.
     if (hasBorderRadius) {
       RefPtr<Path> roundedRect =
         MakePathForRoundedRect(*drawTarget, shadowGfxRect, innerRadii);
@@ -1612,22 +1604,13 @@ nsCSSRendering::PaintBoxShadowInner(nsPresContext* aPresContext,
       renderContext->Clip(shadowGfxRect);
     }
 
-    // Fill the surface minus the area within the frame that we should
-    // not paint in, and blur and apply it.
-    RefPtr<PathBuilder> builder =
-      shadowDT->CreatePathBuilder(FillRule::FILL_EVEN_ODD);
-    AppendRectToPath(builder, shadowPaintGfxRect, true);
-    if (hasBorderRadius) {
-      AppendRoundedRectToPath(builder, shadowClipGfxRect, clipRectRadii, false);
-    } else {
-      AppendRectToPath(builder, shadowClipGfxRect, false);
-    }
-    RefPtr<Path> path = builder->Finish();
-    shadowContext->SetPath(path);
-    shadowContext->Fill();
-    shadowContext->NewPath();
-
-    blurringArea.DoPaint();
+    nsContextBoxBlur insetBoxBlur;
+    gfxRect destRect = nsLayoutUtils::RectToGfxRect(shadowPaintRect, twipsPerPixel);
+    insetBoxBlur.InsetBoxBlur(renderContext, ToRect(destRect),
+                              shadowClipGfxRect, shadowColor,
+                              blurRadius, spreadDistanceAppUnits,
+                              twipsPerPixel, hasBorderRadius,
+                              clipRectRadii, ToRect(skipGfxRect));
     renderContext->Restore();
   }
 }
@@ -2205,14 +2188,14 @@ static float Interpolate(float aF1, float aF2, float aFrac)
 // Returns aFrac*aC2 + (1 - aFrac)*C1. The interpolation is done
 // in unpremultiplied space, which is what SVG gradients and cairo
 // gradients expect.
-static gfxRGBA
-InterpolateColor(const gfxRGBA& aC1, const gfxRGBA& aC2, double aFrac)
+static Color
+InterpolateColor(const Color& aC1, const Color& aC2, float aFrac)
 {
   double other = 1 - aFrac;
-  return gfxRGBA(aC2.r*aFrac + aC1.r*other,
-                 aC2.g*aFrac + aC1.g*other,
-                 aC2.b*aFrac + aC1.b*other,
-                 aC2.a*aFrac + aC1.a*other);
+  return Color(aC2.r*aFrac + aC1.r*other,
+               aC2.g*aFrac + aC1.g*other,
+               aC2.b*aFrac + aC1.b*other,
+               aC2.a*aFrac + aC1.a*other);
 }
 
 static nscoord
@@ -2257,7 +2240,7 @@ RectIsBeyondLinearGradientEdge(const gfxRect& aRect,
                                const nsTArray<ColorStop>& aStops,
                                const gfxPoint& aGradientStart,
                                const gfxPoint& aGradientEnd,
-                               gfxRGBA* aOutEdgeColor)
+                               Color* aOutEdgeColor)
 {
   gfxFloat topLeft = LinearGradientStopPositionForPoint(
     aGradientStart, aGradientEnd, aPatternMatrix.Transform(aRect.TopLeft()));
@@ -2293,8 +2276,8 @@ static void ResolveMidpoints(nsTArray<ColorStop>& stops)
       continue;
     }
 
-    gfxRGBA color1 = stops[x-1].mColor;
-    gfxRGBA color2 = stops[x+1].mColor;
+    Color color1 = stops[x-1].mColor;
+    Color color2 = stops[x+1].mColor;
     float offset1 = stops[x-1].mPosition;
     float offset2 = stops[x+1].mPosition;
     float offset = stops[x].mPosition;
@@ -2349,13 +2332,13 @@ static void ResolveMidpoints(nsTArray<ColorStop>& stops)
       // in luminance of the end points.
       float relativeOffset = (newStops[y].mPosition - offset1) / (offset2 - offset1);
       float multiplier = powf(relativeOffset, logf(.5f) / logf(midpoint));
-      
-      gfxFloat red = color1.r + multiplier * (color2.r - color1.r);
-      gfxFloat green = color1.g + multiplier * (color2.g - color1.g);
-      gfxFloat blue = color1.b + multiplier * (color2.b - color1.b);
-      gfxFloat alpha = color1.a + multiplier * (color2.a - color1.a);
 
-      newStops[y].mColor = gfxRGBA(red, green, blue, alpha);
+      gfx::Float red = color1.r + multiplier * (color2.r - color1.r);
+      gfx::Float green = color1.g + multiplier * (color2.g - color1.g);
+      gfx::Float blue = color1.b + multiplier * (color2.b - color1.b);
+      gfx::Float alpha = color1.a + multiplier * (color2.a - color1.a);
+
+      newStops[y].mColor = Color(red, green, blue, alpha);
     }
 
     stops.ReplaceElementsAt(x, 1, newStops, 9);
@@ -2363,22 +2346,24 @@ static void ResolveMidpoints(nsTArray<ColorStop>& stops)
   }
 }
 
-static gfxRGBA
-Premultiply(const gfxRGBA& aColor)
+static Color
+Premultiply(const Color& aColor)
 {
-  gfxFloat a = aColor.a;
-  return gfxRGBA(aColor.r * a, aColor.g * a, aColor.b * a, a);
+  gfx::Float a = aColor.a;
+  return Color(aColor.r * a, aColor.g * a, aColor.b * a, a);
 }
 
-static gfxRGBA
-Unpremultiply(const gfxRGBA& aColor)
+static Color
+Unpremultiply(const Color& aColor)
 {
-  gfxFloat a = aColor.a;
-  return (a > 0.0) ? gfxRGBA(aColor.r / a, aColor.g / a, aColor.b / a, a) : aColor;
+  gfx::Float a = aColor.a;
+  return (a > 0.f)
+       ? Color(aColor.r / a, aColor.g / a, aColor.b / a, a)
+       : aColor;
 }
 
-static gfxRGBA
-TransparentColor(gfxRGBA aColor) {
+static Color
+TransparentColor(Color aColor) {
   aColor.a = 0;
   return aColor;
 }
@@ -2419,10 +2404,10 @@ ResolvePremultipliedAlpha(nsTArray<ColorStop>& aStops)
 
     // Now handle cases where one or both of the stops are partially transparent.
     if (leftStop.mColor.a != 1.0f || rightStop.mColor.a != 1.0f) {
-      gfxRGBA premulLeftColor = Premultiply(leftStop.mColor);
-      gfxRGBA premulRightColor = Premultiply(rightStop.mColor);
+      Color premulLeftColor = Premultiply(leftStop.mColor);
+      Color premulRightColor = Premultiply(rightStop.mColor);
       // Calculate how many extra steps. We do a step per 10% transparency.
-      size_t stepCount = NSToIntFloor(fabs(leftStop.mColor.a - rightStop.mColor.a) / kAlphaIncrementPerGradientStep);
+      size_t stepCount = NSToIntFloor(fabsf(leftStop.mColor.a - rightStop.mColor.a) / kAlphaIncrementPerGradientStep);
       for (size_t y = 1; y < stepCount; y++) {
         float frac = static_cast<float>(y) / stepCount;
         ColorStop newStop(Interpolate(leftStop.mPosition, rightStop.mPosition, frac), false,
@@ -2501,7 +2486,8 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
         if (firstUnsetPosition < 0) {
           firstUnsetPosition = i;
         }
-        stops.AppendElement(ColorStop(0, stop.mIsInterpolationHint, stop.mColor));
+        stops.AppendElement(ColorStop(0, stop.mIsInterpolationHint,
+                                      Color::FromABGR(stop.mColor)));
         continue;
       }
       break;
@@ -2528,7 +2514,8 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
       // to the previous stop position, if necessary
       position = std::max(position, stops[i - 1].mPosition);
     }
-    stops.AppendElement(ColorStop(position, stop.mIsInterpolationHint, stop.mColor));
+    stops.AppendElement(ColorStop(position, stop.mIsInterpolationHint,
+                                  Color::FromABGR(stop.mColor)));
     if (firstUnsetPosition > 0) {
       // Interpolate positions for all stops that didn't have a specified position
       double p = stops[firstUnsetPosition - 1].mPosition;
@@ -2585,7 +2572,7 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
               // between pos and nextPos.
               // XXX Color interpolation (in cairo, too) should use the
               // CSS 'color-interpolation' property!
-              double frac = (0.0 - pos)/(nextPos - pos);
+              float frac = float((0.0 - pos)/(nextPos - pos));
               stops[i].mColor =
                 InterpolateColor(stops[i].mColor, stops[i + 1].mColor, frac);
             }
@@ -2718,8 +2705,8 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
     // Repeating gradient with all stops in the same place, or radial
     // gradient with radius of 0 -> just paint the last stop color.
     // We use firstStop offset to keep |stops| with same units (will later normalize to 0).
-    gfxRGBA firstColor(stops[0].mColor);
-    gfxRGBA lastColor(stops.LastElement().mColor);
+    Color firstColor(stops[0].mColor);
+    Color lastColor(stops.LastElement().mColor);
     stops.Clear();
 
     if (!aGradient->mRepeating && !zeroRadius) {
@@ -2743,7 +2730,7 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
   nsTArray<gfx::GradientStop> rawStops(stops.Length());
   rawStops.SetLength(stops.Length());
   for(uint32_t i = 0; i < stops.Length(); i++) {
-    rawStops[i].color = gfx::Color(stops[i].mColor.r, stops[i].mColor.g, stops[i].mColor.b, stops[i].mColor.a);
+    rawStops[i].color = stops[i].mColor;
     rawStops[i].offset = stopScale * (stops[i].mPosition - stopOrigin);
   }
   mozilla::RefPtr<mozilla::gfx::GradientStops> gs =
@@ -2815,7 +2802,7 @@ nsCSSRendering::PaintGradient(nsPresContext* aPresContext,
 
       gfxRect dirtyFillRect = fillRect.Intersect(dirtyAreaToFill);
       gfxRect fillRectRelativeToTile = dirtyFillRect - tileRect.TopLeft();
-      gfxRGBA edgeColor;
+      Color edgeColor;
       if (aGradient->mShape == NS_STYLE_GRADIENT_SHAPE_LINEAR && !isRepeat &&
           RectIsBeyondLinearGradientEdge(fillRectRelativeToTile, matrix, stops,
                                          gradientStart, gradientEnd, &edgeColor)) {
@@ -2935,7 +2922,7 @@ nsCSSRendering::PaintBackgroundWithSC(nsPresContext* aPresContext,
 
   // If we might be using a background color, go ahead and set it now.
   if (drawBackgroundColor && !isCanvasFrame)
-    ctx->SetColor(gfxRGBA(bgColor));
+    ctx->SetColor(Color::FromABGR(bgColor));
 
   // NOTE: no Save() yet, we do that later by calling autoSR.EnsureSaved(ctx)
   // in the cases we need it.
@@ -3018,10 +3005,10 @@ nsCSSRendering::PaintBackgroundWithSC(nsPresContext* aPresContext,
         nsBackgroundLayerState state = PrepareBackgroundLayer(aPresContext, aForFrame,
             aFlags, paintBorderArea, clipState.mBGClipArea, layer);
         if (!state.mFillArea.IsEmpty()) {
-          if (state.mCompositingOp != gfxContext::OPERATOR_OVER) {
-            NS_ASSERTION(ctx->CurrentOperator() == gfxContext::OPERATOR_OVER,
-                         "It is assumed the initial operator is OPERATOR_OVER, when it is restored later");
-            ctx->SetOperator(state.mCompositingOp);
+          if (state.mCompositionOp != CompositionOp::OP_OVER) {
+            NS_ASSERTION(ctx->CurrentOp() == CompositionOp::OP_OVER,
+                         "It is assumed the initial op is OP_OVER, when it is restored later");
+            ctx->SetOp(state.mCompositionOp);
           }
 
           DrawResult resultForLayer =
@@ -3034,8 +3021,8 @@ nsCSSRendering::PaintBackgroundWithSC(nsPresContext* aPresContext,
             result = resultForLayer;
           }
 
-          if (state.mCompositingOp != gfxContext::OPERATOR_OVER) {
-            ctx->SetOperator(gfxContext::OPERATOR_OVER);
+          if (state.mCompositionOp != CompositionOp::OP_OVER) {
+            ctx->SetOp(CompositionOp::OP_OVER);
           }
         }
       }
@@ -3339,7 +3326,7 @@ nsCSSRendering::PrepareBackgroundLayer(nsPresContext* aPresContext,
   }
   state.mFillArea.IntersectRect(state.mFillArea, bgClipRect);
 
-  state.mCompositingOp = GetGFXBlendMode(aLayer.mBlendMode);
+  state.mCompositionOp = GetGFXBlendMode(aLayer.mBlendMode);
 
   return state;
 }
@@ -3863,7 +3850,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
   AntialiasMode oldMode = ctx->CurrentAntialiasMode();
   ctx->SetAntialiasMode(AntialiasMode::NONE);
 
-  ctx->SetColor(aBorderColor);
+  ctx->SetColor(Color::FromABGR(aBorderColor));
 
   switch (aBorderStyle) {
   case NS_STYLE_BORDER_STYLE_NONE:
@@ -3943,7 +3930,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
                                           aBGColor->mBackgroundColor,
                                           aBorderColor);
       // XXXbz is this SetColor call still needed?
-      ctx->SetColor(bevelColor);
+      ctx->SetColor(Color::FromABGR(bevelColor));
       nsRect rect(aBorder);
       nscoord half;
       if (horizontal) { // top, bottom
@@ -3980,7 +3967,7 @@ nsCSSRendering::DrawTableBorderSegment(nsRenderingContext&     aContext,
       bevelColor = MakeBevelColor(ridgeGrooveSide, ridgeGroove,
                                   aBGColor->mBackgroundColor, aBorderColor);
       // XXXbz is this SetColor call still needed?
-      ctx->SetColor(bevelColor);
+      ctx->SetColor(Color::FromABGR(bevelColor));
       if (horizontal) {
         rect.y = rect.y + half;
         rect.height = aBorder.height - half;
@@ -4606,8 +4593,7 @@ nsCSSRendering::GetTextDecorationRectInternal(const gfxPoint& aPt,
   }
 
   if (aVertical) {
-    r.y = baseline + floor(offset + 0.5); // this will need updating when we
-                                          // support sideways-left orientation
+    r.y = baseline + floor(offset + 0.5);
     Swap(r.x, r.y);
     Swap(r.width, r.height);
   } else {
@@ -4711,18 +4697,21 @@ nsImageRenderer::PrepareImage()
       nsSVGPaintingProperty* property = nsSVGEffects::GetPaintingPropertyForURI(
           targetURI, mForFrame->FirstContinuation(),
           nsSVGEffects::BackgroundImageProperty());
-      if (!property)
+      if (!property) {
         return false;
-      mPaintServerFrame = property->GetReferencedFrame();
-
-      // If the referenced element doesn't have a frame we might still be able
-      // to paint it if it's an <img>, <canvas>, or <video> element.
-      if (!mPaintServerFrame) {
-        mImageElementSurface =
-          nsLayoutUtils::SurfaceFromElement(property->GetReferencedElement());
-        if (!mImageElementSurface.mSourceSurface)
-          return false;
       }
+
+      // If the referenced element is an <img>, <canvas>, or <video> element,
+      // prefer SurfaceFromElement as it's more reliable.
+      mImageElementSurface =
+        nsLayoutUtils::SurfaceFromElement(property->GetReferencedElement());
+      if (!mImageElementSurface.mSourceSurface) {
+        mPaintServerFrame = property->GetReferencedFrame();
+        if (!mPaintServerFrame) {
+          return false;
+        }
+      }
+
       mIsReady = true;
       break;
     }
@@ -4801,7 +4790,7 @@ nsImageRenderer::ComputeIntrinsicSize()
         }
       } else {
         NS_ASSERTION(mImageElementSurface.mSourceSurface, "Surface should be ready.");
-        gfxIntSize surfaceSize = mImageElementSurface.mSize;
+        IntSize surfaceSize = mImageElementSurface.mSize;
         result.SetSize(
           nsSize(nsPresContext::CSSPixelsToAppUnits(surfaceSize.width),
                  nsPresContext::CSSPixelsToAppUnits(surfaceSize.height)));
@@ -5000,10 +4989,10 @@ nsImageRenderer::Draw(nsPresContext*       aPresContext,
       }
 
       gfxContext* ctx = aRenderingContext.ThebesContext();
-      gfxContext::GraphicsOperator op = ctx->CurrentOperator();
-      if (op != gfxContext::OPERATOR_OVER) {
+      CompositionOp op = ctx->CurrentOp();
+      if (op != CompositionOp::OP_OVER) {
         ctx->PushGroup(gfxContentType::COLOR_ALPHA);
-        ctx->SetOperator(gfxContext::OPERATOR_OVER);
+        ctx->SetOp(CompositionOp::OP_OVER);
       }
 
       nsCOMPtr<imgIContainer> image(ImageOps::CreateFromDrawable(drawable));
@@ -5012,7 +5001,7 @@ nsImageRenderer::Draw(nsPresContext*       aPresContext,
                                filter, aDest, aFill, aAnchor, aDirtyRect,
                                ConvertImageRendererToDrawFlags(mFlags));
 
-      if (op != gfxContext::OPERATOR_OVER) {
+      if (op != CompositionOp::OP_OVER) {
         ctx->PopGroupToSource();
         ctx->Paint();
       }
@@ -5032,18 +5021,22 @@ nsImageRenderer::DrawableForElement(const nsRect& aImageRect,
   NS_ASSERTION(mType == eStyleImageType_Element,
                "DrawableForElement only makes sense if backed by an element");
   if (mPaintServerFrame) {
+    // XXX(seth): In order to not pass FLAG_SYNC_DECODE_IMAGES here,
+    // DrawableFromPaintServer would have to return a DrawResult indicating
+    // whether any images could not be painted because they weren't fully
+    // decoded. Even always passing FLAG_SYNC_DECODE_IMAGES won't eliminate all
+    // problems, as it won't help if there are image which haven't finished
+    // loading, but it's better than nothing.
     int32_t appUnitsPerDevPixel = mForFrame->PresContext()->AppUnitsPerDevPixel();
     nsRect destRect = aImageRect - aImageRect.TopLeft();
     nsIntSize roundedOut = destRect.ToOutsidePixels(appUnitsPerDevPixel).Size();
-    gfxIntSize imageSize(roundedOut.width, roundedOut.height);
+    IntSize imageSize(roundedOut.width, roundedOut.height);
     nsRefPtr<gfxDrawable> drawable =
       nsSVGIntegrationUtils::DrawableFromPaintServer(
         mPaintServerFrame, mForFrame, mSize, imageSize,
         aRenderingContext.GetDrawTarget(),
         aRenderingContext.ThebesContext()->CurrentMatrix(),
-        mFlags & FLAG_SYNC_DECODE_IMAGES
-          ? nsSVGIntegrationUtils::FLAG_SYNC_DECODE_IMAGES
-          : 0);
+        nsSVGIntegrationUtils::FLAG_SYNC_DECODE_IMAGES);
 
     return drawable.forget();
   }
@@ -5294,7 +5287,7 @@ static inline gfxPoint ComputeBlurStdDev(nscoord aBlurRadius,
                            gfxFloat(MAX_BLUR_RADIUS)) / 2.0);
 }
 
-static inline gfxIntSize
+static inline IntSize
 ComputeBlurRadius(nscoord aBlurRadius,
                   int32_t aAppUnitsPerDevPixel,
                   gfxFloat aScaleX = 1.0,
@@ -5323,27 +5316,12 @@ nsContextBoxBlur::Init(const nsRect& aRect, nscoord aSpreadRadius,
     return nullptr;
   }
 
-  gfxFloat scaleX = 1;
-  gfxFloat scaleY = 1;
+  IntSize blurRadius;
+  IntSize spreadRadius;
+  GetBlurAndSpreadRadius(aDestinationCtx, aAppUnitsPerDevPixel,
+                         aBlurRadius, aSpreadRadius,
+                         blurRadius, spreadRadius);
 
-  // Do blurs in device space when possible.
-  // Chrome/Skia always does the blurs in device space
-  // and will sometimes get incorrect results (e.g. rotated blurs)
-  gfxMatrix transform = aDestinationCtx->CurrentMatrix();
-  // XXX: we could probably handle negative scales but for now it's easier just to fallback
-  if (transform.HasNonAxisAlignedTransform() || transform._11 <= 0.0 || transform._22 <= 0.0) {
-    transform = gfxMatrix();
-  } else {
-    scaleX = transform._11;
-    scaleY = transform._22;
-  }
-
-  // compute a large or smaller blur radius
-  gfxIntSize blurRadius = ComputeBlurRadius(aBlurRadius, aAppUnitsPerDevPixel, scaleX, scaleY);
-  gfxIntSize spreadRadius = gfxIntSize(std::min(int32_t(aSpreadRadius * scaleX / aAppUnitsPerDevPixel),
-                                              int32_t(MAX_SPREAD_RADIUS)),
-                                       std::min(int32_t(aSpreadRadius * scaleY / aAppUnitsPerDevPixel),
-                                              int32_t(MAX_SPREAD_RADIUS)));
   mDestinationCtx = aDestinationCtx;
 
   // If not blurring, draw directly onto the destination device
@@ -5361,6 +5339,7 @@ nsContextBoxBlur::Init(const nsRect& aRect, nscoord aSpreadRadius,
     nsLayoutUtils::RectToGfxRect(aDirtyRect, aAppUnitsPerDevPixel);
   dirtyRect.RoundOut();
 
+  gfxMatrix transform = aDestinationCtx->CurrentMatrix();
   rect = transform.TransformBounds(rect);
 
   mPreTransformed = !transform.IsIdentity();
@@ -5387,8 +5366,9 @@ nsContextBoxBlur::Init(const nsRect& aRect, nscoord aSpreadRadius,
 void
 nsContextBoxBlur::DoPaint()
 {
-  if (mContext == mDestinationCtx)
+  if (mContext == mDestinationCtx) {
     return;
+  }
 
   gfxContextMatrixAutoSaveRestore saveMatrix(mDestinationCtx);
 
@@ -5409,7 +5389,7 @@ nsContextBoxBlur::GetContext()
 nsContextBoxBlur::GetBlurRadiusMargin(nscoord aBlurRadius,
                                       int32_t aAppUnitsPerDevPixel)
 {
-  gfxIntSize blurRadius = ComputeBlurRadius(aBlurRadius, aAppUnitsPerDevPixel);
+  IntSize blurRadius = ComputeBlurRadius(aBlurRadius, aAppUnitsPerDevPixel);
 
   nsMargin result;
   result.top = result.bottom = blurRadius.height * aAppUnitsPerDevPixel;
@@ -5423,7 +5403,7 @@ nsContextBoxBlur::BlurRectangle(gfxContext* aDestinationCtx,
                                 int32_t aAppUnitsPerDevPixel,
                                 RectCornerRadii* aCornerRadii,
                                 nscoord aBlurRadius,
-                                const gfxRGBA& aShadowColor,
+                                const Color& aShadowColor,
                                 const nsRect& aDirtyRect,
                                 const gfxRect& aSkipRect)
 {
@@ -5485,4 +5465,100 @@ nsContextBoxBlur::BlurRectangle(gfxContext* aDestinationCtx,
                                  aShadowColor,
                                  dirtyRect,
                                  skipRect);
+}
+
+/* static */ void
+nsContextBoxBlur::GetBlurAndSpreadRadius(gfxContext* aDestinationCtx,
+                                         int32_t aAppUnitsPerDevPixel,
+                                         nscoord aBlurRadius,
+                                         nscoord aSpreadRadius,
+                                         IntSize& aOutBlurRadius,
+                                         IntSize& aOutSpreadRadius,
+                                         bool aConstrainSpreadRadius)
+{
+  gfxFloat scaleX = 1;
+  gfxFloat scaleY = 1;
+
+  // Do blurs in device space when possible.
+  // Chrome/Skia always does the blurs in device space
+  // and will sometimes get incorrect results (e.g. rotated blurs)
+  gfxMatrix transform = aDestinationCtx->CurrentMatrix();
+  // XXX: we could probably handle negative scales but for now it's easier just to fallback
+  if (transform.HasNonAxisAlignedTransform() || transform._11 <= 0.0 || transform._22 <= 0.0) {
+    transform = gfxMatrix();
+  } else {
+    scaleX = transform._11;
+    scaleY = transform._22;
+  }
+
+  // compute a large or smaller blur radius
+  aOutBlurRadius = ComputeBlurRadius(aBlurRadius, aAppUnitsPerDevPixel, scaleX, scaleY);
+  aOutSpreadRadius =
+      IntSize(int32_t(aSpreadRadius * scaleX / aAppUnitsPerDevPixel),
+              int32_t(aSpreadRadius * scaleY / aAppUnitsPerDevPixel));
+
+
+  if (aConstrainSpreadRadius) {
+    aOutSpreadRadius.width = std::min(aOutSpreadRadius.width, int32_t(MAX_SPREAD_RADIUS));
+    aOutSpreadRadius.height = std::min(aOutSpreadRadius.height, int32_t(MAX_SPREAD_RADIUS));
+  }
+}
+
+/* static */ bool
+nsContextBoxBlur::InsetBoxBlur(gfxContext* aDestinationCtx,
+                               Rect aDestinationRect,
+                               Rect aShadowClipRect,
+                               Color& aShadowColor,
+                               nscoord aBlurRadiusAppUnits,
+                               nscoord aSpreadDistanceAppUnits,
+                               int32_t aAppUnitsPerDevPixel,
+                               bool aHasBorderRadius,
+                               RectCornerRadii& aInnerClipRectRadii,
+                               Rect aSkipRect)
+{
+  if (aDestinationRect.IsEmpty()) {
+    mContext = nullptr;
+    return false;
+  }
+
+  IntSize blurRadius;
+  IntSize spreadRadius;
+  // Convert the blur and spread radius to device pixels
+  bool constrainSpreadRadius = false;
+  GetBlurAndSpreadRadius(aDestinationCtx, aAppUnitsPerDevPixel,
+                         aBlurRadiusAppUnits, aSpreadDistanceAppUnits,
+                         blurRadius, spreadRadius, constrainSpreadRadius);
+
+  // The blur and spread radius are scaled already, so scale all
+  // input data to the blur. This way, we don't have to scale the min
+  // inset blur to the invert of the dest context, then rescale it back
+  // when we draw to the destination surface.
+  gfxSize scale = aDestinationCtx->CurrentMatrix().ScaleFactors(true);
+  Matrix currentMatrix = ToMatrix(aDestinationCtx->CurrentMatrix());
+
+  Rect transformedDestRect = currentMatrix.TransformBounds(aDestinationRect);
+  Rect transformedShadowClipRect = currentMatrix.TransformBounds(aShadowClipRect);
+  Rect transformedSkipRect = currentMatrix.TransformBounds(aSkipRect);
+
+  transformedDestRect.Round();
+  transformedShadowClipRect.Round();
+  transformedSkipRect.RoundIn();
+
+  for (size_t i = 0; i < 4; i++) {
+    aInnerClipRectRadii[i].width = scale.width * aInnerClipRectRadii[i].width;
+    aInnerClipRectRadii[i].height = scale.height * aInnerClipRectRadii[i].height;
+  }
+
+  {
+    gfxContextAutoSaveRestore autoRestore(aDestinationCtx);
+    aDestinationCtx->SetMatrix(gfxMatrix());
+
+    mAlphaBoxBlur.BlurInsetBox(aDestinationCtx, transformedDestRect,
+                               transformedShadowClipRect,
+                               blurRadius, spreadRadius,
+                               aShadowColor,
+                               aHasBorderRadius,
+                               aInnerClipRectRadii, transformedSkipRect);
+  }
+  return true;
 }

@@ -24,6 +24,7 @@
 #include "jit/EagerSimdUnbox.h"
 #include "jit/EdgeCaseAnalysis.h"
 #include "jit/EffectiveAddressAnalysis.h"
+#include "jit/InstructionReordering.h"
 #include "jit/IonAnalysis.h"
 #include "jit/IonBuilder.h"
 #include "jit/IonOptimizationLevels.h"
@@ -408,12 +409,14 @@ JitCompartment::ensureIonStubsExist(JSContext* cx)
 struct OnIonCompilationInfo {
     size_t numBlocks;
     size_t scriptIndex;
+    LifoAlloc alloc;
     LSprinter graph;
 
-    explicit OnIonCompilationInfo(LifoAlloc* alloc)
+    OnIonCompilationInfo()
       : numBlocks(0),
         scriptIndex(0),
-        graph(alloc)
+        alloc(4096),
+        graph(&alloc)
     { }
 
     bool filled() const {
@@ -569,7 +572,7 @@ LinkBackgroundCodeGen(JSContext* cx, IonBuilder* builder,
     // Root the assembler until the builder is finished below. As it was
     // constructed off thread, the assembler has not been rooted previously,
     // though any GC activity would discard the builder.
-    codegen->masm.constructRoot(cx);
+    MacroAssembler::AutoRooter masm(cx, &codegen->masm);
 
     return LinkCodeGen(cx, builder, codegen, scripts, info);
 }
@@ -593,7 +596,7 @@ jit::LazyLink(JSContext* cx, HandleScript calleeScript)
 
     // See PrepareForDebuggerOnIonCompilationHook
     Rooted<ScriptVector> debugScripts(cx, ScriptVector(cx));
-    OnIonCompilationInfo info(builder->alloc().lifoAlloc());
+    OnIonCompilationInfo info;
 
     {
         AutoEnterAnalysis enterTypes(cx);
@@ -605,13 +608,13 @@ jit::LazyLink(JSContext* cx, HandleScript calleeScript)
         }
     }
 
-    if (info.filled())
-        Debugger::onIonCompilation(cx, debugScripts, info.graph);
-
     {
         AutoLockHelperThreadState lock;
         FinishOffThreadBuilder(cx, builder);
     }
+
+    if (info.filled())
+        Debugger::onIonCompilation(cx, debugScripts, info.graph);
 
     MOZ_ASSERT(calleeScript->hasBaselineScript());
     MOZ_ASSERT(calleeScript->baselineOrIonRawPointer());
@@ -2226,14 +2229,16 @@ IonCompile(JSContext* cx, JSScript* script,
 
     // See PrepareForDebuggerOnIonCompilationHook
     Rooted<ScriptVector> debugScripts(cx, ScriptVector(cx));
-    OnIonCompilationInfo debugInfo(alloc);
+    OnIonCompilationInfo debugInfo;
 
-    ScopedJSDeletePtr<CodeGenerator> codegen;
     {
+        ScopedJSDeletePtr<CodeGenerator> codegen;
         AutoEnterAnalysis enter(cx);
         codegen = CompileBackEnd(builder);
         if (!codegen) {
             JitSpew(JitSpew_IonAbort, "Failed during back-end compilation.");
+            if (cx->isExceptionPending())
+                return AbortReason_Error;
             return AbortReason_Disable;
         }
 
@@ -2836,9 +2841,11 @@ InvalidateActivation(FreeOp* fop, const JitActivationIterator& activations, bool
                 type = "Baseline";
             else if (it.isBailoutJS())
                 type = "Bailing";
-            JitSpew(JitSpew_IonInvalidate, "#%d %s JS frame @ %p, %s:%" PRIuSIZE " (fun: %p, script: %p, pc %p)",
-                    frameno, type, it.fp(), it.script()->filename(), it.script()->lineno(),
-                    it.maybeCallee(), (JSScript*)it.script(), it.returnAddressToFp());
+            JitSpew(JitSpew_IonInvalidate,
+                    "#%d %s JS frame @ %p, %s:%" PRIuSIZE " (fun: %p, script: %p, pc %p)",
+                    frameno, type, it.fp(), it.script()->maybeForwardedFilename(),
+                    it.script()->lineno(), it.maybeCallee(), (JSScript*)it.script(),
+                    it.returnAddressToFp());
             break;
           }
           case JitFrame_IonStub:

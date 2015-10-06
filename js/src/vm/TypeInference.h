@@ -23,6 +23,7 @@
 #include "js/UbiNode.h"
 #include "js/Utility.h"
 #include "js/Vector.h"
+#include "vm/TaggedProto.h"
 
 namespace js {
 
@@ -32,7 +33,6 @@ namespace jit {
     class TempAllocator;
 } // namespace jit
 
-class TaggedProto;
 struct TypeZone;
 class TypeConstraint;
 class TypeNewScript;
@@ -475,7 +475,7 @@ class TypeSet
     }
 
     /* Whether any values in this set might have the specified type. */
-    bool mightBeMIRType(jit::MIRType type);
+    bool mightBeMIRType(jit::MIRType type) const;
 
     /*
      * Get whether this type set is known to be a subset of other.
@@ -1295,7 +1295,18 @@ PrintTypes(JSContext* cx, JSCompartment* comp, bool force);
 // with no associated compartment.
 namespace JS {
 namespace ubi {
-template<> struct Concrete<js::ObjectGroup> : TracerConcrete<js::ObjectGroup> { };
+
+template<>
+struct Concrete<js::ObjectGroup> : TracerConcrete<js::ObjectGroup> {
+    Size size(mozilla::MallocSizeOf mallocSizeOf) const override;
+
+  protected:
+    explicit Concrete(js::ObjectGroup *ptr) : TracerConcrete<js::ObjectGroup>(ptr) { }
+
+  public:
+    static void construct(void *storage, js::ObjectGroup *ptr) { new (storage) Concrete(ptr); }
+};
+
 } // namespace ubi
 } // namespace JS
 

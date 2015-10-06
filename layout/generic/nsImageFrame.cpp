@@ -1131,7 +1131,8 @@ nsImageFrame::DisplayAltText(nsPresContext*      aPresContext,
                              const nsRect&        aRect)
 {
   // Set font and color
-  aRenderingContext.ThebesContext()->SetColor(StyleColor()->mColor);
+  aRenderingContext.ThebesContext()->
+    SetColor(Color::FromABGR(StyleColor()->mColor));
   nsRefPtr<nsFontMetrics> fm;
   nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
     nsLayoutUtils::FontSizeInflationFor(this));
@@ -1187,7 +1188,7 @@ nsImageFrame::DisplayAltText(nsPresContext*      aPresContext,
       nscoord x, y;
 
       if (isVertical) {
-        x = pt.x + maxDescent; // XXX will need update for sideways-left
+        x = pt.x + maxDescent;
         if (wm.IsBidiLTR()) {
           y = aRect.y;
           dir = NSBIDI_LTR;
@@ -2204,7 +2205,7 @@ nsImageFrame::LoadIcon(const nsAString& aSpec,
 
   // For icon loads, we don't need to merge with the loadgroup flags
   nsLoadFlags loadFlags = nsIRequest::LOAD_NORMAL;
-  nsContentPolicyType contentPolicyType = nsIContentPolicy::TYPE_IMAGE;
+  nsContentPolicyType contentPolicyType = nsIContentPolicy::TYPE_INTERNAL_IMAGE;
 
   return il->LoadImage(realURI,     /* icon URI */
                        nullptr,      /* initial document URI; this is only

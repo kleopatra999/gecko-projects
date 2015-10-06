@@ -33,6 +33,7 @@
 #include "mozilla/css/Loader.h"
 #include "mozilla/css/ImageLoader.h"
 #include "nsDocShell.h"
+#include "nsDocShellLoadTypes.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsCOMArray.h"
 #include "nsQueryObject.h"
@@ -1429,7 +1430,8 @@ nsDOMStyleSheetSetList::EnsureFresh()
 
 // ==================================================================
 nsIDocument::SelectorCache::SelectorCache()
-  : nsExpirationTracker<SelectorCacheKey, 4>(1000) { }
+  : nsExpirationTracker<SelectorCacheKey, 4>(1000, "nsIDocument::SelectorCache")
+{ }
 
 // CacheList takes ownership of aSelectorList.
 void nsIDocument::SelectorCache::CacheList(const nsAString& aSelector,
@@ -1530,7 +1532,8 @@ nsIDocument::nsIDocument()
     mGetUserFontSetCalled(false),
     mPostedFlushUserFontSet(false),
     mPartID(0),
-    mDidFireDOMContentLoaded(true)
+    mDidFireDOMContentLoaded(true),
+    mUserHasInteracted(false)
 {
   SetInDocument();
 
@@ -2624,8 +2627,6 @@ nsDocument::StartDocumentLoad(const char* aCommand, nsIChannel* aChannel,
   }
 
   mMayStartLayout = false;
-
-  mHaveInputEncoding = true;
 
   if (aReset) {
     Reset(aChannel, aLoadGroup);
@@ -3948,7 +3949,7 @@ nsDocument::SetSubDocumentFor(Element* aElement, nsIDocument* aSubDoc)
     // aSubDoc is nullptr, remove the mapping
 
     if (mSubDocuments) {
-      PL_DHashTableRemove(mSubDocuments, aElement);
+      mSubDocuments->Remove(aElement);
     }
   } else {
     if (!mSubDocuments) {
@@ -3956,9 +3957,9 @@ nsDocument::SetSubDocumentFor(Element* aElement, nsIDocument* aSubDoc)
 
       static const PLDHashTableOps hash_table_ops =
       {
-        PL_DHashVoidPtrKeyStub,
-        PL_DHashMatchEntryStub,
-        PL_DHashMoveEntryStub,
+        PLDHashTable::HashVoidPtrKeyStub,
+        PLDHashTable::MatchEntryStub,
+        PLDHashTable::MoveEntryStub,
         SubDocClearEntry,
         SubDocInitEntry
       };
@@ -3967,8 +3968,8 @@ nsDocument::SetSubDocumentFor(Element* aElement, nsIDocument* aSubDoc)
     }
 
     // Add a mapping to the hash table
-    SubDocMapEntry *entry = static_cast<SubDocMapEntry*>
-      (PL_DHashTableAdd(mSubDocuments, aElement, fallible));
+    auto entry =
+      static_cast<SubDocMapEntry*>(mSubDocuments->Add(aElement, fallible));
 
     if (!entry) {
       return NS_ERROR_OUT_OF_MEMORY;
@@ -3994,9 +3995,8 @@ nsIDocument*
 nsDocument::GetSubDocumentFor(nsIContent *aContent) const
 {
   if (mSubDocuments && aContent->IsElement()) {
-    SubDocMapEntry *entry =
-      static_cast<SubDocMapEntry*>
-                 (PL_DHashTableSearch(mSubDocuments, aContent->AsElement()));
+    auto entry = static_cast<SubDocMapEntry*>
+                            (mSubDocuments->Search(aContent->AsElement()));
 
     if (entry) {
       return entry->mSubDocument;
@@ -4730,15 +4730,13 @@ nsDocument::SetScriptGlobalObject(nsIScriptGlobalObject *aScriptGlobalObject)
     mTemplateContentsOwner->SetScriptGlobalObject(aScriptGlobalObject);
   }
 
-  nsCOMPtr<nsIChannel> channel = GetChannel();
-  if (!mMaybeServiceWorkerControlled && channel) {
-    nsLoadFlags loadFlags = 0;
-    channel->GetLoadFlags(&loadFlags);
+  if (!mMaybeServiceWorkerControlled && mDocumentContainer && mScriptGlobalObject && GetChannel()) {
+    nsCOMPtr<nsIDocShell> docShell(mDocumentContainer);
+    uint32_t loadType;
+    docShell->GetLoadType(&loadType);
+
     // If we are shift-reloaded, don't associate with a ServiceWorker.
-    // TODO: This should check the nsDocShell definition of shift-reload instead
-    //       of trying to infer it from LOAD_BYPASS_CACHE.  The current code
-    //       will probably cause problems once bug 1120715 lands.
-    if (loadFlags & nsIRequest::LOAD_BYPASS_CACHE) {
+    if (IsForceReloadType(loadType)) {
       NS_WARNING("Page was shift reloaded, skipping ServiceWorker control");
       return;
     }
@@ -5042,7 +5040,7 @@ nsDocument::MozSetImageElement(const nsAString& aImageElementId,
   if (entry) {
     entry->SetImageElement(aElement);
     if (entry->IsEmpty()) {
-      mIdentifierMap.RemoveEntry(aImageElementId);
+      mIdentifierMap.RemoveEntry(entry);
     }
   }
 }
@@ -5733,8 +5731,15 @@ nsIDocument::CreateAttribute(const nsAString& aName, ErrorResult& rv)
     return nullptr;
   }
 
+  nsAutoString name;
+  if (IsHTMLDocument()) {
+    nsContentUtils::ASCIIToLower(aName, name);
+  } else {
+    name = aName;
+  }
+
   nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
-  res = mNodeInfoManager->GetNodeInfo(aName, nullptr, kNameSpaceID_None,
+  res = mNodeInfoManager->GetNodeInfo(name, nullptr, kNameSpaceID_None,
                                       nsIDOMNode::ATTRIBUTE_NODE,
                                       getter_AddRefs(nodeInfo));
   if (NS_FAILED(res)) {
@@ -5896,29 +5901,6 @@ nsDocument::RegisterUnresolvedElement(Element* aElement, nsIAtom* aTypeName)
   return NS_OK;
 }
 
-namespace {
-
-class ProcessStackRunner final : public nsIRunnable
-{
-  ~ProcessStackRunner() {}
-public:
-  explicit ProcessStackRunner(bool aIsBaseQueue = false)
-    : mIsBaseQueue(aIsBaseQueue)
-  {
-  }
-  NS_DECL_ISUPPORTS
-  NS_IMETHOD Run() override
-  {
-    nsDocument::ProcessTopElementQueue(mIsBaseQueue);
-    return NS_OK;
-  }
-  bool mIsBaseQueue;
-};
-
-NS_IMPL_ISUPPORTS(ProcessStackRunner, nsIRunnable);
-
-} // namespace
-
 void
 nsDocument::EnqueueLifecycleCallback(nsIDocument::ElementCallbackType aType,
                                      Element* aCustomElement,
@@ -6020,10 +6002,7 @@ nsDocument::EnqueueLifecycleCallback(nsIDocument::ElementCallbackType aType,
 
     // A new element queue needs to be pushed if the queue at the
     // top of the stack is associated with another microtask level.
-    // Don't push a queue for the level 0 microtask (base element queue)
-    // because we don't want to process the queue until the
-    // microtask checkpoint.
-    bool shouldPushElementQueue = nsContentUtils::MicroTaskLevel() > 0 &&
+    bool shouldPushElementQueue =
       (!lastData || lastData->mAssociatedMicroTask <
          static_cast<int32_t>(nsContentUtils::MicroTaskLevel()));
 
@@ -6046,38 +6025,21 @@ nsDocument::EnqueueLifecycleCallback(nsIDocument::ElementCallbackType aType,
       // should be invoked prior to returning control back to script.
       // Create a script runner to process the top of the processing
       // stack as soon as it is safe to run script.
-      nsContentUtils::AddScriptRunner(new ProcessStackRunner());
+      nsCOMPtr<nsIRunnable> runnable =
+        NS_NewRunnableFunction(&nsDocument::ProcessTopElementQueue);
+      nsContentUtils::AddScriptRunner(runnable);
     }
   }
 }
 
 // static
 void
-nsDocument::ProcessBaseElementQueue()
-{
-  // Prevent re-entrance. Also, if a microtask checkpoint is reached
-  // and there is no processing stack to process, then we are done.
-  if (sProcessingBaseElementQueue || !sProcessingStack) {
-    return;
-  }
-
-  MOZ_ASSERT(nsContentUtils::MicroTaskLevel() == 0);
-  sProcessingBaseElementQueue = true;
-  nsContentUtils::AddScriptRunner(new ProcessStackRunner(true));
-}
-
-// static
-void
-nsDocument::ProcessTopElementQueue(bool aIsBaseQueue)
+nsDocument::ProcessTopElementQueue()
 {
   MOZ_ASSERT(nsContentUtils::IsSafeToRunScript());
 
   nsTArray<nsRefPtr<CustomElementData>>& stack = *sProcessingStack;
   uint32_t firstQueue = stack.LastIndexOf((CustomElementData*) nullptr);
-
-  if (aIsBaseQueue && firstQueue != 0) {
-    return;
-  }
 
   for (uint32_t i = firstQueue + 1; i < stack.Length(); ++i) {
     // Callback queue may have already been processed in an earlier
@@ -6096,7 +6058,6 @@ nsDocument::ProcessTopElementQueue(bool aIsBaseQueue)
   } else {
     // Don't pop sentinel for base element queue.
     stack.SetLength(1);
-    sProcessingBaseElementQueue = false;
   }
 }
 
@@ -6111,10 +6072,6 @@ nsDocument::RegisterEnabled()
 // static
 Maybe<nsTArray<nsRefPtr<mozilla::dom::CustomElementData>>>
 nsDocument::sProcessingStack;
-
-// static
-bool
-nsDocument::sProcessingBaseElementQueue;
 
 void
 nsDocument::RegisterElement(JSContext* aCx, const nsAString& aType,
@@ -7530,19 +7487,8 @@ nsIDocument::SetDir(const nsAString& aDirection)
 NS_IMETHODIMP
 nsDocument::GetInputEncoding(nsAString& aInputEncoding)
 {
-  nsIDocument::GetInputEncoding(aInputEncoding);
+  nsIDocument::GetCharacterSet(aInputEncoding);
   return NS_OK;
-}
-
-void
-nsIDocument::GetInputEncoding(nsAString& aInputEncoding) const
-{
-  WarnOnceAbout(eInputEncoding);
-  if (mHaveInputEncoding) {
-    return GetCharacterSet(aInputEncoding);
-  }
-
-  SetDOMStringToNull(aInputEncoding);
 }
 
 NS_IMETHODIMP
@@ -7892,9 +7838,7 @@ nsDocument::GetViewportInfo(const ScreenIntSize& aDisplaySize)
   // pixel an integer, and we want the adjusted value.
   float fullZoom = context ? context->DeviceContext()->GetFullZoom() : 1.0;
   fullZoom = (fullZoom == 0.0) ? 1.0 : fullZoom;
-  CSSToLayoutDeviceScale layoutDeviceScale(
-    (float)nsPresContext::AppUnitsPerCSSPixel() /
-    context->AppUnitsPerDevPixel());
+  CSSToLayoutDeviceScale layoutDeviceScale = context->CSSToDevPixelScale();
 
   CSSToScreenScale defaultScale = layoutDeviceScale
                                 * LayoutDeviceToScreenScale(1.0);
@@ -7903,12 +7847,13 @@ nsDocument::GetViewportInfo(const ScreenIntSize& aDisplaySize)
   nsPIDOMWindow* win = GetWindow();
   if (win && win->IsDesktopModeViewport() && !IsAboutPage())
   {
-    float viewportWidth = gfxPrefs::DesktopViewportWidth() / fullZoom;
-    float scaleToFit = aDisplaySize.width / viewportWidth;
+    CSSCoord viewportWidth = gfxPrefs::DesktopViewportWidth() / fullZoom;
+    CSSToScreenScale scaleToFit(aDisplaySize.width / viewportWidth);
     float aspectRatio = (float)aDisplaySize.height / aDisplaySize.width;
-    ScreenSize viewportSize(viewportWidth, viewportWidth * aspectRatio);
-    return nsViewportInfo(RoundedToInt(viewportSize),
-                          CSSToScreenScale(scaleToFit),
+    CSSSize viewportSize(viewportWidth, viewportWidth * aspectRatio);
+    ScreenIntSize fakeDesktopSize = RoundedToInt(viewportSize * scaleToFit);
+    return nsViewportInfo(fakeDesktopSize,
+                          scaleToFit,
                           /*allowZoom*/ true);
   }
 
@@ -8105,7 +8050,7 @@ nsDocument::GetViewportInfo(const ScreenIntSize& aDisplaySize)
 
     // We need to perform a conversion, but only if the initial or maximum
     // scale were set explicitly by the user.
-    if (mValidScaleFloat) {
+    if (mValidScaleFloat && scaleFloat >= scaleMinFloat && scaleFloat <= scaleMaxFloat) {
       CSSSize displaySize = ScreenSize(aDisplaySize) / scaleFloat;
       size.width = std::max(size.width, displaySize.width);
       size.height = std::max(size.height, displaySize.height);
@@ -9458,7 +9403,7 @@ nsDocument::ForgetLink(Link* aLink)
   NS_ASSERTION(entry || mStyledLinksCleared,
                "Document knows nothing about this Link!");
 #endif
-  (void)mStyledLinks.RemoveEntry(aLink);
+  mStyledLinks.RemoveEntry(aLink);
 }
 
 void
@@ -9781,7 +9726,8 @@ nsDocument::MaybePreLoadImage(nsIURI* uri, const nsAString &aCrossOriginAttr,
   int16_t blockingStatus;
   if (nsContentUtils::IsImageInCache(uri, static_cast<nsIDocument *>(this)) ||
       !nsContentUtils::CanLoadImage(uri, static_cast<nsIDocument *>(this),
-                                    this, NodePrincipal(), &blockingStatus)) {
+                                    this, NodePrincipal(), &blockingStatus,
+                                    nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD)) {
     return;
   }
 
@@ -9811,7 +9757,8 @@ nsDocument::MaybePreLoadImage(nsIURI* uri, const nsAString &aCrossOriginAttr,
                               nullptr,       // no observer
                               loadFlags,
                               NS_LITERAL_STRING("img"),
-                              getter_AddRefs(request));
+                              getter_AddRefs(request),
+                              nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD);
 
   // Pin image-reference to avoid evicting it from the img-cache before
   // the "real" load occurs. Unpinned in DispatchContentLoadedEvents and
@@ -9925,7 +9872,7 @@ nsDocument::PreloadStyle(nsIURI* uri, const nsAString& charset,
   nsCOMPtr<nsICSSLoaderObserver> obs = new StubCSSLoaderObserver();
 
   // Charset names are always ASCII.
-  CSSLoader()->LoadSheet(uri, NodePrincipal(),
+  CSSLoader()->LoadSheet(uri, true, NodePrincipal(),
                          NS_LossyConvertUTF16toASCII(charset),
                          obs,
                          Element::StringToCORSMode(aCrossOriginAttr),
@@ -10175,11 +10122,14 @@ nsIDocument::RegisterActivityObserver(nsISupports* aSupports)
 bool
 nsIDocument::UnregisterActivityObserver(nsISupports* aSupports)
 {
-  if (!mActivityObservers)
+  if (!mActivityObservers) {
     return false;
-  if (!mActivityObservers->GetEntry(aSupports))
+  }
+  nsPtrHashKey<nsISupports>* entry = mActivityObservers->GetEntry(aSupports);
+  if (!entry) {
     return false;
-  mActivityObservers->RemoveEntry(aSupports);
+  }
+  mActivityObservers->RemoveEntry(entry);
   return true;
 }
 
@@ -11390,6 +11340,16 @@ LogFullScreenDenied(bool aLogFailure, const char* aMessage, nsIDocument* aDoc)
                                   aMessage);
 }
 
+static void
+UpdateViewportScrollbarOverrideForFullscreen(nsIDocument* aDoc)
+{
+  if (nsIPresShell* presShell = aDoc->GetShell()) {
+    if (nsPresContext* presContext = presShell->GetPresContext()) {
+      presContext->UpdateViewportScrollbarStylesOverride();
+    }
+  }
+}
+
 void
 nsDocument::CleanupFullscreenState()
 {
@@ -11409,6 +11369,7 @@ nsDocument::CleanupFullscreenState()
   }
   mFullScreenStack.Clear();
   mFullscreenRoot = nullptr;
+  UpdateViewportScrollbarOverrideForFullscreen(this);
 }
 
 bool
@@ -11422,6 +11383,7 @@ nsDocument::FullScreenStackPush(Element* aElement)
   EventStateManager::SetFullScreenState(aElement, true);
   mFullScreenStack.AppendElement(do_GetWeakReference(aElement));
   NS_ASSERTION(GetFullScreenElement() == aElement, "Should match");
+  UpdateViewportScrollbarOverrideForFullscreen(this);
   return true;
 }
 
@@ -11461,6 +11423,8 @@ nsDocument::FullScreenStackPop()
       break;
     }
   }
+
+  UpdateViewportScrollbarOverrideForFullscreen(this);
 }
 
 Element*
@@ -11735,6 +11699,41 @@ GetRootWindow(nsIDocument* aDoc)
   return rootItem ? rootItem->GetWindow() : nullptr;
 }
 
+static bool
+ShouldApplyFullscreenDirectly(nsIDocument* aDoc,
+                              nsPIDOMWindow* aRootWin)
+{
+  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    // If we are in the content process, we can apply the fullscreen
+    // state directly only if we have been in DOM fullscreen, because
+    // otherwise we always need to notify the chrome.
+    return nsContentUtils::GetRootDocument(aDoc)->IsFullScreenDoc();
+  } else {
+    // If we are in the chrome process, and the window has not been in
+    // fullscreen, we certainly need to make that fullscreen first.
+    bool fullscreen;
+    NS_WARN_IF(NS_FAILED(aRootWin->GetFullScreen(&fullscreen)));
+    if (!fullscreen) {
+      return false;
+    }
+    // The iterator not being at end indicates there is still some
+    // pending fullscreen request relates to this document. We have to
+    // push the request to the pending queue so requests are handled
+    // in the correct order.
+    PendingFullscreenRequestList::Iterator
+      iter(aDoc, PendingFullscreenRequestList::eDocumentsWithSameRoot);
+    if (!iter.AtEnd()) {
+      return false;
+    }
+    // We have to apply the fullscreen state directly in this case,
+    // because nsGlobalWindow::SetFullscreenInternal() will do nothing
+    // if it is already in fullscreen. If we do not apply the state but
+    // instead add it to the queue and wait for the window as normal,
+    // we would get stuck.
+    return true;
+  }
+}
+
 void
 nsDocument::RequestFullScreen(UniquePtr<FullscreenRequest>&& aRequest)
 {
@@ -11743,19 +11742,7 @@ nsDocument::RequestFullScreen(UniquePtr<FullscreenRequest>&& aRequest)
     return;
   }
 
-  // If we have been in fullscreen, apply the new state directly.
-  // Note that we should check both condition, because if we are in
-  // child process, our window may not report to be in fullscreen.
-  // Also, it is possible that the root window reports that it is in
-  // fullscreen while there exists pending fullscreen request because
-  // of ongoing fullscreen transition. In that case, we shouldn't
-  // apply the state before any previous request.
-  if ((static_cast<nsGlobalWindow*>(rootWin.get())->FullScreen() &&
-       // The iterator being at end at the beginning indicates there is
-       // no pending fullscreen request which relates to this document.
-       PendingFullscreenRequestList::Iterator(
-         this, PendingFullscreenRequestList::eDocumentsWithSameRoot).AtEnd()) ||
-      nsContentUtils::GetRootDocument(this)->IsFullScreenDoc()) {
+  if (ShouldApplyFullscreenDirectly(this, rootWin)) {
     ApplyFullscreen(*aRequest);
     return;
   }
@@ -13044,6 +13031,24 @@ nsDocument::ReportUseCounters()
     // that feature were removed.  Whereas with a document/top-level
     // page split, we can see that N documents would be affected, but
     // only a single web page would be affected.
+
+    // The difference between the values of these two histograms and the
+    // related use counters below tell us how many pages did *not* use
+    // the feature in question.  For instance, if we see that a given
+    // session has destroyed 30 content documents, but a particular use
+    // counter shows only a count of 5, we can infer that the use
+    // counter was *not* used in 25 of those 30 documents.
+    //
+    // We do things this way, rather than accumulating a boolean flag
+    // for each use counter, to avoid sending histograms for features
+    // that don't get widely used.  Doing things in this fashion means
+    // smaller telemetry payloads and faster processing on the server
+    // side.
+    Telemetry::Accumulate(Telemetry::CONTENT_DOCUMENTS_DESTROYED, 1);
+    if (IsTopLevelContentDocument()) {
+      Telemetry::Accumulate(Telemetry::TOP_LEVEL_CONTENT_DOCUMENTS_DESTROYED, 1);
+    }
+
     for (int32_t c = 0;
          c < eUseCounter_Count; ++c) {
       UseCounter uc = static_cast<UseCounter>(c);
@@ -13052,24 +13057,8 @@ nsDocument::ReportUseCounters()
         static_cast<Telemetry::ID>(Telemetry::HistogramFirstUseCounter + uc * 2);
       bool value = GetUseCounter(uc);
 
-      if (sDebugUseCounters && value) {
-        const char* name = Telemetry::GetHistogramName(id);
-        if (name) {
-          printf("  %s", name);
-        } else {
-          printf("  #%d", id);
-        }
-        printf(": %d\n", value);
-      }
-
-      Telemetry::Accumulate(id, value);
-
-      if (IsTopLevelContentDocument()) {
-        id = static_cast<Telemetry::ID>(Telemetry::HistogramFirstUseCounter +
-                                        uc * 2 + 1);
-        value = GetUseCounter(uc) || GetChildDocumentUseCounter(uc);
-
-        if (sDebugUseCounters && value) {
+      if (value) {
+        if (sDebugUseCounters) {
           const char* name = Telemetry::GetHistogramName(id);
           if (name) {
             printf("  %s", name);
@@ -13079,7 +13068,27 @@ nsDocument::ReportUseCounters()
           printf(": %d\n", value);
         }
 
-        Telemetry::Accumulate(id, value);
+        Telemetry::Accumulate(id, 1);
+      }
+
+      if (IsTopLevelContentDocument()) {
+        id = static_cast<Telemetry::ID>(Telemetry::HistogramFirstUseCounter +
+                                        uc * 2 + 1);
+        value = GetUseCounter(uc) || GetChildDocumentUseCounter(uc);
+
+        if (value) {
+          if (sDebugUseCounters) {
+            const char* name = Telemetry::GetHistogramName(id);
+            if (name) {
+              printf("  %s", name);
+            } else {
+              printf("  #%d", id);
+            }
+            printf(": %d\n", value);
+          }
+
+          Telemetry::Accumulate(id, 1);
+        }
       }
     }
   }

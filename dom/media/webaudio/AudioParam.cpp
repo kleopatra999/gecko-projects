@@ -44,14 +44,14 @@ NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(AudioParam, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(AudioParam, Release)
 
 AudioParam::AudioParam(AudioNode* aNode,
-                       AudioParam::CallbackType aCallback,
+                       uint32_t aIndex,
                        float aDefaultValue,
                        const char* aName)
   : AudioParamTimeline(aDefaultValue)
   , mNode(aNode)
-  , mCallback(aCallback)
-  , mDefaultValue(aDefaultValue)
   , mName(aName)
+  , mIndex(aIndex)
+  , mDefaultValue(aDefaultValue)
 {
 }
 
@@ -100,7 +100,7 @@ AudioParam::Stream()
 
   AudioNodeEngine* engine = new AudioNodeEngine(nullptr);
   nsRefPtr<AudioNodeStream> stream =
-    AudioNodeStream::Create(mNode->Context()->Graph(), engine,
+    AudioNodeStream::Create(mNode->Context(), engine,
                             AudioNodeStream::NO_STREAM_FLAGS);
 
   // Force the input to have only one channel, and make it down-mix using
@@ -114,13 +114,24 @@ AudioParam::Stream()
   // Setup the AudioParam's stream as an input to the owner AudioNode's stream
   AudioNodeStream* nodeStream = mNode->GetStream();
   if (nodeStream) {
-    mNodeStreamPort = nodeStream->AllocateInputPort(mStream, 0);
+    mNodeStreamPort =
+      nodeStream->AllocateInputPort(mStream, AudioNodeStream::AUDIO_TRACK);
   }
 
-  // Let the MSG's copy of AudioParamTimeline know about the change in the stream
-  mCallback(mNode);
+  // Send the stream to the timeline on the MSG side.
+  AudioTimelineEvent event(mStream);
+  SendEventToEngine(event);
 
   return mStream;
+}
+
+void
+AudioParam::SendEventToEngine(const AudioTimelineEvent& aEvent)
+{
+  AudioNodeStream* stream = mNode->GetStream();
+  if (stream) {
+    stream->SendTimelineEvent(mIndex, aEvent);
+  }
 }
 
 float

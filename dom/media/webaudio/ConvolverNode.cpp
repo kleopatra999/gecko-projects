@@ -102,6 +102,7 @@ public:
   }
 
   virtual void ProcessBlock(AudioNodeStream* aStream,
+                            GraphTime aFrom,
                             const AudioBlock& aInput,
                             AudioBlock* aOutput,
                             bool* aFinished) override
@@ -120,6 +121,7 @@ public:
       } else {
         if (mLeftOverData != INT32_MIN) {
           mLeftOverData = INT32_MIN;
+          aStream->CheckForInactive();
           nsRefPtr<PlayingRefChanged> refchanged =
             new PlayingRefChanged(aStream, PlayingRefChanged::RELEASE);
           aStream->Graph()->
@@ -152,6 +154,11 @@ public:
     aOutput->AllocateChannels(2);
 
     mReverb->process(&input, aOutput, WEBAUDIO_BLOCK_SIZE);
+  }
+
+  virtual bool IsActive() const override
+  {
+    return mLeftOverData != INT32_MIN;
   }
 
   virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override
@@ -191,7 +198,7 @@ ConvolverNode::ConvolverNode(AudioContext* aContext)
   , mNormalize(true)
 {
   ConvolverNodeEngine* engine = new ConvolverNodeEngine(this, mNormalize);
-  mStream = AudioNodeStream::Create(aContext->Graph(), engine,
+  mStream = AudioNodeStream::Create(aContext, engine,
                                     AudioNodeStream::NO_STREAM_FLAGS);
 }
 

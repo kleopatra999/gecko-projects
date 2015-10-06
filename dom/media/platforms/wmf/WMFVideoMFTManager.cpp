@@ -23,8 +23,8 @@
 #include "mozilla/Preferences.h"
 #include "nsPrintfCString.h"
 
-PRLogModuleInfo* GetDemuxerLog();
-#define LOG(...) MOZ_LOG(GetDemuxerLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
+extern PRLogModuleInfo* GetPDMLog();
+#define LOG(...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 
 using mozilla::layers::Image;
 using mozilla::layers::IMFYCbCrImage;
@@ -168,7 +168,7 @@ WMFVideoMFTManager::InitializeDXVA(bool aForceD3D9)
   }
 
   // The DXVA manager must be created on the main thread.
-  nsRefPtr<CreateDXVAManagerEvent> event = 
+  nsRefPtr<CreateDXVAManagerEvent> event =
     new CreateDXVAManagerEvent(aForceD3D9 ? LayersBackend::LAYERS_D3D9 : mLayersBackend, mDXVAFailureReason);
 
   if (NS_IsMainThread()) {

@@ -3,9 +3,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-let Ci = Components.interfaces;
-let Cu = Components.utils;
-let Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
+var Cc = Components.classes;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/NotificationDB.jsm");
@@ -42,8 +42,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "Log",
                                   "resource://gre/modules/Log.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
                                   "resource://gre/modules/AppConstants.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
-                                  "resource://gre/modules/UpdateChannel.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
+                                  "resource://gre/modules/UpdateUtils.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "Favicons",
                                    "@mozilla.org/browser/favicon-service;1",
                                    "mozIAsyncFavicons");
@@ -83,6 +83,10 @@ function pktUIGetter(prop) {
 }
 Object.defineProperty(window, "pktUI", pktUIGetter("pktUI"));
 Object.defineProperty(window, "pktUIMessaging", pktUIGetter("pktUIMessaging"));
+
+XPCOMUtils.defineLazyGetter(this, "gBrowserBundle", function() {
+  return Services.strings.createBundle('chrome://browser/locale/browser.properties');
+});
 
 const nsIWebNavigation = Ci.nsIWebNavigation;
 
@@ -181,13 +185,13 @@ XPCOMUtils.defineLazyGetter(this, "PopupNotifications", function () {
 
 XPCOMUtils.defineLazyGetter(this, "DeveloperToolbar", function() {
   let tmp = {};
-  Cu.import("resource:///modules/devtools/DeveloperToolbar.jsm", tmp);
+  Cu.import("resource:///modules/devtools/client/shared/DeveloperToolbar.jsm", tmp);
   return new tmp.DeveloperToolbar(window, document.getElementById("developer-toolbar"));
 });
 
 XPCOMUtils.defineLazyGetter(this, "BrowserToolboxProcess", function() {
   let tmp = {};
-  Cu.import("resource:///modules/devtools/ToolboxProcess.jsm", tmp);
+  Cu.import("resource:///modules/devtools/client/framework/ToolboxProcess.jsm", tmp);
   return tmp.BrowserToolboxProcess;
 });
 
@@ -251,7 +255,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode",
 XPCOMUtils.defineLazyModuleGetter(this, "ReaderParent",
   "resource:///modules/ReaderParent.jsm");
 
-let gInitialPages = [
+var gInitialPages = [
   "about:blank",
   "about:newtab",
   "about:home",
@@ -965,6 +969,7 @@ var gBrowserInit = {
     gPageStyleMenu.init();
     LanguageDetectionListener.init();
     BrowserOnClick.init();
+    FeedHandler.init();
     DevEdition.init();
     AboutPrivateBrowsingListener.init();
     TrackingProtection.init();
@@ -1161,7 +1166,15 @@ var gBrowserInit = {
       let browser = gBrowser.getBrowserForDocument(ownerDoc);
 #ifdef MOZ_CRASHREPORTER
       if (event.detail.sendCrashReport) {
-        TabCrashReporter.submitCrashReport(browser);
+        TabCrashReporter.submitCrashReport(browser, {
+          comments: event.detail.comments,
+          email: event.detail.email,
+          emailMe: event.detail.emailMe,
+          includeURL: event.detail.includeURL,
+          URL: event.detail.URL,
+        });
+      } else {
+        TabCrashReporter.dontSubmitCrashReport();
       }
 #endif
 
@@ -1286,9 +1299,6 @@ var gBrowserInit = {
         !focusAndSelectUrlBar()) {
       gBrowser.selectedBrowser.focus();
     }
-
-    // Set up Sanitize Item
-    this._initializeSanitizer();
 
     // Enable/Disable auto-hide tabbar
     gBrowser.tabContainer.updateVisibility();
@@ -1674,9 +1684,6 @@ var gBrowserInit = {
     // initialise the offline listener
     BrowserOffline.init();
 
-    // Set up Sanitize Item
-    this._initializeSanitizer();
-
     // initialize the private browsing UI
     gPrivateBrowsingUI.init();
 
@@ -1701,52 +1708,6 @@ var gBrowserInit = {
     BrowserOffline.uninit();
   },
 #endif
-
-  _initializeSanitizer: function() {
-    const kDidSanitizeDomain = "privacy.sanitize.didShutdownSanitize";
-    if (gPrefService.prefHasUserValue(kDidSanitizeDomain)) {
-      gPrefService.clearUserPref(kDidSanitizeDomain);
-      // We need to persist this preference change, since we want to
-      // check it at next app start even if the browser exits abruptly
-      gPrefService.savePrefFile(null);
-    }
-
-    /**
-     * Migrate Firefox 3.0 privacy.item prefs under one of these conditions:
-     *
-     * a) User has customized any privacy.item prefs
-     * b) privacy.sanitize.sanitizeOnShutdown is set
-     */
-    if (!gPrefService.getBoolPref("privacy.sanitize.migrateFx3Prefs")) {
-      let itemBranch = gPrefService.getBranch("privacy.item.");
-      let itemArray = itemBranch.getChildList("");
-
-      // See if any privacy.item prefs are set
-      let doMigrate = itemArray.some(function (name) itemBranch.prefHasUserValue(name));
-      // Or if sanitizeOnShutdown is set
-      if (!doMigrate)
-        doMigrate = gPrefService.getBoolPref("privacy.sanitize.sanitizeOnShutdown");
-
-      if (doMigrate) {
-        let cpdBranch = gPrefService.getBranch("privacy.cpd.");
-        let clearOnShutdownBranch = gPrefService.getBranch("privacy.clearOnShutdown.");
-        for (let name of itemArray) {
-          try {
-            // don't migrate password or offlineApps clearing in the CRH dialog since
-            // there's no UI for those anymore. They default to false. bug 497656
-            if (name != "passwords" && name != "offlineApps")
-              cpdBranch.setBoolPref(name, itemBranch.getBoolPref(name));
-            clearOnShutdownBranch.setBoolPref(name, itemBranch.getBoolPref(name));
-          }
-          catch(e) {
-            Cu.reportError("Exception thrown during privacy pref migration: " + e);
-          }
-        }
-      }
-
-      gPrefService.setBoolPref("privacy.sanitize.migrateFx3Prefs", true);
-    }
-  },
 }
 
 
@@ -2372,7 +2333,6 @@ function BrowserViewSourceOfDocument(aArgsOrDocument) {
   let viewInternal = () => {
     let inTab = Services.prefs.getBoolPref("view_source.tab");
     if (inTab) {
-      let viewSourceURL = `view-source:${args.URL}`;
       let tabBrowser = gBrowser;
       // In the case of sidebars and chat windows, gBrowser is defined but null,
       // because no #content element exists.  For these cases, we need to find
@@ -2383,7 +2343,12 @@ function BrowserViewSourceOfDocument(aArgsOrDocument) {
         let browserWindow = RecentWindow.getMostRecentBrowserWindow();
         tabBrowser = browserWindow.gBrowser;
       }
-      let tab = tabBrowser.loadOneTab(viewSourceURL, {
+      // `viewSourceInBrowser` will load the source content from the page
+      // descriptor for the tab (when possible) or fallback to the network if
+      // that fails.  Either way, the view source module will manage the tab's
+      // location, so use "about:blank" here to avoid unnecessary redundant
+      // requests.
+      let tab = tabBrowser.loadOneTab("about:blank", {
         relatedToCurrent: true,
         inBackground: false
       });
@@ -2593,7 +2558,7 @@ function PageProxyClickHandler(aEvent)
     middleMousePaste(aEvent);
 }
 
-let gMenuButtonBadgeManager = {
+var gMenuButtonBadgeManager = {
   BADGEID_APPUPDATE: "update",
   BADGEID_FXA: "fxa",
 
@@ -2655,7 +2620,7 @@ let gMenuButtonBadgeManager = {
 };
 
 // Setup the hamburger button badges for updates, if enabled.
-let gMenuButtonUpdateBadge = {
+var gMenuButtonUpdateBadge = {
   enabled: false,
   badgeWaitTime: 0,
   timer: null,
@@ -2762,7 +2727,7 @@ const TLS_ERROR_REPORT_TELEMETRY_AUTO_SEND      = 5;
  * or from about:newtab or from remote error pages that invoke
  * us via async messaging.
  */
-let BrowserOnClick = {
+var BrowserOnClick = {
   init: function () {
     let mm = window.messageManager;
     mm.addMessageListener("Browser:CertExceptionError", this);
@@ -2918,7 +2883,7 @@ let BrowserOnClick = {
       version: 1,
       build: gAppInfo.appBuildID,
       product: gAppInfo.name,
-      channel: UpdateChannel.get()
+      channel: UpdateUtils.UpdateChannel
     }
 
     let reportURL = Services.prefs.getCharPref("security.ssl.errorReporting.url");
@@ -3317,7 +3282,7 @@ function FillInHTMLTooltip(tipElement)
 }
 
 var browserDragAndDrop = {
-  canDropLink: function (aEvent) Services.droppedLinkHandler.canDropLink(aEvent, true),
+  canDropLink: aEvent => Services.droppedLinkHandler.canDropLink(aEvent, true),
 
   dragOver: function (aEvent)
   {
@@ -3465,7 +3430,7 @@ const BrowserSearch = {
 
     // Check to see whether we've already added an engine with this title
     if (browser.engines) {
-      if (browser.engines.some(function (e) e.title == engine.title))
+      if (browser.engines.some(e => e.title == engine.title))
         return;
     }
 
@@ -3832,7 +3797,6 @@ function FillHistoryMenu(aParent) {
         PlacesUtils.favicons.getFaviconURLForPage(entryURI, function (aURI) {
           if (aURI) {
             let iconURL = PlacesUtils.favicons.getFaviconLinkForIcon(aURI).spec;
-            iconURL = PlacesUtils.getImageURLForResolution(window, iconURL);
             item.style.listStyleImage = "url(" + iconURL + ")";
           }
         });
@@ -4053,6 +4017,66 @@ function updateEditUIVisibility()
     goSetCommandEnabled("cmd_switchTextDirection", true);
   }
 #endif
+}
+
+/**
+ * Opens a new tab with the userContextId specified as an attribute of
+ * sourceEvent. This attribute is propagated to the top level originAttributes
+ * living on the tab's docShell.
+ *
+ * @param event
+ *        A click event on a userContext File Menu option
+ */
+function openNewUserContextTab(event)
+{
+  openUILinkIn(BROWSER_NEW_TAB_URL, "tab", {
+    userContextId: event.target.getAttribute('usercontextid'),
+  });
+}
+
+/**
+ * Updates File Menu User Context UI visibility depending on
+ * privacy.userContext.enabled pref state.
+ */
+function updateUserContextUIVisibility()
+{
+  let userContextEnabled = Services.prefs.getBoolPref("privacy.userContext.enabled");
+  document.getElementById("menu_newUserContext").hidden = !userContextEnabled;
+}
+
+/**
+ * Updates the User Context UI indicators if the browser is in a non-default context
+ */
+function updateUserContextUIIndicator(browser)
+{
+  let hbox = document.getElementById("userContext-icons");
+
+  if (!browser.hasAttribute("usercontextid")) {
+    hbox.removeAttribute("usercontextid");
+    return;
+  }
+
+  let label = document.getElementById("userContext-label");
+  let userContextId = browser.getAttribute("usercontextid");
+  hbox.setAttribute("usercontextid", userContextId);
+  switch (userContextId) {
+    case "1":
+      label.value = gBrowserBundle.GetStringFromName("usercontext.personal.label");
+      break;
+    case "2":
+      label.value = gBrowserBundle.GetStringFromName("usercontext.work.label");
+      break;
+    case "3":
+      label.value = gBrowserBundle.GetStringFromName("usercontext.banking.label");
+      break;
+    case "4":
+      label.value = gBrowserBundle.GetStringFromName("usercontext.shopping.label");
+      break;
+    // Display the context IDs for values outside the pre-defined range.
+    // Used for debugging, no localization necessary.
+    default:
+      label.value = "Context " + userContextId;
+  }
 }
 
 /**
@@ -4501,33 +4525,6 @@ var XULBrowserWindow = {
       throw "onSecurityChange: aIsSimulated receieved an unexpected type";
     }
 
-    // aState is defined as a bitmask that may be extended in the future.
-    // We filter out any unknown bits before testing for known values.
-    const wpl = Components.interfaces.nsIWebProgressListener;
-    const wpl_security_bits = wpl.STATE_IS_SECURE |
-                              wpl.STATE_IS_BROKEN |
-                              wpl.STATE_IS_INSECURE;
-    var level;
-
-    switch (this._state & wpl_security_bits) {
-      case wpl.STATE_IS_SECURE:
-        level = "high";
-        break;
-      case wpl.STATE_IS_BROKEN:
-        level = "broken";
-        break;
-    }
-
-    if (level) {
-      // We don't style the Location Bar based on the the 'level' attribute
-      // anymore, but still set it for third-party themes.
-      if (gURLBar)
-        gURLBar.setAttribute("level", level);
-    } else {
-      if (gURLBar)
-        gURLBar.removeAttribute("level");
-    }
-
     // Make sure the "https" part of the URL is striked out or not,
     // depending on the current mixed active content blocking state.
     gURLBar.formatValue();
@@ -4535,7 +4532,7 @@ var XULBrowserWindow = {
     try {
       uri = Services.uriFixup.createExposableURI(uri);
     } catch (e) {}
-    gIdentityHandler.checkIdentity(this._state, uri);
+    gIdentityHandler.updateIdentity(this._state, uri);
     TrackingProtection.onSecurityChange(this._state, aIsSimulated);
   },
 
@@ -4570,7 +4567,9 @@ var LinkTargetDisplay = {
   DELAY_HIDE: 250,
   _timer: 0,
 
-  get _isVisible () XULBrowserWindow.statusTextField.label != "",
+  get _isVisible () {
+    return XULBrowserWindow.statusTextField.label != "";
+  },
 
   update: function () {
     clearTimeout(this._timer);
@@ -4967,7 +4966,11 @@ nsBrowserAccess.prototype = {
   },
 
   isTabContentWindow: function (aWindow) {
-    return gBrowser.browsers.some(function (browser) browser.contentWindow == aWindow);
+    return gBrowser.browsers.some(browser => browser.contentWindow == aWindow);
+  },
+
+  canClose() {
+    return CanCloseWindow();
   },
 }
 
@@ -5198,9 +5201,9 @@ var TabsInTitlebar = {
   },
 
   _update: function (aForce=false) {
-    function $(id) document.getElementById(id);
-    function rect(ele) ele.getBoundingClientRect();
-    function verticalMargins(cstyle) parseFloat(cstyle.marginBottom) + parseFloat(cstyle.marginTop);
+    let $ = id => document.getElementById(id);
+    let rect = ele => ele.getBoundingClientRect();
+    let verticalMargins = cstyle => parseFloat(cstyle.marginBottom) + parseFloat(cstyle.marginTop);
 
     if (!this._initialized || window.fullScreen)
       return;
@@ -6292,7 +6295,8 @@ var OfflineApps = {
 
     var updateService = Cc["@mozilla.org/offlinecacheupdate-service;1"].
                         getService(Ci.nsIOfflineCacheUpdateService);
-    updateService.scheduleUpdate(manifestURI, aDocument.documentURIObject, window);
+    updateService.scheduleUpdate(manifestURI, aDocument.documentURIObject,
+                                 aDocument.nodePrincipal, window);
   },
 
   /////////////////////////////////////////////////////////////////////////////
@@ -6433,6 +6437,26 @@ var IndexedDBPromptHelper = {
   }
 };
 
+function CanCloseWindow()
+{
+  // Avoid redundant calls to canClose from showing multiple
+  // PermitUnload dialogs.
+  if (window.skipNextCanClose) {
+    return true;
+  }
+
+  for (let browser of gBrowser.browsers) {
+    let {permitUnload, timedOut} = browser.permitUnload();
+    if (timedOut) {
+      return true;
+    }
+    if (!permitUnload) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function WindowIsClosing()
 {
   if (TabView.isVisible()) {
@@ -6443,27 +6467,19 @@ function WindowIsClosing()
   if (!closeWindow(false, warnAboutClosingWindow))
     return false;
 
-  // Bug 967873 - Proxy nsDocumentViewer::PermitUnload to the child process
-  if (gMultiProcessBrowser)
+  // In theory we should exit here and the Window's internal Close
+  // method should trigger canClose on nsBrowserAccess. However, by
+  // that point it's too late to be able to show a prompt for
+  // PermitUnload. So we do it here, when we still can.
+  if (CanCloseWindow()) {
+    // This flag ensures that the later canClose call does nothing.
+    // It's only needed to make tests pass, since they detect the
+    // prompt even when it's not actually shown.
+    window.skipNextCanClose = true;
     return true;
-
-  for (let browser of gBrowser.browsers) {
-    let ds = browser.docShell;
-    // Passing true to permitUnload indicates we plan on closing the window.
-    // This means that once unload is permitted, all further calls to
-    // permitUnload will be ignored. This avoids getting multiple prompts
-    // to unload the page.
-    if (ds.contentViewer && !ds.contentViewer.permitUnload(true)) {
-      // ... however, if the user aborts closing, we need to undo that,
-      // to ensure they get prompted again when we next try to close the window.
-      // We do this on the window's toplevel docshell instead of on the tab, so
-      // that all tabs we iterated before will get this reset.
-      window.getInterface(Ci.nsIDocShell).contentViewer.resetCloseWindow();
-      return false;
-    }
   }
 
-  return true;
+  return false;
 }
 
 /**
@@ -6736,21 +6752,63 @@ function formatURL(aFormat, aIsPref) {
  * Utility object to handle manipulations of the identity indicators in the UI
  */
 var gIdentityHandler = {
-  // Mode strings used to control CSS display
-  IDENTITY_MODE_IDENTIFIED                             : "verifiedIdentity", // High-quality identity information
-  IDENTITY_MODE_DOMAIN_VERIFIED                        : "verifiedDomain",   // Minimal SSL CA-signed domain verification
-  IDENTITY_MODE_UNKNOWN                                : "unknownIdentity",  // No trusted identity information
-  IDENTITY_MODE_USES_WEAK_CIPHER                       : "unknownIdentity weakCipher",  // SSL with RC4 cipher suite or SSL3
-  IDENTITY_MODE_MIXED_DISPLAY_LOADED                   : "unknownIdentity mixedContent mixedDisplayContent",  // SSL with unauthenticated display content
-  IDENTITY_MODE_MIXED_ACTIVE_LOADED                    : "unknownIdentity mixedContent mixedActiveContent",  // SSL with unauthenticated active (and perhaps also display) content
-  IDENTITY_MODE_MIXED_DISPLAY_LOADED_ACTIVE_BLOCKED    : "unknownIdentity mixedContent mixedDisplayContentLoadedActiveBlocked",  // SSL with unauthenticated display content; unauthenticated active content is blocked.
-  IDENTITY_MODE_MIXED_ACTIVE_BLOCKED                   : "verifiedDomain mixedContent mixedActiveBlocked",  // SSL with unauthenticated active content blocked; no unauthenticated display content
-  IDENTITY_MODE_MIXED_ACTIVE_BLOCKED_IDENTIFIED        : "verifiedIdentity mixedContent mixedActiveBlocked",  // SSL with unauthenticated active content blocked; no unauthenticated display content
-  IDENTITY_MODE_CHROMEUI                               : "chromeUI",         // Part of the product's UI
-
-  _isChromeUI: false,
-  _sslStatus: null,
+  /**
+   * nsIURI for which the identity UI is displayed. This has been already
+   * processed by nsIURIFixup.createExposableURI.
+   */
   _uri: null,
+
+  /**
+   * We only know the connection type if this._uri has a defined "host" part.
+   *
+   * These URIs, like "about:" and "data:" URIs, will usually be treated as a
+   * non-secure connection, unless they refer to an internally implemented
+   * browser page or resolve to "file:" URIs.
+   */
+  _uriHasHost: false,
+
+  /**
+   * Whether this._uri refers to an internally implemented browser page.
+   *
+   * Note that this is set for some "about:" pages, but general "chrome:" URIs
+   * are not included in this category by default.
+   */
+  _isSecureInternalUI: false,
+
+  /**
+   * nsISSLStatus metadata provided by gBrowser.securityUI the last time the
+   * identity UI was updated, or null if the connection is not secure.
+   */
+  _sslStatus: null,
+
+  /**
+   * Bitmask provided by nsIWebProgressListener.onSecurityChange.
+   */
+  _state: 0,
+
+  get _isBroken() {
+    return this._state & Ci.nsIWebProgressListener.STATE_IS_BROKEN;
+  },
+
+  get _isSecure() {
+    return this._state & Ci.nsIWebProgressListener.STATE_IS_SECURE;
+  },
+
+  get _isEV() {
+    return this._state & Ci.nsIWebProgressListener.STATE_IDENTITY_EV_TOPLEVEL;
+  },
+
+  get _isMixedActiveContentLoaded() {
+    return this._state & Ci.nsIWebProgressListener.STATE_LOADED_MIXED_ACTIVE_CONTENT;
+  },
+
+  get _isMixedActiveContentBlocked() {
+    return this._state & Ci.nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT;
+  },
+
+  get _isMixedPassiveContentLoaded() {
+    return this._state & Ci.nsIWebProgressListener.STATE_LOADED_MIXED_DISPLAY_CONTENT;
+  },
 
   // smart getters
   get _identityPopup () {
@@ -6807,10 +6865,6 @@ var gIdentityHandler = {
     delete this._identityIcon;
     return this._identityIcon = document.getElementById("page-proxy-favicon");
   },
-  get _permissionsContainer () {
-    delete this._permissionsContainer;
-    return this._permissionsContainer = document.getElementById("identity-popup-permissions");
-  },
   get _permissionList () {
     delete this._permissionList;
     return this._permissionList = document.getElementById("identity-popup-permission-list");
@@ -6826,14 +6880,12 @@ var gIdentityHandler = {
     delete this._identityIconLabel;
     delete this._identityIconCountryLabel;
     delete this._identityIcon;
-    delete this._permissionsContainer;
     delete this._permissionList;
     this._identityBox = document.getElementById("identity-box");
     this._identityIcons = document.getElementById("identity-icons");
     this._identityIconLabel = document.getElementById("identity-icon-label");
     this._identityIconCountryLabel = document.getElementById("identity-icon-country-label");
     this._identityIcon = document.getElementById("page-proxy-favicon");
-    this._permissionsContainer = document.getElementById("identity-popup-permissions");
     this._permissionList = document.getElementById("identity-popup-permission-list");
   },
 
@@ -6889,8 +6941,7 @@ var gIdentityHandler = {
   */
   getIdentityData : function() {
     var result = {};
-    var status = this._sslStatus.QueryInterface(Ci.nsISSLStatus);
-    var cert = status.serverCert;
+    var cert = this._sslStatus.serverCert;
 
     // Human readable name of Subject
     result.subjectOrg = cert.organization;
@@ -6917,69 +6968,45 @@ var gIdentityHandler = {
   },
 
   /**
-   * Determine the identity of the page being displayed by examining its SSL cert
-   * (if available) and, if necessary, update the UI to reflect this.  Intended to
-   * be called by onSecurityChange
+   * Update the identity user interface for the page currently being displayed.
    *
-   * @param PRUint32 state
-   * @param nsIURI uri The address for which the UI should be updated.
+   * This examines the SSL certificate metadata, if available, as well as the
+   * connection type and other security-related state information for the page.
+   *
+   * @param state
+   *        Bitmask provided by nsIWebProgressListener.onSecurityChange.
+   * @param uri
+   *        nsIURI for which the identity UI should be displayed, already
+   *        processed by nsIURIFixup.createExposableURI.
    */
-  checkIdentity : function(state, uri) {
-    let nsIWebProgressListener = Ci.nsIWebProgressListener;
+  updateIdentity(state, uri) {
+    this._state = state;
+    this._uri = uri;
 
-    // For some URIs like data: we can't get a host. URIs without a host will
-    // usually be treated as a non-secure connection if they're not on the
-    // whitelist below and don't resolve to file:// URIs internally.
-    let unknown = false;
+    // Firstly, populate the state properties required to display the UI. See
+    // the documentation of the individual properties for details.
+
     try {
-      uri.host;
-    } catch (e) { unknown = true; }
-
-    // Chrome URIs however get special treatment. Some chrome URIs are
-    // whitelisted to provide a positive security signal to the user.
-    let whitelist = /^(?:accounts|addons|app-manager|cache|config|crashes|customizing|downloads|healthreport|home|license|newaddon|permissions|preferences|privatebrowsing|rights|sessionrestore|support|welcomeback)(?:[?#]|$)/i;
-    let isChromeUI = uri.schemeIs("about") && whitelist.test(uri.path);
-    let mode = this.IDENTITY_MODE_UNKNOWN;
-
-    if (isChromeUI) {
-      mode = this.IDENTITY_MODE_CHROMEUI;
-    } else if (unknown) {
-      // Use default mode.
-    } else if (state & nsIWebProgressListener.STATE_IDENTITY_EV_TOPLEVEL) {
-      if (state & nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT) {
-        mode = this.IDENTITY_MODE_MIXED_ACTIVE_BLOCKED_IDENTIFIED;
-      } else {
-        mode = this.IDENTITY_MODE_IDENTIFIED;
-      }
-    } else if (state & nsIWebProgressListener.STATE_IS_SECURE) {
-      if (state & nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT) {
-        mode = this.IDENTITY_MODE_MIXED_ACTIVE_BLOCKED;
-      } else {
-        mode = this.IDENTITY_MODE_DOMAIN_VERIFIED;
-      }
-    } else if (state & nsIWebProgressListener.STATE_IS_BROKEN) {
-      if (state & nsIWebProgressListener.STATE_LOADED_MIXED_ACTIVE_CONTENT) {
-        mode = this.IDENTITY_MODE_MIXED_ACTIVE_LOADED;
-      } else if (state & nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT) {
-        mode = this.IDENTITY_MODE_MIXED_DISPLAY_LOADED_ACTIVE_BLOCKED;
-      } else if (state & nsIWebProgressListener.STATE_LOADED_MIXED_DISPLAY_CONTENT) {
-        mode = this.IDENTITY_MODE_MIXED_DISPLAY_LOADED;
-      } else {
-        mode = this.IDENTITY_MODE_USES_WEAK_CIPHER;
-      }
+      this._uri.host;
+      this._uriHasHost = true;
+    } catch (ex) {
+      this._uriHasHost = false;
     }
 
-    // We need those values later when populating the control center.
-    this._uri = uri;
-    this._state = state;
-    this._isChromeUI = isChromeUI;
-    this._sslStatus =
-      gBrowser.securityUI.QueryInterface(Ci.nsISSLStatusProvider).SSLStatus;
+    let whitelist = /^(?:accounts|addons|app-manager|cache|config|crashes|customizing|downloads|healthreport|home|license|newaddon|permissions|preferences|privatebrowsing|rights|sessionrestore|support|welcomeback)(?:[?#]|$)/i;
+    this._isSecureInternalUI = uri.schemeIs("about") && whitelist.test(uri.path);
 
-    // Update the identity block.
+    this._sslStatus = gBrowser.securityUI
+                              .QueryInterface(Ci.nsISSLStatusProvider)
+                              .SSLStatus;
+    if (this._sslStatus) {
+      this._sslStatus.QueryInterface(Ci.nsISSLStatus);
+    }
+
+    // Then, update the user interface with the available data.
+
     if (this._identityBox) {
-      this._identityBox.className = mode;
-      this.refreshIdentityBlock(mode);
+      this.refreshIdentityBlock();
     }
 
     // NOTE: We do NOT update the identity popup (the control center) when
@@ -6989,16 +7016,14 @@ var gIdentityHandler = {
   },
 
   /**
-   * Return the eTLD+1 version of the current hostname
+   * Attempt to provide proper IDN treatment for host names
    */
-  getEffectiveHost : function() {
+  getEffectiveHost: function() {
     if (!this._IDNService)
       this._IDNService = Cc["@mozilla.org/network/idn-service;1"]
                          .getService(Ci.nsIIDNService);
     try {
-      let baseDomain =
-        Services.eTLD.getBaseDomainFromHost(this._uri.host);
-      return this._IDNService.convertToDisplayIDN(baseDomain, {});
+      return this._IDNService.convertToDisplayIDN(this._uri.host, {});
     } catch (e) {
       // If something goes wrong (e.g. host is an IP address) just fail back
       // to the full domain.
@@ -7007,48 +7032,40 @@ var gIdentityHandler = {
   },
 
   /**
-   * Return the current mode, which should be one of IDENTITY_MODE_*.
+   * Return the CSS class name to set on the "fullscreen-warning" element to
+   * display information about connection security in the notification shown
+   * when a site enters the fullscreen mode.
    */
-  getMode: function() {
-    return this._mode;
+  get fullscreenWarningClassName() {
+    // Note that the fullscreen warning does not handle _isSecureInternalUI.
+    if (this._uriHasHost && this._isEV) {
+      return "verifiedIdentity";
+    }
+    if (this._uriHasHost && this._isSecure) {
+      return "verifiedDomain";
+    }
+    return "unknownIdentity";
   },
 
   /**
-   * Set up the messages for the primary identity UI based on the specified mode,
-   * and the details of the SSL cert, where applicable
-   *
-   * @param newMode The newly set identity mode.  Should be one of the IDENTITY_MODE_* constants.
+   * Updates the identity block user interface with the data from this object.
    */
-  refreshIdentityBlock(newMode) {
+  refreshIdentityBlock() {
     let icon_label = "";
     let tooltip = "";
     let icon_country_label = "";
     let icon_labels_dir = "ltr";
 
-    switch (newMode) {
-    case this.IDENTITY_MODE_DOMAIN_VERIFIED:
-    case this.IDENTITY_MODE_MIXED_ACTIVE_BLOCKED: {
-      let iData = this.getIdentityData();
+    if (this._isSecureInternalUI) {
+      this._identityBox.className = "chromeUI";
+      let brandBundle = document.getElementById("bundle_brand");
+      icon_label = brandBundle.getString("brandShorterName");
+    } else if (this._uriHasHost && this._isEV) {
+      this._identityBox.className = "verifiedIdentity";
+      if (this._isMixedActiveContentBlocked) {
+        this._identityBox.classList.add("mixedActiveBlocked");
+      }
 
-      // Verifier is either the CA Org, for a normal cert, or a special string
-      // for certs that are trusted because of a security exception.
-      tooltip = gNavigatorBundle.getFormattedString("identity.identified.verifier",
-                                                    [iData.caOrg]);
-
-      // This can't throw, because URI's with a host that throw don't end up in this case.
-      let host = this._uri.host;
-      let port = 443;
-      try {
-        if (this._uri.port > 0)
-          port = this._uri.port;
-      } catch (e) {}
-
-      if (this._overrideService.hasMatchingOverride(host, port, iData.cert, {}, {}))
-        tooltip = gNavigatorBundle.getString("identity.identified.verified_by_you");
-
-      break; }
-    case this.IDENTITY_MODE_IDENTIFIED:
-    case this.IDENTITY_MODE_MIXED_ACTIVE_BLOCKED_IDENTIFIED: {
       // If it's identified, then we can populate the dialog with credentials
       let iData = this.getIdentityData();
       tooltip = gNavigatorBundle.getFormattedString("identity.identified.verifier",
@@ -7065,12 +7082,43 @@ var gIdentityHandler = {
       // Unicode Bidirectional Algorithm proper (at the paragraph level).
       icon_labels_dir = /^[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/.test(icon_label) ?
                         "rtl" : "ltr";
-      break; }
-    case this.IDENTITY_MODE_CHROMEUI:
-      let brandBundle = document.getElementById("bundle_brand");
-      icon_label = brandBundle.getString("brandShorterName");
-      break;
-    default:
+
+    } else if (this._uriHasHost && this._isSecure) {
+      this._identityBox.className = "verifiedDomain";
+      if (this._isMixedActiveContentBlocked) {
+        this._identityBox.classList.add("mixedActiveBlocked");
+      }
+
+      let iData = this.getIdentityData();
+
+      // Verifier is either the CA Org, for a normal cert, or a special string
+      // for certs that are trusted because of a security exception.
+      tooltip = gNavigatorBundle.getFormattedString("identity.identified.verifier",
+                                                    [iData.caOrg]);
+
+      let host = this._uri.host;
+      let port = 443;
+      try {
+        if (this._uri.port > 0)
+          port = this._uri.port;
+      } catch (e) {}
+
+      if (this._overrideService.hasMatchingOverride(host, port, iData.cert, {}, {})) {
+        tooltip = gNavigatorBundle.getString("identity.identified.verified_by_you");
+      }
+    } else {
+      this._identityBox.className = "unknownIdentity";
+      if (this._isBroken) {
+        if (this._isMixedActiveContentLoaded) {
+          this._identityBox.classList.add("mixedActiveContent");
+        } else if (this._isMixedActiveContentBlocked) {
+          this._identityBox.classList.add("mixedDisplayContentLoadedActiveBlocked");
+        } else if (this._isMixedPassiveContentLoaded) {
+          this._identityBox.classList.add("mixedDisplayContent");
+        } else {
+          this._identityBox.classList.add("weakCipher");
+        }
+      }
       tooltip = gNavigatorBundle.getString("identity.unknown.tooltip");
     }
 
@@ -7096,39 +7144,26 @@ var gIdentityHandler = {
     let learnMoreHref = `${baseURL}mixed-content`;
     this._identityPopupMixedContentLearnMore.setAttribute("href", learnMoreHref);
 
-    // Basic connection properties.
-    let isBroken = this._state & Ci.nsIWebProgressListener.STATE_IS_BROKEN;
-    let isSecure = this._state & Ci.nsIWebProgressListener.STATE_IS_SECURE;
-    let isEV = this._state & Ci.nsIWebProgressListener.STATE_IDENTITY_EV_TOPLEVEL;
-
     // Determine connection security information.
     let connection = "not-secure";
-    if (this._isChromeUI) {
+    if (this._isSecureInternalUI) {
       connection = "chrome";
-    } else if (this._isURILoadedFromFile(this._uri)) {
+    } else if (this._isURILoadedFromFile) {
       connection = "file";
-    } else if (isEV) {
+    } else if (this._isEV) {
       connection = "secure-ev";
-    } else if (isSecure) {
+    } else if (this._isSecure) {
       connection = "secure";
     }
 
-    // Mixed content flags.
-    let isMixedActiveContentLoaded =
-      this._state & Ci.nsIWebProgressListener.STATE_LOADED_MIXED_ACTIVE_CONTENT;
-    let isMixedActiveContentBlocked =
-      this._state & Ci.nsIWebProgressListener.STATE_BLOCKED_MIXED_ACTIVE_CONTENT;
-    let isMixedPassiveContentLoaded =
-      this._state & Ci.nsIWebProgressListener.STATE_LOADED_MIXED_DISPLAY_CONTENT;
-
     // Determine the mixed content state.
     let mixedcontent = [];
-    if (isMixedPassiveContentLoaded) {
+    if (this._isMixedPassiveContentLoaded) {
       mixedcontent.push("passive-loaded");
     }
-    if (isMixedActiveContentLoaded) {
+    if (this._isMixedActiveContentLoaded) {
       mixedcontent.push("active-loaded");
-    } else if (isMixedActiveContentBlocked) {
+    } else if (this._isMixedActiveContentBlocked) {
       mixedcontent.push("active-blocked");
     }
     mixedcontent = mixedcontent.join(" ");
@@ -7137,7 +7172,7 @@ var gIdentityHandler = {
     // broken and we can't detect any mixed content loaded then it's a weak
     // cipher.
     let ciphers = "";
-    if (isBroken && !isMixedActiveContentLoaded && !isMixedPassiveContentLoaded) {
+    if (this._isBroken && !this._isMixedActiveContentLoaded && !this._isMixedPassiveContentLoaded) {
       ciphers = "weak";
     }
 
@@ -7160,7 +7195,7 @@ var gIdentityHandler = {
       updateAttribute(element, "connection", connection);
       updateAttribute(element, "ciphers", ciphers);
       updateAttribute(element, "mixedcontent", mixedcontent);
-      updateAttribute(element, "isbroken", isBroken);
+      updateAttribute(element, "isbroken", this._isBroken);
     }
 
     // Initialize the optional strings to empty values
@@ -7168,6 +7203,7 @@ var gIdentityHandler = {
     let verifier = "";
     let host = "";
     let owner = "";
+    let crop = "start";
 
     try {
       host = this.getEffectiveHost();
@@ -7181,12 +7217,14 @@ var gIdentityHandler = {
     }
 
     // Fill in the CA name if we have a valid TLS certificate.
-    if (isSecure) {
+    if (this._isSecure) {
       verifier = this._identityBox.tooltipText;
     }
 
     // Fill in organization information if we have a valid EV certificate.
-    if (isEV) {
+    if (this._isEV) {
+      crop = "end";
+
       let iData = this.getIdentityData();
       host = owner = iData.subjectOrg;
       verifier = this._identityBox.tooltipText;
@@ -7206,6 +7244,7 @@ var gIdentityHandler = {
     // Push the appropriate strings out to the UI. Need to use |value| for the
     // host as it's a <label> that will be cropped if too long. Using
     // |textContent| would simply wrap the value.
+    this._identityPopupContentHost.setAttribute("crop", crop);
     this._identityPopupContentHost.setAttribute("value", host);
     this._identityPopupContentOwner.textContent = owner;
     this._identityPopupContentSupp.textContent = supplemental;
@@ -7215,10 +7254,10 @@ var gIdentityHandler = {
     this.updateSitePermissions();
   },
 
-  _isURILoadedFromFile(uri) {
+  get _isURILoadedFromFile() {
     // Create a channel for the sole purpose of getting the resolved URI
     // of the request to determine if it's loaded from the file system.
-    let chanOptions = {uri, loadUsingSystemPrincipal: true};
+    let chanOptions = {uri: this._uri, loadUsingSystemPrincipal: true};
     let resolvedURI;
     try {
       resolvedURI = NetUtil.newChannel(chanOptions).URI;
@@ -7325,8 +7364,6 @@ var gIdentityHandler = {
       let item = this._createPermissionItem(permission, state);
       this._permissionList.appendChild(item);
     }
-
-    this._permissionsContainer.hidden = !this._permissionList.hasChildNodes();
   },
 
   setPermission: function (aPermission, aState) {
@@ -7355,12 +7392,19 @@ var gIdentityHandler = {
     label.setAttribute("flex", "1");
     label.setAttribute("class", "identity-popup-permission-label");
     label.setAttribute("control", menulist.getAttribute("id"));
-    label.setAttribute("value", SitePermissions.getPermissionLabel(aPermission));
+    label.textContent = SitePermissions.getPermissionLabel(aPermission);
 
     let container = document.createElement("hbox");
     container.setAttribute("align", "center");
     container.appendChild(label);
     container.appendChild(menulist);
+
+    // The menuitem text can be long and we don't want the dropdown
+    // to expand to the width of unselected labels.
+    // Need to set this attribute after it's appended, otherwise it gets
+    // overridden with sizetopopup="pref".
+    menulist.setAttribute("sizetopopup", "none");
+
     return container;
   }
 };
@@ -7380,10 +7424,14 @@ function getTabModalPromptBox(aWindow) {
 };
 
 /* DEPRECATED */
-function getBrowser() gBrowser;
-function getNavToolbox() gNavToolbox;
+function getBrowser() {
+  return gBrowser;
+}
+function getNavToolbox() {
+  return gNavToolbox;
+}
 
-let gPrivateBrowsingUI = {
+var gPrivateBrowsingUI = {
   init: function PBUI_init() {
     // Do nothing for normal windows
     if (!PrivateBrowsingUtils.isWindowPrivate(window)) {
@@ -7440,7 +7488,7 @@ let gPrivateBrowsingUI = {
   }
 };
 
-let gRemoteTabsUI = {
+var gRemoteTabsUI = {
   init: function() {
     if (window.location.href != getBrowserURL() &&
         // Also check hidden window for the Mac no-window case
@@ -7575,7 +7623,7 @@ function switchToTabHavingURI(aURI, aOpenNew, aOpenParams={}) {
   return false;
 }
 
-let RestoreLastSessionObserver = {
+var RestoreLastSessionObserver = {
   init: function () {
     if (SessionStore.canRestoreLastSession &&
         !PrivateBrowsingUtils.isWindowPrivate(window)) {
@@ -7695,15 +7743,15 @@ var TabContextMenu = {
 };
 
 XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
-                                  "resource:///modules/devtools/gDevTools.jsm");
+                                  "resource:///modules/devtools/client/framework/gDevTools.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "gDevToolsBrowser",
-                                  "resource:///modules/devtools/gDevTools.jsm");
+                                  "resource:///modules/devtools/client/framework/gDevTools.jsm");
 
 Object.defineProperty(this, "HUDService", {
   get: function HUDService_getter() {
-    let devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
-    return devtools.require("devtools/webconsole/hudservice");
+    let devtools = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {}).devtools;
+    return devtools.require("devtools/client/webconsole/hudservice");
   },
   configurable: true,
   enumerable: true
@@ -7774,7 +7822,7 @@ var Scratchpad = {
 
 XPCOMUtils.defineLazyGetter(Scratchpad, "ScratchpadManager", function() {
   let tmp = {};
-  Cu.import("resource:///modules/devtools/scratchpad-manager.jsm", tmp);
+  Cu.import("resource:///modules/devtools/client/scratchpad/scratchpad-manager.jsm", tmp);
   return tmp.ScratchpadManager;
 });
 
@@ -7786,7 +7834,7 @@ var ResponsiveUI = {
 
 XPCOMUtils.defineLazyGetter(ResponsiveUI, "ResponsiveUIManager", function() {
   let tmp = {};
-  Cu.import("resource:///modules/devtools/responsivedesign.jsm", tmp);
+  Cu.import("resource:///modules/devtools/client/responsivedesign/responsivedesign.jsm", tmp);
   return tmp.ResponsiveUIManager;
 });
 
@@ -7798,8 +7846,8 @@ function openEyedropper() {
 
 Object.defineProperty(this, "Eyedropper", {
   get: function() {
-    let devtools = Cu.import("resource://gre/modules/devtools/Loader.jsm", {}).devtools;
-    return devtools.require("devtools/eyedropper/eyedropper").Eyedropper;
+    let devtools = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {}).devtools;
+    return devtools.require("devtools/client/eyedropper/eyedropper").Eyedropper;
   },
   configurable: true,
   enumerable: true
@@ -7881,7 +7929,7 @@ function BrowserOpenNewTabOrWindow(event) {
   }
 }
 
-let ToolbarIconColor = {
+var ToolbarIconColor = {
   init: function () {
     this._initialized = true;
 
@@ -7957,7 +8005,7 @@ let ToolbarIconColor = {
   }
 }
 
-let PanicButtonNotifier = {
+var PanicButtonNotifier = {
   init: function() {
     this._initialized = true;
     if (window.PanicButtonNotifierShouldNotify) {
@@ -7988,7 +8036,7 @@ let PanicButtonNotifier = {
   },
 };
 
-let AboutPrivateBrowsingListener = {
+var AboutPrivateBrowsingListener = {
   init: function () {
     window.messageManager.addMessageListener(
       "AboutPrivateBrowsing:OpenPrivateWindow",

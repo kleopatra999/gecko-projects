@@ -6,6 +6,7 @@
 
 #include "jit/MacroAssembler-inl.h"
 
+#include "jsfriendapi.h"
 #include "jsprf.h"
 
 #include "builtin/TypedObject.h"
@@ -31,7 +32,7 @@ using JS::GenericNaN;
 using JS::ToInt32;
 
 template <typename Source> void
-MacroAssembler::guardTypeSet(const Source& address, const TypeSet *types, BarrierKind kind,
+MacroAssembler::guardTypeSet(const Source& address, const TypeSet* types, BarrierKind kind,
                              Register scratch, Label* miss)
 {
     MOZ_ASSERT(kind == BarrierKind::TypeTagOnly || kind == BarrierKind::TypeSet);
@@ -147,12 +148,12 @@ MacroAssembler::guardTypeSetMightBeIncomplete(TypeSet* types, Register obj, Regi
 }
 
 void
-MacroAssembler::guardObjectType(Register obj, const TypeSet *types,
+MacroAssembler::guardObjectType(Register obj, const TypeSet* types,
                                 Register scratch, Label* miss)
 {
     MOZ_ASSERT(!types->unknown());
     MOZ_ASSERT(!types->hasType(TypeSet::AnyObjectType()));
-    MOZ_ASSERT(scratch != InvalidReg);
+    MOZ_ASSERT_IF(types->getObjectCount() > 0, scratch != InvalidReg);
 
     // Note: this method elides read barriers on values read from type sets, as
     // this may be called off the main thread during Ion compilation. This is
@@ -214,7 +215,6 @@ MacroAssembler::guardObjectType(Register obj, const TypeSet *types,
     lastBranch.emit(*this);
 
     bind(&matched);
-    return;
 }
 
 template void MacroAssembler::guardTypeSet(const Address& address, const TypeSet* types,
@@ -802,8 +802,9 @@ MacroAssembler::checkUnboxedArrayCapacity(Register obj, const Int32Key& index, R
 void
 MacroAssembler::checkAllocatorState(Label* fail)
 {
-    // Don't execute the inline path if we are tracing allocations.
-    if (js::gc::TraceEnabled())
+    // Don't execute the inline path if we are tracing allocations,
+    // or when the memory profiler is enabled.
+    if (js::gc::TraceEnabled() || MemProfiler::enabled())
         jump(fail);
 
 # ifdef JS_GC_ZEAL

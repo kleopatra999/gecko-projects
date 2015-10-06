@@ -32,8 +32,8 @@
 #include <android/log.h>
 #define GVDM_LOG(...) __android_log_print(ANDROID_LOG_DEBUG, "GonkVideoDecoderManager", __VA_ARGS__)
 
-PRLogModuleInfo* GetDemuxerLog();
-#define LOG(...) MOZ_LOG(GetDemuxerLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
+extern PRLogModuleInfo* GetPDMLog();
+#define LOG(...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 using namespace mozilla::layers;
 using namespace android;
 typedef android::MediaCodecProxy MediaCodecProxy;
@@ -71,6 +71,7 @@ GonkVideoDecoderManager::GonkVideoDecoderManager(
 
 GonkVideoDecoderManager::~GonkVideoDecoderManager()
 {
+  mVideoListener->NotifyManagerRelease();
   MOZ_COUNT_DTOR(GonkVideoDecoderManager);
 }
 
@@ -563,10 +564,25 @@ GonkVideoDecoderManager::VideoResourceListener::~VideoResourceListener()
 void
 GonkVideoDecoderManager::VideoResourceListener::codecReserved()
 {
+  // This class holds VideoResourceListener reference to prevent it's destroyed.
+  class CodecListenerHolder : public nsRunnable {
+  public:
+    CodecListenerHolder(VideoResourceListener* aListener)
+      : mVideoListener(aListener) {}
+
+    NS_IMETHOD Run()
+    {
+      mVideoListener->NotifyCodecReserved();
+      mVideoListener = nullptr;
+      return NS_OK;
+    }
+
+    android::sp<VideoResourceListener> mVideoListener;
+  };
+
   if (mManager) {
-    nsCOMPtr<nsIRunnable> r =
-      NS_NewNonOwningRunnableMethod(mManager, &GonkVideoDecoderManager::codecReserved);
-    mManager->mReaderTaskQueue->Dispatch(r.forget());
+    nsRefPtr<CodecListenerHolder> runner = new CodecListenerHolder(this);
+    mManager->mReaderTaskQueue->Dispatch(runner.forget());
   }
 }
 
@@ -574,9 +590,26 @@ void
 GonkVideoDecoderManager::VideoResourceListener::codecCanceled()
 {
   if (mManager) {
+    MOZ_ASSERT(mManager->mReaderTaskQueue->IsCurrentThreadIn());
     nsCOMPtr<nsIRunnable> r =
       NS_NewNonOwningRunnableMethod(mManager, &GonkVideoDecoderManager::codecCanceled);
     mManager->mReaderTaskQueue->Dispatch(r.forget());
+  }
+}
+
+void
+GonkVideoDecoderManager::VideoResourceListener::NotifyManagerRelease()
+{
+  MOZ_ASSERT_IF(mManager, mManager->mReaderTaskQueue->IsCurrentThreadIn());
+  mManager = nullptr;
+}
+
+void
+GonkVideoDecoderManager::VideoResourceListener::NotifyCodecReserved()
+{
+  if (mManager) {
+    MOZ_ASSERT(mManager->mReaderTaskQueue->IsCurrentThreadIn());
+    mManager->codecReserved();
   }
 }
 

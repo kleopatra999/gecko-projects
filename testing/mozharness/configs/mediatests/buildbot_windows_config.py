@@ -52,7 +52,7 @@ config = {
     "firefox_media_branch": 'master',
     "firefox_media_rev": 'b11d6c3d7f6af166be314d2ac6673e78c1edb566',
     "firefox_ui_repo": 'https://github.com/mozilla/firefox-ui-tests.git',
-    "firefox_ui_branch": 'master',
+    "firefox_ui_branch": 'mozilla-central',
     "firefox_ui_rev": '6d6d57917f85399e903ac69b7e4297091b2d474c',
 
 }

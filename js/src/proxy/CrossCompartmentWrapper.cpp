@@ -153,10 +153,10 @@ CrossCompartmentWrapper::hasOwn(JSContext* cx, HandleObject wrapper, HandleId id
 }
 
 bool
-CrossCompartmentWrapper::get(JSContext* cx, HandleObject wrapper, HandleObject receiver,
+CrossCompartmentWrapper::get(JSContext* cx, HandleObject wrapper, HandleValue receiver,
                              HandleId id, MutableHandleValue vp) const
 {
-    RootedObject receiverCopy(cx, receiver);
+    RootedValue receiverCopy(cx, receiver);
     {
         AutoCompartment call(cx, wrappedObject(wrapper));
         if (!cx->compartment()->wrap(cx, &receiverCopy))
@@ -414,16 +414,6 @@ CrossCompartmentWrapper::boxedValue_unbox(JSContext* cx, HandleObject wrapper, M
     PIERCE(cx, wrapper,
            NOTHING,
            Wrapper::boxedValue_unbox(cx, wrapper, vp),
-           cx->compartment()->wrap(cx, vp));
-}
-
-bool
-CrossCompartmentWrapper::defaultValue(JSContext* cx, HandleObject wrapper, JSType hint,
-                                      MutableHandleValue vp) const
-{
-    PIERCE(cx, wrapper,
-           NOTHING,
-           Wrapper::defaultValue(cx, wrapper, hint, vp),
            cx->compartment()->wrap(cx, vp));
 }
 

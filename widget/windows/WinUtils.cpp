@@ -42,7 +42,6 @@
 #include "imgIEncoder.h"
 #include "nsIThread.h"
 #include "MainThreadUtils.h"
-#include "gfxColor.h"
 #include "nsLookAndFeel.h"
 
 #ifdef NS_ENABLE_TSF
@@ -1108,7 +1107,7 @@ nsresult AsyncFaviconDataReady::OnFaviconDataNotAvailable(void)
                      mozIconURI,
                      nsContentUtils::GetSystemPrincipal(),
                      nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
-                     nsIContentPolicy::TYPE_IMAGE);
+                     nsIContentPolicy::TYPE_INTERNAL_IMAGE);
 
   NS_ENSURE_SUCCESS(rv, rv);
 

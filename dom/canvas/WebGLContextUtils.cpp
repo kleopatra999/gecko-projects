@@ -499,6 +499,8 @@ WebGLContext::GenerateWarning(const char* fmt, va_list ap)
         return;
     }
 
+    api.TakeOwnershipOfErrorReporting();
+
     JSContext* cx = api.cx();
     JS_ReportWarning(cx, "WebGL: %s", buf);
     if (!ShouldGenerateWarnings()) {
@@ -1173,6 +1175,7 @@ WebGLContext::AssertCachedState()
     }
 
     // Draw state
+    MOZ_ASSERT(gl->fIsEnabled(LOCAL_GL_DEPTH_TEST) == mDepthTestEnabled);
     MOZ_ASSERT(gl->fIsEnabled(LOCAL_GL_DITHER) == mDitherEnabled);
     MOZ_ASSERT_IF(IsWebGL2(),
                   gl->fIsEnabled(LOCAL_GL_RASTERIZER_DISCARD) == mRasterizerDiscardEnabled);

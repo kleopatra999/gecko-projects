@@ -124,8 +124,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "ContentSearch",
                                   "resource:///modules/ContentSearch.jsm");
 
 #ifdef E10S_TESTING_ONLY
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
-                                  "resource://gre/modules/UpdateChannel.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
+                                  "resource://gre/modules/UpdateUtils.jsm");
 #endif
 
 #ifdef MOZ_CRASHREPORTER
@@ -276,6 +276,9 @@ BrowserGlue.prototype = {
   // nsIObserver implementation
   observe: function BG_observe(subject, topic, data) {
     switch (topic) {
+      case "notifications-open-settings":
+        this._openPreferences("content");
+        break;
       case "prefservice:after-app-defaults":
         this._onAppDefaults();
         break;
@@ -516,6 +519,9 @@ BrowserGlue.prototype = {
                             .add(1);
         }
         break;
+      case "test-initialize-sanitizer":
+        this._sanitizer.onStartup();
+        break;
     }
   },
 
@@ -588,6 +594,7 @@ BrowserGlue.prototype = {
   // initialization (called on application startup) 
   _init: function BG__init() {
     let os = Services.obs;
+    os.addObserver(this, "notifications-open-settings", false);
     os.addObserver(this, "prefservice:after-app-defaults", false);
     os.addObserver(this, "final-ui-startup", false);
     os.addObserver(this, "browser-delayed-startup-finished", false);
@@ -636,6 +643,7 @@ BrowserGlue.prototype = {
   // cleanup (called on application shutdown)
   _dispose: function BG__dispose() {
     let os = Services.obs;
+    os.removeObserver(this, "notifications-open-settings");
     os.removeObserver(this, "prefservice:after-app-defaults");
     os.removeObserver(this, "final-ui-startup");
     os.removeObserver(this, "sessionstore-windows-restored");
@@ -1800,7 +1808,6 @@ BrowserGlue.prototype = {
    * - export bookmarks as HTML, if so configured.
    */
   _onPlacesShutdown: function BG__onPlacesShutdown() {
-    this._sanitizer.onShutdown();
     PageThumbs.uninit();
 
     if (this._bookmarksBackupIdleTime) {
@@ -2359,6 +2366,19 @@ BrowserGlue.prototype = {
     }
   }),
 
+  /**
+   * Open preferences even if there are no open windows.
+   */
+  _openPreferences(...args) {
+    if (Services.appShell.hiddenDOMWindow.openPreferences) {
+      Services.appShell.hiddenDOMWindow.openPreferences(...args);
+      return;
+    }
+
+    let chromeWindow = RecentWindow.getMostRecentBrowserWindow();
+    chromeWindow.openPreferences(...args);
+  },
+
 #ifdef MOZ_SERVICES_SYNC
   /**
    * Called as an observer when Sync's "display URI" notification is fired.
@@ -2532,38 +2552,6 @@ ContentPermissionPrompt.prototype = {
                                              mainAction, secondaryActions, aOptions);
   },
 
-  _promptPush : function(aRequest) {
-    var message = gBrowserBundle.GetStringFromName("push.enablePush2");
-
-    var actions = [
-    {
-      stringId: "push.alwaysAllow",
-      action: Ci.nsIPermissionManager.ALLOW_ACTION,
-      expireType: null,
-      callback: function() {}
-    },
-    {
-      stringId: "push.allowForSession",
-      action: Ci.nsIPermissionManager.ALLOW_ACTION,
-      expireType: Ci.nsIPermissionManager.EXPIRE_SESSION,
-      callback: function() {}
-    },
-    {
-      stringId: "push.alwaysBlock",
-      action: Ci.nsIPermissionManager.DENY_ACTION,
-      expireType: null,
-      callback: function() {}
-    }]
-
-    var options = {
-      learnMoreURL: Services.urlFormatter.formatURLPref("browser.push.warning.infoURL"),
-    };
-
-    this._showPrompt(aRequest, message, "push", actions, "push",
-                     "push-notification-icon", options);
-
-  },
-
   _promptGeo : function(aRequest) {
     var secHistogram = Services.telemetry.getHistogramById("SECURITY_UI");
 
@@ -2619,12 +2607,6 @@ ContentPermissionPrompt.prototype = {
 
     var actions = [
       {
-        stringId: "webNotifications.showForSession",
-        action: Ci.nsIPermissionManager.ALLOW_ACTION,
-        expireType: Ci.nsIPermissionManager.EXPIRE_SESSION,
-        callback: function() {},
-      },
-      {
         stringId: "webNotifications.alwaysShow",
         action: Ci.nsIPermissionManager.ALLOW_ACTION,
         expireType: null,
@@ -2638,9 +2620,13 @@ ContentPermissionPrompt.prototype = {
       },
     ];
 
+    var options = {
+      learnMoreURL: Services.urlFormatter.formatURLPref("browser.push.warning.infoURL"),
+    };
+
     this._showPrompt(aRequest, message, "desktop-notification", actions,
                      "web-notifications",
-                     "web-notifications-notification-icon", null);
+                     "web-notifications-notification-icon", options);
   },
 
   _promptPointerLock: function CPP_promtPointerLock(aRequest, autoAllow) {
@@ -2711,7 +2697,6 @@ ContentPermissionPrompt.prototype = {
     const kFeatureKeys = { "geolocation" : "geo",
                            "desktop-notification" : "desktop-notification",
                            "pointerLock" : "pointerLock",
-                           "push" : "push"
                          };
 
     // Make sure that we support the request.
@@ -2762,15 +2747,12 @@ ContentPermissionPrompt.prototype = {
     case "pointerLock":
       this._promptPointerLock(request, autoAllow);
       break;
-    case "push":
-      this._promptPush(request);
-      break;
     }
   },
 
 };
 
-let DefaultBrowserCheck = {
+var DefaultBrowserCheck = {
   get OPTIONPOPUP() { return "defaultBrowserNotificationPopup" },
   _setAsDefaultTimer: null,
   _setAsDefaultButtonClickStartTime: 0,
@@ -2803,7 +2785,7 @@ let DefaultBrowserCheck = {
 
       this._setAsDefaultButtonClickStartTime = Math.floor(Date.now() / 1000);
       this._setAsDefaultTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-      this._setAsDefaultTimer.init(function() {
+      this._setAsDefaultTimer.init(() => {
         let isDefault = false;
         let isDefaultError = false;
         try {
@@ -2967,7 +2949,7 @@ let DefaultBrowserCheck = {
 };
 
 #ifdef E10S_TESTING_ONLY
-let E10SUINotification = {
+var E10SUINotification = {
   // Increase this number each time we want to roll out an
   // e10s testing period to Nightly users.
   CURRENT_NOTICE_COUNT: 4,
@@ -2977,7 +2959,7 @@ let E10SUINotification = {
   checkStatus: function() {
     let skipE10sChecks = false;
     try {
-      let updateChannel = UpdateChannel.get();
+      let updateChannel = UpdateUtils.UpdateChannel;
       let channelAuthorized = updateChannel == "nightly" || updateChannel == "aurora";
 
       skipE10sChecks = !channelAuthorized ||
@@ -3224,7 +3206,7 @@ this.NSGetFactory = XPCOMUtils.generateNSGetFactory(components);
 // Listen for UITour messages.
 // Do it here instead of the UITour module itself so that the UITour module is lazy loaded
 // when the first message is received.
-let globalMM = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
+var globalMM = Cc["@mozilla.org/globalmessagemanager;1"].getService(Ci.nsIMessageListenerManager);
 globalMM.addMessageListener("UITour:onPageEvent", function(aMessage) {
   UITour.onPageEvent(aMessage, aMessage.data);
 });

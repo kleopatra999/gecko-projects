@@ -161,7 +161,7 @@ CamerasParent::DeliverFrameOverIPC(CaptureEngine cap_engine,
     ShmemBuffer shMemBuff = mShmemPool.Get(this, size);
 
     if (!shMemBuff.Valid()) {
-      LOG(("Video shmem is not writeable in DeliverFrame"));
+      LOG(("No usable Video shmem in DeliverFrame (out of buffers?)"));
       // We can skip this frame if we run out of buffers, it's not a real error.
       return 0;
     }
@@ -175,6 +175,7 @@ CamerasParent::DeliverFrameOverIPC(CaptureEngine cap_engine,
       return -1;
     }
   } else {
+    MOZ_ASSERT(buffer.Valid());
     // ShmemBuffer was available, we're all good. A single copy happened
     // in the original webrtc callback.
     if (!SendDeliverFrame(cap_engine, cap_id,
@@ -205,7 +206,7 @@ CallbackHelper::DeliverFrame(unsigned char* buffer,
   ShmemBuffer shMemBuffer = mParent->GetBuffer(size);
   if (!shMemBuffer.Valid()) {
     // Either we ran out of buffers or they're not the right size yet
-    LOG(("Video shmem is not available in DeliverFrame"));
+    LOG(("Correctly sized Video shmem not available in DeliverFrame"));
     // We will do the copy into a(n extra) temporary buffer inside
     // the DeliverFrameRunnable constructor.
   } else {
@@ -766,6 +767,18 @@ CamerasParent::RecvStopCapture(const int& aCapEngine,
   return SendReplySuccess();
 }
 
+void
+CamerasParent::StopIPC()
+{
+  MOZ_ASSERT(!mDestroyed);
+  // Release shared memory now, it's our last chance
+  mShmemPool.Cleanup(this);
+  // We don't want to receive callbacks or anything if we can't
+  // forward them anymore anyway.
+  mChildIsAlive = false;
+  mDestroyed = true;
+}
+
 bool
 CamerasParent::RecvAllDone()
 {
@@ -791,8 +804,6 @@ void CamerasParent::DoShutdown()
     }
   }
 
-  mShmemPool.Cleanup(this);
-
   mPBackgroundThread = nullptr;
 
   if (mVideoCaptureThread) {
@@ -809,10 +820,7 @@ CamerasParent::ActorDestroy(ActorDestroyReason aWhy)
 {
   // No more IPC from here
   LOG((__PRETTY_FUNCTION__));
-  // We don't want to receive callbacks or anything if we can't
-  // forward them anymore anyway.
-  mChildIsAlive = false;
-  mDestroyed = true;
+  StopIPC();
   CloseEngines();
 }
 

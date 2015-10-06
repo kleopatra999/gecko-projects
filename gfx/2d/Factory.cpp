@@ -52,6 +52,7 @@
 
 #include "mozilla/CheckedInt.h"
 
+#if defined(PR_LOGGING)
 GFX2D_API PRLogModuleInfo *
 GetGFX2DLog()
 {
@@ -60,6 +61,7 @@ GetGFX2DLog()
     sLog = PR_NewLogModule("gfx2d");
   return sLog;
 }
+#endif
 
 // The following code was largely taken from xpcom/glue/SSE.cpp and
 // made a little simpler.
@@ -401,7 +403,7 @@ Factory::CreateDrawTargetForData(BackendType aBackend,
     }
 #endif
   default:
-    gfxDebug() << "Invalid draw target type specified.";
+    gfxCriticalNote << "Invalid draw target type specified: " << (int)aBackend;
     return nullptr;
   }
 
@@ -410,7 +412,7 @@ Factory::CreateDrawTargetForData(BackendType aBackend,
   }
 
   if (!retVal) {
-    gfxDebug() << "Failed to create DrawTarget, Type: " << int(aBackend) << " Size: " << aSize;
+    gfxCriticalNote << "Failed to create DrawTarget, Type: " << int(aBackend) << " Size: " << aSize << ", Data: " << hexa(aData) << ", Stride: " << aStride;
   }
 
   return retVal.forget();

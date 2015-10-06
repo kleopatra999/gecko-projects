@@ -1,14 +1,14 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-let PERMISSIONS_FILE_NAME = "permissions.sqlite";
+var PERMISSIONS_FILE_NAME = "permissions.sqlite";
 
 /*
  * Prevent the nsINavHistoryService from being avaliable for the migration
  */
 
-let CONTRACT_ID = "@mozilla.org/browser/nav-history-service;1";
-let factory = {
+var CONTRACT_ID = "@mozilla.org/browser/nav-history-service;1";
+var factory = {
   createInstance: function() {
     throw new Error("There is no history service");
   },
@@ -18,11 +18,11 @@ let factory = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIFactory])
 };
 
-let newClassID = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator).generateUUID();
+var newClassID = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator).generateUUID();
 
-let registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
-let oldClassID = registrar.contractIDToCID(CONTRACT_ID);
-let oldFactory = Components.manager.getClassObject(Cc[CONTRACT_ID], Ci.nsIFactory);
+var registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
+var oldClassID = registrar.contractIDToCID(CONTRACT_ID);
+var oldFactory = Components.manager.getClassObject(Cc[CONTRACT_ID], Ci.nsIFactory);
 registrar.unregisterFactory(oldClassID, oldFactory);
 registrar.registerFactory(newClassID, "", CONTRACT_ID, factory);
 
@@ -211,33 +211,13 @@ add_task(function test() {
     let db = Services.storage.openDatabase(GetPermissionsFile(profile));
     do_check_true(db.tableExists("moz_perms"));
     do_check_true(db.tableExists("moz_hosts"));
-    do_check_true(db.tableExists("moz_hosts_is_backup"));
+    do_check_false(db.tableExists("moz_hosts_is_backup"));
     do_check_false(db.tableExists("moz_perms_v6"));
 
-    let mozHostsStmt = db.createStatement("SELECT " +
-                                          "host, type, permission, expireType, expireTime, " +
-                                          "modificationTime, appId, isInBrowserElement " +
-                                          "FROM moz_hosts WHERE id = :id");
-
-    // Check that the moz_hosts table still contains the correct values.
-    created.forEach((it) => {
-      mozHostsStmt.reset();
-      mozHostsStmt.bindByName("id", it.id);
-      mozHostsStmt.executeStep();
-      do_check_eq(mozHostsStmt.getUTF8String(0), it.host);
-      do_check_eq(mozHostsStmt.getUTF8String(1), it.type);
-      do_check_eq(mozHostsStmt.getInt64(2), it.permission);
-      do_check_eq(mozHostsStmt.getInt64(3), it.expireType);
-      do_check_eq(mozHostsStmt.getInt64(4), it.expireTime);
-      do_check_eq(mozHostsStmt.getInt64(5), it.modificationTime);
-      do_check_eq(mozHostsStmt.getInt64(6), it.appId);
-      do_check_eq(mozHostsStmt.getInt64(7), it.isInBrowserElement);
-    });
-
-    // Check that there are the right number of values
+    // The moz_hosts table should still exist but be empty
     let mozHostsCount = db.createStatement("SELECT count(*) FROM moz_hosts");
     mozHostsCount.executeStep();
-    do_check_eq(mozHostsCount.getInt64(0), created.length);
+    do_check_eq(mozHostsCount.getInt64(0), 0);
 
     db.close();
   }

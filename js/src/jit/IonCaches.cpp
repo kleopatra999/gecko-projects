@@ -1259,6 +1259,13 @@ IsCacheableArrayLength(JSContext* cx, HandleObject obj, HandlePropertyName name,
         return false;
     }
 
+    // The emitted stub can only handle int32 lengths. If the length of the
+    // actual object does not fit in an int32 then don't attach a stub, as if
+    // the cache is idempotent we won't end up invalidating the compiled script
+    // otherwise.
+    if (obj->as<ArrayObject>().length() > INT32_MAX)
+        return false;
+
     return true;
 }
 
@@ -1540,6 +1547,20 @@ PushObjectOpResult(MacroAssembler& masm)
 }
 
 static bool
+ProxyGetProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
+{
+    RootedValue receiver(cx, ObjectValue(*proxy));
+    return Proxy::get(cx, proxy, receiver, id, vp);
+}
+
+static bool
+ProxyCallProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
+{
+    RootedValue receiver(cx, ObjectValue(*proxy));
+    return Proxy::callProp(cx, proxy, receiver, id, vp);
+}
+
+static bool
 EmitCallProxyGet(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& attacher,
                  PropertyName* name, LiveRegisterSet liveRegs, Register object,
                  TypedOrValueRegister output, jsbytecode* pc, void* returnAddr)
@@ -1552,8 +1573,8 @@ EmitCallProxyGet(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& at
     AllocatableRegisterSet regSet(RegisterSet::All());
     regSet.take(AnyRegister(object));
 
-    // Proxy::get(JSContext* cx, HandleObject proxy, HandleObject receiver, HandleId id,
-    //            MutableHandleValue vp)
+    // ProxyGetProperty(JSContext* cx, HandleObject proxy, HandleId id,
+    //                  MutableHandleValue vp)
     Register argJSContextReg = regSet.takeAnyGeneral();
     Register argProxyReg     = regSet.takeAnyGeneral();
     Register argIdReg        = regSet.takeAnyGeneral();
@@ -1561,9 +1582,9 @@ EmitCallProxyGet(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& at
 
     Register scratch         = regSet.takeAnyGeneral();
 
-    void* getFunction = JSOp(*pc) == JSOP_CALLPROP                      ?
-                            JS_FUNC_TO_DATA_PTR(void*, Proxy::callProp) :
-                            JS_FUNC_TO_DATA_PTR(void*, Proxy::get);
+    void* getFunction = JSOp(*pc) == JSOP_CALLPROP                        ?
+                            JS_FUNC_TO_DATA_PTR(void*, ProxyCallProperty) :
+                            JS_FUNC_TO_DATA_PTR(void*, ProxyGetProperty);
 
     // Push stubCode for marking.
     attacher.pushStubCodePointer(masm);
@@ -1576,9 +1597,7 @@ EmitCallProxyGet(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& at
     masm.Push(propId, scratch);
     masm.moveStackPtrTo(argIdReg);
 
-    // Pushing object and receiver.  Both are the same, so Handle to one is equivalent to
-    // handle to other.
-    masm.Push(object);
+    // Push the proxy. Also used as receiver.
     masm.Push(object);
     masm.moveStackPtrTo(argProxyReg);
 
@@ -1591,7 +1610,6 @@ EmitCallProxyGet(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& at
     // Make the call.
     masm.setupUnalignedABICall(scratch);
     masm.passABIArg(argJSContextReg);
-    masm.passABIArg(argProxyReg);
     masm.passABIArg(argProxyReg);
     masm.passABIArg(argIdReg);
     masm.passABIArg(argVpReg);
@@ -2284,9 +2302,7 @@ EmitCallProxySet(JSContext* cx, MacroAssembler& masm, IonCache::StubAttacher& at
     masm.Push(propId, scratch);
     masm.moveStackPtrTo(argIdReg);
 
-    // Pushing object and receiver.  Both are the same, so Handle to one is equivalent to
-    // handle to other.
-    masm.Push(object);
+    // Push object.
     masm.Push(object);
     masm.moveStackPtrTo(argProxyReg);
 
@@ -3407,6 +3423,7 @@ GetElementIC::attachGetProp(JSContext* cx, HandleScript outerScript, IonScript* 
             JitSpew(JitSpew_IonIC, "GETELEM uncacheable property");
             return true;
         }
+        MOZ_ASSERT(monitoredResult());
     } else if (obj->is<UnboxedPlainObject>()) {
         MOZ_ASSERT(canCache == GetPropertyIC::CanAttachNone);
         const UnboxedLayout::Property* property =
@@ -4681,6 +4698,9 @@ IsCacheableNameReadSlot(HandleObject scopeChain, HandleObject obj,
         if (!IsCacheableGetPropReadSlotForIon(obj, holder, shape) &&
             !IsCacheableNoProperty(obj, holder, shape, pc, output))
             return false;
+    } else if (obj->is<ModuleEnvironmentObject>()) {
+        // We don't yet support lookups in a module environment.
+        return false;
     } else if (obj->is<CallObject>()) {
         MOZ_ASSERT(obj == holder);
         if (!shape->hasDefaultGetter())

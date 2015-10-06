@@ -319,17 +319,22 @@ class JSFunction : public js::NativeObject
 
     void setEnvironment(JSObject* obj) {
         MOZ_ASSERT(isInterpreted() && !isBeingParsed());
-        *(js::HeapPtrObject*)&u.i.env_ = obj;
+        *reinterpret_cast<js::HeapPtrObject*>(&u.i.env_) = obj;
     }
 
     void initEnvironment(JSObject* obj) {
         MOZ_ASSERT(isInterpreted() && !isBeingParsed());
-        ((js::HeapPtrObject*)&u.i.env_)->init(obj);
+        reinterpret_cast<js::HeapPtrObject*>(&u.i.env_)->init(obj);
+    }
+
+    void unsetEnvironment() {
+        setEnvironment(nullptr);
     }
 
   private:
     void setFunctionBox(js::frontend::FunctionBox* funbox) {
         MOZ_ASSERT(isInterpreted());
+        MOZ_ASSERT_IF(!isBeingParsed(), !environment());
         flags_ |= BEING_PARSED;
         u.i.funbox_ = funbox;
     }
@@ -472,7 +477,7 @@ class JSFunction : public js::NativeObject
         // Note: createScriptForLazilyInterpretedFunction triggers a barrier on
         // lazy script before it is overwritten here.
         MOZ_ASSERT(isInterpretedLazy());
-        if (!lazyScript()->maybeScript())
+        if (lazyScriptOrNull() && !lazyScript()->maybeScript())
             lazyScript()->initScript(script);
         flags_ &= ~INTERPRETED_LAZY;
         flags_ |= INTERPRETED;
@@ -631,8 +636,7 @@ IdToFunctionName(JSContext* cx, HandleId id);
 extern JSFunction*
 DefineFunction(JSContext* cx, HandleObject obj, HandleId id, JSNative native,
                unsigned nargs, unsigned flags,
-               gc::AllocKind allocKind = gc::AllocKind::FUNCTION,
-               NewObjectKind newKind = GenericObject);
+               gc::AllocKind allocKind = gc::AllocKind::FUNCTION);
 
 bool
 FunctionHasResolveHook(const JSAtomState& atomState, jsid id);

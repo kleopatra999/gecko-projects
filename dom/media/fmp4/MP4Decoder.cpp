@@ -15,6 +15,8 @@
 #endif
 #include "mozilla/Logging.h"
 #include "nsMimeTypes.h"
+#include "nsContentTypeParser.h"
+#include "VideoUtils.h"
 
 #ifdef XP_WIN
 #include "mozilla/WindowsVersion.h"
@@ -24,6 +26,10 @@
 #include "AndroidBridge.h"
 #endif
 #include "mozilla/layers/LayersTypes.h"
+
+#ifdef MOZ_FFMPEG
+#include "FFmpegRuntimeLinker.h"
+#endif
 
 namespace mozilla {
 
@@ -47,50 +53,8 @@ MediaDecoderStateMachine* MP4Decoder::CreateStateMachine()
   return new MediaDecoderStateMachine(this, reader);
 }
 
-#ifdef MOZ_EME
-nsresult
-MP4Decoder::SetCDMProxy(CDMProxy* aProxy)
-{
-  nsresult rv = MediaDecoder::SetCDMProxy(aProxy);
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (aProxy) {
-    // The MediaFormatReader can't decrypt EME content until it has a CDMProxy,
-    // and the CDMProxy knows the capabilities of the CDM. The MediaFormatReader
-    // remains in "waiting for resources" state until then.
-    CDMCaps::AutoLock caps(aProxy->Capabilites());
-    nsCOMPtr<nsIRunnable> task(
-      NS_NewRunnableMethod(this, &MediaDecoder::NotifyWaitingForResourcesStatusChanged));
-    caps.CallOnMainThreadWhenCapsAvailable(task);
-  }
-  return NS_OK;
-}
-#endif
-
 static bool
-IsSupportedAudioCodec(const nsAString& aCodec,
-                      bool& aOutContainsAAC,
-                      bool& aOutContainsMP3)
-{
-  // AAC-LC or HE-AAC in M4A.
-  aOutContainsAAC = aCodec.EqualsASCII("mp4a.40.2")     // MPEG4 AAC-LC
-                    || aCodec.EqualsASCII("mp4a.40.5")  // MPEG4 HE-AAC
-                    || aCodec.EqualsASCII("mp4a.67");   // MPEG2 AAC-LC
-  if (aOutContainsAAC) {
-    return true;
-  }
-#ifndef MOZ_GONK_MEDIACODEC // B2G doesn't support MP3 in MP4 yet.
-  aOutContainsMP3 = aCodec.EqualsASCII("mp3");
-  if (aOutContainsMP3) {
-    return true;
-  }
-#else
-  aOutContainsMP3 = false;
-#endif
-  return false;
-}
-
-static bool
-IsSupportedH264Codec(const nsAString& aCodec)
+IsWhitelistedH264Codec(const nsAString& aCodec)
 {
   int16_t profile = 0, level = 0;
 
@@ -124,58 +88,94 @@ IsSupportedH264Codec(const nsAString& aCodec)
 
 /* static */
 bool
-MP4Decoder::CanHandleMediaType(const nsACString& aType,
-                               const nsAString& aCodecs,
-                               bool& aOutContainsAAC,
-                               bool& aOutContainsH264,
-                               bool& aOutContainsMP3)
+MP4Decoder::CanHandleMediaType(const nsACString& aMIMETypeExcludingCodecs,
+                               const nsAString& aCodecs)
 {
   if (!IsEnabled()) {
     return false;
   }
 
-  if (aType.EqualsASCII("audio/mp4") || aType.EqualsASCII("audio/x-m4a")) {
-    return MP4Decoder::CanCreateAACDecoder() &&
-           (aCodecs.IsEmpty() ||
-            IsSupportedAudioCodec(aCodecs,
-                                  aOutContainsAAC,
-                                  aOutContainsMP3));
+  // Whitelist MP4 types, so they explicitly match what we encounter on
+  // the web, as opposed to what we use internally (i.e. what our demuxers
+  // etc output).
+  const bool isMP4Audio = aMIMETypeExcludingCodecs.EqualsASCII("audio/mp4") ||
+                          aMIMETypeExcludingCodecs.EqualsASCII("audio/x-m4a");
+  const bool isMP4Video = aMIMETypeExcludingCodecs.EqualsASCII("video/mp4") ||
+                          aMIMETypeExcludingCodecs.EqualsASCII("video/x-m4v");
+  if (!isMP4Audio && !isMP4Video) {
+    return false;
   }
 
 #ifdef MOZ_GONK_MEDIACODEC
-  if (aType.EqualsASCII(VIDEO_3GPP)) {
+  if (aMIMETypeExcludingCodecs.EqualsASCII(VIDEO_3GPP)) {
     return Preferences::GetBool("media.fragmented-mp4.gonk.enabled", false);
   }
 #endif
-  if ((!aType.EqualsASCII("video/mp4") && !aType.EqualsASCII("video/x-m4v")) ||
-      !MP4Decoder::CanCreateH264Decoder()) {
-    return false;
+
+  nsTArray<nsCString> codecMimes;
+  if (aCodecs.IsEmpty()) {
+    // No codecs specified. Assume AAC/H.264
+    if (isMP4Audio) {
+      codecMimes.AppendElement(NS_LITERAL_CSTRING("audio/mp4a-latm"));
+    } else {
+      MOZ_ASSERT(isMP4Video);
+      codecMimes.AppendElement(NS_LITERAL_CSTRING("video/avc"));
+    }
+  } else {
+    // Verify that all the codecs specified are ones that we expect that
+    // we can play.
+    nsTArray<nsString> codecs;
+    if (!ParseCodecsString(aCodecs, codecs)) {
+      return false;
+    }
+    for (const nsString& codec : codecs) {
+      if (IsAACCodecString(codec)) {
+        codecMimes.AppendElement(NS_LITERAL_CSTRING("audio/mp4a-latm"));
+        continue;
+      }
+      if (codec.EqualsLiteral("mp3")) {
+        codecMimes.AppendElement(NS_LITERAL_CSTRING("audio/mpeg"));
+        continue;
+      }
+      // Note: Only accept H.264 in a video content type, not in an audio
+      // content type.
+      if (IsWhitelistedH264Codec(codec) && isMP4Video) {
+        codecMimes.AppendElement(NS_LITERAL_CSTRING("video/avc"));
+        continue;
+      }
+      // Some unsupported codec.
+      return false;
+    }
   }
 
-  // Verify that all the codecs specifed are ones that we expect that
-  // we can play.
-  nsCharSeparatedTokenizer tokenizer(aCodecs, ',');
-  bool expectMoreTokens = false;
-  while (tokenizer.hasMoreTokens()) {
-    const nsSubstring& token = tokenizer.nextToken();
-    expectMoreTokens = tokenizer.separatorAfterCurrentToken();
-    if (IsSupportedAudioCodec(token,
-                              aOutContainsAAC,
-                              aOutContainsMP3)) {
-      continue;
-    }
-    if (IsSupportedH264Codec(token)) {
-      aOutContainsH264 = true;
-      continue;
-    }
+  // Verify that we have a PDM that supports the whitelisted types.
+  PlatformDecoderModule::Init();
+  nsRefPtr<PlatformDecoderModule> platform = PlatformDecoderModule::Create();
+  if (!platform) {
     return false;
   }
-  if (expectMoreTokens) {
-    // Last codec name was empty
-    return false;
+  for (const nsCString& codecMime : codecMimes) {
+    if (!platform->SupportsMimeType(codecMime)) {
+      return false;
+    }
   }
 
   return true;
+}
+
+/* static */ bool
+MP4Decoder::CanHandleMediaType(const nsAString& aContentType)
+{
+  nsContentTypeParser parser(aContentType);
+  nsAutoString mimeType;
+  nsresult rv = parser.GetType(mimeType);
+  if (NS_FAILED(rv)) {
+    return false;
+  }
+  nsString codecs;
+  parser.GetParameter("codecs", codecs);
+
+  return CanHandleMediaType(NS_ConvertUTF16toUTF8(mimeType), codecs);
 }
 
 static bool
@@ -184,7 +184,9 @@ IsFFmpegAvailable()
 #ifndef MOZ_FFMPEG
   return false;
 #else
-  return Preferences::GetBool("media.fragmented-mp4.ffmpeg.enabled", false);
+  PlatformDecoderModule::Init();
+  nsRefPtr<PlatformDecoderModule> m = FFmpegRuntimeLinker::CreateDecoderModule();
+  return !!m;
 #endif
 }
 
@@ -275,7 +277,7 @@ CreateTestH264Decoder(layers::LayersBackend aBackend,
   PlatformDecoderModule::Init();
 
   nsRefPtr<PlatformDecoderModule> platform = PlatformDecoderModule::Create();
-  if (!platform) {
+  if (!platform || !platform->SupportsMimeType(NS_LITERAL_CSTRING("video/mp4"))) {
     return nullptr;
   }
 
@@ -331,7 +333,7 @@ CreateTestAACDecoder(AudioInfo& aConfig)
   PlatformDecoderModule::Init();
 
   nsRefPtr<PlatformDecoderModule> platform = PlatformDecoderModule::Create();
-  if (!platform) {
+  if (!platform || !platform->SupportsMimeType(NS_LITERAL_CSTRING("audio/mp4a-latm"))) {
     return nullptr;
   }
 

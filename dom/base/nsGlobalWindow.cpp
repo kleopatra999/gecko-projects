@@ -53,6 +53,7 @@
 #include "ScriptSettings.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Likely.h"
+#include "mozilla/Snprintf.h"
 #include "mozilla/unused.h"
 
 // Other Classes
@@ -542,6 +543,14 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_IMPL_CYCLE_COLLECTION_ROOT_NATIVE(nsTimeout, AddRef)
 NS_IMPL_CYCLE_COLLECTION_UNROOT_NATIVE(nsTimeout, Release)
 
+nsresult
+nsTimeout::InitTimer(uint32_t aDelay)
+{
+  return mTimer->InitWithNameableFuncCallback(
+    nsGlobalWindow::TimerCallback, this, aDelay,
+    nsITimer::TYPE_ONE_SHOT, nsGlobalWindow::TimerNameCallback);
+}
+
 // Return true if this timeout has a refcount of 1. This is used to check
 // that dummy_timeout doesn't leak from nsGlobalWindow::RunTimeout.
 bool
@@ -626,7 +635,7 @@ public:
   virtual bool has(JSContext *cx, JS::Handle<JSObject*> proxy,
                    JS::Handle<jsid> id, bool *bp) const override;
   virtual bool get(JSContext *cx, JS::Handle<JSObject*> proxy,
-                   JS::Handle<JSObject*> receiver,
+                   JS::Handle<JS::Value> receiver,
                    JS::Handle<jsid> id,
                    JS::MutableHandle<JS::Value> vp) const override;
   virtual bool set(JSContext *cx, JS::Handle<JSObject*> proxy,
@@ -891,7 +900,7 @@ nsOuterWindowProxy::hasOwn(JSContext *cx, JS::Handle<JSObject*> proxy,
 
 bool
 nsOuterWindowProxy::get(JSContext *cx, JS::Handle<JSObject*> proxy,
-                        JS::Handle<JSObject*> receiver,
+                        JS::Handle<JS::Value> receiver,
                         JS::Handle<jsid> id,
                         JS::MutableHandle<JS::Value> vp) const
 {
@@ -2076,7 +2085,7 @@ nsGlobalWindow::SetInitialPrincipalToSubject()
   MOZ_ASSERT(IsOuterWindow());
 
   // First, grab the subject principal.
-  nsCOMPtr<nsIPrincipal> newWindowPrincipal = nsContentUtils::SubjectPrincipal();
+  nsCOMPtr<nsIPrincipal> newWindowPrincipal = nsContentUtils::SubjectPrincipalOrSystemIfNativeCaller();
 
   // Now, if we're about to use the system principal or an nsExpandedPrincipal,
   // make sure we're not using it for a content docshell.
@@ -3933,7 +3942,7 @@ nsGlobalWindow::GetContentOuter(JSContext* aCx,
 {
   MOZ_RELEASE_ASSERT(IsOuterWindow());
 
-  nsCOMPtr<nsIDOMWindow> content = GetContentInternal(aError);
+  nsCOMPtr<nsIDOMWindow> content = GetContentInternal(aError, !nsContentUtils::IsCallerChrome());
   if (aError.Failed()) {
     return;
   }
@@ -3962,7 +3971,7 @@ nsGlobalWindow::GetContent(JSContext* aCx,
 }
 
 already_AddRefed<nsIDOMWindow>
-nsGlobalWindow::GetContentInternal(ErrorResult& aError)
+nsGlobalWindow::GetContentInternal(ErrorResult& aError, bool aUnprivilegedCaller)
 {
   MOZ_ASSERT(IsOuterWindow());
 
@@ -3980,7 +3989,7 @@ nsGlobalWindow::GetContentInternal(ErrorResult& aError)
   }
 
   nsCOMPtr<nsIDocShellTreeItem> primaryContent;
-  if (!nsContentUtils::IsCallerChrome()) {
+  if (aUnprivilegedCaller) {
     // If we're called by non-chrome code, make sure we don't return
     // the primary content window if the calling tab is hidden. In
     // such a case we return the same-type root in the hidden tab,
@@ -4013,17 +4022,6 @@ nsGlobalWindow::GetContentInternal(ErrorResult& aError)
 
   domWindow = primaryContent->GetWindow();
   return domWindow.forget();
-}
-
-NS_IMETHODIMP
-nsGlobalWindow::GetContent(nsIDOMWindow** aContent)
-{
-  FORWARD_TO_OUTER(GetContent, (aContent), NS_ERROR_UNEXPECTED);
-
-  ErrorResult rv;
-  *aContent = GetContentInternal(rv).take();
-
-  return rv.StealNSResult();
 }
 
 MozSelfSupport*
@@ -4413,7 +4411,7 @@ nsGlobalWindow::GetApplicationCache(ErrorResult& aError)
 
   if (!mApplicationCache) {
     nsCOMPtr<nsIWebNavigation> webNav(do_QueryInterface(GetDocShell()));
-    if (!webNav) {
+    if (!webNav || !mDoc) {
       aError.Throw(NS_ERROR_FAILURE);
       return nullptr;
     }
@@ -4428,7 +4426,7 @@ nsGlobalWindow::GetApplicationCache(ErrorResult& aError)
     nsContentUtils::GetOfflineAppManifest(mDoc, getter_AddRefs(manifestURI));
 
     nsRefPtr<nsDOMOfflineResourceList> applicationCache =
-      new nsDOMOfflineResourceList(manifestURI, uri, this);
+      new nsDOMOfflineResourceList(manifestURI, uri, mDoc->NodePrincipal(), this);
 
     applicationCache->Init();
 
@@ -4540,7 +4538,7 @@ nsGlobalWindow::GetOpenerWindowOuter()
   nsGlobalWindow* win = static_cast<nsGlobalWindow*>(opener.get());
 
   // First, check if we were called from a privileged chrome script
-  if (nsContentUtils::IsCallerChrome()) {
+  if (nsContentUtils::LegacyIsCallerChromeOrNativeCode()) {
     // Catch the case where we're chrome but the opener is not...
     if (GetPrincipal() == nsContentUtils::GetSystemPrincipal() &&
         win->GetPrincipal() != nsContentUtils::GetSystemPrincipal()) {
@@ -6504,7 +6502,7 @@ nsGlobalWindow::SetFullscreenInternal(FullscreenReason aReason,
 
   // Only chrome can change our fullscreen mode. Otherwise, the state
   // can only be changed for DOM fullscreen.
-  if (aReason == eForFullscreenMode && !nsContentUtils::IsCallerChrome()) {
+  if (aReason == eForFullscreenMode && !nsContentUtils::LegacyIsCallerChromeOrNativeCode()) {
     return NS_OK;
   }
 
@@ -8240,7 +8238,7 @@ bool
 nsGlobalWindow::CanSetProperty(const char *aPrefName)
 {
   // Chrome can set any property.
-  if (nsContentUtils::IsCallerChrome()) {
+  if (nsContentUtils::LegacyIsCallerChromeOrNativeCode()) {
     return true;
   }
 
@@ -8756,6 +8754,17 @@ nsGlobalWindow::CanClose()
 {
   MOZ_ASSERT(IsOuterWindow());
 
+  if (mIsChrome) {
+    nsCOMPtr<nsIBrowserDOMWindow> bwin;
+    nsIDOMChromeWindow* chromeWin = static_cast<nsGlobalChromeWindow*>(this);
+    chromeWin->GetBrowserDOMWindow(getter_AddRefs(bwin));
+
+    bool canClose = true;
+    if (bwin && NS_SUCCEEDED(bwin->CanClose(&canClose))) {
+      return canClose;
+    }
+  }
+
   if (!mDocShell) {
     return true;
   }
@@ -8769,7 +8778,7 @@ nsGlobalWindow::CanClose()
   mDocShell->GetContentViewer(getter_AddRefs(cv));
   if (cv) {
     bool canClose;
-    nsresult rv = cv->PermitUnload(false, &canClose);
+    nsresult rv = cv->PermitUnload(&canClose);
     if (NS_SUCCEEDED(rv) && !canClose)
       return false;
 
@@ -10045,6 +10054,7 @@ nsGlobalWindow::AddSystemEventListener(const nsAString& aType,
                "explicit by making optional_argc non-zero.");
 
   if (IsOuterWindow() && mInnerWindow &&
+      !nsContentUtils::LegacyIsCallerNativeCode() &&
       !nsContentUtils::CanCallerAccess(mInnerWindow)) {
     return NS_ERROR_DOM_SECURITY_ERR;
   }
@@ -12172,7 +12182,7 @@ nsGlobalWindow::OpenInternal(const nsAString& aUrl, const nsAString& aName,
               nsIPrincipal::APP_STATUS_INSTALLED;
   }
 
-  const bool checkForPopup = !nsContentUtils::IsCallerChrome() &&
+  const bool checkForPopup = !nsContentUtils::LegacyIsCallerChromeOrNativeCode() &&
     !isApp && !aDialog && !WindowExists(aName, !aCalledNoScript);
 
   // Note: it's very important that this be an nsXPIDLCString, since we want
@@ -12501,7 +12511,7 @@ nsGlobalWindow::SetTimeoutOrInterval(nsIScriptTimeoutHandler *aHandler,
 
     nsRefPtr<nsTimeout> copy = timeout;
 
-    rv = timeout->InitTimer(TimerCallback, realInterval);
+    rv = timeout->InitTimer(realInterval);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -12757,7 +12767,7 @@ nsGlobalWindow::RescheduleTimeout(nsTimeout* aTimeout, const TimeStamp& now,
 
   // Reschedule the OS timer. Don't bother returning any error codes if
   // this fails since the callers of this method don't care about them.
-  nsresult rv = aTimeout->InitTimer(TimerCallback, delay.ToMilliseconds());
+  nsresult rv = aTimeout->InitTimer(delay.ToMilliseconds());
 
   if (NS_FAILED(rv)) {
     NS_ERROR("Error initializing timer for DOM timeout!");
@@ -13057,7 +13067,7 @@ nsresult nsGlobalWindow::ResetTimersForNonBackgroundWindow()
       timeout->mFiringDepth = firingDepth;
       timeout->Release();
 
-      nsresult rv = timeout->InitTimer(TimerCallback, delay.ToMilliseconds());
+      nsresult rv = timeout->InitTimer(delay.ToMilliseconds());
 
       if (NS_FAILED(rv)) {
         NS_WARNING("Error resetting non background timer for DOM timeout!");
@@ -13152,6 +13162,19 @@ nsGlobalWindow::TimerCallback(nsITimer *aTimer, void *aClosure)
   nsRefPtr<nsTimeout> timeout = (nsTimeout *)aClosure;
 
   timeout->mWindow->RunTimeout(timeout);
+}
+
+// static
+void
+nsGlobalWindow::TimerNameCallback(nsITimer* aTimer, void* aClosure, char* aBuf,
+                                  size_t aLen)
+{
+  nsRefPtr<nsTimeout> timeout = (nsTimeout*)aClosure;
+
+  const char* filename;
+  uint32_t lineNum, column;
+  timeout->mScriptHandler->GetLocation(&filename, &lineNum, &column);
+  snprintf(aBuf, aLen, "[content] %s:%u:%u", filename, lineNum, column);
 }
 
 //*****************************************************************************
@@ -13499,7 +13522,7 @@ nsGlobalWindow::ResumeTimeouts(bool aThawChildren)
       t->mTimer = do_CreateInstance("@mozilla.org/timer;1");
       NS_ENSURE_TRUE(t->mTimer, NS_ERROR_OUT_OF_MEMORY);
 
-      rv = t->InitTimer(TimerCallback, delay);
+      rv = t->InitTimer(delay);
       if (NS_FAILED(rv)) {
         t->mTimer = nullptr;
         return rv;

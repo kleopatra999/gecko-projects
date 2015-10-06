@@ -27,6 +27,7 @@
   var DesktopPendingConversationView = loop.conversationViews.PendingConversationView;
   var OngoingConversationView = loop.conversationViews.OngoingConversationView;
   var DirectCallFailureView = loop.conversationViews.DirectCallFailureView;
+  var DesktopRoomEditContextView = loop.roomViews.DesktopRoomEditContextView;
   var RoomFailureView = loop.roomViews.RoomFailureView;
   var DesktopRoomConversationView = loop.roomViews.DesktopRoomConversationView;
 
@@ -35,6 +36,7 @@
   var UnsupportedBrowserView  = loop.webapp.UnsupportedBrowserView;
   var UnsupportedDeviceView   = loop.webapp.UnsupportedDeviceView;
   var StandaloneRoomView      = loop.standaloneRoomViews.StandaloneRoomView;
+  var StandaloneHandleUserAgentView = loop.standaloneRoomViews.StandaloneHandleUserAgentView;
 
   // 3. Shared components
   var ConversationToolbar = loop.shared.views.ConversationToolbar;
@@ -96,7 +98,7 @@
 
     sendTextChatMessage: function(actionData) {
       dispatcher.dispatch(new loop.shared.actions.ReceivedTextChatMessage({
-        contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+        contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
         message: actionData.message,
         receivedTimestamp: actionData.sentTimestamp
       }));
@@ -407,40 +409,40 @@
   textChatStore.setStoreState({textChatEnabled: true});
 
   dispatcher.dispatch(new sharedActions.SendTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "Rheet!",
     sentTimestamp: "2015-06-23T22:21:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.ReceivedTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "Hello",
     receivedTimestamp: "2015-06-23T23:24:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.SendTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "Nowforareallylongwordwithoutspacesorpunctuationwhichshouldcause" +
     "linewrappingissuesifthecssiswrong",
     sentTimestamp: "2015-06-23T22:23:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.SendTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "Check out this menu from DNA Pizza:" +
     " http://example.com/DNA/pizza/menu/lots-of-different-kinds-of-pizza/" +
     "%8D%E0%B8%88%E0%B8%A1%E0%B8%A3%E0%8D%E0%B8%88%E0%B8%A1%E0%B8%A3%E0%",
     sentTimestamp: "2015-06-23T22:23:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.ReceivedTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "That avocado monkey-brains pie sounds tasty!",
     receivedTimestamp: "2015-06-23T22:25:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.SendTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "What time should we meet?",
     sentTimestamp: "2015-06-23T22:27:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.ReceivedTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "8:00 PM",
     receivedTimestamp: "2015-06-23T22:27:45.590Z"
   }));
@@ -602,7 +604,7 @@
         "google-active", "history", "history-hover", "history-active", "leave",
         "screen-white", "screenmute-white", "settings", "settings-hover", "settings-active",
         "share-darkgrey", "tag", "tag-hover", "tag-active", "trash", "unblock",
-        "unblock-hover", "unblock-active", "video", "video-hover", "video-active", "tour",
+        "unblock-hover", "unblock-active", "video", "video-hover", "video-active",
         "status-available", "status-unavailable"
       ]
     },
@@ -1029,6 +1031,7 @@
                            width: 334}, 
               React.createElement("div", {className: "panel force-menu-show"}, 
                 React.createElement(ContactDetail, {contact: fakeManyContacts[0], 
+                               getContainerCoordinates: function() { return {"top": 0, "height": 0 }; }, 
                                handleContactAction: function() {}})
               )
             )
@@ -1043,6 +1046,8 @@
              React.createElement("div", {className: "panel"}, 
                React.createElement(ContactDropdown, {blocked: false, 
                                 canEdit: true, 
+                                eventPosY: 0, 
+                                getContainerCoordinates: function() { return {"top": 0, "height": 0 }; }, 
                                 handleAction: function () {}})
              )
             ), 
@@ -1053,8 +1058,10 @@
                            width: 300}, 
              React.createElement("div", {className: "panel"}, 
                React.createElement(ContactDropdown, {blocked: true, 
-                 canEdit: false, 
-                 handleAction: function () {}})
+                                canEdit: false, 
+                                eventPosY: 0, 
+                                getContainerCoordinates: function() { return {"top": 0, "height": 0 }; }, 
+                                handleAction: function () {}})
              )
             )
           ), 
@@ -1113,6 +1120,7 @@
                                        publishStream: noop, 
                                        screenShare: { state: SCREEN_SHARE_STATES.INACTIVE, visible: true}, 
                                        settingsMenuItems: [{ id: "feedback" }], 
+                                       show: true, 
                                        video: { enabled: true, visible: true}})
                 )
               ), 
@@ -1127,6 +1135,7 @@
                                        publishStream: noop, 
                                        screenShare: { state: SCREEN_SHARE_STATES.PENDING, visible: true}, 
                                        settingsMenuItems: [{ id: "feedback" }], 
+                                       show: true, 
                                        video: { enabled: false, visible: true}})
                 )
               ), 
@@ -1141,6 +1150,7 @@
                                        publishStream: noop, 
                                        screenShare: { state: SCREEN_SHARE_STATES.ACTIVE, visible: true}, 
                                        settingsMenuItems: [{ id: "feedback" }], 
+                                       show: true, 
                                        video: { enabled: true, visible: true}})
                 )
               )
@@ -1212,6 +1222,7 @@
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(OngoingConversationView, {
                   audio: { enabled: true, visible: true}, 
+                  chatWindowDetached: false, 
                   conversationStore: conversationStores[0], 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
@@ -1230,6 +1241,7 @@
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(OngoingConversationView, {
                   audio: { enabled: true, visible: true}, 
+                  chatWindowDetached: false, 
                   conversationStore: conversationStores[1], 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
@@ -1247,6 +1259,7 @@
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(OngoingConversationView, {
                   audio: { enabled: true, visible: true}, 
+                  chatWindowDetached: false, 
                   conversationStore: conversationStores[2], 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
@@ -1265,6 +1278,7 @@
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(OngoingConversationView, {
                   audio: { enabled: true, visible: true}, 
+                  chatWindowDetached: false, 
                   conversationStore: conversationStores[3], 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
@@ -1283,6 +1297,7 @@
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(OngoingConversationView, {
                   audio: { enabled: true, visible: true}, 
+                  chatWindowDetached: false, 
                   conversationStore: conversationStores[4], 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
@@ -1333,7 +1348,8 @@
           ), 
 
           React.createElement(Section, {name: "UnsupportedBrowserView"}, 
-            React.createElement(FramedExample, {dashed: true, 
+            React.createElement(FramedExample, {cssClass: "standalone", 
+                           dashed: true, 
                            height: 430, 
                            summary: "Standalone Unsupported Browser", 
                            width: 480}, 
@@ -1344,7 +1360,8 @@
           ), 
 
           React.createElement(Section, {name: "UnsupportedDeviceView"}, 
-            React.createElement(FramedExample, {dashed: true, 
+            React.createElement(FramedExample, {cssClass: "standalone", 
+                           dashed: true, 
                            height: 430, 
                            summary: "Standalone Unsupported Device", 
                            width: 480}, 
@@ -1358,7 +1375,7 @@
             React.createElement(FramedExample, {
               dashed: true, 
               height: 254, 
-              summary: "", 
+              summary: "Desktop Room Failure View", 
               width: 298}, 
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(RoomFailureView, {
@@ -1376,12 +1393,30 @@
                            width: 298}, 
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(DesktopRoomConversationView, {
+                  chatWindowDetached: false, 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
                   onCallTerminated: function(){}, 
                   roomState: ROOM_STATES.INIT, 
                   roomStore: invitationRoomStore})
+              )
+            ), 
+
+            React.createElement(FramedExample, {height: 278.6, 
+                           onContentsRendered: invitationRoomStore.activeRoomStore.forcedUpdate, 
+                           summary: "Desktop room Edit Context w/Error", 
+                           width: 298}, 
+              React.createElement("div", {className: "fx-embedded room-invitation-overlay"}, 
+                React.createElement(DesktopRoomEditContextView, {
+                  dispatcher: dispatcher, 
+                  error: {}, 
+                  mozLoop: navigator.mozLoop, 
+                  onClose: function(){}, 
+                  roomData: {}, 
+                  savingContext: false, 
+                  show: true}
+                  )
               )
             ), 
 
@@ -1394,6 +1429,7 @@
                scrollbars to appear */
               React.createElement("div", {className: "fx-embedded overflow-hidden"}, 
                 React.createElement(DesktopRoomConversationView, {
+                  chatWindowDetached: false, 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
@@ -1411,6 +1447,7 @@
                            width: 298}, 
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(DesktopRoomConversationView, {
+                  chatWindowDetached: false, 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
@@ -1428,6 +1465,7 @@
                            width: 602}, 
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(DesktopRoomConversationView, {
+                  chatWindowDetached: false, 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
@@ -1445,6 +1483,7 @@
                            width: 646}, 
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(DesktopRoomConversationView, {
+                  chatWindowDetached: false, 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
@@ -1462,6 +1501,7 @@
                            width: 298}, 
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(DesktopRoomConversationView, {
+                  chatWindowDetached: false, 
                   dispatcher: dispatcher, 
                   mozLoop: navigator.mozLoop, 
                   onCallTerminated: function(){}, 
@@ -1477,12 +1517,28 @@
                            width: 298}, 
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(DesktopRoomConversationView, {
+                  chatWindowDetached: false, 
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
                   onCallTerminated: function(){}, 
                   remotePosterUrl: "sample-img/video-screen-remote.png", 
                   roomStore: desktopRemoteFaceMuteRoomStore})
+              )
+            )
+          ), 
+
+          React.createElement(Section, {name: "StandaloneHandleUserAgentView"}, 
+            React.createElement(FramedExample, {
+              cssClass: "standalone", 
+              dashed: true, 
+              height: 483, 
+              summary: "Standalone Room Handle Join in Firefox", 
+              width: 644}, 
+              React.createElement("div", {className: "standalone"}, 
+                React.createElement(StandaloneHandleUserAgentView, {
+                  activeRoomStore: readyRoomStore, 
+                  dispatcher: dispatcher})
               )
             )
           ), 

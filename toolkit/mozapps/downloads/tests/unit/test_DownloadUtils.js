@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-let Cu = Components.utils;
+var Cu = Components.utils;
 Cu.import("resource://gre/modules/DownloadUtils.jsm");
 
 const gDecimalSymbol = Number(5.4).toLocaleString().match(/\D/);
@@ -24,9 +24,9 @@ function testTransferTotal(aCurrBytes, aMaxBytes, aTransfer)
 }
 
 // Get the em-dash character because typing it directly here doesn't work :(
-let gDash = DownloadUtils.getDownloadStatus(0)[0].match(/remaining (.) 0 bytes/)[1];
+var gDash = DownloadUtils.getDownloadStatus(0)[0].match(/remaining (.) 0 bytes/)[1];
 
-let gVals = [0, 100, 2345, 55555, 982341, 23194134, 1482, 58, 9921949201, 13498132, Infinity];
+var gVals = [0, 100, 2345, 55555, 982341, 23194134, 1482, 58, 9921949201, 13498132, Infinity];
 
 function testStatus(aFunc, aCurr, aMore, aRate, aTest)
 {
@@ -128,7 +128,7 @@ function run_test()
 
   if (0) {
     // Help find some interesting test cases
-    let r = function() Math.floor(Math.random() * 10);
+    let r = () => Math.floor(Math.random() * 10);
     for (let i = 0; i < 100; i++) {
       testStatus(r(), r(), r());
     }

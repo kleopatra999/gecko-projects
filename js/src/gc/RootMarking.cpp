@@ -24,7 +24,6 @@
 #include "js/HashTable.h"
 #include "vm/Debugger.h"
 #include "vm/JSONParser.h"
-#include "vm/WeakMapObject.h"
 
 #include "jsgcinlines.h"
 #include "jsobjinlines.h"
@@ -145,10 +144,6 @@ AutoGCRooter::trace(JSTracer* trc)
             TraceManuallyBarrieredEdge(trc, &p->get(), "js::AutoWrapperVector.vector");
         return;
       }
-
-      case JSONPARSER:
-        static_cast<js::JSONParserBase*>(this)->trace(trc);
-        return;
 
       case CUSTOM:
         static_cast<JS::CustomAutoRooter*>(this)->trace(trc);
@@ -312,22 +307,6 @@ js::gc::GCRuntime::markRuntime(JSTracer* trc, TraceOrMarkRuntime traceOrMark)
     for (ContextIter acx(rt); !acx.done(); acx.next())
         acx->mark(trc);
 
-    for (ZonesIter zone(rt, SkipAtoms); !zone.done(); zone.next()) {
-        if (traceOrMark == MarkRuntime && !zone->isCollecting())
-            continue;
-
-        /* Do not discard scripts with counts while profiling. */
-        if (rt->profilingScripts && !rt->isHeapMinorCollecting()) {
-            for (ZoneCellIterUnderGC i(zone, AllocKind::SCRIPT); !i.done(); i.next()) {
-                JSScript* script = i.get<JSScript>();
-                if (script->hasScriptCounts()) {
-                    TraceRoot(trc, &script, "profilingScripts");
-                    MOZ_ASSERT(script == i.get<JSScript>());
-                }
-            }
-        }
-    }
-
     for (CompartmentsIter c(rt, SkipAtoms); !c.done(); c.next())
         c->traceRoots(trc, traceOrMark);
 
@@ -433,7 +412,7 @@ BufferGrayRootsTracer::onChild(const JS::GCCellPtr& thing)
         // objects and scripts. We rely on gray root buffering for this to work,
         // but we only need to worry about uncollected dead compartments during
         // incremental GCs (when we do gray root buffering).
-        DispatchTraceKindTyped(SetMaybeAliveFunctor(), tenured, thing.kind());
+        DispatchTyped(SetMaybeAliveFunctor(), thing);
 
         if (!zone->gcGrayRoots.append(tenured))
             bufferingGrayRootsFailed = true;

@@ -97,9 +97,9 @@ Cu.import("resource://gre/modules/Log.jsm");
 // Configure a logger at the parent 'addons' level to format
 // messages for all the modules under addons.*
 const PARENT_LOGGER_ID = "addons";
-let parentLogger = Log.repository.getLogger(PARENT_LOGGER_ID);
+var parentLogger = Log.repository.getLogger(PARENT_LOGGER_ID);
 parentLogger.level = Log.Level.Warn;
-let formatter = new Log.BasicFormatter();
+var formatter = new Log.BasicFormatter();
 // Set parent logger (and its children) to append to
 // the Javascript section of the Browser Console
 parentLogger.addAppender(new Log.ConsoleAppender(formatter));
@@ -110,7 +110,7 @@ parentLogger.addAppender(new Log.DumpAppender(formatter));
 // Create a new logger (child of 'addons' logger)
 // for use by the Addons Manager
 const LOGGER_ID = "addons.manager";
-let logger = Log.repository.getLogger(LOGGER_ID);
+var logger = Log.repository.getLogger(LOGGER_ID);
 
 // Provide the ability to enable/disable logging
 // messages at runtime.
@@ -859,6 +859,13 @@ var AddonManagerInternal = {
     logger.debug(`Provider finished startup: ${providerName(aProvider)}`);
   },
 
+  _getProviderByName(aName) {
+    for (let provider of this.providers) {
+      if (providerName(provider) == aName)
+        return provider;
+    }
+  },
+
   /**
    * Initializes the AddonManager, loading any known providers and initializing
    * them.
@@ -1098,7 +1105,7 @@ var AddonManagerInternal = {
     this.pendingProviders.delete(aProvider);
 
     for (let type in this.types) {
-      this.types[type].providers = this.types[type].providers.filter(function filterProvider(p) p != aProvider);
+      this.types[type].providers = this.types[type].providers.filter(p => p != aProvider);
       if (this.types[type].providers.length == 0) {
         let oldType = this.types[type].type;
         delete this.types[type];
@@ -1464,9 +1471,9 @@ var AddonManagerInternal = {
     let buPromise = Task.spawn(function* backgroundUpdateTask() {
       let hotfixID = this.hotfixID;
 
-      let checkHotfix = hotfixID &&
-                        Services.prefs.getBoolPref(PREF_APP_UPDATE_ENABLED) &&
-                        Services.prefs.getBoolPref(PREF_APP_UPDATE_AUTO);
+      let appUpdateEnabled = Services.prefs.getBoolPref(PREF_APP_UPDATE_ENABLED) &&
+                             Services.prefs.getBoolPref(PREF_APP_UPDATE_AUTO);
+      let checkHotfix = hotfixID && appUpdateEnabled;
 
       logger.debug("Background update check beginning");
 
@@ -1613,6 +1620,15 @@ var AddonManagerInternal = {
         }
       }
 
+      if (appUpdateEnabled) {
+        try {
+          yield AddonManagerInternal._getProviderByName("XPIProvider").updateSystemAddons();
+        }
+        catch (e) {
+          logger.warn("Failed to update system addons", e);
+        }
+      }
+
       logger.debug("Background update check complete");
       Services.obs.notifyObservers(null,
                                    "addons-background-update-complete",
@@ -1680,8 +1696,7 @@ var AddonManagerInternal = {
     if (!(aType in this.startupChanges))
       return;
 
-    this.startupChanges[aType] = this.startupChanges[aType].filter(
-                                 function filterItem(aItem) aItem != aID);
+    this.startupChanges[aType] = this.startupChanges[aType].filter(aItem => aItem != aID);
   },
 
   /**

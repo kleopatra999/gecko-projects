@@ -86,11 +86,11 @@ AvStatusToSinkString(BluetoothA2dpConnectionState aState, nsAString& aString)
   }
 }
 
-class BluetoothA2dpManager::InitA2dpResultHandler final
+class BluetoothA2dpManager::InitResultHandler final
   : public BluetoothA2dpResultHandler
 {
 public:
-  InitA2dpResultHandler(BluetoothProfileResultHandler* aRes)
+  InitResultHandler(BluetoothProfileResultHandler* aRes)
     : mRes(aRes)
   { }
 
@@ -172,7 +172,7 @@ BluetoothA2dpManager::InitA2dpInterface(BluetoothProfileResultHandler* aRes)
   }
 
   BluetoothA2dpManager* a2dpManager = BluetoothA2dpManager::Get();
-  sBtA2dpInterface->Init(a2dpManager, new InitA2dpResultHandler(aRes));
+  sBtA2dpInterface->Init(a2dpManager, new InitResultHandler(aRes));
 }
 
 BluetoothA2dpManager::~BluetoothA2dpManager()
@@ -227,11 +227,11 @@ BluetoothA2dpManager::Get()
   return sBluetoothA2dpManager;
 }
 
-class BluetoothA2dpManager::CleanupA2dpResultHandler final
+class BluetoothA2dpManager::CleanupResultHandler final
   : public BluetoothA2dpResultHandler
 {
 public:
-  CleanupA2dpResultHandler(BluetoothProfileResultHandler* aRes)
+  CleanupResultHandler(BluetoothProfileResultHandler* aRes)
     : mRes(aRes)
   { }
 
@@ -260,11 +260,11 @@ private:
   nsRefPtr<BluetoothProfileResultHandler> mRes;
 };
 
-class BluetoothA2dpManager::CleanupA2dpResultHandlerRunnable final
+class BluetoothA2dpManager::CleanupResultHandlerRunnable final
   : public nsRunnable
 {
 public:
-  CleanupA2dpResultHandlerRunnable(BluetoothProfileResultHandler* aRes)
+  CleanupResultHandlerRunnable(BluetoothProfileResultHandler* aRes)
     : mRes(aRes)
   { }
 
@@ -289,11 +289,11 @@ BluetoothA2dpManager::DeinitA2dpInterface(BluetoothProfileResultHandler* aRes)
   MOZ_ASSERT(NS_IsMainThread());
 
   if (sBtA2dpInterface) {
-    sBtA2dpInterface->Cleanup(new CleanupA2dpResultHandler(aRes));
+    sBtA2dpInterface->Cleanup(new CleanupResultHandler(aRes));
   } else if (aRes) {
     // We dispatch a runnable here to make the profile resource handler
     // behave as if A2DP was initialized.
-    nsRefPtr<nsRunnable> r = new CleanupA2dpResultHandlerRunnable(aRes);
+    nsRefPtr<nsRunnable> r = new CleanupResultHandlerRunnable(aRes);
     if (NS_FAILED(NS_DispatchToMainThread(r))) {
       BT_LOGR("Failed to dispatch cleanup-result-handler runnable");
     }
@@ -361,7 +361,13 @@ BluetoothA2dpManager::Connect(const nsAString& aDeviceAddress,
     return;
   }
 
-  sBtA2dpInterface->Connect(aDeviceAddress, new ConnectResultHandler());
+  BluetoothAddress deviceAddress;
+  nsresult rv = StringToAddress(aDeviceAddress, deviceAddress);
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  sBtA2dpInterface->Connect(deviceAddress, new ConnectResultHandler());
 }
 
 void
@@ -422,7 +428,13 @@ BluetoothA2dpManager::Disconnect(BluetoothProfileController* aController)
     return;
   }
 
-  sBtA2dpInterface->Disconnect(mDeviceAddress, new DisconnectResultHandler());
+  BluetoothAddress deviceAddress;
+  nsresult rv = StringToAddress(mDeviceAddress, deviceAddress);
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  sBtA2dpInterface->Disconnect(deviceAddress, new DisconnectResultHandler());
 }
 
 void
@@ -568,8 +580,14 @@ void
 BluetoothA2dpManager::HandleBackendError()
 {
   if (mSinkState != SinkState::SINK_DISCONNECTED) {
+    BluetoothAddress deviceAddress;
+    nsresult rv = StringToAddress(mDeviceAddress, deviceAddress);
+    if (NS_FAILED(rv)) {
+      return;
+    }
+
     ConnectionStateNotification(A2DP_CONNECTION_STATE_DISCONNECTED,
-      mDeviceAddress);
+      deviceAddress);
   }
 }
 
@@ -623,7 +641,7 @@ BluetoothA2dpManager::IsConnected()
 
 void
 BluetoothA2dpManager::ConnectionStateNotification(
-  BluetoothA2dpConnectionState aState, const nsAString& aBdAddr)
+  BluetoothA2dpConnectionState aState, const BluetoothAddress& aBdAddr)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -633,13 +651,16 @@ BluetoothA2dpManager::ConnectionStateNotification(
   InfallibleTArray<BluetoothNamedValue> props;
   AppendNamedValue(props, "State", a2dpState);
 
+  nsAutoString addressStr;
+  AddressToString(aBdAddr, addressStr);
+
   HandleSinkPropertyChanged(BluetoothSignal(NS_LITERAL_STRING("AudioSink"),
-                                            nsString(aBdAddr), props));
+                                            addressStr, props));
 }
 
 void
 BluetoothA2dpManager::AudioStateNotification(BluetoothA2dpAudioState aState,
-                                             const nsAString& aBdAddr)
+                                             const BluetoothAddress& aBdAddr)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -658,8 +679,11 @@ BluetoothA2dpManager::AudioStateNotification(BluetoothA2dpAudioState aState,
   InfallibleTArray<BluetoothNamedValue> props;
   AppendNamedValue(props, "State", a2dpState);
 
+  nsAutoString addressStr;
+  AddressToString(aBdAddr, addressStr);
+
   HandleSinkPropertyChanged(BluetoothSignal(NS_LITERAL_STRING("AudioSink"),
-                                            nsString(aBdAddr), props));
+                                            addressStr, props));
 }
 
 NS_IMPL_ISUPPORTS(BluetoothA2dpManager, nsIObserver)

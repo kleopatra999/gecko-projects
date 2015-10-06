@@ -26,7 +26,7 @@
 #include "gfxFont.h"
 #include "nsCSSPseudoElements.h"
 #include "nsThemeConstants.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "nsStyleContext.h"
 #include "nsStyleSet.h"
 #include "nsStyleStruct.h"
@@ -104,7 +104,7 @@ nsRuleNode::ChildrenHashHashKey(PLDHashTable *aTable, const void *aKey)
     static_cast<const nsRuleNode::Key*>(aKey);
   // Disagreement on importance and level for the same rule is extremely
   // rare, so hash just on the rule.
-  return PL_DHashVoidPtrKeyStub(aTable, key->mRule);
+  return PLDHashTable::HashVoidPtrKeyStub(aTable, key->mRule);
 }
 
 /* static */ bool
@@ -127,8 +127,8 @@ nsRuleNode::ChildrenHashOps = {
   // large size allocations.
   ChildrenHashHashKey,
   ChildrenHashMatchEntry,
-  PL_DHashMoveEntryStub,
-  PL_DHashClearEntryStub,
+  PLDHashTable::MoveEntryStub,
+  PLDHashTable::ClearEntryStub,
   nullptr
 };
 
@@ -958,7 +958,10 @@ static bool SetColor(const nsCSSValue& aValue, const nscolor aParentColor,
     int32_t intValue = aValue.GetIntValue();
     if (0 <= intValue) {
       LookAndFeel::ColorID colorID = (LookAndFeel::ColorID) intValue;
-      if (NS_SUCCEEDED(LookAndFeel::GetColor(colorID, &aResult))) {
+      bool useStandinsForNativeColors = aPresContext &&
+                                        !aPresContext->IsChrome();
+      if (NS_SUCCEEDED(LookAndFeel::GetColor(colorID,
+                                    useStandinsForNativeColors, &aResult))) {
         result = true;
       }
     }
@@ -1402,7 +1405,7 @@ void*
 nsRuleNode::operator new(size_t sz, nsPresContext* aPresContext) CPP_THROW_NEW
 {
   // Check the recycle list first.
-  return aPresContext->PresShell()->AllocateByObjectID(nsPresArena::nsRuleNode_id, sz);
+  return aPresContext->PresShell()->AllocateByObjectID(eArenaObjectID_nsRuleNode, sz);
 }
 
 // Overridden to prevent the global delete from being called, since the memory
@@ -1457,7 +1460,7 @@ nsRuleNode::DestroyInternal(nsRuleNode ***aDestroyQueueTail)
 
   // Don't let the memory be freed, since it will be recycled
   // instead. Don't call the global operator delete.
-  mPresContext->PresShell()->FreeByObjectID(nsPresArena::nsRuleNode_id, this);
+  mPresContext->PresShell()->FreeByObjectID(eArenaObjectID_nsRuleNode, this);
 }
 
 nsRuleNode* nsRuleNode::CreateRootNode(nsPresContext* aPresContext)
@@ -1539,8 +1542,8 @@ nsRuleNode::Transition(nsIStyleRule* aRule, uint8_t aLevel,
   }
 
   if (ChildrenAreHashed()) {
-    ChildrenHashEntry *entry = static_cast<ChildrenHashEntry*>
-      (PL_DHashTableAdd(ChildrenHash(), &key, fallible));
+    auto entry =
+      static_cast<ChildrenHashEntry*>(ChildrenHash()->Add(&key, fallible));
     if (!entry) {
       NS_WARNING("out of memory");
       return this;
@@ -1606,8 +1609,8 @@ nsRuleNode::ConvertChildrenToHash(int32_t aNumKids)
                                         aNumKids);
   for (nsRuleNode* curr = ChildrenList(); curr; curr = curr->mNextSibling) {
     // This will never fail because of the initial size we gave the table.
-    ChildrenHashEntry *entry = static_cast<ChildrenHashEntry*>(
-      PL_DHashTableAdd(hash, curr->mRule, fallible));
+    auto entry =
+      static_cast<ChildrenHashEntry*>(hash->Add(curr->mRule, fallible));
     NS_ASSERTION(!entry->mRuleNode, "duplicate entries in list");
     entry->mRuleNode = curr;
   }
@@ -2176,6 +2179,12 @@ nsRuleNode::ResolveVariableReferences(const nsStyleStructID aSID,
     const CSSVariableValues* variables =
       &aContext->StyleVariables()->mVariables;
     nsCSSValueTokenStream* tokenStream = value->GetTokenStreamValue();
+
+    MOZ_ASSERT(tokenStream->mLevel != nsStyleSet::eSheetTypeCount,
+               "Token stream should have a defined level");
+
+    AutoRestore<uint16_t> saveLevel(aRuleData->mLevel);
+    aRuleData->mLevel = tokenStream->mLevel;
 
     // Note that ParsePropertyWithVariableReferences relies on the fact
     // that the nsCSSValue in aRuleData for the property we are re-parsing
@@ -4370,7 +4379,7 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
               conditions,
               SETDSC_ENUMERATED | SETDSC_UNSET_INHERIT,
               parentText->mControlCharacterVisibility,
-              NS_STYLE_CONTROL_CHARACTER_VISIBILITY_VISIBLE, 0, 0, 0, 0);
+              nsCSSParser::ControlCharVisibilityDefault(), 0, 0, 0, 0);
 
   COMPUTE_END_INHERITED(Text, text)
 }
@@ -4839,13 +4848,18 @@ ComputeTimingFunction(const nsCSSValue& aValue, nsTimingFunction& aResult)
                      (array->Item(1).GetIntValue() ==
                        NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_START ||
                       array->Item(1).GetIntValue() ==
-                       NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_END),
+                       NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_END ||
+                      array->Item(1).GetIntValue() == -1),
                      "unexpected second value");
         nsTimingFunction::Type type =
           (array->Item(1).GetIntValue() ==
-            NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_END)
-            ? nsTimingFunction::StepEnd : nsTimingFunction::StepStart;
-        aResult = nsTimingFunction(type, array->Item(0).GetIntValue());
+            NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_START) ?
+              nsTimingFunction::Type::StepStart :
+              nsTimingFunction::Type::StepEnd;
+        aResult = nsTimingFunction(type, array->Item(0).GetIntValue(),
+                                   array->Item(1).GetIntValue() == -1 ?
+                                     nsTimingFunction::Keyword::Implicit :
+                                     nsTimingFunction::Keyword::Explicit);
       }
       break;
     default:
@@ -7641,6 +7655,8 @@ nsRuleNode::ComputePositionData(void* aStartStruct,
       break;
     case NS_STYLE_WRITING_MODE_VERTICAL_RL:
     case NS_STYLE_WRITING_MODE_VERTICAL_LR:
+    case NS_STYLE_WRITING_MODE_SIDEWAYS_RL:
+    case NS_STYLE_WRITING_MODE_SIDEWAYS_LR:
       vertical = true;
       break;
   }
@@ -7998,7 +8014,7 @@ nsRuleNode::ComputeTableBorderData(void* aStartStruct,
               table->mCaptionSide, conditions,
               SETDSC_ENUMERATED | SETDSC_UNSET_INHERIT,
               parentTable->mCaptionSide,
-              NS_STYLE_CAPTION_SIDE_BSTART, 0, 0, 0, 0);
+              NS_STYLE_CAPTION_SIDE_TOP, 0, 0, 0, 0);
 
   // empty-cells: enum, inherit, initial
   SetDiscrete(*aRuleData->ValueForEmptyCells(),

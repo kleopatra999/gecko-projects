@@ -140,7 +140,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "AnimationEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    "AnimationPlaybackEvent",
+    {name: "AnimationPlaybackEvent", release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "AnimationTimeline", release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -200,6 +200,9 @@ var interfaceNamesInGlobalScope =
     {name: "BluetoothDiscoveryHandle", b2g: true, permission: ["bluetooth"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "BluetoothGatt", b2g: true, permission: ["bluetooth"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "BluetoothGattAttributeEvent", b2g: true,
+     permission: ["bluetooth"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "BluetoothGattCharacteristic", b2g: true,
      permission: ["bluetooth"]},
@@ -270,7 +273,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "CameraStateChangeEvent", b2g: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "CanvasCaptureMediaStream", disabled: true},
+    {name: "CanvasCaptureMediaStream"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CanvasGradient",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -972,11 +975,17 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCDataChannelEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "RTCIceCandidate",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "RTCPeerConnection",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCPeerConnectionIceEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCRtpReceiver",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCRtpSender",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    "RTCSessionDescription",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "RTCStatsReport",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -990,11 +999,13 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Selection",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "ServiceWorker", b2g: false, releaseAndroid: false},
+    {name: "ServiceWorker", b2g: false, nightlyAndroid: true, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "ServiceWorkerContainer", b2g: false, releaseAndroid: false},
+    {name: "ServiceWorkerContainer", b2g: false, nightlyAndroid: true, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "ServiceWorkerRegistration", b2g: false, releaseAndroid: false},
+    {name: "ServiceWorkerMessageEvent", b2g: false, nightlyAndroid: true, android: false},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "ServiceWorkerRegistration", b2g: false, nightlyAndroid: true, android: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "SettingsLock",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1487,15 +1498,15 @@ function createInterfaceMap(isXBLScope) {
       } else {
         ok(!("pref" in entry), "Bogus pref annotation for " + entry.name);
         if ((entry.nightly === !isNightly) ||
+            (entry.nightlyAndroid === !(isAndroid && isNightly) && isAndroid) ||
             (entry.xbl === !isXBLScope) ||
             (entry.desktop === !isDesktop) ||
             (entry.b2g === !isB2G) ||
             (entry.windows === !isWindows) ||
             (entry.mac === !isMac) ||
             (entry.linux === !isLinux) ||
-            (entry.android === !isAndroid) ||
+            (entry.android === !isAndroid && !entry.nightlyAndroid) ||
             (entry.release === !isRelease) ||
-            (entry.releaseAndroid === !(isAndroid && isRelease)) ||
             (entry.permission && !hasPermission(entry.permission)) ||
             entry.disabled) {
           interfaceMap[entry.name] = false;

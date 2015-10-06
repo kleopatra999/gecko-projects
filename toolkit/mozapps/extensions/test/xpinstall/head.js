@@ -174,7 +174,7 @@ var Harness = {
     this.runningInstalls = null;
 
     if (callback)
-      callback(count);
+      executeSoon(() => callback(count));
   },
 
   // Window open handling
@@ -245,9 +245,6 @@ var Harness = {
     if (this.installDisabledCallback)
       this.installDisabledCallback(installInfo);
     this.expectingCancelled = true;
-    installInfo.installs.forEach(function(install) {
-      install.cancel();
-    });
     this.expectingCancelled = false;
     this.endTest();
   },

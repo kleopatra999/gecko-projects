@@ -16,8 +16,8 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-let {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
-this.DevToolsUtils = devtools.require("devtools/toolkit/DevToolsUtils.js");
+var {devtools} = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {});
+this.DevToolsUtils = devtools.require("devtools/shared/DevToolsUtils");
 
 XPCOMUtils.defineLazyServiceGetter(
     this, "cookieManager", "@mozilla.org/cookiemanager;1", "nsICookieManager2");
@@ -33,7 +33,7 @@ Cu.import("chrome://marionette/content/simpletest.js");
 loader.loadSubScript("chrome://marionette/content/common.js");
 
 // preserve this import order:
-let utils = {};
+var utils = {};
 loader.loadSubScript("chrome://marionette/content/EventUtils.js", utils);
 loader.loadSubScript("chrome://marionette/content/ChromeUtils.js", utils);
 loader.loadSubScript("chrome://marionette/content/atoms.js", utils);
@@ -57,14 +57,14 @@ const globalMessageManager = Cc["@mozilla.org/globalmessagemanager;1"]
 // API's are ready; see bug 792647.  This assumes that marionette-server.js
 // will be loaded before the 'system-message-listener-ready' message
 // is fired.  If this stops being true, this approach will have to change.
-let systemMessageListenerReady = false;
+var systemMessageListenerReady = false;
 Services.obs.addObserver(function() {
   systemMessageListenerReady = true;
 }, "system-message-listener-ready", false);
 
 // This is used on desktop to prevent newSession from returning before a page
 // load initiated by the Firefox command line has completed.
-let delayedBrowserStarted = false;
+var delayedBrowserStarted = false;
 Services.obs.addObserver(function () {
   delayedBrowserStarted = true;
 }, BROWSER_STARTUP_FINISHED, false);
@@ -221,7 +221,12 @@ GeckoDriver.prototype.sendAsync = function(name, msg, cmdId) {
 
   if (curRemoteFrame === null) {
     this.curBrowser.executeWhenReady(() => {
-      this.mm.broadcastAsyncMessage(name + this.curBrowser.curFrameId, msg);
+      if (this.curBrowser.curFrameId) {
+          this.mm.broadcastAsyncMessage(name + this.curBrowser.curFrameId, msg);
+      }
+      else {
+          throw new WebDriverError("Can not send call to listener as it doesnt exist");
+      }
     });
   } else {
     let remoteFrameId = curRemoteFrame.targetFrameId;
@@ -811,6 +816,9 @@ GeckoDriver.prototype.applyArgumentsToSandbox = function(win, sb, args) {
  *     True if the script is asynchronous.
  * @param {number} timeout
  *     When to interrupt script in milliseconds.
+ * @param {string} filename
+ *     Optional. URI or name of the file we are executing.
+ *     (Used to improve stack trace readability)
  */
 GeckoDriver.prototype.executeScriptInSandbox = function(
     resp,
@@ -818,7 +826,8 @@ GeckoDriver.prototype.executeScriptInSandbox = function(
     script,
     directInject,
     async,
-    timeout) {
+    timeout,
+    filename) {
   if (directInject && async && (timeout === null || timeout === 0)) {
     throw new TimeoutError("Please set a timeout");
   }
@@ -832,7 +841,7 @@ GeckoDriver.prototype.executeScriptInSandbox = function(
     script = data + script;
   }
 
-  let res = Cu.evalInSandbox(script, sandbox, "1.8", "dummy file", 0);
+  let res = Cu.evalInSandbox(script, sandbox, "1.8", filename ? filename : "dummy file", 0);
 
   if (directInject && !async &&
       (typeof res == "undefined" || typeof res.passed == "undefined")) {
@@ -940,7 +949,8 @@ GeckoDriver.prototype.execute = function(cmd, resp, directInject) {
         script,
         directInject,
         false /* async */,
-        scriptTimeout);
+        scriptTimeout,
+        filename);
   } catch (e) {
     throw new JavaScriptError(e, "execute_script", filename, line, script);
   }
@@ -1175,7 +1185,8 @@ GeckoDriver.prototype.executeWithCallback = function(cmd, resp, directInject) {
           script,
           directInject,
           true /* async */,
-          scriptTimeout);
+          scriptTimeout,
+          filename);
     } catch (e) {
       chromeAsyncError(e, "execute_async_script", filename, line, script);
     }
@@ -1901,25 +1912,6 @@ GeckoDriver.prototype.findElement = function(cmd, resp) {
 };
 
 /**
- * Find element using the indicated search strategy starting from a
- * known element.  Used for WebDriver Compatibility only.
- *
- * @param {string} using
- *     Indicates which search method to use.
- * @param {string} value
- *     Value the client is looking for.
- * @param {string} id
- *     Value of the element to start from.
- */
-GeckoDriver.prototype.findChildElement = function(cmd, resp) {
-  resp.body.value = yield this.listener.findElementContent({
-    value: cmd.parameters.value,
-    using: cmd.parameters.using,
-    element: cmd.parameters.id,
-    searchTimeout: this.searchTimeout});
-};
-
-/**
  * Find elements using the indicated search strategy.
  *
  * @param {string} using
@@ -1950,25 +1942,6 @@ GeckoDriver.prototype.findElements = function(cmd, resp) {
         searchTimeout: this.searchTimeout});
       break;
   }
-};
-
-/**
- * Find elements using the indicated search strategy starting from a
- * known element.  Used for WebDriver Compatibility only.
- *
- * @param {string} using
- *     Indicates which search method to use.
- * @param {string} value
- *     Value the client is looking for.
- * @param {string} id
- *     Value of the element to start from.
- */
-GeckoDriver.prototype.findChildElements = function(cmd, resp) {
-  resp.body.value = yield this.listener.findElementsContent({
-    value: cmd.parameters.value,
-    using: cmd.parameters.using,
-    element: cmd.parameters.id,
-    searchTimeout: this.searchTimeout});
 };
 
 /** Return the active element on the page. */
@@ -2958,9 +2931,7 @@ GeckoDriver.prototype.commands = {
   "executeJSScript": GeckoDriver.prototype.executeJSScript,
   "setSearchTimeout": GeckoDriver.prototype.setSearchTimeout,
   "findElement": GeckoDriver.prototype.findElement,
-  "findChildElement": GeckoDriver.prototype.findChildElements, // Needed for WebDriver compat
   "findElements": GeckoDriver.prototype.findElements,
-  "findChildElements":GeckoDriver.prototype.findChildElements, // Needed for WebDriver compat
   "clickElement": GeckoDriver.prototype.clickElement,
   "getElementAttribute": GeckoDriver.prototype.getElementAttribute,
   "getElementText": GeckoDriver.prototype.getElementText,
@@ -3034,7 +3005,7 @@ GeckoDriver.prototype.commands = {
  * @param {GeckoDriver} driver
  *     Reference to the driver the browser is attached to.
  */
-let BrowserObj = function(win, driver) {
+var BrowserObj = function(win, driver) {
   this.browser = undefined;
   this.window = win;
   this.driver = driver;

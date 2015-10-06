@@ -497,14 +497,23 @@ NS_IMETHODIMP
 VectorImage::GetWidth(int32_t* aWidth)
 {
   if (mError || !mIsFullyLoaded) {
-    *aWidth = -1;
-  } else {
-    SVGSVGElement* rootElem = mSVGDocumentWrapper->GetRootSVGElem();
-    MOZ_ASSERT(rootElem, "Should have a root SVG elem, since we finished "
-                         "loading without errors");
-    *aWidth = rootElem->GetIntrinsicWidth();
+    // XXXdholbert Technically we should leave outparam untouched when we
+    // fail. But since many callers don't check for failure, we set it to 0 on
+    // failure, for sane/predictable results.
+    *aWidth = 0;
+    return NS_ERROR_FAILURE;
   }
-  return *aWidth >= 0 ? NS_OK : NS_ERROR_FAILURE;
+
+  SVGSVGElement* rootElem = mSVGDocumentWrapper->GetRootSVGElem();
+  MOZ_ASSERT(rootElem, "Should have a root SVG elem, since we finished "
+             "loading without errors");
+  int32_t rootElemWidth = rootElem->GetIntrinsicWidth();
+  if (rootElemWidth < 0) {
+    *aWidth = 0;
+    return NS_ERROR_FAILURE;
+  }
+  *aWidth = rootElemWidth;
+  return NS_OK;
 }
 
 //******************************************************************************
@@ -561,14 +570,23 @@ NS_IMETHODIMP
 VectorImage::GetHeight(int32_t* aHeight)
 {
   if (mError || !mIsFullyLoaded) {
-    *aHeight = -1;
-  } else {
-    SVGSVGElement* rootElem = mSVGDocumentWrapper->GetRootSVGElem();
-    MOZ_ASSERT(rootElem, "Should have a root SVG elem, since we finished "
-                         "loading without errors");
-    *aHeight = rootElem->GetIntrinsicHeight();
+    // XXXdholbert Technically we should leave outparam untouched when we
+    // fail. But since many callers don't check for failure, we set it to 0 on
+    // failure, for sane/predictable results.
+    *aHeight = 0;
+    return NS_ERROR_FAILURE;
   }
-  return *aHeight >= 0 ? NS_OK : NS_ERROR_FAILURE;
+
+  SVGSVGElement* rootElem = mSVGDocumentWrapper->GetRootSVGElem();
+  MOZ_ASSERT(rootElem, "Should have a root SVG elem, since we finished "
+             "loading without errors");
+  int32_t rootElemHeight = rootElem->GetIntrinsicHeight();
+  if (rootElemHeight < 0) {
+    *aHeight = 0;
+    return NS_ERROR_FAILURE;
+  }
+  *aHeight = rootElemHeight;
+  return NS_OK;
 }
 
 //******************************************************************************
@@ -668,19 +686,8 @@ VectorImage::IsOpaque()
 /* [noscript] SourceSurface getFrame(in uint32_t aWhichFrame,
  *                                   in uint32_t aFlags; */
 NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
-VectorImage::GetFrame(uint32_t aWhichFrame,
-                      uint32_t aFlags)
+VectorImage::GetFrame(uint32_t aWhichFrame, uint32_t aFlags)
 {
-  MOZ_ASSERT(aWhichFrame <= FRAME_MAX_VALUE);
-
-  if (aWhichFrame > FRAME_MAX_VALUE) {
-    return nullptr;
-  }
-
-  if (mError || !mIsFullyLoaded) {
-    return nullptr;
-  }
-
   // Look up height & width
   // ----------------------
   SVGSVGElement* svgElem = mSVGDocumentWrapper->GetRootSVGElem();
@@ -695,12 +702,32 @@ VectorImage::GetFrame(uint32_t aWhichFrame,
     return nullptr;
   }
 
+  return GetFrameAtSize(imageIntSize, aWhichFrame, aFlags);
+}
+
+NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
+VectorImage::GetFrameAtSize(const IntSize& aSize,
+                            uint32_t aWhichFrame,
+                            uint32_t aFlags)
+{
+  MOZ_ASSERT(aWhichFrame <= FRAME_MAX_VALUE);
+
+  if (aSize.IsEmpty()) {
+    return nullptr;
+  }
+
+  if (aWhichFrame > FRAME_MAX_VALUE) {
+    return nullptr;
+  }
+
+  if (mError || !mIsFullyLoaded) {
+    return nullptr;
+  }
+
   // Make our surface the size of what will ultimately be drawn to it.
   // (either the full image size, or the restricted region)
   RefPtr<DrawTarget> dt = gfxPlatform::GetPlatform()->
-    CreateOffscreenContentDrawTarget(IntSize(imageIntSize.width,
-                                             imageIntSize.height),
-                                     SurfaceFormat::B8G8R8A8);
+    CreateOffscreenContentDrawTarget(aSize, SurfaceFormat::B8G8R8A8);
   if (!dt) {
     NS_ERROR("Could not create a DrawTarget");
     return nullptr;
@@ -708,8 +735,8 @@ VectorImage::GetFrame(uint32_t aWhichFrame,
 
   nsRefPtr<gfxContext> context = new gfxContext(dt);
 
-  auto result = Draw(context, imageIntSize,
-                     ImageRegion::Create(imageIntSize),
+  auto result = Draw(context, aSize,
+                     ImageRegion::Create(aSize),
                      aWhichFrame, GraphicsFilter::FILTER_NEAREST,
                      Nothing(), aFlags);
 
@@ -911,8 +938,7 @@ VectorImage::CreateSurfaceAndShow(const SVGDrawingParameters& aParams)
   SurfaceCache::Insert(frame, ImageKey(this),
                        VectorSurfaceKey(aParams.size,
                                         aParams.svgContext,
-                                        aParams.animationTime),
-                       Lifetime::Persistent);
+                                        aParams.animationTime));
 
   // Draw.
   nsRefPtr<gfxDrawable> drawable =

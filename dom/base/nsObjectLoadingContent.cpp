@@ -1156,7 +1156,7 @@ nsObjectLoadingContent::OnStopRequest(nsIRequest *aRequest,
     }
   }
 
-  NS_ENSURE_TRUE(nsContentUtils::IsCallerChrome(), NS_ERROR_NOT_AVAILABLE);
+  NS_ENSURE_TRUE(nsContentUtils::LegacyIsCallerChromeOrNativeCode(), NS_ERROR_NOT_AVAILABLE);
 
   if (aRequest != mChannel) {
     return NS_BINDING_ABORTED;
@@ -1183,7 +1183,7 @@ nsObjectLoadingContent::OnDataAvailable(nsIRequest *aRequest,
                                         nsIInputStream *aInputStream,
                                         uint64_t aOffset, uint32_t aCount)
 {
-  NS_ENSURE_TRUE(nsContentUtils::IsCallerChrome(), NS_ERROR_NOT_AVAILABLE);
+  NS_ENSURE_TRUE(nsContentUtils::LegacyIsCallerChromeOrNativeCode(), NS_ERROR_NOT_AVAILABLE);
 
   if (aRequest != mChannel) {
     return NS_BINDING_ABORTED;
@@ -1474,6 +1474,37 @@ nsObjectLoadingContent::CheckJavaCodebase()
 }
 
 bool
+nsObjectLoadingContent::IsYoutubeEmbed()
+{
+  nsCOMPtr<nsIContent> thisContent =
+    do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
+  NS_ASSERTION(thisContent, "Must be an instance of content");
+
+  // We're only interested in switching out embed tags
+  if (!thisContent->NodeInfo()->Equals(nsGkAtoms::embed)) {
+    return false;
+  }
+  nsCOMPtr<nsIEffectiveTLDService> tldService =
+    do_GetService(NS_EFFECTIVETLDSERVICE_CONTRACTID);
+  // If we can't analyze the URL, just pass on through.
+  if(!tldService) {
+    NS_WARNING("Could not get TLD service!");
+    return false;
+  }
+  nsAutoCString currentBaseDomain;
+  bool ok = NS_SUCCEEDED(tldService->GetBaseDomain(mURI, 0, currentBaseDomain));
+  if (!ok) {
+    // Data URIs won't parse correctly, so just fail silently here.
+    return false;
+  }
+  nsAutoCString domain("youtube.com");
+  if (StringEndsWith(domain, currentBaseDomain)) {
+    return true;
+  }
+  return false;
+}
+
+bool
 nsObjectLoadingContent::CheckLoadPolicy(int16_t *aContentPolicy)
 {
   if (!aContentPolicy || !mURI) {
@@ -1530,7 +1561,7 @@ nsObjectLoadingContent::CheckProcessPolicy(int16_t *aContentPolicy)
   int32_t objectType;
   switch (mType) {
     case eType_Image:
-      objectType = nsIContentPolicy::TYPE_IMAGE;
+      objectType = nsIContentPolicy::TYPE_INTERNAL_IMAGE;
       break;
     case eType_Document:
       objectType = nsIContentPolicy::TYPE_DOCUMENT;
@@ -2120,6 +2151,11 @@ nsObjectLoadingContent::LoadObject(bool aNotify,
     // have originated from OnStartRequest
     NS_NOTREACHED("Loading with a channel, but state doesn't make sense");
     return NS_OK;
+  }
+
+  // Check whether this is a youtube embed.
+  if (IsYoutubeEmbed()) {
+    Telemetry::Accumulate(Telemetry::YOUTUBE_EMBED_SEEN, 1);
   }
 
   //
@@ -2825,9 +2861,10 @@ nsObjectLoadingContent::ScriptRequestPluginInstance(JSContext* aCx,
   // so the ensuing expression is short-circuited.
   MOZ_ASSERT_IF(nsContentUtils::GetCurrentJSContext(),
                 aCx == nsContentUtils::GetCurrentJSContext());
-  bool callerIsContentJS = (!nsContentUtils::IsCallerChrome() &&
+  bool callerIsContentJS = (nsContentUtils::GetCurrentJSContext() &&
+                            !nsContentUtils::IsCallerChrome() &&
                             !nsContentUtils::IsCallerContentXBL() &&
-                            js::IsContextRunningJS(aCx));
+                            JS_IsRunning(aCx));
 
   nsCOMPtr<nsIContent> thisContent =
     do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));

@@ -81,6 +81,7 @@ class ContentParent final : public PContentParent
     typedef mozilla::ipc::PFileDescriptorSetParent PFileDescriptorSetParent;
     typedef mozilla::ipc::TestShellParent TestShellParent;
     typedef mozilla::ipc::URIParams URIParams;
+    typedef mozilla::ipc::PrincipalInfo PrincipalInfo;
     typedef mozilla::dom::ClonedMessageData ClonedMessageData;
 
 public:
@@ -348,6 +349,9 @@ public:
         return PContentParent::RecvPHalConstructor(aActor);
     }
 
+    virtual PHeapSnapshotTempFileHelperParent*
+    AllocPHeapSnapshotTempFileHelperParent() override;
+
     virtual PStorageParent* AllocPStorageParent() override;
     virtual bool RecvPStorageConstructor(PStorageParent* aActor) override {
         return PContentParent::RecvPStorageConstructor(aActor);
@@ -391,12 +395,14 @@ public:
     virtual POfflineCacheUpdateParent*
     AllocPOfflineCacheUpdateParent(const URIParams& aManifestURI,
                                    const URIParams& aDocumentURI,
+                                   const PrincipalInfo& aLoadingPrincipalInfo,
                                    const bool& aStickDocument,
                                    const TabId& aTabId) override;
     virtual bool
     RecvPOfflineCacheUpdateConstructor(POfflineCacheUpdateParent* aActor,
                                        const URIParams& aManifestURI,
                                        const URIParams& aDocumentURI,
+                                       const PrincipalInfo& aLoadingPrincipal,
                                        const bool& stickDocument,
                                        const TabId& aTabId) override;
     virtual bool
@@ -630,6 +636,8 @@ private:
 
     virtual bool DeallocPHalParent(PHalParent*) override;
 
+    virtual bool DeallocPHeapSnapshotTempFileHelperParent(PHeapSnapshotTempFileHelperParent*) override;
+
     virtual PIccParent* AllocPIccParent(const uint32_t& aServiceId) override;
     virtual bool DeallocPIccParent(PIccParent* aActor) override;
 
@@ -704,6 +712,9 @@ private:
     virtual PSpeechSynthesisParent* AllocPSpeechSynthesisParent() override;
     virtual bool DeallocPSpeechSynthesisParent(PSpeechSynthesisParent* aActor) override;
     virtual bool RecvPSpeechSynthesisConstructor(PSpeechSynthesisParent* aActor) override;
+
+    virtual PWebBrowserPersistDocumentParent* AllocPWebBrowserPersistDocumentParent(PBrowserParent* aBrowser, const uint64_t& aOuterWindowID) override;
+    virtual bool DeallocPWebBrowserPersistDocumentParent(PWebBrowserPersistDocumentParent* aActor) override;
 
     virtual bool RecvReadPrefsArray(InfallibleTArray<PrefSetting>* aPrefs) override;
     virtual bool RecvReadFontList(InfallibleTArray<FontListEntry>* retValue) override;
@@ -898,6 +909,8 @@ private:
     virtual bool RecvProfile(const nsCString& aProfile) override;
     virtual bool RecvGetGraphicsDeviceInitData(DeviceInitData* aOut) override;
 
+    virtual bool RecvGetDeviceStorageLocation(const nsString& aType,
+                                              nsString* aPath) override;
     // If you add strong pointers to cycle collected objects here, be sure to
     // release these objects in ShutDownProcess.  See the comment there for more
     // details.

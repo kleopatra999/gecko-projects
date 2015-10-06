@@ -9,7 +9,7 @@ describe("loop.OTSdkDriver", function () {
   var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
   var STREAM_PROPERTIES = loop.shared.utils.STREAM_PROPERTIES;
   var SCREEN_SHARE_STATES = loop.shared.utils.SCREEN_SHARE_STATES;
-  var CHAT_CONTENT_TYPES = loop.store.CHAT_CONTENT_TYPES;
+  var CHAT_CONTENT_TYPES = loop.shared.utils.CHAT_CONTENT_TYPES;
 
   var sandbox;
   var dispatcher, driver, mozLoop, publisher, sdk, session, sessionData, subscriber;
@@ -68,6 +68,7 @@ describe("loop.OTSdkDriver", function () {
     window.OT = {
       ExceptionCodes: {
         CONNECT_FAILED: 1006,
+        TERMS_OF_SERVICE_FAILURE: 1026,
         UNABLE_TO_PUBLISH: 1500
       }
     };
@@ -111,6 +112,19 @@ describe("loop.OTSdkDriver", function () {
       expect(function() {
         new loop.OTSdkDriver({dispatcher: dispatcher});
       }).to.Throw(/sdk/);
+    });
+
+    it("should set the metrics to zero", function() {
+      driver = new loop.OTSdkDriver({
+        dispatcher: dispatcher,
+        sdk: sdk
+      });
+
+      expect(driver._metrics).eql({
+        connections: 0,
+        sendStreams: 0,
+        recvStreams: 0
+      });
     });
   });
 
@@ -471,6 +485,22 @@ describe("loop.OTSdkDriver", function () {
       driver.disconnectSession();
 
       expect(subscribedEvents).eql([]);
+    });
+
+    it("should reset the metrics to zero", function() {
+      driver._metrics = {
+        connections: 1,
+        sendStreams: 2,
+        recvStreams: 3
+      };
+
+      driver.disconnectSession();
+
+      expect(driver._metrics).eql({
+        connections: 0,
+        sendStreams: 0,
+        recvStreams: 0
+      });
     });
 
     it("should dispatch a DataChannelsAvailable action with available = false", function() {
@@ -1537,6 +1567,26 @@ describe("loop.OTSdkDriver", function () {
           }));
       });
 
+      describe("Unable to publish (not GetUserMedia)", function() {
+        it("should notify metrics", function() {
+          sdk.trigger("exception", {
+            code: OT.ExceptionCodes.UNABLE_TO_PUBLISH,
+            message: "Fake",
+            title: "Connect Failed"
+          });
+
+          sinon.assert.calledOnce(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.ConnectionStatus({
+              event: "sdk.exception." + OT.ExceptionCodes.UNABLE_TO_PUBLISH + ".Fake",
+              state: "starting",
+              connections: 0,
+              sendStreams: 0,
+              recvStreams: 0
+            }));
+        });
+      });
+
       describe("Unable to publish (GetUserMedia)", function() {
         it("should destroy the publisher", function() {
           sdk.trigger("exception", {
@@ -1576,6 +1626,83 @@ describe("loop.OTSdkDriver", function () {
           sinon.assert.calledWithExactly(dispatcher.dispatch,
             new sharedActions.ConnectionFailure({
               reason: FAILURE_DETAILS.UNABLE_TO_PUBLISH_MEDIA
+            }));
+        });
+      });
+
+      describe("ToS Failure", function() {
+        it("should dispatch a ConnectionFailure action", function() {
+          sdk.trigger("exception", {
+            code: OT.ExceptionCodes.TERMS_OF_SERVICE_FAILURE,
+            message: "Fake"
+          });
+
+          sinon.assert.calledTwice(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.ConnectionFailure({
+              reason: FAILURE_DETAILS.TOS_FAILURE
+            }));
+        });
+
+        it("should notify metrics", function() {
+          sdk.trigger("exception", {
+            code: OT.ExceptionCodes.TERMS_OF_SERVICE_FAILURE,
+            message: "Fake"
+          });
+
+          sinon.assert.calledTwice(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.ConnectionStatus({
+              event: "sdk.exception." + OT.ExceptionCodes.TERMS_OF_SERVICE_FAILURE,
+              state: "starting",
+              connections: 0,
+              sendStreams: 0,
+              recvStreams: 0
+            }));
+        });
+      });
+
+      describe("ICE failed", function() {
+        it("should dispatch a ConnectionFailure action (Publisher)", function() {
+          sdk.trigger("exception", {
+            code: OT.ExceptionCodes.PUBLISHER_ICE_WORKFLOW_FAILED,
+            message: "ICE failed"
+          });
+
+          sinon.assert.calledTwice(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.ConnectionFailure({
+              reason: FAILURE_DETAILS.ICE_FAILED
+            }));
+        });
+
+        it("should dispatch a ConnectionFailure action (Subscriber)", function() {
+          sdk.trigger("exception", {
+            code: OT.ExceptionCodes.SUBSCRIBER_ICE_WORKFLOW_FAILED,
+            message: "ICE failed"
+          });
+
+          sinon.assert.calledTwice(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.ConnectionFailure({
+              reason: FAILURE_DETAILS.ICE_FAILED
+            }));
+        });
+
+        it("should notify metrics", function() {
+          sdk.trigger("exception", {
+            code: OT.ExceptionCodes.PUBLISHER_ICE_WORKFLOW_FAILED,
+            message: "ICE failed"
+          });
+
+          sinon.assert.calledTwice(dispatcher.dispatch);
+          sinon.assert.calledWithExactly(dispatcher.dispatch,
+            new sharedActions.ConnectionStatus({
+              event: "sdk.exception." + OT.ExceptionCodes.PUBLISHER_ICE_WORKFLOW_FAILED,
+              state: "starting",
+              connections: 0,
+              sendStreams: 0,
+              recvStreams: 0
             }));
         });
       });

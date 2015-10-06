@@ -108,6 +108,12 @@ using namespace mozilla::services;
 using namespace mozilla::widget;
 using namespace mozilla::jsipc;
 
+#if DEUBG
+  #define LOG(args...) printf_stderr(args)
+#else
+  #define LOG(...)
+#endif
+
 // The flags passed by the webProgress notifications are 16 bits shifted
 // from the ones registered by webProgressListeners.
 #define NOTIFY_FLAG_SHIFT 16
@@ -435,6 +441,104 @@ TabParent::IsVisible()
   bool visible = false;
   frameLoader->GetVisible(&visible);
   return visible;
+}
+
+static void LogChannelRelevantInfo(nsIURI* aURI,
+                                   nsIPrincipal* aLoadingPrincipal,
+                                   nsIPrincipal* aChannelResultPrincipal,
+                                   nsContentPolicyType aContentPolicyType) {
+  nsCString loadingOrigin;
+  aLoadingPrincipal->GetOrigin(loadingOrigin);
+
+  nsCString uriString;
+  aURI->GetAsciiSpec(uriString);
+  LOG("Loading %s from origin %s (type: %d)\n", uriString.get(),
+                                                loadingOrigin.get(),
+                                                aContentPolicyType);
+
+  nsCString resultPrincipalOrigin;
+  aChannelResultPrincipal->GetOrigin(resultPrincipalOrigin);
+  LOG("Result principal origin: %s\n", resultPrincipalOrigin.get());
+}
+
+bool
+TabParent::ShouldSwitchProcess(nsIChannel* aChannel)
+{
+  // If we lack of any information which is required to decide the need of
+  // process switch, consider that we should switch process.
+
+  // Prepare the channel loading principal.
+  nsCOMPtr<nsILoadInfo> loadInfo;
+  aChannel->GetLoadInfo(getter_AddRefs(loadInfo));
+  NS_ENSURE_TRUE(loadInfo, true);
+  nsCOMPtr<nsIPrincipal> loadingPrincipal;
+  loadInfo->GetLoadingPrincipal(getter_AddRefs(loadingPrincipal));
+  NS_ENSURE_TRUE(loadingPrincipal, true);
+
+  // Prepare the channel result principal.
+  nsCOMPtr<nsIPrincipal> resultPrincipal;
+  nsContentUtils::GetSecurityManager()->
+    GetChannelResultPrincipal(aChannel, getter_AddRefs(resultPrincipal));
+
+  // Log the debug info which is used to decide the need of proces switch.
+  nsCOMPtr<nsIURI> uri;
+  aChannel->GetURI(getter_AddRefs(uri));
+  LogChannelRelevantInfo(uri, loadingPrincipal, resultPrincipal,
+                         loadInfo->GetContentPolicyType());
+
+  // Check if the signed package is loaded from the same origin.
+  bool sameOrigin = false;
+  loadingPrincipal->Equals(resultPrincipal, &sameOrigin);
+  if (sameOrigin) {
+    LOG("Loading singed package from the same origin. Don't switch process.\n");
+    return false;
+  }
+
+  // If this is not a top level document, there's no need to switch process.
+  if (nsIContentPolicy::TYPE_DOCUMENT != loadInfo->GetContentPolicyType()) {
+    LOG("Subresource of a document. No need to switch process.\n");
+    return false;
+  }
+
+  // If this is a brand new process created to load the signed package
+  // (triggered by previous OnStartSignedPackageRequest), the loading origin
+  // will be "moz-safe-about:blank". In that case, we don't need to switch process
+  // again. We compare with "moz-safe-about:blank" without appId/isBrowserElement/etc
+  // taken into account. That's why we use originNoSuffix.
+  nsCString loadingOriginNoSuffix;
+  loadingPrincipal->GetOriginNoSuffix(loadingOriginNoSuffix);
+  if (loadingOriginNoSuffix.EqualsLiteral("moz-safe-about:blank")) {
+    LOG("The content is already loaded by a brand new process.\n");
+    return false;
+  }
+
+  return true;
+}
+
+void
+TabParent::OnStartSignedPackageRequest(nsIChannel* aChannel)
+{
+  if (!ShouldSwitchProcess(aChannel)) {
+    return;
+  }
+
+  nsCOMPtr<nsIURI> uri;
+  aChannel->GetURI(getter_AddRefs(uri));
+
+  aChannel->Cancel(NS_BINDING_FAILED);
+
+  nsCString uriString;
+  uri->GetAsciiSpec(uriString);
+  LOG("We decide to switch process. Call nsFrameLoader::SwitchProcessAndLoadURIs: %s\n",
+       uriString.get());
+
+  nsRefPtr<nsFrameLoader> frameLoader = GetFrameLoader();
+  NS_ENSURE_TRUE_VOID(frameLoader);
+
+  nsresult rv = frameLoader->SwitchProcessAndLoadURI(uri);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to switch process.");
+  }
 }
 
 void
@@ -1158,6 +1262,16 @@ TabParent::ThemeChanged()
     // send down to the child. We do this for every remote tab for now,
     // but bug 1156934 has been filed to do it once per content process.
     unused << SendThemeChanged(LookAndFeel::GetIntCache());
+  }
+}
+
+void
+TabParent::HandleAccessKey(nsTArray<uint32_t>& aCharCodes,
+                           const bool& aIsTrusted,
+                           const int32_t& aModifierMask)
+{
+  if (!mIsDestroyed) {
+    unused << SendHandleAccessKey(aCharCodes, aIsTrusted, aModifierMask);
   }
 }
 
@@ -1969,7 +2083,7 @@ TabParent::RecvSetCustomCursor(const nsCString& aCursorData,
     }
 
     if (mTabSetsCursor) {
-      const gfxIntSize size(aWidth, aHeight);
+      const gfx::IntSize size(aWidth, aHeight);
 
       mozilla::RefPtr<gfx::DataSourceSurface> customCursor = new mozilla::gfx::SourceSurfaceRawData();
       mozilla::gfx::SourceSurfaceRawData* raw = static_cast<mozilla::gfx::SourceSurfaceRawData*>(customCursor.get());
@@ -1987,15 +2101,6 @@ TabParent::RecvSetCustomCursor(const nsCString& aCursorData,
     }
   }
 
-  return true;
-}
-
-bool
-TabParent::RecvSetBackgroundColor(const nscolor& aColor)
-{
-  if (RenderFrameParent* frame = GetRenderFrame()) {
-    frame->SetBackgroundColor(aColor);
-  }
   return true;
 }
 
@@ -2262,13 +2367,6 @@ TabParent::RecvEnableDisableCommands(const nsString& aAction,
                                          aDisabledCommands.Length(), disabledCommands);
   }
 
-  return true;
-}
-
-bool
-TabParent::RecvGetTabOffset(LayoutDeviceIntPoint* aPoint)
-{
-  *aPoint = GetChildProcessOffset();
   return true;
 }
 
@@ -2964,12 +3062,13 @@ TabParent::GetLoadContext()
   if (mLoadContext) {
     loadContext = mLoadContext;
   } else {
+    // TODO Bug 1191740 - Add OriginAttributes in TabContext
+    OriginAttributes attrs = OriginAttributes(OwnOrContainingAppId(), IsBrowserElement());
     loadContext = new LoadContext(GetOwnerElement(),
-                                  OwnOrContainingAppId(),
                                   true /* aIsContent */,
                                   mChromeFlags & nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW,
                                   mChromeFlags & nsIWebBrowserChrome::CHROME_REMOTE_WINDOW,
-                                  IsBrowserElement());
+                                  attrs);
     mLoadContext = loadContext;
   }
   return loadContext.forget();
@@ -3338,6 +3437,7 @@ public:
   NS_IMETHOD SetPrivateBrowsing(bool) NO_IMPL
   NS_IMETHOD GetIsInBrowserElement(bool*) NO_IMPL
   NS_IMETHOD GetAppId(uint32_t*) NO_IMPL
+  NS_IMETHOD GetOriginAttributes(JS::MutableHandleValue) NO_IMPL
   NS_IMETHOD GetUseRemoteTabs(bool*) NO_IMPL
   NS_IMETHOD SetRemoteTabs(bool) NO_IMPL
 #undef NO_IMPL
@@ -3496,26 +3596,18 @@ TabParent::AsyncPanZoomEnabled() const
   return widget && widget->AsyncPanZoomEnabled();
 }
 
-PWebBrowserPersistDocumentParent*
-TabParent::AllocPWebBrowserPersistDocumentParent(const uint64_t& aOuterWindowID)
-{
-  return new WebBrowserPersistDocumentParent();
-}
-
-bool
-TabParent::DeallocPWebBrowserPersistDocumentParent(PWebBrowserPersistDocumentParent* aActor)
-{
-  delete aActor;
-  return true;
-}
-
 NS_IMETHODIMP
 TabParent::StartPersistence(uint64_t aOuterWindowID,
                             nsIWebBrowserPersistDocumentReceiver* aRecv)
 {
+  nsCOMPtr<nsIContentParent> manager = Manager();
+  if (!manager->IsContentParent()) {
+    return NS_ERROR_UNEXPECTED;
+  }
   auto* actor = new WebBrowserPersistDocumentParent();
   actor->SetOnReady(aRecv);
-  return SendPWebBrowserPersistDocumentConstructor(actor, aOuterWindowID)
+  return manager->AsContentParent()
+    ->SendPWebBrowserPersistDocumentConstructor(actor, this, aOuterWindowID)
     ? NS_OK : NS_ERROR_FAILURE;
   // (The actor will be destroyed on constructor failure.)
 }

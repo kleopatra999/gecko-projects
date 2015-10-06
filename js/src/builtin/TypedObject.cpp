@@ -19,7 +19,6 @@
 #include "vm/String.h"
 #include "vm/StringBuffer.h"
 #include "vm/TypedArrayObject.h"
-#include "vm/WeakMapObject.h"
 
 #include "jsatominlines.h"
 #include "jsobjinlines.h"
@@ -225,7 +224,6 @@ const Class js::ScalarTypeDescr::class_ = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     TypeDescr::finalize,
     ScalarTypeDescr::call
 };
@@ -323,7 +321,6 @@ const Class js::ReferenceTypeDescr::class_ = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     TypeDescr::finalize,
     ReferenceTypeDescr::call
 };
@@ -503,7 +500,6 @@ const Class ArrayTypeDescr::class_ = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     TypeDescr::finalize,
     nullptr, /* call */
     nullptr, /* hasInstance */
@@ -732,7 +728,6 @@ const Class StructTypeDescr::class_ = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     TypeDescr::finalize,
     nullptr, /* call */
     nullptr, /* hasInstance */
@@ -1473,7 +1468,7 @@ OutlineTypedObject::setOwnerAndData(JSObject* owner, uint8_t* data)
     // Trigger a post barrier when attaching an object outside the nursery to
     // one that is inside it.
     if (owner && !IsInsideNursery(this) && IsInsideNursery(owner))
-        runtimeFromMainThread()->gc.storeBuffer.putWholeCellFromMainThread(this);
+        runtimeFromMainThread()->gc.storeBuffer.putWholeCell(this);
 }
 
 /*static*/ OutlineTypedObject*
@@ -1520,8 +1515,11 @@ OutlineTypedObject::attach(JSContext* cx, ArrayBufferObject& buffer, int32_t off
 
     buffer.setHasTypedObjectViews();
 
-    if (!buffer.addView(cx, this))
-        CrashAtUnhandlableOOM("TypedObject::attach");
+    {
+        AutoEnterOOMUnsafeRegion oomUnsafe;
+        if (!buffer.addView(cx, this))
+            oomUnsafe.crash("TypedObject::attach");
+    }
 
     setOwnerAndData(&buffer, buffer.dataPointer() + offset);
 }
@@ -1793,7 +1791,7 @@ TypedObject::obj_hasProperty(JSContext* cx, HandleObject obj, HandleId id, bool*
 }
 
 bool
-TypedObject::obj_getProperty(JSContext* cx, HandleObject obj, HandleObject receiver,
+TypedObject::obj_getProperty(JSContext* cx, HandleObject obj, HandleValue receiver,
                              HandleId id, MutableHandleValue vp)
 {
     Rooted<TypedObject*> typedObj(cx, &obj->as<TypedObject>());
@@ -1850,7 +1848,7 @@ TypedObject::obj_getProperty(JSContext* cx, HandleObject obj, HandleObject recei
 }
 
 bool
-TypedObject::obj_getElement(JSContext* cx, HandleObject obj, HandleObject receiver,
+TypedObject::obj_getElement(JSContext* cx, HandleObject obj, HandleValue receiver,
                             uint32_t index, MutableHandleValue vp)
 {
     MOZ_ASSERT(obj->is<TypedObject>());
@@ -2226,7 +2224,7 @@ InlineTransparentTypedObject::getOrCreateBuffer(JSContext* cx)
     if (IsInsideNursery(this)) {
         // Make sure the buffer is traced by the next generational collection,
         // so that its data pointer is updated after this typed object moves.
-        cx->runtime()->gc.storeBuffer.putWholeCellFromMainThread(buffer);
+        cx->runtime()->gc.storeBuffer.putWholeCell(buffer);
     }
 
     return buffer;
@@ -2255,7 +2253,6 @@ OutlineTransparentTypedObject::getOrCreateBuffer(JSContext* cx)
         nullptr,        /* enumerate   */                \
         nullptr,        /* resolve     */                \
         nullptr,        /* mayResolve  */                \
-        nullptr,        /* convert     */                \
         nullptr,        /* finalize    */                \
         nullptr,        /* call        */                \
         nullptr,        /* hasInstance */                \
@@ -3026,8 +3023,9 @@ TraceListVisitor::visitReference(ReferenceTypeDescr& descr, uint8_t* mem)
       default: MOZ_CRASH("Invalid kind");
     }
 
+    AutoEnterOOMUnsafeRegion oomUnsafe;
     if (!offsets->append((uintptr_t) mem))
-        CrashAtUnhandlableOOM("TraceListVisitor::visitReference");
+        oomUnsafe.crash("TraceListVisitor::visitReference");
 }
 
 bool

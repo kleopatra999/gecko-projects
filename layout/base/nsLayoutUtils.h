@@ -496,12 +496,16 @@ public:
    * properties (top, left, right, bottom) are auto. aAnchorRect is in the
    * coordinate space of aLayer's container layer (i.e. relative to the reference
    * frame of the display item which is building aLayer's container layer).
+   * aIsClipFixed is true if the layer's clip rect should also remain fixed
+   * during async-scrolling (true for fixed position elements, false for
+   * fixed backgrounds).
    */
   static void SetFixedPositionLayerData(Layer* aLayer, const nsIFrame* aViewportFrame,
                                         const nsRect& aAnchorRect,
                                         const nsIFrame* aFixedPosFrame,
                                         nsPresContext* aPresContext,
-                                        const ContainerLayerParameters& aContainerParameters);
+                                        const ContainerLayerParameters& aContainerParameters,
+                                        bool aIsClipFixed);
 
   /**
    * Return true if aPresContext's viewport has a displayport.
@@ -546,8 +550,7 @@ public:
    * geometry root.
    */
   static nsIFrame* GetAnimatedGeometryRootFor(nsDisplayItem* aItem,
-                                              nsDisplayListBuilder* aBuilder,
-                                              mozilla::layers::LayerManager* aManager);
+                                              nsDisplayListBuilder* aBuilder);
 
   /**
    * Finds the nearest ancestor frame to aFrame that is considered to have (or
@@ -1000,11 +1003,10 @@ public:
     PAINT_IGNORE_SUPPRESSION = 0x08,
     PAINT_DOCUMENT_RELATIVE = 0x10,
     PAINT_HIDE_CARET = 0x20,
-    PAINT_ALL_CONTINUATIONS = 0x40,
-    PAINT_TO_WINDOW = 0x80,
-    PAINT_EXISTING_TRANSACTION = 0x100,
-    PAINT_NO_COMPOSITE = 0x200,
-    PAINT_COMPRESSED = 0x400
+    PAINT_TO_WINDOW = 0x40,
+    PAINT_EXISTING_TRANSACTION = 0x80,
+    PAINT_NO_COMPOSITE = 0x100,
+    PAINT_COMPRESSED = 0x200
   };
 
   /**
@@ -1956,10 +1958,8 @@ public:
 
   /**
    * Get the reference frame that would be used when constructing a
-   * display item for this frame.  (Note, however, that
-   * nsDisplayTransform use the reference frame appropriate for their
-   * GetTransformRootFrame(), rather than using their own frame as a
-   * reference frame.)
+   * display item for this frame.  Rather than using their own frame
+   * as a reference frame.)
    *
    * This duplicates some of the logic of GetDisplayRootFrame above and
    * of nsDisplayListBuilder::FindReferenceFrameFor.
@@ -1968,16 +1968,6 @@ public:
    * frame from it instead of calling this.
    */
   static nsIFrame* GetReferenceFrame(nsIFrame* aFrame);
-
-  /**
-   * Get the parent of this frame, except if that parent is part of a
-   * preserve-3d hierarchy, get the parent of the root of the
-   * preserve-3d hierarchy.
-   *
-   * (This is used as the starting point for reference frame computation
-   * for nsDisplayTransform display items.)
-   */
-  static nsIFrame* GetTransformRootFrame(nsIFrame* aFrame);
 
   /**
    * Get textrun construction flags determined by a given style; in particular
@@ -2074,7 +2064,7 @@ public:
     DirectDrawInfo mDrawInfo;
 
     /* The size of the surface */
-    gfxIntSize mSize;
+    mozilla::gfx::IntSize mSize;
     /* The principal associated with the element whose surface was returned.
        If there is a surface, this will never be null. */
     nsCOMPtr<nsIPrincipal> mPrincipal;
@@ -2382,8 +2372,8 @@ public:
     return sFontSizeInflationDisabledInMasterProcess;
   }
 
-  static bool SVGTransformOriginEnabled() {
-    return sSVGTransformOriginEnabled;
+  static bool SVGTransformBoxEnabled() {
+    return sSVGTransformBoxEnabled;
   }
 
   /**
@@ -2663,6 +2653,12 @@ public:
                                                 RepaintMode aRepaintMode);
 
   /**
+   * Return true if GetOrMaybeCreateDisplayPort would create a displayport.
+   */
+  static bool WantDisplayPort(const nsDisplayListBuilder* aBuilder,
+                              nsIFrame* aScrollFrame);
+
+  /**
    * Get the display port for |aScrollFrame|'s content. If |aScrollFrame|
    * WantsAsyncScroll() and we don't have a scrollable displayport yet (as
    * tracked by |aBuilder|), calculate and set a display port. Returns true if
@@ -2690,7 +2686,6 @@ public:
                                       mozilla::WritingMode aLineWM,
                                       mozilla::WritingMode aFrameWM);
 
-  static bool HasApzAwareListeners(mozilla::EventListenerManager* aElm);
   static bool HasDocumentLevelListenersForApzAwareEvents(nsIPresShell* aShell);
 
   /**
@@ -2778,7 +2773,7 @@ private:
   static bool sInvalidationDebuggingIsEnabled;
   static bool sCSSVariablesEnabled;
   static bool sInterruptibleReflowEnabled;
-  static bool sSVGTransformOriginEnabled;
+  static bool sSVGTransformBoxEnabled;
 
   /**
    * Helper function for LogTestDataForPaint().

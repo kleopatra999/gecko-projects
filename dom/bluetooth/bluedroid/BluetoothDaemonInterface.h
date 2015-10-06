@@ -46,80 +46,84 @@ public:
   static BluetoothDaemonInterface* GetInstance();
 
   void Init(BluetoothNotificationHandler* aNotificationHandler,
-            BluetoothResultHandler* aRes);
-  void Cleanup(BluetoothResultHandler* aRes);
+            BluetoothResultHandler* aRes) override;
+  void Cleanup(BluetoothResultHandler* aRes) override;
 
-  void Enable(BluetoothResultHandler* aRes);
-  void Disable(BluetoothResultHandler* aRes);
+  void Enable(BluetoothResultHandler* aRes) override;
+  void Disable(BluetoothResultHandler* aRes) override;
 
   /* Adapter Properties */
 
-  void GetAdapterProperties(BluetoothResultHandler* aRes);
-  void GetAdapterProperty(const nsAString& aName,
-                          BluetoothResultHandler* aRes);
-  void SetAdapterProperty(const BluetoothNamedValue& aProperty,
-                          BluetoothResultHandler* aRes);
+  void GetAdapterProperties(BluetoothResultHandler* aRes) override;
+  void GetAdapterProperty(BluetoothPropertyType aType,
+                          BluetoothResultHandler* aRes) override;
+  void SetAdapterProperty(const BluetoothProperty& aProperty,
+                          BluetoothResultHandler* aRes) override;
 
   /* Remote Device Properties */
 
-  void GetRemoteDeviceProperties(const nsAString& aRemoteAddr,
-                                 BluetoothResultHandler* aRes);
-  void GetRemoteDeviceProperty(const nsAString& aRemoteAddr,
-                               const nsAString& aName,
-                               BluetoothResultHandler* aRes);
-  void SetRemoteDeviceProperty(const nsAString& aRemoteAddr,
-                               const BluetoothNamedValue& aProperty,
-                               BluetoothResultHandler* aRes);
+  void GetRemoteDeviceProperties(const BluetoothAddress& aRemoteAddr,
+                                 BluetoothResultHandler* aRes) override;
+  void GetRemoteDeviceProperty(const BluetoothAddress& aRemoteAddr,
+                               BluetoothPropertyType aType,
+                               BluetoothResultHandler* aRes) override;
+  void SetRemoteDeviceProperty(const BluetoothAddress& aRemoteAddr,
+                               const BluetoothProperty& aProperty,
+                               BluetoothResultHandler* aRes) override;
 
   /* Remote Services */
 
-  void GetRemoteServiceRecord(const nsAString& aRemoteAddr,
-                              const uint8_t aUuid[16],
-                              BluetoothResultHandler* aRes);
-  void GetRemoteServices(const nsAString& aRemoteAddr,
-                         BluetoothResultHandler* aRes);
+  void GetRemoteServiceRecord(const BluetoothAddress& aRemoteAddr,
+                              const BluetoothUuid& aUuid,
+                              BluetoothResultHandler* aRes) override;
+  void GetRemoteServices(const BluetoothAddress& aRemoteAddr,
+                         BluetoothResultHandler* aRes) override;
 
   /* Discovery */
 
-  void StartDiscovery(BluetoothResultHandler* aRes);
-  void CancelDiscovery(BluetoothResultHandler* aRes);
+  void StartDiscovery(BluetoothResultHandler* aRes) override;
+  void CancelDiscovery(BluetoothResultHandler* aRes) override;
 
   /* Bonds */
 
-  void CreateBond(const nsAString& aBdAddr, BluetoothTransport aTransport,
-                  BluetoothResultHandler* aRes);
-  void RemoveBond(const nsAString& aBdAddr, BluetoothResultHandler* aRes);
-  void CancelBond(const nsAString& aBdAddr, BluetoothResultHandler* aRes);
+  void CreateBond(const BluetoothAddress& aBdAddr,
+                  BluetoothTransport aTransport,
+                  BluetoothResultHandler* aRes) override;
+  void RemoveBond(const BluetoothAddress& aBdAddr,
+                  BluetoothResultHandler* aRes) override;
+  void CancelBond(const BluetoothAddress& aBdAddr,
+                  BluetoothResultHandler* aRes) override;
 
   /* Connection */
 
-  void GetConnectionState(const nsAString& aBdAddr,
-                          BluetoothResultHandler* aRes);
+  void GetConnectionState(const BluetoothAddress& aBdAddr,
+                          BluetoothResultHandler* aRes) override;
 
   /* Authentication */
 
-  void PinReply(const nsAString& aBdAddr, bool aAccept,
-                const nsAString& aPinCode,
-                BluetoothResultHandler* aRes);
+  void PinReply(const BluetoothAddress& aBdAddr, bool aAccept,
+                const BluetoothPinCode& aPinCode,
+                BluetoothResultHandler* aRes) override;
 
-  void SspReply(const nsAString& aBdAddr, BluetoothSspVariant aVariant,
+  void SspReply(const BluetoothAddress& aBdAddr,
+                BluetoothSspVariant aVariant,
                 bool aAccept, uint32_t aPasskey,
-                BluetoothResultHandler* aRes);
+                BluetoothResultHandler* aRes) override;
 
   /* DUT Mode */
 
   void DutModeConfigure(bool aEnable, BluetoothResultHandler* aRes);
   void DutModeSend(uint16_t aOpcode, uint8_t* aBuf, uint8_t aLen,
-                   BluetoothResultHandler* aRes);
+                   BluetoothResultHandler* aRes) override;
 
   /* LE Mode */
 
   void LeTestMode(uint16_t aOpcode, uint8_t* aBuf, uint8_t aLen,
-                  BluetoothResultHandler* aRes);
+                  BluetoothResultHandler* aRes) override;
 
   /* Energy Information */
 
-  void ReadEnergyInfo(BluetoothResultHandler* aRes);
+  void ReadEnergyInfo(BluetoothResultHandler* aRes) override;
 
   /* Profile Interfaces */
 

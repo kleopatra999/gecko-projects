@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-let gFxAccounts = {
+var gFxAccounts = {
 
   PREF_SYNC_START_DOORHANGER: "services.sync.ui.showSyncStartDoorhanger",
   DOORHANGER_ACTIVATE_DELAY_MS: 5000,
@@ -214,10 +214,6 @@ let gFxAccounts = {
     this.showDoorhanger("sync-start-panel");
   },
 
-  showSyncFailedDoorhanger: function () {
-    this.showDoorhanger("sync-error-panel");
-  },
-
   updateUI: function () {
     this.updateAppMenuItem();
     this.updateMigrationNotification();
@@ -317,11 +313,18 @@ let gFxAccounts = {
           this.panelUILabel.setAttribute("label", profile.displayName);
         }
         if (profile.avatar) {
+          this.panelUIFooter.setAttribute("fxaprofileimage", "set");
+          let bgImage = "url(\"" + profile.avatar + "\")";
+          this.panelUIAvatar.style.listStyleImage = bgImage;
+
           let img = new Image();
-          // Make sure the image is available before attempting to display it
-          img.onload = () => {
-            this.panelUIFooter.setAttribute("fxaprofileimage", "set");
-            this.panelUIAvatar.style.listStyleImage = "url('" + profile.avatar + "')";
+          img.onerror = () => {
+            // Clear the image if it has trouble loading. Since this callback is asynchronous
+            // we check to make sure the image is still the same before we clear it.
+            if (this.panelUIAvatar.style.listStyleImage === bgImage) {
+              this.panelUIFooter.removeAttribute("fxaprofileimage");
+              this.panelUIAvatar.style.removeProperty("list-style-image");
+            }
           };
           img.src = profile.avatar;
         }

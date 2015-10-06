@@ -193,6 +193,7 @@
 @RESPATH@/components/dom_messages.xpt
 #endif
 @RESPATH@/components/dom_apps.xpt
+@RESPATH@/components/dom_newapps.xpt
 @RESPATH@/components/dom_base.xpt
 @RESPATH@/components/dom_system.xpt
 #ifdef MOZ_B2G_BT
@@ -271,6 +272,9 @@
 @RESPATH@/components/layout_xul.xpt
 @RESPATH@/components/locale.xpt
 @RESPATH@/components/lwbrk.xpt
+#ifdef MOZ_ENABLE_PROFILER_SPS
+@RESPATH@/components/memory_profiler.xpt
+#endif
 @RESPATH@/browser/components/migration.xpt
 @RESPATH@/components/mimetype.xpt
 @RESPATH@/components/mozfind.xpt
@@ -366,6 +370,8 @@
 @RESPATH@/components/BrowserElementParent.js
 @RESPATH@/components/FeedProcessor.manifest
 @RESPATH@/components/FeedProcessor.js
+@RESPATH@/components/PackagedAppUtils.js
+@RESPATH@/components/PackagedAppUtils.manifest
 @RESPATH@/browser/components/BrowserFeeds.manifest
 @RESPATH@/browser/components/FeedConverter.js
 @RESPATH@/browser/components/FeedWriter.js
@@ -383,7 +389,6 @@
 @RESPATH@/browser/components/webideComponents.manifest
 @RESPATH@/browser/components/Experiments.manifest
 @RESPATH@/browser/components/ExperimentsService.js
-@RESPATH@/browser/components/translation.manifest
 @RESPATH@/components/Downloads.manifest
 @RESPATH@/components/DownloadLegacy.js
 @RESPATH@/components/BrowserPageThumbs.manifest
@@ -564,11 +569,6 @@
 @RESPATH@/components/InterAppMessagePort.js
 #endif
 
-@RESPATH@/components/TCPSocket.js
-@RESPATH@/components/TCPServerSocket.js
-@RESPATH@/components/TCPSocketParentIntermediary.js
-@RESPATH@/components/TCPSocket.manifest
-
 #ifdef MOZ_ACTIVITIES
 @RESPATH@/components/SystemMessageCache.js
 @RESPATH@/components/SystemMessageInternal.js
@@ -639,6 +639,10 @@
 @RESPATH@/components/PrivateBrowsing.manifest
 @RESPATH@/components/PrivateBrowsingTrackingProtectionWhitelist.js
 
+; Signed Packaged Content
+@RESPATH@/components/InstallPackagedWebapp.manifest
+@RESPATH@/components/InstallPackagedWebapp.js
+
 ; ANGLE GLES-on-D3D rendering library
 #ifdef MOZ_ANGLE_RENDERER
 @BINPATH@/libEGL.dll
@@ -680,6 +684,10 @@
 @RESPATH@/browser/chrome/webide@JAREXT@
 @RESPATH@/browser/chrome/webide.manifest
 @RESPATH@/browser/@PREF_DIR@/webide-prefs.js
+
+; DevTools
+@RESPATH@/browser/chrome/devtools@JAREXT@
+@RESPATH@/browser/chrome/devtools.manifest
 
 ; shell icons
 #ifdef XP_UNIX

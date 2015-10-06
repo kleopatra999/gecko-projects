@@ -95,6 +95,7 @@ user_pref("extensions.update.url", "http://%(server)s/extensions-dummy/updateURL
 user_pref("extensions.update.background.url", "http://%(server)s/extensions-dummy/updateBackgroundURL");
 user_pref("extensions.blocklist.url", "http://%(server)s/extensions-dummy/blocklistURL");
 user_pref("extensions.hotfix.url", "http://%(server)s/extensions-dummy/hotfixURL");
+user_pref("extensions.systemAddon.update.url", "http://%(server)s/dummy-system-addons.xml");
 // Turn off extension updates so they don't bother tests
 user_pref("extensions.update.enabled", false);
 // Make sure opening about:addons won't hit the network
@@ -166,6 +167,13 @@ user_pref("layout.spammy_warnings.enabled", false);
 // Enable Media Source Extensions for testing
 user_pref("media.mediasource.mp4.enabled", true);
 user_pref("media.mediasource.webm.enabled", true);
+
+// Enable fragmented MP4 parser for testing
+user_pref("media.fragmented-mp4.exposed", true);
+
+#if defined(LINUX)
+user_pref("media.fragmented-mp4.ffmpeg.enabled", true);
+#endif
 
 // Enable mozContacts
 user_pref("dom.mozContacts.enabled", true);
@@ -251,12 +259,13 @@ user_pref("identity.fxaccounts.remote.signin.uri", "https://%(server)s/fxa-signi
 user_pref("identity.fxaccounts.settings.uri", "https://%(server)s/fxa-settings");
 user_pref('identity.fxaccounts.remote.webchannel.uri', 'https://%(server)s/');
 
-// Increase the APZ content response timeout in tests to 15 seconds.
+// Increase the APZ content response timeout in tests to 1 minute.
 // This is to accommodate the fact that test environments tends to be slower
 // than production environments (with the b2g emulator being the slowest of them
 // all), resulting in the production timeout value sometimes being exceeded
-// and causing false-positive test failures. See bug 1176798, bug 1177018.
-user_pref("apz.content_response_timeout", 15000);
+// and causing false-positive test failures. See bug 1176798, bug 1177018,
+// bug 1210465.
+user_pref("apz.content_response_timeout", 60000);
 
 // Make sure SSL Error reports don't hit the network
 user_pref("security.ssl.errorReporting.url", "https://example.com/browser/browser/base/content/test/general/pinning_reports.sjs?succeed");
@@ -303,6 +312,8 @@ user_pref("browser.selfsupport.url", "https://%(server)s/selfsupport-dummy/");
 
 user_pref("media.eme.enabled", true);
 
+user_pref("media.autoplay.enabled", true);
+
 #if defined(XP_WIN)
 user_pref("media.decoder.heuristic.dormant.timeout", 0);
 #endif
@@ -341,5 +352,3 @@ user_pref("browser.urlbar.suggest.searches", false);
 user_pref("browser.urlbar.userMadeSearchSuggestionsChoice", true);
 
 user_pref("dom.audiochannel.mutedByDefault", false);
-
-user_pref("view_source.tab", true);

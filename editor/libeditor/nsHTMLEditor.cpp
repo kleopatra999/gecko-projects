@@ -2791,7 +2791,7 @@ nsHTMLEditor::ReplaceStyleSheet(const nsAString& aURL)
   NS_ENSURE_SUCCESS(rv, rv);
 
   return ps->GetDocument()->CSSLoader()->
-    LoadSheet(uaURI, nullptr, EmptyCString(), this);
+    LoadSheet(uaURI, false, nullptr, EmptyCString(), this);
 }
 
 NS_IMETHODIMP
@@ -3531,7 +3531,7 @@ nsHTMLEditor::SelectAll()
   nsCOMPtr<nsIDOMNode> rootElement = do_QueryInterface(rootContent, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  Maybe<mozilla::dom::Selection::AutoApplyUserSelectStyle> userSelection;
+  Maybe<mozilla::dom::Selection::AutoUserInitiated> userSelection;
   if (!rootContent->IsEditable()) {
     userSelection.emplace(selection);
   }

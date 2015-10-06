@@ -17,6 +17,7 @@ import android.util.Log;
 import android.view.View;
 
 import org.json.JSONObject;
+import org.json.JSONException;
 
 import org.mozilla.gecko.BaseGeckoInterface;
 import org.mozilla.gecko.ContactService;
@@ -27,10 +28,12 @@ import org.mozilla.gecko.GeckoBatteryManager;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.GeckoThread;
 import org.mozilla.gecko.IntentHelper;
+import org.mozilla.gecko.updater.UpdateServiceHelper;
 import org.mozilla.gecko.util.GeckoEventListener;
 
 import org.mozilla.b2gdroid.ScreenStateObserver;
 import org.mozilla.b2gdroid.Apps;
+import org.mozilla.b2gdroid.SettingsMapper;
 
 public class Launcher extends Activity
                       implements GeckoEventListener, ContextGetter {
@@ -39,6 +42,7 @@ public class Launcher extends Activity
     private ContactService      mContactService;
     private ScreenStateObserver mScreenStateObserver;
     private Apps                mApps;
+    private SettingsMapper      mSettings;
 
     /** ContextGetter */
     public Context getContext() {
@@ -56,6 +60,7 @@ public class Launcher extends Activity
         GeckoBatteryManager.getInstance().start(this);
         mContactService = new ContactService(EventDispatcher.getInstance(), this);
         mApps = new Apps(this);
+        mSettings = new SettingsMapper(this, null);
     }
 
     private void hideSplashScreen() {
@@ -85,6 +90,8 @@ public class Launcher extends Activity
 
         GeckoAppShell.setGeckoInterface(new BaseGeckoInterface(this));
 
+        UpdateServiceHelper.registerForUpdates(this);
+
         EventDispatcher.getInstance().registerGeckoThreadListener(this,
             "Launcher:Ready");
 
@@ -112,6 +119,7 @@ public class Launcher extends Activity
 
         mContactService.destroy();
         mApps.destroy();
+        mSettings.destroy();
     }
 
     @Override
@@ -129,20 +137,30 @@ public class Launcher extends Activity
             }
             GeckoEvent e = GeckoEvent.createBroadcastEvent("Android:Launcher", obj.toString());
             GeckoAppShell.sendEventToGecko(e);
+        } else if (Intent.ACTION_MAIN.equals(action)) {
+            Log.d(LOGTAG, "Let's dispatch a 'home' key event");
+            JSONObject obj = new JSONObject();
+            try {
+                obj.put("action", "home-key");
+            } catch(JSONException ex) {
+                Log.wtf(LOGTAG, "Error building Android:Launcher message", ex);
+            }
+            GeckoEvent e = GeckoEvent.createBroadcastEvent("Android:Launcher", obj.toString());
+            GeckoAppShell.sendEventToGecko(e);
         }
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
+        Log.d(LOGTAG, "onWindowFocusChanged hasFocus=" + hasFocus);
+
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             findViewById(R.id.main_layout).setSystemUiVisibility(
-                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                     View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                     | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                     | View.SYSTEM_UI_FLAG_FULLSCREEN
-                    | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+                    );
         }
     }
 

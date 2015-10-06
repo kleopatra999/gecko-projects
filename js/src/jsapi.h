@@ -1151,12 +1151,14 @@ class JS_PUBLIC_API(RuntimeOptions) {
       : baseline_(true),
         ion_(true),
         asmJS_(true),
+        throwOnAsmJSValidationFailure_(false),
         nativeRegExp_(true),
         unboxedArrays_(false),
         asyncStack_(true),
         werror_(false),
         strictMode_(false),
-        extraWarnings_(false)
+        extraWarnings_(false),
+        noSuchMethod_(false)
     {
     }
 
@@ -1187,6 +1189,16 @@ class JS_PUBLIC_API(RuntimeOptions) {
     }
     RuntimeOptions& toggleAsmJS() {
         asmJS_ = !asmJS_;
+        return *this;
+    }
+
+    bool throwOnAsmJSValidationFailure() const { return throwOnAsmJSValidationFailure_; }
+    RuntimeOptions& setThrowOnAsmJSValidationFailure(bool flag) {
+        throwOnAsmJSValidationFailure_ = flag;
+        return *this;
+    }
+    RuntimeOptions& toggleThrowOnAsmJSValidationFailure() {
+        throwOnAsmJSValidationFailure_ = !throwOnAsmJSValidationFailure_;
         return *this;
     }
 
@@ -1238,16 +1250,24 @@ class JS_PUBLIC_API(RuntimeOptions) {
         return *this;
     }
 
+    bool noSuchMethod() const { return noSuchMethod_; }
+    RuntimeOptions& setNoSuchMethod(bool flag) {
+        noSuchMethod_ = flag;
+        return *this;
+    }
+
   private:
     bool baseline_ : 1;
     bool ion_ : 1;
     bool asmJS_ : 1;
+    bool throwOnAsmJSValidationFailure_ : 1;
     bool nativeRegExp_ : 1;
     bool unboxedArrays_ : 1;
     bool asyncStack_ : 1;
     bool werror_ : 1;
     bool strictMode_ : 1;
     bool extraWarnings_ : 1;
+    bool noSuchMethod_ : 1;
 };
 
 JS_PUBLIC_API(RuntimeOptions&)
@@ -1878,15 +1898,31 @@ JS_StringToId(JSContext* cx, JS::HandleString s, JS::MutableHandleId idp);
 extern JS_PUBLIC_API(bool)
 JS_IdToValue(JSContext* cx, jsid id, JS::MutableHandle<JS::Value> vp);
 
-/*
- * Invoke the [[DefaultValue]] hook (see ES5 8.6.2) with the provided hint on
- * the specified object, computing a primitive default value for the object.
- * The hint must be JSTYPE_STRING, JSTYPE_NUMBER, or JSTYPE_VOID (no hint).  On
- * success the resulting value is stored in *vp.
+namespace JS {
+
+/**
+ * Convert obj to a primitive value. On success, store the result in vp and
+ * return true.
+ *
+ * The hint argument must be JSTYPE_STRING, JSTYPE_NUMBER, or JSTYPE_VOID (no
+ * hint).
+ *
+ * Implements: ES6 7.1.1 ToPrimitive(input, [PreferredType]).
  */
 extern JS_PUBLIC_API(bool)
-JS_DefaultValue(JSContext* cx, JS::Handle<JSObject*> obj, JSType hint,
-                JS::MutableHandle<JS::Value> vp);
+ToPrimitive(JSContext* cx, JS::HandleObject obj, JSType hint, JS::MutableHandleValue vp);
+
+/**
+ * If args.get(0) is one of the strings "string", "number", or "default", set
+ * *result to JSTYPE_STRING, JSTYPE_NUMBER, or JSTYPE_VOID accordingly and
+ * return true. Otherwise, return false with a TypeError pending.
+ *
+ * This can be useful in implementing a @@toPrimitive method.
+ */
+extern JS_PUBLIC_API(bool)
+GetFirstArgumentAsTypeHint(JSContext* cx, CallArgs args, JSType *result);
+
+} /* namespace JS */
 
 extern JS_PUBLIC_API(bool)
 JS_PropertyStub(JSContext* cx, JS::HandleObject obj, JS::HandleId id,
@@ -2093,7 +2129,7 @@ struct JSFunctionSpec {
     JS_FNSPEC(name, call, nullptr, nargs, (flags) | JSFUN_STUB_GSOPS, nullptr)
 #define JS_INLINABLE_FN(name,call,nargs,flags,native)                         \
     JS_FNSPEC(name, call, &js::jit::JitInfo_##native, nargs, (flags) | JSFUN_STUB_GSOPS, nullptr)
-#define JS_SYM_FN(name,call,nargs,flags)                                      \
+#define JS_SYM_FN(symbol,call,nargs,flags)                                    \
     JS_SYM_FNSPEC(symbol, call, nullptr, nargs, (flags) | JSFUN_STUB_GSOPS, nullptr)
 #define JS_FNINFO(name,call,info,nargs,flags)                                 \
     JS_FNSPEC(name, call, info, nargs, flags, nullptr)
@@ -2853,7 +2889,7 @@ extern JS_PUBLIC_API(bool)
 JS_GetPropertyById(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::MutableHandleValue vp);
 
 extern JS_PUBLIC_API(bool)
-JS_ForwardGetPropertyTo(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::HandleObject onBehalfOf,
+JS_ForwardGetPropertyTo(JSContext* cx, JS::HandleObject obj, JS::HandleId id, JS::HandleValue onBehalfOf,
                         JS::MutableHandleValue vp);
 
 extern JS_PUBLIC_API(bool)
@@ -2948,11 +2984,21 @@ JS_NewArrayObject(JSContext* cx, const JS::HandleValueArray& contents);
 extern JS_PUBLIC_API(JSObject*)
 JS_NewArrayObject(JSContext* cx, size_t length);
 
+// Returns true and sets |*isArray| indicating whether |value| is an Array
+// object or a wrapper around one, otherwise returns false on failure.
+//
+// This method returns true with |*isArray == false| when passed a proxy whose
+// target is an Array, or when passed a revoked proxy.
 extern JS_PUBLIC_API(bool)
-JS_IsArrayObject(JSContext* cx, JS::HandleValue value);
+JS_IsArrayObject(JSContext* cx, JS::HandleValue value, bool* isArray);
 
+// Returns true and sets |*isArray| indicating whether |obj| is an Array object
+// or a wrapper around one, otherwise returns false on failure.
+//
+// This method returns true with |*isArray == false| when passed a proxy whose
+// target is an Array, or when passed a revoked proxy.
 extern JS_PUBLIC_API(bool)
-JS_IsArrayObject(JSContext* cx, JS::HandleObject obj);
+JS_IsArrayObject(JSContext* cx, JS::HandleObject obj, bool* isArray);
 
 extern JS_PUBLIC_API(bool)
 JS_GetArrayLength(JSContext* cx, JS::Handle<JSObject*> obj, uint32_t* lengthp);
@@ -3094,19 +3140,22 @@ extern JS_PUBLIC_API(JSFunction*)
 JS_NewFunction(JSContext* cx, JSNative call, unsigned nargs, unsigned flags,
                const char* name);
 
-/*
- * Create the function with the name given by the id. JSID_IS_STRING(id) must
- * be true.
- */
-extern JS_PUBLIC_API(JSFunction*)
-JS_NewFunctionById(JSContext* cx, JSNative call, unsigned nargs, unsigned flags,
-                   JS::Handle<jsid> id);
-
 namespace JS {
 
 extern JS_PUBLIC_API(JSFunction*)
-GetSelfHostedFunction(JSContext* cx, const char* selfHostedName, JS::Handle<jsid> id,
+GetSelfHostedFunction(JSContext* cx, const char* selfHostedName, HandleId id,
                       unsigned nargs);
+
+/**
+ * Create a new function based on the given JSFunctionSpec, *fs.
+ * id is the result of a successful call to
+ * `PropertySpecNameToPermanentId(cx, fs->name, &id)`.
+ *
+ * Unlike JS_DefineFunctions, this does not treat fs as an array.
+ * *fs must not be JS_FS_END.
+ */
+extern JS_PUBLIC_API(JSFunction*)
+NewFunctionFromSpec(JSContext* cx, const JSFunctionSpec* fs, HandleId id);
 
 } /* namespace JS */
 
@@ -3343,6 +3392,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
         extraWarningsOption(false),
         werrorOption(false),
         asmJSOption(false),
+        throwOnAsmJSValidationFailureOption(false),
         forceAsync(false),
         installedFile(false),
         sourceIsLazy(false),
@@ -3377,6 +3427,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
     bool extraWarningsOption;
     bool werrorOption;
     bool asmJSOption;
+    bool throwOnAsmJSValidationFailureOption;
     bool forceAsync;
     bool installedFile;  // 'true' iff pre-compiling js file in packaged app
     bool sourceIsLazy;
@@ -4349,15 +4400,16 @@ GetSymbolDescription(HandleSymbol symbol);
 
 /* Well-known symbols. */
 enum class SymbolCode : uint32_t {
-    iterator,                       // Symbol.iterator
-    match,                          // Symbol.match
-    species,                        // Symbol.species
+    iterator,                       // well-known symbols
+    match,
+    species,
+    toPrimitive,
     InSymbolRegistry = 0xfffffffe,  // created by Symbol.for() or JS::GetSymbolFor()
     UniqueSymbol = 0xffffffff       // created by Symbol() or JS::NewSymbol()
 };
 
 /* For use in loops that iterate over the well-known symbols. */
-const size_t WellKnownSymbolLimit = 3;
+const size_t WellKnownSymbolLimit = 4;
 
 /*
  * Return the SymbolCode telling what sort of symbol `symbol` is.
@@ -4714,11 +4766,13 @@ SetForEach(JSContext *cx, HandleObject obj, HandleValue callbackFn, HandleValue 
 extern JS_PUBLIC_API(JSObject*)
 JS_NewDateObject(JSContext* cx, int year, int mon, int mday, int hour, int min, int sec);
 
-/*
- * Infallible predicate to test whether obj is a date object.
- */
+// Returns true and sets |*isDate| indicating whether |obj| is a Date object or
+// a wrapper around one, otherwise returns false on failure.
+//
+// This method returns true with |*isDate == false| when passed a proxy whose
+// target is a Date, or when passed a revoked proxy.
 extern JS_PUBLIC_API(bool)
-JS_ObjectIsDate(JSContext* cx, JS::HandleObject obj);
+JS_ObjectIsDate(JSContext* cx, JS::HandleObject obj, bool* isDate);
 
 /*
  * Clears the cache of calculated local time from each Date object.
@@ -4769,8 +4823,13 @@ extern JS_PUBLIC_API(bool)
 JS_ExecuteRegExpNoStatics(JSContext* cx, JS::HandleObject reobj, char16_t* chars, size_t length,
                           size_t* indexp, bool test, JS::MutableHandleValue rval);
 
+// Returns true and sets |*isRegExp| indicating whether |obj| is a RegExp
+// object or a wrapper around one, otherwise returns false on failure.
+//
+// This method returns true with |*isRegExp == false| when passed a proxy whose
+// target is a RegExp, or when passed a revoked proxy.
 extern JS_PUBLIC_API(bool)
-JS_ObjectIsRegExp(JSContext* cx, JS::HandleObject obj);
+JS_ObjectIsRegExp(JSContext* cx, JS::HandleObject obj, bool* isRegExp);
 
 extern JS_PUBLIC_API(unsigned)
 JS_GetRegExpFlags(JSContext* cx, JS::HandleObject obj);
@@ -5361,9 +5420,12 @@ GetSavedFrameParent(JSContext* cx, HandleObject savedFrame, MutableHandleObject 
  * The same notes above about SavedFrame accessors applies here as well: cx
  * doesn't need to be in stack's compartment, and stack can be null, a
  * SavedFrame object, or a wrapper (CCW or Xray) around a SavedFrame object.
+ *
+ * Optional indent parameter specifies the number of white spaces to indent
+ * each line.
  */
 extern JS_PUBLIC_API(bool)
-BuildStackString(JSContext* cx, HandleObject stack, MutableHandleString stringp);
+BuildStackString(JSContext* cx, HandleObject stack, MutableHandleString stringp, size_t indent = 0);
 
 } /* namespace JS */
 

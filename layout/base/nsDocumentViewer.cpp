@@ -128,6 +128,7 @@ using namespace mozilla;
 using namespace mozilla::dom;
 
 #define BEFOREUNLOAD_DISABLED_PREFNAME "dom.disable_beforeunload"
+#define BEFOREUNLOAD_REQUIRES_INTERACTION_PREFNAME "dom.require_user_interaction_for_beforeunload"
 
 //-----------------------------------------------------
 // LOGGING
@@ -409,7 +410,6 @@ protected:
   nsCString mForceCharacterSet;
   
   bool mIsPageMode;
-  bool mCallerIsClosingWindow;
   bool mInitializedForPrintPreview;
   bool mHidden;
 };
@@ -460,7 +460,6 @@ void nsDocumentViewer::PrepareToStartLoad()
   mLoaded           = false;
   mAttachedToParent = false;
   mDeferredWindowClose = false;
-  mCallerIsClosingWindow = false;
 
 #ifdef NS_PRINTING
   mPrintIsPending        = false;
@@ -1048,18 +1047,15 @@ nsDocumentViewer::LoadComplete(nsresult aStatus)
 }
 
 NS_IMETHODIMP
-nsDocumentViewer::PermitUnload(bool aCallerClosesWindow,
-                               bool *aPermitUnload)
+nsDocumentViewer::PermitUnload(bool *aPermitUnload)
 {
   bool shouldPrompt = true;
-  return PermitUnloadInternal(aCallerClosesWindow, &shouldPrompt,
-                              aPermitUnload);
+  return PermitUnloadInternal(&shouldPrompt, aPermitUnload);
 }
 
 
 nsresult
-nsDocumentViewer::PermitUnloadInternal(bool aCallerClosesWindow,
-                                       bool *aShouldPrompt,
+nsDocumentViewer::PermitUnloadInternal(bool *aShouldPrompt,
                                        bool *aPermitUnload)
 {
   AutoDontWarnAboutSyncXHR disableSyncXHRWarning;
@@ -1068,18 +1064,20 @@ nsDocumentViewer::PermitUnloadInternal(bool aCallerClosesWindow,
 
   if (!mDocument
    || mInPermitUnload
-   || mCallerIsClosingWindow
    || mInPermitUnloadPrompt) {
     return NS_OK;
   }
 
   static bool sIsBeforeUnloadDisabled;
-  static bool sBeforeUnloadPrefCached = false;
+  static bool sBeforeUnloadRequiresInteraction;
+  static bool sBeforeUnloadPrefsCached = false;
 
-  if (!sBeforeUnloadPrefCached ) {
-    sBeforeUnloadPrefCached = true;
+  if (!sBeforeUnloadPrefsCached ) {
+    sBeforeUnloadPrefsCached = true;
     Preferences::AddBoolVarCache(&sIsBeforeUnloadDisabled,
                                  BEFOREUNLOAD_DISABLED_PREFNAME);
+    Preferences::AddBoolVarCache(&sBeforeUnloadRequiresInteraction,
+                                 BEFOREUNLOAD_REQUIRES_INTERACTION_PREFNAME);
   }
 
   // First, get the script global object from the document...
@@ -1137,7 +1135,10 @@ nsDocumentViewer::PermitUnloadInternal(bool aCallerClosesWindow,
   nsAutoString text;
   beforeUnload->GetReturnValue(text);
 
-  if (!sIsBeforeUnloadDisabled && *aShouldPrompt && dialogsAreEnabled &&
+  // NB: we nullcheck mDocument because it might now be dead as a result of
+  // the event being dispatched.
+  if (!sIsBeforeUnloadDisabled && *aShouldPrompt && dialogsAreEnabled && mDocument &&
+      (!sBeforeUnloadRequiresInteraction || mDocument->UserHasInteracted()) &&
       (event->GetInternalNSEvent()->mFlags.mDefaultPrevented ||
        !text.IsEmpty())) {
     // Ask the user if it's ok to unload the current page
@@ -1238,15 +1239,11 @@ nsDocumentViewer::PermitUnloadInternal(bool aCallerClosesWindow,
         docShell->GetContentViewer(getter_AddRefs(cv));
 
         if (cv) {
-          cv->PermitUnloadInternal(aCallerClosesWindow, aShouldPrompt,
-                                   aPermitUnload);
+          cv->PermitUnloadInternal(aShouldPrompt, aPermitUnload);
         }
       }
     }
   }
-
-  if (aCallerClosesWindow && *aPermitUnload)
-    mCallerIsClosingWindow = true;
 
   return NS_OK;
 }
@@ -1262,35 +1259,6 @@ NS_IMETHODIMP
 nsDocumentViewer::GetInPermitUnload(bool* aInEvent)
 {
   *aInEvent = mInPermitUnloadPrompt;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDocumentViewer::ResetCloseWindow()
-{
-  mCallerIsClosingWindow = false;
-
-  nsCOMPtr<nsIDocShell> docShell(mContainer);
-  if (docShell) {
-    int32_t childCount;
-    docShell->GetChildCount(&childCount);
-
-    for (int32_t i = 0; i < childCount; ++i) {
-      nsCOMPtr<nsIDocShellTreeItem> item;
-      docShell->GetChildAt(i, getter_AddRefs(item));
-
-      nsCOMPtr<nsIDocShell> docShell(do_QueryInterface(item));
-
-      if (docShell) {
-        nsCOMPtr<nsIContentViewer> cv;
-        docShell->GetContentViewer(getter_AddRefs(cv));
-
-        if (cv) {
-          cv->ResetCloseWindow();
-        }
-      }
-    }
-  }
   return NS_OK;
 }
 
@@ -2613,7 +2581,7 @@ NS_IMETHODIMP nsDocumentViewer::SelectAll()
   rv = selection->RemoveAllRanges();
   if (NS_FAILED(rv)) return rv;
 
-  mozilla::dom::Selection::AutoApplyUserSelectStyle userSelection(selection);
+  mozilla::dom::Selection::AutoUserInitiated userSelection(selection);
   rv = selection->SelectAllChildren(bodyNode);
   return rv;
 }
@@ -3691,7 +3659,11 @@ nsDocumentViewer::Print(nsIPrintSettings*       aPrintSettings,
   if (GetIsPrinting()) {
     // Let the user know we are not ready to print.
     rv = NS_ERROR_NOT_AVAILABLE;
-    nsPrintEngine::ShowPrintErrorDialog(rv);
+
+    if (mPrintEngine) {
+      mPrintEngine->FirePrintingErrorEvent(rv);
+    }
+
     return rv;
   }
 

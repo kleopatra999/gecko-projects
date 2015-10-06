@@ -600,6 +600,7 @@ js::XDRScript(XDRState<mode>* xdr, HandleObject enclosingScopeArg, HandleScript 
         TreatAsRunOnce,
         HasLazyScript,
         HasNonSyntacticScope,
+        HasInnerFunctions,
     };
 
     uint32_t length, lineno, column, nslots;
@@ -735,6 +736,8 @@ js::XDRScript(XDRState<mode>* xdr, HandleObject enclosingScopeArg, HandleScript 
             scriptBits |= (1 << HasLazyScript);
         if (script->hasNonSyntacticScope())
             scriptBits |= (1 << HasNonSyntacticScope);
+        if (script->hasInnerFunctions())
+            scriptBits |= (1 << HasInnerFunctions);
     }
 
     if (!xdr->codeUint32(&prologueLength))
@@ -869,6 +872,8 @@ js::XDRScript(XDRState<mode>* xdr, HandleObject enclosingScopeArg, HandleScript 
             script->treatAsRunOnce_ = true;
         if (scriptBits & (1 << HasNonSyntacticScope))
             script->hasNonSyntacticScope_ = true;
+        if (scriptBits & (1 << HasInnerFunctions))
+            script->hasInnerFunctions_ = true;
 
         if (scriptBits & (1 << IsLegacyGenerator)) {
             MOZ_ASSERT(!(scriptBits & (1 << IsStarGenerator)));
@@ -1456,6 +1461,16 @@ JSScript::getIonCounts()
 }
 
 void
+JSScript::takeOverScriptCountsMapEntry(ScriptCounts* entryValue)
+{
+#ifdef DEBUG
+    ScriptCountsMap::Ptr p = GetScriptCountsMapEntry(this);
+    MOZ_ASSERT(entryValue == &p->value());
+#endif
+    hasScriptCounts_ = false;
+}
+
+void
 JSScript::releaseScriptCounts(ScriptCounts* counts)
 {
     ScriptCountsMap::Ptr p = GetScriptCountsMapEntry(this);
@@ -1492,6 +1507,12 @@ void
 ScriptSourceObject::finalize(FreeOp* fop, JSObject* obj)
 {
     ScriptSourceObject* sso = &obj->as<ScriptSourceObject>();
+
+    // If code coverage is enabled, record the filename associated with this
+    // source object.
+    if (fop->runtime()->lcovOutput.isEnabled())
+        sso->compartment()->lcovOutput.collectSourceFile(sso->compartment(), sso);
+
     sso->source()->decref();
     sso->setReservedSlot(SOURCE_SLOT, PrivateValue(nullptr));
 }
@@ -1507,7 +1528,6 @@ const Class ScriptSourceObject::class_ = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     finalize,
     nullptr, /* call */
     nullptr, /* hasInstance */
@@ -2922,6 +2942,11 @@ JSScript::finalize(FreeOp* fop)
     // JSScript::Create(), but not yet finished initializing it with
     // fullyInitFromEmitter() or fullyInitTrivial().
 
+    // Collect code coverage information for this script and all its inner
+    // scripts, and store the aggregated information on the compartment.
+    if (isTopLevel() && fop->runtime()->lcovOutput.isEnabled())
+        compartment()->lcovOutput.collectCodeCoverageInfo(compartment(), sourceObject(), this);
+
     fop->runtime()->spsProfiler.onScriptFinalized(this);
 
     if (types_)
@@ -2989,7 +3014,8 @@ js::GetSrcNote(GSNCache& cache, JSScript* script, jsbytecode* pc)
     if (cache.code != script->code() && script->length() >= GSN_CACHE_THRESHOLD) {
         unsigned nsrcnotes = 0;
         for (jssrcnote* sn = script->notes(); !SN_IS_TERMINATOR(sn);
-             sn = SN_NEXT(sn)) {
+             sn = SN_NEXT(sn))
+        {
             if (SN_IS_GETTABLE(sn))
                 ++nsrcnotes;
         }
@@ -3001,10 +3027,11 @@ js::GetSrcNote(GSNCache& cache, JSScript* script, jsbytecode* pc)
         if (cache.map.init(nsrcnotes)) {
             pc = script->code();
             for (jssrcnote* sn = script->notes(); !SN_IS_TERMINATOR(sn);
-                 sn = SN_NEXT(sn)) {
+                 sn = SN_NEXT(sn))
+            {
                 pc += SN_DELTA(sn);
                 if (SN_IS_GETTABLE(sn))
-                    JS_ALWAYS_TRUE(cache.map.put(pc, sn));
+                    cache.map.putNewInfallible(pc, sn);
             }
             cache.code = script->code();
         }
@@ -3362,6 +3389,7 @@ js::detail::CopyScript(JSContext* cx, HandleObject scriptStaticScope, HandleScri
     dst->funHasAnyAliasedFormal_ = src->funHasAnyAliasedFormal();
     dst->hasSingletons_ = src->hasSingletons();
     dst->treatAsRunOnce_ = src->treatAsRunOnce();
+    dst->hasInnerFunctions_ = src->hasInnerFunctions();
     dst->isGeneratorExp_ = src->isGeneratorExp();
     dst->setGeneratorKind(src->generatorKind());
 
@@ -3479,13 +3507,19 @@ js::CloneScriptIntoFunction(JSContext* cx, HandleObject enclosingScope, HandleFu
         return nullptr;
 
     dst->setFunction(fun);
-    if (fun->isInterpretedLazy())
+    Rooted<LazyScript*> lazy(cx);
+    if (fun->isInterpretedLazy()) {
+        lazy = fun->lazyScriptOrNull();
         fun->setUnlazifiedScript(dst);
-    else
+    } else {
         fun->initScript(dst);
+    }
 
     if (!detail::CopyScript(cx, fun, src, dst)) {
-        fun->setScript(nullptr);
+        if (lazy)
+            fun->initLazyScript(lazy);
+        else
+            fun->setScript(nullptr);
         return nullptr;
     }
 
@@ -4308,4 +4342,32 @@ JSScript::AutoDelazify::dropScript()
     if (script_ && !script_->compartment()->isSelfHosting)
         script_->setDoNotRelazify(oldDoNotRelazify_);
     script_ = nullptr;
+}
+
+JS::ubi::Node::Size
+JS::ubi::Concrete<JSScript>::size(mozilla::MallocSizeOf mallocSizeOf) const
+{
+    Size size = Arena::thingSize(get().asTenured().getAllocKind());
+
+    size += get().sizeOfData(mallocSizeOf);
+    size += get().sizeOfTypeScript(mallocSizeOf);
+
+    size_t baselineSize = 0;
+    size_t baselineStubsSize = 0;
+    jit::AddSizeOfBaselineData(&get(), mallocSizeOf, &baselineSize, &baselineStubsSize);
+    size += baselineSize;
+    size += baselineStubsSize;
+
+    size += jit::SizeOfIonData(&get(), mallocSizeOf);
+
+    MOZ_ASSERT(size > 0);
+    return size;
+}
+
+JS::ubi::Node::Size
+JS::ubi::Concrete<js::LazyScript>::size(mozilla::MallocSizeOf mallocSizeOf) const
+{
+    Size size = js::gc::Arena::thingSize(get().asTenured().getAllocKind());
+    size += get().sizeOfExcludingThis(mallocSizeOf);
+    return size;
 }

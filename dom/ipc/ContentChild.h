@@ -167,6 +167,9 @@ public:
     virtual PHalChild* AllocPHalChild() override;
     virtual bool DeallocPHalChild(PHalChild*) override;
 
+    virtual PHeapSnapshotTempFileHelperChild* AllocPHeapSnapshotTempFileHelperChild() override;
+    virtual bool DeallocPHeapSnapshotTempFileHelperChild(PHeapSnapshotTempFileHelperChild*) override;
+
     PIccChild*
     SendPIccConstructor(PIccChild* aActor, const uint32_t& aServiceId);
     virtual PIccChild*
@@ -200,6 +203,12 @@ public:
                                          const bool& aDumpAllTraces,
                                          const FileDescriptor& aGCLog,
                                          const FileDescriptor& aCCLog) override;
+
+    virtual PWebBrowserPersistDocumentChild* AllocPWebBrowserPersistDocumentChild(PBrowserChild* aBrowser, const uint64_t& aOuterWindowID) override;
+    virtual bool RecvPWebBrowserPersistDocumentConstructor(PWebBrowserPersistDocumentChild *aActor,
+                                                           PBrowserChild *aBrowser,
+                                                           const uint64_t& aOuterWindowID) override;
+    virtual bool DeallocPWebBrowserPersistDocumentChild(PWebBrowserPersistDocumentChild* aActor) override;
 
     virtual bool
     RecvDataStoreNotify(const uint32_t& aAppId, const nsString& aName,
@@ -329,7 +338,7 @@ public:
 
     virtual bool RecvAddPermission(const IPC::Permission& permission) override;
 
-    virtual bool RecvScreenSizeChanged(const gfxIntSize &size) override;
+    virtual bool RecvScreenSizeChanged(const gfx::IntSize &size) override;
 
     virtual bool RecvFlushMemory(const nsString& reason) override;
 
@@ -404,7 +413,7 @@ public:
     virtual bool RecvEndDragSession(const bool& aDoneDrag,
                                     const bool& aUserCancelled) override;
 #ifdef ANDROID
-    gfxIntSize GetScreenSize() { return mScreenSize; }
+    gfx::IntSize GetScreenSize() { return mScreenSize; }
 #endif
 
     // Get the directory for IndexedDB files. We query the parent for this and
@@ -450,6 +459,7 @@ public:
     virtual POfflineCacheUpdateChild* AllocPOfflineCacheUpdateChild(
             const URIParams& manifestURI,
             const URIParams& documentURI,
+            const PrincipalInfo& aLoadingPrincipalInfo,
             const bool& stickDocument,
             const TabId& aTabId) override;
     virtual bool
@@ -499,7 +509,7 @@ private:
     AppInfo mAppInfo;
 
 #ifdef ANDROID
-    gfxIntSize mScreenSize;
+    gfx::IntSize mScreenSize;
 #endif
 
     bool mIsForApp;

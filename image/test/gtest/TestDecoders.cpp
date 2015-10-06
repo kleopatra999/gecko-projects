@@ -212,10 +212,19 @@ TEST(ImageDecoders, ICOSingleChunk)
   CheckDecoderSingleChunk(GreenICOTestCase());
 }
 
-// XXX(seth): Disabled. We'll fix this in bug 1196066.
-TEST(ImageDecoders, DISABLED_ICOMultiChunk)
+TEST(ImageDecoders, ICOMultiChunk)
 {
   CheckDecoderMultiChunk(GreenICOTestCase());
+}
+
+TEST(ImageDecoders, IconSingleChunk)
+{
+  CheckDecoderSingleChunk(GreenIconTestCase());
+}
+
+TEST(ImageDecoders, IconMultiChunk)
+{
+  CheckDecoderMultiChunk(GreenIconTestCase());
 }
 
 TEST(ImageDecoders, AnimatedGIFSingleChunk)

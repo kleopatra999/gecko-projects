@@ -25,7 +25,7 @@
 #include "js/HashTable.h"
 #include "js/StructuredClone.h"
 #include "js/UbiNode.h"
-#include "js/UbiNodeTraverse.h"
+#include "js/UbiNodeBreadthFirst.h"
 #include "js/Vector.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
@@ -1111,7 +1111,6 @@ static const JSClass FinalizeCounterClass = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     finalize_counter_finalize
 };
 
@@ -1384,13 +1383,15 @@ DisplayName(JSContext* cx, unsigned argc, Value* vp)
 static JSObject*
 ShellObjectMetadataCallback(JSContext* cx, JSObject*)
 {
+    AutoEnterOOMUnsafeRegion oomUnsafe;
+
     RootedObject obj(cx, NewBuiltinClassInstance<PlainObject>(cx));
     if (!obj)
-        CrashAtUnhandlableOOM("ShellObjectMetadataCallback");
+        oomUnsafe.crash("ShellObjectMetadataCallback");
 
     RootedObject stack(cx, NewDenseEmptyArray(cx));
     if (!stack)
-        CrashAtUnhandlableOOM("ShellObjectMetadataCallback");
+        oomUnsafe.crash("ShellObjectMetadataCallback");
 
     static int createdIndex = 0;
     createdIndex++;
@@ -1398,13 +1399,13 @@ ShellObjectMetadataCallback(JSContext* cx, JSObject*)
     if (!JS_DefineProperty(cx, obj, "index", createdIndex, 0,
                            JS_STUBGETTER, JS_STUBSETTER))
     {
-        CrashAtUnhandlableOOM("ShellObjectMetadataCallback");
+        oomUnsafe.crash("ShellObjectMetadataCallback");
     }
 
     if (!JS_DefineProperty(cx, obj, "stack", stack, 0,
                            JS_STUBGETTER, JS_STUBSETTER))
     {
-        CrashAtUnhandlableOOM("ShellObjectMetadataCallback");
+        oomUnsafe.crash("ShellObjectMetadataCallback");
     }
 
     int stackIndex = 0;
@@ -1417,7 +1418,7 @@ ShellObjectMetadataCallback(JSContext* cx, JSObject*)
             if (!JS_DefinePropertyById(cx, stack, id, callee, 0,
                                        JS_STUBGETTER, JS_STUBSETTER))
             {
-                CrashAtUnhandlableOOM("ShellObjectMetadataCallback");
+                oomUnsafe.crash("ShellObjectMetadataCallback");
             }
             stackIndex++;
         }
@@ -1802,7 +1803,6 @@ const Class CloneBufferObject::class_ = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     Finalize
 };
 
@@ -2125,9 +2125,9 @@ struct FindPathHandler {
     typedef BackEdge NodeData;
     typedef JS::ubi::BreadthFirst<FindPathHandler> Traversal;
 
-    FindPathHandler(JS::ubi::Node start, JS::ubi::Node target,
+    FindPathHandler(JSContext*cx, JS::ubi::Node start, JS::ubi::Node target,
                     AutoValueVector& nodes, Vector<EdgeName>& edges)
-      : start(start), target(target), foundPath(false),
+      : cx(cx), start(start), target(target), foundPath(false),
         nodes(nodes), edges(edges) { }
 
     bool
@@ -2141,7 +2141,7 @@ struct FindPathHandler {
 
         // Record how we reached this node. This is the last edge on a
         // shortest path to this node.
-        EdgeName edgeName = DuplicateString(traversal.cx, edge.name);
+        EdgeName edgeName = DuplicateString(cx, edge.name.get());
         if (!edgeName)
             return false;
         *backEdge = mozilla::Move(BackEdge(origin, Move(edgeName)));
@@ -2177,6 +2177,8 @@ struct FindPathHandler {
 
         return true;
     }
+
+    JSContext* cx;
 
     // The node we're starting from.
     JS::ubi::Node start;
@@ -2236,8 +2238,8 @@ FindPath(JSContext* cx, unsigned argc, Value* vp)
 
         JS::ubi::Node start(args[0]), target(args[1]);
 
-        heaptools::FindPathHandler handler(start, target, nodes, edges);
-        heaptools::FindPathHandler::Traversal traversal(cx, handler, autoCannotGC);
+        heaptools::FindPathHandler handler(cx, start, target, nodes, edges);
+        heaptools::FindPathHandler::Traversal traversal(cx->runtime(), handler, autoCannotGC);
         if (!traversal.init() || !traversal.addStart(start))
             return false;
 
@@ -2458,6 +2460,43 @@ ByteSize(JSContext* cx, unsigned argc, Value* vp)
         else
             args.rval().setUndefined();
     }
+    return true;
+}
+
+static bool
+ByteSizeOfScript(JSContext*cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!args.requireAtLeast(cx, "byteSizeOfScript", 1))
+        return false;
+    if (!args[0].isObject() || !args[0].toObject().is<JSFunction>()) {
+        JS_ReportError(cx, "Argument must be a Function object");
+        return false;
+    }
+
+    RootedScript script(cx, args[0].toObject().as<JSFunction>().getOrCreateScript(cx));
+    mozilla::MallocSizeOf mallocSizeOf = cx->runtime()->debuggerMallocSizeOf;
+
+    {
+        // We can't tolerate the GC moving things around while we're using a
+        // ubi::Node. Check that nothing we do causes a GC.
+        JS::AutoCheckCannotGC autoCannotGC;
+
+        JS::ubi::Node node = script;
+        if (node)
+            args.rval().setNumber(uint32_t(node.size(mallocSizeOf)));
+        else
+            args.rval().setUndefined();
+    }
+    return true;
+}
+
+static bool
+ImmutablePrototypesEnabled(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+
+    args.rval().setBoolean(JS_ImmutablePrototypesEnabled());
     return true;
 }
 
@@ -2791,6 +2830,32 @@ GetLcovInfo(JSContext* cx, unsigned argc, Value* vp)
     args.rval().setString(str);
     return true;
 }
+
+static bool
+EnableNoSuchMethod(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    cx->runtime()->options().setNoSuchMethod(true);
+    args.rval().setUndefined();
+    return true;
+}
+
+#ifdef DEBUG
+static bool
+SetRNGState(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!args.requireAtLeast(cx, "SetRNGState", 1))
+        return false;
+
+    double seed;
+    if (!ToNumber(cx, args[0], &seed))
+        return false;
+
+    cx->compartment()->rngState = static_cast<uint64_t>(seed) & RNG_MASK;
+    return true;
+}
+#endif
 
 static const JSFunctionSpecWithHelp TestingFunctions[] = {
     JS_FN_HELP("gc", ::GC, 0, 0,
@@ -3187,6 +3252,15 @@ gc::ZealModeHelpText),
 "  Return the size in bytes occupied by |value|, or |undefined| if value\n"
 "  is not allocated in memory.\n"),
 
+    JS_FN_HELP("byteSizeOfScript", ByteSizeOfScript, 1, 0,
+"byteSizeOfScript(f)",
+"  Return the size in bytes occupied by the function |f|'s JSScript.\n"),
+
+    JS_FN_HELP("immutablePrototypesEnabled", ImmutablePrototypesEnabled, 0, 0,
+"immutablePrototypesEnabled()",
+"  Returns true if immutable-prototype behavior (triggered by setImmutablePrototype)\n"
+"  is enabled, such that modifying an immutable prototype will fail."),
+
     JS_FN_HELP("setImmutablePrototype", SetImmutablePrototype, 1, 0,
 "setImmutablePrototype(obj)",
 "  Try to make obj's [[Prototype]] immutable, such that subsequent attempts to\n"
@@ -3240,6 +3314,16 @@ gc::ZealModeHelpText),
 "getLcovInfo(global)",
 "  Generate LCOV tracefile for the given compartment.  If no global are provided then\n"
 "  the current global is used as the default one.\n"),
+
+    JS_FN_HELP("enableNoSuchMethod", EnableNoSuchMethod, 0, 0,
+"enableNoSuchMethod()",
+"  Enables the deprecated, non-standard __noSuchMethod__ feature.\n"),
+
+#ifdef DEBUG
+    JS_FN_HELP("setRNGState", SetRNGState, 1, 0,
+"setRNGState(seed)",
+"  Set this compartment's RNG state.\n"),
+#endif
 
     JS_FS_HELP_END
 };

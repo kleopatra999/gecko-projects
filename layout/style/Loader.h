@@ -20,6 +20,7 @@
 #include "nsURIHashKey.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/CORSMode.h"
+#include "mozilla/CSSStyleSheet.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/net/ReferrerPolicy.h"
 
@@ -30,7 +31,6 @@ class nsMediaList;
 class nsIStyleSheetLinkingElement;
 
 namespace mozilla {
-class CSSStyleSheet;
 namespace dom {
 class Element;
 } // namespace dom
@@ -130,6 +130,47 @@ namespace css {
 
 class SheetLoadData;
 class ImportRule;
+
+/*********************
+ * Style sheet reuse *
+ *********************/
+
+class MOZ_RAII LoaderReusableStyleSheets
+{
+public:
+  LoaderReusableStyleSheets()
+  {
+  }
+
+  /**
+   * Look for a reusable sheet (see AddReusableSheet) matching the
+   * given URL.  If found, set aResult, remove the reused sheet from
+   * the internal list, and return true.  If not found, return false;
+   * in this case, aResult is not modified.
+   *
+   * @param aURL the url to match
+   * @param aResult [out] the style sheet which can be reused
+   */
+  bool FindReusableStyleSheet(nsIURI* aURL, nsRefPtr<CSSStyleSheet>& aResult);
+
+  /**
+   * Indicate that a certain style sheet is available for reuse if its
+   * URI matches the URI of an @import.  Sheets should be added in the
+   * opposite order in which they are intended to be reused.
+   *
+   * @param aSheet the sheet which can be reused
+   */
+  void AddReusableSheet(CSSStyleSheet* aSheet) {
+    mReusableSheets.AppendElement(aSheet);
+  }
+
+private:
+  LoaderReusableStyleSheets(const LoaderReusableStyleSheets&) = delete;
+  LoaderReusableStyleSheets& operator=(const LoaderReusableStyleSheets&) = delete;
+
+  // The sheets that can be reused.
+  nsTArray<nsRefPtr<CSSStyleSheet>> mReusableSheets;
+};
 
 /***********************************************************************
  * Enum that describes the state of the sheet returned by CreateSheet. *
@@ -242,11 +283,14 @@ public:
    * @param aMedia the already-parsed media list for the child sheet
    * @param aRule the @import rule importing this child.  This is used to
    *              properly order the child sheet list of aParentSheet.
+   * @param aSavedSheets any saved style sheets which could be reused
+   *              for this load
    */
   nsresult LoadChildSheet(CSSStyleSheet* aParentSheet,
                           nsIURI* aURL,
                           nsMediaList* aMedia,
-                          ImportRule* aRule);
+                          ImportRule* aRule,
+                          LoaderReusableStyleSheets* aSavedSheets);
 
   /**
    * Synchronously load and return the stylesheet at aURL.  Any child sheets
@@ -317,6 +361,7 @@ public:
    * not-yet-loaded sheet.
    */
   nsresult LoadSheet(nsIURI* aURL,
+                     bool aIsPreload,
                      nsIPrincipal* aOriginPrincipal,
                      const nsCString& aCharset,
                      nsICSSLoaderObserver* aObserver,
@@ -405,9 +450,12 @@ private:
 
   // Note: null aSourcePrincipal indicates that the content policy and
   // CheckLoadURI checks should be skipped.
+  // aIsPreload indicates whether the html parser preloads that
+  // stylesheet or if it is a regular load.
   nsresult CheckLoadAllowed(nsIPrincipal* aSourcePrincipal,
                             nsIURI* aTargetURI,
-                            nsISupports* aContext);
+                            nsISupports* aContext,
+                            bool aIsPreload);
 
 
   // For inline style, the aURI param is null, but the aLinkingContent
@@ -446,6 +494,7 @@ private:
                             ImportRule* aParentRule);
 
   nsresult InternalLoadNonDocumentSheet(nsIURI* aURL,
+                                        bool aIsPreload,
                                         bool aAllowUnsafeRules,
                                         bool aUseSystemPrincipal,
                                         nsIPrincipal* aOriginPrincipal,
@@ -477,7 +526,9 @@ private:
 
   // Note: LoadSheet is responsible for releasing aLoadData and setting the
   // sheet to complete on failure.
-  nsresult LoadSheet(SheetLoadData* aLoadData, StyleSheetState aSheetState);
+  nsresult LoadSheet(SheetLoadData* aLoadData,
+                     StyleSheetState aSheetState,
+                     bool aIsPreLoad);
 
   // Parse the stylesheet in aLoadData.  The sheet data comes from aInput.
   // Set aCompleted to true if the parse finished, false otherwise (e.g. if the

@@ -2873,7 +2873,7 @@ nsHTMLEditRules::MoveBlock(nsIDOMNode *aLeftBlock, nsIDOMNode *aRightBlock, int3
   // GetNodesFromPoint is the workhorse that figures out what we wnat to move.
   nsresult res = GetNodesFromPoint(::DOMPoint(aRightBlock,aRightOffset),
                                    EditAction::makeList, arrayOfNodes,
-                                   TouchContent::no);
+                                   TouchContent::yes);
   NS_ENSURE_SUCCESS(res, res);
   for (auto& curNode : arrayOfNodes) {
     // get the node to act on
@@ -5802,26 +5802,35 @@ nsHTMLEditRules::GetNodesForOperation(nsTArray<nsRefPtr<nsRange>>& aArrayOfRange
   int32_t rangeCount = aArrayOfRanges.Length();
   nsresult res = NS_OK;
 
-  // Split text nodes. This is necessary, since GetPromotedPoint() may return a
-  // range ending in a text node in case where part of a pre-formatted
-  // elements needs to be moved.
-  for (int32_t i = 0; i < rangeCount; i++) {
-    nsRefPtr<nsRange> r = aArrayOfRanges[i];
-    nsCOMPtr<nsIContent> endParent = do_QueryInterface(r->GetEndParent());
+  if (aTouchContent == TouchContent::yes) {
+    // Split text nodes. This is necessary, since GetPromotedPoint() may return a
+    // range ending in a text node in case where part of a pre-formatted
+    // elements needs to be moved.
+    for (int32_t i = 0; i < rangeCount; i++) {
+      nsRefPtr<nsRange> r = aArrayOfRanges[i];
+      nsCOMPtr<nsIContent> endParent = do_QueryInterface(r->GetEndParent());
+      if (!mHTMLEditor->IsTextNode(endParent)) {
+        continue;
+      }
+      nsCOMPtr<nsIDOMText> textNode = do_QueryInterface(endParent);
+      if (textNode) {
+        int32_t offset = r->EndOffset();
+        nsAutoString tempString;
+        textNode->GetData(tempString);
 
-    if (mHTMLEditor->IsTextNode(endParent)) {
-      int32_t offset = r->EndOffset();
+        if (0 < offset && offset < (int32_t)(tempString.Length())) {
+          // Split the text node.
+          nsCOMPtr<nsIDOMNode> tempNode;
+          res = mHTMLEditor->SplitNode(endParent->AsDOMNode(), offset,
+                                       getter_AddRefs(tempNode));
+          NS_ENSURE_SUCCESS(res, res);
 
-      // Split the text node.
-      nsCOMPtr<nsIDOMNode> tempNode;
-      res = mHTMLEditor->SplitNode(endParent->AsDOMNode(), offset,
-                                   getter_AddRefs(tempNode));
-      NS_ENSURE_SUCCESS(res, res);
-
-      // Correct the range.
-      // The new end parent becomes the parent node of the text.
-      nsCOMPtr<nsIContent> newParent = endParent->GetParent();
-      r->SetEnd(newParent, newParent->IndexOf(endParent));
+          // Correct the range.
+          // The new end parent becomes the parent node of the text.
+          nsCOMPtr<nsIContent> newParent = endParent->GetParent();
+          r->SetEnd(newParent, newParent->IndexOf(endParent));
+        }
+      }
     }
   }
 
@@ -6633,11 +6642,9 @@ nsHTMLEditRules::SplitParagraph(nsIDOMNode *aPara,
   NS_ENSURE_STATE(mHTMLEditor && rightParaNode);
   nsCOMPtr<nsIDOMNode> child =
     GetAsDOMNode(mHTMLEditor->GetLeftmostChild(rightParaNode, true));
-  NS_ENSURE_STATE(mHTMLEditor);
-  if (mHTMLEditor->IsTextNode(child) || !mHTMLEditor ||
+  if (mHTMLEditor->IsTextNode(child) ||
       mHTMLEditor->IsContainer(child))
   {
-    NS_ENSURE_STATE(mHTMLEditor);
     aSelection->Collapse(child,0);
   }
   else
@@ -7432,11 +7439,9 @@ nsHTMLEditRules::PinSelectionToNewBlock(Selection* aSelection)
     NS_ENSURE_STATE(mHTMLEditor);
     tmp = GetAsDOMNode(mHTMLEditor->GetLastEditableChild(*block));
     uint32_t endPoint;
-    NS_ENSURE_STATE(mHTMLEditor);
-    if (mHTMLEditor->IsTextNode(tmp) || !mHTMLEditor ||
+    if (mHTMLEditor->IsTextNode(tmp) ||
         mHTMLEditor->IsContainer(tmp))
     {
-      NS_ENSURE_STATE(mHTMLEditor);
       res = nsEditor::GetLengthOfDOMNode(tmp, endPoint);
       NS_ENSURE_SUCCESS(res, res);
     }
@@ -7451,15 +7456,13 @@ nsHTMLEditRules::PinSelectionToNewBlock(Selection* aSelection)
   {
     // selection is before block.  put at start of block.
     nsCOMPtr<nsIDOMNode> tmp = mNewBlock;
-    NS_ENSURE_STATE(mHTMLEditor);
     tmp = GetAsDOMNode(mHTMLEditor->GetFirstEditableChild(*block));
     int32_t offset;
-    if (!(mHTMLEditor->IsTextNode(tmp) || !mHTMLEditor ||
-          mHTMLEditor->IsContainer(tmp)))
+    if (mHTMLEditor->IsTextNode(tmp) ||
+        mHTMLEditor->IsContainer(tmp))
     {
       tmp = nsEditor::GetNodeLocation(tmp, &offset);
     }
-    NS_ENSURE_STATE(mHTMLEditor);
     return aSelection->Collapse(tmp, 0);
   }
 }

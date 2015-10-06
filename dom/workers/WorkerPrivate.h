@@ -50,7 +50,9 @@ struct RuntimeStats;
 namespace mozilla {
 namespace dom {
 class Function;
-class StructuredCloneHelper;
+class MessagePort;
+class MessagePortIdentifier;
+class StructuredCloneHolder;
 } // namespace dom
 namespace ipc {
 class PrincipalInfo;
@@ -64,7 +66,6 @@ class ReportDebuggerErrorRunnable;
 BEGIN_WORKERS_NAMESPACE
 
 class AutoSyncLoopHolder;
-class MessagePort;
 class SharedWorker;
 class ServiceWorkerClientInfo;
 class WorkerControlRunnable;
@@ -161,7 +162,9 @@ protected:
 private:
   WorkerPrivate* mParent;
   nsString mScriptURL;
-  nsCString mSharedWorkerName;
+  // This is the worker name for shared workers or the worker scope
+  // for service workers.
+  nsCString mWorkerName;
   LocationInfo mLocationInfo;
   // The lifetime of these objects within LoadInfo is managed explicitly;
   // they do not need to be cycle collected.
@@ -177,10 +180,9 @@ private:
 
   // Only touched on the parent thread (currently this is always the main
   // thread as SharedWorkers are always top-level).
-  nsDataHashtable<nsUint64HashKey, SharedWorker*> mSharedWorkers;
+  nsTArray<nsRefPtr<SharedWorker>> mSharedWorkers;
 
   uint64_t mBusyCount;
-  uint64_t mMessagePortSerial;
   Status mParentStatus;
   bool mParentFrozen;
   bool mIsChromeWorker;
@@ -226,8 +228,7 @@ private:
   void
   PostMessageInternal(JSContext* aCx, JS::Handle<JS::Value> aMessage,
                       const Optional<Sequence<JS::Value>>& aTransferable,
-                      bool aToMessagePort, uint64_t aMessagePortSerial,
-                      ServiceWorkerClientInfo* aClientInfo,
+                      UniquePtr<ServiceWorkerClientInfo>&& aClientInfo,
                       ErrorResult& aRv);
 
   nsresult
@@ -325,30 +326,14 @@ public:
 
   void
   PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
-              const Optional<Sequence<JS::Value> >& aTransferable,
-              ErrorResult& aRv)
-  {
-    PostMessageInternal(aCx, aMessage, aTransferable, false, 0, nullptr, aRv);
-  }
+              const Optional<Sequence<JS::Value>>& aTransferable,
+              ErrorResult& aRv);
 
   void
   PostMessageToServiceWorker(JSContext* aCx, JS::Handle<JS::Value> aMessage,
                              const Optional<Sequence<JS::Value>>& aTransferable,
-                             nsAutoPtr<ServiceWorkerClientInfo>& aClientInfo,
+                             UniquePtr<ServiceWorkerClientInfo>&& aClientInfo,
                              ErrorResult& aRv);
-
-  void
-  PostMessageToMessagePort(JSContext* aCx,
-                           uint64_t aMessagePortSerial,
-                           JS::Handle<JS::Value> aMessage,
-                           const Optional<Sequence<JS::Value> >& aTransferable,
-                           ErrorResult& aRv);
-
-  bool
-  DispatchMessageEventToMessagePort(
-                               JSContext* aCx,
-                               uint64_t aMessagePortSerial,
-                               StructuredCloneHelper& aHelper);
 
   void
   UpdateRuntimeOptions(JSContext* aCx,
@@ -379,10 +364,8 @@ public:
   OfflineStatusChangeEvent(JSContext* aCx, bool aIsOffline);
 
   bool
-  RegisterSharedWorker(JSContext* aCx, SharedWorker* aSharedWorker);
-
-  void
-  UnregisterSharedWorker(JSContext* aCx, SharedWorker* aSharedWorker);
+  RegisterSharedWorker(JSContext* aCx, SharedWorker* aSharedWorker,
+                       MessagePort* aPort);
 
   void
   BroadcastErrorToSharedWorkers(JSContext* aCx,
@@ -745,7 +728,7 @@ public:
     case WorkerTypeShared:
       return nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER;
     case WorkerTypeService:
-      return nsIContentPolicy::TYPE_SCRIPT;
+      return nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER;
     default:
       MOZ_ASSERT_UNREACHABLE("Invalid worker type");
       return nsIContentPolicy::TYPE_INVALID;
@@ -753,16 +736,10 @@ public:
   }
 
   const nsCString&
-  SharedWorkerName() const
+  WorkerName() const
   {
-    return mSharedWorkerName;
-  }
-
-  uint64_t
-  NextMessagePortSerial()
-  {
-    AssertIsOnMainThread();
-    return mMessagePortSerial++;
+    MOZ_ASSERT(IsServiceWorker() || IsSharedWorker());
+    return mWorkerName;
   }
 
   bool
@@ -789,6 +766,9 @@ public:
 
   void
   CloseSharedWorkersForWindow(nsPIDOMWindow* aWindow);
+
+  void
+  CloseAllSharedWorkers();
 
   void
   UpdateOverridenLoadGroup(nsILoadGroup* aBaseLoadGroup);
@@ -952,8 +932,6 @@ class WorkerPrivate : public WorkerPrivateParent<WorkerPrivate>
 
   nsRefPtr<MemoryReporter> mMemoryReporter;
 
-  nsRefPtrHashtable<nsUint64HashKey, MessagePort> mWorkerPorts;
-
   // fired on the main thread if the worker script fails to load
   nsCOMPtr<nsIRunnable> mLoadFailedRunnable;
 
@@ -966,6 +944,7 @@ class WorkerPrivate : public WorkerPrivateParent<WorkerPrivate>
   bool mRunningExpiredTimeouts;
   bool mCloseHandlerStarted;
   bool mCloseHandlerFinished;
+  bool mPendingEventQueueClearing;
   bool mMemoryReporterRunning;
   bool mBlockedForMemoryReporter;
   bool mCancelAllPendingRunnables;
@@ -1076,13 +1055,12 @@ public:
                       const Optional<Sequence<JS::Value>>& aTransferable,
                       ErrorResult& aRv)
   {
-    PostMessageToParentInternal(aCx, aMessage, aTransferable, false, 0, aRv);
+    PostMessageToParentInternal(aCx, aMessage, aTransferable, aRv);
   }
 
   void
   PostMessageToParentMessagePort(
                              JSContext* aCx,
-                             uint64_t aMessagePortSerial,
                              JS::Handle<JS::Value> aMessage,
                              const Optional<Sequence<JS::Value>>& aTransferable,
                              ErrorResult& aRv);
@@ -1239,13 +1217,7 @@ public:
   }
 
   bool
-  ConnectMessagePort(JSContext* aCx, uint64_t aMessagePortSerial);
-
-  void
-  DisconnectMessagePort(uint64_t aMessagePortSerial);
-
-  MessagePort*
-  GetMessagePort(uint64_t aMessagePortSerial);
+  ConnectMessagePort(JSContext* aCx, MessagePortIdentifier& aIdentifier);
 
   WorkerGlobalScope*
   GetOrCreateGlobalScope(JSContext* aCx);
@@ -1304,6 +1276,13 @@ public:
   {
     AssertIsOnWorkerThread();
     return mPreferences[WORKERPREF_DOM_WORKERNOTIFICATION];
+  }
+
+  bool
+  DOMServiceWorkerNotificationEnabled() const
+  {
+    AssertIsOnWorkerThread();
+    return mPreferences[WORKERPREF_DOM_SERVICEWORKERNOTIFICATION];
   }
 
   bool
@@ -1445,8 +1424,6 @@ private:
   PostMessageToParentInternal(JSContext* aCx,
                               JS::Handle<JS::Value> aMessage,
                               const Optional<Sequence<JS::Value>>& aTransferable,
-                              bool aToMessagePort,
-                              uint64_t aMessagePortSerial,
                               ErrorResult& aRv);
 
   void

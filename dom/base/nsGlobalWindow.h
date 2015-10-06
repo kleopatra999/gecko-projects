@@ -40,6 +40,7 @@
 #include "mozilla/dom/StorageEvent.h"
 #include "mozilla/dom/StorageEventBinding.h"
 #include "mozilla/dom/UnionTypes.h"
+#include "mozilla/ErrorResult.h"
 #include "nsFrameMessageManager.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/TimeStamp.h"
@@ -159,11 +160,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(nsTimeout)
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(nsTimeout)
 
-  nsresult InitTimer(nsTimerCallbackFunc aFunc, uint32_t aDelay)
-  {
-    return mTimer->InitWithFuncCallback(aFunc, this, aDelay,
-                                        nsITimer::TYPE_ONE_SHOT);
-  }
+  nsresult InitTimer(uint32_t aDelay);
 
   bool HasRefCntOne();
 
@@ -341,6 +338,8 @@ public:
 #else
   { }
 #endif
+
+  static nsGlobalWindow* Cast(nsPIDOMWindow* aPIWin) { return static_cast<nsGlobalWindow*>(aPIWin); }
 
   // public methods
   nsPIDOMWindow* GetPrivateParent();
@@ -1120,12 +1119,22 @@ public:
                                             const nsAString& aOptions,
                                             const mozilla::dom::Sequence<JS::Value>& aExtraArgument,
                                             mozilla::ErrorResult& aError);
+
+  already_AddRefed<nsIDOMWindow>
+    GetContentInternal(mozilla::ErrorResult& aError, bool aUnprivilegedCaller);
   void GetContentOuter(JSContext* aCx,
                        JS::MutableHandle<JSObject*> aRetval,
                        mozilla::ErrorResult& aError);
   void GetContent(JSContext* aCx,
                   JS::MutableHandle<JSObject*> aRetval,
                   mozilla::ErrorResult& aError);
+  already_AddRefed<nsIDOMWindow> GetContent()
+  {
+    MOZ_ASSERT(IsOuterWindow());
+    mozilla::ErrorResult ignored;
+    return GetContentInternal(ignored, /* aUnprivilegedCaller = */ false);
+  }
+
   void Get_content(JSContext* aCx,
                    JS::MutableHandle<JSObject*> aRetval,
                    mozilla::ErrorResult& aError)
@@ -1428,6 +1437,8 @@ public:
   // fire after it, but no earlier than mTimeoutInsertionPoint, if any.
   void InsertTimeoutIntoList(nsTimeout *aTimeout);
   static void TimerCallback(nsITimer *aTimer, void *aClosure);
+  static void TimerNameCallback(nsITimer* aTimer, void* aClosure, char* aBuf,
+                                size_t aLen);
 
   // Helper Functions
   already_AddRefed<nsIDocShellTreeOwner> GetTreeOwner();
@@ -1618,9 +1629,6 @@ protected:
   already_AddRefed<nsIVariant>
     ShowModalDialog(const nsAString& aUrl, nsIVariant* aArgument,
                     const nsAString& aOptions, mozilla::ErrorResult& aError);
-
-  already_AddRefed<nsIDOMWindow>
-    GetContentInternal(mozilla::ErrorResult& aError);
 
   // Ask the user if further dialogs should be blocked, if dialogs are currently
   // being abused. This is used in the cases where we have no modifiable UI to
