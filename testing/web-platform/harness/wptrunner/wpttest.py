@@ -63,6 +63,8 @@ class RunInfo(dict):
         self["product"] = product
         if debug is not None:
             self["debug"] = debug
+        elif self.get("asan", False):
+            self["debug"] = True
         elif "debug" not in self:
             # Default to release
             self["debug"] = False
