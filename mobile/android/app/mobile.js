@@ -927,6 +927,11 @@ pref("browser.tabs.showAudioPlayingIcon", true);
 pref("dom.serviceWorkers.enabled", true);
 pref("dom.serviceWorkers.interception.enabled", true);
 
+// Enable DOM push API in Nightly Fennec.
+#ifdef NIGHTLY_BUILD
+pref("dom.push.enabled", true);
+#endif
+
 // The remote content URL where FxAccountsWebChannel messages originate.  Must use HTTPS.
 pref("identity.fxaccounts.remote.webchannel.uri", "https://accounts.firefox.com");
 

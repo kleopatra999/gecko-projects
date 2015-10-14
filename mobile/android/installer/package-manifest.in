@@ -154,6 +154,7 @@
 @BINPATH@/components/dom_json.xpt
 @BINPATH@/components/dom_payment.xpt
 @BINPATH@/components/dom_power.xpt
+@BINPATH@/components/dom_push.xpt
 @BINPATH@/components/dom_quota.xpt
 @BINPATH@/components/dom_range.xpt
 @BINPATH@/components/dom_security.xpt
@@ -306,6 +307,10 @@
 @BINPATH@/components/PhoneNumberService.manifest
 @BINPATH@/components/NotificationStorage.js
 @BINPATH@/components/NotificationStorage.manifest
+@BINPATH@/components/Push.js
+@BINPATH@/components/Push.manifest
+@BINPATH@/components/PushClient.js
+@BINPATH@/components/PushNotificationService.js
 @BINPATH@/components/SettingsManager.js
 @BINPATH@/components/SettingsManager.manifest
 @BINPATH@/components/BrowserElementParent.manifest
