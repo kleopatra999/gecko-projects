@@ -1,6 +1,6 @@
-// |jit-test| --no-threads
+if (!('oomTest' in this))
+    quit();
 
-load(libdir + 'oomTest.js');
 oomTest(function () {
     eval(`var wm = new WeakMap();
          wm.set({}, 'FOO').get(false);`);

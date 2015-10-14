@@ -1412,7 +1412,7 @@ nsHTMLDocument::Open(JSContext* cx,
   nsAutoString type;
   nsContentUtils::ASCIIToLower(aType, type);
   nsAutoCString actualType, dummy;
-  NS_ParseContentType(NS_ConvertUTF16toUTF8(type), actualType, dummy);
+  NS_ParseRequestContentType(NS_ConvertUTF16toUTF8(type), actualType, dummy);
   if (!actualType.EqualsLiteral("text/html") &&
       !type.EqualsLiteral("replace")) {
     contentType.AssignLiteral("text/plain");
@@ -1519,7 +1519,7 @@ nsHTMLDocument::Open(JSContext* cx,
 
     if (cv) {
       bool okToUnload;
-      if (NS_SUCCEEDED(cv->PermitUnload(&okToUnload)) && !okToUnload) {
+      if (NS_SUCCEEDED(cv->PermitUnload(false, &okToUnload)) && !okToUnload) {
         // We don't want to unload, so stop here, but don't throw an
         // exception.
         nsCOMPtr<nsIDocument> ret = this;

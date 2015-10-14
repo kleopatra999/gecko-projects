@@ -48,7 +48,6 @@
 #include "jsfuninlines.h"
 #include "jsscriptinlines.h"
 
-#include "jit/AtomicOperations-inl.h"
 #include "jit/JitFrames-inl.h"
 #include "vm/Debugger-inl.h"
 #include "vm/NativeObject-inl.h"
@@ -279,14 +278,14 @@ GetNameOperation(JSContext* cx, InterpreterFrame* fp, jsbytecode* pc, MutableHan
      * before the global object.
      */
     if (IsGlobalOp(JSOp(*pc)) && !fp->script()->hasNonSyntacticScope())
-        obj = &obj->global();
+        obj = &obj->global().lexicalScope();
 
     Shape* shape = nullptr;
     JSObject* scope = nullptr;
     JSObject* pobj = nullptr;
     if (LookupNameNoGC(cx, name, obj, &scope, &pobj, &shape)) {
         if (FetchNameNoGC(pobj, shape, vp))
-            return CheckUninitializedLexical(cx, name, vp);
+            return true;
     }
 
     RootedObject objRoot(cx, obj), scopeRoot(cx), pobjRoot(cx);
@@ -320,6 +319,17 @@ SetPropertyOperation(JSContext* cx, JSOp op, HandleValue lval, HandleId id, Hand
            result.checkStrictErrorOrWarning(cx, obj, id, op == JSOP_STRICTSETPROP);
 }
 
+static JSFunction*
+MakeDefaultConstructor(JSContext* cx, JSOp op, JSAtom* atom, HandleObject proto)
+{
+    bool derived = op == JSOP_DERIVEDCONSTRUCTOR;
+    MOZ_ASSERT(derived == !!proto);
+
+    RootedAtom name(cx, atom);
+    JSNative native = derived ? DefaultDerivedClassConstructor : DefaultClassConstructor;
+    return NewFunctionWithProto(cx, native, 0, JSFunction::NATIVE_CTOR, nullptr, name, proto);
+}
+
 bool
 js::ReportIsNotFunction(JSContext* cx, HandleValue v, int numToSkip, MaybeConstruct construct)
 {
@@ -348,11 +358,17 @@ RunState::maybeCreateThisForConstructor(JSContext* cx)
         InvokeState& invoke = *asInvoke();
         if (invoke.constructing() && invoke.args().thisv().isPrimitive()) {
             RootedObject callee(cx, &invoke.args().callee());
-            NewObjectKind newKind = invoke.createSingleton() ? SingletonObject : GenericObject;
-            JSObject* obj = CreateThisForFunction(cx, callee, newKind);
-            if (!obj)
-                return false;
-            invoke.args().setThis(ObjectValue(*obj));
+            if (script()->isDerivedClassConstructor()) {
+                MOZ_ASSERT(callee->as<JSFunction>().isClassConstructor());
+                invoke.args().setThis(MagicValue(JS_UNINITIALIZED_LEXICAL));
+            } else {
+                RootedObject newTarget(cx, &invoke.args().newTarget().toObject());
+                NewObjectKind newKind = invoke.createSingleton() ? SingletonObject : GenericObject;
+                JSObject* obj = CreateThisForFunction(cx, callee, newTarget, newKind);
+                if (!obj)
+                    return false;
+                invoke.args().setThis(ObjectValue(*obj));
+            }
         }
     }
     return true;
@@ -870,9 +886,9 @@ StackCheckIsConstructorCalleeNewTarget(JSContext* cx, HandleValue callee, Handle
         return false;
     }
 
-    // The new.target for a stack construction attempt is just the callee: no
-    // need to check that it's a constructor.
-    MOZ_ASSERT(&callee.toObject() == &newTarget.toObject());
+    // The new.target has already been vetted by previous calls, or is the callee.
+    // We can just assert that it's a constructor.
+    MOZ_ASSERT(IsConstructor(newTarget));
 
     return true;
 }
@@ -947,7 +963,8 @@ js::ExecuteKernel(JSContext* cx, HandleScript script, JSObject& scopeChainArg, c
                   Value* result)
 {
     MOZ_ASSERT_IF(evalInFrame, type == EXECUTE_DEBUG);
-    MOZ_ASSERT_IF(type == EXECUTE_GLOBAL, !IsSyntacticScope(&scopeChainArg));
+    MOZ_ASSERT_IF(type == EXECUTE_GLOBAL, IsGlobalLexicalScope(&scopeChainArg) ||
+                                          !IsSyntacticScope(&scopeChainArg));
 #ifdef DEBUG
     if (thisv.isObject()) {
         RootedObject thisObj(cx, &thisv.toObject());
@@ -994,7 +1011,7 @@ js::Execute(JSContext* cx, HandleScript script, JSObject& scopeChainArg, Value* 
     RootedObject scopeChain(cx, &scopeChainArg);
     MOZ_ASSERT(scopeChain == GetInnerObject(scopeChain));
 
-    MOZ_RELEASE_ASSERT(scopeChain->is<GlobalObject>() || script->hasNonSyntacticScope(),
+    MOZ_RELEASE_ASSERT(IsGlobalLexicalScope(scopeChain) || script->hasNonSyntacticScope(),
                        "Only scripts with non-syntactic scopes can be executed with "
                        "interesting scopechains");
 
@@ -1596,7 +1613,7 @@ ComputeImplicitThis(JSContext* cx, HandleObject obj, MutableHandleValue vp)
 {
     vp.setUndefined();
 
-    if (obj->is<GlobalObject>())
+    if (IsGlobalLexicalScope(obj))
         return true;
 
     if (IsCacheableNonGlobalScope(obj))
@@ -1743,6 +1760,34 @@ SetObjectElementOperation(JSContext* cx, HandleObject obj, HandleValue receiver,
     return SetProperty(cx, obj, id, tmp, receiver, result) &&
            result.checkStrictErrorOrWarning(cx, obj, id, strict);
 }
+
+/*
+ * Get the innermost enclosing function that has a 'this' binding.
+ *
+ * Implements ES6 12.3.5.2 GetSuperConstructor() steps 1-3, including
+ * the loop in ES6 8.3.2 GetThisEnvironment(). Our implementation of
+ * ES6 12.3.5.3 MakeSuperPropertyReference() also uses this code.
+ */
+static JSFunction&
+GetSuperEnvFunction(JSContext *cx, InterpreterRegs& regs)
+{
+    ScopeIter si(cx, regs.fp()->scopeChain(), regs.fp()->script()->innermostStaticScope(regs.pc));
+    for (; !si.done(); ++si) {
+        if (si.hasSyntacticScopeObject() && si.type() == ScopeIter::Call) {
+            JSFunction& callee = si.scope().as<CallObject>().callee();
+
+            // Arrow functions don't have the information we're looking for,
+            // their enclosing scopes do. Nevertheless, they might have call
+            // objects. Skip them to find what we came for.
+            if (callee.isArrow())
+                continue;
+
+            return callee;
+        }
+    }
+    MOZ_CRASH("unexpected scope chain for GetSuperEnvFunction");
+}
+
 
 /*
  * As an optimization, the interpreter creates a handful of reserved Rooted<T>
@@ -2051,15 +2096,8 @@ CASE(EnableInterruptsPseudoOpcode)
 /* Various 1-byte no-ops. */
 CASE(JSOP_NOP)
 CASE(JSOP_UNUSED2)
+CASE(JSOP_UNUSED14)
 CASE(JSOP_BACKPATCH)
-CASE(JSOP_UNUSED161)
-CASE(JSOP_UNUSED162)
-CASE(JSOP_UNUSED163)
-CASE(JSOP_UNUSED164)
-CASE(JSOP_UNUSED165)
-CASE(JSOP_UNUSED166)
-CASE(JSOP_UNUSED167)
-CASE(JSOP_UNUSED168)
 CASE(JSOP_UNUSED169)
 CASE(JSOP_UNUSED170)
 CASE(JSOP_UNUSED171)
@@ -2198,8 +2236,12 @@ CASE(JSOP_RETRVAL)
      */
     CHECK_BRANCH();
 
+    if (!REGS.fp()->checkReturn(cx))
+        goto error;
+
   successful_return_continuation:
     interpReturnOK = true;
+
   return_continuation:
     if (activation.entryFrame() != REGS.fp()) {
         // Stop the engine. (No details about which engine exactly, could be
@@ -2394,17 +2436,6 @@ CASE(JSOP_PICK)
 }
 END_CASE(JSOP_PICK)
 
-CASE(JSOP_SETCONST)
-{
-    ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
-    ReservedRooted<Value> rval(&rootValue0, REGS.sp[-1]);
-    ReservedRooted<JSObject*> obj(&rootObject0, &REGS.fp()->varObj());
-
-    if (!SetConstOperation(cx, obj, name, rval))
-        goto error;
-}
-END_CASE(JSOP_SETCONST)
-
 CASE(JSOP_BINDINTRINSIC)
 {
     NativeObject* holder = GlobalObject::getIntrinsicsHolder(cx, cx->global());
@@ -2419,19 +2450,19 @@ CASE(JSOP_BINDGNAME)
 CASE(JSOP_BINDNAME)
 {
     JSOp op = JSOp(*REGS.pc);
-    if (op == JSOP_BINDNAME || script->hasNonSyntacticScope()) {
-        ReservedRooted<JSObject*> scopeChain(&rootObject0, REGS.fp()->scopeChain());
-        ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
+    ReservedRooted<JSObject*> scopeChain(&rootObject0);
+    if (op == JSOP_BINDNAME || script->hasNonSyntacticScope())
+        scopeChain.set(REGS.fp()->scopeChain());
+    else
+        scopeChain.set(&REGS.fp()->global().lexicalScope());
+    ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
 
-        /* Assigning to an undeclared name adds a property to the global object. */
-        ReservedRooted<JSObject*> scope(&rootObject1);
-        if (!LookupNameUnqualified(cx, name, scopeChain, &scope))
-            goto error;
+    /* Assigning to an undeclared name adds a property to the global object. */
+    ReservedRooted<JSObject*> scope(&rootObject1);
+    if (!LookupNameUnqualified(cx, name, scopeChain, &scope))
+        goto error;
 
-        PUSH_OBJECT(*scope);
-    } else {
-        PUSH_OBJECT(REGS.fp()->global());
-    }
+    PUSH_OBJECT(*scope);
 
     static_assert(JSOP_BINDNAME_LENGTH == JSOP_BINDGNAME_LENGTH,
                   "We're sharing the END_CASE so the lengths better match");
@@ -2787,6 +2818,8 @@ END_CASE(JSOP_VOID)
 CASE(JSOP_THIS)
     if (!ComputeThis(cx, REGS.fp()))
         goto error;
+    if (!REGS.fp()->checkThis(cx))
+        goto error;
     PUSH_COPY(REGS.fp()->thisValue());
 END_CASE(JSOP_THIS)
 
@@ -3006,6 +3039,7 @@ END_CASE(JSOP_EVAL)
 
 CASE(JSOP_SPREADNEW)
 CASE(JSOP_SPREADCALL)
+CASE(JSOP_SPREADSUPERCALL)
     if (REGS.fp()->hasPushedSPSFrame())
         cx->runtime()->spsProfiler.updatePC(script, REGS.pc);
     /* FALL THROUGH */
@@ -3015,7 +3049,7 @@ CASE(JSOP_STRICTSPREADEVAL)
 {
     static_assert(JSOP_SPREADEVAL_LENGTH == JSOP_STRICTSPREADEVAL_LENGTH,
                   "spreadeval and strictspreadeval must be the same size");
-    bool construct = JSOp(*REGS.pc) == JSOP_SPREADNEW;
+    bool construct = JSOp(*REGS.pc) == JSOP_SPREADNEW || JSOp(*REGS.pc) == JSOP_SPREADSUPERCALL;;
 
     MOZ_ASSERT(REGS.stackDepth() >= 3u + construct);
 
@@ -3047,12 +3081,13 @@ CASE(JSOP_FUNAPPLY)
 
 CASE(JSOP_NEW)
 CASE(JSOP_CALL)
+CASE(JSOP_SUPERCALL)
 CASE(JSOP_FUNCALL)
 {
     if (REGS.fp()->hasPushedSPSFrame())
         cx->runtime()->spsProfiler.updatePC(script, REGS.pc);
 
-    bool construct = (*REGS.pc == JSOP_NEW);
+    bool construct = (*REGS.pc == JSOP_NEW || *REGS.pc == JSOP_SUPERCALL);
     unsigned argStackSlots = GET_ARGC(REGS.pc) + construct;
 
     MOZ_ASSERT(REGS.stackDepth() >= 2u + GET_ARGC(REGS.pc));
@@ -3439,6 +3474,18 @@ CASE(JSOP_INITALIASEDLEXICAL)
 }
 END_CASE(JSOP_INITALIASEDLEXICAL)
 
+CASE(JSOP_INITGLEXICAL)
+{
+    ClonedBlockObject* lexicalScope;
+    if (script->hasNonSyntacticScope())
+        lexicalScope = &REGS.fp()->extensibleLexicalScope();
+    else
+        lexicalScope = &cx->global()->lexicalScope();
+    HandleValue value = REGS.stackHandleAt(-1);
+    InitGlobalLexicalOperation(cx, lexicalScope, script, REGS.pc, value);
+}
+END_CASE(JSOP_INITGLEXICAL)
+
 CASE(JSOP_UNINITIALIZED)
     PUSH_UNINITIALIZED();
 END_CASE(JSOP_UNINITIALIZED)
@@ -3488,24 +3535,38 @@ CASE(JSOP_SETLOCAL)
 }
 END_CASE(JSOP_SETLOCAL)
 
-CASE(JSOP_DEFCONST)
 CASE(JSOP_DEFVAR)
 {
     /* ES5 10.5 step 8 (with subsequent errata). */
     unsigned attrs = JSPROP_ENUMERATE;
-    if (*REGS.pc == JSOP_DEFCONST)
-        attrs |= JSPROP_READONLY;
-    else if (!REGS.fp()->isEvalFrame())
+    if (!REGS.fp()->isEvalFrame())
         attrs |= JSPROP_PERMANENT;
 
     /* Step 8b. */
     ReservedRooted<JSObject*> obj(&rootObject0, &REGS.fp()->varObj());
     ReservedRooted<PropertyName*> name(&rootName0, script->getName(REGS.pc));
 
-    if (!DefVarOrConstOperation(cx, obj, name, attrs))
+    if (!DefVarOperation(cx, obj, name, attrs))
         goto error;
 }
 END_CASE(JSOP_DEFVAR)
+
+CASE(JSOP_DEFCONST)
+CASE(JSOP_DEFLET)
+{
+    ClonedBlockObject* lexicalScope;
+    JSObject* varObj;
+    if (script->hasNonSyntacticScope()) {
+        lexicalScope = &REGS.fp()->extensibleLexicalScope();
+        varObj = &REGS.fp()->varObj();
+    } else {
+        lexicalScope = &cx->global()->lexicalScope();
+        varObj = cx->global();
+    }
+    if (!DefLexicalOperation(cx, lexicalScope, varObj, script, REGS.pc))
+        goto error;
+}
+END_CASE(JSOP_DEFLET)
 
 CASE(JSOP_DEFFUN)
 {
@@ -4049,37 +4110,22 @@ END_CASE(JSOP_INITHOMEOBJECT)
 
 CASE(JSOP_SUPERBASE)
 {
-    ScopeIter si(cx, REGS.fp()->scopeChain(), REGS.fp()->script()->innermostStaticScope(REGS.pc));
-    for (; !si.done(); ++si) {
-        if (si.hasSyntacticScopeObject() && si.type() == ScopeIter::Call) {
-            JSFunction& callee = si.scope().as<CallObject>().callee();
+    JSFunction& superEnvFunc = GetSuperEnvFunction(cx, REGS);
+    MOZ_ASSERT(superEnvFunc.allowSuperProperty());
+    MOZ_ASSERT(superEnvFunc.nonLazyScript()->needsHomeObject());
+    const Value& homeObjVal = superEnvFunc.getExtendedSlot(FunctionExtended::METHOD_HOMEOBJECT_SLOT);
 
-            // Arrow functions don't have the information we're looking for,
-            // their enclosing scopes do. Nevertheless, they might have call
-            // objects. Skip them to find what we came for.
-            if (callee.isArrow())
-                continue;
+    ReservedRooted<JSObject*> homeObj(&rootObject0, &homeObjVal.toObject());
+    ReservedRooted<JSObject*> superBase(&rootObject1);
+    if (!GetPrototype(cx, homeObj, &superBase))
+        goto error;
 
-            MOZ_ASSERT(callee.allowSuperProperty());
-            MOZ_ASSERT(callee.nonLazyScript()->needsHomeObject());
-            const Value& homeObjVal = callee.getExtendedSlot(FunctionExtended::METHOD_HOMEOBJECT_SLOT);
-
-            ReservedRooted<JSObject*> homeObj(&rootObject0, &homeObjVal.toObject());
-            ReservedRooted<JSObject*> superBase(&rootObject1);
-            if (!GetPrototype(cx, homeObj, &superBase))
-                goto error;
-
-            if (!superBase) {
-                JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_CANT_CONVERT_TO,
-                                     "null", "object");
-                goto error;
-            }
-            PUSH_OBJECT(*superBase);
-            break;
-        }
+    if (!superBase) {
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_CANT_CONVERT_TO,
+                                "null", "object");
+        goto error;
     }
-    if (si.done())
-        MOZ_CRASH("Unexpected scope chain in superbase");
+    PUSH_OBJECT(*superBase);
 }
 END_CASE(JSOP_SUPERBASE)
 
@@ -4087,6 +4133,72 @@ CASE(JSOP_NEWTARGET)
     PUSH_COPY(REGS.fp()->newTarget());
     MOZ_ASSERT(REGS.sp[-1].isObject() || REGS.sp[-1].isUndefined());
 END_CASE(JSOP_NEWTARGET)
+
+CASE(JSOP_SUPERFUN)
+{
+    ReservedRooted<JSObject*> superEnvFunc(&rootObject0, &GetSuperEnvFunction(cx, REGS));
+    MOZ_ASSERT(superEnvFunc->as<JSFunction>().isClassConstructor());
+    MOZ_ASSERT(superEnvFunc->as<JSFunction>().nonLazyScript()->isDerivedClassConstructor());
+
+    ReservedRooted<JSObject*> superFun(&rootObject1);
+
+    if (!GetPrototype(cx, superEnvFunc, &superFun))
+        goto error;
+
+    ReservedRooted<Value> superFunVal(&rootValue0, UndefinedValue());
+    if (!superFun)
+        superFunVal = NullValue();
+    else if (!superFun->isConstructor())
+        superFunVal = ObjectValue(*superFun);
+
+    if (superFunVal.isObjectOrNull()) {
+        ReportIsNotFunction(cx, superFunVal, JSDVG_IGNORE_STACK, CONSTRUCT);
+        goto error;
+    }
+
+    PUSH_OBJECT(*superFun);
+}
+END_CASE(JSOP_SUPERFUN)
+
+CASE(JSOP_SETTHIS)
+{
+    MOZ_ASSERT(REGS.fp()->isNonEvalFunctionFrame());
+    MOZ_ASSERT(REGS.fp()->script()->isDerivedClassConstructor());
+    MOZ_ASSERT(REGS.fp()->callee().isClassConstructor());
+
+    if (!REGS.fp()->thisValue().isMagic(JS_UNINITIALIZED_LEXICAL)) {
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_REINIT_THIS);
+        goto error;
+    }
+
+    ReservedRooted<JSObject*> thisv(&rootObject0, &REGS.sp[-1].toObject());
+    REGS.fp()->setDerivedConstructorThis(thisv);
+}
+END_CASE(JSOP_SETTHIS)
+
+CASE(JSOP_DERIVEDCONSTRUCTOR)
+{
+    MOZ_ASSERT(REGS.sp[-1].isObject());
+    ReservedRooted<JSObject*> proto(&rootObject0, &REGS.sp[-1].toObject());
+
+    JSFunction* constructor = MakeDefaultConstructor(cx, JSOp(*REGS.pc), script->getAtom(REGS.pc),
+                                                     proto);
+    if (!constructor)
+        goto error;
+
+    REGS.sp[-1].setObject(*constructor);
+}
+END_CASE(JSOP_DERIVEDCONSTRUCTOR)
+
+CASE(JSOP_CLASSCONSTRUCTOR)
+{
+    JSFunction* constructor = MakeDefaultConstructor(cx, JSOp(*REGS.pc), script->getAtom(REGS.pc),
+                                                     nullptr);
+    if (!constructor)
+        goto error;
+    PUSH_OBJECT(*constructor);
+}
+END_CASE(JSOP_CLASSCONSTRUCTOR)
 
 DEFAULT()
 {
@@ -4688,7 +4800,7 @@ js::SpreadCallOperation(JSContext* cx, HandleScript script, jsbytecode* pc, Hand
     RootedArrayObject aobj(cx, &arr.toObject().as<ArrayObject>());
     uint32_t length = aobj->length();
     JSOp op = JSOp(*pc);
-    bool constructing = op == JSOP_SPREADNEW;
+    bool constructing = op == JSOP_SPREADNEW || op == JSOP_SPREADSUPERCALL;
 
     if (length > ARGS_LENGTH_MAX) {
         JS_ReportErrorNumber(cx, GetErrorMessage, nullptr,
@@ -4706,7 +4818,7 @@ js::SpreadCallOperation(JSContext* cx, HandleScript script, jsbytecode* pc, Hand
         MOZ_ASSERT(!aobj->getDenseElement(i).isMagic());
 #endif
 
-    if (op == JSOP_SPREADNEW) {
+    if (constructing) {
         if (!StackCheckIsConstructorCalleeNewTarget(cx, callee, newTarget))
             return false;
 
@@ -4947,4 +5059,99 @@ js::ReportUninitializedLexical(JSContext* cx, HandleScript script, jsbytecode* p
     }
 
     ReportUninitializedLexical(cx, name);
+}
+
+bool
+js::DefaultClassConstructor(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!args.isConstructing()) {
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_CANT_CALL_CLASS_CONSTRUCTOR);
+        return false;
+    }
+
+    RootedObject newTarget(cx, &args.newTarget().toObject());
+    RootedValue protoVal(cx);
+
+    if (!GetProperty(cx, newTarget, newTarget, cx->names().prototype, &protoVal))
+        return false;
+
+    RootedObject proto(cx);
+    if (!protoVal.isObject()) {
+        if (!GetBuiltinPrototype(cx, JSProto_Object, &proto))
+            return false;
+    } else {
+        proto = &protoVal.toObject();
+    }
+
+    JSObject* obj = NewObjectWithGivenProto(cx, &PlainObject::class_, proto);
+    if (!obj)
+        return false;
+
+    args.rval().set(ObjectValue(*obj));
+    return true;
+}
+
+bool
+js::DefaultDerivedClassConstructor(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    if (!args.isConstructing()) {
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_CANT_CALL_CLASS_CONSTRUCTOR);
+        return false;
+    }
+
+    RootedObject fun(cx, &args.callee());
+    RootedObject superFun(cx);
+    if (!GetPrototype(cx, fun, &superFun))
+        return false;
+
+    RootedValue fval(cx, ObjectOrNullValue(superFun));
+    if (!IsConstructor(fval)) {
+        ReportValueError(cx, JSMSG_NOT_CONSTRUCTOR, JSDVG_IGNORE_STACK, fval, nullptr);
+        return false;
+    }
+
+    ConstructArgs constArgs(cx);
+    if (!FillArgumentsFromArraylike(cx, constArgs, args))
+        return false;
+    return Construct(cx, fval, constArgs, args.newTarget(), args.rval());
+}
+
+void
+js::ReportRuntimeRedeclaration(JSContext* cx, HandlePropertyName name,
+                               frontend::Definition::Kind declKind)
+{
+    JSAutoByteString printable;
+    if (AtomToPrintableString(cx, name, &printable)) {
+        // We cannot distinguish 'var' declarations from manually defined,
+        // non-configurable global properties.
+        const char* kindStr;
+        if (declKind == frontend::Definition::VAR)
+            kindStr = "non-configurable global property";
+        else
+            kindStr = frontend::Definition::kindString(declKind);
+        JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_REDECLARED_VAR,
+                             kindStr, printable.ptr());
+    }
+}
+
+bool
+js::ThrowUninitializedThis(JSContext* cx, AbstractFramePtr frame)
+{
+    RootedFunction fun(cx, frame.callee());
+
+    MOZ_ASSERT(fun->isClassConstructor());
+    MOZ_ASSERT(fun->nonLazyScript()->isDerivedClassConstructor());
+
+    const char* name = "anonymous";
+    JSAutoByteString str;
+    if (fun->atom()) {
+        if (!AtomToPrintableString(cx, fun->atom(), &str))
+            return false;
+        name = str.ptr();
+    }
+
+    JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_UNINITIALIZED_THIS, name);
+    return false;
 }

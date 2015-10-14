@@ -1,6 +1,5 @@
-// |jit-test| --no-threads
-
-load(libdir + 'oomTest.js');
+if (!('oomTest' in this))
+    quit();
 
 oomTest(() => {
     let x = 0;

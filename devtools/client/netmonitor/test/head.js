@@ -2,7 +2,7 @@
    http://creativecommons.org/publicdomain/zero/1.0/ */
 "use strict";
 
-const { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
+var { classes: Cc, interfaces: Ci, utils: Cu, results: Cr } = Components;
 
 var { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
 var { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
@@ -107,8 +107,7 @@ function removeTab(aTab, aWindow) {
   let targetWindow = aWindow || window;
   let targetBrowser = targetWindow.gBrowser;
 
-  // browser_net_pane-toggle.js relies on synchronous removeTab behavior.
-  targetBrowser.removeTab(aTab, {skipPermitUnload: true});
+  targetBrowser.removeTab(aTab);
 }
 
 function waitForNavigation(aTarget) {

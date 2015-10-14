@@ -1,3 +1,4 @@
-// |jit-test| --no-threads
-load(libdir + 'oomTest.js');
+if (!('oomTest' in this))
+    quit();
+
 oomTest(() => getBacktrace({thisprops: gc() && delete addDebuggee.enabled}));

@@ -162,8 +162,8 @@ NS_IMPL_ISUPPORTS(HttpChannelParent,
                   nsIDeprecationWarner)
 
 NS_IMETHODIMP
-HttpChannelParent::ShouldPrepareForIntercept(nsIURI* aURI, bool aIsNavigate,
-                                             nsContentPolicyType aType,
+HttpChannelParent::ShouldPrepareForIntercept(nsIURI* aURI,
+                                             bool aIsNonSubresourceRequest,
                                              bool* aShouldIntercept)
 {
   *aShouldIntercept = mShouldIntercept;
@@ -503,7 +503,10 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
     }
 
   } else {
-    mChannel->ForceNoIntercept();
+    nsLoadFlags loadFlags;
+    mChannel->GetLoadFlags(&loadFlags);
+    loadFlags |= nsIChannel::LOAD_BYPASS_SERVICE_WORKER;
+    mChannel->SetLoadFlags(loadFlags);
   }
 
   nsCOMPtr<nsISupportsPRUint32> cacheKey =
@@ -718,6 +721,7 @@ HttpChannelParent::RecvUpdateAssociatedContentSecurity(const int32_t& broken,
 bool
 HttpChannelParent::RecvRedirect2Verify(const nsresult& result,
                                        const RequestHeaderTuples& changedHeaders,
+                                       const uint32_t& loadFlags,
                                        const OptionalURIParams&   aAPIRedirectURI)
 {
   LOG(("HttpChannelParent::RecvRedirect2Verify [this=%p result=%x]\n",
@@ -740,6 +744,12 @@ HttpChannelParent::RecvRedirect2Verify(const nsresult& result,
                                            changedHeaders[i].mValue,
                                            changedHeaders[i].mMerge);
         }
+      }
+
+      // A successfully redirected channel must have the LOAD_REPLACE flag.
+      MOZ_ASSERT(loadFlags & nsIChannel::LOAD_REPLACE);
+      if (loadFlags & nsIChannel::LOAD_REPLACE) {
+        newHttpChannel->SetLoadFlags(loadFlags);
       }
     }
   }

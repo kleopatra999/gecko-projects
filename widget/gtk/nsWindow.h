@@ -205,6 +205,8 @@ public:
                                                guint            aInfo,
                                                guint            aTime,
                                                gpointer         aData);
+    gboolean           OnPropertyNotifyEvent(GtkWidget *aWidget,
+                                             GdkEventProperty *aEvent);
 
     virtual already_AddRefed<mozilla::gfx::DrawTarget>
                        StartRemoteDrawingInRegion(nsIntRegion& aInvalidRegion) override;
@@ -225,6 +227,8 @@ private:
     void               EnsureGrabs  (void);
     void               GrabPointer  (guint32 aTime);
     void               ReleaseGrabs (void);
+
+    void               UpdateClientOffset();
 
 public:
     enum PluginType {
@@ -390,6 +394,8 @@ private:
     int32_t             mTransparencyBitmapWidth;
     int32_t             mTransparencyBitmapHeight;
 
+    nsIntPoint          mClientOffset;
+
 #if GTK_CHECK_VERSION(3,4,0)
     // This field omits duplicate scroll events caused by GNOME bug 726878.
     guint32             mLastScrollEventTime;
@@ -521,6 +527,7 @@ private:
     // From GDK
     int GdkCoordToDevicePixels(gint coord);
     mozilla::LayoutDeviceIntPoint GdkPointToDevicePixels(GdkPoint point);
+    mozilla::LayoutDeviceIntPoint GdkEventCoordsToDevicePixels(gdouble x, gdouble y);
     nsIntRect GdkRectToDevicePixels(GdkRectangle rect);
 };
 

@@ -1,4 +1,4 @@
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 const loaders = Cu.import("resource://gre/modules/commonjs/toolkit/loader.js", {});
 const devtools = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {}).devtools;
@@ -9,7 +9,7 @@ var appConstants;
 // available in xpcshell tests. This is ok, we can easily polyfill the
 // values that we need.
 try {
-  const system = devtools.require("devtools/shared/shared/system");
+  const system = devtools.require("devtools/shared/system");
   appConstants = system.constants;
 }
 catch(e) {

@@ -81,10 +81,6 @@ public:
                            bool                    aCreateLayer,
                            bool                    aPositioned);
 
-  bool IsUsingDisplayPort(const nsDisplayListBuilder* aBuilder) const;
-  bool WillUseDisplayPort(const nsDisplayListBuilder* aBuilder) const;
-  bool WillBuildScrollableLayer(const nsDisplayListBuilder* aBuilder) const;
-
   bool GetBorderRadii(const nsSize& aFrameSize, const nsSize& aBorderArea,
                       Sides aSkipSides, nscoord aRadii[8]) const;
 
@@ -360,6 +356,8 @@ public:
       // because we have special behaviour for it when APZ scrolling is active.
       mOuter->SchedulePaint();
     }
+    // Update windowed plugin visibility in response to apz scrolling events.
+    NotifyPluginFrames(aTransforming ? BEGIN_APZ : END_APZ);
   }
   bool IsTransformingByAPZ() const {
     return mTransformingByAPZ;
@@ -367,6 +365,10 @@ public:
   void SetZoomableByAPZ(bool aZoomable);
 
   bool UsesContainerScrolling() const;
+
+  bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
+                             nsRect* aDirtyRect,
+                             bool aAllowCreateDisplayPort);
 
   void ScheduleSyntheticMouseMove();
   static void ScrollActivityCallback(nsITimer *aTimer, void* anInstance);
@@ -388,7 +390,7 @@ public:
     Layer* aLayer, nsIFrame* aContainerReferenceFrame,
     const ContainerLayerParameters& aParameters,
     bool aIsForCaret) const;
-  virtual mozilla::Maybe<mozilla::DisplayItemClip> ComputeScrollClip(bool aIsForCaret) const;
+  mozilla::Maybe<mozilla::DisplayItemClip> ComputeScrollClip(bool aIsForCaret) const;
 
   // nsIScrollbarMediator
   void ScrollByPage(nsScrollbarFrame* aScrollbar, int32_t aDirection,
@@ -508,9 +510,9 @@ public:
   // If true, the resizer is collapsed and not displayed
   bool mCollapsedResizer:1;
 
-  // If true, the layer should always be active because we always build a
-  // scrollable layer. Used for asynchronous scrolling.
-  bool mShouldBuildScrollableLayer:1;
+  // If true, the scroll frame should always be active because we always build
+  // a scrollable layer. Used for asynchronous scrolling.
+  bool mWillBuildScrollableLayer:1;
 
   // Whether we are the root scroll frame that is used for containerful
   // scrolling with a display port. If true, the scrollable frame
@@ -557,6 +559,14 @@ protected:
                             = nsIScrollbarMediator::DISABLE_SNAP);
 
   void CompleteAsyncScroll(const nsRect &aRange, nsIAtom* aOrigin = nullptr);
+
+  /*
+   * Helper that notifies plugins about async smooth scroll operations managed
+   * by nsGfxScrollFrame.
+   */
+  enum AsyncScrollEventType { BEGIN_DOM, BEGIN_APZ, END_DOM, END_APZ };
+  void NotifyPluginFrames(AsyncScrollEventType aEvent);
+  AsyncScrollEventType mAsyncScrollEvent;
 
   static void EnsureImageVisPrefsCached();
   static bool sImageVisPrefsCached;
@@ -866,6 +876,11 @@ public:
   }
   virtual bool UsesContainerScrolling() const override {
     return mHelper.UsesContainerScrolling();
+  }
+  virtual bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
+                                     nsRect* aDirtyRect,
+                                     bool aAllowCreateDisplayPort) override {
+    return mHelper.DecideScrollableLayer(aBuilder, aDirtyRect, aAllowCreateDisplayPort);
   }
 
   // nsIStatefulFrame
@@ -1345,6 +1360,12 @@ public:
   void SetZoomableByAPZ(bool aZoomable) override {
     mHelper.SetZoomableByAPZ(aZoomable);
   }
+  virtual bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
+                                     nsRect* aDirtyRect,
+                                     bool aAllowCreateDisplayPort) override {
+    return mHelper.DecideScrollableLayer(aBuilder, aDirtyRect, aAllowCreateDisplayPort);
+  }
+
 
 #ifdef DEBUG_FRAME_DUMP
   virtual nsresult GetFrameName(nsAString& aResult) const override;

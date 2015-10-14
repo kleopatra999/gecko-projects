@@ -6,6 +6,7 @@
 
 #include "vm/SavedStacks.h"
 
+#include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Move.h"
@@ -406,28 +407,90 @@ SavedFrame::getPrincipals()
 }
 
 void
+SavedFrame::initSource(JSAtom* source)
+{
+    MOZ_ASSERT(source);
+    initReservedSlot(JSSLOT_SOURCE, StringValue(source));
+}
+
+void
+SavedFrame::initLine(uint32_t line)
+{
+    initReservedSlot(JSSLOT_LINE, PrivateUint32Value(line));
+}
+
+void
+SavedFrame::initColumn(uint32_t column)
+{
+    initReservedSlot(JSSLOT_COLUMN, PrivateUint32Value(column));
+}
+
+void
+SavedFrame::initPrincipals(JSPrincipals* principals)
+{
+    if (principals)
+        JS_HoldPrincipals(principals);
+    initPrincipalsAlreadyHeld(principals);
+}
+
+void
+SavedFrame::initPrincipalsAlreadyHeld(JSPrincipals* principals)
+{
+    MOZ_ASSERT_IF(principals, principals->refcount > 0);
+    initReservedSlot(JSSLOT_PRINCIPALS, PrivateValue(principals));
+}
+
+void
+SavedFrame::initFunctionDisplayName(JSAtom* maybeName)
+{
+    initReservedSlot(JSSLOT_FUNCTIONDISPLAYNAME, maybeName ? StringValue(maybeName) : NullValue());
+}
+
+void
+SavedFrame::initAsyncCause(JSAtom* maybeCause)
+{
+    initReservedSlot(JSSLOT_ASYNCCAUSE, maybeCause ? StringValue(maybeCause) : NullValue());
+}
+
+void
+SavedFrame::initParent(SavedFrame* maybeParent)
+{
+    initReservedSlot(JSSLOT_PARENT, ObjectOrNullValue(maybeParent));
+}
+
+void
 SavedFrame::initFromLookup(SavedFrame::HandleLookup lookup)
 {
-    MOZ_ASSERT(lookup->source);
-    MOZ_ASSERT(getReservedSlot(JSSLOT_SOURCE).isUndefined());
-    setReservedSlot(JSSLOT_SOURCE, StringValue(lookup->source));
+    initSource(lookup->source);
+    initLine(lookup->line);
+    initColumn(lookup->column);
+    initFunctionDisplayName(lookup->functionDisplayName);
+    initAsyncCause(lookup->asyncCause);
+    initParent(lookup->parent);
+    initPrincipals(lookup->principals);
+}
 
-    setReservedSlot(JSSLOT_LINE, PrivateUint32Value(lookup->line));
-    setReservedSlot(JSSLOT_COLUMN, PrivateUint32Value(lookup->column));
-    setReservedSlot(JSSLOT_FUNCTIONDISPLAYNAME,
-                    lookup->functionDisplayName
-                        ? StringValue(lookup->functionDisplayName)
-                        : NullValue());
-    setReservedSlot(JSSLOT_ASYNCCAUSE,
-                    lookup->asyncCause
-                        ? StringValue(lookup->asyncCause)
-                        : NullValue());
-    setReservedSlot(JSSLOT_PARENT, ObjectOrNullValue(lookup->parent));
+/* static */ SavedFrame*
+SavedFrame::create(JSContext* cx)
+{
+    RootedGlobalObject global(cx, cx->global());
+    assertSameCompartment(cx, global);
 
-    MOZ_ASSERT(getReservedSlot(JSSLOT_PRINCIPALS).isUndefined());
-    if (lookup->principals)
-        JS_HoldPrincipals(lookup->principals);
-    setReservedSlot(JSSLOT_PRINCIPALS, PrivateValue(lookup->principals));
+    // Ensure that we don't try to capture the stack again in the
+    // `SavedStacksMetadataCallback` for this new SavedFrame object, and
+    // accidentally cause O(n^2) behavior.
+    SavedStacks::AutoReentrancyGuard guard(cx->compartment()->savedStacks());
+
+    RootedNativeObject proto(cx, GlobalObject::getOrCreateSavedFramePrototype(cx, global));
+    if (!proto)
+        return nullptr;
+    assertSameCompartment(cx, proto);
+
+    RootedObject frameObj(cx, NewObjectWithGivenProto(cx, &SavedFrame::class_, proto));
+    if (!frameObj)
+        return nullptr;
+
+    return &frameObj->as<SavedFrame>();
 }
 
 bool
@@ -904,6 +967,10 @@ SavedFrame::toStringMethod(JSContext* cx, unsigned argc, Value* vp)
 bool
 SavedStacks::init()
 {
+    uint64_t seed[2];
+    random_generateSeed(seed, mozilla::ArrayLength(seed));
+    bernoulli.setRandomState(seed[0], seed[1]);
+
     if (!pcLocationMap.init())
         return false;
 
@@ -1217,30 +1284,15 @@ SavedStacks::getOrCreateSavedFrame(JSContext* cx, SavedFrame::HandleLookup looku
 SavedFrame*
 SavedStacks::createFrameFromLookup(JSContext* cx, SavedFrame::HandleLookup lookup)
 {
-    RootedGlobalObject global(cx, cx->global());
-    assertSameCompartment(cx, global);
-
-    // Ensure that we don't try to capture the stack again in the
-    // `SavedStacksMetadataCallback` for this new SavedFrame object, and
-    // accidentally cause O(n^2) behavior.
-    SavedStacks::AutoReentrancyGuard guard(*this);
-
-    RootedNativeObject proto(cx, GlobalObject::getOrCreateSavedFramePrototype(cx, global));
-    if (!proto)
+    RootedSavedFrame frame(cx, SavedFrame::create(cx));
+    if (!frame)
         return nullptr;
-    assertSameCompartment(cx, proto);
+    frame->initFromLookup(lookup);
 
-    RootedObject frameObj(cx, NewObjectWithGivenProto(cx, &SavedFrame::class_, proto));
-    if (!frameObj)
+    if (!FreezeObject(cx, frame))
         return nullptr;
 
-    RootedSavedFrame f(cx, &frameObj->as<SavedFrame>());
-    f->initFromLookup(lookup);
-
-    if (!FreezeObject(cx, frameObj))
-        return nullptr;
-
-    return f.get();
+    return frame;
 }
 
 /*
@@ -1326,16 +1378,20 @@ SavedStacks::getLocation(JSContext* cx, const FrameIter& iter, MutableHandleLoca
 }
 
 void
-SavedStacks::chooseSamplingProbability(JSContext* cx)
+SavedStacks::chooseSamplingProbability(JSCompartment* compartment)
 {
-    GlobalObject::DebuggerVector* dbgs = cx->global()->getDebuggers();
+    GlobalObject* global = compartment->maybeGlobal();
+    if (!global)
+        return;
+
+    GlobalObject::DebuggerVector* dbgs = global->getDebuggers();
     if (!dbgs || dbgs->empty())
         return;
 
     mozilla::DebugOnly<Debugger**> begin = dbgs->begin();
     mozilla::DebugOnly<bool> foundAnyDebuggers = false;
 
-    allocationSamplingProbability = 0;
+    double probability = 0;
     for (Debugger** dbgp = dbgs->begin(); dbgp < dbgs->end(); dbgp++) {
         // The set of debuggers had better not change while we're iterating,
         // such that the vector gets reallocated.
@@ -1343,11 +1399,13 @@ SavedStacks::chooseSamplingProbability(JSContext* cx)
 
         if ((*dbgp)->trackingAllocationSites && (*dbgp)->enabled) {
             foundAnyDebuggers = true;
-            allocationSamplingProbability = std::max((*dbgp)->allocationSamplingProbability,
-                                                     allocationSamplingProbability);
+            probability = std::max((*dbgp)->allocationSamplingProbability,
+                                   probability);
         }
     }
     MOZ_ASSERT(foundAnyDebuggers);
+
+    bernoulli.setProbability(probability);
 }
 
 JSObject*
@@ -1356,39 +1414,8 @@ SavedStacksMetadataCallback(JSContext* cx, JSObject* target)
     RootedObject obj(cx, target);
 
     SavedStacks& stacks = cx->compartment()->savedStacks();
-    if (stacks.allocationSkipCount > 0) {
-        stacks.allocationSkipCount--;
+    if (!stacks.bernoulli.trial())
         return nullptr;
-    }
-
-    stacks.chooseSamplingProbability(cx);
-    if (stacks.allocationSamplingProbability == 0.0)
-        return nullptr;
-
-    // If the sampling probability is set to 1.0, we are always taking a sample
-    // and can therefore leave allocationSkipCount at 0.
-    if (stacks.allocationSamplingProbability != 1.0) {
-        // Rather than generating a random number on every allocation to decide
-        // if we want to sample that particular allocation (which would be
-        // expensive), we calculate the number of allocations to skip before
-        // taking the next sample.
-        //
-        // P = the probability we sample any given event.
-        //
-        // ~P = 1-P, the probability we don't sample a given event.
-        //
-        // (~P)^n = the probability that we skip at least the next n events.
-        //
-        // let X = random between 0 and 1.
-        //
-        // floor(log base ~P of X) = n, aka the number of events we should skip
-        // until we take the next sample. Any value for X less than (~P)^n
-        // yields a skip count greater than n, so the likelihood of a skip count
-        // greater than n is (~P)^n, as required.
-        double notSamplingProb = 1.0 - stacks.allocationSamplingProbability;
-        stacks.allocationSkipCount = std::floor(std::log(random_nextDouble(&stacks.rngState)) /
-                                                std::log(notSamplingProb));
-    }
 
     AutoEnterOOMUnsafeRegion oomUnsafe;
     RootedSavedFrame frame(cx);

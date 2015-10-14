@@ -12,6 +12,9 @@
 #include "gfxDrawable.h"
 #include "imgIEncoder.h"
 #include "mozilla/Base64.h"
+#include "mozilla/dom/ImageEncoder.h"
+#include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/DataSurfaceHelpers.h"
 #include "mozilla/gfx/Logging.h"
@@ -21,6 +24,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsIClipboardHelper.h"
 #include "nsIFile.h"
+#include "nsIGfxInfo.h"
 #include "nsIPresShell.h"
 #include "nsPresContext.h"
 #include "nsRegion.h"
@@ -453,8 +457,8 @@ CreateSamplingRestrictedDrawable(gfxDrawable* aDrawable,
 
     nsRefPtr<gfxContext> tmpCtx = new gfxContext(target);
     tmpCtx->SetOp(OptimalFillOp());
-    aDrawable->Draw(tmpCtx, needed - needed.TopLeft(), true,
-                    GraphicsFilter::FILTER_FAST, 1.0, gfxMatrix::Translation(needed.TopLeft()));
+    aDrawable->Draw(tmpCtx, needed - needed.TopLeft(), true, Filter::LINEAR,
+                    1.0, gfxMatrix::Translation(needed.TopLeft()));
     RefPtr<SourceSurface> surface = target->Snapshot();
 
     nsRefPtr<gfxDrawable> drawable = new gfxSurfaceDrawable(surface, size, gfxMatrix::Translation(-needed.TopLeft()));
@@ -542,9 +546,9 @@ DeviceToImageTransform(gfxContext* aContext)
 
 /* These heuristics are based on Source/WebCore/platform/graphics/skia/ImageSkia.cpp:computeResamplingMode() */
 #ifdef MOZ_GFX_OPTIMIZE_MOBILE
-static GraphicsFilter ReduceResamplingFilter(GraphicsFilter aFilter,
-                                             int aImgWidth, int aImgHeight,
-                                             float aSourceWidth, float aSourceHeight)
+static Filter ReduceResamplingFilter(Filter aFilter,
+                                     int aImgWidth, int aImgHeight,
+                                     float aSourceWidth, float aSourceHeight)
 {
     // Images smaller than this in either direction are considered "small" and
     // are not resampled ever (see below).
@@ -559,7 +563,7 @@ static GraphicsFilter ReduceResamplingFilter(GraphicsFilter aFilter,
         || aImgHeight <= kSmallImageSizeThreshold) {
         // Never resample small images. These are often used for borders and
         // rules (think 1x1 images used to make lines).
-        return GraphicsFilter::FILTER_NEAREST;
+        return Filter::POINT;
     }
 
     if (aImgHeight * kLargeStretch <= aSourceHeight || aImgWidth * kLargeStretch <= aSourceWidth) {
@@ -570,7 +574,7 @@ static GraphicsFilter ReduceResamplingFilter(GraphicsFilter aFilter,
         // (which might be large) and then is stretching it to fill some part
         // of the page.
         if (fabs(aSourceWidth - aImgWidth)/aImgWidth < 0.5 || fabs(aSourceHeight - aImgHeight)/aImgHeight < 0.5)
-            return GraphicsFilter::FILTER_NEAREST;
+            return Filter::POINT;
 
         // The image is growing a lot and in more than one direction. Resampling
         // is slow and doesn't give us very much when growing a lot.
@@ -598,9 +602,9 @@ static GraphicsFilter ReduceResamplingFilter(GraphicsFilter aFilter,
     return aFilter;
 }
 #else
-static GraphicsFilter ReduceResamplingFilter(GraphicsFilter aFilter,
-                                             int aImgWidth, int aImgHeight,
-                                             int aSourceWidth, int aSourceHeight)
+static Filter ReduceResamplingFilter(Filter aFilter,
+                                     int aImgWidth, int aImgHeight,
+                                     int aSourceWidth, int aSourceHeight)
 {
     // Just pass the filter through unchanged
     return aFilter;
@@ -627,7 +631,7 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
                         gfxContext* aContext,
                         const ImageRegion& aRegion,
                         Rect aImageRect,
-                        const GraphicsFilter& aFilter,
+                        const Filter& aFilter,
                         const SurfaceFormat aFormat,
                         gfxFloat aOpacity)
 {
@@ -695,7 +699,7 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
                             aContext->CurrentAntialiasMode());
 
     SurfacePattern scaledImagePattern(scaledImage, ExtendMode::REPEAT,
-                                      Matrix(), ToFilter(aFilter));
+                                      Matrix(), aFilter);
     destDrawTarget->FillRect(scaledNeededRect, scaledImagePattern, drawOptions);
   }
   return true;
@@ -708,7 +712,7 @@ gfxUtils::DrawPixelSnapped(gfxContext*         aContext,
                            const gfxSize&      aImageSize,
                            const ImageRegion&  aRegion,
                            const SurfaceFormat aFormat,
-                           GraphicsFilter      aFilter,
+                           Filter              aFilter,
                            uint32_t            aImageFlags,
                            gfxFloat            aOpacity)
 {
@@ -1541,6 +1545,125 @@ gfxUtils::CopyAsDataURI(DrawTarget* aDT)
   } else {
     NS_WARNING("Failed to get surface!");
   }
+}
+
+/* static */ void
+gfxUtils::GetImageBuffer(gfx::DataSourceSurface* aSurface,
+                         bool aIsAlphaPremultiplied,
+                         uint8_t** outImageBuffer,
+                         int32_t* outFormat)
+{
+    *outImageBuffer = nullptr;
+    *outFormat = 0;
+
+    DataSourceSurface::MappedSurface map;
+    if (!aSurface->Map(DataSourceSurface::MapType::READ, &map))
+        return;
+
+    uint32_t bufferSize = aSurface->GetSize().width * aSurface->GetSize().height * 4;
+    uint8_t* imageBuffer = new (fallible) uint8_t[bufferSize];
+    if (!imageBuffer) {
+        aSurface->Unmap();
+        return;
+    }
+    memcpy(imageBuffer, map.mData, bufferSize);
+
+    aSurface->Unmap();
+
+    int32_t format = imgIEncoder::INPUT_FORMAT_HOSTARGB;
+    if (!aIsAlphaPremultiplied) {
+        // We need to convert to INPUT_FORMAT_RGBA, otherwise
+        // we are automatically considered premult, and unpremult'd.
+        // Yes, it is THAT silly.
+        // Except for different lossy conversions by color,
+        // we could probably just change the label, and not change the data.
+        gfxUtils::ConvertBGRAtoRGBA(imageBuffer, bufferSize);
+        format = imgIEncoder::INPUT_FORMAT_RGBA;
+    }
+
+    *outImageBuffer = imageBuffer;
+    *outFormat = format;
+}
+
+/* static */ nsresult
+gfxUtils::GetInputStream(gfx::DataSourceSurface* aSurface,
+                         bool aIsAlphaPremultiplied,
+                         const char* aMimeType,
+                         const char16_t* aEncoderOptions,
+                         nsIInputStream** outStream)
+{
+    nsCString enccid("@mozilla.org/image/encoder;2?type=");
+    enccid += aMimeType;
+    nsCOMPtr<imgIEncoder> encoder = do_CreateInstance(enccid.get());
+    if (!encoder)
+        return NS_ERROR_FAILURE;
+
+    nsAutoArrayPtr<uint8_t> imageBuffer;
+    int32_t format = 0;
+    GetImageBuffer(aSurface, aIsAlphaPremultiplied, getter_Transfers(imageBuffer), &format);
+    if (!imageBuffer)
+        return NS_ERROR_FAILURE;
+
+    return dom::ImageEncoder::GetInputStream(aSurface->GetSize().width,
+                                             aSurface->GetSize().height,
+                                             imageBuffer, format,
+                                             encoder, aEncoderOptions, outStream);
+}
+
+class GetFeatureStatusRunnable final : public dom::workers::WorkerMainThreadRunnable
+{
+public:
+    GetFeatureStatusRunnable(dom::workers::WorkerPrivate* workerPrivate,
+                             const nsCOMPtr<nsIGfxInfo>& gfxInfo,
+                             int32_t feature,
+                             int32_t* status)
+      : WorkerMainThreadRunnable(workerPrivate)
+      , mGfxInfo(gfxInfo)
+      , mFeature(feature)
+      , mStatus(status)
+      , mNSResult(NS_OK)
+    {
+    }
+
+    bool MainThreadRun() override
+    {
+      if (mGfxInfo) {
+        mNSResult = mGfxInfo->GetFeatureStatus(mFeature, mStatus);
+      }
+      return true;
+    }
+
+    nsresult GetNSResult() const
+    {
+      return mNSResult;
+    }
+
+protected:
+    ~GetFeatureStatusRunnable() {}
+
+private:
+    nsCOMPtr<nsIGfxInfo> mGfxInfo;
+    int32_t mFeature;
+    int32_t* mStatus;
+    nsresult mNSResult;
+};
+
+/* static */ nsresult
+gfxUtils::ThreadSafeGetFeatureStatus(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
+                                     int32_t feature, int32_t* status)
+{
+  if (!NS_IsMainThread()) {
+    dom::workers::WorkerPrivate* workerPrivate =
+      dom::workers::GetCurrentThreadWorkerPrivate();
+    nsRefPtr<GetFeatureStatusRunnable> runnable =
+      new GetFeatureStatusRunnable(workerPrivate, gfxInfo, feature, status);
+
+    runnable->Dispatch(workerPrivate->GetJSContext());
+
+    return runnable->GetNSResult();
+  }
+
+  return gfxInfo->GetFeatureStatus(feature, status);
 }
 
 /* static */ bool

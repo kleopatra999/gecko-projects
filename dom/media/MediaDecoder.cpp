@@ -353,7 +353,6 @@ MediaDecoder::MediaDecoder() :
   mDormantSupported(false),
   mLogicalPosition(0.0),
   mDuration(std::numeric_limits<double>::quiet_NaN()),
-  mReentrantMonitor("media.decoder"),
 #ifdef MOZ_EME
   mCDMProxyPromise(mCDMProxyPromiseHolder.Ensure(__func__)),
 #endif
@@ -1237,12 +1236,6 @@ MediaDecoder::SetPreservesPitch(bool aPreservesPitch)
 {
   MOZ_ASSERT(NS_IsMainThread());
   mPreservesPitch = aPreservesPitch;
-}
-
-bool
-MediaDecoder::OnDecodeTaskQueue() const {
-  NS_WARN_IF_FALSE(mDecoderStateMachine, "mDecoderStateMachine is null");
-  return mDecoderStateMachine ? mDecoderStateMachine->OnDecodeTaskQueue() : false;
 }
 
 void

@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "BasicCanvasLayer.h"
+#include "AsyncCanvasRenderer.h"
 #include "basic/BasicLayers.h"          // for BasicLayerManager
 #include "basic/BasicLayersImpl.h"      // for GetEffectiveOperator
 #include "mozilla/mozalloc.h"           // for operator new
@@ -52,7 +53,7 @@ BasicCanvasLayer::Paint(DrawTarget* aDT,
 
   FillRectWithMask(aDT, aDeviceOffset,
                    Rect(0, 0, mBounds.width, mBounds.height),
-                   mSurface, ToFilter(mFilter),
+                   mSurface, mFilter,
                    DrawOptions(GetEffectiveOpacity(), GetEffectiveOperator(this)),
                    aMaskLayer);
 

@@ -7,7 +7,6 @@
 #define GFX_UTILS_H
 
 #include "gfxTypes.h"
-#include "GraphicsFilter.h"
 #include "imgIContainer.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/RefPtr.h"
@@ -17,6 +16,8 @@
 
 class gfxASurface;
 class gfxDrawable;
+class nsIInputStream;
+class nsIGfxInfo;
 class nsIntRegion;
 class nsIPresShell;
 
@@ -79,7 +80,7 @@ public:
                                  const gfxSize&     aImageSize,
                                  const ImageRegion& aRegion,
                                  const mozilla::gfx::SurfaceFormat aFormat,
-                                 GraphicsFilter     aFilter,
+                                 mozilla::gfx::Filter aFilter,
                                  uint32_t           aImageFlags = imgIContainer::FLAG_NONE,
                                  gfxFloat           aOpacity = 1.0);
 
@@ -280,6 +281,21 @@ public:
     static nsCString GetAsDataURI(SourceSurface* aSourceSurface);
     static nsCString GetAsDataURI(DrawTarget* aDT);
     static nsCString GetAsLZ4Base64Str(DataSourceSurface* aSourceSurface);
+
+    static void GetImageBuffer(DataSourceSurface* aSurface,
+                               bool aIsAlphaPremultiplied,
+                               uint8_t** outImageBuffer,
+                               int32_t* outFormat);
+
+    static nsresult GetInputStream(DataSourceSurface* aSurface,
+                                   bool aIsAlphaPremultiplied,
+                                   const char* aMimeType,
+                                   const char16_t* aEncoderOptions,
+                                   nsIInputStream** outStream);
+
+    static nsresult ThreadSafeGetFeatureStatus(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
+                                               int32_t feature,
+                                               int32_t* status);
 
     /**
      * Copy to the clipboard as a PNG encoded Data URL.

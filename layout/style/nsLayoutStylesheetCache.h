@@ -13,15 +13,13 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/css/Loader.h"
 
 class nsIFile;
 class nsIURI;
 
 namespace mozilla {
 class CSSStyleSheet;
-namespace css {
-class Loader;
-} // namespace css
 } // namespace mozilla
 
 class nsLayoutStylesheetCache final
@@ -44,7 +42,6 @@ class nsLayoutStylesheetCache final
   static mozilla::CSSStyleSheet* MinimalXULSheet();
   static mozilla::CSSStyleSheet* XULSheet();
   static mozilla::CSSStyleSheet* QuirkSheet();
-  static mozilla::CSSStyleSheet* FullScreenOverrideSheet();
   static mozilla::CSSStyleSheet* SVGSheet();
   static mozilla::CSSStyleSheet* MathMLSheet();
   static mozilla::CSSStyleSheet* CounterStylesSheet();
@@ -70,11 +67,12 @@ private:
   void InitMemoryReporter();
   static void LoadSheetURL(const char* aURL,
                            nsRefPtr<mozilla::CSSStyleSheet>& aSheet,
-                           bool aEnableUnsafeRules);
+                           mozilla::css::SheetParsingMode aParsingMode);
   static void LoadSheetFile(nsIFile* aFile,
-                            nsRefPtr<mozilla::CSSStyleSheet>& aSheet);
+                            nsRefPtr<mozilla::CSSStyleSheet>& aSheet,
+                            mozilla::css::SheetParsingMode aParsingMode);
   static void LoadSheet(nsIURI* aURI, nsRefPtr<mozilla::CSSStyleSheet>& aSheet,
-                        bool aEnableUnsafeRules);
+                        mozilla::css::SheetParsingMode aParsingMode);
   static void InvalidateSheet(nsRefPtr<mozilla::CSSStyleSheet>& aSheet);
   static void DependentPrefChanged(const char* aPref, void* aData);
   void BuildPreferenceSheet(nsRefPtr<mozilla::CSSStyleSheet>& aSheet,
@@ -92,7 +90,6 @@ private:
   nsRefPtr<mozilla::CSSStyleSheet> mCounterStylesSheet;
   nsRefPtr<mozilla::CSSStyleSheet> mDesignModeSheet;
   nsRefPtr<mozilla::CSSStyleSheet> mFormsSheet;
-  nsRefPtr<mozilla::CSSStyleSheet> mFullScreenOverrideSheet;
   nsRefPtr<mozilla::CSSStyleSheet> mHTMLSheet;
   nsRefPtr<mozilla::CSSStyleSheet> mMathMLSheet;
   nsRefPtr<mozilla::CSSStyleSheet> mMinimalXULSheet;

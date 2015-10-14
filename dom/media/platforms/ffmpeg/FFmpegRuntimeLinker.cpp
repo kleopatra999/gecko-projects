@@ -9,6 +9,7 @@
 #include "FFmpegRuntimeLinker.h"
 #include "mozilla/ArrayUtils.h"
 #include "FFmpegLog.h"
+#include "mozilla/Preferences.h"
 
 #define NUM_ELEMENTS(X) (sizeof(X) / sizeof((X)[0]))
 

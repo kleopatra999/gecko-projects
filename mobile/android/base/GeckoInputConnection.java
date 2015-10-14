@@ -11,7 +11,6 @@ import java.lang.reflect.Proxy;
 import java.util.concurrent.SynchronousQueue;
 
 import org.mozilla.gecko.AppConstants.Versions;
-import org.mozilla.gecko.gfx.InputConnectionHandler;
 import org.mozilla.gecko.util.Clipboard;
 import org.mozilla.gecko.util.GamepadUtils;
 import org.mozilla.gecko.util.ThreadUtils;
@@ -40,7 +39,7 @@ import android.view.inputmethod.InputMethodManager;
 
 class GeckoInputConnection
     extends BaseInputConnection
-    implements InputConnectionHandler, GeckoEditableListener {
+    implements InputConnectionListener, GeckoEditableListener {
 
     private static final boolean DEBUG = false;
     protected static final String LOGTAG = "GeckoInputConnection";
@@ -369,6 +368,13 @@ class GeckoInputConnection
         final InputMethodManager imm = getInputMethodManager();
         if (imm != null) {
             final View v = getView();
+
+            if (v.hasFocus() && !imm.isActive(v)) {
+                // Workaround: The view has focus but it is not the active view for the input method. (Bug 1211848)
+                v.clearFocus();
+                v.requestFocus();
+            }
+
             imm.showSoftInput(v, 0);
         }
     }
@@ -1007,7 +1013,7 @@ final class DebugGeckoInputConnection
     public static GeckoEditableListener create(View targetView,
                                                GeckoEditableClient editable) {
         final Class<?>[] PROXY_INTERFACES = { InputConnection.class,
-                InputConnectionHandler.class,
+                InputConnectionListener.class,
                 GeckoEditableListener.class };
         DebugGeckoInputConnection dgic =
                 new DebugGeckoInputConnection(targetView, editable);

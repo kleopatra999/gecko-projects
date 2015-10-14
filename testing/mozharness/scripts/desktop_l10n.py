@@ -60,6 +60,7 @@ PyMakeIgnoreList = [
 # it's a list of values that are already known before starting a build
 configuration_tokens = ('branch',
                         'platform',
+                        'en_us_binary_url',
                         'update_platform',
                         'update_channel',
                         'ssh_key_dir',
@@ -992,10 +993,6 @@ class DesktopSingleLocale(LocalesMixin, ReleaseMixin, MockMixin, BuildbotMixin,
         self.create_virtualenv()
         self.enable_mock()
         self.activate_virtualenv()
-
-        # Enable Taskcluster debug logging, so at least we get some debug
-        # messages while we are testing uploads.
-        logging.getLogger('taskcluster').setLevel(logging.DEBUG)
 
         branch = self.config['branch']
         platform = self.config['platform']

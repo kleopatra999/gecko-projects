@@ -490,7 +490,7 @@ this.PlacesUtils = {
                    Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER_SHORTCUT,
                    Ci.nsINavHistoryResultNode.RESULT_TYPE_QUERY],
   nodeIsContainer: function PU_nodeIsContainer(aNode) {
-    return this.containerTypes.indexOf(aNode.type) != -1;
+    return this.containerTypes.includes(aNode.type);
   },
 
   /**
@@ -2043,7 +2043,7 @@ XPCOMUtils.defineLazyGetter(this, "bundle", function() {
 
 // A promise resolved once the Sqlite.jsm connections
 // can be closed.
-let promiseCanCloseConnection = function() {
+var promiseCanCloseConnection = function() {
   let TOPIC = "places-will-close-connection";
   return new Promise(resolve => {
     let observer = function() {
@@ -2988,7 +2988,7 @@ function PlacesRemoveLivemarkTransaction(aLivemarkId)
   let annosToExclude = [PlacesUtils.LMANNO_FEEDURI,
                         PlacesUtils.LMANNO_SITEURI];
   this.item.annotations = annos.filter(function(aValue, aIndex, aArray) {
-      return annosToExclude.indexOf(aValue.name) == -1;
+      return !annosToExclude.includes(aValue.name);
     });
   this.item.dateAdded = PlacesUtils.bookmarks.getItemDateAdded(this.item.id);
   this.item.lastModified =
@@ -3761,7 +3761,7 @@ PlacesUntagURITransaction.prototype = {
     // set nonexistent tags.
     let tags = PlacesUtils.tagging.getTagsForURI(this.item.uri);
     this.item.tags = this.item.tags.filter(function (aTag) {
-      return tags.indexOf(aTag) != -1;
+      return tags.includes(aTag);
     });
     PlacesUtils.tagging.untagURI(this.item.uri, this.item.tags);
   },

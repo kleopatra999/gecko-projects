@@ -28,6 +28,14 @@ builds:
         task: tasks/builds/b2g_emulator_kk_opt.yml
       debug:
         task: tasks/builds/b2g_emulator_kk_debug.yml
+  emulator-x86-kk:
+    platforms:
+      - b2g
+    types:
+      opt:
+        task: tasks/builds/b2g_emulator_x86_kk_opt.yml
+      debug:
+        task: tasks/builds/b2g_emulator_x86_kk_debug.yml
   emulator-l:
     platforms:
       - b2g
@@ -150,6 +158,18 @@ builds:
     types:
       debug:
         task: tasks/builds/dbg_macosx64.yml
+  macosx64-st-an:
+    platforms:
+      - MacOSX64 Static Analysis
+    types:
+      opt:
+        task: tasks/builds/opt_macosx64_st-an.yml
+  android-b2gdroid:
+    platforms:
+      - Android
+    types:
+      opt:
+        task: tasks/builds/android_api_11_b2gdroid.yml
 
 tests:
   cppunit:
@@ -157,6 +177,10 @@ tests:
       tasks/builds/b2g_emulator_ics_opt.yml:
         task: tasks/tests/b2g_emulator_cpp_unit.yml
       tasks/builds/b2g_emulator_ics_debug.yml:
+        task: tasks/tests/b2g_emulator_cpp_unit.yml
+      tasks/builds/b2g_emulator_x86_kk_opt.yml:
+        task: tasks/tests/b2g_emulator_cpp_unit.yml
+      tasks/builds/b2g_emulator_x86_kk_debug.yml:
         task: tasks/tests/b2g_emulator_cpp_unit.yml
   crashtest:
     allowed_build_tasks:

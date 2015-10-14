@@ -410,8 +410,6 @@ ModuleObject::evaluate(JSContext* cx, MutableHandleValue rval)
     return JS_ExecuteScript(cx, script, rval);
 }
 
-DEFINE_GETTER_FUNCTIONS(ModuleObject, initialEnvironment, InitialEnvironmentSlot)
-DEFINE_GETTER_FUNCTIONS(ModuleObject, environment, EnvironmentSlot)
 DEFINE_GETTER_FUNCTIONS(ModuleObject, evaluated, EvaluatedSlot)
 DEFINE_GETTER_FUNCTIONS(ModuleObject, requestedModules, RequestedModulesSlot)
 DEFINE_GETTER_FUNCTIONS(ModuleObject, importEntries, ImportEntriesSlot)
@@ -423,8 +421,6 @@ JSObject*
 js::InitModuleClass(JSContext* cx, HandleObject obj)
 {
     static const JSPropertySpec protoAccessors[] = {
-        JS_PSG("initialEnvironment", ModuleObject_initialEnvironmentGetter, 0),
-        JS_PSG("environment", ModuleObject_environmentGetter, 0),
         JS_PSG("evaluated", ModuleObject_evaluatedGetter, 0),
         JS_PSG("requestedModules", ModuleObject_requestedModulesGetter, 0),
         JS_PSG("importEntries", ModuleObject_importEntriesGetter, 0),
@@ -640,7 +636,6 @@ ModuleBuilder::processExport(frontend::ParseNode* pn)
 
       case PNK_VAR:
       case PNK_CONST:
-      case PNK_GLOBALCONST:
       case PNK_LET: {
           MOZ_ASSERT(kid->isArity(PN_LIST));
           for (ParseNode* var = kid->pn_head; var; var = var->pn_next) {

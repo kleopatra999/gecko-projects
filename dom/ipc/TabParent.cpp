@@ -26,6 +26,7 @@
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/ipc/DocumentRendererParent.h"
 #include "mozilla/jsipc/CrossProcessObjectWrappers.h"
+#include "mozilla/layers/AsyncDragMetrics.h"
 #include "mozilla/layers/CompositorParent.h"
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layout/RenderFrameParent.h"
@@ -63,6 +64,7 @@
 #include "nsIXULWindow.h"
 #include "nsIRemoteBrowser.h"
 #include "nsViewManager.h"
+#include "nsVariant.h"
 #include "nsIWidget.h"
 #include "nsIWindowMediator.h"
 #include "nsIWindowWatcher.h"
@@ -1438,6 +1440,24 @@ TabParent::RecvPDocAccessibleConstructor(PDocAccessibleParent* aDoc,
   return true;
 }
 
+a11y::DocAccessibleParent*
+TabParent::GetTopLevelDocAccessible() const
+{
+#ifdef ACCESSIBILITY
+  // XXX Consider managing non top level PDocAccessibles with their parent
+  // document accessible.
+  const nsTArray<PDocAccessibleParent*>& docs = ManagedPDocAccessibleParent();
+  size_t docCount = docs.Length();
+  for (size_t i = 0; i < docCount; i++) {
+    auto doc = static_cast<a11y::DocAccessibleParent*>(docs[i]);
+    if (!doc->ParentDoc()) {
+      return doc;
+    }
+  }
+#endif
+  return nullptr;
+}
+
 PDocumentRendererParent*
 TabParent::AllocPDocumentRendererParent(const nsRect& documentRect,
                                         const gfx::Matrix& transform,
@@ -1570,14 +1590,19 @@ bool TabParent::SendRealMouseEvent(WidgetMouseEvent& event)
     }
   }
 
+  ScrollableLayerGuid guid;
+  uint64_t blockId;
+  ApzAwareEventRoutingToChild(&guid, &blockId, nullptr);
+
   if (eMouseMove == event.mMessage) {
     if (event.reason == WidgetMouseEvent::eSynthesized) {
-      return SendSynthMouseMoveEvent(event);
+      return SendSynthMouseMoveEvent(event, guid, blockId);
     } else {
-      return SendRealMouseMoveEvent(event);
+      return SendRealMouseMoveEvent(event, guid, blockId);
     }
   }
-  return SendRealMouseButtonEvent(event);
+
+  return SendRealMouseButtonEvent(event, guid, blockId);
 }
 
 LayoutDeviceToCSSScale
@@ -2242,14 +2267,7 @@ TabParent::RecvNotifyIMESelection(const ContentCache& aContentCache,
     return true;
 
   mContentCache.AssignContent(aContentCache, &aIMENotification);
-
-  const nsIMEUpdatePreference updatePreference =
-    widget->GetIMEUpdatePreference();
-  if (updatePreference.WantSelectionChange() &&
-      (updatePreference.WantChangesCausedByComposition() ||
-       !aIMENotification.mSelectionChangeData.mCausedByComposition)) {
-    mContentCache.MaybeNotifyIME(widget, aIMENotification);
-  }
+  mContentCache.MaybeNotifyIME(widget, aIMENotification);
   return true;
 }
 
@@ -2291,12 +2309,7 @@ TabParent::RecvNotifyIMEPositionChange(const ContentCache& aContentCache,
   }
 
   mContentCache.AssignContent(aContentCache, &aIMENotification);
-
-  const nsIMEUpdatePreference updatePreference =
-    widget->GetIMEUpdatePreference();
-  if (updatePreference.WantPositionChanged()) {
-    mContentCache.MaybeNotifyIME(widget, aIMENotification);
-  }
+  mContentCache.MaybeNotifyIME(widget, aIMENotification);
   return true;
 }
 
@@ -3046,6 +3059,15 @@ TabParent::RecvSetTargetAPZC(const uint64_t& aInputBlockId,
 }
 
 bool
+TabParent::RecvStartScrollbarDrag(const AsyncDragMetrics& aDragMetrics)
+{
+  if (RenderFrameParent* rfp = GetRenderFrame()) {
+    rfp->StartScrollbarDrag(aDragMetrics);
+  }
+  return true;
+}
+
+bool
 TabParent::RecvSetAllowedTouchBehavior(const uint64_t& aInputBlockId,
                                        nsTArray<TouchBehaviorFlags>&& aFlags)
 {
@@ -3541,7 +3563,7 @@ TabParent::RecvInvokeDragSession(nsTArray<IPCDataTransfer>&& aTransfers,
   }
   mDragAreaX = aDragAreaX;
   mDragAreaY = aDragAreaY;
-  
+
   esm->BeginTrackingRemoteDragGesture(mFrameElement);
 
   return true;
@@ -3554,11 +3576,7 @@ TabParent::AddInitialDnDDataTo(DataTransfer* aDataTransfer)
     nsTArray<DataTransferItem>& itemArray = mInitialDataTransferItems[i];
     for (uint32_t j = 0; j < itemArray.Length(); ++j) {
       DataTransferItem& item = itemArray[j];
-      nsCOMPtr<nsIWritableVariant> variant =
-        do_CreateInstance(NS_VARIANT_CONTRACTID);
-      if (!variant) {
-        break;
-      }
+      nsRefPtr<nsVariantCC> variant = new nsVariantCC();
       // Special case kFilePromiseMime so that we get the right
       // nsIFlavorDataProvider for it.
       if (item.mFlavor.EqualsLiteral(kFilePromiseMime)) {

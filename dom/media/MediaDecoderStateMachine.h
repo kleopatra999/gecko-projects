@@ -235,8 +235,6 @@ public:
 
   // Functions used by assertions to ensure we're calling things
   // on the appropriate threads.
-  bool OnDecodeTaskQueue() const;
-
   bool OnTaskQueue() const;
 
   size_t SizeOfVideoQueue() {
@@ -463,8 +461,9 @@ protected:
   // machine thread, caller must hold the decoder lock.
   void UpdatePlaybackPositionInternal(int64_t aTime);
 
-  // Decode monitor must be held.
-  bool CheckFrameValidity(VideoData* aData);
+  // Decode monitor must be held. To determine if MDSM needs to turn off HW
+  // acceleration.
+  void CheckFrameValidity(VideoData* aData);
 
   // Sets VideoQueue images into the VideoFrameContainer. Called on the shared
   // state machine thread. Decode monitor must be held. The first aMaxFrames
@@ -680,51 +679,8 @@ private:
   // yet to run.
   bool mDispatchedStateMachine;
 
-  // Class for managing delayed dispatches of the state machine.
-  class DelayedScheduler {
-  public:
-    explicit DelayedScheduler(MediaDecoderStateMachine* aSelf)
-      : mSelf(aSelf), mMediaTimer(new MediaTimer()) {}
-
-    bool IsScheduled() const { return !mTarget.IsNull(); }
-
-    void Reset()
-    {
-      MOZ_ASSERT(mSelf->OnTaskQueue(), "Must be on state machine queue to disconnect");
-      if (IsScheduled()) {
-        mRequest.Disconnect();
-        mTarget = TimeStamp();
-      }
-    }
-
-    void Ensure(mozilla::TimeStamp& aTarget)
-    {
-      MOZ_ASSERT(mSelf->OnTaskQueue());
-      if (IsScheduled() && mTarget <= aTarget) {
-        return;
-      }
-      Reset();
-      mTarget = aTarget;
-      mRequest.Begin(mMediaTimer->WaitUntil(mTarget, __func__)->Then(
-        mSelf->OwnerThread(), __func__, mSelf,
-        &MediaDecoderStateMachine::OnDelayedSchedule,
-        &MediaDecoderStateMachine::NotReached));
-    }
-
-    void CompleteRequest()
-    {
-      MOZ_ASSERT(mSelf->OnTaskQueue());
-      mRequest.Complete();
-      mTarget = TimeStamp();
-    }
-
-  private:
-    MediaDecoderStateMachine* mSelf;
-    nsRefPtr<MediaTimer> mMediaTimer;
-    MozPromiseRequestHolder<mozilla::MediaTimerPromise> mRequest;
-    TimeStamp mTarget;
-
-  } mDelayedScheduler;
+  // Used to dispatch another round schedule with specific target time.
+  DelayedScheduler mDelayedScheduler;
 
   // StartTimeRendezvous is a helper class that quarantines the first sample
   // until it gets a sample from both channels, such that we can be guaranteed

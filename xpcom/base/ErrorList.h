@@ -337,6 +337,8 @@
   ERROR(NS_ERROR_BAD_OPAQUE_REDIRECT_INTERCEPTION,     FAILURE(106)),
   /* Service worker intentionally canceled load via preventDefault(). */
   ERROR(NS_ERROR_INTERCEPTION_CANCELED,                FAILURE(107)),
+  /* Service worker passed a rejected promise to respondwith. */
+  ERROR(NS_ERROR_REJECTED_RESPONSE_INTERCEPTION,       FAILURE(108)),
 #undef MODULE
 
 
@@ -540,6 +542,10 @@
 
   /* A way to represent uncatchable exceptions */
   ERROR(NS_ERROR_UNCATCHABLE_EXCEPTION,            FAILURE(1016)),
+
+  /* An nsresult value to use in ErrorResult to indicate that we want to throw
+     a DOMException */
+  ERROR(NS_ERROR_DOM_DOMEXCEPTION,                 FAILURE(1017)),
 
   /* May be used to indicate when e.g. setting a property value didn't
    * actually change the value, like for obj.foo = "bar"; obj.foo = "bar";

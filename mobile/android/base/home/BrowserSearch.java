@@ -14,7 +14,6 @@ import java.util.Locale;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoAppShell;
@@ -308,10 +307,7 @@ public class BrowserSearch extends HomeFragment
                 final Cursor c = mAdapter.getCursor(position);
                 final String url = c.getString(c.getColumnIndexOrThrow(URLColumns.URL));
 
-                // The "urlbar" and "frecency" sessions can be open at the same time. Use the LIST_ITEM
-                // method to set this LOAD_URL event apart from the case where the user commits what's in
-                // the url bar.
-                Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.LIST_ITEM);
+                Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.LIST_ITEM, "frecency");
 
                 // This item is a TwoLinePageRow, so we allow switch-to-tab.
                 mUrlOpenListener.onUrlOpen(url, EnumSet.of(OnUrlOpenListener.Flags.ALLOW_SWITCH_TO_TAB));
@@ -535,14 +531,11 @@ public class BrowserSearch extends HomeFragment
         }
         getLoaderManager().restartLoader(LOADER_ID_SUGGESTION, null, mSearchEngineSuggestionLoaderCallbacks);
 
-        // Start search history suggestions query only in nightly. Bug 1201325
-        if (AppConstants.NIGHTLY_BUILD) {
-            // Saved suggestions
-            if (mSearchHistorySuggestionLoaderCallback == null) {
-                mSearchHistorySuggestionLoaderCallback = new SearchHistorySuggestionLoaderCallbacks();
-            }
-            getLoaderManager().restartLoader(LOADER_ID_SAVED_SUGGESTION, null, mSearchHistorySuggestionLoaderCallback);
+        // Saved suggestions
+        if (mSearchHistorySuggestionLoaderCallback == null) {
+            mSearchHistorySuggestionLoaderCallback = new SearchHistorySuggestionLoaderCallbacks();
         }
+        getLoaderManager().restartLoader(LOADER_ID_SAVED_SUGGESTION, null, mSearchHistorySuggestionLoaderCallback);
     }
 
     private void setSuggestions(ArrayList<String> suggestions) {

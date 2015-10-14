@@ -179,6 +179,7 @@ HttpChannelChild::HttpChannelChild()
   , mSendResumeAt(false)
   , mIPCOpen(false)
   , mKeptAlive(false)
+  , mUnknownDecoderInvolved(false)
   , mDivertingToParent(false)
   , mFlushedForDiversion(false)
   , mSuspendSent(false)
@@ -580,6 +581,42 @@ HttpChannelChild::RecvOnTransportAndData(const nsresult& channelStatus,
   return true;
 }
 
+class MaybeDivertOnDataHttpEvent : public ChannelEvent
+{
+ public:
+  MaybeDivertOnDataHttpEvent(HttpChannelChild* child,
+                             const nsCString& data,
+                             const uint64_t& offset,
+                             const uint32_t& count)
+  : mChild(child)
+  , mData(data)
+  , mOffset(offset)
+  , mCount(count) {}
+
+  void Run()
+  {
+    mChild->MaybeDivertOnData(mData, mOffset, mCount);
+  }
+
+ private:
+  HttpChannelChild* mChild;
+  nsCString mData;
+  uint64_t mOffset;
+  uint32_t mCount;
+};
+
+void
+HttpChannelChild::MaybeDivertOnData(const nsCString& data,
+                                    const uint64_t& offset,
+                                    const uint32_t& count)
+{
+  LOG(("HttpChannelChild::MaybeDivertOnData [this=%p]", this));
+
+  if (mDivertingToParent) {
+    SendDivertOnDataAvailable(data, offset, count);
+  }
+}
+
 void
 HttpChannelChild::OnTransportAndData(const nsresult& channelStatus,
                                      const nsresult& transportStatus,
@@ -606,6 +643,13 @@ HttpChannelChild::OnTransportAndData(const nsresult& channelStatus,
 
   if (mCanceled)
     return;
+
+  if (mUnknownDecoderInvolved) {
+    LOG(("UnknownDecoder is involved queue OnDataAvailable call. [this=%p]",
+         this));
+    mUnknownDecoderEventQ.AppendElement(
+      new MaybeDivertOnDataHttpEvent(this, data, offset, count));
+  }
 
   // Hold queue lock throughout all three calls, else we might process a later
   // necko msg in between them.
@@ -742,12 +786,42 @@ HttpChannelChild::RecvOnStopRequest(const nsresult& channelStatus,
   return true;
 }
 
+class MaybeDivertOnStopHttpEvent : public ChannelEvent
+{
+ public:
+  MaybeDivertOnStopHttpEvent(HttpChannelChild* child,
+                             const nsresult& channelStatus)
+  : mChild(child)
+  , mChannelStatus(channelStatus)
+  {}
+
+  void Run()
+  {
+    mChild->MaybeDivertOnStop(mChannelStatus);
+  }
+
+ private:
+  HttpChannelChild* mChild;
+  nsresult mChannelStatus;
+};
+
+void
+HttpChannelChild::MaybeDivertOnStop(const nsresult& aChannelStatus)
+{
+  LOG(("HttpChannelChild::MaybeDivertOnStop [this=%p, "
+       "mDivertingToParent=%d status=%x]", this, mDivertingToParent,
+       aChannelStatus));
+  if (mDivertingToParent) {
+    SendDivertOnStopRequest(aChannelStatus);
+  }
+}
+
 void
 HttpChannelChild::OnStopRequest(const nsresult& channelStatus,
                                 const ResourceTimingStruct& timing)
 {
   LOG(("HttpChannelChild::OnStopRequest [this=%p status=%x]\n",
-           this, channelStatus));
+       this, channelStatus));
 
   if (mDivertingToParent) {
     MOZ_RELEASE_ASSERT(!mFlushedForDiversion,
@@ -755,6 +829,13 @@ HttpChannelChild::OnStopRequest(const nsresult& channelStatus,
 
     SendDivertOnStopRequest(channelStatus);
     return;
+  }
+
+  if (mUnknownDecoderInvolved) {
+   LOG(("UnknownDecoder is involved queue OnStopRequest call. [this=%p]",
+        this));
+    mUnknownDecoderEventQ.AppendElement(
+      new MaybeDivertOnStopHttpEvent(this, channelStatus));
   }
 
   mTransactionTimings.domainLookupStart = timing.domainLookupStart;
@@ -1369,6 +1450,7 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult result)
 
   RequestHeaderTuples emptyHeaders;
   RequestHeaderTuples* headerTuples = &emptyHeaders;
+  nsLoadFlags loadFlags = 0;
 
   nsCOMPtr<nsIHttpChannelChild> newHttpChannelChild =
       do_QueryInterface(mRedirectChannelChild);
@@ -1401,10 +1483,15 @@ HttpChannelChild::OnRedirectVerifyCallback(nsresult result)
         SerializeURI(apiRedirectURI, redirectURI);
       }
     }
+
+    nsCOMPtr<nsIRequest> request = do_QueryInterface(mRedirectChannelChild);
+    if (request) {
+      request->GetLoadFlags(&loadFlags);
+    }
   }
 
   if (mIPCOpen)
-    SendRedirect2Verify(result, *headerTuples, redirectURI);
+    SendRedirect2Verify(result, *headerTuples, loadFlags, redirectURI);
 
   return NS_OK;
 }
@@ -2233,9 +2320,46 @@ HttpChannelChild::DivertToParent(ChannelDiverterChild **aChild)
   return NS_OK;
 }
 
+NS_IMETHODIMP
+HttpChannelChild::UnknownDecoderInvolvedKeepData()
+{
+  LOG(("HttpChannelChild::UnknownDecoderInvolvedKeepData [this=%p]",
+       this));
+  mUnknownDecoderInvolved = true;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpChannelChild::UnknownDecoderInvolvedOnStartRequestCalled()
+{
+  LOG(("HttpChannelChild::UnknownDecoderInvolvedOnStartRequestCalled "
+       "[this=%p, mDivertingToParent=%d]", this, mDivertingToParent));
+  mUnknownDecoderInvolved = false;
+
+  nsresult rv = NS_OK;
+
+  if (mDivertingToParent) {
+    rv = mEventQ->PrependEvents(mUnknownDecoderEventQ);
+  }
+  mUnknownDecoderEventQ.Clear();
+
+  return rv;
+}
+
+NS_IMETHODIMP
+HttpChannelChild::GetDivertingToParent(bool* aDiverting)
+{
+  NS_ENSURE_ARG_POINTER(aDiverting);
+  *aDiverting = mDivertingToParent;
+  return NS_OK;
+}
+
+
 void
 HttpChannelChild::ResetInterception()
 {
+  NS_ENSURE_TRUE_VOID(gNeckoChild != nullptr);
+
   if (mInterceptListener) {
     mInterceptListener->Cleanup();
   }
@@ -2243,7 +2367,7 @@ HttpChannelChild::ResetInterception()
 
   // The chance to intercept any further requests associated with this channel
   // (such as redirects) has passed.
-  ForceNoIntercept();
+  mLoadFlags |= LOAD_BYPASS_SERVICE_WORKER;
 
   // Continue with the original cross-process request
   nsresult rv = ContinueAsyncOpen();

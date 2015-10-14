@@ -76,147 +76,6 @@ body {
   border-radius: 3px;
 }
 
-/* Tabs and tab selection buttons */
-
-.tab-view-container {
-  width: 100%;
-  background-image: url("../shared/img/beta-ribbon.svg#beta-ribbon");
-  background-color: #fbfbfb;
-  background-size: 36px 36px;
-  background-repeat: no-repeat;
-  flex: 1;
-  display: flex;
-  flex-flow: column nowrap;
-  overflow: hidden;
-}
-
-.tab-view {
-  position: relative;
-  width: 100%;
-  height: 4rem;
-  line-height: 3.7rem;
-  color: #4A4A4A;
-  list-style: none;
-  border-bottom: 2px solid #ccc;
-}
-
-.tab-view > li {
-  display: inline-block;
-  text-align: center;
-  padding: 0;
-  cursor: pointer;
-}
-
-.tab-view > .slide-bar {
-  position: absolute;
-  bottom: -2px;
-  left: 0;
-  height: .2em;
-  width: 50%;
-  background: #00A9DC;
-  border: none;
-  transition: margin .3s ease-in-out;
-}
-
-.tab-view li:nth-child(1).selected ~ .slide-bar {
-  margin-left: 0;
-}
-
-.tab-view li:nth-child(2).selected ~ .slide-bar {
-  margin-left: 50%;
-}
-
-html[dir="rtl"] .tab-view li:nth-child(1).selected ~ .slide-bar {
-  margin-left: 50%;
-}
-
-html[dir="rtl"] .tab-view li:nth-child(2).selected ~ .slide-bar {
-  margin-left: 0;
-}
-
-.tab-view > li > div {
-  font-size: 1.2rem;
-  pointer-events: none;
-  display: inline;
-}
-
-.tab-view > li:before {
-  content: "";
-  pointer-events: none;
-  display: inline-block;
-  -moz-margin-end: .5rem;
-  vertical-align: middle;
-  height: 1.4rem;
-  width: 1.4rem;
-  transition-property: background-image;
-}
-
-.tab-view > li.selected {
-  transition-delay: .3s;
-}
-
-.tab-view > li[data-tab-name="rooms"]:before {
-  background-image: url("../shared/img/icons-14x14.svg#hello");
-}
-
-.tab-view > li[data-tab-name="rooms"]:hover:before {
-  background-image: url("../shared/img/icons-14x14.svg#hello-hover");
-}
-
-.tab-view > li[data-tab-name="rooms"].selected:before {
-  background-image: url("../shared/img/icons-14x14.svg#hello-active");
-}
-
-.tab-view > li[data-tab-name="contacts"]:before {
-  background-image: url("../shared/img/icons-14x14.svg#contacts");
-}
-
-.tab-view > li[data-tab-name="contacts"]:hover:before {
-  background-image: url("../shared/img/icons-14x14.svg#contacts-hover");
-}
-
-.tab-view > li[data-tab-name="contacts"].selected:before {
-  background-image: url("../shared/img/icons-14x14.svg#contacts-active");
-}
-
-/* Styling for one tab */
-.tab-view li:first-child:nth-last-child(2) {
-  width: 100%;
-}
-
-.tab-view li:first-child:nth-last-child(2) > span {
-  display: none;
-}
-
-.tab-view li:first-child:nth-last-child(2) > span {
-  display: none;
-}
-
-.tab-view li:first-child:nth-last-child(2):before {
-  background-image: url("../shared/img/icons-14x14.svg#hello-hover");
-}
-
-.tab-view li:first-child:nth-last-child(2) ~ li {
-  /* hide the tab-slider when there is only one tab shown */
-  display: none;
-}
-
-.tab-view li:first-child:nth-last-child(3),
-.tab-view li:first-child:nth-last-child(3) ~ li {
-  width: 50%;
-}
-
-.tab {
-  display: none;
-  flex: 1;
-  overflow: auto;
-}
-
-.tab.selected {
-  display: flex;
-  flex-flow: column nowrap;
-}
-
 /* Content area and input fields */
 
 .content-area {
@@ -232,8 +91,7 @@ html[dir="rtl"] .tab-view li:nth-child(2).selected ~ .slide-bar {
   -moz-padding-start: 20px;
 }
 
-.fte-get-started-container + .generate-url > #share-link-header,
-.tab-view + .tab .content-area > .generate-url > #share-link-header {
+.fte-get-started-container + .generate-url > #share-link-header {
   /* The header shouldn't be indented if the tabs are present. */
   -moz-padding-start: 0;
 }
@@ -331,6 +189,7 @@ html[dir="rtl"] .tab-view li:nth-child(2).selected ~ .slide-bar {
   flex: 1;
   display: flex;
   flex-flow: column nowrap;
+  width: 100%;
 }
 
 .rooms > h1 {
@@ -347,46 +206,6 @@ html[dir="rtl"] .tab-view li:nth-child(2).selected ~ .slide-bar {
   display: flex;
   flex-direction: column;
   border-top: 1px solid #d8d8d8;
-}
-
-.new-room-view > .context-checkbox-checked {
-  background-color: #dbf7ff;
-}
-
-.new-room-view > .context {
-  border-top: 1px solid #ebebeb;
-  flex: 1;
-  border-radius: 3px 3px 0 0;
-  padding: 6px 15px 8px;
-}
-
-.new-room-view > .context > .context-enabled {
-  margin-bottom: .5rem;
-  display: block;
-}
-
-.new-room-view > .context > .context-enabled > input {
-  -moz-margin-start: 0;
-}
-
-.new-room-view > .context > .checkbox-wrapper {
-  height: 2rem;
-  margin-bottom: .5em;
-  line-height: 2rem;
-}
-
-.new-room-view > .context > .checkbox-wrapper > .checkbox {
-  border-color: #d8d8d8;
-  background-color: #fff;
-}
-
-.new-room-view > .context > .checkbox-wrapper > .checkbox.checked {
-  background-image: url("../shared/img/check.svg#check-blue");
-}
-
-.new-room-view > .context > .checkbox-wrapper > label {
-  color: #333;
-  font-size: 1.1rem;
 }
 
 .new-room-view > .btn {
@@ -414,6 +233,7 @@ html[dir="rtl"] .tab-view li:nth-child(2).selected ~ .slide-bar {
   overflow-x: hidden;
   display: flex;
   flex-flow: column nowrap;
+  width: 100%;
 }
 
 .room-list-empty {
@@ -775,55 +595,6 @@ html[dir="rtl"] .generate-url-spinner {
   text-decoration: none;
 }
 
-/* DnD menu */
-
-.dnd-status {
-  border: 1px solid transparent;
-  padding: 2px 4px;
-  margin: 0;
-  /* Undo the start border + padding so that unhovered dnd-status is aligned
-     as if there was no additional spacing. */
-  -moz-margin-start: calc(-1px + -4px);
-  cursor: pointer;
-  border-radius: 3px;
-}
-
-.dnd-status:hover {
-  border-color: #ddd;
-  background-color: #f1f1f1;
-}
-
-.status-available:before,
-.status-unavailable:before {
-  content: "";
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  vertical-align: bottom;
-  background-repeat: no-repeat;
-  background-size: cover;
-  -moz-margin-end: .2rem;
-  margin-bottom: -3px;
-}
-
-.dropdown-menu-item.status-available:before,
-.dropdown-menu-item.status-unavailable:before {
-  margin-bottom: 2px;
-}
-
-html[dir="rtl"] .dropdown-menu-item.status-available:before,
-html[dir="rtl"] .dropdown-menu-item.status-unavailable:before {
-  margin-right: -3px;
-}
-
-.status-available:before {
-  background-image: url("../shared/img/icons-16x16.svg#status-available");
-}
-
-.status-unavailable:before {
-  background-image: url("../shared/img/icons-16x16.svg#status-unavailable");
-}
-
 /* Status badges -- Available/Unavailable */
 .status {
   display: inline-block;
@@ -881,6 +652,12 @@ html[dir="rtl"] .user-details .dropdown-menu {
   left: auto;
   bottom: 1.1em;
   right: 14px;
+}
+
+.entries-divider {
+  border-left: 0;
+  border-right: 0;
+  border-bottom: solid 1px #d8d8d8;
 }
 
 html[dir="rtl"] .settings-menu .dropdown-menu {

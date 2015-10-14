@@ -289,7 +289,7 @@ public:
   /**
    * Get the scrollframe to ignore, if any.
    */
-  nsIFrame* GetIgnoreScrollFrame() const { return mIgnoreScrollFrame; }
+  nsIFrame* GetIgnoreScrollFrame() { return mIgnoreScrollFrame; }
   /**
    * Get the ViewID of the nearest scrolling ancestor frame.
    */
@@ -864,6 +864,13 @@ public:
 
   NS_DECLARE_FRAME_PROPERTY(OutOfFlowDisplayDataProperty,
                             DeleteValue<OutOfFlowDisplayData>)
+
+  static OutOfFlowDisplayData* GetOutOfFlowData(nsIFrame* aFrame)
+  {
+    return static_cast<OutOfFlowDisplayData*>(
+      aFrame->Properties().Get(OutOfFlowDisplayDataProperty()));
+  }
+
   NS_DECLARE_FRAME_PROPERTY(Preserve3DDirtyRectProperty, DeleteValue<nsRect>)
 
   nsPresContext* CurrentPresContext() {
@@ -2913,7 +2920,6 @@ public:
     : nsDisplayItem(aBuilder, aFrame)
   {
     MOZ_COUNT_CTOR(nsDisplayLayerEventRegions);
-    AddFrame(aBuilder, aFrame);
   }
 #ifdef NS_BUILD_REFCNT_LOGGING
   virtual ~nsDisplayLayerEventRegions() {

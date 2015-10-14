@@ -156,6 +156,7 @@ class JSFunction : public js::NativeObject
                nonLazyScript()->funHasExtensibleScope() ||
                nonLazyScript()->funNeedsDeclEnvObject() ||
                nonLazyScript()->needsHomeObject()       ||
+               nonLazyScript()->isDerivedClassConstructor() ||
                isGenerator();
     }
 
@@ -516,6 +517,16 @@ class JSFunction : public js::NativeObject
         u.n.jitinfo = data;
     }
 
+    bool isDerivedClassConstructor() {
+        bool derived;
+        if (isInterpretedLazy())
+            derived = lazyScript()->isDerivedClassConstructor();
+        else
+            derived = nonLazyScript()->isDerivedClassConstructor();
+        MOZ_ASSERT_IF(derived, isClassConstructor());
+        return derived;
+    }
+
     static unsigned offsetOfNativeOrScript() {
         static_assert(offsetof(U, n.native) == offsetof(U, i.s.script_),
                       "native and script pointers must be in the same spot "
@@ -750,7 +761,7 @@ JSFunction::getExtendedSlot(size_t which) const
 
 namespace js {
 
-JSString* FunctionToString(JSContext* cx, HandleFunction fun, bool bodyOnly, bool lambdaParen);
+JSString* FunctionToString(JSContext* cx, HandleFunction fun, bool lambdaParen);
 
 template<XDRMode mode>
 bool

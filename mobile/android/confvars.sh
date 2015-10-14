@@ -33,11 +33,7 @@ MOZ_MEDIA_NAVIGATOR=1
 # Enable NFC permission
 MOZ_ANDROID_BEAM=1
 
-if test "$LIBXUL_SDK"; then
-MOZ_XULRUNNER=1
-else
 MOZ_XULRUNNER=
-fi
 
 MOZ_CAPTURE=1
 MOZ_RAW=1
@@ -123,3 +119,6 @@ fi
 if ! test "$NIGHTLY_BUILD"; then
 MOZ_ANDROID_NATIVE_ACCOUNT_UI=1
 fi
+
+# Disable GeckoView by default.
+export MOZ_DISABLE_GECKOVIEW=1

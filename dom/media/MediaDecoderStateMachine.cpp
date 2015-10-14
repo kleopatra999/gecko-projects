@@ -180,6 +180,20 @@ static uint32_t sVideoQueueDefaultSize = MAX_VIDEO_QUEUE_SIZE;
 static uint32_t sVideoQueueHWAccelSize = MIN_VIDEO_QUEUE_SIZE;
 static uint32_t sVideoQueueSendToCompositorSize = VIDEO_QUEUE_SEND_TO_COMPOSITOR_SIZE;
 
+static void InitVideoQueuePrefs() {
+  MOZ_ASSERT(NS_IsMainThread());
+  static bool sPrefInit = false;
+  if (!sPrefInit) {
+    sPrefInit = true;
+    sVideoQueueDefaultSize = Preferences::GetUint(
+      "media.video-queue.default-size", MAX_VIDEO_QUEUE_SIZE);
+    sVideoQueueHWAccelSize = Preferences::GetUint(
+      "media.video-queue.hw-accel-size", MIN_VIDEO_QUEUE_SIZE);
+    sVideoQueueSendToCompositorSize = Preferences::GetUint(
+      "media.video-queue.send-to-compositor-size", VIDEO_QUEUE_SEND_TO_COMPOSITOR_SIZE);
+  }
+}
+
 MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
                                                    MediaDecoderReader* aReader,
                                                    bool aRealTime) :
@@ -190,7 +204,7 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   mProducerID(ImageContainer::AllocateProducerID()),
   mRealTime(aRealTime),
   mDispatchedStateMachine(false),
-  mDelayedScheduler(this),
+  mDelayedScheduler(mTaskQueue),
   mState(DECODER_STATE_DECODING_NONE, "MediaDecoderStateMachine::mState"),
   mCurrentFrameID(0),
   mObservedDuration(TimeUnit(), "MediaDecoderStateMachine::mObservedDuration"),
@@ -269,19 +283,7 @@ MediaDecoderStateMachine::MediaDecoderStateMachine(MediaDecoder* aDecoder,
   nsCOMPtr<nsIRunnable> r = NS_NewRunnableMethod(this, &MediaDecoderStateMachine::InitializationTask);
   mTaskQueue->Dispatch(r.forget());
 
-  static bool sPrefCacheInit = false;
-  if (!sPrefCacheInit) {
-    sPrefCacheInit = true;
-    Preferences::AddUintVarCache(&sVideoQueueDefaultSize,
-                                 "media.video-queue.default-size",
-                                 MAX_VIDEO_QUEUE_SIZE);
-    Preferences::AddUintVarCache(&sVideoQueueHWAccelSize,
-                                 "media.video-queue.hw-accel-size",
-                                 MIN_VIDEO_QUEUE_SIZE);
-    Preferences::AddUintVarCache(&sVideoQueueSendToCompositorSize,
-                                 "media.video-queue.send-to-compositor-size",
-                                 VIDEO_QUEUE_SEND_TO_COMPOSITOR_SIZE);
-  }
+  InitVideoQueuePrefs();
 
   mBufferingWait = IsRealTime() ? 0 : 15;
   mLowDataThresholdUsecs = IsRealTime() ? 0 : detail::LOW_DATA_THRESHOLD_USECS;
@@ -400,14 +402,17 @@ bool MediaDecoderStateMachine::HaveNextFrameData()
          (!HasVideo() || VideoQueue().GetSize() > 1);
 }
 
-int64_t MediaDecoderStateMachine::GetDecodedAudioDuration()
+int64_t
+MediaDecoderStateMachine::GetDecodedAudioDuration()
 {
   MOZ_ASSERT(OnTaskQueue());
-  int64_t audioDecoded = AudioQueue().Duration();
   if (mMediaSink->IsStarted()) {
-    audioDecoded += AudioEndTime() - GetMediaTime();
+    // |mDecodedAudioEndTime == -1| means no decoded audio at all so the
+    // returned duration is 0.
+    return mDecodedAudioEndTime != -1 ? mDecodedAudioEndTime - GetClock() : 0;
   }
-  return audioDecoded;
+  // MediaSink not started. All audio samples are in the queue.
+  return AudioQueue().Duration();
 }
 
 void MediaDecoderStateMachine::DiscardStreamData()
@@ -846,6 +851,10 @@ MediaDecoderStateMachine::OnVideoDecoded(MediaData* aVideoSample)
              (video ? video->GetEndTime() : -1),
              (video ? video->mDiscontinuity : 0));
 
+  // Check frame validity here for every decoded frame in order to have a
+  // better chance to make the decision of turning off HW acceleration.
+  CheckFrameValidity(aVideoSample->As<VideoData>());
+
   switch (mState) {
     case DECODER_STATE_BUFFERING: {
       // If we're buffering, this may be the sample we need to stop buffering.
@@ -1024,13 +1033,7 @@ bool MediaDecoderStateMachine::IsPlaying() const
 nsresult MediaDecoderStateMachine::Init(MediaDecoderStateMachine* aCloneDonor)
 {
   MOZ_ASSERT(NS_IsMainThread());
-
-  MediaDecoderReader* cloneReader = nullptr;
-  if (aCloneDonor) {
-    cloneReader = aCloneDonor->mReader;
-  }
-
-  nsresult rv = mReader->Init(cloneReader);
+  nsresult rv = mReader->Init();
   NS_ENSURE_SUCCESS(rv, rv);
   ScheduleStateMachineCrossThread();
   return NS_OK;
@@ -2445,15 +2448,10 @@ MediaDecoderStateMachine::Reset()
   DecodeTaskQueue()->Dispatch(resetTask.forget());
 }
 
-bool MediaDecoderStateMachine::CheckFrameValidity(VideoData* aData)
+void
+MediaDecoderStateMachine::CheckFrameValidity(VideoData* aData)
 {
   MOZ_ASSERT(OnTaskQueue());
-
-  // If we've sent this frame before then only return the valid state,
-  // don't update the statistics.
-  if (aData->mSentToCompositor) {
-    return !aData->mImage || aData->mImage->IsValid();
-  }
 
   // Update corrupt-frames statistics
   if (aData->mImage && !aData->mImage->IsValid()) {
@@ -2472,10 +2470,8 @@ bool MediaDecoderStateMachine::CheckFrameValidity(VideoData* aData)
         mCorruptFrames.clear();
       gfxCriticalNote << "Too many dropped/corrupted frames, disabling DXVA";
     }
-    return false;
   } else {
     mCorruptFrames.insert(0);
-    return true;
   }
 }
 
@@ -2497,7 +2493,7 @@ void MediaDecoderStateMachine::RenderVideoFrames(int32_t aMaxFrames,
   for (uint32_t i = 0; i < frames.Length(); ++i) {
     VideoData* frame = frames[i]->As<VideoData>();
 
-    bool valid = CheckFrameValidity(frame);
+    bool valid = !frame->mImage || frame->mImage->IsValid();
     frame->mSentToCompositor = true;
 
     if (!valid) {
@@ -2859,12 +2855,13 @@ MediaDecoderStateMachine::ScheduleStateMachineIn(int64_t aMicroseconds)
   TimeStamp target = now + TimeDuration::FromMicroseconds(aMicroseconds);
 
   SAMPLE_LOG("Scheduling state machine for %lf ms from now", (target - now).ToMilliseconds());
-  mDelayedScheduler.Ensure(target);
-}
 
-bool MediaDecoderStateMachine::OnDecodeTaskQueue() const
-{
-  return !DecodeTaskQueue() || DecodeTaskQueue()->IsCurrentThreadIn();
+  nsRefPtr<MediaDecoderStateMachine> self = this;
+  mDelayedScheduler.Ensure(target, [self] () {
+    self->OnDelayedSchedule();
+  }, [self] () {
+    self->NotReached();
+  });
 }
 
 bool MediaDecoderStateMachine::OnTaskQueue() const

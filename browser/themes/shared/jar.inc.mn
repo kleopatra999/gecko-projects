@@ -7,6 +7,7 @@
 # be specified once. As a result, the source file paths are relative
 # to the location of the actual manifest.
 
+  skin/classic/browser/aboutCertError.css                      (../shared/aboutCertError.css)
   skin/classic/browser/aboutNetError.css                       (../shared/aboutNetError.css)
   skin/classic/browser/aboutNetError_info.svg                  (../shared/aboutNetError_info.svg)
   skin/classic/browser/aboutNetError_alert.svg                 (../shared/aboutNetError_alert.svg)
@@ -66,8 +67,6 @@
   skin/classic/browser/info.svg                                (../shared/info.svg)
   skin/classic/browser/tracking-protection-16.svg              (../shared/identity-block/tracking-protection-16.svg)
   skin/classic/browser/tracking-protection-disabled-16.svg     (../shared/identity-block/tracking-protection-disabled-16.svg)
-  skin/classic/browser/magnifier.png                           (../shared/magnifier.png)
-  skin/classic/browser/magnifier@2x.png                        (../shared/magnifier@2x.png)
   skin/classic/browser/newtab/close.png                        (../shared/newtab/close.png)
   skin/classic/browser/newtab/controls.svg                     (../shared/newtab/controls.svg)
   skin/classic/browser/newtab/whimsycorn.png                   (../shared/newtab/whimsycorn.png)

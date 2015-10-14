@@ -31,6 +31,7 @@ const SEARCH_AUTOFILL = [SEARCH_GLOBAL_FLAG, SEARCH_FUNCTION_FLAG, SEARCH_TOKEN_
 const EDITOR_VARIABLE_HOVER_DELAY = 750; // ms
 const EDITOR_VARIABLE_POPUP_POSITION = "topcenter bottomleft";
 const TOOLBAR_ORDER_POPUP_POSITION = "topcenter bottomleft";
+const FUNCTION_SEARCH_POPUP_POSITION = "topcenter bottomleft";
 const RESIZE_REFRESH_RATE = 50; // ms
 const PROMISE_DEBUGGER_URL =
   "chrome://devtools/content/promisedebugger/promise-debugger.xhtml";
@@ -48,6 +49,19 @@ const services = {
 
 const EventListenersView = require('./content/views/event-listeners-view');
 const actions = require('./content/actions/event-listeners');
+
+Object.defineProperties(this, {
+  "store": {
+    value: store,
+    enumerable: true,
+    writable: false
+  },
+  "services": {
+    value: services,
+    enumerable: true,
+    writable: false
+  }
+});
 
 /**
  * Object defining the debugger view components.

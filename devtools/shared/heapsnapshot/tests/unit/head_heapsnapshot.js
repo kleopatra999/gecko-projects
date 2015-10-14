@@ -3,11 +3,11 @@
 
 "use strict";
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cu = Components.utils;
-const Cr = Components.results;
-const CC = Components.Constructor;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
+var Cr = Components.results;
+var CC = Components.Constructor;
 
 const { require } = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {});
 const { Match } = Cu.import("resource://test/Match.jsm", {});
@@ -109,8 +109,8 @@ function getFilePath(aName, aAllowMissing=false, aUsePlatformPathSeparator=false
   return path;
 }
 
-function saveNewHeapSnapshot() {
-  const filePath = ChromeUtils.saveHeapSnapshot({ runtime: true });
+function saveNewHeapSnapshot(opts = { runtime: true }) {
+  const filePath = ChromeUtils.saveHeapSnapshot(opts);
   ok(filePath, "Should get a file path to save the core dump to.");
   ok(true, "Saved a heap snapshot to " + filePath);
   return filePath;

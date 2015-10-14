@@ -4,7 +4,7 @@
  */
 "use strict";
 
-const { 'classes': Cc, 'interfaces': Ci, 'utils': Cu, 'results': Cr } = Components;
+var { 'classes': Cc, 'interfaces': Ci, 'utils': Cu, 'results': Cr } = Components;
 
 var { NetUtil } = Cu.import("resource://gre/modules/NetUtil.jsm", {});
 var { FileUtils } = Cu.import("resource://gre/modules/FileUtils.jsm", {});
@@ -12,8 +12,6 @@ var { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
 var { Promise } = Cu.import("resource://gre/modules/Promise.jsm", {});
 var { HttpServer } = Cu.import("resource://testing-common/httpd.js", {});
 var { ctypes } = Cu.import("resource://gre/modules/ctypes.jsm");
-
-var gIsWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
 
 const isDebugBuild = Cc["@mozilla.org/xpcom/debug;1"]
                        .getService(Ci.nsIDebug2).isDebugBuild;
@@ -409,7 +407,7 @@ function _getBinaryUtil(binaryUtilName) {
                            .getService(Ci.nsIProperties);
 
   let utilBin = directoryService.get("CurProcD", Ci.nsILocalFile);
-  utilBin.append(binaryUtilName + (gIsWindows ? ".exe" : ""));
+  utilBin.append(binaryUtilName + mozinfo.bin_suffix);
   // If we're testing locally, the above works. If not, the server executable
   // is in another location.
   if (!utilBin.exists()) {
@@ -418,7 +416,7 @@ function _getBinaryUtil(binaryUtilName) {
       utilBin = utilBin.parent;
     }
     utilBin.append("bin");
-    utilBin.append(binaryUtilName + (gIsWindows ? ".exe" : ""));
+    utilBin.append(binaryUtilName + mozinfo.bin_suffix);
   }
   // But maybe we're on Android or B2G, where binaries are in /data/local/xpcb.
   if (!utilBin.exists()) {

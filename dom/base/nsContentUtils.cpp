@@ -2710,6 +2710,9 @@ nsContentUtils::SubjectPrincipal()
   MOZ_ASSERT(NS_IsMainThread());
   JSContext* cx = GetCurrentJSContext();
   if (!cx) {
+#ifndef RELEASE_BUILD
+    MOZ_CRASH("Accessing the Subject Principal without an AutoJSAPI on the stack is forbidden");
+#endif
     Telemetry::Accumulate(Telemetry::SUBJECT_PRINCIPAL_ACCESSED_WITHOUT_SCRIPT_ON_STACK, true);
     return GetSystemPrincipal();
   }
@@ -3494,6 +3497,8 @@ nsContentUtils::MaybeReportInterceptionErrorToConsole(nsIDocument* aDocument,
     messageName = "BadOpaqueRedirectInterception";
   } else if (aError == NS_ERROR_INTERCEPTION_CANCELED) {
     messageName = "InterceptionCanceled";
+  } else if (aError == NS_ERROR_REJECTED_RESPONSE_INTERCEPTION) {
+    messageName = "InterceptionRejectedResponse";
   }
 
   if (messageName) {
@@ -7196,7 +7201,7 @@ nsContentUtils::IsAllowedNonCorsContentType(const nsACString& aHeaderValue)
   nsAutoCString contentType;
   nsAutoCString unused;
 
-  nsresult rv = NS_ParseContentType(aHeaderValue, contentType, unused);
+  nsresult rv = NS_ParseRequestContentType(aHeaderValue, contentType, unused);
   if (NS_FAILED(rv)) {
     return false;
   }
@@ -8099,10 +8104,21 @@ nsContentUtils::PushEnabled(JSContext* aCx, JSObject* aObj)
 
 // static
 bool
-nsContentUtils::IsWorkerLoad(nsContentPolicyType aType)
+nsContentUtils::IsNonSubresourceRequest(nsIChannel* aChannel)
 {
-  return aType == nsIContentPolicy::TYPE_INTERNAL_WORKER ||
-         aType == nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER;
+  nsLoadFlags loadFlags = 0;
+  aChannel->GetLoadFlags(&loadFlags);
+  if (loadFlags & nsIChannel::LOAD_DOCUMENT_URI) {
+    return true;
+  }
+
+  nsCOMPtr<nsILoadInfo> loadInfo = aChannel->GetLoadInfo();
+  if (!loadInfo) {
+    return false;
+  }
+  nsContentPolicyType type = loadInfo->InternalContentPolicyType();
+  return type == nsIContentPolicy::TYPE_INTERNAL_WORKER ||
+         type == nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER;
 }
 
 // static, public
@@ -8217,10 +8233,8 @@ nsContentUtils::InternalStorageAllowedForPrincipal(nsIPrincipal* aPrincipal,
     return access;
   }
 
-  // We don't want to prompt for every attempt to access permissions, so we
-  // treat the cookie ASK_BEFORE_ACCEPT as though it was a reject.
-  if (sCookiesBehavior == nsICookieService::BEHAVIOR_REJECT ||
-      sCookiesLifetimePolicy == nsICookieService::ASK_BEFORE_ACCEPT) {
+  // We don't want to prompt for every attempt to access permissions.
+  if (sCookiesBehavior == nsICookieService::BEHAVIOR_REJECT) {
     return StorageAccess::eDeny;
   }
 

@@ -519,8 +519,6 @@ public:
 
   bool OnStateMachineTaskQueue() const override;
 
-  bool OnDecodeTaskQueue() const override;
-
   MediaDecoderStateMachine* GetStateMachine() const;
   void SetStateMachine(MediaDecoderStateMachine* aStateMachine);
 
@@ -807,11 +805,6 @@ private:
   //
   // Explicitly prievate to force access via accessors.
   nsRefPtr<MediaDecoderStateMachine> mDecoderStateMachine;
-
-  // |ReentrantMonitor| for detecting when the video play state changes. A call
-  // to |Wait| on this monitor will block the thread until the next state
-  // change.  Explicitly private for force access via GetReentrantMonitor.
-  ReentrantMonitor mReentrantMonitor;
 
 #ifdef MOZ_EME
   MozPromiseHolder<CDMProxyPromise> mCDMProxyPromiseHolder;

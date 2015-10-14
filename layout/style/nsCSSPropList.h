@@ -2483,6 +2483,20 @@ CSS_PROP_POSITION(
     kWidthKTable,
     offsetof(nsStylePosition, mMaxWidth),
     eStyleAnimType_Coord)
+#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
+CSS_PROP_FONT(
+    -moz-min-font-size-ratio,
+    _moz_min_font_size_ratio,
+    CSS_PROP_DOMPROP_PREFIXED(MinFontSizeRatio),
+    CSS_PROPERTY_INTERNAL |
+        CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
+    "",
+    VARIANT_INHERIT | VARIANT_PERCENT,
+    nullptr,
+    offsetof(nsStyleFont, mMinFontSizeRatio),
+    eStyleAnimType_None)
+#endif
 CSS_PROP_POSITION(
     min-height,
     min_height,
@@ -3414,7 +3428,21 @@ CSS_PROP_POSITION(
     nullptr,
     offsetof(nsStylePosition, mOffset),
     eStyleAnimType_Sides_Top)
- CSS_PROP_DISPLAY(
+#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
+CSS_PROP_DISPLAY(
+    -moz-top-layer,
+    _moz_top_layer,
+    CSS_PROP_DOMPROP_PREFIXED(TopLayer),
+    CSS_PROPERTY_INTERNAL |
+        CSS_PROPERTY_PARSE_VALUE |
+        CSS_PROPERTY_ENABLED_IN_UA_SHEETS,
+    "",
+    VARIANT_HK,
+    kTopLayerKTable,
+    CSS_PROP_NO_OFFSET,
+    eStyleAnimType_None)
+#endif // CSS_PROP_LIST_EXCLUDE_INTERNAL
+CSS_PROP_DISPLAY(
     touch-action,
     touch_action,
     TouchAction,
@@ -3590,19 +3618,17 @@ CSS_PROP_POSITION(
     kWidthKTable,
     offsetof(nsStylePosition, mWidth),
     eStyleAnimType_Coord)
-#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
 CSS_PROP_USERINTERFACE(
     -moz-window-dragging,
     _moz_window_dragging,
     CSS_PROP_DOMPROP_PREFIXED(WindowDragging),
-    CSS_PROPERTY_INTERNAL |
-        CSS_PROPERTY_PARSE_VALUE |
-        CSS_PROPERTY_ENABLED_IN_UA_SHEETS_AND_CHROME,
+    CSS_PROPERTY_PARSE_VALUE,
     "",
     VARIANT_HK,
     kWindowDraggingKTable,
     CSS_PROP_NO_OFFSET,
     eStyleAnimType_None)
+#ifndef CSS_PROP_LIST_EXCLUDE_INTERNAL
 CSS_PROP_UIRESET(
     -moz-window-shadow,
     _moz_window_shadow,

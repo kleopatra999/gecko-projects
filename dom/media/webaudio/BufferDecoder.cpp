@@ -11,8 +11,6 @@
 
 namespace mozilla {
 
-extern PRLogModuleInfo* gMediaDecoderLog;
-
 NS_IMPL_ISUPPORTS0(BufferDecoder)
 
 BufferDecoder::BufferDecoder(MediaResource* aResource)
@@ -20,9 +18,6 @@ BufferDecoder::BufferDecoder(MediaResource* aResource)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_COUNT_CTOR(BufferDecoder);
-  if (!gMediaDecoderLog) {
-    gMediaDecoderLog = PR_NewLogModule("MediaDecoder");
-  }
 }
 
 BufferDecoder::~BufferDecoder()
@@ -43,13 +38,6 @@ BufferDecoder::OnStateMachineTaskQueue() const
 {
   // BufferDecoder doesn't have the concept of a state machine.
   return true;
-}
-
-bool
-BufferDecoder::OnDecodeTaskQueue() const
-{
-  MOZ_ASSERT(mTaskQueueIdentity, "Forgot to call BeginDecoding?");
-  return mTaskQueueIdentity->IsCurrentThreadIn();
 }
 
 MediaResource*

@@ -630,12 +630,7 @@ nsHTMLEditor::HandleKeyPressEvent(nsIDOMKeyEvent* aKeyEvent)
       nsCOMPtr<nsINode> node = selection->GetRangeAt(0)->GetStartParent();
       MOZ_ASSERT(node);
 
-      nsCOMPtr<nsINode> blockParent;
-      if (IsBlockNode(node)) {
-        blockParent = node;
-      } else {
-        blockParent = GetBlockNodeParent(node);
-      }
+      nsCOMPtr<Element> blockParent = GetBlock(*node);
 
       if (!blockParent) {
         break;
@@ -817,7 +812,7 @@ nsHTMLEditor::SetDocumentTitle(const nsAString &aTitle)
 ///////////////////////////////////////////////////////////////////////////
 // GetBlockNodeParent: returns enclosing block level ancestor, if any
 //
-already_AddRefed<Element>
+Element*
 nsHTMLEditor::GetBlockNodeParent(nsINode* aNode)
 {
   MOZ_ASSERT(aNode);
@@ -826,7 +821,7 @@ nsHTMLEditor::GetBlockNodeParent(nsINode* aNode)
 
   while (p) {
     if (NodeIsBlockStatic(p)) {
-      return p.forget().downcast<Element>();
+      return p->AsElement();
     }
     p = p->GetParentNode();
   }
@@ -834,7 +829,7 @@ nsHTMLEditor::GetBlockNodeParent(nsINode* aNode)
   return nullptr;
 }
 
-already_AddRefed<nsIDOMNode>
+nsIDOMNode*
 nsHTMLEditor::GetBlockNodeParent(nsIDOMNode *aNode)
 {
   nsCOMPtr<nsINode> node = do_QueryInterface(aNode);
@@ -844,9 +839,19 @@ nsHTMLEditor::GetBlockNodeParent(nsIDOMNode *aNode)
     return nullptr;
   }
 
-  nsCOMPtr<nsIDOMNode> ret =
-    dont_AddRef(GetAsDOMNode(GetBlockNodeParent(node).take()));
-  return ret.forget();
+  return GetAsDOMNode(GetBlockNodeParent(node));
+}
+
+/**
+ * Returns the node if it's a block, otherwise GetBlockNodeParent
+ */
+Element*
+nsHTMLEditor::GetBlock(nsINode& aNode)
+{
+  if (NodeIsBlockStatic(&aNode)) {
+    return aNode.AsElement();
+  }
+  return GetBlockNodeParent(&aNode);
 }
 
 static const char16_t nbsp = 160;
@@ -1065,7 +1070,7 @@ nsHTMLEditor::TabInTable(bool inIsShift, bool* outHandled)
     node = iter->GetCurrentNode();
 
     if (node && nsHTMLEditUtils::IsTableCell(node) &&
-        nsCOMPtr<Element>(GetEnclosingTable(node)) == table) {
+        GetEnclosingTable(node) == table) {
       CollapseSelectionToDeepestNonTableFirstChild(nullptr, node);
       *outHandled = true;
       return NS_OK;
@@ -1583,10 +1588,10 @@ nsHTMLEditor::InsertNodeAtPoint(nsIDOMNode *aNode,
   NS_ENSURE_TRUE(ioOffset, NS_ERROR_NULL_POINTER);
 
   nsresult res = NS_OK;
-  nsCOMPtr<nsINode> parent = do_QueryInterface(*ioParent);
+  nsCOMPtr<nsIContent> parent = do_QueryInterface(*ioParent);
   NS_ENSURE_TRUE(parent, NS_ERROR_NULL_POINTER);
-  nsCOMPtr<nsINode> topChild = parent;
-  int32_t offsetOfInsert = *ioOffset;
+  nsCOMPtr<nsIContent> topChild = parent;
+  nsCOMPtr<nsIContent> origParent = parent;
 
   // Search up the parent chain to find a suitable container
   while (!CanContain(*parent, *node)) {
@@ -1602,24 +1607,24 @@ nsHTMLEditor::InsertNodeAtPoint(nsIDOMNode *aNode,
       // There's no suitable place to put the node in this editing host.  Maybe
       // someone is trying to put block content in a span.  So just put it
       // where we were originally asked.
-      parent = topChild = do_QueryInterface(*ioParent);
-      NS_ENSURE_STATE(parent);
+      parent = topChild = origParent;
       break;
     }
     topChild = parent;
-    parent = parent->GetParentNode();
+    parent = parent->GetParent();
   }
   if (parent != topChild)
   {
     // we need to split some levels above the original selection parent
-    res = SplitNodeDeep(GetAsDOMNode(topChild), *ioParent, *ioOffset,
-                        &offsetOfInsert, aNoEmptyNodes);
-    NS_ENSURE_SUCCESS(res, res);
+    int32_t offset = SplitNodeDeep(*topChild, *origParent, *ioOffset,
+                                   aNoEmptyNodes ? EmptyContainers::no
+                                                 : EmptyContainers::yes);
+    NS_ENSURE_STATE(offset != -1);
     *ioParent = GetAsDOMNode(parent);
-    *ioOffset = offsetOfInsert;
+    *ioOffset = offset;
   }
   // Now we can insert the new node
-  res = InsertNode(*node, *parent, offsetOfInsert);
+  res = InsertNode(*node, *parent, *ioOffset);
   return res;
 }
 
@@ -1755,12 +1760,7 @@ nsHTMLEditor::GetCSSBackgroundColorState(bool *aMixed, nsAString &aOutColor, boo
   if (aBlockLevel) {
     // we are querying the block background (and not the text background), let's
     // climb to the block container
-    nsCOMPtr<Element> blockParent;
-    if (NodeIsBlockStatic(nodeToExamine)) {
-      blockParent = nodeToExamine->AsElement();
-    } else {
-      blockParent = GetBlockNodeParent(nodeToExamine);
-    }
+    nsCOMPtr<Element> blockParent = GetBlock(*nodeToExamine);
     NS_ENSURE_TRUE(blockParent, NS_OK);
 
     // Make sure to not walk off onto the Document node
@@ -1927,30 +1927,31 @@ nsHTMLEditor::MakeOrChangeList(const nsAString& aListType, bool entireList, cons
     // Find out if the selection is collapsed:
     bool isCollapsed = selection->Collapsed();
 
-    nsCOMPtr<nsINode> node;
-    int32_t offset;
-    res = GetStartNodeAndOffset(selection, getter_AddRefs(node), &offset);
-    if (!node) res = NS_ERROR_FAILURE;
-    NS_ENSURE_SUCCESS(res, res);
+    NS_ENSURE_TRUE(selection->GetRangeAt(0) &&
+                   selection->GetRangeAt(0)->GetStartParent() &&
+                   selection->GetRangeAt(0)->GetStartParent()->IsContent(),
+                   NS_ERROR_FAILURE);
+    OwningNonNull<nsIContent> node =
+      *selection->GetRangeAt(0)->GetStartParent()->AsContent();
+    int32_t offset = selection->GetRangeAt(0)->StartOffset();
 
     if (isCollapsed)
     {
       // have to find a place to put the list
-      nsCOMPtr<nsINode> parent = node;
-      nsCOMPtr<nsINode> topChild = node;
+      nsCOMPtr<nsIContent> parent = node;
+      nsCOMPtr<nsIContent> topChild = node;
 
       nsCOMPtr<nsIAtom> listAtom = do_GetAtom(aListType);
       while (!CanContainTag(*parent, *listAtom)) {
         topChild = parent;
-        parent = parent->GetParentNode();
+        parent = parent->GetParent();
       }
 
       if (parent != node)
       {
         // we need to split up to the child of parent
-        res = SplitNodeDeep(GetAsDOMNode(topChild), GetAsDOMNode(node), offset,
-                            &offset);
-        NS_ENSURE_SUCCESS(res, res);
+        offset = SplitNodeDeep(*topChild, *node, offset);
+        NS_ENSURE_STATE(offset != -1);
       }
 
       // make a list
@@ -2058,31 +2059,32 @@ nsHTMLEditor::InsertBasicBlock(const nsAString& aBlockType)
     // Find out if the selection is collapsed:
     bool isCollapsed = selection->Collapsed();
 
-    nsCOMPtr<nsINode> node;
-    int32_t offset;
-    res = GetStartNodeAndOffset(selection, getter_AddRefs(node), &offset);
-    if (!node) res = NS_ERROR_FAILURE;
-    NS_ENSURE_SUCCESS(res, res);
+    NS_ENSURE_TRUE(selection->GetRangeAt(0) &&
+                   selection->GetRangeAt(0)->GetStartParent() &&
+                   selection->GetRangeAt(0)->GetStartParent()->IsContent(),
+                   NS_ERROR_FAILURE);
+    OwningNonNull<nsIContent> node =
+      *selection->GetRangeAt(0)->GetStartParent()->AsContent();
+    int32_t offset = selection->GetRangeAt(0)->StartOffset();
 
     if (isCollapsed)
     {
       // have to find a place to put the block
-      nsCOMPtr<nsINode> parent = node;
-      nsCOMPtr<nsINode> topChild = node;
+      nsCOMPtr<nsIContent> parent = node;
+      nsCOMPtr<nsIContent> topChild = node;
 
       nsCOMPtr<nsIAtom> blockAtom = do_GetAtom(aBlockType);
       while (!CanContainTag(*parent, *blockAtom)) {
-        NS_ENSURE_TRUE(parent->GetParentNode(), NS_ERROR_FAILURE);
+        NS_ENSURE_TRUE(parent->GetParent(), NS_ERROR_FAILURE);
         topChild = parent;
-        parent = parent->GetParentNode();
+        parent = parent->GetParent();
       }
 
       if (parent != node)
       {
         // we need to split up to the child of parent
-        res = SplitNodeDeep(GetAsDOMNode(topChild), GetAsDOMNode(node), offset,
-                            &offset);
-        NS_ENSURE_SUCCESS(res, res);
+        offset = SplitNodeDeep(*topChild, *node, offset);
+        NS_ENSURE_STATE(offset != -1);
       }
 
       // make a block
@@ -2128,33 +2130,34 @@ nsHTMLEditor::Indent(const nsAString& aIndent)
   if (!handled)
   {
     // Do default - insert a blockquote node if selection collapsed
-    nsCOMPtr<nsINode> node;
-    int32_t offset;
     bool isCollapsed = selection->Collapsed();
 
-    res = GetStartNodeAndOffset(selection, getter_AddRefs(node), &offset);
-    if (!node) res = NS_ERROR_FAILURE;
-    NS_ENSURE_SUCCESS(res, res);
+    NS_ENSURE_TRUE(selection->GetRangeAt(0) &&
+                   selection->GetRangeAt(0)->GetStartParent() &&
+                   selection->GetRangeAt(0)->GetStartParent()->IsContent(),
+                   NS_ERROR_FAILURE);
+    OwningNonNull<nsIContent> node =
+      *selection->GetRangeAt(0)->GetStartParent()->AsContent();
+    int32_t offset = selection->GetRangeAt(0)->StartOffset();
 
     if (aIndent.EqualsLiteral("indent"))
     {
       if (isCollapsed)
       {
         // have to find a place to put the blockquote
-        nsCOMPtr<nsINode> parent = node;
-        nsCOMPtr<nsINode> topChild = node;
+        nsCOMPtr<nsIContent> parent = node;
+        nsCOMPtr<nsIContent> topChild = node;
         while (!CanContainTag(*parent, *nsGkAtoms::blockquote)) {
-          NS_ENSURE_TRUE(parent->GetParentNode(), NS_ERROR_FAILURE);
+          NS_ENSURE_TRUE(parent->GetParent(), NS_ERROR_FAILURE);
           topChild = parent;
-          parent = parent->GetParentNode();
+          parent = parent->GetParent();
         }
 
         if (parent != node)
         {
           // we need to split up to the child of parent
-          res = SplitNodeDeep(GetAsDOMNode(topChild), GetAsDOMNode(node),
-                              offset, &offset);
-          NS_ENSURE_SUCCESS(res, res);
+          offset = SplitNodeDeep(*topChild, *node, offset);
+          NS_ENSURE_STATE(offset != -1);
         }
 
         // make a blockquote
@@ -2166,9 +2169,9 @@ nsHTMLEditor::Indent(const nsAString& aIndent)
         res = InsertText(NS_LITERAL_STRING(" "));
         NS_ENSURE_SUCCESS(res, res);
         // reposition selection to before the space character
-        res = GetStartNodeAndOffset(selection, getter_AddRefs(node), &offset);
-        NS_ENSURE_SUCCESS(res, res);
-        res = selection->Collapse(node,0);
+        NS_ENSURE_STATE(selection->GetRangeAt(0));
+        res = selection->Collapse(selection->GetRangeAt(0)->GetStartParent(),
+                                  0);
         NS_ENSURE_SUCCESS(res, res);
       }
     }
@@ -2840,7 +2843,8 @@ nsHTMLEditor::AddOverrideStyleSheet(const nsAString& aURL)
   nsRefPtr<CSSStyleSheet> sheet;
   // Editor override style sheets may want to style Gecko anonymous boxes
   rv = ps->GetDocument()->CSSLoader()->
-    LoadSheetSync(uaURI, true, true, getter_AddRefs(sheet));
+    LoadSheetSync(uaURI, mozilla::css::eAgentSheetFeatures, true,
+                  getter_AddRefs(sheet));
 
   // Synchronous loads should ALWAYS return completed
   NS_ENSURE_TRUE(sheet, NS_ERROR_NULL_POINTER);
@@ -3653,7 +3657,7 @@ nsHTMLEditor::SetCaretInTableCell(nsIDOMElement* aElement)
 ///////////////////////////////////////////////////////////////////////////
 // GetEnclosingTable: find ancestor who is a table, if any
 //
-already_AddRefed<Element>
+Element*
 nsHTMLEditor::GetEnclosingTable(nsINode* aNode)
 {
   MOZ_ASSERT(aNode);
@@ -3662,13 +3666,13 @@ nsHTMLEditor::GetEnclosingTable(nsINode* aNode)
        block;
        block = GetBlockNodeParent(block)) {
     if (nsHTMLEditUtils::IsTable(block)) {
-      return block.forget();
+      return block;
     }
   }
   return nullptr;
 }
 
-nsCOMPtr<nsIDOMNode>
+nsIDOMNode*
 nsHTMLEditor::GetEnclosingTable(nsIDOMNode *aNode)
 {
   NS_PRECONDITION(aNode, "null node passed to nsHTMLEditor::GetEnclosingTable");
@@ -4565,12 +4569,7 @@ nsHTMLEditor::SetCSSBackgroundColor(const nsAString& aColor)
         // A unique node is selected, let's also apply the background color to
         // the containing block, possibly the node itself
         nsCOMPtr<nsIContent> selectedNode = startNode->GetChildAt(startOffset);
-        nsCOMPtr<Element> blockParent;
-        if (NodeIsBlockStatic(selectedNode)) {
-          blockParent = selectedNode->AsElement();
-        } else {
-          blockParent = GetBlockNodeParent(selectedNode);
-        }
+        nsCOMPtr<Element> blockParent = GetBlock(*selectedNode);
         if (blockParent && cachedBlockParent != blockParent) {
           cachedBlockParent = blockParent;
           mHTMLCSSUtils->SetCSSEquivalentToHTMLStyle(blockParent, nullptr,
@@ -4624,12 +4623,7 @@ nsHTMLEditor::SetCSSBackgroundColor(const nsAString& aColor)
 
         // Then loop through the list, set the property on each node
         for (auto& node : arrayOfNodes) {
-          nsCOMPtr<Element> blockParent;
-          if (NodeIsBlockStatic(node)) {
-            blockParent = node->AsElement();
-          } else {
-            blockParent = GetBlockNodeParent(node);
-          }
+          nsCOMPtr<Element> blockParent = GetBlock(node);
           if (blockParent && cachedBlockParent != blockParent) {
             cachedBlockParent = blockParent;
             mHTMLCSSUtils->SetCSSEquivalentToHTMLStyle(blockParent, nullptr,

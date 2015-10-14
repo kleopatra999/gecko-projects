@@ -1368,7 +1368,7 @@ class TypeConstraintFreezeStack : public TypeConstraint
 
 bool
 js::FinishCompilation(JSContext* cx, HandleScript script, CompilerConstraintList* constraints,
-                         RecompileInfo* precompileInfo)
+                      RecompileInfo* precompileInfo)
 {
     if (constraints->failed())
         return false;
@@ -1456,6 +1456,18 @@ js::FinishCompilation(JSContext* cx, HandleScript script, CompilerConstraintList
     }
 
     return true;
+}
+
+void
+js::InvalidateCompilerOutputsForScript(JSContext* cx, HandleScript script)
+{
+    TypeZone& types = cx->zone()->types;
+    if (types.compilerOutputs) {
+        for (auto& co : *types.compilerOutputs) {
+            if (co.script() == script)
+                co.invalidate();
+        }
+    }
 }
 
 static void
@@ -2566,9 +2578,11 @@ UpdatePropertyType(ExclusiveContext* cx, HeapTypeSet* types, NativeObject* obj, 
          * comment).
          *
          * Also don't add untracked values (initial uninitialized lexical
-         * magic values and optimized out values) as appearing in CallObjects.
+         * magic values and optimized out values) as appearing in CallObjects
+         * and the global lexical scope.
          */
-        MOZ_ASSERT_IF(TypeSet::IsUntrackedValue(value), obj->is<CallObject>());
+        MOZ_ASSERT_IF(TypeSet::IsUntrackedValue(value),
+                      obj->is<CallObject>() || IsExtensibleLexicalScope(obj));
         if ((indexed || !value.isUndefined() || !CanHaveEmptyPropertyTypesForOwnProperty(obj)) &&
             !TypeSet::IsUntrackedValue(value))
         {
@@ -4336,7 +4350,8 @@ TypeZone::beginSweep(FreeOp* fop, bool releaseTypes, AutoClearTypeInferenceState
             if (output.isValid()) {
                 JSScript* script = output.script();
                 if (IsAboutToBeFinalizedUnbarriered(&script)) {
-                    script->ionScript()->recompileInfoRef() = RecompileInfo();
+                    if (script->hasIonScript())
+                        script->ionScript()->recompileInfoRef() = RecompileInfo();
                     output.invalidate();
                 } else {
                     CompilerOutput newOutput(script);

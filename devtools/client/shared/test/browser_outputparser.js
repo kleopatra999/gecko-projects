@@ -33,12 +33,8 @@ var COLOR_TEST_CLASS = "test-class";
 // property.  |value| is the CSS text to use.  |segments| is an array
 // describing the expected result.  If an element of |segments| is a
 // string, it is simply appended to the expected string.  Otherwise,
-// it must be an object with a |value| property and a |name| property.
-// These describe the color and are both used in the generated
-// expected output -- |name| is the color name as it appears in the
-// input (e.g., "red"); and |value| is the hash-style numeric value
-// for the color, which parseCssProperty emits in some spots (e.g.,
-// "#F00").
+// it must be an object with a |name| property, which is the color
+// name as it appears in the input.
 //
 // This approach is taken to reduce boilerplate and to make it simpler
 // to modify the test when the parseCssProperty output changes.
@@ -53,10 +49,10 @@ function makeColorTest(name, value, segments) {
     if (typeof (segment) === "string") {
       result.expected += segment;
     } else {
-      result.expected += "<span data-color=\"" + segment.value + "\">" +
+      result.expected += "<span data-color=\"" + segment.name + "\">" +
         "<span style=\"background-color:" + segment.name +
         "\" class=\"" + COLOR_TEST_CLASS + "\"></span><span>" +
-        segment.value + "</span></span>";
+        segment.name + "</span></span>";
     }
   }
 
@@ -68,25 +64,25 @@ function makeColorTest(name, value, segments) {
 function testParseCssProperty(doc, parser) {
   let tests = [
     makeColorTest("border", "1px solid red",
-                  ["1px solid ", {name: "red", value: "#F00"}]),
+                  ["1px solid ", {name: "red"}]),
 
     makeColorTest("background-image",
                   "linear-gradient(to right, #F60 10%, rgba(0,0,0,1))",
-                  ["linear-gradient(to right, ", {name: "#F60", value: "#F60"},
-                   " 10%, ", {name: "rgba(0,0,0,1)", value: "#000"},
+                  ["linear-gradient(to right, ", {name: "#F60"},
+                   " 10%, ", {name: "rgba(0,0,0,1)"},
                    ")"]),
 
     // In "arial black", "black" is a font, not a color.
     makeColorTest("font-family", "arial black", ["arial black"]),
 
     makeColorTest("box-shadow", "0 0 1em red",
-                  ["0 0 1em ", {name: "red", value: "#F00"}]),
+                  ["0 0 1em ", {name: "red"}]),
 
     makeColorTest("box-shadow",
                   "0 0 1em red, 2px 2px 0 0 rgba(0,0,0,.5)",
-                  ["0 0 1em ", {name: "red", value: "#F00"},
+                  ["0 0 1em ", {name: "red"},
                    ", 2px 2px 0 0 ",
-                   {name: "rgba(0,0,0,.5)", value: "rgba(0,0,0,.5)"}]),
+                   {name: "rgba(0,0,0,.5)"}]),
 
     makeColorTest("content", "\"red\"", ["\"red\""]),
 
@@ -98,10 +94,55 @@ function testParseCssProperty(doc, parser) {
                   ["<span data-filters=\"blur(1px) drop-shadow(0 0 0 blue) ",
                    "url(red.svg#blue)\"><span>",
                    "blur(1px) drop-shadow(0 0 0 ",
-                   {name: "blue", value: "#00F"},
+                   {name: "blue"},
                    ") url(red.svg#blue)</span></span>"]),
 
     makeColorTest("color", "currentColor", ["currentColor"]),
+
+    // Test a very long property.
+    makeColorTest("background-image",
+                  "linear-gradient(0deg, transparent 0, transparent 5%,#F00 0, #F00 10%,#FF0 0, #FF0 15%,#0F0 0, #0F0 20%,#0FF 0, #0FF 25%,#00F 0, #00F 30%,#800 0, #800 35%,#880 0, #880 40%,#080 0, #080 45%,#088 0, #088 50%,#008 0, #008 55%,#FFF 0, #FFF 60%,#EEE 0, #EEE 65%,#CCC 0, #CCC 70%,#999 0, #999 75%,#666 0, #666 80%,#333 0, #333 85%,#111 0, #111 90%,#000 0, #000 95%,transparent 0, transparent 100%)",
+                  ["linear-gradient(0deg, ", {name: "transparent"},
+                   " 0, ", {name: "transparent"},
+                   " 5%,", {name: "#F00"},
+                   " 0, ", {name: "#F00"},
+                   " 10%,", {name: "#FF0"},
+                   " 0, ", {name: "#FF0"},
+                   " 15%,", {name: "#0F0"},
+                   " 0, ", {name: "#0F0"},
+                   " 20%,", {name: "#0FF"},
+                   " 0, ", {name: "#0FF"},
+                   " 25%,", {name: "#00F"},
+                   " 0, ", {name: "#00F"},
+                   " 30%,", {name: "#800"},
+                   " 0, ", {name: "#800"},
+                   " 35%,", {name: "#880"},
+                   " 0, ", {name: "#880"},
+                   " 40%,", {name: "#080"},
+                   " 0, ", {name: "#080"},
+                   " 45%,", {name: "#088"},
+                   " 0, ", {name: "#088"},
+                   " 50%,", {name: "#008"},
+                   " 0, ", {name: "#008"},
+                   " 55%,", {name: "#FFF"},
+                   " 0, ", {name: "#FFF"},
+                   " 60%,", {name: "#EEE"},
+                   " 0, ", {name: "#EEE"},
+                   " 65%,", {name: "#CCC"},
+                   " 0, ", {name: "#CCC"},
+                   " 70%,", {name: "#999"},
+                   " 0, ", {name: "#999"},
+                   " 75%,", {name: "#666"},
+                   " 0, ", {name: "#666"},
+                   " 80%,", {name: "#333"},
+                   " 0, ", {name: "#333"},
+                   " 85%,", {name: "#111"},
+                   " 0, ", {name: "#111"},
+                   " 90%,", {name: "#000"},
+                   " 0, ", {name: "#000"},
+                   " 95%,", {name: "transparent"},
+                   " 0, ", {name: "transparent"},
+                   " 100%)"]),
   ];
 
   let target = doc.querySelector("div");

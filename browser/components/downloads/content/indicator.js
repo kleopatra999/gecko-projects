@@ -181,6 +181,12 @@ const DownloadsButton = {
   }
 };
 
+Object.defineProperty(this, "DownloadsButton", {
+  value: DownloadsButton,
+  enumerable: true,
+  writable: false
+});
+
 ////////////////////////////////////////////////////////////////////////////////
 //// DownloadsIndicatorView
 
@@ -577,3 +583,8 @@ const DownloadsIndicatorView = {
   },
 };
 
+Object.defineProperty(this, "DownloadsIndicatorView", {
+  value: DownloadsIndicatorView,
+  enumerable: true,
+  writable: false
+});

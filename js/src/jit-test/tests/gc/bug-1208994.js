@@ -1,4 +1,4 @@
-// |jit-test| --no-threads
+if (!('oomTest' in this))
+    quit();
 
-load(libdir + 'oomTest.js');
 oomTest(() => getBacktrace({args: oomTest[load+1], locals: true, thisprops: true}));

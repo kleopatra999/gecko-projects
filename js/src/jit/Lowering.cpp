@@ -154,6 +154,14 @@ LIRGenerator::visitDefVar(MDefVar* ins)
 }
 
 void
+LIRGenerator::visitDefLexical(MDefLexical* ins)
+{
+    LDefLexical* lir = new(alloc()) LDefLexical();
+    add(lir, ins);
+    assignSafepoint(lir, ins);
+}
+
+void
 LIRGenerator::visitDefFun(MDefFun* ins)
 {
     LDefFun* lir = new(alloc()) LDefFun(useRegisterAtStart(ins->scopeChain()));
@@ -320,6 +328,7 @@ LIRGenerator::visitCreateThisWithProto(MCreateThisWithProto* ins)
 {
     LCreateThisWithProto* lir =
         new(alloc()) LCreateThisWithProto(useRegisterOrConstantAtStart(ins->getCallee()),
+                                          useRegisterOrConstantAtStart(ins->getNewTarget()),
                                           useRegisterOrConstantAtStart(ins->getPrototype()));
     defineReturn(lir, ins);
     assignSafepoint(lir, ins);
@@ -328,7 +337,8 @@ LIRGenerator::visitCreateThisWithProto(MCreateThisWithProto* ins)
 void
 LIRGenerator::visitCreateThis(MCreateThis* ins)
 {
-    LCreateThis* lir = new(alloc()) LCreateThis(useRegisterOrConstantAtStart(ins->getCallee()));
+    LCreateThis* lir = new(alloc()) LCreateThis(useRegisterOrConstantAtStart(ins->getCallee()),
+                                                useRegisterOrConstantAtStart(ins->getNewTarget()));
     defineReturn(lir, ins);
     assignSafepoint(lir, ins);
 }
@@ -3242,6 +3252,12 @@ LIRGenerator::visitGetPropertyCache(MGetPropertyCache* ins)
 {
     MOZ_ASSERT(ins->object()->type() == MIRType_Object);
 
+    MDefinition* id = ins->idval();
+    MOZ_ASSERT(id->type() == MIRType_String ||
+               id->type() == MIRType_Symbol ||
+               id->type() == MIRType_Int32 ||
+               id->type() == MIRType_Value);
+
     if (ins->monitoredResult()) {
         // Set the performs-call flag so that we don't omit the overrecursed
         // check. This is necessary because the cache can attach a scripted
@@ -3249,12 +3265,18 @@ LIRGenerator::visitGetPropertyCache(MGetPropertyCache* ins)
         gen->setPerformsCall();
     }
 
+    // If this is a GETPROP, the id is a constant string. Allow passing it as a
+    // constant to reduce register allocation pressure.
+    bool useConstId = id->type() == MIRType_String || id->type() == MIRType_Symbol;
+
     if (ins->type() == MIRType_Value) {
         LGetPropertyCacheV* lir = new(alloc()) LGetPropertyCacheV(useRegister(ins->object()));
+        useBoxOrTypedOrConstant(lir, LGetPropertyCacheV::Id, id, useConstId);
         defineBox(lir, ins);
         assignSafepoint(lir, ins);
     } else {
         LGetPropertyCacheT* lir = new(alloc()) LGetPropertyCacheT(useRegister(ins->object()));
+        useBoxOrTypedOrConstant(lir, LGetPropertyCacheT::Id, id, useConstId);
         define(lir, ins);
         assignSafepoint(lir, ins);
     }
@@ -3297,29 +3319,6 @@ LIRGenerator::visitSetPropertyPolymorphic(MSetPropertyPolymorphic* ins)
                                                   ins->value()->type(), temp());
         assignSnapshot(lir, Bailout_ShapeGuard);
         add(lir, ins);
-    }
-}
-
-void
-LIRGenerator::visitGetElementCache(MGetElementCache* ins)
-{
-    MOZ_ASSERT(ins->object()->type() == MIRType_Object);
-
-    if (ins->monitoredResult())
-        gen->setPerformsCall(); // See visitGetPropertyCache.
-
-    if (ins->type() == MIRType_Value) {
-        MOZ_ASSERT(ins->index()->type() == MIRType_Value);
-        LGetElementCacheV* lir = new(alloc()) LGetElementCacheV(useRegister(ins->object()));
-        useBox(lir, LGetElementCacheV::Index, ins->index());
-        defineBox(lir, ins);
-        assignSafepoint(lir, ins);
-    } else {
-        MOZ_ASSERT(ins->index()->type() == MIRType_Int32);
-        LGetElementCacheT* lir = new(alloc()) LGetElementCacheT(useRegister(ins->object()),
-                                                                useRegister(ins->index()));
-        define(lir, ins);
-        assignSafepoint(lir, ins);
     }
 }
 
@@ -4250,7 +4249,7 @@ LIRGenerator::visitLexicalCheck(MLexicalCheck* ins)
     MOZ_ASSERT(input->type() == MIRType_Value);
     LLexicalCheck* lir = new(alloc()) LLexicalCheck();
     useBox(lir, LLexicalCheck::Input, input);
-    assignSnapshot(lir, Bailout_UninitializedLexical);
+    assignSnapshot(lir, ins->bailoutKind());
     add(lir, ins);
     redefine(ins, input);
 }
@@ -4259,6 +4258,14 @@ void
 LIRGenerator::visitThrowUninitializedLexical(MThrowUninitializedLexical* ins)
 {
     LThrowUninitializedLexical* lir = new(alloc()) LThrowUninitializedLexical();
+    add(lir, ins);
+    assignSafepoint(lir, ins);
+}
+
+void
+LIRGenerator::visitGlobalNameConflictsCheck(MGlobalNameConflictsCheck* ins)
+{
+    LGlobalNameConflictsCheck* lir = new(alloc()) LGlobalNameConflictsCheck();
     add(lir, ins);
     assignSafepoint(lir, ins);
 }
@@ -4275,6 +4282,22 @@ void
 LIRGenerator::visitAtomicIsLockFree(MAtomicIsLockFree* ins)
 {
     define(new(alloc()) LAtomicIsLockFree(useRegister(ins->input())), ins);
+}
+
+void
+LIRGenerator::visitCheckReturn(MCheckReturn* ins)
+{
+    MDefinition* retVal = ins->returnValue();
+    MDefinition* thisVal = ins->thisValue();
+    MOZ_ASSERT(retVal->type() == MIRType_Value);
+    MOZ_ASSERT(thisVal->type() == MIRType_Value);
+
+    LCheckReturn* lir = new(alloc()) LCheckReturn();
+    useBoxAtStart(lir, LCheckReturn::ReturnValue, retVal);
+    useBoxAtStart(lir, LCheckReturn::ThisValue, thisVal);
+    assignSnapshot(lir, Bailout_BadDerivedConstructorReturn);
+    add(lir, ins);
+    redefine(ins, retVal);
 }
 
 static void

@@ -1379,7 +1379,7 @@ pref("devtools.inspector.showAllAnonymousContent", false);
 pref("devtools.inspector.mdnDocsTooltip.enabled", true);
 
 // DevTools default color unit
-pref("devtools.defaultColorUnit", "hex");
+pref("devtools.defaultColorUnit", "authored");
 
 // Enable the Responsive UI tool
 pref("devtools.responsiveUI.no-reload-notification", false);
@@ -1624,6 +1624,13 @@ pref("devtools.fontinspector.enabled", true);
 // version for each user.
 pref("devtools.telemetry.tools.opened.version", "{}");
 
+// Enable the JSON View tool (an inspector for application/json documents)
+#ifdef MOZ_DEV_EDITION
+  pref("devtools.jsonview.enabled", true);
+#else
+  pref("devtools.jsonview.enabled", false);
+#endif
+
 // Whether the character encoding menu is under the main Firefox button. This
 // preference is a string so that localizers can alter it.
 pref("browser.menu.showCharacterEncoding", "chrome://browser/locale/browser.properties");
@@ -1656,6 +1663,9 @@ pref("browser.newtabpage.directory.source", "https://tiles.services.mozilla.com/
 
 // endpoint to send newtab click and view pings
 pref("browser.newtabpage.directory.ping", "https://tiles.services.mozilla.com/v3/links/");
+
+// activates the remote-hosted newtab page
+pref("browser.newtabpage.remote", false);
 
 // Enable the DOM fullscreen API.
 pref("full-screen-api.enabled", true);
@@ -1707,7 +1717,6 @@ pref("loop.feedback.baseUrl", "https://input.mozilla.org/api/v1/feedback");
 pref("loop.feedback.product", "Loop");
 pref("loop.debug.loglevel", "Error");
 pref("loop.debug.dispatcher", false);
-pref("loop.debug.websocket", false);
 pref("loop.debug.sdk", false);
 pref("loop.debug.twoWayMediaTelemetry", false);
 pref("loop.feedback.dateLastSeenSec", 0);
@@ -1726,7 +1735,6 @@ pref("loop.support_url", "https://support.mozilla.org/kb/group-conversations-fir
 pref("loop.contacts.gravatars.show", false);
 pref("loop.contacts.gravatars.promo", true);
 pref("loop.browserSharing.showInfoBar", true);
-pref("loop.contextInConversations.enabled", true);
 
 pref("social.sidebar.unload_timeout_ms", 10000);
 
@@ -1824,6 +1832,11 @@ pref("ui.key.menuAccessKeyFocuses", true);
 // Encrypted media extensions.
 pref("media.eme.enabled", true);
 pref("media.eme.apiVisible", true);
+
+// If decoding-via-gmp is turned on for <video>, default to using
+// Adobe's GMP for decoding.
+pref("media.fragmented-mp4.gmp.aac", 2);
+pref("media.fragmented-mp4.gmp.h264", 2);
 
 // Whether we should run a test-pattern through EME GMPs before assuming they'll
 // decode H.264.

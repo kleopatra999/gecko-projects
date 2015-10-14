@@ -203,7 +203,6 @@ nsJARChannel::nsJARChannel()
     , mIsUnsafe(true)
     , mOpeningRemote(false)
     , mSynthesizedStreamLength(0)
-    , mForceNoIntercept(false)
     , mBlockRemoteFiles(false)
 {
     if (!gJarProtocolLog)
@@ -748,7 +747,7 @@ nsJARChannel::SetContentType(const nsACString &aContentType)
     // doing our guessing.  So we don't care when this is being called.
 
     // mContentCharset is unchanged if not parsed
-    NS_ParseContentType(aContentType, mContentType, mContentCharset);
+    NS_ParseResponseContentType(aContentType, mContentType, mContentCharset);
     return NS_OK;
 }
 
@@ -864,6 +863,12 @@ nsJARChannel::Open2(nsIInputStream** aStream)
 }
 
 bool
+nsJARChannel::BypassServiceWorker() const
+{
+  return mLoadFlags & LOAD_BYPASS_SERVICE_WORKER;
+}
+
+bool
 nsJARChannel::ShouldIntercept()
 {
     LOG(("nsJARChannel::ShouldIntercept [this=%x]\n", this));
@@ -877,12 +882,9 @@ nsJARChannel::ShouldIntercept()
                                   NS_GET_IID(nsINetworkInterceptController),
                                   getter_AddRefs(controller));
     bool shouldIntercept = false;
-    if (controller && !mForceNoIntercept && mLoadInfo) {
-      bool isNavigation = mLoadFlags & LOAD_DOCUMENT_URI;
-      nsContentPolicyType type = mLoadInfo->InternalContentPolicyType();
+    if (controller && !BypassServiceWorker() && mLoadInfo) {
       nsresult rv = controller->ShouldPrepareForIntercept(mAppURI,
-                                                          isNavigation,
-                                                          type,
+                                                          nsContentUtils::IsNonSubresourceRequest(this),
                                                           &shouldIntercept);
       NS_ENSURE_SUCCESS(rv, false);
     }
@@ -966,9 +968,8 @@ nsJARChannel::AsyncOpen(nsIStreamListener *listener, nsISupports *ctx)
                                     NS_GET_IID(nsINetworkInterceptController),
                                     getter_AddRefs(controller));
 
-      bool isNavigation = mLoadFlags & LOAD_DOCUMENT_URI;
       nsRefPtr<InterceptedJARChannel> intercepted =
-        new InterceptedJARChannel(this, controller, isNavigation);
+        new InterceptedJARChannel(this, controller);
       intercepted->NotifyController();
 
       // We get the JAREntry so we can infer the content type later in case
@@ -1121,13 +1122,6 @@ nsJARChannel::GetZipEntry(nsIZipEntry **aZipEntry)
     return reader->GetEntry(mJarEntry, aZipEntry);
 }
 
-NS_IMETHODIMP
-nsJARChannel::ForceNoIntercept()
-{
-    mForceNoIntercept = true;
-    return NS_OK;
-}
-
 //-----------------------------------------------------------------------------
 // mozilla::net::MemoryDownloader::IObserver
 //-----------------------------------------------------------------------------
@@ -1182,7 +1176,7 @@ nsJARChannel::OnDownloadComplete(MemoryDownloader* aDownloader,
                                            header);
             nsAutoCString contentType;
             nsAutoCString charset;
-            NS_ParseContentType(header, contentType, charset);
+            NS_ParseResponseContentType(header, contentType, charset);
             nsAutoCString channelContentType;
             channel->GetContentType(channelContentType);
             mIsUnsafe = !(contentType.Equals(channelContentType) &&

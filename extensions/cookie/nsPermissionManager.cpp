@@ -891,7 +891,6 @@ nsPermissionManager::InitDB(bool aRemoveFile)
       return NS_ERROR_UNEXPECTED;
   }
 
-  LogToConsole(NS_LITERAL_STRING("Get a connection to permissions.sqlite."));
 
   bool tableExists = false;
   mDBConn->TableExists(NS_LITERAL_CSTRING("moz_perms"), &tableExists);
@@ -901,7 +900,6 @@ nsPermissionManager::InitDB(bool aRemoveFile)
   if (!tableExists) {
     rv = CreateTable();
     NS_ENSURE_SUCCESS(rv, rv);
-    LogToConsole(NS_LITERAL_STRING("DB table(moz_perms) is created!"));
   } else {
     // table already exists; check the schema version before reading
     int32_t dbSchemaVersion;
@@ -2314,30 +2312,6 @@ nsPermissionManager::RemovePermissionsForApp(uint32_t aAppId, bool aBrowserOnly)
 {
   ENSURE_NOT_CHILD_PROCESS;
   NS_ENSURE_ARG(aAppId != nsIScriptSecurityManager::NO_APP_ID);
-
-  // We begin by removing all the permissions from the DB.
-  // After clearing the DB, we call AddInternal() to make sure that all
-  // processes are aware of this change and the representation of the DB in
-  // memory is updated.
-  // We have to get all permissions associated with an application first
-  // because removing entries from the permissions table while iterating over
-  // it is dangerous.
-
-  nsAutoCString sql;
-  sql.AppendLiteral("DELETE FROM moz_perms WHERE appId=");
-  sql.AppendInt(aAppId);
-
-  if (aBrowserOnly) {
-    sql.AppendLiteral(" AND isInBrowserElement=1");
-  }
-
-  nsCOMPtr<mozIStorageAsyncStatement> removeStmt;
-  nsresult rv = mDBConn->CreateAsyncStatement(sql, getter_AddRefs(removeStmt));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsCOMPtr<mozIStoragePendingStatement> pending;
-  rv = removeStmt->ExecuteAsync(nullptr, getter_AddRefs(pending));
-  NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMArray<nsIPermission> permissions;
   for (auto iter = mPermissionTable.Iter(); !iter.Done(); iter.Next()) {

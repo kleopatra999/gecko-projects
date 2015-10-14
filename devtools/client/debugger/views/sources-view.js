@@ -20,6 +20,7 @@ function SourcesView(DebuggerController, DebuggerView) {
   this.Breakpoints = DebuggerController.Breakpoints;
   this.SourceScripts = DebuggerController.SourceScripts;
   this.DebuggerView = DebuggerView;
+  this.Parser = DebuggerController.Parser;
 
   this.togglePrettyPrint = this.togglePrettyPrint.bind(this);
   this.toggleBlackBoxing = this.toggleBlackBoxing.bind(this);
@@ -28,6 +29,7 @@ function SourcesView(DebuggerController, DebuggerView) {
   this._onEditorLoad = this._onEditorLoad.bind(this);
   this._onEditorUnload = this._onEditorUnload.bind(this);
   this._onEditorCursorActivity = this._onEditorCursorActivity.bind(this);
+  this._onMouseDown = this._onMouseDown.bind(this);
   this._onSourceSelect = this._onSourceSelect.bind(this);
   this._onStopBlackBoxing = this._onStopBlackBoxing.bind(this);
   this._onBreakpointRemoved = this._onBreakpointRemoved.bind(this);
@@ -69,9 +71,15 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     this._newTabMenuItem = document.getElementById("debugger-sources-context-newtab");
     this._copyUrlMenuItem = document.getElementById("debugger-sources-context-copyurl");
 
+    this._noResultsFoundToolTip = new Tooltip(document);
+    this._noResultsFoundToolTip.defaultPosition = FUNCTION_SEARCH_POPUP_POSITION;
+
     if (Prefs.prettyPrintEnabled) {
       this._prettyPrintButton.removeAttribute("hidden");
     }
+
+    this._editorContainer = document.getElementById("editor");
+    this._editorContainer.addEventListener("mousedown", this._onMouseDown, false);
 
     window.on(EVENTS.EDITOR_LOADED, this._onEditorLoad, false);
     window.on(EVENTS.EDITOR_UNLOADED, this._onEditorUnload, false);
@@ -466,9 +474,9 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     // If the breakpoint requires a new conditional expression, display
     // the panel to input the corresponding expression.
     if (aOptions.openPopup) {
-      this._openConditionalPopup();
+      return this._openConditionalPopup();
     } else {
-      this._hideConditionalPopup();
+      return this._hideConditionalPopup();
     }
   },
 
@@ -717,13 +725,13 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     // retrieve the current conditional epression.
     let breakpointPromise = this.Breakpoints._getAdded(attachment);
     if (breakpointPromise) {
-      breakpointPromise.then(aBreakpointClient => {
+      return breakpointPromise.then(aBreakpointClient => {
         let isConditionalBreakpoint = aBreakpointClient.hasCondition();
         let condition = aBreakpointClient.getCondition();
-        doOpen.call(this, isConditionalBreakpoint ? condition : "")
+        return doOpen.call(this, isConditionalBreakpoint ? condition : "")
       });
     } else {
-      doOpen.call(this, "")
+      return doOpen.call(this, "")
     }
 
     function doOpen(aConditionalExpression) {
@@ -968,6 +976,81 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     aEditor.off("cursorActivity", this._onEditorCursorActivity);
   },
 
+  _onMouseDown: function(e) {
+    this.hideNoResultsTooltip();
+
+    if (!e.metaKey) {
+      return;
+    }
+
+    let editor = this.DebuggerView.editor;
+    let identifier = this._findIdentifier(e.clientX, e.clientY);
+
+    if (!identifier) {
+        return;
+    }
+
+    let foundDefinitions = this._getFunctionDefinitions(identifier);
+
+    if (!foundDefinitions || !foundDefinitions.definitions) {
+      return;
+    }
+
+    this._showFunctionDefinitionResults(identifier, foundDefinitions.definitions, editor);
+  },
+
+  /**
+   * Searches for function definition of a function in a given source file
+   */
+
+  _findDefinition: function(parsedSource, aName) {
+    let functionDefinitions = parsedSource.getNamedFunctionDefinitions(aName);
+
+    let resultList = [];
+
+    if (!functionDefinitions || !functionDefinitions.length || !functionDefinitions[0].length) {
+      return {
+        definitions: resultList
+      };
+    }
+
+    //functionDefinitions is a list with an object full of metadata, extract the
+    //data and use to construct a more useful, less cluttered, contextual list
+    for (let i=0; i<functionDefinitions.length; i++) {
+      let functionDefinition = {
+        source: functionDefinitions[i].sourceUrl,
+        startLine: functionDefinitions[i][0].functionLocation.start.line,
+        startColumn: functionDefinitions[i][0].functionLocation.start.column,
+        name: functionDefinitions[i][0].functionName
+      }
+
+      resultList.push(functionDefinition)
+    }
+
+    return {
+     definitions: resultList
+    };
+  },
+
+  /**
+   * Searches for an identifier underneath the specified position in the
+   * source editor.
+   *
+   * @param number x, y
+   *        The left/top coordinates where to look for an identifier.
+   */
+  _findIdentifier: function(x, y) {
+    let parsedSource = SourceUtils.parseSource(this.DebuggerView, this.Parser);
+    let identifierInfo = SourceUtils.findIdentifier(this.DebuggerView.editor, parsedSource, x, y);
+
+    // Not hovering over an identifier
+    if (!identifierInfo) {
+        return;
+    }
+
+    return identifierInfo;
+  },
+
   /**
    * The selection listener for the source editor.
    */
@@ -984,6 +1067,60 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     } else {
       this.unhighlightBreakpoint();
     }
+  },
+
+  /*
+   * Uses function definition data to perform actions in different
+   * cases of how many locations were found: zero, one, or mulitple definitions
+   */
+  _showFunctionDefinitionResults: function(aHoveredFunction, aDefinitionList, aEditor) {
+    let definitions = aDefinitionList;
+    let hoveredFunction = aHoveredFunction;
+
+    //show a popup saying no results were found
+    if (definitions.length == 0) {
+      this._noResultsFoundToolTip.setTextContent({
+          messages: [L10N.getStr("noMatchingStringsText")]
+      });
+
+      this._markedIdentifier = aEditor.markText(
+        { line: hoveredFunction.location.start.line - 1, ch: hoveredFunction.location.start.column },
+        { line: hoveredFunction.location.end.line - 1, ch: hoveredFunction.location.end.column });
+
+      this._noResultsFoundToolTip.show(this._markedIdentifier.anchor);
+
+    } else if(definitions.length == 1) {
+      this.DebuggerView.setEditorLocation(definitions[0].source, definitions[0].startLine);
+    } else {
+      //multiple definitions found, do something else
+      this.DebuggerView.setEditorLocation(definitions[0].source, definitions[0].startLine);
+    }
+},
+
+  /**
+   * Hides the tooltip and clear marked text popup.
+   */
+  hideNoResultsTooltip: function() {
+    this._noResultsFoundToolTip.hide();
+    if (this._markedIdentifier) {
+      this._markedIdentifier.clear();
+      this._markedIdentifier = null;
+    }
+  },
+
+  /*
+   * Gets the definition locations from function metadata
+   */
+  _getFunctionDefinitions: function(aIdentifierInfo) {
+    let parsedSource = SourceUtils.parseSource(this.DebuggerView, this.Parser);
+    let definition_info = this._findDefinition(parsedSource, aIdentifierInfo.name);
+
+    //Did not find any definitions for the identifier
+    if (!definition_info) {
+      return;
+    }
+
+    return definition_info;
   },
 
   /**
@@ -1040,18 +1177,24 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
     let attachment = breakpointItem.attachment;
 
     // Check if this is an enabled conditional breakpoint.
-    let breakpointPromise = this.Breakpoints._getAdded(attachment);
-    if (breakpointPromise) {
-      breakpointPromise.then(aBreakpointClient => {
-        doHighlight.call(this, aBreakpointClient.hasCondition());
+    let promise = this.Breakpoints._getAdded(attachment);
+    if (promise) {
+      promise = promise.then(aBreakpointClient => {
+        return doHighlight.call(this, aBreakpointClient.hasCondition());
       });
     } else {
-      doHighlight.call(this, false);
+      promise = Promise.resolve().then(() => {
+        return doHighlight.call(this, false)
+      });
     }
+
+    promise.then(() => {
+      window.emit(EVENTS.BREAKPOINT_CLICKED);
+    });
 
     function doHighlight(aConditionalBreakpointFlag) {
       // Highlight the breakpoint in this pane and in the editor.
-      this.highlightBreakpoint(attachment, {
+      return this.highlightBreakpoint(attachment, {
         // Don't show the conditional expression popup if this is not a
         // conditional breakpoint, or the right mouse button was pressed (to
         // avoid clashing the popup with the context menu).
@@ -1285,7 +1428,9 @@ SourcesView.prototype = Heritage.extend(WidgetMethods, {
   _cbPanel: null,
   _cbTextbox: null,
   _selectedBreakpointItem: null,
-  _conditionalPopupVisible: false
+  _conditionalPopupVisible: false,
+  _noResultsFoundToolTip: null,
+  _markedIdentifier: null
 });
 
 DebuggerView.Sources = new SourcesView(DebuggerController, DebuggerView);

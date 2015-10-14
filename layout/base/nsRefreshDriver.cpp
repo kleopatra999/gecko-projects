@@ -1306,7 +1306,7 @@ DispatchAnimationEventsOnSubDocuments(nsIDocument* aDocument,
     return true;
   }
 
-  nsPresContext* context = shell->GetPresContext();
+  nsRefPtr<nsPresContext> context = shell->GetPresContext();
   if (!context || context->RefreshDriver() != aRefreshDriver) {
     return true;
   }
@@ -1319,7 +1319,10 @@ DispatchAnimationEventsOnSubDocuments(nsIDocument* aDocument,
   // Dispatch transition events first since transitions conceptually sit
   // below animations in terms of compositing order.
   context->TransitionManager()->DispatchEvents();
-  context->AnimationManager()->DispatchEvents();
+  // Check that the presshell has not been destroyed
+  if (context->GetPresShell()) {
+    context->AnimationManager()->DispatchEvents();
+  }
 
   aDocument->EnumerateSubDocuments(DispatchAnimationEventsOnSubDocuments,
                                    aRefreshDriver);
