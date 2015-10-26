@@ -113,6 +113,18 @@ int nr_stun_client_ctx_create(char *label, nr_socket *sock, nr_transport_addr *p
     return(_status);
   }
 
+static void nr_stun_client_fire_finished_cb(nr_stun_client_ctx *ctx)
+  {
+    if (ctx->finished_cb) {
+      NR_async_cb finished_cb = ctx->finished_cb;
+      ctx->finished_cb = 0;  /* prevent 2nd call */
+      /* finished_cb call must be absolutely last thing in function
+       * because as a side effect this ctx may be operated on in the
+       * callback */
+      finished_cb(0,0,ctx->cb_arg);
+    }
+  }
+
 int nr_stun_client_start(nr_stun_client_ctx *ctx, int mode, NR_async_cb finished_cb, void *cb_arg)
   {
     int r,_status;
@@ -134,11 +146,7 @@ int nr_stun_client_start(nr_stun_client_ctx *ctx, int mode, NR_async_cb finished
     _status=0;
   abort:
    if (ctx->state != NR_STUN_CLIENT_STATE_RUNNING) {
-        ctx->finished_cb = 0;  /* prevent 2nd call */
-        /* finished_cb call must be absolutely last thing in function
-         * because as a side effect this ctx may be operated on in the
-         * callback */
-        finished_cb(0,0,cb_arg);
+     nr_stun_client_fire_finished_cb(ctx);
     }
 
     return(_status);
@@ -254,14 +262,7 @@ static void nr_stun_client_timer_expired_cb(NR_SOCKET s, int b, void *cb_arg)
             ctx->timer_handle=0;
         }
 
-        if (ctx->finished_cb) {
-            NR_async_cb finished_cb = ctx->finished_cb;
-            ctx->finished_cb = 0;  /* prevent 2nd call */
-            /* finished_cb call must be absolutely last thing in function
-             * because as a side effect this ctx may be operated on in the
-             * callback */
-            finished_cb(0,0,ctx->cb_arg);
-        }
+        nr_stun_client_fire_finished_cb(ctx);
     }
     return;
   }
@@ -337,7 +338,7 @@ static int nr_stun_client_send_request(nr_stun_client_ctx *ctx)
 
 #ifdef USE_ICE
         case NR_ICE_CLIENT_MODE_USE_CANDIDATE:
-            if ((r=nr_stun_build_use_candidate(&ctx->params.ice_use_candidate, &ctx->request)))
+            if ((r=nr_stun_build_use_candidate(&ctx->params.ice_binding_request, &ctx->request)))
                 ABORT(r);
             break;
         case NR_ICE_CLIENT_MODE_BINDING_REQUEST:
@@ -380,6 +381,8 @@ static int nr_stun_client_send_request(nr_stun_client_ctx *ctx)
     snprintf(string, sizeof(string)-1, "STUN-CLIENT(%s): Sending to %s ", ctx->label, ctx->peer_addr.as_string);
     r_dump(NR_LOG_STUN, LOG_DEBUG, string, (char*)ctx->request->buffer, ctx->request->length);
 
+    assert(ctx->my_addr.protocol==ctx->peer_addr.protocol);
+
     if(r=nr_socket_sendto(ctx->sock, ctx->request->buffer, ctx->request->length, 0, &ctx->peer_addr))
       ABORT(r);
 
@@ -408,7 +411,7 @@ static int nr_stun_client_send_request(nr_stun_client_ctx *ctx)
     _status=0;
   abort:
     if (_status) {
-      ctx->state=NR_STUN_CLIENT_STATE_FAILED;
+      nr_stun_client_failed(ctx);
     }
     return(_status);
   }
@@ -746,15 +749,7 @@ int nr_stun_client_process_response(nr_stun_client_ctx *ctx, UCHAR *msg, int len
             ctx->timer_handle = 0;
         }
 
-        /* Fire the callback */
-        if (ctx->finished_cb) {
-            NR_async_cb finished_cb = ctx->finished_cb;
-            ctx->finished_cb = 0;  /* prevent 2nd call */
-            /* finished_cb call must be absolutely last thing in function
-             * because as a side effect this ctx may be operated on in the
-             * callback */
-            finished_cb(0,0,ctx->cb_arg);
-        }
+        nr_stun_client_fire_finished_cb(ctx);
     }
 
     return(_status);
@@ -792,6 +787,14 @@ int nr_stun_client_cancel(nr_stun_client_ctx *ctx)
 
     /* Mark cancelled so we ignore any returned messsages */
     ctx->state=NR_STUN_CLIENT_STATE_CANCELLED;
+    return(0);
+}
 
+
+int nr_stun_client_failed(nr_stun_client_ctx *ctx)
+  {
+    nr_stun_client_cancel(ctx);
+    ctx->state=NR_STUN_CLIENT_STATE_FAILED;
+    nr_stun_client_fire_finished_cb(ctx);
     return(0);
   }

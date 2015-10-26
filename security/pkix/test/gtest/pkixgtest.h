@@ -125,7 +125,9 @@ public:
                       Result::FATAL_ERROR_LIBRARY_FAILURE);
   }
 
-  Result CheckSignatureDigestAlgorithm(DigestAlgorithm) override
+  Result CheckSignatureDigestAlgorithm(DigestAlgorithm,
+                                       EndEntityOrCA,
+                                       Time) override
   {
     ADD_FAILURE();
     return NotReached("CheckSignatureDigestAlgorithm should not be called",
@@ -178,7 +180,8 @@ class DefaultCryptoTrustDomain : public EverythingFailsByDefaultTrustDomain
     return TestDigestBuf(item, digestAlg, digestBuf, digestBufLen);
   }
 
-  Result CheckSignatureDigestAlgorithm(DigestAlgorithm) override
+  Result CheckSignatureDigestAlgorithm(DigestAlgorithm, EndEntityOrCA, Time)
+                                       override
   {
     return Success;
   }

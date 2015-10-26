@@ -21,6 +21,7 @@
 #pragma GCC diagnostic pop
 
 #include "MediaDecoderReader.h"
+#include "MediaResource.h"
 #include "MP3FrameParser.h"
 #include "ImageContainer.h"
 #include "nsRect.h"
@@ -39,15 +40,15 @@ public:
   explicit GStreamerReader(AbstractMediaDecoder* aDecoder);
   virtual ~GStreamerReader();
 
-  virtual nsresult Init(MediaDecoderReader* aCloneDonor) override;
-  virtual nsRefPtr<ShutdownPromise> Shutdown() override;
+  virtual nsresult Init() override;
+  virtual RefPtr<ShutdownPromise> Shutdown() override;
   virtual nsresult ResetDecode() override;
   virtual bool DecodeAudioData() override;
   virtual bool DecodeVideoFrame(bool &aKeyframeSkip,
                                 int64_t aTimeThreshold) override;
   virtual nsresult ReadMetadata(MediaInfo* aInfo,
                                 MetadataTags** aTags) override;
-  virtual nsRefPtr<SeekPromise>
+  virtual RefPtr<SeekPromise>
   Seek(int64_t aTime, int64_t aEndTime) override;
   virtual media::TimeIntervals GetBuffered() override;
 
@@ -71,8 +72,8 @@ public:
 private:
 
   void ReadAndPushData(guint aLength);
-  nsRefPtr<layers::PlanarYCbCrImage> GetImageFromBuffer(GstBuffer* aBuffer);
-  void CopyIntoImageBuffer(GstBuffer *aBuffer, GstBuffer** aOutBuffer, nsRefPtr<layers::PlanarYCbCrImage> &image);
+  RefPtr<layers::PlanarYCbCrImage> GetImageFromBuffer(GstBuffer* aBuffer);
+  void CopyIntoImageBuffer(GstBuffer *aBuffer, GstBuffer** aOutBuffer, RefPtr<layers::PlanarYCbCrImage> &image);
   GstCaps* BuildAudioSinkCaps();
   void InstallPadCallbacks();
 
@@ -92,8 +93,8 @@ private:
 
   /*
    * We attach this callback to playbin so that when uridecodebin is
-   * constructed, we can then list for its autoplug-sort signal to blacklist
-   * the elements it can construct.
+   * constructed, we can then list for its autoplug-sort signal to block
+   * list the elements it can construct.
    */
   static void ElementAddedCb(GstBin *aPlayBin,
                              GstElement *aElement,
@@ -157,7 +158,7 @@ private:
   static GstFlowReturn AllocateVideoBufferCb(GstPad* aPad, guint64 aOffset, guint aSize,
                                              GstCaps* aCaps, GstBuffer** aBuf);
   GstFlowReturn AllocateVideoBufferFull(GstPad* aPad, guint64 aOffset, guint aSize,
-                                     GstCaps* aCaps, GstBuffer** aBuf, nsRefPtr<layers::PlanarYCbCrImage>& aImage);
+                                     GstCaps* aCaps, GstBuffer** aBuf, RefPtr<layers::PlanarYCbCrImage>& aImage);
   GstFlowReturn AllocateVideoBuffer(GstPad* aPad, guint64 aOffset, guint aSize,
                                      GstCaps* aCaps, GstBuffer** aBuf);
 #endif
@@ -193,7 +194,7 @@ private:
   static bool ShouldAutoplugFactory(GstElementFactory* aFactory, GstCaps* aCaps);
 
   /* Called by decodebin during autoplugging. We use it to apply our
-   * container/codec blacklist.
+   * container/codec block list.
    */
   static GValueArray* AutoplugSortCb(GstElement* aElement,
                                      GstPad* aPad, GstCaps* aCaps,
@@ -262,6 +263,9 @@ private:
 #endif
   int fpsNum;
   int fpsDen;
+
+  MediaResourceIndex mResource;
+  NotifyDataArrivedFilter mFilter;
 };
 
 } // namespace mozilla

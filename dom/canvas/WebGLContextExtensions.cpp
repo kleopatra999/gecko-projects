@@ -6,6 +6,7 @@
 #include "WebGLContext.h"
 #include "WebGLContextUtils.h"
 #include "WebGLExtensions.h"
+#include "gfxPrefs.h"
 #include "GLContext.h"
 
 #include "nsString.h"
@@ -74,12 +75,15 @@ bool WebGLContext::IsExtensionSupported(JSContext* cx,
 
     // Chrome contexts need access to debug information even when
     // webgl.disable-extensions is set. This is used in the graphics
-    // section of about:support.
-    if (xpc::AccessCheck::isChrome(js::GetContextCompartment(cx)))
+    // section of about:support
+    if (NS_IsMainThread() &&
+        xpc::AccessCheck::isChrome(js::GetContextCompartment(cx))) {
         allowPrivilegedExts = true;
+    }
 
-    if (Preferences::GetBool("webgl.enable-privileged-extensions", false))
+    if (gfxPrefs::WebGLPrivilegedExtensionsEnabled()) {
         allowPrivilegedExts = true;
+    }
 
     if (allowPrivilegedExts) {
         switch (ext) {
@@ -159,6 +163,10 @@ WebGLContext::IsExtensionSupported(WebGLExtensionID ext) const
         return gl->IsExtensionSupported(gl::GLContext::EXT_texture_compression_dxt1) &&
                gl->IsExtensionSupported(gl::GLContext::ANGLE_texture_compression_dxt3) &&
                gl->IsExtensionSupported(gl::GLContext::ANGLE_texture_compression_dxt5);
+
+    case WebGLExtensionID::WEBGL_debug_renderer_info:
+        return Preferences::GetBool("webgl.enable-debug-renderer-info", false);
+
     case WebGLExtensionID::WEBGL_depth_texture:
         // WEBGL_depth_texture supports DEPTH_STENCIL textures
         if (!gl->IsSupported(gl::GLFeature::packed_depth_stencil))
@@ -177,9 +185,7 @@ WebGLContext::IsExtensionSupported(WebGLExtensionID ext) const
         break;
     }
 
-    if (Preferences::GetBool("webgl.enable-draft-extensions", false) ||
-        IsWebGL2())
-    {
+    if (gfxPrefs::WebGLDraftExtensionsEnabled() || IsWebGL2()) {
         switch (ext) {
         case WebGLExtensionID::EXT_disjoint_timer_query:
             return WebGLExtensionDisjointTimerQuery::IsSupported(this);
@@ -393,7 +399,7 @@ WebGLContext::EnableExtension(WebGLExtensionID ext)
 
 void
 WebGLContext::GetSupportedExtensions(JSContext* cx,
-                                     Nullable< nsTArray<nsString> >& retval)
+                                     dom::Nullable< nsTArray<nsString> >& retval)
 {
     retval.SetNull();
     if (IsContextLost())

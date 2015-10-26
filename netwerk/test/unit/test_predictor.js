@@ -4,6 +4,7 @@ var Cu = Components.utils;
 var Cr = Components.results;
 
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/LoadContextInfo.jsm");
 
 var running_single_process = false;
 
@@ -38,7 +39,9 @@ LoadContext.prototype = {
     }
 
     throw Cr.NS_ERROR_NO_INTERFACE;
-  }
+  },
+
+  originAttributes: {}
 };
 
 var load_context = new LoadContext();
@@ -148,21 +151,7 @@ var prepListener = {
 };
 
 function open_and_continue(uris, continueCallback) {
-  var lci = {
-    QueryInterface: function (iid) {
-      if (iid.equals(Ci.nsILoadContextInfo)) {
-        return this;
-      }
-      throw Cr.NS_ERROR_NO_INTERFACE;
-    },
-
-    isPrivate: false,
-    appId: Ci.nsILoadContextInfo.NO_APP_ID,
-    isInBrowserElement: false,
-    isAnonymous: false
-  };
-
-  var ds = Services.cache2.diskCacheStorage(lci, false);
+  var ds = Services.cache2.diskCacheStorage(LoadContextInfo.default, false);
 
   prepListener.init(uris.length, continueCallback);
   for (var i = 0; i < uris.length; ++i) {
@@ -393,15 +382,17 @@ function unregisterObserver() {
 
 function run_test_real() {
   tests.forEach(add_test);
-  do_get_profile()
-  predictor = Cc["@mozilla.org/network/predictor;1"].getService(Ci.nsINetworkPredictor);
-
-  registerObserver();
+  do_get_profile();
 
   Services.prefs.setBoolPref("network.predictor.enabled", true);
   Services.prefs.setBoolPref("network.predictor.cleaned-up", true);
   Services.prefs.setBoolPref("browser.cache.use_new_backend_temp", true);
   Services.prefs.setIntPref("browser.cache.use_new_backend", 1);
+
+  predictor = Cc["@mozilla.org/network/predictor;1"].getService(Ci.nsINetworkPredictor);
+
+  registerObserver();
+
   do_register_cleanup(() => {
     Services.prefs.clearUserPref("network.predictor.preconnect-min-confidence");
     Services.prefs.clearUserPref("network.predictor.enabled");

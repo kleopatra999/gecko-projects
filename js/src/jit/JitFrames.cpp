@@ -354,12 +354,12 @@ JitFrameIterator::machineState() const
 
     // The MachineState is used by GCs for marking call-sites.
     if (MOZ_UNLIKELY(isBailoutJS()))
-        return activation_->bailoutData()->machineState();
+        return *activation_->bailoutData()->machineState();
 
     SafepointReader reader(ionScript(), safepoint());
     uintptr_t* spill = spillBase();
-
     MachineState machine;
+
     for (GeneralRegisterBackwardIterator iter(reader.allGprSpills()); iter.more(); iter++)
         machine.setRegisterLocation(*iter, --spill);
 
@@ -466,13 +466,6 @@ HandleExceptionIon(JSContext* cx, const InlineFrameIterator& frame, ResumeFromEx
             uint32_t retval = ExceptionHandlerBailout(cx, frame, rfe, propagateInfo, overrecursed);
             if (retval == BAILOUT_RETURN_OK)
                 return;
-
-            // If bailout failed (e.g., due to overrecursion), clean up any
-            // Debugger.Frame instances here. Normally this should happen
-            // inside the debug epilogue, but due to bailout failure, we
-            // cannot honor any Debugger hooks.
-            if (rematFrame)
-                Debugger::handleUnrecoverableIonBailoutError(cx, rematFrame);
         }
 
         MOZ_ASSERT_IF(rematFrame, !Debugger::inFrameMaps(rematFrame));
@@ -700,6 +693,17 @@ HandleExceptionBaseline(JSContext* cx, const JitFrameIterator& frame, ResumeFrom
 {
     MOZ_ASSERT(frame.isBaselineJS());
 
+    bool frameOk = false;
+    RootedScript script(cx, frame.baselineFrame()->script());
+
+    if (script->hasScriptCounts()) {
+        PCCounts* counts = script->getThrowCounts(pc);
+        // If we failed to allocate, then skip the increment and continue to
+        // handle the exception.
+        if (counts)
+            counts->numExec()++;
+    }
+
     // We may be propagating a forced return from the interrupt
     // callback, which cannot easily force a return.
     if (cx->isPropagatingForcedReturn()) {
@@ -708,10 +712,7 @@ HandleExceptionBaseline(JSContext* cx, const JitFrameIterator& frame, ResumeFrom
         return;
     }
 
-    bool frameOk = false;
-    RootedScript script(cx, frame.baselineFrame()->script());
-
-again:
+  again:
     if (cx->isExceptionPending()) {
         if (!cx->isClosingGenerator()) {
             switch (Debugger::onExceptionUnwind(cx, frame.baselineFrame())) {
@@ -740,8 +741,12 @@ again:
             ScopeIter si(cx, frame.baselineFrame(), pc);
             if (!ProcessTryNotesBaseline(cx, frame, si, rfe, &pc))
                 goto again;
-            if (rfe->kind != ResumeFromException::RESUME_ENTRY_FRAME)
+            if (rfe->kind != ResumeFromException::RESUME_ENTRY_FRAME) {
+                // No need to increment the PCCounts number of execution here,
+                // as the interpreter increments any PCCounts if present.
+                MOZ_ASSERT_IF(script->hasScriptCounts(), script->maybeGetPCCounts(pc));
                 return;
+            }
         }
 
         frameOk = HandleClosingGeneratorReturn(cx, frame.baselineFrame(), frameOk);
@@ -1039,19 +1044,27 @@ ReadAllocation(const JitFrameIterator& frame, const LAllocation* a)
 #endif
 
 static void
-MarkThisAndArguments(JSTracer* trc, JitFrameLayout* layout)
+MarkThisAndArguments(JSTracer* trc, const JitFrameIterator& frame)
 {
     // Mark |this| and any extra actual arguments for an Ion frame. Marking of
     // formal arguments is taken care of by the frame's safepoint/snapshot,
     // except when the script might have lazy arguments, in which case we mark
-    // them as well.
+    // them as well. We also have to mark formals if we have a LazyLink frame.
+
+    JitFrameLayout* layout = frame.isExitFrameLayout<LazyLinkExitFrameLayout>()
+                             ? frame.exitFrame()->as<LazyLinkExitFrameLayout>()->jsFrame()
+                             : frame.jsFrame();
 
     size_t nargs = layout->numActualArgs();
     size_t nformals = 0;
     size_t newTargetOffset = 0;
     if (CalleeTokenIsFunction(layout->calleeToken())) {
         JSFunction* fun = CalleeTokenToFunction(layout->calleeToken());
-        nformals = fun->nonLazyScript()->argumentsHasVarBinding() ? 0 : fun->nargs();
+        if (!frame.isExitFrameLayout<LazyLinkExitFrameLayout>() &&
+            !fun->nonLazyScript()->argumentsHasVarBinding())
+        {
+            nformals = fun->nargs();
+        }
         newTargetOffset = Max(nargs, fun->nargs());
     }
 
@@ -1068,13 +1081,6 @@ MarkThisAndArguments(JSTracer* trc, JitFrameLayout* layout)
     // +1 to pass |this|
     if (CalleeTokenIsConstructing(layout->calleeToken()))
         TraceRoot(trc, &argv[1 + newTargetOffset], "ion-newTarget");
-}
-
-static void
-MarkThisAndArguments(JSTracer* trc, const JitFrameIterator& frame)
-{
-    JitFrameLayout* layout = frame.jsFrame();
-    MarkThisAndArguments(trc, layout);
 }
 
 #ifdef JS_NUNBOX32
@@ -1177,7 +1183,7 @@ MarkBailoutFrame(JSTracer* trc, const JitFrameIterator& frame)
 
     // The vector of recover instructions is already traced as part of the
     // JitActivation.
-    SnapshotIterator snapIter(frame);
+    SnapshotIterator snapIter(frame, frame.activation()->bailoutData()->machineState());
 
     // For each instruction, we read the allocations without evaluating the
     // recover instruction, nor reconstructing the frame. We are only looking at
@@ -1299,7 +1305,7 @@ JitActivationIterator::jitStackRange(uintptr_t*& min, uintptr_t*& end)
     end = reinterpret_cast<uintptr_t*>(frames.prevFp());
 }
 
-#ifdef JS_CODEGEN_MIPS
+#ifdef JS_CODEGEN_MIPS32
 uint8_t*
 alignDoubleSpillWithOffset(uint8_t* pointer, int32_t offset)
 {
@@ -1396,7 +1402,6 @@ MarkJitExitFrame(JSTracer* trc, const JitFrameIterator& frame)
         TraceRoot(trc, oolproxy->vp(), "ion-ool-proxy-vp");
         TraceRoot(trc, oolproxy->id(), "ion-ool-proxy-id");
         TraceRoot(trc, oolproxy->proxy(), "ion-ool-proxy-proxy");
-        TraceRoot(trc, oolproxy->receiver(), "ion-ool-proxy-receiver");
         return;
     }
 
@@ -1421,7 +1426,7 @@ MarkJitExitFrame(JSTracer* trc, const JitFrameIterator& frame)
 
         TraceRoot(trc, ll->stubCode(), "lazy-link-code");
         layout->replaceCalleeToken(MarkCalleeToken(trc, layout->calleeToken()));
-        MarkThisAndArguments(trc, layout);
+        MarkThisAndArguments(trc, frame);
         return;
     }
 
@@ -1745,6 +1750,14 @@ RInstructionResults::isInitialized() const
     return initialized_;
 }
 
+#ifdef DEBUG
+size_t
+RInstructionResults::length() const
+{
+    return results_->length();
+}
+#endif
+
 JitFrameLayout*
 RInstructionResults::frame() const
 {
@@ -1767,24 +1780,7 @@ RInstructionResults::trace(JSTracer* trc)
 }
 
 
-SnapshotIterator::SnapshotIterator(IonScript* ionScript, SnapshotOffset snapshotOffset,
-                                   JitFrameLayout* fp, const MachineState& machine)
-  : snapshot_(ionScript->snapshots(),
-              snapshotOffset,
-              ionScript->snapshotsRVATableSize(),
-              ionScript->snapshotsListSize()),
-    recover_(snapshot_,
-             ionScript->recovers(),
-             ionScript->recoversSize()),
-    fp_(fp),
-    machine_(machine),
-    ionScript_(ionScript),
-    instructionResults_(nullptr)
-{
-    MOZ_ASSERT(snapshotOffset < ionScript->snapshotsListSize());
-}
-
-SnapshotIterator::SnapshotIterator(const JitFrameIterator& iter)
+SnapshotIterator::SnapshotIterator(const JitFrameIterator& iter, const MachineState* machineState)
   : snapshot_(iter.ionScript()->snapshots(),
               iter.snapshotOffset(),
               iter.ionScript()->snapshotsRVATableSize(),
@@ -1793,7 +1789,7 @@ SnapshotIterator::SnapshotIterator(const JitFrameIterator& iter)
              iter.ionScript()->recovers(),
              iter.ionScript()->recoversSize()),
     fp_(iter.jsFrame()),
-    machine_(iter.machineState()),
+    machine_(machineState),
     ionScript_(iter.ionScript()),
     instructionResults_(nullptr)
 {
@@ -2025,7 +2021,7 @@ SnapshotIterator::floatAllocationPointer(const RValueAllocation& alloc) const
 {
     switch (alloc.mode()) {
       case RValueAllocation::ANY_FLOAT_REG:
-        return machine_.address(alloc.fpuReg());
+        return machine_->address(alloc.fpuReg());
 
       case RValueAllocation::ANY_FLOAT_STACK:
         return (FloatRegisters::RegisterContent*) AddressOfFrameSlot(fp_, alloc.stackOffset());
@@ -2043,7 +2039,7 @@ SnapshotIterator::maybeRead(const RValueAllocation& a, MaybeReadFallback& fallba
 
     if (fallback.canRecoverResults()) {
         if (!initInstructionResults(fallback))
-            js::CrashAtUnhandlableOOM("Unable to recover allocations.");
+            MOZ_CRASH("Unable to recover allocations.");
 
         if (allocationReadable(a))
             return allocationValue(a);
@@ -2078,7 +2074,7 @@ SnapshotIterator::writeAllocationValuePayload(const RValueAllocation& alloc, Val
         break;
 
       case RValueAllocation::TYPED_REG:
-        machine_.write(alloc.reg2(), payload);
+        machine_->write(alloc.reg2(), payload);
         break;
 
       case RValueAllocation::TYPED_STACK:
@@ -2097,7 +2093,7 @@ SnapshotIterator::writeAllocationValuePayload(const RValueAllocation& alloc, Val
 #if defined(JS_NUNBOX32)
       case RValueAllocation::UNTYPED_REG_REG:
       case RValueAllocation::UNTYPED_STACK_REG:
-        machine_.write(alloc.reg2(), payload);
+        machine_->write(alloc.reg2(), payload);
         break;
 
       case RValueAllocation::UNTYPED_REG_STACK:
@@ -2106,7 +2102,7 @@ SnapshotIterator::writeAllocationValuePayload(const RValueAllocation& alloc, Val
         break;
 #elif defined(JS_PUNBOX64)
       case RValueAllocation::UNTYPED_REG:
-        machine_.write(alloc.reg(), v.asRawBits());
+        machine_->write(alloc.reg(), v.asRawBits());
         break;
 
       case RValueAllocation::UNTYPED_STACK:
@@ -2216,7 +2212,8 @@ SnapshotIterator::initInstructionResults(MaybeReadFallback& fallback)
         // Start a new snapshot at the beginning of the JitFrameIterator.  This
         // SnapshotIterator is used for evaluating the content of all recover
         // instructions.  The result is then saved on the JitActivation.
-        SnapshotIterator s(*fallback.frame);
+        MachineState machine = fallback.frame->machineState();
+        SnapshotIterator s(*fallback.frame, &machine);
         if (!s.computeInstructionResults(cx, results)) {
 
             // If the evaluation failed because of OOMs, then we discard the
@@ -2227,6 +2224,7 @@ SnapshotIterator::initInstructionResults(MaybeReadFallback& fallback)
     }
 
     MOZ_ASSERT(results->isInitialized());
+    MOZ_ASSERT(results->length() == recover_.numInstructions() - 1);
     instructionResults_ = results;
     return true;
 }
@@ -2408,7 +2406,8 @@ InlineFrameIterator::InlineFrameIterator(JSContext* cx, const InlineFrameIterato
     script_(cx)
 {
     if (frame_) {
-        start_ = SnapshotIterator(*frame_);
+        machine_ = iter->machine_;
+        start_ = SnapshotIterator(*frame_, &machine_);
 
         // findNextFrame will iterate to the next frame and init. everything.
         // Therefore to settle on the same frame, we report one frame less readed.
@@ -2425,7 +2424,8 @@ InlineFrameIterator::resetOn(const JitFrameIterator* iter)
     frameCount_ = UINT32_MAX;
 
     if (iter) {
-        start_ = SnapshotIterator(*iter);
+        machine_ = iter->machineState();
+        start_ = SnapshotIterator(*iter, &machine_);
         findNextFrame();
     }
 }
@@ -2540,19 +2540,19 @@ InlineFrameIterator::computeScopeChain(Value scopeChainValue, MaybeReadFallback&
         if (hasCallObj) {
             if (fallback.canRecoverResults()) {
                 RootedObject obj(fallback.maybeCx, &scopeChainValue.toObject());
-                *hasCallObj = isFunctionFrame() && callee(fallback)->isHeavyweight();
+                *hasCallObj = isFunctionFrame() && callee(fallback)->needsCallObject();
                 return obj;
             } else {
                 JS::AutoSuppressGCAnalysis nogc; // If we cannot recover then we cannot GC.
-                *hasCallObj = isFunctionFrame() && callee(fallback)->isHeavyweight();
+                *hasCallObj = isFunctionFrame() && callee(fallback)->needsCallObject();
             }
         }
 
         return &scopeChainValue.toObject();
     }
 
-    // Note we can hit this case even for heavyweight functions, in case we
-    // are walking the frame during the function prologue, before the scope
+    // Note we can hit this case even for functions with a CallObject, in case
+    // we are walking the frame during the function prologue, before the scope
     // chain has been initialized.
     if (isFunctionFrame())
         return callee(fallback)->environment();
@@ -2561,7 +2561,7 @@ InlineFrameIterator::computeScopeChain(Value scopeChainValue, MaybeReadFallback&
     // the global on their scope chain.
     MOZ_ASSERT(!script()->isForEval());
     MOZ_ASSERT(!script()->hasNonSyntacticScope());
-    return &script()->global();
+    return &script()->global().lexicalScope();
 }
 
 bool
@@ -2583,7 +2583,7 @@ MachineState::FromBailout(RegisterDump::GPRArray& regs, RegisterDump::FPUArray& 
         machine.setRegisterLocation(FloatRegister(i, FloatRegister::Double), &fpregs[i].d);
     for (unsigned i = 0; i < FloatRegisters::TotalSingle; i++)
         machine.setRegisterLocation(FloatRegister(i, FloatRegister::Single), (double*)&fbase[i]);
-#elif defined(JS_CODEGEN_MIPS)
+#elif defined(JS_CODEGEN_MIPS32)
     float* fbase = (float*)&fpregs[0];
     for (unsigned i = 0; i < FloatRegisters::TotalDouble; i++) {
         machine.setRegisterLocation(FloatRegister::FromIndex(i, FloatRegister::Double),
@@ -3142,7 +3142,7 @@ JitProfilingFrameIterator::tryInitWithTable(JitcodeGlobalTable* table, void* pc,
             return false;
 
         type_ = JitFrame_IonJS;
-        returnAddressToFp_ = entry.ionCacheEntry().rejoinAddr();
+        returnAddressToFp_ = pc;
         return true;
     }
 
@@ -3313,7 +3313,9 @@ AssertJitStackInvariants(JSContext* cx)
 #if defined(JS_CODEGEN_X86)
                     + sizeof(void*) /* frame pointer */
 #endif
-                    + sizeof(Value) * (frames.callee()->nargs() + 1 /* |this| argument */ )
+                    + sizeof(Value) * (frames.callee()->nargs() +
+                                       1 /* |this| argument */ +
+                                       frames.isConstructing() /* new.target */)
                     + sizeof(JitFrameLayout);
                 MOZ_RELEASE_ASSERT(frameSize >= expectedFrameSize,
                   "The frame is large enough to hold all arguments");

@@ -30,6 +30,9 @@
           android:icon="@drawable/ic_menu_new_private_tab"
           android:title="@string/new_private_tab"/>
 
+    <item android:id="@+id/send_to_device"
+          android:title="@string/overlay_share_send_other"/>
+
     <item android:id="@+id/share"
           android:title="@string/share" />
 
@@ -38,6 +41,10 @@
 
     <item android:id="@+id/save_as_pdf"
           android:title="@string/save_as_pdf" />
+
+    <item android:id="@+id/print"
+          android:visible="false"
+          android:title="@string/print" />
 
     <item android:id="@+id/find_in_page"
           android:title="@string/find_in_page" />
@@ -55,9 +62,6 @@
     <item android:id="@+id/logins"
           android:title="@string/logins"/>
 
-    <item android:id="@+id/apps"
-          android:title="@string/apps"/>
-
     <item android:id="@+id/char_encoding"
           android:visible="false"
           android:title="@string/char_encoding"/>
@@ -69,24 +73,12 @@
           android:title="@string/help_menu" />
 
     <item android:id="@+id/new_guest_session"
-          android:icon="@drawable/ic_menu_guest"
           android:visible="false"
           android:title="@string/new_guest_session"/>
 
     <item android:id="@+id/exit_guest_session"
-          android:icon="@drawable/ic_menu_guest"
           android:visible="false"
           android:title="@string/exit_guest_session"/>
-
-    <!-- Android will eliminate v11+ resource files from pre-11 builds.
-         Those files are the only place in which certain IDs are defined.
-         This causes compilation errors.
-         To avoid nasty code workarounds, we define stub IDs here, but
-         hide the menu entries. -->
-
-    <item android:id="@+id/quickshare"
-          android:visible="false"
-          android:enabled="false" />
 
     <item android:id="@+id/page"
           android:visible="false"

@@ -36,6 +36,10 @@
 /* a shorter name that better explains what it does */
 #define EINTR_RETRY(x) MOZ_TEMP_FAILURE_RETRY(x)
 
+// period during which to absorb subsequent network change events, in
+// milliseconds
+static const unsigned int kNetworkChangeCoalescingPeriod  = 1000;
+
 using namespace mozilla;
 
 static PRLogModuleInfo *gNotifyAddrLog = nullptr;
@@ -53,6 +57,7 @@ nsNotifyAddrListener::nsNotifyAddrListener()
     , mStatusKnown(false)
     , mAllowChangedEvent(true)
     , mChildThreadShutdown(false)
+    , mCoalescingActive(false)
 {
     mShutdownPipe[0] = -1;
     mShutdownPipe[1] = -1;
@@ -109,7 +114,7 @@ void nsNotifyAddrListener::checkLink(void)
     bool link = false;
     bool prevLinkUp = mLinkUp;
 
-    if(getifaddrs(&list))
+    if (getifaddrs(&list))
         return;
 
     // Walk through the linked list, maintaining head pointer so we can free
@@ -123,7 +128,7 @@ void nsNotifyAddrListener::checkLink(void)
         family = ifa->ifa_addr->sa_family;
 
         if ((family == AF_INET || family == AF_INET6) &&
-            (ifa->ifa_flags & IFF_UP) &&
+            (ifa->ifa_flags & IFF_RUNNING) &&
             !(ifa->ifa_flags & IFF_LOOPBACK)) {
             // An interface that is UP and not loopback
             link = true;
@@ -150,8 +155,10 @@ void nsNotifyAddrListener::OnNetlinkMessage(int aNetlinkSocket)
     // partly on existing sample source code using this size. It needs to be
     // large enough to hold the netlink messages from the kernel.
     char buffer[4095];
+    struct rtattr *attr;
+    int attr_len;
+    bool link_local;
 
-    // Receiving netlink socket data
     ssize_t rc = EINTR_RETRY(recv(aNetlinkSocket, buffer, sizeof(buffer), 0));
     if (rc < 0) {
         return;
@@ -179,10 +186,39 @@ void nsNotifyAddrListener::OnNetlinkMessage(int aNetlinkSocket)
             if (route_entry->rtm_table != RT_TABLE_MAIN)
                 continue;
 
-            networkChange = true;
+            if ((route_entry->rtm_family != AF_INET) &&
+                (route_entry->rtm_family != AF_INET6)) {
+                continue;
+            }
+
+            attr = (struct rtattr *) RTM_RTA(route_entry);
+            attr_len =  RTM_PAYLOAD(nlh);
+            link_local = false;
+
+            /* Loop through all attributes */
+            for ( ; RTA_OK(attr, attr_len); attr = RTA_NEXT(attr, attr_len)) {
+                if (attr->rta_type == RTA_GATEWAY) {
+                    if (route_entry->rtm_family == AF_INET6) {
+                        unsigned char *g = (unsigned char *)
+                            RTA_DATA(attr);
+                        if ((g[0] == 0xFE) && ((g[1] & 0xc0) == 0x80)) {
+                            link_local = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!link_local) {
+                LOG(("OnNetlinkMessage: route update\n"));
+                networkChange = true;
+            } else {
+                LOG(("OnNetlinkMessage: ignored link-local route update\n"));
+            }
             break;
 
         case RTM_NEWADDR:
+            LOG(("OnNetlinkMessage: new address\n"));
             networkChange = true;
             break;
 
@@ -192,7 +228,7 @@ void nsNotifyAddrListener::OnNetlinkMessage(int aNetlinkSocket)
     }
 
     if (networkChange && mAllowChangedEvent) {
-        SendEvent(NS_NETWORK_LINK_DATA_CHANGED);
+        NetworkChanged();
     }
 
     if (networkChange) {
@@ -244,8 +280,9 @@ nsNotifyAddrListener::Run()
 
     nsresult rv = NS_OK;
     bool shutdown = false;
+    int pollWait = pollTimeout;
     while (!shutdown) {
-        int rc = EINTR_RETRY(poll(fds, 2, pollTimeout));
+        int rc = EINTR_RETRY(poll(fds, 2, pollWait));
 
         if (rc > 0) {
             if (fds[0].revents & POLLIN) {
@@ -259,6 +296,19 @@ nsNotifyAddrListener::Run()
         } else if (rc < 0) {
             rv = NS_ERROR_FAILURE;
             break;
+        }
+        if (mCoalescingActive) {
+            // check if coalescing period should continue
+            double period = (TimeStamp::Now() - mChangeTime).ToMilliseconds();
+            if (period >= kNetworkChangeCoalescingPeriod) {
+                SendEvent(NS_NETWORK_LINK_DATA_CHANGED);
+                mCoalescingActive = false;
+                pollWait = pollTimeout; // restore to default
+            } else {
+                // wait no longer than to the end of the period
+                pollWait = static_cast<int>
+                    (kNetworkChangeCoalescingPeriod - period);
+            }
         }
         if (mChildThreadShutdown) {
             LOG(("thread shutdown via variable, dying...\n"));
@@ -314,7 +364,7 @@ nsNotifyAddrListener::Init(void)
     Preferences::AddBoolVarCache(&mAllowChangedEvent,
                                  NETWORK_NOTIFY_CHANGED_PREF, true);
 
-    rv = NS_NewNamedThread("Link Monitor", getter_AddRefs(mThread));
+    rv = NS_NewNamedThread("Link Monitor", getter_AddRefs(mThread), this);
     NS_ENSURE_SUCCESS(rv, rv);
 
 #ifdef MOZ_NUWA_PROCESS
@@ -356,6 +406,27 @@ nsNotifyAddrListener::Shutdown(void)
     return rv;
 }
 
+
+/*
+ * A network event has been registered. Delay the actual sending of the event
+ * for a while and absorb subsequent events in the mean time in an effort to
+ * squash potentially many triggers into a single event.
+ * Only ever called from the same thread.
+ */
+nsresult
+nsNotifyAddrListener::NetworkChanged()
+{
+    if (mCoalescingActive) {
+        LOG(("NetworkChanged: absorbed an event (coalescing active)\n"));
+    } else {
+        // A fresh trigger!
+        mChangeTime = TimeStamp::Now();
+        mCoalescingActive = true;
+        LOG(("NetworkChanged: coalescing period started\n"));
+    }
+    return NS_OK;
+}
+
 /* Sends the given event.  Assumes aEventID never goes out of scope (static
  * strings are ideal).
  */
@@ -365,6 +436,7 @@ nsNotifyAddrListener::SendEvent(const char *aEventID)
     if (!aEventID)
         return NS_ERROR_NULL_POINTER;
 
+    LOG(("SendEvent: %s\n", aEventID));
     nsresult rv = NS_OK;
     nsCOMPtr<nsIRunnable> event = new ChangeEvent(this, aEventID);
     if (NS_FAILED(rv = NS_DispatchToMainThread(event)))

@@ -259,6 +259,7 @@ class Instruction {
   bool IsCBZ() const;
   bool IsCBNZ() const;
   bool IsLDR() const;
+  bool IsNOP() const;
   bool IsADR() const;
   bool IsADRP() const;
   bool IsBranchLinkImm() const;
@@ -266,10 +267,17 @@ class Instruction {
   ptrdiff_t ImmPCRawOffset() const;
   void SetBits32(int msb, int lsb, unsigned value);
 
+  // Is this a stack pointer synchronization instruction as inserted by
+  // MacroAssembler::syncStackPtr()?
+  bool IsStackPtrSync() const;
+
 #define DEFINE_SETTERS(Name, HighBit, LowBit, Func)  \
   inline void Set##Name(unsigned n) { SetBits32(HighBit, LowBit, n); }
 INSTRUCTION_FIELDS_LIST(DEFINE_SETTERS)
 #undef DEFINE_SETTERS
+
+  static int ImmBranchRangeBitwidth(ImmBranchType branch_type);
+  static bool IsValidImmPCOffset(ImmBranchType branch_type, int32_t offset);
 
   // Indicate whether Rd can be the stack pointer or the zero register. This
   // does not check that the instruction actually has an Rd field.
@@ -382,6 +390,10 @@ INSTRUCTION_FIELDS_LIST(DEFINE_SETTERS)
   const Instruction* NextInstruction() const {
     return this + kInstructionSize;
   }
+
+  // Skip any constant pools with artificial guards at this point.
+  // Return either |this| or the first instruction after the pool.
+  const Instruction *skipPool() const;
 
   const Instruction* InstructionAtOffset(int64_t offset) const {
     VIXL_ASSERT(IsWordAligned(this + offset));

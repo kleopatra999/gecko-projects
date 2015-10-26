@@ -23,23 +23,24 @@
 #include "js/Conversions.h"
 #include "js/GCAPI.h"
 #include "js/HeapAPI.h"
+#include "js/TraceableVector.h"
 #include "vm/Shape.h"
 #include "vm/String.h"
 #include "vm/Xdr.h"
 
 namespace JS {
 struct ClassInfo;
-}
+} // namespace JS
 
 namespace js {
 
-typedef AutoVectorRooter<PropertyDescriptor> AutoPropertyDescriptorVector;
+using PropertyDescriptorVector = TraceableVector<PropertyDescriptor>;
 class GCMarker;
 class Nursery;
 
 namespace gc {
 class RelocationOverlay;
-}
+} // namespace gc
 
 inline JSObject*
 CastAsObject(GetterOp op)
@@ -348,7 +349,8 @@ class JSObject : public js::gc::Cell
      * is a proxy. In the lazy case, we store (JSObject*)0x1 in the proto field
      * of the object's group. We offer three ways of getting the prototype:
      *
-     * 1. obj->getProto() returns the prototype, but asserts if obj is a proxy.
+     * 1. obj->getProto() returns the prototype, but asserts if obj is a proxy
+     *    with a relevant getPrototype() handler.
      * 2. obj->getTaggedProto() returns a TaggedProto, which can be tested to
      *    check if the proto is an object, nullptr, or lazily computed.
      * 3. js::GetPrototype(cx, obj, &proto) computes the proto of an object.
@@ -365,7 +367,7 @@ class JSObject : public js::gc::Cell
     bool uninlinedIsProxy() const;
 
     JSObject* getProto() const {
-        MOZ_ASSERT(!uninlinedIsProxy());
+        MOZ_ASSERT(!hasLazyPrototype());
         return getTaggedProto().toObjectOrNull();
     }
 
@@ -534,7 +536,7 @@ class JSObject : public js::gc::Cell
      *
      * Note that X represents a low-level representation and does not query the
      * [[Class]] property of object defined by the spec (for this, see
-     * js::ObjectClassIs).
+     * js::GetBuiltinClass).
      */
 
     template <class T>
@@ -616,14 +618,16 @@ struct JSObject_Slots16 : JSObject { void* data[3]; js::Value fslots[16]; };
 /* static */ MOZ_ALWAYS_INLINE void
 JSObject::readBarrier(JSObject* obj)
 {
-    if (!isNullLike(obj) && obj->isTenured())
+    MOZ_ASSERT_IF(obj, !isNullLike(obj));
+    if (obj && obj->isTenured())
         obj->asTenured().readBarrier(&obj->asTenured());
 }
 
 /* static */ MOZ_ALWAYS_INLINE void
 JSObject::writeBarrierPre(JSObject* obj)
 {
-    if (!isNullLike(obj) && obj->isTenured())
+    MOZ_ASSERT_IF(obj, !isNullLike(obj));
+    if (obj && obj->isTenured())
         obj->asTenured().writeBarrierPre(&obj->asTenured());
 }
 
@@ -631,23 +635,25 @@ JSObject::writeBarrierPre(JSObject* obj)
 JSObject::writeBarrierPost(void* cellp, JSObject* prev, JSObject* next)
 {
     MOZ_ASSERT(cellp);
+    MOZ_ASSERT_IF(next, !IsNullTaggedPointer(next));
+    MOZ_ASSERT_IF(prev, !IsNullTaggedPointer(prev));
 
     // If the target needs an entry, add it.
     js::gc::StoreBuffer* buffer;
-    if (!IsNullTaggedPointer(next) && (buffer = next->storeBuffer())) {
+    if (next && (buffer = next->storeBuffer())) {
         // If we know that the prev has already inserted an entry, we can skip
-        // doing the lookup to add the new entry.
-        if (!IsNullTaggedPointer(prev) && prev->storeBuffer()) {
-            buffer->assertHasCellEdge(static_cast<js::gc::Cell**>(cellp));
+        // doing the lookup to add the new entry. Note that we cannot safely
+        // assert the presence of the entry because it may have been added
+        // via a different store buffer.
+        if (prev && prev->storeBuffer())
             return;
-        }
-        buffer->putCellFromAnyThread(static_cast<js::gc::Cell**>(cellp));
+        buffer->putCell(static_cast<js::gc::Cell**>(cellp));
         return;
     }
 
     // Remove the prev entry if the new value does not need it.
-    if (!IsNullTaggedPointer(prev) && (buffer = prev->storeBuffer()))
-        buffer->unputCellFromAnyThread(static_cast<js::gc::Cell**>(cellp));
+    if (prev && (buffer = prev->storeBuffer()))
+        buffer->unputCell(static_cast<js::gc::Cell**>(cellp));
 }
 
 namespace js {
@@ -669,10 +675,10 @@ IsConstructor(const Value& v)
 
 class JSValueArray {
   public:
-    const jsval* array;
+    const js::Value* array;
     size_t length;
 
-    JSValueArray(const jsval* v, size_t c) : array(v), length(c) {}
+    JSValueArray(const js::Value* v, size_t c) : array(v), length(c) {}
 };
 
 class ValueArray {
@@ -817,11 +823,11 @@ HasProperty(JSContext* cx, HandleObject obj, PropertyName* name, bool* foundp);
  * `receiver[id]`, and we've already searched the prototype chain up to `obj`.
  */
 inline bool
-GetProperty(JSContext* cx, HandleObject obj, HandleObject receiver, HandleId id,
+GetProperty(JSContext* cx, HandleObject obj, HandleValue receiver, HandleId id,
             MutableHandleValue vp);
 
 inline bool
-GetProperty(JSContext* cx, HandleObject obj, HandleObject receiver, PropertyName* name,
+GetProperty(JSContext* cx, HandleObject obj, HandleValue receiver, PropertyName* name,
             MutableHandleValue vp)
 {
     RootedId id(cx, NameToId(name));
@@ -829,17 +835,52 @@ GetProperty(JSContext* cx, HandleObject obj, HandleObject receiver, PropertyName
 }
 
 inline bool
+GetProperty(JSContext* cx, HandleObject obj, HandleObject receiver, HandleId id,
+            MutableHandleValue vp)
+{
+    RootedValue receiverValue(cx, ObjectValue(*receiver));
+    return GetProperty(cx, obj, receiverValue, id, vp);
+}
+
+inline bool
+GetProperty(JSContext* cx, HandleObject obj, HandleObject receiver, PropertyName* name,
+            MutableHandleValue vp)
+{
+    RootedValue receiverValue(cx, ObjectValue(*receiver));
+    return GetProperty(cx, obj, receiverValue, name, vp);
+}
+
+inline bool
+GetElement(JSContext* cx, HandleObject obj, HandleValue receiver, uint32_t index,
+           MutableHandleValue vp);
+
+inline bool
 GetElement(JSContext* cx, HandleObject obj, HandleObject receiver, uint32_t index,
            MutableHandleValue vp);
 
 inline bool
-GetPropertyNoGC(JSContext* cx, JSObject* obj, JSObject* receiver, jsid id, Value* vp);
+GetPropertyNoGC(JSContext* cx, JSObject* obj, const Value& receiver, jsid id, Value* vp);
+
+inline bool
+GetPropertyNoGC(JSContext* cx, JSObject* obj, JSObject* receiver, jsid id, Value* vp)
+{
+    return GetPropertyNoGC(cx, obj, ObjectValue(*receiver), id, vp);
+}
+
+inline bool
+GetPropertyNoGC(JSContext* cx, JSObject* obj, const Value& receiver, PropertyName* name, Value* vp)
+{
+    return GetPropertyNoGC(cx, obj, receiver, NameToId(name), vp);
+}
 
 inline bool
 GetPropertyNoGC(JSContext* cx, JSObject* obj, JSObject* receiver, PropertyName* name, Value* vp)
 {
-    return GetPropertyNoGC(cx, obj, receiver, NameToId(name), vp);
+    return GetPropertyNoGC(cx, obj, ObjectValue(*receiver), name, vp);
 }
+
+inline bool
+GetElementNoGC(JSContext* cx, JSObject* obj, const Value& receiver, uint32_t index, Value* vp);
 
 inline bool
 GetElementNoGC(JSContext* cx, JSObject* obj, JSObject* receiver, uint32_t index, Value* vp);
@@ -967,18 +1008,25 @@ WatchProperty(JSContext* cx, HandleObject obj, HandleId id, HandleObject callabl
 extern bool
 UnwatchProperty(JSContext* cx, HandleObject obj, HandleId id);
 
-/*
- * ToPrimitive support, currently implemented like an internal method (JSClass::convert).
- * In ES6 this is just a method, @@toPrimitive. See bug 1054756.
- */
+/* ES6 draft rev 36 (2015 March 17) 7.1.1 ToPrimitive(vp[, preferredType]) */
 extern bool
-ToPrimitive(JSContext* cx, HandleObject obj, JSType hint, MutableHandleValue vp);
+ToPrimitiveSlow(JSContext* cx, JSType hint, MutableHandleValue vp);
 
-MOZ_ALWAYS_INLINE bool
-ToPrimitive(JSContext* cx, MutableHandleValue vp);
+inline bool
+ToPrimitive(JSContext* cx, MutableHandleValue vp)
+{
+    if (vp.isPrimitive())
+        return true;
+    return ToPrimitiveSlow(cx, JSTYPE_VOID, vp);
+}
 
-MOZ_ALWAYS_INLINE bool
-ToPrimitive(JSContext* cx, JSType preferredType, MutableHandleValue vp);
+inline bool
+ToPrimitive(JSContext* cx, JSType preferredType, MutableHandleValue vp)
+{
+    if (vp.isPrimitive())
+        return true;
+    return ToPrimitiveSlow(cx, preferredType, vp);
+}
 
 /*
  * toString support. (This isn't called GetClassName because there's a macro in
@@ -990,7 +1038,7 @@ GetObjectClassName(JSContext* cx, HandleObject obj);
 /*
  * Inner and outer objects
  *
- * GetInnerObject and GetOuterObject (and also GetThisObject, somewhat) have to
+ * GetInnerObject and GetOuterObject (and also GetThisValue, somewhat) have to
  * do with Windows and WindowProxies. There's a screwy invariant that actual
  * Window objects (the global objects of web pages) are never directly exposed
  * to script. Instead we often substitute a WindowProxy.
@@ -1002,7 +1050,8 @@ GetObjectClassName(JSContext* cx, HandleObject obj);
  */
 
 /*
- * If obj a WindowProxy, return its current inner Window. Otherwise return obj.
+ * If obj is a WindowProxy, return its current inner Window. Otherwise return
+ * obj. This function can't fail and never returns nullptr.
  *
  * GetInnerObject is called when we need a scope chain; you never want a
  * WindowProxy on a scope chain.
@@ -1025,10 +1074,11 @@ GetInnerObject(JSObject* obj)
 
 /*
  * If obj is a Window object, return the WindowProxy. Otherwise return obj.
+ * This function can't fail; it never sets an exception or returns nullptr.
  *
  * This must be called before passing an object to script, if the object might
  * be a Window. (But usually those cases involve scope objects, and for those,
- * it is better to call GetThisObject instead.)
+ * it is better to call GetThisValue instead.)
  */
 inline JSObject*
 GetOuterObject(JSContext* cx, HandleObject obj)
@@ -1045,16 +1095,18 @@ GetOuterObject(JSContext* cx, HandleObject obj)
  * Some JSObjects shouldn't be exposed directly to script. This includes (at
  * least) DynamicWithObjects and Window objects. However, since both of those
  * can be on scope chains, we sometimes would expose those as `this` if we
- * were not so vigilant about calling GetThisObject where appropriate.
+ * were not so vigilant about calling GetThisValue where appropriate.
  *
  * See comments at ComputeImplicitThis.
  */
-inline JSObject*
-GetThisObject(JSContext* cx, HandleObject obj)
+inline bool
+GetThisValue(JSContext* cx, HandleObject obj, MutableHandleValue vp)
 {
-    if (ObjectOp op = obj->getOps()->thisObject)
-        return op(cx, obj);
-    return obj;
+    if (ThisValueOp op = obj->getOps()->thisValue)
+        return op(cx, obj, vp);
+
+    vp.setObject(*obj);
+    return true;
 }
 
 
@@ -1075,6 +1127,9 @@ GetBuiltinPrototypePure(GlobalObject* global, JSProtoKey protoKey);
 extern bool
 SetClassAndProto(JSContext* cx, HandleObject obj,
                  const Class* clasp, Handle<TaggedProto> proto);
+
+extern bool
+IsStandardPrototype(JSObject* obj, JSProtoKey key);
 
 } /* namespace js */
 
@@ -1109,12 +1164,13 @@ GetInitialHeap(NewObjectKind newKind, const Class* clasp)
 // Specialized call for constructing |this| with a known function callee,
 // and a known prototype.
 extern JSObject*
-CreateThisForFunctionWithProto(JSContext* cx, js::HandleObject callee, HandleObject proto,
-                               NewObjectKind newKind = GenericObject);
+CreateThisForFunctionWithProto(JSContext* cx, js::HandleObject callee, HandleObject newTarget,
+                               HandleObject proto, NewObjectKind newKind = GenericObject);
 
 // Specialized call for constructing |this| with a known function callee.
 extern JSObject*
-CreateThisForFunction(JSContext* cx, js::HandleObject callee, NewObjectKind newKind);
+CreateThisForFunction(JSContext* cx, js::HandleObject callee, js::HandleObject newTarget,
+                      NewObjectKind newKind);
 
 // Generic call for constructing |this|.
 extern JSObject*
@@ -1163,7 +1219,7 @@ CompletePropertyDescriptor(MutableHandle<PropertyDescriptor> desc);
  */
 extern bool
 ReadPropertyDescriptors(JSContext* cx, HandleObject props, bool checkAccessors,
-                        AutoIdVector* ids, AutoPropertyDescriptorVector* descs);
+                        AutoIdVector* ids, MutableHandle<PropertyDescriptorVector> descs);
 
 /* Read the name using a dynamic lookup on the scopeChain. */
 extern bool
@@ -1197,7 +1253,7 @@ extern bool
 LookupNameUnqualified(JSContext* cx, HandlePropertyName name, HandleObject scopeChain,
                       MutableHandleObject objp);
 
-}
+} // namespace js
 
 namespace js {
 
@@ -1270,8 +1326,21 @@ XDRObjectLiteral(XDRState<mode>* xdr, MutableHandleObject obj);
 extern bool
 ReportGetterOnlyAssignment(JSContext* cx, bool strict);
 
-extern JSObject*
-NonNullObject(JSContext* cx, const Value& v);
+/*
+ * Report a TypeError: "so-and-so is not an object".
+ * Using NotNullObject is usually less code.
+ */
+extern void
+ReportNotObject(JSContext* cx, const Value& v);
+
+inline JSObject*
+NonNullObject(JSContext* cx, const Value& v)
+{
+    if (v.isObject())
+        return &v.toObject();
+    ReportNotObject(cx, v);
+    return nullptr;
+}
 
 extern const char*
 InformalValueTypeName(const Value& v);

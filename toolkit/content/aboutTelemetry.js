@@ -4,9 +4,9 @@
 
 'use strict';
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cu = Components.utils;
+var Ci = Components.interfaces;
+var Cc = Components.classes;
+var Cu = Components.utils;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/TelemetryTimestamps.jsm");
@@ -16,6 +16,10 @@ Cu.import("resource://gre/modules/TelemetryArchive.jsm");
 Cu.import("resource://gre/modules/TelemetryUtils.jsm");
 Cu.import("resource://gre/modules/TelemetryLog.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
+                                  "resource://gre/modules/AppConstants.jsm");
 
 const Telemetry = Services.telemetry;
 const bundle = Services.strings.createBundle(
@@ -40,10 +44,10 @@ const isWindows = (Services.appinfo.OS == "WINNT");
 const EOL = isWindows ? "\r\n" : "\n";
 
 // This is the ping object currently displayed in the page.
-let gPingData = null;
+var gPingData = null;
 
 // Cached value of document's RTL mode
-let documentRTLMode = "";
+var documentRTLMode = "";
 
 /**
  * Helper function for determining whether the document direction is RTL.
@@ -201,7 +205,7 @@ function shortTimeString(date) {
          + ":" + padToTwoDigits(date.getSeconds());
 }
 
-let Settings = {
+var Settings = {
   SETTINGS: [
     // data upload
     {
@@ -228,8 +232,17 @@ let Settings = {
     let elements = document.getElementsByClassName("change-data-choices-link");
     for (let el of elements) {
       el.addEventListener("click", function() {
-        let mainWindow = getMainWindowWithPreferencesPane();
-        mainWindow.openAdvancedPreferences("dataChoicesTab");
+        if (AppConstants.platform == "android") {
+          Cu.import("resource://gre/modules/Messaging.jsm");
+          Messaging.sendRequest({
+            type: "Settings:Show",
+            resource: "preferences_vendor",
+          });
+        } else {
+          // Show the data choices preferences on desktop.
+          let mainWindow = getMainWindowWithPreferencesPane();
+          mainWindow.openAdvancedPreferences("dataChoicesTab");
+        }
       }, false);
     }
   },
@@ -259,7 +272,7 @@ let Settings = {
   }
 };
 
-let PingPicker = {
+var PingPicker = {
   viewCurrentPingData: true,
   _archivedPings: null,
 
@@ -434,7 +447,7 @@ let PingPicker = {
   },
 };
 
-let GeneralData = {
+var GeneralData = {
   /**
    * Renders the general data
    */
@@ -483,7 +496,7 @@ let GeneralData = {
   },
 };
 
-let EnvironmentData = {
+var EnvironmentData = {
   /**
    * Renders the environment data
    */
@@ -535,7 +548,7 @@ let EnvironmentData = {
   },
 };
 
-let TelLog = {
+var TelLog = {
   /**
    * Renders the telemetry log
    */
@@ -588,7 +601,7 @@ let TelLog = {
   },
 };
 
-let SlowSQL = {
+var SlowSQL = {
 
   slowSqlHits: bundle.GetStringFromName("slowSqlHits"),
 
@@ -710,7 +723,7 @@ let SlowSQL = {
   }
 };
 
-let StackRenderer = {
+var StackRenderer = {
 
   stackTitle: bundle.GetStringFromName("stackTitle"),
 
@@ -797,11 +810,13 @@ let StackRenderer = {
   }
 };
 
-function SymbolicationRequest(aPrefix, aRenderHeader, aMemoryMap, aStacks) {
+function SymbolicationRequest(aPrefix, aRenderHeader,
+                              aMemoryMap, aStacks, aDurations = null) {
   this.prefix = aPrefix;
   this.renderHeader = aRenderHeader;
   this.memoryMap = aMemoryMap;
   this.stacks = aStacks;
+  this.durations = aDurations;
 }
 /**
  * A callback for onreadystatechange. It replaces the numeric stack with
@@ -835,7 +850,7 @@ function SymbolicationRequest_handleSymbolResponse() {
 
   for (let i = 0; i < jsonResponse.length; ++i) {
     let stack = jsonResponse[i];
-    this.renderHeader(i);
+    this.renderHeader(i, this.durations);
 
     for (let symbol of stack) {
       div.appendChild(document.createTextNode(symbol));
@@ -865,7 +880,7 @@ function SymbolicationRequest_fetchSymbols() {
   this.symbolRequest.send(requestJSON);
 }
 
-let ChromeHangs = {
+var ChromeHangs = {
 
   symbolRequest: null,
 
@@ -881,18 +896,18 @@ let ChromeHangs = {
 
     let stacks = hangs.stacks;
     let memoryMap = hangs.memoryMap;
+    let durations = hangs.durations;
 
     StackRenderer.renderStacks("chrome-hangs", stacks, memoryMap,
-			       (index) => this.renderHangHeader(aPing, index));
+                               (index) => this.renderHangHeader(index, durations));
   },
 
-  renderHangHeader: function ChromeHangs_renderHangHeader(aPing, aIndex) {
-    let durations = aPing.payload.chromeHangs.durations;
-    StackRenderer.renderHeader("chrome-hangs", [aIndex + 1, durations[aIndex]]);
+  renderHangHeader: function ChromeHangs_renderHangHeader(aIndex, aDurations) {
+    StackRenderer.renderHeader("chrome-hangs", [aIndex + 1, aDurations[aIndex]]);
   }
 };
 
-let ThreadHangStats = {
+var ThreadHangStats = {
 
   /**
    * Renders raw thread hang stats data
@@ -944,7 +959,7 @@ let ThreadHangStats = {
   },
 };
 
-let Histogram = {
+var Histogram = {
 
   hgramSamplesCaption: bundle.GetStringFromName("histogramSamples"),
 
@@ -1063,7 +1078,7 @@ let Histogram = {
     if (aHgram.values.length) {
       labelPadTo = String(aHgram.values[aHgram.values.length - 1][0]).length;
     }
-    let maxBarValue = aOptions.exponential ? this.getLogValue(aHgram.max_value) : aHgram.max;
+    let maxBarValue = aOptions.exponential ? this.getLogValue(aHgram.max) : aHgram.max;
 
     for (let [label, value] of aHgram.values) {
       let barValue = aOptions.exponential ? this.getLogValue(value) : value;
@@ -1197,7 +1212,7 @@ function RenderObject(aObject) {
   return output + "}";
 };
 
-let KeyValueTable = {
+var KeyValueTable = {
   /**
    * Returns a 2-column table with keys and values
    * @param aMeasurements Each key in this JS object is rendered as a row in
@@ -1263,7 +1278,7 @@ let KeyValueTable = {
   }
 };
 
-let KeyedHistogram = {
+var KeyedHistogram = {
   render: function(parent, id, keyedHistogram) {
     let outerDiv = document.createElement("div");
     outerDiv.className = "keyed-histogram";
@@ -1283,7 +1298,7 @@ let KeyedHistogram = {
   },
 };
 
-let AddonDetails = {
+var AddonDetails = {
   tableIDTitle: bundle.GetStringFromName("addonTableID"),
   tableDetailsTitle: bundle.GetStringFromName("addonTableDetails"),
 
@@ -1378,7 +1393,9 @@ function setupListeners() {
       let hangs = gPingData.payload.chromeHangs;
       let req = new SymbolicationRequest("chrome-hangs",
                                          ChromeHangs.renderHangHeader,
-                                         hangs.memoryMap, hangs.stacks);
+                                         hangs.memoryMap,
+                                         hangs.stacks,
+                                         hangs.durations);
       req.fetchSymbols();
   }, false);
 
@@ -1451,7 +1468,7 @@ function onLoad() {
   }
 }
 
-let LateWritesSingleton = {
+var LateWritesSingleton = {
   renderHeader: function LateWritesSingleton_renderHeader(aIndex) {
     StackRenderer.renderHeader("late-writes", [aIndex + 1]);
   },
@@ -1593,14 +1610,17 @@ function displayPingData(ping) {
   let keyedDiv = document.getElementById("keyed-histograms");
   removeAllChildNodes(keyedDiv);
 
+  setHasData("keyed-histograms-section", false);
   let keyedHistograms = payload.keyedHistograms;
-  hasData = Object.keys(keyedHistograms).length > 0;
-  setHasData("keyed-histograms-section", hasData);
-
-  if (hasData) {
+  if (keyedHistograms) {
+    let hasData = false;
     for (let [id, keyed] of Iterator(keyedHistograms)) {
-      KeyedHistogram.render(keyedDiv, id, keyed, {unpacked: true});
+      if (Object.keys(keyed).length > 0) {
+        hasData = true;
+        KeyedHistogram.render(keyedDiv, id, keyed, {unpacked: true});
+      }
     }
+    setHasData("keyed-histograms-section", hasData);
   }
 
   // Show addon histogram data

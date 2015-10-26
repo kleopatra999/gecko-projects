@@ -26,6 +26,7 @@
 #include "nsCycleCollectionParticipant.h"
 #include "nsWrapperCache.h"
 #include "mozilla/net/ReferrerPolicy.h"
+#include "mozilla/dom/SRIMetadata.h"
 
 class CSSRuleListImpl;
 class nsCSSRuleProcessor;
@@ -44,10 +45,10 @@ namespace css {
 class Rule;
 class GroupRule;
 class ImportRule;
-}
+} // namespace css
 namespace dom {
 class CSSRuleList;
-}
+} // namespace dom
 
 // -------------------------------
 // CSS Style Sheet Inner Data Container
@@ -63,7 +64,8 @@ public:
 private:
   CSSStyleSheetInner(CSSStyleSheet* aPrimarySheet,
                      CORSMode aCORSMode,
-                     ReferrerPolicy aReferrerPolicy);
+                     ReferrerPolicy aReferrerPolicy,
+                     const dom::SRIMetadata& aIntegrity);
   CSSStyleSheetInner(CSSStyleSheetInner& aCopy,
                      CSSStyleSheet* aPrimarySheet);
   ~CSSStyleSheetInner();
@@ -91,11 +93,12 @@ private:
   // currently this is the case) that any time page JS can get ts hands on a
   // child sheet that means we've already ensured unique inners throughout its
   // parent chain and things are good.
-  nsRefPtr<CSSStyleSheet> mFirstChild;
+  RefPtr<CSSStyleSheet> mFirstChild;
   CORSMode               mCORSMode;
   // The Referrer Policy of a stylesheet is used for its child sheets, so it is
   // stored here.
   ReferrerPolicy         mReferrerPolicy;
+  dom::SRIMetadata       mIntegrity;
   bool                   mComplete;
 
 #ifdef DEBUG
@@ -123,6 +126,8 @@ class CSSStyleSheet final : public nsIStyleSheet,
 public:
   typedef net::ReferrerPolicy ReferrerPolicy;
   CSSStyleSheet(CORSMode aCORSMode, ReferrerPolicy aReferrerPolicy);
+  CSSStyleSheet(CORSMode aCORSMode, ReferrerPolicy aReferrerPolicy,
+                const dom::SRIMetadata& aIntegrity);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(CSSStyleSheet,
@@ -237,7 +242,7 @@ public:
   bool UseForPresentation(nsPresContext* aPresContext,
                             nsMediaQueryResultCacheKey& aKey) const;
 
-  nsresult ParseSheet(const nsAString& aInput);
+  nsresult ReparseSheet(const nsAString& aInput);
 
   void SetInRuleProcessorCache() { mInRuleProcessorCache = true; }
 
@@ -258,6 +263,9 @@ public:
 
   // Get this style sheet's Referrer Policy
   ReferrerPolicy GetReferrerPolicy() const { return mInner->mReferrerPolicy; }
+
+  // Get this style sheet's integrity metadata
+  dom::SRIMetadata GetIntegrity() const { return mInner->mIntegrity; }
 
   dom::Element* GetScopeElement() const { return mScopeElement; }
   void SetScopeElement(dom::Element* aScopeElement)
@@ -349,18 +357,18 @@ protected:
 
 protected:
   nsString              mTitle;
-  nsRefPtr<nsMediaList> mMedia;
-  nsRefPtr<CSSStyleSheet> mNext;
+  RefPtr<nsMediaList> mMedia;
+  RefPtr<CSSStyleSheet> mNext;
   CSSStyleSheet*        mParent;    // weak ref
   css::ImportRule*      mOwnerRule; // weak ref
 
-  nsRefPtr<CSSRuleListImpl> mRuleCollection;
+  RefPtr<CSSRuleListImpl> mRuleCollection;
   nsIDocument*          mDocument; // weak ref; parents maintain this for their children
   nsINode*              mOwningNode; // weak ref
   bool                  mDisabled;
   bool                  mDirty; // has been modified 
   bool                  mInRuleProcessorCache;
-  nsRefPtr<dom::Element> mScopeElement;
+  RefPtr<dom::Element> mScopeElement;
 
   CSSStyleSheetInner*   mInner;
 

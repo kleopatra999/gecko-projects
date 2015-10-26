@@ -12,7 +12,7 @@
 #include "jit/BaselineIC.h"
 #include "jit/JitCompartment.h"
 #include "jit/JitFrames.h"
-#include "jit/mips/Simulator-mips.h"
+#include "jit/mips32/Simulator-mips32.h"
 #include "vm/ArrayObject.h"
 #include "vm/Debugger.h"
 #include "vm/Interpreter.h"
@@ -63,16 +63,37 @@ InvokeFunction(JSContext* cx, HandleObject obj, bool constructing, uint32_t argc
     AutoArrayRooter argvRoot(cx, argc + 1 + constructing, argv);
 
     // Data in the argument vector is arranged for a JIT -> JIT call.
-    Value thisv = argv[0];
+    RootedValue thisv(cx, argv[0]);
     Value* argvWithoutThis = argv + 1;
 
-    // For constructing functions, |this| is constructed at caller side and we can just call Invoke.
-    // When creating this failed / is impossible at caller site, i.e. MagicValue(JS_IS_CONSTRUCTING),
-    // we use InvokeConstructor that creates it at the callee side.
-    if (thisv.isMagic(JS_IS_CONSTRUCTING))
-        return InvokeConstructor(cx, ObjectValue(*obj), argc, argvWithoutThis, true, rval);
+    RootedValue fval(cx, ObjectValue(*obj));
+    if (constructing) {
+        if (!IsConstructor(fval)) {
+            ReportValueError(cx, JSMSG_NOT_CONSTRUCTOR, JSDVG_IGNORE_STACK, fval, nullptr);
+            return false;
+        }
 
-    return Invoke(cx, thisv, ObjectValue(*obj), argc, argvWithoutThis, rval);
+        ConstructArgs cargs(cx);
+        if (!cargs.init(argc))
+            return false;
+
+        for (uint32_t i = 0; i < argc; i++)
+            cargs[i].set(argvWithoutThis[i]);
+
+        RootedValue newTarget(cx, argvWithoutThis[argc]);
+
+        // If |this| hasn't been created, we can use normal construction code.
+        if (thisv.isMagic(JS_IS_CONSTRUCTING))
+            return Construct(cx, fval, cargs, newTarget, rval);
+
+        // Otherwise the default |this| has already been created.  We could
+        // almost perform a *call* at this point, but we'd break |new.target|
+        // in the function.  So in this one weird case we call a one-off
+        // construction path that *won't* set |this| to JS_IS_CONSTRUCTING.
+        return InternalConstructWithProvidedThis(cx, fval, thisv, cargs, newTarget, rval);
+    }
+
+    return Invoke(cx, thisv, fval, argc, argvWithoutThis, rval);
 }
 
 bool
@@ -146,25 +167,35 @@ CheckOverRecursedWithExtra(JSContext* cx, BaselineFrame* frame,
 }
 
 bool
-DefVarOrConst(JSContext* cx, HandlePropertyName dn, unsigned attrs, HandleObject scopeChain)
+DefVar(JSContext* cx, HandlePropertyName dn, unsigned attrs, HandleObject scopeChain)
 {
     // Given the ScopeChain, extract the VarObj.
     RootedObject obj(cx, scopeChain);
     while (!obj->isQualifiedVarObj())
         obj = obj->enclosingScope();
 
-    return DefVarOrConstOperation(cx, obj, dn, attrs);
+    return DefVarOperation(cx, obj, dn, attrs);
 }
 
 bool
-SetConst(JSContext* cx, HandlePropertyName name, HandleObject scopeChain, HandleValue rval)
+DefLexical(JSContext* cx, HandlePropertyName dn, unsigned attrs, HandleObject scopeChain)
 {
-    // Given the ScopeChain, extract the VarObj.
-    RootedObject obj(cx, scopeChain);
-    while (!obj->isQualifiedVarObj())
-        obj = obj->enclosingScope();
+    // Find the extensible lexical scope.
+    Rooted<ClonedBlockObject*> lexical(cx, &NearestEnclosingExtensibleLexicalScope(scopeChain));
 
-    return SetConstOperation(cx, obj, name, rval);
+    // Find the variables object.
+    RootedObject varObj(cx, scopeChain);
+    while (!varObj->isQualifiedVarObj())
+        varObj = varObj->enclosingScope();
+
+    return DefLexicalOperation(cx, lexical, varObj, dn, attrs);
+}
+
+bool
+DefGlobalLexical(JSContext* cx, HandlePropertyName dn, unsigned attrs)
+{
+    Rooted<ClonedBlockObject*> globalLexical(cx, &cx->global()->lexicalScope());
+    return DefLexicalOperation(cx, globalLexical, cx->global(), dn, attrs);
 }
 
 bool
@@ -414,7 +445,7 @@ SetProperty(JSContext* cx, HandleObject obj, HandlePropertyName name, HandleValu
 
     JSOp op = JSOp(*pc);
 
-    if (op == JSOP_SETALIASEDVAR) {
+    if (op == JSOP_SETALIASEDVAR || op == JSOP_INITALIASEDLEXICAL) {
         // Aliased var assigns ignore readonly attributes on the property, as
         // required for initializing 'const' closure variables.
         Shape* shape = obj->as<NativeObject>().lookup(cx, name);
@@ -474,7 +505,7 @@ NewCallObject(JSContext* cx, HandleShape shape, HandleObjectGroup group, uint32_
     // the initializing writes. The interpreter, however, may have allocated
     // the call object tenured, so barrier as needed before re-entering.
     if (!IsInsideNursery(obj))
-        cx->runtime()->gc.storeBuffer.putWholeCellFromMainThread(obj);
+        cx->runtime()->gc.storeBuffer.putWholeCell(obj);
 
     return obj;
 }
@@ -491,7 +522,7 @@ NewSingletonCallObject(JSContext* cx, HandleShape shape, uint32_t lexicalBegin)
     // the call object tenured, so barrier as needed before re-entering.
     MOZ_ASSERT(!IsInsideNursery(obj),
                "singletons are created in the tenured heap");
-    cx->runtime()->gc.storeBuffer.putWholeCellFromMainThread(obj);
+    cx->runtime()->gc.storeBuffer.putWholeCell(obj);
 
     return obj;
 }
@@ -534,7 +565,7 @@ GetIntrinsicValue(JSContext* cx, HandlePropertyName name, MutableHandleValue rva
 }
 
 bool
-CreateThis(JSContext* cx, HandleObject callee, MutableHandleValue rval)
+CreateThis(JSContext* cx, HandleObject callee, HandleObject newTarget, MutableHandleValue rval)
 {
     rval.set(MagicValue(JS_IS_CONSTRUCTING));
 
@@ -544,10 +575,14 @@ CreateThis(JSContext* cx, HandleObject callee, MutableHandleValue rval)
             JSScript* script = fun->getOrCreateScript(cx);
             if (!script || !script->ensureHasTypes(cx))
                 return false;
-            JSObject* thisObj = CreateThisForFunction(cx, callee, GenericObject);
-            if (!thisObj)
-                return false;
-            rval.set(ObjectValue(*thisObj));
+            if (script->isDerivedClassConstructor()) {
+                rval.set(MagicValue(JS_UNINITIALIZED_LEXICAL));
+            } else {
+                JSObject* thisObj = CreateThisForFunction(cx, callee, newTarget, GenericObject);
+                if (!thisObj)
+                    return false;
+                rval.set(ObjectValue(*thisObj));
+            }
         }
     }
 
@@ -588,30 +623,11 @@ GetDynamicName(JSContext* cx, JSObject* scopeChain, JSString* str, Value* vp)
     vp->setUndefined();
 }
 
-bool
-FilterArgumentsOrEval(JSContext* cx, JSString* str)
-{
-    // ensureLinear() is fallible, but cannot GC: it can only allocate a
-    // character buffer for the flattened string. If this call fails then the
-    // calling Ion code will bailout, resume in Baseline and likely fail again
-    // when trying to flatten the string and unwind the stack.
-    JS::AutoCheckCannotGC nogc;
-    JSLinearString* linear = str->ensureLinear(cx);
-    if (!linear)
-        return false;
-
-    static const char16_t arguments[] = {'a', 'r', 'g', 'u', 'm', 'e', 'n', 't', 's'};
-    static const char16_t eval[] = {'e', 'v', 'a', 'l'};
-
-    return !StringHasPattern(linear, arguments, mozilla::ArrayLength(arguments)) &&
-        !StringHasPattern(linear, eval, mozilla::ArrayLength(eval));
-}
-
 void
 PostWriteBarrier(JSRuntime* rt, JSObject* obj)
 {
     MOZ_ASSERT(!IsInsideNursery(obj));
-    rt->gc.storeBuffer.putWholeCellFromMainThread(obj);
+    rt->gc.storeBuffer.putWholeCell(obj);
 }
 
 void
@@ -833,15 +849,47 @@ GeneratorThrowOrClose(JSContext* cx, BaselineFrame* frame, Handle<GeneratorObjec
 }
 
 bool
-StrictEvalPrologue(JSContext* cx, BaselineFrame* frame)
+InitGlobalOrEvalScopeObjects(JSContext* cx, BaselineFrame* frame)
 {
-    return frame->strictEvalPrologue(cx);
+    RootedScript script(cx, frame->script());
+    RootedObject varObj(cx, frame->scopeChain());
+    while (!varObj->isQualifiedVarObj())
+        varObj = varObj->enclosingScope();
+
+    if (script->isForEval()) {
+        // Strict eval needs its own call object.
+        //
+        // Non-strict eval may introduce 'var' bindings that conflict with
+        // lexical bindings in an enclosing lexical scope.
+        if (script->strict()) {
+            if (!frame->initStrictEvalScopeObjects(cx))
+                return false;
+        } else {
+            RootedObject scopeChain(cx, frame->scopeChain());
+            if (!CheckEvalDeclarationConflicts(cx, script, scopeChain, varObj))
+                return false;
+        }
+    } else {
+        Rooted<ClonedBlockObject*> lexicalScope(cx,
+            &NearestEnclosingExtensibleLexicalScope(frame->scopeChain()));
+        if (!CheckGlobalDeclarationConflicts(cx, script, lexicalScope, varObj))
+            return false;
+    }
+
+    return true;
 }
 
 bool
-HeavyweightFunPrologue(JSContext* cx, BaselineFrame* frame)
+GlobalNameConflictsCheckFromIon(JSContext* cx, HandleScript script)
 {
-    return frame->heavyweightFunPrologue(cx);
+    Rooted<ClonedBlockObject*> lexicalScope(cx, &cx->global()->lexicalScope());
+    return CheckGlobalDeclarationConflicts(cx, script, lexicalScope, cx->global());
+}
+
+bool
+InitFunctionScopeObjects(JSContext* cx, BaselineFrame* frame)
+{
+    return frame->initFunctionScopeObjects(cx);
 }
 
 bool
@@ -1039,11 +1087,7 @@ RegExpReplace(JSContext* cx, HandleString string, HandleObject regexp, HandleStr
     MOZ_ASSERT(string);
     MOZ_ASSERT(repl);
 
-    RootedValue rval(cx);
-    if (!str_replace_regexp_raw(cx, string, regexp, repl, &rval))
-        return nullptr;
-
-    return rval.toString();
+    return str_replace_regexp_raw(cx, string, regexp.as<RegExpObject>(), repl);
 }
 
 JSString*
@@ -1053,11 +1097,7 @@ StringReplace(JSContext* cx, HandleString string, HandleString pattern, HandleSt
     MOZ_ASSERT(pattern);
     MOZ_ASSERT(repl);
 
-    RootedValue rval(cx);
-    if (!str_replace_string_raw(cx, string, pattern, repl, &rval))
-        return nullptr;
-
-    return rval.toString();
+    return str_replace_string_raw(cx, string, pattern, repl);
 }
 
 bool
@@ -1247,12 +1287,25 @@ MarkObjectGroupFromIon(JSRuntime* rt, ObjectGroup** groupp)
 }
 
 bool
-ThrowUninitializedLexical(JSContext* cx)
+ThrowRuntimeLexicalError(JSContext* cx, unsigned errorNumber)
 {
     ScriptFrameIter iter(cx);
     RootedScript script(cx, iter.script());
-    ReportUninitializedLexical(cx, script, iter.pc());
+    ReportRuntimeLexicalError(cx, errorNumber, script, iter.pc());
     return false;
+}
+
+bool
+ThrowBadDerivedReturn(JSContext* cx, HandleValue v)
+{
+    ReportValueError(cx, JSMSG_BAD_DERIVED_RETURN, JSDVG_IGNORE_STACK, v, nullptr);
+    return false;
+}
+
+bool
+BaselineThrowUninitializedThis(JSContext* cx, BaselineFrame* frame)
+{
+    return ThrowUninitializedThis(cx, frame);
 }
 
 } // namespace jit

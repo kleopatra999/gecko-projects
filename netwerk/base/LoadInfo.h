@@ -12,21 +12,25 @@
 #include "nsIPrincipal.h"
 #include "nsIWeakReferenceUtils.h" // for nsWeakPtr
 #include "nsIURI.h"
+#include "nsTArray.h"
+
+#include "mozilla/BasePrincipal.h"
 
 class nsINode;
+class nsXMLHttpRequest;
 
 namespace mozilla {
 
 namespace net {
-class LoadInfoArgs;
-}
+class OptionalLoadInfoArgs;
+} // namespace net
 
 namespace ipc {
 // we have to forward declare that function so we can use it as a friend.
 nsresult
-LoadInfoArgsToLoadInfo(const mozilla::net::LoadInfoArgs& aLoadInfoArgs,
+LoadInfoArgsToLoadInfo(const mozilla::net::OptionalLoadInfoArgs& aLoadInfoArgs,
                        nsILoadInfo** outLoadInfo);
-}
+} // namespace ipc
 
 /**
  * Class that provides an nsILoadInfo implementation.
@@ -47,36 +51,56 @@ public:
            nsIPrincipal* aTriggeringPrincipal,
            nsINode* aLoadingContext,
            nsSecurityFlags aSecurityFlags,
-           nsContentPolicyType aContentPolicyType,
-           nsIURI* aBaseURI = nullptr);
+           nsContentPolicyType aContentPolicyType);
+
+  already_AddRefed<nsILoadInfo> Clone() const;
 
 private:
   // private constructor that is only allowed to be called from within
   // HttpChannelParent and FTPChannelParent declared as friends undeneath.
   // In e10s we can not serialize nsINode, hence we store the innerWindowID.
+  // Please note that aRedirectChain uses swapElements.
   LoadInfo(nsIPrincipal* aLoadingPrincipal,
            nsIPrincipal* aTriggeringPrincipal,
            nsSecurityFlags aSecurityFlags,
            nsContentPolicyType aContentPolicyType,
+           bool aUpgradeInsecureRequests,
            uint64_t aInnerWindowID,
            uint64_t aOuterWindowID,
-           uint64_t aParentOuterWindowID);
+           uint64_t aParentOuterWindowID,
+           bool aEnforceSecurity,
+           bool aInitialSecurityCheckDone,
+           const OriginAttributes& aOriginAttributes,
+           nsTArray<nsCOMPtr<nsIPrincipal>>& aRedirectChain);
+  LoadInfo(const LoadInfo& rhs);
 
   friend nsresult
-  mozilla::ipc::LoadInfoArgsToLoadInfo(const mozilla::net::LoadInfoArgs& aLoadInfoArgs,
-                                       nsILoadInfo** outLoadInfo);
+  mozilla::ipc::LoadInfoArgsToLoadInfo(
+    const mozilla::net::OptionalLoadInfoArgs& aLoadInfoArgs,
+    nsILoadInfo** outLoadInfo);
 
   ~LoadInfo();
 
-  nsCOMPtr<nsIPrincipal> mLoadingPrincipal;
-  nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
-  nsWeakPtr mLoadingContext;
-  nsSecurityFlags mSecurityFlags;
-  nsContentPolicyType mContentPolicyType;
-  nsCOMPtr<nsIURI> mBaseURI;
-  uint64_t mInnerWindowID;
-  uint64_t mOuterWindowID;
-  uint64_t mParentOuterWindowID;
+  // This function is the *only* function which can change the securityflags
+  // of a loadinfo. It only exists because of the XHR code. Don't call it
+  // from anywhere else!
+  void SetWithCredentialsSecFlag();
+  friend class ::nsXMLHttpRequest;
+
+  nsCOMPtr<nsIPrincipal>           mLoadingPrincipal;
+  nsCOMPtr<nsIPrincipal>           mTriggeringPrincipal;
+  nsWeakPtr                        mLoadingContext;
+  nsSecurityFlags                  mSecurityFlags;
+  nsContentPolicyType              mInternalContentPolicyType;
+  LoadTainting                     mTainting;
+  bool                             mUpgradeInsecureRequests;
+  uint64_t                         mInnerWindowID;
+  uint64_t                         mOuterWindowID;
+  uint64_t                         mParentOuterWindowID;
+  bool                             mEnforceSecurity;
+  bool                             mInitialSecurityCheckDone;
+  OriginAttributes                 mOriginAttributes;
+  nsTArray<nsCOMPtr<nsIPrincipal>> mRedirectChain;
 };
 
 } // namespace mozilla

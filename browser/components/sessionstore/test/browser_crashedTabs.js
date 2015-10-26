@@ -117,7 +117,7 @@ add_task(function test_crash_page_not_in_history() {
   yield TabStateFlusher.flush(browser);
 
   // Crash the tab
-  yield crashBrowser(browser);
+  yield BrowserTestUtils.crashBrowser(browser);
 
   // Check the tab state and make sure the tab crashed page isn't
   // mentioned.
@@ -146,7 +146,7 @@ add_task(function test_revived_history_from_remote() {
   yield TabStateFlusher.flush(browser);
 
   // Crash the tab
-  yield crashBrowser(browser);
+  yield BrowserTestUtils.crashBrowser(browser);
 
   // Browse to a new site that will cause the browser to
   // become remote again.
@@ -185,7 +185,7 @@ add_task(function test_revived_history_from_non_remote() {
   yield TabStateFlusher.flush(browser);
 
   // Crash the tab
-  yield crashBrowser(browser);
+  yield BrowserTestUtils.crashBrowser(browser);
 
   // Browse to a new site that will not cause the browser to
   // become remote again.
@@ -235,7 +235,7 @@ add_task(function test_revive_tab_from_session_store() {
   yield TabStateFlusher.flush(browser);
 
   // Crash the tab
-  yield crashBrowser(browser);
+  yield BrowserTestUtils.crashBrowser(browser);
   is(newTab2.getAttribute("crashed"), "true", "Second tab should be crashed too.");
 
   // Use SessionStore to revive the tab
@@ -286,7 +286,7 @@ add_task(function test_revive_all_tabs_from_session_store() {
   yield TabStateFlusher.flush(browser2);
 
   // Crash the tab
-  yield crashBrowser(browser);
+  yield BrowserTestUtils.crashBrowser(browser);
   is(newTab2.getAttribute("crashed"), "true", "Second tab should be crashed too.");
 
   // Use SessionStore to revive all the tabs
@@ -331,7 +331,7 @@ add_task(function test_close_tab_after_crash() {
   yield TabStateFlusher.flush(browser);
 
   // Crash the tab
-  yield crashBrowser(browser);
+  yield BrowserTestUtils.crashBrowser(browser);
 
   let promise = promiseEvent(gBrowser.tabContainer, "TabClose");
 
@@ -340,4 +340,80 @@ add_task(function test_close_tab_after_crash() {
   yield promise;
 
   is(gBrowser.tabs.length, 1, "Should have closed the tab");
+});
+
+/**
+ * Checks that "restore all" button is only shown if more than one tab
+ * has crashed.
+ */
+add_task(function* test_hide_restore_all_button() {
+  let newTab = gBrowser.addTab();
+  gBrowser.selectedTab = newTab;
+  let browser = newTab.linkedBrowser;
+  ok(browser.isRemoteBrowser, "Should be a remote browser");
+  yield promiseBrowserLoaded(browser);
+
+  browser.loadURI(PAGE_1);
+  yield promiseBrowserLoaded(browser);
+
+  yield TabStateFlusher.flush(browser);
+
+  // Crash the tab
+  yield BrowserTestUtils.crashBrowser(browser);
+
+  let doc = browser.contentDocument;
+  let restoreAllButton = doc.getElementById("restoreAll");
+  let restoreOneButton = doc.getElementById("restoreTab");
+
+  is(restoreAllButton.getAttribute("hidden"), "true", "Restore All button should be hidden");
+  ok(restoreOneButton.classList.contains("primary"), "Restore Tab button should have the primary class");
+
+  let newTab2 = gBrowser.addTab();
+  gBrowser.selectedTab = newTab;
+
+  browser.loadURI(PAGE_2);
+  yield promiseBrowserLoaded(browser);
+
+  // Crash the tab
+  yield BrowserTestUtils.crashBrowser(browser);
+
+  doc = browser.contentDocument;
+  restoreAllButton = doc.getElementById("restoreAll");
+  restoreOneButton = doc.getElementById("restoreTab");
+
+  ok(!restoreAllButton.hasAttribute("hidden"), "Restore All button should not be hidden");
+  ok(!(restoreOneButton.classList.contains("primary")), "Restore Tab button should not have the primary class");
+
+  gBrowser.removeTab(newTab);
+  gBrowser.removeTab(newTab2);
+});
+
+add_task(function* test_aboutcrashedtabzoom() {
+  let newTab = gBrowser.addTab();
+  gBrowser.selectedTab = newTab;
+  let browser = newTab.linkedBrowser;
+  ok(browser.isRemoteBrowser, "Should be a remote browser");
+  yield promiseBrowserLoaded(browser);
+
+  browser.loadURI(PAGE_1);
+  yield promiseBrowserLoaded(browser);
+
+  FullZoom.enlarge();
+  let zoomLevel = ZoomManager.getZoomForBrowser(browser);
+  ok(zoomLevel !== 1, "should have enlarged");
+
+  yield TabStateFlusher.flush(browser);
+
+  // Crash the tab
+  yield BrowserTestUtils.crashBrowser(browser);
+
+  ok(ZoomManager.getZoomForBrowser(browser) === 1, "zoom should have reset on crash");
+
+  clickButton(browser, "restoreTab");
+  yield promiseTabRestored(newTab);
+
+  ok(ZoomManager.getZoomForBrowser(browser) === zoomLevel, "zoom should have gone back to enlarged");
+  FullZoom.reset();
+
+  gBrowser.removeTab(newTab);
 });

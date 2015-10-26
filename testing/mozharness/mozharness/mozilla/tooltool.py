@@ -33,19 +33,25 @@ class TooltoolMixin(object):
         # set the default authentication file based on platform; this
         # corresponds to where puppet puts the token
         if 'tooltool_authentication_file' in self.config:
-            return self.config['tooltool_authentication_file']
-
-        if self._is_windows():
-            return r'c:\builds\relengapi.tok'
+            fn = self.config['tooltool_authentication_file']
+        elif self._is_windows():
+            fn = r'c:\builds\relengapi.tok'
         else:
-            return '/builds/relengapi.tok'
+            fn = '/builds/relengapi.tok'
 
-    def tooltool_fetch(self, manifest, bootstrap_cmd=None,
+        # if the file doesn't exist, don't pass it to tooltool (it will just
+        # fail).  In taskcluster, this will work OK as the relengapi-proxy will
+        # take care of auth.  Everywhere else, we'll get auth failures if
+        # necessary.
+        if os.path.exists(fn):
+            return fn
+
+    def tooltool_fetch(self, manifest,
                        output_dir=None, privileged=False, cache=None):
         """docstring for tooltool_fetch"""
         tooltool = self.query_exe('tooltool.py', return_type='list')
 
-        if self.config.get("developer_mode"):
+        if self.config.get("download_tooltool"):
             tooltool = [bin for bin in tooltool if os.path.exists(bin)]
             if tooltool:
                 cmd = [tooltool[0]]
@@ -90,19 +96,6 @@ class TooltoolMixin(object):
             error_message="Tooltool %s fetch failed!" % manifest,
             error_level=FATAL,
         )
-        if bootstrap_cmd is not None:
-            error_message = "Tooltool bootstrap %s failed!" % str(bootstrap_cmd)
-            self.retry(
-                self.run_command,
-                args=(bootstrap_cmd, ),
-                kwargs={'cwd': output_dir,
-                        'error_list': TooltoolErrorList,
-                        'privileged': privileged,
-                        },
-                good_statuses=(0, ),
-                error_message=error_message,
-                error_level=FATAL,
-            )
 
     def _fetch_tooltool_py(self):
         """ Retrieve tooltool.py

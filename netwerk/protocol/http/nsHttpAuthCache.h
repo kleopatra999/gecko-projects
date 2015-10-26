@@ -252,9 +252,10 @@ private:
 
 private:
     PLHashTable *mDB; // "host:port" --> nsHttpAuthNode
-    nsRefPtr<AppDataClearObserver> mObserver;
+    RefPtr<AppDataClearObserver> mObserver;
 };
 
-}} // namespace mozilla::net
+} // namespace net
+} // namespace mozilla
 
 #endif // nsHttpAuthCache_h__

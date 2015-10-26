@@ -3,6 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+Components.utils.import("resource://gre/modules/AppConstants.jsm");
 Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
 Components.utils.import("resource://gre/modules/TelemetryStopwatch.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "MigrationUtils",
@@ -113,20 +114,21 @@ var PlacesOrganizer = {
     PlacesSearchBox.init();
 
     window.addEventListener("AppCommand", this, true);
-#ifdef XP_MACOSX
-    // 1. Map Edit->Find command to OrganizerCommand_find:all.  Need to map
-    // both the menuitem and the Find key.
-    var findMenuItem = document.getElementById("menu_find");
-    findMenuItem.setAttribute("command", "OrganizerCommand_find:all");
-    var findKey = document.getElementById("key_find");
-    findKey.setAttribute("command", "OrganizerCommand_find:all");
 
-    // 2. Disable some keybindings from browser.xul
-    var elements = ["cmd_handleBackspace", "cmd_handleShiftBackspace"];
-    for (var i=0; i < elements.length; i++) {
-      document.getElementById(elements[i]).setAttribute("disabled", "true");
+    if (AppConstants.platform === "macosx") {
+      // 1. Map Edit->Find command to OrganizerCommand_find:all.  Need to map
+      // both the menuitem and the Find key.
+      let findMenuItem = document.getElementById("menu_find");
+      findMenuItem.setAttribute("command", "OrganizerCommand_find:all");
+      let findKey = document.getElementById("key_find");
+      findKey.setAttribute("command", "OrganizerCommand_find:all");
+
+      // 2. Disable some keybindings from browser.xul
+      let elements = ["cmd_handleBackspace", "cmd_handleShiftBackspace"];
+      for (let i = 0; i < elements.length; i++) {
+        document.getElementById(elements[i]).setAttribute("disabled", "true");
+      }
     }
-#endif
 
     // remove the "Properties" context-menu item, we've our own details pane
     document.getElementById("placesContext")
@@ -360,7 +362,8 @@ var PlacesOrganizer = {
    * cookies, history, preferences, and bookmarks.
    */
   importFromBrowser: function PO_importFromBrowser() {
-    MigrationUtils.showMigrationWizard(window);
+    // We pass in the type of source we're using for use in telemetry:
+    MigrationUtils.showMigrationWizard(window, [MigrationUtils.MIGRATION_ENTRYPOINT_PLACES]);
   },
 
   /**
@@ -592,7 +595,7 @@ var PlacesOrganizer = {
         infoBox.setAttribute("minimal", "true");
       infoBox.removeAttribute("wasminimal");
       infoBoxExpanderWrapper.hidden =
-        this._additionalInfoFields.every(function (id)
+        this._additionalInfoFields.every(id =>
           document.getElementById(id).collapsed);
     }
     additionalInfoBroadcaster.hidden = infoBox.getAttribute("minimal") == "true";
@@ -1247,7 +1250,7 @@ var ViewMenu = {
   }
 }
 
-let ContentArea = {
+var ContentArea = {
   _specialViews: new Map(),
 
   init: function CA_init() {
@@ -1306,7 +1309,9 @@ let ContentArea = {
                                            options: aOptions || new Object() });
   },
 
-  get currentView() PlacesUIUtils.getViewForNode(this._deck.selectedPanel),
+  get currentView() {
+    return PlacesUIUtils.getViewForNode(this._deck.selectedPanel);
+  },
   set currentView(aNewView) {
     let oldView = this.currentView;
     if (oldView != aNewView) {
@@ -1320,7 +1325,9 @@ let ContentArea = {
     return aNewView;
   },
 
-  get currentPlace() this.currentView.place,
+  get currentPlace() {
+    return this.currentView.place;
+  },
   set currentPlace(aQueryString) {
     let oldView = this.currentView;
     let newView = this.getContentViewForQueryString(aQueryString);
@@ -1349,11 +1356,11 @@ let ContentArea = {
       // On Windows and Linux the menu buttons are menus wrapped in a menubar.
       if (elt.id == "placesMenu") {
         for (let menuElt of elt.childNodes) {
-          menuElt.hidden = options.toolbarSet.indexOf(menuElt.id) == -1;
+          menuElt.hidden = !options.toolbarSet.includes(menuElt.id);
         }
       }
       else {
-        elt.hidden = options.toolbarSet.indexOf(elt.id) == -1;
+        elt.hidden = !options.toolbarSet.includes(elt.id);
       }
     }
   },
@@ -1380,17 +1387,21 @@ let ContentArea = {
   }
 };
 
-let ContentTree = {
+var ContentTree = {
   init: function CT_init() {
     this._view = document.getElementById("placeContent");
   },
 
-  get view() this._view,
+  get view() {
+    return this._view;
+  },
 
-  get viewOptions() Object.seal({
-    showDetailsPane: true,
-    toolbarSet: "back-button, forward-button, organizeButton, viewMenu, maintenanceButton, libraryToolbarSpacer, searchFilter"
-  }),
+  get viewOptions() {
+    return Object.seal({
+      showDetailsPane: true,
+      toolbarSet: "back-button, forward-button, organizeButton, viewMenu, maintenanceButton, libraryToolbarSpacer, searchFilter"
+    });
+  },
 
   openSelectedNode: function CT_openSelectedNode(aEvent) {
     let view = this.view;

@@ -14,8 +14,8 @@ USING_WORKERS_NAMESPACE
 
 class RegisterDebuggerRunnable final : public nsRunnable
 {
-  nsRefPtr<WorkerDebuggerManager> mManager;
-  nsRefPtr<WorkerDebugger> mDebugger;
+  RefPtr<WorkerDebuggerManager> mManager;
+  RefPtr<WorkerDebugger> mDebugger;
   bool mHasListeners;
 
 public:
@@ -24,8 +24,6 @@ public:
                            bool aHasListeners)
   : mManager(aManager), mDebugger(aDebugger), mHasListeners(aHasListeners)
   { }
-
-  NS_DECL_THREADSAFE_ISUPPORTS
 
 private:
   ~RegisterDebuggerRunnable()
@@ -39,8 +37,6 @@ private:
     return NS_OK;
   }
 };
-
-NS_IMPL_ISUPPORTS(RegisterDebuggerRunnable, nsIRunnable);
 
 BEGIN_WORKERS_NAMESPACE
 
@@ -105,7 +101,7 @@ WorkerDebuggerManager::GetWorkerDebuggerEnumerator(
 
   MutexAutoLock lock(mMutex);
 
-  nsRefPtr<WorkerDebuggerEnumerator> enumerator =
+  RefPtr<WorkerDebuggerEnumerator> enumerator =
     new WorkerDebuggerEnumerator(mDebuggers);
   enumerator.forget(aResult);
   return NS_OK;
@@ -188,7 +184,7 @@ WorkerDebuggerManager::UnregisterDebugger(WorkerDebugger* aDebugger)
     UnregisterDebuggerOnMainThread(aDebugger);
   } else {
     nsCOMPtr<nsIRunnable> runnable =
-      NS_NewRunnableMethodWithArg<nsRefPtr<WorkerDebugger>>(this,
+      NS_NewRunnableMethodWithArg<RefPtr<WorkerDebugger>>(this,
         &WorkerDebuggerManager::UnregisterDebuggerOnMainThread, aDebugger);
     MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
       NS_DispatchToMainThread(runnable, NS_DISPATCH_NORMAL)));

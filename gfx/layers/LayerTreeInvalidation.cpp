@@ -4,13 +4,12 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "LayerTreeInvalidation.h"
+
 #include <stdint.h>                     // for uint32_t
 #include "ImageContainer.h"             // for ImageContainer
 #include "ImageLayers.h"                // for ImageLayer, etc
 #include "Layers.h"                     // for Layer, ContainerLayer, etc
 #include "Units.h"                      // for ParentLayerIntRect
-#include "gfxColor.h"                   // for gfxRGBA
-#include "GraphicsFilter.h"             // for GraphicsFilter
 #include "gfxRect.h"                    // for gfxRect
 #include "gfxUtils.h"                   // for gfxUtils
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
@@ -23,6 +22,8 @@
 #include "nsISupportsImpl.h"            // for Layer::AddRef, etc
 #include "nsRect.h"                     // for IntRect
 #include "nsTArray.h"                   // for nsAutoTArray, nsTArray_Impl
+#include "mozilla/layers/ImageHost.h"
+#include "mozilla/layers/LayerManagerComposite.h"
 
 using namespace mozilla::gfx;
 
@@ -40,7 +41,7 @@ TransformRect(const IntRect& aRect, const Matrix4x4& aTransform)
   }
 
   Rect rect(aRect.x, aRect.y, aRect.width, aRect.height);
-  rect = aTransform.TransformBounds(rect);
+  rect = aTransform.TransformAndClipBounds(rect, Rect::MaxIntRect());
   rect.RoundOut();
 
   IntRect intRect;
@@ -220,7 +221,7 @@ struct LayerPropertiesBase : public LayerProperties
     return IntRect();
   }
 
-  nsRefPtr<Layer> mLayer;
+  RefPtr<Layer> mLayer;
   UniquePtr<LayerPropertiesBase> mMaskLayer;
   nsTArray<UniquePtr<LayerPropertiesBase>> mAncestorMaskLayers;
   nsIntRegion mVisibleRegion;
@@ -341,7 +342,7 @@ struct ContainerLayerProperties : public LayerPropertiesBase
       container->SetChildrenChanged(true);
     }
 
-    result.Transform(gfx::To3DMatrix(mLayer->GetLocalTransform()));
+    result.Transform(mLayer->GetLocalTransform());
 
     return result;
   }
@@ -379,20 +380,36 @@ struct ColorLayerProperties : public LayerPropertiesBase
     return result;
   }
 
-  gfxRGBA mColor;
+  Color mColor;
   IntRect mBounds;
 };
+
+static ImageHost* GetImageHost(Layer* aLayer)
+{
+  LayerComposite* composite = aLayer->AsLayerComposite();
+  if (composite) {
+    return static_cast<ImageHost*>(composite->GetCompositableHost());
+  }
+  return nullptr;
+}
 
 struct ImageLayerProperties : public LayerPropertiesBase
 {
   explicit ImageLayerProperties(ImageLayer* aImage, bool aIsMask)
     : LayerPropertiesBase(aImage)
     , mContainer(aImage->GetContainer())
+    , mImageHost(GetImageHost(aImage))
     , mFilter(aImage->GetFilter())
     , mScaleToSize(aImage->GetScaleToSize())
     , mScaleMode(aImage->GetScaleMode())
+    , mLastProducerID(-1)
+    , mLastFrameID(-1)
     , mIsMask(aIsMask)
   {
+    if (mImageHost) {
+      mLastProducerID = mImageHost->GetLastProducerID();
+      mLastFrameID = mImageHost->GetLastFrameID();
+    }
   }
 
   virtual nsIntRegion ComputeChangeInternal(NotifySubDocInvalidationFunc aCallback,
@@ -408,32 +425,71 @@ struct ImageLayerProperties : public LayerPropertiesBase
     }
 
     ImageContainer* container = imageLayer->GetContainer();
+    ImageHost* host = GetImageHost(imageLayer);
     if (mContainer != container ||
         mFilter != imageLayer->GetFilter() ||
         mScaleToSize != imageLayer->GetScaleToSize() ||
-        mScaleMode != imageLayer->GetScaleMode()) {
+        mScaleMode != imageLayer->GetScaleMode() ||
+        host != mImageHost ||
+        (host && host->GetProducerID() != mLastProducerID) ||
+        (host && host->GetFrameID() != mLastFrameID)) {
       aGeometryChanged = true;
 
       if (mIsMask) {
         // Mask layers have an empty visible region, so we have to
         // use the image size instead.
-        IntSize size = container->GetCurrentSize();
+        IntSize size;
+        if (container) {
+          size = container->GetCurrentSize();
+        }
+        if (host) {
+          size = host->GetImageSize();
+        }
         IntRect rect(0, 0, size.width, size.height);
         return TransformRect(rect, mLayer->GetLocalTransform());
-
-      } else {
-        return NewTransformedBounds();
       }
+      return NewTransformedBounds();
     }
 
     return IntRect();
   }
 
-  nsRefPtr<ImageContainer> mContainer;
-  GraphicsFilter mFilter;
+  RefPtr<ImageContainer> mContainer;
+  RefPtr<ImageHost> mImageHost;
+  Filter mFilter;
   gfx::IntSize mScaleToSize;
   ScaleMode mScaleMode;
+  int32_t mLastProducerID;
+  int32_t mLastFrameID;
   bool mIsMask;
+};
+
+struct CanvasLayerProperties : public LayerPropertiesBase
+{
+  explicit CanvasLayerProperties(CanvasLayer* aCanvas)
+    : LayerPropertiesBase(aCanvas)
+    , mImageHost(GetImageHost(aCanvas))
+  {
+    mFrameID = mImageHost ? mImageHost->GetFrameID() : -1;
+  }
+
+  virtual nsIntRegion ComputeChangeInternal(NotifySubDocInvalidationFunc aCallback,
+                                            bool& aGeometryChanged)
+  {
+    CanvasLayer* canvasLayer = static_cast<CanvasLayer*>(mLayer.get());
+
+    ImageHost* host = GetImageHost(canvasLayer);
+    if (host && host->GetFrameID() != mFrameID) {
+      aGeometryChanged = true;
+
+      return NewTransformedBounds();
+    }
+
+    return IntRect();
+  }
+
+  RefPtr<ImageHost> mImageHost;
+  int32_t mFrameID;
 };
 
 UniquePtr<LayerPropertiesBase>
@@ -453,11 +509,16 @@ CloneLayerTreePropertiesInternal(Layer* aRoot, bool aIsMask /* = false */)
       return MakeUnique<ColorLayerProperties>(static_cast<ColorLayer*>(aRoot));
     case Layer::TYPE_IMAGE:
       return MakeUnique<ImageLayerProperties>(static_cast<ImageLayer*>(aRoot), aIsMask);
-    default:
+    case Layer::TYPE_CANVAS:
+      return MakeUnique<CanvasLayerProperties>(static_cast<CanvasLayer*>(aRoot));
+    case Layer::TYPE_READBACK:
+    case Layer::TYPE_SHADOW:
+    case Layer::TYPE_PAINTED:
       return MakeUnique<LayerPropertiesBase>(aRoot);
   }
 
-  return UniquePtr<LayerPropertiesBase>(nullptr);
+  MOZ_ASSERT_UNREACHABLE("Unexpected root layer type");
+  return MakeUnique<LayerPropertiesBase>(aRoot);
 }
 
 /* static */ UniquePtr<LayerProperties>

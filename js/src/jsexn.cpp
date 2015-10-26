@@ -68,7 +68,6 @@ static const JSFunctionSpec exception_methods[] = {
 #define IMPLEMENT_ERROR_SUBCLASS(name) \
     { \
         js_Error_str, /* yes, really */ \
-        JSCLASS_IMPLEMENTS_BARRIERS | \
         JSCLASS_HAS_CACHED_PROTO(JSProto_##name) | \
         JSCLASS_HAS_RESERVED_SLOTS(ErrorObject::RESERVED_SLOTS), \
         nullptr,                 /* addProperty */ \
@@ -78,7 +77,6 @@ static const JSFunctionSpec exception_methods[] = {
         nullptr,                 /* enumerate */ \
         nullptr,                 /* resolve */ \
         nullptr,                 /* mayResolve */ \
-        nullptr,                 /* convert */ \
         exn_finalize, \
         nullptr,                 /* call        */ \
         nullptr,                 /* hasInstance */ \
@@ -100,7 +98,6 @@ const Class
 ErrorObject::classes[JSEXN_LIMIT] = {
     {
         js_Error_str,
-        JSCLASS_IMPLEMENTS_BARRIERS |
         JSCLASS_HAS_CACHED_PROTO(JSProto_Error) |
         JSCLASS_HAS_RESERVED_SLOTS(ErrorObject::RESERVED_SLOTS),
         nullptr,                 /* addProperty */
@@ -110,7 +107,6 @@ ErrorObject::classes[JSEXN_LIMIT] = {
         nullptr,                 /* enumerate */
         nullptr,                 /* resolve */
         nullptr,                 /* mayResolve */
-        nullptr,                 /* convert */
         exn_finalize,
         nullptr,                 /* call        */
         nullptr,                 /* hasInstance */
@@ -321,6 +317,20 @@ js::ErrorFromException(JSContext* cx, HandleObject objArg)
         return nullptr;
 
     return obj->as<ErrorObject>().getOrCreateErrorReport(cx);
+}
+
+JS_PUBLIC_API(JSObject*)
+ExceptionStackOrNull(JSContext* cx, HandleObject objArg)
+{
+    AssertHeapIsIdle(cx);
+    CHECK_REQUEST(cx);
+    assertSameCompartment(cx, objArg);
+    RootedObject obj(cx, CheckedUnwrap(objArg));
+    if (!obj || !obj->is<ErrorObject>()) {
+      return nullptr;
+    }
+
+    return obj->as<ErrorObject>().stack();
 }
 
 bool
@@ -634,8 +644,10 @@ js::ReportUncaughtException(JSContext* cx)
         return true;
 
     RootedValue exn(cx);
-    if (!cx->getPendingException(&exn))
+    if (!cx->getPendingException(&exn)) {
+        cx->clearPendingException();
         return false;
+    }
 
     cx->clearPendingException();
 
@@ -1002,9 +1014,14 @@ js::ValueToSourceForError(JSContext* cx, HandleValue val, JSAutoByteString& byte
     StringBuffer sb(cx);
     if (val.isObject()) {
         RootedObject valObj(cx, val.toObjectOrNull());
-        if (JS_IsArrayObject(cx, valObj)) {
+        ESClassValue cls;
+        if (!GetBuiltinClass(cx, valObj, &cls)) {
+            JS_ClearPendingException(cx);
+            return "<<error determining class of value>>";
+        }
+        if (cls == ESClass_Array) {
             sb.append("the array ");
-        } else if (JS_IsArrayBufferObject(valObj)) {
+        } else if (cls == ESClass_ArrayBuffer) {
             sb.append("the array buffer ");
         } else if (JS_IsArrayBufferViewObject(valObj)) {
             sb.append("the typed array ");

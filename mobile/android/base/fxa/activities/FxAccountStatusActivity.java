@@ -4,15 +4,6 @@
 
 package org.mozilla.gecko.fxa.activities;
 
-import org.mozilla.gecko.AppConstants;
-import org.mozilla.gecko.Locales.LocaleAwareFragmentActivity;
-import org.mozilla.gecko.R;
-import org.mozilla.gecko.background.common.log.Logger;
-import org.mozilla.gecko.background.fxa.FxAccountUtils;
-import org.mozilla.gecko.fxa.FirefoxAccounts;
-import org.mozilla.gecko.fxa.authenticator.AndroidFxAccount;
-import org.mozilla.gecko.sync.Utils;
-
 import android.accounts.Account;
 import android.accounts.AccountManager;
 import android.accounts.AccountManagerCallback;
@@ -32,6 +23,15 @@ import android.view.Menu;
 import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.widget.Toast;
+import org.mozilla.gecko.AppConstants;
+import org.mozilla.gecko.Locales.LocaleAwareFragmentActivity;
+import org.mozilla.gecko.R;
+import org.mozilla.gecko.background.common.log.Logger;
+import org.mozilla.gecko.background.fxa.FxAccountUtils;
+import org.mozilla.gecko.fxa.FirefoxAccounts;
+import org.mozilla.gecko.fxa.FxAccountConstants;
+import org.mozilla.gecko.fxa.authenticator.AndroidFxAccount;
+import org.mozilla.gecko.sync.Utils;
 
 /**
  * Activity which displays account status.
@@ -85,7 +85,7 @@ public class FxAccountStatusActivity extends LocaleAwareFragmentActivity {
       Logger.warn(LOG_TAG, "Could not get Firefox Account.");
 
       // Gracefully redirect to get started.
-      Intent intent = new Intent(this, FxAccountGetStartedActivity.class);
+      final Intent intent = new Intent(FxAccountConstants.ACTION_FXA_GET_STARTED);
       // Per http://stackoverflow.com/a/8992365, this triggers a known bug with
       // the soft keyboard not being shown for the started activity. Why, Android, why?
       intent.setFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
@@ -176,11 +176,6 @@ public class FxAccountStatusActivity extends LocaleAwareFragmentActivity {
       return true;
     }
 
-    if (itemId == R.id.remove_account) {
-      maybeDeleteAndroidAccount(this, FirefoxAccounts.getFirefoxAccount(this), null);
-      return true;
-    }
-
     if (itemId == R.id.enable_debug_mode) {
       FxAccountUtils.LOG_PERSONAL_INFORMATION = !FxAccountUtils.LOG_PERSONAL_INFORMATION;
       Toast.makeText(this, (FxAccountUtils.LOG_PERSONAL_INFORMATION ? "Enabled" : "Disabled") +
@@ -202,6 +197,12 @@ public class FxAccountStatusActivity extends LocaleAwareFragmentActivity {
     boolean enabled = !AppConstants.MOZILLA_OFFICIAL || AppConstants.NIGHTLY_BUILD || AppConstants.DEBUG_BUILD;
     if (!enabled) {
       menu.removeItem(R.id.enable_debug_mode);
+    } else {
+      final MenuItem debugModeItem = menu.findItem(R.id.enable_debug_mode);
+      if (debugModeItem != null) {
+        // Update checked state based on internal flag.
+        menu.findItem(R.id.enable_debug_mode).setChecked(FxAccountUtils.LOG_PERSONAL_INFORMATION);
+      }
     }
     return super.onCreateOptionsMenu(menu);
   };

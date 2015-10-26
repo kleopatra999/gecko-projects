@@ -13,7 +13,8 @@ from contextlib import contextmanager
 from copy import copy
 from subprocess import list2cmdline, call
 
-from lib.tests import TestCase, get_jitflags
+from lib.tests import RefTestCase, get_jitflags, get_cpu_count, \
+                      get_environment_overlay, change_env
 from lib.results import ResultsSink
 from lib.progressbar import ProgressBar
 
@@ -21,37 +22,6 @@ if sys.platform.startswith('linux') or sys.platform.startswith('darwin'):
     from lib.tasks_unix import run_all_tests
 else:
     from lib.tasks_win import run_all_tests
-
-
-def get_cpu_count():
-    """
-    Guess at a reasonable parallelism count to set as the default for the
-    current machine and run.
-    """
-    # Python 2.6+
-    try:
-        import multiprocessing
-        return multiprocessing.cpu_count()
-    except (ImportError, NotImplementedError):
-        pass
-
-    # POSIX
-    try:
-        res = int(os.sysconf('SC_NPROCESSORS_ONLN'))
-        if res > 0:
-            return res
-    except (AttributeError, ValueError):
-        pass
-
-    # Windows
-    try:
-        res = int(os.environ['NUMBER_OF_PROCESSORS'])
-        if res > 0:
-            return res
-    except (KeyError, ValueError):
-        pass
-
-    return 1
 
 
 @contextmanager
@@ -138,6 +108,8 @@ def parse_args():
     input_og.add_option('--no-extensions', action='store_true',
                         help='Run only tests conforming to the ECMAScript 5'
                         ' standard.')
+    input_og.add_option('--repeat', type=int, default=1,
+                        help='Repeat tests the given number of times.')
     op.add_option_group(input_og)
 
     output_og = OptionGroup(op, "Output",
@@ -211,8 +183,8 @@ def parse_args():
             abspath(dirname(abspath(__file__))),
             '..', '..', 'examples', 'jorendb.js'))
         js_cmd_args.extend(['-d', '-f', debugger_path, '--'])
-    prefix = TestCase.build_js_cmd_prefix(options.js_shell, js_cmd_args,
-                                          debugger_prefix)
+    prefix = RefTestCase.build_js_cmd_prefix(options.js_shell, js_cmd_args,
+                                             debugger_prefix)
 
     # If files with lists of tests to run were specified, add them to the
     # requested tests set.
@@ -275,8 +247,8 @@ def load_tests(options, requested_paths, excluded_paths):
 
     test_dir = dirname(abspath(__file__))
     test_count = manifest.count_tests(test_dir, requested_paths, excluded_paths)
-    test_gen = manifest.load(test_dir, requested_paths, excluded_paths,
-                              xul_tester)
+    test_gen = manifest.load_reftests(test_dir, requested_paths, excluded_paths,
+                                      xul_tester)
 
     if options.make_manifests:
         manifest.make_manifests(options.make_manifests, test_gen)
@@ -323,6 +295,14 @@ def load_tests(options, requested_paths, excluded_paths):
     if not options.run_slow_tests:
         test_gen = (_ for _ in test_gen if not _.slow)
 
+    if options.repeat:
+        def repeat_gen(tests):
+            for test in tests:
+                for i in range(options.repeat):
+                    yield test
+        test_gen = repeat_gen(test_gen)
+        test_count *= options.repeat
+
     return test_count, test_gen
 
 
@@ -332,6 +312,7 @@ def main():
         print('Could not find shell at given path.')
         return 1
     test_count, test_gen = load_tests(options, requested_paths, excluded_paths)
+    test_environment = get_environment_overlay(options.js_shell)
 
     if test_count == 0:
         print('no tests selected')
@@ -340,29 +321,25 @@ def main():
     test_dir = dirname(abspath(__file__))
 
     if options.debug:
-        if len(list(test_gen)) > 1:
+        tests = list(test_gen)
+        if len(tests) > 1:
             print('Multiple tests match command line arguments,'
                   ' debugger can only run one')
-            for tc in test_gen:
+            for tc in tests:
                 print('    {}'.format(tc.path))
             return 2
 
-        cmd = test_gen[0].get_command(TestCase.js_cmd_prefix)
+        cmd = tests[0].get_command(prefix)
         if options.show_cmd:
             print(list2cmdline(cmd))
-        with changedir(test_dir):
+        with changedir(test_dir), change_env(test_environment):
             call(cmd)
         return 0
 
-    with changedir(test_dir):
-        # Force Pacific time zone to avoid failures in Date tests.
-        os.environ['TZ'] = 'PST8PDT'
-        # Force date strings to English.
-        os.environ['LC_TIME'] = 'en_US.UTF-8'
-
+    with changedir(test_dir), change_env(test_environment):
         results = ResultsSink(options, test_count)
         try:
-            for out in run_all_tests(test_gen, prefix, results, options):
+            for out in run_all_tests(test_gen, prefix, results.pb, options):
                 results.push(out)
             results.finish(True)
         except KeyboardInterrupt:

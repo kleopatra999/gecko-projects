@@ -20,6 +20,7 @@ class OverscrollHandoffChain;
 class CancelableBlockState;
 class TouchBlockState;
 class WheelBlockState;
+class PanGestureBlockState;
 
 /**
  * A base class that stores state common to various input blocks.
@@ -33,27 +34,27 @@ class InputBlockState
 public:
   static const uint64_t NO_BLOCK_ID = 0;
 
-  explicit InputBlockState(const nsRefPtr<AsyncPanZoomController>& aTargetApzc,
+  explicit InputBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
                            bool aTargetConfirmed);
   virtual ~InputBlockState()
   {}
 
-  virtual bool SetConfirmedTargetApzc(const nsRefPtr<AsyncPanZoomController>& aTargetApzc);
-  const nsRefPtr<AsyncPanZoomController>& GetTargetApzc() const;
-  const nsRefPtr<const OverscrollHandoffChain>& GetOverscrollHandoffChain() const;
+  virtual bool SetConfirmedTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc);
+  const RefPtr<AsyncPanZoomController>& GetTargetApzc() const;
+  const RefPtr<const OverscrollHandoffChain>& GetOverscrollHandoffChain() const;
   uint64_t GetBlockId() const;
 
   bool IsTargetConfirmed() const;
 
 protected:
-  virtual void UpdateTargetApzc(const nsRefPtr<AsyncPanZoomController>& aTargetApzc);
+  virtual void UpdateTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc);
 
 private:
-  nsRefPtr<AsyncPanZoomController> mTargetApzc;
+  RefPtr<AsyncPanZoomController> mTargetApzc;
   bool mTargetConfirmed;
   const uint64_t mBlockId;
 protected:
-  nsRefPtr<const OverscrollHandoffChain> mOverscrollHandoffChain;
+  RefPtr<const OverscrollHandoffChain> mOverscrollHandoffChain;
 
   // Used to transform events from global screen space to |mTargetApzc|'s
   // screen space. It's cached at the beginning of the input block so that
@@ -76,13 +77,16 @@ protected:
 class CancelableBlockState : public InputBlockState
 {
 public:
-  CancelableBlockState(const nsRefPtr<AsyncPanZoomController>& aTargetApzc,
+  CancelableBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
                        bool aTargetConfirmed);
 
   virtual TouchBlockState *AsTouchBlock() {
     return nullptr;
   }
   virtual WheelBlockState *AsWheelBlock() {
+    return nullptr;
+  }
+  virtual PanGestureBlockState *AsPanGestureBlock() {
     return nullptr;
   }
 
@@ -116,6 +120,12 @@ public:
    * nullptr.
    */
   void DispatchImmediate(const InputData& aEvent) const;
+
+  /**
+   * Dispatch the event to the target APZC. Mostly this is a hook for
+   * subclasses to do any per-event processing they need to.
+   */
+  virtual void DispatchEvent(const InputData& aEvent) const;
 
   /**
    * @return true iff this block has received all the information needed
@@ -162,7 +172,7 @@ private:
 class WheelBlockState : public CancelableBlockState
 {
 public:
-  WheelBlockState(const nsRefPtr<AsyncPanZoomController>& aTargetApzc,
+  WheelBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
                   bool aTargetConfirmed,
                   const ScrollWheelInput& aEvent);
 
@@ -173,7 +183,7 @@ public:
   void HandleEvents() override;
   bool MustStayActive() override;
   const char* Type() override;
-  bool SetConfirmedTargetApzc(const nsRefPtr<AsyncPanZoomController>& aTargetApzc) override;
+  bool SetConfirmedTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc) override;
 
   void AddEvent(const ScrollWheelInput& aEvent);
 
@@ -232,13 +242,53 @@ public:
   void Update(const ScrollWheelInput& aEvent);
 
 protected:
-  void UpdateTargetApzc(const nsRefPtr<AsyncPanZoomController>& aTargetApzc) override;
+  void UpdateTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc) override;
 
 private:
   nsTArray<ScrollWheelInput> mEvents;
   TimeStamp mLastEventTime;
   TimeStamp mLastMouseMove;
   bool mTransactionEnded;
+};
+
+/**
+ * A single block of pan gesture events.
+ */
+class PanGestureBlockState : public CancelableBlockState
+{
+public:
+  PanGestureBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                       bool aTargetConfirmed,
+                       const PanGestureInput& aEvent);
+
+  bool SetContentResponse(bool aPreventDefault) override;
+  bool IsReadyForHandling() const override;
+  bool HasEvents() const override;
+  void DropEvents() override;
+  void HandleEvents() override;
+  bool MustStayActive() override;
+  const char* Type() override;
+  bool SetConfirmedTargetApzc(const RefPtr<AsyncPanZoomController>& aTargetApzc) override;
+
+  void AddEvent(const PanGestureInput& aEvent);
+
+  PanGestureBlockState *AsPanGestureBlock() override {
+    return this;
+  }
+
+  /**
+   * @return Whether or not overscrolling is prevented for this block.
+   */
+  bool AllowScrollHandoff() const;
+
+  bool WasInterrupted() const { return mInterrupted; }
+
+  void SetNeedsToWaitForContentResponse(bool aWaitForContentResponse);
+
+private:
+  nsTArray<PanGestureInput> mEvents;
+  bool mInterrupted;
+  bool mWaitingForContentResponse;
 };
 
 /**
@@ -267,8 +317,8 @@ private:
 class TouchBlockState : public CancelableBlockState
 {
 public:
-  explicit TouchBlockState(const nsRefPtr<AsyncPanZoomController>& aTargetApzc,
-                           bool aTargetConfirmed);
+  explicit TouchBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                           bool aTargetConfirmed, TouchCounter& aTouchCounter);
 
   TouchBlockState *AsTouchBlock() override {
     return this;
@@ -344,6 +394,7 @@ public:
   bool HasEvents() const override;
   void DropEvents() override;
   void HandleEvents() override;
+  void DispatchEvent(const InputData& aEvent) const override;
   bool MustStayActive() override;
   const char* Type() override;
 
@@ -353,6 +404,8 @@ private:
   bool mDuringFastFling;
   bool mSingleTapOccurred;
   nsTArray<MultiTouchInput> mEvents;
+  // A reference to the InputQueue's touch counter
+  TouchCounter& mTouchCounter;
 };
 
 } // namespace layers

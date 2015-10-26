@@ -7,12 +7,13 @@
 #ifndef GLCONTEXT_H_
 #define GLCONTEXT_H_
 
-#include <stdio.h>
-#include <stdint.h>
-#include <ctype.h>
-#include <map>
 #include <bitset>
+#include <ctype.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <map>
 #include <queue>
+#include <stack>
 
 #ifdef DEBUG
 #include <string.h>
@@ -32,19 +33,18 @@
 #define MOZ_GL_DEBUG 1
 #endif
 
-#include "mozilla/UniquePtr.h"
+#include "../../mfbt/Maybe.h"
+#include "../../mfbt/RefPtr.h"
+#include "../../mfbt/UniquePtr.h"
 
 #include "GLDefs.h"
 #include "GLLibraryLoader.h"
 #include "nsISupportsImpl.h"
 #include "plstr.h"
-#include "nsDataHashtable.h"
-#include "nsHashKeys.h"
 #include "nsAutoPtr.h"
 #include "GLContextTypes.h"
-#include "GLTextureImage.h"
+//#include "GLTextureImage.h"
 #include "SurfaceTypes.h"
-#include "GLScreenBuffer.h"
 #include "GLContextSymbols.h"
 #include "base/platform_thread.h"       // for PlatformThreadId
 #include "mozilla/GenericRefCounted.h"
@@ -53,29 +53,30 @@
 
 namespace android {
     class GraphicBuffer;
-}
+} // namespace android
 
 namespace mozilla {
     namespace gfx {
         class DataSourceSurface;
         class SourceSurface;
-    }
+    } // namespace gfx
 
     namespace gl {
-        class GLContext;
-        class GLLibraryEGL;
-        class GLScreenBuffer;
-        class TextureGarbageBin;
         class GLBlitHelper;
         class GLBlitTextureImageHelper;
+        class GLContext;
+        class GLLibraryEGL;
         class GLReadTexImageHelper;
+        class GLScreenBuffer;
+        class SharedSurface;
+        class TextureGarbageBin;
         struct SurfaceCaps;
-    }
+    } // namespace gl
 
     namespace layers {
         class ColorTextureLayerProgram;
-    }
-}
+    } // namespace layers
+} // namespace mozilla
 
 namespace mozilla {
 namespace gl {
@@ -97,6 +98,7 @@ enum class GLFeature {
     framebuffer_blit,
     framebuffer_multisample,
     framebuffer_object,
+    framebuffer_object_EXT_OES,
     get_integer_indexed,
     get_integer64_indexed,
     get_query_object_i64v,
@@ -105,6 +107,7 @@ enum class GLFeature {
     gpu_shader4,
     instanced_arrays,
     instanced_non_arrays,
+    internalformat_query,
     invalidate_framebuffer,
     map_buffer_range,
     occlusion_query,
@@ -167,6 +170,7 @@ enum class GLRenderer {
     AdrenoTM200,
     AdrenoTM205,
     AdrenoTM320,
+    AdrenoTM420,
     SGX530,
     SGX540,
     Tegra,
@@ -194,6 +198,14 @@ public:
      * for an ANGLE implementation.
      */
     virtual bool IsANGLE() const {
+        return false;
+    }
+
+    /**
+    * Returns true if the context is using WARP. This should only be overridden
+    * for an ANGLE implementation.
+    */
+    virtual bool IsWARP() const {
         return false;
     }
 
@@ -377,6 +389,7 @@ public:
         ANGLE_texture_compression_dxt5,
         ANGLE_timer_query,
         APPLE_client_storage,
+        APPLE_framebuffer_multisample,
         APPLE_texture_range,
         APPLE_vertex_array_object,
         ARB_ES2_compatibility,
@@ -388,8 +401,10 @@ public:
         ARB_draw_instanced,
         ARB_framebuffer_object,
         ARB_framebuffer_sRGB,
+        ARB_geometry_shader4,
         ARB_half_float_pixel,
         ARB_instanced_arrays,
+        ARB_internalformat_query,
         ARB_invalidate_subdata,
         ARB_map_buffer_range,
         ARB_occlusion_query2,
@@ -423,6 +438,7 @@ public:
         EXT_framebuffer_object,
         EXT_framebuffer_sRGB,
         EXT_gpu_shader4,
+        EXT_multisampled_render_to_texture,
         EXT_occlusion_query_boolean,
         EXT_packed_depth_stencil,
         EXT_read_format_bgra,
@@ -446,6 +462,8 @@ public:
         KHR_debug,
         NV_draw_instanced,
         NV_fence,
+        NV_framebuffer_blit,
+        NV_geometry_program4,
         NV_half_float,
         NV_instanced_arrays,
         NV_transform_feedback,
@@ -458,6 +476,7 @@ public:
         OES_depth32,
         OES_depth_texture,
         OES_element_index_uint,
+        OES_framebuffer_object,
         OES_packed_depth_stencil,
         OES_rgb8_rgba8,
         OES_standard_derivatives,
@@ -601,7 +620,7 @@ public:
     class LocalErrorScope;
 
 private:
-    LocalErrorScope* mLocalErrorScope;
+    std::stack<const LocalErrorScope*> mLocalErrorScopeStack;
 
 public:
     class LocalErrorScope {
@@ -614,8 +633,7 @@ public:
             : mGL(gl)
             , mHasBeenChecked(false)
         {
-            MOZ_ASSERT(!mGL.mLocalErrorScope);
-            mGL.mLocalErrorScope = this;
+            mGL.mLocalErrorScopeStack.push(this);
 
             mGL.FlushErrors();
 
@@ -635,10 +653,10 @@ public:
 
             MOZ_ASSERT(mGL.fGetError() == LOCAL_GL_NO_ERROR);
 
-            mGL.mTopError = mOldTop;
+            MOZ_ASSERT(mGL.mLocalErrorScopeStack.top() == this);
+            mGL.mLocalErrorScopeStack.pop();
 
-            MOZ_ASSERT(mGL.mLocalErrorScope == this);
-            mGL.mLocalErrorScope = nullptr;
+            mGL.mTopError = mOldTop;
         }
     };
 
@@ -720,7 +738,7 @@ private:
             }
 
             if (err != LOCAL_GL_NO_ERROR &&
-                !mLocalErrorScope)
+                !mLocalErrorScopeStack.size())
             {
                 printf_stderr("[gl:%p] %s: Generated unexpected %s error."
                               " (0x%04x)\n", this, funcName,
@@ -792,31 +810,19 @@ private:
 
     // Do whatever setup is necessary to draw to our offscreen FBO, if it's
     // bound.
-    void BeforeGLDrawCall() {
-    }
+    void BeforeGLDrawCall() { }
 
     // Do whatever tear-down is necessary after drawing to our offscreen FBO,
     // if it's bound.
-    void AfterGLDrawCall()
-    {
-        if (mScreen) {
-            mScreen->AfterDrawCall();
-        }
-        mHeavyGLCallsSinceLastFlush = true;
-    }
+    void AfterGLDrawCall();
 
     // Do whatever setup is necessary to read from our offscreen FBO, if it's
     // bound.
-    void BeforeGLReadCall()
-    {
-        if (mScreen)
-            mScreen->BeforeReadCall();
-    }
+    void BeforeGLReadCall();
 
     // Do whatever tear-down is necessary after reading from our offscreen FBO,
     // if it's bound.
-    void AfterGLReadCall() {
-    }
+    void AfterGLReadCall() { }
 
 
 // -----------------------------------------------------------------------------
@@ -854,32 +860,7 @@ public:
         AFTER_GL_CALL;
     }
 
-    void fBindFramebuffer(GLenum target, GLuint framebuffer) {
-        if (!mScreen) {
-            raw_fBindFramebuffer(target, framebuffer);
-            return;
-        }
-
-        switch (target) {
-            case LOCAL_GL_DRAW_FRAMEBUFFER_EXT:
-                mScreen->BindDrawFB(framebuffer);
-                return;
-
-            case LOCAL_GL_READ_FRAMEBUFFER_EXT:
-                mScreen->BindReadFB(framebuffer);
-                return;
-
-            case LOCAL_GL_FRAMEBUFFER:
-                mScreen->BindFB(framebuffer);
-                return;
-
-            default:
-                // Nothing we care about, likely an error.
-                break;
-        }
-
-        raw_fBindFramebuffer(target, framebuffer);
-    }
+    void fBindFramebuffer(GLenum target, GLuint framebuffer);
 
     void fInvalidateFramebuffer(GLenum target, GLsizei numAttachments, const GLenum* attachments) {
         BEFORE_GL_CALL;
@@ -1041,29 +1022,8 @@ public:
         mHeavyGLCallsSinceLastFlush = true;
     }
 
-    void fCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
-        if (!IsTextureSizeSafeToPassToDriver(target, width, height)) {
-            // pass wrong values to cause the GL to generate GL_INVALID_VALUE.
-            // See bug 737182 and the comment in IsTextureSizeSafeToPassToDriver.
-            level = -1;
-            width = -1;
-            height = -1;
-            border = -1;
-        }
-
-        BeforeGLReadCall();
-        bool didCopyTexImage2D = false;
-        if (mScreen) {
-            didCopyTexImage2D = mScreen->CopyTexImage2D(target, level, internalformat, x,
-                                                        y, width, height, border);
-        }
-
-        if (!didCopyTexImage2D) {
-            raw_fCopyTexImage2D(target, level, internalformat, x, y, width, height,
-                                border);
-        }
-        AfterGLReadCall();
-    }
+    void fCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x,
+                         GLint y, GLsizei width, GLsizei height, GLint border);
 
     void fCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) {
         BeforeGLReadCall();
@@ -1238,7 +1198,7 @@ public:
     }
 
 private:
-    void raw_fGetIntegerv(GLenum pname, GLint *params) {
+    void raw_fGetIntegerv(GLenum pname, GLint* params) {
         BEFORE_GL_CALL;
         mSymbols.fGetIntegerv(pname, params);
         AFTER_GL_CALL;
@@ -1246,72 +1206,19 @@ private:
 
 public:
 
-    void fGetIntegerv(GLenum pname, GLint *params) {
-        switch (pname)
-        {
-            // LOCAL_GL_FRAMEBUFFER_BINDING is equal to
-            // LOCAL_GL_DRAW_FRAMEBUFFER_BINDING_EXT,
-            // so we don't need two cases.
-            case LOCAL_GL_DRAW_FRAMEBUFFER_BINDING_EXT:
-                if (mScreen) {
-                    *params = mScreen->GetDrawFB();
-                } else {
-                    raw_fGetIntegerv(pname, params);
-                }
-                break;
-
-            case LOCAL_GL_READ_FRAMEBUFFER_BINDING_EXT:
-                if (mScreen) {
-                    *params = mScreen->GetReadFB();
-                } else {
-                    raw_fGetIntegerv(pname, params);
-                }
-                break;
-
-            case LOCAL_GL_MAX_TEXTURE_SIZE:
-                MOZ_ASSERT(mMaxTextureSize>0);
-                *params = mMaxTextureSize;
-                break;
-
-            case LOCAL_GL_MAX_CUBE_MAP_TEXTURE_SIZE:
-                MOZ_ASSERT(mMaxCubeMapTextureSize>0);
-                *params = mMaxCubeMapTextureSize;
-                break;
-
-            case LOCAL_GL_MAX_RENDERBUFFER_SIZE:
-                MOZ_ASSERT(mMaxRenderbufferSize>0);
-                *params = mMaxRenderbufferSize;
-                break;
-
-            case LOCAL_GL_VIEWPORT:
-                for (size_t i = 0; i < 4; i++) {
-                    params[i] = mViewportRect[i];
-                }
-                break;
-
-            case LOCAL_GL_SCISSOR_BOX:
-                for (size_t i = 0; i < 4; i++) {
-                    params[i] = mScissorRect[i];
-                }
-                break;
-
-            default:
-                raw_fGetIntegerv(pname, params);
-                break;
-        }
-    }
+    void fGetIntegerv(GLenum pname, GLint* params);
 
     void GetUIntegerv(GLenum pname, GLuint *params) {
         fGetIntegerv(pname, reinterpret_cast<GLint*>(params));
     }
 
-    void fGetFloatv(GLenum pname, GLfloat *params) {
+    void fGetFloatv(GLenum pname, GLfloat* params) {
         BEFORE_GL_CALL;
         mSymbols.fGetFloatv(pname, params);
         AFTER_GL_CALL;
     }
 
-    void fGetBooleanv(GLenum pname, realGLboolean *params) {
+    void fGetBooleanv(GLenum pname, realGLboolean* params) {
         BEFORE_GL_CALL;
         mSymbols.fGetBooleanv(pname, params);
         AFTER_GL_CALL;
@@ -1604,20 +1511,8 @@ public:
         mHeavyGLCallsSinceLastFlush = true;
     }
 
-    void fReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, GLvoid *pixels) {
-        BeforeGLReadCall();
-
-        bool didReadPixels = false;
-        if (mScreen) {
-            didReadPixels = mScreen->ReadPixels(x, y, width, height, format, type, pixels);
-        }
-
-        if (!didReadPixels) {
-            raw_fReadPixels(x, y, width, height, format, type, pixels);
-        }
-
-        AfterGLReadCall();
-    }
+    void fReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
+                     GLenum type, GLvoid* pixels);
 
 public:
     void fSampleCoverage(GLclampf value, realGLboolean invert) {
@@ -1643,15 +1538,15 @@ public:
         AFTER_GL_CALL;
     }
 
-    void fStencilFunc(GLenum func, GLint ref, GLuint mask) {
+    void fStencilFunc(GLenum func, GLint reference, GLuint mask) {
         BEFORE_GL_CALL;
-        mSymbols.fStencilFunc(func, ref, mask);
+        mSymbols.fStencilFunc(func, reference, mask);
         AFTER_GL_CALL;
     }
 
-    void fStencilFuncSeparate(GLenum frontfunc, GLenum backfunc, GLint ref, GLuint mask) {
+    void fStencilFuncSeparate(GLenum frontfunc, GLenum backfunc, GLint reference, GLuint mask) {
         BEFORE_GL_CALL;
-        mSymbols.fStencilFuncSeparate(frontfunc, backfunc, ref, mask);
+        mSymbols.fStencilFuncSeparate(frontfunc, backfunc, reference, mask);
         AFTER_GL_CALL;
     }
 
@@ -2059,6 +1954,13 @@ public:
         AFTER_GL_CALL;
     }
 
+    void fFramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer) {
+        BEFORE_GL_CALL;
+        ASSERT_SYMBOL_PRESENT(fFramebufferTextureLayer);
+        mSymbols.fFramebufferTextureLayer(target, attachment, texture, level, layer);
+        AFTER_GL_CALL;
+    }
+
     void fGetFramebufferAttachmentParameteriv(GLenum target, GLenum attachment, GLenum pname, GLint* value) {
         BEFORE_GL_CALL;
         mSymbols.fGetFramebufferAttachmentParameteriv(target, attachment, pname, value);
@@ -2289,22 +2191,7 @@ public:
         TRACKING_CONTEXT(DeletedBuffers(this, n, names));
     }
 
-    void fDeleteFramebuffers(GLsizei n, const GLuint* names) {
-        if (mScreen) {
-            // Notify mScreen which framebuffers we're deleting.
-            // Otherwise, we will get framebuffer binding mispredictions.
-            for (int i = 0; i < n; i++) {
-                mScreen->DeletingFB(names[i]);
-            }
-        }
-
-        if (n == 1 && *names == 0) {
-            // Deleting framebuffer 0 causes hangs on the DROID. See bug 623228.
-        } else {
-            raw_fDeleteFramebuffers(n, names);
-        }
-        TRACKING_CONTEXT(DeletedFramebuffers(this, n, names));
-    }
+    void fDeleteFramebuffers(GLsizei n, const GLuint* names);
 
     void fDeleteRenderbuffers(GLsizei n, const GLuint* names) {
         raw_fDeleteRenderbuffers(n, names);
@@ -2515,6 +2402,22 @@ public:
 // -----------------------------------------------------------------------------
 //  GL 3.0, GL ES 3.0 & EXT_gpu_shader4
 public:
+    void fGetVertexAttribIiv(GLuint index, GLenum pname, GLint* params)
+    {
+        ASSERT_SYMBOL_PRESENT(fGetVertexAttribIiv);
+        BEFORE_GL_CALL;
+        mSymbols.fGetVertexAttribIiv(index, pname, params);
+        AFTER_GL_CALL;
+    }
+
+    void fGetVertexAttribIuiv(GLuint index, GLenum pname, GLuint* params)
+    {
+        ASSERT_SYMBOL_PRESENT(fGetVertexAttribIuiv);
+        BEFORE_GL_CALL;
+        mSymbols.fGetVertexAttribIuiv(index, pname, params);
+        AFTER_GL_CALL;
+    }
+
     void fVertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w)
     {
         BEFORE_GL_CALL;
@@ -2631,6 +2534,17 @@ public:
         mSymbols.fVertexAttribDivisor(index, divisor);
         AFTER_GL_CALL;
     }
+
+// -----------------------------------------------------------------------------
+// Feature internalformat_query
+public:
+    void fGetInternalformativ(GLenum target, GLenum internalformat, GLenum pname, GLsizei bufSize, GLint* params) {
+        BEFORE_GL_CALL;
+        ASSERT_SYMBOL_PRESENT(fGetInternalformativ);
+        mSymbols.fGetInternalformativ(target, internalformat, pname, bufSize, params);
+        AFTER_GL_CALL;
+    }
+
 
 // -----------------------------------------------------------------------------
 // Package XXX_query_counter
@@ -3097,15 +3011,6 @@ public:
         AFTER_GL_CALL;
     }
 
-    void fGetActiveUniformName(GLuint program, GLuint uniformIndex, GLsizei bufSize,
-                               GLsizei* length, GLchar* uniformName)
-    {
-        ASSERT_SYMBOL_PRESENT(fGetActiveUniformName);
-        BEFORE_GL_CALL;
-        mSymbols.fGetActiveUniformName(program, uniformIndex, bufSize, length, uniformName);
-        AFTER_GL_CALL;
-    }
-
     GLuint fGetUniformBlockIndex(GLuint program, const GLchar* uniformBlockName) {
         ASSERT_SYMBOL_PRESENT(fGetUniformBlockIndex);
         BEFORE_GL_CALL;
@@ -3359,40 +3264,18 @@ public:
         fBindFramebuffer(LOCAL_GL_READ_FRAMEBUFFER_EXT, fb);
     }
 
-    GLuint GetDrawFB() {
-        if (mScreen)
-            return mScreen->GetDrawFB();
+    GLuint GetDrawFB();
 
-        GLuint ret = 0;
-        GetUIntegerv(LOCAL_GL_DRAW_FRAMEBUFFER_BINDING_EXT, &ret);
-        return ret;
-    }
+    GLuint GetReadFB();
 
-    GLuint GetReadFB() {
-        if (mScreen)
-            return mScreen->GetReadFB();
+    GLuint GetFB();
 
-        GLenum bindEnum = IsSupported(GLFeature::framebuffer_blit)
-                            ? LOCAL_GL_READ_FRAMEBUFFER_BINDING_EXT
-                            : LOCAL_GL_FRAMEBUFFER_BINDING;
-
-        GLuint ret = 0;
-        GetUIntegerv(bindEnum, &ret);
-        return ret;
-    }
-
-    GLuint GetFB() {
-        if (mScreen) {
-            // This has a very important extra assert that checks that we're
-            // not accidentally ignoring a situation where the draw and read
-            // FBs differ.
-            return mScreen->GetFB();
-        }
-
-        GLuint ret = 0;
-        GetUIntegerv(LOCAL_GL_FRAMEBUFFER_BINDING, &ret);
-        return ret;
-    }
+    /*
+     * Retrieves the size of the native windowing system drawable.
+     */
+    virtual Maybe<gfx::IntSize> GetTargetSize() {
+        return Maybe<gfx::IntSize>();
+    };
 
 private:
     void GetShaderPrecisionFormatNonES2(GLenum shadertype, GLenum precisiontype, GLint* range, GLint* precision) {
@@ -3452,7 +3335,7 @@ public:
     }
 
 protected:
-    nsRefPtr<GLContext> mSharedContext;
+    RefPtr<GLContext> mSharedContext;
 
     // The thread id which this context was created.
     PlatformThreadId mOwningThreadId;
@@ -3492,22 +3375,7 @@ public:
         return thisShared == otherShared;
     }
 
-    bool InitOffscreen(const gfx::IntSize& size, const SurfaceCaps& caps) {
-        if (!CreateScreenBuffer(size, caps))
-            return false;
-
-        MakeCurrent();
-        fBindFramebuffer(LOCAL_GL_FRAMEBUFFER, 0);
-        fScissor(0, 0, size.width, size.height);
-        fViewport(0, 0, size.width, size.height);
-
-        mCaps = mScreen->mCaps;
-        MOZ_ASSERT(!mCaps.any);
-
-        UpdateGLFormats(mCaps);
-
-        return true;
-    }
+    bool InitOffscreen(const gfx::IntSize& size, const SurfaceCaps& caps);
 
 protected:
     // Note that it does -not- clear the resized buffers.
@@ -3598,12 +3466,10 @@ public:
 
     bool WorkAroundDriverBugs() const { return mWorkAroundDriverBugs; }
 
-    bool IsDrawingToDefaultFramebuffer() {
-        return Screen()->IsDrawFramebufferDefault();
-    }
+    bool IsDrawingToDefaultFramebuffer();
 
 protected:
-    nsRefPtr<TextureGarbageBin> mTexGarbageBin;
+    RefPtr<TextureGarbageBin> mTexGarbageBin;
 
 public:
     TextureGarbageBin* TexGarbageBin() {
@@ -3630,6 +3496,7 @@ protected:
     GLint mMaxViewportDims[2];
     GLsizei mMaxSamples;
     bool mNeedsTextureSizeChecks;
+    bool mNeedsFlushBeforeDeleteFB;
     bool mWorkAroundDriverBugs;
 
     bool IsTextureSizeSafeToPassToDriver(GLenum target, GLsizei width, GLsizei height) const {
@@ -3775,6 +3642,28 @@ MarkBitfieldByStrings(const std::vector<nsCString>& strList,
             printf_stderr("  %s%s\n", str.BeginReading(), wasMarked ? "(*)" : "");
     }
 }
+
+/**
+ * Helper function that creates a 2D texture aSize.width x aSize.height with
+ * storage type specified by aFormats. Returns GL texture object id.
+ *
+ * See mozilla::gl::CreateTexture.
+ */
+GLuint CreateTextureForOffscreen(GLContext* aGL, const GLFormats& aFormats,
+                                 const gfx::IntSize& aSize);
+
+/**
+ * Helper function that creates a 2D texture aSize.width x aSize.height with
+ * storage type aInternalFormat. Returns GL texture object id.
+ *
+ * Initialize textyre parameters to:
+ *    GL_TEXTURE_MIN_FILTER = GL_LINEAR
+ *    GL_TEXTURE_MAG_FILTER = GL_LINEAR
+ *    GL_TEXTURE_WRAP_S = GL_CLAMP_TO_EDGE
+ *    GL_TEXTURE_WRAP_T = GL_CLAMP_TO_EDGE
+ */
+GLuint CreateTexture(GLContext* aGL, GLenum aInternalFormat, GLenum aFormat,
+                     GLenum aType, const gfx::IntSize& aSize, bool linear = true);
 
 } /* namespace gl */
 } /* namespace mozilla */

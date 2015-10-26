@@ -7,6 +7,7 @@
   <!-- Fennec color palette (bug 1127517) -->
   <color name="fennec_ui_orange">#FF9500</color>
   <color name="affirmative_green">#6FBE4A</color>
+  <color name="rejection_red">#D23228</color>
   <color name="action_orange">#E66000</color>
   <color name="action_orange_pressed">#DC5600</color>
   <color name="link_blue">#0096DD</color>
@@ -29,6 +30,11 @@
 
   <color name="url_bar_shadow_private">#7878A5</color>
 
+  <!-- Restricted profiles palette -->
+
+  <color name="restricted_profile_background_gold">#ffffcb51</color>
+  <color name="restricted_profile_background_green">#1aaa86</color>
+
   <!-- Non-palette colors -->
 
   <!-- Synced w/ toolbar_grey -->
@@ -41,13 +47,13 @@
   <color name="highlight_dark_focused">#1AFFFFFF</color>
 
   <!-- Synced w/ toolbar_grey_pressed -->
-  <color name="new_tablet_highlight_lwt">#AAD7D7DC</color>
+  <color name="tablet_highlight_lwt">#AAD7D7DC</color>
 
   <!-- Synced w/ tabs_tray_grey_pressed -->
-  <color name="new_tablet_highlight_dark_lwt">#AA45494E</color>
+  <color name="tablet_highlight_dark_lwt">#AA45494E</color>
 
   <!-- (bug 1077195) Focused state values are temporary. -->
-  <color name="new_tablet_highlight_focused">#C0C9D0</color>
+  <color name="tablet_highlight_focused">#C0C9D0</color>
 
   <!-- highlight on shaped button: 20% white over text_and_tabs_tray_grey -->
   <color name="highlight_shaped">#FF696D71</color>
@@ -115,6 +121,7 @@
 
   <color name="panel_image_item_background">#D1D9E1</color>
   <color name="panel_icon_item_title_background">#32000000</color>
+  <color name="panel_tab_text_normal">#FFBFBFBF</color>
 
   <!-- Swipe to refresh colors for dynamic panel -->
   <color name="swipe_refresh_orange">#FFFFC26C</color>
@@ -124,7 +131,7 @@
   <color name="remote_tabs_setup_button_background_hit">#D95300</color>
 
   <!-- Button toast colors. -->
-  <color name="toast_background">#DD363B40</color>
+  <color name="toast_background">#DD222222</color>
   <color name="toast_button_background">#00000000</color>
   <color name="toast_button_pressed">#DD2C3136</color>
   <color name="toast_button_text">#FFFFFFFF</color>
@@ -144,5 +151,10 @@
   <!-- Top sites thumbnail colors -->
   <color name="top_site_default">#FFECF0F3</color>
   <color name="top_site_border">#FFCFD9E1</color>
+
+  <color name="private_active_text">#FFFFFF</color>
+
+  <!-- This color is from a 2.3 Samsung device. -->
+  <color name="gingerbread_menu_background_color">#1b1b1b</color>
 
 </resources>

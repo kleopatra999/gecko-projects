@@ -38,6 +38,7 @@
 #include "ScrollbarStyles.h"
 #include "nsIMessageManager.h"
 #include "mozilla/RestyleLogging.h"
+#include "Units.h"
 
 class nsAString;
 class nsIPrintSettings;
@@ -70,8 +71,8 @@ class CounterStyleManager;
 namespace layers {
 class ContainerLayer;
 class LayerManager;
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 // supported values for cached bool types
 enum nsPresContext_CachedBoolPrefType {
@@ -110,7 +111,7 @@ public:
 
   void TakeFrom(nsInvalidateRequestList* aList)
   {
-    mRequests.MoveElementsFrom(aList->mRequests);
+    mRequests.AppendElements(mozilla::Move(aList->mRequests));
   }
   bool IsEmpty() { return mRequests.IsEmpty(); }
 
@@ -636,6 +637,12 @@ public:
   float DevPixelsToFloatCSSPixels(int32_t aPixels)
   { return AppUnitsToFloatCSSPixels(DevPixelsToAppUnits(aPixels)); }
 
+  mozilla::CSSToLayoutDeviceScale CSSToDevPixelScale() const
+  {
+    return mozilla::CSSToLayoutDeviceScale(
+        float(AppUnitsPerCSSPixel()) / float(AppUnitsPerDevPixel()));
+  }
+
   // If there is a remainder, it is rounded to nearest app units.
   nscoord GfxUnitsToAppUnits(gfxFloat aGfxUnits) const;
 
@@ -665,10 +672,17 @@ public:
   nscoord RoundAppUnitsToNearestDevPixels(nscoord aAppUnits) const
   { return DevPixelsToAppUnits(AppUnitsToDevPixels(aAppUnits)); }
 
-  void SetViewportScrollbarStylesOverride(const ScrollbarStyles& aScrollbarStyle)
-  {
-    mViewportStyleScrollbar = aScrollbarStyle;
-  }
+  /**
+   * This checks the root element and the HTML BODY, if any, for an "overflow"
+   * property that should be applied to the viewport. If one is found then we
+   * return the element that we took the overflow from (which should then be
+   * treated as "overflow: visible"), and we store the overflow style here.
+   * If the document is in fullscreen, and the fullscreen element is not the
+   * root, the scrollbar of viewport will be suppressed.
+   * @return if scroll was propagated from some content node, the content node
+   *         it was propagated from.
+   */
+  nsIContent* UpdateViewportScrollbarStylesOverride();
   ScrollbarStyles GetViewportScrollbarStylesOverride()
   {
     return mViewportStyleScrollbar;
@@ -854,7 +868,8 @@ public:
   void UpdateIsChrome();
 
   // Public API for native theme code to get style internals.
-  virtual bool HasAuthorSpecifiedRules(nsIFrame *aFrame, uint32_t ruleTypeMask) const;
+  virtual bool HasAuthorSpecifiedRules(const nsIFrame *aFrame,
+                                       uint32_t ruleTypeMask) const;
 
   // Is it OK to let the page specify colors and backgrounds?
   bool UseDocumentColors() const {
@@ -913,6 +928,11 @@ public:
     mUndeliveredInvalidateRequestsBeforeLastPaint.mRequests.Clear();
     mAllInvalidated = false;
   }
+
+  /**
+   * Returns the RestyleManager's restyle generation counter.
+   */
+  uint64_t GetRestyleGeneration() const;
 
   /**
    * Returns whether there are any pending restyles or reflows.
@@ -1193,6 +1213,11 @@ protected:
 
   bool IsChromeSlow() const;
 
+  // Creates a one-shot timer with the given aCallback & aDelay.
+  // Returns a refcounted pointer to the timer (or nullptr on failure).
+  already_AddRefed<nsITimer> CreateTimer(nsTimerCallbackFunc aCallback,
+                                         uint32_t aDelay);
+
   // IMPORTANT: The ownership implicit in the following member variables
   // has been explicitly checked.  If you add any members to this class,
   // please make the ownership explicit (pinkerton, scc).
@@ -1202,17 +1227,17 @@ protected:
   // for nulling this pointer before it is destroyed
   nsIPresShell* MOZ_NON_OWNING_REF mShell;         // [WEAK]
   nsCOMPtr<nsIDocument> mDocument;
-  nsRefPtr<nsDeviceContext> mDeviceContext; // [STRONG] could be weak, but
+  RefPtr<nsDeviceContext> mDeviceContext; // [STRONG] could be weak, but
                                             // better safe than sorry.
                                             // Cannot reintroduce cycles
                                             // since there is no dependency
                                             // from gfx back to layout.
-  nsRefPtr<mozilla::EventStateManager> mEventManager;
-  nsRefPtr<nsRefreshDriver> mRefreshDriver;
-  nsRefPtr<nsTransitionManager> mTransitionManager;
-  nsRefPtr<nsAnimationManager> mAnimationManager;
-  nsRefPtr<mozilla::RestyleManager> mRestyleManager;
-  nsRefPtr<mozilla::CounterStyleManager> mCounterStyleManager;
+  RefPtr<mozilla::EventStateManager> mEventManager;
+  RefPtr<nsRefreshDriver> mRefreshDriver;
+  RefPtr<nsTransitionManager> mTransitionManager;
+  RefPtr<nsAnimationManager> mAnimationManager;
+  RefPtr<mozilla::RestyleManager> mRestyleManager;
+  RefPtr<mozilla::CounterStyleManager> mCounterStyleManager;
   nsIAtom* MOZ_UNSAFE_REF("always a static atom") mMedium; // initialized by subclass ctors
   nsCOMPtr<nsIAtom> mMediaEmulated;
 
@@ -1372,6 +1397,9 @@ protected:
 
   // Have we added quirk.css to the style set?
   unsigned              mQuirkSheetAdded : 1;
+
+  // Is there a pref update to process once we have a container?
+  unsigned              mNeedsPrefUpdate : 1;
 
 #ifdef RESTYLE_LOGGING
   // Should we output debug information about restyling for this document?

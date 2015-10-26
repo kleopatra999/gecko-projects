@@ -152,8 +152,13 @@ class AssemblerBuffer
 
     bool ensureSpace(int size) {
         // Space can exist in the most recent Slice.
-        if (tail && tail->length() + size <= tail->Capacity())
+        if (tail && tail->length() + size <= tail->Capacity()) {
+            // Simulate allocation failure even when we don't need a new slice.
+            if (js::oom::ShouldFailWithOOM())
+                return fail_oom();
+
             return true;
+        }
 
         // Otherwise, a new Slice must be added.
         Slice* slice = newSlice(lifoAlloc_);
@@ -246,7 +251,7 @@ class AssemblerBuffer
             slicesSkipped++;
         }
 
-        MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("Invalid instruction cursor.");
+        MOZ_CRASH("Invalid instruction cursor.");
     }
 
     Inst* getInstBackwards(BufferOffset off, Slice* start, int startOffset, bool updateFinger = false) {
@@ -275,12 +280,21 @@ class AssemblerBuffer
             slicesSkipped++;
         }
 
-        MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("Invalid instruction cursor.");
+        MOZ_CRASH("Invalid instruction cursor.");
     }
 
   public:
+    Inst* getInstOrNull(BufferOffset off) {
+        if (!off.assigned())
+            return nullptr;
+        return getInst(off);
+    }
+
+    // Get a pointer to the instruction at offset |off| which must be within the
+    // bounds of the buffer. Use |getInstOrNull()| if |off| may be unassigned.
     Inst* getInst(BufferOffset off) {
         const int offset = off.getOffset();
+        MOZ_RELEASE_ASSERT(off.assigned() && offset >= 0 && (unsigned)offset < size());
 
         // Is the instruction in the last slice?
         if (offset >= int(bufferSize))
@@ -300,7 +314,8 @@ class AssemblerBuffer
         if (offset < int(bufferSize - offset))
             return getInstForwards(off, head, 0);
 
-        // The last slice was already checked above, so start at the second-to-last.
+        // The last slice was already checked above, so start at the
+        // second-to-last.
         Slice* prev = tail->getPrev();
         return getInstBackwards(off, prev, bufferSize - prev->length());
     }

@@ -41,6 +41,8 @@
 #include "nsIContentPolicy.h"
 #include "nsSVGEffects.h"
 
+#include "gfxPrefs.h"
+
 #include "mozAutoDocUpdate.h"
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/EventStates.h"
@@ -98,6 +100,9 @@ nsImageLoadingContent::nsImageLoadingContent()
   if (!nsContentUtils::GetImgLoaderForChannel(nullptr, nullptr)) {
     mLoadingEnabled = false;
   }
+
+  bool isInconsistent;
+  mMostRecentRequestChange = TimeStamp::ProcessCreation(isInconsistent);
 }
 
 void
@@ -186,6 +191,12 @@ nsImageLoadingContent::Notify(imgIRequest* aRequest,
   }
 
   if (aType == imgINotificationObserver::DECODE_COMPLETE) {
+    nsCOMPtr<imgIContainer> container;
+    aRequest->GetImage(getter_AddRefs(container));
+    if (container) {
+      container->PropagateUseCounters(GetOurOwnerDoc());
+    }
+
     UpdateImageState(true);
   }
 
@@ -578,7 +589,7 @@ nsImageLoadingContent::PolicyTypeForLoad(ImageLoadType aImageLoadType)
 
   MOZ_ASSERT(aImageLoadType == eImageLoadType_Normal,
              "Unknown ImageLoadType type in PolicyTypeForLoad");
-  return nsIContentPolicy::TYPE_IMAGE;
+  return nsIContentPolicy::TYPE_INTERNAL_IMAGE;
 }
 
 int32_t
@@ -661,7 +672,7 @@ nsImageLoadingContent::LoadImageWithChannel(nsIChannel* aChannel,
 
   // Do the load.
   nsCOMPtr<nsIStreamListener> listener;
-  nsRefPtr<imgRequestProxy>& req = PrepareNextRequest(eImageLoadType_Normal);
+  RefPtr<imgRequestProxy>& req = PrepareNextRequest(eImageLoadType_Normal);
   nsresult rv = loader->
     LoadImageWithChannel(aChannel, this, doc,
                          getter_AddRefs(listener),
@@ -932,30 +943,26 @@ nsImageLoadingContent::LoadImage(nsIURI* aNewURI,
   }
 
   // get document wide referrer policy
-  mozilla::net::ReferrerPolicy referrerPolicy = aDocument->GetReferrerPolicy();
-  bool referrerAttributeEnabled = Preferences::GetBool("network.http.enablePerElementReferrer", false);
   // if referrer attributes are enabled in preferences, load img referrer attribute
-  nsresult rv;
-  if (referrerAttributeEnabled) {
-    mozilla::net::ReferrerPolicy imgReferrerPolicy = GetImageReferrerPolicy();
-    // if the image does not provide a referrer attribute, ignore this
-    if (imgReferrerPolicy != mozilla::net::RP_Unset) {
-      referrerPolicy = imgReferrerPolicy;
-    }
+  // if the image does not provide a referrer attribute, ignore this
+  net::ReferrerPolicy referrerPolicy = aDocument->GetReferrerPolicy();
+  net::ReferrerPolicy imgReferrerPolicy = GetImageReferrerPolicy();
+  if (imgReferrerPolicy != net::RP_Unset) {
+    referrerPolicy = imgReferrerPolicy;
   }
 
   // Not blocked. Do the load.
-  nsRefPtr<imgRequestProxy>& req = PrepareNextRequest(aImageLoadType);
+  RefPtr<imgRequestProxy>& req = PrepareNextRequest(aImageLoadType);
   nsCOMPtr<nsIContent> content =
       do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-  rv = nsContentUtils::LoadImage(aNewURI, aDocument,
-                                 aDocument->NodePrincipal(),
-                                 aDocument->GetDocumentURI(),
-                                 referrerPolicy,
-                                 this, loadFlags,
-                                 content->LocalName(),
-                                 getter_AddRefs(req),
-                                 policyType);
+  nsresult rv = nsContentUtils::LoadImage(aNewURI, aDocument,
+                                          aDocument->NodePrincipal(),
+                                          aDocument->GetDocumentURI(),
+                                          referrerPolicy,
+                                          this, loadFlags,
+                                          content->LocalName(),
+                                          getter_AddRefs(req),
+                                          policyType);
 
   // Tell the document to forget about the image preload, if any, for
   // this URI, now that we might have another imgRequestProxy for it.
@@ -1137,7 +1144,7 @@ nsImageLoadingContent::UseAsPrimaryRequest(imgRequestProxy* aRequest,
   ClearCurrentRequest(NS_BINDING_ABORTED, ON_NONVISIBLE_REQUEST_DISCARD);
 
   // Clone the request we were given.
-  nsRefPtr<imgRequestProxy>& req = PrepareNextRequest(aImageLoadType);
+  RefPtr<imgRequestProxy>& req = PrepareNextRequest(aImageLoadType);
   nsresult rv = aRequest->Clone(this, getter_AddRefs(req));
   if (NS_SUCCEEDED(rv)) {
     TrackImage(req);
@@ -1225,16 +1232,32 @@ nsImageLoadingContent::FireEvent(const nsAString& aEventType)
 
   nsCOMPtr<nsINode> thisNode = do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
 
-  nsRefPtr<AsyncEventDispatcher> loadBlockingAsyncDispatcher =
+  RefPtr<AsyncEventDispatcher> loadBlockingAsyncDispatcher =
     new LoadBlockingAsyncEventDispatcher(thisNode, aEventType, false, false);
   loadBlockingAsyncDispatcher->PostDOMEvent();
 
   return NS_OK;
 }
 
-nsRefPtr<imgRequestProxy>&
+RefPtr<imgRequestProxy>&
 nsImageLoadingContent::PrepareNextRequest(ImageLoadType aImageLoadType)
 {
+  nsImageFrame* frame = do_QueryFrame(GetOurPrimaryFrame());
+  if (frame) {
+    // Detect JavaScript-based animations created by changing the |src|
+    // attribute on a timer.
+    TimeStamp now = TimeStamp::Now();
+    TimeDuration threshold =
+      TimeDuration::FromMilliseconds(
+        gfxPrefs::ImageInferSrcAnimationThresholdMS());
+
+    // If the length of time between request changes is less than the threshold,
+    // then force sync decoding to eliminate flicker from the animation.
+    frame->SetForceSyncDecoding(now - mMostRecentRequestChange < threshold);
+
+    mMostRecentRequestChange = now;
+  }
+
   // If we don't have a usable current request, get rid of any half-baked
   // request that might be sitting there and make this one current.
   if (!HaveSize(mCurrentRequest))
@@ -1274,7 +1297,7 @@ nsImageLoadingContent::SetBlockedRequest(nsIURI* aURI, int16_t aContentDecision)
   }
 }
 
-nsRefPtr<imgRequestProxy>&
+RefPtr<imgRequestProxy>&
 nsImageLoadingContent::PrepareCurrentRequest(ImageLoadType aImageLoadType)
 {
   // Blocked images go through SetBlockedRequest, which is a separate path. For
@@ -1297,7 +1320,7 @@ nsImageLoadingContent::PrepareCurrentRequest(ImageLoadType aImageLoadType)
   return mCurrentRequest;
 }
 
-nsRefPtr<imgRequestProxy>&
+RefPtr<imgRequestProxy>&
 nsImageLoadingContent::PreparePendingRequest(ImageLoadType aImageLoadType)
 {
   // Get rid of anything that was there previously.
@@ -1340,7 +1363,7 @@ private:
   nsCOMPtr<imgIRequest> mRequest;
 };
 
-} // anonymous namespace
+} // namespace
 
 void
 nsImageLoadingContent::MakePendingRequestCurrent()
@@ -1491,6 +1514,15 @@ nsImageLoadingContent::TrackImage(imgIRequest* aImage)
   nsIDocument* doc = GetOurCurrentDoc();
   if (doc && (mFrameCreateCalled || GetOurPrimaryFrame()) &&
       (mVisibleCount > 0)) {
+
+    if (mVisibleCount == 1) {
+      // Since we're becoming visible, request a decode.
+      nsImageFrame* f = do_QueryFrame(GetOurPrimaryFrame());
+      if (f) {
+        f->MaybeDecodeForPredictedSize();
+      }
+    }
+
     if (aImage == mCurrentRequest && !(mCurrentRequestFlags & REQUEST_IS_TRACKED)) {
       mCurrentRequestFlags |= REQUEST_IS_TRACKED;
       doc->AddImage(mCurrentRequest);

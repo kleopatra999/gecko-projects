@@ -21,8 +21,8 @@ class nsPIDOMWindow;
 namespace mozilla {
 namespace dom {
 class File;
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 /**
   This class creates a proxy file picker to be used in content processes.
@@ -65,7 +65,7 @@ private:
     ~nsFilePickerProxy();
     void InitNative(nsIWidget*, const nsAString&) override;
 
-    nsTArray<nsRefPtr<mozilla::dom::File>> mDomfiles;
+    nsTArray<RefPtr<mozilla::dom::File>> mDomfiles;
     nsCOMPtr<nsIFilePickerShownCallback> mCallback;
 
     int16_t   mSelectedType;

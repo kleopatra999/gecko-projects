@@ -274,8 +274,13 @@ class ScriptMixin(PlatformMixin):
             if file_attr & win32file.FILE_ATTRIBUTE_DIRECTORY:
                 self._rmtree_windows(full_name)
             else:
-                win32file.SetFileAttributesW('\\\\?\\' + full_name, win32file.FILE_ATTRIBUTE_NORMAL)
-                win32file.DeleteFile('\\\\?\\' + full_name)
+                try:
+                    win32file.SetFileAttributesW('\\\\?\\' + full_name, win32file.FILE_ATTRIBUTE_NORMAL)
+                    win32file.DeleteFile('\\\\?\\' + full_name)
+                except:
+                    # DeleteFile fails on long paths, del /f /q works just fine
+                    self.run_command('del /F /Q "%s"' % full_name)
+
         win32file.RemoveDirectory('\\\\?\\' + path)
 
     def get_filename_from_url(self, url):
@@ -390,12 +395,14 @@ class ScriptMixin(PlatformMixin):
             self.warning("Socket error when accessing %s: %s" % (url, str(e)))
             raise
 
-    def _retry_download_file(self, url, file_name, error_level, retry_config=None):
-        """ Helper method to retry _download_file().
+    def _retry_download(self, url, error_level, file_name=None, retry_config=None):
+        """ Helper method to retry download methods
         Split out so we can alter the retry logic in mozharness.mozilla.testing.gaia_test.
 
         This method calls `self.retry` on `self._download_file` using the passed
-        parameters.
+        parameters if a file_name is specified. If no file is specified, we will
+        instead call `self._urlopen`, which grabs the contents of a url but does
+        not create a file on disk.
 
         Args:
             url (str): URL path where the file is located.
@@ -421,11 +428,24 @@ class ScriptMixin(PlatformMixin):
         if retry_config:
             retry_args.update(retry_config)
 
+        download_func = self._urlopen
+        kwargs = {"url": url}
+        if file_name:
+            download_func = self._download_file
+            kwargs = {"url": url, "file_name": file_name}
+
         return self.retry(
-            self._download_file,
-            args=(url, file_name),
+            download_func,
+            kwargs=kwargs,
             **retry_args
         )
+
+    def load_json_url(self, url, error_level=None, *args, **kwargs):
+        """ Returns a json object from a url (it retries). """
+        contents = self._retry_download(
+            url=url, error_level=error_level, *args, **kwargs
+        )
+        return json.loads(contents.read())
 
     # http://www.techniqal.com/blog/2008/07/31/python-file-read-write-with-urllib2/
     # TODO thinking about creating a transfer object.
@@ -467,7 +487,12 @@ class ScriptMixin(PlatformMixin):
             if create_parent_dir:
                 self.mkdir_p(parent_dir, error_level=error_level)
         self.info("Downloading %s to %s" % (url, file_name))
-        status = self._retry_download_file(url, file_name, error_level, retry_config=retry_config)
+        status = self._retry_download(
+            url=url,
+            error_level=error_level,
+            file_name=file_name,
+            retry_config=retry_config
+        )
         if status == file_name:
             self.info("Downloaded %d bytes." % os.path.getsize(file_name))
         return status
@@ -856,7 +881,8 @@ class ScriptMixin(PlatformMixin):
 
     def query_env(self, partial_env=None, replace_dict=None,
                   purge_env=(),
-                  set_self_env=None, log_level=DEBUG):
+                  set_self_env=None, log_level=DEBUG,
+                  avoid_host_env=False):
         """ Environment query/generation method.
         The default, self.query_env(), will look for self.config['env']
         and replace any special strings in there ( %(PATH)s ).
@@ -878,6 +904,9 @@ class ScriptMixin(PlatformMixin):
                 Defaults to True.
             log_level (str, optional): log level name to use on normal operation.
                 Defaults to `DEBUG`.
+            avoid_host_env (boolean, optional): if set to True, we will not use
+                any environment variables set on the host except PATH.
+                Defaults to False.
 
         Returns:
             dict: environment variables names with their values.
@@ -890,7 +919,9 @@ class ScriptMixin(PlatformMixin):
                 partial_env = {}
             if set_self_env is None:
                 set_self_env = True
-        env = os.environ.copy()
+
+        env = {'PATH': os.environ['PATH']} if avoid_host_env else os.environ.copy()
+
         default_replace_dict = self.query_abs_dirs()
         default_replace_dict['PATH'] = os.environ['PATH']
         if not replace_dict:

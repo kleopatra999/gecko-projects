@@ -19,7 +19,7 @@ struct RegistrationOptions;
 
 namespace workers {
 class ServiceWorker;
-}
+} // namespace workers
 
 // Lightweight serviceWorker APIs collection.
 class ServiceWorkerContainer final : public DOMEventTargetHelper
@@ -77,9 +77,9 @@ private:
 
   // This only changes when a worker hijacks everything in its scope by calling
   // claim.
-  nsRefPtr<workers::ServiceWorker> mControllerWorker;
+  RefPtr<workers::ServiceWorker> mControllerWorker;
 
-  nsRefPtr<Promise> mReadyPromise;
+  RefPtr<Promise> mReadyPromise;
 };
 
 } // namespace dom

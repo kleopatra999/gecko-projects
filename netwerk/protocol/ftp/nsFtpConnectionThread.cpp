@@ -19,7 +19,9 @@
 #include "nsCRT.h"
 #include "nsEscape.h"
 #include "nsMimeTypes.h"
+#include "nsNetCID.h"
 #include "nsNetUtil.h"
+#include "nsIAsyncStreamCopier.h"
 #include "nsThreadUtils.h"
 #include "nsStreamUtils.h"
 #include "nsIURL.h"
@@ -725,7 +727,7 @@ nsFtpState::S_user() {
             if (!prompter)
                 return NS_ERROR_NOT_INITIALIZED;
 
-            nsRefPtr<nsAuthInformationHolder> info =
+            RefPtr<nsAuthInformationHolder> info =
                 new nsAuthInformationHolder(nsIAuthInformation::AUTH_HOST,
                                             EmptyString(),
                                             EmptyCString());
@@ -814,7 +816,7 @@ nsFtpState::S_pass() {
             if (!prompter)
                 return NS_ERROR_NOT_INITIALIZED;
 
-            nsRefPtr<nsAuthInformationHolder> info =
+            RefPtr<nsAuthInformationHolder> info =
                 new nsAuthInformationHolder(nsIAuthInformation::AUTH_HOST |
                                             nsIAuthInformation::ONLY_PASSWORD,
                                             EmptyString(),
@@ -1615,10 +1617,10 @@ nsFtpState::Init(nsFtpChannel *channel)
     mCountRecv = 0;
 
 #ifdef MOZ_WIDGET_GONK
-    nsCOMPtr<nsINetworkInterface> activeNetwork;
-    GetActiveNetworkInterface(activeNetwork);
-    mActiveNetwork =
-        new nsMainThreadPtrHolder<nsINetworkInterface>(activeNetwork);
+    nsCOMPtr<nsINetworkInfo> activeNetworkInfo;
+    GetActiveNetworkInfo(activeNetworkInfo);
+    mActiveNetworkInfo =
+        new nsMainThreadPtrHolder<nsINetworkInfo>(activeNetworkInfo);
 #endif
 
     mKeepRunning = true;
@@ -2103,7 +2105,7 @@ nsFtpState::SaveNetworkStats(bool enforce)
     NS_GetAppInfo(mChannel, &appId, &isInBrowser);
 
     // Check if active network and appid are valid.
-    if (!mActiveNetwork || appId == NECKO_NO_APP_ID) {
+    if (!mActiveNetworkInfo || appId == NECKO_NO_APP_ID) {
         return NS_OK;
     }
 
@@ -2121,8 +2123,8 @@ nsFtpState::SaveNetworkStats(bool enforce)
 
     // Create the event to save the network statistics.
     // the event is then dispathed to the main thread.
-    nsRefPtr<nsRunnable> event =
-        new SaveNetworkStatsEvent(appId, isInBrowser, mActiveNetwork,
+    RefPtr<nsRunnable> event =
+        new SaveNetworkStatsEvent(appId, isInBrowser, mActiveNetworkInfo,
                                   mCountRecv, 0, false);
     NS_DispatchToMainThread(event);
 

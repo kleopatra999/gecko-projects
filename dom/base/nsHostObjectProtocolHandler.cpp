@@ -5,17 +5,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsHostObjectProtocolHandler.h"
-#include "nsHostObjectURI.h"
-#include "nsError.h"
-#include "nsClassHashtable.h"
-#include "nsNetUtil.h"
-#include "nsIPrincipal.h"
+
 #include "DOMMediaStream.h"
-#include "mozilla/dom/MediaSource.h"
-#include "nsIMemoryReporter.h"
 #include "mozilla/dom/File.h"
-#include "mozilla/Preferences.h"
+#include "mozilla/dom/MediaSource.h"
 #include "mozilla/LoadInfo.h"
+#include "mozilla/Preferences.h"
+#include "nsClassHashtable.h"
+#include "nsError.h"
+#include "nsHostObjectURI.h"
+#include "nsIMemoryReporter.h"
+#include "nsIPrincipal.h"
+#include "nsIUUIDGenerator.h"
+#include "nsNetUtil.h"
 
 using mozilla::dom::BlobImpl;
 using mozilla::ErrorResult;
@@ -206,7 +208,7 @@ class BlobURLsReporter final : public nsIMemoryReporter
   {
     EnumArg* envp = static_cast<EnumArg*>(aUserArg);
     nsCOMPtr<nsIDOMBlob> tmp = do_QueryInterface(aInfo->mObject);
-    nsRefPtr<mozilla::dom::Blob> blob = static_cast<mozilla::dom::Blob*>(tmp.get());
+    RefPtr<mozilla::dom::Blob> blob = static_cast<mozilla::dom::Blob*>(tmp.get());
 
     if (blob) {
       NS_NAMED_LITERAL_CSTRING
@@ -309,7 +311,7 @@ class BlobURLsReporter final : public nsIMemoryReporter
 
 NS_IMPL_ISUPPORTS(BlobURLsReporter, nsIMemoryReporter)
 
-}
+} // namespace mozilla
 
 void
 nsHostObjectProtocolHandler::Init(void)
@@ -417,16 +419,26 @@ GetDataInfo(const nsACString& aUri)
   }
 
   DataInfo* res;
-  nsCString uriIgnoringRef;
-  int32_t hashPos = aUri.FindChar('#');
-  if (hashPos < 0) {
-    uriIgnoringRef = aUri;
+
+  // Let's remove any fragment and query from this URI.
+  int32_t hasFragmentPos = aUri.FindChar('#');
+  int32_t hasQueryPos = aUri.FindChar('?');
+
+  int32_t pos = -1;
+  if (hasFragmentPos >= 0 && hasQueryPos >= 0) {
+    pos = std::min(hasFragmentPos, hasQueryPos);
+  } else if (hasFragmentPos >= 0) {
+    pos = hasFragmentPos;
+  } else {
+    pos = hasQueryPos;
   }
-  else {
-    uriIgnoringRef = StringHead(aUri, hashPos);
+
+  if (pos < 0) {
+    gDataTable->Get(aUri, &res);
+  } else {
+    gDataTable->Get(StringHead(aUri, pos), &res);
   }
-  gDataTable->Get(uriIgnoringRef, &res);
-  
+
   return res;
 }
 
@@ -510,7 +522,7 @@ nsHostObjectProtocolHandler::NewURI(const nsACString& aSpec,
 
   DataInfo* info = GetDataInfo(aSpec);
 
-  nsRefPtr<nsHostObjectURI> uri =
+  RefPtr<nsHostObjectURI> uri =
     new nsHostObjectURI(info ? info->mPrincipal.get() : nullptr);
 
   rv = uri->SetSpec(aSpec);
@@ -559,11 +571,14 @@ nsHostObjectProtocolHandler::NewChannel2(nsIURI* uri,
     return rv.StealNSResult();
   }
 
+  nsAutoString contentType;
+  blob->GetType(contentType);
+
   nsCOMPtr<nsIChannel> channel;
   rv = NS_NewInputStreamChannelInternal(getter_AddRefs(channel),
                                         uri,
                                         stream,
-                                        EmptyCString(), // aContentType
+                                        NS_ConvertUTF16toUTF8(contentType),
                                         EmptyCString(), // aContentCharset
                                         aLoadInfo);
   if (NS_WARN_IF(rv.Failed())) {
@@ -669,7 +684,7 @@ NS_GetBlobForBlobURISpec(const nsACString& aSpec, BlobImpl** aBlob)
 nsresult
 NS_GetStreamForBlobURI(nsIURI* aURI, nsIInputStream** aStream)
 {
-  nsRefPtr<BlobImpl> blobImpl;
+  RefPtr<BlobImpl> blobImpl;
   ErrorResult rv;
   rv = NS_GetBlobForBlobURI(aURI, getter_AddRefs(blobImpl));
   if (NS_WARN_IF(rv.Failed())) {
@@ -704,7 +719,7 @@ nsFontTableProtocolHandler::NewURI(const nsACString& aSpec,
                                    nsIURI *aBaseURI,
                                    nsIURI **aResult)
 {
-  nsRefPtr<nsIURI> uri;
+  RefPtr<nsIURI> uri;
 
   // Either you got here via a ref or a fonttable: uri
   if (aSpec.Length() && aSpec.CharAt(0) == '#') {

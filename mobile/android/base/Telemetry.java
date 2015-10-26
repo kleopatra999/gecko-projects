@@ -5,7 +5,7 @@
 
 package org.mozilla.gecko;
 
-import org.mozilla.gecko.mozglue.RobocopTarget;
+import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.TelemetryContract.Event;
 import org.mozilla.gecko.TelemetryContract.Method;
 import org.mozilla.gecko.TelemetryContract.Reason;
@@ -40,6 +40,12 @@ public class Telemetry {
     // toolkit/components/telemetry/Histograms.json
     public static void addToHistogram(String name, int value) {
         GeckoEvent event = GeckoEvent.createTelemetryHistogramAddEvent(name, value);
+        GeckoAppShell.sendEventToGecko(event);
+    }
+
+    public static void addToKeyedHistogram(String histogram, String keyName, int value) {
+        GeckoEvent event = GeckoEvent.createTelemetryKeyedHistogramAddEvent(histogram,
+                keyName, value);
         GeckoAppShell.sendEventToGecko(event);
     }
 

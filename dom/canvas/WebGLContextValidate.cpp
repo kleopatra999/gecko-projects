@@ -8,17 +8,20 @@
 #include <algorithm>
 #include "angle/ShaderLang.h"
 #include "CanvasUtils.h"
+#include "gfxPrefs.h"
 #include "GLContext.h"
 #include "jsfriendapi.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "nsIObserverService.h"
+#include "WebGLActiveInfo.h"
 #include "WebGLBuffer.h"
 #include "WebGLContextUtils.h"
 #include "WebGLFramebuffer.h"
 #include "WebGLProgram.h"
 #include "WebGLRenderbuffer.h"
+#include "WebGLSampler.h"
 #include "WebGLShader.h"
 #include "WebGLTexture.h"
 #include "WebGLUniformLocation.h"
@@ -399,15 +402,8 @@ WebGLContext::ValidateFramebufferAttachment(const WebGLFramebuffer* fb, GLenum a
         return true;
     }
 
-    GLenum colorAttachCount = 1;
-    if (IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers))
-        colorAttachCount = mGLMaxColorAttachments;
-
-    if (attachment >= LOCAL_GL_COLOR_ATTACHMENT0 &&
-        attachment < GLenum(LOCAL_GL_COLOR_ATTACHMENT0 + colorAttachCount))
-    {
+    if (attachment >= LOCAL_GL_COLOR_ATTACHMENT0 && attachment <= LastColorAttachment())
         return true;
-    }
 
     ErrorInvalidEnum("%s: attachment: invalid enum value 0x%x.", funcName,
                      attachment);
@@ -609,40 +605,6 @@ WebGLContext::ValidateTexImageFormat(GLenum format, WebGLTexImageFunc func,
     }
 
     ErrorInvalidEnumWithName(this, "invalid format", format, func, dims);
-    return false;
-}
-
-/**
- * Check if the given texture target is valid for TexImage.
- */
-bool
-WebGLContext::ValidateTexImageTarget(GLenum target, WebGLTexImageFunc func,
-                                     WebGLTexDimensions dims)
-{
-    switch (dims) {
-    case WebGLTexDimensions::Tex2D:
-        if (target == LOCAL_GL_TEXTURE_2D ||
-            IsTexImageCubemapTarget(target))
-        {
-            return true;
-        }
-
-        ErrorInvalidEnumWithName(this, "invalid target", target, func, dims);
-        return false;
-
-    case WebGLTexDimensions::Tex3D:
-        if (target == LOCAL_GL_TEXTURE_3D)
-        {
-            return true;
-        }
-
-        ErrorInvalidEnumWithName(this, "invalid target", target, func, dims);
-        return false;
-
-    default:
-        MOZ_ASSERT(false, "ValidateTexImageTarget: Invalid dims");
-    }
-
     return false;
 }
 
@@ -1692,6 +1654,11 @@ WebGLContext::InitAndValidateGL()
     if (!gl)
         return false;
 
+    // Unconditionally create a new format usage authority. This is
+    // important when restoring contexts and extensions need to add
+    // formats back into the authority.
+    mFormatUsage = CreateFormatUsage();
+
     GLenum error = gl->fGetError();
     if (error != LOCAL_GL_NO_ERROR) {
         GenerateWarning("GL error 0x%x occurred during OpenGL context"
@@ -1699,11 +1666,11 @@ WebGLContext::InitAndValidateGL()
         return false;
     }
 
-    mMinCapability = Preferences::GetBool("webgl.min_capability_mode", false);
-    mDisableExtensions = Preferences::GetBool("webgl.disable-extensions", false);
-    mLoseContextOnMemoryPressure = Preferences::GetBool("webgl.lose-context-on-memory-pressure", false);
-    mCanLoseContextInForeground = Preferences::GetBool("webgl.can-lose-context-in-foreground", true);
-    mRestoreWhenVisible = Preferences::GetBool("webgl.restore-context-when-visible", true);
+    mMinCapability = gfxPrefs::WebGLMinCapabilityMode();
+    mDisableExtensions = gfxPrefs::WebGLDisableExtensions();
+    mLoseContextOnMemoryPressure = gfxPrefs::WebGLLoseContextOnMemoryPressure();
+    mCanLoseContextInForeground = gfxPrefs::WebGLCanLoseContextInForeground();
+    mRestoreWhenVisible = gfxPrefs::WebGLRestoreWhenVisible();
 
     if (MinCapabilityMode())
         mDisableFragHighP = true;
@@ -1883,9 +1850,6 @@ WebGLContext::InitAndValidateGL()
         }
     }
 
-    // Always 1 for GLES2
-    mMaxFramebufferColorAttachments = 1;
-
     if (gl->IsCompatibilityProfile()) {
         // gl_PointSize is always available in ES2 GLSL, but has to be
         // specifically enabled on desktop GLSL.
@@ -1915,10 +1879,7 @@ WebGLContext::InitAndValidateGL()
 #endif
 
     // Check the shader validator pref
-    NS_ENSURE_TRUE(Preferences::GetRootBranch(), false);
-
-    mBypassShaderValidation = Preferences::GetBool("webgl.bypass-shader-validation",
-                                                   mBypassShaderValidation);
+    mBypassShaderValidation = gfxPrefs::WebGLBypassShaderValidator();
 
     // initialize shader translator
     if (!ShInitialize()) {
@@ -1949,7 +1910,9 @@ WebGLContext::InitAndValidateGL()
     }
 
     // Default value for all disabled vertex attributes is [0, 0, 0, 1]
+    mVertexAttribType = MakeUnique<GLenum[]>(mGLMaxVertexAttribs);
     for (int32_t index = 0; index < mGLMaxVertexAttribs; ++index) {
+        mVertexAttribType[index] = LOCAL_GL_FLOAT;
         VertexAttrib4f(index, 0, 0, 0, 1);
     }
 
@@ -1971,9 +1934,6 @@ WebGLContext::InitAndValidateGL()
         mDefaultVertexArray->GenVertexArray();
         mDefaultVertexArray->BindVertexArray();
     }
-
-    if (mLoseContextOnMemoryPressure)
-        mContextObserver->RegisterMemoryPressureEvent();
 
     return true;
 }

@@ -129,6 +129,11 @@ DuplicateString(ExclusiveContext* cx, const char* s);
 extern mozilla::UniquePtr<char16_t[], JS::FreePolicy>
 DuplicateString(ExclusiveContext* cx, const char16_t* s);
 
+// This variant does not report OOMs, you must arrange for OOMs to be reported
+// yourself.
+extern mozilla::UniquePtr<char16_t[], JS::FreePolicy>
+DuplicateString(const char16_t* s);
+
 /*
  * Convert a non-string value to a string, returning null after reporting an
  * error, otherwise returning a new string reference.
@@ -218,6 +223,10 @@ StringHasPattern(JSLinearString* text, const char16_t* pat, uint32_t patlen);
 
 extern int
 StringFindPattern(JSLinearString* text, JSLinearString* pat, size_t start);
+
+/* Return true if the string contains a pattern at |start|. */
+extern bool
+HasSubstringAt(JSLinearString* text, JSLinearString* pat, size_t start);
 
 template <typename CharT>
 extern bool
@@ -337,9 +346,9 @@ extern bool
 str_charCodeAt(JSContext* cx, unsigned argc, Value* vp);
 /*
  * Convert one UCS-4 char and write it into a UTF-8 buffer, which must be at
- * least 6 bytes long.  Return the number of UTF-8 bytes of data written.
+ * least 4 bytes long.  Return the number of UTF-8 bytes of data written.
  */
-extern int
+extern uint32_t
 OneUcs4ToUtf8Char(uint8_t* utf8Buffer, uint32_t ucs4Char);
 
 extern size_t
@@ -428,13 +437,9 @@ str_split(JSContext* cx, unsigned argc, Value* vp);
 JSObject*
 str_split_string(JSContext* cx, HandleObjectGroup group, HandleString str, HandleString sep);
 
-bool
-str_replace_regexp_raw(JSContext* cx, HandleString string, HandleObject regexp,
-                       HandleString replacement, MutableHandleValue rval);
-
-bool
+JSString*
 str_replace_string_raw(JSContext* cx, HandleString string, HandleString pattern,
-                       HandleString replacement, MutableHandleValue rval);
+                       HandleString replacement);
 
 extern bool
 StringConstructor(JSContext* cx, unsigned argc, Value* vp);

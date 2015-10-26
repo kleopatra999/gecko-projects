@@ -1,0 +1,35 @@
+$inherits:
+  from: 'tasks/builds/b2g_phone_base.yml'
+  variables:
+    build_name: 'nexus-4-kk-user'
+    build_type: 'opt'
+task:
+  workerType: flame-kk
+  scopes:
+    - 'docker-worker:cache:build-nexus-4-kk-user'
+    - 'docker-worker:cache:build-nexus-4-kk-user-objdir-gecko-{{project}}'
+    - 'docker-worker:relengapi-proxy:tooltool.download.internal'
+  metadata:
+    name: '[TC] B2G Nexus 4 KK User'
+  payload:
+    cache:
+      build-nexus-4-kk-user: /home/worker/workspace
+      build-nexus-4-kk-user-objdir-gecko-{{project}}: /home/worker/objdir-gecko
+    env:
+      TARGET: 'nexus-4-kk'
+      DEBUG: 0
+      TOOLTOOL_MANIFEST: 'b2g/config/nexus-4-kk/releng-mako.tt'
+    command:
+      - phone
+  extra:
+    treeherderEnv:
+      - production
+      - staging
+    treeherder:
+      symbol: B
+      groupSymbol: Nexus 4 KK
+      groupName: Nexus 4 Kitkat Device Image
+      machine:
+        platform: b2g-device-image
+    locations:
+      img: 'private/build/nexus-4-kk.zip'

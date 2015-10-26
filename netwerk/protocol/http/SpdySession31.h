@@ -261,7 +261,7 @@ private:
   // This is intended to be nsHttpConnectionMgr:nsConnectionHandle taken
   // from the first transaction on this session. That object contains the
   // pointer to the real network-level nsHttpConnection object.
-  nsRefPtr<nsAHttpConnection> mConnection;
+  RefPtr<nsAHttpConnection> mConnection;
 
   // The underlying socket transport object is needed to propogate some events
   nsISocketTransport         *mSocketTransport;
@@ -425,6 +425,7 @@ private:
   nsDataHashtable<nsCStringHashKey, uint32_t> mTunnelHash;
 };
 
-}} // namespace mozilla::net
+} // namespace net
+} // namespace mozilla
 
 #endif // mozilla_net_SpdySession31_h

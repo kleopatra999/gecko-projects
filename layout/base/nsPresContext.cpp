@@ -56,8 +56,9 @@
 #include "mozilla/dom/TabParent.h"
 #include "nsRefreshDriver.h"
 #include "Layers.h"
+#include "LayerUserData.h"
 #include "ClientLayerManager.h"
-#include "nsIDOMEvent.h"
+#include "mozilla/dom/NotifyPaintEvent.h"
 #include "gfxPrefs.h"
 #include "nsIDOMChromeWindow.h"
 #include "nsFrameLoader.h"
@@ -119,11 +120,11 @@ public:
   }
 
 private:
-  nsRefPtr<nsPresContext> mPresContext;
+  RefPtr<nsPresContext> mPresContext;
   nsCString mCharSet;
 };
 
-} // anonymous namespace
+} // namespace
 
 nscolor
 nsPresContext::MakeColorPref(const nsString& aColor)
@@ -162,7 +163,7 @@ nsPresContext::IsDOMPaintEventPending()
 void
 nsPresContext::PrefChangedCallback(const char* aPrefName, void* instance_data)
 {
-  nsRefPtr<nsPresContext>  presContext =
+  RefPtr<nsPresContext>  presContext =
     static_cast<nsPresContext*>(instance_data);
 
   NS_ASSERTION(nullptr != presContext, "bad instance data");
@@ -360,6 +361,7 @@ nsPresContext::LastRelease()
 NS_IMPL_CYCLE_COLLECTION_CLASS(nsPresContext)
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsPresContext)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAnimationManager);
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocument);
   // NS_IMPL_CYCLE_COLLECTION_TRAVERSE_RAWPTR(mDeviceContext); // not xpcom
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mEventManager);
@@ -372,6 +374,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsPresContext)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsPresContext)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAnimationManager);
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument);
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDeviceContext); // worth bothering?
   // NS_RELEASE(tmp->mLanguage); // an atom
@@ -696,7 +699,7 @@ nsPresContext::GetDocumentColorPreferences()
   // 0 = default: always, except in high contrast mode
   // 1 = always
   // 2 = never
-  if (sDocumentColorsSetting == 1) {
+  if (sDocumentColorsSetting == 1 || mDocument->IsBeingUsedAsImage()) {
     mUseDocumentColors = true;
   } else if (sDocumentColorsSetting == 2) {
     mUseDocumentColors = isChromeDocShell || mIsChromeOriginImage;
@@ -871,7 +874,7 @@ nsPresContext::PreferenceChanged(const char* aPrefName)
       // Re-fetch the view manager's window dimensions in case there's a deferred
       // resize which hasn't affected our mVisibleArea yet
       nscoord oldWidthAppUnits, oldHeightAppUnits;
-      nsRefPtr<nsViewManager> vm = shell->GetViewManager();
+      RefPtr<nsViewManager> vm = shell->GetViewManager();
       if (!vm) {
         return;
       }
@@ -926,16 +929,16 @@ nsPresContext::PreferenceChanged(const char* aPrefName)
   // we use a zero-delay timer to coalesce multiple pref updates
   if (!mPrefChangedTimer)
   {
-    mPrefChangedTimer = do_CreateInstance("@mozilla.org/timer;1");
-    if (!mPrefChangedTimer)
-      return;
     // We will end up calling InvalidatePreferenceSheets one from each pres
     // context, but all it's doing is clearing its cached sheet pointers,
     // so it won't be wastefully recreating the sheet multiple times.
     // The first pres context that has its mPrefChangedTimer called will
     // be the one to cause the reconstruction of the pref style sheet.
     nsLayoutStylesheetCache::InvalidatePreferenceSheets();
-    mPrefChangedTimer->InitWithFuncCallback(nsPresContext::PrefChangedUpdateTimerCallback, (void*)this, 0, nsITimer::TYPE_ONE_SHOT);
+    mPrefChangedTimer = CreateTimer(PrefChangedUpdateTimerCallback, 0);
+    if (!mPrefChangedTimer) {
+      return;
+    }
   }
   if (prefName.EqualsLiteral("nglayout.debug.paint_flashing") ||
       prefName.EqualsLiteral("nglayout.debug.paint_flashing_chrome")) {
@@ -948,6 +951,12 @@ void
 nsPresContext::UpdateAfterPreferencesChanged()
 {
   mPrefChangedTimer = nullptr;
+
+  if (!mContainer) {
+    // Delay updating until there is a container
+    mNeedsPrefUpdate = true;
+    return;
+  }
 
   nsCOMPtr<nsIDocShellTreeItem> docShell(mContainer);
   if (docShell && nsIDocShellTreeItem::typeChrome == docShell->ItemType()) {
@@ -1234,7 +1243,7 @@ nsPresContext::Observe(nsISupports* aSubject,
                         const char16_t* aData)
 {
   if (!nsCRT::strcmp(aTopic, "charset")) {
-    nsRefPtr<CharSetChangingRunnable> runnable =
+    RefPtr<CharSetChangingRunnable> runnable =
       new CharSetChangingRunnable(this, NS_LossyConvertUTF16toASCII(aData));
     return NS_DispatchToCurrentThread(runnable);
   }
@@ -1373,11 +1382,11 @@ nsPresContext::CompatibilityModeChanged()
   if (needsQuirkSheet) {
     // quirk.css needs to come after html.css; we just keep it at the end.
     DebugOnly<nsresult> rv =
-      styleSet->AppendStyleSheet(nsStyleSet::eAgentSheet, sheet);
+      styleSet->AppendStyleSheet(SheetType::Agent, sheet);
     NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "failed to insert quirk.css");
   } else {
     DebugOnly<nsresult> rv =
-      styleSet->RemoveStyleSheet(nsStyleSet::eAgentSheet, sheet);
+      styleSet->RemoveStyleSheet(SheetType::Agent, sheet);
     NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "failed to remove quirk.css");
   }
 
@@ -1566,11 +1575,124 @@ nsPresContext::ScreenSizeInchesForFontInflation(bool* aChanged)
   return deviceSizeInches;
 }
 
+static bool
+CheckOverflow(const nsStyleDisplay* aDisplay, ScrollbarStyles* aStyles)
+{
+  if (aDisplay->mOverflowX == NS_STYLE_OVERFLOW_VISIBLE &&
+      aDisplay->mScrollBehavior == NS_STYLE_SCROLL_BEHAVIOR_AUTO &&
+      aDisplay->mScrollSnapTypeX == NS_STYLE_SCROLL_SNAP_TYPE_NONE &&
+      aDisplay->mScrollSnapTypeY == NS_STYLE_SCROLL_SNAP_TYPE_NONE &&
+      aDisplay->mScrollSnapPointsX == nsStyleCoord(eStyleUnit_None) &&
+      aDisplay->mScrollSnapPointsY == nsStyleCoord(eStyleUnit_None) &&
+      !aDisplay->mScrollSnapDestination.mXPosition.mHasPercent &&
+      !aDisplay->mScrollSnapDestination.mYPosition.mHasPercent &&
+      aDisplay->mScrollSnapDestination.mXPosition.mLength == 0 &&
+      aDisplay->mScrollSnapDestination.mYPosition.mLength == 0) {
+    return false;
+  }
+
+  if (aDisplay->mOverflowX == NS_STYLE_OVERFLOW_CLIP) {
+    *aStyles = ScrollbarStyles(NS_STYLE_OVERFLOW_HIDDEN,
+                               NS_STYLE_OVERFLOW_HIDDEN, aDisplay);
+  } else {
+    *aStyles = ScrollbarStyles(aDisplay);
+  }
+  return true;
+}
+
+static nsIContent*
+GetPropagatedScrollbarStylesForViewport(nsPresContext* aPresContext,
+                                        ScrollbarStyles *aStyles)
+{
+  // Set default
+  *aStyles = ScrollbarStyles(NS_STYLE_OVERFLOW_AUTO, NS_STYLE_OVERFLOW_AUTO);
+
+  // We never mess with the viewport scroll state
+  // when printing or in print preview
+  if (aPresContext->IsPaginated()) {
+    return nullptr;
+  }
+
+  nsIDocument* document = aPresContext->Document();
+  Element* docElement = document->GetRootElement();
+
+  // Check the style on the document root element
+  nsStyleSet *styleSet = aPresContext->StyleSet();
+  RefPtr<nsStyleContext> rootStyle;
+  rootStyle = styleSet->ResolveStyleFor(docElement, nullptr);
+  if (CheckOverflow(rootStyle->StyleDisplay(), aStyles)) {
+    // tell caller we stole the overflow style from the root element
+    return docElement;
+  }
+
+  // Don't look in the BODY for non-HTML documents or HTML documents
+  // with non-HTML roots
+  // XXX this should be earlier; we shouldn't even look at the document root
+  // for non-HTML documents. Fix this once we support explicit CSS styling
+  // of the viewport
+  // XXX what about XHTML?
+  nsCOMPtr<nsIDOMHTMLDocument> htmlDoc(do_QueryInterface(document));
+  if (!htmlDoc || !docElement->IsHTMLElement()) {
+    return nullptr;
+  }
+
+  nsCOMPtr<nsIDOMHTMLElement> body;
+  htmlDoc->GetBody(getter_AddRefs(body));
+  nsCOMPtr<nsIContent> bodyElement = do_QueryInterface(body);
+
+  if (!bodyElement ||
+      !bodyElement->NodeInfo()->Equals(nsGkAtoms::body)) {
+    // The body is not a <body> tag, it's a <frameset>.
+    return nullptr;
+  }
+
+  RefPtr<nsStyleContext> bodyStyle;
+  bodyStyle = styleSet->ResolveStyleFor(bodyElement->AsElement(), rootStyle);
+
+  if (CheckOverflow(bodyStyle->StyleDisplay(), aStyles)) {
+    // tell caller we stole the overflow style from the body element
+    return bodyElement;
+  }
+
+  return nullptr;
+}
+
+nsIContent*
+nsPresContext::UpdateViewportScrollbarStylesOverride()
+{
+  nsIContent* propagatedFrom =
+    GetPropagatedScrollbarStylesForViewport(this, &mViewportStyleScrollbar);
+
+  nsIDocument* document = Document();
+  if (Element* fullscreenElement = document->GetFullScreenElement()) {
+    // If the document is in fullscreen, but the fullscreen element is
+    // not the root element, we should explicitly suppress the scrollbar
+    // here. Note that, we still need to return the original element
+    // the styles are from, so that the state of those elements is not
+    // affected across fullscreen change.
+    if (fullscreenElement != document->GetRootElement() &&
+        fullscreenElement != propagatedFrom) {
+      mViewportStyleScrollbar = ScrollbarStyles(NS_STYLE_OVERFLOW_HIDDEN,
+                                                NS_STYLE_OVERFLOW_HIDDEN);
+    }
+  }
+
+  return propagatedFrom;
+}
+
 void
 nsPresContext::SetContainer(nsIDocShell* aDocShell)
 {
   if (aDocShell) {
+    NS_ASSERTION(!(mContainer && mNeedsPrefUpdate),
+                 "Should only need pref update if mContainer is null.");
     mContainer = static_cast<nsDocShell*>(aDocShell);
+    if (mNeedsPrefUpdate) {
+      if (!mPrefChangedTimer) {
+        mPrefChangedTimer = CreateTimer(PrefChangedUpdateTimerCallback, 0);
+      }
+      mNeedsPrefUpdate = false;
+    }
   } else {
     mContainer = WeakPtr<nsDocShell>();
   }
@@ -1864,7 +1986,7 @@ NotifyChildrenUIResolutionChanged(nsIDOMWindow* aWindow)
     return;
   }
   nsCOMPtr<nsIDocument> doc = piWin->GetExtantDoc();
-  nsRefPtr<nsPIWindowRoot> topLevelWin = nsContentUtils::GetWindowRoot(doc);
+  RefPtr<nsPIWindowRoot> topLevelWin = nsContentUtils::GetWindowRoot(doc);
   if (!topLevelWin) {
     return;
   }
@@ -1992,7 +2114,7 @@ nsPresContext::MediaFeatureValuesChanged(nsRestyleHint aRestyleHint,
     // Note that we intentionally send the notifications to media query
     // list in the order they were created and, for each list, to the
     // listeners in the order added.
-    MediaQueryList::NotifyList notifyList;
+    nsTArray<MediaQueryList::HandleChangeData> notifyList;
     for (PRCList *l = PR_LIST_HEAD(mDocument->MediaQueryLists());
          l != mDocument->MediaQueryLists(); l = PR_NEXT_LINK(l)) {
       MediaQueryList *mql = static_cast<MediaQueryList*>(l);
@@ -2067,7 +2189,7 @@ nsPresContext::EnsureVisible()
     docShell->GetContentViewer(getter_AddRefs(cv));
     // Make sure this is the content viewer we belong with
     if (cv) {
-      nsRefPtr<nsPresContext> currentPresContext;
+      RefPtr<nsPresContext> currentPresContext;
       cv->GetPresContext(getter_AddRefs(currentPresContext));
       if (currentPresContext == this) {
         // OK, this is us.  We want to call Show() on the content viewer.
@@ -2099,7 +2221,8 @@ nsPresContext::UpdateIsChrome()
 }
 
 /* virtual */ bool
-nsPresContext::HasAuthorSpecifiedRules(nsIFrame *aFrame, uint32_t ruleTypeMask) const
+nsPresContext::HasAuthorSpecifiedRules(const nsIFrame *aFrame,
+                                       uint32_t ruleTypeMask) const
 {
   return
     nsRuleNode::HasAuthorSpecifiedRules(aFrame->StyleContext(),
@@ -2239,23 +2362,20 @@ nsPresContext::FireDOMPaintEvent(nsInvalidateRequestList* aList)
   }
   // Events sent to the window get propagated to the chrome event handler
   // automatically.
-  nsCOMPtr<nsIDOMEvent> event;
+  //
   // This will empty our list in case dispatching the event causes more damage
   // (hopefully it won't, or we're likely to get an infinite loop! At least
   // it won't be blocking app execution though).
-  NS_NewDOMNotifyPaintEvent(getter_AddRefs(event), eventTarget, this, nullptr,
-                            NS_AFTERPAINT, aList);
-  if (!event) {
-    return;
-  }
+  RefPtr<NotifyPaintEvent> event =
+    NS_NewDOMNotifyPaintEvent(eventTarget, this, nullptr, eAfterPaint, aList);
 
   // Even if we're not telling the window about the event (so eventTarget is
   // the chrome event handler, not the window), the window is still
   // logically the event target.
   event->SetTarget(eventTarget);
   event->SetTrusted(true);
-  EventDispatcher::DispatchDOMEvent(dispatchTarget, nullptr, event, this,
-                                    nullptr);
+  EventDispatcher::DispatchDOMEvent(dispatchTarget, nullptr,
+                                    static_cast<Event*>(event), this, nullptr);
 }
 
 static bool
@@ -2474,7 +2594,7 @@ public:
     return NS_OK;
   }
 
-  nsRefPtr<nsPresContext> mPresContext;
+  RefPtr<nsPresContext> mPresContext;
   nsInvalidateRequestList mList;
 };
 
@@ -2529,6 +2649,22 @@ bool
 nsPresContext::HasCachedStyleData()
 {
   return mShell && mShell->StyleSet()->HasCachedStyleData();
+}
+
+already_AddRefed<nsITimer>
+nsPresContext::CreateTimer(nsTimerCallbackFunc aCallback,
+                           uint32_t aDelay)
+{
+  nsCOMPtr<nsITimer> timer = do_CreateInstance("@mozilla.org/timer;1");
+  if (timer) {
+    nsresult rv = timer->InitWithFuncCallback(aCallback, this, aDelay,
+                                              nsITimer::TYPE_ONE_SHOT);
+    if (NS_SUCCEEDED(rv)) {
+      return timer.forget();
+    }
+  }
+
+  return nullptr;
 }
 
 static bool sGotInterruptEnv = false;
@@ -2814,6 +2950,15 @@ nsPresContext::IsDeviceSizePageSize()
   return isDeviceSizePageSize;
 }
 
+uint64_t
+nsPresContext::GetRestyleGeneration() const
+{
+  if (!mRestyleManager) {
+    return 0;
+  }
+  return mRestyleManager->GetRestyleGeneration();
+}
+
 nsRootPresContext::nsRootPresContext(nsIDocument* aDocument,
                                      nsPresContextType aType)
   : nsPresContext(aDocument, aType),
@@ -2849,23 +2994,6 @@ nsRootPresContext::UnregisterPluginForGeometryUpdates(nsIContent* aPlugin)
   mRegisteredPlugins.RemoveEntry(aPlugin);
 }
 
-static PLDHashOperator
-SetPluginHidden(nsRefPtrHashKey<nsIContent>* aEntry, void* userArg)
-{
-  nsIFrame* root = static_cast<nsIFrame*>(userArg);
-  nsPluginFrame* f = static_cast<nsPluginFrame*>(aEntry->GetKey()->GetPrimaryFrame());
-  if (!f) {
-    NS_WARNING("Null frame in SetPluginHidden");
-    return PL_DHASH_NEXT;
-  }
-  if (!nsLayoutUtils::IsAncestorFrameCrossDoc(root, f)) {
-    // f is not managed by this frame so we should ignore it.
-    return PL_DHASH_NEXT;
-  }
-  f->SetEmptyWidgetConfiguration();
-  return PL_DHASH_NEXT;
-}
-
 void
 nsRootPresContext::ComputePluginGeometryUpdates(nsIFrame* aFrame,
                                                 nsDisplayListBuilder* aBuilder,
@@ -2878,7 +3006,18 @@ nsRootPresContext::ComputePluginGeometryUpdates(nsIFrame* aFrame,
   // Initially make the next state for each plugin descendant of aFrame be
   // "hidden". Plugins that are visible will have their next state set to
   // unhidden by nsDisplayPlugin::ComputeVisibility.
-  mRegisteredPlugins.EnumerateEntries(SetPluginHidden, aFrame);
+  for (auto iter = mRegisteredPlugins.Iter(); !iter.Done(); iter.Next()) {
+    auto f = static_cast<nsPluginFrame*>(iter.Get()->GetKey()->GetPrimaryFrame());
+    if (!f) {
+      NS_WARNING("Null frame in ComputePluginGeometryUpdates");
+      continue;
+    }
+    if (!nsLayoutUtils::IsAncestorFrameCrossDoc(aFrame, f)) {
+      // f is not managed by this frame so we should ignore it.
+      continue;
+    }
+    f->SetEmptyWidgetConfiguration();
+  }
 
   nsIFrame* rootFrame = FrameManager()->GetRootFrame();
 
@@ -2926,13 +3065,8 @@ nsRootPresContext::InitApplyPluginGeometryTimer()
   // so set a backup timer to do this too.  We want to make sure this
   // won't fire before our normal paint notifications, if those would
   // update the geometry, so set it for double the refresh driver interval.
-  mApplyPluginGeometryTimer = do_CreateInstance("@mozilla.org/timer;1");
-  if (mApplyPluginGeometryTimer) {
-    mApplyPluginGeometryTimer->
-      InitWithFuncCallback(ApplyPluginGeometryUpdatesCallback, this,
-                           nsRefreshDriver::DefaultInterval() * 2,
-                           nsITimer::TYPE_ONE_SHOT);
-  }
+  mApplyPluginGeometryTimer = CreateTimer(ApplyPluginGeometryUpdatesCallback,
+                                          nsRefreshDriver::DefaultInterval() * 2);
 }
 
 void
@@ -3014,35 +3148,33 @@ SortConfigurations(nsTArray<nsIWidget::Configuration>* aConfigurations)
   }
 }
 
-struct PluginGetGeometryUpdateClosure {
-  nsTArray<nsIWidget::Configuration> mConfigurations;
-};
-static PLDHashOperator
-PluginGetGeometryUpdate(nsRefPtrHashKey<nsIContent>* aEntry, void* userArg)
+static void
+PluginGetGeometryUpdate(nsTHashtable<nsRefPtrHashKey<nsIContent>>& aPlugins,
+                        nsTArray<nsIWidget::Configuration>* aConfigurations)
 {
-  PluginGetGeometryUpdateClosure* closure =
-    static_cast<PluginGetGeometryUpdateClosure*>(userArg);
-  nsPluginFrame* f = static_cast<nsPluginFrame*>(aEntry->GetKey()->GetPrimaryFrame());
-  if (!f) {
-    NS_WARNING("Null frame in GetPluginGeometryUpdate");
-    return PL_DHASH_NEXT;
+  for (auto iter = aPlugins.Iter(); !iter.Done(); iter.Next()) {
+    auto f = static_cast<nsPluginFrame*>(iter.Get()->GetKey()->GetPrimaryFrame());
+    if (!f) {
+      NS_WARNING("Null frame in PluginGeometryUpdate");
+      continue;
+    }
+    f->GetWidgetConfiguration(aConfigurations);
   }
-  f->GetWidgetConfiguration(&closure->mConfigurations);
-  return PL_DHASH_NEXT;
 }
 
 #endif  // #ifndef XP_MACOSX
 
-static PLDHashOperator
-PluginDidSetGeometryEnumerator(nsRefPtrHashKey<nsIContent>* aEntry, void* userArg)
+static void
+PluginDidSetGeometry(nsTHashtable<nsRefPtrHashKey<nsIContent>>& aPlugins)
 {
-  nsPluginFrame* f = static_cast<nsPluginFrame*>(aEntry->GetKey()->GetPrimaryFrame());
-  if (!f) {
-    NS_WARNING("Null frame in PluginDidSetGeometryEnumerator");
-    return PL_DHASH_NEXT;
+  for (auto iter = aPlugins.Iter(); !iter.Done(); iter.Next()) {
+    auto f = static_cast<nsPluginFrame*>(iter.Get()->GetKey()->GetPrimaryFrame());
+    if (!f) {
+      NS_WARNING("Null frame in PluginDidSetGeometry");
+      continue;
+    }
+    f->DidSetWidgetGeometry();
   }
-  f->DidSetWidgetGeometry();
-  return PL_DHASH_NEXT;
 }
 
 void
@@ -3051,18 +3183,18 @@ nsRootPresContext::ApplyPluginGeometryUpdates()
 #ifndef XP_MACOSX
   CancelApplyPluginGeometryTimer();
 
-  PluginGetGeometryUpdateClosure closure;
-  mRegisteredPlugins.EnumerateEntries(PluginGetGeometryUpdate, &closure);
+  nsTArray<nsIWidget::Configuration> configurations;
+  PluginGetGeometryUpdate(mRegisteredPlugins, &configurations);
   // Walk mRegisteredPlugins and ask each plugin for its configuration
-  if (!closure.mConfigurations.IsEmpty()) {
-    nsIWidget* widget = closure.mConfigurations[0].mChild->GetParent();
+  if (!configurations.IsEmpty()) {
+    nsIWidget* widget = configurations[0].mChild->GetParent();
     NS_ASSERTION(widget, "Plugins must have a parent window");
-    SortConfigurations(&closure.mConfigurations);
-    widget->ConfigureChildren(closure.mConfigurations);
+    SortConfigurations(&configurations);
+    widget->ConfigureChildren(configurations);
   }
 #endif  // #ifndef XP_MACOSX
 
-  mRegisteredPlugins.EnumerateEntries(PluginDidSetGeometryEnumerator, nullptr);
+  PluginDidSetGeometry(mRegisteredPlugins);
 }
 
 void
@@ -3073,17 +3205,18 @@ nsRootPresContext::CollectPluginGeometryUpdates(LayerManager* aLayerManager)
   // for transmission to the chrome process.
   NS_ASSERTION(aLayerManager, "layer manager is invalid!");
   mozilla::layers::ClientLayerManager* clm = aLayerManager->AsClientLayerManager();
-  PluginGetGeometryUpdateClosure closure;
-  mRegisteredPlugins.EnumerateEntries(PluginGetGeometryUpdate, &closure);
-  if (closure.mConfigurations.IsEmpty()) {
-    mRegisteredPlugins.EnumerateEntries(PluginDidSetGeometryEnumerator, nullptr);
+
+  nsTArray<nsIWidget::Configuration> configurations;
+  PluginGetGeometryUpdate(mRegisteredPlugins, &configurations);
+  if (configurations.IsEmpty()) {
+    PluginDidSetGeometry(mRegisteredPlugins);
     return;
   }
-  SortConfigurations(&closure.mConfigurations);
+  SortConfigurations(&configurations);
   if (clm) {
-    clm->StorePluginWidgetConfigurations(closure.mConfigurations);
+    clm->StorePluginWidgetConfigurations(configurations);
   }
-  mRegisteredPlugins.EnumerateEntries(PluginDidSetGeometryEnumerator, nullptr);
+  PluginDidSetGeometry(mRegisteredPlugins);
 #endif  // #ifndef XP_MACOSX
 }
 
@@ -3103,11 +3236,8 @@ nsRootPresContext::EnsureEventualDidPaintEvent()
 {
   if (mNotifyDidPaintTimer)
     return;
-  mNotifyDidPaintTimer = do_CreateInstance("@mozilla.org/timer;1");
-  if (!mNotifyDidPaintTimer)
-    return;
-  mNotifyDidPaintTimer->InitWithFuncCallback(NotifyDidPaintForSubtreeCallback,
-                                             (void*)this, 100, nsITimer::TYPE_ONE_SHOT);
+
+  mNotifyDidPaintTimer = CreateTimer(NotifyDidPaintForSubtreeCallback, 100);
 }
 
 void

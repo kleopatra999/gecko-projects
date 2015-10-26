@@ -262,8 +262,7 @@ DOMEventTargetHelper::DispatchEvent(nsIDOMEvent* aEvent, bool* aRetVal)
 nsresult
 DOMEventTargetHelper::DispatchTrustedEvent(const nsAString& aEventName)
 {
-  nsCOMPtr<nsIDOMEvent> event;
-  NS_NewDOMEvent(getter_AddRefs(event), this, nullptr, nullptr);
+  RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
   nsresult rv = event->InitEvent(aEventName, false, false);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -284,10 +283,10 @@ DOMEventTargetHelper::SetEventHandler(nsIAtom* aType,
                                       JSContext* aCx,
                                       const JS::Value& aValue)
 {
-  nsRefPtr<EventHandlerNonNull> handler;
+  RefPtr<EventHandlerNonNull> handler;
   JS::Rooted<JSObject*> callable(aCx);
   if (aValue.isObject() && JS::IsCallable(callable = &aValue.toObject())) {
-    handler = new EventHandlerNonNull(callable, dom::GetIncumbentGlobal());
+    handler = new EventHandlerNonNull(aCx, callable, dom::GetIncumbentGlobal());
   }
   SetEventHandler(aType, EmptyString(), handler);
   return NS_OK;

@@ -33,8 +33,7 @@ class nsPluginInstanceOwner;
 namespace mozilla {
 namespace layers {
 class ImageContainer;
-class CompositionNotifySink;
-}
+} // namespace layers
 namespace plugins {
 
 class PBrowserStreamParent;
@@ -129,6 +128,9 @@ public:
     virtual bool
     AnswerNPN_SetValue_NPPVpluginEventModel(const int& eventModel,
                                              NPError* result) override;
+    virtual bool
+    AnswerNPN_SetValue_NPPVpluginIsPlayingAudio(const bool& isAudioPlaying,
+                                                NPError* result) override;
 
     virtual bool
     AnswerNPN_GetURL(const nsCString& url, const nsCString& target,
@@ -167,7 +169,7 @@ public:
 
     virtual PPluginSurfaceParent*
     AllocPPluginSurfaceParent(const WindowsSharedMemoryHandle& handle,
-                              const gfxIntSize& size,
+                              const mozilla::gfx::IntSize& size,
                               const bool& transparent) override;
 
     virtual bool
@@ -218,6 +220,9 @@ public:
 
     virtual bool
     RecvAsyncNPP_NewResult(const NPError& aResult) override;
+
+    virtual bool
+    RecvSetNetscapeWindowAsParent(const NativeWindowHandle& childWindow) override;
 
     NPError NPP_SetWindow(const NPWindow* aWindow);
 
@@ -335,7 +340,7 @@ private:
 
 private:
     PluginModuleParent* mParent;
-    nsRefPtr<PluginAsyncSurrogate> mSurrogate;
+    RefPtr<PluginAsyncSurrogate> mSurrogate;
     bool mUseSurrogate;
     NPP mNPP;
     const NPNetscapeFuncs* mNPNIface;
@@ -343,7 +348,6 @@ private:
     bool mIsWhitelistedForShumway;
     NPWindowType mWindowType;
     int16_t            mDrawingModel;
-    nsAutoPtr<mozilla::layers::CompositionNotifySink> mNotifySink;
 
     nsDataHashtable<nsPtrHashKey<NPObject>, PluginScriptableObjectParent*> mScriptableObjects;
 
@@ -360,11 +364,18 @@ private:
     void SubclassPluginWindow(HWND aWnd);
     void UnsubclassPluginWindow();
 
+    bool MaybeCreateAndParentChildPluginWindow();
+    void MaybeCreateChildPopupSurrogate();
+
 private:
     gfx::SharedDIBWin  mSharedSurfaceDib;
     nsIntRect          mPluginPort;
     nsIntRect          mSharedSize;
     HWND               mPluginHWND;
+    // This is used for the normal child plugin HWND for windowed plugins and,
+    // if needed, also the child popup surrogate HWND for windowless plugins.
+    HWND               mChildPluginHWND;
+    HWND               mChildPluginsParentHWND;
     WNDPROC            mPluginWndProc;
     bool               mNestedEventState;
 
@@ -382,7 +393,7 @@ private:
 #endif // definied(MOZ_WIDGET_COCOA)
 
     // ObjectFrame layer wrapper
-    nsRefPtr<gfxASurface>    mFrontSurface;
+    RefPtr<gfxASurface>    mFrontSurface;
     // For windowless+transparent instances, this surface contains a
     // "pretty recent" copy of the pixels under its <object> frame.
     // On the plugin side, we use this surface to avoid doing alpha
@@ -392,9 +403,9 @@ private:
     // We have explicitly chosen not to provide any guarantees about
     // the consistency of the pixels in |mBackground|.  A plugin may
     // be able to observe partial updates to the background.
-    nsRefPtr<gfxASurface>    mBackground;
+    RefPtr<gfxASurface>    mBackground;
 
-    nsRefPtr<ImageContainer> mImageContainer;
+    RefPtr<ImageContainer> mImageContainer;
 };
 
 

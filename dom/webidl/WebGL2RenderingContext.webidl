@@ -319,12 +319,12 @@ interface WebGL2RenderingContext : WebGLRenderingContext
     void copyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readOffset,
                            GLintptr writeOffset, GLsizeiptr size);
     void getBufferSubData(GLenum target, GLintptr offset, ArrayBuffer? returnedData);
+    void getBufferSubData(GLenum target, GLintptr offset, SharedArrayBuffer returnedData);
 
     /* Framebuffer objects */
     void blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
                          GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
-    void framebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer);
-    any getInternalformatParameter(GLenum target, GLenum internalformat, GLenum pname);
+    void framebufferTextureLayer(GLenum target, GLenum attachment, WebGLTexture? texture, GLint level, GLint layer);
 
     [Throws]
     void invalidateFramebuffer(GLenum target, sequence<GLenum> attachments);
@@ -336,6 +336,8 @@ interface WebGL2RenderingContext : WebGLRenderingContext
     void readBuffer(GLenum src);
 
     /* Renderbuffer objects */
+    [Throws]
+    any getInternalformatParameter(GLenum target, GLenum internalformat, GLenum pname);
     void renderbufferStorageMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height);
 
     /* Texture objects */
@@ -346,10 +348,10 @@ interface WebGL2RenderingContext : WebGLRenderingContext
     void texImage3D(GLenum target, GLint level, GLenum internalformat,
                     GLsizei width, GLsizei height, GLsizei depth,
                     GLint border, GLenum format,
-                    GLenum type, ArrayBufferView? pixels);
+                    GLenum type, (ArrayBufferView or SharedArrayBufferView)? pixels);
     [Throws] void texSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
                                 GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type,
-                                ArrayBufferView? pixels);
+                                (ArrayBufferView or SharedArrayBufferView)? pixels);
     [Throws] void texSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
                                 GLenum format, GLenum type, ImageData? data);
     [Throws] void texSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
@@ -362,10 +364,10 @@ interface WebGL2RenderingContext : WebGLRenderingContext
                            GLint x, GLint y, GLsizei width, GLsizei height);
     void compressedTexImage3D(GLenum target, GLint level, GLenum internalformat,
                               GLsizei width, GLsizei height, GLsizei depth,
-                              GLint border, GLsizei imageSize, ArrayBufferView data);
+                              GLint border, GLsizei imageSize, (ArrayBufferView or SharedArrayBufferView) data);
     void compressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
                                  GLsizei width, GLsizei height, GLsizei depth,
-                                 GLenum format, GLsizei imageSize, ArrayBufferView data);
+                                 GLenum format, GLsizei imageSize, (ArrayBufferView or SharedArrayBufferView) data);
 
     /* Programs and shaders */
     [WebGLHandlesContextLoss] GLint getFragDataLocation(WebGLProgram? program, DOMString name);

@@ -17,6 +17,11 @@ MacIOSurfaceTextureClientOGL::MacIOSurfaceTextureClientOGL(ISurfaceAllocator* aA
 
 MacIOSurfaceTextureClientOGL::~MacIOSurfaceTextureClientOGL()
 {
+}
+
+void
+MacIOSurfaceTextureClientOGL::FinalizeOnIPDLThread()
+{
   if (mActor && mSurface) {
     KeepUntilFullDeallocation(MakeUnique<TKeepAlive<MacIOSurface>>(mSurface));
   }
@@ -82,5 +87,6 @@ MacIOSurfaceTextureClientOGL::GetAsSurface()
   RefPtr<gfx::SourceSurface> surf = mSurface->GetAsSurface();
   return surf->GetDataSurface();
 }
-}
-}
+
+} // namespace layers
+} // namespace mozilla

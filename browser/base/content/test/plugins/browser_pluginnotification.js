@@ -1,6 +1,6 @@
-let gTestRoot = getRootDirectory(gTestPath).replace("chrome://mochitests/content/", "http://127.0.0.1:8888/");
-let gPluginHost = Components.classes["@mozilla.org/plugin/host;1"].getService(Components.interfaces.nsIPluginHost);
-let gTestBrowser = null;
+var gTestRoot = getRootDirectory(gTestPath).replace("chrome://mochitests/content/", "http://127.0.0.1:8888/");
+var gPluginHost = Components.classes["@mozilla.org/plugin/host;1"].getService(Components.interfaces.nsIPluginHost);
+var gTestBrowser = null;
 
 function updateAllTestPlugins(aState) {
   setTestPluginEnabledState(aState, "Test Plug-in");
@@ -239,7 +239,7 @@ add_task(function* () {
     utils.sendMouseEvent("mouseup", left, top, 0, 1, 0, false, 0, 0);
   });
 
-  let condition = function() !PopupNotifications.getNotification("click-to-play-plugins", gTestBrowser).dismissed;
+  let condition = () => !PopupNotifications.getNotification("click-to-play-plugins", gTestBrowser).dismissed;
   yield promiseForCondition(condition);
 });
 
@@ -269,7 +269,7 @@ add_task(function* () {
     utils.sendMouseEvent("mouseup", left, top, 0, 1, 0, false, 0, 0);
   });
 
-  let condition = function() !PopupNotifications.getNotification("click-to-play-plugins", gTestBrowser).dismissed;
+  let condition = () => !PopupNotifications.getNotification("click-to-play-plugins", gTestBrowser).dismissed;
   yield promiseForCondition(condition);
 });
 
@@ -296,7 +296,7 @@ add_task(function* () {
     utils.sendMouseEvent("mouseup", 50, 50, 0, 1, 0, false, 0, 0);
   });
 
-  let condition = function() !PopupNotifications.getNotification("click-to-play-plugins", gTestBrowser).dismissed &&
+  let condition = () => !PopupNotifications.getNotification("click-to-play-plugins", gTestBrowser).dismissed &&
     PopupNotifications.panel.firstChild;
   yield promiseForCondition(condition);
   PopupNotifications.panel.firstChild._primaryButton.click();
@@ -379,7 +379,7 @@ add_task(function* () {
     utils.sendMouseEvent("mouseup", left, top, 0, 1, 0, false, 0, 0);
   });
 
-  let condition = function() !notification.dismissed && !!PopupNotifications.panel.firstChild;
+  let condition = () => !notification.dismissed && !!PopupNotifications.panel.firstChild;
   yield promiseForCondition(condition);
   PopupNotifications.panel.firstChild._primaryButton.click();
 

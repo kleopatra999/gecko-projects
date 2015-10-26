@@ -23,6 +23,7 @@ Cu.import("resource://gre/modules/DeferredTask.jsm", this);
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Timer.jsm");
 Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
+Cu.import("resource://gre/modules/AppConstants.jsm");
 
 const Utils = TelemetryUtils;
 
@@ -40,15 +41,20 @@ const PREF_FHR_ENABLED = "datareporting.healthreport.service.enabled";
 const PREF_FHR_UPLOAD_ENABLED = "datareporting.healthreport.uploadEnabled";
 const PREF_SESSIONS_BRANCH = "datareporting.sessions.";
 const PREF_UNIFIED = PREF_BRANCH + "unified";
+const PREF_UNIFIED_OPTIN = PREF_BRANCH + "unifiedIsOptIn";
+const PREF_OPTOUT_SAMPLE = PREF_BRANCH + "optoutSample";
 
 // Whether the FHR/Telemetry unification features are enabled.
 // Changing this pref requires a restart.
 const IS_UNIFIED_TELEMETRY = Preferences.get(PREF_UNIFIED, false);
+// This preference allows to leave unified Telemetry behavior on only for people that
+// opted into Telemetry. Changing this pref requires a restart.
+const IS_UNIFIED_OPTIN = Preferences.get(PREF_UNIFIED_OPTIN, false);
 
 const PING_FORMAT_VERSION = 4;
 
 // Delay before intializing telemetry (ms)
-const TELEMETRY_DELAY = 60000;
+const TELEMETRY_DELAY = Preferences.get("toolkit.telemetry.initDelay", 60) * 1000;
 // Delay before initializing telemetry if we're testing (ms)
 const TELEMETRY_TEST_DELAY = 100;
 
@@ -75,21 +81,46 @@ XPCOMUtils.defineLazyModuleGetter(this, "TelemetryEnvironment",
                                   "resource://gre/modules/TelemetryEnvironment.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "SessionRecorder",
                                   "resource://gre/modules/SessionRecorder.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
-                                  "resource://gre/modules/UpdateChannel.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
+                                  "resource://gre/modules/UpdateUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryArchive",
                                   "resource://gre/modules/TelemetryArchive.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetrySession",
                                   "resource://gre/modules/TelemetrySession.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetrySend",
                                   "resource://gre/modules/TelemetrySend.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "TelemetryReportingPolicy",
+                                  "resource://gre/modules/TelemetryReportingPolicy.jsm");
+
+XPCOMUtils.defineLazyGetter(this, "gCrcTable", function() {
+  let c;
+  let table = [];
+  for (let n = 0; n < 256; n++) {
+      c = n;
+      for (let k =0; k < 8; k++) {
+          c = ((c&1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+      }
+      table[n] = c;
+  }
+  return table;
+});
+
+function crc32(str) {
+    let crc = 0 ^ (-1);
+
+    for (let i = 0; i < str.length; i++ ) {
+        crc = (crc >>> 8) ^ gCrcTable[(crc ^ str.charCodeAt(i)) & 0xFF];
+    }
+
+    return (crc ^ (-1)) >>> 0;
+}
 
 /**
  * Setup Telemetry logging. This function also gets called when loggin related
  * preferences change.
  */
-let gLogger = null;
-let gLogAppenderDump = null;
+var gLogger = null;
+var gLogAppenderDump = null;
 function configureLogging() {
   if (!gLogger) {
     gLogger = Log.repository.getLogger(LOGGER_NAME);
@@ -120,8 +151,11 @@ function configureLogging() {
 /**
  * This is a policy object used to override behavior for testing.
  */
-let Policy = {
+var Policy = {
   now: () => new Date(),
+  generatePingId: () => Utils.generateUUID(),
+  getCachedClientID: () => ClientID.getCachedClientID(),
+  isUnifiedOptin: () => IS_UNIFIED_OPTIN,
 }
 
 this.EXPORTED_SYMBOLS = ["TelemetryController"];
@@ -143,12 +177,7 @@ this.TelemetryController = Object.freeze({
    * Used only for testing purposes.
    */
   reset: function() {
-    Impl._clientID = null;
-    Impl._detachObservers();
-    TelemetryStorage.reset();
-    TelemetrySend.reset();
-
-    return this.setup();
+    return Impl.reset();
   },
   /**
    * Used only for testing purposes.
@@ -190,13 +219,14 @@ this.TelemetryController = Object.freeze({
    * @param {Boolean} [aOptions.addEnvironment=false] true if the ping should contain the
    *                  environment data.
    * @param {Object}  [aOptions.overrideEnvironment=null] set to override the environment data.
-   * @returns {Promise} A promise that resolves with the ping id once the ping is stored or sent.
+   * @returns {Promise} Test-only - a promise that resolves with the ping id once the ping is stored or sent.
    */
   submitExternalPing: function(aType, aPayload, aOptions = {}) {
     aOptions.addClientId = aOptions.addClientId || false;
     aOptions.addEnvironment = aOptions.addEnvironment || false;
 
-    return Impl.submitExternalPing(aType, aPayload, aOptions);
+    const testOnly = Impl.submitExternalPing(aType, aPayload, aOptions);
+    return testOnly;
   },
 
   /**
@@ -302,6 +332,15 @@ this.TelemetryController = Object.freeze({
   },
 
   /**
+   * Whether this client is part of a sample that gets opt-out Telemetry.
+   *
+   * @return {Boolean} Whether the client is part of the opt-out sample.
+   */
+  get isInOptoutSample() {
+    return Impl.isInOptoutSample;
+  },
+
+  /**
    * The AsyncShutdown.Barrier to synchronize with TelemetryController shutdown.
    */
   get shutdown() {
@@ -326,7 +365,7 @@ this.TelemetryController = Object.freeze({
   },
 });
 
-let Impl = {
+var Impl = {
   _initialized: false,
   _initStarted: false, // Whether we started setting up TelemetryController.
   _logger: null,
@@ -374,7 +413,7 @@ let Impl = {
 
     let updateChannel = null;
     try {
-      updateChannel = UpdateChannel.get(false);
+      updateChannel = UpdateUtils.getUpdateChannel(false);
     } catch (e) {
       this._log.trace("assemblePing - Unable to get update channel.", e);
     }
@@ -416,7 +455,7 @@ let Impl = {
     // Fill the common ping fields.
     let pingData = {
       type: aType,
-      id: Utils.generateUUID(),
+      id: Policy.generatePingId(),
       creationDate: (Policy.now()).toISOString(),
       version: PING_FORMAT_VERSION,
       application: this._getApplicationSection(),
@@ -456,7 +495,7 @@ let Impl = {
    * @param {Boolean} [aOptions.addEnvironment=false] true if the ping should contain the
    *                  environment data.
    * @param {Object}  [aOptions.overrideEnvironment=null] set to override the environment data.
-   * @returns {Promise} A promise that is resolved with the ping id once the ping is stored or sent.
+   * @returns {Promise} Test-only - a promise that is resolved with the ping id once the ping is stored or sent.
    */
   submitExternalPing: function send(aType, aPayload, aOptions) {
     this._log.trace("submitExternalPing - type: " + aType + ", aOptions: " + JSON.stringify(aOptions));
@@ -585,28 +624,69 @@ let Impl = {
   },
 
   /**
+   *
+   */
+  _isInOptoutSample: function() {
+    if (!Preferences.get(PREF_OPTOUT_SAMPLE, false)) {
+      this._log.config("_sampleForOptoutTelemetry - optout sampling is disabled");
+      return false;
+    }
+
+    const clientId = Policy.getCachedClientID();
+    if (!clientId) {
+      this._log.config("_sampleForOptoutTelemetry - no cached client id available")
+      return false;
+    }
+
+    // This mimics the server-side 1% sampling, so that we can get matching populations.
+    // The server samples on ((crc32(clientId) % 100) == 42), we match 42+X here to get
+    // a bigger sample.
+    const sample = crc32(clientId) % 100;
+    const offset = 42;
+    const range = 5; // sampling from 5%
+
+    const optout = (sample >= offset && sample < (offset + range));
+    this._log.config("_sampleForOptoutTelemetry - sampling for optout Telemetry - " +
+                     "offset: " + offset + ", range: " + range + ", sample: " + sample);
+    return optout;
+  },
+
+  /**
    * Perform telemetry initialization for either chrome or content process.
    * @return {Boolean} True if Telemetry is allowed to record at least base (FHR) data,
    *                   false otherwise.
    */
   enableTelemetryRecording: function enableTelemetryRecording() {
+    // The thumbnail service also runs in a content process, even with e10s off.
+    // We need to check if e10s is on so we don't submit child payloads for it.
+    // We still need xpcshell child tests to work, so we skip this if test mode is enabled.
+    if (Utils.isContentProcess && !this._testMode && !Services.appinfo.browserTabsRemoteAutostart) {
+      this._log.config("enableTelemetryRecording - not enabling Telemetry for non-e10s child process");
+      Telemetry.canRecordBase = false;
+      Telemetry.canRecordExtended = false;
+      return false;
+    }
+
+    // Configure base Telemetry recording.
+    // Unified Telemetry makes it opt-out unless the unifedOptin pref is set.
+    // Additionally, we make Telemetry opt-out for a 5% sample.
+    // If extended Telemetry is enabled, base recording is always on as well.
     const enabled = Preferences.get(PREF_ENABLED, false);
+    const isOptout = IS_UNIFIED_TELEMETRY && (!Policy.isUnifiedOptin() || this._isInOptoutSample());
+    Telemetry.canRecordBase = enabled || isOptout;
 
-    // Enable base Telemetry recording, if needed.
-    Telemetry.canRecordBase = enabled || IS_UNIFIED_TELEMETRY;
-
-#ifdef MOZILLA_OFFICIAL
-    // Enable extended telemetry if:
-    //  * the telemetry preference is set and
-    //  * this is an official build or we are in test-mode
-    // We only do the latter check for official builds so that e.g. developer builds
-    // still enable Telemetry based on prefs.
-    Telemetry.canRecordExtended = enabled && (Telemetry.isOfficialTelemetry || this._testMode);
-#else
-    // Turn off extended telemetry recording if disabled by preferences or if base/telemetry
-    // telemetry recording is off.
-    Telemetry.canRecordExtended = enabled;
-#endif
+    if (AppConstants.MOZILLA_OFFICIAL) {
+      // Enable extended telemetry if:
+      //  * the telemetry preference is set and
+      //  * this is an official build or we are in test-mode
+      // We only do the latter check for official builds so that e.g. developer builds
+      // still enable Telemetry based on prefs.
+      Telemetry.canRecordExtended = enabled && (Telemetry.isOfficialTelemetry || this._testMode);
+    } else {
+      // Turn off extended telemetry recording if disabled by preferences or if base/telemetry
+      // telemetry recording is off.
+      Telemetry.canRecordExtended = enabled;
+    }
 
     this._log.config("enableTelemetryRecording - canRecordBase:" + Telemetry.canRecordBase +
                      ", canRecordExtended: " + Telemetry.canRecordExtended);
@@ -650,6 +730,9 @@ let Impl = {
       this._sessionRecorder.onStartup();
     }
 
+    // This will trigger displaying the datachoices infobar.
+    TelemetryReportingPolicy.setup();
+
     if (!this.enableTelemetryRecording()) {
       this._log.config("setupChromeProcess - Telemetry recording is disabled, skipping Chrome process setup.");
       return Promise.resolve();
@@ -661,7 +744,7 @@ let Impl = {
     // id from disk.
     // We try to cache it in prefs to avoid this, even though this may
     // lead to some stale client ids.
-    this._clientID = Preferences.get(PREF_CACHED_CLIENTID, null);
+    this._clientID = ClientID.getCachedClientID();
 
     // Delay full telemetry initialization to give the browser time to
     // run various late initializers. Otherwise our gathered memory
@@ -674,9 +757,8 @@ let Impl = {
 
         yield TelemetrySend.setup(this._testMode);
 
-        // Load the ClientID and update the cache.
+        // Load the ClientID.
         this._clientID = yield ClientID.getClientID();
-        Preferences.set(PREF_CACHED_CLIENTID, this._clientID);
 
         // Purge the pings archive by removing outdated pings. We don't wait for this
         // task to complete, but TelemetryStorage blocks on it during shutdown.
@@ -725,6 +807,9 @@ let Impl = {
 
     // Now do an orderly shutdown.
     try {
+      // Stop the datachoices infobar display.
+      TelemetryReportingPolicy.shutdown();
+
       // Stop any ping sending.
       yield TelemetrySend.shutdown();
 
@@ -796,6 +881,10 @@ let Impl = {
     return this._clientID;
   },
 
+  get isInOptoutSample() {
+    return this._isInOptoutSample();
+  },
+
   /**
    * Get an object describing the current state of this module for AsyncShutdown diagnostics.
    */
@@ -806,6 +895,7 @@ let Impl = {
       haveDelayedInitTask: !!this._delayedInitTask,
       shutdownBarrier: this._shutdownBarrier.state,
       connectionsBarrier: this._connectionsBarrier.state,
+      sendModule: TelemetrySend.getShutdownState(),
     };
   },
 
@@ -819,9 +909,25 @@ let Impl = {
       // There's nothing we should do if we are enabling upload.
       return;
     }
-    // Send the deletion ping.
-    this._log.trace("_onUploadPrefChange - Sending deletion ping.");
-    this.submitExternalPing(PING_TYPE_DELETION, {}, { addClientId: true });
+
+    let p = Task.spawn(function*() {
+      try {
+        // Clear the current pings.
+        yield TelemetrySend.clearCurrentPings();
+
+        // Remove all the pending pings, but not the deletion ping.
+        yield TelemetryStorage.runRemovePendingPingsTask();
+      } catch (e) {
+        this._log.error("_onUploadPrefChange - error clearing pending pings", e);
+      } finally {
+        // Always send the deletion ping.
+        this._log.trace("_onUploadPrefChange - Sending deletion ping.");
+        this.submitExternalPing(PING_TYPE_DELETION, {}, { addClientId: true });
+      }
+    }.bind(this));
+
+    this._shutdownBarrier.client.addBlocker(
+      "TelemetryController: removing pending pings after data upload was disabled", p);
   },
 
   _attachObservers: function() {
@@ -860,4 +966,18 @@ let Impl = {
 
     return ping;
   },
+
+  reset: Task.async(function*() {
+    this._clientID = null;
+    this._detachObservers();
+
+    // We need to kick of the controller setup first for tests that check the
+    // cached client id.
+    let controllerSetup = this.setupTelemetry(true);
+
+    yield TelemetrySend.reset();
+    yield TelemetryStorage.reset();
+
+    yield controllerSetup;
+  }),
 };

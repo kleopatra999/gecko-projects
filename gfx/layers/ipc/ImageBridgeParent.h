@@ -9,6 +9,7 @@
 #include <stddef.h>                     // for size_t
 #include <stdint.h>                     // for uint32_t, uint64_t
 #include "CompositableTransactionParent.h"
+#include "ImageContainerParent.h"
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT_HELPER2
 #include "mozilla/Attributes.h"         // for override
 #include "mozilla/ipc/ProtocolUtils.h"
@@ -23,12 +24,12 @@ class MessageLoop;
 
 namespace base {
 class Thread;
-}
+} // namespace base
 
 namespace mozilla {
 namespace ipc {
 class Shmem;
-}
+} // namespace ipc
 
 namespace layers {
 
@@ -47,8 +48,6 @@ public:
 
   ImageBridgeParent(MessageLoop* aLoop, Transport* aTransport, ProcessId aChildProcessId);
   ~ImageBridgeParent();
-
-  virtual LayersBackend GetCompositorBackendType() const override;
 
   virtual void ActorDestroy(ActorDestroyReason aWhy) override;
 
@@ -74,15 +73,19 @@ public:
   virtual bool IsAsync() const override { return true; }
 
   PCompositableParent* AllocPCompositableParent(const TextureInfo& aInfo,
+                                                PImageContainerParent* aImageContainer,
                                                 uint64_t*) override;
   bool DeallocPCompositableParent(PCompositableParent* aActor) override;
 
   virtual PTextureParent* AllocPTextureParent(const SurfaceDescriptor& aSharedData,
+                                              const LayersBackend& aLayersBackend,
                                               const TextureFlags& aFlags) override;
   virtual bool DeallocPTextureParent(PTextureParent* actor) override;
 
   PMediaSystemResourceManagerParent* AllocPMediaSystemResourceManagerParent() override;
   bool DeallocPMediaSystemResourceManagerParent(PMediaSystemResourceManagerParent* aActor) override;
+  virtual PImageContainerParent* AllocPImageContainerParent() override;
+  virtual bool DeallocPImageContainerParent(PImageContainerParent* actor) override;
 
   virtual bool
   RecvChildAsyncMessages(InfallibleTArray<AsyncChildMessageData>&& aMessages) override;
@@ -139,11 +142,16 @@ public:
 
   static ImageBridgeParent* GetInstance(ProcessId aId);
 
+  static bool NotifyImageComposites(nsTArray<ImageCompositeNotification>& aNotifications);
+
   // Overriden from IToplevelProtocol
   IToplevelProtocol*
   CloneToplevel(const InfallibleTArray<ProtocolFdMapping>& aFds,
                 base::ProcessHandle aPeerProcess,
                 mozilla::ipc::ProtocolCloneContext* aCtx) override;
+
+protected:
+  void OnChannelConnected(int32_t pid) override;
 
 private:
   void DeferredDestroy();
@@ -151,7 +159,7 @@ private:
   Transport* mTransport;
   // This keeps us alive until ActorDestroy(), at which point we do a
   // deferred destruction of ourselves.
-  nsRefPtr<ImageBridgeParent> mSelfRef;
+  RefPtr<ImageBridgeParent> mSelfRef;
 
   bool mSetChildThreadPriority;
 
@@ -162,10 +170,10 @@ private:
 
   static MessageLoop* sMainLoop;
 
-  nsRefPtr<CompositorThreadHolder> mCompositorThreadHolder;
+  RefPtr<CompositorThreadHolder> mCompositorThreadHolder;
 };
 
-} // layers
-} // mozilla
+} // namespace layers
+} // namespace mozilla
 
 #endif // gfx_layers_ipc_ImageBridgeParent_h_

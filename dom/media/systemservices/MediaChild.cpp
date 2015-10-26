@@ -20,34 +20,36 @@ namespace mozilla {
 namespace media {
 
 already_AddRefed<Pledge<nsCString>>
-GetOriginKey(const nsCString& aOrigin, bool aPrivateBrowsing)
+GetOriginKey(const nsCString& aOrigin, bool aPrivateBrowsing, bool aPersist)
 {
-  nsRefPtr<MediaManager> mgr = MediaManager::GetInstance();
+  RefPtr<MediaManager> mgr = MediaManager::GetInstance();
   MOZ_ASSERT(mgr);
 
-  nsRefPtr<Pledge<nsCString>> p = new Pledge<nsCString>();
+  RefPtr<Pledge<nsCString>> p = new Pledge<nsCString>();
   uint32_t id = mgr->mGetOriginKeyPledges.Append(*p);
 
   if (XRE_GetProcessType() == GeckoProcessType_Default) {
-    mgr->GetNonE10sParent()->RecvGetOriginKey(id, aOrigin, aPrivateBrowsing);
+    mgr->GetNonE10sParent()->RecvGetOriginKey(id, aOrigin, aPrivateBrowsing,
+                                              aPersist);
   } else {
-    Child::Get()->SendGetOriginKey(id, aOrigin, aPrivateBrowsing);
+    Child::Get()->SendGetOriginKey(id, aOrigin, aPrivateBrowsing, aPersist);
   }
   return p.forget();
 }
 
 void
-SanitizeOriginKeys(const uint64_t& aSinceWhen)
+SanitizeOriginKeys(const uint64_t& aSinceWhen, bool aOnlyPrivateBrowsing)
 {
-  LOG(("SanitizeOriginKeys since %llu", aSinceWhen));
+  LOG(("SanitizeOriginKeys since %llu %s", aSinceWhen,
+       (aOnlyPrivateBrowsing? "in Private Browsing." : ".")));
 
   if (XRE_GetProcessType() == GeckoProcessType_Default) {
     // Avoid opening MediaManager in this case, since this is called by
     // sanitize.js when cookies are cleared, which can happen on startup.
     ScopedDeletePtr<Parent<NonE10s>> tmpParent(new Parent<NonE10s>(true));
-    tmpParent->RecvSanitizeOriginKeys(aSinceWhen);
+    tmpParent->RecvSanitizeOriginKeys(aSinceWhen, aOnlyPrivateBrowsing);
   } else {
-    Child::Get()->SendSanitizeOriginKeys(aSinceWhen);
+    Child::Get()->SendSanitizeOriginKeys(aSinceWhen, aOnlyPrivateBrowsing);
   }
 }
 
@@ -88,11 +90,11 @@ void Child::ActorDestroy(ActorDestroyReason aWhy)
 bool
 Child::RecvGetOriginKeyResponse(const uint32_t& aRequestId, const nsCString& aKey)
 {
-  nsRefPtr<MediaManager> mgr = MediaManager::GetInstance();
+  RefPtr<MediaManager> mgr = MediaManager::GetInstance();
   if (!mgr) {
     return false;
   }
-  nsRefPtr<Pledge<nsCString>> pledge = mgr->mGetOriginKeyPledges.Remove(aRequestId);
+  RefPtr<Pledge<nsCString>> pledge = mgr->mGetOriginKeyPledges.Remove(aRequestId);
   if (pledge) {
     pledge->Resolve(aKey);
   }
@@ -112,5 +114,5 @@ DeallocPMediaChild(media::PMediaChild *aActor)
   return true;
 }
 
-}
-}
+} // namespace media
+} // namespace mozilla

@@ -104,10 +104,6 @@ public:
   }
 
   gfx::CompositionOp GetOperator() const { return mOperator; }
-  gfxContext::GraphicsOperator DeprecatedGetOperator() const
-  {
-    return gfx::ThebesOp(mOperator);
-  }
 
   /**
    * Return a surface for this layer. Will use an existing surface, if
@@ -130,7 +126,7 @@ protected:
   gfx::CompositionOp mOperator;
 };
 
-} // layers
-} // mozilla
+} // namespace layers
+} // namespace mozilla
 
 #endif

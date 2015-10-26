@@ -80,13 +80,13 @@ gfxXlibSurface::gfxXlibSurface(cairo_surface_t *csurf)
 
 gfxXlibSurface::~gfxXlibSurface()
 {
-#if defined(GL_PROVIDER_GLX)
-    if (mGLXPixmap) {
-        gl::sGLXLibrary.DestroyPixmap(mDisplay, mGLXPixmap);
-    }
-#endif
     // gfxASurface's destructor calls RecordMemoryFreed().
     if (mPixmapTaken) {
+#if defined(GL_PROVIDER_GLX)
+        if (mGLXPixmap) {
+            gl::sGLXLibrary.DestroyPixmap(mDisplay, mGLXPixmap);
+        }
+#endif
         XFreePixmap (mDisplay, mDrawable);
     }
 }
@@ -195,7 +195,7 @@ gfxXlibSurface::Create(Screen *screen, Visual *visual,
     if (!drawable)
         return nullptr;
 
-    nsRefPtr<gfxXlibSurface> result =
+    RefPtr<gfxXlibSurface> result =
         new gfxXlibSurface(DisplayOfScreen(screen), drawable, visual, size);
     result->TakePixmap();
 
@@ -215,7 +215,7 @@ gfxXlibSurface::Create(Screen *screen, XRenderPictFormat *format,
     if (!drawable)
         return nullptr;
 
-    nsRefPtr<gfxXlibSurface> result =
+    RefPtr<gfxXlibSurface> result =
         new gfxXlibSurface(screen, drawable, format, size);
     result->TakePixmap();
 
@@ -254,7 +254,7 @@ gfxXlibSurface::CreateSimilarSurface(gfxContentType aContent,
                 // itself, so we use cairo_surface_create_similar with a
                 // temporary reference surface to indicate the format.
                 Screen* screen = cairo_xlib_surface_get_screen(CairoSurface());
-                nsRefPtr<gfxXlibSurface> depth24reference =
+                RefPtr<gfxXlibSurface> depth24reference =
                     gfxXlibSurface::Create(screen, format,
                                            gfx::IntSize(1, 1), mDrawable);
                 if (depth24reference)
@@ -271,7 +271,7 @@ void
 gfxXlibSurface::Finish()
 {
 #if defined(GL_PROVIDER_GLX)
-    if (mGLXPixmap) {
+    if (mPixmapTaken && mGLXPixmap) {
         gl::sGLXLibrary.DestroyPixmap(mDisplay, mGLXPixmap);
         mGLXPixmap = None;
     }
@@ -523,7 +523,6 @@ gfxXlibSurface::FindVisual(Screen *screen, gfxImageFormat format)
             blue_mask = 0x1f;
             break;
         case gfxImageFormat::A8:
-        case gfxImageFormat::A1:
         default:
             return nullptr;
     }
@@ -567,8 +566,6 @@ gfxXlibSurface::FindRenderFormat(Display *dpy, gfxImageFormat format)
         }
         case gfxImageFormat::A8:
             return XRenderFindStandardFormat (dpy, PictStandardA8);
-        case gfxImageFormat::A1:
-            return XRenderFindStandardFormat (dpy, PictStandardA1);
         default:
             break;
     }
@@ -605,10 +602,12 @@ gfxXlibSurface::GetGLXPixmap()
     }
     return mGLXPixmap;
 }
-#endif
 
-gfxMemoryLocation
-gfxXlibSurface::GetMemoryLocation() const
+void
+gfxXlibSurface::BindGLXPixmap(GLXPixmap aPixmap)
 {
-    return gfxMemoryLocation::OUT_OF_PROCESS;
+    MOZ_ASSERT(!mGLXPixmap, "A GLXPixmap is already bound!");
+    mGLXPixmap = aPixmap;
 }
+
+#endif

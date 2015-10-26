@@ -6,6 +6,7 @@
 #include "WebGLShaderValidator.h"
 
 #include "angle/ShaderLang.h"
+#include "gfxPrefs.h"
 #include "GLContext.h"
 #include "mozilla/Preferences.h"
 #include "MurmurHash3.h"
@@ -43,7 +44,7 @@ ChooseValidatorCompileOptions(const ShBuiltInResources& resources,
         options |= SH_LIMIT_EXPRESSION_COMPLEXITY;
     }
 
-    if (Preferences::GetBool("webgl.all-angle-options", false)) {
+    if (gfxPrefs::WebGLAllANGLEOptions()) {
         return options |
                SH_VALIDATE_LOOP_INDEXING |
                SH_UNROLL_FOR_LOOP_WITH_INTEGER_INDEX |
@@ -98,7 +99,7 @@ WebGLContext::CreateShaderValidator(GLenum shaderType) const
     if (mBypassShaderValidation)
         return nullptr;
 
-    ShShaderSpec spec = SH_WEBGL_SPEC;
+    ShShaderSpec spec = IsWebGL2() ? SH_WEBGL2_SPEC : SH_WEBGL_SPEC;
     ShShaderOutput outputLanguage = gl->IsGLES() ? SH_ESSL_OUTPUT
                                                  : SH_GLSL_OUTPUT;
 
@@ -209,12 +210,23 @@ StartsWith(const std::string& haystack, const char (&needle)[N])
 bool
 ShaderValidator::CanLinkTo(const ShaderValidator* prev, nsCString* const out_log) const
 {
-    {
-        const std::vector<sh::Uniform>& vertList = *ShGetUniforms(prev->mHandle);
-        const std::vector<sh::Uniform>& fragList = *ShGetUniforms(mHandle);
+    if (!prev) {
+        nsPrintfCString error("Passed in NULL prev ShaderValidator.");
+        *out_log = error;
+        return false;
+    }
 
-        for (auto itrFrag = fragList.begin(); itrFrag != fragList.end(); ++itrFrag) {
-            for (auto itrVert = vertList.begin(); itrVert != vertList.end(); ++itrVert) {
+    {
+        const std::vector<sh::Uniform>* vertPtr = ShGetUniforms(prev->mHandle);
+        const std::vector<sh::Uniform>* fragPtr = ShGetUniforms(mHandle);
+        if (!vertPtr || !fragPtr) {
+            nsPrintfCString error("Could not create uniform list.");
+            *out_log = error;
+            return false;
+        }
+
+        for (auto itrFrag = fragPtr->begin(); itrFrag != fragPtr->end(); ++itrFrag) {
+            for (auto itrVert = vertPtr->begin(); itrVert != vertPtr->end(); ++itrVert) {
                 if (itrVert->name != itrFrag->name)
                     continue;
 
@@ -231,12 +243,17 @@ ShaderValidator::CanLinkTo(const ShaderValidator* prev, nsCString* const out_log
         }
     }
     {
-        const std::vector<sh::Varying>& vertList = *ShGetVaryings(prev->mHandle);
-        const std::vector<sh::Varying>& fragList = *ShGetVaryings(mHandle);
+        const std::vector<sh::Varying>* vertPtr = ShGetVaryings(prev->mHandle);
+        const std::vector<sh::Varying>* fragPtr = ShGetVaryings(mHandle);
+        if (!vertPtr || !fragPtr) {
+            nsPrintfCString error("Could not create varying list.");
+            *out_log = error;
+            return false;
+        }
 
         nsTArray<ShVariableInfo> staticUseVaryingList;
 
-        for (auto itrFrag = fragList.begin(); itrFrag != fragList.end(); ++itrFrag) {
+        for (auto itrFrag = fragPtr->begin(); itrFrag != fragPtr->end(); ++itrFrag) {
             const ShVariableInfo varInfo = { itrFrag->type,
                                              (int)itrFrag->elementCount() };
 
@@ -251,7 +268,7 @@ ShaderValidator::CanLinkTo(const ShaderValidator* prev, nsCString* const out_log
             bool definedInVertShader = false;
             bool staticVertUse = false;
 
-            for (auto itrVert = vertList.begin(); itrVert != vertList.end(); ++itrVert) {
+            for (auto itrVert = vertPtr->begin(); itrVert != vertPtr->end(); ++itrVert) {
                 if (itrVert->name != itrFrag->name)
                     continue;
 

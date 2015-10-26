@@ -29,7 +29,6 @@ CompositorD3D9::CompositorD3D9(PCompositorParent* aParent, nsIWidget *aWidget)
   , mDeviceResetCount(0)
   , mFailedResetAttempts(0)
 {
-  Compositor::SetBackend(LayersBackend::LAYERS_D3D9);
 }
 
 CompositorD3D9::~CompositorD3D9()
@@ -45,10 +44,7 @@ CompositorD3D9::Initialize()
 
   ScopedGfxFeatureReporter reporter("D3D9 Layers", force);
 
-  if (!gfxPlatform::CanUseDirect3D9()) {
-    NS_WARNING("Direct3D 9-accelerated layers are not supported on this system.");
-    return false;
-  }
+  MOZ_ASSERT(gfxPlatform::CanUseDirect3D9());
 
   mDeviceManager = gfxWindowsPlatform::GetPlatform()->GetD3D9DeviceManager();
   if (!mDeviceManager) {
@@ -59,6 +55,10 @@ CompositorD3D9::Initialize()
     CreateSwapChain((HWND)mWidget->GetNativeData(NS_NATIVE_WINDOW));
 
   if (!mSwapChain) {
+    return false;
+  }
+
+  if (!mWidget->InitCompositor(this)) {
     return false;
   }
 
@@ -117,7 +117,7 @@ CompositorD3D9::CreateRenderTarget(const gfx::IntRect &aRect,
   RefPtr<IDirect3DTexture9> texture;
   HRESULT hr = device()->CreateTexture(aRect.width, aRect.height, 1,
                                        D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
-                                       D3DPOOL_DEFAULT, byRef(texture),
+                                       D3DPOOL_DEFAULT, getter_AddRefs(texture),
                                        nullptr);
   if (FAILED(hr)) {
     ReportFailure(NS_LITERAL_CSTRING("CompositorD3D9::CreateRenderTarget: Failed to create texture"),
@@ -146,7 +146,7 @@ CompositorD3D9::CreateRenderTargetFromSource(const gfx::IntRect &aRect,
   RefPtr<IDirect3DTexture9> texture;
   HRESULT hr = device()->CreateTexture(aRect.width, aRect.height, 1,
                                        D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8,
-                                       D3DPOOL_DEFAULT, byRef(texture),
+                                       D3DPOOL_DEFAULT, getter_AddRefs(texture),
                                        nullptr);
   if (FAILED(hr)) {
     ReportFailure(NS_LITERAL_CSTRING("CompositorD3D9::CreateRenderTargetFromSource: Failed to create texture"),
@@ -155,10 +155,10 @@ CompositorD3D9::CreateRenderTargetFromSource(const gfx::IntRect &aRect,
   }
 
   if (aSource) {
-    nsRefPtr<IDirect3DSurface9> sourceSurface =
+    RefPtr<IDirect3DSurface9> sourceSurface =
       static_cast<const CompositingRenderTargetD3D9*>(aSource)->GetD3D9Surface();
 
-    nsRefPtr<IDirect3DSurface9> destSurface;
+    RefPtr<IDirect3DSurface9> destSurface;
     hr = texture->GetSurfaceLevel(0, getter_AddRefs(destSurface));
     if (FAILED(hr)) {
       NS_WARNING("Failed to get texture surface level for dest.");
@@ -411,7 +411,7 @@ CompositorD3D9::DrawQuad(const gfx::Rect &aRect,
         if (source->AsSourceD3D9()->GetStereoMode() != StereoMode::MONO) {
           mDeviceManager->GetNv3DVUtils()->SendNv3DVControl(mode, true, FIREFOX_3DV_APP_HANDLE);
 
-          nsRefPtr<IDirect3DSurface9> renderTarget;
+          RefPtr<IDirect3DSurface9> renderTarget;
           d3d9Device->GetRenderTarget(0, getter_AddRefs(renderTarget));
           mDeviceManager->GetNv3DVUtils()->SendNv3DVMetaData((unsigned int)aRect.width,
                                                              (unsigned int)aRect.height,
@@ -651,7 +651,7 @@ CompositorD3D9::BeginFrame(const nsIntRegion& aInvalidRegion,
   }
   device()->SetScissorRect(&r);
 
-  nsRefPtr<IDirect3DSurface9> backBuffer = mSwapChain->GetBackBuffer();
+  RefPtr<IDirect3DSurface9> backBuffer = mSwapChain->GetBackBuffer();
   mDefaultRT = new CompositingRenderTargetD3D9(backBuffer,
                                                INIT_MODE_CLEAR,
                                                IntRect(0, 0, mSize.width, mSize.height));
@@ -691,6 +691,7 @@ CompositorD3D9::PrepareViewport(const gfx::IntSize& aSize)
   viewMatrix._22 = -2.0f / aSize.height;
   viewMatrix._41 = -1.0f;
   viewMatrix._42 = 1.0f;
+  viewMatrix._33 = 0.0f;
 
   HRESULT hr = device()->SetVertexShaderConstantF(CBmProjection, &viewMatrix._11, 4);
 
@@ -733,8 +734,8 @@ CompositorD3D9::PaintToTarget()
     return;
   }
 
-  nsRefPtr<IDirect3DSurface9> backBuff;
-  nsRefPtr<IDirect3DSurface9> destSurf;
+  RefPtr<IDirect3DSurface9> backBuff;
+  RefPtr<IDirect3DSurface9> destSurf;
   device()->GetRenderTarget(0, getter_AddRefs(backBuff));
 
   D3DSURFACE_DESC desc;

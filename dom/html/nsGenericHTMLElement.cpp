@@ -37,7 +37,6 @@
 #include "nsPIDOMWindow.h"
 #include "nsIStyleRule.h"
 #include "nsIURL.h"
-#include "nsNetUtil.h"
 #include "nsEscape.h"
 #include "nsIFrameInlines.h"
 #include "nsIScrollableFrame.h"
@@ -106,8 +105,6 @@
 #include "mozilla/dom/HTMLBodyElement.h"
 #include "imgIContainer.h"
 
-#include "mozilla/net/ReferrerPolicy.h"
-
 using namespace mozilla;
 using namespace mozilla::dom;
 
@@ -164,7 +161,7 @@ private:
   // NOTE: nsGenericHTMLFormElement is saved as a nsGenericHTMLElement
   // because AddRef/Release are ambiguous with nsGenericHTMLFormElement
   // and Focus() is declared (and defined) in nsGenericHTMLElement class.
-  nsRefPtr<nsGenericHTMLElement> mElement;
+  RefPtr<nsGenericHTMLElement> mElement;
 };
 
 class nsGenericHTMLElementTearoff : public nsIDOMElementCSSInlineStyle
@@ -190,7 +187,7 @@ class nsGenericHTMLElementTearoff : public nsIDOMElementCSSInlineStyle
                                            nsIDOMElementCSSInlineStyle)
 
 private:
-  nsRefPtr<nsGenericHTMLElement> mElement;
+  RefPtr<nsGenericHTMLElement> mElement;
 };
 
 NS_IMPL_CYCLE_COLLECTION(nsGenericHTMLElementTearoff, mElement)
@@ -232,8 +229,8 @@ nsGenericHTMLElement::CopyInnerTo(Element* aDst)
       // We can't just set this as a string, because that will fail
       // to reparse the string into style data until the node is
       // inserted into the document.  Clone the Rule instead.
-      nsRefPtr<mozilla::css::Rule> ruleClone = value->GetCSSStyleRuleValue()->Clone();
-      nsRefPtr<mozilla::css::StyleRule> styleRule = do_QueryObject(ruleClone);
+      RefPtr<mozilla::css::Rule> ruleClone = value->GetCSSStyleRuleValue()->Clone();
+      RefPtr<mozilla::css::StyleRule> styleRule = do_QueryObject(ruleClone);
       NS_ENSURE_TRUE(styleRule, NS_ERROR_UNEXPECTED);
 
       rv = aDst->SetInlineStyleRule(styleRule, &valStr, false);
@@ -261,7 +258,7 @@ nsGenericHTMLElement::Dataset()
     slots->mDataset = new nsDOMStringMap(this);
   }
 
-  nsRefPtr<nsDOMStringMap> ret = slots->mDataset;
+  RefPtr<nsDOMStringMap> ret = slots->mDataset;
   return ret.forget();
 }
 
@@ -528,6 +525,14 @@ nsGenericHTMLElement::IntrinsicState() const
   return state;
 }
 
+uint32_t
+nsGenericHTMLElement::EditableInclusiveDescendantCount()
+{
+  bool isEditable = IsInUncomposedDoc() && HasFlag(NODE_IS_EDITABLE) &&
+    GetContentEditableValue() == eTrue;
+  return EditableDescendantCount() + isEditable;
+}
+
 nsresult
 nsGenericHTMLElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
                                  nsIContent* aBindingParent,
@@ -551,6 +556,7 @@ nsGenericHTMLElement::BindToTree(nsIDocument* aDocument, nsIContent* aParent,
       aDocument->
         AddToNameTable(this, GetParsedAttr(nsGkAtoms::name)->GetAtomValue());
     }
+
     if (HasFlag(NODE_IS_EDITABLE) && GetContentEditableValue() == eTrue) {
       nsCOMPtr<nsIHTMLDocument> htmlDocument = do_QueryInterface(aDocument);
       if (htmlDocument) {
@@ -846,7 +852,7 @@ nsGenericHTMLElement::GetOn##name_()                                          \
       nsGlobalWindow* globalWin = nsGlobalWindow::FromSupports(supports);     \
       OnErrorEventHandlerNonNull* errorHandler = globalWin->GetOn##name_();   \
       if (errorHandler) {                                                     \
-        nsRefPtr<EventHandlerNonNull> handler =                               \
+        RefPtr<EventHandlerNonNull> handler =                               \
           new EventHandlerNonNull(errorHandler);                              \
         return handler.forget();                                              \
       }                                                                       \
@@ -854,7 +860,7 @@ nsGenericHTMLElement::GetOn##name_()                                          \
     return nullptr;                                                           \
   }                                                                           \
                                                                               \
-  nsRefPtr<EventHandlerNonNull> handler = nsINode::GetOn##name_();            \
+  RefPtr<EventHandlerNonNull> handler = nsINode::GetOn##name_();            \
   return handler.forget();                                                    \
 }                                                                             \
 void                                                                          \
@@ -868,7 +874,7 @@ nsGenericHTMLElement::SetOn##name_(EventHandlerNonNull* handler)              \
                                                                               \
     nsCOMPtr<nsISupports> supports = do_QueryInterface(win);                  \
     nsGlobalWindow* globalWin = nsGlobalWindow::FromSupports(supports);       \
-    nsRefPtr<OnErrorEventHandlerNonNull> errorHandler;                        \
+    RefPtr<OnErrorEventHandlerNonNull> errorHandler;                        \
     if (handler) {                                                            \
       errorHandler = new OnErrorEventHandlerNonNull(handler);                 \
     }                                                                         \
@@ -1058,7 +1064,7 @@ nsGenericHTMLElement::ParseBackgroundAttribute(int32_t aNamespaceID,
     }
 
     nsString value(aValue);
-    nsRefPtr<nsStringBuffer> buffer = nsCSSValue::BufferFromString(value);
+    RefPtr<nsStringBuffer> buffer = nsCSSValue::BufferFromString(value);
     if (MOZ_UNLIKELY(!buffer)) {
       return false;
     }
@@ -1842,7 +1848,7 @@ nsGenericHTMLElement::GetUndoManager()
 {
   nsDOMSlots* slots = GetExistingDOMSlots();
   if (slots && slots->mUndoManager) {
-    nsRefPtr<UndoManager> undoManager = slots->mUndoManager;
+    RefPtr<UndoManager> undoManager = slots->mUndoManager;
     return undoManager.forget();
   } else {
     return nullptr;
@@ -2122,7 +2128,7 @@ nsGenericHTMLFormElement::UnbindFromTree(bool aDeep, bool aNullParent)
 
 nsresult
 nsGenericHTMLFormElement::BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                        const nsAttrValueOrString* aValue,
+                                        nsAttrValueOrString* aValue,
                                         bool aNotify)
 {
   if (aNameSpaceID == kNameSpaceID_None) {
@@ -2244,9 +2250,8 @@ nsresult
 nsGenericHTMLFormElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
 {
   if (aVisitor.mEvent->mFlags.mIsTrusted) {
-    switch (aVisitor.mEvent->message) {
-      case NS_FOCUS_CONTENT:
-      {
+    switch (aVisitor.mEvent->mMessage) {
+      case eFocus: {
         // Check to see if focus has bubbled up from a form control's
         // child textfield or button.  If that's the case, don't focus
         // this parent file control -- leave focus on the child.
@@ -2256,13 +2261,14 @@ nsGenericHTMLFormElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
           formControlFrame->SetFocus(true, true);
         break;
       }
-      case NS_BLUR_CONTENT:
-      {
+      case eBlur: {
         nsIFormControlFrame* formControlFrame = GetFormControlFrame(true);
         if (formControlFrame)
           formControlFrame->SetFocus(false, false);
         break;
       }
+      default:
+        break;
     }
   }
 
@@ -2448,9 +2454,25 @@ nsGenericHTMLFormElement::FormIdUpdated(Element* aOldElement,
 }
 
 bool 
-nsGenericHTMLFormElement::IsElementDisabledForEvents(uint32_t aMessage, 
-                                                    nsIFrame* aFrame)
+nsGenericHTMLFormElement::IsElementDisabledForEvents(EventMessage aMessage,
+                                                     nsIFrame* aFrame)
 {
+  switch (aMessage) {
+    case eMouseMove:
+    case eMouseOver:
+    case eMouseOut:
+    case eMouseEnter:
+    case eMouseLeave:
+    case ePointerMove:
+    case ePointerOver:
+    case ePointerOut:
+    case ePointerEnter:
+    case ePointerLeave:
+      return false;
+    default:
+      break;
+  }
+
   bool disabled = IsDisabled();
   if (!disabled && aFrame) {
     const nsStyleUserInterface* uiStyle = aFrame->StyleUserInterface();
@@ -2458,7 +2480,7 @@ nsGenericHTMLFormElement::IsElementDisabledForEvents(uint32_t aMessage,
       uiStyle->mUserInput == NS_STYLE_USER_INPUT_DISABLED;
 
   }
-  return disabled && aMessage != NS_MOUSE_MOVE;
+  return disabled;
 }
 
 void
@@ -2633,7 +2655,7 @@ nsGenericHTMLElement::Click()
   nsCOMPtr<nsIDocument> doc = GetComposedDoc();
 
   nsCOMPtr<nsIPresShell> shell;
-  nsRefPtr<nsPresContext> context;
+  RefPtr<nsPresContext> context;
   if (doc) {
     shell = doc->GetShell();
     if (shell) {
@@ -2647,7 +2669,7 @@ nsGenericHTMLElement::Click()
   // called from chrome JS. Mark this event trusted if Click()
   // is called from chrome code.
   WidgetMouseEvent event(nsContentUtils::IsCallerChrome(),
-                         NS_MOUSE_CLICK, nullptr, WidgetMouseEvent::eReal);
+                         eMouseClick, nullptr, WidgetMouseEvent::eReal);
   event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_UNKNOWN;
 
   EventDispatcher::Dispatch(static_cast<nsIContent*>(this), context, &event);
@@ -2733,23 +2755,29 @@ nsGenericHTMLElement::RegUnRegAccessKey(bool aDoReg)
   }
 }
 
-void
+bool
 nsGenericHTMLElement::PerformAccesskey(bool aKeyCausesActivation,
                                        bool aIsTrustedEvent)
 {
   nsPresContext* presContext = GetPresContext(eForUncomposedDoc);
-  if (!presContext)
-    return;
+  if (!presContext) {
+    return false;
+  }
 
   // It's hard to say what HTML4 wants us to do in all cases.
-  nsIFocusManager* fm = nsFocusManager::GetFocusManager();
+  bool focused = true;
+  nsFocusManager* fm = nsFocusManager::GetFocusManager();
   if (fm) {
     fm->SetFocus(this, nsIFocusManager::FLAG_BYKEY);
+
+    // Return true if the element became the current focus within its window.
+    nsPIDOMWindow* window = OwnerDoc()->GetWindow();
+    focused = (window && window->GetFocusedNode());
   }
 
   if (aKeyCausesActivation) {
     // Click on it if the users prefs indicate to do so.
-    WidgetMouseEvent event(aIsTrustedEvent, NS_MOUSE_CLICK, nullptr,
+    WidgetMouseEvent event(aIsTrustedEvent, eMouseClick, nullptr,
                            WidgetMouseEvent::eReal);
     event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_KEYBOARD;
 
@@ -2759,6 +2787,8 @@ nsGenericHTMLElement::PerformAccesskey(bool aKeyCausesActivation,
     EventDispatcher::Dispatch(static_cast<nsIContent*>(this),
                               presContext, &event);
   }
+
+  return focused;
 }
 
 const nsAttrName*
@@ -2778,7 +2808,8 @@ nsGenericHTMLElement::GetEditor(nsIEditor** aEditor)
 {
   *aEditor = nullptr;
 
-  if (!nsContentUtils::IsCallerChrome()) {
+  // See also HTMLTextFieldAccessible::GetEditor.
+  if (!nsContentUtils::LegacyIsCallerChromeOrNativeCode()) {
     return NS_ERROR_DOM_SECURITY_ERR;
   }
 
@@ -2919,6 +2950,12 @@ nsGenericHTMLElement::ChangeEditableState(int32_t aChange)
       do_QueryInterface(document);
     if (htmlDocument) {
       htmlDocument->ChangeContentEditableCount(this, aChange);
+    }
+
+    nsIContent* parent = GetParent();
+    while (parent) {
+      parent->ChangeEditableDescendantCount(aChange);
+      parent = parent->GetParent();
     }
   }
 
@@ -3180,7 +3217,7 @@ nsGenericHTMLElement::GetProperties(nsISupports** aProperties)
 }
 
 nsSize
-nsGenericHTMLElement::GetWidthHeightForImage(nsRefPtr<imgRequestProxy>& aImageRequest)
+nsGenericHTMLElement::GetWidthHeightForImage(RefPtr<imgRequestProxy>& aImageRequest)
 {
   nsSize size(0,0);
 

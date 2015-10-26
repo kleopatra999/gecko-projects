@@ -71,7 +71,7 @@ public:
 private:
     virtual ~nsDNSRecord() {}
 
-    nsRefPtr<nsHostRecord>  mHostRecord;
+    RefPtr<nsHostRecord>  mHostRecord;
     NetAddrElement         *mIter;
     int                     mIterGenCnt; // the generation count of
                                          // mHostRecord->addr_info when we
@@ -324,7 +324,7 @@ public:
 
     size_t SizeOfIncludingThis(mozilla::MallocSizeOf) const override;
 
-    nsRefPtr<nsHostResolver> mResolver;
+    RefPtr<nsHostResolver> mResolver;
     nsCString                mHost; // hostname we're resolving
     nsCOMPtr<nsIDNSListener> mListener;
     uint16_t                 mFlags;
@@ -409,7 +409,7 @@ public:
 
     bool                   mDone;
     nsresult               mStatus;
-    nsRefPtr<nsHostRecord> mHostRecord;
+    RefPtr<nsHostRecord> mHostRecord;
 
 private:
     PRMonitor             *mMonitor;
@@ -454,25 +454,24 @@ nsDNSSyncRequest::SizeOfIncludingThis(MallocSizeOf mallocSizeOf) const
 class NotifyDNSResolution: public nsRunnable
 {
 public:
-    NotifyDNSResolution(nsMainThreadPtrHandle<nsIObserverService> &aObs,
-                        const nsACString &aHostname)
-        : mObs(aObs)
-        , mHostname(aHostname)
+    explicit NotifyDNSResolution(const nsACString &aHostname)
+        : mHostname(aHostname)
     {
-        MOZ_ASSERT(mObs);
     }
 
     NS_IMETHOD Run()
     {
         MOZ_ASSERT(NS_IsMainThread());
-        mObs->NotifyObservers(nullptr,
-                              "dns-resolution-request",
-                              NS_ConvertUTF8toUTF16(mHostname).get());
+        nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
+        if (obs) {
+            obs->NotifyObservers(nullptr,
+                                 "dns-resolution-request",
+                                 NS_ConvertUTF8toUTF16(mHostname).get());
+        }
         return NS_OK;
     }
 
 private:
-    nsMainThreadPtrHandle<nsIObserverService> mObs;
     nsCString                                 mHostname;
 };
 
@@ -606,9 +605,7 @@ nsDNSService::Init()
 
     nsCOMPtr<nsIIDNService> idn = do_GetService(NS_IDNSERVICE_CONTRACTID);
 
-    nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
-
-    nsRefPtr<nsHostResolver> res;
+    RefPtr<nsHostResolver> res;
     nsresult rv = nsHostResolver::Create(maxCacheEntries,
                                          defaultCacheLifetime,
                                          defaultGracePeriod,
@@ -635,10 +632,6 @@ nsDNSService::Init()
             }
         }
         mNotifyResolution = notifyResolution;
-        if (mNotifyResolution) {
-            mObserverService =
-              new nsMainThreadPtrHolder<nsIObserverService>(obs);
-        }
     }
 
 #if !defined(MOZILLA_XPCOMRT_API)
@@ -655,7 +648,7 @@ nsDNSService::Shutdown()
     UnregisterWeakMemoryReporter(this);
 #endif // !defined(MOZILLA_XPCOMRT_API)
 
-    nsRefPtr<nsHostResolver> res;
+    RefPtr<nsHostResolver> res;
     {
         MutexAutoLock lock(mLock);
         res = mResolver;
@@ -744,7 +737,7 @@ nsDNSService::AsyncResolveExtended(const nsACString  &aHostname,
 {
     // grab reference to global host resolver and IDN service.  beware
     // simultaneous shutdown!!
-    nsRefPtr<nsHostResolver> res;
+    RefPtr<nsHostResolver> res;
     nsCOMPtr<nsIIDNService> idn;
     nsCOMPtr<nsIEventTarget> target = target_;
     bool localDomain = false;
@@ -760,8 +753,7 @@ nsDNSService::AsyncResolveExtended(const nsACString  &aHostname,
     }
 
     if (mNotifyResolution) {
-        NS_DispatchToMainThread(new NotifyDNSResolution(mObserverService,
-                                                        aHostname));
+        NS_DispatchToMainThread(new NotifyDNSResolution(aHostname));
     }
 
     if (!res)
@@ -828,7 +820,7 @@ nsDNSService::CancelAsyncResolveExtended(const nsACString  &aHostname,
 {
     // grab reference to global host resolver and IDN service.  beware
     // simultaneous shutdown!!
-    nsRefPtr<nsHostResolver> res;
+    RefPtr<nsHostResolver> res;
     nsCOMPtr<nsIIDNService> idn;
     bool localDomain = false;
     {
@@ -863,7 +855,7 @@ nsDNSService::Resolve(const nsACString &aHostname,
 {
     // grab reference to global host resolver and IDN service.  beware
     // simultaneous shutdown!!
-    nsRefPtr<nsHostResolver> res;
+    RefPtr<nsHostResolver> res;
     nsCOMPtr<nsIIDNService> idn;
     bool localDomain = false;
     {
@@ -874,8 +866,7 @@ nsDNSService::Resolve(const nsACString &aHostname,
     }
 
     if (mNotifyResolution) {
-        NS_DispatchToMainThread(new NotifyDNSResolution(mObserverService,
-                                                        aHostname));
+        NS_DispatchToMainThread(new NotifyDNSResolution(aHostname));
     }
 
     NS_ENSURE_TRUE(res, NS_ERROR_OFFLINE);

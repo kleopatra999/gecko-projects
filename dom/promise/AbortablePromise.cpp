@@ -49,8 +49,8 @@ AbortablePromise::Create(nsIGlobalObject* aGlobal,
                          PromiseNativeAbortCallback& aAbortCallback,
                          ErrorResult& aRv)
 {
-  nsRefPtr<AbortablePromise> p = new AbortablePromise(aGlobal, aAbortCallback);
-  p->CreateWrapper(aRv);
+  RefPtr<AbortablePromise> p = new AbortablePromise(aGlobal, aAbortCallback);
+  p->CreateWrapper(nullptr, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -65,7 +65,8 @@ AbortablePromise::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 
 /* static */ already_AddRefed<AbortablePromise>
 AbortablePromise::Constructor(const GlobalObject& aGlobal, PromiseInit& aInit,
-                              AbortCallback& aAbortCallback, ErrorResult& aRv)
+                              AbortCallback& aAbortCallback, ErrorResult& aRv,
+                              JS::Handle<JSObject*> aDesiredProto)
 {
   nsCOMPtr<nsIGlobalObject> global;
   global = do_QueryInterface(aGlobal.GetAsSupports());
@@ -74,8 +75,8 @@ AbortablePromise::Constructor(const GlobalObject& aGlobal, PromiseInit& aInit,
     return nullptr;
   }
 
-  nsRefPtr<AbortablePromise> promise = new AbortablePromise(global);
-  promise->CreateWrapper(aRv);
+  RefPtr<AbortablePromise> promise = new AbortablePromise(global);
+  promise->CreateWrapper(aDesiredProto, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }

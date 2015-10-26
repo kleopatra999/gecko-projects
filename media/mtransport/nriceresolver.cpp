@@ -149,12 +149,12 @@ int NrIceResolver::resolve(nr_resolver_resource *resource,
   int _status;
   MOZ_ASSERT(allocated_resolvers_ > 0);
   ASSERT_ON_THREAD(sts_thread_);
-  nsRefPtr<PendingResolution> pr;
+  RefPtr<PendingResolution> pr;
   uint32_t resolve_flags = 0;
 
   if (resource->transport_protocol != IPPROTO_UDP &&
       resource->transport_protocol != IPPROTO_TCP) {
-    MOZ_MTLOG(ML_ERROR, "Only UDP and TCP are is supported.");
+    MOZ_MTLOG(ML_ERROR, "Only UDP and TCP are supported.");
     ABORT(R_NOT_FOUND);
   }
   pr = new PendingResolution(sts_thread_,

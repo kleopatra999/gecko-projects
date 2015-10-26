@@ -16,6 +16,7 @@
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseWorkerProxy.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/StructuredCloneHolder.h"
 #include "mozilla/ErrorResult.h"
 
 #include "WorkerPrivate.h"
@@ -167,7 +168,7 @@ public:
   }
 
 protected:
-  nsRefPtr<PromiseWorkerProxy> mPromiseWorkerProxy;
+  RefPtr<PromiseWorkerProxy> mPromiseWorkerProxy;
 };
 
 // A DataStoreRunnable to run DataStore::Get(...) on the main thread.
@@ -199,7 +200,7 @@ protected:
   {
     AssertIsOnMainThread();
 
-    nsRefPtr<Promise> promise = mBackingStore->Get(mId, mRv);
+    RefPtr<Promise> promise = mBackingStore->Get(mId, mRv);
     promise->AppendNativeHandler(mPromiseWorkerProxy);
     return true;
   }
@@ -207,8 +208,8 @@ protected:
 
 // A DataStoreRunnable to run DataStore::Put(...) on the main thread.
 class DataStorePutRunnable final : public DataStoreProxyRunnable
+                                 , public StructuredCloneHolder
 {
-  JSAutoStructuredCloneBuffer mObjBuffer;
   const StringOrUnsignedLong& mId;
   const nsString mRevisionId;
   ErrorResult& mRv;
@@ -223,6 +224,8 @@ public:
                        const nsAString& aRevisionId,
                        ErrorResult& aRv)
     : DataStoreProxyRunnable(aWorkerPrivate, aBackingStore, aWorkerPromise)
+    , StructuredCloneHolder(CloningNotSupported, TransferringNotSupported,
+                            SameProcessDifferentThread)
     , mId(aId)
     , mRevisionId(aRevisionId)
     , mRv(aRv)
@@ -231,10 +234,8 @@ public:
     aWorkerPrivate->AssertIsOnWorkerThread();
 
     // This needs to be structured cloned while it's still on the worker thread.
-    if (!mObjBuffer.write(aCx, aObj)) {
-      JS_ClearPendingException(aCx);
-      mRv.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
-    }
+    Write(aCx, aObj, mRv);
+    NS_WARN_IF(mRv.Failed());
   }
 
 protected:
@@ -252,13 +253,12 @@ protected:
     JSContext* cx = jsapi.cx();
 
     JS::Rooted<JS::Value> value(cx);
-    if (!mObjBuffer.read(cx, &value)) {
-      JS_ClearPendingException(cx);
-      mRv.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
+    Read(mBackingStore->GetParentObject(), cx, &value, mRv);
+    if (NS_WARN_IF(mRv.Failed())) {
       return true;
     }
 
-    nsRefPtr<Promise> promise = mBackingStore->Put(cx,
+    RefPtr<Promise> promise = mBackingStore->Put(cx,
                                                    value,
                                                    mId,
                                                    mRevisionId,
@@ -270,8 +270,8 @@ protected:
 
 // A DataStoreRunnable to run DataStore::Add(...) on the main thread.
 class DataStoreAddRunnable final : public DataStoreProxyRunnable
+                                 , public StructuredCloneHolder
 {
-  JSAutoStructuredCloneBuffer mObjBuffer;
   const Optional<StringOrUnsignedLong>& mId;
   const nsString mRevisionId;
   ErrorResult& mRv;
@@ -286,6 +286,8 @@ public:
                        const nsAString& aRevisionId,
                        ErrorResult& aRv)
     : DataStoreProxyRunnable(aWorkerPrivate, aBackingStore, aWorkerPromise)
+    , StructuredCloneHolder(CloningNotSupported, TransferringNotSupported,
+                            SameProcessDifferentThread)
     , mId(aId)
     , mRevisionId(aRevisionId)
     , mRv(aRv)
@@ -294,10 +296,8 @@ public:
     aWorkerPrivate->AssertIsOnWorkerThread();
 
     // This needs to be structured cloned while it's still on the worker thread.
-    if (!mObjBuffer.write(aCx, aObj)) {
-      JS_ClearPendingException(aCx);
-      mRv.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
-    }
+    Write(aCx, aObj, mRv);
+    NS_WARN_IF(mRv.Failed());
   }
 
 protected:
@@ -315,13 +315,12 @@ protected:
     JSContext* cx = jsapi.cx();
 
     JS::Rooted<JS::Value> value(cx);
-    if (!mObjBuffer.read(cx, &value)) {
-      JS_ClearPendingException(cx);
-      mRv.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
+    Read(mBackingStore->GetParentObject(), cx, &value, mRv);
+    if (NS_WARN_IF(mRv.Failed())) {
       return true;
     }
 
-    nsRefPtr<Promise> promise = mBackingStore->Add(cx,
+    RefPtr<Promise> promise = mBackingStore->Add(cx,
                                                    value,
                                                    mId,
                                                    mRevisionId,
@@ -361,7 +360,7 @@ protected:
   {
     AssertIsOnMainThread();
 
-    nsRefPtr<Promise> promise = mBackingStore->Remove(mId, mRevisionId, mRv);
+    RefPtr<Promise> promise = mBackingStore->Remove(mId, mRevisionId, mRv);
     promise->AppendNativeHandler(mPromiseWorkerProxy);
     return true;
   }
@@ -393,7 +392,7 @@ protected:
   {
     AssertIsOnMainThread();
 
-    nsRefPtr<Promise> promise = mBackingStore->Clear(mRevisionId, mRv);
+    RefPtr<Promise> promise = mBackingStore->Clear(mRevisionId, mRv);
     promise->AppendNativeHandler(mPromiseWorkerProxy);
     return true;
   }
@@ -428,7 +427,7 @@ protected:
     AssertIsOnMainThread();
 
     // Point WorkerDataStoreCursor to DataStoreCursor.
-    nsRefPtr<DataStoreCursor> cursor = mBackingStore->Sync(mRevisionId, mRv);
+    RefPtr<DataStoreCursor> cursor = mBackingStore->Sync(mRevisionId, mRv);
     nsMainThreadPtrHandle<DataStoreCursor> backingCursor(
       new nsMainThreadPtrHolder<DataStoreCursor>(cursor));
     mWorkerCursor->SetBackingDataStoreCursor(backingCursor);
@@ -444,7 +443,7 @@ WorkerDataStore::GetName(JSContext* aCx, nsAString& aName, ErrorResult& aRv)
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<DataStoreGetStringRunnable> runnable =
+  RefPtr<DataStoreGetStringRunnable> runnable =
     new DataStoreGetStringRunnable(workerPrivate,
                                    mBackingStore,
                                    &DataStore::GetName,
@@ -460,7 +459,7 @@ WorkerDataStore::GetOwner(JSContext* aCx, nsAString& aOwner, ErrorResult& aRv)
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<DataStoreGetStringRunnable> runnable =
+  RefPtr<DataStoreGetStringRunnable> runnable =
     new DataStoreGetStringRunnable(workerPrivate,
                                    mBackingStore,
                                    &DataStore::GetOwner,
@@ -476,7 +475,7 @@ WorkerDataStore::GetReadOnly(JSContext* aCx, ErrorResult& aRv)
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<DataStoreGetReadOnlyRunnable> runnable =
+  RefPtr<DataStoreGetReadOnlyRunnable> runnable =
     new DataStoreGetReadOnlyRunnable(workerPrivate, mBackingStore, aRv);
   runnable->Dispatch(aCx);
 
@@ -492,12 +491,12 @@ WorkerDataStore::Get(JSContext* aCx,
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
+  RefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
 
-  nsRefPtr<DataStoreGetRunnable> runnable =
+  RefPtr<DataStoreGetRunnable> runnable =
     new DataStoreGetRunnable(workerPrivate,
                              mBackingStore,
                              promise,
@@ -519,12 +518,12 @@ WorkerDataStore::Put(JSContext* aCx,
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
+  RefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
 
-  nsRefPtr<DataStorePutRunnable> runnable =
+  RefPtr<DataStorePutRunnable> runnable =
     new DataStorePutRunnable(workerPrivate,
                              mBackingStore,
                              promise,
@@ -549,12 +548,12 @@ WorkerDataStore::Add(JSContext* aCx,
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
+  RefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
 
-  nsRefPtr<DataStoreAddRunnable> runnable =
+  RefPtr<DataStoreAddRunnable> runnable =
     new DataStoreAddRunnable(workerPrivate,
                              mBackingStore,
                              promise,
@@ -578,12 +577,12 @@ WorkerDataStore::Remove(JSContext* aCx,
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
+  RefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
 
-  nsRefPtr<DataStoreRemoveRunnable> runnable =
+  RefPtr<DataStoreRemoveRunnable> runnable =
     new DataStoreRemoveRunnable(workerPrivate,
                                 mBackingStore,
                                 promise,
@@ -604,12 +603,12 @@ WorkerDataStore::Clear(JSContext* aCx,
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
+  RefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
 
-  nsRefPtr<DataStoreClearRunnable> runnable =
+  RefPtr<DataStoreClearRunnable> runnable =
     new DataStoreClearRunnable(workerPrivate,
                                mBackingStore,
                                promise,
@@ -629,7 +628,7 @@ WorkerDataStore::GetRevisionId(JSContext* aCx,
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<DataStoreGetStringRunnable> runnable =
+  RefPtr<DataStoreGetStringRunnable> runnable =
     new DataStoreGetStringRunnable(workerPrivate,
                                    mBackingStore,
                                    &DataStore::GetRevisionId,
@@ -661,7 +660,7 @@ protected:
   {
     AssertIsOnMainThread();
 
-    nsRefPtr<Promise> promise = mBackingStore->GetLength(mRv);
+    RefPtr<Promise> promise = mBackingStore->GetLength(mRv);
     promise->AppendNativeHandler(mPromiseWorkerProxy);
     return true;
   }
@@ -674,12 +673,12 @@ WorkerDataStore::GetLength(JSContext* aCx, ErrorResult& aRv)
   MOZ_ASSERT(workerPrivate);
   workerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
+  RefPtr<Promise> promise = Promise::Create(workerPrivate->GlobalScope(), aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
 
-  nsRefPtr<DataStoreGetLengthRunnable> runnable =
+  RefPtr<DataStoreGetLengthRunnable> runnable =
     new DataStoreGetLengthRunnable(workerPrivate,
                                    mBackingStore,
                                    promise,
@@ -701,12 +700,12 @@ WorkerDataStore::Sync(JSContext* aCx,
   // Create a WorkerDataStoreCursor on the worker. Note that we need to pass
   // this WorkerDataStore into the WorkerDataStoreCursor, so that it can keep
   // track of which WorkerDataStore owns the WorkerDataStoreCursor.
-  nsRefPtr<WorkerDataStoreCursor> workerCursor =
+  RefPtr<WorkerDataStoreCursor> workerCursor =
     new WorkerDataStoreCursor(this);
 
   // DataStoreSyncStoreRunnable will point the WorkerDataStoreCursor to the
   // DataStoreCursor created on the main thread.
-  nsRefPtr<DataStoreSyncStoreRunnable> runnable =
+  RefPtr<DataStoreSyncStoreRunnable> runnable =
     new DataStoreSyncStoreRunnable(workerPrivate,
                                    mBackingStore,
                                    workerCursor,
@@ -760,7 +759,7 @@ public:
 
     MOZ_ASSERT(mDataStoreChangeEventProxy);
 
-    nsRefPtr<WorkerDataStore> workerStore =
+    RefPtr<WorkerDataStore> workerStore =
       mDataStoreChangeEventProxy->GetWorkerStore();
 
     DataStoreChangeEventInit eventInit;
@@ -771,7 +770,7 @@ public:
     eventInit.mOperation = mOperation;
     eventInit.mOwner = mOwner;
 
-    nsRefPtr<DataStoreChangeEvent> event =
+    RefPtr<DataStoreChangeEvent> event =
       DataStoreChangeEvent::Constructor(workerStore,
                                         NS_LITERAL_STRING("change"),
                                         eventInit);
@@ -785,7 +784,7 @@ protected:
   {}
 
 private:
-  nsRefPtr<DataStoreChangeEventProxy> mDataStoreChangeEventProxy;
+  RefPtr<DataStoreChangeEventProxy> mDataStoreChangeEventProxy;
 
   nsString mRevisionId;
   Nullable<OwningStringOrUnsignedLong> mId;
@@ -848,10 +847,10 @@ DataStoreChangeEventProxy::HandleEvent(nsIDOMEvent* aEvent)
     return NS_OK;
   }
 
-  nsRefPtr<DataStoreChangeEvent> event =
+  RefPtr<DataStoreChangeEvent> event =
     static_cast<DataStoreChangeEvent*>(aEvent);
 
-  nsRefPtr<DispatchDataStoreChangeEventRunnable> runnable =
+  RefPtr<DispatchDataStoreChangeEventRunnable> runnable =
     new DispatchDataStoreChangeEventRunnable(this, event);
 
   {

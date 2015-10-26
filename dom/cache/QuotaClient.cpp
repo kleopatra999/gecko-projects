@@ -216,7 +216,7 @@ private:
   NS_INLINE_DECL_REFCOUNTING(CacheQuotaClient, override)
 };
 
-} // anonymous namespace;
+} // namespace
 
 namespace mozilla {
 namespace dom {
@@ -224,7 +224,7 @@ namespace cache {
 
 already_AddRefed<quota::Client> CreateQuotaClient()
 {
-  nsRefPtr<CacheQuotaClient> ref = new CacheQuotaClient();
+  RefPtr<CacheQuotaClient> ref = new CacheQuotaClient();
   return ref.forget();
 }
 

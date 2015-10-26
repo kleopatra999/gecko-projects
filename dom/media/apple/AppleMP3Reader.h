@@ -6,6 +6,7 @@
 #define __AppleMP3Reader_h__
 
 #include "MediaDecoderReader.h"
+#include "MediaResource.h"
 #include "MP3FrameParser.h"
 #include "VideoUtils.h"
 
@@ -19,7 +20,7 @@ public:
   explicit AppleMP3Reader(AbstractMediaDecoder *aDecoder);
   virtual ~AppleMP3Reader() override;
 
-  virtual nsresult Init(MediaDecoderReader* aCloneDonor) override;
+  virtual nsresult Init() override;
 
   nsresult PushDataToDemuxer();
 
@@ -33,7 +34,7 @@ public:
   virtual nsresult ReadMetadata(MediaInfo* aInfo,
                                 MetadataTags** aTags) override;
 
-  virtual nsRefPtr<SeekPromise>
+  virtual RefPtr<SeekPromise>
   Seek(int64_t aTime, int64_t aEndTime) override;
 
   void AudioSampleCallback(UInt32 aNumBytes,
@@ -79,6 +80,9 @@ private:
   AudioConverterRef mAudioConverter;
 
   MP3FrameParser mMP3FrameParser;
+
+  MediaResourceIndex mResource;
+  NotifyDataArrivedFilter mFilter;
 };
 
 } // namespace mozilla

@@ -123,11 +123,16 @@ public:
     return 0;
   }
 
+  virtual const PerformanceResourceTiming* ToResourceTiming() const override
+  {
+    return this;
+  }
+
 protected:
   virtual ~PerformanceResourceTiming();
 
   nsString mInitiatorType;
-  nsRefPtr<nsPerformanceTiming> mTiming;
+  RefPtr<nsPerformanceTiming> mTiming;
 };
 
 } // namespace dom

@@ -8,6 +8,9 @@
 #include "nsStreamUtils.h"
 #include "nsThreadUtils.h"
 #include "nsNetUtil.h"
+#include "nsNetCID.h"
+#include "nsIBufferedStreams.h"
+#include "nsIRequestObserver.h"
 #include "mozilla/Logging.h"
 
 using namespace mozilla;
@@ -51,7 +54,7 @@ public:
       return NS_OK;
     }
 private:
-      nsRefPtr<nsAsyncStreamCopier> mCopier;
+      RefPtr<nsAsyncStreamCopier> mCopier;
       nsCOMPtr<nsIEventTarget> mTarget;
 };
 

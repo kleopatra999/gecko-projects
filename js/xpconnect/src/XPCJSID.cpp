@@ -176,7 +176,7 @@ nsJSID::NewID(const char* str)
         return nullptr;
     }
 
-    nsRefPtr<nsJSID> idObj = new nsJSID();
+    RefPtr<nsJSID> idObj = new nsJSID();
     NS_ENSURE_SUCCESS(idObj->Initialize(str), nullptr);
     return idObj.forget();
 }
@@ -185,7 +185,7 @@ nsJSID::NewID(const char* str)
 already_AddRefed<nsJSID>
 nsJSID::NewID(const nsID& id)
 {
-    nsRefPtr<nsJSID> idObj = new nsJSID();
+    RefPtr<nsJSID> idObj = new nsJSID();
     idObj->mID = id;
     idObj->mName = nullptr;
     idObj->mNumber = nullptr;
@@ -371,7 +371,7 @@ nsJSIID::NewID(nsIInterfaceInfo* aInfo)
     if (NS_FAILED(aInfo->IsScriptable(&canScript)) || !canScript)
         return nullptr;
 
-    nsRefPtr<nsJSIID> idObj = new nsJSIID(aInfo);
+    RefPtr<nsJSIID> idObj = new nsJSIID(aInfo);
     return idObj.forget();
 }
 
@@ -408,7 +408,6 @@ nsJSIID::Resolve(nsIXPConnectWrappedNative* wrapper,
     return NS_OK;
 }
 
-/* bool enumerate (in nsIXPConnectWrappedNative wrapper, in JSContextPtr cx, in JSObjectPtr obj); */
 NS_IMETHODIMP
 nsJSIID::Enumerate(nsIXPConnectWrappedNative* wrapper,
                    JSContext * cx, JSObject * objArg, bool* _retval)
@@ -505,7 +504,6 @@ xpc::HasInstance(JSContext* cx, HandleObject objArg, const nsID* iid, bool* bp)
     return NS_OK;
 }
 
-/* bool hasInstance (in nsIXPConnectWrappedNative wrapper, in JSContextPtr cx, in JSObjectPtr obj, in jsval val, out bool bp); */
 NS_IMETHODIMP
 nsJSIID::HasInstance(nsIXPConnectWrappedNative* wrapper,
                      JSContext* cx, JSObject * /* unused */,
@@ -586,7 +584,7 @@ nsJSCID::NewID(const char* str)
         return nullptr;
     }
 
-    nsRefPtr<nsJSCID> idObj = new nsJSCID();
+    RefPtr<nsJSCID> idObj = new nsJSCID();
     if (str[0] == '{') {
         NS_ENSURE_SUCCESS(idObj->Initialize(str), nullptr);
     } else {
@@ -624,7 +622,6 @@ GetIIDArg(uint32_t argc, const JS::Value& val, JSContext* cx)
     return iid;
 }
 
-/* nsISupports createInstance (); */
 NS_IMETHODIMP
 nsJSCID::CreateInstance(HandleValue iidval, JSContext* cx,
                         uint8_t optionalArgc, MutableHandleValue retval)
@@ -660,7 +657,6 @@ nsJSCID::CreateInstance(HandleValue iidval, JSContext* cx,
     return NS_OK;
 }
 
-/* nsISupports getService (); */
 NS_IMETHODIMP
 nsJSCID::GetService(HandleValue iidval, JSContext* cx, uint8_t optionalArgc,
                     MutableHandleValue retval)
@@ -699,7 +695,6 @@ nsJSCID::GetService(HandleValue iidval, JSContext* cx, uint8_t optionalArgc,
     return NS_OK;
 }
 
-/* bool construct (in nsIXPConnectWrappedNative wrapper, in JSContextPtr cx, in JSObjectPtr obj, in uint32_t argc, in JSValPtr argv, in JSValPtr vp); */
 NS_IMETHODIMP
 nsJSCID::Construct(nsIXPConnectWrappedNative* wrapper,
                    JSContext* cx, JSObject* objArg,
@@ -719,7 +714,6 @@ nsJSCID::Construct(nsIXPConnectWrappedNative* wrapper,
     return NS_OK;
 }
 
-/* bool hasInstance (in nsIXPConnectWrappedNative wrapper, in JSContextPtr cx, in JSObjectPtr obj, in jsval val, out bool bp); */
 NS_IMETHODIMP
 nsJSCID::HasInstance(nsIXPConnectWrappedNative* wrapper,
                      JSContext* cx, JSObject * /* unused */,

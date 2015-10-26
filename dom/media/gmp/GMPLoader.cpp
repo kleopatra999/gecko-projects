@@ -10,14 +10,16 @@
 #include "gmp-entrypoints.h"
 #include "prlink.h"
 #include "prenv.h"
+#include "nsAutoPtr.h"
 
 #include <string>
 
-#if defined(XP_WIN) && defined(MOZ_SANDBOX)
-#include "mozilla/Scoped.h"
+#ifdef XP_WIN
 #include "windows.h"
+#ifdef MOZ_SANDBOX
 #include <intrin.h>
 #include <assert.h>
+#endif
 #endif
 
 #if defined(HASH_NODE_ID_WITH_DEVICE_ID)
@@ -34,31 +36,6 @@
 #include "sha256.h"
 #endif
 
-#if defined(XP_WIN) && defined(MOZ_SANDBOX)
-namespace {
-
-// Scoped type used by Load
-struct ScopedActCtxHandleTraits
-{
-  typedef HANDLE type;
-
-  static type empty()
-  {
-    return INVALID_HANDLE_VALUE;
-  }
-
-  static void release(type aActCtxHandle)
-  {
-    if (aActCtxHandle != INVALID_HANDLE_VALUE) {
-      ReleaseActCtx(aActCtxHandle);
-    }
-  }
-};
-typedef mozilla::Scoped<ScopedActCtxHandleTraits> ScopedActCtxHandle;
-
-} // anonymous namespace
-#endif
-
 namespace mozilla {
 namespace gmp {
 
@@ -69,8 +46,8 @@ public:
   {}
   virtual ~GMPLoaderImpl() {}
 
-  virtual bool Load(const char* aLibPath,
-                    uint32_t aLibPathLen,
+  virtual bool Load(const char* aUTF8LibPath,
+                    uint32_t aUTF8LibPathLen,
                     char* aOriginSalt,
                     uint32_t aOriginSaltLen,
                     const GMPPlatformAPI* aPlatformAPI) override;
@@ -132,9 +109,20 @@ GetStackAfterCurrentFrame(uint8_t** aOutTop, uint8_t** aOutBottom)
 }
 #endif
 
+#ifdef HASH_NODE_ID_WITH_DEVICE_ID
+static void SecureMemset(void* start, uint8_t value, size_t size)
+{
+  // Inline instructions equivalent to RtlSecureZeroMemory().
+  for (size_t i = 0; i < size; ++i) {
+    volatile uint8_t* p = static_cast<volatile uint8_t*>(start) + i;
+    *p = value;
+  }
+}
+#endif
+
 bool
-GMPLoaderImpl::Load(const char* aLibPath,
-                    uint32_t aLibPathLen,
+GMPLoaderImpl::Load(const char* aUTF8LibPath,
+                    uint32_t aUTF8LibPathLen,
                     char* aOriginSalt,
                     uint32_t aOriginSaltLen,
                     const GMPPlatformAPI* aPlatformAPI)
@@ -160,10 +148,10 @@ GMPLoaderImpl::Load(const char* aLibPath,
     // Overwrite all data involved in calculation as it could potentially
     // identify the user, so there's no chance a GMP can read it and use
     // it for identity tracking.
-    memset(&ctx, 0, sizeof(ctx));
-    memset(aOriginSalt, 0, aOriginSaltLen);
-    volumeId = 0;
-    memset(&deviceId[0], '*', sizeof(string16::value_type) * deviceId.size());
+    SecureMemset(&ctx, 0, sizeof(ctx));
+    SecureMemset(aOriginSalt, 0, aOriginSaltLen);
+    SecureMemset(&volumeId, 0, sizeof(volumeId));
+    SecureMemset(&deviceId[0], '*', sizeof(string16::value_type) * deviceId.size());
     deviceId = L"";
 
     if (!rlz_lib::BytesToString(digest, SHA256_LENGTH, &nodeId)) {
@@ -195,41 +183,32 @@ GMPLoaderImpl::Load(const char* aLibPath,
     nodeId = std::string(aOriginSalt, aOriginSalt + aOriginSaltLen);
   }
 
-#if defined(XP_WIN) && defined(MOZ_SANDBOX)
-  // If the GMP DLL is a side-by-side assembly with static imports then the DLL
-  // loader will attempt to create an activation context which will fail because
-  // of the sandbox. If we create an activation context before we start the
-  // sandbox then this one will get picked up by the DLL loader.
-  int pathLen = MultiByteToWideChar(CP_ACP, 0, aLibPath, -1, nullptr, 0);
-  if (pathLen == 0) {
-    return false;
-  }
-
-  wchar_t* widePath = new wchar_t[pathLen];
-  if (MultiByteToWideChar(CP_ACP, 0, aLibPath, -1, widePath, pathLen) == 0) {
-    delete[] widePath;
-    return false;
-  }
-
-  ACTCTX actCtx = { sizeof(actCtx) };
-  actCtx.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID;
-  actCtx.lpSource = widePath;
-  actCtx.lpResourceName = ISOLATIONAWARE_MANIFEST_RESOURCE_ID;
-  ScopedActCtxHandle actCtxHandle(CreateActCtx(&actCtx));
-  delete[] widePath;
-#endif
-
   // Start the sandbox now that we've generated the device bound node id.
   // This must happen after the node id is bound to the device id, as
   // generating the device id requires privileges.
-  if (mSandboxStarter && !mSandboxStarter->Start(aLibPath)) {
+  if (mSandboxStarter && !mSandboxStarter->Start(aUTF8LibPath)) {
     return false;
   }
 
   // Load the GMP.
   PRLibSpec libSpec;
-  libSpec.value.pathname = aLibPath;
+#ifdef XP_WIN
+  int pathLen = MultiByteToWideChar(CP_UTF8, 0, aUTF8LibPath, -1, nullptr, 0);
+  if (pathLen == 0) {
+    return false;
+  }
+
+  nsAutoArrayPtr<wchar_t> widePath(new wchar_t[pathLen]);
+  if (MultiByteToWideChar(CP_UTF8, 0, aUTF8LibPath, -1, widePath, pathLen) == 0) {
+    return false;
+  }
+
+  libSpec.value.pathname_u = widePath;
+  libSpec.type = PR_LibSpec_PathnameU;
+#else
+  libSpec.value.pathname = aUTF8LibPath;
   libSpec.type = PR_LibSpec_Pathname;
+#endif
   mLib = PR_LoadLibraryWithFlags(libSpec, 0);
   if (!mLib) {
     return false;

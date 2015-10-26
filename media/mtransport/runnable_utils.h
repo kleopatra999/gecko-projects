@@ -44,7 +44,7 @@ RunOnThreadInternal(nsIEventTarget *thread, nsIRunnable *runnable, uint32_t flag
       return rv;
     }
     if (!on) {
-      return thread->Dispatch(runnable_ref, flags);
+      return thread->Dispatch(runnable_ref.forget(), flags);
     }
   }
   return runnable_ref->Run();
@@ -244,7 +244,7 @@ public:
     return NS_OK;
   }
 private:
-  nsRefPtr<T> ref_;
+  RefPtr<T> ref_;
 };
 
 template <typename T>

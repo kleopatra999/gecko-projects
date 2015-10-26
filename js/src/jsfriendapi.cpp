@@ -18,13 +18,12 @@
 #include "jswatchpoint.h"
 #include "jsweakmap.h"
 #include "jswrapper.h"
-#include "prmjtime.h"
 
 #include "builtin/TestingFunctions.h"
 #include "js/Proxy.h"
 #include "proxy/DeadObjectProxy.h"
 #include "vm/ArgumentsObject.h"
-#include "vm/WeakMapObject.h"
+#include "vm/Time.h"
 #include "vm/WrapperObject.h"
 
 #include "jsobjinlines.h"
@@ -50,7 +49,6 @@ PerThreadDataFriendFields::PerThreadDataFriendFields()
     for (int i=0; i<StackKindCount; i++)
         nativeStackLimit[i] = UINTPTR_MAX;
 #endif
-    PodArrayZero(thingGCRooters);
 }
 
 JS_FRIEND_API(void)
@@ -206,15 +204,15 @@ JS_WrapPropertyDescriptor(JSContext* cx, JS::MutableHandle<js::PropertyDescripto
 JS_FRIEND_API(void)
 JS_TraceShapeCycleCollectorChildren(JS::CallbackTracer* trc, JS::GCCellPtr shape)
 {
-    MOZ_ASSERT(shape.isShape());
-    TraceCycleCollectorChildren(trc, static_cast<Shape*>(shape.asCell()));
+    MOZ_ASSERT(shape.is<Shape>());
+    TraceCycleCollectorChildren(trc, &shape.as<Shape>());
 }
 
 JS_FRIEND_API(void)
 JS_TraceObjectGroupCycleCollectorChildren(JS::CallbackTracer* trc, JS::GCCellPtr group)
 {
-    MOZ_ASSERT(group.isObjectGroup());
-    TraceCycleCollectorChildren(trc, static_cast<ObjectGroup*>(group.asCell()));
+    MOZ_ASSERT(group.is<ObjectGroup>());
+    TraceCycleCollectorChildren(trc, &group.as<ObjectGroup>());
 }
 
 static bool
@@ -245,6 +243,9 @@ JS_DefineFunctionsWithHelp(JSContext* cx, HandleObject obj, const JSFunctionSpec
         if (!fun)
             return false;
 
+        if (fs->jitInfo)
+            fun->setJitInfo(fs->jitInfo);
+
         if (fs->usage) {
             if (!DefineHelpProperty(cx, fun, "usage", fs->usage))
                 return false;
@@ -260,9 +261,37 @@ JS_DefineFunctionsWithHelp(JSContext* cx, HandleObject obj, const JSFunctionSpec
 }
 
 JS_FRIEND_API(bool)
-js::ObjectClassIs(JSContext* cx, HandleObject obj, ESClassValue classValue)
+js::GetBuiltinClass(JSContext* cx, HandleObject obj, ESClassValue* classValue)
 {
-    return ObjectClassIs(obj, classValue, cx);
+    if (MOZ_UNLIKELY(obj->is<ProxyObject>()))
+        return Proxy::getBuiltinClass(cx, obj, classValue);
+
+    if (obj->is<PlainObject>() || obj->is<UnboxedPlainObject>())
+        *classValue = ESClass_Object;
+    else if (obj->is<ArrayObject>() || obj->is<UnboxedArrayObject>())
+        *classValue = ESClass_Array;
+    else if (obj->is<NumberObject>())
+        *classValue = ESClass_Number;
+    else if (obj->is<StringObject>())
+        *classValue = ESClass_String;
+    else if (obj->is<BooleanObject>())
+        *classValue = ESClass_Boolean;
+    else if (obj->is<RegExpObject>())
+        *classValue = ESClass_RegExp;
+    else if (obj->is<ArrayBufferObject>())
+        *classValue = ESClass_ArrayBuffer;
+    else if (obj->is<SharedArrayBufferObject>())
+        *classValue = ESClass_SharedArrayBuffer;
+    else if (obj->is<DateObject>())
+        *classValue = ESClass_Date;
+    else if (obj->is<SetObject>())
+        *classValue = ESClass_Set;
+    else if (obj->is<MapObject>())
+        *classValue = ESClass_Map;
+    else
+        *classValue = ESClass_Other;
+
+    return true;
 }
 
 JS_FRIEND_API(const char*)
@@ -493,7 +522,7 @@ js::SetPreserveWrapperCallback(JSRuntime* rt, PreserveWrapperCallback callback)
 namespace js {
 // Defined in vm/GlobalObject.cpp.
 extern size_t sSetProtoCalled;
-}
+} // namespace js
 
 JS_FRIEND_API(size_t)
 JS_SetProtoCalled(JSContext*)
@@ -657,6 +686,21 @@ FormatValue(JSContext* cx, const Value& vArg, JSAutoByteString& bytes)
     return buf;
 }
 
+// Wrapper for JS_sprintf_append() that reports allocation failure to the
+// context.
+template <typename... Args>
+static char*
+sprintf_append(JSContext* cx, char* buf, Args&&... args)
+{
+    char* result = JS_sprintf_append(buf, mozilla::Forward<Args>(args)...);
+    if (!result) {
+        ReportOutOfMemory(cx);
+        return nullptr;
+    }
+
+    return result;
+}
+
 static char*
 FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
             bool showArgs, bool showLocals, bool showThisProps)
@@ -683,14 +727,17 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
     // print the frame number and function name
     if (funname) {
         JSAutoByteString funbytes;
-        buf = JS_sprintf_append(buf, "%d %s(", num, funbytes.encodeLatin1(cx, funname));
+        char* str = funbytes.encodeLatin1(cx, funname);
+        if (!str)
+            return nullptr;
+        buf = sprintf_append(cx, buf, "%d %s(", num, str);
     } else if (fun) {
-        buf = JS_sprintf_append(buf, "%d anonymous(", num);
+        buf = sprintf_append(cx, buf, "%d anonymous(", num);
     } else {
-        buf = JS_sprintf_append(buf, "%d <TOP LEVEL>", num);
+        buf = sprintf_append(cx, buf, "%d <TOP LEVEL>", num);
     }
     if (!buf)
-        return buf;
+        return nullptr;
 
     if (showArgs && iter.hasArgs()) {
         BindingIter bi(script);
@@ -715,6 +762,11 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
 
             JSAutoByteString valueBytes;
             const char* value = FormatValue(cx, arg, valueBytes);
+            if (!value) {
+                if (cx->isThrowingOutOfMemory())
+                    return nullptr;
+                cx->clearPendingException();
+            }
 
             JSAutoByteString nameBytes;
             const char* name = nullptr;
@@ -722,40 +774,40 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
             if (i < iter.numFormalArgs()) {
                 MOZ_ASSERT(i == bi.argIndex());
                 name = nameBytes.encodeLatin1(cx, bi->name());
-                if (!buf)
+                if (!name)
                     return nullptr;
                 bi++;
             }
 
             if (value) {
-                buf = JS_sprintf_append(buf, "%s%s%s%s%s%s",
-                                        !first ? ", " : "",
-                                        name ? name :"",
-                                        name ? " = " : "",
-                                        arg.isString() ? "\"" : "",
-                                        value,
-                                        arg.isString() ? "\"" : "");
+                buf = sprintf_append(cx, buf, "%s%s%s%s%s%s",
+                                     !first ? ", " : "",
+                                     name ? name :"",
+                                     name ? " = " : "",
+                                     arg.isString() ? "\"" : "",
+                                     value,
+                                     arg.isString() ? "\"" : "");
                 if (!buf)
-                    return buf;
+                    return nullptr;
 
                 first = false;
             } else {
-                buf = JS_sprintf_append(buf, "    <Failed to get argument while inspecting stack frame>\n");
+                buf = sprintf_append(cx, buf,
+                                     "    <Failed to get argument while inspecting stack frame>\n");
                 if (!buf)
-                    return buf;
-                cx->clearPendingException();
+                    return nullptr;
 
             }
         }
     }
 
     // print filename and line number
-    buf = JS_sprintf_append(buf, "%s [\"%s\":%d]\n",
-                            fun ? ")" : "",
-                            filename ? filename : "<unknown>",
-                            lineno);
+    buf = sprintf_append(cx, buf, "%s [\"%s\":%d]\n",
+                         fun ? ")" : "",
+                         filename ? filename : "<unknown>",
+                         lineno);
     if (!buf)
-        return buf;
+        return nullptr;
 
 
     // Note: Right now we don't dump the local variables anymore, because
@@ -766,17 +818,21 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
         if (!thisVal.isUndefined()) {
             JSAutoByteString thisValBytes;
             RootedString thisValStr(cx, ToString<CanGC>(cx, thisVal));
-            const char* str = nullptr;
-            if (thisValStr &&
-                (str = thisValBytes.encodeLatin1(cx, thisValStr)))
-            {
-                buf = JS_sprintf_append(buf, "    this = %s\n", str);
-                if (!buf)
-                    return buf;
-            } else {
-                buf = JS_sprintf_append(buf, "    <failed to get 'this' value>\n");
+            if (!thisValStr) {
+                if (cx->isThrowingOutOfMemory())
+                    return nullptr;
                 cx->clearPendingException();
             }
+            if (thisValStr) {
+                const char* str = thisValBytes.encodeLatin1(cx, thisValStr);
+                if (!str)
+                    return nullptr;
+                buf = sprintf_append(cx, buf, "    this = %s\n", str);
+            } else {
+                buf = sprintf_append(cx, buf, "    <failed to get 'this' value>\n");
+            }
+            if (!buf)
+                return nullptr;
         }
     }
 
@@ -785,8 +841,9 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
 
         AutoIdVector keys(cx);
         if (!GetPropertyKeys(cx, obj, JSITER_OWNONLY, &keys)) {
+            if (cx->isThrowingOutOfMemory())
+                return nullptr;
             cx->clearPendingException();
-            return buf;
         }
 
         RootedId id(cx);
@@ -796,27 +853,44 @@ FormatFrame(JSContext* cx, const ScriptFrameIter& iter, char* buf, int num,
             RootedValue v(cx);
 
             if (!GetProperty(cx, obj, obj, id, &v)) {
-                buf = JS_sprintf_append(buf, "    <Failed to fetch property while inspecting stack frame>\n");
+                if (cx->isThrowingOutOfMemory())
+                    return nullptr;
                 cx->clearPendingException();
+                buf = sprintf_append(cx, buf,
+                                     "    <Failed to fetch property while inspecting stack frame>\n");
+                if (!buf)
+                    return nullptr;
                 continue;
             }
 
             JSAutoByteString nameBytes;
-            JSAutoByteString valueBytes;
             const char* name = FormatValue(cx, key, nameBytes);
-            const char* value = FormatValue(cx, v, valueBytes);
-            if (name && value) {
-                buf = JS_sprintf_append(buf, "    this.%s = %s%s%s\n",
-                                        name,
-                                        v.isString() ? "\"" : "",
-                                        value,
-                                        v.isString() ? "\"" : "");
-                if (!buf)
-                    return buf;
-            } else {
-                buf = JS_sprintf_append(buf, "    <Failed to format values while inspecting stack frame>\n");
+            if (!name) {
+                if (cx->isThrowingOutOfMemory())
+                    return nullptr;
                 cx->clearPendingException();
             }
+
+            JSAutoByteString valueBytes;
+            const char* value = FormatValue(cx, v, valueBytes);
+            if (!value) {
+                if (cx->isThrowingOutOfMemory())
+                    return nullptr;
+                cx->clearPendingException();
+            }
+
+            if (name && value) {
+                buf = sprintf_append(cx, buf, "    this.%s = %s%s%s\n",
+                                     name,
+                                     v.isString() ? "\"" : "",
+                                     value,
+                                     v.isString() ? "\"" : "");
+            } else {
+                buf = sprintf_append(cx, buf,
+                                     "    <Failed to format values while inspecting stack frame>\n");
+            }
+            if (!buf)
+                return nullptr;
         }
     }
 
@@ -831,6 +905,8 @@ JS::FormatStackDump(JSContext* cx, char* buf, bool showArgs, bool showLocals, bo
 
     for (AllFramesIter i(cx); !i.done(); ++i) {
         buf = FormatFrame(cx, i, buf, num, showArgs, showLocals, showThisProps);
+        if (!buf)
+            return nullptr;
         num++;
     }
 
@@ -853,8 +929,8 @@ struct DumpHeapTracer : public JS::CallbackTracer, public WeakMapTracer
   private:
     void trace(JSObject* map, JS::GCCellPtr key, JS::GCCellPtr value) override {
         JSObject* kdelegate = nullptr;
-        if (key.isObject())
-            kdelegate = js::GetWeakmapKeyDelegate(key.toObject());
+        if (key.is<JSObject>())
+            kdelegate = js::GetWeakmapKeyDelegate(&key.as<JSObject>());
 
         fprintf(output, "WeakMapEntry map=%p key=%p keyDelegate=%p value=%p\n",
                 map, key.asCell(), kdelegate, value.asCell());
@@ -910,7 +986,7 @@ DumpHeapVisitCell(JSRuntime* rt, void* data, void* thing,
     char cellDesc[1024 * 32];
     JS_GetTraceThingInfo(cellDesc, sizeof(cellDesc), dtrc, thing, traceKind, true);
     fprintf(dtrc->output, "%p %c %s\n", thing, MarkDescriptor(thing), cellDesc);
-    JS_TraceChildren(dtrc, thing, traceKind);
+    js::TraceChildren(dtrc, thing, traceKind);
 }
 
 void
@@ -949,12 +1025,6 @@ js::DumpHeap(JSRuntime* rt, FILE* fp, js::DumpHeapNurseryBehaviour nurseryBehavi
     fflush(dtrc.output);
 }
 
-JS_FRIEND_API(const JSStructuredCloneCallbacks*)
-js::GetContextStructuredCloneCallbacks(JSContext* cx)
-{
-    return cx->runtime()->structuredCloneCallbacks;
-}
-
 JS_FRIEND_API(bool)
 js::ContextHasOutstandingRequests(const JSContext* cx)
 {
@@ -966,12 +1036,6 @@ js::SetActivityCallback(JSRuntime* rt, ActivityCallback cb, void* arg)
 {
     rt->activityCallback = cb;
     rt->activityCallbackArg = arg;
-}
-
-JS_FRIEND_API(bool)
-js::IsContextRunningJS(JSContext* cx)
-{
-    return cx->currentlyRunning();
 }
 
 JS_FRIEND_API(void)
@@ -1014,7 +1078,7 @@ js::GetTestingFunctions(JSContext* cx)
     if (!obj)
         return nullptr;
 
-    if (!DefineTestingFunctions(cx, obj, false))
+    if (!DefineTestingFunctions(cx, obj, false, false))
         return nullptr;
 
     return obj;
@@ -1190,6 +1254,12 @@ JS_StoreStringPostBarrierCallback(JSContext* cx,
     JSRuntime* rt = cx->runtime();
     if (IsInsideNursery(key))
         rt->gc.storeBuffer.putCallback(callback, key, data);
+}
+
+extern JS_FRIEND_API(void)
+JS_ClearAllPostBarrierCallbacks(JSRuntime* rt)
+{
+    rt->gc.clearPostBarrierCallbacks();
 }
 
 JS_FRIEND_API(bool)

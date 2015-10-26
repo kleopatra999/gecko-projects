@@ -7,10 +7,9 @@ const HAWK_TOKEN_LENGTH = 64;
 const {
   LOOP_SESSION_TYPE,
   MozLoopServiceInternal,
-  MozLoopService,
+  MozLoopService
 } = Cu.import("resource:///modules/loop/MozLoopService.jsm", {});
-const {LoopCalls} = Cu.import("resource:///modules/loop/LoopCalls.jsm", {});
-const {LoopRooms} = Cu.import("resource:///modules/loop/LoopRooms.jsm", {});
+const { LoopRooms } = Cu.import("resource:///modules/loop/LoopRooms.jsm", {});
 
 // Cache this value only once, at the beginning of a
 // test run, so that it doesn't pick up the offline=true
@@ -97,9 +96,9 @@ function waitForCondition(condition, nextTest, errorMsg) {
 }
 
 function promiseWaitForCondition(aConditionFn) {
-  let deferred = Promise.defer();
-  waitForCondition(aConditionFn, deferred.resolve, "Condition didn't pass.");
-  return deferred.promise;
+  return new Promise((resolve, reject) => {
+    waitForCondition(aConditionFn, resolve, "Condition didn't pass.");
+  });
 }
 
 /**
@@ -131,8 +130,8 @@ function loadLoopPanel(aOverrideOptions = {}) {
 
 function promiseOAuthParamsSetup(baseURL, params) {
   return new Promise((resolve, reject) => {
-    let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].
-                createInstance(Ci.nsIXMLHttpRequest);
+    let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].createInstance(
+              Ci.nsIXMLHttpRequest);
     xhr.open("POST", baseURL + "/setup_params", true);
     xhr.setRequestHeader("X-Params", JSON.stringify(params));
     xhr.addEventListener("load", () => resolve(xhr));
@@ -173,8 +172,8 @@ function checkLoggedOutState() {
 
 function promiseDeletedOAuthParams(baseURL) {
   return new Promise((resolve, reject) => {
-    let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].
-                createInstance(Ci.nsIXMLHttpRequest);
+    let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].createInstance(
+              Ci.nsIXMLHttpRequest);
     xhr.open("DELETE", baseURL + "/setup_params", true);
     xhr.addEventListener("load", () => resolve(xhr));
     xhr.addEventListener("error", reject);
@@ -187,7 +186,7 @@ function promiseObserverNotified(aTopic, aExpectedData = null) {
     Services.obs.addObserver(function onNotification(aSubject, topic, aData) {
       Services.obs.removeObserver(onNotification, topic);
       is(aData, aExpectedData, "observer data should match expected data");
-      resolve({subject: aSubject, data: aData});
+      resolve({ subject: aSubject, data: aData });
     }, aTopic, false);
   });
 }
@@ -197,59 +196,13 @@ function promiseObserverNotified(aTopic, aExpectedData = null) {
  */
 function promiseOAuthGetRegistration(baseURL) {
   return new Promise((resolve, reject) => {
-    let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].
-                createInstance(Ci.nsIXMLHttpRequest);
+    let xhr = Cc["@mozilla.org/xmlextras/xmlhttprequest;1"].createInstance(
+              Ci.nsIXMLHttpRequest);
     xhr.open("GET", baseURL + "/get_registration", true);
     xhr.responseType = "json";
     xhr.addEventListener("load", () => resolve(xhr));
     xhr.addEventListener("error", reject);
     xhr.send();
-  });
-}
-
-/**
- * Waits for a load (or custom) event to finish in a given tab. If provided
- * load an uri into the tab.
- *
- * @param tab
- *        The tab to load into.
- * @param [optional] url
- *        The url to load, or the current url.
- * @param [optional] event
- *        The load event type to wait for.  Defaults to "load".
- * @return {Promise} resolved when the event is handled.
- * @resolves to the received event
- * @rejects if a valid load event is not received within a meaningful interval
- */
-function promiseTabLoadEvent(tab, url, eventType="load") {
-  return new Promise((resolve, reject) => {
-    info("Wait tab event: " + eventType);
-
-    function handle(event) {
-      if (event.originalTarget != tab.linkedBrowser.contentDocument ||
-          event.target.location.href == "about:blank" ||
-          (url && event.target.location.href != url)) {
-        info("Skipping spurious '" + eventType + "'' event" +
-             " for " + event.target.location.href);
-        return;
-      }
-      clearTimeout(timeout);
-      tab.linkedBrowser.removeEventListener(eventType, handle, true);
-      info("Tab event received: " + eventType);
-      resolve(event);
-    }
-
-    let timeout = setTimeout(() => {
-      if (tab.linkedBrowser) {
-        tab.linkedBrowser.removeEventListener(eventType, handle, true);
-      }
-      reject(new Error("Timed out while waiting for a '" + eventType + "'' event"));
-    }, 30000);
-
-    tab.linkedBrowser.addEventListener(eventType, handle, true, true);
-    if (url) {
-      tab.linkedBrowser.loadURI(url);
-    }
   });
 }
 
@@ -262,7 +215,7 @@ function getLoopString(stringID) {
  * MozLoopService tests. There is only one object created per test instance, as
  * once registration has taken place, the object cannot currently be changed.
  */
-let mockPushHandler = {
+var mockPushHandler = {
   // This sets the registration result to be returned when initialize
   // is called. By default, it is equivalent to success.
   registrationResult: null,
@@ -277,12 +230,8 @@ let mockPushHandler = {
     if ("mockWebSocket" in options) {
       this._mockWebSocket = options.mockWebSocket;
     }
-    this.registrationPushURLs[MozLoopService.channelIDs.callsGuest] =
-      "https://localhost/pushUrl/guest-calls";
     this.registrationPushURLs[MozLoopService.channelIDs.roomsGuest] =
       "https://localhost/pushUrl/guest-rooms";
-    this.registrationPushURLs[MozLoopService.channelIDs.callsFxA] =
-      "https://localhost/pushUrl/fxa-calls";
     this.registrationPushURLs[MozLoopService.channelIDs.roomsFxA] =
       "https://localhost/pushUrl/fxa-rooms";
   },

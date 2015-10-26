@@ -59,7 +59,7 @@ EncodedBufferCache::ExtractBlob(nsISupports* aParent,
                                 const nsAString &aContentType)
 {
   MutexAutoLock lock(mMutex);
-  nsRefPtr<dom::Blob> blob;
+  RefPtr<dom::Blob> blob;
   if (mTempFileEnabled) {
     // generate new temporary file to write
     blob = dom::Blob::CreateTemporaryBlob(aParent, mFD, 0, mDataSize,
@@ -88,4 +88,4 @@ EncodedBufferCache::ExtractBlob(nsISupports* aParent,
   return blob.forget();
 }
 
-} //end namespace
+} // namespace mozilla

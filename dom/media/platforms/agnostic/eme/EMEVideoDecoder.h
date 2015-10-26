@@ -13,7 +13,7 @@
 namespace mozilla {
 
 class CDMProxy;
-class MediaTaskQueue;
+class TaskQueue;
 
 class EMEVideoCallbackAdapter : public VideoCallbackAdapter {
 public:
@@ -23,7 +23,7 @@ public:
    : VideoCallbackAdapter(aCallback, aVideoInfo, aImageContainer)
   {}
 
-  virtual void Error(GMPErr aErr) override;
+  void Error(GMPErr aErr) override;
 };
 
 class EMEVideoDecoder : public GMPVideoDecoder {
@@ -32,7 +32,7 @@ public:
                   const VideoInfo& aConfig,
                   layers::LayersBackend aLayersBackend,
                   layers::ImageContainer* aImageContainer,
-                  MediaTaskQueue* aTaskQueue,
+                  TaskQueue* aTaskQueue,
                   MediaDataDecoderCallbackProxy* aCallback)
    : GMPVideoDecoder(aConfig,
                      aLayersBackend,
@@ -48,13 +48,13 @@ public:
   }
 
 private:
-  virtual void InitTags(nsTArray<nsCString>& aTags) override;
-  virtual nsCString GetNodeId() override;
-  virtual GMPUniquePtr<GMPVideoEncodedFrame> CreateFrame(MediaRawData* aSample) override;
+  void InitTags(nsTArray<nsCString>& aTags) override;
+  nsCString GetNodeId() override;
+  GMPUniquePtr<GMPVideoEncodedFrame> CreateFrame(MediaRawData* aSample) override;
 
-  nsRefPtr<CDMProxy> mProxy;
+  RefPtr<CDMProxy> mProxy;
 };
 
-}
+} // namespace mozilla
 
 #endif // EMEVideoDecoder_h_

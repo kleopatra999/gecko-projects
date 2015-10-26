@@ -3,13 +3,12 @@
 
 "use strict";
 
-let gTestTab;
-let gContentAPI;
-let gContentWindow;
-let loopButton;
-let loopPanel = document.getElementById("loop-notification-panel");
+var gTestTab;
+var gContentAPI;
+var gContentWindow;
+var loopButton;
+var loopPanel = document.getElementById("loop-notification-panel");
 
-Components.utils.import("resource:///modules/UITour.jsm");
 const { LoopRooms } = Components.utils.import("resource:///modules/loop/LoopRooms.jsm", {});
 const { MozLoopServiceInternal } = Cu.import("resource:///modules/loop/MozLoopService.jsm", {});
 
@@ -27,7 +26,7 @@ function runOffline(fun) {
   }
 }
 
-let tests = [
+var tests = [
   taskify(function* test_gettingStartedClicked_linkOpenedWithExpectedParams() {
     Services.prefs.setBoolPref("loop.gettingStarted.seen", false);
     Services.prefs.setCharPref("loop.gettingStarted.url", "http://example.com");
@@ -46,7 +45,7 @@ let tests = [
     let loopDoc = document.getElementById("loop-notification-panel").children[0].contentDocument;
     yield waitForConditionPromise(() => {
       return loopDoc.readyState == 'complete';
-    }, "Loop notification panel document should be fully loaded.");
+    }, "Loop notification panel document should be fully loaded.", 50);
     let gettingStartedButton = loopDoc.getElementById("fte-button");
     ok(gettingStartedButton, "Getting Started button should be found");
 
@@ -185,55 +184,6 @@ let tests = [
       });
     });
   },
-  taskify(function* test_panelTabChangeNotifications() {
-    // First make sure the Loop panel looks like we're logged in to have more than
-    // just one tab to switch to.
-    const fxASampleToken = {
-      token_type: "bearer",
-      access_token: "1bad3e44b12f77a88fe09f016f6a37c42e40f974bc7a8b432bb0d2f0e37e1752",
-      scope: "profile"
-    };
-    const fxASampleProfile = {
-      email: "test@example.com",
-      uid: "abcd1234"
-    };
-    MozLoopServiceInternal.fxAOAuthTokenData = fxASampleToken;
-    MozLoopServiceInternal.fxAOAuthProfile = fxASampleProfile;
-    Services.prefs.setCharPref("loop.key.fxa", "fake");
-    yield MozLoopServiceInternal.notifyStatusChanged("login");
-
-    // Show the Loop menu.
-    yield showMenuPromise("loop");
-
-    // Listen for and test the notifications that will arrive from now on.
-    let tabChangePromise = new Promise(resolve => {
-      gContentAPI.observe((event, params) => {
-        is(event, "Loop:PanelTabChanged", "Check Loop:PanelTabChanged notification");
-        is(params, "contacts", "Check the tab name param");
-
-        gContentAPI.observe((event, params) => {
-          is(event, "Loop:PanelTabChanged", "Check Loop:PanelTabChanged notification");
-          is(params, "rooms", "Check the tab name param");
-
-          gContentAPI.observe((event, params) => {
-            ok(false, "No more notifications should have arrived");
-          });
-          resolve();
-        });
-      });
-    });
-
-    // Switch to the contacts tab.
-    yield window.LoopUI.openCallPanel(null, "contacts");
-
-    // Logout. The panel tab will switch back to 'rooms'.
-    MozLoopServiceInternal.fxAOAuthTokenData =
-      MozLoopServiceInternal.fxAOAuthProfile = null;
-    Services.prefs.clearUserPref("loop.key.fxa");
-    yield MozLoopServiceInternal.notifyStatusChanged();
-
-    yield tabChangePromise;
-  }),
   runOffline(function test_notifyLoopChatWindowOpenedClosed(done) {
     gContentAPI.observe((event, params) => {
       is(event, "Loop:ChatWindowOpened", "Check Loop:ChatWindowOpened notification");
@@ -301,6 +251,7 @@ let tests = [
         chatWin.document.querySelector(".btn-email").click();
       });
     });
+    setupFakeRoom();
     LoopRooms.open("fakeTourRoom");
   }),
   taskify(function* test_arrow_panel_position() {
@@ -399,6 +350,7 @@ function setupFakeRoom() {
   for (let prop of ["roomToken", "roomOwner", "roomUrl", "participants"])
     room[prop] = "fakeTourRoom";
   room.decryptedContext = {roomName: "fakeTourRoom"};
+  room.participants = [];
   let roomsMap = new Map([
     [room.roomToken, room]
   ]);

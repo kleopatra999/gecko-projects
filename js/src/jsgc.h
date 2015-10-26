@@ -23,18 +23,6 @@
 
 #include "vm/NativeObject.h"
 
-#define FOR_EACH_GC_LAYOUT(D) \
- /* PrettyName       TypeName           AddToCCKind */ \
-    D(BaseShape,     js::BaseShape,     true) \
-    D(JitCode,       js::jit::JitCode,  true) \
-    D(LazyScript,    js::LazyScript,    true) \
-    D(Object,        JSObject,          true) \
-    D(ObjectGroup,   js::ObjectGroup,   true) \
-    D(Script,        JSScript,          true) \
-    D(Shape,         js::Shape,         true) \
-    D(String,        JSString,          false) \
-    D(Symbol,        JS::Symbol,        false)
-
 namespace js {
 
 unsigned GetCPUCount();
@@ -47,7 +35,7 @@ enum ThreadType
 
 namespace gcstats {
 struct Statistics;
-}
+} // namespace gcstats
 
 class Nursery;
 
@@ -63,14 +51,46 @@ enum State {
     COMPACT
 };
 
-// Map from base trace type to the trace kind.
-template <typename T> struct MapTypeToTraceKind {};
-#define EXPAND_DEF(name, type, _) \
-    template <> struct MapTypeToTraceKind<type> { \
-        static const JS::TraceKind kind = JS::TraceKind::name; \
-    };
-FOR_EACH_GC_LAYOUT(EXPAND_DEF);
-#undef EXPAND_DEF
+// Expand the given macro D for each valid GC reference type.
+#define FOR_EACH_GC_POINTER_TYPE(D) \
+    D(AccessorShape*) \
+    D(BaseShape*) \
+    D(UnownedBaseShape*) \
+    D(jit::JitCode*) \
+    D(NativeObject*) \
+    D(ArrayObject*) \
+    D(ArgumentsObject*) \
+    D(ArrayBufferObject*) \
+    D(ArrayBufferObjectMaybeShared*) \
+    D(ArrayBufferViewObject*) \
+    D(DebugScopeObject*) \
+    D(GlobalObject*) \
+    D(JSObject*) \
+    D(JSFunction*) \
+    D(ModuleObject*) \
+    D(ModuleEnvironmentObject*) \
+    D(NestedScopeObject*) \
+    D(PlainObject*) \
+    D(SavedFrame*) \
+    D(ScopeObject*) \
+    D(ScriptSourceObject*) \
+    D(SharedArrayBufferObject*) \
+    D(SharedTypedArrayObject*) \
+    D(ImportEntryObject*) \
+    D(ExportEntryObject*) \
+    D(JSScript*) \
+    D(LazyScript*) \
+    D(Shape*) \
+    D(JSAtom*) \
+    D(JSString*) \
+    D(JSFlatString*) \
+    D(JSLinearString*) \
+    D(PropertyName*) \
+    D(JS::Symbol*) \
+    D(js::ObjectGroup*) \
+    D(Value) \
+    D(jsid) \
+    D(TaggedProto)
 
 /* Map from C++ type to alloc kind. JSObject does not have a 1:1 mapping, so must use Arena::thingSize. */
 template <typename T> struct MapTypeToFinalizeKind {};
@@ -89,7 +109,7 @@ template <> struct MapTypeToFinalizeKind<jit::JitCode>      { static const Alloc
 template <typename T> struct ParticipatesInCC {};
 #define EXPAND_PARTICIPATES_IN_CC(_, type, addToCCKind) \
     template <> struct ParticipatesInCC<type> { static const bool value = addToCCKind; };
-FOR_EACH_GC_LAYOUT(EXPAND_PARTICIPATES_IN_CC)
+JS_FOR_EACH_TRACEKIND(EXPAND_PARTICIPATES_IN_CC)
 #undef EXPAND_PARTICIPATES_IN_CC
 
 static inline bool
@@ -177,53 +197,6 @@ CanBeFinalizedInBackground(AllocKind kind, const Class* clasp)
             (!clasp->finalize || (clasp->flags & JSCLASS_BACKGROUND_FINALIZE)));
 }
 
-// Fortunately, few places in the system need to deal with fully abstract
-// cells. In those places that do, we generally want to move to a layout
-// templated function as soon as possible. This template wraps the upcast
-// for that dispatch.
-//
-// Call the functor |F f| with template parameter of the layout type.
-
-// GCC and Clang require an explicit template declaration in front of the
-// specialization of operator() because it is a dependent template. MSVC, on
-// the other hand, gets very confused if we have a |template| token there.
-#ifdef _MSC_VER
-# define DEPENDENT_TEMPLATE_HINT
-#else
-# define DEPENDENT_TEMPLATE_HINT template
-#endif
-template <typename F, typename... Args>
-auto
-CallTyped(F f, JS::TraceKind traceKind, Args&&... args)
-  -> decltype(f. DEPENDENT_TEMPLATE_HINT operator()<JSObject>(mozilla::Forward<Args>(args)...))
-{
-    switch (traceKind) {
-#define EXPAND_DEF(name, type, _) \
-      case JS::TraceKind::name: \
-        return f. DEPENDENT_TEMPLATE_HINT operator()<type>(mozilla::Forward<Args>(args)...);
-      FOR_EACH_GC_LAYOUT(EXPAND_DEF);
-#undef EXPAND_DEF
-      default:
-          MOZ_CRASH("Invalid trace kind in CallTyped.");
-    }
-}
-#undef DEPENDENT_TEMPLATE_HINT
-
-template <typename F, typename... Args>
-auto
-CallTyped(F f, void* thing, JS::TraceKind traceKind, Args&&... args)
-  -> decltype(f(reinterpret_cast<JSObject*>(0), mozilla::Forward<Args>(args)...))
-{
-    switch (traceKind) {
-#define EXPAND_DEF(name, type, _) \
-      case JS::TraceKind::name: \
-          return f(static_cast<type*>(thing), mozilla::Forward<Args>(args)...);
-      FOR_EACH_GC_LAYOUT(EXPAND_DEF);
-#undef EXPAND_DEF
-      default:
-          MOZ_CRASH("Invalid trace kind in CallTyped.");
-    }
-}
 /* Capacity for slotsToThingKind */
 const size_t SLOTS_TO_THING_KIND_LIMIT = 17;
 
@@ -240,7 +213,7 @@ GetGCObjectKind(size_t numSlots)
 
 /* As for GetGCObjectKind, but for dense array allocation. */
 static inline AllocKind
-GetGCArrayKind(size_t numSlots)
+GetGCArrayKind(size_t numElements)
 {
     /*
      * Dense arrays can use their fixed slots to hold their elements array
@@ -249,9 +222,12 @@ GetGCArrayKind(size_t numSlots)
      * unused.
      */
     JS_STATIC_ASSERT(ObjectElements::VALUES_PER_HEADER == 2);
-    if (numSlots > NativeObject::NELEMENTS_LIMIT || numSlots + 2 >= SLOTS_TO_THING_KIND_LIMIT)
+    if (numElements > NativeObject::MAX_DENSE_ELEMENTS_COUNT ||
+        numElements + ObjectElements::VALUES_PER_HEADER >= SLOTS_TO_THING_KIND_LIMIT)
+    {
         return AllocKind::OBJECT2;
-    return slotsToThingKind[numSlots + 2];
+    }
+    return slotsToThingKind[numElements + ObjectElements::VALUES_PER_HEADER];
 }
 
 static inline AllocKind
@@ -871,7 +847,7 @@ class ArenaLists
         MOZ_ASSERT(freeLists[kind].isEmpty());
     }
 
-    bool relocateArenas(ArenaHeader*& relocatedListOut, JS::gcreason::Reason reason,
+    bool relocateArenas(Zone* zone, ArenaHeader*& relocatedListOut, JS::gcreason::Reason reason,
                         SliceBudget& sliceBudget, gcstats::Statistics& stats);
 
     void queueForegroundObjectsForSweep(FreeOp* fop);
@@ -1168,23 +1144,20 @@ MergeCompartments(JSCompartment* source, JSCompartment* target);
  */
 class RelocationOverlay
 {
-    friend class MinorCollectionTracer;
-    friend class js::TenuringTracer;
-
     /* The low bit is set so this should never equal a normal pointer. */
     static const uintptr_t Relocated = uintptr_t(0xbad0bad1);
 
-    // Putting the magic value after the forwarding pointer is a terrible hack
-    // to make JSObject::zone() work on forwarded objects.
+    // Arrange the fields of the RelocationOverlay so that JSObject's group
+    // pointer is not overwritten during compacting.
 
-    /* The location |this| was moved to. */
-    Cell* newLocation_;
+    /* A list entry to track all relocated things. */
+    RelocationOverlay* next_;
 
     /* Set to Relocated when moved. */
     uintptr_t magic_;
 
-    /* A list entry to track all relocated things. */
-    RelocationOverlay* next_;
+    /* The location |this| was moved to. */
+    Cell* newLocation_;
 
   public:
     static RelocationOverlay* fromCell(Cell* cell) {
@@ -1202,15 +1175,20 @@ class RelocationOverlay
 
     void forwardTo(Cell* cell) {
         MOZ_ASSERT(!isForwarded());
-        static_assert(offsetof(JSObject, group_) == offsetof(RelocationOverlay, newLocation_),
-                      "forwarding pointer and group should be at same location, "
-                      "so that obj->zone() works on forwarded objects");
+        static_assert(offsetof(JSObject, group_) == offsetof(RelocationOverlay, next_),
+                      "next pointer and group should be at same location, "
+                      "so that group is not overwritten during compacting");
         newLocation_ = cell;
         magic_ = Relocated;
-        next_ = nullptr;
+    }
+
+    RelocationOverlay*& nextRef() {
+        MOZ_ASSERT(isForwarded());
+        return next_;
     }
 
     RelocationOverlay* next() const {
+        MOZ_ASSERT(isForwarded());
         return next_;
     }
 
@@ -1252,7 +1230,7 @@ struct IsForwardedFunctor : public BoolDefaultAdaptor<Value, false> {
 inline bool
 IsForwarded(const JS::Value& value)
 {
-    return DispatchValueTyped(IsForwardedFunctor(), value);
+    return DispatchTyped(IsForwardedFunctor(), value);
 }
 
 template <typename T>
@@ -1266,14 +1244,14 @@ Forwarded(T* t)
 
 struct ForwardedFunctor : public IdentityDefaultAdaptor<Value> {
     template <typename T> inline Value operator()(T* t) {
-        return js::gc::RewrapValueOrId<Value, T*>::wrap(Forwarded(t));
+        return js::gc::RewrapTaggedPointer<Value, T*>::wrap(Forwarded(t));
     }
 };
 
 inline Value
 Forwarded(const JS::Value& value)
 {
-    return DispatchValueTyped(ForwardedFunctor(), value);
+    return DispatchTyped(ForwardedFunctor(), value);
 }
 
 template <typename T>
@@ -1295,6 +1273,13 @@ CheckGCThingAfterMovingGC(T* t)
     }
 }
 
+template <typename T>
+inline void
+CheckGCThingAfterMovingGC(const ReadBarriered<T*>& t)
+{
+    CheckGCThingAfterMovingGC(t.unbarrieredGet());
+}
+
 struct CheckValueAfterMovingGCFunctor : public VoidDefaultAdaptor<Value> {
     template <typename T> void operator()(T* t) { CheckGCThingAfterMovingGC(t); }
 };
@@ -1302,7 +1287,7 @@ struct CheckValueAfterMovingGCFunctor : public VoidDefaultAdaptor<Value> {
 inline void
 CheckValueAfterMovingGC(const JS::Value& value)
 {
-    DispatchValueTyped(CheckValueAfterMovingGCFunctor(), value);
+    DispatchTyped(CheckValueAfterMovingGCFunctor(), value);
 }
 
 #endif // JSGC_HASH_TABLE_CHECKS
@@ -1356,7 +1341,7 @@ MaybeVerifyBarriers(JSContext* cx, bool always = false)
  * read the comment in vm/Runtime.h above |suppressGC| and take all appropriate
  * precautions before instantiating this class.
  */
-class AutoSuppressGC
+class MOZ_RAII AutoSuppressGC
 {
     int32_t& suppressGC_;
 
@@ -1370,33 +1355,6 @@ class AutoSuppressGC
         suppressGC_--;
     }
 };
-
-#ifdef DEBUG
-/* Disable OOM testing in sections which are not OOM safe. */
-class AutoEnterOOMUnsafeRegion
-{
-    bool oomEnabled_;
-    int64_t oomAfter_;
-
-  public:
-    AutoEnterOOMUnsafeRegion()
-      : oomEnabled_(OOM_maxAllocations != UINT32_MAX), oomAfter_(0)
-    {
-        if (oomEnabled_) {
-            oomAfter_ = OOM_maxAllocations - OOM_counter;
-            OOM_maxAllocations = UINT32_MAX;
-        }
-    }
-
-    ~AutoEnterOOMUnsafeRegion() {
-        MOZ_ASSERT(OOM_maxAllocations == UINT32_MAX);
-        if (oomEnabled_)
-            OOM_maxAllocations = OOM_counter + oomAfter_;
-    }
-};
-#else
-class AutoEnterOOMUnsafeRegion {};
-#endif /* DEBUG */
 
 // A singly linked list of zones.
 class ZoneList
@@ -1433,24 +1391,22 @@ NewMemoryStatisticsObject(JSContext* cx);
 
 #ifdef DEBUG
 /* Use this to avoid assertions when manipulating the wrapper map. */
-class AutoDisableProxyCheck
+class MOZ_RAII AutoDisableProxyCheck
 {
-    MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER;
     gc::GCRuntime& gc;
 
   public:
-    explicit AutoDisableProxyCheck(JSRuntime* rt
-                                   MOZ_GUARD_OBJECT_NOTIFIER_PARAM);
+    explicit AutoDisableProxyCheck(JSRuntime* rt);
     ~AutoDisableProxyCheck();
 };
 #else
-struct AutoDisableProxyCheck
+struct MOZ_RAII AutoDisableProxyCheck
 {
     explicit AutoDisableProxyCheck(JSRuntime* rt) {}
 };
 #endif
 
-struct AutoDisableCompactingGC
+struct MOZ_RAII AutoDisableCompactingGC
 {
     explicit AutoDisableCompactingGC(JSRuntime* rt);
     ~AutoDisableCompactingGC();

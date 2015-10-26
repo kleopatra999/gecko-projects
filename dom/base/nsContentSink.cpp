@@ -20,6 +20,8 @@
 #include "nsCPrefetchService.h"
 #include "nsIURI.h"
 #include "nsNetUtil.h"
+#include "nsIMIMEHeaderParam.h"
+#include "nsIProtocolHandler.h"
 #include "nsIHttpChannel.h"
 #include "nsIContent.h"
 #include "nsIPresShell.h"
@@ -49,6 +51,16 @@
 #include "nsParserConstants.h"
 #include "nsSandboxFlags.h"
 
+static PRLogModuleInfo*
+GetSriLog()
+{
+  static PRLogModuleInfo *gSriPRLog;
+  if (!gSriPRLog) {
+    gSriPRLog = PR_NewLogModule("SRI");
+  }
+  return gSriPRLog;
+}
+
 using namespace mozilla;
 
 PRLogModuleInfo* gContentSinkLogModuleInfo;
@@ -73,12 +85,14 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsContentSink)
   }
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mParser)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mCSSLoader)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mNodeInfoManager)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mScriptLoader)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsContentSink)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocument)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParser)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCSSLoader)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mNodeInfoManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mScriptLoader)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
@@ -748,12 +762,23 @@ nsContentSink::ProcessStyleLink(nsIContent* aElement,
                aElement->NodeType() == nsIDOMNode::PROCESSING_INSTRUCTION_NODE,
                "We only expect processing instructions here");
 
+  nsAutoString integrity;
+  if (aElement) {
+    aElement->GetAttr(kNameSpaceID_None, nsGkAtoms::integrity, integrity);
+  }
+  if (!integrity.IsEmpty()) {
+    MOZ_LOG(GetSriLog(), mozilla::LogLevel::Debug,
+            ("nsContentSink::ProcessStyleLink, integrity=%s",
+             NS_ConvertUTF16toUTF8(integrity).get()));
+  }
+
   // If this is a fragment parser, we don't want to observe.
   // We don't support CORS for processing instructions
   bool isAlternate;
   rv = mCSSLoader->LoadStyleLink(aElement, url, aTitle, aMedia, aAlternate,
                                  CORS_NONE, mDocument->GetReferrerPolicy(),
-                                 mRunsToCompletion ? nullptr : this, &isAlternate);
+                                 integrity, mRunsToCompletion ? nullptr : this,
+                                 &isAlternate);
   NS_ENSURE_SUCCESS(rv, rv);
   
   if (!isAlternate && !mRunsToCompletion) {
@@ -1039,6 +1064,12 @@ nsContentSink::ProcessOfflineManifest(const nsAString& aManifestSpec)
     return;
   }
 
+  // If this document has been interecepted, let's skip the processing of the
+  // manifest.
+  if (nsContentUtils::IsControlledByServiceWorker(mDocument)) {
+    return;
+  }
+
   // If the docshell's in private browsing mode, we don't want to do any
   // manifest processing.
   nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(mDocShell);
@@ -1140,7 +1171,8 @@ nsContentSink::ProcessOfflineManifest(const nsAString& aManifestSpec)
 
     if (updateService) {
       nsCOMPtr<nsIDOMDocument> domdoc = do_QueryInterface(mDocument);
-      updateService->ScheduleOnDocumentStop(manifestURI, mDocumentURI, domdoc);
+      updateService->ScheduleOnDocumentStop(manifestURI, mDocumentURI,
+                                            mDocument->NodePrincipal(), domdoc);
     }
     break;
   }
@@ -1504,7 +1536,7 @@ nsContentSink::DropParserAndPerfHint(void)
   // actually broken.
   // Drop our reference to the parser to get rid of a circular
   // reference.
-  nsRefPtr<nsParserBase> kungFuDeathGrip(mParser.forget());
+  RefPtr<nsParserBase> kungFuDeathGrip(mParser.forget());
 
   if (mDynamicLowerValue) {
     // Reset the performance hint which was set to FALSE

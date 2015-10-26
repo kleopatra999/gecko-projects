@@ -21,43 +21,58 @@ public:
   static already_AddRefed<PlatformDecoderModule>
   Create()
   {
-    nsRefPtr<PlatformDecoderModule> pdm = new FFmpegDecoderModule();
+    RefPtr<PlatformDecoderModule> pdm = new FFmpegDecoderModule();
+
     return pdm.forget();
+  }
+
+  static bool
+  GetVersion(uint32_t& aMajor, uint32_t& aMinor)
+  {
+    uint32_t version = avcodec_version();
+    aMajor = (version >> 16) & 0xff;
+    aMinor = (version >> 8) & 0xff;
+    return true;
   }
 
   FFmpegDecoderModule() {}
   virtual ~FFmpegDecoderModule() {}
 
-  virtual already_AddRefed<MediaDataDecoder>
+  already_AddRefed<MediaDataDecoder>
   CreateVideoDecoder(const VideoInfo& aConfig,
                      layers::LayersBackend aLayersBackend,
                      layers::ImageContainer* aImageContainer,
-                     FlushableMediaTaskQueue* aVideoTaskQueue,
+                     FlushableTaskQueue* aVideoTaskQueue,
                      MediaDataDecoderCallback* aCallback) override
   {
-    nsRefPtr<MediaDataDecoder> decoder =
+    RefPtr<MediaDataDecoder> decoder =
       new FFmpegH264Decoder<V>(aVideoTaskQueue, aCallback, aConfig,
                                aImageContainer);
     return decoder.forget();
   }
 
-  virtual already_AddRefed<MediaDataDecoder>
+  already_AddRefed<MediaDataDecoder>
   CreateAudioDecoder(const AudioInfo& aConfig,
-                     FlushableMediaTaskQueue* aAudioTaskQueue,
+                     FlushableTaskQueue* aAudioTaskQueue,
                      MediaDataDecoderCallback* aCallback) override
   {
-    nsRefPtr<MediaDataDecoder> decoder =
+    RefPtr<MediaDataDecoder> decoder =
       new FFmpegAudioDecoder<V>(aAudioTaskQueue, aCallback, aConfig);
     return decoder.forget();
   }
 
-  virtual bool SupportsMimeType(const nsACString& aMimeType) override
+  bool SupportsMimeType(const nsACString& aMimeType) override
   {
-    return FFmpegAudioDecoder<V>::GetCodecId(aMimeType) != AV_CODEC_ID_NONE ||
-      FFmpegH264Decoder<V>::GetCodecId(aMimeType) != AV_CODEC_ID_NONE;
+    AVCodecID audioCodec = FFmpegAudioDecoder<V>::GetCodecId(aMimeType);
+    AVCodecID videoCodec = FFmpegH264Decoder<V>::GetCodecId(aMimeType);
+    if (audioCodec == AV_CODEC_ID_NONE && videoCodec == AV_CODEC_ID_NONE) {
+      return false;
+    }
+    AVCodecID codec = audioCodec != AV_CODEC_ID_NONE ? audioCodec : videoCodec;
+    return !!FFmpegDataDecoder<V>::FindAVCodec(codec);
   }
 
-  virtual ConversionRequired
+  ConversionRequired
   DecoderNeedsConversion(const TrackInfo& aConfig) const override
   {
     if (aConfig.IsVideo() &&

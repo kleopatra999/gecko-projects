@@ -6,8 +6,10 @@
 
 #include "base/basictypes.h"
 
+#include "mozilla/AbstractThread.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Poison.h"
+#include "mozilla/SharedThreadPool.h"
 #include "mozilla/XPCOM.h"
 #include "nsXULAppAPI.h"
 
@@ -211,7 +213,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsStorageStream)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsVersionComparatorImpl)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsScriptableBase64Encoder)
 
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsVariant)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsVariantCC)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHashPropertyBagCC)
 
@@ -496,6 +498,8 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
 
   NS_LogInit();
 
+  mozilla::LogModule::Init();
+
   JS_SetCurrentEmbedderTimeFunction(TimeSinceProcessCreation);
 
   char aLocal;
@@ -714,6 +718,12 @@ NS_InitXPCOM2(nsIServiceManager** aResult,
   // to the directory service.
   nsDirectoryService::gService->RegisterCategoryProviders();
 
+  // Init SharedThreadPool (which needs the service manager).
+  SharedThreadPool::InitStatics();
+
+  // Init AbstractThread.
+  AbstractThread::InitStatics();
+
   // Force layout to spin up so that nsContentUtils is available for cx stack
   // munging.
   nsCOMPtr<nsISupports> componentLoader =
@@ -827,7 +837,7 @@ ShutdownXPCOM(nsIServiceManager* aServMgr)
       return NS_ERROR_UNEXPECTED;
     }
 
-    nsRefPtr<nsObserverService> observerService;
+    RefPtr<nsObserverService> observerService;
     CallGetService("@mozilla.org/observer-service;1",
                    (nsObserverService**)getter_AddRefs(observerService));
 

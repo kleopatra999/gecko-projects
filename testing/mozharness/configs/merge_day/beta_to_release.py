@@ -1,12 +1,30 @@
 config = {
     "log_name": "beta_to_release",
-
-    "branding_dirs": [
-        "mobile/android/config/mozconfigs/android-api-11/",
-        "mobile/android/config/mozconfigs/android-api-9-10-constrained/",
-        "mobile/android/config/mozconfigs/android-x86/",
+    "version_files": [
+        "browser/config/version.txt",
+        "browser/config/version_display.txt",
+        "config/milestone.txt",
+        "mobile/android/confvars.sh",  # TODO: remove this line before gecko 43 merge
+        "b2g/confvars.sh",
     ],
-    "branding_files": ["release", "l10n-release", "l10n-nightly", "nightly"],
+    "replacements": [
+        # File, from, to
+        ("{}/{}".format(d, f),
+        "ac_add_options --with-branding=mobile/android/branding/beta",
+        "ac_add_options --with-branding=mobile/android/branding/official")
+        for d in ["mobile/android/config/mozconfigs/android-api-11/",
+                  "mobile/android/config/mozconfigs/android-api-9-10-constrained/",
+                  "mobile/android/config/mozconfigs/android-x86/"]
+        for f in ["debug", "nightly", "l10n-nightly", "l10n-release", "release"]
+    ] + [
+        # File, from, to
+        ("browser/confvars.sh",
+         "ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-beta,firefox-mozilla-release",
+         "ACCEPTED_MAR_CHANNEL_IDS=firefox-mozilla-release"),
+        ("browser/confvars.sh",
+         "MAR_CHANNEL_ID=firefox-mozilla-beta",
+         "MAR_CHANNEL_ID=firefox-mozilla-release"),
+    ],
 
     # Disallow sharing, since we want pristine .hg directories.
     # "vcs_share_base": None,

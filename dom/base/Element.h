@@ -37,6 +37,7 @@
 #include "mozilla/dom/WindowBinding.h"
 #include "mozilla/dom/ElementBinding.h"
 #include "Units.h"
+#include "nsContentListDeclarations.h"
 
 class nsIFrame;
 class nsIDOMMozNamedAttrMap;
@@ -61,11 +62,6 @@ namespace dom {
 } // namespace mozilla
 
 
-already_AddRefed<nsContentList>
-NS_GetContentList(nsINode* aRootNode,
-                  int32_t  aMatchNameSpaceId,
-                  const nsAString& aTagname);
-
 #define ELEMENT_FLAG_BIT(n_) NODE_FLAG_BIT(NODE_TYPE_SPECIFIC_BITS_OFFSET + (n_))
 
 // Element-specific flags
@@ -89,18 +85,27 @@ enum {
   // change will attempt to restyle descendants).
   ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT = ELEMENT_FLAG_BIT(3),
 
-  // All of those bits together, for convenience.
-  ELEMENT_ALL_RESTYLE_FLAGS = ELEMENT_HAS_PENDING_RESTYLE |
-                              ELEMENT_IS_POTENTIAL_RESTYLE_ROOT |
-                              ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE |
-                              ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT,
+  // Set if this element has a pending restyle with an eRestyle_SomeDescendants
+  // restyle hint.
+  ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR = ELEMENT_FLAG_BIT(4),
 
   // Just the HAS_PENDING bits, for convenience
-  ELEMENT_PENDING_RESTYLE_FLAGS = ELEMENT_HAS_PENDING_RESTYLE |
-                                  ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE,
+  ELEMENT_PENDING_RESTYLE_FLAGS =
+    ELEMENT_HAS_PENDING_RESTYLE |
+    ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE,
+
+  // Just the IS_POTENTIAL bits, for convenience
+  ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS =
+    ELEMENT_IS_POTENTIAL_RESTYLE_ROOT |
+    ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT,
+
+  // All of the restyle bits together, for convenience.
+  ELEMENT_ALL_RESTYLE_FLAGS = ELEMENT_PENDING_RESTYLE_FLAGS |
+                              ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS |
+                              ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR,
 
   // Remaining bits are for subclasses
-  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 4
+  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 5
 };
 
 #undef ELEMENT_FLAG_BIT
@@ -126,8 +131,8 @@ class DestinationInsertionPointList;
 
 // IID for the dom::Element interface
 #define NS_ELEMENT_IID \
-{ 0x31d3f3fb, 0xcdf8, 0x4e40, \
- { 0xb7, 0x09, 0x1a, 0x11, 0x43, 0x93, 0x61, 0x71 } }
+{ 0xc67ed254, 0xfd3b, 0x4b10, \
+  { 0x96, 0xa2, 0xc5, 0x8b, 0x7b, 0x64, 0x97, 0xd1 } }
 
 class Element : public FragmentOrElement
 {
@@ -477,6 +482,8 @@ public:
 
   virtual nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName, nsIAtom* aPrefix,
                            const nsAString& aValue, bool aNotify) override;
+  // aParsedValue receives the old value of the attribute. That's useful if
+  // either the input or output value of aParsedValue is StoresOwnData.
   nsresult SetParsedAttr(int32_t aNameSpaceID, nsIAtom* aName, nsIAtom* aPrefix,
                          nsAttrValue& aParsedValue, bool aNotify);
   // GetAttr is not inlined on purpose, to keep down codesize from all
@@ -661,11 +668,6 @@ public:
                            ErrorResult& aError);
   already_AddRefed<nsIHTMLCollection>
     GetElementsByClassName(const nsAString& aClassNames);
-  bool MozMatchesSelector(const nsAString& aSelector,
-                          ErrorResult& aError)
-  {
-    return Matches(aSelector, aError);
-  }
   void SetPointerCapture(int32_t aPointerId, ErrorResult& aError)
   {
     bool activeState = false;
@@ -804,7 +806,7 @@ public:
   {
   }
 
-  void GetAnimations(nsTArray<nsRefPtr<Animation>>& aAnimations);
+  void GetAnimations(nsTArray<RefPtr<Animation>>& aAnimations);
 
   NS_IMETHOD GetInnerHTML(nsAString& aInnerHTML);
   virtual void SetInnerHTML(const nsAString& aInnerHTML, ErrorResult& aError);
@@ -1060,6 +1062,8 @@ public:
    */
   float FontSizeInflation();
 
+  net::ReferrerPolicy GetReferrerPolicy();
+
 protected:
   /*
    * Named-bools for use with SetAttrAndNotify to make call sites easier to
@@ -1085,10 +1089,15 @@ protected:
    * @param aNamespaceID  namespace of attribute
    * @param aAttribute    local-name of attribute
    * @param aPrefix       aPrefix of attribute
-   * @param aOldValue     previous value of attribute. Only needed if
-   *                      aFireMutation is true or if the element is a
-   *                      custom element (in web components).
-   * @param aParsedValue  parsed new value of attribute
+   * @param aOldValue     The old value of the attribute to use as a fallback
+   *                      in the cases where the actual old value (i.e.
+   *                      its current value) is !StoresOwnData() --- in which
+   *                      case the current value is probably already useless.
+   *                      If the current value is StoresOwnData() (or absent),
+   *                      aOldValue will not be used.
+   * @param aParsedValue  parsed new value of attribute. Replaced by the
+   *                      old value of the attribute. This old value is only
+   *                      useful if either it or the new value is StoresOwnData.
    * @param aModType      nsIDOMMutationEvent::MODIFICATION or ADDITION.  Only
    *                      needed if aFireMutation or aNotify is true.
    * @param aFireMutation should mutation-events be fired?
@@ -1161,17 +1170,16 @@ protected:
    * @param aName the localname of the attribute being set
    * @param aValue the value it's being set to represented as either a string or
    *        a parsed nsAttrValue. Alternatively, if the attr is being removed it
-   *        will be null.
+   *        will be null. BeforeSetAttr is allowed to modify aValue by parsing
+   *        the string to an nsAttrValue (to avoid having to reparse it in
+   *        ParseAttribute).
    * @param aNotify Whether we plan to notify document observers.
    */
   // Note that this is inlined so that when subclasses call it it gets
   // inlined.  Those calls don't go through a vtable.
   virtual nsresult BeforeSetAttr(int32_t aNamespaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
-                                 bool aNotify)
-  {
-    return NS_OK;
-  }
+                                 nsAttrValueOrString* aValue,
+                                 bool aNotify);
 
   /**
    * Hook that is called by Element::SetAttr to allow subclasses to
@@ -1290,8 +1298,8 @@ public:
   NS_IMETHOD Run() override;
 private:
   virtual ~RemoveFromBindingManagerRunnable();
-  nsRefPtr<nsBindingManager> mManager;
-  nsRefPtr<nsIContent> mContent;
+  RefPtr<nsBindingManager> mManager;
+  RefPtr<nsIContent> mContent;
   nsCOMPtr<nsIDocument> mDoc;
 };
 
@@ -1301,7 +1309,7 @@ public:
   explicit DestinationInsertionPointList(Element* aElement);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_CLASS(DestinationInsertionPointList)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(DestinationInsertionPointList)
 
   // nsIDOMNodeList
   NS_DECL_NSIDOMNODELIST
@@ -1315,7 +1323,7 @@ public:
 protected:
   virtual ~DestinationInsertionPointList();
 
-  nsRefPtr<Element> mParent;
+  RefPtr<Element> mParent;
   nsCOMArray<nsIContent> mDestinationPoints;
 };
 
@@ -1383,7 +1391,7 @@ _elementName::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const 
 {                                                                           \
   *aResult = nullptr;                                                       \
   already_AddRefed<mozilla::dom::NodeInfo> ni =                             \
-    nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
+    RefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
   _elementName *it = new _elementName(ni);                                  \
   if (!it) {                                                                \
     return NS_ERROR_OUT_OF_MEMORY;                                          \
@@ -1404,7 +1412,7 @@ _elementName::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const 
 {                                                                           \
   *aResult = nullptr;                                                       \
   already_AddRefed<mozilla::dom::NodeInfo> ni =                             \
-    nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
+    RefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
   _elementName *it = new _elementName(ni);                                  \
   if (!it) {                                                                \
     return NS_ERROR_OUT_OF_MEMORY;                                          \
@@ -1756,8 +1764,8 @@ NS_IMETHOD MozMatchesSelector(const nsAString& selector,                      \
                               bool* _retval) final override                   \
 {                                                                             \
   mozilla::ErrorResult rv;                                                    \
-  *_retval = Element::MozMatchesSelector(selector, rv);                       \
-  return rv.StealNSResult();                                                      \
+  *_retval = Element::Matches(selector, rv);                                  \
+  return rv.StealNSResult();                                                  \
 }                                                                             \
 NS_IMETHOD SetCapture(bool retargetToElement) final override                  \
 {                                                                             \

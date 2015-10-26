@@ -62,17 +62,15 @@ class StoreBuffer
         StoreSet stores_;
 
         /*
-         * A small, fixed-size buffer in front of the canonical set to simplify
-         * insertion via jit code.
+         * A one element cache in front of the canonical set to speed up
+         * temporary instances of RelocatablePtr.
          */
-        const static size_t NumBufferEntries = 4096 / sizeof(T);
-        T buffer_[NumBufferEntries];
-        T* insert_;
+        T last_;
 
         /* Maximum number of entries before we request a minor GC. */
         const static size_t MaxEntries = 48 * 1024 / sizeof(T);
 
-        explicit MonoTypeBuffer() { clearBuffer(); }
+        explicit MonoTypeBuffer() : last_(T()) {}
         ~MonoTypeBuffer() { stores_.finish(); }
 
         bool init() {
@@ -82,13 +80,8 @@ class StoreBuffer
             return true;
         }
 
-        void clearBuffer() {
-            JS_POISON(buffer_, JS_EMPTY_STOREBUFFER_PATTERN, NumBufferEntries * sizeof(T));
-            insert_ = buffer_;
-        }
-
         void clear() {
-            clearBuffer();
+            last_ = T();
             if (stores_.initialized())
                 stores_.clear();
         }
@@ -96,33 +89,36 @@ class StoreBuffer
         /* Add one item to the buffer. */
         void put(StoreBuffer* owner, const T& t) {
             MOZ_ASSERT(stores_.initialized());
-            *insert_++ = t;
-            if (MOZ_UNLIKELY(insert_ == buffer_ + NumBufferEntries))
-                sinkStores(owner);
+            sinkStore(owner);
+            last_ = t;
+        }
+
+        /* Remove an item from the store buffer. */
+        void unput(StoreBuffer* owner, const T& v) {
+            // Fast, hashless remove of last put.
+            if (last_ == v) {
+                last_ = T();
+                return;
+            }
+            stores_.remove(v);
         }
 
         /* Move any buffered stores to the canonical store set. */
-        void sinkStores(StoreBuffer* owner) {
+        void sinkStore(StoreBuffer* owner) {
             MOZ_ASSERT(stores_.initialized());
-
-            for (T* p = buffer_; p < insert_; ++p) {
-                if (!stores_.put(*p))
-                    CrashAtUnhandlableOOM("Failed to allocate for MonoTypeBuffer::sinkStores.");
+            if (last_) {
+                AutoEnterOOMUnsafeRegion oomUnsafe;
+                if (!stores_.put(last_))
+                    oomUnsafe.crash("Failed to allocate for MonoTypeBuffer::put.");
             }
-            clearBuffer();
+            last_ = T();
 
             if (MOZ_UNLIKELY(stores_.count() > MaxEntries))
                 owner->setAboutToOverflow();
         }
 
-        /* Remove an item from the store buffer. */
-        void unput(StoreBuffer* owner, const T& v) {
-            sinkStores(owner);
-            stores_.remove(v);
-        }
-
         bool has(StoreBuffer* owner, const T& v) {
-            sinkStores(owner);
+            sinkStore(owner);
             return stores_.has(v);
         }
 
@@ -172,15 +168,16 @@ class StoreBuffer
             /* Ensure T is derived from BufferableRef. */
             (void)static_cast<const BufferableRef*>(&t);
 
+            AutoEnterOOMUnsafeRegion oomUnsafe;
             unsigned size = sizeof(T);
             unsigned* sizep = storage_->pod_malloc<unsigned>();
             if (!sizep)
-                CrashAtUnhandlableOOM("Failed to allocate for GenericBuffer::put.");
+                oomUnsafe.crash("Failed to allocate for GenericBuffer::put.");
             *sizep = size;
 
             T* tp = storage_->new_<T>(t);
             if (!tp)
-                CrashAtUnhandlableOOM("Failed to allocate for GenericBuffer::put.");
+                oomUnsafe.crash("Failed to allocate for GenericBuffer::put.");
 
             if (isAboutToOverflow())
                 owner->setAboutToOverflow();
@@ -188,6 +185,10 @@ class StoreBuffer
 
         size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) {
             return storage_ ? storage_->sizeOfIncludingThis(mallocSizeOf) : 0;
+        }
+
+        bool isEmpty() {
+            return !storage_ || storage_->isEmpty();
         }
 
       private:
@@ -222,6 +223,8 @@ class StoreBuffer
         CellPtrEdge untagged() const { return CellPtrEdge((Cell**)(uintptr_t(edge) & ~1)); }
         bool isTagged() const { return bool(uintptr_t(edge) & 1); }
 
+        explicit operator bool() const { return edge != nullptr; }
+
         typedef PointerEdgeHasher<CellPtrEdge> Hasher;
     };
 
@@ -246,6 +249,8 @@ class StoreBuffer
         ValueEdge tagged() const { return ValueEdge((JS::Value*)(uintptr_t(edge) | 1)); }
         ValueEdge untagged() const { return ValueEdge((JS::Value*)(uintptr_t(edge) & ~1)); }
         bool isTagged() const { return bool(uintptr_t(edge) & 1); }
+
+        explicit operator bool() const { return edge != nullptr; }
 
         typedef PointerEdgeHasher<ValueEdge> Hasher;
     };
@@ -289,6 +294,8 @@ class StoreBuffer
 
         void trace(TenuringTracer& mover) const;
 
+        explicit operator bool() const { return objectAndKind_ != 0; }
+
         typedef struct {
             typedef SlotsEdge Lookup;
             static HashNumber hash(const Lookup& l) { return l.objectAndKind_ ^ l.start_ ^ l.count_; }
@@ -315,6 +322,8 @@ class StoreBuffer
 
         void trace(TenuringTracer& mover) const;
 
+        explicit operator bool() const { return edge != nullptr; }
+
         typedef PointerEdgeHasher<WholeCellEdges> Hasher;
     };
 
@@ -335,48 +344,22 @@ class StoreBuffer
         void* data;
     };
 
-    bool isOkayToUseBuffer() const {
+    template <typename Buffer, typename Edge>
+    void unput(Buffer& buffer, const Edge& edge) {
         MOZ_ASSERT(!JS::shadow::Runtime::asShadowRuntime(runtime_)->isHeapBusy());
-
-        /*
-         * Disabled store buffers may not have a valid state; e.g. when stored
-         * inline in the ChunkTrailer.
-         */
+        MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime_));
         if (!isEnabled())
-            return false;
-
-        /*
-         * The concurrent parsing thread cannot validly insert into the buffer,
-         * but it should not activate the re-entrancy guard either.
-         */
-        if (!CurrentThreadCanAccessRuntime(runtime_))
-            return false;
-
-        return true;
-    }
-
-    template <typename Buffer, typename Edge>
-    void putFromAnyThread(Buffer& buffer, const Edge& edge) {
-        if (!isOkayToUseBuffer())
-            return;
-        mozilla::ReentrancyGuard g(*this);
-        if (edge.maybeInRememberedSet(nursery_))
-            buffer.put(this, edge);
-    }
-
-    template <typename Buffer, typename Edge>
-    void unputFromAnyThread(Buffer& buffer, const Edge& edge) {
-        if (!isOkayToUseBuffer())
             return;
         mozilla::ReentrancyGuard g(*this);
         buffer.unput(this, edge);
     }
 
     template <typename Buffer, typename Edge>
-    void putFromMainThread(Buffer& buffer, const Edge& edge) {
+    void put(Buffer& buffer, const Edge& edge) {
+        MOZ_ASSERT(!JS::shadow::Runtime::asShadowRuntime(runtime_)->isHeapBusy());
+        MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime_));
         if (!isEnabled())
             return;
-        MOZ_ASSERT(CurrentThreadCanAccessRuntime(runtime_));
         mozilla::ReentrancyGuard g(*this);
         if (edge.maybeInRememberedSet(nursery_))
             buffer.put(this, edge);
@@ -416,37 +399,29 @@ class StoreBuffer
     bool cancelIonCompilations() const { return cancelIonCompilations_; }
 
     /* Insert a single edge into the buffer/remembered set. */
-    void putValueFromAnyThread(JS::Value* vp) { putFromAnyThread(bufferVal, ValueEdge(vp)); }
-    void unputValueFromAnyThread(JS::Value* vp) { unputFromAnyThread(bufferVal, ValueEdge(vp)); }
-    void putCellFromAnyThread(Cell** cellp) { putFromAnyThread(bufferCell, CellPtrEdge(cellp)); }
-    void unputCellFromAnyThread(Cell** cellp) { unputFromAnyThread(bufferCell, CellPtrEdge(cellp)); }
-    void putSlotFromAnyThread(NativeObject* obj, int kind, int32_t start, int32_t count) {
-        putFromAnyThread(bufferSlot, SlotsEdge(obj, kind, start, count));
+    void putValue(JS::Value* vp) { put(bufferVal, ValueEdge(vp)); }
+    void unputValue(JS::Value* vp) { unput(bufferVal, ValueEdge(vp)); }
+    void putCell(Cell** cellp) { put(bufferCell, CellPtrEdge(cellp)); }
+    void unputCell(Cell** cellp) { unput(bufferCell, CellPtrEdge(cellp)); }
+    void putSlot(NativeObject* obj, int kind, int32_t start, int32_t count) {
+        put(bufferSlot, SlotsEdge(obj, kind, start, count));
     }
-    void putWholeCellFromMainThread(Cell* cell) {
+    void putWholeCell(Cell* cell) {
         MOZ_ASSERT(cell->isTenured());
-        putFromMainThread(bufferWholeCell, WholeCellEdges(cell));
+        put(bufferWholeCell, WholeCellEdges(cell));
     }
 
     /* Insert an entry into the generic buffer. */
     template <typename T>
-    void putGeneric(const T& t) { putFromAnyThread(bufferGeneric, t);}
+    void putGeneric(const T& t) { put(bufferGeneric, t);}
 
     /* Insert or update a callback entry. */
     template <typename Key>
     void putCallback(void (*callback)(JSTracer* trc, Key* key, void* data), Key* key, void* data) {
-        putFromAnyThread(bufferGeneric, CallbackRef<Key>(callback, key, data));
+        put(bufferGeneric, CallbackRef<Key>(callback, key, data));
     }
 
-    void assertHasCellEdge(Cell** cellp) {
-        CellPtrEdge cpe(cellp);
-
-        MOZ_ASSERT(bufferCell.has(this, CellPtrEdge(cellp)) ||
-                   !CellPtrEdge(cellp).maybeInRememberedSet(nursery_));
-
-    }
-
-    void assertHasValueEdge(Value* vp) {
+    void assertHasValueEdge(JS::Value* vp) {
         MOZ_ASSERT(bufferVal.has(this, ValueEdge(vp)) ||
                    !ValueEdge(vp).maybeInRememberedSet(nursery_));
     }
@@ -464,6 +439,10 @@ class StoreBuffer
 
     /* For use by our owned buffers and for testing. */
     void setAboutToOverflow();
+
+    bool hasPostBarrierCallbacks() {
+        return !bufferGeneric.isEmpty();
+    }
 
     void addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf, JS::GCSizes* sizes);
 };

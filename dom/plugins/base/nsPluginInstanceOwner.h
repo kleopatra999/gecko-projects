@@ -31,11 +31,11 @@ class nsDisplayListBuilder;
 namespace mozilla {
 namespace dom {
 struct MozPluginParameter;
-}
+} // namespace dom
 namespace widget {
 class PuppetWidget;
-}
-}
+} // namespace widget
+} // namespace mozilla
 
 using mozilla::widget::PuppetWidget;
 
@@ -61,7 +61,8 @@ public:
   
   NS_IMETHOD GetURL(const char *aURL, const char *aTarget,
                     nsIInputStream *aPostStream, 
-                    void *aHeadersData, uint32_t aHeadersDataLen) override;
+                    void *aHeadersData, uint32_t aHeadersDataLen,
+                    bool aDoCheckLoadURIChecks) override;
   
   NPBool     ConvertPoint(double sourceX, double sourceY, NPCoordinateSpace sourceSpace,
                           double *destX, double *destY, NPCoordinateSpace destSpace) override;
@@ -111,6 +112,11 @@ public:
   void ReleasePluginPort(void* pluginPort);
 
   nsEventStatus ProcessEvent(const mozilla::WidgetGUIEvent& anEvent);
+
+#if defined(XP_WIN)
+  void SetWidgetWindowAsParent(HWND aWindowToAdopt);
+  nsresult SetNetscapeWindowAsParent(HWND aWindowToAdopt);
+#endif
   
 #ifdef XP_MACOSX
   enum { ePluginPaintEnable, ePluginPaintDisable };
@@ -272,21 +278,25 @@ private:
   bool mFullScreen;
   void* mJavaView;
 #endif 
+
+#if defined(XP_WIN)
+  nsIWidget* GetContainingWidgetIfOffset();
+#endif
  
   nsPluginNativeWindow       *mPluginWindow;
-  nsRefPtr<nsNPAPIPluginInstance> mInstance;
+  RefPtr<nsNPAPIPluginInstance> mInstance;
   nsPluginFrame              *mPluginFrame;
   nsWeakPtr                   mContent; // WEAK, content owns us
   nsCString                   mDocumentBase;
   bool                        mWidgetCreationComplete;
   nsCOMPtr<nsIWidget>         mWidget;
-  nsRefPtr<nsPluginHost>      mPluginHost;
+  RefPtr<nsPluginHost>      mPluginHost;
   
 #ifdef XP_MACOSX
   NP_CGContext                              mCGPluginPortCopy;
   int32_t                                   mInCGPaintLevel;
-  mozilla::RefPtr<MacIOSurface>             mIOSurface;
-  mozilla::RefPtr<nsCARenderer>             mCARenderer;
+  RefPtr<MacIOSurface>             mIOSurface;
+  RefPtr<nsCARenderer>             mCARenderer;
   CGColorSpaceRef                           mColorProfile;
   static nsCOMPtr<nsITimer>                *sCATimer;
   static nsTArray<nsPluginInstanceOwner*>  *sCARefreshListeners;
@@ -321,7 +331,7 @@ private:
 #endif
   
   // pointer to wrapper for nsIDOMContextMenuListener
-  nsRefPtr<nsPluginDOMContextMenuListener> mCXMenuListener;
+  RefPtr<nsPluginDOMContextMenuListener> mCXMenuListener;
   
   nsresult DispatchKeyToPlugin(nsIDOMEvent* aKeyEvent);
   nsresult DispatchMouseToPlugin(nsIDOMEvent* aMouseEvent,

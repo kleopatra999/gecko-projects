@@ -8,6 +8,8 @@
 #define mozilla_psm_AppsTrustDomain_h
 
 #include "pkix/pkixtypes.h"
+#include "mozilla/StaticMutex.h"
+#include "nsAutoPtr.h"
 #include "nsDebug.h"
 #include "nsIX509CertDB.h"
 #include "ScopedNSSTypes.h"
@@ -40,7 +42,9 @@ public:
   virtual Result IsChainValid(const mozilla::pkix::DERArray& certChain,
                               mozilla::pkix::Time time) override;
   virtual Result CheckSignatureDigestAlgorithm(
-                   mozilla::pkix::DigestAlgorithm digestAlg) override;
+                   mozilla::pkix::DigestAlgorithm digestAlg,
+                   mozilla::pkix::EndEntityOrCA endEntityOrCA,
+                   mozilla::pkix::Time notBefore) override;
   virtual Result CheckRSAPublicKeyModulusSizeInBits(
                    mozilla::pkix::EndEntityOrCA endEntityOrCA,
                    unsigned int modulusSizeInBits) override;
@@ -67,6 +71,10 @@ private:
   void* mPinArg; // non-owning!
   ScopedCERTCertificate mTrustedRoot;
   unsigned int mMinRSABits;
+
+  static StaticMutex sMutex;
+  static nsAutoArrayPtr<unsigned char> sDevImportedDERData;
+  static unsigned int sDevImportedDERLen;
 };
 
 } } // namespace mozilla::psm

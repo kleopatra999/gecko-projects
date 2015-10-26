@@ -21,7 +21,7 @@ struct CacheFileContextEvictorEntry
 {
   nsCOMPtr<nsILoadContextInfo> mInfo;
   PRTime                       mTimeStamp; // in milliseconds
-  nsRefPtr<CacheIndexIterator> mIterator;
+  RefPtr<CacheIndexIterator> mIterator;
 };
 
 class CacheFileContextEvictor
@@ -88,7 +88,7 @@ private:
   nsCOMPtr<nsIFile> mEntriesDir;
 };
 
-} // net
-} // mozilla
+} // namespace net
+} // namespace mozilla
 
 #endif

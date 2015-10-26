@@ -23,7 +23,7 @@
 #endif /* _WIN32 */
 
 #include "plstr.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "plbase64.h"
 #include "mozilla/Logging.h"
 #include "prprf.h"
@@ -80,9 +80,9 @@ static bool         gShouldCleanupDeadNodes = false;
 
 
 static PLDHashTableOps     pref_HashTableOps = {
-    PL_DHashStringKey,
+    PLDHashTable::HashStringKey,
     matchPrefEntry,
-    PL_DHashMoveEntryStub,
+    PLDHashTable::MoveEntryStub,
     clearPrefEntry,
     nullptr,
 };
@@ -555,7 +555,7 @@ PREF_DeleteBranch(const char *branch_name)
     const char *to_delete = branch_dot.get();
     MOZ_ASSERT(to_delete);
     len = strlen(to_delete);
-    for (auto iter = gHashTable->RemovingIter(); !iter.Done(); iter.Next()) {
+    for (auto iter = gHashTable->Iter(); !iter.Done(); iter.Next()) {
         auto entry = static_cast<PrefHashEntry*>(iter.Get());
 
         /* note if we're deleting "ldap" then we want to delete "ldap.xxx"
@@ -584,7 +584,7 @@ PREF_ClearUserPref(const char *pref_name)
         pref->flags &= ~PREF_USERSET;
 
         if (!(pref->flags & PREF_HAS_DEFAULT)) {
-            PL_DHashTableRemove(gHashTable, pref_name);
+            gHashTable->RemoveEntry(pref);
         }
 
         pref_DoCallback(pref_name);
@@ -604,7 +604,7 @@ PREF_ClearAllUserPrefs()
         return NS_ERROR_NOT_INITIALIZED;
 
     std::vector<std::string> prefStrings;
-    for (auto iter = gHashTable->RemovingIter(); !iter.Done(); iter.Next()) {
+    for (auto iter = gHashTable->Iter(); !iter.Done(); iter.Next()) {
         auto pref = static_cast<PrefHashEntry*>(iter.Get());
 
         if (PREF_HAS_USER_VALUE(pref)) {
@@ -692,13 +692,13 @@ static void pref_SetValue(PrefValue* existingValue, uint16_t *existingFlags,
     }
 }
 
-PrefHashEntry* pref_HashTableLookup(const void *key)
+PrefHashEntry* pref_HashTableLookup(const char *key)
 {
 #ifndef MOZ_B2G
     MOZ_ASSERT(NS_IsMainThread());
 #endif
 
-    return static_cast<PrefHashEntry*>(PL_DHashTableSearch(gHashTable, key));
+    return static_cast<PrefHashEntry*>(gHashTable->Search(key));
 }
 
 nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, uint32_t flags)
@@ -710,9 +710,7 @@ nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, uint32_t
     if (!gHashTable)
         return NS_ERROR_OUT_OF_MEMORY;
 
-    PrefHashEntry* pref = static_cast<PrefHashEntry*>
-        (PL_DHashTableAdd(gHashTable, key, fallible));
-
+    auto pref = static_cast<PrefHashEntry*>(gHashTable->Add(key, fallible));
     if (!pref)
         return NS_ERROR_OUT_OF_MEMORY;
 

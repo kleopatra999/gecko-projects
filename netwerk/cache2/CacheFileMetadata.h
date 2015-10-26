@@ -10,6 +10,7 @@
 #include "CacheHashUtils.h"
 #include "CacheObserver.h"
 #include "mozilla/Endian.h"
+#include "mozilla/BasePrincipal.h"
 #include "nsAutoPtr.h"
 #include "nsString.h"
 
@@ -121,13 +122,13 @@ public:
   nsresult GetKey(nsACString &_retval);
 
   nsresult ReadMetadata(CacheFileMetadataListener *aListener);
+  uint32_t CalcMetadataSize(uint32_t aElementsSize, uint32_t aHashCount);
   nsresult WriteMetadata(uint32_t aOffset,
                          CacheFileMetadataListener *aListener);
   nsresult SyncReadMetadata(nsIFile *aFile);
 
   bool     IsAnonymous() { return mAnonymous; }
-  bool     IsInBrowser() { return mInBrowser; }
-  uint32_t AppId()       { return mAppId; }
+  mozilla::OriginAttributes const & OriginAttributes() const { return mOriginAttributes; }
 
   const char * GetElement(const char *aKey);
   nsresult     SetElement(const char *aKey, const char *aValue);
@@ -171,10 +172,10 @@ private:
   void     InitEmptyMetadata();
   nsresult ParseMetadata(uint32_t aMetaOffset, uint32_t aBufOffset, bool aHaveKey);
   nsresult CheckElements(const char *aBuf, uint32_t aSize);
-  void     EnsureBuffer(uint32_t aSize);
+  nsresult EnsureBuffer(uint32_t aSize);
   nsresult ParseKey(const nsACString &aKey);
 
-  nsRefPtr<CacheFileHandle>           mHandle;
+  RefPtr<CacheFileHandle>           mHandle;
   nsCString                           mKey;
   CacheHash::Hash16_t                *mHashArray;
   uint32_t                            mHashArraySize;
@@ -188,16 +189,15 @@ private:
   uint32_t                            mElementsSize;
   bool                                mIsDirty        : 1;
   bool                                mAnonymous      : 1;
-  bool                                mInBrowser      : 1;
   bool                                mAllocExactSize : 1;
   bool                                mFirstRead      : 1;
+  mozilla::OriginAttributes           mOriginAttributes;
   mozilla::TimeStamp                  mReadStart;
-  uint32_t                            mAppId;
   nsCOMPtr<CacheFileMetadataListener> mListener;
 };
 
 
-} // net
-} // mozilla
+} // namespace net
+} // namespace mozilla
 
 #endif

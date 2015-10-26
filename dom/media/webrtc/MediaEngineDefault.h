@@ -18,12 +18,13 @@
 #include "AudioSegment.h"
 #include "StreamBuffer.h"
 #include "MediaStreamGraph.h"
+#include "MediaTrackConstraints.h"
 
 namespace mozilla {
 
 namespace layers {
 class ImageContainer;
-}
+} // namespace layers
 
 class MediaEngineDefault;
 
@@ -48,6 +49,9 @@ public:
   virtual nsresult Deallocate() override;
   virtual nsresult Start(SourceMediaStream*, TrackID) override;
   virtual nsresult Stop(SourceMediaStream*, TrackID) override;
+  virtual nsresult Restart(const dom::MediaTrackConstraints& aConstraints,
+                           const MediaEnginePrefs &aPrefs,
+                           const nsString& aDeviceId) override;
   virtual void SetDirectListeners(bool aHasDirectListeners) override {};
   virtual nsresult Config(bool aEchoOn, uint32_t aEcho,
                           bool aAgcOn, uint32_t aAGC,
@@ -89,9 +93,9 @@ protected:
   // image changes).  Note that mSources is not accessed from other threads
   // for video and is not protected.
   Monitor mMonitor;
-  nsRefPtr<layers::Image> mImage;
+  RefPtr<layers::Image> mImage;
 
-  nsRefPtr<layers::ImageContainer> mImageContainer;
+  RefPtr<layers::ImageContainer> mImageContainer;
 
   MediaEnginePrefs mOpts;
   int mCb;
@@ -118,6 +122,9 @@ public:
   virtual nsresult Deallocate() override;
   virtual nsresult Start(SourceMediaStream*, TrackID) override;
   virtual nsresult Stop(SourceMediaStream*, TrackID) override;
+  virtual nsresult Restart(const dom::MediaTrackConstraints& aConstraints,
+                           const MediaEnginePrefs &aPrefs,
+                           const nsString& aDeviceId) override;
   virtual void SetDirectListeners(bool aHasDirectListeners) override {};
   virtual nsresult Config(bool aEchoOn, uint32_t aEcho,
                           bool aAgcOn, uint32_t aAGC,
@@ -168,9 +175,9 @@ public:
   {}
 
   virtual void EnumerateVideoDevices(dom::MediaSourceEnum,
-                                     nsTArray<nsRefPtr<MediaEngineVideoSource> >*) override;
+                                     nsTArray<RefPtr<MediaEngineVideoSource> >*) override;
   virtual void EnumerateAudioDevices(dom::MediaSourceEnum,
-                                     nsTArray<nsRefPtr<MediaEngineAudioSource> >*) override;
+                                     nsTArray<RefPtr<MediaEngineAudioSource> >*) override;
   virtual void Shutdown() override {
     MutexAutoLock lock(mMutex);
 
@@ -189,10 +196,10 @@ private:
   Mutex mMutex;
   // protected with mMutex:
 
-  nsTArray<nsRefPtr<MediaEngineVideoSource> > mVSources;
-  nsTArray<nsRefPtr<MediaEngineAudioSource> > mASources;
+  nsTArray<RefPtr<MediaEngineVideoSource> > mVSources;
+  nsTArray<RefPtr<MediaEngineAudioSource> > mASources;
 };
 
-}
+} // namespace mozilla
 
 #endif /* NSMEDIAENGINEDEFAULT_H_ */

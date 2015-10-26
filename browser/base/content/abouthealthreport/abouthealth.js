@@ -4,14 +4,21 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 
 const prefs = new Preferences("datareporting.healthreport.");
 
-let healthReportWrapper = {
+const PREF_UNIFIED = "toolkit.telemetry.unified";
+const PREF_UNIFIED_OPTIN = "toolkit.telemetry.unifiedIsOptIn";
+
+// Whether v4 behavior is enabled, i.e. unified Telemetry features are on by default.
+const IS_V4 = Preferences.get(PREF_UNIFIED, false) &&
+              !Preferences.get(PREF_UNIFIED_OPTIN, false);
+
+var healthReportWrapper = {
   init: function () {
     let iframe = document.getElementById("remote-report");
     iframe.addEventListener("load", healthReportWrapper.initRemotePage, false);
@@ -28,7 +35,9 @@ let healthReportWrapper = {
   },
 
   _getReportURI: function () {
-    let url = Services.urlFormatter.formatURLPref("datareporting.healthreport.about.reportUrl");
+    const pref = IS_V4 ? "datareporting.healthreport.about.reportUrl"
+                       : "datareporting.healthreport.about.reportUrlUnified";
+    let url = Services.urlFormatter.formatURLPref(pref);
     return Services.io.newURI(url, null, null);
   },
 

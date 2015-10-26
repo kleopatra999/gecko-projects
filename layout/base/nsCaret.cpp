@@ -127,8 +127,9 @@ IsKeyboardRTL()
 
 nsCaret::nsCaret()
 : mOverrideOffset(0)
-, mIsBlinkOn(false)
 , mBlinkCount(-1)
+, mHideCount(0)
+, mIsBlinkOn(false)
 , mVisible(false)
 , mReadOnly(false)
 , mShowDuringSelection(false)
@@ -266,7 +267,7 @@ void nsCaret::SetVisible(bool inMakeVisible)
 
 bool nsCaret::IsVisible()
 {
-  if (!mVisible) {
+  if (!mVisible || mHideCount) {
     return false;
   }
 
@@ -303,6 +304,25 @@ bool nsCaret::IsVisible()
   return true;
 }
 
+void nsCaret::AddForceHide()
+{
+  MOZ_ASSERT(mHideCount < UINT32_MAX);
+  if (++mHideCount > 1) {
+    return;
+  }
+  ResetBlinking();
+  SchedulePaint();
+}
+
+void nsCaret::RemoveForceHide()
+{
+  if (!mHideCount || --mHideCount) {
+    return;
+  }
+  ResetBlinking();
+  SchedulePaint();
+}
+
 void nsCaret::SetCaretReadOnly(bool inMakeReadonly)
 {
   mReadOnly = inMakeReadonly;
@@ -333,7 +353,7 @@ nsCaret::GetGeometryForFrame(nsIFrame* aFrame,
                "We should not be in the middle of reflow");
   nscoord baseline = frame->GetCaretBaseline();
   nscoord ascent = 0, descent = 0;
-  nsRefPtr<nsFontMetrics> fm;
+  RefPtr<nsFontMetrics> fm;
   nsLayoutUtils::GetFontMetricsForFrame(aFrame, getter_AddRefs(fm),
     nsLayoutUtils::FontSizeInflationFor(aFrame));
   NS_ASSERTION(fm, "We should be able to get the font metrics");
@@ -390,10 +410,10 @@ nsCaret::GetGeometryForFrame(nsIFrame* aFrame,
   return rect;
 }
 
-static nsIFrame*
-GetFrameAndOffset(Selection* aSelection,
-                  nsINode* aOverrideNode, int32_t aOverrideOffset,
-                  int32_t* aFrameOffset)
+nsIFrame*
+nsCaret::GetFrameAndOffset(Selection* aSelection,
+                           nsINode* aOverrideNode, int32_t aOverrideOffset,
+                           int32_t* aFrameOffset)
 {
   nsINode* focusNode;
   int32_t focusOffset;
@@ -622,7 +642,7 @@ void nsCaret::ResetBlinking()
 {
   mIsBlinkOn = true;
 
-  if (mReadOnly || !mVisible) {
+  if (mReadOnly || !mVisible || mHideCount) {
     StopBlinking();
     return;
   }
@@ -905,7 +925,8 @@ nsCaret::ComputeCaretRects(nsIFrame* aFrame, int32_t aFrameOffset,
 {
   NS_ASSERTION(aFrame, "Should have a frame here");
 
-  bool isVertical = aFrame->GetWritingMode().IsVertical();
+  WritingMode wm = aFrame->GetWritingMode();
+  bool isVertical = wm.IsVertical();
 
   nscoord bidiIndicatorSize;
   *aCaretRect = GetGeometryForFrame(aFrame, aFrameOffset, &bidiIndicatorSize);
@@ -937,11 +958,20 @@ nsCaret::ComputeCaretRects(nsIFrame* aFrame, int32_t aFrameOffset,
     }
     bool isCaretRTL = caretBidiLevel % 2;
     if (isVertical) {
-      aHookRect->SetRect(aCaretRect->XMost() - bidiIndicatorSize,
-                         aCaretRect->y + (isCaretRTL ? bidiIndicatorSize * -1 :
-                                                       aCaretRect->height),
-                         aCaretRect->height,
-                         bidiIndicatorSize);
+      bool isSidewaysLR = wm.IsVerticalLR() && !wm.IsLineInverted();
+      if (isSidewaysLR) {
+        aHookRect->SetRect(aCaretRect->x + bidiIndicatorSize,
+                           aCaretRect->y + (!isCaretRTL ? bidiIndicatorSize * -1 :
+                                                          aCaretRect->height),
+                           aCaretRect->height,
+                           bidiIndicatorSize);
+      } else {
+        aHookRect->SetRect(aCaretRect->XMost() - bidiIndicatorSize,
+                           aCaretRect->y + (isCaretRTL ? bidiIndicatorSize * -1 :
+                                                         aCaretRect->height),
+                           aCaretRect->height,
+                           bidiIndicatorSize);
+      }
     } else {
       aHookRect->SetRect(aCaretRect->x + (isCaretRTL ? bidiIndicatorSize * -1 :
                                                        aCaretRect->width),

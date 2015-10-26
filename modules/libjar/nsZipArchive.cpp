@@ -171,7 +171,7 @@ nsZipHandle::nsZipHandle()
 NS_IMPL_ADDREF(nsZipHandle)
 NS_IMPL_RELEASE(nsZipHandle)
 
-nsresult nsZipHandle::Init(nsIFile *file, bool aMustCacheFd, nsZipHandle **ret,
+nsresult nsZipHandle::Init(nsIFile *file, nsZipHandle **ret,
                            PRFileDesc **aFd)
 {
   mozilla::AutoFDClose fd;
@@ -198,7 +198,7 @@ nsresult nsZipHandle::Init(nsIFile *file, bool aMustCacheFd, nsZipHandle **ret,
     return NS_ERROR_FAILURE;
   }
 
-  nsRefPtr<nsZipHandle> handle = new nsZipHandle();
+  RefPtr<nsZipHandle> handle = new nsZipHandle();
   if (!handle) {
     PR_MemUnmap(buf, (uint32_t) size);
     PR_CloseFileMap(map);
@@ -210,9 +210,7 @@ nsresult nsZipHandle::Init(nsIFile *file, bool aMustCacheFd, nsZipHandle **ret,
     *aFd = fd.forget();
   }
 #else
-  if (aMustCacheFd) {
-    handle->mNSPRFileDesc = fd.forget();
-  }
+  handle->mNSPRFileDesc = fd.forget();
 #endif
   handle->mMap = map;
   handle->mFile.Init(file);
@@ -225,7 +223,7 @@ nsresult nsZipHandle::Init(nsIFile *file, bool aMustCacheFd, nsZipHandle **ret,
 nsresult nsZipHandle::Init(nsZipArchive *zip, const char *entry,
                            nsZipHandle **ret)
 {
-  nsRefPtr<nsZipHandle> handle = new nsZipHandle();
+  RefPtr<nsZipHandle> handle = new nsZipHandle();
   if (!handle)
     return NS_ERROR_OUT_OF_MEMORY;
 
@@ -247,7 +245,7 @@ nsresult nsZipHandle::Init(nsZipArchive *zip, const char *entry,
 nsresult nsZipHandle::Init(const uint8_t* aData, uint32_t aLen,
                            nsZipHandle **aRet)
 {
-  nsRefPtr<nsZipHandle> handle = new nsZipHandle();
+  RefPtr<nsZipHandle> handle = new nsZipHandle();
 
   handle->mFileData = aData;
   handle->mLen = aLen;
@@ -267,6 +265,10 @@ nsresult nsZipHandle::GetNSPRFileDesc(PRFileDesc** aNSPRFileDesc)
   }
 
   *aNSPRFileDesc = mNSPRFileDesc;
+  if (!mNSPRFileDesc) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
   return NS_OK;
 }
 
@@ -305,15 +307,15 @@ nsresult nsZipArchive::OpenArchive(nsZipHandle *aZipHandle, PRFileDesc *aFd)
   return rv;
 }
 
-nsresult nsZipArchive::OpenArchive(nsIFile *aFile, bool aMustCacheFd)
+nsresult nsZipArchive::OpenArchive(nsIFile *aFile)
 {
-  nsRefPtr<nsZipHandle> handle;
+  RefPtr<nsZipHandle> handle;
 #if defined(XP_WIN)
   mozilla::AutoFDClose fd;
-  nsresult rv = nsZipHandle::Init(aFile, aMustCacheFd, getter_AddRefs(handle),
+  nsresult rv = nsZipHandle::Init(aFile, getter_AddRefs(handle),
                                   &fd.rwget());
 #else
-  nsresult rv = nsZipHandle::Init(aFile, aMustCacheFd, getter_AddRefs(handle));
+  nsresult rv = nsZipHandle::Init(aFile, getter_AddRefs(handle));
 #endif
   if (NS_FAILED(rv))
     return rv;
@@ -839,8 +841,10 @@ MOZ_WIN_MEM_TRY_BEGIN
   // -- check if there is enough source data in the file
   if (!offset ||
       mFd->mLen < aItem->Size() ||
-      offset > mFd->mLen - aItem->Size())
+      offset > mFd->mLen - aItem->Size() ||
+      (aItem->Compression() == STORED && aItem->Size() != aItem->RealSize())) {
     return nullptr;
+  }
 
   return mFd->mFileData + offset;
 MOZ_WIN_MEM_TRY_CATCH(return nullptr)
@@ -869,6 +873,8 @@ int64_t nsZipArchive::SizeOfMapping()
 
 nsZipArchive::nsZipArchive()
   : mRefCnt(0)
+  , mCommentPtr(nullptr)
+  , mCommentLen(0)
   , mBuiltSynthetics(false)
 {
   zipLog.AddRef();
@@ -896,12 +902,12 @@ nsZipArchive::~nsZipArchive()
 // nsZipFind constructor and destructor
 //------------------------------------------
 
-nsZipFind::nsZipFind(nsZipArchive* aZip, char* aPattern, bool aRegExp) : 
-  mArchive(aZip),
-  mPattern(aPattern),
-  mItem(0),
-  mSlot(0),
-  mRegExp(aRegExp)
+nsZipFind::nsZipFind(nsZipArchive* aZip, char* aPattern, bool aRegExp)
+  : mArchive(aZip)
+  , mPattern(aPattern)
+  , mItem(nullptr)
+  , mSlot(0)
+  , mRegExp(aRegExp)
 {
   MOZ_COUNT_CTOR(nsZipFind);
 }
@@ -992,6 +998,13 @@ static PRTime GetModTime(uint16_t aDate, uint16_t aTime)
 
   return PR_ImplodeTime(&time);
 }
+
+nsZipItem::nsZipItem()
+  : next(nullptr)
+  , central(nullptr)
+  , nameLength(0)
+  , isSynthetic(false)
+{}
 
 uint32_t nsZipItem::LocalOffset()
 {
@@ -1088,11 +1101,13 @@ bool nsZipItem::IsSymlink()
 }
 #endif
 
-nsZipCursor::nsZipCursor(nsZipItem *item, nsZipArchive *aZip, uint8_t* aBuf, uint32_t aBufSize, bool doCRC) :
-  mItem(item),
-  mBuf(aBuf),
-  mBufSize(aBufSize),
-  mDoCRC(doCRC)
+nsZipCursor::nsZipCursor(nsZipItem *item, nsZipArchive *aZip, uint8_t* aBuf,
+                         uint32_t aBufSize, bool doCRC)
+  : mItem(item)
+  , mBuf(aBuf)
+  , mBufSize(aBufSize)
+  , mCRC(0)
+  , mDoCRC(doCRC)
 {
   if (mItem->Compression() == DEFLATED) {
 #ifdef DEBUG
@@ -1164,8 +1179,10 @@ MOZ_WIN_MEM_TRY_CATCH(return nullptr)
   return buf;
 }
 
-nsZipItemPtr_base::nsZipItemPtr_base(nsZipArchive *aZip, const char * aEntryName, bool doCRC) :
-  mReturnBuf(nullptr)
+nsZipItemPtr_base::nsZipItemPtr_base(nsZipArchive *aZip,
+                                     const char * aEntryName, bool doCRC)
+  : mReturnBuf(nullptr)
+  , mReadlen(0)
 {
   // make sure the ziparchive hangs around
   mZipHandle = aZip->GetFD();

@@ -1,9 +1,9 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const Cu = Components.utils;
-const Cc = Components.classes;
-const Ci = Components.interfaces;
+var Cu = Components.utils;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/TelemetryController.jsm", this);
 Cu.import("resource://gre/modules/TelemetrySession.jsm", this);
@@ -20,7 +20,7 @@ XPCOMUtils.defineLazyGetter(this, "gDatareportingService",
 Cu.import("resource://testing-common/AppInfo.jsm");
 updateAppInfo();
 
-let gGlobalScope = this;
+var gGlobalScope = this;
 function loadAddonManager() {
   let ns = {};
   Cu.import("resource://gre/modules/Services.jsm", ns);

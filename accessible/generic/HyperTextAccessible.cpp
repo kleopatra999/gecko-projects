@@ -30,6 +30,7 @@
 #include "nsIScrollableFrame.h"
 #include "nsIServiceManager.h"
 #include "nsITextControlElement.h"
+#include "nsIMathMLFrame.h"
 #include "nsTextFragment.h"
 #include "mozilla/BinarySearch.h"
 #include "mozilla/dom/Element.h"
@@ -952,6 +953,145 @@ HyperTextAccessible::GetLevelInternal()
   return AccessibleWrap::GetLevelInternal();
 }
 
+void
+HyperTextAccessible::SetMathMLXMLRoles(nsIPersistentProperties* aAttributes)
+{
+  // Add MathML xmlroles based on the position inside the parent.
+  Accessible* parent = Parent();
+  if (parent) {
+    switch (parent->Role()) {
+    case roles::MATHML_CELL:
+    case roles::MATHML_ENCLOSED:
+    case roles::MATHML_ERROR:
+    case roles::MATHML_MATH:
+    case roles::MATHML_ROW:
+    case roles::MATHML_SQUARE_ROOT:
+    case roles::MATHML_STYLE:
+      if (Role() == roles::MATHML_OPERATOR) {
+        // This is an operator inside an <mrow> (or an inferred <mrow>).
+        // See http://www.w3.org/TR/MathML3/chapter3.html#presm.inferredmrow
+        // XXX We should probably do something similar for MATHML_FENCED, but
+        // operators do not appear in the accessible tree. See bug 1175747.
+        nsIMathMLFrame* mathMLFrame = do_QueryFrame(GetFrame());
+        if (mathMLFrame) {
+          nsEmbellishData embellishData;
+          mathMLFrame->GetEmbellishData(embellishData);
+          if (NS_MATHML_EMBELLISH_IS_FENCE(embellishData.flags)) {
+            if (!PrevSibling()) {
+              nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                                     nsGkAtoms::open_fence);
+            } else if (!NextSibling()) {
+              nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                                     nsGkAtoms::close_fence);
+            }
+          }
+          if (NS_MATHML_EMBELLISH_IS_SEPARATOR(embellishData.flags)) {
+            nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                                   nsGkAtoms::separator_);
+          }
+        }
+      }
+    break;
+    case roles::MATHML_FRACTION:
+      nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                             IndexInParent() == 0 ?
+                             nsGkAtoms::numerator :
+                             nsGkAtoms::denominator);
+      break;
+    case roles::MATHML_ROOT:
+      nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                             IndexInParent() == 0 ? nsGkAtoms::base :
+                             nsGkAtoms::root_index);
+      break;
+    case roles::MATHML_SUB:
+      nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                             IndexInParent() == 0 ? nsGkAtoms::base :
+                             nsGkAtoms::subscript);
+      break;
+    case roles::MATHML_SUP:
+      nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                             IndexInParent() == 0 ? nsGkAtoms::base :
+                             nsGkAtoms::superscript);
+      break;
+    case roles::MATHML_SUB_SUP: {
+      int32_t index = IndexInParent();
+      nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                             index == 0 ? nsGkAtoms::base :
+                             (index == 1 ? nsGkAtoms::subscript :
+                              nsGkAtoms::superscript));
+    } break;
+    case roles::MATHML_UNDER:
+      nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                             IndexInParent() == 0 ? nsGkAtoms::base :
+                             nsGkAtoms::underscript);
+      break;
+    case roles::MATHML_OVER:
+      nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                             IndexInParent() == 0 ? nsGkAtoms::base :
+                             nsGkAtoms::overscript);
+      break;
+    case roles::MATHML_UNDER_OVER: {
+      int32_t index = IndexInParent();
+      nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                             index == 0 ? nsGkAtoms::base :
+                             (index == 1 ? nsGkAtoms::underscript :
+                              nsGkAtoms::overscript));
+    } break;
+    case roles::MATHML_MULTISCRIPTS: {
+      // Get the <multiscripts> base.
+      nsIContent* child;
+      bool baseFound = false;
+      for (child = parent->GetContent()->GetFirstChild(); child;
+           child = child->GetNextSibling()) {
+        if (child->IsMathMLElement()) {
+          baseFound = true;
+          break;
+        }
+      }
+      if (baseFound) {
+        nsIContent* content = GetContent();
+        if (child == content) {
+          // We are the base.
+          nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                                 nsGkAtoms::base);
+        } else {
+          // Browse the list of scripts to find us and determine our type.
+          bool postscript = true;
+          bool subscript = true;
+          for (child = child->GetNextSibling(); child;
+               child = child->GetNextSibling()) {
+            if (!child->IsMathMLElement())
+              continue;
+            if (child->IsMathMLElement(nsGkAtoms::mprescripts_)) {
+              postscript = false;
+              subscript = true;
+              continue;
+            }
+            if (child == content) {
+              if (postscript) {
+                nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                                       subscript ?
+                                       nsGkAtoms::subscript :
+                                       nsGkAtoms::superscript);
+              } else {
+                nsAccUtils::SetAccAttr(aAttributes, nsGkAtoms::xmlroles,
+                                       subscript ?
+                                       nsGkAtoms::presubscript :
+                                       nsGkAtoms::presuperscript);
+              }
+              break;
+            }
+            subscript = !subscript;
+          }
+        }
+      }
+    } break;
+    default:
+      break;
+    }
+  }
+}
+
 already_AddRefed<nsIPersistentProperties>
 HyperTextAccessible::NativeAttributes()
 {
@@ -976,8 +1116,11 @@ HyperTextAccessible::NativeAttributes()
     }
   }
 
-  if (HasOwnContent())
+  if (HasOwnContent()) {
     GetAccService()->MarkupAttributes(mContent, attributes);
+    if (mContent->IsMathMLElement())
+      SetMathMLXMLRoles(attributes);
+  }
 
   return attributes.forget();
 }
@@ -1287,7 +1430,7 @@ HyperTextAccessible::CaretLineNumber()
 {
   // Provide the line number for the caret, relative to the
   // currently focused node. Use a 1-based index
-  nsRefPtr<nsFrameSelection> frameSelection = FrameSelection();
+  RefPtr<nsFrameSelection> frameSelection = FrameSelection();
   if (!frameSelection)
     return -1;
 
@@ -1356,7 +1499,7 @@ HyperTextAccessible::GetCaretRect(nsIWidget** aWidget)
 {
   *aWidget = nullptr;
 
-  nsRefPtr<nsCaret> caret = mDoc->PresShell()->GetCaret();
+  RefPtr<nsCaret> caret = mDoc->PresShell()->GetCaret();
   NS_ENSURE_TRUE(caret, nsIntRect());
 
   bool isVisible = caret->IsVisible();
@@ -1398,7 +1541,7 @@ HyperTextAccessible::GetSelectionDOMRanges(int16_t aType,
                                            nsTArray<nsRange*>* aRanges)
 {
   // Ignore selection if it is not visible.
-  nsRefPtr<nsFrameSelection> frameSelection = FrameSelection();
+  RefPtr<nsFrameSelection> frameSelection = FrameSelection();
   if (!frameSelection ||
       frameSelection->GetDisplaySelection() <= nsISelectionController::SELECTION_HIDDEN)
     return;
@@ -1506,7 +1649,7 @@ HyperTextAccessible::SetSelectionBoundsAt(int32_t aSelectionNum,
   if (!domSel)
     return false;
 
-  nsRefPtr<nsRange> range;
+  RefPtr<nsRange> range;
   uint32_t rangeCount = domSel->RangeCount();
   if (aSelectionNum == static_cast<int32_t>(rangeCount))
     range = new nsRange(mContent);
@@ -1546,7 +1689,7 @@ void
 HyperTextAccessible::ScrollSubstringTo(int32_t aStartOffset, int32_t aEndOffset,
                                        uint32_t aScrollType)
 {
-  nsRefPtr<nsRange> range = new nsRange(mContent);
+  RefPtr<nsRange> range = new nsRange(mContent);
   if (OffsetsToDOMRange(aStartOffset, aEndOffset, range))
     nsCoreUtils::ScrollSubstringTo(GetFrame(), range, aScrollType);
 }
@@ -1564,7 +1707,7 @@ HyperTextAccessible::ScrollSubstringToPoint(int32_t aStartOffset,
   nsIntPoint coords = nsAccUtils::ConvertToScreenCoords(aX, aY, aCoordinateType,
                                                         this);
 
-  nsRefPtr<nsRange> range = new nsRange(mContent);
+  RefPtr<nsRange> range = new nsRange(mContent);
   if (!OffsetsToDOMRange(aStartOffset, aEndOffset, range))
     return;
 
@@ -1762,11 +1905,12 @@ HyperTextAccessible::RelationByType(RelationType aType)
 
   switch (aType) {
     case RelationType::NODE_CHILD_OF:
-      if (mContent->IsMathMLElement()) {
+      if (HasOwnContent() && mContent->IsMathMLElement()) {
         Accessible* parent = Parent();
         if (parent) {
           nsIContent* parentContent = parent->GetContent();
-          if (parentContent->IsMathMLElement(nsGkAtoms::mroot_)) {
+          if (parentContent &&
+              parentContent->IsMathMLElement(nsGkAtoms::mroot_)) {
             // Add a relation pointing to the parent <mroot>.
             rel.AppendTarget(parent);
           }
@@ -1774,7 +1918,7 @@ HyperTextAccessible::RelationByType(RelationType aType)
       }
       break;
     case RelationType::NODE_PARENT_OF:
-      if (mContent->IsMathMLElement(nsGkAtoms::mroot_)) {
+      if (HasOwnContent() && mContent->IsMathMLElement(nsGkAtoms::mroot_)) {
         Accessible* base = GetChildAt(0);
         Accessible* index = GetChildAt(1);
         if (base && index) {
@@ -2009,7 +2153,7 @@ HyperTextAccessible::GetSpellTextAttr(nsINode* aNode,
                                       uint32_t* aEndOffset,
                                       nsIPersistentProperties* aAttributes)
 {
-  nsRefPtr<nsFrameSelection> fs = FrameSelection();
+  RefPtr<nsFrameSelection> fs = FrameSelection();
   if (!fs)
     return;
 

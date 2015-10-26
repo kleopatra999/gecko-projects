@@ -29,9 +29,7 @@ using namespace mozilla;
 using namespace mozilla::widget;
 
 #ifdef DEBUG
-NS_IMPL_ISUPPORTS_INHERITED(GfxInfo, GfxInfoBase, nsIGfxInfo2, nsIGfxInfoDebug)
-#else
-NS_IMPL_ISUPPORTS_INHERITED(GfxInfo, GfxInfoBase, nsIGfxInfo2)
+NS_IMPL_ISUPPORTS_INHERITED(GfxInfo, GfxInfoBase, nsIGfxInfoDebug)
 #endif
 
 static const uint32_t allWindowsVersions = 0xffffffff;
@@ -59,7 +57,6 @@ GfxInfo::GetDWriteEnabled(bool *aEnabled)
   return NS_OK;
 }
 
-/* readonly attribute DOMString DWriteVersion; */
 NS_IMETHODIMP
 GfxInfo::GetDWriteVersion(nsAString & aDwriteVersion)
 {
@@ -70,7 +67,6 @@ GfxInfo::GetDWriteVersion(nsAString & aDwriteVersion)
 #define PIXEL_STRUCT_RGB  1
 #define PIXEL_STRUCT_BGR  2
 
-/* readonly attribute DOMString cleartypeParameters; */
 NS_IMETHODIMP
 GfxInfo::GetCleartypeParameters(nsAString & aCleartypeParams)
 {
@@ -224,7 +220,7 @@ enum {
   kWindows7 = 0x60001,
   kWindows8 = 0x60002,
   kWindows8_1 = 0x60003,
-  kWindows10 = 0x60004
+  kWindows10 = 0xA0000
 };
 
 static int32_t
@@ -564,12 +560,9 @@ GfxInfo::Init()
 
   AddCrashReportAnnotations();
 
-  GetCountryCode();
-
   return rv;
 }
 
-/* readonly attribute DOMString adapterDescription; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDescription(nsAString & aAdapterDescription)
 {
@@ -577,7 +570,6 @@ GfxInfo::GetAdapterDescription(nsAString & aAdapterDescription)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDescription2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDescription2(nsAString & aAdapterDescription)
 {
@@ -585,7 +577,6 @@ GfxInfo::GetAdapterDescription2(nsAString & aAdapterDescription)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterRAM; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterRAM(nsAString & aAdapterRAM)
 {
@@ -594,7 +585,6 @@ GfxInfo::GetAdapterRAM(nsAString & aAdapterRAM)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterRAM2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterRAM2(nsAString & aAdapterRAM)
 {
@@ -606,7 +596,6 @@ GfxInfo::GetAdapterRAM2(nsAString & aAdapterRAM)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriver; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriver(nsAString & aAdapterDriver)
 {
@@ -615,7 +604,6 @@ GfxInfo::GetAdapterDriver(nsAString & aAdapterDriver)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriver2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriver2(nsAString & aAdapterDriver)
 {
@@ -627,7 +615,6 @@ GfxInfo::GetAdapterDriver2(nsAString & aAdapterDriver)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverVersion; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverVersion(nsAString & aAdapterDriverVersion)
 {
@@ -635,7 +622,6 @@ GfxInfo::GetAdapterDriverVersion(nsAString & aAdapterDriverVersion)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverDate; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverDate(nsAString & aAdapterDriverDate)
 {
@@ -643,7 +629,6 @@ GfxInfo::GetAdapterDriverDate(nsAString & aAdapterDriverDate)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverVersion2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverVersion2(nsAString & aAdapterDriverVersion)
 {
@@ -651,7 +636,6 @@ GfxInfo::GetAdapterDriverVersion2(nsAString & aAdapterDriverVersion)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDriverDate2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDriverDate2(nsAString & aAdapterDriverDate)
 {
@@ -659,7 +643,6 @@ GfxInfo::GetAdapterDriverDate2(nsAString & aAdapterDriverDate)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterVendorID; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterVendorID(nsAString & aAdapterVendorID)
 {
@@ -667,7 +650,6 @@ GfxInfo::GetAdapterVendorID(nsAString & aAdapterVendorID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterVendorID2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterVendorID2(nsAString & aAdapterVendorID)
 {
@@ -675,7 +657,6 @@ GfxInfo::GetAdapterVendorID2(nsAString & aAdapterVendorID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDeviceID; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDeviceID(nsAString & aAdapterDeviceID)
 {
@@ -683,7 +664,6 @@ GfxInfo::GetAdapterDeviceID(nsAString & aAdapterDeviceID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterDeviceID2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterDeviceID2(nsAString & aAdapterDeviceID)
 {
@@ -691,7 +671,6 @@ GfxInfo::GetAdapterDeviceID2(nsAString & aAdapterDeviceID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterSubsysID; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterSubsysID(nsAString & aAdapterSubsysID)
 {
@@ -699,7 +678,6 @@ GfxInfo::GetAdapterSubsysID(nsAString & aAdapterSubsysID)
   return NS_OK;
 }
 
-/* readonly attribute DOMString adapterSubsysID2; */
 NS_IMETHODIMP
 GfxInfo::GetAdapterSubsysID2(nsAString & aAdapterSubsysID)
 {
@@ -707,7 +685,6 @@ GfxInfo::GetAdapterSubsysID2(nsAString & aAdapterSubsysID)
   return NS_OK;
 }
 
-/* readonly attribute boolean isGPU2Active; */
 NS_IMETHODIMP
 GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active)
 {
@@ -731,15 +708,6 @@ CheckForCiscoVPN() {
   }
 }
 #endif
-
-/* interface nsIGfxInfo2 */
-/* readonly attribute DOMString countryCode; */
-NS_IMETHODIMP
-GfxInfo::GetCountryCode(nsAString& aCountryCode)
-{
-  aCountryCode = mCountryCode;
-  return NS_OK;
-}
 
 void
 GfxInfo::AddCrashReportAnnotations()
@@ -820,28 +788,6 @@ GfxInfo::AddCrashReportAnnotations()
   CrashReporter::AppendAppNotesToCrashReport(note);
 
 #endif
-}
-
-void
-GfxInfo::GetCountryCode()
-{
-  GEOID geoid = GetUserGeoID(GEOCLASS_NATION);
-  if (geoid == GEOID_NOT_AVAILABLE) {
-    return;
-  }
-  // Get required length
-  int numChars = GetGeoInfoW(geoid, GEO_ISO2, nullptr, 0, 0);
-  if (!numChars) {
-    return;
-  }
-  // Now get the string for real
-  mCountryCode.SetLength(numChars);
-  numChars = GetGeoInfoW(geoid, GEO_ISO2, wwc(mCountryCode.BeginWriting()),
-                         mCountryCode.Length(), 0);
-  if (numChars) {
-    // numChars includes null terminator
-    mCountryCode.Truncate(numChars - 1);
-  }
 }
 
 static OperatingSystem
@@ -978,14 +924,23 @@ GfxInfo::GetGfxDriverInfo()
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_VISTA, IntelGMA950,   V(7,14,10,1504));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_VISTA, IntelGMA3150,  V(7,14,10,2124));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_VISTA, IntelGMAX3000, V(7,15,10,1666));
-    IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_VISTA, IntelGMAX4500HD, V(8,15,10,2202));
+    IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_VISTA, IntelHDGraphicsToIvyBridge, V(8,15,10,2202));
 
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_7, IntelGMA500,   V(5,0,0,2026));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_7, IntelGMA900,   GfxDriverInfo::allDriverVersions);
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_7, IntelGMA950,   V(8,15,10,1930));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_7, IntelGMA3150,  V(8,14,10,2117));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_7, IntelGMAX3000, V(8,15,10,1930));
-    IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_7, IntelGMAX4500HD, V(8,15,10,2202));
+    IMPLEMENT_INTEL_DRIVER_BLOCKLIST_D2D(DRIVER_OS_WINDOWS_7, IntelHDGraphicsToIvyBridge, V(8,15,10,2202));
+
+    /* Disable Direct2D on Intel GMAX4500 devices because of rendering corruption discovered
+     * in bug 1180379. These seems to affect even the most recent drivers. We're black listing
+     * all of the devices to be safe even though we've only confirmed the issue on the G45
+     */
+    APPEND_TO_DRIVER_BLOCKLIST2(DRIVER_OS_ALL,
+        (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorIntel), (GfxDeviceFamily*) GfxDriverInfo::GetDeviceFamily(IntelGMAX4500HD),
+      nsIGfxInfo::FEATURE_DIRECT2D, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+      DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions);
 
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_XP, IntelGMA500,   V(3,0,20,3200));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_XP, IntelGMA900,   V(6,14,10,4764));
@@ -993,6 +948,7 @@ GfxInfo::GetGfxDriverInfo()
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_XP, IntelGMA3150,  V(6,14,10,5134));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_XP, IntelGMAX3000, V(6,14,10,5218));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_XP, IntelGMAX4500HD, V(6,14,10,4969));
+    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_XP, IntelHDGraphicsToIvyBridge, V(6,14,10,4969));
 
     // StrechRect seems to suffer from precision issues which leads to artifacting
     // during content drawing starting with at least version 6.14.10.5082
@@ -1009,6 +965,7 @@ GfxInfo::GetGfxDriverInfo()
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_VISTA, IntelGMA3150,  V(7,14,10,1910));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_VISTA, IntelGMAX3000, V(7,15,10,1666));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_VISTA, IntelGMAX4500HD, V(7,15,10,1666));
+    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_VISTA, IntelHDGraphicsToIvyBridge, V(7,15,10,1666));
 
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_7, IntelGMA500,   V(5,0,0,2026));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_7, IntelGMA900,   GfxDriverInfo::allDriverVersions);
@@ -1016,11 +973,17 @@ GfxInfo::GetGfxDriverInfo()
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_7, IntelGMA3150,  V(8,14,10,1972));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_7, IntelGMAX3000, V(7,15,10,1666));
     IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_7, IntelGMAX4500HD, V(7,15,10,1666));
+    IMPLEMENT_INTEL_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_7, IntelHDGraphicsToIvyBridge, V(7,15,10,1666));
 
     // Bug 1074378
     APPEND_TO_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_7,
       (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorIntel),
       (GfxDeviceFamily*) GfxDriverInfo::GetDeviceFamily(IntelGMAX4500HD),
+      GfxDriverInfo::allFeatures, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
+      DRIVER_EQUAL, V(8,15,10,1749), "8.15.10.2342");
+    APPEND_TO_DRIVER_BLOCKLIST(DRIVER_OS_WINDOWS_7,
+      (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorIntel),
+      (GfxDeviceFamily*) GfxDriverInfo::GetDeviceFamily(IntelHDGraphicsToIvyBridge),
       GfxDriverInfo::allFeatures, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
       DRIVER_EQUAL, V(8,15,10,1749), "8.15.10.2342");
 
@@ -1067,6 +1030,18 @@ GfxInfo::GetGfxDriverInfo()
       nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
       DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions );
 
+    /* Disable D3D11 layers on Intel GMA 3150 for failing to allocate a shared handle for textures.
+     * See bug 1207665. Additionally block D2D so we don't accidentally use WARP.
+     */
+    APPEND_TO_DRIVER_BLOCKLIST2(DRIVER_OS_ALL,
+        (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorIntel), (GfxDeviceFamily*) GfxDriverInfo::GetDeviceFamily(Bug1207665),
+        nsIGfxInfo::FEATURE_DIRECT3D_11_LAYERS, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+      DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions );
+    APPEND_TO_DRIVER_BLOCKLIST2(DRIVER_OS_ALL,
+        (nsAString&) GfxDriverInfo::GetDeviceVendor(VendorIntel), (GfxDeviceFamily*) GfxDriverInfo::GetDeviceFamily(Bug1207665),
+        nsIGfxInfo::FEATURE_DIRECT2D, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+      DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions );
+
     /* Disable D2D on AMD Catalyst 14.4 until 14.6
      * See bug 984488
      */
@@ -1110,6 +1085,16 @@ GfxInfo::GetGfxDriverInfo()
       (nsAString&)GfxDriverInfo::GetDeviceVendor(VendorATI), GfxDriverInfo::allDevices,
       nsIGfxInfo::FEATURE_HARDWARE_VIDEO_DECODING, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
       DRIVER_EQUAL, V(15,200,1006,0));
+
+    /* Bug 1213107: D3D9 crashes with ATI cards on Windows 7. */
+    APPEND_TO_DRIVER_BLOCKLIST_RANGE(DRIVER_OS_WINDOWS_7,
+      (nsAString&)GfxDriverInfo::GetDeviceVendor(VendorATI), GfxDriverInfo::allDevices,
+      nsIGfxInfo::FEATURE_HARDWARE_VIDEO_DECODING, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
+      DRIVER_BETWEEN_INCLUSIVE, V(8,861,0,0), V(8,862,6,5000), "Radeon driver > 8.862.6.5000");
+    APPEND_TO_DRIVER_BLOCKLIST_RANGE(DRIVER_OS_WINDOWS_7,
+      (nsAString&)GfxDriverInfo::GetDeviceVendor(VendorATI), GfxDriverInfo::allDevices,
+      nsIGfxInfo::FEATURE_WEBGL_ANGLE, nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
+      DRIVER_BETWEEN_INCLUSIVE, V(8,861,0,0), V(8,862,6,5000), "Radeon driver > 8.862.6.5000");
 
     APPEND_TO_DRIVER_BLOCKLIST2(DRIVER_OS_WINDOWS_7,
       (nsAString&)GfxDriverInfo::GetDeviceVendor(VendorIntel), (GfxDeviceFamily*)GfxDriverInfo::GetDeviceFamily(Bug1155608),
@@ -1255,32 +1240,67 @@ GfxInfo::FindMonitors(JSContext* aCx, JS::HandleObject aOutArray)
   return NS_OK;
 }
 
+void
+GfxInfo::DescribeFeatures(JSContext* aCx, JS::Handle<JSObject*> aObj)
+{
+  JS::Rooted<JSObject*> obj(aCx);
+
+  gfxWindowsPlatform* platform = gfxWindowsPlatform::GetPlatform();
+
+  gfx::FeatureStatus d3d11 = platform->GetD3D11Status();
+  if (!InitFeatureObject(aCx, aObj, "d3d11", d3d11, &obj)) {
+    return;
+  }
+  if (d3d11 == gfx::FeatureStatus::Available) {
+    JS::Rooted<JS::Value> val(aCx, JS::Int32Value(platform->GetD3D11Version()));
+    JS_SetProperty(aCx, obj, "version", val);
+
+    val = JS::BooleanValue(platform->IsWARP());
+    JS_SetProperty(aCx, obj, "warp", val);
+
+    val = JS::BooleanValue(platform->CompositorD3D11TextureSharingWorks());
+    JS_SetProperty(aCx, obj, "textureSharing", val);
+
+    val = JS::BooleanValue(!platform->CanUseDirect3D11());
+    JS_SetProperty(aCx, obj, "blacklisted", val);
+  }
+
+  gfx::FeatureStatus d2d = platform->GetD2DStatus();
+  if (!InitFeatureObject(aCx, aObj, "d2d", d2d, &obj)) {
+    return;
+  }
+  {
+    const char* version = "1.0";
+    if (platform->GetD2D1Status() == gfx::FeatureStatus::Available)
+      version = "1.1";
+    JS::Rooted<JSString*> str(aCx, JS_NewStringCopyZ(aCx, version));
+    JS::Rooted<JS::Value> val(aCx, JS::StringValue(str));
+    JS_SetProperty(aCx, obj, "version", val);
+  }
+}
+
 #ifdef DEBUG
 
 // Implement nsIGfxInfoDebug
 
-/* void spoofVendorID (in DOMString aVendorID); */
 NS_IMETHODIMP GfxInfo::SpoofVendorID(const nsAString & aVendorID)
 {
   mAdapterVendorID = aVendorID;
   return NS_OK;
 }
 
-/* void spoofDeviceID (in unsigned long aDeviceID); */
 NS_IMETHODIMP GfxInfo::SpoofDeviceID(const nsAString & aDeviceID)
 {
   mAdapterDeviceID = aDeviceID;
   return NS_OK;
 }
 
-/* void spoofDriverVersion (in DOMString aDriverVersion); */
 NS_IMETHODIMP GfxInfo::SpoofDriverVersion(const nsAString & aDriverVersion)
 {
   mDriverVersion = aDriverVersion;
   return NS_OK;
 }
 
-/* void spoofOSVersion (in unsigned long aVersion); */
 NS_IMETHODIMP GfxInfo::SpoofOSVersion(uint32_t aVersion)
 {
   mWindowsVersion = aVersion;

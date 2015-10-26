@@ -14,7 +14,7 @@
 
 #include "mozilla/media/MediaSystemResourceClient.h"
 #include "mozilla/Monitor.h"
-#include "nsRefPtr.h"
+#include "mozilla/RefPtr.h"
 
 namespace android {
 // This class is intended to be a proxy for MediaCodec with codec resource
@@ -129,7 +129,7 @@ public:
 
   // If aData is null, will notify decoder input EOS
   status_t Input(const uint8_t* aData, uint32_t aDataSize,
-                 int64_t aTimestampUsecs, uint64_t flags);
+                 int64_t aTimestampUsecs, uint64_t flags, int64_t aTimeoutUs = 0);
   status_t Output(MediaBuffer** aBuffer, int64_t aTimeoutUs);
   bool Prepare();
   void ReleaseMediaResources();
@@ -183,7 +183,7 @@ private:
   wp<CodecResourceListener> mListener;
 
   // Media Resource Management
-  nsRefPtr<mozilla::MediaSystemResourceClient> mResourceClient;
+  RefPtr<mozilla::MediaSystemResourceClient> mResourceClient;
 
   // MediaCodec instance
   mutable RWLock mCodecLock;

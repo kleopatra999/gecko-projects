@@ -87,7 +87,6 @@ ParseKeySystem(const nsAString& aExpectedKeySystem,
 
 static const char16_t* sKeySystems[] = {
   MOZ_UTF16("org.w3.clearkey"),
-  MOZ_UTF16("com.adobe.access"),
   MOZ_UTF16("com.adobe.primetime"),
 };
 
@@ -107,6 +106,16 @@ ParseKeySystem(const nsAString& aInputKeySystem,
     }
   }
   return false;
+}
+
+void
+ConstructKeySystem(const nsAString& aKeySystem,
+                   const nsAString& aCDMVersion,
+                   nsAString& aOutKeySystem)
+{
+  aOutKeySystem.Append(aKeySystem);
+  aOutKeySystem.AppendLiteral(".");
+  aOutKeySystem.Append(aCDMVersion);
 }
 
 } // namespace mozilla

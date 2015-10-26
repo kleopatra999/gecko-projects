@@ -18,7 +18,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Log",
 
 this.EXPORTED_SYMBOLS = ["GoogleImporter"];
 
-let log = Log.repository.getLogger("Loop.Importer.Google");
+var log = Log.repository.getLogger("Loop.Importer.Google");
 log.level = Log.Level.Debug;
 log.addAppender(new Log.ConsoleAppender(new Log.BasicFormatter()));
 
@@ -114,7 +114,7 @@ const getUrlParam = function(paramValue, prefName, encode = true) {
   return encode ? encodeURIComponent(paramValue) : paramValue;
 };
 
-let gAuthWindow, gProfileId;
+var gAuthWindow, gProfileId;
 const kAuthWindowSize = {
   width: 420,
   height: 460
@@ -170,7 +170,7 @@ this.GoogleImporter.prototype = {
       let code = yield this._promiseAuthCode(windowRef);
       let tokenSet = yield this._promiseTokenSet(code);
       let contactEntries = yield this._getContactEntries(tokenSet);
-      let {total, success, ids} = yield this._processContacts(contactEntries, db, tokenSet);
+      let { total, success, ids } = yield this._processContacts(contactEntries, db, tokenSet);
       yield this._purgeContacts(ids, db);
 
       return {
@@ -547,14 +547,18 @@ this.GoogleImporter.prototype = {
           let email;
           try {
             email = getPreferred(contact);
-          } catch (ex) {}
+          } catch (ex) {
+            // Do nothing
+          }
           if (email) {
             contact.name = [email.value];
           } else {
             let tel;
             try {
               tel = getPreferred(contact, "tel");
-            } catch (ex) {}
+            } catch (ex) {
+              // Do nothing
+            }
             if (tel) {
               contact.name = [tel.value];
             }

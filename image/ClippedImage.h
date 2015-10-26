@@ -37,6 +37,10 @@ public:
   NS_IMETHOD GetIntrinsicRatio(nsSize* aRatio) override;
   NS_IMETHOD_(already_AddRefed<SourceSurface>)
     GetFrame(uint32_t aWhichFrame, uint32_t aFlags) override;
+  NS_IMETHOD_(already_AddRefed<SourceSurface>)
+    GetFrameAtSize(const gfx::IntSize& aSize,
+                   uint32_t aWhichFrame,
+                   uint32_t aFlags) override;
   NS_IMETHOD_(bool) IsImageContainerAvailable(layers::LayerManager* aManager,
                                               uint32_t aFlags) override;
   NS_IMETHOD_(already_AddRefed<layers::ImageContainer>)
@@ -46,7 +50,7 @@ public:
                                const nsIntSize& aSize,
                                const ImageRegion& aRegion,
                                uint32_t aWhichFrame,
-                               GraphicsFilter aFilter,
+                               gfx::Filter aFilter,
                                const Maybe<SVGImageContext>& aSVGContext,
                                uint32_t aFlags) override;
   NS_IMETHOD RequestDiscard() override;
@@ -55,7 +59,7 @@ public:
     override;
   nsIntSize OptimalImageSizeForDest(const gfxSize& aDest,
                                     uint32_t aWhichFrame,
-                                    GraphicsFilter aFilter,
+                                    gfx::Filter aFilter,
                                     uint32_t aFlags) override;
 
 protected:
@@ -64,7 +68,7 @@ protected:
   virtual ~ClippedImage();
 
 private:
-  already_AddRefed<SourceSurface>
+  Pair<DrawResult, RefPtr<SourceSurface>>
     GetFrameInternal(const nsIntSize& aSize,
                      const Maybe<SVGImageContext>& aSVGContext,
                      uint32_t aWhichFrame,
@@ -74,7 +78,7 @@ private:
                             const nsIntSize& aSize,
                             const ImageRegion& aRegion,
                             uint32_t aWhichFrame,
-                            GraphicsFilter aFilter,
+                            gfx::Filter aFilter,
                             const Maybe<SVGImageContext>& aSVGContext,
                             uint32_t aFlags);
 

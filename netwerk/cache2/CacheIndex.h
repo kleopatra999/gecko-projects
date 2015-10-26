@@ -259,9 +259,9 @@ public:
                                            nsILoadContextInfo *aInfo)
   {
     if (!aInfo->IsPrivate() &&
-        aInfo->AppId() == aRec->mAppId &&
+        aInfo->OriginAttributesPtr()->mAppId == aRec->mAppId &&
         aInfo->IsAnonymous() == !!(aRec->mFlags & kAnonymousMask) &&
-        aInfo->IsInBrowserElement() == !!(aRec->mFlags & kInBrowserMask)) {
+        aInfo->OriginAttributesPtr()->mInBrowser == !!(aRec->mFlags & kInBrowserMask)) {
       return true;
     }
 
@@ -723,8 +723,6 @@ private:
 
   // Merge all pending operations from mPendingUpdates into mIndex.
   void ProcessPendingOperations();
-  static PLDHashOperator UpdateEntryInIndex(CacheIndexEntryUpdate *aEntry,
-                                            void* aClosure);
 
   // Following methods perform writing of the index file.
   //
@@ -745,11 +743,6 @@ private:
   // Finalizes writing process.
   void FinishWrite(bool aSucceeded);
 
-  static PLDHashOperator CopyRecordsToRWBuf(CacheIndexEntry *aEntry,
-                                            void* aClosure);
-  static PLDHashOperator ApplyIndexChanges(CacheIndexEntry *aEntry,
-                                           void* aClosure);
-
   // Following methods perform writing of the journal during shutdown. All these
   // methods must be called only during shutdown since they write/delete files
   // directly on the main thread instead of using CacheFileIOManager that does
@@ -762,9 +755,6 @@ private:
   void     RemoveIndexFromDisk();
   // Writes journal to the disk and clears dirty flag in index header.
   nsresult WriteLogToDisk();
-
-  static PLDHashOperator WriteEntryToLog(CacheIndexEntry *aEntry,
-                                         void* aClosure);
 
   // Following methods perform reading of the index from the disk.
   //
@@ -820,12 +810,8 @@ private:
   // In debug build this method is called after processing pending operations
   // to make sure mIndexStats contains correct information.
   void EnsureCorrectStats();
-  static PLDHashOperator SumIndexStats(CacheIndexEntry *aEntry, void* aClosure);
   // Finalizes reading process.
   void FinishRead(bool aSucceeded);
-
-  static PLDHashOperator ProcessJournalEntry(CacheIndexEntry *aEntry,
-                                             void* aClosure);
 
   // Following methods perform updating and building of the index.
   // Timer callback that starts update or build process.
@@ -853,8 +839,7 @@ private:
   // Finalizes update or build process.
   void FinishUpdate(bool aSucceeded);
 
-  static PLDHashOperator RemoveNonFreshEntries(CacheIndexEntry *aEntry,
-                                               void* aClosure);
+  void RemoveNonFreshEntries();
 
   enum EState {
     // Initial state in which the index is not usable
@@ -984,21 +969,21 @@ private:
   char                     *mRWBuf;
   uint32_t                  mRWBufSize;
   uint32_t                  mRWBufPos;
-  nsRefPtr<CacheHash>       mRWHash;
+  RefPtr<CacheHash>       mRWHash;
 
   // Reading of journal succeeded if true.
   bool                      mJournalReadSuccessfully;
 
   // Handle used for writing and reading index file.
-  nsRefPtr<CacheFileHandle> mIndexHandle;
+  RefPtr<CacheFileHandle> mIndexHandle;
   // Handle used for reading journal file.
-  nsRefPtr<CacheFileHandle> mJournalHandle;
+  RefPtr<CacheFileHandle> mJournalHandle;
   // Used to check the existence of the file during reading process.
-  nsRefPtr<CacheFileHandle> mTmpHandle;
+  RefPtr<CacheFileHandle> mTmpHandle;
 
-  nsRefPtr<FileOpenHelper>  mIndexFileOpener;
-  nsRefPtr<FileOpenHelper>  mJournalFileOpener;
-  nsRefPtr<FileOpenHelper>  mTmpFileOpener;
+  RefPtr<FileOpenHelper>  mIndexFileOpener;
+  RefPtr<FileOpenHelper>  mJournalFileOpener;
+  RefPtr<FileOpenHelper>  mTmpFileOpener;
 
   // Directory enumerator used when building and updating index.
   nsCOMPtr<nsIDirectoryEnumerator> mDirEnumerator;
@@ -1084,7 +1069,7 @@ private:
   };
 
   // List of async observers that want to get disk consumption information
-  nsTArray<nsRefPtr<DiskConsumptionObserver> > mDiskConsumptionObservers;
+  nsTArray<RefPtr<DiskConsumptionObserver> > mDiskConsumptionObservers;
 };
 
 class CacheIndexAutoLock {
@@ -1115,7 +1100,7 @@ public:
   }
 
 private:
-  nsRefPtr<CacheIndex> mIndex;
+  RefPtr<CacheIndex> mIndex;
   bool mLocked;
 };
 
@@ -1147,11 +1132,11 @@ public:
   }
 
 private:
-  nsRefPtr<CacheIndex> mIndex;
+  RefPtr<CacheIndex> mIndex;
   bool mLocked;
 };
 
-} // net
-} // mozilla
+} // namespace net
+} // namespace mozilla
 
 #endif

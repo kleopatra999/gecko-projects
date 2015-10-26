@@ -18,7 +18,7 @@
 #include "nsPrintfCString.h"
 #include "nsIStringBundle.h"
 #include "prefapi.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 
 #include "nsCRT.h"
 #include "mozilla/Services.h"
@@ -515,7 +515,6 @@ NS_IMETHODIMP nsPrefBranch::UnlockPref(const char *aPrefName)
   return PREF_LockPref(pref, false);
 }
 
-/* void resetBranch (in string startingAt); */
 NS_IMETHODIMP nsPrefBranch::ResetBranch(const char *aStartingAt)
 {
   return NS_ERROR_NOT_IMPLEMENTED;

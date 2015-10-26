@@ -39,22 +39,42 @@ Structure::
 
         sessionStartDate: <ISO date>, // daily precision
         subsessionStartDate: <ISO date>, // daily precision, ISO date in local time
-        subsessionLength: <number>, // the subsession length in seconds
+        sessionLength: <number>, // the session length until now in seconds, monotonic
+        subsessionLength: <number>, // the subsession length in seconds, monotonic
       },
 
-      childPayloads: {...}, // only present with e10s; a reduced payload from content processes
+      childPayloads: {...}, // only present with e10s; a reduced payload from content processes, null on failure
+      simpleMeasurements: {...},
 
-      simpleMeasurements: { ... },
-      histograms: {},
-      keyedHistograms: {},
-      chromeHangs: {},
-      threadHangStats: {},
-      log: [],
+      // The following properties may all be null if we fail to collect them.
+      histograms: {...},
+      keyedHistograms: {...},
+      chromeHangs: {...},
+      threadHangStats: {...},
+      log: [...],
       fileIOReports: {...},
       lateWrites: {...},
-      addonDetails: { ... },
+      addonDetails: {...},
       addonHistograms: {...},
       UIMeasurements: {...},
       slowSQL: {...},
       slowSQLstartup: {...},
     }
+
+info
+----
+
+sessionLength
+~~~~~~~~~~~~~
+The length of the current session so far in seconds.
+This uses a monotonic clock, so this may mismatch with other measurements that
+are not monotonic like calculations based on ``Date.now()``.
+
+If the monotonic clock failed, this will be ``-1``.
+
+subsessionLength
+~~~~~~~~~~~~~~~~
+The length of this subsession in seconds.
+This uses a monotonic clock, so this may mismatch with other measurements that are not monotonic (e.g. based on Date.now()).
+
+If ``sessionLength`` is ``-1``, the monotonic clock is not working.

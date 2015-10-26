@@ -140,7 +140,7 @@ private:
    */
   void SetState(GestureState aState);
 
-  nsRefPtr<AsyncPanZoomController> mAsyncPanZoomController;
+  RefPtr<AsyncPanZoomController> mAsyncPanZoomController;
 
   /**
    * Array containing all active touches. When a touch happens it, gets added to
@@ -225,7 +225,7 @@ private:
 
 };
 
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 #endif

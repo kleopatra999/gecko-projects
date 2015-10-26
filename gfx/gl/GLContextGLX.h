@@ -50,6 +50,15 @@ public:
 
     virtual bool SwapBuffers() override;
 
+    // Overrides the current GLXDrawable backing the context and makes the
+    // context current.
+    bool OverrideDrawable(GLXDrawable drawable);
+
+    // Undoes the effect of a drawable override.
+    bool RestoreDrawable();
+
+    virtual Maybe<gfx::IntSize> GetTargetSize() override;
+
 private:
     friend class GLContextProviderGLX;
 
@@ -71,7 +80,7 @@ private:
 
     GLXLibrary* mGLX;
 
-    nsRefPtr<gfxXlibSurface> mPixmap;
+    RefPtr<gfxXlibSurface> mPixmap;
     bool mOwnsContext;
 };
 

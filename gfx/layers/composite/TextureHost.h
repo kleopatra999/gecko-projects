@@ -33,7 +33,7 @@
 namespace mozilla {
 namespace ipc {
 class Shmem;
-}
+} // namespace ipc
 
 namespace layers {
 
@@ -325,9 +325,11 @@ public:
   /**
    * Factory method.
    */
-  static already_AddRefed<TextureHost> Create(const SurfaceDescriptor& aDesc,
-                                          ISurfaceAllocator* aDeallocator,
-                                          TextureFlags aFlags);
+  static already_AddRefed<TextureHost> Create(
+    const SurfaceDescriptor& aDesc,
+    ISurfaceAllocator* aDeallocator,
+    LayersBackend aBackend,
+    TextureFlags aFlags);
 
   /**
    * Tell to TextureChild that TextureHost is recycled.
@@ -418,6 +420,11 @@ public:
   virtual gfx::IntSize GetSize() const = 0;
 
   /**
+   * Should be overridden if TextureHost supports crop rect.
+   */
+  virtual void SetCropRect(nsIntRect aCropRect) {}
+
+  /**
    * Debug facility.
    * XXX - cool kids use Moz2D. See bug 882113.
    */
@@ -445,6 +452,7 @@ public:
    */
   static PTextureParent* CreateIPDLActor(CompositableParentManager* aManager,
                                          const SurfaceDescriptor& aSharedData,
+                                         LayersBackend aLayersBackend,
                                          TextureFlags aFlags);
   static bool DestroyIPDLActor(PTextureParent* actor);
 
@@ -711,6 +719,7 @@ public:
   explicit CompositingRenderTarget(const gfx::IntPoint& aOrigin)
     : mClearOnBind(false)
     , mOrigin(aOrigin)
+    , mHasComplexProjection(false)
   {}
   virtual ~CompositingRenderTarget() {}
 
@@ -726,14 +735,45 @@ public:
     mClearOnBind = true;
   }
 
-  const gfx::IntPoint& GetOrigin() { return mOrigin; }
+  const gfx::IntPoint& GetOrigin() const { return mOrigin; }
   gfx::IntRect GetRect() { return gfx::IntRect(GetOrigin(), GetSize()); }
 
+  /**
+   * If a Projection matrix is set, then it is used for rendering to
+   * this render target instead of generating one.  If no explicit
+   * projection is set, Compositors are expected to generate an
+   * orthogonal maaping that maps 0..1 to the full size of the render
+   * target.
+   */
+  bool HasComplexProjection() const { return mHasComplexProjection; }
+  void ClearProjection() { mHasComplexProjection = false; }
+  void SetProjection(const gfx::Matrix4x4& aNewMatrix, bool aEnableDepthBuffer,
+                     float aZNear, float aZFar)
+  {
+    mProjectionMatrix = aNewMatrix;
+    mEnableDepthBuffer = aEnableDepthBuffer;
+    mZNear = aZNear;
+    mZFar = aZFar;
+    mHasComplexProjection = true;
+  }
+  void GetProjection(gfx::Matrix4x4& aMatrix, bool& aEnableDepth, float& aZNear, float& aZFar)
+  {
+    MOZ_ASSERT(mHasComplexProjection);
+    aMatrix = mProjectionMatrix;
+    aEnableDepth = mEnableDepthBuffer;
+    aZNear = mZNear;
+    aZFar = mZFar;
+  }
 protected:
   bool mClearOnBind;
 
 private:
   gfx::IntPoint mOrigin;
+
+  gfx::Matrix4x4 mProjectionMatrix;
+  float mZNear, mZFar;
+  bool mHasComplexProjection;
+  bool mEnableDepthBuffer;
 };
 
 /**
@@ -745,7 +785,7 @@ CreateBackendIndependentTextureHost(const SurfaceDescriptor& aDesc,
                                     ISurfaceAllocator* aDeallocator,
                                     TextureFlags aFlags);
 
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 #endif

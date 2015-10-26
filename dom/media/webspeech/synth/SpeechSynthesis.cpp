@@ -32,14 +32,6 @@ GetSpeechSynthLog()
 namespace mozilla {
 namespace dom {
 
-static PLDHashOperator
-TraverseCachedVoices(const nsAString& aKey, SpeechSynthesisVoice* aEntry, void* aData)
-{
-  nsCycleCollectionTraversalCallback* cb = static_cast<nsCycleCollectionTraversalCallback*>(aData);
-  cb->NoteXPCOMChild(aEntry);
-  return PL_DHASH_NEXT;
-}
-
 NS_IMPL_CYCLE_COLLECTION_CLASS(SpeechSynthesis)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(SpeechSynthesis)
@@ -55,7 +47,10 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(SpeechSynthesis)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCurrentTask)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSpeechQueue)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
-  tmp->mVoiceCache.EnumerateRead(TraverseCachedVoices, &cb);
+  for (auto iter = tmp->mVoiceCache.Iter(); !iter.Done(); iter.Next()) {
+    SpeechSynthesisVoice* voice = iter.UserData();
+    cb.NoteXPCOMChild(voice);
+  }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(SpeechSynthesis)
@@ -72,7 +67,9 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(SpeechSynthesis)
 
 SpeechSynthesis::SpeechSynthesis(nsPIDOMWindow* aParent)
   : mParent(aParent)
+  , mHoldQueue(false)
 {
+  MOZ_ASSERT(aParent->IsInnerWindow());
 }
 
 SpeechSynthesis::~SpeechSynthesis()
@@ -109,21 +106,20 @@ SpeechSynthesis::Pending() const
 bool
 SpeechSynthesis::Speaking() const
 {
-  if (mSpeechQueue.IsEmpty()) {
-    return false;
+  if (!mSpeechQueue.IsEmpty() &&
+      mSpeechQueue.ElementAt(0)->GetState() == SpeechSynthesisUtterance::STATE_SPEAKING) {
+    return true;
   }
 
-  return mSpeechQueue.ElementAt(0)->GetState() == SpeechSynthesisUtterance::STATE_SPEAKING;
+  // Returns global speaking state if global queue is enabled. Or false.
+  return nsSynthVoiceRegistry::GetInstance()->IsSpeaking();
 }
 
 bool
 SpeechSynthesis::Paused() const
 {
-  if (mSpeechQueue.IsEmpty()) {
-    return false;
-  }
-
-  return mSpeechQueue.ElementAt(0)->IsPaused();
+  return mHoldQueue || (mCurrentTask && mCurrentTask->IsPrePaused()) ||
+         (!mSpeechQueue.IsEmpty() && mSpeechQueue.ElementAt(0)->IsPaused());
 }
 
 void
@@ -137,7 +133,7 @@ SpeechSynthesis::Speak(SpeechSynthesisUtterance& aUtterance)
   mSpeechQueue.AppendElement(&aUtterance);
   aUtterance.mState = SpeechSynthesisUtterance::STATE_PENDING;
 
-  if (mSpeechQueue.Length() == 1 && !mCurrentTask) {
+  if (mSpeechQueue.Length() == 1 && !mCurrentTask && !mHoldQueue) {
     AdvanceQueue();
   }
 }
@@ -152,7 +148,7 @@ SpeechSynthesis::AdvanceQueue()
     return;
   }
 
-  nsRefPtr<SpeechSynthesisUtterance> utterance = mSpeechQueue.ElementAt(0);
+  RefPtr<SpeechSynthesisUtterance> utterance = mSpeechQueue.ElementAt(0);
 
   nsAutoString docLang;
   nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(mParent);
@@ -179,29 +175,47 @@ SpeechSynthesis::AdvanceQueue()
 void
 SpeechSynthesis::Cancel()
 {
-  if (mCurrentTask) {
-   if (mSpeechQueue.Length() > 1) {
-      // Remove all queued utterances except for current one.
-      mSpeechQueue.RemoveElementsAt(1, mSpeechQueue.Length() - 1);
-    }
+  if (!mSpeechQueue.IsEmpty() &&
+      mSpeechQueue.ElementAt(0)->GetState() == SpeechSynthesisUtterance::STATE_SPEAKING) {
+    // Remove all queued utterances except for current one, we will remove it
+    // in OnEnd
+    mSpeechQueue.RemoveElementsAt(1, mSpeechQueue.Length() - 1);
+  } else {
+    mSpeechQueue.Clear();
+  }
 
-   mCurrentTask->Cancel();
+  if (mCurrentTask) {
+    mCurrentTask->Cancel();
   }
 }
 
 void
 SpeechSynthesis::Pause()
 {
-  if (mCurrentTask && !Paused() && (Speaking() || Pending())) {
+  if (Paused()) {
+    return;
+  }
+
+  if (mCurrentTask &&
+      mSpeechQueue.ElementAt(0)->GetState() != SpeechSynthesisUtterance::STATE_ENDED) {
     mCurrentTask->Pause();
+  } else {
+    mHoldQueue = true;
   }
 }
 
 void
 SpeechSynthesis::Resume()
 {
-  if (mCurrentTask && Paused()) {
+  if (!Paused()) {
+    return;
+  }
+
+  if (mCurrentTask) {
     mCurrentTask->Resume();
+  } else {
+    mHoldQueue = false;
+    AdvanceQueue();
   }
 }
 
@@ -219,7 +233,7 @@ SpeechSynthesis::OnEnd(const nsSpeechTask* aTask)
 }
 
 void
-SpeechSynthesis::GetVoices(nsTArray< nsRefPtr<SpeechSynthesisVoice> >& aResult)
+SpeechSynthesis::GetVoices(nsTArray< RefPtr<SpeechSynthesisVoice> >& aResult)
 {
   aResult.Clear();
   uint32_t voiceCount = 0;
@@ -252,6 +266,16 @@ SpeechSynthesis::GetVoices(nsTArray< nsRefPtr<SpeechSynthesisVoice> >& aResult)
   for (uint32_t i = 0; i < aResult.Length(); i++) {
     SpeechSynthesisVoice* voice = aResult[i];
     mVoiceCache.Put(voice->mUri, voice);
+  }
+}
+
+// For testing purposes, allows us to cancel the current task that is
+// misbehaving, and flush the queue.
+void
+SpeechSynthesis::ForceEnd()
+{
+  if (mCurrentTask) {
+    mCurrentTask->ForceEnd();
   }
 }
 

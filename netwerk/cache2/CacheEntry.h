@@ -55,7 +55,7 @@ public:
   NS_DECL_NSIRUNNABLE
 
   CacheEntry(const nsACString& aStorageID, nsIURI* aURI, const nsACString& aEnhanceID,
-             bool aUseDisk);
+             bool aUseDisk, bool aSkipSizeCheck);
 
   void AsyncOpen(nsICacheEntryOpenCallback* aCallback, uint32_t aFlags);
 
@@ -125,7 +125,7 @@ private:
   NS_IMETHOD OnFileDoomed(nsresult aResult) override;
 
   // Keep the service alive during life-time of an entry
-  nsRefPtr<CacheStorageService> mService;
+  RefPtr<CacheStorageService> mService;
 
   // We must monitor when a cache entry whose consumer is responsible
   // for writing it the first time gets released.  We must then invoke
@@ -146,7 +146,7 @@ private:
     // We are raising reference count here to take into account the pending
     // callback (that virtually holds a ref to this entry before it gets
     // it's pointer).
-    nsRefPtr<CacheEntry> mEntry;
+    RefPtr<CacheEntry> mEntry;
     nsCOMPtr<nsICacheEntryOpenCallback> mCallback;
     nsCOMPtr<nsIThread> mTargetThread;
     bool mReadOnly : 1;
@@ -178,7 +178,7 @@ private:
       return NS_OK;
     }
 
-    nsRefPtr<CacheEntry> mEntry;
+    RefPtr<CacheEntry> mEntry;
     Callback mCallback;
   };
 
@@ -204,7 +204,7 @@ private:
       return NS_OK;
     }
 
-    nsRefPtr<CacheEntry> mEntry;
+    RefPtr<CacheEntry> mEntry;
     nsresult mRv;
   };
 
@@ -263,7 +263,7 @@ private:
   nsTArray<Callback> mCallbacks;
   nsCOMPtr<nsICacheEntryDoomCallback> mDoomCallback;
 
-  nsRefPtr<CacheFile> mFile;
+  RefPtr<CacheFile> mFile;
 
   // Using ReleaseAcquire since we only control access to mFile with this.
   // When mFileStatus is read and found success it is ensured there is mFile and
@@ -275,6 +275,9 @@ private:
 
   // Whether it's allowed to persist the data to disk
   bool const mUseDisk;
+
+  // Whether it should skip max size check.
+  bool const mSkipSizeCheck;
 
   // Set when entry is doomed with AsyncDoom() or DoomAlreadyRemoved().
   // Left as a standalone flag to not bother with locking (there is no need).
@@ -363,7 +366,7 @@ public:
   NS_FORWARD_NSICACHEENTRY(mEntry->)
 private:
   virtual ~CacheEntryHandle();
-  nsRefPtr<CacheEntry> mEntry;
+  RefPtr<CacheEntry> mEntry;
 };
 
 
@@ -381,10 +384,10 @@ private:
   explicit CacheOutputCloseListener(CacheEntry* aEntry);
 
 private:
-  nsRefPtr<CacheEntry> mEntry;
+  RefPtr<CacheEntry> mEntry;
 };
 
-} // net
-} // mozilla
+} // namespace net
+} // namespace mozilla
 
 #endif

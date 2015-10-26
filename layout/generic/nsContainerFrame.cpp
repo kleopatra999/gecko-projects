@@ -656,7 +656,7 @@ nsContainerFrame::SyncWindowProperties(nsPresContext*       aPresContext,
     return;
   }
 
-  nsRefPtr<nsPresContext> kungFuDeathGrip(aPresContext);
+  RefPtr<nsPresContext> kungFuDeathGrip(aPresContext);
   nsWeakFrame weak(rootFrame);
 
   nsTransparencyMode mode = nsLayoutUtils::GetFrameTransparency(aFrame, rootFrame);
@@ -922,13 +922,13 @@ nsContainerFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
     AutoMaybeDisableFontInflation an(this);
 
     WritingMode tableWM = GetParent()->GetWritingMode();
-    uint8_t captionSide = StyleTableBorder()->LogicalCaptionSide(tableWM);
+    uint8_t captionSide = StyleTableBorder()->mCaptionSide;
 
     if (aWM.IsOrthogonalTo(tableWM)) {
-      if (captionSide == NS_STYLE_CAPTION_SIDE_BSTART ||
-          captionSide == NS_STYLE_CAPTION_SIDE_BSTART_OUTSIDE ||
-          captionSide == NS_STYLE_CAPTION_SIDE_BEND ||
-          captionSide == NS_STYLE_CAPTION_SIDE_BEND_OUTSIDE) {
+      if (captionSide == NS_STYLE_CAPTION_SIDE_TOP ||
+          captionSide == NS_STYLE_CAPTION_SIDE_TOP_OUTSIDE ||
+          captionSide == NS_STYLE_CAPTION_SIDE_BOTTOM ||
+          captionSide == NS_STYLE_CAPTION_SIDE_BOTTOM_OUTSIDE) {
         // For an orthogonal caption on a block-dir side of the table,
         // shrink-wrap to min-isize.
         result.ISize(aWM) = GetMinISize(aRenderingContext);
@@ -944,11 +944,11 @@ nsContainerFrame::ComputeAutoSize(nsRenderingContext* aRenderingContext,
         }
       }
     } else {
-      if (captionSide == NS_STYLE_CAPTION_SIDE_ISTART ||
-          captionSide == NS_STYLE_CAPTION_SIDE_IEND) {
+      if (captionSide == NS_STYLE_CAPTION_SIDE_LEFT ||
+          captionSide == NS_STYLE_CAPTION_SIDE_RIGHT) {
         result.ISize(aWM) = GetMinISize(aRenderingContext);
-      } else if (captionSide == NS_STYLE_CAPTION_SIDE_BSTART ||
-                 captionSide == NS_STYLE_CAPTION_SIDE_BEND) {
+      } else if (captionSide == NS_STYLE_CAPTION_SIDE_TOP ||
+                 captionSide == NS_STYLE_CAPTION_SIDE_BOTTOM) {
         // The outer frame constrains our available isize to the isize of
         // the table.  Grow if our min-isize is bigger than that, but not
         // larger than the containing block isize.  (It would really be nice
@@ -974,20 +974,20 @@ nsContainerFrame::ReflowChild(nsIFrame*                aKidFrame,
                               const nsHTMLReflowState& aReflowState,
                               const WritingMode&       aWM,
                               const LogicalPoint&      aPos,
-                              nscoord                  aContainerWidth,
+                              const nsSize&            aContainerSize,
                               uint32_t                 aFlags,
                               nsReflowStatus&          aStatus,
                               nsOverflowContinuationTracker* aTracker)
 {
   NS_PRECONDITION(aReflowState.frame == aKidFrame, "bad reflow state");
   if (aWM.IsVerticalRL() || (!aWM.IsVertical() && !aWM.IsBidiLTR())) {
-    NS_ASSERTION(aContainerWidth != NS_UNCONSTRAINEDSIZE,
+    NS_ASSERTION(aContainerSize.width != NS_UNCONSTRAINEDSIZE,
                  "ReflowChild with unconstrained container width!");
   }
 
   // Position the child frame and its view if requested.
   if (NS_FRAME_NO_MOVE_FRAME != (aFlags & NS_FRAME_NO_MOVE_FRAME)) {
-    aKidFrame->SetPosition(aWM, aPos, aContainerWidth);
+    aKidFrame->SetPosition(aWM, aPos, aContainerSize);
   }
 
   if (0 == (aFlags & NS_FRAME_NO_MOVE_VIEW)) {
@@ -1114,11 +1114,11 @@ nsContainerFrame::FinishReflowChild(nsIFrame*                  aKidFrame,
                                     const nsHTMLReflowState*   aReflowState,
                                     const WritingMode&         aWM,
                                     const LogicalPoint&        aPos,
-                                    nscoord                    aContainerWidth,
+                                    const nsSize&              aContainerSize,
                                     uint32_t                   aFlags)
 {
   if (aWM.IsVerticalRL() || (!aWM.IsVertical() && !aWM.IsBidiLTR())) {
-    NS_ASSERTION(aContainerWidth != NS_UNCONSTRAINEDSIZE,
+    NS_ASSERTION(aContainerSize.width != NS_UNCONSTRAINEDSIZE,
                  "FinishReflowChild with unconstrained container width!");
   }
 
@@ -1129,7 +1129,7 @@ nsContainerFrame::FinishReflowChild(nsIFrame*                  aKidFrame,
 
   if (NS_FRAME_NO_MOVE_FRAME != (aFlags & NS_FRAME_NO_MOVE_FRAME)) {
     aKidFrame->SetRect(aWM, LogicalRect(aWM, aPos, convertedSize),
-                       aContainerWidth);
+                       aContainerSize);
   } else {
     aKidFrame->SetSize(aWM, convertedSize);
   }
@@ -1261,8 +1261,8 @@ nsContainerFrame::ReflowOverflowContainerChildren(nsPresContext*           aPres
       NS_ASSERTION(frame->GetStateBits() & NS_FRAME_IS_OVERFLOW_CONTAINER,
                    "overflow container frame must have overflow container bit set");
       WritingMode wm = frame->GetWritingMode();
-      nscoord containerWidth = aReflowState.AvailableSize(wm).Width(wm);
-      LogicalRect prevRect = prevInFlow->GetLogicalRect(wm, containerWidth);
+      nsSize containerSize = aReflowState.AvailableSize(wm).GetPhysicalSize(wm);
+      LogicalRect prevRect = prevInFlow->GetLogicalRect(wm, containerSize);
 
       // Initialize reflow params
       LogicalSize availSpace(wm, prevRect.ISize(wm),
@@ -1275,11 +1275,11 @@ nsContainerFrame::ReflowOverflowContainerChildren(nsPresContext*           aPres
       // Reflow
       LogicalPoint pos(wm, prevRect.IStart(wm), 0);
       ReflowChild(frame, aPresContext, desiredSize, frameState,
-                  wm, pos, containerWidth, aFlags, frameStatus, &tracker);
+                  wm, pos, containerSize, aFlags, frameStatus, &tracker);
       //XXXfr Do we need to override any shrinkwrap effects here?
       // e.g. desiredSize.Width() = prevRect.width;
       FinishReflowChild(frame, aPresContext, desiredSize, &frameState,
-                        wm, pos, containerWidth, aFlags);
+                        wm, pos, containerSize, aFlags);
 
       // Handle continuations
       if (!NS_FRAME_IS_FULLY_COMPLETE(frameStatus)) {
@@ -1321,7 +1321,7 @@ nsContainerFrame::ReflowOverflowContainerChildren(nsPresContext*           aPres
       if (aReflowState.mFloatManager) {
         nsBlockFrame::RecoverFloatsFor(frame, *aReflowState.mFloatManager,
                                        aReflowState.GetWritingMode(),
-                                       aReflowState.ComputedWidth());
+                                       aReflowState.ComputedPhysicalSize());
       }
     }
     ConsiderChildOverflow(aOverflowRects, frame);

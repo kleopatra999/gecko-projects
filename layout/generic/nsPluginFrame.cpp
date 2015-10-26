@@ -12,6 +12,7 @@
 #include "gfxMatrix.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/MouseEvents.h"
 #ifdef XP_WIN
 // This is needed for DoublePassRenderingEvent.
 #include "mozilla/plugins/PluginMessageUtils.h"
@@ -157,6 +158,7 @@ nsPluginFrame::nsPluginFrame(nsStyleContext* aContext)
   : nsPluginFrameSuper(aContext)
   , mInstanceOwner(nullptr)
   , mReflowCallbackPosted(false)
+  , mIsHiddenDueToScroll(false)
 {
   MOZ_LOG(GetObjectFrameLog(), LogLevel::Debug,
          ("Created new nsPluginFrame %p\n", this));
@@ -306,8 +308,8 @@ nsPluginFrame::PrepForDrawing(nsIWidget *aWidget)
     viewMan->InsertChild(view, mInnerView, nullptr, true);
 
     mWidget->SetParent(parentWidget);
-    mWidget->Show(true);
     mWidget->Enable(true);
+    mWidget->Show(true);
 
     // Set the plugin window to have an empty clip region until we know
     // what our true position, size and clip region are. These
@@ -322,7 +324,7 @@ nsPluginFrame::PrepForDrawing(nsIWidget *aWidget)
     configuration->mBounds.height = NSAppUnitsToIntPixels(mRect.height, appUnitsPerDevPixel);
     parentWidget->ConfigureChildren(configurations);
 
-    nsRefPtr<nsDeviceContext> dx = viewMan->GetDeviceContext();
+    RefPtr<nsDeviceContext> dx = viewMan->GetDeviceContext();
     mInnerView->AttachWidgetEventHandler(mWidget);
 
 #ifdef XP_MACOSX
@@ -594,7 +596,7 @@ nsPluginFrame::CallSetWindow(bool aCheckIsHidden)
   NPWindow *win = nullptr;
  
   nsresult rv = NS_ERROR_FAILURE;
-  nsRefPtr<nsNPAPIPluginInstance> pi;
+  RefPtr<nsNPAPIPluginInstance> pi;
   if (!mInstanceOwner ||
       NS_FAILED(rv = mInstanceOwner->GetInstance(getter_AddRefs(pi))) ||
       !pi ||
@@ -611,7 +613,7 @@ nsPluginFrame::CallSetWindow(bool aCheckIsHidden)
   // on OS X) or SetWindow() (below, on all platforms) can destroy this
   // frame.  (FixUpPluginWindow() calls SetWindow()).  So grab a safe
   // reference to mInstanceOwner which we can use below, if needed.
-  nsRefPtr<nsPluginInstanceOwner> instanceOwnerRef(mInstanceOwner);
+  RefPtr<nsPluginInstanceOwner> instanceOwnerRef(mInstanceOwner);
 
   // refresh the plugin port as well
 #ifdef XP_MACOSX
@@ -764,6 +766,23 @@ nsPluginFrame::IsHidden(bool aCheckVisibilityStyle) const
   return false;
 }
 
+// Clips windowed plugin frames during remote content scroll operations managed
+// by nsGfxScrollFrame.
+void
+nsPluginFrame::SetScrollVisibility(bool aState)
+{
+  // Limit this setting to windowed plugins by checking if we have a widget
+  if (mWidget) {
+    bool changed = mIsHiddenDueToScroll != aState;
+    mIsHiddenDueToScroll = aState;
+    // Force a paint so plugin window visibility gets flushed via
+    // the compositor.
+    if (changed) {
+      SchedulePaint();
+    }
+  }
+}
+
 mozilla::LayoutDeviceIntPoint
 nsPluginFrame::GetRemoteTabChromeOffset()
 {
@@ -776,9 +795,7 @@ nsPluginFrame::GetRemoteTabChromeOffset()
       if (topWindow) {
         dom::TabChild* tc = dom::TabChild::GetFrom(topWindow);
         if (tc) {
-          LayoutDeviceIntPoint chromeOffset;
-          tc->SendGetTabOffset(&chromeOffset);
-          offset -= chromeOffset;
+          offset += tc->GetChromeDisplacement();
         }
       }
     }
@@ -1100,6 +1117,11 @@ nsPluginFrame::DidSetWidgetGeometry()
 bool
 nsPluginFrame::IsOpaque() const
 {
+  // Insure underlying content gets painted when we clip windowed plugins
+  // during remote content scroll operations managed by nsGfxScrollFrame.
+  if (mIsHiddenDueToScroll) {
+    return false;
+  }
 #if defined(XP_MACOSX)
   return false;
 #elif defined(MOZ_WIDGET_ANDROID)
@@ -1129,7 +1151,7 @@ nsPluginFrame::IsTransparentMode() const
     return false;
 
   nsresult rv;
-  nsRefPtr<nsNPAPIPluginInstance> pi;
+  RefPtr<nsNPAPIPluginInstance> pi;
   rv = mInstanceOwner->GetInstance(getter_AddRefs(pi));
   if (NS_FAILED(rv) || !pi)
     return false;
@@ -1145,6 +1167,12 @@ nsPluginFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
                                 const nsRect&           aDirtyRect,
                                 const nsDisplayListSet& aLists)
 {
+  // Clip windowed plugin frames from the list during remote content scroll
+  // operations managed by nsGfxScrollFrame.
+  if (mIsHiddenDueToScroll) {
+    return;
+  }
+
   // XXX why are we painting collapsed object frames?
   if (!IsVisibleOrCollapsedForPainting(aBuilder))
     return;
@@ -1251,7 +1279,7 @@ nsPluginFrame::PrintPlugin(nsRenderingContext& aRenderingContext,
     return;
 
   // finally we can get our plugin instance
-  nsRefPtr<nsNPAPIPluginInstance> pi;
+  RefPtr<nsNPAPIPluginInstance> pi;
   if (NS_FAILED(objectFrame->GetPluginInstance(getter_AddRefs(pi))) || !pi)
     return;
 
@@ -1401,12 +1429,12 @@ nsPluginFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
   gfxRect r = nsLayoutUtils::RectToGfxRect(area, PresContext()->AppUnitsPerDevPixel());
   // to provide crisper and faster drawing.
   r.Round();
-  nsRefPtr<Layer> layer =
+  RefPtr<Layer> layer =
     (aManager->GetLayerBuilder()->GetLeafLayerFor(aBuilder, aItem));
 
   if (aItem->GetType() == nsDisplayItem::TYPE_PLUGIN) {
     // Create image
-    nsRefPtr<ImageContainer> container = mInstanceOwner->GetImageContainer();
+    RefPtr<ImageContainer> container = mInstanceOwner->GetImageContainer();
     if (!container) {
       // This can occur if our instance is gone.
       return nullptr;
@@ -1430,12 +1458,11 @@ nsPluginFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
 
     imglayer->SetScaleToSize(size, ScaleMode::STRETCH);
     imglayer->SetContainer(container);
-    GraphicsFilter filter =
-      nsLayoutUtils::GetGraphicsFilterForFrame(this);
+    Filter filter = nsLayoutUtils::GetGraphicsFilterForFrame(this);
 #ifdef MOZ_GFX_OPTIMIZE_MOBILE
     if (!aManager->IsCompositingCheap()) {
       // Pixman just horrible with bilinear filter scaling
-      filter = GraphicsFilter::FILTER_NEAREST;
+      filter = Filter::POINT;
     }
 #endif
     imglayer->SetFilter(filter);
@@ -1446,7 +1473,7 @@ nsPluginFrame::BuildLayer(nsDisplayListBuilder* aBuilder,
     nsDisplayPluginVideo* videoItem = reinterpret_cast<nsDisplayPluginVideo*>(aItem);
     nsNPAPIPluginInstance::VideoInfo* videoInfo = videoItem->VideoInfo();
 
-    nsRefPtr<ImageContainer> container = mInstanceOwner->GetImageContainerForVideo(videoInfo);
+    RefPtr<ImageContainer> container = mInstanceOwner->GetImageContainerForVideo(videoInfo);
     if (!container)
       return nullptr;
 
@@ -1574,7 +1601,7 @@ nsPluginFrame::PaintPlugin(nsDisplayListBuilder* aBuilder,
         return;
       }
 
-      nsRefPtr<nsNPAPIPluginInstance> inst;
+      RefPtr<nsNPAPIPluginInstance> inst;
       GetPluginInstance(getter_AddRefs(inst));
       if (!inst) {
         NS_WARNING("null plugin instance during PaintPlugin");
@@ -1641,7 +1668,7 @@ nsPluginFrame::PaintPlugin(nsDisplayListBuilder* aBuilder,
     }
   }
 #elif defined(XP_WIN)
-  nsRefPtr<nsNPAPIPluginInstance> inst;
+  RefPtr<nsNPAPIPluginInstance> inst;
   GetPluginInstance(getter_AddRefs(inst));
   if (inst) {
     gfxRect frameGfxRect =
@@ -1761,13 +1788,13 @@ nsPluginFrame::HandleEvent(nsPresContext* aPresContext,
 
   mInstanceOwner->ConsiderNewEventloopNestingLevel();
 
-  if (anEvent->message == NS_PLUGIN_ACTIVATE) {
+  if (anEvent->mMessage == ePluginActivate) {
     nsIFocusManager* fm = nsFocusManager::GetFocusManager();
     nsCOMPtr<nsIDOMElement> elem = do_QueryInterface(GetContent());
     if (fm && elem)
       return fm->SetFocus(elem, 0);
   }
-  else if (anEvent->message == NS_PLUGIN_FOCUS) {
+  else if (anEvent->mMessage == ePluginFocus) {
     nsIFocusManager* fm = nsFocusManager::GetFocusManager();
     if (fm)
       return fm->FocusPlugin(GetContent());
@@ -1788,8 +1815,8 @@ nsPluginFrame::HandleEvent(nsPresContext* aPresContext,
 
 #ifdef XP_MACOSX
   // we want to process some native mouse events in the cocoa event model
-  if ((anEvent->message == NS_MOUSE_ENTER_WIDGET ||
-       anEvent->message == NS_WHEEL_WHEEL) &&
+  if ((anEvent->mMessage == eMouseEnterIntoWidget ||
+       anEvent->mMessage == eWheel) &&
       mInstanceOwner->GetEventModel() == NPEventModelCocoa) {
     *anEventStatus = mInstanceOwner->ProcessEvent(*anEvent);
     // Due to plugin code reentering Gecko, this frame may be dead at this
@@ -1801,7 +1828,7 @@ nsPluginFrame::HandleEvent(nsPresContext* aPresContext,
   // and mouse-up) are needed to make the routing of mouse events while
   // dragging conform to standard OS X practice, and to the Cocoa NPAPI spec.
   // See bug 525078 and bug 909678.
-  if (anEvent->message == NS_MOUSE_BUTTON_DOWN) {
+  if (anEvent->mMessage == eMouseDown) {
     nsIPresShell::SetCapturingContent(GetContent(), CAPTURE_IGNOREALLOWED);
   }
 #endif
@@ -1812,12 +1839,56 @@ nsPluginFrame::HandleEvent(nsPresContext* aPresContext,
   // nsPluginFrameSuper::HandleEvent() might have killed us.
 
 #ifdef XP_MACOSX
-  if (anEvent->message == NS_MOUSE_BUTTON_UP) {
+  if (anEvent->mMessage == eMouseUp) {
     nsIPresShell::SetCapturingContent(nullptr, 0);
   }
 #endif
 
   return rv;
+}
+
+void
+nsPluginFrame::HandleWheelEventAsDefaultAction(WidgetWheelEvent* aWheelEvent)
+{
+  MOZ_ASSERT(WantsToHandleWheelEventAsDefaultAction());
+  MOZ_ASSERT(!aWheelEvent->mFlags.mDefaultPrevented);
+
+  if (NS_WARN_IF(!mInstanceOwner) ||
+      NS_WARN_IF(aWheelEvent->mMessage != eWheel)) {
+    return;
+  }
+
+  // If the wheel event has native message, it should may be handled by
+  // HandleEvent() in the future.  In such case, we should do nothing here.
+  if (NS_WARN_IF(!!aWheelEvent->mPluginEvent)) {
+    return;
+  }
+
+  mInstanceOwner->ProcessEvent(*aWheelEvent);
+  // We need to assume that the event is always consumed/handled by the
+  // plugin.  There is no way to know if it's actually consumed/handled.
+  aWheelEvent->mViewPortIsOverscrolled = false;
+  aWheelEvent->overflowDeltaX = 0;
+  aWheelEvent->overflowDeltaY = 0;
+  // Consume the event explicitly.
+  aWheelEvent->PreventDefault();
+}
+
+bool
+nsPluginFrame::WantsToHandleWheelEventAsDefaultAction() const
+{
+#ifdef XP_WIN
+  if (!mInstanceOwner) {
+    return false;
+  }
+  NPWindow* window = nullptr;
+  mInstanceOwner->GetWindow(window);
+  // On Windows, only when the plugin is windowless, we need to send wheel
+  // events as default action.
+  return window->type == NPWindowTypeDrawable;
+#else
+  return false;
+#endif
 }
 
 nsresult
@@ -1839,7 +1910,7 @@ nsPluginFrame::GetCursor(const nsPoint& aPoint, nsIFrame::Cursor& aCursor)
     return NS_ERROR_FAILURE;
   }
 
-  nsRefPtr<nsNPAPIPluginInstance> inst;
+  RefPtr<nsNPAPIPluginInstance> inst;
   mInstanceOwner->GetInstance(getter_AddRefs(inst));
   if (!inst) {
     return NS_ERROR_FAILURE;
@@ -1870,7 +1941,7 @@ nsPluginFrame::GetNextObjectFrame(nsPresContext* aPresContext, nsIFrame* aRoot)
   while (child) {
     nsIObjectFrame* outFrame = do_QueryFrame(child);
     if (outFrame) {
-      nsRefPtr<nsNPAPIPluginInstance> pi;
+      RefPtr<nsNPAPIPluginInstance> pi;
       outFrame->GetPluginInstance(getter_AddRefs(pi));  // make sure we have a REAL plugin
       if (pi)
         return outFrame;

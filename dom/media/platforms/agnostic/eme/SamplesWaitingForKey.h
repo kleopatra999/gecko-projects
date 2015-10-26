@@ -7,7 +7,8 @@
 #ifndef SamplesWaitingForKey_h_
 #define SamplesWaitingForKey_h_
 
-#include "MediaTaskQueue.h"
+#include "mozilla/TaskQueue.h"
+
 #include "PlatformDecoderModule.h"
 
 namespace mozilla {
@@ -24,7 +25,7 @@ public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(SamplesWaitingForKey)
 
   explicit SamplesWaitingForKey(MediaDataDecoder* aDecoder,
-                                MediaTaskQueue* aTaskQueue,
+                                TaskQueue* aTaskQueue,
                                 CDMProxy* aProxy);
 
   // Returns true if we need to wait for a key to become usable.
@@ -44,10 +45,10 @@ protected:
 
 private:
   Mutex mMutex;
-  nsRefPtr<MediaDataDecoder> mDecoder;
-  nsRefPtr<MediaTaskQueue> mTaskQueue;
-  nsRefPtr<CDMProxy> mProxy;
-  nsTArray<nsRefPtr<MediaRawData>> mSamples;
+  RefPtr<MediaDataDecoder> mDecoder;
+  RefPtr<TaskQueue> mTaskQueue;
+  RefPtr<CDMProxy> mProxy;
+  nsTArray<RefPtr<MediaRawData>> mSamples;
 };
 
 } // namespace mozilla

@@ -20,12 +20,12 @@ namespace mozilla {
 
 namespace media {
 class MediaSystemResourceManagerChild;
-}
+} // namespace media
 
 class MediaSystemResourceClient;
 class MediaSystemResourceReservationListener;
-class MediaTaskQueue;
 class ReentrantMonitor;
+class TaskQueue;
 
 /**
  * Manage media system resource allocation requests within a process.
@@ -56,8 +56,6 @@ public:
 private:
   MediaSystemResourceManager();
   virtual ~MediaSystemResourceManager();
-
-  static bool IsMediaSystemResourceManagerEnabled();
 
   void OpenIPC();
   void CloseIPC();

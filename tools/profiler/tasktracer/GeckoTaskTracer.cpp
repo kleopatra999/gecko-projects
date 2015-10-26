@@ -190,6 +190,7 @@ ObsoleteCurrentTraceInfos()
     (*sTraceInfos)[i]->mObsolete = true;
   }
 }
+
 } // namespace anonymous
 
 nsCString*
@@ -203,7 +204,7 @@ void
 TraceInfo::MoveLogsInto(TraceInfoLogsType& aResult)
 {
   MutexAutoLock lock(mLogsMutex);
-  aResult.MoveElementsFrom(mLogs);
+  aResult.AppendElements(Move(mLogs));
 }
 
 void

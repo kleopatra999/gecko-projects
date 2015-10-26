@@ -9,6 +9,7 @@
 
 #include "mozilla/Atomics.h"
 
+#include "jsfriendapi.h"
 #include "jsgc.h"
 
 #include "gc/Heap.h"
@@ -609,6 +610,7 @@ class GCRuntime
         gcstats::AutoPhase ap(stats, gcstats::PHASE_EVICT_NURSERY);
         minorGCImpl(reason, nullptr);
     }
+    void clearPostBarrierCallbacks();
     bool gcIfRequested(JSContext* cx = nullptr);
     void gc(JSGCInvocationKind gckind, JS::gcreason::Reason reason);
     void startGC(JSGCInvocationKind gckind, JS::gcreason::Reason reason, int64_t millis = 0);
@@ -631,13 +633,7 @@ class GCRuntime
         TraceRuntime,
         MarkRuntime
     };
-    enum TraceRootsOrUsedSaved {
-        TraceRoots,
-        UseSavedRoots
-    };
-    void markRuntime(JSTracer* trc,
-                     TraceOrMarkRuntime traceOrMark = TraceRuntime,
-                     TraceRootsOrUsedSaved rootsSource = TraceRoots);
+    void markRuntime(JSTracer* trc, TraceOrMarkRuntime traceOrMark = TraceRuntime);
 
     void notifyDidPaint();
     void shrinkBuffers();
@@ -659,10 +655,16 @@ class GCRuntime
 
     size_t maxMallocBytesAllocated() { return maxMallocBytes; }
 
+    uint64_t nextCellUniqueId() {
+        MOZ_ASSERT(nextCellUniqueId_ > 0);
+        return nextCellUniqueId_++;
+    }
+
   public:
     // Internal public interface
     js::gc::State state() const { return incrementalState; }
     bool isHeapCompacting() const { return state() == COMPACT; }
+    bool isForegroundSweeping() const { return state() == SWEEP; }
     bool isBackgroundSweeping() { return helperState.isBackgroundSweeping(); }
     void waitBackgroundSweepEnd() { helperState.waitBackgroundSweepEnd(); }
     void waitBackgroundSweepOrAllocEnd() {
@@ -677,7 +679,7 @@ class GCRuntime
     bool onBackgroundThread() { return helperState.onBackgroundThread(); }
 
     bool currentThreadOwnsGCLock() {
-        return lockOwner == PR_GetCurrentThread();
+        return lockOwner.value == PR_GetCurrentThread();
     }
 
 #endif // DEBUG
@@ -688,15 +690,17 @@ class GCRuntime
 
     void lockGC() {
         PR_Lock(lock);
-        MOZ_ASSERT(!lockOwner);
 #ifdef DEBUG
-        lockOwner = PR_GetCurrentThread();
+        MOZ_ASSERT(!lockOwner.value);
+        lockOwner.value = PR_GetCurrentThread();
 #endif
     }
 
     void unlockGC() {
-        MOZ_ASSERT(lockOwner == PR_GetCurrentThread());
-        lockOwner = nullptr;
+#ifdef DEBUG
+        MOZ_ASSERT(lockOwner.value == PR_GetCurrentThread());
+        lockOwner.value = nullptr;
+#endif
         PR_Unlock(lock);
     }
 
@@ -725,19 +729,19 @@ class GCRuntime
 
     void setAlwaysPreserveCode() { alwaysPreserveCode = true; }
 
-    bool isIncrementalGCAllowed() { return incrementalAllowed; }
+    bool isIncrementalGCAllowed() const { return incrementalAllowed; }
     void disallowIncrementalGC() { incrementalAllowed = false; }
 
-    bool isIncrementalGCEnabled() { return mode == JSGC_MODE_INCREMENTAL && incrementalAllowed; }
-    bool isIncrementalGCInProgress() { return state() != gc::NO_INCREMENTAL; }
+    bool isIncrementalGCEnabled() const { return mode == JSGC_MODE_INCREMENTAL && incrementalAllowed; }
+    bool isIncrementalGCInProgress() const { return state() != gc::NO_INCREMENTAL; }
 
-    bool isGenerationalGCEnabled() { return generationalDisabled == 0; }
+    bool isGenerationalGCEnabled() const { return generationalDisabled == 0; }
     void disableGenerationalGC();
     void enableGenerationalGC();
 
     void disableCompactingGC();
     void enableCompactingGC();
-    bool isCompactingGCEnabled();
+    bool isCompactingGCEnabled() const;
 
     void setGrayRootsTracer(JSTraceDataOp traceOp, void* data);
     bool addBlackRootsTracer(JSTraceDataOp traceOp, void* data);
@@ -772,15 +776,14 @@ class GCRuntime
     void setFoundBlackGrayEdges() { foundBlackGrayEdges = true; }
 
     uint64_t gcNumber() const { return number; }
-    void incGcNumber() { ++number; }
 
     uint64_t minorGCCount() const { return minorGCNumber; }
-    void incMinorGcNumber() { ++minorGCNumber; }
+    void incMinorGcNumber() { ++minorGCNumber; ++number; }
 
     uint64_t majorGCCount() const { return majorGCNumber; }
-    void incMajorGcNumber() { ++majorGCNumber; }
+    void incMajorGcNumber() { ++majorGCNumber; ++number; }
 
-    int64_t defaultSliceBudget() const { return sliceBudget; }
+    int64_t defaultSliceBudget() const { return defaultTimeBudget_; }
 
     bool isIncrementalGc() const { return isIncremental; }
     bool isFullGc() const { return isFull; }
@@ -836,6 +839,7 @@ class GCRuntime
     void releaseArena(ArenaHeader* aheader, const AutoLockGC& lock);
 
     void releaseHeldRelocatedArenas();
+    void releaseHeldRelocatedArenasWithoutUnlocking(const AutoLockGC& lock);
 
     // Allocator
     template <AllowGC allowGC>
@@ -891,12 +895,22 @@ class GCRuntime
 
     void requestMajorGC(JS::gcreason::Reason reason);
     SliceBudget defaultBudget(JS::gcreason::Reason reason, int64_t millis);
-    void collect(bool incremental, SliceBudget budget, JS::gcreason::Reason reason);
-    bool gcCycle(bool incremental, SliceBudget& budget, JS::gcreason::Reason reason);
-    gcstats::ZoneGCStats scanZonesBeforeGC();
     void budgetIncrementalGC(SliceBudget& budget);
     void resetIncrementalGC(const char* reason);
+
+    // Assert if the system state is such that we should never
+    // receive a request to do GC work.
+    void checkCanCallAPI();
+
+    // Check if the system state is such that GC has been supressed
+    // or otherwise delayed.
+    bool checkIfGCAllowedInCurrentState(JS::gcreason::Reason reason);
+
+    gcstats::ZoneGCStats scanZonesBeforeGC();
+    void collect(bool nonincrementalByAPI, SliceBudget budget, JS::gcreason::Reason reason);
+    bool gcCycle(bool nonincrementalByAPI, SliceBudget& budget, JS::gcreason::Reason reason);
     void incrementalCollectSlice(SliceBudget& budget, JS::gcreason::Reason reason);
+
     void pushZealSelectedObjects();
     void purgeRuntime();
     bool beginMarkPhase(JS::gcreason::Reason reason);
@@ -935,16 +949,15 @@ class GCRuntime
     void endCompactPhase(JS::gcreason::Reason reason);
     void sweepTypesAfterCompacting(Zone* zone);
     void sweepZoneAfterCompacting(Zone* zone);
-    bool relocateArenas(Zone* zone, JS::gcreason::Reason reason, SliceBudget& sliceBudget);
+    bool relocateArenas(Zone* zone, JS::gcreason::Reason reason, ArenaHeader*& relocatedListOut,
+                        SliceBudget& sliceBudget);
     void updateAllCellPointersParallel(MovingTracer* trc, Zone* zone);
     void updateAllCellPointersSerial(MovingTracer* trc, Zone* zone);
     void updatePointersToRelocatedCells(Zone* zone);
-    void releaseRelocatedArenas();
-    void releaseRelocatedArenasWithoutUnlocking(const AutoLockGC& lock);
-#ifdef DEBUG
-    void protectRelocatedArenas();
-    void unprotectRelocatedArenas();
-#endif
+    void protectAndHoldArenas(ArenaHeader* arenaList);
+    void unprotectHeldRelocatedArenas();
+    void releaseRelocatedArenas(ArenaHeader* arenaList);
+    void releaseRelocatedArenasWithoutUnlocking(ArenaHeader* arenaList, const AutoLockGC& lock);
     void finishCollection(JS::gcreason::Reason reason);
 
     void computeNonIncrementalMarkingForValidation();
@@ -981,6 +994,8 @@ class GCRuntime
     GCSchedulingTunables tunables;
     GCSchedulingState schedulingState;
 
+    MemProfiler mMemProfiler;
+
   private:
     // When empty, chunks reside in the emptyChunks pool and are re-used as
     // needed or eventually expired if not re-used. The emptyChunks pool gets
@@ -1003,6 +1018,9 @@ class GCRuntime
     RootedValueMap rootsHash;
 
     size_t maxMallocBytes;
+
+    // An incrementing id used to assign unique ids to cells that require one.
+    uint64_t nextCellUniqueId_;
 
     /*
      * Number of the committed arenas in all GC chunks including empty chunks.
@@ -1085,6 +1103,9 @@ class GCRuntime
     /* The invocation kind of the current GC, taken from the first slice. */
     JSGCInvocationKind invocationKind;
 
+    /* The initial GC reason, taken from the first slice. */
+    JS::gcreason::Reason initialReason;
+
     /*
      * If this is 0, all cross-compartment proxies must be registered in the
      * wrapper map. This checking must be disabled temporarily while creating
@@ -1164,7 +1185,7 @@ class GCRuntime
     bool interFrameGC;
 
     /* Default budget for incremental GC slice. See js/SliceBudget.h. */
-    int64_t sliceBudget;
+    int64_t defaultTimeBudget_;
 
     /*
      * We disable incremental GC if we encounter a js::Class with a trace hook
@@ -1288,7 +1309,7 @@ class GCRuntime
 
     /* Synchronize GC heap access between main thread and GCHelperState. */
     PRLock* lock;
-    mozilla::DebugOnly<PRThread*> lockOwner;
+    mozilla::DebugOnly<mozilla::Atomic<PRThread*>> lockOwner;
 
     BackgroundAllocTask allocTask;
     GCHelperState helperState;
@@ -1306,7 +1327,7 @@ class GCRuntime
 };
 
 /* Prevent compartments and zones from being collected during iteration. */
-class AutoEnterIteration {
+class MOZ_RAII AutoEnterIteration {
     GCRuntime* gc;
 
   public:

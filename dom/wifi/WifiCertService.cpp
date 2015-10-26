@@ -22,6 +22,7 @@
 #include "nsIDOMBlob.h"
 #include "nsIWifiService.h"
 #include "nsNetUtil.h"
+#include "nsIInputStream.h"
 #include "nsServiceManagerUtils.h"
 #include "nsXULAppAPI.h"
 #include "ScopedNSSTypes.h"
@@ -302,7 +303,7 @@ private:
     return NS_OK;
   }
 
-  nsRefPtr<Blob> mBlob;
+  RefPtr<Blob> mBlob;
   nsString mPassword;
   WifiCertServiceResultOptions mResult;
 };
@@ -454,7 +455,7 @@ WifiCertService::FactoryCreate()
     ClearOnShutdown(&gWifiCertService);
   }
 
-  nsRefPtr<WifiCertService> service = gWifiCertService.get();
+  RefPtr<WifiCertService> service = gWifiCertService.get();
   return service.forget();
 }
 
@@ -463,7 +464,7 @@ WifiCertService::ImportCert(int32_t aId, nsIDOMBlob* aCertBlob,
                             const nsAString& aCertPassword,
                             const nsAString& aCertNickname)
 {
-  nsRefPtr<Blob> blob = static_cast<Blob*>(aCertBlob);
+  RefPtr<Blob> blob = static_cast<Blob*>(aCertBlob);
   RefPtr<CryptoTask> task = new ImportCertTask(aId, blob, aCertPassword,
                                                aCertNickname);
   return task->Dispatch("WifiImportCert");

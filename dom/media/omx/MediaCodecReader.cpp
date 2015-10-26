@@ -25,18 +25,18 @@
 #include <stagefright/MetaData.h>
 #include <stagefright/Utils.h>
 
+#include "mozilla/TaskQueue.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/layers/GrallocTextureClient.h"
 
 #include "gfx2DGlue.h"
 
 #include "MediaStreamSource.h"
-#include "MediaTaskQueue.h"
 #include "MP3FrameParser.h"
 #include "nsMimeTypes.h"
 #include "nsThreadUtils.h"
 #include "ImageContainer.h"
-#include "SharedThreadPool.h"
+#include "mozilla/SharedThreadPool.h"
 #include "VideoFrameContainer.h"
 #include "VideoUtils.h"
 
@@ -215,11 +215,11 @@ MediaCodecReader::SignalObject::Signal()
   mMonitor.Notify();
 }
 
-MediaCodecReader::ParseCachedDataRunnable::ParseCachedDataRunnable(nsRefPtr<MediaCodecReader> aReader,
+MediaCodecReader::ParseCachedDataRunnable::ParseCachedDataRunnable(RefPtr<MediaCodecReader> aReader,
                                                                    const char* aBuffer,
                                                                    uint32_t aLength,
                                                                    int64_t aOffset,
-                                                                   nsRefPtr<SignalObject> aSignal)
+                                                                   RefPtr<SignalObject> aSignal)
   : mReader(aReader)
   , mBuffer(aBuffer)
   , mLength(aLength)
@@ -251,7 +251,7 @@ MediaCodecReader::ParseCachedDataRunnable::Run()
   return NS_OK;
 }
 
-MediaCodecReader::ProcessCachedDataTask::ProcessCachedDataTask(nsRefPtr<MediaCodecReader> aReader,
+MediaCodecReader::ProcessCachedDataTask::ProcessCachedDataTask(RefPtr<MediaCodecReader> aReader,
                                                                int64_t aOffset)
   : mReader(aReader)
   , mOffset(aOffset)
@@ -283,12 +283,6 @@ MediaCodecReader::~MediaCodecReader()
 {
 }
 
-nsresult
-MediaCodecReader::Init(MediaDecoderReader* aCloneDonor)
-{
-  return NS_OK;
-}
-
 void
 MediaCodecReader::ReleaseMediaResources()
 {
@@ -305,7 +299,7 @@ MediaCodecReader::ReleaseMediaResources()
   ReleaseCriticalResources();
 }
 
-nsRefPtr<ShutdownPromise>
+RefPtr<ShutdownPromise>
 MediaCodecReader::Shutdown()
 {
   MOZ_ASSERT(mAudioTrack.mAudioPromise.IsEmpty());
@@ -337,7 +331,7 @@ MediaCodecReader::DispatchVideoTask(int64_t aTimeThreshold)
   }
 }
 
-nsRefPtr<MediaDecoderReader::AudioDataPromise>
+RefPtr<MediaDecoderReader::AudioDataPromise>
 MediaCodecReader::RequestAudioData()
 {
   MOZ_ASSERT(OnTaskQueue());
@@ -351,10 +345,9 @@ MediaCodecReader::RequestAudioData()
   return mAudioTrack.mAudioPromise.Ensure(__func__);
 }
 
-nsRefPtr<MediaDecoderReader::VideoDataPromise>
+RefPtr<MediaDecoderReader::VideoDataPromise>
 MediaCodecReader::RequestVideoData(bool aSkipToNextKeyframe,
-                                   int64_t aTimeThreshold,
-                                   bool aForceDecodeAhead)
+                                   int64_t aTimeThreshold)
 {
   MOZ_ASSERT(OnTaskQueue());
   MOZ_ASSERT(HasVideo());
@@ -416,8 +409,9 @@ MediaCodecReader::DecodeAudioDataSync()
     AudioQueue().Finish();
   } else if (bufferInfo.mBuffer != nullptr && bufferInfo.mSize > 0 &&
              bufferInfo.mBuffer->data() != nullptr) {
+    MOZ_ASSERT(mStreamSource);
     // This is the approximate byte position in the stream.
-    int64_t pos = mDecoder->GetResource()->Tell();
+    int64_t pos = mStreamSource->Tell();
 
     uint32_t frames = bufferInfo.mSize /
                       (mInfo.mAudio.mChannels * sizeof(AudioDataValue));
@@ -458,7 +452,7 @@ MediaCodecReader::DecodeAudioDataTask()
     return;
   }
   if (AudioQueue().GetSize() > 0) {
-    nsRefPtr<AudioData> a = AudioQueue().PopFront();
+    RefPtr<AudioData> a = AudioQueue().PopFront();
     if (a) {
       if (mAudioTrack.mDiscontinuity) {
         a->mDiscontinuity = true;
@@ -495,7 +489,7 @@ MediaCodecReader::DecodeVideoFrameTask(int64_t aTimeThreshold)
     return;
   }
   if (VideoQueue().GetSize() > 0) {
-    nsRefPtr<VideoData> v = VideoQueue().PopFront();
+    RefPtr<VideoData> v = VideoQueue().PopFront();
     if (v) {
       if (mVideoTrack.mDiscontinuity) {
         v->mDiscontinuity = true;
@@ -526,32 +520,34 @@ void
 MediaCodecReader::NotifyDataArrivedInternal(uint32_t aLength,
                                             int64_t aOffset)
 {
-  nsRefPtr<MediaByteBuffer> bytes = mDecoder->GetResource()->SilentReadAt(aOffset, aLength);
-  NS_ENSURE_TRUE_VOID(bytes);
-
-  MonitorAutoLock monLock(mParserMonitor);
-  if (mNextParserPosition == mParsedDataLength &&
-      mNextParserPosition >= aOffset &&
-      mNextParserPosition <= aOffset + aLength) {
-    // No pending parsing runnable currently. And available data are adjacent to
-    // parsed data.
-    int64_t shift = mNextParserPosition - aOffset;
-    const char* buffer = reinterpret_cast<const char*>(bytes->Elements()) + shift;
-    uint32_t length = aLength - shift;
-    int64_t offset = mNextParserPosition;
-    if (length > 0) {
-      MonitorAutoUnlock monUnlock(mParserMonitor);
-      ParseDataSegment(buffer, length, offset);
+  IntervalSet<int64_t> intervals = mFilter.NotifyDataArrived(aLength, aOffset);
+  for (const auto& interval : intervals) {
+    RefPtr<MediaByteBuffer> bytes =
+      mDecoder->GetResource()->MediaReadAt(interval.mStart, interval.Length());
+    MonitorAutoLock monLock(mParserMonitor);
+    if (mNextParserPosition == mParsedDataLength &&
+        mNextParserPosition >= interval.mStart &&
+        mNextParserPosition <= interval.mEnd) {
+      // No pending parsing runnable currently. And available data are adjacent to
+      // parsed data.
+      int64_t shift = mNextParserPosition - interval.mStart;
+      const char* buffer = reinterpret_cast<const char*>(bytes->Elements()) + shift;
+      uint32_t length = interval.Length() - shift;
+      int64_t offset = mNextParserPosition;
+      if (length > 0) {
+        MonitorAutoUnlock monUnlock(mParserMonitor);
+        ParseDataSegment(buffer, length, offset);
+      }
+      mParseDataFromCache = false;
+      mParsedDataLength = offset + length;
+      mNextParserPosition = mParsedDataLength;
     }
-    mParseDataFromCache = false;
-    mParsedDataLength = offset + length;
-    mNextParserPosition = mParsedDataLength;
   }
 }
 
 int64_t
 MediaCodecReader::ProcessCachedData(int64_t aOffset,
-                                    nsRefPtr<SignalObject> aSignal)
+                                    RefPtr<SignalObject> aSignal)
 {
   // We read data in chunks of 32 KiB. We can reduce this
   // value if media, such as sdcards, is too slow.
@@ -589,7 +585,7 @@ MediaCodecReader::ProcessCachedData(int64_t aOffset,
 
   MonitorAutoLock monLock(mParserMonitor);
   if (mParseDataFromCache) {
-    nsRefPtr<ParseCachedDataRunnable> runnable(
+    RefPtr<ParseCachedDataRunnable> runnable(
       new ParseCachedDataRunnable(this,
                                   buffer.forget(),
                                   bufferLength,
@@ -661,7 +657,7 @@ MediaCodecReader::ParseDataSegment(const char* aBuffer,
   return true;
 }
 
-nsRefPtr<MediaDecoderReader::MetadataPromise>
+RefPtr<MediaDecoderReader::MetadataPromise>
 MediaCodecReader::AsyncReadMetadata()
 {
   MOZ_ASSERT(OnTaskQueue());
@@ -678,11 +674,11 @@ MediaCodecReader::AsyncReadMetadata()
              ReadMetadataFailureReason::METADATA_ERROR, __func__);
   }
 
-  nsRefPtr<MediaDecoderReader::MetadataPromise> p = mMetadataPromise.Ensure(__func__);
+  RefPtr<MediaDecoderReader::MetadataPromise> p = mMetadataPromise.Ensure(__func__);
 
-  nsRefPtr<MediaCodecReader> self = this;
+  RefPtr<MediaCodecReader> self = this;
   mMediaResourceRequest.Begin(CreateMediaCodecs()
-    ->Then(TaskQueue(), __func__,
+    ->Then(OwnerThread(), __func__,
       [self] (bool) -> void {
         self->mMediaResourceRequest.Complete();
         self->HandleResourceAllocated();
@@ -742,13 +738,11 @@ MediaCodecReader::HandleResourceAllocated()
   // Video track's frame sizes will not overflow. Activate the video track.
   VideoFrameContainer* container = mDecoder->GetVideoFrameContainer();
   if (container) {
-    container->SetCurrentFrame(
-      gfxIntSize(mInfo.mVideo.mDisplay.width, mInfo.mVideo.mDisplay.height),
-      nullptr,
-      mozilla::TimeStamp::Now());
+    container->ClearCurrentFrame(
+      gfx::IntSize(mInfo.mVideo.mDisplay.width, mInfo.mVideo.mDisplay.height));
   }
 
-  nsRefPtr<MetadataHolder> metadata = new MetadataHolder();
+  RefPtr<MetadataHolder> metadata = new MetadataHolder();
   metadata->mInfo = mInfo;
   metadata->mTags = nullptr;
 
@@ -786,7 +780,7 @@ void
 MediaCodecReader::TextureClientRecycleCallback(TextureClient* aClient,
                                                void* aClosure)
 {
-  nsRefPtr<MediaCodecReader> reader = static_cast<MediaCodecReader*>(aClosure);
+  RefPtr<MediaCodecReader> reader = static_cast<MediaCodecReader*>(aClosure);
   MOZ_ASSERT(reader, "reader should not be nullptr in TextureClientRecycleCallback()");
 
   reader->TextureClientRecycleCallback(aClient);
@@ -837,7 +831,7 @@ MediaCodecReader::WaitFenceAndReleaseOutputBuffer()
   for (size_t i = 0; i < releasingItems.Length(); i++) {
     if (releasingItems[i].mReleaseFence.IsValid()) {
 #if MOZ_WIDGET_GONK && ANDROID_VERSION >= 17
-      nsRefPtr<FenceHandle::FdObj> fdObj = releasingItems[i].mReleaseFence.GetAndResetFdObj();
+      RefPtr<FenceHandle::FdObj> fdObj = releasingItems[i].mReleaseFence.GetAndResetFdObj();
       sp<Fence> fence = new Fence(fdObj->GetAndResetFd());
       fence->waitForever("MediaCodecReader");
 #endif
@@ -846,32 +840,6 @@ MediaCodecReader::WaitFenceAndReleaseOutputBuffer()
       mVideoTrack.mCodec->releaseOutputBuffer(releasingItems[i].mReleaseIndex);
     }
   }
-}
-
-PLDHashOperator
-MediaCodecReader::ReleaseTextureClient(TextureClient* aClient,
-                                       size_t& aIndex,
-                                       void* aUserArg)
-{
-  nsRefPtr<MediaCodecReader> reader = static_cast<MediaCodecReader*>(aUserArg);
-  MOZ_ASSERT(reader, "reader should not be nullptr in ReleaseTextureClient()");
-
-  return reader->ReleaseTextureClient(aClient, aIndex);
-}
-
-PLDHashOperator
-MediaCodecReader::ReleaseTextureClient(TextureClient* aClient,
-                                       size_t& aIndex)
-{
-  MOZ_ASSERT(aClient, "TextureClient should be a valid pointer");
-
-  aClient->ClearRecycleCallback();
-
-  if (mVideoTrack.mCodec != nullptr) {
-    mVideoTrack.mCodec->releaseOutputBuffer(aIndex);
-  }
-
-  return PL_DHASH_REMOVE;
 }
 
 void
@@ -885,7 +853,17 @@ MediaCodecReader::ReleaseAllTextureClients()
   }
   printf_stderr("All TextureClients should be released already");
 
-  mTextureClientIndexes.Enumerate(MediaCodecReader::ReleaseTextureClient, this);
+  for (auto iter = mTextureClientIndexes.Iter(); !iter.Done(); iter.Next()) {
+    TextureClient* client = iter.Key();
+    size_t& index = iter.Data();
+
+    client->ClearRecycleCallback();
+
+    if (mVideoTrack.mCodec != nullptr) {
+      mVideoTrack.mCodec->releaseOutputBuffer(index);
+    }
+    iter.Remove();
+  }
   mTextureClientIndexes.Clear();
 }
 
@@ -935,12 +913,13 @@ MediaCodecReader::DecodeVideoFrameSync(int64_t aTimeThreshold)
     return;
   }
 
-  nsRefPtr<VideoData> v;
+  RefPtr<VideoData> v;
   RefPtr<TextureClient> textureClient;
   sp<GraphicBuffer> graphicBuffer;
   if (bufferInfo.mBuffer != nullptr) {
+    MOZ_ASSERT(mStreamSource);
     // This is the approximate byte position in the stream.
-    int64_t pos = mDecoder->GetResource()->Tell();
+    int64_t pos = mStreamSource->Tell();
 
     if (mVideoTrack.mNativeWindow != nullptr &&
         mVideoTrack.mCodec->getOutputGraphicBufferFromIndex(bufferInfo.mIndex, &graphicBuffer) == OK &&
@@ -1040,7 +1019,7 @@ MediaCodecReader::DecodeVideoFrameSync(int64_t aTimeThreshold)
   }
 }
 
-nsRefPtr<MediaDecoderReader::SeekPromise>
+RefPtr<MediaDecoderReader::SeekPromise>
 MediaCodecReader::Seek(int64_t aTime, int64_t aEndTime)
 {
   MOZ_ASSERT(OnTaskQueue());
@@ -1053,14 +1032,6 @@ MediaCodecReader::Seek(int64_t aTime, int64_t aEndTime)
     mVideoTrack.mInputEndOfStream = false;
     mVideoTrack.mOutputEndOfStream = false;
     mVideoTrack.mFlushed = false;
-
-    VideoFrameContainer* videoframe = mDecoder->GetVideoFrameContainer();
-    if (videoframe) {
-      layers::ImageContainer* image = videoframe->GetImageContainer();
-      if (image) {
-        image->ClearAllImagesExceptFront();
-      }
-    }
 
     MediaBuffer* source_buffer = nullptr;
     MediaSource::ReadOptions options;
@@ -1206,7 +1177,7 @@ MediaCodecReader::CreateExtractor()
     if (dataSource->initCheck() != OK) {
       return false;
     }
-
+    mStreamSource = static_cast<MediaStreamSource*>(dataSource.get());
     mExtractor = MediaExtractor::Create(dataSource);
   }
 
@@ -1326,11 +1297,11 @@ MediaCodecReader::CreateTaskQueues()
   return true;
 }
 
-nsRefPtr<MediaOmxCommonReader::MediaResourcePromise>
+RefPtr<MediaOmxCommonReader::MediaResourcePromise>
 MediaCodecReader::CreateMediaCodecs()
 {
   bool isWaiting = false;
-  nsRefPtr<MediaResourcePromise> p = mMediaResourcePromise.Ensure(__func__);
+  RefPtr<MediaResourcePromise> p = mMediaResourcePromise.Ensure(__func__);
 
   if (!CreateMediaCodec(mLooper, mAudioTrack, false, isWaiting, nullptr)) {
     mMediaResourcePromise.Reject(true, __func__);
@@ -1506,7 +1477,7 @@ MediaCodecReader::TriggerIncrementalParser()
       {
         MonitorAutoUnlock monUnlock(mParserMonitor);
         // trigger parsing logic and wait for finishing parsing data in the beginning.
-        nsRefPtr<SignalObject> signalObject = new SignalObject("MediaCodecReader::UpdateDuration()");
+        RefPtr<SignalObject> signalObject = new SignalObject("MediaCodecReader::UpdateDuration()");
         if (ProcessCachedData(INT64_C(0), signalObject) > INT64_C(0)) {
           signalObject->Wait();
         }

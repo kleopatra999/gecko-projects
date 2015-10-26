@@ -5,15 +5,18 @@
 #ifndef MOOF_PARSER_H_
 #define MOOF_PARSER_H_
 
+#include "mozilla/Monitor.h"
 #include "mp4_demuxer/Atom.h"
 #include "mp4_demuxer/AtomType.h"
-#include "mp4_demuxer/mp4_demuxer.h"
 #include "mp4_demuxer/SinfParser.h"
+#include "mp4_demuxer/Stream.h"
+#include "mp4_demuxer/Interval.h"
 #include "MediaResource.h"
 
 namespace mp4_demuxer {
+using mozilla::Monitor;
+typedef int64_t Microseconds;
 
-class Stream;
 class Box;
 class BoxContext;
 class Moof;
@@ -32,7 +35,9 @@ public:
 
   Microseconds ToMicroseconds(int64_t aTimescaleUnits)
   {
-    return aTimescaleUnits * 1000000ll / mTimescale;
+    int64_t major = aTimescaleUnits / mTimescale;
+    int64_t remainder = aTimescaleUnits % mTimescale;
+    return major * 1000000ll + remainder * 1000000ll / mTimescale;
   }
 
   uint64_t mCreationTime;
@@ -225,11 +230,12 @@ public:
 
   bool BlockingReadNextMoof();
   bool HasMetadata();
+  already_AddRefed<mozilla::MediaByteBuffer> Metadata();
   MediaByteRange FirstCompleteMediaSegment();
   MediaByteRange FirstCompleteMediaHeader();
 
   mozilla::MediaByteRange mInitRange;
-  nsRefPtr<Stream> mSource;
+  RefPtr<Stream> mSource;
   uint64_t mOffset;
   nsTArray<uint64_t> mMoofOffsets;
   Mvhd mMvhd;
@@ -241,6 +247,8 @@ public:
   Monitor* mMonitor;
   nsTArray<Moof>& Moofs() { mMonitor->AssertCurrentThreadOwns(); return mMoofs; }
 private:
+  void ScanForMetadata(mozilla::MediaByteRange& aFtyp,
+                       mozilla::MediaByteRange& aMoov);
   nsTArray<Moof> mMoofs;
   nsTArray<MediaByteRange> mMediaRanges;
   bool mIsAudio;

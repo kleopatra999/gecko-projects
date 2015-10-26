@@ -11,7 +11,8 @@ namespace mozilla
 {
 
 MockMediaResource::MockMediaResource(const char* aFileName)
-  : mFileName(aFileName)
+  : mFileHandle(nullptr)
+  , mFileName(aFileName)
   , mContentType(NS_LITERAL_CSTRING("video/mp4"))
 {
 }
@@ -109,4 +110,5 @@ MockMediaResource::GetCachedRanges(nsTArray<MediaByteRange>& aRanges)
   aRanges.AppendElements(mRanges);
   return NS_OK;
 }
-}
+
+} // namespace mozilla

@@ -35,7 +35,7 @@ class TextRenderedRunIterator;
 namespace dom {
 class SVGIRect;
 class SVGPathElement;
-}
+} // namespace dom
 
 /**
  * Information about the positioning for a single character in an SVG <text>
@@ -618,7 +618,7 @@ private:
   /**
    * The MutationObserver we have registered for the <text> element subtree.
    */
-  nsRefPtr<MutationObserver> mMutationObserver;
+  RefPtr<MutationObserver> mMutationObserver;
 
   /**
    * Cached canvasTM value.

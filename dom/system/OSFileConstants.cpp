@@ -180,7 +180,7 @@ Paths* gPaths = nullptr;
  * on the main thread.
  */
 uint32_t gUserUmask = 0;
-}
+} // namespace
 
 /**
  * Return the path to one of the special directories.
@@ -290,7 +290,7 @@ nsresult InitOSFileConstants()
     if (NS_FAILED(rv)) {
       return rv;
     }
-    nsRefPtr<DelayedPathSetter> pathSetter = new DelayedPathSetter();
+    RefPtr<DelayedPathSetter> pathSetter = new DelayedPathSetter();
     rv = obsService->AddObserver(pathSetter, "profile-do-change", false);
     if (NS_FAILED(rv)) {
       return rv;
@@ -368,7 +368,7 @@ void CleanupOSFileConstants()
  * Produces a |ConstantSpec|.
  */
 #define UINT_CONSTANT(name)      \
-  { #name, UINT_TO_JSVAL((name)) }
+  { #name, JS::NumberValue(name) }
 
 /**
  * End marker for ConstantSpec
@@ -931,7 +931,7 @@ bool DefineOSFileConstants(JSContext *cx, JS::Handle<JSObject*> global)
   }
 
   dom::ConstantSpec umask_cs[] = {
-    { "umask", UINT_TO_JSVAL(gUserUmask) },
+    { "umask", JS::NumberValue(gUserUmask) },
     PROP_END
   };
   if (!dom::DefineConstants(cx, objSys, umask_cs)) {

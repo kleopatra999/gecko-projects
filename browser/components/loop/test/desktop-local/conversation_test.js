@@ -6,29 +6,33 @@ describe("loop.conversation", function() {
   "use strict";
 
   var expect = chai.expect;
+  var FeedbackView = loop.feedbackViews.FeedbackView;
   var TestUtils = React.addons.TestUtils;
-  var sharedModels = loop.shared.models,
-      fakeWindow,
-      sandbox;
+  var sharedActions = loop.shared.actions;
+  var sharedModels = loop.shared.models;
+  var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
+  var fakeWindow, sandbox, getLoopPrefStub, setLoopPrefStub, mozL10nGet;
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
+    setLoopPrefStub = sandbox.stub();
 
     navigator.mozLoop = {
       doNotDisturb: true,
       getStrings: function() {
-        return JSON.stringify({textContent: "fakeText"});
+        return JSON.stringify({ textContent: "fakeText" });
       },
       get locale() {
         return "en-US";
       },
-      setLoopPref: sinon.stub(),
+      setLoopPref: setLoopPrefStub,
       getLoopPref: function(prefName) {
-        if (prefName == "debug.sdk") {
-          return false;
+        switch (prefName) {
+          case "debug.sdk":
+            return false;
+          default:
+            return "http://fake";
         }
-
-        return "http://fake";
       },
       LOOP_SESSION_TYPE: {
         GUEST: 1,
@@ -45,7 +49,7 @@ describe("loop.conversation", function() {
         };
       },
       getAudioBlob: sinon.spy(function(name, callback) {
-        callback(null, new Blob([new ArrayBuffer(10)], {type: "audio/ogg"}));
+        callback(null, new Blob([new ArrayBuffer(10)], { type: "audio/ogg" }));
       }),
       getSelectedTabMetadata: function(callback) {
         callback({});
@@ -63,7 +67,7 @@ describe("loop.conversation", function() {
 
     // XXX These stubs should be hoisted in a common file
     // Bug 1040968
-    sandbox.stub(document.mozL10n, "get", function(x) {
+    mozL10nGet = sandbox.stub(document.mozL10n, "get", function(x) {
       return x;
     });
     document.mozL10n.initialize(navigator.mozLoop);
@@ -76,12 +80,10 @@ describe("loop.conversation", function() {
   });
 
   describe("#init", function() {
+    var OTRestore;
     beforeEach(function() {
       sandbox.stub(React, "render");
       sandbox.stub(document.mozL10n, "initialize");
-
-      sandbox.stub(loop.shared.models.ConversationModel.prototype,
-        "initialize");
 
       sandbox.stub(loop.Dispatcher.prototype, "dispatch");
 
@@ -91,13 +93,14 @@ describe("loop.conversation", function() {
           pathname: "/"
         });
 
+      OTRestore = window.OT;
       window.OT = {
         overrideGuidStorage: sinon.stub()
       };
     });
 
     afterEach(function() {
-      delete window.OT;
+      window.OT = OTRestore;
     });
 
     it("should initialize L10n", function() {
@@ -131,8 +134,9 @@ describe("loop.conversation", function() {
   });
 
   describe("AppControllerView", function() {
-    var conversationStore, client, ccView, dispatcher;
-    var conversationAppStore, roomStore;
+    var activeRoomStore, ccView, dispatcher;
+    var conversationAppStore, roomStore, feedbackPeriodMs = 15770000000;
+    var ROOM_STATES = loop.store.ROOM_STATES;
 
     function mountTestComponent() {
       return TestUtils.renderIntoDocument(
@@ -144,35 +148,24 @@ describe("loop.conversation", function() {
     }
 
     beforeEach(function() {
-      client = new loop.Client();
       dispatcher = new loop.Dispatcher();
-      conversationStore = new loop.store.ConversationStore(
-        dispatcher, {
-          client: client,
-          mozLoop: navigator.mozLoop,
-          sdkDriver: {}
-        });
 
-      conversationStore.setStoreState({contact: {
-        name: [ "Mr Smith" ],
-        email: [{
-          type: "home",
-          value: "fakeEmail",
-          pref: true
-        }]
-      }});
-
+      activeRoomStore = new loop.store.ActiveRoomStore(dispatcher, {
+        mozLoop: {},
+        sdkDriver: {}
+      });
       roomStore = new loop.store.RoomStore(dispatcher, {
-        mozLoop: navigator.mozLoop
+        mozLoop: navigator.mozLoop,
+        activeRoomStore: activeRoomStore
       });
       conversationAppStore = new loop.store.ConversationAppStore({
+        activeRoomStore: activeRoomStore,
         dispatcher: dispatcher,
         mozLoop: navigator.mozLoop
       });
 
       loop.store.StoreMixin.register({
-        conversationAppStore: conversationAppStore,
-        conversationStore: conversationStore
+        conversationAppStore: conversationAppStore
       });
     });
 
@@ -180,26 +173,9 @@ describe("loop.conversation", function() {
       ccView = undefined;
     });
 
-    it("should display the CallControllerView for outgoing calls", function() {
-      conversationAppStore.setStoreState({windowType: "outgoing"});
-
-      ccView = mountTestComponent();
-
-      TestUtils.findRenderedComponentWithType(ccView,
-        loop.conversationViews.CallControllerView);
-    });
-
-    it("should display the CallControllerView for incoming calls", function() {
-      conversationAppStore.setStoreState({windowType: "incoming"});
-
-      ccView = mountTestComponent();
-
-      TestUtils.findRenderedComponentWithType(ccView,
-        loop.conversationViews.CallControllerView);
-    });
-
     it("should display the RoomView for rooms", function() {
-      conversationAppStore.setStoreState({windowType: "room"});
+      conversationAppStore.setStoreState({ windowType: "room" });
+      activeRoomStore.setStoreState({ roomState: ROOM_STATES.READY });
 
       ccView = mountTestComponent();
 
@@ -207,13 +183,108 @@ describe("loop.conversation", function() {
         loop.roomViews.DesktopRoomConversationView);
     });
 
-    it("should display the GenericFailureView for failures", function() {
-      conversationAppStore.setStoreState({windowType: "failed"});
+    it("should display the RoomFailureView for failures", function() {
+      conversationAppStore.setStoreState({
+        outgoing: false,
+        windowType: "failed"
+      });
 
       ccView = mountTestComponent();
 
       TestUtils.findRenderedComponentWithType(ccView,
-        loop.conversationViews.GenericFailureView);
+        loop.roomViews.RoomFailureView);
+    });
+
+    it("should set the correct title when rendering feedback view", function() {
+      conversationAppStore.setStoreState({ showFeedbackForm: true });
+
+      ccView = mountTestComponent();
+
+      sinon.assert.calledWithExactly(mozL10nGet, "conversation_has_ended");
+    });
+
+    it("should render FeedbackView if showFeedbackForm state is true",
+       function() {
+         conversationAppStore.setStoreState({ showFeedbackForm: true });
+
+         ccView = mountTestComponent();
+
+         TestUtils.findRenderedComponentWithType(ccView, FeedbackView);
+       });
+
+    it("should dispatch a ShowFeedbackForm action if timestamp is 0",
+       function() {
+         conversationAppStore.setStoreState({ feedbackTimestamp: 0 });
+         sandbox.stub(dispatcher, "dispatch");
+
+         ccView = mountTestComponent();
+
+         ccView.handleCallTerminated();
+
+         sinon.assert.calledOnce(dispatcher.dispatch);
+         sinon.assert.calledWithExactly(dispatcher.dispatch,
+                                        new sharedActions.ShowFeedbackForm());
+       });
+
+    it("should set feedback timestamp if delta is > feedback period",
+       function() {
+         var feedbackTimestamp = new Date() - feedbackPeriodMs;
+         conversationAppStore.setStoreState({
+           feedbackTimestamp: feedbackTimestamp,
+           feedbackPeriod: feedbackPeriodMs
+         });
+
+         ccView = mountTestComponent();
+
+         ccView.handleCallTerminated();
+
+         sinon.assert.calledOnce(setLoopPrefStub);
+       });
+
+    it("should dispatch a ShowFeedbackForm action if delta > feedback period",
+       function() {
+         var feedbackTimestamp = new Date() - feedbackPeriodMs;
+         conversationAppStore.setStoreState({
+           feedbackTimestamp: feedbackTimestamp,
+           feedbackPeriod: feedbackPeriodMs
+         });
+         sandbox.stub(dispatcher, "dispatch");
+
+         ccView = mountTestComponent();
+
+         ccView.handleCallTerminated();
+
+         sinon.assert.calledOnce(dispatcher.dispatch);
+         sinon.assert.calledWithExactly(dispatcher.dispatch,
+                                        new sharedActions.ShowFeedbackForm());
+       });
+
+    it("should close the window if delta < feedback period", function() {
+      var feedbackTimestamp = new Date().getTime();
+      conversationAppStore.setStoreState({
+        feedbackTimestamp: feedbackTimestamp,
+        feedbackPeriod: feedbackPeriodMs
+      });
+
+      ccView = mountTestComponent();
+      var closeWindowStub = sandbox.stub(ccView, "closeWindow");
+      ccView.handleCallTerminated();
+
+      sinon.assert.calledOnce(closeWindowStub);
+    });
+
+    it("should set the correct timestamp for dateLastSeenSec", function() {
+      var feedbackTimestamp = new Date().getTime();
+      conversationAppStore.setStoreState({
+        feedbackTimestamp: feedbackTimestamp,
+        feedbackPeriod: feedbackPeriodMs
+      });
+
+      ccView = mountTestComponent();
+      var closeWindowStub = sandbox.stub(ccView, "closeWindow");
+      ccView.handleCallTerminated();
+
+      sinon.assert.calledOnce(closeWindowStub);
     });
   });
 });

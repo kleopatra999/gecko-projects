@@ -112,7 +112,7 @@ public:
                                           int32_t aHorizontal,
                                           int32_t aVertical);
   NS_IMETHOD              PlaceBehind(nsTopLevelWidgetZPlacement aPlacement, nsIWidget *aWidget, bool aActivate);
-  NS_IMETHOD              SetSizeMode(int32_t aMode);
+  NS_IMETHOD              SetSizeMode(nsSizeMode aMode);
   NS_IMETHOD              Enable(bool aState);
   virtual bool            IsEnabled() const;
   NS_IMETHOD              SetFocus(bool aRaise);
@@ -126,6 +126,11 @@ public:
                                     uint32_t aHotspotX, uint32_t aHotspotY);
   NS_IMETHOD              SetCursor(nsCursor aCursor);
   virtual nsresult        ConfigureChildren(const nsTArray<Configuration>& aConfigurations);
+  virtual bool PrepareForFullscreenTransition(nsISupports** aData) override;
+  virtual void PerformFullscreenTransition(FullscreenTransitionStage aStage,
+                                           uint16_t aDuration,
+                                           nsISupports* aData,
+                                           nsIRunnable* aCallback) override;
   NS_IMETHOD              MakeFullScreen(bool aFullScreen, nsIScreen* aScreen = nullptr);
   NS_IMETHOD              HideWindowChrome(bool aShouldHide);
   NS_IMETHOD              Invalidate(bool aEraseBackground = false,
@@ -203,11 +208,15 @@ public:
   /**
    * Event helpers
    */
-  virtual bool            DispatchMouseEvent(uint32_t aEventType, WPARAM wParam,
-                                             LPARAM lParam,
-                                             bool aIsContextMenuKey = false,
-                                             int16_t aButton = mozilla::WidgetMouseEvent::eLeftButton,
-                                             uint16_t aInputSource = nsIDOMMouseEvent::MOZ_SOURCE_MOUSE);
+  virtual bool            DispatchMouseEvent(
+                            mozilla::EventMessage aEventMessage,
+                            WPARAM wParam,
+                            LPARAM lParam,
+                            bool aIsContextMenuKey = false,
+                            int16_t aButton =
+                              mozilla::WidgetMouseEvent::eLeftButton,
+                            uint16_t aInputSource =
+                              nsIDOMMouseEvent::MOZ_SOURCE_MOUSE);
   virtual bool            DispatchWindowEvent(mozilla::WidgetGUIEvent* aEvent,
                                               nsEventStatus& aStatus);
   void                    DispatchPendingEvents();
@@ -240,6 +249,7 @@ public:
    * Misc.
    */
   virtual bool            AutoErase(HDC dc);
+  bool ComputeShouldAccelerate() override;
 
   static void             ClearCompositor(nsWindow* aWindow);
 
@@ -278,19 +288,16 @@ public:
 
   bool                    const DestroyCalled() { return mDestroyCalled; }
 
-  virtual void GetPreferredCompositorBackends(nsTArray<mozilla::layers::LayersBackend>& aHints);
-
   bool IsPopup();
   virtual bool ShouldUseOffMainThreadCompositing();
 
-  bool CaptureWidgetOnScreen(mozilla::RefPtr<mozilla::gfx::DrawTarget> aDT);
+  bool CaptureWidgetOnScreen(RefPtr<mozilla::gfx::DrawTarget> aDT);
 
 protected:
   virtual ~nsWindow();
 
   virtual void WindowUsesOMTC() override;
-  virtual void ConfigureAPZCTreeManager() override;
-  void RegisterTouchWindow();
+  virtual void RegisterTouchWindow() override;
 
   virtual nsresult NotifyIMEInternal(
                      const IMENotification& aIMENotification) override;
@@ -330,7 +337,7 @@ protected:
   void                    ResetLayout();
   void                    InvalidateNonClientRegion();
   HRGN                    ExcludeNonClientFromPaintRegion(HRGN aRegion);
-  static void             GetMainWindowClass(nsAString& aClass);
+  static const wchar_t*   GetMainWindowClass();
   bool                    HasGlass() const {
     return mTransparencyMode == eTransparencyGlass ||
            mTransparencyMode == eTransparencyBorderlessGlass;
@@ -354,7 +361,7 @@ protected:
    * Event processing helpers
    */
   void                    DispatchFocusToTopLevelWindow(bool aIsActivate);
-  bool                    DispatchStandardEvent(uint32_t aMsg);
+  bool                    DispatchStandardEvent(mozilla::EventMessage aMsg);
   void                    RelayMouseEvent(UINT aMsg, WPARAM wParam, LPARAM lParam);
   virtual bool            ProcessMessage(UINT msg, WPARAM &wParam,
                                          LPARAM &lParam, LRESULT *aRetValue);
@@ -397,14 +404,15 @@ protected:
   void                    UserActivity();
 
   int32_t                 GetHeight(int32_t aProposedHeight);
-  void                    GetWindowClass(nsString& aWindowClass);
-  void                    GetWindowPopupClass(nsString& aWindowClass);
+  const wchar_t*          GetWindowClass() const;
+  const wchar_t*          GetWindowPopupClass() const;
   virtual DWORD           WindowStyle();
   DWORD                   WindowExStyle();
 
-  void                    RegisterWindowClass(const nsString& aClassName,
+  // This method registers the given window class, and returns the class name.
+  const wchar_t*          RegisterWindowClass(const wchar_t* aClassName,
                                               UINT aExtraStyle,
-                                              LPWSTR aIconID);
+                                              LPWSTR aIconID) const;
 
   /**
    * XP and Vista theming support for windows with rounded edges
@@ -462,6 +470,7 @@ protected:
   nsIntSize             mLastSize;
   nsIntPoint            mLastPoint;
   HWND                  mWnd;
+  HWND                  mTransitionWnd;
   WNDPROC               mPrevWndProc;
   HBRUSH                mBrush;
   bool                  mIsTopWidgetWindow;
@@ -499,7 +508,6 @@ protected:
   static bool           sJustGotActivate;
   static bool           sIsInMouseCapture;
   static int            sTrimOnMinimize;
-  static const char*    sDefaultMainWindowClass;
 
   // Always use the helper method to read this property.  See bug 603793.
   static TriStateBool   sHasBogusPopupsDropShadowOnMultiMonitor;
@@ -553,10 +561,18 @@ protected:
 
   nsIntRect             mLastPaintBounds;
 
+  // Used for displayport suppression during window resize
+  enum ResizeState {
+    NOT_RESIZING,
+    IN_SIZEMOVE,
+    RESIZING,
+  };
+  ResizeState mResizeState;
+
   // Transparency
 #ifdef MOZ_XUL
   // Use layered windows to support full 256 level alpha translucency
-  nsRefPtr<gfxASurface> mTransparentSurface;
+  RefPtr<gfxASurface> mTransparentSurface;
   HDC                   mMemoryDC;
   nsTransparencyMode    mTransparencyMode;
   nsIntRegion           mPossiblyTransparentRegion;
@@ -587,11 +603,6 @@ protected:
   POINT mCachedHitTestPoint;
   TimeStamp mCachedHitTestTime;
   int32_t mCachedHitTestResult;
-
-  // For converting native event times to timestamps we record the time of the
-  // first received event in each time scale.
-  static DWORD     sFirstEventTime;
-  static TimeStamp sFirstEventTimeStamp;
 
   static bool sNeedsToInitMouseWheelSettings;
   static void InitMouseWheelScrollData();

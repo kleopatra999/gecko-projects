@@ -32,14 +32,6 @@ namespace image {
 ImageFactory::Initialize()
 { }
 
-static bool
-ShouldDownscaleDuringDecode(const nsCString& aMimeType)
-{
-  return aMimeType.EqualsLiteral(IMAGE_JPEG) ||
-         aMimeType.EqualsLiteral(IMAGE_JPG) ||
-         aMimeType.EqualsLiteral(IMAGE_PJPEG);
-}
-
 static uint32_t
 ComputeImageFlags(ImageURL* uri, const nsCString& aMimeType, bool isMultiPart)
 {
@@ -48,48 +40,26 @@ ComputeImageFlags(ImageURL* uri, const nsCString& aMimeType, bool isMultiPart)
   // We default to the static globals.
   bool isDiscardable = gfxPrefs::ImageMemDiscardable();
   bool doDecodeImmediately = gfxPrefs::ImageDecodeImmediatelyEnabled();
-  bool doDownscaleDuringDecode = gfxPrefs::ImageDownscaleDuringDecodeEnabled();
-
-  // We use the platform APZ value here since we don't have a widget to test.
-  // It's safe since this is an optimization, and the only platform
-  // ImageDecodeOnlyOnDraw is disabled on is B2G (where APZ is enabled in all
-  // widgets anyway).
-  bool doDecodeOnlyOnDraw = gfxPrefs::ImageDecodeOnlyOnDrawEnabled() &&
-                            gfxPlatform::AsyncPanZoomEnabled();
 
   // We want UI to be as snappy as possible and not to flicker. Disable
-  // discarding and decode-only-on-draw for chrome URLS.
+  // discarding for chrome URLS.
   bool isChrome = false;
   rv = uri->SchemeIs("chrome", &isChrome);
   if (NS_SUCCEEDED(rv) && isChrome) {
-    isDiscardable = doDecodeOnlyOnDraw = false;
+    isDiscardable = false;
   }
 
-  // We don't want resources like the "loading" icon to be discardable or
-  // decode-only-on-draw either.
+  // We don't want resources like the "loading" icon to be discardable either.
   bool isResource = false;
   rv = uri->SchemeIs("resource", &isResource);
   if (NS_SUCCEEDED(rv) && isResource) {
-    isDiscardable = doDecodeOnlyOnDraw = false;
-  }
-
-  // Downscale-during-decode and decode-only-on-draw are only enabled for
-  // certain content types.
-  if ((doDownscaleDuringDecode || doDecodeOnlyOnDraw) &&
-      !ShouldDownscaleDuringDecode(aMimeType)) {
-    doDownscaleDuringDecode = false;
-    doDecodeOnlyOnDraw = false;
-  }
-
-  // If we're decoding immediately, disable decode-only-on-draw.
-  if (doDecodeImmediately) {
-    doDecodeOnlyOnDraw = false;
+    isDiscardable = false;
   }
 
   // For multipart/x-mixed-replace, we basically want a direct channel to the
   // decoder. Disable everything for this case.
   if (isMultiPart) {
-    isDiscardable = doDecodeOnlyOnDraw = doDownscaleDuringDecode = false;
+    isDiscardable = false;
   }
 
   // We have all the information we need.
@@ -97,17 +67,11 @@ ComputeImageFlags(ImageURL* uri, const nsCString& aMimeType, bool isMultiPart)
   if (isDiscardable) {
     imageFlags |= Image::INIT_FLAG_DISCARDABLE;
   }
-  if (doDecodeOnlyOnDraw) {
-    imageFlags |= Image::INIT_FLAG_DECODE_ONLY_ON_DRAW;
-  }
   if (doDecodeImmediately) {
     imageFlags |= Image::INIT_FLAG_DECODE_IMMEDIATELY;
   }
   if (isMultiPart) {
     imageFlags |= Image::INIT_FLAG_TRANSIENT;
-  }
-  if (doDownscaleDuringDecode) {
-    imageFlags |= Image::INIT_FLAG_DOWNSCALE_DURING_DECODE;
   }
 
   return imageFlags;
@@ -137,15 +101,14 @@ ImageFactory::CreateImage(nsIRequest* aRequest,
   }
 }
 
-// Marks an image as having an error before returning it. Used with macros like
-// NS_ENSURE_SUCCESS, since we guarantee to always return an image even if an
-// error occurs, but callers need to be able to tell that this happened.
+// Marks an image as having an error before returning it.
 template <typename T>
 static already_AddRefed<Image>
-BadImage(nsRefPtr<T>& image)
+BadImage(const char* aMessage, RefPtr<T>& aImage)
 {
-  image->SetHasError();
-  return image.forget();
+  NS_WARNING(aMessage);
+  aImage->SetHasError();
+  return aImage.forget();
 }
 
 /* static */ already_AddRefed<Image>
@@ -153,14 +116,16 @@ ImageFactory::CreateAnonymousImage(const nsCString& aMimeType)
 {
   nsresult rv;
 
-  nsRefPtr<RasterImage> newImage = new RasterImage();
+  RefPtr<RasterImage> newImage = new RasterImage();
 
-  nsRefPtr<ProgressTracker> newTracker = new ProgressTracker();
+  RefPtr<ProgressTracker> newTracker = new ProgressTracker();
   newTracker->SetImage(newImage);
   newImage->SetProgressTracker(newTracker);
 
   rv = newImage->Init(aMimeType.get(), Image::INIT_FLAG_SYNC_LOAD);
-  NS_ENSURE_SUCCESS(rv, BadImage(newImage));
+  if (NS_FAILED(rv)) {
+    return BadImage("RasterImage::Init failed", newImage);
+  }
 
   return newImage.forget();
 }
@@ -172,7 +137,7 @@ ImageFactory::CreateMultipartImage(Image* aFirstPart,
   MOZ_ASSERT(aFirstPart);
   MOZ_ASSERT(aProgressTracker);
 
-  nsRefPtr<MultipartImage> newImage = new MultipartImage(aFirstPart);
+  RefPtr<MultipartImage> newImage = new MultipartImage(aFirstPart);
   aProgressTracker->SetImage(newImage);
   newImage->SetProgressTracker(aProgressTracker);
 
@@ -236,12 +201,33 @@ ImageFactory::CreateRasterImage(nsIRequest* aRequest,
 
   nsresult rv;
 
-  nsRefPtr<RasterImage> newImage = new RasterImage(aURI);
+  RefPtr<RasterImage> newImage = new RasterImage(aURI);
   aProgressTracker->SetImage(newImage);
   newImage->SetProgressTracker(aProgressTracker);
 
+  nsAutoCString ref;
+  aURI->GetRef(ref);
+  net::nsMediaFragmentURIParser parser(ref);
+  if (parser.HasSampleSize()) {
+      /* Get our principal */
+      nsCOMPtr<nsIChannel> chan(do_QueryInterface(aRequest));
+      nsCOMPtr<nsIPrincipal> principal;
+      if (chan) {
+        nsContentUtils::GetSecurityManager()
+          ->GetChannelResultPrincipal(chan, getter_AddRefs(principal));
+      }
+
+      if ((principal &&
+           principal->GetAppStatus() == nsIPrincipal::APP_STATUS_CERTIFIED) ||
+          gfxPrefs::ImageMozSampleSizeEnabled()) {
+        newImage->SetRequestedSampleSize(parser.GetSampleSize());
+      }
+  }
+
   rv = newImage->Init(aMimeType.get(), aImageFlags);
-  NS_ENSURE_SUCCESS(rv, BadImage(newImage));
+  if (NS_FAILED(rv)) {
+    return BadImage("RasterImage::Init failed", newImage);
+  }
 
   newImage->SetInnerWindowID(aInnerWindowId);
 
@@ -264,29 +250,6 @@ ImageFactory::CreateRasterImage(nsIRequest* aRequest,
     }
   }
 
-  nsAutoCString ref;
-  aURI->GetRef(ref);
-  net::nsMediaFragmentURIParser parser(ref);
-  if (parser.HasResolution()) {
-    newImage->SetRequestedResolution(parser.GetResolution());
-  }
-
-  if (parser.HasSampleSize()) {
-      /* Get our principal */
-      nsCOMPtr<nsIChannel> chan(do_QueryInterface(aRequest));
-      nsCOMPtr<nsIPrincipal> principal;
-      if (chan) {
-        nsContentUtils::GetSecurityManager()
-          ->GetChannelResultPrincipal(chan, getter_AddRefs(principal));
-      }
-
-      if ((principal &&
-           principal->GetAppStatus() == nsIPrincipal::APP_STATUS_CERTIFIED) ||
-          gfxPrefs::ImageMozSampleSizeEnabled()) {
-        newImage->SetRequestedSampleSize(parser.GetSampleSize());
-      }
-  }
-
   return newImage.forget();
 }
 
@@ -302,17 +265,21 @@ ImageFactory::CreateVectorImage(nsIRequest* aRequest,
 
   nsresult rv;
 
-  nsRefPtr<VectorImage> newImage = new VectorImage(aURI);
+  RefPtr<VectorImage> newImage = new VectorImage(aURI);
   aProgressTracker->SetImage(newImage);
   newImage->SetProgressTracker(aProgressTracker);
 
   rv = newImage->Init(aMimeType.get(), aImageFlags);
-  NS_ENSURE_SUCCESS(rv, BadImage(newImage));
+  if (NS_FAILED(rv)) {
+    return BadImage("VectorImage::Init failed", newImage);
+  }
 
   newImage->SetInnerWindowID(aInnerWindowId);
 
   rv = newImage->OnStartRequest(aRequest, nullptr);
-  NS_ENSURE_SUCCESS(rv, BadImage(newImage));
+  if (NS_FAILED(rv)) {
+    return BadImage("VectorImage::OnStartRequest failed", newImage);
+  }
 
   return newImage.forget();
 }

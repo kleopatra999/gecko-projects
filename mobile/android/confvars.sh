@@ -5,7 +5,8 @@
 MOZ_APP_BASENAME=Fennec
 MOZ_APP_VENDOR=Mozilla
 
-MOZ_APP_VERSION=42.0a1
+MOZ_APP_VERSION=$FIREFOX_VERSION
+MOZ_APP_VERSION_DISPLAY=$FIREFOX_VERSION_DISPLAY
 MOZ_APP_UA_NAME=Firefox
 
 MOZ_BRANDING_DIRECTORY=mobile/android/branding/unofficial
@@ -32,11 +33,7 @@ MOZ_MEDIA_NAVIGATOR=1
 # Enable NFC permission
 MOZ_ANDROID_BEAM=1
 
-if test "$LIBXUL_SDK"; then
-MOZ_XULRUNNER=1
-else
 MOZ_XULRUNNER=
-fi
 
 MOZ_CAPTURE=1
 MOZ_RAW=1
@@ -96,27 +93,30 @@ MOZ_ANDROID_SHARE_OVERLAY=1
 # Enable the Mozilla Location Service stumbler.
 MOZ_ANDROID_MLS_STUMBLER=1
 
-# Enable adding to the system downloads list in pre-release builds.
+# Enable adding to the system downloads list.
 MOZ_ANDROID_DOWNLOADS_INTEGRATION=1
 
 # Enable Tab Queue
-if test "$NIGHTLY_BUILD"; then
-  MOZ_ANDROID_TAB_QUEUE=1
-fi
+MOZ_ANDROID_TAB_QUEUE=1
 
 # Use the low-memory GC tuning.
 export JS_GC_SMALL_CHUNK_SIZE=1
 
-# Enable FxAccount Avatar
-if test "$NIGHTLY_BUILD"; then
-  MOZ_ANDROID_FIREFOX_ACCOUNT_PROFILES=1
-fi
+# Enable Firefox Account avatars.
+MOZ_ANDROID_FIREFOX_ACCOUNT_PROFILES=1
 
 # Enable checking that add-ons are signed by the trusted root
 MOZ_ADDON_SIGNING=1
-if test "$MOZ_OFFICIAL_BRANDING"; then
-  if test "$MOZ_UPDATE_CHANNEL" = "beta" -o \
-          "$MOZ_UPDATE_CHANNEL" = "release"; then
-    MOZ_REQUIRE_SIGNING=1
-  fi
+
+# Enable the Switchboard A/B framework code.
+# Note: The framework is always included in the app. This flag controls
+# usage of the framework.
+MOZ_SWITCHBOARD=1
+
+# Use native Firefox Accounts UI after Nightly.
+if ! test "$NIGHTLY_BUILD"; then
+MOZ_ANDROID_NATIVE_ACCOUNT_UI=1
 fi
+
+# Disable GeckoView by default.
+export MOZ_DISABLE_GECKOVIEW=1

@@ -35,10 +35,10 @@ using namespace mozilla::dom;
 
 bool
 nsJSUtils::GetCallingLocation(JSContext* aContext, nsACString& aFilename,
-                              uint32_t* aLineno)
+                              uint32_t* aLineno, uint32_t* aColumn)
 {
   JS::AutoFilename filename;
-  if (!JS::DescribeScriptedCaller(aContext, &filename, aLineno)) {
+  if (!JS::DescribeScriptedCaller(aContext, &filename, aLineno, aColumn)) {
     return false;
   }
 
@@ -48,10 +48,10 @@ nsJSUtils::GetCallingLocation(JSContext* aContext, nsACString& aFilename,
 
 bool
 nsJSUtils::GetCallingLocation(JSContext* aContext, nsAString& aFilename,
-                              uint32_t* aLineno)
+                              uint32_t* aLineno, uint32_t* aColumn)
 {
   JS::AutoFilename filename;
-  if (!JS::DescribeScriptedCaller(aContext, &filename, aLineno)) {
+  if (!JS::DescribeScriptedCaller(aContext, &filename, aLineno, aColumn)) {
     return false;
   }
 
@@ -174,6 +174,8 @@ nsJSUtils::EvaluateString(JSContext* aCx,
   MOZ_ASSERT(js::GetGlobalForObjectCrossCompartment(aEvaluationGlobal) ==
              aEvaluationGlobal);
   MOZ_ASSERT_IF(aOffThreadToken, aCompileOptions.noScriptRval);
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(nsContentUtils::IsInMicroTask());
 
   // Unfortunately, the JS engine actually compiles scripts with a return value
   // in a different, less efficient way.  Furthermore, it can't JIT them in many
@@ -183,7 +185,6 @@ nsJSUtils::EvaluateString(JSContext* aCx,
   // aCompileOptions.noScriptRval set to true.
   aRetValue.setUndefined();
 
-  nsAutoMicroTask mt;
   nsresult rv = NS_OK;
 
   nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
@@ -306,6 +307,12 @@ nsJSUtils::GetScopeChainForElement(JSContext* aCx,
   return true;
 }
 
+/* static */
+void
+nsJSUtils::ResetTimeZone()
+{
+  JS::ResetTimeZone();
+}
 
 //
 // nsDOMJSUtils.h

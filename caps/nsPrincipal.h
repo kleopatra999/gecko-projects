@@ -26,7 +26,6 @@ public:
   NS_IMETHOD GetURI(nsIURI** aURI) override;
   NS_IMETHOD GetDomain(nsIURI** aDomain) override;
   NS_IMETHOD SetDomain(nsIURI* aDomain) override;
-  NS_IMETHOD CheckMayLoad(nsIURI* uri, bool report, bool allowIfInheritsPrincipal) override;
   NS_IMETHOD GetBaseDomain(nsACString& aBaseDomain) override;
   virtual bool IsOnCSSUnprefixingWhitelist() override;
   bool IsCodebasePrincipal() const override { return true; }
@@ -39,23 +38,6 @@ public:
 
   virtual void GetScriptLocation(nsACString& aStr) override;
   void SetURI(nsIURI* aURI);
-
-  static bool IsPrincipalInherited(nsIURI* aURI) {
-    // return true if the loadee URI has
-    // the URI_INHERITS_SECURITY_CONTEXT flag set.
-    bool doesInheritSecurityContext;
-    nsresult rv =
-    NS_URIChainHasFlags(aURI,
-                        nsIProtocolHandler::URI_INHERITS_SECURITY_CONTEXT,
-                        &doesInheritSecurityContext);
-
-    if (NS_SUCCEEDED(rv) && doesInheritSecurityContext) {
-      return true;
-    }
-
-    return false;
-  }
-
 
   /**
    * Computes the puny-encoded origin of aURI.
@@ -79,6 +61,7 @@ protected:
   virtual ~nsPrincipal();
 
   bool SubsumesInternal(nsIPrincipal* aOther, DocumentDomainConsideration aConsideration) override;
+  bool MayLoadInternal(nsIURI* aURI) override;
 };
 
 class nsExpandedPrincipal : public nsIExpandedPrincipal, public mozilla::BasePrincipal
@@ -95,7 +78,6 @@ public:
   NS_IMETHOD GetURI(nsIURI** aURI) override;
   NS_IMETHOD GetDomain(nsIURI** aDomain) override;
   NS_IMETHOD SetDomain(nsIURI* aDomain) override;
-  NS_IMETHOD CheckMayLoad(nsIURI* uri, bool report, bool allowIfInheritsPrincipal) override;
   NS_IMETHOD GetBaseDomain(nsACString& aBaseDomain) override;
   virtual bool IsOnCSSUnprefixingWhitelist() override;
   virtual void GetScriptLocation(nsACString &aStr) override;
@@ -105,6 +87,7 @@ protected:
   virtual ~nsExpandedPrincipal();
 
   bool SubsumesInternal(nsIPrincipal* aOther, DocumentDomainConsideration aConsideration) override;
+  bool MayLoadInternal(nsIURI* aURI) override;
 
 private:
   nsTArray< nsCOMPtr<nsIPrincipal> > mPrincipals;
@@ -112,12 +95,12 @@ private:
 
 #define NS_PRINCIPAL_CONTRACTID "@mozilla.org/principal;1"
 #define NS_PRINCIPAL_CID \
-  { 0xb7c8505e, 0xc56d, 0x4191, \
-    { 0xa1, 0x5e, 0x5d, 0xcb, 0x88, 0x9b, 0xa0, 0x94 }}
+{ 0x653e0e4d, 0x3ee4, 0x45fa, \
+  { 0xb2, 0x72, 0x97, 0xc2, 0x0b, 0xc0, 0x1e, 0xb8 } }
 
 #define NS_EXPANDEDPRINCIPAL_CONTRACTID "@mozilla.org/expandedprincipal;1"
 #define NS_EXPANDEDPRINCIPAL_CID \
-  { 0x38539471, 0x68cc, 0x4a6f, \
-    { 0x81, 0x20, 0xdb, 0xd5, 0x4a, 0x22, 0x0a, 0x13 }}
+{ 0xe8ee88b0, 0x5571, 0x4086, \
+  { 0xa4, 0x5b, 0x39, 0xa7, 0x16, 0x90, 0x6b, 0xdb } }
 
 #endif // nsPrincipal_h__

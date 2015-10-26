@@ -39,7 +39,7 @@ MaybeReportMainThreadException(JSContext* aCx, bool aResult)
   }
 }
 
-} // anonymous namespace
+} // namespace
 
 #ifdef DEBUG
 WorkerRunnable::WorkerRunnable(WorkerPrivate* aWorkerPrivate,
@@ -136,25 +136,27 @@ WorkerRunnable::Dispatch(JSContext* aCx)
 bool
 WorkerRunnable::DispatchInternal()
 {
+  RefPtr<WorkerRunnable> runnable(this);
+
   if (mBehavior == WorkerThreadModifyBusyCount ||
       mBehavior == WorkerThreadUnchangedBusyCount) {
     if (IsDebuggerRunnable()) {
-      return NS_SUCCEEDED(mWorkerPrivate->DispatchDebuggerRunnable(this));
+      return NS_SUCCEEDED(mWorkerPrivate->DispatchDebuggerRunnable(runnable.forget()));
     } else {
-      return NS_SUCCEEDED(mWorkerPrivate->Dispatch(this));
+      return NS_SUCCEEDED(mWorkerPrivate->Dispatch(runnable.forget()));
     }
   }
 
   MOZ_ASSERT(mBehavior == ParentThreadUnchangedBusyCount);
 
   if (WorkerPrivate* parent = mWorkerPrivate->GetParent()) {
-    return NS_SUCCEEDED(parent->Dispatch(this));
+    return NS_SUCCEEDED(parent->Dispatch(runnable.forget()));
   }
 
   nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
   MOZ_ASSERT(mainThread);
 
-  return NS_SUCCEEDED(mainThread->Dispatch(this, NS_DISPATCH_NORMAL));
+  return NS_SUCCEEDED(mainThread->Dispatch(runnable.forget(), NS_DISPATCH_NORMAL));
 }
 
 void
@@ -304,7 +306,7 @@ WorkerRunnable::Run()
   nsCOMPtr<nsIGlobalObject> globalObject;
   bool isMainThread = !targetIsWorkerThread && !mWorkerPrivate->GetParent();
   MOZ_ASSERT(isMainThread == NS_IsMainThread());
-  nsRefPtr<WorkerPrivate> kungFuDeathGrip;
+  RefPtr<WorkerPrivate> kungFuDeathGrip;
   if (targetIsWorkerThread) {
     JSContext* cx = GetCurrentThreadJSContext();
     if (NS_WARN_IF(!cx)) {
@@ -422,7 +424,8 @@ bool
 WorkerSyncRunnable::DispatchInternal()
 {
   if (mSyncLoopTarget) {
-    return NS_SUCCEEDED(mSyncLoopTarget->Dispatch(this, NS_DISPATCH_NORMAL));
+    RefPtr<WorkerSyncRunnable> runnable(this);
+    return NS_SUCCEEDED(mSyncLoopTarget->Dispatch(runnable.forget(), NS_DISPATCH_NORMAL));
   }
 
   return WorkerRunnable::DispatchInternal();
@@ -482,7 +485,8 @@ StopSyncLoopRunnable::DispatchInternal()
 {
   MOZ_ASSERT(mSyncLoopTarget);
 
-  return NS_SUCCEEDED(mSyncLoopTarget->Dispatch(this, NS_DISPATCH_NORMAL));
+  RefPtr<StopSyncLoopRunnable> runnable(this);
+  return NS_SUCCEEDED(mSyncLoopTarget->Dispatch(runnable.forget(), NS_DISPATCH_NORMAL));
 }
 
 void
@@ -518,18 +522,20 @@ WorkerControlRunnable::Cancel()
 bool
 WorkerControlRunnable::DispatchInternal()
 {
+  RefPtr<WorkerControlRunnable> runnable(this);
+
   if (mBehavior == WorkerThreadUnchangedBusyCount) {
-    return NS_SUCCEEDED(mWorkerPrivate->DispatchControlRunnable(this));
+    return NS_SUCCEEDED(mWorkerPrivate->DispatchControlRunnable(runnable.forget()));
   }
 
   if (WorkerPrivate* parent = mWorkerPrivate->GetParent()) {
-    return NS_SUCCEEDED(parent->DispatchControlRunnable(this));
+    return NS_SUCCEEDED(parent->DispatchControlRunnable(runnable.forget()));
   }
 
   nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
   MOZ_ASSERT(mainThread);
 
-  return NS_SUCCEEDED(mainThread->Dispatch(this, NS_DISPATCH_NORMAL));
+  return NS_SUCCEEDED(mainThread->Dispatch(runnable.forget(), NS_DISPATCH_NORMAL));
 }
 
 void
@@ -560,8 +566,9 @@ WorkerMainThreadRunnable::Dispatch(JSContext* aCx)
   AutoSyncLoopHolder syncLoop(mWorkerPrivate);
 
   mSyncLoopTarget = syncLoop.EventTarget();
+  RefPtr<WorkerMainThreadRunnable> runnable(this);
 
-  if (NS_FAILED(NS_DispatchToMainThread(this, NS_DISPATCH_NORMAL))) {
+  if (NS_FAILED(NS_DispatchToMainThread(runnable.forget(), NS_DISPATCH_NORMAL))) {
     JS_ReportError(aCx, "Failed to dispatch to main thread!");
     return false;
   }
@@ -576,7 +583,7 @@ WorkerMainThreadRunnable::Run()
 
   bool runResult = MainThreadRun();
 
-  nsRefPtr<MainThreadStopSyncLoopRunnable> response =
+  RefPtr<MainThreadStopSyncLoopRunnable> response =
     new MainThreadStopSyncLoopRunnable(mWorkerPrivate,
                                        mSyncLoopTarget.forget(),
                                        runResult);

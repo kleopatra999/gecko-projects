@@ -44,12 +44,15 @@ loop.store.StandaloneMetricsStore = (function() {
       "connectedToSdkServers",
       "connectionFailure",
       "gotMediaPermission",
-      "joinRoom",
+      "metricsLogJoinRoom",
       "joinedRoom",
       "leaveRoom",
       "mediaConnected",
       "recordClick",
-      "remotePeerConnected"
+      "remotePeerConnected",
+      "retryAfterRoomFailure",
+      "tileShown",
+      "windowUnload"
     ],
 
     /**
@@ -122,12 +125,19 @@ loop.store.StandaloneMetricsStore = (function() {
      * @param {sharedActions.ConnectionFailure} actionData
      */
     connectionFailure: function(actionData) {
-      if (actionData.reason === FAILURE_DETAILS.MEDIA_DENIED) {
-        this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.failed,
-          "Media denied");
-      } else if (actionData.reason === FAILURE_DETAILS.NO_MEDIA) {
-        this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.failed,
-          "No media");
+      switch (actionData.reason) {
+        case FAILURE_DETAILS.MEDIA_DENIED:
+          this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.failed,
+            "Media denied");
+          break;
+        case FAILURE_DETAILS.NO_MEDIA:
+          this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.failed,
+            "No media");
+          break;
+        case FAILURE_DETAILS.ROOM_ALREADY_OPEN:
+          this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.failed,
+            "Room already open");
+          break;
       }
     },
 
@@ -141,10 +151,20 @@ loop.store.StandaloneMetricsStore = (function() {
 
     /**
      * Handles the user clicking the join room button.
+     *
+     * @param {sharedActions.MetricsLogJoinRoom} actionData
      */
-    joinRoom: function() {
-      this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.button,
-        "Join the conversation");
+    metricsLogJoinRoom: function(actionData) {
+      var label;
+
+      if (actionData.userAgentHandledRoom) {
+        label = actionData.ownRoom ? "Joined own room in Firefox" :
+          "Joined in Firefox";
+      } else {
+        label = "Join the conversation";
+      }
+
+      this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.button, label);
     },
 
     /**
@@ -188,6 +208,23 @@ loop.store.StandaloneMetricsStore = (function() {
     remotePeerConnected: function() {
       this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.success,
         "Remote peer connected");
+    },
+
+    /**
+     * Handles when the user retrys room activity after its failed initially
+     * (e.g. on first load).
+     */
+    retryAfterRoomFailure: function() {
+      this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.button,
+        "Retry failed room");
+    },
+
+    /**
+     * Handles when a tile was finally shown (potentially after a delay)
+     */
+    tileShown: function() {
+      this._storeEvent(METRICS_GA_CATEGORY.general, METRICS_GA_ACTIONS.pageLoad,
+        "Tile shown");
     },
 
     /**
@@ -247,6 +284,17 @@ loop.store.StandaloneMetricsStore = (function() {
       var muteState = muted ? "mute" : "unmute";
 
       this._storeEvent(METRICS_GA_CATEGORY.general, muteType, muteState);
+    },
+
+    /**
+     * Called when the window is unloaded, either by code, or by the user
+     * explicitly closing it.  Expected to do any necessary housekeeping, such
+     * as shutting down the call cleanly and adding any relevant telemetry data.
+     */
+    windowUnload: function() {
+      if (this.activeRoomStore) {
+        this.stopListening(this.activeRoomStore);
+      }
     }
   });
 

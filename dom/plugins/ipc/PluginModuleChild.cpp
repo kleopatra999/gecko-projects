@@ -45,6 +45,8 @@
 #ifdef XP_WIN
 #include "nsWindowsDllInterceptor.h"
 #include "mozilla/widget/AudioSession.h"
+#include "WinUtils.h"
+#include <knownfolders.h>
 #endif
 
 #ifdef MOZ_WIDGET_COCOA
@@ -56,6 +58,7 @@
 
 using namespace mozilla;
 using namespace mozilla::plugins;
+using namespace mozilla::widget;
 using mozilla::dom::CrashReporterChild;
 using mozilla::dom::PCrashReporterChild;
 
@@ -67,7 +70,7 @@ const wchar_t * kMozillaWindowClass = L"MozillaWindowClass";
 namespace {
 // see PluginModuleChild::GetChrome()
 PluginModuleChild* gChromeInstance = nullptr;
-}
+} // namespace
 
 #ifdef MOZ_WIDGET_QT
 typedef void (*_gtk_init_fn)(int argc, char **argv);
@@ -158,7 +161,7 @@ PluginModuleChild::PluginModuleChild(bool aIsChrome)
 PluginModuleChild::~PluginModuleChild()
 {
     if (mTransport) {
-        // For some reason IPDL doesn't autmatically delete the channel for a
+        // For some reason IPDL doesn't automatically delete the channel for a
         // bridged protocol (bug 1090570). So we have to do it ourselves. This
         // code is only invoked for PluginModuleChild instances created via
         // bridging; otherwise mTransport is null.
@@ -734,31 +737,34 @@ PluginModuleChild::AnswerOptionalFunctionsSupported(bool *aURLRedirectNotify,
 }
 
 bool
-PluginModuleChild::AnswerNPP_ClearSiteData(const nsCString& aSite,
+PluginModuleChild::RecvNPP_ClearSiteData(const nsCString& aSite,
                                            const uint64_t& aFlags,
                                            const uint64_t& aMaxAge,
-                                           NPError* aResult)
+                                           const uint64_t& aCallbackId)
 {
-    *aResult =
+    NPError result =
         mFunctions.clearsitedata(NullableStringGet(aSite), aFlags, aMaxAge);
+    SendReturnClearSiteData(result, aCallbackId);
     return true;
 }
 
 bool
-PluginModuleChild::AnswerNPP_GetSitesWithData(InfallibleTArray<nsCString>* aResult)
+PluginModuleChild::RecvNPP_GetSitesWithData(const uint64_t& aCallbackId)
 {
     char** result = mFunctions.getsiteswithdata();
-    if (!result)
+    InfallibleTArray<nsCString> array;
+    if (!result) {
+        SendReturnSitesWithData(array, aCallbackId);
         return true;
-
+    }
     char** iterator = result;
     while (*iterator) {
-        aResult->AppendElement(*iterator);
+        array.AppendElement(*iterator);
         free(*iterator);
         ++iterator;
     }
+    SendReturnSitesWithData(array, aCallbackId);
     free(result);
-
     return true;
 }
 
@@ -1968,6 +1974,29 @@ CreateFileAHookFn(LPCSTR fname, DWORD access, DWORD share,
                             ftemplate);
 }
 
+static bool
+GetLocalLowTempPath(size_t aLen, LPWSTR aPath)
+{
+    NS_NAMED_LITERAL_STRING(tempname, "\\Temp");
+    LPWSTR path;
+    if (SUCCEEDED(WinUtils::SHGetKnownFolderPath(FOLDERID_LocalAppDataLow, 0,
+                                                 nullptr, &path))) {
+        if (wcslen(path) + tempname.Length() < aLen) {
+            wcscpy(aPath, path);
+            wcscat(aPath, tempname.get());
+            ::CoTaskMemFree(path);
+            return true;
+        }
+        ::CoTaskMemFree(path);
+    }
+
+    // XP doesn't support SHGetKnownFolderPath and LocalLow
+    if (!GetTempPathW(aLen, aPath)) {
+        return false;
+    }
+    return true;
+}
+
 HANDLE WINAPI
 CreateFileWHookFn(LPCWSTR fname, DWORD access, DWORD share,
                   LPSECURITY_ATTRIBUTES security, DWORD creation, DWORD flags,
@@ -1987,7 +2016,7 @@ CreateFileWHookFn(LPCWSTR fname, DWORD access, DWORD share,
 
         // This is the config file we want to rewrite
         WCHAR tempPath[MAX_PATH+1];
-        if (GetTempPathW(MAX_PATH, tempPath) == 0) {
+        if (GetLocalLowTempPath(MAX_PATH, tempPath) == 0) {
             break;
         }
         WCHAR tempFile[MAX_PATH+1];
@@ -2108,55 +2137,11 @@ PluginModuleChild::AllocPPluginInstanceChild(const nsCString& aMimeType,
 void
 PluginModuleChild::InitQuirksModes(const nsCString& aMimeType)
 {
-    if (mQuirks != QUIRKS_NOT_INITIALIZED)
+    if (mQuirks != QUIRKS_NOT_INITIALIZED) {
       return;
-    mQuirks = 0;
-
-    nsPluginHost::SpecialType specialType = nsPluginHost::GetSpecialType(aMimeType);
-
-    if (specialType == nsPluginHost::eSpecialType_Silverlight) {
-        mQuirks |= QUIRK_SILVERLIGHT_DEFAULT_TRANSPARENT;
-#ifdef OS_WIN
-        mQuirks |= QUIRK_WINLESS_TRACKPOPUP_HOOK;
-        mQuirks |= QUIRK_SILVERLIGHT_FOCUS_CHECK_PARENT;
-#endif
     }
 
-    if (specialType == nsPluginHost::eSpecialType_Flash) {
-        mQuirks |= QUIRK_FLASH_RETURN_EMPTY_DOCUMENT_ORIGIN;
-#ifdef OS_WIN
-        mQuirks |= QUIRK_WINLESS_TRACKPOPUP_HOOK;
-        mQuirks |= QUIRK_FLASH_THROTTLE_WMUSER_EVENTS;
-        mQuirks |= QUIRK_FLASH_HOOK_SETLONGPTR;
-        mQuirks |= QUIRK_FLASH_HOOK_GETWINDOWINFO;
-        mQuirks |= QUIRK_FLASH_FIXUP_MOUSE_CAPTURE;
-#endif
-    }
-
-#ifdef OS_WIN
-    // QuickTime plugin usually loaded with audio/mpeg mimetype
-    NS_NAMED_LITERAL_CSTRING(quicktime, "npqtplugin");
-    if (FindInReadable(quicktime, mPluginFilename)) {
-        mQuirks |= QUIRK_QUICKTIME_AVOID_SETWINDOW;
-    }
-#endif
-
-#ifdef XP_MACOSX
-    // Whitelist Flash and Quicktime to support offline renderer
-    NS_NAMED_LITERAL_CSTRING(quicktime, "QuickTime Plugin.plugin");
-    if (specialType == nsPluginHost::eSpecialType_Flash) {
-        mQuirks |= QUIRK_FLASH_AVOID_CGMODE_CRASHES;
-        mQuirks |= QUIRK_ALLOW_OFFLINE_RENDERER;
-    } else if (FindInReadable(quicktime, mPluginFilename)) {
-        mQuirks |= QUIRK_ALLOW_OFFLINE_RENDERER;
-    }
-#endif
-
-#ifdef OS_WIN
-    if (specialType == nsPluginHost::eSpecialType_Unity) {
-        mQuirks |= QUIRK_UNITY_FIXUP_MOUSE_CAPTURE;
-    }
-#endif
+    mQuirks = GetQuirksFromMimeTypeAndFilename(aMimeType, mPluginFilename);
 }
 
 bool

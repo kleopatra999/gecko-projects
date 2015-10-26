@@ -216,21 +216,21 @@ FormAutoComplete.prototype = {
             // of results in wrappedResult._values and only the results from
             // form history in wrappedResults.entries.
             // First, grab the entire list of old results.
-            let allResults = wrappedResult._values;
+            let allResults = wrappedResult._labels;
             let datalistResults, datalistLabels;
             if (allResults) {
                 // We have datalist results, extract them from the values array.
-                datalistResults = allResults.slice(wrappedResult.entries.length);
+                datalistLabels = allResults.slice(wrappedResult.entries.length);
                 let filtered = [];
-                datalistLabels = [];
-                for (let i = datalistResults.length; i > 0; --i) {
-                    if (datalistResults[i - 1].contains(searchString)) {
-                        filtered.push(datalistResults[i - 1]);
-                        datalistLabels.push(wrappedResult._labels[i - 1]);
+                datalistResults = [];
+                for (let i = 0; i < datalistLabels.length; ++i) {
+                    if (datalistLabels[i].toLowerCase().includes(searchString)) {
+                        filtered.push(datalistLabels[i]);
+                        datalistResults.push(wrappedResult._values[i]);
                     }
                 }
 
-                datalistResults = filtered;
+                datalistLabels = filtered;
             }
 
             let searchTokens = searchString.split(/\s+/);
@@ -242,7 +242,7 @@ FormAutoComplete.prototype = {
                 let entry = entries[i];
                 // Remove results that do not contain the token
                 // XXX bug 394604 -- .toLowerCase can be wrong for some intl chars
-                if(searchTokens.some(function (tok) entry.textLowerCase.indexOf(tok) < 0))
+                if(searchTokens.some(tok => entry.textLowerCase.indexOf(tok) < 0))
                     continue;
                 this._calculateScore(entry, searchString, searchTokens);
                 this.log("Reusing autocomplete entry '" + entry.text +
@@ -401,7 +401,7 @@ FormAutoComplete.prototype = {
     _calculateScore : function (entry, aSearchString, searchTokens) {
         let boundaryCalc = 0;
         // for each word, calculate word boundary weights
-        for each (let token in searchTokens) {
+        for (let token of searchTokens) {
             boundaryCalc += (entry.textLowerCase.indexOf(token) == 0);
             boundaryCalc += (entry.textLowerCase.indexOf(" " + token) >= 0);
         }

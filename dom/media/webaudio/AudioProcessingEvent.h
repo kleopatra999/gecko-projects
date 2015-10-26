@@ -72,14 +72,14 @@ private:
 
 private:
   double mPlaybackTime;
-  nsRefPtr<AudioBuffer> mInputBuffer;
-  nsRefPtr<AudioBuffer> mOutputBuffer;
-  nsRefPtr<ScriptProcessorNode> mNode;
+  RefPtr<AudioBuffer> mInputBuffer;
+  RefPtr<AudioBuffer> mOutputBuffer;
+  RefPtr<ScriptProcessorNode> mNode;
   uint32_t mNumberOfInputChannels;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

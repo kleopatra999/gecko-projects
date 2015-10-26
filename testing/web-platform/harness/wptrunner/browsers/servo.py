@@ -26,7 +26,8 @@ def check_args(**kwargs):
 
 def browser_kwargs(**kwargs):
     return {"binary": kwargs["binary"],
-            "debug_info": kwargs["debug_info"]}
+            "debug_info": kwargs["debug_info"],
+            "user_stylesheets": kwargs.get("user_stylesheets")}
 
 
 def executor_kwargs(test_type, server_config, cache_manager, run_info_data,
@@ -36,19 +37,23 @@ def executor_kwargs(test_type, server_config, cache_manager, run_info_data,
     rv["pause_after_test"] = kwargs["pause_after_test"]
     return rv
 
+
 def env_options():
-    return {"host": "localhost",
+    return {"host": "127.0.0.1",
+            "external_host": "web-platform.test",
             "bind_hostname": "true",
             "testharnessreport": "testharnessreport-servo.js",
             "supports_debugger": True}
 
 
 class ServoBrowser(NullBrowser):
-    def __init__(self, logger, binary, debug_info=None):
+    def __init__(self, logger, binary, debug_info=None, user_stylesheets=None):
         NullBrowser.__init__(self, logger)
         self.binary = binary
         self.debug_info = debug_info
+        self.user_stylesheets = user_stylesheets or []
 
     def executor_browser(self):
         return ExecutorBrowser, {"binary": self.binary,
-                                 "debug_info": self.debug_info}
+                                 "debug_info": self.debug_info,
+                                 "user_stylesheets": self.user_stylesheets}

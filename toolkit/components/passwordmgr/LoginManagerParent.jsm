@@ -152,7 +152,9 @@ var LoginManagerParent = {
 
     XPCOMUtils.defineLazyGetter(this, "recipeParentPromise", () => {
       const { LoginRecipesParent } = Cu.import("resource://gre/modules/LoginRecipes.jsm", {});
-      this._recipeManager = new LoginRecipesParent();
+      this._recipeManager = new LoginRecipesParent({
+        defaults: Services.prefs.getComplexValue("signon.recipes.path", Ci.nsISupportsString).data,
+      });
       return this._recipeManager.initializationPromise;
     });
 
@@ -233,7 +235,7 @@ var LoginManagerParent = {
    * Trigger a login form fill and send relevant data (e.g. logins and recipes)
    * to the child process (LoginManagerContent).
    */
-  fillForm: Task.async(function* ({ browser, loginFormOrigin, login }) {
+  fillForm: Task.async(function* ({ browser, loginFormOrigin, login, inputElement }) {
     let recipes = [];
     if (loginFormOrigin) {
       let formHost;
@@ -249,11 +251,13 @@ var LoginManagerParent = {
     // Convert the array of nsILoginInfo to vanilla JS objects since nsILoginInfo
     // doesn't support structured cloning.
     let jsLogins = JSON.parse(JSON.stringify([login]));
+
+    let objects = inputElement ? {inputElement} : null;
     browser.messageManager.sendAsyncMessage("RemoteLogins:fillForm", {
       loginFormOrigin,
       logins: jsLogins,
       recipes,
-    });
+    }, objects);
   }),
 
   /**
@@ -274,22 +278,30 @@ var LoginManagerParent = {
     }
 
     if (!showMasterPassword && !Services.logins.isLoggedIn) {
-      target.sendAsyncMessage("RemoteLogins:loginsFound", {
-        requestId: requestId,
-        logins: [],
-        recipes,
-      });
+      try {
+        target.sendAsyncMessage("RemoteLogins:loginsFound", {
+          requestId: requestId,
+          logins: [],
+          recipes,
+        });
+      } catch (e) {
+        log("error sending message to target", e);
+      }
       return;
     }
 
     let allLoginsCount = Services.logins.countLogins(formOrigin, "", null);
     // If there are no logins for this site, bail out now.
     if (!allLoginsCount) {
-      target.sendAsyncMessage("RemoteLogins:loginsFound", {
-        requestId: requestId,
-        logins: [],
-        recipes,
-      });
+      try {
+        target.sendAsyncMessage("RemoteLogins:loginsFound", {
+          requestId: requestId,
+          logins: [],
+          recipes,
+        });
+      } catch (e) {
+        log("error sending message to target", e);
+      }
       return;
     }
 
@@ -511,6 +523,10 @@ var LoginManagerParent = {
         log("...passwords differ, prompting to change.");
         prompter = getPrompter();
         prompter.promptToChangePassword(existingLogin, formLogin);
+      } else if (!existingLogin.username && formLogin.username) {
+        log("...empty username update, prompting to change.");
+        prompter = getPrompter();
+        prompter.promptToChangePassword(existingLogin, formLogin);
       } else {
         recordLoginUse(existingLogin);
       }
@@ -554,11 +570,22 @@ var LoginManagerParent = {
   },
 
   /**
+   * Returns true if the page currently loaded in the given browser element has
+   * insecure login forms. This state may be updated asynchronously, in which
+   * case a custom event named InsecureLoginFormsStateChange will be dispatched
+   * on the browser element.
+   */
+  hasInsecureLoginForms(browser) {
+    return !!this.stateForBrowser(browser).hasInsecureLoginForms;
+  },
+
+  /**
    * Called to indicate whether a login form on the currently loaded page is
    * present or not. This is one of the factors used to control the visibility
    * of the password fill doorhanger.
    */
-  updateLoginFormPresence(browser, { loginFormOrigin, loginFormPresent }) {
+  updateLoginFormPresence(browser, { loginFormOrigin, loginFormPresent,
+                                     hasInsecureLoginForms }) {
     const ANCHOR_DELAY_MS = 200;
 
     let state = this.stateForBrowser(browser);
@@ -567,8 +594,13 @@ var LoginManagerParent = {
     // processed in order, this will always be the latest version to use.
     state.loginFormOrigin = loginFormOrigin;
     state.loginFormPresent = loginFormPresent;
+    state.hasInsecureLoginForms = hasInsecureLoginForms;
 
-    // Apply the data to the currently displayed icon later.
+    // Report the insecure login form state immediately.
+    browser.dispatchEvent(new browser.ownerDocument.defaultView
+                                 .CustomEvent("InsecureLoginFormsStateChange"));
+
+    // Apply the data to the currently displayed login fill icon later.
     if (!state.anchorDeferredTask) {
       state.anchorDeferredTask = new DeferredTask(
         () => this.updateLoginAnchor(browser),

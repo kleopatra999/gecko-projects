@@ -79,7 +79,7 @@ IMETextTxn::UndoTransaction()
 {
   // Get the selection first so we'll fail before making any changes if we
   // can't get it
-  nsRefPtr<Selection> selection = mEditor.GetSelection();
+  RefPtr<Selection> selection = mEditor.GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NOT_INITIALIZED);
 
   nsresult res = mTextNode->DeleteData(mOffset, mStringToInsert.Length());
@@ -106,7 +106,7 @@ IMETextTxn::Merge(nsITransaction* aTransaction, bool* aDidMerge)
   }
 
   // If aTransaction is another IMETextTxn then absorb it
-  nsRefPtr<IMETextTxn> otherTxn = do_QueryObject(aTransaction);
+  RefPtr<IMETextTxn> otherTxn = do_QueryObject(aTransaction);
   if (otherTxn) {
     // We absorb the next IME transaction by adopting its insert string
     mStringToInsert = otherTxn->mStringToInsert;
@@ -167,7 +167,7 @@ IMETextTxn::SetIMESelection(nsEditor& aEditor,
                             uint32_t aLengthOfCompositionString,
                             const TextRangeArray* aRanges)
 {
-  nsRefPtr<Selection> selection = aEditor.GetSelection();
+  RefPtr<Selection> selection = aEditor.GetSelection();
   NS_ENSURE_TRUE(selection, NS_ERROR_NOT_INITIALIZED);
 
   nsresult rv = selection->StartBatchChanges();
@@ -223,7 +223,12 @@ IMETextTxn::SetIMESelection(nsEditor& aEditor,
                  static_cast<uint32_t>(caretOffset) <= maxOffset);
       rv = selection->Collapse(aTextNode, caretOffset);
       setCaret = setCaret || NS_SUCCEEDED(rv);
-      NS_ASSERTION(setCaret, "Failed to collapse normal selection");
+      if (NS_WARN_IF(!setCaret)) {
+        continue;
+      }
+      // If caret range is specified explicitly, we should show the caret if
+      // it should be so.
+      aEditor.HideCaret(false);
       continue;
     }
 
@@ -233,7 +238,7 @@ IMETextTxn::SetIMESelection(nsEditor& aEditor,
       continue;
     }
 
-    nsRefPtr<nsRange> clauseRange;
+    RefPtr<nsRange> clauseRange;
     int32_t startOffset = static_cast<int32_t>(
       aOffsetInNode +
         std::min(textRange.mStartOffset, aLengthOfCompositionString));
@@ -292,6 +297,8 @@ IMETextTxn::SetIMESelection(nsEditor& aEditor,
     rv = selection->Collapse(aTextNode, caretOffset);
     NS_ASSERTION(NS_SUCCEEDED(rv),
                  "Failed to set caret at the end of composition string");
+    // If caret range isn't specified explicitly, we should hide the caret.
+    aEditor.HideCaret(true);
   }
 
   rv = selection->EndBatchChanges();

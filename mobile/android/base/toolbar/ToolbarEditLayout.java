@@ -6,17 +6,17 @@
 package org.mozilla.gecko.toolbar;
 
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.DialogInterface;
 import android.content.Intent;
+import android.graphics.drawable.Drawable;
 import android.speech.RecognizerIntent;
 import android.widget.Button;
 import android.widget.ImageButton;
 import org.mozilla.gecko.ActivityHandlerHelper;
-import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.Telemetry;
+import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.PropertyAnimator.PropertyAnimationListener;
 import org.mozilla.gecko.preferences.GeckoPreferences;
@@ -25,15 +25,18 @@ import org.mozilla.gecko.toolbar.BrowserToolbar.OnDismissListener;
 import org.mozilla.gecko.toolbar.BrowserToolbar.OnFilterListener;
 import org.mozilla.gecko.toolbar.BrowserToolbar.TabEditingState;
 import org.mozilla.gecko.util.ActivityResultHandler;
+import org.mozilla.gecko.util.DrawableUtil;
+import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.util.InputOptionsUtils;
-import org.mozilla.gecko.widget.ThemedLinearLayout;
+import org.mozilla.gecko.widget.themed.ThemedLinearLayout;
 
 import android.content.Context;
 import android.util.AttributeSet;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.ImageView;
 
 import java.util.List;
 
@@ -44,6 +47,12 @@ import java.util.List;
 * current type of text in the entry.
 */
 public class ToolbarEditLayout extends ThemedLinearLayout {
+
+    public interface OnSearchStateChangeListener {
+        public void onSearchStateChange(boolean isActive);
+    }
+
+    private final ImageView mSearchIcon;
 
     private final ToolbarEditText mEditText;
 
@@ -60,6 +69,8 @@ public class ToolbarEditLayout extends ThemedLinearLayout {
         setOrientation(HORIZONTAL);
 
         LayoutInflater.from(context).inflate(R.layout.toolbar_edit_layout, this);
+        mSearchIcon = (ImageView) findViewById(R.id.search_icon);
+
         mEditText = (ToolbarEditText) findViewById(R.id.url_edit_text);
 
         mVoiceInput = (ImageButton) findViewById(R.id.mic);
@@ -68,6 +79,10 @@ public class ToolbarEditLayout extends ThemedLinearLayout {
 
     @Override
     public void onAttachedToWindow() {
+        if (HardwareUtils.isTablet()) {
+            mSearchIcon.setVisibility(View.VISIBLE);
+        }
+
         mEditText.setOnFocusChangeListener(new OnFocusChangeListener() {
             @Override
             public void onFocusChange(View v, boolean hasFocus) {
@@ -92,6 +107,13 @@ public class ToolbarEditLayout extends ThemedLinearLayout {
             }
         });
 
+        mEditText.setOnSearchStateChangeListener(new OnSearchStateChangeListener() {
+            @Override
+            public void onSearchStateChange(boolean isActive) {
+                updateSearchIcon(isActive);
+            }
+        });
+
         mVoiceInput.setOnClickListener(new Button.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -105,6 +127,37 @@ public class ToolbarEditLayout extends ThemedLinearLayout {
                 launchQRCodeReader();
             }
         });
+
+        // Set an inactive search icon on tablet devices when in editing mode
+        updateSearchIcon(false);
+    }
+
+    /**
+     * Update the search icon at the left of the edittext based
+     * on its state.
+     *
+     * @param isActive The state of the edittext. Active is when the initialized
+     *         text has changed and is not empty.
+     */
+    void updateSearchIcon(boolean isActive) {
+        if (!HardwareUtils.isTablet()) {
+            return;
+        }
+
+        // When on tablet show a magnifying glass in editing mode
+        final int searchDrawableId = R.drawable.search_icon_active;
+        final Drawable searchDrawable;
+        if (!isActive) {
+            searchDrawable = DrawableUtil.tintDrawable(getContext(), searchDrawableId, R.color.placeholder_grey);
+        } else {
+            if (isPrivateMode()) {
+                searchDrawable = DrawableUtil.tintDrawable(getContext(), searchDrawableId, R.color.tabs_tray_icon_grey);
+            } else {
+                searchDrawable = getResources().getDrawable(searchDrawableId);
+            }
+        }
+
+        mSearchIcon.setImageDrawable(searchDrawable);
     }
 
     @Override
@@ -218,10 +271,6 @@ public class ToolbarEditLayout extends ThemedLinearLayout {
     }
 
     private boolean voiceIsEnabled(Context context, String prompt) {
-        // Voice input is enabled for nightly only
-        if(!AppConstants.NIGHTLY_BUILD) {
-            return false;
-        }
         final boolean voiceIsSupported = InputOptionsUtils.supportsVoiceRecognizer(context, prompt);
         if (!voiceIsSupported) {
             return false;
@@ -231,32 +280,18 @@ public class ToolbarEditLayout extends ThemedLinearLayout {
     }
 
     private void launchVoiceRecognizer() {
+        Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.ACTIONBAR, "voice_input_launch");
         final Intent intent = InputOptionsUtils.createVoiceRecognizerIntent(getResources().getString(R.string.voicesearch_prompt));
 
         Activity activity = GeckoAppShell.getGeckoInterface().getActivity();
         ActivityHandlerHelper.startIntentForActivity(activity, intent, new ActivityResultHandler() {
             @Override
             public void onActivityResult(int resultCode, Intent data) {
-                switch (resultCode) {
-                    case RecognizerIntent.RESULT_CLIENT_ERROR:
-                    case RecognizerIntent.RESULT_NETWORK_ERROR:
-                    case RecognizerIntent.RESULT_SERVER_ERROR:
-                        // We have an temporarily unrecoverable error.
-                        handleVoiceSearchError(false);
-                        break;
-                    case RecognizerIntent.RESULT_AUDIO_ERROR:
-                    case RecognizerIntent.RESULT_NO_MATCH:
-                        // Maybe the user can say it differently?
-                        handleVoiceSearchError(true);
-                        break;
-                    case Activity.RESULT_CANCELED:
-                        break;
-                }
-
                 if (resultCode != Activity.RESULT_OK) {
                     return;
                 }
 
+                Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.ACTIONBAR, "voice_input_success");
                 // We have RESULT_OK, not RESULT_NO_MATCH so it should be safe to assume that
                 // we have at least one match. We only need one: this will be
                 // used for showing the user search engines with this search term in it.
@@ -272,38 +307,7 @@ public class ToolbarEditLayout extends ThemedLinearLayout {
         });
     }
 
-    private void handleVoiceSearchError(boolean offerRetry) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(getContext())
-                .setTitle(R.string.voicesearch_failed_title)
-                .setIcon(R.drawable.icon).setNeutralButton(android.R.string.cancel, new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int which) {
-                        dialog.dismiss();
-                    }
-                });
-
-        if (offerRetry) {
-            builder.setMessage(R.string.voicesearch_failed_message_recoverable)
-                    .setNegativeButton(R.string.voicesearch_failed_retry, new DialogInterface.OnClickListener() {
-                        @Override
-                        public void onClick(DialogInterface dialog, int which) {
-                            launchVoiceRecognizer();
-                        }
-                    });
-        } else {
-            builder.setMessage(R.string.voicesearch_failed_message);
-        }
-
-        AlertDialog dialog = builder.create();
-
-        dialog.show();
-    }
-
     private boolean qrCodeIsEnabled(Context context) {
-        // QR code is enabled for nightly only
-        if(!AppConstants.NIGHTLY_BUILD) {
-            return false;
-        }
         final boolean qrCodeIsSupported = InputOptionsUtils.supportsQrCodeReader(context);
         if (!qrCodeIsSupported) {
             return false;
@@ -313,6 +317,7 @@ public class ToolbarEditLayout extends ThemedLinearLayout {
     }
 
     private void launchQRCodeReader() {
+        Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.ACTIONBAR, "qrcode_input_launch");
         final Intent intent = InputOptionsUtils.createQRCodeReaderIntent();
 
         Activity activity = GeckoAppShell.getGeckoInterface().getActivity();
@@ -322,6 +327,7 @@ public class ToolbarEditLayout extends ThemedLinearLayout {
                 if (resultCode == Activity.RESULT_OK) {
                     String text = intent.getStringExtra("SCAN_RESULT");
                     if (!StringUtils.isSearchQuery(text, false)) {
+                        Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.ACTIONBAR, "qrcode_input_success");
                         mEditText.setText(text);
                         mEditText.selectAll();
 

@@ -7,12 +7,12 @@
 #include <CoreFoundation/CFString.h>
 
 #include "AppleCMLinker.h"
+#include "AppleDecoderModule.h"
 #include "AppleUtils.h"
 #include "AppleVTDecoder.h"
 #include "AppleVTLinker.h"
 #include "mp4_demuxer/H264.h"
 #include "MediaData.h"
-#include "MacIOSurfaceImage.h"
 #include "mozilla/ArrayUtils.h"
 #include "nsAutoPtr.h"
 #include "nsThreadUtils.h"
@@ -20,8 +20,8 @@
 #include "VideoUtils.h"
 #include "gfxPlatform.h"
 
-PRLogModuleInfo* GetAppleMediaLog();
-#define LOG(...) MOZ_LOG(GetAppleMediaLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
+extern PRLogModuleInfo* GetPDMLog();
+#define LOG(...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 //#define LOG_MEDIA_SHA1
 
 #ifdef LOG_MEDIA_SHA1
@@ -31,7 +31,7 @@ PRLogModuleInfo* GetAppleMediaLog();
 namespace mozilla {
 
 AppleVTDecoder::AppleVTDecoder(const VideoInfo& aConfig,
-                               FlushableMediaTaskQueue* aVideoTaskQueue,
+                               FlushableTaskQueue* aVideoTaskQueue,
                                MediaDataDecoderCallback* aCallback,
                                layers::ImageContainer* aImageContainer)
   : AppleVDADecoder(aConfig, aVideoTaskQueue, aCallback, aImageContainer)
@@ -52,15 +52,20 @@ AppleVTDecoder::~AppleVTDecoder()
   MOZ_COUNT_DTOR(AppleVTDecoder);
 }
 
-nsresult
+RefPtr<MediaDataDecoder::InitPromise>
 AppleVTDecoder::Init()
 {
   nsresult rv = InitializeSession();
-  return rv;
+
+  if (NS_SUCCEEDED(rv)) {
+    return InitPromise::CreateAndResolve(TrackType::kVideoTrack, __func__);
+  }
+
+  return InitPromise::CreateAndReject(DecoderFailureReason::INIT_ERROR, __func__);
 }
 
-nsresult
-AppleVTDecoder::Shutdown()
+void
+AppleVTDecoder::ProcessShutdown()
 {
   if (mSession) {
     LOG("%s: cleaning up session %p", __func__, mSession);
@@ -73,18 +78,19 @@ AppleVTDecoder::Shutdown()
     CFRelease(mFormat);
     mFormat = nullptr;
   }
-  return NS_OK;
 }
 
 nsresult
 AppleVTDecoder::Input(MediaRawData* aSample)
 {
+  MOZ_ASSERT(mCallback->OnReaderTaskQueue());
+
   LOG("mp4 input sample %p pts %lld duration %lld us%s %d bytes",
       aSample,
       aSample->mTime,
       aSample->mDuration,
       aSample->mKeyframe ? " keyframe" : "",
-      aSample->mSize);
+      aSample->Size());
 
 #ifdef LOG_MEDIA_SHA1
   SHA1Sum hash;
@@ -98,33 +104,34 @@ AppleVTDecoder::Input(MediaRawData* aSample)
   LOG("    sha1 %s", digest.get());
 #endif // LOG_MEDIA_SHA1
 
+  mInputIncoming++;
+
   nsCOMPtr<nsIRunnable> runnable =
-      NS_NewRunnableMethodWithArg<nsRefPtr<MediaRawData>>(
-          this,
-          &AppleVTDecoder::SubmitFrame,
-          nsRefPtr<MediaRawData>(aSample));
+      NS_NewRunnableMethodWithArg<RefPtr<MediaRawData>>(
+          this, &AppleVTDecoder::SubmitFrame, aSample);
   mTaskQueue->Dispatch(runnable.forget());
   return NS_OK;
 }
 
-nsresult
-AppleVTDecoder::Flush()
+void
+AppleVTDecoder::ProcessFlush()
 {
-  mTaskQueue->Flush();
+  MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
   nsresult rv = WaitForAsynchronousFrames();
   if (NS_FAILED(rv)) {
     LOG("AppleVTDecoder::Flush failed waiting for platform decoder "
         "with error:%d.", rv);
   }
   ClearReorderedFrames();
-
-  return rv;
+  MonitorAutoLock mon(mMonitor);
+  mIsFlushing = false;
+  mon.NotifyAll();
 }
 
-nsresult
-AppleVTDecoder::Drain()
+void
+AppleVTDecoder::ProcessDrain()
 {
-  mTaskQueue->AwaitIdle();
+  MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
   nsresult rv = WaitForAsynchronousFrames();
   if (NS_FAILED(rv)) {
     LOG("AppleVTDecoder::Drain failed waiting for platform decoder "
@@ -132,7 +139,6 @@ AppleVTDecoder::Drain()
   }
   DrainReorderedFrames();
   mCallback->DrainComplete();
-  return NS_OK;
 }
 
 //
@@ -162,17 +168,14 @@ PlatformCallback(void* decompressionOutputRefCon,
   // Validate our arguments.
   if (status != noErr || !image) {
     NS_WARNING("VideoToolbox decoder returned no data");
-    return;
-  }
-  if (flags & kVTDecodeInfo_FrameDropped) {
+    image = nullptr;
+  } else if (flags & kVTDecodeInfo_FrameDropped) {
     NS_WARNING("  ...frame tagged as dropped...");
+  } else {
+    MOZ_ASSERT(CFGetTypeID(image) == CVPixelBufferGetTypeID(),
+      "VideoToolbox returned an unexpected image type");
   }
-  MOZ_ASSERT(CFGetTypeID(image) == CVPixelBufferGetTypeID(),
-    "VideoToolbox returned an unexpected image type");
-
-  // Forward the data back to an object method which can access
-  // the correct MP4Reader callback.
-  decoder->OutputFrame(image, frameRef);
+  decoder->OutputFrame(image, *frameRef);
 }
 
 nsresult
@@ -204,6 +207,8 @@ TimingInfoFromSample(MediaRawData* aSample)
 nsresult
 AppleVTDecoder::SubmitFrame(MediaRawData* aSample)
 {
+  MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
+  mInputIncoming--;
   // For some reason this gives me a double-free error with stagefright.
   AutoCFRelease<CMBlockBufferRef> block = nullptr;
   AutoCFRelease<CMSampleBufferRef> sample = nullptr;
@@ -215,12 +220,12 @@ AppleVTDecoder::SubmitFrame(MediaRawData* aSample)
   // But note that there may be a problem keeping the samples
   // alive over multiple frames.
   rv = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, // Struct allocator.
-                                          const_cast<uint8_t*>(aSample->mData),
-                                          aSample->mSize,
+                                          const_cast<uint8_t*>(aSample->Data()),
+                                          aSample->Size(),
                                           kCFAllocatorNull, // Block allocator.
                                           NULL, // Block source.
                                           0,    // Data offset.
-                                          aSample->mSize,
+                                          aSample->Size(),
                                           false,
                                           block.receive());
   if (rv != noErr) {
@@ -233,6 +238,8 @@ AppleVTDecoder::SubmitFrame(MediaRawData* aSample)
     NS_ERROR("Couldn't create CMSampleBuffer");
     return NS_ERROR_FAILURE;
   }
+
+  mQueuedSamples++;
 
   VTDecodeFrameFlags decodeFlags =
     kVTDecodeFrame_EnableAsynchronousDecompression;
@@ -249,7 +256,7 @@ AppleVTDecoder::SubmitFrame(MediaRawData* aSample)
   }
 
   // Ask for more data.
-  if (mTaskQueue->IsEmpty()) {
+  if (!mInputIncoming && mQueuedSamples <= mMaxRefFrames) {
     LOG("AppleVTDecoder task queue empty; requesting more data");
     mCallback->InputExhausted();
   }
@@ -350,23 +357,19 @@ AppleVTDecoder::CreateDecoderExtensions()
   const void* extensionKeys[] =
     { kCVImageBufferChromaLocationBottomFieldKey,
       kCVImageBufferChromaLocationTopFieldKey,
-      AppleCMLinker::skPropExtensionAtoms,
-      AppleCMLinker::skPropFullRangeVideo /* Not defined in 10.6 */ };
+      AppleCMLinker::skPropExtensionAtoms };
 
   const void* extensionValues[] =
     { kCVImageBufferChromaLocation_Left,
       kCVImageBufferChromaLocation_Left,
-      atoms,
-      kCFBooleanTrue };
+      atoms };
   static_assert(ArrayLength(extensionKeys) == ArrayLength(extensionValues),
                 "Non matching keys/values array size");
 
   return CFDictionaryCreate(kCFAllocatorDefault,
                             extensionKeys,
                             extensionValues,
-                            AppleCMLinker::skPropFullRangeVideo ?
-                              ArrayLength(extensionKeys) :
-                              ArrayLength(extensionKeys) - 1,
+                            ArrayLength(extensionKeys),
                             &kCFTypeDictionaryKeyCallBacks,
                             &kCFTypeDictionaryValueCallBacks);
 }
@@ -380,7 +383,7 @@ AppleVTDecoder::CreateDecoderSpecification()
 
   const void* specKeys[] = { AppleVTLinker::skPropEnableHWAccel };
   const void* specValues[1];
-  if (gfxPlatform::GetPlatform()->CanUseHardwareVideoDecoding()) {
+  if (AppleDecoderModule::sCanUseHardwareVideoDecoder) {
     specValues[0] = kCFBooleanTrue;
   } else {
     // This GPU is blacklisted for hardware decoding.

@@ -10,13 +10,23 @@
 #include "nsISupports.h"
 #include "nsWrapperCache.h"
 #include "nsCycleCollectionParticipant.h"
+#include "js/TypeDecls.h"
 #include "mozilla/AnimationUtils.h"
 #include "mozilla/Attributes.h"
+#include "nsHashKeys.h"
 #include "nsIGlobalObject.h"
-#include "js/TypeDecls.h"
+#include "nsTHashtable.h"
+
+// GetCurrentTime is defined in winbase.h as zero argument macro forwarding to
+// GetTickCount().
+#ifdef GetCurrentTime
+#undef GetCurrentTime
+#endif
 
 namespace mozilla {
 namespace dom {
+
+class Animation;
 
 class AnimationTimeline
   : public nsISupports
@@ -38,8 +48,11 @@ public:
 
   nsIGlobalObject* GetParentObject() const { return mWindow; }
 
+  typedef nsTArray<RefPtr<Animation>> AnimationSequence;
+
   // AnimationTimeline methods
   virtual Nullable<TimeDuration> GetCurrentTime() const = 0;
+  void GetAnimations(AnimationSequence& aAnimations);
 
   // Wrapper functions for AnimationTimeline DOM methods when called from
   // script.
@@ -47,8 +60,52 @@ public:
     return AnimationUtils::TimeDurationToDouble(GetCurrentTime());
   }
 
+  /**
+   * Returns true if the times returned by GetCurrentTime() are convertible
+   * to and from wallclock-based TimeStamp (e.g. from TimeStamp::Now()) values
+   * using ToTimelineTime() and ToTimeStamp().
+   *
+   * Typically this is true, but it will be false in the case when this
+   * timeline has no refresh driver or is tied to a refresh driver under test
+   * control.
+   */
+  virtual bool TracksWallclockTime() const = 0;
+
+  /**
+   * Converts a TimeStamp to the equivalent value in timeline time.
+   * Note that when TracksWallclockTime() is false, there is no correspondence
+   * between timeline time and wallclock time. In such a case, passing a
+   * timestamp from TimeStamp::Now() to this method will not return a
+   * meaningful result.
+   */
+  virtual Nullable<TimeDuration> ToTimelineTime(const TimeStamp&
+                                                  aTimeStamp) const = 0;
+
+  virtual TimeStamp ToTimeStamp(const TimeDuration& aTimelineTime) const = 0;
+
+  /**
+   * Inform this timeline that |aAnimation| which is or was observing the
+   * timeline, has been updated. This serves as both the means to associate
+   * AND disassociate animations with a timeline. The timeline itself will
+   * determine if it needs to begin, continue or stop tracking this animation.
+   */
+  virtual void NotifyAnimationUpdated(Animation& aAnimation);
+
 protected:
   nsCOMPtr<nsIGlobalObject> mWindow;
+
+  // Animations observing this timeline
+  //
+  // We store them in (a) a hashset for quick lookup, and (b) an array
+  // to maintain a fixed sampling order.
+  //
+  // The array keeps a strong reference to each animation in order
+  // to save some addref/release traffic and because we never dereference
+  // the pointers in the hashset.
+  typedef nsTHashtable<nsPtrHashKey<dom::Animation>> AnimationSet;
+  typedef nsTArray<RefPtr<dom::Animation>>         AnimationArray;
+  AnimationSet   mAnimations;
+  AnimationArray mAnimationOrder;
 };
 
 } // namespace dom

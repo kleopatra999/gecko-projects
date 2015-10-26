@@ -44,10 +44,10 @@ var std_String_substring = String_substring;
 var std_WeakMap = WeakMap;
 // StopIteration is a bare constructor without properties or methods.
 var std_StopIteration = StopIteration;
+var std_Map_iterator_next = MapIteratorNext;
 
 
 /********** List specification type **********/
-
 
 /* Spec: ECMAScript Language Specification, 5.1 edition, 8.8 */
 function List() {
@@ -191,4 +191,11 @@ function SpeciesConstructor(obj, defaultConstructor) {
 
     // Step 10.
     ThrowTypeError(JSMSG_NOT_CONSTRUCTOR, "@@species property of object's constructor");
+}
+
+/*************************************** Testing functions ***************************************/
+function outer() {
+    return function inner() {
+        return "foo";
+    }
 }

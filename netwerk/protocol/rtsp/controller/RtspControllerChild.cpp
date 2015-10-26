@@ -10,7 +10,6 @@
 #include "mozilla/net/NeckoChild.h"
 #include "nsITabChild.h"
 #include "nsILoadContext.h"
-#include "nsNetUtil.h"
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "nsStringStream.h"
@@ -136,7 +135,7 @@ RtspControllerChild::RecvOnMediaDataAvailable(
                        const uint32_t& offset,
                        InfallibleTArray<RtspMetadataParam>&& metaArray)
 {
-  nsRefPtr<RtspMetaData> meta = new RtspMetaData();
+  RefPtr<RtspMetaData> meta = new RtspMetaData();
   nsresult rv = meta->DeserializeRtspMetaData(metaArray);
   NS_ENSURE_SUCCESS(rv, true);
 
@@ -165,7 +164,7 @@ RtspControllerChild::RecvOnConnected(
                        InfallibleTArray<RtspMetadataParam>&& metaArray)
 {
   // Deserialize meta data.
-  nsRefPtr<RtspMetaData> meta = new RtspMetaData();
+  RefPtr<RtspMetaData> meta = new RtspMetaData();
   nsresult rv = meta->DeserializeRtspMetaData(metaArray);
   NS_ENSURE_SUCCESS(rv, true);
   meta->GetTotalTracks(&mTotalTracks);
@@ -305,7 +304,7 @@ public:
     return NS_OK;
   }
 private:
-  nsRefPtr<RtspControllerChild> mController;
+  RefPtr<RtspControllerChild> mController;
   IPCEvent mEvent;
   uint64_t mSeekTime;
 };

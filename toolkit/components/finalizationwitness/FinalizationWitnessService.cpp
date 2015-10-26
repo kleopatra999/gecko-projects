@@ -100,7 +100,7 @@ ExtractFinalizationEvent(JSObject *objSelf)
  */
 void Finalize(JSFreeOp *fop, JSObject *objSelf)
 {
-  nsRefPtr<FinalizationEvent> event = ExtractFinalizationEvent(objSelf);
+  RefPtr<FinalizationEvent> event = ExtractFinalizationEvent(objSelf);
   if (event == nullptr || gShuttingDown) {
     // NB: event will be null if Forget() has been called
     return;
@@ -108,7 +108,10 @@ void Finalize(JSFreeOp *fop, JSObject *objSelf)
 
   // Notify observers. Since we are executed during garbage-collection,
   // we need to dispatch the notification to the main thread.
-  (void)NS_DispatchToMainThread(event);
+  nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
+  if (mainThread) {
+    mainThread->Dispatch(event.forget(), NS_DISPATCH_NORMAL);
+  }
   // We may fail at dispatching to the main thread if we arrive too late
   // during shutdown. In that case, there is not much we can do.
 }
@@ -123,7 +126,6 @@ static const JSClass sWitnessClass = {
   nullptr /* enumerate */,
   nullptr /* resolve */,
   nullptr /* mayResolve */,
-  nullptr /* convert */,
   Finalize /* finalize */
 };
 
@@ -141,7 +143,7 @@ bool IsWitness(JS::Handle<JS::Value> v)
  *  Neutralize the witness. Once this method is called, the witness will
  *  never report any error.
  */
-bool ForgetImpl(JSContext* cx, JS::CallArgs args)
+bool ForgetImpl(JSContext* cx, const JS::CallArgs& args)
 {
   if (args.length() != 0) {
     JS_ReportError(cx, "forget() takes no arguments");
@@ -150,7 +152,7 @@ bool ForgetImpl(JSContext* cx, JS::CallArgs args)
   JS::Rooted<JS::Value> valSelf(cx, args.thisv());
   JS::Rooted<JSObject*> objSelf(cx, &valSelf.toObject());
 
-  nsRefPtr<FinalizationEvent> event = ExtractFinalizationEvent(objSelf);
+  RefPtr<FinalizationEvent> event = ExtractFinalizationEvent(objSelf);
   if (event == nullptr) {
     JS_ReportError(cx, "forget() called twice");
     return false;
@@ -171,7 +173,7 @@ static const JSFunctionSpec sWitnessClassFunctions[] = {
   JS_FS_END
 };
 
-}
+} // namespace
 
 NS_IMPL_ISUPPORTS(FinalizationWitnessService, nsIFinalizationWitnessService, nsIObserver)
 
@@ -201,7 +203,7 @@ FinalizationWitnessService::Make(const char* aTopic,
     return NS_ERROR_FAILURE;
   }
 
-  nsRefPtr<FinalizationEvent> event = new FinalizationEvent(aTopic, aValue);
+  RefPtr<FinalizationEvent> event = new FinalizationEvent(aTopic, aValue);
 
   // Transfer ownership of the addrefed |event| to |objResult|.
   JS_SetReservedSlot(objResult, WITNESS_SLOT_EVENT,

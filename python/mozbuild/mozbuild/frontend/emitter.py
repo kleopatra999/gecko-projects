@@ -24,6 +24,10 @@ import reftest
 import mozinfo
 
 from .data import (
+    AndroidAssetsDirs,
+    AndroidExtraPackages,
+    AndroidExtraResDirs,
+    AndroidResDirs,
     BrandingFiles,
     ConfigFileSubstitution,
     ContextWrapped,
@@ -41,6 +45,7 @@ from .data import (
     ExternalStaticLibrary,
     ExternalSharedLibrary,
     HeaderFileSubstitution,
+    HostDefines,
     HostLibrary,
     HostProgram,
     HostSimpleProgram,
@@ -58,7 +63,6 @@ from .data import (
     PreprocessedTestWebIDLFile,
     PreprocessedWebIDLFile,
     Program,
-    ReaderSummary,
     Resources,
     SharedLibrary,
     SimpleProgram,
@@ -75,15 +79,22 @@ from .data import (
 
 from .reader import SandboxValidationError
 
+from ..testing import (
+    TEST_MANIFESTS,
+    REFTEST_FLAVORS,
+    WEB_PATFORM_TESTS_FLAVORS,
+)
+
 from .context import (
     Context,
-    ObjDirPath,
     SourcePath,
     ObjDirPath,
     Path,
     SubContext,
     TemplateContext,
 )
+
+from mozbuild.base import ExecutionSummary
 
 
 class TreeMetadataEmitter(LoggingMixin):
@@ -126,22 +137,28 @@ class TreeMetadataEmitter(LoggingMixin):
         # Add security/nss manually, since it doesn't have a subconfigure.
         self._external_paths.add('security/nss')
 
+        self._emitter_time = 0.0
+        self._object_count = 0
+
+    def summary(self):
+        return ExecutionSummary(
+            'Processed into {object_count:d} build config descriptors in '
+            '{execution_time:.2f}s',
+            execution_time=self._emitter_time,
+            object_count=self._object_count)
+
     def emit(self, output):
         """Convert the BuildReader output into data structures.
 
         The return value from BuildReader.read_topsrcdir() (a generator) is
         typically fed into this function.
         """
-        file_count = 0
-        sandbox_execution_time = 0.0
-        emitter_time = 0.0
         contexts = {}
 
         def emit_objs(objs):
             for o in objs:
+                self._object_count += 1
                 yield o
-                if not o._ack:
-                    raise Exception('Unhandled object of type %s' % type(o))
 
         for out in output:
             # Nothing in sub-contexts is currently of interest to us. Filter
@@ -156,13 +173,9 @@ class TreeMetadataEmitter(LoggingMixin):
                 start = time.time()
                 # We need to expand the generator for the timings to work.
                 objs = list(self.emit_from_context(out))
-                emitter_time += time.time() - start
+                self._emitter_time += time.time() - start
 
                 for o in emit_objs(objs): yield o
-
-                # Update the stats.
-                file_count += len(out.all_paths)
-                sandbox_execution_time += out.execution_time
 
             else:
                 raise Exception('Unhandled output type: %s' % type(out))
@@ -172,11 +185,9 @@ class TreeMetadataEmitter(LoggingMixin):
         if self.config.substs.get('COMPILE_ENVIRONMENT', True):
             start = time.time()
             objs = list(self._emit_libs_derived(contexts))
-            emitter_time += time.time() - start
+            self._emitter_time += time.time() - start
 
             for o in emit_objs(objs): yield o
-
-        yield ReaderSummary(file_count, sandbox_execution_time, emitter_time)
 
     def _emit_libs_derived(self, contexts):
         # First do FINAL_LIBRARY linkage.
@@ -554,13 +565,14 @@ class TreeMetadataEmitter(LoggingMixin):
         # desired abstraction of the build definition away from makefiles.
         passthru = VariablePassthru(context)
         varlist = [
+            'ALLOW_COMPILER_WARNINGS',
+            'ANDROID_APK_NAME',
+            'ANDROID_APK_PACKAGE',
             'ANDROID_GENERATED_RESFILES',
-            'ANDROID_RES_DIRS',
             'DISABLE_STL_WRAPPING',
             'EXTRA_COMPONENTS',
             'EXTRA_DSO_LDOPTS',
             'EXTRA_PP_COMPONENTS',
-            'FAIL_ON_WARNINGS',
             'USE_STATIC_LIBS',
             'PYTHON_UNIT_TESTS',
             'RCFILE',
@@ -583,7 +595,7 @@ class TreeMetadataEmitter(LoggingMixin):
             context['OS_LIBS'].append('delayimp')
 
         for v in ['CFLAGS', 'CXXFLAGS', 'CMFLAGS', 'CMMFLAGS', 'ASFLAGS',
-                  'LDFLAGS']:
+                  'LDFLAGS', 'HOST_CFLAGS', 'HOST_CXXFLAGS']:
             if v in context and context[v]:
                 passthru.variables['MOZBUILD_' + v] = context[v]
 
@@ -617,6 +629,10 @@ class TreeMetadataEmitter(LoggingMixin):
         defines = context.get('DEFINES')
         if defines:
             yield Defines(context, defines)
+
+        host_defines = context.get('HOST_DEFINES')
+        if host_defines:
+            yield HostDefines(context, host_defines)
 
         resources = context.get('RESOURCE_FILES')
         if resources:
@@ -699,6 +715,24 @@ class TreeMetadataEmitter(LoggingMixin):
 
         for name, data in context.get('ANDROID_ECLIPSE_PROJECT_TARGETS', {}).items():
             yield ContextWrapped(context, data)
+
+        for (symbol, cls) in [
+                ('ANDROID_RES_DIRS', AndroidResDirs),
+                ('ANDROID_EXTRA_RES_DIRS', AndroidExtraResDirs),
+                ('ANDROID_ASSETS_DIRS', AndroidAssetsDirs)]:
+            paths = context.get(symbol)
+            if not paths:
+                continue
+            for p in paths:
+                if isinstance(p, SourcePath) and not os.path.isdir(p.full_path):
+                    raise SandboxValidationError('Directory listed in '
+                        '%s is not a directory: \'%s\'' %
+                            (symbol, p.full_path), context)
+            yield cls(context, paths)
+
+        android_extra_packages = context.get('ANDROID_EXTRA_PACKAGES')
+        if android_extra_packages:
+            yield AndroidExtraPackages(context, android_extra_packages)
 
         if passthru.variables:
             yield passthru
@@ -952,51 +986,21 @@ class TreeMetadataEmitter(LoggingMixin):
                     else 'USE_LIBS'))
 
     def _process_test_manifests(self, context):
-        # While there are multiple test manifests, the behavior is very similar
-        # across them. We enforce this by having common handling of all
-        # manifests and outputting a single class type with the differences
-        # described inside the instance.
-        #
-        # Keys are variable prefixes and values are tuples describing how these
-        # manifests should be handled:
-        #
-        #    (flavor, install_prefix, package_tests)
-        #
-        # flavor identifies the flavor of this test.
-        # install_prefix is the path prefix of where to install the files in
-        #     the tests directory.
-        # package_tests indicates whether to package test files into the test
-        #     package; suites that compile the test files should not install
-        #     them into the test package.
-        #
-        test_manifests = dict(
-            A11Y=('a11y', 'testing/mochitest', 'a11y', True),
-            BROWSER_CHROME=('browser-chrome', 'testing/mochitest', 'browser', True),
-            ANDROID_INSTRUMENTATION=('instrumentation', 'instrumentation', '.', False),
-            JETPACK_PACKAGE=('jetpack-package', 'testing/mochitest', 'jetpack-package', True),
-            JETPACK_ADDON=('jetpack-addon', 'testing/mochitest', 'jetpack-addon', False),
-            METRO_CHROME=('metro-chrome', 'testing/mochitest', 'metro', True),
-            MOCHITEST=('mochitest', 'testing/mochitest', 'tests', True),
-            MOCHITEST_CHROME=('chrome', 'testing/mochitest', 'chrome', True),
-            MOCHITEST_WEBAPPRT_CONTENT=('webapprt-content', 'testing/mochitest', 'webapprtContent', True),
-            MOCHITEST_WEBAPPRT_CHROME=('webapprt-chrome', 'testing/mochitest', 'webapprtChrome', True),
-            WEBRTC_SIGNALLING_TEST=('steeplechase', 'steeplechase', '.', True),
-            XPCSHELL_TESTS=('xpcshell', 'xpcshell', '.', True),
-        )
 
-        for prefix, info in test_manifests.items():
+        for prefix, info in TEST_MANIFESTS.items():
             for path in context.get('%s_MANIFESTS' % prefix, []):
                 for obj in self._process_test_manifest(context, info, path):
                     yield obj
 
-        for flavor in ('crashtest', 'reftest'):
+        for flavor in REFTEST_FLAVORS:
             for path in context.get('%s_MANIFESTS' % flavor.upper(), []):
                 for obj in self._process_reftest_manifest(context, flavor, path):
                     yield obj
 
-        for path in context.get("WEB_PLATFORM_TESTS_MANIFESTS", []):
-            for obj in self._process_web_platform_tests_manifest(context, path):
-                yield obj
+        for flavor in WEB_PATFORM_TESTS_FLAVORS:
+            for path in context.get("%s_MANIFESTS" % flavor.upper().replace('-', '_'), []):
+                for obj in self._process_web_platform_tests_manifest(context, path):
+                    yield obj
 
     def _process_test_manifest(self, context, info, manifest_path):
         flavor, install_root, install_subdir, package_tests = info
@@ -1262,6 +1266,7 @@ class TreeMetadataEmitter(LoggingMixin):
 
         # Some paths have a subconfigure, yet also have a moz.build. Those
         # shouldn't end up in self._external_paths.
-        self._external_paths -= { o.relobjdir }
+        if o.objdir:
+            self._external_paths -= { o.relobjdir }
 
         yield o

@@ -11,6 +11,7 @@
 #define nsIScrollFrame_h___
 
 #include "nsCoord.h"
+#include "DisplayItemClip.h"
 #include "ScrollbarStyles.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/gfx/Point.h"
@@ -32,15 +33,14 @@ class nsDisplayListBuilder;
 
 namespace mozilla {
 struct ContainerLayerParameters;
-class DisplayItemClip;
 namespace layers {
 class Layer;
-}
+} // namespace layers
 
 struct FrameMetricsAndClip
 {
   layers::FrameMetrics metrics;
-  const DisplayItemClip* clip;
+  mozilla::Maybe<DisplayItemClip> clip;
 };
 
 } // namespace mozilla
@@ -107,8 +107,10 @@ public:
   /**
    * Return the width for non-disappearing scrollbars.
    */
-  virtual nscoord GetNondisappearingScrollbarWidth(nsPresContext* aPresContext,
-                                                   nsRenderingContext* aRC) = 0;
+  virtual nscoord
+  GetNondisappearingScrollbarWidth(nsPresContext* aPresContext,
+                                   nsRenderingContext* aRC,
+                                   mozilla::WritingMode aWM) = 0;
   /**
    * GetScrolledRect is designed to encapsulate deciding which
    * directions of overflow should be reachable by scrolling and which
@@ -443,11 +445,29 @@ public:
   virtual bool IsTransformingByAPZ() const = 0;
 
   /**
+   * Notify this scroll frame that it can be zoomed by APZ.
+   */
+  virtual void SetZoomableByAPZ(bool aZoomable) = 0;
+
+  /**
    * Whether or not this frame uses containerful scrolling.
    */
   virtual bool UsesContainerScrolling() const = 0;
 
-  virtual const mozilla::DisplayItemClip* ComputeScrollClip(bool aIsForCaret) const = 0;
+  virtual mozilla::Maybe<mozilla::DisplayItemClip> ComputeScrollClip(bool aIsForCaret) const = 0;
+
+  /**
+   * Determine if we should build a scrollable layer for this scroll frame and
+   * return the result. It will also record this result on the scroll frame.
+   * Pass the dirty rect in aDirtyRect. On return it will be set to the
+   * displayport if there is one (ie the dirty rect that should be used).
+   * This function may create a display port where one did not exist before if
+   * aAllowCreateDisplayPort is true. It is only allowed to be false if there
+   * has been a call with it set to true before on the same paint.
+   */
+  virtual bool DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
+                                     nsRect* aDirtyRect,
+                                     bool aAllowCreateDisplayPort) = 0;
 };
 
 #endif

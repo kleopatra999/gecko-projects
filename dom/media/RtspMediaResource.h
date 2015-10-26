@@ -133,15 +133,6 @@ public:
   // dummy
   virtual void     SetPlaybackRate(uint32_t aBytesPerSecond) override {}
   // dummy
-  virtual nsresult Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes)
-  override {
-    return NS_OK;
-  }
-  // dummy
-  virtual nsresult Seek(int32_t aWhence, int64_t aOffset) override {
-    return NS_OK;
-  }
-  // dummy
   virtual int64_t  Tell() override { return 0; }
 
   // Any thread
@@ -222,7 +213,7 @@ public:
     void Revoke();
 
   private:
-    nsRefPtr<RtspMediaResource> mResource;
+    RefPtr<RtspMediaResource> mResource;
   };
   friend class Listener;
 
@@ -235,7 +226,7 @@ protected:
   nsresult OnConnected(uint8_t aIndex, nsIStreamingProtocolMetaData* aMeta);
   nsresult OnDisconnected(uint8_t aIndex, nsresult aReason);
 
-  nsRefPtr<Listener> mListener;
+  RefPtr<Listener> mListener;
 
 private:
   // Notify mDecoder the rtsp stream is suspend. Main thread only.

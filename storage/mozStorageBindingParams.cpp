@@ -98,7 +98,7 @@ sqlite3_T_blob(BindingColumnData aData,
 
 #include "variantToSQLiteT_impl.h"
 
-} // anonymous namespace
+} // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 //// BindingParams
@@ -110,7 +110,7 @@ BindingParams::BindingParams(mozIStorageBindingParamsArray *aOwningArray,
 , mOwningStatement(aOwningStatement)
 {
   (void)mOwningStatement->GetParameterCount(&mParamCount);
-  (void)mParameters.SetCapacity(mParamCount);
+  mParameters.SetCapacity(mParamCount);
 }
 
 BindingParams::BindingParams(mozIStorageBindingParamsArray *aOwningArray)
@@ -274,7 +274,7 @@ AsyncBindingParams::BindByName(const nsACString &aName,
 {
   NS_ENSURE_FALSE(mLocked, NS_ERROR_UNEXPECTED);
 
-  nsRefPtr<Variant_base> variant = convertVariantToStorageVariant(aValue);
+  RefPtr<Variant_base> variant = convertVariantToStorageVariant(aValue);
   if (!variant)
     return NS_ERROR_UNEXPECTED;
 
@@ -396,7 +396,7 @@ BindingParams::BindByIndex(uint32_t aIndex,
   ENSURE_INDEX_VALUE(aIndex, mParamCount);
 
   // Store the variant for later use.
-  nsRefPtr<Variant_base> variant = convertVariantToStorageVariant(aValue);
+  RefPtr<Variant_base> variant = convertVariantToStorageVariant(aValue);
   if (!variant)
     return NS_ERROR_UNEXPECTED;
   if (mParameters.Length() <= aIndex) {
@@ -418,7 +418,7 @@ AsyncBindingParams::BindByIndex(uint32_t aIndex,
   // In the asynchronous case we do not know how many parameters there are to
   // bind to, so we cannot check the validity of aIndex.
 
-  nsRefPtr<Variant_base> variant = convertVariantToStorageVariant(aValue);
+  RefPtr<Variant_base> variant = convertVariantToStorageVariant(aValue);
   if (!variant)
     return NS_ERROR_UNEXPECTED;
   if (mParameters.Length() <= aIndex) {

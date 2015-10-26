@@ -31,7 +31,6 @@
 #include "gfxXlibSurface.h"
 #endif
 #include "gfxContext.h"
-#include "gfxColor.h"
 #include "gfxUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "Layers.h"
@@ -51,6 +50,7 @@
 #include "nsHashKeys.h"
 #include "nsIWidget.h"
 #include "nsPluginNativeWindow.h"
+#include "PluginQuirks.h"
 extern const wchar_t* kFlashFullscreenClass;
 #elif defined(MOZ_WIDGET_GTK)
 #include <gdk/gdk.h>
@@ -117,6 +117,8 @@ PluginInstanceParent::PluginInstanceParent(PluginModuleParent* parent,
     , mDrawingModel(kDefaultDrawingModel)
 #if defined(OS_WIN)
     , mPluginHWND(nullptr)
+    , mChildPluginHWND(nullptr)
+    , mChildPluginsParentHWND(nullptr)
     , mPluginWndProc(nullptr)
     , mNestedEventState(false)
 #endif // defined(XP_WIN)
@@ -159,31 +161,12 @@ PluginInstanceParent::InitMetadata(const nsACString& aMimeType,
         return false;
     }
     // Ensure that the src attribute is absolute
-    nsRefPtr<nsPluginInstanceOwner> owner = GetOwner();
+    RefPtr<nsPluginInstanceOwner> owner = GetOwner();
     if (!owner) {
         return false;
     }
     nsCOMPtr<nsIURI> baseUri(owner->GetBaseURI());
-    nsresult rv = NS_MakeAbsoluteURI(mSrcAttribute, aSrcAttribute, baseUri);
-    if (NS_FAILED(rv)) {
-        return false;
-    }
-    // Check the whitelist
-    nsAutoCString baseUrlSpec;
-    rv = baseUri->GetSpec(baseUrlSpec);
-    if (NS_FAILED(rv)) {
-        return false;
-    }
-    auto whitelist = Preferences::GetCString(kShumwayWhitelistPref);
-    // Empty whitelist is interpreted by CheckWhitelist as "allow everything,"
-    // which is not valid for our use case and should be treated as a failure.
-    if (whitelist.IsEmpty()) {
-        return false;
-    }
-    rv = nsPluginPlayPreviewInfo::CheckWhitelist(baseUrlSpec, mSrcAttribute,
-                                                 whitelist,
-                                                 &mIsWhitelistedForShumway);
-    return NS_SUCCEEDED(rv);
+    return NS_SUCCEEDED(NS_MakeAbsoluteURI(mSrcAttribute, aSrcAttribute, baseUri));
 }
 
 void
@@ -197,13 +180,10 @@ PluginInstanceParent::ActorDestroy(ActorDestroyReason why)
         UnsubclassPluginWindow();
     }
 #endif
-    // After this method, the data backing the remote surface may no
-    // longer be valid. The X surface may be destroyed, or the shared
-    // memory backing this surface may no longer be valid.
     if (mFrontSurface) {
         mFrontSurface = nullptr;
         if (mImageContainer) {
-            mImageContainer->SetCurrentImage(nullptr);
+            mImageContainer->ClearAllImages();
         }
 #ifdef MOZ_X11
         FinishX(DefaultXDisplay());
@@ -393,17 +373,6 @@ PluginInstanceParent::AnswerNPN_SetValue_NPPVpluginUsesDOMForCursor(
     return true;
 }
 
-class NotificationSink : public CompositionNotifySink
-{
-public:
-  explicit NotificationSink(PluginInstanceParent* aInstance) : mInstance(aInstance)
-  { }
-
-  virtual void DidComposite() { mInstance->DidComposite(); }
-private:
-  PluginInstanceParent *mInstance;
-};
-
 bool
 PluginInstanceParent::AnswerNPN_SetValue_NPPVpluginDrawingModel(
     const int& drawingModel, NPError* result)
@@ -452,6 +421,15 @@ PluginInstanceParent::AnswerNPN_SetValue_NPPVpluginEventModel(
     *result = NPERR_GENERIC_ERROR;
     return true;
 #endif
+}
+
+bool
+PluginInstanceParent::AnswerNPN_SetValue_NPPVpluginIsPlayingAudio(
+    const bool& isAudioPlaying, NPError* result)
+{
+    *result = mNPNIface->setvalue(mNPP, NPPVpluginIsPlayingAudio,
+                                  (void*)(intptr_t)isAudioPlaying);
+    return true;
 }
 
 bool
@@ -557,7 +535,7 @@ PluginInstanceParent::RecvShow(const NPRect& updatedRect,
          updatedRect.bottom - updatedRect.top));
 
     // XXXjwatt rewrite to use Moz2D
-    nsRefPtr<gfxASurface> surface;
+    RefPtr<gfxASurface> surface;
     if (newSurface.type() == SurfaceDescriptor::TShmem) {
         if (!newSurface.get_Shmem().IsReadable()) {
             NS_WARNING("back surface not readable");
@@ -639,7 +617,7 @@ PluginInstanceParent::RecvShow(const NPRect& updatedRect,
         surface->MarkDirty(ur);
 
         ImageContainer *container = GetImageContainer();
-        nsRefPtr<Image> image = container->CreateImage(ImageFormat::CAIRO_SURFACE);
+        RefPtr<Image> image = container->CreateImage(ImageFormat::CAIRO_SURFACE);
         NS_ASSERTION(image->GetFormat() == ImageFormat::CAIRO_SURFACE, "Wrong format?");
         CairoImage* cairoImage = static_cast<CairoImage*>(image.get());
         CairoImage::Data cairoData;
@@ -647,10 +625,13 @@ PluginInstanceParent::RecvShow(const NPRect& updatedRect,
         cairoData.mSourceSurface = gfxPlatform::GetPlatform()->GetSourceSurfaceForSurface(nullptr, surface);
         cairoImage->SetData(cairoData);
 
-        container->SetCurrentImage(cairoImage);
+        nsAutoTArray<ImageContainer::NonOwningImage,1> imageList;
+        imageList.AppendElement(
+            ImageContainer::NonOwningImage(image));
+        container->SetCurrentImages(imageList);
     }
     else if (mImageContainer) {
-        mImageContainer->SetCurrentImage(nullptr);
+        mImageContainer->ClearAllImages();
     }
 
     mFrontSurface = surface;
@@ -679,6 +660,11 @@ PluginInstanceParent::AsyncSetWindow(NPWindow* aWindow)
     mNPNIface->getvalue(mNPP, NPNVcontentsScaleFactor, &scaleFactor);
     window.contentsScaleFactor = scaleFactor;
 #endif
+
+#if defined(OS_WIN)
+    MaybeCreateChildPopupSurrogate();
+#endif
+
     if (!SendAsyncSetWindow(gfxPlatform::GetPlatform()->ScreenReferenceSurface()->GetType(),
                             window))
         return NS_ERROR_FAILURE;
@@ -712,7 +698,7 @@ PluginInstanceParent::GetImageContainer(ImageContainer** aContainer)
 
 #ifdef XP_MACOSX
     if (ioSurface) {
-        nsRefPtr<Image> image = container->CreateImage(ImageFormat::MAC_IOSURFACE);
+        RefPtr<Image> image = container->CreateImage(ImageFormat::MAC_IOSURFACE);
         if (!image) {
             return NS_ERROR_FAILURE;
         }
@@ -739,7 +725,7 @@ nsresult
 PluginInstanceParent::GetImageSize(nsIntSize* aSize)
 {
     if (mFrontSurface) {
-        gfxIntSize size = mFrontSurface->GetSize();
+        mozilla::gfx::IntSize size = mFrontSurface->GetSize();
         *aSize = nsIntSize(size.width, size.height);
         return NS_OK;
     }
@@ -808,7 +794,7 @@ PluginInstanceParent::BeginUpdateBackground(const nsIntRect& aRect,
         }
     }
 
-    gfxIntSize sz = mBackground->GetSize();
+    mozilla::gfx::IntSize sz = mBackground->GetSize();
 #ifdef DEBUG
     MOZ_ASSERT(nsIntRect(0, 0, sz.width, sz.height).Contains(aRect),
                "Update outside of background area");
@@ -816,7 +802,7 @@ PluginInstanceParent::BeginUpdateBackground(const nsIntRect& aRect,
 
     RefPtr<gfx::DrawTarget> dt = gfxPlatform::GetPlatform()->
       CreateDrawTargetForSurface(mBackground, gfx::IntSize(sz.width, sz.height));
-    nsRefPtr<gfxContext> ctx = new gfxContext(dt);
+    RefPtr<gfxContext> ctx = new gfxContext(dt);
     ctx.forget(aCtx);
 
     return NS_OK;
@@ -865,7 +851,7 @@ PluginInstanceParent::CreateBackground(const nsIntSize& aSize)
     Screen* screen = DefaultScreenOfDisplay(DefaultXDisplay());
     Visual* visual = DefaultVisualOfScreen(screen);
     mBackground = gfxXlibSurface::Create(screen, visual,
-                                         gfxIntSize(aSize.width, aSize.height));
+                                         mozilla::gfx::IntSize(aSize.width, aSize.height));
     return !!mBackground;
 
 #elif defined(XP_WIN)
@@ -874,7 +860,7 @@ PluginInstanceParent::CreateBackground(const nsIntSize& aSize)
     mBackground =
         gfxSharedImageSurface::CreateUnsafe(
             this,
-            gfxIntSize(aSize.width, aSize.height),
+            mozilla::gfx::IntSize(aSize.width, aSize.height),
             gfxImageFormat::RGB24);
     return !!mBackground;
 #else
@@ -967,9 +953,16 @@ PluginInstanceParent::NPP_SetWindow(const NPWindow* aWindow)
         if (!SharedSurfaceSetWindow(aWindow, window)) {
           return NPERR_OUT_OF_MEMORY_ERROR;
         }
-    }
-    else {
+
+        MaybeCreateChildPopupSurrogate();
+    } else {
         SubclassPluginWindow(reinterpret_cast<HWND>(aWindow->window));
+
+        // Skip SetWindow call for hidden QuickTime plugins.
+        if ((mParent->GetQuirks() & QUIRK_QUICKTIME_AVOID_SETWINDOW) &&
+            aWindow->width == 0 && aWindow->height == 0) {
+            return NPERR_NO_ERROR;
+        }
 
         window.window = reinterpret_cast<uint64_t>(aWindow->window);
         window.x = aWindow->x;
@@ -977,6 +970,12 @@ PluginInstanceParent::NPP_SetWindow(const NPWindow* aWindow)
         window.width = aWindow->width;
         window.height = aWindow->height;
         window.type = aWindow->type;
+
+        // On Windows we need to create and set the parent before we set the
+        // window on the plugin, or keyboard interaction will not work.
+        if (!MaybeCreateAndParentChildPluginWindow()) {
+            return NPERR_GENERIC_ERROR;
+        }
     }
 #else
     window.window = reinterpret_cast<uint64_t>(aWindow->window);
@@ -1027,30 +1026,9 @@ PluginInstanceParent::NPP_SetWindow(const NPWindow* aWindow)
     window.colormap = ws_info->colormap;
 #endif
 
-    NPRemoteWindow childWindow;
-    if (!CallNPP_SetWindow(window, &childWindow)) {
+    if (!CallNPP_SetWindow(window)) {
         return NPERR_GENERIC_ERROR;
     }
-
-#if defined(XP_WIN)
-    // If a child window is returned it means that we need to re-parent it.
-    if (childWindow.window) {
-        nsCOMPtr<nsIWidget> widget;
-        static_cast<const nsPluginNativeWindow*>(aWindow)->
-            GetPluginWidget(getter_AddRefs(widget));
-        if (widget) {
-            widget->SetNativeData(NS_NATIVE_CHILD_WINDOW,
-                                  static_cast<uintptr_t>(childWindow.window));
-        }
-
-        // Now it has got the correct parent, make sure it is visible.
-        // In subsequent calls to SetWindow these calls happen in the Child.
-        HWND childHWND = reinterpret_cast<HWND>(childWindow.window);
-        ShowWindow(childHWND, SW_SHOWNA);
-        SetWindowPos(childHWND, nullptr, 0, 0, window.width, window.height,
-                     SWP_NOZORDER | SWP_NOREPOSITION);
-    }
-#endif
 
     return NPERR_NO_ERROR;
 }
@@ -1153,11 +1131,18 @@ PluginInstanceParent::NPP_GetValue(NPPVariable aVariable,
 NPError
 PluginInstanceParent::NPP_SetValue(NPNVariable variable, void* value)
 {
+    NPError result;
     switch (variable) {
     case NPNVprivateModeBool:
-        NPError result;
         if (!CallNPP_SetValue_NPNVprivateModeBool(*static_cast<NPBool*>(value),
                                                   &result))
+            return NPERR_GENERIC_ERROR;
+
+        return result;
+
+    case NPNVmuteAudioBool:
+        if (!CallNPP_SetValue_NPNVmuteAudioBool(*static_cast<NPBool*>(value),
+                                                &result))
             return NPERR_GENERIC_ERROR;
 
         return result;
@@ -1504,7 +1489,7 @@ ActorSearch(NPObject* aKey,
     return PL_DHASH_NEXT;
 }
 
-} // anonymous namespace
+} // namespace
 #endif // DEBUG
 
 bool
@@ -1614,7 +1599,7 @@ PluginInstanceParent::GetActorForNPObject(NPObject* aObject)
 
 PPluginSurfaceParent*
 PluginInstanceParent::AllocPPluginSurfaceParent(const WindowsSharedMemoryHandle& handle,
-                                                const gfxIntSize& size,
+                                                const mozilla::gfx::IntSize& size,
                                                 const bool& transparent)
 {
 #ifdef XP_WIN
@@ -1791,6 +1776,22 @@ PluginInstanceParent::RecvAsyncNPP_NewResult(const NPError& aResult)
     mSurrogate->OnInstanceCreated(this);
 
     return true;
+}
+
+bool
+PluginInstanceParent::RecvSetNetscapeWindowAsParent(const NativeWindowHandle& childWindow)
+{
+#if defined(XP_WIN)
+    nsPluginInstanceOwner* owner = GetOwner();
+    if (!owner || NS_FAILED(owner->SetNetscapeWindowAsParent(childWindow))) {
+        NS_WARNING("Failed to set Netscape window as parent.");
+    }
+
+    return true;
+#else
+    NS_NOTREACHED("PluginInstanceParent::RecvSetNetscapeWindowAsParent not implemented!");
+    return false;
+#endif
 }
 
 #if defined(OS_WIN)
@@ -2035,6 +2036,65 @@ PluginInstanceParent::SharedSurfaceAfterPaint(NPEvent* npevent)
              dirtyRect.x,
              dirtyRect.y,
              SRCCOPY);
+}
+
+bool
+PluginInstanceParent::MaybeCreateAndParentChildPluginWindow()
+{
+    // On Windows we need to create and set the parent before we set the
+    // window on the plugin, or keyboard interaction will not work.
+    if (!mChildPluginHWND) {
+        if (!CallCreateChildPluginWindow(&mChildPluginHWND) ||
+            !mChildPluginHWND) {
+            return false;
+        }
+    }
+
+    // It's not clear if the parent window would ever change, but when this
+    // was done in the NPAPI child it used to allow for this.
+    if (mPluginHWND == mChildPluginsParentHWND) {
+        return true;
+    }
+
+    nsPluginInstanceOwner* owner = GetOwner();
+    if (!owner) {
+        // We can't reparent without an owner, the plugin is probably shutting
+        // down, just return true to allow any calls to continue.
+        return true;
+    }
+
+    // Note that this call will probably cause a sync native message to the
+    // process that owns the child window.
+    owner->SetWidgetWindowAsParent(mChildPluginHWND);
+    mChildPluginsParentHWND = mPluginHWND;
+    return true;
+}
+
+void
+PluginInstanceParent::MaybeCreateChildPopupSurrogate()
+{
+    // Already created or not required for this plugin.
+    if (mChildPluginHWND || mWindowType != NPWindowTypeDrawable ||
+        !(mParent->GetQuirks() & QUIRK_WINLESS_TRACKPOPUP_HOOK)) {
+        return;
+    }
+
+    // We need to pass the netscape window down to be cached as part of the call
+    // to create the surrogate, because the reparenting of the surrogate in the
+    // main process can cause sync Windows messages to the plugin process, which
+    // then cause sync messages from the plugin child for the netscape window
+    // which causes a deadlock.
+    NativeWindowHandle netscapeWindow;
+    NPError result = mNPNIface->getvalue(mNPP, NPNVnetscapeWindow,
+                                         &netscapeWindow);
+    if (NPERR_NO_ERROR != result) {
+        NS_WARNING("Can't get netscape window to pass to plugin child.");
+        return;
+    }
+
+    if (!SendCreateChildPopupSurrogate(netscapeWindow)) {
+        NS_WARNING("Failed to create popup surrogate in child.");
+    }
 }
 
 #endif // defined(OS_WIN)

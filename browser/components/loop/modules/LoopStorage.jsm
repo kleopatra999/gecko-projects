@@ -3,7 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 // Make it possible to load LoopStorage.jsm in xpcshell tests
 try {
@@ -19,7 +19,7 @@ try {
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 XPCOMUtils.defineLazyGetter(this, "eventEmitter", function() {
-  const {EventEmitter} = Cu.import("resource://gre/modules/devtools/event-emitter.js", {});
+  const { EventEmitter } = Cu.import("resource://devtools/shared/event-emitter.js", {});
   return new EventEmitter();
 });
 
@@ -27,12 +27,12 @@ this.EXPORTED_SYMBOLS = ["LoopStorage"];
 
 const kDatabasePrefix = "loop-";
 const kDefaultDatabaseName = "default";
-let gDatabaseName = kDatabasePrefix + kDefaultDatabaseName;
+var gDatabaseName = kDatabasePrefix + kDefaultDatabaseName;
 const kDatabaseVersion = 1;
 
-let gWaitForOpenCallbacks = new Set();
-let gDatabase = null;
-let gClosed = false;
+var gWaitForOpenCallbacks = new Set();
+var gDatabase = null;
+var gClosed = false;
 
 /**
  * Properly shut the database instance down. This is done on application shutdown.
@@ -162,7 +162,7 @@ const getTransaction = function(store, callback, mode) {
     let trans;
     try {
       trans = db.transaction(store, mode);
-    } catch(ex) {
+    } catch (ex) {
       callback(ex);
       return;
     }

@@ -71,7 +71,7 @@ public:
 
   virtual void EndFrameForExternalComposition(const gfx::Matrix& aTransform) override {}
 
-  virtual void PrepareViewport(const gfx::IntSize& aSize) override;
+  virtual void PrepareViewport(const gfx::IntSize& aSize);
 
   virtual bool SupportsPartialTextureUpdate() override{ return true; }
 
@@ -158,10 +158,10 @@ private:
   }
 
   /* Device manager instance for this compositor */
-  nsRefPtr<DeviceManagerD3D9> mDeviceManager;
+  RefPtr<DeviceManagerD3D9> mDeviceManager;
 
   /* Swap chain associated with this compositor */
-  nsRefPtr<SwapChainD3D9> mSwapChain;
+  RefPtr<SwapChainD3D9> mSwapChain;
 
   /* Widget associated with this layer manager */
   nsIWidget *mWidget;

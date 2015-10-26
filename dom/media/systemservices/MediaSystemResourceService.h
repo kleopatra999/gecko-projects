@@ -17,7 +17,7 @@ namespace mozilla {
 
 namespace media {
 class MediaSystemResourceManagerParent;
-}
+} // namespace media
 
 /**
  * Manage media system resource allocation requests within system.
@@ -76,10 +76,6 @@ private:
                       MediaSystemResourceType aResourceType);
 
   void UpdateRequests(MediaSystemResourceType aResourceType);
-
-  static PLDHashOperator ReleaseResourceForKey(const uint32_t& aKey,
-                                               nsAutoPtr<MediaSystemResource>& aData,
-                                               void* aClosure);
 
   bool mDestroyed;
 

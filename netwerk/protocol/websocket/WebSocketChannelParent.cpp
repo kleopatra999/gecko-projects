@@ -66,7 +66,7 @@ WebSocketChannelParent::RecvAsyncOpen(const URIParams& aURI,
                                       const bool& aClientSetPingInterval,
                                       const uint32_t& aPingTimeout,
                                       const bool& aClientSetPingTimeout,
-                                      const LoadInfoArgs& aLoadInfoArgs)
+                                      const OptionalLoadInfoArgs& aLoadInfoArgs)
 {
   LOG(("WebSocketChannelParent::RecvAsyncOpen() %p\n", this));
 
@@ -205,7 +205,7 @@ WebSocketChannelParent::OnStart(nsISupports *aContext)
     mChannel->GetProtocol(protocol);
     mChannel->GetExtensions(extensions);
 
-    nsRefPtr<WebSocketChannel> channel;
+    RefPtr<WebSocketChannel> channel;
     channel = static_cast<WebSocketChannel*>(mChannel.get());
     MOZ_ASSERT(channel);
 

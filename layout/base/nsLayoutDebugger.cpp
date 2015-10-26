@@ -163,7 +163,7 @@ PrintDisplayItemTo(nsDisplayListBuilder* aBuilder, nsDisplayItem* aItem,
   bool snap;
   nsRect rect = aItem->GetBounds(aBuilder, &snap);
   nsRect layerRect = rect -
-    nsLayoutUtils::GetAnimatedGeometryRootFor(aItem, aBuilder, nullptr)->
+    nsLayoutUtils::GetAnimatedGeometryRootFor(aItem, aBuilder)->
       GetOffsetToCrossDoc(aItem->ReferenceFrame());
   nscolor color;
   nsRect vis = aItem->GetVisibleRect();
@@ -194,7 +194,7 @@ PrintDisplayItemTo(nsDisplayListBuilder* aBuilder, nsDisplayItem* aItem,
     aStream << nsPrintfCString(" (opaque %d,%d,%d,%d)", r->x, r->y, r->width, r->height);
   }
 
-  if (aItem->ShouldFixToViewport(nullptr)) {
+  if (aItem->ShouldFixToViewport(aBuilder)) {
     aStream << " fixed";
   }
 
@@ -234,6 +234,14 @@ PrintDisplayItemTo(nsDisplayListBuilder* aBuilder, nsDisplayItem* aItem,
   }
 #endif
   aStream << "\n";
+#ifdef MOZ_DUMP_PAINTING
+  if (aDumpHtml && aItem->Painted()) {
+    nsCString string(aItem->Name());
+    string.Append('-');
+    string.AppendInt((uint64_t)aItem);
+    aStream << nsPrintfCString("<br><img id=\"%s\">\n", string.BeginReading());
+  }
+#endif
 
   if (aDumpSublist && list) {
     PrintDisplayListTo(aBuilder, *list, aStream, aIndent+1, aDumpHtml);
@@ -261,16 +269,6 @@ PrintDisplayListTo(nsDisplayListBuilder* aBuilder, const nsDisplayList& aList,
   if (aDumpHtml) {
     aStream << "</ul>";
   }
-}
-
-void
-nsFrame::PrintDisplayItem(nsDisplayListBuilder* aBuilder,
-                          nsDisplayItem* aItem,
-                          std::stringstream& aStream,
-                          bool aDumpSublist,
-                          bool aDumpHtml)
-{
-  PrintDisplayItemTo(aBuilder, aItem, aStream, 0, aDumpSublist, aDumpHtml);
 }
 
 void

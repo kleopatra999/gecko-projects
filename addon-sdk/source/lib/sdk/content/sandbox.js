@@ -29,7 +29,7 @@ const sandboxes = new WeakMap();
   require('./content-worker.js');
   Then, retrieve URL of these files in the XPI:
 */
-let prefix = module.uri.split('sandbox.js')[0];
+var prefix = module.uri.split('sandbox.js')[0];
 const CONTENT_WORKER_URL = prefix + 'content-worker.js';
 const metadata = require('@loader/options').metadata;
 
@@ -162,9 +162,15 @@ const WorkerSandbox = Class({
     let parent = window.parent === window ? content : content.parent;
     merge(content, {
       // We need 'this === window === top' to be true in toplevel scope:
-      get window() content,
-      get top() top,
-      get parent() parent
+      get window() {
+        return content;
+      },
+      get top() {
+        return top;
+      },
+      get parent() {
+        return parent;
+      }
     });
 
     // Use the Greasemonkey naming convention to provide access to the

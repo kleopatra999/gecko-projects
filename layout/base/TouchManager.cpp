@@ -42,7 +42,7 @@ TouchManager::Destroy()
 }
 
 static void
-EvictTouchPoint(nsRefPtr<dom::Touch>& aTouch,
+EvictTouchPoint(RefPtr<dom::Touch>& aTouch,
                 nsIDocument* aLimitToDocument = nullptr)
 {
   nsCOMPtr<nsINode> node(do_QueryInterface(aTouch->mTarget));
@@ -56,7 +56,7 @@ EvictTouchPoint(nsRefPtr<dom::Touch>& aTouch,
           nsPoint pt(aTouch->mRefPoint.x, aTouch->mRefPoint.y);
           nsCOMPtr<nsIWidget> widget = frame->GetView()->GetNearestWidget(&pt);
           if (widget) {
-            WidgetTouchEvent event(true, NS_TOUCH_END, widget);
+            WidgetTouchEvent event(true, eTouchEnd, widget);
             event.widget = widget;
             event.time = PR_IntervalNow();
             event.touches.AppendElement(aTouch);
@@ -75,7 +75,7 @@ EvictTouchPoint(nsRefPtr<dom::Touch>& aTouch,
 }
 
 static PLDHashOperator
-AppendToTouchList(const uint32_t& aKey, nsRefPtr<dom::Touch>& aData, void *aTouchList)
+AppendToTouchList(const uint32_t& aKey, RefPtr<dom::Touch>& aData, void *aTouchList)
 {
   WidgetTouchEvent::TouchArray* touches =
     static_cast<WidgetTouchEvent::TouchArray*>(aTouchList);
@@ -101,8 +101,8 @@ TouchManager::PreHandleEvent(WidgetEvent* aEvent,
                              bool& aIsHandlingUserInput,
                              nsCOMPtr<nsIContent>& aCurrentEventContent)
 {
-  switch (aEvent->message) {
-    case NS_TOUCH_START: {
+  switch (aEvent->mMessage) {
+    case eTouchStart: {
       aIsHandlingUserInput = true;
       WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent();
       // if there is only one touch in this touchstart event, assume that it is
@@ -123,12 +123,12 @@ TouchManager::PreHandleEvent(WidgetEvent* aEvent,
           // If it is not already in the queue, it is a new touch
           touch->mChanged = true;
         }
-        touch->mMessage = aEvent->message;
+        touch->mMessage = aEvent->mMessage;
         gCaptureTouchList->Put(id, touch);
       }
       break;
     }
-    case NS_TOUCH_MOVE: {
+    case eTouchMove: {
       // Check for touches that changed. Mark them add to queue
       WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent();
       WidgetTouchEvent::TouchArray& touches = touchEvent->touches;
@@ -140,9 +140,9 @@ TouchManager::PreHandleEvent(WidgetEvent* aEvent,
           continue;
         }
         int32_t id = touch->Identifier();
-        touch->mMessage = aEvent->message;
+        touch->mMessage = aEvent->mMessage;
 
-        nsRefPtr<dom::Touch> oldTouch = gCaptureTouchList->GetWeak(id);
+        RefPtr<dom::Touch> oldTouch = gCaptureTouchList->GetWeak(id);
         if (!oldTouch) {
           touches.RemoveElementAt(i);
           continue;
@@ -190,10 +190,10 @@ TouchManager::PreHandleEvent(WidgetEvent* aEvent,
       }
       break;
     }
-    case NS_TOUCH_END:
+    case eTouchEnd:
       aIsHandlingUserInput = true;
       // Fall through to touchcancel code
-    case NS_TOUCH_CANCEL: {
+    case eTouchCancel: {
       // Remove the changed touches
       // need to make sure we only remove touches that are ending here
       WidgetTouchEvent* touchEvent = aEvent->AsTouchEvent();
@@ -203,11 +203,11 @@ TouchManager::PreHandleEvent(WidgetEvent* aEvent,
         if (!touch) {
           continue;
         }
-        touch->mMessage = aEvent->message;
+        touch->mMessage = aEvent->mMessage;
         touch->mChanged = true;
 
         int32_t id = touch->Identifier();
-        nsRefPtr<dom::Touch> oldTouch = gCaptureTouchList->GetWeak(id);
+        RefPtr<dom::Touch> oldTouch = gCaptureTouchList->GetWeak(id);
         if (!oldTouch) {
           continue;
         }

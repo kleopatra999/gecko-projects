@@ -45,8 +45,8 @@ namespace safebrowsing {
 class Classifier;
 class ProtocolParser;
 class TableUpdate;
-}
-}
+} // namespace safebrowsing
+} // namespace mozilla
 
 // This is a proxy class that just creates a background thread and delagates
 // calls to the background thread.
@@ -101,8 +101,8 @@ private:
   // Build a comma-separated list of tables to check
   void BuildTables(bool trackingProtectionEnabled, nsCString& tables);
 
-  nsRefPtr<nsUrlClassifierDBServiceWorker> mWorker;
-  nsRefPtr<UrlClassifierDBServiceWorkerProxy> mWorkerProxy;
+  RefPtr<nsUrlClassifierDBServiceWorker> mWorker;
+  RefPtr<UrlClassifierDBServiceWorkerProxy> mWorkerProxy;
 
   nsInterfaceHashtable<nsCStringHashKey, nsIUrlClassifierHashCompleter> mCompleters;
 

@@ -65,8 +65,14 @@ class PluginInstanceChild : public PPluginInstanceChild
 #endif
 
 protected:
-    bool AnswerNPP_SetWindow(const NPRemoteWindow& window,
-                             NPRemoteWindow* aChildWindowToBeAdopted) override;
+    virtual bool
+    AnswerCreateChildPluginWindow(NativeWindowHandle* aChildPluginWindow) override;
+
+    virtual bool
+    RecvCreateChildPopupSurrogate(const NativeWindowHandle& aNetscapeWindow) override;
+
+    virtual bool
+    AnswerNPP_SetWindow(const NPRemoteWindow& window) override;
 
     virtual bool
     AnswerNPP_GetValue_NPPVpluginWantsAllNetworkStreams(bool* wantsAllStreams, NPError* rv) override;
@@ -80,6 +86,8 @@ protected:
                                                            NPError* aResult) override;
     virtual bool
     AnswerNPP_SetValue_NPNVprivateModeBool(const bool& value, NPError* result) override;
+    virtual bool
+    AnswerNPP_SetValue_NPNVmuteAudioBool(const bool& value, NPError* result) override;
 
     virtual bool
     AnswerNPP_HandleEvent(const NPRemoteEvent& event, int16_t* handled) override;
@@ -105,7 +113,7 @@ protected:
 
     virtual PPluginSurfaceChild*
     AllocPPluginSurfaceChild(const WindowsSharedMemoryHandle&,
-                             const gfxIntSize&, const bool&) override {
+                             const gfx::IntSize&, const bool&) override {
         return new PPluginSurfaceChild();
     }
 
@@ -449,7 +457,7 @@ private:
 #endif
     CGColorSpaceRef               mShColorSpace;
     CGContextRef                  mShContext;
-    mozilla::RefPtr<nsCARenderer> mCARenderer;
+    RefPtr<nsCARenderer> mCARenderer;
     void                         *mCGLayer;
 
     // Core Animation drawing model requires a refresh timer.
@@ -506,7 +514,7 @@ private:
     // Paint plugin content rectangle to surface with bg color filling
     void PaintRectToSurface(const nsIntRect& aRect,
                             gfxASurface* aSurface,
-                            const gfxRGBA& aColor);
+                            const gfx::Color& aColor);
 
     // Render plugin content to surface using
     // white/black image alpha extraction algorithm
@@ -556,11 +564,11 @@ private:
     bool mLayersRendering;
 
     // Current surface available for rendering
-    nsRefPtr<gfxASurface> mCurrentSurface;
+    RefPtr<gfxASurface> mCurrentSurface;
 
     // Back surface, just keeping reference to
     // surface which is on ParentProcess side
-    nsRefPtr<gfxASurface> mBackSurface;
+    RefPtr<gfxASurface> mBackSurface;
 
 #ifdef XP_MACOSX
     // Current IOSurface available for rendering
@@ -573,7 +581,7 @@ private:
     // |mIsTransparent|.  We ask the plugin render directly onto a
     // copy of the background pixels if available, and fall back on
     // alpha recovery otherwise.
-    nsRefPtr<gfxASurface> mBackground;
+    RefPtr<gfxASurface> mBackground;
 
 #ifdef XP_WIN
     // These actors mirror mCurrentSurface/mBackSurface
@@ -607,7 +615,7 @@ private:
     // alpha, or not support rendering to an image surface.
     // In those cases we need to draw to a temporary platform surface; we cache
     // that surface here.
-    nsRefPtr<gfxASurface> mHelperSurface;
+    RefPtr<gfxASurface> mHelperSurface;
 
     // true when plugin does not support painting to ARGB32
     // surface this is false if plugin supports

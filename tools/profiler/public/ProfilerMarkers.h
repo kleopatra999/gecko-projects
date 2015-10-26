@@ -12,8 +12,8 @@
 namespace mozilla {
 namespace layers {
 class Layer;
-} // layers
-} // mozilla
+} // namespace layers
+} // namespace mozilla
 
 class SpliceableJSONWriter;
 class UniqueStacks;
@@ -98,7 +98,7 @@ public:
                              UniqueStacks& aUniqueStacks) override;
 
 private:
-  nsRefPtr<gfxASurface> mImg;
+  RefPtr<gfxASurface> mImg;
 };
 
 class IOMarkerPayload : public ProfilerMarkerPayload

@@ -28,9 +28,9 @@ SetUpSandboxEnvironment()
     "SetUpSandboxEnvironment relies on nsDirectoryService being initialized");
 
   // A low integrity temp only currently makes sense for Vista or Later and
-  // sandbox pref level 1.
+  // sandbox pref level >= 1.
   if (!IsVistaOrLater() ||
-      Preferences::GetInt("security.sandbox.content.level") != 1) {
+      Preferences::GetInt("security.sandbox.content.level") < 1) {
     return;
   }
 
@@ -76,10 +76,11 @@ bool
 ContentProcess::Init()
 {
     mContent.Init(IOThreadChild::message_loop(),
-                         ParentPid(),
-                         IOThreadChild::channel());
+                  ParentPid(),
+                  IOThreadChild::channel());
     mXREEmbed.Start();
     mContent.InitXPCOM();
+    mContent.InitGraphicsDeviceData();
 
 #if defined(XP_WIN) && defined(MOZ_CONTENT_SANDBOX)
     SetUpSandboxEnvironment();

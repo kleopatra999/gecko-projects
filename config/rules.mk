@@ -888,7 +888,8 @@ $(basename $2$(notdir $1)).$(OBJ_SUFFIX): $1 $$(call mkdir_deps,$$(MDDEPDIR))
 endef
 $(foreach f,$(CSRCS) $(SSRCS) $(CPPSRCS) $(CMSRCS) $(CMMSRCS) $(ASFILES),$(eval $(call src_objdep,$(f))))
 $(foreach f,$(HOST_CSRCS) $(HOST_CPPSRCS) $(HOST_CMSRCS) $(HOST_CMMSRCS),$(eval $(call src_objdep,$(f),host_)))
-# The rust compiler only outputs library objects, and so we need different
+
+# The Rust compiler only outputs library objects, and so we need different
 # mangling to generate dependency rules for it.
 mk_libname = $(basename lib$(notdir $1)).$(LIB_SUFFIX)
 src_libdep = $(call mk_libname,$1): $1 $$(call mkdir_deps,$$(MDDEPDIR))
@@ -946,7 +947,7 @@ ifdef MOZ_RUST
 # in the target's LIBS.
 $(RSOBJS):
 	$(REPORT_BUILD)
-	$(RUSTC) --crate-type staticlib -o $(call mk_libname,$<) $(_VPATH_SRCS)
+	$(RUSTC) $(RUSTFLAGS) --crate-type staticlib -o $(call mk_libname,$<) $(_VPATH_SRCS)
 endif
 
 $(SOBJS):
@@ -1147,13 +1148,8 @@ PREF_DIR = defaults/pref
 # If DIST_SUBDIR is defined it indicates that app and gre dirs are
 # different and that we are building app related resources. Hence,
 # PREF_DIR should point to the app prefs location.
-ifneq (,$(DIST_SUBDIR)$(XPI_NAME)$(LIBXUL_SDK))
+ifneq (,$(DIST_SUBDIR)$(XPI_NAME))
 PREF_DIR = defaults/preferences
-endif
-
-# on win32, pref files need CRLF line endings... see bug 206029
-ifeq (WINNT,$(OS_ARCH))
-PREF_PPFLAGS += --line-endings=crlf
 endif
 
 ifneq ($(PREF_JS_EXPORTS),)
@@ -1260,8 +1256,8 @@ endif
 
 libs realchrome:: $(FINAL_TARGET)/chrome
 	$(call py_action,jar_maker,\
-	  $(QUIET) -j $(FINAL_TARGET)/chrome \
-	  $(MAKE_JARS_FLAGS) $(XULPPFLAGS) $(DEFINES) $(ACDEFINES) \
+	  $(QUIET) -d $(FINAL_TARGET) \
+	  $(MAKE_JARS_FLAGS) $(DEFINES) $(ACDEFINES) $(MOZ_DEBUG_DEFINES) \
 	  $(JAR_MANIFEST))
 
 endif
@@ -1515,7 +1511,7 @@ PP_TARGETS_ALL_RESULTS := $(sort $(foreach tier,$(PP_TARGETS_TIERS),$(PP_TARGETS
 $(PP_TARGETS_ALL_RESULTS):
 	$(if $(filter-out $(notdir $@),$(notdir $(<:.in=))),$(error Looks like $@ has an unexpected dependency on $< which breaks PP_TARGETS))
 	$(RM) '$@'
-	$(call py_action,preprocessor,--depend $(MDDEPDIR)/$(@F).pp $(PP_TARGET_FLAGS) $(DEFINES) $(ACDEFINES) $(XULPPFLAGS) '$<' -o '$@')
+	$(call py_action,preprocessor,--depend $(MDDEPDIR)/$(@F).pp $(PP_TARGET_FLAGS) $(DEFINES) $(ACDEFINES) $(MOZ_DEBUG_DEFINES) '$<' -o '$@')
 
 # The depfile is based on the filename, and we don't want conflicts. So check
 # there's only one occurrence of any given filename in PP_TARGETS_ALL_RESULTS.

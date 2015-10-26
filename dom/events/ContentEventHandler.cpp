@@ -203,13 +203,13 @@ ContentEventHandler::QueryContentRect(nsIContent* aContent,
 
   // get rect for first frame
   nsRect resultRect(nsPoint(0, 0), frame->GetRect().Size());
-  nsresult rv = ConvertToRootViewRelativeOffset(frame, resultRect);
+  nsresult rv = ConvertToRootRelativeOffset(frame, resultRect);
   NS_ENSURE_SUCCESS(rv, rv);
 
   // account for any additional frames
   while ((frame = frame->GetNextContinuation()) != nullptr) {
     nsRect frameRect(nsPoint(0, 0), frame->GetRect().Size());
-    rv = ConvertToRootViewRelativeOffset(frame, frameRect);
+    rv = ConvertToRootRelativeOffset(frame, frameRect);
     NS_ENSURE_SUCCESS(rv, rv);
     resultRect.UnionRect(resultRect, frameRect);
   }
@@ -626,7 +626,7 @@ ContentEventHandler::ExpandToClusterBoundary(nsIContent* aContent,
   NS_ASSERTION(*aXPOffset <= aContent->TextLength(),
                "offset is out of range.");
 
-  nsRefPtr<nsFrameSelection> fs = mPresShell->FrameSelection();
+  RefPtr<nsFrameSelection> fs = mPresShell->FrameSelection();
   int32_t offsetInFrame;
   CaretAssociationHint hint =
     aForward ? CARET_ASSOCIATE_BEFORE : CARET_ASSOCIATE_AFTER;
@@ -792,6 +792,34 @@ ContentEventHandler::GetLineBreakType(bool aUseNativeLineBreak)
     LINE_BREAK_TYPE_NATIVE : LINE_BREAK_TYPE_XP;
 }
 
+nsresult
+ContentEventHandler::HandleQueryContentEvent(WidgetQueryContentEvent* aEvent)
+{
+  switch (aEvent->mMessage) {
+    case eQuerySelectedText:
+      return OnQuerySelectedText(aEvent);
+    case eQueryTextContent:
+      return OnQueryTextContent(aEvent);
+    case eQueryCaretRect:
+      return OnQueryCaretRect(aEvent);
+    case eQueryTextRect:
+      return OnQueryTextRect(aEvent);
+    case eQueryEditorRect:
+      return OnQueryEditorRect(aEvent);
+    case eQueryContentState:
+      return OnQueryContentState(aEvent);
+    case eQuerySelectionAsTransferable:
+      return OnQuerySelectionAsTransferable(aEvent);
+    case eQueryCharacterAtPoint:
+      return OnQueryCharacterAtPoint(aEvent);
+    case eQueryDOMWidgetHittest:
+      return OnQueryDOMWidgetHittest(aEvent);
+    default:
+      return NS_ERROR_NOT_IMPLEMENTED;
+  }
+  return NS_OK;
+}
+
 // Similar to nsFrameSelection::GetFrameForNodeOffset,
 // but this is more flexible for OnQueryTextRect to use
 static nsresult GetFrameForTextRect(nsINode* aNode,
@@ -825,27 +853,65 @@ ContentEventHandler::OnQuerySelectedText(WidgetQueryContentEvent* aEvent)
                                 &aEvent->mReply.mOffset, lineBreakType);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsINode> anchorNode = mSelection->GetAnchorNode();
-  nsCOMPtr<nsINode> focusNode = mSelection->GetFocusNode();
-  if (NS_WARN_IF(!anchorNode) || NS_WARN_IF(!focusNode)) {
-    return NS_ERROR_FAILURE;
+  nsCOMPtr<nsINode> anchorNode, focusNode;
+  int32_t anchorOffset, focusOffset;
+  if (mSelection->RangeCount()) {
+    anchorNode = mSelection->GetAnchorNode();
+    focusNode = mSelection->GetFocusNode();
+    if (NS_WARN_IF(!anchorNode) || NS_WARN_IF(!focusNode)) {
+      return NS_ERROR_FAILURE;
+    }
+    anchorOffset = static_cast<int32_t>(mSelection->AnchorOffset());
+    focusOffset = static_cast<int32_t>(mSelection->FocusOffset());
+    if (NS_WARN_IF(anchorOffset < 0) || NS_WARN_IF(focusOffset < 0)) {
+      return NS_ERROR_FAILURE;
+    }
+
+    int16_t compare = nsContentUtils::ComparePoints(anchorNode, anchorOffset,
+                                                    focusNode, focusOffset);
+    aEvent->mReply.mReversed = compare > 0;
+
+    if (compare) {
+      RefPtr<nsRange> range;
+      if (mSelection->RangeCount() == 1) {
+        range = mFirstSelectedRange;
+      } else {
+        rv = nsRange::CreateRange(anchorNode, anchorOffset,
+                                  focusNode, focusOffset,
+                                  getter_AddRefs(range));
+        if (NS_WARN_IF(NS_FAILED(rv))) {
+          return rv;
+        }
+        if (NS_WARN_IF(!range)) {
+          return NS_ERROR_FAILURE;
+        }
+      }
+      rv = GenerateFlatTextContent(range, aEvent->mReply.mString,
+                                   lineBreakType);
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        return rv;
+      }
+    } else {
+      aEvent->mReply.mString.Truncate();
+    }
+  } else {
+    NS_ASSERTION(mFirstSelectedRange->Collapsed(),
+      "When mSelection doesn't have selection, mFirstSelectedRange must be "
+      "collapsed");
+    anchorNode = focusNode = mFirstSelectedRange->GetStartParent();
+    if (NS_WARN_IF(!anchorNode)) {
+      return NS_ERROR_FAILURE;
+    }
+    anchorOffset = focusOffset =
+      static_cast<int32_t>(mFirstSelectedRange->StartOffset());
+    if (NS_WARN_IF(anchorOffset < 0)) {
+      return NS_ERROR_FAILURE;
+    }
+
+    aEvent->mReply.mReversed = false;
+    aEvent->mReply.mString.Truncate();
   }
 
-  int32_t anchorOffset = static_cast<int32_t>(mSelection->AnchorOffset());
-  int32_t focusOffset = static_cast<int32_t>(mSelection->FocusOffset());
-  if (NS_WARN_IF(anchorOffset < 0) || NS_WARN_IF(focusOffset < 0)) {
-    return NS_ERROR_FAILURE;
-  }
-
-  int16_t compare = nsContentUtils::ComparePoints(anchorNode, anchorOffset,
-                                                  focusNode, focusOffset);
-  aEvent->mReply.mReversed = compare > 0;
-
-  if (compare) {
-    rv = GenerateFlatTextContent(mFirstSelectedRange, aEvent->mReply.mString,
-                                 lineBreakType);
-    NS_ENSURE_SUCCESS(rv, rv);
-  }
 
   nsIFrame* frame = nullptr;
   rv = GetFrameForTextRect(focusNode, focusOffset, true, &frame);
@@ -872,7 +938,7 @@ ContentEventHandler::OnQueryTextContent(WidgetQueryContentEvent* aEvent)
 
   LineBreakType lineBreakType = GetLineBreakType(aEvent);
 
-  nsRefPtr<nsRange> range = new nsRange(mRootContent);
+  RefPtr<nsRange> range = new nsRange(mRootContent);
   rv = SetRangeFromFlatTextOffset(range, aEvent->mInput.mOffset,
                                   aEvent->mInput.mLength, lineBreakType, false,
                                   &aEvent->mReply.mOffset);
@@ -927,7 +993,7 @@ ContentEventHandler::OnQueryTextRect(WidgetQueryContentEvent* aEvent)
   }
 
   LineBreakType lineBreakType = GetLineBreakType(aEvent);
-  nsRefPtr<nsRange> range = new nsRange(mRootContent);
+  RefPtr<nsRange> range = new nsRange(mRootContent);
   rv = SetRangeFromFlatTextOffset(range, aEvent->mInput.mOffset,
                                   aEvent->mInput.mLength, lineBreakType, true,
                                   &aEvent->mReply.mOffset);
@@ -951,7 +1017,7 @@ ContentEventHandler::OnQueryTextRect(WidgetQueryContentEvent* aEvent)
 
   // get the starting frame rect
   nsRect rect(nsPoint(0, 0), firstFrame->GetRect().Size());
-  rv = ConvertToRootViewRelativeOffset(firstFrame, rect);
+  rv = ConvertToRootRelativeOffset(firstFrame, rect);
   NS_ENSURE_SUCCESS(rv, rv);
   nsRect frameRect = rect;
   nsPoint ptOffset;
@@ -993,7 +1059,7 @@ ContentEventHandler::OnQueryTextRect(WidgetQueryContentEvent* aEvent)
       }
     }
     frameRect.SetRect(nsPoint(0, 0), frame->GetRect().Size());
-    rv = ConvertToRootViewRelativeOffset(frame, frameRect);
+    rv = ConvertToRootRelativeOffset(frame, frameRect);
     NS_ENSURE_SUCCESS(rv, rv);
     if (frame != lastFrame) {
       // not last frame, so just add rect to previous result
@@ -1059,7 +1125,7 @@ ContentEventHandler::OnQueryCaretRect(WidgetQueryContentEvent* aEvent)
                                     lineBreakType);
       NS_ENSURE_SUCCESS(rv, rv);
       if (offset == aEvent->mInput.mOffset) {
-        rv = ConvertToRootViewRelativeOffset(caretFrame, caretRect);
+        rv = ConvertToRootRelativeOffset(caretFrame, caretRect);
         NS_ENSURE_SUCCESS(rv, rv);
         nscoord appUnitsPerDevPixel =
           caretFrame->PresContext()->AppUnitsPerDevPixel();
@@ -1074,7 +1140,7 @@ ContentEventHandler::OnQueryCaretRect(WidgetQueryContentEvent* aEvent)
   }
 
   // Otherwise, we should set the guessed caret rect.
-  nsRefPtr<nsRange> range = new nsRange(mRootContent);
+  RefPtr<nsRange> range = new nsRange(mRootContent);
   rv = SetRangeFromFlatTextOffset(range, aEvent->mInput.mOffset, 0,
                                   lineBreakType, true,
                                   &aEvent->mReply.mOffset);
@@ -1103,7 +1169,7 @@ ContentEventHandler::OnQueryCaretRect(WidgetQueryContentEvent* aEvent)
 
   nscoord fontHeight = 0;
   float inflation = nsLayoutUtils::FontSizeInflationFor(frame);
-  nsRefPtr<nsFontMetrics> fontMetrics;
+  RefPtr<nsFontMetrics> fontMetrics;
   rv = nsLayoutUtils::GetFontMetricsForFrame(frame, getter_AddRefs(fontMetrics),
                                              inflation);
   if (NS_WARN_IF(!fontMetrics)) {
@@ -1120,7 +1186,7 @@ ContentEventHandler::OnQueryCaretRect(WidgetQueryContentEvent* aEvent)
     rect.height = fontHeight;
   }
 
-  rv = ConvertToRootViewRelativeOffset(frame, rect);
+  rv = ConvertToRootRelativeOffset(frame, rect);
   NS_ENSURE_SUCCESS(rv, rv);
 
   aEvent->mReply.mRect = LayoutDevicePixel::FromUntyped(
@@ -1201,7 +1267,7 @@ ContentEventHandler::OnQueryCharacterAtPoint(WidgetQueryContentEvent* aEvent)
     NS_ENSURE_TRUE(rootWidget, NS_ERROR_FAILURE);
   }
 
-  WidgetQueryContentEvent eventOnRoot(true, NS_QUERY_CHARACTER_AT_POINT,
+  WidgetQueryContentEvent eventOnRoot(true, eQueryCharacterAtPoint,
                                       rootWidget);
   eventOnRoot.mUseNativeLineBreak = aEvent->mUseNativeLineBreak;
   eventOnRoot.refPoint = aEvent->refPoint;
@@ -1264,7 +1330,7 @@ ContentEventHandler::OnQueryCharacterAtPoint(WidgetQueryContentEvent* aEvent)
                                 GetLineBreakType(aEvent));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  WidgetQueryContentEvent textRect(true, NS_QUERY_TEXT_RECT, aEvent->widget);
+  WidgetQueryContentEvent textRect(true, eQueryTextRect, aEvent->widget);
   textRect.InitForQueryTextRect(offset, 1, aEvent->mUseNativeLineBreak);
   rv = OnQueryTextRect(&textRect);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1333,7 +1399,7 @@ ContentEventHandler::GetFlatTextOffsetOfRange(nsIContent* aRootContent,
   NS_ENSURE_STATE(aRootContent);
   NS_ASSERTION(aOffset, "param is invalid");
 
-  nsRefPtr<nsRange> prev = new nsRange(aRootContent);
+  RefPtr<nsRange> prev = new nsRange(aRootContent);
   nsCOMPtr<nsIDOMNode> rootDOMNode(do_QueryInterface(aRootContent));
   prev->SetStart(rootDOMNode, 0);
 
@@ -1471,7 +1537,7 @@ ContentEventHandler::GetStartFrameAndOffset(const nsRange* aRange,
     return NS_ERROR_FAILURE;
   }
   nsIContent* content = static_cast<nsIContent*>(node);
-  nsRefPtr<nsFrameSelection> fs = mPresShell->FrameSelection();
+  RefPtr<nsFrameSelection> fs = mPresShell->FrameSelection();
   aFrame = fs->GetFrameForNodeOffset(content, aRange->StartOffset(),
                                      fs->GetHint(), &aOffsetInFrame);
   if (NS_WARN_IF(!aFrame)) {
@@ -1481,18 +1547,21 @@ ContentEventHandler::GetStartFrameAndOffset(const nsRange* aRange,
 }
 
 nsresult
-ContentEventHandler::ConvertToRootViewRelativeOffset(nsIFrame* aFrame,
-                                                     nsRect& aRect)
+ContentEventHandler::ConvertToRootRelativeOffset(nsIFrame* aFrame,
+                                                 nsRect& aRect)
 {
   NS_ASSERTION(aFrame, "aFrame must not be null");
 
-  nsView* view = nullptr;
-  nsPoint posInView;
-  aFrame->GetOffsetFromView(posInView, &view);
-  if (!view) {
+  nsPresContext* rootPresContext = aFrame->PresContext()->GetRootPresContext();
+  if (NS_WARN_IF(!rootPresContext)) {
     return NS_ERROR_FAILURE;
   }
-  aRect += posInView + view->GetOffsetTo(nullptr);
+  nsIFrame* rootFrame = rootPresContext->PresShell()->GetRootFrame();
+  if (NS_WARN_IF(!rootFrame)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  aRect = nsLayoutUtils::TransformFrameRectToAncestor(aFrame, aRect, rootFrame);
   return NS_OK;
 }
 
@@ -1552,7 +1621,7 @@ ContentEventHandler::OnSelectionEvent(WidgetSelectionEvent* aEvent)
   }
 
   // Get range from offset and length
-  nsRefPtr<nsRange> range = new nsRange(mRootContent);
+  RefPtr<nsRange> range = new nsRange(mRootContent);
   rv = SetRangeFromFlatTextOffset(range, aEvent->mOffset, aEvent->mLength,
                                   GetLineBreakType(aEvent),
                                   aEvent->mExpandToClusterBoundary);

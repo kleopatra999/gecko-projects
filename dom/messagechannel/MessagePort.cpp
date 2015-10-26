@@ -77,7 +77,7 @@ private:
   ~DispatchEventRunnable()
   {}
 
-  nsRefPtr<MessagePort> mPort;
+  RefPtr<MessagePort> mPort;
 };
 
 NS_IMPL_ISUPPORTS(DispatchEventRunnable, nsICancelableRunnable, nsIRunnable)
@@ -116,29 +116,21 @@ public:
 
     JSContext* cx = jsapi.cx();
 
-    nsTArray<nsRefPtr<MessagePort>> ports;
     nsCOMPtr<nsPIDOMWindow> window =
       do_QueryInterface(mPort->GetParentObject());
 
+    ErrorResult rv;
     JS::Rooted<JS::Value> value(cx);
-    if (!mData->mData.IsEmpty()) {
-      bool ok = ReadStructuredCloneWithTransfer(cx, mData->mData,
-                                                mData->mClosure,
-                                                &value, window, ports);
-      FreeStructuredClone(mData->mData, mData->mClosure);
 
-      if (!ok) {
-        return NS_ERROR_FAILURE;
-      }
+    mData->Read(window, cx, &value, rv);
+    if (NS_WARN_IF(rv.Failed())) {
+      return rv.StealNSResult();
     }
-
-    // The data should be already be cleaned.
-    MOZ_ASSERT(!mData->mData.Length());
 
     // Create the event
     nsCOMPtr<mozilla::dom::EventTarget> eventTarget =
       do_QueryInterface(mPort->GetOwner());
-    nsRefPtr<MessageEvent> event =
+    RefPtr<MessageEvent> event =
       new MessageEvent(eventTarget, nullptr, nullptr);
 
     event->InitMessageEvent(NS_LITERAL_STRING("message"),
@@ -148,14 +140,11 @@ public:
     event->SetTrusted(true);
     event->SetSource(mPort);
 
-    nsTArray<nsRefPtr<MessagePortBase>> array;
-    array.SetCapacity(ports.Length());
-    for (uint32_t i = 0; i < ports.Length(); ++i) {
-      array.AppendElement(ports[i]);
-    }
+    nsTArray<RefPtr<MessagePort>> ports = mData->TakeTransferredPorts();
 
-    nsRefPtr<MessagePortList> portList =
-      new MessagePortList(static_cast<dom::Event*>(event.get()), array);
+    RefPtr<MessagePortList> portList =
+      new MessagePortList(static_cast<dom::Event*>(event.get()),
+                          ports);
     event->SetPorts(portList);
 
     bool dummy;
@@ -175,25 +164,16 @@ private:
   ~PostMessageRunnable()
   {}
 
-  nsRefPtr<MessagePort> mPort;
-  nsRefPtr<SharedMessagePortMessage> mData;
+  RefPtr<MessagePort> mPort;
+  RefPtr<SharedMessagePortMessage> mData;
 };
 
 NS_IMPL_ISUPPORTS(PostMessageRunnable, nsICancelableRunnable, nsIRunnable)
 
-MessagePortBase::MessagePortBase(nsPIDOMWindow* aWindow)
-  : DOMEventTargetHelper(aWindow)
-{
-}
-
-MessagePortBase::MessagePortBase()
-{
-}
-
 NS_IMPL_CYCLE_COLLECTION_CLASS(MessagePort)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(MessagePort,
-                                                MessagePortBase)
+                                                DOMEventTargetHelper)
   if (tmp->mDispatchRunnable) {
     NS_IMPL_CYCLE_COLLECTION_UNLINK(mDispatchRunnable->mPort);
   }
@@ -204,7 +184,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(MessagePort,
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(MessagePort,
-                                                  MessagePortBase)
+                                                  DOMEventTargetHelper)
   if (tmp->mDispatchRunnable) {
     NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDispatchRunnable->mPort);
   }
@@ -215,10 +195,10 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(MessagePort)
   NS_INTERFACE_MAP_ENTRY(nsIIPCBackgroundChildCreateCallback)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
-NS_INTERFACE_MAP_END_INHERITING(MessagePortBase)
+NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
-NS_IMPL_ADDREF_INHERITED(MessagePort, MessagePortBase)
-NS_IMPL_RELEASE_INHERITED(MessagePort, MessagePortBase)
+NS_IMPL_ADDREF_INHERITED(MessagePort, DOMEventTargetHelper)
+NS_IMPL_RELEASE_INHERITED(MessagePort, DOMEventTargetHelper)
 
 namespace {
 
@@ -266,7 +246,7 @@ public:
       return;
     }
 
-    nsRefPtr<ForceCloseHelper> helper = new ForceCloseHelper(aIdentifier);
+    RefPtr<ForceCloseHelper> helper = new ForceCloseHelper(aIdentifier);
     if (NS_WARN_IF(!mozilla::ipc::BackgroundChild::GetOrCreateForCurrentThread(helper))) {
       MOZ_CRASH();
     }
@@ -294,10 +274,10 @@ private:
 
 NS_IMPL_ISUPPORTS(ForceCloseHelper, nsIIPCBackgroundChildCreateCallback)
 
-} // anonymous namespace
+} // namespace
 
 MessagePort::MessagePort(nsPIDOMWindow* aWindow)
-  : MessagePortBase(aWindow)
+  : DOMEventTargetHelper(aWindow)
   , mInnerID(0)
   , mMessageQueueEnabled(false)
   , mIsKeptAlive(false)
@@ -317,7 +297,7 @@ MessagePort::~MessagePort()
 MessagePort::Create(nsPIDOMWindow* aWindow, const nsID& aUUID,
                     const nsID& aDestinationUUID, ErrorResult& aRv)
 {
-  nsRefPtr<MessagePort> mp = new MessagePort(aWindow);
+  RefPtr<MessagePort> mp = new MessagePort(aWindow);
   mp->Initialize(aUUID, aDestinationUUID, 1 /* 0 is an invalid sequence ID */,
                  false /* Neutered */, eStateUnshippedEntangled, aRv);
   return mp.forget();
@@ -328,7 +308,7 @@ MessagePort::Create(nsPIDOMWindow* aWindow,
                     const MessagePortIdentifier& aIdentifier,
                     ErrorResult& aRv)
 {
-  nsRefPtr<MessagePort> mp = new MessagePort(aWindow);
+  RefPtr<MessagePort> mp = new MessagePort(aWindow);
   mp->Initialize(aIdentifier.uuid(), aIdentifier.destinationUuid(),
                  aIdentifier.sequenceId(), aIdentifier.neutered(),
                  eStateEntangling, aRv);
@@ -374,16 +354,7 @@ MessagePort::Initialize(const nsID& aUUID,
   // The port has to keep itself alive until it's entangled.
   UpdateMustKeepAlive();
 
-  if (NS_IsMainThread()) {
-    MOZ_ASSERT(GetOwner());
-    MOZ_ASSERT(GetOwner()->IsInnerWindow());
-    mInnerID = GetOwner()->WindowID();
-
-    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
-    if (obs) {
-      obs->AddObserver(this, "inner-window-destroyed", false);
-    }
-  } else {
+  if (!NS_IsMainThread()) {
     WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(workerPrivate);
     MOZ_ASSERT(!mWorkerFeature);
@@ -396,6 +367,15 @@ MessagePort::Initialize(const nsID& aUUID,
     }
 
     mWorkerFeature = Move(feature);
+  } else if (GetOwner()) {
+    MOZ_ASSERT(NS_IsMainThread());
+    MOZ_ASSERT(GetOwner()->IsInnerWindow());
+    mInnerID = GetOwner()->WindowID();
+
+    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+    if (obs) {
+      obs->AddObserver(this, "inner-window-destroyed", false);
+    }
   }
 }
 
@@ -424,7 +404,7 @@ MessagePort::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
         continue;
       }
 
-      MessagePortBase* port = nullptr;
+      MessagePort* port = nullptr;
       nsresult rv = UNWRAP_OBJECT(MessagePort, &value.toObject(), port);
       if (NS_FAILED(rv)) {
         continue;
@@ -452,11 +432,10 @@ MessagePort::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
     transferable.setObject(*array);
   }
 
-  nsRefPtr<SharedMessagePortMessage> data = new SharedMessagePortMessage();
+  RefPtr<SharedMessagePortMessage> data = new SharedMessagePortMessage();
 
-  if (!WriteStructuredCloneWithTransfer(aCx, aMessage, transferable,
-                                        data->mData, data->mClosure)) {
-    aRv.Throw(NS_ERROR_DOM_DATA_CLONE_ERR);
+  data->Write(aCx, aMessage, transferable, aRv);
+  if (NS_WARN_IF(aRv.Failed())) {
     return;
   }
 
@@ -489,7 +468,7 @@ MessagePort::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
   MOZ_ASSERT(mActor);
   MOZ_ASSERT(mMessagesForTheOtherPort.IsEmpty());
 
-  nsAutoTArray<nsRefPtr<SharedMessagePortMessage>, 1> array;
+  nsAutoTArray<RefPtr<SharedMessagePortMessage>, 1> array;
   array.AppendElement(data);
 
   nsAutoTArray<MessagePortMessage, 1> messages;
@@ -516,10 +495,10 @@ MessagePort::Dispatch()
     return;
   }
 
-  nsRefPtr<SharedMessagePortMessage> data = mMessages.ElementAt(0);
+  RefPtr<SharedMessagePortMessage> data = mMessages.ElementAt(0);
   mMessages.RemoveElementAt(0);
 
-  nsRefPtr<PostMessageRunnable> runnable = new PostMessageRunnable(this, data);
+  RefPtr<PostMessageRunnable> runnable = new PostMessageRunnable(this, data);
 
   MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToCurrentThread(runnable)));
 
@@ -531,16 +510,11 @@ MessagePort::Dispatch()
 void
 MessagePort::Close()
 {
-  // Not entangled yet, but already closed.
-  if (mNextStep != eNextStepNone) {
-    return;
-  }
-
   if (mState == eStateUnshippedEntangled) {
     MOZ_ASSERT(mUnshippedEntangledPort);
 
     // This avoids loops.
-    nsRefPtr<MessagePort> port = Move(mUnshippedEntangledPort);
+    RefPtr<MessagePort> port = Move(mUnshippedEntangledPort);
     MOZ_ASSERT(mUnshippedEntangledPort == nullptr);
 
     mState = eStateDisentangled;
@@ -551,7 +525,7 @@ MessagePort::Close()
   }
 
   // Not entangled yet, we have to wait.
-  if (mState < eStateEntangling) {
+  if (mState == eStateEntangling) {
     mNextStep = eNextStepClose;
     return;
   }
@@ -617,7 +591,7 @@ MessagePort::Entangled(nsTArray<MessagePortMessage>& aMessages)
   }
 
   // We must convert the messages into SharedMessagePortMessages to avoid leaks.
-  FallibleTArray<nsRefPtr<SharedMessagePortMessage>> data;
+  FallibleTArray<RefPtr<SharedMessagePortMessage>> data;
   if (NS_WARN_IF(!SharedMessagePortMessage::FromMessagesToSharedChild(aMessages,
                                                                       data))) {
     // OOM, we cannot continue.
@@ -667,8 +641,8 @@ MessagePort::MessagesReceived(nsTArray<MessagePortMessage>& aMessages)
 
   RemoveDocFromBFCache();
 
-  FallibleTArray<nsRefPtr<SharedMessagePortMessage>> data;
-  if (!NS_WARN_IF(SharedMessagePortMessage::FromMessagesToSharedChild(aMessages,
+  FallibleTArray<RefPtr<SharedMessagePortMessage>> data;
+  if (NS_WARN_IF(!SharedMessagePortMessage::FromMessagesToSharedChild(aMessages,
                                                                       data))) {
     // OOM, We cannot continue.
     return;
@@ -710,7 +684,7 @@ MessagePort::Disentangle()
   UpdateMustKeepAlive();
 }
 
-bool
+void
 MessagePort::CloneAndDisentangle(MessagePortIdentifier& aIdentifier)
 {
   MOZ_ASSERT(mIdentifier);
@@ -721,13 +695,13 @@ MessagePort::CloneAndDisentangle(MessagePortIdentifier& aIdentifier)
   aIdentifier.neutered() = true;
 
   if (mState > eStateEntangled) {
-    return true;
+    return;
   }
 
   // We already have a 'next step'. We have to consider this port as already
   // cloned/closed/disentangled.
   if (mNextStep != eNextStepNone) {
-    return true;
+    return;
   }
 
   aIdentifier.uuid() = mIdentifier->uuid();
@@ -750,24 +724,23 @@ MessagePort::CloneAndDisentangle(MessagePortIdentifier& aIdentifier)
 
       mState = eStateDisentangled;
       UpdateMustKeepAlive();
-      return true;
+      return;
     }
 
     // Register this component to PBackground.
     ConnectToPBackground();
 
     mNextStep = eNextStepDisentangle;
-    return true;
+    return;
   }
 
   // Not entangled yet, we have to wait.
   if (mState < eStateEntangled) {
     mNextStep = eNextStepDisentangle;
-    return true;
+    return;
   }
 
   StartDisentangling();
-  return true;
 }
 
 void
@@ -900,7 +873,9 @@ MessagePort::RemoveDocFromBFCache()
   }
 
   nsPIDOMWindow* window = GetOwner();
-  MOZ_ASSERT(window);
+  if (!window) {
+    return;
+  }
 
   nsIDocument* doc = window->GetExtantDoc();
   if (!doc) {

@@ -18,8 +18,6 @@ XPCOMUtils.defineLazyModuleGetter(this, 'Logger',
   'resource://gre/modules/accessibility/Utils.jsm');
 XPCOMUtils.defineLazyModuleGetter(this, 'Presentation',
   'resource://gre/modules/accessibility/Presentation.jsm');
-XPCOMUtils.defineLazyModuleGetter(this, 'TraversalRules',
-  'resource://gre/modules/accessibility/TraversalRules.jsm');
 XPCOMUtils.defineLazyModuleGetter(this, 'Roles',
   'resource://gre/modules/accessibility/Constants.jsm');
 XPCOMUtils.defineLazyModuleGetter(this, 'Events',
@@ -289,8 +287,12 @@ this.EventManager.prototype = {
       case Events.DOCUMENT_LOAD_COMPLETE:
       {
         let position = this.contentControl.vc.position;
+        // Check if position is in the subtree of the DOCUMENT_LOAD_COMPLETE
+        // event's dialog accesible or accessible document
+        let subtreeRoot = aEvent.accessible.role === Roles.DIALOG ?
+          aEvent.accessible : aEvent.accessibleDocument;
         if (aEvent.accessible === aEvent.accessibleDocument ||
-            (position && Utils.isInSubtree(position, aEvent.accessible))) {
+            (position && Utils.isInSubtree(position, subtreeRoot))) {
           // Do not automove into the document if the virtual cursor is already
           // positioned inside it.
           break;

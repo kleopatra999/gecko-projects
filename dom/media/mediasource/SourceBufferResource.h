@@ -33,7 +33,7 @@ namespace dom {
 
 class SourceBuffer;
 
-}  // namespace dom
+} // namespace dom
 
 class SourceBufferResource final : public MediaResource
 {
@@ -46,9 +46,7 @@ public:
   virtual already_AddRefed<MediaResource> CloneData(MediaDecoder* aDecoder) override { UNIMPLEMENTED(); return nullptr; }
   virtual void SetReadMode(MediaCacheStream::ReadMode aMode) override { UNIMPLEMENTED(); }
   virtual void SetPlaybackRate(uint32_t aBytesPerSecond) override { UNIMPLEMENTED(); }
-  virtual nsresult Read(char* aBuffer, uint32_t aCount, uint32_t* aBytes) override;
   virtual nsresult ReadAt(int64_t aOffset, char* aBuffer, uint32_t aCount, uint32_t* aBytes) override;
-  virtual nsresult Seek(int32_t aWhence, int64_t aOffset) override;
   virtual int64_t Tell() override { return mOffset; }
   virtual void Pin() override { UNIMPLEMENTED(); }
   virtual void Unpin() override { UNIMPLEMENTED(); }
@@ -102,6 +100,11 @@ public:
     return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
   }
 
+  virtual bool IsExpectingMoreData() override
+  {
+    return false;
+  }
+
   // Used by SourceBuffer.
   void AppendData(MediaByteBuffer* aData);
   void Ended();
@@ -134,7 +137,7 @@ public:
 #endif
 
 private:
-  ~SourceBufferResource();
+  virtual ~SourceBufferResource();
   nsresult SeekInternal(int64_t aOffset);
   nsresult ReadInternal(char* aBuffer, uint32_t aCount, uint32_t* aBytes, bool aMayBlock);
   nsresult ReadAtInternal(int64_t aOffset, char* aBuffer, uint32_t aCount, uint32_t* aBytes, bool aMayBlock);

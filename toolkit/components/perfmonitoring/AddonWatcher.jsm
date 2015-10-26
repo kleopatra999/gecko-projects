@@ -16,7 +16,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Preferences",
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
                                   "resource://gre/modules/Task.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "console",
-                                  "resource://gre/modules/devtools/Console.jsm");
+                                  "resource://gre/modules/Console.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PerformanceStats",
                                   "resource://gre/modules/PerformanceStats.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "Telemetry",
@@ -24,13 +24,15 @@ XPCOMUtils.defineLazyServiceGetter(this, "Telemetry",
                                   Ci.nsITelemetry);
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
-
 const FILTERS = [
   {probe: "jank", field: "longestDuration"},
   {probe: "cpow", field: "totalCPOWTime"},
 ];
 
-let AddonWatcher = {
+const WAKEUP_IS_SURPRISINGLY_SLOW_FACTOR = 2;
+const THREAD_TAKES_LOTS_OF_CPU_FACTOR = .75;
+
+var AddonWatcher = {
   _previousPerformanceIndicators: {},
 
   /**
@@ -52,6 +54,16 @@ let AddonWatcher = {
    */
   _interval: 15000,
   _ignoreList: null,
+
+  /**
+   * The date of the latest wakeup, in milliseconds since an arbitrary
+   * epoch.
+   *
+   * @type {number}
+   */
+  _latestWakeup: Date.now(),
+  _latestSnapshot: null,
+
   /**
    * Initialize and launch the AddonWatcher.
    *
@@ -131,6 +143,49 @@ let AddonWatcher = {
   _isPaused: true,
 
   /**
+   * @return {true} If any measure we have for this wakeup is invalid
+   * because the system is very busy and/or coming backup from hibernation.
+   */
+  _isSystemTooBusy: function(deltaT, currentSnapshot, previousSnapshot) {
+    if (deltaT <= WAKEUP_IS_SURPRISINGLY_SLOW_FACTOR * this._interval) {
+      // The wakeup was reasonably accurate.
+      return false;
+    }
+
+    // There has been a strangely long delay between two successive
+    // wakeups. This can mean one of the following things:
+    // 1. we're in the process of initializing the app;
+    // 2. the system is not responsive, either because it is very busy
+    //   or because it has gone to sleep;
+    // 3. the main loop of the application is so clogged that it could
+    //   not process timer events.
+    //
+    // In cases 1. or 2., any alert here is a false positive.
+    // In case 3., the application (hopefully an add-on) is misbehaving and we need
+    // to identify what's wrong.
+
+    if (!previousSnapshot) {
+      // We're initializing, skip.
+      return true;
+    }
+
+    let diff = currentSnapshot.processData.subtract(previousSnapshot.processData);
+    if (diff.totalCPUTime >= deltaT * THREAD_TAKES_LOTS_OF_CPU_FACTOR ) {
+      // The main thread itself is using lots of CPU, perhaps because of
+      // an add-on. We need to investigate.
+      //
+      // Note that any measurement based on wallclock time may
+      // be affected by the lack of responsiveness of the main event loop,
+      // so we may end up with false positives along the way.
+      return false;
+    }
+
+    // The application is apparently behaving correctly, so the issue must
+    // be somehow due to the system.
+    return true;
+  },
+
+  /**
    * Check the performance of add-ons during the latest slice of time.
    *
    * We consider that an add-on is causing slowdown if it has executed
@@ -139,9 +194,14 @@ let AddonWatcher = {
    * slice.
    */
   _checkAddons: function() {
+    let previousWakeup = this._latestWakeup;
+    let currentWakeup = this._latestWakeup = Date.now();
+
     return Task.spawn(function*() {
       try {
-        let snapshot = yield this._monitor.promiseSnapshot();
+        let previousSnapshot = this._latestSnapshot;
+        let snapshot = this._latestSnapshot = yield this._monitor.promiseSnapshot();
+        let isSystemTooBusy = this._isSystemTooBusy(currentWakeup - previousWakeup, snapshot, previousSnapshot);
 
         let limits = {
           // By default, warn if we have a total time of 1s of CPOW per 15 seconds
@@ -154,27 +214,29 @@ let AddonWatcher = {
         // By default, warn only after an add-on has been spotted misbehaving 3 times.
         let tolerance = Preferences.get("browser.addon-watch.tolerance", 3);
 
-        for (let item of snapshot.componentsData) {
-          let addonId = item.addonId;
-          if (!item.isSystem || !addonId) {
-            // We are only interested in add-ons.
-            continue;
-          }
+        for (let [addonId, item] of snapshot.addons) {
           if (this._ignoreList.has(addonId)) {
             // This add-on has been explicitly put in the ignore list
             // by the user. Don't waste time with it.
             continue;
           }
+
           let previous = this._previousPerformanceIndicators[addonId];
           this._previousPerformanceIndicators[addonId] = item;
 
           if (!previous) {
             // This is the first time we see the addon, so we are probably
-            // executed right during/after startup. Performance is always
+            // executed right during/just after its startup. Performance is always
             // weird during startup, with the JIT warming up, competition
             // in disk access, etc. so we do not take this as a reason to
             // display the slow addon warning.
             continue;
+          }
+          if (isSystemTooBusy) {
+            // The main event loop is behaving weirdly, most likely because of
+            // the system being busy or asleep, so results are not trustworthy.
+            // Ignore.
+            return;
           }
 
           // Report misbehaviors to Telemetry
@@ -212,7 +274,7 @@ let AddonWatcher = {
 
             stats.alerts[filter] = (stats.alerts[filter] || 0) + 1;
 
-		    if (stats.alerts[filter] % tolerance != 0) {
+            if (stats.alerts[filter] % tolerance != 0) {
               continue;
             }
 

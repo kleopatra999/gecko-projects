@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Messaging.jsm");
 Cu.import('resource://gre/modules/Geometry.jsm');
@@ -23,18 +23,6 @@ const TAB_CHANGE_EVENT = "testSelectionCarets:TabChange";
 const TAB_STOP_EVENT = "STOP";
 
 const gChromeWin = Services.wm.getMostRecentWindow("navigator:browser");
-
-/**
- * Robocop test helpers.
- */
-function ok(passed, text) {
-  do_report_result(passed, text, Components.stack.caller, false);
-}
-
-function is(lhs, rhs, text) {
-  do_report_result(lhs === rhs, "[ " + lhs + " === " + rhs + " ] " + text,
-    Components.stack.caller, false);
-}
 
 /**
  * Wait for and return, when an expected tab change event occurs.

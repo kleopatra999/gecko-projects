@@ -93,6 +93,9 @@ public:
       return NS_OK;
     }
 
+    AutoHideSelectionChanges hideSelectionChanges
+      (mFrame->GetConstFrameSelection());
+
     if (mFrame) {
       // SetSelectionRange leads to Selection::AddRange which flushes Layout -
       // need to block script to avoid nested PrepareEditor calls (bug 642800).
@@ -250,7 +253,7 @@ public:
   NS_IMETHOD SetSelectionCaretsVisibility(bool aVisibility) override;
 
 private:
-  nsRefPtr<nsFrameSelection> mFrameSelection;
+  RefPtr<nsFrameSelection> mFrameSelection;
   nsCOMPtr<nsIContent>       mLimiter;
   nsIScrollableFrame        *mScrollFrame;
   nsWeakPtr mPresShellWeak;
@@ -395,7 +398,7 @@ nsTextInputSelectionImpl::SetCaretReadOnly(bool aReadOnly)
   nsCOMPtr<nsIPresShell> shell = do_QueryReferent(mPresShellWeak, &result);
   if (shell)
   {
-    nsRefPtr<nsCaret> caret = shell->GetCaret();
+    RefPtr<nsCaret> caret = shell->GetCaret();
     if (caret) {
       nsISelection* domSel = mFrameSelection->
         GetSelection(nsISelectionController::SELECTION_NORMAL);
@@ -421,7 +424,7 @@ nsTextInputSelectionImpl::GetCaretVisible(bool *_retval)
   nsCOMPtr<nsIPresShell> shell = do_QueryReferent(mPresShellWeak, &result);
   if (shell)
   {
-    nsRefPtr<nsCaret> caret = shell->GetCaret();
+    RefPtr<nsCaret> caret = shell->GetCaret();
     if (caret) {
       *_retval = caret->IsVisible();
       return NS_OK;
@@ -438,7 +441,7 @@ nsTextInputSelectionImpl::SetCaretVisibilityDuringSelection(bool aVisibility)
   nsCOMPtr<nsIPresShell> shell = do_QueryReferent(mPresShellWeak, &result);
   if (shell)
   {
-    nsRefPtr<nsCaret> caret = shell->GetCaret();
+    RefPtr<nsCaret> caret = shell->GetCaret();
     if (caret) {
       nsISelection* domSel = mFrameSelection->
         GetSelection(nsISelectionController::SELECTION_NORMAL);
@@ -819,7 +822,7 @@ nsTextInputListener::NotifySelectionChanged(nsIDOMDocument* aDoc, nsISelection* 
         if (presShell) 
         {
           nsEventStatus status = nsEventStatus_eIgnore;
-          WidgetEvent event(true, NS_FORM_SELECTED);
+          WidgetEvent event(true, eFormSelect);
 
           presShell->HandleEventWithTarget(&event, mFrame, content, &status);
         }
@@ -904,7 +907,7 @@ nsTextInputListener::HandleEvent(nsIDOMEvent* aEvent)
     return NS_ERROR_UNEXPECTED;
   }
 
-  if (keyEvent->message != NS_KEY_PRESS) {
+  if (keyEvent->mMessage != eKeyPress) {
     return NS_OK;
   }
 
@@ -1160,7 +1163,7 @@ nsTextEditorState::BindToFrame(nsTextControlFrame* aFrame)
   NS_ENSURE_TRUE(shell, NS_ERROR_FAILURE);
 
   // Create selection
-  nsRefPtr<nsFrameSelection> frameSel = new nsFrameSelection();
+  RefPtr<nsFrameSelection> frameSel = new nsFrameSelection();
 
   // Create a SelectionController
   mSelCon = new nsTextInputSelectionImpl(frameSel, shell, rootNode);
@@ -1171,12 +1174,12 @@ nsTextEditorState::BindToFrame(nsTextControlFrame* aFrame)
   mSelCon->SetDisplaySelection(nsISelectionController::SELECTION_ON);
 
   // Get the caret and make it a selection listener.
-  nsRefPtr<nsISelection> domSelection;
+  RefPtr<nsISelection> domSelection;
   if (NS_SUCCEEDED(mSelCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
                                          getter_AddRefs(domSelection))) &&
       domSelection) {
     nsCOMPtr<nsISelectionPrivate> selPriv(do_QueryInterface(domSelection));
-    nsRefPtr<nsCaret> caret = shell->GetCaret();
+    RefPtr<nsCaret> caret = shell->GetCaret();
     nsCOMPtr<nsISelectionListener> listener;
     if (caret) {
       listener = do_QueryInterface(caret);
@@ -1247,6 +1250,8 @@ nsTextEditorState::PrepareEditor(const nsAString *aValue)
     // Do not initialize the editor multiple times.
     return NS_OK;
   }
+
+  AutoHideSelectionChanges hideSelectionChanges(GetConstFrameSelection());
 
   // Don't attempt to initialize recursively!
   InitializationGuard guard(*this);
@@ -1666,7 +1671,7 @@ nsTextEditorState::UnbindFromFrame(nsTextControlFrame* aFrame)
 
   if (mSelCon) {
     if (mTextListener) {
-      nsRefPtr<nsISelection> domSelection;
+      RefPtr<nsISelection> domSelection;
       if (NS_SUCCEEDED(mSelCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
                                              getter_AddRefs(domSelection))) &&
           domSelection) {
@@ -1737,7 +1742,7 @@ nsTextEditorState::CreateRootNode()
   NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
 
   // Now create a DIV and add it to the anonymous content child list.
-  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
+  RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = doc->NodeInfoManager()->GetNodeInfo(nsGkAtoms::div, nullptr,
                                                  kNameSpaceID_XHTML,
                                                  nsIDOMNode::ELEMENT_NODE);
@@ -1820,7 +1825,7 @@ be called if @placeholder is the empty string when trimmed from line breaks");
 
   // Create a DIV for the placeholder
   // and add it to the anonymous content child list
-  nsRefPtr<mozilla::dom::NodeInfo> nodeInfo;
+  RefPtr<mozilla::dom::NodeInfo> nodeInfo;
   nodeInfo = pNodeInfoManager->GetNodeInfo(nsGkAtoms::div, nullptr,
                                            kNameSpaceID_XHTML,
                                            nsIDOMNode::ELEMENT_NODE);
@@ -1830,7 +1835,7 @@ be called if @placeholder is the empty string when trimmed from line breaks");
   NS_ENSURE_SUCCESS(rv, rv);
 
   // Create the text node for the placeholder text before doing anything else
-  nsRefPtr<nsTextNode> placeholderText = new nsTextNode(pNodeInfoManager);
+  RefPtr<nsTextNode> placeholderText = new nsTextNode(pNodeInfoManager);
 
   rv = mPlaceholderDiv->AppendChildTo(placeholderText, false);
   NS_ENSURE_SUCCESS(rv, rv);

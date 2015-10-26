@@ -26,8 +26,8 @@
 
 namespace {
 
-mozilla::RefPtr<mozilla::ipc::NetdClient> gNetdClient;
-mozilla::RefPtr<mozilla::ipc::NetdConsumer> gNetdConsumer;
+RefPtr<mozilla::ipc::NetdClient> gNetdClient;
+RefPtr<mozilla::ipc::NetdConsumer> gNetdConsumer;
 
 class StopNetdConsumer : public nsRunnable {
 public:
@@ -80,7 +80,7 @@ InitRndisAddress()
   return true;
 }
 
-} // anonymous namespace
+} // namespace
 
 namespace mozilla {
 namespace ipc {

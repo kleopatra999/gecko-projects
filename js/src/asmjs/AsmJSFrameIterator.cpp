@@ -136,7 +136,7 @@ static const unsigned PushedRetAddr = 0;
 static const unsigned PushedFP = 0;
 static const unsigned StoredFP = 0;
 static const unsigned PostStorePrePopFP = 0;
-#elif defined(JS_CODEGEN_MIPS)
+#elif defined(JS_CODEGEN_MIPS32)
 static const unsigned PushedRetAddr = 8;
 static const unsigned PushedFP = 24;
 static const unsigned StoredFP = 28;
@@ -157,7 +157,7 @@ PushRetAddr(MacroAssembler& masm)
 {
 #if defined(JS_CODEGEN_ARM)
     masm.push(lr);
-#elif defined(JS_CODEGEN_MIPS)
+#elif defined(JS_CODEGEN_MIPS32)
     masm.push(ra);
 #else
     // The x86/x64 call instruction pushes the return address.
@@ -194,14 +194,14 @@ GenerateProfilingPrologue(MacroAssembler& masm, unsigned framePushed, AsmJSExit:
         masm.bind(begin);
 
         PushRetAddr(masm);
-        MOZ_ASSERT(PushedRetAddr == masm.currentOffset() - offsetAtBegin);
+        MOZ_ASSERT_IF(!masm.oom(), PushedRetAddr == masm.currentOffset() - offsetAtBegin);
 
         masm.loadAsmJSActivation(scratch);
         masm.push(Address(scratch, AsmJSActivation::offsetOfFP()));
-        MOZ_ASSERT(PushedFP == masm.currentOffset() - offsetAtBegin);
+        MOZ_ASSERT_IF(!masm.oom(), PushedFP == masm.currentOffset() - offsetAtBegin);
 
         masm.storePtr(masm.getStackPointer(), Address(scratch, AsmJSActivation::offsetOfFP()));
-        MOZ_ASSERT(StoredFP == masm.currentOffset() - offsetAtBegin);
+        MOZ_ASSERT_IF(!masm.oom(), StoredFP == masm.currentOffset() - offsetAtBegin);
     }
 
     if (reason != AsmJSExit::None)
@@ -221,7 +221,7 @@ GenerateProfilingEpilogue(MacroAssembler& masm, unsigned framePushed, AsmJSExit:
                           Label* profilingReturn)
 {
     Register scratch = ABIArgGenerator::NonReturn_VolatileReg0;
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || defined(JS_CODEGEN_MIPS32)
     Register scratch2 = ABIArgGenerator::NonReturn_VolatileReg1;
 #endif
 
@@ -245,12 +245,12 @@ GenerateProfilingEpilogue(MacroAssembler& masm, unsigned framePushed, AsmJSExit:
         // and the async interrupt exit. Since activation.fp can be read at any
         // time and still points to the current frame, be careful to only update
         // sp after activation.fp has been repointed to the caller's frame.
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || defined(JS_CODEGEN_MIPS32)
         masm.loadPtr(Address(masm.getStackPointer(), 0), scratch2);
         masm.storePtr(scratch2, Address(scratch, AsmJSActivation::offsetOfFP()));
         DebugOnly<uint32_t> prePop = masm.currentOffset();
         masm.addToStackPtr(Imm32(sizeof(void *)));
-        MOZ_ASSERT(PostStorePrePopFP == masm.currentOffset() - prePop);
+        MOZ_ASSERT_IF(!masm.oom(), PostStorePrePopFP == masm.currentOffset() - prePop);
 #else
         masm.pop(Address(scratch, AsmJSActivation::offsetOfFP()));
         MOZ_ASSERT(PostStorePrePopFP == 0);
@@ -280,13 +280,13 @@ js::GenerateAsmJSFunctionPrologue(MacroAssembler& masm, unsigned framePushed,
 
     masm.haltingAlign(CodeAlignment);
 
-    GenerateProfilingPrologue(masm, framePushed, AsmJSExit::None, &labels->begin);
+    GenerateProfilingPrologue(masm, framePushed, AsmJSExit::None, &labels->profilingEntry);
     Label body;
     masm.jump(&body);
 
     // Generate normal prologue:
     masm.haltingAlign(CodeAlignment);
-    masm.bind(&labels->entry);
+    masm.bind(&labels->nonProfilingEntry);
     PushRetAddr(masm);
     masm.subFromStackPtr(Imm32(framePushed + AsmJSFrameBytesAfterReturnAddress));
 
@@ -339,7 +339,7 @@ js::GenerateAsmJSFunctionEpilogue(MacroAssembler& masm, unsigned framePushed,
         masm.twoByteNop();
 #elif defined(JS_CODEGEN_ARM)
         masm.nop();
-#elif defined(JS_CODEGEN_MIPS)
+#elif defined(JS_CODEGEN_MIPS32)
         masm.nop();
         masm.nop();
         masm.nop();
@@ -566,7 +566,7 @@ AsmJSProfilingFrameIterator::AsmJSProfilingFrameIterator(const AsmJSActivation& 
         MOZ_ASSERT(offsetInModule < codeRange->end());
         uint32_t offsetInCodeRange = offsetInModule - codeRange->begin();
         void** sp = (void**)state.sp;
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS32)
         if (offsetInCodeRange < PushedRetAddr) {
             // First instruction of the ARM/MIPS function; the return address is
             // still in lr and fp still holds the caller's fp.
@@ -682,7 +682,7 @@ static const char*
 BuiltinToName(AsmJSExit::BuiltinKind builtin)
 {
     // Note: this label is regexp-matched by
-    // browser/devtools/profiler/cleopatra/js/parserWorker.js.
+    // devtools/client/profiler/cleopatra/js/parserWorker.js.
 
     switch (builtin) {
       case AsmJSExit::Builtin_ToInt32:   return "ToInt32 (in asm.js)";
@@ -690,6 +690,7 @@ BuiltinToName(AsmJSExit::BuiltinKind builtin)
       case AsmJSExit::Builtin_IDivMod:   return "software idivmod (in asm.js)";
       case AsmJSExit::Builtin_UDivMod:   return "software uidivmod (in asm.js)";
       case AsmJSExit::Builtin_AtomicCmpXchg:  return "Atomics.compareExchange (in asm.js)";
+      case AsmJSExit::Builtin_AtomicXchg:     return "Atomics.exchange (in asm.js)";
       case AsmJSExit::Builtin_AtomicFetchAdd: return "Atomics.add (in asm.js)";
       case AsmJSExit::Builtin_AtomicFetchSub: return "Atomics.sub (in asm.js)";
       case AsmJSExit::Builtin_AtomicFetchAnd: return "Atomics.and (in asm.js)";
@@ -725,7 +726,7 @@ AsmJSProfilingFrameIterator::label() const
     // entries will be coalesced by the profiler.
     //
     // NB: these labels are regexp-matched by
-    //     browser/devtools/profiler/cleopatra/js/parserWorker.js.
+    //     devtools/client/profiler/cleopatra/js/parserWorker.js.
     const char* jitFFIDescription = "fast FFI trampoline (in asm.js)";
     const char* slowFFIDescription = "slow FFI trampoline (in asm.js)";
     const char* interruptDescription = "interrupt due to out-of-bounds or long execution (in asm.js)";

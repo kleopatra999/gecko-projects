@@ -33,7 +33,7 @@ BlobSerial(ImageURL* aURI)
   nsAutoCString spec;
   aURI->GetSpec(spec);
 
-  nsRefPtr<BlobImpl> blob;
+  RefPtr<BlobImpl> blob;
   if (NS_SUCCEEDED(NS_GetBlobForBlobURISpec(spec, getter_AddRefs(blob))) &&
       blob) {
     return Some(blob->GetSerialNumber());
@@ -112,9 +112,9 @@ ImageCacheKey::ComputeHash(ImageURL* aURI,
   if (aBlobSerial) {
     // For blob URIs, we hash the serial number of the underlying blob, so that
     // different blob URIs which point to the same blob share a cache entry. We
-    // also include the ref portion of the URI to support -moz-samplesize and
-    // -moz-resolution, which require us to create different Image objects even
-    // if the source data is the same.
+    // also include the ref portion of the URI to support -moz-samplesize, which
+    // requires us to create different Image objects even if the source data is
+    // the same.
     nsAutoCString ref;
     aURI->GetRef(ref);
     return HashGeneric(*aBlobSerial, HashString(ref));

@@ -11,7 +11,7 @@ Cu.import("resource://gre/modules/Promise.jsm");
 
 timerHandlers.startTimer = callback => callback();
 
-let openChatOrig = Chat.open;
+var openChatOrig = Chat.open;
 
 const kKey = "uGIs-kGbYt1hBBwjyW7MLQ";
 
@@ -151,7 +151,7 @@ const kRoomUpdates = {
       displayName: "Alexis",
       account: "alexis@example.com",
       roomConnectionId: "2a1787a6-4a73-43b5-ae3e-906ec1e763cb"
-    },  {
+    }, {
       displayName: "Ruharb",
       roomConnectionId: "5de6281c-6568-455f-af08-c0b0a973100e"
     }]
@@ -211,12 +211,12 @@ const compareRooms = function(room1, room2) {
 };
 
 // LoopRooms emits various events. Test if they work as expected here.
-let gExpectedAdds = [];
-let gExpectedUpdates = [];
-let gExpectedDeletes = [];
-let gExpectedJoins = {};
-let gExpectedLeaves = {};
-let gExpectedRefresh = false;
+var gExpectedAdds = [];
+var gExpectedUpdates = [];
+var gExpectedDeletes = [];
+var gExpectedJoins = {};
+var gExpectedLeaves = {};
+var gExpectedRefresh = false;
 
 const onRoomAdded = function(e, room) {
   let expectedIds = gExpectedAdds.map(expectedRoom => expectedRoom.roomToken);
@@ -404,6 +404,13 @@ add_task(function* test_createRoom() {
 
   gExpectedAdds.push(expectedRoom);
   let room = yield LoopRooms.promise("create", kCreateRoomProps);
+
+  // We can't check the value of the key, but check we've got a # which indicates
+  // there should be one.
+  Assert.ok(room.roomUrl.contains("#"), "Created room url should have a key");
+  var key = room.roomUrl.split("#")[1];
+  Assert.ok(key.length, "Created room url should have non-zero length key");
+
   compareRooms(room, expectedRoom);
 });
 
@@ -645,7 +652,7 @@ function run_test() {
   LoopRooms.on("left", onRoomLeft);
   LoopRooms.on("refresh", onRefresh);
 
-  do_register_cleanup(function () {
+  do_register_cleanup(function() {
     // Revert original Chat.open implementation
     Chat.open = openChatOrig;
     Services.prefs.clearUserPref("loop.key");

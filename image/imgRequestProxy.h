@@ -107,7 +107,6 @@ public:
 
   // Other, internal-only methods:
   virtual void SetHasImage() override;
-  virtual void OnStartDecode() override;
 
   // Whether we want notifications from ProgressTracker to be deferred until
   // an event it has scheduled has been fired.
@@ -152,7 +151,7 @@ protected:
       }
 
     private:
-      nsRefPtr<imgRequestProxy> mOwner;
+      RefPtr<imgRequestProxy> mOwner;
       nsresult mStatus;
   };
 
@@ -199,7 +198,7 @@ private:
   friend imgRequestProxy* NewStaticProxy(imgRequestProxy* aThis);
 
   // The URI of our request.
-  nsRefPtr<ImageURL> mURI;
+  RefPtr<ImageURL> mURI;
 
   // mListener is only promised to be a weak ref (see imgILoader.idl),
   // but we actually keep a strong ref to it until we've seen our

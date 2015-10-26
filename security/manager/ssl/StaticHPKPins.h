@@ -81,7 +81,7 @@ static const char kDigiCert_High_Assurance_EV_Root_CAFingerprint[] =
 
 /* End Entity Test Cert */
 static const char kEnd_Entity_Test_CertFingerprint[] =
-  "lzCakFt+nADIfIkgk+UE/EQ9SaT2nay2yu2iykVbvV8=";
+  "VCIlmPM9NkgFQtrs4Oa5TeFcDu6MWRTKSNdePEhOgD8=";
 
 /* Entrust Root Certification Authority */
 static const char kEntrust_Root_Certification_AuthorityFingerprint[] =
@@ -231,17 +231,9 @@ static const char kStartCom_Certification_AuthorityFingerprint[] =
 static const char kStartCom_Certification_Authority_G2Fingerprint[] =
   "FSg5faISiQqDCwuVpZlozvI0dzd531GBzxD6ZHU0u2U=";
 
-/* TC TrustCenter Class 2 CA II */
-static const char kTC_TrustCenter_Class_2_CA_IIFingerprint[] =
-  "rPZeHWLLWKK6/W/6tA+4hpnEc5fPXLSD1C1pytNM1Is=";
-
 /* TC TrustCenter Class 3 CA II */
 static const char kTC_TrustCenter_Class_3_CA_IIFingerprint[] =
   "k5KuIUmSSt435kXbof9L3dzaKykbYJdmnSr6XHo3Jhk=";
-
-/* TC TrustCenter Universal CA I */
-static const char kTC_TrustCenter_Universal_CA_IFingerprint[] =
-  "st71NirT+s0EvSkEekOET3ZwNOpIkvgOVr7mkCQ+JQI=";
 
 /* TC TrustCenter Universal CA III */
 static const char kTC_TrustCenter_Universal_CA_IIIFingerprint[] =
@@ -408,10 +400,8 @@ static const char* kPinset_google_root_pems_sha256_Data[] = {
   kTC_TrustCenter_Universal_CA_IIIFingerprint,
   kGeoTrust_Primary_Certification_Authority___G3Fingerprint,
   kDigiCert_Global_Root_CAFingerprint,
-  kTC_TrustCenter_Class_2_CA_IIFingerprint,
   kVerisign_Class_3_Public_Primary_Certification_AuthorityFingerprint,
   kVerisign_Class_3_Public_Primary_Certification_AuthorityFingerprint,
-  kTC_TrustCenter_Universal_CA_IFingerprint,
   kGeoTrust_Primary_Certification_Authority___G2Fingerprint,
   kComodo_AAA_Services_rootFingerprint,
   kAffirmTrust_PremiumFingerprint,
@@ -751,8 +741,10 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "apps.facebook.com", true, false, false, -1, &kPinset_facebook },
   { "appspot.com", true, false, false, -1, &kPinset_google_root_pems },
   { "aus4.mozilla.org", true, true, true, 3, &kPinset_mozilla },
+  { "aus5.mozilla.org", true, true, true, 7, &kPinset_mozilla },
   { "blog.torproject.org", true, false, false, -1, &kPinset_tor },
   { "blogger.com", true, false, false, -1, &kPinset_google_root_pems },
+  { "blogspot.com", true, false, false, -1, &kPinset_google_root_pems },
   { "business.facebook.com", true, false, false, -1, &kPinset_facebook },
   { "business.twitter.com", true, false, false, -1, &kPinset_twitterCom },
   { "cdn.mozilla.net", true, false, true, -1, &kPinset_mozilla },
@@ -779,10 +771,15 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "doubleclick.net", true, false, false, -1, &kPinset_google_root_pems },
   { "drive.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "dropbox.com", false, false, false, -1, &kPinset_dropbox },
+  { "dropboxstatic.com", false, true, false, -1, &kPinset_dropbox },
+  { "dropboxusercontent.com", false, true, false, -1, &kPinset_dropbox },
   { "encrypted.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "exclude-subdomains.pinning.example.com", false, false, false, 0, &kPinset_mozilla_test },
   { "facebook.com", false, false, false, -1, &kPinset_facebook },
+  { "fi.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "g.co", true, false, false, -1, &kPinset_google_root_pems },
+  { "g4w.co", true, false, false, -1, &kPinset_google_root_pems },
+  { "ggpht.com", true, false, false, -1, &kPinset_google_root_pems },
   { "glass.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "gmail.com", false, false, false, -1, &kPinset_google_root_pems },
   { "goo.gl", true, false, false, -1, &kPinset_google_root_pems },
@@ -1037,8 +1034,10 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "myaccount.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "oauth.twitter.com", true, false, false, -1, &kPinset_twitterCom },
   { "passwords.google.com", true, false, false, -1, &kPinset_google_root_pems },
+  { "pinning-test.badssl.com", true, true, false, -1, &kPinset_test },
   { "pinningtest.appspot.com", true, false, false, -1, &kPinset_test },
   { "pixel.facebook.com", true, false, false, -1, &kPinset_facebook },
+  { "pixel.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "platform.twitter.com", true, false, false, -1, &kPinset_twitterCDN },
   { "play.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "plus.google.com", true, false, false, -1, &kPinset_google_root_pems },
@@ -1080,6 +1079,8 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "wf-training-hrd.appspot.com", true, false, false, -1, &kPinset_google_root_pems },
   { "wf-training-master.appspot.com", true, false, false, -1, &kPinset_google_root_pems },
   { "wf-trial-hrd.appspot.com", true, false, false, -1, &kPinset_google_root_pems },
+  { "withgoogle.com", true, false, false, -1, &kPinset_google_root_pems },
+  { "withyoutube.com", true, false, false, -1, &kPinset_google_root_pems },
   { "www.dropbox.com", true, false, false, -1, &kPinset_dropbox },
   { "www.facebook.com", true, false, false, -1, &kPinset_facebook },
   { "www.gmail.com", false, false, false, -1, &kPinset_google_root_pems },
@@ -1087,14 +1088,15 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "www.torproject.org", true, false, false, -1, &kPinset_tor },
   { "www.twitter.com", true, false, false, -1, &kPinset_twitterCom },
   { "xbrlsuccess.appspot.com", true, false, false, -1, &kPinset_google_root_pems },
+  { "xn--7xa.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "youtu.be", true, false, false, -1, &kPinset_google_root_pems },
   { "youtube-nocookie.com", true, false, false, -1, &kPinset_google_root_pems },
   { "youtube.com", true, false, false, -1, &kPinset_google_root_pems },
   { "ytimg.com", true, false, false, -1, &kPinset_google_root_pems },
 };
 
-// Pinning Preload List Length = 354;
+// Pinning Preload List Length = 366;
 
 static const int32_t kUnknownId = -1;
 
-static const PRTime kPreloadPKPinsExpirationTime = INT64_C(1444472497288000);
+static const PRTime kPreloadPKPinsExpirationTime = INT64_C(1454150226851000);

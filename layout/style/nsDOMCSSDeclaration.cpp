@@ -293,7 +293,7 @@ nsDOMCSSDeclaration::GetCSSParsingEnvironmentForRule(css::Rule* aRule,
                                                      CSSParsingEnvironment& aCSSParseEnv)
 {
   nsIStyleSheet* sheet = aRule ? aRule->GetStyleSheet() : nullptr;
-  nsRefPtr<CSSStyleSheet> cssSheet(do_QueryObject(sheet));
+  RefPtr<CSSStyleSheet> cssSheet(do_QueryObject(sheet));
   if (!cssSheet) {
     aCSSParseEnv.mPrincipal = nullptr;
     return;
@@ -431,25 +431,4 @@ nsDOMCSSDeclaration::RemoveCustomProperty(const nsAString& aPropertyName)
   decl->RemoveVariableDeclaration(Substring(aPropertyName,
                                             CSS_CUSTOM_NAME_PREFIX_LENGTH));
   return SetCSSDeclaration(decl);
-}
-
-bool IsCSSPropertyExposedToJS(nsCSSProperty aProperty, JSContext* cx, JSObject* obj)
-{
-  nsCSSProps::EnabledState enabledState = nsCSSProps::eEnabledForAllContent;
-
-  // Optimization: we skip checking properties of the JSContext
-  // in the majority case where the property does not have the
-  // CSS_PROPERTY_ALWAYS_ENABLED_IN_PRIVILEGED_CONTENT flag.
-  bool isEnabledInChromeOrCertifiedApp
-    = nsCSSProps::PropHasFlags(aProperty,
-                               CSS_PROPERTY_ALWAYS_ENABLED_IN_CHROME_OR_CERTIFIED_APP);
-
-  if (isEnabledInChromeOrCertifiedApp) {
-    if (dom::IsInCertifiedApp(cx, obj) ||
-        nsContentUtils::ThreadsafeIsCallerChrome())
-    {
-      enabledState |= nsCSSProps::eEnabledInChromeOrCertifiedApp;
-    }
-  }
-  return nsCSSProps::IsEnabled(aProperty, enabledState);
 }

@@ -42,14 +42,11 @@ protected:
   virtual ~GainNode();
 
 private:
-  static void SendGainToStream(AudioNode* aNode);
-
-private:
-  nsRefPtr<AudioParam> mGain;
+  RefPtr<AudioParam> mGain;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

@@ -168,13 +168,12 @@ nsUXThemeData::UpdateTitlebarInfo(HWND aWnd)
     }
   }
 
-  if (sTitlebarInfoPopulatedThemed)
+  // NB: sTitlebarInfoPopulatedThemed is always true pre-vista.
+  if (sTitlebarInfoPopulatedThemed || IsWin8OrLater())
     return;
 
   // Query a temporary, visible window with command buttons to get
   // the right metrics. 
-  nsAutoString className;
-  className.AssignLiteral(kClassNameTemp);
   WNDCLASSW wc;
   wc.style         = 0;
   wc.lpfnWndProc   = ::DefWindowProcW;
@@ -185,7 +184,7 @@ nsUXThemeData::UpdateTitlebarInfo(HWND aWnd)
   wc.hCursor       = nullptr;
   wc.hbrBackground = nullptr;
   wc.lpszMenuName  = nullptr;
-  wc.lpszClassName = className.get();
+  wc.lpszClassName = kClassNameTemp;
   ::RegisterClassW(&wc);
 
   // Create a transparent descendant of the window passed in. This
@@ -193,13 +192,21 @@ nsUXThemeData::UpdateTitlebarInfo(HWND aWnd)
   // Note the parent (browser) window is usually still hidden, we
   // don't want to display it, so we can't query it directly.
   HWND hWnd = CreateWindowExW(WS_EX_LAYERED,
-                              className.get(), L"",
+                              kClassNameTemp, L"",
                               WS_OVERLAPPEDWINDOW,
                               0, 0, 0, 0, aWnd, nullptr,
                               nsToolkit::mDllInstance, nullptr);
   NS_ASSERTION(hWnd, "UpdateTitlebarInfo window creation failed.");
 
-  ShowWindow(hWnd, SW_SHOW);
+  int showType = SW_SHOWNA;
+  // We try to avoid activating this window, but on Aero basic (aero without
+  // compositor) and aero lite (special theme for win server 2012/2013) we may
+  // get the wrong information if the window isn't activated, so we have to:
+  if (sThemeId == LookAndFeel::eWindowsTheme_AeroLite ||
+      (sThemeId == LookAndFeel::eWindowsTheme_Aero && !nsUXThemeData::CheckForCompositor())) {
+    showType = SW_SHOW;
+  }
+  ShowWindow(hWnd, showType);
   TITLEBARINFOEX info = {0};
   info.cbSize = sizeof(TITLEBARINFOEX);
   SendMessage(hWnd, WM_GETTITLEBARINFOEX, 0, (LPARAM)&info); 

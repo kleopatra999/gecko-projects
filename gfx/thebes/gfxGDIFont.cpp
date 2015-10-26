@@ -177,9 +177,8 @@ gfxGDIFont::Initialize()
 
     // Figure out if we want to do synthetic oblique styling.
     GDIFontEntry* fe = static_cast<GDIFontEntry*>(GetFontEntry());
-    bool wantFakeItalic =
-        (mStyle.style & (NS_FONT_STYLE_ITALIC | NS_FONT_STYLE_OBLIQUE)) &&
-        !fe->IsItalic() && mStyle.allowSyntheticStyle;
+    bool wantFakeItalic = mStyle.style != NS_FONT_STYLE_NORMAL &&
+                          fe->IsUpright() && mStyle.allowSyntheticStyle;
 
     // If the font's family has an actual italic face (but font matching
     // didn't choose it), we have to use a cairo transform instead of asking
@@ -480,13 +479,22 @@ gfxGDIFont::GetGlyph(uint32_t aUnicode, uint32_t aVarSelector)
     wchar_t ch = aUnicode;
     WORD glyph;
     DWORD ret = ScriptGetCMap(nullptr, &mScriptCache, &ch, 1, 0, &glyph);
-    if (ret == E_PENDING) {
+    if (ret != S_OK) {
         AutoDC dc;
         AutoSelectFont fs(dc.GetDC(), GetHFONT());
-        ret = ScriptGetCMap(dc.GetDC(), &mScriptCache, &ch, 1, 0, &glyph);
-    }
-    if (ret != S_OK) {
-        glyph = 0;
+        if (ret == E_PENDING) {
+            // Try ScriptGetCMap again now that we've set up the font.
+            ret = ScriptGetCMap(dc.GetDC(), &mScriptCache, &ch, 1, 0, &glyph);
+        }
+        if (ret != S_OK) {
+            // If ScriptGetCMap still failed, fall back to GetGlyphIndicesW
+            // (see bug 1105807).
+            ret = GetGlyphIndicesW(dc.GetDC(), &ch, 1, &glyph,
+                                   GGI_MARK_NONEXISTING_GLYPHS);
+            if (ret == GDI_ERROR || glyph == 0xFFFF) {
+                glyph = 0;
+            }
+        }
     }
 
     mGlyphIDs->Put(aUnicode, glyph);
@@ -528,7 +536,7 @@ gfxGDIFont::AddSizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf,
     aSizes->mFontInstances += aMallocSizeOf(mMetrics);
     if (mGlyphWidths) {
         aSizes->mFontInstances +=
-            mGlyphWidths->SizeOfIncludingThis(nullptr, aMallocSizeOf);
+            mGlyphWidths->ShallowSizeOfIncludingThis(aMallocSizeOf);
     }
 }
 

@@ -14,7 +14,7 @@
 #include <utils/threads.h>
 
 #include "mozilla/media/MediaSystemResourceClient.h"
-#include "nsRefPtr.h"
+#include "mozilla/RefPtr.h"
 
 namespace android {
 
@@ -110,13 +110,13 @@ private:
 
     sp<MediaSource> mOMXCodec;
 
-    nsRefPtr<mozilla::MediaSystemResourceClient> mResourceClient;
+    RefPtr<mozilla::MediaSystemResourceClient> mResourceClient;
     ResourceState mState;
 
     // Codec Resource Notification Listener
     wp<CodecResourceListener> mListener;
 };
 
-}  // namespace android
+} // namespace android
 
 #endif  // OMX_CODEC_PROXY_DECODER_H_

@@ -21,8 +21,8 @@ const ICON_ANCHOR_ATTRIBUTE = "popupnotificationanchor";
 
 const PREF_SECURITY_DELAY = "security.notification_enable_delay";
 
-let popupNotificationsMap = new WeakMap();
-let gNotificationParents = new WeakMap;
+var popupNotificationsMap = new WeakMap();
+var gNotificationParents = new WeakMap;
 
 function getAnchorFromBrowser(aBrowser, aAnchorID) {
   let attrPrefix = aAnchorID ? aAnchorID.replace("notification-icon", "") : "";
@@ -173,7 +173,7 @@ PopupNotifications.prototype = {
   getNotification: function PopupNotifications_getNotification(id, browser) {
     let n = null;
     let notifications = this._getNotificationsForBrowser(browser || this.tabbrowser.selectedBrowser);
-    notifications.some(function(x) x.id == id && (n = x));
+    notifications.some(x => x.id == id && (n = x));
     return n;
   },
 
@@ -212,9 +212,6 @@ PopupNotifications.prototype = {
    * @param options
    *        An options JavaScript object holding additional properties for the
    *        notification. The following properties are currently supported:
-   *        origin:      A string representing the origin of the site presenting
-   *                     a notification so it can be shown to the user (possibly
-   *                     with a favicon). e.g. https://example.com:8080
    *        persistence: An integer. The notification will not automatically
    *                     dismiss for this many page loads.
    *        timeout:     A time in milliseconds. The notification will not
@@ -273,9 +270,11 @@ PopupNotifications.prototype = {
    *                     A string URL. Setting this property will make the
    *                     prompt display a "Learn More" link that, when clicked,
    *                     opens the URL in a new tab.
-   *        displayOrigin:
-   *                     The host name or file path of the page the notification came
+   *        displayURI:
+   *                     The nsIURI of the page the notification came
    *                     from. If present, this will be displayed above the message.
+   *                     If the nsIURI represents a file, the path will be displayed,
+   *                     otherwise the hostPort will be displayed.
    * @returns the Notification object corresponding to the added notification.
    */
   show: function PopupNotifications_show(browser, id, message, anchorID,
@@ -548,7 +547,6 @@ PopupNotifications.prototype = {
       popupnotification.setAttribute("id", popupnotificationID);
       popupnotification.setAttribute("popupid", n.id);
       popupnotification.setAttribute("closebuttoncommand", "PopupNotifications._dismiss();");
-      popupnotification.setAttribute("noautofocus", "true");
       if (n.mainAction) {
         popupnotification.setAttribute("buttonlabel", n.mainAction.label);
         popupnotification.setAttribute("buttonaccesskey", n.mainAction.accessKey);
@@ -571,9 +569,20 @@ PopupNotifications.prototype = {
       else
         popupnotification.removeAttribute("learnmoreurl");
 
-      if (n.options.displayOrigin)
-        popupnotification.setAttribute("origin", n.options.displayOrigin);
-      else
+      if (n.options.displayURI) {
+        let uri;
+        try {
+           if (n.options.displayURI instanceof Ci.nsIFileURL) {
+            uri = n.options.displayURI.path;
+          } else {
+            uri = n.options.displayURI.hostPort;
+          }
+          popupnotification.setAttribute("origin", uri);
+        } catch (e) {
+          Cu.reportError(e);
+          popupnotification.removeAttribute("origin");
+        }
+      } else
         popupnotification.removeAttribute("origin");
 
       popupnotification.notification = n;
@@ -681,14 +690,10 @@ PopupNotifications.prototype = {
 
     if (!notifications)
       notifications = this._currentNotifications;
-    let notificationsToShow = [];
-    // Filter out notifications that have been dismissed.
-    notificationsToShow = notifications.filter(function (n) {
-      return !n.dismissed && !n.options.neverShow;
-    });
 
-    if (!anchors.size && notificationsToShow.length)
-      anchors = this._getAnchorsForNotifications(notificationsToShow);
+    let haveNotifications = notifications.length > 0;
+    if (!anchors.size && haveNotifications)
+      anchors = this._getAnchorsForNotifications(notifications);
 
     let useIconBox = !!this.iconBox;
     if (useIconBox && anchors.size) {
@@ -700,24 +705,31 @@ PopupNotifications.prototype = {
       }
     }
 
+    // Filter out notifications that have been dismissed.
+    let notificationsToShow = notifications.filter(function (n) {
+      return !n.dismissed && !n.options.neverShow;
+    });
+
     if (useIconBox) {
-      // hide icons of the previous tab.
+      // Hide icons of the previous tab.
       this._hideIcons();
     }
 
-    let haveNotifications = notifications.length > 0;
     if (haveNotifications) {
-      if (useIconBox) {
-        this._showIcons(notifications);
-        this.iconBox.hidden = false;
-      } else if (anchors.size) {
-        this._updateAnchorIcons(notifications, anchors);
-      }
-
       // Also filter out notifications that are for a different anchor.
       notificationsToShow = notificationsToShow.filter(function (n) {
         return anchors.has(n.anchorElement);
       });
+
+      if (useIconBox) {
+        this._showIcons(notifications);
+        this.iconBox.hidden = false;
+        // Make sure that panels can only be attached to anchors of shown
+        // notifications inside an iconBox.
+        anchors = this._getAnchorsForNotifications(notificationsToShow);
+      } else if (anchors.size) {
+        this._updateAnchorIcons(notifications, anchors);
+      }
     }
 
     if (notificationsToShow.length > 0) {
@@ -760,7 +772,6 @@ PopupNotifications.prototype = {
       if (anchorElement.classList.contains("notification-anchor-icon")) {
         // remove previous icon classes
         let className = anchorElement.className.replace(/([-\w]+-notification-icon\s?)/g,"")
-        className = "default-notification-icon " + className;
         if (notifications.length > 0) {
           // Find the first notification this anchor used for.
           let notification = notifications[0];
@@ -860,6 +871,9 @@ PopupNotifications.prototype = {
       this._dismissOrRemoveCurrentNotifications();
     }
 
+    // Ensure we move focus into the panel because it's opened through user interaction:
+    this.panel.removeAttribute("noautofocus", "true");
+
     this._reshowNotifications(anchor);
   },
 
@@ -939,6 +953,10 @@ PopupNotifications.prototype = {
       }
       return;
     }
+
+    // Ensure that when the panel comes up without user interaction,
+    // we don't autofocus it.
+    this.panel.setAttribute("noautofocus", "true");
 
     this._dismissOrRemoveCurrentNotifications();
 

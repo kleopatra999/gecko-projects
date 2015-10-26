@@ -20,8 +20,6 @@
 
 #include <string>
 
-struct gfxRGBA;
-
 namespace mozilla {
 namespace layers {
 
@@ -32,16 +30,17 @@ enum ShaderFeatures {
   ENABLE_TEXTURE_RECT=0x02,
   ENABLE_TEXTURE_EXTERNAL=0x04,
   ENABLE_TEXTURE_YCBCR=0x08,
-  ENABLE_TEXTURE_COMPONENT_ALPHA=0x10,
-  ENABLE_TEXTURE_NO_ALPHA=0x20,
-  ENABLE_TEXTURE_RB_SWAP=0x40,
-  ENABLE_OPACITY=0x80,
-  ENABLE_BLUR=0x100,
-  ENABLE_COLOR_MATRIX=0x200,
-  ENABLE_MASK_2D=0x400,
-  ENABLE_MASK_3D=0x800,
-  ENABLE_PREMULTIPLY=0x1000,
-  ENABLE_DEAA=0x2000
+  ENABLE_TEXTURE_NV12=0x10,
+  ENABLE_TEXTURE_COMPONENT_ALPHA=0x20,
+  ENABLE_TEXTURE_NO_ALPHA=0x40,
+  ENABLE_TEXTURE_RB_SWAP=0x80,
+  ENABLE_OPACITY=0x100,
+  ENABLE_BLUR=0x200,
+  ENABLE_COLOR_MATRIX=0x400,
+  ENABLE_MASK_2D=0x800,
+  ENABLE_MASK_3D=0x1000,
+  ENABLE_PREMULTIPLY=0x2000,
+  ENABLE_DEAA=0x4000
 };
 
 class KnownUniform {
@@ -68,6 +67,7 @@ public:
     MaskTexture,
     RenderColor,
     TexCoordMultiplier,
+    CbCrTexCoordMultiplier,
     TexturePass2,
     ColorMatrix,
     ColorMatrixVector,
@@ -215,6 +215,7 @@ public:
   void SetNoAlpha(bool aEnabled);
   void SetOpacity(bool aEnabled);
   void SetYCbCr(bool aEnabled);
+  void SetNV12(bool aEnabled);
   void SetComponentAlpha(bool aEnabled);
   void SetColorMatrix(bool aEnabled);
   void SetBlur(bool aEnabled);
@@ -415,6 +416,11 @@ public:
     SetUniform(KnownUniform::CrTexture, aCrUnit);
   }
 
+  void SetNV12TextureUnits(GLint aYUnit, GLint aCbCrUnit) {
+    SetUniform(KnownUniform::YTexture, aYUnit);
+    SetUniform(KnownUniform::CbTexture, aCbCrUnit);
+  }
+
   void SetBlackTextureUnit(GLint aUnit) {
     SetUniform(KnownUniform::BlackTexture, aUnit);
   }
@@ -425,10 +431,6 @@ public:
 
   void SetMaskTextureUnit(GLint aUnit) {
     SetUniform(KnownUniform::MaskTexture, aUnit);
-  }
-
-  void SetRenderColor(const gfxRGBA& aColor) {
-    SetUniform(KnownUniform::RenderColor, aColor);
   }
 
   void SetRenderColor(const gfx::Color& aColor) {
@@ -444,6 +446,11 @@ public:
   void SetTexCoordMultiplier(float aWidth, float aHeight) {
     float f[] = {aWidth, aHeight};
     SetUniform(KnownUniform::TexCoordMultiplier, 2, f);
+  }
+
+  void SetCbCrTexCoordMultiplier(float aWidth, float aHeight) {
+    float f[] = {aWidth, aHeight};
+    SetUniform(KnownUniform::CbCrTexCoordMultiplier, 2, f);
   }
 
   // Set whether we want the component alpha shader to return the color
@@ -491,17 +498,6 @@ protected:
     KnownUniform& ku(mProfile.mUniforms[aKnownUniform]);
     if (ku.UpdateUniform(aFloatValue)) {
       mGL->fUniform1f(ku.mLocation, aFloatValue);
-    }
-  }
-
-  void SetUniform(KnownUniform::KnownUniformName aKnownUniform, const gfxRGBA& aColor)
-  {
-    ASSERT_THIS_PROGRAM;
-    NS_ASSERTION(aKnownUniform >= 0 && aKnownUniform < KnownUniform::KnownUniformCount, "Invalid known uniform");
-
-    KnownUniform& ku(mProfile.mUniforms[aKnownUniform]);
-    if (ku.UpdateUniform(aColor.r, aColor.g, aColor.b, aColor.a)) {
-      mGL->fUniform4fv(ku.mLocation, 1, ku.mValue.f16v);
     }
   }
 
@@ -581,8 +577,7 @@ protected:
   }
 };
 
-
-} /* layers */
-} /* mozilla */
+} // namespace layers
+} // namespace mozilla
 
 #endif /* GFX_OGLSHADERPROGRAM_H */

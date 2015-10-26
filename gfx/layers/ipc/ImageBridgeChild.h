@@ -12,6 +12,7 @@
 #include "mozilla/RefPtr.h"             // for already_AddRefed
 #include "mozilla/ipc/SharedMemory.h"   // for SharedMemory, etc
 #include "mozilla/layers/AsyncTransactionTracker.h" // for AsyncTransactionTrackerHolder
+#include "mozilla/layers/CanvasClient.h"
 #include "mozilla/layers/CompositableForwarder.h"
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/PImageBridgeChild.h"
@@ -23,15 +24,16 @@ class MessageLoop;
 
 namespace base {
 class Thread;
-}
+} // namespace base
 
 namespace mozilla {
 namespace ipc {
 class Shmem;
-}
+} // namespace ipc
 
 namespace layers {
 
+class AsyncCanvasRenderer;
 class AsyncTransactionTracker;
 class ImageClient;
 class ImageContainer;
@@ -174,7 +176,8 @@ public:
    */
   virtual MessageLoop * GetMessageLoop() const override;
 
-  PCompositableChild* AllocPCompositableChild(const TextureInfo& aInfo, uint64_t* aID) override;
+  PCompositableChild* AllocPCompositableChild(const TextureInfo& aInfo,
+                                              PImageContainerChild* aChild, uint64_t* aID) override;
   bool DeallocPCompositableChild(PCompositableChild* aActor) override;
 
   /**
@@ -184,49 +187,69 @@ public:
   ~ImageBridgeChild();
 
   virtual PTextureChild*
-  AllocPTextureChild(const SurfaceDescriptor& aSharedData, const TextureFlags& aFlags) override;
+  AllocPTextureChild(const SurfaceDescriptor& aSharedData, const LayersBackend& aLayersBackend, const TextureFlags& aFlags) override;
 
   virtual bool
   DeallocPTextureChild(PTextureChild* actor) override;
 
   PMediaSystemResourceManagerChild*
   AllocPMediaSystemResourceManagerChild() override;
-
   bool
   DeallocPMediaSystemResourceManagerChild(PMediaSystemResourceManagerChild* aActor) override;
+
+  virtual PImageContainerChild*
+  AllocPImageContainerChild() override;
+  virtual bool
+  DeallocPImageContainerChild(PImageContainerChild* actor) override;
 
   virtual bool
   RecvParentAsyncMessages(InfallibleTArray<AsyncParentMessageData>&& aMessages) override;
 
-  already_AddRefed<ImageClient> CreateImageClient(CompositableType aType);
-  already_AddRefed<ImageClient> CreateImageClientNow(CompositableType aType);
+  virtual bool
+  RecvDidComposite(InfallibleTArray<ImageCompositeNotification>&& aNotifications) override;
 
-  static void DispatchReleaseImageClient(ImageClient* aClient);
+  already_AddRefed<ImageClient> CreateImageClient(CompositableType aType,
+                                                  ImageContainer* aImageContainer);
+  already_AddRefed<ImageClient> CreateImageClientNow(CompositableType aType,
+                                                     ImageContainer* aImageContainer);
+  already_AddRefed<CanvasClient> CreateCanvasClient(CanvasClient::CanvasClientType aType,
+                                                    TextureFlags aFlag);
+  already_AddRefed<CanvasClient> CreateCanvasClientNow(CanvasClient::CanvasClientType aType,
+                                                       TextureFlags aFlag);
+
+  static void DispatchReleaseImageClient(ImageClient* aClient,
+                                         PImageContainerChild* aChild = nullptr);
+  static void DispatchReleaseCanvasClient(CanvasClient* aClient);
   static void DispatchReleaseTextureClient(TextureClient* aClient);
   static void DispatchImageClientUpdate(ImageClient* aClient, ImageContainer* aContainer);
+
+  static void UpdateAsyncCanvasRenderer(AsyncCanvasRenderer* aClient);
+  static void UpdateAsyncCanvasRendererNow(AsyncCanvasRenderer* aClient);
 
   /**
    * Flush all Images sent to CompositableHost.
    */
-  static void FlushAllImages(ImageClient* aClient, ImageContainer* aContainer, bool aExceptFront);
+  static void FlushAllImages(ImageClient* aClient, ImageContainer* aContainer);
 
   // CompositableForwarder
 
-  virtual void Connect(CompositableClient* aCompositable) override;
+  virtual void Connect(CompositableClient* aCompositable,
+                       ImageContainer* aImageContainer) override;
 
   virtual bool IsImageBridgeChild() const override { return true; }
 
   /**
-   * See CompositableForwarder::UseTexture
+   * See CompositableForwarder::UseTextures
    */
-  virtual void UseTexture(CompositableClient* aCompositable,
-                          TextureClient* aClient) override;
+  virtual void UseTextures(CompositableClient* aCompositable,
+                           const nsTArray<TimedTextureClient>& aTextures) override;
   virtual void UseComponentAlphaTextures(CompositableClient* aCompositable,
                                          TextureClient* aClientOnBlack,
                                          TextureClient* aClientOnWhite) override;
 #ifdef MOZ_WIDGET_GONK
   virtual void UseOverlaySource(CompositableClient* aCompositable,
-                                const OverlaySource& aOverlay) override;
+                                const OverlaySource& aOverlay,
+                                const nsIntRect& aPictureRect) override;
 #endif
 
   virtual void RemoveTextureFromCompositable(CompositableClient* aCompositable,
@@ -243,13 +266,6 @@ public:
   {
     NS_RUNTIMEABORT("should not be called");
   }
-
-  /**
-   * Communicate the picture rect of a YUV image in aLayer to the compositor
-   */
-  virtual void UpdatePictureRect(CompositableClient* aCompositable,
-                                 const gfx::IntRect& aRect) override;
-
 
   virtual void UpdateTextureRegion(CompositableClient* aCompositable,
                                    const ThebesBufferData& aThebesBufferData,
@@ -286,6 +302,7 @@ public:
   virtual void DeallocShmem(mozilla::ipc::Shmem& aShmem) override;
 
   virtual PTextureChild* CreateTexture(const SurfaceDescriptor& aSharedData,
+                                       LayersBackend aLayersBackend,
                                        TextureFlags aFlags) override;
 
   virtual bool IsSameProcess() const override;
@@ -304,7 +321,7 @@ protected:
   bool mShuttingDown;
 };
 
-} // layers
-} // mozilla
+} // namespace layers
+} // namespace mozilla
 
 #endif

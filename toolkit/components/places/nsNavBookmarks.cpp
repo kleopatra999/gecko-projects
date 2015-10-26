@@ -53,7 +53,7 @@ public:
 
   void Init()
   {
-    nsRefPtr<Database> DB = Database::GetDatabase();
+    RefPtr<Database> DB = Database::GetDatabase();
     if (DB) {
       nsCOMPtr<mozIStorageAsyncStatement> stmt = DB->GetAsyncStatement(
         "/* do not warn (bug 1175249) */ "
@@ -105,12 +105,12 @@ public:
   }
 
 private:
-  nsRefPtr<nsNavBookmarks> mBookmarksSvc;
+  RefPtr<nsNavBookmarks> mBookmarksSvc;
   Method mCallback;
   DataType mData;
 };
 
-} // Anonymous namespace.
+} // namespace
 
 
 nsNavBookmarks::nsNavBookmarks()
@@ -551,7 +551,8 @@ nsNavBookmarks::InsertBookmark(int64_t aFolder,
                                      TYPE_BOOKMARK,
                                      bookmarks[i].parentId,
                                      bookmarks[i].guid,
-                                     bookmarks[i].parentGuid));
+                                     bookmarks[i].parentGuid,
+                                     EmptyCString()));
     }
   }
 
@@ -656,7 +657,8 @@ nsNavBookmarks::RemoveItem(int64_t aItemId)
                                      TYPE_BOOKMARK,
                                      bookmarks[i].parentId,
                                      bookmarks[i].guid,
-                                     bookmarks[i].parentGuid));
+                                     bookmarks[i].parentGuid,
+                                     EmptyCString()));
     }
 
   }
@@ -1132,7 +1134,8 @@ nsNavBookmarks::RemoveFolderChildren(int64_t aFolderId)
                                        TYPE_BOOKMARK,
                                        bookmarks[i].parentId,
                                        bookmarks[i].guid,
-                                       bookmarks[i].parentGuid));
+                                       bookmarks[i].parentGuid,
+                                       EmptyCString()));
       }
     }
   }
@@ -1413,7 +1416,8 @@ nsNavBookmarks::SetItemDateAdded(int64_t aItemId, PRTime aDateAdded)
                                  bookmark.type,
                                  bookmark.parentId,
                                  bookmark.guid,
-                                 bookmark.parentGuid));
+                                 bookmark.parentGuid,
+                                 EmptyCString()));
   return NS_OK;
 }
 
@@ -1459,7 +1463,8 @@ nsNavBookmarks::SetItemLastModified(int64_t aItemId, PRTime aLastModified)
                                  bookmark.type,
                                  bookmark.parentId,
                                  bookmark.guid,
-                                 bookmark.parentGuid));
+                                 bookmark.parentGuid,
+                                 EmptyCString()));
   return NS_OK;
 }
 
@@ -1527,7 +1532,8 @@ nsNavBookmarks::SetItemTitle(int64_t aItemId, const nsACString& aTitle)
                                  bookmark.type,
                                  bookmark.parentId,
                                  bookmark.guid,
-                                 bookmark.parentGuid));
+                                 bookmark.parentGuid,
+                                 EmptyCString()));
   return NS_OK;
 }
 
@@ -1676,7 +1682,7 @@ nsNavBookmarks::ProcessFolderNodeRow(
   rv = aRow->GetInt64(nsNavHistory::kGetInfoIndex_ItemId, &id);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsRefPtr<nsNavHistoryResultNode> node;
+  RefPtr<nsNavHistoryResultNode> node;
 
   if (itemType == TYPE_BOOKMARK) {
     nsNavHistory* history = nsNavHistory::GetHistoryService();
@@ -2010,7 +2016,8 @@ nsNavBookmarks::ChangeBookmarkURI(int64_t aBookmarkId, nsIURI* aNewURI)
                                  bookmark.type,
                                  bookmark.parentId,
                                  bookmark.guid,
-                                 bookmark.parentGuid));
+                                 bookmark.parentGuid,
+                                 bookmark.url));
   return NS_OK;
 }
 
@@ -2044,6 +2051,7 @@ nsNavBookmarks::GetBookmarkIdsForURITArray(nsIURI* aURI,
   // importing, syncing or due to extensions.
   // Note: not using a JOIN is cheaper in this case.
   nsCOMPtr<mozIStorageStatement> stmt = mDB->GetStatement(
+    "/* do not warn (bug 1175249) */ "
     "SELECT b.id, b.guid, b.parent, b.lastModified, t.guid, t.parent "
     "FROM moz_bookmarks b "
     "JOIN moz_bookmarks t on t.id = b.parent "
@@ -2087,6 +2095,7 @@ nsNavBookmarks::GetBookmarksForURI(nsIURI* aURI,
   // importing, syncing or due to extensions.
   // Note: not using a JOIN is cheaper in this case.
   nsCOMPtr<mozIStorageStatement> stmt = mDB->GetStatement(
+    "/* do not warn (bug 1175249) */ "
     "SELECT b.id, b.guid, b.parent, b.lastModified, t.guid, t.parent "
     "FROM moz_bookmarks b "
     "JOIN moz_bookmarks t on t.id = b.parent "
@@ -2302,7 +2311,8 @@ nsNavBookmarks::SetKeywordForBookmark(int64_t aBookmarkId,
                                      TYPE_BOOKMARK,
                                      bookmarks[i].parentId,
                                      bookmarks[i].guid,
-                                     bookmarks[i].parentGuid));
+                                     bookmarks[i].parentGuid,
+                                     EmptyCString()));
     }
 
     return NS_OK;
@@ -2354,7 +2364,8 @@ nsNavBookmarks::SetKeywordForBookmark(int64_t aBookmarkId,
                                      TYPE_BOOKMARK,
                                      bookmarks[i].parentId,
                                      bookmarks[i].guid,
-                                     bookmarks[i].parentGuid));
+                                     bookmarks[i].parentGuid,
+                                     EmptyCString()));
     }
 
     stmt = mDB->GetStatement(
@@ -2393,7 +2404,8 @@ nsNavBookmarks::SetKeywordForBookmark(int64_t aBookmarkId,
                                    TYPE_BOOKMARK,
                                    bookmarks[i].parentId,
                                    bookmarks[i].guid,
-                                   bookmarks[i].parentGuid));
+                                   bookmarks[i].parentGuid,
+                                   EmptyCString()));
   }
 
   return NS_OK;
@@ -2536,7 +2548,7 @@ nsNavBookmarks::GetObservers(uint32_t* _count,
 
   // Then add the other observers.
   for (uint32_t i = 0; i < mObservers.Length(); ++i) {
-    const nsCOMPtr<nsINavBookmarkObserver> &observer = mObservers.ElementAt(i);
+    const nsCOMPtr<nsINavBookmarkObserver> &observer = mObservers.ElementAt(i).GetValue();
     // Skip nullified weak observers.
     if (observer)
       observers.AppendElement(observer);
@@ -2589,7 +2601,8 @@ nsNavBookmarks::NotifyItemChanged(const ItemChangeData& aData)
                                  aData.bookmark.type,
                                  aData.bookmark.parentId,
                                  aData.bookmark.guid,
-                                 aData.bookmark.parentGuid));
+                                 aData.bookmark.parentGuid,
+                                 aData.oldValue));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2656,7 +2669,7 @@ nsNavBookmarks::OnVisit(nsIURI* aURI, int64_t aVisitId, PRTime aTime,
   visitData.time = aTime;
   visitData.transitionType = aTransitionType;
 
-  nsRefPtr< AsyncGetBookmarksForURI<ItemVisitMethod, ItemVisitData> > notifier =
+  RefPtr< AsyncGetBookmarksForURI<ItemVisitMethod, ItemVisitData> > notifier =
     new AsyncGetBookmarksForURI<ItemVisitMethod, ItemVisitData>(this, &nsNavBookmarks::NotifyItemVisited, visitData);
   notifier->Init();
   return NS_OK;
@@ -2757,7 +2770,7 @@ nsNavBookmarks::OnPageChanged(nsIURI* aURI,
       }
     }
     else {
-      nsRefPtr< AsyncGetBookmarksForURI<ItemChangeMethod, ItemChangeData> > notifier =
+      RefPtr< AsyncGetBookmarksForURI<ItemChangeMethod, ItemChangeData> > notifier =
         new AsyncGetBookmarksForURI<ItemChangeMethod, ItemChangeData>(this, &nsNavBookmarks::NotifyItemChanged, changeData);
       notifier->Init();
     }
@@ -2782,7 +2795,7 @@ nsNavBookmarks::OnDeleteVisits(nsIURI* aURI, PRTime aVisitTime,
     changeData.bookmark.lastModified = 0;
     changeData.bookmark.type = TYPE_BOOKMARK;
 
-    nsRefPtr< AsyncGetBookmarksForURI<ItemChangeMethod, ItemChangeData> > notifier =
+    RefPtr< AsyncGetBookmarksForURI<ItemChangeMethod, ItemChangeData> > notifier =
       new AsyncGetBookmarksForURI<ItemChangeMethod, ItemChangeData>(this, &nsNavBookmarks::NotifyItemChanged, changeData);
     notifier->Init();
   }
@@ -2820,7 +2833,8 @@ nsNavBookmarks::OnItemAnnotationSet(int64_t aItemId, const nsACString& aName)
                                  bookmark.type,
                                  bookmark.parentId,
                                  bookmark.guid,
-                                 bookmark.parentGuid));
+                                 bookmark.parentGuid,
+                                 EmptyCString()));
   return NS_OK;
 }
 

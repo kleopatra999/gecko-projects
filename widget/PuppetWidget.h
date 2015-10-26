@@ -29,7 +29,7 @@ namespace mozilla {
 
 namespace dom {
 class TabChild;
-}
+} // namespace dom
 
 namespace widget {
 
@@ -119,6 +119,9 @@ public:
 
   // PuppetWidgets don't have native data, as they're purely nonnative.
   virtual void* GetNativeData(uint32_t aDataType) override;
+#if defined(XP_WIN)
+  void SetNativeData(uint32_t aDataType, uintptr_t aVal) override;
+#endif
   NS_IMETHOD ReparentNativeWidget(nsIWidget* aNewParent) override
   { return NS_ERROR_UNEXPECTED; }
 
@@ -193,10 +196,11 @@ public:
   virtual bool NeedsPaint() override;
 
   virtual TabChild* GetOwningTabChild() override { return mTabChild; }
-  virtual void ClearBackingScaleCache()
+
+  void UpdateBackingScaleCache(float aDpi, double aScale)
   {
-    mDPI = -1;
-    mDefaultScale = -1;
+    mDPI = aDpi;
+    mDefaultScale = aScale;
   }
 
   nsIntSize GetScreenDimensions();
@@ -247,6 +251,7 @@ public:
   virtual nsresult ClearNativeTouchSequence(nsIObserver* aObserver) override;
   virtual uint32_t GetMaxTouchPoints() const override;
 
+  virtual void StartAsyncScrollbarDrag(const AsyncDragMetrics& aDragMetrics) override;
 protected:
   bool mEnabled;
   bool mVisible;
@@ -262,7 +267,7 @@ private:
   nsresult IMEEndComposition(bool aCancel);
   nsresult NotifyIMEOfFocusChange(const IMENotification& aIMENotification);
   nsresult NotifyIMEOfSelectionChange(const IMENotification& aIMENotification);
-  nsresult NotifyIMEOfUpdateComposition(const IMENotification& aIMENotification);
+  nsresult NotifyIMEOfCompositionUpdate(const IMENotification& aIMENotification);
   nsresult NotifyIMEOfTextChange(const IMENotification& aIMENotification);
   nsresult NotifyIMEOfMouseButtonEvent(const IMENotification& aIMENotification);
   nsresult NotifyIMEOfPositionChange(const IMENotification& aIMENotification);
@@ -273,6 +278,8 @@ private:
                              uint32_t& aTargetCauseOffset);
   bool GetCaretRect(mozilla::LayoutDeviceIntRect& aCaretRect, uint32_t aCaretOffset);
   uint32_t GetCaretOffset();
+
+  nsIWidgetListener* GetCurrentWidgetListener();
 
   class PaintTask : public nsRunnable {
   public:
@@ -304,15 +311,16 @@ private:
   TabChild* mTabChild;
   // The "widget" to which we delegate events if we don't have an
   // event handler.
-  nsRefPtr<PuppetWidget> mChild;
+  RefPtr<PuppetWidget> mChild;
   nsIntRegion mDirtyRegion;
   nsRevocableEventPtr<PaintTask> mPaintTask;
-  nsRefPtr<MemoryPressureObserver> mMemoryPressureObserver;
+  RefPtr<MemoryPressureObserver> mMemoryPressureObserver;
   // XXX/cjones: keeping this around until we teach LayerManager to do
   // retained-content-only transactions
-  mozilla::RefPtr<DrawTarget> mDrawTarget;
+  RefPtr<DrawTarget> mDrawTarget;
   // IME
   nsIMEUpdatePreference mIMEPreferenceOfParent;
+  InputContext mInputContext;
   ContentCacheInChild mContentCache;
   bool mNeedIMEStateInit;
 
@@ -404,7 +412,7 @@ protected:
     nsCOMPtr<nsIScreen> mOneScreen;
 };
 
-}  // namespace widget
-}  // namespace mozilla
+} // namespace widget
+} // namespace mozilla
 
 #endif  // mozilla_widget_PuppetWidget_h__

@@ -7,6 +7,7 @@
 #ifndef mozilla_dom_ContentParent_h
 #define mozilla_dom_ContentParent_h
 
+#include "mozilla/dom/NuwaParent.h"
 #include "mozilla/dom/PContentParent.h"
 #include "mozilla/dom/nsIContentParent.h"
 #include "mozilla/ipc/GeckoChildProcessHost.h"
@@ -15,6 +16,7 @@
 #include "mozilla/HalTypes.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/StaticPtr.h"
+#include "mozilla/UniquePtr.h"
 
 #include "nsDataHashtable.h"
 #include "nsFrameMessageManager.h"
@@ -24,6 +26,7 @@
 #include "nsIDOMGeoPositionCallback.h"
 #include "nsIDOMGeoPositionErrorCallback.h"
 #include "PermissionMessageUtils.h"
+#include "DriverCrashGuard.h"
 
 #define CHILD_PROCESS_SHUTDOWN_MESSAGE NS_LITERAL_STRING("child-process-shutdown")
 
@@ -41,6 +44,11 @@ class PRemoteSpellcheckEngineParent;
 class ProfileGatherer;
 #endif
 
+#if defined(XP_LINUX) && defined(MOZ_CONTENT_SANDBOX)
+class SandboxBroker;
+class SandboxBrokerPolicyFactory;
+#endif
+
 namespace ipc {
 class OptionalURIParams;
 class PFileDescriptorSetParent;
@@ -50,7 +58,7 @@ class TestShellParent;
 
 namespace jsipc {
 class PJavaScriptParent;
-}
+} // namespace jsipc
 
 namespace layers {
 class PCompositorParent;
@@ -79,8 +87,8 @@ class ContentParent final : public PContentParent
     typedef mozilla::ipc::PFileDescriptorSetParent PFileDescriptorSetParent;
     typedef mozilla::ipc::TestShellParent TestShellParent;
     typedef mozilla::ipc::URIParams URIParams;
+    typedef mozilla::ipc::PrincipalInfo PrincipalInfo;
     typedef mozilla::dom::ClonedMessageData ClonedMessageData;
-    typedef mozilla::OwningSerializedStructuredCloneBuffer OwningSerializedStructuredCloneBuffer;
 
 public:
 #ifdef MOZ_NUWA_PROCESS
@@ -174,6 +182,10 @@ public:
                                                nsTArray<nsCString>&& aTags,
                                                bool* aHasPlugin,
                                                nsCString* aVersion) override;
+    virtual bool RecvIsGMPPresentOnDisk(const nsString& aKeySystem,
+                                        const nsCString& aVersion,
+                                        bool* aIsPresent,
+                                        nsCString* aMessage) override;
 
     virtual bool RecvLoadPlugin(const uint32_t& aPluginId, nsresult* aRv, uint32_t* aRunID) override;
     virtual bool RecvConnectPluginBridge(const uint32_t& aPluginId, nsresult* aRv) override;
@@ -194,11 +206,11 @@ public:
      */
     virtual bool DoLoadMessageManagerScript(const nsAString& aURL,
                                             bool aRunInGlobalScope) override;
-    virtual bool DoSendAsyncMessage(JSContext* aCx,
-                                    const nsAString& aMessage,
-                                    const mozilla::dom::StructuredCloneData& aData,
-                                    JS::Handle<JSObject *> aCpows,
-                                    nsIPrincipal* aPrincipal) override;
+    virtual nsresult DoSendAsyncMessage(JSContext* aCx,
+                                        const nsAString& aMessage,
+                                        StructuredCloneData& aData,
+                                        JS::Handle<JSObject *> aCpows,
+                                        nsIPrincipal* aPrincipal) override;
     virtual bool CheckPermission(const nsAString& aPermission) override;
     virtual bool CheckManifestURL(const nsAString& aManifestURL) override;
     virtual bool CheckAppHasPermission(const nsAString& aPermission) override;
@@ -206,9 +218,10 @@ public:
     virtual bool KillChild() override;
 
     /** Notify that a tab is beginning its destruction sequence. */
-    void NotifyTabDestroying(PBrowserParent* aTab);
+    static void NotifyTabDestroying(const TabId& aTabId,
+                                    const ContentParentId& aCpId);
     /** Notify that a tab was destroyed during normal operation. */
-    void NotifyTabDestroyed(PBrowserParent* aTab,
+    void NotifyTabDestroyed(const TabId& aTabId,
                             bool aNotifiedDestroying);
 
     TestShellParent* CreateTestShell();
@@ -221,7 +234,21 @@ public:
                   const IPCTabContext& aContext,
                   const ContentParentId& aCpId);
     static void
-    DeallocateTabId(const TabId& aTabId, const ContentParentId& aCpId);
+    DeallocateTabId(const TabId& aTabId,
+                    const ContentParentId& aCpId,
+                    bool aMarkedDestroying);
+
+    /*
+     * Add the appId's reference count by the given ContentParentId and TabId
+     */
+    static bool
+    PermissionManagerAddref(const ContentParentId& aCpId, const TabId& aTabId);
+
+    /*
+     * Release the appId's reference count by the given ContentParentId and TabId
+     */
+    static bool
+    PermissionManagerRelease(const ContentParentId& aCpId, const TabId& aTabId);
 
     static bool
     GetBrowserConfiguration(const nsCString& aURI, BrowserConfiguration& aConfig);
@@ -238,6 +265,15 @@ public:
 #ifdef MOZ_NUWA_PROCESS
     bool IsNuwaProcess();
 #endif
+
+    // A shorthand for checking if the Nuwa process is ready.
+    bool IsReadyNuwaProcess() {
+#ifdef MOZ_NUWA_PROCESS
+        return IsNuwaProcess() && IsNuwaReady();
+#else
+        return false;
+#endif
+    }
 
     GeckoChildProcessHost* Process() {
         return mSubprocess;
@@ -319,6 +355,9 @@ public:
         return PContentParent::RecvPHalConstructor(aActor);
     }
 
+    virtual PHeapSnapshotTempFileHelperParent*
+    AllocPHeapSnapshotTempFileHelperParent() override;
+
     virtual PStorageParent* AllocPStorageParent() override;
     virtual bool RecvPStorageConstructor(PStorageParent* aActor) override {
         return PContentParent::RecvPStorageConstructor(aActor);
@@ -350,19 +389,26 @@ public:
                                    const ContentParentId& aCpId,
                                    TabId* aTabId) override;
 
-    virtual bool RecvDeallocateTabId(const TabId& aTabId) override;
+    virtual bool RecvDeallocateTabId(const TabId& aTabId,
+                                     const ContentParentId& aCpId,
+                                     const bool& aMarkedDestroying) override;
+
+    virtual bool RecvNotifyTabDestroying(const TabId& aTabId,
+                                         const ContentParentId& aCpId) override;
 
     nsTArray<TabContext> GetManagedTabContext();
 
     virtual POfflineCacheUpdateParent*
     AllocPOfflineCacheUpdateParent(const URIParams& aManifestURI,
                                    const URIParams& aDocumentURI,
+                                   const PrincipalInfo& aLoadingPrincipalInfo,
                                    const bool& aStickDocument,
                                    const TabId& aTabId) override;
     virtual bool
     RecvPOfflineCacheUpdateConstructor(POfflineCacheUpdateParent* aActor,
                                        const URIParams& aManifestURI,
                                        const URIParams& aDocumentURI,
+                                       const PrincipalInfo& aLoadingPrincipal,
                                        const bool& stickDocument,
                                        const TabId& aTabId) override;
     virtual bool
@@ -381,7 +427,12 @@ public:
     virtual bool
     DeallocPContentPermissionRequestParent(PContentPermissionRequestParent* actor) override;
 
+    virtual bool HandleWindowsMessages(const Message& aMsg) const override;
+
     bool HasGamepadListener() const { return mHasGamepadListener; }
+
+    void SetNuwaParent(NuwaParent* aNuwaParent) { mNuwaParent = aNuwaParent; }
+    void ForkNewProcess(bool aBlocking);
 
 protected:
     void OnChannelConnected(int32_t pid) override;
@@ -554,7 +605,7 @@ private:
                                                InfallibleTArray<nsString>* dictionaries,
                                                ClipboardCapabilities* clipboardCaps,
                                                DomainPolicyClone* domainPolicy,
-                                               OwningSerializedStructuredCloneBuffer* initialData) override;
+                                               StructuredCloneData* initialData) override;
 
     virtual bool DeallocPJavaScriptParent(mozilla::jsipc::PJavaScriptParent*) override;
 
@@ -589,7 +640,11 @@ private:
     virtual bool RecvIsSecureURI(const uint32_t& aType, const URIParams& aURI,
                                  const uint32_t& aFlags, bool* aIsSecureURI) override;
 
+    virtual bool RecvAccumulateMixedContentHSTS(const URIParams& aURI, const bool& aActive) override;
+
     virtual bool DeallocPHalParent(PHalParent*) override;
+
+    virtual bool DeallocPHeapSnapshotTempFileHelperParent(PHeapSnapshotTempFileHelperParent*) override;
 
     virtual PIccParent* AllocPIccParent(const uint32_t& aServiceId) override;
     virtual bool DeallocPIccParent(PIccParent* aActor) override;
@@ -658,16 +713,16 @@ private:
     virtual PFMRadioParent* AllocPFMRadioParent() override;
     virtual bool DeallocPFMRadioParent(PFMRadioParent* aActor) override;
 
-    virtual PAsmJSCacheEntryParent* AllocPAsmJSCacheEntryParent(
-                                 const asmjscache::OpenMode& aOpenMode,
-                                 const asmjscache::WriteParams& aWriteParams,
-                                 const IPC::Principal& aPrincipal) override;
-    virtual bool DeallocPAsmJSCacheEntryParent(
-                                   PAsmJSCacheEntryParent* aActor) override;
+    virtual PPresentationParent* AllocPPresentationParent() override;
+    virtual bool DeallocPPresentationParent(PPresentationParent* aActor) override;
+    virtual bool RecvPPresentationConstructor(PPresentationParent* aActor) override;
 
     virtual PSpeechSynthesisParent* AllocPSpeechSynthesisParent() override;
     virtual bool DeallocPSpeechSynthesisParent(PSpeechSynthesisParent* aActor) override;
     virtual bool RecvPSpeechSynthesisConstructor(PSpeechSynthesisParent* aActor) override;
+
+    virtual PWebBrowserPersistDocumentParent* AllocPWebBrowserPersistDocumentParent(PBrowserParent* aBrowser, const uint64_t& aOuterWindowID) override;
+    virtual bool DeallocPWebBrowserPersistDocumentParent(PWebBrowserPersistDocumentParent* aActor) override;
 
     virtual bool RecvReadPrefsArray(InfallibleTArray<PrefSetting>* aPrefs) override;
     virtual bool RecvReadFontList(InfallibleTArray<FontListEntry>* retValue) override;
@@ -701,6 +756,8 @@ private:
     virtual bool RecvSetURITitle(const URIParams& uri,
                                  const nsString& title) override;
 
+    bool HasNotificationPermission(const IPC::Principal& aPrincipal);
+
     virtual bool RecvShowAlertNotification(const nsString& aImageUrl, const nsString& aTitle,
                                            const nsString& aText, const bool& aTextClickable,
                                            const nsString& aCookie, const nsString& aName,
@@ -712,18 +769,22 @@ private:
     virtual bool RecvCloseAlert(const nsString& aName,
                                 const IPC::Principal& aPrincipal) override;
 
+    virtual bool RecvDisableNotifications(const IPC::Principal& aPrincipal) override;
+
+    virtual bool RecvOpenNotificationSettings(const IPC::Principal& aPrincipal) override;
+
     virtual bool RecvLoadURIExternal(const URIParams& uri) override;
 
     virtual bool RecvSyncMessage(const nsString& aMsg,
                                  const ClonedMessageData& aData,
                                  InfallibleTArray<CpowEntry>&& aCpows,
                                  const IPC::Principal& aPrincipal,
-                                 nsTArray<OwningSerializedStructuredCloneBuffer>* aRetvals) override;
+                                 nsTArray<StructuredCloneData>* aRetvals) override;
     virtual bool RecvRpcMessage(const nsString& aMsg,
                                 const ClonedMessageData& aData,
                                 InfallibleTArray<CpowEntry>&& aCpows,
                                 const IPC::Principal& aPrincipal,
-                                nsTArray<OwningSerializedStructuredCloneBuffer>* aRetvals) override;
+                                nsTArray<StructuredCloneData>* aRetvals) override;
     virtual bool RecvAsyncMessage(const nsString& aMsg,
                                   const ClonedMessageData& aData,
                                   InfallibleTArray<CpowEntry>&& aCpows,
@@ -752,24 +813,16 @@ private:
 
     virtual bool RecvFirstIdle() override;
 
-    virtual bool RecvAudioChannelGetState(const AudioChannel& aChannel,
-                                          const bool& aElementHidden,
-                                          const bool& aElementWasHidden,
-                                          AudioChannelState* aValue) override;
-
-    virtual bool RecvAudioChannelRegisterType(const AudioChannel& aChannel,
-                                              const bool& aWithVideo) override;
-    virtual bool RecvAudioChannelUnregisterType(const AudioChannel& aChannel,
-                                                const bool& aElementHidden,
-                                                const bool& aWithVideo) override;
-
-    virtual bool RecvAudioChannelChangedNotification() override;
-
     virtual bool RecvAudioChannelChangeDefVolChannel(const int32_t& aChannel,
                                                      const bool& aHidden) override;
+
+    virtual bool RecvAudioChannelServiceStatus(const bool& aTelephonyChannel,
+                                               const bool& aContentOrNormalChannel,
+                                               const bool& aAnyChannel) override;
+
     virtual bool RecvGetSystemMemory(const uint64_t& getterId) override;
 
-    virtual bool RecvGetLookAndFeelCache(nsTArray<LookAndFeelInt>&& aLookAndFeelIntCache) override;
+    virtual bool RecvGetLookAndFeelCache(nsTArray<LookAndFeelInt>* aLookAndFeelIntCache) override;
 
     virtual bool RecvDataStoreGetStores(
                        const nsString& aName,
@@ -783,10 +836,10 @@ private:
 
     virtual bool RecvSystemMessageHandled() override;
 
-    virtual bool RecvNuwaReady() override;
-
-    virtual bool RecvAddNewProcess(const uint32_t& aPid,
-                                   InfallibleTArray<ProtocolFdMapping>&& aFds) override;
+    // Callbacks from NuwaParent.
+    void OnNuwaReady();
+    void OnNewProcessCreated(uint32_t aPid,
+                             UniquePtr<nsTArray<ProtocolFdMapping>>&& aFds);
 
     virtual bool RecvCreateFakeVolume(const nsString& fsName, const nsString& mountPoint) override;
 
@@ -814,6 +867,8 @@ private:
     virtual bool RecvGetGraphicsFeatureStatus(const int32_t& aFeature,
                                               int32_t* aStatus,
                                               bool* aSuccess) override;
+    virtual bool RecvBeginDriverCrashGuard(const uint32_t& aGuardType, bool* aOutCrashed) override;
+    virtual bool RecvEndDriverCrashGuard(const uint32_t& aGuardType) override;
 
     virtual bool RecvAddIdleObserver(const uint64_t& observerId,
                                      const uint32_t& aIdleTimeInS) override;
@@ -866,7 +921,10 @@ private:
     virtual bool RecvGamepadListenerAdded() override;
     virtual bool RecvGamepadListenerRemoved() override;
     virtual bool RecvProfile(const nsCString& aProfile) override;
+    virtual bool RecvGetGraphicsDeviceInitData(DeviceInitData* aOut) override;
 
+    virtual bool RecvGetDeviceStorageLocation(const nsString& aType,
+                                              nsString* aPath) override;
     // If you add strong pointers to cycle collected objects here, be sure to
     // release these objects in ShutDownProcess.  See the comment there for more
     // details.
@@ -924,7 +982,10 @@ private:
 
     friend class CrashReporterParent;
 
-    nsRefPtr<nsConsoleService>  mConsoleService;
+    // Allows NuwaParent to access OnNuwaReady() and OnNewProcessCreated().
+    friend class NuwaParent;
+
+    RefPtr<nsConsoleService>  mConsoleService;
     nsConsoleService* GetConsoleService();
 
     nsTArray<nsCOMPtr<nsIObserver>> mIdleListeners;
@@ -941,10 +1002,23 @@ private:
 #endif
 
     PProcessHangMonitorParent* mHangMonitorActor;
+
+    // NuwaParent and ContentParent hold strong references to each other. The
+    // cycle will be broken when either actor is destroyed.
+    RefPtr<NuwaParent> mNuwaParent;
+
 #ifdef MOZ_ENABLE_PROFILER_SPS
-    nsRefPtr<mozilla::ProfileGatherer> mGatherer;
+    RefPtr<mozilla::ProfileGatherer> mGatherer;
 #endif
     nsCString mProfile;
+
+    UniquePtr<gfx::DriverCrashGuard> mDriverCrashGuard;
+
+#if defined(XP_LINUX) && defined(MOZ_CONTENT_SANDBOX)
+    mozilla::UniquePtr<SandboxBroker> mSandboxBroker;
+    static mozilla::UniquePtr<SandboxBrokerPolicyFactory>
+        sSandboxBrokerPolicyFactory;
+#endif
 };
 
 } // namespace dom
@@ -962,7 +1036,7 @@ public:
   {}
 private:
   virtual ~ParentIdleListener() {}
-  nsRefPtr<mozilla::dom::ContentParent> mParent;
+  RefPtr<mozilla::dom::ContentParent> mParent;
   uint64_t mObserver;
   uint32_t mTime;
 };

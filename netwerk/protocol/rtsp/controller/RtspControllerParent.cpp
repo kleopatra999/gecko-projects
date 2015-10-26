@@ -12,7 +12,6 @@
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "mozilla/unused.h"
-#include "nsNetUtil.h"
 #include "mozilla/Logging.h"
 
 #include <sys/types.h>
@@ -43,7 +42,7 @@ RtspControllerParent::Destroy()
   if (!NS_IsMainThread()) {
     nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
     NS_ENSURE_TRUE_VOID(mainThread);
-    nsRefPtr<RtspControllerParent> doomed(this);
+    RefPtr<RtspControllerParent> doomed(this);
     if (NS_FAILED(NS_ProxyRelease(mainThread,
             static_cast<nsIStreamingProtocolListener*>(doomed), true))) {
       NS_WARNING("Failed to proxy release to main thread!");

@@ -21,6 +21,8 @@
 
 #include "nsITimer.h"
 
+#include "Units.h"
+
 class nsIWidget;
 
 // XUL popups can be in several different states. When opening a popup, the
@@ -122,13 +124,6 @@ enum MenuPopupAnchorType {
 #define POPUPPOSITION_HFLIP(v) (v ^ 1)
 #define POPUPPOSITION_VFLIP(v) (v ^ 2)
 
-// XXX, kyle.yuan@sun.com, there are 4 definitions for the same purpose:
-//  nsMenuPopupFrame.h, nsListControlFrame.cpp, listbox.xml, tree.xml
-//  need to find a good place to put them together.
-//  if someone changes one, please also change the other.
-
-#define CONTEXT_MENU_OFFSET_PIXELS 2
-
 nsIFrame* NS_NewMenuPopupFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
 class nsView;
@@ -154,7 +149,7 @@ protected:
 
 private:
   nsCOMPtr<nsIContent> mPopup;
-  nsRefPtr<nsPresContext> mPresContext;
+  RefPtr<nsPresContext> mPresContext;
 };
 
 class nsMenuPopupFrame final : public nsBoxFrame, public nsMenuParent,
@@ -342,11 +337,11 @@ public:
 
   void ChangeByPage(bool aIsUp);
 
-  // Move the popup to the screen coordinate (aLeft, aTop) in CSS pixels.
+  // Move the popup to the screen coordinate |aPos| in CSS pixels.
   // If aUpdateAttrs is true, and the popup already has left or top attributes,
   // then those attributes are updated to the new location.
   // The frame may be destroyed by this method.
-  void MoveTo(int32_t aLeft, int32_t aTop, bool aUpdateAttrs);
+  void MoveTo(const mozilla::CSSIntPoint& aPos, bool aUpdateAttrs);
 
   void MoveToAnchor(nsIContent* aAnchorContent,
                     const nsAString& aPosition,
@@ -390,9 +385,9 @@ public:
   // Return the anchor if there is one.
   nsIContent* GetAnchor() const { return mAnchorContent; }
 
-  // Return the screen coordinates of the popup, or (-1, -1) if anchored.
-  // This position is in CSS pixels.
-  nsIntPoint ScreenPosition() const { return mScreenRect.TopLeft(); }
+  // Return the screen coordinates in CSS pixels of the popup,
+  // or (-1, -1, 0, 0) if anchored.
+  nsIntRect GetScreenAnchorRect() const { return mScreenRect; }
 
   nsIntPoint GetLastClientOffset() const { return mLastClientOffset; }
 
@@ -508,7 +503,7 @@ protected:
 
   nsMenuFrame* mCurrentMenu; // The current menu that is active.
 
-  nsRefPtr<nsXULPopupShownEvent> mPopupShownDispatcher;
+  RefPtr<nsXULPopupShownEvent> mPopupShownDispatcher;
 
   // A popup's preferred size may be different than its actual size stored in
   // mRect in the case where the popup was resized because it was too large

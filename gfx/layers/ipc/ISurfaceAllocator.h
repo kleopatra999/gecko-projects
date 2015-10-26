@@ -33,10 +33,10 @@
 namespace mozilla {
 namespace ipc {
 class Shmem;
-}
+} // namespace ipc
 namespace gfx {
 class DataSourceSurface;
-}
+} // namespace gfx
 
 namespace layers {
 
@@ -82,16 +82,6 @@ public:
   {}
 
   void Finalize();
-
-  /**
-   * Returns the type of backend that is used off the main thread.
-   * We only don't allow changing the backend type at runtime so this value can
-   * be queried once and will not change until Gecko is restarted.
-   *
-   * XXX - With e10s this may not be true anymore. we can have accelerated widgets
-   * and non-accelerated widgets (small popups, etc.)
-   */
-  virtual LayersBackend GetCompositorBackendType() const = 0;
 
   /**
    * Allocate shared memory that can be accessed by only one process at a time.
@@ -229,7 +219,7 @@ private:
   static mozilla::Atomic<size_t> sAmount;
 };
 
-} // namespace
-} // namespace
+} // namespace layers
+} // namespace mozilla
 
 #endif

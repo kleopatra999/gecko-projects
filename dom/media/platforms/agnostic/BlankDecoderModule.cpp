@@ -12,7 +12,8 @@
 #include "VideoUtils.h"
 #include "ImageContainer.h"
 #include "MediaInfo.h"
-#include "MediaTaskQueue.h"
+#include "mozilla/TaskQueue.h"
+#include "TimeUnits.h"
 
 namespace mozilla {
 
@@ -23,19 +24,21 @@ class BlankMediaDataDecoder : public MediaDataDecoder {
 public:
 
   BlankMediaDataDecoder(BlankMediaDataCreator* aCreator,
-                        FlushableMediaTaskQueue* aTaskQueue,
-                        MediaDataDecoderCallback* aCallback)
+                        FlushableTaskQueue* aTaskQueue,
+                        MediaDataDecoderCallback* aCallback,
+                        TrackInfo::TrackType aType)
     : mCreator(aCreator)
     , mTaskQueue(aTaskQueue)
     , mCallback(aCallback)
+    , mType(aType)
   {
   }
 
-  virtual nsresult Init() override {
-    return NS_OK;
+  RefPtr<InitPromise> Init() override {
+    return InitPromise::CreateAndResolve(mType, __func__);
   }
 
-  virtual nsresult Shutdown() override {
+  nsresult Shutdown() override {
     return NS_OK;
   }
 
@@ -51,19 +54,20 @@ public:
     }
     NS_IMETHOD Run() override
     {
-      nsRefPtr<MediaData> data = mCreator->Create(mSample->mTime,
-                                                  mSample->mDuration,
-                                                  mSample->mOffset);
+      RefPtr<MediaData> data =
+        mCreator->Create(media::TimeUnit::FromMicroseconds(mSample->mTime),
+                         media::TimeUnit::FromMicroseconds(mSample->mDuration),
+                         mSample->mOffset);
       mCallback->Output(data);
       return NS_OK;
     }
   private:
-    nsRefPtr<MediaRawData> mSample;
+    RefPtr<MediaRawData> mSample;
     BlankMediaDataCreator* mCreator;
     MediaDataDecoderCallback* mCallback;
   };
 
-  virtual nsresult Input(MediaRawData* aSample) override
+  nsresult Input(MediaRawData* aSample) override
   {
     // The MediaDataDecoder must delete the sample when we're finished
     // with it, so the OutputEvent stores it in an nsAutoPtr and deletes
@@ -73,20 +77,21 @@ public:
     return NS_OK;
   }
 
-  virtual nsresult Flush() override {
+  nsresult Flush() override {
     mTaskQueue->Flush();
     return NS_OK;
   }
 
-  virtual nsresult Drain() override {
+  nsresult Drain() override {
     mCallback->DrainComplete();
     return NS_OK;
   }
 
 private:
   nsAutoPtr<BlankMediaDataCreator> mCreator;
-  RefPtr<FlushableMediaTaskQueue> mTaskQueue;
+  RefPtr<FlushableTaskQueue> mTaskQueue;
   MediaDataDecoderCallback* mCallback;
+  TrackInfo::TrackType mType;
 };
 
 class BlankVideoDataCreator {
@@ -103,7 +108,7 @@ public:
   }
 
   already_AddRefed<MediaData>
-  Create(Microseconds aDTS, Microseconds aDuration, int64_t aOffsetInStream)
+  Create(const media::TimeUnit& aDTS, const media::TimeUnit& aDuration, int64_t aOffsetInStream)
   {
     // Create a fake YUV buffer in a 420 format. That is, an 8bpp Y plane,
     // with a U and V plane that are half the size of the Y plane, i.e 8 bit,
@@ -141,11 +146,11 @@ public:
                              mImageContainer,
                              nullptr,
                              aOffsetInStream,
-                             aDTS,
-                             aDuration,
+                             aDTS.ToMicroseconds(),
+                             aDuration.ToMicroseconds(),
                              buffer,
                              true,
-                             aDTS,
+                             aDTS.ToMicroseconds(),
                              mPicture);
   }
 private:
@@ -164,13 +169,14 @@ public:
   {
   }
 
-  MediaData* Create(Microseconds aDTS,
-                    Microseconds aDuration,
+  MediaData* Create(const media::TimeUnit& aDTS,
+                    const media::TimeUnit& aDuration,
                     int64_t aOffsetInStream)
   {
     // Convert duration to frames. We add 1 to duration to account for
     // rounding errors, so we get a consistent tone.
-    CheckedInt64 frames = UsecsToFrames(aDuration+1, mSampleRate);
+    CheckedInt64 frames =
+      UsecsToFrames(aDuration.ToMicroseconds()+1, mSampleRate);
     if (!frames.isValid() ||
         !mChannelCount ||
         !mSampleRate ||
@@ -189,8 +195,8 @@ public:
       mFrameSum++;
     }
     return new AudioData(aOffsetInStream,
-                         aDTS,
-                         aDuration,
+                         aDTS.ToMicroseconds(),
+                         aDuration.ToMicroseconds(),
                          uint32_t(frames.value()),
                          samples,
                          mChannelCount,
@@ -207,43 +213,45 @@ class BlankDecoderModule : public PlatformDecoderModule {
 public:
 
   // Decode thread.
-  virtual already_AddRefed<MediaDataDecoder>
+  already_AddRefed<MediaDataDecoder>
   CreateVideoDecoder(const VideoInfo& aConfig,
                      layers::LayersBackend aLayersBackend,
                      layers::ImageContainer* aImageContainer,
-                     FlushableMediaTaskQueue* aVideoTaskQueue,
+                     FlushableTaskQueue* aVideoTaskQueue,
                      MediaDataDecoderCallback* aCallback) override {
     BlankVideoDataCreator* creator = new BlankVideoDataCreator(
       aConfig.mDisplay.width, aConfig.mDisplay.height, aImageContainer);
-    nsRefPtr<MediaDataDecoder> decoder =
+    RefPtr<MediaDataDecoder> decoder =
       new BlankMediaDataDecoder<BlankVideoDataCreator>(creator,
                                                        aVideoTaskQueue,
-                                                       aCallback);
+                                                       aCallback,
+                                                       TrackInfo::kVideoTrack);
     return decoder.forget();
   }
 
   // Decode thread.
-  virtual already_AddRefed<MediaDataDecoder>
+  already_AddRefed<MediaDataDecoder>
   CreateAudioDecoder(const AudioInfo& aConfig,
-                     FlushableMediaTaskQueue* aAudioTaskQueue,
+                     FlushableTaskQueue* aAudioTaskQueue,
                      MediaDataDecoderCallback* aCallback) override {
     BlankAudioDataCreator* creator = new BlankAudioDataCreator(
       aConfig.mChannels, aConfig.mRate);
 
-    nsRefPtr<MediaDataDecoder> decoder =
+    RefPtr<MediaDataDecoder> decoder =
       new BlankMediaDataDecoder<BlankAudioDataCreator>(creator,
                                                        aAudioTaskQueue,
-                                                       aCallback);
+                                                       aCallback,
+                                                       TrackInfo::kAudioTrack);
     return decoder.forget();
   }
 
-  virtual bool
+  bool
   SupportsMimeType(const nsACString& aMimeType) override
   {
     return true;
   }
 
-  virtual ConversionRequired
+  ConversionRequired
   DecoderNeedsConversion(const TrackInfo& aConfig) const override
   {
     return kNeedNone;
@@ -253,7 +261,7 @@ public:
 
 already_AddRefed<PlatformDecoderModule> CreateBlankDecoderModule()
 {
-  nsRefPtr<PlatformDecoderModule> pdm = new BlankDecoderModule();
+  RefPtr<PlatformDecoderModule> pdm = new BlankDecoderModule();
   return pdm.forget();
 }
 

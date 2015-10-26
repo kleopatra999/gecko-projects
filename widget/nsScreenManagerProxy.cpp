@@ -97,7 +97,7 @@ nsScreenManagerProxy::ScreenForRect(int32_t inLeft,
     return NS_ERROR_FAILURE;
   }
 
-  nsRefPtr<ScreenProxy> screen = new ScreenProxy(this, details);
+  RefPtr<ScreenProxy> screen = new ScreenProxy(this, details);
   NS_ADDREF(*outScreen = screen);
 
   return NS_OK;
@@ -132,7 +132,7 @@ nsScreenManagerProxy::ScreenForNativeWidget(void* aWidget,
   }
 
   ScreenCacheEntry newEntry;
-  nsRefPtr<ScreenProxy> screen = new ScreenProxy(this, details);
+  RefPtr<ScreenProxy> screen = new ScreenProxy(this, details);
 
   newEntry.mScreenProxy = screen;
   newEntry.mTabChild = tabChild;
@@ -198,16 +198,9 @@ nsScreenManagerProxy::InvalidateCacheOnNextTick()
 
   mCacheWillInvalidate = true;
 
-  nsCOMPtr<nsIAppShell> appShell = do_GetService(kAppShellCID);
-  if (appShell) {
-    nsCOMPtr<nsIRunnable> r =
-      NS_NewRunnableMethod(this, &nsScreenManagerProxy::InvalidateCache);
-    appShell->RunInStableState(r.forget());
-  } else {
-    // It's pretty bad news if we can't get the appshell. In that case,
-    // let's just invalidate the cache right away.
-    InvalidateCache();
-  }
+  nsCOMPtr<nsIRunnable> r =
+    NS_NewRunnableMethod(this, &nsScreenManagerProxy::InvalidateCache);
+  nsContentUtils::RunInStableState(r.forget());
 }
 
 void

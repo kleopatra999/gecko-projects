@@ -79,7 +79,7 @@
 #endif
 
 // Frame allocation boilerplate macros.  Every subclass of nsFrame
-// must define its own operator new and GetAllocatedSize.  If they do
+// must define its own operator new and GetFrameId.  If they do
 // not, the per-frame recycler lists in nsPresArena will not work
 // correctly, with potentially catastrophic consequences (not enough
 // memory is allocated for a frame object).
@@ -582,8 +582,10 @@ public:
   static bool ShouldApplyOverflowClipping(const nsIFrame* aFrame,
                                           const nsStyleDisplay* aDisp)
   {
-    // clip overflow:-moz-hidden-unscrollable ...
-    if (MOZ_UNLIKELY(aDisp->mOverflowX == NS_STYLE_OVERFLOW_CLIP)) {
+    // clip overflow:-moz-hidden-unscrollable, except for nsListControlFrame,
+    // which is an nsHTMLScrollFrame.
+    if (MOZ_UNLIKELY(aDisp->mOverflowX == NS_STYLE_OVERFLOW_CLIP &&
+                     aFrame->GetType() != nsGkAtoms::listControlFrame)) {
       return true;
     }
 
@@ -731,12 +733,6 @@ public:
 #endif
 
 public:
-
-  static void PrintDisplayItem(nsDisplayListBuilder* aBuilder,
-                               nsDisplayItem* aItem,
-                               std::stringstream& aStream,
-                               bool aDumpSublist = false,
-                               bool aDumpHtml = false);
 
   static void PrintDisplayList(nsDisplayListBuilder* aBuilder,
                                const nsDisplayList& aList,

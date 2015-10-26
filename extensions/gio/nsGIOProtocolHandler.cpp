@@ -16,9 +16,18 @@
 #include "nsIStringBundle.h"
 #include "nsIStandardURL.h"
 #include "nsMimeTypes.h"
+#include "nsNetCID.h"
 #include "nsNetUtil.h"
+#include "nsServiceManagerUtils.h"
+#include "nsIURI.h"
+#include "nsIAuthPrompt.h"
+#include "nsIChannel.h"
+#include "nsIInputStream.h"
+#include "nsIProtocolHandler.h"
 #include "nsNullPrincipal.h"
 #include "mozilla/Monitor.h"
+#include "plstr.h"
+#include "prtime.h"
 #include <gio/gio.h>
 #include <algorithm>
 
@@ -1052,7 +1061,7 @@ nsGIOProtocolHandler::NewChannel2(nsIURI* aURI,
   if (NS_FAILED(rv))
     return rv;
 
-  nsRefPtr<nsGIOInputStream> stream = new nsGIOInputStream(spec);
+  RefPtr<nsGIOInputStream> stream = new nsGIOInputStream(spec);
   if (!stream) {
     return NS_ERROR_OUT_OF_MEMORY;
   }

@@ -15,8 +15,10 @@ if CONFIG['OS_ARCH'] == 'WINNT':
 else:
     DIRS += ['unix']
 
-if CONFIG['OS_TARGET'] == 'Android' and not CONFIG['MOZ_ANDROID_LIBSTDCXX']:
+if CONFIG['OS_TARGET'] == 'Android' and CONFIG['MOZ_ANDROID_CXX_STL'] == 'mozstlport':
     DIRS += ['stlport']
+    if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android' and CONFIG['ENABLE_INTL_API']:
+        DIRS += ['gabi++']
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
     DIRS += ['annotationProcessors']
@@ -25,8 +27,11 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
         'mobile/sutagent/android/watcher',
         'mobile/sutagent/android/ffxcp',
         'mobile/sutagent/android/fencp',
-        'mobile/robocop',
     ]
+    if not CONFIG['MOZ_B2GDROID']:
+        TEST_DIRS += [
+            'mobile/robocop',
+        ]
 
 for var in ('GRE_MILESTONE', 'MOZ_APP_VERSION', 'MOZ_APP_BASENAME',
             'MOZ_APP_VENDOR', 'MOZ_APP_ID', 'MAR_CHANNEL_ID',

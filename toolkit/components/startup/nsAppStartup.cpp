@@ -35,6 +35,7 @@
 #include "mozilla/Services.h"
 #include "nsIXPConnect.h"
 #include "jsapi.h"
+#include "js/Date.h"
 #include "prenv.h"
 #include "nsAppDirectoryServiceDefs.h"
 
@@ -98,7 +99,7 @@ uint32_t gRestartMode = 0;
 
 class nsAppExitEvent : public nsRunnable {
 private:
-  nsRefPtr<nsAppStartup> mService;
+  RefPtr<nsAppStartup> mService;
 
 public:
   explicit nsAppExitEvent(nsAppStartup *service) : mService(service) {}
@@ -780,7 +781,7 @@ nsAppStartup::GetStartupInfo(JSContext* aCx, JS::MutableHandle<JS::Value> aRetva
       if (stamp >= procTime) {
         PRTime prStamp = ComputeAbsoluteTimestamp(absNow, now, stamp)
           / PR_USEC_PER_MSEC;
-        JS::Rooted<JSObject*> date(aCx, JS_NewDateObjectMsec(aCx, prStamp));
+        JS::Rooted<JSObject*> date(aCx, JS::NewDateObject(aCx, JS::TimeClip(prStamp)));
         JS_DefineProperty(aCx, obj, StartupTimeline::Describe(ev), date, JSPROP_ENUMERATE);
       } else {
         Telemetry::Accumulate(Telemetry::STARTUP_MEASUREMENT_ERRORS, ev);

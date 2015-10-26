@@ -25,6 +25,10 @@
   <script type="application/javascript"
           src="chrome://browser/content/preferences/aboutPermissions.js"/>
 
+  <keyset>
+    <key key="&focusSearch.key;" modifiers="accel" oncommand="AboutPermissions.focusFilterBox();"/>
+  </keyset>
+
   <hbox flex="1" id="permissions-content" class="main-content">
 
     <vbox id="sites-box">
@@ -235,42 +239,21 @@
           </vbox>
         </hbox>
 
-        <!-- Fullscreen -->
-        <hbox id="fullscreen-pref-item"
+        <!-- Notifications -->
+        <hbox id="desktop-notification-pref-item"
               class="pref-item" align="top">
-          <image class="pref-icon" type="fullscreen"/>
+          <image class="pref-icon" type="desktop-notification"/>
           <vbox>
-            <label class="pref-title" value="&fullscreen.label;"/>
+            <label class="pref-title" value="&desktop-notification.label;"/>
             <hbox align="center">
-              <menulist id="fullscreen-menulist"
+              <menulist id="desktop-notification-menulist"
                         class="pref-menulist"
-                        type="fullscreen"
+                        type="desktop-notification"
                         oncommand="AboutPermissions.onPermissionCommand(event);">
                 <menupopup>
-                  <menuitem id="fullscreen-0" value="0" label="&permission.alwaysAsk;"/>
-                  <menuitem id="fullscreen-1" value="1" label="&permission.allow;"/>
-                  <menuitem id="fullscreen-2" value="2" label="&permission.block;"/>
-                </menupopup>
-              </menulist>
-            </hbox>
-          </vbox>
-        </hbox>
-
-        <!-- Push Notifications -->
-        <hbox id="push-pref-item"
-              class="pref-item" align="top">
-          <image class="pref-icon" type="push"/>
-          <vbox>
-            <label class="pref-title" value="&push.label;"/>
-            <hbox align="center">
-              <menulist id="push-menulist"
-                        class="pref-menulist"
-                        type="push"
-                        oncommand="AboutPermissions.onPermissionCommand(event);">
-                <menupopup>
-                  <menuitem id="push-0" value="0" label="&permission.alwaysAsk;"/>
-                  <menuitem id="push-1" value="1" label="&permission.allow;"/>
-                  <menuitem id="push-2" value="2" label="&permission.block;"/>
+                  <menuitem id="desktop-notification-0" value="0" label="&permission.alwaysAsk;"/>
+                  <menuitem id="desktop-notification-1" value="1" label="&permission.allow;"/>
+                  <menuitem id="desktop-notification-2" value="2" label="&permission.block;"/>
                 </menupopup>
               </menulist>
             </hbox>

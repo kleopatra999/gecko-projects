@@ -26,10 +26,10 @@
 namespace mozilla {
 namespace gl {
   class BindableTexture;
-}
+} // namespace gl
 namespace gfx {
   class DataSourceSurface;
-}
+} // namespace gfx
 
 namespace layers {
 
@@ -38,6 +38,8 @@ class TextureSource;
 class CompositingRenderTargetOGL : public CompositingRenderTarget
 {
   typedef mozilla::gl::GLContext GLContext;
+
+  friend class CompositorOGL;
 
   // For lazy initialisation of the GL stuff
   struct InitParams
@@ -172,7 +174,7 @@ private:
   GLuint mFBO;
 };
 
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 #endif /* MOZILLA_GFX_SURFACEOGL_H */

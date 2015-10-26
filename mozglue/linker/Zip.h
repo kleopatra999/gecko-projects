@@ -11,6 +11,7 @@
 #include <zlib.h>
 #include "Utils.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/RefCounted.h"
 #include "mozilla/RefPtr.h"
 
 /**
@@ -270,7 +271,7 @@ private:
      */
     bool Equals(const char *str) const
     {
-      return strncmp(str, buf, length) == 0;
+      return (strncmp(str, buf, length) == 0 && str[length] == '\0');
     }
 
   private:

@@ -38,7 +38,7 @@
 @APPNAME@/Contents/PkgInfo
 @RESPATH@/firefox.icns
 @RESPATH@/document.icns
-@RESPATH@/@AB@.lproj/*
+@RESPATH@/@LPROJ_ROOT@.lproj/*
 #endif
 
 [@AB_CD@]
@@ -63,9 +63,6 @@
 
 [xpcom]
 @RESPATH@/dependentlibs.list
-#ifdef GKMEDIAS_SHARED_LIBRARY
-@BINPATH@/@DLL_PREFIX@gkmedias@DLL_SUFFIX@
-#endif
 #ifdef MOZ_SHARED_MOZGLUE
 @BINPATH@/@DLL_PREFIX@mozglue@DLL_SUFFIX@
 #endif
@@ -123,14 +120,9 @@
 #endif
 #endif
 #endif
-#ifdef MOZ_REPLACE_MALLOC
-#ifndef MOZ_JEMALLOC3
-@BINPATH@/@DLL_PREFIX@replace_jemalloc@DLL_SUFFIX@
-#endif
-#endif
 #ifdef MOZ_GTK3
 @BINPATH@/@DLL_PREFIX@mozgtk@DLL_SUFFIX@
-@BINPATH@/@DLL_PREFIX@mozgtk2@DLL_SUFFIX@
+@BINPATH@/gtk2/@DLL_PREFIX@mozgtk@DLL_SUFFIX@
 #endif
 
 [browser]
@@ -151,6 +143,7 @@
 @BINPATH@/@DLL_PREFIX@mozsqlite3@DLL_SUFFIX@
 #endif
 #endif
+@BINPATH@/@DLL_PREFIX@lgpllibs@DLL_SUFFIX@
 @RESPATH@/browser/blocklist.xml
 #ifdef XP_UNIX
 #ifndef XP_MACOSX
@@ -188,7 +181,7 @@
 #endif
 @RESPATH@/components/content_xslt.xpt
 @RESPATH@/components/cookie.xpt
-@RESPATH@/components/devtools_security.xpt
+@RESPATH@/browser/components/devtools_security.xpt
 @RESPATH@/components/directory.xpt
 @RESPATH@/components/docshell.xpt
 @RESPATH@/components/dom.xpt
@@ -197,6 +190,7 @@
 @RESPATH@/components/dom_messages.xpt
 #endif
 @RESPATH@/components/dom_apps.xpt
+@RESPATH@/components/dom_newapps.xpt
 @RESPATH@/components/dom_base.xpt
 @RESPATH@/components/dom_system.xpt
 #ifdef MOZ_B2G_BT
@@ -266,7 +260,7 @@
 @RESPATH@/components/jar.xpt
 @RESPATH@/components/jsdebugger.xpt
 @RESPATH@/components/jsdownloads.xpt
-@RESPATH@/components/jsinspector.xpt
+@RESPATH@/browser/components/jsinspector.xpt
 @RESPATH@/components/layout_base.xpt
 #ifdef NS_PRINTING
 @RESPATH@/components/layout_printing.xpt
@@ -275,6 +269,9 @@
 @RESPATH@/components/layout_xul.xpt
 @RESPATH@/components/locale.xpt
 @RESPATH@/components/lwbrk.xpt
+#ifdef MOZ_ENABLE_PROFILER_SPS
+@RESPATH@/components/memory_profiler.xpt
+#endif
 @RESPATH@/browser/components/migration.xpt
 @RESPATH@/components/mimetype.xpt
 @RESPATH@/components/mozfind.xpt
@@ -370,6 +367,8 @@
 @RESPATH@/components/BrowserElementParent.js
 @RESPATH@/components/FeedProcessor.manifest
 @RESPATH@/components/FeedProcessor.js
+@RESPATH@/components/PackagedAppUtils.js
+@RESPATH@/components/PackagedAppUtils.manifest
 @RESPATH@/browser/components/BrowserFeeds.manifest
 @RESPATH@/browser/components/FeedConverter.js
 @RESPATH@/browser/components/FeedWriter.js
@@ -387,7 +386,6 @@
 @RESPATH@/browser/components/webideComponents.manifest
 @RESPATH@/browser/components/Experiments.manifest
 @RESPATH@/browser/components/ExperimentsService.js
-@RESPATH@/browser/components/translation.manifest
 @RESPATH@/components/Downloads.manifest
 @RESPATH@/components/DownloadLegacy.js
 @RESPATH@/components/BrowserPageThumbs.manifest
@@ -435,7 +433,8 @@
 @RESPATH@/components/addoncompat.manifest
 @RESPATH@/components/multiprocessShims.js
 @RESPATH@/components/defaultShims.js
-@RESPATH@/components/remoteTagService.js
+@RESPATH@/components/utils.manifest
+@RESPATH@/components/simpleServices.js
 @RESPATH@/components/pluginGlue.manifest
 @RESPATH@/components/ProcessSingleton.manifest
 @RESPATH@/components/MainProcessSingleton.js
@@ -487,14 +486,12 @@
 @RESPATH@/browser/components/FirefoxProfileMigrator.js
 #ifdef XP_WIN
 @RESPATH@/browser/components/360seProfileMigrator.js
+@RESPATH@/browser/components/EdgeProfileMigrator.js
 @RESPATH@/browser/components/IEProfileMigrator.js
 @RESPATH@/browser/components/SafariProfileMigrator.js
 #endif
 #ifdef XP_MACOSX
 @RESPATH@/browser/components/SafariProfileMigrator.js
-#endif
-#ifdef MOZ_ENABLE_DBUS
-@RESPATH@/components/@DLL_PREFIX@dbusservice@DLL_SUFFIX@
 #endif
 #ifdef MOZ_ENABLE_GNOME_COMPONENT
 @RESPATH@/components/@DLL_PREFIX@mozgnome@DLL_SUFFIX@
@@ -556,6 +553,7 @@
 @RESPATH@/components/AlarmsManager.manifest
 @RESPATH@/components/Push.js
 @RESPATH@/components/Push.manifest
+@RESPATH@/components/PushClient.js
 @RESPATH@/components/PushNotificationService.js
 
 @RESPATH@/components/SlowScriptDebug.manifest
@@ -567,11 +565,6 @@
 @RESPATH@/components/InterAppConnection.js
 @RESPATH@/components/InterAppMessagePort.js
 #endif
-
-@RESPATH@/components/TCPSocket.js
-@RESPATH@/components/TCPServerSocket.js
-@RESPATH@/components/TCPSocketParentIntermediary.js
-@RESPATH@/components/TCPSocket.manifest
 
 #ifdef MOZ_ACTIVITIES
 @RESPATH@/components/SystemMessageCache.js
@@ -638,6 +631,15 @@
 @RESPATH@/components/url-classifier.xpt
 #endif
 
+; Private Browsing
+@RESPATH@/components/privatebrowsing.xpt
+@RESPATH@/components/PrivateBrowsing.manifest
+@RESPATH@/components/PrivateBrowsingTrackingProtectionWhitelist.js
+
+; Signed Packaged Content
+@RESPATH@/components/InstallPackagedWebapp.manifest
+@RESPATH@/components/InstallPackagedWebapp.js
+
 ; ANGLE GLES-on-D3D rendering library
 #ifdef MOZ_ANGLE_RENDERER
 @BINPATH@/libEGL.dll
@@ -680,6 +682,11 @@
 @RESPATH@/browser/chrome/webide.manifest
 @RESPATH@/browser/@PREF_DIR@/webide-prefs.js
 
+; DevTools
+@RESPATH@/browser/chrome/devtools@JAREXT@
+@RESPATH@/browser/chrome/devtools.manifest
+@RESPATH@/browser/@PREF_DIR@/devtools.js
+
 ; shell icons
 #ifdef XP_UNIX
 #ifndef XP_MACOSX
@@ -700,15 +707,10 @@
 @RESPATH@/defaults/autoconfig/prefcalls.js
 @RESPATH@/browser/defaults/profile/prefs.js
 
-#ifndef LIBXUL_SDK
 ; Warning: changing the path to channel-prefs.js can cause bugs (Bug 756325)
 ; Technically this is an app pref file, but we are keeping it in the original
 ; gre location for now.
 @RESPATH@/defaults/pref/channel-prefs.js
-#else
-; For Fx-on-xr, channel-prefs lives with the app preferences. (Bug 762588)
-@RESPATH@/@PREF_DIR@/channel-prefs.js
-#endif
 
 ; Services (gre) prefs
 #ifdef MOZ_SERVICES_NOTIFICATIONS
@@ -744,6 +746,18 @@
 @RESPATH@/res/table-remove-row-active.gif
 @RESPATH@/res/table-remove-row-hover.gif
 @RESPATH@/res/table-remove-row.gif
+@RESPATH@/res/accessiblecaret.png
+@RESPATH@/res/accessiblecaret@1.5x.png
+@RESPATH@/res/accessiblecaret@2.25x.png
+@RESPATH@/res/accessiblecaret@2x.png
+@RESPATH@/res/accessiblecaret_tilt_left.png
+@RESPATH@/res/accessiblecaret_tilt_left@1.5x.png
+@RESPATH@/res/accessiblecaret_tilt_left@2.25x.png
+@RESPATH@/res/accessiblecaret_tilt_left@2x.png
+@RESPATH@/res/accessiblecaret_tilt_right.png
+@RESPATH@/res/accessiblecaret_tilt_right@1.5x.png
+@RESPATH@/res/accessiblecaret_tilt_right@2.25x.png
+@RESPATH@/res/accessiblecaret_tilt_right@2x.png
 @RESPATH@/res/text_caret.png
 @RESPATH@/res/text_caret@1.5x.png
 @RESPATH@/res/text_caret@2.25x.png
@@ -879,13 +893,14 @@ bin/libfreebl_32int64_3.so
 @RESPATH@/webapprt/modules/Startup.jsm
 @RESPATH@/webapprt/modules/WebappRT.jsm
 @RESPATH@/webapprt/modules/WebappManager.jsm
-@RESPATH@/webapprt/modules/RemoteDebugger.jsm
 @RESPATH@/webapprt/modules/WebRTCHandler.jsm
 #endif
 
 @RESPATH@/components/DataStore.manifest
 @RESPATH@/components/DataStoreImpl.js
 @RESPATH@/components/dom_datastore.xpt
+
+@RESPATH@/components/dom_audiochannel.xpt
 
 ; Shutdown Terminator
 @RESPATH@/components/nsTerminatorTelemetry.js
@@ -912,4 +927,8 @@ bin/libfreebl_32int64_3.so
 #ifdef XP_WIN
 @RESPATH@/components/GfxSanityTest.manifest
 @RESPATH@/components/SanityTest.js
+#endif
+
+#ifdef MOZ_MULET
+#include ../../b2g/installer/package-manifest.in
 #endif

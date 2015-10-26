@@ -13,6 +13,7 @@
 #include "TimeUnits.h"
 #include "VorbisUtils.h"
 #include "WebMBufferedParser.h"
+#include "NesteggPacketHolder.h"
 
 #include <algorithm>
 
@@ -55,6 +56,12 @@ SoftwareWebMVideoDecoder::Create(WebMReader* aReader)
 nsresult
 SoftwareWebMVideoDecoder::Init(unsigned int aWidth, unsigned int aHeight)
 {
+  return InitDecoder(aWidth, aHeight);
+}
+
+nsresult
+SoftwareWebMVideoDecoder::InitDecoder(unsigned int aWidth, unsigned int aHeight)
+{
   vpx_codec_iface_t* dx = nullptr;
   switch(mReader->GetVideoCodec()) {
     case NESTEGG_CODEC_VP8:
@@ -80,7 +87,7 @@ SoftwareWebMVideoDecoder::DecodeVideoFrame(bool &aKeyframeSkip,
   // stats counters using the AutoNotifyDecoded stack-based class.
   AbstractMediaDecoder::AutoNotifyDecoded a(mReader->GetDecoder());
 
-  nsRefPtr<NesteggPacketHolder> holder(mReader->NextPacket(WebMReader::VIDEO));
+  RefPtr<NesteggPacketHolder> holder(mReader->NextPacket(WebMReader::VIDEO));
   if (!holder) {
     return false;
   }
@@ -110,10 +117,10 @@ SoftwareWebMVideoDecoder::DecodeVideoFrame(bool &aKeyframeSkip,
   // end of the resource, use the file's duration as the end time of this
   // video frame.
   int64_t next_tstamp = 0;
-  nsRefPtr<NesteggPacketHolder> next_holder(mReader->NextPacket(WebMReader::VIDEO));
+  RefPtr<NesteggPacketHolder> next_holder(mReader->NextPacket(WebMReader::VIDEO));
   if (next_holder) {
     next_tstamp = next_holder->Timestamp();
-    mReader->PushVideoPacket(next_holder.forget());
+    mReader->PushVideoPacket(next_holder);
   } else {
     next_tstamp = tstamp;
     next_tstamp += tstamp - mReader->GetLastVideoFrameTime();
@@ -201,7 +208,7 @@ SoftwareWebMVideoDecoder::DecodeVideoFrame(bool &aKeyframeSkip,
     }
 
     VideoInfo videoInfo = mReader->GetMediaInfo().mVideo;
-    nsRefPtr<VideoData> v = VideoData::Create(videoInfo,
+    RefPtr<VideoData> v = VideoData::Create(videoInfo,
                                               mReader->GetDecoder()->GetImageContainer(),
                                               holder->Offset(),
                                               tstamp,

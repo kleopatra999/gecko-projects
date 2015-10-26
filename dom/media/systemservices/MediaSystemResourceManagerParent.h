@@ -46,12 +46,12 @@ private:
 
   bool mDestroyed;
 
-  nsRefPtr<MediaSystemResourceService> mMediaSystemResourceService;
+  RefPtr<MediaSystemResourceService> mMediaSystemResourceService;
 
   nsClassHashtable<nsUint32HashKey, MediaSystemResourceRequest> mResourceRequests;
 };
 
-} // namespatce media
-} // namespatce mozilla
+} // namespace media
+} // namespace mozilla
 
 #endif

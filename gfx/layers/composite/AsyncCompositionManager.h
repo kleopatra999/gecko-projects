@@ -16,7 +16,7 @@
 #include "mozilla/gfx/Matrix.h"         // for Matrix4x4
 #include "mozilla/layers/FrameUniformityData.h" // For FrameUniformityData
 #include "mozilla/layers/LayersMessages.h"  // for TargetConfig
-#include "nsRefPtr.h"                   // for nsRefPtr
+#include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsISupportsImpl.h"            // for LayerManager::AddRef, etc
 
 namespace mozilla {
@@ -26,6 +26,7 @@ class AsyncPanZoomController;
 class Layer;
 class LayerManagerComposite;
 class AutoResolveRefLayers;
+class CompositorParent;
 
 // Represents (affine) transforms that are calculated from a content view.
 struct ViewTransform {
@@ -98,14 +99,18 @@ public:
   void ComputeRotation();
 
   // Call after updating our layer tree.
-  void Updated(bool isFirstPaint, const TargetConfig& aTargetConfig)
+  void Updated(bool isFirstPaint, const TargetConfig& aTargetConfig,
+               int32_t aPaintSyncId)
   {
     mIsFirstPaint |= isFirstPaint;
     mLayersUpdated = true;
     mTargetConfig = aTargetConfig;
+    if (aPaintSyncId) {
+      mPaintSyncId = aPaintSyncId;
+    }
   }
 
-  bool RequiresReorientation(mozilla::dom::ScreenOrientation aOrientation)
+  bool RequiresReorientation(mozilla::dom::ScreenOrientationInternal aOrientation) const
   {
     return mTargetConfig.orientation() != aOrientation;
   }
@@ -124,8 +129,11 @@ public:
 private:
   void TransformScrollableLayer(Layer* aLayer);
   // Return true if an AsyncPanZoomController content transform was
-  // applied for |aLayer|.
-  bool ApplyAsyncContentTransformToTree(Layer* aLayer);
+  // applied for |aLayer|. |*aOutFoundRoot| is set to true on Android only, if
+  // one of the metrics on one of the layers was determined to be the "root"
+  // and its state was synced to the Java front-end. |aOutFoundRoot| must be
+  // non-null.
+  bool ApplyAsyncContentTransformToTree(Layer* aLayer, bool* aOutFoundRoot);
   /**
    * Update the shadow transform for aLayer assuming that is a scrollbar,
    * so that it stays in sync with the content that is being scrolled by APZ.
@@ -139,19 +147,18 @@ private:
   void SyncViewportInfo(const LayerIntRect& aDisplayPort,
                         const CSSToLayerScale& aDisplayResolution,
                         bool aLayersUpdated,
-                        ParentLayerPoint& aScrollOffset,
+                        int32_t aPaintSyncId,
+                        ParentLayerRect& aScrollRect,
                         CSSToParentLayerScale& aScale,
-                        LayerMargin& aFixedLayerMargins,
-                        ScreenPoint& aOffset);
+                        ScreenMargin& aFixedLayerMargins);
   void SyncFrameMetrics(const ParentLayerPoint& aScrollOffset,
-                        float aZoom,
+                        const CSSToParentLayerScale& aZoom,
                         const CSSRect& aCssPageRect,
-                        bool aLayersUpdated,
                         const CSSRect& aDisplayPort,
-                        const CSSToLayerScale& aDisplayResolution,
-                        bool aIsFirstPaint,
-                        LayerMargin& aFixedLayerMargins,
-                        ScreenPoint& aOffset);
+                        const CSSToLayerScale& aPaintedResolution,
+                        bool aLayersUpdated,
+                        int32_t aPaintSyncId,
+                        ScreenMargin& aFixedLayerMargins);
 
   /**
    * Adds a translation to the transform of any fixed position (whose parent
@@ -172,15 +179,23 @@ private:
                                  FrameMetrics::ViewID aTransformScrollId,
                                  const gfx::Matrix4x4& aPreviousTransformForRoot,
                                  const gfx::Matrix4x4& aCurrentTransformForRoot,
-                                 const LayerMargin& aFixedLayerMargins);
+                                 const ScreenMargin& aFixedLayerMargins);
 
   /**
    * DRAWING PHASE ONLY
    *
    * For reach RefLayer in our layer tree, look up its referent and connect it
    * to the layer tree, if found.
+   * aHasRemoteContent - indicates if the layer tree contains a remote reflayer.
+   *  May be null.
+   * aResolvePlugins - incoming value indicates if plugin windows should be
+   *  updated through a call on aCompositor's UpdatePluginWindowState. Applies
+   *  to linux and windows only, may be null. On return value indicates
+   *  if any updates occured.
    */
-  void ResolveRefLayers();
+  void ResolveRefLayers(CompositorParent* aCompositor, bool* aHasRemoteContent,
+                        bool* aResolvePlugins);
+
   /**
    * Detaches all referents resolved by ResolveRefLayers.
    * Assumes that mLayerManager->GetRoot() and mTargetConfig have not changed
@@ -194,7 +209,7 @@ private:
   TargetConfig mTargetConfig;
   CSSRect mContentRect;
 
-  nsRefPtr<LayerManagerComposite> mLayerManager;
+  RefPtr<LayerManagerComposite> mLayerManager;
   // When this flag is set, the next composition will be the first for a
   // particular document (i.e. the document displayed on the screen will change).
   // This happens when loading a new page or switching tabs. We notify the
@@ -206,6 +221,8 @@ private:
   // after a layers update has it set. It is cleared after that first composition.
   bool mLayersUpdated;
 
+  int32_t mPaintSyncId;
+
   bool mReadyForCompose;
 
   gfx::Matrix mWorldTransform;
@@ -216,10 +233,14 @@ MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(AsyncCompositionManager::TransformsToSkip)
 
 class MOZ_STACK_CLASS AutoResolveRefLayers {
 public:
-  explicit AutoResolveRefLayers(AsyncCompositionManager* aManager) : mManager(aManager)
+  explicit AutoResolveRefLayers(AsyncCompositionManager* aManager,
+                                CompositorParent* aCompositor = nullptr,
+                                bool* aHasRemoteContent = nullptr,
+                                bool* aResolvePlugins = nullptr) :
+    mManager(aManager)
   {
     if (mManager) {
-      mManager->ResolveRefLayers();
+      mManager->ResolveRefLayers(aCompositor, aHasRemoteContent, aResolvePlugins);
     }
   }
 
@@ -237,7 +258,7 @@ private:
   AutoResolveRefLayers& operator=(const AutoResolveRefLayers&) = delete;
 };
 
-} // layers
-} // mozilla
+} // namespace layers
+} // namespace mozilla
 
 #endif

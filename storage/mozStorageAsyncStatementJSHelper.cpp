@@ -28,7 +28,7 @@ nsresult
 AsyncStatementJSHelper::getParams(AsyncStatement *aStatement,
                                   JSContext *aCtx,
                                   JSObject *aScopeObj,
-                                  jsval *_params)
+                                  JS::Value *_params)
 {
   MOZ_ASSERT(NS_IsMainThread());
   nsresult rv;
@@ -56,7 +56,7 @@ AsyncStatementJSHelper::getParams(AsyncStatement *aStatement,
       getter_AddRefs(holder)
     );
     NS_ENSURE_SUCCESS(rv, rv);
-    nsRefPtr<AsyncStatementParamsHolder> paramsHolder =
+    RefPtr<AsyncStatementParamsHolder> paramsHolder =
       new AsyncStatementParamsHolder(holder);
     aStatement->mStatementParamsHolder =
       new nsMainThreadPtrHolder<nsIXPConnectJSObjectHolder>(paramsHolder);
@@ -91,7 +91,7 @@ AsyncStatementJSHelper::GetProperty(nsIXPConnectWrappedNative *aWrapper,
                                     JSContext *aCtx,
                                     JSObject *aScopeObj,
                                     jsid aId,
-                                    jsval *_result,
+                                    JS::Value *_result,
                                     bool *_retval)
 {
   if (!JSID_IS_STRING(aId))

@@ -5,11 +5,11 @@
 
 "use strict";
 
-let Cu = Components.utils;
-let Ci = Components.interfaces;
-let Cc = Components.classes;
-let Cr = Components.results;
-let Cm = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
+var Cu = Components.utils;
+var Ci = Components.interfaces;
+var Cc = Components.classes;
+var Cr = Components.results;
+var Cm = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
 
 this.EXPORTED_SYMBOLS = ["BrowserElementPromptService"];
 
@@ -338,7 +338,7 @@ BrowserElementAuthPrompt.prototype = {
         prompt.authInfo.password = password;
       }
 
-      for each (let consumer in prompt.consumers) {
+      for (let consumer of prompt.consumers) {
         if (!consumer.callback) {
           // Not having a callback means that consumer didn't provide it
           // or canceled the notification.

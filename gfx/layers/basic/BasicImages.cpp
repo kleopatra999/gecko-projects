@@ -81,7 +81,7 @@ public:
                                               const gfx::IntSize &aScaleHint,
                                               BufferRecycleBin *aRecycleBin)
   {
-    nsRefPtr<Image> image;
+    RefPtr<Image> image;
     if (aFormat == ImageFormat::PLANAR_YCBCR) {
       image = new BasicPlanarYCbCrImage(aScaleHint, gfxPlatform::GetPlatform()->GetOffscreenFormat(), aRecycleBin);
       return image.forget();
@@ -180,5 +180,5 @@ BasicLayerManager::GetImageFactory()
   return mFactory.get();
 }
 
-}
-}
+} // namespace layers
+} // namespace mozilla

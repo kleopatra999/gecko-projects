@@ -17,7 +17,7 @@ const URIS = [
 
 const TOPIC_CONNECTION_CLOSED = "places-connection-closed";
 
-let EXPECTED_NOTIFICATIONS = [
+var EXPECTED_NOTIFICATIONS = [
   "places-shutdown"
 , "places-will-close-connection"
 , "places-expiration-finished"
@@ -36,7 +36,7 @@ var formHistoryStartup = Cc["@mozilla.org/satchel/form-history-startup;1"].
                          getService(Ci.nsIObserver);
 formHistoryStartup.observe(null, "profile-after-change", null);
 
-let timeInMicroseconds = Date.now() * 1000;
+var timeInMicroseconds = Date.now() * 1000;
 
 function run_test() {
   run_next_test();
@@ -49,6 +49,8 @@ add_task(function* test_execute() {
   let glue = Cc["@mozilla.org/browser/browserglue;1"].
              getService(Ci.nsIObserver);
   glue.observe(null, "initial-migration-will-import-default-bookmarks", null);
+  glue.observe(null, "test-initialize-sanitizer", null);
+
 
   Services.prefs.setBoolPref("privacy.clearOnShutdown.cache", true);
   Services.prefs.setBoolPref("privacy.clearOnShutdown.cookies", true);
@@ -57,7 +59,6 @@ add_task(function* test_execute() {
   Services.prefs.setBoolPref("privacy.clearOnShutdown.downloads", true);
   Services.prefs.setBoolPref("privacy.clearOnShutdown.cookies", true);
   Services.prefs.setBoolPref("privacy.clearOnShutdown.formData", true);
-  Services.prefs.setBoolPref("privacy.clearOnShutdown.passwords", true);
   Services.prefs.setBoolPref("privacy.clearOnShutdown.sessions", true);
   Services.prefs.setBoolPref("privacy.clearOnShutdown.siteSettings", true);
 
@@ -72,13 +73,11 @@ add_task(function* test_execute() {
   }
   do_print("Add cache.");
   yield storeCache(FTP_URL, "testData");
-});
 
-add_task(function* run_test_continue() {
   do_print("Simulate and wait shutdown.");
   yield shutdownPlaces();
 
-  let stmt = DBConn().createStatement(
+  let stmt = DBConn(true).createStatement(
     "SELECT id FROM moz_places WHERE url = :page_url "
   );
 
@@ -94,13 +93,7 @@ add_task(function* run_test_continue() {
 
   do_print("Check cache");
   // Check cache.
-  let promiseCacheChecked = checkCache(FTP_URL);
-
-  do_print("Shutdown the download manager");
-  // Shutdown the download manager.
-  Services.obs.notifyObservers(null, "quit-application", null);
-
-  yield promiseCacheChecked;
+  yield checkCache(FTP_URL);
 });
 
 function storeCache(aURL, aContent) {

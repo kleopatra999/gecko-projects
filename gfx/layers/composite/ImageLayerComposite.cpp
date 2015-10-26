@@ -6,7 +6,7 @@
 #include "ImageLayerComposite.h"
 #include "CompositableHost.h"           // for CompositableHost
 #include "Layers.h"                     // for WriteSnapshotToDumpFile, etc
-#include "gfx2DGlue.h"                  // for ToFilter, ToMatrix4x4
+#include "gfx2DGlue.h"                  // for ToFilter
 #include "gfxRect.h"                    // for gfxRect
 #include "gfxUtils.h"                   // for gfxUtils, etc
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
@@ -18,7 +18,7 @@
 #include "mozilla/layers/TextureHost.h"  // for TextureHost, etc
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsAString.h"
-#include "nsRefPtr.h"                   // for nsRefPtr
+#include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsDebug.h"                    // for NS_ASSERTION
 #include "nsISupportsImpl.h"            // for MOZ_COUNT_CTOR, etc
 #include "nsString.h"                   // for nsAutoCString
@@ -87,7 +87,7 @@ ImageLayerComposite::RenderLayer(const IntRect& aClipRect)
   }
 
 #ifdef MOZ_DUMP_PAINTING
-  if (gfxUtils::sDumpPainting) {
+  if (gfxUtils::sDumpCompositorTextures) {
     RefPtr<gfx::DataSourceSurface> surf = mImageHost->GetAsSurface();
     WriteSnapshotToDumpFile(this, surf);
   }
@@ -98,7 +98,7 @@ ImageLayerComposite::RenderLayer(const IntRect& aClipRect)
   RenderWithAllMasks(this, mCompositor, aClipRect,
                      [&](EffectChain& effectChain, const Rect& clipRect) {
     mImageHost->SetCompositor(mCompositor);
-    mImageHost->Composite(effectChain,
+    mImageHost->Composite(this, effectChain,
                           GetEffectiveOpacity(),
                           GetEffectiveTransformForBuffer(),
                           GetEffectFilter(),
@@ -166,7 +166,7 @@ ImageLayerComposite::CleanupResources()
 gfx::Filter
 ImageLayerComposite::GetEffectFilter()
 {
-  return gfx::ToFilter(mFilter);
+  return mFilter;
 }
 
 void
@@ -188,5 +188,5 @@ ImageLayerComposite::PrintInfo(std::stringstream& aStream, const char* aPrefix)
   }
 }
 
-} /* layers */
-} /* mozilla */
+} // namespace layers
+} // namespace mozilla

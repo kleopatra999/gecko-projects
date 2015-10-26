@@ -5,12 +5,15 @@
 
 package org.mozilla.gecko.toolbar;
 
+import org.mozilla.gecko.AboutPages;
 import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.CustomEditText;
 import org.mozilla.gecko.InputMethods;
+import org.mozilla.gecko.R;
 import org.mozilla.gecko.toolbar.BrowserToolbar.OnCommitListener;
 import org.mozilla.gecko.toolbar.BrowserToolbar.OnDismissListener;
 import org.mozilla.gecko.toolbar.BrowserToolbar.OnFilterListener;
+import org.mozilla.gecko.toolbar.ToolbarEditLayout.OnSearchStateChangeListener;
 import org.mozilla.gecko.util.GamepadUtils;
 import org.mozilla.gecko.util.StringUtils;
 
@@ -51,6 +54,7 @@ public class ToolbarEditText extends CustomEditText
     private OnCommitListener mCommitListener;
     private OnDismissListener mDismissListener;
     private OnFilterListener mFilterListener;
+    private OnSearchStateChangeListener mSearchStateChangeListener;
 
     private ToolbarPrefs mPrefs;
 
@@ -82,6 +86,10 @@ public class ToolbarEditText extends CustomEditText
         mFilterListener = listener;
     }
 
+    void setOnSearchStateChangeListener(OnSearchStateChangeListener listener) {
+        mSearchStateChangeListener = listener;
+    }
+
     @Override
     public void onAttachedToWindow() {
         setOnKeyListener(new KeyListener());
@@ -93,6 +101,13 @@ public class ToolbarEditText extends CustomEditText
     @Override
     public void onFocusChanged(boolean gainFocus, int direction, Rect previouslyFocusedRect) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect);
+
+        // Make search icon inactive when edit toolbar search term isn't a user entered
+        // search term
+        final boolean isActive = !TextUtils.isEmpty(getText());
+        if (mSearchStateChangeListener != null) {
+            mSearchStateChangeListener.onSearchStateChange(isActive);
+        }
 
         if (gainFocus) {
             resetAutocompleteState();
@@ -113,7 +128,17 @@ public class ToolbarEditText extends CustomEditText
 
     @Override
     public void setText(final CharSequence text, final TextView.BufferType type) {
-        super.setText(text, type);
+        final String textString = (text == null) ? "" : text.toString();
+
+        // If we're on the home or private browsing page, we don't set the "about" url.
+        final CharSequence finalText;
+        if (AboutPages.isAboutHome(textString) || AboutPages.isAboutPrivateBrowsing(textString)) {
+            finalText = "";
+        } else {
+            finalText = text;
+        }
+
+        super.setText(finalText, type);
 
         // Any autocomplete text would have been overwritten, so reset our autocomplete states.
         resetAutocompleteState();
@@ -512,6 +537,11 @@ public class ToolbarEditText extends CustomEditText
                 // Otherwise, remove the old autocomplete text
                 // until any new autocomplete text gets added.
                 removeAutocomplete(editable);
+            }
+
+            // Update search icon with an active state since user is typing
+            if (mSearchStateChangeListener != null) {
+                mSearchStateChangeListener.onSearchStateChange(textLength > 0);
             }
 
             if (mFilterListener != null) {

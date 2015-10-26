@@ -17,7 +17,7 @@
 namespace mozilla {
 namespace net {
 class PNeckoParent;
-}
+} // namespace net
 
 namespace dom {
 
@@ -66,7 +66,7 @@ private:
   bool mIPCOpen;
   nsCOMPtr<nsIUDPSocket> mSocket;
   nsCOMPtr<nsIUDPSocketFilter> mFilter;
-  nsRefPtr<mozilla::net::OfflineObserver> mObserver;
+  RefPtr<mozilla::net::OfflineObserver> mObserver;
   nsCOMPtr<nsIPrincipal> mPrincipal;
 };
 

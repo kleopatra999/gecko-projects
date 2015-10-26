@@ -23,6 +23,14 @@ const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm", this);
 Cu.import("resource://gre/modules/Services.jsm", this);
+Cu.import("resource://gre/modules/Task.jsm", this);
+Cu.import("resource://gre/modules/ObjectUtils.jsm", this);
+XPCOMUtils.defineLazyModuleGetter(this, "PromiseUtils",
+  "resource://gre/modules/PromiseUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "setTimeout",
+  "resource://gre/modules/Timer.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "clearTimeout",
+  "resource://gre/modules/Timer.jsm");
 
 // The nsIPerformanceStatsService provides lower-level
 // access to SpiderMonkey and the probes.
@@ -37,14 +45,17 @@ XPCOMUtils.defineLazyServiceGetter(this, "finalizer",
   Ci.nsIFinalizationWitnessService
 );
 
-
 // The topic used to notify that a PerformanceMonitor has been garbage-collected
 // and that we can release/close the probes it holds.
 const FINALIZATION_TOPIC = "performancemonitor-finalize";
 
-const PROPERTIES_META_IMMUTABLE = ["name", "addonId", "isSystem", "groupId"];
-const PROPERTIES_META = [...PROPERTIES_META_IMMUTABLE, "windowId", "title"];
+const PROPERTIES_META_IMMUTABLE = ["addonId", "isSystem", "isChildProcess", "groupId", "processId"];
+const PROPERTIES_META = [...PROPERTIES_META_IMMUTABLE, "windowId", "title", "name"];
 
+// How long we wait for children processes to respond.
+const MAX_WAIT_FOR_CHILD_PROCESS_MS = 5000;
+
+var isContent = Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT;
 /**
  * Access to a low-level performance probe.
  *
@@ -68,6 +79,7 @@ Probe.prototype = {
   acquire: function() {
     if (this._counter == 0) {
       this._impl.isActive = true;
+      Process.broadcast("acquire", [this._name]);
     }
     this._counter++;
   },
@@ -81,6 +93,7 @@ Probe.prototype = {
     this._counter--;
     if (this._counter == 0) {
       this._impl.isActive = false;
+      Process.broadcast("release", [this._name]);
     }
   },
 
@@ -125,14 +138,24 @@ Probe.prototype = {
    * @return {object} An object representing `a - b`. If `b` is
    * `null`, this is `a`.
    */
-  substract: function(a, b) {
+  subtract: function(a, b) {
     if (a == null) {
       throw new TypeError();
     }
     if (b == null) {
       return a;
     }
-    return this._impl.substract(a, b);
+    return this._impl.subtract(a, b);
+  },
+
+  importChildCompartments: function(parent, children) {
+    if (!Array.isArray(children)) {
+      throw new TypeError();
+    }
+    if (!parent || !(parent instanceof PerformanceDataLeaf)) {
+      throw new TypeError();
+    }
+    return this._impl.importChildCompartments(parent, children);
   },
 
   /**
@@ -140,6 +163,13 @@ Probe.prototype = {
    */
   get name() {
     return this._name;
+  },
+
+  compose: function(stats) {
+    if (!Array.isArray(stats)) {
+      throw new TypeError();
+    }
+    return this._impl.compose(stats);
   }
 };
 
@@ -157,7 +187,7 @@ function lastNonZero(array) {
 /**
  * The actual Probes implemented by SpiderMonkey.
  */
-let Probes = {
+var Probes = {
   /**
    * A probe measuring jank.
    *
@@ -185,6 +215,7 @@ let Probes = {
       return {
         totalUserTime: xpcom.totalUserTime,
         totalSystemTime: xpcom.totalSystemTime,
+        totalCPUTime: xpcom.totalUserTime + xpcom.totalSystemTime,
         durations: durations,
         longestDuration: lastNonZero(durations)
       }
@@ -204,11 +235,12 @@ let Probes = {
       }
       return true;
     },
-    substract: function(a, b) {
+    subtract: function(a, b) {
       // invariant: `a` and `b` are both non-null
       let result = {
         totalUserTime: a.totalUserTime - b.totalUserTime,
         totalSystemTime: a.totalSystemTime - b.totalSystemTime,
+        totalCPUTime: a.totalCPUTime - b.totalCPUTime,
         durations: [],
         longestDuration: -1,
       };
@@ -216,6 +248,26 @@ let Probes = {
         result.durations[i] = a.durations[i] - b.durations[i];
       }
       result.longestDuration = lastNonZero(result.durations);
+      return result;
+    },
+    importChildCompartments: function() { /* nothing to do */ },
+    compose: function(stats) {
+      let result = {
+        totalUserTime: 0,
+        totalSystemTime: 0,
+        totalCPUTime: 0,
+        durations: [],
+        longestDuration: -1
+      };
+      for (let stat of stats) {
+        result.totalUserTime += stat.totalUserTime;
+        result.totalSystemTime += stat.totalSystemTime;
+        result.totalCPUTime += stat.totalCPUTime;
+        for (let i = 0; i < stat.durations.length; ++i) {
+          result.durations[i] += stat.durations[i];
+        }
+        result.longestDuration = Math.max(result.longestDuration, stat.longestDuration);
+      }
       return result;
     }
   }),
@@ -243,11 +295,19 @@ let Probes = {
     isEqual: function(a, b) {
       return a.totalCPOWTime == b.totalCPOWTime;
     },
-    substract: function(a, b) {
+    subtract: function(a, b) {
       return {
         totalCPOWTime: a.totalCPOWTime - b.totalCPOWTime
       };
-    }
+    },
+    importChildCompartments: function() { /* nothing to do */ },
+    compose: function(stats) {
+      let totalCPOWTime = 0;
+      for (let stat of stats) {
+        totalCPOWTime += stat.totalCPOWTime;
+      }
+      return { totalCPOWTime };
+    },
   }),
 
   /**
@@ -272,14 +332,45 @@ let Probes = {
     isEqual: function(a, b) {
       return a.ticks == b.ticks;
     },
-    substract: function(a, b) {
+    subtract: function(a, b) {
       return {
         ticks: a.ticks - b.ticks
       };
-    }
+    },
+    importChildCompartments: function() { /* nothing to do */ },
+    compose: function(stats) {
+      let ticks = 0;
+      for (let stat of stats) {
+        ticks += stat.ticks;
+      }
+      return { ticks };
+    },
+  }),
+
+  compartments: new Probe("compartments", {
+    set isActive(x) {
+      performanceStatsService.isMonitoringPerCompartment = x;
+    },
+    get isActive() {
+      return performanceStatsService.isMonitoringPerCompartment;
+    },
+    extract: function(xpcom) {
+      return null;
+    },
+    isEqual: function(a, b) {
+      return true;
+    },
+    subtract: function(a, b) {
+      return true;
+    },
+    importChildCompartments: function(parent, children) {
+      parent.children = children;
+    },
+    compose: function(stats) {
+      return null;
+    },
   }),
 };
-
 
 /**
  * A monitor for a set of probes.
@@ -306,6 +397,13 @@ function PerformanceMonitor(probes) {
 }
 PerformanceMonitor.prototype = {
   /**
+   * The names of probes activated in this monitor.
+   */
+  get probeNames() {
+    return [for (probe of this._probes) probe.name];
+  },
+
+  /**
    * Return asynchronously a snapshot with the data
    * for each probe monitored by this PerformanceMonitor.
    *
@@ -317,7 +415,7 @@ PerformanceMonitor.prototype = {
    * will return a `Snapshot` in which all values are 0. For most uses,
    * the appropriate scenario is to perform a first call to `promiseSnapshot()`
    * to obtain a baseline, and then watch evolution of the values by calling
-   * `promiseSnapshot()` and `substract()`.
+   * `promiseSnapshot()` and `subtract()`.
    *
    * On the other hand, numeric values are also monotonic across several instances
    * of a PerformanceMonitor with the same probes. 
@@ -330,18 +428,55 @@ PerformanceMonitor.prototype = {
    *
    *  // all values of `snapshot2` are greater or equal to values of `snapshot1`.
    *
+   * @param {object} options If provided, an object that may contain the following
+   *   fields:
+   *   {Array<string>} probeNames The subset of probes to use for this snapshot.
+   *      These probes must be a subset of the probes active in the monitor.
+   *
    * @return {Promise}
    * @resolve {Snapshot}
    */
-  promiseSnapshot: function() {
+  _checkBeforeSnapshot: function(options) {
     if (!this._finalizer) {
       throw new Error("dispose() has already been called, this PerformanceMonitor is not usable anymore");
     }
-    // Current implementation is actually synchronous.
-    return Promise.resolve().then(() => new Snapshot({
-      xpcom: performanceStatsService.getSnapshot(),
-      probes: this._probes
-    }));
+    let probes;
+    if (options && options.probeNames || undefined) {
+      if (!Array.isArray(options.probeNames)) {
+        throw new TypeError();
+      }
+      // Make sure that we only request probes that we have
+      for (let probeName of options.probeNames) {
+        let probe = this._probes.find(probe => probe.name == probeName);
+        if (!probe) {
+          throw new TypeError(`I need probe ${probeName} but I only have ${this.probeNames}`);
+        }
+        if (!probes) {
+          probes = [];
+        }
+        probes.push(probe);
+      }
+    } else {
+      probes = this._probes;
+    }
+    return probes;
+  },
+  promiseContentSnapshot: function(options = null) {
+    this._checkBeforeSnapshot(options);
+    return (new ProcessSnapshot(performanceStatsService.getSnapshot()));
+  },
+  promiseSnapshot: function(options = null) {
+    let probes = this._checkBeforeSnapshot(options);
+    return Task.spawn(function*() {
+      let childProcesses = yield Process.broadcastAndCollect("collect", {probeNames: [for (probe of probes) probe.name]});
+      let xpcom = performanceStatsService.getSnapshot();
+      return new ApplicationSnapshot({
+        xpcom,
+        childProcesses,
+        probes,
+        date: Cu.now()
+      });
+    });
   },
 
   /**
@@ -381,12 +516,12 @@ PerformanceMonitor.make = function(probeNames) {
   let probes = [];
   for (let probeName of probeNames) {
     if (!(probeName in Probes)) {
-      throw new TypeError("Probe not implemented: " + k);
+      throw new TypeError("Probe not implemented: " + probeName);
     }
     probes.push(Probes[probeName]);
   }
 
-  return new PerformanceMonitor(probes);
+  return (new PerformanceMonitor(probes));
 };
 
 /**
@@ -467,22 +602,35 @@ this.PerformanceStats = {
  * @field {object|undefined} cpow See the documentation of probe "cpow".
  *   `undefined` if this probe is not active.
  */
-function PerformanceData({xpcom, probes}) {
+function PerformanceDataLeaf({xpcom, json, probes}) {
+  if (xpcom && json) {
+    throw new TypeError("Cannot import both xpcom and json data");
+  }
+  let source = xpcom || json;
   for (let k of PROPERTIES_META) {
-    this[k] = xpcom[k];
+    this[k] = source[k];
   }
-  for (let probe of probes) {
-    this[probe.name] = probe.extract(xpcom);
+  if (xpcom) {
+    for (let probe of probes) {
+      this[probe.name] = probe.extract(xpcom);
+    }
+    this.isChildProcess = false;
+  } else {
+    for (let probe of probes) {
+      this[probe.name] = json[probe.name];
+    }
+    this.isChildProcess = true;
   }
+  this.owner = null;
 }
-PerformanceData.prototype = {
+PerformanceDataLeaf.prototype = {
   /**
    * Compare two instances of `PerformanceData`
    *
    * @return `true` if `this` and `to` have equal values in all fields.
    */
   equals: function(to) {
-    if (!(to instanceof PerformanceData)) {
+    if (!(to instanceof PerformanceDataLeaf)) {
       throw new TypeError();
     }
     for (let probeName of Object.keys(Probes)) {
@@ -502,37 +650,339 @@ PerformanceData.prototype = {
    * @return {PerformanceDiff} The performance usage between `to` and `this`.
    */
   subtract: function(to = null) {
-    return new PerformanceDiff(this, to);
+    return (new PerformanceDiffLeaf(this, to));
+  }
+};
+
+function PerformanceData(timestamp) {
+  this._parent = null;
+  this._content = new Map();
+  this._all = [];
+  this._timestamp = timestamp;
+}
+PerformanceData.prototype = {
+  addChild: function(stat) {
+    if (!(stat instanceof PerformanceDataLeaf)) {
+      throw new TypeError(); // FIXME
+    }
+    if (!stat.isChildProcess) {
+      throw new TypeError(); // FIXME
+    }
+    this._content.set(stat.groupId, stat);
+    this._all.push(stat);
+    stat.owner = this;
+  },
+  setParent: function(stat) {
+    if (!(stat instanceof PerformanceDataLeaf)) {
+      throw new TypeError(); // FIXME
+    }
+    if (stat.isChildProcess) {
+      throw new TypeError(); // FIXME
+    }
+    this._parent = stat;
+    this._all.push(stat);
+    stat.owner = this;
+  },
+  equals: function(to) {
+    if (this._parent && !to._parent) {
+      return false;
+    }
+    if (!this._parent && to._parent) {
+      return false;
+    }
+    if (this._content.size != to._content.size) {
+      return false;
+    }
+    if (this._parent && !this._parent.equals(to._parent)) {
+      return false;
+    }
+    for (let [k, v] of this._content) {
+      let v2 = to._content.get(k);
+      if (!v2) {
+        return false;
+      }
+      if (!v.equals(v2)) {
+        return false;
+      }
+    }
+    return true;
+  },
+  subtract: function(to = null) {
+    return (new PerformanceDiff(this, to));
+  },
+  get addonId() {
+    return this._all[0].addonId;
+  },
+  get title() {
+    return this._all[0].title;
+  }
+};
+
+function PerformanceDiff(current, old = null) {
+  this.addonId = current.addonId;
+  this.title = current.title;
+  this.windowId = current.windowId;
+  this.deltaT = old ? current._timestamp - old._timestamp : Infinity;
+  this._all = [];
+
+  // Handle the parent, if any.
+  if (current._parent) {
+    this._parent = old?current._parent.subtract(old._parent):current._parent;
+    this._all.push(this._parent);
+    this._parent.owner = this;
+  } else {
+    this._parent = null;
+  }
+
+  // Handle the children, if any.
+  this._content = new Map();
+  for (let [k, stat] of current._content) {
+    let diff = stat.subtract(old ? old._content.get(k) : null);
+    this._content.set(k, diff);
+    this._all.push(diff);
+    diff.owner = this;
+  }
+
+  // Now consolidate data
+  for (let k of Object.keys(Probes)) {
+    if (!(k in this._all[0])) {
+      // The stats don't contain data from this probe.
+      continue;
+    }
+    let data = [for (item of this._all) item[k]];
+    let probe = Probes[k];
+    this[k] = probe.compose(data);
+  }
+}
+PerformanceDiff.prototype = {
+  toString: function() {
+    return `[PerformanceDiff] ${this.key}`;
+  },
+  get windowIds() {
+    return [for (item of this._all) item.windowId].filter(x => !!x);
+  },
+  get groupIds() {
+    return [for (item of this._all) item.groupId];
+  },
+  get key() {
+    if (this.addonId) {
+      return this.addonId;
+    }
+    if (this._parent) {
+      return this._parent.windowId;
+    }
+    return this._all[0].groupId;
+  },
+  get names() {
+    return [for (item of this._all) item.name];
+  },
+  get processes() {
+    return [for (item of this._all) { isChildProcess: item.isChildProcess, processId: item.processId}];
   }
 };
 
 /**
- * The delta between two instances of `PerformanceData`.
+ * The delta between two instances of `PerformanceDataLeaf`.
  *
  * Used to monitor resource usage between two timestamps.
  */
-function PerformanceDiff(current, old = null) {
+function PerformanceDiffLeaf(current, old = null) {
   for (let k of PROPERTIES_META) {
     this[k] = current[k];
   }
 
   for (let probeName of Object.keys(Probes)) {
-    let other = old ? old[probeName] : null;
+    let other = null;
+    if (old && probeName in old) {
+      other = old[probeName];
+    }
+
     if (probeName in current) {
-      this[probeName] = Probes[probeName].substract(current[probeName], other);
+      this[probeName] = Probes[probeName].subtract(current[probeName], other);
     }
   }
 }
 
 /**
- * A snapshot of the performance usage of the process.
+ * A snapshot of a single process.
  */
-function Snapshot({xpcom, probes}) {
+function ProcessSnapshot({xpcom, probes}) {
   this.componentsData = [];
+
+  let subgroups = new Map();
   let enumeration = xpcom.getComponentsData().enumerate();
   while (enumeration.hasMoreElements()) {
-    let stat = enumeration.getNext().QueryInterface(Ci.nsIPerformanceStats);
-    this.componentsData.push(new PerformanceData({xpcom: stat, probes}));
+    let xpcom = enumeration.getNext().QueryInterface(Ci.nsIPerformanceStats);
+    let stat = (new PerformanceDataLeaf({xpcom, probes}));
+
+    if (!xpcom.parentId) {
+      this.componentsData.push(stat);
+    } else {
+      let siblings = subgroups.get(xpcom.parentId);
+      if (!siblings) {
+        subgroups.set(xpcom.parentId, (siblings = []));
+      }
+      siblings.push(stat);
+    }
   }
-  this.processData = new PerformanceData({xpcom: xpcom.getProcessData(), probes});
+
+  for (let group of this.componentsData) {
+    for (let probe of probes) {
+      probe.importChildCompartments(group, subgroups.get(group.groupId) || []);
+    }
+  }
+
+  this.processData = (new PerformanceDataLeaf({xpcom: xpcom.getProcessData(), probes}));
 }
+
+/**
+ * A snapshot of the performance usage of the application.
+ *
+ * @param {nsIPerformanceSnapshot} xpcom The data acquired from this process.
+ * @param {Array<Object>} childProcesses The data acquired from children processes.
+ * @param {Array<Probe>} probes The active probes.
+ */
+function ApplicationSnapshot({xpcom, childProcesses, probes, date}) {
+  ProcessSnapshot.call(this, {xpcom, probes});
+
+  this.addons = new Map();
+  this.webpages = new Map();
+  this.date = date;
+
+  // Child processes
+  for (let {componentsData} of (childProcesses || [])) {
+    // We are only interested in `componentsData` for the time being.
+    for (let json of componentsData) {
+      let leaf = (new PerformanceDataLeaf({json, probes}));
+      this.componentsData.push(leaf);
+    }
+  }
+
+  for (let leaf of this.componentsData) {
+    let key, map;
+    if (leaf.addonId) {
+      key = leaf.addonId;
+      map = this.addons;
+    } else if (leaf.windowId) {
+      key = leaf.windowId;
+      map = this.webpages;
+    } else {
+      continue;
+    }
+
+    let combined = map.get(key);
+    if (!combined) {
+      combined = new PerformanceData(date);
+      map.set(key, combined);
+    }
+    if (leaf.isChildProcess) {
+      combined.addChild(leaf);
+    } else {
+      combined.setParent(leaf);
+    }
+  }
+}
+
+/**
+ * Communication with other processes
+ */
+var Process = {
+  // a counter used to match responses to requests
+  _idcounter: 0,
+  _loader: null,
+  /**
+   * If we are in a child process, return `null`.
+   * Otherwise, return the global parent process message manager
+   * and load the script to connect to children processes.
+   */
+  get loader() {
+    if (isContent) {
+      return null;
+    }
+    if (this._loader) {
+      return this._loader;
+    }
+    Services.ppmm.loadProcessScript("resource://gre/modules/PerformanceStats-content.js",
+      true/*including future processes*/);
+    return this._loader = Services.ppmm;
+  },
+
+  /**
+   * Broadcast a message to all children processes.
+   *
+   * NOOP if we are in a child process.
+   */
+  broadcast: function(topic, payload) {
+    if (!this.loader) {
+      return;
+    }
+    this.loader.broadcastAsyncMessage("performance-stats-service-" + topic, {payload});
+  },
+
+  /**
+   * Brodcast a message to all children processes and wait for answer.
+   *
+   * NOOP if we are in a child process, or if we have no children processes,
+   * in which case we return `undefined`.
+   *
+   * @return {undefined} If we have no children processes, in particular
+   * if we are in a child process.
+   * @return {Promise<Array<Object>>} If we have children processes, an
+   * array of objects with a structure similar to PerformanceData. Note
+   * that the array may be empty if no child process responded.
+   */
+  broadcastAndCollect: Task.async(function*(topic, payload) {
+    if (!this.loader || this.loader.childCount == 1) {
+      return undefined;
+    }
+    const TOPIC = "performance-stats-service-" + topic;
+    let id = this._idcounter++;
+
+    // The number of responses we are expecting. Note that we may
+    // not receive all responses if a process is too long to respond.
+    let expecting = this.loader.childCount;
+
+    // The responses we have collected, in arbitrary order.
+    let collected = [];
+    let deferred = PromiseUtils.defer();
+
+    let observer = function({data, target}) {
+      if (data.id != id) {
+        // Collision between two collections,
+        // ignore the other one.
+        return;
+      }
+      if (data.data) {
+        collected.push(data.data)
+      }
+      if (--expecting > 0) {
+        // We are still waiting for at least one response.
+        return;
+      }
+      deferred.resolve();
+    };
+    this.loader.addMessageListener(TOPIC, observer);
+    this.loader.broadcastAsyncMessage(
+      TOPIC,
+      {id, payload}
+    );
+
+    // Processes can die/freeze/be busy loading a page..., so don't expect
+    // that they will always respond.
+    let timeout = setTimeout(() => {
+      if (expecting == 0) {
+        return;
+      }
+      deferred.resolve();
+    }, MAX_WAIT_FOR_CHILD_PROCESS_MS);
+
+    deferred.promise.then(() => {
+      clearTimeout(timeout);
+    });
+
+    yield deferred.promise;
+    this.loader.removeMessageListener(TOPIC, observer);
+
+    return collected;
+  })
+};

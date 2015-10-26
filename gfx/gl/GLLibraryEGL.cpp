@@ -5,21 +5,27 @@
 #include "GLLibraryEGL.h"
 
 #include "gfxCrashReporterUtils.h"
+#include "gfxUtils.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Assertions.h"
 #include "nsDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
+#include "nsIGfxInfo.h"
 #include "nsPrintfCString.h"
 #ifdef XP_WIN
 #include "nsWindowsHelpers.h"
 #endif
+#include "OGLShaderProgram.h"
 #include "prenv.h"
 #include "GLContext.h"
+#include "GLContextProvider.h"
 #include "gfxPrefs.h"
+#include "ScopedGLHelpers.h"
 
 namespace mozilla {
 namespace gl {
 
+StaticMutex GLLibraryEGL::sMutex;
 GLLibraryEGL sEGLLibrary;
 #ifdef MOZ_B2G
 ThreadLocal<EGLContext> GLLibraryEGL::sCurrentContext;
@@ -35,7 +41,10 @@ static const char *sEGLExtensionNames[] = {
     "EGL_EXT_create_context_robustness",
     "EGL_KHR_image",
     "EGL_KHR_fence_sync",
-    "EGL_ANDROID_native_fence_sync"
+    "EGL_ANDROID_native_fence_sync",
+    "EGL_ANDROID_image_crop",
+    "EGL_ANGLE_platform_angle",
+    "EGL_ANGLE_platform_angle_d3d"
 };
 
 #if defined(ANDROID)
@@ -98,7 +107,37 @@ LoadLibraryForEGLOnWindows(const nsAString& filename)
     }
     return lib;
 }
+
 #endif // XP_WIN
+
+static EGLDisplay
+GetAndInitWARPDisplay(GLLibraryEGL& egl, void* displayType)
+{
+    EGLint attrib_list[] = {  LOCAL_EGL_PLATFORM_ANGLE_TYPE_ANGLE,
+                              LOCAL_EGL_PLATFORM_ANGLE_TYPE_D3D11_WARP_ANGLE,
+                              LOCAL_EGL_NONE };
+    EGLDisplay display = egl.fGetPlatformDisplayEXT(LOCAL_EGL_PLATFORM_ANGLE_ANGLE,
+                                                    displayType,
+                                                    attrib_list);
+
+    if (display == EGL_NO_DISPLAY)
+        return EGL_NO_DISPLAY;
+
+    if (!egl.fInitialize(display, nullptr, nullptr))
+        return EGL_NO_DISPLAY;
+
+    return display;
+}
+
+static bool
+IsAccelAngleSupported(const nsCOMPtr<nsIGfxInfo>& gfxInfo)
+{
+    int32_t angleSupport;
+    gfxUtils::ThreadSafeGetFeatureStatus(gfxInfo,
+                                         nsIGfxInfo::FEATURE_WEBGL_ANGLE,
+                                         &angleSupport);
+    return (angleSupport == nsIGfxInfo::FEATURE_STATUS_OK);
+}
 
 static EGLDisplay
 GetAndInitDisplay(GLLibraryEGL& egl, void* displayType)
@@ -114,7 +153,33 @@ GetAndInitDisplay(GLLibraryEGL& egl, void* displayType)
 }
 
 bool
-GLLibraryEGL::EnsureInitialized()
+GLLibraryEGL::ReadbackEGLImage(EGLImage image, gfx::DataSourceSurface* out_surface)
+{
+    StaticMutexAutoUnlock lock(sMutex);
+    if (!mReadbackGL) {
+        mReadbackGL = gl::GLContextProvider::CreateHeadless(gl::CreateContextFlags::NONE);
+    }
+
+    ScopedTexture destTex(mReadbackGL);
+    const GLuint target = LOCAL_GL_TEXTURE_EXTERNAL;
+    ScopedBindTexture autoTex(mReadbackGL, destTex.Texture(), target);
+    mReadbackGL->fTexParameteri(target, LOCAL_GL_TEXTURE_WRAP_S, LOCAL_GL_CLAMP_TO_EDGE);
+    mReadbackGL->fTexParameteri(target, LOCAL_GL_TEXTURE_WRAP_T, LOCAL_GL_CLAMP_TO_EDGE);
+    mReadbackGL->fTexParameteri(target, LOCAL_GL_TEXTURE_MAG_FILTER, LOCAL_GL_NEAREST);
+    mReadbackGL->fTexParameteri(target, LOCAL_GL_TEXTURE_MIN_FILTER, LOCAL_GL_NEAREST);
+    mReadbackGL->fEGLImageTargetTexture2D(target, image);
+
+    ShaderConfigOGL config = ShaderConfigFromTargetAndFormat(target,
+                                                             out_surface->GetFormat());
+    int shaderConfig = config.mFeatures;
+    mReadbackGL->ReadTexImageHelper()->ReadTexImage(out_surface, 0, target,
+                                                    out_surface->GetSize(), shaderConfig);
+
+    return true;
+}
+
+bool
+GLLibraryEGL::EnsureInitialized(bool forceAccel)
 {
     if (mInitialized) {
         return true;
@@ -249,47 +314,88 @@ GLLibraryEGL::EnsureInitialized()
                        "Couldn't find eglQueryStringImplementationANDROID");
 #endif
 
-    mEGLDisplay = GetAndInitDisplay(*this, EGL_DEFAULT_DISPLAY);
+    //Initialize client extensions
+    InitExtensionsFromDisplay(EGL_NO_DISPLAY);
 
-    const char* vendor = (char*)fQueryString(mEGLDisplay, LOCAL_EGL_VENDOR);
-    if (vendor && (strstr(vendor, "TransGaming") != 0 ||
-                   strstr(vendor, "Google Inc.") != 0))
-    {
-        mIsANGLE = true;
+    GLLibraryLoader::PlatformLookupFunction lookupFunction =
+        (GLLibraryLoader::PlatformLookupFunction)mSymbols.fGetProcAddress;
+
+#ifdef XP_WIN
+    if (IsExtensionSupported(ANGLE_platform_angle_d3d)) {
+        GLLibraryLoader::SymLoadStruct d3dSymbols[] = {
+            { (PRFuncPtr*)&mSymbols.fGetPlatformDisplayEXT, { "eglGetPlatformDisplayEXT", nullptr } },
+            { nullptr, { nullptr } }
+        };
+
+        bool success = GLLibraryLoader::LoadSymbols(mEGLLibrary,
+                                                    &d3dSymbols[0],
+                                                    lookupFunction);
+        if (!success) {
+            NS_ERROR("EGL supports ANGLE_platform_angle_d3d without exposing its functions!");
+
+            MarkExtensionUnsupported(ANGLE_platform_angle_d3d);
+
+            mSymbols.fGetPlatformDisplayEXT = nullptr;
+        }
     }
+#endif
+    mEGLDisplay = EGL_NO_DISPLAY;
+    // Check the ANGLE support the system has
+    nsCOMPtr<nsIGfxInfo> gfxInfo = do_GetService("@mozilla.org/gfx/info;1");
+    mIsANGLE = IsExtensionSupported(ANGLE_platform_angle_d3d);
 
     if (mIsANGLE) {
-        EGLDisplay newDisplay = EGL_NO_DISPLAY;
+        bool accelAngleSupport = IsAccelAngleSupported(gfxInfo);
+        bool warpAngleSupport = gfxPlatform::CanUseDirect3D11ANGLE();
 
-        // D3D11 ANGLE only works with OMTC; there's a bug in the non-OMTC layer
-        // manager, and it's pointless to try to fix it.  We also don't try
-        // D3D11 ANGLE if the layer manager is prefering D3D9 (hrm, do we care?)
-        if (gfxPrefs::LayersOffMainThreadCompositionEnabled() &&
-            !gfxPrefs::LayersPreferD3D9())
-        {
-            if (gfxPrefs::WebGLANGLEForceD3D11()) {
-                newDisplay = GetAndInitDisplay(*this,
-                                               LOCAL_EGL_D3D11_ONLY_DISPLAY_ANGLE);
-            } else if (gfxPrefs::WebGLANGLETryD3D11() && gfxPlatform::CanUseDirect3D11ANGLE()) {
-                newDisplay = GetAndInitDisplay(*this,
-                                               LOCAL_EGL_D3D11_ELSE_D3D9_DISPLAY_ANGLE);
+        bool shouldTryAccel = forceAccel || accelAngleSupport;
+        bool shouldTryWARP = !shouldTryAccel && warpAngleSupport;
+        if (gfxPrefs::WebGLANGLEForceWARP()) {
+            shouldTryWARP = true;
+            shouldTryAccel = false;
+        }
+
+        // Fallback to a WARP display if non-WARP is blacklisted,
+        // or if WARP is forced
+        if (shouldTryWARP) {
+            mEGLDisplay = GetAndInitWARPDisplay(*this,
+                                                EGL_DEFAULT_DISPLAY);
+            if (mEGLDisplay != EGL_NO_DISPLAY) {
+                mIsWARP = true;
             }
         }
 
-        if (newDisplay != EGL_NO_DISPLAY) {
-            DebugOnly<EGLBoolean> success = fTerminate(mEGLDisplay);
-            MOZ_ASSERT(success == LOCAL_EGL_TRUE);
+        // If falling back to WARP did not work and we don't want to try
+        // using HW accelerated ANGLE, then fail
+        if (mEGLDisplay == EGL_NO_DISPLAY && !shouldTryAccel) {
+            NS_ERROR("Fallback WARP ANGLE context failed to initialize.");
+            return false;
+        }
 
-            mEGLDisplay = newDisplay;
-
-            vendor = (char*)fQueryString(mEGLDisplay, LOCAL_EGL_VENDOR);
+        // Hardware accelerated ANGLE path
+        if (mEGLDisplay == EGL_NO_DISPLAY && shouldTryAccel) {
+            // D3D11 ANGLE only works with OMTC; there's a bug in the non-OMTC layer
+            // manager, and it's pointless to try to fix it.  We also don't try
+            // D3D11 ANGLE if the layer manager is prefering D3D9 (hrm, do we care?)
+            if (gfxPrefs::LayersOffMainThreadCompositionEnabled() &&
+                !gfxPrefs::LayersPreferD3D9())
+            {
+                if (gfxPrefs::WebGLANGLEForceD3D11()) {
+                    mEGLDisplay = GetAndInitDisplay(*this,
+                                                    LOCAL_EGL_D3D11_ONLY_DISPLAY_ANGLE);
+                } else if (gfxPrefs::WebGLANGLETryD3D11() && gfxPlatform::CanUseDirect3D11ANGLE()) {
+                    mEGLDisplay = GetAndInitDisplay(*this,
+                                                    LOCAL_EGL_D3D11_ELSE_D3D9_DISPLAY_ANGLE);
+                }
+            }
         }
     }
 
-    InitExtensions();
+    if (mEGLDisplay == EGL_NO_DISPLAY) {
+        mEGLDisplay = GetAndInitDisplay(*this, EGL_DEFAULT_DISPLAY);
+    }
 
-    GLLibraryLoader::PlatformLookupFunction lookupFunction =
-            (GLLibraryLoader::PlatformLookupFunction)mSymbols.fGetProcAddress;
+    InitExtensionsFromDisplay(mEGLDisplay);
 
     if (IsExtensionSupported(KHR_lock_surface)) {
         GLLibraryLoader::SymLoadStruct lockSymbols[] = {
@@ -326,25 +432,6 @@ GLLibraryEGL::EnsureInitialized()
             MarkExtensionUnsupported(ANGLE_surface_d3d_texture_2d_share_handle);
 
             mSymbols.fQuerySurfacePointerANGLE = nullptr;
-        }
-    }
-
-    //XXX: use correct extension name
-    if (IsExtensionSupported(ANGLE_surface_d3d_texture_2d_share_handle)) {
-        GLLibraryLoader::SymLoadStruct d3dSymbols[] = {
-            { (PRFuncPtr*)&mSymbols.fSurfaceReleaseSyncANGLE, { "eglSurfaceReleaseSyncANGLE", nullptr } },
-            { nullptr, { nullptr } }
-        };
-
-        bool success = GLLibraryLoader::LoadSymbols(mEGLLibrary,
-                                                    &d3dSymbols[0],
-                                                    lookupFunction);
-        if (!success) {
-            NS_ERROR("EGL supports ANGLE_surface_d3d_texture_2d_share_handle without exposing its functions!");
-
-            MarkExtensionUnsupported(ANGLE_surface_d3d_texture_2d_share_handle);
-
-            mSymbols.fSurfaceReleaseSyncANGLE = nullptr;
         }
     }
 
@@ -420,11 +507,11 @@ GLLibraryEGL::EnsureInitialized()
 }
 
 void
-GLLibraryEGL::InitExtensions()
+GLLibraryEGL::InitExtensionsFromDisplay(EGLDisplay eglDisplay)
 {
     std::vector<nsCString> driverExtensionList;
 
-    const char* rawExts = (const char*)fQueryString(mEGLDisplay, LOCAL_EGL_EXTENSIONS);
+    const char* rawExts = (const char*)fQueryString(eglDisplay, LOCAL_EGL_EXTENSIONS);
     if (rawExts) {
         nsDependentCString exts(rawExts);
         SplitByChar(exts, ' ', &driverExtensionList);

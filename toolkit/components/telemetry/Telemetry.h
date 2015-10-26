@@ -14,15 +14,15 @@
 
 namespace base {
   class Histogram;
-}
+} // namespace base
 
 namespace mozilla {
 namespace HangMonitor {
   class HangAnnotations;
-}
+} // namespace HangMonitor
 namespace Telemetry {
 
-#include "TelemetryHistogramEnums.h"
+#include "mozilla/TelemetryHistogramEnums.h"
 
 enum TimerResolution {
   Millisecond,
@@ -63,6 +63,18 @@ void Accumulate(ID id, const nsCString& key, uint32_t sample = 1);
 void Accumulate(const char* name, uint32_t sample);
 
 /**
+ * Adds a sample to a histogram defined in TelemetryHistograms.h.
+ * This function is here to support telemetry measurements from Java,
+ * where we have only names and not numeric IDs.  You should almost
+ * certainly be using the by-enum-id version instead of this one.
+ *
+ * @param name - histogram name
+ * @param key - the string key
+ * @param sample - sample - (optional) value to record, defaults to 1.
+ */
+void Accumulate(const char *name, const nsCString& key, uint32_t sample = 1);
+
+/**
  * Adds time delta in milliseconds to a histogram defined in TelemetryHistograms.h
  *
  * @param id - histogram id
@@ -75,6 +87,8 @@ void AccumulateTimeDelta(ID id, TimeStamp start, TimeStamp end = TimeStamp::Now(
  * Return a raw Histogram for direct manipulation for users who can not use Accumulate().
  */
 base::Histogram* GetHistogramById(ID id);
+
+const char* GetHistogramName(ID id);
 
 /**
  * Return a raw histogram for keyed histograms.
@@ -116,7 +130,7 @@ struct AccumulateDelta_impl<Microsecond>
 
 
 template<ID id, TimerResolution res = Millisecond>
-class AutoTimer {
+class MOZ_RAII AutoTimer {
 public:
   explicit AutoTimer(TimeStamp aStart = TimeStamp::Now() MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
      : start(aStart)
@@ -146,7 +160,7 @@ private:
 };
 
 template<ID id>
-class AutoCounter {
+class MOZ_RAII AutoCounter {
 public:
   explicit AutoCounter(uint32_t counterStart = 0 MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
     : counter(counterStart)
@@ -269,4 +283,5 @@ void WriteFailedProfileLock(nsIFile* aProfileDir);
 
 } // namespace Telemetry
 } // namespace mozilla
+
 #endif // Telemetry_h__

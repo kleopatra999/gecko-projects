@@ -83,7 +83,7 @@ public:
   }
 
   nsString mDeviceAddress;
-  nsTArray<nsRefPtr<Blob>> mBlobs;
+  nsTArray<RefPtr<Blob>> mBlobs;
 };
 
 NS_IMETHODIMP
@@ -155,7 +155,7 @@ public:
     if (numRead > 0) {
       sBluetoothOppManager->CheckPutFinal(numRead);
 
-      nsRefPtr<SendSocketDataTask> task =
+      RefPtr<SendSocketDataTask> task =
         new SendSocketDataTask((uint8_t*)buf.forget(), numRead);
       if (NS_FAILED(NS_DispatchToMainThread(task))) {
         BT_WARNING("Failed to dispatch to main thread!");
@@ -190,7 +190,7 @@ public:
   }
 
 private:
-  nsRefPtr<BluetoothSocket> mSocket;
+  RefPtr<BluetoothSocket> mSocket;
 };
 
 BluetoothOppManager::BluetoothOppManager()
@@ -367,7 +367,6 @@ BluetoothOppManager::StartSendingNextFile()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  MOZ_ASSERT(!IsConnected());
   MOZ_ASSERT(!mBatches.IsEmpty());
   MOZ_ASSERT((int)mBatches[0].mBlobs.Length() > mCurrentBlobIndex + 1);
 
@@ -395,8 +394,8 @@ BluetoothOppManager::SendFile(const nsAString& aDeviceAddress,
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  nsRefPtr<BlobImpl> impl = aActor->GetBlobImpl();
-  nsRefPtr<Blob> blob = Blob::Create(nullptr, impl);
+  RefPtr<BlobImpl> impl = aActor->GetBlobImpl();
+  RefPtr<Blob> blob = Blob::Create(nullptr, impl);
 
   return SendFile(aDeviceAddress, blob);
 }
@@ -460,6 +459,7 @@ bool
 BluetoothOppManager::ProcessNextBatch()
 {
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(!IsConnected());
 
   // Remove the processed batch.
   // A batch is processed if we've incremented mCurrentBlobIndex for it.
@@ -592,9 +592,11 @@ BluetoothOppManager::AfterOppDisconnected()
     mOutputStream = nullptr;
   }
 
-  if (mReadFileThread) {
-    mReadFileThread->Shutdown();
-    mReadFileThread = nullptr;
+  // Store local pointer of |mReadFileThread| to avoid shutdown reentry crash
+  // See bug 1191715 comment 19 for more details.
+  nsCOMPtr<nsIThread> thread = mReadFileThread.forget();
+  if (thread) {
+    thread->Shutdown();
   }
 
   // Release the mount lock if file transfer completed
@@ -771,13 +773,13 @@ BluetoothOppManager::RetrieveSentFileName()
 {
   mFileName.Truncate();
 
-  nsRefPtr<File> file = mBlob->ToFile();
+  RefPtr<File> file = mBlob->ToFile();
   if (file) {
     file->GetName(mFileName);
   }
 
   /**
-   * We try our best to get the file extention to avoid interoperability issues.
+   * We try our best to get the file extension to avoid interoperability issues.
    * However, once we found that we are unable to get suitable extension or
    * information about the content type, sending a pre-defined file name without
    * extension would be fine.
@@ -1134,7 +1136,7 @@ BluetoothOppManager::ClientDataHandler(UnixSocketBuffer* aMessage)
       }
     }
 
-    nsRefPtr<ReadFileTask> task = new ReadFileTask(mInputStream,
+    RefPtr<ReadFileTask> task = new ReadFileTask(mInputStream,
                                                    mRemoteMaxPacketLength);
     rv = mReadFileThread->Dispatch(task, NS_DISPATCH_NORMAL);
     if (NS_WARN_IF(rv.Failed())) {

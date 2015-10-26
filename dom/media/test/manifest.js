@@ -76,7 +76,7 @@ var gPlayedTests = [
   { name:"seek.ogv", type:"video/ogg", duration:3.966 },
   { name:"seek.webm", type:"video/webm", duration:3.966 },
   { name:"gizmo.mp4", type:"video/mp4", duration:5.56 },
-  { name:"owl.mp3", type:"audio/mpeg", duration:3.29 },
+  { name:"owl.mp3", type:"audio/mpeg", duration:3.343 },
   // Disable vbr.mp3 to see if it reduces the error of AUDCLNT_E_CPUUSAGE_EXCEEDED.
   // See bug 1110922 comment 26.
   //{ name:"vbr.mp3", type:"audio/mpeg", duration:10.0 },
@@ -124,6 +124,11 @@ var gClosingConnectionsTest = [
 // currently supported by the media encoder.
 var gMediaRecorderTests = [
   { name:"detodos.opus", type:"audio/ogg; codecs=opus", duration:2.9135 }
+];
+
+// Used by video media recorder tests
+var gMediaRecorderVideoTests = [
+  { name:"seek.webm", type:"video/webm", width:320, height:240, duration:3.966 },
 ];
 
 // These are files that we want to make sure we can play through.  We can
@@ -232,13 +237,13 @@ var gPlayTests = [
 
   { name:"small-shot.m4a", type:"audio/mp4", duration:0.29 },
   { name:"small-shot.mp3", type:"audio/mpeg", duration:0.27 },
-  { name:"owl.mp3", type:"audio/mpeg", duration:3.29 },
+  { name:"owl.mp3", type:"audio/mpeg", duration:3.343 },
   // owl.mp3 as above, but with something funny going on in the ID3v2 tag
   // that causes DirectShow to fail.
-  { name:"owl-funny-id3.mp3", type:"audio/mpeg", duration:3.29 },
+  { name:"owl-funny-id3.mp3", type:"audio/mpeg", duration:3.343 },
   // owl.mp3 as above, but with something even funnier going on in the ID3v2 tag
   // that causes DirectShow to fail.
-  { name:"owl-funnier-id3.mp3", type:"audio/mpeg", duration:3.29 },
+  { name:"owl-funnier-id3.mp3", type:"audio/mpeg", duration:3.343 },
   // One second of silence with ~140KB of ID3 tags. Usually when the first MP3
   // frame is at such a high offset into the file, MP3FrameParser will give up
   // and report that the stream is not MP3. However, it does not count ID3 tags
@@ -464,7 +469,7 @@ var gSeekTests = [
   { name:"split.webm", type:"video/webm", duration:1.967 },
   { name:"detodos.opus", type:"audio/ogg; codecs=opus", duration:2.9135 },
   { name:"gizmo.mp4", type:"video/mp4", duration:5.56 },
-  { name:"owl.mp3", type:"audio/mpeg", duration:3.29 },
+  { name:"owl.mp3", type:"audio/mpeg", duration:3.343 },
   { name:"bogus.duh", type:"bogus/duh", duration:123 }
 ];
 
@@ -490,33 +495,35 @@ var gUnseekableTests = [
   { name:"no-cues.webm", type:"video/webm" },
   { name:"bogus.duh", type:"bogus/duh"}
 ];
-// Android supports fragmented MP4 playback from 4.3.
-// Fragmented MP4.
+
+var androidVersion = -1; // non-Android platforms
 if (manifestNavigator().userAgent.indexOf("Mobile") != -1) {
   // See nsSystemInfo.cpp, the getProperty('version') returns different value
   // on each platforms, so we need to distinguish the android and B2G platform.
-  var androidVersion;
-  if (navigator.userAgent.indexOf("Android") != -1) {
-    androidSDKVer = SpecialPowers.Cc['@mozilla.org/system-info;1']
-                                 .getService(SpecialPowers.Ci.nsIPropertyBag2)
-                                 .getProperty('version');
-  } else if (navigator.userAgent.indexOf("Android") == -1) {
-    androidSDKVer = SpecialPowers.Cc['@mozilla.org/system-info;1']
-                                 .getService(SpecialPowers.Ci.nsIPropertyBag2)
-                                 .getProperty('sdk_version');
-  }
-  if (androidVersion >= 18) {
-    gUnseekableTests = gUnseekableTests.concat([
-      { name:"street.mp4", type:"video/mp4" }
-    ]);
-  }
+  var versionString = manifestNavigator().userAgent.indexOf("Android") != -1 ?
+                      'version' : 'sdk_version';
+  androidVersion = SpecialPowers.Cc['@mozilla.org/system-info;1']
+                                .getService(SpecialPowers.Ci.nsIPropertyBag2)
+                                .getProperty(versionString);
+}
+
+function getAndroidVersion() {
+  return androidVersion;
+}
+
+//Android supports fragmented MP4 playback from 4.3.
+//Fragmented MP4.
+if (getAndroidVersion() >= 18) {
+  gUnseekableTests = gUnseekableTests.concat([
+    { name:"street.mp4", type:"video/mp4" }
+  ]);
 }
 
 // These are files suitable for using with a "new Audio" constructor.
 var gAudioTests = [
   { name:"r11025_s16_c1.wav", type:"audio/x-wav", duration:1.0 },
   { name:"sound.ogg", type:"audio/ogg" },
-  { name:"owl.mp3", type:"audio/mpeg", duration:3.29 },
+  { name:"owl.mp3", type:"audio/mpeg", duration:3.343 },
   { name:"small-shot.m4a", type:"audio/mp4", duration:0.29 },
   { name:"bogus.duh", type:"bogus/duh", duration:123 }
 ];
@@ -785,7 +792,6 @@ var gEMETests = [
   },
   {
     name:"400x300 audio&video tracks, each with its key",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -817,7 +823,6 @@ var gEMETests = [
   },
   {
     name:"640x480@624kbps audio&video tracks, each with its key",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -849,7 +854,6 @@ var gEMETests = [
   },
   {
     name:"640x480@959kbps audio&video tracks, each with its key",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -881,7 +885,6 @@ var gEMETests = [
   },
   {
     name:"640x480 then 400x300, same key (1st) per track",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -914,7 +917,6 @@ var gEMETests = [
   },
   {
     name:"640x480 then 400x300, same key (2nd) per track",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -947,7 +949,6 @@ var gEMETests = [
   },
   {
     name:"640x480 with 1st keys then 400x300 with 2nd keys",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -981,7 +982,6 @@ var gEMETests = [
   },
   {
     name:"400x300 with 1st keys then 640x480 with 2nd keys",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -1015,7 +1015,6 @@ var gEMETests = [
   },
   {
     name:"640x480@959kbps with 1st keys then 640x480@624kbps with 2nd keys",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -1049,7 +1048,6 @@ var gEMETests = [
   },
   {
     name:"640x480@624kbps with 1st keys then 640x480@959kbps with 2nd keys",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -1083,7 +1081,6 @@ var gEMETests = [
   },
   {
     name:"400x300 with presentation size 533x300",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -1115,7 +1112,6 @@ var gEMETests = [
   },
   {
     name:"400x300 as-is then 400x300 presented as 533x300",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -1149,7 +1145,6 @@ var gEMETests = [
   },
   {
     name:"400x225",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -1180,7 +1175,6 @@ var gEMETests = [
   },
   {
     name:"640x360",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -1211,7 +1205,6 @@ var gEMETests = [
   },
   {
     name:"400x225 then 640x360",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -1245,7 +1238,6 @@ var gEMETests = [
   },
   {
     name:"640x360 then 640x480",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
     tracks: [
       {
         name:"audio",
@@ -1282,7 +1274,8 @@ var gEMETests = [
 var gEMENonMSEFailTests = [
   {
     name:"short-cenc.mp4",
-    type:"video/mp4; codecs=\"avc1.64000d,mp4a.40.2\"",
+    audioType:"audio/mp4; codecs=\"mp4a.40.2\"",
+    videoType:"video/mp4; codecs=\"avc1.64000d\"",
     duration:0.47,
   },
 ];
@@ -1336,12 +1329,12 @@ function getMajorMimeType(mimetype) {
 // Force releasing decoder to avoid timeout in waiting for decoding resource.
 function removeNodeAndSource(n) {
   n.remove();
-  // Clearing mozSrcObject and/or src will actually set them to some default
+  // Clearing srcObject and/or src will actually set them to some default
   // URI that will fail to load, so make sure we don't produce a spurious
   // bailing error.
   n.onerror = null;
-  // reset |mozSrcObject| first since it takes precedence over |src|.
-  n.mozSrcObject = null;
+  // reset |srcObject| first since it takes precedence over |src|.
+  n.srcObject = null;
   n.src = "";
   while (n.firstChild) {
     n.removeChild(n.firstChild);
@@ -1543,6 +1536,11 @@ function setMediaTestsPrefs(callback, extraPrefs) {
     prefs = prefs.concat(extraPrefs);
   }
   SpecialPowers.pushPrefEnv({"set": prefs}, callback);
+}
+
+// B2G emulator and Android 2.3 are condidered slow platforms
+function isSlowPlatform() {
+  return SpecialPowers.Services.appinfo.name == "B2G" || getAndroidVersion() == 10;
 }
 
 SimpleTest.requestFlakyTimeout("untriaged");

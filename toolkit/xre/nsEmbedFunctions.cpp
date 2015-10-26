@@ -220,8 +220,8 @@ XRE_ChildProcessTypeToString(GeckoProcessType aProcessType)
 namespace mozilla {
 namespace startup {
 GeckoProcessType sChildProcessType = GeckoProcessType_Default;
-}
-}
+} // namespace startup
+} // namespace mozilla
 
 void
 XRE_SetProcessType(const char* aProcessTypeString)
@@ -350,6 +350,8 @@ XRE_InitChildProcess(int aArgc,
   // NB: This must be called before profiler_init
   NS_LogInit();
 
+  mozilla::LogModule::Init();
+
   char aLocal;
   profiler_init(&aLocal);
 
@@ -466,8 +468,8 @@ XRE_InitChildProcess(int aArgc,
 #ifdef MOZ_X11
   XInitThreads();
 #endif
-#if defined(MOZ_WIDGET_GTK)
-  g_thread_init(nullptr);
+#if MOZ_WIDGET_GTK == 2
+  XRE_GlibInit();
 #endif
 
 #if defined(MOZ_WIDGET_QT)
@@ -603,6 +605,13 @@ XRE_InitChildProcess(int aArgc,
         NS_LogTerm();
         return NS_ERROR_FAILURE;
       }
+
+#if defined(XP_WIN)
+      // Set child processes up such that they will get killed after the
+      // chrome process is killed in cases where the user shuts the system
+      // down or logs off.
+      ::SetProcessShutdownParameters(0x280 - 1, SHUTDOWN_NORETRY);
+#endif
 
 #if defined(MOZ_SANDBOX) && defined(XP_WIN)
       // We need to do this after the process has been initialised, as
@@ -820,7 +829,7 @@ ContentParent* gContentParent; //long-lived, manually refcounted
 TestShellParent* GetOrCreateTestShellParent()
 {
     if (!gContentParent) {
-        nsRefPtr<ContentParent> parent = ContentParent::GetNewOrUsedBrowserProcess();
+        RefPtr<ContentParent> parent = ContentParent::GetNewOrUsedBrowserProcess();
         parent.forget(&gContentParent);
     } else if (!gContentParent->IsAlive()) {
         return nullptr;
@@ -831,7 +840,8 @@ TestShellParent* GetOrCreateTestShellParent()
     }
     return tsp;
 }
-}
+
+} // namespace
 
 bool
 XRE_SendTestShellCommand(JSContext* aCx,

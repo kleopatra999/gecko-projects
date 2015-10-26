@@ -21,6 +21,7 @@
 #include "nsNetUtil.h"
 #include "nsScriptLoader.h"
 #include "Workers.h"
+#include "nsStringStream.h"
 
 using mozilla::dom::cache::Cache;
 using mozilla::dom::cache::CacheStorage;
@@ -31,33 +32,29 @@ namespace serviceWorkerScriptCache {
 
 namespace {
 
+// XXX A sandbox nsIGlobalObject does not preserve its reflector, so |aSandbox|
+// must be kept alive as long as the CacheStorage if you want to ensure that
+// the CacheStorage will continue to work. Failures will manifest as errors
+// like "JavaScript error: , line 0: TypeError: The expression cannot be
+// converted to return the specified type."
 already_AddRefed<CacheStorage>
-CreateCacheStorage(nsIPrincipal* aPrincipal, ErrorResult& aRv,
-                   nsIXPConnectJSObjectHolder** aHolder = nullptr)
+CreateCacheStorage(JSContext* aCx, nsIPrincipal* aPrincipal, ErrorResult& aRv,
+                   JS::MutableHandle<JSObject*> aSandbox)
 {
   AssertIsOnMainThread();
   MOZ_ASSERT(aPrincipal);
 
   nsIXPConnect* xpc = nsContentUtils::XPConnect();
   MOZ_ASSERT(xpc, "This should never be null!");
-
-  AutoJSAPI jsapi;
-  jsapi.Init();
-  nsCOMPtr<nsIXPConnectJSObjectHolder> sandbox;
-  aRv = xpc->CreateSandbox(jsapi.cx(), aPrincipal, getter_AddRefs(sandbox));
+  aRv = xpc->CreateSandbox(aCx, aPrincipal, aSandbox.address());
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
 
-  nsCOMPtr<nsIGlobalObject> sandboxGlobalObject =
-    xpc::NativeGlobal(sandbox->GetJSObject());
+  nsCOMPtr<nsIGlobalObject> sandboxGlobalObject = xpc::NativeGlobal(aSandbox);
   if (!sandboxGlobalObject) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
-  }
-
-  if (aHolder) {
-    sandbox.forget(aHolder);
   }
 
   // We assume private browsing is not enabled here.  The ScriptLoader
@@ -114,13 +111,15 @@ public:
     }
 
     // Note that because there is no "serviceworker" RequestContext type, we can
-    // use the external TYPE_SCRIPT content policy types when loading a service
+    // use the TYPE_INTERNAL_SCRIPT content policy types when loading a service
     // worker.
     rv = NS_NewChannel(getter_AddRefs(mChannel),
                        uri, aPrincipal,
-                       nsILoadInfo::SEC_NORMAL,
-                       nsIContentPolicy::TYPE_SCRIPT,
-                       loadGroup);
+                       nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED,
+                       nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER,
+                       loadGroup,
+                       nullptr, // aCallbacks
+                       nsIChannel::LOAD_BYPASS_SERVICE_WORKER);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -141,12 +140,10 @@ public:
     if (httpChannel) {
       // Spec says no redirects allowed for SW scripts.
       httpChannel->SetRedirectionLimit(0);
-    }
 
-    // Don't let serviceworker intercept.
-    nsCOMPtr<nsIHttpChannelInternal> internalChannel = do_QueryInterface(mChannel);
-    if (internalChannel) {
-      internalChannel->ForceNoIntercept();
+      httpChannel->SetRequestHeader(NS_LITERAL_CSTRING("Service-Worker"),
+                                    NS_LITERAL_CSTRING("script"),
+                                    /* merge */ false);
     }
 
     nsCOMPtr<nsIStreamLoader> loader;
@@ -155,7 +152,7 @@ public:
       return rv;
     }
 
-    rv = mChannel->AsyncOpen(loader, nullptr);
+    rv = mChannel->AsyncOpen2(loader);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return rv;
     }
@@ -185,7 +182,7 @@ private:
     AssertIsOnMainThread();
   }
 
-  nsRefPtr<CompareManager> mManager;
+  RefPtr<CompareManager> mManager;
   nsCOMPtr<nsIChannel> mChannel;
   nsString mBuffer;
 };
@@ -278,7 +275,7 @@ private:
   void
   ManageValueResult(JSContext* aCx, JS::Handle<JS::Value> aValue);
 
-  nsRefPtr<CompareManager> mManager;
+  RefPtr<CompareManager> mManager;
   nsCOMPtr<nsIInputStreamPump> mPump;
 
   nsString mURL;
@@ -297,6 +294,8 @@ NS_IMPL_ISUPPORTS(CompareCache, nsIStreamLoaderObserver)
 class CompareManager final : public PromiseNativeHandler
 {
 public:
+  NS_DECL_ISUPPORTS
+
   explicit CompareManager(CompareCallback* aCallback)
     : mCallback(aCallback)
     , mState(WaitingForOpen)
@@ -318,8 +317,11 @@ public:
 
     // Always create a CacheStorage since we want to write the network entry to
     // the cache even if there isn't an existing one.
+    AutoJSAPI jsapi;
+    jsapi.Init();
     ErrorResult result;
-    mCacheStorage = CreateCacheStorage(aPrincipal, result, getter_AddRefs(mSandbox));
+    mSandbox.init(jsapi.cx());
+    mCacheStorage = CreateCacheStorage(jsapi.cx(), aPrincipal, result, &mSandbox);
     if (NS_WARN_IF(result.Failed())) {
       MOZ_ASSERT(!result.IsErrorWithMessage());
       return result.StealNSResult();
@@ -364,7 +366,7 @@ public:
 
     mNetworkFinished = true;
 
-    if (NS_FAILED(aStatus)) {
+    if (NS_WARN_IF(NS_FAILED(aStatus))) {
       if (mCC) {
         mCC->Abort();
       }
@@ -384,7 +386,7 @@ public:
     mCacheFinished = true;
     mInCache = aInCache;
 
-    if (NS_FAILED(aStatus)) {
+    if (NS_WARN_IF(NS_FAILED(aStatus))) {
       if (mCN) {
         mCN->Abort();
       }
@@ -405,7 +407,7 @@ public:
       return;
     }
 
-    if (!mCC || !mInCache) {
+    if (NS_WARN_IF(!mCC || !mInCache)) {
       ComparisonFinished(NS_OK, false);
       return;
     }
@@ -442,7 +444,7 @@ public:
       }
 
       // Just to be safe.
-      nsRefPtr<Cache> kungfuDeathGrip = cache;
+      RefPtr<Cache> kungfuDeathGrip = cache;
       WriteToCache(cache);
       return;
     }
@@ -534,7 +536,7 @@ private:
     AssertIsOnMainThread();
     MOZ_ASSERT(mCallback);
 
-    if (NS_FAILED(aStatus)) {
+    if (NS_WARN_IF(NS_FAILED(aStatus))) {
       Fail(aStatus);
       return;
     }
@@ -565,7 +567,7 @@ private:
       return;
     }
 
-    nsRefPtr<Promise> cacheOpenPromise = mCacheStorage->Open(mNewCacheName, result);
+    RefPtr<Promise> cacheOpenPromise = mCacheStorage->Open(mNewCacheName, result);
     if (NS_WARN_IF(result.Failed())) {
       MOZ_ASSERT(!result.IsErrorWithMessage());
       Fail(result.StealNSResult());
@@ -591,7 +593,7 @@ private:
       return;
     }
 
-    nsRefPtr<InternalResponse> ir =
+    RefPtr<InternalResponse> ir =
       new InternalResponse(200, NS_LITERAL_CSTRING("OK"));
     ir->SetBody(body);
 
@@ -600,7 +602,7 @@ private:
       ir->SetPrincipalInfo(Move(mPrincipalInfo));
     }
 
-    nsRefPtr<Response> response = new Response(aCache->GetGlobalObject(), ir);
+    RefPtr<Response> response = new Response(aCache->GetGlobalObject(), ir);
 
     RequestOrUSVString request;
     request.SetAsUSVString().Rebind(URL().Data(), URL().Length());
@@ -608,7 +610,7 @@ private:
     // For now we have to wait until the Put Promise is fulfilled before we can
     // continue since Cache does not yet support starting a read that is being
     // written to.
-    nsRefPtr<Promise> cachePromise = aCache->Put(request, *response, result);
+    RefPtr<Promise> cachePromise = aCache->Put(request, *response, result);
     if (NS_WARN_IF(result.Failed())) {
       MOZ_ASSERT(!result.IsErrorWithMessage());
       Fail(result.StealNSResult());
@@ -619,12 +621,12 @@ private:
     cachePromise->AppendNativeHandler(this);
   }
 
-  nsRefPtr<CompareCallback> mCallback;
-  nsCOMPtr<nsIXPConnectJSObjectHolder> mSandbox;
-  nsRefPtr<CacheStorage> mCacheStorage;
+  RefPtr<CompareCallback> mCallback;
+  JS::PersistentRooted<JSObject*> mSandbox;
+  RefPtr<CacheStorage> mCacheStorage;
 
-  nsRefPtr<CompareNetwork> mCN;
-  nsRefPtr<CompareCache> mCC;
+  RefPtr<CompareNetwork> mCN;
+  RefPtr<CompareCache> mCC;
 
   nsString mURL;
   // Only used if the network script has changed and needs to be cached.
@@ -645,6 +647,8 @@ private:
   bool mCacheFinished;
   bool mInCache;
 };
+
+NS_IMPL_ISUPPORTS0(CompareManager)
 
 NS_IMETHODIMP
 CompareNetwork::OnStartRequest(nsIRequest* aRequest, nsISupports* aContext)
@@ -691,7 +695,11 @@ CompareNetwork::OnStreamComplete(nsIStreamLoader* aLoader, nsISupports* aContext
   }
 
   if (NS_WARN_IF(NS_FAILED(aStatus))) {
-    mManager->NetworkFinished(aStatus);
+    if (aStatus == NS_ERROR_REDIRECT_LOOP) {
+      mManager->NetworkFinished(NS_ERROR_DOM_SECURITY_ERR);
+    } else {
+      mManager->NetworkFinished(aStatus);
+    }
     return NS_OK;
   }
 
@@ -711,18 +719,32 @@ CompareNetwork::OnStreamComplete(nsIStreamLoader* aLoader, nsISupports* aContext
       return NS_OK;
     }
 
-    if (!requestSucceeded) {
+    if (NS_WARN_IF(!requestSucceeded)) {
       mManager->NetworkFinished(NS_ERROR_FAILURE);
       return NS_OK;
     }
 
     nsAutoCString maxScope;
     // Note: we explicitly don't check for the return value here, because the
-    // absense of the header is not an error condition.
+    // absence of the header is not an error condition.
     unused << httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("Service-Worker-Allowed"),
                                              maxScope);
 
     mManager->SetMaxScope(maxScope);
+
+    nsAutoCString mimeType;
+    rv = httpChannel->GetContentType(mimeType);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      mManager->NetworkFinished(NS_ERROR_DOM_SECURITY_ERR);
+      return rv;
+    }
+
+    if (!mimeType.LowerCaseEqualsLiteral("text/javascript") &&
+        !mimeType.LowerCaseEqualsLiteral("application/x-javascript") &&
+        !mimeType.LowerCaseEqualsLiteral("application/javascript")) {
+      mManager->NetworkFinished(NS_ERROR_DOM_SECURITY_ERR);
+      return rv;
+    }
   }
   else {
     // The only supported request schemes are http, https, and app.
@@ -748,13 +770,11 @@ CompareNetwork::OnStreamComplete(nsIStreamLoader* aLoader, nsISupports* aContext
       return NS_OK;
     }
 
-    if (!scheme.LowerCaseEqualsLiteral("app")) {
+    if (NS_WARN_IF(!scheme.LowerCaseEqualsLiteral("app"))) {
       mManager->NetworkFinished(NS_ERROR_FAILURE);
       return NS_OK;      
     }
   }
-
-  // FIXME(nsm): "Extract mime type..."
 
   char16_t* buffer = nullptr;
   size_t len = 0;
@@ -784,7 +804,7 @@ CompareCache::Initialize(nsIPrincipal* aPrincipal, const nsAString& aURL,
 
   ErrorResult rv;
 
-  nsRefPtr<Promise> promise = mManager->CacheStorage_()->Open(aCacheName, rv);
+  RefPtr<Promise> promise = mManager->CacheStorage_()->Open(aCacheName, rv);
   if (NS_WARN_IF(rv.Failed())) {
     MOZ_ASSERT(!rv.IsErrorWithMessage());
     return rv.StealNSResult();
@@ -866,7 +886,7 @@ CompareCache::ManageCacheResult(JSContext* aCx, JS::Handle<JS::Value> aValue)
   request.SetAsUSVString().Rebind(mURL.Data(), mURL.Length());
   ErrorResult error;
   CacheQueryOptions params;
-  nsRefPtr<Promise> promise = cache->Match(request, params, error);
+  RefPtr<Promise> promise = cache->Match(request, params, error);
   if (NS_WARN_IF(error.Failed())) {
     mManager->CacheFinished(error.StealNSResult(), false);
     return;
@@ -942,7 +962,7 @@ CompareCache::ManageValueResult(JSContext* aCx, JS::Handle<JS::Value> aValue)
   }
 }
 
-} // anonymous namespace
+} // namespace
 
 nsresult
 PurgeCache(nsIPrincipal* aPrincipal, const nsAString& aCacheName)
@@ -954,14 +974,17 @@ PurgeCache(nsIPrincipal* aPrincipal, const nsAString& aCacheName)
     return NS_OK;
   }
 
+  AutoJSAPI jsapi;
+  jsapi.Init();
   ErrorResult rv;
-  nsRefPtr<CacheStorage> cacheStorage = CreateCacheStorage(aPrincipal, rv);
+  JS::Rooted<JSObject*> sandboxObject(jsapi.cx());
+  RefPtr<CacheStorage> cacheStorage = CreateCacheStorage(jsapi.cx(), aPrincipal, rv, &sandboxObject);
   if (NS_WARN_IF(rv.Failed())) {
     return rv.StealNSResult();
   }
 
   // We use the ServiceWorker scope as key for the cacheStorage.
-  nsRefPtr<Promise> promise =
+  RefPtr<Promise> promise =
     cacheStorage->Delete(aCacheName, rv);
   if (NS_WARN_IF(rv.Failed())) {
     return rv.StealNSResult();
@@ -1004,7 +1027,7 @@ Compare(nsIPrincipal* aPrincipal, const nsAString& aCacheName,
   MOZ_ASSERT(!aURL.IsEmpty());
   MOZ_ASSERT(aCallback);
 
-  nsRefPtr<CompareManager> cm = new CompareManager(aCallback);
+  RefPtr<CompareManager> cm = new CompareManager(aCallback);
 
   nsresult rv = cm->Initialize(aPrincipal, aURL, aCacheName, aLoadGroup);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -1014,6 +1037,6 @@ Compare(nsIPrincipal* aPrincipal, const nsAString& aCacheName,
   return NS_OK;
 }
 
-} // serviceWorkerScriptCache namespace
+} // namespace serviceWorkerScriptCache
 
 END_WORKERS_NAMESPACE

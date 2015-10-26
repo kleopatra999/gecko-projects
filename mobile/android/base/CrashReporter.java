@@ -23,7 +23,6 @@ import java.util.zip.GZIPOutputStream;
 
 import org.mozilla.gecko.AppConstants.Versions;
 
-import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.DialogInterface;
@@ -32,6 +31,7 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.support.v7.app.AppCompatActivity;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.View;
@@ -39,7 +39,7 @@ import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.EditText;
 
-public class CrashReporter extends Activity
+public class CrashReporter extends AppCompatActivity
 {
     private static final String LOGTAG = "GeckoCrashReporter";
 
@@ -389,6 +389,7 @@ public class CrashReporter extends Activity
             sendPart(os, boundary, "Android_Device", Build.DEVICE);
             sendPart(os, boundary, "Android_Display", Build.DISPLAY);
             sendPart(os, boundary, "Android_Fingerprint", Build.FINGERPRINT);
+            sendPart(os, boundary, "Android_APP_ABI", AppConstants.MOZ_APP_ABI);
             sendPart(os, boundary, "Android_CPU_ABI", Build.CPU_ABI);
             sendPart(os, boundary, "Android_MIN_SDK", Integer.toString(AppConstants.Versions.MIN_SDK_VERSION));
             sendPart(os, boundary, "Android_MAX_SDK", Integer.toString(AppConstants.Versions.MAX_SDK_VERSION));

@@ -10,6 +10,7 @@
 
 #include "ExtendedValidation.h"
 #include "OCSPRequestor.h"
+#include "OCSPVerificationTrustDomain.h"
 #include "certdb.h"
 #include "cert.h"
 #include "mozilla/UniquePtr.h"
@@ -49,6 +50,9 @@ NSSCertDBTrustDomain::NSSCertDBTrustDomain(SECTrustType certDBTrustType,
                                            CertVerifier::PinningMode pinningMode,
                                            unsigned int minRSABits,
                                            ValidityCheckingMode validityCheckingMode,
+                                           SignatureDigestOption signatureDigestOption,
+                                           CertVerifier::SHA1Mode sha1Mode,
+                              /*optional*/ PinningTelemetryInfo* pinningTelemetryInfo,
                               /*optional*/ const char* hostname,
                               /*optional*/ ScopedCERTCertList* builtChain)
   : mCertDBTrustType(certDBTrustType)
@@ -60,6 +64,9 @@ NSSCertDBTrustDomain::NSSCertDBTrustDomain(SECTrustType certDBTrustType,
   , mPinningMode(pinningMode)
   , mMinRSABits(minRSABits)
   , mValidityCheckingMode(validityCheckingMode)
+  , mSignatureDigestOption(signatureDigestOption)
+  , mSHA1Mode(sha1Mode)
+  , mPinningTelemetryInfo(pinningTelemetryInfo)
   , mHostname(hostname)
   , mBuiltChain(builtChain)
   , mCertBlocklist(do_GetService(NS_CERTBLOCKLIST_CONTRACTID))
@@ -636,7 +643,17 @@ NSSCertDBTrustDomain::VerifyAndMaybeCacheEncodedOCSPResponse(
 {
   Time thisUpdate(Time::uninitialized);
   Time validThrough(Time::uninitialized);
-  Result rv = VerifyEncodedOCSPResponse(*this, certID, time,
+
+  // We use a try and fallback approach which first mandates good signature
+  // digest algorithms, then falls back to SHA-1 if this fails. If a delegated
+  // OCSP response signing certificate was issued with a SHA-1 signature,
+  // verification initially fails. We cache the failure and then re-use that
+  // result even when doing fallback (i.e. when weak signature digest algorithms
+  // should succeed). To address this we use an OCSPVerificationTrustDomain
+  // here, rather than using *this, to ensure verification succeeds for all
+  // allowed signature digest algorithms.
+  OCSPVerificationTrustDomain trustDomain(*this);
+  Result rv = VerifyEncodedOCSPResponse(trustDomain, certID, time,
                                         maxLifetimeInDays, encodedResponse,
                                         expired, &thisUpdate, &validThrough);
   // If a response was stapled and expired, we don't want to cache it. Return
@@ -779,7 +796,8 @@ NSSCertDBTrustDomain::IsChainValid(const DERArray& certArray, Time time)
       (mPinningMode == CertVerifier::pinningEnforceTestMode);
     bool chainHasValidPins;
     nsresult nsrv = PublicKeyPinningService::ChainHasValidPins(
-      certList, mHostname, time, enforceTestMode, chainHasValidPins);
+      certList, mHostname, time, enforceTestMode, chainHasValidPins,
+      mPinningTelemetryInfo);
     if (NS_FAILED(nsrv)) {
       return Result::FATAL_ERROR_LIBRARY_FAILURE;
     }
@@ -796,8 +814,50 @@ NSSCertDBTrustDomain::IsChainValid(const DERArray& certArray, Time time)
 }
 
 Result
-NSSCertDBTrustDomain::CheckSignatureDigestAlgorithm(DigestAlgorithm)
+NSSCertDBTrustDomain::CheckSignatureDigestAlgorithm(DigestAlgorithm aAlg,
+                                                    EndEntityOrCA endEntityOrCA,
+                                                    Time notBefore)
 {
+  // (new Date("2016-01-01T00:00:00Z")).getTime() / 1000
+  static const Time JANUARY_FIRST_2016 = TimeFromEpochInSeconds(1451606400);
+
+  MOZ_LOG(gCertVerifierLog, LogLevel::Debug,
+          ("NSSCertDBTrustDomain: CheckSignatureDigestAlgorithm"));
+  if (aAlg == DigestAlgorithm::sha1) {
+    // First check based on SHA1Mode
+    switch (mSHA1Mode) {
+      case CertVerifier::SHA1Mode::Forbidden:
+        MOZ_LOG(gCertVerifierLog, LogLevel::Debug, ("SHA-1 certificate rejected"));
+        return Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED;
+      case CertVerifier::SHA1Mode::OnlyBefore2016:
+        if (JANUARY_FIRST_2016 <= notBefore) {
+          MOZ_LOG(gCertVerifierLog, LogLevel::Debug, ("Post-2015 SHA-1 certificate rejected"));
+          return Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED;
+        }
+        break;
+      case CertVerifier::SHA1Mode::Allowed:
+      default:
+        break;
+    }
+
+    // Then check the signatureDigestOption values
+    if (mSignatureDigestOption == DisableSHA1Everywhere) {
+      MOZ_LOG(gCertVerifierLog, LogLevel::Debug, ("SHA-1 certificate rejected"));
+      return Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED;
+    }
+
+    if (endEntityOrCA == EndEntityOrCA::MustBeCA) {
+      MOZ_LOG(gCertVerifierLog, LogLevel::Debug, ("CA cert is SHA-1"));
+      return mSignatureDigestOption == DisableSHA1ForCA
+             ? Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED
+             : Success;
+    } else {
+      MOZ_LOG(gCertVerifierLog, LogLevel::Debug, ("EE cert is SHA-1"));
+      return mSignatureDigestOption == DisableSHA1ForEE
+             ? Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED
+             : Success;
+    }
+  }
   return Success;
 }
 

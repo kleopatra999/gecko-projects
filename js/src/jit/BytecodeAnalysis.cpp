@@ -9,6 +9,7 @@
 #include "jsopcode.h"
 #include "jit/JitSpewer.h"
 #include "jsopcodeinlines.h"
+#include "jsscriptinlines.h"
 
 using namespace js;
 using namespace js::jit;
@@ -45,8 +46,12 @@ BytecodeAnalysis::init(TempAllocator& alloc, GSNCache& gsn)
     if (!infos_.growByUninitialized(script_->length()))
         return false;
 
-    // We need a scope chain if any of the bindings are aliased.
-    usesScopeChain_ = script_->hasAnyAliasedBindings();
+    // Initialize the scope chain slot if either the function needs a CallObject
+    // or the script uses the scope chain. The latter case is handled below.
+    usesScopeChain_ = script_->module() ||
+                      (script_->functionDelazifying() &&
+                       script_->functionDelazifying()->needsCallObject());
+    MOZ_ASSERT_IF(script_->hasAnyAliasedBindings(), usesScopeChain_);
 
     jsbytecode* end = script_->codeEnd();
 
@@ -162,8 +167,6 @@ BytecodeAnalysis::init(TempAllocator& alloc, GSNCache& gsn)
           case JSOP_LAMBDA_ARROW:
           case JSOP_DEFFUN:
           case JSOP_DEFVAR:
-          case JSOP_DEFCONST:
-          case JSOP_SETCONST:
             usesScopeChain_ = true;
             break;
 

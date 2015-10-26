@@ -58,7 +58,6 @@ ImageBridgeParent::ImageBridgeParent(MessageLoop* aLoop,
   : mMessageLoop(aLoop)
   , mTransport(aTransport)
   , mSetChildThreadPriority(false)
-  , mCompositorThreadHolder(GetCompositorThreadHolder())
 {
   MOZ_ASSERT(NS_IsMainThread());
   sMainLoop = MessageLoop::current();
@@ -83,13 +82,13 @@ ImageBridgeParent::~ImageBridgeParent()
                                      new DeleteTask<Transport>(mTransport));
   }
 
-  sImageBridges.erase(OtherPid());
-}
+  nsTArray<PImageContainerParent*> parents;
+  ManagedPImageContainerParent(parents);
+  for (PImageContainerParent* p : parents) {
+    delete p;
+  }
 
-LayersBackend
-ImageBridgeParent::GetCompositorBackendType() const
-{
-  return Compositor::GetBackend();
+  sImageBridges.erase(OtherPid());
 }
 
 void
@@ -132,12 +131,6 @@ bool
 ImageBridgeParent::RecvUpdate(EditArray&& aEdits, EditReplyArray* aReply)
 {
   AutoImageBridgeParentAsyncMessageSender autoAsyncMessageSender(this);
-
-  // If we don't actually have a compositor, then don't bother
-  // creating any textures.
-  if (Compositor::GetBackend() == LayersBackend::LAYERS_NONE) {
-    return true;
-  }
 
   EditReplyVector replyv;
   for (EditArray::index_type i = 0; i < aEdits.Length(); ++i) {
@@ -182,7 +175,7 @@ ConnectImageBridgeInParentProcess(ImageBridgeParent* aBridge,
 ImageBridgeParent::Create(Transport* aTransport, ProcessId aChildProcessId)
 {
   MessageLoop* loop = CompositorParent::CompositorLoop();
-  nsRefPtr<ImageBridgeParent> bridge = new ImageBridgeParent(loop, aTransport, aChildProcessId);
+  RefPtr<ImageBridgeParent> bridge = new ImageBridgeParent(loop, aTransport, aChildProcessId);
   bridge->mSelfRef = bridge;
   loop->PostTask(FROM_HERE,
                  NewRunnableFunction(ConnectImageBridgeInParentProcess,
@@ -236,11 +229,12 @@ static  uint64_t GenImageContainerID() {
 
 PCompositableParent*
 ImageBridgeParent::AllocPCompositableParent(const TextureInfo& aInfo,
+                                            PImageContainerParent* aImageContainer,
                                             uint64_t* aID)
 {
   uint64_t id = GenImageContainerID();
   *aID = id;
-  return CompositableHost::CreateIPDLActor(this, aInfo, id);
+  return CompositableHost::CreateIPDLActor(this, aInfo, id, aImageContainer);
 }
 
 bool ImageBridgeParent::DeallocPCompositableParent(PCompositableParent* aActor)
@@ -250,9 +244,10 @@ bool ImageBridgeParent::DeallocPCompositableParent(PCompositableParent* aActor)
 
 PTextureParent*
 ImageBridgeParent::AllocPTextureParent(const SurfaceDescriptor& aSharedData,
+                                       const LayersBackend& aLayersBackend,
                                        const TextureFlags& aFlags)
 {
-  return TextureHost::CreateIPDLActor(this, aSharedData, aFlags);
+  return TextureHost::CreateIPDLActor(this, aSharedData, aLayersBackend, aFlags);
 }
 
 bool
@@ -275,6 +270,19 @@ ImageBridgeParent::DeallocPMediaSystemResourceManagerParent(PMediaSystemResource
   return true;
 }
 
+PImageContainerParent*
+ImageBridgeParent::AllocPImageContainerParent()
+{
+  return new ImageContainerParent();
+}
+
+bool
+ImageBridgeParent::DeallocPImageContainerParent(PImageContainerParent* actor)
+{
+  delete actor;
+  return true;
+}
+
 void
 ImageBridgeParent::SendAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessage)
 {
@@ -287,6 +295,48 @@ ImageBridgeParent::RecvChildAsyncMessages(InfallibleTArray<AsyncChildMessageData
   return true;
 }
 
+class ProcessIdComparator
+{
+public:
+  bool Equals(const ImageCompositeNotification& aA,
+              const ImageCompositeNotification& aB) const
+  {
+    return aA.imageContainerParent()->OtherPid() == aB.imageContainerParent()->OtherPid();
+  }
+  bool LessThan(const ImageCompositeNotification& aA,
+                const ImageCompositeNotification& aB) const
+  {
+    return aA.imageContainerParent()->OtherPid() < aB.imageContainerParent()->OtherPid();
+  }
+};
+
+/* static */ bool
+ImageBridgeParent::NotifyImageComposites(nsTArray<ImageCompositeNotification>& aNotifications)
+{
+  // Group the notifications by destination process ID and then send the
+  // notifications in one message per group.
+  aNotifications.Sort(ProcessIdComparator());
+  uint32_t i = 0;
+  bool ok = true;
+  while (i < aNotifications.Length()) {
+    nsAutoTArray<ImageCompositeNotification,1> notifications;
+    notifications.AppendElement(aNotifications[i]);
+    uint32_t end = i + 1;
+    MOZ_ASSERT(aNotifications[i].imageContainerParent());
+    ProcessId pid = aNotifications[i].imageContainerParent()->OtherPid();
+    while (end < aNotifications.Length() &&
+           aNotifications[end].imageContainerParent()->OtherPid() == pid) {
+      notifications.AppendElement(aNotifications[end]);
+      ++end;
+    }
+    if (!GetInstance(pid)->SendDidComposite(notifications)) {
+      ok = false;
+    }
+    i = end;
+  }
+  return ok;
+}
+
 MessageLoop * ImageBridgeParent::GetMessageLoop() const {
   return mMessageLoop;
 }
@@ -294,6 +344,7 @@ MessageLoop * ImageBridgeParent::GetMessageLoop() const {
 void
 ImageBridgeParent::DeferredDestroy()
 {
+  MOZ_ASSERT(mCompositorThreadHolder);
   mCompositorThreadHolder = nullptr;
   mSelfRef = nullptr;
 }
@@ -317,10 +368,19 @@ ImageBridgeParent::CloneToplevel(const InfallibleTArray<ProtocolFdMapping>& aFds
       PImageBridgeParent* bridge = Create(transport, base::GetProcId(aPeerProcess));
       bridge->CloneManagees(this, aCtx);
       bridge->IToplevelProtocol::SetTransport(transport);
+      // The reference to the compositor thread is held in OnChannelConnected().
+      // We need to do this for cloned actors, too.
+      bridge->OnChannelConnected(base::GetProcId(aPeerProcess));
       return bridge;
     }
   }
   return nullptr;
+}
+
+void
+ImageBridgeParent::OnChannelConnected(int32_t aPid)
+{
+  mCompositorThreadHolder = GetCompositorThreadHolder();
 }
 
 bool ImageBridgeParent::IsSameProcess() const
@@ -428,5 +488,5 @@ ImageBridgeParent::SendPendingAsyncMessages(base::ProcessId aChildProcessId)
   imageBridge->SendPendingAsyncMessages();
 }
 
-} // layers
-} // mozilla
+} // namespace layers
+} // namespace mozilla

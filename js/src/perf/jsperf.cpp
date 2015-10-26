@@ -49,7 +49,7 @@ GETTER(eventsMeasured)
 // Calls
 
 static bool
-pm_start(JSContext* cx, unsigned argc, jsval* vp)
+pm_start(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     PerfMeasurement* p = GetPM(cx, args.thisv(), "start");
@@ -62,7 +62,7 @@ pm_start(JSContext* cx, unsigned argc, jsval* vp)
 }
 
 static bool
-pm_stop(JSContext* cx, unsigned argc, jsval* vp)
+pm_stop(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     PerfMeasurement* p = GetPM(cx, args.thisv(), "stop");
@@ -75,7 +75,7 @@ pm_stop(JSContext* cx, unsigned argc, jsval* vp)
 }
 
 static bool
-pm_reset(JSContext* cx, unsigned argc, jsval* vp)
+pm_reset(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     PerfMeasurement* p = GetPM(cx, args.thisv(), "reset");
@@ -88,7 +88,7 @@ pm_reset(JSContext* cx, unsigned argc, jsval* vp)
 }
 
 static bool
-pm_canMeasureSomething(JSContext* cx, unsigned argc, jsval* vp)
+pm_canMeasureSomething(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     PerfMeasurement* p = GetPM(cx, args.thisv(), "canMeasureSomething");
@@ -158,19 +158,19 @@ static const struct pm_const {
 
 #undef CONSTANT
 
-static bool pm_construct(JSContext* cx, unsigned argc, jsval* vp);
+static bool pm_construct(JSContext* cx, unsigned argc, Value* vp);
 static void pm_finalize(JSFreeOp* fop, JSObject* obj);
 
 static const JSClass pm_class = {
     "PerfMeasurement", JSCLASS_HAS_PRIVATE,
-    nullptr, nullptr, nullptr, nullptr, nullptr,
+    nullptr, nullptr, nullptr, nullptr,
     nullptr, nullptr, nullptr, pm_finalize
 };
 
 // Constructor and destructor
 
 static bool
-pm_construct(JSContext* cx, unsigned argc, jsval* vp)
+pm_construct(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
@@ -267,7 +267,7 @@ RegisterPerfMeasurement(JSContext* cx, HandleObject globalArg)
 }
 
 PerfMeasurement*
-ExtractPerfMeasurement(jsval wrapper)
+ExtractPerfMeasurement(Value wrapper)
 {
     if (wrapper.isPrimitive())
         return 0;

@@ -113,7 +113,7 @@ namespace gfx {
 class Matrix;
 class Matrix4x4;
 class DrawTarget;
-}
+} // namespace gfx
 
 namespace layers {
 
@@ -229,6 +229,10 @@ public:
     mTarget = aTarget;
     mTargetBounds = aRect;
   }
+  gfx::DrawTarget* GetTargetContext() const
+  {
+    return mTarget;
+  }
   void ClearTargetContext()
   {
     mTarget = nullptr;
@@ -316,6 +320,21 @@ public:
       DrawQuad(aRect, aClipRect, aEffectChain, aOpacity, aTransform, aRect);
   }
 
+  /**
+   * Draw an unfilled solid color rect. Typically used for debugging overlays.
+   */
+  void SlowDrawRect(const gfx::Rect& aRect, const gfx::Color& color,
+                const gfx::Rect& aClipRect = gfx::Rect(),
+                const gfx::Matrix4x4& aTransform = gfx::Matrix4x4(),
+                int aStrokeWidth = 1);
+
+  /**
+   * Draw a solid color filled rect. This is a simple DrawQuad helper.
+   */
+  void FillRect(const gfx::Rect& aRect, const gfx::Color& color,
+                    const gfx::Rect& aClipRect = gfx::Rect(),
+                    const gfx::Matrix4x4& aTransform = gfx::Matrix4x4());
+
   /*
    * Clear aRect on current render target.
    */
@@ -351,7 +370,7 @@ public:
    */
   virtual void EndFrame() = 0;
 
-  virtual void SetDispAcquireFence(Layer* aLayer) {}
+  virtual void SetDispAcquireFence(Layer* aLayer, nsIWidget* aWidget) {}
 
   virtual FenceHandle GetReleaseFence()
   {
@@ -364,16 +383,6 @@ public:
    * aTransform is the transform from user space to window space.
    */
   virtual void EndFrameForExternalComposition(const gfx::Matrix& aTransform) = 0;
-
-  /**
-   * Setup the viewport and projection matrix for rendering to a target of the
-   * given dimensions. The size and transform here will override those set in
-   * BeginFrame. BeginFrame sets a size and transform for the default render
-   * target, usually the screen. Calling this method prepares the compositor to
-   * render using a different viewport (that is, size and transform), usually
-   * associated with a new render target.
-   */
-  virtual void PrepareViewport(const gfx::IntSize& aSize) = 0;
 
   /**
    * Whether textures created by this compositor can receive partial updates.
@@ -454,16 +463,6 @@ public:
    */
   static void AssertOnCompositorThread();
 
-  /**
-   * We enforce that there can only be one Compositor backend type off the main
-   * thread at the same time. The backend type in use can be checked with this
-   * static method. We need this for creating texture clients/hosts etc. when we
-   * don't have a reference to a Compositor.
-   *
-   * This can only be used from the compositor thread!
-   */
-  static LayersBackend GetBackend();
-
   size_t GetFillRatio() {
     float fillRatio = 0;
     if (mPixelsFilled > 0 && mPixelsPerFrame > 0) {
@@ -478,9 +477,29 @@ public:
   ScreenRotation GetScreenRotation() const {
     return mScreenRotation;
   }
-
   void SetScreenRotation(ScreenRotation aRotation) {
     mScreenRotation = aRotation;
+  }
+
+  TimeStamp GetCompositionTime() const {
+    return mCompositionTime;
+  }
+  void SetCompositionTime(TimeStamp aTimeStamp) {
+    mCompositionTime = aTimeStamp;
+    if (!mCompositionTime.IsNull() && !mCompositeUntilTime.IsNull() &&
+        mCompositionTime >= mCompositeUntilTime) {
+      mCompositeUntilTime = TimeStamp();
+    }
+  }
+
+  void CompositeUntil(TimeStamp aTimeStamp) {
+    if (mCompositeUntilTime.IsNull() ||
+        mCompositeUntilTime < aTimeStamp) {
+      mCompositeUntilTime = aTimeStamp;
+    }
+  }
+  TimeStamp GetCompositeUntilTime() const {
+    return mCompositeUntilTime;
   }
 
 protected:
@@ -493,9 +512,15 @@ protected:
   bool ShouldDrawDiagnostics(DiagnosticFlags);
 
   /**
-   * Set the global Compositor backend, checking that one isn't already set.
+   * Render time for the current composition.
    */
-  static void SetBackend(LayersBackend backend);
+  TimeStamp mCompositionTime;
+  /**
+   * When nonnull, during rendering, some compositable indicated that it will
+   * change its rendering at this time. In order not to miss it, we composite
+   * on every vsync until this time occurs (this is the latest such time).
+   */
+  TimeStamp mCompositeUntilTime;
 
   uint32_t mCompositorID;
   DiagnosticTypes mDiagnosticTypes;

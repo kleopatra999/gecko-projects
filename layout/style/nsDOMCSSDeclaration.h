@@ -24,8 +24,8 @@ namespace css {
 class Declaration;
 class Loader;
 class Rule;
-}
-}
+} // namespace css
+} // namespace mozilla
 
 class nsDOMCSSDeclaration : public nsICSSDeclaration
 {
@@ -173,13 +173,5 @@ protected:
 protected:
   virtual ~nsDOMCSSDeclaration();
 };
-
-bool IsCSSPropertyExposedToJS(nsCSSProperty aProperty, JSContext* cx, JSObject* obj);
-
-template <nsCSSProperty Property>
-MOZ_ALWAYS_INLINE bool IsCSSPropertyExposedToJS(JSContext* cx, JSObject* obj)
-{
-  return IsCSSPropertyExposedToJS(Property, cx, obj);
-}
 
 #endif // nsDOMCSSDeclaration_h___

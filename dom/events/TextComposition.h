@@ -41,6 +41,8 @@ class TextComposition final
 public:
   typedef dom::TabParent TabParent;
 
+  static bool IsHandlingSelectionEvent() { return sHandlingSelectionEvent; }
+
   TextComposition(nsPresContext* aPresContext,
                   nsINode* aNode,
                   TabParent* aTabParent,
@@ -158,7 +160,7 @@ public:
     }
 
   private:
-    nsRefPtr<TextComposition> mComposition;
+    RefPtr<TextComposition> mComposition;
     CompositionChangeEventHandlingMarker();
     CompositionChangeEventHandlingMarker(
       const CompositionChangeEventHandlingMarker& aOther);
@@ -171,17 +173,21 @@ private:
     // WARNING: mPresContext may be destroying, so, be careful if you touch it.
   }
 
+  // sHandlingSelectionEvent is true while TextComposition sends a selection
+  // event to ContentEventHandler.
+  static bool sHandlingSelectionEvent;
+
   // This class holds nsPresContext weak.  This instance shouldn't block
   // destroying it.  When the presContext is being destroyed, it's notified to
   // IMEStateManager::OnDestroyPresContext(), and then, it destroy
   // this instance.
   nsPresContext* mPresContext;
   nsCOMPtr<nsINode> mNode;
-  nsRefPtr<TabParent> mTabParent;
+  RefPtr<TabParent> mTabParent;
 
   // This is the clause and caret range information which is managed by
   // the focused editor.  This may be null if there is no clauses or caret.
-  nsRefPtr<TextRangeArray> mRanges;
+  RefPtr<TextRangeArray> mRanges;
 
   // mNativeContext stores a opaque pointer.  This works as the "ID" for this
   // composition.  Don't access the instance, it may not be available.
@@ -285,6 +291,18 @@ private:
                                 bool aIsSynthesized);
 
   /**
+   * HandleSelectionEvent() sends the selection event to ContentEventHandler
+   * or dispatches it to the focused child process.
+   */
+  void HandleSelectionEvent(WidgetSelectionEvent* aSelectionEvent)
+  {
+    HandleSelectionEvent(mPresContext, mTabParent, aSelectionEvent);
+  }
+  static void HandleSelectionEvent(nsPresContext* aPresContext,
+                                   TabParent* aTabParent,
+                                   WidgetSelectionEvent* aSelectionEvent);
+
+  /**
    * MaybeDispatchCompositionUpdate() may dispatch a compositionupdate event
    * if aCompositionEvent changes composition string.
    * @return Returns false if dispatching the compositionupdate event caused
@@ -301,7 +319,7 @@ private:
    */
   BaseEventFlags CloneAndDispatchAs(
                    const WidgetCompositionEvent* aCompositionEvent,
-                   uint32_t aMessage,
+                   EventMessage aMessage,
                    nsEventStatus* aStatus = nullptr,
                    EventDispatchingCallback* aCallBack = nullptr);
 
@@ -335,16 +353,16 @@ private:
   public:
     CompositionEventDispatcher(TextComposition* aTextComposition,
                                nsINode* aEventTarget,
-                               uint32_t aEventMessage,
+                               EventMessage aEventMessage,
                                const nsAString& aData,
                                bool aIsSynthesizedEvent = false);
     NS_IMETHOD Run() override;
 
   private:
-    nsRefPtr<TextComposition> mTextComposition;
+    RefPtr<TextComposition> mTextComposition;
     nsCOMPtr<nsINode> mEventTarget;
-    uint32_t mEventMessage;
     nsString mData;
+    EventMessage mEventMessage;
     bool mIsSynthesizedEvent;
 
     CompositionEventDispatcher() {};
@@ -363,7 +381,7 @@ private:
    *                                commit or cancel composition.  Otherwise,
    *                                false.
    */
-  void DispatchCompositionEventRunnable(uint32_t aEventMessage,
+  void DispatchCompositionEventRunnable(EventMessage aEventMessage,
                                         const nsAString& aData,
                                         bool aIsSynthesizingCommit = false);
 };
@@ -379,7 +397,7 @@ private:
  */
 
 class TextCompositionArray final :
-  public nsAutoTArray<nsRefPtr<TextComposition>, 2>
+  public nsAutoTArray<RefPtr<TextComposition>, 2>
 {
 public:
   index_type IndexOf(nsIWidget* aWidget);

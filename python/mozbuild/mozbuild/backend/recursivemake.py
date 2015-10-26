@@ -14,6 +14,7 @@ from collections import (
     namedtuple,
 )
 from StringIO import StringIO
+from itertools import chain
 
 from reftest import ReftestManifest
 
@@ -25,6 +26,10 @@ import mozpack.path as mozpath
 
 from .common import CommonBackend
 from ..frontend.data import (
+    AndroidAssetsDirs,
+    AndroidResDirs,
+    AndroidExtraResDirs,
+    AndroidExtraPackages,
     AndroidEclipseProjectData,
     BrandingFiles,
     ConfigFileSubstitution,
@@ -39,6 +44,7 @@ from ..frontend.data import (
     GeneratedFile,
     GeneratedInclude,
     GeneratedSources,
+    HostDefines,
     HostLibrary,
     HostProgram,
     HostSimpleProgram,
@@ -69,79 +75,95 @@ from ..util import (
 from ..makeutil import Makefile
 
 MOZBUILD_VARIABLES = [
-    'ANDROID_GENERATED_RESFILES',
-    'ANDROID_RES_DIRS',
-    'ASFLAGS',
-    'CMSRCS',
-    'CMMSRCS',
-    'CPP_UNIT_TESTS',
-    'DIRS',
-    'DIST_INSTALL',
-    'EXTRA_DSO_LDOPTS',
-    'EXTRA_JS_MODULES',
-    'EXTRA_PP_COMPONENTS',
-    'EXTRA_PP_JS_MODULES',
-    'FORCE_SHARED_LIB',
-    'FORCE_STATIC_LIB',
-    'FINAL_LIBRARY',
-    'HOST_CSRCS',
-    'HOST_CMMSRCS',
-    'HOST_EXTRA_LIBS',
-    'HOST_LIBRARY_NAME',
-    'HOST_PROGRAM',
-    'HOST_SIMPLE_PROGRAMS',
-    'IS_COMPONENT',
-    'JAR_MANIFEST',
-    'JAVA_JAR_TARGETS',
-    'LD_VERSION_SCRIPT',
-    'LIBRARY_NAME',
-    'LIBS',
-    'MAKE_FRAMEWORK',
-    'MODULE',
-    'NO_DIST_INSTALL',
-    'NO_EXPAND_LIBS',
-    'NO_INTERFACES_MANIFEST',
-    'NO_JS_MANIFEST',
-    'OS_LIBS',
-    'PARALLEL_DIRS',
-    'PREF_JS_EXPORTS',
-    'PROGRAM',
-    'PYTHON_UNIT_TESTS',
-    'RESOURCE_FILES',
-    'SDK_HEADERS',
-    'SDK_LIBRARY',
-    'SHARED_LIBRARY_LIBS',
-    'SHARED_LIBRARY_NAME',
-    'SIMPLE_PROGRAMS',
-    'SONAME',
-    'STATIC_LIBRARY_NAME',
-    'TEST_DIRS',
-    'TOOL_DIRS',
+    b'ANDROID_APK_NAME',
+    b'ANDROID_APK_PACKAGE',
+    b'ANDROID_ASSETS_DIRS',
+    b'ANDROID_EXTRA_PACKAGES',
+    b'ANDROID_EXTRA_RES_DIRS',
+    b'ANDROID_GENERATED_RESFILES',
+    b'ANDROID_RES_DIRS',
+    b'ASFLAGS',
+    b'CMSRCS',
+    b'CMMSRCS',
+    b'CPP_UNIT_TESTS',
+    b'DIRS',
+    b'DIST_INSTALL',
+    b'EXTRA_DSO_LDOPTS',
+    b'EXTRA_JS_MODULES',
+    b'EXTRA_PP_COMPONENTS',
+    b'EXTRA_PP_JS_MODULES',
+    b'FORCE_SHARED_LIB',
+    b'FORCE_STATIC_LIB',
+    b'FINAL_LIBRARY',
+    b'HOST_CFLAGS',
+    b'HOST_CSRCS',
+    b'HOST_CMMSRCS',
+    b'HOST_CXXFLAGS',
+    b'HOST_EXTRA_LIBS',
+    b'HOST_LIBRARY_NAME',
+    b'HOST_PROGRAM',
+    b'HOST_SIMPLE_PROGRAMS',
+    b'IS_COMPONENT',
+    b'JAR_MANIFEST',
+    b'JAVA_JAR_TARGETS',
+    b'LD_VERSION_SCRIPT',
+    b'LIBRARY_NAME',
+    b'LIBS',
+    b'MAKE_FRAMEWORK',
+    b'MODULE',
+    b'NO_DIST_INSTALL',
+    b'NO_EXPAND_LIBS',
+    b'NO_INTERFACES_MANIFEST',
+    b'NO_JS_MANIFEST',
+    b'OS_LIBS',
+    b'PARALLEL_DIRS',
+    b'PREF_JS_EXPORTS',
+    b'PROGRAM',
+    b'PYTHON_UNIT_TESTS',
+    b'RESOURCE_FILES',
+    b'SDK_HEADERS',
+    b'SDK_LIBRARY',
+    b'SHARED_LIBRARY_LIBS',
+    b'SHARED_LIBRARY_NAME',
+    b'SIMPLE_PROGRAMS',
+    b'SONAME',
+    b'STATIC_LIBRARY_NAME',
+    b'TEST_DIRS',
+    b'TOOL_DIRS',
     # XXX config/Makefile.in specifies this in a make invocation
     #'USE_EXTENSION_MANIFEST',
-    'XPCSHELL_TESTS',
-    'XPIDL_MODULE',
+    b'XPCSHELL_TESTS',
+    b'XPIDL_MODULE',
 ]
 
 DEPRECATED_VARIABLES = [
-    'ANDROID_RESFILES',
-    'EXPORT_LIBRARY',
-    'EXTRA_LIBS',
-    'HOST_LIBS',
-    'LIBXUL_LIBRARY',
-    'MOCHITEST_A11Y_FILES',
-    'MOCHITEST_BROWSER_FILES',
-    'MOCHITEST_BROWSER_FILES_PARTS',
-    'MOCHITEST_CHROME_FILES',
-    'MOCHITEST_FILES',
-    'MOCHITEST_FILES_PARTS',
-    'MOCHITEST_METRO_FILES',
-    'MOCHITEST_ROBOCOP_FILES',
-    'MOZ_CHROME_FILE_FORMAT',
-    'SHORT_LIBNAME',
-    'TESTING_JS_MODULES',
-    'TESTING_JS_MODULE_DIR',
+    b'ANDROID_RESFILES',
+    b'EXPORT_LIBRARY',
+    b'EXTRA_LIBS',
+    b'HOST_LIBS',
+    b'LIBXUL_LIBRARY',
+    b'MOCHITEST_A11Y_FILES',
+    b'MOCHITEST_BROWSER_FILES',
+    b'MOCHITEST_BROWSER_FILES_PARTS',
+    b'MOCHITEST_CHROME_FILES',
+    b'MOCHITEST_FILES',
+    b'MOCHITEST_FILES_PARTS',
+    b'MOCHITEST_METRO_FILES',
+    b'MOCHITEST_ROBOCOP_FILES',
+    b'MODULE_OPTIMIZE_FLAGS',
+    b'MOZ_CHROME_FILE_FORMAT',
+    b'SHORT_LIBNAME',
+    b'TESTING_JS_MODULES',
+    b'TESTING_JS_MODULE_DIR',
 ]
+
+MOZBUILD_VARIABLES_MESSAGE = 'It should only be defined in moz.build files.'
+
+DEPRECATED_VARIABLES_MESSAGE = (
+    'This variable has been deprecated. It does nothing. It must be removed '
+    'in order to build.'
+)
+
 
 class BackendMakeFile(object):
     """Represents a generated backend.mk file.
@@ -189,7 +211,9 @@ class BackendMakeFile(object):
         self.fh.write(buf)
 
     def write_once(self, buf):
-        if '\n' + buf not in self.fh.getvalue():
+        if isinstance(buf, unicode):
+            buf = buf.encode('utf-8')
+        if b'\n' + buf not in self.fh.getvalue():
             self.write(buf)
 
     # For compatibility with makeutil.Makefile
@@ -352,26 +376,8 @@ class RecursiveMakeBackend(CommonBackend):
         self._backend_files = {}
         self._idl_dirs = set()
 
-        def detailed(summary):
-            s = '{:d} total backend files; ' \
-                '{:d} created; {:d} updated; {:d} unchanged; ' \
-                '{:d} deleted; {:d} -> {:d} Makefile'.format(
-                summary.created_count + summary.updated_count +
-                summary.unchanged_count,
-                summary.created_count,
-                summary.updated_count,
-                summary.unchanged_count,
-                summary.deleted_count,
-                summary.makefile_in_count,
-                summary.makefile_out_count)
-
-            return s
-
-        # This is a little kludgy and could be improved with a better API.
-        self.summary.backend_detailed_summary = types.MethodType(detailed,
-            self.summary)
-        self.summary.makefile_in_count = 0
-        self.summary.makefile_out_count = 0
+        self._makefile_in_count = 0
+        self._makefile_out_count = 0
 
         self._test_manifests = {}
 
@@ -404,6 +410,13 @@ class RecursiveMakeBackend(CommonBackend):
             'tools': set(),
         }
 
+    def summary(self):
+        summary = super(RecursiveMakeBackend, self).summary()
+        summary.extend('; {makefile_in:d} -> {makefile_out:d} Makefile',
+                       makefile_in=self._makefile_in_count,
+                       makefile_out=self._makefile_out_count)
+        return summary
+
     def _get_backend_file_for(self, obj):
         if obj.objdir not in self._backend_files:
             self._backend_files[obj.objdir] = \
@@ -415,11 +428,11 @@ class RecursiveMakeBackend(CommonBackend):
         """Write out build files necessary to build with recursive make."""
 
         if not isinstance(obj, ContextDerived):
-            return
+            return False
 
         backend_file = self._get_backend_file_for(obj)
 
-        CommonBackend.consume_object(self, obj)
+        consumed = CommonBackend.consume_object(self, obj)
 
         # CommonBackend handles XPIDLFile and TestManifest, but we want to do
         # some extra things for them.
@@ -432,8 +445,8 @@ class RecursiveMakeBackend(CommonBackend):
             self._process_test_manifest(obj, backend_file)
 
         # If CommonBackend acknowledged the object, we're done with it.
-        if obj._ack:
-            return
+        if consumed:
+            return True
 
         if isinstance(obj, DirectoryTraversal):
             self._process_directory_traversal(obj, backend_file)
@@ -483,7 +496,8 @@ class RecursiveMakeBackend(CommonBackend):
                         backend_file.write('%s := 1\n' % k)
                 else:
                     backend_file.write('%s := %s\n' % (k, v))
-
+        elif isinstance(obj, HostDefines):
+            self._process_defines(obj, backend_file, which='HOST_DEFINES')
         elif isinstance(obj, Defines):
             self._process_defines(obj, backend_file)
 
@@ -491,12 +505,16 @@ class RecursiveMakeBackend(CommonBackend):
             self._process_exports(obj, obj.exports, backend_file)
 
         elif isinstance(obj, GeneratedFile):
+            dep_file = "%s.pp" % obj.output
             backend_file.write('GENERATED_FILES += %s\n' % obj.output)
+            backend_file.write('EXTRA_MDDEPEND_FILES += %s\n' % dep_file)
             if obj.script:
                 backend_file.write("""{output}: {script}{inputs}
-\t$(call py_action,file_generate,{script} {method} {output}{inputs})
+\t$(REPORT_BUILD)
+\t$(call py_action,file_generate,{script} {method} {output} $(MDDEPDIR)/{dep_file}{inputs})
 
 """.format(output=obj.output,
+           dep_file=dep_file,
            inputs=' ' + ' '.join(obj.inputs) if obj.inputs else '',
            script=obj.script,
            method=obj.method))
@@ -561,7 +579,7 @@ class RecursiveMakeBackend(CommonBackend):
             elif isinstance(obj.wrapped, AndroidEclipseProjectData):
                 self._process_android_eclipse_project_data(obj.wrapped, backend_file)
             else:
-                return
+                return False
 
         elif isinstance(obj, SharedLibrary):
             self._process_shared_library(obj, backend_file)
@@ -586,9 +604,26 @@ class RecursiveMakeBackend(CommonBackend):
             for f in obj.files:
                 backend_file.write('DIST_FILES += %s\n' % f)
 
+        elif isinstance(obj, AndroidResDirs):
+            for p in obj.paths:
+                backend_file.write('ANDROID_RES_DIRS += %s\n' % p.full_path)
+
+        elif isinstance(obj, AndroidAssetsDirs):
+            for p in obj.paths:
+                backend_file.write('ANDROID_ASSETS_DIRS += %s\n' % p.full_path)
+
+        elif isinstance(obj, AndroidExtraResDirs):
+            for p in obj.paths:
+                backend_file.write('ANDROID_EXTRA_RES_DIRS += %s\n' % p.full_path)
+
+        elif isinstance(obj, AndroidExtraPackages):
+            for p in obj.packages:
+                backend_file.write('ANDROID_EXTRA_PACKAGES += %s\n' % p)
+
         else:
-            return
-        obj.ack()
+            return False
+
+        return True
 
     def _fill_root_mk(self):
         """
@@ -725,16 +760,25 @@ class RecursiveMakeBackend(CommonBackend):
             # Bypass the variable restrictions for externally managed makefiles.
             return
 
-        for x in MOZBUILD_VARIABLES:
-            if re.search(r'^[^#]*\b%s\s*[:?+]?=' % x, makefile_content, re.M):
-                raise Exception('Variable %s is defined in %s. It should '
-                    'only be defined in moz.build files.' % (x, makefile_in))
+        for l in makefile_content.splitlines():
+            l = l.strip()
+            # Don't check comments
+            if l.startswith(b'#'):
+                continue
+            for x in chain(MOZBUILD_VARIABLES, DEPRECATED_VARIABLES):
+                if x not in l:
+                    continue
 
-        for x in DEPRECATED_VARIABLES:
-            if re.search(r'^[^#]*\b%s\s*[:?+]?=' % x, makefile_content, re.M):
-                raise Exception('Variable %s is defined in %s. This variable '
-                    'has been deprecated. It does nothing. It must be removed '
-                    'in order to build.' % (x, makefile_in))
+                # Finding the variable name in the Makefile is not enough: it
+                # may just appear as part of something else, like DIRS appears
+                # in GENERATED_DIRS.
+                if re.search(r'\b%s\s*[:?+]?=' % x, l):
+                    if x in MOZBUILD_VARIABLES:
+                        message = MOZBUILD_VARIABLES_MESSAGE
+                    else:
+                        message = DEPRECATED_VARIABLES_MESSAGE
+                    raise Exception('Variable %s is defined in %s. %s'
+                                    % (x, makefile_in, message))
 
     def consume_finished(self):
         CommonBackend.consume_finished(self)
@@ -751,7 +795,7 @@ class RecursiveMakeBackend(CommonBackend):
                 if not stub:
                     self.log(logging.DEBUG, 'substitute_makefile',
                         {'path': makefile}, 'Substituting makefile: {path}')
-                    self.summary.makefile_in_count += 1
+                    self._makefile_in_count += 1
 
                     for tier, skiplist in self._may_skip.items():
                         if bf.relobjdir in skiplist:
@@ -898,11 +942,11 @@ class RecursiveMakeBackend(CommonBackend):
                 dest = mozpath.join(namespace, path, mozpath.basename(s))
                 yield source, dest, strings.flags_for(s)
 
-    def _process_defines(self, obj, backend_file):
+    def _process_defines(self, obj, backend_file, which='DEFINES'):
         """Output the DEFINES rules to the given backend file."""
         defines = list(obj.get_defines())
         if defines:
-            backend_file.write('DEFINES +=')
+            backend_file.write(which + ' +=')
             for define in defines:
                 backend_file.write(' %s' % define)
             backend_file.write('\n')
@@ -1049,6 +1093,7 @@ INSTALL_TARGETS += %(prefix)s
         modules = manager.modules
         xpt_modules = sorted(modules.keys())
         xpt_files = set()
+        registered_xpt_files = set()
 
         mk = Makefile()
 
@@ -1080,15 +1125,16 @@ INSTALL_TARGETS += %(prefix)s
         rules = StringIO()
         mk.dump(rules, removal_guard=False)
 
-        # Write out manifests defining interfaces
+        interfaces_manifests = []
         dist_dir = mozpath.join(self.environment.topobjdir, 'dist')
         for manifest, entries in manager.interface_manifests.items():
-            path = mozpath.join(self.environment.topobjdir, manifest)
-            with self._write_file(path) as fh:
-                for xpt in sorted(entries):
-                    fh.write('interfaces %s\n' % xpt)
+            interfaces_manifests.append(mozpath.join('$(DEPTH)', manifest))
+            for xpt in sorted(entries):
+                registered_xpt_files.add(mozpath.join(
+                    '$(DEPTH)', mozpath.dirname(manifest), xpt))
 
             if install_target.startswith('dist/'):
+                path = mozpath.join(self.environment.topobjdir, manifest)
                 path = mozpath.relpath(path, dist_dir)
                 prefix, subpath = path.split('/', 1)
                 key = 'dist_%s' % prefix
@@ -1111,9 +1157,11 @@ INSTALL_TARGETS += %(prefix)s
         obj.config = self.environment
         self._create_makefile(obj, extra=dict(
             chrome_manifests = ' '.join(chrome_manifests),
+            interfaces_manifests = ' '.join(interfaces_manifests),
             xpidl_rules=rules.getvalue(),
             xpidl_modules=' '.join(xpt_modules),
-            xpt_files=' '.join(sorted(xpt_files)),
+            xpt_files=' '.join(sorted(xpt_files - registered_xpt_files)),
+            registered_xpt_files=' '.join(sorted(registered_xpt_files)),
         ))
 
     def _process_program(self, program, backend_file):
@@ -1396,7 +1444,7 @@ INSTALL_TARGETS += %(prefix)s
             # the autogenerated one automatically.
             self.backend_input_files.add(obj.input_path)
 
-        self.summary.makefile_out_count += 1
+        self._makefile_out_count += 1
 
     def _handle_ipdl_sources(self, ipdl_dir, sorted_ipdl_sources,
                              unified_ipdl_cppsrcs_mapping):
@@ -1449,7 +1497,7 @@ INSTALL_TARGETS += %(prefix)s
                 # which would modify content in the source directory.
                 '$(RM) $@',
                 '$(call py_action,preprocessor,$(DEFINES) $(ACDEFINES) '
-                    '$(XULPPFLAGS) $< -o $@)'
+                    '$(MOZ_DEBUG_DEFINES) $< -o $@)'
             ])
 
         self._add_unified_build_rules(mk,

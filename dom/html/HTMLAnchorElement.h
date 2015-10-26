@@ -123,6 +123,14 @@ public:
   {
     SetHTMLAttr(nsGkAtoms::rel, aValue, rv);
   }
+  void SetReferrer(const nsAString& aValue, mozilla::ErrorResult& rv)
+  {
+    SetHTMLAttr(nsGkAtoms::referrer, aValue, rv);
+  }
+  void GetReferrer(nsAString& aReferrer)
+  {
+    GetHTMLAttr(nsGkAtoms::referrer, aReferrer);
+  }
   nsDOMTokenList* RelList();
   void GetHreflang(DOMString& aValue)
   {
@@ -227,7 +235,7 @@ protected:
   virtual void GetItemValueText(DOMString& text) override;
   virtual void SetItemValueText(const nsAString& text) override;
   virtual JSObject* WrapNode(JSContext *aCx, JS::Handle<JSObject*> aGivenProto) override;
-  nsRefPtr<nsDOMTokenList > mRelList;
+  RefPtr<nsDOMTokenList > mRelList;
 };
 
 } // namespace dom

@@ -4,6 +4,7 @@
 
 var loop = loop || {};
 loop.OTSdkDriver = (function() {
+  "use strict";
 
   var sharedActions = loop.shared.actions;
   var FAILURE_DETAILS = loop.shared.utils.FAILURE_DETAILS;
@@ -37,13 +38,9 @@ loop.OTSdkDriver = (function() {
 
     this.connections = {};
 
-    // Metrics object to keep track of the number of connections we have
+    // Setup the metrics object to keep track of the number of connections we have
     // and the amount of streams.
-    this._metrics = {
-      connections: 0,
-      sendStreams: 0,
-      recvStreams: 0
-    };
+    this._resetMetrics();
 
     this.dispatcher.register(this, [
       "setupStreamElements",
@@ -60,15 +57,26 @@ loop.OTSdkDriver = (function() {
 
     /**
      * XXX This is a workaround for desktop machines that do not have a
-     * camera installed. As we don't yet have device enumeration, when
-     * we do, this can be removed (bug 1138851), and the sdk should handle it.
+     * camera installed. The SDK doesn't currently do use the new device
+     * enumeration apis, when it does (bug 1138851), we can drop this part.
      */
-    if (this._isDesktop && !window.MediaStreamTrack.getSources) {
+    if (this._isDesktop) {
       // If there's no getSources function, the sdk defines its own and caches
-      // the result. So here we define the "normal" one which doesn't get cached, so
-      // we can change it later.
+      // the result. So here we define our own one which wraps around the
+      // real device enumeration api.
       window.MediaStreamTrack.getSources = function(callback) {
-        callback([{kind: "audio"}, {kind: "video"}]);
+        navigator.mediaDevices.enumerateDevices().then(function(devices) {
+          var result = [];
+          devices.forEach(function(device) {
+            if (device.kind === "audioinput") {
+              result.push({ kind: "audio" });
+            }
+            if (device.kind === "videoinput") {
+              result.push({ kind: "video" });
+            }
+          });
+          callback(result);
+        });
       };
     }
   };
@@ -97,6 +105,17 @@ loop.OTSdkDriver = (function() {
     },
 
     /**
+     * Resets the metrics for the driver.
+     */
+    _resetMetrics: function() {
+      this._metrics = {
+        connections: 0,
+        sendStreams: 0,
+        recvStreams: 0
+      };
+    },
+
+    /**
      * Handles the setupStreamElements action. Saves the required data and
      * kicks off the initialising of the publisher.
      *
@@ -108,21 +127,13 @@ loop.OTSdkDriver = (function() {
 
       this.sdk.on("exception", this._onOTException.bind(this));
 
-      // At this state we init the publisher, even though we might be waiting for
-      // the initial connect of the session. This saves time when setting up
-      // the media.
-      this._publishLocalStreams();
-    },
-
-    /**
-     * Internal function to publish a local stream.
-     * XXX This can be simplified when bug 1138851 is actioned.
-     */
-    _publishLocalStreams: function() {
       // We expect the local video to be muted automatically by the SDK. Hence
       // we don't mute it manually here.
       this._mockPublisherEl = document.createElement("div");
 
+      // At this state we init the publisher, even though we might be waiting for
+      // the initial connect of the session. This saves time when setting up
+      // the media.
       this.publisher = this.sdk.initPublisher(this._mockPublisherEl,
         _.extend(this._getDataChannelSettings, this._getCopyPublisherConfig));
 
@@ -132,17 +143,6 @@ loop.OTSdkDriver = (function() {
       this.publisher.on("accessDenied", this._onPublishDenied.bind(this));
       this.publisher.on("accessDialogOpened",
         this._onAccessDialogOpened.bind(this));
-    },
-
-    /**
-     * Forces the sdk into not using video, and starts publishing again.
-     * XXX This is part of the work around that will be removed by bug 1138851.
-     */
-    retryPublishWithoutVideo: function() {
-      window.MediaStreamTrack.getSources = function(callback) {
-        callback([{kind: "audio"}]);
-      };
-      this._publishLocalStreams();
     },
 
     /**
@@ -277,19 +277,31 @@ loop.OTSdkDriver = (function() {
       this.dispatcher.dispatch(new sharedActions.DataChannelsAvailable({
         available: false
       }));
+      this.dispatcher.dispatch(new sharedActions.MediaStreamDestroyed({
+        isLocal: true
+      }));
+      this.dispatcher.dispatch(new sharedActions.MediaStreamDestroyed({
+        isLocal: false
+      }));
 
       if (this.session) {
-        this.session.off("sessionDisconnected streamCreated streamDestroyed connectionCreated connectionDestroyed streamPropertyChanged");
+        this.session.off("sessionDisconnected streamCreated streamDestroyed " +
+                         "connectionCreated connectionDestroyed " +
+                         "streamPropertyChanged signal:readyForDataChannel");
         this.session.disconnect();
         delete this.session;
 
         this._notifyMetricsEvent("Session.connectionDestroyed", "local");
       }
       if (this.publisher) {
-        this.publisher.off("accessAllowed accessDenied accessDialogOpened streamCreated");
+        this.publisher.off("accessAllowed accessDenied accessDialogOpened " +
+                           "streamCreated streamDestroyed");
         this.publisher.destroy();
         delete this.publisher;
       }
+
+      // Now reset the metrics as well.
+      this._resetMetrics();
 
       this._noteConnectionLengthIfNeeded(this._getTwoWayMediaStartTime(), performance.now());
 
@@ -596,13 +608,11 @@ loop.OTSdkDriver = (function() {
       sdkSubscriberObject.on("videoEnabled", this._onVideoEnabled.bind(this));
       sdkSubscriberObject.on("videoDisabled", this._onVideoDisabled.bind(this));
 
-      // XXX for some reason, the SDK deliberately suppresses sending the
-      // videoEnabled event after subscribe, in spite of docs claiming
-      // otherwise, so we do it ourselves.
-      if (sdkSubscriberObject.stream.hasVideo) {
-        this.dispatcher.dispatch(new sharedActions.RemoteVideoEnabled({
-          srcVideoObject: sdkSubscriberVideo}));
-      }
+      this.dispatcher.dispatch(new sharedActions.MediaStreamCreated({
+        hasVideo: sdkSubscriberObject.stream[STREAM_PROPERTIES.HAS_VIDEO],
+        isLocal: false,
+        srcMediaElement: sdkSubscriberVideo
+      }));
 
       this._subscribedRemoteStream = true;
       if (this._checkAllStreamsConnected()) {
@@ -635,7 +645,7 @@ loop.OTSdkDriver = (function() {
       // _handleRemoteScreenShareCreated.  Maybe these should be separate
       // actions.  But even so, this shouldn't be necessary....
       this.dispatcher.dispatch(new sharedActions.ReceivingScreenShare({
-        receiving: true, srcVideoObject: sdkSubscriberVideo
+        receiving: true, srcMediaElement: sdkSubscriberVideo
       }));
 
     },
@@ -761,13 +771,17 @@ loop.OTSdkDriver = (function() {
     _onLocalStreamCreated: function(event) {
       this._notifyMetricsEvent("Publisher.streamCreated");
 
-      if (event.stream[STREAM_PROPERTIES.HAS_VIDEO]) {
+      var sdkLocalVideo = this._mockPublisherEl.querySelector("video");
+      var hasVideo = event.stream[STREAM_PROPERTIES.HAS_VIDEO];
 
-        var sdkLocalVideo = this._mockPublisherEl.querySelector("video");
+      this.dispatcher.dispatch(new sharedActions.MediaStreamCreated({
+        hasVideo: hasVideo,
+        isLocal: true,
+        srcMediaElement: sdkLocalVideo
+      }));
 
-        this.dispatcher.dispatch(new sharedActions.LocalVideoEnabled(
-              {srcVideoObject: sdkLocalVideo}));
-
+      // Only dispatch the video dimensions if we actually have video.
+      if (hasVideo) {
         this.dispatcher.dispatch(new sharedActions.VideoDimensionsChanged({
           isLocal: true,
           videoType: event.stream.videoType,
@@ -840,6 +854,9 @@ loop.OTSdkDriver = (function() {
         this.dispatcher.dispatch(new sharedActions.DataChannelsAvailable({
           available: false
         }));
+        this.dispatcher.dispatch(new sharedActions.MediaStreamDestroyed({
+          isLocal: false
+        }));
         delete this._subscriberChannel;
         delete this._mockSubscribeEl;
         return;
@@ -850,7 +867,6 @@ loop.OTSdkDriver = (function() {
       this.dispatcher.dispatch(new sharedActions.ReceivingScreenShare({
         receiving: false
       }));
-
       delete this._mockScreenShareEl;
     },
 
@@ -861,6 +877,9 @@ loop.OTSdkDriver = (function() {
       this._notifyMetricsEvent("Publisher.streamDestroyed");
       this.dispatcher.dispatch(new sharedActions.DataChannelsAvailable({
         available: false
+      }));
+      this.dispatcher.dispatch(new sharedActions.MediaStreamDestroyed({
+        isLocal: true
       }));
       delete this._publisherChannel;
       delete this._mockPublisherEl;
@@ -908,21 +927,45 @@ loop.OTSdkDriver = (function() {
     },
 
     _onOTException: function(event) {
-      if (event.code === OT.ExceptionCodes.UNABLE_TO_PUBLISH &&
-          event.message === "GetUserMedia") {
-        // We free up the publisher here in case the store wants to try
-        // grabbing the media again.
-        if (this.publisher) {
-          this.publisher.off("accessAllowed accessDenied accessDialogOpened streamCreated");
-          this.publisher.destroy();
-          delete this.publisher;
-          delete this._mockPublisherEl;
-        }
-        this.dispatcher.dispatch(new sharedActions.ConnectionFailure({
-          reason: FAILURE_DETAILS.UNABLE_TO_PUBLISH_MEDIA
-        }));
-      } else {
-        this._notifyMetricsEvent("sdk.exception." + event.code);
+      switch (event.code) {
+        case OT.ExceptionCodes.PUBLISHER_ICE_WORKFLOW_FAILED:
+        case OT.ExceptionCodes.SUBSCRIBER_ICE_WORKFLOW_FAILED:
+          this.dispatcher.dispatch(new sharedActions.ConnectionFailure({
+            reason: FAILURE_DETAILS.ICE_FAILED
+          }));
+          this._notifyMetricsEvent("sdk.exception." + event.code);
+          break;
+        case OT.ExceptionCodes.UNABLE_TO_PUBLISH:
+          if (event.message === "GetUserMedia") {
+            // We free up the publisher here in case the store wants to try
+            // grabbing the media again.
+            if (this.publisher) {
+              this.publisher.off("accessAllowed accessDenied accessDialogOpened streamCreated");
+              this.publisher.destroy();
+              delete this.publisher;
+              delete this._mockPublisherEl;
+            }
+            this.dispatcher.dispatch(new sharedActions.ConnectionFailure({
+              reason: FAILURE_DETAILS.UNABLE_TO_PUBLISH_MEDIA
+            }));
+            // No exception logging as this is a handled event.
+          } else {
+            // We need to log the message so that we can understand where the exception
+            // is coming from. Potentially a temporary addition.
+            this._notifyMetricsEvent("sdk.exception." + event.code + "." + event.message);
+          }
+          break;
+        case OT.ExceptionCodes.TERMS_OF_SERVICE_FAILURE:
+          this.dispatcher.dispatch(new sharedActions.ConnectionFailure({
+            reason: FAILURE_DETAILS.TOS_FAILURE
+          }));
+          // We still need to log the exception so that the server knows why this
+          // attempt failed.
+          this._notifyMetricsEvent("sdk.exception." + event.code);
+          break;
+        default:
+          this._notifyMetricsEvent("sdk.exception." + event.code);
+          break;
       }
     },
 
@@ -930,9 +973,9 @@ loop.OTSdkDriver = (function() {
      * Handles publishing of property changes to a stream.
      */
     _onStreamPropertyChanged: function(event) {
-      if (event.changedProperty == STREAM_PROPERTIES.VIDEO_DIMENSIONS) {
+      if (event.changedProperty === STREAM_PROPERTIES.VIDEO_DIMENSIONS) {
         this.dispatcher.dispatch(new sharedActions.VideoDimensionsChanged({
-          isLocal: event.stream.connection.id == this.session.connection.id,
+          isLocal: event.stream.connection.id === this.session.connection.id,
           videoType: event.stream.videoType,
           dimensions: event.stream[STREAM_PROPERTIES.VIDEO_DIMENSIONS]
         }));
@@ -956,9 +999,9 @@ loop.OTSdkDriver = (function() {
         console.error("sdkSubscriberVideo unexpectedly falsy!");
       }
 
-      this.dispatcher.dispatch(
-        new sharedActions.RemoteVideoEnabled(
-          {srcVideoObject: sdkSubscriberVideo}));
+      this.dispatcher.dispatch(new sharedActions.RemoteVideoStatus({
+        videoEnabled: true
+      }));
     },
 
     /**
@@ -971,8 +1014,9 @@ loop.OTSdkDriver = (function() {
      * @private
      */
     _onVideoDisabled: function(event) {
-      this.dispatcher.dispatch(
-        new sharedActions.RemoteVideoDisabled());
+      this.dispatcher.dispatch(new sharedActions.RemoteVideoStatus({
+        videoEnabled: false
+      }));
     },
 
     /**
@@ -1091,8 +1135,8 @@ loop.OTSdkDriver = (function() {
         return;
       }
 
-      if (startTime == this.CONNECTION_START_TIME_ALREADY_NOTED ||
-          startTime == this.CONNECTION_START_TIME_UNINITIALIZED ||
+      if (startTime === this.CONNECTION_START_TIME_ALREADY_NOTED ||
+          startTime === this.CONNECTION_START_TIME_UNINITIALIZED ||
           startTime > endTime) {
         if (this._debugTwoWayMediaTelemetry) {
           console.log("_noteConnectionLengthIfNeeded called with " +
@@ -1118,7 +1162,7 @@ loop.OTSdkDriver = (function() {
      * be running in the standalone client and return immediately.
      *
      * @param  {String}  type    Type of sharing that was flipped. May be 'window'
-     *                           or 'tab'.
+     *                           or 'browser'.
      * @param  {Boolean} enabled Flag that tells us if the feature was flipped on
      *                           or off.
      * @private

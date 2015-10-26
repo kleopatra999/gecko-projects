@@ -4,8 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_bluetooth_bluetoothoppmanager_h__
-#define mozilla_dom_bluetooth_bluetoothoppmanager_h__
+#ifndef mozilla_dom_bluetooth_bluedroid_BluetoothOppManager_h
+#define mozilla_dom_bluetooth_bluedroid_BluetoothOppManager_h
 
 #include "BluetoothCommon.h"
 #include "BluetoothProfileManagerBase.h"
@@ -146,6 +146,18 @@ private:
   int mUpdateProgressCounter;
 
   /**
+   * When it is true and the target service on target device couldn't be found,
+   * refreshing SDP records is necessary.
+   */
+  bool mNeedsUpdatingSdpRecords;
+
+  /**
+   * This holds the time when OPP manager fail to get service channel and
+   * prepare to refresh SDP records.
+   */
+  mozilla::TimeStamp mLastServiceChannelCheck;
+
+  /**
    * Set when StopSendingFile() is called.
    */
   bool mAbortFlag;
@@ -192,7 +204,7 @@ private:
   nsAutoArrayPtr<uint8_t> mReceivedDataBuffer;
 
   int mCurrentBlobIndex;
-  nsRefPtr<Blob> mBlob;
+  RefPtr<Blob> mBlob;
   nsTArray<SendFileBatch> mBatches;
 
   /**
@@ -203,20 +215,20 @@ private:
   nsCOMPtr<nsIOutputStream> mOutputStream;
   nsCOMPtr<nsIInputStream> mInputStream;
   nsCOMPtr<nsIVolumeMountLock> mMountLock;
-  nsRefPtr<DeviceStorageFile> mDsFile;
-  nsRefPtr<DeviceStorageFile> mDummyDsFile;
+  RefPtr<DeviceStorageFile> mDsFile;
+  RefPtr<DeviceStorageFile> mDummyDsFile;
 
   // If a connection has been established, mSocket will be the socket
   // communicating with the remote socket. We maintain the invariant that if
   // mSocket is non-null, mServerSocket must be null (and vice versa).
-  nsRefPtr<BluetoothSocket> mSocket;
+  RefPtr<BluetoothSocket> mSocket;
 
   // Server sockets. Once an inbound connection is established, it will hand
   // over the ownership to mSocket, and get a new server socket while Listen()
   // is called.
-  nsRefPtr<BluetoothSocket> mServerSocket;
+  RefPtr<BluetoothSocket> mServerSocket;
 };
 
 END_BLUETOOTH_NAMESPACE
 
-#endif
+#endif // mozilla_dom_bluetooth_bluedroid_BluetoothOppManager_h

@@ -8,24 +8,20 @@
 #include "SourceSurfaceSkia.h"
 #include "ScaledFontBase.h"
 #include "ScaledFontCairo.h"
-#include "skia/SkGpuDevice.h"
-#include "skia/SkBitmapDevice.h"
+#include "skia/include/core/SkBitmapDevice.h"
 #include "FilterNodeSoftware.h"
+#include "HelpersSkia.h"
 
 #ifdef USE_SKIA_GPU
-#include "skia/SkGpuDevice.h"
-#include "skia/GrGLInterface.h"
+#include "skia/include/gpu/SkGpuDevice.h"
+#include "skia/include/gpu/gl/GrGLInterface.h"
 #endif
 
-#include "skia/SkTypeface.h"
-#include "skia/SkGradientShader.h"
-#include "skia/SkBlurDrawLooper.h"
-#include "skia/SkBlurMaskFilter.h"
-#include "skia/SkColorFilter.h"
-#include "skia/SkDropShadowImageFilter.h"
-#include "skia/SkLayerRasterizer.h"
-#include "skia/SkLayerDrawLooper.h"
-#include "skia/SkDashPathEffect.h"
+#include "skia/include/core/SkTypeface.h"
+#include "skia/include/effects/SkGradientShader.h"
+#include "skia/include/core/SkColorFilter.h"
+#include "skia/include/effects/SkBlurImageFilter.h"
+#include "skia/include/effects/SkLayerRasterizer.h"
 #include "Logging.h"
 #include "Tools.h"
 #include "DataSurfaceHelpers.h"
@@ -429,15 +425,37 @@ DrawTargetSkia::DrawSurfaceWithShadow(SourceSurface *aSurface,
   TempBitmap bitmap = GetBitmapForSurface(aSurface);
 
   SkPaint paint;
-
-  SkImageFilter* filter = SkDropShadowImageFilter::Create(aOffset.x, aOffset.y,
-                                                          aSigma, aSigma,
-                                                          ColorToSkColor(aColor, 1.0));
-
-  paint.setImageFilter(filter);
   paint.setXfermodeMode(GfxOpToSkiaOp(aOperator));
 
-  mCanvas->drawBitmap(bitmap.mBitmap, aDest.x, aDest.y, &paint);
+  // bug 1201272
+  // We can't use the SkDropShadowImageFilter here because it applies the xfer
+  // mode first to render the bitmap to a temporary layer, and then implicitly
+  // uses src-over to composite the resulting shadow.
+  // The canvas spec, however, states that the composite op must be used to
+  // composite the resulting shadow, so we must instead use a SkBlurImageFilter
+  // to blur the image ourselves.
+
+  SkPaint shadowPaint;
+  SkAutoTUnref<SkImageFilter> blurFilter(SkBlurImageFilter::Create(aSigma, aSigma));
+  SkAutoTUnref<SkColorFilter> colorFilter(
+    SkColorFilter::CreateModeFilter(ColorToSkColor(aColor, 1.0), SkXfermode::kSrcIn_Mode));
+
+  shadowPaint.setXfermode(paint.getXfermode());
+  shadowPaint.setImageFilter(blurFilter.get());
+  shadowPaint.setColorFilter(colorFilter.get());
+
+  // drawBitmap implicitly calls saveLayer with a src-over xfer mode if given
+  // an image filter, whereas the supplied xfer mode gets used to render into
+  // the layer, which is the wrong order. We instead must use drawSprite which
+  // applies the image filter directly to the bitmap without rendering it first,
+  // then uses the xfer mode to composite it.
+  IntPoint shadowDest = RoundedToInt(aDest + aOffset);
+  mCanvas->drawSprite(bitmap.mBitmap, shadowDest.x, shadowDest.y, &shadowPaint);
+
+  // Composite the original image after the shadow
+  IntPoint dest = RoundedToInt(aDest);
+  mCanvas->drawSprite(bitmap.mBitmap, dest.x, dest.y, &paint);
+
   mCanvas->restore();
 }
 
@@ -572,23 +590,17 @@ DrawTargetSkia::FillGlyphs(ScaledFont *aFont,
   paint.mPaint.setLCDRenderText(shouldLCDRenderText);
 
   if (aRenderingOptions && aRenderingOptions->GetType() == FontType::CAIRO) {
-    switch (static_cast<const GlyphRenderingOptionsCairo*>(aRenderingOptions)->GetHinting()) {
-      case FontHinting::NONE:
-        paint.mPaint.setHinting(SkPaint::kNo_Hinting);
-        break;
-      case FontHinting::LIGHT:
-        paint.mPaint.setHinting(SkPaint::kSlight_Hinting);
-        break;
-      case FontHinting::NORMAL:
-        paint.mPaint.setHinting(SkPaint::kNormal_Hinting);
-        break;
-      case FontHinting::FULL:
-        paint.mPaint.setHinting(SkPaint::kFull_Hinting);
-        break;
+    const GlyphRenderingOptionsCairo* cairoOptions =
+      static_cast<const GlyphRenderingOptionsCairo*>(aRenderingOptions);
+
+    paint.mPaint.setHinting(GfxHintingToSkiaHinting(cairoOptions->GetHinting()));
+
+    if (cairoOptions->GetAutoHinting()) {
+      paint.mPaint.setAutohinted(true);
     }
 
-    if (static_cast<const GlyphRenderingOptionsCairo*>(aRenderingOptions)->GetAutoHinting()) {
-      paint.mPaint.setAutohinted(true);
+    if (cairoOptions->GetAntialiasMode() == AntialiasMode::NONE) {
+      paint.mPaint.setAntiAlias(false);
     }
   } else if (aFont->GetType() == FontType::MAC && shouldLCDRenderText) {
     // SkFontHost_mac only supports subpixel antialiasing when hinting is turned off.
@@ -825,20 +837,18 @@ DrawTargetSkia::Init(const IntSize &aSize, SurfaceFormat aFormat)
         aSize.width, aSize.height,
         GfxFormatToSkiaColorType(aFormat),
         alphaType);
+  // we need to have surfaces that have a stride aligned to 4 for interop with cairo
+  int stride = (BytesPerPixel(aFormat)*aSize.width + (4-1)) & -4;
 
-  SkAutoTUnref<SkBaseDevice> device(SkBitmapDevice::Create(skiInfo));
-  if (!device) {
-      return false;
-  }
-
-  SkBitmap bitmap = device->accessBitmap(true);
+  SkBitmap bitmap;
+  bitmap.setInfo(skiInfo, stride);
   if (!bitmap.allocPixels()) {
     return false;
   }
 
   bitmap.eraseARGB(0, 0, 0, 0);
 
-  mCanvas.adopt(new SkCanvas(device.get()));
+  mCanvas.adopt(new SkCanvas(bitmap));
   mSize = aSize;
 
   mFormat = aFormat;
@@ -1014,5 +1024,5 @@ DrawTargetSkia::SnapshotDestroyed()
   mSnapshot = nullptr;
 }
 
-}
-}
+} // namespace gfx
+} // namespace mozilla

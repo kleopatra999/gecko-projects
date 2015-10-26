@@ -14,11 +14,13 @@
 #include "mozilla/dom/cache/TypeUtils.h"
 #include "mozIStorageConnection.h"
 #include "mozIStorageStatement.h"
+#include "mozStorageHelper.h"
 #include "nsCOMPtr.h"
 #include "nsTArray.h"
 #include "nsCRT.h"
 #include "nsHttp.h"
 #include "nsICryptoHash.h"
+#include "nsNetCID.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/dom/HeadersBinding.h"
 #include "mozilla/dom/RequestBinding.h"
@@ -30,11 +32,131 @@ namespace dom {
 namespace cache {
 namespace db {
 
-const int32_t kMaxWipeSchemaVersion = 14;
+const int32_t kFirstShippedSchemaVersion = 15;
 
 namespace {
 
-const int32_t kLatestSchemaVersion = 14;
+// Update this whenever the DB schema is changed.
+const int32_t kLatestSchemaVersion = 17;
+
+// ---------
+// The following constants define the SQL schema.  These are defined in the
+// same order the SQL should be executed in CreateOrMigrateSchema().  They are
+// broken out as constants for convenient use in validation and migration.
+// ---------
+
+// The caches table is the single source of truth about what Cache
+// objects exist for the origin.  The contents of the Cache are stored
+// in the entries table that references back to caches.
+//
+// The caches table is also referenced from storage.  Rows in storage
+// represent named Cache objects.  There are cases, however, where
+// a Cache can still exist, but not be in a named Storage.  For example,
+// when content is still using the Cache after CacheStorage::Delete()
+// has been run.
+//
+// For now, the caches table mainly exists for data integrity with
+// foreign keys, but could be expanded to contain additional cache object
+// information.
+//
+// AUTOINCREMENT is necessary to prevent CacheId values from being reused.
+const char* const kTableCaches =
+  "CREATE TABLE caches ("
+    "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT "
+  ")";
+
+// Security blobs are quite large and duplicated for every Response from
+// the same https origin.  This table is used to de-duplicate this data.
+const char* const kTableSecurityInfo =
+  "CREATE TABLE security_info ("
+    "id INTEGER NOT NULL PRIMARY KEY, "
+    "hash BLOB NOT NULL, "  // first 8-bytes of the sha1 hash of data column
+    "data BLOB NOT NULL, "  // full security info data, usually a few KB
+    "refcount INTEGER NOT NULL"
+  ")";
+
+// Index the smaller hash value instead of the large security data blob.
+const char* const kIndexSecurityInfoHash =
+  "CREATE INDEX security_info_hash_index ON security_info (hash)";
+
+const char* const kTableEntries =
+  "CREATE TABLE entries ("
+    "id INTEGER NOT NULL PRIMARY KEY, "
+    "request_method TEXT NOT NULL, "
+    "request_url_no_query TEXT NOT NULL, "
+    "request_url_no_query_hash BLOB NOT NULL, " // first 8-bytes of sha1 hash
+    "request_url_query TEXT NOT NULL, "
+    "request_url_query_hash BLOB NOT NULL, "    // first 8-bytes of sha1 hash
+    "request_referrer TEXT NOT NULL, "
+    "request_headers_guard INTEGER NOT NULL, "
+    "request_mode INTEGER NOT NULL, "
+    "request_credentials INTEGER NOT NULL, "
+    "request_contentpolicytype INTEGER NOT NULL, "
+    "request_cache INTEGER NOT NULL, "
+    "request_body_id TEXT NULL, "
+    "response_type INTEGER NOT NULL, "
+    "response_url TEXT NOT NULL, "
+    "response_status INTEGER NOT NULL, "
+    "response_status_text TEXT NOT NULL, "
+    "response_headers_guard INTEGER NOT NULL, "
+    "response_body_id TEXT NULL, "
+    "response_security_info_id INTEGER NULL REFERENCES security_info(id), "
+    "response_principal_info TEXT NOT NULL, "
+    "cache_id INTEGER NOT NULL REFERENCES caches(id) ON DELETE CASCADE, "
+
+    // New columns must be added at the end of table to migrate and
+    // validate properly.
+    "request_redirect INTEGER NOT NULL"
+  ")";
+
+// Create an index to support the QueryCache() matching algorithm.  This
+// needs to quickly find entries in a given Cache that match the request
+// URL.  The url query is separated in order to support the ignoreSearch
+// option.  Finally, we index hashes of the URL values instead of the
+// actual strings to avoid excessive disk bloat.  The index will duplicate
+// the contents of the columsn in the index.  The hash index will prune
+// the vast majority of values from the query result so that normal
+// scanning only has to be done on a few values to find an exact URL match.
+const char* const kIndexEntriesRequest =
+  "CREATE INDEX entries_request_match_index "
+            "ON entries (cache_id, request_url_no_query_hash, "
+                        "request_url_query_hash)";
+
+const char* const kTableRequestHeaders =
+  "CREATE TABLE request_headers ("
+    "name TEXT NOT NULL, "
+    "value TEXT NOT NULL, "
+    "entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE"
+  ")";
+
+const char* const kTableResponseHeaders =
+  "CREATE TABLE response_headers ("
+    "name TEXT NOT NULL, "
+    "value TEXT NOT NULL, "
+    "entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE"
+  ")";
+
+// We need an index on response_headers, but not on request_headers,
+// because we quickly need to determine if a VARY header is present.
+const char* const kIndexResponseHeadersName =
+  "CREATE INDEX response_headers_name_index "
+            "ON response_headers (name)";
+
+// NOTE: key allows NULL below since that is how "" is represented
+//       in a BLOB column.  We use BLOB to avoid encoding issues
+//       with storing DOMStrings.
+const char* const kTableStorage =
+  "CREATE TABLE storage ("
+    "namespace INTEGER NOT NULL, "
+    "key BLOB NULL, "
+    "cache_id INTEGER NOT NULL REFERENCES caches(id), "
+    "PRIMARY KEY(namespace, key) "
+  ")";
+
+// ---------
+// End schema definition
+// ---------
+
 const int32_t kMaxEntriesPerStatement = 255;
 
 const uint32_t kPageSize = 4 * 1024;
@@ -54,7 +176,7 @@ const uint32_t kWalAutoCheckpointPages = kWalAutoCheckpointSize / kPageSize;
 static_assert(kWalAutoCheckpointSize % kPageSize == 0,
               "WAL checkpoint size must be multiple of page size");
 
-} // anonymous namespace
+} // namespace
 
 // If any of the static_asserts below fail, it means that you have changed
 // the corresponding WebIDL enum in a way that may be incompatible with the
@@ -70,8 +192,7 @@ static_assert(int(HeadersGuardEnum::None) == 0 &&
 static_assert(int(RequestMode::Same_origin) == 0 &&
               int(RequestMode::No_cors) == 1 &&
               int(RequestMode::Cors) == 2 &&
-              int(RequestMode::Cors_with_forced_preflight) == 3 &&
-              int(RequestMode::EndGuard_) == 4,
+              int(RequestMode::EndGuard_) == 3,
               "RequestMode values are as expected");
 static_assert(int(RequestCredentials::Omit) == 0 &&
               int(RequestCredentials::Same_origin) == 1 &&
@@ -86,12 +207,18 @@ static_assert(int(RequestCache::Default) == 0 &&
               int(RequestCache::Only_if_cached) == 5 &&
               int(RequestCache::EndGuard_) == 6,
               "RequestCache values are as expected");
+static_assert(int(RequestRedirect::Follow) == 0 &&
+              int(RequestRedirect::Error) == 1 &&
+              int(RequestRedirect::Manual) == 2 &&
+              int(RequestRedirect::EndGuard_) == 3,
+              "RequestRedirect values are as expected");
 static_assert(int(ResponseType::Basic) == 0 &&
               int(ResponseType::Cors) == 1 &&
               int(ResponseType::Default) == 2 &&
               int(ResponseType::Error) == 3 &&
               int(ResponseType::Opaque) == 4 &&
-              int(ResponseType::EndGuard_) == 5,
+              int(ResponseType::Opaqueredirect) == 5 &&
+              int(ResponseType::EndGuard_) == 6,
               "ResponseType values are as expected");
 
 // If the static_asserts below fails, it means that you have changed the
@@ -140,8 +267,16 @@ static_assert(nsIContentPolicy::TYPE_INVALID == 0 &&
               nsIContentPolicy::TYPE_INTERNAL_IFRAME == 29 &&
               nsIContentPolicy::TYPE_INTERNAL_AUDIO == 30 &&
               nsIContentPolicy::TYPE_INTERNAL_VIDEO == 31 &&
-              nsIContentPolicy::TYPE_INTERNAL_TRACK == 32,
-              "nsContentPolicytType values are as expected");
+              nsIContentPolicy::TYPE_INTERNAL_TRACK == 32 &&
+              nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST == 33 &&
+              nsIContentPolicy::TYPE_INTERNAL_EVENTSOURCE == 34 &&
+              nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER == 35 &&
+              nsIContentPolicy::TYPE_INTERNAL_SCRIPT_PRELOAD == 36 &&
+              nsIContentPolicy::TYPE_INTERNAL_IMAGE == 37 &&
+              nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD == 38 &&
+              nsIContentPolicy::TYPE_INTERNAL_STYLESHEET == 39 &&
+              nsIContentPolicy::TYPE_INTERNAL_STYLESHEET_PRELOAD == 40,
+              "nsContentPolicyType values are as expected");
 
 namespace {
 
@@ -203,10 +338,57 @@ static nsresult CreateAndBindKeyStatement(mozIStorageConnection* aConn,
                                           mozIStorageStatement** aStateOut);
 static nsresult HashCString(nsICryptoHash* aCrypto, const nsACString& aIn,
                             nsACString& aOut);
-} // anonymous namespace
+nsresult Validate(mozIStorageConnection* aConn);
+nsresult Migrate(mozIStorageConnection* aConn);
+} // namespace
+
+class MOZ_RAII AutoDisableForeignKeyChecking
+{
+public:
+  explicit AutoDisableForeignKeyChecking(mozIStorageConnection* aConn)
+    : mConn(aConn)
+    , mForeignKeyCheckingDisabled(false)
+  {
+    nsCOMPtr<mozIStorageStatement> state;
+    nsresult rv = mConn->CreateStatement(NS_LITERAL_CSTRING(
+      "PRAGMA foreign_keys;"
+    ), getter_AddRefs(state));
+    if (NS_WARN_IF(NS_FAILED(rv))) { return; }
+
+    bool hasMoreData = false;
+    rv = state->ExecuteStep(&hasMoreData);
+    if (NS_WARN_IF(NS_FAILED(rv))) { return; }
+
+    int32_t mode;
+    rv = state->GetInt32(0, &mode);
+    if (NS_WARN_IF(NS_FAILED(rv))) { return; }
+
+    if (mode) {
+      nsresult rv = mConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+        "PRAGMA foreign_keys = OFF;"
+      ));
+      if (NS_WARN_IF(NS_FAILED(rv))) { return; }
+      mForeignKeyCheckingDisabled = true;
+    }
+  }
+
+  ~AutoDisableForeignKeyChecking()
+  {
+    if (mForeignKeyCheckingDisabled) {
+      nsresult rv = mConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+        "PRAGMA foreign_keys = ON;"
+      ));
+      if (NS_WARN_IF(NS_FAILED(rv))) { return; }
+    }
+  }
+
+private:
+  nsCOMPtr<mozIStorageConnection> mConn;
+  bool mForeignKeyCheckingDisabled;
+};
 
 nsresult
-CreateSchema(mozIStorageConnection* aConn)
+CreateOrMigrateSchema(mozIStorageConnection* aConn)
 {
   MOZ_ASSERT(!NS_IsMainThread());
   MOZ_ASSERT(aConn);
@@ -216,135 +398,58 @@ CreateSchema(mozIStorageConnection* aConn)
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
   if (schemaVersion == kLatestSchemaVersion) {
-    // We already have the correct schema, so just get started.
+    // We already have the correct schema version.  Validate it matches
+    // our expected schema and then proceed.
+    rv = Validate(aConn);
+    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
     return rv;
   }
 
-  if (!schemaVersion) {
-    // The caches table is the single source of truth about what Cache
-    // objects exist for the origin.  The contents of the Cache are stored
-    // in the entries table that references back to caches.
-    //
-    // The caches table is also referenced from storage.  Rows in storage
-    // represent named Cache objects.  There are cases, however, where
-    // a Cache can still exist, but not be in a named Storage.  For example,
-    // when content is still using the Cache after CacheStorage::Delete()
-    // has been run.
-    //
-    // For now, the caches table mainly exists for data integrity with
-    // foreign keys, but could be expanded to contain additional cache object
-    // information.
-    //
-    // AUTOINCREMENT is necessary to prevent CacheId values from being reused.
-    rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "CREATE TABLE caches ("
-        "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT "
-      ");"
-    ));
+  // Turn off checking foreign keys before starting a transaction, and restore
+  // it once we're done.
+  AutoDisableForeignKeyChecking restoreForeignKeyChecking(aConn);
+  mozStorageTransaction trans(aConn, false,
+                              mozIStorageConnection::TRANSACTION_IMMEDIATE);
+  bool needVacuum = false;
+
+  if (schemaVersion) {
+    // A schema exists, but its not the current version.  Attempt to
+    // migrate it to our new schema.
+    rv = Migrate(aConn);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    // Security blobs are quite large and duplicated for every Response from
-    // the same https origin.  This table is used to de-duplicate this data.
-    rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "CREATE TABLE security_info ("
-        "id INTEGER NOT NULL PRIMARY KEY, "
-        "hash BLOB NOT NULL, "  // first 8-bytes of the sha1 hash of data column
-        "data BLOB NOT NULL, "  // full security info data, usually a few KB
-        "refcount INTEGER NOT NULL"
-      ");"
-    ));
+    // Migrations happen infrequently and reflect a chance in DB structure.
+    // This is a good time to rebuild the database.  It also helps catch
+    // if a new migration is incorrect by fast failing on the corruption.
+    needVacuum = true;
+  } else {
+    // There is no schema installed.  Create the database from scratch.
+    rv = aConn->ExecuteSimpleSQL(nsDependentCString(kTableCaches));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    // Index the smaller hash value instead of the large security data blob.
-    rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "CREATE INDEX security_info_hash_index ON security_info (hash);"
-    ));
+    rv = aConn->ExecuteSimpleSQL(nsDependentCString(kTableSecurityInfo));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "CREATE TABLE entries ("
-        "id INTEGER NOT NULL PRIMARY KEY, "
-        "request_method TEXT NOT NULL, "
-        "request_url_no_query TEXT NOT NULL, "
-        "request_url_no_query_hash BLOB NOT NULL, " // first 8-bytes of sha1 hash
-        "request_url_query TEXT NOT NULL, "
-        "request_url_query_hash BLOB NOT NULL, "    // first 8-bytes of sha1 hash
-        "request_referrer TEXT NOT NULL, "
-        "request_headers_guard INTEGER NOT NULL, "
-        "request_mode INTEGER NOT NULL, "
-        "request_credentials INTEGER NOT NULL, "
-        "request_contentpolicytype INTEGER NOT NULL, "
-        "request_cache INTEGER NOT NULL, "
-        "request_body_id TEXT NULL, "
-        "response_type INTEGER NOT NULL, "
-        "response_url TEXT NOT NULL, "
-        "response_status INTEGER NOT NULL, "
-        "response_status_text TEXT NOT NULL, "
-        "response_headers_guard INTEGER NOT NULL, "
-        "response_body_id TEXT NULL, "
-        "response_security_info_id INTEGER NULL REFERENCES security_info(id), "
-        "response_principal_info TEXT NOT NULL, "
-        "response_redirected INTEGER NOT NULL, "
-        // Note that response_redirected_url is either going to be empty, or
-        // it's going to be a URL different than response_url.
-        "response_redirected_url TEXT NOT NULL, "
-        "cache_id INTEGER NOT NULL REFERENCES caches(id) ON DELETE CASCADE"
-      ");"
-    ));
+    rv = aConn->ExecuteSimpleSQL(nsDependentCString(kIndexSecurityInfoHash));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    // Create an index to support the QueryCache() matching algorithm.  This
-    // needs to quickly find entries in a given Cache that match the request
-    // URL.  The url query is separated in order to support the ignoreSearch
-    // option.  Finally, we index hashes of the URL values instead of the
-    // actual strings to avoid excessive disk bloat.  The index will duplicate
-    // the contents of the columsn in the index.  The hash index will prune
-    // the vast majority of values from the query result so that normal
-    // scanning only has to be done on a few values to find an exact URL match.
-    rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "CREATE INDEX entries_request_match_index "
-                "ON entries (cache_id, request_url_no_query_hash, "
-                            "request_url_query_hash);"
-    ));
+    rv = aConn->ExecuteSimpleSQL(nsDependentCString(kTableEntries));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "CREATE TABLE request_headers ("
-        "name TEXT NOT NULL, "
-        "value TEXT NOT NULL, "
-        "entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE"
-      ");"
-    ));
+    rv = aConn->ExecuteSimpleSQL(nsDependentCString(kIndexEntriesRequest));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "CREATE TABLE response_headers ("
-        "name TEXT NOT NULL, "
-        "value TEXT NOT NULL, "
-        "entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE"
-      ");"
-    ));
+    rv = aConn->ExecuteSimpleSQL(nsDependentCString(kTableRequestHeaders));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    // We need an index on response_headers, but not on request_headers,
-    // because we quickly need to determine if a VARY header is present.
-    rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "CREATE INDEX response_headers_name_index "
-                "ON response_headers (name);"
-    ));
+    rv = aConn->ExecuteSimpleSQL(nsDependentCString(kTableResponseHeaders));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    // NOTE: key allows NULL below since that is how "" is represented
-    //       in a BLOB column.  We use BLOB to avoid encoding issues
-    //       with storing DOMStrings.
-    rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
-      "CREATE TABLE storage ("
-        "namespace INTEGER NOT NULL, "
-        "key BLOB NULL, "
-        "cache_id INTEGER NOT NULL REFERENCES caches(id), "
-        "PRIMARY KEY(namespace, key) "
-      ");"
-    ));
+    rv = aConn->ExecuteSimpleSQL(nsDependentCString(kIndexResponseHeadersName));
+    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+    rv = aConn->ExecuteSimpleSQL(nsDependentCString(kTableStorage));
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
     rv = aConn->SetSchemaVersion(kLatestSchemaVersion);
@@ -354,8 +459,16 @@ CreateSchema(mozIStorageConnection* aConn)
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
   }
 
-  if (schemaVersion != kLatestSchemaVersion) {
-    return NS_ERROR_FAILURE;
+  rv = Validate(aConn);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  rv = trans.Commit();
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  if (needVacuum) {
+    // Unfortunately, this must be performed outside of the transaction.
+    aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING("VACUUM"));
+    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
   }
 
   return rv;
@@ -1129,7 +1242,7 @@ MatchByVaryHeader(mozIStorageConnection* aConn,
   rv = state->BindInt32ByName(NS_LITERAL_CSTRING("entry_id"), entryId);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  nsRefPtr<InternalHeaders> cachedHeaders =
+  RefPtr<InternalHeaders> cachedHeaders =
     new InternalHeaders(HeadersGuardEnum::None);
 
   while (NS_SUCCEEDED(state->ExecuteStep(&hasMoreData)) && hasMoreData) {
@@ -1147,7 +1260,7 @@ MatchByVaryHeader(mozIStorageConnection* aConn,
   }
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-  nsRefPtr<InternalHeaders> queryHeaders =
+  RefPtr<InternalHeaders> queryHeaders =
     TypeUtils::ToInternalHeaders(aRequest.headers());
 
   // Assume the vary headers match until we find a conflict
@@ -1527,6 +1640,7 @@ InsertEntry(mozIStorageConnection* aConn, CacheId aCacheId,
       "request_credentials, "
       "request_contentpolicytype, "
       "request_cache, "
+      "request_redirect, "
       "request_body_id, "
       "response_type, "
       "response_url, "
@@ -1536,8 +1650,6 @@ InsertEntry(mozIStorageConnection* aConn, CacheId aCacheId,
       "response_body_id, "
       "response_security_info_id, "
       "response_principal_info, "
-      "response_redirected, "
-      "response_redirected_url, "
       "cache_id "
     ") VALUES ("
       ":request_method, "
@@ -1551,6 +1663,7 @@ InsertEntry(mozIStorageConnection* aConn, CacheId aCacheId,
       ":request_credentials, "
       ":request_contentpolicytype, "
       ":request_cache, "
+      ":request_redirect, "
       ":request_body_id, "
       ":response_type, "
       ":response_url, "
@@ -1560,8 +1673,6 @@ InsertEntry(mozIStorageConnection* aConn, CacheId aCacheId,
       ":response_body_id, "
       ":response_security_info_id, "
       ":response_principal_info, "
-      ":response_redirected, "
-      ":response_redirected_url, "
       ":cache_id "
     ");"
   ), getter_AddRefs(state));
@@ -1619,6 +1730,9 @@ InsertEntry(mozIStorageConnection* aConn, CacheId aCacheId,
     static_cast<int32_t>(aRequest.requestCache()));
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
+  rv = state->BindInt32ByName(NS_LITERAL_CSTRING("request_redirect"),
+    static_cast<int32_t>(aRequest.requestRedirect()));
+
   rv = BindId(state, NS_LITERAL_CSTRING("request_body_id"), aRequestBodyId);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
@@ -1664,23 +1778,13 @@ InsertEntry(mozIStorageConnection* aConn, CacheId aCacheId,
 
     serializedInfo.Append(cInfo.spec());
 
-    MOZ_ASSERT(cInfo.appId() != nsIScriptSecurityManager::UNKNOWN_APP_ID);
-    OriginAttributes attrs(cInfo.appId(), cInfo.isInBrowserElement());
     nsAutoCString suffix;
-    attrs.CreateSuffix(suffix);
+    cInfo.attrs().CreateSuffix(suffix);
     serializedInfo.Append(suffix);
   }
 
   rv = state->BindUTF8StringByName(NS_LITERAL_CSTRING("response_principal_info"),
                                    serializedInfo);
-  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-  rv = state->BindInt32ByName(NS_LITERAL_CSTRING("response_redirected"),
-                              aResponse.channelInfo().redirected() ? 1 : 0);
-  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-  rv = state->BindUTF8StringByName(NS_LITERAL_CSTRING("response_redirected_url"),
-                                   aResponse.channelInfo().redirectedURI());
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
   rv = state->BindInt64ByName(NS_LITERAL_CSTRING("cache_id"), aCacheId);
@@ -1775,8 +1879,6 @@ ReadResponse(mozIStorageConnection* aConn, EntryId aEntryId,
       "entries.response_headers_guard, "
       "entries.response_body_id, "
       "entries.response_principal_info, "
-      "entries.response_redirected, "
-      "entries.response_redirected_url, "
       "security_info.data "
     "FROM entries "
     "LEFT OUTER JOIN security_info "
@@ -1832,24 +1934,16 @@ ReadResponse(mozIStorageConnection* aConn, EntryId aEntryId,
   if (!serializedInfo.IsEmpty()) {
     nsAutoCString originNoSuffix;
     OriginAttributes attrs;
-    fprintf(stderr, "\n%s\n", serializedInfo.get());
     if (!attrs.PopulateFromOrigin(serializedInfo, originNoSuffix)) {
       NS_WARNING("Something went wrong parsing a serialized principal!");
       return NS_ERROR_FAILURE;
     }
 
     aSavedResponseOut->mValue.principalInfo() =
-      mozilla::ipc::ContentPrincipalInfo(attrs.mAppId, attrs.mInBrowser, originNoSuffix);
+      mozilla::ipc::ContentPrincipalInfo(attrs, originNoSuffix);
   }
 
-  int32_t redirected;
-  rv = state->GetInt32(7, &redirected);
-  aSavedResponseOut->mValue.channelInfo().redirected() = !!redirected;
-
-  rv = state->GetUTF8String(8, aSavedResponseOut->mValue.channelInfo().redirectedURI());
-  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-  rv = state->GetBlobAsUTF8String(9, aSavedResponseOut->mValue.channelInfo().securityInfo());
+  rv = state->GetBlobAsUTF8String(7, aSavedResponseOut->mValue.channelInfo().securityInfo());
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
   rv = aConn->CreateStatement(NS_LITERAL_CSTRING(
@@ -1899,6 +1993,7 @@ ReadRequest(mozIStorageConnection* aConn, EntryId aEntryId,
       "request_credentials, "
       "request_contentpolicytype, "
       "request_cache, "
+      "request_redirect, "
       "request_body_id "
     "FROM entries "
     "WHERE id=:id;"
@@ -1953,13 +2048,19 @@ ReadRequest(mozIStorageConnection* aConn, EntryId aEntryId,
   aSavedRequestOut->mValue.requestCache() =
     static_cast<RequestCache>(requestCache);
 
+  int32_t requestRedirect;
+  rv = state->GetInt32(9, &requestRedirect);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+  aSavedRequestOut->mValue.requestRedirect() =
+    static_cast<RequestRedirect>(requestRedirect);
+
   bool nullBody = false;
-  rv = state->GetIsNull(9, &nullBody);
+  rv = state->GetIsNull(10, &nullBody);
   if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
   aSavedRequestOut->mHasBodyId = !nullBody;
 
   if (aSavedRequestOut->mHasBodyId) {
-    rv = ExtractId(state, 9, &aSavedRequestOut->mBodyId);
+    rv = ExtractId(state, 10, &aSavedRequestOut->mBodyId);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
   }
 
@@ -2117,7 +2218,7 @@ HashCString(nsICryptoHash* aCrypto, const nsACString& aIn, nsACString& aOut)
   return rv;
 }
 
-} // anonymouns namespace
+} // namespace
 
 nsresult
 IncrementalVacuum(mozIStorageConnection* aConn)
@@ -2182,6 +2283,377 @@ IncrementalVacuum(mozIStorageConnection* aConn)
 
   return NS_OK;
 }
+
+namespace {
+
+#ifdef DEBUG
+struct Expect
+{
+  // Expect exact SQL
+  Expect(const char* aName, const char* aType, const char* aSql)
+    : mName(aName)
+    , mType(aType)
+    , mSql(aSql)
+    , mIgnoreSql(false)
+  { }
+
+  // Ignore SQL
+  Expect(const char* aName, const char* aType)
+    : mName(aName)
+    , mType(aType)
+    , mIgnoreSql(true)
+  { }
+
+  const nsCString mName;
+  const nsCString mType;
+  const nsCString mSql;
+  const bool mIgnoreSql;
+};
+#endif
+
+nsresult
+Validate(mozIStorageConnection* aConn)
+{
+  int32_t schemaVersion;
+  nsresult rv = aConn->GetSchemaVersion(&schemaVersion);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  if (NS_WARN_IF(schemaVersion != kLatestSchemaVersion)) {
+    return NS_ERROR_FAILURE;
+  }
+
+#ifdef DEBUG
+  // This is the schema we expect the database at the latest version to
+  // contain.  Update this list if you add a new table or index.
+  Expect expect[] = {
+    Expect("caches", "table", kTableCaches),
+    Expect("sqlite_sequence", "table"), // auto-gen by sqlite
+    Expect("security_info", "table", kTableSecurityInfo),
+    Expect("security_info_hash_index", "index", kIndexSecurityInfoHash),
+    Expect("entries", "table", kTableEntries),
+    Expect("entries_request_match_index", "index", kIndexEntriesRequest),
+    Expect("request_headers", "table", kTableRequestHeaders),
+    Expect("response_headers", "table", kTableResponseHeaders),
+    Expect("response_headers_name_index", "index", kIndexResponseHeadersName),
+    Expect("storage", "table", kTableStorage),
+    Expect("sqlite_autoindex_storage_1", "index"), // auto-gen by sqlite
+  };
+  const uint32_t expectLength = sizeof(expect) / sizeof(Expect);
+
+  // Read the schema from the sqlite_master table and compare.
+  nsCOMPtr<mozIStorageStatement> state;
+  rv = aConn->CreateStatement(NS_LITERAL_CSTRING(
+    "SELECT name, type, sql FROM sqlite_master;"
+  ), getter_AddRefs(state));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  bool hasMoreData = false;
+  while (NS_SUCCEEDED(state->ExecuteStep(&hasMoreData)) && hasMoreData) {
+    nsAutoCString name;
+    rv = state->GetUTF8String(0, name);
+    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+    nsAutoCString type;
+    rv = state->GetUTF8String(1, type);
+    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+    nsAutoCString sql;
+    rv = state->GetUTF8String(2, sql);
+    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+    bool foundMatch = false;
+    for (uint32_t i = 0; i < expectLength; ++i) {
+      if (name == expect[i].mName) {
+        if (type != expect[i].mType) {
+          NS_WARNING(nsPrintfCString("Unexpected type for Cache schema entry %s",
+                     name.get()).get());
+          return NS_ERROR_FAILURE;
+        }
+
+        if (!expect[i].mIgnoreSql && sql != expect[i].mSql) {
+          NS_WARNING(nsPrintfCString("Unexpected SQL for Cache schema entry %s",
+                     name.get()).get());
+          return NS_ERROR_FAILURE;
+        }
+
+        foundMatch = true;
+        break;
+      }
+    }
+
+    if (NS_WARN_IF(!foundMatch)) {
+      NS_WARNING(nsPrintfCString("Unexpected schema entry %s in Cache database",
+                 name.get()).get());
+      return NS_ERROR_FAILURE;
+    }
+  }
+#endif
+
+  return rv;
+}
+
+// -----
+// Schema migration code
+// -----
+
+typedef nsresult (*MigrationFunc)(mozIStorageConnection*);
+struct Migration
+{
+  Migration(int32_t aFromVersion, MigrationFunc aFunc)
+    : mFromVersion(aFromVersion)
+    , mFunc(aFunc)
+  { }
+  int32_t mFromVersion;
+  MigrationFunc mFunc;
+};
+
+// Declare migration functions here.  Each function should upgrade
+// the version by a single increment.  Don't skip versions.
+nsresult MigrateFrom15To16(mozIStorageConnection* aConn);
+nsresult MigrateFrom16To17(mozIStorageConnection* aConn);
+
+// Configure migration functions to run for the given starting version.
+Migration sMigrationList[] = {
+  Migration(15, MigrateFrom15To16),
+  Migration(16, MigrateFrom16To17),
+};
+
+uint32_t sMigrationListLength = sizeof(sMigrationList) / sizeof(Migration);
+
+nsresult
+Migrate(mozIStorageConnection* aConn)
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+  MOZ_ASSERT(aConn);
+
+  int32_t currentVersion = 0;
+  nsresult rv = aConn->GetSchemaVersion(&currentVersion);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  while (currentVersion < kLatestSchemaVersion) {
+    // Wiping old databases is handled in DBAction because it requires
+    // making a whole new mozIStorageConnection.  Make sure we don't
+    // accidentally get here for one of those old databases.
+    MOZ_ASSERT(currentVersion >= kFirstShippedSchemaVersion);
+
+    for (uint32_t i = 0; i < sMigrationListLength; ++i) {
+      if (sMigrationList[i].mFromVersion == currentVersion) {
+        rv = sMigrationList[i].mFunc(aConn);
+        if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+        break;
+      }
+    }
+
+    DebugOnly<int32_t> lastVersion = currentVersion;
+    rv = aConn->GetSchemaVersion(&currentVersion);
+    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+    MOZ_ASSERT(currentVersion > lastVersion);
+  }
+
+  MOZ_ASSERT(currentVersion == kLatestSchemaVersion);
+
+  return rv;
+}
+
+nsresult
+RewriteEntriesSchema(mozIStorageConnection* aConn)
+{
+  nsresult rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "PRAGMA writable_schema = ON"
+  ));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  nsCOMPtr<mozIStorageStatement> state;
+  rv = aConn->CreateStatement(NS_LITERAL_CSTRING(
+    "UPDATE sqlite_master SET sql=:sql WHERE name='entries'"
+  ), getter_AddRefs(state));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  rv = state->BindUTF8StringByName(NS_LITERAL_CSTRING("sql"),
+                                   nsDependentCString(kTableEntries));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  rv = state->Execute();
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "PRAGMA writable_schema = OFF"
+  ));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  return rv;
+}
+
+nsresult MigrateFrom15To16(mozIStorageConnection* aConn)
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+  MOZ_ASSERT(aConn);
+
+  mozStorageTransaction trans(aConn, true,
+                              mozIStorageConnection::TRANSACTION_IMMEDIATE);
+
+  // Add the request_redirect column with a default value of "follow".  Note,
+  // we only use a default value here because its required by ALTER TABLE and
+  // we need to apply the default "follow" to existing records in the table.
+  // We don't actually want to keep the default in the schema for future
+  // INSERTs.
+  nsresult rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "ALTER TABLE entries "
+    "ADD COLUMN request_redirect INTEGER NOT NULL DEFAULT 0"
+  ));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  // Now overwrite the master SQL for the entries table to remove the column
+  // default value.  This is also necessary for our Validate() method to
+  // pass on this database.
+  rv = RewriteEntriesSchema(aConn);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  rv = aConn->SetSchemaVersion(16);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  return rv;
+}
+
+nsresult
+MigrateFrom16To17(mozIStorageConnection* aConn)
+{
+  MOZ_ASSERT(!NS_IsMainThread());
+  MOZ_ASSERT(aConn);
+
+  // This migration path removes the response_redirected and
+  // response_redirected_url columns from the entries table.  sqlite doesn't
+  // support removing a column from a table using ALTER TABLE, so we need to
+  // create a new table without those columns, fill it up with the existing
+  // data, and then drop the original table and rename the new one to the old
+  // one.
+
+  // Create a new_entries table with the new fields as of version 17.
+  nsresult rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "CREATE TABLE new_entries ("
+      "id INTEGER NOT NULL PRIMARY KEY, "
+      "request_method TEXT NOT NULL, "
+      "request_url_no_query TEXT NOT NULL, "
+      "request_url_no_query_hash BLOB NOT NULL, "
+      "request_url_query TEXT NOT NULL, "
+      "request_url_query_hash BLOB NOT NULL, "
+      "request_referrer TEXT NOT NULL, "
+      "request_headers_guard INTEGER NOT NULL, "
+      "request_mode INTEGER NOT NULL, "
+      "request_credentials INTEGER NOT NULL, "
+      "request_contentpolicytype INTEGER NOT NULL, "
+      "request_cache INTEGER NOT NULL, "
+      "request_body_id TEXT NULL, "
+      "response_type INTEGER NOT NULL, "
+      "response_url TEXT NOT NULL, "
+      "response_status INTEGER NOT NULL, "
+      "response_status_text TEXT NOT NULL, "
+      "response_headers_guard INTEGER NOT NULL, "
+      "response_body_id TEXT NULL, "
+      "response_security_info_id INTEGER NULL REFERENCES security_info(id), "
+      "response_principal_info TEXT NOT NULL, "
+      "cache_id INTEGER NOT NULL REFERENCES caches(id) ON DELETE CASCADE, "
+      "request_redirect INTEGER NOT NULL"
+    ")"
+  ));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  // Copy all of the data to the newly created table.
+  rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "INSERT INTO new_entries ("
+      "id, "
+      "request_method, "
+      "request_url_no_query, "
+      "request_url_no_query_hash, "
+      "request_url_query, "
+      "request_url_query_hash, "
+      "request_referrer, "
+      "request_headers_guard, "
+      "request_mode, "
+      "request_credentials, "
+      "request_contentpolicytype, "
+      "request_cache, "
+      "request_redirect, "
+      "request_body_id, "
+      "response_type, "
+      "response_url, "
+      "response_status, "
+      "response_status_text, "
+      "response_headers_guard, "
+      "response_body_id, "
+      "response_security_info_id, "
+      "response_principal_info, "
+      "cache_id "
+    ") SELECT "
+      "id, "
+      "request_method, "
+      "request_url_no_query, "
+      "request_url_no_query_hash, "
+      "request_url_query, "
+      "request_url_query_hash, "
+      "request_referrer, "
+      "request_headers_guard, "
+      "request_mode, "
+      "request_credentials, "
+      "request_contentpolicytype, "
+      "request_cache, "
+      "request_redirect, "
+      "request_body_id, "
+      "response_type, "
+      "response_url, "
+      "response_status, "
+      "response_status_text, "
+      "response_headers_guard, "
+      "response_body_id, "
+      "response_security_info_id, "
+      "response_principal_info, "
+      "cache_id "
+    "FROM entries;"
+  ));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  // Remove the old table.
+  rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "DROP TABLE entries;"
+  ));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  // Rename new_entries to entries.
+  rv = aConn->ExecuteSimpleSQL(NS_LITERAL_CSTRING(
+    "ALTER TABLE new_entries RENAME to entries;"
+  ));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  // Now, recreate our indices.
+  rv = aConn->ExecuteSimpleSQL(nsDependentCString(kIndexEntriesRequest));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  // Revalidate the foreign key constraints, and ensure that there are no
+  // violations.
+  nsCOMPtr<mozIStorageStatement> state;
+  rv = aConn->CreateStatement(NS_LITERAL_CSTRING(
+    "PRAGMA foreign_key_check;"
+  ), getter_AddRefs(state));
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  bool hasMoreData = false;
+  rv = state->ExecuteStep(&hasMoreData);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+  if (NS_WARN_IF(hasMoreData)) { return NS_ERROR_FAILURE; }
+
+  // Finally, rewrite the schema for the entries database, otherwise the
+  // returned SQL string from sqlite will wrap the name of the table in quotes,
+  // breaking the checks in Validate().
+  rv = RewriteEntriesSchema(aConn);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  rv = aConn->SetSchemaVersion(17);
+  if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
+
+  return rv;
+}
+
+} // anonymous namespace
 
 } // namespace db
 } // namespace cache

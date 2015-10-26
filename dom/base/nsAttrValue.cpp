@@ -29,6 +29,11 @@
 #include "nsIDocument.h"
 #include <algorithm>
 
+#ifdef LoadImage
+// Undefine LoadImage to prevent naming conflict with Windows.
+#undef LoadImage
+#endif
+
 using namespace mozilla;
 
 #define MISC_STR_PTR(_cont) \
@@ -1685,7 +1690,7 @@ nsAttrValue::ParseStyleAttribute(const nsAString& aString,
   css::Loader* cssLoader = ownerDoc->CSSLoader();
   nsCSSParser cssParser(cssLoader);
 
-  nsRefPtr<css::StyleRule> rule;
+  RefPtr<css::StyleRule> rule;
   cssParser.ParseStyleAttribute(aString, docURI, baseURI,
                                 aElement->NodePrincipal(),
                                 getter_AddRefs(rule));
@@ -1871,7 +1876,7 @@ nsAttrValue::GetStringBuffer(const nsAString& aValue) const
     return nullptr;
   }
 
-  nsRefPtr<nsStringBuffer> buf = nsStringBuffer::FromString(aValue);
+  RefPtr<nsStringBuffer> buf = nsStringBuffer::FromString(aValue);
   if (buf && (buf->StorageSize()/sizeof(char16_t) - 1) == len) {
     return buf.forget();
   }
@@ -1928,7 +1933,7 @@ nsAttrValue::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
         //n += container->mCSSStyleRule->SizeOfIncludingThis(aMallocSizeOf);
       } else if (Type() == eAtomArray && container->mValue.mAtomArray) {
         // Don't measure each nsIAtom, they are measured separatly.
-        n += container->mValue.mAtomArray->SizeOfIncludingThis(aMallocSizeOf);
+        n += container->mValue.mAtomArray->ShallowSizeOfIncludingThis(aMallocSizeOf);
       }
       break;
     }

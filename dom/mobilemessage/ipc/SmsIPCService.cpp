@@ -67,12 +67,12 @@ SendCursorRequest(const IPCMobileMessageCursor& aRequest,
   PSmsChild* smsChild = GetSmsChild();
   NS_ENSURE_TRUE(smsChild, NS_ERROR_FAILURE);
 
-  nsRefPtr<MobileMessageCursorChild> actor =
+  RefPtr<MobileMessageCursorChild> actor =
     new MobileMessageCursorChild(aRequestReply);
 
   // Add an extra ref for IPDL. Will be released in
   // SmsChild::DeallocPMobileMessageCursor().
-  nsRefPtr<MobileMessageCursorChild> actorCopy(actor);
+  RefPtr<MobileMessageCursorChild> actorCopy(actor);
   mozilla::unused << actorCopy.forget().take();
 
   smsChild->SendPMobileMessageCursorConstructor(actor, aRequest);
@@ -95,7 +95,7 @@ getDefaultServiceId(const char* aPrefKey)
   return id;
 }
 
-} // anonymous namespace
+} // namespace
 
 NS_IMPL_ISUPPORTS(SmsIPCService,
                   nsISmsService,
@@ -112,7 +112,7 @@ SmsIPCService::GetSingleton()
     sSingleton = new SmsIPCService();
   }
 
-  nsRefPtr<SmsIPCService> service = sSingleton;
+  RefPtr<SmsIPCService> service = sSingleton;
   return service.forget();
 }
 
@@ -260,6 +260,7 @@ SmsIPCService::CreateMessageCursor(bool aHasStartDate,
                                    const nsAString& aDelivery,
                                    bool aHasRead,
                                    bool aRead,
+                                   bool aHasThreadId,
                                    uint64_t aThreadId,
                                    bool aReverse,
                                    nsIMobileMessageCursorCallback* aCursorCallback,
@@ -284,6 +285,7 @@ SmsIPCService::CreateMessageCursor(bool aHasStartDate,
   data.delivery() = aDelivery;
   data.hasRead() = aHasRead;
   data.read() = aRead;
+  data.hasThreadId() = aHasThreadId;
   data.threadId() = aThreadId;
 
   return SendCursorRequest(CreateMessageCursorRequest(data, aReverse),

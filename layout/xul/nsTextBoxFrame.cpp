@@ -455,8 +455,10 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
     } while (0 != decorMask &&
              (f = nsLayoutUtils::GetParentOrPlaceholderFor(f)));
 
-    nsRefPtr<nsFontMetrics> fontMet;
+    RefPtr<nsFontMetrics> fontMet;
     nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fontMet));
+    fontMet->SetVertical(wm.IsVertical());
+    fontMet->SetTextOrientation(StyleVisibility()->mTextOrientation);
 
     nscoord offset;
     nscoord size;
@@ -474,7 +476,7 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
         presContext->RoundAppUnitsToNearestDevPixels(aTextRect.y + ascent);
     }
 
-    nsRefPtr<gfxContext> ctx = aRenderingContext.ThebesContext();
+    RefPtr<gfxContext> ctx = aRenderingContext.ThebesContext();
     gfxPoint pt(presContext->AppUnitsToGfxUnits(aTextRect.x),
                 presContext->AppUnitsToGfxUnits(aTextRect.y));
     gfxFloat width = presContext->AppUnitsToGfxUnits(aTextRect.width);
@@ -522,7 +524,7 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
 
     nscolor c = aOverrideColor ? *aOverrideColor : StyleColor()->mColor;
     ColorPattern color(ToDeviceColor(c));
-    aRenderingContext.ThebesContext()->SetColor(c);
+    aRenderingContext.ThebesContext()->SetColor(Color::FromABGR(c));
 
     nsresult rv = NS_ERROR_FAILURE;
 
@@ -627,7 +629,7 @@ nsTextBoxFrame::CalculateTitleForWidth(nsPresContext*      aPresContext,
         return 0;
     }
 
-    nsRefPtr<nsFontMetrics> fm;
+    RefPtr<nsFontMetrics> fm;
     nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm));
 
     // see if the text will completely fit in the width given
@@ -957,7 +959,7 @@ nsTextBoxFrame::DoLayout(nsBoxLayoutState& aBoxLayoutState)
     nsRect scrollBounds(nsPoint(0, 0), GetSize());
     nsRect textRect = mTextDrawRect;
     
-    nsRefPtr<nsFontMetrics> fontMet;
+    RefPtr<nsFontMetrics> fontMet;
     nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fontMet));
     nsBoundingMetrics metrics = 
       fontMet->GetInkBoundsForVisualOverflow(mCroppedTitle.get(),
@@ -965,7 +967,7 @@ nsTextBoxFrame::DoLayout(nsBoxLayoutState& aBoxLayoutState)
                                              aBoxLayoutState.GetRenderingContext());
 
     WritingMode wm = GetWritingMode();
-    LogicalRect tr(wm, textRect, GetSize().width);
+    LogicalRect tr(wm, textRect, GetSize());
 
     tr.IStart(wm) -= metrics.leftBearing;
     tr.ISize(wm) = metrics.width;
@@ -973,7 +975,7 @@ nsTextBoxFrame::DoLayout(nsBoxLayoutState& aBoxLayoutState)
     tr.BStart(wm) += fontMet->MaxAscent() - metrics.ascent;
     tr.BSize(wm) = metrics.ascent + metrics.descent;
 
-    textRect = tr.GetPhysicalRect(wm, GetSize().width);
+    textRect = tr.GetPhysicalRect(wm, GetSize());
 
     // Our scrollable overflow is our bounds; our visual overflow may
     // extend beyond that.
@@ -1019,7 +1021,7 @@ nsTextBoxFrame::GetTextSize(nsPresContext* aPresContext,
                             const nsString& aString,
                             nsSize& aSize, nscoord& aAscent)
 {
-    nsRefPtr<nsFontMetrics> fontMet;
+    RefPtr<nsFontMetrics> fontMet;
     nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fontMet));
     aSize.height = fontMet->MaxHeight();
     aSize.width =
@@ -1096,7 +1098,7 @@ nsTextBoxFrame::CalcDrawRect(nsRenderingContext &aRenderingContext)
       textRect.IStart(wm) += (outerISize - textRect.ISize(wm));
     }
 
-    mTextDrawRect = textRect.GetPhysicalRect(wm, GetSize().width);
+    mTextDrawRect = textRect.GetPhysicalRect(wm, GetSize());
 }
 
 /**

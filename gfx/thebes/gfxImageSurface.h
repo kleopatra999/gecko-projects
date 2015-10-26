@@ -20,8 +20,8 @@ namespace mozilla {
 namespace gfx {
 class DataSourceSurface;
 class SourceSurface;
-}
-}
+} // namespace gfx
+} // namespace mozilla
 
 /**
  * A raw image buffer. The format can be set in the constructor. Its main
@@ -164,7 +164,7 @@ protected:
                        const mozilla::gfx::IntSize& aSize,
                        gfxImageFormat aFormat);
 private:
-    nsRefPtr<gfxImageSurface> mParent;
+    RefPtr<gfxImageSurface> mParent;
 };
 
 #endif /* GFX_IMAGESURFACE_H */

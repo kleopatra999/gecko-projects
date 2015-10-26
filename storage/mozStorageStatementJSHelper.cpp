@@ -29,7 +29,7 @@ static
 bool
 stepFunc(JSContext *aCtx,
          uint32_t,
-         jsval *_vp)
+         JS::Value *_vp)
 {
   nsCOMPtr<nsIXPConnect> xpc(Service::getXPConnect());
   nsCOMPtr<nsIXPConnectWrappedNative> wrapper;
@@ -82,7 +82,7 @@ nsresult
 StatementJSHelper::getRow(Statement *aStatement,
                           JSContext *aCtx,
                           JSObject *aScopeObj,
-                          jsval *_row)
+                          JS::Value *_row)
 {
   MOZ_ASSERT(NS_IsMainThread());
   nsresult rv;
@@ -109,7 +109,7 @@ StatementJSHelper::getRow(Statement *aStatement,
       getter_AddRefs(holder)
     );
     NS_ENSURE_SUCCESS(rv, rv);
-    nsRefPtr<StatementRowHolder> rowHolder = new StatementRowHolder(holder);
+    RefPtr<StatementRowHolder> rowHolder = new StatementRowHolder(holder);
     aStatement->mStatementRowHolder =
       new nsMainThreadPtrHolder<nsIXPConnectJSObjectHolder>(rowHolder);
   }
@@ -126,7 +126,7 @@ nsresult
 StatementJSHelper::getParams(Statement *aStatement,
                              JSContext *aCtx,
                              JSObject *aScopeObj,
-                             jsval *_params)
+                             JS::Value *_params)
 {
   MOZ_ASSERT(NS_IsMainThread());
   nsresult rv;
@@ -154,7 +154,7 @@ StatementJSHelper::getParams(Statement *aStatement,
       getter_AddRefs(holder)
     );
     NS_ENSURE_SUCCESS(rv, rv);
-    nsRefPtr<StatementParamsHolder> paramsHolder =
+    RefPtr<StatementParamsHolder> paramsHolder =
       new StatementParamsHolder(holder);
     aStatement->mStatementParamsHolder =
       new nsMainThreadPtrHolder<nsIXPConnectJSObjectHolder>(paramsHolder);
@@ -190,7 +190,7 @@ StatementJSHelper::GetProperty(nsIXPConnectWrappedNative *aWrapper,
                                JSContext *aCtx,
                                JSObject *aScopeObj,
                                jsid aId,
-                               jsval *_result,
+                               JS::Value *_result,
                                bool *_retval)
 {
   if (!JSID_IS_STRING(aId))

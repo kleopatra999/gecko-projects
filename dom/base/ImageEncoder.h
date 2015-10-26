@@ -12,7 +12,6 @@
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/HTMLCanvasElementBinding.h"
 #include "nsLayoutUtils.h"
-#include "nsNetUtil.h"
 #include "nsSize.h"
 
 class nsICanvasRenderingContextInternal;
@@ -20,8 +19,9 @@ class nsICanvasRenderingContextInternal;
 namespace mozilla {
 
 namespace layers {
+class AsyncCanvasRenderer;
 class Image;
-}
+} // namespace layers
 
 namespace dom {
 
@@ -41,6 +41,7 @@ public:
                               const nsAString& aOptions,
                               const nsIntSize aSize,
                               nsICanvasRenderingContextInternal* aContext,
+                              layers::AsyncCanvasRenderer* aRenderer,
                               nsIInputStream** aStream);
 
   // Extracts data asynchronously. aType may change to "image/png" if we had to
@@ -85,7 +86,7 @@ public:
                                  nsIInputStream** aStream);
 
 private:
-  // When called asynchronously, aContext is null.
+  // When called asynchronously, aContext and aRenderer are null.
   static nsresult
   ExtractDataInternal(const nsAString& aType,
                       const nsAString& aOptions,
@@ -94,6 +95,7 @@ private:
                       const nsIntSize aSize,
                       layers::Image* aImage,
                       nsICanvasRenderingContextInternal* aContext,
+                      layers::AsyncCanvasRenderer* aRenderer,
                       nsIInputStream** aStream,
                       imgIEncoder* aEncoder);
 

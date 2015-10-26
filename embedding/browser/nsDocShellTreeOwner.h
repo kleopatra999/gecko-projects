@@ -34,8 +34,8 @@
 namespace mozilla {
 namespace dom {
 class EventTarget;
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 class nsWebBrowser;
 class ChromeTooltipListener;
@@ -125,11 +125,12 @@ protected:
   // the objects that listen for chrome events like context menus and tooltips.
   // They are separate objects to avoid circular references between |this|
   // and the DOM.
-  nsRefPtr<ChromeTooltipListener> mChromeTooltipListener;
-  nsRefPtr<ChromeContextMenuListener> mChromeContextMenuListener;
+  RefPtr<ChromeTooltipListener> mChromeTooltipListener;
+  RefPtr<ChromeContextMenuListener> mChromeContextMenuListener;
 
   nsCOMPtr<nsIPrompt> mPrompter;
   nsCOMPtr<nsIAuthPrompt> mAuthPrompter;
+  nsCOMPtr<nsITabParent> mPrimaryTabParent;
 };
 
 

@@ -27,11 +27,11 @@ EXPORTS.mozilla.dom += [
     'DOMString.h',
     'Errors.msg',
     'Exceptions.h',
+    'IterableIterator.h',
     'JSSlots.h',
     'MozMap.h',
     'NonRefcountedDOMObject.h',
     'Nullable.h',
-    'OwningNonNull.h',
     'PrimitiveConversions.h',
     'RootedDictionary.h',
     'StructuredClone.h',
@@ -40,12 +40,10 @@ EXPORTS.mozilla.dom += [
     'UnionMember.h',
 ]
 
-FAIL_ON_WARNINGS = True
-
 LOCAL_INCLUDES += [
     '/dom/base',
     '/dom/battery',
-    '/dom/bluetooth',
+    '/dom/bluetooth/common/webapi',
     '/dom/camera',
     '/dom/canvas',
     '/dom/geolocation',
@@ -77,6 +75,7 @@ UNIFIED_SOURCES += [
     'Date.cpp',
     'DOMJSProxyHandler.cpp',
     'Exceptions.cpp',
+    'IterableIterator.cpp',
     'ToJSValue.cpp',
 ]
 
@@ -91,12 +90,16 @@ SOURCES += [
 # them are only run in debug mode.
 if CONFIG['MOZ_DEBUG']:
     EXPORTS.mozilla.dom += [
+        "test/TestInterfaceIterableDouble.h",
+        "test/TestInterfaceIterableSingle.h",
         "test/TestInterfaceMaplike.h",
         "test/TestInterfaceMaplikeObject.h",
         "test/TestInterfaceSetlike.h",
         "test/TestInterfaceSetlikeNode.h"
         ]
     UNIFIED_SOURCES += [
+        "test/TestInterfaceIterableDouble.cpp",
+        "test/TestInterfaceIterableSingle.cpp",
         "test/TestInterfaceMaplike.cpp",
         "test/TestInterfaceMaplikeObject.cpp",
         "test/TestInterfaceSetlike.cpp",
@@ -108,15 +111,6 @@ include('/ipc/chromium/chromium-config.mozbuild')
 if CONFIG['MOZ_AUDIO_CHANNEL_MANAGER']:
     LOCAL_INCLUDES += [
         '/dom/system/gonk',
-    ]
-
-if CONFIG['MOZ_B2G_BT_API_V1']:
-    LOCAL_INCLUDES += [
-        '/dom/bluetooth/bluetooth1',
-    ]
-else:
-    LOCAL_INCLUDES += [
-        '/dom/bluetooth/bluetooth2',
     ]
 
 FINAL_LIBRARY = 'xul'

@@ -629,6 +629,12 @@ FilterNodeSoftware::GetOutput(const IntRect &aRect)
 void
 FilterNodeSoftware::RequestRect(const IntRect &aRect)
 {
+  if (mRequestedRect.Contains(aRect)) {
+    // Bail out now. Otherwise pathological filters can spend time exponential
+    // in the number of primitives, e.g. if each primitive takes the
+    // previous primitive as its two inputs.
+    return;
+  }
   mRequestedRect = mRequestedRect.Union(aRect);
   RequestFromInputsForRect(aRect);
 }
@@ -1554,7 +1560,8 @@ struct CompareIntRects
     return a.height < b.height;
   }
 };
-}
+
+} // namespace
 
 already_AddRefed<DataSourceSurface>
 FilterNodeTileSoftware::Render(const IntRect& aRect)
@@ -3333,7 +3340,7 @@ template<typename LightType, typename LightingType>
 IntRect
 FilterNodeLightingSoftware<LightType, LightingType>::GetOutputRectInRect(const IntRect& aRect)
 {
-  return GetInputRectInRect(IN_LIGHTING_IN, aRect);
+  return aRect;
 }
 
 Point3D
@@ -3475,7 +3482,7 @@ FilterNodeLightingSoftware<LightType, LightingType>::DoRender(const IntRect& aRe
 
   RefPtr<DataSourceSurface> input =
     GetInputDataSourceSurface(IN_LIGHTING_IN, srcRect, CAN_HANDLE_A8,
-                              EDGE_MODE_DUPLICATE);
+                              EDGE_MODE_NONE);
 
   if (!input) {
     return nullptr;

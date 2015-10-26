@@ -162,13 +162,7 @@ _DEBUG_ASFLAGS :=
 _DEBUG_CFLAGS :=
 _DEBUG_LDFLAGS :=
 
-ifdef MOZ_DEBUG
-  _DEBUG_CFLAGS += $(MOZ_DEBUG_ENABLE_DEFS)
-  XULPPFLAGS += $(MOZ_DEBUG_ENABLE_DEFS)
-else
-  _DEBUG_CFLAGS += $(MOZ_DEBUG_DISABLE_DEFS)
-  XULPPFLAGS += $(MOZ_DEBUG_DISABLE_DEFS)
-endif
+_DEBUG_CFLAGS += $(MOZ_DEBUG_DEFINES)
 
 ifneq (,$(MOZ_DEBUG)$(MOZ_DEBUG_SYMBOLS))
   ifeq ($(AS),yasm)
@@ -242,11 +236,6 @@ endif # WINNT && !GNU_CC
 #
 _ENABLE_PIC=1
 
-# No sense in profiling tools
-ifdef INTERNAL_TOOLS
-NO_PROFILE_GUIDED_OPTIMIZE = 1
-endif
-
 # Don't build SIMPLE_PROGRAMS with PGO, since they don't need it anyway,
 # and we don't have the same build logic to re-link them in the second pass.
 ifdef SIMPLE_PROGRAMS
@@ -312,7 +301,6 @@ ifndef IS_GYP_DIR
 # NSPR_CFLAGS and NSS_CFLAGS must appear ahead of the other flags to avoid Linux
 # builds wrongly picking up system NSPR/NSS header files.
 OS_INCLUDES := \
-  $(if $(LIBXUL_SDK),-I$(LIBXUL_SDK)/include) \
   $(NSPR_CFLAGS) $(NSS_CFLAGS) \
   $(MOZ_JPEG_CFLAGS) \
   $(MOZ_PNG_CFLAGS) \
@@ -327,15 +315,8 @@ CFLAGS		= $(OS_CPPFLAGS) $(OS_CFLAGS)
 CXXFLAGS	= $(OS_CPPFLAGS) $(OS_CXXFLAGS)
 LDFLAGS		= $(OS_LDFLAGS) $(MOZBUILD_LDFLAGS) $(MOZ_FIX_LINK_PATHS)
 
-# Allow each module to override the *default* optimization settings
-# by setting MODULE_OPTIMIZE_FLAGS if the developer has not given
-# arguments to --enable-optimize
 ifdef MOZ_OPTIMIZE
 ifeq (1,$(MOZ_OPTIMIZE))
-ifdef MODULE_OPTIMIZE_FLAGS
-CFLAGS		+= $(MODULE_OPTIMIZE_FLAGS)
-CXXFLAGS	+= $(MODULE_OPTIMIZE_FLAGS)
-else
 ifneq (,$(if $(MOZ_PROFILE_GENERATE)$(MOZ_PROFILE_USE),$(MOZ_PGO_OPTIMIZE_FLAGS)))
 CFLAGS		+= $(MOZ_PGO_OPTIMIZE_FLAGS)
 CXXFLAGS	+= $(MOZ_PGO_OPTIMIZE_FLAGS)
@@ -343,12 +324,12 @@ else
 CFLAGS		+= $(MOZ_OPTIMIZE_FLAGS)
 CXXFLAGS	+= $(MOZ_OPTIMIZE_FLAGS)
 endif # neq (,$(MOZ_PROFILE_GENERATE)$(MOZ_PROFILE_USE))
-endif # MODULE_OPTIMIZE_FLAGS
 else
 CFLAGS		+= $(MOZ_OPTIMIZE_FLAGS)
 CXXFLAGS	+= $(MOZ_OPTIMIZE_FLAGS)
 endif # MOZ_OPTIMIZE == 1
 LDFLAGS		+= $(MOZ_OPTIMIZE_LDFLAGS)
+RUSTFLAGS	+= $(MOZ_OPTIMIZE_RUSTFLAGS)
 endif # MOZ_OPTIMIZE
 
 ifdef CROSS_COMPILE
@@ -356,11 +337,7 @@ HOST_CFLAGS	+= $(HOST_OPTIMIZE_FLAGS)
 else
 ifdef MOZ_OPTIMIZE
 ifeq (1,$(MOZ_OPTIMIZE))
-ifdef MODULE_OPTIMIZE_FLAGS
-HOST_CFLAGS	+= $(MODULE_OPTIMIZE_FLAGS)
-else
 HOST_CFLAGS	+= $(MOZ_OPTIMIZE_FLAGS)
-endif # MODULE_OPTIMIZE_FLAGS
 else
 HOST_CFLAGS	+= $(MOZ_OPTIMIZE_FLAGS)
 endif # MOZ_OPTIMIZE == 1
@@ -370,31 +347,39 @@ endif # CROSS_COMPILE
 CFLAGS += $(MOZ_FRAMEPTR_FLAGS)
 CXXFLAGS += $(MOZ_FRAMEPTR_FLAGS)
 
-# Check for FAIL_ON_WARNINGS (Shorthand for Makefiles to request that we use
-# the 'warnings as errors' compile flags)
+# Check for ALLOW_COMPILER_WARNINGS (shorthand for Makefiles to request that we
+# *don't* use the warnings-as-errors compile flags)
 
-# NOTE: First, we clear FAIL_ON_WARNINGS[_DEBUG] if we're doing a Windows PGO
-# build, since WARNINGS_AS_ERRORS has been suspected of causing isuses in that
-# situation. (See bug 437002.)
+# Don't use warnings-as-errors in Windows PGO builds because it is suspected of
+# causing problems in that situation. (See bug 437002.)
 ifeq (WINNT_1,$(OS_ARCH)_$(MOZ_PROFILE_GENERATE)$(MOZ_PROFILE_USE))
-FAIL_ON_WARNINGS=
+ALLOW_COMPILER_WARNINGS=1
 endif # WINNT && (MOS_PROFILE_GENERATE ^ MOZ_PROFILE_USE)
 
-# Check for normal version of flag, and add WARNINGS_AS_ERRORS if it's set to 1.
-ifdef FAIL_ON_WARNINGS
-# Never treat warnings as errors in clang-cl, because it warns about many more
+# Don't use warnings-as-errors in clang-cl because it warns about many more
 # things than MSVC does.
-ifndef CLANG_CL
+ifdef CLANG_CL
+ALLOW_COMPILER_WARNINGS=1
+endif # CLANG_CL
+
+# Use warnings-as-errors if ALLOW_COMPILER_WARNINGS is not set to 1 (which
+# includes the case where it's undefined).
+ifneq (1,$(ALLOW_COMPILER_WARNINGS))
 CXXFLAGS += $(WARNINGS_AS_ERRORS)
 CFLAGS   += $(WARNINGS_AS_ERRORS)
-endif # CLANG_CL
-endif # FAIL_ON_WARNINGS
+endif # ALLOW_COMPILER_WARNINGS
 
 ifeq ($(OS_ARCH)_$(GNU_CC),WINNT_)
 #// Currently, unless USE_STATIC_LIBS is defined, the multithreaded
 #// DLL version of the RTL is used...
 #//
 #//------------------------------------------------------------------------
+ifdef MOZ_ASAN
+# ASAN-instrumented code tries to link against the dynamic CRT, which can't be
+# used in the same link as the static CRT.
+USE_STATIC_LIBS=
+endif # MOZ_ASAN
+
 ifdef USE_STATIC_LIBS
 RTL_FLAGS=-MT          # Statically linked multithreaded RTL
 ifdef MOZ_DEBUG
@@ -437,19 +422,17 @@ ifndef CROSS_COMPILE
 HOST_CFLAGS += $(RTL_FLAGS)
 endif
 
+HOST_CFLAGS += $(HOST_DEFINES) $(MOZBUILD_HOST_CFLAGS)
+HOST_CXXFLAGS += $(HOST_DEFINES) $(MOZBUILD_HOST_CXXFLAGS)
+
 #
 # Name of the binary code directories
 #
 # Override defaults
 
 # Default location of include files
-ifndef LIBXUL_SDK
 IDL_PARSER_DIR = $(topsrcdir)/xpcom/idl-parser
 IDL_PARSER_CACHE_DIR = $(DEPTH)/xpcom/idl-parser
-else
-IDL_PARSER_DIR = $(LIBXUL_SDK)/sdk/bin
-IDL_PARSER_CACHE_DIR = $(LIBXUL_SDK)/sdk/bin
-endif
 
 SDK_LIB_DIR = $(DIST)/sdk/lib
 SDK_BIN_DIR = $(DIST)/sdk/bin
@@ -629,10 +612,36 @@ EXPAND_MKSHLIB_ARGS += --symbol-order $(SYMBOL_ORDER)
 endif
 EXPAND_MKSHLIB = $(EXPAND_LIBS_EXEC) $(EXPAND_MKSHLIB_ARGS) -- $(MKSHLIB)
 
+# $(call CHECK_SYMBOLS,lib,PREFIX,dep_name,test)
+# Checks that the given `lib` doesn't contain dependency on symbols with a
+# version starting with `PREFIX`_ and matching the `test`. `dep_name` is only
+# used for the error message.
+# `test` is an awk expression using the information in the variable `v` which
+# contains a list of version items ([major, minor, ...]).
+define CHECK_SYMBOLS
+@$(TOOLCHAIN_PREFIX)readelf -sW $(1) | \
+awk '$$8 ~ /@$(2)_/ { \
+	split($$8,a,"@"); \
+	split(a[2],b,"_"); \
+	split(b[2],v,"."); \
+	if ($(4)) { \
+		if (!found) { \
+			print "TEST-UNEXPECTED-FAIL | check_stdcxx | We do not want these $(3) symbol versions to be used:" \
+		} \
+		print " ",$$8; \
+		found=1 \
+	} \
+} \
+END { \
+	if (found) { \
+		exit(1) \
+	} \
+}'
+endef
+
 ifneq (,$(MOZ_LIBSTDCXX_TARGET_VERSION)$(MOZ_LIBSTDCXX_HOST_VERSION))
-ifneq ($(OS_ARCH),Darwin)
-CHECK_STDCXX = @$(TOOLCHAIN_PREFIX)objdump -p $(1) | grep -e 'GLIBCXX_3\.4\.\(1[1-9]\|[2-9][0-9]\)' > /dev/null && echo 'TEST-UNEXPECTED-FAIL | check_stdcxx | We do not want these libstdc++ symbols to be used:' && $(TOOLCHAIN_PREFIX)objdump -T $(1) | grep -e 'GLIBCXX_3\.4\.\(1[1-9]\|[2-9][0-9]\)' && exit 1 || true
-endif
+CHECK_STDCXX = $(call CHECK_SYMBOLS,$(1),GLIBCXX,libstdc++,v[1] > 3 || (v[1] == 3 && v[2] == 4 && v[3] > 10))
+CHECK_GLIBC = $(call CHECK_SYMBOLS,$(1),GLIBC,libc,v[1] > 2 || (v[1] == 2 && v[2] > 7))
 endif
 
 ifeq (,$(filter $(OS_TARGET),WINNT Darwin))
@@ -648,6 +657,7 @@ CHECK_MOZGLUE_ORDER = @$(TOOLCHAIN_PREFIX)readelf -d $(1) | grep NEEDED | awk '{
 endif
 
 define CHECK_BINARY
+$(call CHECK_GLIBC,$(1))
 $(call CHECK_STDCXX,$(1))
 $(call CHECK_TEXTREL,$(1))
 $(call LOCAL_CHECKS,$(1))

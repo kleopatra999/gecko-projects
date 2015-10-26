@@ -8,7 +8,6 @@ EXPORTS += [
     'ContextStateTracker.h',
     'DrawMode.h',
     'gfx2DGlue.h',
-    'gfx3DMatrix.h',
     'gfxAlphaRecovery.h',
     'gfxASurface.h',
     'gfxBaseSharedMemorySurface.h',
@@ -23,6 +22,7 @@ EXPORTS += [
     'gfxFontFamilyList.h',
     'gfxFontFeatures.h',
     'gfxFontInfoLoader.h',
+    'gfxFontPrefLangList.h',
     'gfxFontTest.h',
     'gfxFontUtils.h',
     'gfxGradientCache.h',
@@ -49,7 +49,6 @@ EXPORTS += [
     'gfxTypes.h',
     'gfxUserFontSet.h',
     'gfxUtils.h',
-    'GraphicsFilter.h',
     'RoundedRect.h',
     'SoftwareVsyncSource.h',
     'VsyncSource.h',
@@ -211,7 +210,6 @@ SOURCES += [
 
 UNIFIED_SOURCES += [
     'CJKCompatSVS.cpp',
-    'gfx3DMatrix.cpp',
     'gfxAlphaRecovery.cpp',
     'gfxBaseSharedMemorySurface.cpp',
     'gfxBlur.cpp',
@@ -261,7 +259,8 @@ if CONFIG['ENABLE_INTL_API']:
         'icu',
     ]
 
-FAIL_ON_WARNINGS = not CONFIG['_MSC_VER']
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']
 
 include('/ipc/chromium/chromium-config.mozbuild')
 
@@ -272,6 +271,7 @@ GENERATED_FILES = [
 ]
 
 LOCAL_INCLUDES += [
+    '/dom/workers',
     '/dom/xml',
 ]
 
@@ -302,10 +302,9 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'android':
 if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk2', 'gtk3', 'qt'):
     CXXFLAGS += CONFIG['MOZ_PANGO_CFLAGS']
 
-DEFINES['GRAPHITE2_STATIC'] = True
+LOCAL_INCLUDES += CONFIG['SKIA_INCLUDES']
 
-if CONFIG['GKMEDIAS_SHARED_LIBRARY']:
-    DEFINES['OTS_DLL'] = True
+DEFINES['GRAPHITE2_STATIC'] = True
 
 if CONFIG['OS_ARCH'] == 'WINNT':
     del DEFINES['UNICODE']

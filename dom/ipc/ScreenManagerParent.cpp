@@ -4,6 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/unused.h"
 #include "nsIWidget.h"
@@ -132,7 +133,7 @@ ScreenManagerParent::RecvScreenForBrowser(const TabId& aTabId,
   // the nsIScreen it's on.
   ContentParent* cp = static_cast<ContentParent*>(this->Manager());
   ContentProcessManager* cpm = ContentProcessManager::GetSingleton();
-  nsRefPtr<TabParent> tabParent =
+  RefPtr<TabParent> tabParent =
     cpm->GetTopLevelTabParentByProcessAndTabId(cp->ChildID(), aTabId);
   if(!tabParent){
     return false;
@@ -168,6 +169,10 @@ ScreenManagerParent::RecvScreenForBrowser(const TabId& aTabId,
 bool
 ScreenManagerParent::ExtractScreenDetails(nsIScreen* aScreen, ScreenDetails &aDetails)
 {
+  if (!aScreen) {
+    return false;
+  }
+
   uint32_t id;
   nsresult rv = aScreen->GetId(&id);
   NS_ENSURE_SUCCESS(rv, false);

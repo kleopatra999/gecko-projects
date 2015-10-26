@@ -13,6 +13,7 @@
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "GLReadTexImageHelper.h"
 #include "mozilla/gfx/BaseSize.h"       // for BaseSize
+#include "mozilla/layers/AsyncCanvasRenderer.h"
 #include "mozilla/layers/CompositableForwarder.h"
 #include "mozilla/layers/CompositorChild.h" // for CompositorChild
 #include "mozilla/layers/GrallocTextureClient.h"
@@ -38,12 +39,30 @@ CanvasClient::CreateCanvasClient(CanvasClientType aType,
   switch (aType) {
   case CanvasClientTypeShSurf:
     return MakeAndAddRef<CanvasClientSharedSurface>(aForwarder, aFlags);
-    break;
-
+  case CanvasClientAsync:
+    return MakeAndAddRef<CanvasClientBridge>(aForwarder, aFlags);
   default:
     return MakeAndAddRef<CanvasClient2D>(aForwarder, aFlags);
     break;
   }
+}
+
+void
+CanvasClientBridge::UpdateAsync(AsyncCanvasRenderer* aRenderer)
+{
+  if (!GetForwarder() || !mLayer || !aRenderer ||
+      !aRenderer->GetCanvasClient()) {
+    return;
+  }
+
+  uint64_t asyncID = aRenderer->GetCanvasClientAsyncID();
+  if (asyncID == 0 || mAsyncID == asyncID) {
+    return;
+  }
+
+  static_cast<ShadowLayerForwarder*>(GetForwarder())
+    ->AttachAsyncCompositable(asyncID, mLayer);
+  mAsyncID = asyncID;
 }
 
 void
@@ -62,14 +81,13 @@ CanvasClient2D::Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer)
     gfxContentType contentType = isOpaque
                                                 ? gfxContentType::COLOR
                                                 : gfxContentType::COLOR_ALPHA;
-    gfxImageFormat format
-      = gfxPlatform::GetPlatform()->OptimalFormatForContent(contentType);
+    gfx::SurfaceFormat surfaceFormat
+      = gfxPlatform::GetPlatform()->Optimal2DFormatForContent(contentType);
     TextureFlags flags = TextureFlags::DEFAULT;
     if (mTextureFlags & TextureFlags::ORIGIN_BOTTOM_LEFT) {
       flags |= TextureFlags::ORIGIN_BOTTOM_LEFT;
     }
 
-    gfx::SurfaceFormat surfaceFormat = gfx::ImageFormatToSurfaceFormat(format);
     mBuffer = CreateTextureClientForCanvas(surfaceFormat, aSize, flags, aLayer);
     if (!mBuffer) {
       NS_WARNING("Failed to allocate the TextureClient");
@@ -103,7 +121,12 @@ CanvasClient2D::Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer)
   }
 
   if (updated) {
-    GetForwarder()->UseTexture(this, mBuffer);
+    nsAutoTArray<CompositableForwarder::TimedTextureClient,1> textures;
+    CompositableForwarder::TimedTextureClient* t = textures.AppendElement();
+    t->mTextureClient = mBuffer;
+    t->mPictureRect = nsIntRect(nsIntPoint(0, 0), mBuffer->GetSize());
+    t->mFrameID = mFrameID;
+    GetForwarder()->UseTextures(this, textures);
     mBuffer->SyncWithObject(GetForwarder()->GetSyncObject());
   }
 }
@@ -123,12 +146,12 @@ CanvasClient2D::CreateTextureClientForCanvas(gfx::SurfaceFormat aFormat,
                                                    mTextureFlags | aFlags);
   }
 
-  gfx::BackendType backend = gfxPlatform::GetPlatform()->GetPreferredCanvasBackend();
 #ifdef XP_WIN
-  return CreateTextureClientForDrawing(aFormat, aSize, backend, aFlags);
+  return CreateTextureClientForDrawing(aFormat, aSize, BackendSelector::Canvas, aFlags);
 #else
   // XXX - We should use CreateTextureClientForDrawing, but we first need
   // to use double buffering.
+  gfx::BackendType backend = gfxPlatform::GetPlatform()->GetPreferredCanvasBackend();
   return TextureClient::CreateForRawBufferAccess(GetForwarder(),
                                                  aFormat, aSize, backend,
                                                  mTextureFlags | aFlags);
@@ -319,13 +342,38 @@ CloneSurface(gl::SharedSurface* src, gl::SurfaceFactory* factory)
 void
 CanvasClientSharedSurface::Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer)
 {
-  auto gl = aLayer->mGLContext;
+  Renderer renderer;
+  renderer.construct<ClientCanvasLayer*>(aLayer);
+  UpdateRenderer(aSize, renderer);
+}
+
+void
+CanvasClientSharedSurface::UpdateAsync(AsyncCanvasRenderer* aRenderer)
+{
+  Renderer renderer;
+  renderer.construct<AsyncCanvasRenderer*>(aRenderer);
+  UpdateRenderer(aRenderer->GetSize(), renderer);
+}
+
+void
+CanvasClientSharedSurface::UpdateRenderer(gfx::IntSize aSize, Renderer& aRenderer)
+{
+  GLContext* gl = nullptr;
+  ClientCanvasLayer* layer = nullptr;
+  AsyncCanvasRenderer* asyncRenderer = nullptr;
+  if (aRenderer.constructed<ClientCanvasLayer*>()) {
+    layer = aRenderer.ref<ClientCanvasLayer*>();
+    gl = layer->mGLContext;
+  } else {
+    asyncRenderer = aRenderer.ref<AsyncCanvasRenderer*>();
+    gl = asyncRenderer->mGLContext;
+  }
   gl->MakeCurrent();
 
   RefPtr<TextureClient> newFront;
 
-  if (aLayer->mGLFrontbuffer) {
-    mShSurfClient = CloneSurface(aLayer->mGLFrontbuffer.get(), aLayer->mFactory.get());
+  if (layer && layer->mGLFrontbuffer) {
+    mShSurfClient = CloneSurface(layer->mGLFrontbuffer.get(), layer->mFactory.get());
     if (!mShSurfClient) {
       gfxCriticalError() << "Invalid canvas front buffer";
       return;
@@ -349,13 +397,29 @@ CanvasClientSharedSurface::Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer)
 
   bool needsReadback = (surf->mType == SharedSurfaceType::Basic);
   if (needsReadback) {
-    TextureFlags flags = aLayer->Flags() |
-                         TextureFlags::IMMUTABLE;
+    TextureFlags flags = TextureFlags::IMMUTABLE;
 
-    auto manager = aLayer->ClientManager();
-    auto shadowForwarder = manager->AsShadowForwarder();
+    CompositableForwarder* shadowForwarder = nullptr;
+    if (layer) {
+      flags |= layer->Flags();
+      shadowForwarder = layer->ClientManager()->AsShadowForwarder();
+    } else {
+      MOZ_ASSERT(asyncRenderer);
+      flags |= mTextureFlags;
+      shadowForwarder = GetForwarder();
+    }
+
     auto layersBackend = shadowForwarder->GetCompositorBackendType();
     mReadbackClient = TexClientFromReadback(surf, forwarder, flags, layersBackend);
+
+    if (asyncRenderer) {
+      // Above codes will readback the GLContext to mReadbackClient
+      // in order to send frame to compositor. We copy from this
+      // TextureClient directly by calling CopyFromTextureClient().
+      // Therefore, if main-thread want the content of GLContext,
+      // it don't have to readback it again.
+      asyncRenderer->CopyFromTextureClient(mReadbackClient);
+    }
 
     newFront = mReadbackClient;
   } else {
@@ -369,24 +433,52 @@ CanvasClientSharedSurface::Update(gfx::IntSize aSize, ClientCanvasLayer* aLayer)
     return;
   }
 
+  mNewFront = newFront;
+}
+
+void
+CanvasClientSharedSurface::Updated()
+{
+  auto forwarder = GetForwarder();
+
+#ifndef MOZ_WIDGET_GONK
   if (mFront) {
     if (mFront->GetFlags() & TextureFlags::RECYCLE) {
       mFront->WaitForCompositorRecycle();
     }
   }
+#else
+  // AutoRemoveTexture does the followings.
+  // - Ensure to deliver FenceHandle from TextureHost to TextureClient, before
+  //   next TextureClient usage.
+  // - Control TextureClient's recycling timing.
+  // - Call RemoveTexture() after newFront's UseTextures() call.
+  //   It could improve performance of Host side's EGL handling on gonk
+  AutoRemoveTexture autoRemove(this);
+  if (mFront && mFront != mNewFront) {
+    autoRemove.mTexture = mFront;
+  }
+#endif
 
-  mFront = newFront;
+  mFront = mNewFront;
+  mNewFront = nullptr;
 
   // Add the new TexClient.
   MOZ_ALWAYS_TRUE( AddTextureClient(mFront) );
 
-  forwarder->UseTexture(this, mFront);
+  nsAutoTArray<CompositableForwarder::TimedTextureClient,1> textures;
+  CompositableForwarder::TimedTextureClient* t = textures.AppendElement();
+  t->mTextureClient = mFront;
+  t->mPictureRect = nsIntRect(nsIntPoint(0, 0), mFront->GetSize());
+  t->mFrameID = mFrameID;
+  forwarder->UseTextures(this, textures);
 }
 
 void
 CanvasClientSharedSurface::ClearSurfaces()
 {
   mFront = nullptr;
+  mNewFront = nullptr;
   mShSurfClient = nullptr;
   mReadbackClient = nullptr;
 }

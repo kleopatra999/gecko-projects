@@ -28,6 +28,9 @@
 #include <android/log.h>
 #endif
 
+template<typename T> class nsTHashtable;
+template<typename T> class nsPtrHashKey;
+
 // WARNING: this takes into account the private, special-message-type
 // enum in ipc_channel.h.  They need to be kept in sync.
 namespace {
@@ -38,23 +41,25 @@ namespace {
 // protocol 0.  Oops!  We can get away with this until protocol 0
 // starts approaching its 65,536th message.
 enum {
-    CHANNEL_OPENED_MESSAGE_TYPE = kuint16max - 5,
-    SHMEM_DESTROYED_MESSAGE_TYPE = kuint16max - 4,
-    SHMEM_CREATED_MESSAGE_TYPE = kuint16max - 3,
-    GOODBYE_MESSAGE_TYPE       = kuint16max - 2
+    CHANNEL_OPENED_MESSAGE_TYPE = kuint16max - 6,
+    SHMEM_DESTROYED_MESSAGE_TYPE = kuint16max - 5,
+    SHMEM_CREATED_MESSAGE_TYPE = kuint16max - 4,
+    GOODBYE_MESSAGE_TYPE       = kuint16max - 3,
+    CANCEL_MESSAGE_TYPE        = kuint16max - 2,
 
     // kuint16max - 1 is used by ipc_channel.h.
 };
-}
+
+} // namespace
 
 namespace mozilla {
 namespace dom {
 class ContentParent;
-}
+} // namespace dom
 
 namespace net {
 class NeckoParent;
-}
+} // namespace net
 
 namespace ipc {
 
@@ -126,7 +131,7 @@ class ProtocolCloneContext
   typedef mozilla::dom::ContentParent ContentParent;
   typedef mozilla::net::NeckoParent NeckoParent;
 
-  nsRefPtr<ContentParent> mContentParent;
+  RefPtr<ContentParent> mContentParent;
   NeckoParent* mNeckoParent;
 
 public:
@@ -233,6 +238,8 @@ public:
 
     void GetOpenedActors(nsTArray<IToplevelProtocol*>& aActors);
 
+    virtual MessageChannel* GetIPCChannel() = 0;
+
     // This Unsafe version should only be used when all other threads are
     // frozen, since it performs no locking. It also takes a stack-allocated
     // array and its size (number of elements) rather than an nsTArray. The Nuwa
@@ -294,7 +301,7 @@ FatalError(const char* aProtocolName, const char* aMsg,
 
 struct PrivateIPDLInterface {};
 
-bool
+nsresult
 Bridge(const PrivateIPDLInterface&,
        MessageChannel*, base::ProcessId, MessageChannel*, base::ProcessId,
        ProtocolId, ProtocolId);
@@ -323,6 +330,21 @@ DuplicateHandle(HANDLE aSourceHandle,
 #endif
 
 } // namespace ipc
+
+template<typename Protocol>
+using ManagedContainer = nsTHashtable<nsPtrHashKey<Protocol>>;
+
+template<typename Protocol>
+Protocol*
+LoneManagedOrNull(const ManagedContainer<Protocol>& aManagees)
+{
+    if (aManagees.IsEmpty()) {
+        return nullptr;
+    }
+    MOZ_ASSERT(aManagees.Count() == 1);
+    return aManagees.ConstIter().Get()->GetKey();
+}
+
 } // namespace mozilla
 
 

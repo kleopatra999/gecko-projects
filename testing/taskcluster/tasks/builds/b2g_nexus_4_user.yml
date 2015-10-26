@@ -1,0 +1,34 @@
+$inherits:
+  from: 'tasks/builds/b2g_phone_base.yml'
+  variables:
+    build_name: 'nexus-4-user'
+    build_type: 'opt'
+task:
+  workerType: flame-kk
+  scopes:
+    - 'docker-worker:cache:build-nexus-4-user'
+    - 'docker-worker:relengapi-proxy:tooltool.download.internal'
+  metadata:
+    name: '[TC] B2G Nexus 4 User'
+
+  payload:
+    cache:
+      build-nexus-4-user: /home/worker/object-folder
+    env:
+      TARGET: 'nexus-4'
+      DEBUG: 0
+      TOOLTOOL_MANIFEST: 'b2g/config/nexus-4/releng-mako.tt'
+    command:
+      - phone
+  extra:
+    treeherderEnv:
+      - production
+      - staging
+    treeherder:
+      symbol: B
+      groupSymbol: Nexus 4
+      groupName: Nexus 4 Device Image
+      machine:
+        platform: b2g-device-image
+    locations:
+      img: 'private/build/nexus-4.zip'

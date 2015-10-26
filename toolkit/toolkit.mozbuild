@@ -3,9 +3,6 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-if CONFIG['LIBXUL_SDK']:
-    error('toolkit.mozbuild is not compatible with --enable-libxul-sdk=')
-
 if CONFIG['MOZ_SANDBOX']:
     DIRS += ['/security/sandbox']
 
@@ -122,7 +119,9 @@ if CONFIG['MOZ_JPROF']:
     DIRS += ['/tools/jprof']
 
 DIRS += [
+    '/tools/power',
     '/tools/profiler',
+    '/tools/memory-profiler',
     '/xpfe/components',
 ]
 
@@ -141,6 +140,7 @@ if CONFIG['MOZ_PREF_EXTENSIONS']:
     DIRS += ['/extensions/pref']
 
 DIRS += [
+    '/devtools',
     '/services',
     '/startupcache',
     '/js/ductwork/debugger',
@@ -157,10 +157,6 @@ DIRS += [
 
 if CONFIG['MOZ_ENABLE_GNOME_COMPONENT']:
     DIRS += ['/toolkit/system/gnome']
-
-# if QtNetwork is present, it will do its own network monitoring
-if not CONFIG['MOZ_ENABLE_QTNETWORK'] and CONFIG['MOZ_ENABLE_DBUS']:
-    DIRS += ['/toolkit/system/dbus']
 
 DIRS += ['/addon-sdk']
 

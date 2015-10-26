@@ -123,7 +123,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         dirs = self.query_abs_dirs()
         suite_category = self.test_suite_definitions[self.test_suite]["category"]
         try:
-            test_dir = self.tree_config["suite_definitions"][suite_category]["testsdir"]
+            test_dir = self.config["suite_definitions"][suite_category]["testsdir"]
         except:
             test_dir = suite_category
         return os.path.join(dirs['abs_test_install_dir'], test_dir)
@@ -413,10 +413,6 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         except OSError, err:
             self.warning("Failed to take screenshot: %s" % err.strerror)
 
-    @PostScriptRun
-    def _post_script(self):
-        self._kill_processes(self.config["emulator_process_name"])
-
     def _query_package_name(self):
         if self.app_name is None:
             #find appname from package-name.txt - assumes download-and-extract has completed successfully
@@ -438,21 +434,23 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         dirs = self.query_abs_dirs()
         suite_category = self.test_suite_definitions[self.test_suite]["category"]
 
-        if suite_category not in self.tree_config["suite_definitions"]:
-            self.fatal("Key '%s' not defined in the in-tree config! Please add it to '%s'. "
-                       "See bug 981030 for more details." % (suite_category,
-                       os.path.join('gecko', 'testing', self.config['in_tree_config'])))
+        if suite_category not in self.config["suite_definitions"]:
+            self.fatal("Key '%s' not defined in the config!" % suite_category)
+
         cmd = [
             self.query_python_path('python'),
             '-u',
             os.path.join(
                 self._query_tests_dir(),
-                self.tree_config["suite_definitions"][suite_category]["run_filename"]
+                self.config["suite_definitions"][suite_category]["run_filename"]
             ),
         ]
 
         raw_log_file = os.path.join(dirs['abs_blob_upload_dir'],
                                     '%s_raw.log' % self.test_suite)
+
+        error_summary_file = os.path.join(dirs['abs_blob_upload_dir'],
+                                          '%s_errorsummary.log' % self.test_suite)
         str_format_values = {
             'app': self._query_package_name(),
             'remote_webserver': c['remote_webserver'],
@@ -467,6 +465,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
             'modules_dir': dirs['abs_modules_dir'],
             'installer_path': self.installer_path,
             'raw_log_file': raw_log_file,
+            'error_summary_file': error_summary_file,
             'dm_trans': c['device_manager'],
         }
         if self.config["device_manager"] == "sut":
@@ -474,7 +473,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
                 'device_ip': c['device_ip'],
                 'device_port': str(self.emulator['sut_port1']),
             })
-        for option in self.tree_config["suite_definitions"][suite_category]["options"]:
+        for option in self.config["suite_definitions"][suite_category]["options"]:
             cmd.extend([option % str_format_values])
 
         for arg in self.test_suite_definitions[self.test_suite]["extra_args"]:
@@ -483,6 +482,13 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
             if any(a.split('=')[0] == argname for a in cmd):
                 continue
             cmd.append(arg)
+
+        try_options, try_tests = self.try_args(suite_category)
+        cmd.extend(try_options)
+        cmd.extend(self.query_tests_args(
+            self.config["suite_definitions"][suite_category].get("tests"),
+            self.test_suite_definitions[self.test_suite].get("tests"),
+            try_tests))
 
         return cmd
 
@@ -595,7 +601,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         max_restarts = 3
         emulator_ok = self._retry(max_restarts, 30, self._verify_emulator_and_restart_on_fail, "Check emulator")
         if not emulator_ok:
-            self.fatal('Unable to start emulator after %d attempts' % max_restarts)
+            self.fatal('INFRA-ERROR: Unable to start emulator after %d attempts' % max_restarts)
         # Start logcat for the emulator. The adb process runs until the
         # corresponding emulator is killed. Output is written directly to
         # the blobber upload directory so that it is uploaded automatically
@@ -641,13 +647,13 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         # Install Fennec
         install_ok = self._retry(3, 30, self._install_fennec_apk, "Install Fennec APK")
         if not install_ok:
-            self.fatal('Failed to install %s on %s' % (self.installer_path, self.emulator["name"]))
+            self.fatal('INFRA-ERROR: Failed to install %s on %s' % (self.installer_path, self.emulator["name"]))
 
         # Install Robocop if required
         if self.test_suite.startswith('robocop'):
             install_ok = self._retry(3, 30, self._install_robocop_apk, "Install Robocop APK")
             if not install_ok:
-                self.fatal('Failed to install %s on %s' % (self.robocop_path, self.emulator["name"]))
+                self.fatal('INFRA-ERROR: Failed to install %s on %s' % (self.robocop_path, self.emulator["name"]))
 
         self.info("Finished installing apps for %s" % self.emulator["name"])
 
@@ -656,7 +662,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         Run the tests
         """
         cmd = self._build_command()
-        cmd = self.append_harness_extra_args(cmd)
+
         try:
             cwd = self._query_tests_dir()
         except:
@@ -670,8 +676,16 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         self.info("Running on %s the command %s" % (self.emulator["name"], subprocess.list2cmdline(cmd)))
         self.info("##### %s log begins" % self.test_suite)
 
+        # TinderBoxPrintRe does not know about the '-debug' categories
+        aliases = {
+            'reftest-debug': 'reftest',
+            'jsreftest-debug': 'jsreftest',
+            'crashtest-debug': 'crashtest',
+        }
+        suite_category = self.test_suite_definitions[self.test_suite]["category"]
+        suite_category = aliases.get(suite_category, suite_category)
         parser = self.get_test_output_parser(
-            self.test_suite_definitions[self.test_suite]["category"],
+            suite_category,
             config=self.config,
             log_obj=self.log_obj,
             error_list=self.error_list)
@@ -692,6 +706,15 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         '''
         self._verify_emulator()
         self._kill_processes(self.config["emulator_process_name"])
+
+    def upload_blobber_files(self):
+        '''
+        Override BlobUploadMixin.upload_blobber_files to ensure emulator is killed
+        first (if the emulator is still running, logcat may still be running, which
+        may lock the blob upload directory, causing a hang).
+        '''
+        self._kill_processes(self.config["emulator_process_name"])
+        super(AndroidEmulatorTest, self).upload_blobber_files()
 
 if __name__ == '__main__':
     emulatorTest = AndroidEmulatorTest()

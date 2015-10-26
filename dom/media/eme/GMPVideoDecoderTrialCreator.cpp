@@ -77,6 +77,36 @@ GMPVideoDecoderTrialCreator::GetCreateTrialState(const nsAString& aKeySystem)
   }
 }
 
+/* static */ void
+GMPVideoDecoderTrialCreator::UpdateTrialCreateState(const nsAString& aKeySystem,
+                                                    uint32_t aState)
+{
+  UpdateTrialCreateState(aKeySystem, (TrialCreateState)aState);
+}
+
+/* static */ void
+GMPVideoDecoderTrialCreator::UpdateTrialCreateState(const nsAString& aKeySystem,
+                                                    TrialCreateState aState)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (XRE_GetProcessType() == GeckoProcessType_Content) {
+    // Pref has to be set from the chrome process. Dispatch to chrome via
+    // GMPService.
+    nsCOMPtr<mozIGeckoMediaPluginService> service =
+      do_GetService("@mozilla.org/gecko-media-plugin-service;1");
+    NS_ENSURE_TRUE_VOID(service);
+
+    service->UpdateTrialCreateState(aKeySystem, (uint32_t)aState);
+    return;
+  }
+
+  const char* pref = TrialCreatePrefName(aKeySystem);
+  if (pref) {
+    Preferences::SetInt(pref, (int)aState);
+  }
+}
+
 void
 GMPVideoDecoderTrialCreator::TrialCreateGMPVideoDecoderFailed(const nsAString& aKeySystem,
                                                               const nsACString& aReason)
@@ -91,11 +121,9 @@ GMPVideoDecoderTrialCreator::TrialCreateGMPVideoDecoderFailed(const nsAString& a
     return;
   }
   data->mStatus = Failed;
-  const char* pref = TrialCreatePrefName(aKeySystem);
-  if (pref) {
-    Preferences::SetInt(pref, (int)Failed);
-  }
-  for (nsRefPtr<AbstractPromiseLike>& promise: data->mPending) {
+  UpdateTrialCreateState(aKeySystem, Failed);
+
+  for (RefPtr<AbstractPromiseLike>& promise: data->mPending) {
     promise->Reject(NS_ERROR_DOM_NOT_SUPPORTED_ERR, aReason);
   }
   data->mPending.Clear();
@@ -115,11 +143,9 @@ GMPVideoDecoderTrialCreator::TrialCreateGMPVideoDecoderSucceeded(const nsAString
     return;
   }
   data->mStatus = Succeeded;
-  const char* pref = TrialCreatePrefName(aKeySystem);
-  if (pref) {
-    Preferences::SetInt(pref, (int)Succeeded);
-  }
-  for (nsRefPtr<AbstractPromiseLike>& promise : data->mPending) {
+  UpdateTrialCreateState(aKeySystem, Succeeded);
+
+  for (RefPtr<AbstractPromiseLike>& promise : data->mPending) {
     promise->Resolve();
   }
   data->mPending.Clear();
@@ -140,7 +166,7 @@ TestGMPVideoDecoder::Start()
   if (!thread) {
     return NS_ERROR_FAILURE;
   }
-  nsRefPtr<nsIRunnable> task(NS_NewRunnableMethod(this, &TestGMPVideoDecoder::CreateGMPVideoDecoder));
+  RefPtr<nsIRunnable> task(NS_NewRunnableMethod(this, &TestGMPVideoDecoder::CreateGMPVideoDecoder));
   return thread->Dispatch(task, NS_DISPATCH_NORMAL);
 }
 
@@ -259,7 +285,7 @@ TestGMPVideoDecoder::ReportFailure(const nsACString& aReason)
     mGMP = nullptr;
   }
 
-  nsRefPtr<nsIRunnable> task;
+  RefPtr<nsIRunnable> task;
   task = NS_NewRunnableMethodWithArgs<nsString, nsCString>(mInstance,
     &GMPVideoDecoderTrialCreator::TrialCreateGMPVideoDecoderFailed,
     mKeySystem,
@@ -277,7 +303,7 @@ TestGMPVideoDecoder::ReportSuccess()
     mGMP = nullptr;
   }
 
-  nsRefPtr<nsIRunnable> task;
+  RefPtr<nsIRunnable> task;
   task = NS_NewRunnableMethodWithArg<nsString>(mInstance,
     &GMPVideoDecoderTrialCreator::TrialCreateGMPVideoDecoderSucceeded,
     mKeySystem);
@@ -385,7 +411,7 @@ TestGMPVideoDecoder::Callback::Done(GMPVideoDecoderProxy* aGMP, GMPVideoHost* aH
     return;
   }
 
-  nsRefPtr<nsIRunnable> task;
+  RefPtr<nsIRunnable> task;
   task = NS_NewRunnableMethodWithArgs<GMPVideoDecoderProxy*, GMPVideoHost*>(mInstance,
     &TestGMPVideoDecoder::ActorCreated,
     aGMP, aHost);
@@ -400,7 +426,7 @@ TestGMPVideoDecoder::ActorCreated(GMPVideoDecoderProxy* aGMP,
   MOZ_ASSERT(aHost && aGMP);
 
   // Add crash handler.
-  nsRefPtr<gmp::GeckoMediaPluginService> service =
+  RefPtr<gmp::GeckoMediaPluginService> service =
     gmp::GeckoMediaPluginService::GetGeckoMediaPluginService();
   service->AddPluginCrashedEventTarget(aGMP->GetPluginId(), mWindow);
 
@@ -411,7 +437,7 @@ TestGMPVideoDecoder::ActorCreated(GMPVideoDecoderProxy* aGMP,
     return;
   }
 
-  nsRefPtr<nsIRunnable> task;
+  RefPtr<nsIRunnable> task;
   task = NS_NewRunnableMethodWithArgs<GMPVideoDecoderProxy*, GMPVideoHost*>(this,
     &TestGMPVideoDecoder::InitGMPDone,
     aGMP, aHost);
@@ -453,6 +479,11 @@ TestGMPVideoDecoder::InitGMPDone(GMPVideoDecoderProxy* aGMP,
   }
 
   GMPUniquePtr<GMPVideoEncodedFrame> frame = CreateFrame(aHost);
+  if (!frame) {
+    EME_LOG("InitGMPDone() - Decode() failed to create frame!");
+    ReportFailure(NS_LITERAL_CSTRING("TestGMPVideoDecoder Decode() failed to create frame"));
+    return;
+  }
   nsTArray<uint8_t> info; // No codec specific per-frame info to pass.
   rv = mGMP->Decode(Move(frame), false, info, 0);
   if (NS_FAILED(rv)) {
@@ -479,9 +510,9 @@ TestGMPVideoDecoder::CreateGMPVideoDecoder()
   tags.AppendElement(NS_ConvertUTF16toUTF8(mKeySystem));
 
   UniquePtr<GetGMPVideoDecoderCallback> callback(new Callback(this));
-  nsCString fakeNodeId;
-  if (NS_FAILED(GenerateRandomName(fakeNodeId, 32)) ||
-      NS_FAILED(mGMPService->GetGMPVideoDecoder(&tags, fakeNodeId, Move(callback)))) {
+  if (NS_FAILED(mGMPService->GetGMPVideoDecoder(&tags,
+                                                NS_LITERAL_CSTRING("fakeNodeId1234567890fakeNodeId12"),
+                                                Move(callback)))) {
     ReportFailure(NS_LITERAL_CSTRING("TestGMPVideoDecoder GMPService GetGMPVideoDecoder returned failure"));
   }
 }
@@ -492,12 +523,6 @@ GMPVideoDecoderTrialCreator::MaybeAwaitTrialCreate(const nsAString& aKeySystem,
                                                    nsPIDOMWindow* aParent)
 {
   MOZ_ASSERT(NS_IsMainThread());
-
-  if (XRE_GetProcessType() == GeckoProcessType_Content) {
-    // Currently broken with e10s...
-    aPromisey->Resolve();
-    return;
-  }
 
   if (!mTestCreate.Contains(aKeySystem)) {
     mTestCreate.Put(aKeySystem, new TrialCreateData(aKeySystem));

@@ -9,10 +9,10 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.util.Log;
+import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.mozglue.GeckoLoader;
 import org.mozilla.gecko.mozglue.NativeZip;
-import org.mozilla.gecko.mozglue.RobocopTarget;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -52,6 +52,9 @@ public final class GeckoJarReader {
             inputStream = getStream(zip, jarUrls, url);
             if (inputStream != null) {
                 bitmap = new BitmapDrawable(resources, inputStream);
+                // BitmapDrawable created from a stream does not set the correct target density from resources.
+                // In fact it discards the resources https://android.googlesource.com/platform/frameworks/base/+/refs/heads/master/graphics/java/android/graphics/drawable/BitmapDrawable.java#191
+                bitmap.setTargetDensity(resources.getDisplayMetrics());
             }
         } catch (IOException | URISyntaxException ex) {
             Log.e(LOGTAG, "Exception ", ex);

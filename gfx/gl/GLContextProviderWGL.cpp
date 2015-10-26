@@ -451,7 +451,7 @@ GLContextProviderWGL::CreateForWindow(nsIWidget *aWidget)
     }
 
     SurfaceCaps caps = SurfaceCaps::ForRGBA();
-    nsRefPtr<GLContextWGL> glContext = new GLContextWGL(caps,
+    RefPtr<GLContextWGL> glContext = new GLContextWGL(caps,
                                                         shareContext,
                                                         false,
                                                         dc,
@@ -546,7 +546,7 @@ CreatePBufferOffscreenContext(const IntSize& aSize,
     }
 
     SurfaceCaps dummyCaps = SurfaceCaps::Any();
-    nsRefPtr<GLContextWGL> glContext = new GLContextWGL(dummyCaps,
+    RefPtr<GLContextWGL> glContext = new GLContextWGL(dummyCaps,
                                                         aShareContext,
                                                         true,
                                                         pbuffer,
@@ -599,21 +599,21 @@ CreateWindowOffscreenContext()
     }
 
     SurfaceCaps caps = SurfaceCaps::ForRGBA();
-    nsRefPtr<GLContextWGL> glContext = new GLContextWGL(caps,
+    RefPtr<GLContextWGL> glContext = new GLContextWGL(caps,
                                                         shareContext, true,
                                                         dc, context, win);
 
     return glContext.forget();
 }
 
-already_AddRefed<GLContext>
-GLContextProviderWGL::CreateHeadless(bool)
+/*static*/ already_AddRefed<GLContext>
+GLContextProviderWGL::CreateHeadless(CreateContextFlags)
 {
     if (!sWGLLib.EnsureInitialized()) {
         return nullptr;
     }
 
-    nsRefPtr<GLContextWGL> glContext;
+    RefPtr<GLContextWGL> glContext;
 
     // Always try to create a pbuffer context first, because we
     // want the context isolation.
@@ -635,28 +635,28 @@ GLContextProviderWGL::CreateHeadless(bool)
         return nullptr;
     }
 
-    nsRefPtr<GLContext> retGL = glContext.get();
+    RefPtr<GLContext> retGL = glContext.get();
     return retGL.forget();
 }
 
-already_AddRefed<GLContext>
+/*static*/ already_AddRefed<GLContext>
 GLContextProviderWGL::CreateOffscreen(const IntSize& size,
-                                      const SurfaceCaps& caps,
-                                      bool requireCompatProfile)
+                                      const SurfaceCaps& minCaps,
+                                      CreateContextFlags flags)
 {
-    nsRefPtr<GLContext> glContext = CreateHeadless(requireCompatProfile);
-    if (!glContext)
+    RefPtr<GLContext> gl = CreateHeadless(flags);
+    if (!gl)
         return nullptr;
 
-    if (!glContext->InitOffscreen(size, caps))
+    if (!gl->InitOffscreen(size, minCaps))
         return nullptr;
 
-    return glContext.forget();
+    return gl.forget();
 }
 
-static nsRefPtr<GLContextWGL> gGlobalContext;
+static RefPtr<GLContextWGL> gGlobalContext;
 
-GLContext *
+/*static*/ GLContext*
 GLContextProviderWGL::GetGlobalContext()
 {
     if (!sWGLLib.EnsureInitialized()) {
@@ -684,7 +684,7 @@ GLContextProviderWGL::GetGlobalContext()
     return static_cast<GLContext*>(gGlobalContext);
 }
 
-void
+/*static*/ void
 GLContextProviderWGL::Shutdown()
 {
     gGlobalContext = nullptr;

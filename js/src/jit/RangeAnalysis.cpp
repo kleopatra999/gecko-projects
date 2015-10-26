@@ -158,7 +158,7 @@ RangeAnalysis::addBetaNodes()
         MCompare* compare = test->getOperand(0)->toCompare();
 
         if (compare->compareType() == MCompare::Compare_Unknown ||
-            compare->compareType() == MCompare::Compare_Value)
+            compare->compareType() == MCompare::Compare_Bitwise)
         {
             continue;
         }
@@ -1734,7 +1734,7 @@ MArrayLength::computeRange(TempAllocator& alloc)
 void
 MInitializedLength::computeRange(TempAllocator& alloc)
 {
-    setRange(Range::NewUInt32Range(alloc, 0, NativeObject::NELEMENTS_LIMIT));
+    setRange(Range::NewUInt32Range(alloc, 0, NativeObject::MAX_DENSE_ELEMENTS_COUNT));
 }
 
 void
@@ -2248,32 +2248,8 @@ RangeAnalysis::analyze()
 
         // First pass at collecting range info - while the beta nodes are still
         // around and before truncation.
-        for (MInstructionIterator iter(block->begin()); iter != block->end(); iter++) {
+        for (MInstructionIterator iter(block->begin()); iter != block->end(); iter++)
             iter->collectRangeInfoPreTrunc();
-
-            // Would have been nice to implement this using collectRangeInfoPreTrunc()
-            // methods but it needs the minAsmJSHeapLength().
-            if (mir->compilingAsmJS()) {
-                uint32_t minHeapLength = mir->minAsmJSHeapLength();
-                if (iter->isAsmJSLoadHeap()) {
-                    MAsmJSLoadHeap* ins = iter->toAsmJSLoadHeap();
-                    Range* range = ins->ptr()->range();
-                    uint32_t elemSize = TypedArrayElemSize(ins->accessType());
-                    if (range && range->hasInt32LowerBound() && range->lower() >= 0 &&
-                        range->hasInt32UpperBound() && uint32_t(range->upper()) + elemSize <= minHeapLength) {
-                        ins->removeBoundsCheck();
-                    }
-                } else if (iter->isAsmJSStoreHeap()) {
-                    MAsmJSStoreHeap* ins = iter->toAsmJSStoreHeap();
-                    Range* range = ins->ptr()->range();
-                    uint32_t elemSize = TypedArrayElemSize(ins->accessType());
-                    if (range && range->hasInt32LowerBound() && range->lower() >= 0 &&
-                        range->hasInt32UpperBound() && uint32_t(range->upper()) + elemSize <= minHeapLength) {
-                        ins->removeBoundsCheck();
-                    }
-                }
-            }
-        }
     }
 
     return true;
@@ -2313,6 +2289,10 @@ RangeAnalysis::addRangeAssertions()
 
             // Don't insert assertions if there's nothing interesting to assert.
             if (r.isUnknown() || (ins->type() == MIRType_Int32 && r.isUnknownInt32()))
+                continue;
+
+            // Don't add a use to an instruction that is recovered on bailout.
+            if (ins->isRecoveredOnBailout())
                 continue;
 
             MAssertRange* guard = MAssertRange::New(alloc(), ins, new(alloc()) Range(r));
@@ -2514,8 +2494,10 @@ MDiv::truncate()
 
     // Divisions where the lhs and rhs are unsigned and the result is
     // truncated can be lowered more efficiently.
-    if (tryUseUnsignedOperands())
+    if (unsignedOperands()) {
+        replaceWithUnsignedOperands();
         unsigned_ = true;
+    }
 }
 
 bool
@@ -2535,8 +2517,10 @@ MMod::truncate()
     specialization_ = MIRType_Int32;
     setResultType(MIRType_Int32);
 
-    if (tryUseUnsignedOperands())
+    if (unsignedOperands()) {
+        replaceWithUnsignedOperands();
         unsigned_ = true;
+    }
 }
 
 bool
@@ -2683,8 +2667,8 @@ MToDouble::operandTruncateKind(size_t index) const
 MDefinition::TruncateKind
 MStoreUnboxedScalar::operandTruncateKind(size_t index) const
 {
-    // An integer store truncates the stored value.
-    return index == 2 && isIntegerWrite() ? Truncate : NoTruncate;
+    // Some receiver objects, such as typed arrays, will truncate out of range integer inputs.
+    return (truncateInput() && index == 2 && isIntegerWrite()) ? Truncate : NoTruncate;
 }
 
 MDefinition::TruncateKind

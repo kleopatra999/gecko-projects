@@ -16,6 +16,8 @@ const LoginInfo =
       Components.Constructor("@mozilla.org/login-manager/loginInfo;1",
                              "nsILoginInfo", "init");
 
+const BRAND_BUNDLE = "chrome://branding/locale/brand.properties";
+
 /**
  * Constants for password prompt telemetry.
  * Mirrored in mobile/android/components/LoginManagerPrompter.js */
@@ -118,7 +120,7 @@ LoginManagerPromptFactory.prototype = {
         prompt.inProgress = false;
         self._asyncPromptInProgress = false;
 
-        for each (var consumer in prompt.consumers) {
+        for (var consumer of prompt.consumers) {
           if (!consumer.callback)
             // Not having a callback means that consumer didn't provide it
             // or canceled the notification
@@ -146,7 +148,8 @@ LoginManagerPromptFactory.prototype = {
     var asyncPrompts = this._asyncPrompts;
     this.__proto__._asyncPrompts = {};
 
-    for each (var prompt in asyncPrompts) {
+    for (var hashKey in asyncPrompts) {
+      let prompt = asyncPrompts[hashKey];
       // Watch out! If this prompt is currently prompting, let it handle
       // notifying the callbacks of success/failure, since it's already
       // asking the user for input. Reusing a callback can be crashy.
@@ -155,7 +158,7 @@ LoginManagerPromptFactory.prototype = {
         continue;
       }
 
-      for each (var consumer in prompt.consumers) {
+      for (var consumer of prompt.consumers) {
         if (!consumer.callback)
           continue;
 
@@ -375,18 +378,18 @@ LoginManagerPrompter.prototype = {
 
     // If we didn't find an existing login, or if the username
     // changed, save as a new login.
+    let newLogin = Cc["@mozilla.org/login-manager/loginInfo;1"].
+                   createInstance(Ci.nsILoginInfo);
+    newLogin.init(hostname, null, realm,
+                  aUsername.value, aPassword.value, "", "");
     if (!selectedLogin) {
       // add as new
       this.log("New login seen for " + realm);
-      var newLogin = Cc["@mozilla.org/login-manager/loginInfo;1"].
-                     createInstance(Ci.nsILoginInfo);
-      newLogin.init(hostname, null, realm,
-                    aUsername.value, aPassword.value, "", "");
       this._pwmgr.addLogin(newLogin);
     } else if (aPassword.value != selectedLogin.password) {
       // update password
       this.log("Updating password for  " + realm);
-      this._updateLogin(selectedLogin, aPassword.value);
+      this._updateLogin(selectedLogin, newLogin);
     } else {
       this.log("Login unchanged, no further action needed.");
       this._updateLogin(selectedLogin);
@@ -602,14 +605,14 @@ LoginManagerPrompter.prototype = {
 
       // If we didn't find an existing login, or if the username
       // changed, save as a new login.
+      let newLogin = Cc["@mozilla.org/login-manager/loginInfo;1"].
+                     createInstance(Ci.nsILoginInfo);
+      newLogin.init(hostname, null, httpRealm,
+                    username, password, "", "");
       if (!selectedLogin) {
         this.log("New login seen for " + username +
                  " @ " + hostname + " (" + httpRealm + ")");
 
-        var newLogin = Cc["@mozilla.org/login-manager/loginInfo;1"].
-                       createInstance(Ci.nsILoginInfo);
-        newLogin.init(hostname, null, httpRealm,
-                      username, password, "", "");
         var notifyObj = this._getPopupNote() || notifyBox;
         if (notifyObj)
           this._showSaveLoginNotification(notifyObj, newLogin);
@@ -623,10 +626,9 @@ LoginManagerPrompter.prototype = {
         var notifyObj = this._getPopupNote() || notifyBox;
         if (notifyObj)
           this._showChangeLoginNotification(notifyObj,
-                                            selectedLogin, password);
+                                            selectedLogin, newLogin);
         else
-          this._updateLogin(selectedLogin, password);
-
+          this._updateLogin(selectedLogin, newLogin);
       } else {
         this.log("Login unchanged, no further action needed.");
         this._updateLogin(selectedLogin);
@@ -775,21 +777,26 @@ LoginManagerPrompter.prototype = {
     let { browser } = this._getNotifyWindow();
 
     let saveMsgNames = {
-      prompt: "rememberPasswordMsgNoUsername",
-      buttonLabel: "notifyBarRememberPasswordButtonText",
-      buttonAccessKey: "notifyBarRememberPasswordButtonAccessKey",
+      prompt: login.username === "" ? "rememberLoginMsgNoUser"
+                                    : "rememberLoginMsg",
+      buttonLabel: "rememberLoginButtonText",
+      buttonAccessKey: "rememberLoginButtonAccessKey",
     };
 
     let changeMsgNames = {
-      // We reuse the existing message, even if it expects a username, until we
-      // switch to the final terminology in bug 1144856.
-      prompt: "updatePasswordMsg",
-      buttonLabel: "notifyBarUpdateButtonText",
-      buttonAccessKey: "notifyBarUpdateButtonAccessKey",
+      prompt: login.username === "" ? "updateLoginMsgNoUser"
+                                    : "updateLoginMsg",
+      buttonLabel: "updateLoginButtonText",
+      buttonAccessKey: "updateLoginButtonAccessKey",
     };
 
     let initialMsgNames = type == "password-save" ? saveMsgNames
                                                   : changeMsgNames;
+
+    let brandBundle = Services.strings.createBundle(BRAND_BUNDLE);
+    let brandShortName = brandBundle.GetStringFromName("brandShortName");
+    let promptMsg = type == "password-save" ? this._getLocalizedString(saveMsgNames.prompt, [brandShortName])
+                                            : this._getLocalizedString(changeMsgNames.prompt);
 
     let histogramName = type == "password-save" ? "PWMGR_PROMPT_REMEMBER_ACTION"
                                                 : "PWMGR_PROMPT_UPDATE_ACTION";
@@ -818,7 +825,7 @@ LoginManagerPrompter.prototype = {
       let foundLogins = Services.logins.findLogins({}, login.hostname,
                                                    login.formSubmitURL,
                                                    login.httpRealm);
-      let logins = foundLogins.filter(l => l.username == login.username);
+      let logins = this._filterUpdatableLogins(login, foundLogins);
       let msgNames = (logins.length == 0) ? saveMsgNames : changeMsgNames;
 
       // Update the label based on whether this will be a new login or not.
@@ -840,14 +847,21 @@ LoginManagerPrompter.prototype = {
     };
 
     let writeDataToUI = () => {
+      // setAttribute is used since the <textbox> binding may not be attached yet.
       chromeDoc.getElementById("password-notification-username")
                .setAttribute("placeholder", usernamePlaceholder);
       chromeDoc.getElementById("password-notification-username")
                .setAttribute("value", login.username);
-      chromeDoc.getElementById("password-notification-password")
-               .setAttribute("value", login.password);
-      chromeDoc.getElementById("password-notification-password")
-               .setAttribute("show-content", showPasswordPlaceholder);
+
+      let passwordField = chromeDoc.getElementById("password-notification-password");
+      // Ensure the type is reset so the field is masked.
+      passwordField.setAttribute("type", "password");
+      passwordField.setAttribute("value", login.password);
+      if (Services.prefs.getBoolPref("signon.rememberSignons.visibilityToggle")) {
+        passwordField.setAttribute("show-content", showPasswordPlaceholder);
+      } else {
+        passwordField.setAttribute("show-content", "");
+      }
       updateButtonLabel();
     };
 
@@ -873,13 +887,14 @@ LoginManagerPrompter.prototype = {
         selectionStart = passwordField.value.length;
         selectionEnd = passwordField.value.length;
       }
-      passwordField.type = "";
+      passwordField.setAttribute("type", "");
       passwordField.selectionStart = selectionStart;
       passwordField.selectionEnd = selectionEnd;
     };
 
     let onPasswordBlur = () => {
-      chromeDoc.getElementById("password-notification-password").type = "password";
+      // Use setAttribute in case the <textbox> binding isn't applied.
+      chromeDoc.getElementById("password-notification-password").setAttribute("type", "password");
     };
 
     let onNotificationClick = (clickEvent) => {
@@ -903,7 +918,8 @@ LoginManagerPrompter.prototype = {
       let foundLogins = Services.logins.findLogins({}, login.hostname,
                                                    login.formSubmitURL,
                                                    login.httpRealm);
-      let logins = foundLogins.filter(l => l.username == login.username);
+      let logins = this._filterUpdatableLogins(login, foundLogins);
+
       if (logins.length == 0) {
         // The original login we have been provided with might have its own
         // metadata, but we don't want it propagated to the newly created one.
@@ -915,11 +931,12 @@ LoginManagerPrompter.prototype = {
                                                login.usernameField,
                                                login.passwordField));
       } else if (logins.length == 1) {
-        if (logins[0].password == login.password) {
+        if (logins[0].password == login.password &&
+            logins[0].username == login.username) {
           // We only want to touch the login's use count and last used time.
-          this._updateLogin(logins[0], null);
+          this._updateLogin(logins[0]);
         } else {
-          this._updateLogin(logins[0], login.password);
+          this._updateLogin(logins[0], login);
         }
       } else {
         Cu.reportError("Unexpected match of multiple logins.");
@@ -960,13 +977,13 @@ LoginManagerPrompter.prototype = {
     this._getPopupNote().show(
       browser,
       "password",
-      this._getLocalizedString(initialMsgNames.prompt, [displayHost]),
+      promptMsg,
       "password-notification-icon",
       mainAction,
       secondaryActions,
       {
         timeout: Date.now() + 10000,
-        origin: login.hostname,
+        displayURI: Services.io.newURI(login.hostname, null, null),
         persistWhileVisible: true,
         passwordNotificationType: type,
         eventCallback: function (topic) {
@@ -977,8 +994,10 @@ LoginManagerPrompter.prototype = {
                        .addEventListener("input", onInput);
               chromeDoc.getElementById("password-notification-password")
                        .addEventListener("input", onInput);
-              chromeDoc.getElementById("password-notification-password")
-                       .addEventListener("focus", onPasswordFocus);
+              if (Services.prefs.getBoolPref("signon.rememberSignons.visibilityToggle")) {
+                chromeDoc.getElementById("password-notification-password")
+                         .addEventListener("focus", onPasswordFocus);
+              }
               chromeDoc.getElementById("password-notification-password")
                        .addEventListener("blur", onPasswordBlur);
               break;
@@ -1175,24 +1194,26 @@ LoginManagerPrompter.prototype = {
   },
 
 
-  /*
-   * promptToChangePassword
+  /**
+   * Called when we think we detect a password or username change for
+   * an existing login, when the form being submitted contains multiple
+   * password fields.
    *
-   * Called when we think we detect a password change for an existing
-   * login, when the form being submitted contains multiple password
-   * fields.
-   *
+   * @param {nsILoginInfo} aOldLogin
+   *                       The old login we may want to update.
+   * @param {nsILoginInfo} aNewLogin
+   *                       The new login from the page form.
    */
-  promptToChangePassword : function (aOldLogin, aNewLogin) {
-    var notifyObj = this._getPopupNote() || this._getNotifyBox();
+  promptToChangePassword(aOldLogin, aNewLogin) {
+    let notifyObj = this._getPopupNote() || this._getNotifyBox();
 
-    if (notifyObj)
+    if (notifyObj) {
       this._showChangeLoginNotification(notifyObj, aOldLogin,
-                                        aNewLogin.password);
-    else
-      this._showChangeLoginDialog(aOldLogin, aNewLogin.password);
+                                        aNewLogin);
+    } else {
+      this._showChangeLoginDialog(aOldLogin, aNewLogin);
+    }
   },
-
 
   /*
    * _showChangeLoginNotification
@@ -1201,8 +1222,15 @@ LoginManagerPrompter.prototype = {
    *
    * @param aNotifyObj
    *        A notification box or a popup notification.
+   *
+   * @param aOldLogin
+   *        The stored login we want to update.
+   *
+   * @param aNewLogin
+   *        The login object with the changes we want to make.
+   *
    */
-  _showChangeLoginNotification : function (aNotifyObj, aOldLogin, aNewPassword) {
+  _showChangeLoginNotification(aNotifyObj, aOldLogin, aNewLogin) {
     var changeButtonText =
           this._getLocalizedString("notifyBarUpdateButtonText");
     var changeButtonAccessKey =
@@ -1221,7 +1249,8 @@ LoginManagerPrompter.prototype = {
 
     // Notification is a PopupNotification
     if (aNotifyObj == this._getPopupNote()) {
-      aOldLogin.password = aNewPassword;
+      aOldLogin.password = aNewLogin.password;
+      aOldLogin.username = aNewLogin.username;
       this._showLoginCaptureDoorhanger(aOldLogin, "password-change");
     } else {
       var dontChangeButtonText =
@@ -1235,7 +1264,7 @@ LoginManagerPrompter.prototype = {
           accessKey: changeButtonAccessKey,
           popup:     null,
           callback:  function(aNotifyObj, aButton) {
-            self._updateLogin(aOldLogin, aNewPassword);
+            self._updateLogin(aOldLogin, aNewLogin);
           }
         },
 
@@ -1262,7 +1291,7 @@ LoginManagerPrompter.prototype = {
    * Shows the Change Password dialog.
    *
    */
-  _showChangeLoginDialog : function (aOldLogin, aNewPassword) {
+  _showChangeLoginDialog(aOldLogin, aNewLogin) {
     const buttonFlags = Ci.nsIPrompt.STD_YES_NO_BUTTONS;
 
     var dialogText;
@@ -1284,7 +1313,7 @@ LoginManagerPrompter.prototype = {
                             null, {});
     if (ok) {
       this.log("Updating password for user " + aOldLogin.username);
-      this._updateLogin(aOldLogin, aNewPassword);
+      this._updateLogin(aOldLogin, aNewLogin);
     }
   },
 
@@ -1305,7 +1334,7 @@ LoginManagerPrompter.prototype = {
   promptToChangePasswordWithUsernames : function (logins, count, aNewLogin) {
     const buttonFlags = Ci.nsIPrompt.STD_YES_NO_BUTTONS;
 
-    var usernames = logins.map(function (l) l.username);
+    var usernames = logins.map(l => l.username);
     var dialogText  = this._getLocalizedString("userSelectText");
     var dialogTitle = this._getLocalizedString("passwordChangeTitle");
     var selectedIndex = { value: null };
@@ -1320,7 +1349,7 @@ LoginManagerPrompter.prototype = {
       // Now that we know which login to use, modify its password.
       var selectedLogin = logins[selectedIndex.value];
       this.log("Updating password for user " + selectedLogin.username);
-      this._updateLogin(selectedLogin, aNewLogin.password);
+      this._updateLogin(selectedLogin, aNewLogin);
     }
   },
 
@@ -1332,15 +1361,13 @@ LoginManagerPrompter.prototype = {
 
 
 
-  /*
-   * _updateLogin
-   */
-  _updateLogin : function (login, newPassword) {
+  _updateLogin(login, aNewLogin = null) {
     var now = Date.now();
     var propBag = Cc["@mozilla.org/hash-property-bag;1"].
                   createInstance(Ci.nsIWritablePropertyBag);
-    if (newPassword) {
-      propBag.setProperty("password", newPassword);
+    if (aNewLogin) {
+      propBag.setProperty("password", aNewLogin.password);
+      propBag.setProperty("username", aNewLogin.username);
       // Explicitly set the password change time here (even though it would
       // be changed automatically), to ensure that it's exactly the same
       // value as timeLastUsed.
@@ -1703,7 +1730,28 @@ LoginManagerPrompter.prototype = {
         this.context = null;
       }
     };
-  }
+  },
+
+  /**
+   * This function looks for existing logins that can be updated
+   * to match a submitted login, instead of creating a new one.
+   *
+   * Given a login and a loginList, it filters the login list
+   * to find every login with either the same username as aLogin
+   * or with the same password as aLogin and an empty username
+   * so the user can add a username.
+   *
+   * @param {nsILoginInfo} aLogin
+   *                       login to use as filter.
+   * @param {nsILoginInfo[]} aLoginList
+   *                         Array of logins to filter.
+   * @returns {nsILoginInfo[]} the filtered array of logins.
+   */
+  _filterUpdatableLogins(aLogin, aLoginList) {
+    return aLoginList.filter(l => l.username == aLogin.username ||
+                             (l.password == aLogin.password &&
+                              !l.username));
+  },
 
 }; // end of LoginManagerPrompter implementation
 

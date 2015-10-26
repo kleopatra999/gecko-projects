@@ -46,10 +46,8 @@ using namespace mozilla::gfx;
 using namespace mozilla::layers;
 using namespace android;
 
-OmxDecoder::OmxDecoder(MediaResource *aResource,
-                       AbstractMediaDecoder *aDecoder) :
+OmxDecoder::OmxDecoder(AbstractMediaDecoder *aDecoder) :
   mDecoder(aDecoder),
-  mResource(aResource),
   mDisplayWidth(0),
   mDisplayHeight(0),
   mVideoWidth(0),
@@ -143,8 +141,6 @@ bool OmxDecoder::Init(sp<MediaExtractor>& extractor) {
     return false;
   }
 
-  mResource->SetReadMode(MediaCacheStream::MODE_PLAYBACK);
-
   if (videoTrackIndex != -1 && mDecoder->GetImageContainer()) {
     mVideoTrack = extractor->getTrack(videoTrackIndex);
   }
@@ -221,9 +217,9 @@ static bool isInEmulator()
   return !strncmp(propQemu, "1", 1);
 }
 
-nsRefPtr<mozilla::MediaOmxCommonReader::MediaResourcePromise> OmxDecoder::AllocateMediaResources()
+RefPtr<mozilla::MediaOmxCommonReader::MediaResourcePromise> OmxDecoder::AllocateMediaResources()
 {
-  nsRefPtr<MediaResourcePromise> p = mMediaResourcePromise.Ensure(__func__);
+  RefPtr<MediaResourcePromise> p = mMediaResourcePromise.Ensure(__func__);
 
   if ((mVideoTrack != nullptr) && (mVideoSource == nullptr)) {
     // OMXClient::connect() always returns OK and abort's fatally if
@@ -869,7 +865,7 @@ void OmxDecoder::ReleaseAllPendingVideoBuffersLocked()
     MediaBuffer *buffer;
     buffer = releasingVideoBuffers[i].mMediaBuffer;
 #if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-    nsRefPtr<FenceHandle::FdObj> fdObj = releasingVideoBuffers.editItemAt(i).mReleaseFenceHandle.GetAndResetFdObj();
+    RefPtr<FenceHandle::FdObj> fdObj = releasingVideoBuffers.editItemAt(i).mReleaseFenceHandle.GetAndResetFdObj();
     int fenceFd = fdObj->GetAndResetFd();
 
     MOZ_ASSERT(buffer->refcount() == 1);

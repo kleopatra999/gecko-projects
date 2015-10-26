@@ -22,7 +22,7 @@
 #include "BaseWebSocketChannel.h"
 
 #ifdef MOZ_WIDGET_GONK
-#include "nsINetworkManager.h"
+#include "nsINetworkInterface.h"
 #include "nsProxyRelease.h"
 #endif
 
@@ -178,7 +178,14 @@ private:
   {
     mPingOutstanding = 0;
     if (mPingTimer) {
-      mPingTimer->SetDelay(mPingInterval);
+      if (!mPingInterval) {
+        // The timer was created by forced ping and regular pinging is disabled,
+        // so cancel and null out mPingTimer.
+        mPingTimer->Cancel();
+        mPingTimer = nullptr;
+      } else {
+        mPingTimer->SetDelay(mPingInterval);
+      }
     }
   }
 
@@ -291,7 +298,7 @@ private:
   uint32_t                        mAppId;
   bool                            mIsInBrowser;
 #ifdef MOZ_WIDGET_GONK
-  nsMainThreadPtrHandle<nsINetworkInterface> mActiveNetwork;
+  nsMainThreadPtrHandle<nsINetworkInfo> mActiveNetworkInfo;
 #endif
   nsresult                        SaveNetworkStats(bool);
   void                            CountRecvBytes(uint64_t recvBytes)
@@ -314,6 +321,7 @@ protected:
     virtual ~WebSocketSSLChannel() {}
 };
 
-}} // namespace mozilla::net
+} // namespace net
+} // namespace mozilla
 
 #endif // mozilla_net_WebSocketChannel_h

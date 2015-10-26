@@ -8,6 +8,7 @@
 #define vm_Printer_h
 
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 
 class JSString;
@@ -132,7 +133,7 @@ class Fprinter final : public GenericPrinter
     // Initialize this printer, returns false on error.
     bool init(const char* path);
     void init(FILE* fp);
-    bool isInitialized() {
+    bool isInitialized() const {
         return file_ != nullptr;
     }
     void flush();

@@ -19,6 +19,7 @@
 #include "gfxUserFontSet.h"
 #include "gfxUtils.h"
 #include "gfxFT2FontBase.h"
+#include "gfxPrefs.h"
 
 #include "mozilla/gfx/2D.h"
 
@@ -64,6 +65,8 @@ bool gfxPlatformGtk::sUseFcFontList = false;
 
 gfxPlatformGtk::gfxPlatformGtk()
 {
+    gtk_init(nullptr, nullptr);
+
     sUseFcFontList = mozilla::Preferences::GetBool("gfx.font_rendering.fontconfig.fontlist.enabled");
     if (!sUseFcFontList && !sFontconfigUtils) {
         sFontconfigUtils = gfxFontconfigUtils::GetFontconfigUtils();
@@ -98,12 +101,11 @@ gfxPlatformGtk::FlushContentDrawing()
 }
 
 already_AddRefed<gfxASurface>
-gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
-                                       gfxContentType contentType)
+gfxPlatformGtk::CreateOffscreenSurface(const IntSize& aSize,
+                                       gfxImageFormat aFormat)
 {
-    nsRefPtr<gfxASurface> newSurface;
+    RefPtr<gfxASurface> newSurface;
     bool needsClear = true;
-    gfxImageFormat imageFormat = OptimalFormatForContent(contentType);
 #ifdef MOZ_X11
     // XXX we really need a different interface here, something that passes
     // in more context, including the display and/or target surface type that
@@ -116,16 +118,16 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
             Screen *screen = gdk_x11_screen_get_xscreen(gdkScreen);
             XRenderPictFormat* xrenderFormat =
                 gfxXlibSurface::FindRenderFormat(DisplayOfScreen(screen),
-                                                 imageFormat);
+                                                 aFormat);
 
             if (xrenderFormat) {
                 newSurface = gfxXlibSurface::Create(screen, xrenderFormat,
-                                                    size);
+                                                    aSize);
             }
         } else {
             // We're not going to use XRender, so we don't need to
             // search for a render format
-            newSurface = new gfxImageSurface(size, imageFormat);
+            newSurface = new gfxImageSurface(aSize, aFormat);
             // The gfxImageSurface ctor zeroes this for us, no need to
             // waste time clearing again
             needsClear = false;
@@ -137,7 +139,7 @@ gfxPlatformGtk::CreateOffscreenSurface(const IntSize& size,
         // We couldn't create a native surface for whatever reason;
         // e.g., no display, no RENDER, bad size, etc.
         // Fall back to image surface for the data.
-        newSurface = new gfxImageSurface(size, imageFormat);
+        newSurface = new gfxImageSurface(aSize, aFormat);
     }
 
     if (newSurface->CairoStatus()) {
@@ -239,11 +241,12 @@ gfxPlatformGtk::GetStandardFamilyName(const nsAString& aFontName, nsAString& aFa
 
 gfxFontGroup *
 gfxPlatformGtk::CreateFontGroup(const FontFamilyList& aFontFamilyList,
-                                const gfxFontStyle *aStyle,
-                                gfxUserFontSet *aUserFontSet)
+                                const gfxFontStyle* aStyle,
+                                gfxTextPerfMetrics* aTextPerf,
+                                gfxUserFontSet* aUserFontSet)
 {
     if (sUseFcFontList) {
-        return new gfxFontGroup(aFontFamilyList, aStyle, aUserFontSet);
+        return new gfxFontGroup(aFontFamilyList, aStyle, aTextPerf, aUserFontSet);
     }
 
     return new gfxPangoFontGroup(aFontFamilyList, aStyle, aUserFontSet);
@@ -253,34 +256,35 @@ gfxFontEntry*
 gfxPlatformGtk::LookupLocalFont(const nsAString& aFontName,
                                 uint16_t aWeight,
                                 int16_t aStretch,
-                                bool aItalic)
+                                uint8_t aStyle)
 {
     if (sUseFcFontList) {
         gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
-        return pfl->LookupLocalFont(aFontName, aWeight, aStretch, aItalic);
+        return pfl->LookupLocalFont(aFontName, aWeight, aStretch,
+                                    aStyle);
     }
 
     return gfxPangoFontGroup::NewFontEntry(aFontName, aWeight,
-                                           aStretch, aItalic);
+                                           aStretch, aStyle);
 }
 
 gfxFontEntry* 
 gfxPlatformGtk::MakePlatformFont(const nsAString& aFontName,
                                  uint16_t aWeight,
                                  int16_t aStretch,
-                                 bool aItalic,
+                                 uint8_t aStyle,
                                  const uint8_t* aFontData,
                                  uint32_t aLength)
 {
     if (sUseFcFontList) {
         gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
-        return pfl->MakePlatformFont(aFontName, aWeight, aStretch, aItalic,
-                                     aFontData, aLength);
+        return pfl->MakePlatformFont(aFontName, aWeight, aStretch,
+                                     aStyle, aFontData, aLength);
     }
 
     // passing ownership of the font data to the new font entry
     return gfxPangoFontGroup::NewFontEntry(aFontName, aWeight,
-                                           aStretch, aItalic,
+                                           aStretch, aStyle,
                                            aFontData, aLength);
 }
 
@@ -336,6 +340,18 @@ gfxPlatformGtk::GetDPIScale()
     return (dpi > 96) ? round(dpi/96.0) : 1.0;
 }
 
+bool
+gfxPlatformGtk::UseImageOffscreenSurfaces()
+{
+    // We want to turn on image offscreen surfaces ONLY for GTK3 builds since
+    // GTK2 theme rendering still requires xlib surfaces.
+#if (MOZ_WIDGET_GTK == 3)
+    return gfxPrefs::UseImageOffscreenSurfaces();
+#else
+    return false;
+#endif
+}
+
 gfxImageFormat
 gfxPlatformGtk::GetOffscreenFormat()
 {
@@ -346,24 +362,6 @@ gfxPlatformGtk::GetOffscreenFormat()
     }
 
     return gfxImageFormat::RGB24;
-}
-
-static int sDepth = 0;
-
-int
-gfxPlatformGtk::GetScreenDepth() const
-{
-    if (!sDepth) {
-        GdkScreen *screen = gdk_screen_get_default();
-        if (screen) {
-            sDepth = gdk_visual_get_depth(gdk_visual_get_system());
-        } else {
-            sDepth = 24;
-        }
-
-    }
-
-    return sDepth;
 }
 
 void

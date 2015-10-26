@@ -53,7 +53,7 @@ nsGeolocationSettings::GetGeolocationSettings()
     return nullptr;
   }
 
-  nsRefPtr<nsGeolocationSettings> result;
+  RefPtr<nsGeolocationSettings> result;
   if (nsGeolocationSettings::sSettings) {
     result = nsGeolocationSettings::sSettings;
     return result.forget();
@@ -245,10 +245,10 @@ nsGeolocationSettings::HandleGeolocationPerOriginSettingsChange(const JS::Value&
   AutoEntryScript aes(global, "geolocation.app_settings enumeration");
   aes.TakeOwnershipOfErrorReporting();
   JSContext *cx = aes.cx();
-  JS::AutoIdArray ids(cx, JS_Enumerate(cx, obj));
+  JS::Rooted<JS::IdVector> ids(cx, JS::IdVector(cx));
 
   // if we get no ids then the exception list is empty and we can return here.
-  if (!ids) {
+  if (!JS_Enumerate(cx, obj, &ids)) {
       return;
   }
 
@@ -322,7 +322,8 @@ nsGeolocationSettings::HandleGeolocationAlwaysPreciseChange(const JS::Value& aVa
   aes.TakeOwnershipOfErrorReporting();
   JSContext *cx = aes.cx();
 
-  if (!JS_IsArrayObject(cx, obj)) {
+  bool isArray;
+  if (!JS_IsArrayObject(cx, obj, &isArray) || !isArray) {
     return;
   }
 

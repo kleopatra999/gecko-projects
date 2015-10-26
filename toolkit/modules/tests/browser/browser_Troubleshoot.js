@@ -27,7 +27,7 @@ registerCleanupFunction(function () {
   delete window.Troubleshoot;
 });
 
-let tests = [
+var tests = [
 
   function snapshotSchema(done) {
     Troubleshoot.snapshot(function (snapshot) {
@@ -64,7 +64,7 @@ let tests = [
          "The pref should be absent because it's blacklisted.");
       ok(!("network.proxy.troubleshoot" in p),
          "The pref should be absent because it's blacklisted.");
-      prefs.forEach(function (p) Services.prefs.deleteBranch(p));
+      prefs.forEach(p => Services.prefs.deleteBranch(p));
       done();
     });
   },
@@ -219,7 +219,7 @@ const SNAPSHOT_SCHEMA = {
           type: "boolean",
         },
         supportsHardwareH264: {
-          type: "boolean",
+          type: "string",
         },
         numAcceleratedWindowsMessage: {
           type: "array",
@@ -490,7 +490,7 @@ function validateObject_array(array, schema) {
   if (typeof(schema.items) != "object")
     // Don't care what the array's elements are.
     return;
-  array.forEach(function (elt) validateObject(elt, schema.items));
+  array.forEach(elt => validateObject(elt, schema.items));
 }
 
 function validateObject_string(str, schema) {}

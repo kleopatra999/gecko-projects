@@ -128,6 +128,15 @@ public:
   } 
   nsDOMTokenList* RelList();
 
+  void SetReferrer(const nsAString& aValue, mozilla::ErrorResult& rv)
+  {
+    SetHTMLAttr(nsGkAtoms::referrer, aValue, rv);
+  }
+  void GetReferrer(nsAString& aReferrer)
+  {
+    GetHTMLAttr(nsGkAtoms::referrer, aReferrer);
+  }
+
   // The Link::GetOrigin is OK for us
 
   using Link::GetProtocol;
@@ -181,7 +190,7 @@ protected:
 
   virtual void GetItemValueText(DOMString& text) override;
   virtual void SetItemValueText(const nsAString& text) override;
-  nsRefPtr<nsDOMTokenList > mRelList;
+  RefPtr<nsDOMTokenList > mRelList;
 };
 
 } // namespace dom

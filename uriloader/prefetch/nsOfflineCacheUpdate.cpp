@@ -37,6 +37,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/Attributes.h"
 #include "nsContentUtils.h"
+#include "nsIPrincipal.h"
 
 #include "nsXULAppAPI.h"
 
@@ -78,7 +79,7 @@ private:
     char **mValues;
 };
 
-namespace { // anon
+namespace {
 
 nsresult
 DropReferenceFromURL(nsIURI * aURI)
@@ -107,7 +108,7 @@ LogToConsole(const char * message, nsOfflineCacheUpdateItem * item = nullptr)
     }
 }
 
-} // anon namespace
+} // namespace
 
 //-----------------------------------------------------------------------------
 // nsManifestCheck
@@ -120,10 +121,12 @@ class nsManifestCheck final : public nsIStreamListener
 public:
     nsManifestCheck(nsOfflineCacheUpdate *aUpdate,
                     nsIURI *aURI,
-                    nsIURI *aReferrerURI)
+                    nsIURI *aReferrerURI,
+                    nsIPrincipal* aLoadingPrincipal)
         : mUpdate(aUpdate)
         , mURI(aURI)
         , mReferrerURI(aReferrerURI)
+        , mLoadingPrincipal(aLoadingPrincipal)
         {}
 
     NS_DECL_ISUPPORTS
@@ -145,9 +148,10 @@ private:
                                   uint32_t aCount,
                                   uint32_t *aBytesConsumed);
 
-    nsRefPtr<nsOfflineCacheUpdate> mUpdate;
+    RefPtr<nsOfflineCacheUpdate> mUpdate;
     nsCOMPtr<nsIURI> mURI;
     nsCOMPtr<nsIURI> mReferrerURI;
+    nsCOMPtr<nsIPrincipal> mLoadingPrincipal;
     nsCOMPtr<nsICryptoHash> mManifestHash;
     nsCOMPtr<nsIChannel> mChannel;
 };
@@ -176,8 +180,8 @@ nsManifestCheck::Begin()
     NS_ENSURE_SUCCESS(rv, rv);
     rv = NS_NewChannel(getter_AddRefs(mChannel),
                        mURI,
-                       nsContentUtils::GetSystemPrincipal(),
-                       nsILoadInfo::SEC_NORMAL,
+                       mLoadingPrincipal,
+                       nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED,
                        nsIContentPolicy::TYPE_OTHER,
                        nullptr,   // loadGroup
                        nullptr,   // aCallbacks
@@ -195,10 +199,7 @@ nsManifestCheck::Begin()
                                       false);
     }
 
-    rv = mChannel->AsyncOpen(this, nullptr);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    return NS_OK;
+    return mChannel->AsyncOpen2(this);
 }
 
 //-----------------------------------------------------------------------------
@@ -320,11 +321,13 @@ NS_IMPL_ISUPPORTS(nsOfflineCacheUpdateItem,
 
 nsOfflineCacheUpdateItem::nsOfflineCacheUpdateItem(nsIURI *aURI,
                                                    nsIURI *aReferrerURI,
+                                                   nsIPrincipal* aLoadingPrincipal,
                                                    nsIApplicationCache *aApplicationCache,
                                                    nsIApplicationCache *aPreviousApplicationCache,
                                                    uint32_t type)
     : mURI(aURI)
     , mReferrerURI(aReferrerURI)
+    , mLoadingPrincipal(aLoadingPrincipal)
     , mApplicationCache(aApplicationCache)
     , mPreviousApplicationCache(aPreviousApplicationCache)
     , mItemType(type)
@@ -370,8 +373,8 @@ nsOfflineCacheUpdateItem::OpenChannel(nsOfflineCacheUpdate *aUpdate)
 
     rv = NS_NewChannel(getter_AddRefs(mChannel),
                        mURI,
-                       nsContentUtils::GetSystemPrincipal(),
-                       nsILoadInfo::SEC_NORMAL,
+                       mLoadingPrincipal,
+                       nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                        nsIContentPolicy::TYPE_OTHER,
                        nullptr,  // aLoadGroup
                        this,     // aCallbacks
@@ -403,7 +406,7 @@ nsOfflineCacheUpdateItem::OpenChannel(nsOfflineCacheUpdate *aUpdate)
                                       false);
     }
 
-    rv = mChannel->AsyncOpen(this, nullptr);
+    rv = mChannel->AsyncOpen2(this);
     NS_ENSURE_SUCCESS(rv, rv);
 
     mUpdate = aUpdate;
@@ -496,7 +499,6 @@ nsOfflineCacheUpdateItem::OnStopRequest(nsIRequest *aRequest,
     return NS_OK;
 }
 
-
 //-----------------------------------------------------------------------------
 // nsOfflineCacheUpdateItem::nsIRunnable
 //-----------------------------------------------------------------------------
@@ -511,7 +513,7 @@ nsOfflineCacheUpdateItem::Run()
     // and Run() of this item.  Finish() would then have been called twice.
     mState = LoadStatus::LOADED;
 
-    nsRefPtr<nsOfflineCacheUpdate> update;
+    RefPtr<nsOfflineCacheUpdate> update;
     update.swap(mUpdate);
     update->LoadCompleted(this);
 
@@ -677,9 +679,10 @@ nsOfflineCacheUpdateItem::GetStatus(uint16_t *aStatus)
 
 nsOfflineManifestItem::nsOfflineManifestItem(nsIURI *aURI,
                                              nsIURI *aReferrerURI,
+                                             nsIPrincipal* aLoadingPrincipal,
                                              nsIApplicationCache *aApplicationCache,
                                              nsIApplicationCache *aPreviousApplicationCache)
-    : nsOfflineCacheUpdateItem(aURI, aReferrerURI,
+    : nsOfflineCacheUpdateItem(aURI, aReferrerURI, aLoadingPrincipal,
                                aApplicationCache, aPreviousApplicationCache,
                                nsIApplicationCache::ITEM_MANIFEST)
     , mParserState(PARSE_INIT)
@@ -748,7 +751,7 @@ nsOfflineManifestItem::ReadManifest(nsIInputStream *aInputStream,
 
     for (iter = begin; iter != end; iter++) {
         if (*iter == '\r' || *iter == '\n') {
-            nsresult rv = manifest->HandleManifestLine(begin, iter);
+            rv = manifest->HandleManifestLine(begin, iter);
 
             if (NS_FAILED(rv)) {
                 LOG(("HandleManifestLine failed with 0x%08x", rv));
@@ -823,7 +826,7 @@ nsOfflineManifestItem::HandleManifestLine(const nsCString::const_iterator &aBegi
 
         if (!magic.EqualsLiteral("CACHE MANIFEST")) {
             mParserState = PARSE_ERROR;
-            LogToConsole("Offline cache manifest magic incorect", this);
+            LogToConsole("Offline cache manifest magic incorrect", this);
             return NS_OK;
         }
 
@@ -919,7 +922,6 @@ nsOfflineManifestItem::HandleManifestLine(const nsCString::const_iterator &aBegi
         rv = namespaceURI->GetAsciiSpec(namespaceSpec);
         if (NS_FAILED(rv))
             break;
-
 
         nsCOMPtr<nsIURI> fallbackURI;
         rv = NS_NewURI(getter_AddRefs(fallbackURI), fallbackSpec, nullptr, mURI);
@@ -1191,7 +1193,8 @@ nsOfflineCacheUpdate::GetCacheKey(nsIURI *aURI, nsACString &aKey)
 }
 
 nsresult
-nsOfflineCacheUpdate::InitInternal(nsIURI *aManifestURI)
+nsOfflineCacheUpdate::InitInternal(nsIURI *aManifestURI,
+                                   nsIPrincipal* aLoadingPrincipal)
 {
     nsresult rv;
 
@@ -1208,6 +1211,7 @@ nsOfflineCacheUpdate::InitInternal(nsIURI *aManifestURI)
     }
 
     mManifestURI = aManifestURI;
+    mLoadingPrincipal = aLoadingPrincipal;
 
     rv = mManifestURI->GetAsciiHost(mUpdateDomain);
     NS_ENSURE_SUCCESS(rv, rv);
@@ -1220,6 +1224,7 @@ nsOfflineCacheUpdate::InitInternal(nsIURI *aManifestURI)
 nsresult
 nsOfflineCacheUpdate::Init(nsIURI *aManifestURI,
                            nsIURI *aDocumentURI,
+                           nsIPrincipal* aLoadingPrincipal,
                            nsIDOMDocument *aDocument,
                            nsIFile *aCustomProfileDir,
                            uint32_t aAppID,
@@ -1235,7 +1240,7 @@ nsOfflineCacheUpdate::Init(nsIURI *aManifestURI,
 
     LOG(("nsOfflineCacheUpdate::Init [%p]", this));
 
-    rv = InitInternal(aManifestURI);
+    rv = InitInternal(aManifestURI, aLoadingPrincipal);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIApplicationCacheService> cacheService =
@@ -1295,6 +1300,7 @@ nsOfflineCacheUpdate::Init(nsIURI *aManifestURI,
 
 nsresult
 nsOfflineCacheUpdate::InitForUpdateCheck(nsIURI *aManifestURI,
+                                         nsIPrincipal* aLoadingPrincipal,
                                          uint32_t aAppID,
                                          bool aInBrowser,
                                          nsIObserver *aObserver)
@@ -1309,7 +1315,7 @@ nsOfflineCacheUpdate::InitForUpdateCheck(nsIURI *aManifestURI,
 
     LOG(("nsOfflineCacheUpdate::InitForUpdateCheck [%p]", this));
 
-    rv = InitInternal(aManifestURI);
+    rv = InitInternal(aManifestURI, aLoadingPrincipal);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIApplicationCacheService> cacheService =
@@ -1348,7 +1354,8 @@ nsOfflineCacheUpdate::InitForUpdateCheck(nsIURI *aManifestURI,
 nsresult
 nsOfflineCacheUpdate::InitPartial(nsIURI *aManifestURI,
                                   const nsACString& clientID,
-                                  nsIURI *aDocumentURI)
+                                  nsIURI *aDocumentURI,
+                                  nsIPrincipal *aLoadingPrincipal)
 {
     nsresult rv;
 
@@ -1362,6 +1369,7 @@ nsOfflineCacheUpdate::InitPartial(nsIURI *aManifestURI,
 
     mPartialUpdate = true;
     mDocumentURI = aDocumentURI;
+    mLoadingPrincipal = aLoadingPrincipal;
 
     mManifestURI = aManifestURI;
     rv = mManifestURI->GetAsciiHost(mUpdateDomain);
@@ -1695,11 +1703,11 @@ nsOfflineCacheUpdate::ManifestCheckCompleted(nsresult aStatus,
         // correct.
         FinishNoNotify();
 
-        nsRefPtr<nsOfflineCacheUpdate> newUpdate =
+        RefPtr<nsOfflineCacheUpdate> newUpdate =
             new nsOfflineCacheUpdate();
         // Leave aDocument argument null. Only glues and children keep
         // document instances.
-        newUpdate->Init(mManifestURI, mDocumentURI, nullptr,
+        newUpdate->Init(mManifestURI, mDocumentURI, mLoadingPrincipal, nullptr,
                         mCustomProfileDir, mAppID, mInBrowser);
 
         // In a rare case the manifest will not be modified on the next refetch
@@ -1730,7 +1738,7 @@ nsOfflineCacheUpdate::Begin()
     mItemsInProgress = 0;
 
     if (mState == STATE_CANCELLED) {
-      nsRefPtr<nsRunnableMethod<nsOfflineCacheUpdate> > errorNotification =
+      RefPtr<nsRunnableMethod<nsOfflineCacheUpdate> > errorNotification =
         NS_NewRunnableMethod(this,
                              &nsOfflineCacheUpdate::AsyncFinishWithError);
       nsresult rv = NS_DispatchToMainThread(errorNotification);
@@ -1751,6 +1759,7 @@ nsOfflineCacheUpdate::Begin()
 
     mManifestItem = new nsOfflineManifestItem(mManifestURI,
                                               mDocumentURI,
+                                              mLoadingPrincipal,
                                               mApplicationCache,
                                               mPreviousApplicationCache);
     if (!mManifestItem) {
@@ -1855,8 +1864,8 @@ nsOfflineCacheUpdate::ProcessNextURI()
             // update, to prevent capturing a cache while the server
             // is being updated.  The check will call
             // ManifestCheckCompleted() when it's done.
-            nsRefPtr<nsManifestCheck> manifestCheck =
-                new nsManifestCheck(this, mManifestURI, mDocumentURI);
+            RefPtr<nsManifestCheck> manifestCheck =
+                new nsManifestCheck(this, mManifestURI, mDocumentURI, mLoadingPrincipal);
             if (NS_FAILED(manifestCheck->Begin())) {
                 mSucceeded = false;
                 NotifyState(nsIOfflineCacheUpdateObserver::STATE_ERROR);
@@ -2033,7 +2042,7 @@ nsOfflineCacheUpdate::ScheduleImplicit()
 
     nsresult rv;
 
-    nsRefPtr<nsOfflineCacheUpdate> update = new nsOfflineCacheUpdate();
+    RefPtr<nsOfflineCacheUpdate> update = new nsOfflineCacheUpdate();
     NS_ENSURE_TRUE(update, NS_ERROR_OUT_OF_MEMORY);
 
     nsAutoCString clientID;
@@ -2049,7 +2058,7 @@ nsOfflineCacheUpdate::ScheduleImplicit()
         NS_ERROR("Offline cache update not having set mApplicationCache?");
     }
 
-    rv = update->InitPartial(mManifestURI, clientID, mDocumentURI);
+    rv = update->InitPartial(mManifestURI, clientID, mDocumentURI, mLoadingPrincipal);
     NS_ENSURE_SUCCESS(rv, rv);
 
     for (int32_t i = 0; i < mDocumentURIs.Count(); i++) {
@@ -2288,9 +2297,10 @@ nsOfflineCacheUpdate::AddURI(nsIURI *aURI, uint32_t aType)
         }
     }
 
-    nsRefPtr<nsOfflineCacheUpdateItem> item =
+    RefPtr<nsOfflineCacheUpdateItem> item =
         new nsOfflineCacheUpdateItem(aURI,
                                      mDocumentURI,
+                                     mLoadingPrincipal,
                                      mApplicationCache,
                                      mPreviousApplicationCache,
                                      aType);

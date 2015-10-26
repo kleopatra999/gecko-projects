@@ -53,13 +53,13 @@ private:
 
   virtual void ActorDestroy(ActorDestroyReason aWhy) override;
 
-  nsRefPtr<MessagePortService> mService;
+  RefPtr<MessagePortService> mService;
   const nsID mUUID;
   bool mEntangled;
   bool mCanSendData;
 };
 
-} // dom namespace
-} // mozilla namespace
+} // namespace dom
+} // namespace mozilla
 
 #endif // mozilla_dom_MessagePortParent_h

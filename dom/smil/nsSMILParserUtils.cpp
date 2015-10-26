@@ -416,7 +416,7 @@ ParseElementBaseTimeValueSpec(const nsAString& aSpec,
   bool requiresUnescaping;
   MoveToNextToken(tokenEnd, end, true, requiresUnescaping);
 
-  nsRefPtr<nsIAtom> atom =
+  RefPtr<nsIAtom> atom =
     ConvertTokenToAtom(Substring(start.get(), tokenEnd.get()),
                        requiresUnescaping);
   if (atom == nullptr) {
@@ -478,7 +478,7 @@ ParseElementBaseTimeValueSpec(const nsAString& aSpec,
   return true;
 }
 
-} // end anonymous namespace block
+} // namespace
 
 //------------------------------------------------------------------------------
 // Implementation

@@ -29,13 +29,13 @@ public:
 
   bool DisentanglePort(
                  MessagePortParent* aParent,
-                 FallibleTArray<nsRefPtr<SharedMessagePortMessage>>& aMessages);
+                 FallibleTArray<RefPtr<SharedMessagePortMessage>>& aMessages);
 
   bool ClosePort(MessagePortParent* aParent);
 
   bool PostMessages(
                  MessagePortParent* aParent,
-                 FallibleTArray<nsRefPtr<SharedMessagePortMessage>>& aMessages);
+                 FallibleTArray<RefPtr<SharedMessagePortMessage>>& aMessages);
 
   void ParentDestroy(MessagePortParent* aParent);
 
@@ -60,7 +60,7 @@ private:
   nsClassHashtable<nsIDHashKey, MessagePortServiceData> mPorts;
 };
 
-} // dom namespace
-} // mozilla namespace
+} // namespace dom
+} // namespace mozilla
 
 #endif // mozilla_dom_MessagePortService_h

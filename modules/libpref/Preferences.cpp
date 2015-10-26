@@ -23,6 +23,9 @@
 #include "nsIFile.h"
 #include "nsIInputStream.h"
 #include "nsIObserverService.h"
+#include "nsIOutputStream.h"
+#include "nsISafeOutputStream.h"
+#include "nsISimpleEnumerator.h"
 #include "nsIStringEnumerator.h"
 #include "nsIZipReader.h"
 #include "nsPrefBranch.h"
@@ -34,7 +37,7 @@
 #include "nsPrintfCString.h"
 
 #include "nsQuickSort.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 
 #include "prefapi.h"
 #include "prefread.h"
@@ -215,18 +218,6 @@ AssertNotAlreadyCached(const char* aPrefType,
 }
 #endif
 
-static size_t
-SizeOfObserverEntryExcludingThis(ValueObserverHashKey* aKey,
-                                 const nsRefPtr<ValueObserver>& aData,
-                                 mozilla::MallocSizeOf aMallocSizeOf,
-                                 void*)
-{
-  size_t n = 0;
-  n += aKey->mPrefName.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
-  n += aData->mClosures.SizeOfExcludingThis(aMallocSizeOf);
-  return n;
-}
-
 // Although this is a member of Preferences, it measures sPreferences and
 // several other global structures.
 /* static */ int64_t
@@ -238,18 +229,21 @@ Preferences::SizeOfIncludingThisAndOtherStuff(mozilla::MallocSizeOf aMallocSizeO
   if (gHashTable) {
     // pref keys are allocated in a private arena, which we count elsewhere.
     // pref stringvals are allocated out of the same private arena.
-    n += PL_DHashTableSizeOfExcludingThis(gHashTable, nullptr, aMallocSizeOf);
+    n += gHashTable->ShallowSizeOfIncludingThis(aMallocSizeOf);
   }
   if (gCacheData) {
-    n += gCacheData->SizeOfIncludingThis(aMallocSizeOf);
+    n += gCacheData->ShallowSizeOfIncludingThis(aMallocSizeOf);
     for (uint32_t i = 0, count = gCacheData->Length(); i < count; ++i) {
       n += aMallocSizeOf((*gCacheData)[i]);
     }
   }
   if (gObserverTable) {
     n += aMallocSizeOf(gObserverTable);
-    n += gObserverTable->SizeOfExcludingThis(SizeOfObserverEntryExcludingThis,
-                                             aMallocSizeOf);
+    n += gObserverTable->ShallowSizeOfIncludingThis(aMallocSizeOf);
+    for (auto iter = gObserverTable->Iter(); !iter.Done(); iter.Next()) {
+      n += iter.Key()->mPrefName.SizeOfExcludingThisIfUnshared(aMallocSizeOf);
+      n += iter.Data()->mClosures.ShallowSizeOfExcludingThis(aMallocSizeOf);
+    }
   }
   // We don't measure sRootBranch and sDefaultRootBranch here because
   // DMD indicates they are not significant.
@@ -392,7 +386,7 @@ class AddPreferencesMemoryReporterRunnable : public nsRunnable
     return RegisterStrongMemoryReporter(new PreferenceServiceReporter());
   }
 };
-} // anonymous namespace
+} // namespace
 
 // static
 Preferences*
@@ -427,7 +421,7 @@ Preferences::GetInstanceForService()
   // RegisterStrongMemoryReporter calls GetService(nsIMemoryReporter).  To
   // avoid a potential recursive GetService() call, we can't register the
   // memory reporter here; instead, do it off a runnable.
-  nsRefPtr<AddPreferencesMemoryReporterRunnable> runnable =
+  RefPtr<AddPreferencesMemoryReporterRunnable> runnable =
     new AddPreferencesMemoryReporterRunnable();
   NS_DispatchToMainThread(runnable);
 
@@ -751,7 +745,7 @@ Preferences::GetBranch(const char *aPrefRoot, nsIPrefBranch **_retval)
 
   if ((nullptr != aPrefRoot) && (*aPrefRoot != '\0')) {
     // TODO: - cache this stuff and allow consumers to share branches (hold weak references I think)
-    nsRefPtr<nsPrefBranch> prefBranch = new nsPrefBranch(aPrefRoot, false);
+    RefPtr<nsPrefBranch> prefBranch = new nsPrefBranch(aPrefRoot, false);
     prefBranch.forget(_retval);
     rv = NS_OK;
   } else {
@@ -773,7 +767,7 @@ Preferences::GetDefaultBranch(const char *aPrefRoot, nsIPrefBranch **_retval)
   }
 
   // TODO: - cache this stuff and allow consumers to share branches (hold weak references I think)
-  nsRefPtr<nsPrefBranch> prefBranch = new nsPrefBranch(aPrefRoot, true);
+  RefPtr<nsPrefBranch> prefBranch = new nsPrefBranch(aPrefRoot, true);
   if (!prefBranch)
     return NS_ERROR_OUT_OF_MEMORY;
 
@@ -1239,7 +1233,7 @@ static nsresult pref_InitInitialObjects()
   const char *entryName;
   uint16_t entryNameLen;
 
-  nsRefPtr<nsZipArchive> jarReader = mozilla::Omnijar::GetReader(mozilla::Omnijar::GRE);
+  RefPtr<nsZipArchive> jarReader = mozilla::Omnijar::GetReader(mozilla::Omnijar::GRE);
   if (jarReader) {
     // Load jar:$gre/omni.jar!/greprefs.js
     rv = pref_ReadPrefFromJar(jarReader, "greprefs.js");
@@ -1304,7 +1298,7 @@ static nsresult pref_InitInitialObjects()
 
   // Load jar:$app/omni.jar!/defaults/preferences/*.js
   // or jar:$gre/omni.jar!/defaults/preferences/*.js.
-  nsRefPtr<nsZipArchive> appJarReader = mozilla::Omnijar::GetReader(mozilla::Omnijar::APP);
+  RefPtr<nsZipArchive> appJarReader = mozilla::Omnijar::GetReader(mozilla::Omnijar::APP);
   // GetReader(mozilla::Omnijar::APP) returns null when $app == $gre, in which
   // case we look for app-specific default preferences in $gre.
   if (!appJarReader)
@@ -1520,7 +1514,7 @@ Preferences::SetCString(const char* aPref, const nsACString &aValue)
 
 // static
 nsresult
-Preferences::SetString(const char* aPref, const char16_t* aValue)
+Preferences::SetString(const char* aPref, const char16ptr_t aValue)
 {
   ENSURE_MAIN_PROCESS("Cannot SetString from content process:", aPref);
   NS_ENSURE_TRUE(InitStaticMembers(), NS_ERROR_NOT_AVAILABLE);
@@ -1677,7 +1671,7 @@ Preferences::RegisterCallback(PrefChangedFunc aCallback,
   NS_ENSURE_TRUE(InitStaticMembers(), NS_ERROR_NOT_AVAILABLE);
 
   ValueObserverHashKey hashKey(aPref, aCallback);
-  nsRefPtr<ValueObserver> observer;
+  RefPtr<ValueObserver> observer;
   gObserverTable->Get(&hashKey, getter_AddRefs(observer));
   if (observer) {
     observer->AppendClosure(aClosure);
@@ -1717,7 +1711,7 @@ Preferences::UnregisterCallback(PrefChangedFunc aCallback,
   NS_ENSURE_TRUE(sPreferences, NS_ERROR_NOT_AVAILABLE);
 
   ValueObserverHashKey hashKey(aPref, aCallback);
-  nsRefPtr<ValueObserver> observer;
+  RefPtr<ValueObserver> observer;
   gObserverTable->Get(&hashKey, getter_AddRefs(observer));
   if (!observer) {
     return NS_OK;

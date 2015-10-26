@@ -23,22 +23,13 @@
 namespace mozilla {
 namespace dom {
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(URL)
-
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(URL)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mParent)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mSearchParams)
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(URL)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParent)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mSearchParams)
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(URL, mParent, mSearchParams)
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(URL)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(URL)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(URL)
+  NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
@@ -87,7 +78,7 @@ URL::Constructor(nsISupports* aParent, const nsAString& aUrl,
   nsresult rv = NS_NewURI(getter_AddRefs(baseUri), aBase, nullptr, nullptr,
                           nsContentUtils::GetIOService());
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    aRv.ThrowTypeError(MSG_INVALID_URL, &aBase);
+    aRv.ThrowTypeError<MSG_INVALID_URL>(&aBase);
     return nullptr;
   }
 
@@ -103,11 +94,11 @@ URL::Constructor(nsISupports* aParent, const nsAString& aUrl, nsIURI* aBase,
   nsresult rv = NS_NewURI(getter_AddRefs(uri), aUrl, nullptr, aBase,
                           nsContentUtils::GetIOService());
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    aRv.ThrowTypeError(MSG_INVALID_URL, &aUrl);
+    aRv.ThrowTypeError<MSG_INVALID_URL>(&aUrl);
     return nullptr;
   }
 
-  nsRefPtr<URL> url = new URL(aParent, uri.forget());
+  RefPtr<URL> url = new URL(aParent, uri.forget());
   return url.forget();
 }
 
@@ -239,7 +230,7 @@ URL::SetHref(const nsAString& aHref, ErrorResult& aRv)
   rv = ioService->NewURI(href, nullptr, nullptr, getter_AddRefs(uri));
   if (NS_FAILED(rv)) {
     nsAutoString label(aHref);
-    aRv.ThrowTypeError(MSG_INVALID_URL, &label);
+    aRv.ThrowTypeError<MSG_INVALID_URL>(&label);
     return;
   }
 
@@ -432,8 +423,15 @@ URL::GetPathname(nsAString& aPathname, ErrorResult& aRv) const
 
   nsCOMPtr<nsIURL> url(do_QueryInterface(mURI));
   if (!url) {
-    // Do not throw!  Not having a valid URI or URL should result in an empty
-    // string.
+    nsAutoCString path;
+    nsresult rv = mURI->GetPath(path);
+    if (NS_FAILED(rv)){
+      // Do not throw!  Not having a valid URI or URL should result in an empty
+      // string.
+      return;
+    }
+
+    CopyUTF8toUTF16(path, aPathname);
     return;
   }
 
@@ -540,5 +538,5 @@ URL::CreateSearchParamsIfNeeded()
   }
 }
 
-}
-}
+} // namespace dom
+} // namespace mozilla

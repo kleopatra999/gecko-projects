@@ -4,10 +4,10 @@
 
 "use strict";
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cu = Components.utils;
-const Cr = Components.results;
+var Ci = Components.interfaces;
+var Cc = Components.classes;
+var Cu = Components.utils;
+var Cr = Components.results;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
@@ -17,7 +17,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "MatchPattern",
 XPCOMUtils.defineLazyModuleGetter(this, "WebRequestCommon",
                                   "resource://gre/modules/WebRequestCommon.jsm");
 
-let ContentPolicy = {
+var ContentPolicy = {
   _classDescription: "WebRequest content policy",
   _classID: Components.ID("938e5d24-9ccc-4b55-883e-c252a41f7ce9"),
   _contractID: "@mozilla.org/webrequest/policy;1",

@@ -44,15 +44,12 @@ UNIFIED_SOURCES += [
     'nsDNSService2.cpp',
     'nsIDNService.cpp',
     'punycode.c',
-    'race.c',
 ]
 
 IPDL_SOURCES = [
     'PDNSRequest.ipdl',
     'PDNSRequestParams.ipdlh',
 ]
-
-FAIL_ON_WARNINGS = True
 
 include('/ipc/chromium/chromium-config.mozbuild')
 

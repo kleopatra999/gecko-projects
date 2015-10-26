@@ -44,7 +44,7 @@ struct SurfaceBufferInfo
     return GetAlignedStride<16>(sizeof(SurfaceBufferInfo));
   }
 };
-} // anonymous namespace
+} // namespace
 
 static SurfaceBufferInfo*
 GetBufferInfo(uint8_t* aData, size_t aDataSize)
@@ -151,9 +151,13 @@ already_AddRefed<DrawTarget>
 ImageDataSerializerBase::GetAsDrawTarget(gfx::BackendType aBackend)
 {
   MOZ_ASSERT(IsValid());
-  return gfx::Factory::CreateDrawTargetForData(aBackend,
+  RefPtr<DrawTarget> dt = gfx::Factory::CreateDrawTargetForData(aBackend,
                                                GetData(), GetSize(),
                                                GetStride(), GetFormat());
+  if (!dt) {
+    gfxCriticalNote << "Failed GetAsDrawTarget " << IsValid() << ", " << hexa(size_t(mData)) << " + " << SurfaceBufferInfo::GetOffset() << ", " << GetSize() << ", " << GetStride() << ", " << (int)GetFormat();
+  }
+  return dt.forget();
 }
 
 already_AddRefed<gfx::DataSourceSurface>

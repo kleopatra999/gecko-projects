@@ -187,7 +187,7 @@ void TestTextureClientSurface(TextureClient* texture, gfxImageSurface* surface) 
   if (host->Lock()) {
     RefPtr<mozilla::gfx::DataSourceSurface> hostDataSurface = host->GetAsSurface();
 
-    nsRefPtr<gfxImageSurface> hostSurface =
+    RefPtr<gfxImageSurface> hostSurface =
       new gfxImageSurface(hostDataSurface->GetData(),
                           hostDataSurface->GetSize(),
                           hostDataSurface->Stride(),
@@ -257,8 +257,8 @@ void TestTextureClientYCbCr(TextureClient* client, PlanarYCbCrData& ycbcrData) {
   }
 }
 
-} // namespace
-} // namespace
+} // namespace layers
+} // namespace mozilla
 
 TEST(Layers, TextureSerialization) {
   // the test is run on all the following image formats

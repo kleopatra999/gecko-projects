@@ -5,7 +5,6 @@
 
 #include "mozilla/layers/ContentClient.h"
 #include "BasicLayers.h"                // for BasicLayerManager
-#include "gfxColor.h"                   // for gfxRGBA
 #include "gfxContext.h"                 // for gfxContext, etc
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "gfxPrefs.h"                   // for gfxPrefs
@@ -35,7 +34,6 @@
 #ifdef MOZ_WIDGET_GTK
 #include "gfxPlatformGtk.h"
 #endif
-#include "gfx2DGlue.h"
 #include "ReadbackLayer.h"
 
 #include <vector>
@@ -99,18 +97,6 @@ ContentClient::CreateContentClient(CompositableForwarder* aForwarder)
 void
 ContentClient::EndPaint(nsTArray<ReadbackProcessor::Update>* aReadbackUpdates)
 {
-  // It is very important that this is called after any overridden EndPaint behaviour,
-  // because destroying textures is a three stage process:
-  // 1. We are done with the buffer and move it to ContentClient::mOldTextures,
-  // that happens in DestroyBuffers which is may be called indirectly from
-  // PaintThebes.
-  // 2. The content client calls RemoveTextureClient on the texture clients in
-  // mOldTextures and forgets them. They then become invalid. The compositable
-  // client keeps a record of IDs. This happens in EndPaint.
-  // 3. An IPC message is sent to destroy the corresponding texture host. That
-  // happens from OnTransaction.
-  // It is important that these steps happen in order.
-  OnTransaction();
 }
 
 void
@@ -142,12 +128,10 @@ ContentClientBasic::CreateBuffer(ContentType aType,
                                  RefPtr<gfx::DrawTarget>* aWhiteDT)
 {
   MOZ_ASSERT(!(aFlags & BUFFER_COMPONENT_ALPHA));
-  gfxImageFormat format =
-    gfxPlatform::GetPlatform()->OptimalFormatForContent(aType);
 
   *aBlackDT = gfxPlatform::GetPlatform()->CreateOffscreenContentDrawTarget(
     IntSize(aRect.width, aRect.height),
-    ImageFormatToSurfaceFormat(format));
+    gfxPlatform::GetPlatform()->Optimal2DFormatForContent(aType));
 }
 
 void
@@ -200,7 +184,7 @@ public:
         continue;
       }
 
-      nsRefPtr<gfxContext> ctx =
+      RefPtr<gfxContext> ctx =
         sink->BeginUpdate(update.mUpdateRect + offset, update.mSequenceCounter);
 
       if (!ctx) {
@@ -308,7 +292,7 @@ ContentClientRemoteBuffer::CreateBackBuffer(const IntRect& aBufferRect)
 {
   // gfx::BackendType::NONE means fallback to the content backend
   mTextureClient = CreateTextureClientForDrawing(
-    mSurfaceFormat, mSize, gfx::BackendType::NONE,
+    mSurfaceFormat, mSize, BackendSelector::Content,
     mTextureFlags | ExtraTextureFlags(),
     TextureAllocationFlags::ALLOC_CLEAR_BUFFER
   );
@@ -396,7 +380,12 @@ ContentClientRemoteBuffer::Updated(const nsIntRegion& aRegionToDraw,
     mForwarder->UseComponentAlphaTextures(this, mTextureClient,
                                           mTextureClientOnWhite);
   } else {
-    mForwarder->UseTexture(this, mTextureClient);
+    nsAutoTArray<CompositableForwarder::TimedTextureClient,1> textures;
+    CompositableForwarder::TimedTextureClient* t = textures.AppendElement();
+    t->mTextureClient = mTextureClient;
+    IntSize size = mTextureClient->GetSize();
+    t->mPictureRect = nsIntRect(0, 0, size.width, size.height);
+    GetForwarder()->UseTextures(this, textures);
   }
   mForwarder->UpdateTextureRegion(this,
                                   ThebesBufferData(BufferRect(),
@@ -413,21 +402,25 @@ ContentClientRemoteBuffer::SwapBuffers(const nsIntRegion& aFrontUpdatedRegion)
 void
 ContentClientRemoteBuffer::Dump(std::stringstream& aStream,
                                 const char* aPrefix,
-                                bool aDumpHtml)
+                                bool aDumpHtml, TextureDumpMode aCompress)
 {
   // TODO We should combine the OnWhite/OnBlack here an just output a single image.
-  aStream << "\n" << aPrefix << "Surface: ";
-  CompositableClient::DumpTextureClient(aStream, mTextureClient);
+  if (!aDumpHtml) {
+    aStream << "\n" << aPrefix << "Surface: ";
+  }
+  CompositableClient::DumpTextureClient(aStream, mTextureClient, aCompress);
 }
 
 void
 ContentClientDoubleBuffered::Dump(std::stringstream& aStream,
-                                const char* aPrefix,
-                                bool aDumpHtml)
+                                  const char* aPrefix,
+                                  bool aDumpHtml, TextureDumpMode aCompress)
 {
   // TODO We should combine the OnWhite/OnBlack here an just output a single image.
-  aStream << "\n" << aPrefix << "Surface: ";
-  CompositableClient::DumpTextureClient(aStream, mFrontClient);
+  if (!aDumpHtml) {
+    aStream << "\n" << aPrefix << "Surface: ";
+  }
+  CompositableClient::DumpTextureClient(aStream, mFrontClient, aCompress);
 }
 
 void
@@ -454,20 +447,24 @@ ContentClientDoubleBuffered::Updated(const nsIntRegion& aRegionToDraw,
 #if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
   if (mFrontClient) {
     // remove old buffer from CompositableHost
-    RefPtr<AsyncTransactionTracker> tracker = new RemoveTextureFromCompositableTracker();
+    RefPtr<AsyncTransactionWaiter> waiter = new AsyncTransactionWaiter();
+    RefPtr<AsyncTransactionTracker> tracker =
+        new RemoveTextureFromCompositableTracker(waiter);
     // Hold TextureClient until transaction complete.
     tracker->SetTextureClient(mFrontClient);
-    mFrontClient->SetRemoveFromCompositableTracker(tracker);
+    mFrontClient->SetRemoveFromCompositableWaiter(waiter);
     // RemoveTextureFromCompositableAsync() expects CompositorChild's presence.
     GetForwarder()->RemoveTextureFromCompositableAsync(tracker, this, mFrontClient);
   }
 
   if (mFrontClientOnWhite) {
     // remove old buffer from CompositableHost
-    RefPtr<AsyncTransactionTracker> tracker = new RemoveTextureFromCompositableTracker();
+    RefPtr<AsyncTransactionWaiter> waiter = new AsyncTransactionWaiter();
+    RefPtr<AsyncTransactionTracker> tracker =
+        new RemoveTextureFromCompositableTracker(waiter);
     // Hold TextureClient until transaction complete.
     tracker->SetTextureClient(mFrontClientOnWhite);
-    mFrontClientOnWhite->SetRemoveFromCompositableTracker(tracker);
+    mFrontClientOnWhite->SetRemoveFromCompositableWaiter(waiter);
     // RemoveTextureFromCompositableAsync() expects CompositorChild's presence.
     GetForwarder()->RemoveTextureFromCompositableAsync(tracker, this, mFrontClientOnWhite);
   }

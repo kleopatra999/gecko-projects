@@ -75,10 +75,10 @@ int nr_sockaddr_to_transport_addr(struct sockaddr *saddr, int protocol, int keep
 
 // addresses, ports in local byte order
 int nr_ip4_port_to_transport_addr(UINT4 ip4, UINT2 port, int protocol, nr_transport_addr *addr);
-int nr_str_port_to_transport_addr(const char *ip4, UINT2 port, int protocol, nr_transport_addr *addr);
+int nr_str_port_to_transport_addr(const char *str, UINT2 port, int protocol, nr_transport_addr *addr);
 int nr_ip6_port_to_transport_addr(struct in6_addr* addr6, UINT2 port, int protocol, nr_transport_addr *addr);
 
-int nr_transport_addr_get_addrstring(nr_transport_addr *addr, char *str, int maxlen);
+int nr_transport_addr_get_addrstring(const nr_transport_addr *addr, char *str, int maxlen);
 int nr_transport_addr_get_port(nr_transport_addr *addr, int *port);
 int nr_transport_addr_cmp(nr_transport_addr *addr1,nr_transport_addr *addr2,int mode);
 #define NR_TRANSPORT_ADDR_CMP_MODE_VERSION   1

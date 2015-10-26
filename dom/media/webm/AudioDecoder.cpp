@@ -47,18 +47,18 @@ ogg_packet InitOggPacket(const unsigned char* aData, size_t aLength,
 class VorbisDecoder : public WebMAudioDecoder
 {
 public:
-  nsresult Init();
-  void Shutdown();
-  nsresult ResetDecode();
-  nsresult DecodeHeader(const unsigned char* aData, size_t aLength);
-  nsresult FinishInit(AudioInfo& aInfo);
+  nsresult Init() override;
+  void Shutdown() override;
+  nsresult ResetDecode() override;
+  nsresult DecodeHeader(const unsigned char* aData, size_t aLength) override;
+  nsresult FinishInit(AudioInfo& aInfo) override;
   bool Decode(const unsigned char* aData, size_t aLength,
               int64_t aOffset, uint64_t aTstampUsecs,
-              int64_t aDiscardPadding, int32_t* aTotalFrames);
+              int64_t aDiscardPadding, int32_t* aTotalFrames) override;
   explicit VorbisDecoder(WebMReader* aReader);
   ~VorbisDecoder();
 private:
-  nsRefPtr<WebMReader> mReader;
+  RefPtr<WebMReader> mReader;
 
   // Vorbis decoder state
   vorbis_info mVorbisInfo;
@@ -229,18 +229,18 @@ VorbisDecoder::Decode(const unsigned char* aData, size_t aLength,
 class OpusDecoder : public WebMAudioDecoder
 {
 public:
-  nsresult Init();
-  void Shutdown();
-  nsresult ResetDecode();
-  nsresult DecodeHeader(const unsigned char* aData, size_t aLength);
-  nsresult FinishInit(AudioInfo& aInfo);
+  nsresult Init() override;
+  void Shutdown() override;
+  nsresult ResetDecode() override;
+  nsresult DecodeHeader(const unsigned char* aData, size_t aLength) override;
+  nsresult FinishInit(AudioInfo& aInfo) override;
   bool Decode(const unsigned char* aData, size_t aLength,
               int64_t aOffset, uint64_t aTstampUsecs,
-              int64_t aDiscardPadding, int32_t* aTotalFrames);
+              int64_t aDiscardPadding, int32_t* aTotalFrames) override;
   explicit OpusDecoder(WebMReader* aReader);
   ~OpusDecoder();
 private:
-  nsRefPtr<WebMReader> mReader;
+  RefPtr<WebMReader> mReader;
 
   // Opus decoder state
   nsAutoPtr<OpusParser> mOpusParser;

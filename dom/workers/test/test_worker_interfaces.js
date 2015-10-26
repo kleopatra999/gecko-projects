@@ -50,6 +50,7 @@ var ecmaGlobals =
     "Proxy",
     "RangeError",
     "ReferenceError",
+    "Reflect",
     "RegExp",
     "Set",
     {name: "SharedArrayBuffer", nightly: true},
@@ -89,9 +90,9 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "BroadcastChannel",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "Cache", release: false},
+    "Cache",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "CacheStorage", release: false},
+    "CacheStorage",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "DedicatedWorkerGlobalScope",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -123,6 +124,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "IDBCursor",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "IDBCursorWithValue",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "IDBDatabase",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "IDBFactory",
@@ -141,6 +144,8 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "IDBVersionChangeEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    "ImageBitmap",
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "ImageData",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MessageChannel",
@@ -150,6 +155,8 @@ var interfaceNamesInGlobalScope =
     "MessagePort",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Notification",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "OffscreenCanvas", disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Performance",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -161,11 +168,15 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Promise",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "PushManager", b2g: false, android: false, release: false},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "PushSubscription", b2g: false, android: false, release: false},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "Request",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Response",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    { name: "ServiceWorkerRegistration", release: false, b2g: false },
+    { name: "ServiceWorkerRegistration", b2g: false, release: false },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "TextDecoder",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -180,6 +191,26 @@ var interfaceNamesInGlobalScope =
     "URL",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "URLSearchParams",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLActiveInfo", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLBuffer", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLFramebuffer", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLProgram", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLRenderbuffer", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLRenderingContext", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLShader", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLShaderPrecisionFormat", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLTexture", disabled: true },
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    { name: "WebGLUniformLocation", disabled: true },
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "WebSocket",
 // IMPORTANT: Do not change this list without review from a DOM peer!

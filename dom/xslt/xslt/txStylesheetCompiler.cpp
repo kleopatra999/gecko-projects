@@ -528,6 +528,7 @@ txStylesheetCompilerState::txStylesheetCompilerState(txACompileObserver* aObserv
       mSorter(nullptr),
       mDOE(false),
       mSearchingForFallback(false),
+      mDisAllowed(0),
       mObserver(aObserver),
       mEmbedStatus(eNoEmbed),
       mDoneWithThisStylesheet(false),
@@ -771,7 +772,7 @@ txStylesheetCompilerState::loadIncludedStylesheet(const nsAString& aURI)
     
     txACompileObserver* observer = static_cast<txStylesheetCompiler*>(this);
 
-    nsRefPtr<txStylesheetCompiler> compiler =
+    RefPtr<txStylesheetCompiler> compiler =
         new txStylesheetCompiler(aURI, mStylesheet, &mToplevelIterator,
                                  mReferrerPolicy, observer);
     NS_ENSURE_TRUE(compiler, NS_ERROR_OUT_OF_MEMORY);
@@ -808,7 +809,7 @@ txStylesheetCompilerState::loadImportedStylesheet(const nsAString& aURI,
 
     txACompileObserver* observer = static_cast<txStylesheetCompiler*>(this);
 
-    nsRefPtr<txStylesheetCompiler> compiler =
+    RefPtr<txStylesheetCompiler> compiler =
         new txStylesheetCompiler(aURI, mStylesheet, &iter, mReferrerPolicy,
                                  observer);
     NS_ENSURE_TRUE(compiler, NS_ERROR_OUT_OF_MEMORY);
@@ -923,6 +924,9 @@ TX_ConstructXSLTFunction(nsIAtom* aName, int32_t aNamespaceID,
             new DocumentFunctionCall(aState->mElementContext->mBaseURI);
     }
     else if (aName == nsGkAtoms::key) {
+        if (!aState->allowed(txIParseContext::KEY_FUNCTION)) {
+            return NS_ERROR_XSLT_CALL_TO_KEY_NOT_ALLOWED;
+        }
         *aFunction =
             new txKeyFunctionCall(aState->mElementContext->mMappings);
     }
@@ -1079,7 +1083,7 @@ findFunction(nsIAtom* aName, int32_t aNamespaceID,
 extern bool
 TX_XSLTFunctionAvailable(nsIAtom* aName, int32_t aNameSpaceID)
 {
-    nsRefPtr<txStylesheetCompiler> compiler =
+    RefPtr<txStylesheetCompiler> compiler =
         new txStylesheetCompiler(EmptyString(),
                                  mozilla::net::RP_Default, nullptr);
     NS_ENSURE_TRUE(compiler, false);

@@ -13,7 +13,6 @@
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
 
-#include "gfxPrefs.h"
 #include "gfxTypes.h"
 #include "gfxFontFamilyList.h"
 #include "gfxBlur.h"
@@ -38,11 +37,12 @@ class nsIURI;
 class nsIAtom;
 class nsIObserver;
 class SRGBOverrideObserver;
+class gfxTextPerfMetrics;
 
 namespace mozilla {
 namespace gl {
 class SkiaGLGlue;
-}
+} // namespace gl
 namespace gfx {
 class DrawTarget;
 class SourceSurface;
@@ -50,61 +50,25 @@ class DataSourceSurface;
 class ScaledFont;
 class DrawEventRecorder;
 class VsyncSource;
+class DeviceInitData;
 
 inline uint32_t
 BackendTypeBit(BackendType b)
 {
   return 1 << uint8_t(b);
 }
-}
-}
+
+} // namespace gfx
+} // namespace mozilla
 
 #define MOZ_PERFORMANCE_WARNING(module, ...) \
   do { \
-    if (gfxPrefs::PerfWarnings()) { \
+    if (gfxPlatform::PerfWarnings()) { \
       printf_stderr("[" module "] " __VA_ARGS__); \
     } \
   } while (0)
 
 extern cairo_user_data_key_t kDrawTarget;
-
-// pref lang id's for font prefs
-// !!! needs to match the list of pref font.default.xx entries listed in all.js !!!
-// !!! don't use as bit mask, this may grow larger !!!
-
-enum eFontPrefLang {
-    eFontPrefLang_Western     =  0,
-    eFontPrefLang_Japanese    =  1,
-    eFontPrefLang_ChineseTW   =  2,
-    eFontPrefLang_ChineseCN   =  3,
-    eFontPrefLang_ChineseHK   =  4,
-    eFontPrefLang_Korean      =  5,
-    eFontPrefLang_Cyrillic    =  6,
-    eFontPrefLang_Greek       =  7,
-    eFontPrefLang_Thai        =  8,
-    eFontPrefLang_Hebrew      =  9,
-    eFontPrefLang_Arabic      = 10,
-    eFontPrefLang_Devanagari  = 11,
-    eFontPrefLang_Tamil       = 12,
-    eFontPrefLang_Armenian    = 13,
-    eFontPrefLang_Bengali     = 14,
-    eFontPrefLang_Canadian    = 15,
-    eFontPrefLang_Ethiopic    = 16,
-    eFontPrefLang_Georgian    = 17,
-    eFontPrefLang_Gujarati    = 18,
-    eFontPrefLang_Gurmukhi    = 19,
-    eFontPrefLang_Khmer       = 20,
-    eFontPrefLang_Malayalam   = 21,
-    eFontPrefLang_Oriya       = 22,
-    eFontPrefLang_Telugu      = 23,
-    eFontPrefLang_Kannada     = 24,
-    eFontPrefLang_Sinhala     = 25,
-    eFontPrefLang_Tibetan     = 26,
-
-    eFontPrefLang_Others      = 27, // x-unicode
-
-    eFontPrefLang_CJKSet      = 28  // special code for CJK set
-};
 
 enum eCMSMode {
     eCMSMode_Off          = 0,     // No color management
@@ -188,6 +152,12 @@ public:
      */
     static gfxPlatform *GetPlatform();
 
+    /**
+     * Returns whether or not graphics has been initialized yet. This is
+     * intended for Telemetry where we don't necessarily want to initialize
+     * graphics just to observe its state.
+     */
+    static bool Initialized();
 
     /**
      * Shut down Thebes.
@@ -203,8 +173,8 @@ public:
      * and image format.
      */
     virtual already_AddRefed<gfxASurface>
-      CreateOffscreenSurface(const IntSize& size,
-                             gfxContentType contentType) = 0;
+      CreateOffscreenSurface(const IntSize& aSize,
+                             gfxImageFormat aFormat) = 0;
 
     /**
      * Beware that these methods may return DrawTargets which are not fully supported
@@ -289,11 +259,11 @@ public:
 
     /// These should be used instead of directly accessing the preference,
     /// as different platforms may override the behaviour.
-    virtual bool UseProgressivePaint() { return gfxPrefs::ProgressivePaintDoNotUseDirectly(); }
+    virtual bool UseProgressivePaint();
 
     static bool AsyncPanZoomEnabled();
 
-    void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
+    virtual void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
       aObj.DefineProperty("AzureCanvasBackend", GetBackendName(mPreferredCanvasBackend));
       aObj.DefineProperty("AzureSkiaAccelerated", UseAcceleratedSkiaCanvas());
       aObj.DefineProperty("AzureFallbackCanvasBackend", GetBackendName(mFallbackCanvasBackend));
@@ -301,7 +271,16 @@ public:
     }
     void GetApzSupportInfo(mozilla::widget::InfoObject& aObj);
 
-    mozilla::gfx::BackendType GetContentBackend() {
+    // Get the default content backend that will be used with the default
+    // compositor. If the compositor is known when calling this function,
+    // GetContentBackendFor() should be called instead.
+    mozilla::gfx::BackendType GetDefaultContentBackend() {
+      return mContentBackend;
+    }
+
+    // Return the best content backend available that is compatible with the
+    // given layers backend.
+    virtual mozilla::gfx::BackendType GetContentBackendFor(mozilla::layers::LayersBackend aLayers) {
       return mContentBackend;
     }
 
@@ -329,12 +308,6 @@ public:
     int GetTileWidth();
     int GetTileHeight();
     void SetTileSize(int aWidth, int aHeight);
-    /**
-     * Calling this function will compute and set the ideal tile size for the
-     * platform. This should only be called in the parent process; child processes
-     * should be updated via SetTileSize to match the value computed in the parent.
-     */
-    void ComputeTileSize();
 
     /**
      * Rebuilds the any cached system font lists
@@ -360,11 +333,11 @@ public:
     /**
      * Create the appropriate platform font group
      */
-    virtual gfxFontGroup
-    *CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
-                     const gfxFontStyle *aStyle,
-                     gfxUserFontSet *aUserFontSet) = 0;
-                                          
+    virtual gfxFontGroup*
+    CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
+                    const gfxFontStyle *aStyle,
+                    gfxTextPerfMetrics* aTextPerf,
+                    gfxUserFontSet *aUserFontSet) = 0;
                                           
     /**
      * Look up a local platform font using the full font face name.
@@ -375,7 +348,7 @@ public:
     virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
                                           uint16_t aWeight,
                                           int16_t aStretch,
-                                          bool aItalic)
+                                          uint8_t aStyle)
     { return nullptr; }
 
     /**
@@ -389,7 +362,7 @@ public:
     virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
                                            uint16_t aWeight,
                                            int16_t aStretch,
-                                           bool aItalic,
+                                           uint8_t aStyle,
                                            const uint8_t* aFontData,
                                            uint32_t aLength);
 
@@ -454,41 +427,6 @@ public:
 
     virtual bool DidRenderingDeviceReset(DeviceResetReason* aResetReason = nullptr) { return false; }
 
-    // in some situations, need to make decisions about ambiguous characters, may need to look at multiple pref langs
-    void GetLangPrefs(eFontPrefLang aPrefLangs[], uint32_t &aLen, eFontPrefLang aCharLang, eFontPrefLang aPageLang);
-    
-    /**
-     * Iterate over pref fonts given a list of lang groups.  For a single lang
-     * group, multiple pref fonts are possible.  If error occurs, returns false,
-     * true otherwise.  Callback returns false to abort process.
-     */
-    typedef bool (*PrefFontCallback) (eFontPrefLang aLang, const nsAString& aName,
-                                        void *aClosure);
-    static bool ForEachPrefFont(eFontPrefLang aLangArray[], uint32_t aLangArrayLen,
-                                  PrefFontCallback aCallback,
-                                  void *aClosure);
-
-    // convert a lang group to enum constant (i.e. "zh-TW" ==> eFontPrefLang_ChineseTW)
-    static eFontPrefLang GetFontPrefLangFor(const char* aLang);
-
-    // convert a lang group atom to enum constant
-    static eFontPrefLang GetFontPrefLangFor(nsIAtom *aLang);
-
-    // convert an enum constant to a lang group atom
-    static nsIAtom* GetLangGroupForPrefLang(eFontPrefLang aLang);
-
-    // convert a enum constant to lang group string (i.e. eFontPrefLang_ChineseTW ==> "zh-TW")
-    static const char* GetPrefLangName(eFontPrefLang aLang);
-   
-    // map a Unicode range (based on char code) to a font language for Preferences
-    static eFontPrefLang GetFontPrefLangFor(uint8_t aUnicodeRange);
-
-    // returns true if a pref lang is CJK
-    static bool IsLangCJK(eFontPrefLang aLang);
-    
-    // helper method to add a pref lang to an array, if not already in array
-    static void AppendPrefLang(eFontPrefLang aPrefLangs[], uint32_t& aLen, eFontPrefLang aAddLang);
-
     // returns a list of commonly used fonts for a given character
     // these are *possible* matches, no cmap-checking is done at this level
     virtual void GetCommonFallbackFonts(uint32_t /*aCh*/, uint32_t /*aNextCh*/,
@@ -507,6 +445,13 @@ public:
     static bool CanUseDirect3D11();
     virtual bool CanUseHardwareVideoDecoding();
     static bool CanUseDirect3D11ANGLE();
+
+    // Returns whether or not layers acceleration should be used. This should
+    // only be called on the parent process.
+    bool ShouldUseLayersAcceleration();
+
+    // Returns a prioritized list of all available compositor backends.
+    void GetCompositorBackends(bool useAcceleration, nsTArray<mozilla::layers::LayersBackend>& aBackends);
 
     /**
      * Is it possible to use buffer rotation.  Note that these
@@ -588,7 +533,8 @@ public:
      */
     static PRLogModuleInfo* GetLog(eGfxLog aWhichLog);
 
-    virtual int GetScreenDepth() const;
+    int GetScreenDepth() const { return mScreenDepth; }
+    mozilla::gfx::IntSize GetScreenSize() const { return mScreenSize; }
 
     /**
      * Return the layer debugging options to use browser-wide.
@@ -628,6 +574,21 @@ public:
     static bool IsInLayoutAsapMode();
 
     /**
+     * Returns the software vsync rate to use.
+     */
+    static int GetSoftwareVsyncRate();
+
+    /**
+     * Returns whether or not a custom vsync rate is set.
+     */
+    static bool ForceSoftwareVsync();
+
+    /**
+     * Returns the default frame rate for the refresh driver / software vsync.
+     */
+    static int GetDefaultFrameRate();
+
+    /**
      * Used to test which input types are handled via APZ.
      */
     virtual bool SupportsApzWheelInput() const {
@@ -636,6 +597,7 @@ public:
     virtual bool SupportsApzTouchInput() const {
       return false;
     }
+    bool SupportsApzDragInput() const;
 
     virtual void FlushContentDrawing() {}
 
@@ -648,17 +610,44 @@ public:
                                  const mozilla::gfx::IntSize& aSize,
                                  mozilla::gfx::SurfaceFormat aFormat);
 
+    /**
+     * Wrapper around gfxPrefs::PerfWarnings().
+     * Extracted into a function to avoid including gfxPrefs.h from this file.
+     */
+    static bool PerfWarnings();
+
+    void NotifyCompositorCreated(mozilla::layers::LayersBackend aBackend);
+    mozilla::layers::LayersBackend GetCompositorBackend() const {
+      return mCompositorBackend;
+    }
+
+    // Trigger a test-driven graphics device reset.
+    virtual void TestDeviceReset(DeviceResetReason aReason)
+    {}
+
+    // Return information on how child processes should initialize graphics
+    // devices. Currently this is only used on Windows.
+    virtual void GetDeviceInitData(mozilla::gfx::DeviceInitData* aOut);
+
 protected:
     gfxPlatform();
     virtual ~gfxPlatform();
-
-    void AppendCJKPrefLangs(eFontPrefLang aPrefLangs[], uint32_t &aLen,
-                            eFontPrefLang aCharLang, eFontPrefLang aPageLang);
 
     /**
      * Initialized hardware vsync based on each platform.
      */
     virtual already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource();
+
+    // Returns whether or not layers should be accelerated by default on this platform.
+    virtual bool AccelerateLayersByDefault();
+
+    // Returns a prioritized list of available compositor backends for acceleration.
+    virtual void GetAcceleratedCompositorBackends(nsTArray<mozilla::layers::LayersBackend>& aBackends);
+
+    // Returns whether or not the basic compositor is supported.
+    virtual bool SupportsBasicCompositor() const {
+      return true;
+    }
 
     /**
      * Initialise the preferred and fallback canvas backends
@@ -668,6 +657,17 @@ protected:
      */
     void InitBackendPrefs(uint32_t aCanvasBitmask, mozilla::gfx::BackendType aCanvasDefault,
                           uint32_t aContentBitmask, mozilla::gfx::BackendType aContentDefault);
+
+    /**
+     * If in a child process, triggers a refresh of device preferences.
+     */
+    void UpdateDeviceInitData();
+
+    /**
+     * Called when new device preferences are available.
+     */
+    virtual void SetDeviceInitData(mozilla::gfx::DeviceInitData& aData)
+    {}
 
     /**
      * returns the first backend named in the pref gfx.canvas.azure.backends
@@ -716,9 +716,9 @@ protected:
     uint32_t mTotalSystemMemory;
 
     // Hardware vsync source. Only valid on parent process
-    nsRefPtr<mozilla::gfx::VsyncSource> mVsyncSource;
+    RefPtr<mozilla::gfx::VsyncSource> mVsyncSource;
 
-    mozilla::RefPtr<mozilla::gfx::DrawTarget> mScreenReferenceDrawTarget;
+    RefPtr<mozilla::gfx::DrawTarget> mScreenReferenceDrawTarget;
 
 private:
     /**
@@ -734,8 +734,19 @@ private:
 
     virtual void GetPlatformCMSOutputProfile(void *&mem, size_t &size);
 
-    nsRefPtr<gfxASurface> mScreenReferenceSurface;
-    nsTArray<uint32_t> mCJKPrefLangs;
+    /**
+     * Calling this function will compute and set the ideal tile size for the
+     * platform. This will only have an effect in the parent process; child processes
+     * should be updated via SetTileSize to match the value computed in the parent.
+     */
+    void ComputeTileSize();
+
+    /**
+     * This uses nsIScreenManager to determine the screen size and color depth
+     */
+    void PopulateScreenInfo();
+
+    RefPtr<gfxASurface> mScreenReferenceSurface;
     nsCOMPtr<nsIObserver> mSRGBOverrideObserver;
     nsCOMPtr<nsIObserver> mFontPrefsObserver;
     nsCOMPtr<nsIObserver> mMemoryPressureObserver;
@@ -755,8 +766,15 @@ private:
     mozilla::widget::GfxInfoCollector<gfxPlatform> mAzureCanvasBackendCollector;
     mozilla::widget::GfxInfoCollector<gfxPlatform> mApzSupportCollector;
 
-    mozilla::RefPtr<mozilla::gfx::DrawEventRecorder> mRecorder;
-    mozilla::RefPtr<mozilla::gl::SkiaGLGlue> mSkiaGlue;
+    RefPtr<mozilla::gfx::DrawEventRecorder> mRecorder;
+    RefPtr<mozilla::gl::SkiaGLGlue> mSkiaGlue;
+
+    // Backend that we are compositing with. NONE, if no compositor has been
+    // created yet.
+    mozilla::layers::LayersBackend mCompositorBackend;
+
+    int32_t mScreenDepth;
+    mozilla::gfx::IntSize mScreenSize;
 };
 
 #endif /* GFX_PLATFORM_H */

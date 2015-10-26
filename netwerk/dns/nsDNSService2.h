@@ -16,8 +16,6 @@
 #include "nsString.h"
 #include "nsTHashtable.h"
 #include "nsHashKeys.h"
-#include "nsIObserverService.h"
-#include "nsProxyRelease.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Attributes.h"
 
@@ -45,7 +43,7 @@ private:
 
     uint16_t GetAFForLookup(const nsACString &host, uint32_t flags);
 
-    nsRefPtr<nsHostResolver>  mResolver;
+    RefPtr<nsHostResolver>  mResolver;
     nsCOMPtr<nsIIDNService>   mIDN;
 
     // mLock protects access to mResolver and mIPv4OnlyDomains
@@ -61,7 +59,6 @@ private:
     bool                                      mOffline;
     bool                                      mNotifyResolution;
     bool                                      mOfflineLocalhost;
-    nsMainThreadPtrHandle<nsIObserverService> mObserverService;
     nsTHashtable<nsCStringHashKey>            mLocalDomains;
 };
 

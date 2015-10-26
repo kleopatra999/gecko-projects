@@ -11,6 +11,7 @@ template<class T> class nsCOMArray;
 class nsCString;
 %}
 [ptr] native StringArray(nsTArray<nsCString>);
+[ref] native StringArrayRef(const nsTArray<nsCString>);
 [ref] native securityMessagesArray(nsCOMArray<nsISecurityConsoleMessage>);
 
 interface nsIAsyncInputStream;
@@ -25,7 +26,7 @@ interface nsIURI;
  * The callback interface for nsIHttpChannelInternal::HTTPUpgrade()
  */
 
-[scriptable, uuid(7b48d081-1dc1-4d08-b7a5-81491bf28c0e)]
+[scriptable, uuid(5b515449-ab64-4dba-b3cd-da8fc2f83064)]
 interface nsIHttpUpgradeListener : nsISupports
 {
     void onTransportAvailable(in nsISocketTransport   aTransport,
@@ -38,8 +39,7 @@ interface nsIHttpUpgradeListener : nsISupports
  * using any feature exposed by this interface, be aware that this interface
  * will change and you will be broken.  You have been warned.
  */
-[scriptable, uuid(c025c35a-dda3-4a1d-9e6c-e02d7149ac79)]
-
+[scriptable, uuid(9eabaac6-cc7c-4ca1-9430-65f2daaa578f)]
 interface nsIHttpChannelInternal : nsISupports
 {
     /**
@@ -202,6 +202,13 @@ interface nsIHttpChannelInternal : nsISupports
     attribute boolean responseTimeoutEnabled;
 
     /**
+     * If the underlying transport supports RWIN manipulation, this is the
+     * intiial window value for the channel. HTTP/2 implements this.
+     * 0 means no override from system default. Set before opening channel.
+     */
+    attribute unsigned long initialRwin;
+
+    /**
      * Get value of the URI passed to nsIHttpChannel.redirectTo() if any.
      * May return null when redirectTo() has not been called.
      */
@@ -213,19 +220,16 @@ interface nsIHttpChannelInternal : nsISupports
      */
     attribute boolean allowAltSvc;
 
-    /**
-     * Add a new nsIPrincipal to the redirect chain. This is the only way to
-     * write to nsIRedirectHistory.redirects.
-     */
-    void addRedirect(in nsIPrincipal aPrincipal);
-
     readonly attribute PRTime lastModifiedTime;
 
     /**
      * Force a channel that has not been AsyncOpen'ed to skip any check for possible
-     * interception and proceed immediately to the network/cache.
+     * interception and proceed immediately to open a previously-synthesized cache
+     * entry using the provided ID.
      */
-    void forceNoIntercept();
+    void forceIntercepted(in uint64_t aInterceptionID);
+
+    readonly attribute boolean responseSynthesized;
 
     /**
      * Set by nsCORSListenerProxy if credentials should be included in
@@ -237,11 +241,20 @@ interface nsIHttpChannelInternal : nsISupports
     const unsigned long CORS_MODE_SAME_ORIGIN = 0;
     const unsigned long CORS_MODE_NO_CORS = 1;
     const unsigned long CORS_MODE_CORS = 2;
-    const unsigned long CORS_MODE_CORS_WITH_FORCED_PREFLIGHT = 3;
     /**
      * Set by nsCORSListenerProxy to indicate CORS load type. Defaults to CORS_MODE_NO_CORS.
      */
     attribute unsigned long corsMode;
+
+    const unsigned long REDIRECT_MODE_FOLLOW = 0;
+    const unsigned long REDIRECT_MODE_ERROR = 1;
+    const unsigned long REDIRECT_MODE_MANUAL = 2;
+    /**
+     * Set to indicate Request.redirect mode exposed during ServiceWorker
+     * interception. No policy enforcement is performed by the channel for this
+     * value.
+     */
+    attribute unsigned long redirectMode;
 
     /**
      * The URI of the top-level window that's associated with this channel.
@@ -258,4 +271,13 @@ interface nsIHttpChannelInternal : nsISupports
      * proxies for this channel.
      */
     readonly attribute nsIURI proxyURI;
+
+    /**
+     * Make cross-origin CORS loads happen with a CORS preflight, and specify
+     * the CORS preflight parameters.
+     */
+    [noscript]
+    void setCorsPreflightParameters(in StringArrayRef unsafeHeaders,
+                                    in boolean withCredentials,
+                                    in nsIPrincipal preflightPrincipal);
 };

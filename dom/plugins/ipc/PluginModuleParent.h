@@ -41,7 +41,7 @@ class ProfileGatherer;
 namespace dom {
 class PCrashReporterParent;
 class CrashReporterParent;
-}
+} // namespace dom
 
 namespace plugins {
 //-----------------------------------------------------------------------------
@@ -97,10 +97,10 @@ protected:
     DeallocPPluginInstanceParent(PPluginInstanceParent* aActor) override;
 
 public:
-    explicit PluginModuleParent(bool aIsChrome);
+    explicit PluginModuleParent(bool aIsChrome, bool aAllowAsyncInit);
     virtual ~PluginModuleParent();
 
-    bool RemovePendingSurrogate(const nsRefPtr<PluginAsyncSurrogate>& aSurrogate);
+    bool RemovePendingSurrogate(const RefPtr<PluginAsyncSurrogate>& aSurrogate);
 
     /** @return the state of the pref that controls async plugin init */
     bool IsStartingAsync() const { return mIsStartingAsync; }
@@ -136,6 +136,8 @@ public:
     virtual void SetHasLocalInstance() override {
         mHadLocalInstance = true;
     }
+
+    int GetQuirks() { return mQuirks; }
 
 protected:
     virtual mozilla::ipc::RacyInterruptPolicy
@@ -199,6 +201,12 @@ protected:
     virtual bool RecvNotifyContentModuleDestroyed() override { return true; }
 
     virtual bool RecvProfile(const nsCString& aProfile) override { return true; }
+
+    virtual bool RecvReturnClearSiteData(const NPError& aRv,
+                                         const uint64_t& aCallbackId) override;
+
+    virtual bool RecvReturnSitesWithData(nsTArray<nsCString>&& aSites,
+                                         const uint64_t& aCallbackId) override;
 
     void SetPluginFuncs(NPPluginFuncs* aFuncs);
 
@@ -264,9 +272,19 @@ protected:
                              uint16_t mode, int16_t argc, char* argn[],
                              char* argv[], NPSavedData* saved,
                              NPError* error) override;
-    virtual nsresult NPP_ClearSiteData(const char* site, uint64_t flags,
-                                       uint64_t maxAge) override;
-    virtual nsresult NPP_GetSitesWithData(InfallibleTArray<nsCString>& result) override;
+    virtual nsresult NPP_ClearSiteData(const char* site, uint64_t flags, uint64_t maxAge,
+                                       nsCOMPtr<nsIClearSiteDataCallback> callback) override;
+    virtual nsresult NPP_GetSitesWithData(nsCOMPtr<nsIGetSitesWithDataCallback> callback) override;
+
+private:
+    std::map<uint64_t, nsCOMPtr<nsIClearSiteDataCallback>> mClearSiteDataCallbacks;
+    std::map<uint64_t, nsCOMPtr<nsIGetSitesWithDataCallback>> mSitesWithDataCallbacks;
+
+    nsCString mPluginFilename;
+    int mQuirks;
+    void InitQuirksModes(const nsCString& aMimeType);
+
+public:
 
 #if defined(XP_MACOSX)
     virtual nsresult IsRemoteDrawingCoreAnimation(NPP instance, bool *aDrawing) override;
@@ -297,7 +315,7 @@ protected:
     nsString mPluginDumpID;
     nsString mBrowserDumpID;
     nsString mHangID;
-    nsRefPtr<nsIObserver> mProfilerObserver;
+    RefPtr<nsIObserver> mProfilerObserver;
     TimeDuration mTimeBlocked;
     nsCString mPluginName;
     nsCString mPluginVersion;
@@ -318,7 +336,7 @@ protected:
     bool              mIsStartingAsync;
     bool              mNPInitialized;
     bool              mIsNPShutdownPending;
-    nsTArray<nsRefPtr<PluginAsyncSurrogate>> mSurrogateInstances;
+    nsTArray<RefPtr<PluginAsyncSurrogate>> mSurrogateInstances;
     nsresult          mAsyncNewRv;
     uint32_t          mRunID;
 };
@@ -326,9 +344,9 @@ protected:
 class PluginModuleContentParent : public PluginModuleParent
 {
   public:
-    explicit PluginModuleContentParent();
+    explicit PluginModuleContentParent(bool aAllowAsyncInit);
 
-    static PluginLibrary* LoadModule(uint32_t aPluginId);
+    static PluginLibrary* LoadModule(uint32_t aPluginId, nsPluginTag* aPluginTag);
 
     static PluginModuleContentParent* Initialize(mozilla::ipc::Transport* aTransport,
                                                  base::ProcessId aOtherProcess);
@@ -386,12 +404,17 @@ class PluginModuleChromeParent
      *
      * @param aMsgLoop the main message pump associated with the module
      *   protocol.
+     * @param aMonitorDescription a string describing the hang monitor that
+     *   is making this call. This string is added to the crash reporter
+     *   annotations for the plugin process.
      * @param aBrowserDumpId (optional) previously taken browser dump id. If
      *   provided TerminateChildProcess will use this browser dump file in
      *   generating a multi-process crash report. If not provided a browser
      *   dump will be taken at the time of this call.
      */
-    void TerminateChildProcess(MessageLoop* aMsgLoop, const nsAString& aBrowserDumpId);
+    void TerminateChildProcess(MessageLoop* aMsgLoop,
+                               const nsCString& aMonitorDescription,
+                               const nsAString& aBrowserDumpId);
 
 #ifdef XP_WIN
     /**
@@ -474,7 +497,8 @@ private:
 
     // aFilePath is UTF8, not native!
     explicit PluginModuleChromeParent(const char* aFilePath, uint32_t aPluginId,
-                                      int32_t aSandboxLevel);
+                                      int32_t aSandboxLevel,
+                                      bool aAllowAsyncInit);
 
     CrashReporterParent* CrashReporter();
 
@@ -589,7 +613,7 @@ private:
     dom::ContentParent* mContentParent;
     nsCOMPtr<nsIObserver> mOfflineObserver;
 #ifdef MOZ_ENABLE_PROFILER_SPS
-    nsRefPtr<mozilla::ProfileGatherer> mGatherer;
+    RefPtr<mozilla::ProfileGatherer> mGatherer;
 #endif
     nsCString mProfile;
     bool mIsBlocklisted;

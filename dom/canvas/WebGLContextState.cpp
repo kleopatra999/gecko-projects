@@ -4,19 +4,21 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "WebGLContext.h"
-#include "WebGLContextUtils.h"
-#include "WebGLBuffer.h"
-#include "WebGLShader.h"
-#include "WebGLProgram.h"
-#include "WebGLFramebuffer.h"
-#include "WebGLRenderbuffer.h"
-#include "WebGLTexture.h"
-#include "WebGLVertexArray.h"
+
 #include "GLContext.h"
 #include "mozilla/dom/ToJSValue.h"
+#include "mozilla/Preferences.h"
+#include "nsString.h"
+#include "WebGLBuffer.h"
+#include "WebGLContextUtils.h"
+#include "WebGLFramebuffer.h"
+#include "WebGLProgram.h"
+#include "WebGLRenderbuffer.h"
+#include "WebGLShader.h"
+#include "WebGLTexture.h"
+#include "WebGLVertexArray.h"
 
-using namespace mozilla;
-using namespace dom;
+namespace mozilla {
 
 void
 WebGLContext::Disable(GLenum cap)
@@ -56,6 +58,18 @@ WebGLContext::Enable(GLenum cap)
 
     MakeContextCurrent();
     gl->fEnable(cap);
+}
+
+static JS::Value
+StringValue(JSContext* cx, const nsAString& str, ErrorResult& rv)
+{
+    JSString* jsStr = JS_NewUCStringCopyN(cx, str.BeginReading(), str.Length());
+    if (!jsStr) {
+        rv.Throw(NS_ERROR_OUT_OF_MEMORY);
+        return JS::NullValue();
+    }
+
+    return JS::StringValue(jsStr);
 }
 
 bool
@@ -177,19 +191,47 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         }
     }
 
-    // Privileged string params exposed by WEBGL_debug_renderer_info:
+    // Privileged string params exposed by WEBGL_debug_renderer_info.
+    // The privilege check is done in WebGLContext::IsExtensionSupported.
+    // So here we just have to check that the extension is enabled.
     if (IsExtensionEnabled(WebGLExtensionID::WEBGL_debug_renderer_info)) {
         switch (pname) {
         case UNMASKED_VENDOR_WEBGL:
         case UNMASKED_RENDERER_WEBGL:
-            GLenum glstringname = LOCAL_GL_NONE;
-            if (pname == UNMASKED_VENDOR_WEBGL) {
-                glstringname = LOCAL_GL_VENDOR;
-            } else if (pname == UNMASKED_RENDERER_WEBGL) {
-                glstringname = LOCAL_GL_RENDERER;
+            {
+                const char* overridePref = nullptr;
+                GLenum driverEnum = LOCAL_GL_NONE;
+
+                switch (pname) {
+                case UNMASKED_RENDERER_WEBGL:
+                    overridePref = "webgl.renderer-string-override";
+                    driverEnum = LOCAL_GL_RENDERER;
+                    break;
+                case UNMASKED_VENDOR_WEBGL:
+                    overridePref = "webgl.vendor-string-override";
+                    driverEnum = LOCAL_GL_VENDOR;
+                    break;
+                default:
+                    MOZ_CRASH("bad `pname`");
+                }
+
+                bool hasRetVal = false;
+
+                nsAutoString ret;
+                if (overridePref) {
+                    nsresult res = Preferences::GetString(overridePref, &ret);
+                    if (NS_SUCCEEDED(res) && ret.Length() > 0)
+                        hasRetVal = true;
+                }
+
+                if (!hasRetVal) {
+                    const char* chars = reinterpret_cast<const char*>(gl->fGetString(driverEnum));
+                    ret = NS_ConvertASCIItoUTF16(chars);
+                    hasRetVal = true;
+                }
+
+                return StringValue(cx, ret, rv);
             }
-            const GLchar* string = (const GLchar*) gl->fGetString(glstringname);
-            return StringValue(cx, string, rv);
         }
     }
 
@@ -318,10 +360,16 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         case LOCAL_GL_MAX_TEXTURE_IMAGE_UNITS:
         case LOCAL_GL_RED_BITS:
         case LOCAL_GL_GREEN_BITS:
-        case LOCAL_GL_BLUE_BITS:
-        case LOCAL_GL_DEPTH_BITS: {
+        case LOCAL_GL_BLUE_BITS: {
             GLint i = 0;
             gl->fGetIntegerv(pname, &i);
+            return JS::Int32Value(i);
+        }
+        case LOCAL_GL_DEPTH_BITS: {
+            GLint i = 0;
+            if (!mNeedsFakeNoDepth) {
+                gl->fGetIntegerv(pname, &i);
+            }
             return JS::Int32Value(i);
         }
         case LOCAL_GL_ALPHA_BITS: {
@@ -349,11 +397,10 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         case LOCAL_GL_MAX_VARYING_VECTORS:
             return JS::Int32Value(mGLMaxVaryingVectors);
 
-        case LOCAL_GL_NUM_COMPRESSED_TEXTURE_FORMATS:
-            return JS::Int32Value(0);
         case LOCAL_GL_COMPRESSED_TEXTURE_FORMATS: {
             uint32_t length = mCompressedTextureFormats.Length();
-            JSObject* obj = Uint32Array::Create(cx, this, length, mCompressedTextureFormats.Elements());
+            JSObject* obj = dom::Uint32Array::Create(cx, this, length,
+                                                     mCompressedTextureFormats.Elements());
             if (!obj) {
                 rv = NS_ERROR_OUT_OF_MEMORY;
             }
@@ -419,7 +466,7 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         case LOCAL_GL_ALIASED_LINE_WIDTH_RANGE: {
             GLfloat fv[2] = { 0 };
             gl->fGetFloatv(pname, fv);
-            JSObject* obj = Float32Array::Create(cx, this, 2, fv);
+            JSObject* obj = dom::Float32Array::Create(cx, this, 2, fv);
             if (!obj) {
                 rv = NS_ERROR_OUT_OF_MEMORY;
             }
@@ -431,7 +478,7 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         case LOCAL_GL_BLEND_COLOR: {
             GLfloat fv[4] = { 0 };
             gl->fGetFloatv(pname, fv);
-            JSObject* obj = Float32Array::Create(cx, this, 4, fv);
+            JSObject* obj = dom::Float32Array::Create(cx, this, 4, fv);
             if (!obj) {
                 rv = NS_ERROR_OUT_OF_MEMORY;
             }
@@ -442,7 +489,7 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         case LOCAL_GL_MAX_VIEWPORT_DIMS: {
             GLint iv[2] = { 0 };
             gl->fGetIntegerv(pname, iv);
-            JSObject* obj = Int32Array::Create(cx, this, 2, iv);
+            JSObject* obj = dom::Int32Array::Create(cx, this, 2, iv);
             if (!obj) {
                 rv = NS_ERROR_OUT_OF_MEMORY;
             }
@@ -454,7 +501,7 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         case LOCAL_GL_VIEWPORT: {
             GLint iv[4] = { 0 };
             gl->fGetIntegerv(pname, iv);
-            JSObject* obj = Int32Array::Create(cx, this, 4, iv);
+            JSObject* obj = dom::Int32Array::Create(cx, this, 4, iv);
             if (!obj) {
                 rv = NS_ERROR_OUT_OF_MEMORY;
             }
@@ -468,7 +515,7 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
             bool vals[4] = { bool(gl_bv[0]), bool(gl_bv[1]),
                              bool(gl_bv[2]), bool(gl_bv[3]) };
             JS::Rooted<JS::Value> arr(cx);
-            if (!ToJSValue(cx, vals, &arr)) {
+            if (!dom::ToJSValue(cx, vals, &arr)) {
                 rv = NS_ERROR_OUT_OF_MEMORY;
             }
             return arr;
@@ -581,6 +628,8 @@ realGLboolean*
 WebGLContext::GetStateTrackingSlot(GLenum cap)
 {
     switch (cap) {
+        case LOCAL_GL_DEPTH_TEST:
+            return &mDepthTestEnabled;
         case LOCAL_GL_DITHER:
             return &mDitherEnabled;
         case LOCAL_GL_RASTERIZER_DISCARD:
@@ -593,3 +642,5 @@ WebGLContext::GetStateTrackingSlot(GLenum cap)
 
     return nullptr;
 }
+
+} // namespace mozilla

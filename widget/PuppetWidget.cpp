@@ -138,8 +138,8 @@ PuppetWidget::InitIMEState()
   MOZ_ASSERT(mTabChild);
   if (mNeedIMEStateInit) {
     mContentCache.Clear();
-    mTabChild->SendNotifyIMEFocus(false, mContentCache,
-                                  &mIMEPreferenceOfParent);
+    mTabChild->SendUpdateContentCache(mContentCache);
+    mIMEPreferenceOfParent = nsIMEUpdatePreference();
     mNeedIMEStateInit = false;
   }
 }
@@ -217,7 +217,14 @@ PuppetWidget::Resize(double aWidth,
     InvalidateRegion(this, dirty);
   }
 
+  // call WindowResized() on both the current listener, and possibly
+  // also the previous one if we're in a state where we're drawing that one
+  // because the current one is paint suppressed
   if (!oldBounds.IsEqualEdges(mBounds) && mAttachedWidgetListener) {
+    if (GetCurrentWidgetListener() &&
+        GetCurrentWidgetListener() != mAttachedWidgetListener) {
+      GetCurrentWidgetListener()->WindowResized(this, mBounds.width, mBounds.height);
+    }
     mAttachedWidgetListener->WindowResized(this, mBounds.width, mBounds.height);
   }
 
@@ -250,8 +257,10 @@ PuppetWidget::ConfigureChildren(const nsTArray<Configuration>& aConfigurations)
 NS_IMETHODIMP
 PuppetWidget::SetFocus(bool aRaise)
 {
-  // XXX/cjones: someone who knows about event handling needs to
-  // decide how this should work.
+  if (aRaise && mTabChild) {
+    mTabChild->SendRequestFocus(true);
+  }
+
   return NS_OK;
 }
 
@@ -313,8 +322,8 @@ PuppetWidget::DispatchEvent(WidgetGUIEvent* event, nsEventStatus& aStatus)
 
   aStatus = nsEventStatus_eIgnore;
 
-  if (mAttachedWidgetListener) {
-    aStatus = mAttachedWidgetListener->HandleEvent(event, mUseAttachedEvents);
+  if (GetCurrentWidgetListener()) {
+    aStatus = GetCurrentWidgetListener()->HandleEvent(event, mUseAttachedEvents);
   }
 
   return NS_OK;
@@ -513,25 +522,28 @@ PuppetWidget::ExecuteNativeKeyBinding(NativeKeyBindingsType aType,
 #else // #ifdef MOZ_WIDGET_GONK
   MOZ_ASSERT(mNativeKeyCommandsValid);
 
-  nsTArray<mozilla::CommandInt>& commands = mSingleLineCommands;
+  const nsTArray<mozilla::CommandInt>* commands = nullptr;
   switch (aType) {
     case nsIWidget::NativeKeyBindingsForSingleLineEditor:
-      commands = mSingleLineCommands;
+      commands = &mSingleLineCommands;
       break;
     case nsIWidget::NativeKeyBindingsForMultiLineEditor:
-      commands = mMultiLineCommands;
+      commands = &mMultiLineCommands;
       break;
     case nsIWidget::NativeKeyBindingsForRichTextEditor:
-      commands = mRichTextCommands;
+      commands = &mRichTextCommands;
+      break;
+    default:
+      MOZ_CRASH("Invalid type");
       break;
   }
 
-  if (commands.IsEmpty()) {
+  if (commands->IsEmpty()) {
     return false;
   }
 
-  for (uint32_t i = 0; i < commands.Length(); i++) {
-    aCallback(static_cast<mozilla::Command>(commands[i]), aCallbackData);
+  for (uint32_t i = 0; i < commands->Length(); i++) {
+    aCallback(static_cast<mozilla::Command>((*commands)[i]), aCallbackData);
   }
   return true;
 #endif
@@ -565,8 +577,7 @@ PuppetWidget::IMEEndComposition(bool aCancel)
 
   nsEventStatus status;
   bool noCompositionEvent = true;
-  WidgetCompositionEvent compositionCommitEvent(true, NS_COMPOSITION_COMMIT,
-                                                this);
+  WidgetCompositionEvent compositionCommitEvent(true, eCompositionCommit, this);
   InitEvent(compositionCommitEvent, nullptr);
   // SendEndIMEComposition is always called since ResetInputState
   // should always be called even if we aren't composing something.
@@ -600,7 +611,7 @@ PuppetWidget::NotifyIMEInternal(const IMENotification& aIMENotification)
     case NOTIFY_IME_OF_TEXT_CHANGE:
       return NotifyIMEOfTextChange(aIMENotification);
     case NOTIFY_IME_OF_COMPOSITION_UPDATE:
-      return NotifyIMEOfUpdateComposition(aIMENotification);
+      return NotifyIMEOfCompositionUpdate(aIMENotification);
     case NOTIFY_IME_OF_MOUSE_BUTTON_EVENT:
       return NotifyIMEOfMouseButtonEvent(aIMENotification);
     case NOTIFY_IME_OF_POSITION_CHANGE:
@@ -636,6 +647,8 @@ NS_IMETHODIMP_(void)
 PuppetWidget::SetInputContext(const InputContext& aContext,
                               const InputContextAction& aAction)
 {
+  mInputContext = aContext;
+
 #ifndef MOZ_CROSS_PROCESS_IME
   return;
 #endif
@@ -684,9 +697,18 @@ PuppetWidget::NotifyIMEOfFocusChange(const IMENotification& aIMENotification)
 
   bool gotFocus = aIMENotification.mMessage == NOTIFY_IME_OF_FOCUS;
   if (gotFocus) {
-    // When IME gets focus, we should initalize all information of the content.
-    if (NS_WARN_IF(!mContentCache.CacheAll(this, &aIMENotification))) {
-      return NS_ERROR_FAILURE;
+    if (mInputContext.mIMEState.mEnabled != IMEState::PLUGIN) {
+      // When IME gets focus, we should initalize all information of the
+      // content.
+      if (NS_WARN_IF(!mContentCache.CacheAll(this, &aIMENotification))) {
+        return NS_ERROR_FAILURE;
+      }
+    } else {
+      // However, if a plugin has focus, only the editor rect information is
+      // available.
+      if (NS_WARN_IF(!mContentCache.CacheEditorRect(this, &aIMENotification))) {
+        return NS_ERROR_FAILURE;
+      }
     }
   } else {
     // When IME loses focus, we don't need to store anything.
@@ -694,7 +716,7 @@ PuppetWidget::NotifyIMEOfFocusChange(const IMENotification& aIMENotification)
   }
 
   mIMEPreferenceOfParent = nsIMEUpdatePreference();
-  if (!mTabChild->SendNotifyIMEFocus(gotFocus, mContentCache,
+  if (!mTabChild->SendNotifyIMEFocus(mContentCache, aIMENotification,
                                      &mIMEPreferenceOfParent)) {
     return NS_ERROR_FAILURE;
   }
@@ -702,7 +724,7 @@ PuppetWidget::NotifyIMEOfFocusChange(const IMENotification& aIMENotification)
 }
 
 nsresult
-PuppetWidget::NotifyIMEOfUpdateComposition(
+PuppetWidget::NotifyIMEOfCompositionUpdate(
                 const IMENotification& aIMENotification)
 {
 #ifndef MOZ_CROSS_PROCESS_IME
@@ -711,10 +733,11 @@ PuppetWidget::NotifyIMEOfUpdateComposition(
 
   NS_ENSURE_TRUE(mTabChild, NS_ERROR_FAILURE);
 
-  if (NS_WARN_IF(!mContentCache.CacheSelection(this, &aIMENotification))) {
+  if (mInputContext.mIMEState.mEnabled != IMEState::PLUGIN &&
+      NS_WARN_IF(!mContentCache.CacheSelection(this, &aIMENotification))) {
     return NS_ERROR_FAILURE;
   }
-  mTabChild->SendNotifyIMESelectedCompositionRect(mContentCache);
+  mTabChild->SendNotifyIMECompositionUpdate(mContentCache, aIMENotification);
   return NS_OK;
 }
 
@@ -722,7 +745,17 @@ nsIMEUpdatePreference
 PuppetWidget::GetIMEUpdatePreference()
 {
 #ifdef MOZ_CROSS_PROCESS_IME
-  // e10s requires IME information cache into TabParent
+  // e10s requires IME content cache in in the TabParent for handling query
+  // content event only with the parent process.  Therefore, this process
+  // needs to receive a lot of information from the focused editor to sent
+  // the latest content to the parent process.
+  if (mInputContext.mIMEState.mEnabled == IMEState::PLUGIN) {
+    // But if a plugin has focus, we cannot receive text nor selection change
+    // in the plugin.  Therefore, PuppetWidget needs to receive only position
+    // change event for updating the editor rect cache.
+    return nsIMEUpdatePreference(mIMEPreferenceOfParent.mWantUpdates |
+                                 nsIMEUpdatePreference::NOTIFY_POSITION_CHANGE);
+  }
   return nsIMEUpdatePreference(mIMEPreferenceOfParent.mWantUpdates |
                                nsIMEUpdatePreference::NOTIFY_SELECTION_CHANGE |
                                nsIMEUpdatePreference::NOTIFY_TEXT_CHANGE |
@@ -746,6 +779,11 @@ PuppetWidget::NotifyIMEOfTextChange(const IMENotification& aIMENotification)
   if (!mTabChild)
     return NS_ERROR_FAILURE;
 
+  // While a plugin has focus, text change notification shouldn't be available.
+  if (NS_WARN_IF(mInputContext.mIMEState.mEnabled == IMEState::PLUGIN)) {
+    return NS_ERROR_FAILURE;
+  }
+
   // FYI: text change notification is the first notification after
   //      a user operation changes the content.  So, we need to modify
   //      the cache as far as possible here.
@@ -759,12 +797,7 @@ PuppetWidget::NotifyIMEOfTextChange(const IMENotification& aIMENotification)
   if (mIMEPreferenceOfParent.WantTextChange() &&
       (mIMEPreferenceOfParent.WantChangesCausedByComposition() ||
        !aIMENotification.mTextChangeData.mCausedByComposition)) {
-    mTabChild->SendNotifyIMETextChange(
-      mContentCache,
-      aIMENotification.mTextChangeData.mStartOffset,
-      aIMENotification.mTextChangeData.mOldEndOffset,
-      aIMENotification.mTextChangeData.mNewEndOffset,
-      aIMENotification.mTextChangeData.mCausedByComposition);
+    mTabChild->SendNotifyIMETextChange(mContentCache, aIMENotification);
   } else {
     mTabChild->SendUpdateContentCache(mContentCache);
   }
@@ -785,17 +818,28 @@ PuppetWidget::NotifyIMEOfSelectionChange(
   if (!mTabChild)
     return NS_ERROR_FAILURE;
 
+  // While a plugin has focus, selection change notification shouldn't be
+  // available.
+  if (NS_WARN_IF(mInputContext.mIMEState.mEnabled == IMEState::PLUGIN)) {
+    return NS_ERROR_FAILURE;
+  }
+
   // Note that selection change must be notified after text change if it occurs.
   // Therefore, we don't need to query text content again here.
   mContentCache.SetSelection(
-    this,
+    this, 
     aIMENotification.mSelectionChangeData.mOffset,
-    aIMENotification.mSelectionChangeData.mLength,
+    aIMENotification.mSelectionChangeData.Length(),
     aIMENotification.mSelectionChangeData.mReversed,
     aIMENotification.mSelectionChangeData.GetWritingMode());
 
-  mTabChild->SendNotifyIMESelection(
-    mContentCache, aIMENotification.mSelectionChangeData.mCausedByComposition);
+  if (mIMEPreferenceOfParent.WantSelectionChange() &&
+      (mIMEPreferenceOfParent.WantChangesCausedByComposition() ||
+       !aIMENotification.mSelectionChangeData.mCausedByComposition)) {
+    mTabChild->SendNotifyIMESelection(mContentCache, aIMENotification);
+  } else {
+    mTabChild->SendUpdateContentCache(mContentCache);
+  }
   return NS_OK;
 }
 
@@ -806,6 +850,13 @@ PuppetWidget::NotifyIMEOfMouseButtonEvent(
   if (!mTabChild) {
     return NS_ERROR_FAILURE;
   }
+
+  // While a plugin has focus, mouse button event notification shouldn't be
+  // available.
+  if (NS_WARN_IF(mInputContext.mIMEState.mEnabled == IMEState::PLUGIN)) {
+    return NS_ERROR_FAILURE;
+  }
+
 
   bool consumedByIME = false;
   if (!mTabChild->SendNotifyIMEMouseButtonEvent(aIMENotification,
@@ -826,12 +877,19 @@ PuppetWidget::NotifyIMEOfPositionChange(const IMENotification& aIMENotification)
     return NS_ERROR_FAILURE;
   }
 
-  if (NS_WARN_IF(!mContentCache.CacheEditorRect(this, &aIMENotification)) ||
+  if (NS_WARN_IF(!mContentCache.CacheEditorRect(this, &aIMENotification))) {
+    return NS_ERROR_FAILURE;
+  }
+  // While a plugin has focus, selection range isn't available.  So, we don't
+  // need to cache it at that time.
+  if (mInputContext.mIMEState.mEnabled != IMEState::PLUGIN &&
       NS_WARN_IF(!mContentCache.CacheSelection(this, &aIMENotification))) {
     return NS_ERROR_FAILURE;
   }
-  if (!mTabChild->SendNotifyIMEPositionChange(mContentCache)) {
-    return NS_ERROR_FAILURE;
+  if (mIMEPreferenceOfParent.WantPositionChanged()) {
+    mTabChild->SendNotifyIMEPositionChange(mContentCache, aIMENotification);
+  } else {
+    mTabChild->SendUpdateContentCache(mContentCache);
   }
   return NS_OK;
 }
@@ -878,7 +936,7 @@ PuppetWidget::SetCursor(imgIContainer* aCursor,
     return NS_ERROR_FAILURE;
   }
 
-  mozilla::RefPtr<mozilla::gfx::DataSourceSurface> dataSurface =
+  RefPtr<mozilla::gfx::DataSourceSurface> dataSurface =
     surface->GetDataSurface();
   size_t length;
   int32_t stride;
@@ -914,7 +972,7 @@ PuppetWidget::Paint()
 {
   MOZ_ASSERT(!mDirtyRegion.IsEmpty(), "paint event logic messed up");
 
-  if (!mAttachedWidgetListener)
+  if (!GetCurrentWidgetListener())
     return NS_OK;
 
   nsIntRegion region = mDirtyRegion;
@@ -923,9 +981,9 @@ PuppetWidget::Paint()
   mDirtyRegion.SetEmpty();
   mPaintTask.Revoke();
 
-  mAttachedWidgetListener->WillPaintWindow(this);
+  GetCurrentWidgetListener()->WillPaintWindow(this);
 
-  if (mAttachedWidgetListener) {
+  if (GetCurrentWidgetListener()) {
 #ifdef DEBUG
     debug_DumpPaintEvent(stderr, this, region,
                          nsAutoCString("PuppetWidget"), 0);
@@ -937,20 +995,20 @@ PuppetWidget::Paint()
         mTabChild->NotifyPainted();
       }
     } else {
-      nsRefPtr<gfxContext> ctx = new gfxContext(mDrawTarget);
+      RefPtr<gfxContext> ctx = new gfxContext(mDrawTarget);
       ctx->Rectangle(gfxRect(0,0,0,0));
       ctx->Clip();
       AutoLayerManagerSetup setupLayerManager(this, ctx,
                                               BufferMode::BUFFER_NONE);
-      mAttachedWidgetListener->PaintWindow(this, region);
+      GetCurrentWidgetListener()->PaintWindow(this, region);
       if (mTabChild) {
         mTabChild->NotifyPainted();
       }
     }
   }
 
-  if (mAttachedWidgetListener) {
-    mAttachedWidgetListener->DidPaintWindow();
+  if (GetCurrentWidgetListener()) {
+    GetCurrentWidgetListener()->DidPaintWindow();
   }
 
   return NS_OK;
@@ -986,7 +1044,8 @@ PuppetWidget::MemoryPressureObserver::Observe(nsISupports* aSubject,
     return NS_OK;
   }
 
-  if (strcmp("memory-pressure", aTopic) == 0) {
+  if (strcmp("memory-pressure", aTopic) == 0 &&
+      !NS_LITERAL_STRING("lowering-priority").Equals(aData)) {
     if (!mWidget->mVisible && mWidget->mLayerManager &&
         XRE_IsContentProcess()) {
       mWidget->mLayerManager->ClearCachedResources();
@@ -1059,20 +1118,37 @@ PuppetWidget::GetNativeData(uint32_t aDataType)
     }
     return (void*)nativeData;
   }
-  case NS_NATIVE_WINDOW:
+  case NS_NATIVE_WIDGET:
   case NS_NATIVE_DISPLAY:
+    // These types are ignored (see bug 1183828).
+    break;
+  case NS_NATIVE_WINDOW:
   case NS_NATIVE_PLUGIN_PORT:
   case NS_NATIVE_GRAPHIC:
   case NS_NATIVE_SHELLWIDGET:
-  case NS_NATIVE_WIDGET:
-    NS_WARNING("nsWindow::GetNativeData not implemented for this type");
-    break;
   default:
     NS_WARNING("nsWindow::GetNativeData called with bad value");
     break;
   }
   return nullptr;
 }
+
+#if defined(XP_WIN)
+void
+PuppetWidget::SetNativeData(uint32_t aDataType, uintptr_t aVal)
+{
+  switch (aDataType) {
+  case NS_NATIVE_CHILD_OF_SHAREABLE_WINDOW:
+    MOZ_ASSERT(mTabChild, "Need TabChild to send the message.");
+    if (mTabChild) {
+      mTabChild->SendSetNativeChildOfShareableWindow(aVal);
+    }
+    break;
+  default:
+    NS_WARNING("SetNativeData called with unsupported data type.");
+  }
+}
+#endif
 
 nsIntPoint
 PuppetWidget::GetChromeDimensions()
@@ -1115,6 +1191,12 @@ uint32_t PuppetWidget::GetMaxTouchPoints() const
     sIsInitialized = true;
   }
   return sTouchPoints;
+}
+
+void
+PuppetWidget::StartAsyncScrollbarDrag(const AsyncDragMetrics& aDragMetrics)
+{
+  mTabChild->SendStartScrollbarDrag(aDragMetrics);
 }
 
 PuppetScreen::PuppetScreen(void *nativeScreen)
@@ -1251,5 +1333,20 @@ PuppetScreenManager::GetSystemDefaultScale(float *aDefaultScale)
   return NS_OK;
 }
 
-}  // namespace widget
-}  // namespace mozilla
+nsIWidgetListener*
+PuppetWidget::GetCurrentWidgetListener()
+{
+  if (!mPreviouslyAttachedWidgetListener ||
+      !mAttachedWidgetListener) {
+    return mAttachedWidgetListener;
+  }
+
+  if (mAttachedWidgetListener->GetView()->IsPrimaryFramePaintSuppressed()) {
+    return mPreviouslyAttachedWidgetListener;
+  }
+
+  return mAttachedWidgetListener;
+}
+
+} // namespace widget
+} // namespace mozilla

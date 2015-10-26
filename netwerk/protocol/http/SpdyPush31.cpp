@@ -40,7 +40,7 @@ SpdyPushedStream31::SpdyPushedStream31(SpdyPush31TransactionBuffer *aTransaction
   LOG3(("SpdyPushedStream31 ctor this=%p id=0x%X\n", this, aID));
   mStreamID = aID;
   mBufferedPush->SetPushStream(this);
-  mLoadGroupCI = aAssociatedStream->LoadGroupConnectionInfo();
+  mSchedulingContext = aAssociatedStream->SchedulingContext();
   mLastRead = TimeStamp::Now();
 }
 
@@ -313,7 +313,7 @@ SpdyPush31TransactionBuffer::RequestHead()
 
 nsresult
 SpdyPush31TransactionBuffer::TakeSubTransactions(
-  nsTArray<nsRefPtr<nsAHttpTransaction> > &outTransactions)
+  nsTArray<RefPtr<nsAHttpTransaction> > &outTransactions)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -374,5 +374,5 @@ SpdyPush31TransactionBuffer::GetBufferedData(char *buf,
   return NS_OK;
 }
 
-} // namespace mozilla::net
+} // namespace net
 } // namespace mozilla

@@ -23,7 +23,7 @@ ServiceWorkerManagerChild::RecvNotifyRegister(
     return true;
   }
 
-  nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   MOZ_ASSERT(swm);
 
   swm->LoadRegistration(aData);
@@ -39,10 +39,10 @@ ServiceWorkerManagerChild::RecvNotifySoftUpdate(
     return true;
   }
 
-  nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   MOZ_ASSERT(swm);
 
-  swm->SoftUpdate(aOriginAttributes, NS_ConvertUTF16toUTF8(aScope));
+  swm->SoftUpdate(aOriginAttributes, NS_ConvertUTF16toUTF8(aScope), nullptr);
   return true;
 }
 
@@ -54,7 +54,7 @@ ServiceWorkerManagerChild::RecvNotifyUnregister(const PrincipalInfo& aPrincipalI
     return true;
   }
 
-  nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   MOZ_ASSERT(swm);
 
   nsCOMPtr<nsIPrincipal> principal = PrincipalInfoToPrincipal(aPrincipalInfo);
@@ -74,7 +74,7 @@ ServiceWorkerManagerChild::RecvNotifyRemove(const nsCString& aHost)
     return true;
   }
 
-  nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   MOZ_ASSERT(swm);
 
   swm->Remove(aHost);
@@ -88,13 +88,13 @@ ServiceWorkerManagerChild::RecvNotifyRemoveAll()
     return true;
   }
 
-  nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
   MOZ_ASSERT(swm);
 
   swm->RemoveAll();
   return true;
 }
 
-} // workers namespace
-} // dom namespace
-} // mozilla namespace
+} // namespace workers
+} // namespace dom
+} // namespace mozilla

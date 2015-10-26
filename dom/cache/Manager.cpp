@@ -54,16 +54,9 @@ public:
     nsresult rv = BodyCreateDir(aDBDir);
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    {
-      mozStorageTransaction trans(aConn, false,
-                                  mozIStorageConnection::TRANSACTION_IMMEDIATE);
-
-      rv = db::CreateSchema(aConn);
-      if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-
-      rv = trans.Commit();
-      if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
-    }
+    // executes in its own transaction
+    rv = db::CreateOrMigrateSchema(aConn);
+    if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
     // If the Context marker file exists, then the last session was
     // not cleanly shutdown.  In these cases sqlite will ensure that
@@ -168,7 +161,7 @@ bool IsHeadRequest(CacheRequestOrVoid aRequest, CacheQueryParams aParams)
   return false;
 }
 
-} // anonymous namespace
+} // namespace
 
 // ----------------------------------------------------------------------------
 
@@ -189,7 +182,7 @@ public:
     nsresult rv = MaybeCreateInstance();
     if (NS_WARN_IF(NS_FAILED(rv))) { return rv; }
 
-    nsRefPtr<Manager> ref = Get(aManagerId);
+    RefPtr<Manager> ref = Get(aManagerId);
     if (!ref) {
       // TODO: replace this with a thread pool (bug 1119864)
       nsCOMPtr<nsIThread> ioThread;
@@ -201,7 +194,7 @@ public:
       // There may be an old manager for this origin in the process of
       // cleaning up.  We need to tell the new manager about this so
       // that it won't actually start until the old manager is done.
-      nsRefPtr<Manager> oldManager = Get(aManagerId, Closing);
+      RefPtr<Manager> oldManager = Get(aManagerId, Closing);
       ref->Init(oldManager);
 
       MOZ_ASSERT(!sFactory->mManagerList.Contains(ref));
@@ -226,7 +219,7 @@ public:
     // chains to an old Manager we want it to be the most recent one.
     ManagerList::BackwardIterator iter(sFactory->mManagerList);
     while (iter.HasMore()) {
-      nsRefPtr<Manager> manager = iter.GetNext();
+      RefPtr<Manager> manager = iter.GetNext();
       if (aState == manager->GetState() && *manager->mManagerId == *aManagerId) {
         return manager.forget();
       }
@@ -398,9 +391,9 @@ private:
     {
       ManagerList::ForwardIterator iter(sFactory->mManagerList);
       while (iter.HasMore()) {
-        nsRefPtr<Manager> manager = iter.GetNext();
+        RefPtr<Manager> manager = iter.GetNext();
         if (aOrigin.IsVoid() ||
-            manager->mManagerId->ExtendedOrigin() == aOrigin) {
+            manager->mManagerId->QuotaOrigin() == aOrigin) {
           manager->Abort();
         }
       }
@@ -435,7 +428,7 @@ private:
 
       ManagerList::ForwardIterator iter(sFactory->mManagerList);
       while (iter.HasMore()) {
-        nsRefPtr<Manager> manager = iter.GetNext();
+        RefPtr<Manager> manager = iter.GetNext();
         manager->Shutdown();
       }
     }
@@ -549,7 +542,7 @@ protected:
     mManager = nullptr;
   }
 
-  nsRefPtr<Manager> mManager;
+  RefPtr<Manager> mManager;
   const ListenerId mListenerId;
 };
 
@@ -592,7 +585,7 @@ public:
   }
 
 private:
-  nsRefPtr<Manager> mManager;
+  RefPtr<Manager> mManager;
   const CacheId mCacheId;
   nsTArray<nsID> mDeletedBodyIdList;
 };
@@ -657,7 +650,7 @@ public:
 private:
   const CacheId mCacheId;
   const CacheMatchArgs mArgs;
-  nsRefPtr<StreamList> mStreamList;
+  RefPtr<StreamList> mStreamList;
   bool mFoundResponse;
   SavedResponse mResponse;
 };
@@ -720,7 +713,7 @@ public:
 private:
   const CacheId mCacheId;
   const CacheMatchAllArgs mArgs;
-  nsRefPtr<StreamList> mStreamList;
+  RefPtr<StreamList> mStreamList;
   nsTArray<SavedResponse> mSavedResponses;
 };
 
@@ -1068,13 +1061,13 @@ private:
     mTargetThread = nullptr;
 
     // Make sure to de-ref the resolver per the Action API contract.
-    nsRefPtr<Action::Resolver> resolver;
+    RefPtr<Action::Resolver> resolver;
     mResolver.swap(resolver);
     resolver->Resolve(aRv);
   }
 
   // initiating thread only
-  nsRefPtr<Manager> mManager;
+  RefPtr<Manager> mManager;
   const ListenerId mListenerId;
 
   // Set on initiating thread, read on target thread.  State machine guarantees
@@ -1084,7 +1077,7 @@ private:
   uint32_t mExpectedAsyncCopyCompletions;
 
   // target thread only
-  nsRefPtr<Resolver> mResolver;
+  RefPtr<Resolver> mResolver;
   nsCOMPtr<nsIFile> mDBDir;
   nsCOMPtr<mozIStorageConnection> mConn;
   nsCOMPtr<nsIThread> mTargetThread;
@@ -1211,7 +1204,7 @@ public:
 private:
   const CacheId mCacheId;
   const CacheKeysArgs mArgs;
-  nsRefPtr<StreamList> mStreamList;
+  RefPtr<StreamList> mStreamList;
   nsTArray<SavedRequest> mSavedRequests;
 };
 
@@ -1273,7 +1266,7 @@ public:
 private:
   const Namespace mNamespace;
   const StorageMatchArgs mArgs;
-  nsRefPtr<StreamList> mStreamList;
+  RefPtr<StreamList> mStreamList;
   bool mFoundResponse;
   SavedResponse mSavedResponse;
 };
@@ -1416,13 +1409,13 @@ public:
       if (!mManager->SetCacheIdOrphanedIfRefed(mCacheId)) {
 
         // no outstanding references, delete immediately
-        nsRefPtr<Context> context = mManager->mContext;
+        RefPtr<Context> context = mManager->mContext;
 
         if (context->IsCanceled()) {
           context->NoteOrphanedData();
         } else {
           context->CancelForCacheId(mCacheId);
-          nsRefPtr<Action> action =
+          RefPtr<Action> action =
             new DeleteOrphanedCacheAction(mManager, mCacheId);
           context->Dispatch(action);
         }
@@ -1653,7 +1646,7 @@ Manager::ReleaseCacheId(CacheId aCacheId)
       if (mCacheIdRefs[i].mCount == 0) {
         bool orphaned = mCacheIdRefs[i].mOrphaned;
         mCacheIdRefs.RemoveElementAt(i);
-        nsRefPtr<Context> context = mContext;
+        RefPtr<Context> context = mContext;
         // If the context is already gone, then orphan flag should have been
         // set in RemoveContext().
         if (orphaned && context) {
@@ -1661,7 +1654,7 @@ Manager::ReleaseCacheId(CacheId aCacheId)
             context->NoteOrphanedData();
           } else {
             context->CancelForCacheId(aCacheId);
-            nsRefPtr<Action> action = new DeleteOrphanedCacheAction(this,
+            RefPtr<Action> action = new DeleteOrphanedCacheAction(this,
                                                                     aCacheId);
             context->Dispatch(action);
           }
@@ -1702,14 +1695,14 @@ Manager::ReleaseBodyId(const nsID& aBodyId)
       if (mBodyIdRefs[i].mCount < 1) {
         bool orphaned = mBodyIdRefs[i].mOrphaned;
         mBodyIdRefs.RemoveElementAt(i);
-        nsRefPtr<Context> context = mContext;
+        RefPtr<Context> context = mContext;
         // If the context is already gone, then orphan flag should have been
         // set in RemoveContext().
         if (orphaned && context) {
           if (context->IsCanceled()) {
             context->NoteOrphanedData();
           } else {
-            nsRefPtr<Action> action = new DeleteOrphanedBodyAction(aBodyId);
+            RefPtr<Action> action = new DeleteOrphanedBodyAction(aBodyId);
             context->Dispatch(action);
           }
         }
@@ -1724,7 +1717,7 @@ Manager::ReleaseBodyId(const nsID& aBodyId)
 already_AddRefed<ManagerId>
 Manager::GetManagerId() const
 {
-  nsRefPtr<ManagerId> ref = mManagerId;
+  RefPtr<ManagerId> ref = mManagerId;
   return ref.forget();
 }
 
@@ -1757,13 +1750,13 @@ Manager::ExecuteCacheOp(Listener* aListener, CacheId aCacheId,
     return;
   }
 
-  nsRefPtr<Context> context = mContext;
+  RefPtr<Context> context = mContext;
   MOZ_ASSERT(!context->IsCanceled());
 
-  nsRefPtr<StreamList> streamList = new StreamList(this, context);
+  RefPtr<StreamList> streamList = new StreamList(this, context);
   ListenerId listenerId = SaveListener(aListener);
 
-  nsRefPtr<Action> action;
+  RefPtr<Action> action;
   switch(aOpArgs.type()) {
     case CacheOpArgs::TCacheMatchArgs:
       action = new CacheMatchAction(this, listenerId, aCacheId,
@@ -1801,13 +1794,13 @@ Manager::ExecuteStorageOp(Listener* aListener, Namespace aNamespace,
     return;
   }
 
-  nsRefPtr<Context> context = mContext;
+  RefPtr<Context> context = mContext;
   MOZ_ASSERT(!context->IsCanceled());
 
-  nsRefPtr<StreamList> streamList = new StreamList(this, context);
+  RefPtr<StreamList> streamList = new StreamList(this, context);
   ListenerId listenerId = SaveListener(aListener);
 
-  nsRefPtr<Action> action;
+  RefPtr<Action> action;
   switch(aOpArgs.type()) {
     case CacheOpArgs::TStorageMatchArgs:
       action = new StorageMatchAction(this, listenerId, aNamespace,
@@ -1850,12 +1843,12 @@ Manager::ExecutePutAll(Listener* aListener, CacheId aCacheId,
     return;
   }
 
-  nsRefPtr<Context> context = mContext;
+  RefPtr<Context> context = mContext;
   MOZ_ASSERT(!context->IsCanceled());
 
   ListenerId listenerId = SaveListener(aListener);
 
-  nsRefPtr<Action> action = new CachePutAllAction(this, listenerId, aCacheId,
+  RefPtr<Action> action = new CachePutAllAction(this, listenerId, aCacheId,
                                                   aPutList, aRequestStreamList,
                                                   aResponseStreamList);
 
@@ -1894,7 +1887,7 @@ Manager::Init(Manager* aOldManager)
 {
   NS_ASSERT_OWNINGTHREAD(Manager);
 
-  nsRefPtr<Context> oldContext;
+  RefPtr<Context> oldContext;
   if (aOldManager) {
     oldContext = aOldManager->mContext;
   }
@@ -1902,8 +1895,8 @@ Manager::Init(Manager* aOldManager)
   // Create the context immediately.  Since there can at most be one Context
   // per Manager now, this lets us cleanly call Factory::Remove() once the
   // Context goes away.
-  nsRefPtr<Action> setupAction = new SetupAction();
-  nsRefPtr<Context> ref = Context::Create(this, mIOThread, setupAction,
+  RefPtr<Action> setupAction = new SetupAction();
+  RefPtr<Context> ref = Context::Create(this, mIOThread, setupAction,
                                           oldContext);
   mContext = ref;
 }
@@ -1930,7 +1923,7 @@ Manager::Shutdown()
   // If there is a context, then cancel and only note that we are done after
   // its cleaned up.
   if (mContext) {
-    nsRefPtr<Context> context = mContext;
+    RefPtr<Context> context = mContext;
     context->CancelAll();
     return;
   }
@@ -1948,7 +1941,7 @@ Manager::Abort()
   NoteClosing();
 
   // Cancel and only note that we are done after the context is cleaned up.
-  nsRefPtr<Context> context = mContext;
+  RefPtr<Context> context = mContext;
   context->CancelAll();
 }
 
@@ -2035,9 +2028,9 @@ Manager::NoteOrphanedBodyIdList(const nsTArray<nsID>& aDeletedBodyIdList)
   }
 
   // TODO: note that we need to check these bodies for staleness on startup (bug 1110446)
-  nsRefPtr<Context> context = mContext;
+  RefPtr<Context> context = mContext;
   if (!deleteNowList.IsEmpty() && context && !context->IsCanceled()) {
-    nsRefPtr<Action> action = new DeleteOrphanedBodyAction(deleteNowList);
+    RefPtr<Action> action = new DeleteOrphanedBodyAction(deleteNowList);
     context->Dispatch(action);
   }
 }
@@ -2052,7 +2045,7 @@ Manager::MaybeAllowContextToClose()
   // Cache state information to complete before doing this.  Once we allow
   // the Context to close we may not reliably get notified of storage
   // invalidation.
-  nsRefPtr<Context> context = mContext;
+  RefPtr<Context> context = mContext;
   if (context && mListeners.IsEmpty()
               && mCacheIdRefs.IsEmpty()
               && mBodyIdRefs.IsEmpty()) {

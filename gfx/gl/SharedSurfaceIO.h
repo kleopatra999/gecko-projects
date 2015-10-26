@@ -68,6 +68,8 @@ public:
     }
 
     virtual bool ToSurfaceDescriptor(layers::SurfaceDescriptor* const out_descriptor) override;
+
+    virtual bool ReadbackBySharedHandle(gfx::DataSourceSurface* out_surface) override;
 };
 
 class SurfaceFactory_IOSurface : public SurfaceFactory
@@ -92,7 +94,8 @@ protected:
     virtual UniquePtr<SharedSurface> CreateShared(const gfx::IntSize& size) override;
 };
 
-} /* namespace gfx */
+} // namespace gl
+
 } /* namespace mozilla */
 
 #endif /* SHARED_SURFACEIO_H_ */

@@ -9,35 +9,36 @@
 #include "AndroidSurfaceTexture.h"
 
 #include "MediaCodec.h"
+#include "TimeUnits.h"
 #include "mozilla/Monitor.h"
 
 #include <queue>
 
 namespace mozilla {
 
-typedef std::queue<nsRefPtr<MediaRawData>> SampleQueue;
+typedef std::queue<RefPtr<MediaRawData>> SampleQueue;
 
 class AndroidDecoderModule : public PlatformDecoderModule {
 public:
-  virtual already_AddRefed<MediaDataDecoder>
+  already_AddRefed<MediaDataDecoder>
   CreateVideoDecoder(const VideoInfo& aConfig,
                      layers::LayersBackend aLayersBackend,
                      layers::ImageContainer* aImageContainer,
-                     FlushableMediaTaskQueue* aVideoTaskQueue,
+                     FlushableTaskQueue* aVideoTaskQueue,
                      MediaDataDecoderCallback* aCallback) override;
 
-  virtual already_AddRefed<MediaDataDecoder>
+  already_AddRefed<MediaDataDecoder>
   CreateAudioDecoder(const AudioInfo& aConfig,
-                     FlushableMediaTaskQueue* aAudioTaskQueue,
+                     FlushableTaskQueue* aAudioTaskQueue,
                      MediaDataDecoderCallback* aCallback) override;
 
 
   AndroidDecoderModule() {}
   virtual ~AndroidDecoderModule() {}
 
-  virtual bool SupportsMimeType(const nsACString& aMimeType) override;
+  bool SupportsMimeType(const nsACString& aMimeType) override;
 
-  virtual ConversionRequired
+  ConversionRequired
   DecoderNeedsConversion(const TrackInfo& aConfig) const override;
 };
 
@@ -51,11 +52,11 @@ public:
 
   virtual ~MediaCodecDataDecoder();
 
-  virtual nsresult Init() override;
-  virtual nsresult Flush() override;
-  virtual nsresult Drain() override;
-  virtual nsresult Shutdown() override;
-  virtual nsresult Input(MediaRawData* aSample);
+  RefPtr<MediaDataDecoder::InitPromise> Init() override;
+  nsresult Flush() override;
+  nsresult Drain() override;
+  nsresult Shutdown() override;
+  nsresult Input(MediaRawData* aSample) override;
 
 protected:
   friend class AndroidDecoderModule;
@@ -81,12 +82,13 @@ protected:
   bool mStopping;
 
   SampleQueue mQueue;
-  std::queue<Microseconds> mDurations;
+  // Durations are stored in microseconds.
+  std::queue<media::TimeUnit> mDurations;
 
   virtual nsresult InitDecoder(widget::sdk::Surface::Param aSurface);
 
-  virtual nsresult Output(widget::sdk::BufferInfo::Param aInfo, void* aBuffer, widget::sdk::MediaFormat::Param aFormat, Microseconds aDuration) { return NS_OK; }
-  virtual nsresult PostOutput(widget::sdk::BufferInfo::Param aInfo, widget::sdk::MediaFormat::Param aFormat, Microseconds aDuration) { return NS_OK; }
+  virtual nsresult Output(widget::sdk::BufferInfo::Param aInfo, void* aBuffer, widget::sdk::MediaFormat::Param aFormat, const media::TimeUnit& aDuration) { return NS_OK; }
+  virtual nsresult PostOutput(widget::sdk::BufferInfo::Param aInfo, widget::sdk::MediaFormat::Param aFormat, const media::TimeUnit& aDuration) { return NS_OK; }
   virtual void Cleanup() {};
 
   nsresult ResetInputBuffers();

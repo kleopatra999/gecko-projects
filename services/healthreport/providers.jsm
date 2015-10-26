@@ -46,8 +46,8 @@ Cu.import("resource://services-common/utils.js");
 
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
                                   "resource://gre/modules/AddonManager.jsm");
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
-                                  "resource://gre/modules/UpdateChannel.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
+                                  "resource://gre/modules/UpdateUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesDBUtils",
                                   "resource://gre/modules/PlacesDBUtils.jsm");
 
@@ -60,6 +60,7 @@ const DAILY_LAST_TEXT_FIELD = {type: Metrics.Storage.FIELD_DAILY_LAST_TEXT};
 const DAILY_COUNTER_FIELD = {type: Metrics.Storage.FIELD_DAILY_COUNTER};
 
 const TELEMETRY_PREF = "toolkit.telemetry.enabled";
+const SEARCH_COHORT_PREF = "browser.search.cohort";
 
 function isTelemetryEnabled(prefs) {
   return prefs.get(TELEMETRY_PREF, false);
@@ -332,7 +333,7 @@ AppInfoProvider.prototype = Object.freeze({
     }
 
     try {
-      yield m.setLastText("updateChannel", UpdateChannel.get());
+      yield m.setLastText("updateChannel", UpdateUtils.UpdateChannel);
     } catch (ex) {
       this._log.warn("Could not obtain update channel: " +
                      CommonUtils.exceptionStr(ex));
@@ -1630,10 +1631,11 @@ SearchEnginesMeasurement1.prototype = Object.freeze({
   __proto__: Metrics.Measurement.prototype,
 
   name: "engines",
-  version: 1,
+  version: 2,
 
   fields: {
     default: DAILY_LAST_TEXT_FIELD,
+    cohort: DAILY_LAST_TEXT_FIELD,
   },
 });
 
@@ -1688,6 +1690,9 @@ this.SearchesProvider.prototype = Object.freeze({
       }
 
       yield m.setDailyLastText("default", name);
+
+      if (Services.prefs.prefHasUserValue(SEARCH_COHORT_PREF))
+        yield m.setDailyLastText("cohort", Services.prefs.getCharPref(SEARCH_COHORT_PREF));
     }.bind(this));
   },
 

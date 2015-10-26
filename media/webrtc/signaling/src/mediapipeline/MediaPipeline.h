@@ -26,6 +26,7 @@
 #include "databuffer.h"
 #include "runnable_utils.h"
 #include "transportflow.h"
+#include "AudioPacketizer.h"
 
 #if defined(MOZILLA_INTERNAL_API)
 #include "VideoSegment.h"
@@ -387,7 +388,7 @@ public:
                         RefPtr<TransportFlow> rtcp_transport,
                         nsAutoPtr<MediaPipelineFilter> filter) :
       MediaPipeline(pc, TRANSMIT, main_thread, sts_thread,
-                    domstream->GetStream(), track_id, level,
+                    domstream->GetOwnedStream(), track_id, level,
                     conduit, rtp_transport, rtcp_transport, filter),
       listener_(new PipelineListener(conduit)),
       domstream_(domstream),
@@ -446,9 +447,7 @@ public:
         active_(false),
         enabled_(false),
         direct_connect_(false),
-        samples_10ms_buffer_(nullptr),
-        buffer_current_(0),
-        samplenum_10ms_(0)
+        packetizer_(nullptr)
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
         , last_img_(-1)
 #endif // MOZILLA_INTERNAL_API
@@ -483,7 +482,9 @@ public:
     virtual void NotifyQueuedTrackChanges(MediaStreamGraph* graph, TrackID tid,
                                           StreamTime offset,
                                           uint32_t events,
-                                          const MediaSegment& queued_media) override;
+                                          const MediaSegment& queued_media,
+                                          MediaStream* input_stream,
+                                          TrackID input_tid) override;
     virtual void NotifyPull(MediaStreamGraph* aGraph, StreamTime aDesiredTime) override {}
 
     // Implement MediaStreamDirectListener
@@ -526,16 +527,7 @@ public:
 
     bool direct_connect_;
 
-
-    // These vars handle breaking audio samples into exact 10ms chunks:
-    // The buffer of 10ms audio samples that we will send once full
-    // (can be carried over from one call to another).
-    nsAutoArrayPtr<int16_t> samples_10ms_buffer_;
-    // The location of the pointer within that buffer (in units of samples).
-    int64_t buffer_current_;
-    // The number of samples in a 10ms audio chunk.
-    int64_t samplenum_10ms_;
-
+    nsAutoPtr<AudioPacketizer<int16_t, int16_t>> packetizer_;
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
     int32_t last_img_; // serial number of last Image
 #endif // MOZILLA_INTERNAL_API
@@ -639,7 +631,9 @@ class MediaPipelineReceiveAudio : public MediaPipelineReceive {
     virtual void NotifyQueuedTrackChanges(MediaStreamGraph* graph, TrackID tid,
                                           StreamTime offset,
                                           uint32_t events,
-                                          const MediaSegment& queued_media) override {}
+                                          const MediaSegment& queued_media,
+                                          MediaStream* input_stream,
+                                          TrackID input_tid) override {}
     virtual void NotifyPull(MediaStreamGraph* graph, StreamTime desired_time) override;
 
    private:
@@ -735,7 +729,9 @@ class MediaPipelineReceiveVideo : public MediaPipelineReceive {
     virtual void NotifyQueuedTrackChanges(MediaStreamGraph* graph, TrackID tid,
                                           StreamTime offset,
                                           uint32_t events,
-                                          const MediaSegment& queued_media) override {}
+                                          const MediaSegment& queued_media,
+                                          MediaStream* input_stream,
+                                          TrackID input_tid) override {}
     virtual void NotifyPull(MediaStreamGraph* graph, StreamTime desired_time) override;
 
     // Accessors for external writes from the renderer
@@ -758,10 +754,10 @@ class MediaPipelineReceiveVideo : public MediaPipelineReceive {
     int width_;
     int height_;
 #if defined(MOZILLA_XPCOMRT_API)
-    nsRefPtr<mozilla::SimpleImageBuffer> image_;
+    RefPtr<mozilla::SimpleImageBuffer> image_;
 #elif defined(MOZILLA_INTERNAL_API)
-    nsRefPtr<layers::ImageContainer> image_container_;
-    nsRefPtr<layers::Image> image_;
+    RefPtr<layers::ImageContainer> image_container_;
+    RefPtr<layers::Image> image_;
 #endif
     mozilla::ReentrantMonitor monitor_; // Monitor for processing WebRTC frames.
                                         // Protects image_ against:

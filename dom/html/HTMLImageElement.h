@@ -195,10 +195,10 @@ public:
   }
   void GetReferrer(nsAString& aReferrer)
   {
-    GetEnumAttr(nsGkAtoms::referrer, nullptr, aReferrer);
+    GetHTMLAttr(nsGkAtoms::referrer, aReferrer);
   }
 
-  mozilla::net::ReferrerPolicy
+  net::ReferrerPolicy
   GetImageReferrerPolicy() override
   {
     return GetReferrerPolicy();
@@ -264,6 +264,12 @@ public:
                                 const nsAString& aTypeAttr,
                                 const nsAString& aMediaAttr,
                                 nsAString& aResult);
+
+  /**
+   * If this image's src pointers to an SVG document, flush the SVG document's
+   * use counters to telemetry.  Only used for testing purposes.
+   */
+  void FlushUseCounters();
 
 protected:
   virtual ~HTMLImageElement();
@@ -334,7 +340,7 @@ protected:
   void UpdateFormOwner();
 
   virtual nsresult BeforeSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                                 const nsAttrValueOrString* aValue,
+                                 nsAttrValueOrString* aValue,
                                  bool aNotify) override;
 
   virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
@@ -345,7 +351,7 @@ protected:
   HTMLFormElement* mForm;
 
   // Created when we're tracking responsive image state
-  nsRefPtr<ResponsiveImageSelector> mResponsiveSelector;
+  RefPtr<ResponsiveImageSelector> mResponsiveSelector;
 
 private:
   bool SourceElementMatches(nsIContent* aSourceNode);

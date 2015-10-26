@@ -28,7 +28,7 @@ class nsStyleContext;
 namespace mozilla {
 class WritingMode;
 class LogicalMargin;
-}
+} // namespace mozilla
 
 struct nsTableReflowState;
 struct BCPropertyData;
@@ -272,9 +272,10 @@ public:
    * columns, row groups, rows, and cells), and the table border, and all
    * internal borders if border-collapse is on.
    */
-  DrawResult PaintTableBorderBackground(nsRenderingContext& aRenderingContext,
+  DrawResult PaintTableBorderBackground(nsDisplayListBuilder* aBuilder,
+                                        nsRenderingContext& aRenderingContext,
                                         const nsRect& aDirtyRect,
-                                        nsPoint aPt, uint32_t aBGPaintFlags);
+                                        nsPoint aPt);
 
   /** Get the outer half (i.e., the part outside the height and width of
    *  the table) of the largest segment (?) of border-collapsed border on
@@ -814,7 +815,7 @@ protected:
 
   void SetColumnDimensions(nscoord aHeight, WritingMode aWM,
                            const LogicalMargin& aBorderPadding,
-                           nscoord aContainerWidth);
+                           const nsSize& aContainerSize);
 
   int32_t CollectRows(nsIFrame*                   aFrame,
                       nsTArray<nsTableRowFrame*>& aCollection);

@@ -12,6 +12,7 @@
 #include "mozilla/mozalloc.h"           // for operator delete
 #include "nsDebug.h"                    // for NS_WARN_IF
 #include "yuv_convert.h"                // for ConvertYCbCrToRGB32, etc
+#include "nsDebug.h"
 
 #define MOZ_ALIGN_WORD(x) (((x) + 3) & ~3)
 
@@ -291,17 +292,18 @@ YCbCrImageDataDeserializer::ToDataSourceSurface()
     return nullptr;
   }
 
+  gfx::YUVType type = TypeFromSize(GetYSize().width, GetYSize().height,
+                                   GetCbCrSize().width, GetCbCrSize().height);
   gfx::ConvertYCbCrToRGB32(GetYData(), GetCbData(), GetCrData(),
                            map.mData,
                            0, 0, //pic x and y
                            GetYSize().width, GetYSize().height,
                            GetYStride(), GetCbCrStride(),
-                           map.mStride,
-                           gfx::YV12);
+                           map.mStride, type);
   result->Unmap();
   return result.forget();
 }
 
 
-} // namespace
-} // namespace
+} // namespace layers
+} // namespace mozilla

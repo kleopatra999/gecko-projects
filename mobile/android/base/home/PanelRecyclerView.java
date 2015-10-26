@@ -8,7 +8,9 @@ package org.mozilla.gecko.home;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.home.PanelLayout.DatasetBacked;
 import org.mozilla.gecko.home.PanelLayout.PanelView;
-import org.mozilla.gecko.home.RecyclerViewItemClickListener.OnClickListener;
+import org.mozilla.gecko.widget.RecyclerViewClickSupport;
+import org.mozilla.gecko.widget.RecyclerViewClickSupport.OnItemClickListener;
+import org.mozilla.gecko.widget.RecyclerViewClickSupport.OnItemLongClickListener;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -22,12 +24,14 @@ import android.view.View;
  * RecyclerView implementation for grid home panels.
  */
 @SuppressLint("ViewConstructor") // View is only created from code
-public class PanelRecyclerView extends RecyclerView implements DatasetBacked, PanelView, OnClickListener {
+public class PanelRecyclerView extends RecyclerView
+        implements DatasetBacked, PanelView, OnItemClickListener, OnItemLongClickListener {
     private final PanelRecyclerViewAdapter adapter;
     private final GridLayoutManager layoutManager;
     private final PanelViewItemHandler itemHandler;
     private final float columnWidth;
     private final boolean autoFit;
+    private final HomeConfig.ViewConfig viewConfig;
 
     private PanelLayout.OnItemOpenListener itemOpenListener;
     private HomeContextMenuInfo contextMenuInfo;
@@ -35,6 +39,8 @@ public class PanelRecyclerView extends RecyclerView implements DatasetBacked, Pa
 
     public PanelRecyclerView(Context context, HomeConfig.ViewConfig viewConfig) {
         super(context);
+
+        this.viewConfig = viewConfig;
 
         final Resources resources = context.getResources();
 
@@ -52,6 +58,8 @@ public class PanelRecyclerView extends RecyclerView implements DatasetBacked, Pa
         adapter = new PanelRecyclerViewAdapter(context, viewConfig);
         itemHandler = new PanelViewItemHandler();
 
+        layoutManager.setSpanSizeLookup(new PanelSpanSizeLookup());
+
         setLayoutManager(layoutManager);
         setAdapter(adapter);
 
@@ -64,7 +72,9 @@ public class PanelRecyclerView extends RecyclerView implements DatasetBacked, Pa
         setPadding(outerSpacing, outerSpacing, outerSpacing, outerSpacing);
         setClipToPadding(false);
 
-        addOnItemTouchListener(new RecyclerViewItemClickListener(context, this, this));
+        RecyclerViewClickSupport.addTo(this)
+            .setOnItemClickListener(this)
+            .setOnItemLongClickListener(this);
     }
 
     @Override
@@ -118,16 +128,51 @@ public class PanelRecyclerView extends RecyclerView implements DatasetBacked, Pa
     }
 
     @Override
-    public void onClick(View view, int position) {
+    public void onItemClicked(RecyclerView recyclerView, int position, View v) {
+        if (viewConfig.hasHeaderConfig()) {
+            if (position == 0) {
+                itemOpenListener.onItemOpen(viewConfig.getHeaderConfig().getUrl(), null);
+                return;
+            }
+
+            position--;
+        }
+
         itemHandler.openItemAtPosition(adapter.getCursor(), position);
     }
 
     @Override
-    public void onLongClick(View view, int position) {
+    public boolean onItemLongClicked(RecyclerView recyclerView, int position, View v) {
+        if (viewConfig.hasHeaderConfig()) {
+            if (position == 0) {
+                final HomeConfig.HeaderConfig headerConfig = viewConfig.getHeaderConfig();
+
+                final HomeContextMenuInfo info = new HomeContextMenuInfo(v, position, -1);
+                info.url = headerConfig.getUrl();
+                info.title = headerConfig.getUrl();
+
+                contextMenuInfo = info;
+                return showContextMenuForChild(this);
+            }
+
+            position--;
+        }
+
         Cursor cursor = adapter.getCursor();
         cursor.moveToPosition(position);
 
-        contextMenuInfo = contextMenuInfoFactory.makeInfoForCursor(view, position, -1, cursor);
-        showContextMenuForChild(PanelRecyclerView.this);
+        contextMenuInfo = contextMenuInfoFactory.makeInfoForCursor(recyclerView, position, -1, cursor);
+        return showContextMenuForChild(this);
+    }
+
+    private class PanelSpanSizeLookup extends GridLayoutManager.SpanSizeLookup {
+        @Override
+        public int getSpanSize(int position) {
+            if (position == 0 && viewConfig.hasHeaderConfig()) {
+                return layoutManager.getSpanCount();
+            }
+
+            return 1;
+        }
     }
 }

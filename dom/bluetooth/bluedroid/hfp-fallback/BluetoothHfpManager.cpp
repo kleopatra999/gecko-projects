@@ -18,7 +18,7 @@ USING_BLUETOOTH_NAMESPACE
 namespace {
   StaticRefPtr<BluetoothHfpManager> sBluetoothHfpManager;
   bool sInShutdown = false;
-} // anonymous namespace
+} // namespace
 
 /**
  * nsIObserver function
@@ -91,7 +91,7 @@ BluetoothHfpManager::OnGetServiceChannel(const nsAString& aDeviceAddress,
 }
 
 void
-BluetoothHfpManager::OnUpdateSdpRecords(const nsAString& aDeviceAddress)
+BluetoothHfpManager::OnUpdateSdpRecords(const BluetoothAddress& aDeviceAddress)
 {
   MOZ_ASSERT(false);
 }
@@ -101,6 +101,12 @@ BluetoothHfpManager::OnUpdateSdpRecords(const nsAString& aDeviceAddress)
  */
 bool
 BluetoothHfpManager::IsScoConnected()
+{
+  return false;
+}
+
+bool
+BluetoothHfpManager::IsNrecEnabled()
 {
   return false;
 }
@@ -205,7 +211,7 @@ void
 BluetoothHfpManager::HandleBackendError()
 {
   /**
-   * TODO: 
+   * TODO:
    *   Reset connection state and audio state to DISCONNECTED to handle backend
    *   error. The state change triggers UI status bar update as ordinary
    *   bluetooth turn-off sequence.

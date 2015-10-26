@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const CC = Components.classes;
+var CC = Components.classes;
 const CI = Components.interfaces;
 const CR = Components.results;
 const CU = Components.utils;
@@ -194,13 +194,6 @@ function attrOrDefault(element, attr, def) {
 function setupViewport(contentRootElement) {
     if (!contentRootElement) {
         return;
-    }
-
-    var vw = attrOrDefault(contentRootElement, "reftest-viewport-w", 0);
-    var vh = attrOrDefault(contentRootElement, "reftest-viewport-h", 0);
-    if (vw !== 0 || vh !== 0) {
-        LogInfo("Setting viewport to <w="+ vw +", h="+ vh +">");
-        windowUtils().setCSSViewport(vw, vh);
     }
 
     var sw = attrOrDefault(contentRootElement, "reftest-scrollport-w", 0);
@@ -402,10 +395,11 @@ function FlushRendering() {
                     .getInterface(CI.nsIDOMWindowUtils);
         var afterPaintWasPending = utils.isMozAfterPaintPending;
 
-        if (win.document.documentElement) {
+        var root = win.document.documentElement;
+        if (root && !root.classList.contains("reftest-no-flush")) {
             try {
                 // Flush pending restyles and reflows for this window
-                win.document.documentElement.getBoundingClientRect();
+                root.getBoundingClientRect();
             } catch (e) {
                 LogWarning("flushWindow failed: " + e + "\n");
             }

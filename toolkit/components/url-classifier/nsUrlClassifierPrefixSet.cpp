@@ -262,11 +262,11 @@ nsUrlClassifierPrefixSet::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeO
 {
   size_t n = 0;
   n += aMallocSizeOf(this);
-  n += mIndexDeltas.SizeOfExcludingThis(aMallocSizeOf);
+  n += mIndexDeltas.ShallowSizeOfExcludingThis(aMallocSizeOf);
   for (uint32_t i = 0; i < mIndexDeltas.Length(); i++) {
-    n += mIndexDeltas[i].SizeOfExcludingThis(aMallocSizeOf);
+    n += mIndexDeltas[i].ShallowSizeOfExcludingThis(aMallocSizeOf);
   }
-  n += mIndexPrefixes.SizeOfExcludingThis(aMallocSizeOf);
+  n += mIndexPrefixes.ShallowSizeOfExcludingThis(aMallocSizeOf);
   return n;
 }
 
@@ -322,6 +322,9 @@ nsUrlClassifierPrefixSet::LoadFromFd(AutoFDClose& fileFd)
     for (uint32_t i = 0; i < indexSize; i++) {
       uint32_t numInDelta = i == indexSize - 1 ? deltaSize - indexStarts[i]
                                : indexStarts[i + 1] - indexStarts[i];
+      if (numInDelta > DELTAS_LIMIT) {
+        return NS_ERROR_FILE_CORRUPTED;
+      }
       if (numInDelta > 0) {
         mIndexDeltas[i].SetLength(numInDelta);
         mTotalPrefixes += numInDelta;

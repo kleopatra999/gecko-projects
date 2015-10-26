@@ -53,16 +53,12 @@ if CONFIG['OS_TARGET'] == 'WINNT':
 if CONFIG['OS_TARGET'] == 'Android':
     SOURCES += ['cubeb_opensl.c']
     SOURCES += ['cubeb_resampler.cpp']
-    SOURCES['cubeb_opensl.c'].flags += ['-Wno-declaration-after-statement']
     DEFINES['USE_OPENSL'] = True
     if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'gonk':
         SOURCES += [
             'cubeb_audiotrack.c',
         ]
         DEFINES['USE_AUDIOTRACK'] = True
-
-if CONFIG['GKMEDIAS_SHARED_LIBRARY']:
-    NO_VISIBILITY_FLAGS = True
 
 FINAL_LIBRARY = 'gkmedias'
 
@@ -73,8 +69,6 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':
             'system/media/wilhelm/include',
         ]
     ]
-
-FAIL_ON_WARNINGS = True
 
 CFLAGS += CONFIG['MOZ_ALSA_CFLAGS']
 CFLAGS += CONFIG['MOZ_PULSEAUDIO_CFLAGS']

@@ -82,7 +82,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
 const DB_URL_LENGTH_MAX = 65536;
 const DB_TITLE_LENGTH_MAX = 4096;
 
-let Bookmarks = Object.freeze({
+var Bookmarks = Object.freeze({
   /**
    * Item's type constants.
    * These should stay consistent with nsINavBookmarksService.idl
@@ -146,7 +146,7 @@ let Bookmarks = Object.freeze({
              , validIf: b => b.type == this.TYPE_BOOKMARK }
       , parentGuid: { required: true }
       , title: { validIf: b => [ this.TYPE_BOOKMARK
-                               , this.TYPE_FOLDER ].indexOf(b.type) != -1 }
+                               , this.TYPE_FOLDER ].includes(b.type) }
       , dateAdded: { defaultValue: time
                    , validIf: b => !b.lastModified ||
                                     b.dateAdded <= b.lastModified }
@@ -187,7 +187,8 @@ let Bookmarks = Object.freeze({
           notify(observers, "onItemChanged", [ entry._id, "tags", false, "",
                                                toPRTime(entry.lastModified),
                                                entry.type, entry._parentId,
-                                               entry.guid, entry.parentGuid ]);
+                                               entry.guid, entry.parentGuid,
+                                               "" ]);
         }
       }
 
@@ -253,7 +254,7 @@ let Bookmarks = Object.freeze({
       updateInfo = validateBookmarkObject(updateInfo,
         { url: { validIf: () => item.type == this.TYPE_BOOKMARK }
         , title: { validIf: () => [ this.TYPE_BOOKMARK
-                                  , this.TYPE_FOLDER ].indexOf(item.type) != -1 }
+                                  , this.TYPE_FOLDER ].includes(item.type) }
         , lastModified: { defaultValue: new Date()
                         , validIf: b => b.lastModified >= item.dateAdded }
         });
@@ -277,7 +278,7 @@ let Bookmarks = Object.freeze({
                SELECT guid FROM moz_bookmarks
                WHERE id IN descendants
               `, { id: item._id, type: this.TYPE_FOLDER });
-            if ([r.getResultByName("guid") for (r of rows)].indexOf(updateInfo.parentGuid) != -1)
+            if ([r.getResultByName("guid") for (r of rows)].includes(updateInfo.parentGuid))
               throw new Error("Cannot insert a folder into itself or one of its descendants");
           }
 
@@ -325,7 +326,7 @@ let Bookmarks = Object.freeze({
                                                updatedItem.type,
                                                updatedItem._parentId,
                                                updatedItem.guid,
-                                               updatedItem.parentGuid ]);
+                                               updatedItem.parentGuid, "" ]);
         }
         if (updateInfo.hasOwnProperty("title")) {
           notify(observers, "onItemChanged", [ updatedItem._id, "title",
@@ -334,7 +335,7 @@ let Bookmarks = Object.freeze({
                                                updatedItem.type,
                                                updatedItem._parentId,
                                                updatedItem.guid,
-                                               updatedItem.parentGuid ]);
+                                               updatedItem.parentGuid, "" ]);
         }
         if (updateInfo.hasOwnProperty("url")) {
           notify(observers, "onItemChanged", [ updatedItem._id, "uri",
@@ -343,7 +344,8 @@ let Bookmarks = Object.freeze({
                                                updatedItem.type,
                                                updatedItem._parentId,
                                                updatedItem.guid,
-                                               updatedItem.parentGuid ]);
+                                               updatedItem.parentGuid,
+                                               item.url.href ]);
         }
         // If the item was moved, notify onItemMoved.
         if (item.parentGuid != updatedItem.parentGuid ||
@@ -382,7 +384,7 @@ let Bookmarks = Object.freeze({
 
     // Disallow removing the root folders.
     if ([this.rootGuid, this.menuGuid, this.toolbarGuid, this.unfiledGuid,
-         this.tagsGuid].indexOf(info.guid) != -1) {
+         this.tagsGuid].includes(info.guid)) {
       throw new Error("It's not possible to remove Places root folders.");
     }
 
@@ -410,7 +412,8 @@ let Bookmarks = Object.freeze({
           notify(observers, "onItemChanged", [ entry._id, "tags", false, "",
                                                toPRTime(entry.lastModified),
                                                entry.type, entry._parentId,
-                                               entry.guid, entry.parentGuid ]);
+                                               entry.guid, entry.parentGuid,
+                                               "" ]);
         }
       }
 
@@ -872,7 +875,8 @@ function fetchBookmarksByURL(info) {
     Task.async(function*(db) {
 
     let rows = yield db.executeCached(
-      `SELECT b.guid, IFNULL(p.guid, "") AS parentGuid, b.position AS 'index',
+      `/* do not warn (bug no): not worth to add an index */
+       SELECT b.guid, IFNULL(p.guid, "") AS parentGuid, b.position AS 'index',
               b.dateAdded, b.lastModified, b.type, b.title, h.url AS url,
               b.id AS _id, b.parent AS _parentId,
               (SELECT count(*) FROM moz_bookmarks WHERE parent = b.id) AS _childCount,
@@ -1179,7 +1183,7 @@ const VALIDATORS = Object.freeze({
   type: simpleValidateFunc(v => Number.isInteger(v) &&
                                 [ Bookmarks.TYPE_BOOKMARK
                                 , Bookmarks.TYPE_FOLDER
-                                , Bookmarks.TYPE_SEPARATOR ].indexOf(v) != -1),
+                                , Bookmarks.TYPE_SEPARATOR ].includes(v)),
   title: v => {
     simpleValidateFunc(val => val === null || typeof(val) == "string").call(this, v);
     if (!v)
@@ -1267,7 +1271,7 @@ function validateBookmarkObject(input, behavior={}) {
  * @param urls
  *        the array of URLs to update.
  */
-let updateFrecency = Task.async(function* (db, urls) {
+var updateFrecency = Task.async(function* (db, urls) {
   yield db.execute(
     `UPDATE moz_places
      SET frecency = NOTIFY_FRECENCY(
@@ -1289,7 +1293,7 @@ let updateFrecency = Task.async(function* (db, urls) {
  * @param db
  *        the Sqlite.jsm connection handle.
  */
-let removeOrphanAnnotations = Task.async(function* (db) {
+var removeOrphanAnnotations = Task.async(function* (db) {
   yield db.executeCached(
     `DELETE FROM moz_items_annos
      WHERE id IN (SELECT a.id from moz_items_annos a
@@ -1313,7 +1317,7 @@ let removeOrphanAnnotations = Task.async(function* (db) {
  * @param itemId
  *        internal id of the item for which to remove annotations.
  */
-let removeAnnotationsForItem = Task.async(function* (db, itemId) {
+var removeAnnotationsForItem = Task.async(function* (db, itemId) {
   yield db.executeCached(
     `DELETE FROM moz_items_annos
      WHERE item_id = :id
@@ -1339,7 +1343,7 @@ let removeAnnotationsForItem = Task.async(function* (db, itemId) {
  *
  * @note the folder itself is also updated.
  */
-let setAncestorsLastModified = Task.async(function* (db, folderGuid, time) {
+var setAncestorsLastModified = Task.async(function* (db, folderGuid, time) {
   yield db.executeCached(
     `WITH RECURSIVE
      ancestors(aid) AS (
@@ -1363,7 +1367,7 @@ let setAncestorsLastModified = Task.async(function* (db, folderGuid, time) {
  * @param folderGuids
  *        array of folder guids.
  */
-let removeFoldersContents =
+var removeFoldersContents =
 Task.async(function* (db, folderGuids) {
   let itemsRemoved = [];
   for (let folderGuid of folderGuids) {
@@ -1428,7 +1432,8 @@ Task.async(function* (db, folderGuids) {
         notify(observers, "onItemChanged", [ entry._id, "tags", false, "",
                                              toPRTime(entry.lastModified),
                                              entry.type, entry._parentId,
-                                             entry.guid, entry.parentGuid ]);
+                                             entry.guid, entry.parentGuid,
+                                             "" ]);
       }
     }
   }

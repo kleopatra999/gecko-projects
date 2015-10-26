@@ -30,6 +30,12 @@ this.BrowserUtils = {
   restartApplication: function() {
     let appStartup = Cc["@mozilla.org/toolkit/app-startup;1"]
                        .getService(Ci.nsIAppStartup);
+    let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
+                       .createInstance(Ci.nsISupportsPRBool);
+    Services.obs.notifyObservers(cancelQuit, "quit-application-requested", "restart");
+    if (cancelQuit.data) { // The quit request has been canceled.
+      return false;
+    }
     //if already in safe mode restart in safe mode
     if (Services.appinfo.inSafeMode) {
       appStartup.restartInSafeMode(Ci.nsIAppStartup.eAttemptQuit | Ci.nsIAppStartup.eRestart);
@@ -92,30 +98,6 @@ this.BrowserUtils = {
 
   makeURIFromCPOW: function(aCPOWURI) {
     return Services.io.newURI(aCPOWURI.spec, aCPOWURI.originCharset, null);
-  },
-
-  // Creates a codebase principal from a canonical origin string. This is
-  // the inverse operation of .origin on a codebase principal.
-  principalFromOrigin: function(aOriginString) {
-    if (aOriginString.startsWith('[')) {
-      throw new Error("principalFromOrigin does not support System and Expanded principals");
-    }
-
-    if (aOriginString.startsWith("moz-nullprincipal:")) {
-      throw new Error("principalFromOrigin does not support nsNullPrincipal");
-    }
-
-    var parts = aOriginString.split('!');
-    if (parts.length > 2) {
-      throw new Error("bad origin string: " + aOriginString);
-    }
-
-    var uri = Services.io.newURI(parts[0], null, null);
-    var attrs = {};
-    // Parse the parameters string into a dictionary.
-    (parts[1] || "").split("&").map((x) => x.split('=')).forEach((x) => attrs[x[0]] = x[1]);
-
-    return Services.scriptSecurityManager.createCodebasePrincipal(uri, attrs);
   },
 
   /**
@@ -278,7 +260,7 @@ this.BrowserUtils = {
       if (elt instanceof win.HTMLInputElement && elt.mozIsTextField(false))
         return false;
 
-      if (elt.isContentEditable)
+      if (elt.isContentEditable || win.document.designMode == "on")
         return false;
 
       if (elt instanceof win.HTMLTextAreaElement ||
@@ -302,20 +284,6 @@ this.BrowserUtils = {
          win.document.documentElement.getAttribute("disablefastfind") == "true"))
       return false;
 
-    if (win) {
-      try {
-        let editingSession = win.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
-          .getInterface(Components.interfaces.nsIWebNavigation)
-          .QueryInterface(Components.interfaces.nsIInterfaceRequestor)
-          .getInterface(Components.interfaces.nsIEditingSession);
-        if (editingSession.windowIsEditable(win))
-          return false;
-      }
-      catch (e) {
-        Cu.reportError(e);
-        // If someone built with composer disabled, we can't get an editing session.
-      }
-    }
     return true;
   },
 

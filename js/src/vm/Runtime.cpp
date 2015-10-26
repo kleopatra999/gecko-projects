@@ -12,6 +12,15 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ThreadLocal.h"
 
+#if defined(XP_DARWIN)
+#include <mach/mach.h>
+#elif defined(XP_UNIX)
+#include <sys/resource.h>
+#elif defined(XP_WIN)
+#include <processthreadsapi.h>
+#include <windows.h>
+#endif // defined(XP_DARWIN) || defined(XP_UNIX) || defined(XP_WIN)
+
 #include <locale.h>
 #include <string.h>
 
@@ -34,7 +43,7 @@
 #include "jit/arm/Simulator-arm.h"
 #include "jit/arm64/vixl/Simulator-vixl.h"
 #include "jit/JitCompartment.h"
-#include "jit/mips/Simulator-mips.h"
+#include "jit/mips32/Simulator-mips32.h"
 #include "jit/PcScriptCache.h"
 #include "js/MemoryMetrics.h"
 #include "js/SliceBudget.h"
@@ -61,7 +70,7 @@ using JS::DoubleNaNValue;
 
 namespace js {
     bool gCanUseExtraThreads = true;
-};
+} // namespace js
 
 void
 js::DisableExtraThreads()
@@ -121,13 +130,15 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     jitJSContext(nullptr),
     jitActivation(nullptr),
     jitStackLimit_(0xbad),
+    jitStackLimitNoInterrupt_(0xbad),
     activation_(nullptr),
     profilingActivation_(nullptr),
     profilerSampleBufferGen_(0),
     profilerSampleBufferLapCount_(1),
     asmJSActivationStack_(nullptr),
-    asyncStackForNewActivations(nullptr),
-    asyncCauseForNewActivations(nullptr),
+    asyncStackForNewActivations(this),
+    asyncCauseForNewActivations(this),
+    asyncCallIsExplicit(false),
     entryMonitor(nullptr),
     parentRuntime(parentRuntime),
     interrupt_(false),
@@ -166,6 +177,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     simulator_(nullptr),
 #endif
     scriptAndCountsVector(nullptr),
+    lcovOutput(),
     NaNValue(DoubleNaNValue()),
     negativeInfinityValue(DoubleValue(NegativeInfinity<double>())),
     positiveInfinityValue(DoubleValue(PositiveInfinity<double>())),
@@ -185,7 +197,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     securityCallbacks(const_cast<JSSecurityCallbacks*>(&NullSecurityCallbacks)),
     DOMcallbacks(nullptr),
     destroyPrincipals(nullptr),
-    structuredCloneCallbacks(nullptr),
+    readPrincipals(nullptr),
     errorReporter(nullptr),
     linkedAsmJSModules(nullptr),
     propertyRemovals(0),
@@ -221,7 +233,8 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     largeAllocationFailureCallback(nullptr),
     oomCallback(nullptr),
     debuggerMallocSizeOf(ReturnZeroSize),
-    lastAnimationTime(0)
+    lastAnimationTime(0),
+    performanceMonitoring(thisFromCtor())
 {
     setGCStoreBufferPtr(&gc.storeBuffer);
 
@@ -232,6 +245,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
 
     PodArrayZero(nativeStackQuota);
     PodZero(&asmJSCacheOps);
+    lcovOutput.init();
 }
 
 static bool
@@ -272,10 +286,10 @@ JSRuntime::init(uint32_t maxbytes, uint32_t maxNurseryBytes)
     if (!regexpStack.init())
         return false;
 
-    js::TlsPerThreadData.set(&mainThread);
+    if (CanUseExtraThreads() && !EnsureHelperThreadsInitialized())
+        return false;
 
-    if (CanUseExtraThreads())
-        EnsureHelperThreadsInitialized();
+    js::TlsPerThreadData.set(&mainThread);
 
     if (!gc.init(maxbytes, maxNurseryBytes))
         return false;
@@ -367,6 +381,13 @@ JSRuntime::~JSRuntime()
             if (WatchpointMap* wpmap = comp->watchpointMap)
                 wpmap->clear();
         }
+
+        /*
+         * Clear script counts map, to remove the strong reference on the
+         * JSScript key.
+         */
+        for (CompartmentsIter comp(this, SkipAtoms); !comp.done(); comp.next())
+            comp->clearScriptCounts();
 
         /* Clear atoms to remove GC roots and heap allocations. */
         finishAtoms();
@@ -603,6 +624,7 @@ JSRuntime::resetJitStackLimit()
 #else
     jitStackLimit_ = mainThread.nativeStackLimit[StackForUntrustedScript];
 #endif
+    jitStackLimitNoInterrupt_ = jitStackLimit_;
 }
 
 void
@@ -740,6 +762,7 @@ JSRuntime::onOutOfMemory(AllocFunction allocFunc, size_t nbytes, void* reallocPt
                          JSContext* maybecx)
 {
     MOZ_ASSERT_IF(allocFunc != AllocFunction::Realloc, !reallocPtr);
+    MOZ_ASSERT(CurrentThreadCanAccessRuntime(this));
 
     if (isHeapBusy())
         return nullptr;
@@ -868,116 +891,4 @@ JS::IsProfilingEnabledForRuntime(JSRuntime* runtime)
 {
     MOZ_ASSERT(runtime);
     return runtime->spsProfiler.enabled();
-}
-
-void
-js::ResetStopwatches(JSRuntime* rt)
-{
-    MOZ_ASSERT(rt);
-    rt->stopwatch.reset();
-}
-
-bool
-js::SetStopwatchIsMonitoringJank(JSRuntime* rt, bool value)
-{
-    return rt->stopwatch.setIsMonitoringJank(value);
-}
-bool
-js::GetStopwatchIsMonitoringJank(JSRuntime* rt)
-{
-    return rt->stopwatch.isMonitoringJank();
-}
-
-bool
-js::SetStopwatchIsMonitoringCPOW(JSRuntime* rt, bool value)
-{
-    return rt->stopwatch.setIsMonitoringCPOW(value);
-}
-bool
-js::GetStopwatchIsMonitoringCPOW(JSRuntime* rt)
-{
-    return rt->stopwatch.isMonitoringCPOW();
-}
-
-js::PerformanceGroupHolder::~PerformanceGroupHolder()
-{
-    unlink();
-}
-
-void*
-js::PerformanceGroupHolder::getHashKey(JSContext* cx)
-{
-    if (runtime_->stopwatch.currentPerfGroupCallback) {
-        return (*runtime_->stopwatch.currentPerfGroupCallback)(cx);
-    }
-
-    // As a fallback, put everything in the same PerformanceGroup.
-    return nullptr;
-}
-
-void
-js::PerformanceGroupHolder::unlink()
-{
-    if (!group_) {
-        // The group has never been instantiated.
-        return;
-    }
-
-    js::PerformanceGroup* group = group_;
-    group_ = nullptr;
-
-    if (group->decRefCount() > 0) {
-        // The group has at least another owner.
-        return;
-    }
-
-
-    JSRuntime::Stopwatch::Groups::Ptr ptr =
-        runtime_->stopwatch.groups_.lookup(group->key_);
-    MOZ_ASSERT(ptr);
-    runtime_->stopwatch.groups_.remove(ptr);
-    js_delete(group);
-}
-
-PerformanceGroup*
-js::PerformanceGroupHolder::getGroup(JSContext* cx)
-{
-    if (group_)
-        return group_;
-
-    void* key = getHashKey(cx);
-    JSRuntime::Stopwatch::Groups::AddPtr ptr =
-        runtime_->stopwatch.groups_.lookupForAdd(key);
-    if (ptr) {
-        group_ = ptr->value();
-        MOZ_ASSERT(group_);
-    } else {
-        group_ = runtime_->new_<PerformanceGroup>(cx, key);
-        runtime_->stopwatch.groups_.add(ptr, key, group_);
-    }
-
-    group_->incRefCount();
-
-    return group_;
-}
-
-PerformanceData*
-js::GetPerformanceData(JSRuntime* rt)
-{
-    return &rt->stopwatch.performance;
-}
-
-js::PerformanceGroup::PerformanceGroup(JSContext* cx, void* key)
-  : uid(cx->runtime()->stopwatch.uniqueId())
-  , stopwatch_(nullptr)
-  , iteration_(0)
-  , key_(key)
-  , refCount_(0)
-{
-}
-
-void
-JS_SetCurrentPerfGroupCallback(JSRuntime *rt, JSCurrentPerfGroupCallback cb)
-{
-    rt->stopwatch.currentPerfGroupCallback = cb;
 }

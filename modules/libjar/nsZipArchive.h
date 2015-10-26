@@ -58,9 +58,11 @@ struct PRFileDesc;
  * each nsZipItem represents one file in the archive and all the
  * information needed to manipulate it.
  */
-class nsZipItem
+class nsZipItem final
 {
 public:
+  nsZipItem();
+
   const char* Name() { return ((const char*)central) + ZIPCENTRAL_SIZE; }
 
   uint32_t LocalOffset();
@@ -91,7 +93,7 @@ class nsZipHandle;
  * nsZipArchive -- a class for reading the PKZIP file format.
  *
  */
-class nsZipArchive 
+class nsZipArchive final
 {
   friend class nsZipFind;
 
@@ -121,10 +123,9 @@ public:
    * Convenience function that generates nsZipHandle
    *
    * @param   aFile         The file used to access the zip
-   * @param   aMustCacheFd  Optional flag to keep the PRFileDesc in nsZipHandle
    * @return  status code
    */
-  nsresult OpenArchive(nsIFile *aFile, bool aMustCacheFd = false);
+  nsresult OpenArchive(nsIFile *aFile);
 
   /**
    * Test the integrity of items in this archive by running
@@ -222,7 +223,7 @@ private:
   bool          mBuiltSynthetics;
 
   // file handle
-  nsRefPtr<nsZipHandle> mFd;
+  RefPtr<nsZipHandle> mFd;
 
   // file URI, for logging
   nsCString mURI;
@@ -242,7 +243,7 @@ private:
  *
  * a helper class for nsZipArchive, representing a search
  */
-class nsZipFind
+class nsZipFind final
 {
 public:
   nsZipFind(nsZipArchive* aZip, char* aPattern, bool regExp);
@@ -251,7 +252,7 @@ public:
   nsresult      FindNext(const char** aResult, uint16_t* aNameLen);
 
 private:
-  nsRefPtr<nsZipArchive> mArchive;
+  RefPtr<nsZipArchive> mArchive;
   char*         mPattern;
   nsZipItem*    mItem;
   uint16_t      mSlot;
@@ -264,7 +265,8 @@ private:
 /** 
  * nsZipCursor -- a low-level class for reading the individual items in a zip.
  */
-class nsZipCursor {
+class nsZipCursor final
+{
 public:
   /**
    * Initializes the cursor
@@ -319,7 +321,8 @@ private:
  * for decompression.
  * Do not use when the file may be very large.
  */
-class nsZipItemPtr_base {
+class nsZipItemPtr_base
+{
 public:
   /**
    * Initializes the reader
@@ -335,14 +338,15 @@ public:
   }
 
 protected:
-  nsRefPtr<nsZipHandle> mZipHandle;
+  RefPtr<nsZipHandle> mZipHandle;
   nsAutoArrayPtr<uint8_t> mAutoBuf;
   uint8_t *mReturnBuf;
   uint32_t mReadlen;
 };
 
 template <class T>
-class nsZipItemPtr : public nsZipItemPtr_base {
+class nsZipItemPtr final : public nsZipItemPtr_base
+{
 public:
   nsZipItemPtr(nsZipArchive *aZip, const char *aEntryName, bool doCRC = false) : nsZipItemPtr_base(aZip, aEntryName, doCRC) { }
   /**
@@ -377,11 +381,12 @@ public:
   }
 };
 
-class nsZipHandle {
+class nsZipHandle final
+{
 friend class nsZipArchive;
 friend class mozilla::FileLocation;
 public:
-  static nsresult Init(nsIFile *file, bool aMustCacheFd, nsZipHandle **ret,
+  static nsresult Init(nsIFile *file, nsZipHandle **ret,
                        PRFileDesc **aFd = nullptr);
   static nsresult Init(nsZipArchive *zip, const char *entry,
                        nsZipHandle **ret);

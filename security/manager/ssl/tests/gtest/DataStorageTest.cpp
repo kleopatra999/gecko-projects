@@ -12,6 +12,7 @@
 #include "nsNetUtil.h"
 #include "nsPrintfCString.h"
 #include "nsStreamUtils.h"
+#include "prtime.h"
 
 using namespace mozilla;
 
@@ -27,7 +28,7 @@ protected:
     storage->Init(dataWillPersist);
   }
 
-  nsRefPtr<DataStorage> storage;
+  RefPtr<DataStorage> storage;
   bool dataWillPersist;
 };
 

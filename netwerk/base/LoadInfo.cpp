@@ -7,6 +7,7 @@
 #include "mozilla/LoadInfo.h"
 
 #include "mozilla/Assertions.h"
+#include "mozilla/dom/ToJSValue.h"
 #include "nsFrameLoader.h"
 #include "nsIDocShell.h"
 #include "nsIDocument.h"
@@ -22,19 +23,21 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
                    nsIPrincipal* aTriggeringPrincipal,
                    nsINode* aLoadingContext,
                    nsSecurityFlags aSecurityFlags,
-                   nsContentPolicyType aContentPolicyType,
-                   nsIURI* aBaseURI)
+                   nsContentPolicyType aContentPolicyType)
   : mLoadingPrincipal(aLoadingContext ?
                         aLoadingContext->NodePrincipal() : aLoadingPrincipal)
   , mTriggeringPrincipal(aTriggeringPrincipal ?
                            aTriggeringPrincipal : mLoadingPrincipal.get())
   , mLoadingContext(do_GetWeakReference(aLoadingContext))
   , mSecurityFlags(aSecurityFlags)
-  , mContentPolicyType(aContentPolicyType)
-  , mBaseURI(aBaseURI)
+  , mInternalContentPolicyType(aContentPolicyType)
+  , mTainting(LoadTainting::Basic)
+  , mUpgradeInsecureRequests(false)
   , mInnerWindowID(0)
   , mOuterWindowID(0)
   , mParentOuterWindowID(0)
+  , mEnforceSecurity(false)
+  , mInitialSecurityCheckDone(false)
 {
   MOZ_ASSERT(mLoadingPrincipal);
   MOZ_ASSERT(mTriggeringPrincipal);
@@ -76,26 +79,56 @@ LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
       nsCOMPtr<nsPIDOMWindow> piParent = do_QueryInterface(parent);
       mParentOuterWindowID = piParent->WindowID();
     }
+
+    mUpgradeInsecureRequests = aLoadingContext->OwnerDoc()->GetUpgradeInsecureRequests();
   }
+
+  mOriginAttributes = BasePrincipal::Cast(mLoadingPrincipal)->OriginAttributesRef();
+}
+
+LoadInfo::LoadInfo(const LoadInfo& rhs)
+  : mLoadingPrincipal(rhs.mLoadingPrincipal)
+  , mTriggeringPrincipal(rhs.mTriggeringPrincipal)
+  , mLoadingContext(rhs.mLoadingContext)
+  , mSecurityFlags(rhs.mSecurityFlags)
+  , mInternalContentPolicyType(rhs.mInternalContentPolicyType)
+  , mUpgradeInsecureRequests(rhs.mUpgradeInsecureRequests)
+  , mInnerWindowID(rhs.mInnerWindowID)
+  , mOuterWindowID(rhs.mOuterWindowID)
+  , mParentOuterWindowID(rhs.mParentOuterWindowID)
+  , mEnforceSecurity(false)
+  , mInitialSecurityCheckDone(false)
+{
 }
 
 LoadInfo::LoadInfo(nsIPrincipal* aLoadingPrincipal,
                    nsIPrincipal* aTriggeringPrincipal,
                    nsSecurityFlags aSecurityFlags,
                    nsContentPolicyType aContentPolicyType,
+                   bool aUpgradeInsecureRequests,
                    uint64_t aInnerWindowID,
                    uint64_t aOuterWindowID,
-                   uint64_t aParentOuterWindowID)
+                   uint64_t aParentOuterWindowID,
+                   bool aEnforceSecurity,
+                   bool aInitialSecurityCheckDone,
+                   const OriginAttributes& aOriginAttributes,
+                   nsTArray<nsCOMPtr<nsIPrincipal>>& aRedirectChain)
   : mLoadingPrincipal(aLoadingPrincipal)
   , mTriggeringPrincipal(aTriggeringPrincipal)
   , mSecurityFlags(aSecurityFlags)
-  , mContentPolicyType(aContentPolicyType)
+  , mInternalContentPolicyType(aContentPolicyType)
+  , mUpgradeInsecureRequests(aUpgradeInsecureRequests)
   , mInnerWindowID(aInnerWindowID)
   , mOuterWindowID(aOuterWindowID)
   , mParentOuterWindowID(aParentOuterWindowID)
+  , mEnforceSecurity(aEnforceSecurity)
+  , mInitialSecurityCheckDone(aInitialSecurityCheckDone)
+  , mOriginAttributes(aOriginAttributes)
 {
   MOZ_ASSERT(mLoadingPrincipal);
   MOZ_ASSERT(mTriggeringPrincipal);
+
+  mRedirectChain.SwapElements(aRedirectChain);
 }
 
 LoadInfo::~LoadInfo()
@@ -103,6 +136,13 @@ LoadInfo::~LoadInfo()
 }
 
 NS_IMPL_ISUPPORTS(LoadInfo, nsILoadInfo)
+
+already_AddRefed<nsILoadInfo>
+LoadInfo::Clone() const
+{
+  RefPtr<LoadInfo> copy(new LoadInfo(*this));
+  return copy.forget();
+}
 
 NS_IMETHODIMP
 LoadInfo::GetLoadingPrincipal(nsIPrincipal** aLoadingPrincipal)
@@ -155,6 +195,34 @@ LoadInfo::GetSecurityFlags(nsSecurityFlags* aResult)
   return NS_OK;
 }
 
+void
+LoadInfo::SetWithCredentialsSecFlag()
+{
+  MOZ_ASSERT(!mEnforceSecurity,
+             "Request should not have been opened yet");
+  mSecurityFlags |= nsILoadInfo::SEC_REQUIRE_CORS_WITH_CREDENTIALS;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetSecurityMode(uint32_t *aFlags)
+{
+  *aFlags = (mSecurityFlags &
+              (nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_INHERITS |
+               nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED |
+               nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_INHERITS |
+               nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL |
+               nsILoadInfo::SEC_REQUIRE_CORS_DATA_INHERITS));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetRequireCorsWithCredentials(bool* aResult)
+{
+  *aResult =
+    (mSecurityFlags & nsILoadInfo::SEC_REQUIRE_CORS_WITH_CREDENTIALS);
+  return NS_OK;
+}
+
 NS_IMETHODIMP
 LoadInfo::GetForceInheritPrincipal(bool* aInheritPrincipal)
 {
@@ -171,30 +239,39 @@ LoadInfo::GetLoadingSandboxed(bool* aLoadingSandboxed)
 }
 
 NS_IMETHODIMP
-LoadInfo::GetContentPolicyType(nsContentPolicyType* aResult)
+LoadInfo::GetAboutBlankInherits(bool* aResult)
 {
-  *aResult = nsContentUtils::InternalContentPolicyTypeToExternal(mContentPolicyType);
+  *aResult =
+    (mSecurityFlags & nsILoadInfo::SEC_ABOUT_BLANK_INHERITS);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetAllowChrome(bool* aResult)
+{
+  *aResult =
+    (mSecurityFlags & nsILoadInfo::SEC_ALLOW_CHROME);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetExternalContentPolicyType(nsContentPolicyType* aResult)
+{
+  *aResult = nsContentUtils::InternalContentPolicyTypeToExternal(mInternalContentPolicyType);
   return NS_OK;
 }
 
 nsContentPolicyType
 LoadInfo::InternalContentPolicyType()
 {
-  return mContentPolicyType;
+  return mInternalContentPolicyType;
 }
 
 NS_IMETHODIMP
-LoadInfo::GetBaseURI(nsIURI** aBaseURI)
+LoadInfo::GetUpgradeInsecureRequests(bool* aResult)
 {
-  *aBaseURI = mBaseURI;
-  NS_IF_ADDREF(*aBaseURI);
+  *aResult = mUpgradeInsecureRequests;
   return NS_OK;
-}
-
-nsIURI*
-LoadInfo::BaseURI()
-{
-  return mBaseURI;
 }
 
 NS_IMETHODIMP
@@ -215,6 +292,123 @@ NS_IMETHODIMP
 LoadInfo::GetParentOuterWindowID(uint64_t* aResult)
 {
   *aResult = mParentOuterWindowID;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetScriptableOriginAttributes(JSContext* aCx,
+  JS::MutableHandle<JS::Value> aOriginAttributes)
+{
+  if (NS_WARN_IF(!ToJSValue(aCx, mOriginAttributes, aOriginAttributes))) {
+    return NS_ERROR_FAILURE;
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetScriptableOriginAttributes(JSContext* aCx,
+  JS::Handle<JS::Value> aOriginAttributes)
+{
+  OriginAttributes attrs;
+  if (!aOriginAttributes.isObject() || !attrs.Init(aCx, aOriginAttributes)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  mOriginAttributes = attrs;
+  return NS_OK;
+}
+
+nsresult
+LoadInfo::GetOriginAttributes(mozilla::OriginAttributes* aOriginAttributes)
+{
+  NS_ENSURE_ARG(aOriginAttributes);
+  *aOriginAttributes = mOriginAttributes;
+  return NS_OK;
+}
+
+nsresult
+LoadInfo::SetOriginAttributes(const mozilla::OriginAttributes& aOriginAttributes)
+{
+  mOriginAttributes = aOriginAttributes;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetEnforceSecurity(bool aEnforceSecurity)
+{
+  // Indicates whether the channel was openend using AsyncOpen2. Once set
+  // to true, it must remain true throughout the lifetime of the channel.
+  // Setting it to anything else than true will be discarded.
+  MOZ_ASSERT(aEnforceSecurity, "aEnforceSecurity must be true");
+  mEnforceSecurity = mEnforceSecurity || aEnforceSecurity;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetEnforceSecurity(bool* aResult)
+{
+  *aResult = mEnforceSecurity;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetInitialSecurityCheckDone(bool aInitialSecurityCheckDone)
+{
+  // Indicates whether the channel was ever evaluated by the
+  // ContentSecurityManager. Once set to true, this flag must
+  // remain true throughout the lifetime of the channel.
+  // Setting it to anything else than true will be discarded.
+  MOZ_ASSERT(aInitialSecurityCheckDone, "aInitialSecurityCheckDone must be true");
+  mInitialSecurityCheckDone = mInitialSecurityCheckDone || aInitialSecurityCheckDone;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetInitialSecurityCheckDone(bool* aResult)
+{
+  *aResult = mInitialSecurityCheckDone;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::AppendRedirectedPrincipal(nsIPrincipal* aPrincipal)
+{
+  NS_ENSURE_ARG(aPrincipal);
+  mRedirectChain.AppendElement(aPrincipal);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetRedirectChain(JSContext* aCx, JS::MutableHandle<JS::Value> aChain)
+{
+  if (!ToJSValue(aCx, mRedirectChain, aChain)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+  return NS_OK;
+}
+
+const nsTArray<nsCOMPtr<nsIPrincipal>>&
+LoadInfo::RedirectChain()
+{
+  return mRedirectChain;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetTainting(uint32_t* aTaintingOut)
+{
+  MOZ_ASSERT(aTaintingOut);
+  *aTaintingOut = static_cast<uint32_t>(mTainting);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::MaybeIncreaseTainting(uint32_t aTainting)
+{
+  NS_ENSURE_ARG(aTainting <= TAINTING_OPAQUE);
+  LoadTainting tainting = static_cast<LoadTainting>(aTainting);
+  if (tainting > mTainting) {
+    mTainting = tainting;
+  }
   return NS_OK;
 }
 

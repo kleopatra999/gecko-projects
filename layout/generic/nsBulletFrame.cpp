@@ -128,7 +128,7 @@ nsBulletFrame::DidSetStyleContext(nsStyleContext* aOldStyleContext)
     }
 
     if (needNewRequest) {
-      nsRefPtr<imgRequestProxy> newRequestClone;
+      RefPtr<imgRequestProxy> newRequestClone;
       newRequest->Clone(mListener, getter_AddRefs(newRequestClone));
 
       // Deregister the old request. We wait until after Clone is done in case
@@ -304,7 +304,7 @@ nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
     }
   }
 
-  nsRefPtr<nsFontMetrics> fm;
+  RefPtr<nsFontMetrics> fm;
   ColorPattern color(ToDeviceColor(
                        nsLayoutUtils::GetColor(this, eCSSProperty_color)));
 
@@ -410,7 +410,7 @@ nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
   default:
     {
       aRenderingContext.ThebesContext()->SetColor(
-                          nsLayoutUtils::GetColor(this, eCSSProperty_color));
+        Color::FromABGR(nsLayoutUtils::GetColor(this, eCSSProperty_color)));
 
       nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
                                             GetFontSizeInflation());
@@ -535,7 +535,7 @@ nsBulletFrame::GetDesiredSize(nsPresContext*  aCX,
 
   const nsStyleList* myList = StyleList();
   nscoord ascent;
-  nsRefPtr<nsFontMetrics> fm;
+  RefPtr<nsFontMetrics> fm;
   nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
                                         aFontSizeInflation);
 
@@ -718,6 +718,16 @@ nsBulletFrame::Notify(imgIRequest *aRequest, int32_t aType, const nsIntRect* aDa
     InvalidateFrame();
   }
 
+  if (aType == imgINotificationObserver::DECODE_COMPLETE) {
+    if (nsIDocument* parent = GetOurCurrentDoc()) {
+      nsCOMPtr<imgIContainer> container;
+      aRequest->GetImage(getter_AddRefs(container));
+      if (container) {
+        container->PropagateUseCounters(parent);
+      }
+    }
+  }
+
   return NS_OK;
 }
 
@@ -883,7 +893,7 @@ nsBulletFrame::GetLogicalBaseline(WritingMode aWritingMode) const
   if (GetStateBits() & BULLET_FRAME_IMAGE_LOADING) {
     ascent = BSize(aWritingMode);
   } else {
-    nsRefPtr<nsFontMetrics> fm;
+    RefPtr<nsFontMetrics> fm;
     nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
                                           GetFontSizeInflation());
     CounterStyle* listStyleType = StyleList()->GetCounterStyle();

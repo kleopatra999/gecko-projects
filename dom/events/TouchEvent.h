@@ -124,12 +124,17 @@ public:
 protected:
   ~TouchEvent() {}
 
-  nsRefPtr<TouchList> mTouches;
-  nsRefPtr<TouchList> mTargetTouches;
-  nsRefPtr<TouchList> mChangedTouches;
+  RefPtr<TouchList> mTouches;
+  RefPtr<TouchList> mTargetTouches;
+  RefPtr<TouchList> mChangedTouches;
 };
 
 } // namespace dom
 } // namespace mozilla
+
+already_AddRefed<mozilla::dom::TouchEvent>
+NS_NewDOMTouchEvent(mozilla::dom::EventTarget* aOwner,
+                    nsPresContext* aPresContext,
+                    mozilla::WidgetTouchEvent* aEvent);
 
 #endif // mozilla_dom_TouchEvent_h_

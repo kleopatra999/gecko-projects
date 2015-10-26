@@ -188,10 +188,10 @@ DrawTargetCaptureImpl::ReplayToDrawTarget(DrawTarget* aDT, const Matrix& aTransf
   uint8_t* current = start;
 
   while (current < start + mDrawCommandStorage.size()) {
-    reinterpret_cast<DrawingCommand*>(current + sizeof(uint32_t))->ExecuteOnDT(aDT, aTransform);
+    reinterpret_cast<DrawingCommand*>(current + sizeof(uint32_t))->ExecuteOnDT(aDT, &aTransform);
     current += *(uint32_t*)current;
   }
 }
 
-}
-}
+} // namespace gfx
+} // namespace mozilla

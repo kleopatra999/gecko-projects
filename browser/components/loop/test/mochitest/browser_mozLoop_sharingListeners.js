@@ -6,10 +6,10 @@
  */
 "use strict";
 
-const {injectLoopAPI} = Cu.import("resource:///modules/loop/MozLoopAPI.jsm", {});
+const { injectLoopAPI } = Cu.import("resource:///modules/loop/MozLoopAPI.jsm", {});
 gMozLoopAPI = injectLoopAPI({});
 
-let handlers = [
+var handlers = [
   {
     resolve: null,
     windowId: null,
@@ -35,7 +35,7 @@ function promiseWindowIdReceivedOnAdd(handler) {
   });
 }
 
-let createdTabs = [];
+var createdTabs = [];
 
 function promiseWindowIdReceivedNewTab(handlersParam = []) {
   let promiseHandlers = [];
@@ -46,10 +46,10 @@ function promiseWindowIdReceivedNewTab(handlersParam = []) {
     }));
   });
 
-  let createdTab = gBrowser.selectedTab = gBrowser.addTab();
+  let createdTab = gBrowser.selectedTab = gBrowser.addTab("about:mozilla");
   createdTabs.push(createdTab);
 
-  promiseHandlers.push(promiseTabLoadEvent(createdTab, "about:mozilla"));
+  promiseHandlers.push(BrowserTestUtils.browserLoaded(createdTab.linkedBrowser));
 
   return Promise.all(promiseHandlers);
 }

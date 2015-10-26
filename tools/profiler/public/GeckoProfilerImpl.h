@@ -42,7 +42,7 @@ class GeckoSampler;
 
 namespace mozilla {
 class TimeStamp;
-}
+} // namespace mozilla
 
 extern mozilla::ThreadLocal<PseudoStack *> tlsPseudoStack;
 extern mozilla::ThreadLocal<GeckoSampler *> tlsTicker;
@@ -119,6 +119,12 @@ static inline
 void profiler_free_backtrace(ProfilerBacktrace* aBacktrace)
 {
   mozilla_sampler_free_backtrace(aBacktrace);
+}
+
+static inline
+void profiler_get_backtrace_noalloc(char *output, size_t outputSize)
+{
+  return mozilla_sampler_get_backtrace_noalloc(output, outputSize);
 }
 
 static inline
@@ -377,7 +383,7 @@ static inline void profiler_tracing(const char* aCategory, const char* aInfo,
 
 namespace mozilla {
 
-class MOZ_STACK_CLASS GeckoProfilerTracingRAII {
+class MOZ_RAII GeckoProfilerTracingRAII {
 public:
   GeckoProfilerTracingRAII(const char* aCategory, const char* aInfo,
                            mozilla::UniquePtr<ProfilerBacktrace> aBacktrace
@@ -449,7 +455,7 @@ private:
   void* mHandle;
 };
 
-} //mozilla
+} // namespace mozilla
 
 inline PseudoStack* mozilla_get_pseudo_stack(void)
 {

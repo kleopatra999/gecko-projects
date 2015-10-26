@@ -5,10 +5,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "mozilla/BasePrincipal.h"
 #include "mozilla/net/PNeckoParent.h"
 #include "mozilla/net/NeckoCommon.h"
 #include "mozilla/net/OfflineObserver.h"
+#include "nsIAuthPrompt2.h"
 #include "nsINetworkPredictor.h"
+#include "nsNetUtil.h"
 
 #ifndef mozilla_net_NeckoParent_h
 #define mozilla_net_NeckoParent_h
@@ -36,8 +39,7 @@ public:
   static const char *
   GetValidatedAppInfo(const SerializedLoadContext& aSerialized,
                       PContentParent* aBrowser,
-                      uint32_t* aAppId,
-                      bool* aInBrowserElement);
+                      mozilla::OriginAttributes& aAttrs);
 
   /*
    * Creates LoadContext for parent-side of an e10s channel.
@@ -144,11 +146,11 @@ protected:
   virtual PTCPServerSocketParent*
     AllocPTCPServerSocketParent(const uint16_t& aLocalPort,
                                 const uint16_t& aBacklog,
-                                const nsString& aBinaryType) override;
+                                const bool& aUseArrayBuffers) override;
   virtual bool RecvPTCPServerSocketConstructor(PTCPServerSocketParent*,
                                                const uint16_t& aLocalPort,
                                                const uint16_t& aBacklog,
-                                               const nsString& aBinaryType) override;
+                                               const bool& aUseArrayBuffers) override;
   virtual bool DeallocPTCPServerSocketParent(PTCPServerSocketParent*) override;
   virtual PUDPSocketParent* AllocPUDPSocketParent(const Principal& aPrincipal,
                                                   const nsCString& aFilter) override;
@@ -222,10 +224,12 @@ protected:
                              const IPC::SerializedLoadContext& aLoadContext) override;
   virtual bool RecvPredReset() override;
 
+  virtual bool RecvRemoveSchedulingContext(const nsCString& scid) override;
+
 private:
   nsCString mCoreAppsBasePath;
   nsCString mWebAppsBasePath;
-  nsRefPtr<OfflineObserver> mObserver;
+  RefPtr<OfflineObserver> mObserver;
 };
 
 /**

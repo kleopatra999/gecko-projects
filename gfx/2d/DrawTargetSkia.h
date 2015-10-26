@@ -7,11 +7,11 @@
 #define _MOZILLA_GFX_SOURCESURFACESKIA_H
 
 #ifdef USE_SKIA_GPU
-#include "skia/GrContext.h"
-#include "skia/GrGLInterface.h"
+#include "skia/include/gpu/GrContext.h"
+#include "skia/include/gpu/gl/GrGLInterface.h"
 #endif
 
-#include "skia/SkCanvas.h"
+#include "skia/include/core/SkCanvas.h"
 
 #include "2D.h"
 #include "HelpersSkia.h"
@@ -145,7 +145,7 @@ private:
   SourceSurfaceSkia* mSnapshot;
 };
 
-}
-}
+} // namespace gfx
+} // namespace mozilla
 
 #endif // _MOZILLA_GFX_SOURCESURFACESKIA_H

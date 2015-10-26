@@ -5,9 +5,13 @@
 
 const {PushDB, PushService, PushServiceWebSocket} = serviceExports;
 
+const userAgentID = '3c7462fc-270f-45be-a459-b9d631b0d093';
+
 function run_test() {
   do_get_profile();
-  setPrefs();
+  setPrefs({
+    userAgentID: userAgentID,
+  });
   disableServiceWorkerEvents(
     'https://example.com/a',
     'https://example.com/b',
@@ -26,19 +30,22 @@ add_task(function* test_notification_error() {
     pushEndpoint: 'https://example.org/update/success-1',
     scope: 'https://example.com/a',
     originAttributes: originAttributes,
-    version: 1
+    version: 1,
+    quota: Infinity,
   }, {
     channelID: '3c3930ba-44de-40dc-a7ca-8a133ec1a866',
     pushEndpoint: 'https://example.org/update/error',
     scope: 'https://example.com/b',
     originAttributes: originAttributes,
-    version: 2
+    version: 2,
+    quota: Infinity,
   }, {
     channelID: 'b63f7bef-0a0d-4236-b41e-086a69dfd316',
     pushEndpoint: 'https://example.org/update/success-2',
     scope: 'https://example.com/c',
     originAttributes: originAttributes,
-    version: 3
+    version: 3,
+    quota: Infinity,
   }];
   for (let record of records) {
     yield db.put(record);
@@ -55,8 +62,8 @@ add_task(function* test_notification_error() {
     )
   ]);
 
-  let ackDefer = Promise.defer();
-  let ackDone = after(records.length, ackDefer.resolve);
+  let ackDone;
+  let ackPromise = new Promise(resolve => ackDone = after(records.length, resolve));
   PushService.init({
     serverURI: "wss://push.example.org/",
     networkInfo: new MockDesktopNetworkInfo(),
@@ -79,7 +86,7 @@ add_task(function* test_notification_error() {
           this.serverSendMsg(JSON.stringify({
             messageType: 'hello',
             status: 200,
-            uaid: '3c7462fc-270f-45be-a459-b9d631b0d093'
+            uaid: userAgentID,
           }));
           this.serverSendMsg(JSON.stringify({
             messageType: 'notification',
@@ -109,7 +116,7 @@ add_task(function* test_notification_error() {
     'Wrong endpoint for notification C');
   equal(cPush.version, 4, 'Wrong version for notification C');
 
-  yield waitForPromise(ackDefer.promise, DEFAULT_TIMEOUT,
+  yield waitForPromise(ackPromise, DEFAULT_TIMEOUT,
     'Timed out waiting for acknowledgements');
 
   let aRecord = yield db.getByIdentifiers({scope: 'https://example.com/a',

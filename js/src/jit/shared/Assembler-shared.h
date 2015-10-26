@@ -34,7 +34,7 @@ namespace jit {
 
 namespace Disassembler {
 class HeapAccess;
-};
+} // namespace Disassembler
 
 static const uint32_t Simd128DataSize = 4 * sizeof(int32_t);
 static_assert(Simd128DataSize == 4 * sizeof(int32_t), "SIMD data should be able to contain int32x4");
@@ -122,6 +122,15 @@ struct ImmWord
     uintptr_t value;
 
     explicit ImmWord(uintptr_t value) : value(value)
+    { }
+};
+
+// Used for 64-bit immediates which do not require relocation.
+struct Imm64
+{
+    uint64_t value;
+
+    explicit Imm64(uint64_t value) : value(value)
     { }
 };
 
@@ -413,15 +422,18 @@ struct AbsoluteLabel : public LabelBase
     }
 };
 
-// A code label contains an absolute reference to a point in the code
-// Thus, it cannot be patched until after linking
+// A code label contains an absolute reference to a point in the code. Thus, it
+// cannot be patched until after linking.
+// When the source label is resolved into a memory address, this address is
+// patched into the destination address.
 class CodeLabel
 {
-    // The destination position, where the absolute reference should get patched into
+    // The destination position, where the absolute reference should get
+    // patched into.
     AbsoluteLabel dest_;
 
-    // The source label (relative) in the code to where the
-    // the destination should get patched to.
+    // The source label (relative) in the code to where the destination should
+    // get patched to.
     Label src_;
 
   public:
@@ -771,7 +783,7 @@ class AsmJSHeapAccess
         cmpDelta_ = cmp == NoLengthCheck ? 0 : insnOffset - cmp;
         MOZ_ASSERT(offsetWithinWholeSimdVector_ == offsetWithinWholeSimdVector);
     }
-#elif defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || defined(JS_CODEGEN_MIPS)
+#elif defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || defined(JS_CODEGEN_MIPS32)
     explicit AsmJSHeapAccess(uint32_t insnOffset)
     {
         mozilla::PodZero(this);  // zero padding for Valgrind
@@ -819,6 +831,7 @@ enum AsmJSImmKind
     AsmJSImm_aeabi_idivmod   = AsmJSExit::Builtin_IDivMod,
     AsmJSImm_aeabi_uidivmod  = AsmJSExit::Builtin_UDivMod,
     AsmJSImm_AtomicCmpXchg   = AsmJSExit::Builtin_AtomicCmpXchg,
+    AsmJSImm_AtomicXchg      = AsmJSExit::Builtin_AtomicXchg,
     AsmJSImm_AtomicFetchAdd  = AsmJSExit::Builtin_AtomicFetchAdd,
     AsmJSImm_AtomicFetchSub  = AsmJSExit::Builtin_AtomicFetchSub,
     AsmJSImm_AtomicFetchAnd  = AsmJSExit::Builtin_AtomicFetchAnd,
@@ -913,7 +926,8 @@ class AssemblerShared
     Vector<AsmJSAbsoluteLink, 0, SystemAllocPolicy> asmJSAbsoluteLinks_;
 
   protected:
-    Vector<CodeOffsetLabel, 0, SystemAllocPolicy> profilerCallSites_;
+    Vector<CodeLabel, 0, SystemAllocPolicy> codeLabels_;
+
     bool enoughMemory_;
     bool embedsNurseryPointers_;
 
@@ -933,10 +947,6 @@ class AssemblerShared
 
     bool oom() const {
         return !enoughMemory_;
-    }
-
-    void appendProfilerCallSite(CodeOffsetLabel label) {
-        enoughMemory_ &= profilerCallSites_.append(label);
     }
 
     bool embedsNurseryPointers() const {
@@ -963,6 +973,16 @@ class AssemblerShared
     AsmJSAbsoluteLink asmJSAbsoluteLink(size_t i) const { return asmJSAbsoluteLinks_[i]; }
 
     static bool canUseInSingleByteInstruction(Register reg) { return true; }
+
+    void addCodeLabel(CodeLabel label) {
+        propagateOOM(codeLabels_.append(label));
+    }
+    size_t numCodeLabels() const {
+        return codeLabels_.length();
+    }
+    CodeLabel codeLabel(size_t i) {
+        return codeLabels_[i];
+    }
 };
 
 } // namespace jit

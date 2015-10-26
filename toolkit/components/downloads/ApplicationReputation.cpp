@@ -15,17 +15,19 @@
 #include "nsIHttpChannel.h"
 #include "nsIIOService.h"
 #include "nsIPrefService.h"
-#include "nsIScriptSecurityManager.h"
+#include "nsISimpleEnumerator.h"
 #include "nsIStreamListener.h"
 #include "nsIStringStream.h"
 #include "nsITimer.h"
 #include "nsIUploadChannel2.h"
 #include "nsIURI.h"
+#include "nsIURL.h"
 #include "nsIUrlClassifierDBService.h"
 #include "nsIX509Cert.h"
 #include "nsIX509CertDB.h"
 #include "nsIX509CertList.h"
 
+#include "mozilla/BasePrincipal.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
 #include "mozilla/Telemetry.h"
@@ -48,6 +50,8 @@
 #include "nsILoadInfo.h"
 #include "nsContentUtils.h"
 
+using mozilla::BasePrincipal;
+using mozilla::OriginAttributes;
 using mozilla::Preferences;
 using mozilla::TimeStamp;
 using mozilla::Telemetry::Accumulate;
@@ -244,7 +248,7 @@ private:
 
   nsCString mSpec;
   bool mAllowlistOnly;
-  nsRefPtr<PendingLookup> mPendingLookup;
+  RefPtr<PendingLookup> mPendingLookup;
   nsresult LookupSpecInternal(const nsACString& aSpec);
 };
 
@@ -291,13 +295,12 @@ PendingDBLookup::LookupSpecInternal(const nsACString& aSpec)
   rv = ios->NewURI(aSpec, nullptr, nullptr, getter_AddRefs(uri));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsCOMPtr<nsIPrincipal> principal;
-  nsCOMPtr<nsIScriptSecurityManager> secMan =
-    do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = secMan->GetNoAppCodebasePrincipal(uri, getter_AddRefs(principal));
-  NS_ENSURE_SUCCESS(rv, rv);
+  OriginAttributes attrs;
+  nsCOMPtr<nsIPrincipal> principal =
+    BasePrincipal::CreateCodebasePrincipal(uri, attrs);
+  if (!principal) {
+    return NS_ERROR_FAILURE;
+  }
 
   // Check local lists to see if the URI has already been whitelisted or
   // blacklisted.
@@ -445,7 +448,7 @@ PendingLookup::LookupNext()
     // Check the source URI, referrer and redirect chain.
     spec = mAnylistSpecs[index];
     mAnylistSpecs.RemoveElementAt(index);
-    nsRefPtr<PendingDBLookup> lookup(new PendingDBLookup(this));
+    RefPtr<PendingDBLookup> lookup(new PendingDBLookup(this));
     return lookup->LookupSpec(spec, false);
   }
   // If any of mAnylistSpecs matched the blocklist, go ahead and block.
@@ -462,7 +465,7 @@ PendingLookup::LookupNext()
     spec = mAllowlistSpecs[index];
     LOG(("PendingLookup::LookupNext: checking %s on allowlist", spec.get()));
     mAllowlistSpecs.RemoveElementAt(index);
-    nsRefPtr<PendingDBLookup> lookup(new PendingDBLookup(this));
+    RefPtr<PendingDBLookup> lookup(new PendingDBLookup(this));
     return lookup->LookupSpec(spec, true);
   }
   // There are no more URIs to check against local list. If the file is
@@ -951,7 +954,7 @@ PendingLookup::SendRemoteQueryInternal()
                         nullptr, // aLoadingNode
                         nsContentUtils::GetSystemPrincipal(),
                         nullptr, // aTriggeringPrincipal
-                        nsILoadInfo::SEC_NORMAL,
+                        nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
                         nsIContentPolicy::TYPE_OTHER,
                         getter_AddRefs(mChannel));
   NS_ENSURE_SUCCESS(rv, rv);
@@ -979,7 +982,7 @@ PendingLookup::SendRemoteQueryInternal()
   mTimeoutTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
   mTimeoutTimer->InitWithCallback(this, timeoutMs, nsITimer::TYPE_ONE_SHOT);
 
-  rv = mChannel->AsyncOpen(this, nullptr);
+  rv = mChannel->AsyncOpen2(this);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -1174,7 +1177,7 @@ nsresult ApplicationReputationService::QueryReputationInternal(
   NS_ENSURE_STATE(uri);
 
   // Create a new pending lookup and start the call chain.
-  nsRefPtr<PendingLookup> lookup(new PendingLookup(aQuery, aCallback));
+  RefPtr<PendingLookup> lookup(new PendingLookup(aQuery, aCallback));
   NS_ENSURE_STATE(lookup);
 
   return lookup->StartLookup();

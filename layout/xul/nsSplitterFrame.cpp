@@ -288,7 +288,7 @@ nsSplitterFrame::Init(nsIContent*       aContent,
         aContent->SetAttr(kNameSpaceID_None, nsGkAtoms::orient,
                           NS_LITERAL_STRING("vertical"), false);
         nsStyleContext* parentStyleContext = StyleContext()->GetParent();
-        nsRefPtr<nsStyleContext> newContext = PresContext()->StyleSet()->
+        RefPtr<nsStyleContext> newContext = PresContext()->StyleSet()->
           ResolveStyleFor(aContent->AsElement(), parentStyleContext);
         SetStyleContextWithoutNotification(newContext);
       }
@@ -387,17 +387,20 @@ nsSplitterFrame::HandleEvent(nsPresContext* aPresContext,
   }
 
   nsWeakFrame weakFrame(this);
-  nsRefPtr<nsSplitterFrameInner> kungFuDeathGrip(mInner);
-  switch (aEvent->message) {
-    case NS_MOUSE_MOVE: 
+  RefPtr<nsSplitterFrameInner> kungFuDeathGrip(mInner);
+  switch (aEvent->mMessage) {
+    case eMouseMove: 
       mInner->MouseDrag(aPresContext, aEvent);
-    break;
+      break;
   
-    case NS_MOUSE_BUTTON_UP:
+    case eMouseUp:
       if (aEvent->AsMouseEvent()->button == WidgetMouseEvent::eLeftButton) {
         mInner->MouseUp(aPresContext, aEvent);
       }
-    break;
+      break;
+
+    default:
+      break;
   }
 
   NS_ENSURE_STATE(weakFrame.IsAlive());

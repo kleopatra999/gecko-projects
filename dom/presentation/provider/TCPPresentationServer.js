@@ -14,19 +14,16 @@ function log(aMsg) {
   dump("-*- TCPPresentationServer.js: " + aMsg + "\n");
 }
 
-function TCPDeviceInfo(aHost, aPort, aId, aName, aType) {
-  this.host = aHost;
+function TCPDeviceInfo(aAddress, aPort, aId) {
+  this.address = aAddress;
   this.port = aPort;
   this.id = aId;
-  this.name = aName;
-  this.type = aType;
 }
 
 function TCPPresentationServer() {
   this._id = null;
   this._port = 0;
   this._serverSocket = null;
-  this._devices = null;
 }
 
 TCPPresentationServer.prototype = {
@@ -37,18 +34,16 @@ TCPPresentationServer.prototype = {
    */
   _controlChannels: [],
 
-  init: function(aId, aPort) {
-    if (this._isInit()) {
+  startService: function(aPort) {
+    if (this._isServiceInit()) {
       DEBUG && log("TCPPresentationServer - server socket has been initialized");
       throw Cr.NS_ERROR_FAILURE;
     }
 
-    if (typeof aId === "undefined" || typeof aPort === "undefined") {
-      DEBUG && log("TCPPresentationServer - aId/aPort should not be undefined");
+    if (typeof aPort === "undefined") {
+      DEBUG && log("TCPPresentationServer - aPort should not be undefined");
       throw Cr.NS_ERROR_FAILURE;
     }
-
-    DEBUG && log("TCPPresentationServer - init id: " + aId + " port: " + aPort);
 
     /**
      * 0 or undefined indicates opt-out parameter, and a port will be selected
@@ -66,19 +61,16 @@ TCPPresentationServer.prototype = {
 
     try {
       this._serverSocket.init(serverSocketPort, false, -1);
+      this._serverSocket.asyncListen(this);
     } catch (e) {
       // NS_ERROR_SOCKET_ADDRESS_IN_USE
       DEBUG && log("TCPPresentationServer - init server socket fail: " + e);
       throw Cr.NS_ERROR_FAILURE;
     }
 
-    /**
-     * The setter may trigger |_serverSocket.asyncListen| if the |id| setting
-     * successes.
-     */
-    this.id = aId;
     this._port = this._serverSocket.port;
-    this._devices = new Map(); // id -> device
+
+    DEBUG && log("TCPPresentationServer - service start on port: " + aPort);
   },
 
   get id() {
@@ -86,16 +78,7 @@ TCPPresentationServer.prototype = {
   },
 
   set id(aId) {
-    if (!aId || aId.length == 0 || aId === this._id) {
-      return;
-    } else if (this._id) {
-      throw Cr.NS_ERROR_FAILURE;
-    }
     this._id = aId;
-
-    if (this._serverSocket) {
-      this._serverSocket.asyncListen(this);
-    }
   },
 
   get port() {
@@ -110,46 +93,16 @@ TCPPresentationServer.prototype = {
     return this._listener;
   },
 
-  _isInit: function() {
-    return this._id !== null && this._serverSocket !== null;
+  _isServiceInit: function() {
+    return this._serverSocket !== null;
   },
 
-  createTCPDevice: function(aId, aName, aType, aHost, aPort) {
-    DEBUG && log("TCPPresentationServer - createTCPDevice with id: " + aId);
-    if (this._devices.has(aId)) {
-      throw Cr.NS_ERROR_INVALID_ARG;
-    }
-
-    this._devices.set(aId, new TCPDevice(this, {id: aId,
-                                                name: aName,
-                                                type: aType,
-                                                host: aHost,
-                                                port: aPort}));
-    return this._devices.get(aId);
-  },
-
-  getTCPDevice: function(aId) {
-    DEBUG && log("TCPPresentationServer - getTCPDevice with id: " + aId);
-    if (!this._devices.has(aId)) {
-      throw Cr.NS_ERROR_INVALID_ARG;
-    }
-    return this._devices.get(aId);
-  },
-
-  removeTCPDevice: function(aId) {
-    DEBUG && log("TCPPresentationServer - removeTCPDevice with id: " + aId);
-    if (!this._devices.has(aId)) {
-      throw Cr.NS_ERROR_INVALID_ARG;
-    }
-    this._devices.delete(aId);
-  },
-
-  requestSession: function(aDevice, aUrl, aPresentationId) {
-    if (!this._isInit()) {
-      DEBUG && log("TCPPresentationServer - has not initialized; requestSession fails");
+  requestSession: function(aDeviceInfo, aUrl, aPresentationId) {
+    if (!this.id) {
+      DEBUG && log("TCPPresentationServer - Id has not initialized; requestSession fails");
       return null;
     }
-    DEBUG && log("TCPPresentationServer - requestSession to " + aDevice.name
+    DEBUG && log("TCPPresentationServer - requestSession to " + aDeviceInfo.id
                  + ": " + aUrl + ", " + aPresentationId);
 
     let sts = Cc["@mozilla.org/network/socket-transport-service;1"]
@@ -159,8 +112,8 @@ TCPPresentationServer.prototype = {
     try {
       socketTransport = sts.createTransport(null,
                                             0,
-                                            aDevice.host,
-                                            aDevice.port,
+                                            aDeviceInfo.address,
+                                            aDeviceInfo.port,
                                             null);
     } catch (e) {
       DEBUG && log("TCPPresentationServer - createTransport throws: " + e);
@@ -169,22 +122,23 @@ TCPPresentationServer.prototype = {
     }
     return new TCPControlChannel(this,
                                  socketTransport,
-                                 aDevice,
+                                 aDeviceInfo,
                                  aPresentationId,
                                  "sender",
                                  aUrl);
   },
 
-  responseSession: function(aDevice, aSocketTransport) {
-    if (!this._isInit()) {
-      DEBUG && log("TCPPresentationServer - has not initialized; responseSession fails");
+  responseSession: function(aDeviceInfo, aSocketTransport) {
+    if (!this._isServiceInit()) {
+      DEBUG && log("TCPPresentationServer - should never receive remote " +
+                   "session request before server socket initialization");
       return null;
     }
     DEBUG && log("TCPPresentationServer - responseSession to "
-                 + JSON.stringify(aDevice));
+                 + JSON.stringify(aDeviceInfo));
     return new TCPControlChannel(this,
                                  aSocketTransport,
-                                 aDevice,
+                                 aDeviceInfo,
                                  null, // presentation ID
                                  "receiver",
                                  null // url
@@ -192,18 +146,13 @@ TCPPresentationServer.prototype = {
   },
 
   // Triggered by TCPControlChannel
-  onSessionRequest: function(aId, aUrl, aPresentationId, aControlChannel) {
-    let device = this._devices.get(aId);
-    if (!device) {
-      //XXX Bug 1136565 - should have a way to recovery
-      DEBUG && log("TCPPresentationServer - onSessionRequest not found device for id: "
-                   + aId );
-      return;
-    }
-    device.listener.onSessionRequest(device,
-                                     aUrl,
-                                     aPresentationId,
-                                     aControlChannel);
+  onSessionRequest: function(aDeviceInfo, aUrl, aPresentationId, aControlChannel) {
+    DEBUG && log("TCPPresentationServer - onSessionRequest: "
+                 + aDeviceInfo.address + ":" + aDeviceInfo.port);
+    this.listener.onSessionRequest(aDeviceInfo,
+                                   aUrl,
+                                   aPresentationId,
+                                   aControlChannel);
     this.releaseControlChannel(aControlChannel);
   },
 
@@ -211,8 +160,8 @@ TCPPresentationServer.prototype = {
   onSocketAccepted: function(aServerSocket, aClientSocket) {
     DEBUG && log("TCPPresentationServer - onSocketAccepted: "
                  + aClientSocket.host + ":" + aClientSocket.port);
-    let device = new TCPDeviceInfo(aClientSocket.host, aClientSocket.port);
-    this.holdControlChannel(this.responseSession(device, aClientSocket));
+    let deviceInfo = new TCPDeviceInfo(aClientSocket.host, aClientSocket.port);
+    this.holdControlChannel(this.responseSession(deviceInfo, aClientSocket));
   },
 
   holdControlChannel: function(aControlChannel) {
@@ -248,10 +197,7 @@ TCPPresentationServer.prototype = {
       this._serverSocket.close();
       this._serverSocket = null;
     }
-    this._id = null;
     this._port = 0;
-    this._devices && this._devices.clear();
-    this._devices = null;
   },
 
   classID: Components.ID("{f4079b8b-ede5-4b90-a112-5b415a931deb}"),
@@ -266,8 +212,8 @@ function ChannelDescription(aInit) {
       this._tcpAddresses = Cc["@mozilla.org/array;1"]
                            .createInstance(Ci.nsIMutableArray);
       for (let address of aInit.tcpAddress) {
-        let wrapper = Cc["@mozilla.org/supports-string;1"]
-                      .createInstance(Ci.nsISupportsString);
+        let wrapper = Cc["@mozilla.org/supports-cstring;1"]
+                      .createInstance(Ci.nsISupportsCString);
         wrapper.data = address;
         this._tcpAddresses.appendElement(wrapper, false);
       }
@@ -315,7 +261,7 @@ function discriptionAsJson(aDescription) {
       let addresses = aDescription.tcpAddress.QueryInterface(Ci.nsIArray);
       json.tcpAddress = [];
       for (let idx = 0; idx < addresses.length; idx++) {
-        let address = addresses.queryElementAt(idx, Ci.nsISupportsString);
+        let address = addresses.queryElementAt(idx, Ci.nsISupportsCString);
         json.tcpAddress.push(address.data);
       }
       json.tcpPort = aDescription.tcpPort;
@@ -329,13 +275,13 @@ function discriptionAsJson(aDescription) {
 
 function TCPControlChannel(presentationServer,
                            transport,
-                           device,
+                           deviceInfo,
                            presentationId,
                            direction,
                            url) {
   DEBUG && log("create TCPControlChannel: " + presentationId + " with role: "
                + direction);
-  this._device = device;
+  this._deviceInfo = deviceInfo;
   this._presentationId = presentationId;
   this._direction = direction;
   this._transport = transport;
@@ -529,13 +475,13 @@ TCPControlChannel.prototype = {
   // Handle command from remote side
   _handleMessage: function(aMsg) {
     DEBUG && log("TCPControlChannel - handleMessage from "
-                 + JSON.stringify(this._device) + ": " + JSON.stringify(aMsg));
+                 + JSON.stringify(this._deviceInfo) + ": " + JSON.stringify(aMsg));
     switch (aMsg.type) {
       case "requestSession:Init": {
-        this._device.id = aMsg.id;
+        this._deviceInfo.id = aMsg.id;
         this._url = aMsg.url;
         this._presentationId = aMsg.presentationId;
-        this._presentationServer.onSessionRequest(aMsg.id,
+        this._presentationServer.onSessionRequest(this._deviceInfo,
                                                   aMsg.url,
                                                   aMsg.presentationId,
                                                   this);
@@ -543,11 +489,11 @@ TCPControlChannel.prototype = {
         break;
       }
       case "requestSession:Offer": {
-        this._listener.onOffer(new ChannelDescription(aMsg.offer));
+        this._onOffer(aMsg.offer);
         break;
       }
       case "requestSession:Answer": {
-        this._listener.onAnswer(new ChannelDescription(aMsg.answer));
+        this._onAnswer(aMsg.answer);
         break;
       }
     }
@@ -603,7 +549,7 @@ TCPControlChannel.prototype = {
       return;
     }
     if (!this._listener) {
-      this._pendingOffer = offer;
+      this._pendingOffer = aOffer;
       return;
     }
     DEBUG && log("TCPControlChannel - notify offer: "
@@ -673,45 +619,6 @@ TCPControlChannel.prototype = {
   classID: Components.ID("{fefb8286-0bdc-488b-98bf-0c11b485c955}"),
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIPresentationControlChannel,
                                          Ci.nsIStreamListener]),
-};
-
-function TCPDevice(aPresentationServer, aInfo) {
-  DEBUG && log("create TCPDevice");
-  this.id = aInfo.id;
-  this.name = aInfo.name;
-  this.type = aInfo.type
-  this.host = aInfo.host;
-  this.port = aInfo.port;
-
-  this._presentationServer = aPresentationServer;
-  this._listener = null;
-}
-
-TCPDevice.prototype = {
-  establishControlChannel: function(aUrl, aPresentationId) {
-    DEBUG && log("TCPDevice - establishControlChannel: " + aUrl + ", "
-                 + aPresentationId);
-    return this._presentationServer
-               .requestSession(this._getDeviceInfo(), aUrl, aPresentationId);
-  },
-  get listener() {
-    return this._listener;
-  },
-  set listener(aListener) {
-    DEBUG && log("TCPDevice - set listener");
-    this._listener = aListener;
-  },
-
-  _getDeviceInfo: function() {
-    return new TCPDeviceInfo(this.host,
-                             this.port,
-                             this.id,
-                             this.name,
-                             this.type);
-  },
-
-  classID: Components.ID("{d6492549-a4f2-4a0c-9a93-00f0e9918b0a}"),
-  QueryInterface: XPCOMUtils.generateQI([Ci.nsIPresentationDevice]),
 };
 
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory([TCPPresentationServer]);

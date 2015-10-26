@@ -21,12 +21,12 @@ var _profileInitialized = false;
 // modules.
 _register_modules_protocol_handler();
 
-let _Promise = Components.utils.import("resource://gre/modules/Promise.jsm", {}).Promise;
+var _Promise = Components.utils.import("resource://gre/modules/Promise.jsm", {}).Promise;
 
 // Support a common assertion library, Assert.jsm.
-let AssertCls = Components.utils.import("resource://testing-common/Assert.jsm", null).Assert;
+var AssertCls = Components.utils.import("resource://testing-common/Assert.jsm", null).Assert;
 // Pass a custom report function for xpcshell-test style reporting.
-let Assert = new AssertCls(function(err, message, stack) {
+var Assert = new AssertCls(function(err, message, stack) {
   if (err) {
     do_report_result(false, err.message, err.stack);
   } else {
@@ -35,18 +35,18 @@ let Assert = new AssertCls(function(err, message, stack) {
 });
 
 
-let _add_params = function (params) {
+var _add_params = function (params) {
   if (typeof _XPCSHELL_PROCESS != "undefined") {
     params.xpcshell_process = _XPCSHELL_PROCESS;
   }
 };
 
-let _dumpLog = function (raw_msg) {
-  dump("\n" + raw_msg + "\n");
+var _dumpLog = function (raw_msg) {
+  dump("\n" + JSON.stringify(raw_msg) + "\n");
 }
 
-let _LoggerClass = Components.utils.import("resource://testing-common/StructuredLog.jsm", null).StructuredLogger;
-let _testLogger = new _LoggerClass("xpcshell/head.js", _dumpLog, [_add_params]);
+var _LoggerClass = Components.utils.import("resource://testing-common/StructuredLog.jsm", null).StructuredLogger;
+var _testLogger = new _LoggerClass("xpcshell/head.js", _dumpLog, [_add_params]);
 
 // Disable automatic network detection, so tests work correctly when
 // not connected to a network.
@@ -58,12 +58,12 @@ let _testLogger = new _LoggerClass("xpcshell/head.js", _dumpLog, [_add_params]);
 }
 
 // Determine if we're running on parent or child
-let runningInParent = true;
+var runningInParent = true;
 try {
   runningInParent = Components.classes["@mozilla.org/xre/runtime;1"].
                     getService(Components.interfaces.nsIXULRuntime).processType
                     == Components.interfaces.nsIXULRuntime.PROCESS_TYPE_DEFAULT;
-} 
+}
 catch (e) { }
 
 // Only if building of places is enabled.
@@ -127,7 +127,8 @@ try {
       return this;
     },
     observe : function (msg) {
-      do_print("CONSOLE_MESSAGE: (" + levelNames[msg.logLevel] + ") " + msg.toString());
+      if (typeof do_print === "function")
+        do_print("CONSOLE_MESSAGE: (" + levelNames[msg.logLevel] + ") " + msg.toString());
     }
   };
   Components.classes["@mozilla.org/consoleservice;1"]
@@ -233,7 +234,9 @@ var _fakeIdleService = {
       Components.manager.QueryInterface(Components.interfaces.nsIComponentRegistrar);
   },
   contractID: "@mozilla.org/widget/idleservice;1",
-  get CID() this.registrar.contractIDToCID(this.contractID),
+  get CID() {
+    return this.registrar.contractIDToCID(this.contractID);
+  },
 
   activate: function FIS_activate()
   {
@@ -285,7 +288,9 @@ var _fakeIdleService = {
   },
 
   // nsIIdleService
-  get idleTime() 0,
+  get idleTime() {
+    return 0;
+  },
   addIdleObserver: function () {},
   removeIdleObserver: function () {},
 
@@ -328,7 +333,7 @@ function _register_protocol_handlers() {
 }
 
 function _register_modules_protocol_handler() {
-  if (!this._TESTING_MODULES_DIR) {
+  if (!_TESTING_MODULES_DIR) {
     throw new Error("Please define a path where the testing modules can be " +
                     "found in a variable called '_TESTING_MODULES_DIR' before " +
                     "head.js is included.");
@@ -378,8 +383,9 @@ function _setupDebuggerServer(breakpointFiles, callback) {
     prefs.setBoolPref("devtools.debugger.log.verbose", true);
   }
 
-  let {DebuggerServer, OriginalLocation} =
-    Components.utils.import('resource://gre/modules/devtools/dbg-server.jsm', {});
+  let { require } = Components.utils.import("resource://devtools/shared/Loader.jsm", {});
+  let { DebuggerServer } = require("devtools/server/main");
+  let { OriginalLocation } = require("devtools/server/actors/common");
   DebuggerServer.init();
   DebuggerServer.addBrowserActors();
   DebuggerServer.addActors("resource://testing-common/dbg-actors.js");
@@ -503,7 +509,7 @@ function _execute_test() {
     do_test_pending("MAIN run_test");
     // Check if run_test() is defined. If defined, run it.
     // Else, call run_next_test() directly to invoke tests
-    // added by add_test() and add_task().  
+    // added by add_test() and add_task().
     if (typeof run_test === "function") {
       run_test();
     } else {
@@ -1214,13 +1220,14 @@ function do_load_child_test_harness()
   let command =
         "const _HEAD_JS_PATH=" + uneval(_HEAD_JS_PATH) + "; "
       + "const _HEAD_FILES=" + uneval(_HEAD_FILES) + "; "
+      + "const _MOZINFO_JS_PATH=" + uneval(_MOZINFO_JS_PATH) + "; "
       + "const _TAIL_FILES=" + uneval(_TAIL_FILES) + "; "
       + "const _TEST_NAME=" + uneval(_TEST_NAME) + "; "
       // We'll need more magic to get the debugger working in the child
       + "const _JSDEBUGGER_PORT=0; "
       + "const _XPCSHELL_PROCESS='child';";
 
-  if (this._TESTING_MODULES_DIR) {
+  if (_TESTING_MODULES_DIR) {
     command += " const _TESTING_MODULES_DIR=" + uneval(_TESTING_MODULES_DIR) + ";";
   }
 
@@ -1336,7 +1343,7 @@ function do_send_remote_message(name) {
  *
  * @return the test function that was passed in.
  */
-let _gTests = [];
+var _gTests = [];
 function add_test(funcOrProperties, func) {
   if (typeof funcOrProperties == "function") {
     _gTests.push([{ _isTask: false }, funcOrProperties]);
@@ -1414,16 +1421,16 @@ function add_task(funcOrProperties, func) {
     do_throw("add_task() should take a function or an object and a function");
   }
 }
-let _Task = Components.utils.import("resource://gre/modules/Task.jsm", {}).Task;
+var _Task = Components.utils.import("resource://gre/modules/Task.jsm", {}).Task;
 _Task.Debugging.maintainStack = true;
 
 
 /**
  * Runs the next test function from the list of async tests.
  */
-let _gRunningTest = null;
-let _gTestIndex = 0; // The index of the currently running test.
-let _gTaskRunning = false;
+var _gRunningTest = null;
+var _gTestIndex = 0; // The index of the currently running test.
+var _gTaskRunning = false;
 function run_next_test()
 {
   if (_gTaskRunning) {
@@ -1431,7 +1438,7 @@ function run_next_test()
                     "run_next_test() should not be called from inside add_task() " +
                     "under any circumstances!");
   }
- 
+
   function _run_next_test()
   {
     if (_gTestIndex < _gTests.length) {
@@ -1502,8 +1509,10 @@ try {
       .getService(Components.interfaces.nsIPrefBranch);
 
     prefs.setCharPref("media.gmp-manager.url.override", "http://%(server)s/dummy-gmp-manager.xml");
+    prefs.setCharPref("extensions.systemAddon.update.url", "http://%(server)s/dummy-system-addons.xml");
     prefs.setCharPref("browser.selfsupport.url", "https://%(server)s/selfsupport-dummy/");
     prefs.setCharPref("toolkit.telemetry.server", "https://%(server)s/telemetry-dummy");
+    prefs.setCharPref("browser.search.geoip.url", "https://%(server)s/geoip-dummy");
   }
 } catch (e) { }
 
@@ -1518,3 +1527,29 @@ try {
     prefs.deleteBranch("browser.devedition.theme.enabled");
   }
 } catch (e) { }
+
+function _load_mozinfo() {
+  let mozinfoFile = Components.classes["@mozilla.org/file/local;1"]
+    .createInstance(Components.interfaces.nsIFile);
+  mozinfoFile.initWithPath(_MOZINFO_JS_PATH);
+  let stream = Components.classes["@mozilla.org/network/file-input-stream;1"]
+    .createInstance(Components.interfaces.nsIFileInputStream);
+  stream.init(mozinfoFile, -1, 0, 0);
+  let json = Components.classes["@mozilla.org/dom/json;1"]
+    .createInstance(Components.interfaces.nsIJSON);
+  let mozinfo = json.decodeFromStream(stream, stream.available());
+  stream.close();
+  return mozinfo;
+}
+
+Object.defineProperty(this, "mozinfo", {
+  configurable: true,
+  get() {
+    let _mozinfo = _load_mozinfo();
+    Object.defineProperty(this, "mozinfo", {
+      configurable: false,
+      value: _mozinfo
+    });
+    return _mozinfo;
+  }
+});

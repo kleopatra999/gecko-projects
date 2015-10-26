@@ -49,7 +49,7 @@ public class SendTabList extends ListView {
 
     // The maximum number of target devices to show in the main list. Further devices are available
     // from a secondary menu.
-    public static final int MAXIMUM_INLINE_ELEMENTS = 2;
+    public static final int MAXIMUM_INLINE_ELEMENTS = R.integer.number_of_inline_share_devices;
 
     private SendTabDeviceListArrayAdapter clientListAdapter;
 
@@ -122,12 +122,7 @@ public class SendTabList extends ListView {
     public AlertDialog getDialog() {
         final Context context = getContext();
 
-        final AlertDialog.Builder builder;
-        if (Versions.feature11Plus) {
-            builder = new AlertDialog.Builder(context, R.style.Gecko_Dialog);
-        } else {
-            builder = new AlertDialog.Builder(context);
-        }
+        final AlertDialog.Builder builder = new AlertDialog.Builder(context);
 
         final RemoteClient[] records = clientListAdapter.toArray();
         final String[] dialogElements = new String[records.length];

@@ -17,12 +17,12 @@
 
 /**
  * Snapshot of the performance of a component, e.g. an add-on, a web
- * page, system built-ins, or the entire process itself.
+ * page, system built-ins, a module or the entire process itself.
  *
  * All values are monotonic and are updated only when
  * `nsIPerformanceStatsService.isStopwatchActive` is `true`.
  */
-[scriptable, uuid(47f8d36d-1d67-43cb-befd-d2f4720ac568)]
+[scriptable, uuid(f171c901-1888-4087-a002-c2751e510f92)]
 interface nsIPerformanceStats: nsISupports {
   /**
    * An identifier unique to the component.
@@ -33,11 +33,7 @@ interface nsIPerformanceStats: nsISupports {
   readonly attribute AString groupId;
 
   /**
-   * The name of the component:
-   * - for the process itself, "<process>";
-   * - for platform code, "<platform>";
-   * - for an add-on, the identifier of the addon (e.g. "myaddon@foo.bar");
-   * - for a webpage, the url of the page.
+   * A somewhat human-readable name for the component.
    */
   readonly attribute AString name;
 
@@ -52,12 +48,6 @@ interface nsIPerformanceStats: nsISupports {
    * outer window (i.e. the tab), otherwise 0.
    */
   readonly attribute uint64_t windowId;
-
-  /**
-   * If the component is code executed in a window, the title of the topmost
-   * window (i.e. the tab), otherwise an empty string.
-   */
-  readonly attribute AString title;
 
   /**
    * Total amount of time spent executing code in this group, in
@@ -82,6 +72,11 @@ interface nsIPerformanceStats: nsISupports {
   readonly attribute bool isSystem;
 
   /**
+   * The process running this group.
+   */
+  readonly attribute unsigned long long processId;
+
+  /**
    * Jank indicator.
    *
    * durations[i] == number of times execution of this group
@@ -94,7 +89,7 @@ interface nsIPerformanceStats: nsISupports {
 /**
  * A snapshot of the performance data of the process.
  */
-[scriptable, uuid(29ecebd0-908a-4b34-8f62-a6015dea1141)]
+[scriptable, uuid(0ac38e2a-2613-4e3f-9f21-95f085c177de)]
 interface nsIPerformanceSnapshot: nsISupports {
   /**
    * Data on all individual components.
@@ -112,7 +107,7 @@ interface nsIPerformanceSnapshot: nsISupports {
   nsIPerformanceStats getProcessData();
 };
 
-[scriptable, builtinclass, uuid(0469e6af-95c3-4961-a385-4bc009128939)]
+[scriptable, builtinclass, uuid(aad18f7c-9ff7-4e22-8cd1-60ab0b57c698)]
 interface nsIPerformanceStatsService : nsISupports {
   /**
    * `true` if we should monitor CPOW, `false` otherwise.
@@ -123,6 +118,13 @@ interface nsIPerformanceStatsService : nsISupports {
    * `true` if we should monitor jank, `false` otherwise.
    */
   [implicit_jscontext] attribute bool isMonitoringJank;
+
+  /**
+   * `true` if all compartments need to be monitored individually,
+   * `false` if only performance groups (i.e. entire add-ons, entire
+   * webpages, etc.) need to be monitored.
+   */
+  [implicit_jscontext] attribute bool isMonitoringPerCompartment;
 
   /**
    * Capture a snapshot of the performance data.

@@ -68,6 +68,12 @@ CalleeTokenToScript(CalleeToken token)
     MOZ_ASSERT(GetCalleeTokenTag(token) == CalleeToken_Script);
     return (JSScript*)(uintptr_t(token) & CalleeTokenMask);
 }
+static inline bool
+CalleeTokenIsModuleScript(CalleeToken token)
+{
+    CalleeTokenTag tag = GetCalleeTokenTag(token);
+    return tag == CalleeToken_Script && CalleeTokenToScript(token)->module();
+}
 
 static inline JSScript*
 ScriptFromCalleeToken(CalleeToken token)
@@ -181,9 +187,10 @@ class OsiIndex
 //   .. locals ..
 
 // The descriptor is organized into three sections:
-// [ frame size | constructing bit | frame type ]
+// [ frame size | has cached saved frame bit | frame type ]
 // < highest - - - - - - - - - - - - - - lowest >
-static const uintptr_t FRAMESIZE_SHIFT = 4;
+static const uintptr_t FRAMESIZE_SHIFT = 5;
+static const uintptr_t HASCACHEDSAVEDFRAME_BIT = 1 << 4;
 static const uintptr_t FRAMETYPE_BITS = 4;
 
 // Ion frames have a few important numbers associated with them:
@@ -282,7 +289,7 @@ void UpdateJitActivationsForMinorGC(JSRuntime* rt, JSTracer* trc);
 static inline uint32_t
 MakeFrameDescriptor(uint32_t frameSize, FrameType type)
 {
-    return (frameSize << FRAMESIZE_SHIFT) | type;
+    return 0 | (frameSize << FRAMESIZE_SHIFT) | type;
 }
 
 // Returns the JSScript associated with the topmost JIT frame.
@@ -302,7 +309,7 @@ GetTopJitJSScript(JSContext* cx)
     return iter.script();
 }
 
-#ifdef JS_CODEGEN_MIPS
+#ifdef JS_CODEGEN_MIPS32
 uint8_t* alignDoubleSpillWithOffset(uint8_t* pointer, int32_t offset);
 #else
 inline uint8_t*
@@ -343,7 +350,13 @@ class CommonFrameLayout
         return descriptor_ >> FRAMESIZE_SHIFT;
     }
     void setFrameDescriptor(size_t size, FrameType type) {
-        descriptor_ = (size << FRAMESIZE_SHIFT) | type;
+        descriptor_ = 0 | (size << FRAMESIZE_SHIFT) | type;
+    }
+    bool hasCachedSavedFrame() const {
+        return descriptor_ & HASCACHEDSAVEDFRAME_BIT;
+    }
+    void setHasCachedSavedFrame() {
+        descriptor_ |= HASCACHEDSAVEDFRAME_BIT;
     }
     uint8_t* returnAddress() const {
         return returnAddress_;
@@ -692,8 +705,8 @@ class IonOOLSetterOpExitFrameLayout : public IonOOLPropertyOpExitFrameLayout
     }
 };
 
-// Proxy::get(JSContext* cx, HandleObject proxy, HandleObject receiver, HandleId id,
-//            MutableHandleValue vp)
+// ProxyGetProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
+// ProxyCallProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
 // ProxySetProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp,
 //                  bool strict)
 class IonOOLProxyExitFrameLayout
@@ -704,9 +717,6 @@ class IonOOLProxyExitFrameLayout
 
     // The proxy object.
     JSObject* proxy_;
-
-    // Object for HandleObject
-    JSObject* receiver_;
 
     // id for HandleId
     jsid id_;
@@ -738,9 +748,6 @@ class IonOOLProxyExitFrameLayout
     }
     inline jsid* id() {
         return &id_;
-    }
-    inline JSObject** receiver() {
-        return &receiver_;
     }
     inline JSObject** proxy() {
         return &proxy_;
@@ -998,6 +1005,12 @@ GetPcScript(JSContext* cx, JSScript** scriptRes, jsbytecode** pcRes);
 
 CalleeToken
 MarkCalleeToken(JSTracer* trc, CalleeToken token);
+
+// The minimum stack size is two. Two slots are needed because INITGLEXICAL
+// (stack depth 1) is compiled as a SETPROP (stack depth 2) on the global
+// lexical scope. Baseline also requires one slot for this/argument type
+// checks.
+static const uint32_t MinJITStackSize = 2;
 
 } /* namespace jit */
 } /* namespace js */

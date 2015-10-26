@@ -52,7 +52,9 @@ public:
 
   void OnEnd(const nsSpeechTask* aTask);
 
-  void GetVoices(nsTArray< nsRefPtr<SpeechSynthesisVoice> >& aResult);
+  void GetVoices(nsTArray< RefPtr<SpeechSynthesisVoice> >& aResult);
+
+  void ForceEnd();
 
 private:
   virtual ~SpeechSynthesis();
@@ -61,14 +63,15 @@ private:
 
   nsCOMPtr<nsPIDOMWindow> mParent;
 
-  nsTArray<nsRefPtr<SpeechSynthesisUtterance> > mSpeechQueue;
+  nsTArray<RefPtr<SpeechSynthesisUtterance> > mSpeechQueue;
 
-  nsRefPtr<nsSpeechTask> mCurrentTask;
+  RefPtr<nsSpeechTask> mCurrentTask;
 
   nsRefPtrHashtable<nsStringHashKey, SpeechSynthesisVoice> mVoiceCache;
+
+  bool mHoldQueue;
 };
 
 } // namespace dom
 } // namespace mozilla
-
 #endif

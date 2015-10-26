@@ -8,13 +8,14 @@
 
 #include "nsTArrayForwardDeclare.h"
 #include "gfxPlatform.h"
+#include "mozilla/LookAndFeel.h"
 
 namespace mozilla {
 namespace gfx {
 class DrawTarget;
 class VsyncSource;
-} // gfx
-} // mozilla
+} // namespace gfx
+} // namespace mozilla
 
 class gfxPlatformMac : public gfxPlatform {
 public:
@@ -26,8 +27,8 @@ public:
     }
 
     virtual already_AddRefed<gfxASurface>
-      CreateOffscreenSurface(const IntSize& size,
-                             gfxContentType contentType) override;
+      CreateOffscreenSurface(const IntSize& aSize,
+                             gfxImageFormat aFormat) override;
 
     already_AddRefed<mozilla::gfx::ScaledFont>
       GetScaledFontForFont(mozilla::gfx::DrawTarget* aTarget, gfxFont *aFont) override;
@@ -37,19 +38,20 @@ public:
     gfxFontGroup*
     CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
                     const gfxFontStyle *aStyle,
+                    gfxTextPerfMetrics* aTextPerf,
                     gfxUserFontSet *aUserFontSet) override;
 
     virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
                                           uint16_t aWeight,
                                           int16_t aStretch,
-                                          bool aItalic) override;
+                                          uint8_t aStyle) override;
 
     virtual gfxPlatformFontList* CreatePlatformFontList() override;
 
     virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
                                            uint16_t aWeight,
                                            int16_t aStretch,
-                                           bool aItalic,
+                                           uint8_t aStyle,
                                            const uint8_t* aFontData,
                                            uint32_t aLength) override;
 
@@ -64,12 +66,25 @@ public:
                                         int32_t aRunScript,
                                         nsTArray<const char*>& aFontList) override;
 
+    // lookup the system font for a particular system font type and set
+    // the name and style characteristics
+    static void
+    LookupSystemFont(mozilla::LookAndFeel::FontID aSystemFontID,
+                     nsAString& aSystemFontName,
+                     gfxFontStyle &aFontStyle,
+                     float aDevPixPerCSSPixel);
+
     virtual bool CanRenderContentToDataSurface() const override {
       return true;
     }
 
     virtual bool SupportsApzWheelInput() const override {
       return true;
+    }
+
+    bool SupportsBasicCompositor() const override {
+      // At the moment, BasicCompositor is broken on mac.
+      return false;
     }
 
     bool UseAcceleratedCanvas();
@@ -79,6 +94,9 @@ public:
 
     // lower threshold on font anti-aliasing
     uint32_t GetAntiAliasingThreshold() { return mFontAntiAliasingThreshold; }
+
+protected:
+    bool AccelerateLayersByDefault() override;
 
 private:
     virtual void GetPlatformCMSOutputProfile(void* &mem, size_t &size) override;

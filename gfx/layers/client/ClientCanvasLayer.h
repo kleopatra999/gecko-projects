@@ -22,7 +22,7 @@
 namespace mozilla {
 namespace gl {
 class SurfaceFactory;
-}
+} // namespace gl
 
 namespace layers {
 
@@ -97,11 +97,11 @@ protected:
 
   TextureFlags mFlags;
 
-  friend class DeprecatedCanvasClient2D;
   friend class CanvasClient2D;
   friend class CanvasClientSharedSurface;
 };
-}
-}
+
+} // namespace layers
+} // namespace mozilla
 
 #endif

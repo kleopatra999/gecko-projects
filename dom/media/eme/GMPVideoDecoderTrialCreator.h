@@ -35,9 +35,11 @@ public:
                              T* aPromiseLike,
                              nsPIDOMWindow* aParent)
   {
-    nsRefPtr<PromiseLike<T>> p(new PromiseLike<T>(aPromiseLike, aAccess));
+    RefPtr<PromiseLike<T>> p(new PromiseLike<T>(aPromiseLike, aAccess));
     MaybeAwaitTrialCreate(aKeySystem, p, aParent);
   }
+
+  static void UpdateTrialCreateState(const nsAString& aKeySystem, uint32_t aState);
 
 private:
 
@@ -70,8 +72,8 @@ private:
     }
   protected:
     ~PromiseLike() {}
-    nsRefPtr<T> mPromiseLike;
-    nsRefPtr<MediaKeySystemAccess> mAccess;
+    RefPtr<T> mPromiseLike;
+    RefPtr<MediaKeySystemAccess> mAccess;
   };
 
   void MaybeAwaitTrialCreate(const nsAString& aKeySystem,
@@ -88,16 +90,18 @@ private:
   };
 
   static TrialCreateState GetCreateTrialState(const nsAString& aKeySystem);
+  static void UpdateTrialCreateState(const nsAString& aKeySystem,
+                                     TrialCreateState aState);
 
   struct TrialCreateData {
-    TrialCreateData(const nsAString& aKeySystem)
+    explicit TrialCreateData(const nsAString& aKeySystem)
       : mKeySystem(aKeySystem)
       , mStatus(GetCreateTrialState(aKeySystem))
     {}
     ~TrialCreateData() {}
     const nsString mKeySystem;
-    nsRefPtr<TestGMPVideoDecoder> mTest;
-    nsTArray<nsRefPtr<AbstractPromiseLike>> mPending;
+    RefPtr<TestGMPVideoDecoder> mTest;
+    nsTArray<RefPtr<AbstractPromiseLike>> mPending;
     TrialCreateState mStatus;
   private:
     TrialCreateData(const TrialCreateData& aOther) = delete;
@@ -141,13 +145,13 @@ public:
   class Callback : public GetGMPVideoDecoderCallback
   {
   public:
-    Callback(TestGMPVideoDecoder* aInstance)
+    explicit Callback(TestGMPVideoDecoder* aInstance)
       : mInstance(aInstance)
     {}
     ~Callback() {}
     void Done(GMPVideoDecoderProxy* aGMP, GMPVideoHost* aHost) override;
   private:
-    nsRefPtr<TestGMPVideoDecoder> mInstance;
+    RefPtr<TestGMPVideoDecoder> mInstance;
   };
 
 private:
@@ -162,7 +166,7 @@ private:
   const nsString mKeySystem;
   nsCOMPtr<mozIGeckoMediaPluginService> mGMPService;
 
-  nsRefPtr<GMPVideoDecoderTrialCreator> mInstance;
+  RefPtr<GMPVideoDecoderTrialCreator> mInstance;
   nsCOMPtr<nsPIDOMWindow> mWindow;
   GMPVideoDecoderProxy* mGMP;
   GMPVideoHost* mHost;

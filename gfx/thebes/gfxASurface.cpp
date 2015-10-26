@@ -13,6 +13,7 @@
 #include "nsISupportsImpl.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Logging.h"
+#include "mozilla/gfx/HelpersCairo.h"
 #include "gfx2DGlue.h"
 
 #include "gfxASurface.h"
@@ -155,7 +156,7 @@ gfxASurface::SetSurfaceWrapper(cairo_surface_t *csurf, gfxASurface *asurf)
 already_AddRefed<gfxASurface>
 gfxASurface::Wrap (cairo_surface_t *csurf, const IntSize& aSize)
 {
-    nsRefPtr<gfxASurface> result;
+    RefPtr<gfxASurface> result;
 
     /* Do we already have a wrapper for this surface? */
     result = GetSurfaceWrapper(csurf);
@@ -333,7 +334,7 @@ gfxASurface::CreateSimilarSurface(gfxContentType aContent,
         return nullptr;
     }
 
-    nsRefPtr<gfxASurface> result = Wrap(surface, aSize);
+    RefPtr<gfxASurface> result = Wrap(surface, aSize);
     cairo_surface_destroy(surface);
     return result.forget();
 }
@@ -341,7 +342,7 @@ gfxASurface::CreateSimilarSurface(gfxContentType aContent,
 already_AddRefed<gfxImageSurface>
 gfxASurface::GetAsReadableARGB32ImageSurface()
 {
-    nsRefPtr<gfxImageSurface> imgSurface = GetAsImageSurface();
+    RefPtr<gfxImageSurface> imgSurface = GetAsImageSurface();
     if (!imgSurface || imgSurface->Format() != gfxImageFormat::ARGB32) {
       imgSurface = CopyToARGB32ImageSurface();
     }
@@ -356,7 +357,7 @@ gfxASurface::CopyToARGB32ImageSurface()
     }
 
     const IntSize size = GetSize();
-    nsRefPtr<gfxImageSurface> imgSurface =
+    RefPtr<gfxImageSurface> imgSurface =
         new gfxImageSurface(size, gfxImageFormat::ARGB32);
 
     RefPtr<DrawTarget> dt = gfxPlatform::GetPlatform()->CreateDrawTargetForSurface(imgSurface, IntSize(size.width, size.height));
@@ -423,7 +424,8 @@ gfxASurface::CheckSurfaceSize(const IntSize& sz, int32_t limit)
 int32_t
 gfxASurface::FormatStrideForWidth(gfxImageFormat format, int32_t width)
 {
-    return cairo_format_stride_for_width((cairo_format_t)(int)format, (int)width);
+    cairo_format_t cformat = gfxImageFormatToCairoFormat(format);
+    return cairo_format_stride_for_width(cformat, (int)width);
 }
 
 nsresult
@@ -466,7 +468,6 @@ gfxASurface::ContentFromFormat(gfxImageFormat format)
         case gfxImageFormat::RGB16_565:
             return gfxContentType::COLOR;
         case gfxImageFormat::A8:
-        case gfxImageFormat::A1:
             return gfxContentType::ALPHA;
 
         case gfxImageFormat::Unknown:
@@ -496,12 +497,6 @@ gfxASurface::GetSubpixelAntialiasingEnabled()
 #else
     return true;
 #endif
-}
-
-gfxMemoryLocation
-gfxASurface::GetMemoryLocation() const
-{
-    return gfxMemoryLocation::IN_PROCESS_HEAP;
 }
 
 int32_t
@@ -569,13 +564,25 @@ PR_STATIC_ASSERT(uint32_t(CAIRO_SURFACE_TYPE_SKIA) ==
 
 /* Surface size memory reporting */
 
-static int64_t gSurfaceMemoryUsed[size_t(gfxSurfaceType::Max)] = { 0 };
-
 class SurfaceMemoryReporter final : public nsIMemoryReporter
 {
     ~SurfaceMemoryReporter() {}
 
+    // We can touch this array on several different threads, and we don't
+    // want to introduce memory barriers when recording the memory used.  To
+    // assure dynamic race checkers like TSan that this is OK, we use
+    // relaxed memory ordering here.
+    static Atomic<size_t, Relaxed> sSurfaceMemoryUsed[size_t(gfxSurfaceType::Max)];
+
 public:
+    static void AdjustUsedMemory(gfxSurfaceType aType, int32_t aBytes)
+    {
+        // A read-modify-write operation like += would require a memory barrier
+        // here, which would defeat the purpose of using relaxed memory
+        // ordering.  So separate out the read and write operations.
+        sSurfaceMemoryUsed[size_t(aType)] = sSurfaceMemoryUsed[size_t(aType)] + aBytes;
+    };
+    
     NS_DECL_ISUPPORTS
 
     NS_IMETHOD CollectReports(nsIMemoryReporterCallback *aCb,
@@ -583,7 +590,7 @@ public:
     {
         const size_t len = ArrayLength(sSurfaceMemoryReporterAttrs);
         for (size_t i = 0; i < len; i++) {
-            int64_t amount = gSurfaceMemoryUsed[i];
+            int64_t amount = sSurfaceMemoryUsed[i];
 
             if (amount != 0) {
                 const char *path = sSurfaceMemoryReporterAttrs[i].path;
@@ -594,7 +601,7 @@ public:
 
                 nsresult rv = aCb->Callback(EmptyCString(), nsCString(path),
                                             KIND_OTHER, UNITS_BYTES,
-                                            gSurfaceMemoryUsed[i],
+                                            amount,
                                             nsCString(desc), aClosure);
                 NS_ENSURE_SUCCESS(rv, rv);
             }
@@ -603,6 +610,8 @@ public:
         return NS_OK;
     }
 };
+
+Atomic<size_t, Relaxed> SurfaceMemoryReporter::sSurfaceMemoryUsed[size_t(gfxSurfaceType::Max)];
 
 NS_IMPL_ISUPPORTS(SurfaceMemoryReporter, nsIMemoryReporter)
 
@@ -621,7 +630,7 @@ gfxASurface::RecordMemoryUsedForSurfaceType(gfxSurfaceType aType,
         registered = true;
     }
 
-    gSurfaceMemoryUsed[size_t(aType)] += aBytes;
+    SurfaceMemoryReporter::AdjustUsedMemory(aType, aBytes);
 }
 
 void
@@ -665,8 +674,6 @@ gfxASurface::BytesPerPixel(gfxImageFormat aImageFormat)
       return 2;
     case gfxImageFormat::A8:
       return 1;
-    case gfxImageFormat::A1:
-      return 1; // Close enough
     case gfxImageFormat::Unknown:
     default:
       NS_NOTREACHED("Not really sure what you want me to say here");
@@ -697,6 +704,15 @@ const IntSize
 gfxASurface::GetSize() const
 {
   return IntSize(-1, -1);
+}
+
+SurfaceFormat
+gfxASurface::GetSurfaceFormat() const
+{
+    if (!mSurfaceValid) {
+      return SurfaceFormat::UNKNOWN;
+    }
+    return GfxFormatForCairoSurface(mSurface);
 }
 
 already_AddRefed<gfxImageSurface>

@@ -13,7 +13,7 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "console",
-                                  "resource://gre/modules/devtools/Console.jsm");
+                                  "resource://gre/modules/Console.jsm");
 
 function section(number, url)
 {
@@ -21,7 +21,7 @@ function section(number, url)
   return { number, url: baseURL + url };
 }
 
-let CompatWarning = {
+var CompatWarning = {
   // Sometimes we want to generate a warning, but put off issuing it
   // until later. For example, if someone registers a listener, we
   // might only want to warn about it if the listener actually

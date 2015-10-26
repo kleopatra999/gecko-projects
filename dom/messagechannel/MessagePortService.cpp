@@ -27,7 +27,7 @@ AssertIsInMainProcess()
   MOZ_ASSERT(XRE_GetProcessType() == GeckoProcessType_Default);
 }
 
-} // anonymous namespace
+} // namespace
 
 class MessagePortService::MessagePortServiceData final
 {
@@ -61,7 +61,7 @@ public:
   };
 
   FallibleTArray<NextParent> mNextParents;
-  FallibleTArray<nsRefPtr<SharedMessagePortMessage>> mMessages;
+  FallibleTArray<RefPtr<SharedMessagePortMessage>> mMessages;
 };
 
 /* static */ MessagePortService*
@@ -157,7 +157,7 @@ MessagePortService::RequestEntangling(MessagePortParent* aParent,
 bool
 MessagePortService::DisentanglePort(
                   MessagePortParent* aParent,
-                  FallibleTArray<nsRefPtr<SharedMessagePortMessage>>& aMessages)
+                  FallibleTArray<RefPtr<SharedMessagePortMessage>>& aMessages)
 {
   MessagePortServiceData* data;
   if (!mPorts.Get(aParent->ID(), &data)) {
@@ -296,7 +296,7 @@ MessagePortService::MaybeShutdown()
 bool
 MessagePortService::PostMessages(
                   MessagePortParent* aParent,
-                  FallibleTArray<nsRefPtr<SharedMessagePortMessage>>& aMessages)
+                  FallibleTArray<RefPtr<SharedMessagePortMessage>>& aMessages)
 {
   MessagePortServiceData* data;
   if (!mPorts.Get(aParent->ID(), &data)) {
@@ -374,5 +374,5 @@ MessagePortService::ForceClose(const nsID& aUUID,
   return true;
 }
 
-} // dom namespace
-} // mozilla namespace
+} // namespace dom
+} // namespace mozilla

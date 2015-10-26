@@ -20,6 +20,9 @@
 #include "prerror.h"
 #include "prio.h"
 #include "TunnelUtils.h"
+#include "nsNetCID.h"
+#include "nsServiceManagerUtils.h"
+#include "nsComponentManagerUtils.h"
 
 #ifdef DEBUG
 // defined by the socket transport service while active
@@ -451,7 +454,7 @@ TLSFilterTransaction::StartTimerCallback()
 
   if (mNudgeCallback) {
     // This class can be called re-entrantly, so cleanup m* before ->on()
-    nsRefPtr<NudgeTunnelCallback> cb(mNudgeCallback);
+    RefPtr<NudgeTunnelCallback> cb(mNudgeCallback);
     mNudgeCallback = nullptr;
     cb->OnTunnelNudged(this);
   }
@@ -654,7 +657,7 @@ TLSFilterTransaction::Http1xTransactionCount()
 
 nsresult
 TLSFilterTransaction::TakeSubTransactions(
-  nsTArray<nsRefPtr<nsAHttpTransaction> > &outTransactions)
+  nsTArray<RefPtr<nsAHttpTransaction> > &outTransactions)
 {
   LOG(("TLSFilterTransaction::TakeSubTransactions [this=%p] mTransaction %p\n",
        this, mTransaction.get()));
@@ -809,7 +812,7 @@ private:
   virtual ~SocketInWrapper() {};
 
   nsCOMPtr<nsIAsyncInputStream> mStream;
-  nsRefPtr<TLSFilterTransaction> mTLSFilter;
+  RefPtr<TLSFilterTransaction> mTLSFilter;
 };
 
 nsresult
@@ -881,7 +884,7 @@ private:
   virtual ~SocketOutWrapper() {};
 
   nsCOMPtr<nsIAsyncOutputStream> mStream;
-  nsRefPtr<TLSFilterTransaction> mTLSFilter;
+  RefPtr<TLSFilterTransaction> mTLSFilter;
 };
 
 nsresult
@@ -1077,7 +1080,7 @@ SpdyConnectTransaction::MapStreamToHttpConnection(nsISocketTransport *aTransport
   }
 
   // make the originating transaction stick to the tunneled conn
-  nsRefPtr<nsAHttpConnection> wrappedConn =
+  RefPtr<nsAHttpConnection> wrappedConn =
     gHttpHandler->ConnMgr()->MakeConnectionHandle(mTunneledConn);
   mDrivingTransaction->SetConnection(wrappedConn);
   mDrivingTransaction->MakeSticky();
@@ -1260,6 +1263,12 @@ SpdyConnectTransaction::WriteSegments(nsAHttpSegmentWriter *writer,
   return rv;
 }
 
+bool
+SpdyConnectTransaction::ConnectedReadyForInput()
+{
+  return mTunneledConn && mTunnelStreamIn->mCallback;
+}
+
 nsHttpRequestHead *
 SpdyConnectTransaction::RequestHead()
 {
@@ -1294,7 +1303,7 @@ OutputStreamShim::AsyncWait(nsIOutputStreamCallback *callback,
   LOG(("OutputStreamShim::AsyncWait %p callback %p\n", this, callback));
   mCallback = callback;
 
-  nsRefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
+  RefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
   if (!baseTrans) {
     return NS_ERROR_FAILURE;
   }
@@ -1312,7 +1321,7 @@ OutputStreamShim::AsyncWait(nsIOutputStreamCallback *callback,
 NS_IMETHODIMP
 OutputStreamShim::CloseWithStatus(nsresult reason)
 {
-  nsRefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
+  RefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
   if (!baseTrans) {
     return NS_ERROR_FAILURE;
   }
@@ -1335,7 +1344,7 @@ OutputStreamShim::Close()
 NS_IMETHODIMP
 OutputStreamShim::Flush()
 {
-  nsRefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
+  RefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
   if (!baseTrans) {
     return NS_ERROR_FAILURE;
   }
@@ -1366,7 +1375,7 @@ OutputStreamShim::Write(const char * aBuf, uint32_t aCount, uint32_t *_retval)
     return mStatus;
   }
 
-  nsRefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
+  RefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
   if (!baseTrans) {
     return NS_ERROR_FAILURE;
   }
@@ -1434,7 +1443,7 @@ InputStreamShim::AsyncWait(nsIInputStreamCallback *callback,
 NS_IMETHODIMP
 InputStreamShim::CloseWithStatus(nsresult reason)
 {
-  nsRefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
+  RefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
   if (!baseTrans) {
     return NS_ERROR_FAILURE;
   }
@@ -1457,7 +1466,7 @@ InputStreamShim::Close()
 NS_IMETHODIMP
 InputStreamShim::Available(uint64_t *_retval)
 {
-  nsRefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
+  RefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
   if (!baseTrans) {
     return NS_ERROR_FAILURE;
   }
@@ -1480,7 +1489,7 @@ InputStreamShim::Read(char *aBuf, uint32_t aCount, uint32_t *_retval)
     return mStatus;
   }
 
-  nsRefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
+  RefPtr<NullHttpTransaction> baseTrans(do_QueryReferent(mWeakTrans));
   if (!baseTrans) {
     return NS_ERROR_FAILURE;
   }
@@ -1640,5 +1649,5 @@ NS_IMPL_ISUPPORTS(OutputStreamShim, nsIOutputStream, nsIAsyncOutputStream)
 NS_IMPL_ISUPPORTS(SocketInWrapper, nsIAsyncInputStream)
 NS_IMPL_ISUPPORTS(SocketOutWrapper, nsIAsyncOutputStream)
 
-} // namespace mozilla::net
+} // namespace net
 } // namespace mozilla

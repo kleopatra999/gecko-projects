@@ -1,7 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const {utils: Cu} = Components;
+var {utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/osfile.jsm");
@@ -9,7 +9,7 @@ Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://gre/modules/Promise.jsm")
 Cu.import("resource://gre/modules/Log.jsm");
 
-let testFormatter = {
+var testFormatter = {
   format: function format(message) {
     return message.loggerName + "\t" +
       message.levelDesc + "\t" +

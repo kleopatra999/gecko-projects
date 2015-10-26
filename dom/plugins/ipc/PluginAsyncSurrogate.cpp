@@ -137,7 +137,7 @@ PluginAsyncSurrogate::Create(PluginModuleParent* aParent, NPMIMEType aPluginType
                              NPP aInstance, uint16_t aMode, int16_t aArgc,
                              char* aArgn[], char* aArgv[])
 {
-  nsRefPtr<PluginAsyncSurrogate> surrogate(new PluginAsyncSurrogate(aParent));
+  RefPtr<PluginAsyncSurrogate> surrogate(new PluginAsyncSurrogate(aParent));
   if (!surrogate->Init(aPluginType, aInstance, aMode, aArgc, aArgn, aArgv)) {
     return false;
   }
@@ -316,7 +316,7 @@ PluginAsyncSurrogate::NPP_Destroy(NPP aInstance, NPSavedData** aSave)
   PluginModuleParent* module = rawSurrogate->GetParent();
   if (module && !module->IsInitialized()) {
     // Take ownership of pdata's surrogate since we're going to release it
-    nsRefPtr<PluginAsyncSurrogate> surrogate(dont_AddRef(rawSurrogate));
+    RefPtr<PluginAsyncSurrogate> surrogate(dont_AddRef(rawSurrogate));
     aInstance->pdata = nullptr;
     // We haven't actually called NPP_New yet, so we should remove the
     // surrogate for this instance.
@@ -565,14 +565,19 @@ PluginAsyncSurrogate::NotifyAsyncInitFailed()
   }
   mPendingNewStreamCalls.Clear();
 
+  // Make sure that any WaitForInit calls on this surrogate will fail, or else
+  // we'll be perma-blocked
+  mInitCancelled = true;
+
   nsNPAPIPluginInstance* inst =
     static_cast<nsNPAPIPluginInstance*>(mInstance->ndata);
   if (!inst) {
       return;
   }
   nsPluginInstanceOwner* owner = inst->GetOwner();
-  MOZ_ASSERT(owner);
-  owner->NotifyHostAsyncInitFailed();
+  if (owner) {
+    owner->NotifyHostAsyncInitFailed();
+  }
 }
 
 // static

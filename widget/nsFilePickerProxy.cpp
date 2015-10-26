@@ -6,7 +6,6 @@
 
 #include "nsFilePickerProxy.h"
 #include "nsComponentManagerUtils.h"
-#include "nsNetUtil.h"
 #include "nsIFile.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/TabChild.h"
@@ -100,7 +99,6 @@ nsFilePickerProxy::SetFilterIndex(int32_t aFilterIndex)
   return NS_OK;
 }
 
-/* readonly attribute nsIFile file; */
 NS_IMETHODIMP
 nsFilePickerProxy::GetFile(nsIFile** aFile)
 {
@@ -108,7 +106,6 @@ nsFilePickerProxy::GetFile(nsIFile** aFile)
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute nsIFileURL fileURL; */
 NS_IMETHODIMP
 nsFilePickerProxy::GetFileURL(nsIURI** aFileURL)
 {
@@ -116,7 +113,6 @@ nsFilePickerProxy::GetFileURL(nsIURI** aFileURL)
   return NS_ERROR_FAILURE;
 }
 
-/* readonly attribute nsISimpleEnumerator files; */
 NS_IMETHODIMP
 nsFilePickerProxy::GetFiles(nsISimpleEnumerator** aFiles)
 {
@@ -155,14 +151,14 @@ nsFilePickerProxy::Recv__delete__(const MaybeInputFiles& aFiles,
     const InfallibleTArray<PBlobChild*>& blobs = aFiles.get_InputFiles().blobsChild();
     for (uint32_t i = 0; i < blobs.Length(); ++i) {
       BlobChild* actor = static_cast<BlobChild*>(blobs[i]);
-      nsRefPtr<BlobImpl> blobImpl = actor->GetBlobImpl();
+      RefPtr<BlobImpl> blobImpl = actor->GetBlobImpl();
       NS_ENSURE_TRUE(blobImpl, true);
 
       if (!blobImpl->IsFile()) {
         return true;
       }
 
-      nsRefPtr<File> file = File::Create(mParent, blobImpl);
+      RefPtr<File> file = File::Create(mParent, blobImpl);
       MOZ_ASSERT(file);
 
       mDomfiles.AppendElement(file);
@@ -198,7 +194,7 @@ class SimpleEnumerator final : public nsISimpleEnumerator
 public:
   NS_DECL_ISUPPORTS
 
-  explicit SimpleEnumerator(const nsTArray<nsRefPtr<File>>& aFiles)
+  explicit SimpleEnumerator(const nsTArray<RefPtr<File>>& aFiles)
     : mFiles(aFiles)
     , mIndex(0)
   {}
@@ -225,18 +221,18 @@ private:
   ~SimpleEnumerator()
   {}
 
-  nsTArray<nsRefPtr<File>> mFiles;
+  nsTArray<RefPtr<File>> mFiles;
   uint32_t mIndex;
 };
 
 NS_IMPL_ISUPPORTS(SimpleEnumerator, nsISimpleEnumerator)
 
-} // anonymous namespace
+} // namespace
 
 NS_IMETHODIMP
 nsFilePickerProxy::GetDomfiles(nsISimpleEnumerator** aDomfiles)
 {
-  nsRefPtr<SimpleEnumerator> enumerator = new SimpleEnumerator(mDomfiles);
+  RefPtr<SimpleEnumerator> enumerator = new SimpleEnumerator(mDomfiles);
   enumerator.forget(aDomfiles);
   return NS_OK;
 }

@@ -395,7 +395,7 @@ EnsureVibratorThreadInitialized()
   NS_NewThread(getter_AddRefs(thread), sVibratorRunnable);
 }
 
-} // anonymous namespace
+} // namespace
 
 void
 Vibrate(const nsTArray<uint32_t> &pattern, const hal::WindowIdentifier &)
@@ -472,7 +472,7 @@ public:
   }
 };
 
-} // anonymous namespace
+} // namespace
 
 class BatteryObserver final : public IUeventObserver
 {
@@ -502,7 +502,7 @@ protected:
   ~BatteryObserver() {}
 
 private:
-  nsRefPtr<BatteryUpdater> mUpdater;
+  RefPtr<BatteryUpdater> mUpdater;
 };
 
 // sBatteryObserver is owned by the IO thread. Only the IO thread may
@@ -745,7 +745,7 @@ bool sCpuSleepAllowed = true;
 // when reading or writing this variable to ensure thread-safe.
 int32_t sInternalLockCpuCount = 0;
 
-} // anonymous namespace
+} // namespace
 
 bool
 GetScreenEnabled()
@@ -1025,12 +1025,12 @@ DisableScreenConfigurationNotifications()
 void
 GetCurrentScreenConfiguration(hal::ScreenConfiguration* aScreenConfiguration)
 {
-  nsRefPtr<nsScreenGonk> screen = nsScreenManagerGonk::GetPrimaryScreen();
+  RefPtr<nsScreenGonk> screen = nsScreenManagerGonk::GetPrimaryScreen();
   *aScreenConfiguration = screen->GetConfiguration();
 }
 
 bool
-LockScreenOrientation(const dom::ScreenOrientation& aOrientation)
+LockScreenOrientation(const dom::ScreenOrientationInternal& aOrientation)
 {
   return OrientationObserver::GetInstance()->LockScreenOrientation(aOrientation);
 }
@@ -1125,7 +1125,7 @@ WaitForAlarm(void* aData)
       // *on time* (the system won't sleep during the process in any way),
       // we need to acquire a CPU wake lock before firing the alarm event.
       InternalLockCpu();
-      nsRefPtr<AlarmFiredEvent> event =
+      RefPtr<AlarmFiredEvent> event =
         new AlarmFiredEvent(alarmData->mGeneration);
       NS_DispatchToMainThread(event);
     }
@@ -1826,7 +1826,7 @@ EnsureKernelLowMemKillerParamsSet()
   }
 
   // Ensure OOM events appear in logcat
-  nsRefPtr<OomVictimLogger> oomLogger = new OomVictimLogger();
+  RefPtr<OomVictimLogger> oomLogger = new OomVictimLogger();
   nsCOMPtr<nsIObserverService> os = services::GetObserverService();
   if (os) {
     os->AddObserver(oomLogger, "ipc:content-shutdown", false);
@@ -2017,7 +2017,7 @@ private:
   hal::ThreadPriority mThreadPriority;
 };
 
-} // anonymous namespace
+} // namespace
 
 void
 SetCurrentThreadPriority(ThreadPriority aThreadPriority)

@@ -4,10 +4,10 @@
 
 "use strict";
 
-let Cu = Components.utils;
-let Ci = Components.interfaces;
-let Cc = Components.classes;
-let Cr = Components.results;
+var Cu = Components.utils;
+var Ci = Components.interfaces;
+var Cc = Components.classes;
+var Cr = Components.results;
 
 /* BrowserElementParent injects script to listen for certain events in the
  * child.  We then listen to messages from the child script and take
@@ -36,22 +36,10 @@ function getIntPref(prefName, def) {
   }
 }
 
-function visibilityChangeHandler(e) {
-  // The visibilitychange event's target is the document.
-  let win = e.target.defaultView;
-
-  if (!win._browserElementParents) {
-    return;
-  }
-
-  let beps = Cu.nondeterministicGetWeakMapKeys(win._browserElementParents);
-  if (beps.length == 0) {
-    win.removeEventListener('visibilitychange', visibilityChangeHandler);
-    return;
-  }
-
-  for (let i = 0; i < beps.length; i++) {
-    beps[i]._ownerVisibilityChange();
+function handleWindowEvent(e) {
+  if (this._browserElementParents) {
+    let beps = Cu.nondeterministicGetWeakMapKeys(this._browserElementParents);
+    beps.forEach(bep => bep._handleOwnerEvent(e));
   }
 }
 
@@ -119,10 +107,14 @@ BrowserElementParent.prototype = {
     // BrowserElementParents.
     if (!this._window._browserElementParents) {
       this._window._browserElementParents = new WeakMap();
-      this._window.addEventListener('visibilitychange',
-                                    visibilityChangeHandler,
-                                    /* useCapture = */ false,
-                                    /* wantsUntrusted = */ false);
+      let handler = handleWindowEvent.bind(this._window);
+      let windowEvents = ['visibilitychange', 'mozfullscreenchange'];
+      let els = Cc["@mozilla.org/eventlistenerservice;1"]
+                  .getService(Ci.nsIEventListenerService);
+      for (let event of windowEvents) {
+        els.addSystemEventListener(this._window, event, handler,
+                                   /* useCapture = */ true);
+      }
     }
 
     this._window._browserElementParents.set(this, null);
@@ -131,11 +123,6 @@ BrowserElementParent.prototype = {
     BrowserElementPromptService.mapFrameToBrowserElementParent(this._frameElement, this);
     this._setupMessageListener();
     this._registerAppManifest();
-
-    let els = Cc["@mozilla.org/eventlistenerservice;1"]
-                .getService(Ci.nsIEventListenerService);
-    els.addSystemEventListener(this._window.document, "mozfullscreenchange",
-                               this._fullscreenChange.bind(this), true);
   },
 
   _runPendingAPICall: function() {
@@ -174,10 +161,17 @@ BrowserElementParent.prototype = {
 
   _setupMessageListener: function() {
     this._mm = this._frameLoader.messageManager;
-    let self = this;
-    let isWidget = this._frameLoader
-                       .QueryInterface(Ci.nsIFrameLoader)
-                       .ownerIsWidget;
+    this._isWidget = this._frameLoader
+                         .QueryInterface(Ci.nsIFrameLoader)
+                         .ownerIsWidget;
+    this._mm.addMessageListener('browser-element-api:call', this);
+    this._mm.loadFrameScript("chrome://global/content/extensions.js", true);
+  },
+
+  receiveMessage: function(aMsg) {
+    if (!this._isAlive()) {
+      return;
+    }
 
     // Messages we receive are handed to functions which take a (data) argument,
     // where |data| is the message manager's data object.
@@ -197,6 +191,8 @@ BrowserElementParent.prototype = {
       "got-contentdimensions": this._gotDOMRequestResult,
       "got-can-go-back": this._gotDOMRequestResult,
       "got-can-go-forward": this._gotDOMRequestResult,
+      "got-muted": this._gotDOMRequestResult,
+      "got-volume": this._gotDOMRequestResult,
       "requested-dom-fullscreen": this._requestedDOMFullscreen,
       "fullscreen-origin-change": this._fullscreenOriginChange,
       "exit-dom-fullscreen": this._exitDomFullscreen,
@@ -206,10 +202,18 @@ BrowserElementParent.prototype = {
       "selectionstatechanged": this._handleSelectionStateChanged,
       "scrollviewchange": this._handleScrollViewChange,
       "caretstatechanged": this._handleCaretStateChanged,
-      "findchange": this._handleFindChange
+      "findchange": this._handleFindChange,
+      "execute-script-done": this._gotDOMRequestResult,
+      "got-audio-channel-volume": this._gotDOMRequestResult,
+      "got-set-audio-channel-volume": this._gotDOMRequestResult,
+      "got-audio-channel-muted": this._gotDOMRequestResult,
+      "got-set-audio-channel-muted": this._gotDOMRequestResult,
+      "got-is-audio-channel-active": this._gotDOMRequestResult,
+      "got-structured-data": this._gotDOMRequestResult
     };
 
     let mmSecuritySensitiveCalls = {
+      "audioplaybackchange": this._fireEventFromMsg,
       "showmodalprompt": this._handleShowModalPrompt,
       "contextmenu": this._fireCtxMenuEvent,
       "securitychange": this._fireEventFromMsg,
@@ -226,18 +230,15 @@ BrowserElementParent.prototype = {
       "opentab": this._fireEventFromMsg
     };
 
-    this._mm.addMessageListener('browser-element-api:call', function(aMsg) {
-      if (!self._isAlive()) {
-        return;
-      }
+    if (aMsg.data.msg_name in mmCalls) {
+      return mmCalls[aMsg.data.msg_name].apply(this, arguments);
+    } else if (!this._isWidget && aMsg.data.msg_name in mmSecuritySensitiveCalls) {
+      return mmSecuritySensitiveCalls[aMsg.data.msg_name].apply(this, arguments);
+    }
+  },
 
-      if (aMsg.data.msg_name in mmCalls) {
-        return mmCalls[aMsg.data.msg_name].apply(self, arguments);
-      } else if (!isWidget && aMsg.data.msg_name in mmSecuritySensitiveCalls) {
-        return mmSecuritySensitiveCalls[aMsg.data.msg_name]
-                 .apply(self, arguments);
-      }
-    });
+  _removeMessageListener: function() {
+    this._mm.removeMessageListener('browser-element-api:call', this);
   },
 
   /**
@@ -456,6 +457,9 @@ BrowserElementParent.prototype = {
   //  - collapsed: Indicate current selection is collapsed or not.
   //  - caretVisible: Indicate the caret visiibility.
   //  - selectionVisible: Indicate current selection is visible or not.
+  //  - selectionEditable: Indicate current selection is editable or not.
+  //  - selectedTextContent: Contains current selected text content, which is
+  //                         equivalent to the string returned by Selection.toString().
   _handleCaretStateChanged: function(data) {
     let evt = this._createEvent('caretstatechanged', data.json,
                                 /* cancelable = */ false);
@@ -670,6 +674,22 @@ BrowserElementParent.prototype = {
     return this._sendAsyncMsg('clear-match');
   }),
 
+  mute: defineNoReturnMethod(function() {
+    this._sendAsyncMsg('mute');
+  }),
+
+  unmute: defineNoReturnMethod(function() {
+    this._sendAsyncMsg('unmute');
+  }),
+
+  getMuted: defineDOMRequestMethod('get-muted'),
+
+  getVolume: defineDOMRequestMethod('get-volume'),
+
+  setVolume: defineNoReturnMethod(function(volume) {
+    this._sendAsyncMsg('set-volume', {volume});
+  }),
+
   goBack: defineNoReturnMethod(function() {
     this._sendAsyncMsg('go-back');
   }),
@@ -685,6 +705,19 @@ BrowserElementParent.prototype = {
   stop: defineNoReturnMethod(function() {
     this._sendAsyncMsg('stop');
   }),
+
+  executeScript: function(script, options) {
+    if (!this._isAlive()) {
+      throw Components.Exception("Dead content process",
+                                 Cr.NS_ERROR_DOM_INVALID_STATE_ERR);
+    }
+
+    // Enforcing options.url or options.origin
+    if (!options.url && !options.origin) {
+      throw Components.Exception("Invalid argument", Cr.NS_ERROR_INVALID_ARG);
+    }
+    return this._sendDOMRequest('execute-script', {script, options});
+  },
 
   /*
    * The valid range of zoom scale is defined in preference "zoom.maxPercent" and "zoom.minPercent".
@@ -805,14 +838,13 @@ BrowserElementParent.prototype = {
       catch(e) {
         debug('Malformed referrer -- ' + e);
       }
+
       // This simply returns null if there is no principal available
       // for the requested uri. This is an acceptable fallback when
       // calling newChannelFromURI2.
-      principal = 
-        Services.scriptSecurityManager.getAppCodebasePrincipal(
-          referrer, 
-          this._frameLoader.loadContext.appId, 
-          this._frameLoader.loadContext.isInBrowserElement);
+      principal =
+        Services.scriptSecurityManager.createCodebasePrincipal(
+          referrer, this._frameLoader.loadContext.originAttributes);
     }
 
     debug('Using principal? ' + !!principal);
@@ -966,11 +998,40 @@ BrowserElementParent.prototype = {
     try {
       let nfcContentHelper =
         Cc["@mozilla.org/nfc/content-helper;1"].getService(Ci.nsINfcBrowserAPI);
-      nfcContentHelper.setFocusApp(tabId, isFocus);
+      nfcContentHelper.setFocusTab(tabId, isFocus);
     } catch(e) {
       // Not all platforms support NFC
     }
   },
+
+  getAudioChannelVolume: function(aAudioChannel) {
+    return this._sendDOMRequest('get-audio-channel-volume',
+                                {audioChannel: aAudioChannel});
+  },
+
+  setAudioChannelVolume: function(aAudioChannel, aVolume) {
+    return this._sendDOMRequest('set-audio-channel-volume',
+                                {audioChannel: aAudioChannel,
+                                 volume: aVolume});
+  },
+
+  getAudioChannelMuted: function(aAudioChannel) {
+    return this._sendDOMRequest('get-audio-channel-muted',
+                                {audioChannel: aAudioChannel});
+  },
+
+  setAudioChannelMuted: function(aAudioChannel, aMuted) {
+    return this._sendDOMRequest('set-audio-channel-muted',
+                                {audioChannel: aAudioChannel,
+                                 muted: aMuted});
+  },
+
+  isAudioChannelActive: function(aAudioChannel) {
+    return this._sendDOMRequest('get-is-audio-channel-active',
+                                {audioChannel: aAudioChannel});
+  },
+
+  getStructuredData: defineDOMRequestMethod('get-structured-data'),
 
   /**
    * Called when the visibility of the window which owns this iframe changes.
@@ -1009,14 +1070,19 @@ BrowserElementParent.prototype = {
     this._windowUtils.remoteFrameFullscreenReverted();
   },
 
-  _fullscreenChange: function(evt) {
-    if (this._isAlive() && evt.target == this._window.document) {
-      if (!this._window.document.mozFullScreen) {
-        this._sendAsyncMsg("exit-fullscreen");
-      } else if (this._pendingDOMFullscreen) {
-        this._pendingDOMFullscreen = false;
-        this._sendAsyncMsg("entered-fullscreen");
-      }
+  _handleOwnerEvent: function(evt) {
+    switch (evt.type) {
+      case 'visibilitychange':
+        this._ownerVisibilityChange();
+        break;
+      case 'mozfullscreenchange':
+        if (!this._window.document.mozFullScreen) {
+          this._sendAsyncMsg('exit-fullscreen');
+        } else if (this._pendingDOMFullscreen) {
+          this._pendingDOMFullscreen = false;
+          this._sendAsyncMsg('entered-fullscreen');
+        }
+        break;
     }
   },
 

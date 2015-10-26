@@ -18,8 +18,6 @@ if CONFIG['OS_ARCH'] == 'WINNT':
 if CONFIG['DEHYDRA_PATH']:
     TEST_DIRS += ['static-checker']
 
-FAIL_ON_WARNINGS = True
-
 EXPORTS.testing += [
     'TestHarness.h',
 ]
@@ -66,7 +64,6 @@ GeckoCppUnitTests([
     'TestObserverArray',
     'TestObserverService',
     'TestPipe',
-    'TestPLDHash',
     'TestStringAPI',
     'TestTArray',
     'TestTextFormatter',
@@ -77,11 +74,6 @@ if CONFIG['MOZ_MEMORY']:
     GeckoCppUnitTests([
         'TestJemalloc',
     ])
-
-# XXX Make these tests work in libxul builds.
-#CPP_UNIT_TESTS += [
-#    'TestAtoms',
-#]
 
 # FIXME: bug 577500 TestStaticAtoms fails when run in dist/bin
 #CPP_UNIT_TESTS += [
@@ -111,3 +103,6 @@ LOCAL_INCLUDES += [
 RESOURCE_FILES += [
     'test.properties',
 ]
+
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']

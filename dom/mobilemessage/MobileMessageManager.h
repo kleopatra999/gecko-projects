@@ -14,11 +14,11 @@
 class nsISmsService;
 class nsIDOMMozSmsMessage;
 class nsIDOMMozMmsMessage;
-class Promise;
 
 namespace mozilla {
 namespace dom {
 
+class Promise;
 class DOMRequest;
 class DOMCursor;
 struct MmsParameters;
@@ -64,7 +64,7 @@ public:
   Send(const Sequence<nsString>& aNumbers,
        const nsAString& aText,
        const SmsSendParameters& aSendParams,
-       nsTArray<nsRefPtr<DOMRequest>>& aReturn,
+       nsTArray<RefPtr<DOMRequest>>& aReturn,
        ErrorResult& aRv);
 
   already_AddRefed<DOMRequest>
@@ -114,7 +114,7 @@ public:
   RetrieveMMS(nsIDOMMozMmsMessage* aMessage,
               ErrorResult& aRv);
 
-  already_AddRefed<DOMRequest>
+  already_AddRefed<Promise>
   GetSmscAddress(const Optional<uint32_t>& aServiceId,
                  ErrorResult& aRv);
 

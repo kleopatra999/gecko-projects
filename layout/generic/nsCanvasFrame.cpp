@@ -85,7 +85,7 @@ nsCanvasFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
   ErrorResult er;
   // We won't create touch caret element if preference is not enabled.
   if (PresShell::TouchCaretPrefEnabled()) {
-    nsRefPtr<NodeInfo> nodeInfo;
+    RefPtr<NodeInfo> nodeInfo;
 
     // Create and append touch caret frame.
     nodeInfo = doc->NodeInfoManager()->GetNodeInfo(nsGkAtoms::div, nullptr,
@@ -145,6 +145,15 @@ nsCanvasFrame::CreateAnonymousContent(nsTArray<ContentInfo>& aElements)
 
   // Create the custom content container.
   mCustomContentContainer = doc->CreateHTMLElement(nsGkAtoms::div);
+#ifdef DEBUG
+  // We restyle our mCustomContentContainer, even though it's root anonymous
+  // content.  Normally that's not OK because the frame constructor doesn't know
+  // how to order the frame tree in such cases, but we make this work for this
+  // particular case, so it's OK.
+  mCustomContentContainer->SetProperty(nsGkAtoms::restylableAnonymousNode,
+                                       reinterpret_cast<void*>(true));
+#endif // DEBUG
+
   aElements.AppendElement(mCustomContentContainer);
 
   // XXX add :moz-native-anonymous or will that be automatically set?
@@ -221,7 +230,7 @@ nsCanvasFrame::DestroyFrom(nsIFrame* aDestructRoot)
     nsCOMPtr<nsIDocument> doc = mContent->OwnerDoc();
     ErrorResult rv;
 
-    nsTArray<nsRefPtr<mozilla::dom::AnonymousContent>>& docAnonContents =
+    nsTArray<RefPtr<mozilla::dom::AnonymousContent>>& docAnonContents =
       doc->GetAnonymousContents();
     for (size_t i = 0, len = docAnonContents.Length(); i < len; ++i) {
       AnonymousContent* content = docAnonContents[i];
@@ -369,7 +378,7 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
   nsRect bgClipRect = frame->CanvasArea() + offset;
 
   nsRenderingContext context;
-  nsRefPtr<gfxContext> dest = aCtx->ThebesContext();
+  RefPtr<gfxContext> dest = aCtx->ThebesContext();
   RefPtr<DrawTarget> dt;
   gfxRect destRect;
 #ifndef MOZ_GFX_OPTIMIZE_MOBILE
@@ -387,7 +396,7 @@ nsDisplayCanvasBackgroundImage::Paint(nsDisplayListBuilder* aBuilder,
     }
     dt = destDT->CreateSimilarDrawTarget(IntSize(ceil(destRect.width), ceil(destRect.height)), SurfaceFormat::B8G8R8A8);
     if (dt) {
-      nsRefPtr<gfxContext> ctx = new gfxContext(dt);
+      RefPtr<gfxContext> ctx = new gfxContext(dt);
       ctx->SetMatrix(
         ctx->CurrentMatrix().Translate(-destRect.x, -destRect.y));
       context.Init(ctx);
@@ -665,20 +674,20 @@ nsCanvasFrame::Reflow(nsPresContext*           aPresContext,
 
     WritingMode wm = aReflowState.GetWritingMode();
     WritingMode kidWM = kidReflowState.GetWritingMode();
-    nscoord containerWidth = aReflowState.ComputedWidth();
+    nsSize containerSize = aReflowState.ComputedPhysicalSize();
 
     LogicalMargin margin = kidReflowState.ComputedLogicalMargin();
     LogicalPoint kidPt(kidWM, margin.IStart(kidWM), margin.BStart(kidWM));
 
-    kidReflowState.ApplyRelativePositioning(&kidPt, containerWidth);
+    kidReflowState.ApplyRelativePositioning(&kidPt, containerSize);
 
     // Reflow the frame
     ReflowChild(kidFrame, aPresContext, kidDesiredSize, kidReflowState,
-                kidWM, kidPt, containerWidth, 0, aStatus);
+                kidWM, kidPt, containerSize, 0, aStatus);
 
     // Complete the reflow and position and size the child frame
     FinishReflowChild(kidFrame, aPresContext, kidDesiredSize, &kidReflowState,
-                      kidWM, kidPt, containerWidth, 0);
+                      kidWM, kidPt, containerSize, 0);
 
     if (!NS_FRAME_IS_FULLY_COMPLETE(aStatus)) {
       nsIFrame* nextFrame = kidFrame->GetNextInFlow();

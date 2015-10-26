@@ -18,7 +18,7 @@ namespace mozilla {
 
 namespace gfx {
 class DataSourceSurface;
-}
+} // namespace gfx
 
 namespace gl {
 
@@ -33,6 +33,12 @@ void ReadPixelsIntoDataSurface(GLContext* aGL,
 
 already_AddRefed<gfx::DataSourceSurface>
 ReadBackSurface(GLContext* gl, GLuint aTexture, bool aYInvert, gfx::SurfaceFormat aFormat);
+
+already_AddRefed<gfx::DataSourceSurface>
+YInvertImageSurface(gfx::DataSourceSurface* aSurf);
+
+void
+SwapRAndBComponents(gfx::DataSourceSurface* surf);
 
 class GLReadTexImageHelper final
 {
@@ -65,15 +71,20 @@ public:
       * passed as int to eliminate including LayerManagerOGLProgram.h here.
       */
     already_AddRefed<gfx::DataSourceSurface> ReadTexImage(GLuint aTextureId,
-                                                      GLenum aTextureTarget,
-                                                      const gfx::IntSize& aSize,
-                              /* ShaderProgramType */ int aShaderProgram,
-                                                      bool aYInvert = false);
+                                                          GLenum aTextureTarget,
+                                                          const gfx::IntSize& aSize,
+                                  /* ShaderProgramType */ int aShaderProgram,
+                                                          bool aYInvert = false);
 
-
+    bool ReadTexImage(gfx::DataSourceSurface* aDest,
+                      GLuint aTextureId,
+                      GLenum aTextureTarget,
+                      const gfx::IntSize& aSize,
+                      int aShaderProgram,
+                      bool aYInvert = false);
 };
 
-}
-}
+} // namespace gl
+} // namespace mozilla
 
 #endif

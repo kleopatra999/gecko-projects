@@ -11,6 +11,8 @@
 #include "nsIInputStream.h"
 #include "nsILineInputStream.h"
 #include "nsIObserverService.h"
+#include "nsIOutputStream.h"
+#include "nsISafeOutputStream.h"
 
 #include "MainThreadUtils.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -38,7 +40,7 @@ namespace {
 
 StaticRefPtr<ServiceWorkerRegistrar> gServiceWorkerRegistrar;
 
-} // anonymous namespace
+} // namespace
 
 NS_IMPL_ISUPPORTS(ServiceWorkerRegistrar,
                   nsIObserver)
@@ -73,7 +75,7 @@ ServiceWorkerRegistrar::Get()
   MOZ_ASSERT(XRE_IsParentProcess());
 
   MOZ_ASSERT(gServiceWorkerRegistrar);
-  nsRefPtr<ServiceWorkerRegistrar> service = gServiceWorkerRegistrar.get();
+  RefPtr<ServiceWorkerRegistrar> service = gServiceWorkerRegistrar.get();
   return service.forget();
 }
 
@@ -321,25 +323,17 @@ ServiceWorkerRegistrar::ReadData()
       return NS_ERROR_FAILURE;                        \
     }
 
-    GET_LINE(line);
+    nsAutoCString suffix;
+    GET_LINE(suffix);
 
-    uint32_t appId = line.ToInteger(&rv);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
+    OriginAttributes attrs;
+    if (!attrs.PopulateFromSuffix(suffix)) {
+      return NS_ERROR_INVALID_ARG;
     }
-
-    GET_LINE(line);
-
-    if (!line.EqualsLiteral(SERVICEWORKERREGISTRAR_TRUE) &&
-        !line.EqualsLiteral(SERVICEWORKERREGISTRAR_FALSE)) {
-      return NS_ERROR_FAILURE;
-    }
-
-    bool isInBrowserElement = line.EqualsLiteral(SERVICEWORKERREGISTRAR_TRUE);
 
     GET_LINE(line);
     entry->principal() =
-      mozilla::ipc::ContentPrincipalInfo(appId, isInBrowserElement, line);
+      mozilla::ipc::ContentPrincipalInfo(attrs, line);
 
     GET_LINE(entry->scope());
     GET_LINE(entry->scriptSpec());
@@ -413,12 +407,12 @@ public:
   NS_IMETHODIMP
   Run()
   {
-    nsRefPtr<ServiceWorkerRegistrar> service = ServiceWorkerRegistrar::Get();
+    RefPtr<ServiceWorkerRegistrar> service = ServiceWorkerRegistrar::Get();
     MOZ_ASSERT(service);
 
     service->SaveData();
 
-    nsRefPtr<nsRunnable> runnable =
+    RefPtr<nsRunnable> runnable =
       NS_NewRunnableMethod(service, &ServiceWorkerRegistrar::DataSaved);
     nsresult rv = mThread->Dispatch(runnable, NS_DISPATCH_NORMAL);
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -442,7 +436,7 @@ ServiceWorkerRegistrar::ScheduleSaveData()
     do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID);
   MOZ_ASSERT(target, "Must have stream transport service");
 
-  nsRefPtr<nsRunnable> runnable =
+  RefPtr<nsRunnable> runnable =
     new ServiceWorkerRegistrarSaveDataRunnable();
   nsresult rv = target->Dispatch(runnable, NS_DISPATCH_NORMAL);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -492,7 +486,7 @@ ServiceWorkerRegistrar::MaybeScheduleShutdownCompleted()
     return;
   }
 
-  nsRefPtr<nsRunnable> runnable =
+  RefPtr<nsRunnable> runnable =
      NS_NewRunnableMethod(this, &ServiceWorkerRegistrar::ShutdownCompleted);
   nsresult rv = NS_DispatchToMainThread(runnable);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -554,19 +548,14 @@ ServiceWorkerRegistrar::WriteData()
     const mozilla::ipc::ContentPrincipalInfo& cInfo =
       info.get_ContentPrincipalInfo();
 
+    nsAutoCString suffix;
+    cInfo.attrs().CreateSuffix(suffix);
+
     buffer.Truncate();
-    buffer.AppendInt(cInfo.appId());
+    buffer.Append(suffix.get());
     buffer.Append('\n');
 
-    if (cInfo.isInBrowserElement()) {
-      buffer.AppendLiteral(SERVICEWORKERREGISTRAR_TRUE);
-    } else {
-      buffer.AppendLiteral(SERVICEWORKERREGISTRAR_FALSE);
-    }
-
-    buffer.Append('\n');
     buffer.Append(cInfo.spec());
-
     buffer.Append('\n');
 
     buffer.Append(data[i].scope());
@@ -707,5 +696,5 @@ ServiceWorkerRegistrar::Observe(nsISupports* aSubject, const char* aTopic,
   return NS_ERROR_UNEXPECTED;
 }
 
-} // dom namespace
-} // mozilla namespace
+} // namespace dom
+} // namespace mozilla

@@ -15,17 +15,18 @@
   <remote fetch="https://git.mozilla.org/external/apitrace" name="apitrace"/>
   <default remote="caf" revision="refs/tags/android-4.0.4_r2.1" sync-j="4"/>
   <!-- Gonk specific things and forks -->
-  <project name="platform_build" path="build" remote="b2g" revision="173b3104bfcbd23fc9dccd4b0035fc49aae3d444">
+  <project name="platform_build" path="build" remote="b2g" revision="1b0db93fb6b870b03467aff50d6419771ba0d88c">
     <copyfile dest="Makefile" src="core/root.mk"/>
   </project>
   <project name="fake-dalvik" path="dalvik" remote="b2g" revision="ca1f327d5acc198bb4be62fa51db2c039032c9ce"/>
-  <project name="gaia.git" path="gaia" remote="mozillaorg" revision="2673b2501d86f0d6230ee5328e6f7ba054f938a0"/>
-  <project name="gonk-misc" path="gonk-misc" remote="b2g" revision="3477513bcd385571aa01c0d074849e35bd5e2376"/>
+  <project name="gaia.git" path="gaia" remote="mozillaorg" revision="a677ddd3aa3a81058775938bd56008d96dbc78b0"/>
+  <project name="gonk-misc" path="gonk-misc" remote="b2g" revision="956700d9754349b630a34551750ae6353614b6aa"/>
   <project name="rilproxy" path="rilproxy" remote="b2g" revision="5ef30994f4778b4052e58a4383dbe7890048c87e"/>
-  <project name="platform_hardware_ril" path="hardware/ril" remote="b2g" revision="87a2d8ab9248540910e56921654367b78a587095"/>
-  <project name="platform_external_qemu" path="external/qemu" remote="b2g" revision="9d0e5057ee5404a31ec1bf76131cb11336a7c3b6"/>
-  <project name="moztt" path="external/moztt" remote="b2g" revision="46da1a05ac04157669685246d70ac59d48699c9e"/>
+  <project name="platform_hardware_ril" path="hardware/ril" remote="b2g" revision="4ace9aaee0e048dfda11bb787646c59982a3dc80"/>
+  <project name="platform_external_qemu" path="external/qemu" remote="b2g" revision="c72c9278ddc2f442d193474993d36e7f2cfb08c4"/>
+  <project name="moztt" path="external/moztt" remote="b2g" revision="3b9a47b517d345b8d98bc7f787b9a6c2f51ca75d"/>
   <project name="apitrace" path="external/apitrace" remote="apitrace" revision="34ea6163f9f0e0122fb0bb03607eccdca31ced7a"/>
+  <project name="platform_hardware_libhardware_moz" path="hardware/libhardware_moz" remote="b2g" revision="fdf3a143dc777e5f9d33a88373af7ea161d3b440"/>
   <!-- Stock Android things -->
   <project name="platform/abi/cpp" path="abi/cpp" revision="dd924f92906085b831bf1cbbc7484d3c043d613c"/>
   <project name="platform_bionic" path="bionic" remote="b2g" revision="e2b3733ba3fa5e3f404e983d2e4142b1f6b1b846"/>
@@ -98,7 +99,7 @@
   <project name="platform/system/vold" path="system/vold" revision="919829940468066a32f403980b43f6ebfee5d314"/>
   <!-- Emulator specific things -->
   <project name="android-development" path="development" remote="b2g" revision="2bdf22305b523af644e1891b4ddfd9229336d0ce"/>
-  <project name="device_generic_goldfish" path="device/generic/goldfish" remote="b2g" revision="0d5c43228006bae775c4cb57a6d3908484d41718"/>
+  <project name="device_generic_goldfish" path="device/generic/goldfish" remote="b2g" revision="fc5f390fa314385e2a84629ea88284a60b40f7c4"/>
   <project name="platform/external/iproute2" path="external/iproute2" revision="c66c5716d5335e450f7a7b71ccc6a604fb2f41d2"/>
   <project name="platform/prebuilts/gcc/linux-x86/host/i686-linux-glibc2.7-4.6" path="prebuilts/gcc/linux-x86/host/i686-linux-glibc2.7-4.6" revision="d2685281e2e54ca14d1df304867aa82c37b27162"/>
   <project name="platform/prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.7-4.6" path="prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.7-4.6" revision="627f9b20fc518937b93747a7ff1ed4f5ed46e06f"/>

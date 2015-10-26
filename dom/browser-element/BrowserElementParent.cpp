@@ -15,6 +15,7 @@
 #endif
 
 #include "BrowserElementParent.h"
+#include "BrowserElementAudioChannel.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/dom/HTMLIFrameElement.h"
 #include "mozilla/dom/ToJSValue.h"
@@ -39,13 +40,13 @@ CreateIframe(Element* aOpenerFrameElement, const nsAString& aName, bool aRemote)
   nsNodeInfoManager *nodeInfoManager =
     aOpenerFrameElement->OwnerDoc()->NodeInfoManager();
 
-  nsRefPtr<NodeInfo> nodeInfo =
+  RefPtr<NodeInfo> nodeInfo =
     nodeInfoManager->GetNodeInfo(nsGkAtoms::iframe,
                                  /* aPrefix = */ nullptr,
                                  kNameSpaceID_XHTML,
                                  nsIDOMNode::ELEMENT_NODE);
 
-  nsRefPtr<HTMLIFrameElement> popupFrameElement =
+  RefPtr<HTMLIFrameElement> popupFrameElement =
     static_cast<HTMLIFrameElement*>(
       NS_NewHTMLIFrameElement(nodeInfo.forget(), mozilla::dom::NOT_FROM_PARSER));
 
@@ -96,21 +97,15 @@ DispatchCustomDOMEvent(Element* aFrameElement, const nsAString& aEventName,
 {
   NS_ENSURE_TRUE(aFrameElement, false);
   nsIPresShell *shell = aFrameElement->OwnerDoc()->GetShell();
-  nsRefPtr<nsPresContext> presContext;
+  RefPtr<nsPresContext> presContext;
   if (shell) {
     presContext = shell->GetPresContext();
   }
 
-  nsCOMPtr<nsIDOMEvent> domEvent;
-  EventDispatcher::CreateEvent(aFrameElement, presContext, nullptr,
-                               NS_LITERAL_STRING("customevent"),
-                               getter_AddRefs(domEvent));
-  NS_ENSURE_TRUE(domEvent, false);
+  RefPtr<CustomEvent> event =
+    NS_NewDOMCustomEvent(aFrameElement, presContext, nullptr);
 
-  nsCOMPtr<nsIDOMCustomEvent> customEvent = do_QueryInterface(domEvent);
-  NS_ENSURE_TRUE(customEvent, false);
   ErrorResult res;
-  CustomEvent* event = static_cast<CustomEvent*>(customEvent.get());
   event->InitCustomEvent(cx,
                          aEventName,
                          /* bubbles = */ true,
@@ -120,16 +115,17 @@ DispatchCustomDOMEvent(Element* aFrameElement, const nsAString& aEventName,
   if (res.Failed()) {
     return false;
   }
-  customEvent->SetTrusted(true);
+  event->SetTrusted(true);
   // Dispatch the event.
-  *aStatus = nsEventStatus_eConsumeNoDefault;
+  // We don't initialize aStatus here, as our callers have already done so.
   nsresult rv =
     EventDispatcher::DispatchDOMEvent(aFrameElement, nullptr,
-                                      domEvent, presContext, aStatus);
+                                      static_cast<Event*>(event),
+                                      presContext, aStatus);
   return NS_SUCCEEDED(rv);
 }
 
-} // anonymous namespace
+} // namespace
 
 namespace mozilla {
 
@@ -181,7 +177,7 @@ BrowserElementParent::DispatchOpenWindowEvent(Element* aOpenerFrameElement,
     return BrowserElementParent::OPEN_WINDOW_CANCELLED;
   }
 
-  nsEventStatus status;
+  nsEventStatus status = nsEventStatus_eIgnore;
   bool dispatchSucceeded =
     DispatchCustomDOMEvent(aOpenerFrameElement,
                            NS_LITERAL_STRING("mozbrowseropenwindow"),
@@ -213,7 +209,7 @@ BrowserElementParent::OpenWindowOOP(TabParent* aOpenerTabParent,
   nsCOMPtr<Element> openerFrameElement = aOpenerTabParent->GetOwnerElement();
   NS_ENSURE_TRUE(openerFrameElement,
                  BrowserElementParent::OPEN_WINDOW_IGNORED);
-  nsRefPtr<HTMLIFrameElement> popupFrameElement =
+  RefPtr<HTMLIFrameElement> popupFrameElement =
     CreateIframe(openerFrameElement, aName, /* aRemote = */ true);
 
   // Normally an <iframe> element will try to create a frameLoader when the
@@ -271,7 +267,7 @@ BrowserElementParent::OpenWindowInProcess(nsIDOMWindow* aOpenerWindow,
   NS_ENSURE_TRUE(openerFrameElement, BrowserElementParent::OPEN_WINDOW_IGNORED);
 
 
-  nsRefPtr<HTMLIFrameElement> popupFrameElement =
+  RefPtr<HTMLIFrameElement> popupFrameElement =
     CreateIframe(openerFrameElement, aName, /* aRemote = */ false);
   NS_ENSURE_TRUE(popupFrameElement, BrowserElementParent::OPEN_WINDOW_IGNORED);
 
@@ -319,7 +315,7 @@ public:
   NS_IMETHOD Run();
 
 private:
-  nsRefPtr<TabParent> mTabParent;
+  RefPtr<TabParent> mTabParent;
   const CSSRect mContentRect;
   const CSSSize mContentSize;
 };
@@ -374,7 +370,7 @@ BrowserElementParent::DispatchAsyncScrollEvent(TabParent* aTabParent,
     return true;
   }
 
-  nsRefPtr<DispatchAsyncScrollEventRunnable> runnable =
+  RefPtr<DispatchAsyncScrollEventRunnable> runnable =
     new DispatchAsyncScrollEventRunnable(aTabParent, aContentRect,
                                          aContentSize);
   return NS_SUCCEEDED(NS_DispatchToMainThread(runnable));

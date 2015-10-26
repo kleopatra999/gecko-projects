@@ -13,7 +13,8 @@
 #include "nsCycleCollectionParticipant.h"
 
 #ifdef MOZ_WIDGET_GONK
-#include "nsINetworkManager.h"
+#include "nsINetworkInterface.h"
+#include "nsProxyRelease.h"
 #endif
 
 //-----------------------------------------------------------------------------
@@ -66,12 +67,12 @@ private:
   nsCOMPtr<nsIUDPSocketListener>       mListener;
   nsCOMPtr<nsIEventTarget>             mListenerTarget;
   bool                                 mAttached;
-  nsRefPtr<nsSocketTransportService>   mSts;
+  RefPtr<nsSocketTransportService>   mSts;
 
   uint64_t   mByteReadCount;
   uint64_t   mByteWriteCount;
 #ifdef MOZ_WIDGET_GONK
-  nsMainThreadPtrHandle<nsINetworkInterface> mActiveNetwork;
+  nsMainThreadPtrHandle<nsINetworkInfo> mActiveNetworkInfo;
 #endif
 };
 
@@ -113,7 +114,7 @@ public:
 private:
   virtual ~nsUDPOutputStream();
 
-  nsRefPtr<nsUDPSocket>       mSocket;
+  RefPtr<nsUDPSocket>       mSocket;
   PRFileDesc                  *mFD;
   PRNetAddr                   mPrClientAddr;
   bool                        mIsClosed;

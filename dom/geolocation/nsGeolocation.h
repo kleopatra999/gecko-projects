@@ -44,8 +44,8 @@ namespace dom {
 class Geolocation;
 typedef CallbackObjectHolder<PositionCallback, nsIDOMGeoPositionCallback> GeoPositionCallback;
 typedef CallbackObjectHolder<PositionErrorCallback, nsIDOMGeoPositionErrorCallback> GeoPositionErrorCallback;
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 struct CachedPositionAndAccuracy {
   nsCOMPtr<nsIDOMGeoPosition> position;
@@ -201,8 +201,8 @@ private:
   // there is a page change. All requests held by either array are active, that
   // is, they have been allowed and expect to be fulfilled.
 
-  nsTArray<nsRefPtr<nsGeolocationRequest> > mPendingCallbacks;
-  nsTArray<nsRefPtr<nsGeolocationRequest> > mWatchingCallbacks;
+  nsTArray<RefPtr<nsGeolocationRequest> > mPendingCallbacks;
+  nsTArray<RefPtr<nsGeolocationRequest> > mWatchingCallbacks;
 
   // window that this was created for.  Weak reference.
   nsWeakPtr mOwner;
@@ -211,13 +211,13 @@ private:
   nsCOMPtr<nsIPrincipal> mPrincipal;
 
   // owning back pointer.
-  nsRefPtr<nsGeolocationService> mService;
+  RefPtr<nsGeolocationService> mService;
 
   // Watch ID
   uint32_t mLastWatchId;
 
   // Pending requests are used when the service is not ready
-  nsTArray<nsRefPtr<nsGeolocationRequest> > mPendingRequests;
+  nsTArray<RefPtr<nsGeolocationRequest> > mPendingRequests;
 
   // Array containing already cleared watch IDs
   nsTArray<int32_t> mClearedWatchIDs;
@@ -246,16 +246,17 @@ public:
 private:
   ~PositionError();
   int16_t mCode;
-  nsRefPtr<Geolocation> mParent;
+  RefPtr<Geolocation> mParent;
 };
 
-}
+} // namespace dom
 
 inline nsISupports*
 ToSupports(dom::Geolocation* aGeolocation)
 {
   return ToSupports(static_cast<nsIDOMGeoGeolocation*>(aGeolocation));
 }
-}
+
+} // namespace mozilla
 
 #endif /* nsGeoLocation_h */

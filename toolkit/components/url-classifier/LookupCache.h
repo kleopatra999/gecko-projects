@@ -12,6 +12,7 @@
 #include "nsCOMPtr.h"
 #include "nsIFile.h"
 #include "nsIFileStreams.h"
+#include "mozilla/RefPtr.h"
 #include "nsUrlClassifierPrefixSet.h"
 #include "mozilla/Logging.h"
 
@@ -133,10 +134,10 @@ private:
   nsCOMPtr<nsIFile> mStoreDirectory;
   CompletionArray mCompletions;
   // Set of prefixes known to be in the database
-  nsRefPtr<nsUrlClassifierPrefixSet> mPrefixSet;
+  RefPtr<nsUrlClassifierPrefixSet> mPrefixSet;
 };
 
-}
-}
+} // namespace safebrowsing
+} // namespace mozilla
 
 #endif

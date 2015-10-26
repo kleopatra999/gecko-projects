@@ -32,16 +32,16 @@ import java.util.zip.ZipFile;
 
 import javax.net.ssl.SSLException;
 
-import org.apache.http.protocol.HTTP;
+import ch.boye.httpclientandroidlib.protocol.HTTP;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
 import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.Telemetry;
-import org.mozilla.gecko.mozglue.RobocopTarget;
 import org.mozilla.gecko.util.FileUtils;
 import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.util.ThreadUtils;
@@ -373,6 +373,37 @@ public class Distribution {
             Log.e(LOGTAG, "Error parsing preferences.json", e);
             Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
             return null;
+        }
+    }
+
+    /**
+     * Get the Android preferences from the preferences.json file, if any exist.
+     * @return The preferences in a JSONObject, or an empty JSONObject if no preferences are defined.
+     */
+    public JSONObject getAndroidPreferences() {
+        final File descFile = getDistributionFile("preferences.json");
+        if (descFile == null) {
+            // Logging and existence checks are handled in getDistributionFile.
+            return new JSONObject();
+        }
+
+        try {
+            final JSONObject all = new JSONObject(FileUtils.getFileContents(descFile));
+
+            if (!all.has("AndroidPreferences")) {
+                return new JSONObject();
+            }
+
+            return all.getJSONObject("AndroidPreferences");
+
+        } catch (IOException e) {
+            Log.e(LOGTAG, "Error getting distribution descriptor file.", e);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
+            return new JSONObject();
+        } catch (JSONException e) {
+            Log.e(LOGTAG, "Error parsing preferences.json", e);
+            Telemetry.addToHistogram(HISTOGRAM_CODE_CATEGORY, CODE_CATEGORY_MALFORMED_DISTRIBUTION);
+            return new JSONObject();
         }
     }
 

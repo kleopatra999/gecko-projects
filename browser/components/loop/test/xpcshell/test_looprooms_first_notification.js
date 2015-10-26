@@ -42,8 +42,8 @@ const kRoomsResponses = new Map([
   }]
 ]);
 
-let gRoomsAdded = [];
-let gRoomsUpdated = [];
+var gRoomsAdded = [];
+var gRoomsUpdated = [];
 
 const onRoomAdded = function(e, room) {
   gRoomsAdded.push(room);
@@ -53,7 +53,7 @@ const onRoomUpdated = function(e, room) {
   gRoomsUpdated.push(room);
 };
 
-let gQueryString = null;
+var gQueryString = null;
 
 add_task(function* setup_server() {
   loopServer.registerPathHandler("/registration", (req, res) => {
@@ -108,7 +108,7 @@ function run_test() {
   LoopRooms.on("add", onRoomAdded);
   LoopRooms.on("update", onRoomUpdated);
 
-  do_register_cleanup(function () {
+  do_register_cleanup(function() {
     Services.prefs.clearUserPref("loop.key");
 
     LoopRooms.off("add", onRoomAdded);

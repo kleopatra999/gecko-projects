@@ -8,8 +8,8 @@ Components.utils.import("resource://gre/modules/Services.jsm");
 Components.utils.import("resource://gre/modules/NetUtil.jsm");
 do_load_manifest("test_downloads.manifest");
 
-let httpserver = null;
-let currentTest = 0;
+var httpserver = null;
+var currentTest = 0;
 
 function WindowContext() { }
 WindowContext.prototype = {
@@ -26,7 +26,7 @@ WindowContext.prototype = {
   removeRequest: function (request, context, status) { }
 };
 
-let DownloadListener = {
+var DownloadListener = {
   set: null,
   prevFiles : [],
 
@@ -53,7 +53,7 @@ let DownloadListener = {
     } else if (aTopic == "dl-done") {
       // check that no two files have the same filename in the download manager
       let file = aSubject.QueryInterface(Ci.nsIDownload).targetFile;
-      for each (let prevFile in this.prevFiles) {
+      for (let prevFile of this.prevFiles) {
         do_check_neq(file.leafName, prevFile.leafName);
       }
       this.prevFiles.push(file);
@@ -93,7 +93,7 @@ let DownloadListener = {
 function runNextTest()
 {
   if (currentTest == tests.length) {
-    for each (var file in DownloadListener.prevFiles) {
+    for (var file of DownloadListener.prevFiles) {
       try {
         file.remove(false);
       } catch (ex) {
@@ -138,7 +138,7 @@ function getResponse(aSet) {
 // files to be downloaded. All files will have the same suggested filename, but
 // should contain different data. doPause will cause the download to pause and resume
 // itself
-let tests = [
+var tests = [
   { serverURL: "/test1.html", data: "Test data 1", doPause: false },
   { serverURL: "/test2.html", data: "Test data 2", doPause: false },
   { serverURL: "/test3.html", data: "Test data 3", doPause: true }

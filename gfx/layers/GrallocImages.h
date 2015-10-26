@@ -49,7 +49,7 @@ class GrallocImage : public PlanarYCbCrImage
   static int32_t sColorIdMap[];
 public:
   struct GrallocData {
-    nsRefPtr<TextureClient> mGraphicBuffer;
+    RefPtr<TextureClient> mGraphicBuffer;
     gfx::IntSize mPicSize;
   };
 
@@ -129,6 +129,7 @@ private:
 
 } // namespace layers
 } // namespace mozilla
+
 #endif
 
 #endif /* GRALLOCIMAGES_H */

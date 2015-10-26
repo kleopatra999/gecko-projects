@@ -52,6 +52,7 @@
 
 #include "mozilla/CheckedInt.h"
 
+#if defined(PR_LOGGING)
 GFX2D_API PRLogModuleInfo *
 GetGFX2DLog()
 {
@@ -60,6 +61,7 @@ GetGFX2DLog()
     sLog = PR_NewLogModule("gfx2d");
   return sLog;
 }
+#endif
 
 // The following code was largely taken from xpcom/glue/SSE.cpp and
 // made a little simpler.
@@ -401,7 +403,7 @@ Factory::CreateDrawTargetForData(BackendType aBackend,
     }
 #endif
   default:
-    gfxDebug() << "Invalid draw target type specified.";
+    gfxCriticalNote << "Invalid draw target type specified: " << (int)aBackend;
     return nullptr;
   }
 
@@ -410,7 +412,7 @@ Factory::CreateDrawTargetForData(BackendType aBackend,
   }
 
   if (!retVal) {
-    gfxDebug() << "Failed to create DrawTarget, Type: " << int(aBackend) << " Size: " << aSize;
+    gfxCriticalNote << "Failed to create DrawTarget, Type: " << int(aBackend) << " Size: " << aSize << ", Data: " << hexa(aData) << ", Stride: " << aStride;
   }
 
   return retVal.forget();
@@ -621,7 +623,9 @@ Factory::SetDirect3D10Device(ID3D10Device1 *aDevice)
   // do not throw on failure; return error codes and disconnect the device
   // On Windows 8 error codes are the default, but on Windows 7 the
   // default is to throw (or perhaps only with some drivers?)
-  aDevice->SetExceptionMode(0);
+  if (aDevice) {
+    aDevice->SetExceptionMode(0);
+  }
   mD3D10Device = aDevice;
 }
 
@@ -678,7 +682,7 @@ Factory::SetDirect3D11Device(ID3D11Device *aDevice)
   RefPtr<ID2D1Factory1> factory = D2DFactory1();
 
   RefPtr<IDXGIDevice> device;
-  aDevice->QueryInterface((IDXGIDevice**)byRef(device));
+  aDevice->QueryInterface((IDXGIDevice**)getter_AddRefs(device));
   HRESULT hr = factory->CreateDevice(device, &mD2D1Device);
   if (FAILED(hr)) {
     gfxCriticalError() << "[D2D1] Failed to create gfx factory's D2D1 device, code: " << hexa(hr);
@@ -756,13 +760,14 @@ Factory::PurgeAllCaches()
 
 #ifdef USE_SKIA_FREETYPE
 already_AddRefed<GlyphRenderingOptions>
-Factory::CreateCairoGlyphRenderingOptions(FontHinting aHinting, bool aAutoHinting)
+Factory::CreateCairoGlyphRenderingOptions(FontHinting aHinting, bool aAutoHinting, AntialiasMode aAntialiasMode)
 {
   RefPtr<GlyphRenderingOptionsCairo> options =
     new GlyphRenderingOptionsCairo();
 
   options->SetHinting(aHinting);
   options->SetAutoHinting(aAutoHinting);
+  options->SetAntialiasMode(aAntialiasMode);
   return options.forget();
 }
 #endif
@@ -901,5 +906,13 @@ CriticalLogger::OutputMessage(const std::string &aString,
   BasicLogger::OutputMessage(aString, aLevel, aNoNewline);
 }
 
+void
+CriticalLogger::CrashAction(LogReason aReason)
+{
+  if (Factory::GetLogForwarder()) {
+    Factory::GetLogForwarder()->CrashAction(aReason);
+  }
 }
-}
+
+} // namespace gfx
+} // namespace mozilla

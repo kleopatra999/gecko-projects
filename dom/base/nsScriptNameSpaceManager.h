@@ -22,11 +22,12 @@
 #define nsScriptNameSpaceManager_h__
 
 #include "mozilla/MemoryReporting.h"
+#include "nsBaseHashtable.h"
 #include "nsIMemoryReporter.h"
 #include "nsIScriptNameSpaceManager.h"
 #include "nsString.h"
 #include "nsID.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "nsDOMClassInfo.h"
 #include "nsIObserver.h"
 #include "nsWeakReference.h"
@@ -206,7 +207,7 @@ public:
   NameIterator GlobalNameIter()    { return NameIterator(&mGlobalNames); }
   NameIterator NavigatorNameIter() { return NameIterator(&mNavigatorNames); }
 
-  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf);
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
 private:
   virtual ~nsScriptNameSpaceManager();

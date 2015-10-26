@@ -28,7 +28,7 @@ class ErrorResult;
 struct ResourceItem {
   explicit ResourceItem(MediaByteBuffer* aData);
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const;
-  nsRefPtr<MediaByteBuffer> mData;
+  RefPtr<MediaByteBuffer> mData;
 };
 
 class ResourceQueue : private nsDeque {
@@ -82,4 +82,5 @@ private:
 };
 
 } // namespace mozilla
+
 #endif /* MOZILLA_RESOURCEQUEUE_H_ */

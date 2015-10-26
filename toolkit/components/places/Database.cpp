@@ -11,12 +11,14 @@
 #include "nsINavBookmarksService.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIFile.h"
+#include "nsIWritablePropertyBag2.h"
 
 #include "nsNavHistory.h"
 #include "nsPlacesTables.h"
 #include "nsPlacesIndexes.h"
 #include "nsPlacesTriggers.h"
 #include "nsPlacesMacros.h"
+#include "nsVariant.h"
 #include "SQLFunctions.h"
 #include "Helpers.h"
 
@@ -290,7 +292,7 @@ CreateRoot(nsCOMPtr<mozIStorageConnection>& aDBConn,
 }
 
 
-} // Anonymous namespace
+} // namespace
 
 /**
  * An AsyncShutdown blocker in charge of shutting down places
@@ -314,8 +316,8 @@ public:
    * `true` if we have not started shutdown, i.e.  if
    * `BlockShutdown()` hasn't been called yet, false otherwise.
    */
-  bool IsStarted() const {
-    return mIsStarted;
+  static bool IsStarted() {
+    return sIsStarted;
   }
 
 private:
@@ -325,7 +327,7 @@ private:
   // The owning database.
   // The cycle is broken in method Complete(), once the connection
   // has been closed by mozStorage.
-  nsRefPtr<Database> mDatabase;
+  RefPtr<Database> mDatabase;
 
   // The current state, used both internally and for
   // forensics/debugging purposes.
@@ -353,21 +355,22 @@ private:
     NOTIFIED_OBSERVERS_PLACES_CONNECTION_CLOSED,
   };
   State mState;
-  bool mIsStarted;
 
   // As tests may resurrect a dead `Database`, we use a counter to
   // give the instances of `DatabaseShutdown` unique names.
   uint16_t mCounter;
   static uint16_t sCounter;
 
+  static Atomic<bool> sIsStarted;
+
   ~DatabaseShutdown() {}
 };
 uint16_t DatabaseShutdown::sCounter = 0;
+Atomic<bool> DatabaseShutdown::sIsStarted(false);
 
 DatabaseShutdown::DatabaseShutdown(Database* aDatabase)
   : mDatabase(aDatabase)
   , mState(NOT_STARTED)
-  , mIsStarted(false)
   , mCounter(sCounter++)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -418,9 +421,7 @@ NS_IMETHODIMP DatabaseShutdown::GetState(nsIPropertyBag** aState)
   if (NS_WARN_IF(NS_FAILED(rv))) return rv;
 
   // Put `mState` in field `progress`
-  nsCOMPtr<nsIWritableVariant> progress =
-    do_CreateInstance(NS_VARIANT_CONTRACTID, &rv);
-  if (NS_WARN_IF(NS_FAILED(rv))) return rv;
+  RefPtr<nsVariant> progress = new nsVariant();
 
   rv = progress->SetAsUint8(mState);
   if (NS_WARN_IF(NS_FAILED(rv))) return rv;
@@ -438,9 +439,7 @@ NS_IMETHODIMP DatabaseShutdown::GetState(nsIPropertyBag** aState)
     return NS_OK;
   }
 
-  nsCOMPtr<nsIWritableVariant> barrier =
-    do_CreateInstance(NS_VARIANT_CONTRACTID, &rv);
-  if (NS_WARN_IF(NS_FAILED(rv))) return rv;
+  RefPtr<nsVariant> barrier = new nsVariant();
 
   rv = barrier->SetAsInterface(NS_GET_IID(nsIPropertyBag), barrierState);
   if (NS_WARN_IF(NS_FAILED(rv))) return rv;
@@ -464,7 +463,7 @@ DatabaseShutdown::BlockShutdown(nsIAsyncShutdownClient* aParentClient)
 {
   mParentClient = aParentClient;
   mState = RECEIVED_BLOCK_SHUTDOWN;
-  mIsStarted = true;
+  sIsStarted = true;
 
   if (NS_WARN_IF(!mBarrier)) {
     return NS_ERROR_NOT_AVAILABLE;
@@ -661,6 +660,15 @@ Database::GetConnectionShutdown()
   return mConnectionShutdown->GetClient();
 }
 
+// static
+already_AddRefed<Database>
+Database::GetDatabase()
+{
+  if (DatabaseShutdown::IsStarted())
+    return nullptr;
+  return GetSingleton();
+}
+
 nsresult
 Database::Init()
 {
@@ -686,7 +694,7 @@ Database::Init()
   // If the database connection still cannot be opened, it may just be locked
   // by third parties.  Send out a notification and interrupt initialization.
   if (NS_FAILED(rv)) {
-    nsRefPtr<PlacesEvent> lockedEvent = new PlacesEvent(TOPIC_DATABASE_LOCKED);
+    RefPtr<PlacesEvent> lockedEvent = new PlacesEvent(TOPIC_DATABASE_LOCKED);
     (void)NS_DispatchToMainThread(lockedEvent);
     return rv;
   }
@@ -723,7 +731,7 @@ Database::Init()
   // Notify we have finished database initialization.
   // Enqueue the notification, so if we init another service that requires
   // nsNavHistoryService we don't recursive try to get it.
-  nsRefPtr<PlacesEvent> completeEvent =
+  RefPtr<PlacesEvent> completeEvent =
     new PlacesEvent(TOPIC_PLACES_INIT_COMPLETE);
   rv = NS_DispatchToMainThread(completeEvent);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1917,7 +1925,7 @@ Database::Shutdown()
   mMainThreadStatements.FinalizeStatements();
   mMainThreadAsyncStatements.FinalizeStatements();
 
-  nsRefPtr< FinalizeStatementCacheProxy<mozIStorageStatement> > event =
+  RefPtr< FinalizeStatementCacheProxy<mozIStorageStatement> > event =
     new FinalizeStatementCacheProxy<mozIStorageStatement>(
           mAsyncThreadStatements,
           NS_ISUPPORTS_CAST(nsIObserver*, this)

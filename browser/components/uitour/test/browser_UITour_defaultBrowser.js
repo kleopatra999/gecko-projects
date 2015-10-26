@@ -1,9 +1,9 @@
 "use strict";
 
-let gTestTab;
-let gContentAPI;
-let gContentWindow;
-let setDefaultBrowserCalled = false;
+var gTestTab;
+var gContentAPI;
+var gContentWindow;
+var setDefaultBrowserCalled = false;
 
 Cc["@mozilla.org/moz/jssubscript-loader;1"]
   .getService(Ci.mozIJSSubScriptLoader)
@@ -32,7 +32,7 @@ MockShellService.prototype = {
   defaultFeedReader: 0,
 };
 
-let mockShellService = new MockObjectRegisterer("@mozilla.org/browser/shell-service;1",
+var mockShellService = new MockObjectRegisterer("@mozilla.org/browser/shell-service;1",
                                                 MockShellService);
 
 // Temporarily disabled, see note at test_setDefaultBrowser.
@@ -42,13 +42,13 @@ function test() {
   UITourTest();
 }
 
-let tests = [
+var tests = [
 
   /* This test is disabled (bug 1180714) since the MockObjectRegisterer
      is not actually replacing the original ShellService.
   taskify(function* test_setDefaultBrowser() {
     try {
-      gContentAPI.setDefaultBrowser();
+      gContentAPI.setConfiguration("defaultBrowser");
       ok(setDefaultBrowserCalled, "setDefaultBrowser called");
     } finally {
       mockShellService.unregister();
@@ -60,8 +60,35 @@ let tests = [
     let shell = Components.classes["@mozilla.org/browser/shell-service;1"]
                           .getService(Components.interfaces.nsIShellService);
     let isDefault = shell.isDefaultBrowser(false);
-    gContentAPI.isDefaultBrowser(function(data) {
-      is(data.value, isDefault, "gContentAPI.isDefaultBrowser should match shellService.isDefaultBrowser");
+    gContentAPI.getConfiguration("appinfo", (data) => {
+      is(isDefault, data.defaultBrowser, "gContentAPI result should match shellService.isDefaultBrowser");
+      done();
+    });
+  }),
+
+  taskify(function* test_setInBackgroundWhenPrefExists(done) {
+    Services.prefs.setCharPref("browser.shell.associationHash.http", "ABCDEFG");
+    gContentAPI.getConfiguration("appinfo", (data) => {
+      let canSetInBackground = true;
+      is(canSetInBackground, data.canSetDefaultBrowserInBackground,
+        "canSetDefaultBrowserInBackground should be true when a hash is present");
+      Services.prefs.clearUserPref("browser.shell.associationHash.http");
+      done();
+    });
+  }),
+
+  taskify(function* test_setInBackgroundWhenPrefDoesntExist(done) {
+    /* The association hashes are only supported on Windows. */
+    Cu.import("resource://gre/modules/AppConstants.jsm");
+    if (AppConstants.platform != "win") {
+      info("Skipping test_setInBackgroundWhenPrefDoesntExist on non-Windows platform");
+      return;
+    }
+
+    gContentAPI.getConfiguration("appinfo", (data) => {
+      let canSetInBackground = false;
+      is(canSetInBackground, data.canSetDefaultBrowserInBackground,
+        "canSetDefaultBrowserInBackground should be false when no hashes are present");
       done();
     });
   })

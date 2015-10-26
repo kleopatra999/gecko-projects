@@ -38,7 +38,7 @@ FileSystemRequestParent::Dispatch(ContentParent* aParent,
                                   const FileSystemParams& aParams)
 {
   MOZ_ASSERT(aParent, "aParent should not be null.");
-  nsRefPtr<FileSystemTaskBase> task;
+  RefPtr<FileSystemTaskBase> task;
   switch (aParams.type()) {
 
     FILESYSTEM_REQUEST_PARENT_DISPATCH_ENTRY(CreateDirectory)
@@ -58,7 +58,7 @@ FileSystemRequestParent::Dispatch(ContentParent* aParent,
     return false;
   }
 
-  if (!mFileSystem->IsTesting()) {
+  if (mFileSystem->RequiresPermissionChecks()) {
     // Check the content process permission.
 
     nsCString access;

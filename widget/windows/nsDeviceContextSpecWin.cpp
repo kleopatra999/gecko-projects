@@ -270,7 +270,7 @@ NS_IMETHODIMP nsDeviceContextSpecWin::GetSurfaceForPrinter(gfxASurface **surface
 {
   NS_ASSERTION(mDevMode, "DevMode can't be NULL here");
 
-  nsRefPtr<gfxASurface> newSurface;
+  RefPtr<gfxASurface> newSurface;
 
   int16_t outputFormat = 0;
   if (mPrintSettings) {
@@ -624,7 +624,6 @@ NS_IMPL_ISUPPORTS(nsPrinterEnumeratorWin, nsIPrinterEnumerator)
 
 //----------------------------------------------------------------------------------
 // Return the Default Printer name
-/* readonly attribute wstring defaultPrinterName; */
 NS_IMETHODIMP 
 nsPrinterEnumeratorWin::GetDefaultPrinterName(char16_t * *aDefaultPrinterName)
 {
@@ -635,7 +634,6 @@ nsPrinterEnumeratorWin::GetDefaultPrinterName(char16_t * *aDefaultPrinterName)
   return NS_OK;
 }
 
-/* void initPrintSettingsFromPrinter (in wstring aPrinterName, in nsIPrintSettings aPrintSettings); */
 NS_IMETHODIMP 
 nsPrinterEnumeratorWin::InitPrintSettingsFromPrinter(const char16_t *aPrinterName, nsIPrintSettings *aPrintSettings)
 {
@@ -646,7 +644,7 @@ nsPrinterEnumeratorWin::InitPrintSettingsFromPrinter(const char16_t *aPrinterNam
     return NS_OK;
   }
 
-  nsRefPtr<nsDeviceContextSpecWin> devSpecWin = new nsDeviceContextSpecWin();
+  RefPtr<nsDeviceContextSpecWin> devSpecWin = new nsDeviceContextSpecWin();
   if (!devSpecWin) return NS_ERROR_OUT_OF_MEMORY;
 
   if (NS_FAILED(GlobalPrinters::GetInstance()->EnumeratePrinterList())) {

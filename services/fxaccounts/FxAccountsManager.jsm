@@ -99,7 +99,7 @@ this.FxAccountsManager = {
     return this._fxAccounts.getAccountsClient();
   },
 
-  _signInSignUp: function(aMethod, aEmail, aPassword) {
+  _signInSignUp: function(aMethod, aEmail, aPassword, aFetchKeys) {
     if (Services.io.offline) {
       return this._error(ERROR_OFFLINE);
     }
@@ -127,7 +127,7 @@ this.FxAccountsManager = {
             user: this._user
           });
         }
-        return client[aMethod](aEmail, aPassword);
+        return client[aMethod](aEmail, aPassword, aFetchKeys);
       }
     ).then(
       user => {
@@ -156,6 +156,15 @@ this.FxAccountsManager = {
             this._activeSession = user;
             log.debug("User signed in: " + JSON.stringify(this._user) +
                       " - Account created " + (aMethod == "signUp"));
+
+            // There is no way to obtain the key fetch token afterwards
+            // without login out the user and asking her to log in again.
+            // Also, key fetch tokens are designed to be short-lived, so
+            // we need to fetch kB as soon as we have the key fetch token.
+            if (aFetchKeys) {
+              this._fxAccounts.getKeys();
+            }
+
             return Promise.resolve({
               accountCreated: aMethod === "signUp",
               user: this._user
@@ -213,7 +222,7 @@ this.FxAccountsManager = {
         }
       );
     }
-    return Promise.reject(reason);
+    return Promise.reject(reason.message ? { error: reason.message } : reason);
   },
 
   _getAssertion: function(aAudience, aPrincipal) {
@@ -351,12 +360,12 @@ this.FxAccountsManager = {
 
   // -- API --
 
-  signIn: function(aEmail, aPassword) {
-    return this._signInSignUp("signIn", aEmail, aPassword);
+  signIn: function(aEmail, aPassword, aFetchKeys) {
+    return this._signInSignUp("signIn", aEmail, aPassword, aFetchKeys);
   },
 
-  signUp: function(aEmail, aPassword) {
-    return this._signInSignUp("signUp", aEmail, aPassword);
+  signUp: function(aEmail, aPassword, aFetchKeys) {
+    return this._signInSignUp("signUp", aEmail, aPassword, aFetchKeys);
   },
 
   signOut: function() {
@@ -577,8 +586,37 @@ this.FxAccountsManager = {
         return this._uiRequest(UI_REQUEST_SIGN_IN_FLOW, aAudience, principal);
       }
     );
-  }
+  },
 
+  getKeys: function() {
+    let syncEnabled = false;
+    try {
+      syncEnabled = Services.prefs.getBoolPref("services.sync.enabled");
+    } catch(e) {
+      dump("Sync is disabled, so you won't get the keys. " + e + "\n");
+    }
+
+    if (!syncEnabled) {
+      return Promise.reject(ERROR_SYNC_DISABLED);
+    }
+
+    return this.getAccount().then(
+      user => {
+        if (!user) {
+          log.debug("No signed in user");
+          return Promise.resolve(null);
+        }
+
+        if (!user.verified) {
+          return this._error(ERROR_UNVERIFIED_ACCOUNT, {
+            user: user
+          });
+        }
+
+        return this._fxAccounts.getKeys();
+      }
+    );
+  }
 };
 
 FxAccountsManager.init();

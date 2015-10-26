@@ -491,6 +491,16 @@ In a reftest-wait test, to disable testing of invalidation and force the final
 snapshot to be taken of the whole window, set the "reftest-snapshot-all"
 class on the root element.
 
+Avoid triggering flushes: class="reftest-no-flush"
+==================================================
+
+The reftest harness normally triggers flushes by calling
+getBoundingClientRect on the root element.  If the root element of the
+test has class="reftest-no-flush", it doesn't do this.
+
+This is useful for testing animations on the compositor thread, since
+the flushing will cause a main thread style update.
+
 Zoom Tests: reftest-zoom="<float>"
 ==================================
 
@@ -501,13 +511,6 @@ device pixels high. The reftest harness assumes that the CSS pixel dimensions
 are 800/zoom and 1000/zoom. For best results therefore, choose zoom factors
 that do not require rounding when we calculate the number of appunits per
 device pixel; i.e. the zoom factor should divide 60, so 60/zoom is an integer.
-
-Setting Viewport Size: reftest-viewport-w/h="<int>"
-===================================================
-
-If either of the "reftest-viewport-w" and "reftest-viewport-h" attributes on
-the root element are non-zero, sets the CSS viewport to the given size in
-CSS pixels. This does not affect the size of the snapshot that is taken.
 
 Setting Scrollport Size: reftest-scrollport-w/h="<int>"
 =======================================================

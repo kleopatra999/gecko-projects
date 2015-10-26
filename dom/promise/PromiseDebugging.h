@@ -9,7 +9,7 @@
 
 #include "js/TypeDecls.h"
 #include "nsTArray.h"
-#include "nsRefPtr.h"
+#include "mozilla/RefPtr.h"
 
 namespace mozilla {
 
@@ -18,7 +18,7 @@ class ErrorResult;
 namespace dom {
 namespace workers {
 class WorkerPrivate;
-}
+} // namespace workers
 
 class Promise;
 struct PromiseDebuggingStateHolder;
@@ -42,7 +42,7 @@ public:
   static void GetFullfillmentStack(GlobalObject&, Promise& aPromise,
                                    JS::MutableHandle<JSObject*> aStack);
   static void GetDependentPromises(GlobalObject&, Promise& aPromise,
-                                   nsTArray<nsRefPtr<Promise>>& aPromises);
+                                   nsTArray<RefPtr<Promise>>& aPromises);
   static double GetPromiseLifetime(GlobalObject&, Promise& aPromise);
   static double GetTimeToSettle(GlobalObject&, Promise& aPromise,
                                 ErrorResult& aRv);

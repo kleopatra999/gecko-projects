@@ -13,8 +13,12 @@
 #include "MediaEngine.h"
 #include "VideoUtils.h"
 #include "nsThreadUtils.h"
+#include "nsNetCID.h"
 #include "nsNetUtil.h"
+#include "nsIInputStream.h"
 #include "nsILineInputStream.h"
+#include "nsIOutputStream.h"
+#include "nsISafeOutputStream.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsISupportsImpl.h"
 #include "mozilla/Logging.h"
@@ -45,7 +49,7 @@ class OriginKeyStore : public nsISupports
     static const size_t DecodedLength = 18;
     static const size_t EncodedLength = DecodedLength * 4 / 3;
 
-    OriginKey(const nsACString& aKey, int64_t aSecondsStamp)
+    explicit OriginKey(const nsACString& aKey, int64_t aSecondsStamp = 0) // 0 = temporal
     : mKey(aKey)
     , mSecondsStamp(aSecondsStamp) {}
 
@@ -56,10 +60,10 @@ class OriginKeyStore : public nsISupports
   class OriginKeysTable
   {
   public:
-    OriginKeysTable() {}
+    OriginKeysTable() : mPersistCount(0) {}
 
     nsresult
-    GetOriginKey(const nsACString& aOrigin, nsCString& result)
+    GetOriginKey(const nsACString& aOrigin, nsCString& aResult, bool aPersist = false)
     {
       OriginKey* key;
       if (!mKeys.Get(aOrigin, &key)) {
@@ -68,37 +72,38 @@ class OriginKeyStore : public nsISupports
         if (NS_WARN_IF(NS_FAILED(rv))) {
           return rv;
         }
-        key = new OriginKey(salt, PR_Now() / PR_USEC_PER_SEC);
+        key = new OriginKey(salt);
         mKeys.Put(aOrigin, key);
       }
-      result = key->mKey;
+      if (aPersist && !key->mSecondsStamp) {
+        key->mSecondsStamp = PR_Now() / PR_USEC_PER_SEC;
+        mPersistCount++;
+      }
+      aResult = key->mKey;
       return NS_OK;
-    }
-
-    static PLDHashOperator
-    HashCleaner(const nsACString& aOrigin, nsAutoPtr<OriginKey>& aOriginKey,
-                void *aUserArg)
-    {
-      OriginKey* since = static_cast<OriginKey*>(aUserArg);
-
-      LOG((((aOriginKey->mSecondsStamp >= since->mSecondsStamp)?
-            "%s: REMOVE %lld >= %lld" :
-            "%s: KEEP   %lld < %lld"),
-            __FUNCTION__, aOriginKey->mSecondsStamp, since->mSecondsStamp));
-
-      return (aOriginKey->mSecondsStamp >= since->mSecondsStamp)?
-          PL_DHASH_REMOVE : PL_DHASH_NEXT;
     }
 
     void Clear(int64_t aSinceWhen)
     {
       // Avoid int64_t* <-> void* casting offset
       OriginKey since(nsCString(), aSinceWhen  / PR_USEC_PER_SEC);
-      mKeys.Enumerate(HashCleaner, &since);
+      for (auto iter = mKeys.Iter(); !iter.Done(); iter.Next()) {
+        nsAutoPtr<OriginKey>& originKey = iter.Data();
+        LOG((((originKey->mSecondsStamp >= since.mSecondsStamp)?
+              "%s: REMOVE %lld >= %lld" :
+              "%s: KEEP   %lld < %lld"),
+              __FUNCTION__, originKey->mSecondsStamp, since.mSecondsStamp));
+
+        if (originKey->mSecondsStamp >= since.mSecondsStamp) {
+          iter.Remove();
+        }
+      }
+      mPersistCount = 0;
     }
 
   protected:
     nsClassHashtable<nsCStringHashKey, OriginKey> mKeys;
+    size_t mPersistCount;
   };
 
   class OriginKeysLoader : public OriginKeysTable
@@ -107,11 +112,11 @@ class OriginKeyStore : public nsISupports
     OriginKeysLoader() {}
 
     nsresult
-    GetOriginKey(const nsACString& aOrigin, nsCString& result)
+    GetOriginKey(const nsACString& aOrigin, nsCString& aResult, bool aPersist)
     {
-      auto before = mKeys.Count();
-      OriginKeysTable::GetOriginKey(aOrigin, result);
-      if (mKeys.Count() != before) {
+      auto before = mPersistCount;
+      OriginKeysTable::GetOriginKey(aOrigin, aResult, aPersist);
+      if (mPersistCount != before) {
         Save();
       }
       return NS_OK;
@@ -159,6 +164,7 @@ class OriginKeyStore : public nsISupports
       }
       nsCOMPtr<nsILineInputStream> i = do_QueryInterface(stream);
       MOZ_ASSERT(i);
+      MOZ_ASSERT(!mPersistCount);
 
       nsCString line;
       bool hasMoreLines;
@@ -205,28 +211,8 @@ class OriginKeyStore : public nsISupports
         }
         mKeys.Put(origin, new OriginKey(key, secondsstamp));
       }
+      mPersistCount = mKeys.Count();
       return NS_OK;
-    }
-
-    static PLDHashOperator
-    HashWriter(const nsACString& aOrigin, OriginKey* aOriginKey, void *aUserArg)
-    {
-      auto* stream = static_cast<nsIOutputStream *>(aUserArg);
-
-      nsCString buffer;
-      buffer.Append(aOriginKey->mKey);
-      buffer.Append(' ');
-      buffer.AppendInt(aOriginKey->mSecondsStamp);
-      buffer.Append(' ');
-      buffer.Append(aOrigin);
-      buffer.Append('\n');
-
-      uint32_t count;
-      nsresult rv = stream->Write(buffer.Data(), buffer.Length(), &count);
-      if (NS_WARN_IF(NS_FAILED(rv)) || count != buffer.Length()) {
-        return PL_DHASH_STOP;
-      }
-      return PL_DHASH_NEXT;
     }
 
     nsresult
@@ -254,7 +240,27 @@ class OriginKeyStore : public nsISupports
       if (count != buffer.Length()) {
         return NS_ERROR_UNEXPECTED;
       }
-      mKeys.EnumerateRead(HashWriter, stream.get());
+      for (auto iter = mKeys.Iter(); !iter.Done(); iter.Next()) {
+        const nsACString& origin = iter.Key();
+        OriginKey* originKey = iter.UserData();
+
+        if (!originKey->mSecondsStamp) {
+          continue; // don't write temporal ones
+        }
+        nsCString buffer;
+        buffer.Append(originKey->mKey);
+        buffer.Append(' ');
+        buffer.AppendInt(originKey->mSecondsStamp);
+        buffer.Append(' ');
+        buffer.Append(origin);
+        buffer.Append('\n');
+
+        uint32_t count;
+        nsresult rv = stream->Write(buffer.Data(), buffer.Length(), &count);
+        if (NS_WARN_IF(NS_FAILED(rv)) || count != buffer.Length()) {
+          break;
+        }
+      }
 
       nsCOMPtr<nsISafeOutputStream> safeStream = do_QueryInterface(stream);
       MOZ_ASSERT(safeStream);
@@ -356,7 +362,7 @@ Parent<PMediaParent>* Parent<PMediaParent>::GetSingleton()
 template<> /* static */
 Parent<NonE10s>* Parent<NonE10s>::GetSingleton()
 {
-  nsRefPtr<MediaManager> mgr = MediaManager::GetInstance();
+  RefPtr<MediaManager> mgr = MediaManager::GetInstance();
   if (!mgr) {
     return nullptr;
   }
@@ -372,8 +378,9 @@ Parent<Super>* GccGetSingleton() { return Parent<Super>::GetSingleton(); };
 
 template<class Super> bool
 Parent<Super>::RecvGetOriginKey(const uint32_t& aRequestId,
-                         const nsCString& aOrigin,
-                         const bool& aPrivateBrowsing)
+                                const nsCString& aOrigin,
+                                const bool& aPrivateBrowsing,
+                                const bool& aPersist)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -390,23 +397,23 @@ Parent<Super>::RecvGetOriginKey(const uint32_t& aRequestId,
   // Then over to stream-transport thread to do the actual file io.
   // Stash a pledge to hold the answer and get an id for this request.
 
-  nsRefPtr<Pledge<nsCString>> p = new Pledge<nsCString>();
+  RefPtr<Pledge<nsCString>> p = new Pledge<nsCString>();
   uint32_t id = mOutstandingPledges.Append(*p);
 
   nsCOMPtr<nsIEventTarget> sts = do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID);
   MOZ_ASSERT(sts);
-  nsRefPtr<OriginKeyStore> store(mOriginKeyStore);
+  RefPtr<OriginKeyStore> store(mOriginKeyStore);
   bool sameProcess = mSameProcess;
 
-  rv = sts->Dispatch(NewRunnableFrom([id, profileDir, store, sameProcess,
-                                      aOrigin, aPrivateBrowsing]() -> nsresult {
+  rv = sts->Dispatch(NewRunnableFrom([id, profileDir, store, sameProcess, aOrigin,
+                                      aPrivateBrowsing, aPersist]() -> nsresult {
     MOZ_ASSERT(!NS_IsMainThread());
     store->mOriginKeys.SetProfileDir(profileDir);
     nsCString result;
     if (aPrivateBrowsing) {
       store->mPrivateBrowsingOriginKeys.GetOriginKey(aOrigin, result);
     } else {
-      store->mOriginKeys.GetOriginKey(aOrigin, result);
+      store->mOriginKeys.GetOriginKey(aOrigin, result, aPersist);
     }
 
     // Pass result back to main thread.
@@ -417,7 +424,7 @@ Parent<Super>::RecvGetOriginKey(const uint32_t& aRequestId,
       if (!parent) {
         return NS_OK;
       }
-      nsRefPtr<Pledge<nsCString>> p = parent->mOutstandingPledges.Remove(id);
+      RefPtr<Pledge<nsCString>> p = parent->mOutstandingPledges.Remove(id);
       if (!p) {
         return NS_ERROR_UNEXPECTED;
       }
@@ -442,11 +449,11 @@ Parent<Super>::RecvGetOriginKey(const uint32_t& aRequestId,
       }
       unused << sIPCServingParent->SendGetOriginKeyResponse(aRequestId, aKey);
     } else {
-      nsRefPtr<MediaManager> mgr = MediaManager::GetInstance();
+      RefPtr<MediaManager> mgr = MediaManager::GetInstance();
       if (!mgr) {
         return NS_OK;
       }
-      nsRefPtr<Pledge<nsCString>> pledge =
+      RefPtr<Pledge<nsCString>> pledge =
           mgr->mGetOriginKeyPledges.Remove(aRequestId);
       if (pledge) {
         pledge->Resolve(aKey);
@@ -458,7 +465,8 @@ Parent<Super>::RecvGetOriginKey(const uint32_t& aRequestId,
 }
 
 template<class Super> bool
-Parent<Super>::RecvSanitizeOriginKeys(const uint64_t& aSinceWhen)
+Parent<Super>::RecvSanitizeOriginKeys(const uint64_t& aSinceWhen,
+                                      const bool& aOnlyPrivateBrowsing)
 {
   MOZ_ASSERT(NS_IsMainThread());
   nsCOMPtr<nsIFile> profileDir;
@@ -471,13 +479,16 @@ Parent<Super>::RecvSanitizeOriginKeys(const uint64_t& aSinceWhen)
 
   nsCOMPtr<nsIEventTarget> sts = do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID);
   MOZ_ASSERT(sts);
-  nsRefPtr<OriginKeyStore> store(mOriginKeyStore);
+  RefPtr<OriginKeyStore> store(mOriginKeyStore);
 
-  rv = sts->Dispatch(NewRunnableFrom([profileDir, store, aSinceWhen]() -> nsresult {
+  rv = sts->Dispatch(NewRunnableFrom([profileDir, store, aSinceWhen,
+                                      aOnlyPrivateBrowsing]() -> nsresult {
     MOZ_ASSERT(!NS_IsMainThread());
-    store->mOriginKeys.SetProfileDir(profileDir);
     store->mPrivateBrowsingOriginKeys.Clear(aSinceWhen);
-    store->mOriginKeys.Clear(aSinceWhen);
+    if (!aOnlyPrivateBrowsing) {
+      store->mOriginKeys.SetProfileDir(profileDir);
+      store->mOriginKeys.Clear(aSinceWhen);
+    }
     return NS_OK;
   }), NS_DISPATCH_NORMAL);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -524,11 +535,12 @@ DeallocPMediaParent(media::PMediaParent *aActor)
 {
   MOZ_ASSERT(sIPCServingParent == static_cast<Parent<PMediaParent>*>(aActor));
   delete sIPCServingParent;
+  sIPCServingParent = nullptr;
   return true;
 }
 
-}
-}
+} // namespace media
+} // namespace mozilla
 
 // Instantiate templates to satisfy linker
 template class mozilla::media::Parent<mozilla::media::NonE10s>;

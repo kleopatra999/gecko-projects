@@ -24,8 +24,9 @@ from mozharness.base.python import (
 from mozharness.mozilla.buildbot import BuildbotMixin, TBPL_WARNING
 from mozharness.mozilla.proxxy import Proxxy
 from mozharness.mozilla.structuredlog import StructuredOutputParser
+from mozharness.mozilla.taskcluster_helper import TaskClusterArtifactFinderMixin
 from mozharness.mozilla.testing.unittest import DesktopUnittestOutputParser
-from mozharness.mozilla.testing.try_tools import TryToolsMixin
+from mozharness.mozilla.testing.try_tools import TryToolsMixin, try_config_options
 from mozharness.mozilla.tooltool import TooltoolMixin
 
 from mozharness.lib.python.authentication import get_credentials
@@ -82,12 +83,12 @@ testing_config_options = [
      "choices": ['ondemand', 'true'],
      "help": "Download and extract crash reporter symbols.",
       }],
-] + copy.deepcopy(virtualenv_config_options)
+] + copy.deepcopy(virtualenv_config_options) + copy.deepcopy(try_config_options)
 
 
 # TestingMixin {{{1
-class TestingMixin(VirtualenvMixin, BuildbotMixin, ResourceMonitoringMixin, TooltoolMixin,
-                   TryToolsMixin):
+class TestingMixin(VirtualenvMixin, BuildbotMixin, ResourceMonitoringMixin,
+                   TaskClusterArtifactFinderMixin, TooltoolMixin, TryToolsMixin):
     """
     The steps to identify + download the proper bits for [browser] unit
     tests and Talos.
@@ -99,7 +100,6 @@ class TestingMixin(VirtualenvMixin, BuildbotMixin, ResourceMonitoringMixin, Tool
     test_url = None
     test_packages_url = None
     test_zip_path = None
-    tree_config = ReadOnlyDict({})
     symbols_url = None
     symbols_path = None
     jsshell_url = None
@@ -133,13 +133,6 @@ class TestingMixin(VirtualenvMixin, BuildbotMixin, ResourceMonitoringMixin, Tool
             return super(TestingMixin, self).download_file(*args, **kwargs)
         else:
             return self.download_proxied_file(*args, **kwargs)
-
-    def query_value(self, key):
-        """
-        This function allows us to check for a value
-        in the self.tree_config first and then on self.config
-        """
-        return self.tree_config.get(key, self.config.get(key))
 
     def query_build_dir_url(self, file_name):
         """
@@ -204,10 +197,11 @@ class TestingMixin(VirtualenvMixin, BuildbotMixin, ResourceMonitoringMixin, Tool
                     return new_url
             return url
 
-        assert c["installer_url"], "You must use --installer-url with developer_config.py"
+        if c.get("installer_url") is None:
+            self.exception("You must use --installer-url with developer_config.py")
         if c.get("require_test_zip"):
             if not c.get('test_url') and not c.get('test_packages_url'):
-                raise AssertionError("You must use --test-url or --test-packages-url with developer_config.py")
+                self.exception("You must use --test-url or --test-packages-url with developer_config.py")
 
         c["installer_url"] = _replace_url(c["installer_url"], c["replace_urls"])
         if c.get("test_url"):
@@ -254,6 +248,48 @@ class TestingMixin(VirtualenvMixin, BuildbotMixin, ResourceMonitoringMixin, Tool
 
     # read_buildbot_config is in BuildbotMixin.
 
+    def find_artifacts_from_buildbot_changes(self):
+        c = self.config
+        try:
+            files = self.buildbot_config['sourcestamp']['changes'][-1]['files']
+            buildbot_prop_branch = self.buildbot_config['properties']['branch']
+
+            # Bug 868490 - Only require exactly two files if require_test_zip;
+            # otherwise accept either 1 or 2, since we'll be getting a
+            # test_zip url that we don't need.
+            expected_length = [1, 2, 3]
+            if c.get("require_test_zip") and not self.test_url:
+                expected_length = [2, 3]
+            if buildbot_prop_branch.startswith('gaia-try'):
+                expected_length = range(1, 1000)
+            actual_length = len(files)
+            if actual_length not in expected_length:
+                self.fatal("Unexpected number of files in buildbot config %s.\nExpected these number(s) of files: %s, but got: %d" %
+                           (c['buildbot_json_path'], str(expected_length), actual_length))
+            for f in files:
+                if f['name'].endswith('tests.zip'):  # yuk
+                    if not self.test_url:
+                        # str() because of unicode issues on mac
+                        self.test_url = str(f['name'])
+                        self.info("Found test url %s." % self.test_url)
+                elif f['name'].endswith('crashreporter-symbols.zip'):  # yuk
+                    self.symbols_url = str(f['name'])
+                    self.info("Found symbols url %s." % self.symbols_url)
+                elif f['name'].endswith('test_packages.json'):
+                    self.test_packages_url = str(f['name'])
+                    self.info("Found a test packages url %s." % self.test_packages_url)
+                elif not any(f['name'].endswith(s) for s in ('code-coverage-gcno.zip',)):
+                    if not self.installer_url:
+                        self.installer_url = str(f['name'])
+                        self.info("Found installer url %s." % self.installer_url)
+        except IndexError, e:
+            self.error(str(e))
+
+    def find_artifacts_from_taskcluster(self):
+        self.info("Finding installer, test and symbols from parent task. ")
+        task_id = self.buildbot_config['properties']['taskId']
+        self.set_parent_artifacts(task_id)
+
     def postflight_read_buildbot_config(self):
         """
         Determine which files to download from the buildprops.json file
@@ -268,40 +304,12 @@ class TestingMixin(VirtualenvMixin, BuildbotMixin, ResourceMonitoringMixin, Tool
                 self.test_url = c['test_url']
             if c.get("test_packages_url"):
                 self.test_packages_url = c['test_packages_url']
-            try:
-                files = self.buildbot_config['sourcestamp']['changes'][-1]['files']
-                buildbot_prop_branch = self.buildbot_config['properties']['branch']
 
-                # Bug 868490 - Only require exactly two files if require_test_zip;
-                # otherwise accept either 1 or 2, since we'll be getting a
-                # test_zip url that we don't need.
-                expected_length = [1, 2, 3]
-                if c.get("require_test_zip") and not self.test_url:
-                    expected_length = [2, 3]
-                if buildbot_prop_branch.startswith('gaia-try'):
-                    expected_length = range(1, 1000)
-                actual_length = len(files)
-                if actual_length not in expected_length:
-                    self.fatal("Unexpected number of files in buildbot config %s.\nExpected these number(s) of files: %s, but got: %d" %
-                               (c['buildbot_json_path'], str(expected_length), actual_length))
-                for f in files:
-                    if f['name'].endswith('tests.zip'):  # yuk
-                        if not self.test_url:
-                            # str() because of unicode issues on mac
-                            self.test_url = str(f['name'])
-                            self.info("Found test url %s." % self.test_url)
-                    elif f['name'].endswith('crashreporter-symbols.zip'):  # yuk
-                        self.symbols_url = str(f['name'])
-                        self.info("Found symbols url %s." % self.symbols_url)
-                    elif f['name'].endswith('test_packages.json'):
-                        self.test_packages_url = str(f['name'])
-                        self.info("Found a test packages url %s." % self.test_packages_url)
-                    elif not any(f['name'].endswith(s) for s in ('code-coverage-gcno.zip',)):
-                        if not self.installer_url:
-                            self.installer_url = str(f['name'])
-                            self.info("Found installer url %s." % self.installer_url)
-            except IndexError, e:
-                self.error(str(e))
+            if self.buildbot_config['sourcestamp']['changes']:
+                self.find_artifacts_from_buildbot_changes()
+            elif 'taskId' in self.buildbot_config['properties']:
+                self.find_artifacts_from_taskcluster()
+
             missing = []
             if not self.installer_url:
                 missing.append("installer_url")
@@ -387,8 +395,12 @@ You can set this by:
             'robocop': 'mochitest',
             'mochitest-chrome': 'mochitest',
             'mochitest-gl': 'mochitest',
+            'webapprt': 'mochitest',
             'jsreftest': 'reftest',
             'crashtest': 'reftest',
+            'reftest-debug': 'reftest',
+            'jsreftest-debug': 'reftest',
+            'crashtest-debug': 'reftest',
         }
         suite_categories = [aliases.get(name, name) for name in suite_categories]
 
@@ -450,52 +462,13 @@ You can set this by:
                          halt_on_failure=True, success_codes=[0, 11],
                          fatal_exit_code=3)
 
-    def _read_tree_config(self):
-        """Reads an in-tree config file"""
-        dirs = self.query_abs_dirs()
-        test_install_dir = dirs.get('abs_test_install_dir',
-                                    os.path.join(dirs['abs_work_dir'], 'tests'))
-
-        if 'in_tree_config' in self.config:
-            rel_tree_config_path = self.config['in_tree_config']
-            tree_config_path = os.path.join(test_install_dir, rel_tree_config_path)
-
-            if not os.path.isfile(tree_config_path):
-                self.fatal("The in-tree configuration file '%s' does not exist!"
-                           "It must be added to '%s'. See bug 1035551 for more details." %
-                           (tree_config_path, os.path.join('gecko', 'testing', rel_tree_config_path)))
-
-            try:
-                self.tree_config.update(parse_config_file(tree_config_path))
-            except:
-                msg = "There was a problem parsing the in-tree configuration file '%s'!" % \
-                      os.path.join('gecko', 'testing', rel_tree_config_path)
-                self.exception(message=msg, level=FATAL)
-
-            self.dump_config(file_path=os.path.join(dirs['abs_log_dir'], 'treeconfig.json'),
-                             config=self.tree_config)
-
-        if (self.buildbot_config and 'properties' in self.buildbot_config and
-            self.buildbot_config['properties'].get('branch') == 'try'):
-            try_config_path = os.path.join(test_install_dir, 'config', 'mozharness',
-                                           'try_arguments.py')
-            known_try_arguments = parse_config_file(try_config_path)
-            comments = self.buildbot_config['sourcestamp']['changes'][-1]['comments']
-            if not comments and 'try_syntax' in self.buildbot_config['properties']:
-                # If we don't find try syntax in the usual place, check for it in an
-                # alternate property available to tools using self-serve.
-                comments = self.buildbot_config['properties']['try_syntax']
-            self.parse_extra_try_arguments(comments, known_try_arguments)
-
-        self.tree_config.lock()
-
     def structured_output(self, suite_category):
         """Defines whether structured logging is in use in this configuration. This
         may need to be replaced with data from a different config at the resolution
         of bug 1070041 and related bugs.
         """
-        return ('structured_suites' in self.tree_config and
-                suite_category in self.tree_config['structured_suites'])
+        return ('structured_suites' in self.config and
+                suite_category in self.config['structured_suites'])
 
     def get_test_output_parser(self, suite_category, strict=False,
                                fallback_parser_class=DesktopUnittestOutputParser,
@@ -576,7 +549,6 @@ You can set this by:
             suite_categories = suite_categories or ['common']
             self._download_test_packages(suite_categories, target_unzip_dirs)
 
-        self._read_tree_config()
         self._download_installer()
         if self.config.get('download_symbols'):
             self._download_and_extract_symbols()
@@ -668,7 +640,7 @@ Did you run with --create-virtualenv? Is mozinstall in virtualenv_modules?""")
         else:
             self.fatal('could not determine minidump filename')
 
-    def query_minidump_stackwalk(self):
+    def query_minidump_stackwalk(self, manifest=None):
         if self.minidump_stackwalk_path:
             return self.minidump_stackwalk_path
         c = self.config
@@ -676,13 +648,17 @@ Did you run with --create-virtualenv? Is mozinstall in virtualenv_modules?""")
 
         if c.get('download_minidump_stackwalk'):
             minidump_stackwalk_path = self.query_minidump_filename()
-            tooltool_manifest_path = self.query_minidump_tooltool_manifest()
+
+            if not manifest:
+                tooltool_manifest_path = self.query_minidump_tooltool_manifest()
+                manifest = os.path.join(dirs.get('abs_test_install_dir',
+                                                 os.path.join(dirs['abs_work_dir'], 'tests')),
+                                        tooltool_manifest_path)
+
             self.info('grabbing minidump binary from tooltool')
             try:
                 self.tooltool_fetch(
-                    manifest=os.path.join(dirs.get('abs_test_install_dir',
-                                                   os.path.join(dirs['abs_work_dir'], 'tests')),
-                                          tooltool_manifest_path),
+                    manifest=manifest,
                     output_dir=dirs['abs_work_dir'],
                     cache=c.get('tooltool_cache')
                 )
@@ -702,6 +678,35 @@ Did you run with --create-virtualenv? Is mozinstall in virtualenv_modules?""")
 
         return self.minidump_stackwalk_path
 
+    def query_options(self, *args, **kwargs):
+        if "str_format_values" in kwargs:
+            str_format_values = kwargs.pop("str_format_values")
+        else:
+            str_format_values = {}
+
+        arguments = []
+
+        for arg in args:
+            if arg is not None:
+                arguments.extend(argument % str_format_values for argument in arg)
+
+        return arguments
+
+    def query_tests_args(self, *args, **kwargs):
+        if "str_format_values" in kwargs:
+            str_format_values = kwargs.pop("str_format_values")
+        else:
+            str_format_values = {}
+
+        arguments = []
+
+        for arg in reversed(args):
+            if arg:
+                arguments.append("--")
+                arguments.extend(argument % str_format_values for argument in arg)
+                break
+
+        return arguments
 
     def _run_cmd_checks(self, suites):
         if not suites:
@@ -736,10 +741,6 @@ Did you run with --create-virtualenv? Is mozinstall in virtualenv_modules?""")
 
     def preflight_run_tests(self):
         """preflight commands for all tests"""
-        # If the in tree config hasn't been loaded by a previous step, load it here.
-        if len(self.tree_config) == 0:
-            self._read_tree_config()
-
         c = self.config
         if c.get('run_cmd_checks_enabled'):
             self._run_cmd_checks(c.get('preflight_run_cmd_suites', []))

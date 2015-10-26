@@ -13,6 +13,7 @@
 #include "mozilla/dom/DedicatedWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/FunctionBinding.h"
+#include "mozilla/dom/ImageBitmap.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseWorkerProxy.h"
 #include "mozilla/dom/ServiceWorkerGlobalScopeBinding.h"
@@ -58,7 +59,8 @@ using mozilla::ipc::PrincipalInfo;
 BEGIN_WORKERS_NAMESPACE
 
 WorkerGlobalScope::WorkerGlobalScope(WorkerPrivate* aWorkerPrivate)
-: mWorkerPrivate(aWorkerPrivate)
+: mWindowInteractionsAllowed(0)
+, mWorkerPrivate(aWorkerPrivate)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
 }
@@ -136,7 +138,7 @@ WorkerGlobalScope::GetCaches(ErrorResult& aRv)
                                                  mWorkerPrivate, aRv);
   }
 
-  nsRefPtr<CacheStorage> ref = mCacheStorage;
+  RefPtr<CacheStorage> ref = mCacheStorage;
   return ref.forget();
 }
 
@@ -152,7 +154,7 @@ WorkerGlobalScope::Location()
     MOZ_ASSERT(mLocation);
   }
 
-  nsRefPtr<WorkerLocation> location = mLocation;
+  RefPtr<WorkerLocation> location = mLocation;
   return location.forget();
 }
 
@@ -166,7 +168,7 @@ WorkerGlobalScope::Navigator()
     MOZ_ASSERT(mNavigator);
   }
 
-  nsRefPtr<WorkerNavigator> navigator = mNavigator;
+  RefPtr<WorkerNavigator> navigator = mNavigator;
   return navigator.forget();
 }
 
@@ -175,7 +177,7 @@ WorkerGlobalScope::GetExistingNavigator() const
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<WorkerNavigator> navigator = mNavigator;
+  RefPtr<WorkerNavigator> navigator = mNavigator;
   return navigator.forget();
 }
 
@@ -353,11 +355,12 @@ WorkerGlobalScope::GetIndexedDB(ErrorResult& aErrorResult)
 {
   mWorkerPrivate->AssertIsOnWorkerThread();
 
-  nsRefPtr<IDBFactory> indexedDB = mIndexedDB;
+  RefPtr<IDBFactory> indexedDB = mIndexedDB;
 
   if (!indexedDB) {
-    if (!mWorkerPrivate->IsIndexedDBAllowed()) {
+    if (!mWorkerPrivate->IsStorageAllowed()) {
       NS_WARNING("IndexedDB is not allowed in this worker!");
+      aErrorResult = NS_ERROR_DOM_SECURITY_ERR;
       return nullptr;
     }
 
@@ -384,6 +387,21 @@ WorkerGlobalScope::GetIndexedDB(ErrorResult& aErrorResult)
   }
 
   return indexedDB.forget();
+}
+
+already_AddRefed<Promise>
+WorkerGlobalScope::CreateImageBitmap(const ImageBitmapSource& aImage,
+                                     ErrorResult& aRv)
+{
+  return ImageBitmap::Create(this, aImage, Nothing(), aRv);
+}
+
+already_AddRefed<Promise>
+WorkerGlobalScope::CreateImageBitmap(const ImageBitmapSource& aImage,
+                                     int32_t aSx, int32_t aSy, int32_t aSw, int32_t aSh,
+                                     ErrorResult& aRv)
+{
+  return ImageBitmap::Create(this, aImage, Some(gfx::IntRect(aSx, aSy, aSw, aSh)), aRv);
 }
 
 DedicatedWorkerGlobalScope::DedicatedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate)
@@ -511,7 +529,7 @@ namespace {
 
 class SkipWaitingResultRunnable final : public WorkerRunnable
 {
-  nsRefPtr<PromiseWorkerProxy> mPromiseProxy;
+  RefPtr<PromiseWorkerProxy> mPromiseProxy;
 
 public:
   SkipWaitingResultRunnable(WorkerPrivate* aWorkerPrivate,
@@ -528,9 +546,7 @@ public:
     MOZ_ASSERT(aWorkerPrivate);
     aWorkerPrivate->AssertIsOnWorkerThread();
 
-    Promise* promise = mPromiseProxy->GetWorkerPromise();
-    MOZ_ASSERT(promise);
-
+    RefPtr<Promise> promise = mPromiseProxy->WorkerPromise();
     promise->MaybeResolve(JS::UndefinedHandleValue);
 
     // Release the reference on the worker thread.
@@ -542,7 +558,7 @@ public:
 
 class WorkerScopeSkipWaitingRunnable final : public nsRunnable
 {
-  nsRefPtr<PromiseWorkerProxy> mPromiseProxy;
+  RefPtr<PromiseWorkerProxy> mPromiseProxy;
   nsCString mScope;
 
 public:
@@ -558,43 +574,29 @@ public:
   Run() override
   {
     AssertIsOnMainThread();
-    nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+    RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
     MOZ_ASSERT(swm);
 
-    MutexAutoLock lock(mPromiseProxy->GetCleanUpLock());
-    if (mPromiseProxy->IsClean()) {
+    MutexAutoLock lock(mPromiseProxy->Lock());
+    if (mPromiseProxy->CleanedUp()) {
       return NS_OK;
     }
-    WorkerPrivate* workerPrivate = mPromiseProxy->GetWorkerPrivate();
-    MOZ_ASSERT(workerPrivate);
 
+    WorkerPrivate* workerPrivate = mPromiseProxy->GetWorkerPrivate();
     swm->SetSkipWaitingFlag(workerPrivate->GetPrincipal(), mScope,
                             workerPrivate->ServiceWorkerID());
 
-    nsRefPtr<SkipWaitingResultRunnable> runnable =
+    RefPtr<SkipWaitingResultRunnable> runnable =
       new SkipWaitingResultRunnable(workerPrivate, mPromiseProxy);
 
     AutoJSAPI jsapi;
     jsapi.Init();
-    JSContext* cx = jsapi.cx();
-    if (runnable->Dispatch(cx)) {
-      return NS_OK;
-    }
-
-    // Dispatch to worker thread failed because the worker is shutting down.
-    // Use a control runnable to release the runnable on the worker thread.
-    nsRefPtr<PromiseWorkerProxyControlRunnable> releaseRunnable =
-      new PromiseWorkerProxyControlRunnable(workerPrivate, mPromiseProxy);
-
-    if (!releaseRunnable->Dispatch(cx)) {
-      NS_RUNTIMEABORT("Failed to dispatch Claim control runnable.");
-    }
-
+    runnable->Dispatch(jsapi.cx());
     return NS_OK;
   }
 };
 
-}
+} // namespace
 
 already_AddRefed<Promise>
 ServiceWorkerGlobalScope::SkipWaiting(ErrorResult& aRv)
@@ -602,28 +604,23 @@ ServiceWorkerGlobalScope::SkipWaiting(ErrorResult& aRv)
   mWorkerPrivate->AssertIsOnWorkerThread();
   MOZ_ASSERT(mWorkerPrivate->IsServiceWorker());
 
-  nsRefPtr<Promise> promise = Promise::Create(this, aRv);
+  RefPtr<Promise> promise = Promise::Create(this, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
 
-  nsRefPtr<PromiseWorkerProxy> promiseProxy =
+  RefPtr<PromiseWorkerProxy> promiseProxy =
     PromiseWorkerProxy::Create(mWorkerPrivate, promise);
-  if (!promiseProxy->GetWorkerPromise()) {
-    // Don't dispatch if adding the worker feature failed.
+  if (!promiseProxy) {
     promise->MaybeResolve(JS::UndefinedHandleValue);
     return promise.forget();
   }
 
-  nsRefPtr<WorkerScopeSkipWaitingRunnable> runnable =
+  RefPtr<WorkerScopeSkipWaitingRunnable> runnable =
     new WorkerScopeSkipWaitingRunnable(promiseProxy,
                                        NS_ConvertUTF16toUTF8(mScope));
 
-  aRv = NS_DispatchToMainThread(runnable);
-  if (NS_WARN_IF(aRv.Failed())) {
-    promise->MaybeReject(NS_ERROR_DOM_ABORT_ERR);
-  }
-
+  MOZ_ALWAYS_TRUE(NS_SUCCEEDED(NS_DispatchToMainThread(runnable)));
   return promise.forget();
 }
 
@@ -635,6 +632,15 @@ ServiceWorkerGlobalScope::InterceptionEnabled(JSContext* aCx, JSObject* aObj)
   MOZ_ASSERT(worker);
   worker->AssertIsOnWorkerThread();
   return worker->InterceptionEnabled();
+}
+
+bool
+ServiceWorkerGlobalScope::OpenWindowEnabled(JSContext* aCx, JSObject* aObj)
+{
+  WorkerPrivate* worker = GetCurrentThreadWorkerPrivate();
+  MOZ_ASSERT(worker);
+  worker->AssertIsOnWorkerThread();
+  return worker->OpenWindowEnabled();
 }
 
 WorkerDebuggerGlobalScope::WorkerDebuggerGlobalScope(
@@ -743,18 +749,6 @@ workerdebuggersandbox_resolve(JSContext *cx, JS::Handle<JSObject *> obj,
   return JS_ResolveStandardClass(cx, obj, id, resolvedp);
 }
 
-static bool
-workerdebuggersandbox_convert(JSContext *cx, JS::Handle<JSObject *> obj,
-                              JSType type, JS::MutableHandle<JS::Value> vp)
-{
-  if (type == JSTYPE_OBJECT) {
-    vp.setObject(*obj);
-    return true;
-  }
-
-  return JS::OrdinaryToPrimitive(cx, obj, type, vp);
-}
-
 static void
 workerdebuggersandbox_finalize(js::FreeOp *fop, JSObject *obj)
 {
@@ -778,7 +772,6 @@ const js::Class workerdebuggersandbox_class = {
     workerdebuggersandbox_enumerate,
     workerdebuggersandbox_resolve,
     nullptr, /* mayResolve */
-    workerdebuggersandbox_convert,
     workerdebuggersandbox_finalize,
     nullptr,
     nullptr,

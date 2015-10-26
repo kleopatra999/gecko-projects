@@ -193,7 +193,7 @@ NS_NewInputStreamReadyEvent(nsIInputStreamCallback* aCallback,
 {
   NS_ASSERTION(aCallback, "null callback");
   NS_ASSERTION(aTarget, "null target");
-  nsRefPtr<nsInputStreamReadyEvent> ev =
+  RefPtr<nsInputStreamReadyEvent> ev =
     new nsInputStreamReadyEvent(aCallback, aTarget);
   return ev.forget();
 }
@@ -204,7 +204,7 @@ NS_NewOutputStreamReadyEvent(nsIOutputStreamCallback* aCallback,
 {
   NS_ASSERTION(aCallback, "null callback");
   NS_ASSERTION(aTarget, "null target");
-  nsRefPtr<nsOutputStreamReadyEvent> ev =
+  RefPtr<nsOutputStreamReadyEvent> ev =
     new nsOutputStreamReadyEvent(aCallback, aTarget);
   return ev.forget();
 }
@@ -855,6 +855,17 @@ NS_FillArray(FallibleTArray<char>& aDest, nsIInputStream* aInput,
 
   MOZ_ASSERT(aDest.Length() <= aDest.Capacity(), "buffer overflow");
   return rv;
+}
+
+bool
+NS_InputStreamIsCloneable(nsIInputStream* aSource)
+{
+  if (!aSource) {
+    return false;
+  }
+
+  nsCOMPtr<nsICloneableInputStream> cloneable = do_QueryInterface(aSource);
+  return cloneable && cloneable->GetCloneable();
 }
 
 nsresult

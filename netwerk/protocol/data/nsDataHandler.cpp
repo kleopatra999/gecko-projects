@@ -8,6 +8,7 @@
 #include "nsNetCID.h"
 #include "nsError.h"
 #include "DataChannelChild.h"
+#include "plstr.h"
 
 static NS_DEFINE_CID(kSimpleURICID, NS_SIMPLEURI_CID);
 
@@ -63,7 +64,7 @@ nsDataHandler::NewURI(const nsACString &aSpec,
                       nsIURI *aBaseURI,
                       nsIURI **result) {
     nsresult rv;
-    nsRefPtr<nsIURI> uri;
+    RefPtr<nsIURI> uri;
 
     nsCString spec(aSpec);
 

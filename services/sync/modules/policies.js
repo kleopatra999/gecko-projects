@@ -7,7 +7,7 @@ this.EXPORTED_SYMBOLS = [
   "SyncScheduler",
 ];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://services-sync/constants.js");
@@ -61,20 +61,40 @@ SyncScheduler.prototype = {
   },
 
   // nextSync is in milliseconds, but prefs can't hold that much
-  get nextSync() Svc.Prefs.get("nextSync", 0) * 1000,
-  set nextSync(value) Svc.Prefs.set("nextSync", Math.floor(value / 1000)),
+  get nextSync() {
+    return Svc.Prefs.get("nextSync", 0) * 1000;
+  },
+  set nextSync(value) {
+    Svc.Prefs.set("nextSync", Math.floor(value / 1000));
+  },
 
-  get syncInterval() Svc.Prefs.get("syncInterval", this.singleDeviceInterval),
-  set syncInterval(value) Svc.Prefs.set("syncInterval", value),
+  get syncInterval() {
+    return Svc.Prefs.get("syncInterval", this.singleDeviceInterval);
+  },
+  set syncInterval(value) {
+    Svc.Prefs.set("syncInterval", value);
+  },
 
-  get syncThreshold() Svc.Prefs.get("syncThreshold", SINGLE_USER_THRESHOLD),
-  set syncThreshold(value) Svc.Prefs.set("syncThreshold", value),
+  get syncThreshold() {
+    return Svc.Prefs.get("syncThreshold", SINGLE_USER_THRESHOLD);
+  },
+  set syncThreshold(value) {
+    Svc.Prefs.set("syncThreshold", value);
+  },
 
-  get globalScore() Svc.Prefs.get("globalScore", 0),
-  set globalScore(value) Svc.Prefs.set("globalScore", value),
+  get globalScore() {
+    return Svc.Prefs.get("globalScore", 0);
+  },
+  set globalScore(value) {
+    Svc.Prefs.set("globalScore", value);
+  },
 
-  get numClients() Svc.Prefs.get("numClients", 0),
-  set numClients(value) Svc.Prefs.set("numClients", value),
+  get numClients() {
+    return Svc.Prefs.get("numClients", 0);
+  },
+  set numClients(value) {
+    Svc.Prefs.set("numClients", value);
+  },
 
   init: function init() {
     this._log.level = Log.Level[Svc.Prefs.get("log.logger.service.main")];
@@ -497,45 +517,6 @@ SyncScheduler.prototype = {
       this.syncTimer.clear();
   },
 
-  /**
-   * Prevent new syncs from starting.  This is used by the FxA migration code
-   * where we can't afford to have a sync start partway through the migration.
-   * To handle the edge-case of a sync starting and not stopping, we store
-   * this state in a pref, so on the next startup we remain blocked (and thus
-   * sync will never start) so the migration can complete.
-   *
-   * As a safety measure, we only block for some period of time, and after
-   * that it will automatically unblock.  This ensures that if things go
-   * really pear-shaped and we never end up calling unblockSync() we haven't
-   * completely broken the world.
-   */
-  blockSync: function(until = null) {
-    if (!until) {
-      until = Date.now() + DEFAULT_BLOCK_PERIOD;
-    }
-    // until is specified in ms, but Prefs can't hold that much
-    Svc.Prefs.set("scheduler.blocked-until", Math.floor(until / 1000));
-  },
-
-  unblockSync: function() {
-    Svc.Prefs.reset("scheduler.blocked-until");
-    // the migration code should be ready to roll, so resume normal operations.
-    this.checkSyncStatus();
-  },
-
-  get isBlocked() {
-    let until = Svc.Prefs.get("scheduler.blocked-until");
-    if (until === undefined) {
-      return false;
-    }
-    if (until <= Math.floor(Date.now() / 1000)) {
-      // we were previously blocked but the time has expired.
-      Svc.Prefs.reset("scheduler.blocked-until");
-      return false;
-    }
-    // we remain blocked.
-    return true;
-  },
 };
 
 this.ErrorHandler = function ErrorHandler(service) {
@@ -575,7 +556,7 @@ ErrorHandler.prototype = {
     root.level = Log.Level[Svc.Prefs.get("log.rootLogger")];
 
     let logs = ["Sync", "FirefoxAccounts", "Hawk", "Common.TokenServerClient",
-                "Sync.SyncMigration"];
+                "Sync.SyncMigration", "browserwindow.syncui"];
 
     this._logManager = new LogManager(Svc.Prefs, logs, "sync");
   },
@@ -596,10 +577,13 @@ ErrorHandler.prototype = {
         let exception = subject;  // exception thrown by engine's sync() method
         let engine_name = data;   // engine name that threw the exception
 
-        this.checkServerError(exception);
+        this.checkServerError(exception, "engines/" + engine_name);
 
         Status.engines = [engine_name, exception.failureCode || ENGINE_UNKNOWN_FAIL];
         this._log.debug(engine_name + " failed: " + Utils.exceptionStr(exception));
+
+        Services.telemetry.getKeyedHistogramById("WEAVE_ENGINE_SYNC_ERRORS")
+                          .add(engine_name);
         break;
       case "weave:service:login:error":
         this._log.error("Sync encountered a login error");
@@ -728,6 +712,9 @@ ErrorHandler.prototype = {
     }
   },
 
+  // A function to indicate if Sync errors should be "reported" - which in this
+  // context really means "should be notify observers of an error" - but note
+  // that since bug 1180587, no one is going to surface an error to the user.
   shouldReportError: function shouldReportError() {
     if (Status.login == MASTER_PASSWORD_LOCKED) {
       this._log.trace("shouldReportError: false (master password locked).");
@@ -843,7 +830,7 @@ ErrorHandler.prototype = {
    *
    * This method also looks for "side-channel" warnings.
    */
-  checkServerError: function (resp) {
+  checkServerError: function (resp, cause) {
     switch (resp.status) {
       case 200:
       case 404:
@@ -873,6 +860,9 @@ ErrorHandler.prototype = {
         break;
 
       case 401:
+        Services.telemetry.getKeyedHistogramById(
+          "WEAVE_STORAGE_AUTH_ERRORS").add(cause);
+
         this.service.logout();
         this._log.info("Got 401 response; resetting clusterURL.");
         Svc.Prefs.reset("clusterURL");

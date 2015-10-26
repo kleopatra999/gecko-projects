@@ -14,8 +14,8 @@
 #endif
 
 #ifdef USE_SKIA
-#include "skia/SkPath.h"
-#include "skia/SkTypeface.h"
+#include "skia/include/core/SkPath.h"
+#include "skia/include/core/SkTypeface.h"
 #endif
 #ifdef USE_CAIRO_SCALED_FONT
 #include "cairo.h"
@@ -61,7 +61,7 @@ protected:
   Float mSize;
 };
 
-}
-}
+} // namespace gfx
+} // namespace mozilla
 
 #endif /* MOZILLA_GFX_SCALEDFONTBASE_H_ */

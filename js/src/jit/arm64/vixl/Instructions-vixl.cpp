@@ -211,6 +211,29 @@ LSDataSize CalcLSPairDataSize(LoadStorePairOp op) {
 }
 
 
+int Instruction::ImmBranchRangeBitwidth(ImmBranchType branch_type) {
+  switch (branch_type) {
+    case UncondBranchType:
+      return ImmUncondBranch_width;
+    case CondBranchType:
+      return ImmCondBranch_width;
+    case CompareBranchType:
+      return ImmCmpBranch_width;
+    case TestBranchType:
+      return ImmTestBranch_width;
+    default:
+      VIXL_UNREACHABLE();
+      return 0;
+  }
+}
+
+
+bool Instruction::IsValidImmPCOffset(ImmBranchType branch_type,
+                                     int32_t offset) {
+  return is_intn(ImmBranchRangeBitwidth(branch_type), offset);
+}
+
+
 const Instruction* Instruction::ImmPCOffsetTarget() const {
   const Instruction * base = this;
   ptrdiff_t offset;
@@ -233,7 +256,7 @@ const Instruction* Instruction::ImmPCOffsetTarget() const {
 }
 
 
-inline int Instruction::ImmBranch() const {
+int Instruction::ImmBranch() const {
   switch (BranchType()) {
     case CondBranchType: return ImmCondBranch();
     case UncondBranchType: return ImmUncondBranch();

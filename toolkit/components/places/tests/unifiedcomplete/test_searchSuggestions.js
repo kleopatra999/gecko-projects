@@ -6,8 +6,8 @@ const SUGGEST_PREF = "browser.urlbar.suggest.searches";
 const SUGGEST_ENABLED_PREF = "browser.search.suggest.enabled";
 const SUGGEST_RESTRICT_TOKEN = "$";
 
-let suggestionsFn;
-let previousSuggestionsFn;
+var suggestionsFn;
+var previousSuggestionsFn;
 
 function setSuggestionsFn(fn) {
   previousSuggestionsFn = suggestionsFn;
@@ -47,11 +47,33 @@ add_task(function* setUp() {
   Services.search.currentEngine = engine;
 });
 
-add_task(function* disabled() {
+add_task(function* disabled_urlbarSuggestions() {
   Services.prefs.setBoolPref(SUGGEST_PREF, false);
+  Services.prefs.setBoolPref(SUGGEST_ENABLED_PREF, true);
   yield check_autocomplete({
     search: "hello",
     matches: [],
+  });
+  yield cleanUpSuggestions();
+});
+
+add_task(function* disabled_allSuggestions() {
+  Services.prefs.setBoolPref(SUGGEST_PREF, true);
+  Services.prefs.setBoolPref(SUGGEST_ENABLED_PREF, false);
+  yield check_autocomplete({
+    search: "hello",
+    matches: [],
+  });
+  yield cleanUpSuggestions();
+});
+
+add_task(function* disabled_privateWindow() {
+  Services.prefs.setBoolPref(SUGGEST_PREF, true);
+  Services.prefs.setBoolPref(SUGGEST_ENABLED_PREF, true);
+  yield check_autocomplete({
+    search: "hello",
+    matches: [],
+    searchParam: "private-window",
   });
   yield cleanUpSuggestions();
 });
@@ -387,6 +409,102 @@ add_task(function* mixup_frecency() {
         title: "low frecency 1" },
       { uri: NetUtil.newURI("http://example.com/lo0"),
         title: "low frecency 0" },
+    ],
+  });
+
+  yield cleanUpSuggestions();
+});
+
+add_task(function* prohibit_suggestions() {
+  Services.prefs.setBoolPref(SUGGEST_PREF, true);
+
+  yield check_autocomplete({
+    search: "localhost",
+    matches: [
+      {
+        uri: makeActionURI(("searchengine"), {
+          engineName: ENGINE_NAME,
+          input: "localhost foo",
+          searchQuery: "localhost",
+          searchSuggestion: "localhost foo",
+        }),
+        title: ENGINE_NAME,
+        style: ["action", "searchengine"],
+        icon: "",
+      },
+      {
+        uri: makeActionURI(("searchengine"), {
+          engineName: ENGINE_NAME,
+          input: "localhost bar",
+          searchQuery: "localhost",
+          searchSuggestion: "localhost bar",
+        }),
+        title: ENGINE_NAME,
+        style: ["action", "searchengine"],
+        icon: "",
+      },
+    ],
+  });
+  Services.prefs.setBoolPref("browser.fixup.domainwhitelist.localhost", true);
+  do_register_cleanup(() => {
+    Services.prefs.clearUserPref("browser.fixup.domainwhitelist.localhost");
+  });
+  yield check_autocomplete({
+    search: "localhost",
+    matches: [],
+  });
+
+  yield check_autocomplete({
+    search: "1.2.3.4",
+    matches: [],
+  });
+  yield check_autocomplete({
+    search: "[2001::1]:30",
+    matches: [],
+  });
+  yield check_autocomplete({
+    search: "user:pass@test",
+    matches: [],
+  });
+  yield check_autocomplete({
+    search: "test/test",
+    matches: [],
+  });
+  yield check_autocomplete({
+    search: "data:text/plain,Content",
+    matches: [],
+  });
+
+  yield check_autocomplete({
+    search: "a",
+    matches: [],
+  });
+
+  yield cleanUpSuggestions();
+});
+
+add_task(function* avoid_url_suggestions() {
+  Services.prefs.setBoolPref(SUGGEST_PREF, true);
+
+  setSuggestionsFn(searchStr => {
+    let suffixes = [".com", "/test", ":1]", "@test", ". com"];
+    return suffixes.map(s => searchStr + s);
+  });
+
+  yield check_autocomplete({
+    search: "test",
+    matches: [
+      {
+        uri: makeActionURI(("searchengine"), {
+          engineName: ENGINE_NAME,
+          input: "test. com",
+          searchQuery: "test",
+          searchSuggestion: "test. com",
+        }),
+        title: ENGINE_NAME,
+        style: ["action", "searchengine"],
+        icon: "",
+      },
     ],
   });
 

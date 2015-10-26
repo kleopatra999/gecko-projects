@@ -9,14 +9,14 @@ Cu.import("resource://services-common/utils.js");
 const loopCrypto = Cu.import("resource:///modules/loop/crypto.js", {}).LoopCrypto;
 const { LOOP_ROOMS_CACHE_FILENAME } = Cu.import("resource:///modules/loop/LoopRoomsCache.jsm", {});
 
-let gTimerArgs = [];
+var gTimerArgs = [];
 
 timerHandlers.startTimer = function(callback, delay) {
-  gTimerArgs.push({callback, delay});
+  gTimerArgs.push({ callback, delay });
   return gTimerArgs.length;
 };
 
-let gRoomPatches = [];
+var gRoomPatches = [];
 
 const kContextEnabledPref = "loop.contextInConverations.enabled";
 
@@ -129,7 +129,7 @@ function run_test() {
   MozLoopServiceInternal.fxAOAuthTokenData = { token_type: "bearer" };
   MozLoopServiceInternal.fxAOAuthProfile = { email: "fake@invalid.com" };
 
-  do_register_cleanup(function () {
+  do_register_cleanup(function() {
     Services.prefs.clearUserPref(kContextEnabledPref);
     Services.prefs.clearUserPref("loop.key.fxa");
 

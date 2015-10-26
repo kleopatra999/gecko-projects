@@ -31,7 +31,7 @@ Gamepad::UpdateTimestamp()
   if(newWindow) {
     nsPerformance* perf = newWindow->GetPerformance();
     if (perf) {
-      mTimestamp =  perf->GetDOMTiming()->TimeStampToDOMHighRes(TimeStamp::Now());
+      mTimestamp =  perf->Now();
     }
   }
 }
@@ -114,7 +114,7 @@ Gamepad::SyncState(Gamepad* aOther)
 already_AddRefed<Gamepad>
 Gamepad::Clone(nsISupports* aParent)
 {
-  nsRefPtr<Gamepad> out =
+  RefPtr<Gamepad> out =
     new Gamepad(aParent, mID, mIndex, mMapping,
                 mButtons.Length(), mAxes.Length());
   out->SyncState(this);

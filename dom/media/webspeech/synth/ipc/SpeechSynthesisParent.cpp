@@ -25,10 +25,12 @@ SpeechSynthesisParent::ActorDestroy(ActorDestroyReason aWhy)
 }
 
 bool
-SpeechSynthesisParent::RecvReadVoiceList(InfallibleTArray<RemoteVoice>* aVoices,
-                                         InfallibleTArray<nsString>* aDefaults)
+SpeechSynthesisParent::RecvReadVoicesAndState(InfallibleTArray<RemoteVoice>* aVoices,
+                                              InfallibleTArray<nsString>* aDefaults,
+                                              bool* aIsSpeaking)
 {
-  nsSynthVoiceRegistry::GetInstance()->SendVoices(aVoices, aDefaults);
+  nsSynthVoiceRegistry::GetInstance()->SendVoicesAndState(aVoices, aDefaults,
+                                                          aIsSpeaking);
   return true;
 }
 
@@ -40,7 +42,7 @@ SpeechSynthesisParent::AllocPSpeechSynthesisRequestParent(const nsString& aText,
                                                           const float& aRate,
                                                           const float& aPitch)
 {
-  nsRefPtr<SpeechTaskParent> task = new SpeechTaskParent(aVolume, aText);
+  RefPtr<SpeechTaskParent> task = new SpeechTaskParent(aVolume, aText);
   SpeechSynthesisRequestParent* actor = new SpeechSynthesisRequestParent(task);
   return actor;
 }
@@ -114,6 +116,22 @@ SpeechSynthesisRequestParent::RecvCancel()
 {
   MOZ_ASSERT(mTask);
   mTask->Cancel();
+  return true;
+}
+
+bool
+SpeechSynthesisRequestParent::RecvForceEnd()
+{
+  MOZ_ASSERT(mTask);
+  mTask->ForceEnd();
+  return true;
+}
+
+bool
+SpeechSynthesisRequestParent::RecvSetAudioOutputVolume(const float& aVolume)
+{
+  MOZ_ASSERT(mTask);
+  mTask->SetAudioOutputVolume(aVolume);
   return true;
 }
 

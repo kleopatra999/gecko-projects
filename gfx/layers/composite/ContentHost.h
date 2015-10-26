@@ -36,7 +36,7 @@
 namespace mozilla {
 namespace gfx {
 class Matrix4x4;
-}
+} // namespace gfx
 namespace layers {
 class Compositor;
 class ThebesBufferData;
@@ -112,9 +112,11 @@ public:
   explicit ContentHostTexture(const TextureInfo& aTextureInfo)
     : ContentHostBase(aTextureInfo)
     , mLocked(false)
+    , mReceivedNewHost(false)
   { }
 
-  virtual void Composite(EffectChain& aEffectChain,
+  virtual void Composite(LayerComposite* aLayer,
+                         EffectChain& aEffectChain,
                          float aOpacity,
                          const gfx::Matrix4x4& aTransform,
                          const gfx::Filter& aFilter,
@@ -131,7 +133,7 @@ public:
 
   virtual void PrintInfo(std::stringstream& aStream, const char* aPrefix) override;
 
-  virtual void UseTextureHost(TextureHost* aTexture) override;
+  virtual void UseTextureHost(const nsTArray<TimedTexture>& aTextures) override;
   virtual void UseComponentAlphaTextures(TextureHost* aTextureOnBlack,
                                          TextureHost* aTextureOnWhite) override;
 
@@ -170,6 +172,7 @@ protected:
   CompositableTextureSourceRef mTextureSource;
   CompositableTextureSourceRef mTextureSourceOnWhite;
   bool mLocked;
+  bool mReceivedNewHost;
 };
 
 /**
@@ -217,7 +220,7 @@ public:
                             nsIntRegion* aUpdatedRegionBack);
 };
 
-}
-}
+} // namespace layers
+} // namespace mozilla
 
 #endif

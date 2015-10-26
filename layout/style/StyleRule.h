@@ -106,6 +106,8 @@ public:
   /** Do a deep clone.  Should be used only on the first in the linked list. */
   nsAttrSelector* Clone() const { return Clone(true); }
 
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
+
   nsString        mValue;
   nsAttrSelector* mNext;
   nsCOMPtr<nsIAtom> mLowercaseAttr;
@@ -159,16 +161,27 @@ public:
   void ToString(nsAString& aString, mozilla::CSSStyleSheet* aSheet,
                 bool aAppend = false) const;
 
+  bool IsRestrictedSelector() const {
+    return PseudoType() == nsCSSPseudoElements::ePseudo_NotPseudoElement;
+  }
+
+#ifdef DEBUG
+  nsCString RestrictedSelectorToString() const;
+#endif
+
 private:
   void AddPseudoClassInternal(nsPseudoClassList *aPseudoClass);
   nsCSSSelector* Clone(bool aDeepNext, bool aDeepNegations) const;
 
-  void AppendToStringWithoutCombinators(nsAString& aString,
-                                        mozilla::CSSStyleSheet* aSheet) const;
-  void AppendToStringWithoutCombinatorsOrNegations(nsAString& aString,
-                                                   mozilla::CSSStyleSheet* aSheet,
-                                                   bool aIsNegated)
-                                                        const;
+  void AppendToStringWithoutCombinators(
+      nsAString& aString,
+      mozilla::CSSStyleSheet* aSheet,
+      bool aUseStandardNamespacePrefixes) const;
+  void AppendToStringWithoutCombinatorsOrNegations(
+      nsAString& aString,
+      mozilla::CSSStyleSheet* aSheet,
+      bool aIsNegated,
+      bool aUseStandardNamespacePrefixes) const;
   // Returns true if this selector can have a namespace specified (which
   // happens if and only if the default namespace would apply to this
   // selector).
@@ -375,8 +388,8 @@ private:
 private:
   nsCSSSelectorList*      mSelector; // null for style attribute
   Declaration*            mDeclaration;
-  nsRefPtr<ImportantRule> mImportantRule; // initialized by RuleMatched
-  nsRefPtr<DOMCSSStyleRule> mDOMRule;
+  RefPtr<ImportantRule> mImportantRule; // initialized by RuleMatched
+  RefPtr<DOMCSSStyleRule> mDOMRule;
 
 private:
   StyleRule& operator=(const StyleRule& aCopy) = delete;

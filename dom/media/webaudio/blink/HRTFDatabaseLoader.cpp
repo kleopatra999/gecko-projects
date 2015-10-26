@@ -123,7 +123,7 @@ void HRTFDatabaseLoader::ProxyRelease()
 {
     nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
     if (MOZ_LIKELY(mainThread)) {
-        nsRefPtr<ProxyReleaseEvent> event = new ProxyReleaseEvent(this);
+        RefPtr<ProxyReleaseEvent> event = new ProxyReleaseEvent(this);
         DebugOnly<nsresult> rv =
             mainThread->Dispatch(event, NS_DISPATCH_NORMAL);
         MOZ_ASSERT(NS_SUCCEEDED(rv), "Failed to dispatch release event");
@@ -205,14 +205,6 @@ void HRTFDatabaseLoader::waitForLoaderThreadCompletion()
     m_databaseLoaderThread = nullptr;
 }
 
-PLDHashOperator
-HRTFDatabaseLoader::shutdownEnumFunc(LoaderByRateEntry *entry, void* unused)
-{
-    // Ensure the loader thread's reference is removed for leak analysis.
-    entry->mLoader->waitForLoaderThreadCompletion();
-    return PLDHashOperator::PL_DHASH_NEXT;
-}
-
 void HRTFDatabaseLoader::shutdown()
 {
     MOZ_ASSERT(NS_IsMainThread());
@@ -221,8 +213,11 @@ void HRTFDatabaseLoader::shutdown()
         // reference release during enumeration.
         nsTHashtable<LoaderByRateEntry>* loaderMap = s_loaderMap;
         s_loaderMap = nullptr;
-        loaderMap->EnumerateEntries(shutdownEnumFunc, nullptr);
+        for (auto iter = loaderMap->Iter(); !iter.Done(); iter.Next()) {
+          iter.Get()->mLoader->waitForLoaderThreadCompletion();
+        }
         delete loaderMap;
     }
 }
+
 } // namespace WebCore

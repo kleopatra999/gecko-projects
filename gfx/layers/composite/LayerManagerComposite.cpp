@@ -22,7 +22,6 @@
 #include "TiledContentHost.h"
 #include "Units.h"                      // for ScreenIntRect
 #include "UnitTransforms.h"             // for ViewAs
-#include "gfx2DGlue.h"                  // for ToMatrix4x4
 #include "gfxPrefs.h"                   // for gfxPrefs
 #ifdef XP_MACOSX
 #include "gfxPlatformMac.h"
@@ -45,7 +44,7 @@
 #include "ipc/ShadowLayerUtils.h"
 #include "mozilla/mozalloc.h"           // for operator new, etc
 #include "nsAppRunner.h"
-#include "nsRefPtr.h"                   // for nsRefPtr
+#include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsCOMPtr.h"                   // for already_AddRefed
 #include "nsDebug.h"                    // for NS_WARNING, NS_RUNTIMEABORT, etc
 #include "nsISupportsImpl.h"            // for Layer::AddRef, etc
@@ -56,10 +55,16 @@
 #ifdef MOZ_WIDGET_ANDROID
 #include <android/log.h>
 #include "AndroidBridge.h"
+#endif
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
 #include "opengl/CompositorOGL.h"
 #include "GLContextEGL.h"
 #include "GLContextProvider.h"
 #include "ScopedGLHelpers.h"
+#endif
+#ifdef MOZ_WIDGET_GONK
+#include "nsScreenManagerGonk.h"
+#include "nsWindow.h"
 #endif
 #include "GeckoProfiler.h"
 #include "TextRenderer.h"               // for TextRenderer
@@ -156,7 +161,7 @@ LayerManagerComposite::UpdateRenderBounds(const IntRect& aRect)
 bool
 LayerManagerComposite::AreComponentAlphaLayersEnabled()
 {
-  return Compositor::GetBackend() != LayersBackend::LAYERS_BASIC &&
+  return mCompositor->GetBackendType() != LayersBackend::LAYERS_BASIC &&
          LayerManager::AreComponentAlphaLayersEnabled();
 }
 
@@ -235,7 +240,7 @@ LayerManagerComposite::ApplyOcclusionCulling(Layer* aLayer, nsIntRegion& aOpaque
   // aOpaqueRegion.
   if (isTranslation &&
       !aLayer->HasMaskLayers() &&
-      aLayer->GetLocalOpacity() == 1.0f) {
+      aLayer->IsOpaqueForVisibility()) {
     if (aLayer->GetContentFlags() & Layer::CONTENT_OPAQUE) {
       localOpaque.Or(localOpaque, composite->GetFullyRenderedRegion());
     }
@@ -248,27 +253,13 @@ LayerManagerComposite::ApplyOcclusionCulling(Layer* aLayer, nsIntRegion& aOpaque
   }
 }
 
-bool
-LayerManagerComposite::EndEmptyTransaction(EndTransactionFlags aFlags)
-{
-  NS_ASSERTION(mInTransaction, "Didn't call BeginTransaction?");
-  if (!mRoot) {
-    mInTransaction = false;
-    mIsCompositorReady = false;
-    return false;
-  }
-
-  EndTransaction(nullptr, nullptr);
-  return true;
-}
-
 void
-LayerManagerComposite::EndTransaction(DrawPaintedLayerCallback aCallback,
-                                      void* aCallbackData,
+LayerManagerComposite::EndTransaction(const TimeStamp& aTimeStamp,
                                       EndTransactionFlags aFlags)
 {
   NS_ASSERTION(mInTransaction, "Didn't call BeginTransaction?");
-  NS_ASSERTION(!aCallback && !aCallbackData, "Not expecting callbacks here");
+  NS_ASSERTION(!(aFlags & END_NO_COMPOSITE),
+               "Shouldn't get END_NO_COMPOSITE here");
   mInTransaction = false;
 
   if (!mIsCompositorReady) {
@@ -286,6 +277,11 @@ LayerManagerComposite::EndTransaction(DrawPaintedLayerCallback aCallback,
     return;
   }
 
+  // Set composition timestamp here because we need it in
+  // ComputeEffectiveTransforms (so the correct video frame size is picked) and
+  // also to compute invalid regions properly.
+  mCompositor->SetCompositionTime(aTimeStamp);
+
   if (mRoot && mClonedLayerTreeProperties) {
     MOZ_ASSERT(!mTarget);
     nsIntRegion invalid =
@@ -297,13 +293,17 @@ LayerManagerComposite::EndTransaction(DrawPaintedLayerCallback aCallback,
     mInvalidRegion.Or(mInvalidRegion, mRenderBounds);
   }
 
-  if (mRoot && !(aFlags & END_NO_IMMEDIATE_REDRAW)) {
-    if (aFlags & END_NO_COMPOSITE) {
-      // Apply pending tree updates before recomputing effective
-      // properties.
-      mRoot->ApplyPendingUpdatesToSubtree();
-    }
+  if (mInvalidRegion.IsEmpty() && !mTarget) {
+    // Composition requested, but nothing has changed. Don't do any work.
+    return;
+  }
 
+  // We don't want our debug overlay to cause more frames to happen
+  // so we will invalidate after we've decided if something changed.
+  InvalidateDebugOverlay(mRenderBounds);
+
+ if (mRoot && !(aFlags & END_NO_IMMEDIATE_REDRAW)) {
+    MOZ_ASSERT(!aTimeStamp.IsNull());
     // The results of our drawing always go directly into a pixel buffer,
     // so we don't need to pass any global transform here.
     mRoot->ComputeEffectiveTransforms(gfx::Matrix4x4());
@@ -312,7 +312,7 @@ LayerManagerComposite::EndTransaction(DrawPaintedLayerCallback aCallback,
     ApplyOcclusionCulling(mRoot, opaque);
 
     Render();
-#ifdef MOZ_WIDGET_ANDROID
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
     RenderToPresentationSurface();
 #endif
     mGeometryChanged = false;
@@ -342,7 +342,7 @@ LayerManagerComposite::CreatePaintedLayer()
 {
   MOZ_ASSERT(gIsGtest, "Unless you're testing the compositor using GTest,"
                        "this should only be called on the drawing side");
-  nsRefPtr<PaintedLayer> layer = new PaintedLayerComposite(this);
+  RefPtr<PaintedLayer> layer = new PaintedLayerComposite(this);
   return layer.forget();
 }
 
@@ -351,7 +351,7 @@ LayerManagerComposite::CreateContainerLayer()
 {
   MOZ_ASSERT(gIsGtest, "Unless you're testing the compositor using GTest,"
                        "this should only be called on the drawing side");
-  nsRefPtr<ContainerLayer> layer = new ContainerLayerComposite(this);
+  RefPtr<ContainerLayer> layer = new ContainerLayerComposite(this);
   return layer.forget();
 }
 
@@ -367,7 +367,7 @@ LayerManagerComposite::CreateColorLayer()
 {
   MOZ_ASSERT(gIsGtest, "Unless you're testing the compositor using GTest,"
                        "this should only be called on the drawing side");
-  nsRefPtr<ColorLayer> layer = new ColorLayerComposite(this);
+  RefPtr<ColorLayer> layer = new ColorLayerComposite(this);
   return layer.forget();
 }
 
@@ -396,6 +396,26 @@ LayerManagerComposite::RootLayer() const
 // encoding of the qrcodes 0-255.
 #include "qrcode_table.h"
 #endif
+
+void
+LayerManagerComposite::InvalidateDebugOverlay(const IntRect& aBounds)
+{
+  bool drawFps = gfxPrefs::LayersDrawFPS();
+  bool drawFrameCounter = gfxPrefs::DrawFrameCounter();
+  bool drawFrameColorBars = gfxPrefs::CompositorDrawColorBars();
+
+  if (drawFps || drawFrameCounter) {
+    AddInvalidRegion(nsIntRect(0, 0, 256, 256));
+  }
+  if (drawFrameColorBars) {
+    AddInvalidRegion(nsIntRect(0, 0, 10, aBounds.height));
+  }
+
+  if (drawFrameColorBars) {
+    AddInvalidRegion(nsIntRect(0, 0, 10, aBounds.height));
+  }
+
+}
 
 static uint16_t sFrameCount = 0;
 void
@@ -463,6 +483,8 @@ LayerManagerComposite::RenderDebugOverlay(const Rect& aBounds)
       mUnusedApzTransformWarning = false;
       SetDebugOverlayWantsNextFrame(true);
     }
+
+    // Each frame is invalidate by the previous frame for simplicity
   } else {
     mFPS = nullptr;
   }
@@ -477,6 +499,7 @@ LayerManagerComposite::RenderDebugOverlay(const Rect& aBounds)
                           effects,
                           1.0,
                           gfx::Matrix4x4());
+
   }
 
 #ifdef MOZ_PROFILING
@@ -519,6 +542,7 @@ LayerManagerComposite::RenderDebugOverlay(const Rect& aBounds)
         }
       }
     }
+
   }
 #endif
 
@@ -660,7 +684,7 @@ LayerManagerComposite::Render()
   }
 
   /** Our more efficient but less powerful alter ego, if one is available. */
-  nsRefPtr<Composer2D> composer2D;
+  RefPtr<Composer2D> composer2D;
   composer2D = mCompositor->GetWidget()->GetComposer2D();
 
   // We can't use composert2D if we have layer effects
@@ -769,7 +793,8 @@ LayerManagerComposite::Render()
       js::ProfileEntry::Category::GRAPHICS);
 
     mCompositor->EndFrame();
-    mCompositor->SetDispAcquireFence(mRoot);
+    mCompositor->SetDispAcquireFence(mRoot,
+                                     mCompositor->GetWidget()); // Call after EndFrame()
   }
 
   if (composer2D) {
@@ -781,7 +806,7 @@ LayerManagerComposite::Render()
   RecordFrame();
 }
 
-#ifdef MOZ_WIDGET_ANDROID
+#if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
 class ScopedCompositorProjMatrix {
 public:
   ScopedCompositorProjMatrix(CompositorOGL* aCompositor, const Matrix4x4& aProjMatrix):
@@ -855,6 +880,7 @@ private:
 void
 LayerManagerComposite::RenderToPresentationSurface()
 {
+#ifdef MOZ_WIDGET_ANDROID
   if (!AndroidBridge::Bridge()) {
     return;
   }
@@ -887,17 +913,60 @@ LayerManagerComposite::RenderToPresentationSurface()
 
   const IntSize windowSize = AndroidBridge::Bridge()->GetNativeWindowSize(window);
 
+#elif defined(MOZ_WIDGET_GONK)
+  CompositorOGL* compositor = static_cast<CompositorOGL*>(mCompositor.get());
+  nsScreenGonk* screen = static_cast<nsWindow*>(mCompositor->GetWidget())->GetScreen();
+  if (!screen->IsPrimaryScreen()) {
+    // Only primary screen support mirroring
+    return;
+  }
+
+  nsWindow* mirrorScreenWidget = screen->GetMirroringWidget();
+  if (!mirrorScreenWidget) {
+    // No mirroring
+    return;
+  }
+
+  nsScreenGonk* mirrorScreen = mirrorScreenWidget->GetScreen();
+  if (!mirrorScreen->GetTopWindows().IsEmpty()) {
+    return;
+  }
+
+  EGLSurface surface = mirrorScreen->GetEGLSurface();
+  if (surface == LOCAL_EGL_NO_SURFACE) {
+    // Create GLContext
+    RefPtr<GLContext> gl = gl::GLContextProvider::CreateForWindow(mirrorScreenWidget);
+    mirrorScreenWidget->SetNativeData(NS_NATIVE_OPENGL_CONTEXT,
+                                      reinterpret_cast<uintptr_t>(gl.get()));
+    surface = mirrorScreen->GetEGLSurface();
+    if (surface == LOCAL_EGL_NO_SURFACE) {
+      // Failed to create EGLSurface
+      return;
+    }
+  }
+  GLContext* gl = compositor->gl();
+  GLContextEGL* egl = GLContextEGL::Cast(gl);
+  const IntSize windowSize = mirrorScreen->GetNaturalBounds().Size();
+#endif
+
   if ((windowSize.width <= 0) || (windowSize.height <= 0)) {
     return;
   }
+
+  ScreenRotation rotation = compositor->GetScreenRotation();
 
   const int actualWidth = windowSize.width;
   const int actualHeight = windowSize.height;
 
   const gfx::IntSize originalSize = compositor->GetDestinationSurfaceSize();
+  const nsIntRect originalRect = nsIntRect(0, 0, originalSize.width, originalSize.height);
 
-  const int pageWidth = originalSize.width;
-  const int pageHeight = originalSize.height;
+  int pageWidth = originalSize.width;
+  int pageHeight = originalSize.height;
+  if (rotation == ROTATION_90 || rotation == ROTATION_270) {
+    pageWidth = originalSize.height;
+    pageHeight = originalSize.width;
+  }
 
   float scale = 1.0;
 
@@ -911,8 +980,18 @@ LayerManagerComposite::RenderToPresentationSurface()
   ScopedCompostitorSurfaceSize overrideSurfaceSize(compositor, actualSize);
 
   const ScreenPoint offset((actualWidth - (int)(scale * pageWidth)) / 2, 0);
-  ScopedCompositorRenderOffset overrideRenderOffset(compositor, offset);
   ScopedContextSurfaceOverride overrideSurface(egl, surface);
+
+  Matrix viewMatrix = ComputeTransformForRotation(originalRect,
+                                                  rotation);
+  viewMatrix.Invert(); // unrotate
+  viewMatrix.PostScale(scale, scale);
+  viewMatrix.PostTranslate(offset.x, offset.y);
+  Matrix4x4 matrix = Matrix4x4::From2D(viewMatrix);
+
+  mRoot->ComputeEffectiveTransforms(matrix);
+  nsIntRegion opaque;
+  ApplyOcclusionCulling(mRoot, opaque);
 
   nsIntRegion invalid;
   Rect bounds(0.0f, 0.0f, scale * pageWidth, (float)actualHeight);
@@ -920,33 +999,29 @@ LayerManagerComposite::RenderToPresentationSurface()
 
   mCompositor->BeginFrame(invalid, nullptr, bounds, &rect, &actualBounds);
 
-  // Override the projection matrix since the presentation frame buffer
-  // is probably not the same size as the device frame buffer. The override
-  // projection matrix also scales the content to fit into the presentation
-  // frame buffer.
-  Matrix viewMatrix;
-  viewMatrix.PreTranslate(-1.0, 1.0);
-  viewMatrix.PreScale((2.0f * scale) / (float)actualWidth, (2.0f * scale) / (float)actualHeight);
-  viewMatrix.PreScale(1.0f, -1.0f);
-  viewMatrix.PreTranslate((int)((float)offset.x / scale), offset.y);
-
-  Matrix4x4 projMatrix = Matrix4x4::From2D(viewMatrix);
-
-  ScopedCompositorProjMatrix overrideProjMatrix(compositor, projMatrix);
-
   // The Java side of Fennec sets a scissor rect that accounts for
   // chrome such as the URL bar. Override that so that the entire frame buffer
   // is cleared.
-  ScopedScissorRect screen(egl, 0, 0, actualWidth, actualHeight);
+  ScopedScissorRect scissorRect(egl, 0, 0, actualWidth, actualHeight);
   egl->fClearColor(0.0, 0.0, 0.0, 0.0);
   egl->fClear(LOCAL_GL_COLOR_BUFFER_BIT);
 
-  const IntRect clipRect = IntRect(0, 0, (int)(scale * pageWidth), actualHeight);
+  const IntRect clipRect = IntRect(0, 0, actualWidth, actualHeight);
+
   RootLayer()->Prepare(RenderTargetPixel::FromUntyped(clipRect));
   RootLayer()->RenderLayer(clipRect);
 
   mCompositor->EndFrame();
-  mCompositor->SetDispAcquireFence(mRoot);
+#ifdef MOZ_WIDGET_GONK
+  mCompositor->SetDispAcquireFence(mRoot,
+                                   mirrorScreenWidget); // Call after EndFrame()
+
+  RefPtr<Composer2D> composer2D;
+  composer2D = mCompositor->GetWidget()->GetComposer2D();
+  if (composer2D) {
+    composer2D->Render(mirrorScreenWidget);
+  }
+#endif
 }
 #endif
 
@@ -963,7 +1038,8 @@ SubtractTransformedRegion(nsIntRegion& aRegion,
   // subtract it from the screen region.
   nsIntRegionRectIterator it(aRegionToSubtract);
   while (const IntRect* rect = it.Next()) {
-    Rect incompleteRect = aTransform.TransformBounds(ToRect(*rect));
+    Rect incompleteRect = aTransform.TransformAndClipBounds(ToRect(*rect),
+                                                            Rect::MaxIntRect());
     aRegion.Sub(aRegion, IntRect(incompleteRect.x,
                                    incompleteRect.y,
                                    incompleteRect.width,
@@ -1170,7 +1246,7 @@ LayerManagerComposite::CreatePaintedLayerComposite()
     NS_WARNING("Call on destroyed layer manager");
     return nullptr;
   }
-  return nsRefPtr<PaintedLayerComposite>(new PaintedLayerComposite(this)).forget();
+  return RefPtr<PaintedLayerComposite>(new PaintedLayerComposite(this)).forget();
 }
 
 already_AddRefed<ContainerLayerComposite>
@@ -1180,7 +1256,7 @@ LayerManagerComposite::CreateContainerLayerComposite()
     NS_WARNING("Call on destroyed layer manager");
     return nullptr;
   }
-  return nsRefPtr<ContainerLayerComposite>(new ContainerLayerComposite(this)).forget();
+  return RefPtr<ContainerLayerComposite>(new ContainerLayerComposite(this)).forget();
 }
 
 already_AddRefed<ImageLayerComposite>
@@ -1190,7 +1266,7 @@ LayerManagerComposite::CreateImageLayerComposite()
     NS_WARNING("Call on destroyed layer manager");
     return nullptr;
   }
-  return nsRefPtr<ImageLayerComposite>(new ImageLayerComposite(this)).forget();
+  return RefPtr<ImageLayerComposite>(new ImageLayerComposite(this)).forget();
 }
 
 already_AddRefed<ColorLayerComposite>
@@ -1200,7 +1276,7 @@ LayerManagerComposite::CreateColorLayerComposite()
     NS_WARNING("Call on destroyed layer manager");
     return nullptr;
   }
-  return nsRefPtr<ColorLayerComposite>(new ColorLayerComposite(this)).forget();
+  return RefPtr<ColorLayerComposite>(new ColorLayerComposite(this)).forget();
 }
 
 already_AddRefed<CanvasLayerComposite>
@@ -1210,7 +1286,7 @@ LayerManagerComposite::CreateCanvasLayerComposite()
     NS_WARNING("Call on destroyed layer manager");
     return nullptr;
   }
-  return nsRefPtr<CanvasLayerComposite>(new CanvasLayerComposite(this)).forget();
+  return RefPtr<CanvasLayerComposite>(new CanvasLayerComposite(this)).forget();
 }
 
 already_AddRefed<RefLayerComposite>
@@ -1220,7 +1296,7 @@ LayerManagerComposite::CreateRefLayerComposite()
     NS_WARNING("Call on destroyed layer manager");
     return nullptr;
   }
-  return nsRefPtr<RefLayerComposite>(new RefLayerComposite(this)).forget();
+  return RefPtr<RefLayerComposite>(new RefLayerComposite(this)).forget();
 }
 
 LayerManagerComposite::AutoAddMaskEffect::AutoAddMaskEffect(Layer* aMaskLayer,
@@ -1366,5 +1442,5 @@ LayerManagerComposite::PlatformSyncBeforeReplyUpdate()
 
 #endif  // !defined(MOZ_HAVE_PLATFORM_SPECIFIC_LAYER_BUFFERS)
 
-} /* layers */
-} /* mozilla */
+} // namespace layers
+} // namespace mozilla

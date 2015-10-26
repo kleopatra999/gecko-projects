@@ -43,8 +43,6 @@ public:
 
   virtual ~DirectShowReader();
 
-  nsresult Init(MediaDecoderReader* aCloneDonor) override;
-
   bool DecodeAudioData() override;
   bool DecodeVideoFrame(bool &aKeyframeSkip,
                         int64_t aTimeThreshold) override;
@@ -55,7 +53,7 @@ public:
   nsresult ReadMetadata(MediaInfo* aInfo,
                         MetadataTags** aTags) override;
 
-  nsRefPtr<SeekPromise>
+  RefPtr<SeekPromise>
   Seek(int64_t aTime, int64_t aEndTime) override;
 
 protected:
@@ -110,6 +108,8 @@ private:
 
   // Duration of the stream, in microseconds.
   int64_t mDuration;
+
+  NotifyDataArrivedFilter mFilter;
 };
 
 } // namespace mozilla

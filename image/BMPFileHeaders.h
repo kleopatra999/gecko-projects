@@ -5,58 +5,53 @@
 #ifndef mozilla_image_BMPFileHeaders_h
 #define mozilla_image_BMPFileHeaders_h
 
+#include <stddef.h>
+#include <stdint.h>
+
 namespace mozilla {
 namespace image {
+namespace bmp {
 
-struct BMPFILEHEADER {
-  char signature[2];   // String "BM"
-  uint32_t filesize;
-  int32_t reserved;    // Zero
-  uint32_t dataoffset; // Offset to raster data
+// This length is stored in the |bihsize| field of bmp::FileHeader.
+struct InfoHeaderLength {
+  enum {
+    WIN_V2 = 12,
+    WIN_V3 = 40,
+    WIN_V4 = 108,
+    WIN_V5 = 124,
 
-  uint32_t bihsize;
+    // OS2_V1 is omitted; it's the same as WIN_V2.
+    OS2_V2_MIN = 16,    // Minimum allowed value for OS2v2.
+    OS2_V2_MAX = 64,    // Maximum allowed value for OS2v2.
+  };
 };
 
-// The length of the bitmap file header as defined in the BMP spec.
-#define BFH_LENGTH 14
-// Internally we store the bitmap file header with an additional 4 bytes which
-// is used to store the bitmap information header size.
-#define BFH_INTERNAL_LENGTH 18
+struct FileHeader {
+  char signature[2];   // String "BM".
+  uint32_t filesize;   // File size; unreliable in practice.
+  int32_t reserved;    // Zero.
+  uint32_t dataoffset; // Offset to raster data.
 
-#define OS2_INTERNAL_BIH_LENGTH 8
-#define WIN_V3_INTERNAL_BIH_LENGTH 36
-#define WIN_V5_INTERNAL_BIH_LENGTH 120
+  // The length of the file header as defined in the BMP spec.
+  static const size_t LENGTH = 14;
+};
 
-#define OS2_BIH_LENGTH 12     // This is the real BIH size (as contained in the
-                              // bihsize field of BMPFILEHEADER)
-#define WIN_V3_BIH_LENGTH 40  // This is the real BIH size (as contained in the
-                              // bihsize field of BMPFILEHEADER)
-#define WIN_V5_BIH_LENGTH 124 // This is the real BIH size (as contained in the
-                              // bihsize field of BMPFILEHEADER)
-
-#define OS2_HEADER_LENGTH (BFH_INTERNAL_LENGTH + OS2_INTERNAL_BIH_LENGTH)
-#define WIN_V3_HEADER_LENGTH (BFH_INTERNAL_LENGTH + WIN_V3_INTERNAL_BIH_LENGTH)
-#define WIN_V5_HEADER_LENGTH (BFH_INTERNAL_LENGTH + WIN_V5_INTERNAL_BIH_LENGTH)
-
-#ifndef LCS_sRGB
-#define LCS_sRGB 0x73524742
-#endif
-
-struct xyz {
+struct XYZ {
   int32_t x, y, z;
 };
 
-struct xyzTriple {
-  xyz r, g, b;
+struct XYZTriple {
+  XYZ r, g, b;
 };
 
-struct BITMAPV5HEADER {
+struct V5InfoHeader {
+  uint32_t bihsize;          // Header size
   int32_t width;             // Uint16 in OS/2 BMPs
   int32_t height;            // Uint16 in OS/2 BMPs
   uint16_t planes;           // =1
   uint16_t bpp;              // Bits per pixel.
-  // The rest of the header is not available in OS/2 BMP Files
-  uint32_t compression;      // 0=no compression 1=8bit RLE 2=4bit RLE
+  // The rest of the header is not available in WIN_V2/OS2_V1 BMP Files
+  uint32_t compression;      // See Compression for valid values
   uint32_t image_size;       // (compressed) image size. Can be 0 if
                              // compression==0
   uint32_t xppm;             // Pixels per meter, horizontal
@@ -69,7 +64,7 @@ struct BITMAPV5HEADER {
   uint32_t alpha_mask;       // Bits used for alpha component
   uint32_t color_space;      // 0x73524742=LCS_sRGB ...
   // These members are unused unless color_space == LCS_CALIBRATED_RGB
-  xyzTriple white_point;     // Logical white point
+  XYZTriple white_point;     // Logical white point
   uint32_t gamma_red;        // Red gamma component
   uint32_t gamma_green;      // Green gamma component
   uint32_t gamma_blue;       // Blue gamma component
@@ -78,67 +73,12 @@ struct BITMAPV5HEADER {
   uint32_t profile_offset;   // Offset to profile data in bytes
   uint32_t profile_size;     // Size of profile data in bytes
   uint32_t reserved;         // =0
+
+  static const uint32_t COLOR_SPACE_LCS_SRGB = 0x73524742;
 };
 
-struct colorTable {
-  uint8_t red;
-  uint8_t green;
-  uint8_t blue;
-};
-
-struct bitFields {
-  uint32_t red;
-  uint32_t green;
-  uint32_t blue;
-  uint8_t redLeftShift;
-  uint8_t redRightShift;
-  uint8_t greenLeftShift;
-  uint8_t greenRightShift;
-  uint8_t blueLeftShift;
-  uint8_t blueRightShift;
-};
-
+} // namespace bmp
 } // namespace image
 } // namespace mozilla
-
-#define BITFIELD_LENGTH 12 // Length of the bitfields structure in the bmp file
-#define USE_RGB
-
-// BMPINFOHEADER.compression defines
-#ifndef BI_RGB
-#define BI_RGB 0
-#endif
-#ifndef BI_RLE8
-#define BI_RLE8 1
-#endif
-#ifndef BI_RLE4
-#define BI_RLE4 2
-#endif
-#ifndef BI_BITFIELDS
-#define BI_BITFIELDS 3
-#endif
-// BI_ALPHABITFIELDS  means no compression and specifies alpha bits
-// valid only for 32bpp and 16bpp
-#ifndef BI_ALPHABITFIELDS
-#define BI_ALPHABITFIELDS 4
-#endif
-
-// RLE Escape codes
-#define RLE_ESCAPE       0
-#define RLE_ESCAPE_EOL   0
-#define RLE_ESCAPE_EOF   1
-#define RLE_ESCAPE_DELTA 2
-
-/// enums for mState
-enum ERLEState {
-  eRLEStateInitial,
-  eRLEStateNeedSecondEscapeByte,
-  eRLEStateNeedXDelta,
-  eRLEStateNeedYDelta,        ///< mStateData will hold x delta
-  eRLEStateAbsoluteMode,      ///< mStateData will hold count of existing data
-                              ///< to read
-  eRLEStateAbsoluteModePadded ///< As above, but another byte of data has to
-                              ///< be read as padding
-};
 
 #endif // mozilla_image_BMPFileHeaders_h

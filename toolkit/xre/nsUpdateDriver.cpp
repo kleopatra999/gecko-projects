@@ -11,7 +11,7 @@
 #include "nsAppRunner.h"
 #include "nsIWritablePropertyBag.h"
 #include "nsIFile.h"
-#include "nsIVariant.h"
+#include "nsVariant.h"
 #include "nsCOMPtr.h"
 #include "nsString.h"
 #include "prproces.h"
@@ -402,7 +402,8 @@ CopyUpdaterIntoUpdateDir(nsIFile *greDir, nsIFile *appDir, nsIFile *updateDir,
  *
  * @param pathToAppend A new library path to prepend to LD_LIBRARY_PATH
  */
-#if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && !defined(XP_MACOSX)
+#if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && \
+    !defined(XP_MACOSX) && !defined(MOZ_WIDGET_GONK)
 #include "prprf.h"
 #define PATH_SEPARATOR ":"
 #define LD_LIBRARY_PATH_ENVVAR_NAME "LD_LIBRARY_PATH"
@@ -626,7 +627,8 @@ SwitchToUpdatedApp(nsIFile *greDir, nsIFile *updateDir,
   if (gSafeMode) {
     PR_SetEnv("MOZ_SAFE_MODE_RESTART=1");
   }
-#if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && !defined(XP_MACOSX)
+#if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && \
+    !defined(XP_MACOSX) && !defined(MOZ_WIDGET_GONK)
   AppendToLibPath(installDirPath.get());
 #endif
 
@@ -689,12 +691,7 @@ SetOSApplyToDir(nsIUpdate* update, const nsACString& osApplyToDir)
     return;
   }
 
-  nsCOMPtr<nsIWritableVariant> variant =
-    do_CreateInstance("@mozilla.org/variant;1", &rv);
-  if (NS_FAILED(rv)) {
-    return;
-  }
-
+  RefPtr<nsVariant> variant = new nsVariant();
   rv = variant->SetAsACString(osApplyToDir);
   if (NS_FAILED(rv)) {
     return;
@@ -906,7 +903,8 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsIFile *statusFile,
   if (gSafeMode) {
     PR_SetEnv("MOZ_SAFE_MODE_RESTART=1");
   }
-#if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && !defined(XP_MACOSX)
+#if defined(MOZ_VERIFY_MAR_SIGNATURE) && !defined(XP_WIN) && \
+    !defined(XP_MACOSX) && !defined(MOZ_WIDGET_GONK)
   AppendToLibPath(installDirPath.get());
 #endif
 

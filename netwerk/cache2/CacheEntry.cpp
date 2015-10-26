@@ -163,7 +163,8 @@ NS_IMPL_ISUPPORTS(CacheEntry,
 CacheEntry::CacheEntry(const nsACString& aStorageID,
                        nsIURI* aURI,
                        const nsACString& aEnhanceID,
-                       bool aUseDisk)
+                       bool aUseDisk,
+                       bool aSkipSizeCheck)
 : mFrecency(0)
 , mSortingExpirationTime(uint32_t(-1))
 , mLock("CacheEntry")
@@ -172,6 +173,7 @@ CacheEntry::CacheEntry(const nsACString& aStorageID,
 , mEnhanceID(aEnhanceID)
 , mStorageID(aStorageID)
 , mUseDisk(aUseDisk)
+, mSkipSizeCheck(aSkipSizeCheck)
 , mIsDoomed(false)
 , mSecurityInfoLoaded(false)
 , mPreventCallbacks(false)
@@ -391,6 +393,7 @@ bool CacheEntry::Load(bool aTruncate, bool aPriority)
       rv = mFile->Init(fileKey,
                        aTruncate,
                        !mUseDisk,
+                       mSkipSizeCheck,
                        aPriority,
                        directLoad ? nullptr : this);
     }
@@ -459,7 +462,7 @@ NS_IMETHODIMP CacheEntry::OnFileReady(nsresult aResult, bool aIsNew)
 NS_IMETHODIMP CacheEntry::OnFileDoomed(nsresult aResult)
 {
   if (mDoomCallback) {
-    nsRefPtr<DoomCallbackRunnable> event =
+    RefPtr<DoomCallbackRunnable> event =
       new DoomCallbackRunnable(this, aResult);
     NS_DispatchToMainThread(event);
   }
@@ -477,8 +480,8 @@ already_AddRefed<CacheEntryHandle> CacheEntry::ReopenTruncated(bool aMemoryOnly,
   // Hold callbacks invocation, AddStorageEntry would invoke from doom prematurly
   mPreventCallbacks = true;
 
-  nsRefPtr<CacheEntryHandle> handle;
-  nsRefPtr<CacheEntry> newEntry;
+  RefPtr<CacheEntryHandle> handle;
+  RefPtr<CacheEntry> newEntry;
   {
     mozilla::MutexAutoUnlock unlock(mLock);
 
@@ -486,6 +489,7 @@ already_AddRefed<CacheEntryHandle> CacheEntry::ReopenTruncated(bool aMemoryOnly,
     nsresult rv = CacheStorageService::Self()->AddStorageEntry(
       GetStorageID(), GetURI(), GetEnhanceID(),
       mUseDisk && !aMemoryOnly,
+      mSkipSizeCheck,
       true, // always create
       true, // truncate existing (this one)
       getter_AddRefs(handle));
@@ -513,7 +517,7 @@ already_AddRefed<CacheEntryHandle> CacheEntry::ReopenTruncated(bool aMemoryOnly,
   // reference counter and doesn't revert entry state back when write
   // fails and also doesn't update the entry frecency.  Not updating
   // frecency causes entries to not be purged from our memory pools.
-  nsRefPtr<CacheEntryHandle> writeHandle =
+  RefPtr<CacheEntryHandle> writeHandle =
     newEntry->NewWriteHandle();
   return writeHandle.forget();
 }
@@ -596,7 +600,7 @@ bool CacheEntry::InvokeCallbacks(bool aReadOnly)
 
     if (NS_SUCCEEDED(rv) && !onCheckThread) {
       // Redispatch to the target thread
-      nsRefPtr<nsRunnableMethod<CacheEntry> > event =
+      RefPtr<nsRunnableMethod<CacheEntry> > event =
         NS_NewRunnableMethod(this, &CacheEntry::InvokeCallbacksLock);
 
       rv = mCallbacks[i].mTargetThread->Dispatch(event, nsIEventTarget::DISPATCH_NORMAL);
@@ -763,7 +767,7 @@ void CacheEntry::InvokeAvailableCallback(Callback const & aCallback)
 
   if (!onAvailThread) {
     // Dispatch to the right thread
-    nsRefPtr<AvailableCallbackRunnable> event =
+    RefPtr<AvailableCallbackRunnable> event =
       new AvailableCallbackRunnable(this, aCallback);
 
     rv = aCallback.mTargetThread->Dispatch(event, nsIEventTarget::DISPATCH_NORMAL);
@@ -792,7 +796,7 @@ void CacheEntry::InvokeAvailableCallback(Callback const & aCallback)
       BackgroundOp(Ops::FRECENCYUPDATE);
     }
 
-    nsRefPtr<CacheEntryHandle> handle = NewHandle();
+    RefPtr<CacheEntryHandle> handle = NewHandle();
     aCallback.mCallback->OnCacheEntryAvailable(
       handle, false, nullptr, NS_OK);
     return;
@@ -813,7 +817,7 @@ void CacheEntry::InvokeAvailableCallback(Callback const & aCallback)
 
   // Consumer will be responsible to fill or validate the entry metadata and data.
 
-  nsRefPtr<CacheEntryHandle> handle = NewWriteHandle();
+  RefPtr<CacheEntryHandle> handle = NewWriteHandle();
   rv = aCallback.mCallback->OnCacheEntryAvailable(
     handle, state == WRITING, nullptr, NS_OK);
 
@@ -1112,7 +1116,7 @@ nsresult CacheEntry::OpenOutputStreamInternal(int64_t offset, nsIOutputStream * 
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
-  nsRefPtr<CacheOutputCloseListener> listener =
+  RefPtr<CacheOutputCloseListener> listener =
     new CacheOutputCloseListener(this);
 
   nsCOMPtr<nsIOutputStream> stream;
@@ -1142,7 +1146,7 @@ NS_IMETHODIMP CacheEntry::SetPredictedDataSize(int64_t aPredictedDataSize)
 {
   mPredictedDataSize = aPredictedDataSize;
 
-  if (CacheObserver::EntryIsTooBig(mPredictedDataSize, mUseDisk)) {
+  if (!mSkipSizeCheck && CacheObserver::EntryIsTooBig(mPredictedDataSize, mUseDisk)) {
     LOG(("CacheEntry::SetPredictedDataSize [this=%p] too big, dooming", this));
     AsyncDoom(nullptr);
 
@@ -1326,7 +1330,7 @@ NS_IMETHODIMP CacheEntry::Recreate(bool aMemoryOnly,
 
   mozilla::MutexAutoLock lock(mLock);
 
-  nsRefPtr<CacheEntryHandle> handle = ReopenTruncated(aMemoryOnly, nullptr);
+  RefPtr<CacheEntryHandle> handle = ReopenTruncated(aMemoryOnly, nullptr);
   if (handle) {
     handle.forget(_retval);
     return NS_OK;
@@ -1599,7 +1603,7 @@ void CacheEntry::BackgroundOp(uint32_t aOperations, bool aForceAsync)
 
       // Because CacheFile::Set*() are not thread-safe to use (uses WeakReference that
       // is not thread-safe) we must post to the main thread...
-      nsRefPtr<nsRunnableMethod<CacheEntry> > event =
+      RefPtr<nsRunnableMethod<CacheEntry> > event =
         NS_NewRunnableMethodWithArg<double>(this, &CacheEntry::StoreFrecency, mFrecency);
       NS_DispatchToMainThread(event);
     }
@@ -1667,7 +1671,7 @@ size_t CacheEntry::SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const
   size_t n = 0;
   nsCOMPtr<nsISizeOf> sizeOf;
 
-  n += mCallbacks.SizeOfExcludingThis(mallocSizeOf);
+  n += mCallbacks.ShallowSizeOfExcludingThis(mallocSizeOf);
   if (mFile) {
     n += mFile->SizeOfIncludingThis(mallocSizeOf);
   }
@@ -1695,5 +1699,5 @@ size_t CacheEntry::SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const
   return mallocSizeOf(this) + SizeOfExcludingThis(mallocSizeOf);
 }
 
-} // net
-} // mozilla
+} // namespace net
+} // namespace mozilla

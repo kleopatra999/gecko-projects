@@ -525,23 +525,6 @@ GfxPatternToCairoPattern(const Pattern& aPattern,
       matrix = &pattern.mMatrix;
 
       const std::vector<GradientStop>& stops = cairoStops->GetStops();
-      if (stops.size() >= 2 && stops.front().offset == stops.back().offset) {
-        // Certain Cairo backends that use pixman to implement gradients can have jagged
-        // edges occur with hard stops. Such hard stops are used for implementing certain
-        // types of CSS borders. Work around this by turning these hard-stops into half-pixel
-        // gradients to anti-alias them. See bug 1033375
-        Matrix patternToDevice = aTransform * pattern.mMatrix;
-        Float gradLength = (patternToDevice * pattern.mEnd - patternToDevice * pattern.mBegin).Length();
-        if (gradLength > 0) {
-          Float aaOffset = 0.25 / gradLength;
-          CairoPatternAddGradientStop(pat, stops.front(), -aaOffset);
-          for (size_t i = 1; i < stops.size()-1; ++i) {
-            CairoPatternAddGradientStop(pat, stops[i]);
-          }
-          CairoPatternAddGradientStop(pat, stops.back(), aaOffset);
-          break;
-        }
-      }
       for (size_t i = 0; i < stops.size(); ++i) {
         CairoPatternAddGradientStop(pat, stops[i]);
       }
@@ -673,6 +656,23 @@ IntSize
 DrawTargetCairo::GetSize()
 {
   return mSize;
+}
+
+SurfaceFormat
+GfxFormatForCairoSurface(cairo_surface_t* surface)
+{
+  cairo_surface_type_t type = cairo_surface_get_type(surface);
+  if (type == CAIRO_SURFACE_TYPE_IMAGE) {
+    return CairoFormatToGfxFormat(cairo_image_surface_get_format(surface));
+  }
+#ifdef CAIRO_HAS_XLIB_SURFACE
+  // xlib is currently the only Cairo backend that creates 16bpp surfaces
+  if (type == CAIRO_SURFACE_TYPE_XLIB &&
+      cairo_xlib_surface_get_depth(surface) == 16) {
+    return SurfaceFormat::R5G6B5;
+  }
+#endif
+  return CairoContentToGfxFormat(cairo_surface_get_content(surface));
 }
 
 already_AddRefed<SourceSurface>
@@ -1100,7 +1100,7 @@ DrawTargetCairo::ClearRect(const Rect& aRect)
   if (!mContext || aRect.Width() <= 0 || aRect.Height() <= 0 ||
       !IsFinite(aRect.X()) || !IsFinite(aRect.Width()) ||
       !IsFinite(aRect.Y()) || !IsFinite(aRect.Height())) {
-    gfxCriticalError(CriticalLog::DefaultOptions(false)) << "ClearRect with invalid argument " << gfx::hexa(mContext) << " with " << aRect.Width() << "x" << aRect.Height() << " [" << aRect.X() << ", " << aRect.Y() << "]";
+    gfxCriticalNote << "ClearRect with invalid argument " << gfx::hexa(mContext) << " with " << aRect.Width() << "x" << aRect.Height() << " [" << aRect.X() << ", " << aRect.Y() << "]";
   }
 
   cairo_set_antialias(mContext, CAIRO_ANTIALIAS_NONE);
@@ -1559,7 +1559,7 @@ DrawTargetCairo::CreateSimilarDrawTarget(const IntSize &aSize, SurfaceFormat aFo
     }
   }
 
-  gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "Failed to create similar cairo surface! Size: " << aSize << " Status: " << cairo_surface_status(similar);
+  gfxCriticalError(CriticalLog::DefaultOptions(Factory::ReasonableSurfaceSize(aSize))) << "Failed to create similar cairo surface! Size: " << aSize << " Status: " << cairo_surface_status(similar) << " format " << (int)aFormat;
 
   return nullptr;
 }
@@ -1807,5 +1807,5 @@ BorrowedXlibDrawable::Finish()
 }
 #endif
 
-}
-}
+} // namespace gfx
+} // namespace mozilla

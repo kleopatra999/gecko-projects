@@ -8,7 +8,6 @@
 #define mozilla_dom_IccListener_h
 
 #include "nsAutoPtr.h"
-#include "nsIIccProvider.h"
 #include "nsIIccService.h"
 
 namespace mozilla {
@@ -43,8 +42,8 @@ private:
   // collection is because in Navigator->Invalidate() it will call
   // mIccManager->Shutdown(), then IccManager will call Shutdown() of each
   // IccListener, this will release the reference and break the cycle.
-  nsRefPtr<Icc> mIcc;
-  nsRefPtr<IccManager> mIccManager;
+  RefPtr<Icc> mIcc;
+  RefPtr<IccManager> mIccManager;
   // mHandler will be released at Shutdown(), there is no need to join cycle
   // collection.
   nsCOMPtr<nsIIcc> mHandler;

@@ -189,7 +189,7 @@ nsresult
 SVGSVGElement::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const
 {
   *aResult = nullptr;
-  already_AddRefed<mozilla::dom::NodeInfo> ni = nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();
+  already_AddRefed<mozilla::dom::NodeInfo> ni = RefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();
   SVGSVGElement *it = new SVGSVGElement(ni, NOT_FROM_PARSER);
 
   nsCOMPtr<nsINode> kungFuDeathGrip = it;
@@ -291,14 +291,12 @@ SVGSVGElement::SuspendRedraw(uint32_t max_wait_milliseconds)
   return 1;
 }
 
-/* void unsuspendRedraw (in unsigned long suspend_handle_id); */
 void
 SVGSVGElement::UnsuspendRedraw(uint32_t suspend_handle_id)
 {
   // no-op
 }
 
-/* void unsuspendRedrawAll (); */
 void
 SVGSVGElement::UnsuspendRedrawAll()
 {
@@ -375,7 +373,7 @@ SVGSVGElement::DeselectAll()
 {
   nsIFrame* frame = GetPrimaryFrame();
   if (frame) {
-    nsRefPtr<nsFrameSelection> frameSelection = frame->GetFrameSelection();
+    RefPtr<nsFrameSelection> frameSelection = frame->GetFrameSelection();
     frameSelection->ClearNormalSelection();
   }
 }
@@ -383,7 +381,7 @@ SVGSVGElement::DeselectAll()
 already_AddRefed<DOMSVGNumber>
 SVGSVGElement::CreateSVGNumber()
 {
-  nsRefPtr<DOMSVGNumber> number = new DOMSVGNumber(ToSupports(this));
+  RefPtr<DOMSVGNumber> number = new DOMSVGNumber(ToSupports(this));
   return number.forget();
 }
 
@@ -399,7 +397,7 @@ SVGSVGElement::CreateSVGAngle()
 {
   nsSVGAngle* angle = new nsSVGAngle();
   angle->Init();
-  nsRefPtr<SVGAngle> svgangle = new SVGAngle(angle, this, SVGAngle::CreatedValue);
+  RefPtr<SVGAngle> svgangle = new SVGAngle(angle, this, SVGAngle::CreatedValue);
   return svgangle.forget();
 }
 
@@ -413,7 +411,7 @@ SVGSVGElement::CreateSVGPoint()
 already_AddRefed<SVGMatrix>
 SVGSVGElement::CreateSVGMatrix()
 {
-  nsRefPtr<SVGMatrix> matrix = new SVGMatrix();
+  RefPtr<SVGMatrix> matrix = new SVGMatrix();
   return matrix.forget();
 }
 
@@ -426,14 +424,14 @@ SVGSVGElement::CreateSVGRect()
 already_AddRefed<SVGTransform>
 SVGSVGElement::CreateSVGTransform()
 {
-  nsRefPtr<SVGTransform> transform = new SVGTransform();
+  RefPtr<SVGTransform> transform = new SVGTransform();
   return transform.forget();
 }
 
 already_AddRefed<SVGTransform>
 SVGSVGElement::CreateSVGTransformFromMatrix(SVGMatrix& matrix)
 {
-  nsRefPtr<SVGTransform> transform = new SVGTransform(matrix.GetMatrix());
+  RefPtr<SVGTransform> transform = new SVGTransform(matrix.GetMatrix());
   return transform.forget();
 }
 
@@ -472,7 +470,7 @@ SVGSVGElement::SetZoomAndPan(uint16_t aZoomAndPan, ErrorResult& rv)
     return;
   }
 
-  rv.ThrowRangeError(MSG_INVALID_ZOOMANDPAN_VALUE_ERROR, &aZoomAndPan);
+  rv.ThrowRangeError<MSG_INVALID_ZOOMANDPAN_VALUE_ERROR>();
 }
 
 //----------------------------------------------------------------------
@@ -513,10 +511,10 @@ SVGSVGElement::SetCurrentScaleTranslate(float s, float x, float y)
     if (presShell && IsRoot()) {
       nsEventStatus status = nsEventStatus_eIgnore;
       if (mPreviousScale != mCurrentScale) {
-        InternalSVGZoomEvent svgZoomEvent(true, NS_SVG_ZOOM);
+        InternalSVGZoomEvent svgZoomEvent(true, eSVGZoom);
         presShell->HandleDOMEventWithTarget(this, &svgZoomEvent, &status);
       } else {
-        WidgetEvent svgScrollEvent(true, NS_SVG_SCROLL);
+        WidgetEvent svgScrollEvent(true, eSVGScroll);
         presShell->HandleDOMEventWithTarget(this, &svgScrollEvent, &status);
       }
       InvalidateTransformNotifyFrame();
@@ -592,7 +590,7 @@ SVGSVGElement::IsAttributeMapped(const nsIAtom* name) const
 nsresult
 SVGSVGElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
 {
-  if (aVisitor.mEvent->message == NS_SVG_LOAD) {
+  if (aVisitor.mEvent->mMessage == eSVGLoad) {
     if (mTimedDocumentRoot) {
       mTimedDocumentRoot->Begin();
       // Set 'resample needed' flag, so that if any script calls a DOM method

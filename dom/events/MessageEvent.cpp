@@ -134,7 +134,7 @@ MessageEvent::Constructor(EventTarget* aEventTarget,
                           const MessageEventInit& aParam,
                           ErrorResult& aRv)
 {
-  nsRefPtr<MessageEvent> event = new MessageEvent(aEventTarget, nullptr, nullptr);
+  RefPtr<MessageEvent> event = new MessageEvent(aEventTarget, nullptr, nullptr);
 
   aRv = event->InitEvent(aType, aParam.mBubbles, aParam.mCancelable);
   if (aRv.Failed()) {
@@ -167,12 +167,12 @@ MessageEvent::Constructor(EventTarget* aEventTarget,
   }
 
   if (aParam.mPorts.WasPassed() && !aParam.mPorts.Value().IsNull()) {
-    nsTArray<nsRefPtr<MessagePortBase>> ports;
+    nsTArray<RefPtr<MessagePort>> ports;
     for (uint32_t i = 0, len = aParam.mPorts.Value().Value().Length(); i < len; ++i) {
       ports.AppendElement(aParam.mPorts.Value().Value()[i].get());
     }
 
-    event->mPorts = new MessagePortList(static_cast<EventBase*>(event), ports);
+    event->mPorts = new MessagePortList(static_cast<Event*>(event), ports);
   }
 
   return event.forget();
@@ -200,6 +200,49 @@ MessageEvent::InitMessageEvent(const nsAString& aType,
 }
 
 void
+MessageEvent::InitMessageEvent(JSContext* aCx, const nsAString& aType,
+                               bool aCanBubble, bool aCancelable,
+                               JS::Handle<JS::Value> aData,
+                               const nsAString& aOrigin,
+                               const nsAString& aLastEventId,
+                               const Nullable<WindowProxyOrMessagePort>& aSource,
+                               const Nullable<Sequence<OwningNonNull<MessagePort>>>& aPorts,
+                               ErrorResult& aRv)
+{
+  aRv = Event::InitEvent(aType, aCanBubble, aCancelable);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return;
+  }
+
+  mData = aData;
+  mozilla::HoldJSObjects(this);
+  mOrigin = aOrigin;
+  mLastEventId = aLastEventId;
+
+  mWindowSource = nullptr;
+  mPortSource = nullptr;
+
+  if (!aSource.IsNull()) {
+    if (aSource.Value().IsWindowProxy()) {
+      mWindowSource = aSource.Value().GetAsWindowProxy();
+    } else {
+      mPortSource = &aSource.Value().GetAsMessagePort();
+    }
+  }
+
+  mPorts = nullptr;
+
+  if (!aPorts.IsNull()) {
+    nsTArray<RefPtr<MessagePort>> ports;
+    for (uint32_t i = 0, len = aPorts.Value().Length(); i < len; ++i) {
+      ports.AppendElement(aPorts.Value()[i]);
+    }
+
+    mPorts = new MessagePortList(static_cast<Event*>(this), ports);
+  }
+}
+
+void
 MessageEvent::SetPorts(MessagePortList* aPorts)
 {
   MOZ_ASSERT(!mPorts && aPorts);
@@ -224,14 +267,11 @@ MessageEvent::SetSource(mozilla::dom::workers::ServiceWorkerClient* aClient)
 using namespace mozilla;
 using namespace mozilla::dom;
 
-nsresult
-NS_NewDOMMessageEvent(nsIDOMEvent** aInstancePtrResult,
-                      EventTarget* aOwner,
+already_AddRefed<MessageEvent>
+NS_NewDOMMessageEvent(EventTarget* aOwner,
                       nsPresContext* aPresContext,
-                      WidgetEvent* aEvent) 
+                      WidgetEvent* aEvent)
 {
-  MessageEvent* it = new MessageEvent(aOwner, aPresContext, aEvent);
-  NS_ADDREF(it);
-  *aInstancePtrResult = static_cast<Event*>(it);
-  return NS_OK;
+  RefPtr<MessageEvent> it = new MessageEvent(aOwner, aPresContext, aEvent);
+  return it.forget();
 }

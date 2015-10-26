@@ -275,8 +275,20 @@ ExternalHelperAppParent::Open(nsIInputStream **aResult)
 }
 
 NS_IMETHODIMP
+ExternalHelperAppParent::Open2(nsIInputStream** aStream)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 ExternalHelperAppParent::AsyncOpen(nsIStreamListener *aListener,
                                    nsISupports *aContext)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+ExternalHelperAppParent::AsyncOpen2(nsIStreamListener *aListener)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -384,7 +396,9 @@ ExternalHelperAppParent::SetContentCharset(const nsACString& aContentCharset)
 NS_IMETHODIMP
 ExternalHelperAppParent::GetContentDisposition(uint32_t *aContentDisposition)
 {
-  if (mContentDispositionHeader.IsEmpty())
+  // NB: mContentDisposition may or may not be set to a non UINT32_MAX value in
+  // nsExternalHelperAppService::DoContentContentProcessHelper
+  if (mContentDispositionHeader.IsEmpty() && mContentDisposition == UINT32_MAX)
     return NS_ERROR_NOT_AVAILABLE;
 
   *aContentDisposition = mContentDisposition;
@@ -477,6 +491,18 @@ ExternalHelperAppParent::GetPartID(uint32_t* aPartID)
 
 NS_IMETHODIMP
 ExternalHelperAppParent::GetIsLastPart(bool* aIsLastPart)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+ExternalHelperAppParent::GetPreamble(nsACString & aPreamble)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+ExternalHelperAppParent::GetOriginalResponseHeader(nsACString & aOriginalResponseHeader)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }

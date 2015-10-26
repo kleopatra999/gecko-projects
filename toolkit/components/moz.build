@@ -22,6 +22,7 @@ DIRS += [
     'crashmonitor',
     'diskspacewatcher',
     'downloads',
+    'extensions',
     'exthelper',
     'filepicker',
     'filewatcher',
@@ -37,6 +38,7 @@ DIRS += [
     'passwordmgr',
     'perf',
     'places',
+    'privatebrowsing',
     'processsingleton',
     'promiseworker',
     'prompts',
@@ -50,6 +52,7 @@ DIRS += [
     'thumbnails',
     'timermanager',
     'typeaheadfind',
+    'utils',
     'urlformatter',
     'viewconfig',
     'workerloader',
@@ -100,7 +103,8 @@ if CONFIG['NIGHTLY_BUILD']: # Bug 1136927 - Performance Monitoring is not ready 
 
 DIRS += ['build']
 
-EXTRA_COMPONENTS += [
-    'nsDefaultCLH.js',
-    'nsDefaultCLH.manifest',
-]
+if CONFIG['MOZ_WIDGET_TOOLKIT'] != 'android':
+    EXTRA_COMPONENTS += [
+        'nsDefaultCLH.js',
+        'nsDefaultCLH.manifest',
+    ]

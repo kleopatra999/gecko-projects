@@ -6,6 +6,7 @@
 #include "TextureHost.h"
 
 #include "CompositableHost.h"           // for CompositableHost
+#include "LayerScope.h"
 #include "LayersLogging.h"              // for AppendToString
 #include "mozilla/gfx/2D.h"             // for DataSourceSurface, Factory
 #include "mozilla/ipc/Shmem.h"          // for Shmem
@@ -17,12 +18,13 @@
 #include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
 #include "mozilla/layers/YCbCrImageDataSerializer.h"
 #include "nsAString.h"
-#include "nsRefPtr.h"                   // for nsRefPtr
+#include "mozilla/RefPtr.h"                   // for nsRefPtr
 #include "nsPrintfCString.h"            // for nsPrintfCString
 #include "mozilla/layers/PTextureParent.h"
 #include "mozilla/unused.h"
 #include <limits>
 #include "../opengl/CompositorOGL.h"
+#include "gfxPrefs.h"
 #include "gfxUtils.h"
 
 #ifdef MOZ_ENABLE_D3D10_LAYER
@@ -67,6 +69,7 @@ public:
   ~TextureParent();
 
   bool Init(const SurfaceDescriptor& aSharedData,
+            const LayersBackend& aLayersBackend,
             const TextureFlags& aFlags);
 
   void CompositorRecycle();
@@ -91,11 +94,10 @@ public:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-
-// static
 PTextureParent*
 TextureHost::CreateIPDLActor(CompositableParentManager* aManager,
                              const SurfaceDescriptor& aSharedData,
+                             LayersBackend aLayersBackend,
                              TextureFlags aFlags)
 {
   if (aSharedData.type() == SurfaceDescriptor::TSurfaceDescriptorMemory &&
@@ -105,7 +107,7 @@ TextureHost::CreateIPDLActor(CompositableParentManager* aManager,
     return nullptr;
   }
   TextureParent* actor = new TextureParent(aManager);
-  if (!actor->Init(aSharedData, aFlags)) {
+  if (!actor->Init(aSharedData, aLayersBackend, aFlags)) {
     delete actor;
     return nullptr;
   }
@@ -131,7 +133,10 @@ TextureHost::SendDeleteIPDLActor(PTextureParent* actor)
 TextureHost*
 TextureHost::AsTextureHost(PTextureParent* actor)
 {
-  return actor? static_cast<TextureParent*>(actor)->mTextureHost : nullptr;
+  if (!actor) {
+    return nullptr;
+  }
+  return static_cast<TextureParent*>(actor)->mTextureHost;
 }
 
 PTextureParent*
@@ -171,7 +176,7 @@ TextureHost::SetAcquireFenceHandle(const FenceHandle& aAcquireFenceHandle)
 FenceHandle
 TextureHost::GetAndResetAcquireFenceHandle()
 {
-  nsRefPtr<FenceHandle::FdObj> fdObj = mAcquireFenceHandle.GetAndResetFdObj();
+  RefPtr<FenceHandle::FdObj> fdObj = mAcquireFenceHandle.GetAndResetFdObj();
   return FenceHandle(fdObj);
 }
 
@@ -195,10 +200,10 @@ already_AddRefed<TextureHost> CreateTextureHostD3D9(const SurfaceDescriptor& aDe
                                                 ISurfaceAllocator* aDeallocator,
                                                 TextureFlags aFlags);
 
-// static
 already_AddRefed<TextureHost>
 TextureHost::Create(const SurfaceDescriptor& aDesc,
                     ISurfaceAllocator* aDeallocator,
+                    LayersBackend aBackend,
                     TextureFlags aFlags)
 {
   switch (aDesc.type()) {
@@ -214,7 +219,7 @@ TextureHost::Create(const SurfaceDescriptor& aDesc,
       return CreateTextureHostOGL(aDesc, aDeallocator, aFlags);
 
     case SurfaceDescriptor::TSurfaceDescriptorMacIOSurface:
-      if (Compositor::GetBackend() == LayersBackend::LAYERS_OPENGL) {
+      if (aBackend == LayersBackend::LAYERS_OPENGL) {
         return CreateTextureHostOGL(aDesc, aDeallocator, aFlags);
       } else {
         return CreateTextureHostBasic(aDesc, aDeallocator, aFlags);
@@ -233,7 +238,7 @@ TextureHost::Create(const SurfaceDescriptor& aDesc,
 
     case SurfaceDescriptor::TSurfaceDescriptorD3D10:
     case SurfaceDescriptor::TSurfaceDescriptorDXGIYCbCr:
-      if (Compositor::GetBackend() == LayersBackend::LAYERS_D3D9) {
+      if (aBackend == LayersBackend::LAYERS_D3D9) {
         return CreateTextureHostD3D9(aDesc, aDeallocator, aFlags);
       } else {
         return CreateTextureHostD3D11(aDesc, aDeallocator, aFlags);
@@ -296,10 +301,13 @@ TextureHost::TextureHost(TextureFlags aFlags)
     : mActor(nullptr)
     , mFlags(aFlags)
     , mCompositableCount(0)
-{}
+{
+  MOZ_COUNT_CTOR(TextureHost);
+}
 
 TextureHost::~TextureHost()
 {
+  MOZ_COUNT_DTOR(TextureHost);
 }
 
 void TextureHost::Finalize()
@@ -407,7 +415,7 @@ BufferTextureHost::UpdatedInternal(const nsIntRegion* aRegion)
   // If the last frame wasn't uploaded yet, and we -don't- have a partial update,
   // we still need to update the full surface.
   if (aRegion && !mNeedsFullUpdate) {
-    mMaybeUpdatedRegion = mMaybeUpdatedRegion.Or(mMaybeUpdatedRegion, *aRegion);
+    mMaybeUpdatedRegion.OrWith(*aRegion);
   } else {
     mNeedsFullUpdate = true;
   }
@@ -590,8 +598,13 @@ BufferTextureHost::Upload(nsIntRegion *aRegion)
     }
   } else {
     // non-YCbCr case
+    nsIntRegion* regionToUpdate = aRegion;
     if (!mFirstSource) {
-      mFirstSource = mCompositor->CreateDataTextureSource();
+      mFirstSource = mCompositor->CreateDataTextureSource(mFlags);
+      if (mFlags & TextureFlags::COMPONENT_ALPHA) {
+        // Update the full region the first time for component alpha textures.
+        regionToUpdate = nullptr;
+      }
     }
     ImageDataDeserializer deserializer(GetBuffer(), GetBufferSize());
     if (!deserializer.IsValid()) {
@@ -604,7 +617,7 @@ BufferTextureHost::Upload(nsIntRegion *aRegion)
       return false;
     }
 
-    if (!mFirstSource->Update(surf.get(), aRegion)) {
+    if (!mFirstSource->Update(surf.get(), regionToUpdate)) {
       NS_WARNING("failed to update the DataTextureSource");
       return false;
     }
@@ -790,10 +803,12 @@ TextureParent::RecvClientRecycle()
 
 bool
 TextureParent::Init(const SurfaceDescriptor& aSharedData,
+                    const LayersBackend& aBackend,
                     const TextureFlags& aFlags)
 {
   mTextureHost = TextureHost::Create(aSharedData,
                                      mCompositableManager,
+                                     aBackend,
                                      aFlags);
   if (mTextureHost) {
     mTextureHost->mActor = this;
@@ -870,5 +885,5 @@ TextureParent::RecvRecycleTexture(const TextureFlags& aTextureFlags)
 
 ////////////////////////////////////////////////////////////////////////////////
 
-} // namespace
-} // namespace
+} // namespace layers
+} // namespace mozilla

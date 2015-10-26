@@ -88,12 +88,12 @@ private:
 - (void)widgetDestroyed;
 // Tear down this ChildView
 - (void)delayedTearDown;
-- (void)sendMouseEvent:(int) aType point:(LayoutDeviceIntPoint)aPoint widget:(nsWindow*)aWindow;
+- (void)sendMouseEvent:(EventMessage) aType point:(LayoutDeviceIntPoint)aPoint widget:(nsWindow*)aWindow;
 - (void)handleTap:(UITapGestureRecognizer *)sender;
 - (BOOL)isUsingMainThreadOpenGL;
 - (void)drawUsingOpenGL;
 - (void)drawUsingOpenGLCallback;
-- (void)sendTouchEvent:(int) aType touches:(NSSet*)aTouches widget:(nsWindow*)aWindow;
+- (void)sendTouchEvent:(EventMessage) aType touches:(NSSet*)aTouches widget:(nsWindow*)aWindow;
 // Event handling (UIResponder)
 - (void)touchesBegan:(NSSet *)touches withEvent:(UIEvent *)event;
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event;
@@ -138,7 +138,7 @@ private:
   [self release];
 }
 
-- (void)sendMouseEvent:(int) aType point:(LayoutDeviceIntPoint)aPoint widget:(nsWindow*)aWindow
+- (void)sendMouseEvent:(EventMessage) aType point:(LayoutDeviceIntPoint)aPoint widget:(nsWindow*)aWindow
 {
     WidgetMouseEvent event(true, aType, aWindow,
                            WidgetMouseEvent::eReal, WidgetMouseEvent::eNormal);
@@ -158,13 +158,13 @@ private:
     if (sender.state == UIGestureRecognizerStateEnded) {
         ALOG("[ChildView[%p] handleTap]", self);
         LayoutDeviceIntPoint lp = UIKitPointsToDevPixels([sender locationInView:self], [self contentScaleFactor]);
-        [self sendMouseEvent:NS_MOUSE_MOVE point:lp widget:mGeckoChild];
-        [self sendMouseEvent:NS_MOUSE_BUTTON_DOWN point:lp widget:mGeckoChild];
-        [self sendMouseEvent:NS_MOUSE_BUTTON_UP point:lp widget:mGeckoChild];
+        [self sendMouseEvent:eMouseMove point:lp widget:mGeckoChild];
+        [self sendMouseEvent:eMouseDown point:lp widget:mGeckoChild];
+        [self sendMouseEvent:eMouseUp point:lp widget:mGeckoChild];
     }
 }
 
-- (void)sendTouchEvent:(int) aType touches:(NSSet*)aTouches widget:(nsWindow*)aWindow
+- (void)sendTouchEvent:(EventMessage) aType touches:(NSSet*)aTouches widget:(nsWindow*)aWindow
 {
     WidgetTouchEvent event(true, aType, aWindow);
     //XXX: I think nativeEvent.timestamp * 1000 is probably usable here but
@@ -180,7 +180,7 @@ private:
             continue;
         }
         int id = reinterpret_cast<int>(value);
-        nsRefPtr<Touch> t = new Touch(id,
+        RefPtr<Touch> t = new Touch(id,
                                       loc,
                                       nsIntPoint([touch majorRadius], [touch majorRadius]),
                                       0.0f,
@@ -201,13 +201,15 @@ private:
         CFDictionaryAddValue(mTouches, touch, (void*)mNextTouchID);
         mNextTouchID++;
     }
-    [self sendTouchEvent:NS_TOUCH_START touches:[event allTouches] widget:mGeckoChild];
+    [self sendTouchEvent:eTouchStart
+                 touches:[event allTouches]
+                  widget:mGeckoChild];
 }
 
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event
 {
     ALOG("[ChildView[%p] touchesCancelled", self);
-    [self sendTouchEvent:NS_TOUCH_CANCEL touches:touches widget:mGeckoChild];
+    [self sendTouchEvent:eTouchCancel touches:touches widget:mGeckoChild];
     for (UITouch* touch : touches) {
         CFDictionaryRemoveValue(mTouches, touch);
     }
@@ -222,7 +224,7 @@ private:
     if (!mGeckoChild)
         return;
 
-    [self sendTouchEvent:NS_TOUCH_END touches:touches widget:mGeckoChild];
+    [self sendTouchEvent:eTouchEnd touches:touches widget:mGeckoChild];
     for (UITouch* touch : touches) {
         CFDictionaryRemoveValue(mTouches, touch);
     }
@@ -237,7 +239,9 @@ private:
     if (!mGeckoChild)
         return;
 
-    [self sendTouchEvent:NS_TOUCH_MOVE touches:[event allTouches] widget:mGeckoChild];
+    [self sendTouchEvent:eTouchMove
+                 touches:[event allTouches]
+                  widget:mGeckoChild];
 }
 
 - (void)setNeedsDisplayInRect:(CGRect)aRect
@@ -349,9 +353,9 @@ private:
                                  NSToIntRound(aRect.size.height * scale));
 
   // Create Cairo objects.
-  nsRefPtr<gfxQuartzSurface> targetSurface;
+  RefPtr<gfxQuartzSurface> targetSurface;
 
-  nsRefPtr<gfxContext> targetContext;
+  RefPtr<gfxContext> targetContext;
   if (gfxPlatform::GetPlatform()->SupportsAzureContentForType(gfx::BackendType::COREGRAPHICS)) {
     RefPtr<gfx::DrawTarget> dt =
       gfx::Factory::CreateDrawTargetForCairoCGContext(aContext,
@@ -682,7 +686,7 @@ nsWindow::PlaceBehind(nsTopLevelWidgetZPlacement aPlacement,
 }
 
 NS_IMETHODIMP
-nsWindow::SetSizeMode(int32_t aMode)
+nsWindow::SetSizeMode(nsSizeMode aMode)
 {
     if (aMode == static_cast<int32_t>(mSizeMode)) {
         return NS_OK;
@@ -749,7 +753,7 @@ void nsWindow::ReportMoveEvent()
     NotifyWindowMoved(mBounds.x, mBounds.y);
 }
 
-void nsWindow::ReportSizeModeEvent(int32_t aMode)
+void nsWindow::ReportSizeModeEvent(nsSizeMode aMode)
 {
     if (mWidgetListener) {
         // This is terrible.

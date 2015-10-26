@@ -8,9 +8,12 @@
 #include "mozilla/dom/CanvasRenderingContext2D.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/DataSurfaceHelpers.h"
+#include "mozilla/layers/AsyncCanvasRenderer.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/SyncRunnable.h"
+#include "mozilla/unused.h"
 #include "gfxUtils.h"
+#include "nsNetUtil.h"
 
 using namespace mozilla::gfx;
 
@@ -62,7 +65,7 @@ private:
 already_AddRefed<DataSourceSurface>
 GetBRGADataSourceSurfaceSync(already_AddRefed<layers::Image> aImage)
 {
-  nsRefPtr<SurfaceHelper> helper = new SurfaceHelper(Move(aImage));
+  RefPtr<SurfaceHelper> helper = new SurfaceHelper(Move(aImage));
   return helper->GetDataSurfaceSafe();
 }
 
@@ -90,7 +93,7 @@ public:
 
     if (!mFailed) {
       // The correct parentObject has to be set by the mEncodeCompleteCallback.
-      nsRefPtr<Blob> blob =
+      RefPtr<Blob> blob =
         Blob::CreateMemoryBlob(nullptr, mImgData, mImgSize, mType);
       MOZ_ASSERT(blob);
 
@@ -120,7 +123,7 @@ private:
   nsAutoString mType;
   void* mImgData;
   nsCOMPtr<nsIThread> mEncoderThread;
-  nsRefPtr<EncodeCompleteCallback> mEncodeCompleteCallback;
+  RefPtr<EncodeCompleteCallback> mEncodeCompleteCallback;
   bool mFailed;
 };
 
@@ -163,6 +166,7 @@ public:
                                                     mSize,
                                                     mImage,
                                                     nullptr,
+                                                    nullptr,
                                                     getter_AddRefs(stream),
                                                     mEncoder);
 
@@ -175,6 +179,7 @@ public:
                                              mFormat,
                                              mSize,
                                              mImage,
+                                             nullptr,
                                              nullptr,
                                              getter_AddRefs(stream),
                                              mEncoder);
@@ -205,7 +210,7 @@ public:
     rv = NS_DispatchToMainThread(mEncodingCompleteEvent);
     if (NS_FAILED(rv)) {
       // Better to leak than to crash.
-      mEncodingCompleteEvent.forget();
+      unused << mEncodingCompleteEvent.forget();
       return rv;
     }
 
@@ -216,9 +221,9 @@ private:
   nsAutoString mType;
   nsAutoString mOptions;
   nsAutoArrayPtr<uint8_t> mImageBuffer;
-  nsRefPtr<layers::Image> mImage;
+  RefPtr<layers::Image> mImage;
   nsCOMPtr<imgIEncoder> mEncoder;
-  nsRefPtr<EncodingCompleteEvent> mEncodingCompleteEvent;
+  RefPtr<EncodingCompleteEvent> mEncodingCompleteEvent;
   int32_t mFormat;
   const nsIntSize mSize;
   bool mUsingCustomOptions;
@@ -232,6 +237,7 @@ ImageEncoder::ExtractData(nsAString& aType,
                           const nsAString& aOptions,
                           const nsIntSize aSize,
                           nsICanvasRenderingContextInternal* aContext,
+                          layers::AsyncCanvasRenderer* aRenderer,
                           nsIInputStream** aStream)
 {
   nsCOMPtr<imgIEncoder> encoder = ImageEncoder::GetImageEncoder(aType);
@@ -240,9 +246,8 @@ ImageEncoder::ExtractData(nsAString& aType,
   }
 
   return ExtractDataInternal(aType, aOptions, nullptr, 0, aSize, nullptr,
-                             aContext, aStream, encoder);
+                             aContext, aRenderer, aStream, encoder);
 }
-
 
 /* static */
 nsresult
@@ -261,7 +266,7 @@ ImageEncoder::ExtractDataFromLayersImageAsync(nsAString& aType,
   nsresult rv = NS_NewThread(getter_AddRefs(encoderThread), nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsRefPtr<EncodingCompleteEvent> completeEvent =
+  RefPtr<EncodingCompleteEvent> completeEvent =
     new EncodingCompleteEvent(encoderThread, aEncodeCallback);
 
   nsIntSize size(aImage->GetSize().width, aImage->GetSize().height);
@@ -296,7 +301,7 @@ ImageEncoder::ExtractDataAsync(nsAString& aType,
   nsresult rv = NS_NewThread(getter_AddRefs(encoderThread), nullptr);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsRefPtr<EncodingCompleteEvent> completeEvent =
+  RefPtr<EncodingCompleteEvent> completeEvent =
     new EncodingCompleteEvent(encoderThread, aEncodeCallback);
 
   nsCOMPtr<nsIRunnable> event = new EncodingRunnable(aType,
@@ -339,6 +344,7 @@ ImageEncoder::ExtractDataInternal(const nsAString& aType,
                                   const nsIntSize aSize,
                                   layers::Image* aImage,
                                   nsICanvasRenderingContextInternal* aContext,
+                                  layers::AsyncCanvasRenderer* aRenderer,
                                   nsIInputStream** aStream,
                                   imgIEncoder* aEncoder)
 {
@@ -364,6 +370,11 @@ ImageEncoder::ExtractDataInternal(const nsAString& aType,
     rv = aContext->GetInputStream(encoderType.get(),
                                   nsPromiseFlatString(aOptions).get(),
                                   getter_AddRefs(imgStream));
+  } else if (aRenderer) {
+    NS_ConvertUTF16toUTF8 encoderType(aType);
+    rv = aRenderer->GetInputStream(encoderType.get(),
+                                   nsPromiseFlatString(aOptions).get(),
+                                   getter_AddRefs(imgStream));
   } else if (aImage) {
     // It is safe to convert PlanarYCbCr format from YUV to RGB off-main-thread.
     // Other image formats could have problem to convert format off-main-thread.

@@ -360,7 +360,10 @@ nsWebBrowser::SetParentURIContentListener(
 NS_IMETHODIMP
 nsWebBrowser::GetContentDOMWindow(nsIDOMWindow** aResult)
 {
-  NS_ENSURE_STATE(mDocShell);
+  if (!mDocShell) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
   nsCOMPtr<nsIDOMWindow> retval = mDocShell->GetWindow();
   retval.forget(aResult);
   return *aResult ? NS_OK : NS_ERROR_FAILURE;
@@ -1062,7 +1065,7 @@ nsWebBrowser::SaveChannel(nsIChannel* aChannel, nsISupports* aFile)
 }
 
 NS_IMETHODIMP
-nsWebBrowser::SaveDocument(nsIDOMDocument* aDocument,
+nsWebBrowser::SaveDocument(nsISupports* aDocumentish,
                            nsISupports* aFile,
                            nsISupports* aDataPath,
                            const char* aOutputContentType,
@@ -1083,11 +1086,13 @@ nsWebBrowser::SaveDocument(nsIDOMDocument* aDocument,
   // Use the specified DOM document, or if none is specified, the one
   // attached to the web browser.
 
-  nsCOMPtr<nsIDOMDocument> doc;
-  if (aDocument) {
-    doc = do_QueryInterface(aDocument);
+  nsCOMPtr<nsISupports> doc;
+  if (aDocumentish) {
+    doc = aDocumentish;
   } else {
-    GetDocument(getter_AddRefs(doc));
+    nsCOMPtr<nsIDOMDocument> domDoc;
+    GetDocument(getter_AddRefs(domDoc));
+    doc = domDoc.forget();
   }
   if (!doc) {
     return NS_ERROR_FAILURE;
@@ -1683,6 +1688,7 @@ static void
 DrawPaintedLayer(PaintedLayer* aLayer,
                  gfxContext* aContext,
                  const nsIntRegion& aRegionToDraw,
+                 const nsIntRegion& aDirtyRegion,
                  DrawRegionClip aClip,
                  const nsIntRegion& aRegionToInvalidate,
                  void* aCallbackData)
@@ -1728,7 +1734,7 @@ nsWebBrowser::PaintWindow(nsIWidget* aWidget, nsIntRegion aRegion)
   NS_ASSERTION(layerManager, "Must be in paint event");
 
   layerManager->BeginTransaction();
-  nsRefPtr<PaintedLayer> root = layerManager->CreatePaintedLayer();
+  RefPtr<PaintedLayer> root = layerManager->CreatePaintedLayer();
   if (root) {
     nsIntRect dirtyRect = aRegion.GetBounds();
     root->SetVisibleRegion(dirtyRect);

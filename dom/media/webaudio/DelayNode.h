@@ -42,15 +42,14 @@ protected:
   virtual ~DelayNode();
 
 private:
-  static void SendDelayToStream(AudioNode* aNode);
   friend class DelayNodeEngine;
 
 private:
-  nsRefPtr<AudioParam> mDelay;
+  RefPtr<AudioParam> mDelay;
 };
 
-}
-}
+} // namespace dom
+} // namespace mozilla
 
 #endif
 

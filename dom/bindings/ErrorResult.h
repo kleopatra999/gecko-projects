@@ -18,11 +18,12 @@
 #include "nsStringGlue.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Move.h"
+#include "nsTArray.h"
 
 namespace IPC {
 class Message;
 template <typename> struct ParamTraits;
-}
+} // namespace IPC
 
 namespace mozilla {
 
@@ -36,31 +37,68 @@ enum ErrNum {
   Err_Limit
 };
 
+// Debug-only compile-time table of the number of arguments of each error, for use in static_assert.
+#if defined(DEBUG) && (defined(__clang__) || defined(__GNUC__))
+uint16_t constexpr ErrorFormatNumArgs[] = {
+#define MSG_DEF(_name, _argc, _exn, _str) \
+  _argc,
+#include "mozilla/dom/Errors.msg"
+#undef MSG_DEF
+};
+#endif
+
+uint16_t
+GetErrorArgCount(const ErrNum aErrorNumber);
+
 bool
 ThrowErrorMessage(JSContext* aCx, const ErrNum aErrorNumber, ...);
+
+struct StringArrayAppender
+{
+  static void Append(nsTArray<nsString>& aArgs, uint16_t aCount)
+  {
+    MOZ_RELEASE_ASSERT(aCount == 0, "Must give at least as many string arguments as are required by the ErrNum.");
+  }
+
+  template<typename... Ts>
+  static void Append(nsTArray<nsString>& aArgs, uint16_t aCount, const nsAString* aFirst, Ts... aOtherArgs)
+  {
+    if (aCount == 0) {
+      MOZ_ASSERT(false, "There should not be more string arguments provided than are required by the ErrNum.");
+      return;
+    }
+    aArgs.AppendElement(*aFirst);
+    Append(aArgs, aCount - 1, aOtherArgs...);
+  }
+};
 
 } // namespace dom
 
 class ErrorResult {
 public:
-  ErrorResult() {
-    mResult = NS_OK;
-
+  ErrorResult()
+    : mResult(NS_OK)
 #ifdef DEBUG
-    mMightHaveUnreportedJSException = false;
-    mHasMessage = false;
+    , mMightHaveUnreportedJSException(false)
+    , mUnionState(HasNothing)
 #endif
+  {
   }
 
 #ifdef DEBUG
   ~ErrorResult() {
     MOZ_ASSERT_IF(IsErrorWithMessage(), !mMessage);
+    MOZ_ASSERT_IF(IsDOMException(), !mDOMExceptionInfo);
     MOZ_ASSERT(!mMightHaveUnreportedJSException);
-    MOZ_ASSERT(!mHasMessage);
+    MOZ_ASSERT(mUnionState == HasNothing);
   }
-#endif
+#endif // DEBUG
 
   ErrorResult(ErrorResult&& aRHS)
+    // Initialize mResult and whatever else we need to default-initialize, so
+    // the ClearUnionData call in our operator= will do the right thing
+    // (nothing).
+    : ErrorResult()
   {
     *this = Move(aRHS);
   }
@@ -91,8 +129,18 @@ public:
     return rv;
   }
 
-  void ThrowTypeError(const dom::ErrNum errorNumber, ...);
-  void ThrowRangeError(const dom::ErrNum errorNumber, ...);
+  template<dom::ErrNum errorNumber, typename... Ts>
+  void ThrowTypeError(Ts... messageArgs)
+  {
+    ThrowErrorWithMessage<errorNumber>(NS_ERROR_TYPE_ERR, messageArgs...);
+  }
+
+  template<dom::ErrNum errorNumber, typename... Ts>
+  void ThrowRangeError(Ts... messageArgs)
+  {
+    ThrowErrorWithMessage<errorNumber>(NS_ERROR_RANGE_ERR, messageArgs...);
+  }
+
   void ReportErrorWithMessage(JSContext* cx);
   bool IsErrorWithMessage() const { return ErrorCode() == NS_ERROR_TYPE_ERR || ErrorCode() == NS_ERROR_RANGE_ERR; }
 
@@ -110,11 +158,14 @@ public:
   void ReportJSException(JSContext* cx);
   bool IsJSException() const { return ErrorCode() == NS_ERROR_DOM_JS_EXCEPTION; }
 
-  void ThrowNotEnoughArgsError() { mResult = NS_ERROR_XPC_NOT_ENOUGH_ARGS; }
-  void ReportNotEnoughArgsError(JSContext* cx,
-                                const char* ifaceName,
-                                const char* memberName);
-  bool IsNotEnoughArgsError() const { return ErrorCode() == NS_ERROR_XPC_NOT_ENOUGH_ARGS; }
+  // Facilities for throwing a DOMException.  If an empty message string is
+  // passed to ThrowDOMException, the default message string for the given
+  // nsresult will be used.  The passed-in string must be UTF-8.  The nsresult
+  // passed in must be one we create DOMExceptions for; otherwise you may get an
+  // XPConnect Exception.
+  void ThrowDOMException(nsresult rv, const nsACString& message = EmptyCString());
+  void ReportDOMException(JSContext* cx);
+  bool IsDOMException() const { return ErrorCode() == NS_ERROR_DOM_DOMEXCEPTION; }
 
   // Report a generic error.  This should only be used if we're not
   // some more specific exception type.
@@ -176,12 +227,43 @@ protected:
   }
 
 private:
+#ifdef DEBUG
+  enum UnionState {
+    HasMessage,
+    HasDOMExceptionInfo,
+    HasJSException,
+    HasNothing
+  };
+#endif // DEBUG
+
   friend struct IPC::ParamTraits<ErrorResult>;
   void SerializeMessage(IPC::Message* aMsg) const;
   bool DeserializeMessage(const IPC::Message* aMsg, void** aIter);
 
-  void ThrowErrorWithMessage(va_list ap, const dom::ErrNum errorNumber,
-                             nsresult errorType);
+  void SerializeDOMExceptionInfo(IPC::Message* aMsg) const;
+  bool DeserializeDOMExceptionInfo(const IPC::Message* aMsg, void** aIter);
+
+  // Helper method that creates a new Message for this ErrorResult,
+  // and returns the arguments array from that Message.
+  nsTArray<nsString>& CreateErrorMessageHelper(const dom::ErrNum errorNumber, nsresult errorType);
+
+  template<dom::ErrNum errorNumber, typename... Ts>
+  void ThrowErrorWithMessage(nsresult errorType, Ts... messageArgs)
+  {
+#if defined(DEBUG) && (defined(__clang__) || defined(__GNUC__))
+    static_assert(dom::ErrorFormatNumArgs[errorNumber] == sizeof...(messageArgs),
+                  "Pass in the right number of arguments");
+#endif
+
+    ClearUnionData();
+
+    nsTArray<nsString>& messageArgsArray = CreateErrorMessageHelper(errorNumber, errorType);
+    uint16_t argCount = dom::GetErrorArgCount(errorNumber);
+    dom::StringArrayAppender::Append(messageArgsArray, argCount, messageArgs...);
+#ifdef DEBUG
+    mUnionState = HasMessage;
+#endif // DEBUG
+  }
 
   void AssignErrorCode(nsresult aRv) {
     MOZ_ASSERT(aRv != NS_ERROR_TYPE_ERR, "Use ThrowTypeError()");
@@ -189,32 +271,55 @@ private:
     MOZ_ASSERT(!IsErrorWithMessage(), "Don't overwrite errors with message");
     MOZ_ASSERT(aRv != NS_ERROR_DOM_JS_EXCEPTION, "Use ThrowJSException()");
     MOZ_ASSERT(!IsJSException(), "Don't overwrite JS exceptions");
-    MOZ_ASSERT(aRv != NS_ERROR_XPC_NOT_ENOUGH_ARGS, "Use ThrowNotEnoughArgsError()");
-    MOZ_ASSERT(!IsNotEnoughArgsError(), "Don't overwrite not enough args error");
+    MOZ_ASSERT(aRv != NS_ERROR_DOM_DOMEXCEPTION, "Use ThrowDOMException()");
+    MOZ_ASSERT(!IsDOMException(), "Don't overwrite DOM exceptions");
+    MOZ_ASSERT(aRv != NS_ERROR_XPC_NOT_ENOUGH_ARGS, "May need to bring back ThrowNotEnoughArgsError");
     mResult = aRv;
   }
 
   void ClearMessage();
+  void ClearDOMExceptionInfo();
 
+  // ClearUnionData will try to clear the data in our
+  // mMessage/mJSException/mDOMExceptionInfo union.  After this the union may be
+  // in an uninitialized state (e.g. mMessage or mDOMExceptionInfo may be
+  // pointing to deleted memory) and the caller must either reinitialize it or
+  // change mResult to something that will not involve us touching the union
+  // anymore.
+  void ClearUnionData();
+
+  // Special values of mResult:
+  // NS_ERROR_TYPE_ERR -- ThrowTypeError() called on us.
+  // NS_ERROR_RANGE_ERR -- ThrowRangeError() called on us.
+  // NS_ERROR_DOM_JS_EXCEPTION -- ThrowJSException() called on us.
+  // NS_ERROR_UNCATCHABLE_EXCEPTION -- ThrowUncatchableException called on us.
+  // NS_ERROR_DOM_DOMEXCEPTION -- ThrowDOMException() called on us.
   nsresult mResult;
+
   struct Message;
-  // mMessage is set by ThrowErrorWithMessage and cleared (and deallocated) by
+  struct DOMExceptionInfo;
+  // mMessage is set by ThrowErrorWithMessage and reported (and deallocated) by
   // ReportErrorWithMessage.
-  // mJSException is set (and rooted) by ThrowJSException and unrooted
-  // by ReportJSException.
+  // mJSException is set (and rooted) by ThrowJSException and reported
+  // (and unrooted) by ReportJSException.
+  // mDOMExceptionInfo is set by ThrowDOMException and reported
+  // (and deallocated) by ReportDOMException.
   union {
     Message* mMessage; // valid when IsErrorWithMessage()
     JS::Value mJSException; // valid when IsJSException()
+    DOMExceptionInfo* mDOMExceptionInfo; // valid when IsDOMException()
   };
 
 #ifdef DEBUG
   // Used to keep track of codepaths that might throw JS exceptions,
   // for assertion purposes.
   bool mMightHaveUnreportedJSException;
-  // Used to keep track of whether mMessage has ever been assigned to.
-  // We need to check this in order to ensure that not attempting to
-  // delete mMessage in DeserializeMessage doesn't leak memory.
-  bool mHasMessage;
+
+  // Used to keep track of what's stored in our union right now.  Note
+  // that this may be set to HasNothing even if our mResult suggests
+  // we should have something, if we have already cleaned up the
+  // something.
+  UnionState mUnionState;
 #endif
 
   // Not to be implemented, to make sure people always pass this by

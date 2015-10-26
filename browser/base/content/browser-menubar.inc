@@ -11,12 +11,44 @@
                 style="border:0px;padding:0px;margin:0px;-moz-appearance:none">
             <menu id="file-menu" label="&fileMenu.label;"
                   accesskey="&fileMenu.accesskey;">
-              <menupopup id="menu_FilePopup">
+              <menupopup id="menu_FilePopup"
+                         onpopupshowing="updateUserContextUIVisibility();">
                 <menuitem id="menu_newNavigatorTab"
                           label="&tabCmd.label;"
                           command="cmd_newNavigatorTab"
                           key="key_newNavigatorTab"
                           accesskey="&tabCmd.accesskey;"/>
+                <menu id="menu_newUserContext"
+                      label="&newUserContext.label;"
+                      accesskey="&newUserContext.accesskey;"
+                      hidden="true">
+                  <menupopup>
+                    <menuitem id="menu_newUserContextTabPersonal"
+                              usercontextid="1"
+                              class="menuitem-iconic"
+                              label="&userContextPersonal.label;"
+                              command="Browser:NewUserContextTab"
+                              accesskey="&userContextPersonal.accesskey;"/>
+                    <menuitem id="menu_newUserContextTabWork"
+                              usercontextid="2"
+                              class="menuitem-iconic"
+                              label="&userContextWork.label;"
+                              command="Browser:NewUserContextTab"
+                              accesskey="&userContextWork.accesskey;"/>
+                    <menuitem id="menu_newUserContextTabBanking"
+                              usercontextid="3"
+                              class="menuitem-iconic"
+                              label="&userContextBanking.label;"
+                              command="Browser:NewUserContextTab"
+                              accesskey="&userContextBanking.accesskey;"/>
+                    <menuitem id="menu_newUserContextTabShopping"
+                              usercontextid="4"
+                              class="menuitem-iconic"
+                              label="&userContextShopping.label;"
+                              command="Browser:NewUserContextTab"
+                              accesskey="&userContextShopping.accesskey;"/>
+                  </menupopup>
+                </menu>
                 <menuitem id="menu_newNavigator"
                           label="&newNavigatorCmd.label;"
                           accesskey="&newNavigatorCmd.accesskey;"
@@ -210,10 +242,6 @@
                               key="key_gotoHistory"
                               observes="viewHistorySidebar"
                               label="&historyButton.label;"/>
-                    <menuitem id="menu_readingListSidebar"
-                              key="key_readingListSidebar"
-                              observes="readingListSidebar"
-                              label="&readingList.label;"/>
 
                     <!-- Service providers with sidebars are inserted between these two menuseperators -->
                     <menuseparator hidden="true"/>
@@ -443,30 +471,6 @@
                    onpopupshowing="if (!this.parentNode._placesView)
                                      new PlacesMenu(event, 'place:folder=TOOLBAR');"/>
       </menu>
-#ifndef XP_MACOSX
-# Disabled on Mac because we can't fill native menupopups asynchronously
-      <menuseparator id="menu_readingListSeparator">
-        <observes element="readingListSidebar" attribute="hidden"/>
-      </menuseparator>
-      <menu id="menu_readingList"
-            class="menu-iconic bookmark-item"
-            label="&readingList.label;"
-            container="true">
-        <observes element="readingListSidebar" attribute="hidden"/>
-        <menupopup id="readingListPopup"
-#ifndef XP_MACOSX
-                   placespopup="true"
-#endif
-                   onpopupshowing="ReadingListUI.onReadingListPopupShowing(this);">
-          <menuseparator id="viewReadingListSidebarSeparator"/>
-          <menuitem id="viewReadingListSidebar" class="subviewbutton"
-                    oncommand="SidebarUI.toggle('readingListSidebar');"
-                    label="&readingList.showSidebar.label;">
-            <observes element="readingListSidebar" attribute="checked"/>
-          </menuitem>
-        </menupopup>
-      </menu>
-#endif
       <menuseparator id="bookmarksMenuItemsSeparator"/>
       <!-- Bookmarks menu items -->
       <menuseparator builder="end"
@@ -503,11 +507,17 @@
                         label="&webapps.label;"
                         accesskey="&webapps.accesskey;"
                         oncommand="BrowserOpenApps();"/>
+
+              <menuitem id="menu_openLoop"
+                        label="&loopMenuItem.label;"
+                        accesskey = "&loopMenuItem.accesskey;"
+                        oncommand="LoopUI.togglePanel();"/>
+
 #ifdef MOZ_SERVICES_SYNC
-              <!-- only one of sync-setup or sync-menu will be showing at once -->
+              <!-- only one of sync-setup, sync-syncnowitem or sync-reauthitem will be showing at once -->
               <menuitem id="sync-setup"
-                        label="&syncSetup.label;"
-                        accesskey="&syncSetup.accesskey;"
+                        label="&syncSignIn.label;"
+                        accesskey="&syncSignIn.accesskey;"
                         observes="sync-setup-state"
                         oncommand="gSyncUI.openSetup(null, 'menubar')"/>
               <menuitem id="sync-syncnowitem"

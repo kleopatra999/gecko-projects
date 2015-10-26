@@ -57,8 +57,9 @@ class PersistentBufferProviderBasic : public PersistentBufferProvider
 public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(PersistentBufferProviderBasic)
 
-  PersistentBufferProviderBasic(LayerManager* aManager, gfx::IntSize aSize,
-                                gfx::SurfaceFormat aFormat, gfx::BackendType aBackend);
+  PersistentBufferProviderBasic(gfx::IntSize aSize, gfx::SurfaceFormat aFormat,
+                                gfx::BackendType aBackend);
+  explicit PersistentBufferProviderBasic(gfx::DrawTarget* aTarget) : mDrawTarget(aTarget) {}
 
   bool IsValid() { return !!mDrawTarget; }
   virtual LayersBackend GetType() { return LayersBackend::LAYERS_BASIC; }
@@ -69,6 +70,7 @@ private:
   RefPtr<gfx::DrawTarget> mDrawTarget;
 };
 
-}
-}
+} // namespace layers
+} // namespace mozilla
+
 #endif

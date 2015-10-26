@@ -17,9 +17,11 @@
 #ifndef MOZ_SIMPLEPUSH
 #include "mozilla/dom/PushEventBinding.h"
 #include "mozilla/dom/PushMessageDataBinding.h"
+#include "mozilla/dom/File.h"
 #endif
 
 #include "nsProxyRelease.h"
+#include "nsContentUtils.h"
 
 class nsIInterceptedChannel;
 
@@ -35,13 +37,25 @@ BEGIN_WORKERS_NAMESPACE
 
 class ServiceWorkerClient;
 
+class CancelChannelRunnable final : public nsRunnable
+{
+  nsMainThreadPtrHandle<nsIInterceptedChannel> mChannel;
+  const nsresult mStatus;
+public:
+  CancelChannelRunnable(nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel,
+                        nsresult aStatus);
+
+  NS_IMETHOD Run() override;
+};
+
 class FetchEvent final : public Event
 {
   nsMainThreadPtrHandle<nsIInterceptedChannel> mChannel;
-  nsMainThreadPtrHandle<ServiceWorker> mServiceWorker;
-  nsRefPtr<ServiceWorkerClient> mClient;
-  nsRefPtr<Request> mRequest;
-  nsAutoPtr<ServiceWorkerClientInfo> mClientInfo;
+  RefPtr<ServiceWorkerClient> mClient;
+  RefPtr<Request> mRequest;
+  nsCString mScriptSpec;
+  UniquePtr<ServiceWorkerClientInfo> mClientInfo;
+  RefPtr<Promise> mPromise;
   bool mIsReload;
   bool mWaitToRespond;
 protected:
@@ -59,8 +73,8 @@ public:
   }
 
   void PostInit(nsMainThreadPtrHandle<nsIInterceptedChannel>& aChannel,
-                nsMainThreadPtrHandle<ServiceWorker>& aServiceWorker,
-                nsAutoPtr<ServiceWorkerClientInfo>& aClientInfo);
+                const nsACString& aScriptSpec,
+                UniquePtr<ServiceWorkerClientInfo>&& aClientInfo);
 
   static already_AddRefed<FetchEvent>
   Constructor(const GlobalObject& aGlobal,
@@ -90,7 +104,14 @@ public:
   }
 
   void
-  RespondWith(const ResponseOrPromise& aArg, ErrorResult& aRv);
+  RespondWith(Promise& aArg, ErrorResult& aRv);
+
+  already_AddRefed<Promise>
+  GetPromise() const
+  {
+    RefPtr<Promise> p = mPromise;
+    return p.forget();
+  }
 
   already_AddRefed<Promise>
   ForwardTo(const nsAString& aUrl);
@@ -101,7 +122,7 @@ public:
 
 class ExtendableEvent : public Event
 {
-  nsRefPtr<Promise> mPromise;
+  nsTArray<RefPtr<Promise>> mPromises;
 
 protected:
   explicit ExtendableEvent(mozilla::dom::EventTarget* aOwner);
@@ -122,7 +143,7 @@ public:
               const nsAString& aType,
               const EventInit& aOptions)
   {
-    nsRefPtr<ExtendableEvent> e = new ExtendableEvent(aOwner);
+    RefPtr<ExtendableEvent> e = new ExtendableEvent(aOwner);
     bool trusted = e->Init(aOwner);
     e->InitEvent(aType, aOptions.mBubbles, aOptions.mCancelable);
     e->SetTrusted(trusted);
@@ -140,14 +161,10 @@ public:
   }
 
   void
-  WaitUntil(Promise& aPromise);
+  WaitUntil(Promise& aPromise, ErrorResult& aRv);
 
   already_AddRefed<Promise>
-  GetPromise() const
-  {
-    nsRefPtr<Promise> p = mPromise;
-    return p.forget();
-  }
+  GetPromise();
 
   virtual ExtendableEvent* AsExtendableEvent() override
   {
@@ -160,10 +177,9 @@ public:
 class PushMessageData final : public nsISupports,
                               public nsWrapperCache
 {
-  nsString mData;
-
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(PushMessageData)
 
   virtual JSObject* WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
   {
@@ -171,24 +187,30 @@ public:
   }
 
   nsISupports* GetParentObject() const {
-    return nullptr;
+    return mOwner;
   }
 
-  void Json(JSContext* cx, JS::MutableHandle<JSObject*> aRetval);
+  void Json(JSContext* cx, JS::MutableHandle<JS::Value> aRetval,
+            ErrorResult& aRv);
   void Text(nsAString& aData);
-  void ArrayBuffer(JSContext* cx, JS::MutableHandle<JSObject*> aRetval);
-  mozilla::dom::Blob* Blob();
+  void ArrayBuffer(JSContext* cx, JS::MutableHandle<JSObject*> aRetval,
+                   ErrorResult& aRv);
+  already_AddRefed<mozilla::dom::Blob> Blob(ErrorResult& aRv);
 
-  explicit PushMessageData(const nsAString& aData);
+  PushMessageData(nsISupports* aOwner, const nsTArray<uint8_t>& aBytes);
 private:
+  nsCOMPtr<nsISupports> mOwner;
+  nsTArray<uint8_t> mBytes;
+  nsString mDecodedText;
   ~PushMessageData();
 
+  NS_METHOD EnsureDecodedText();
+  uint8_t* GetContentsCopy();
 };
 
 class PushEvent final : public ExtendableEvent
 {
-  nsString mData;
-  nsMainThreadPtrHandle<ServiceWorker> mServiceWorker;
+  RefPtr<PushMessageData> mData;
 
 protected:
   explicit PushEvent(mozilla::dom::EventTarget* aOwner);
@@ -196,6 +218,7 @@ protected:
 
 public:
   NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(PushEvent, ExtendableEvent)
   NS_FORWARD_TO_EVENT
 
   virtual JSObject* WrapObjectInternal(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) override
@@ -206,17 +229,8 @@ public:
   static already_AddRefed<PushEvent>
   Constructor(mozilla::dom::EventTarget* aOwner,
               const nsAString& aType,
-              const PushEventInit& aOptions)
-  {
-    nsRefPtr<PushEvent> e = new PushEvent(aOwner);
-    bool trusted = e->Init(aOwner);
-    e->InitEvent(aType, aOptions.mBubbles, aOptions.mCancelable);
-    e->SetTrusted(trusted);
-    if(aOptions.mData.WasPassed()){
-      e->mData = aOptions.mData.Value();
-    }
-    return e.forget();
-  }
+              const PushEventInit& aOptions,
+              ErrorResult& aRv);
 
   static already_AddRefed<PushEvent>
   Constructor(const GlobalObject& aGlobal,
@@ -225,18 +239,13 @@ public:
               ErrorResult& aRv)
   {
     nsCOMPtr<EventTarget> owner = do_QueryInterface(aGlobal.GetAsSupports());
-    return Constructor(owner, aType, aOptions);
+    return Constructor(owner, aType, aOptions, aRv);
   }
 
-  void PostInit(nsMainThreadPtrHandle<ServiceWorker>& aServiceWorker)
+  PushMessageData*
+  GetData() const
   {
-    mServiceWorker = aServiceWorker;
-  }
-
-  already_AddRefed<PushMessageData> Data()
-  {
-    nsRefPtr<PushMessageData> data = new PushMessageData(mData);
-    return data.forget();
+    return mData;
   }
 };
 #endif /* ! MOZ_SIMPLEPUSH */

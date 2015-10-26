@@ -17,14 +17,18 @@
 #ifndef nsScreenManagerGonk_h___
 #define nsScreenManagerGonk_h___
 
-#include "mozilla/Hal.h"
-
 #include "cutils/properties.h"
 #include "hardware/hwcomposer.h"
+
 #include "libdisplay/GonkDisplay.h"
+#include "mozilla/Hal.h"
+#include "mozilla/Mutex.h"
 #include "nsBaseScreen.h"
 #include "nsCOMPtr.h"
 #include "nsIScreenManager.h"
+#include "nsProxyRelease.h"
+
+#include <android/native_window.h>
 
 class nsRunnable;
 class nsWindow;
@@ -70,6 +74,9 @@ public:
     ScreenConfiguration GetConfiguration();
     bool IsPrimaryScreen();
 
+    ANativeWindowBuffer* DequeueBuffer();
+    bool QueueBuffer(ANativeWindowBuffer* buf);
+
 #if ANDROID_VERSION >= 17
     android::DisplaySurface* GetDisplaySurface();
     int GetPrevDispAcquireFd();
@@ -85,11 +92,25 @@ public:
         return mTopWindows;
     }
 
-    // Set EGL info of primary display. Used for BLIT Composition.
+    // Non-primary screen only
+    bool EnableMirroring();
+    bool DisableMirroring();
+    bool IsMirroring()
+    {
+        return mIsMirroring;
+    }
+
+    // Primary screen only
+    bool SetMirroringScreen(nsScreenGonk* aScreen);
+    bool ClearMirroringScreen(nsScreenGonk* aScreen);
+
+    // Called only on compositor thread
     void SetEGLInfo(hwc_display_t aDisplay, hwc_surface_t aSurface,
                     mozilla::gl::GLContext* aGLContext);
-    hwc_display_t GetDpy();
-    hwc_surface_t GetSur();
+    hwc_display_t GetEGLDisplay();
+    hwc_surface_t GetEGLSurface();
+    void UpdateMirroringWidget(already_AddRefed<nsWindow>& aWindow); // Primary screen only
+    nsWindow* GetMirroringWidget(); // Primary screen only
 
 protected:
     uint32_t mId;
@@ -105,10 +126,15 @@ protected:
 #if ANDROID_VERSION >= 17
     android::sp<android::DisplaySurface> mDisplaySurface;
 #endif
+    bool mIsMirroring; // Non-primary screen only
+    RefPtr<nsScreenGonk> mMirroringScreen; // Primary screen only
+
+    // Accessed and updated only on compositor thread
     GonkDisplay::DisplayType mDisplayType;
-    hwc_display_t mDpy; // Store for BLIT Composition and GonkDisplayICS
-    hwc_surface_t mSur; // Store for BLIT Composition and GonkDisplayICS
-    mozilla::gl::GLContext* mGLContext; // Store for BLIT Composition
+    hwc_display_t mEGLDisplay;
+    hwc_surface_t mEGLSurface;
+    RefPtr<mozilla::gl::GLContext> mGLContext;
+    RefPtr<nsWindow> mMirroringWidget; // Primary screen only
 };
 
 class nsScreenManagerGonk final : public nsIScreenManager
@@ -129,7 +155,7 @@ public:
     void DisplayEnabled(bool aEnabled);
 
     nsresult AddScreen(GonkDisplay::DisplayType aDisplayType,
-                       android::IGraphicBufferProducer* aProducer = nullptr);
+                       android::IGraphicBufferProducer* aSink = nullptr);
 
     nsresult RemoveScreen(GonkDisplay::DisplayType aDisplayType);
 
@@ -140,9 +166,9 @@ protected:
     bool IsScreenConnected(uint32_t aId);
 
     bool mInitialized;
-    nsTArray<nsRefPtr<nsScreenGonk>> mScreens;
-    nsRefPtr<nsRunnable> mScreenOnEvent;
-    nsRefPtr<nsRunnable> mScreenOffEvent;
+    nsTArray<RefPtr<nsScreenGonk>> mScreens;
+    RefPtr<nsRunnable> mScreenOnEvent;
+    RefPtr<nsRunnable> mScreenOffEvent;
 };
 
 #endif /* nsScreenManagerGonk_h___ */
