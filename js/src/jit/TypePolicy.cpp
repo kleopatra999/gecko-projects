@@ -24,6 +24,8 @@ EnsureOperandNotFloat32(TempAllocator& alloc, MInstruction* def, unsigned op)
     if (in->type() == MIRType_Float32) {
         MToDouble* replace = MToDouble::New(alloc, in);
         def->block()->insertBefore(def, replace);
+        if (def->isRecoveredOnBailout())
+            replace->setRecoveredOnBailout();
         def->replaceOperand(op, replace);
     }
 }
@@ -134,7 +136,7 @@ ComparePolicy::adjustInputs(TempAllocator& alloc, MInstruction* def)
 
     // Box inputs to get value
     if (compare->compareType() == MCompare::Compare_Unknown ||
-        compare->compareType() == MCompare::Compare_Value)
+        compare->compareType() == MCompare::Compare_Bitwise)
     {
         return BoxInputsPolicy::staticAdjustInputs(alloc, def);
     }
@@ -491,7 +493,7 @@ bool
 DoublePolicy<Op>::staticAdjustInputs(TempAllocator& alloc, MInstruction* def)
 {
     MDefinition* in = def->getOperand(Op);
-    if (in->type() == MIRType_Double)
+    if (in->type() == MIRType_Double || in->type() == MIRType_SinCosDouble)
         return true;
 
     MToDouble* replace = MToDouble::New(alloc, in);
@@ -622,6 +624,23 @@ template bool BoxExceptPolicy<1, MIRType_String>::staticAdjustInputs(TempAllocat
                                                                      MInstruction* ins);
 template bool BoxExceptPolicy<2, MIRType_String>::staticAdjustInputs(TempAllocator& alloc,
                                                                      MInstruction* ins);
+
+template <unsigned Op>
+bool
+CacheIdPolicy<Op>::staticAdjustInputs(TempAllocator& alloc, MInstruction* ins)
+{
+    MDefinition* in = ins->getOperand(Op);
+    switch (in->type()) {
+      case MIRType_Int32:
+      case MIRType_String:
+      case MIRType_Symbol:
+        return true;
+      default:
+        return BoxPolicy<Op>::staticAdjustInputs(alloc, ins);
+    }
+}
+
+template bool CacheIdPolicy<1>::staticAdjustInputs(TempAllocator& alloc, MInstruction* ins);
 
 bool
 ToDoublePolicy::staticAdjustInputs(TempAllocator& alloc, MInstruction* ins)
@@ -1080,6 +1099,30 @@ FilterTypeSetPolicy::adjustInputs(TempAllocator& alloc, MInstruction* ins)
     MIRType inputType = ins->getOperand(0)->type();
     MIRType outputType = ins->type();
 
+    // Special case when output is a Float32, but input isn't.
+    if (outputType == MIRType_Float32 && inputType != MIRType_Float32) {
+        // Create a MToFloat32 to add between the MFilterTypeSet and
+        // its uses.
+        MInstruction* replace = MToFloat32::New(alloc, ins);
+        ins->justReplaceAllUsesWithExcept(replace);
+        ins->block()->insertAfter(ins, replace);
+
+        // Reset the type to not MIRType_Float32
+        // Note: setResultType shouldn't happen in TypePolicies,
+        //       Here it is fine, since there is just one use we just
+        //       added ourself. And the resulting type after MToFloat32
+        //       equals the original type.
+        ins->setResultType(ins->resultTypeSet()->getKnownMIRType());
+        outputType = ins->type();
+
+        // Do the type analysis
+        if (!replace->typePolicy()->adjustInputs(alloc, replace))
+            return false;
+
+        // Fall through to let the MFilterTypeSet adjust its input based
+        // on its new type.
+    }
+
     // Input and output type are already in accordance.
     if (inputType == outputType)
         return true;
@@ -1170,18 +1213,21 @@ FilterTypeSetPolicy::adjustInputs(TempAllocator& alloc, MInstruction* ins)
     _(Mix3Policy<ObjectPolicy<0>, IntPolicy<1>, IntPolicy<2> >)         \
     _(Mix3Policy<ObjectPolicy<0>, IntPolicy<1>, TruncateToInt32Policy<2> >) \
     _(Mix3Policy<ObjectPolicy<0>, ObjectPolicy<1>, IntPolicy<2> >)      \
+    _(Mix3Policy<ObjectPolicy<0>, ObjectPolicy<1>, ObjectPolicy<2> >)   \
     _(Mix3Policy<StringPolicy<0>, IntPolicy<1>, IntPolicy<2>>)          \
     _(Mix3Policy<StringPolicy<0>, ObjectPolicy<1>, StringPolicy<2> >)   \
     _(Mix3Policy<StringPolicy<0>, StringPolicy<1>, StringPolicy<2> >)   \
     _(Mix4Policy<ObjectPolicy<0>, StringPolicy<1>, BoxPolicy<2>, BoxPolicy<3>>) \
     _(Mix4Policy<ObjectPolicy<0>, IntPolicy<1>, IntPolicy<2>, IntPolicy<3>>) \
     _(Mix4Policy<ObjectPolicy<0>, IntPolicy<1>, TruncateToInt32Policy<2>, TruncateToInt32Policy<3> >) \
+    _(Mix3Policy<ObjectPolicy<0>, CacheIdPolicy<1>, NoFloatPolicy<2>>)  \
     _(Mix4Policy<SimdScalarPolicy<0>, SimdScalarPolicy<1>, SimdScalarPolicy<2>, SimdScalarPolicy<3> >) \
     _(MixPolicy<BoxPolicy<0>, ObjectPolicy<1> >)                        \
     _(MixPolicy<ConvertToStringPolicy<0>, ConvertToStringPolicy<1> >)   \
     _(MixPolicy<ConvertToStringPolicy<0>, ObjectPolicy<1> >)            \
     _(MixPolicy<DoublePolicy<0>, DoublePolicy<1> >)                     \
     _(MixPolicy<ObjectPolicy<0>, BoxPolicy<1> >)                        \
+    _(MixPolicy<ObjectPolicy<0>, CacheIdPolicy<1>>)                     \
     _(MixPolicy<ObjectPolicy<0>, ConvertToStringPolicy<1> >)            \
     _(MixPolicy<ObjectPolicy<0>, IntPolicy<1> >)                        \
     _(MixPolicy<ObjectPolicy<0>, NoFloatPolicy<1> >)                    \
@@ -1247,14 +1293,6 @@ thisTypeSpecialization()
 }
 
 } // namespace
-
-TypePolicy*
-MGetElementCache::thisTypePolicy()
-{
-    if (type() == MIRType_Value)
-        return PolicyV.thisTypePolicy();
-    return PolicyT.thisTypePolicy();
-}
 
 // For each MIR Instruction, this macro define the |typePolicy| method which is
 // using the |thisTypePolicy| method.  The |thisTypePolicy| method is either a

@@ -158,7 +158,7 @@ RangeAnalysis::addBetaNodes()
         MCompare* compare = test->getOperand(0)->toCompare();
 
         if (compare->compareType() == MCompare::Compare_Unknown ||
-            compare->compareType() == MCompare::Compare_Value)
+            compare->compareType() == MCompare::Compare_Bitwise)
         {
             continue;
         }
@@ -1734,7 +1734,7 @@ MArrayLength::computeRange(TempAllocator& alloc)
 void
 MInitializedLength::computeRange(TempAllocator& alloc)
 {
-    setRange(Range::NewUInt32Range(alloc, 0, NativeObject::NELEMENTS_LIMIT));
+    setRange(Range::NewUInt32Range(alloc, 0, NativeObject::MAX_DENSE_ELEMENTS_COUNT));
 }
 
 void
@@ -2291,6 +2291,10 @@ RangeAnalysis::addRangeAssertions()
             if (r.isUnknown() || (ins->type() == MIRType_Int32 && r.isUnknownInt32()))
                 continue;
 
+            // Don't add a use to an instruction that is recovered on bailout.
+            if (ins->isRecoveredOnBailout())
+                continue;
+
             MAssertRange* guard = MAssertRange::New(alloc(), ins, new(alloc()) Range(r));
 
             // Beta nodes and interrupt checks are required to be located at the
@@ -2490,8 +2494,10 @@ MDiv::truncate()
 
     // Divisions where the lhs and rhs are unsigned and the result is
     // truncated can be lowered more efficiently.
-    if (tryUseUnsignedOperands())
+    if (unsignedOperands()) {
+        replaceWithUnsignedOperands();
         unsigned_ = true;
+    }
 }
 
 bool
@@ -2511,8 +2517,10 @@ MMod::truncate()
     specialization_ = MIRType_Int32;
     setResultType(MIRType_Int32);
 
-    if (tryUseUnsignedOperands())
+    if (unsignedOperands()) {
+        replaceWithUnsignedOperands();
         unsigned_ = true;
+    }
 }
 
 bool

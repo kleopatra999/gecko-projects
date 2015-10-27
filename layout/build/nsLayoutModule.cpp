@@ -50,6 +50,7 @@
 #include "nsFocusManager.h"
 #include "ThirdPartyUtil.h"
 #include "nsStructuredCloneContainer.h"
+#include "gfxPlatform.h"
 
 #include "nsIEventListenerService.h"
 #include "nsIMessageManager.h"
@@ -85,9 +86,6 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/DOMRequest.h"
-#include "mozilla/dom/network/TCPSocketChild.h"
-#include "mozilla/dom/network/TCPSocketParent.h"
-#include "mozilla/dom/network/TCPServerSocketChild.h"
 #include "mozilla/dom/network/UDPSocketChild.h"
 #include "mozilla/dom/quota/QuotaManager.h"
 #include "mozilla/dom/workers/ServiceWorkerManager.h"
@@ -217,6 +215,7 @@ static void Shutdown();
 #ifdef MOZ_GAMEPAD
 #include "mozilla/dom/GamepadServiceTest.h"
 #endif
+#include "mozilla/dom/nsContentSecurityManager.h"
 #include "mozilla/dom/nsCSPService.h"
 #include "mozilla/dom/nsCSPContext.h"
 #include "nsICellBroadcastService.h"
@@ -232,6 +231,7 @@ static void Shutdown();
 #include "mozilla/dom/nsMixedContentBlocker.h"
 
 #include "AudioChannelService.h"
+#include "mozilla/net/WebSocketFrameService.h"
 
 #include "mozilla/dom/DataStoreService.h"
 
@@ -274,9 +274,6 @@ using mozilla::dom::quota::QuotaManager;
 using mozilla::dom::workers::ServiceWorkerManager;
 using mozilla::dom::workers::ServiceWorkerPeriodicUpdater;
 using mozilla::dom::workers::WorkerDebuggerManager;
-using mozilla::dom::TCPSocketChild;
-using mozilla::dom::TCPSocketParent;
-using mozilla::dom::TCPServerSocketChild;
 using mozilla::dom::UDPSocketChild;
 using mozilla::dom::time::TimeService;
 using mozilla::net::StreamingProtocolControllerService;
@@ -636,12 +633,17 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(Geolocation, Init)
 #define NS_AUDIOCHANNEL_SERVICE_CID \
   { 0xf712e983, 0x048a, 0x443f, { 0x88, 0x02, 0xfc, 0xc3, 0xd9, 0x27, 0xce, 0xac }}
 
+#define NS_WEBSOCKETFRAME_SERVICE_CID \
+  { 0x5973dd8f, 0xed2c, 0x41ff, { 0x9e, 0x64, 0x25, 0x1f, 0xf5, 0x5a, 0x67, 0xb9 }}
+
 #define NS_DATASTORE_SERVICE_CID \
   { 0x0d4285fe, 0xf1b3, 0x49fa, { 0xbc, 0x51, 0xa4, 0xa8, 0x3f, 0x0a, 0xaf, 0x85 }}
 
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsGeolocationService, nsGeolocationService::GetGeolocationService)
 
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(AudioChannelService, AudioChannelService::GetOrCreate)
+
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(WebSocketFrameService, WebSocketFrameService::GetOrCreate)
 
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(DataStoreService, DataStoreService::GetOrCreate)
 
@@ -652,6 +654,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(FakeSpeechRecognitionService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(PocketSphinxSpeechRecognitionService)
 #endif
 
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsContentSecurityManager)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsCSPContext)
 NS_GENERIC_FACTORY_CONSTRUCTOR(CSPService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsMixedContentBlocker)
@@ -663,9 +666,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNullPrincipal, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsStructuredCloneContainer)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(OSFileConstantsService)
-NS_GENERIC_FACTORY_CONSTRUCTOR(TCPSocketChild)
-NS_GENERIC_FACTORY_CONSTRUCTOR(TCPSocketParent)
-NS_GENERIC_FACTORY_CONSTRUCTOR(TCPServerSocketChild)
 NS_GENERIC_FACTORY_CONSTRUCTOR(UDPSocketChild)
 
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(GeckoMediaPluginService, GeckoMediaPluginService::GetGeckoMediaPluginService)
@@ -795,8 +795,10 @@ NS_DEFINE_NAMED_CID(NS_TEXTSERVICESDOCUMENT_CID);
 NS_DEFINE_NAMED_CID(NS_GEOLOCATION_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_GEOLOCATION_CID);
 NS_DEFINE_NAMED_CID(NS_AUDIOCHANNEL_SERVICE_CID);
+NS_DEFINE_NAMED_CID(NS_WEBSOCKETFRAME_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_DATASTORE_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_FOCUSMANAGER_CID);
+NS_DEFINE_NAMED_CID(NS_CONTENTSECURITYMANAGER_CID);
 NS_DEFINE_NAMED_CID(CSPSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_CSPCONTEXT_CID);
 NS_DEFINE_NAMED_CID(NS_MIXEDCONTENTBLOCKER_CID);
@@ -834,9 +836,6 @@ NS_DEFINE_NAMED_CID(MOBILE_MESSAGE_DATABASE_SERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_POWERMANAGERSERVICE_CID);
 NS_DEFINE_NAMED_CID(OSFILECONSTANTSSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_ALARMHALSERVICE_CID);
-NS_DEFINE_NAMED_CID(TCPSOCKETCHILD_CID);
-NS_DEFINE_NAMED_CID(TCPSOCKETPARENT_CID);
-NS_DEFINE_NAMED_CID(TCPSERVERSOCKETCHILD_CID);
 NS_DEFINE_NAMED_CID(UDPSOCKETCHILD_CID);
 NS_DEFINE_NAMED_CID(NS_TIMESERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_MEDIASTREAMCONTROLLERSERVICE_CID);
@@ -1104,6 +1103,7 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_GEOLOCATION_SERVICE_CID, false, nullptr, nsGeolocationServiceConstructor },
   { &kNS_GEOLOCATION_CID, false, nullptr, GeolocationConstructor },
   { &kNS_AUDIOCHANNEL_SERVICE_CID, false, nullptr, AudioChannelServiceConstructor },
+  { &kNS_WEBSOCKETFRAME_SERVICE_CID, false, nullptr, WebSocketFrameServiceConstructor },
   { &kNS_DATASTORE_SERVICE_CID, false, nullptr, DataStoreServiceConstructor },
   { &kNS_FOCUSMANAGER_CID, false, nullptr, CreateFocusManager },
 #ifdef MOZ_WEBSPEECH_TEST_BACKEND
@@ -1115,6 +1115,7 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
 #ifdef MOZ_WEBSPEECH
   { &kNS_SYNTHVOICEREGISTRY_CID, true, nullptr, nsSynthVoiceRegistryConstructor },
 #endif
+  { &kNS_CONTENTSECURITYMANAGER_CID, false, nullptr, nsContentSecurityManagerConstructor },
   { &kCSPSERVICE_CID, false, nullptr, CSPServiceConstructor },
   { &kNS_CSPCONTEXT_CID, false, nullptr, nsCSPContextConstructor },
   { &kNS_MIXEDCONTENTBLOCKER_CID, false, nullptr, nsMixedContentBlockerConstructor },
@@ -1143,9 +1144,6 @@ static const mozilla::Module::CIDEntry kLayoutCIDs[] = {
   { &kNS_POWERMANAGERSERVICE_CID, false, nullptr, nsIPowerManagerServiceConstructor },
   { &kOSFILECONSTANTSSERVICE_CID, true, nullptr, OSFileConstantsServiceConstructor },
   { &kNS_ALARMHALSERVICE_CID, false, nullptr, nsIAlarmHalServiceConstructor },
-  { &kTCPSOCKETCHILD_CID, false, nullptr, TCPSocketChildConstructor },
-  { &kTCPSOCKETPARENT_CID, false, nullptr, TCPSocketParentConstructor },
-  { &kTCPSERVERSOCKETCHILD_CID, false, nullptr, TCPServerSocketChildConstructor },
   { &kUDPSOCKETCHILD_CID, false, nullptr, UDPSocketChildConstructor },
   { &kGECKO_MEDIA_PLUGIN_SERVICE_CID, true, nullptr, GeckoMediaPluginServiceConstructor },
   { &kNS_TIMESERVICE_CID, false, nullptr, nsITimeServiceConstructor },
@@ -1273,6 +1271,7 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { "@mozilla.org/geolocation/service;1", &kNS_GEOLOCATION_SERVICE_CID },
   { "@mozilla.org/geolocation;1", &kNS_GEOLOCATION_CID },
   { "@mozilla.org/audiochannel/service;1", &kNS_AUDIOCHANNEL_SERVICE_CID },
+  { "@mozilla.org/websocketframe/service;1", &kNS_WEBSOCKETFRAME_SERVICE_CID },
   { "@mozilla.org/datastore-service;1", &kNS_DATASTORE_SERVICE_CID },
   { "@mozilla.org/focus-manager;1", &kNS_FOCUSMANAGER_CID },
 #ifdef MOZ_WEBSPEECH_TEST_BACKEND
@@ -1284,6 +1283,7 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
 #ifdef MOZ_WEBSPEECH
   { NS_SYNTHVOICEREGISTRY_CONTRACTID, &kNS_SYNTHVOICEREGISTRY_CID },
 #endif
+  { NS_CONTENTSECURITYMANAGER_CONTRACTID, &kNS_CONTENTSECURITYMANAGER_CID },
   { CSPSERVICE_CONTRACTID, &kCSPSERVICE_CID },
   { NS_CSPCONTEXT_CONTRACTID, &kNS_CSPCONTEXT_CID },
   { NS_MIXEDCONTENTBLOCKER_CONTRACTID, &kNS_MIXEDCONTENTBLOCKER_CID },
@@ -1313,9 +1313,6 @@ static const mozilla::Module::ContractIDEntry kLayoutContracts[] = {
   { POWERMANAGERSERVICE_CONTRACTID, &kNS_POWERMANAGERSERVICE_CID },
   { OSFILECONSTANTSSERVICE_CONTRACTID, &kOSFILECONSTANTSSERVICE_CID },
   { ALARMHALSERVICE_CONTRACTID, &kNS_ALARMHALSERVICE_CID },
-  { "@mozilla.org/tcp-socket-child;1", &kTCPSOCKETCHILD_CID },
-  { "@mozilla.org/tcp-socket-parent;1", &kTCPSOCKETPARENT_CID },
-  { "@mozilla.org/tcp-server-socket-child;1", &kTCPSERVERSOCKETCHILD_CID },
   { "@mozilla.org/udp-socket-child;1", &kUDPSOCKETCHILD_CID },
   { TIMESERVICE_CONTRACTID, &kNS_TIMESERVICE_CID },
   { MEDIASTREAMCONTROLLERSERVICE_CONTRACTID, &kNS_MEDIASTREAMCONTROLLERSERVICE_CID },

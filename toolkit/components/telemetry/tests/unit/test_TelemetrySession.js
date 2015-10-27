@@ -55,7 +55,7 @@ const PR_TRUNCATE = 0x20;
 const RW_OWNER = parseInt("0600", 8);
 
 const NUMBER_OF_THREADS_TO_LAUNCH = 30;
-let gNumberOfThreadsLaunched = 0;
+var gNumberOfThreadsLaunched = 0;
 
 const MS_IN_ONE_HOUR  = 60 * 60 * 1000;
 const MS_IN_ONE_DAY   = 24 * MS_IN_ONE_HOUR;
@@ -74,7 +74,7 @@ XPCOMUtils.defineLazyGetter(this, "DATAREPORTING_PATH", function() {
   return OS.Path.join(OS.Constants.Path.profileDir, DATAREPORTING_DIR);
 });
 
-let gClientID = null;
+var gClientID = null;
 
 function generateUUID() {
   let str = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator).generateUUID().toString();
@@ -100,7 +100,7 @@ function sendPing() {
   }
 }
 
-let clearPendingPings = Task.async(function*() {
+var clearPendingPings = Task.async(function*() {
   const pending = yield TelemetryStorage.loadPendingPingList();
   for (let p of pending) {
     yield TelemetryStorage.removePendingPing(p.id);
@@ -286,12 +286,10 @@ function checkPayload(payload, reason, successfulPings, savedPings) {
   const TELEMETRY_TEST_COUNT = "TELEMETRY_TEST_COUNT";
   const TELEMETRY_TEST_KEYED_FLAG = "TELEMETRY_TEST_KEYED_FLAG";
   const TELEMETRY_TEST_KEYED_COUNT = "TELEMETRY_TEST_KEYED_COUNT";
-  const READ_SAVED_PING_SUCCESS = "READ_SAVED_PING_SUCCESS";
 
   if (successfulPings > 0) {
     Assert.ok(TELEMETRY_PING in payload.histograms);
   }
-  Assert.ok(READ_SAVED_PING_SUCCESS in payload.histograms);
   Assert.ok(TELEMETRY_TEST_FLAG in payload.histograms);
   Assert.ok(TELEMETRY_TEST_COUNT in payload.histograms);
 
@@ -346,9 +344,6 @@ function checkPayload(payload, reason, successfulPings, savedPings) {
     Assert.equal(uneval(tc), uneval(expected_tc));
   }
 
-  let h = payload.histograms[READ_SAVED_PING_SUCCESS];
-  Assert.equal(h.values[0], 1);
-
   // The ping should include data from memory reporters.  We can't check that
   // this data is correct, because we can't control the values returned by the
   // memory reporters.  But we can at least check that the data is there.
@@ -369,6 +364,10 @@ function checkPayload(payload, reason, successfulPings, savedPings) {
 
   Assert.ok(("mainThread" in payload.slowSQL) &&
                 ("otherThreads" in payload.slowSQL));
+
+  Assert.ok(("IceCandidatesStats" in payload.webrtc) &&
+                ("webrtc" in payload.webrtc.IceCandidatesStats) &&
+                ("loop" in payload.webrtc.IceCandidatesStats));
 
   // Check keyed histogram payload.
 
@@ -485,17 +484,6 @@ add_task(function* test_expiredHistogram() {
 
   do_check_eq(TelemetrySession.getPayload()["histograms"][histogram_id], undefined);
   do_check_eq(TelemetrySession.getPayload()["histograms"]["TELEMETRY_TEST_EXPIRED"], undefined);
-});
-
-// Checks that an invalid histogram file is deleted if TelemetryStorage fails to parse it.
-add_task(function* test_runInvalidJSON() {
-  let pingFile = getSavedPingFile("invalid-histograms.dat");
-
-  writeStringToFile(pingFile, "this.is.invalid.JSON");
-  do_check_true(pingFile.exists());
-
-  yield TelemetryStorage.testLoadHistograms(pingFile);
-  do_check_false(pingFile.exists());
 });
 
 // Sends a ping to a non existing server. If we remove this test, we won't get
@@ -1586,7 +1574,7 @@ add_task(function* test_schedulerNothingDue() {
 add_task(function* test_pingExtendedStats() {
   const EXTENDED_PAYLOAD_FIELDS = [
     "chromeHangs", "threadHangStats", "log", "slowSQL", "fileIOReports", "lateWrites",
-    "addonHistograms", "addonDetails", "UIMeasurements",
+    "addonHistograms", "addonDetails", "UIMeasurements", "webrtc"
   ];
 
   // Disable sending extended statistics.

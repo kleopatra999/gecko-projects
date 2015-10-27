@@ -82,7 +82,7 @@ protected:
                                const ClonedMessageData& aData,
                                InfallibleTArray<jsipc::CpowEntry>&& aCpows,
                                const IPC::Principal& aPrincipal,
-                               nsTArray<StructuredCloneIPCHelper>* aRetvals) override;
+                               nsTArray<StructuredCloneData>* aRetvals) override;
   virtual bool RecvAsyncMessage(const nsString& aMsg,
                                 const ClonedMessageData& aData,
                                 InfallibleTArray<jsipc::CpowEntry>&& aCpows,
@@ -109,7 +109,7 @@ protected:
   DISALLOW_EVIL_CONSTRUCTORS(ContentBridgeParent);
 
 protected: // members
-  nsRefPtr<ContentBridgeParent> mSelfRef;
+  RefPtr<ContentBridgeParent> mSelfRef;
   Transport* mTransport; // owned
   ContentParentId mChildID;
   bool mIsForApp;

@@ -4,7 +4,7 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu} = Components;
 
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
@@ -18,7 +18,7 @@ const PREF_UNIFIED_OPTIN = "toolkit.telemetry.unifiedIsOptIn";
 const IS_V4 = Preferences.get(PREF_UNIFIED, false) &&
               !Preferences.get(PREF_UNIFIED_OPTIN, false);
 
-let healthReportWrapper = {
+var healthReportWrapper = {
   init: function () {
     let iframe = document.getElementById("remote-report");
     iframe.addEventListener("load", healthReportWrapper.initRemotePage, false);

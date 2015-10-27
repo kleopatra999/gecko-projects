@@ -18,6 +18,7 @@
 #include "nsIContentViewerContainer.h"
 #include "nsIDOMStorageManager.h"
 #include "nsDocLoader.h"
+#include "mozilla/BasePrincipal.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WeakPtr.h"
 #include "mozilla/TimeStamp.h"
@@ -58,6 +59,7 @@
 #include "prtime.h"
 #include "nsRect.h"
 #include "Units.h"
+#include "nsIDeprecationWarner.h"
 
 namespace mozilla {
 namespace dom {
@@ -109,7 +111,7 @@ public:
 
   int32_t GetDelay() { return mDelay ;}
 
-  nsRefPtr<nsDocShell> mDocShell;
+  RefPtr<nsDocShell> mDocShell;
   nsCOMPtr<nsIURI> mURI;
   int32_t mDelay;
   bool mRepeat;
@@ -145,6 +147,7 @@ class nsDocShell final
   , public nsIClipboardCommands
   , public nsIDOMStorageManager
   , public nsINetworkInterceptController
+  , public nsIDeprecationWarner
   , public mozilla::SupportsWeakPtr<nsDocShell>
 {
   friend class nsDSURIContentListener;
@@ -176,6 +179,7 @@ public:
   NS_DECL_NSICLIPBOARDCOMMANDS
   NS_DECL_NSIWEBSHELLSERVICES
   NS_DECL_NSINETWORKINTERCEPTCONTROLLER
+  NS_DECL_NSIDEPRECATIONWARNER
   NS_FORWARD_SAFE_NSIDOMSTORAGEMANAGER(TopSessionStorageManager())
 
   NS_IMETHOD Stop() override
@@ -227,6 +231,7 @@ public:
   NS_IMETHOD SetPrivateBrowsing(bool) override;
   NS_IMETHOD GetUseRemoteTabs(bool*) override;
   NS_IMETHOD SetRemoteTabs(bool) override;
+  NS_IMETHOD GetOriginAttributes(JS::MutableHandle<JS::Value>) override;
 
   // Restores a cached presentation from history (mLSHE).
   // This method swaps out the content viewer and simulates loads for
@@ -265,10 +270,11 @@ public:
   }
   bool InFrameSwap();
 
+  mozilla::OriginAttributes GetOriginAttributes();
+
 private:
   // An observed docshell wrapper is created when recording markers is enabled.
   mozilla::UniquePtr<mozilla::ObservedDocShell> mObserved;
-  bool IsObserved() const { return !!mObserved; }
 
   // It is necessary to allow adding a timeline marker wherever a docshell
   // instance is available. This operation happens frequently and needs to
@@ -282,13 +288,18 @@ private:
   friend void mozilla::TimelineConsumers::AddMarkerForDocShell(
     nsDocShell*, const char*, const TimeStamp&, MarkerTracingType);
   friend void mozilla::TimelineConsumers::AddMarkerForDocShell(
-    nsDocShell*, UniquePtr<TimelineMarker>&&);
+    nsDocShell*, UniquePtr<AbstractTimelineMarker>&&);
 
 public:
   // Tell the favicon service that aNewURI has the same favicon as aOldURI.
   static void CopyFavicon(nsIURI* aOldURI,
                           nsIURI* aNewURI,
                           bool aInPrivateBrowsing);
+
+  static nsDocShell* Cast(nsIDocShell* aDocShell)
+  {
+    return static_cast<nsDocShell*>(aDocShell);
+  }
 
 protected:
   virtual ~nsDocShell();
@@ -327,7 +338,12 @@ protected:
   // not have an owner on the channel should just pass null.
   // If aSrcdoc is not void, the load will be considered as a srcdoc load,
   // and the contents of aSrcdoc will be loaded instead of aURI.
+  // aOriginalURI will be set as the originalURI on the channel that does the
+  // load. If aOriginalURI is null, aURI will be set as the originalURI.
+  // If aLoadReplace is true, OLOAD_REPLACE flag will be set to the nsIChannel.
   nsresult DoURILoad(nsIURI* aURI,
+                     nsIURI* aOriginalURI,
+                     bool aLoadReplace,
                      nsIURI* aReferrer,
                      bool aSendReferrer,
                      uint32_t aReferrerPolicy,
@@ -721,7 +737,7 @@ public:
     explicit RestorePresentationEvent(nsDocShell* aDs) : mDocShell(aDs) {}
     void Revoke() { mDocShell = nullptr; }
   private:
-    nsRefPtr<nsDocShell> mDocShell;
+    RefPtr<nsDocShell> mDocShell;
   };
 
 protected:
@@ -770,7 +786,7 @@ protected:
 
   nsCOMPtr<nsISupportsArray> mRefreshURIList;
   nsCOMPtr<nsISupportsArray> mSavedRefreshURIList;
-  nsRefPtr<nsDSURIContentListener> mContentListener;
+  RefPtr<nsDSURIContentListener> mContentListener;
   nsCOMPtr<nsIContentViewer> mContentViewer;
   nsCOMPtr<nsIWidget> mParentWidget;
 
@@ -778,7 +794,7 @@ protected:
   nsCOMPtr<nsIURI> mCurrentURI;
   nsCOMPtr<nsIURI> mReferrerURI;
   uint32_t mReferrerPolicy;
-  nsRefPtr<nsGlobalWindow> mScriptGlobal;
+  RefPtr<nsGlobalWindow> mScriptGlobal;
   nsCOMPtr<nsISHistory> mSessionHistory;
   nsCOMPtr<nsIGlobalHistory2> mGlobalHistory;
   nsCOMPtr<nsIWebBrowserFind> mFind;
@@ -885,9 +901,6 @@ protected:
   // Cached value of the "browser.xul.error_pages.enabled" preference.
   static bool sUseErrorPages;
 
-  // Cached value of the "dom.serviceWorkers.interception.enabled" preference.
-  static bool sInterceptionEnabled;
-
   bool mCreated;
   bool mAllowSubframes;
   bool mAllowPlugins;
@@ -958,7 +971,7 @@ protected:
 
   static nsIURIFixup* sURIFixup;
 
-  nsRefPtr<nsDOMNavigationTiming> mTiming;
+  RefPtr<nsDOMNavigationTiming> mTiming;
 
   // This flag means that mTiming has been initialized but nulled out.
   // We will check the innerWin's timing before creating a new one

@@ -45,6 +45,8 @@
 #ifdef XP_WIN
 #include "nsWindowsDllInterceptor.h"
 #include "mozilla/widget/AudioSession.h"
+#include "WinUtils.h"
+#include <knownfolders.h>
 #endif
 
 #ifdef MOZ_WIDGET_COCOA
@@ -56,6 +58,7 @@
 
 using namespace mozilla;
 using namespace mozilla::plugins;
+using namespace mozilla::widget;
 using mozilla::dom::CrashReporterChild;
 using mozilla::dom::PCrashReporterChild;
 
@@ -158,7 +161,7 @@ PluginModuleChild::PluginModuleChild(bool aIsChrome)
 PluginModuleChild::~PluginModuleChild()
 {
     if (mTransport) {
-        // For some reason IPDL doesn't autmatically delete the channel for a
+        // For some reason IPDL doesn't automatically delete the channel for a
         // bridged protocol (bug 1090570). So we have to do it ourselves. This
         // code is only invoked for PluginModuleChild instances created via
         // bridging; otherwise mTransport is null.
@@ -1971,6 +1974,29 @@ CreateFileAHookFn(LPCSTR fname, DWORD access, DWORD share,
                             ftemplate);
 }
 
+static bool
+GetLocalLowTempPath(size_t aLen, LPWSTR aPath)
+{
+    NS_NAMED_LITERAL_STRING(tempname, "\\Temp");
+    LPWSTR path;
+    if (SUCCEEDED(WinUtils::SHGetKnownFolderPath(FOLDERID_LocalAppDataLow, 0,
+                                                 nullptr, &path))) {
+        if (wcslen(path) + tempname.Length() < aLen) {
+            wcscpy(aPath, path);
+            wcscat(aPath, tempname.get());
+            ::CoTaskMemFree(path);
+            return true;
+        }
+        ::CoTaskMemFree(path);
+    }
+
+    // XP doesn't support SHGetKnownFolderPath and LocalLow
+    if (!GetTempPathW(aLen, aPath)) {
+        return false;
+    }
+    return true;
+}
+
 HANDLE WINAPI
 CreateFileWHookFn(LPCWSTR fname, DWORD access, DWORD share,
                   LPSECURITY_ATTRIBUTES security, DWORD creation, DWORD flags,
@@ -1990,7 +2016,7 @@ CreateFileWHookFn(LPCWSTR fname, DWORD access, DWORD share,
 
         // This is the config file we want to rewrite
         WCHAR tempPath[MAX_PATH+1];
-        if (GetTempPathW(MAX_PATH, tempPath) == 0) {
+        if (GetLocalLowTempPath(MAX_PATH, tempPath) == 0) {
             break;
         }
         WCHAR tempFile[MAX_PATH+1];

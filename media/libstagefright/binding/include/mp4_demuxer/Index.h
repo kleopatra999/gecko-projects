@@ -12,7 +12,6 @@
 #include "mp4_demuxer/Stream.h"
 #include "nsISupportsImpl.h"
 
-template<class T> class nsRefPtr;
 template<class T> class nsAutoPtr;
 
 namespace mp4_demuxer
@@ -35,7 +34,7 @@ public:
 private:
   Sample* Get();
   void Next();
-  nsRefPtr<Index> mIndex;
+  RefPtr<Index> mIndex;
   size_t mCurrentMoof;
   size_t mCurrentSample;
 };
@@ -51,6 +50,7 @@ public:
     uint64_t end_offset;
     uint64_t start_composition;
     uint64_t end_composition;
+    uint64_t start_decode;
     bool sync;
   };
 

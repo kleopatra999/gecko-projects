@@ -10,7 +10,6 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Move.h"
 #include "nsTHashtable.h"
-#include "prlock.h"
 #include "nsDebug.h"
 
 // These are the codes returned by |EnumReadFunction| and |EnumFunction|, which
@@ -296,6 +295,15 @@ public:
   {
     return aMallocSizeOf(this) + ShallowSizeOfExcludingThis(aMallocSizeOf);
   }
+
+  /**
+   * Swap the elements in this hashtable with the elements in aOther.
+   */
+  void SwapElements(nsBaseHashtable& aOther)
+  {
+    nsTHashtable<EntryType>::SwapElements(aOther);
+  }
+
 
 #ifdef DEBUG
   using nsTHashtable<EntryType>::MarkImmutable;

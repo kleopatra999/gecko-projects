@@ -58,7 +58,7 @@ XPCOMUtils.defineLazyGetter(Services, "ppmm", () => {
            .QueryInterface(Ci.nsIProcessScriptLoader);
 });
 
-let initTable = [
+var initTable = [
   ["androidBridge", "@mozilla.org/android/bridge;1", "nsIAndroidBridge",
    AppConstants.platform == "android"],
   ["appShell", "@mozilla.org/appshell/appShellService;1", "nsIAppShellService"],
@@ -101,6 +101,7 @@ let initTable = [
   ["uriFixup", "@mozilla.org/docshell/urifixup;1", "nsIURIFixup"],
   ["blocklist", "@mozilla.org/extensions/blocklist;1", "nsIBlocklistService"],
   ["netUtils", "@mozilla.org/network/util;1", "nsINetUtil"],
+  ["loadContextInfo", "@mozilla.org/load-context-info-factory;1", "nsILoadContextInfoFactory"],
 ];
 
 initTable.forEach(([name, contract, intf, enabled = true]) => {

@@ -37,6 +37,7 @@ from mozharness.base.python import VirtualenvMixin
 from mozharness.base.python import InfluxRecordingMixin
 from mozharness.mozilla.building.buildbase import MakeUploadOutputParser
 from mozharness.mozilla.building.buildb2gbase import B2GBuildBaseScript, B2GMakefileErrorList
+from mozharness.base.script import PostScriptRun
 
 
 class B2GBuild(LocalesMixin, PurgeMixin,
@@ -549,6 +550,7 @@ class B2GBuild(LocalesMixin, PurgeMixin,
             cmds = [self.generate_build_command()]
         else:
             cmds = [self.generate_build_command(t) for t in build_targets]
+
         env = self.query_build_env()
         if self.config.get('gaia_languages_file'):
             env['LOCALE_BASEDIR'] = dirs['gaia_l10n_base_dir']
@@ -635,7 +637,7 @@ class B2GBuild(LocalesMixin, PurgeMixin,
             return
 
         self.checkout_tools()
-        cmd = self.query_moz_sign_cmd(formats='b2gmar')
+        cmd = self.query_moz_sign_cmd(formats=['b2gmar'])
         cmd.append(self.query_marfile_path())
 
         retval = self.run_command(cmd)
@@ -720,14 +722,9 @@ class B2GBuild(LocalesMixin, PurgeMixin,
                 if base_pattern in public_upload_patterns:
                     public_files.append(f)
 
-        device_name = self.config['target'].split('-')[0]
-        blobfree_zip = os.path.join(
-                        dirs['work_dir'],
-                        'out',
-                        'target',
-                        'product',
-                        device_name,
-                        device_name + '.blobfree-dist.zip')
+        device_name   = os.path.basename(output_dir)
+        blobfree_dist = device_name + '.blobfree-dist.zip'
+        blobfree_zip  = os.path.join(output_dir, blobfree_dist)
 
         if os.path.exists(blobfree_zip):
             public_files.append(blobfree_zip)
@@ -1110,6 +1107,13 @@ class B2GBuild(LocalesMixin, PurgeMixin,
         self.set_buildbot_property("isOSUpdate", self.isOSUpdate)
 
         self.submit_balrog_updates(product='b2g')
+
+    @PostScriptRun
+    def _remove_userconfig(self):
+        self.info("Cleanup .userconfig file.")
+        dirs = self.query_abs_dirs()
+        userconfig_path = os.path.join(dirs["work_dir"], ".userconfig")
+        os.remove(userconfig_path)
 
 # main {{{1
 if __name__ == '__main__':

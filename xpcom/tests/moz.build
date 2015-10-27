@@ -75,11 +75,6 @@ if CONFIG['MOZ_MEMORY']:
         'TestJemalloc',
     ])
 
-# XXX Make these tests work in libxul builds.
-#CPP_UNIT_TESTS += [
-#    'TestAtoms',
-#]
-
 # FIXME: bug 577500 TestStaticAtoms fails when run in dist/bin
 #CPP_UNIT_TESTS += [
 #    'TestStaticAtoms',
@@ -108,3 +103,6 @@ LOCAL_INCLUDES += [
 RESOURCE_FILES += [
     'test.properties',
 ]
+
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']

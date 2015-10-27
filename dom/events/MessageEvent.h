@@ -8,18 +8,19 @@
 #define mozilla_dom_MessageEvent_h_
 
 #include "mozilla/dom/Event.h"
+#include "mozilla/dom/BindingUtils.h"
+#include "mozilla/dom/MessagePortList.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIDOMMessageEvent.h"
-#include "mozilla/dom/MessagePortList.h"
 
 namespace mozilla {
 namespace dom {
 
 struct MessageEventInit;
 class MessagePort;
-class MessagePortBase;
 class MessagePortList;
 class OwningWindowProxyOrMessagePortOrClient;
+class WindowProxyOrMessagePort;
 
 namespace workers {
 
@@ -86,6 +87,13 @@ public:
               const MessageEventInit& aEventInit,
               ErrorResult& aRv);
 
+  void InitMessageEvent(JSContext* aCx, const nsAString& aType, bool aCanBubble,
+                        bool aCancelable, JS::Handle<JS::Value> aData,
+                        const nsAString& aOrigin, const nsAString& aLastEventId,
+                        const Nullable<WindowProxyOrMessagePort>& aSource,
+                        const Nullable<Sequence<OwningNonNull<MessagePort>>>& aPorts,
+                        ErrorResult& aRv);
+
 protected:
   ~MessageEvent();
 
@@ -94,9 +102,9 @@ private:
   nsString mOrigin;
   nsString mLastEventId;
   nsCOMPtr<nsIDOMWindow> mWindowSource;
-  nsRefPtr<MessagePortBase> mPortSource;
-  nsRefPtr<workers::ServiceWorkerClient> mClientSource;
-  nsRefPtr<MessagePortList> mPorts;
+  RefPtr<MessagePort> mPortSource;
+  RefPtr<workers::ServiceWorkerClient> mClientSource;
+  RefPtr<MessagePortList> mPorts;
 };
 
 } // namespace dom

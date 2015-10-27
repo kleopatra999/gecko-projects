@@ -81,7 +81,7 @@ namespace
   class AsyncTimeEventRunner : public nsRunnable
   {
   protected:
-    nsRefPtr<nsIContent> mTarget;
+    RefPtr<nsIContent> mTarget;
     EventMessage         mMsg;
     int32_t              mDetail;
 
@@ -180,7 +180,7 @@ private:
 // Templated helper functions
 
 // Selectively remove elements from an array of type
-// nsTArray<nsRefPtr<nsSMILInstanceTime> > with O(n) performance.
+// nsTArray<RefPtr<nsSMILInstanceTime> > with O(n) performance.
 template <class TestFunctor>
 void
 nsSMILTimedElement::RemoveInstanceTimes(InstanceTimeList& aArray,
@@ -405,7 +405,7 @@ nsSMILTimedElement::AddInstanceTime(nsSMILInstanceTime* aInstanceTime,
 
   aInstanceTime->SetSerial(++mInstanceSerialIndex);
   InstanceTimeList& instanceList = aIsBegin ? mBeginInstances : mEndInstances;
-  nsRefPtr<nsSMILInstanceTime>* inserted =
+  RefPtr<nsSMILInstanceTime>* inserted =
     instanceList.InsertElementSorted(aInstanceTime, InstanceTimeComparator());
   if (!inserted) {
     NS_WARNING("Insufficient memory to insert instance time");
@@ -643,7 +643,7 @@ nsSMILTimedElement::DoSampleAt(nsSMILTime aContainerTime, bool aEndOnly)
             mClient->Activate(mCurrentInterval->Begin()->Time().GetMillis());
           }
           if (mSeekState == SEEK_NOT_SEEKING) {
-            FireTimeEventAsync(NS_SMIL_BEGIN, 0);
+            FireTimeEventAsync(eSMILBeginEvent, 0);
           }
           if (HasPlayed()) {
             Reset(); // Apply restart behaviour
@@ -679,7 +679,7 @@ nsSMILTimedElement::DoSampleAt(nsSMILTime aContainerTime, bool aEndOnly)
           }
           mCurrentInterval->FixEnd();
           if (mSeekState == SEEK_NOT_SEEKING) {
-            FireTimeEventAsync(NS_SMIL_END, 0);
+            FireTimeEventAsync(eSMILEndEvent, 0);
           }
           mCurrentRepeatIteration = 0;
           mOldIntervals.AppendElement(mCurrentInterval.forget());
@@ -727,7 +727,7 @@ nsSMILTimedElement::DoSampleAt(nsSMILTime aContainerTime, bool aEndOnly)
               mCurrentRepeatIteration != prevRepeatIteration &&
               mCurrentRepeatIteration &&
               mSeekState == SEEK_NOT_SEEKING) {
-              FireTimeEventAsync(NS_SMIL_REPEAT,
+              FireTimeEventAsync(eSMILRepeatEvent,
                             static_cast<int32_t>(mCurrentRepeatIteration));
             }
           }
@@ -1403,7 +1403,7 @@ nsSMILTimedElement::ApplyEarlyEnd(const nsSMILTimeValue& aSampleTime)
         // Generate a new instance time for the early end since the
         // existing instance time is part of some dependency chain that we
         // don't want to participate in.
-        nsRefPtr<nsSMILInstanceTime> newEarlyEnd =
+        RefPtr<nsSMILInstanceTime> newEarlyEnd =
           new nsSMILInstanceTime(earlyEnd->Time());
         mCurrentInterval->SetEnd(*newEarlyEnd);
       } else {
@@ -1518,14 +1518,14 @@ nsSMILTimedElement::DoPostSeek()
   case SEEK_FORWARD_FROM_ACTIVE:
   case SEEK_BACKWARD_FROM_ACTIVE:
     if (mElementState != STATE_ACTIVE) {
-      FireTimeEventAsync(NS_SMIL_END, 0);
+      FireTimeEventAsync(eSMILEndEvent, 0);
     }
     break;
 
   case SEEK_FORWARD_FROM_INACTIVE:
   case SEEK_BACKWARD_FROM_INACTIVE:
     if (mElementState == STATE_ACTIVE) {
-      FireTimeEventAsync(NS_SMIL_BEGIN, 0);
+      FireTimeEventAsync(eSMILBeginEvent, 0);
     }
     break;
 
@@ -1719,8 +1719,8 @@ nsSMILTimedElement::GetNextInterval(const nsSMILInterval* aPrevInterval,
     beginAfter.SetMillis(INT64_MIN);
   }
 
-  nsRefPtr<nsSMILInstanceTime> tempBegin;
-  nsRefPtr<nsSMILInstanceTime> tempEnd;
+  RefPtr<nsSMILInstanceTime> tempBegin;
+  RefPtr<nsSMILInstanceTime> tempEnd;
 
   while (true) {
     // Calculate begin time
@@ -2211,7 +2211,7 @@ nsSMILTimedElement::AddInstanceTimeFromCurrentTime(nsSMILTime aCurrentTime,
 
   nsSMILTimeValue timeVal(aCurrentTime + int64_t(NS_round(offset)));
 
-  nsRefPtr<nsSMILInstanceTime> instanceTime =
+  RefPtr<nsSMILInstanceTime> instanceTime =
     new nsSMILInstanceTime(timeVal, nsSMILInstanceTime::SOURCE_DOM);
 
   AddInstanceTime(instanceTime, aIsBegin);

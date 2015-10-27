@@ -25,6 +25,8 @@
 
 #include "nsIAndroidBridge.h"
 #include "nsIMobileMessageCallback.h"
+#include "nsIMobileMessageCursorCallback.h"
+#include "nsIDOMDOMCursor.h"
 
 #include "mozilla/Likely.h"
 #include "mozilla/StaticPtr.h"
@@ -74,15 +76,6 @@ typedef struct AndroidSystemColors {
     nscolor panelColorBackground;
 } AndroidSystemColors;
 
-class nsFilePickerCallback : nsISupports {
-public:
-    NS_DECL_THREADSAFE_ISUPPORTS
-    virtual void handleResult(nsAString& filePath) = 0;
-    nsFilePickerCallback() {}
-protected:
-    virtual ~nsFilePickerCallback() {}
-};
-
 class DelayedTask {
 public:
     DelayedTask(Task* aTask, int aDelayMs) {
@@ -106,6 +99,42 @@ public:
 private:
     Task* mTask;
     mozilla::TimeStamp mRunTime;
+};
+
+class ThreadCursorContinueCallback : public nsICursorContinueCallback
+{
+public:
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSICURSORCONTINUECALLBACK
+
+    ThreadCursorContinueCallback(int aRequestId)
+        : mRequestId(aRequestId)
+    {
+    }
+private:
+    virtual ~ThreadCursorContinueCallback()
+    {
+    }
+
+    int mRequestId;
+};
+
+class MessageCursorContinueCallback : public nsICursorContinueCallback
+{
+public:
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSICURSORCONTINUECALLBACK
+
+    MessageCursorContinueCallback(int aRequestId)
+        : mRequestId(aRequestId)
+    {
+    }
+private:
+    virtual ~MessageCursorContinueCallback()
+    {
+    }
+
+    int mRequestId;
 };
 
 class AndroidBridge final
@@ -241,10 +270,29 @@ public:
                      nsIMobileMessageCallback* aRequest);
     void GetMessage(int32_t aMessageId, nsIMobileMessageCallback* aRequest);
     void DeleteMessage(int32_t aMessageId, nsIMobileMessageCallback* aRequest);
-    void CreateMessageList(const dom::mobilemessage::SmsFilterData& aFilter,
-                           bool aReverse, nsIMobileMessageCallback* aRequest);
-    void GetNextMessageInList(int32_t aListId, nsIMobileMessageCallback* aRequest);
+    void MarkMessageRead(int32_t aMessageId,
+                         bool aValue,
+                         bool aSendReadReport,
+                         nsIMobileMessageCallback* aRequest);
+    already_AddRefed<nsICursorContinueCallback>
+    CreateMessageCursor(bool aHasStartDate,
+                        uint64_t aStartDate,
+                        bool aHasEndDate,
+                        uint64_t aEndDate,
+                        const char16_t** aNumbers,
+                        uint32_t aNumbersCount,
+                        const nsAString& aDelivery,
+                        bool aHasRead,
+                        bool aRead,
+                        bool aHasThreadId,
+                        uint64_t aThreadId,
+                        bool aReverse,
+                        nsIMobileMessageCursorCallback* aRequest);
+    already_AddRefed<nsICursorContinueCallback>
+    CreateThreadCursor(nsIMobileMessageCursorCallback* aRequest);
     already_AddRefed<nsIMobileMessageCallback> DequeueSmsRequest(uint32_t aRequestId);
+    nsCOMPtr<nsIMobileMessageCursorCallback> GetSmsCursorRequest(uint32_t aRequestId);
+    already_AddRefed<nsIMobileMessageCursorCallback> DequeueSmsCursorRequest(uint32_t aRequestId);
 
     void GetCurrentNetworkInformation(hal::NetworkInformation* aNetworkInfo);
 
@@ -253,9 +301,13 @@ public:
     void SyncViewportInfo(const LayerIntRect& aDisplayPort, const CSSToLayerScale& aDisplayResolution,
                           bool aLayersUpdated, int32_t aPaintSyncId, ParentLayerRect& aScrollRect, CSSToParentLayerScale& aScale,
                           ScreenMargin& aFixedLayerMargins);
-    void SyncFrameMetrics(const ParentLayerPoint& aScrollOffset, float aZoom, const CSSRect& aCssPageRect,
-                          bool aLayersUpdated, const CSSRect& aDisplayPort, const CSSToLayerScale& aDisplayResolution,
-                          bool aIsFirstPaint, ScreenMargin& aFixedLayerMargins);
+    void SyncFrameMetrics(const ParentLayerPoint& aScrollOffset,
+                          const CSSToParentLayerScale& aZoom,
+                          const CSSRect& aCssPageRect,
+                          const CSSRect& aDisplayPort,
+                          const CSSToLayerScale& aPaintedResolution,
+                          bool aLayersUpdated, int32_t aPaintSyncId,
+                          ScreenMargin& aFixedLayerMargins);
 
     void AddPluginView(jobject view, const LayoutDeviceRect& rect, bool isFullScreen);
 
@@ -305,9 +357,12 @@ public:
     static nsresult GetExternalPublicDirectory(const nsAString& aType, nsAString& aPath);
 
 protected:
+    static nsDataHashtable<nsStringHashKey, nsString> sStoragePaths;
+
     static pthread_t sJavaUiThread;
     static AndroidBridge* sBridge;
-    nsTArray<nsCOMPtr<nsIMobileMessageCallback> > mSmsRequests;
+    nsTArray<nsCOMPtr<nsIMobileMessageCallback>> mSmsRequests;
+    nsTArray<nsCOMPtr<nsIMobileMessageCursorCallback>> mSmsCursorRequests;
 
     widget::GeckoLayerClient::GlobalRef mLayerClient;
 
@@ -328,6 +383,7 @@ protected:
     int mAPIVersion;
 
     bool QueueSmsRequest(nsIMobileMessageCallback* aRequest, uint32_t* aRequestIdOut);
+    bool QueueSmsCursorRequest(nsIMobileMessageCursorCallback* aRequest, uint32_t* aRequestIdOut);
 
     // intput stream
     jclass jReadableByteChannel;

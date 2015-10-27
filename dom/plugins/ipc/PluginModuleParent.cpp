@@ -84,7 +84,7 @@ static const char kContentTimeoutPref[] = "dom.ipc.plugins.contentTimeoutSecs";
 static const char kChildTimeoutPref[] = "dom.ipc.plugins.timeoutSecs";
 static const char kParentTimeoutPref[] = "dom.ipc.plugins.parentTimeoutSecs";
 static const char kLaunchTimeoutPref[] = "dom.ipc.plugins.processLaunchTimeoutSecs";
-static const char kAsyncInitPref[] = "dom.ipc.plugins.asyncInit";
+static const char kAsyncInitPref[] = "dom.ipc.plugins.asyncInit.enabled";
 #ifdef XP_WIN
 static const char kHangUITimeoutPref[] = "dom.ipc.plugins.hangUITimeoutSecs";
 static const char kHangUIMinDisplayPref[] = "dom.ipc.plugins.hangUIMinDisplaySecs";
@@ -113,8 +113,8 @@ mozilla::plugins::SetupBridge(uint32_t aPluginId,
     }
 
     PluginModuleChromeParent::ClearInstantiationFlag();
-    nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst();
-    nsRefPtr<nsNPAPIPlugin> plugin;
+    RefPtr<nsPluginHost> host = nsPluginHost::GetInst();
+    RefPtr<nsNPAPIPlugin> plugin;
     *rv = host->GetPluginForContentProcess(aPluginId, getter_AddRefs(plugin));
     if (NS_FAILED(*rv)) {
         return true;
@@ -306,7 +306,7 @@ public:
         return sIsLoadModuleOnStack;
     }
 
-    class MOZ_STACK_CLASS NotifyLoadingModule
+    class MOZ_RAII NotifyLoadingModule
     {
     public:
         explicit NotifyLoadingModule(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM)
@@ -360,12 +360,12 @@ mozilla::plugins::TerminatePlugin(uint32_t aPluginId,
 {
     MOZ_ASSERT(XRE_IsParentProcess());
 
-    nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst();
+    RefPtr<nsPluginHost> host = nsPluginHost::GetInst();
     nsPluginTag* pluginTag = host->PluginWithId(aPluginId);
     if (!pluginTag || !pluginTag->mPlugin) {
         return;
     }
-    nsRefPtr<nsNPAPIPlugin> plugin = pluginTag->mPlugin;
+    RefPtr<nsNPAPIPlugin> plugin = pluginTag->mPlugin;
     PluginModuleChromeParent* chromeParent =
         static_cast<PluginModuleChromeParent*>(plugin->GetLibrary());
     chromeParent->TerminateChildProcess(MessageLoop::current(),
@@ -690,6 +690,9 @@ PluginModuleContentParent::PluginModuleContentParent(bool aAllowAsyncInit)
 
 PluginModuleContentParent::~PluginModuleContentParent()
 {
+    XRE_GetIOMessageLoop()->PostTask(FROM_HERE,
+                                     new DeleteTask<Transport>(GetTransport()));
+
     Preferences::UnregisterCallback(TimeoutChanged, kContentTimeoutPref, this);
 }
 
@@ -1189,7 +1192,7 @@ PluginModuleChromeParent::ShouldContinueFromReplyTimeout()
 bool
 PluginModuleContentParent::ShouldContinueFromReplyTimeout()
 {
-    nsRefPtr<ProcessHangMonitor> monitor = ProcessHangMonitor::Get();
+    RefPtr<ProcessHangMonitor> monitor = ProcessHangMonitor::Get();
     if (!monitor) {
         return true;
     }
@@ -1352,7 +1355,7 @@ PluginModuleChromeParent::TerminateChildProcess(MessageLoop* aMsgLoop,
 bool
 PluginModuleParent::GetPluginDetails()
 {
-    nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst();
+    RefPtr<nsPluginHost> host = nsPluginHost::GetInst();
     if (!host) {
         return false;
     }
@@ -1481,7 +1484,7 @@ PluginModuleChromeParent::OnHangUIContinue()
 CrashReporterParent*
 PluginModuleChromeParent::CrashReporter()
 {
-    return static_cast<CrashReporterParent*>(ManagedPCrashReporterParent()[0]);
+    return static_cast<CrashReporterParent*>(LoneManagedOrNull(ManagedPCrashReporterParent()));
 }
 
 #ifdef MOZ_CRASHREPORTER_INJECTOR
@@ -2378,7 +2381,7 @@ PluginModuleParent::InitAsyncSurrogates()
 
 bool
 PluginModuleParent::RemovePendingSurrogate(
-                            const nsRefPtr<PluginAsyncSurrogate>& aSurrogate)
+                            const RefPtr<PluginAsyncSurrogate>& aSurrogate)
 {
     return mSurrogateInstances.RemoveElement(aSurrogate);
 }
@@ -2559,27 +2562,12 @@ PluginModuleParent::NPP_New(NPMIMEType pluginType, NPP instance,
         }
 
         if (!mNPInitialized) {
-            nsRefPtr<PluginAsyncSurrogate> surrogate =
+            RefPtr<PluginAsyncSurrogate> surrogate =
                 PluginAsyncSurrogate::Cast(instance);
             mSurrogateInstances.AppendElement(surrogate);
             *error = NPERR_NO_ERROR;
             return NS_PLUGIN_INIT_PENDING;
         }
-    }
-
-    if (mPluginName.IsEmpty()) {
-        GetPluginDetails();
-        InitQuirksModes(nsDependentCString(pluginType));
-        /** mTimeBlocked measures the time that the main thread has been blocked
-         *  on plugin module initialization. As implemented, this is the sum of
-         *  plugin-container launch + toolhelp32 snapshot + NP_Initialize.
-         *  We don't accumulate its value until here because the plugin info
-         *  is not available until *after* NP_Initialize.
-         */
-        Telemetry::Accumulate(Telemetry::BLOCKED_ON_PLUGIN_MODULE_INIT_MS,
-                              GetHistogramKey(),
-                              static_cast<uint32_t>(mTimeBlocked.ToMilliseconds()));
-        mTimeBlocked = TimeDuration();
     }
 
     // create the instance on the other side
@@ -2615,6 +2603,21 @@ PluginModuleParent::NPP_NewInternal(NPMIMEType pluginType, NPP instance,
                                     InfallibleTArray<nsCString>& values,
                                     NPSavedData* saved, NPError* error)
 {
+    if (mPluginName.IsEmpty()) {
+        GetPluginDetails();
+        InitQuirksModes(nsDependentCString(pluginType));
+        /** mTimeBlocked measures the time that the main thread has been blocked
+         *  on plugin module initialization. As implemented, this is the sum of
+         *  plugin-container launch + toolhelp32 snapshot + NP_Initialize.
+         *  We don't accumulate its value until here because the plugin info
+         *  is not available until *after* NP_Initialize.
+         */
+        Telemetry::Accumulate(Telemetry::BLOCKED_ON_PLUGIN_MODULE_INIT_MS,
+                              GetHistogramKey(),
+                              static_cast<uint32_t>(mTimeBlocked.ToMilliseconds()));
+        mTimeBlocked = TimeDuration();
+    }
+
     nsCaseInsensitiveUTF8StringArrayComparator comparator;
     NS_NAMED_LITERAL_CSTRING(srcAttributeName, "src");
     auto srcAttributeIndex = names.IndexOf(srcAttributeName, 0, comparator);
@@ -2632,7 +2635,7 @@ PluginModuleParent::NPP_NewInternal(NPMIMEType pluginType, NPP instance,
     }
 
     // Release the surrogate reference that was in pdata
-    nsRefPtr<PluginAsyncSurrogate> surrogate(
+    RefPtr<PluginAsyncSurrogate> surrogate(
         dont_AddRef(PluginAsyncSurrogate::Cast(instance)));
     // Now replace it with the instance
     instance->pdata = static_cast<PluginDataResolver*>(parentInstance);
@@ -2963,7 +2966,7 @@ PluginModuleParent::RecvNPN_ReloadPlugins(const bool& aReloadPages)
 bool
 PluginModuleChromeParent::RecvNotifyContentModuleDestroyed()
 {
-    nsRefPtr<nsPluginHost> host = nsPluginHost::GetInst();
+    RefPtr<nsPluginHost> host = nsPluginHost::GetInst();
     if (host) {
         host->NotifyContentModuleDestroyed(mPluginId);
     }
@@ -3151,7 +3154,7 @@ PluginProfilerObserver::Observe(nsISupports *aSubject,
     } else if (!strcmp(aTopic, "profiler-stopped")) {
         unused << mPmp->SendStopProfiler();
     } else if (!strcmp(aTopic, "profiler-subprocess-gather")) {
-        nsRefPtr<ProfileGatherer> gatherer = static_cast<ProfileGatherer*>(aSubject);
+        RefPtr<ProfileGatherer> gatherer = static_cast<ProfileGatherer*>(aSubject);
         mPmp->GatherAsyncProfile(gatherer);
     } else if (!strcmp(aTopic, "profiler-subprocess")) {
         nsCOMPtr<nsIProfileSaveEvent> pse = do_QueryInterface(aSubject);

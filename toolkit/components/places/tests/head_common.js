@@ -68,10 +68,10 @@ XPCOMUtils.defineLazyGetter(this, "SMALLSVG_DATA_URI", function() {
          "IGhlaWdodD0iNDEuOCIvPg0KPC9zdmc%2BDQo%3D");
 });
 
-let gTestDir = do_get_cwd();
+var gTestDir = do_get_cwd();
 
 // Initialize profile.
-let gProfD = do_get_profile();
+var gProfD = do_get_profile();
 
 // Remove any old database.
 clearDB();
@@ -82,7 +82,9 @@ clearDB();
  * @param aSpec
  *        URLString of the uri.
  */
-function uri(aSpec) NetUtil.newURI(aSpec);
+function uri(aSpec) {
+  return NetUtil.newURI(aSpec);
+}
 
 
 /**
@@ -96,7 +98,7 @@ function uri(aSpec) NetUtil.newURI(aSpec);
  *
  * @return The database connection or null if unable to get one.
  */
-let gDBConn;
+var gDBConn;
 function DBConn(aForceNewConnection) {
   if (!aForceNewConnection) {
     let db = PlacesUtils.history.QueryInterface(Ci.nsPIPlacesDatabase)
@@ -377,7 +379,7 @@ function promiseTopicObserved(aTopic)
 /**
  * Simulates a Places shutdown.
  */
-let shutdownPlaces = function() {
+var shutdownPlaces = function() {
   do_print("shutdownPlaces: starting");
   let promise = new Promise(resolve => {
     Services.obs.addObserver(resolve, "places-connection-closed", false);
@@ -730,11 +732,11 @@ function do_compare_arrays(a1, a2, sorted)
     return false;
 
   if (sorted) {
-    return a1.every(function (e, i) e == a2[i]);
+    return a1.every((e, i) => e == a2[i]);
   }
   else {
-    return a1.filter(function (e) a2.indexOf(e) == -1).length == 0 &&
-           a2.filter(function (e) a1.indexOf(e) == -1).length == 0;
+    return a1.filter(e => !a2.includes(e)).length == 0 &&
+           a2.filter(e => !a1.includes(e)).length == 0;
   }
 }
 

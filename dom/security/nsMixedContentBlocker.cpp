@@ -32,8 +32,13 @@
 #include "nsIChannelEventSink.h"
 #include "nsAsyncRedirectVerifyHelper.h"
 #include "mozilla/LoadInfo.h"
+#include "nsISiteSecurityService.h"
 
 #include "mozilla/Logging.h"
+#include "mozilla/Telemetry.h"
+#include "mozilla/dom/ContentChild.h"
+#include "mozilla/ipc/URIUtils.h"
+
 
 using namespace mozilla;
 
@@ -286,7 +291,7 @@ nsMixedContentBlocker::AsyncOnChannelRedirect(nsIChannel* aOldChannel,
     return NS_OK;
   }
 
-  uint32_t contentPolicyType = loadInfo->GetContentPolicyType();
+  nsContentPolicyType contentPolicyType = loadInfo->InternalContentPolicyType();
   nsCOMPtr<nsIPrincipal> requestingPrincipal = loadInfo->LoadingPrincipal();
 
   // Since we are calling shouldLoad() directly on redirects, we don't go through the code
@@ -305,7 +310,7 @@ nsMixedContentBlocker::AsyncOnChannelRedirect(nsIChannel* aOldChannel,
   }
 
   int16_t decision = REJECT_REQUEST;
-  rv = ShouldLoad(nsContentUtils::InternalContentPolicyTypeToExternal(contentPolicyType),
+  rv = ShouldLoad(nsContentUtils::InternalContentPolicyTypeToExternalOrScript(contentPolicyType),
                   newUri,
                   requestingLocation,
                   loadInfo->LoadingNode(),
@@ -342,7 +347,7 @@ nsMixedContentBlocker::ShouldLoad(uint32_t aContentType,
   // callers of this method don't know whether the load went through cached
   // image redirects.  This is handled by direct callers of the static
   // ShouldLoad.
-  nsresult rv = ShouldLoad(false,   //aHadInsecureImageRedirect
+  nsresult rv = ShouldLoad(false,   // aHadInsecureImageRedirect
                            aContentType,
                            aContentLocation,
                            aRequestingLocation,
@@ -373,14 +378,21 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
   // to them.
   MOZ_ASSERT(NS_IsMainThread());
 
-  MOZ_ASSERT(aContentType == nsContentUtils::InternalContentPolicyTypeToExternal(aContentType),
+  MOZ_ASSERT(aContentType == nsContentUtils::InternalContentPolicyTypeToExternalOrScript(aContentType),
              "We should only see external content policy types here.");
+
+  // The content policy type that we receive may be an internal type for
+  // scripts.  Let's remember if we have seen a worker type, and reset it to the
+  // external type in all cases right now.
+  bool isWorkerType = aContentType == nsIContentPolicy::TYPE_INTERNAL_WORKER ||
+                      aContentType == nsIContentPolicy::TYPE_INTERNAL_SHARED_WORKER ||
+                      aContentType == nsIContentPolicy::TYPE_INTERNAL_SERVICE_WORKER;
+  aContentType = nsContentUtils::InternalContentPolicyTypeToExternal(aContentType);
 
   // Assume active (high risk) content and blocked by default
   MixedContentTypes classification = eMixedScript;
   // Make decision to block/reject by default
   *aDecision = REJECT_REQUEST;
-
 
   // Notes on non-obvious decisions:
   //
@@ -621,6 +633,23 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
     return NS_OK;
   }
 
+  // Disallow mixed content loads for workers, shared workers and service
+  // workers.
+  if (isWorkerType) {
+    // For workers, we can assume that we're mixed content at this point, since
+    // the parent is https, and the protocol associated with aContentLocation
+    // doesn't map to the secure URI flags checked above.  Assert this for
+    // sanity's sake
+#ifdef DEBUG
+    bool isHttpsScheme = false;
+    rv = aContentLocation->SchemeIs("https", &isHttpsScheme);
+    NS_ENSURE_SUCCESS(rv, rv);
+    MOZ_ASSERT(!isHttpsScheme);
+#endif
+    *aDecision = REJECT_REQUEST;
+    return NS_OK;
+  }
+
   // Determine if the rootDoc is https and if the user decided to allow Mixed Content
   nsCOMPtr<nsIDocShell> docShell = NS_CP_GetDocShellFromContext(aRequestingContext);
   NS_ENSURE_TRUE(docShell, NS_OK);
@@ -717,6 +746,33 @@ nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
     return NS_OK;
   }
   nsresult stateRV = securityUI->GetState(&state);
+
+  // At this point we know that the request is mixed content, and the only
+  // question is whether we block it.  Record telemetry at this point as to
+  // whether HSTS would have fixed things by making the content location
+  // into an HTTPS URL.
+  //
+  // Note that we count this for redirects as well as primary requests. This
+  // will cause some degree of double-counting, especially when mixed content
+  // is not blocked (e.g., for images).  For more detail, see:
+  //   https://bugzilla.mozilla.org/show_bug.cgi?id=1198572#c19
+  //
+  // We do not count requests aHadInsecureImageRedirect=true, since these are
+  // just an artifact of the image caching system.
+  bool active = (classification == eMixedScript);
+  if (!aHadInsecureImageRedirect) {
+    if (XRE_IsParentProcess()) {
+      AccumulateMixedContentHSTS(aContentLocation, active);
+    } else {
+      // Ask the parent process to do the same call
+      mozilla::dom::ContentChild* cc = mozilla::dom::ContentChild::GetSingleton();
+      if (cc) {
+        mozilla::ipc::URIParams uri;
+        SerializeURI(aContentLocation, uri);
+        cc->SendAccumulateMixedContentHSTS(uri, active);
+      }
+    }
+  }
 
   // If the content is display content, and the pref says display content should be blocked, block it.
   if (sBlockMixedDisplay && classification == eMixedDisplay) {
@@ -856,4 +912,55 @@ nsMixedContentBlocker::ShouldProcess(uint32_t aContentType,
   return ShouldLoad(aContentType, aContentLocation, aRequestingLocation,
                     aRequestingContext, aMimeGuess, aExtra, aRequestPrincipal,
                     aDecision);
+}
+
+enum MixedContentHSTSState {
+  MCB_HSTS_PASSIVE_NO_HSTS   = 0,
+  MCB_HSTS_PASSIVE_WITH_HSTS = 1,
+  MCB_HSTS_ACTIVE_NO_HSTS    = 2,
+  MCB_HSTS_ACTIVE_WITH_HSTS  = 3
+};
+
+// Record information on when HSTS would have made mixed content not mixed
+// content (regardless of whether it was actually blocked)
+void
+nsMixedContentBlocker::AccumulateMixedContentHSTS(nsIURI* aURI, bool aActive)
+{
+  // This method must only be called in the parent, because
+  // nsSiteSecurityService is only available in the parent
+  if (!XRE_IsParentProcess()) {
+    MOZ_ASSERT(false);
+    return;
+  }
+
+  bool hsts;
+  nsresult rv;
+  nsCOMPtr<nsISiteSecurityService> sss = do_GetService(NS_SSSERVICE_CONTRACTID, &rv);
+  if (NS_FAILED(rv)) {
+    return;
+  }
+  rv = sss->IsSecureURI(nsISiteSecurityService::HEADER_HSTS, aURI, 0, &hsts);
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  if (!aActive) {
+    if (!hsts) {
+      Telemetry::Accumulate(Telemetry::MIXED_CONTENT_HSTS,
+                            MCB_HSTS_PASSIVE_NO_HSTS);
+    }
+    else {
+      Telemetry::Accumulate(Telemetry::MIXED_CONTENT_HSTS,
+                            MCB_HSTS_PASSIVE_WITH_HSTS);
+    }
+  } else {
+    if (!hsts) {
+      Telemetry::Accumulate(Telemetry::MIXED_CONTENT_HSTS,
+                            MCB_HSTS_ACTIVE_NO_HSTS);
+    }
+    else {
+      Telemetry::Accumulate(Telemetry::MIXED_CONTENT_HSTS,
+                            MCB_HSTS_ACTIVE_WITH_HSTS);
+    }
+  }
 }

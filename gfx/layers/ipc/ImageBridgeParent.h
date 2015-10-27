@@ -49,8 +49,6 @@ public:
   ImageBridgeParent(MessageLoop* aLoop, Transport* aTransport, ProcessId aChildProcessId);
   ~ImageBridgeParent();
 
-  virtual LayersBackend GetCompositorBackendType() const override;
-
   virtual void ActorDestroy(ActorDestroyReason aWhy) override;
 
   static PImageBridgeParent*
@@ -80,6 +78,7 @@ public:
   bool DeallocPCompositableParent(PCompositableParent* aActor) override;
 
   virtual PTextureParent* AllocPTextureParent(const SurfaceDescriptor& aSharedData,
+                                              const LayersBackend& aLayersBackend,
                                               const TextureFlags& aFlags) override;
   virtual bool DeallocPTextureParent(PTextureParent* actor) override;
 
@@ -151,13 +150,16 @@ public:
                 base::ProcessHandle aPeerProcess,
                 mozilla::ipc::ProtocolCloneContext* aCtx) override;
 
+protected:
+  void OnChannelConnected(int32_t pid) override;
+
 private:
   void DeferredDestroy();
   MessageLoop* mMessageLoop;
   Transport* mTransport;
   // This keeps us alive until ActorDestroy(), at which point we do a
   // deferred destruction of ourselves.
-  nsRefPtr<ImageBridgeParent> mSelfRef;
+  RefPtr<ImageBridgeParent> mSelfRef;
 
   bool mSetChildThreadPriority;
 
@@ -168,7 +170,7 @@ private:
 
   static MessageLoop* sMainLoop;
 
-  nsRefPtr<CompositorThreadHolder> mCompositorThreadHolder;
+  RefPtr<CompositorThreadHolder> mCompositorThreadHolder;
 };
 
 } // namespace layers

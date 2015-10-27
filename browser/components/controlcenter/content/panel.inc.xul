@@ -10,7 +10,7 @@
        orient="vertical">
 
   <broadcasterset>
-    <broadcaster id="identity-popup-content-host" class="identity-popup-headline" crop="end"/>
+    <broadcaster id="identity-popup-content-host" class="identity-popup-headline" crop="start"/>
     <broadcaster id="identity-popup-mcb-learn-more" class="text-link plain" value="&identity.learnMore;"/>
   </broadcasterset>
 
@@ -41,6 +41,7 @@
             <description when-mixedcontent="active-loaded">&identity.activeLoaded;</description>
             <description class="identity-popup-warning-yellow"
                          when-ciphers="weak">&identity.weakEncryption;</description>
+            <description when-loginforms="insecure">&identity.insecureLoginForms;</description>
           </vbox>
         </vbox>
         <button id="identity-popup-security-expander"
@@ -81,11 +82,12 @@
       </hbox>
 
       <!-- Permissions Section -->
-      <hbox id="identity-popup-permissions" class="identity-popup-section">
+      <hbox class="identity-popup-section">
         <vbox id="identity-popup-permissions-content" flex="1">
           <label class="identity-popup-headline"
                  value="&identity.permissions;"/>
           <vbox id="identity-popup-permission-list"/>
+          <description>&identity.permissionsEmpty;</description>
         </vbox>
       </hbox>
     </panelview>
@@ -115,7 +117,11 @@
                      when-connection="secure secure-ev"/>
 
         <!-- Connection is Not Secure -->
-        <description when-connection="not-secure">&identity.description.insecure;</description>
+        <description when-connection="not-secure"
+                     and-when-loginforms="secure">&identity.description.insecure;</description>
+
+        <!-- Insecure login forms -->
+        <description when-loginforms="insecure">&identity.description.insecureLoginForms;</description>
 
         <!-- Weak Cipher -->
         <description when-ciphers="weak">&identity.description.weakCipher;</description>
@@ -137,8 +143,14 @@
                      class="identity-popup-warning-yellow">&identity.description.passiveLoaded3; <label observes="identity-popup-mcb-learn-more"/></description>
 
         <!-- Active Mixed Content Blocking Disabled -->
-        <description when-mixedcontent="active-loaded">&identity.description.activeLoaded;</description>
-        <description when-mixedcontent="active-loaded">&identity.description.activeLoaded2;</description>
+        <description when-mixedcontent="active-loaded"
+                     and-when-loginforms="secure">&identity.description.activeLoaded;</description>
+        <description when-mixedcontent="active-loaded"
+                     and-when-loginforms="secure">&identity.description.activeLoaded2; <label observes="identity-popup-mcb-learn-more"/></description>
+        <!-- Show only the first message when there are insecure login forms,
+             and make sure the Learn More link is included. -->
+        <description when-mixedcontent="active-loaded"
+                     and-when-loginforms="insecure">&identity.description.activeLoaded; <label observes="identity-popup-mcb-learn-more"/></description>
 
         <!-- Buttons to enable/disable mixed content blocking. -->
         <button when-mixedcontent="active-blocked"

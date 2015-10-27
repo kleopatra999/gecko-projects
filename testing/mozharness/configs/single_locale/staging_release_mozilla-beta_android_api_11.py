@@ -2,8 +2,8 @@ BRANCH = "mozilla-beta"
 MOZ_UPDATE_CHANNEL = "beta"
 MOZILLA_DIR = BRANCH
 OBJDIR = "obj-l10n"
-STAGE_SERVER = "dev-stage01.srv.releng.scl3.mozilla.com"
-EN_US_BINARY_URL = "http://" + STAGE_SERVER + "/pub/mozilla.org/mobile/candidates/%(version)s-candidates/build%(buildnum)d/android-api-11/en-US"
+STAGE_SERVER = "ftp.stage.mozaws.net"
+EN_US_BINARY_URL = "http://" + STAGE_SERVER + "/pub/mobile/candidates/%(version)s-candidates/build%(buildnum)d/android-api-11/en-US"
 HG_SHARE_BASE_DIR = "/builds/hg-shared"
 
 config = {
@@ -92,5 +92,6 @@ config = {
                       ],
     "mock_files": [
         ("/home/cltbld/.ssh", "/home/mock_mozilla/.ssh"),
+        ('/usr/local/lib/hgext', '/usr/local/lib/hgext'),
     ],
 }

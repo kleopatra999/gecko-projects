@@ -11,6 +11,7 @@
 #include "WebMDemuxer.h"
 #include "WebMBufferedParser.h"
 #include "gfx2DGlue.h"
+#include "mozilla/Endian.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/SharedThreadPool.h"
 #include "MediaDataDemuxer.h"
@@ -25,14 +26,19 @@
 #include "vpx/vp8dx.h"
 #include "vpx/vpx_decoder.h"
 
-#define WEBM_DEBUG(arg, ...) MOZ_LOG(gMediaDecoderLog, mozilla::LogLevel::Debug, ("WebMDemuxer(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
+#define WEBM_DEBUG(arg, ...) MOZ_LOG(gWebMDemuxerLog, mozilla::LogLevel::Debug, ("WebMDemuxer(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
 
 namespace mozilla {
 
 using namespace gfx;
 
-extern PRLogModuleInfo* gMediaDecoderLog;
+PRLogModuleInfo* gWebMDemuxerLog = nullptr;
 extern PRLogModuleInfo* gNesteggLog;
+
+// How far ahead will we look when searching future keyframe. In microseconds.
+// This value is based on what appears to be a reasonable value as most webm
+// files encountered appear to have keyframes located < 4s.
+#define MAX_LOOK_AHEAD 10000000
 
 // Functions for reading and seeking using WebMDemuxer required for
 // nestegg_io. The 'user data' passed to these functions is the
@@ -142,6 +148,9 @@ WebMDemuxer::WebMDemuxer(MediaResource* aResource, bool aIsMediaSource)
   if (!gNesteggLog) {
     gNesteggLog = PR_NewLogModule("Nestegg");
   }
+  if (!gWebMDemuxerLog) {
+    gWebMDemuxerLog = PR_NewLogModule("WebMDemuxer");
+  }
 }
 
 WebMDemuxer::~WebMDemuxer()
@@ -150,13 +159,12 @@ WebMDemuxer::~WebMDemuxer()
   Cleanup();
 }
 
-nsRefPtr<WebMDemuxer::InitPromise>
+RefPtr<WebMDemuxer::InitPromise>
 WebMDemuxer::Init()
 {
-  if (InitBufferedState() != NS_OK) {
-    return InitPromise::CreateAndReject(DemuxerFailureReason::WAITING_FOR_DATA, __func__);
-  }
-  if (ReadMetadata() != NS_OK) {
+  InitBufferedState();
+
+  if (NS_FAILED(ReadMetadata())) {
     return InitPromise::CreateAndReject(DemuxerFailureReason::DEMUXER_ERROR, __func__);
   }
 
@@ -168,27 +176,11 @@ WebMDemuxer::Init()
   return InitPromise::CreateAndResolve(NS_OK, __func__);
 }
 
-nsresult
+void
 WebMDemuxer::InitBufferedState()
 {
-  if(!mBufferedState) {
-    mBufferedState = new WebMBufferedState;
-  }
-  EnsureUpToDateIndex();
-  return NS_OK;
-}
-
-already_AddRefed<MediaDataDemuxer>
-WebMDemuxer::Clone() const
-{
-  nsRefPtr<WebMDemuxer> demuxer = new WebMDemuxer(mResource.GetResource());
-  demuxer->mInitData = mInitData;
-  if (demuxer->InitBufferedState() != NS_OK ||
-      demuxer->ReadMetadata() != NS_OK) {
-    NS_WARNING("Couldn't recreate WebMDemuxer");
-    return nullptr;
-  }
-  return demuxer.forget();
+  MOZ_ASSERT(!mBufferedState);
+  mBufferedState = new WebMBufferedState;
 }
 
 bool
@@ -230,7 +222,7 @@ WebMDemuxer::GetTrackDemuxer(TrackInfo::TrackType aType, uint32_t aTrackNumber)
   if (GetNumberTracks(aType) <= aTrackNumber) {
     return nullptr;
   }
-  nsRefPtr<WebMTrackDemuxer> e =
+  RefPtr<WebMTrackDemuxer> e =
     new WebMTrackDemuxer(this, aType, aTrackNumber);
   mDemuxers.AppendElement(e);
 
@@ -263,12 +255,26 @@ WebMDemuxer::ReadMetadata()
   io.seek = webmdemux_seek;
   io.tell = webmdemux_tell;
   io.userdata = this;
-  int64_t maxOffset = mBufferedState->GetInitEndOffset();
-  if (maxOffset == -1) {
-    maxOffset = mResource.GetLength();
-  }
-  int r = nestegg_init(&mContext, io, &webmdemux_log, maxOffset);
+  int r = nestegg_init(&mContext, io, &webmdemux_log,
+                       IsMediaSource() ? mResource.GetLength() : -1);
   if (r == -1) {
+    return NS_ERROR_FAILURE;
+  }
+  {
+    // Check how much data nestegg read and force feed it to BufferedState.
+    RefPtr<MediaByteBuffer> buffer = mResource.MediaReadAt(0, mResource.Tell());
+    if (!buffer) {
+      return NS_ERROR_FAILURE;
+    }
+    mBufferedState->NotifyDataArrived(buffer->Elements(), buffer->Length(), 0);
+    if (mBufferedState->GetInitEndOffset() < 0) {
+      return NS_ERROR_FAILURE;
+    }
+    MOZ_ASSERT(mBufferedState->GetInitEndOffset() <= mResource.Tell());
+  }
+  mInitData = mResource.MediaReadAt(0, mBufferedState->GetInitEndOffset());
+  if (!mInitData ||
+      mInitData->Length() != size_t(mBufferedState->GetInitEndOffset())) {
     return NS_ERROR_FAILURE;
   }
 
@@ -284,7 +290,7 @@ WebMDemuxer::ReadMetadata()
       return NS_ERROR_FAILURE;
     }
     int type = nestegg_track_type(mContext, track);
-    if (type == NESTEGG_TRACK_VIDEO) {
+    if (type == NESTEGG_TRACK_VIDEO && !mHasVideo) {
       nestegg_video_params params;
       r = nestegg_track_video_params(mContext, track, &params);
       if (r == -1) {
@@ -359,7 +365,7 @@ WebMDemuxer::ReadMetadata()
       if (!r) {
         mInfo.mVideo.mDuration = media::TimeUnit::FromNanoseconds(duration).ToMicroseconds();
       }
-    } else if (type == NESTEGG_TRACK_AUDIO) {
+    } else if (type == NESTEGG_TRACK_AUDIO && !mHasAudio) {
       nestegg_audio_params params;
       r = nestegg_track_audio_params(mContext, track, &params);
       if (r == -1) {
@@ -435,11 +441,8 @@ WebMDemuxer::IsSeekable() const
 void
 WebMDemuxer::EnsureUpToDateIndex()
 {
-  if (!mNeedReIndex) {
+  if (!mNeedReIndex || !mInitData) {
     return;
-  }
-  if (mInitData && mBufferedState->GetInitEndOffset() == -1) {
-    mBufferedState->NotifyDataArrived(mInitData->Elements(), mInitData->Length(), 0);
   }
   AutoPinned<MediaResource> resource(mResource.GetResource());
   nsTArray<MediaByteRange> byteRanges;
@@ -448,9 +451,7 @@ WebMDemuxer::EnsureUpToDateIndex()
     return;
   }
   mBufferedState->UpdateIndex(byteRanges, resource);
-  if (!mInitData && mBufferedState->GetInitEndOffset() != -1) {
-    mInitData = mResource.MediaReadAt(0, mBufferedState->GetInitEndOffset());
-  }
+
   mNeedReIndex = false;
 
   if (!mIsMediaSource) {
@@ -461,9 +462,9 @@ WebMDemuxer::EnsureUpToDateIndex()
 }
 
 void
-WebMDemuxer::NotifyDataArrived(uint32_t aLength, int64_t aOffset)
+WebMDemuxer::NotifyDataArrived()
 {
-  WEBM_DEBUG("length: %ld offset: %ld", aLength, aOffset);
+  WEBM_DEBUG("");
   mNeedReIndex = true;
 }
 
@@ -471,6 +472,9 @@ void
 WebMDemuxer::NotifyDataRemoved()
 {
   mBufferedState->Reset();
+  if (mInitData) {
+    mBufferedState->NotifyDataArrived(mInitData->Elements(), mInitData->Length(), 0);
+  }
   mNeedReIndex = true;
 }
 
@@ -484,10 +488,11 @@ bool
 WebMDemuxer::GetNextPacket(TrackInfo::TrackType aType, MediaRawDataQueue *aSamples)
 {
   if (mIsMediaSource) {
+    // To ensure mLastWebMBlockOffset is properly up to date.
     EnsureUpToDateIndex();
   }
 
-  nsRefPtr<NesteggPacketHolder> holder(NextPacket(aType));
+  RefPtr<NesteggPacketHolder> holder(NextPacket(aType));
 
   if (!holder) {
     return false;
@@ -507,7 +512,7 @@ WebMDemuxer::GetNextPacket(TrackInfo::TrackType aType, MediaRawDataQueue *aSampl
   // video frame.
   int64_t next_tstamp = INT64_MIN;
   if (aType == TrackInfo::kAudioTrack) {
-    nsRefPtr<NesteggPacketHolder> next_holder(NextPacket(aType));
+    RefPtr<NesteggPacketHolder> next_holder(NextPacket(aType));
     if (next_holder) {
       next_tstamp = next_holder->Timestamp();
       PushAudioPacket(next_holder);
@@ -520,7 +525,7 @@ WebMDemuxer::GetNextPacket(TrackInfo::TrackType aType, MediaRawDataQueue *aSampl
     }
     mLastAudioFrameTime = Some(tstamp);
   } else if (aType == TrackInfo::kVideoTrack) {
-    nsRefPtr<NesteggPacketHolder> next_holder(NextPacket(aType));
+    RefPtr<NesteggPacketHolder> next_holder(NextPacket(aType));
     if (next_holder) {
       next_tstamp = next_holder->Timestamp();
       PushVideoPacket(next_holder);
@@ -569,7 +574,7 @@ WebMDemuxer::GetNextPacket(TrackInfo::TrackType aType, MediaRawDataQueue *aSampl
 
     WEBM_DEBUG("push sample tstamp: %ld next_tstamp: %ld length: %ld kf: %d",
                tstamp, next_tstamp, length, isKeyframe);
-    nsRefPtr<MediaRawData> sample = new MediaRawData(data, length);
+    RefPtr<MediaRawData> sample = new MediaRawData(data, length);
     sample->mTimecode = tstamp;
     sample->mTime = tstamp;
     sample->mDuration = next_tstamp - tstamp;
@@ -586,7 +591,7 @@ WebMDemuxer::GetNextPacket(TrackInfo::TrackType aType, MediaRawDataQueue *aSampl
   return true;
 }
 
-nsRefPtr<NesteggPacketHolder>
+RefPtr<NesteggPacketHolder>
 WebMDemuxer::NextPacket(TrackInfo::TrackType aType)
 {
   bool isVideo = aType == TrackInfo::kVideoTrack;
@@ -617,7 +622,7 @@ WebMDemuxer::NextPacket(TrackInfo::TrackType aType)
   }
 
   do {
-    nsRefPtr<NesteggPacketHolder> holder = DemuxPacket();
+    RefPtr<NesteggPacketHolder> holder = DemuxPacket();
     if (!holder) {
       return nullptr;
     }
@@ -635,7 +640,7 @@ WebMDemuxer::NextPacket(TrackInfo::TrackType aType)
   } while (true);
 }
 
-nsRefPtr<NesteggPacketHolder>
+RefPtr<NesteggPacketHolder>
 WebMDemuxer::DemuxPacket()
 {
   nestegg_packet* packet;
@@ -651,26 +656,12 @@ WebMDemuxer::DemuxPacket()
   }
 
   int64_t offset = mResource.Tell();
-  nsRefPtr<NesteggPacketHolder> holder = new NesteggPacketHolder();
+  RefPtr<NesteggPacketHolder> holder = new NesteggPacketHolder();
   if (!holder->Init(packet, offset, track, false)) {
     return nullptr;
   }
 
   return holder;
-}
-
-int64_t
-WebMDemuxer::GetNextKeyframeTime()
-{
-  EnsureUpToDateIndex();
-  uint64_t keyframeTime;
-  uint64_t lastFrame =
-    media::TimeUnit::FromMicroseconds(mLastVideoFrameTime.refOr(0)).ToNanoseconds();
-  if (!mBufferedState->GetNextKeyframeTime(lastFrame, &keyframeTime) ||
-      keyframeTime <= lastFrame) {
-    return -1;
-  }
-  return media::TimeUnit::FromNanoseconds(keyframeTime).ToMicroseconds();
 }
 
 void
@@ -815,7 +806,7 @@ WebMTrackDemuxer::GetInfo() const
   return mInfo->Clone();
 }
 
-nsRefPtr<WebMTrackDemuxer::SeekPromise>
+RefPtr<WebMTrackDemuxer::SeekPromise>
 WebMTrackDemuxer::Seek(media::TimeUnit aTime)
 {
   // Seeks to aTime. Upon success, SeekPromise will be resolved with the
@@ -828,16 +819,15 @@ WebMTrackDemuxer::Seek(media::TimeUnit aTime)
 
   // Check what time we actually seeked to.
   if (mSamples.GetSize() > 0) {
-    nsRefPtr<MediaRawData> sample(mSamples.PopFront());
+    const RefPtr<MediaRawData>& sample = mSamples.First();
     seekTime = media::TimeUnit::FromMicroseconds(sample->mTime);
-    mSamples.PushFront(sample);
   }
   SetNextKeyFrameTime();
 
   return SeekPromise::CreateAndResolve(seekTime, __func__);
 }
 
-nsRefPtr<MediaRawData>
+RefPtr<MediaRawData>
 WebMTrackDemuxer::NextSample()
 {
   while (mSamples.GetSize() < 1 && mParent->GetNextPacket(mType, &mSamples)) {
@@ -848,16 +838,16 @@ WebMTrackDemuxer::NextSample()
   return nullptr;
 }
 
-nsRefPtr<WebMTrackDemuxer::SamplesPromise>
+RefPtr<WebMTrackDemuxer::SamplesPromise>
 WebMTrackDemuxer::GetSamples(int32_t aNumSamples)
 {
-  nsRefPtr<SamplesHolder> samples = new SamplesHolder;
+  RefPtr<SamplesHolder> samples = new SamplesHolder;
   if (!aNumSamples) {
     return SamplesPromise::CreateAndReject(DemuxerFailureReason::DEMUXER_ERROR, __func__);
   }
 
   while (aNumSamples) {
-    nsRefPtr<MediaRawData> sample(NextSample());
+    RefPtr<MediaRawData> sample(NextSample());
     if (!sample) {
       break;
     }
@@ -876,33 +866,59 @@ WebMTrackDemuxer::GetSamples(int32_t aNumSamples)
 void
 WebMTrackDemuxer::SetNextKeyFrameTime()
 {
+  if (mType != TrackInfo::kVideoTrack) {
+    return;
+  }
+
   int64_t frameTime = -1;
 
   mNextKeyframeTime.reset();
 
-  if (mType == TrackInfo::kVideoTrack) {
-    MediaRawDataQueue skipSamplesQueue;
-    bool foundKeyframe = false;
-    while (!foundKeyframe && mSamples.GetSize()) {
-      nsRefPtr<MediaRawData> sample(mSamples.PopFront());
-      if (sample->mKeyframe) {
-        frameTime = sample->mTime;
-        foundKeyframe = true;
-      }
-      skipSamplesQueue.PushFront(sample);
+  MediaRawDataQueue skipSamplesQueue;
+  bool foundKeyframe = false;
+  while (!foundKeyframe && mSamples.GetSize()) {
+    RefPtr<MediaRawData> sample = mSamples.PopFront();
+    if (sample->mKeyframe) {
+      frameTime = sample->mTime;
+      foundKeyframe = true;
     }
-    while(skipSamplesQueue.GetSize()) {
-      nsRefPtr<MediaRawData> data = skipSamplesQueue.PopFront();
-      mSamples.PushFront(data);
+    skipSamplesQueue.Push(sample.forget());
+  }
+  Maybe<int64_t> startTime;
+  if (skipSamplesQueue.GetSize()) {
+    const RefPtr<MediaRawData>& sample = skipSamplesQueue.First();
+    startTime.emplace(sample->mTimecode);
+  }
+  // Demux and buffer frames until we find a keyframe.
+  RefPtr<MediaRawData> sample;
+  while (!foundKeyframe && (sample = NextSample())) {
+    if (sample->mKeyframe) {
+      frameTime = sample->mTime;
+      foundKeyframe = true;
     }
-    if (frameTime == -1) {
-      frameTime = mParent->GetNextKeyframeTime();
+    int64_t sampleTimecode = sample->mTimecode;
+    skipSamplesQueue.Push(sample.forget());
+    if (!startTime) {
+      startTime.emplace(sampleTimecode);
+    } else if (!foundKeyframe &&
+               sampleTimecode > startTime.ref() + MAX_LOOK_AHEAD) {
+      WEBM_DEBUG("Couldn't find keyframe in a reasonable time, aborting");
+      break;
     }
   }
+  // We may have demuxed more than intended, so ensure that all frames are kept
+  // in the right order.
+  mSamples.PushFront(Move(skipSamplesQueue));
 
   if (frameTime != -1) {
     mNextKeyframeTime.emplace(media::TimeUnit::FromMicroseconds(frameTime));
-    WEBM_DEBUG("Next Keyframe %f", mNextKeyframeTime.value().ToSeconds());
+    WEBM_DEBUG("Next Keyframe %f (%u queued %.02fs)",
+               mNextKeyframeTime.value().ToSeconds(),
+               uint32_t(mSamples.GetSize()),
+               media::TimeUnit::FromMicroseconds(mSamples.Last()->mTimecode - mSamples.First()->mTimecode).ToSeconds());
+  } else {
+    WEBM_DEBUG("Couldn't determine next keyframe time  (%u queued)",
+               uint32_t(mSamples.GetSize()));
   }
 }
 
@@ -921,7 +937,7 @@ WebMTrackDemuxer::Reset()
 }
 
 void
-WebMTrackDemuxer::UpdateSamples(nsTArray<nsRefPtr<MediaRawData>>& aSamples)
+WebMTrackDemuxer::UpdateSamples(nsTArray<RefPtr<MediaRawData>>& aSamples)
 {
   if (mNextKeyframeTime.isNothing() ||
       aSamples.LastElement()->mTime >= mNextKeyframeTime.value().ToMicroseconds()) {
@@ -942,12 +958,12 @@ WebMTrackDemuxer::GetNextRandomAccessPoint(media::TimeUnit* aTime)
   return NS_OK;
 }
 
-nsRefPtr<WebMTrackDemuxer::SkipAccessPointPromise>
+RefPtr<WebMTrackDemuxer::SkipAccessPointPromise>
 WebMTrackDemuxer::SkipToNextRandomAccessPoint(media::TimeUnit aTimeThreshold)
 {
   uint32_t parsed = 0;
   bool found = false;
-  nsRefPtr<MediaRawData> sample;
+  RefPtr<MediaRawData> sample;
 
   WEBM_DEBUG("TimeThreshold: %f", aTimeThreshold.ToSeconds());
   while (!found && (sample = NextSample())) {
@@ -955,7 +971,7 @@ WebMTrackDemuxer::SkipToNextRandomAccessPoint(media::TimeUnit aTimeThreshold)
     if (sample->mKeyframe && sample->mTime >= aTimeThreshold.ToMicroseconds()) {
       found = true;
       mSamples.Reset();
-      mSamples.PushFront(sample);
+      mSamples.PushFront(sample.forget());
     }
   }
   SetNextKeyFrameTime();
@@ -968,17 +984,6 @@ WebMTrackDemuxer::SkipToNextRandomAccessPoint(media::TimeUnit aTimeThreshold)
     SkipFailureHolder failure(DemuxerFailureReason::END_OF_STREAM, parsed);
     return SkipAccessPointPromise::CreateAndReject(Move(failure), __func__);
   }
-}
-
-int64_t
-WebMTrackDemuxer::GetEvictionOffset(media::TimeUnit aTime)
-{
-  int64_t offset;
-  if (!mParent->GetOffsetForTime(aTime.ToNanoseconds(), &offset)) {
-    return 0;
-  }
-
-  return offset;
 }
 
 media::TimeIntervals

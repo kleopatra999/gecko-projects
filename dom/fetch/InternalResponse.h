@@ -37,7 +37,7 @@ public:
   static already_AddRefed<InternalResponse>
   NetworkError()
   {
-    nsRefPtr<InternalResponse> response = new InternalResponse(0, EmptyCString());
+    RefPtr<InternalResponse> response = new InternalResponse(0, EmptyCString());
     ErrorResult result;
     response->Headers()->SetGuard(HeadersGuardEnum::Immutable, result);
     MOZ_ASSERT(!result.Failed());
@@ -80,6 +80,16 @@ public:
   GetUrl(nsCString& aURL) const
   {
     aURL.Assign(mURL);
+  }
+
+  void
+  GetUnfilteredUrl(nsCString& aURL) const
+  {
+    if (mWrappedResponse) {
+      return mWrappedResponse->GetUrl(aURL);
+    }
+
+    return GetUrl(aURL);
   }
 
   // SetUrl should only be called when the fragment has alredy been stripped
@@ -208,6 +218,9 @@ public:
   nsresult
   StripFragmentAndSetUrl(const nsACString& aUrl);
 
+  LoadTainting
+  GetTainting() const;
+
 private:
   ~InternalResponse();
 
@@ -224,7 +237,7 @@ private:
   nsCString mURL;
   const uint16_t mStatus;
   const nsCString mStatusText;
-  nsRefPtr<InternalHeaders> mHeaders;
+  RefPtr<InternalHeaders> mHeaders;
   nsCOMPtr<nsIInputStream> mBody;
   ChannelInfo mChannelInfo;
   UniquePtr<mozilla::ipc::PrincipalInfo> mPrincipalInfo;
@@ -233,7 +246,7 @@ private:
   // Cache, and SW interception should always serialize/access the underlying
   // unfiltered headers and when deserializing, create an InternalResponse
   // with the unfiltered headers followed by wrapping it.
-  nsRefPtr<InternalResponse> mWrappedResponse;
+  RefPtr<InternalResponse> mWrappedResponse;
 };
 
 } // namespace dom

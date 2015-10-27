@@ -49,6 +49,8 @@ private:
   {
     MOZ_ASSERT(!mReframingStyleContexts,
                "temporary member should be nulled out before destruction");
+    MOZ_ASSERT(!mAnimationsWithDestroyedFrame,
+               "leaving dangling pointers from AnimationsWithDestroyedFrame");
   }
 
 public:
@@ -88,6 +90,10 @@ public:
                         nsIAtom* aAttribute,
                         int32_t  aModType,
                         const nsAttrValue* aOldValue);
+
+  // Get an integer that increments every time we process pending restyles.
+  // The value is never 0.
+  uint32_t GetRestyleGeneration() const { return mRestyleGeneration; }
 
   // Get an integer that increments every time there is a style change
   // as a result of a change to the :hover content state.
@@ -245,7 +251,66 @@ public:
   static bool
   TryStartingTransition(nsPresContext* aPresContext, nsIContent* aContent,
                         nsStyleContext* aOldStyleContext,
-                        nsRefPtr<nsStyleContext>* aNewStyleContext /* inout */);
+                        RefPtr<nsStyleContext>* aNewStyleContext /* inout */);
+
+  // AnimationsWithDestroyedFrame is used to stop animations on elements that
+  // have no frame at the end of the restyling process.
+  // It only lives during the restyling process.
+  class MOZ_STACK_CLASS AnimationsWithDestroyedFrame final {
+  public:
+    // Construct a AnimationsWithDestroyedFrame object.  The caller must
+    // ensure that aRestyleManager lives at least as long as the
+    // object.  (This is generally easy since the caller is typically a
+    // method of RestyleManager.)
+    explicit AnimationsWithDestroyedFrame(RestyleManager* aRestyleManager);
+    ~AnimationsWithDestroyedFrame()
+    {
+    }
+
+    // This method takes the content node for the generated content for
+    // animation on ::before and ::after, rather than the content node for
+    // the real element.
+    void Put(nsIContent* aContent, nsStyleContext* aStyleContext) {
+      MOZ_ASSERT(aContent);
+      nsCSSPseudoElements::Type pseudoType = aStyleContext->GetPseudoType();
+      if (pseudoType == nsCSSPseudoElements::ePseudo_NotPseudoElement) {
+        mContents.AppendElement(aContent);
+      } else if (pseudoType == nsCSSPseudoElements::ePseudo_before) {
+        MOZ_ASSERT(aContent->NodeInfo()->NameAtom() == nsGkAtoms::mozgeneratedcontentbefore);
+        mBeforeContents.AppendElement(aContent->GetParent());
+      } else if (pseudoType == nsCSSPseudoElements::ePseudo_after) {
+        MOZ_ASSERT(aContent->NodeInfo()->NameAtom() == nsGkAtoms::mozgeneratedcontentafter);
+        mAfterContents.AppendElement(aContent->GetParent());
+      }
+    }
+
+    void StopAnimationsForElementsWithoutFrames();
+
+  private:
+    void StopAnimationsWithoutFrame(nsTArray<RefPtr<nsIContent>>& aArray,
+                                    nsCSSPseudoElements::Type aPseudoType);
+
+    RestyleManager* mRestyleManager;
+    AutoRestore<AnimationsWithDestroyedFrame*> mRestorePointer;
+
+    // Below three arrays might include elements that have already had their
+    // animations stopped.
+    //
+    // mBeforeContents and mAfterContents hold the real element rather than
+    // the content node for the generated content (which might change during
+    // a reframe)
+    nsTArray<RefPtr<nsIContent>> mContents;
+    nsTArray<RefPtr<nsIContent>> mBeforeContents;
+    nsTArray<RefPtr<nsIContent>> mAfterContents;
+  };
+
+  /**
+   * Return the current AnimationsWithDestroyedFrame struct, or null if we're
+   * not currently in a restyling operation.
+   */
+  AnimationsWithDestroyedFrame* GetAnimationsWithDestroyedFrame() {
+    return mAnimationsWithDestroyedFrame;
+  }
 
 private:
   void RestyleForEmptyChange(Element* aContainer);
@@ -458,6 +523,12 @@ private:
     // Fast-path the common case (esp. for the animation restyle
     // tracker) of not having anything to do.
     if (aRestyleTracker.Count() || ShouldStartRebuildAllFor(aRestyleTracker)) {
+      if (++mRestyleGeneration == 0) {
+        // Keep mRestyleGeneration from being 0, since that's what
+        // nsPresContext::GetRestyleGeneration returns when it no
+        // longer has a RestyleManager.
+        ++mRestyleGeneration;
+      }
       aRestyleTracker.DoProcessRestyles();
     }
   }
@@ -478,6 +549,7 @@ private:
   bool mSkipAnimationRules : 1;
   bool mHavePendingNonAnimationRestyles : 1;
 
+  uint32_t mRestyleGeneration;
   uint32_t mHoverGeneration;
   nsChangeHint mRebuildAllExtraHint;
   nsRestyleHint mRebuildAllRestyleHint;
@@ -491,6 +563,7 @@ private:
   uint64_t mAnimationGeneration;
 
   ReframingStyleContexts* mReframingStyleContexts;
+  AnimationsWithDestroyedFrame* mAnimationsWithDestroyedFrame;
 
   RestyleTracker mPendingRestyles;
 
@@ -513,7 +586,7 @@ public:
   typedef mozilla::dom::Element Element;
 
   struct ContextToClear {
-    nsRefPtr<nsStyleContext> mStyleContext;
+    RefPtr<nsStyleContext> mStyleContext;
     uint32_t mStructs;
   };
 
@@ -527,7 +600,7 @@ public:
                   TreeMatchContext& aTreeMatchContext,
                   nsTArray<nsIContent*>& aVisibleKidsOfHiddenElement,
                   nsTArray<ContextToClear>& aContextsToClear,
-                  nsTArray<nsRefPtr<nsStyleContext>>& aSwappedStructOwners);
+                  nsTArray<RefPtr<nsStyleContext>>& aSwappedStructOwners);
 
   // Construct for an element whose parent is being restyled.
   enum ConstructorFlags {
@@ -558,7 +631,7 @@ public:
                   TreeMatchContext& aTreeMatchContext,
                   nsTArray<nsIContent*>& aVisibleKidsOfHiddenElement,
                   nsTArray<ContextToClear>& aContextsToClear,
-                  nsTArray<nsRefPtr<nsStyleContext>>& aSwappedStructOwners);
+                  nsTArray<RefPtr<nsStyleContext>>& aSwappedStructOwners);
 
   /**
    * Restyle our frame's element and its subtree.
@@ -603,7 +676,7 @@ public:
                                     nsRestyleHint      aRestyleHint,
                                     const RestyleHintData& aRestyleHintData,
                                     nsTArray<ContextToClear>& aContextsToClear,
-                                    nsTArray<nsRefPtr<nsStyleContext>>&
+                                    nsTArray<RefPtr<nsStyleContext>>&
                                       aSwappedStructOwners);
 
 #ifdef RESTYLE_LOGGING
@@ -636,8 +709,8 @@ private:
 
   struct SwapInstruction
   {
-    nsRefPtr<nsStyleContext> mOldContext;
-    nsRefPtr<nsStyleContext> mNewContext;
+    RefPtr<nsStyleContext> mOldContext;
+    RefPtr<nsStyleContext> mNewContext;
     uint32_t mStructsToSwap;
   };
 
@@ -817,7 +890,7 @@ private:
   // Style contexts that had old structs swapped into it and which should
   // stay alive until the end of the restyle.  (See comment in
   // ElementRestyler::Restyle.)
-  nsTArray<nsRefPtr<nsStyleContext>>& mSwappedStructOwners;
+  nsTArray<RefPtr<nsStyleContext>>& mSwappedStructOwners;
   // Whether this is the root of the restyle.
   bool mIsRootOfRestyle;
 

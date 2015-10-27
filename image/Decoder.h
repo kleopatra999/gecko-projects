@@ -11,6 +11,7 @@
 #include "mozilla/RefPtr.h"
 #include "DecodePool.h"
 #include "DecoderFlags.h"
+#include "Downscaler.h"
 #include "ImageMetadata.h"
 #include "Orientation.h"
 #include "SourceBuffer.h"
@@ -112,19 +113,14 @@ public:
    * If this decoder supports downscale-during-decode, sets the target size that
    * this image should be decoded to.
    *
-   * If this decoder *doesn't* support downscale-during-decode, returns
-   * NS_ERROR_NOT_AVAILABLE. If the provided size is unacceptable, returns
-   * another error.
+   * If the provided size is unacceptable, an error is returned.
    *
    * Returning NS_OK from this method is a promise that the decoder will decode
    * the image to the requested target size unless it encounters an error.
    *
    * This must be called before Init() is called.
    */
-  virtual nsresult SetTargetSize(const nsIntSize& aSize)
-  {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
+  nsresult SetTargetSize(const nsIntSize& aSize);
 
   /**
    * Set the requested sample size for this decoder. Used to implement the
@@ -133,14 +129,6 @@ public:
    *  XXX(seth): Support for -moz-sample-size will be removed in bug 1120056.
    */
   virtual void SetSampleSize(int aSampleSize) { }
-
-  /**
-   * Set the requested resolution for this decoder. Used to implement the
-   * -moz-resolution media fragment.
-   *
-   *  XXX(seth): Support for -moz-resolution will be removed in bug 1118926.
-   */
-  virtual void SetResolution(const gfx::IntSize& aResolution) { }
 
   /**
    * Set an iterator to the SourceBuffer which will feed data to this decoder.
@@ -403,13 +391,15 @@ protected:
                                           imgFrame* aPreviousFrame);
 
 protected:
+  Maybe<Downscaler> mDownscaler;
+
   uint8_t* mImageData;  // Pointer to image data in either Cairo or 8bit format
   uint32_t mImageDataLength;
   uint32_t* mColormap;  // Current colormap to be used in Cairo format
   uint32_t mColormapSize;
 
 private:
-  nsRefPtr<RasterImage> mImage;
+  RefPtr<RasterImage> mImage;
   Maybe<SourceBufferIterator> mIterator;
   RawAccessFrameRef mCurrentFrame;
   ImageMetadata mImageMetadata;

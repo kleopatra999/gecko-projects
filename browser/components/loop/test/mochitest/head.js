@@ -9,8 +9,7 @@ const {
   MozLoopServiceInternal,
   MozLoopService
 } = Cu.import("resource:///modules/loop/MozLoopService.jsm", {});
-const {LoopCalls} = Cu.import("resource:///modules/loop/LoopCalls.jsm", {});
-const {LoopRooms} = Cu.import("resource:///modules/loop/LoopRooms.jsm", {});
+const { LoopRooms } = Cu.import("resource:///modules/loop/LoopRooms.jsm", {});
 
 // Cache this value only once, at the beginning of a
 // test run, so that it doesn't pick up the offline=true
@@ -97,9 +96,9 @@ function waitForCondition(condition, nextTest, errorMsg) {
 }
 
 function promiseWaitForCondition(aConditionFn) {
-  let deferred = Promise.defer();
-  waitForCondition(aConditionFn, deferred.resolve, "Condition didn't pass.");
-  return deferred.promise;
+  return new Promise((resolve, reject) => {
+    waitForCondition(aConditionFn, resolve, "Condition didn't pass.");
+  });
 }
 
 /**
@@ -187,7 +186,7 @@ function promiseObserverNotified(aTopic, aExpectedData = null) {
     Services.obs.addObserver(function onNotification(aSubject, topic, aData) {
       Services.obs.removeObserver(onNotification, topic);
       is(aData, aExpectedData, "observer data should match expected data");
-      resolve({subject: aSubject, data: aData});
+      resolve({ subject: aSubject, data: aData });
     }, aTopic, false);
   });
 }
@@ -216,7 +215,7 @@ function getLoopString(stringID) {
  * MozLoopService tests. There is only one object created per test instance, as
  * once registration has taken place, the object cannot currently be changed.
  */
-let mockPushHandler = {
+var mockPushHandler = {
   // This sets the registration result to be returned when initialize
   // is called. By default, it is equivalent to success.
   registrationResult: null,
@@ -231,12 +230,8 @@ let mockPushHandler = {
     if ("mockWebSocket" in options) {
       this._mockWebSocket = options.mockWebSocket;
     }
-    this.registrationPushURLs[MozLoopService.channelIDs.callsGuest] =
-      "https://localhost/pushUrl/guest-calls";
     this.registrationPushURLs[MozLoopService.channelIDs.roomsGuest] =
       "https://localhost/pushUrl/guest-rooms";
-    this.registrationPushURLs[MozLoopService.channelIDs.callsFxA] =
-      "https://localhost/pushUrl/fxa-calls";
     this.registrationPushURLs[MozLoopService.channelIDs.roomsFxA] =
       "https://localhost/pushUrl/fxa-rooms";
   },

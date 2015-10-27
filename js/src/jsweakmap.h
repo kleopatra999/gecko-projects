@@ -7,6 +7,7 @@
 #ifndef jsweakmap_h
 #define jsweakmap_h
 
+#include "mozilla/LinkedList.h"
 #include "mozilla/Move.h"
 
 #include "jscompartment.h"
@@ -35,56 +36,49 @@ class WeakMapBase;
 // implementation takes care of the iterative marking needed for weak tables and removing
 // table entries when collection is complete.
 
-// The value for the next pointer for maps not in the map list.
-static WeakMapBase * const WeakMapNotInList = reinterpret_cast<WeakMapBase*>(1);
-
 typedef HashSet<WeakMapBase*, DefaultHasher<WeakMapBase*>, SystemAllocPolicy> WeakMapSet;
 
 // Common base class for all WeakMap specializations. The collector uses this to call
 // their markIteratively and sweep methods.
-class WeakMapBase {
+class WeakMapBase : public mozilla::LinkedListElement<WeakMapBase>
+{
     friend void js::GCMarker::enterWeakMarkingMode();
 
   public:
-    WeakMapBase(JSObject* memOf, JSCompartment* c);
+    WeakMapBase(JSObject* memOf, JS::Zone* zone);
     virtual ~WeakMapBase();
 
     void trace(JSTracer* tracer);
 
     // Garbage collector entry points.
 
-    // Unmark all weak maps in a compartment.
-    static void unmarkCompartment(JSCompartment* c);
+    // Unmark all weak maps in a zone.
+    static void unmarkZone(JS::Zone* zone);
 
-    // Mark all the weakmaps in a compartment.
-    static void markAll(JSCompartment* c, JSTracer* tracer);
+    // Mark all the weakmaps in a zone.
+    static void markAll(JS::Zone* zone, JSTracer* tracer);
 
-    // Check all weak maps in a compartment that have been marked as live in this garbage
+    // Check all weak maps in a zone that have been marked as live in this garbage
     // collection, and mark the values of all entries that have become strong references
     // to them. Return true if we marked any new values, indicating that we need to make
     // another pass. In other words, mark my marked maps' marked members' mid-collection.
-    static bool markCompartmentIteratively(JSCompartment* c, JSTracer* tracer);
+    static bool markZoneIteratively(JS::Zone* zone, JSTracer* tracer);
 
     // Add zone edges for weakmaps with key delegates in a different zone.
-    static bool findZoneEdgesForCompartment(JSCompartment* c);
+    static bool findInterZoneEdges(JS::Zone* zone);
 
-    // Sweep the weak maps in a compartment, removing dead weak maps and removing
+    // Sweep the weak maps in a zone, removing dead weak maps and removing
     // entries of live weak maps whose keys are dead.
-    static void sweepCompartment(JSCompartment* c);
+    static void sweepZone(JS::Zone* zone);
 
     // Trace all delayed weak map bindings. Used by the cycle collector.
     static void traceAllMappings(WeakMapTracer* tracer);
 
-    bool isInList() { return next != WeakMapNotInList; }
+    // Save information about which weak maps are marked for a zone.
+    static bool saveZoneMarkedWeakMaps(JS::Zone* zone, WeakMapSet& markedWeakMaps);
 
-    // Save information about which weak maps are marked for a compartment.
-    static bool saveCompartmentMarkedWeakMaps(JSCompartment* c, WeakMapSet& markedWeakMaps);
-
-    // Restore information about which weak maps are marked for many compartments.
+    // Restore information about which weak maps are marked for many zones.
     static void restoreMarkedWeakMaps(WeakMapSet& markedWeakMaps);
-
-    // Remove a weakmap from its compartment's weakmaps list.
-    static void removeWeakMapFromList(WeakMapBase* weakmap);
 
     // Any weakmap key types that want to participate in the non-iterative
     // ephemeron marking must override this method.
@@ -106,20 +100,15 @@ class WeakMapBase {
     // Object that this weak map is part of, if any.
     HeapPtrObject memberOf;
 
-    // Compartment that this weak map is part of.
-    JSCompartment* compartment;
-
-    // Link in a list of all WeakMaps in a compartment, headed by
-    // JSCompartment::gcWeakMapList. The last element of the list has nullptr as
-    // its next. Maps not in the list have WeakMapNotInList as their next.
-    WeakMapBase* next;
+    // Zone containing this weak map.
+    JS::Zone* zone;
 
     // Whether this object has been traced during garbage collection.
     bool marked;
 };
 
 template <typename T>
-static T extractUnbarriered(BarrieredBase<T> v)
+static T extractUnbarriered(WriteBarrieredBase<T> v)
 {
     return v.get();
 }
@@ -142,14 +131,13 @@ class WeakMap : public HashMap<Key, Value, HashPolicy, RuntimeAllocPolicy>, publ
     typedef typename Base::AddPtr AddPtr;
 
     explicit WeakMap(JSContext* cx, JSObject* memOf = nullptr)
-        : Base(cx->runtime()), WeakMapBase(memOf, cx->compartment()) { }
+        : Base(cx->runtime()), WeakMapBase(memOf, cx->compartment()->zone()) { }
 
     bool init(uint32_t len = 16) {
         if (!Base::init(len))
             return false;
-        next = compartment->gcWeakMapList;
-        compartment->gcWeakMapList = this;
-        marked = JS::IsIncrementalGCInProgress(compartment->runtimeFromMainThread());
+        zone->gcWeakMapList.insertFront(this);
+        marked = JS::IsIncrementalGCInProgress(zone->runtimeFromMainThread());
         return true;
     }
 
@@ -176,6 +164,9 @@ class WeakMap : public HashMap<Key, Value, HashPolicy, RuntimeAllocPolicy>, publ
             exposeGCThingToActiveJS(p->value());
         return p;
     }
+
+    // Resolve ambiguity with LinkedListElement<>::remove.
+    using Base::remove;
 
     // The WeakMap and some part of the key are marked. If the entry is marked
     // according to the exact semantics of this WeakMap, then mark the value.
@@ -396,6 +387,43 @@ WeakMap_clear(JSContext* cx, unsigned argc, Value* vp);
 
 extern JSObject*
 InitWeakMapClass(JSContext* cx, HandleObject obj);
+
+
+class ObjectValueMap : public WeakMap<PreBarrieredObject, RelocatableValue>
+{
+  public:
+    ObjectValueMap(JSContext* cx, JSObject* obj)
+      : WeakMap<PreBarrieredObject, RelocatableValue>(cx, obj) {}
+
+    virtual bool findZoneEdges();
+};
+
+
+// Generic weak map for mapping objects to other objects.
+class ObjectWeakMap
+{
+  private:
+    ObjectValueMap map;
+    typedef gc::HashKeyRef<ObjectValueMap, JSObject*> StoreBufferRef;
+
+  public:
+    explicit ObjectWeakMap(JSContext* cx);
+    bool init();
+
+    JSObject* lookup(const JSObject* obj);
+    bool add(JSContext* cx, JSObject* obj, JSObject* target);
+    void clear();
+
+    void trace(JSTracer* trc);
+    size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf);
+    size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) {
+        return mallocSizeOf(this) + sizeOfExcludingThis(mallocSizeOf);
+    }
+
+#ifdef JSGC_HASH_TABLE_CHECKS
+    void checkAfterMovingGC();
+#endif
+};
 
 } /* namespace js */
 

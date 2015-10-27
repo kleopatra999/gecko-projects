@@ -1,15 +1,15 @@
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/FormHistory.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://testing-common/ContentTaskUtils.jsm");
 
-let gAutocompletePopup = Services.ww.activeWindow.
+var gAutocompletePopup = Services.ww.activeWindow.
                                    document.
                                    getElementById("PopupAutoComplete");
 assert.ok(gAutocompletePopup, "Got autocomplete popup");
 
-let ParentUtils = {
+var ParentUtils = {
   getMenuEntries() {
     let entries = [];
     let column = gAutocompletePopup.tree.columns[0];

@@ -197,8 +197,7 @@ ZoomConstraintsClient::RefreshZoomConstraints()
     return;
   }
 
-  nsViewportInfo viewportInfo = nsContentUtils::GetViewportInfo(
-    mDocument,
+  nsViewportInfo viewportInfo = mDocument->GetViewportInfo(
     ViewAs<ScreenPixel>(screenSize, PixelCastJustification::LayoutDeviceIsScreenForBounds));
 
   mozilla::layers::ZoomConstraints zoomConstraints =
@@ -207,12 +206,19 @@ ZoomConstraintsClient::RefreshZoomConstraints()
   if (zoomConstraints.mAllowDoubleTapZoom) {
     // If the CSS viewport is narrower than the screen (i.e. width <= device-width)
     // then we disable double-tap-to-zoom behaviour.
-    int32_t auPerDevPixel = mPresShell->GetPresContext()->AppUnitsPerDevPixel();
-    CSSToLayoutDeviceScale scale(
-      (float)nsPresContext::AppUnitsPerCSSPixel() / auPerDevPixel);
+    CSSToLayoutDeviceScale scale =
+        mPresShell->GetPresContext()->CSSToDevPixelScale();
     if ((viewportInfo.GetSize() * scale).width <= screenSize.width) {
       zoomConstraints.mAllowDoubleTapZoom = false;
     }
+  }
+
+  // We only ever create a ZoomConstraintsClient for an RCD, so the RSF of
+  // the presShell must be the RCD-RSF (if it exists).
+  MOZ_ASSERT(mPresShell->GetPresContext()->IsRootContentDocument());
+  if (nsIScrollableFrame* rcdrsf = mPresShell->GetRootScrollFrameAsScrollable()) {
+    ZCC_LOG("Notifying RCD-RSF that it is zoomable: %d\n", zoomConstraints.mAllowZoom);
+    rcdrsf->SetZoomableByAPZ(zoomConstraints.mAllowZoom);
   }
 
   ScrollableLayerGuid newGuid(0, presShellId, viewId);

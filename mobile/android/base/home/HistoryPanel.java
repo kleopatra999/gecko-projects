@@ -111,7 +111,7 @@ public class HistoryPanel extends HomeFragment {
         THREE_MONTHS_AGO,
         FOUR_MONTHS_AGO,
         FIVE_MONTHS_AGO,
-        MostRecentSection, OLDER_THAN_SIX_MONTHS
+        OLDER_THAN_SIX_MONTHS
     };
 
     protected interface HistoryUrlProvider {
@@ -120,11 +120,7 @@ public class HistoryPanel extends HomeFragment {
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
-        if (HardwareUtils.isTablet() && GeckoScreenOrientation.getInstance().getAndroidOrientation() == Configuration.ORIENTATION_LANDSCAPE) {
-            return inflater.inflate(R.layout.home_history_split_pane_panel, container, false);
-        } else {
-            return inflater.inflate(R.layout.home_history_panel, container, false);
-        }
+        return inflater.inflate(R.layout.home_history_panel, container, false);
     }
 
     @Override
@@ -147,6 +143,7 @@ public class HistoryPanel extends HomeFragment {
                         selected = rangeItem;
                         mRangeAdapter.notifyDataSetChanged();
                         getLoaderManager().getLoader(LOADER_ID_HISTORY).forceLoad();
+                        mList.smoothScrollToPosition(0);
                     }
                 }
             });
@@ -157,7 +154,7 @@ public class HistoryPanel extends HomeFragment {
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 final String url = ((HistoryUrlProvider) mAdapter).getURL(position);
 
-                Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.LIST_ITEM);
+                Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.LIST_ITEM, "history");
 
                 // This item is a TwoLinePageRow, so we allow switch-to-tab.
                 mUrlOpenListener.onUrlOpen(url, EnumSet.of(OnUrlOpenListener.Flags.ALLOW_SWITCH_TO_TAB));
@@ -237,6 +234,14 @@ public class HistoryPanel extends HomeFragment {
     @Override
     public void onDestroyView() {
         super.onDestroyView();
+
+        // Discard any additional item clicks on the list as the
+        // panel is getting destroyed (bug 1210243).
+        if (mRangeList != null) {
+            mRangeList.setOnItemClickListener(null);
+        }
+        mList.setOnItemClickListener(null);
+
         mRangeList = null;
         mList = null;
         mEmptyView = null;
@@ -317,6 +322,10 @@ public class HistoryPanel extends HomeFragment {
                 emptyHint.setText(hintBuilder);
                 emptyHint.setMovementMethod(LinkMovementMethod.getInstance());
                 emptyHint.setVisibility(View.VISIBLE);
+            }
+
+            if (!RestrictedProfiles.isAllowed(getActivity(), Restriction.DISALLOW_PRIVATE_BROWSING)) {
+                emptyHint.setVisibility(View.GONE);
             }
 
             mList.setEmptyView(mEmptyView);
@@ -404,15 +413,15 @@ public class HistoryPanel extends HomeFragment {
         cal.set(Calendar.DAY_OF_MONTH, cal.getMinimum(Calendar.DAY_OF_MONTH));
 
         // Iterate over the remaining MostRecentSections, to find the start, end and display text.
-        for (int i = MostRecentSection.THIS_MONTH.ordinal(); i <= MostRecentSection.OLDER_THAN_SIX_MONTHS.ordinal(); i++) {
+        for (int i = MostRecentSection.THIS_MONTH.ordinal(); i < MostRecentSection.OLDER_THAN_SIX_MONTHS.ordinal(); i++) {
             final long end = cal.getTimeInMillis();
             cal.add(Calendar.MONTH, -1);
             final long start = cal.getTimeInMillis();
-            final String displayName = (i != MostRecentSection.OLDER_THAN_SIX_MONTHS.ordinal())
-                    ? cal.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.getDefault())
-                    : context.getString(R.string.history_older_section);
+            final String displayName = cal.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.getDefault());
             recentSectionTimeOffsetList.add(i, new MostRecentSectionRange(start, end, displayName));
         }
+        recentSectionTimeOffsetList.add(MostRecentSection.OLDER_THAN_SIX_MONTHS.ordinal(),
+                new MostRecentSectionRange(0L, cal.getTimeInMillis(), context.getString(R.string.history_older_section)));
     }
 
     private static class HistoryCursorLoader extends SimpleCursorLoader {

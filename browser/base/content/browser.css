@@ -291,6 +291,12 @@ toolbar[customizing] > .overflow-button {
 #main-window[sizemode="maximized"] #titlebar-buttonbox {
   -moz-appearance: -moz-window-button-box-maximized;
 }
+
+#main-window[tabletmode] #titlebar-min,
+#main-window[tabletmode] #titlebar-max {
+  display: none !important;
+}
+
 %endif
 
 %endif
@@ -599,14 +605,8 @@ toolbar[mode="text"] #bookmarks-menu-button > .toolbarbutton-menubutton-button >
 menupopup[emptyplacesresult="true"] > .hide-if-empty-places-result {
   display: none;
 }
-
 menuitem.spell-suggestion {
   font-weight: bold;
-}
-
-/* apply Fitts' law to the notification bar's close button */
-window[sizemode="maximized"] #content .notification-inner {
-  border-right: 0px !important;
 }
 
 /* Hide extension toolbars that neglected to set the proper class */
@@ -663,7 +663,7 @@ window[chromehidden~="toolbar"] toolbar:not(#nav-bar):not(#TabsToolbar):not(#pri
   background: black;
 }
 
-#fullscreen-warning {
+html|*#fullscreen-warning {
   position: fixed;
   z-index: 2147483647 !important;
   visibility: visible;
@@ -672,33 +672,33 @@ window[chromehidden~="toolbar"] toolbar:not(#nav-bar):not(#TabsToolbar):not(#pri
      we use left: 50% with translateX(-50%). */
   top: 0; left: 50%;
   transform: translate(-50%, -100%);
-  /* We must specify a max-width, otherwise word-wrap:break-word doesn't
-     work in descendant <description> and <label> elements. Bug 630864. */
+  box-sizing: border-box;
+  width: -moz-max-content;
   max-width: 95%;
   pointer-events: none;
 }
-#fullscreen-warning:not([hidden]) {
+html|*#fullscreen-warning:not([hidden]) {
   display: flex;
 }
-#fullscreen-warning[onscreen] {
+html|*#fullscreen-warning[onscreen] {
   transform: translate(-50%, 50px);
 }
-#fullscreen-warning[ontop] {
+html|*#fullscreen-warning[ontop] {
   /* Use -10px to hide the border and border-radius on the top */
   transform: translate(-50%, -10px);
 }
 
-#fullscreen-domain-text,
-#fullscreen-generic-text {
+html|*#fullscreen-domain-text,
+html|*#fullscreen-generic-text {
   word-wrap: break-word;
   /* We must specify a min-width, otherwise word-wrap:break-word doesn't work. Bug 630864. */
   min-width: 1px
 }
-#fullscreen-domain-text:not([hidden]) + #fullscreen-generic-text {
+html|*#fullscreen-domain-text:not([hidden]) + html|*#fullscreen-generic-text {
   display: none;
 }
 
-#fullscreen-exit-button {
+html|*#fullscreen-exit-button {
   pointer-events: auto;
 }
 
@@ -762,6 +762,7 @@ window[chromehidden~="toolbar"] toolbar:not(#nav-bar):not(#TabsToolbar):not(#pri
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
+  -moz-stack-sizing: ignore;
 }
 
 #addon-progress-notification {
@@ -922,21 +923,21 @@ notification[value="loop-sharing-notification"] .close-icon {
 chatbox {
   -moz-binding: url("chrome://browser/content/socialchat.xml#chatbox");
   transition: height 150ms ease-out, width 150ms ease-out;
-  height: 285px;
-  width: 260px; /* CHAT_WIDTH_OPEN in socialchat.xml */
+  height: 290px;
+  width: 300px; /* CHAT_WIDTH_OPEN in socialchat.xml */
 }
 
 chatbox[customSize] {
-  width: 300px; /* CHAT_WIDTH_OPEN_ALT in socialchat.xml */
+  width: 350px; /* CHAT_WIDTH_OPEN_ALT in socialchat.xml */
 }
 
 #chat-window[customSize] {
-  min-width: 300px;
+  min-width: 350px;
 }
 
 chatbox[customSize="loopChatEnabled"] {
-  /* 325px as defined per UX */
-  height: 325px;
+  /* 430px as defined per UX */
+  height: 430px;
 }
 
 #chat-window[customSize="loopChatEnabled"] {
@@ -945,13 +946,18 @@ chatbox[customSize="loopChatEnabled"] {
 }
 
 chatbox[customSize="loopChatMessageAppended"] {
-  /* 445px as defined per UX */
-  height: 445px;
+  /* 430px as defined per UX */
+  height: 430px;
+}
+
+chatbox[customSize="loopChatDisabledMessageAppended"] {
+  /* 388px as defined per UX */
+  height: 388px;
 }
 
 #chat-window[customSize="loopChatMessageAppended"] {
   /* 445px + 30px top bar height. */
-  min-height: calc(445px + 30px);
+  min-height: calc(400px + 30px);
 }
 
 chatbox[minimized="true"] {
@@ -970,8 +976,8 @@ chatbar {
 }
 
 chatbar[customSize] > .chatbar-innerbox {
-  /* 425px to make room for the maximum custom-size chatbox; currently 'loopChatMessageAppended'. */
-  margin-top: -425px;
+  /* 450px to make room for the maximum custom-size chatbox; currently 'loopChatMessageAppended'. */
+  margin-top: -450px;
 }
 
 /* Apply crisp rendering for favicons at exactly 2dppx resolution */

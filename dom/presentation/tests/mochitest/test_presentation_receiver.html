@@ -4,12 +4,12 @@
    - http://creativecommons.org/publicdomain/zero/1.0/ -->
 <head>
   <meta charset="utf-8">
-  <title>Test for B2G Presentation Session API at receiver side</title>
+  <title>Test for B2G PresentationConnection API at receiver side</title>
   <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
 </head>
 <body>
-<a target="_blank" href="https://bugzilla.mozilla.org/show_bug.cgi?id=1069230">Test for B2G Presentation Session API at receiver side</a>
+<a target="_blank" href="https://bugzilla.mozilla.org/show_bug.cgi?id=1069230">Test for B2G PresentationConnection API at receiver side</a>
 <p id="display"></p>
 <div id="content" style="display: none"></div>
 <pre id="test"></pre>
@@ -62,6 +62,11 @@ function setup() {
       info("An offer is received.");
     });
 
+    gScript.addMessageListener('answer-sent', function answerSentHandler(aIsValid) {
+      gScript.removeMessageListener('answer-sent', answerSentHandler);
+      ok(aIsValid, "A valid answer is sent.");
+    });
+
     gScript.addMessageListener('control-channel-closed', function controlChannelClosedHandler(aReason) {
       gScript.removeMessageListener('control-channel-closed', controlChannelClosedHandler);
       is(aReason, SpecialPowers.Cr.NS_OK, "The control channel is closed normally.");
@@ -88,8 +93,7 @@ function testIncomingSessionRequest() {
       info("Trying to launch receiver page.");
 
       ok(navigator.presentation, "navigator.presentation should be available in in-process pages.");
-      ok(!navigator.presentation.session, "Non-receiving in-process pages shouldn't get a predefined presentation session instance.");
-
+      ok(!navigator.presentation.receiver, "Non-receiving in-process pages shouldn't get a presentation receiver instance.");
       aResolve();
     });
 
@@ -119,7 +123,6 @@ SpecialPowers.pushPermissions([
   {type: 'presentation', allow: true, context: document},
 ], function() {
   SpecialPowers.pushPrefEnv({ 'set': [["dom.presentation.enabled", true],
-                                      ["dom.ignore_webidl_scope_checks", true],
                                       ["dom.presentation.test.enabled", true],
                                       ["dom.presentation.test.stage", 0]]},
                             runTests);

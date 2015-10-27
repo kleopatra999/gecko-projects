@@ -6,7 +6,7 @@
 #include "DecoderFactory.h"
 
 #include "nsMimeTypes.h"
-#include "mozilla/nsRefPtr.h"
+#include "mozilla/RefPtr.h"
 #include "nsString.h"
 
 #include "Decoder.h"
@@ -72,7 +72,7 @@ DecoderFactory::GetDecoder(DecoderType aType,
                            RasterImage* aImage,
                            bool aIsRedecode)
 {
-  nsRefPtr<Decoder> decoder;
+  RefPtr<Decoder> decoder;
 
   switch (aType) {
     case DecoderType::PNG:
@@ -111,14 +111,13 @@ DecoderFactory::CreateDecoder(DecoderType aType,
                               const Maybe<IntSize>& aTargetSize,
                               DecoderFlags aDecoderFlags,
                               SurfaceFlags aSurfaceFlags,
-                              int aSampleSize,
-                              const IntSize& aResolution)
+                              int aSampleSize)
 {
   if (aType == DecoderType::UNKNOWN) {
     return nullptr;
   }
 
-  nsRefPtr<Decoder> decoder =
+  RefPtr<Decoder> decoder =
     GetDecoder(aType, aImage, bool(aDecoderFlags & DecoderFlags::IS_REDECODE));
   MOZ_ASSERT(decoder, "Should have a decoder now");
 
@@ -128,13 +127,10 @@ DecoderFactory::CreateDecoder(DecoderType aType,
   decoder->SetDecoderFlags(aDecoderFlags | DecoderFlags::FIRST_FRAME_ONLY);
   decoder->SetSurfaceFlags(aSurfaceFlags);
   decoder->SetSampleSize(aSampleSize);
-  decoder->SetResolution(aResolution);
 
   // Set a target size for downscale-during-decode if applicable.
   if (aTargetSize) {
     DebugOnly<nsresult> rv = decoder->SetTargetSize(*aTargetSize);
-    MOZ_ASSERT(nsresult(rv) != NS_ERROR_NOT_AVAILABLE,
-               "We're downscale-during-decode but decoder doesn't support it?");
     MOZ_ASSERT(NS_SUCCEEDED(rv), "Bad downscale-during-decode target size?");
   }
 
@@ -151,8 +147,7 @@ DecoderFactory::CreateAnimationDecoder(DecoderType aType,
                                        RasterImage* aImage,
                                        SourceBuffer* aSourceBuffer,
                                        DecoderFlags aDecoderFlags,
-                                       SurfaceFlags aSurfaceFlags,
-                                       const IntSize& aResolution)
+                                       SurfaceFlags aSurfaceFlags)
 {
   if (aType == DecoderType::UNKNOWN) {
     return nullptr;
@@ -161,7 +156,7 @@ DecoderFactory::CreateAnimationDecoder(DecoderType aType,
   MOZ_ASSERT(aType == DecoderType::GIF || aType == DecoderType::PNG,
              "Calling CreateAnimationDecoder for non-animating DecoderType");
 
-  nsRefPtr<Decoder> decoder =
+  RefPtr<Decoder> decoder =
     GetDecoder(aType, aImage, /* aIsRedecode = */ true);
   MOZ_ASSERT(decoder, "Should have a decoder now");
 
@@ -170,7 +165,6 @@ DecoderFactory::CreateAnimationDecoder(DecoderType aType,
   decoder->SetIterator(aSourceBuffer->Iterator());
   decoder->SetDecoderFlags(aDecoderFlags | DecoderFlags::IS_REDECODE);
   decoder->SetSurfaceFlags(aSurfaceFlags);
-  decoder->SetResolution(aResolution);
 
   decoder->Init();
   if (NS_FAILED(decoder->GetDecoderError())) {
@@ -184,14 +178,13 @@ DecoderFactory::CreateAnimationDecoder(DecoderType aType,
 DecoderFactory::CreateMetadataDecoder(DecoderType aType,
                                       RasterImage* aImage,
                                       SourceBuffer* aSourceBuffer,
-                                      int aSampleSize,
-                                      const IntSize& aResolution)
+                                      int aSampleSize)
 {
   if (aType == DecoderType::UNKNOWN) {
     return nullptr;
   }
 
-  nsRefPtr<Decoder> decoder =
+  RefPtr<Decoder> decoder =
     GetDecoder(aType, aImage, /* aIsRedecode = */ false);
   MOZ_ASSERT(decoder, "Should have a decoder now");
 
@@ -199,7 +192,6 @@ DecoderFactory::CreateMetadataDecoder(DecoderType aType,
   decoder->SetMetadataDecode(true);
   decoder->SetIterator(aSourceBuffer->Iterator());
   decoder->SetSampleSize(aSampleSize);
-  decoder->SetResolution(aResolution);
 
   decoder->Init();
   if (NS_FAILED(decoder->GetDecoderError())) {
@@ -218,7 +210,7 @@ DecoderFactory::CreateAnonymousDecoder(DecoderType aType,
     return nullptr;
   }
 
-  nsRefPtr<Decoder> decoder =
+  RefPtr<Decoder> decoder =
     GetDecoder(aType, /* aImage = */ nullptr, /* aIsRedecode = */ false);
   MOZ_ASSERT(decoder, "Should have a decoder now");
 
@@ -256,7 +248,7 @@ DecoderFactory::CreateAnonymousMetadataDecoder(DecoderType aType,
     return nullptr;
   }
 
-  nsRefPtr<Decoder> decoder =
+  RefPtr<Decoder> decoder =
     GetDecoder(aType, /* aImage = */ nullptr, /* aIsRedecode = */ false);
   MOZ_ASSERT(decoder, "Should have a decoder now");
 

@@ -7,16 +7,15 @@
 #ifndef nsTHashtable_h__
 #define nsTHashtable_h__
 
-#include "nscore.h"
-#include "pldhash.h"
-#include "nsDebug.h"
+#include "PLDHashTable.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/Attributes.h"
+#include "mozilla/fallible.h"
 #include "mozilla/MemoryChecking.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Move.h"
-#include "mozilla/fallible.h"
 #include "mozilla/PodOperations.h"
-#include "mozilla/Attributes.h"
+#include "mozilla/TypeTraits.h"
 
 #include <new>
 
@@ -38,8 +37,8 @@
  *     // this should either be a simple datatype (uint32_t, nsISupports*) or
  *     // a const reference (const nsAString&)
  *     typedef something KeyType;
- *     // KeyTypePointer is the pointer-version of KeyType, because pldhash.h
- *     // requires keys to cast to <code>const void*</code>
+ *     // KeyTypePointer is the pointer-version of KeyType, because
+ *     // PLDHashTable.h requires keys to cast to <code>const void*</code>
  *     typedef const something* KeyTypePointer;
  *
  *     EntryType(KeyTypePointer aKey);
@@ -76,6 +75,8 @@ template<class EntryType>
 class MOZ_NEEDS_NO_VTABLE_TYPE nsTHashtable
 {
   typedef mozilla::fallible_t fallible_t;
+  static_assert(mozilla::IsPointer<typename EntryType::KeyTypePointer>::value,
+                "KeyTypePointer should be a pointer");
 
 public:
   // Separate constructors instead of default aInitLength parameter since
@@ -117,6 +118,11 @@ public:
   uint32_t Count() const { return mTable.EntryCount(); }
 
   /**
+   * Return true if the hashtable is empty.
+   */
+  bool IsEmpty() const { return Count() == 0; }
+
+  /**
    * Get the entry associated with a key.
    * @param     aKey the key to retrieve
    * @return    pointer to the entry class, if the key exists; nullptr if the
@@ -125,8 +131,7 @@ public:
   EntryType* GetEntry(KeyType aKey) const
   {
     return static_cast<EntryType*>(
-      PL_DHashTableSearch(const_cast<PLDHashTable*>(&mTable),
-                          EntryType::KeyToPointer(aKey)));
+      const_cast<PLDHashTable*>(&mTable)->Search(EntryType::KeyToPointer(aKey)));
   }
 
   /**
@@ -144,16 +149,15 @@ public:
    */
   EntryType* PutEntry(KeyType aKey)
   {
-    return static_cast<EntryType*>  // infallible add
-      (PL_DHashTableAdd(&mTable, EntryType::KeyToPointer(aKey)));
+    // infallible add
+    return static_cast<EntryType*>(mTable.Add(EntryType::KeyToPointer(aKey)));
   }
 
   MOZ_WARN_UNUSED_RESULT
   EntryType* PutEntry(KeyType aKey, const fallible_t&)
   {
-    return static_cast<EntryType*>
-      (PL_DHashTableAdd(&mTable, EntryType::KeyToPointer(aKey),
-                        mozilla::fallible));
+    return static_cast<EntryType*>(mTable.Add(EntryType::KeyToPointer(aKey),
+                                              mozilla::fallible));
   }
 
   /**
@@ -162,21 +166,28 @@ public:
    */
   void RemoveEntry(KeyType aKey)
   {
-    PL_DHashTableRemove(&mTable,
-                        EntryType::KeyToPointer(aKey));
+    mTable.Remove(EntryType::KeyToPointer(aKey));
+  }
+
+  /**
+   * Remove the entry associated with a key.
+   * @param aEntry   the entry-pointer to remove (obtained from GetEntry)
+   */
+  void RemoveEntry(EntryType* aEntry)
+  {
+    mTable.RemoveEntry(aEntry);
   }
 
   /**
    * Remove the entry associated with a key, but don't resize the hashtable.
    * This is a low-level method, and is not recommended unless you know what
-   * you're doing and you need the extra performance. This method can be used
-   * during enumeration, while RemoveEntry() cannot.
-   * @param aEntry   the entry-pointer to remove (obtained from GetEntry or
-   *                 the enumerator
+   * you're doing. If you use it, please add a comment explaining why you
+   * didn't use RemoveEntry().
+   * @param aEntry   the entry-pointer to remove (obtained from GetEntry)
    */
   void RawRemoveEntry(EntryType* aEntry)
   {
-    PL_DHashTableRawRemove(&mTable, aEntry);
+    mTable.RawRemove(aEntry);
   }
 
   // This is an iterator that also allows entry removal. Example usage:
@@ -285,7 +296,7 @@ public:
    */
   void MarkImmutable()
   {
-    PL_DHashMarkTableImmutable(&mTable);
+    mTable.MarkImmutable();
   }
 #endif
 
@@ -348,7 +359,7 @@ nsTHashtable<EntryType>::Ops()
   {
     s_HashKey,
     s_MatchEntry,
-    EntryType::ALLOW_MEMMOVE ? ::PL_DHashMoveEntryStub : s_CopyEntry,
+    EntryType::ALLOW_MEMMOVE ? PLDHashTable::MoveEntryStub : s_CopyEntry,
     s_ClearEntry,
     s_InitEntry
   };
@@ -361,7 +372,7 @@ template<class EntryType>
 PLDHashNumber
 nsTHashtable<EntryType>::s_HashKey(PLDHashTable* aTable, const void* aKey)
 {
-  return EntryType::HashKey(reinterpret_cast<const KeyTypePointer>(aKey));
+  return EntryType::HashKey(static_cast<const KeyTypePointer>(aKey));
 }
 
 template<class EntryType>
@@ -371,7 +382,7 @@ nsTHashtable<EntryType>::s_MatchEntry(PLDHashTable* aTable,
                                       const void* aKey)
 {
   return ((const EntryType*)aEntry)->KeyEquals(
-    reinterpret_cast<const KeyTypePointer>(aKey));
+    static_cast<const KeyTypePointer>(aKey));
 }
 
 template<class EntryType>
@@ -381,7 +392,7 @@ nsTHashtable<EntryType>::s_CopyEntry(PLDHashTable* aTable,
                                      PLDHashEntryHdr* aTo)
 {
   EntryType* fromEntry =
-    const_cast<EntryType*>(reinterpret_cast<const EntryType*>(aFrom));
+    const_cast<EntryType*>(static_cast<const EntryType*>(aFrom));
 
   new (aTo) EntryType(mozilla::Move(*fromEntry));
 
@@ -401,7 +412,7 @@ void
 nsTHashtable<EntryType>::s_InitEntry(PLDHashEntryHdr* aEntry,
                                      const void* aKey)
 {
-  new (aEntry) EntryType(reinterpret_cast<KeyTypePointer>(aKey));
+  new (aEntry) EntryType(static_cast<KeyTypePointer>(aKey));
 }
 
 class nsCycleCollectionTraversalCallback;

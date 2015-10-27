@@ -35,7 +35,9 @@ public:
 
   Microseconds ToMicroseconds(int64_t aTimescaleUnits)
   {
-    return aTimescaleUnits * 1000000ll / mTimescale;
+    int64_t major = aTimescaleUnits / mTimescale;
+    int64_t remainder = aTimescaleUnits % mTimescale;
+    return major * 1000000ll + remainder * 1000000ll / mTimescale;
   }
 
   uint64_t mCreationTime;
@@ -233,7 +235,7 @@ public:
   MediaByteRange FirstCompleteMediaHeader();
 
   mozilla::MediaByteRange mInitRange;
-  nsRefPtr<Stream> mSource;
+  RefPtr<Stream> mSource;
   uint64_t mOffset;
   nsTArray<uint64_t> mMoofOffsets;
   Mvhd mMvhd;

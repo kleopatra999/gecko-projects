@@ -14,7 +14,6 @@
 #include "nsComponentManagerUtils.h"
 #include "nsError.h"
 #include "Decoder.h"
-#include "nsAutoPtr.h"
 #include "prenv.h"
 #include "prsystem.h"
 #include "ImageContainer.h"
@@ -65,142 +64,6 @@ using std::min;
 // used for statistics.
 static int32_t sMaxDecodeCount = 0;
 
-class ScaleRunner : public nsRunnable
-{
-  enum ScaleState
-  {
-    eNew,
-    eReady,
-    eFinish,
-    eFinishWithError
-  };
-
-public:
-  ScaleRunner(RasterImage* aImage,
-              uint32_t aImageFlags,
-              const IntSize& aSize,
-              RawAccessFrameRef&& aSrcRef)
-    : mImage(aImage)
-    , mSrcRef(Move(aSrcRef))
-    , mDstSize(aSize)
-    , mImageFlags(aImageFlags)
-    , mState(eNew)
-  {
-    MOZ_ASSERT(!mSrcRef->GetIsPaletted());
-    MOZ_ASSERT(aSize.width > 0 && aSize.height > 0);
-  }
-
-  bool Init()
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-    MOZ_ASSERT(mState == eNew, "Calling Init() twice?");
-
-    // We'll need a destination frame. It's unconditionally ARGB32 because
-    // that's what the scaler outputs.
-    nsRefPtr<imgFrame> tentativeDstFrame = new imgFrame();
-    nsresult rv =
-      tentativeDstFrame->InitForDecoder(mDstSize, SurfaceFormat::B8G8R8A8);
-    if (NS_FAILED(rv)) {
-      return false;
-    }
-
-    // We need a strong reference to the raw data for the destination frame.
-    // (We already got one for the source frame in the constructor.)
-    RawAccessFrameRef tentativeDstRef = tentativeDstFrame->RawAccessRef();
-    if (!tentativeDstRef) {
-      return false;
-    }
-
-    // Everything worked, so commit to these objects and mark ourselves ready.
-    mDstRef = Move(tentativeDstRef);
-    mState = eReady;
-
-    // Insert the new surface into the cache immediately. We need to do this so
-    // that we won't start multiple scaling jobs for the same size.
-    SurfaceCache::Insert(mDstRef.get(), ImageKey(mImage.get()),
-                         RasterSurfaceKey(mDstSize,
-                                          ToSurfaceFlags(mImageFlags),
-                                          /* aFrameNum = */ 0),
-                         Lifetime::Transient);
-
-    return true;
-  }
-
-  NS_IMETHOD Run() override
-  {
-    if (mState == eReady) {
-      // Collect information from the frames that we need to scale.
-      ScalingData srcData = mSrcRef->GetScalingData();
-      ScalingData dstData = mDstRef->GetScalingData();
-
-      // Actually do the scaling.
-      bool succeeded =
-        gfx::Scale(srcData.mRawData, srcData.mSize.width, srcData.mSize.height,
-                   srcData.mBytesPerRow, dstData.mRawData, mDstSize.width,
-                   mDstSize.height, dstData.mBytesPerRow, srcData.mFormat);
-
-      if (succeeded) {
-        // Mark the frame as complete and discardable.
-        mDstRef->ImageUpdated(mDstRef->GetRect());
-        MOZ_ASSERT(mDstRef->IsImageComplete(),
-                   "Incomplete, but just updated the entire frame");
-      }
-
-      // We need to send notifications and release our references on the main
-      // thread, so finish up there.
-      mState = succeeded ? eFinish : eFinishWithError;
-      NS_DispatchToMainThread(this);
-    } else if (mState == eFinish) {
-      MOZ_ASSERT(NS_IsMainThread());
-      MOZ_ASSERT(mDstRef, "Should have a valid scaled frame");
-
-      // Notify, so observers can redraw.
-      nsRefPtr<RasterImage> image = mImage.get();
-      if (image) {
-        image->NotifyNewScaledFrame();
-      }
-
-      // We're done, so release everything.
-      mSrcRef.reset();
-      mDstRef.reset();
-    } else if (mState == eFinishWithError) {
-      MOZ_ASSERT(NS_IsMainThread());
-      NS_WARNING("HQ scaling failed");
-
-      // Remove the frame from the cache since we know we don't need it.
-      SurfaceCache::RemoveSurface(ImageKey(mImage.get()),
-                                  RasterSurfaceKey(mDstSize,
-                                                   ToSurfaceFlags(mImageFlags),
-                                                   /* aFrameNum = */ 0));
-
-      // Release everything we're holding, too.
-      mSrcRef.reset();
-      mDstRef.reset();
-    } else {
-      // mState must be eNew, which is invalid in Run().
-      MOZ_ASSERT(false, "Need to call Init() before dispatching");
-    }
-
-    return NS_OK;
-  }
-
-private:
-  virtual ~ScaleRunner()
-  {
-    MOZ_ASSERT(!mSrcRef && !mDstRef,
-               "Should have released strong refs in Run()");
-  }
-
-  WeakPtr<RasterImage> mImage;
-  RawAccessFrameRef    mSrcRef;
-  RawAccessFrameRef    mDstRef;
-  const IntSize      mDstSize;
-  uint32_t             mImageFlags;
-  ScaleState           mState;
-};
-
-static nsCOMPtr<nsIThread> sScaleWorkerThread = nullptr;
-
 #ifndef DEBUG
 NS_IMPL_ISUPPORTS(RasterImage, imgIContainer, nsIProperties)
 #else
@@ -227,7 +90,6 @@ RasterImage::RasterImage(ImageURL* aURI /* = nullptr */) :
   mDiscardable(false),
   mHasSourceData(false),
   mHasBeenDecoded(false),
-  mDownscaleDuringDecode(false),
   mPendingAnimation(false),
   mAnimationFinished(false),
   mWantFullDecode(false)
@@ -263,22 +125,14 @@ RasterImage::Init(const char* aMimeType,
   }
 
   // We want to avoid redecodes for transient images.
-  MOZ_ASSERT(!(aFlags & INIT_FLAG_TRANSIENT) ||
-               (!(aFlags & INIT_FLAG_DISCARDABLE) &&
-                !(aFlags & INIT_FLAG_DOWNSCALE_DURING_DECODE)),
-             "Illegal init flags for transient image");
+  MOZ_ASSERT_IF(aFlags & INIT_FLAG_TRANSIENT,
+                !(aFlags & INIT_FLAG_DISCARDABLE));
 
   // Store initialization data
   mDiscardable = !!(aFlags & INIT_FLAG_DISCARDABLE);
   mWantFullDecode = !!(aFlags & INIT_FLAG_DECODE_IMMEDIATELY);
   mTransient = !!(aFlags & INIT_FLAG_TRANSIENT);
-  mDownscaleDuringDecode = !!(aFlags & INIT_FLAG_DOWNSCALE_DURING_DECODE);
   mSyncLoad = !!(aFlags & INIT_FLAG_SYNC_LOAD);
-
-#ifndef MOZ_ENABLE_SKIA
-  // Downscale-during-decode requires Skia.
-  mDownscaleDuringDecode = false;
-#endif
 
   // Use the MIME type to select a decoder type, and make sure there *is* a
   // decoder for this MIME type.
@@ -309,7 +163,6 @@ RasterImage::Init(const char* aMimeType,
 }
 
 //******************************************************************************
-// [notxpcom] void requestRefresh ([const] in TimeStamp aTime);
 NS_IMETHODIMP_(void)
 RasterImage::RequestRefresh(const TimeStamp& aTime)
 {
@@ -433,31 +286,22 @@ RasterImage::LookupFrameInternal(uint32_t aFrameNum,
     return mAnim->GetCompositedFrame(aFrameNum);
   }
 
-  Maybe<SurfaceFlags> alternateFlags;
-  if (IsOpaque()) {
-    // If we're opaque, we can always substitute a frame that was decoded with a
-    // different decode flag for premultiplied alpha, because that can only
-    // matter for frames with transparency.
-    alternateFlags.emplace(ToSurfaceFlags(aFlags) ^
-                             SurfaceFlags::NO_PREMULTIPLY_ALPHA);
-  }
+  SurfaceFlags surfaceFlags = ToSurfaceFlags(aFlags);
 
-  // We don't want any substitution for sync decodes (except the premultiplied
-  // alpha optimization above), so we use SurfaceCache::Lookup in this case.
+  // We don't want any substitution for sync decodes, so we use
+  // SurfaceCache::Lookup in this case.
   if (aFlags & FLAG_SYNC_DECODE) {
     return SurfaceCache::Lookup(ImageKey(this),
                                 RasterSurfaceKey(aSize,
-                                                 ToSurfaceFlags(aFlags),
-                                                 aFrameNum),
-                                alternateFlags);
+                                                 surfaceFlags,
+                                                 aFrameNum));
   }
 
   // We'll return the best match we can find to the requested frame.
   return SurfaceCache::LookupBestMatch(ImageKey(this),
                                        RasterSurfaceKey(aSize,
-                                                        ToSurfaceFlags(aFlags),
-                                                        aFrameNum),
-                                       alternateFlags);
+                                                        surfaceFlags,
+                                                        aFrameNum));
 }
 
 DrawableFrameRef
@@ -466,6 +310,12 @@ RasterImage::LookupFrame(uint32_t aFrameNum,
                          uint32_t aFlags)
 {
   MOZ_ASSERT(NS_IsMainThread());
+
+  // If we're opaque, we don't need to care about premultiplied alpha, because
+  // that can only matter for frames with transparency.
+  if (IsOpaque()) {
+    aFlags &= ~FLAG_DECODE_NO_PREMULTIPLY_ALPHA;
+  }
 
   IntSize requestedSize = CanDownscaleDuringDecode(aSize, aFlags)
                         ? aSize : mSize;
@@ -692,19 +542,31 @@ RasterImage::CopyFrame(uint32_t aWhichFrame, uint32_t aFlags)
 }
 
 //******************************************************************************
-/* [noscript] SourceSurface getFrame(in uint32_t aWhichFrame,
- *                                   in uint32_t aFlags); */
 NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
 RasterImage::GetFrame(uint32_t aWhichFrame,
                       uint32_t aFlags)
 {
-  return GetFrameInternal(aWhichFrame, aFlags).second().forget();
+  return GetFrameInternal(mSize, aWhichFrame, aFlags).second().forget();
+}
+
+NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
+RasterImage::GetFrameAtSize(const IntSize& aSize,
+                            uint32_t aWhichFrame,
+                            uint32_t aFlags)
+{
+  return GetFrameInternal(aSize, aWhichFrame, aFlags).second().forget();
 }
 
 Pair<DrawResult, RefPtr<SourceSurface>>
-RasterImage::GetFrameInternal(uint32_t aWhichFrame, uint32_t aFlags)
+RasterImage::GetFrameInternal(const IntSize& aSize,
+                              uint32_t aWhichFrame,
+                              uint32_t aFlags)
 {
   MOZ_ASSERT(aWhichFrame <= FRAME_MAX_VALUE);
+
+  if (aSize.IsEmpty()) {
+    return MakePair(DrawResult::BAD_ARGS, RefPtr<SourceSurface>());
+  }
 
   if (aWhichFrame > FRAME_MAX_VALUE) {
     return MakePair(DrawResult::BAD_ARGS, RefPtr<SourceSurface>());
@@ -718,7 +580,7 @@ RasterImage::GetFrameInternal(uint32_t aWhichFrame, uint32_t aFlags)
   // not waiting for the data to be loaded from the network or not passing
   // FLAG_SYNC_DECODE
   DrawableFrameRef frameRef =
-    LookupFrame(GetRequestedFrameIndex(aWhichFrame), mSize, aFlags);
+    LookupFrame(GetRequestedFrameIndex(aWhichFrame), aSize, aFlags);
   if (!frameRef) {
     // The OS threw this frame away and we couldn't redecode it.
     return MakePair(DrawResult::TEMPORARY_ERROR, RefPtr<SourceSurface>());
@@ -727,15 +589,15 @@ RasterImage::GetFrameInternal(uint32_t aWhichFrame, uint32_t aFlags)
   // If this frame covers the entire image, we can just reuse its existing
   // surface.
   RefPtr<SourceSurface> frameSurf;
-  IntRect frameRect = frameRef->GetRect();
-  if (frameRect.x == 0 && frameRect.y == 0 &&
-      frameRect.width == mSize.width &&
-      frameRect.height == mSize.height) {
+  if (!frameRef->NeedsPadding() &&
+      frameRef->GetSize() == aSize) {
     frameSurf = frameRef->GetSurface();
   }
 
   // The image doesn't have a usable surface because it's been optimized away or
-  // because it's a partial update frame from an animation. Create one.
+  // because it's a partial update frame from an animation. Create one. (In this
+  // case we fall back to returning a surface at our intrinsic size, even if a
+  // different size was originally specified.)
   if (!frameSurf) {
     frameSurf = CopyFrame(aWhichFrame, aFlags);
   }
@@ -747,7 +609,7 @@ RasterImage::GetFrameInternal(uint32_t aWhichFrame, uint32_t aFlags)
   return MakePair(DrawResult::SUCCESS, Move(frameSurf));
 }
 
-Pair<DrawResult, nsRefPtr<layers::Image>>
+Pair<DrawResult, RefPtr<layers::Image>>
 RasterImage::GetCurrentImage(ImageContainer* aContainer, uint32_t aFlags)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -756,11 +618,11 @@ RasterImage::GetCurrentImage(ImageContainer* aContainer, uint32_t aFlags)
   DrawResult drawResult;
   RefPtr<SourceSurface> surface;
   Tie(drawResult, surface) =
-    GetFrameInternal(FRAME_CURRENT, aFlags | FLAG_ASYNC_NOTIFY);
+    GetFrameInternal(mSize, FRAME_CURRENT, aFlags | FLAG_ASYNC_NOTIFY);
   if (!surface) {
     // The OS threw out some or all of our buffer. We'll need to wait for the
     // redecode (which was automatically triggered by GetFrame) to complete.
-    return MakePair(drawResult, nsRefPtr<layers::Image>());
+    return MakePair(drawResult, RefPtr<layers::Image>());
   }
 
   CairoImage::Data cairoData;
@@ -768,7 +630,7 @@ RasterImage::GetCurrentImage(ImageContainer* aContainer, uint32_t aFlags)
   GetHeight(&cairoData.mSize.height);
   cairoData.mSourceSurface = surface;
 
-  nsRefPtr<layers::Image> image =
+  RefPtr<layers::Image> image =
     aContainer->CreateImage(ImageFormat::CAIRO_SURFACE);
   MOZ_ASSERT(image);
 
@@ -812,7 +674,7 @@ RasterImage::GetImageContainer(LayerManager* aManager, uint32_t aFlags)
     mProgressTracker->OnUnlockedDraw();
   }
 
-  nsRefPtr<layers::ImageContainer> container = mImageContainer.get();
+  RefPtr<layers::ImageContainer> container = mImageContainer.get();
 
   bool mustRedecode =
     (aFlags & (FLAG_SYNC_DECODE | FLAG_SYNC_DECODE_IF_FAST)) &&
@@ -827,7 +689,7 @@ RasterImage::GetImageContainer(LayerManager* aManager, uint32_t aFlags)
   container = LayerManager::CreateImageContainer();
 
   DrawResult drawResult;
-  nsRefPtr<layers::Image> image;
+  RefPtr<layers::Image> image;
   Tie(drawResult, image) = GetCurrentImage(container, aFlags);
   if (!image) {
     return nullptr;
@@ -849,13 +711,13 @@ RasterImage::UpdateImageContainer()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  nsRefPtr<layers::ImageContainer> container = mImageContainer.get();
+  RefPtr<layers::ImageContainer> container = mImageContainer.get();
   if (!container) {
     return;
   }
 
   DrawResult drawResult;
-  nsRefPtr<layers::Image> image;
+  RefPtr<layers::Image> image;
   Tie(drawResult, image) = GetCurrentImage(container, FLAG_NONE);
   if (!image) {
     return;
@@ -903,7 +765,7 @@ public:
   }
 
 private:
-  nsRefPtr<RasterImage> mImage;
+  RefPtr<RasterImage> mImage;
   uint32_t mNewFrameCount;
   IntRect mNewRefreshArea;
 };
@@ -942,14 +804,14 @@ RasterImage::OnAddedFrame(uint32_t aNewFrameCount,
   }
 }
 
-void
+bool
 RasterImage::SetMetadata(const ImageMetadata& aMetadata,
                          bool aFromMetadataDecode)
 {
   MOZ_ASSERT(NS_IsMainThread());
 
   if (mError) {
-    return;
+    return true;
   }
 
   if (aMetadata.HasSize()) {
@@ -957,7 +819,7 @@ RasterImage::SetMetadata(const ImageMetadata& aMetadata,
     if (size.width < 0 || size.height < 0) {
       NS_WARNING("Image has negative intrinsic size");
       DoError();
-      return;
+      return true;
     }
 
     MOZ_ASSERT(aMetadata.HasOrientation());
@@ -968,7 +830,7 @@ RasterImage::SetMetadata(const ImageMetadata& aMetadata,
       NS_WARNING("Image changed size or orientation on redecode! "
                  "This should not happen!");
       DoError();
-      return;
+      return true;
     }
 
     // Set the size and flag that we have it.
@@ -990,7 +852,7 @@ RasterImage::SetMetadata(const ImageMetadata& aMetadata,
       // discovered that it actually was during the full decode. This is a
       // rare failure that only occurs for corrupt images. To recover, we need
       // to discard all existing surfaces and redecode.
-      RecoverFromInvalidFrames(mSize, DECODE_FLAGS_DEFAULT);
+      return false;
     }
   }
 
@@ -1012,6 +874,8 @@ RasterImage::SetMetadata(const ImageMetadata& aMetadata,
     Set("hotspotX", intwrapx);
     Set("hotspotY", intwrapy);
   }
+
+  return true;
 }
 
 NS_IMETHODIMP
@@ -1105,7 +969,6 @@ RasterImage::ResetAnimation()
 }
 
 //******************************************************************************
-// [notxpcom] void setAnimationStartTime ([const] in TimeStamp aTime);
 NS_IMETHODIMP_(void)
 RasterImage::SetAnimationStartTime(const TimeStamp& aTime)
 {
@@ -1329,10 +1192,6 @@ RasterImage::RequestDecodeForSize(const IntSize& aSize, uint32_t aFlags)
     return NS_OK;
   }
 
-  // Fall back to our intrinsic size if we don't support
-  // downscale-during-decode.
-  IntSize targetSize = mDownscaleDuringDecode ? aSize : mSize;
-
   // Decide whether to sync decode images we can decode quickly. Here we are
   // explicitly trading off flashing for responsiveness in the case that we're
   // redecoding an image (see bug 845147).
@@ -1345,7 +1204,7 @@ RasterImage::RequestDecodeForSize(const IntSize& aSize, uint32_t aFlags)
 
   // Look up the first frame of the image, which will implicitly start decoding
   // if it's not available right now.
-  LookupFrame(0, targetSize, flags);
+  LookupFrame(0, aSize, flags);
 
   return NS_OK;
 }
@@ -1395,20 +1254,14 @@ RasterImage::Decode(const IntSize& aSize, uint32_t aFlags)
     return NS_OK;
   }
 
-  if (mDownscaleDuringDecode) {
-    // We're about to decode again, which may mean that some of the previous
-    // sizes we've decoded at aren't useful anymore. We can allow them to
-    // expire from the cache by unlocking them here. When the decode finishes,
-    // it will send an invalidation that will cause all instances of this image
-    // to redraw. If this image is locked, any surfaces that are still useful
-    // will become locked again when LookupFrame touches them, and the remainder
-    // will eventually expire.
-    SurfaceCache::UnlockSurfaces(ImageKey(this));
-  }
-
-  MOZ_ASSERT(mDownscaleDuringDecode || aSize == mSize,
-             "Can only decode to our intrinsic size if we're not allowed to "
-             "downscale-during-decode");
+  // We're about to decode again, which may mean that some of the previous sizes
+  // we've decoded at aren't useful anymore. We can allow them to expire from
+  // the cache by unlocking them here. When the decode finishes, it will send an
+  // invalidation that will cause all instances of this image to redraw. If this
+  // image is locked, any surfaces that are still useful will become locked
+  // again when LookupFrame touches them, and the remainder will eventually
+  // expire.
+  SurfaceCache::UnlockSurfaces(ImageKey(this));
 
   Maybe<IntSize> targetSize = mSize != aSize ? Some(aSize) : Nothing();
 
@@ -1424,19 +1277,24 @@ RasterImage::Decode(const IntSize& aSize, uint32_t aFlags)
     decoderFlags |= DecoderFlags::IS_REDECODE;
   }
 
+  SurfaceFlags surfaceFlags = ToSurfaceFlags(aFlags);
+  if (IsOpaque()) {
+    // If there's no transparency, it doesn't matter whether we premultiply
+    // alpha or not.
+    surfaceFlags &= ~SurfaceFlags::NO_PREMULTIPLY_ALPHA;
+  }
+
   // Create a decoder.
-  nsRefPtr<Decoder> decoder;
+  RefPtr<Decoder> decoder;
   if (mAnim) {
     decoder = DecoderFactory::CreateAnimationDecoder(mDecoderType, this,
                                                      mSourceBuffer, decoderFlags,
-                                                     ToSurfaceFlags(aFlags),
-                                                     mRequestedResolution);
+                                                     surfaceFlags);
   } else {
     decoder = DecoderFactory::CreateDecoder(mDecoderType, this, mSourceBuffer,
                                             targetSize, decoderFlags,
-                                            ToSurfaceFlags(aFlags),
-                                            mRequestedSampleSize,
-                                            mRequestedResolution);
+                                            surfaceFlags,
+                                            mRequestedSampleSize);
   }
 
   // Make sure DecoderFactory was able to create a decoder successfully.
@@ -1489,10 +1347,9 @@ RasterImage::DecodeMetadata(uint32_t aFlags)
   MOZ_ASSERT(!mHasSize, "Should not do unnecessary metadata decodes");
 
   // Create a decoder.
-  nsRefPtr<Decoder> decoder =
+  RefPtr<Decoder> decoder =
     DecoderFactory::CreateMetadataDecoder(mDecoderType, this, mSourceBuffer,
-                                          mRequestedSampleSize,
-                                          mRequestedResolution);
+                                          mRequestedSampleSize);
 
   // Make sure DecoderFactory was able to create a decoder successfully.
   if (!decoder) {
@@ -1533,75 +1390,24 @@ RasterImage::RecoverFromInvalidFrames(const IntSize& aSize, uint32_t aFlags)
   Decode(aSize, aFlags);
 }
 
-bool
-RasterImage::CanScale(GraphicsFilter aFilter,
-                      const IntSize& aSize,
-                      uint32_t aFlags)
+static bool
+HaveSkia()
 {
-#ifndef MOZ_ENABLE_SKIA
-  // The high-quality scaler requires Skia.
-  return false;
+#ifdef MOZ_ENABLE_SKIA
+  return true;
 #else
-  // Check basic requirements: HQ downscaling is enabled, we have all the source
-  // data and know our size, the flags allow us to do it, and a 'good' filter is
-  // being used. The flags may ask us not to scale because the caller isn't
-  // drawing to the window. If we're drawing to something else (e.g. a canvas)
-  // we usually have no way of updating what we've drawn, so HQ scaling is
-  // useless.
-  if (!gfxPrefs::ImageHQDownscalingEnabled() || !mHasSize || !mHasSourceData ||
-      !(aFlags & imgIContainer::FLAG_HIGH_QUALITY_SCALING) ||
-      aFilter != GraphicsFilter::FILTER_GOOD) {
-    return false;
-  }
-
-  // We don't HQ scale images that we can downscale during decode.
-  if (mDownscaleDuringDecode) {
-    return false;
-  }
-
-  // We don't use the scaler for animated or transient images to avoid doing a
-  // bunch of work on an image that just gets thrown away.
-  if (mAnim || mTransient) {
-    return false;
-  }
-
-  // If target size is 1:1 with original, don't scale.
-  if (aSize == mSize) {
-    return false;
-  }
-
-  // To save memory, don't quality upscale images bigger than the limit.
-  if (aSize.width > mSize.width || aSize.height > mSize.height) {
-    uint32_t scaledSize = static_cast<uint32_t>(aSize.width * aSize.height);
-    if (scaledSize > gfxPrefs::ImageHQUpscalingMaxSize()) {
-      return false;
-    }
-  }
-
-  // There's no point in scaling if we can't store the result.
-  if (!SurfaceCache::CanHold(aSize)) {
-    return false;
-  }
-
-  // XXX(seth): It's not clear what this check buys us over
-  // gfxPrefs::ImageHQUpscalingMaxSize().
-  // The default value of this pref is 1000, which means that we never upscale.
-  // If that's all it's getting us, I'd rather we just forbid that explicitly.
-  gfx::Size scale(double(aSize.width) / mSize.width,
-                  double(aSize.height) / mSize.height);
-  gfxFloat minFactor = gfxPrefs::ImageHQDownscalingMinFactor() / 1000.0;
-  return (scale.width < minFactor || scale.height < minFactor);
+  return false;
 #endif
 }
 
 bool
 RasterImage::CanDownscaleDuringDecode(const IntSize& aSize, uint32_t aFlags)
 {
-  // Check basic requirements: downscale-during-decode is enabled for this
-  // image, we have all the source data and know our size, the flags allow us to
-  // do it, and a 'good' filter is being used.
-  if (!mDownscaleDuringDecode || !mHasSize ||
-      !gfxPrefs::ImageHQDownscalingEnabled() ||
+  // Check basic requirements: downscale-during-decode is enabled, Skia is
+  // available, this image isn't transient, we have all the source data and know
+  // our size, and the flags allow us to do it.
+  if (!mHasSize || mTransient || !HaveSkia() ||
+      !gfxPrefs::ImageDownscaleDuringDecodeEnabled() ||
       !(aFlags & imgIContainer::FLAG_HIGH_QUALITY_SCALING)) {
     return false;
   }
@@ -1629,87 +1435,21 @@ RasterImage::CanDownscaleDuringDecode(const IntSize& aSize, uint32_t aFlags)
   return true;
 }
 
-void
-RasterImage::NotifyNewScaledFrame()
-{
-  // Send an invalidation so observers will repaint and can take advantage of
-  // the new scaled frame if possible.
-  NotifyProgress(NoProgress, IntRect(0, 0, mSize.width, mSize.height));
-}
-
-void
-RasterImage::RequestScale(imgFrame* aFrame,
-                          uint32_t aFlags,
-                          const IntSize& aSize)
-{
-  // We don't scale frames which aren't fully decoded.
-  if (!aFrame->IsImageComplete()) {
-    return;
-  }
-
-  // We can't scale frames that need padding or are single pixel.
-  if (aFrame->NeedsPadding() || aFrame->IsSinglePixel()) {
-    return;
-  }
-
-  // We also can't scale if we can't lock the image data for this frame.
-  RawAccessFrameRef frameRef = aFrame->RawAccessRef();
-  if (!frameRef) {
-    return;
-  }
-
-  nsRefPtr<ScaleRunner> runner =
-    new ScaleRunner(this, aFlags, aSize, Move(frameRef));
-  if (runner->Init()) {
-    if (!sScaleWorkerThread) {
-      NS_NewNamedThread("Image Scaler", getter_AddRefs(sScaleWorkerThread));
-      ClearOnShutdown(&sScaleWorkerThread);
-    }
-
-    sScaleWorkerThread->Dispatch(runner, NS_DISPATCH_NORMAL);
-  }
-}
-
 DrawResult
-RasterImage::DrawWithPreDownscaleIfNeeded(DrawableFrameRef&& aFrameRef,
-                                          gfxContext* aContext,
-                                          const IntSize& aSize,
-                                          const ImageRegion& aRegion,
-                                          GraphicsFilter aFilter,
-                                          uint32_t aFlags)
+RasterImage::DrawInternal(DrawableFrameRef&& aFrameRef,
+                          gfxContext* aContext,
+                          const IntSize& aSize,
+                          const ImageRegion& aRegion,
+                          Filter aFilter,
+                          uint32_t aFlags)
 {
-  DrawableFrameRef frameRef;
-
-  if (CanScale(aFilter, aSize, aFlags)) {
-    LookupResult result =
-      SurfaceCache::Lookup(ImageKey(this),
-                           RasterSurfaceKey(aSize,
-                                            ToSurfaceFlags(aFlags),
-                                            /* aFrameNum = */ 0));
-    if (!result) {
-      // We either didn't have a matching scaled frame or the OS threw it away.
-      // Request a new one so we'll be ready next time. For now, we'll fall back
-      // to aFrameRef below.
-      RequestScale(aFrameRef.get(), aFlags, aSize);
-    }
-    if (result && result.DrawableRef()->IsImageComplete()) {
-      frameRef = Move(result.DrawableRef());  // The scaled version is ready.
-    }
-  }
-
   gfxContextMatrixAutoSaveRestore saveMatrix(aContext);
   ImageRegion region(aRegion);
-  bool frameIsComplete = true;  // We already checked HQ scaled frames.
-  if (!frameRef) {
-    // There's no HQ scaled frame available, so we'll have to use the frame
-    // provided by the caller.
-    frameRef = Move(aFrameRef);
-    frameIsComplete = frameRef->IsImageComplete();
-  }
+  bool frameIsComplete = aFrameRef->IsImageComplete();
 
   // By now we may have a frame with the requested size. If not, we need to
   // adjust the drawing parameters accordingly.
-  IntSize finalSize = frameRef->GetImageSize();
+  IntSize finalSize = aFrameRef->GetImageSize();
   bool couldRedecodeForBetterFrame = false;
   if (finalSize != aSize) {
     gfx::Size scale(double(aSize.width) / finalSize.width,
@@ -1717,11 +1457,10 @@ RasterImage::DrawWithPreDownscaleIfNeeded(DrawableFrameRef&& aFrameRef,
     aContext->Multiply(gfxMatrix::Scaling(scale.width, scale.height));
     region.Scale(1.0 / scale.width, 1.0 / scale.height);
 
-    couldRedecodeForBetterFrame = mDownscaleDuringDecode &&
-                                  CanDownscaleDuringDecode(aSize, aFlags);
+    couldRedecodeForBetterFrame = CanDownscaleDuringDecode(aSize, aFlags);
   }
 
-  if (!frameRef->Draw(aContext, region, aFilter, aFlags)) {
+  if (!aFrameRef->Draw(aContext, region, aFilter, aFlags)) {
     RecoverFromInvalidFrames(aSize, aFlags);
     return DrawResult::TEMPORARY_ERROR;
   }
@@ -1735,21 +1474,12 @@ RasterImage::DrawWithPreDownscaleIfNeeded(DrawableFrameRef&& aFrameRef,
 }
 
 //******************************************************************************
-/* [noscript] void draw(in gfxContext aContext,
- *                      in gfxGraphicsFilter aFilter,
- *                      [const] in gfxMatrix aUserSpaceToImageSpace,
- *                      [const] in gfxRect aFill,
- *                      [const] in IntRect aSubimage,
- *                      [const] in IntSize aViewportSize,
- *                      [const] in SVGImageContext aSVGContext,
- *                      in uint32_t aWhichFrame,
- *                      in uint32_t aFlags); */
 NS_IMETHODIMP_(DrawResult)
 RasterImage::Draw(gfxContext* aContext,
                   const IntSize& aSize,
                   const ImageRegion& aRegion,
                   uint32_t aWhichFrame,
-                  GraphicsFilter aFilter,
+                  Filter aFilter,
                   const Maybe<SVGImageContext>& /*aSVGContext - ignored*/,
                   uint32_t aFlags)
 {
@@ -1776,9 +1506,9 @@ RasterImage::Draw(gfxContext* aContext,
     mProgressTracker->OnUnlockedDraw();
   }
 
-  // If we're not using GraphicsFilter::FILTER_GOOD, we shouldn't high-quality
-  // scale or downscale during decode.
-  uint32_t flags = aFilter == GraphicsFilter::FILTER_GOOD
+  // If we're not using Filter::GOOD, we shouldn't high-quality scale or
+  // downscale during decode.
+  uint32_t flags = aFilter == Filter::GOOD
                  ? aFlags
                  : aFlags & ~FLAG_HIGH_QUALITY_SCALING;
 
@@ -1795,8 +1525,8 @@ RasterImage::Draw(gfxContext* aContext,
   bool shouldRecordTelemetry = !mDrawStartTime.IsNull() &&
                                ref->IsImageComplete();
 
-  auto result = DrawWithPreDownscaleIfNeeded(Move(ref), aContext, aSize,
-                                             aRegion, aFilter, flags);
+  auto result = DrawInternal(Move(ref), aContext, aSize,
+                             aRegion, aFilter, flags);
 
   if (shouldRecordTelemetry) {
       TimeDuration drawLatency = TimeStamp::Now() - mDrawStartTime;
@@ -1915,7 +1645,7 @@ RasterImage::DoError()
 /* static */ void
 RasterImage::HandleErrorWorker::DispatchIfNeeded(RasterImage* aImage)
 {
-  nsRefPtr<HandleErrorWorker> worker = new HandleErrorWorker(aImage);
+  RefPtr<HandleErrorWorker> worker = new HandleErrorWorker(aImage);
   NS_DispatchToMainThread(worker);
 }
 
@@ -1961,7 +1691,7 @@ RasterImage::NotifyProgress(Progress aProgress,
   MOZ_ASSERT(NS_IsMainThread());
 
   // Ensure that we stay alive long enough to finish notifying.
-  nsRefPtr<RasterImage> image(this);
+  RefPtr<RasterImage> image(this);
 
   bool wasDefaultFlags = aSurfaceFlags == DefaultSurfaceFlags();
 
@@ -1991,7 +1721,18 @@ RasterImage::FinalizeDecoder(Decoder* aDecoder)
   }
 
   // Record all the metadata the decoder gathered about this image.
-  SetMetadata(aDecoder->GetImageMetadata(), wasMetadata);
+  bool metadataOK = SetMetadata(aDecoder->GetImageMetadata(), wasMetadata);
+  if (!metadataOK) {
+    // This indicates a serious error that requires us to discard all existing
+    // surfaces and redecode to recover. We'll drop the results from this
+    // decoder on the floor, since they aren't valid.
+    aDecoder->TakeProgress();
+    aDecoder->TakeInvalidRect();
+    RecoverFromInvalidFrames(mSize,
+                             FromSurfaceFlags(aDecoder->GetSurfaceFlags()));
+    return;
+  }
+
   MOZ_ASSERT(mError || mHasSize || !aDecoder->HasSize(),
              "SetMetadata should've gotten a size");
 
@@ -2095,7 +1836,7 @@ RasterImage::PropagateUseCounters(nsIDocument*)
 
 IntSize
 RasterImage::OptimalImageSizeForDest(const gfxSize& aDest, uint32_t aWhichFrame,
-                                     GraphicsFilter aFilter, uint32_t aFlags)
+                                     Filter aFilter, uint32_t aFlags)
 {
   MOZ_ASSERT(aDest.width >= 0 || ceil(aDest.width) <= INT32_MAX ||
              aDest.height >= 0 || ceil(aDest.height) <= INT32_MAX,
@@ -2107,31 +1848,11 @@ RasterImage::OptimalImageSizeForDest(const gfxSize& aDest, uint32_t aWhichFrame,
 
   IntSize destSize(ceil(aDest.width), ceil(aDest.height));
 
-  if (aFilter == GraphicsFilter::FILTER_GOOD &&
-      CanDownscaleDuringDecode(destSize, aFlags)) {
+  if (aFilter == Filter::GOOD && CanDownscaleDuringDecode(destSize, aFlags)) {
     return destSize;
-  } else if (CanScale(aFilter, destSize, aFlags)) {
-    LookupResult result =
-      SurfaceCache::Lookup(ImageKey(this),
-                           RasterSurfaceKey(destSize,
-                                            ToSurfaceFlags(aFlags),
-                                            /* aFrameNum = */ 0));
-
-    if (result && result.DrawableRef()->IsImageComplete()) {
-      return destSize;  // We have an existing HQ scale for this size.
-    }
-    if (!result) {
-      // We could HQ scale to this size, but we haven't. Request a scale now.
-      DrawableFrameRef ref = LookupFrame(GetRequestedFrameIndex(aWhichFrame),
-                                         mSize, aFlags);
-      if (ref) {
-        RequestScale(ref.get(), aFlags, destSize);
-      }
-    }
   }
 
-  // We either can't HQ scale to this size or the scaled version isn't ready
-  // yet. Use our intrinsic size for now.
+  // We can't scale to this size. Use our intrinsic size for now.
   return mSize;
 }
 

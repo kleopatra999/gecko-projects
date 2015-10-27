@@ -24,35 +24,21 @@ import shutil
 import mozfile
 import logging
 
-from talos.utils import TalosError, TalosCrash, TalosRegression
+from talos.utils import TalosCrash, TalosRegression
 from talos.talos_process import run_browser
 from talos.ffsetup import FFSetup
 from talos.cmanager import CounterManagement
 
 
 class TTest(object):
+    platform_type = utils.PLATFORM_TYPE
 
-    if platform.system() == "Linux":
-        platform_type = 'linux_'
-    elif platform.system() in ("Windows", "Microsoft"):
-        if '5.1' in platform.version():  # winxp
-            platform_type = 'win_'
-        elif '6.1' in platform.version():  # w7
-            platform_type = 'w7_'
-        elif '6.2' in platform.version():  # w8
-            platform_type = 'w8_'
-        else:
-            raise TalosError('unsupported windows version')
-    elif platform.system() == "Darwin":
-        platform_type = 'mac_'
-
-    def check_for_crashes(self, browser_config, profile_dir, test_name):
+    def check_for_crashes(self, browser_config, minidump_dir, test_name):
         # check for minidumps
-        minidumpdir = os.path.join(profile_dir, 'minidumps')
-        found = mozcrash.check_for_crashes(minidumpdir,
+        found = mozcrash.check_for_crashes(minidump_dir,
                                            browser_config['symbols_path'],
                                            test_name=test_name)
-        mozfile.remove(minidumpdir)
+        mozfile.remove(minidump_dir)
 
         if found:
             raise TalosCrash("Found crashes after test run, terminating test")
@@ -75,6 +61,7 @@ class TTest(object):
             return self._runTest(browser_config, test_config, setup)
 
     def _runTest(self, browser_config, test_config, setup):
+        minidump_dir = os.path.join(setup.profile_dir, 'minidumps')
         counters = test_config.get(self.platform_type + 'counters', [])
         resolution = test_config['resolution']
 
@@ -178,6 +165,7 @@ class TTest(object):
             try:
                 pcontext = run_browser(
                     command_args,
+                    minidump_dir,
                     timeout=timeout,
                     env=setup.env,
                     # start collecting counters as soon as possible
@@ -238,25 +226,17 @@ class TTest(object):
                 )
 
             # add the results from the browser output
-            try:
-                test_results.add(
-                    '\n'.join(pcontext.output),
-                    counter_results=(counter_management.results()
-                                     if counter_management
-                                     else None))
-            except Exception:
-                # Log the exception, but continue. One way to get here
-                # is if the browser hangs, and we'd still like to get
-                # symbolicated profiles in that case.
-                # TODO: the browser can't be hanging here anymore
-                # check if we can remove this, or if we should adjust the
-                # above comment.
-                logging.exception("Unable to add results for cycle %d" % i)
+            test_results.add(
+                '\n'.join(pcontext.output),
+                counter_results=(counter_management.results()
+                                 if counter_management
+                                 else None)
+            )
 
             if setup.sps_profile:
                 setup.sps_profile.symbolicate(i)
 
-            self.check_for_crashes(browser_config, setup.profile_dir,
+            self.check_for_crashes(browser_config, minidump_dir,
                                    test_config['name'])
 
         # include global (cross-cycle) counters

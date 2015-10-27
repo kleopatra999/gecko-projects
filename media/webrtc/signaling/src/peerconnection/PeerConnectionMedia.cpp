@@ -142,7 +142,7 @@ void SourceStreamInfo::DetachMedia_m()
 already_AddRefed<PeerConnectionImpl>
 PeerConnectionImpl::Constructor(const dom::GlobalObject& aGlobal, ErrorResult& rv)
 {
-  nsRefPtr<PeerConnectionImpl> pc = new PeerConnectionImpl(&aGlobal);
+  RefPtr<PeerConnectionImpl> pc = new PeerConnectionImpl(&aGlobal);
 
   CSFLogDebug(logTag, "Created PeerConnection: %p", pc.get());
 
@@ -205,9 +205,15 @@ PeerConnectionMedia::ProtocolProxyQueryHandler::SetProxyOnPcm(
 
   if (pcm_->mIceCtx.get()) {
     assert(httpsProxyPort >= 0 && httpsProxyPort < (1 << 16));
+    // Note that this could check if PrivacyRequested() is set on the PC and
+    // remove "webrtc" from the ALPN list.  But that would only work if the PC
+    // was constructed with a peerIdentity constraint, not when isolated
+    // streams are added.  If we ever need to signal to the proxy that the
+    // media is isolated, then we would need to restructure this code.
     pcm_->mProxyServer.reset(
       new NrIceProxyServer(httpsProxyHost.get(),
-                           static_cast<uint16_t>(httpsProxyPort)));
+                           static_cast<uint16_t>(httpsProxyPort),
+                           "webrtc,c-webrtc"));
   } else {
     CSFLogError(logTag, "%s: Failed to set proxy server (ICE ctx unavailable)",
         __FUNCTION__);
@@ -291,7 +297,7 @@ nsresult PeerConnectionMedia::Init(const std::vector<NrIceStunServer>& stun_serv
     return NS_ERROR_FAILURE;
   }
 
-  nsRefPtr<ProtocolProxyQueryHandler> handler = new ProtocolProxyQueryHandler(this);
+  RefPtr<ProtocolProxyQueryHandler> handler = new ProtocolProxyQueryHandler(this);
   rv = pps->AsyncResolve(channel,
                          nsIProtocolProxyService::RESOLVE_PREFER_HTTPS_PROXY |
                          nsIProtocolProxyService::RESOLVE_ALWAYS_TUNNEL,
@@ -304,6 +310,10 @@ nsresult PeerConnectionMedia::Init(const std::vector<NrIceStunServer>& stun_serv
 
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
   bool ice_tcp = Preferences::GetBool("media.peerconnection.ice.tcp", false);
+  if (!XRE_IsParentProcess()) {
+    CSFLogError(logTag, "%s: ICE TCP not support on e10s", __FUNCTION__);
+    ice_tcp = false;
+  }
   bool default_address_only = Preferences::GetBool(
     "media.peerconnection.ice.default_address_only", false);
 #else
@@ -316,7 +326,6 @@ nsresult PeerConnectionMedia::Init(const std::vector<NrIceStunServer>& stun_serv
   // Looks like a bug in the NrIceCtx API.
   mIceCtx = NrIceCtx::Create("PC:" + mParentName,
                              true, // Offerer
-                             true, // Explicitly set priorities
                              mParent->GetAllowIceLoopback(),
                              ice_tcp,
                              mParent->GetAllowIceLinkLocal(),
@@ -692,7 +701,7 @@ PeerConnectionMedia::AddTrack(DOMMediaStream* aMediaStream,
 
   CSFLogDebug(logTag, "%s: MediaStream: %p", __FUNCTION__, aMediaStream);
 
-  nsRefPtr<LocalSourceStreamInfo> localSourceStream =
+  RefPtr<LocalSourceStreamInfo> localSourceStream =
     GetLocalStreamById(streamId);
 
   if (!localSourceStream) {
@@ -713,7 +722,7 @@ PeerConnectionMedia::RemoveLocalTrack(const std::string& streamId,
   CSFLogDebug(logTag, "%s: stream: %s track: %s", __FUNCTION__,
                       streamId.c_str(), trackId.c_str());
 
-  nsRefPtr<LocalSourceStreamInfo> localSourceStream =
+  RefPtr<LocalSourceStreamInfo> localSourceStream =
     GetLocalStreamById(streamId);
   if (!localSourceStream) {
     return NS_ERROR_ILLEGAL_VALUE;
@@ -735,7 +744,7 @@ PeerConnectionMedia::RemoveRemoteTrack(const std::string& streamId,
   CSFLogDebug(logTag, "%s: stream: %s track: %s", __FUNCTION__,
                       streamId.c_str(), trackId.c_str());
 
-  nsRefPtr<RemoteSourceStreamInfo> remoteSourceStream =
+  RefPtr<RemoteSourceStreamInfo> remoteSourceStream =
     GetRemoteStreamById(streamId);
   if (!remoteSourceStream) {
     return NS_ERROR_ILLEGAL_VALUE;
@@ -882,7 +891,7 @@ PeerConnectionMedia::GetRemoteStreamById(const std::string& id)
 }
 
 nsresult
-PeerConnectionMedia::AddRemoteStream(nsRefPtr<RemoteSourceStreamInfo> aInfo)
+PeerConnectionMedia::AddRemoteStream(RefPtr<RemoteSourceStreamInfo> aInfo)
 {
   ASSERT_ON_THREAD(mMainThread);
 
@@ -1224,10 +1233,10 @@ SourceStreamInfo::AnyCodecHasPluginID(uint64_t aPluginID)
 }
 
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
-nsRefPtr<mozilla::dom::VideoStreamTrack>
+RefPtr<mozilla::dom::VideoStreamTrack>
 SourceStreamInfo::GetVideoTrackByTrackId(const std::string& trackId)
 {
-  nsTArray<nsRefPtr<mozilla::dom::VideoStreamTrack>> videoTracks;
+  nsTArray<RefPtr<mozilla::dom::VideoStreamTrack>> videoTracks;
 
   mMediaStream->GetVideoTracks(videoTracks);
 
@@ -1246,7 +1255,7 @@ SourceStreamInfo::GetVideoTrackByTrackId(const std::string& trackId)
 nsresult
 SourceStreamInfo::StorePipeline(
     const std::string& trackId,
-    const mozilla::RefPtr<mozilla::MediaPipeline>& aPipeline)
+    const RefPtr<mozilla::MediaPipeline>& aPipeline)
 {
   MOZ_ASSERT(mPipelines.find(trackId) == mPipelines.end());
   if (mPipelines.find(trackId) != mPipelines.end()) {
@@ -1295,7 +1304,7 @@ RemoteSourceStreamInfo::StartReceiving()
 
   mReceiving = true;
 
-  SourceMediaStream* source = GetMediaStream()->GetStream()->AsSourceStream();
+  SourceMediaStream* source = GetMediaStream()->GetInputStream()->AsSourceStream();
   source->FinishAddTracks();
   source->SetPullEnabled(true);
   // AdvanceKnownTracksTicksTime(HEAT_DEATH_OF_UNIVERSE) means that in

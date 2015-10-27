@@ -30,13 +30,6 @@ import mozpack.path as mozpath
 here = os.path.abspath(os.path.dirname(__file__))
 
 
-ADB_NOT_FOUND = '''
-The mochitest command requires the adb binary to be on your path.
-
-If you have a B2G build, this can be found in
-'{}/out/host/<platform>/bin'.
-'''.lstrip()
-
 GAIA_PROFILE_NOT_FOUND = '''
 The mochitest command requires a non-debug gaia profile. Either
 pass in --profile, or set the GAIA_PROFILE environment variable.
@@ -287,13 +280,6 @@ class MochitestRunner(MozbuildObject):
         if options.desktop:
             return mochitest.run_desktop_mochitests(options)
 
-        try:
-            which.which('adb')
-        except which.WhichError:
-            # TODO Find adb automatically if it isn't on the path
-            print(ADB_NOT_FOUND.format(options.b2gPath))
-            return 1
-
         return mochitest.run_remote_mochitests(options)
 
     def run_desktop_test(self, context, tests=None, suite=None, **kwargs):
@@ -426,7 +412,7 @@ def setup_argument_parser():
         # be done in this admittedly awkward place because
         # MochitestArgumentParser initialization fails if no device is found.
         from mozrunner.devices.android_device import verify_android_device
-        verify_android_device(build_obj, install=True)
+        verify_android_device(build_obj, install=True, xre=True)
 
     return MochitestArgumentParser()
 
@@ -648,6 +634,9 @@ class RobocopCommands(MachCommandBase):
         return mochitest.run_robocop_test(self._mach_context, tests, 'robocop', **kwargs)
 
 
+# NOTE python/mach/mach/commands/commandinfo.py references this function
+#      by name. If this function is renamed or removed, that file should
+#      be updated accordingly as well.
 def REMOVED(cls):
     """Command no longer exists! Use |mach mochitest| instead.
 

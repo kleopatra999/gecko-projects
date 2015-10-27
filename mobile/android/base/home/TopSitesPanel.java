@@ -173,7 +173,7 @@ public class TopSitesPanel extends HomeFragment {
 
                 final String url = c.getString(c.getColumnIndexOrThrow(TopSites.URL));
 
-                Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.LIST_ITEM);
+                Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.LIST_ITEM, "top_sites");
 
                 // This item is a TwoLinePageRow, so we allow switch-to-tab.
                 mUrlOpenListener.onUrlOpen(url, EnumSet.of(OnUrlOpenListener.Flags.ALLOW_SWITCH_TO_TAB));
@@ -342,6 +342,11 @@ public class TopSitesPanel extends HomeFragment {
             // Long pressed item was not a Top Sites GridView item. Superclass
             // can handle this.
             super.onCreateContextMenu(menu, view, menuInfo);
+
+            if (!RestrictedProfiles.isAllowed(view.getContext(), Restriction.DISALLOW_CLEAR_HISTORY)) {
+                menu.findItem(R.id.home_remove).setVisible(false);
+            }
+
             return;
         }
 

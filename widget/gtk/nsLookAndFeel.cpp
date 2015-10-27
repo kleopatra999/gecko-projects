@@ -23,6 +23,7 @@
 #include "gtkdrawing.h"
 #include "nsStyleConsts.h"
 #include "gfxFontConstants.h"
+#include "WidgetUtils.h"
 
 #include <dlfcn.h>
 
@@ -634,8 +635,13 @@ nsLookAndFeel::GetIntImpl(IntID aID, int32_t &aResult)
         res = NS_ERROR_NOT_IMPLEMENTED;
         break;
     case eIntID_TouchEnabled:
+#if MOZ_WIDGET_GTK == 3
+        aResult = mozilla::widget::WidgetUtils::IsTouchDeviceSupportPresent();
+        break;
+#else
         aResult = 0;
         res = NS_ERROR_NOT_IMPLEMENTED;
+#endif
         break;
     case eIntID_MacGraphiteTheme:
     case eIntID_MacLionTheme:
@@ -1202,15 +1208,15 @@ nsLookAndFeel::Init()
     gtk_widget_path_free(path);
 
     // GtkInfoBar
-    path = gtk_widget_path_new();
-    gtk_widget_path_append_type(path, GTK_TYPE_WINDOW);
-    gtk_widget_path_append_type(path, GTK_TYPE_INFO_BAR);
-    style = create_context(path);
+    GtkWidget* infoBar = gtk_info_bar_new();
+    GtkWidget* infoBarContent = gtk_info_bar_get_content_area(GTK_INFO_BAR(infoBar));
+    GtkWidget* infoBarLabel = gtk_label_new(nullptr);
+    gtk_container_add(GTK_CONTAINER(parent), infoBar);
+    gtk_container_add(GTK_CONTAINER(infoBarContent), infoBarLabel);
+    style = gtk_widget_get_style_context(infoBarLabel);
     gtk_style_context_add_class(style, GTK_STYLE_CLASS_INFO);
     gtk_style_context_get_color(style, GTK_STATE_FLAG_NORMAL, &color);
     sInfoBarText = GDK_RGBA_TO_NS_RGBA(color);
-    g_object_unref(style);
-    gtk_widget_path_free(path);
 #endif
     // Some themes have a unified menu bar, and support window dragging on it
     gboolean supports_menubar_drag = FALSE;

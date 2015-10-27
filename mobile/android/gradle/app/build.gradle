@@ -1,12 +1,15 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion 22
-    buildToolsVersion "22.0.1"
+    compileSdkVersion 23
+    buildToolsVersion "23.0.1"
 
     defaultConfig {
         targetSdkVersion 22
         minSdkVersion 9
+        applicationId mozconfig.substs.ANDROID_PACKAGE_NAME
+        testApplicationId 'org.mozilla.roboexample.test'
+        testInstrumentationRunner 'org.mozilla.gecko.FennecInstrumentationTestRunner'
     }
 
     compileOptions {
@@ -25,13 +28,13 @@ android {
         }
     }
 
-    defaultConfig {
-        testApplicationId 'org.mozilla.roboexample.test'
-        testInstrumentationRunner 'org.mozilla.gecko.FennecInstrumentationTestRunner'
-    }
-
     sourceSets {
+        main {
+            manifest.srcFile "${topobjdir}/mobile/android/base/AndroidManifest.xml"
+        }
+
         androidTest {
+            manifest.srcFile "${topobjdir}/build/mobile/robocop/AndroidManifest.xml"
             java {
                 srcDir "src/robocop_harness"
                 srcDir "src/robocop"

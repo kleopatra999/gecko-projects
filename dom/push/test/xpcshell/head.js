@@ -3,7 +3,7 @@
 
 'use strict';
 
-let {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import('resource://gre/modules/Services.jsm');
@@ -279,7 +279,7 @@ MockWebSocket.prototype = {
     return this._originalURI;
   },
 
-  asyncOpen(uri, origin, listener, context) {
+  asyncOpen(uri, origin, windowId, listener, context) {
     this._listener = listener;
     this._context = context;
     waterfall(() => this._listener.onStart(this._context));

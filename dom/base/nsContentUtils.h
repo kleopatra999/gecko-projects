@@ -195,6 +195,47 @@ public:
   static bool     ThreadsafeIsCallerChrome();
   static bool     IsCallerContentXBL();
 
+  // In the traditional Gecko architecture, both C++ code and untrusted JS code
+  // needed to rely on the same XPCOM method/getter/setter to get work done.
+  // This required lots of security checks in the various exposed methods, which
+  // in turn created difficulty in determining whether the caller was script
+  // (whose access needed to be checked) and internal C++ platform code (whose
+  // access did not need to be checked). To address this problem, Gecko had a
+  // convention whereby the absence of script on the stack was interpretted as
+  // "System Caller" and always granted unfettered access.
+  //
+  // Unfortunately, this created a bunch of footguns. For example, when the
+  // implementation of a DOM method wanted to perform a privileged
+  // sub-operation, it needed to "hide" the presence of script on the stack in
+  // order for that sub-operation to be allowed. Additionally, if script could
+  // trigger an API entry point to be invoked in some asynchronous way without
+  // script on the stack, it could potentially perform privilege escalation.
+  //
+  // In the modern world, untrusted script should interact with the platform
+  // exclusively over WebIDL APIs, and platform code has a lot more flexibility
+  // in deciding whether or not to use XPCOM. This gives us the flexibility to
+  // do something better.
+  //
+  // Going forward, APIs should be designed such that any security checks that
+  // ask the question "is my caller allowed to do this?" should live in WebIDL
+  // API entry points, with a separate method provided for internal callers
+  // that just want to get the job done.
+  //
+  // To enforce this and catch bugs, nsContentUtils::SubjectPrincipal will crash
+  // if it is invoked without script on the stack. To land that transition, it
+  // was necessary to go through and whitelist a bunch of callers that were
+  // depending on the old behavior. Those callers should be fixed up, and these
+  // methods should not be used by new code without review from bholley or bz.
+  static bool     LegacyIsCallerNativeCode() { return !GetCurrentJSContext(); }
+  static bool     LegacyIsCallerChromeOrNativeCode() { return LegacyIsCallerNativeCode() || IsCallerChrome(); }
+  static nsIPrincipal* SubjectPrincipalOrSystemIfNativeCaller()
+  {
+    if (!GetCurrentJSContext()) {
+      return GetSystemPrincipal();
+    }
+    return SubjectPrincipal();
+  }
+
   static bool     IsImageSrcSetDisabled();
 
   static bool LookupBindingMember(JSContext* aCx, nsIContent *aContent,
@@ -624,7 +665,7 @@ public:
    * @param aContext the context the image is loaded in (eg an element)
    * @param aLoadingDocument the document we belong to
    * @param aLoadingPrincipal the principal doing the load
-   * @param [aContentPolicyType=nsIContentPolicy::TYPE_IMAGE] (Optional)
+   * @param [aContentPolicyType=nsIContentPolicy::TYPE_INTERNAL_IMAGE] (Optional)
    *        The CP content type to use
    * @param aImageBlockingStatus the nsIContentPolicy blocking status for this
    *        image.  This will be set even if a security check fails for the
@@ -640,7 +681,7 @@ public:
                            nsIDocument* aLoadingDocument,
                            nsIPrincipal* aLoadingPrincipal,
                            int16_t* aImageBlockingStatus = nullptr,
-                           uint32_t aContentPolicyType = nsIContentPolicy::TYPE_IMAGE);
+                           uint32_t aContentPolicyType = nsIContentPolicy::TYPE_INTERNAL_IMAGE);
 
   /**
    * Returns true if objects in aDocument shouldn't initiate image loads.
@@ -660,7 +701,7 @@ public:
    *         creation
    * @param aObserver the observer for the image load
    * @param aLoadFlags the load flags to use.  See nsIRequest
-   * @param [aContentPolicyType=nsIContentPolicy::TYPE_IMAGE] (Optional)
+   * @param [aContentPolicyType=nsIContentPolicy::TYPE_INTERNAL_IMAGE] (Optional)
    *        The CP content type to use
    * @return the imgIRequest for the image load
    */
@@ -673,7 +714,7 @@ public:
                             int32_t aLoadFlags,
                             const nsAString& initiatorType,
                             imgRequestProxy** aRequest,
-                            uint32_t aContentPolicyType = nsIContentPolicy::TYPE_IMAGE);
+                            uint32_t aContentPolicyType = nsIContentPolicy::TYPE_INTERNAL_IMAGE);
 
   /**
    * Obtain an image loader that respects the given document/channel's privacy status.
@@ -954,6 +995,28 @@ public:
   static nsContentPolicyType InternalContentPolicyTypeToExternal(nsContentPolicyType aType);
 
   /**
+   * Map internal content policy types to external ones or script types:
+   *   * TYPE_INTERNAL_SCRIPT
+   *   * TYPE_INTERNAL_WORKER
+   *   * TYPE_INTERNAL_SHARED_WORKER
+   *   * TYPE_INTERNAL_SERVICE_WORKER
+   *
+   *
+   * Note: DO NOT call this function unless you know what you're doing!
+   */
+  static nsContentPolicyType InternalContentPolicyTypeToExternalOrScript(nsContentPolicyType aType);
+
+  /**
+   * Map internal content policy types to external ones or preload types:
+   *   * TYPE_INTERNAL_SCRIPT_PRELOAD
+   *   * TYPE_INTERNAL_IMAGE_PRELOAD
+   *   * TYPE_INTERNAL_STYLESHEET_PRELOAD
+   *
+   * Note: DO NOT call this function unless you know what you're doing!
+   */
+  static nsContentPolicyType InternalContentPolicyTypeToExternalOrPreload(nsContentPolicyType aType);
+
+  /**
    * Quick helper to determine whether there are any mutation listeners
    * of a given type that apply to this content or any of its ancestors.
    * The method has the side effect to call document's MayDispatchMutationEvent
@@ -1101,7 +1164,7 @@ public:
 
   /**
    * Return the event message for the event with the given name. The name is
-   * the event name with the 'on' prefix. Returns NS_USER_DEFINED_EVENT if the
+   * the event name with the 'on' prefix. Returns eUnidentifiedEvent if the
    * event doesn't match a known event name.
    *
    * @param aName the event name to look up
@@ -1120,7 +1183,7 @@ public:
   /**
    * Return the event message and atom for the event with the given name.
    * The name is the event name *without* the 'on' prefix.
-   * Returns NS_USER_DEFINED_EVENT on the aEventID if the
+   * Returns eUnidentifiedEvent on the aEventID if the
    * event doesn't match a known event name in the category.
    *
    * @param aName the event name to look up
@@ -1367,38 +1430,6 @@ public:
   static void NotifyInstalledMenuKeyboardListener(bool aInstalling);
 
   /**
-   * Do security checks before loading a resource. Does the following checks:
-   *   nsIScriptSecurityManager::CheckLoadURIWithPrincipal
-   *   NS_CheckContentLoadPolicy
-   *   nsIScriptSecurityManager::CheckSameOriginURI
-   *
-   * You will still need to do at least SameOrigin checks before on redirects.
-   *
-   * @param aURIToLoad         URI that is getting loaded.
-   * @param aLoadingPrincipal  Principal of the resource that is initiating
-   *                           the load
-   * @param aCheckLoadFlags    Flags to be passed to
-   *                           nsIScriptSecurityManager::CheckLoadURIWithPrincipal
-   *                           NOTE: If this contains ALLOW_CHROME the
-   *                                 CheckSameOriginURI check will be skipped if
-   *                                 aURIToLoad is a chrome uri.
-   * @param aAllowData         Set to true to skip CheckSameOriginURI check when
-                               aURIToLoad is a data uri.
-   * @param aContentPolicyType Type     \
-   * @param aContext           Context   |- to be passed to
-   * @param aMimeGuess         Mimetype  |      NS_CheckContentLoadPolicy
-   * @param aExtra             Extra    /
-   */
-  static nsresult CheckSecurityBeforeLoad(nsIURI* aURIToLoad,
-                                          nsIPrincipal* aLoadingPrincipal,
-                                          uint32_t aCheckLoadFlags,
-                                          bool aAllowData,
-                                          uint32_t aContentPolicyType,
-                                          nsISupports* aContext,
-                                          const nsAFlatCString& aMimeGuess = EmptyCString(),
-                                          nsISupports* aExtra = nullptr);
-
-  /**
    * Returns true if aPrincipal is the system principal.
    */
   static bool IsSystemPrincipal(nsIPrincipal* aPrincipal);
@@ -1640,24 +1671,6 @@ public:
    * was called
    */
   static void RunInMetastableState(already_AddRefed<nsIRunnable> aRunnable);
-
-  /**
-   * Retrieve information about the viewport as a data structure.
-   * This will return information in the viewport META data section
-   * of the document. This can be used in lieu of ProcessViewportInfo(),
-   * which places the viewport information in the document header instead
-   * of returning it directly.
-   *
-   * @param aDisplayWidth width of the on-screen display area for this
-   * document, in device pixels.
-   * @param aDisplayHeight height of the on-screen display area for this
-   * document, in device pixels.
-   *
-   * NOTE: If the site is optimized for mobile (via the doctype), this
-   * will return viewport information that specifies default information.
-   */
-  static nsViewportInfo GetViewportInfo(nsIDocument* aDocument,
-                                        const mozilla::ScreenIntSize& aDisplaySize);
 
   // Call EnterMicroTask when you're entering JS execution.
   // Usually the best way to do this is to use nsAutoMicroTask.
@@ -1976,6 +1989,14 @@ public:
   }
 
   /*
+   * Returns true if ServiceWorker Interception is enabled by pref.
+   */
+  static bool ServiceWorkerInterceptionEnabled()
+  {
+    return sSWInterceptionEnabled;
+  }
+
+  /*
    * Returns true if the frame timing APIs are enabled.
    */
   static bool IsFrameTimingEnabled();
@@ -2016,6 +2037,11 @@ public:
   static bool HasPluginWithUncontrolledEventDispatch(nsIDocument* aDoc);
 
   /**
+   * Return true if this doc is controlled by a ServiceWorker.
+   */
+  static bool IsControlledByServiceWorker(nsIDocument* aDocument);
+
+  /**
    * Fire mutation events for changes caused by parsing directly into a
    * context node.
    *
@@ -2045,7 +2071,7 @@ public:
    * Returns true if aWin and the current pointer lock document
    * have common scriptable top window.
    */
-  static bool IsInPointerLockContext(nsIDOMWindow* aWin);
+  static bool IsInPointerLockContext(nsPIDOMWindow* aWin);
 
   /**
    * Returns the time limit on handling user input before
@@ -2287,14 +2313,6 @@ public:
                                         int32_t& aOutEndOffset);
 
   /**
-   * Takes a selection, and return selection's bounding rect which is relative
-   * to root frame.
-   *
-   * @param aSel      Selection to check
-   */
-  static nsRect GetSelectionBoundingRect(mozilla::dom::Selection* aSel);
-
-  /**
    * Takes a frame for anonymous content within a text control (<input> or
    * <textarea>), and returns an offset in the text content, adjusted for a
    * trailing <br> frame.
@@ -2478,6 +2496,13 @@ public:
 
   static bool PushEnabled(JSContext* aCx, JSObject* aObj);
 
+  static bool IsNonSubresourceRequest(nsIChannel* aChannel);
+
+  static uint32_t CookiesBehavior()
+  {
+    return sCookiesBehavior;
+  }
+
   // The order of these entries matters, as we use std::min for total ordering
   // of permissions. Private Browsing is considered to be more limiting
   // then session scoping
@@ -2509,6 +2534,13 @@ public:
    * (if that is possible, the caller should use StorageAllowedForWindow)
    */
   static StorageAccess StorageAllowedForPrincipal(nsIPrincipal* aPrincipal);
+
+  /*
+   * Serializes a HTML nsINode into its markup representation.
+   */
+  static bool SerializeNodeToMarkup(nsINode* aRoot,
+                                    bool aDescendentsOnly,
+                                    nsAString& aOut);
 
 private:
   static bool InitializeEventTable();
@@ -2627,6 +2659,7 @@ private:
   static bool sGettersDecodeURLHash;
   static bool sPrivacyResistFingerprinting;
   static bool sSendPerformanceTimingNotifications;
+  static bool sSWInterceptionEnabled;
   static uint32_t sCookiesLifetimePolicy;
   static uint32_t sCookiesBehavior;
 
@@ -2651,7 +2684,7 @@ private:
 #endif
 };
 
-class MOZ_STACK_CLASS nsAutoScriptBlocker {
+class MOZ_RAII nsAutoScriptBlocker {
 public:
   explicit nsAutoScriptBlocker(MOZ_GUARD_OBJECT_NOTIFIER_ONLY_PARAM) {
     MOZ_GUARD_OBJECT_NOTIFIER_INIT;

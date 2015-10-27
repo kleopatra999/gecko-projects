@@ -37,6 +37,7 @@ class nsIURI;
 class nsIAtom;
 class nsIObserver;
 class SRGBOverrideObserver;
+class gfxTextPerfMetrics;
 
 namespace mozilla {
 namespace gl {
@@ -68,15 +69,6 @@ BackendTypeBit(BackendType b)
   } while (0)
 
 extern cairo_user_data_key_t kDrawTarget;
-
-// pref lang id's for font prefs
-enum eFontPrefLang {
-    #define FONT_PREF_LANG(enum_id_, str_, atom_id_) eFontPrefLang_ ## enum_id_
-    #include "gfxFontPrefLangList.h"
-    #undef FONT_PREF_LANG
-
-    , eFontPrefLang_CJKSet  // special code for CJK set
-};
 
 enum eCMSMode {
     eCMSMode_Off          = 0,     // No color management
@@ -279,7 +271,16 @@ public:
     }
     void GetApzSupportInfo(mozilla::widget::InfoObject& aObj);
 
-    mozilla::gfx::BackendType GetContentBackend() {
+    // Get the default content backend that will be used with the default
+    // compositor. If the compositor is known when calling this function,
+    // GetContentBackendFor() should be called instead.
+    mozilla::gfx::BackendType GetDefaultContentBackend() {
+      return mContentBackend;
+    }
+
+    // Return the best content backend available that is compatible with the
+    // given layers backend.
+    virtual mozilla::gfx::BackendType GetContentBackendFor(mozilla::layers::LayersBackend aLayers) {
       return mContentBackend;
     }
 
@@ -332,11 +333,11 @@ public:
     /**
      * Create the appropriate platform font group
      */
-    virtual gfxFontGroup
-    *CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
-                     const gfxFontStyle *aStyle,
-                     gfxUserFontSet *aUserFontSet) = 0;
-                                          
+    virtual gfxFontGroup*
+    CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
+                    const gfxFontStyle *aStyle,
+                    gfxTextPerfMetrics* aTextPerf,
+                    gfxUserFontSet *aUserFontSet) = 0;
                                           
     /**
      * Look up a local platform font using the full font face name.
@@ -347,7 +348,7 @@ public:
     virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
                                           uint16_t aWeight,
                                           int16_t aStretch,
-                                          bool aItalic)
+                                          uint8_t aStyle)
     { return nullptr; }
 
     /**
@@ -361,7 +362,7 @@ public:
     virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
                                            uint16_t aWeight,
                                            int16_t aStretch,
-                                           bool aItalic,
+                                           uint8_t aStyle,
                                            const uint8_t* aFontData,
                                            uint32_t aLength);
 
@@ -425,41 +426,6 @@ public:
     virtual bool IsFontFormatSupported(nsIURI *aFontURI, uint32_t aFormatFlags) { return false; }
 
     virtual bool DidRenderingDeviceReset(DeviceResetReason* aResetReason = nullptr) { return false; }
-
-    // in some situations, need to make decisions about ambiguous characters, may need to look at multiple pref langs
-    void GetLangPrefs(eFontPrefLang aPrefLangs[], uint32_t &aLen, eFontPrefLang aCharLang, eFontPrefLang aPageLang);
-    
-    /**
-     * Iterate over pref fonts given a list of lang groups.  For a single lang
-     * group, multiple pref fonts are possible.  If error occurs, returns false,
-     * true otherwise.  Callback returns false to abort process.
-     */
-    typedef bool (*PrefFontCallback) (eFontPrefLang aLang, const nsAString& aName,
-                                        void *aClosure);
-    static bool ForEachPrefFont(eFontPrefLang aLangArray[], uint32_t aLangArrayLen,
-                                  PrefFontCallback aCallback,
-                                  void *aClosure);
-
-    // convert a lang group to enum constant (i.e. "zh-TW" ==> eFontPrefLang_ChineseTW)
-    static eFontPrefLang GetFontPrefLangFor(const char* aLang);
-
-    // convert a lang group atom to enum constant
-    static eFontPrefLang GetFontPrefLangFor(nsIAtom *aLang);
-
-    // convert an enum constant to a lang group atom
-    static nsIAtom* GetLangGroupForPrefLang(eFontPrefLang aLang);
-
-    // convert a enum constant to lang group string (i.e. eFontPrefLang_ChineseTW ==> "zh-TW")
-    static const char* GetPrefLangName(eFontPrefLang aLang);
-   
-    // map a Unicode range (based on char code) to a font language for Preferences
-    static eFontPrefLang GetFontPrefLangFor(uint8_t aUnicodeRange);
-
-    // returns true if a pref lang is CJK
-    static bool IsLangCJK(eFontPrefLang aLang);
-    
-    // helper method to add a pref lang to an array, if not already in array
-    static void AppendPrefLang(eFontPrefLang aPrefLangs[], uint32_t& aLen, eFontPrefLang aAddLang);
 
     // returns a list of commonly used fonts for a given character
     // these are *possible* matches, no cmap-checking is done at this level
@@ -567,7 +533,8 @@ public:
      */
     static PRLogModuleInfo* GetLog(eGfxLog aWhichLog);
 
-    virtual int GetScreenDepth() const;
+    int GetScreenDepth() const { return mScreenDepth; }
+    mozilla::gfx::IntSize GetScreenSize() const { return mScreenSize; }
 
     /**
      * Return the layer debugging options to use browser-wide.
@@ -607,6 +574,21 @@ public:
     static bool IsInLayoutAsapMode();
 
     /**
+     * Returns the software vsync rate to use.
+     */
+    static int GetSoftwareVsyncRate();
+
+    /**
+     * Returns whether or not a custom vsync rate is set.
+     */
+    static bool ForceSoftwareVsync();
+
+    /**
+     * Returns the default frame rate for the refresh driver / software vsync.
+     */
+    static int GetDefaultFrameRate();
+
+    /**
      * Used to test which input types are handled via APZ.
      */
     virtual bool SupportsApzWheelInput() const {
@@ -615,6 +597,7 @@ public:
     virtual bool SupportsApzTouchInput() const {
       return false;
     }
+    bool SupportsApzDragInput() const;
 
     virtual void FlushContentDrawing() {}
 
@@ -649,9 +632,6 @@ public:
 protected:
     gfxPlatform();
     virtual ~gfxPlatform();
-
-    void AppendCJKPrefLangs(eFontPrefLang aPrefLangs[], uint32_t &aLen,
-                            eFontPrefLang aCharLang, eFontPrefLang aPageLang);
 
     /**
      * Initialized hardware vsync based on each platform.
@@ -736,9 +716,9 @@ protected:
     uint32_t mTotalSystemMemory;
 
     // Hardware vsync source. Only valid on parent process
-    nsRefPtr<mozilla::gfx::VsyncSource> mVsyncSource;
+    RefPtr<mozilla::gfx::VsyncSource> mVsyncSource;
 
-    mozilla::RefPtr<mozilla::gfx::DrawTarget> mScreenReferenceDrawTarget;
+    RefPtr<mozilla::gfx::DrawTarget> mScreenReferenceDrawTarget;
 
 private:
     /**
@@ -761,8 +741,12 @@ private:
      */
     void ComputeTileSize();
 
-    nsRefPtr<gfxASurface> mScreenReferenceSurface;
-    nsTArray<uint32_t> mCJKPrefLangs;
+    /**
+     * This uses nsIScreenManager to determine the screen size and color depth
+     */
+    void PopulateScreenInfo();
+
+    RefPtr<gfxASurface> mScreenReferenceSurface;
     nsCOMPtr<nsIObserver> mSRGBOverrideObserver;
     nsCOMPtr<nsIObserver> mFontPrefsObserver;
     nsCOMPtr<nsIObserver> mMemoryPressureObserver;
@@ -782,12 +766,15 @@ private:
     mozilla::widget::GfxInfoCollector<gfxPlatform> mAzureCanvasBackendCollector;
     mozilla::widget::GfxInfoCollector<gfxPlatform> mApzSupportCollector;
 
-    mozilla::RefPtr<mozilla::gfx::DrawEventRecorder> mRecorder;
-    mozilla::RefPtr<mozilla::gl::SkiaGLGlue> mSkiaGlue;
+    RefPtr<mozilla::gfx::DrawEventRecorder> mRecorder;
+    RefPtr<mozilla::gl::SkiaGLGlue> mSkiaGlue;
 
     // Backend that we are compositing with. NONE, if no compositor has been
     // created yet.
     mozilla::layers::LayersBackend mCompositorBackend;
+
+    int32_t mScreenDepth;
+    mozilla::gfx::IntSize mScreenSize;
 };
 
 #endif /* GFX_PLATFORM_H */

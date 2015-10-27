@@ -60,6 +60,7 @@
 #include "nsBidi.h"
 #include "nsBidiPresUtils.h"
 #include "Layers.h"
+#include "LayerUserData.h"
 #include "CanvasUtils.h"
 #include "nsIMemoryReporter.h"
 #include "nsStyleUtil.h"
@@ -149,8 +150,6 @@ using namespace mozilla::gfx;
 using namespace mozilla::image;
 using namespace mozilla::ipc;
 using namespace mozilla::layers;
-
-namespace mgfx = mozilla::gfx;
 
 namespace mozilla {
 namespace dom {
@@ -295,10 +294,10 @@ public:
 
   AdjustedTargetForFilter(CanvasRenderingContext2D *ctx,
                           DrawTarget *aFinalTarget,
-                          const mgfx::IntPoint& aFilterSpaceToTargetOffset,
-                          const mgfx::IntRect& aPreFilterBounds,
-                          const mgfx::IntRect& aPostFilterBounds,
-                          mgfx::CompositionOp aCompositionOp)
+                          const gfx::IntPoint& aFilterSpaceToTargetOffset,
+                          const gfx::IntRect& aPreFilterBounds,
+                          const gfx::IntRect& aPostFilterBounds,
+                          gfx::CompositionOp aCompositionOp)
     : mCtx(nullptr)
     , mCompositionOp(aCompositionOp)
   {
@@ -346,7 +345,7 @@ public:
 
   // Return a SourceSurface that contains the FillPaint or StrokePaint source.
   already_AddRefed<SourceSurface>
-  DoSourcePaint(mgfx::IntRect& aRect, CanvasRenderingContext2D::Style aStyle)
+  DoSourcePaint(gfx::IntRect& aRect, CanvasRenderingContext2D::Style aStyle)
   {
     if (aRect.IsEmpty()) {
       return nullptr;
@@ -365,8 +364,8 @@ public:
     dt->SetTransform(transform);
 
     if (transform.Invert()) {
-      mgfx::Rect dtBounds(0, 0, aRect.width, aRect.height);
-      mgfx::Rect fillRect = transform.TransformBounds(dtBounds);
+      gfx::Rect dtBounds(0, 0, aRect.width, aRect.height);
+      gfx::Rect fillRect = transform.TransformBounds(dtBounds);
       dt->FillRect(fillRect, CanvasGeneralPattern().ForStyle(mCtx, aStyle, dt));
     }
     return dt->Snapshot();
@@ -388,9 +387,9 @@ public:
     AutoRestoreTransform autoRestoreTransform(mFinalTarget);
     mFinalTarget->SetTransform(Matrix());
 
-    mgfx::FilterSupport::RenderFilterDescription(
+    gfx::FilterSupport::RenderFilterDescription(
       mFinalTarget, mCtx->CurrentState().filter,
-      mgfx::Rect(mPostFilterBounds),
+      gfx::Rect(mPostFilterBounds),
       snapshot, mSourceGraphicRect,
       fillPaint, mFillPaintRect,
       strokePaint, mStrokePaintRect,
@@ -408,12 +407,12 @@ private:
   RefPtr<DrawTarget> mTarget;
   RefPtr<DrawTarget> mFinalTarget;
   CanvasRenderingContext2D *mCtx;
-  mgfx::IntRect mSourceGraphicRect;
-  mgfx::IntRect mFillPaintRect;
-  mgfx::IntRect mStrokePaintRect;
-  mgfx::IntRect mPostFilterBounds;
-  mgfx::IntPoint mOffset;
-  mgfx::CompositionOp mCompositionOp;
+  gfx::IntRect mSourceGraphicRect;
+  gfx::IntRect mFillPaintRect;
+  gfx::IntRect mStrokePaintRect;
+  gfx::IntRect mPostFilterBounds;
+  gfx::IntPoint mOffset;
+  gfx::CompositionOp mCompositionOp;
 };
 
 /* This is an RAII based class that can be used as a drawtarget for
@@ -427,8 +426,8 @@ public:
 
   AdjustedTargetForShadow(CanvasRenderingContext2D *ctx,
                           DrawTarget *aFinalTarget,
-                          const mgfx::Rect& aBounds,
-                          mgfx::CompositionOp aCompositionOp)
+                          const gfx::Rect& aBounds,
+                          gfx::CompositionOp aCompositionOp)
     : mCtx(nullptr)
     , mCompositionOp(aCompositionOp)
   {
@@ -439,7 +438,7 @@ public:
 
     mSigma = state.ShadowBlurSigma();
 
-    mgfx::Rect bounds = aBounds;
+    gfx::Rect bounds = aBounds;
 
     int32_t blurRadius = state.ShadowBlurRadius();
 
@@ -486,7 +485,7 @@ public:
     return mTarget;
   }
 
-  mgfx::IntPoint OffsetToFinalDT()
+  gfx::IntPoint OffsetToFinalDT()
   {
     return mTempRect.TopLeft();
   }
@@ -496,8 +495,8 @@ private:
   RefPtr<DrawTarget> mFinalTarget;
   CanvasRenderingContext2D *mCtx;
   Float mSigma;
-  mgfx::IntRect mTempRect;
-  mgfx::CompositionOp mCompositionOp;
+  gfx::IntRect mTempRect;
+  gfx::CompositionOp mCompositionOp;
 };
 
 /* This is an RAII based class that can be used as a drawtarget for
@@ -517,7 +516,7 @@ public:
   typedef CanvasRenderingContext2D::ContextState ContextState;
 
   explicit AdjustedTarget(CanvasRenderingContext2D* ctx,
-                          const mgfx::Rect *aBounds = nullptr)
+                          const gfx::Rect *aBounds = nullptr)
   {
     mTarget = ctx->mTarget;
 
@@ -527,21 +526,21 @@ public:
     // calculate what their maximum required bounds would need to be if we
     // were to fill the whole canvas. Everything outside those bounds we don't
     // need to render.
-    mgfx::Rect r(0, 0, ctx->mWidth, ctx->mHeight);
-    mgfx::Rect maxSourceNeededBoundsForShadow =
+    gfx::Rect r(0, 0, ctx->mWidth, ctx->mHeight);
+    gfx::Rect maxSourceNeededBoundsForShadow =
       MaxSourceNeededBoundsForShadow(r, ctx);
-    mgfx::Rect maxSourceNeededBoundsForFilter =
+    gfx::Rect maxSourceNeededBoundsForFilter =
       MaxSourceNeededBoundsForFilter(maxSourceNeededBoundsForShadow, ctx);
 
-    mgfx::Rect bounds = maxSourceNeededBoundsForFilter;
+    gfx::Rect bounds = maxSourceNeededBoundsForFilter;
     if (aBounds) {
       bounds = bounds.Intersect(*aBounds);
     }
-    mgfx::Rect boundsAfterFilter = BoundsAfterFilter(bounds, ctx);
+    gfx::Rect boundsAfterFilter = BoundsAfterFilter(bounds, ctx);
 
     mozilla::gfx::CompositionOp op = ctx->CurrentState().op;
 
-    mgfx::IntPoint offsetToFinalDT;
+    gfx::IntPoint offsetToFinalDT;
 
     // First set up the shadow draw target, because the shadow goes outside.
     // It applies to the post-filter results, if both a filter and a shadow
@@ -554,20 +553,20 @@ public:
 
       // If we also have a filter, the filter needs to be drawn with OP_OVER
       // because shadow drawing already applies op on the result.
-      op = mgfx::CompositionOp::OP_OVER;
+      op = gfx::CompositionOp::OP_OVER;
     }
 
     // Now set up the filter draw target.
     if (ctx->NeedToApplyFilter()) {
       bounds.RoundOut();
 
-      mgfx::IntRect intBounds;
+      gfx::IntRect intBounds;
       if (!bounds.ToIntRect(&intBounds)) {
         return;
       }
       mFilterTarget = MakeUnique<AdjustedTargetForFilter>(
         ctx, mTarget, offsetToFinalDT, intBounds,
-        mgfx::RoundedToInt(boundsAfterFilter), op);
+        gfx::RoundedToInt(boundsAfterFilter), op);
       mTarget = mFilterTarget->DT();
     }
   }
@@ -592,8 +591,8 @@ public:
 
 private:
 
-  mgfx::Rect
-  MaxSourceNeededBoundsForFilter(const mgfx::Rect& aDestBounds, CanvasRenderingContext2D *ctx)
+  gfx::Rect
+  MaxSourceNeededBoundsForFilter(const gfx::Rect& aDestBounds, CanvasRenderingContext2D *ctx)
   {
     if (!ctx->NeedToApplyFilter()) {
       return aDestBounds;
@@ -604,21 +603,21 @@ private:
     nsIntRegion strokePaintNeededRegion;
 
     FilterSupport::ComputeSourceNeededRegions(
-      ctx->CurrentState().filter, mgfx::RoundedToInt(aDestBounds),
+      ctx->CurrentState().filter, gfx::RoundedToInt(aDestBounds),
       sourceGraphicNeededRegion, fillPaintNeededRegion, strokePaintNeededRegion);
 
-    return mgfx::Rect(sourceGraphicNeededRegion.GetBounds());
+    return gfx::Rect(sourceGraphicNeededRegion.GetBounds());
   }
 
-  mgfx::Rect
-  MaxSourceNeededBoundsForShadow(const mgfx::Rect& aDestBounds, CanvasRenderingContext2D *ctx)
+  gfx::Rect
+  MaxSourceNeededBoundsForShadow(const gfx::Rect& aDestBounds, CanvasRenderingContext2D *ctx)
   {
     if (!ctx->NeedToDrawShadow()) {
       return aDestBounds;
     }
 
     const ContextState &state = ctx->CurrentState();
-    mgfx::Rect sourceBounds = aDestBounds - state.shadowOffset;
+    gfx::Rect sourceBounds = aDestBounds - state.shadowOffset;
     sourceBounds.Inflate(state.ShadowBlurRadius());
 
     // Union the shadow source with the original rect because we're going to
@@ -626,25 +625,25 @@ private:
     return sourceBounds.Union(aDestBounds);
   }
 
-  mgfx::Rect
-  BoundsAfterFilter(const mgfx::Rect& aBounds, CanvasRenderingContext2D *ctx)
+  gfx::Rect
+  BoundsAfterFilter(const gfx::Rect& aBounds, CanvasRenderingContext2D *ctx)
   {
     if (!ctx->NeedToApplyFilter()) {
       return aBounds;
     }
 
-    mgfx::Rect bounds(aBounds);
+    gfx::Rect bounds(aBounds);
     bounds.RoundOut();
 
-    mgfx::IntRect intBounds;
+    gfx::IntRect intBounds;
     if (!bounds.ToIntRect(&intBounds)) {
-      return mgfx::Rect();
+      return gfx::Rect();
     }
 
     nsIntRegion extents =
-      mgfx::FilterSupport::ComputePostFilterExtents(ctx->CurrentState().filter,
-                                                    intBounds);
-    return mgfx::Rect(extents.GetBounds());
+      gfx::FilterSupport::ComputePostFilterExtents(ctx->CurrentState().filter,
+                                                   intBounds);
+    return gfx::Rect(extents.GetBounds());
   }
 
   RefPtr<DrawTarget> mTarget;
@@ -674,7 +673,9 @@ CanvasGradient::AddColorStop(float offset, const nsAString& colorstr, ErrorResul
   }
 
   nscolor color;
-  if (!nsRuleNode::ComputeColor(value, nullptr, nullptr, color)) {
+  nsCOMPtr<nsIPresShell> presShell = mContext ? mContext->GetPresShell() : nullptr;
+  if (!nsRuleNode::ComputeColor(value, presShell ? presShell->GetPresContext() : nullptr,
+                                nullptr, color)) {
     rv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
     return;
   }
@@ -946,9 +947,12 @@ CanvasRenderingContext2D::CanvasRenderingContext2D()
   , mZero(false), mOpaque(false)
   , mResetLayer(true)
   , mIPC(false)
+  , mIsSkiaGL(false)
   , mDrawObserver(nullptr)
   , mIsEntireFrameInvalid(false)
-  , mPredictManyRedrawCalls(false), mPathTransformWillUpdate(false)
+  , mPredictManyRedrawCalls(false)
+  , mIsCapturedFrameInvalid(false)
+  , mPathTransformWillUpdate(false)
   , mInvalidateCount(0)
 {
   sNumLivingContexts++;
@@ -1015,7 +1019,7 @@ CanvasRenderingContext2D::ParseColor(const nsAString& aString,
   } else {
     // otherwise resolve it
     nsCOMPtr<nsIPresShell> presShell = GetPresShell();
-    nsRefPtr<nsStyleContext> parentContext;
+    RefPtr<nsStyleContext> parentContext;
     if (mCanvasElement && mCanvasElement->IsInDoc()) {
       // Inherit from the canvas element.
       parentContext = nsComputedDOMStyle::GetStyleContextForElement(
@@ -1053,6 +1057,7 @@ CanvasRenderingContext2D::Reset()
   // no longer be valid.
   mIsEntireFrameInvalid = false;
   mPredictManyRedrawCalls = false;
+  mIsCapturedFrameInvalid = false;
 
   return NS_OK;
 }
@@ -1111,6 +1116,8 @@ CanvasRenderingContext2D::StyleColorToString(const nscolor& aColor, nsAString& a
 nsresult
 CanvasRenderingContext2D::Redraw()
 {
+  mIsCapturedFrameInvalid = true;
+
   if (mIsEntireFrameInvalid) {
     return NS_OK;
   }
@@ -1130,8 +1137,10 @@ CanvasRenderingContext2D::Redraw()
 }
 
 void
-CanvasRenderingContext2D::Redraw(const mgfx::Rect &r)
+CanvasRenderingContext2D::Redraw(const gfx::Rect &r)
 {
+  mIsCapturedFrameInvalid = true;
+
   ++mInvalidateCount;
 
   if (mIsEntireFrameInvalid) {
@@ -1169,13 +1178,14 @@ CanvasRenderingContext2D::DidRefresh()
 void
 CanvasRenderingContext2D::RedrawUser(const gfxRect& r)
 {
+  mIsCapturedFrameInvalid = true;
+
   if (mIsEntireFrameInvalid) {
     ++mInvalidateCount;
     return;
   }
 
-  mgfx::Rect newr =
-    mTarget->GetTransform().TransformBounds(ToRect(r));
+  gfx::Rect newr = mTarget->GetTransform().TransformBounds(ToRect(r));
   Redraw(newr);
 }
 
@@ -1222,11 +1232,11 @@ bool CanvasRenderingContext2D::SwitchRenderingMode(RenderingMode aRenderingMode)
   mRenderingMode = attemptedMode;
 
   // Restore the content from the old DrawTarget
-  mgfx::Rect r(0, 0, mWidth, mHeight);
+  gfx::Rect r(0, 0, mWidth, mHeight);
   mTarget->DrawSurface(snapshot, r, r);
 
   // Restore the clips and transform
-  for (uint32_t i = 0; i < CurrentState().clipsPushed.size(); i++) {
+  for (uint32_t i = 0; i < CurrentState().clipsPushed.Length(); i++) {
     mTarget->PushClip(CurrentState().clipsPushed[i]);
   }
 
@@ -1367,6 +1377,8 @@ CanvasRenderingContext2D::EnsureTarget(RenderingMode aRenderingMode)
     }
   }
 
+  mIsSkiaGL = false;
+
    // Check that the dimensions are sane
   IntSize size(mWidth, mHeight);
   if (size.width <= gfxPrefs::MaxCanvasSize() &&
@@ -1378,7 +1390,7 @@ CanvasRenderingContext2D::EnsureTarget(RenderingMode aRenderingMode)
       ownerDoc = mCanvasElement->OwnerDoc();
     }
 
-    nsRefPtr<LayerManager> layerManager = nullptr;
+    RefPtr<LayerManager> layerManager = nullptr;
 
     if (ownerDoc) {
       layerManager =
@@ -1399,8 +1411,10 @@ CanvasRenderingContext2D::EnsureTarget(RenderingMode aRenderingMode)
           mTarget = Factory::CreateDrawTargetSkiaWithGrContext(glue->GetGrContext(), size, format);
           if (mTarget) {
             AddDemotableContext(this);
+            mBufferProvider = new PersistentBufferProviderBasic(mTarget);
+            mIsSkiaGL = true;
           } else {
-            printf_stderr("Failed to create a SkiaGL DrawTarget, falling back to software\n");
+            gfxCriticalNote << "Failed to create a SkiaGL DrawTarget, falling back to software\n";
             mode = RenderingMode::SoftwareBackendMode;
           }
         }
@@ -1433,15 +1447,15 @@ CanvasRenderingContext2D::EnsureTarget(RenderingMode aRenderingMode)
       JS_updateMallocCounter(context, mWidth * mHeight * 4);
     }
 
-    mTarget->ClearRect(mgfx::Rect(Point(0, 0), Size(mWidth, mHeight)));
-    if (mTarget->GetBackendType() == mgfx::BackendType::CAIRO) {
+    mTarget->ClearRect(gfx::Rect(Point(0, 0), Size(mWidth, mHeight)));
+    if (mTarget->GetBackendType() == gfx::BackendType::CAIRO) {
       // Cairo doesn't play well with huge clips. When given a very big clip it
       // will try to allocate big mask surface without taking the target
       // size into account which can cause OOM. See bug 1034593.
       // This limits the clip extents to the size of the canvas.
       // A fix in Cairo would probably be preferable, but requires somewhat
       // invasive changes.
-      mTarget->PushClipRect(mgfx::Rect(Point(0, 0), Size(mWidth, mHeight)));
+      mTarget->PushClipRect(gfx::Rect(Point(0, 0), Size(mWidth, mHeight)));
     }
     // Force a full layer transaction since we didn't have a layer before
     // and now we might need one.
@@ -1456,10 +1470,13 @@ CanvasRenderingContext2D::EnsureTarget(RenderingMode aRenderingMode)
     mTarget = sErrorTarget;
   }
 
+  // Drop a note in the debug builds if we ever use accelerated Skia canvas.
+  if (mIsSkiaGL && mTarget && mTarget->GetType() == DrawTargetType::HARDWARE_RASTER) {
+    gfxWarningOnce() << "Using SkiaGL canvas.";
+  }
   return mode;
 }
 
-#ifdef DEBUG
 int32_t
 CanvasRenderingContext2D::GetWidth() const
 {
@@ -1471,7 +1488,6 @@ CanvasRenderingContext2D::GetHeight() const
 {
   return mHeight;
 }
-#endif
 
 NS_IMETHODIMP
 CanvasRenderingContext2D::SetDimensions(int32_t width, int32_t height)
@@ -1516,7 +1532,7 @@ CanvasRenderingContext2D::ClearTarget()
 
   // For vertical writing-mode, unless text-orientation is sideways,
   // we'll modify the initial value of textBaseline to 'middle'.
-  nsRefPtr<nsStyleContext> canvasStyle;
+  RefPtr<nsStyleContext> canvasStyle;
   if (mCanvasElement && mCanvasElement->IsInDoc()) {
     nsCOMPtr<nsIPresShell> presShell = GetPresShell();
     if (presShell) {
@@ -1564,9 +1580,9 @@ CanvasRenderingContext2D::InitializeWithSurface(nsIDocShell *shell,
     mTarget = sErrorTarget;
   }
 
-  if (mTarget->GetBackendType() == mgfx::BackendType::CAIRO) {
+  if (mTarget->GetBackendType() == gfx::BackendType::CAIRO) {
     // Cf comment in EnsureTarget
-    mTarget->PushClipRect(mgfx::Rect(Point(0, 0), Size(mWidth, mHeight)));
+    mTarget->PushClipRect(gfx::Rect(Point(0, 0), Size(mWidth, mHeight)));
   }
 
   return NS_OK;
@@ -1595,7 +1611,9 @@ CanvasRenderingContext2D::SetIsIPC(bool isIPC)
 }
 
 NS_IMETHODIMP
-CanvasRenderingContext2D::SetContextOptions(JSContext* aCx, JS::Handle<JS::Value> aOptions)
+CanvasRenderingContext2D::SetContextOptions(JSContext* aCx,
+                                            JS::Handle<JS::Value> aOptions,
+                                            ErrorResult& aRvForDictionaryInit)
 {
   if (aOptions.isNullOrUndefined()) {
     return NS_OK;
@@ -1605,7 +1623,10 @@ CanvasRenderingContext2D::SetContextOptions(JSContext* aCx, JS::Handle<JS::Value
   MOZ_ASSERT(!mTarget);
 
   ContextAttributes2D attributes;
-  NS_ENSURE_TRUE(attributes.Init(aCx, aOptions), NS_ERROR_UNEXPECTED);
+  if (!attributes.Init(aCx, aOptions)) {
+    aRvForDictionaryInit.Throw(NS_ERROR_UNEXPECTED);
+    return NS_ERROR_UNEXPECTED;
+  }
 
   if (Preferences::GetBool("gfx.canvas.willReadFrequently.enable", false)) {
     // Use software when there is going to be a lot of readback
@@ -1708,7 +1729,7 @@ CanvasRenderingContext2D::Restore()
 
   TransformWillUpdate();
 
-  for (uint32_t i = 0; i < CurrentState().clipsPushed.size(); i++) {
+  for (uint32_t i = 0; i < CurrentState().clipsPushed.Length(); i++) {
     mTarget->PopClip();
   }
 
@@ -1988,7 +2009,7 @@ CanvasRenderingContext2D::GetFillRule(nsAString& aString)
 already_AddRefed<CanvasGradient>
 CanvasRenderingContext2D::CreateLinearGradient(double x0, double y0, double x1, double y1)
 {
-  nsRefPtr<CanvasGradient> grad =
+  RefPtr<CanvasGradient> grad =
     new CanvasLinearGradient(this, Point(x0, y0), Point(x1, y1));
 
   return grad.forget();
@@ -2004,7 +2025,7 @@ CanvasRenderingContext2D::CreateRadialGradient(double x0, double y0, double r0,
     return nullptr;
   }
 
-  nsRefPtr<CanvasGradient> grad =
+  RefPtr<CanvasGradient> grad =
     new CanvasRadialGradient(this, Point(x0, y0), r0, Point(x1, y1), r1);
 
   return grad.forget();
@@ -2048,7 +2069,7 @@ CanvasRenderingContext2D::CreatePattern(const CanvasImageSource& source,
       // This might not be an Azure canvas!
       RefPtr<SourceSurface> srcSurf = srcCanvas->GetSurfaceSnapshot();
 
-      nsRefPtr<CanvasPattern> pat =
+      RefPtr<CanvasPattern> pat =
         new CanvasPattern(this, srcSurf, repeatMode, htmlElement->NodePrincipal(), canvas->IsWriteOnly(), false);
 
       return pat.forget();
@@ -2072,7 +2093,7 @@ CanvasRenderingContext2D::CreatePattern(const CanvasImageSource& source,
     // An ImageBitmap never taints others so we set principalForSecurityCheck to
     // nullptr and set CORSUsed to true for passing the security check in
     // CanvasUtils::DoDrawImageSecurityCheck().
-    nsRefPtr<CanvasPattern> pat =
+    RefPtr<CanvasPattern> pat =
       new CanvasPattern(this, srcSurf, repeatMode, nullptr, false, true);
 
     return pat.forget();
@@ -2091,7 +2112,7 @@ CanvasRenderingContext2D::CreatePattern(const CanvasImageSource& source,
     return nullptr;
   }
 
-  nsRefPtr<CanvasPattern> pat =
+  RefPtr<CanvasPattern> pat =
     new CanvasPattern(this, res.mSourceSurface, repeatMode, res.mPrincipal,
                              res.mIsWriteOnly, res.mCORSUsed);
 
@@ -2122,7 +2143,7 @@ CreateStyleRule(nsINode* aNode,
   const nsCSSProperty aProp2, const nsAString& aValue2, bool* aChanged2,
   ErrorResult& error)
 {
-  nsRefPtr<StyleRule> rule;
+  RefPtr<StyleRule> rule;
 
   nsIPrincipal* principal = aNode->NodePrincipal();
   nsIDocument* document = aNode->OwnerDoc();
@@ -2174,7 +2195,7 @@ GetFontParentStyleContext(Element* aElement, nsIPresShell* presShell,
 {
   if (aElement && aElement->IsInDoc()) {
     // Inherit from the canvas element.
-    nsRefPtr<nsStyleContext> result =
+    RefPtr<nsStyleContext> result =
       nsComputedDOMStyle::GetStyleContextForElement(aElement, nullptr,
                                                     presShell);
     if (!result) {
@@ -2186,7 +2207,7 @@ GetFontParentStyleContext(Element* aElement, nsIPresShell* presShell,
 
   // otherwise inherit from default (10px sans-serif)
   bool changed;
-  nsRefPtr<css::StyleRule> parentRule =
+  RefPtr<css::StyleRule> parentRule =
     CreateFontStyleRule(NS_LITERAL_STRING("10px sans-serif"),
                         presShell->GetDocument(), &changed, error);
 
@@ -2196,7 +2217,7 @@ GetFontParentStyleContext(Element* aElement, nsIPresShell* presShell,
 
   nsTArray<nsCOMPtr<nsIStyleRule>> parentRules;
   parentRules.AppendElement(parentRule);
-  nsRefPtr<nsStyleContext> result =
+  RefPtr<nsStyleContext> result =
     presShell->StyleSet()->ResolveStyleForRules(nullptr, parentRules);
 
   if (!result) {
@@ -2226,7 +2247,7 @@ GetFontStyleContext(Element* aElement, const nsAString& aFont,
                     ErrorResult& error)
 {
   bool fontParsedSuccessfully = false;
-  nsRefPtr<css::StyleRule> rule =
+  RefPtr<css::StyleRule> rule =
     CreateFontStyleRule(aFont, presShell->GetDocument(),
                         &fontParsedSuccessfully, error);
 
@@ -2249,7 +2270,7 @@ GetFontStyleContext(Element* aElement, const nsAString& aFont,
 
   // have to get a parent style context for inherit-like relative
   // values (2em, bolder, etc.)
-  nsRefPtr<nsStyleContext> parentContext =
+  RefPtr<nsStyleContext> parentContext =
     GetFontParentStyleContext(aElement, presShell, error);
 
   if (error.Failed()) {
@@ -2269,7 +2290,7 @@ GetFontStyleContext(Element* aElement, const nsAString& aFont,
   rules.AppendElement(new nsDisableTextZoomStyleRule);
 
   nsStyleSet* styleSet = presShell->StyleSet();
-  nsRefPtr<nsStyleContext> sc =
+  RefPtr<nsStyleContext> sc =
     styleSet->ResolveStyleForRules(parentContext, rules);
 
   // The font getter is required to be reserialized based on what we
@@ -2302,7 +2323,7 @@ ResolveStyleForFilterRule(const nsAString& aFilterString,
 {
   nsIDocument* document = aPresShell->GetDocument();
   bool filterChanged = false;
-  nsRefPtr<css::StyleRule> rule =
+  RefPtr<css::StyleRule> rule =
     CreateFilterStyleRule(aFilterString, document, &filterChanged, error);
 
   if (error.Failed()) {
@@ -2323,7 +2344,7 @@ ResolveStyleForFilterRule(const nsAString& aFilterString,
   nsTArray<nsCOMPtr<nsIStyleRule>> rules;
   rules.AppendElement(rule);
 
-  nsRefPtr<nsStyleContext> sc =
+  RefPtr<nsStyleContext> sc =
     aPresShell->StyleSet()->ResolveStyleForRules(aParentContext, rules);
 
   return sc.forget();
@@ -2347,7 +2368,7 @@ CanvasRenderingContext2D::ParseFilter(const nsAString& aString,
   }
 
   nsString usedFont;
-  nsRefPtr<nsStyleContext> parentContext =
+  RefPtr<nsStyleContext> parentContext =
     GetFontStyleContext(mCanvasElement, GetFont(),
                         presShell, usedFont, error);
   if (!parentContext) {
@@ -2355,7 +2376,7 @@ CanvasRenderingContext2D::ParseFilter(const nsAString& aString,
     return false;
   }
 
-  nsRefPtr<nsStyleContext> sc =
+  RefPtr<nsStyleContext> sc =
     ResolveStyleForFilterRule(aString, presShell, parentContext, error);
 
   if (!sc) {
@@ -2429,7 +2450,7 @@ public:
   virtual float GetExLength() const override
   {
     gfxTextPerfMetrics* tp = mPresContext->GetTextPerfMetrics();
-    nsRefPtr<nsFontMetrics> fontMetrics;
+    RefPtr<nsFontMetrics> fontMetrics;
     nsDeviceContext* dc = mPresContext->DeviceContext();
     dc->GetMetricsFor(mFont, mFontLanguage, mExplicitLanguage,
                       gfxFont::eHorizontal, nullptr, tp,
@@ -2478,13 +2499,33 @@ CanvasRenderingContext2D::UpdateFilter()
 // rects
 //
 
+// bug 1074733
+// The canvas spec does not forbid rects with negative w or h, so given
+// corners (x, y), (x+w, y), (x+w, y+h), and (x, y+h) we must generate
+// the appropriate rect by flipping negative dimensions. This prevents
+// draw targets from receiving "empty" rects later on.
+static void
+NormalizeRect(double& aX, double& aY, double& aWidth, double& aHeight)
+{
+  if (aWidth < 0) {
+    aWidth = -aWidth;
+    aX -= aWidth;
+  }
+  if (aHeight < 0) {
+    aHeight = -aHeight;
+    aY -= aHeight;
+  }
+}
+
 void
 CanvasRenderingContext2D::ClearRect(double x, double y, double w,
                                     double h)
 {
+  NormalizeRect(x, y, w, h);
+
   EnsureTarget();
 
-  mTarget->ClearRect(mgfx::Rect(x, y, w, h));
+  mTarget->ClearRect(gfx::Rect(x, y, w, h));
 
   RedrawUser(gfxRect(x, y, w, h));
 }
@@ -2494,6 +2535,8 @@ CanvasRenderingContext2D::FillRect(double x, double y, double w,
                                    double h)
 {
   const ContextState &state = CurrentState();
+
+  NormalizeRect(x, y, w, h);
 
   if (state.patternStyles[Style::FILL]) {
     CanvasPattern::RepeatMode repeat =
@@ -2541,16 +2584,16 @@ CanvasRenderingContext2D::FillRect(double x, double y, double w,
     }
   }
 
-  mgfx::Rect bounds;
+  gfx::Rect bounds;
 
   EnsureTarget();
   if (NeedToCalculateBounds()) {
-    bounds = mgfx::Rect(x, y, w, h);
+    bounds = gfx::Rect(x, y, w, h);
     bounds = mTarget->GetTransform().TransformBounds(bounds);
   }
 
   AdjustedTarget(this, bounds.IsEmpty() ? nullptr : &bounds)->
-    FillRect(mgfx::Rect(x, y, w, h),
+    FillRect(gfx::Rect(x, y, w, h),
              CanvasGeneralPattern().ForStyle(this, Style::FILL, mTarget),
              DrawOptions(state.globalAlpha, UsedOperation()));
 
@@ -2563,11 +2606,12 @@ CanvasRenderingContext2D::StrokeRect(double x, double y, double w,
 {
   const ContextState &state = CurrentState();
 
-  mgfx::Rect bounds;
+  gfx::Rect bounds;
 
   if (!w && !h) {
     return;
   }
+  NormalizeRect(x, y, w, h);
 
   EnsureTarget();
   if (!IsTargetValid()) {
@@ -2575,8 +2619,8 @@ CanvasRenderingContext2D::StrokeRect(double x, double y, double w,
   }
 
   if (NeedToCalculateBounds()) {
-    bounds = mgfx::Rect(x - state.lineWidth / 2.0f, y - state.lineWidth / 2.0f,
-                        w + state.lineWidth, h + state.lineWidth);
+    bounds = gfx::Rect(x - state.lineWidth / 2.0f, y - state.lineWidth / 2.0f,
+                       w + state.lineWidth, h + state.lineWidth);
     bounds = mTarget->GetTransform().TransformBounds(bounds);
   }
 
@@ -2615,14 +2659,14 @@ CanvasRenderingContext2D::StrokeRect(double x, double y, double w,
   }
 
   AdjustedTarget(this, bounds.IsEmpty() ? nullptr : &bounds)->
-    StrokeRect(mgfx::Rect(x, y, w, h),
-                CanvasGeneralPattern().ForStyle(this, Style::STROKE, mTarget),
-                StrokeOptions(state.lineWidth, state.lineJoin,
-                              state.lineCap, state.miterLimit,
-                              state.dash.Length(),
-                              state.dash.Elements(),
-                              state.dashOffset),
-                DrawOptions(state.globalAlpha, UsedOperation()));
+    StrokeRect(gfx::Rect(x, y, w, h),
+               CanvasGeneralPattern().ForStyle(this, Style::STROKE, mTarget),
+               StrokeOptions(state.lineWidth, state.lineJoin,
+                             state.lineCap, state.miterLimit,
+                             state.dash.Length(),
+                             state.dash.Elements(),
+                             state.dashOffset),
+               DrawOptions(state.globalAlpha, UsedOperation()));
 
   Redraw();
 }
@@ -2649,7 +2693,7 @@ CanvasRenderingContext2D::Fill(const CanvasWindingRule& winding)
     return;
   }
 
-  mgfx::Rect bounds;
+  gfx::Rect bounds;
 
   if (NeedToCalculateBounds()) {
     bounds = mPath->GetBounds(mTarget->GetTransform());
@@ -2672,7 +2716,7 @@ void CanvasRenderingContext2D::Fill(const CanvasPath& path, const CanvasWindingR
     return;
   }
 
-  mgfx::Rect bounds;
+  gfx::Rect bounds;
 
   if (NeedToCalculateBounds()) {
     bounds = gfxpath->GetBounds(mTarget->GetTransform());
@@ -2701,7 +2745,7 @@ CanvasRenderingContext2D::Stroke()
                               state.dash.Length(), state.dash.Elements(),
                               state.dashOffset);
 
-  mgfx::Rect bounds;
+  gfx::Rect bounds;
   if (NeedToCalculateBounds()) {
     bounds =
       mPath->GetStrokedBounds(strokeOptions, mTarget->GetTransform());
@@ -2732,7 +2776,7 @@ CanvasRenderingContext2D::Stroke(const CanvasPath& path)
                               state.dash.Length(), state.dash.Elements(),
                               state.dashOffset);
 
-  mgfx::Rect bounds;
+  gfx::Rect bounds;
   if (NeedToCalculateBounds()) {
     bounds =
       gfxpath->GetStrokedBounds(strokeOptions, mTarget->GetTransform());
@@ -2830,7 +2874,7 @@ CanvasRenderingContext2D::Clip(const CanvasWindingRule& winding)
   }
 
   mTarget->PushClip(mPath);
-  CurrentState().clipsPushed.push_back(mPath);
+  CurrentState().clipsPushed.AppendElement(mPath);
 }
 
 void
@@ -2845,7 +2889,7 @@ CanvasRenderingContext2D::Clip(const CanvasPath& path, const CanvasWindingRule& 
   }
 
   mTarget->PushClip(gfxpath);
-  CurrentState().clipsPushed.push_back(gfxpath);
+  CurrentState().clipsPushed.AppendElement(gfxpath);
 }
 
 void
@@ -3104,7 +3148,7 @@ CanvasRenderingContext2D::SetFontInternal(const nsAString& font,
   }
 
   nsString usedFont;
-  nsRefPtr<nsStyleContext> sc =
+  RefPtr<nsStyleContext> sc =
     GetFontStyleContext(mCanvasElement, font, presShell, usedFont, error);
   if (!sc) {
     return false;
@@ -3130,7 +3174,7 @@ CanvasRenderingContext2D::SetFontInternal(const nsAString& font,
   resizedFont.size =
     (fontStyle->mSize * c->AppUnitsPerDevPixel()) / c->AppUnitsPerCSSPixel();
 
-  nsRefPtr<nsFontMetrics> metrics;
+  RefPtr<nsFontMetrics> metrics;
   c->DeviceContext()->GetMetricsFor(resizedFont,
                                     fontStyle->mLanguage,
                                     fontStyle->mExplicitLanguage,
@@ -3298,7 +3342,7 @@ CanvasRenderingContext2D::AddHitRegion(const HitRegionOptions& options, ErrorRes
   }
 
   // get the bounds of the current path. They are relative to the canvas
-  mgfx::Rect bounds(path->GetBounds(mTarget->GetTransform()));
+  gfx::Rect bounds(path->GetBounds(mTarget->GetTransform()));
   if ((bounds.width == 0) || (bounds.height == 0) || !bounds.IsFinite()) {
     // The specified region has no pixels.
     error.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
@@ -3362,7 +3406,7 @@ CanvasRenderingContext2D::GetHitRegionRect(Element* aElement, nsRect& aRect)
   for (unsigned int x = 0; x < mHitRegionsOptions.Length(); x++) {
     RegionInfo& info = mHitRegionsOptions[x];
     if (info.mElement == aElement) {
-      mgfx::Rect bounds(info.mPath->GetBounds());
+      gfx::Rect bounds(info.mPath->GetBounds());
       gfxRect rect(bounds.x, bounds.y, bounds.width, bounds.height);
       aRect = nsLayoutUtils::RoundGfxRectToAppRect(rect, AppUnitsPerCSSPixel());
 
@@ -3656,7 +3700,7 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor : public nsBidiPresUtils::BidiProcess
   nsAutoPtr<gfxTextRun> mTextRun;
 
   // pointer to a screen reference context used to measure text and such
-  nsRefPtr<gfxContext> mThebes;
+  RefPtr<gfxContext> mThebes;
 
   // Pointer to the draw target we should fill our text to
   CanvasRenderingContext2D *mCtx;
@@ -3725,7 +3769,7 @@ CanvasRenderingContext2D::DrawOrMeasureText(const nsAString& aRawText,
   // for now, default to ltr if not in doc
   bool isRTL = false;
 
-  nsRefPtr<nsStyleContext> canvasStyle;
+  RefPtr<nsStyleContext> canvasStyle;
   if (mCanvasElement && mCanvasElement->IsInDoc()) {
     // try to find the closest context
     canvasStyle =
@@ -3951,16 +3995,16 @@ gfxFontGroup *CanvasRenderingContext2D::GetCurrentFontStyle()
     if (err.Failed() || !fontUpdated) {
       gfxFontStyle style;
       style.size = kDefaultFontSize;
+      gfxTextPerfMetrics* tp = nullptr;
+      if (presShell && !presShell->IsDestroying()) {
+        tp = presShell->GetPresContext()->GetTextPerfMetrics();
+      }
       CurrentState().fontGroup =
         gfxPlatform::GetPlatform()->CreateFontGroup(FontFamilyList(eFamily_sans_serif),
-                                                    &style,
+                                                    &style, tp,
                                                     nullptr);
       if (CurrentState().fontGroup) {
         CurrentState().font = kDefaultFontStyle;
-        if (presShell && !presShell->IsDestroying()) {
-          CurrentState().fontGroup->SetTextPerfMetrics(
-            presShell->GetPresContext()->GetTextPerfMetrics());
-        }
       } else {
         NS_ERROR("Default canvas font is invalid");
       }
@@ -4214,11 +4258,11 @@ bool CanvasRenderingContext2D::IsPointInStroke(const CanvasPath& mPath, double x
 // On entry, aSourceRect is relative to aSurface, and on return aSourceRect is
 // relative to the returned surface.
 static already_AddRefed<SourceSurface>
-ExtractSubrect(SourceSurface* aSurface, mgfx::Rect* aSourceRect, DrawTarget* aTargetDT)
+ExtractSubrect(SourceSurface* aSurface, gfx::Rect* aSourceRect, DrawTarget* aTargetDT)
 {
-  mgfx::Rect roundedOutSourceRect = *aSourceRect;
+  gfx::Rect roundedOutSourceRect = *aSourceRect;
   roundedOutSourceRect.RoundOut();
-  mgfx::IntRect roundedOutSourceRectInt;
+  gfx::IntRect roundedOutSourceRectInt;
   if (!roundedOutSourceRect.ToIntRect(&roundedOutSourceRectInt)) {
     RefPtr<SourceSurface> surface(aSurface);
     return surface.forget();
@@ -4292,6 +4336,25 @@ CanvasRenderingContext2D::CachedSurfaceFromElement(Element* aElement)
 // image
 //
 
+static void
+ClipImageDimension(double& aSourceCoord, double& aSourceSize, int32_t aImageSize,
+                   double& aDestCoord, double& aDestSize)
+{
+  double scale = aDestSize / aSourceSize;
+  if (aSourceCoord < 0.0) {
+    double destEnd = aDestCoord + aDestSize;
+    aDestCoord -= aSourceCoord * scale;
+    aDestSize = destEnd - aDestCoord;
+    aSourceSize += aSourceCoord;
+    aSourceCoord = 0.0;
+  }
+  double delta = aImageSize - (aSourceCoord + aSourceSize);
+  if (delta < 0.0) {
+    aDestSize += delta * scale;
+    aSourceSize = aImageSize - aSourceCoord;
+  }
+}
+
 // drawImage(in HTMLImageElement image, in float dx, in float dy);
 //   -- render image from 0,0 at dx,dy top-left coords
 // drawImage(in HTMLImageElement image, in float dx, in float dy, in float sw, in float sh);
@@ -4317,6 +4380,11 @@ CanvasRenderingContext2D::DrawImage(const CanvasImageSource& image,
   }
 
   MOZ_ASSERT(optional_argc == 0 || optional_argc == 2 || optional_argc == 6);
+
+  if (optional_argc == 6) {
+    NormalizeRect(sx, sy, sw, sh);
+    NormalizeRect(dx, dy, dw, dh);
+  }
 
   RefPtr<SourceSurface> srcSurf;
   gfx::IntSize imgSize;
@@ -4524,37 +4592,31 @@ CanvasRenderingContext2D::DrawImage(const CanvasImageSource& image,
     return;
   }
 
-  if (dw == 0.0 || dh == 0.0) {
-    // not really failure, but nothing to do --
-    // and noone likes a divide-by-zero
-    return;
-  }
+  ClipImageDimension(sx, sw, imgSize.width, dx, dw);
+  ClipImageDimension(sy, sh, imgSize.height, dy, dh);
 
-  if (sx < 0.0 || sy < 0.0 ||
-      sw < 0.0 || sw > (double) imgSize.width ||
-      sh < 0.0 || sh > (double) imgSize.height ||
-      dw < 0.0 || dh < 0.0) {
-    // XXX - Unresolved spec issues here, for now return error.
-    error.Throw(NS_ERROR_DOM_INDEX_SIZE_ERR);
+  if (sw <= 0.0 || sh <= 0.0 ||
+      dw <= 0.0 || dh <= 0.0) {
+    // source and/or destination are fully clipped, so nothing is painted
     return;
   }
 
   Filter filter;
 
   if (CurrentState().imageSmoothingEnabled)
-    filter = mgfx::Filter::LINEAR;
+    filter = gfx::Filter::LINEAR;
   else
-    filter = mgfx::Filter::POINT;
+    filter = gfx::Filter::POINT;
 
-  mgfx::Rect bounds;
+  gfx::Rect bounds;
 
   if (NeedToCalculateBounds()) {
-    bounds = mgfx::Rect(dx, dy, dw, dh);
+    bounds = gfx::Rect(dx, dy, dw, dh);
     bounds = mTarget->GetTransform().TransformBounds(bounds);
   }
 
   if (srcSurf) {
-    mgfx::Rect sourceRect(sx, sy, sw, sh);
+    gfx::Rect sourceRect(sx, sy, sw, sh);
     if (element == mCanvasElement) {
       // srcSurf is a snapshot of mTarget. If we draw to mTarget now, we'll
       // trigger a COW copy of the whole canvas into srcSurf. That's a huge
@@ -4565,14 +4627,14 @@ CanvasRenderingContext2D::DrawImage(const CanvasImageSource& image,
     }
     AdjustedTarget(this, bounds.IsEmpty() ? nullptr : &bounds)->
       DrawSurface(srcSurf,
-                  mgfx::Rect(dx, dy, dw, dh),
+                  gfx::Rect(dx, dy, dw, dh),
                   sourceRect,
                   DrawSurfaceOptions(filter),
                   DrawOptions(CurrentState().globalAlpha, UsedOperation()));
   } else {
     DrawDirectlyToCanvas(drawInfo, &bounds,
-                         mgfx::Rect(dx, dy, dw, dh),
-                         mgfx::Rect(sx, sy, sw, sh),
+                         gfx::Rect(dx, dy, dw, dh),
+                         gfx::Rect(sx, sy, sw, sh),
                          imgSize);
   }
 
@@ -4582,9 +4644,9 @@ CanvasRenderingContext2D::DrawImage(const CanvasImageSource& image,
 void
 CanvasRenderingContext2D::DrawDirectlyToCanvas(
                           const nsLayoutUtils::DirectDrawInfo& image,
-                          mgfx::Rect* bounds,
-                          mgfx::Rect dest,
-                          mgfx::Rect src,
+                          gfx::Rect* bounds,
+                          gfx::Rect dest,
+                          gfx::Rect src,
                           gfx::IntSize imgSize)
 {
   MOZ_ASSERT(src.width > 0 && src.height > 0,
@@ -4615,7 +4677,7 @@ CanvasRenderingContext2D::DrawDirectlyToCanvas(
   // the matrix even though this is a temp gfxContext.
   AutoRestoreTransform autoRestoreTransform(mTarget);
 
-  nsRefPtr<gfxContext> context = new gfxContext(tempTarget);
+  RefPtr<gfxContext> context = new gfxContext(tempTarget);
   context->SetMatrix(contextMatrix.
                        Scale(1.0 / contextScale.width,
                              1.0 / contextScale.height).
@@ -4630,8 +4692,7 @@ CanvasRenderingContext2D::DrawDirectlyToCanvas(
   auto result = image.mImgContainer->
     Draw(context, scaledImageSize,
          ImageRegion::Create(gfxRect(src.x, src.y, src.width, src.height)),
-         image.mWhichFrame, GraphicsFilter::FILTER_GOOD,
-         Some(svgContext), modifiedFlags);
+         image.mWhichFrame, Filter::GOOD, Some(svgContext), modifiedFlags);
 
   if (result != DrawResult::SUCCESS) {
     NS_WARNING("imgIContainer::Draw failed");
@@ -4732,7 +4793,7 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& window, double x,
 {
   // protect against too-large surfaces that will cause allocation
   // or overflow issues
-  if (!gfxASurface::CheckSurfaceSize(gfxIntSize(int32_t(w), int32_t(h)),
+  if (!gfxASurface::CheckSurfaceSize(gfx::IntSize(int32_t(w), int32_t(h)),
                                      0xffff)) {
     error.Throw(NS_ERROR_FAILURE);
     return;
@@ -4757,7 +4818,7 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& window, double x,
     nsContentUtils::FlushLayoutForTree(&window);
   }
 
-  nsRefPtr<nsPresContext> presContext;
+  RefPtr<nsPresContext> presContext;
   nsIDocShell* docshell = window.GetDocShell();
   if (docshell) {
     docshell->GetPresContext(getter_AddRefs(presContext));
@@ -4805,7 +4866,7 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& window, double x,
     return;
   }
 
-  nsRefPtr<gfxContext> thebes;
+  RefPtr<gfxContext> thebes;
   RefPtr<DrawTarget> drawDT;
   // Rendering directly is faster and can be done if mTarget supports Azure
   // and does not need alpha blending.
@@ -4851,10 +4912,10 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& window, double x,
       return;
     }
 
-    mgfx::Rect destRect(0, 0, w, h);
-    mgfx::Rect sourceRect(0, 0, sw, sh);
+    gfx::Rect destRect(0, 0, w, h);
+    gfx::Rect sourceRect(0, 0, sw, sh);
     mTarget->DrawSurface(source, destRect, sourceRect,
-                         DrawSurfaceOptions(mgfx::Filter::POINT),
+                         DrawSurfaceOptions(gfx::Filter::POINT),
                          DrawOptions(GlobalAlpha(), CompositionOp::OP_OVER,
                                      AntialiasMode::NONE));
     mTarget->Flush();
@@ -4896,7 +4957,7 @@ CanvasRenderingContext2D::AsyncDrawXULElement(nsXULElement& elem,
     return;
   }
 
-  nsRefPtr<nsFrameLoader> frameloader = loaderOwner->GetFrameLoader();
+  RefPtr<nsFrameLoader> frameloader = loaderOwner->GetFrameLoader();
   if (!frameloader) {
     error.Throw(NS_ERROR_FAILURE);
     return;
@@ -4921,7 +4982,7 @@ CanvasRenderingContext2D::AsyncDrawXULElement(nsXULElement& elem,
 
   // protect against too-large surfaces that will cause allocation
   // or overflow issues
-  if (!gfxASurface::CheckSurfaceSize(gfxIntSize(w, h), 0xffff)) {
+  if (!gfxASurface::CheckSurfaceSize(gfx::IntSize(w, h), 0xffff)) {
     error.Throw(NS_ERROR_FAILURE);
     return;
   }
@@ -4971,7 +5032,7 @@ CanvasRenderingContext2D::DrawWidgetAsOnScreen(nsGlobalWindow& aWindow,
     return;
   }
 
-  nsRefPtr<nsPresContext> presContext;
+  RefPtr<nsPresContext> presContext;
   nsIDocShell* docshell = aWindow.GetDocShell();
   if (docshell) {
     docshell->GetPresContext(getter_AddRefs(presContext));
@@ -4992,9 +5053,9 @@ CanvasRenderingContext2D::DrawWidgetAsOnScreen(nsGlobalWindow& aWindow,
     return;
   }
 
-  mgfx::Rect sourceRect(mgfx::Point(0, 0), mgfx::Size(snapshot->GetSize()));
+  gfx::Rect sourceRect(gfx::Point(0, 0), gfx::Size(snapshot->GetSize()));
   mTarget->DrawSurface(snapshot, sourceRect, sourceRect,
-                       DrawSurfaceOptions(mgfx::Filter::POINT),
+                       DrawSurfaceOptions(gfx::Filter::POINT),
                        DrawOptions(GlobalAlpha(), CompositionOp::OP_OVER,
                                    AntialiasMode::NONE));
   mTarget->Flush();
@@ -5085,7 +5146,7 @@ CanvasRenderingContext2D::GetImageData(JSContext* aCx, double aSx,
   }
   MOZ_ASSERT(array);
 
-  nsRefPtr<ImageData> imageData = new ImageData(w, h, *array);
+  RefPtr<ImageData> imageData = new ImageData(w, h, *array);
   return imageData.forget();
 }
 
@@ -5272,9 +5333,6 @@ CanvasRenderingContext2D::PutImageData(ImageData& imageData, double dx,
                                 JS::ToInt32(dirtyHeight));
 }
 
-// void putImageData (in ImageData d, in float x, in float y);
-// void putImageData (in ImageData d, in double x, in double y, in double dirtyX, in double dirtyY, in double dirtyWidth, in double dirtyHeight);
-
 nsresult
 CanvasRenderingContext2D::PutImageData_explicit(int32_t x, int32_t y, uint32_t w, uint32_t h,
                                                 dom::Uint8ClampedArray* aArray,
@@ -5346,7 +5404,7 @@ CanvasRenderingContext2D::PutImageData_explicit(int32_t x, int32_t y, uint32_t w
 
   uint32_t copyWidth = dirtyRect.Width();
   uint32_t copyHeight = dirtyRect.Height();
-  nsRefPtr<gfxImageSurface> imgsurf = new gfxImageSurface(gfxIntSize(copyWidth, copyHeight),
+  RefPtr<gfxImageSurface> imgsurf = new gfxImageSurface(gfx::IntSize(copyWidth, copyHeight),
                                                           gfxImageFormat::ARGB32,
                                                           false);
   if (!imgsurf || imgsurf->CairoStatus()) {
@@ -5409,7 +5467,7 @@ CanvasRenderingContext2D::PutImageData_explicit(int32_t x, int32_t y, uint32_t w
                                dirtyRect.width, dirtyRect.height),
                        IntPoint(dirtyRect.x, dirtyRect.y));
 
-  Redraw(mgfx::Rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height));
+  Redraw(gfx::Rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height));
 
   return NS_OK;
 }
@@ -5436,7 +5494,7 @@ CreateImageData(JSContext* cx, CanvasRenderingContext2D* context,
     return nullptr;
   }
 
-  nsRefPtr<mozilla::dom::ImageData> imageData =
+  RefPtr<mozilla::dom::ImageData> imageData =
     new mozilla::dom::ImageData(w, h, *darray);
   return imageData.forget();
 }
@@ -5509,9 +5567,11 @@ CanvasRenderingContext2D::GetCanvasLayer(nsDisplayListBuilder* aBuilder,
                                          CanvasLayer *aOldLayer,
                                          LayerManager *aManager)
 {
-  if (mOpaque) {
+  if (mOpaque || mIsSkiaGL) {
     // If we're opaque then make sure we have a surface so we paint black
     // instead of transparent.
+    // If we're using SkiaGL, then SkiaGLTex() below needs the target to
+    // be accessible.
     EnsureTarget();
   }
 
@@ -5540,18 +5600,20 @@ CanvasRenderingContext2D::GetCanvasLayer(nsDisplayListBuilder* aBuilder,
 
       data.mGLContext = glue->GetGLContext();
       data.mFrontbufferGLTex = skiaGLTex;
+      PersistentBufferProvider *provider = GetBufferProvider(aManager);
+      data.mBufferProvider = provider;
     } else {
       PersistentBufferProvider *provider = GetBufferProvider(aManager);
       data.mBufferProvider = provider;
     }
 
     if (userData && userData->IsForContext(this) && aOldLayer->IsDataValid(data)) {
-      nsRefPtr<CanvasLayer> ret = aOldLayer;
+      RefPtr<CanvasLayer> ret = aOldLayer;
       return ret.forget();
     }
   }
 
-  nsRefPtr<CanvasLayer> canvasLayer = aManager->CreateCanvasLayer();
+  RefPtr<CanvasLayer> canvasLayer = aManager->CreateCanvasLayer();
   if (!canvasLayer) {
     NS_WARNING("CreateCanvasLayer returned null!");
     // No DidTransactionCallback will be received, so mark the context clean
@@ -5590,6 +5652,8 @@ CanvasRenderingContext2D::GetCanvasLayer(nsDisplayListBuilder* aBuilder,
 
     data.mGLContext = glue->GetGLContext();
     data.mFrontbufferGLTex = skiaGLTex;
+    PersistentBufferProvider *provider = GetBufferProvider(aManager);
+    data.mBufferProvider = provider;
   } else {
     PersistentBufferProvider *provider = GetBufferProvider(aManager);
     data.mBufferProvider = provider;
@@ -5615,6 +5679,17 @@ CanvasRenderingContext2D::MarkContextClean()
   mInvalidateCount = 0;
 }
 
+void
+CanvasRenderingContext2D::MarkContextCleanForFrameCapture()
+{
+  mIsCapturedFrameInvalid = false;
+}
+
+bool
+CanvasRenderingContext2D::IsContextCleanForFrameCapture()
+{
+  return !mIsCapturedFrameInvalid;
+}
 
 bool
 CanvasRenderingContext2D::ShouldForceInactiveLayer(LayerManager *aManager)
@@ -5650,7 +5725,7 @@ CanvasPath::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aGivenProto)
 already_AddRefed<CanvasPath>
 CanvasPath::Constructor(const GlobalObject& aGlobal, ErrorResult& aRv)
 {
-  nsRefPtr<CanvasPath> path = new CanvasPath(aGlobal.GetAsSupports());
+  RefPtr<CanvasPath> path = new CanvasPath(aGlobal.GetAsSupports());
   return path.forget();
 }
 
@@ -5660,7 +5735,7 @@ CanvasPath::Constructor(const GlobalObject& aGlobal, CanvasPath& aCanvasPath, Er
   RefPtr<gfx::Path> tempPath = aCanvasPath.GetPath(CanvasWindingRule::Nonzero,
                                                    gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget());
 
-  nsRefPtr<CanvasPath> path = new CanvasPath(aGlobal.GetAsSupports(), tempPath->CopyToBuilder());
+  RefPtr<CanvasPath> path = new CanvasPath(aGlobal.GetAsSupports(), tempPath->CopyToBuilder());
   return path.forget();
 }
 
@@ -5672,7 +5747,7 @@ CanvasPath::Constructor(const GlobalObject& aGlobal, const nsAString& aPathStrin
     return Constructor(aGlobal, aRv);
   }
 
-  nsRefPtr<CanvasPath> path = new CanvasPath(aGlobal.GetAsSupports(), tempPath->CopyToBuilder());
+  RefPtr<CanvasPath> path = new CanvasPath(aGlobal.GetAsSupports(), tempPath->CopyToBuilder());
   return path.forget();
 }
 

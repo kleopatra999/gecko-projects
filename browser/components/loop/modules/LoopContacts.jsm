@@ -3,11 +3,11 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu} = Components;
+const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "console",
-                                  "resource://gre/modules/devtools/Console.jsm");
+                                  "resource://gre/modules/Console.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LoopStorage",
                                   "resource:///modules/loop/LoopStorage.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
@@ -17,7 +17,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "CardDavImporter",
 XPCOMUtils.defineLazyModuleGetter(this, "GoogleImporter",
                                   "resource:///modules/loop/GoogleImporter.jsm");
 XPCOMUtils.defineLazyGetter(this, "eventEmitter", function() {
-  const {EventEmitter} = Cu.import("resource://gre/modules/devtools/event-emitter.js", {});
+  const { EventEmitter } = Cu.import("resource://devtools/shared/event-emitter.js", {});
   return new EventEmitter();
 });
 
@@ -313,7 +313,7 @@ LoopStorage.on("upgrade", function(e, db) {
     keyPath: kKeyPath,
     autoIncrement: true
   });
-  store.createIndex(kServiceIdIndex, kServiceIdIndex, {unique: false});
+  store.createIndex(kServiceIdIndex, kServiceIdIndex, { unique: false });
 });
 
 /**
@@ -323,7 +323,7 @@ LoopStorage.on("upgrade", function(e, db) {
  * callback Function. MozLoopAPI will cause things to break if this invariant is
  * violated. You'll notice this as well in the documentation for each method.
  */
-let LoopContactsInternal = Object.freeze({
+var LoopContactsInternal = Object.freeze({
   /**
    * Map of contact importer names to instances
    */

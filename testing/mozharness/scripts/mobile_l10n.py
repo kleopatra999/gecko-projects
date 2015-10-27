@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import shlex
 
 try:
@@ -166,7 +167,7 @@ class MobileSingleLocale(MockMixin, LocalesMixin, ReleaseMixin,
             rc = self.query_release_config()
             repack_env['EN_US_BINARY_URL'] = c['base_en_us_binary_url'] % replace_dict
         if 'MOZ_SIGNING_SERVERS' in os.environ:
-            repack_env['MOZ_SIGN_CMD'] = subprocess.list2cmdline(self.query_moz_sign_cmd(formats='jar'))
+            repack_env['MOZ_SIGN_CMD'] = subprocess.list2cmdline(self.query_moz_sign_cmd(formats=['jar']))
         self.repack_env = repack_env
         return self.repack_env
 
@@ -486,6 +487,7 @@ class MobileSingleLocale(MockMixin, LocalesMixin, ReleaseMixin,
         revision = self.query_revision()
         repo = self.query_l10n_repo()
         pushinfo = self.vcs_query_pushinfo(repo, revision, vcs='hgtool')
+        pushdate = time.strftime('%Y%m%d%H%M%S', time.gmtime(pushinfo.pushdate))
         routes_json = os.path.join(self.query_abs_dirs()['abs_mozilla_dir'],
                                    'testing/taskcluster/routes.json')
         with open(routes_json) as f:
@@ -506,6 +508,10 @@ class MobileSingleLocale(MockMixin, LocalesMixin, ReleaseMixin,
                 'index': self.config.get('taskcluster_index', 'index.garbage.staging'),
                 'project': branch,
                 'head_rev': revision,
+                'pushdate': pushdate,
+                'year': pushdate[0:4],
+                'month': pushdate[4:6],
+                'day': pushdate[6:8],
                 'build_product': self.config['stage_product'],
                 'build_name': self.query_build_name(),
                 'build_type': self.query_build_type(),

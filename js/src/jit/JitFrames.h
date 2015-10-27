@@ -68,6 +68,12 @@ CalleeTokenToScript(CalleeToken token)
     MOZ_ASSERT(GetCalleeTokenTag(token) == CalleeToken_Script);
     return (JSScript*)(uintptr_t(token) & CalleeTokenMask);
 }
+static inline bool
+CalleeTokenIsModuleScript(CalleeToken token)
+{
+    CalleeTokenTag tag = GetCalleeTokenTag(token);
+    return tag == CalleeToken_Script && CalleeTokenToScript(token)->module();
+}
 
 static inline JSScript*
 ScriptFromCalleeToken(CalleeToken token)
@@ -167,7 +173,6 @@ class OsiIndex
     uint32_t snapshotOffset() const {
         return snapshotOffset_;
     }
-    void fixUpOffset(MacroAssembler& masm);
 };
 
 // The layout of an Ion frame on the C stack is roughly:
@@ -699,8 +704,8 @@ class IonOOLSetterOpExitFrameLayout : public IonOOLPropertyOpExitFrameLayout
     }
 };
 
-// Proxy::get(JSContext* cx, HandleObject proxy, HandleObject receiver, HandleId id,
-//            MutableHandleValue vp)
+// ProxyGetProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
+// ProxyCallProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp)
 // ProxySetProperty(JSContext* cx, HandleObject proxy, HandleId id, MutableHandleValue vp,
 //                  bool strict)
 class IonOOLProxyExitFrameLayout
@@ -711,9 +716,6 @@ class IonOOLProxyExitFrameLayout
 
     // The proxy object.
     JSObject* proxy_;
-
-    // Object for HandleObject
-    JSObject* receiver_;
 
     // id for HandleId
     jsid id_;
@@ -745,9 +747,6 @@ class IonOOLProxyExitFrameLayout
     }
     inline jsid* id() {
         return &id_;
-    }
-    inline JSObject** receiver() {
-        return &receiver_;
     }
     inline JSObject** proxy() {
         return &proxy_;
@@ -1005,6 +1004,12 @@ GetPcScript(JSContext* cx, JSScript** scriptRes, jsbytecode** pcRes);
 
 CalleeToken
 MarkCalleeToken(JSTracer* trc, CalleeToken token);
+
+// The minimum stack size is two. Two slots are needed because INITGLEXICAL
+// (stack depth 1) is compiled as a SETPROP (stack depth 2) on the global
+// lexical scope. Baseline also requires one slot for this/argument type
+// checks.
+static const uint32_t MinJITStackSize = 2;
 
 } /* namespace jit */
 } /* namespace js */

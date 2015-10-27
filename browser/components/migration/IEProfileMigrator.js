@@ -12,11 +12,14 @@ const Cr = Components.results;
 const kLoginsKey = "Software\\Microsoft\\Internet Explorer\\IntelliForms\\Storage2";
 const kMainKey = "Software\\Microsoft\\Internet Explorer\\Main";
 
+Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource:///modules/MigrationUtils.jsm");
 Cu.import("resource:///modules/MSMigrationUtils.jsm");
+Cu.import("resource://gre/modules/LoginHelper.jsm");
+
 
 XPCOMUtils.defineLazyModuleGetter(this, "ctypes",
                                   "resource://gre/modules/ctypes.jsm");
@@ -29,6 +32,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "WindowsRegistry",
 
 Cu.importGlobalProperties(["URL"]);
 
+var CtypesKernelHelpers = MSMigrationUtils.CtypesKernelHelpers;
+
 ////////////////////////////////////////////////////////////////////////////////
 //// Resources
 
@@ -39,36 +44,13 @@ function History() {
 History.prototype = {
   type: MigrationUtils.resourceTypes.HISTORY,
 
-  get exists() true,
-
-  __typedURLs: null,
-  get _typedURLs() {
-    if (!this.__typedURLs) {
-      // The list of typed URLs is a sort of annotation stored in the registry.
-      // Currently, IE stores 25 entries and this value is not configurable,
-      // but we just keep reading up to the first non-existing entry to support
-      // possible future bumps of this limit.
-      this.__typedURLs = {};
-      let registry = Cc["@mozilla.org/windows-registry-key;1"].
-                     createInstance(Ci.nsIWindowsRegKey);
-      try {
-        registry.open(Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
-                      "Software\\Microsoft\\Internet Explorer\\TypedURLs",
-                      Ci.nsIWindowsRegKey.ACCESS_READ);
-        for (let entry = 1; registry.hasValue("url" + entry); entry++) {
-          let url = registry.readStringValue("url" + entry);
-          this.__typedURLs[url] = true;
-        }
-      } catch (ex) {
-      } finally {
-        registry.close();
-      }
-    }
-    return this.__typedURLs;
+  get exists() {
+    return true;
   },
 
   migrate: function H_migrate(aCallback) {
     let places = [];
+    let typedURLs = MSMigrationUtils.getTypedURLs("Software\\Microsoft\\Internet Explorer");
     let historyEnumerator = Cc["@mozilla.org/profile/migrator/iehistoryenumerator;1"].
                             createInstance(Ci.nsISimpleEnumerator);
     while (historyEnumerator.hasMoreElements()) {
@@ -88,11 +70,14 @@ History.prototype = {
       }
 
       // The typed urls are already fixed-up, so we can use them for comparison.
-      let transitionType = this._typedURLs[uri.spec] ?
+      let transitionType = typedURLs.has(uri.spec) ?
                              Ci.nsINavHistoryService.TRANSITION_TYPED :
                              Ci.nsINavHistoryService.TRANSITION_LINK;
-      // use the current date if we have no visits for this entry
-      let lastVisitTime = entry.get("time") || Date.now();
+      // use the current date if we have no visits for this entry.
+      // Note that the entry will have a time in microseconds (PRTime),
+      // and Date.now() returns milliseconds. Places expects PRTime,
+      // so we multiply the Date.now return value to make up the difference.
+      let lastVisitTime = entry.get("time") || (Date.now() * 1000);
 
       places.push(
         { uri: uri,
@@ -123,14 +108,21 @@ History.prototype = {
   }
 };
 
-// IE password migrator supporting windows from XP until 7 and IE from 7 until 11
+// IE form password migrator supporting windows from XP until 7 and IE from 7 until 11
 function IE7FormPasswords () {
+  // used to distinguish between this migrator and other passwords migrators in tests.
+  this.name = "IE7FormPasswords";
 }
 
 IE7FormPasswords.prototype = {
   type: MigrationUtils.resourceTypes.PASSWORDS,
 
   get exists() {
+    // work only on windows until 7
+    if (AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
+      return false;
+    }
+
     try {
       let nsIWindowsRegKey = Ci.nsIWindowsRegKey;
       let key = Cc["@mozilla.org/windows-registry-key;1"].
@@ -170,7 +162,7 @@ IE7FormPasswords.prototype = {
    * @param {nsIURI[]} uris - the uris that are going to be migrated.
    */
   _migrateURIs(uris) {
-    this.ctypesHelpers = new MSMigrationUtils.CtypesHelpers();
+    this.ctypesKernelHelpers = new MSMigrationUtils.CtypesKernelHelpers();
     this._crypto = new OSCrypto();
     let nsIWindowsRegKey = Ci.nsIWindowsRegKey;
     let key = Cc["@mozilla.org/windows-registry-key;1"].
@@ -239,7 +231,7 @@ IE7FormPasswords.prototype = {
 
     key.close();
     this._crypto.finalize();
-    this.ctypesHelpers.finalize();
+    this.ctypesKernelHelpers.finalize();
   },
 
   _crypto: null,
@@ -249,52 +241,16 @@ IE7FormPasswords.prototype = {
    * @param {Object[]} logins - array of the login details.
    */
   _addLogins(ieLogins) {
-    function addLogin(login, existingLogins) {
-      // Add the login only if it doesn't already exist
-      // if the login is not already available, it s going to be added or merged with another
-      // login
-      if (existingLogins.some(l => login.matches(l, true))) {
-        return;
-      }
-      let isUpdate = false; // the login is just an update for an old one
-      for (let existingLogin of existingLogins) {
-        if (login.username == existingLogin.username && login.password != existingLogin.password) {
-          // if a login with the same username and different password already exists and it's older
-          // than the current one, that login needs to be updated using the current one details
-          if (login.timePasswordChanged > existingLogin.timePasswordChanged) {
-            // Bug 1187190: Password changes should be propagated depending on timestamps.
-
-            // the existing login password and timestamps should be updated
-            let propBag = Cc["@mozilla.org/hash-property-bag;1"].
-                          createInstance(Ci.nsIWritablePropertyBag);
-            propBag.setProperty("password", login.password);
-            propBag.setProperty("timePasswordChanged", login.timePasswordChanged);
-            Services.logins.modifyLogin(existingLogin, propBag);
-            // make sure not to add the new login
-            isUpdate = true;
-          }
-        }
-      }
-      // if the new login is not an update, add it.
-      if (!isUpdate) {
-        Services.logins.addLogin(login);
-      }
-    }
-
     for (let ieLogin of ieLogins) {
       try {
-        let login = Cc["@mozilla.org/login-manager/loginInfo;1"].createInstance(Ci.nsILoginInfo);
-
-        login.init(ieLogin.url, "", null,
-                   ieLogin.username, ieLogin.password, "", "");
-        login.QueryInterface(Ci.nsILoginMetaInfo);
-        login.timeCreated = ieLogin.creation;
-        login.timeLastUsed = ieLogin.creation;
-        login.timePasswordChanged = ieLogin.creation;
-        // login.timesUsed is going to set to the default value 1
-        // Add the login only if there's not an existing entry
-        let existingLogins = Services.logins.findLogins({}, login.hostname, "", null);
-        addLogin(login, existingLogins);
+        // create a new login
+        let login = {
+          username: ieLogin.username,
+          password: ieLogin.password,
+          hostname: ieLogin.url,
+          timeCreated: ieLogin.creation,
+          };
+        LoginHelper.maybeImportLogin(login);
       } catch (e) {
         Cu.reportError(e);
       }
@@ -364,7 +320,7 @@ IE7FormPasswords.prototype = {
       // Bytes 0-31 starting from currentInfoIndex contain the loginItem data structure for the
       // current login
       let currentLoginItem = currentLoginItemPointer.contents;
-      let creation = this.ctypesHelpers.
+      let creation = this.ctypesKernelHelpers.
                      fileTimeToSecondsSinceEpoch(currentLoginItem.hiDateTime,
                                                  currentLoginItem.loDateTime) * 1000;
       let currentResult = {
@@ -393,11 +349,13 @@ function Settings() {
 Settings.prototype = {
   type: MigrationUtils.resourceTypes.SETTINGS,
 
-  get exists() true,
+  get exists() {
+    return true;
+  },
 
   migrate: function S_migrate(aCallback) {
     // Converts from yes/no to a boolean.
-    function yesNoToBoolean(v) v == "yes";
+    let yesNoToBoolean = v => v == "yes";
 
     // Converts source format like "en-us,ar-kw;q=0.7,ar-om;q=0.3" into
     // destination format like "en-us, ar-kw, ar-om".
@@ -409,7 +367,7 @@ Settings.prototype = {
                 let qB = parseFloat(b.split(";q=")[1]) || 1.0;
                 return qA < qB ? 1 : qA == qB ? 0 : -1;
               })
-              .map(function(a) a.split(";")[0]);
+              .map(a => a.split(";")[0]);
     }
 
     // For reference on some of the available IE Registry settings:
@@ -441,7 +399,7 @@ Settings.prototype = {
     this._set(kMainKey,
               "Display Inline Images",
               "permissions.default.image",
-              function (v) yesNoToBoolean(v) ? 1 : 2);
+              v => yesNoToBoolean(v) ? 1 : 2);
     this._set(kMainKey,
               "Move System Caret",
               "accessibility.browsewithcaret",
@@ -449,11 +407,11 @@ Settings.prototype = {
     this._set("Software\\Microsoft\\Internet Explorer\\Settings",
               "Always Use My Colors",
               "browser.display.document_color_use",
-              function (v) !Boolean(v) ? 0 : 2);
+              v => !Boolean(v) ? 0 : 2);
     this._set("Software\\Microsoft\\Internet Explorer\\Settings",
               "Always Use My Font Face",
               "browser.display.use_document_fonts",
-              function (v) !Boolean(v));
+              v => !Boolean(v));
     this._set(kMainKey,
               "SmoothScroll",
               "general.smoothScroll",
@@ -465,7 +423,7 @@ Settings.prototype = {
     this._set("Software\\Microsoft\\Internet Explorer\\TabbedBrowsing\\",
               "OpenInForeground",
               "browser.tabs.loadInBackground",
-              function (v) !Boolean(v));
+              v => !Boolean(v));
 
     aCallback(true);
   },
@@ -524,10 +482,17 @@ IEProfileMigrator.prototype.getResources = function IE_getResources() {
     MSMigrationUtils.getBookmarksMigrator()
   , new History()
   , MSMigrationUtils.getCookiesMigrator()
-  , new IE7FormPasswords()
   , new Settings()
   ];
-  return [r for each (r in resources) if (r.exists)];
+  // Only support the form password migrator for Windows XP to 7.
+  if (AppConstants.isPlatformAndVersionAtMost("win", "6.1")) {
+    resources.push(new IE7FormPasswords());
+  }
+  let windowsVaultFormPasswordsMigrator =
+    MSMigrationUtils.getWindowsVaultFormPasswordsMigrator();
+  windowsVaultFormPasswordsMigrator.name = "IEVaultFormPasswords";
+  resources.push(windowsVaultFormPasswordsMigrator);
+  return resources.filter(r => r.exists);
 };
 
 Object.defineProperty(IEProfileMigrator.prototype, "sourceHomePageURL", {

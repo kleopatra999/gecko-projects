@@ -33,6 +33,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_END
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(BluetoothLeDeviceEvent, Event)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDevice)
   tmp->mScanRecord = nullptr;
+  mozilla::DropJSObjects(this);
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(BluetoothLeDeviceEvent)
@@ -66,7 +67,7 @@ BluetoothLeDeviceEvent::Constructor(
   const int16_t aRssi,
   const nsTArray<uint8_t>& aScanRecord)
 {
-  nsRefPtr<BluetoothLeDeviceEvent> e = new BluetoothLeDeviceEvent(aOwner);
+  RefPtr<BluetoothLeDeviceEvent> e = new BluetoothLeDeviceEvent(aOwner);
   bool trusted = e->Init(aOwner);
   e->InitEvent(aType, false, false);
   e->mDevice = aDevice;
@@ -87,7 +88,7 @@ BluetoothLeDeviceEvent::Constructor(
   nsCOMPtr<mozilla::dom::EventTarget> owner =
     do_QueryInterface(aGlobal.GetAsSupports());
 
-  nsRefPtr<BluetoothLeDeviceEvent> e = new BluetoothLeDeviceEvent(owner);
+  RefPtr<BluetoothLeDeviceEvent> e = new BluetoothLeDeviceEvent(owner);
   bool trusted = e->Init(owner);
   e->InitEvent(aType, aEventInitDict.mBubbles, aEventInitDict.mCancelable);
   e->mDevice = aEventInitDict.mDevice;
@@ -129,6 +130,7 @@ BluetoothLeDeviceEvent::GetScanRecord(
 {
   if (!mScanRecord) {
     mScanRecord = ArrayBuffer::Create(cx,
+                                      this,
                                       mRawScanRecord.Length(),
                                       mRawScanRecord.Elements());
     if (!mScanRecord) {

@@ -483,6 +483,13 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
                 continue
             cmd.append(arg)
 
+        try_options, try_tests = self.try_args(suite_category)
+        cmd.extend(try_options)
+        cmd.extend(self.query_tests_args(
+            self.config["suite_definitions"][suite_category].get("tests"),
+            self.test_suite_definitions[self.test_suite].get("tests"),
+            try_tests))
+
         return cmd
 
     def _tooltool_fetch(self, url):
@@ -655,7 +662,7 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         Run the tests
         """
         cmd = self._build_command()
-        cmd = self.append_harness_extra_args(cmd)
+
         try:
             cwd = self._query_tests_dir()
         except:
@@ -669,8 +676,16 @@ class AndroidEmulatorTest(BlobUploadMixin, TestingMixin, EmulatorMixin, VCSMixin
         self.info("Running on %s the command %s" % (self.emulator["name"], subprocess.list2cmdline(cmd)))
         self.info("##### %s log begins" % self.test_suite)
 
+        # TinderBoxPrintRe does not know about the '-debug' categories
+        aliases = {
+            'reftest-debug': 'reftest',
+            'jsreftest-debug': 'jsreftest',
+            'crashtest-debug': 'crashtest',
+        }
+        suite_category = self.test_suite_definitions[self.test_suite]["category"]
+        suite_category = aliases.get(suite_category, suite_category)
         parser = self.get_test_output_parser(
-            self.test_suite_definitions[self.test_suite]["category"],
+            suite_category,
             config=self.config,
             log_obj=self.log_obj,
             error_list=self.error_list)

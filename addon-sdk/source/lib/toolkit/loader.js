@@ -363,7 +363,7 @@ const load = iced(function load(loader, module) {
       fileName: { value: fileName, writable: true, configurable: true },
       lineNumber: { value: lineNumber, writable: true, configurable: true },
       stack: { value: serializeStack(frames), writable: true, configurable: true },
-      toString: { value: function() toString, writable: true, configurable: true },
+      toString: { value: () => toString, writable: true, configurable: true },
     });
   }
 
@@ -798,7 +798,7 @@ function Loader(options) {
     globals: {
       get console() {
         // Import Console.jsm from here to prevent loading it until someone uses it
-        let { ConsoleAPI } = Cu.import("resource://gre/modules/devtools/Console.jsm");
+        let { ConsoleAPI } = Cu.import("resource://gre/modules/Console.jsm");
         let console = new ConsoleAPI({
           consoleID: options.id ? "addon/" + options.id : ""
         });
@@ -937,13 +937,13 @@ function Loader(options) {
 };
 Loader.Loader = Loader;
 
-let isJSONURI = uri => uri.substr(-5) === '.json';
-let isJSMURI = uri => uri.substr(-4) === '.jsm';
-let isJSURI = uri => uri.substr(-3) === '.js';
-let isAbsoluteURI = uri => uri.indexOf("resource://") >= 0 ||
+var isJSONURI = uri => uri.substr(-5) === '.json';
+var isJSMURI = uri => uri.substr(-4) === '.jsm';
+var isJSURI = uri => uri.substr(-3) === '.js';
+var isAbsoluteURI = uri => uri.indexOf("resource://") >= 0 ||
                            uri.indexOf("chrome://") >= 0 ||
                            uri.indexOf("file://") >= 0
-let isRelative = id => id[0] === '.'
+var isRelative = id => id[0] === '.'
 
 const generateMap = iced(function generateMap(options, callback) {
   let { rootURI, resolve, paths } = override({

@@ -342,7 +342,7 @@ public:
 
     // Check if we already know that there is no event listener for the event.
     if (mNoListenerForEvent == aEvent->mMessage &&
-        (mNoListenerForEvent != NS_USER_DEFINED_EVENT ||
+        (mNoListenerForEvent != eUnidentifiedEvent ||
          mNoListenerForEventAtom == aEvent->userType)) {
       return;
     }
@@ -442,6 +442,10 @@ public:
   void TraceListeners(JSTracer* aTrc);
 
   dom::EventTarget* GetTarget() { return mTarget; }
+
+  bool HasApzAwareListeners();
+
+  bool IsApzAwareEvent(nsIAtom* aEvent);
 
 protected:
   void HandleEventInternal(nsPresContext* aPresContext,

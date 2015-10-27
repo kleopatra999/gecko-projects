@@ -390,7 +390,7 @@ public:
   // TextComposition automatically.
   nsString mData;
 
-  nsRefPtr<TextRangeArray> mRanges;
+  RefPtr<TextRangeArray> mRanges;
 
   // If the instance is a clone of another event, mOriginalMessage stores
   // the another event's mMessage.
@@ -434,22 +434,22 @@ public:
 
   bool CausesDOMTextEvent() const
   {
-    return mMessage == NS_COMPOSITION_CHANGE ||
-           mMessage == NS_COMPOSITION_COMMIT ||
-           mMessage == NS_COMPOSITION_COMMIT_AS_IS;
+    return mMessage == eCompositionChange ||
+           mMessage == eCompositionCommit ||
+           mMessage == eCompositionCommitAsIs;
   }
 
   bool CausesDOMCompositionEndEvent() const
   {
-    return mMessage == NS_COMPOSITION_END ||
-           mMessage == NS_COMPOSITION_COMMIT ||
-           mMessage == NS_COMPOSITION_COMMIT_AS_IS;
+    return mMessage == eCompositionEnd ||
+           mMessage == eCompositionCommit ||
+           mMessage == eCompositionCommitAsIs;
   }
 
   bool IsFollowedByCompositionEnd() const
   {
-    return mOriginalMessage == NS_COMPOSITION_COMMIT ||
-           mOriginalMessage == NS_COMPOSITION_COMMIT_AS_IS;
+    return mOriginalMessage == eCompositionCommit ||
+           mOriginalMessage == eCompositionCommitAsIs;
   }
 };
 
@@ -495,7 +495,7 @@ public:
   void InitForQueryTextContent(uint32_t aOffset, uint32_t aLength,
                                bool aUseNativeLineBreak = true)
   {
-    NS_ASSERTION(mMessage == NS_QUERY_TEXT_CONTENT,
+    NS_ASSERTION(mMessage == eQueryTextContent,
                  "wrong initializer is called");
     mInput.mOffset = aOffset;
     mInput.mLength = aLength;
@@ -505,7 +505,7 @@ public:
   void InitForQueryCaretRect(uint32_t aOffset,
                              bool aUseNativeLineBreak = true)
   {
-    NS_ASSERTION(mMessage == NS_QUERY_CARET_RECT,
+    NS_ASSERTION(mMessage == eQueryCaretRect,
                  "wrong initializer is called");
     mInput.mOffset = aOffset;
     mUseNativeLineBreak = aUseNativeLineBreak;
@@ -514,7 +514,7 @@ public:
   void InitForQueryTextRect(uint32_t aOffset, uint32_t aLength,
                             bool aUseNativeLineBreak = true)
   {
-    NS_ASSERTION(mMessage == NS_QUERY_TEXT_RECT,
+    NS_ASSERTION(mMessage == eQueryTextRect,
                  "wrong initializer is called");
     mInput.mOffset = aOffset;
     mInput.mLength = aLength;
@@ -523,37 +523,37 @@ public:
 
   void InitForQueryDOMWidgetHittest(const mozilla::LayoutDeviceIntPoint& aPoint)
   {
-    NS_ASSERTION(mMessage == NS_QUERY_DOM_WIDGET_HITTEST,
+    NS_ASSERTION(mMessage == eQueryDOMWidgetHittest,
                  "wrong initializer is called");
     refPoint = aPoint;
   }
 
   void RequestFontRanges()
   {
-    NS_ASSERTION(mMessage == NS_QUERY_TEXT_CONTENT,
+    NS_ASSERTION(mMessage == eQueryTextContent,
                  "not querying text content");
     mWithFontRanges = true;
   }
 
   uint32_t GetSelectionStart(void) const
   {
-    NS_ASSERTION(mMessage == NS_QUERY_SELECTED_TEXT,
+    NS_ASSERTION(mMessage == eQuerySelectedText,
                  "not querying selection");
     return mReply.mOffset + (mReply.mReversed ? mReply.mString.Length() : 0);
   }
 
   uint32_t GetSelectionEnd(void) const
   {
-    NS_ASSERTION(mMessage == NS_QUERY_SELECTED_TEXT,
+    NS_ASSERTION(mMessage == eQuerySelectedText,
                  "not querying selection");
     return mReply.mOffset + (mReply.mReversed ? 0 : mReply.mString.Length());
   }
 
   mozilla::WritingMode GetWritingMode(void) const
   {
-    NS_ASSERTION(mMessage == NS_QUERY_SELECTED_TEXT ||
-                 mMessage == NS_QUERY_CARET_RECT ||
-                 mMessage == NS_QUERY_TEXT_RECT,
+    NS_ASSERTION(mMessage == eQuerySelectedText ||
+                 mMessage == eQueryCaretRect ||
+                 mMessage == eQueryTextRect,
                  "not querying selection or text rect");
     return mReply.mWritingMode;
   }
@@ -578,19 +578,23 @@ public:
   {
     void* mContentsRoot;
     uint32_t mOffset;
-    // mTentativeCaretOffset is used by only NS_QUERY_CHARACTER_AT_POINT.
+    // mTentativeCaretOffset is used by only eQueryCharacterAtPoint.
     // This is the offset where caret would be if user clicked at the refPoint.
     uint32_t mTentativeCaretOffset;
     nsString mString;
-    // Finally, the coordinates is system coordinates.
+    // mRect is used by eQueryTextRect, eQueryCaretRect, eQueryCharacterAtPoint
+    // and eQueryEditorRect. The coordinates is system coordinates relative to
+    // the top level widget of mFocusedWidget.  E.g., if a <xul:panel> which
+    // is owned by a window has focused editor, the offset of mRect is relative
+    // to the owner window, not the <xul:panel>.
     mozilla::LayoutDeviceIntRect mRect;
     // The return widget has the caret. This is set at all query events.
     nsIWidget* mFocusedWidget;
     // mozilla::WritingMode value at the end (focus) of the selection
     mozilla::WritingMode mWritingMode;
-    // used by NS_QUERY_SELECTION_AS_TRANSFERABLE
+    // Used by eQuerySelectionAsTransferable
     nsCOMPtr<nsITransferable> mTransferable;
-    // used by NS_QUERY_TEXT_CONTENT with font ranges requested
+    // Used by eQueryTextContent with font ranges requested
     nsAutoTArray<mozilla::FontRange, 1> mFontRanges;
     // true if selection is reversed (end < start)
     bool mReversed;

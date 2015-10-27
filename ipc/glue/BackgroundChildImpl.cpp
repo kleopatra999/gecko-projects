@@ -8,7 +8,9 @@
 #include "BroadcastChannelChild.h"
 #include "ServiceWorkerManagerChild.h"
 #include "FileDescriptorSetChild.h"
+#ifdef MOZ_WEBRTC
 #include "CamerasChild.h"
+#endif
 #include "mozilla/media/MediaChild.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/dom/PBlobChild.h"
@@ -209,7 +211,7 @@ BackgroundChildImpl::DeallocPFileDescriptorSetChild(
 BackgroundChildImpl::PVsyncChild*
 BackgroundChildImpl::AllocPVsyncChild()
 {
-  nsRefPtr<mozilla::layout::VsyncChild> actor = new mozilla::layout::VsyncChild();
+  RefPtr<mozilla::layout::VsyncChild> actor = new mozilla::layout::VsyncChild();
   // There still has one ref-count after return, and it will be released in
   // DeallocPVsyncChild().
   return actor.forget().take();
@@ -221,7 +223,7 @@ BackgroundChildImpl::DeallocPVsyncChild(PVsyncChild* aActor)
   MOZ_ASSERT(aActor);
 
   // This actor already has one ref-count. Please check AllocPVsyncChild().
-  nsRefPtr<mozilla::layout::VsyncChild> actor =
+  RefPtr<mozilla::layout::VsyncChild> actor =
       dont_AddRef(static_cast<mozilla::layout::VsyncChild*>(aActor));
   return true;
 }
@@ -253,7 +255,7 @@ BackgroundChildImpl::AllocPBroadcastChannelChild(const PrincipalInfo& aPrincipal
                                                  const nsString& aChannel,
                                                  const bool& aPrivateBrowsing)
 {
-  nsRefPtr<dom::BroadcastChannelChild> agent =
+  RefPtr<dom::BroadcastChannelChild> agent =
     new dom::BroadcastChannelChild(aOrigin);
   return agent.forget().take();
 }
@@ -262,7 +264,7 @@ bool
 BackgroundChildImpl::DeallocPBroadcastChannelChild(
                                                  PBroadcastChannelChild* aActor)
 {
-  nsRefPtr<dom::BroadcastChannelChild> child =
+  RefPtr<dom::BroadcastChannelChild> child =
     dont_AddRef(static_cast<dom::BroadcastChannelChild*>(aActor));
   MOZ_ASSERT(child);
   return true;
@@ -271,17 +273,23 @@ BackgroundChildImpl::DeallocPBroadcastChannelChild(
 camera::PCamerasChild*
 BackgroundChildImpl::AllocPCamerasChild()
 {
-  nsRefPtr<camera::CamerasChild> agent =
+#ifdef MOZ_WEBRTC
+  RefPtr<camera::CamerasChild> agent =
     new camera::CamerasChild();
   return agent.forget().take();
+#else
+  return nullptr;
+#endif
 }
 
 bool
 BackgroundChildImpl::DeallocPCamerasChild(camera::PCamerasChild *aActor)
 {
-  nsRefPtr<camera::CamerasChild> child =
+#ifdef MOZ_WEBRTC
+  RefPtr<camera::CamerasChild> child =
       dont_AddRef(static_cast<camera::CamerasChild*>(aActor));
   MOZ_ASSERT(aActor);
+#endif
   return true;
 }
 
@@ -292,7 +300,7 @@ BackgroundChildImpl::DeallocPCamerasChild(camera::PCamerasChild *aActor)
 dom::PServiceWorkerManagerChild*
 BackgroundChildImpl::AllocPServiceWorkerManagerChild()
 {
-  nsRefPtr<dom::workers::ServiceWorkerManagerChild> agent =
+  RefPtr<dom::workers::ServiceWorkerManagerChild> agent =
     new dom::workers::ServiceWorkerManagerChild();
   return agent.forget().take();
 }
@@ -301,7 +309,7 @@ bool
 BackgroundChildImpl::DeallocPServiceWorkerManagerChild(
                                              PServiceWorkerManagerChild* aActor)
 {
-  nsRefPtr<dom::workers::ServiceWorkerManagerChild> child =
+  RefPtr<dom::workers::ServiceWorkerManagerChild> child =
     dont_AddRef(static_cast<dom::workers::ServiceWorkerManagerChild*>(aActor));
   MOZ_ASSERT(child);
   return true;
@@ -361,14 +369,14 @@ BackgroundChildImpl::AllocPMessagePortChild(const nsID& aUUID,
                                             const nsID& aDestinationUUID,
                                             const uint32_t& aSequenceID)
 {
-  nsRefPtr<dom::MessagePortChild> agent = new dom::MessagePortChild();
+  RefPtr<dom::MessagePortChild> agent = new dom::MessagePortChild();
   return agent.forget().take();
 }
 
 bool
 BackgroundChildImpl::DeallocPMessagePortChild(PMessagePortChild* aActor)
 {
-  nsRefPtr<dom::MessagePortChild> child =
+  RefPtr<dom::MessagePortChild> child =
     dont_AddRef(static_cast<dom::MessagePortChild*>(aActor));
   MOZ_ASSERT(child);
   return true;

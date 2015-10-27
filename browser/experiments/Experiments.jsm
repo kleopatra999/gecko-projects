@@ -20,8 +20,8 @@ Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/AsyncShutdown.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "UpdateChannel",
-                                  "resource://gre/modules/UpdateChannel.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "UpdateUtils",
+                                  "resource://gre/modules/UpdateUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManager",
                                   "resource://gre/modules/AddonManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "AddonManagerPrivate",
@@ -94,28 +94,29 @@ const TELEMETRY_LOG = {
     RECHECK: "RECHECK",
   },
 };
+XPCOMUtils.defineConstant(this, "TELEMETRY_LOG", TELEMETRY_LOG);
 
 const gPrefs = new Preferences(PREF_BRANCH);
 const gPrefsTelemetry = new Preferences(PREF_BRANCH_TELEMETRY);
-let gExperimentsEnabled = false;
-let gAddonProvider = null;
-let gExperiments = null;
-let gLogAppenderDump = null;
-let gPolicyCounter = 0;
-let gExperimentsCounter = 0;
-let gExperimentEntryCounter = 0;
-let gPreviousProviderCounter = 0;
+var gExperimentsEnabled = false;
+var gAddonProvider = null;
+var gExperiments = null;
+var gLogAppenderDump = null;
+var gPolicyCounter = 0;
+var gExperimentsCounter = 0;
+var gExperimentEntryCounter = 0;
+var gPreviousProviderCounter = 0;
 
 // Tracks active AddonInstall we know about so we can deny external
 // installs.
-let gActiveInstallURLs = new Set();
+var gActiveInstallURLs = new Set();
 
 // Tracks add-on IDs that are being uninstalled by us. This allows us
 // to differentiate between expected uninstalled and user-driven uninstalls.
-let gActiveUninstallAddonIDs = new Set();
+var gActiveUninstallAddonIDs = new Set();
 
-let gLogger;
-let gLogDumping = false;
+var gLogger;
+var gLogDumping = false;
 
 function configureLogging() {
   if (!gLogger) {
@@ -217,7 +218,7 @@ function uninstallAddons(addons) {
  * The experiments module.
  */
 
-let Experiments = {
+var Experiments = {
   /**
    * Provides access to the global `Experiments.Experiments` instance.
    */
@@ -275,7 +276,7 @@ Experiments.Policy.prototype = {
   },
 
   updatechannel: function () {
-    return UpdateChannel.get();
+    return UpdateUtils.UpdateChannel;
   },
 
   locale: function () {
@@ -2086,7 +2087,7 @@ Experiments.ExperimentEntry.prototype = {
  *
  * This will return a cloned Date object. The original is unchanged.
  */
-let stripDateToMidnight = function (d) {
+var stripDateToMidnight = function (d) {
   let m = new Date(d);
   m.setUTCHours(0, 0, 0, 0);
 
@@ -2223,7 +2224,7 @@ this.Experiments.PreviousExperimentProvider = function (experiments) {
 }
 
 this.Experiments.PreviousExperimentProvider.prototype = Object.freeze({
-  get name() "PreviousExperimentProvider",
+  name: "PreviousExperimentProvider",
 
   startup: function () {
     this._log.trace("startup()");

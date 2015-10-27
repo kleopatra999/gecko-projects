@@ -147,7 +147,7 @@ public:
     return mUpdating;
   }
 
-  already_AddRefed<TimeRanges> GetBuffered(ErrorResult& aRv);
+  TimeRanges* GetBuffered(ErrorResult& aRv);
   media::TimeIntervals GetTimeIntervals();
 
   double TimestampOffset() const
@@ -255,15 +255,14 @@ private:
   void AppendDataCompletedWithSuccess(bool aHasActiveTracks);
   void AppendDataErrored(nsresult aError);
 
-  nsRefPtr<MediaSource> mMediaSource;
+  RefPtr<MediaSource> mMediaSource;
 
   uint32_t mEvictionThreshold;
 
-  nsRefPtr<SourceBufferContentManager> mContentManager;
-  nsRefPtr<SourceBufferAttributes> mAttributes;
+  RefPtr<SourceBufferContentManager> mContentManager;
+  RefPtr<SourceBufferAttributes> mAttributes;
 
   bool mUpdating;
-  bool mIsUsingFormatReader;
 
   mozilla::Atomic<bool> mActive;
 
@@ -275,6 +274,8 @@ private:
 
   MozPromiseRequestHolder<SourceBufferContentManager::AppendPromise> mPendingAppend;
   const nsCString mType;
+
+  RefPtr<TimeRanges> mBuffered;
 };
 
 } // namespace dom

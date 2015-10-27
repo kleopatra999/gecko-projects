@@ -2,24 +2,25 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-let {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
-let uuidGen = Cc["@mozilla.org/uuid-generator;1"]
+var uuidGen = Cc["@mozilla.org/uuid-generator;1"]
                 .getService(Ci.nsIUUIDGenerator);
 
-let loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
+var loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
                .getService(Ci.mozIJSSubScriptLoader);
 
 loader.loadSubScript("chrome://marionette/content/simpletest.js");
 loader.loadSubScript("chrome://marionette/content/common.js");
 loader.loadSubScript("chrome://marionette/content/actions.js");
+Cu.import("chrome://marionette/content/capture.js");
 Cu.import("chrome://marionette/content/elements.js");
 Cu.import("chrome://marionette/content/error.js");
 Cu.import("resource://gre/modules/FileUtils.jsm");
 Cu.import("resource://gre/modules/NetUtil.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-let utils = {};
+var utils = {};
 utils.window = content;
 // Load Event/ChromeUtils for use with JS scripts:
 loader.loadSubScript("chrome://marionette/content/EventUtils.js", utils);
@@ -27,59 +28,59 @@ loader.loadSubScript("chrome://marionette/content/ChromeUtils.js", utils);
 loader.loadSubScript("chrome://marionette/content/atoms.js", utils);
 loader.loadSubScript("chrome://marionette/content/sendkeys.js", utils);
 
-let marionetteLogObj = new MarionetteLogObj();
+var marionetteLogObj = new MarionetteLogObj();
 
-let isB2G = false;
+var isB2G = false;
 
-let marionetteTestName;
-let winUtil = content.QueryInterface(Ci.nsIInterfaceRequestor)
+var marionetteTestName;
+var winUtil = content.QueryInterface(Ci.nsIInterfaceRequestor)
     .getInterface(Ci.nsIDOMWindowUtils);
-let listenerId = null; // unique ID of this listener
-let curContainer = { frame: content, shadowRoot: null };
-let isRemoteBrowser = () => curContainer.frame.contentWindow !== null;
-let previousContainer = null;
-let elementManager = new ElementManager([]);
-let accessibility = new Accessibility();
-let actions = new ActionChain(utils, checkForInterrupted);
-let importedScripts = null;
+var listenerId = null; // unique ID of this listener
+var curContainer = { frame: content, shadowRoot: null };
+var isRemoteBrowser = () => curContainer.frame.contentWindow !== null;
+var previousContainer = null;
+var elementManager = new ElementManager([]);
+var accessibility = new Accessibility();
+var actions = new ActionChain(utils, checkForInterrupted);
+var importedScripts = null;
 
 // Contains the last file input element that was the target of
 // sendKeysToElement.
-let fileInputElement;
+var fileInputElement;
 
 // A dict of sandboxes used this session
-let sandboxes = {};
+var sandboxes = {};
 // The name of the current sandbox
-let sandboxName = 'default';
+var sandboxName = 'default';
 
 // the unload handler
-let onunload;
+var onunload;
 
 // Flag to indicate whether an async script is currently running or not.
-let asyncTestRunning = false;
-let asyncTestCommandId;
-let asyncTestTimeoutId;
+var asyncTestRunning = false;
+var asyncTestCommandId;
+var asyncTestTimeoutId;
 
-let inactivityTimeoutId = null;
-let heartbeatCallback = function () {}; // Called by the simpletest methods.
+var inactivityTimeoutId = null;
+var heartbeatCallback = function () {}; // Called by the simpletest methods.
 
-let originalOnError;
+var originalOnError;
 //timer for doc changes
-let checkTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+var checkTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
 //timer for readystate
-let readyStateTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+var readyStateTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
 // timer for navigation commands.
-let navTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-let onDOMContentLoaded;
+var navTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+var onDOMContentLoaded;
 // Send move events about this often
-let EVENT_INTERVAL = 30; // milliseconds
+var EVENT_INTERVAL = 30; // milliseconds
 // last touch for each fingerId
-let multiLast = {};
+var multiLast = {};
 
 Cu.import("resource://gre/modules/Log.jsm");
-let logger = Log.repository.getLogger("Marionette");
+var logger = Log.repository.getLogger("Marionette");
 logger.info("loaded listener.js");
-let modalHandler = function() {
+var modalHandler = function() {
   // This gets called on the system app only since it receives the mozbrowserprompt event
   sendSyncMessage("Marionette:switchedToFrame", { frameValue: null, storePrevious: true });
   let isLocal = sendSyncMessage("MarionetteFrame:handleModal", {})[0].value;
@@ -101,6 +102,9 @@ function registerSelf() {
 
   if (register[0]) {
     let {id, remotenessChange} = register[0][0];
+    let {B2G, raisesAccessibilityExceptions} = register[0][2];
+    isB2G = B2G;
+    accessibility.strict = raisesAccessibilityExceptions;
     listenerId = id;
     if (typeof id != "undefined") {
       // check if we're the main process
@@ -193,25 +197,27 @@ function removeMessageListenerId(messageName, handler) {
   removeMessageListener(messageName + listenerId, handler);
 }
 
-let getTitleFn = dispatch(getTitle);
-let getPageSourceFn = dispatch(getPageSource);
-let getActiveElementFn = dispatch(getActiveElement);
-let clickElementFn = dispatch(clickElement);
-let goBackFn = dispatch(goBack);
-let getElementAttributeFn = dispatch(getElementAttribute);
-let getElementTextFn = dispatch(getElementText);
-let getElementTagNameFn = dispatch(getElementTagName);
-let getElementRectFn = dispatch(getElementRect);
-let isElementEnabledFn = dispatch(isElementEnabled);
-let getCurrentUrlFn = dispatch(getCurrentUrl);
-let findElementContentFn = dispatch(findElementContent);
-let findElementsContentFn = dispatch(findElementsContent);
-let isElementSelectedFn = dispatch(isElementSelected);
-let clearElementFn = dispatch(clearElement);
-let isElementDisplayedFn = dispatch(isElementDisplayed);
-let getElementValueOfCssPropertyFn = dispatch(getElementValueOfCssProperty);
-let switchToShadowRootFn = dispatch(switchToShadowRoot);
-let getCookiesFn = dispatch(getCookies);
+var getTitleFn = dispatch(getTitle);
+var getPageSourceFn = dispatch(getPageSource);
+var getActiveElementFn = dispatch(getActiveElement);
+var clickElementFn = dispatch(clickElement);
+var goBackFn = dispatch(goBack);
+var getElementAttributeFn = dispatch(getElementAttribute);
+var getElementTextFn = dispatch(getElementText);
+var getElementTagNameFn = dispatch(getElementTagName);
+var getElementRectFn = dispatch(getElementRect);
+var isElementEnabledFn = dispatch(isElementEnabled);
+var getCurrentUrlFn = dispatch(getCurrentUrl);
+var findElementContentFn = dispatch(findElementContent);
+var findElementsContentFn = dispatch(findElementsContent);
+var isElementSelectedFn = dispatch(isElementSelected);
+var clearElementFn = dispatch(clearElement);
+var isElementDisplayedFn = dispatch(isElementDisplayed);
+var getElementValueOfCssPropertyFn = dispatch(getElementValueOfCssProperty);
+var switchToShadowRootFn = dispatch(switchToShadowRoot);
+var getCookiesFn = dispatch(getCookies);
+var singleTapFn = dispatch(singleTap);
+var takeScreenshotFn = dispatch(takeScreenshot);
 
 /**
  * Start all message listeners
@@ -222,7 +228,7 @@ function startListeners() {
   addMessageListenerId("Marionette:executeScript", executeScript);
   addMessageListenerId("Marionette:executeAsyncScript", executeAsyncScript);
   addMessageListenerId("Marionette:executeJSScript", executeJSScript);
-  addMessageListenerId("Marionette:singleTap", singleTap);
+  addMessageListenerId("Marionette:singleTap", singleTapFn);
   addMessageListenerId("Marionette:actionChain", actionChain);
   addMessageListenerId("Marionette:multiAction", multiAction);
   addMessageListenerId("Marionette:get", get);
@@ -249,6 +255,7 @@ function startListeners() {
   addMessageListenerId("Marionette:sendKeysToElement", sendKeysToElement);
   addMessageListenerId("Marionette:clearElement", clearElementFn);
   addMessageListenerId("Marionette:switchToFrame", switchToFrame);
+  addMessageListenerId("Marionette:switchToParentFrame", switchToParentFrame);
   addMessageListenerId("Marionette:switchToShadowRoot", switchToShadowRootFn);
   addMessageListenerId("Marionette:deleteSession", deleteSession);
   addMessageListenerId("Marionette:sleepSession", sleepSession);
@@ -256,7 +263,7 @@ function startListeners() {
   addMessageListenerId("Marionette:importScript", importScript);
   addMessageListenerId("Marionette:getAppCacheStatus", getAppCacheStatus);
   addMessageListenerId("Marionette:setTestName", setTestName);
-  addMessageListenerId("Marionette:takeScreenshot", takeScreenshot);
+  addMessageListenerId("Marionette:takeScreenshot", takeScreenshotFn);
   addMessageListenerId("Marionette:addCookie", addCookie);
   addMessageListenerId("Marionette:getCookies", getCookiesFn);
   addMessageListenerId("Marionette:deleteAllCookies", deleteAllCookies);
@@ -326,7 +333,7 @@ function deleteSession(msg) {
   removeMessageListenerId("Marionette:executeScript", executeScript);
   removeMessageListenerId("Marionette:executeAsyncScript", executeAsyncScript);
   removeMessageListenerId("Marionette:executeJSScript", executeJSScript);
-  removeMessageListenerId("Marionette:singleTap", singleTap);
+  removeMessageListenerId("Marionette:singleTap", singleTapFn);
   removeMessageListenerId("Marionette:actionChain", actionChain);
   removeMessageListenerId("Marionette:multiAction", multiAction);
   removeMessageListenerId("Marionette:get", get);
@@ -353,6 +360,7 @@ function deleteSession(msg) {
   removeMessageListenerId("Marionette:sendKeysToElement", sendKeysToElement);
   removeMessageListenerId("Marionette:clearElement", clearElementFn);
   removeMessageListenerId("Marionette:switchToFrame", switchToFrame);
+  removeMessageListenerId("Marionette:switchToParentFrame", switchToParentFrame);
   removeMessageListenerId("Marionette:switchToShadowRoot", switchToShadowRootFn);
   removeMessageListenerId("Marionette:deleteSession", deleteSession);
   removeMessageListenerId("Marionette:sleepSession", sleepSession);
@@ -360,7 +368,7 @@ function deleteSession(msg) {
   removeMessageListenerId("Marionette:importScript", importScript);
   removeMessageListenerId("Marionette:getAppCacheStatus", getAppCacheStatus);
   removeMessageListenerId("Marionette:setTestName", setTestName);
-  removeMessageListenerId("Marionette:takeScreenshot", takeScreenshot);
+  removeMessageListenerId("Marionette:takeScreenshot", takeScreenshotFn);
   removeMessageListenerId("Marionette:addCookie", addCookie);
   removeMessageListenerId("Marionette:getCookies", getCookiesFn);
   removeMessageListenerId("Marionette:deleteAllCookies", deleteAllCookies);
@@ -572,6 +580,7 @@ function executeScript(msg, directInject) {
 
   asyncTestCommandId = msg.json.command_id;
   let script = msg.json.script;
+  let filename = msg.json.filename;
   sandboxName = msg.json.sandboxName;
 
   if (msg.json.newSandbox ||
@@ -598,7 +607,7 @@ function executeScript(msg, directInject) {
         stream.close();
         script = data + script;
       }
-      let res = Cu.evalInSandbox(script, sandbox, "1.8", "dummy file" ,0);
+      let res = Cu.evalInSandbox(script, sandbox, "1.8", filename ? filename : "dummy file" ,0);
       sendSyncMessage("Marionette:shareData",
                       {log: elementManager.wrapValue(marionetteLogObj.getLogs())});
       marionetteLogObj.clearLogs();
@@ -619,7 +628,7 @@ function executeScript(msg, directInject) {
         return;
       }
 
-      script = "let __marionetteFunc = function(){" + script + "};" +
+      script = "var __marionetteFunc = function(){" + script + "};" +
                    "__marionetteFunc.apply(null, __marionetteParams);";
       if (importedScripts.exists()) {
         let stream = Components.classes["@mozilla.org/network/file-input-stream;1"].
@@ -629,7 +638,7 @@ function executeScript(msg, directInject) {
         stream.close();
         script = data + script;
       }
-      let res = Cu.evalInSandbox(script, sandbox, "1.8", "dummy file", 0);
+      let res = Cu.evalInSandbox(script, sandbox, "1.8", filename ? filename : "dummy file", 0);
       sendSyncMessage("Marionette:shareData",
                       {log: elementManager.wrapValue(marionetteLogObj.getLogs())});
       marionetteLogObj.clearLogs();
@@ -720,6 +729,7 @@ function executeWithCallback(msg, useFinish) {
   }
 
   let script = msg.json.script;
+  let filename = msg.json.filename;
   asyncTestCommandId = msg.json.command_id;
   sandboxName = msg.json.sandboxName;
 
@@ -770,7 +780,7 @@ function executeWithCallback(msg, useFinish) {
     }
 
     scriptSrc = "__marionetteParams.push(marionetteScriptFinished);" +
-                "let __marionetteFunc = function() { " + script + "};" +
+                "var __marionetteFunc = function() { " + script + "};" +
                 "__marionetteFunc.apply(null, __marionetteParams); ";
   }
 
@@ -784,7 +794,7 @@ function executeWithCallback(msg, useFinish) {
       stream.close();
       scriptSrc = data + scriptSrc;
     }
-    Cu.evalInSandbox(scriptSrc, sandbox, "1.8", "dummy file", 0);
+    Cu.evalInSandbox(scriptSrc, sandbox, "1.8", filename ? filename : "dummy file", 0);
   } catch (e) {
     let err = new JavaScriptError(
         e,
@@ -911,34 +921,27 @@ function checkVisible(el, x, y) {
 /**
  * Function that perform a single tap
  */
-function singleTap(msg) {
-  let command_id = msg.json.command_id;
-  try {
-    let el = elementManager.getKnownElement(msg.json.id, curContainer);
-    let acc = accessibility.getAccessibleObject(el, true);
-    // after this block, the element will be scrolled into view
-    let visible = checkVisible(el, msg.json.corx, msg.json.cory);
-    checkVisibleAccessibility(acc, visible);
-    if (!visible) {
-      sendError(new ElementNotVisibleError("Element is not currently visible and may not be manipulated"), command_id);
-      return;
-    }
-    checkActionableAccessibility(acc);
-    if (!curContainer.frame.document.createTouch) {
-      actions.mouseEventsOnly = true;
-    }
-    let c = coordinates(el, msg.json.corx, msg.json.cory);
-    if (!actions.mouseEventsOnly) {
-      let touchId = actions.nextTouchId++;
-      let touch = createATouch(el, c.x, c.y, touchId);
-      emitTouchEvent('touchstart', touch);
-      emitTouchEvent('touchend', touch);
-    }
-    actions.mouseTap(el.ownerDocument, c.x, c.y);
-    sendOk(command_id);
-  } catch (e) {
-    sendError(e, command_id);
+function singleTap(id, corx, cory) {
+  let el = elementManager.getKnownElement(id, curContainer);
+  // after this block, the element will be scrolled into view
+  let visible = checkVisible(el, corx, cory);
+  if (!visible) {
+    throw new ElementNotVisibleError("Element is not currently visible and may not be manipulated");
   }
+  let acc = accessibility.getAccessibleObject(el, true);
+  checkVisibleAccessibility(acc, el, visible);
+  checkActionableAccessibility(acc, el);
+  if (!curContainer.frame.document.createTouch) {
+    actions.mouseEventsOnly = true;
+  }
+  let c = coordinates(el, corx, cory);
+  if (!actions.mouseEventsOnly) {
+    let touchId = actions.nextTouchId++;
+    let touch = createATouch(el, c.x, c.y, touchId);
+    emitTouchEvent('touchstart', touch);
+    emitTouchEvent('touchend', touch);
+  }
+  actions.mouseTap(el.ownerDocument, c.x, c.y);
 }
 
 /**
@@ -966,16 +969,17 @@ function checkEnabledAccessibility(accesible, element, enabled) {
   } else if (!enabled && !disabledAccessibility) {
     message = 'Element is disabled but enabled via the accessibility API';
   }
-  accessibility.handleErrorMessage(message);
+  accessibility.handleErrorMessage(message, element);
 }
 
 /**
  * Check if the element's visible state corresponds to its accessibility API
  * visibility
  * @param nsIAccessible object
+ * @param WebElement corresponding to nsIAccessible object
  * @param Boolean visible element's visibility state
  */
-function checkVisibleAccessibility(accesible, visible) {
+function checkVisibleAccessibility(accesible, element, visible) {
   if (!accesible) {
     return;
   }
@@ -988,14 +992,15 @@ function checkVisibleAccessibility(accesible, visible) {
     message = 'Element is currently only visible via the accessibility API ' +
       'and can be manipulated by it';
   }
-  accessibility.handleErrorMessage(message);
+  accessibility.handleErrorMessage(message, element);
 }
 
 /**
  * Check if it is possible to activate an element with the accessibility API
  * @param nsIAccessible object
+ * @param WebElement corresponding to nsIAccessible object
  */
-function checkActionableAccessibility(accesible) {
+function checkActionableAccessibility(accesible, element) {
   if (!accesible) {
     return;
   }
@@ -1010,16 +1015,17 @@ function checkActionableAccessibility(accesible) {
   } else if (!accessibility.matchState(accesible, 'STATE_FOCUSABLE')) {
     message = 'Element is not focusable via the accessibility API';
   }
-  accessibility.handleErrorMessage(message);
+  accessibility.handleErrorMessage(message, element);
 }
 
 /**
  * Check if element's selected state corresponds to its accessibility API
  * selected state.
  * @param nsIAccessible object
+ * @param WebElement corresponding to nsIAccessible object
  * @param Boolean selected element's selected state
  */
-function checkSelectedAccessibility(accessible, selected) {
+function checkSelectedAccessibility(accessible, element, selected) {
   if (!accessible) {
     return;
   }
@@ -1036,7 +1042,7 @@ function checkSelectedAccessibility(accessible, selected) {
   } else if (!selected && selectedAccessibility) {
     message = 'Element is not selected but selected via the accessibility API';
   }
-  accessibility.handleErrorMessage(message);
+  accessibility.handleErrorMessage(message, element);
 }
 
 
@@ -1323,7 +1329,15 @@ function get(msg) {
     navTimer.initWithCallback(timerFunc, msg.json.pageTimeout, Ci.nsITimer.TYPE_ONE_SHOT);
   }
   addEventListener("DOMContentLoaded", onDOMContentLoaded, false);
-  curContainer.frame.location = msg.json.url;
+  if (isB2G) {
+    curContainer.frame.location = msg.json.url;
+  } else {
+    // We need to move to the top frame before navigating
+    sendSyncMessage("Marionette:switchedToFrame", { frameValue: null });
+    curContainer.frame = content;
+
+    curContainer.frame.location = msg.json.url;
+  }
 }
 
  /**
@@ -1445,15 +1459,16 @@ function getActiveElement() {
  */
 function clickElement(id) {
   let el = elementManager.getKnownElement(id, curContainer);
-  let acc = accessibility.getAccessibleObject(el, true);
   let visible = checkVisible(el);
-  checkVisibleAccessibility(acc, visible);
   if (!visible) {
     throw new ElementNotVisibleError("Element is not visible");
   }
-  checkActionableAccessibility(acc);
+  let acc = accessibility.getAccessibleObject(el, true);
+  checkVisibleAccessibility(acc, el, visible);
+
   if (utils.isElementEnabled(el)) {
     checkEnabledAccessibility(acc, el, true);
+    checkActionableAccessibility(acc, el);
     utils.synthesizeMouseAtCenter(el, {}, el.ownerDocument.defaultView);
   } else {
     throw new InvalidElementStateError("Element is not Enabled");
@@ -1513,7 +1528,8 @@ function getElementTagName(id) {
 function isElementDisplayed(id) {
   let el = elementManager.getKnownElement(id, curContainer);
   let displayed = utils.isElementDisplayed(el);
-  checkVisibleAccessibility(accessibility.getAccessibleObject(el), displayed);
+  checkVisibleAccessibility(
+    accessibility.getAccessibleObject(el), el, displayed);
   return displayed;
 }
 
@@ -1581,7 +1597,8 @@ function isElementEnabled(id) {
 function isElementSelected(id) {
   let el = elementManager.getKnownElement(id, curContainer);
     let selected = utils.isElementSelected(el);
-    checkSelectedAccessibility(accessibility.getAccessibleObject(el), selected);
+    checkSelectedAccessibility(
+      accessibility.getAccessibleObject(el), el, selected);
   return selected;
 }
 
@@ -1596,7 +1613,8 @@ function sendKeysToElement(msg) {
     let el = elementManager.getKnownElement(msg.json.id, curContainer);
     // Element should be actionable from the accessibility standpoint to be able
     // to send keys to it.
-    checkActionableAccessibility(accessibility.getAccessibleObject(el, true));
+    checkActionableAccessibility(
+      accessibility.getAccessibleObject(el, true), el);
     if (el.type == "file") {
       let p = val.join("");
       fileInputElement = el;
@@ -1662,6 +1680,20 @@ function switchToShadowRoot(id) {
   }
   curContainer.shadowRoot = foundShadowRoot;
 }
+
+/**
+ * Switch to the parent frame of the current Frame. If the frame is the top most
+ * is the current frame then no action will happen.
+ */
+ function switchToParentFrame(msg) {
+   let command_id = msg.json.command_id;
+   curContainer.frame = curContainer.frame.parent;
+   let parentElement = elementManager.addToKnownElements(curContainer.frame);
+
+   sendSyncMessage("Marionette:switchedToFrame", { frameValue: parentElement });
+
+   sendOk(msg.json.command_id);
+ }
 
 /**
  * Switch to frame given either the server-assigned element id,
@@ -1924,8 +1956,8 @@ function getAppCacheStatus(msg) {
 }
 
 // emulator callbacks
-let _emu_cb_id = 0;
-let _emu_cbs = {};
+var _emu_cb_id = 0;
+var _emu_cbs = {};
 
 function runEmulatorCmd(cmd, callback) {
   if (callback) {
@@ -1982,96 +2014,47 @@ function importScript(msg) {
 }
 
 /**
- * Takes a screen capture of the given web element if <code>id</code>
- * property exists in the message's JSON object, or if null captures
- * the bounding box of the current frame.
+ * Perform a screen capture in content context.
  *
- * If given an array of web element references in
- * <code>msg.json.highlights</code>, a red box will be painted around
- * them to highlight their position.
+ * @param {UUID=} id
+ *     Optional web element reference of an element to take a screenshot
+ *     of.
+ * @param {boolean=} full
+ *     True to take a screenshot of the entire document element.  Is not
+ *     considered if {@code id} is not defined.  Defaults to true.
+ * @param {Array.<UUID>=} highlights
+ *     Draw a border around the elements found by their web element
+ *     references.
+ *
+ * @return {string}
+ *     Base64 encoded string of an image/png type.
  */
-function takeScreenshot(msg) {
-  let node = null;
-  if (msg.json.id) {
-    try {
-      node = elementManager.getKnownElement(msg.json.id, curContainer)
-    }
-    catch (e) {
-      sendResponse(e.message, e.code, e.stack, msg.json.command_id);
-      return;
-    }
-  }
-  else {
-    node = curContainer.frame;
-  }
-  let highlights = msg.json.highlights;
+function takeScreenshot(id, full=true, highlights=[]) {
+  let canvas;
 
-  var document = curContainer.frame.document;
-  var rect, win, width, height, left, top;
-  // node can be either a window or an arbitrary DOM node
-  if (node == curContainer.frame) {
-    // node is a window
-    win = node;
-    if (msg.json.full) {
-      // the full window
-      width = document.body.scrollWidth;
-      height = document.body.scrollHeight;
-      top = 0;
-      left = 0;
-    }
-    else {
-      // only the viewport
-      width = document.documentElement.clientWidth;
-      height = document.documentElement.clientHeight;
-      left = curContainer.frame.pageXOffset;
-      top = curContainer.frame.pageYOffset;
-    }
-  }
-  else {
-    // node is an arbitrary DOM node
-    win = node.ownerDocument.defaultView;
-    rect = node.getBoundingClientRect();
-    width = rect.width;
-    height = rect.height;
-    top = rect.top;
-    left = rect.left;
+  let highlightEls = [];
+  for (let h of highlights) {
+    let el = elementManager.getKnownElement(h, curContainer);
+    highlightEls.push(el);
   }
 
-  var canvas = document.createElementNS("http://www.w3.org/1999/xhtml",
-                                        "canvas");
-  canvas.width = width;
-  canvas.height = height;
-  var ctx = canvas.getContext("2d");
-  // Draws the DOM contents of the window to the canvas
-  ctx.drawWindow(win, left, top, width, height, "rgb(255,255,255)");
+  // viewport
+  if (!id && !full) {
+    canvas = capture.viewport(curContainer.frame.document, highlightEls);
 
-  // This section is for drawing a red rectangle around each element
-  // passed in via the highlights array
-  if (highlights) {
-    ctx.lineWidth = "2";
-    ctx.strokeStyle = "red";
-    ctx.save();
-
-    for (var i = 0; i < highlights.length; ++i) {
-      var elem = elementManager.getKnownElement(highlights[i], curContainer);
-      rect = elem.getBoundingClientRect();
-
-      var offsetY = -top;
-      var offsetX = -left;
-
-      // Draw the rectangle
-      ctx.strokeRect(rect.left + offsetX,
-                     rect.top + offsetY,
-                     rect.width,
-                     rect.height);
+  // element or full document element
+  } else {
+    let node;
+    if (id) {
+      node = elementManager.getKnownElement(id, curContainer);
+    } else {
+      node = curContainer.frame.document.documentElement;
     }
+
+    canvas = capture.element(node, highlightEls);
   }
 
-  // Return the Base64 encoded string back to the client so that it
-  // can save the file to disk if it is required
-  var dataUrl = canvas.toDataURL("image/png", "");
-  var data = dataUrl.substring(dataUrl.indexOf(",") + 1);
-  sendResponse({value: data}, msg.json.command_id);
+  return capture.toBase64(canvas);
 }
 
 // Call register self when we get loaded

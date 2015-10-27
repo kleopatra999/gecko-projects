@@ -222,8 +222,8 @@ class RTCStatsQuery {
     friend class PeerConnectionImpl;
     std::string pcName;
     bool internalStats;
-    nsTArray<mozilla::RefPtr<mozilla::MediaPipeline>> pipelines;
-    mozilla::RefPtr<NrIceCtx> iceCtx;
+    nsTArray<RefPtr<mozilla::MediaPipeline>> pipelines;
+    RefPtr<NrIceCtx> iceCtx;
     bool grabAllLevels;
     DOMHighResTimeStamp now;
 };
@@ -279,7 +279,7 @@ public:
   static PeerConnectionImpl* CreatePeerConnection();
   already_AddRefed<DOMMediaStream> MakeMediaStream();
 
-  nsresult CreateRemoteSourceStreamInfo(nsRefPtr<RemoteSourceStreamInfo>* aInfo,
+  nsresult CreateRemoteSourceStreamInfo(RefPtr<RemoteSourceStreamInfo>* aInfo,
                                         const std::string& aId);
 
   // DataConnection observers
@@ -292,7 +292,7 @@ public:
     ;
 
   // Get the media object
-  const nsRefPtr<PeerConnectionMedia>& media() const {
+  const RefPtr<PeerConnectionMedia>& media() const {
     PC_AUTO_ENTER_API_CALL_NO_CHECK();
     return mMedia;
   }
@@ -362,10 +362,10 @@ public:
 
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
   void SetCertificate(mozilla::dom::RTCCertificate& aCertificate);
-  const nsRefPtr<mozilla::dom::RTCCertificate>& Certificate() const;
+  const RefPtr<mozilla::dom::RTCCertificate>& Certificate() const;
 #endif
   // This is a hack to support external linkage.
-  mozilla::RefPtr<DtlsIdentity> Identity() const;
+  RefPtr<DtlsIdentity> Identity() const;
 
   NS_IMETHODIMP_TO_ERRORRESULT(CreateOffer, ErrorResult &rv,
                                const RTCOfferOptions& aOptions)
@@ -550,6 +550,8 @@ public:
   bool PluginCrash(uint32_t aPluginID,
                    const nsAString& aPluginName);
 
+  void RecordEndOfCallTelemetry() const;
+
   nsresult InitializeDataChannel();
 
   NS_IMETHODIMP_TO_ERRORRESULT_RETREF(nsDOMDataChannel,
@@ -564,13 +566,13 @@ public:
                                       uint16_t aStream);
 
   NS_IMETHODIMP_TO_ERRORRESULT(GetLocalStreams, ErrorResult &rv,
-                               nsTArray<nsRefPtr<DOMMediaStream > >& result)
+                               nsTArray<RefPtr<DOMMediaStream > >& result)
   {
     rv = GetLocalStreams(result);
   }
 
   NS_IMETHODIMP_TO_ERRORRESULT(GetRemoteStreams, ErrorResult &rv,
-                               nsTArray<nsRefPtr<DOMMediaStream > >& result)
+                               nsTArray<RefPtr<DOMMediaStream > >& result)
   {
     rv = GetRemoteStreams(result);
   }
@@ -673,6 +675,15 @@ private:
       const mozilla::JsepApplicationCodecDescription** codec,
       uint16_t* level) const;
 
+  static void DeferredAddTrackToJsepSession(const std::string& pcHandle,
+                                            SdpMediaSection::MediaType type,
+                                            const std::string& streamId,
+                                            const std::string& trackId);
+
+  nsresult AddTrackToJsepSession(SdpMediaSection::MediaType type,
+                                 const std::string& streamId,
+                                 const std::string& trackId);
+
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
   static void GetStatsForPCObserver_s(
       const std::string& pcHandle,
@@ -729,9 +740,9 @@ private:
   // void if they are not yet identified, and no identity setting has been set
   nsAutoPtr<PeerIdentity> mPeerIdentity;
   // The certificate we are using.
-  nsRefPtr<mozilla::dom::RTCCertificate> mCertificate;
+  RefPtr<mozilla::dom::RTCCertificate> mCertificate;
 #else
-  mozilla::RefPtr<DtlsIdentity> mIdentity;
+  RefPtr<DtlsIdentity> mIdentity;
 #endif
   // Whether an app should be prevented from accessing media produced by the PC
   // If this is true, then media will not be sent until mPeerIdentity matches
@@ -753,12 +764,12 @@ private:
 
 #if !defined(MOZILLA_EXTERNAL_LINKAGE)
   // DataConnection that's used to get all the DataChannels
-  nsRefPtr<mozilla::DataChannelConnection> mDataConnection;
+  RefPtr<mozilla::DataChannelConnection> mDataConnection;
 #endif
 
   bool mAllowIceLoopback;
   bool mAllowIceLinkLocal;
-  nsRefPtr<PeerConnectionMedia> mMedia;
+  RefPtr<PeerConnectionMedia> mMedia;
 
   // The JSEP negotiation session.
   mozilla::UniquePtr<PCUuidGenerator> mUuidGen;
@@ -777,6 +788,7 @@ private:
   // Bug 840728.
   int mNumAudioStreams;
   int mNumVideoStreams;
+  bool mHaveConfiguredCodecs;
 
   bool mHaveDataStream;
 
@@ -785,6 +797,10 @@ private:
   bool mTrickle;
 
   bool mShouldSuppressNegotiationNeeded;
+
+  // storage for Telemetry data
+  uint16_t mMaxReceiving[SdpMediaSection::kMediaTypes];
+  uint16_t mMaxSending[SdpMediaSection::kMediaTypes];
 
 public:
   //these are temporary until the DataChannel Listen/Connect API is removed
@@ -802,7 +818,7 @@ class PeerConnectionWrapper
   PeerConnectionImpl *impl() { return impl_; }
 
  private:
-  nsRefPtr<PeerConnectionImpl> impl_;
+  RefPtr<PeerConnectionImpl> impl_;
 };
 
 }  // end mozilla namespace

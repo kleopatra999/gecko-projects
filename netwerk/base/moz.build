@@ -38,6 +38,7 @@ XPIDL_SOURCES += [
     'nsICryptoHMAC.idl',
     'nsIDashboard.idl',
     'nsIDashboardEventNotifier.idl',
+    'nsIDeprecationWarner.idl',
     'nsIDivertableChannel.idl',
     'nsIDownloader.idl',
     'nsIEncodedChannel.idl',
@@ -68,7 +69,9 @@ XPIDL_SOURCES += [
     'nsINSSErrorsService.idl',
     'nsINullChannel.idl',
     'nsIPACGenerator.idl',
+    'nsIPackagedAppChannelListener.idl',
     'nsIPackagedAppService.idl',
+    'nsIPackagedAppUtils.idl',
     'nsIPackagedAppVerifier.idl',
     'nsIParentChannel.idl',
     'nsIParentRedirectingChannel.idl',
@@ -99,6 +102,7 @@ XPIDL_SOURCES += [
     'nsISecureBrowserUI.idl',
     'nsISecurityEventSink.idl',
     'nsISecurityInfoProvider.idl',
+    'nsISensitiveInfoHiddenURI.idl',
     'nsISerializationHelper.idl',
     'nsIServerSocket.idl',
     'nsISimpleStreamListener.idl',
@@ -164,6 +168,7 @@ EXPORTS += [
 
 EXPORTS.mozilla += [
     'LoadInfo.h',
+    'LoadTainting.h',
 ]
 
 EXPORTS.mozilla.net += [
@@ -188,6 +193,7 @@ UNIFIED_SOURCES += [
     'CaptivePortalService.cpp',
     'ChannelDiverterChild.cpp',
     'ChannelDiverterParent.cpp',
+    'ClosingService.cpp',
     'Dashboard.cpp',
     'EventTokenBucket.cpp',
     'LoadContextInfo.cpp',

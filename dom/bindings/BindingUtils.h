@@ -28,6 +28,7 @@
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
+#include "nsIDocument.h"
 #include "nsIGlobalObject.h"
 #include "nsIXPConnect.h"
 #include "nsJSUtils.h"
@@ -206,7 +207,7 @@ IsDOMObject(JSObject* obj)
 // Some callers don't want to set an exception when unwrapping fails
 // (for example, overload resolution uses unwrapping to tell what sort
 // of thing it's looking at).
-// U must be something that a T* can be assigned to (e.g. T* or an nsRefPtr<T>).
+// U must be something that a T* can be assigned to (e.g. T* or an RefPtr<T>).
 template <class T, typename U>
 MOZ_ALWAYS_INLINE nsresult
 UnwrapObject(JSObject* obj, U& value, prototypes::ID protoID,
@@ -254,31 +255,49 @@ UnwrapObject(JSObject* obj, U& value)
 }
 
 inline bool
-IsNotDateOrRegExp(JSContext* cx, JS::Handle<JSObject*> obj)
+IsNotDateOrRegExp(JSContext* cx, JS::Handle<JSObject*> obj,
+                  bool* notDateOrRegExp)
 {
   MOZ_ASSERT(obj);
-  return !JS_ObjectIsDate(cx, obj) && !JS_ObjectIsRegExp(cx, obj);
+
+  js::ESClassValue cls;
+  if (!js::GetBuiltinClass(cx, obj, &cls)) {
+    return false;
+  }
+
+  *notDateOrRegExp = cls != js::ESClass_Date && cls != js::ESClass_RegExp;
+  return true;
 }
 
 MOZ_ALWAYS_INLINE bool
 IsObjectValueConvertibleToDictionary(JSContext* cx,
-                                     JS::Handle<JS::Value> objVal)
+                                     JS::Handle<JS::Value> objVal,
+                                     bool* convertible)
 {
   JS::Rooted<JSObject*> obj(cx, &objVal.toObject());
-  return IsNotDateOrRegExp(cx, obj);
+  return IsNotDateOrRegExp(cx, obj, convertible);
 }
 
 MOZ_ALWAYS_INLINE bool
-IsConvertibleToDictionary(JSContext* cx, JS::Handle<JS::Value> val)
+IsConvertibleToDictionary(JSContext* cx, JS::Handle<JS::Value> val,
+                          bool* convertible)
 {
-  return val.isNullOrUndefined() ||
-    (val.isObject() && IsObjectValueConvertibleToDictionary(cx, val));
+  if (val.isNullOrUndefined()) {
+    *convertible = true;
+    return true;
+  }
+  if (!val.isObject()) {
+    *convertible = false;
+    return true;
+  }
+  return IsObjectValueConvertibleToDictionary(cx, val, convertible);
 }
 
 MOZ_ALWAYS_INLINE bool
-IsConvertibleToCallbackInterface(JSContext* cx, JS::Handle<JSObject*> obj)
+IsConvertibleToCallbackInterface(JSContext* cx, JS::Handle<JSObject*> obj,
+                                 bool* convertible)
 {
-  return IsNotDateOrRegExp(cx, obj);
+  return IsNotDateOrRegExp(cx, obj, convertible);
 }
 
 // The items in the protoAndIfaceCache are indexed by the prototypes::id::ID,
@@ -769,6 +788,9 @@ TryToOuterize(JSContext* cx, JS::MutableHandle<JS::Value> rval)
 
   return true;
 }
+
+bool
+ObjectToOuterObjectValue(JSContext* cx, JS::Handle<JSObject*> obj, JS::MutableHandle<JS::Value> vp);
 
 // Make sure to wrap the given string value into the right compartment, as
 // needed.
@@ -1482,7 +1504,7 @@ WrapObject(JSContext* cx, const nsCOMPtr<T>& p,
 // Helper to make it possible to wrap directly out of an nsRefPtr
 template<class T>
 inline bool
-WrapObject(JSContext* cx, const nsRefPtr<T>& p,
+WrapObject(JSContext* cx, const RefPtr<T>& p,
            const nsIID* iid, JS::MutableHandle<JS::Value> rval)
 {
   return WrapObject(cx, p.get(), iid, rval);
@@ -1491,7 +1513,7 @@ WrapObject(JSContext* cx, const nsRefPtr<T>& p,
 // Helper to make it possible to wrap directly out of an nsRefPtr
 template<class T>
 inline bool
-WrapObject(JSContext* cx, const nsRefPtr<T>& p,
+WrapObject(JSContext* cx, const RefPtr<T>& p,
            JS::MutableHandle<JS::Value> rval)
 {
   return WrapObject(cx, p, nullptr, rval);
@@ -1847,8 +1869,8 @@ ThrowConstructorWithoutNew(JSContext* cx, const char* name);
 
 bool
 GetPropertyOnPrototype(JSContext* cx, JS::Handle<JSObject*> proxy,
-                       JS::Handle<jsid> id, bool* found,
-                       JS::MutableHandle<JS::Value> vp);
+                       JS::Handle<JS::Value> receiver, JS::Handle<jsid> id,
+                       bool* found, JS::MutableHandle<JS::Value> vp);
 
 //
 bool
@@ -2266,7 +2288,7 @@ void DoTraceSequence(JSTracer* trc, InfallibleTArray<T>& seq)
 
 // Rooter class for sequences; this is what we mostly use in the codegen
 template<typename T>
-class MOZ_STACK_CLASS SequenceRooter : private JS::CustomAutoRooter
+class MOZ_RAII SequenceRooter : private JS::CustomAutoRooter
 {
 public:
   SequenceRooter(JSContext *aCx, FallibleTArray<T>* aSequence
@@ -2325,7 +2347,7 @@ public:
 
 // Rooter class for MozMap; this is what we mostly use in the codegen.
 template<typename T>
-class MOZ_STACK_CLASS MozMapRooter : private JS::CustomAutoRooter
+class MOZ_RAII MozMapRooter : private JS::CustomAutoRooter
 {
 public:
   MozMapRooter(JSContext *aCx, MozMap<T>* aMozMap
@@ -2371,8 +2393,8 @@ private:
 };
 
 template<typename T>
-class MOZ_STACK_CLASS RootedUnion : public T,
-                                    private JS::CustomAutoRooter
+class MOZ_RAII RootedUnion : public T,
+                             private JS::CustomAutoRooter
 {
 public:
   explicit RootedUnion(JSContext* cx MOZ_GUARD_OBJECT_NOTIFIER_PARAM) :
@@ -2848,7 +2870,7 @@ private:
   };
 
   JS::Rooted<JSObject*> mReflector;
-  typename Conditional<IsRefcounted<T>::value, nsRefPtr<T>, OwnedNative>::Type mNative;
+  typename Conditional<IsRefcounted<T>::value, RefPtr<T>, OwnedNative>::Type mNative;
 };
 
 template<class T>
@@ -2857,7 +2879,7 @@ struct DeferredFinalizerImpl
   typedef typename Conditional<IsSame<T, nsISupports>::value,
                                nsCOMPtr<T>,
                                typename Conditional<IsRefcounted<T>::value,
-                                                    nsRefPtr<T>,
+                                                    RefPtr<T>,
                                                     nsAutoPtr<T>>::Type>::Type SmartPtr;
   typedef nsTArray<SmartPtr> SmartPtrArray;
 
@@ -2871,7 +2893,7 @@ struct DeferredFinalizerImpl
   }
   template<class U>
   static inline void
-  AppendAndTake(nsTArray<nsRefPtr<U>>& smartPtrArray, U* ptr)
+  AppendAndTake(nsTArray<RefPtr<U>>& smartPtrArray, U* ptr)
   {
     smartPtrArray.AppendElement(dont_AddRef(ptr));
   }
@@ -3092,6 +3114,14 @@ CreateGlobal(JSContext* aCx, T* aNative, nsWrapperCache* aCache,
     return nullptr;
   }
 
+  bool succeeded;
+  if (!JS_SetImmutablePrototype(aCx, aGlobal, &succeeded)) {
+    return nullptr;
+  }
+  MOZ_ASSERT(succeeded,
+             "making a fresh global object's [[Prototype]] immutable can "
+             "internally fail, but it should never be unsuccessful");
+
   return proto;
 }
 
@@ -3247,7 +3277,7 @@ WrappedJSToDictionary(nsISupports* aObject, T& aDictionary)
 
 
 template<class T, class S>
-inline nsRefPtr<T>
+inline RefPtr<T>
 StrongOrRawPtr(already_AddRefed<S>&& aPtr)
 {
   return aPtr.template downcast<T>();
@@ -3270,7 +3300,7 @@ template<class T>
 struct StrongPtrForMember
 {
   typedef typename Conditional<IsRefcounted<T>::value,
-                               nsRefPtr<T>, nsAutoPtr<T>>::Type Type;
+                               RefPtr<T>, nsAutoPtr<T>>::Type Type;
 };
 
 inline
@@ -3323,6 +3353,11 @@ GetDesiredProto(JSContext* aCx, const JS::CallArgs& aCallArgs,
 void
 SetDocumentAndPageUseCounter(JSContext* aCx, JSObject* aObject,
                              UseCounter aUseCounter);
+
+// Warnings
+void
+DeprecationWarning(JSContext* aCx, JSObject* aObject,
+                   nsIDocument::DeprecatedOperations aOperation);
 
 } // namespace dom
 } // namespace mozilla

@@ -9,6 +9,7 @@
 
 #include "mozilla/ipc/FileDescriptorSetParent.h"
 #include "mozilla/net/HttpChannelParent.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/dom/TabParent.h"
 #include "mozilla/net/NeckoParent.h"
 #include "mozilla/unused.h"
@@ -34,6 +35,10 @@
 #include "nsIHttpHeaderVisitor.h"
 #include "nsQueryObject.h"
 #include "mozilla/BasePrincipal.h"
+#include "nsCORSListenerProxy.h"
+#include "nsIPrompt.h"
+#include "nsIWindowWatcher.h"
+#include "nsIDocument.h"
 
 using mozilla::BasePrincipal;
 using mozilla::OriginAttributes;
@@ -126,7 +131,8 @@ HttpChannelParent::Init(const HttpChannelCreationArgs& aArgs)
                        a.appCacheClientID(), a.allowSpdy(), a.allowAltSvc(), a.fds(),
                        a.loadInfo(), a.synthesizedResponseHead(),
                        a.synthesizedSecurityInfoSerialization(),
-                       a.cacheKey(), a.schedulingContextID());
+                       a.cacheKey(), a.schedulingContextID(), a.preflightArgs(),
+                       a.initialRwin());
   }
   case HttpChannelCreationArgs::THttpChannelConnectArgs:
   {
@@ -148,13 +154,17 @@ NS_IMPL_ISUPPORTS(HttpChannelParent,
                   nsIProgressEventSink,
                   nsIRequestObserver,
                   nsIStreamListener,
+                  nsIPackagedAppChannelListener,
                   nsIParentChannel,
                   nsIAuthPromptProvider,
                   nsIParentRedirectingChannel,
-                  nsINetworkInterceptController)
+                  nsINetworkInterceptController,
+                  nsIDeprecationWarner)
 
 NS_IMETHODIMP
-HttpChannelParent::ShouldPrepareForIntercept(nsIURI* aURI, bool aIsNavigate, bool* aShouldIntercept)
+HttpChannelParent::ShouldPrepareForIntercept(nsIURI* aURI,
+                                             bool aIsNonSubresourceRequest,
+                                             bool* aShouldIntercept)
 {
   *aShouldIntercept = mShouldIntercept;
   return NS_OK;
@@ -193,17 +203,61 @@ public:
 
   NS_IMETHOD Run()
   {
-    mChannel->FinishSynthesizedResponse();
+    // The URL passed as an argument here doesn't matter, since the child will
+    // receive a redirection notification as a result of this synthesized response.
+    mChannel->FinishSynthesizedResponse(EmptyCString());
     return NS_OK;
   }
 };
 
+class ResponseSynthesizer final : public nsIFetchEventDispatcher
+{
+public:
+  ResponseSynthesizer(nsIInterceptedChannel* aChannel,
+                       HttpChannelParent* aParentChannel)
+    : mChannel(aChannel)
+    , mParentChannel(aParentChannel)
+  {
+  }
+
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIFETCHEVENTDISPATCHER
+
+private:
+  ~ResponseSynthesizer()
+  {
+  }
+
+  nsCOMPtr<nsIInterceptedChannel> mChannel;
+  RefPtr<HttpChannelParent> mParentChannel;
+};
+
+NS_IMPL_ISUPPORTS(ResponseSynthesizer, nsIFetchEventDispatcher)
+
 NS_IMETHODIMP
-HttpChannelParent::ChannelIntercepted(nsIInterceptedChannel* aChannel)
+ResponseSynthesizer::Dispatch()
+{
+  mParentChannel->SynthesizeResponse(mChannel);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpChannelParent::ChannelIntercepted(nsIInterceptedChannel* aChannel,
+                                      nsIFetchEventDispatcher** aDispatcher)
+{
+  RefPtr<ResponseSynthesizer> dispatcher =
+    new ResponseSynthesizer(aChannel, this);
+  dispatcher.forget(aDispatcher);
+  return NS_OK;
+}
+
+void
+HttpChannelParent::SynthesizeResponse(nsIInterceptedChannel* aChannel)
 {
   if (mShouldSuspendIntercept) {
     mInterceptedChannel = aChannel;
-    return NS_OK;
+    return;
   }
 
   aChannel->SynthesizeStatus(mSynthesizedResponseHead->Status(),
@@ -215,7 +269,6 @@ HttpChannelParent::ChannelIntercepted(nsIInterceptedChannel* aChannel)
   NS_DispatchToCurrentThread(event);
 
   mSynthesizedResponseHead = nullptr;
-  return NS_OK;
 }
 
 //-----------------------------------------------------------------------------
@@ -244,6 +297,35 @@ HttpChannelParent::GetInterface(const nsIID& aIID, void **result)
     nsCOMPtr<nsILoadContext> copy = mLoadContext;
     copy.forget(result);
     return NS_OK;
+  }
+
+  if (mTabParent && aIID.Equals(NS_GET_IID(nsIPrompt))) {
+    nsCOMPtr<Element> frameElement = mTabParent->GetOwnerElement();
+    if (frameElement) {
+      nsresult rv;
+      nsCOMPtr<nsIDOMWindow> win =
+        do_QueryInterface(frameElement->OwnerDoc()->GetWindow(), &rv);
+
+      if (NS_WARN_IF(!NS_SUCCEEDED(rv))) {
+        return rv;
+      }
+
+      nsCOMPtr<nsIWindowWatcher> wwatch =
+        do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv);
+
+      if (NS_WARN_IF(!NS_SUCCEEDED(rv))) {
+        return rv;
+      }
+
+      nsCOMPtr<nsIPrompt> prompt;
+      rv = wwatch->GetNewPrompter(win, getter_AddRefs(prompt));
+      if (NS_WARN_IF(!NS_SUCCEEDED(rv))) {
+        return rv;
+      }
+
+      prompt.forget(result);
+      return NS_OK;
+    }
   }
 
   return QueryInterface(aIID, result);
@@ -284,7 +366,9 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
                                  const OptionalHttpResponseHead& aSynthesizedResponseHead,
                                  const nsCString&           aSecurityInfoSerialization,
                                  const uint32_t&            aCacheKey,
-                                 const nsCString&           aSchedulingContextID)
+                                 const nsCString&           aSchedulingContextID,
+                                 const OptionalCorsPreflightArgs& aCorsPreflightArgs,
+                                 const uint32_t&            aInitialRwin)
 {
   nsCOMPtr<nsIURI> uri = DeserializeURI(aURI);
   if (!uri) {
@@ -391,6 +475,18 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
       get_ArrayOfFileDescriptor().SwapElements(fds);
   }
 
+  if (aCorsPreflightArgs.type() == OptionalCorsPreflightArgs::TCorsPreflightArgs) {
+    const CorsPreflightArgs& args = aCorsPreflightArgs.get_CorsPreflightArgs();
+    nsCOMPtr<nsIPrincipal> preflightPrincipal =
+      PrincipalInfoToPrincipal(args.preflightPrincipal());
+    rv = mChannel->SetCorsPreflightParameters(args.unsafeHeaders(),
+                                              args.withCredentials(),
+                                              preflightPrincipal);
+    if (NS_FAILED(rv)) {
+      return SendFailedAsyncOpen(rv);
+    }
+  }
+
   nsCOMPtr<nsIInputStream> stream = DeserializeInputStream(uploadStream, fds);
   if (stream) {
     mChannel->InternalSetUploadStream(stream);
@@ -409,7 +505,10 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
     }
 
   } else {
-    mChannel->ForceNoIntercept();
+    nsLoadFlags loadFlags;
+    mChannel->GetLoadFlags(&loadFlags);
+    loadFlags |= nsIChannel::LOAD_BYPASS_SERVICE_WORKER;
+    mChannel->SetLoadFlags(loadFlags);
   }
 
   nsCOMPtr<nsISupportsPRUint32> cacheKey =
@@ -437,6 +536,7 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
   mChannel->SetThirdPartyFlags(thirdPartyFlags);
   mChannel->SetAllowSpdy(allowSpdy);
   mChannel->SetAllowAltSvc(allowAltSvc);
+  mChannel->SetInitialRwin(aInitialRwin);
 
   nsCOMPtr<nsIApplicationCacheChannel> appCacheChan =
     do_QueryObject(mChannel);
@@ -460,13 +560,11 @@ HttpChannelParent::DoAsyncOpen(  const URIParams&           aURI,
     }
 
     if (setChooseApplicationCache) {
-      bool inBrowser = false;
+      OriginAttributes attrs;
       if (mLoadContext) {
-        mLoadContext->GetIsInBrowserElement(&inBrowser);
+        attrs.CopyFromLoadContext(mLoadContext);
       }
 
-      // TODO: Bug 1165466 - use originAttribute in nsILoadContext.
-      OriginAttributes attrs(appId, inBrowser);
       nsCOMPtr<nsIPrincipal> principal =
         BasePrincipal::CreateCodebasePrincipal(uri, attrs);
 
@@ -625,6 +723,7 @@ HttpChannelParent::RecvUpdateAssociatedContentSecurity(const int32_t& broken,
 bool
 HttpChannelParent::RecvRedirect2Verify(const nsresult& result,
                                        const RequestHeaderTuples& changedHeaders,
+                                       const uint32_t& loadFlags,
                                        const OptionalURIParams&   aAPIRedirectURI)
 {
   LOG(("HttpChannelParent::RecvRedirect2Verify [this=%p result=%x]\n",
@@ -647,6 +746,12 @@ HttpChannelParent::RecvRedirect2Verify(const nsresult& result,
                                            changedHeaders[i].mValue,
                                            changedHeaders[i].mMerge);
         }
+      }
+
+      // A successfully redirected channel must have the LOAD_REPLACE flag.
+      MOZ_ASSERT(loadFlags & nsIChannel::LOAD_REPLACE);
+      if (loadFlags & nsIChannel::LOAD_REPLACE) {
+        newHttpChannel->SetLoadFlags(loadFlags);
       }
     }
   }
@@ -924,6 +1029,37 @@ HttpChannelParent::DivertComplete()
   }
 
   mParentListener = nullptr;
+}
+
+bool
+HttpChannelParent::RecvRemoveCorsPreflightCacheEntry(const URIParams& uri,
+  const mozilla::ipc::PrincipalInfo& requestingPrincipal)
+{
+  nsCOMPtr<nsIURI> deserializedURI = DeserializeURI(uri);
+  if (!deserializedURI) {
+    return false;
+  }
+  nsCOMPtr<nsIPrincipal> principal =
+    PrincipalInfoToPrincipal(requestingPrincipal);
+  if (!principal) {
+    return false;
+  }
+  nsCORSListenerProxy::RemoveFromCorsPreflightCache(deserializedURI,
+                                                    principal);
+  return true;
+}
+
+//-----------------------------------------------------------------------------
+// HttpChannelParent::nsIPackagedAppChannelListener
+//-----------------------------------------------------------------------------
+
+NS_IMETHODIMP
+HttpChannelParent::OnStartSignedPackageRequest(const nsACString& aPackageId)
+{
+  if (mTabParent) {
+    mTabParent->OnStartSignedPackageRequest(mChannel, aPackageId);
+  }
+  return NS_OK;
 }
 
 //-----------------------------------------------------------------------------
@@ -1381,7 +1517,7 @@ public:
     return NS_OK;
   }
 private:
-  nsRefPtr<HttpChannelParent> mChannelParent;
+  RefPtr<HttpChannelParent> mChannelParent;
   nsresult mErrorCode;
   bool mSkipResume;
 };
@@ -1498,6 +1634,13 @@ HttpChannelParent::ReportSecurityMessage(const nsAString& aMessageTag,
                                             nsString(aMessageCategory)))) {
     return NS_ERROR_UNEXPECTED;
   }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpChannelParent::IssueWarning(uint32_t aWarning, bool aAsError)
+{
+  unused << SendIssueDeprecationWarning(aWarning, aAsError);
   return NS_OK;
 }
 

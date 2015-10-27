@@ -35,7 +35,8 @@ public:
   {
     MutexAutoLock lock(mMutex);
     if (mStream) {
-      mLastOutputTime = mStream->StreamTimeToMicroseconds(mStream->GraphTimeToStreamTime(aCurrentTime));
+      mLastOutputTime = mStream->StreamTimeToMicroseconds(
+          mStream->GraphTimeToStreamTime(aCurrentTime));
     }
   }
 
@@ -78,7 +79,7 @@ public:
 private:
   Mutex mMutex;
   // Members below are protected by mMutex.
-  nsRefPtr<MediaStream> mStream;
+  RefPtr<MediaStream> mStream;
   int64_t mLastOutputTime; // microseconds
   bool mStreamFinishedOnMainThread;
   // Main thread only.
@@ -86,14 +87,21 @@ private:
 };
 
 static void
-UpdateStreamBlocking(MediaStream* aStream, bool aBlocking)
+UpdateStreamSuspended(MediaStream* aStream, bool aBlocking)
 {
-  int32_t delta = aBlocking ? 1 : -1;
   if (NS_IsMainThread()) {
-    aStream->ChangeExplicitBlockerCount(delta);
+    if (aBlocking) {
+      aStream->Suspend();
+    } else {
+      aStream->Resume();
+    }
   } else {
-    nsCOMPtr<nsIRunnable> r = NS_NewRunnableMethodWithArg<int32_t>(
-      aStream, &MediaStream::ChangeExplicitBlockerCount, delta);
+    nsCOMPtr<nsIRunnable> r;
+    if (aBlocking) {
+      r = NS_NewRunnableMethod(aStream, &MediaStream::Suspend);
+    } else {
+      r = NS_NewRunnableMethod(aStream, &MediaStream::Resume);
+    }
     AbstractThread::MainThread()->Dispatch(r.forget());
   }
 }
@@ -127,7 +135,7 @@ public:
   int64_t mNextAudioTime; // microseconds
   // The last video image sent to the stream. Useful if we need to replicate
   // the image.
-  nsRefPtr<layers::Image> mLastVideoImage;
+  RefPtr<layers::Image> mLastVideoImage;
   gfx::IntSize mLastVideoImageDisplaySize;
   // This is set to true when the stream is initialized (audio and
   // video tracks added).
@@ -137,8 +145,8 @@ public:
   bool mHaveSentFinishVideo;
 
   // The decoder is responsible for calling Destroy() on this stream.
-  const nsRefPtr<SourceMediaStream> mStream;
-  nsRefPtr<DecodedStreamGraphListener> mListener;
+  const RefPtr<SourceMediaStream> mStream;
+  RefPtr<DecodedStreamGraphListener> mListener;
   bool mPlaying;
   // True if we need to send a compensation video frame to ensure the
   // StreamTime going forward.
@@ -189,48 +197,13 @@ DecodedStreamData::SetPlaying(bool aPlaying)
 {
   if (mPlaying != aPlaying) {
     mPlaying = aPlaying;
-    UpdateStreamBlocking(mStream, !mPlaying);
+    UpdateStreamSuspended(mStream, !mPlaying);
   }
 }
-
-class OutputStreamListener : public MediaStreamListener {
-  typedef MediaStreamListener::MediaStreamGraphEvent MediaStreamGraphEvent;
-public:
-  explicit OutputStreamListener(OutputStreamData* aOwner) : mOwner(aOwner) {}
-
-  void NotifyEvent(MediaStreamGraph* aGraph, MediaStreamGraphEvent event) override
-  {
-    if (event == EVENT_FINISHED) {
-      nsCOMPtr<nsIRunnable> r = NS_NewRunnableMethod(
-        this, &OutputStreamListener::DoNotifyFinished);
-      aGraph->DispatchToMainThreadAfterStreamStateUpdate(r.forget());
-    }
-  }
-
-  void Forget()
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-    mOwner = nullptr;
-  }
-
-private:
-  void DoNotifyFinished()
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-    if (mOwner) {
-      // Remove the finished stream so it won't block the decoded stream.
-      mOwner->Remove();
-    }
-  }
-
-  // Main thread only
-  OutputStreamData* mOwner;
-};
 
 OutputStreamData::~OutputStreamData()
 {
   MOZ_ASSERT(NS_IsMainThread());
-  mListener->Forget();
   // Break the connection to the input stream if necessary.
   if (mPort) {
     mPort->Destroy();
@@ -242,8 +215,6 @@ OutputStreamData::Init(OutputStreamManager* aOwner, ProcessedMediaStream* aStrea
 {
   mOwner = aOwner;
   mStream = aStream;
-  mListener = new OutputStreamListener(this);
-  aStream->AddListener(mListener);
 }
 
 void
@@ -253,10 +224,7 @@ OutputStreamData::Connect(MediaStream* aStream)
   MOZ_ASSERT(!mPort, "Already connected?");
   MOZ_ASSERT(!mStream->IsDestroyed(), "Can't connect a destroyed stream.");
 
-  mPort = mStream->AllocateInputPort(aStream, 0);
-  // Unblock the output stream now. The input stream is responsible for
-  // controlling blocking from now on.
-  mStream->ChangeExplicitBlockerCount(-1);
+  mPort = mStream->AllocateInputPort(aStream);
 }
 
 bool
@@ -276,17 +244,7 @@ OutputStreamData::Disconnect()
     mPort->Destroy();
     mPort = nullptr;
   }
-  // Block the stream again. It will be unlocked when connecting
-  // to the input stream.
-  mStream->ChangeExplicitBlockerCount(1);
   return true;
-}
-
-void
-OutputStreamData::Remove()
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  mOwner->Remove(mStream);
 }
 
 MediaStreamGraph*
@@ -383,7 +341,7 @@ DecodedStream::SetPlaybackParams(const PlaybackParams& aParams)
   mParams = aParams;
 }
 
-nsRefPtr<GenericPromise>
+RefPtr<GenericPromise>
 DecodedStream::OnEnded(TrackType aType)
 {
   AssertOwnerThread();
@@ -432,7 +390,7 @@ DecodedStream::Start(int64_t aStartTime, const MediaInfo& aInfo)
       return NS_OK;
     }
   private:
-    nsRefPtr<DecodedStream> mThis;
+    RefPtr<DecodedStream> mThis;
     Method mMethod;
     Promise mPromise;
   };
@@ -465,6 +423,13 @@ DecodedStream::IsStarted() const
   return mStartTime.isSome();
 }
 
+bool
+DecodedStream::IsPlaying() const
+{
+  AssertOwnerThread();
+  return IsStarted() && mPlaying;
+}
+
 void
 DecodedStream::DestroyData(UniquePtr<DecodedStreamData> aData)
 {
@@ -475,7 +440,7 @@ DecodedStream::DestroyData(UniquePtr<DecodedStreamData> aData)
   }
 
   DecodedStreamData* data = aData.release();
-  nsRefPtr<DecodedStream> self = this;
+  RefPtr<DecodedStream> self = this;
   nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([=] () {
     self->mOutputStreamManager.Disconnect();
     delete data;
@@ -512,7 +477,7 @@ DecodedStream::CreateData(MozPromiseHolder<GenericPromise>&& aPromise)
       return NS_OK;
     }
   private:
-    nsRefPtr<DecodedStream> mThis;
+    RefPtr<DecodedStream> mThis;
     Method mMethod;
     UniquePtr<DecodedStreamData> mData;
   };
@@ -640,6 +605,9 @@ SendStreamAudio(DecodedStreamData* aStream, int64_t aStartTime,
                 MediaData* aData, AudioSegment* aOutput,
                 uint32_t aRate, double aVolume)
 {
+  // The amount of audio frames that is used to fuzz rounding errors.
+  static const int64_t AUDIO_FUZZ_FRAMES = 1;
+
   MOZ_ASSERT(aData);
   AudioData* audio = aData->As<AudioData>();
   // This logic has to mimic AudioSink closely to make sure we write
@@ -651,11 +619,11 @@ SendStreamAudio(DecodedStreamData* aStream, int64_t aStartTime,
   if (!audioWrittenOffset.isValid() ||
       !frameOffset.isValid() ||
       // ignore packet that we've already processed
-      frameOffset.value() + audio->mFrames <= audioWrittenOffset.value()) {
+      audio->GetEndTime() <= aStream->mNextAudioTime) {
     return;
   }
 
-  if (audioWrittenOffset.value() < frameOffset.value()) {
+  if (audioWrittenOffset.value() + AUDIO_FUZZ_FRAMES < frameOffset.value()) {
     int64_t silentFrames = frameOffset.value() - audioWrittenOffset.value();
     // Write silence to catch up
     AudioSegment silence;
@@ -665,20 +633,17 @@ SendStreamAudio(DecodedStreamData* aStream, int64_t aStartTime,
     aOutput->AppendFrom(&silence);
   }
 
-  MOZ_ASSERT(audioWrittenOffset.value() >= frameOffset.value());
-
-  int64_t offset = audioWrittenOffset.value() - frameOffset.value();
-  size_t framesToWrite = audio->mFrames - offset;
-
+  // Always write the whole sample without truncation to be consistent with
+  // DecodedAudioDataSink::PlayFromAudioQueue()
   audio->EnsureAudioBuffer();
-  nsRefPtr<SharedBuffer> buffer = audio->mAudioBuffer;
+  RefPtr<SharedBuffer> buffer = audio->mAudioBuffer;
   AudioDataValue* bufferData = static_cast<AudioDataValue*>(buffer->Data());
   nsAutoTArray<const AudioDataValue*, 2> channels;
   for (uint32_t i = 0; i < audio->mChannels; ++i) {
-    channels.AppendElement(bufferData + i * audio->mFrames + offset);
+    channels.AppendElement(bufferData + i * audio->mFrames);
   }
-  aOutput->AppendFrames(buffer.forget(), channels, framesToWrite);
-  aStream->mAudioFramesWritten += framesToWrite;
+  aOutput->AppendFrames(buffer.forget(), channels, audio->mFrames);
+  aStream->mAudioFramesWritten += audio->mFrames;
   aOutput->ApplyVolume(aVolume);
 
   aStream->mNextAudioTime = audio->GetEndTime();
@@ -695,7 +660,7 @@ DecodedStream::SendAudio(double aVolume, bool aIsSameOrigin)
 
   AudioSegment output;
   uint32_t rate = mInfo.mAudio.mRate;
-  nsAutoTArray<nsRefPtr<MediaData>,10> audio;
+  nsAutoTArray<RefPtr<MediaData>,10> audio;
   TrackID audioTrackId = mInfo.mAudio.mTrackId;
   SourceMediaStream* sourceStream = mData->mStream;
 
@@ -731,7 +696,7 @@ WriteVideoToMediaStream(MediaStream* aStream,
                         const mozilla::gfx::IntSize& aIntrinsicSize,
                         VideoSegment* aOutput)
 {
-  nsRefPtr<layers::Image> image = aImage;
+  RefPtr<layers::Image> image = aImage;
   StreamTime duration =
       aStream->MicrosecondsToStreamTimeRoundDown(aEndMicroseconds) -
       aStream->MicrosecondsToStreamTimeRoundDown(aStartMicroseconds);
@@ -760,7 +725,7 @@ DecodedStream::SendVideo(bool aIsSameOrigin)
 
   VideoSegment output;
   TrackID videoTrackId = mInfo.mVideo.mTrackId;
-  nsAutoTArray<nsRefPtr<MediaData>, 10> video;
+  nsAutoTArray<RefPtr<MediaData>, 10> video;
   SourceMediaStream* sourceStream = mData->mStream;
 
   // It's OK to hold references to the VideoData because VideoData

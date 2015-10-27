@@ -1329,25 +1329,10 @@ void nsWindow::SetThemeRegion()
  *
  **************************************************************/
 
-void nsWindow::ConfigureAPZCTreeManager()
-{
-  nsBaseWidget::ConfigureAPZCTreeManager();
-
-  // When APZ is enabled, we can actually enable raw touch events because we
-  // have code that can deal with them properly. If APZ is not enabled, this
-  // function doesn't get called, and |mGesture| will take care of touch-based
-  // scrolling. Note that RegisterTouchWindow may still do nothing depending
-  // on touch events prefs, and so it is possible to enable APZ without
-  // also enabling touch support.
-  RegisterTouchWindow();
-}
-
 void nsWindow::RegisterTouchWindow() {
-  if (Preferences::GetInt("dom.w3c_touch_events.enabled", 0)) {
-    mTouchWindow = true;
-    mGesture.RegisterTouchWindow(mWnd);
-    ::EnumChildWindows(mWnd, nsWindow::RegisterTouchForDescendants, 0);
-  }
+  mTouchWindow = true;
+  mGesture.RegisterTouchWindow(mWnd);
+  ::EnumChildWindows(mWnd, nsWindow::RegisterTouchForDescendants, 0);
 }
 
 BOOL CALLBACK nsWindow::RegisterTouchForDescendants(HWND aWnd, LPARAM aMsg) {
@@ -2320,7 +2305,7 @@ NS_IMETHODIMP
 nsWindow::SetNonClientMargins(nsIntMargin &margins)
 {
   if (!mIsTopWidgetWindow ||
-      mBorderStyle & eBorderStyle_none)
+      mBorderStyle == eBorderStyle_none)
     return NS_ERROR_INVALID_ARG;
 
   if (mHideChrome) {
@@ -2629,7 +2614,7 @@ NS_IMETHODIMP nsWindow::SetCursor(imgIContainer* aCursor,
 
   HCURSOR cursor;
   // No scaling
-  gfxIntSize size(0, 0);
+  IntSize size(0, 0);
   rv = nsWindowGfx::CreateIcon(aCursor, true, aHotspotX, aHotspotY, size, &cursor);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -3701,7 +3686,7 @@ nsWindow::StartRemoteDrawing()
                "Unexpected render mode for remote drawing");
 
   HDC dc = (HDC)GetNativeData(NS_NATIVE_GRAPHIC);
-  nsRefPtr<gfxASurface> surf;
+  RefPtr<gfxASurface> surf;
 
   if (mTransparencyMode == eTransparencyTransparent) {
     if (!mTransparentSurface) {
@@ -3752,7 +3737,7 @@ nsWindow::EndRemoteDrawing()
 void
 nsWindow::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries)
 {
-  nsRefPtr<LayerManager> layerManager = GetLayerManager();
+  RefPtr<LayerManager> layerManager = GetLayerManager();
   if (!layerManager) {
     return;
   }
@@ -4409,7 +4394,8 @@ void
 nsWindow::IPCWindowProcHandler(UINT& msg, WPARAM& wParam, LPARAM& lParam)
 {
   MOZ_ASSERT_IF(msg != WM_GETOBJECT,
-                !mozilla::ipc::MessageChannel::IsPumpingMessages());
+                !mozilla::ipc::MessageChannel::IsPumpingMessages() ||
+                mozilla::ipc::SuppressedNeuteringRegion::IsNeuteringSuppressed());
 
   // Modal UI being displayed in windowless plugins.
   if (mozilla::ipc::MessageChannel::IsSpinLoopActive() &&
@@ -4557,7 +4543,7 @@ inline static mozilla::HangMonitor::ActivityType ActivityTypeForMessage(UINT msg
 // and http://msdn.microsoft.com/en-us/library/ms633573%28VS.85%29.aspx
 LRESULT CALLBACK nsWindow::WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-  ipc::CancelCPOWs();
+  mozilla::ipc::CancelCPOWs();
 
   HangMonitor::NotifyActivity(ActivityTypeForMessage(msg));
 
@@ -4761,16 +4747,6 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
   // (Large blocks of code should be broken out into OnEvent handlers.)
   switch (msg) {
-    // Manually reset the cursor if WM_SETCURSOR is requested while over
-    // application content (as opposed to Windows borders, etc).
-    case WM_SETCURSOR:
-      if (LOWORD(lParam) == HTCLIENT)
-      {
-        SetCursor(GetCursor());
-        result = true;
-      }
-      break;
-
     // WM_QUERYENDSESSION must be handled by all windows.
     // Otherwise Windows thinks the window can just be killed at will.
     case WM_QUERYENDSESSION:
@@ -5633,8 +5609,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
         nsPointWin touchPoint;
         touchPoint = gestureinfo->ptsLocation;
         touchPoint.ScreenToClient(mWnd);
-        WidgetGestureNotifyEvent gestureNotifyEvent(true,
-                                   NS_GESTURENOTIFY_EVENT_START, this);
+        WidgetGestureNotifyEvent gestureNotifyEvent(true, eGestureNotify, this);
         gestureNotifyEvent.refPoint = LayoutDeviceIntPoint::FromUntyped(touchPoint);
         nsEventStatus status;
         DispatchEvent(&gestureNotifyEvent, status);
@@ -5648,7 +5623,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case WM_CLEAR:
     {
-      WidgetContentCommandEvent command(true, NS_CONTENT_COMMAND_DELETE, this);
+      WidgetContentCommandEvent command(true, eContentCommandDelete, this);
       DispatchWindowEvent(&command);
       result = true;
     }
@@ -5656,7 +5631,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case WM_CUT:
     {
-      WidgetContentCommandEvent command(true, NS_CONTENT_COMMAND_CUT, this);
+      WidgetContentCommandEvent command(true, eContentCommandCut, this);
       DispatchWindowEvent(&command);
       result = true;
     }
@@ -5664,7 +5639,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case WM_COPY:
     {
-      WidgetContentCommandEvent command(true, NS_CONTENT_COMMAND_COPY, this);
+      WidgetContentCommandEvent command(true, eContentCommandCopy, this);
       DispatchWindowEvent(&command);
       result = true;
     }
@@ -5672,7 +5647,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case WM_PASTE:
     {
-      WidgetContentCommandEvent command(true, NS_CONTENT_COMMAND_PASTE, this);
+      WidgetContentCommandEvent command(true, eContentCommandPaste, this);
       DispatchWindowEvent(&command);
       result = true;
     }
@@ -5680,7 +5655,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case EM_UNDO:
     {
-      WidgetContentCommandEvent command(true, NS_CONTENT_COMMAND_UNDO, this);
+      WidgetContentCommandEvent command(true, eContentCommandUndo, this);
       DispatchWindowEvent(&command);
       *aRetValue = (LRESULT)(command.mSucceeded && command.mIsEnabled);
       result = true;
@@ -5689,7 +5664,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case EM_REDO:
     {
-      WidgetContentCommandEvent command(true, NS_CONTENT_COMMAND_REDO, this);
+      WidgetContentCommandEvent command(true, eContentCommandRedo, this);
       DispatchWindowEvent(&command);
       *aRetValue = (LRESULT)(command.mSucceeded && command.mIsEnabled);
       result = true;
@@ -5701,7 +5676,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
       // Support EM_CANPASTE message only when wParam isn't specified or
       // is plain text format.
       if (wParam == 0 || wParam == CF_TEXT || wParam == CF_UNICODETEXT) {
-        WidgetContentCommandEvent command(true, NS_CONTENT_COMMAND_PASTE,
+        WidgetContentCommandEvent command(true, eContentCommandPaste,
                                           this, true);
         DispatchWindowEvent(&command);
         *aRetValue = (LRESULT)(command.mSucceeded && command.mIsEnabled);
@@ -5712,8 +5687,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case EM_CANUNDO:
     {
-      WidgetContentCommandEvent command(true, NS_CONTENT_COMMAND_UNDO,
-                                        this, true);
+      WidgetContentCommandEvent command(true, eContentCommandUndo, this, true);
       DispatchWindowEvent(&command);
       *aRetValue = (LRESULT)(command.mSucceeded && command.mIsEnabled);
       result = true;
@@ -5722,8 +5696,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case EM_CANREDO:
     {
-      WidgetContentCommandEvent command(true, NS_CONTENT_COMMAND_REDO,
-                                        this, true);
+      WidgetContentCommandEvent command(true, eContentCommandRedo, this, true);
       DispatchWindowEvent(&command);
       *aRetValue = (LRESULT)(command.mSucceeded && command.mIsEnabled);
       result = true;
@@ -6406,7 +6379,7 @@ bool nsWindow::OnTouch(WPARAM wParam, LPARAM lParam)
           ModifierKeyState modifierKeyState;
           touchInput.modifiers = modifierKeyState.GetModifiers();
         }
-        // Pres shell expects this event to be a NS_TOUCH_START
+        // Pres shell expects this event to be a eTouchStart
         // if any new contact points have been added since the last event sent.
         if (pInputs[i].dwFlags & TOUCHEVENTF_DOWN) {
           touchInput.mType = MultiTouchInput::MULTITOUCH_START;
@@ -6415,7 +6388,7 @@ bool nsWindow::OnTouch(WPARAM wParam, LPARAM lParam)
       }
       if (pInputs[i].dwFlags & TOUCHEVENTF_UP) {
         // Pres shell expects removed contacts points to be delivered in a separate
-        // NS_TOUCH_END event containing only the contact points that were removed.
+        // eTouchEnd event containing only the contact points that were removed.
         if (touchEndInput.mTimeStamp.IsNull()) {
           // Initialize a touch event to send.
           touchEndInput.mType = MultiTouchInput::MULTITOUCH_END;
@@ -6487,7 +6460,7 @@ bool nsWindow::OnGesture(WPARAM wParam, LPARAM lParam)
 
     nsEventStatus status;
 
-    WidgetWheelEvent wheelEvent(true, NS_WHEEL_WHEEL, this);
+    WidgetWheelEvent wheelEvent(true, eWheel, this);
 
     ModifierKeyState modifierKeyState;
     modifierKeyState.InitInputEvent(wheelEvent);
@@ -6988,8 +6961,8 @@ void nsWindow::ResizeTranslucentWindow(int32_t aNewWidth, int32_t aNewHeight, bo
   if (!force && aNewWidth == mBounds.width && aNewHeight == mBounds.height)
     return;
 
-  nsRefPtr<gfxWindowsSurface> newSurface =
-    new gfxWindowsSurface(gfxIntSize(aNewWidth, aNewHeight), gfxImageFormat::ARGB32);
+  RefPtr<gfxWindowsSurface> newSurface =
+    new gfxWindowsSurface(IntSize(aNewWidth, aNewHeight), gfxImageFormat::ARGB32);
   mTransparentSurface = newSurface;
   mMemoryDC = newSurface->GetDC();
 }
@@ -7750,7 +7723,7 @@ bool nsWindow::CaptureWidgetOnScreen(RefPtr<DrawTarget> aDT)
                    ? 0
                    : gfxWindowsSurface::FLAG_IS_TRANSPARENT;
 
-  nsRefPtr<gfxASurface> surf = new gfxWindowsSurface(dc, flags);
+  RefPtr<gfxASurface> surf = new gfxWindowsSurface(dc, flags);
   IntSize size(surf->GetSize().width, surf->GetSize().height);
   if (size.width <= 0 || size.height <= 0) {
     ::ReleaseDC(mWnd, dc);

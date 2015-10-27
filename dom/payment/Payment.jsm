@@ -27,7 +27,7 @@ XPCOMUtils.defineLazyServiceGetter(this, "prefService",
                                    "@mozilla.org/preferences-service;1",
                                    "nsIPrefService");
 
-let PaymentManager =  {
+var PaymentManager =  {
   init: function init() {
     // Payment providers data are stored as a preference.
     this.registeredProviders = null;
@@ -45,7 +45,7 @@ let PaymentManager =  {
       }
     } catch(e) {}
 
-    for each (let msgname in PAYMENT_IPC_MSG_NAMES) {
+    for (let msgname of PAYMENT_IPC_MSG_NAMES) {
       ppmm.addMessageListener(msgname, this);
     }
 
@@ -401,7 +401,7 @@ let PaymentManager =  {
 
   observe: function observe(subject, topic, data) {
     if (topic == "xpcom-shutdown") {
-      for each (let msgname in PAYMENT_IPC_MSG_NAMES) {
+      for (let msgname of PAYMENT_IPC_MSG_NAMES) {
         ppmm.removeMessageListener(msgname, this);
       }
       this.registeredProviders = null;

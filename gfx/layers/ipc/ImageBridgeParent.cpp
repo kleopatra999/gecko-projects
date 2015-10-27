@@ -58,7 +58,6 @@ ImageBridgeParent::ImageBridgeParent(MessageLoop* aLoop,
   : mMessageLoop(aLoop)
   , mTransport(aTransport)
   , mSetChildThreadPriority(false)
-  , mCompositorThreadHolder(GetCompositorThreadHolder())
 {
   MOZ_ASSERT(NS_IsMainThread());
   sMainLoop = MessageLoop::current();
@@ -90,12 +89,6 @@ ImageBridgeParent::~ImageBridgeParent()
   }
 
   sImageBridges.erase(OtherPid());
-}
-
-LayersBackend
-ImageBridgeParent::GetCompositorBackendType() const
-{
-  return Compositor::GetBackend();
 }
 
 void
@@ -138,12 +131,6 @@ bool
 ImageBridgeParent::RecvUpdate(EditArray&& aEdits, EditReplyArray* aReply)
 {
   AutoImageBridgeParentAsyncMessageSender autoAsyncMessageSender(this);
-
-  // If we don't actually have a compositor, then don't bother
-  // creating any textures.
-  if (Compositor::GetBackend() == LayersBackend::LAYERS_NONE) {
-    return true;
-  }
 
   EditReplyVector replyv;
   for (EditArray::index_type i = 0; i < aEdits.Length(); ++i) {
@@ -188,7 +175,7 @@ ConnectImageBridgeInParentProcess(ImageBridgeParent* aBridge,
 ImageBridgeParent::Create(Transport* aTransport, ProcessId aChildProcessId)
 {
   MessageLoop* loop = CompositorParent::CompositorLoop();
-  nsRefPtr<ImageBridgeParent> bridge = new ImageBridgeParent(loop, aTransport, aChildProcessId);
+  RefPtr<ImageBridgeParent> bridge = new ImageBridgeParent(loop, aTransport, aChildProcessId);
   bridge->mSelfRef = bridge;
   loop->PostTask(FROM_HERE,
                  NewRunnableFunction(ConnectImageBridgeInParentProcess,
@@ -257,9 +244,10 @@ bool ImageBridgeParent::DeallocPCompositableParent(PCompositableParent* aActor)
 
 PTextureParent*
 ImageBridgeParent::AllocPTextureParent(const SurfaceDescriptor& aSharedData,
+                                       const LayersBackend& aLayersBackend,
                                        const TextureFlags& aFlags)
 {
-  return TextureHost::CreateIPDLActor(this, aSharedData, aFlags);
+  return TextureHost::CreateIPDLActor(this, aSharedData, aLayersBackend, aFlags);
 }
 
 bool
@@ -356,6 +344,7 @@ MessageLoop * ImageBridgeParent::GetMessageLoop() const {
 void
 ImageBridgeParent::DeferredDestroy()
 {
+  MOZ_ASSERT(mCompositorThreadHolder);
   mCompositorThreadHolder = nullptr;
   mSelfRef = nullptr;
 }
@@ -379,10 +368,19 @@ ImageBridgeParent::CloneToplevel(const InfallibleTArray<ProtocolFdMapping>& aFds
       PImageBridgeParent* bridge = Create(transport, base::GetProcId(aPeerProcess));
       bridge->CloneManagees(this, aCtx);
       bridge->IToplevelProtocol::SetTransport(transport);
+      // The reference to the compositor thread is held in OnChannelConnected().
+      // We need to do this for cloned actors, too.
+      bridge->OnChannelConnected(base::GetProcId(aPeerProcess));
       return bridge;
     }
   }
   return nullptr;
+}
+
+void
+ImageBridgeParent::OnChannelConnected(int32_t aPid)
+{
+  mCompositorThreadHolder = GetCompositorThreadHolder();
 }
 
 bool ImageBridgeParent::IsSameProcess() const

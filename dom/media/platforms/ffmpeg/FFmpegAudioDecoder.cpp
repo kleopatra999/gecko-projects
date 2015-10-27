@@ -18,8 +18,7 @@ namespace mozilla
 FFmpegAudioDecoder<LIBAV_VER>::FFmpegAudioDecoder(
   FlushableTaskQueue* aTaskQueue, MediaDataDecoderCallback* aCallback,
   const AudioInfo& aConfig)
-  : FFmpegDataDecoder(aTaskQueue, GetCodecId(aConfig.mMimeType))
-  , mCallback(aCallback)
+  : FFmpegDataDecoder(aTaskQueue, aCallback, GetCodecId(aConfig.mMimeType))
 {
   MOZ_COUNT_CTOR(FFmpegAudioDecoder);
   // Use a new MediaByteBuffer as the object will be modified during initialization.
@@ -27,7 +26,7 @@ FFmpegAudioDecoder<LIBAV_VER>::FFmpegAudioDecoder(
   mExtraData->AppendElements(*aConfig.mCodecSpecificConfig);
 }
 
-nsRefPtr<MediaDataDecoder::InitPromise>
+RefPtr<MediaDataDecoder::InitPromise>
 FFmpegAudioDecoder<LIBAV_VER>::Init()
 {
   nsresult rv = InitDecoder();
@@ -85,6 +84,7 @@ CopyAndPackAudio(AVFrame* aFrame, uint32_t aNumChannels, uint32_t aNumAFrames)
 void
 FFmpegAudioDecoder<LIBAV_VER>::DecodePacket(MediaRawData* aSample)
 {
+  MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
   AVPacket packet;
   av_init_packet(&packet);
 
@@ -126,7 +126,7 @@ FFmpegAudioDecoder<LIBAV_VER>::DecodePacket(MediaRawData* aSample)
         return;
       }
 
-      nsRefPtr<AudioData> data = new AudioData(samplePosition,
+      RefPtr<AudioData> data = new AudioData(samplePosition,
                                                pts.ToMicroseconds(),
                                                duration.ToMicroseconds(),
                                                mFrame->nb_samples,
@@ -154,18 +154,18 @@ FFmpegAudioDecoder<LIBAV_VER>::DecodePacket(MediaRawData* aSample)
 nsresult
 FFmpegAudioDecoder<LIBAV_VER>::Input(MediaRawData* aSample)
 {
-  nsCOMPtr<nsIRunnable> runnable(NS_NewRunnableMethodWithArg<nsRefPtr<MediaRawData>>(
-    this, &FFmpegAudioDecoder::DecodePacket, nsRefPtr<MediaRawData>(aSample)));
+  nsCOMPtr<nsIRunnable> runnable(NS_NewRunnableMethodWithArg<RefPtr<MediaRawData>>(
+    this, &FFmpegAudioDecoder::DecodePacket, RefPtr<MediaRawData>(aSample)));
   mTaskQueue->Dispatch(runnable.forget());
   return NS_OK;
 }
 
-nsresult
-FFmpegAudioDecoder<LIBAV_VER>::Drain()
+void
+FFmpegAudioDecoder<LIBAV_VER>::ProcessDrain()
 {
-  mTaskQueue->AwaitIdle();
+  MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
+  ProcessFlush();
   mCallback->DrainComplete();
-  return Flush();
 }
 
 AVCodecID

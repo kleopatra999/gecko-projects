@@ -68,7 +68,6 @@ pref("browser.cache.memory_limit", 5120); // 5 MB
 
 /* image cache prefs */
 pref("image.cache.size", 1048576); // bytes
-pref("image.high_quality_downscaling.enabled", false);
 
 /* offline cache prefs */
 pref("browser.offline-apps.notify", true);
@@ -558,10 +557,6 @@ pref("layers.low-precision-opacity", "1.0");
 // work harder keep scrolling smooth and memory low.
 pref("layers.max-active", 20);
 
-// Temporarily disable support for offsetX/Y to work around Google Maps bug
-// (bug 1150284)
-pref("dom.mouseEvent.offsetXY.enabled", false);
-
 pref("notification.feature.enabled", true);
 pref("dom.webnotifications.enabled", true);
 
@@ -586,10 +581,8 @@ pref("media.cache_readahead_limit", 30);
 pref("media.video-queue.default-size", 3);
 
 // Enable the MediaCodec PlatformDecoderModule by default.
-pref("media.fragmented-mp4.exposed", true);
-pref("media.fragmented-mp4.enabled", true);
-pref("media.fragmented-mp4.android-media-codec.enabled", true);
-pref("media.fragmented-mp4.android-media-codec.preferred", true);
+pref("media.android-media-codec.enabled", true);
+pref("media.android-media-codec.preferred", true);
 
 // Enable MSE
 pref("media.mediasource.enabled", true);
@@ -1007,12 +1000,12 @@ pref("dom.mozTCPSocket.enabled", true);
 pref("dom.mozContacts.enabled", true);
 
 // OOP apps.
-pref("dom.ipc.tabs.disabled", true);
+pref("dom.ipc.tabs.disabled", false);
 pref("dom.ipc.processCount", 100000);
 
 // Enable pre-launching content processes for improved startup time
 // (hiding latency).
-pref("dom.ipc.processPrelaunch.enabled", false);
+pref("dom.ipc.processPrelaunch.enabled", true);
 // Wait this long before pre-launching a new subprocess.
 pref("dom.ipc.processPrelaunch.delayMs", 5000);
 
@@ -1026,3 +1019,8 @@ pref("dom.ipc.systemMessageCPULockTimeoutSec", 30);
 pref("dom.wakelock.enabled", true);
 
 pref("dom.webcomponents.enabled", true);
+
+// Enable the Alarms API
+pref("dom.mozAlarms.enabled", true);
+
+pref("layout.css.scroll-snap.enabled", true);

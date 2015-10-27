@@ -19,6 +19,28 @@ import platform
 here = os.path.dirname(os.path.realpath(__file__))
 
 
+def _get_platform():
+    # get the platform we're interested in. Note that the values
+    # are used in TTest historically, this is why they are not really friendly.
+    # TODO: give some user friendly values
+    if platform.system() == "Linux":
+        return 'linux_'
+    elif platform.system() in ("Windows", "Microsoft"):
+        if '5.1' in platform.version():  # winxp
+            return 'win_'
+        elif '6.1' in platform.version():  # w7
+            return 'w7_'
+        elif '6.2' in platform.version():  # w8
+            return 'w8_'
+        else:
+            raise TalosError('unsupported windows version')
+    elif platform.system() == "Darwin":
+        return 'mac_'
+
+
+PLATFORM_TYPE = _get_platform()
+
+
 class Timer(object):
     def __init__(self):
         self._start_time = 0
@@ -37,16 +59,6 @@ def startLogger(levelChoice):
     log_levels = {'debug': logging.DEBUG, 'info': logging.INFO}
     logging.basicConfig(format='%(asctime)-15s %(levelname)s : %(message)s',
                         level=log_levels[levelChoice])
-
-
-def stamped_msg(msg_title, msg_action):
-    """Prints a message to the console with a time stamp
-    """
-    time_format = "%a, %d %b %Y %H:%M:%S"
-    msg_format = "%s: \n\t\t%s %s"
-    print msg_format % (msg_title, msg_action,
-                        time.strftime(time_format, time.localtime()))
-    sys.stdout.flush()
 
 
 class TalosError(Exception):

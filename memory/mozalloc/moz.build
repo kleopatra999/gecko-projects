@@ -40,9 +40,6 @@ GENERATED_INCLUDES += ['/xpcom']
 
 DISABLE_STL_WRAPPING = True
 
-if not CONFIG['CLANG_CXX'] and not CONFIG['_MSC_VER']:
-    ALLOW_COMPILER_WARNINGS = True
-
 DEFINES['IMPL_MFBT'] = True
 
 if CONFIG['_MSC_VER']:
@@ -51,3 +48,6 @@ if CONFIG['_MSC_VER']:
 LOCAL_INCLUDES += ['/memory/build']
 
 DIST_INSTALL = True
+
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']

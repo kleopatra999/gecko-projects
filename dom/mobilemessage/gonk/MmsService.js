@@ -16,7 +16,7 @@ Cu.import("resource://gre/modules/Promise.jsm");
 const GONK_MMSSERVICE_CONTRACTID = "@mozilla.org/mms/gonkmmsservice;1";
 const GONK_MMSSERVICE_CID = Components.ID("{9b069b8c-8697-11e4-a406-474f5190272b}");
 
-let DEBUG = false;
+var DEBUG = false;
 function debug(s) {
   dump("-@- MmsService: " + s + "\n");
 };
@@ -1647,7 +1647,7 @@ MmsService.prototype = {
 
     savable.receivers = [];
     // We don't have Bcc in recevied MMS message.
-    for each (let type in ["cc", "to"]) {
+    for (let type of ["cc", "to"]) {
       if (intermediate.headers[type]) {
         if (intermediate.headers[type] instanceof Array) {
           for (let index in intermediate.headers[type]) {

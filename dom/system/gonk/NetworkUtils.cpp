@@ -1438,6 +1438,17 @@ void NetworkUtils::disableIpv6(CommandChain* aChain,
   setIpv6Enabled(aChain, aCallback, aResult, false);
 }
 
+void NetworkUtils::setMtu(CommandChain* aChain,
+                          CommandCallback aCallback,
+                          NetworkResultOptions& aResult)
+{
+  char command[MAX_COMMAND_SIZE];
+  PR_snprintf(command, MAX_COMMAND_SIZE - 1, "interface setmtu %s %d",
+              GET_CHAR(mIfname), GET_FIELD(mMtu));
+
+  doCommand(command, aChain, aCallback);
+}
+
 #undef GET_CHAR
 #undef GET_FIELD
 
@@ -1676,6 +1687,7 @@ void NetworkUtils::ExecuteCommand(NetworkParams aOptions)
     BUILD_ENTRY(createNetwork),
     BUILD_ENTRY(destroyNetwork),
     BUILD_ENTRY(getNetId),
+    BUILD_ENTRY(setMtu),
 
     #undef BUILD_ENTRY
   };
@@ -2006,13 +2018,6 @@ CommandResult NetworkUtils::setDefaultRoute(NetworkParams& aOptions)
 CommandResult NetworkUtils::setDefaultRouteLegacy(NetworkParams& aOptions)
 {
   NS_ConvertUTF16toUTF8 autoIfname(aOptions.mIfname);
-
-  if (!aOptions.mOldIfname.IsEmpty()) {
-    // Remove IPv4's default route.
-    WARN_IF_FAILED(mNetUtils->do_ifc_remove_default_route(GET_CHAR(mOldIfname)));
-    // Remove IPv6's default route.
-    WARN_IF_FAILED(mNetUtils->do_ifc_remove_route(GET_CHAR(mOldIfname), "::", 0, NULL));
-  }
 
   uint32_t length = aOptions.mGateways.Length();
   if (length > 0) {
@@ -2719,6 +2724,23 @@ CommandResult NetworkUtils::getNetId(NetworkParams& aOptions)
   }
   result.mNetId.AppendInt(netIdInfo.mNetId, 10);
   return result;
+}
+
+CommandResult NetworkUtils::setMtu(NetworkParams& aOptions)
+{
+  // Setting/getting mtu is supported since Kitkat.
+  if (SDK_VERSION < 19) {
+    ERROR("setMtu is not supported in current SDK_VERSION.");
+    return -1;
+  }
+
+  static CommandFunc COMMAND_CHAIN[] = {
+    setMtu,
+    defaultAsyncSuccessHandler,
+  };
+
+  runChain(aOptions, COMMAND_CHAIN, defaultAsyncFailureHandler);
+  return CommandResult::Pending();
 }
 
 void NetworkUtils::sendBroadcastMessage(uint32_t code, char* reason)

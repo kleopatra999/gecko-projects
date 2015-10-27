@@ -11,7 +11,8 @@
 #include "nsIWebProgress.h"
 #include "nsServiceManagerUtils.h"
 #include "PresentationCallbacks.h"
-#include "PresentationSession.h"
+#include "PresentationRequest.h"
+#include "PresentationConnection.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -22,15 +23,15 @@ using namespace mozilla::dom;
 
 NS_IMPL_ISUPPORTS(PresentationRequesterCallback, nsIPresentationServiceCallback)
 
-PresentationRequesterCallback::PresentationRequesterCallback(nsPIDOMWindow* aWindow,
+PresentationRequesterCallback::PresentationRequesterCallback(PresentationRequest* aRequest,
                                                              const nsAString& aUrl,
                                                              const nsAString& aSessionId,
                                                              Promise* aPromise)
-  : mWindow(aWindow)
+  : mRequest(aRequest)
   , mSessionId(aSessionId)
   , mPromise(aPromise)
 {
-  MOZ_ASSERT(mWindow);
+  MOZ_ASSERT(mRequest);
   MOZ_ASSERT(mPromise);
   MOZ_ASSERT(!mSessionId.IsEmpty());
 }
@@ -46,16 +47,18 @@ PresentationRequesterCallback::NotifySuccess()
   MOZ_ASSERT(NS_IsMainThread());
 
   // At the sender side, this function must get called after the transport
-  // channel is ready. So we simply set the session state as connected.
-  nsRefPtr<PresentationSession> session =
-    PresentationSession::Create(mWindow, mSessionId, PresentationSessionState::Connected);
-  if (!session) {
-    mPromise->MaybeReject(NS_ERROR_DOM_ABORT_ERR);
+  // channel is ready. So we simply set the connection state as connected.
+  RefPtr<PresentationConnection> connection =
+    PresentationConnection::Create(mRequest->GetOwner(), mSessionId,
+                                   PresentationConnectionState::Connected);
+  if (NS_WARN_IF(!connection)) {
+    mPromise->MaybeReject(NS_ERROR_DOM_OPERATION_ERR);
     return NS_OK;
   }
 
-  mPromise->MaybeResolve(session);
-  return NS_OK;
+  mPromise->MaybeResolve(connection);
+
+  return mRequest->DispatchConnectionAvailableEvent(connection);
 }
 
 NS_IMETHODIMP
@@ -102,7 +105,7 @@ PresentationResponderLoadingCallback::Init(nsIDocShell* aDocShell)
     return rv;
   }
 
-  if ((busyFlags & nsIDocShell::BUSY_FLAGS_NONE) ||
+  if ((busyFlags == nsIDocShell::BUSY_FLAGS_NONE) ||
       (busyFlags & nsIDocShell::BUSY_FLAGS_PAGE_LOADING)) {
     // The docshell has finished loading or is receiving data (|STATE_TRANSFERRING|
     // has already been fired), so the page is ready for presentation use.

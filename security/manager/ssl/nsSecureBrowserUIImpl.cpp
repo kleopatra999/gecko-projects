@@ -31,6 +31,7 @@
 #include "imgIRequest.h"
 #include "nsThreadUtils.h"
 #include "nsNetCID.h"
+#include "nsNetUtil.h"
 #include "nsCRT.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIProtocolHandler.h"
@@ -70,10 +71,10 @@ RequestMapInitEntry(PLDHashEntryHdr *hdr, const void *key)
 }
 
 static const PLDHashTableOps gMapOps = {
-  PL_DHashVoidPtrKeyStub,
+  PLDHashTable::HashVoidPtrKeyStub,
   RequestMapMatchEntry,
-  PL_DHashMoveEntryStub,
-  PL_DHashClearEntryStub,
+  PLDHashTable::MoveEntryStub,
+  PLDHashTable::ClearEntryStub,
   RequestMapInitEntry
 };
 
@@ -859,7 +860,7 @@ nsSecureBrowserUIImpl::OnStateChange(nsIWebProgress* aWebProgress,
     // means, there has already been data transfered.
 
     ReentrantMonitorAutoEnter lock(mReentrantMonitor);
-    PL_DHashTableAdd(&mTransferringRequests, aRequest, fallible);
+    mTransferringRequests.Add(aRequest, fallible);
 
     return NS_OK;
   }
@@ -872,8 +873,9 @@ nsSecureBrowserUIImpl::OnStateChange(nsIWebProgress* aWebProgress,
   {
     { /* scope for the ReentrantMonitorAutoEnter */
       ReentrantMonitorAutoEnter lock(mReentrantMonitor);
-      if (PL_DHashTableSearch(&mTransferringRequests, aRequest)) {
-        PL_DHashTableRemove(&mTransferringRequests, aRequest);
+      PLDHashEntryHdr* entry = mTransferringRequests.Search(aRequest);
+      if (entry) {
+        mTransferringRequests.RemoveEntry(entry);
         requestHasTransferedData = true;
       }
     }

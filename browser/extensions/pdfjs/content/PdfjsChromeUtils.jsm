@@ -32,7 +32,7 @@ const PDF_CONTENT_TYPE = 'application/pdf';
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import('resource://gre/modules/Services.jsm');
 
-let Svc = {};
+var Svc = {};
 XPCOMUtils.defineLazyServiceGetter(Svc, 'mime',
                                    '@mozilla.org/mime;1',
                                    'nsIMIMEService');
@@ -50,11 +50,12 @@ var DEFAULT_PREFERENCES = {
   disableAutoFetch: false,
   disableFontFace: false,
   disableTextLayer: false,
-  useOnlyCssZoom: false
+  useOnlyCssZoom: false,
+  externalLinkTarget: 0,
 };
 
 
-let PdfjsChromeUtils = {
+var PdfjsChromeUtils = {
   // For security purposes when running remote, we restrict preferences
   // content can access.
   _allowedPrefNames: Object.keys(DEFAULT_PREFERENCES),

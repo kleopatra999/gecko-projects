@@ -422,14 +422,17 @@ nsStandardURL::NormalizeIDN(const nsCSubstring &host, nsCString &result)
 }
 
 bool
-nsStandardURL::ValidIPv6orHostname(const char *host)
+nsStandardURL::ValidIPv6orHostname(const char *host, uint32_t length)
 {
     if (!host || !*host) {
         // Should not be NULL or empty string
         return false;
     }
 
-    int32_t length = strlen(host);
+    if (length != strlen(host)) {
+        // Embedded null
+        return false;
+    }
 
     bool openBracket = host[0] == '[';
     bool closeBracket = host[length - 1] == ']';
@@ -443,8 +446,9 @@ nsStandardURL::ValidIPv6orHostname(const char *host)
         return false;
     }
 
-    if (PL_strchr(host, ':')) {
-        // Hostnames should not contain a colon
+    const char *end = host + length;
+    if (end != net_FindCharInSet(host, end, "\t\n\v\f\r #/:?@[\\]")) {
+        // % is allowed because we don't do hostname percent decoding yet.
         return false;
     }
 
@@ -582,6 +586,11 @@ nsStandardURL::BuildNormalizedSpec(const char *spec)
             approxLen += encHost.Length();
         else
             approxLen += mHost.mLen;
+
+        if ((useEncHost && !ValidIPv6orHostname(encHost.BeginReading(), encHost.Length())) ||
+            (!useEncHost && !ValidIPv6orHostname(tempHost.BeginReading(), tempHost.Length()))) {
+            return NS_ERROR_MALFORMED_URI;
+        }
     }
 
     //
@@ -964,6 +973,7 @@ NS_INTERFACE_MAP_BEGIN(nsStandardURL)
     NS_INTERFACE_MAP_ENTRY(nsIClassInfo)
     NS_INTERFACE_MAP_ENTRY(nsIMutable)
     NS_INTERFACE_MAP_ENTRY(nsIIPCSerializableURI)
+    NS_INTERFACE_MAP_ENTRY(nsISensitiveInfoHiddenURI)
     // see nsStandardURL::Equals
     if (aIID.Equals(kThisImplCID))
         foundInterface = static_cast<nsIURI *>(this);
@@ -980,6 +990,17 @@ NS_IMETHODIMP
 nsStandardURL::GetSpec(nsACString &result)
 {
     result = mSpec;
+    return NS_OK;
+}
+
+// result may contain unescaped UTF-8 characters
+NS_IMETHODIMP
+nsStandardURL::GetSensitiveInfoHiddenSpec(nsACString &result)
+{
+    result = mSpec;
+    if (mPassword.mLen >= 0) {
+      result.Replace(mPassword.mPos, mPassword.mLen, "****");
+    }
     return NS_OK;
 }
 
@@ -1597,14 +1618,10 @@ nsStandardURL::SetHost(const nsACString &input)
     if (strchr(host, ' '))
         return NS_ERROR_MALFORMED_URI;
 
-    if (!ValidIPv6orHostname(host)) {
-        return NS_ERROR_MALFORMED_URI;
-    }
-
     InvalidateCache();
     mHostEncoding = eEncoding_ASCII;
 
-    int32_t len;
+    uint32_t len;
     nsAutoCString hostBuf;
     if (NormalizeIDN(flat, hostBuf)) {
         host = hostBuf.get();
@@ -1612,6 +1629,10 @@ nsStandardURL::SetHost(const nsACString &input)
     }
     else
         len = flat.Length();
+
+    if (!ValidIPv6orHostname(host, len)) {
+        return NS_ERROR_MALFORMED_URI;
+    }
 
     if (mHost.mLen < 0) {
         int port_length = 0;
@@ -1766,7 +1787,7 @@ nsStandardURL::EqualsInternal(nsIURI *unknownOther,
     NS_ENSURE_ARG_POINTER(unknownOther);
     NS_PRECONDITION(result, "null pointer");
 
-    nsRefPtr<nsStandardURL> other;
+    RefPtr<nsStandardURL> other;
     nsresult rv = unknownOther->QueryInterface(kThisImplCID,
                                                getter_AddRefs(other));
     if (NS_FAILED(rv)) {
@@ -1883,7 +1904,7 @@ nsStandardURL::CloneInternal(nsStandardURL::RefHandlingEnum refHandlingMode,
                              nsIURI **result)
 
 {
-    nsRefPtr<nsStandardURL> clone = StartClone();
+    RefPtr<nsStandardURL> clone = StartClone();
     if (!clone)
         return NS_ERROR_OUT_OF_MEMORY;
 

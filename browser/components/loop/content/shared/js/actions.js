@@ -55,8 +55,7 @@ loop.shared.actions = (function() {
 
       // Optional Items. There are other optional items typically sent
       // around with this action. They are for the setup of calls and rooms and
-      // depend on the type. See LoopCalls and LoopRooms for the details of this
-      // data.
+      // depend on the type. See LoopRooms for the details of this data.
     }),
 
     /**
@@ -76,72 +75,12 @@ loop.shared.actions = (function() {
     }),
 
     /**
-     * Fetch a new room url from the server, intended to be sent over email when
-     * a contact can't be reached.
-     */
-    FetchRoomEmailLink: Action.define("fetchRoomEmailLink", {
-      roomName: String
-    }),
-
-    /**
-     * Used to cancel call setup.
-     */
-    CancelCall: Action.define("cancelCall", {
-    }),
-
-    /**
-     * Used to retry a failed call.
-     */
-    RetryCall: Action.define("retryCall", {
-    }),
-
-    /**
-     * Signals when the user wishes to accept a call.
-     */
-    AcceptCall: Action.define("acceptCall", {
-      callType: String
-    }),
-
-    /**
-     * Signals when the user declines a call.
-     */
-    DeclineCall: Action.define("declineCall", {
-      blockCaller: Boolean
-    }),
-
-    /**
-     * Used to initiate connecting of a call with the relevant
-     * sessionData.
-     */
-    ConnectCall: Action.define("connectCall", {
-      // This object contains the necessary details for the
-      // connection of the websocket, and the SDK
-      sessionData: Object
-    }),
-
-    /**
-     * Used for hanging up the call at the end of a successful call.
-     */
-    HangupCall: Action.define("hangupCall", {
-    }),
-
-    /**
      * Used to indicate the remote peer was disconnected for some reason.
      *
      * peerHungup is true if the peer intentionally disconnected, false otherwise.
      */
     RemotePeerDisconnected: Action.define("remotePeerDisconnected", {
       peerHungup: Boolean
-    }),
-
-    /**
-     * Used for notifying of connection progress state changes.
-     * The connection refers to the overall connection flow as indicated
-     * on the websocket.
-     */
-    ConnectionProgress: Action.define("connectionProgress", {
-      // The connection state from the websocket.
-      wsState: String
     }),
 
     /**
@@ -228,39 +167,31 @@ loop.shared.actions = (function() {
     }),
 
     /**
-     * Video has been enabled from the remote sender.
+     * A stream from local or remote media has been created.
+     */
+    MediaStreamCreated: Action.define("mediaStreamCreated", {
+      hasVideo: Boolean,
+      isLocal: Boolean,
+      srcMediaElement: Object
+    }),
+
+    /**
+     * A stream from local or remote media has been destroyed.
+     */
+    MediaStreamDestroyed: Action.define("mediaStreamDestroyed", {
+      isLocal: Boolean
+    }),
+
+    /**
+     * Used to inform that the remote stream has enabled or disabled the video
+     * part of the stream.
      *
-     * XXX somewhat tangled up with remote video muting semantics; see bug
-     * 1171969
-     *
-     * @note if/when we want to untangle this, we'll may want to include the
-     *       reason provided by the SDK and documented hereI:
+     * @note We'll may want to include the future the reason provided by the SDK
+     *       and documented here:
      *       https://tokbox.com/opentok/libraries/client/js/reference/VideoEnabledChangedEvent.html
      */
-    RemoteVideoEnabled: Action.define("remoteVideoEnabled", {
-      /* The SDK video object that the views will be copying the remote
-         stream from. */
-      srcVideoObject: Object
-    }),
-
-    /**
-     * Video has been disabled by the remote sender.
-     *
-     *  @see RemoteVideoEnabled
-     */
-    RemoteVideoDisabled: Action.define("remoteVideoDisabled", {
-    }),
-
-    /**
-     * Video from the local camera has been enabled.
-     *
-     * XXX we should implement a LocalVideoDisabled action to cleanly prevent
-     * leakage; see bug 1171978 for details
-     */
-    LocalVideoEnabled: Action.define("localVideoEnabled", {
-      /* The SDK video object that the views will be copying the remote
-         stream from. */
-      srcVideoObject: Object
+    RemoteVideoStatus: Action.define("remoteVideoStatus", {
+      videoEnabled: Boolean
     }),
 
     /**
@@ -302,7 +233,7 @@ loop.shared.actions = (function() {
      */
     ReceivingScreenShare: Action.define("receivingScreenShare", {
       receiving: Boolean
-      // srcVideoObject: Object (only present if receiving is true)
+      // srcMediaElement: Object (only present if receiving is true)
     }),
 
     /**
@@ -459,32 +390,28 @@ loop.shared.actions = (function() {
     }),
 
     /**
-     * Sets up the room information when it is received.
-     * XXX: should move to some roomActions module - refs bug 1079284
-     *
-     * @see https://wiki.mozilla.org/Loop/Architecture/Rooms#GET_.2Frooms.2F.7Btoken.7D
-     */
-    SetupRoomInfo: Action.define("setupRoomInfo", {
-      // roomContextUrls: Array - Optional.
-      // roomDescription: String - Optional.
-      // roomName: String - Optional.
-      roomToken: String,
-      roomUrl: String,
-      socialShareProviders: Array
-    }),
-
-    /**
      * Updates the room information when it is received.
      * XXX: should move to some roomActions module - refs bug 1079284
      *
      * @see https://wiki.mozilla.org/Loop/Architecture/Rooms#GET_.2Frooms.2F.7Btoken.7D
      */
     UpdateRoomInfo: Action.define("updateRoomInfo", {
-      // description: String - Optional.
-      // roomName: String - Optional.
-      roomUrl: String
-      // urls: Array - Optional.
+      // participants: Array - Optional.
+      // roomContextUrls: Array - Optional.
       // See https://wiki.mozilla.org/Loop/Architecture/Context#Format_of_context.value
+      // roomDescription: String - Optional.
+      // roomInfoFailure: String - Optional.
+      // roomName: String - Optional.
+      // roomState: String - Optional.
+      roomUrl: String
+      // socialShareProviders: Array - Optional.
+    }),
+
+    /**
+     * Notifies if the user agent will handle the room or not.
+     */
+    UserAgentHandlesRoom: Action.define("userAgentHandlesRoom", {
+      handlesRoom: Boolean
     }),
 
     /**
@@ -500,6 +427,16 @@ loop.shared.actions = (function() {
      * XXX: should move to some roomActions module - refs bug 1079284
      */
     JoinRoom: Action.define("joinRoom", {
+    }),
+
+    /**
+     * A special action for metrics logging to define what type of join
+     * occurred when JoinRoom was activated.
+     * XXX: should move to some roomActions module - refs bug 1079284
+     */
+    MetricsLogJoinRoom: Action.define("metricsLogJoinRoom", {
+      userAgentHandledRoom: Boolean
+      // ownRoom: Boolean - Optional. Expected if firefoxHandledRoom is true.
     }),
 
     /**

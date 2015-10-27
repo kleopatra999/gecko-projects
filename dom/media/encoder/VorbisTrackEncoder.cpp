@@ -56,9 +56,12 @@ VorbisTrackEncoder::Init(int aChannels, int aSamplingRate)
 
   int ret = 0;
   vorbis_info_init(&mVorbisInfo);
+  double quality = mAudioBitrate ? (double)mAudioBitrate/aSamplingRate :
+                   BASE_QUALITY;
 
+  printf("quality %f \n", quality);
   ret = vorbis_encode_init_vbr(&mVorbisInfo, mChannels, mSamplingRate,
-                               BASE_QUALITY);
+                               quality);
 
   mInitialized = (ret == 0);
 
@@ -101,7 +104,7 @@ VorbisTrackEncoder::GetMetadata()
 
   // Vorbis codec specific data
   // http://matroska.org/technical/specs/codecid/index.html
-  nsRefPtr<VorbisMetadata> meta = new VorbisMetadata();
+  RefPtr<VorbisMetadata> meta = new VorbisMetadata();
   meta->mBitDepth = 32; // float for desktop
   meta->mChannels = mChannels;
   meta->mSamplingFrequency = mSamplingRate;

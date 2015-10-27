@@ -231,7 +231,7 @@ NS_IMETHODIMP nsXULWindow::SetZLevel(uint32_t aLevel)
     nsCOMPtr<nsIDocument> doc = cv->GetDocument();
     if (doc) {
       ErrorResult rv;
-      nsRefPtr<dom::Event> event =
+      RefPtr<dom::Event> event =
         doc->CreateEvent(NS_LITERAL_STRING("Events"),rv);
       if (event) {
         event->InitEvent(NS_LITERAL_STRING("windowZLevel"), true, false);
@@ -316,6 +316,37 @@ NS_IMETHODIMP nsXULWindow::GetPrimaryContentShell(nsIDocShellTreeItem**
 {
   NS_ENSURE_ARG_POINTER(aDocShellTreeItem);
   NS_IF_ADDREF(*aDocShellTreeItem = mPrimaryContentShell);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULWindow::TabParentAdded(nsITabParent* aTab, bool aPrimary)
+{
+  if (aPrimary) {
+    mPrimaryTabParent = aTab;
+    mPrimaryContentShell = nullptr;
+  } else if (mPrimaryTabParent == aTab) {
+    mPrimaryTabParent = nullptr;
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULWindow::TabParentRemoved(nsITabParent* aTab)
+{
+  if (aTab == mPrimaryTabParent) {
+    mPrimaryTabParent = nullptr;
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXULWindow::GetPrimaryTabParent(nsITabParent** aTab)
+{
+  nsCOMPtr<nsITabParent> tab = mPrimaryTabParent;
+  tab.forget(aTab);
   return NS_OK;
 }
 
@@ -994,9 +1025,12 @@ void nsXULWindow::OnChromeLoaded()
         nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
         docShellAsItem->GetTreeOwner(getter_AddRefs(treeOwner));
         if (treeOwner) {
-          int32_t width, height;
-          cv->GetContentSize(&width, &height);
-          treeOwner->SizeShellTo(docShellAsItem, width, height);
+          // GetContentSize can fail, so initialise |width| and |height| to be
+          // on the safe side.
+          int32_t width = 0, height = 0;
+          if (NS_SUCCEEDED(cv->GetContentSize(&width, &height))) {
+            treeOwner->SizeShellTo(docShellAsItem, width, height);
+          }
         }
       }
     }
@@ -1148,9 +1182,8 @@ bool nsXULWindow::LoadSizeFromXUL()
     // constrain to screen size
     nsCOMPtr<nsIDOMWindow> domWindow;
     GetWindowDOMWindow(getter_AddRefs(domWindow));
-    if (domWindow) {
-      nsCOMPtr<nsIDOMScreen> screen;
-      domWindow->GetScreen(getter_AddRefs(screen));
+    if (nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(domWindow)) {
+      nsCOMPtr<nsIDOMScreen> screen = window->GetScreen();
       if (screen) {
         int32_t screenWidth;
         int32_t screenHeight;
@@ -1234,7 +1267,8 @@ bool nsXULWindow::LoadMiscPersistentAttributesFromXUL()
   if (sizeMode == nsSizeMode_Fullscreen) {
     nsCOMPtr<nsIDOMWindow> ourWindow;
     GetWindowDOMWindow(getter_AddRefs(ourWindow));
-    ourWindow->SetFullScreen(true);
+    nsCOMPtr<nsPIDOMWindow> piWindow = do_QueryInterface(ourWindow);
+    piWindow->SetFullScreen(true);
   } else {
     mWindow->SetSizeMode(sizeMode);
   }
@@ -1447,6 +1481,11 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
     return NS_OK;
   }
 
+  bool isFullscreen = false;
+  if (nsPIDOMWindow* domWindow = mDocShell->GetWindow()) {
+    isFullscreen = domWindow->GetFullScreen();
+  }
+
   // get our size, position and mode to persist
   nsIntRect rect;
   bool gotRestoredBounds = NS_SUCCEEDED(mWindow->GetRestoredBounds(rect));
@@ -1474,6 +1513,7 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
     docShellElement->GetId(windowElementId);
   }
 
+  bool shouldPersist = !isFullscreen && ownerXULDoc;
   ErrorResult rv;
   // (only for size elements which are persisted)
   if ((mPersistentAttributesDirty & PAD_POSITION) && gotRestoredBounds) {
@@ -1481,15 +1521,17 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
       PR_snprintf(sizeBuf, sizeof(sizeBuf), "%d", NSToIntRound(rect.x / scale.scale));
       sizeString.AssignWithConversion(sizeBuf);
       docShellElement->SetAttribute(SCREENX_ATTRIBUTE, sizeString, rv);
-      if (ownerXULDoc) // force persistence in case the value didn't change
+      if (shouldPersist) {
         ownerXULDoc->Persist(windowElementId, SCREENX_ATTRIBUTE);
+      }
     }
     if (persistString.Find("screenY") >= 0) {
       PR_snprintf(sizeBuf, sizeof(sizeBuf), "%d", NSToIntRound(rect.y / scale.scale));
       sizeString.AssignWithConversion(sizeBuf);
       docShellElement->SetAttribute(SCREENY_ATTRIBUTE, sizeString, rv);
-      if (ownerXULDoc)
+      if (shouldPersist) {
         ownerXULDoc->Persist(windowElementId, SCREENY_ATTRIBUTE);
+      }
     }
   }
 
@@ -1498,15 +1540,17 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
       PR_snprintf(sizeBuf, sizeof(sizeBuf), "%d", NSToIntRound(rect.width / scale.scale));
       sizeString.AssignWithConversion(sizeBuf);
       docShellElement->SetAttribute(WIDTH_ATTRIBUTE, sizeString, rv);
-      if (ownerXULDoc)
+      if (shouldPersist) {
         ownerXULDoc->Persist(windowElementId, WIDTH_ATTRIBUTE);
+      }
     }
     if (persistString.Find("height") >= 0) {
       PR_snprintf(sizeBuf, sizeof(sizeBuf), "%d", NSToIntRound(rect.height / scale.scale));
       sizeString.AssignWithConversion(sizeBuf);
       docShellElement->SetAttribute(HEIGHT_ATTRIBUTE, sizeString, rv);
-      if (ownerXULDoc)
+      if (shouldPersist) {
         ownerXULDoc->Persist(windowElementId, HEIGHT_ATTRIBUTE);
+      }
     }
   }
 
@@ -1521,8 +1565,9 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
       else
         sizeString.Assign(SIZEMODE_NORMAL);
       docShellElement->SetAttribute(MODE_ATTRIBUTE, sizeString, rv);
-      if (ownerXULDoc && persistString.Find("sizemode") >= 0)
+      if (shouldPersist && persistString.Find("sizemode") >= 0) {
         ownerXULDoc->Persist(windowElementId, MODE_ATTRIBUTE);
+      }
     }
     if (persistString.Find("zlevel") >= 0) {
       uint32_t zLevel;
@@ -1532,7 +1577,9 @@ NS_IMETHODIMP nsXULWindow::SavePersistentAttributes()
         PR_snprintf(sizeBuf, sizeof(sizeBuf), "%lu", (unsigned long)zLevel);
         sizeString.AssignWithConversion(sizeBuf);
         docShellElement->SetAttribute(ZLEVEL_ATTRIBUTE, sizeString, rv);
-        ownerXULDoc->Persist(windowElementId, ZLEVEL_ATTRIBUTE);
+        if (shouldPersist) {
+          ownerXULDoc->Persist(windowElementId, ZLEVEL_ATTRIBUTE);
+        }
       }
     }
   }
@@ -1597,6 +1644,7 @@ nsresult nsXULWindow::ContentShellAdded(nsIDocShellTreeItem* aContentShell,
     NS_ENSURE_SUCCESS(EnsurePrimaryContentTreeOwner(), NS_ERROR_FAILURE);
     aContentShell->SetTreeOwner(mPrimaryContentTreeOwner);
     mPrimaryContentShell = aContentShell;
+    mPrimaryTabParent = nullptr;
   }
   else {
     NS_ENSURE_SUCCESS(EnsureContentTreeOwner(), NS_ERROR_FAILURE);
@@ -1976,8 +2024,8 @@ void nsXULWindow::SetContentScrollbarVisibility(bool aVisible)
   if (contentWin) {
     mozilla::ErrorResult rv;
 
-    nsRefPtr<nsGlobalWindow> window = static_cast<nsGlobalWindow*>(contentWin.get());
-    nsRefPtr<mozilla::dom::BarProp> scrollbars = window->GetScrollbars(rv);
+    RefPtr<nsGlobalWindow> window = static_cast<nsGlobalWindow*>(contentWin.get());
+    RefPtr<mozilla::dom::BarProp> scrollbars = window->GetScrollbars(rv);
     if (scrollbars) {
       scrollbars->SetVisible(aVisible, rv);
     }

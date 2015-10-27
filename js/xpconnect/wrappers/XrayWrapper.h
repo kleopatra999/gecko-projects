@@ -446,7 +446,7 @@ class XrayWrapper : public Base {
     virtual bool isExtensible(JSContext* cx, JS::Handle<JSObject*> wrapper, bool* extensible) const override;
     virtual bool has(JSContext* cx, JS::Handle<JSObject*> wrapper, JS::Handle<jsid> id,
                      bool* bp) const override;
-    virtual bool get(JSContext* cx, JS::Handle<JSObject*> wrapper, JS::Handle<JSObject*> receiver,
+    virtual bool get(JSContext* cx, JS::Handle<JSObject*> wrapper, JS::HandleValue receiver,
                      JS::Handle<jsid> id, JS::MutableHandle<JS::Value> vp) const override;
     virtual bool set(JSContext* cx, JS::Handle<JSObject*> wrapper, JS::Handle<jsid> id,
                      JS::Handle<JS::Value> v, JS::Handle<JS::Value> receiver,
@@ -465,9 +465,6 @@ class XrayWrapper : public Base {
                                               JS::AutoIdVector& props) const override;
 
     virtual const char* className(JSContext* cx, JS::HandleObject proxy) const override;
-    virtual bool defaultValue(JSContext* cx, JS::HandleObject wrapper,
-                              JSType hint, JS::MutableHandleValue vp)
-                              const override;
 
     static const XrayWrapper singleton;
 
@@ -520,7 +517,7 @@ public:
     // which implement them in terms of lower-level methods.
     virtual bool has(JSContext* cx, JS::Handle<JSObject*> proxy, JS::Handle<jsid> id,
                      bool* bp) const override;
-    virtual bool get(JSContext* cx, JS::Handle<JSObject*> proxy, JS::Handle<JSObject*> receiver,
+    virtual bool get(JSContext* cx, JS::Handle<JSObject*> proxy, JS::HandleValue receiver,
                      JS::Handle<jsid> id, JS::MutableHandle<JS::Value> vp) const override;
     virtual bool set(JSContext* cx, JS::Handle<JSObject*> proxy, JS::Handle<jsid> id,
                      JS::Handle<JS::Value> v, JS::Handle<JS::Value> receiver,

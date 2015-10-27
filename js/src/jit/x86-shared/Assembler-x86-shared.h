@@ -10,7 +10,14 @@
 #include <cstddef>
 
 #include "jit/shared/Assembler-shared.h"
-#include "jit/x86-shared/BaseAssembler-x86-shared.h"
+
+#if defined(JS_CODEGEN_X86)
+# include "jit/x86/BaseAssembler-x86.h"
+#elif defined(JS_CODEGEN_X64)
+# include "jit/x64/BaseAssembler-x64.h"
+#else
+# error "Unknown architecture!"
+#endif
 
 namespace js {
 namespace jit {
@@ -243,7 +250,6 @@ class AssemblerX86Shared : public AssemblerShared
         { }
     };
 
-    Vector<CodeLabel, 0, SystemAllocPolicy> codeLabels_;
     Vector<RelativePatch, 8, SystemAllocPolicy> jumps_;
     CompactBufferWriter jumpRelocations_;
     CompactBufferWriter dataRelocations_;
@@ -261,7 +267,7 @@ class AssemblerX86Shared : public AssemblerShared
     }
 
   protected:
-    X86Encoding::BaseAssembler masm;
+    X86Encoding::BaseAssemblerSpecific masm;
 
     typedef X86Encoding::JmpSrc JmpSrc;
     typedef X86Encoding::JmpDst JmpDst;
@@ -399,16 +405,6 @@ class AssemblerX86Shared : public AssemblerShared
     void copyJumpRelocationTable(uint8_t* dest);
     void copyDataRelocationTable(uint8_t* dest);
     void copyPreBarrierTable(uint8_t* dest);
-
-    void addCodeLabel(CodeLabel label) {
-        propagateOOM(codeLabels_.append(label));
-    }
-    size_t numCodeLabels() const {
-        return codeLabels_.length();
-    }
-    CodeLabel codeLabel(size_t i) {
-        return codeLabels_[i];
-    }
 
     // Size of the instruction stream, in bytes.
     size_t size() const {
@@ -3127,10 +3123,6 @@ class AssemblerX86Shared : public AssemblerShared
     }
 
     // Defined for compatibility with ARM's assembler
-    uint32_t actualOffset(uint32_t x) {
-        return x;
-    }
-
     uint32_t actualIndex(uint32_t x) {
         return x;
     }

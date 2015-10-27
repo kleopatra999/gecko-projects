@@ -113,6 +113,18 @@ CSSTransition::GetAnimationManager() const
 }
 
 void
+CSSTransition::UpdateTiming(SeekFlag aSeekFlag, SyncNotifyFlag aSyncNotifyFlag)
+{
+  if (mNeedsNewAnimationIndexWhenRun &&
+      PlayState() != AnimationPlayState::Idle) {
+    mAnimationIndex = sNextAnimationIndex++;
+    mNeedsNewAnimationIndexWhenRun = false;
+  }
+
+  Animation::UpdateTiming(aSeekFlag, aSyncNotifyFlag);
+}
+
+void
 CSSTransition::QueueEvents()
 {
   AnimationPlayState playState = PlayState();
@@ -133,23 +145,14 @@ CSSTransition::QueueEvents()
   if (!presContext) {
     return;
   }
+
   nsTransitionManager* manager = presContext->TransitionManager();
-
-  manager->QueueEvent(
-    TransitionEventInfo(owningElement, TransitionProperty(),
-                        mEffect->Timing().mIterationDuration,
-                        owningPseudoType));
-}
-
-bool
-CSSTransition::HasEndEventToQueue() const
-{
-  if (!mEffect) {
-    return false;
-  }
-
-  return !mWasFinishedOnLastTick &&
-         PlayState() == AnimationPlayState::Finished;
+  manager->QueueEvent(TransitionEventInfo(owningElement, owningPseudoType,
+                                          TransitionProperty(),
+                                          mEffect->Timing()
+                                            .mIterationDuration,
+                                          AnimationTimeToTimeStamp(EffectEnd()),
+                                          this));
 }
 
 void
@@ -187,26 +190,23 @@ CSSTransition::HasLowerCompositeOrderThan(const Animation& aOther) const
 
   // 2. CSS transitions that correspond to a transition-property property sort
   // lower than CSS transitions owned by script.
-  if (!IsUsingCustomCompositeOrder()) {
-    return !aOther.IsUsingCustomCompositeOrder() ?
+  if (!IsTiedToMarkup()) {
+    return !otherTransition->IsTiedToMarkup() ?
            Animation::HasLowerCompositeOrderThan(aOther) :
            false;
   }
-  if (!aOther.IsUsingCustomCompositeOrder()) {
+  if (!otherTransition->IsTiedToMarkup()) {
     return true;
   }
 
   // 3. Sort by document order
-  MOZ_ASSERT(mOwningElement.IsSet() && otherTransition->OwningElement().IsSet(),
-             "Transitions using custom composite order should have an owning "
-             "element");
-  if (!mOwningElement.Equals(otherTransition->OwningElement())) {
-    return mOwningElement.LessThan(otherTransition->OwningElement());
+  if (!mOwningElement.Equals(otherTransition->mOwningElement)) {
+    return mOwningElement.LessThan(otherTransition->mOwningElement);
   }
 
   // 4. (Same element and pseudo): Sort by transition generation
-  if (mSequenceNum != otherTransition->mSequenceNum) {
-    return mSequenceNum < otherTransition->mSequenceNum;
+  if (mAnimationIndex != otherTransition->mAnimationIndex) {
+    return mAnimationIndex < otherTransition->mAnimationIndex;
   }
 
   // 5. (Same transition generation): Sort by transition property
@@ -229,7 +229,7 @@ NS_INTERFACE_MAP_END
 void
 nsTransitionManager::StyleContextChanged(dom::Element *aElement,
                                          nsStyleContext *aOldStyleContext,
-                                         nsRefPtr<nsStyleContext>* aNewStyleContext /* inout */)
+                                         RefPtr<nsStyleContext>* aNewStyleContext /* inout */)
 {
   nsStyleContext* newStyleContext = *aNewStyleContext;
 
@@ -330,7 +330,7 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
   // style", which is the new style without any data from transitions,
   // but still inheriting from data that contains transitions that are
   // not stopping or starting right now.
-  nsRefPtr<nsStyleContext> afterChangeStyle;
+  RefPtr<nsStyleContext> afterChangeStyle;
   if (collection) {
     nsStyleSet* styleSet = mPresContext->StyleSet();
     afterChangeStyle =
@@ -476,7 +476,7 @@ nsTransitionManager::StyleContextChanged(dom::Element *aElement,
     // creates a new style rule if we started *or* stopped transitions.
     collection->mStyleRuleRefreshTime = TimeStamp();
     collection->UpdateCheckGeneration(mPresContext);
-    collection->mNeedsRefreshes = true;
+    collection->mStyleChanging = true;
     TimeStamp now = mPresContext->RefreshDriver()->MostRecentRefresh();
     collection->EnsureStyleRuleFor(now);
   }
@@ -661,7 +661,7 @@ nsTransitionManager::ConsiderStartingTransition(
   timing.mDirection = NS_STYLE_ANIMATION_DIRECTION_NORMAL;
   timing.mFillMode = NS_STYLE_ANIMATION_FILL_MODE_BACKWARDS;
 
-  nsRefPtr<ElementPropertyTransition> pt =
+  RefPtr<ElementPropertyTransition> pt =
     new ElementPropertyTransition(aElement->OwnerDoc(), aElement,
                                   aNewStyleContext->GetPseudoType(), timing);
   pt->mStartForReversingTest = startForReversingTest;
@@ -678,7 +678,7 @@ nsTransitionManager::ConsiderStartingTransition(
   segment.mToKey = 1;
   segment.mTimingFunction.Init(tf);
 
-  nsRefPtr<CSSTransition> animation =
+  RefPtr<CSSTransition> animation =
     new CSSTransition(mPresContext->Document()->GetScopeObject());
   animation->SetOwningElement(
     OwningElementRef(*aElement, aNewStyleContext->GetPseudoType()));

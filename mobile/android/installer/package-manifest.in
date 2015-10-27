@@ -2,7 +2,7 @@
 ; License, v. 2.0. If a copy of the MPL was not distributed with this
 ; file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-; Package file for the Fennec build. 
+; Package file for the Fennec build.
 ;
 ; File format:
 ;
@@ -138,6 +138,7 @@
 @BINPATH@/components/dom.xpt
 @BINPATH@/components/dom_activities.xpt
 @BINPATH@/components/dom_apps.xpt
+@BINPATH@/components/dom_newapps.xpt
 @BINPATH@/components/dom_base.xpt
 @BINPATH@/components/dom_canvas.xpt
 @BINPATH@/components/dom_core.xpt
@@ -205,6 +206,9 @@
 @BINPATH@/components/layout_xul.xpt
 @BINPATH@/components/locale.xpt
 @BINPATH@/components/lwbrk.xpt
+#ifdef MOZ_ENABLE_PROFILER_SPS
+@BINPATH@/components/memory_profiler.xpt
+#endif
 @BINPATH@/components/migration.xpt
 @BINPATH@/components/mimetype.xpt
 @BINPATH@/components/mozfind.xpt
@@ -306,8 +310,12 @@
 @BINPATH@/components/SettingsManager.manifest
 @BINPATH@/components/BrowserElementParent.manifest
 @BINPATH@/components/BrowserElementParent.js
+@BINPATH@/components/BrowserElementProxy.manifest
+@BINPATH@/components/BrowserElementProxy.js
 @BINPATH@/components/FeedProcessor.manifest
 @BINPATH@/components/FeedProcessor.js
+@BINPATH@/components/PackagedAppUtils.manifest
+@BINPATH@/components/PackagedAppUtils.js
 @BINPATH@/components/BrowserFeeds.manifest
 @BINPATH@/components/FeedConverter.js
 @BINPATH@/components/FeedWriter.js
@@ -394,9 +402,6 @@
 @BINPATH@/components/contentAreaDropListener.js
 @BINPATH@/components/messageWakeupService.js
 @BINPATH@/components/messageWakeupService.manifest
-#ifdef MOZ_ENABLE_DBUS
-@BINPATH@/components/@DLL_PREFIX@dbusservice@DLL_SUFFIX@
-#endif
 @BINPATH@/components/nsINIProcessor.manifest
 @BINPATH@/components/nsINIProcessor.js
 @BINPATH@/components/nsPrompter.manifest
@@ -425,10 +430,8 @@
 @BINPATH@/components/SystemMessageCache.js
 @BINPATH@/components/SystemMessageManager.manifest
 
-@BINPATH@/components/TCPSocket.js
-@BINPATH@/components/TCPSocketParentIntermediary.js
-@BINPATH@/components/TCPServerSocket.js
-@BINPATH@/components/TCPSocket.manifest
+@BINPATH@/components/InstallPackagedWebapp.manifest
+@BINPATH@/components/InstallPackagedWebapp.js
 
 #ifdef MOZ_WEBRTC
 @BINPATH@/components/PeerConnection.js
@@ -463,6 +466,8 @@
 @BINPATH@/components/PresentationDeviceInfoManager.js
 @BINPATH@/components/BuiltinProviders.manifest
 @BINPATH@/components/TCPPresentationServer.js
+@BINPATH@/components/PresentationNetworkHelper.js
+@BINPATH@/components/PresentationNetworkHelper.manifest
 
 @BINPATH@/components/PACGenerator.js
 @BINPATH@/components/PACGenerator.manifest
@@ -507,6 +512,9 @@
 @BINPATH@/chrome/icons/default/default48.png
 #endif
 
+; DevTools
+@BINPATH@/chrome/devtools@JAREXT@
+@BINPATH@/chrome/devtools.manifest
 
 ; shell icons
 #ifdef XP_UNIX
@@ -525,7 +533,7 @@
 @BINPATH@/defaults/profile/prefs.js
 
 ; [Layout Engine Resources]
-; Style Sheets, Graphics and other Resources used by the layout engine. 
+; Style Sheets, Graphics and other Resources used by the layout engine.
 @BINPATH@/res/EditorOverride.css
 @BINPATH@/res/contenteditable.css
 @BINPATH@/res/designmode.css
@@ -605,16 +613,10 @@ bin/libfreebl_32int64_3.so
 #endif
 
 ; [Crash Reporter]
-;
+; CrashService is not used on Android but the ini files are required for L10N
+; strings, see bug 1191351.
 #ifdef MOZ_CRASHREPORTER
-@BINPATH@/components/CrashService.manifest
-@BINPATH@/components/CrashService.js
-@BINPATH@/crashreporter@BIN_SUFFIX@
-@BINPATH@/crashreporter.crt
 @BINPATH@/crashreporter.ini
-#ifdef XP_UNIX
-@BINPATH@/Throbber-small.gif
-#endif
 @BINPATH@/crashreporter-override.ini
 #endif
 
@@ -629,6 +631,7 @@ bin/libfreebl_32int64_3.so
 @BINPATH@/components/ColorPicker.js
 @BINPATH@/components/ContentDispatchChooser.js
 @BINPATH@/components/ContentPermissionPrompt.js
+@BINPATH@/components/ImageBlockingPolicy.js
 @BINPATH@/components/DirectoryProvider.js
 @BINPATH@/components/FilePicker.js
 @BINPATH@/components/HelperAppDialog.js
@@ -656,7 +659,7 @@ bin/libfreebl_32int64_3.so
 @BINPATH@/components/browsercomps.xpt
 
 #ifdef ENABLE_MARIONETTE
-@BINPATH@/chrome/marionette@JAREXT@ 
+@BINPATH@/chrome/marionette@JAREXT@
 @BINPATH@/chrome/marionette.manifest
 @BINPATH@/components/MarionetteComponents.manifest
 @BINPATH@/components/marionettecomponent.js

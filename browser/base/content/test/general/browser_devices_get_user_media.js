@@ -223,9 +223,9 @@ function* checkNotSharing() {
   yield* assertWebRTCIndicatorStatus(null);
 }
 
-const permissionError = "error: PermissionDeniedError: The user did not grant permission for the operation.";
+const permissionError = "error: SecurityError: The operation is insecure.";
 
-let gTests = [
+var gTests = [
 
 {
   desc: "getUserMedia audio+video",

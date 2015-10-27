@@ -12,12 +12,11 @@
 #include <stdint.h>
 #include <inttypes.h>  // For PRId64
 
-#define OPUS_DEBUG(arg, ...) MOZ_LOG(gMediaDecoderLog, mozilla::LogLevel::Debug, \
+extern PRLogModuleInfo* GetPDMLog();
+#define OPUS_DEBUG(arg, ...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, \
     ("OpusDataDecoder(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
 
 namespace mozilla {
-
-extern PRLogModuleInfo* gMediaDecoderLog;
 
 OpusDataDecoder::OpusDataDecoder(const AudioInfo& aConfig,
                                  FlushableTaskQueue* aTaskQueue,
@@ -47,7 +46,7 @@ OpusDataDecoder::Shutdown()
   return NS_OK;
 }
 
-nsRefPtr<MediaDataDecoder::InitPromise>
+RefPtr<MediaDataDecoder::InitPromise>
 OpusDataDecoder::Init()
 {
   size_t length = mInfo.mCodecSpecificConfig->Length();
@@ -115,9 +114,9 @@ nsresult
 OpusDataDecoder::Input(MediaRawData* aSample)
 {
   nsCOMPtr<nsIRunnable> runnable(
-    NS_NewRunnableMethodWithArg<nsRefPtr<MediaRawData>>(
+    NS_NewRunnableMethodWithArg<RefPtr<MediaRawData>>(
       this, &OpusDataDecoder::Decode,
-      nsRefPtr<MediaRawData>(aSample)));
+      RefPtr<MediaRawData>(aSample)));
   mTaskQueue->Dispatch(runnable.forget());
 
   return NS_OK;

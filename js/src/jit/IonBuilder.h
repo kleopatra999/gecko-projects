@@ -215,6 +215,9 @@ class IonBuilder
                const OptimizationInfo* optimizationInfo, BaselineFrameInspector* baselineFrame,
                size_t inliningDepth = 0, uint32_t loopDepth = 0);
 
+    // Callers of build() and buildInline() should always check whether the
+    // call overrecursed, if false is returned.  Overrecursion is not
+    // signaled as OOM and will not in general be caught by OOM paths.
     bool build();
     bool buildInline(IonBuilder* callerBuilder, MResumePoint* callerResumePoint,
                      CallInfo& callInfo);
@@ -260,6 +263,7 @@ class IonBuilder
     ControlStatus processTryEnd(CFGState& state);
     ControlStatus processReturn(JSOp op);
     ControlStatus processThrow();
+    ControlStatus processThrowSetConst();
     ControlStatus processContinue(JSOp op);
     ControlStatus processBreak(JSOp op, jssrcnote* sn);
     ControlStatus maybeLoop(JSOp op, jssrcnote* sn);
@@ -380,10 +384,10 @@ class IonBuilder
 
     JSObject* getSingletonPrototype(JSFunction* target);
 
-    MDefinition* createThisScripted(MDefinition* callee);
+    MDefinition* createThisScripted(MDefinition* callee, MDefinition* newTarget);
     MDefinition* createThisScriptedSingleton(JSFunction* target, MDefinition* callee);
     MDefinition* createThisScriptedBaseline(MDefinition* callee);
-    MDefinition* createThis(JSFunction* target, MDefinition* callee);
+    MDefinition* createThis(JSFunction* target, MDefinition* callee, MDefinition* newTarget);
     MInstruction* createDeclEnvObject(MDefinition* callee, MDefinition* scopeObj);
     MInstruction* createCallObject(MDefinition* callee, MDefinition* scopeObj);
 
@@ -425,8 +429,7 @@ class IonBuilder
                                     TemporaryTypeSet* types);
     bool getPropTryArgumentsLength(bool* emitted, MDefinition* obj);
     bool getPropTryArgumentsCallee(bool* emitted, MDefinition* obj, PropertyName* name);
-    bool getPropTryConstant(bool* emitted, MDefinition* obj, PropertyName* name,
-                            TemporaryTypeSet* types);
+    bool getPropTryConstant(bool* emitted, MDefinition* obj, jsid id, TemporaryTypeSet* types);
     bool getPropTryDefiniteSlot(bool* emitted, MDefinition* obj, PropertyName* name,
                                 BarrierKind barrier, TemporaryTypeSet* types);
     bool getPropTryUnboxed(bool* emitted, MDefinition* obj, PropertyName* name,
@@ -495,6 +498,13 @@ class IonBuilder
 
     // jsop_bitnot helpers.
     bool bitnotTrySpecialized(bool* emitted, MDefinition* input);
+
+    // jsop_compare helpes.
+    bool compareTrySpecialized(bool* emitted, JSOp op, MDefinition* left, MDefinition* right);
+    bool compareTryBitwise(bool* emitted, JSOp op, MDefinition* left, MDefinition* right);
+    bool compareTrySpecializedOnBaselineInspector(bool* emitted, JSOp op, MDefinition* left,
+                                                  MDefinition* right);
+    bool compareTrySharedStub(bool* emitted, JSOp op, MDefinition* left, MDefinition* right);
 
     // binary data lookup helpers.
     TypedObjectPrediction typedObjectPrediction(MDefinition* typedObj);
@@ -578,6 +588,7 @@ class IonBuilder
 
     // jsop_getelem() helpers.
     bool getElemTryDense(bool* emitted, MDefinition* obj, MDefinition* index);
+    bool getElemTryGetProp(bool* emitted, MDefinition* obj, MDefinition* index);
     bool getElemTryTypedStatic(bool* emitted, MDefinition* obj, MDefinition* index);
     bool getElemTryTypedArray(bool* emitted, MDefinition* obj, MDefinition* index);
     bool getElemTryTypedObject(bool* emitted, MDefinition* obj, MDefinition* index);
@@ -642,8 +653,10 @@ class IonBuilder
     bool jsop_pow();
     bool jsop_pos();
     bool jsop_neg();
+    bool jsop_tostring();
     bool jsop_setarg(uint32_t arg);
     bool jsop_defvar(uint32_t index);
+    bool jsop_deflexical(uint32_t index);
     bool jsop_deffun(uint32_t index);
     bool jsop_notearg();
     bool jsop_checklexical();
@@ -661,6 +674,7 @@ class IonBuilder
     bool jsop_dup2();
     bool jsop_loophead(jsbytecode* pc);
     bool jsop_compare(JSOp op);
+    bool jsop_compare(JSOp op, MDefinition* left, MDefinition* right);
     bool getStaticName(JSObject* staticObject, PropertyName* name, bool* psucceeded,
                        MDefinition* lexicalCheck = nullptr);
     bool setStaticName(JSObject* staticObject, PropertyName* name);
@@ -688,7 +702,7 @@ class IonBuilder
     bool jsop_setprop(PropertyName* name);
     bool jsop_delprop(PropertyName* name);
     bool jsop_delelem();
-    bool jsop_newarray(uint32_t count);
+    bool jsop_newarray(uint32_t length);
     bool jsop_newarray_copyonwrite();
     bool jsop_newobject();
     bool jsop_initelem();
@@ -834,6 +848,9 @@ class IonBuilder
     IonBuilder::InliningStatus boxSimd(CallInfo& callInfo, MInstruction* ins,
                                        InlineTypedObject* templateObj);
 
+    InliningStatus inlineSimdInt32x4(CallInfo& callInfo, JSNative native);
+    InliningStatus inlineSimdFloat32x4(CallInfo& callInfo, JSNative native);
+
     template <typename T>
     InliningStatus inlineBinarySimd(CallInfo& callInfo, JSNative native,
                                     typename T::Operation op, SimdTypeDescr::Type type);
@@ -943,14 +960,16 @@ class IonBuilder
                                   const BaselineInspector::ObjectGroupVector& convertUnboxedGroups,
                                   bool isOwnProperty);
 
-    bool annotateGetPropertyCache(MDefinition* obj, MGetPropertyCache* getPropCache,
-                                  TemporaryTypeSet* objTypes,
+    bool annotateGetPropertyCache(MDefinition* obj, PropertyName* name,
+                                  MGetPropertyCache* getPropCache, TemporaryTypeSet* objTypes,
                                   TemporaryTypeSet* pushedTypes);
 
     MGetPropertyCache* getInlineableGetPropertyCache(CallInfo& callInfo);
 
-    JSObject* testSingletonProperty(JSObject* obj, PropertyName* name);
-    JSObject* testSingletonPropertyTypes(MDefinition* obj, PropertyName* name);
+    JSObject* testGlobalLexicalBinding(PropertyName* name);
+
+    JSObject* testSingletonProperty(JSObject* obj, jsid id);
+    JSObject* testSingletonPropertyTypes(MDefinition* obj, jsid id);
 
     uint32_t getDefiniteSlot(TemporaryTypeSet* types, PropertyName* name, uint32_t* pnfixed);
     MDefinition* convertUnboxedObjects(MDefinition* obj);

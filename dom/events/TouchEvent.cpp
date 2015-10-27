@@ -122,8 +122,7 @@ TouchEvent::Touches()
 {
   if (!mTouches) {
     WidgetTouchEvent* touchEvent = mEvent->AsTouchEvent();
-    if (mEvent->mMessage == NS_TOUCH_END ||
-        mEvent->mMessage == NS_TOUCH_CANCEL) {
+    if (mEvent->mMessage == eTouchEnd || mEvent->mMessage == eTouchCancel) {
       // for touchend events, remove any changed touches from the touches array
       WidgetTouchEvent::AutoTouchArray unchangedTouches;
       const WidgetTouchEvent::TouchArray& touches = touchEvent->touches;
@@ -150,8 +149,8 @@ TouchEvent::TargetTouches()
     for (uint32_t i = 0; i < touches.Length(); ++i) {
       // for touchend/cancel events, don't append to the target list if this is a
       // touch that is ending
-      if ((mEvent->mMessage != NS_TOUCH_END &&
-           mEvent->mMessage != NS_TOUCH_CANCEL) || !touches[i]->mChanged) {
+      if ((mEvent->mMessage != eTouchEnd && mEvent->mMessage != eTouchCancel) ||
+          !touches[i]->mChanged) {
         if (touches[i]->mTarget == mEvent->originalTarget) {
           targetTouches.AppendElement(touches[i]);
         }
@@ -187,10 +186,10 @@ TouchEvent::PrefEnabled(JSContext* aCx, JSObject* aGlobal)
   int32_t flag = 0;
   if (NS_SUCCEEDED(Preferences::GetInt("dom.w3c_touch_events.enabled", &flag))) {
     if (flag == 2) {
-#ifdef XP_WIN
+#if defined(XP_WIN) || MOZ_WIDGET_GTK == 3
       static bool sDidCheckTouchDeviceSupport = false;
       static bool sIsTouchDeviceSupportPresent = false;
-      // On Windows we auto-detect based on device support.
+      // On Windows and GTK3 we auto-detect based on device support.
       if (!sDidCheckTouchDeviceSupport) {
         sDidCheckTouchDeviceSupport = true;
         sIsTouchDeviceSupportPresent = WidgetUtils::IsTouchDeviceSupportPresent();
@@ -245,6 +244,6 @@ NS_NewDOMTouchEvent(EventTarget* aOwner,
                     nsPresContext* aPresContext,
                     WidgetTouchEvent* aEvent)
 {
-  nsRefPtr<TouchEvent> it = new TouchEvent(aOwner, aPresContext, aEvent);
+  RefPtr<TouchEvent> it = new TouchEvent(aOwner, aPresContext, aEvent);
   return it.forget();
 }

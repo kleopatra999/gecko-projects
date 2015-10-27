@@ -5,7 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "prio.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "nsXPCOMStrings.h"
 #include "mozilla/IOInterposer.h"
 #include "mozilla/MemoryReporting.h"
@@ -323,7 +323,7 @@ StartupCache::GetBuffer(const char* id, char** outbuf, uint32_t* length)
   if (NS_SUCCEEDED(rv))
     return rv;
 
-  nsRefPtr<nsZipArchive> omnijar = mozilla::Omnijar::GetReader(mozilla::Omnijar::APP);
+  RefPtr<nsZipArchive> omnijar = mozilla::Omnijar::GetReader(mozilla::Omnijar::APP);
   // no need to checksum omnijarred entries
   rv = GetBufferFromZipArchive(omnijar, false, id, outbuf, length);
   if (NS_SUCCEEDED(rv))

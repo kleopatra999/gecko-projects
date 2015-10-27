@@ -47,6 +47,8 @@
 #include "SurfaceTexture.h"
 #include "GLContextProvider.h"
 
+#include "mozilla/dom/ContentChild.h"
+
 using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::jni;
@@ -55,6 +57,7 @@ using namespace mozilla::widget;
 AndroidBridge* AndroidBridge::sBridge = nullptr;
 pthread_t AndroidBridge::sJavaUiThread;
 static jobject sGlobalContext = nullptr;
+nsDataHashtable<nsStringHashKey, nsString> AndroidBridge::sStoragePaths;
 
 // This is a dummy class that can be used in the template for android::sp
 class AndroidRefable {
@@ -682,6 +685,7 @@ AndroidBridge::SetLayerClient(GeckoLayerClient::Param jobj)
     // We therefore need to link up the new java objects to Gecko, and that's what
     // we do here.
     bool resetting = (mLayerClient != nullptr);
+    __android_log_print(ANDROID_LOG_INFO, "GeckoBug1151102", "Reseting layer client: %d", resetting);
 
     mLayerClient = jobj;
 
@@ -1098,51 +1102,109 @@ AndroidBridge::DeleteMessage(int32_t aMessageId, nsIMobileMessageCallback* aRequ
 }
 
 void
-AndroidBridge::CreateMessageList(const dom::mobilemessage::SmsFilterData& aFilter, bool aReverse,
-                                 nsIMobileMessageCallback* aRequest)
+AndroidBridge::MarkMessageRead(int32_t aMessageId,
+                               bool aValue,
+                               bool aSendReadReport,
+                               nsIMobileMessageCallback* aRequest)
 {
-    ALOG_BRIDGE("AndroidBridge::CreateMessageList");
+    ALOG_BRIDGE("AndroidBridge::MarkMessageRead");
+
+    uint32_t requestId;
+    if (!QueueSmsRequest(aRequest, &requestId)) {
+        return;
+    }
+
+    GeckoAppShell::MarkMessageRead(aMessageId,
+                                   aValue,
+                                   aSendReadReport,
+                                   requestId);
+}
+
+NS_IMPL_ISUPPORTS0(MessageCursorContinueCallback)
+
+NS_IMETHODIMP
+MessageCursorContinueCallback::HandleContinue()
+{
+    GeckoAppShell::GetNextMessageWrapper(mRequestId);
+    return NS_OK;
+}
+
+already_AddRefed<nsICursorContinueCallback>
+AndroidBridge::CreateMessageCursor(bool aHasStartDate,
+                                   uint64_t aStartDate,
+                                   bool aHasEndDate,
+                                   uint64_t aEndDate,
+                                   const char16_t** aNumbers,
+                                   uint32_t aNumbersCount,
+                                   const nsAString& aDelivery,
+                                   bool aHasRead,
+                                   bool aRead,
+                                   bool aHasThreadId,
+                                   uint64_t aThreadId,
+                                   bool aReverse,
+                                   nsIMobileMessageCursorCallback* aRequest)
+{
+    ALOG_BRIDGE("AndroidBridge::CreateMessageCursor");
 
     JNIEnv* const env = jni::GetGeckoThreadEnv();
 
     uint32_t requestId;
-    if (!QueueSmsRequest(aRequest, &requestId))
-        return;
+    if (!QueueSmsCursorRequest(aRequest, &requestId))
+        return nullptr;
 
     AutoLocalJNIFrame jniFrame(env, 2);
 
     jobjectArray numbers =
-        (jobjectArray)env->NewObjectArray(aFilter.numbers().Length(),
+        (jobjectArray)env->NewObjectArray(aNumbersCount,
                                           jStringClass,
                                           NewJavaString(&jniFrame, EmptyString()));
 
-    for (uint32_t i = 0; i < aFilter.numbers().Length(); ++i) {
-        jstring elem = NewJavaString(&jniFrame, aFilter.numbers()[i]);
+    for (uint32_t i = 0; i < aNumbersCount; ++i) {
+        jstring elem = NewJavaString(&jniFrame, nsDependentString(aNumbers[i]));
         env->SetObjectArrayElement(numbers, i, elem);
         env->DeleteLocalRef(elem);
     }
 
-    int64_t startDate = aFilter.hasStartDate() ? aFilter.startDate() : -1;
-    int64_t endDate = aFilter.hasEndDate() ? aFilter.endDate() : -1;
-    GeckoAppShell::CreateMessageListWrapper(startDate, endDate,
-                                            ObjectArray::Ref::From(numbers),
-                                            aFilter.numbers().Length(),
-                                            aFilter.delivery(),
-                                            aFilter.hasRead(), aFilter.read(),
-                                            aFilter.threadId(),
-                                            aReverse, requestId);
+    int64_t startDate = aHasStartDate ? aStartDate : -1;
+    int64_t endDate = aHasEndDate ? aEndDate : -1;
+    GeckoAppShell::CreateMessageCursorWrapper(startDate, endDate,
+                                              ObjectArray::Ref::From(numbers),
+                                              aNumbersCount,
+                                              aDelivery,
+                                              aHasRead, aRead,
+                                              aHasThreadId, aThreadId,
+                                              aReverse,
+                                              requestId);
+
+    nsCOMPtr<nsICursorContinueCallback> callback = 
+       new MessageCursorContinueCallback(requestId);
+    return callback.forget();
 }
 
-void
-AndroidBridge::GetNextMessageInList(int32_t aListId, nsIMobileMessageCallback* aRequest)
+NS_IMPL_ISUPPORTS0(ThreadCursorContinueCallback)
+
+NS_IMETHODIMP
+ThreadCursorContinueCallback::HandleContinue()
 {
-    ALOG_BRIDGE("AndroidBridge::GetNextMessageInList");
+    GeckoAppShell::GetNextThreadWrapper(mRequestId);
+    return NS_OK;
+}
+
+already_AddRefed<nsICursorContinueCallback>
+AndroidBridge::CreateThreadCursor(nsIMobileMessageCursorCallback* aRequest)
+{
+    ALOG_BRIDGE("AndroidBridge::CreateThreadCursor");
 
     uint32_t requestId;
-    if (!QueueSmsRequest(aRequest, &requestId))
-        return;
+    if (!QueueSmsCursorRequest(aRequest, &requestId)) {
+        return nullptr;
+    }
 
-    GeckoAppShell::GetNextMessageInListWrapper(aListId, requestId);
+    GeckoAppShell::CreateThreadCursorWrapper(requestId);
+
+    nsCOMPtr<nsICursorContinueCallback> callback =
+        new ThreadCursorContinueCallback(requestId);
+    return callback.forget();
 }
 
 bool
@@ -1178,6 +1240,57 @@ AndroidBridge::DequeueSmsRequest(uint32_t aRequestId)
     }
 
     return mSmsRequests[aRequestId].forget();
+}
+
+bool
+AndroidBridge::QueueSmsCursorRequest(nsIMobileMessageCursorCallback* aRequest,
+                                     uint32_t* aRequestIdOut)
+{
+    MOZ_ASSERT(NS_IsMainThread(), "Wrong thread!");
+    MOZ_ASSERT(aRequest && aRequestIdOut);
+
+    const uint32_t length = mSmsCursorRequests.Length();
+    for (uint32_t i = 0; i < length; i++) {
+        if (!(mSmsCursorRequests)[i]) {
+            (mSmsCursorRequests)[i] = aRequest;
+            *aRequestIdOut = i;
+            return true;
+        }
+    }
+
+    mSmsCursorRequests.AppendElement(aRequest);
+
+    // After AppendElement(), previous `length` points to the new tail element.
+    *aRequestIdOut = length;
+    return true;
+}
+
+nsCOMPtr<nsIMobileMessageCursorCallback>
+AndroidBridge::GetSmsCursorRequest(uint32_t aRequestId)
+{
+    MOZ_ASSERT(NS_IsMainThread(), "Wrong thread!");
+
+    MOZ_ASSERT(aRequestId < mSmsCursorRequests.Length());
+    if (aRequestId >= mSmsCursorRequests.Length()) {
+        return nullptr;
+    }
+
+    // TODO: remove on final dequeue
+    return mSmsCursorRequests[aRequestId];
+}
+
+already_AddRefed<nsIMobileMessageCursorCallback>
+AndroidBridge::DequeueSmsCursorRequest(uint32_t aRequestId)
+{
+    MOZ_ASSERT(NS_IsMainThread(), "Wrong thread!");
+
+    MOZ_ASSERT(aRequestId < mSmsCursorRequests.Length());
+    if (aRequestId >= mSmsCursorRequests.Length()) {
+        return nullptr;
+    }
+
+    // TODO: remove on final dequeue
+    return mSmsCursorRequests[aRequestId].forget();
 }
 
 void
@@ -1478,25 +1591,27 @@ AndroidBridge::SyncViewportInfo(const LayerIntRect& aDisplayPort, const CSSToLay
     aFixedLayerMargins.left = viewTransform->FixedLayerMarginLeft();
 }
 
-void AndroidBridge::SyncFrameMetrics(const ParentLayerPoint& aScrollOffset, float aZoom, const CSSRect& aCssPageRect,
-                                     bool aLayersUpdated, const CSSRect& aDisplayPort, const CSSToLayerScale& aDisplayResolution,
-                                     bool aIsFirstPaint, ScreenMargin& aFixedLayerMargins)
+void AndroidBridge::SyncFrameMetrics(const ParentLayerPoint& aScrollOffset,
+                                     const CSSToParentLayerScale& aZoom,
+                                     const CSSRect& aCssPageRect,
+                                     const CSSRect& aDisplayPort,
+                                     const CSSToLayerScale& aPaintedResolution,
+                                     bool aLayersUpdated, int32_t aPaintSyncId,
+                                     ScreenMargin& aFixedLayerMargins)
 {
     if (!mLayerClient) {
         ALOG_BRIDGE("Exceptional Exit: %s", __PRETTY_FUNCTION__);
         return;
     }
 
-    // convert the displayport rect from scroll-relative CSS pixels to document-relative device pixels
-    LayerRect dpUnrounded = aDisplayPort * aDisplayResolution;
-    dpUnrounded += LayerPoint::FromUnknownPoint(aScrollOffset.ToUnknownPoint());
-    LayerIntRect dp = gfx::RoundedToInt(dpUnrounded);
-
+    // convert the displayport rect from document-relative CSS pixels to
+    // document-relative device pixels
+    LayerIntRect dp = gfx::RoundedToInt(aDisplayPort * aPaintedResolution);
     ViewTransform::LocalRef viewTransform = mLayerClient->SyncFrameMetrics(
-            aScrollOffset.x, aScrollOffset.y, aZoom,
+            aScrollOffset.x, aScrollOffset.y, aZoom.scale,
             aCssPageRect.x, aCssPageRect.y, aCssPageRect.XMost(), aCssPageRect.YMost(),
-            aLayersUpdated, dp.x, dp.y, dp.width, dp.height, aDisplayResolution.scale,
-            aIsFirstPaint);
+            dp.x, dp.y, dp.width, dp.height, aPaintedResolution.scale,
+            aLayersUpdated, aPaintSyncId);
 
     MOZ_ASSERT(viewTransform, "No view transform object!");
 
@@ -1723,7 +1838,7 @@ AndroidBridge::CaptureZoomedView(nsIDOMWindow *window, nsIntRect zoomedViewRect,
     if (!win) {
         return NS_ERROR_FAILURE;
     }
-    nsRefPtr <nsPresContext> presContext;
+    RefPtr<nsPresContext> presContext;
 
     nsIDocShell* docshell = win->GetDocShell();
 
@@ -1764,7 +1879,7 @@ AndroidBridge::CaptureZoomedView(nsIDOMWindow *window, nsIntRect zoomedViewRect,
         ALOG_BRIDGE("Error creating DrawTarget");
         return NS_ERROR_FAILURE;
     }
-    nsRefPtr <gfxContext> context = new gfxContext(dt);
+    RefPtr<gfxContext> context = new gfxContext(dt);
     context->SetMatrix(context->CurrentMatrix().Scale(zoomFactor, zoomFactor));
 
     rv = presShell->RenderDocument(r, renderDocFlags, bgColor, context);
@@ -1828,7 +1943,7 @@ nsresult AndroidBridge::CaptureThumbnail(nsIDOMWindow *window, int32_t bufW, int
     nsCOMPtr<nsPIDOMWindow> win = do_QueryInterface(window);
     if (!win)
         return NS_ERROR_FAILURE;
-    nsRefPtr<nsPresContext> presContext;
+    RefPtr<nsPresContext> presContext;
 
     nsIDocShell* docshell = win->GetDocShell();
 
@@ -1870,7 +1985,7 @@ nsresult AndroidBridge::CaptureThumbnail(nsIDOMWindow *window, int32_t bufW, int
         ALOG_BRIDGE("Error creating DrawTarget");
         return NS_ERROR_FAILURE;
     }
-    nsRefPtr<gfxContext> context = new gfxContext(dt);
+    RefPtr<gfxContext> context = new gfxContext(dt);
     context->SetMatrix(
       context->CurrentMatrix().Scale(scale * bufW / srcW,
                                      scale * bufH / srcH));
@@ -2081,7 +2196,7 @@ AndroidBridge::SetPresentationSurface(EGLSurface aPresentationSurface)
 Object::LocalRef AndroidBridge::ChannelCreate(Object::Param stream) {
     JNIEnv* const env = GetEnvForThread();
     auto rv = Object::LocalRef::Adopt(env, env->CallStaticObjectMethod(
-            sBridge->jReadableByteChannel, sBridge->jChannelCreate, stream.Get()));
+            sBridge->jChannels, sBridge->jChannelCreate, stream.Get()));
     HandleUncaughtException(env);
     return rv;
 }
@@ -2118,6 +2233,30 @@ nsresult AndroidBridge::InputStreamRead(Object::Param obj, char *aBuf, uint32_t 
 }
 
 nsresult AndroidBridge::GetExternalPublicDirectory(const nsAString& aType, nsAString& aPath) {
+    if (XRE_IsContentProcess()) {
+        nsString key(aType);
+        nsAutoString path;
+        if (AndroidBridge::sStoragePaths.Get(key, &path)) {
+            aPath = path;
+            return NS_OK;
+        }
+
+        // Lazily get the value from the parent.
+        dom::ContentChild* child = dom::ContentChild::GetSingleton();
+        if (child) {
+          nsAutoString type(aType);
+          child->SendGetDeviceStorageLocation(type, &path);
+          if (!path.IsEmpty()) {
+            AndroidBridge::sStoragePaths.Put(key, path);
+            return NS_OK;
+          }
+        }
+
+        ALOG_BRIDGE("AndroidBridge::GetExternalPublicDirectory no cache for %s",
+              NS_ConvertUTF16toUTF8(aType).get());
+        return NS_ERROR_NOT_AVAILABLE;
+    }
+
     auto path = GeckoAppShell::GetExternalPublicDirectory(aType);
     if (!path) {
         return NS_ERROR_NOT_AVAILABLE;

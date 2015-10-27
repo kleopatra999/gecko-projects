@@ -66,7 +66,7 @@ public:
 
   virtual nsISupports* GetParentObject() override;
 
-  nsRefPtr<SVGSVGElement> mElement;
+  RefPtr<SVGSVGElement> mElement;
 
 private:
   ~DOMSVGTranslatePoint() {}
@@ -407,7 +407,7 @@ private:
 
 // Helper class to automatically manage temporary changes to an SVG document's
 // state for rendering purposes.
-class MOZ_STACK_CLASS AutoSVGRenderingState
+class MOZ_RAII AutoSVGRenderingState
 {
 public:
   AutoSVGRenderingState(const Maybe<SVGImageContext>& aSVGContext,
@@ -443,7 +443,7 @@ public:
 private:
   const bool mHaveOverrides;
   float mOriginalTime;
-  const nsRefPtr<dom::SVGSVGElement> mRootElem;
+  const RefPtr<dom::SVGSVGElement> mRootElem;
   MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 

@@ -191,6 +191,7 @@ IMContextWrapper::IMContextWrapper(nsWindow* aOwnerWindow)
     , mIsDeletingSurrounding(false)
     , mLayoutChanged(false)
     , mSetCursorPositionOnKeyEvent(true)
+    , mPendingResettingIMContext(false)
 {
     if (!gGtkIMLog) {
         gGtkIMLog = PR_NewLogModule("nsGtkIMModuleWidgets");
@@ -277,6 +278,12 @@ IMContextWrapper::~IMContextWrapper()
 nsIMEUpdatePreference
 IMContextWrapper::GetIMEUpdatePreference() const
 {
+    // While a plugin has focus, IMContextWrapper doesn't need any
+    // notifications.
+    if (mInputContext.mIMEState.mEnabled == IMEState::PLUGIN) {
+      return nsIMEUpdatePreference();
+    }
+
     nsIMEUpdatePreference::Notifications notifications =
         nsIMEUpdatePreference::NOTIFY_SELECTION_CHANGE;
     // If it's not enabled, we don't need position change notification.
@@ -555,9 +562,10 @@ IMContextWrapper::ResetIME()
         return;
     }
 
-    nsRefPtr<IMContextWrapper> kungFuDeathGrip(this);
-    nsRefPtr<nsWindow> lastFocusedWindow(mLastFocusedWindow);
+    RefPtr<IMContextWrapper> kungFuDeathGrip(this);
+    RefPtr<nsWindow> lastFocusedWindow(mLastFocusedWindow);
 
+    mPendingResettingIMContext = false;
     gtk_im_context_reset(activeContext);
 
     // The last focused window might have been destroyed by a DOM event handler
@@ -889,7 +897,8 @@ IMContextWrapper::OnSelectionChange(nsWindow* aCaller,
     MOZ_LOG(gGtkIMLog, LogLevel::Info,
         ("GTKIM: %p OnSelectionChange(aCaller=0x%p, aIMENotification={ "
          "mSelectionChangeData={ mOffset=%u, Length()=%u, mReversed=%s, "
-         "mWritingMode=%s, mCausedByComposition=%s, mCausedBySelectionEvent=%s "
+         "mWritingMode=%s, mCausedByComposition=%s, "
+         "mCausedBySelectionEvent=%s, mOccurredDuringComposition=%s "
          "} }), mCompositionState=%s, mIsDeletingSurrounding=%s",
          this, aCaller, selectionChangeData.mOffset,
          selectionChangeData.Length(),
@@ -897,6 +906,7 @@ IMContextWrapper::OnSelectionChange(nsWindow* aCaller,
          GetWritingModeName(selectionChangeData.GetWritingMode()).get(),
          ToChar(selectionChangeData.mCausedByComposition),
          ToChar(selectionChangeData.mCausedBySelectionEvent),
+         ToChar(selectionChangeData.mOccurredDuringComposition),
          GetCompositionStateName(), ToChar(mIsDeletingSurrounding)));
 
     if (aCaller != mLastFocusedWindow) {
@@ -915,7 +925,7 @@ IMContextWrapper::OnSelectionChange(nsWindow* aCaller,
 
     // The focused editor might have placeholder text with normal text node.
     // In such case, the text node must be removed from a compositionstart
-    // event handler.  So, we're dispatching NS_COMPOSITION_START,
+    // event handler.  So, we're dispatching eCompositionStart,
     // we should ignore selection change notification.
     if (mCompositionState == eCompositionState_CompositionStartDispatched) {
         if (NS_WARN_IF(!mSelection.IsValid())) {
@@ -944,11 +954,18 @@ IMContextWrapper::OnSelectionChange(nsWindow* aCaller,
         return;
     }
 
-    // When the selection change is caused by dispatching composition event
-    // and/or selection set event, we shouldn't notify IME of that and commit
-    // existing composition.
+    bool occurredBeforeComposition =
+      IsComposing() && !selectionChangeData.mOccurredDuringComposition;
+    if (occurredBeforeComposition) {
+        mPendingResettingIMContext = true;
+    }
+
+    // When the selection change is caused by dispatching composition event,
+    // selection set event and/or occurred before starting current composition,
+    // we shouldn't notify IME of that and commit existing composition.
     if (!selectionChangeData.mCausedByComposition &&
-        !selectionChangeData.mCausedBySelectionEvent) {
+        !selectionChangeData.mCausedBySelectionEvent &&
+        !occurredBeforeComposition) {
         ResetIME();
     }
 }
@@ -1016,13 +1033,17 @@ IMContextWrapper::OnEndCompositionNative(GtkIMContext* aContext)
     g_object_unref(mComposingContext);
     mComposingContext = nullptr;
 
-    if (!IsComposing()) {
-        // If we already handled the commit event, we should do nothing here.
-        return;
+    // If we already handled the commit event, we should do nothing here.
+    if (IsComposing()) {
+        if (!DispatchCompositionCommitEvent(aContext)) {
+            // If the widget is destroyed, we should do nothing anymore.
+            return;
+        }
     }
 
-    // Be aware, widget can be gone
-    DispatchCompositionCommitEvent(aContext);
+    if (mPendingResettingIMContext) {
+        ResetIME();
+    }
 }
 
 /* static */
@@ -1303,7 +1324,7 @@ IMContextWrapper::DispatchCompositionStart(GtkIMContext* aContext)
         ("GTKIM: %p   DispatchCompositionStart(), FAILED, mCompositionStart=%u",
          this, mCompositionStart));
     mCompositionState = eCompositionState_CompositionStartDispatched;
-    WidgetCompositionEvent compEvent(true, NS_COMPOSITION_START,
+    WidgetCompositionEvent compEvent(true, eCompositionStart,
                                      mLastFocusedWindow);
     InitEvent(compEvent);
     nsCOMPtr<nsIWidget> kungFuDeathGrip = mLastFocusedWindow;
@@ -1350,7 +1371,7 @@ IMContextWrapper::DispatchCompositionChangeEvent(
     }
 
     nsEventStatus status;
-    nsRefPtr<nsWindow> lastFocusedWindow = mLastFocusedWindow;
+    RefPtr<nsWindow> lastFocusedWindow = mLastFocusedWindow;
 
     // Store the selected string which will be removed by following
     // compositionchange event.
@@ -1364,7 +1385,7 @@ IMContextWrapper::DispatchCompositionChangeEvent(
         }
     }
 
-    WidgetCompositionEvent compositionChangeEvent(true, NS_COMPOSITION_CHANGE,
+    WidgetCompositionEvent compositionChangeEvent(true, eCompositionChange,
                                                   mLastFocusedWindow);
     InitEvent(compositionChangeEvent);
 
@@ -1437,10 +1458,10 @@ IMContextWrapper::DispatchCompositionCommitEvent(
         }
     }
 
-    nsRefPtr<nsWindow> lastFocusedWindow(mLastFocusedWindow);
+    RefPtr<nsWindow> lastFocusedWindow(mLastFocusedWindow);
 
-    EventMessage message = aCommitString ? NS_COMPOSITION_COMMIT :
-                                           NS_COMPOSITION_COMMIT_AS_IS;
+    EventMessage message = aCommitString ? eCompositionCommit :
+                                           eCompositionCommitAsIs;
     mCompositionState = eCompositionState_NotComposing;
     mCompositionStart = UINT32_MAX;
     mCompositionTargetRange.Clear();
@@ -1449,7 +1470,7 @@ IMContextWrapper::DispatchCompositionCommitEvent(
     WidgetCompositionEvent compositionCommitEvent(true, message,
                                                   mLastFocusedWindow);
     InitEvent(compositionCommitEvent);
-    if (message == NS_COMPOSITION_COMMIT) {
+    if (message == eCompositionCommit) {
         compositionCommitEvent.mData = *aCommitString;
     }
 
@@ -1479,7 +1500,7 @@ IMContextWrapper::CreateTextRangeArray(GtkIMContext* aContext,
          this, aContext, NS_ConvertUTF16toUTF8(aCompositionString).get(),
          aCompositionString.Length()));
 
-    nsRefPtr<TextRangeArray> textRangeArray = new TextRangeArray();
+    RefPtr<TextRangeArray> textRangeArray = new TextRangeArray();
 
     gchar *preedit_string;
     gint cursor_pos_in_chars;
@@ -1810,8 +1831,8 @@ IMContextWrapper::SetCursorPosition(GtkIMContext* aContext)
     }
 
     WidgetQueryContentEvent charRect(true,
-                                     useCaret ? NS_QUERY_CARET_RECT :
-                                                NS_QUERY_TEXT_RECT,
+                                     useCaret ? eQueryCaretRect :
+                                                eQueryTextRect,
                                      mLastFocusedWindow);
     if (useCaret) {
         charRect.InitForQueryCaretRect(mSelection.mOffset);
@@ -1833,7 +1854,7 @@ IMContextWrapper::SetCursorPosition(GtkIMContext* aContext)
     if (!charRect.mSucceeded) {
         MOZ_LOG(gGtkIMLog, LogLevel::Error,
             ("GTKIM: %p   SetCursorPosition(), FAILED, %s was failed",
-             this, useCaret ? "NS_QUERY_CARET_RECT" : "NS_QUERY_TEXT_RECT"));
+             this, useCaret ? "eQueryCaretRect" : "eQueryTextRect"));
         return;
     }
 
@@ -1909,8 +1930,7 @@ IMContextWrapper::GetCurrentParagraph(nsAString& aText,
     }
 
     // Get all text contents of the focused editor
-    WidgetQueryContentEvent queryTextContentEvent(true,
-                                                  NS_QUERY_TEXT_CONTENT,
+    WidgetQueryContentEvent queryTextContentEvent(true, eQueryTextContent,
                                                   mLastFocusedWindow);
     queryTextContentEvent.InitForQueryTextContent(0, UINT32_MAX);
     mLastFocusedWindow->DispatchEvent(&queryTextContentEvent, status);
@@ -1978,7 +1998,7 @@ IMContextWrapper::DeleteText(GtkIMContext* aContext,
         return NS_ERROR_INVALID_ARG;
     }
 
-    nsRefPtr<nsWindow> lastFocusedWindow(mLastFocusedWindow);
+    RefPtr<nsWindow> lastFocusedWindow(mLastFocusedWindow);
     nsEventStatus status;
 
     // First, we should cancel current composition because editor cannot
@@ -2006,8 +2026,7 @@ IMContextWrapper::DeleteText(GtkIMContext* aContext,
     }
 
     // Get all text contents of the focused editor
-    WidgetQueryContentEvent queryTextContentEvent(true,
-                                                  NS_QUERY_TEXT_CONTENT,
+    WidgetQueryContentEvent queryTextContentEvent(true, eQueryTextContent,
                                                   mLastFocusedWindow);
     queryTextContentEvent.InitForQueryTextContent(0, UINT32_MAX);
     mLastFocusedWindow->DispatchEvent(&queryTextContentEvent, status);
@@ -2082,8 +2101,7 @@ IMContextWrapper::DeleteText(GtkIMContext* aContext,
     }
 
     // Delete the selection
-    WidgetContentCommandEvent contentCommandEvent(true,
-                                                  NS_CONTENT_COMMAND_DELETE,
+    WidgetContentCommandEvent contentCommandEvent(true, eContentCommandDelete,
                                                   mLastFocusedWindow);
     mLastFocusedWindow->DispatchEvent(&contentCommandEvent, status);
 
@@ -2152,7 +2170,7 @@ IMContextWrapper::EnsureToCacheSelection(nsAString* aSelectedString)
     }
 
     nsEventStatus status;
-    WidgetQueryContentEvent selection(true, NS_QUERY_SELECTED_TEXT,
+    WidgetQueryContentEvent selection(true, eQuerySelectedText,
                                       mLastFocusedWindow);
     InitEvent(selection);
     mLastFocusedWindow->DispatchEvent(&selection, status);
@@ -2201,7 +2219,7 @@ IMContextWrapper::Selection::Assign(const IMENotification& aIMENotification)
 void
 IMContextWrapper::Selection::Assign(const WidgetQueryContentEvent& aEvent)
 {
-    MOZ_ASSERT(aEvent.mMessage == NS_QUERY_SELECTED_TEXT);
+    MOZ_ASSERT(aEvent.mMessage == eQuerySelectedText);
     MOZ_ASSERT(aEvent.mSucceeded);
     mOffset = aEvent.mReply.mOffset;
     mLength = aEvent.mReply.mString.Length();

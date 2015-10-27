@@ -8,6 +8,7 @@
 
 #include "mozilla/DebugOnly.h"
 
+#include "jit/BaselineIC.h"
 #include "jit/JitcodeMap.h"
 #include "jit/Linker.h"
 #include "jit/PerfSpewer.h"
@@ -695,6 +696,7 @@ RecompileBaselineScriptForDebugMode(JSContext* cx, JSScript* script,
     _(GetElem_NativePrototypeCallScriptedSymbol) \
     _(GetProp_CallScripted)                     \
     _(GetProp_CallNative)                       \
+    _(GetProp_CallNativeGlobal)                 \
     _(GetProp_CallDOMProxyNative)               \
     _(GetProp_CallDOMProxyWithGenerationNative) \
     _(GetProp_DOMProxyShadowed)                 \
@@ -707,7 +709,8 @@ RecompileBaselineScriptForDebugMode(JSContext* cx, JSScript* script,
     _(GetElem_Dense)                            \
     _(GetElem_Arguments)                        \
     _(GetProp_NativePrototype)                  \
-    _(GetProp_Native)
+    _(GetProp_Native)                           \
+    _(GetName_Global)
 #endif
 
 static bool
@@ -1165,7 +1168,6 @@ JitRuntime::generateBaselineDebugModeOSRHandler(JSContext* cx, uint32_t* noFrame
     if (!code)
         return nullptr;
 
-    noFrameRegPopOffset.fixup(&masm);
     *noFrameRegPopOffsetOut = noFrameRegPopOffset.offset();
 
 #ifdef JS_ION_PERF

@@ -62,7 +62,7 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
   bool doDefault = true;
 
   switch (aEvent->mMessage) {
-    case NS_TOUCH_START:
+    case eTouchStart:
     case eMouseDown: {
       if (aEvent->mClass == eTouchEventClass ||
           (aEvent->mClass == eMouseEventClass &&
@@ -128,7 +128,7 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
     }
     break;
 
-  case NS_TOUCH_END:
+  case eTouchEnd:
   case eMouseUp: {
     if (aEvent->mClass == eTouchEventClass ||
         (aEvent->mClass == eMouseEventClass &&
@@ -143,7 +143,7 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
   }
   break;
 
-  case NS_TOUCH_MOVE:
+  case eTouchMove:
   case eMouseMove: {
     if (mTrackingMouseMove)
     {
@@ -273,9 +273,8 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
             (!menuPopupFrame->IsAnchored() ||
              menuPopupFrame->PopupLevel() != ePopupLevelParent)) {
 
-          rect.x = aPresContext->DevPixelsToIntCSSPixels(rect.x);
-          rect.y = aPresContext->DevPixelsToIntCSSPixels(rect.y);
-          menuPopupFrame->MoveTo(rect.x, rect.y, true);
+          CSSPoint cssPos = rect.TopLeft() / aPresContext->CSSToDevPixelScale();
+          menuPopupFrame->MoveTo(RoundedToInt(cssPos), true);
         }
       }
       else {

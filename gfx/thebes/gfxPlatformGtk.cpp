@@ -104,7 +104,7 @@ already_AddRefed<gfxASurface>
 gfxPlatformGtk::CreateOffscreenSurface(const IntSize& aSize,
                                        gfxImageFormat aFormat)
 {
-    nsRefPtr<gfxASurface> newSurface;
+    RefPtr<gfxASurface> newSurface;
     bool needsClear = true;
 #ifdef MOZ_X11
     // XXX we really need a different interface here, something that passes
@@ -241,11 +241,12 @@ gfxPlatformGtk::GetStandardFamilyName(const nsAString& aFontName, nsAString& aFa
 
 gfxFontGroup *
 gfxPlatformGtk::CreateFontGroup(const FontFamilyList& aFontFamilyList,
-                                const gfxFontStyle *aStyle,
-                                gfxUserFontSet *aUserFontSet)
+                                const gfxFontStyle* aStyle,
+                                gfxTextPerfMetrics* aTextPerf,
+                                gfxUserFontSet* aUserFontSet)
 {
     if (sUseFcFontList) {
-        return new gfxFontGroup(aFontFamilyList, aStyle, aUserFontSet);
+        return new gfxFontGroup(aFontFamilyList, aStyle, aTextPerf, aUserFontSet);
     }
 
     return new gfxPangoFontGroup(aFontFamilyList, aStyle, aUserFontSet);
@@ -255,34 +256,35 @@ gfxFontEntry*
 gfxPlatformGtk::LookupLocalFont(const nsAString& aFontName,
                                 uint16_t aWeight,
                                 int16_t aStretch,
-                                bool aItalic)
+                                uint8_t aStyle)
 {
     if (sUseFcFontList) {
         gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
-        return pfl->LookupLocalFont(aFontName, aWeight, aStretch, aItalic);
+        return pfl->LookupLocalFont(aFontName, aWeight, aStretch,
+                                    aStyle);
     }
 
     return gfxPangoFontGroup::NewFontEntry(aFontName, aWeight,
-                                           aStretch, aItalic);
+                                           aStretch, aStyle);
 }
 
 gfxFontEntry* 
 gfxPlatformGtk::MakePlatformFont(const nsAString& aFontName,
                                  uint16_t aWeight,
                                  int16_t aStretch,
-                                 bool aItalic,
+                                 uint8_t aStyle,
                                  const uint8_t* aFontData,
                                  uint32_t aLength)
 {
     if (sUseFcFontList) {
         gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
-        return pfl->MakePlatformFont(aFontName, aWeight, aStretch, aItalic,
-                                     aFontData, aLength);
+        return pfl->MakePlatformFont(aFontName, aWeight, aStretch,
+                                     aStyle, aFontData, aLength);
     }
 
     // passing ownership of the font data to the new font entry
     return gfxPangoFontGroup::NewFontEntry(aFontName, aWeight,
-                                           aStretch, aItalic,
+                                           aStretch, aStyle,
                                            aFontData, aLength);
 }
 
@@ -360,24 +362,6 @@ gfxPlatformGtk::GetOffscreenFormat()
     }
 
     return gfxImageFormat::RGB24;
-}
-
-static int sDepth = 0;
-
-int
-gfxPlatformGtk::GetScreenDepth() const
-{
-    if (!sDepth) {
-        GdkScreen *screen = gdk_screen_get_default();
-        if (screen) {
-            sDepth = gdk_visual_get_depth(gdk_visual_get_system());
-        } else {
-            sDepth = 24;
-        }
-
-    }
-
-    return sDepth;
 }
 
 void

@@ -55,7 +55,7 @@ function promiseSocialUrlNotRemembered(url) {
   return deferred.promise;
 }
 
-let gURLsNotRemembered = [];
+var gURLsNotRemembered = [];
 
 
 function checkProviderPrefsEmpty(isError) {
@@ -154,7 +154,7 @@ function runSocialTestWithProvider(manifest, callback, finishcallback) {
         registerCleanupFunction(function () {
           finishSocialTest(true);
         });
-        waitForCondition(function() provider.enabled,
+        waitForCondition(() => provider.enabled,
                          function() {
           info("provider has been enabled");
           callback(finishSocialTest);
@@ -589,7 +589,7 @@ function resizeAndCheckWidths(first, second, third, checks, cb) {
     checkPopup();
     ok(sizedOk, count+": window resized correctly");
     function collapsedObserver(r, m) {
-      if ([first, second, third].filter(function(item) !item.collapsed).length == numExpectedVisible) {
+      if ([first, second, third].filter(item => !item.collapsed).length == numExpectedVisible) {
         if (m) {
           m.disconnect();
         }
@@ -656,7 +656,7 @@ function closeAllChats() {
 
 // Support for going on and offline.
 // (via browser/base/content/test/browser_bookmark_titles.js)
-let origProxyType = Services.prefs.getIntPref('network.proxy.type');
+var origProxyType = Services.prefs.getIntPref('network.proxy.type');
 
 function toggleOfflineStatus(goOffline) {
   // Bug 968887 fix.  when going on/offline, wait for notification before continuing

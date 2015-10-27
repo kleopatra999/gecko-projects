@@ -9,9 +9,13 @@ const Ci = Components.interfaces;
 const Cu = Components.utils;
 const Cr = Components.results;
 
+Cu.import("resource://gre/modules/AppConstants.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "Messaging",
+                                  "resource://gre/modules/Messaging.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
                                   "resource://gre/modules/PlacesUtils.jsm");
@@ -19,24 +23,10 @@ XPCOMUtils.defineLazyModuleGetter(this, "PlacesUtils",
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
-                                  "resource://gre/modules/BrowserUtils.jsm");
 
 this.EXPORTED_SYMBOLS = ["PushRecord"];
 
 const prefs = new Preferences("dom.push.");
-
-// History transition types that can fire a `pushsubscriptionchange` event
-// when the user visits a site with expired push registrations. Visits only
-// count if the user sees the origin in the address bar. This excludes embedded
-// resources, downloads, and framed links.
-const QUOTA_REFRESH_TRANSITIONS_SQL = [
-  Ci.nsINavHistoryService.TRANSITION_LINK,
-  Ci.nsINavHistoryService.TRANSITION_TYPED,
-  Ci.nsINavHistoryService.TRANSITION_BOOKMARK,
-  Ci.nsINavHistoryService.TRANSITION_REDIRECT_PERMANENT,
-  Ci.nsINavHistoryService.TRANSITION_REDIRECT_TEMPORARY
-].join(",");
 
 function PushRecord(props) {
   this.pushEndpoint = props.pushEndpoint;
@@ -44,13 +34,23 @@ function PushRecord(props) {
   this.originAttributes = props.originAttributes;
   this.pushCount = props.pushCount || 0;
   this.lastPush = props.lastPush || 0;
+  this.p256dhPublicKey = props.p256dhPublicKey;
+  this.p256dhPrivateKey = props.p256dhPrivateKey;
   this.setQuota(props.quota);
+  this.ctime = (typeof props.ctime === "number") ? props.ctime : 0;
 }
 
 PushRecord.prototype = {
   setQuota(suggestedQuota) {
-    this.quota = (!isNaN(suggestedQuota) && suggestedQuota >= 0) ?
-                 suggestedQuota : prefs.get("maxQuotaPerSubscription");
+    if (!isNaN(suggestedQuota) && suggestedQuota >= 0) {
+      this.quota = suggestedQuota;
+    } else {
+      this.resetQuota();
+    }
+  },
+
+  resetQuota() {
+    this.quota = prefs.get("maxQuotaPerSubscription");
   },
 
   updateQuota(lastVisit) {
@@ -74,11 +74,17 @@ PushRecord.prototype = {
         Math.round(8 * Math.pow(daysElapsed, -0.8)),
         prefs.get("maxQuotaPerSubscription")
       );
+      Services.telemetry.getHistogramById("PUSH_API_QUOTA_RESET_TO").add(currentQuota - 1);
     } else {
       // The user hasn't visited the site since the last notification.
       currentQuota = this.quota;
     }
     this.quota = Math.max(currentQuota - 1, 0);
+    // We check for ctime > 0 to skip older records that did not have ctime.
+    if (this.isExpired() && this.ctime > 0) {
+      let duration = Date.now() - this.ctime;
+      Services.telemetry.getHistogramById("PUSH_API_QUOTA_EXPIRATION_TIME").add(duration / 1000);
+    }
   },
 
   receivedPush(lastVisit) {
@@ -98,9 +104,34 @@ PushRecord.prototype = {
   getLastVisit() {
     if (!this.quotaApplies() || this.isTabOpen()) {
       // If the registration isn't subject to quota, or the user already
-      // has the site open, skip the Places query.
+      // has the site open, skip expensive database queries.
       return Promise.resolve(Date.now());
     }
+
+    if (AppConstants.MOZ_ANDROID_HISTORY) {
+      return Messaging.sendRequestForResult({
+        type: "History:GetPrePathLastVisitedTimeMilliseconds",
+        prePath: this.uri.prePath,
+      }).then(result => {
+        if (result == 0) {
+          return -Infinity;
+        }
+        return result;
+      });
+    }
+
+    // Places History transition types that can fire a
+    // `pushsubscriptionchange` event when the user visits a site with expired push
+    // registrations. Visits only count if the user sees the origin in the address
+    // bar. This excludes embedded resources, downloads, and framed links.
+    const QUOTA_REFRESH_TRANSITIONS_SQL = [
+      Ci.nsINavHistoryService.TRANSITION_LINK,
+      Ci.nsINavHistoryService.TRANSITION_TYPED,
+      Ci.nsINavHistoryService.TRANSITION_BOOKMARK,
+      Ci.nsINavHistoryService.TRANSITION_REDIRECT_PERMANENT,
+      Ci.nsINavHistoryService.TRANSITION_REDIRECT_TEMPORARY
+    ].join(",");
+
     return PlacesUtils.withConnectionWrapper("PushRecord.getLastVisit", db => {
       // We're using a custom query instead of `nsINavHistoryQueryOptions`
       // because the latter doesn't expose a way to filter by transition type:
@@ -154,21 +185,18 @@ PushRecord.prototype = {
   },
 
   /**
-   * Returns the push permission state for the principal associated with
-   * this registration.
-   */
-  pushPermission() {
-    return Services.perms.testExactPermissionFromPrincipal(
-           this.principal, "push");
-  },
-
-  /**
    * Indicates whether the registration can deliver push messages to its
    * associated service worker.
    */
   hasPermission() {
-    let permission = this.pushPermission();
+    let permission = Services.perms.testExactPermissionFromPrincipal(
+      this.principal, "desktop-notification");
     return permission == Ci.nsIPermissionManager.ALLOW_ACTION;
+  },
+
+  quotaChanged() {
+    return this.getLastVisit()
+      .then(lastVisit => lastVisit > this.lastPush);
   },
 
   quotaApplies() {
@@ -184,19 +212,21 @@ PushRecord.prototype = {
       pushEndpoint: this.pushEndpoint,
       lastPush: this.lastPush,
       pushCount: this.pushCount,
+      p256dhKey: this.p256dhPublicKey,
     };
   },
 
   toRegister() {
     return {
       pushEndpoint: this.pushEndpoint,
+      p256dhKey: this.p256dhPublicKey,
     };
   },
 };
 
 // Define lazy getters for the principal and scope URI. IndexedDB can't store
 // `nsIPrincipal` objects, so we keep them in a private weak map.
-let principals = new WeakMap();
+var principals = new WeakMap();
 Object.defineProperties(PushRecord.prototype, {
   principal: {
     get() {
@@ -207,7 +237,7 @@ Object.defineProperties(PushRecord.prototype, {
           // Allow tests to omit origin attributes.
           url += this.originAttributes;
         }
-        principal = BrowserUtils.principalFromOrigin(url);
+        principal = Services.scriptSecurityManager.createCodebasePrincipalFromOrigin(url);
         principals.set(this, principal);
       }
       return principal;

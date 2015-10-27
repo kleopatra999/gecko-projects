@@ -15,8 +15,7 @@ BEGIN_BLUETOOTH_NAMESPACE
 
 using mozilla::ipc::DaemonSocketPDU;
 using mozilla::ipc::DaemonSocketPDUHeader;
-
-class BluetoothSetupResultHandler;
+using mozilla::ipc::DaemonSocketResultHandler;
 
 class BluetoothDaemonAvrcpModule
 {
@@ -63,16 +62,8 @@ public:
 #endif
   };
 
-  static const int MAX_NUM_CLIENTS;
-
-  virtual nsresult Send(DaemonSocketPDU* aPDU, void* aUserData) = 0;
-
-  virtual nsresult RegisterModule(uint8_t aId, uint8_t aMode,
-                                  uint32_t aMaxNumClients,
-                                  BluetoothSetupResultHandler* aRes) = 0;
-
-  virtual nsresult UnregisterModule(uint8_t aId,
-                                    BluetoothSetupResultHandler* aRes) = 0;
+  virtual nsresult Send(DaemonSocketPDU* aPDU,
+                        DaemonSocketResultHandler* aRes) = 0;
 
   void SetNotificationHandler(
     BluetoothAvrcpNotificationHandler* aNotificationHandler);
@@ -119,11 +110,8 @@ public:
   nsresult SetVolumeCmd(uint8_t aVolume, BluetoothAvrcpResultHandler* aRes);
 
 protected:
-  nsresult Send(DaemonSocketPDU* aPDU,
-                BluetoothAvrcpResultHandler* aRes);
-
   void HandleSvc(const DaemonSocketPDUHeader& aHeader,
-                 DaemonSocketPDU& aPDU, void* aUserData);
+                 DaemonSocketPDU& aPDU, DaemonSocketResultHandler* aRes);
 
   //
   // Responses
@@ -183,7 +171,7 @@ protected:
 
   void HandleRsp(const DaemonSocketPDUHeader& aHeader,
                  DaemonSocketPDU& aPDU,
-                 void* aUserData);
+                 DaemonSocketResultHandler* aRes);
 
   //
   // Notifications
@@ -192,8 +180,9 @@ protected:
   class NotificationHandlerWrapper;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, nsString, unsigned long,
-    const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothAddress, unsigned long,
+    const BluetoothAddress&>
     RemoteFeatureNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable0<
@@ -245,14 +234,13 @@ protected:
     VolumeChangeNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, int, int>
+    NotificationHandlerWrapper, void, uint8_t, uint8_t, int, int>
     PassthroughCmdNotification;
 
   class GetElementAttrInitOp;
   class GetPlayerAppAttrsTextInitOp;
   class GetPlayerAppValueInitOp;
   class GetPlayerAppValuesTextInitOp;
-  class PassthroughCmdInitOp;
   class RemoteFeatureInitOp;
 
   void RemoteFeatureNtf(const DaemonSocketPDUHeader& aHeader,
@@ -293,7 +281,7 @@ protected:
 
   void HandleNtf(const DaemonSocketPDUHeader& aHeader,
                  DaemonSocketPDU& aPDU,
-                 void* aUserData);
+                 DaemonSocketResultHandler* aRes);
 
   static BluetoothAvrcpNotificationHandler* sNotificationHandler;
 };
@@ -308,10 +296,8 @@ public:
   BluetoothDaemonAvrcpInterface(BluetoothDaemonAvrcpModule* aModule);
   ~BluetoothDaemonAvrcpInterface();
 
-  void Init(BluetoothAvrcpNotificationHandler* aNotificationHandler,
-            BluetoothAvrcpResultHandler* aRes) override;
-
-  void Cleanup(BluetoothAvrcpResultHandler* aRes) override;
+  void SetNotificationHandler(
+    BluetoothAvrcpNotificationHandler* aNotificationHandler) override;
 
   void GetPlayStatusRsp(ControlPlayStatus aPlayStatus,
                         uint32_t aSongLen, uint32_t aSongPos,

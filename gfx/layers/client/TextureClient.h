@@ -178,7 +178,7 @@ public:
 
   // Creates and allocates a TextureClient usable with Moz2D.
   static already_AddRefed<TextureClient>
-  CreateForDrawing(ISurfaceAllocator* aAllocator,
+  CreateForDrawing(CompositableForwarder* aAllocator,
                    gfx::SurfaceFormat aFormat,
                    gfx::IntSize aSize,
                    BackendSelector aSelector,
@@ -382,7 +382,7 @@ public:
 
   void MarkImmutable() { AddFlags(TextureFlags::IMMUTABLE); }
 
-  bool IsSharedWithCompositor() const { return mShared; }
+  bool IsSharedWithCompositor() const;
 
   bool ShouldDeallocateInDestructor() const;
 
@@ -408,6 +408,8 @@ public:
    * help avoid race conditions in some cases.
    * It's a temporary hack to ensure that DXGI textures don't get destroyed
    * between serialization and deserialization.
+   *
+   * This must not be called off the texture's IPDL thread.
    */
   void KeepUntilFullDeallocation(UniquePtr<KeepAlive> aKeep, bool aMainThreadOnly = false);
 
@@ -442,7 +444,7 @@ public:
     mReleaseFenceHandle.Merge(aReleaseFenceHandle);
   }
 
-  FenceHandle GetAndResetReleaseFenceHandle()
+  virtual FenceHandle GetAndResetReleaseFenceHandle()
   {
     FenceHandle fence;
     mReleaseFenceHandle.TransferToAnotherFenceHandle(fence);
@@ -454,7 +456,7 @@ public:
     mAcquireFenceHandle = aAcquireFenceHandle;
   }
 
-  const FenceHandle& GetAcquireFenceHandle() const
+  virtual const FenceHandle& GetAcquireFenceHandle() const
   {
     return mAcquireFenceHandle;
   }
@@ -504,12 +506,19 @@ private:
   static void TextureClientRecycleCallback(TextureClient* aClient, void* aClosure);
 
   /**
-   * Called once, just before the destructor.
+   * Called once, during the destruction of the Texture, on the thread in which
+   * texture's reference count reaches 0 (could be any thread).
    *
    * Here goes the shut-down code that uses virtual methods.
    * Must only be called by Release().
    */
   B2G_ACL_EXPORT void Finalize();
+
+  /**
+   * Called once during the destruction of the texture on the IPDL thread, if
+   * the texture is shared on the compositor (otherwise it is not called at all).
+   */
+  virtual void FinalizeOnIPDLThread() {}
 
   friend class AtomicRefCountedWithFinalize<TextureClient>;
 
@@ -571,7 +580,7 @@ public:
     }
 
 private:
-    mozilla::RefPtr<TextureClient> mTextureClient;
+    RefPtr<TextureClient> mTextureClient;
 };
 
 /**

@@ -1064,6 +1064,12 @@ nsContentSink::ProcessOfflineManifest(const nsAString& aManifestSpec)
     return;
   }
 
+  // If this document has been interecepted, let's skip the processing of the
+  // manifest.
+  if (nsContentUtils::IsControlledByServiceWorker(mDocument)) {
+    return;
+  }
+
   // If the docshell's in private browsing mode, we don't want to do any
   // manifest processing.
   nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(mDocShell);
@@ -1165,7 +1171,8 @@ nsContentSink::ProcessOfflineManifest(const nsAString& aManifestSpec)
 
     if (updateService) {
       nsCOMPtr<nsIDOMDocument> domdoc = do_QueryInterface(mDocument);
-      updateService->ScheduleOnDocumentStop(manifestURI, mDocumentURI, domdoc);
+      updateService->ScheduleOnDocumentStop(manifestURI, mDocumentURI,
+                                            mDocument->NodePrincipal(), domdoc);
     }
     break;
   }
@@ -1529,7 +1536,7 @@ nsContentSink::DropParserAndPerfHint(void)
   // actually broken.
   // Drop our reference to the parser to get rid of a circular
   // reference.
-  nsRefPtr<nsParserBase> kungFuDeathGrip(mParser.forget());
+  RefPtr<nsParserBase> kungFuDeathGrip(mParser.forget());
 
   if (mDynamicLowerValue) {
     // Reset the performance hint which was set to FALSE

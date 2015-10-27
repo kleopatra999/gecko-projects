@@ -6,7 +6,7 @@ const PREF_NEWTAB_DIRECTORYSOURCE = "browser.newtabpage.directory.source";
 
 Services.prefs.setBoolPref(PREF_NEWTAB_ENABLED, true);
 
-let tmp = {};
+var tmp = {};
 Cu.import("resource://gre/modules/Promise.jsm", tmp);
 Cu.import("resource://gre/modules/NewTabUtils.jsm", tmp);
 Cu.import("resource:///modules/DirectoryLinksProvider.jsm", tmp);
@@ -15,23 +15,23 @@ Cc["@mozilla.org/moz/jssubscript-loader;1"]
   .getService(Ci.mozIJSSubScriptLoader)
   .loadSubScript("chrome://browser/content/sanitize.js", tmp);
 Cu.import("resource://gre/modules/Timer.jsm", tmp);
-let {Promise, NewTabUtils, Sanitizer, clearTimeout, setTimeout, DirectoryLinksProvider, PlacesTestUtils} = tmp;
+var {Promise, NewTabUtils, Sanitizer, clearTimeout, setTimeout, DirectoryLinksProvider, PlacesTestUtils} = tmp;
 
-let uri = Services.io.newURI("about:newtab", null, null);
-let principal = Services.scriptSecurityManager.createCodebasePrincipal(uri, {});
+var uri = Services.io.newURI("about:newtab", null, null);
+var principal = Services.scriptSecurityManager.createCodebasePrincipal(uri, {});
 
-let isMac = ("nsILocalFileMac" in Ci);
-let isLinux = ("@mozilla.org/gnome-gconf-service;1" in Cc);
-let isWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
-let gWindow = window;
+var isMac = ("nsILocalFileMac" in Ci);
+var isLinux = ("@mozilla.org/gnome-gconf-service;1" in Cc);
+var isWindows = ("@mozilla.org/windows-registry-key;1" in Cc);
+var gWindow = window;
 
 // Default to dummy/empty directory links
-let gDirectorySource = 'data:application/json,{"test":1}';
-let gOrigDirectorySource;
+var gDirectorySource = 'data:application/json,{"test":1}';
+var gOrigDirectorySource;
 
 // The tests assume all 3 rows and all 3 columns of sites are shown, but the
 // window may be too small to actually show everything.  Resize it if necessary.
-let requiredSize = {};
+var requiredSize = {};
 requiredSize.innerHeight =
   40 + 32 + // undo container + bottom margin
   44 + 32 + // search bar + bottom margin
@@ -41,7 +41,7 @@ requiredSize.innerWidth =
   (3 * (290 + 20)) + // 3 cols * (tile width + side margins)
   100; // breathing room
 
-let oldSize = {};
+var oldSize = {};
 Object.keys(requiredSize).forEach(prop => {
   info([prop, gBrowser.contentWindow[prop], requiredSize[prop]]);
   if (gBrowser.contentWindow[prop] < requiredSize[prop]) {
@@ -52,8 +52,8 @@ Object.keys(requiredSize).forEach(prop => {
   }
 });
 
-let screenHeight = {};
-let screenWidth = {};
+var screenHeight = {};
+var screenWidth = {};
 Cc["@mozilla.org/gfx/screenmanager;1"].
   getService(Ci.nsIScreenManager).
   primaryScreen.
@@ -116,24 +116,64 @@ function watchLinksChangeOnce() {
 
 /**
  * Provide the default test function to start our test runner.
+ *
+ * We need different code paths for tests that are still wired for
+ * `TestRunner` and tests that have been ported to `add_task` as
+ * we cannot have both in the same file.
  */
-function test() {
-  waitForExplicitFinish();
-  // start TestRunner.run() after directory links is downloaded and written to disk
-  watchLinksChangeOnce().then(() => {
-    // Wait for hidden page to update with the desired links
-    whenPagesUpdated(() => TestRunner.run(), true);
-  });
+function isTestPortedToAddTask() {
+  return gTestPath.endsWith("browser_newtab_bug722273.js");
+}
+if (!isTestPortedToAddTask()) {
+  this.test = function() {
+    waitForExplicitFinish();
+    // start TestRunner.run() after directory links is downloaded and written to disk
+    watchLinksChangeOnce().then(() => {
+      // Wait for hidden page to update with the desired links
+      whenPagesUpdated(() => TestRunner.run(), true);
+    });
 
-  // Save the original directory source (which is set globally for tests)
-  gOrigDirectorySource = Services.prefs.getCharPref(PREF_NEWTAB_DIRECTORYSOURCE);
-  Services.prefs.setCharPref(PREF_NEWTAB_DIRECTORYSOURCE, gDirectorySource);
+    // Save the original directory source (which is set globally for tests)
+    gOrigDirectorySource = Services.prefs.getCharPref(PREF_NEWTAB_DIRECTORYSOURCE);
+    Services.prefs.setCharPref(PREF_NEWTAB_DIRECTORYSOURCE, gDirectorySource);
+  }
+} else {
+  add_task(function* setup() {
+    registerCleanupFunction(function() {
+      return new Promise(resolve => {
+        function cleanupAndFinish() {
+          PlacesTestUtils.clearHistory().then(() => {
+            whenPagesUpdated(resolve);
+            NewTabUtils.restore();
+          });
+        }
+
+        let callbacks = NewTabUtils.links._populateCallbacks;
+        let numCallbacks = callbacks.length;
+
+        if (numCallbacks)
+          callbacks.splice(0, numCallbacks, cleanupAndFinish);
+        else
+          cleanupAndFinish();
+      });
+    });
+
+    let promiseReady = Task.spawn(function*() {
+      yield watchLinksChangeOnce();
+      yield new Promise(resolve => whenPagesUpdated(resolve, true));
+    });
+
+    // Save the original directory source (which is set globally for tests)
+    gOrigDirectorySource = Services.prefs.getCharPref(PREF_NEWTAB_DIRECTORYSOURCE);
+    Services.prefs.setCharPref(PREF_NEWTAB_DIRECTORYSOURCE, gDirectorySource);
+    yield promiseReady;
+  });
 }
 
 /**
  * The test runner that controls the execution flow of our tests.
  */
-let TestRunner = {
+var TestRunner = {
   /**
    * Starts the test runner.
    */
@@ -270,7 +310,7 @@ function fillHistory(aLinks, aCallback = TestRunner.next) {
     };
 
     PlacesUtils.asyncHistory.updatePlaces(place, {
-      handleError: function () ok(false, "couldn't add visit to history"),
+      handleError: () => ok(false, "couldn't add visit to history"),
       handleResult: function () {},
       handleCompletion: function () {
         if (--numLinks == 0 && aCallback)

@@ -16,7 +16,7 @@ Cu.import("resource://gre/modules/nsFormAutoCompleteResult.jsm");
 
 // nsITreeView implementation that feeds the autocomplete popup
 // with the search data.
-let AutoCompleteE10SView = {
+var AutoCompleteE10SView = {
   // nsISupports
   QueryInterface: XPCOMUtils.generateQI([Ci.nsITreeView,
                                          Ci.nsIAutoCompleteController]),
@@ -56,7 +56,9 @@ let AutoCompleteE10SView = {
   getColumnProperties: function(column) { return ""; },
 
   // nsIAutoCompleteController
-  get matchCount() this.rowCount,
+  get matchCount() {
+    return this.rowCount;
+  },
 
   handleEnter: function(aIsPopupSelection) {
     AutoCompleteE10S.handleEnter(aIsPopupSelection);
@@ -98,7 +100,9 @@ this.AutoCompleteE10S = {
     this.popup.style.direction = direction;
 
     this.x = rect.left;
-    this.y = rect.top + rect.height;
+    this.y = rect.top;
+    this.width = rect.width;
+    this.height = rect.height;
   },
 
   _showPopup: function(results) {
@@ -125,7 +129,7 @@ this.AutoCompleteE10S = {
       this.popup.mInput = null;
       this.popup.showCommentColumn = false;
       this.popup.showImageColumn = false;
-      this.popup.openPopupAtScreen(this.x, this.y, true);
+      this.popup.openPopupAtScreenRect("after_start", this.x, this.y, this.width, this.height, false, false);
     } else {
       this.popup.closePopup();
     }

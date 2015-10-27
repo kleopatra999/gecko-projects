@@ -554,6 +554,7 @@ struct IMENotification final
     bool mReversed;
     bool mCausedByComposition;
     bool mCausedBySelectionEvent;
+    bool mOccurredDuringComposition;
 
     void SetWritingMode(const WritingMode& aWritingMode);
     WritingMode GetWritingMode() const;
@@ -582,14 +583,19 @@ struct IMENotification final
     {
       return mString->IsEmpty();
     }
-    void Clear()
+    void ClearSelectionData()
     {
       mOffset = UINT32_MAX;
       mString->Truncate();
       mWritingMode = 0;
       mReversed = false;
+    }
+    void Clear()
+    {
+      ClearSelectionData();
       mCausedByComposition = false;
       mCausedBySelectionEvent = false;
+      mOccurredDuringComposition = false;
     }
     bool IsValid() const
     {
@@ -601,8 +607,17 @@ struct IMENotification final
       *mString = aOther.String();
       mWritingMode = aOther.mWritingMode;
       mReversed = aOther.mReversed;
-      mCausedByComposition = aOther.mCausedByComposition;
-      mCausedBySelectionEvent = aOther.mCausedBySelectionEvent;
+      AssignReason(aOther.mCausedByComposition,
+                   aOther.mCausedBySelectionEvent,
+                   aOther.mOccurredDuringComposition);
+    }
+    void AssignReason(bool aCausedByComposition,
+                      bool aCausedBySelectionEvent,
+                      bool aOccurredDuringComposition)
+    {
+      mCausedByComposition = aCausedByComposition;
+      mCausedBySelectionEvent = aCausedBySelectionEvent;
+      mOccurredDuringComposition = aOccurredDuringComposition;
     }
   };
 
@@ -660,6 +675,7 @@ struct IMENotification final
     uint32_t mAddedEndOffset;
 
     bool mCausedByComposition;
+    bool mOccurredDuringComposition;
 
     uint32_t OldLength() const
     {
@@ -720,7 +736,8 @@ struct IMENotification final
     TextChangeData(uint32_t aStartOffset,
                    uint32_t aRemovedEndOffset,
                    uint32_t aAddedEndOffset,
-                   bool aCausedByComposition)
+                   bool aCausedByComposition,
+                   bool aOccurredDuringComposition)
     {
       MOZ_ASSERT(aRemovedEndOffset >= aStartOffset,
                  "removed end offset must not be smaller than start offset");
@@ -730,6 +747,7 @@ struct IMENotification final
       mRemovedEndOffset = aRemovedEndOffset;
       mAddedEndOffset = aAddedEndOffset;
       mCausedByComposition = aCausedByComposition;
+      mOccurredDuringComposition = aOccurredDuringComposition;
     }
   };
 
@@ -767,15 +785,6 @@ struct IMENotification final
     MOZ_RELEASE_ASSERT(mMessage == NOTIFY_IME_OF_SELECTION_CHANGE);
     mSelectionChangeData.Assign(aSelectionChangeData);
   }
-  void SetData(const SelectionChangeDataBase& aSelectionChangeData,
-               bool aCausedByComposition,
-               bool aCausedBySelectionEvent)
-  {
-    MOZ_RELEASE_ASSERT(mMessage == NOTIFY_IME_OF_SELECTION_CHANGE);
-    mSelectionChangeData.Assign(aSelectionChangeData);
-    mSelectionChangeData.mCausedByComposition = aCausedByComposition;
-    mSelectionChangeData.mCausedBySelectionEvent = aCausedBySelectionEvent;
-  }
 
   void SetData(const TextChangeDataBase& aTextChangeData)
   {
@@ -790,6 +799,18 @@ struct IMENotification final
         return mSelectionChangeData.mCausedByComposition;
       case NOTIFY_IME_OF_TEXT_CHANGE:
         return mTextChangeData.mCausedByComposition;
+      default:
+        return false;
+    }
+  }
+
+  bool OccurredDuringComposition() const
+  {
+    switch (mMessage) {
+      case NOTIFY_IME_OF_SELECTION_CHANGE:
+        return mSelectionChangeData.mOccurredDuringComposition;
+      case NOTIFY_IME_OF_TEXT_CHANGE:
+        return mTextChangeData.mOccurredDuringComposition;
       default:
         return false;
     }

@@ -18,6 +18,11 @@
             android:title="@string/fxaccount_email_hint" />
         <Preference
             android:editable="false"
+            android:key="manage_account"
+            android:persistent="false"
+            android:title="@string/fxaccount_status_manage_account" />
+        <Preference
+            android:editable="false"
             android:key="auth_server"
             android:persistent="false"
             android:title="@string/fxaccount_status_auth_server" />
@@ -97,7 +102,11 @@
             android:key="sync_server"
             android:persistent="false"
             android:title="@string/fxaccount_status_sync_server" />
-
+        <Preference
+            android:editable="false"
+            android:key="remove_account"
+            android:persistent="false"
+            android:title="@string/fxaccount_remove_account" />
         <Preference
             android:editable="false"
             android:key="more"

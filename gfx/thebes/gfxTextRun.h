@@ -10,6 +10,7 @@
 #include "nsString.h"
 #include "gfxPoint.h"
 #include "gfxFont.h"
+#include "gfxFontConstants.h"
 #include "nsTArray.h"
 #include "gfxSkipChars.h"
 #include "gfxPlatform.h"
@@ -126,10 +127,6 @@ public:
     bool CharIsNewline(uint32_t aPos) const {
         NS_ASSERTION(aPos < GetLength(), "aPos out of range");
         return mCharacterGlyphs[aPos].CharIsNewline();
-    }
-    bool CharIsLowSurrogate(uint32_t aPos) const {
-        NS_ASSERTION(aPos < GetLength(), "aPos out of range");
-        return mCharacterGlyphs[aPos].CharIsLowSurrogate();
     }
 
     // All uint32_t aStart, uint32_t aLength ranges below are restricted to
@@ -412,7 +409,7 @@ public:
 
     // The text is divided into GlyphRuns as necessary
     struct GlyphRun {
-        nsRefPtr<gfxFont> mFont;   // never null
+        RefPtr<gfxFont> mFont;   // never null
         uint32_t          mCharacterOffset; // into original UTF16 string
         uint8_t           mMatchType;
         uint16_t          mOrientation; // gfxTextRunFactory::TEXT_ORIENT_* value
@@ -533,10 +530,6 @@ public:
             SetGlyphs(aIndex, CompressedGlyph().SetComplex(true, true, 1), details);
         }
         g->SetIsNewline();
-    }
-    void SetIsLowSurrogate(uint32_t aIndex) {
-        SetGlyphs(aIndex, CompressedGlyph().SetComplex(false, false, 0), nullptr);
-        mCharacterGlyphs[aIndex].SetIsLowSurrogate();
     }
 
     /**
@@ -732,8 +725,9 @@ public:
     static void Shutdown(); // platform must call this to release the languageAtomService
 
     gfxFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
-                 const gfxFontStyle *aStyle,
-                 gfxUserFontSet *aUserFontSet = nullptr);
+                 const gfxFontStyle* aStyle,
+                 gfxTextPerfMetrics* aTextPerf,
+                 gfxUserFontSet* aUserFontSet = nullptr);
 
     virtual ~gfxFontGroup();
 
@@ -844,7 +838,6 @@ public:
 
     // used when logging text performance
     gfxTextPerfMetrics *GetTextPerfMetrics() { return mTextPerf; }
-    void SetTextPerfMetrics(gfxTextPerfMetrics *aTextPerf) { mTextPerf = aTextPerf; }
 
     // This will call UpdateUserFonts() if the user font set is changed.
     void SetUserFontSet(gfxUserFontSet *aUserFontSet);
@@ -871,12 +864,6 @@ public:
     // Get it/use it/forget it :) - don't keep a reference that might go stale.
     gfxTextRun* GetEllipsisTextRun(int32_t aAppUnitsPerDevPixel, uint32_t aFlags,
                                    LazyReferenceContextGetter& aRefContextGetter);
-
-    // helper method for resolving generic font families
-    static void
-    ResolveGenericFontNames(mozilla::FontFamilyType aGenericType,
-                            nsIAtom *aLanguage,
-                            nsTArray<nsString>& aGenericFamilies);
 
 protected:
     // search through pref fonts for a character, return nullptr if no matching pref font
@@ -1009,7 +996,7 @@ protected:
         bool EqualsUserFont(const gfxUserFontEntry* aUserFont) const;
 
     private:
-        nsRefPtr<gfxFontFamily> mFamily;
+        RefPtr<gfxFontFamily> mFamily;
         // either a font or a font entry exists
         union {
             gfxFont*            mFont;
@@ -1030,13 +1017,13 @@ protected:
     // Code should be careful about addressing this array directly.
     nsTArray<FamilyFace> mFonts;
 
-    nsRefPtr<gfxFont> mDefaultFont;
+    RefPtr<gfxFont> mDefaultFont;
     gfxFontStyle mStyle;
 
     gfxFloat mUnderlineOffset;
     gfxFloat mHyphenWidth;
 
-    nsRefPtr<gfxUserFontSet> mUserFontSet;
+    RefPtr<gfxUserFontSet> mUserFontSet;
     uint64_t mCurrGeneration;  // track the current user font set generation, rebuild font list if needed
 
     gfxTextPerfMetrics *mTextPerf;
@@ -1046,8 +1033,8 @@ protected:
     nsAutoPtr<gfxTextRun>   mCachedEllipsisTextRun;
 
     // cache the most recent pref font to avoid general pref font lookup
-    nsRefPtr<gfxFontFamily> mLastPrefFamily;
-    nsRefPtr<gfxFont>       mLastPrefFont;
+    RefPtr<gfxFontFamily> mLastPrefFamily;
+    RefPtr<gfxFont>       mLastPrefFont;
     eFontPrefLang           mLastPrefLang;       // lang group for last pref font
     eFontPrefLang           mPageLang;
     bool                    mLastPrefFirstFont;  // is this the first font in the list of pref fonts for this lang group?
@@ -1117,18 +1104,12 @@ protected:
 
     // helper methods for looking up fonts
 
-    // iterate over the fontlist, lookup names and expand generics
-    void EnumerateFontList(nsIAtom *aLanguage, void *aClosure = nullptr);
-
-    // expand a generic to a list of specific names based on prefs
-    void FindGenericFonts(mozilla::FontFamilyType aGenericType,
-                          nsIAtom *aLanguage,
-                          void *aClosure);
-
     // lookup and add a font with a given name (i.e. *not* a generic!)
-    virtual void FindPlatformFont(const nsAString& aName,
-                                  bool aUseFontSet,
-                                  void *aClosure);
+    void AddPlatformFont(const nsAString& aName,
+                         nsTArray<gfxFontFamily*>& aFamilyList);
+
+    // do style selection and add entries to list
+    void AddFamilyToFontList(gfxFontFamily* aFamily);
 
     static nsILanguageAtomService* gLangService;
 };

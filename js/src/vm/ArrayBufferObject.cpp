@@ -24,6 +24,7 @@
 #include "jsarray.h"
 #include "jscntxt.h"
 #include "jscpucfg.h"
+#include "jsfriendapi.h"
 #include "jsnum.h"
 #include "jsobj.h"
 #include "jstypes.h"
@@ -110,7 +111,6 @@ const Class ArrayBufferObject::class_ = {
     nullptr,                 /* enumerate */
     nullptr,                 /* resolve */
     nullptr,                 /* mayResolve */
-    nullptr,                 /* convert */
     ArrayBufferObject::finalize,
     nullptr,        /* call        */
     nullptr,        /* hasInstance */
@@ -253,6 +253,7 @@ ReleaseAsmJSMappedData(void* base)
     }
 #   endif
 #  endif
+    MemProfiler::RemoveNative(base);
 }
 #else
 static void
@@ -299,6 +300,7 @@ TransferAsmJSMappedBuffer(JSContext* cx, const CallArgs& args,
             return false;
         }
 #  endif
+        MemProfiler::SampleNative(diffStart, diffLength);
     } else if (newByteLength < oldByteLength) {
         void* diffStart = data + newByteLength;
         size_t diffLength = oldByteLength - newByteLength;
@@ -351,7 +353,10 @@ ArrayBufferObject::fun_transfer(JSContext* cx, unsigned argc, Value* vp)
     }
 
     RootedObject oldBufferObj(cx, &oldBufferArg.toObject());
-    if (!ObjectClassIs(oldBufferObj, ESClass_ArrayBuffer, cx)) {
+    ESClassValue cls;
+    if (!GetBuiltinClass(cx, oldBufferObj, &cls))
+        return false;
+    if (cls != ESClass_ArrayBuffer) {
         JS_ReportErrorNumber(cx, GetErrorMessage, nullptr, JSMSG_TYPED_ARRAY_BAD_ARGS);
         return false;
     }
@@ -456,7 +461,7 @@ ArrayBufferObject::class_constructor(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
 
-    if (!WarnIfNotConstructing(cx, args, "ArrayBuffer"))
+    if (!ThrowIfNotConstructing(cx, args, "ArrayBuffer"))
         return false;
 
     int32_t nbytes = 0;
@@ -520,8 +525,9 @@ ArrayBufferObject::neuter(JSContext* cx, Handle<ArrayBufferObject*> buffer,
     if (buffer->hasTypedObjectViews()) {
         // Make sure the global object's group has been instantiated, so the
         // flag change will be observed.
+        AutoEnterOOMUnsafeRegion oomUnsafe;
         if (!cx->global()->getGroup(cx))
-            CrashAtUnhandlableOOM("ArrayBufferObject::neuter");
+            oomUnsafe.crash("ArrayBufferObject::neuter");
         MarkObjectGroupFlags(cx, cx->global(), OBJECT_FLAG_TYPED_OBJECT_NEUTERED);
         cx->compartment()->neuteredTypedObjects = 1;
     }
@@ -661,12 +667,14 @@ ArrayBufferObject::prepareForAsmJS(JSContext* cx, Handle<ArrayBufferObject*> buf
 # ifdef XP_WIN
     if (!VirtualAlloc(data, buffer->byteLength(), MEM_COMMIT, PAGE_READWRITE)) {
         VirtualFree(data, 0, MEM_RELEASE);
+        MemProfiler::RemoveNative(data);
         return false;
     }
 # else
     size_t validLength = buffer->byteLength();
     if (mprotect(data, validLength, PROT_READ | PROT_WRITE)) {
         munmap(data, AsmJSMappedSize);
+        MemProfiler::RemoveNative(data);
         return false;
     }
 #   if defined(MOZ_VALGRIND) && defined(VALGRIND_DISABLE_ADDR_ERROR_REPORTING_IN_RANGE)
@@ -702,6 +710,7 @@ ArrayBufferObject::BufferContents
 ArrayBufferObject::createMappedContents(int fd, size_t offset, size_t length)
 {
     void* data = AllocateMappedContent(fd, offset, length, ARRAY_BUFFER_ALIGNMENT);
+    MemProfiler::SampleNative(data, length);
     return BufferContents::create<MAPPED>(data);
 }
 
@@ -717,6 +726,12 @@ ArrayBufferObject::dataPointer() const
     return static_cast<uint8_t*>(getSlot(DATA_SLOT).toPrivate());
 }
 
+SharedMem<uint8_t*>
+ArrayBufferObject::dataPointerShared() const
+{
+    return SharedMem<uint8_t*>::unshared(getSlot(DATA_SLOT).toPrivate());
+}
+
 void
 ArrayBufferObject::releaseData(FreeOp* fop)
 {
@@ -728,6 +743,7 @@ ArrayBufferObject::releaseData(FreeOp* fop)
         fop->free_(dataPointer());
         break;
       case MAPPED:
+        MemProfiler::RemoveNative(dataPointer());
         DeallocateMappedContent(dataPointer(), byteLength());
         break;
       case ASMJS_MAPPED:
@@ -1454,6 +1470,7 @@ JS_CreateMappedArrayBufferContents(int fd, size_t offset, size_t length)
 JS_PUBLIC_API(void)
 JS_ReleaseMappedArrayBufferContents(void* contents, size_t length)
 {
+    MemProfiler::RemoveNative(contents);
     DeallocateMappedContent(contents, length);
 }
 

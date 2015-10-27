@@ -257,12 +257,19 @@ protected:
     // trying to delete the surrounding text.
     bool mIsDeletingSurrounding;
     // mLayoutChanged is true after OnLayoutChange() is called.  This is reset
-    // when NS_COMPOSITION_CHANGE is being dispatched.
+    // when eCompositionChange is being dispatched.
     bool mLayoutChanged;
     // mSetCursorPositionOnKeyEvent true when caret rect or position is updated
     // with no composition.  If true, we update candidate window position
     // before key down
     bool mSetCursorPositionOnKeyEvent;
+    // mPendingResettingIMContext becomes true if selection change notification
+    // is received during composition but the selection change occurred before
+    // starting the composition.  In such case, we cannot notify IME of
+    // selection change during composition because we don't want to commit
+    // the composition in such case.  However, we should notify IME of the
+    // selection change after the composition is committed.
+    bool mPendingResettingIMContext;
 
     // sLastFocusedContext is a pointer to the last focused instance of this
     // class.  When a instance is destroyed and sLastFocusedContext refers it,

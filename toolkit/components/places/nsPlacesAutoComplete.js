@@ -721,8 +721,9 @@ nsPlacesAutoComplete.prototype = {
   //////////////////////////////////////////////////////////////////////////////
   //// nsPlacesAutoComplete
 
-  get _databaseInitialized()
-    Object.getOwnPropertyDescriptor(this, "_db").value !== undefined,
+  get _databaseInitialized() {
+    return Object.getOwnPropertyDescriptor(this, "_db").value !== undefined;
+  },
 
   /**
    * Generates the tokens used in searching from a given string.
@@ -1769,5 +1770,5 @@ urlInlineComplete.prototype = {
   ])
 };
 
-let components = [nsPlacesAutoComplete, urlInlineComplete];
+var components = [nsPlacesAutoComplete, urlInlineComplete];
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory(components);

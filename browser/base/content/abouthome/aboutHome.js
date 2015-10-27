@@ -21,11 +21,11 @@ const DATABASE_NAME = "abouthome";
 const DATABASE_VERSION = 1;
 const DATABASE_STORAGE = "persistent";
 const SNIPPETS_OBJECTSTORE_NAME = "snippets";
-let searchText, findKey;
+var searchText;
 
 // This global tracks if the page has been set up before, to prevent double inits
-let gInitialized = false;
-let gObserver = new MutationObserver(function (mutations) {
+var gInitialized = false;
+var gObserver = new MutationObserver(function (mutations) {
   for (let mutation of mutations) {
     if (mutation.attributeName == "snippetsVersion") {
       if (!gInitialized) {
@@ -55,21 +55,27 @@ window.addEventListener("pagehide", function() {
   window.removeEventListener("resize", fitToWidth);
 });
 
-// make Accel+f focus the search box
 window.addEventListener("keypress", ev => {
-  // Make Ctrl/Cmd+f focus the search box.
-  let modifiers = ev.ctrlKey + ev.altKey + ev.shiftKey + ev.metaKey;
-  if (ev.getModifierState("Accel") && modifiers == 1 && ev.key == findKey) {
-    searchText.focus();
-    ev.preventDefault();
-  }
+  // focus the search-box on keypress
+  if (document.activeElement.id == "searchText") // unless already focussed
+    return;
+
+  let modifiers = ev.ctrlKey + ev.altKey + ev.metaKey;
+  // ignore Ctrl/Cmd/Alt, but not Shift
+  // also ignore Tab, Insert, PageUp, etc., and Space
+  if (modifiers != 0 || ev.charCode == 0 || ev.charCode == 32)
+    return;
+
+  searchText.focus();
+  // need to send the first keypress outside the search-box manually to it
+  searchText.value += ev.key;
 });
 
 // This object has the same interface as Map and is used to store and retrieve
 // the snippets data.  It is lazily initialized by ensureSnippetsMapThen(), so
 // be sure its callback returned before trying to use it.
-let gSnippetsMap;
-let gSnippetsMapCallbacks = [];
+var gSnippetsMap;
+var gSnippetsMapCallbacks = [];
 
 /**
  * Ensure the snippets map is properly initialized.
@@ -183,7 +189,7 @@ function onSearchSubmit(aEvent)
 }
 
 
-let gContentSearchController;
+var gContentSearchController;
 
 function setupSearch()
 {
@@ -195,7 +201,6 @@ function setupSearch()
     searchText.removeEventListener("blur", searchText_onBlur);
     searchText.removeAttribute("autofocus");
   });
-  findKey = searchText.dataset.findkey;
 
   if (!gContentSearchController) {
     gContentSearchController =
@@ -274,7 +279,7 @@ function loadSnippets()
  * @note: snippets should never invoke showSnippets(), or they may cause
  *        a "too much recursion" exception.
  */
-let _snippetsShown = false;
+var _snippetsShown = false;
 function showSnippets()
 {
   let snippetsElt = document.getElementById("snippets");
@@ -352,7 +357,7 @@ function showDefaultSnippets()
 }
 
 function fitToWidth() {
-  if (window.scrollMaxX) {
+  if (window.scrollMaxX != window.scrollMinX) {
     document.body.setAttribute("narrow", "true");
   } else if (document.body.hasAttribute("narrow")) {
     document.body.removeAttribute("narrow");

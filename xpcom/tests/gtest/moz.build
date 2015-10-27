@@ -6,6 +6,7 @@
 
 UNIFIED_SOURCES += [
     'Helpers.cpp',
+	'TestAtoms.cpp',
     'TestCloneInputStream.cpp',
     'TestCRT.cpp',
     'TestEncoding.cpp',
@@ -28,3 +29,6 @@ UNIFIED_SOURCES += [
 ]
 
 FINAL_LIBRARY = 'xul-gtest'
+
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']

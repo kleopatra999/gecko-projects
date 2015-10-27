@@ -92,14 +92,15 @@ public:
                       ImageContainer* aContainer,
                       Image** aOutImage) override;
 
-  virtual bool SupportsConfig(IMFMediaType* aType, float aFramerate) override;
+  bool SupportsConfig(IMFMediaType* aType, float aFramerate) override;
 
 private:
-  nsRefPtr<IDirect3D9Ex> mD3D9;
-  nsRefPtr<IDirect3DDevice9Ex> mDevice;
-  nsRefPtr<IDirect3DDeviceManager9> mDeviceManager;
+  RefPtr<IDirect3D9Ex> mD3D9;
+  RefPtr<IDirect3DDevice9Ex> mDevice;
+  RefPtr<IDirect3DDeviceManager9> mDeviceManager;
   RefPtr<D3D9RecycleAllocator> mTextureClientAllocator;
-  nsRefPtr<IDirectXVideoDecoderService> mDecoderService;
+  RefPtr<IDirectXVideoDecoderService> mDecoderService;
+  GUID mDecoderGUID;
   UINT32 mResetToken;
   bool mFirstFrame;
   bool mIsAMDPreUVD4;
@@ -170,6 +171,10 @@ static const GUID DXVA2_ModeH264_E = {
   0x1b81be68, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 }
 };
 
+static const GUID DXVA2_Intel_ModeH264_E = {
+  0x604F8E68, 0x4951, 0x4c54, { 0x88, 0xFE, 0xAB, 0xD2, 0x5C, 0x15, 0xB3, 0xD6 }
+};
+
 // This tests if a DXVA video decoder can be created for the given media type/resolution.
 // It uses the same decoder device (DXVA2_ModeH264_E - DXVA2_ModeH264_VLD_NoFGT) as the H264
 // decoder MFT provided by windows (CLSID_CMSH264DecoderMFT) uses, so we can use it to determine
@@ -192,22 +197,22 @@ D3D9DXVA2Manager::SupportsConfig(IMFMediaType* aType, float aFramerate)
 
   UINT configCount;
   DXVA2_ConfigPictureDecode* configs = nullptr;
-  hr = mDecoderService->GetDecoderConfigurations(DXVA2_ModeH264_E, &desc, nullptr, &configCount, &configs);
+  hr = mDecoderService->GetDecoderConfigurations(mDecoderGUID, &desc, nullptr, &configCount, &configs);
   NS_ENSURE_TRUE(SUCCEEDED(hr), false);
 
-  nsRefPtr<IDirect3DSurface9> surface;
+  RefPtr<IDirect3DSurface9> surface;
   hr = mDecoderService->CreateSurface(desc.SampleWidth, desc.SampleHeight, 0, (D3DFORMAT)MAKEFOURCC('N', 'V', '1', '2'),
-  D3DPOOL_DEFAULT, 0, DXVA2_VideoDecoderRenderTarget,
-  surface.StartAssignment(), NULL);
+                                      D3DPOOL_DEFAULT, 0, DXVA2_VideoDecoderRenderTarget,
+                                      surface.StartAssignment(), NULL);
   if (!SUCCEEDED(hr)) {
     CoTaskMemFree(configs);
     return false;
   }
 
   for (UINT i = 0; i < configCount; i++) {
-    nsRefPtr<IDirectXVideoDecoder> decoder;
+    RefPtr<IDirectXVideoDecoder> decoder;
     IDirect3DSurface9* surfaces = surface;
-    hr = mDecoderService->CreateVideoDecoder(DXVA2_ModeH264_E, &desc, &configs[i], &surfaces, 1, decoder.StartAssignment());
+    hr = mDecoderService->CreateVideoDecoder(mDecoderGUID, &desc, &configs[i], &surfaces, 1, decoder.StartAssignment());
     if (SUCCEEDED(hr) && decoder) {
       CoTaskMemFree(configs);
       return true;
@@ -256,7 +261,7 @@ D3D9DXVA2Manager::Init(nsACString& aFailureReason)
   NS_ENSURE_TRUE(d3d9lib, E_FAIL);
   decltype(Direct3DCreate9Ex)* d3d9Create =
     (decltype(Direct3DCreate9Ex)*) GetProcAddress(d3d9lib, "Direct3DCreate9Ex");
-  nsRefPtr<IDirect3D9Ex> d3d9Ex;
+  RefPtr<IDirect3D9Ex> d3d9Ex;
   HRESULT hr = d3d9Create(D3D_SDK_VERSION, getter_AddRefs(d3d9Ex));
   if (!d3d9Ex) {
     NS_WARNING("Direct3DCreate9 failed");
@@ -286,7 +291,7 @@ D3D9DXVA2Manager::Init(nsACString& aFailureReason)
   params.Windowed = TRUE;
   params.Flags = D3DPRESENTFLAG_VIDEO;
 
-  nsRefPtr<IDirect3DDevice9Ex> device;
+  RefPtr<IDirect3DDevice9Ex> device;
   hr = d3d9Ex->CreateDeviceEx(D3DADAPTER_DEFAULT,
                               D3DDEVTYPE_HAL,
                               ::GetShellWindow(),
@@ -305,7 +310,7 @@ D3D9DXVA2Manager::Init(nsACString& aFailureReason)
   // Without this, when we make a copy of the frame in order to share it with
   // another device, we can't be sure that the copy has finished before the
   // other device starts using it.
-  nsRefPtr<IDirect3DQuery9> query;
+  RefPtr<IDirect3DQuery9> query;
 
   hr = device->CreateQuery(D3DQUERYTYPE_EVENT, getter_AddRefs(query));
   if (!SUCCEEDED(hr)) {
@@ -315,7 +320,7 @@ D3D9DXVA2Manager::Init(nsACString& aFailureReason)
 
   // Create and initialize IDirect3DDeviceManager9.
   UINT resetToken = 0;
-  nsRefPtr<IDirect3DDeviceManager9> deviceManager;
+  RefPtr<IDirect3DDeviceManager9> deviceManager;
 
   hr = wmf::DXVA2CreateDirect3DDeviceManager9(&resetToken,
                                               getter_AddRefs(deviceManager));
@@ -330,22 +335,33 @@ D3D9DXVA2Manager::Init(nsACString& aFailureReason)
   }
 
   HANDLE deviceHandle;
-  nsRefPtr<IDirectXVideoDecoderService> decoderService;
+  RefPtr<IDirectXVideoDecoderService> decoderService;
   hr = deviceManager->OpenDeviceHandle(&deviceHandle);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  if (!SUCCEEDED(hr)) {
+    aFailureReason = nsPrintfCString("IDirect3DDeviceManager9::OpenDeviceHandle failed with error %X", hr);
+    return hr;
+  }
 
   hr = deviceManager->GetVideoService(deviceHandle, IID_PPV_ARGS(decoderService.StartAssignment()));
   deviceManager->CloseDeviceHandle(deviceHandle);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  if (!SUCCEEDED(hr)) {
+    aFailureReason = nsPrintfCString("IDirectXVideoDecoderServer::GetVideoService failed with error %X", hr);
+    return hr;
+  }
 
   UINT deviceCount;
   GUID* decoderDevices = nullptr;
   hr = decoderService->GetDecoderDeviceGuids(&deviceCount, &decoderDevices);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  if (!SUCCEEDED(hr)) {
+    aFailureReason = nsPrintfCString("IDirectXVideoDecoderServer::GetDecoderDeviceGuids failed with error %X", hr);
+    return hr;
+  }
 
   bool found = false;
   for (UINT i = 0; i < deviceCount; i++) {
-    if (decoderDevices[i] == DXVA2_ModeH264_E) {
+    if (decoderDevices[i] == DXVA2_ModeH264_E ||
+        decoderDevices[i] == DXVA2_Intel_ModeH264_E) {
+      mDecoderGUID = decoderDevices[i];
       found = true;
       break;
     }
@@ -353,14 +369,18 @@ D3D9DXVA2Manager::Init(nsACString& aFailureReason)
   CoTaskMemFree(decoderDevices);
 
   if (!found) {
+    aFailureReason.AssignLiteral("Failed to find an appropriate decoder GUID");
     return E_FAIL;
   }
 
   D3DADAPTER_IDENTIFIER9 adapter;
   hr = d3d9Ex->GetAdapterIdentifier(D3DADAPTER_DEFAULT, 0, &adapter);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  if (!SUCCEEDED(hr)) {
+    aFailureReason = nsPrintfCString("IDirect3D9Ex::GetAdapterIdentifier failed with error %X", hr);
+    return hr;
+  }
 
-  if (adapter.VendorId = 0x1022) {
+  if (adapter.VendorId == 0x1022) {
     for (size_t i = 0; i < MOZ_ARRAY_LENGTH(sAMDPreUVD4); i++) {
       if (adapter.DeviceId == sAMDPreUVD4[i]) {
         mIsAMDPreUVD4 = true;
@@ -389,18 +409,18 @@ D3D9DXVA2Manager::CopyToImage(IMFSample* aSample,
                               ImageContainer* aImageContainer,
                               Image** aOutImage)
 {
-  nsRefPtr<IMFMediaBuffer> buffer;
+  RefPtr<IMFMediaBuffer> buffer;
   HRESULT hr = aSample->GetBufferByIndex(0, getter_AddRefs(buffer));
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
-  nsRefPtr<IDirect3DSurface9> surface;
+  RefPtr<IDirect3DSurface9> surface;
   hr = wmf::MFGetService(buffer,
                          MR_BUFFER_SERVICE,
                          IID_IDirect3DSurface9,
                          getter_AddRefs(surface));
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
-  nsRefPtr<Image> image = aImageContainer->CreateImage(ImageFormat::D3D9_RGB32_TEXTURE);
+  RefPtr<Image> image = aImageContainer->CreateImage(ImageFormat::D3D9_RGB32_TEXTURE);
   NS_ENSURE_TRUE(image, E_FAIL);
   NS_ASSERTION(image->GetFormat() == ImageFormat::D3D9_RGB32_TEXTURE,
                "Wrong format?");
@@ -461,11 +481,11 @@ public:
                       ImageContainer* aContainer,
                       Image** aOutImage) override;
 
-  virtual HRESULT ConfigureForSize(uint32_t aWidth, uint32_t aHeight) override;
+  HRESULT ConfigureForSize(uint32_t aWidth, uint32_t aHeight) override;
 
-  virtual bool IsD3D11() override { return true; }
+  bool IsD3D11() override { return true; }
 
-  virtual bool SupportsConfig(IMFMediaType* aType, float aFramerate) override;
+  bool SupportsConfig(IMFMediaType* aType, float aFramerate) override;
 
 private:
   HRESULT CreateFormatConverter();
@@ -478,6 +498,7 @@ private:
   RefPtr<IMFDXGIDeviceManager> mDXGIDeviceManager;
   RefPtr<MFTDecoder> mTransform;
   RefPtr<D3D11RecycleAllocator> mTextureClientAllocator;
+  GUID mDecoderGUID;
   uint32_t mWidth;
   uint32_t mHeight;
   UINT mDeviceManagerToken;
@@ -488,11 +509,11 @@ bool
 D3D11DXVA2Manager::SupportsConfig(IMFMediaType* aType, float aFramerate)
 {
   RefPtr<ID3D11VideoDevice> videoDevice;
-  HRESULT hr = mDevice->QueryInterface(static_cast<ID3D11VideoDevice**>(byRef(videoDevice)));
+  HRESULT hr = mDevice->QueryInterface(static_cast<ID3D11VideoDevice**>(getter_AddRefs(videoDevice)));
   NS_ENSURE_TRUE(SUCCEEDED(hr), false);
 
   D3D11_VIDEO_DECODER_DESC desc;
-  desc.Guid = DXVA2_ModeH264_E;
+  desc.Guid = mDecoderGUID;
 
   UINT32 width = 0;
   UINT32 height = 0;
@@ -520,7 +541,7 @@ D3D11DXVA2Manager::SupportsConfig(IMFMediaType* aType, float aFramerate)
     D3D11_VIDEO_DECODER_CONFIG config;
     hr = videoDevice->GetVideoDecoderConfig(&desc, i, &config);
     if (SUCCEEDED(hr)) {
-      nsRefPtr<ID3D11VideoDecoder> decoder;
+      RefPtr<ID3D11VideoDecoder> decoder;
       hr = videoDevice->CreateVideoDecoder(&desc, &config, decoder.StartAssignment());
       if (SUCCEEDED(hr) && decoder) {
         return true;
@@ -560,13 +581,13 @@ D3D11DXVA2Manager::Init(nsACString& aFailureReason)
     return E_FAIL;
   }
 
-  mDevice->GetImmediateContext(byRef(mContext));
+  mDevice->GetImmediateContext(getter_AddRefs(mContext));
   if (!mContext) {
     aFailureReason.AssignLiteral("Failed to get immediate context for d3d11 device");
     return E_FAIL;
   }
 
-  hr = wmf::MFCreateDXGIDeviceManager(&mDeviceManagerToken, byRef(mDXGIDeviceManager));
+  hr = wmf::MFCreateDXGIDeviceManager(&mDeviceManagerToken, getter_AddRefs(mDXGIDeviceManager));
   if (!SUCCEEDED(hr)) {
     aFailureReason = nsPrintfCString("MFCreateDXGIDeviceManager failed with code %X", hr);
     return hr;
@@ -592,43 +613,61 @@ D3D11DXVA2Manager::Init(nsACString& aFailureReason)
   }
 
   RefPtr<ID3D11VideoDevice> videoDevice;
-  hr = mDevice->QueryInterface(static_cast<ID3D11VideoDevice**>(byRef(videoDevice)));
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  hr = mDevice->QueryInterface(static_cast<ID3D11VideoDevice**>(getter_AddRefs(videoDevice)));
+  if (!SUCCEEDED(hr)) {
+    aFailureReason = nsPrintfCString("QI to ID3D11VideoDevice failed with code %X", hr);
+    return hr;
+  }
 
   bool found = false;
   UINT profileCount = videoDevice->GetVideoDecoderProfileCount();
   for (UINT i = 0; i < profileCount; i++) {
     GUID id;
     hr = videoDevice->GetVideoDecoderProfile(i, &id);
-    if (SUCCEEDED(hr) && id == DXVA2_ModeH264_E) {
+    if (SUCCEEDED(hr) && (id == DXVA2_ModeH264_E || id == DXVA2_Intel_ModeH264_E)) {
+      mDecoderGUID = id;
       found = true;
       break;
     }
   }
   if (!found) {
+    aFailureReason.AssignLiteral("Failed to find an appropriate decoder GUID");
     return E_FAIL;
   }
 
   BOOL nv12Support = false;
-  hr = videoDevice->CheckVideoDecoderFormat(&DXVA2_ModeH264_E, DXGI_FORMAT_NV12, &nv12Support);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  hr = videoDevice->CheckVideoDecoderFormat(&mDecoderGUID, DXGI_FORMAT_NV12, &nv12Support);
+  if (!SUCCEEDED(hr)) {
+    aFailureReason = nsPrintfCString("CheckVideoDecoderFormat failed with code %X", hr);
+    return hr;
+  }
   if (!nv12Support) {
+    aFailureReason.AssignLiteral("Decoder doesn't support NV12 surfaces");
     return E_FAIL;
   }
 
   RefPtr<IDXGIDevice> dxgiDevice;
-  hr = mDevice->QueryInterface(static_cast<IDXGIDevice**>(byRef(dxgiDevice)));
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  hr = mDevice->QueryInterface(static_cast<IDXGIDevice**>(getter_AddRefs(dxgiDevice)));
+  if (!SUCCEEDED(hr)) {
+    aFailureReason = nsPrintfCString("QI to IDXGIDevice failed with code %X", hr);
+    return hr;
+  }
 
-  nsRefPtr<IDXGIAdapter> adapter;
+  RefPtr<IDXGIAdapter> adapter;
   hr = dxgiDevice->GetAdapter(adapter.StartAssignment());
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  if (!SUCCEEDED(hr)) {
+    aFailureReason = nsPrintfCString("IDXGIDevice::GetAdapter failed with code %X", hr);
+    return hr;
+  }
 
   DXGI_ADAPTER_DESC adapterDesc;
   hr = adapter->GetDesc(&adapterDesc);
-  NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
+  if (!SUCCEEDED(hr)) {
+    aFailureReason = nsPrintfCString("IDXGIAdapter::GetDesc failed with code %X", hr);
+    return hr;
+  }
 
-  if (adapterDesc.VendorId = 0x1022) {
+  if (adapterDesc.VendorId == 0x1022) {
     for (size_t i = 0; i < MOZ_ARRAY_LENGTH(sAMDPreUVD4); i++) {
       if (adapterDesc.DeviceId == sAMDPreUVD4[i]) {
         mIsAMDPreUVD4 = true;
@@ -648,11 +687,11 @@ HRESULT
 D3D11DXVA2Manager::CreateOutputSample(RefPtr<IMFSample>& aSample, ID3D11Texture2D* aTexture)
 {
   RefPtr<IMFSample> sample;
-  HRESULT hr = wmf::MFCreateSample(byRef(sample));
+  HRESULT hr = wmf::MFCreateSample(getter_AddRefs(sample));
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
   RefPtr<IMFMediaBuffer> buffer;
-  hr = wmf::MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), aTexture, 0, FALSE, byRef(buffer));
+  hr = wmf::MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), aTexture, 0, FALSE, getter_AddRefs(buffer));
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
   sample->AddBuffer(buffer);
@@ -676,7 +715,7 @@ D3D11DXVA2Manager::CopyToImage(IMFSample* aVideoSample,
   // handle, and put that handle into the rendering pipeline.
 
   ImageFormat format = ImageFormat::D3D11_SHARE_HANDLE_TEXTURE;
-  nsRefPtr<Image> image(aContainer->CreateImage(format));
+  RefPtr<Image> image(aContainer->CreateImage(format));
   NS_ENSURE_TRUE(image, E_FAIL);
   NS_ASSERTION(image->GetFormat() == ImageFormat::D3D11_SHARE_HANDLE_TEXTURE,
                "Wrong format?");
@@ -696,7 +735,7 @@ D3D11DXVA2Manager::CopyToImage(IMFSample* aVideoSample,
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
   RefPtr<IDXGIKeyedMutex> keyedMutex;
-  hr = texture->QueryInterface(static_cast<IDXGIKeyedMutex**>(byRef(keyedMutex)));
+  hr = texture->QueryInterface(static_cast<IDXGIKeyedMutex**>(getter_AddRefs(keyedMutex)));
   NS_ENSURE_TRUE(SUCCEEDED(hr) && keyedMutex, hr);
 
   hr = keyedMutex->AcquireSync(0, INFINITE);
@@ -734,7 +773,7 @@ D3D11DXVA2Manager::ConfigureForSize(uint32_t aWidth, uint32_t aHeight)
   mHeight = aHeight;
 
   RefPtr<IMFMediaType> inputType;
-  HRESULT hr = wmf::MFCreateMediaType(byRef(inputType));
+  HRESULT hr = wmf::MFCreateMediaType(getter_AddRefs(inputType));
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
   hr = inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
@@ -761,7 +800,7 @@ D3D11DXVA2Manager::ConfigureForSize(uint32_t aWidth, uint32_t aHeight)
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
   RefPtr<IMFMediaType> outputType;
-  hr = wmf::MFCreateMediaType(byRef(outputType));
+  hr = wmf::MFCreateMediaType(getter_AddRefs(outputType));
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
   hr = outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);

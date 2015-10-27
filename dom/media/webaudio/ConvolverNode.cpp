@@ -102,12 +102,13 @@ public:
   }
 
   virtual void ProcessBlock(AudioNodeStream* aStream,
+                            GraphTime aFrom,
                             const AudioBlock& aInput,
                             AudioBlock* aOutput,
                             bool* aFinished) override
   {
     if (!mReverb) {
-      *aOutput = aInput;
+      aOutput->SetNull(WEBAUDIO_BLOCK_SIZE);
       return;
     }
 
@@ -120,7 +121,8 @@ public:
       } else {
         if (mLeftOverData != INT32_MIN) {
           mLeftOverData = INT32_MIN;
-          nsRefPtr<PlayingRefChanged> refchanged =
+          aStream->CheckForInactive();
+          RefPtr<PlayingRefChanged> refchanged =
             new PlayingRefChanged(aStream, PlayingRefChanged::RELEASE);
           aStream->Graph()->
             DispatchToMainThreadAfterStreamStateUpdate(refchanged.forget());
@@ -141,7 +143,7 @@ public:
       }
 
       if (mLeftOverData <= 0) {
-        nsRefPtr<PlayingRefChanged> refchanged =
+        RefPtr<PlayingRefChanged> refchanged =
           new PlayingRefChanged(aStream, PlayingRefChanged::ADDREF);
         aStream->Graph()->
           DispatchToMainThreadAfterStreamStateUpdate(refchanged.forget());
@@ -152,6 +154,11 @@ public:
     aOutput->AllocateChannels(2);
 
     mReverb->process(&input, aOutput, WEBAUDIO_BLOCK_SIZE);
+  }
+
+  virtual bool IsActive() const override
+  {
+    return mLeftOverData != INT32_MIN;
   }
 
   virtual size_t SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const override
@@ -174,7 +181,7 @@ public:
   }
 
 private:
-  nsRefPtr<ThreadSharedFloatArrayBufferList> mBuffer;
+  RefPtr<ThreadSharedFloatArrayBufferList> mBuffer;
   nsAutoPtr<WebCore::Reverb> mReverb;
   int32_t mBufferLength;
   int32_t mLeftOverData;
@@ -191,7 +198,7 @@ ConvolverNode::ConvolverNode(AudioContext* aContext)
   , mNormalize(true)
 {
   ConvolverNodeEngine* engine = new ConvolverNodeEngine(this, mNormalize);
-  mStream = AudioNodeStream::Create(aContext->Graph(), engine,
+  mStream = AudioNodeStream::Create(aContext, engine,
                                     AudioNodeStream::NO_STREAM_FLAGS);
 }
 
@@ -246,14 +253,14 @@ ConvolverNode::SetBuffer(JSContext* aCx, AudioBuffer* aBuffer, ErrorResult& aRv)
   MOZ_ASSERT(ns, "Why don't we have a stream here?");
   if (mBuffer) {
     uint32_t length = mBuffer->Length();
-    nsRefPtr<ThreadSharedFloatArrayBufferList> data =
+    RefPtr<ThreadSharedFloatArrayBufferList> data =
       mBuffer->GetThreadSharedChannelsForRate(aCx);
     if (data && length < WEBAUDIO_BLOCK_SIZE) {
       // For very small impulse response buffers, we need to pad the
       // buffer with 0 to make sure that the Reverb implementation
       // has enough data to compute FFTs from.
       length = WEBAUDIO_BLOCK_SIZE;
-      nsRefPtr<ThreadSharedFloatArrayBufferList> paddedBuffer =
+      RefPtr<ThreadSharedFloatArrayBufferList> paddedBuffer =
         new ThreadSharedFloatArrayBufferList(data->GetChannels());
       float* channelData = (float*) malloc(sizeof(float) * length * data->GetChannels());
       for (uint32_t i = 0; i < data->GetChannels(); ++i) {

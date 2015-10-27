@@ -838,12 +838,10 @@ GetDateBoundary(nsIX509Cert* ix509,
   if (NS_FAILED(rv))
     return;
 
-  dateTimeFormat->FormatPRTime(nullptr, kDateFormatShort, 
-                               kTimeFormatNoSeconds, timeToUse, 
-                               formattedDate);
-  dateTimeFormat->FormatPRTime(nullptr, kDateFormatShort,
-                               kTimeFormatNoSeconds, now,
-                               nowDate);
+  dateTimeFormat->FormatPRTime(nullptr, kDateFormatLong, kTimeFormatNoSeconds,
+                               timeToUse, formattedDate);
+  dateTimeFormat->FormatPRTime(nullptr, kDateFormatLong, kTimeFormatNoSeconds,
+                               now, nowDate);
 }
 
 static void
@@ -955,7 +953,7 @@ formatOverridableCertErrorMessage(nsISSLStatus & sslStatus,
   returnedMessage.AppendLiteral("\n\n");
 
   RefPtr<nsIX509Cert> ix509;
-  rv = sslStatus.GetServerCert(byRef(ix509));
+  rv = sslStatus.GetServerCert(getter_AddRefs(ix509));
   NS_ENSURE_SUCCESS(rv, rv);
 
   bool isUntrusted;

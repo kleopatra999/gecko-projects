@@ -7,6 +7,7 @@
 #include "jit/MIR.h"
 
 #include "mozilla/FloatingPoint.h"
+#include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/SizePrintfMacros.h"
 
@@ -26,8 +27,6 @@
 #include "jsatominlines.h"
 #include "jsobjinlines.h"
 #include "jsscriptinlines.h"
-
-#include "jit/AtomicOperations-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -344,13 +343,13 @@ MInstruction::clearResumePoint()
     resumePoint_ = nullptr;
 }
 
-static bool
-MaybeEmulatesUndefined(CompilerConstraintList* constraints, MDefinition* op)
+bool
+MDefinition::maybeEmulatesUndefined(CompilerConstraintList* constraints)
 {
-    if (!op->mightBeType(MIRType_Object))
+    if (!mightBeType(MIRType_Object))
         return false;
 
-    TemporaryTypeSet* types = op->resultTypeSet();
+    TemporaryTypeSet* types = resultTypeSet();
     if (!types)
         return true;
 
@@ -381,8 +380,8 @@ MTest::cacheOperandMightEmulateUndefined(CompilerConstraintList* constraints)
 {
     MOZ_ASSERT(operandMightEmulateUndefined());
 
-    if (!MaybeEmulatesUndefined(constraints, getOperand(0)))
-        markOperandCantEmulateUndefined();
+    if (!getOperand(0)->maybeEmulatesUndefined(constraints))
+        markNoOperandEmulatesUndefined();
 }
 
 MDefinition*
@@ -606,6 +605,30 @@ MDefinition::justReplaceAllUsesWith(MDefinition* dom)
     for (MUseIterator i(usesBegin()), e(usesEnd()); i != e; ++i)
         i->setProducerUnchecked(dom);
     dom->uses_.takeElements(uses_);
+}
+
+void
+MDefinition::justReplaceAllUsesWithExcept(MDefinition* dom)
+{
+    MOZ_ASSERT(dom != nullptr);
+    MOZ_ASSERT(dom != this);
+
+    // Move all uses to new dom. Save the use of the dominating instruction.
+    MUse *exceptUse = nullptr;
+    for (MUseIterator i(usesBegin()), e(usesEnd()); i != e; ++i) {
+        if (i->consumer() != dom) {
+            i->setProducerUnchecked(dom);
+        } else {
+            MOZ_ASSERT(!exceptUse);
+            exceptUse = *i;
+        }
+    }
+    dom->uses_.takeElements(uses_);
+
+    // Restore the use to the original definition.
+    dom->uses_.remove(exceptUse);
+    exceptUse->setProducerUnchecked(this);
+    uses_.pushFront(exceptUse);
 }
 
 void
@@ -1064,7 +1087,7 @@ void
 MConstantElements::printOpcode(GenericPrinter& out) const
 {
     PrintOpcodeName(out, op());
-    out.printf(" %p", value());
+    out.printf(" 0x%" PRIxPTR, value().asValue());
 }
 
 void
@@ -1715,12 +1738,55 @@ MPhi::operandIfRedundant()
 }
 
 MDefinition*
+MPhi::foldsFilterTypeSet()
+{
+    // Fold phi with as operands a combination of 'subject' and
+    // MFilterTypeSet(subject) to 'subject'.
+
+    if (inputs_.length() == 0)
+        return nullptr;
+
+    MDefinition* subject = getOperand(0);
+    if (subject->isFilterTypeSet())
+        subject = subject->toFilterTypeSet()->input();
+
+    // Not same type, don't fold.
+    if (subject->type() != type())
+        return nullptr;
+
+    // Phi is better typed (has typeset). Don't fold.
+    if (resultTypeSet() && !subject->resultTypeSet())
+        return nullptr;
+
+    // Phi is better typed (according to typeset). Don't fold.
+    if (subject->resultTypeSet() && resultTypeSet()) {
+        if (!subject->resultTypeSet()->isSubset(resultTypeSet()))
+            return nullptr;
+    }
+
+    for (size_t i = 1, e = numOperands(); i < e; i++) {
+        MDefinition* op = getOperand(i);
+        if (op == subject)
+            continue;
+        if (op->isFilterTypeSet() && op->toFilterTypeSet()->input() == subject)
+            continue;
+
+        return nullptr;
+    }
+
+    return subject;
+}
+
+MDefinition*
 MPhi::foldsTo(TempAllocator& alloc)
 {
     if (MDefinition* def = operandIfRedundant())
         return def;
 
     if (MDefinition* def = foldsTernary())
+        return def;
+
+    if (MDefinition* def = foldsFilterTypeSet())
         return def;
 
     return this;
@@ -1794,8 +1860,11 @@ jit::MergeTypes(MIRType* ptype, TemporaryTypeSet** ptypeSet,
                 return false;
         }
         if (newTypeSet) {
-            if (!newTypeSet->isSubset(*ptypeSet))
+            if (!newTypeSet->isSubset(*ptypeSet)) {
                 *ptypeSet = TypeSet::unionSets(*ptypeSet, newTypeSet, alloc);
+                if (!*ptypeSet)
+                    return false;
+            }
         } else {
             *ptypeSet = nullptr;
         }
@@ -2325,10 +2394,25 @@ MFilterTypeSet::trySpecializeFloat32(TempAllocator& alloc)
 }
 
 bool
+MFilterTypeSet::canProduceFloat32() const
+{
+    // A FilterTypeSet should be a producer if the input is a producer too.
+    // Also, be overly conservative by marking as not float32 producer when the
+    // input is a phi, as phis can be cyclic (phiA -> FilterTypeSet -> phiB ->
+    // phiA) and FilterTypeSet doesn't belong in the Float32 phi analysis.
+    return !input()->isPhi() && input()->canProduceFloat32();
+}
+
+bool
 MFilterTypeSet::canConsumeFloat32(MUse* operand) const
 {
     MOZ_ASSERT(getUseFor(0) == operand);
-    return CheckUsesAreFloat32Consumers(this);
+    // A FilterTypeSet should be a consumer if all uses are consumer. See also
+    // comment below MFilterTypeSet::canProduceFloat32.
+    bool allConsumerUses = true;
+    for (MUseDefIterator use(this); allConsumerUses && use; use++)
+        allConsumerUses &= !use.def()->isPhi() && use.def()->canConsumeFloat32(use.use());
+    return allConsumerUses;
 }
 
 void
@@ -2336,6 +2420,8 @@ MBinaryArithInstruction::trySpecializeFloat32(TempAllocator& alloc)
 {
     // Do not use Float32 if we can use int32.
     if (specialization_ == MIRType_Int32)
+        return;
+    if (specialization_ == MIRType_None)
         return;
 
     MDefinition* left = lhs();
@@ -2700,66 +2786,6 @@ SafelyCoercesToDouble(MDefinition* op)
     return SimpleArithOperand(op) && !op->mightBeType(MIRType_Null);
 }
 
-static bool
-ObjectOrSimplePrimitive(MDefinition* op)
-{
-    // Return true if op is either undefined/null/boolean/int32 or an object.
-    return !op->mightBeType(MIRType_String)
-        && !op->mightBeType(MIRType_Symbol)
-        && !op->mightBeType(MIRType_Double)
-        && !op->mightBeType(MIRType_Float32)
-        && !op->mightBeType(MIRType_MagicOptimizedArguments)
-        && !op->mightBeType(MIRType_MagicHole)
-        && !op->mightBeType(MIRType_MagicIsConstructing);
-}
-
-static bool
-CanDoValueBitwiseCmp(CompilerConstraintList* constraints,
-                     MDefinition* lhs, MDefinition* rhs, bool looseEq)
-{
-    // Only primitive (not double/string) or objects are supported.
-    // I.e. Undefined/Null/Boolean/Int32 and Object
-    if (!ObjectOrSimplePrimitive(lhs) || !ObjectOrSimplePrimitive(rhs))
-        return false;
-
-    // Objects that emulate undefined are not supported.
-    if (MaybeEmulatesUndefined(constraints, lhs) || MaybeEmulatesUndefined(constraints, rhs))
-        return false;
-
-    // In the loose comparison more values could be the same,
-    // but value comparison reporting otherwise.
-    if (looseEq) {
-
-        // Undefined compared loosy to Null is not supported,
-        // because tag is different, but value can be the same (undefined == null).
-        if ((lhs->mightBeType(MIRType_Undefined) && rhs->mightBeType(MIRType_Null)) ||
-            (lhs->mightBeType(MIRType_Null) && rhs->mightBeType(MIRType_Undefined)))
-        {
-            return false;
-        }
-
-        // Int32 compared loosy to Boolean is not supported,
-        // because tag is different, but value can be the same (1 == true).
-        if ((lhs->mightBeType(MIRType_Int32) && rhs->mightBeType(MIRType_Boolean)) ||
-            (lhs->mightBeType(MIRType_Boolean) && rhs->mightBeType(MIRType_Int32)))
-        {
-            return false;
-        }
-
-        // For loosy comparison of an object with a Boolean/Number/String
-        // the valueOf the object is taken. Therefore not supported.
-        bool simpleLHS = lhs->mightBeType(MIRType_Boolean) || lhs->mightBeType(MIRType_Int32);
-        bool simpleRHS = rhs->mightBeType(MIRType_Boolean) || rhs->mightBeType(MIRType_Int32);
-        if ((lhs->mightBeType(MIRType_Object) && simpleRHS) ||
-            (rhs->mightBeType(MIRType_Object) && simpleLHS))
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 MIRType
 MCompare::inputType()
 {
@@ -2788,7 +2814,7 @@ MCompare::inputType()
       case Compare_Object:
         return MIRType_Object;
       case Compare_Unknown:
-      case Compare_Value:
+      case Compare_Bitwise:
         return MIRType_Value;
       default:
         MOZ_CRASH("No known conversion");
@@ -2808,6 +2834,8 @@ MustBeUInt32(MDefinition* def, MDefinition** pwrapped)
     }
 
     if (def->isConstantValue()) {
+        if (def->isBox())
+            def = def->toBox()->getOperand(0);
         *pwrapped = def;
         return def->constantValue().isInt32()
             && def->constantValue().toInt32() >= 0;
@@ -2816,57 +2844,62 @@ MustBeUInt32(MDefinition* def, MDefinition** pwrapped)
     return false;
 }
 
-bool
-MBinaryInstruction::tryUseUnsignedOperands()
+/* static */ bool
+MBinaryInstruction::unsignedOperands(MDefinition* left, MDefinition* right)
 {
-    MDefinition* newlhs;
-    MDefinition* newrhs;
-    if (MustBeUInt32(getOperand(0), &newlhs) && MustBeUInt32(getOperand(1), &newrhs)) {
-        if (newlhs->type() != MIRType_Int32 || newrhs->type() != MIRType_Int32)
-            return false;
-        if (newlhs != getOperand(0)) {
-            getOperand(0)->setImplicitlyUsedUnchecked();
-            replaceOperand(0, newlhs);
-        }
-        if (newrhs != getOperand(1)) {
-            getOperand(1)->setImplicitlyUsedUnchecked();
-            replaceOperand(1, newrhs);
-        }
-        return true;
-    }
-    return false;
+    MDefinition* replace;
+    if (!MustBeUInt32(left, &replace))
+        return false;
+    if (replace->type() != MIRType_Int32)
+        return false;
+    if (!MustBeUInt32(right, &replace))
+        return false;
+    if (replace->type() != MIRType_Int32)
+        return false;
+    return true;
+}
+
+bool
+MBinaryInstruction::unsignedOperands()
+{
+    return unsignedOperands(getOperand(0), getOperand(1));
 }
 
 void
-MCompare::infer(CompilerConstraintList* constraints, BaselineInspector* inspector, jsbytecode* pc)
+MBinaryInstruction::replaceWithUnsignedOperands()
 {
-    MOZ_ASSERT(operandMightEmulateUndefined());
+    MOZ_ASSERT(unsignedOperands());
 
-    if (!MaybeEmulatesUndefined(constraints, getOperand(0)) &&
-        !MaybeEmulatesUndefined(constraints, getOperand(1)))
-    {
-        markNoOperandEmulatesUndefined();
+    for (size_t i = 0; i < numOperands(); i++) {
+        MDefinition* replace;
+        MustBeUInt32(getOperand(i), &replace);
+        if (replace == getOperand(i))
+            continue;
+
+        getOperand(i)->setImplicitlyUsedUnchecked();
+        replaceOperand(i, replace);
     }
+}
 
-    MIRType lhs = getOperand(0)->type();
-    MIRType rhs = getOperand(1)->type();
+MCompare::CompareType
+MCompare::determineCompareType(JSOp op, MDefinition* left, MDefinition* right)
+{
+    MIRType lhs = left->type();
+    MIRType rhs = right->type();
 
-    bool looseEq = jsop() == JSOP_EQ || jsop() == JSOP_NE;
-    bool strictEq = jsop() == JSOP_STRICTEQ || jsop() == JSOP_STRICTNE;
+    bool looseEq = op == JSOP_EQ || op == JSOP_NE;
+    bool strictEq = op == JSOP_STRICTEQ || op == JSOP_STRICTNE;
     bool relationalEq = !(looseEq || strictEq);
 
     // Comparisons on unsigned integers may be treated as UInt32.
-    if (tryUseUnsignedOperands()) {
-        compareType_ = Compare_UInt32;
-        return;
-    }
+    if (unsignedOperands(left, right))
+        return Compare_UInt32;
 
     // Integer to integer or boolean to boolean comparisons may be treated as Int32.
     if ((lhs == MIRType_Int32 && rhs == MIRType_Int32) ||
         (lhs == MIRType_Boolean && rhs == MIRType_Boolean))
     {
-        compareType_ = Compare_Int32MaybeCoerceBoth;
-        return;
+        return Compare_Int32MaybeCoerceBoth;
     }
 
     // Loose/relational cross-integer/boolean comparisons may be treated as Int32.
@@ -2874,95 +2907,60 @@ MCompare::infer(CompilerConstraintList* constraints, BaselineInspector* inspecto
         (lhs == MIRType_Int32 || lhs == MIRType_Boolean) &&
         (rhs == MIRType_Int32 || rhs == MIRType_Boolean))
     {
-        compareType_ = Compare_Int32MaybeCoerceBoth;
-        return;
+        return Compare_Int32MaybeCoerceBoth;
     }
 
     // Numeric comparisons against a double coerce to double.
-    if (IsNumberType(lhs) && IsNumberType(rhs)) {
-        compareType_ = Compare_Double;
-        return;
-    }
+    if (IsNumberType(lhs) && IsNumberType(rhs))
+        return Compare_Double;
 
     // Any comparison is allowed except strict eq.
-    if (!strictEq && IsFloatingPointType(lhs) && SafelyCoercesToDouble(getOperand(1))) {
-        compareType_ = Compare_DoubleMaybeCoerceRHS;
-        return;
-    }
-    if (!strictEq && IsFloatingPointType(rhs) && SafelyCoercesToDouble(getOperand(0))) {
-        compareType_ = Compare_DoubleMaybeCoerceLHS;
-        return;
-    }
+    if (!strictEq && IsFloatingPointType(rhs) && SafelyCoercesToDouble(left))
+        return Compare_DoubleMaybeCoerceLHS;
+    if (!strictEq && IsFloatingPointType(lhs) && SafelyCoercesToDouble(right))
+        return Compare_DoubleMaybeCoerceRHS;
 
     // Handle object comparison.
-    if (!relationalEq && lhs == MIRType_Object && rhs == MIRType_Object) {
-        compareType_ = Compare_Object;
-        return;
-    }
+    if (!relationalEq && lhs == MIRType_Object && rhs == MIRType_Object)
+        return Compare_Object;
 
     // Handle string comparisons. (Relational string compares are still unsupported).
-    if (!relationalEq && lhs == MIRType_String && rhs == MIRType_String) {
-        compareType_ = Compare_String;
-        return;
-    }
+    if (!relationalEq && lhs == MIRType_String && rhs == MIRType_String)
+        return Compare_String;
 
-    if (strictEq && lhs == MIRType_String) {
-        // Lowering expects the rhs to be definitly string.
-        compareType_ = Compare_StrictString;
-        swapOperands();
-        return;
-    }
+    // Handle strict string compare.
+    if (strictEq && lhs == MIRType_String)
+        return Compare_StrictString;
+    if (strictEq && rhs == MIRType_String)
+        return Compare_StrictString;
 
-    if (strictEq && rhs == MIRType_String) {
-        compareType_ = Compare_StrictString;
-        return;
-    }
-
-    // Handle compare with lhs being Undefined or Null.
-    if (!relationalEq && IsNullOrUndefined(lhs)) {
-        // Lowering expects the rhs to be null/undefined, so we have to
-        // swap the operands. This is necessary since we may not know which
-        // operand was null/undefined during lowering (both operands may have
-        // MIRType_Value).
-        compareType_ = (lhs == MIRType_Null) ? Compare_Null : Compare_Undefined;
-        swapOperands();
-        return;
-    }
-
-    // Handle compare with rhs being Undefined or Null.
-    if (!relationalEq && IsNullOrUndefined(rhs)) {
-        compareType_ = (rhs == MIRType_Null) ? Compare_Null : Compare_Undefined;
-        return;
-    }
+    // Handle compare with lhs or rhs being Undefined or Null.
+    if (!relationalEq && IsNullOrUndefined(lhs))
+        return (lhs == MIRType_Null) ? Compare_Null : Compare_Undefined;
+    if (!relationalEq && IsNullOrUndefined(rhs))
+        return (rhs == MIRType_Null) ? Compare_Null : Compare_Undefined;
 
     // Handle strict comparison with lhs/rhs being typed Boolean.
     if (strictEq && (lhs == MIRType_Boolean || rhs == MIRType_Boolean)) {
         // bool/bool case got an int32 specialization earlier.
         MOZ_ASSERT(!(lhs == MIRType_Boolean && rhs == MIRType_Boolean));
-
-        // Ensure the boolean is on the right so that the type policy knows
-        // which side to unbox.
-        if (lhs == MIRType_Boolean)
-             swapOperands();
-
-        compareType_ = Compare_Boolean;
-        return;
+        return Compare_Boolean;
     }
 
-    // Determine if we can do the compare based on a quick value check.
-    if (!relationalEq && CanDoValueBitwiseCmp(constraints, getOperand(0), getOperand(1), looseEq)) {
-        compareType_ = Compare_Value;
+    return Compare_Unknown;
+}
+
+void
+MCompare::cacheOperandMightEmulateUndefined(CompilerConstraintList* constraints)
+{
+    MOZ_ASSERT(operandMightEmulateUndefined());
+
+    if (getOperand(0)->maybeEmulatesUndefined(constraints))
         return;
-    }
+    if (getOperand(1)->maybeEmulatesUndefined(constraints))
+        return;
 
-    // Type information is not good enough to pick out a particular type of
-    // comparison we can do here. Try to specialize based on any baseline
-    // caches that have been generated for the opcode. These will cause the
-    // instruction's type policy to insert fallible unboxes to the appropriate
-    // input types.
-
-    if (!strictEq)
-        compareType_ = inspector->expectedCompareType(pc);
+    markNoOperandEmulatesUndefined();
 }
 
 MBitNot*
@@ -3051,7 +3049,7 @@ MTypeOf::cacheInputMaybeCallableOrEmulatesUndefined(CompilerConstraintList* cons
 {
     MOZ_ASSERT(inputMaybeCallableOrEmulatesUndefined());
 
-    if (!MaybeEmulatesUndefined(constraints, input()) && !MaybeCallable(constraints, input()))
+    if (!input()->maybeEmulatesUndefined(constraints) && !MaybeCallable(constraints, input()))
         markInputNotCallableOrEmulatesUndefined();
 }
 
@@ -3463,7 +3461,7 @@ MCompare::tryFoldEqualOperands(bool* result)
                compareType_ == Compare_Double || compareType_ == Compare_DoubleMaybeCoerceLHS ||
                compareType_ == Compare_DoubleMaybeCoerceRHS || compareType_ == Compare_Float32 ||
                compareType_ == Compare_String || compareType_ == Compare_StrictString ||
-               compareType_ == Compare_Object || compareType_ == Compare_Value);
+               compareType_ == Compare_Object || compareType_ == Compare_Bitwise);
 
     if (isDoubleComparison() || isFloat32Comparison()) {
         if (!operandsAreNeverNaN())
@@ -3872,8 +3870,8 @@ MNot::cacheOperandMightEmulateUndefined(CompilerConstraintList* constraints)
 {
     MOZ_ASSERT(operandMightEmulateUndefined());
 
-    if (!MaybeEmulatesUndefined(constraints, getOperand(0)))
-        markOperandCantEmulateUndefined();
+    if (!getOperand(0)->maybeEmulatesUndefined(constraints))
+        markNoOperandEmulatesUndefined();
 }
 
 MDefinition*
@@ -4066,7 +4064,7 @@ MArrayState::MArrayState(MDefinition* arr)
     // This instruction is only used as a summary for bailout paths.
     setResultType(MIRType_Object);
     setRecoveredOnBailout();
-    numElements_ = arr->toNewArray()->count();
+    numElements_ = arr->toNewArray()->length();
 }
 
 bool
@@ -4106,10 +4104,10 @@ MArrayState::Copy(TempAllocator& alloc, MArrayState* state)
     return res;
 }
 
-MNewArray::MNewArray(CompilerConstraintList* constraints, uint32_t count, MConstant* templateConst,
+MNewArray::MNewArray(CompilerConstraintList* constraints, uint32_t length, MConstant* templateConst,
                      gc::InitialHeap initialHeap, jsbytecode* pc)
   : MUnaryInstruction(templateConst),
-    count_(count),
+    length_(length),
     initialHeap_(initialHeap),
     convertDoubleElements_(false),
     pc_(pc)
@@ -4131,16 +4129,16 @@ MNewArray::shouldUseVM() const
         return true;
 
     if (templateObject()->is<UnboxedArrayObject>()) {
-        MOZ_ASSERT(templateObject()->as<UnboxedArrayObject>().capacity() >= count());
+        MOZ_ASSERT(templateObject()->as<UnboxedArrayObject>().capacity() >= length());
         return !templateObject()->as<UnboxedArrayObject>().hasInlineElements();
     }
 
-    MOZ_ASSERT(count() < NativeObject::NELEMENTS_LIMIT);
+    MOZ_ASSERT(length() <= NativeObject::MAX_DENSE_ELEMENTS_COUNT);
 
     size_t arraySlots =
         gc::GetGCKindSlots(templateObject()->asTenured().getAllocKind()) - ObjectElements::VALUES_PER_HEADER;
 
-    return count() > arraySlots;
+    return length() > arraySlots;
 }
 
 bool
@@ -4573,7 +4571,7 @@ InlinePropertyTable::buildTypeSetForFunction(JSFunction* func) const
     return types;
 }
 
-void*
+SharedMem<void*>
 MLoadTypedArrayElementStatic::base() const
 {
     return AnyTypedArrayViewData(someTypedArray_);
@@ -4602,14 +4600,14 @@ MLoadTypedArrayElementStatic::congruentTo(const MDefinition* ins) const
     return congruentIfOperandsEqual(other);
 }
 
-void*
+SharedMem<void*>
 MStoreTypedArrayElementStatic::base() const
 {
     return AnyTypedArrayViewData(someTypedArray_);
 }
 
 bool
-MGetElementCache::allowDoubleResult() const
+MGetPropertyCache::allowDoubleResult() const
 {
     if (!resultTypeSet())
         return true;
@@ -4670,7 +4668,8 @@ MGetPropertyCache::setBlock(MBasicBlock* block)
 }
 
 bool
-MGetPropertyCache::updateForReplacement(MDefinition* ins) {
+MGetPropertyCache::updateForReplacement(MDefinition* ins)
+{
     MGetPropertyCache* other = ins->toGetPropertyCache();
     location_.append(&other->location_);
     return true;

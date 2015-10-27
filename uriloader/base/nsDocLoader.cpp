@@ -95,9 +95,9 @@ class nsDefaultComparator <nsDocLoader::nsListenerInfo, nsIWebProgressListener*>
 
 /* static */ const PLDHashTableOps nsDocLoader::sRequestInfoHashOps =
 {
-  PL_DHashVoidPtrKeyStub,
-  PL_DHashMatchEntryStub,
-  PL_DHashMoveEntryStub,
+  PLDHashTable::HashVoidPtrKeyStub,
+  PLDHashTable::MatchEntryStub,
+  PLDHashTable::MoveEntryStub,
   nsDocLoader::RequestInfoHashClearEntry,
   nsDocLoader::RequestInfoHashInitEntry
 };
@@ -213,7 +213,7 @@ NS_IMETHODIMP nsDocLoader::GetInterface(const nsIID& aIID, void** aSink)
 already_AddRefed<nsDocLoader>
 nsDocLoader::GetAsDocLoader(nsISupports* aSupports)
 {
-  nsRefPtr<nsDocLoader> ret = do_QueryObject(aSupports);
+  RefPtr<nsDocLoader> ret = do_QueryObject(aSupports);
   return ret.forget();
 }
 
@@ -226,7 +226,7 @@ nsDocLoader::AddDocLoaderAsChildOfRoot(nsDocLoader* aDocLoader)
     do_GetService(NS_DOCUMENTLOADER_SERVICE_CONTRACTID, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsRefPtr<nsDocLoader> rootDocLoader = GetAsDocLoader(docLoaderService);
+  RefPtr<nsDocLoader> rootDocLoader = GetAsDocLoader(docLoaderService);
   NS_ENSURE_TRUE(rootDocLoader, NS_ERROR_UNEXPECTED);
 
   return rootDocLoader->AddChildLoader(aDocLoader);
@@ -708,7 +708,7 @@ void nsDocLoader::DocLoaderIsEmpty(bool aFlushLayout)
 
       // Take a ref to our parent now so that we can call DocLoaderIsEmpty() on
       // it even if our onload handler removes us from the docloader tree.
-      nsRefPtr<nsDocLoader> parent = mParent;
+      RefPtr<nsDocLoader> parent = mParent;
 
       // Note that if calling ChildEnteringOnload() on the parent returns false
       // then calling our onload handler is not safe.  That can only happen on
@@ -905,10 +905,7 @@ nsDocLoader::GetIsTopLevel(bool *aResult)
     nsCOMPtr<nsPIDOMWindow> piwindow = do_QueryInterface(window);
     NS_ENSURE_STATE(piwindow);
 
-    nsCOMPtr<nsIDOMWindow> topWindow;
-    nsresult rv = piwindow->GetTop(getter_AddRefs(topWindow));
-    NS_ENSURE_SUCCESS(rv, rv);
-
+    nsCOMPtr<nsPIDOMWindow> topWindow = piwindow->GetTop();
     *aResult = piwindow == topWindow;
   }
 
@@ -1325,7 +1322,7 @@ nsDocLoader::RefreshAttempted(nsIWebProgress* aWebProgress,
 
 nsresult nsDocLoader::AddRequestInfo(nsIRequest *aRequest)
 {
-  if (!PL_DHashTableAdd(&mRequestInfoHash, aRequest, mozilla::fallible)) {
+  if (!mRequestInfoHash.Add(aRequest, mozilla::fallible)) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
@@ -1334,13 +1331,12 @@ nsresult nsDocLoader::AddRequestInfo(nsIRequest *aRequest)
 
 void nsDocLoader::RemoveRequestInfo(nsIRequest *aRequest)
 {
-  PL_DHashTableRemove(&mRequestInfoHash, aRequest);
+  mRequestInfoHash.Remove(aRequest);
 }
 
 nsDocLoader::nsRequestInfo* nsDocLoader::GetRequestInfo(nsIRequest* aRequest)
 {
-  return static_cast<nsRequestInfo*>
-                    (PL_DHashTableSearch(&mRequestInfoHash, aRequest));
+  return static_cast<nsRequestInfo*>(mRequestInfoHash.Search(aRequest));
 }
 
 void nsDocLoader::ClearRequestInfoHash(void)

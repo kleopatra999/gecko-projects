@@ -5,7 +5,6 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "BluetoothDaemonAvrcpInterface.h"
-#include "BluetoothDaemonSetupInterface.h"
 #include "mozilla/unused.h"
 
 BEGIN_BLUETOOTH_NAMESPACE
@@ -15,8 +14,6 @@ using namespace mozilla::ipc;
 //
 // AVRCP module
 //
-
-const int BluetoothDaemonAvrcpModule::MAX_NUM_CLIENTS = 1;
 
 BluetoothAvrcpNotificationHandler*
   BluetoothDaemonAvrcpModule::sNotificationHandler;
@@ -28,25 +25,14 @@ BluetoothDaemonAvrcpModule::SetNotificationHandler(
   sNotificationHandler = aNotificationHandler;
 }
 
-nsresult
-BluetoothDaemonAvrcpModule::Send(DaemonSocketPDU* aPDU,
-                                 BluetoothAvrcpResultHandler* aRes)
-{
-  nsRefPtr<BluetoothAvrcpResultHandler> res(aRes);
-  nsresult rv = Send(aPDU, static_cast<void*>(res.get()));
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-  unused << res.forget(); // Keep reference for response
-  return NS_OK;
-}
-
 void
 BluetoothDaemonAvrcpModule::HandleSvc(const DaemonSocketPDUHeader& aHeader,
-                                      DaemonSocketPDU& aPDU, void* aUserData)
+                                      DaemonSocketPDU& aPDU,
+                                      DaemonSocketResultHandler* aRes)
 {
   static void (BluetoothDaemonAvrcpModule::* const HandleOp[])(
-    const DaemonSocketPDUHeader&, DaemonSocketPDU&, void*) = {
+    const DaemonSocketPDUHeader&, DaemonSocketPDU&,
+    DaemonSocketResultHandler*) = {
     [0] = &BluetoothDaemonAvrcpModule::HandleRsp,
     [1] = &BluetoothDaemonAvrcpModule::HandleNtf
   };
@@ -55,7 +41,7 @@ BluetoothDaemonAvrcpModule::HandleSvc(const DaemonSocketPDUHeader& aHeader,
 
   unsigned int isNtf = !!(aHeader.mOpcode & 0x80);
 
-  (this->*(HandleOp[isNtf]))(aHeader, aPDU, aUserData);
+  (this->*(HandleOp[isNtf]))(aHeader, aPDU, aRes);
 }
 
 // Commands
@@ -421,7 +407,7 @@ BluetoothDaemonAvrcpModule::SetVolumeRsp(
 void
 BluetoothDaemonAvrcpModule::HandleRsp(
   const DaemonSocketPDUHeader& aHeader, DaemonSocketPDU& aPDU,
-  void* aUserData)
+  DaemonSocketResultHandler* aRes)
 {
   static void (BluetoothDaemonAvrcpModule::* const HandleRsp[])(
     const DaemonSocketPDUHeader&,
@@ -458,9 +444,8 @@ BluetoothDaemonAvrcpModule::HandleRsp(
     return;
   }
 
-  nsRefPtr<BluetoothAvrcpResultHandler> res =
-    already_AddRefed<BluetoothAvrcpResultHandler>(
-      static_cast<BluetoothAvrcpResultHandler*>(aUserData));
+  RefPtr<BluetoothAvrcpResultHandler> res =
+    static_cast<BluetoothAvrcpResultHandler*>(aRes);
 
   if (!res) {
     return; // Return early if no result handler has been set for response
@@ -496,13 +481,12 @@ public:
   { }
 
   nsresult
-  operator () (nsString& aArg1, unsigned long& aArg2) const
+  operator () (BluetoothAddress& aArg1, unsigned long& aArg2) const
   {
     DaemonSocketPDU& pdu = GetPDU();
 
     /* Read address */
-    nsresult rv = UnpackPDU(
-      pdu, UnpackConversion<BluetoothAddress, nsAString>(aArg1));
+    nsresult rv = UnpackPDU(pdu, aArg1);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -510,7 +494,7 @@ public:
     /* Read feature */
     rv = UnpackPDU(
       pdu,
-      UnpackConversion<BluetoothAvrcpRemoteFeature, unsigned long>(aArg2));
+      UnpackConversion<BluetoothAvrcpRemoteFeatureBits, unsigned long>(aArg2));
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -752,47 +736,20 @@ BluetoothDaemonAvrcpModule::VolumeChangeNtf(
     UnpackPDUInitOp(aPDU));
 }
 
-// Init operator class for PassthroughCmdNotification
-class BluetoothDaemonAvrcpModule::PassthroughCmdInitOp final
-  : private PDUInitOp
-{
-public:
-  PassthroughCmdInitOp(DaemonSocketPDU& aPDU)
-    : PDUInitOp(aPDU)
-  { }
-
-  nsresult
-  operator () (int& aArg1, int& aArg2) const
-  {
-    DaemonSocketPDU& pdu = GetPDU();
-
-    nsresult rv = UnpackPDU(pdu, UnpackConversion<uint8_t, int>(aArg1));
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    rv = UnpackPDU(pdu, UnpackConversion<uint8_t, int>(aArg2));
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    WarnAboutTrailingData();
-    return NS_OK;
-  }
-};
-
 void
 BluetoothDaemonAvrcpModule::PassthroughCmdNtf(
   const DaemonSocketPDUHeader& aHeader, DaemonSocketPDU& aPDU)
 {
   PassthroughCmdNotification::Dispatch(
     &BluetoothAvrcpNotificationHandler::PassthroughCmdNotification,
-    PassthroughCmdInitOp(aPDU));
+    UnpackPDUInitOp(aPDU));
 }
 #endif
 
 void
 BluetoothDaemonAvrcpModule::HandleNtf(
   const DaemonSocketPDUHeader& aHeader, DaemonSocketPDU& aPDU,
-  void* aUserData)
+  DaemonSocketResultHandler* aRes)
 {
   static void (BluetoothDaemonAvrcpModule::* const HandleNtf[])(
     const DaemonSocketPDUHeader&, DaemonSocketPDU&) = {
@@ -846,115 +803,13 @@ BluetoothDaemonAvrcpInterface::BluetoothDaemonAvrcpInterface(
 BluetoothDaemonAvrcpInterface::~BluetoothDaemonAvrcpInterface()
 { }
 
-class BluetoothDaemonAvrcpInterface::InitResultHandler final
-  : public BluetoothSetupResultHandler
-{
-public:
-  InitResultHandler(BluetoothAvrcpResultHandler* aRes)
-    : mRes(aRes)
-  {
-    MOZ_ASSERT(mRes);
-  }
-
-  void OnError(BluetoothStatus aStatus) override
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-
-    mRes->OnError(aStatus);
-  }
-
-  void RegisterModule() override
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-
-    mRes->Init();
-  }
-
-private:
-  nsRefPtr<BluetoothAvrcpResultHandler> mRes;
-};
-
 void
-BluetoothDaemonAvrcpInterface::Init(
-  BluetoothAvrcpNotificationHandler* aNotificationHandler,
-  BluetoothAvrcpResultHandler* aRes)
+BluetoothDaemonAvrcpInterface::SetNotificationHandler(
+  BluetoothAvrcpNotificationHandler* aNotificationHandler)
 {
   MOZ_ASSERT(mModule);
 
-  // Set notification handler _before_ registering the module. It could
-  // happen that we receive notifications, before the result handler runs.
   mModule->SetNotificationHandler(aNotificationHandler);
-
-  InitResultHandler* res;
-
-  if (aRes) {
-    res = new InitResultHandler(aRes);
-  } else {
-    // We don't need a result handler if the caller is not interested.
-    res = nullptr;
-  }
-
-  nsresult rv = mModule->RegisterModule(
-    BluetoothDaemonAvrcpModule::SERVICE_ID,
-    BluetoothDaemonAvrcpModule::MAX_NUM_CLIENTS, 0x00, res);
-
-  if (NS_FAILED(rv) && aRes) {
-    DispatchError(aRes, rv);
-  }
-}
-
-class BluetoothDaemonAvrcpInterface::CleanupResultHandler final
-  : public BluetoothSetupResultHandler
-{
-public:
-  CleanupResultHandler(BluetoothDaemonAvrcpModule* aModule,
-                       BluetoothAvrcpResultHandler* aRes)
-    : mModule(aModule)
-    , mRes(aRes)
-  {
-    MOZ_ASSERT(mModule);
-  }
-
-  void OnError(BluetoothStatus aStatus) override
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-
-    if (mRes) {
-      mRes->OnError(aStatus);
-    }
-  }
-
-  void UnregisterModule() override
-  {
-    MOZ_ASSERT(NS_IsMainThread());
-
-    // Clear notification handler _after_ module has been
-    // unregistered. While unregistering the module, we might
-    // still receive notifications.
-    mModule->SetNotificationHandler(nullptr);
-
-    if (mRes) {
-      mRes->Cleanup();
-    }
-  }
-
-private:
-  BluetoothDaemonAvrcpModule* mModule;
-  nsRefPtr<BluetoothAvrcpResultHandler> mRes;
-};
-
-void
-BluetoothDaemonAvrcpInterface::Cleanup(
-  BluetoothAvrcpResultHandler* aRes)
-{
-  MOZ_ASSERT(mModule);
-
-  nsresult rv = mModule->UnregisterModule(
-    BluetoothDaemonAvrcpModule::SERVICE_ID,
-    new CleanupResultHandler(mModule, aRes));
-  if (NS_FAILED(rv)) {
-    DispatchError(aRes, rv);
-  }
 }
 
 void

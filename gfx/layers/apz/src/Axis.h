@@ -43,6 +43,9 @@ public:
   /**
    * Notify this Axis that a new touch has been received, including a timestamp
    * for when the touch was received. This triggers a recalculation of velocity.
+   * This can also used for pan gesture events. For those events, the "touch"
+   * location is stationary and the scroll displacement is passed in as
+   * aAdditionalDelta.
    */
   void UpdateWithTouchAtDevicePoint(ParentLayerCoord aPos, ParentLayerCoord aAdditionalDelta, uint32_t aTimestampMs);
 
@@ -222,6 +225,11 @@ public:
    * This gets called by ScaleWillOverscroll().
    */
   bool ScaleWillOverscrollBothSides(float aScale) const;
+
+  /**
+   * Returns true if movement on this axis is locked.
+   */
+  bool IsAxisLocked() const;
 
   ParentLayerCoord GetOrigin() const;
   ParentLayerCoord GetCompositionLength() const;

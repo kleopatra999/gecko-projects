@@ -80,6 +80,8 @@ private:
                                     mozilla::net::MemoryDownloader::Data aData)
         override;
 
+    bool BypassServiceWorker() const;
+
     // Returns true if this channel should intercept the network request and
     // prepare for a possible synthesized response instead.
     bool ShouldIntercept();
@@ -133,11 +135,8 @@ private:
     nsCString                       mJarEntry;
     nsCString                       mInnerJarEntry;
 
-    nsRefPtr<nsInputStreamPump>     mSynthesizedResponsePump;
+    RefPtr<nsInputStreamPump>     mSynthesizedResponsePump;
     int64_t                         mSynthesizedStreamLength;
-
-    // True if this channel should skip any interception checks.
-    bool                            mForceNoIntercept;
 
     // True if this channel should not download any remote files.
     bool                            mBlockRemoteFiles;

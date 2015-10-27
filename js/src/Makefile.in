@@ -12,8 +12,6 @@ ifneq ($(make_min_ver),$(firstword $(sort $(make_min_ver) $(MAKE_VERSION))))
 $(error GNU Make $(make_min_ver) or higher is required)
 endif
 
-run_for_side_effects := $(shell echo 'MAKE: $(MAKE)')
-
 ifdef JS_HAS_CTYPES
 ifdef MOZ_NATIVE_FFI
 LOCAL_INCLUDES = $(MOZ_FFI_CFLAGS)
@@ -293,6 +291,7 @@ selfhosting_srcs := \
   $(srcdir)/builtin/IntlData.js \
   $(srcdir)/builtin/Iterator.js \
   $(srcdir)/builtin/Map.js \
+  $(srcdir)/builtin/Module.js \
   $(srcdir)/builtin/Number.js \
   $(srcdir)/builtin/Object.js \
   $(srcdir)/builtin/Reflect.js \
@@ -312,12 +311,7 @@ selfhosted_out_h_deps := \
   $(srcdir)/builtin/SelfHostingDefines.h \
   $(NULL)
 
-SELFHOSTED_DEFINES += $(DEFINES) $(ACDEFINES)
-ifdef MOZ_DEBUG
-SELFHOSTED_DEFINES += $(MOZ_DEBUG_ENABLE_DEFS)
-else
-SELFHOSTED_DEFINES += $(MOZ_DEBUG_DISABLE_DEFS)
-endif
+SELFHOSTED_DEFINES += $(DEFINES) $(ACDEFINES) $(MOZ_DEBUG_DEFINES)
 
 selfhosted.out.h: $(selfhosted_out_h_deps)
 	$(PYTHON) $(srcdir)/builtin/embedjs.py $(SELFHOSTED_DEFINES) \

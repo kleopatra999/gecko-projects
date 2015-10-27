@@ -233,11 +233,6 @@ public:
    */
   nsresult SetSourceSizeHint(uint32_t aSizeHint);
 
-  /* Provide a hint for the requested resolution of the resulting image. */
-  void SetRequestedResolution(const nsIntSize requestedResolution) {
-    mRequestedResolution = requestedResolution;
-  }
-
   /* Provide a hint for the requested dimension of the resulting image. */
   void SetRequestedSampleSize(int requestedSampleSize) {
     mRequestedSampleSize = requestedSampleSize;
@@ -254,18 +249,20 @@ public:
 private:
   nsresult Init(const char* aMimeType, uint32_t aFlags);
 
-  DrawResult DrawWithPreDownscaleIfNeeded(DrawableFrameRef&& aFrameRef,
-                                          gfxContext* aContext,
-                                          const nsIntSize& aSize,
-                                          const ImageRegion& aRegion,
-                                          GraphicsFilter aFilter,
-                                          uint32_t aFlags);
+  DrawResult DrawInternal(DrawableFrameRef&& aFrameRef,
+                          gfxContext* aContext,
+                          const nsIntSize& aSize,
+                          const ImageRegion& aRegion,
+                          gfx::Filter aFilter,
+                          uint32_t aFlags);
 
   already_AddRefed<gfx::SourceSurface> CopyFrame(uint32_t aWhichFrame,
                                              uint32_t aFlags);
 
   Pair<DrawResult, RefPtr<gfx::SourceSurface>>
-    GetFrameInternal(uint32_t aWhichFrame, uint32_t aFlags);
+    GetFrameInternal(const gfx::IntSize& aSize,
+                     uint32_t aWhichFrame,
+                     uint32_t aFlags);
 
   LookupResult LookupFrameInternal(uint32_t aFrameNum,
                                    const gfx::IntSize& aSize,
@@ -278,7 +275,7 @@ private:
 
   nsIntRect GetFirstFrameRect();
 
-  Pair<DrawResult, nsRefPtr<layers::Image>>
+  Pair<DrawResult, RefPtr<layers::Image>>
     GetCurrentImage(layers::ImageContainer* aContainer, uint32_t aFlags);
 
   void UpdateImageContainer();
@@ -303,10 +300,6 @@ private:
    *
    * It's an error to call Decode() before this image's intrinsic size is
    * available. A metadata decode must successfully complete first.
-   *
-   * If downscale-during-decode is not enabled for this image (i.e., if
-   * mDownscaleDuringDecode is false), it is an error to pass an @aSize value
-   * different from this image's intrinsic size.
    */
   NS_IMETHOD Decode(const gfx::IntSize& aSize, uint32_t aFlags);
 
@@ -326,8 +319,11 @@ private:
    * @param aMetadata The metadata to set on this image.
    * @param aFromMetadataDecode True if this metadata came from a metadata
    *                            decode; false if it came from a full decode.
+   * @return |true| unless a catastrophic failure was discovered. If |false| is
+   * returned, it indicates that the image is corrupt in a way that requires all
+   * surfaces to be discarded to recover.
    */
-  void SetMetadata(const ImageMetadata& aMetadata, bool aFromMetadataDecode);
+  bool SetMetadata(const ImageMetadata& aMetadata, bool aFromMetadataDecode);
 
   /**
    * In catastrophic circumstances like a GPU driver crash, the contents of our
@@ -364,10 +360,6 @@ private: // data
   // This is currently only used for statistics
   int32_t                        mDecodeCount;
 
-  // If the image contains multiple resolutions, a hint as to which one
-  // should be used
-  nsIntSize                  mRequestedResolution;
-
   // A hint for image decoder that directly scale the image to smaller buffer
   int                        mRequestedSampleSize;
 
@@ -384,7 +376,7 @@ private: // data
 #endif
 
   // The source data for this image.
-  nsRefPtr<SourceBuffer>     mSourceBuffer;
+  RefPtr<SourceBuffer>     mSourceBuffer;
 
   // The number of frames this image has.
   uint32_t                   mFrameCount;
@@ -396,7 +388,6 @@ private: // data
   bool                       mDiscardable:1;   // Is container discardable?
   bool                       mHasSourceData:1; // Do we have source data?
   bool                       mHasBeenDecoded:1; // Decoded at least once?
-  bool                       mDownscaleDuringDecode:1;
 
   // Whether we're waiting to start animation. If we get a StartAnimation() call
   // but we don't yet have more than one frame, mPendingAnimation is set so that
@@ -418,21 +409,9 @@ private: // data
   // Scaling.
   //////////////////////////////////////////////////////////////////////////////
 
-  // Initiates an HQ scale for the given frame, if possible.
-  void RequestScale(imgFrame* aFrame, uint32_t aFlags, const nsIntSize& aSize);
-
-  // Determines whether we can perform an HQ scale with the given parameters.
-  bool CanScale(GraphicsFilter aFilter, const nsIntSize& aSize,
-                uint32_t aFlags);
-
   // Determines whether we can downscale during decode with the given
   // parameters.
   bool CanDownscaleDuringDecode(const nsIntSize& aSize, uint32_t aFlags);
-
-  // Called by the HQ scaler when a new scaled frame is ready.
-  void NotifyNewScaledFrame();
-
-  friend class ScaleRunner;
 
 
   // Error handling.
@@ -453,7 +432,7 @@ private: // data
   private:
     explicit HandleErrorWorker(RasterImage* aImage);
 
-    nsRefPtr<RasterImage> mImage;
+    RefPtr<RasterImage> mImage;
   };
 
   // Helpers

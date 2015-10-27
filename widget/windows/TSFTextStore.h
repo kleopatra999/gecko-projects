@@ -310,15 +310,15 @@ protected:
   void     MaybeDestroyNativeCaret();
 
   // Holds the pointer to our current win32 widget
-  nsRefPtr<nsWindowBase>       mWidget;
+  RefPtr<nsWindowBase>       mWidget;
   // Document manager for the currently focused editor
-  nsRefPtr<ITfDocumentMgr>     mDocumentMgr;
+  RefPtr<ITfDocumentMgr>     mDocumentMgr;
   // Edit cookie associated with the current editing context
   DWORD                        mEditCookie;
   // Editing context at the bottom of mDocumentMgr's context stack
-  nsRefPtr<ITfContext>         mContext;
+  RefPtr<ITfContext>         mContext;
   // Currently installed notification sink
-  nsRefPtr<ITextStoreACPSink>  mSink;
+  RefPtr<ITextStoreACPSink>  mSink;
   // TS_AS_* mask of what events to notify
   DWORD                        mSinkMask;
   // 0 if not locked, otherwise TS_LF_* indicating the current lock
@@ -330,12 +330,12 @@ protected:
   {
   public:
     // nullptr if no composition is active, otherwise the current composition
-    nsRefPtr<ITfCompositionView> mView;
+    RefPtr<ITfCompositionView> mView;
 
     // Current copy of the active composition string. Only mString is
     // changed during a InsertTextAtSelection call if we have a composition.
     // mString acts as a buffer until OnUpdateComposition is called
-    // and mString is flushed to editor through NS_COMPOSITION_CHANGE.
+    // and mString is flushed to editor through eCompositionChange.
     // This way all changes are updated in batches to avoid
     // inconsistencies/artifacts.
     nsString mString;
@@ -520,7 +520,7 @@ protected:
     // For compositionupdate and compositionend
     nsString mData;
     // For compositionupdate
-    nsRefPtr<TextRangeArray> mRanges;
+    RefPtr<TextRangeArray> mRanges;
     // For selectionset
     bool mSelectionReversed;
     // For compositionupdate
@@ -547,6 +547,32 @@ protected:
     newAction->mRanges = new TextRangeArray();
     newAction->mIncomplete = true;
     return newAction;
+  }
+
+  /**
+   * WasTextInsertedWithoutCompositionAt() checks if text was inserted without
+   * composition immediately before (e.g., see InsertTextAtSelectionInternal()).
+   *
+   * @param aStart              The inserted offset you expected.
+   * @param aLength             The inserted text length you expected.
+   * @return                    true if the last pending actions are
+   *                            COMPOSITION_START and COMPOSITION_END and
+   *                            aStart and aLength match their information.
+   */
+  bool WasTextInsertedWithoutCompositionAt(LONG aStart, LONG aLength) const
+  {
+    if (mPendingActions.Length() < 2) {
+      return false;
+    }
+    const PendingAction& pendingLastAction = mPendingActions.LastElement();
+    if (pendingLastAction.mType != PendingAction::COMPOSITION_END ||
+        pendingLastAction.mData.Length() != aLength) {
+      return false;
+    }
+    const PendingAction& pendingPreLastAction =
+      mPendingActions[mPendingActions.Length() - 2];
+    return pendingPreLastAction.mType == PendingAction::COMPOSITION_START &&
+           pendingPreLastAction.mSelectionStart == aStart;
   }
 
   bool IsPendingCompositionUpdateIncomplete() const
@@ -594,7 +620,7 @@ protected:
   private:
     AutoPendingActionAndContentFlusher() {}
 
-    nsRefPtr<TSFTextStore> mTextStore;
+    RefPtr<TSFTextStore> mTextStore;
   };
 
   class Content final
@@ -642,6 +668,23 @@ protected:
     void StartComposition(ITfCompositionView* aCompositionView,
                           const PendingAction& aCompStart,
                           bool aPreserveSelection);
+    /**
+     * RestoreCommittedComposition() restores the committed string as
+     * composing string.  If InsertTextAtSelection() or something is called
+     * before a call of OnStartComposition(), there is a pending
+     * compositionstart and a pending compositionend.  In this case, we
+     * need to cancel the pending compositionend and continue the composition.
+     *
+     * @param aCompositionView          The composition view.
+     * @param aPendingCompositionStart  The pending compositionstart which
+     *                                  started the committed composition.
+     * @param aCanceledCompositionEnd   The pending compositionend which is
+     *                                  canceled for restarting the composition.
+     */
+    void RestoreCommittedComposition(
+                         ITfCompositionView* aCompositionView,
+                         const PendingAction& aPendingCompositionStart,
+                         const PendingAction& aCanceledCompositionEnd);
     void EndComposition(const PendingAction& aCompEnd);
 
     const nsString& Text() const
@@ -739,7 +782,7 @@ protected:
     LONG RangeStart() const { return mStart; }
   
   private:
-    nsRefPtr<ITfMouseSink> mSink;
+    RefPtr<ITfMouseSink> mSink;
     LONG mStart;
     LONG mLength;
     DWORD mCookie;
@@ -805,6 +848,9 @@ protected:
   // For preventing it to be called, we should put off notifying TSF of
   // anything until layout information becomes available.
   bool                         mDeferNotifyingTSF;
+  // Immediately after a call of Destroy(), mDestroyed becomes true.  If this
+  // is true, the instance shouldn't grant any requests from the TIP anymore.
+  bool                         mDestroyed;
 
 
   // TSF thread manager object for the current application
@@ -839,8 +885,8 @@ protected:
   static bool sDoNotReturnNoLayoutErrorToMSTraditionalTIP;
   static bool sDoNotReturnNoLayoutErrorToFreeChangJie;
   static bool sDoNotReturnNoLayoutErrorToEasyChangjei;
-  static bool sDoNotReturnNoLayoutErrorToGoogleJaInputAtFirstChar;
-  static bool sDoNotReturnNoLayoutErrorToGoogleJaInputAtCaret;
+  static bool sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtFirstChar;
+  static bool sDoNotReturnNoLayoutErrorToMSJapaneseIMEAtCaret;
   static bool sHackQueryInsertForMSSimplifiedTIP;
   static bool sHackQueryInsertForMSTraditionalTIP;
 };

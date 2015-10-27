@@ -1,5 +1,5 @@
 import os
-from talos import filter
+from talos import filter, utils
 
 """
 test definitions for Talos
@@ -148,6 +148,7 @@ class sessionrestore(TsBase):
     2. Launch Firefox.
     3. Measure the delta between firstPaint and sessionRestored.
     """
+    extensions = '${talos}/startup_test/sessionrestore/addon'
     cycles = 10
     timeout = 1000000
     sps_profile_startup = True
@@ -155,7 +156,7 @@ class sessionrestore(TsBase):
     profile_path = '${talos}/startup_test/sessionrestore/profile'
     url = 'startup_test/sessionrestore/index.html'
     shutdown = False
-    reinstall = ['sessionstore.js']
+    reinstall = ['sessionstore.js', 'sessionCheckpoints.json']
     # Restore the session
     preferences = {'browser.startup.page': 3}
 
@@ -247,16 +248,20 @@ class tps(PageloaderTest):
     """
     Tests the amount of time it takes to switch between tabs
     """
-    extensions = '${talos}/page_load_test/tabswitch'
-    tpmanifest = '${talos}/page_load_test/tabswitch/tps.manifest'
+    extensions = '${talos}/tests/tabswitch'
+    tpmanifest = '${talos}/tests/tabswitch/tps.manifest'
     tppagecycles = 5
     sps_profile_entries = 1000000
     tploadnocache = True
     preferences = {
         'addon.test.tabswitch.urlfile': os.path.join('${talos}',
-                                                     'page_load_test',
+                                                     'tests',
                                                      'tp5o.html'),
         'addon.test.tabswitch.webserver': '${webserver}',
+        # limit the page set number for winxp as we have issues.
+        # see https://bugzilla.mozilla.org/show_bug.cgi?id=1195288
+        'addon.test.tabswitch.maxurls':
+            45 if utils.PLATFORM_TYPE == 'win_' else -1,
     }
 
 
@@ -283,8 +288,8 @@ class tart(PageloaderTest):
       - half: average interval over the 2nd half of the animation.
       - all: average interval over all recorded intervals.
     """
-    tpmanifest = '${talos}/page_load_test/tart/tart.manifest'
-    extensions = '${talos}/page_load_test/tart/addon'
+    tpmanifest = '${talos}/tests/tart/tart.manifest'
+    extensions = '${talos}/tests/tart/addon'
     tpcycles = 1
     tppagecycles = 25
     tploadnocache = True
@@ -319,8 +324,8 @@ class cart(PageloaderTest):
     2-customize-exit  - exiting customize
     3-customize-enter-css - only the CSS animation part of entering customize
     """
-    tpmanifest = '${talos}/page_load_test/tart/cart.manifest'
-    extensions = '${talos}/page_load_test/tart/addon'
+    tpmanifest = '${talos}/tests/tart/cart.manifest'
+    extensions = '${talos}/tests/tart/addon'
     tpcycles = 1
     tppagecycles = 25
     tploadnocache = True
@@ -344,8 +349,8 @@ class damp(PageloaderTest):
     Tests the speed of DevTools toolbox open, close, and page reload
     for each tool, across a very simple and very complicated page.
     """
-    tpmanifest = '${talos}/page_load_test/devtools/damp.manifest'
-    extensions = '${talos}/page_load_test/devtools/addon'
+    tpmanifest = '${talos}/tests/devtools/damp.manifest'
+    extensions = '${talos}/tests/devtools/addon'
     tpcycles = 1
     tppagecycles = 25
     tploadnocache = True
@@ -354,6 +359,7 @@ class damp(PageloaderTest):
     sps_profile_entries = 1000000
     win_counters = w7_counters = linux_counters = mac_counters = None
     filters = filter.ignore_first.prepare(1) + filter.median.prepare()
+    preferences = {'devtools.memory.enabled': True}
 
 
 @register_test()
@@ -366,7 +372,7 @@ class glterrain(PageloaderTest):
     antialias as canvas properties.
     Each of these 4 runs is reported as a different test name.
     """
-    tpmanifest = '${talos}/page_load_test/webgl/glterrain.manifest'
+    tpmanifest = '${talos}/tests/webgl/glterrain.manifest'
     tpcycles = 1
     tppagecycles = 25
     tploadnocache = True
@@ -393,7 +399,7 @@ class tp5n(PageloaderTest):
     """
     resolution = 20
     shutdown = True
-    tpmanifest = '${talos}/page_load_test/tp5n/tp5n.manifest'
+    tpmanifest = '${talos}/tests/tp5n/tp5n.manifest'
     tpcycles = 1
     tppagecycles = 1
     cycles = 1
@@ -437,7 +443,7 @@ class tp5o(PageloaderTest):
     tptimeout = 5000
     rss = True
     mainthread = False
-    tpmanifest = '${talos}/page_load_test/tp5n/tp5o.manifest'
+    tpmanifest = '${talos}/tests/tp5n/tp5o.manifest'
     win_counters = ['Main_RSS', 'Private Bytes', '% Processor Time']
     w7_counters = ['Main_RSS', 'Private Bytes', '% Processor Time',
                    'Modified Page List Bytes']
@@ -455,7 +461,7 @@ class tp5o_scroll(PageloaderTest):
     """
     Tests scroll (like tscrollx does, including ASAP) but on the tp5o pageset.
     """
-    tpmanifest = '${talos}/page_load_test/tp5n/tp5o.manifest'
+    tpmanifest = '${talos}/tests/tp5n/tp5o.manifest'
     tpcycles = 1
     tppagecycles = 12
     sps_profile_interval = 2
@@ -479,7 +485,7 @@ class v8_7(PageloaderTest):
     The previous version of this test is V8 version 5 which was run on
     selective branches and operating systems.
     """
-    tpmanifest = '${talos}/page_load_test/v8_7/v8.manifest'
+    tpmanifest = '${talos}/tests/v8_7/v8.manifest'
     sps_profile_interval = 1
     sps_profile_entries = 1000000
     tpcycles = 1
@@ -495,7 +501,7 @@ class kraken(PageloaderTest):
     This is the Kraken javascript benchmark taken verbatim and slightly
     modified to fit into our pageloader extension and talos harness.
     """
-    tpmanifest = '${talos}/page_load_test/kraken/kraken.manifest'
+    tpmanifest = '${talos}/tests/kraken/kraken.manifest'
     tpcycles = 1
     tppagecycles = 1
     sps_profile_interval = 0.1
@@ -510,7 +516,7 @@ class tcanvasmark(PageloaderTest):
     """
     CanvasMark benchmark v0.6
     """
-    tpmanifest = '${talos}/page_load_test/canvasmark/canvasmark.manifest'
+    tpmanifest = '${talos}/tests/canvasmark/canvasmark.manifest'
     win_counters = w7_counters = linux_counters = mac_counters = None
     tpcycles = 5
     tppagecycles = 1
@@ -538,7 +544,7 @@ class dromaeo_css(dromaeo):
     """
     sps_profile_interval = 2
     sps_profile_entries = 10000000
-    tpmanifest = '${talos}/page_load_test/dromaeo/css.manifest'
+    tpmanifest = '${talos}/tests/dromaeo/css.manifest'
 
 
 @register_test()
@@ -552,7 +558,7 @@ class dromaeo_dom(dromaeo):
     """
     sps_profile_interval = 2
     sps_profile_entries = 10000000
-    tpmanifest = '${talos}/page_load_test/dromaeo/dom.manifest'
+    tpmanifest = '${talos}/tests/dromaeo/dom.manifest'
     tpdisable_e10s = True
 
 
@@ -561,7 +567,7 @@ class tsvgm(PageloaderTest):
     """
     An svg-only number that measures SVG rendering performance.
     """
-    tpmanifest = '${talos}/page_load_test/svgx/svgm.manifest'
+    tpmanifest = '${talos}/tests/svgx/svgm.manifest'
     tpcycles = 1
     tppagecycles = 7
     tpmozafterpaint = False
@@ -579,7 +585,7 @@ class tsvgx(PageloaderTest):
     """
     An svg-only number that measures SVG rendering performance.
     """
-    tpmanifest = '${talos}/page_load_test/svgx/svgx.manifest'
+    tpmanifest = '${talos}/tests/svgx/svgx.manifest'
     tpcycles = 1
     tppagecycles = 25
     tpmozafterpaint = False
@@ -597,7 +603,7 @@ class tsvgr_opacity(PageloaderTest):
     """
     An svg-only number that measures SVG rendering performance.
     """
-    tpmanifest = '${talos}/page_load_test/svg_opacity/svg_opacity.manifest'
+    tpmanifest = '${talos}/tests/svg_opacity/svg_opacity.manifest'
     tpcycles = 1
     tppagecycles = 25
     sps_profile_interval = 1
@@ -610,7 +616,7 @@ class tscrollx(PageloaderTest):
     """
     This test does some scrolly thing.
     """
-    tpmanifest = '${talos}/page_load_test/scroll/scroll.manifest'
+    tpmanifest = '${talos}/tests/scroll/scroll.manifest'
     tpcycles = 1
     tppagecycles = 25
     tpmozafterpaint = False
@@ -629,7 +635,7 @@ class a11yr(PageloaderTest):
     This test ensures basic a11y tables and permutations do not cause
     performance regressions.
     """
-    tpmanifest = '${talos}/page_load_test/a11y/a11y.manifest'
+    tpmanifest = '${talos}/tests/a11y/a11y.manifest'
     tpcycles = 1
     tppagecycles = 25
     tpmozafterpaint = True

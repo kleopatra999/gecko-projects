@@ -12,6 +12,7 @@
 #include "mozilla/ErrorResult.h"
 #include "mozilla/dom/Headers.h"
 #include "mozilla/dom/Fetch.h"
+#include "mozilla/dom/FetchUtil.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/URL.h"
 #include "mozilla/dom/WorkerPrivate.h"
@@ -63,10 +64,29 @@ Request::RequestContextEnabled(JSContext* aCx, JSObject* aObj)
   return workerPrivate->RequestContextEnabled();
 }
 
+// static
+bool
+Request::RequestCacheEnabled(JSContext* aCx, JSObject* aObj)
+{
+  if (NS_IsMainThread()) {
+    return Preferences::GetBool("dom.requestcache.enabled", false);
+  }
+
+  using namespace workers;
+
+  // Otherwise, check the pref via the WorkerPrivate
+  WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
+  if (!workerPrivate) {
+    return false;
+  }
+
+  return workerPrivate->RequestCacheEnabled();
+}
+
 already_AddRefed<InternalRequest>
 Request::GetInternalRequest()
 {
-  nsRefPtr<InternalRequest> r = mRequest;
+  RefPtr<InternalRequest> r = mRequest;
   return r.forget();
 }
 
@@ -82,7 +102,7 @@ GetRequestURLFromDocument(nsIDocument* aDocument, const nsAString& aInput,
   nsCOMPtr<nsIURI> resolvedURI;
   aRv = NS_NewURI(getter_AddRefs(resolvedURI), aInput, nullptr, baseURI);
   if (NS_WARN_IF(aRv.Failed())) {
-    aRv.ThrowTypeError(MSG_INVALID_URL, &aInput);
+    aRv.ThrowTypeError<MSG_INVALID_URL>(&aInput);
     return;
   }
 
@@ -91,7 +111,7 @@ GetRequestURLFromDocument(nsIDocument* aDocument, const nsAString& aInput,
   nsAutoCString credentials;
   unused << resolvedURI->GetUserPass(credentials);
   if (!credentials.IsEmpty()) {
-    aRv.ThrowTypeError(MSG_URL_HAS_CREDENTIALS, &aInput);
+    aRv.ThrowTypeError<MSG_URL_HAS_CREDENTIALS>(&aInput);
     return;
   }
 
@@ -121,7 +141,7 @@ GetRequestURLFromChrome(const nsAString& aInput, nsAString& aRequestURL,
   nsCOMPtr<nsIURI> uri;
   aRv = NS_NewURI(getter_AddRefs(uri), aInput, nullptr, nullptr);
   if (NS_WARN_IF(aRv.Failed())) {
-    aRv.ThrowTypeError(MSG_INVALID_URL, &aInput);
+    aRv.ThrowTypeError<MSG_INVALID_URL>(&aInput);
     return;
   }
 
@@ -130,7 +150,7 @@ GetRequestURLFromChrome(const nsAString& aInput, nsAString& aRequestURL,
   nsAutoCString credentials;
   unused << uri->GetUserPass(credentials);
   if (!credentials.IsEmpty()) {
-    aRv.ThrowTypeError(MSG_URL_HAS_CREDENTIALS, &aInput);
+    aRv.ThrowTypeError<MSG_URL_HAS_CREDENTIALS>(&aInput);
     return;
   }
 
@@ -160,10 +180,10 @@ GetRequestURLFromWorker(const GlobalObject& aGlobal, const nsAString& aInput,
   worker->AssertIsOnWorkerThread();
 
   NS_ConvertUTF8toUTF16 baseURL(worker->GetLocationInfo().mHref);
-  nsRefPtr<workers::URL> url =
+  RefPtr<workers::URL> url =
     workers::URL::Constructor(aGlobal, aInput, baseURL, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
-    aRv.ThrowTypeError(MSG_INVALID_URL, &aInput);
+    aRv.ThrowTypeError<MSG_INVALID_URL>(&aInput);
     return;
   }
 
@@ -180,7 +200,7 @@ GetRequestURLFromWorker(const GlobalObject& aGlobal, const nsAString& aInput,
   }
 
   if (!username.IsEmpty() || !password.IsEmpty()) {
-    aRv.ThrowTypeError(MSG_URL_HAS_CREDENTIALS, &aInput);
+    aRv.ThrowTypeError<MSG_URL_HAS_CREDENTIALS>(&aInput);
     return;
   }
 
@@ -203,17 +223,17 @@ Request::Constructor(const GlobalObject& aGlobal,
                      const RequestInit& aInit, ErrorResult& aRv)
 {
   nsCOMPtr<nsIInputStream> temporaryBody;
-  nsRefPtr<InternalRequest> request;
+  RefPtr<InternalRequest> request;
 
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
 
   if (aInput.IsRequest()) {
-    nsRefPtr<Request> inputReq = &aInput.GetAsRequest();
+    RefPtr<Request> inputReq = &aInput.GetAsRequest();
     nsCOMPtr<nsIInputStream> body;
     inputReq->GetBody(getter_AddRefs(body));
     if (body) {
       if (inputReq->BodyUsed()) {
-        aRv.ThrowTypeError(MSG_FETCH_BODY_CONSUMED_ERROR);
+        aRv.ThrowTypeError<MSG_FETCH_BODY_CONSUMED_ERROR>();
         return nullptr;
       }
       temporaryBody = body;
@@ -259,16 +279,6 @@ Request::Constructor(const GlobalObject& aGlobal,
     fallbackCache = RequestCache::Default;
   }
 
-  // CORS-with-forced-preflight is not publicly exposed and should not be
-  // considered a valid value.
-  if (aInit.mMode.WasPassed() &&
-      aInit.mMode.Value() == RequestMode::Cors_with_forced_preflight) {
-    NS_NAMED_LITERAL_STRING(sourceDescription, "'mode' member of RequestInit");
-    NS_NAMED_LITERAL_STRING(value, "cors-with-forced-preflight");
-    NS_NAMED_LITERAL_STRING(type, "RequestMode");
-    aRv.ThrowTypeError(MSG_INVALID_ENUM_VALUE, &sourceDescription, &value, &type);
-    return nullptr;
-  }
   RequestMode mode = aInit.mMode.WasPassed() ? aInit.mMode.Value() : fallbackMode;
   RequestCredentials credentials =
     aInit.mCredentials.WasPassed() ? aInit.mCredentials.Value()
@@ -298,41 +308,28 @@ Request::Constructor(const GlobalObject& aGlobal,
   // Request constructor step 14.
   if (aInit.mMethod.WasPassed()) {
     nsAutoCString method(aInit.mMethod.Value());
-    nsAutoCString upperCaseMethod = method;
-    ToUpperCase(upperCaseMethod);
 
     // Step 14.1. Disallow forbidden methods, and anything that is not a HTTP
     // token, since HTTP states that Method may be any of the defined values or
     // a token (extension method).
-    if (upperCaseMethod.EqualsLiteral("CONNECT") ||
-        upperCaseMethod.EqualsLiteral("TRACE") ||
-        upperCaseMethod.EqualsLiteral("TRACK") ||
-        !NS_IsValidHTTPToken(method)) {
+    nsAutoCString outMethod;
+    nsresult rv = FetchUtil::GetValidRequestMethod(method, outMethod);
+    if (NS_FAILED(rv)) {
       NS_ConvertUTF8toUTF16 label(method);
-      aRv.ThrowTypeError(MSG_INVALID_REQUEST_METHOD, &label);
+      aRv.ThrowTypeError<MSG_INVALID_REQUEST_METHOD>(&label);
       return nullptr;
     }
 
     // Step 14.2
-    if (upperCaseMethod.EqualsLiteral("DELETE") ||
-        upperCaseMethod.EqualsLiteral("GET") ||
-        upperCaseMethod.EqualsLiteral("HEAD") ||
-        upperCaseMethod.EqualsLiteral("POST") ||
-        upperCaseMethod.EqualsLiteral("PUT") ||
-        upperCaseMethod.EqualsLiteral("OPTIONS")) {
-      request->ClearCreatedByFetchEvent();
-      request->SetMethod(upperCaseMethod);
-    } else {
-      request->ClearCreatedByFetchEvent();
-      request->SetMethod(method);
-    }
+    request->ClearCreatedByFetchEvent();
+    request->SetMethod(outMethod);
   }
 
-  nsRefPtr<InternalHeaders> requestHeaders = request->Headers();
+  RefPtr<InternalHeaders> requestHeaders = request->Headers();
 
-  nsRefPtr<InternalHeaders> headers;
+  RefPtr<InternalHeaders> headers;
   if (aInit.mHeaders.WasPassed()) {
-    nsRefPtr<Headers> h = Headers::Constructor(aGlobal, aInit.mHeaders.Value(), aRv);
+    RefPtr<Headers> h = Headers::Constructor(aGlobal, aInit.mHeaders.Value(), aRv);
     if (aRv.Failed()) {
       return nullptr;
     }
@@ -353,7 +350,7 @@ Request::Constructor(const GlobalObject& aGlobal,
       nsAutoCString method;
       request->GetMethod(method);
       NS_ConvertUTF8toUTF16 label(method);
-      aRv.ThrowTypeError(MSG_INVALID_REQUEST_METHOD, &label);
+      aRv.ThrowTypeError<MSG_INVALID_REQUEST_METHOD>(&label);
       return nullptr;
     }
 
@@ -374,7 +371,7 @@ Request::Constructor(const GlobalObject& aGlobal,
     request->GetMethod(method);
     // method is guaranteed to be uppercase due to step 14.2 above.
     if (method.EqualsLiteral("HEAD") || method.EqualsLiteral("GET")) {
-      aRv.ThrowTypeError(MSG_NO_BODY_ALLOWED_FOR_GET_AND_HEAD);
+      aRv.ThrowTypeError<MSG_NO_BODY_ALLOWED_FOR_GET_AND_HEAD>();
       return nullptr;
     }
   }
@@ -405,11 +402,11 @@ Request::Constructor(const GlobalObject& aGlobal,
     request->SetBody(temporaryBody);
   }
 
-  nsRefPtr<Request> domRequest = new Request(global, request);
+  RefPtr<Request> domRequest = new Request(global, request);
   domRequest->SetMimeType();
 
   if (aInput.IsRequest()) {
-    nsRefPtr<Request> inputReq = &aInput.GetAsRequest();
+    RefPtr<Request> inputReq = &aInput.GetAsRequest();
     nsCOMPtr<nsIInputStream> body;
     inputReq->GetBody(getter_AddRefs(body));
     if (body) {
@@ -424,17 +421,17 @@ already_AddRefed<Request>
 Request::Clone(ErrorResult& aRv) const
 {
   if (BodyUsed()) {
-    aRv.ThrowTypeError(MSG_FETCH_BODY_CONSUMED_ERROR);
+    aRv.ThrowTypeError<MSG_FETCH_BODY_CONSUMED_ERROR>();
     return nullptr;
   }
 
-  nsRefPtr<InternalRequest> ir = mRequest->Clone();
+  RefPtr<InternalRequest> ir = mRequest->Clone();
   if (!ir) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
   }
 
-  nsRefPtr<Request> request = new Request(mOwner, ir);
+  RefPtr<Request> request = new Request(mOwner, ir);
   return request.forget();
 }
 

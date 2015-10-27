@@ -12,6 +12,7 @@
 #include "gfxWindowsPlatform.h"
 #include "mozilla/GfxMessageUtils.h"
 #include <d3d11.h>
+#include "d3d9.h"
 #include <vector>
 
 namespace mozilla {
@@ -87,6 +88,8 @@ public:
 protected:
   bool AllocateD3D11Surface(ID3D11Device* aDevice, const gfx::IntSize& aSize);
 
+  virtual void FinalizeOnIPDLThread() override;
+
   gfx::IntSize mSize;
   RefPtr<ID3D10Texture2D> mTexture10;
   RefPtr<ID3D11Texture2D> mTexture;
@@ -109,12 +112,23 @@ public:
   static already_AddRefed<DXGIYCbCrTextureClient>
   Create(ISurfaceAllocator* aAllocator,
          TextureFlags aFlags,
-         IUnknown* aTextureY,
-         IUnknown* aTextureCb,
-         IUnknown* aTextureCr,
+         IDirect3DTexture9* aTextureY,
+         IDirect3DTexture9* aTextureCb,
+         IDirect3DTexture9* aTextureCr,
          HANDLE aHandleY,
          HANDLE aHandleCb,
          HANDLE aHandleCr,
+         const gfx::IntSize& aSize,
+         const gfx::IntSize& aSizeY,
+         const gfx::IntSize& aSizeCbCr);
+
+  // Creates a TextureClient and init width.
+  static already_AddRefed<DXGIYCbCrTextureClient>
+  Create(ISurfaceAllocator* aAllocator,
+         TextureFlags aFlags,
+         ID3D11Texture2D* aTextureY,
+         ID3D11Texture2D* aTextureCb,
+         ID3D11Texture2D* aTextureCr,
          const gfx::IntSize& aSize,
          const gfx::IntSize& aSizeY,
          const gfx::IntSize& aSizeCbCr);
@@ -145,6 +159,8 @@ public:
     CreateSimilar(TextureFlags, TextureAllocationFlags) const override{ return nullptr; }
 
 private:
+  virtual void FinalizeOnIPDLThread() override;
+
   RefPtr<IUnknown> mHoldRefs[3];
   HANDLE mHandles[3];
   gfx::IntSize mSize;

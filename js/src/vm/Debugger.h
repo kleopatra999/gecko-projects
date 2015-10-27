@@ -82,22 +82,16 @@ class DebuggerWeakMap : private WeakMap<PreBarriered<UnbarrieredKey>, Relocatabl
                     RuntimeAllocPolicy> CountMap;
 
     CountMap zoneCounts;
+    JSCompartment* compartment;
 
   public:
     typedef WeakMap<Key, Value, DefaultHasher<Key> > Base;
 
     explicit DebuggerWeakMap(JSContext* cx)
-        : Base(cx), zoneCounts(cx->runtime()) { }
-
-    ~DebuggerWeakMap() {
-        // If our owning Debugger fails construction after already initializing
-        // this DebuggerWeakMap, we need to make sure that we aren't in the
-        // compartment's weak map list anymore. Normally, when we are destroyed
-        // because the GC finds us unreachable, the GC takes care of removing us
-        // from this list.
-        if (WeakMapBase::isInList())
-            WeakMapBase::removeWeakMapFromList(this);
-    }
+        : Base(cx),
+          zoneCounts(cx->runtime()),
+          compartment(cx->compartment())
+    { }
 
   public:
     /* Expose those parts of HashMap public interface that are used by Debugger methods. */
@@ -121,7 +115,7 @@ class DebuggerWeakMap : private WeakMap<PreBarriered<UnbarrieredKey>, Relocatabl
 
     template<typename KeyInput, typename ValueInput>
     bool relookupOrAdd(AddPtr& p, const KeyInput& k, const ValueInput& v) {
-        MOZ_ASSERT(v->compartment() == Base::compartment);
+        MOZ_ASSERT(v->compartment() == this->compartment);
         MOZ_ASSERT(!k->compartment()->options_.mergeable());
         MOZ_ASSERT_IF(!InvisibleKeysOk, !k->compartment()->options_.invisibleToDebugger());
         MOZ_ASSERT(!Base::has(k));
@@ -206,6 +200,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     friend class DebuggerMemory;
     friend class SavedStacks;
     friend class mozilla::LinkedListElement<Debugger>;
+    friend class mozilla::LinkedList<Debugger>;
     friend bool (::JS_DefineDebuggerObject)(JSContext* cx, JS::HandleObject obj);
     friend bool (::JS::dbg::IsDebugger)(JSObject&);
     friend bool (::JS::dbg::GetDebuggeeGlobals)(JSContext*, JSObject&, AutoObjectVector&);
@@ -264,7 +259,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
 
     // Return true if the given compartment is a debuggee of this debugger,
     // false otherwise.
-    bool isDebuggee(const JSCompartment* compartment) const;
+    bool isDebuggeeUnbarriered(const JSCompartment* compartment) const;
 
     // Return true if this Debugger observed a debuggee that participated in the
     // GC identified by the given GC number. Return false otherwise.
@@ -340,6 +335,10 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     js::HeapPtrObject uncaughtExceptionHook; /* Strong reference. */
     bool enabled;
     bool allowUnobservedAsmJS;
+
+    // Wether to enable code coverage on the Debuggee.
+    bool collectCoverageInfo;
+
     JSCList breakpoints;                /* Circular list of all js::Breakpoints in this debugger */
 
     // The set of GC numbers for which one or more of this Debugger's observed
@@ -368,7 +367,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     /*
      * Recompute the set of debuggee zones based on the set of debuggee globals.
      */
-    bool recomputeDebuggeeZoneSet();
+    void recomputeDebuggeeZoneSet();
 
     /*
      * Return true if there is an existing object metadata callback for the
@@ -388,7 +387,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
      * debuggee's compartment. The given debuggee global must be observed by at
      * least one Debugger that is enabled and tracking allocations.
      */
-    static bool addAllocationsTracking(JSContext* cx, GlobalObject& debuggee);
+    static bool addAllocationsTracking(JSContext* cx, Handle<GlobalObject*> debuggee);
 
     /*
      * Remove allocations tracking for objects allocated within the given
@@ -545,6 +544,8 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static bool setUncaughtExceptionHook(JSContext* cx, unsigned argc, Value* vp);
     static bool getAllowUnobservedAsmJS(JSContext* cx, unsigned argc, Value* vp);
     static bool setAllowUnobservedAsmJS(JSContext* cx, unsigned argc, Value* vp);
+    static bool getCollectCoverageInfo(JSContext* cx, unsigned argc, Value* vp);
+    static bool setCollectCoverageInfo(JSContext* cx, unsigned argc, Value* vp);
     static bool getMemory(JSContext* cx, unsigned argc, Value* vp);
     static bool getOnIonCompilation(JSContext* cx, unsigned argc, Value* vp);
     static bool setOnIonCompilation(JSContext* cx, unsigned argc, Value* vp);
@@ -594,6 +595,10 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     // execution of its debuggees.
     IsObserving observesAsmJS() const;
 
+    // Whether the Debugger instance needs to observe coverage of any JavaScript
+    // execution.
+    IsObserving observesCoverage() const;
+
   private:
     static bool ensureExecutionObservabilityOfFrame(JSContext* cx, AbstractFramePtr frame);
     static bool ensureExecutionObservabilityOfCompartment(JSContext* cx, JSCompartment* comp);
@@ -601,6 +606,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static bool hookObservesAllExecution(Hook which);
 
     bool updateObservesAllExecutionOnDebuggees(JSContext* cx, IsObserving observing);
+    bool updateObservesCoverageOnDebuggees(JSContext* cx, IsObserving observing);
     void updateObservesAsmJSOnDebuggees(IsObserving observing);
 
     JSObject* getHook(Hook hook) const;
@@ -615,7 +621,8 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static bool slowPathOnLogAllocationSite(JSContext* cx, HandleObject obj, HandleSavedFrame frame,
                                             double when, GlobalObject::DebuggerVector& dbgs);
     static void slowPathPromiseHook(JSContext* cx, Hook hook, HandleObject promise);
-    static void slowPathOnIonCompilation(JSContext* cx, AutoScriptVector& scripts, LSprinter& graph);
+    static void slowPathOnIonCompilation(JSContext* cx, Handle<ScriptVector> scripts,
+                                         LSprinter& graph);
 
     template <typename HookIsEnabledFun /* bool (Debugger*) */,
               typename FireHookFun /* JSTrapStatus (Debugger*) */>
@@ -657,7 +664,7 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
      * Receive a "Ion compilation" event from the engine. An Ion compilation with
      * the given summary just got linked.
      */
-    JSTrapStatus fireOnIonCompilationHook(JSContext* cx, AutoScriptVector& scripts,
+    JSTrapStatus fireOnIonCompilationHook(JSContext* cx, Handle<ScriptVector> scripts,
                                           LSprinter& graph);
 
     /*
@@ -778,7 +785,8 @@ class Debugger : private mozilla::LinkedListElement<Debugger>
     static inline bool onLogAllocationSite(JSContext* cx, JSObject* obj, HandleSavedFrame frame,
                                            double when);
     static inline bool observesIonCompilation(JSContext* cx);
-    static inline void onIonCompilation(JSContext* cx, AutoScriptVector& scripts, LSprinter& graph);
+    static inline void onIonCompilation(JSContext* cx, Handle<ScriptVector> scripts,
+                                        LSprinter& graph);
     static JSTrapStatus onTrap(JSContext* cx, MutableHandleValue vp);
     static JSTrapStatus onSingleStep(JSContext* cx, MutableHandleValue vp);
     static bool handleBaselineOsr(JSContext* cx, InterpreterFrame* from, jit::BaselineFrame* to);

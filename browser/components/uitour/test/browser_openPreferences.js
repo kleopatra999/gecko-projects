@@ -3,17 +3,17 @@
 
 "use strict";
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
-let gTestTab;
-let gContentAPI;
-let gContentWindow;
+var gTestTab;
+var gContentAPI;
+var gContentWindow;
 
 function test() {
   UITourTest();
 }
 
-let tests = [
+var tests = [
   taskify(function* test_openPreferences() {
     let promiseTabOpened = BrowserTestUtils.waitForNewTab(gBrowser, "about:preferences");
     gContentAPI.openPreferences();

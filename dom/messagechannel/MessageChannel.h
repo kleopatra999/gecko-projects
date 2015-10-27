@@ -40,6 +40,9 @@ public:
   static already_AddRefed<MessageChannel>
   Constructor(const GlobalObject& aGlobal, ErrorResult& aRv);
 
+  static already_AddRefed<MessageChannel>
+  Constructor(nsPIDOMWindow* aWindow, ErrorResult& aRv);
+
   MessagePort*
   Port1() const
   {
@@ -58,8 +61,8 @@ private:
 
   nsCOMPtr<nsPIDOMWindow> mWindow;
 
-  nsRefPtr<MessagePort> mPort1;
-  nsRefPtr<MessagePort> mPort2;
+  RefPtr<MessagePort> mPort1;
+  RefPtr<MessagePort> mPort2;
 };
 
 } // namespace dom

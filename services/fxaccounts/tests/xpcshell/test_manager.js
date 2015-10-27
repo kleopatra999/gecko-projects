@@ -3,7 +3,7 @@
 
 "use strict";
 
-const Cm = Components.manager;
+var Cm = Components.manager;
 
 Cu.import("resource://gre/modules/FxAccounts.jsm");
 Cu.import("resource://gre/modules/FxAccountsCommon.js");
@@ -14,11 +14,11 @@ Cu.import("resource://testing-common/MockRegistrar.jsm");
 // === Mocks ===
 
 // Globals representing server state
-let passwordResetOnServer = false;
-let deletedOnServer = false;
+var passwordResetOnServer = false;
+var deletedOnServer = false;
 
 // Global representing FxAccounts state
-let certExpired = false;
+var certExpired = false;
 
 // Mock RP
 function makePrincipal(origin, appId) {
@@ -27,13 +27,13 @@ function makePrincipal(origin, appId) {
   let uri = Services.io.newURI(origin, null, null);
   return secMan.createCodebasePrincipal(uri, {appId: appId});
 }
-let principal = makePrincipal('app://settings.gaiamobile.org', 27, false);
+var principal = makePrincipal('app://settings.gaiamobile.org', 27, false);
 
 // For override FxAccountsUIGlue.
-let fakeFxAccountsUIGlueCID;
+var fakeFxAccountsUIGlueCID;
 
 // FxAccountsUIGlue fake component.
-let FxAccountsUIGlue = {
+var FxAccountsUIGlue = {
   _reject: false,
 
   _error: 'error',
@@ -177,7 +177,7 @@ FxAccountsManager._fxAccounts = {
 const kFxAccountsClient = FxAccountsManager._getFxAccountsClient;
 
 // and change it for a fake client factory.
-let FakeFxAccountsClient = {
+var FakeFxAccountsClient = {
   _reject: false,
   _recoveryEmailStatusCalled: false,
   _signInCalled: false,
@@ -204,9 +204,10 @@ let FakeFxAccountsClient = {
     return deferred.promise;
   },
 
-  signIn: function(user, password) {
+  signIn: function(user, password, getKeys) {
     this._signInCalled = true;
     this._password = password;
+    this._keyFetchToken = getKeys ? "token" : null;
     let deferred = Promise.defer();
     this._reject ? deferred.reject()
                  : deferred.resolve({ email: user,
@@ -804,6 +805,50 @@ add_test(function(test_signIn_already_signed_user) {
       run_next_test();
     }
   );
+});
+
+add_test(function(test_signIn_getKeys_true) {
+  do_print("= signIn, getKeys true =");
+  FxAccountsManager.signOut().then(() => {
+    FxAccountsManager.signIn("user@domain.org", "password", true).then(
+      result => {
+        do_check_true(FakeFxAccountsClient._signInCalled);
+        do_check_true(FxAccountsManager._fxAccounts._getSignedInUserCalled);
+        do_check_eq(FxAccountsManager._fxAccounts._signedInUser.email, "user@domain.org");
+        do_check_eq(FakeFxAccountsClient._password, "password");
+        do_check_eq(FakeFxAccountsClient._keyFetchToken, "token");
+        do_check_eq(result.user.email, "user@domain.org");
+        FakeFxAccountsClient._reset();
+        FxAccountsManager._fxAccounts._reset();
+        run_next_test();
+      },
+      error => {
+        do_throw("Unexpected error");
+      }
+    );
+  });
+});
+
+add_test(function(test_signIn_getKeys_false) {
+  do_print("= signIn, getKeys false =");
+  FxAccountsManager.signOut().then(() => {
+    FxAccountsManager.signIn("user@domain.org", "password", false).then(
+      result => {
+        do_check_true(FakeFxAccountsClient._signInCalled);
+        do_check_true(FxAccountsManager._fxAccounts._getSignedInUserCalled);
+        do_check_eq(FxAccountsManager._fxAccounts._signedInUser.email, "user@domain.org");
+        do_check_eq(FakeFxAccountsClient._password, "password");
+        do_check_eq(FakeFxAccountsClient._keyFetchToken, null);
+        do_check_eq(result.user.email, "user@domain.org");
+        FakeFxAccountsClient._reset();
+        FxAccountsManager._fxAccounts._reset();
+        run_next_test();
+      },
+      error => {
+        do_throw("Unexpected error");
+      }
+    );
+  });
 });
 
 add_test(function(test_resendVerificationEmail_error_handling) {

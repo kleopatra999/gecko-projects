@@ -251,14 +251,12 @@ Classifier::Check(const nsACString& aSpec,
       continue;
     }
 
-#if DEBUG
     if (LOG_ENABLED()) {
       nsAutoCString checking;
       lookupHash.ToHexString(checking);
       LOG(("Checking fragment %s, hash %s (%X)", fragments[i].get(),
            checking.get(), lookupHash.ToUint32()));
     }
-#endif
 
     for (uint32_t i = 0; i < cacheArray.Length(); i++) {
       LookupCache *cache = cacheArray[i];
@@ -368,6 +366,15 @@ Classifier::MarkSpoiled(nsTArray<nsCString>& aTables)
     }
   }
   return NS_OK;
+}
+
+void
+Classifier::SetLastUpdateTime(const nsACString &aTable,
+                              uint64_t updateTime)
+{
+  LOG(("Marking table %s as last updated on %u",
+       PromiseFlatCString(aTable).get(), updateTime));
+  mTableFreshness.Put(aTable, updateTime / PR_MSEC_PER_SEC);
 }
 
 void

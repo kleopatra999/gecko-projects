@@ -88,6 +88,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitInitPropGetterSetter(MInitPropGetterSetter* ins);
     void visitCheckOverRecursed(MCheckOverRecursed* ins);
     void visitDefVar(MDefVar* ins);
+    void visitDefLexical(MDefLexical* ins);
     void visitDefFun(MDefFun* ins);
     void visitCreateThisWithTemplate(MCreateThisWithTemplate* ins);
     void visitCreateThisWithProto(MCreateThisWithProto* ins);
@@ -141,6 +142,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitConcat(MConcat* ins);
     void visitCharCodeAt(MCharCodeAt* ins);
     void visitFromCharCode(MFromCharCode* ins);
+    void visitSinCos(MSinCos *ins);
     void visitStringSplit(MStringSplit* ins);
     void visitStart(MStart* start);
     void visitOsrEntry(MOsrEntry* entry);
@@ -224,7 +226,6 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitGetPropertyCache(MGetPropertyCache* ins);
     void visitGetPropertyPolymorphic(MGetPropertyPolymorphic* ins);
     void visitSetPropertyPolymorphic(MSetPropertyPolymorphic* ins);
-    void visitGetElementCache(MGetElementCache* ins);
     void visitBindNameCache(MBindNameCache* ins);
     void visitGuardObjectIdentity(MGuardObjectIdentity* ins);
     void visitGuardClass(MGuardClass* ins);
@@ -244,7 +245,6 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitCallSetElement(MCallSetElement* ins);
     void visitCallInitElementArray(MCallInitElementArray* ins);
     void visitSetPropertyCache(MSetPropertyCache* ins);
-    void visitSetElementCache(MSetElementCache* ins);
     void visitCallSetProperty(MCallSetProperty* ins);
     void visitIteratorStart(MIteratorStart* ins);
     void visitIteratorMore(MIteratorMore* ins);
@@ -298,11 +298,13 @@ class LIRGenerator : public LIRGeneratorSpecific
     void visitArrayState(MArrayState* ins);
     void visitUnknownValue(MUnknownValue* ins);
     void visitLexicalCheck(MLexicalCheck* ins);
-    void visitThrowUninitializedLexical(MThrowUninitializedLexical* ins);
+    void visitThrowRuntimeLexicalError(MThrowRuntimeLexicalError* ins);
+    void visitGlobalNameConflictsCheck(MGlobalNameConflictsCheck* ins);
     void visitDebugger(MDebugger* ins);
     void visitNewTarget(MNewTarget* ins);
     void visitArrowNewTarget(MArrowNewTarget* ins);
     void visitAtomicIsLockFree(MAtomicIsLockFree* ins);
+    void visitCheckReturn(MCheckReturn* ins);
 };
 
 } // namespace jit

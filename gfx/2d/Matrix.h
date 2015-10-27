@@ -265,6 +265,13 @@ public:
     return !(*this == other);
   }
 
+  bool ExactlyEquals(const Matrix& o) const
+  {
+    return _11 == o._11 && _12 == o._12 &&
+           _21 == o._21 && _22 == o._22 &&
+           _31 == o._31 && _32 == o._32;
+  }
+
   /* Verifies that the matrix contains no Infs or NaNs. */
   bool IsFinite() const
   {
@@ -698,12 +705,15 @@ public:
     _11 *= aX;
     _12 *= aX;
     _13 *= aX;
+    _14 *= aX;
     _21 *= aY;
     _22 *= aY;
     _23 *= aY;
+    _24 *= aY;
     _31 *= aZ;
     _32 *= aZ;
     _33 *= aZ;
+    _34 *= aZ;
 
     return *this;
   }

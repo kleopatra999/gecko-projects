@@ -143,7 +143,7 @@ TextEventDispatcher::DispatchEvent(nsIWidget* aWidget,
 {
   MOZ_ASSERT(!aEvent.AsInputEvent(), "Use DispatchInputEvent()");
 
-  nsRefPtr<TextEventDispatcher> kungFuDeathGrip(this);
+  RefPtr<TextEventDispatcher> kungFuDeathGrip(this);
   nsCOMPtr<nsIWidget> widget(aWidget);
   mDispatchingEvent++;
   nsresult rv = widget->DispatchEvent(&aEvent, aStatus);
@@ -157,7 +157,7 @@ TextEventDispatcher::DispatchInputEvent(nsIWidget* aWidget,
                                         nsEventStatus& aStatus,
                                         DispatchTo aDispatchTo)
 {
-  nsRefPtr<TextEventDispatcher> kungFuDeathGrip(this);
+  RefPtr<TextEventDispatcher> kungFuDeathGrip(this);
   nsCOMPtr<nsIWidget> widget(aWidget);
   mDispatchingEvent++;
 
@@ -191,7 +191,7 @@ TextEventDispatcher::StartComposition(nsEventStatus& aStatus)
   }
 
   mIsComposing = true;
-  WidgetCompositionEvent compositionStartEvent(true, NS_COMPOSITION_START,
+  WidgetCompositionEvent compositionStartEvent(true, eCompositionStart,
                                                mWidget);
   InitEvent(compositionStartEvent);
   rv = DispatchEvent(mWidget, compositionStartEvent, aStatus);
@@ -268,11 +268,11 @@ TextEventDispatcher::CommitComposition(nsEventStatus& aStatus,
   // End current composition and make this free for other IMEs.
   mIsComposing = false;
 
-  EventMessage message = aCommitString ? NS_COMPOSITION_COMMIT :
-                                         NS_COMPOSITION_COMMIT_AS_IS;
+  EventMessage message = aCommitString ? eCompositionCommit :
+                                         eCompositionCommitAsIs;
   WidgetCompositionEvent compositionCommitEvent(true, message, widget);
   InitEvent(compositionCommitEvent);
-  if (message == NS_COMPOSITION_COMMIT) {
+  if (message == eCompositionCommit) {
     compositionCommitEvent.mData = *aCommitString;
   }
   rv = DispatchEvent(widget, compositionCommitEvent, aStatus);
@@ -539,9 +539,9 @@ TextEventDispatcher::PendingComposition::Flush(TextEventDispatcher* aDispatcher,
     mClauses->AppendElement(mCaret);
   }
 
-  nsRefPtr<TextEventDispatcher> kungFuDeathGrip(aDispatcher);
+  RefPtr<TextEventDispatcher> kungFuDeathGrip(aDispatcher);
   nsCOMPtr<nsIWidget> widget(aDispatcher->mWidget);
-  WidgetCompositionEvent compChangeEvent(true, NS_COMPOSITION_CHANGE, widget);
+  WidgetCompositionEvent compChangeEvent(true, eCompositionChange, widget);
   aDispatcher->InitEvent(compChangeEvent);
   compChangeEvent.mData = mString;
   if (mClauses) {

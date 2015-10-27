@@ -1,16 +1,17 @@
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
-let {
+var {
   EventManager,
   ignoreEvent,
+  runSafe,
 } = ExtensionUtils;
 
 // WeakMap[Extension -> Set[Notification]]
-let notificationsMap = new WeakMap();
+var notificationsMap = new WeakMap();
 
-// WeakMap[Extension -> callback]
-let notificationCallbacksMap = new WeakMap();
+// WeakMap[Extension -> Set[callback]]
+var notificationCallbacksMap = new WeakMap();
 
 // Manages a notification popup (notifications API) created by the extension.
 function Notification(extension, id, options)
@@ -54,8 +55,8 @@ Notification.prototype = {
       return;
     }
 
-    if (notificationCallbacksMap.has(this.extension)) {
-      notificationCallbackMap.get(this.extension)(this);
+    for (let callback in notificationCallbacksMap.get(this.extension)) {
+      callback(this);
     }
 
     notificationsMap.get(this.extension).delete(this);
@@ -64,6 +65,7 @@ Notification.prototype = {
 
 extensions.on("startup", (type, extension) => {
   notificationsMap.set(extension, new Set());
+  notificationCallbacksMap.set(extension, new Set());
 });
 
 extensions.on("shutdown", (type, extension) => {
@@ -71,9 +73,10 @@ extensions.on("shutdown", (type, extension) => {
     notification.clear();
   }
   notificationsMap.delete(extension);
+  notificationCallbacksMap.delete(extension);
 });
 
-let nextId = 0;
+var nextId = 0;
 
 extensions.registerPrivilegedAPI("notifications", (extension, context) => {
   return {
@@ -128,9 +131,9 @@ extensions.registerPrivilegedAPI("notifications", (extension, context) => {
           fire(notification.id, true);
         };
 
-        notificationCallbackMap.set(extension, listener);
+        notificationCallbacksMap.get(extension).add(listener);
         return () => {
-          notificationCallbackMap.delete(extension);
+          notificationCallbacksMap.get(extension).delete(listener);
         };
       }).api(),
 

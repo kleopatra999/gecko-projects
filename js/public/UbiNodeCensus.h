@@ -9,8 +9,10 @@
 
 #include "mozilla/Move.h"
 
+#include "jsapi.h"
+
 #include "js/UbiNode.h"
-#include "js/UbiNodeTraverse.h"
+#include "js/UbiNodeBreadthFirst.h"
 
 // A census is a ubi::Node traversal that assigns each node to one or more
 // buckets, and returns a report with the size of each bucket.

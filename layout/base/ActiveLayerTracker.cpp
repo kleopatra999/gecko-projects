@@ -100,7 +100,9 @@ public:
   // 75-100ms is a good timeout period. We use 4 generations of 25ms each.
   enum { GENERATION_MS = 100 };
   LayerActivityTracker()
-    : nsExpirationTracker<LayerActivity,4>(GENERATION_MS) {}
+    : nsExpirationTracker<LayerActivity,4>(GENERATION_MS,
+                                           "LayerActivityTracker")
+  {}
   ~LayerActivityTracker() {
     AgeAllGenerations();
   }
@@ -335,7 +337,7 @@ ActiveLayerTracker::IsStyleAnimated(nsDisplayListBuilder* aBuilder,
       return true;
     }
   }
-  if (aProperty == eCSSProperty_transform && aFrame->Preserves3D()) {
+  if (aProperty == eCSSProperty_transform && aFrame->Combines3DTransformWithAncestors()) {
     return IsStyleAnimated(aBuilder, aFrame->GetParent(), aProperty);
   }
   return nsLayoutUtils::HasCurrentAnimationsForProperties(aFrame, &aProperty, 1);

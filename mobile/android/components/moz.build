@@ -21,9 +21,9 @@ EXTRA_COMPONENTS += [
     'DirectoryProvider.js',
     'FilePicker.js',
     'HelperAppDialog.js',
+    'ImageBlockingPolicy.js',
     'LoginManagerPrompter.js',
     'NSSDialogService.js',
-    'PromptService.js',
     'SiteSpecificUserAgent.js',
     'Snippets.js',
     'TabSource.js',
@@ -33,6 +33,7 @@ EXTRA_COMPONENTS += [
 if not CONFIG['MOZ_B2GDROID']:
     EXTRA_COMPONENTS += [
         'ContentPermissionPrompt.js',
+        'PromptService.js',
         'SessionStore.js',
         'WebappsUpdateTimer.js',
     ]

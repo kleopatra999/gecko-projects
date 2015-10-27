@@ -21,16 +21,20 @@ const Cr = Components.results;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/devtools/event-emitter.js");
+Cu.import("resource://devtools/shared/event-emitter.js");
 
 XPCOMUtils.defineLazyModuleGetter(this, "Locale",
                                   "resource://gre/modules/Locale.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Log",
+                                  "resource://gre/modules/Log.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "MatchPattern",
                                   "resource://gre/modules/MatchPattern.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "FileUtils",
                                   "resource://gre/modules/FileUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
+                                  "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
 Cu.import("resource://gre/modules/ExtensionManagement.jsm");
 
@@ -38,6 +42,7 @@ Cu.import("resource://gre/modules/ExtensionManagement.jsm");
 // in browser/, mobile/, or b2g/.
 ExtensionManagement.registerScript("chrome://extensions/content/ext-alarms.js");
 ExtensionManagement.registerScript("chrome://extensions/content/ext-backgroundPage.js");
+ExtensionManagement.registerScript("chrome://extensions/content/ext-cookies.js");
 ExtensionManagement.registerScript("chrome://extensions/content/ext-notifications.js");
 ExtensionManagement.registerScript("chrome://extensions/content/ext-i18n.js");
 ExtensionManagement.registerScript("chrome://extensions/content/ext-idle.js");
@@ -49,17 +54,19 @@ ExtensionManagement.registerScript("chrome://extensions/content/ext-storage.js")
 ExtensionManagement.registerScript("chrome://extensions/content/ext-test.js");
 
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
-let {
+var {
   MessageBroker,
   Messenger,
   injectAPI,
   flushJarCache,
 } = ExtensionUtils;
 
-let scriptScope = this;
+const LOGGER_ID_BASE = "addons.webextension.";
+
+var scriptScope = this;
 
 // This object loads the ext-*.js scripts that define the extension API.
-let Management = {
+var Management = {
   initialized: false,
   scopes: [],
   apis: [],
@@ -154,7 +161,7 @@ let Management = {
 
 // A MessageBroker that's used to send and receive messages for
 // extension pages (which run in the chrome process).
-let globalBroker = new MessageBroker([Services.mm, Services.ppmm]);
+var globalBroker = new MessageBroker([Services.mm, Services.ppmm]);
 
 // An extension page is an execution context for any extension content
 // that runs in the chrome process. It's used for background pages
@@ -166,6 +173,7 @@ let globalBroker = new MessageBroker([Services.mm, Services.ppmm]);
 // |contentWindow| is the DOM window the content runs in.
 // |uri| is the URI of the content (optional).
 // |docShell| is the docshell the content runs in (optional).
+// |incognito| is the content running in a private context (default: false).
 function ExtensionPage(extension, params)
 {
   let {type, contentWindow, uri, docShell} = params;
@@ -173,6 +181,7 @@ function ExtensionPage(extension, params)
   this.type = type;
   this.contentWindow = contentWindow || null;
   this.uri = uri || extension.baseURI;
+  this.incognito = params.incognito || false;
   this.onClose = new Set();
 
   // This is the sender property passed to the Messenger for this
@@ -223,7 +232,7 @@ ExtensionPage.prototype = {
 };
 
 // Responsible for loading extension APIs into the right globals.
-let GlobalManager = {
+var GlobalManager = {
   // Number of extensions currently enabled.
   count: 0,
 
@@ -278,7 +287,9 @@ let GlobalManager = {
 
     if (this.docShells.has(docShell)) {
       let {extension, context} = this.docShells.get(docShell);
-      inject(extension, context);
+      if (context) {
+        inject(extension, context);
+      }
       return;
     }
 
@@ -298,7 +309,8 @@ let GlobalManager = {
     }
     let extension = this.extensionMap.get(id);
     let uri = contentWindow.document.documentURIObject;
-    let context = new ExtensionPage(extension, {type: "tab", contentWindow, uri, docShell});
+    let incognito = PrivateBrowsingUtils.isContentWindowPrivate(contentWindow);
+    let context = new ExtensionPage(extension, {type: "tab", contentWindow, uri, docShell, incognito});
     inject(extension, context);
 
     let eventHandler = docShell.chromeEventHandler;
@@ -328,8 +340,11 @@ this.Extension = function(addonData)
   this.addonData = addonData;
   this.id = addonData.id;
   this.baseURI = Services.io.newURI("moz-extension://" + uuid, null, null);
+  this.baseURI.QueryInterface(Ci.nsIURL);
   this.manifest = null;
   this.localeMessages = null;
+  this.logger = Log.repository.getLogger(LOGGER_ID_BASE + this.id.replace(/\./g, "-"));
+  this.principal = this.createPrincipal();
 
   this.views = new Set();
 
@@ -367,7 +382,7 @@ this.Extension = function(addonData)
  * To make things easier, the value of "background" and "files"[] can
  * be a function, which is converted to source that is run.
  */
-this.Extension.generate = function(data)
+this.Extension.generate = function(id, data)
 {
   let manifest = data.manifest;
   if (!manifest) {
@@ -392,9 +407,7 @@ this.Extension.generate = function(data)
     }
   }
 
-  let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator);
-  let uuid = uuidGenerator.generateUUID().number;
-  provide(manifest, ["applications", "gecko", "id"], uuid);
+  provide(manifest, ["applications", "gecko", "id"], id);
 
   provide(manifest, ["name"], "Generated extension");
   provide(manifest, ["manifest_version"], 2);
@@ -427,12 +440,10 @@ this.Extension.generate = function(data)
     let components = filename.split("/");
     let path = "";
     for (let component of components.slice(0, -1)) {
-      path += component;
+      path += component + "/";
       if (!zipW.hasEntry(path)) {
         zipW.addEntryDirectory(path, time, false);
       }
-
-      path += "/";
     }
   }
 
@@ -458,7 +469,7 @@ this.Extension.generate = function(data)
   let jarURI = Services.io.newURI("jar:" + fileURI.spec + "!/", null, null);
 
   return new Extension({
-    id: uuid,
+    id,
     resourceURI: jarURI,
     cleanupFile: file
   });
@@ -479,6 +490,24 @@ Extension.prototype = {
 
   testMessage(...args) {
     Management.emit("test-message", this, ...args);
+  },
+
+  createPrincipal(uri = this.baseURI) {
+    return Services.scriptSecurityManager.createCodebasePrincipal(
+      uri, {addonId: this.id});
+  },
+
+  // Checks that the given URL is a child of our baseURI.
+  isExtensionURL(url) {
+    let uri = Services.io.newURI(url, null, null);
+
+    let common = this.baseURI.getCommonBaseSpec(uri);
+    return common == this.baseURI.spec;
+  },
+
+  // Report an error about the extension's manifest file.
+  manifestError(message) {
+    this.logger.error(`Loading extension '${this.id}': ${message}`);
   },
 
   // Representation of the extension to send to content
@@ -638,6 +667,20 @@ Extension.prototype = {
     return {};
   },
 
+  broadcast(msg, data) {
+    return new Promise(resolve => {
+      let count = Services.ppmm.childCount;
+      Services.ppmm.addMessageListener(msg + "Complete", function listener() {
+        count--;
+        if (count == 0) {
+          Services.ppmm.removeMessageListener(msg + "Complete", listener);
+          resolve();
+        }
+      });
+      Services.ppmm.broadcastAsyncMessage(msg, data);
+    });
+  },
+
   runManifest(manifest) {
     let permissions = manifest.permissions || [];
     let webAccessibleResources = manifest.web_accessible_resources || [];
@@ -668,7 +711,8 @@ Extension.prototype = {
     }
     let serial = this.serialize();
     data["Extension:Extensions"].push(serial);
-    Services.ppmm.broadcastAsyncMessage("Extension:Startup", serial);
+
+    return this.broadcast("Extension:Startup", serial);
   },
 
   callOnClose(obj) {
@@ -698,7 +742,7 @@ Extension.prototype = {
 
       Management.emit("startup", this);
 
-      this.runManifest(manifest);
+      return this.runManifest(manifest);
     }).catch(e => {
       dump(`Extension error: ${e} ${e.fileName}:${e.lineNumber}\n`);
       Cu.reportError(e);
@@ -716,19 +760,13 @@ Extension.prototype = {
 
     Services.obs.removeObserver(this, "xpcom-shutdown");
 
-    let count = Services.ppmm.childCount;
-
-    Services.ppmm.addMessageListener("Extension:FlushJarCacheComplete", function listener() {
-      count--;
-      if (count == 0) {
-        // We can't delete this file until everyone using it has
-        // closed it (because Windows is dumb). So we wait for all the
-        // child processes (including the parent) to flush their JAR
-        // caches. These caches may keep the file open.
-        file.remove(false);
-      }
+    this.broadcast("Extension:FlushJarCache", {path: file.path}).then(() => {
+      // We can't delete this file until everyone using it has
+      // closed it (because Windows is dumb). So we wait for all the
+      // child processes (including the parent) to flush their JAR
+      // caches. These caches may keep the file open.
+      file.remove(false);
     });
-    Services.ppmm.broadcastAsyncMessage("Extension:FlushJarCache", {path: file.path});
   },
 
   shutdown() {
@@ -765,6 +803,10 @@ Extension.prototype = {
 
   hasPermission(perm) {
     return this.permissions.has(perm);
+  },
+
+  get name() {
+    return this.localize(this.manifest.name);
   },
 };
 

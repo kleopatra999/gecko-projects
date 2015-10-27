@@ -267,6 +267,10 @@ ifdef MOZ_FOLD_LIBS_FLAGS
 DEFAULT_GMAKE_FLAGS += XCFLAGS='$(MOZ_FOLD_LIBS_FLAGS)'
 endif
 
+ifeq (1,$(ALLOW_COMPILER_WARNINGS))
+DEFAULT_GMAKE_FLAGS += NSS_ENABLE_WERROR=0
+endif
+
 NSS_SRCDIR = $(topsrcdir)
 
 NSS_DIRS =
@@ -354,7 +358,7 @@ nspr_def_file := $(srcdir)/nspr-dummy.def
 
 nss3.def: $(nss_def_file) $(sqlite_def_file) $(nspr_def_file) $(NSS_EXTRA_SYMBOLS_FILE)
 	@$(call py_action,convert_def_file, \
-	  $(DEFINES) $(ACDEFINES) $(XULPPFLAGS) -o $@ $^)
+	  $(DEFINES) $(ACDEFINES) $(MOZ_DEBUG_DEFINES) -o $@ $^)
 
 GARBAGE += \
   nss3.def \

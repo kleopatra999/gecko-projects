@@ -115,10 +115,6 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY fxaUnverified.label "Verify Your Account">
 <!ENTITY syncStartPanel2.heading "&syncBrand.shortName.label; enabled">
 <!ENTITY syncStartPanel2.subTitle "&brandShortName; will begin syncing momentarily.">
-<!ENTITY syncErrorPanel.heading "Cannot connect to &syncBrand.shortName.label;">
-<!ENTITY syncErrorPanel.subTitle "Please sign in to resume syncing.">
-<!ENTITY syncErrorPanel.signInButton.label "Sign In">
-<!ENTITY syncErrorPanel.signInButton.accesskey "S">
 
 
 <!ENTITY fullScreenMinimize.tooltip "Minimize">
@@ -193,7 +189,35 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY printButton.label            "Print">
 <!ENTITY printButton.tooltip          "Print this page">
 
-<!ENTITY locationItem.title           "Location">
+<!ENTITY urlbar.viewSiteInfo.label                      "View site information">
+<!-- LOCALIZATION NOTE: all of the following urlbar NotificationAnchor.label strings are
+     used to provide accessible labels to users of assistive technology like screenreaders.
+     It is not possible to see them visually in the UI. -->
+<!ENTITY urlbar.defaultNotificationAnchor.label         "View a notification">
+<!ENTITY urlbar.geolocationNotificationAnchor.label     "View the location request">
+<!ENTITY urlbar.addonsNotificationAnchor.label          "View the add-on install message">
+<!ENTITY urlbar.indexedDBNotificationAnchor.label       "View the app-offline storage message">
+<!ENTITY urlbar.loginFillNotificationAnchor.label       "Manage your login information">
+<!ENTITY urlbar.passwordNotificationAnchor.label        "Check if you want to save your password">
+<!ENTITY urlbar.webappsNotificationAnchor.label         "View the app install message">
+<!ENTITY urlbar.pluginsNotificationAnchor.label         "Manage plugin usage on this page">
+<!ENTITY urlbar.webNotsNotificationAnchor.label         "Change whether the site can show you notifications">
+
+<!ENTITY urlbar.webRTCShareDevicesNotificationAnchor.label      "Manage sharing your camera and/or microphone with the site">
+<!ENTITY urlbar.webRTCSharingDevicesNotificationAnchor.label    "You are sharing your camera and/or microphone with the site">
+<!ENTITY urlbar.webRTCShareMicrophoneNotificationAnchor.label   "Manage sharing your microphone with the site">
+<!ENTITY urlbar.webRTCSharingMicrophoneNotificationAnchor.label "You are sharing your microphone with the site">
+<!ENTITY urlbar.webRTCShareScreenNotificationAnchor.label       "Manage sharing your windows or screen with the site">
+<!ENTITY urlbar.webRTCSharingScreenNotificationAnchor.label     "You are sharing a window or your screen with the site">
+
+<!ENTITY urlbar.pointerLockNotificationAnchor.label     "Change whether the site can hide the pointer">
+<!ENTITY urlbar.servicesNotificationAnchor.label        "View the service install message">
+<!ENTITY urlbar.translateNotificationAnchor.label       "Translate this page">
+<!ENTITY urlbar.translatedNotificationAnchor.label      "Manage page translation">
+<!ENTITY urlbar.emeNotificationAnchor.label             "Manage use of DRM software">
+
+<!ENTITY urlbar.openHistoryPopup.tooltip                "Show history">
+
 <!ENTITY searchItem.title             "Search">
 
 <!-- Toolbar items --> 
@@ -233,6 +257,8 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY addons.commandkey            "A">
 <!ENTITY webapps.label                "Apps">
 <!ENTITY webapps.accesskey            "p">
+<!ENTITY loopMenuItem.label           "Start a conversation…">
+<!ENTITY loopMenuItem.accesskey       "t">
 
 <!ENTITY webDeveloperMenu.label       "Web Developer">
 <!ENTITY webDeveloperMenu.accesskey   "W">
@@ -292,8 +318,6 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 <!ENTITY devToolbarCloseButton.tooltiptext "Close Developer Toolbar">
 <!ENTITY devToolbarMenu.label              "Developer Toolbar">
 <!ENTITY devToolbarMenu.accesskey          "v">
-<!ENTITY devAppMgrMenu.label               "App Manager">
-<!ENTITY devAppMgrMenu.accesskey           "A">
 <!ENTITY webide.label                      "WebIDE">
 <!ENTITY webide.accesskey                  "W">
 <!ENTITY webide.keycode                    "VK_F8">
@@ -312,6 +336,16 @@ These should match what Safari and other Apple applications use on OS X Lion. --
 
 <!ENTITY fileMenu.label         "File"> 
 <!ENTITY fileMenu.accesskey       "F">
+<!ENTITY newUserContext.label             "New Container Tab">
+<!ENTITY newUserContext.accesskey         "C">
+<!ENTITY userContextPersonal.label        "Personal">
+<!ENTITY userContextPersonal.accesskey    "P">
+<!ENTITY userContextWork.label            "Work">
+<!ENTITY userContextWork.accesskey        "W">
+<!ENTITY userContextBanking.label         "Banking">
+<!ENTITY userContextBanking.accesskey     "B">
+<!ENTITY userContextShopping.label        "Shopping">
+<!ENTITY userContextShopping.accesskey    "S">
 <!ENTITY newNavigatorCmd.label        "New Window">
 <!ENTITY newNavigatorCmd.key        "N">
 <!ENTITY newNavigatorCmd.accesskey      "N">
@@ -470,6 +504,11 @@ These should match what Safari and other Apple applications use on OS X Lion. --
      This string won't wrap, so if the translated string is longer,
      consider translating it as if it said only "Search Settings". -->
 <!ENTITY changeSearchSettings.button  "Change Search Settings">
+
+<!ENTITY searchInNewTab.label         "Search in New Tab">
+<!ENTITY searchInNewTab.accesskey     "T">
+<!ENTITY searchSetAsDefault.label     "Set As Default Search Engine">
+<!ENTITY searchSetAsDefault.accesskey "D">
 
 <!ENTITY tabView.commandkey           "e">
 
@@ -706,6 +745,7 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 <!ENTITY identity.connectionFile "This page is stored on your computer.">
 <!ENTITY identity.connectionVerified1 "You are securely connected to this site, run by:">
 <!ENTITY identity.connectionInternal "This is a secure &brandShortName; page.">
+<!ENTITY identity.insecureLoginForms "Your login could be compromised.">
 
 <!-- Strings for connection state warnings. -->
 <!ENTITY identity.activeBlocked "&brandShortName; has blocked parts of this page that are not secure.">
@@ -715,6 +755,7 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 
 <!-- Strings for connection state warnings in the subview. -->
 <!ENTITY identity.description.insecure "Your connection to this site is not private. Information you submit could be viewed by others (like passwords, messages, credit cards, etc.).">
+<!ENTITY identity.description.insecureLoginForms "The login information you enter on this page is not secure and could be compromised.">
 <!ENTITY identity.description.weakCipher "Your connection to this website uses weak encryption and is not private.">
 <!ENTITY identity.description.weakCipher2 "Other people can view your information or modify the website's behavior.">
 <!ENTITY identity.description.activeBlocked "&brandShortName; has blocked parts of this page that are not secure.">
@@ -733,6 +774,7 @@ you can use these alternative items. Otherwise, their values should be empty.  -
 <!ENTITY identity.moreInfoLinkText2 "More Information">
 
 <!ENTITY identity.permissions "Permissions">
+<!ENTITY identity.permissionsEmpty "You have not granted this site any special permissions.">
 
 <!-- Name for the tabs toolbar as spoken by screen readers.
      The word "toolbar" is appended automatically and should not be contained below! -->

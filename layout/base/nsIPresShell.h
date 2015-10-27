@@ -20,6 +20,7 @@
 #ifndef nsIPresShell_h___
 #define nsIPresShell_h___
 
+#include "mozilla/ArenaObjectID.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/StaticPtr.h"
@@ -246,7 +247,7 @@ public:
    * the same aSize value.  AllocateByObjectID returns zero-filled memory.
    * AllocateByObjectID is infallible and will abort on out-of-memory.
    */
-  void* AllocateByObjectID(nsPresArena::ObjectID aID, size_t aSize)
+  void* AllocateByObjectID(mozilla::ArenaObjectID aID, size_t aSize)
   {
 #ifdef DEBUG
     mPresArenaAllocCount++;
@@ -256,7 +257,7 @@ public:
     return result;
   }
 
-  void FreeByObjectID(nsPresArena::ObjectID aID, void* aPtr)
+  void FreeByObjectID(mozilla::ArenaObjectID aID, void* aPtr)
   {
 #ifdef DEBUG
     mPresArenaAllocCount--;
@@ -289,6 +290,23 @@ public:
 #endif
     if (!mIsDestroying)
       mFrameArena.FreeBySize(aSize, aPtr);
+  }
+
+  template<typename T>
+  void RegisterArenaRefPtr(mozilla::ArenaRefPtr<T>* aPtr)
+  {
+    mFrameArena.RegisterArenaRefPtr(aPtr);
+  }
+
+  template<typename T>
+  void DeregisterArenaRefPtr(mozilla::ArenaRefPtr<T>* aPtr)
+  {
+    mFrameArena.DeregisterArenaRefPtr(aPtr);
+  }
+
+  void ClearArenaRefPtrs(mozilla::ArenaObjectID aObjectID)
+  {
+    mFrameArena.ClearArenaRefPtrs(aObjectID);
   }
 
   nsIDocument* GetDocument() const { return mDocument; }
@@ -1704,12 +1722,12 @@ protected:
   // These are the same Document and PresContext owned by the DocViewer.
   // we must share ownership.
   nsCOMPtr<nsIDocument>     mDocument;
-  nsRefPtr<nsPresContext>   mPresContext;
+  RefPtr<nsPresContext>   mPresContext;
   nsStyleSet*               mStyleSet;      // [OWNS]
   nsCSSFrameConstructor*    mFrameConstructor; // [OWNS]
   nsViewManager*           mViewManager;   // [WEAK] docViewer owns it so I don't have to
   nsPresArena               mFrameArena;
-  nsRefPtr<nsFrameSelection> mSelection;
+  RefPtr<nsFrameSelection> mSelection;
   // Pointer into mFrameConstructor - this is purely so that FrameManager() and
   // GetRootFrame() can be inlined:
   nsFrameManagerBase*       mFrameManager;
@@ -1799,7 +1817,7 @@ protected:
   // same update block we have already had other changes that require
   // the whole document to be restyled (i.e., mStylesHaveChanged is already
   // true), then we don't bother adding the scope root here.
-  nsAutoTArray<nsRefPtr<mozilla::dom::Element>,1> mChangedScopeStyleRoots;
+  nsAutoTArray<RefPtr<mozilla::dom::Element>,1> mChangedScopeStyleRoots;
 
   static nsIContent*        gKeyDownTarget;
 

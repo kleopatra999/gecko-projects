@@ -4,33 +4,44 @@
    - http://creativecommons.org/publicdomain/zero/1.0/ -->
 <head>
   <meta charset="utf-8">
-  <title>Test for session disconnection of B2G Presentation API at sender side</title>
+  <title>Test for disconnection of B2G Presentation API at sender side</title>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css"/>
   <script type="application/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
 </head>
 <body>
-<a target="_blank" href="https://bugzilla.mozilla.org/show_bug.cgi?id=1069230">Test for session disconnection of B2G Presentation API at sender side</a>
+<a target="_blank" href="https://bugzilla.mozilla.org/show_bug.cgi?id=1069230">Test for disconnection of B2G Presentation API at sender side</a>
 <script type="application/javascript;version=1.8">
 
 'use strict';
 
 var gScript = SpecialPowers.loadChromeScript(SimpleTest.getTestFileURL('PresentationSessionChromeScript.js'));
-var presentation;
-var session;
+var request;
+var connection;
 
 function testSetup() {
   return new Promise(function(aResolve, aReject) {
-    presentation.onavailablechange = function(aIsAvailable) {
-      presentation.onavailablechange = null;
-      ok(aIsAvailable, "Device should be available.");
-      aResolve();
-    };
+    request = new PresentationRequest("http://example.com");
+
+    request.getAvailability().then(
+      function(aAvailability) {
+        aAvailability.onchange = function() {
+          aAvailability.onchange = null;
+          ok(aAvailability.value, "Device should be available.");
+          aResolve();
+        }
+      },
+      function(aError) {
+        ok(false, "Error occurred when getting availability: " + aError);
+        teardown();
+        aReject();
+      }
+    );
 
     gScript.sendAsyncMessage('trigger-device-add');
   });
 }
 
-function testStartSession() {
+function testStartConnection() {
   return new Promise(function(aResolve, aReject) {
     gScript.addMessageListener('device-prompt', function devicePromptHandler() {
       gScript.removeMessageListener('device-prompt', devicePromptHandler);
@@ -41,6 +52,12 @@ function testStartSession() {
     gScript.addMessageListener('control-channel-established', function controlChannelEstablishedHandler() {
       gScript.removeMessageListener('control-channel-established', controlChannelEstablishedHandler);
       info("A control channel is established.");
+      gScript.sendAsyncMessage('trigger-control-channel-open');
+    });
+
+    gScript.addMessageListener('control-channel-opened', function controlChannelOpenedHandler(aReason) {
+      gScript.removeMessageListener('control-channel-opened', controlChannelOpenedHandler);
+      info("The control channel is opened.");
     });
 
     gScript.addMessageListener('control-channel-closed', function controlChannelClosedHandler(aReason) {
@@ -48,9 +65,9 @@ function testStartSession() {
       info("The control channel is closed. " + aReason);
     });
 
-    gScript.addMessageListener('offer-sent', function offerSentHandler() {
+    gScript.addMessageListener('offer-sent', function offerSentHandler(aIsValid) {
       gScript.removeMessageListener('offer-sent', offerSentHandler);
-      info("An offer is sent out.");
+      ok(aIsValid, "A valid offer is sent out.");
       gScript.sendAsyncMessage('trigger-incoming-answer');
     });
 
@@ -70,16 +87,16 @@ function testStartSession() {
       info("Data notification is enabled for data transport channel.");
     });
 
-    presentation.startSession("http://example.com").then(
-      function(aSession) {
-        session = aSession;
-        ok(session, "Session should be availlable.");
-        ok(session.id, "Session ID should be set.");
-        is(session.state, "connected", "Session state at sender side should be connected by default.");
+    request.start().then(
+      function(aConnection) {
+        connection = aConnection;
+        ok(connection, "Connection should be available.");
+        ok(connection.id, "Connection ID should be set.");
+        is(connection.state, "connected", "Connection state at sender side should be connected by default.");
         aResolve();
       },
       function(aError) {
-        ok(false, "Error occurred when starting session: " + aError);
+        ok(false, "Error occurred when establishing a connection: " + aError);
         teardown();
         aReject();
       }
@@ -87,32 +104,20 @@ function testStartSession() {
   });
 }
 
-function testSessionDisconnection() {
+function testDisconnection() {
   return new Promise(function(aResolve, aReject) {
     gScript.addMessageListener('data-transport-closed', function dataTransportClosedHandler(aReason) {
       gScript.removeMessageListener('data-transport-closed', dataTransportClosedHandler);
       info("The data transport is closed. " + aReason);
     });
 
-    session.onstatechange = function() {
-      session.onstatechange = null;
-      is(session.state, "disconnected", "Session should be disconnected.");
+    connection.onstatechange = function() {
+      connection.onstatechange = null;
+      is(connection.state, "closed", "Connection should be closed.");
       aResolve();
     };
 
     gScript.sendAsyncMessage('trigger-data-transport-close', SpecialPowers.Cr.NS_ERROR_FAILURE);
-  });
-}
-
-function testCloseSession() {
-  return new Promise(function(aResolve, aReject) {
-    session.onstatechange = function() {
-      session.onstatechange = null;
-      is(session.state, "terminated", "Session should be terminated.");
-      aResolve();
-    };
-
-    session.close();
   });
 }
 
@@ -127,13 +132,11 @@ function teardown() {
 }
 
 function runTests() {
-  ok(navigator.presentation, "navigator.presentation should be available.");
-  presentation = navigator.presentation;
+  ok(window.PresentationRequest, "PresentationRequest should be available.");
 
   testSetup().
-  then(testStartSession).
-  then(testSessionDisconnection).
-  then(testCloseSession).
+  then(testStartConnection).
+  then(testDisconnection).
   then(teardown);
 }
 
@@ -144,7 +147,6 @@ SpecialPowers.pushPermissions([
   {type: 'presentation', allow: true, context: document},
 ], function() {
   SpecialPowers.pushPrefEnv({ 'set': [["dom.presentation.enabled", true],
-                                      ["dom.ignore_webidl_scope_checks", true],
                                       ["dom.presentation.test.enabled", true],
                                       ["dom.presentation.test.stage", 0]]},
                             runTests);

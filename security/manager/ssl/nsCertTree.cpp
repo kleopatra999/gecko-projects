@@ -84,9 +84,9 @@ CompareCacheClearEntry(PLDHashTable *table, PLDHashEntryHdr *hdr)
 }
 
 static const PLDHashTableOps gMapOps = {
-  PL_DHashVoidPtrKeyStub,
+  PLDHashTable::HashVoidPtrKeyStub,
   CompareCacheMatchEntry,
-  PL_DHashMoveEntryStub,
+  PLDHashTable::MoveEntryStub,
   CompareCacheClearEntry,
   CompareCacheInitEntry
 };
@@ -186,14 +186,14 @@ CompareCacheHashEntry *
 nsCertTree::getCacheEntry(void *cache, void *aCert)
 {
   PLDHashTable &aCompareCache = *reinterpret_cast<PLDHashTable*>(cache);
-  CompareCacheHashEntryPtr *entryPtr = static_cast<CompareCacheHashEntryPtr*>
-    (PL_DHashTableAdd(&aCompareCache, aCert, fallible));
+  auto entryPtr = static_cast<CompareCacheHashEntryPtr*>
+                             (aCompareCache.Add(aCert, fallible));
   return entryPtr ? entryPtr->entry : nullptr;
 }
 
 void nsCertTree::RemoveCacheEntry(void *key)
 {
-  PL_DHashTableRemove(&mCompareCache, key);
+  mCompareCache.Remove(key);
 }
 
 // CountOrganizations
@@ -1311,9 +1311,6 @@ nsCertTree::PerformActionOnRow(const char16_t *action, int32_t row)
   return NS_OK;
 }
 
-/* void performActionOnCell (in wstring action, in long row, 
- *                           in wstring colID); 
- */
 NS_IMETHODIMP 
 nsCertTree::PerformActionOnCell(const char16_t *action, int32_t row, 
                                 nsITreeColumn* col)

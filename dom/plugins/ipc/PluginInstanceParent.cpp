@@ -31,7 +31,6 @@
 #include "gfxXlibSurface.h"
 #endif
 #include "gfxContext.h"
-#include "gfxColor.h"
 #include "gfxUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "Layers.h"
@@ -162,7 +161,7 @@ PluginInstanceParent::InitMetadata(const nsACString& aMimeType,
         return false;
     }
     // Ensure that the src attribute is absolute
-    nsRefPtr<nsPluginInstanceOwner> owner = GetOwner();
+    RefPtr<nsPluginInstanceOwner> owner = GetOwner();
     if (!owner) {
         return false;
     }
@@ -536,7 +535,7 @@ PluginInstanceParent::RecvShow(const NPRect& updatedRect,
          updatedRect.bottom - updatedRect.top));
 
     // XXXjwatt rewrite to use Moz2D
-    nsRefPtr<gfxASurface> surface;
+    RefPtr<gfxASurface> surface;
     if (newSurface.type() == SurfaceDescriptor::TShmem) {
         if (!newSurface.get_Shmem().IsReadable()) {
             NS_WARNING("back surface not readable");
@@ -618,7 +617,7 @@ PluginInstanceParent::RecvShow(const NPRect& updatedRect,
         surface->MarkDirty(ur);
 
         ImageContainer *container = GetImageContainer();
-        nsRefPtr<Image> image = container->CreateImage(ImageFormat::CAIRO_SURFACE);
+        RefPtr<Image> image = container->CreateImage(ImageFormat::CAIRO_SURFACE);
         NS_ASSERTION(image->GetFormat() == ImageFormat::CAIRO_SURFACE, "Wrong format?");
         CairoImage* cairoImage = static_cast<CairoImage*>(image.get());
         CairoImage::Data cairoData;
@@ -699,7 +698,7 @@ PluginInstanceParent::GetImageContainer(ImageContainer** aContainer)
 
 #ifdef XP_MACOSX
     if (ioSurface) {
-        nsRefPtr<Image> image = container->CreateImage(ImageFormat::MAC_IOSURFACE);
+        RefPtr<Image> image = container->CreateImage(ImageFormat::MAC_IOSURFACE);
         if (!image) {
             return NS_ERROR_FAILURE;
         }
@@ -726,7 +725,7 @@ nsresult
 PluginInstanceParent::GetImageSize(nsIntSize* aSize)
 {
     if (mFrontSurface) {
-        gfxIntSize size = mFrontSurface->GetSize();
+        mozilla::gfx::IntSize size = mFrontSurface->GetSize();
         *aSize = nsIntSize(size.width, size.height);
         return NS_OK;
     }
@@ -795,7 +794,7 @@ PluginInstanceParent::BeginUpdateBackground(const nsIntRect& aRect,
         }
     }
 
-    gfxIntSize sz = mBackground->GetSize();
+    mozilla::gfx::IntSize sz = mBackground->GetSize();
 #ifdef DEBUG
     MOZ_ASSERT(nsIntRect(0, 0, sz.width, sz.height).Contains(aRect),
                "Update outside of background area");
@@ -803,7 +802,7 @@ PluginInstanceParent::BeginUpdateBackground(const nsIntRect& aRect,
 
     RefPtr<gfx::DrawTarget> dt = gfxPlatform::GetPlatform()->
       CreateDrawTargetForSurface(mBackground, gfx::IntSize(sz.width, sz.height));
-    nsRefPtr<gfxContext> ctx = new gfxContext(dt);
+    RefPtr<gfxContext> ctx = new gfxContext(dt);
     ctx.forget(aCtx);
 
     return NS_OK;
@@ -852,7 +851,7 @@ PluginInstanceParent::CreateBackground(const nsIntSize& aSize)
     Screen* screen = DefaultScreenOfDisplay(DefaultXDisplay());
     Visual* visual = DefaultVisualOfScreen(screen);
     mBackground = gfxXlibSurface::Create(screen, visual,
-                                         gfxIntSize(aSize.width, aSize.height));
+                                         mozilla::gfx::IntSize(aSize.width, aSize.height));
     return !!mBackground;
 
 #elif defined(XP_WIN)
@@ -861,7 +860,7 @@ PluginInstanceParent::CreateBackground(const nsIntSize& aSize)
     mBackground =
         gfxSharedImageSurface::CreateUnsafe(
             this,
-            gfxIntSize(aSize.width, aSize.height),
+            mozilla::gfx::IntSize(aSize.width, aSize.height),
             gfxImageFormat::RGB24);
     return !!mBackground;
 #else
@@ -1600,7 +1599,7 @@ PluginInstanceParent::GetActorForNPObject(NPObject* aObject)
 
 PPluginSurfaceParent*
 PluginInstanceParent::AllocPPluginSurfaceParent(const WindowsSharedMemoryHandle& handle,
-                                                const gfxIntSize& size,
+                                                const mozilla::gfx::IntSize& size,
                                                 const bool& transparent)
 {
 #ifdef XP_WIN

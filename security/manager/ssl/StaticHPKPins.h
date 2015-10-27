@@ -81,7 +81,7 @@ static const char kDigiCert_High_Assurance_EV_Root_CAFingerprint[] =
 
 /* End Entity Test Cert */
 static const char kEnd_Entity_Test_CertFingerprint[] =
-  "lzCakFt+nADIfIkgk+UE/EQ9SaT2nay2yu2iykVbvV8=";
+  "VCIlmPM9NkgFQtrs4Oa5TeFcDu6MWRTKSNdePEhOgD8=";
 
 /* Entrust Root Certification Authority */
 static const char kEntrust_Root_Certification_AuthorityFingerprint[] =
@@ -776,7 +776,9 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "encrypted.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "exclude-subdomains.pinning.example.com", false, false, false, 0, &kPinset_mozilla_test },
   { "facebook.com", false, false, false, -1, &kPinset_facebook },
+  { "fi.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "g.co", true, false, false, -1, &kPinset_google_root_pems },
+  { "g4w.co", true, false, false, -1, &kPinset_google_root_pems },
   { "ggpht.com", true, false, false, -1, &kPinset_google_root_pems },
   { "glass.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "gmail.com", false, false, false, -1, &kPinset_google_root_pems },
@@ -1032,8 +1034,10 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "myaccount.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "oauth.twitter.com", true, false, false, -1, &kPinset_twitterCom },
   { "passwords.google.com", true, false, false, -1, &kPinset_google_root_pems },
+  { "pinning-test.badssl.com", true, true, false, -1, &kPinset_test },
   { "pinningtest.appspot.com", true, false, false, -1, &kPinset_test },
   { "pixel.facebook.com", true, false, false, -1, &kPinset_facebook },
+  { "pixel.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "platform.twitter.com", true, false, false, -1, &kPinset_twitterCDN },
   { "play.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "plus.google.com", true, false, false, -1, &kPinset_google_root_pems },
@@ -1084,14 +1088,15 @@ static const TransportSecurityPreload kPublicKeyPinningPreloadList[] = {
   { "www.torproject.org", true, false, false, -1, &kPinset_tor },
   { "www.twitter.com", true, false, false, -1, &kPinset_twitterCom },
   { "xbrlsuccess.appspot.com", true, false, false, -1, &kPinset_google_root_pems },
+  { "xn--7xa.google.com", true, false, false, -1, &kPinset_google_root_pems },
   { "youtu.be", true, false, false, -1, &kPinset_google_root_pems },
   { "youtube-nocookie.com", true, false, false, -1, &kPinset_google_root_pems },
   { "youtube.com", true, false, false, -1, &kPinset_google_root_pems },
   { "ytimg.com", true, false, false, -1, &kPinset_google_root_pems },
 };
 
-// Pinning Preload List Length = 361;
+// Pinning Preload List Length = 366;
 
 static const int32_t kUnknownId = -1;
 
-static const PRTime kPreloadPKPinsExpirationTime = INT64_C(1449916304292000);
+static const PRTime kPreloadPKPinsExpirationTime = INT64_C(1454150226851000);

@@ -8,6 +8,7 @@
 
 #include "FrameMetrics.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/Function.h"
 #include "mozilla/layers/APZUtils.h"
 #include "nsIDOMWindowUtils.h"
 
@@ -17,20 +18,12 @@ class nsIPresShell;
 class nsIWidget;
 template<class T> struct already_AddRefed;
 template<class T> class nsCOMPtr;
-template<class T> class nsRefPtr;
 
 namespace mozilla {
 namespace layers {
 
-/* A base class for callbacks to be passed to
- * APZCCallbackHelper::SendSetAllowedTouchBehaviorNotification. */
-struct SetAllowedTouchBehaviorCallback {
-public:
-  NS_INLINE_DECL_REFCOUNTING(SetAllowedTouchBehaviorCallback)
-  virtual void Run(uint64_t aInputBlockId, const nsTArray<TouchBehaviorFlags>& aFlags) const = 0;
-protected:
-  virtual ~SetAllowedTouchBehaviorCallback() {}
-};
+typedef Function<void(uint64_t, const nsTArray<TouchBehaviorFlags>&)>
+        SetAllowedTouchBehaviorCallback;
 
 /* This class contains some helper methods that facilitate implementing the
    GeckoContentController callback interface required by the AsyncPanZoomController.
@@ -162,7 +155,7 @@ public:
     static void SendSetAllowedTouchBehaviorNotification(nsIWidget* aWidget,
                                                          const WidgetTouchEvent& aEvent,
                                                          uint64_t aInputBlockId,
-                                                         const nsRefPtr<SetAllowedTouchBehaviorCallback>& aCallback);
+                                                         const SetAllowedTouchBehaviorCallback& aCallback);
 
     /* Notify content of a mouse scroll testing event. */
     static void NotifyMozMouseScrollEvent(const FrameMetrics::ViewID& aScrollId, const nsString& aEvent);

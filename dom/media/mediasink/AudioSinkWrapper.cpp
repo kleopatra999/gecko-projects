@@ -41,7 +41,7 @@ AudioSinkWrapper::SetPlaybackParams(const PlaybackParams& aParams)
   mParams = aParams;
 }
 
-nsRefPtr<GenericPromise>
+RefPtr<GenericPromise>
 AudioSinkWrapper::OnEnded(TrackType aType)
 {
   AssertOwnerThread();
@@ -220,6 +220,13 @@ AudioSinkWrapper::IsStarted() const
 {
   AssertOwnerThread();
   return mIsStarted;
+}
+
+bool
+AudioSinkWrapper::IsPlaying() const
+{
+  AssertOwnerThread();
+  return IsStarted() && !mPlayStartTime.IsNull();
 }
 
 void

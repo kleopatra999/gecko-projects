@@ -111,8 +111,13 @@ enum BailoutKind
     // We hit a |debugger;| statement.
     Bailout_Debugger,
 
-    // END Normal bailouts
+    // |this| used uninitialized in a derived constructor
+    Bailout_UninitializedThis,
 
+    // Derived constructors must return object or undefined
+    Bailout_BadDerivedConstructorReturn,
+
+    // END Normal bailouts
 
     // Bailouts caused by invalid assumptions based on Baseline code.
     // Causes immediate invalidation.
@@ -151,7 +156,7 @@ enum BailoutKind
     Bailout_UninitializedLexical,
 
     // A bailout to baseline from Ion on exception to handle Debugger hooks.
-    Bailout_IonExceptionDebugMode,
+    Bailout_IonExceptionDebugMode
 };
 
 inline const char*
@@ -209,6 +214,10 @@ BailoutKindString(BailoutKind kind)
         return "Bailout_InitialState";
       case Bailout_Debugger:
         return "Bailout_Debugger";
+      case Bailout_UninitializedThis:
+        return "Bailout_UninitializedThis";
+      case Bailout_BadDerivedConstructorReturn:
+        return "Bailout_BadDerivedConstructorReturn";
 
       // Bailouts caused by invalid assumptions.
       case Bailout_OverflowInvalidate:
@@ -379,6 +388,7 @@ enum MIRType
     MIRType_MagicIsConstructing,       // JS_IS_CONSTRUCTING magic value.
     MIRType_MagicUninitializedLexical, // JS_UNINITIALIZED_LEXICAL magic value.
     MIRType_Value,
+    MIRType_SinCosDouble,              // Optimizing a sin/cos to sincos.
     MIRType_ObjectOrNull,
     MIRType_None,                      // Invalid, used as a placeholder.
     MIRType_Slots,                     // A slots vector
@@ -492,6 +502,8 @@ StringFromMIRType(MIRType type)
       return "MagicUninitializedLexical";
     case MIRType_Value:
       return "Value";
+    case MIRType_SinCosDouble:
+      return "SinCosDouble";
     case MIRType_ObjectOrNull:
       return "ObjectOrNull";
     case MIRType_None:
@@ -717,7 +729,20 @@ enum ABIFunctionType
     Args_Double_DoubleDoubleDouble = Args_Double_DoubleDouble | (ArgType_Double << (ArgType_Shift * 3)),
 
     // double f(double, double, double, double)
-    Args_Double_DoubleDoubleDoubleDouble = Args_Double_DoubleDoubleDouble | (ArgType_Double << (ArgType_Shift * 4))
+    Args_Double_DoubleDoubleDoubleDouble = Args_Double_DoubleDoubleDouble | (ArgType_Double << (ArgType_Shift * 4)),
+
+    // int f(double, int, int)
+    Args_Int_DoubleIntInt = Args_General0 |
+       (ArgType_General << (ArgType_Shift * 1)) |
+       (ArgType_General << (ArgType_Shift * 2)) |
+       (ArgType_Double  << (ArgType_Shift * 3)),
+
+    // int f(int, double, int, int)
+    Args_Int_IntDoubleIntInt = Args_General0 |
+        (ArgType_General << (ArgType_Shift * 1)) |
+        (ArgType_General << (ArgType_Shift * 2)) |
+        (ArgType_Double  << (ArgType_Shift * 3)) |
+        (ArgType_General << (ArgType_Shift * 4))
 
 };
 

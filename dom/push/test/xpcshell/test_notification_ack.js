@@ -5,7 +5,7 @@
 
 const {PushDB, PushService, PushServiceWebSocket} = serviceExports;
 
-let userAgentID = '5ab1d1df-7a3d-4024-a469-b9e1bb399fad';
+var userAgentID = '5ab1d1df-7a3d-4024-a469-b9e1bb399fad';
 
 function run_test() {
   do_get_profile();
@@ -65,11 +65,6 @@ add_task(function* test_notification_ack() {
         onHello(request) {
           equal(request.uaid, userAgentID,
             'Should send matching device IDs in handshake');
-          deepEqual(request.channelIDs.sort(), [
-            '21668e05-6da8-42c9-b8ab-9cc3f4d5630c',
-            '5477bfda-22db-45d4-9614-fee369630260',
-            '9a5ff87f-47c9-4215-b2b8-0bdd38b4b305'
-          ], 'Should send matching channel IDs in handshake');
           this.serverSendMsg(JSON.stringify({
             messageType: 'hello',
             uaid: userAgentID,

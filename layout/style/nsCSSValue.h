@@ -10,6 +10,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/MemoryReporting.h"
+#include "mozilla/SheetType.h"
 
 #include "nsIPrincipal.h"
 #include "nsIURI.h"
@@ -108,7 +109,7 @@ private:
   // null if the URI is invalid.
   mutable nsCOMPtr<nsIURI> mURI;
 public:
-  nsRefPtr<nsStringBuffer> mString;
+  RefPtr<nsStringBuffer> mString;
   nsCOMPtr<nsIURI> mReferrer;
   nsCOMPtr<nsIPrincipal> mOriginPrincipal;
 
@@ -1493,6 +1494,7 @@ public:
     return mPropertyID == aOther.mPropertyID &&
            mShorthandPropertyID == aOther.mShorthandPropertyID &&
            mTokenStream.Equals(aOther.mTokenStream) &&
+           mLevel == aOther.mLevel &&
            (mBaseURI == aOther.mBaseURI ||
             (mBaseURI && aOther.mBaseURI &&
              NS_SUCCEEDED(mBaseURI->Equals(aOther.mBaseURI, &eq)) &&
@@ -1541,6 +1543,7 @@ public:
   // mozilla::CSSStyleSheet* mSheet;
   uint32_t mLineNumber;
   uint32_t mLineOffset;
+  mozilla::SheetType mLevel;
 
 private:
   nsCSSValueTokenStream(const nsCSSValueTokenStream& aOther) = delete;

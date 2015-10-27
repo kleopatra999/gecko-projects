@@ -8,7 +8,7 @@
 #include "mp4_demuxer/MoofParser.h"
 #include "mp4_demuxer/SinfParser.h"
 #include "nsAutoPtr.h"
-#include "mozilla/nsRefPtr.h"
+#include "mozilla/RefPtr.h"
 
 #include <algorithm>
 #include <limits>
@@ -98,7 +98,7 @@ already_AddRefed<MediaRawData> SampleIterator::GetNext()
     return nullptr;
   }
 
-  nsRefPtr<MediaRawData> sample = new MediaRawData();
+  RefPtr<MediaRawData> sample = new MediaRawData();
   sample->mTimecode= s->mDecodeTime;
   sample->mTime = s->mCompositionRange.start;
   sample->mDuration = s->mCompositionRange.Length();
@@ -255,6 +255,7 @@ Index::Index(const nsTArray<Indice>& aIndex,
                                          indice.end_offset);
       sample.mCompositionRange = Interval<Microseconds>(indice.start_composition,
                                                         indice.end_composition);
+      sample.mDecodeTime = indice.start_decode;
       sample.mSync = indice.sync;
       // FIXME: Make this infallible after bug 968520 is done.
       MOZ_ALWAYS_TRUE(mIndex.AppendElement(sample, fallible));

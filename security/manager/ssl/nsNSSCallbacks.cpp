@@ -54,7 +54,7 @@ public:
 
   nsNSSHttpRequestSession *mRequestSession;
   
-  nsRefPtr<nsHTTPListener> mListener;
+  RefPtr<nsHTTPListener> mListener;
   bool mResponsibleForDoneSignal;
   TimeStamp mStartTime;
 };
@@ -102,7 +102,8 @@ nsHTTPDownloadEvent::Run()
   if (priorityChannel)
     priorityChannel->AdjustPriority(nsISupportsPriority::PRIORITY_HIGHEST);
 
-  chan->SetLoadFlags(nsIRequest::LOAD_ANONYMOUS);
+  chan->SetLoadFlags(nsIRequest::LOAD_ANONYMOUS |
+                     nsIChannel::LOAD_BYPASS_SERVICE_WORKER);
 
   // Create a loadgroup for this new channel.  This way if the channel
   // is redirected, we'll have a way to cancel the resulting channel.
@@ -173,7 +174,7 @@ nsHTTPDownloadEvent::Run()
 }
 
 struct nsCancelHTTPDownloadEvent : nsRunnable {
-  nsRefPtr<nsHTTPListener> mListener;
+  RefPtr<nsHTTPListener> mListener;
 
   NS_IMETHOD Run() {
     mListener->FreeLoadGroup(true);
@@ -767,6 +768,7 @@ ShowProtectedAuthPrompt(PK11SlotInfo* slot, nsIInterfaceRequestor *ir)
 }
 
 class PK11PasswordPromptRunnable : public SyncRunnableBase
+                                 , public nsNSSShutDownObject
 {
 public:
   PK11PasswordPromptRunnable(PK11SlotInfo* slot, 
@@ -776,28 +778,41 @@ public:
       mIR(ir)
   {
   }
+  virtual ~PK11PasswordPromptRunnable();
+
+  // This doesn't own the PK11SlotInfo or any other NSS objects, so there's
+  // nothing to release.
+  virtual void virtualDestroyNSSReference() override {}
   char * mResult; // out
-  virtual void RunOnTargetThread();
+  virtual void RunOnTargetThread() override;
 private:
   PK11SlotInfo* const mSlot; // in
   nsIInterfaceRequestor* const mIR; // in
 };
+
+PK11PasswordPromptRunnable::~PK11PasswordPromptRunnable()
+{
+  nsNSSShutDownPreventionLock locker;
+  if (isAlreadyShutDown()) {
+    return;
+  }
+
+  shutdown(calledFromObject);
+}
 
 void PK11PasswordPromptRunnable::RunOnTargetThread()
 {
   static NS_DEFINE_CID(kNSSComponentCID, NS_NSSCOMPONENT_CID);
 
   nsNSSShutDownPreventionLock locker;
+  if (isAlreadyShutDown()) {
+    return;
+  }
+
   nsresult rv = NS_OK;
   char16_t *password = nullptr;
   bool value = false;
   nsCOMPtr<nsIPrompt> prompt;
-
-  /* TODO: Retry should generate a different dialog message */
-/*
-  if (retry)
-    return nullptr;
-*/
 
   if (!mIR)
   {
@@ -834,19 +849,11 @@ void PK11PasswordPromptRunnable::RunOnTargetThread()
   if (NS_FAILED(rv))
     return;
 
-  {
-    nsPSMUITracker tracker;
-    if (tracker.isUIForbidden()) {
-      rv = NS_ERROR_NOT_AVAILABLE;
-    }
-    else {
-      // Although the exact value is ignored, we must not pass invalid
-      // bool values through XPConnect.
-      bool checkState = false;
-      rv = prompt->PromptPassword(nullptr, promptString.get(),
-                                  &password, nullptr, &checkState, &value);
-    }
-  }
+  // Although the exact value is ignored, we must not pass invalid bool values
+  // through XPConnect.
+  bool checkState = false;
+  rv = prompt->PromptPassword(nullptr, promptString.get(), &password, nullptr,
+                              &checkState, &value);
   
   if (NS_SUCCEEDED(rv) && value) {
     mResult = ToNewUTF8String(nsDependentString(password));
@@ -1238,6 +1245,9 @@ void HandshakeCallback(PRFileDesc* fd, void* client_data) {
   } else {
     state = nsIWebProgressListener::STATE_IS_SECURE |
             nsIWebProgressListener::STATE_SECURE_HIGH;
+    // we know this site no longer requires a weak cipher
+    ioLayerHelpers.removeInsecureFallbackSite(infoObject->GetHostName(),
+                                              infoObject->GetPort());
   }
   infoObject->SetSecurityState(state);
 

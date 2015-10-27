@@ -76,7 +76,7 @@ void Axis::UpdateWithTouchAtDevicePoint(ParentLayerCoord aPos, ParentLayerCoord 
     return;
   }
 
-  float newVelocity = mAxisLocked ? 0.0f : (float)(mPos - aPos + aAdditionalDelta) / (float)(aTimestampMs - mPosTimeMs);
+  float newVelocity = mAxisLocked ? 0.0f : (float)(mPos - aPos - aAdditionalDelta) / (float)(aTimestampMs - mPosTimeMs);
   if (gfxPrefs::APZMaxVelocity() > 0.0f) {
     bool velocityIsNegative = (newVelocity < 0);
     newVelocity = fabs(newVelocity);
@@ -508,6 +508,10 @@ CSSCoord Axis::ScaleWillOverscrollAmount(float aScale, CSSCoord aFocus) const {
     return (originAfterScale + (GetCompositionLength() / aScale) - GetPageEnd()) / zoom;
   }
   return 0;
+}
+
+bool Axis::IsAxisLocked() const {
+  return mAxisLocked;
 }
 
 float Axis::GetVelocity() const {

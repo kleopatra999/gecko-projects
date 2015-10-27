@@ -8,10 +8,10 @@
 
 dump("###################################### forms.js loaded\n");
 
-let Ci = Components.interfaces;
-let Cc = Components.classes;
-let Cu = Components.utils;
-let Cr = Components.results;
+var Ci = Components.interfaces;
+var Cc = Components.classes;
+var Cu = Components.utils;
+var Cr = Components.results;
 
 Cu.import("resource://gre/modules/Services.jsm");
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
@@ -22,7 +22,7 @@ XPCOMUtils.defineLazyServiceGetter(Services, "fm",
 /*
  * A WeakMap to map window to objects keeping it's TextInputProcessor instance.
  */
-let WindowMap = {
+var WindowMap = {
   // WeakMap of <window, object> pairs.
   _map: null,
 
@@ -72,15 +72,15 @@ const RESIZE_SCROLL_DELAY = 20;
 // the selection range any more.
 const MAX_BLOCKED_COUNT = 20;
 
-let HTMLDocument = Ci.nsIDOMHTMLDocument;
-let HTMLHtmlElement = Ci.nsIDOMHTMLHtmlElement;
-let HTMLBodyElement = Ci.nsIDOMHTMLBodyElement;
-let HTMLIFrameElement = Ci.nsIDOMHTMLIFrameElement;
-let HTMLInputElement = Ci.nsIDOMHTMLInputElement;
-let HTMLTextAreaElement = Ci.nsIDOMHTMLTextAreaElement;
-let HTMLSelectElement = Ci.nsIDOMHTMLSelectElement;
-let HTMLOptGroupElement = Ci.nsIDOMHTMLOptGroupElement;
-let HTMLOptionElement = Ci.nsIDOMHTMLOptionElement;
+var HTMLDocument = Ci.nsIDOMHTMLDocument;
+var HTMLHtmlElement = Ci.nsIDOMHTMLHtmlElement;
+var HTMLBodyElement = Ci.nsIDOMHTMLBodyElement;
+var HTMLIFrameElement = Ci.nsIDOMHTMLIFrameElement;
+var HTMLInputElement = Ci.nsIDOMHTMLInputElement;
+var HTMLTextAreaElement = Ci.nsIDOMHTMLTextAreaElement;
+var HTMLSelectElement = Ci.nsIDOMHTMLSelectElement;
+var HTMLOptGroupElement = Ci.nsIDOMHTMLOptGroupElement;
+var HTMLOptionElement = Ci.nsIDOMHTMLOptionElement;
 
 function guessKeyNameFromKeyCode(KeyboardEvent, aKeyCode) {
   switch (aKeyCode) {
@@ -227,7 +227,7 @@ function guessKeyNameFromKeyCode(KeyboardEvent, aKeyCode) {
   }
 }
 
-let FormVisibility = {
+var FormVisibility = {
   /**
    * Searches upwards in the DOM for an element that has been scrolled.
    *
@@ -261,7 +261,7 @@ let FormVisibility = {
     // we also care about the window this is the more
     // common case where the content is larger then
     // the viewport/screen.
-    if (win.scrollMaxX || win.scrollMaxY) {
+    if (win.scrollMaxX != win.scrollMinX || win.scrollMaxY != win.scrollMinY) {
       return win;
     }
 
@@ -371,7 +371,7 @@ let FormVisibility = {
 };
 
 // This object implements nsITextInputProcessorCallback
-let textInputProcessorCallback = {
+var textInputProcessorCallback = {
   onNotify: function(aTextInputProcessor, aNotification) {
     try {
       switch (aNotification.type) {
@@ -405,7 +405,7 @@ let textInputProcessorCallback = {
   }
 };
 
-let FormAssistant = {
+var FormAssistant = {
   init: function fa_init() {
     addEventListener("focus", this, true, false);
     addEventListener("blur", this, true, false);
@@ -997,7 +997,7 @@ let FormAssistant = {
   unhandleFocus: function fa_unhandleFocus() {
     this.setFocusedElement(null);
     this.isHandlingFocus = false;
-    sendAsyncMessage("Forms:Input", { "type": "blur" });
+    sendAsyncMessage("Forms:Blur", {});
   },
 
   isFocusableElement: function fa_isFocusableElement(element) {
@@ -1026,7 +1026,7 @@ let FormAssistant = {
   },
 
   sendInputState: function(element) {
-    sendAsyncMessage("Forms:Input", getJSON(element, this._focusCounter));
+    sendAsyncMessage("Forms:Focus", getJSON(element, this._focusCounter));
   },
 
   getSelectionInfo: function fa_getSelectionInfo() {
@@ -1113,28 +1113,32 @@ function getJSON(element, focusCounter) {
   // need it's number control here in order to get the correct 'type' etc.:
   element = element.ownerNumberControl || element;
 
-  let type = element.type || "";
+  let type = element.tagName.toLowerCase();
+  let inputType = (element.type || "").toLowerCase();
   let value = element.value || "";
   let max = element.max || "";
   let min = element.min || "";
 
-  // Treat contenteditble element as a special text area field
+  // Treat contenteditable element as a special text area field
   if (isContentEditable(element)) {
-    type = "textarea";
+    type = "contenteditable";
+    inputType = "textarea";
     value = getContentEditableText(element);
   }
 
   // Until the input type=date/datetime/range have been implemented
   // let's return their real type even if the platform returns 'text'
-  let attributeType = element.getAttribute("type") || "";
+  let attributeInputType = element.getAttribute("type") || "";
 
-  if (attributeType) {
-    var typeLowerCase = attributeType.toLowerCase();
-    switch (typeLowerCase) {
+  if (attributeInputType) {
+    let inputTypeLowerCase = attributeInputType.toLowerCase();
+    switch (inputTypeLowerCase) {
       case "datetime":
       case "datetime-local":
+      case "month":
+      case "week":
       case "range":
-        type = typeLowerCase;
+        inputType = inputTypeLowerCase;
         break;
     }
   }
@@ -1145,11 +1149,11 @@ function getJSON(element, focusCounter) {
   // inputmode for fields. This shouldn't be used outside of pre-installed
   // apps because the attribute is going to disappear as soon as a definitive
   // solution will be find.
-  let inputmode = element.getAttribute('x-inputmode');
-  if (inputmode) {
-    inputmode = inputmode.toLowerCase();
+  let inputMode = element.getAttribute('x-inputmode');
+  if (inputMode) {
+    inputMode = inputMode.toLowerCase();
   } else {
-    inputmode = '';
+    inputMode = '';
   }
 
   let range = getSelectionRange(element);
@@ -1158,10 +1162,12 @@ function getJSON(element, focusCounter) {
   return {
     "contextId": focusCounter,
 
-    "type": type.toLowerCase(),
+    "type": type,
+    "inputType": inputType,
+    "inputMode": inputMode,
+
     "choices": getListForElement(element),
     "value": value,
-    "inputmode": inputmode,
     "selectionStart": range[0],
     "selectionEnd": range[1],
     "max": max,
@@ -1487,7 +1493,7 @@ function replaceSurroundingText(element, text, offset, length) {
   return true;
 }
 
-let CompositionManager =  {
+var CompositionManager =  {
   _isStarted: false,
   _tip: null,
   _KeyboardEventForWin: null,

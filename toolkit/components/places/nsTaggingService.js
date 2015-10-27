@@ -522,7 +522,9 @@ TagAutoCompleteResult.prototype = {
     return this._results.length;
   },
 
-  get typeAheadResult() false,
+  get typeAheadResult() {
+    return false;
+  },
 
   /**
    * Get the value of the result at the given index
@@ -642,7 +644,7 @@ TagAutoCompleteSearch.prototype = {
         // for each match, prepend what the user has typed so far
         if (searchResults[i].toLowerCase()
                             .indexOf(searchString.toLowerCase()) == 0 &&
-            comments.indexOf(searchResults[i]) == -1) {
+            !comments.includes(searchResults[i])) {
           results.push(before + searchResults[i]);
           comments.push(searchResults[i]);
         }
@@ -703,5 +705,5 @@ TagAutoCompleteSearch.prototype = {
   ])
 };
 
-let component = [TaggingService, TagAutoCompleteSearch];
+var component = [TaggingService, TagAutoCompleteSearch];
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory(component);

@@ -23,8 +23,6 @@
  *       - TempAllocPolicy: Adds automatic error reporting to the provided
  *         Context when allocations fail.
  *
- *       - ContextAllocPolicy: forwards to the JSContext MallocProvider.
- *
  *       - RuntimeAllocPolicy: forwards to the JSRuntime MallocProvider.
  *
  *   - MallocProvider. A mixin base class that handles automatically updating
@@ -53,19 +51,45 @@ template<class Client>
 struct MallocProvider
 {
     template <class T>
+    T* maybe_pod_malloc(size_t numElems) {
+        T* p = js_pod_malloc<T>(numElems);
+        if (MOZ_LIKELY(p))
+            client()->updateMallocCounter(numElems * sizeof(T));
+        return p;
+    }
+
+    template <class T>
+    T* maybe_pod_calloc(size_t numElems) {
+        T* p = js_pod_calloc<T>(numElems);
+        if (MOZ_LIKELY(p))
+            client()->updateMallocCounter(numElems * sizeof(T));
+        return p;
+    }
+
+    template <class T>
+    T* maybe_pod_realloc(T* prior, size_t oldSize, size_t newSize) {
+        T* p = js_pod_realloc(prior, oldSize, newSize);
+        if (MOZ_LIKELY(p)) {
+            // For compatibility we do not account for realloc that decreases
+            // previously allocated memory.
+            if (newSize > oldSize)
+                client()->updateMallocCounter((newSize - oldSize) * sizeof(T));
+        }
+        return p;
+    }
+
+    template <class T>
     T* pod_malloc() {
         return pod_malloc<T>(1);
     }
 
     template <class T>
     T* pod_malloc(size_t numElems) {
-        size_t bytes = numElems * sizeof(T);
-        T* p = js_pod_malloc<T>(numElems);
-        if (MOZ_LIKELY(p)) {
-            client()->updateMallocCounter(bytes);
+        T* p = maybe_pod_malloc<T>(numElems);
+        if (MOZ_LIKELY(p))
             return p;
-        }
-        if (numElems & mozilla::tl::MulOverflowMask<sizeof(T)>::value) {
+        size_t bytes;
+        if (MOZ_UNLIKELY(!CalculateAllocSize<T>(numElems, &bytes))) {
             client()->reportAllocationOverflow();
             return nullptr;
         }
@@ -77,16 +101,12 @@ struct MallocProvider
 
     template <class T, class U>
     T* pod_malloc_with_extra(size_t numExtra) {
-        if (MOZ_UNLIKELY(numExtra & mozilla::tl::MulOverflowMask<sizeof(U)>::value)) {
+        size_t bytes;
+        if (MOZ_UNLIKELY((!CalculateAllocSizeWithExtra<T, U>(numExtra, &bytes)))) {
             client()->reportAllocationOverflow();
             return nullptr;
         }
-        size_t bytes = sizeof(T) + numExtra * sizeof(U);
-        if (MOZ_UNLIKELY(bytes < sizeof(T))) {
-            client()->reportAllocationOverflow();
-            return nullptr;
-        }
-        T* p = reinterpret_cast<T*>(js_pod_malloc<uint8_t>(bytes));
+        T* p = static_cast<T*>(js_malloc(bytes));
         if (MOZ_LIKELY(p)) {
             client()->updateMallocCounter(bytes);
             return p;
@@ -110,13 +130,11 @@ struct MallocProvider
 
     template <class T>
     T* pod_calloc(size_t numElems) {
-        size_t bytes = numElems * sizeof(T);
-        T* p = js_pod_calloc<T>(numElems);
-        if (MOZ_LIKELY(p)) {
-            client()->updateMallocCounter(bytes);
+        T* p = maybe_pod_calloc<T>(numElems);
+        if (MOZ_LIKELY(p))
             return p;
-        }
-        if (numElems & mozilla::tl::MulOverflowMask<sizeof(T)>::value) {
+        size_t bytes;
+        if (MOZ_UNLIKELY(!CalculateAllocSize<T>(numElems, &bytes))) {
             client()->reportAllocationOverflow();
             return nullptr;
         }
@@ -128,16 +146,12 @@ struct MallocProvider
 
     template <class T, class U>
     T* pod_calloc_with_extra(size_t numExtra) {
-        if (MOZ_UNLIKELY(numExtra & mozilla::tl::MulOverflowMask<sizeof(U)>::value)) {
+        size_t bytes;
+        if (MOZ_UNLIKELY((!CalculateAllocSizeWithExtra<T, U>(numExtra, &bytes)))) {
             client()->reportAllocationOverflow();
             return nullptr;
         }
-        size_t bytes = sizeof(T) + numExtra * sizeof(U);
-        if (MOZ_UNLIKELY(bytes < sizeof(T))) {
-            client()->reportAllocationOverflow();
-            return nullptr;
-        }
-        T* p = reinterpret_cast<T*>(js_pod_calloc<uint8_t>(bytes));
+        T* p = static_cast<T*>(js_calloc(bytes));
         if (p) {
             client()->updateMallocCounter(bytes);
             return p;
@@ -157,19 +171,15 @@ struct MallocProvider
 
     template <class T>
     T* pod_realloc(T* prior, size_t oldSize, size_t newSize) {
-        T* p = js_pod_realloc(prior, oldSize, newSize);
-        if (MOZ_LIKELY(p)) {
-            // For compatibility we do not account for realloc that decreases
-            // previously allocated memory.
-            if (newSize > oldSize)
-                client()->updateMallocCounter((newSize - oldSize) * sizeof(T));
+        T* p = maybe_pod_realloc(prior, oldSize, newSize);
+        if (MOZ_LIKELY(p))
             return p;
-        }
-        if (newSize & mozilla::tl::MulOverflowMask<sizeof(T)>::value) {
+        size_t bytes;
+        if (MOZ_UNLIKELY(!CalculateAllocSize<T>(newSize, &bytes))) {
             client()->reportAllocationOverflow();
             return nullptr;
         }
-        p = (T*)client()->onOutOfMemory(AllocFunction::Realloc, newSize * sizeof(T), prior);
+        p = (T*)client()->onOutOfMemory(AllocFunction::Realloc, bytes, prior);
         if (p && newSize > oldSize)
             client()->updateMallocCounter((newSize - oldSize) * sizeof(T));
         return p;

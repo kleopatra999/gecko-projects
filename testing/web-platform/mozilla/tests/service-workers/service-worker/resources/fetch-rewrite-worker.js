@@ -47,9 +47,20 @@ self.addEventListener('fetch', function(event) {
           'gQLABKXJBqMGjBoAAqMGDLwBDAwAEsoCTFWunmQAAAAASUVORK5CYII=');
       var array = new Uint8Array(binary.length);
       for(var i = 0; i < binary.length; i++) {
-        array[i] = binary.charCodeAt(i)
+        array[i] = binary.charCodeAt(i);
       };
       event.respondWith(new Response(new Blob([array], {type: 'image/png'})));
+      return;
+    }
+    if (params['check-ua-header']) {
+      var ua = event.request.headers.get('User-Agent');
+      if (ua) {
+        // We have a user agent!
+        event.respondWith(new Response(new Blob([ua])));
+      } else {
+        // We don't have a user-agent!
+        event.respondWith(new Response(new Blob(["NO_UA"])));
+      }
       return;
     }
     event.respondWith(new Promise(function(resolve, reject) {
@@ -69,7 +80,25 @@ self.addEventListener('fetch', function(event) {
                       expectedType
             })));
           }
-          resolve(response);
+
+          if (params['cache']) {
+            var cacheName = "cached-fetches-" + Date.now();
+            var cache;
+            var cachedResponse;
+            return self.caches.open(cacheName).then(function(opened) {
+              cache = opened;
+              return cache.put(request, response);
+            }).then(function() {
+              return cache.match(request);
+            }).then(function(cached) {
+              cachedResponse = cached;
+              return self.caches.delete(cacheName);
+            }).then(function() {
+               resolve(cachedResponse);
+            });
+          } else {
+            resolve(response);
+          }
         }, reject)
       }));
   });

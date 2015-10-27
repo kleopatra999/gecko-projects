@@ -16,7 +16,6 @@
 #include "mozilla/layout/FrameChildList.h"
 #include "nsThreadUtils.h"
 #include "nsIPrincipal.h"
-#include "GraphicsFilter.h"
 #include "nsCSSPseudoElements.h"
 #include "FrameMetrics.h"
 #include "nsIWidget.h"
@@ -73,6 +72,7 @@ class Element;
 class HTMLImageElement;
 class HTMLCanvasElement;
 class HTMLVideoElement;
+class Selection;
 } // namespace dom
 namespace gfx {
 struct RectCornerRadii;
@@ -112,7 +112,6 @@ struct DisplayPortMarginsPropertyData {
  */
 class nsLayoutUtils
 {
-  typedef ::GraphicsFilter GraphicsFilter;
   typedef mozilla::dom::DOMRectList DOMRectList;
   typedef mozilla::layers::Layer Layer;
   typedef mozilla::ContainerLayerParameters ContainerLayerParameters;
@@ -120,6 +119,7 @@ class nsLayoutUtils
   typedef mozilla::gfx::SourceSurface SourceSurface;
   typedef mozilla::gfx::Color Color;
   typedef mozilla::gfx::DrawTarget DrawTarget;
+  typedef mozilla::gfx::Filter Filter;
   typedef mozilla::gfx::Float Float;
   typedef mozilla::gfx::Point Point;
   typedef mozilla::gfx::Rect Rect;
@@ -496,12 +496,16 @@ public:
    * properties (top, left, right, bottom) are auto. aAnchorRect is in the
    * coordinate space of aLayer's container layer (i.e. relative to the reference
    * frame of the display item which is building aLayer's container layer).
+   * aIsClipFixed is true if the layer's clip rect should also remain fixed
+   * during async-scrolling (true for fixed position elements, false for
+   * fixed backgrounds).
    */
   static void SetFixedPositionLayerData(Layer* aLayer, const nsIFrame* aViewportFrame,
                                         const nsRect& aAnchorRect,
                                         const nsIFrame* aFixedPosFrame,
                                         nsPresContext* aPresContext,
-                                        const ContainerLayerParameters& aContainerParameters);
+                                        const ContainerLayerParameters& aContainerParameters,
+                                        bool aIsClipFixed);
 
   /**
    * Return true if aPresContext's viewport has a displayport.
@@ -546,8 +550,7 @@ public:
    * geometry root.
    */
   static nsIFrame* GetAnimatedGeometryRootFor(nsDisplayItem* aItem,
-                                              nsDisplayListBuilder* aBuilder,
-                                              mozilla::layers::LayerManager* aManager);
+                                              nsDisplayListBuilder* aBuilder);
 
   /**
    * Finds the nearest ancestor frame to aFrame that is considered to have (or
@@ -1000,11 +1003,10 @@ public:
     PAINT_IGNORE_SUPPRESSION = 0x08,
     PAINT_DOCUMENT_RELATIVE = 0x10,
     PAINT_HIDE_CARET = 0x20,
-    PAINT_ALL_CONTINUATIONS = 0x40,
-    PAINT_TO_WINDOW = 0x80,
-    PAINT_EXISTING_TRANSACTION = 0x100,
-    PAINT_NO_COMPOSITE = 0x200,
-    PAINT_COMPRESSED = 0x400
+    PAINT_TO_WINDOW = 0x40,
+    PAINT_EXISTING_TRANSACTION = 0x80,
+    PAINT_NO_COMPOSITE = 0x100,
+    PAINT_COMPRESSED = 0x200
   };
 
   /**
@@ -1703,7 +1705,7 @@ public:
   /**
    * Gets the graphics filter for the frame
    */
-  static GraphicsFilter GetGraphicsFilterForFrame(nsIFrame* aFrame);
+  static Filter GetGraphicsFilterForFrame(nsIFrame* aFrame);
 
   /* N.B. The only difference between variants of the Draw*Image
    * functions below is the type of the aImage argument.
@@ -1734,7 +1736,7 @@ public:
                                         nsPresContext*      aPresContext,
                                         imgIContainer*      aImage,
                                         const CSSIntSize&   aImageSize,
-                                        GraphicsFilter      aGraphicsFilter,
+                                        Filter              aGraphicsFilter,
                                         const nsRect&       aDest,
                                         const nsRect&       aFill,
                                         const nsPoint&      aAnchor,
@@ -1759,7 +1761,7 @@ public:
   static DrawResult DrawImage(gfxContext&         aContext,
                               nsPresContext*      aPresContext,
                               imgIContainer*      aImage,
-                              GraphicsFilter      aGraphicsFilter,
+                              Filter              aGraphicsFilter,
                               const nsRect&       aDest,
                               const nsRect&       aFill,
                               const nsPoint&      aAnchor,
@@ -1813,7 +1815,7 @@ public:
   static DrawResult DrawSingleUnscaledImage(gfxContext&          aContext,
                                             nsPresContext*       aPresContext,
                                             imgIContainer*       aImage,
-                                            GraphicsFilter       aGraphicsFilter,
+                                            Filter               aGraphicsFilter,
                                             const nsPoint&       aDest,
                                             const nsRect*        aDirty,
                                             uint32_t             aImageFlags,
@@ -1844,7 +1846,7 @@ public:
   static DrawResult DrawSingleImage(gfxContext&         aContext,
                                     nsPresContext*      aPresContext,
                                     imgIContainer*      aImage,
-                                    GraphicsFilter      aGraphicsFilter,
+                                    Filter              aGraphicsFilter,
                                     const nsRect&       aDest,
                                     const nsRect&       aDirty,
                                     const mozilla::SVGImageContext* aSVGContext,
@@ -1956,10 +1958,8 @@ public:
 
   /**
    * Get the reference frame that would be used when constructing a
-   * display item for this frame.  (Note, however, that
-   * nsDisplayTransform use the reference frame appropriate for their
-   * GetTransformRootFrame(), rather than using their own frame as a
-   * reference frame.)
+   * display item for this frame.  Rather than using their own frame
+   * as a reference frame.)
    *
    * This duplicates some of the logic of GetDisplayRootFrame above and
    * of nsDisplayListBuilder::FindReferenceFrameFor.
@@ -1968,16 +1968,6 @@ public:
    * frame from it instead of calling this.
    */
   static nsIFrame* GetReferenceFrame(nsIFrame* aFrame);
-
-  /**
-   * Get the parent of this frame, except if that parent is part of a
-   * preserve-3d hierarchy, get the parent of the root of the
-   * preserve-3d hierarchy.
-   *
-   * (This is used as the starting point for reference frame computation
-   * for nsDisplayTransform display items.)
-   */
-  static nsIFrame* GetTransformRootFrame(nsIFrame* aFrame);
 
   /**
    * Get textrun construction flags determined by a given style; in particular
@@ -2069,12 +2059,12 @@ public:
     SurfaceFromElementResult();
 
     /* mSourceSurface will contain the resulting surface, or will be nullptr on error */
-    mozilla::RefPtr<SourceSurface> mSourceSurface;
+    RefPtr<SourceSurface> mSourceSurface;
     /* Contains info for drawing when there is no mSourceSurface. */
     DirectDrawInfo mDrawInfo;
 
     /* The size of the surface */
-    gfxIntSize mSize;
+    mozilla::gfx::IntSize mSize;
     /* The principal associated with the element whose surface was returned.
        If there is a surface, this will never be null. */
     nsCOMPtr<nsIPrincipal> mPrincipal;
@@ -2382,8 +2372,8 @@ public:
     return sFontSizeInflationDisabledInMasterProcess;
   }
 
-  static bool SVGTransformOriginEnabled() {
-    return sSVGTransformOriginEnabled;
+  static bool SVGTransformBoxEnabled() {
+    return sSVGTransformBoxEnabled;
   }
 
   /**
@@ -2690,7 +2680,6 @@ public:
                                       mozilla::WritingMode aLineWM,
                                       mozilla::WritingMode aFrameWM);
 
-  static bool HasApzAwareListeners(mozilla::EventListenerManager* aElm);
   static bool HasDocumentLevelListenersForApzAwareEvents(nsIPresShell* aShell);
 
   /**
@@ -2767,6 +2756,13 @@ public:
    */
   static void AppendFrameTextContent(nsIFrame* aFrame, nsAString& aResult);
 
+  /**
+   * Takes a selection, and returns selection's bounding rect which is relative
+   * to its root frame.
+   *
+   * @param aSel      Selection to check
+   */
+  static nsRect GetSelectionBoundingRect(mozilla::dom::Selection* aSel);
 private:
   static uint32_t sFontSizeInflationEmPerLine;
   static uint32_t sFontSizeInflationMinTwips;
@@ -2778,7 +2774,7 @@ private:
   static bool sInvalidationDebuggingIsEnabled;
   static bool sCSSVariablesEnabled;
   static bool sInterruptibleReflowEnabled;
-  static bool sSVGTransformOriginEnabled;
+  static bool sSVGTransformBoxEnabled;
 
   /**
    * Helper function for LogTestDataForPaint().
@@ -2864,6 +2860,17 @@ gfx::Rect NSRectToRect(const nsRect& aRect, double aAppUnitsPerPixel);
  */
 gfx::Rect NSRectToSnappedRect(const nsRect& aRect, double aAppUnitsPerPixel,
                               const gfx::DrawTarget& aSnapDT);
+
+/**
+* Converts, where possible, an nsRect in app units to a Moz2D Rect in pixels
+* (whether those are device pixels or CSS px depends on what the caller
+*  chooses to pass as aAppUnitsPerPixel).
+*
+* If snapping results in a rectangle with zero width or height, the affected
+* coordinates are left unsnapped
+*/
+gfx::Rect NSRectToNonEmptySnappedRect(const nsRect& aRect, double aAppUnitsPerPixel,
+                                      const gfx::DrawTarget& aSnapDT);
 
 void StrokeLineWithSnapping(const nsPoint& aP1, const nsPoint& aP2,
                             int32_t aAppUnitsPerDevPixel,

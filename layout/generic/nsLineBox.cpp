@@ -8,6 +8,7 @@
 
 #include "nsLineBox.h"
 
+#include "mozilla/ArenaObjectID.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Likely.h"
 #include "mozilla/WritingModes.h"
@@ -148,14 +149,14 @@ nsLineBox::NoteFramesMovedFrom(nsLineBox* aFromLine)
 void*
 nsLineBox::operator new(size_t sz, nsIPresShell* aPresShell) CPP_THROW_NEW
 {
-  return aPresShell->AllocateByObjectID(nsPresArena::nsLineBox_id, sz);
+  return aPresShell->AllocateByObjectID(eArenaObjectID_nsLineBox, sz);
 }
 
 void
 nsLineBox::Destroy(nsIPresShell* aPresShell)
 {
   this->nsLineBox::~nsLineBox();
-  aPresShell->FreeByObjectID(nsPresArena::nsLineBox_id, this);
+  aPresShell->FreeByObjectID(eArenaObjectID_nsLineBox, this);
 }
 
 void
@@ -249,11 +250,8 @@ nsLineBox::List(FILE* out, const char* aPrefix, uint32_t aFlags) const
   str += nsPrintfCString("{%d,%d,%d,%d} ",
           bounds.x, bounds.y, bounds.width, bounds.height);
   if (mWritingMode.IsVertical() || !mWritingMode.IsBidiLTR()) {
-    str += nsPrintfCString("{%s-%s: %d,%d,%d,%d; cs=%d,%d} ",
-                           mWritingMode.IsVertical()
-                             ? mWritingMode.IsVerticalLR() ? "vlr" : "vrl"
-                             : "htb",
-                           mWritingMode.IsBidiLTR() ? "ltr" : "rtl",
+    str += nsPrintfCString("{%s: %d,%d,%d,%d; cs=%d,%d} ",
+                           mWritingMode.DebugString(),
                            IStart(), BStart(), ISize(), BSize(),
                            mContainerSize.width, mContainerSize.height);
   }

@@ -37,7 +37,16 @@ WebBrowserPersistDocumentParent::ActorDestroy(ActorDestroyReason aWhy)
         mReflection = nullptr;
     }
     if (mOnReady) {
-        mOnReady->OnError(NS_ERROR_FAILURE);
+        // Bug 1202887: If this is part of a subtree destruction, then
+        // anything which could cause another actor in that subtree to
+        // be Send__delete__()ed will cause use-after-free -- such as
+        // dropping the last reference to another document's
+        // WebBrowserPersistRemoteDocument.  To avoid that, defer the
+        // callback until after the entire subtree is destroyed.
+        nsCOMPtr<nsIRunnable> errorLater = NS_NewRunnableMethodWithArg
+            <nsresult>(mOnReady, &nsIWebBrowserPersistDocumentReceiver::OnError,
+                       NS_ERROR_FAILURE);
+        NS_DispatchToCurrentThread(errorLater);
         mOnReady = nullptr;
     }
 }
@@ -60,7 +69,7 @@ WebBrowserPersistDocumentParent::RecvAttributes(const Attrs& aAttrs,
         return false;
     }
     mReflection = new WebBrowserPersistRemoteDocument(this, aAttrs, postData);
-    nsRefPtr<WebBrowserPersistRemoteDocument> reflection = mReflection;
+    RefPtr<WebBrowserPersistRemoteDocument> reflection = mReflection;
     mOnReady->OnDocumentReady(reflection);
     mOnReady = nullptr;
     return true;
@@ -89,7 +98,7 @@ bool
 WebBrowserPersistDocumentParent::DeallocPWebBrowserPersistResourcesParent(PWebBrowserPersistResourcesParent* aActor)
 {
     // Turn the ref held by IPC back into an nsRefPtr.
-    nsRefPtr<WebBrowserPersistResourcesParent> actor =
+    RefPtr<WebBrowserPersistResourcesParent> actor =
         already_AddRefed<WebBrowserPersistResourcesParent>(
             static_cast<WebBrowserPersistResourcesParent*>(aActor));
     return true;

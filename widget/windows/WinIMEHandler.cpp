@@ -28,7 +28,8 @@
 const char* kOskPathPrefName = "ui.osk.on_screen_keyboard_path";
 const char* kOskEnabled = "ui.osk.enabled";
 const char* kOskDetectPhysicalKeyboard = "ui.osk.detect_physical_keyboard";
-const char* kOskRequireTabletMode = "ui.osk.require_tablet_mode";
+const char* kOskRequireWin10 = "ui.osk.require_win10";
+const char* kOskDebugReason = "ui.osk.debug.keyboardDisplayReason";
 
 namespace mozilla {
 namespace widget {
@@ -37,13 +38,16 @@ namespace widget {
  * IMEHandler
  ******************************************************************************/
 
+bool IMEHandler::sPluginHasFocus = false;
 #ifdef NS_ENABLE_TSF
 bool IMEHandler::sIsInTSFMode = false;
 bool IMEHandler::sIsIMMEnabled = true;
-bool IMEHandler::sPluginHasFocus = false;
 bool IMEHandler::sShowingOnScreenKeyboard = false;
 decltype(SetInputScopes)* IMEHandler::sSetInputScopes = nullptr;
 #endif // #ifdef NS_ENABLE_TSF
+
+static POWER_PLATFORM_ROLE sPowerPlatformRole = PlatformRoleUnspecified;
+static bool sDeterminedPowerPlatformRole = false;
 
 // static
 void
@@ -294,6 +298,12 @@ IMEHandler::NotifyIME(nsWindow* aWindow,
 nsIMEUpdatePreference
 IMEHandler::GetUpdatePreference()
 {
+  // While a plugin has focus, neither TSFTextStore nor IMMHandler needs
+  // notifications.
+  if (sPluginHasFocus) {
+    return nsIMEUpdatePreference();
+  }
+
 #ifdef NS_ENABLE_TSF
   if (IsTSFAvailable()) {
     return TSFTextStore::GetIMEUpdatePreference();
@@ -529,25 +539,26 @@ void
 IMEHandler::MaybeShowOnScreenKeyboard()
 {
   if (sPluginHasFocus ||
-      !IsWin10OrLater() ||
+      !IsWin8OrLater() ||
       !Preferences::GetBool(kOskEnabled, true) ||
       sShowingOnScreenKeyboard ||
       IMEHandler::IsKeyboardPresentOnSlate()) {
     return;
   }
 
-  // Tablet Mode is only supported on Windows 10 and higher.
-  // When touch-event detection within IME is better supported
-  // this check may be removed, and ShowOnScreenKeyboard can
-  // run on Windows 8 and higher (adjusting the IsWin10OrLater
-  // guard above and within MaybeDismissOnScreenKeyboard).
-  if (!IsInTabletMode() &&
-      Preferences::GetBool(kOskRequireTabletMode, true) &&
-      !AutoInvokeOnScreenKeyboardInDesktopMode()) {
+  // On Windows 10 we require tablet mode, unless the user has set the relevant
+  // Windows setting to enable the on-screen keyboard in desktop mode.
+  // We might be disabled specifically on Win8(.1), so we check that afterwards.
+  if (IsWin10OrLater()) {
+    if (!IsInTabletMode() && !AutoInvokeOnScreenKeyboardInDesktopMode()) {
+      return;
+    }
+  }
+  else if (Preferences::GetBool(kOskRequireWin10, true)) {
     return;
   }
 
- IMEHandler::ShowOnScreenKeyboard();
+  IMEHandler::ShowOnScreenKeyboard();
 }
 
 // static
@@ -555,7 +566,7 @@ void
 IMEHandler::MaybeDismissOnScreenKeyboard()
 {
   if (sPluginHasFocus ||
-      !IsWin10OrLater() ||
+      !IsWin8OrLater() ||
       !sShowingOnScreenKeyboard) {
     return;
   }
@@ -590,22 +601,26 @@ IMEHandler::IsKeyboardPresentOnSlate()
 {
   // This function is only supported for Windows 8 and up.
   if (!IsWin8OrLater()) {
+    Preferences::SetString(kOskDebugReason, L"IKPOS: Requires Win8+.");
     return true;
   }
 
   if (!Preferences::GetBool(kOskDetectPhysicalKeyboard, true)) {
-    // Detection for physical keyboard has been disabled for testing.
+    Preferences::SetString(kOskDebugReason, L"IKPOS: Detection disabled.");
     return false;
   }
 
   // This function should be only invoked for machines with touch screens.
   if ((::GetSystemMetrics(SM_DIGITIZER) & NID_INTEGRATED_TOUCH)
         != NID_INTEGRATED_TOUCH) {
+    Preferences::SetString(kOskDebugReason,
+                           L"IKPOS: Touch screen not found.");
     return true;
   }
 
   // If the device is docked, the user is treating the device as a PC.
   if (::GetSystemMetrics(SM_SYSTEMDOCKED) != 0) {
+    Preferences::SetString(kOskDebugReason, L"IKPOS: System docked.");
     return true;
   }
 
@@ -632,11 +647,16 @@ IMEHandler::IsKeyboardPresentOnSlate()
   if (get_rotation_state) {
     AR_STATE auto_rotation_state = AR_ENABLED;
     get_rotation_state(&auto_rotation_state);
-    if ((auto_rotation_state & AR_NOSENSOR) ||
-        (auto_rotation_state & AR_NOT_SUPPORTED)) {
-      // If there is no auto rotation sensor or rotation is not supported in
-      // the current configuration, then we can assume that this is a desktop
-      // or a traditional laptop.
+    // If there is no auto rotation sensor or rotation is not supported in
+    // the current configuration, then we can assume that this is a desktop
+    // or a traditional laptop.
+    if (auto_rotation_state & AR_NOSENSOR) {
+      Preferences::SetString(kOskDebugReason,
+                             L"IKPOS: Rotation sensor not found.");
+      return true;
+    } else if (auto_rotation_state & AR_NOT_SUPPORTED) {
+      Preferences::SetString(kOskDebugReason,
+                             L"IKPOS: Auto-rotation not supported.");
       return true;
     }
   }
@@ -645,16 +665,31 @@ IMEHandler::IsKeyboardPresentOnSlate()
   // checked by first checking the role of the device and then the
   // corresponding system metric (SM_CONVERTIBLESLATEMODE). If it is being
   // used as a tablet then we want the OSK to show up.
-  typedef POWER_PLATFORM_ROLE (WINAPI* PowerDeterminePlatformRole)();
-  PowerDeterminePlatformRole power_determine_platform_role =
-    reinterpret_cast<PowerDeterminePlatformRole>(::GetProcAddress(
-      ::LoadLibraryW(L"PowrProf.dll"), "PowerDeterminePlatformRole"));
-  if (power_determine_platform_role) {
-    POWER_PLATFORM_ROLE role = power_determine_platform_role();
-    if (((role == PlatformRoleMobile) || (role == PlatformRoleSlate)) &&
-         (::GetSystemMetrics(SM_CONVERTIBLESLATEMODE) == 0)) {
-      return false;
+  typedef POWER_PLATFORM_ROLE (WINAPI* PowerDeterminePlatformRoleEx)(ULONG Version);
+  if (!sDeterminedPowerPlatformRole) {
+    sDeterminedPowerPlatformRole = true;
+    PowerDeterminePlatformRoleEx power_determine_platform_role =
+      reinterpret_cast<PowerDeterminePlatformRoleEx>(::GetProcAddress(
+        ::LoadLibraryW(L"PowrProf.dll"), "PowerDeterminePlatformRoleEx"));
+    if (power_determine_platform_role) {
+      sPowerPlatformRole = power_determine_platform_role(POWER_PLATFORM_ROLE_V2);
+    } else {
+      sPowerPlatformRole = PlatformRoleUnspecified;
     }
+  }
+
+  // If this is not a mobile or slate (tablet) device, we don't need to
+  // do anything here.
+  if (sPowerPlatformRole != PlatformRoleMobile &&
+      sPowerPlatformRole != PlatformRoleSlate) {
+    Preferences::SetString(kOskDebugReason, L"IKPOS: PlatformRole is neither Mobile nor Slate.");
+    return true;
+  }
+
+  // Likewise, if the tablet/mobile isn't in "slate" mode, we should bail:
+  if (::GetSystemMetrics(SM_CONVERTIBLESLATEMODE) != 0) {
+    Preferences::SetString(kOskDebugReason, L"IKPOS: ConvertibleSlateMode is non-zero");
+    return true;
   }
 
   const GUID KEYBOARD_CLASS_GUID =
@@ -666,6 +701,7 @@ IMEHandler::IsKeyboardPresentOnSlate()
     ::SetupDiGetClassDevs(&KEYBOARD_CLASS_GUID, nullptr,
                           nullptr, DIGCF_PRESENT);
   if (device_info == INVALID_HANDLE_VALUE) {
+    Preferences::SetString(kOskDebugReason, L"IKPOS: No keyboard info.");
     return false;
   }
 
@@ -696,10 +732,14 @@ IMEHandler::IsKeyboardPresentOnSlate()
         // return true if the API's report one or more keyboards. Please note
         // that this will break for non keyboard devices which expose a
         // keyboard PDO.
+        Preferences::SetString(kOskDebugReason,
+                               L"IKPOS: Keyboard presence confirmed.");
         return true;
       }
     }
   }
+  Preferences::SetString(kOskDebugReason,
+                         L"IKPOS: Lack of keyboard confirmed.");
   return false;
 }
 
@@ -710,10 +750,17 @@ IMEHandler::IsInTabletMode()
   nsCOMPtr<nsIWindowsUIUtils>
     uiUtils(do_GetService("@mozilla.org/windows-ui-utils;1"));
   if (NS_WARN_IF(!uiUtils)) {
+    Preferences::SetString(kOskDebugReason,
+                           L"IITM: nsIWindowsUIUtils not available.");
     return false;
   }
   bool isInTabletMode = false;
   uiUtils->GetInTabletMode(&isInTabletMode);
+  if (isInTabletMode) {
+    Preferences::SetString(kOskDebugReason, L"IITM: GetInTabletMode=true.");
+  } else {
+    Preferences::SetString(kOskDebugReason, L"IITM: GetInTabletMode=false.");
+  }
   return isInTabletMode;
 }
 
@@ -725,12 +772,16 @@ IMEHandler::AutoInvokeOnScreenKeyboardInDesktopMode()
   nsCOMPtr<nsIWindowsRegKey> regKey
     (do_CreateInstance("@mozilla.org/windows-registry-key;1", &rv));
   if (NS_WARN_IF(NS_FAILED(rv))) {
+    Preferences::SetString(kOskDebugReason, L"AIOSKIDM: "
+                           L"nsIWindowsRegKey not available");
     return false;
   }
   rv = regKey->Open(nsIWindowsRegKey::ROOT_KEY_CURRENT_USER,
                     NS_LITERAL_STRING("SOFTWARE\\Microsoft\\TabletTip\\1.7"),
                     nsIWindowsRegKey::ACCESS_QUERY_VALUE);
   if (NS_FAILED(rv)) {
+    Preferences::SetString(kOskDebugReason,
+                           L"AIOSKIDM: failed opening regkey.");
     return false;
   }
   // EnableDesktopModeAutoInvoke is an opt-in option from the Windows
@@ -741,7 +792,14 @@ IMEHandler::AutoInvokeOnScreenKeyboardInDesktopMode()
   rv = regKey->ReadIntValue(NS_LITERAL_STRING("EnableDesktopModeAutoInvoke"),
                             &value);
   if (NS_FAILED(rv)) {
+    Preferences::SetString(kOskDebugReason,
+                           L"AIOSKIDM: failed reading value of regkey.");
     return false;
+  }
+  if (!!value) {
+    Preferences::SetString(kOskDebugReason, L"AIOSKIDM: regkey value=true.");
+  } else {
+    Preferences::SetString(kOskDebugReason, L"AIOSKIDM: regkey value=false.");
   }
   return !!value;
 }

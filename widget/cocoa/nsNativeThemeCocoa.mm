@@ -311,7 +311,6 @@ static BOOL IsToolbarStyleContainer(nsIFrame* aFrame)
 
   switch (aFrame->StyleDisplay()->mAppearance) {
     case NS_THEME_TOOLBAR:
-    case NS_THEME_MOZ_MAC_UNIFIED_TOOLBAR:
     case NS_THEME_STATUSBAR:
       return YES;
     default:
@@ -1113,17 +1112,17 @@ static const NSSize kCheckmarkSize = NSMakeSize(11, 11);
 static const NSSize kMenuarrowSize = nsCocoaFeatures::OnLionOrLater() ?
                                      NSMakeSize(9, 10) : NSMakeSize(8, 10);
 static const NSSize kMenuScrollArrowSize = NSMakeSize(10, 8);
-static const NSString* kCheckmarkImage = @"image.MenuOnState";
-static const NSString* kMenuarrowRightImage = @"image.MenuSubmenu";
-static const NSString* kMenuarrowLeftImage = @"image.MenuSubmenuLeft";
-static const NSString* kMenuDownScrollArrowImage = @"image.MenuScrollDown";
-static const NSString* kMenuUpScrollArrowImage = @"image.MenuScrollUp";
+static NSString* kCheckmarkImage = @"MenuOnState";
+static NSString* kMenuarrowRightImage = @"MenuSubmenu";
+static NSString* kMenuarrowLeftImage = @"MenuSubmenuLeft";
+static NSString* kMenuDownScrollArrowImage = @"MenuScrollDown";
+static NSString* kMenuUpScrollArrowImage = @"MenuScrollUp";
 static const CGFloat kMenuIconIndent = 6.0f;
 
 void
 nsNativeThemeCocoa::DrawMenuIcon(CGContextRef cgContext, const CGRect& aRect,
                                  EventStates inState, nsIFrame* aFrame,
-                                 const NSSize& aIconSize, const NSString* aImageName,
+                                 const NSSize& aIconSize, NSString* aImageName,
                                  bool aCenterHorizontally)
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
@@ -1153,10 +1152,16 @@ nsNativeThemeCocoa::DrawMenuIcon(CGContextRef cgContext, const CGRect& aRect,
   NSString* backgroundTypeKey = !otherKeysAndValues ? @"kCUIBackgroundTypeMenu" :
     !isDisabled && isActive ? @"backgroundTypeDark" : @"backgroundTypeLight";
 
+  NSString* imageName = aImageName;
+  if (!nsCocoaFeatures::OnElCapitanOrLater()) {
+    // Pre-10.11, image names are prefixed with "image."
+    imageName = [@"image." stringByAppendingString:aImageName];
+  }
+
   NSMutableArray* keys = [NSMutableArray arrayWithObjects:@"backgroundTypeKey",
     @"imageNameKey", @"state", @"widget", @"is.flipped", nil];
   NSMutableArray* values = [NSMutableArray arrayWithObjects: backgroundTypeKey,
-    aImageName, state, @"image", [NSNumber numberWithBool:YES], nil];
+    imageName, state, @"image", [NSNumber numberWithBool:YES], nil];
 
   if (otherKeysAndValues) { // Earlier versions used one more key-value pair.
     [keys insertObject:@"imageIsGrayscaleKey" atIndex:1];
@@ -2682,7 +2687,6 @@ nsNativeThemeCocoa::DrawWidgetBackground(nsRenderingContext* aContext,
     }
       break;
 
-    case NS_THEME_MOZ_MAC_UNIFIED_TOOLBAR:
     case NS_THEME_TOOLBAR: {
       NSWindow* win = NativeWindowForFrame(aFrame);
       if (ToolbarCanBeUnified(cgContext, macRect, win)) {
@@ -3595,7 +3599,6 @@ nsNativeThemeCocoa::WidgetStateChanged(nsIFrame* aFrame, uint8_t aWidgetType,
     case NS_THEME_WINDOW_TITLEBAR:
     case NS_THEME_TOOLBOX:
     case NS_THEME_TOOLBAR:
-    case NS_THEME_MOZ_MAC_UNIFIED_TOOLBAR:
     case NS_THEME_STATUSBAR:
     case NS_THEME_STATUSBAR_PANEL:
     case NS_THEME_STATUSBAR_RESIZER_PANEL:
@@ -3689,7 +3692,7 @@ nsNativeThemeCocoa::ThemeSupportsWidget(nsPresContext* aPresContext, nsIFrame* a
       if (aFrame && aFrame->GetWritingMode().IsVertical()) {
         return false;
       }
-      // fall through
+      MOZ_FALLTHROUGH;
 
     case NS_THEME_LISTBOX:
 
@@ -3722,7 +3725,6 @@ nsNativeThemeCocoa::ThemeSupportsWidget(nsPresContext* aPresContext, nsIFrame* a
     case NS_THEME_SPINNER_UP_BUTTON:
     case NS_THEME_SPINNER_DOWN_BUTTON:
     case NS_THEME_TOOLBAR:
-    case NS_THEME_MOZ_MAC_UNIFIED_TOOLBAR:
     case NS_THEME_STATUSBAR:
     case NS_THEME_NUMBER_INPUT:
     case NS_THEME_TEXTFIELD:
@@ -3952,7 +3954,6 @@ nsNativeThemeCocoa::ThemeGeometryTypeForWidget(nsIFrame* aFrame, uint8_t aWidget
     case NS_THEME_WINDOW_TITLEBAR:
       return eThemeGeometryTypeTitlebar;
     case NS_THEME_TOOLBAR:
-    case NS_THEME_MOZ_MAC_UNIFIED_TOOLBAR:
       return eThemeGeometryTypeToolbar;
     case NS_THEME_TOOLBOX:
       return eThemeGeometryTypeToolbox;
@@ -4003,7 +4004,6 @@ nsNativeThemeCocoa::GetWidgetTransparency(nsIFrame* aFrame, uint8_t aWidgetType)
     return eOpaque;
 
   case NS_THEME_TOOLBAR:
-  case NS_THEME_MOZ_MAC_UNIFIED_TOOLBAR:
     return eOpaque;
 
   default:

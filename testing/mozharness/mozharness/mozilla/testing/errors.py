@@ -60,6 +60,12 @@ TinderBoxPrintRe = {
         'fail_group': "Failed",
         'known_fail_group': None,
     },
+    "gtest_summary": {
+        'regex': re.compile(r'''(Passed|Failed): (\d+)'''),
+        'pass_group': "Passed",
+        'fail_group': "Failed",
+        'known_fail_group': None,
+    },
     "jittest_summary": {
         'regex': re.compile(r'''(Passed|Failed): (\d+)'''),
         'pass_group': "Passed",
@@ -84,6 +90,11 @@ TinderBoxPrintRe = {
         'full_regex': re.compile(r"(?:TEST-UNEXPECTED-FAIL|PROCESS-CRASH) \| .* \| (application crashed|missing output line for total leaks!|negative leaks caught!|\d+ bytes leaked)"),
         'minimum_regex': re.compile(r'''(TEST-UNEXPECTED|PROCESS-CRASH)'''),
         'retry_regex': re.compile(r'''FAIL-SHOULD-RETRY''')
+    },
+    "valgrind_error": {
+        'substr': 'TEST-VALGRIND-ERROR',
+        'level': ERROR,
+        'explanation': 'Valgrind detected memory errors during the run'
     },
 }
 

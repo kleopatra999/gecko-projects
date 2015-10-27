@@ -131,7 +131,6 @@ class PackedScopeCoordinate
     F(CONTINUE) \
     F(VAR) \
     F(CONST) \
-    F(GLOBALCONST) \
     F(WITH) \
     F(RETURN) \
     F(NEW) \
@@ -176,6 +175,7 @@ class PackedScopeCoordinate
     F(CLASSNAMES) \
     F(NEWTARGET) \
     F(POSHOLDER) \
+    F(SUPERCALL) \
     \
     /* Unary operators. */ \
     F(TYPEOFNAME) \
@@ -356,8 +356,7 @@ IsDeleteKind(ParseNodeKind kind)
  *                                     pn_left: PNK_NAME with pn_used true and
  *                                              pn_lexdef (NOT pn_expr) set
  *                                     pn_right: initializer
- * PNK_RETURN   binary      pn_left: return expr or null
- *                          pn_right: .genrval name or null
+ * PNK_RETURN   unary       pn_kid: return expr or null
  * PNK_SEMI     unary       pn_kid: expr or null statement
  *                          pn_prologue: true if Directive Prologue member
  *                              in original source, not introduced via
@@ -1571,8 +1570,7 @@ struct Definition : public ParseNode
     enum Kind {
         MISSING = 0,
         VAR,
-        GLOBALCONST,
-        CONST,
+        CONSTANT,
         LET,
         ARG,
         NAMED_LAMBDA,
@@ -1600,9 +1598,7 @@ struct Definition : public ParseNode
         if (isImport())
             return IMPORT;
         if (isLexical())
-            return isConst() ? CONST : LET;
-        if (isConst())
-            return GLOBALCONST;
+            return isConst() ? CONSTANT : LET;
         return VAR;
     }
 };
@@ -1716,13 +1712,27 @@ enum FunctionSyntaxKind
     ClassConstructor,
     DerivedClassConstructor,
     Getter,
-    Setter
+    GetterNoExpressionClosure,
+    Setter,
+    SetterNoExpressionClosure
 };
 
 static inline bool
 IsConstructorKind(FunctionSyntaxKind kind)
 {
     return kind == ClassConstructor || kind == DerivedClassConstructor;
+}
+
+static inline bool
+IsGetterKind(FunctionSyntaxKind kind)
+{
+    return kind == Getter || kind == GetterNoExpressionClosure;
+}
+
+static inline bool
+IsSetterKind(FunctionSyntaxKind kind)
+{
+    return kind == Setter || kind == SetterNoExpressionClosure;
 }
 
 static inline ParseNode*

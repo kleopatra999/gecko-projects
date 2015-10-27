@@ -99,7 +99,7 @@ public:
 
 private:
   ~ImageLoadTask() {}
-  nsRefPtr<HTMLImageElement> mElement;
+  RefPtr<HTMLImageElement> mElement;
   nsCOMPtr<nsIDocument> mDocument;
 };
 
@@ -469,12 +469,8 @@ HTMLImageElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
   // twice, once by the image frame for the map and once by the Anchor
   // element. (bug 39723)
   WidgetMouseEvent* mouseEvent = aVisitor.mEvent->AsMouseEvent();
-  if (mouseEvent && mouseEvent->IsLeftClickEvent()) {
-    bool isMap = false;
-    GetIsMap(&isMap);
-    if (isMap) {
-      aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
-    }
+  if (mouseEvent && mouseEvent->IsLeftClickEvent() && IsMap()) {
+    aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
   }
   return nsGenericHTMLElement::PreHandleEvent(aVisitor);
 }
@@ -724,7 +720,7 @@ HTMLImageElement::Image(const GlobalObject& aGlobal,
                                         kNameSpaceID_XHTML,
                                         nsIDOMNode::ELEMENT_NODE);
 
-  nsRefPtr<HTMLImageElement> img = new HTMLImageElement(nodeInfo);
+  RefPtr<HTMLImageElement> img = new HTMLImageElement(nodeInfo);
 
   if (aWidth.WasPassed()) {
     img->SetWidth(aWidth.Value(), aError);
@@ -1199,7 +1195,7 @@ HTMLImageElement::TryCreateResponsiveSelector(nsIContent *aSourceNode,
 
 
   // Try to parse
-  nsRefPtr<ResponsiveImageSelector> sel = new ResponsiveImageSelector(aSourceNode);
+  RefPtr<ResponsiveImageSelector> sel = new ResponsiveImageSelector(aSourceNode);
   if (!sel->SetCandidatesFromSourceSet(srcset)) {
     // No possible candidates, don't need to bother parsing sizes
     return false;
@@ -1266,7 +1262,7 @@ HTMLImageElement::SelectSourceForTagWithAttrs(nsIDocument *aDocument,
   }
 
   // Using srcset or picture <source>, build a responsive selector for this tag.
-  nsRefPtr<ResponsiveImageSelector> sel =
+  RefPtr<ResponsiveImageSelector> sel =
     new ResponsiveImageSelector(aDocument);
 
   sel->SetCandidatesFromSourceSet(aSrcsetAttr);

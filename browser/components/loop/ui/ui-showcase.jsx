@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* global Frame:false uncaughtError:true fakeManyContacts:true fakeFewerContacts:true */
+/* global Frame:false uncaughtError:true */
 
 (function() {
   "use strict";
@@ -15,26 +15,18 @@
 
   // 1. Desktop components
   // 1.1 Panel
-  var AvailabilityDropdown = loop.panel.AvailabilityDropdown;
   var PanelView = loop.panel.PanelView;
   var SignInRequestView = loop.panel.SignInRequestView;
-  var ContactDetailsForm = loop.contacts.ContactDetailsForm;
-  var ContactDropdown = loop.contacts.ContactDropdown;
-  var ContactDetail = loop.contacts.ContactDetail;
-  var GettingStartedView = loop.panel.GettingStartedView;
   // 1.2. Conversation Window
-  var AcceptCallView = loop.conversationViews.AcceptCallView;
-  var DesktopPendingConversationView = loop.conversationViews.PendingConversationView;
-  var OngoingConversationView = loop.conversationViews.OngoingConversationView;
-  var DirectCallFailureView = loop.conversationViews.DirectCallFailureView;
+  var DesktopRoomEditContextView = loop.roomViews.DesktopRoomEditContextView;
   var RoomFailureView = loop.roomViews.RoomFailureView;
   var DesktopRoomConversationView = loop.roomViews.DesktopRoomConversationView;
 
   // 2. Standalone webapp
-  var HomeView = loop.webapp.HomeView;
-  var UnsupportedBrowserView  = loop.webapp.UnsupportedBrowserView;
-  var UnsupportedDeviceView   = loop.webapp.UnsupportedDeviceView;
-  var StandaloneRoomView      = loop.standaloneRoomViews.StandaloneRoomView;
+  var UnsupportedBrowserView = loop.webapp.UnsupportedBrowserView;
+  var UnsupportedDeviceView = loop.webapp.UnsupportedDeviceView;
+  var StandaloneRoomView = loop.standaloneRoomViews.StandaloneRoomView;
+  var StandaloneHandleUserAgentView = loop.standaloneRoomViews.StandaloneHandleUserAgentView;
 
   // 3. Shared components
   var ConversationToolbar = loop.shared.views.ConversationToolbar;
@@ -57,7 +49,7 @@
     return false;
   }
 
-  function noop(){}
+  function noop() {}
 
   // We save the visibility change listeners so that we can fake an event
   // to the panel once we've loaded all the views.
@@ -96,7 +88,7 @@
 
     sendTextChatMessage: function(actionData) {
       dispatcher.dispatch(new loop.shared.actions.ReceivedTextChatMessage({
-        contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+        contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
         message: actionData.message,
         receivedTimestamp: actionData.sentTimestamp
       }));
@@ -149,12 +141,12 @@
         // (eg MacBook Pro) where that is the default camera resolution.
         var newStoreState = {
           localVideoDimensions: {
-            camera: {height: 480, orientation: 0, width: 640}
+            camera: { height: 480, orientation: 0, width: 640 }
           },
           mediaConnected: options.mediaConnected,
           receivingScreenShare: !!options.receivingScreenShare,
           remoteVideoDimensions: {
-            camera: {height: 480, orientation: 0, width: 640}
+            camera: { height: 480, orientation: 0, width: 640 }
           },
           remoteVideoEnabled: options.remoteVideoEnabled,
           // Override the matchMedia, this is so that the correct version is
@@ -180,7 +172,7 @@
           // For showcase purposes, this shouldn't matter much, as the sizes
           // of things being shared will be fairly arbitrary.
           newStoreState.remoteVideoDimensions.screen =
-          {height: 456, orientation: 0, width: 641};
+          { height: 456, orientation: 0, width: 641 };
         }
 
         store.setStoreState(newStoreState);
@@ -205,7 +197,7 @@
   var loadingRemoteVideoRoomStore = makeActiveRoomStore({
     mediaConnected: false,
     roomState: ROOM_STATES.HAS_PARTICIPANTS,
-    remoteSrcVideoObject: false
+    remoteSrcMediaElement: false
   });
 
   var readyRoomStore = makeActiveRoomStore({
@@ -246,7 +238,7 @@
     mediaConnected: false,
     receivingScreenShare: true,
     roomState: ROOM_STATES.HAS_PARTICIPANTS,
-    remoteSrcVideoObject: false
+    remoteSrcMediaElement: false
   });
   var loadingScreenSharingRoomStore = makeActiveRoomStore({
     receivingScreenShare: true,
@@ -256,11 +248,11 @@
   /* Set up the stores for pending screen sharing */
   loadingScreenSharingRoomStore.receivingScreenShare({
     receiving: true,
-    srcVideoObject: false
+    srcMediaElement: false
   });
   loadingRemoteLoadingScreenStore.receivingScreenShare({
     receiving: true,
-    srcVideoObject: false
+    srcMediaElement: false
   });
 
   var fullActiveRoomStore = makeActiveRoomStore({
@@ -295,7 +287,7 @@
     activeRoomStore: makeActiveRoomStore({
       roomState: ROOM_STATES.HAS_PARTICIPANTS,
       mediaConnected: false,
-      remoteSrcVideoObject: false
+      remoteSrcMediaElement: false
     })
   });
 
@@ -336,118 +328,60 @@
     sdkDriver: mockSDK
   });
 
-  /**
-   * Every view that uses an conversationStore needs its own; if they shared
-   * a conversation store, they'd interfere with each other.
-   *
-   * @param options
-   * @returns {loop.store.ConversationStore}
-   */
-  function makeConversationStore() {
-    var roomDispatcher = new loop.Dispatcher();
-
-    var store = new loop.store.ConversationStore(dispatcher, {
-      client: {},
-      mozLoop: navigator.mozLoop,
-      sdkDriver: mockSDK
-    });
-
-    store.forcedUpdate = function forcedUpdate(contentWindow) {
-      // Since this is called by setTimeout, we don't want to lose any
-      // exceptions if there's a problem and we need to debug, so...
-      try {
-        var newStoreState = {
-          // Override the matchMedia, this is so that the correct version is
-          // used for the frame.
-          //
-          // Currently, we use an icky hack, and the showcase conspires with
-          // react-frame-component to set iframe.contentWindow.matchMedia onto
-          // the store. Once React context matures a bit (somewhere between
-          // 0.14 and 1.0, apparently):
-          //
-          // https://facebook.github.io/react/blog/2015/02/24/streamlining-react-elements.html#solution-make-context-parent-based-instead-of-owner-based
-          //
-          // we should be able to use those to clean this up.
-          matchMedia: contentWindow.matchMedia.bind(contentWindow)
-        };
-
-        store.setStoreState(newStoreState);
-      } catch (ex) {
-        console.error("exception in forcedUpdate:", ex);
-      }
-    };
-
-    return store;
-  }
-
-  var conversationStores = [];
-  for (var index = 0; index < 5; index++) {
-    conversationStores[index] = makeConversationStore();
-  }
-
-  conversationStores[0].setStoreState({
-    callStateReason: FAILURE_DETAILS.NO_MEDIA
-  });
-  conversationStores[1].setStoreState({
-    callStateReason: FAILURE_DETAILS.USER_UNAVAILABLE,
-    contact: fakeManyContacts[0]
-  });
-
   // Update the text chat store with the room info.
   textChatStore.updateRoomInfo(new sharedActions.UpdateRoomInfo({
     roomName: "A Very Long Conversation Name",
     roomUrl: "http://showcase",
-    urls: [{
+    roomContextUrls: [{
       description: "A wonderful page!",
       location: "http://wonderful.invalid"
       // use the fallback thumbnail
     }]
   }));
 
-  textChatStore.setStoreState({textChatEnabled: true});
+  textChatStore.setStoreState({ textChatEnabled: true });
 
   dispatcher.dispatch(new sharedActions.SendTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "Rheet!",
     sentTimestamp: "2015-06-23T22:21:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.ReceivedTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "Hello",
     receivedTimestamp: "2015-06-23T23:24:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.SendTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "Nowforareallylongwordwithoutspacesorpunctuationwhichshouldcause" +
     "linewrappingissuesifthecssiswrong",
     sentTimestamp: "2015-06-23T22:23:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.SendTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "Check out this menu from DNA Pizza:" +
     " http://example.com/DNA/pizza/menu/lots-of-different-kinds-of-pizza/" +
     "%8D%E0%B8%88%E0%B8%A1%E0%B8%A3%E0%8D%E0%B8%88%E0%B8%A1%E0%B8%A3%E0%",
     sentTimestamp: "2015-06-23T22:23:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.ReceivedTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "That avocado monkey-brains pie sounds tasty!",
     receivedTimestamp: "2015-06-23T22:25:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.SendTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "What time should we meet?",
     sentTimestamp: "2015-06-23T22:27:45.590Z"
   }));
   dispatcher.dispatch(new sharedActions.ReceivedTextChatMessage({
-    contentType: loop.store.CHAT_CONTENT_TYPES.TEXT,
+    contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
     message: "8:00 PM",
     receivedTimestamp: "2015-06-23T22:27:45.590Z"
   }));
 
   loop.store.StoreMixin.register({
     activeRoomStore: activeRoomStore,
-    conversationStore: conversationStores[0],
     textChatStore: textChatStore
   });
 
@@ -458,10 +392,21 @@
   };
 
   var mockMozLoopNoRoomsNoContext = _.cloneDeep(navigator.mozLoop);
-  mockMozLoopNoRoomsNoContext.getSelectedTabMetadata = function(){};
+  mockMozLoopNoRoomsNoContext.getSelectedTabMetadata = function() {};
   mockMozLoopNoRoomsNoContext.rooms.getAll = function(version, callback) {
     callback(null, []);
   };
+
+  var roomStoreOpenedRoom = new loop.store.RoomStore(dispatcher, {
+    mozLoop: navigator.mozLoop,
+    activeRoomStore: makeActiveRoomStore({
+      roomState: ROOM_STATES.HAS_PARTICIPANTS
+    })
+  });
+
+  roomStoreOpenedRoom.setStoreState({
+    openedRoom: "3jKS_Els9IU"
+  });
 
   var roomStoreNoRooms = new loop.store.RoomStore(new loop.Dispatcher(), {
     mozLoop: mockMozLoopNoRooms,
@@ -491,7 +436,7 @@
   };
 
   var mockMozLoopLoggedInNoContext = _.cloneDeep(navigator.mozLoop);
-  mockMozLoopLoggedInNoContext.getSelectedTabMetadata = function(){};
+  mockMozLoopLoggedInNoContext.getSelectedTabMetadata = function() {};
   mockMozLoopLoggedInNoContext.userProfile = _.cloneDeep(mockMozLoopLoggedIn.userProfile);
 
   var mockMozLoopLoggedInLongEmail = _.cloneDeep(navigator.mozLoop);
@@ -502,27 +447,6 @@
 
   var mockMozLoopRooms = _.extend({}, navigator.mozLoop);
 
-  var mozLoopNoContacts = _.cloneDeep(navigator.mozLoop);
-  mozLoopNoContacts.contacts.getAll = function(callback) {
-    callback(null, []);
-  };
-  mozLoopNoContacts.userProfile = {
-    email: "reallyreallylongtext@example.com",
-    uid: "0354b278a381d3cb408bb46ffc01266"
-  };
-  mozLoopNoContacts.contacts.getAll = function(callback) {
-    callback(null, []);
-  };
-
-  var mozLoopNoContactsFilter = _.cloneDeep(navigator.mozLoop);
-  mozLoopNoContactsFilter.userProfile = {
-    email: "reallyreallylongtext@example.com",
-    uid: "0354b278a381d3cb408bb46ffc01266"
-  };
-  mozLoopNoContactsFilter.contacts.getAll = function(callback) {
-    callback(null, fakeFewerContacts); // Defined in fake-mozLoop.js.
-  };
-
   var firstTimeUseMozLoop = _.cloneDeep(navigator.mozLoop);
   firstTimeUseMozLoop.getLoopPref = function(prop) {
     if (prop === "gettingStarted.seen") {
@@ -532,22 +456,9 @@
     return true;
   };
 
-  var mockContact = {
-    name: ["Mr Smith"],
-    email: [{
-      value: "smith@invalid.com"
-    }]
-  };
-
   var mockClient = {
     requestCallUrlInfo: noop
   };
-
-  var mockWebSocket = new loop.CallConnectionWebSocket({
-    url: "fake",
-    callId: "fakeId",
-    websocketToken: "fakeToken"
-  });
 
   var notifications = new loop.shared.models.NotificationCollection();
   var errNotifications = new loop.shared.models.NotificationCollection();
@@ -597,13 +508,11 @@
         "volume-disabled", "clear", "magnifier"
       ],
       "16x16": ["add", "add-hover", "add-active", "audio", "audio-hover", "audio-active",
-        "block", "block-red", "block-hover", "block-active", "contacts", "contacts-hover",
-        "contacts-active", "copy", "checkmark", "delete", "globe", "google", "google-hover",
+        "block", "block-red", "block-hover", "block-active", "copy", "checkmark", "delete", "globe", "google", "google-hover",
         "google-active", "history", "history-hover", "history-active", "leave",
         "screen-white", "screenmute-white", "settings", "settings-hover", "settings-active",
         "share-darkgrey", "tag", "tag-hover", "tag-active", "trash", "unblock",
-        "unblock-hover", "unblock-active", "video", "video-hover", "video-active", "tour",
-        "status-available", "status-unavailable"
+        "unblock-hover", "unblock-active", "video", "video-hover", "video-active"
       ]
     },
 
@@ -655,7 +564,7 @@
             <a href={this.makeId("#")}>&nbsp;¶</a>
           </h3>
           <div className="comp">
-            <Frame className={cx({dashed: this.props.dashed})}
+            <Frame className={cx({ dashed: this.props.dashed })}
                    cssClass={this.props.cssClass}
                    height={height}
                    onContentsRendered={this.props.onContentsRendered}
@@ -764,8 +673,7 @@
                   dispatcher={dispatcher}
                   mozLoop={firstTimeUseMozLoop}
                   notifications={notifications}
-                  roomStore={roomStore}
-                  selectedTab="rooms" />
+                  roomStore={roomStore} />
               </div>
             </FramedExample>
 
@@ -782,134 +690,59 @@
             <FramedExample cssClass="fx-embedded-panel"
                            dashed={true}
                            height={410}
-                           summary="Room list tab"
+                           summary="Room list"
                            width={330}>
               <div className="panel">
                 <PanelView client={mockClient}
                            dispatcher={dispatcher}
                            mozLoop={mockMozLoopLoggedIn}
                            notifications={notifications}
-                           roomStore={roomStore}
-                           selectedTab="rooms" />
+                           roomStore={roomStore} />
               </div>
             </FramedExample>
 
             <FramedExample cssClass="fx-embedded-panel"
                            dashed={true}
                            height={410}
-                           summary="Room list tab (No Context)"
+                           summary="Room list (active view)"
                            width={330}>
               <div className="panel">
                 <PanelView client={mockClient}
                            dispatcher={dispatcher}
-                           mozLoop={mockMozLoopLoggedInNoContext}
+                           mozLoop={navigator.mozLoop}
                            notifications={notifications}
-                           roomStore={roomStore}
-                           selectedTab="rooms" />
+                           roomStore={roomStoreOpenedRoom} />
               </div>
             </FramedExample>
 
             <FramedExample cssClass="fx-embedded-panel"
                            dashed={true}
                            height={410}
-                           summary="Room list tab (no rooms)"
+                           summary="Room list (no rooms)"
                            width={330}>
               <div className="panel">
                 <PanelView client={mockClient}
                            dispatcher={dispatcher}
                            mozLoop={mockMozLoopNoRooms}
                            notifications={notifications}
-                           roomStore={roomStoreNoRooms}
-                           selectedTab="rooms" />
+                           roomStore={roomStoreNoRooms} />
               </div>
             </FramedExample>
 
             <FramedExample cssClass="fx-embedded-panel"
                            dashed={true}
                            height={410}
-                           summary="Room list tab (no rooms and no context)"
+                           summary="Room list (loading view)"
                            width={330}>
               <div className="panel">
                 <PanelView client={mockClient}
                            dispatcher={dispatcher}
                            mozLoop={mockMozLoopNoRoomsNoContext}
                            notifications={notifications}
-                           roomStore={roomStoreNoRooms}
-                           selectedTab="rooms" />
+                           roomStore={roomStoreNoRoomsPending} />
               </div>
             </FramedExample>
 
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={410}
-                           summary="Room list tab (loading view)"
-                           width={330}>
-              <div className="panel">
-                <PanelView client={mockClient}
-                           dispatcher={dispatcher}
-                           mozLoop={mockMozLoopNoRoomsNoContext}
-                           notifications={notifications}
-                           roomStore={roomStoreNoRoomsPending}
-                           selectedTab="rooms" />
-              </div>
-            </FramedExample>
-
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={410}
-                           summary="Contact list tab"
-                           width={330}>
-              <div className="panel">
-                <PanelView client={mockClient}
-                           dispatcher={dispatcher}
-                           mozLoop={mockMozLoopLoggedIn}
-                           notifications={notifications}
-                           roomStore={roomStore}
-                           selectedTab="contacts" />
-              </div>
-            </FramedExample>
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={410}
-                           summary="Contact list tab (no search filter)"
-                           width={332}>
-              <div className="panel">
-                <PanelView client={mockClient}
-                           dispatcher={dispatcher}
-                           mozLoop={mozLoopNoContactsFilter}
-                           notifications={notifications}
-                           roomStore={roomStore}
-                           selectedTab="contacts" />
-              </div>
-            </FramedExample>
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={410}
-                           summary="Contact list tab long email"
-                           width={330}>
-              <div className="panel">
-                <PanelView client={mockClient}
-                           dispatcher={dispatcher}
-                           mozLoop={mockMozLoopLoggedInLongEmail}
-                           notifications={notifications}
-                           roomStore={roomStore}
-                           selectedTab="contacts" />
-              </div>
-            </FramedExample>
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={410}
-                           summary="Contact list tab (no contacts)"
-                           width={330}>
-              <div className="panel">
-                <PanelView client={mockClient}
-                           dispatcher={dispatcher}
-                           mozLoop={mozLoopNoContacts}
-                           notifications={notifications}
-                           roomStore={roomStore}
-                           selectedTab="contacts" />
-              </div>
-            </FramedExample>
             <FramedExample cssClass="fx-embedded-panel"
                            dashed={true}
                            height={410}
@@ -936,168 +769,6 @@
                            roomStore={roomStore} />
               </div>
             </FramedExample>
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={410}
-                           summary="Contact import success"
-                           width={330}>
-              <div className="panel">
-                <PanelView dispatcher={dispatcher}
-                           mozLoop={mockMozLoopLoggedIn}
-                           notifications={new loop.shared.models.NotificationCollection([{level: "success", message: "Import success"}])}
-                           roomStore={roomStore}
-                           selectedTab="contacts" />
-              </div>
-            </FramedExample>
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={410}
-                           summary="Contact import error"
-                           width={330}>
-              <div className="panel">
-                <PanelView dispatcher={dispatcher}
-                           mozLoop={mockMozLoopLoggedIn}
-                           notifications={new loop.shared.models.NotificationCollection([{level: "error", message: "Import error"}])}
-                           roomStore={roomStore}
-                           selectedTab="contacts" />
-              </div>
-            </FramedExample>
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={410}
-                           summary="Contact Form - Add"
-                           width={330}>
-              <div className="panel">
-                <PanelView client={mockClient}
-                           dispatcher={dispatcher}
-                           initialSelectedTabComponent="contactAdd"
-                           mozLoop={mockMozLoopLoggedIn}
-                           notifications={notifications}
-                           roomStore={roomStore}
-                           selectedTab="contacts"
-                           userProfile={{email: "test@example.com"}} />
-              </div>
-            </FramedExample>
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={410}
-                           summary="Contact Form - Edit"
-                           width={330}>
-              <div className="panel">
-                <PanelView client={mockClient}
-                           dispatcher={dispatcher}
-                           initialSelectedTabComponent="contactEdit"
-                           mozLoop={mockMozLoopLoggedIn}
-                           notifications={notifications}
-                           roomStore={roomStore}
-                           selectedTab="contacts"
-                           userProfile={{email: "test@example.com"}} />
-              </div>
-            </FramedExample>
-          </Section>
-
-          <Section name="Availability Dropdown">
-            <p className="note">
-              <strong>Note:</strong> 332px wide.
-            </p>
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={200}
-                           summary="AvailabilityDropdown"
-                           width={332}>
-              <div className="panel">
-                <AvailabilityDropdown />
-              </div>
-            </FramedExample>
-
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={200}
-                           summary="AvailabilityDropdown Expanded"
-                           width={332}>
-              <div className="panel force-menu-show" style={{"height": "100%", "paddingTop": "50px"}}>
-                <AvailabilityDropdown />
-              </div>
-            </FramedExample>
-          </Section>
-
-          <Section name="ContactDetail">
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={50}
-                           summary="ContactDetail"
-                           width={334}>
-              <div className="panel force-menu-show">
-                <ContactDetail contact={fakeManyContacts[0]}
-                               handleContactAction={function() {}} />
-              </div>
-            </FramedExample>
-          </Section>
-
-          <Section name="ContactDropdown">
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={272}
-                           summary="ContactDropdown not blocked can edit"
-                           width={300}>
-             <div className="panel">
-               <ContactDropdown blocked={false}
-                                canEdit={true}
-                                handleAction={function () {}} />
-             </div>
-            </FramedExample>
-            <FramedExample cssClass="fx-embedded-panel"
-                           dashed={true}
-                           height={272}
-                           summary="ContactDropdown blocked can't edit"
-                           width={300}>
-             <div className="panel">
-               <ContactDropdown blocked={true}
-                 canEdit={false}
-                 handleAction={function () {}} />
-             </div>
-            </FramedExample>
-          </Section>
-
-          <Section name="AcceptCallView">
-            <FramedExample dashed={true}
-                           height={272}
-                           summary="Default / incoming video call"
-                           width={332}>
-              <div className="fx-embedded">
-                <AcceptCallView callType={CALL_TYPES.AUDIO_VIDEO}
-                                callerId="Mr Smith"
-                                dispatcher={dispatcher}
-                                mozLoop={mockMozLoopLoggedIn} />
-              </div>
-            </FramedExample>
-
-            <FramedExample dashed={true}
-                           height={272}
-                           summary="Default / incoming audio only call"
-                           width={332}>
-              <div className="fx-embedded">
-                <AcceptCallView callType={CALL_TYPES.AUDIO_ONLY}
-                                callerId="Mr Smith"
-                                dispatcher={dispatcher}
-                                mozLoop={mockMozLoopLoggedIn} />
-              </div>
-            </FramedExample>
-          </Section>
-
-          <Section name="AcceptCallView-ActiveState">
-            <FramedExample dashed={true}
-                           height={272}
-                           summary="Default"
-                           width={332}>
-              <div className="fx-embedded">
-                <AcceptCallView callType={CALL_TYPES.AUDIO_VIDEO}
-                                callerId="Mr Smith"
-                                dispatcher={dispatcher}
-                                mozLoop={mockMozLoopLoggedIn}
-                                showMenu={true} />
-              </div>
-            </FramedExample>
           </Section>
 
           <Section name="ConversationToolbar">
@@ -1113,6 +784,7 @@
                                        publishStream={noop}
                                        screenShare={{ state: SCREEN_SHARE_STATES.INACTIVE, visible: true }}
                                        settingsMenuItems={[{ id: "feedback" }]}
+                                       show={true}
                                        video={{ enabled: true, visible: true }} />
                 </div>
               </FramedExample>
@@ -1127,6 +799,7 @@
                                        publishStream={noop}
                                        screenShare={{ state: SCREEN_SHARE_STATES.PENDING, visible: true }}
                                        settingsMenuItems={[{ id: "feedback" }]}
+                                       show={true}
                                        video={{ enabled: false, visible: true }} />
                 </div>
               </FramedExample>
@@ -1141,167 +814,20 @@
                                        publishStream={noop}
                                        screenShare={{ state: SCREEN_SHARE_STATES.ACTIVE, visible: true }}
                                        settingsMenuItems={[{ id: "feedback" }]}
+                                       show={true}
                                        video={{ enabled: true, visible: true }} />
                 </div>
               </FramedExample>
             </div>
           </Section>
 
-          <Section name="PendingConversationView (Desktop)">
-            <FramedExample dashed={true}
-                           height={272}
-                           summary="Connecting"
-                           width={300}>
-              <div className="fx-embedded">
-                <DesktopPendingConversationView callState={"gather"}
-                                                contact={mockContact}
-                                                dispatcher={dispatcher} />
-              </div>
-            </FramedExample>
-          </Section>
-
-          <Section name="DirectCallFailureView">
-            <FramedExample
-              dashed={true}
-              height={254}
-              summary="Call Failed - Incoming"
-              width={298}>
-              <div className="fx-embedded">
-                <DirectCallFailureView
-                  conversationStore={conversationStores[0]}
-                  dispatcher={dispatcher}
-                  mozLoop={navigator.mozLoop}
-                  outgoing={false} />
-              </div>
-            </FramedExample>
-            <FramedExample
-              dashed={true}
-              height={254}
-              summary="Call Failed - Outgoing"
-              width={298}>
-              <div className="fx-embedded">
-                <DirectCallFailureView
-                  conversationStore={conversationStores[1]}
-                  dispatcher={dispatcher}
-                  mozLoop={navigator.mozLoop}
-                  outgoing={true} />
-              </div>
-            </FramedExample>
-            <FramedExample
-              dashed={true}
-              height={254}
-              summary="Call Failed — with call URL error"
-              width={298}>
-              <div className="fx-embedded">
-                <DirectCallFailureView
-                  conversationStore={conversationStores[0]}
-                  dispatcher={dispatcher}
-                  emailLinkError={true}
-                  mozLoop={navigator.mozLoop}
-                  outgoing={true} />
-              </div>
-            </FramedExample>
-          </Section>
-
-          <Section name="OngoingConversationView">
-            <FramedExample dashed={true}
-                           height={394}
-                           onContentsRendered={conversationStores[0].forcedUpdate}
-                           summary="Desktop ongoing conversation window"
-                           width={298}>
-              <div className="fx-embedded">
-                <OngoingConversationView
-                  audio={{ enabled: true, visible: true }}
-                  conversationStore={conversationStores[0]}
-                  dispatcher={dispatcher}
-                  localPosterUrl="sample-img/video-screen-local.png"
-                  mediaConnected={true}
-                  remotePosterUrl="sample-img/video-screen-remote.png"
-                  remoteVideoEnabled={true}
-                  video={{ enabled: true, visible: true }} />
-              </div>
-            </FramedExample>
-
-            <FramedExample dashed={true}
-                           height={400}
-                           onContentsRendered={conversationStores[1].forcedUpdate}
-                           summary="Desktop ongoing conversation window (medium)"
-                           width={600}>
-              <div className="fx-embedded">
-                <OngoingConversationView
-                  audio={{ enabled: true, visible: true }}
-                  conversationStore={conversationStores[1]}
-                  dispatcher={dispatcher}
-                  localPosterUrl="sample-img/video-screen-local.png"
-                  mediaConnected={true}
-                  remotePosterUrl="sample-img/video-screen-remote.png"
-                  remoteVideoEnabled={true}
-                  video={{ enabled: true, visible: true }} />
-              </div>
-            </FramedExample>
-
-            <FramedExample height={600}
-                           onContentsRendered={conversationStores[2].forcedUpdate}
-                           summary="Desktop ongoing conversation window (large)"
-                           width={800}>
-              <div className="fx-embedded">
-                <OngoingConversationView
-                  audio={{ enabled: true, visible: true }}
-                  conversationStore={conversationStores[2]}
-                  dispatcher={dispatcher}
-                  localPosterUrl="sample-img/video-screen-local.png"
-                  mediaConnected={true}
-                  remotePosterUrl="sample-img/video-screen-remote.png"
-                  remoteVideoEnabled={true}
-                  video={{ enabled: true, visible: true }} />
-              </div>
-            </FramedExample>
-
-            <FramedExample dashed={true}
-                           height={394}
-                           onContentsRendered={conversationStores[3].forcedUpdate}
-                           summary="Desktop ongoing conversation window - local face mute"
-                           width={298}>
-              <div className="fx-embedded">
-                <OngoingConversationView
-                  audio={{ enabled: true, visible: true }}
-                  conversationStore={conversationStores[3]}
-                  dispatcher={dispatcher}
-                  localPosterUrl="sample-img/video-screen-local.png"
-                  mediaConnected={true}
-                  remotePosterUrl="sample-img/video-screen-remote.png"
-                  remoteVideoEnabled={true}
-                  video={{ enabled: true, visible: true }} />
-              </div>
-            </FramedExample>
-
-            <FramedExample dashed={true}
-                           height={394}
-                           onContentsRendered={conversationStores[4].forcedUpdate}
-                           summary="Desktop ongoing conversation window - remote face mute"
-                           width={298} >
-              <div className="fx-embedded">
-                <OngoingConversationView
-                  audio={{ enabled: true, visible: true }}
-                  conversationStore={conversationStores[4]}
-                  dispatcher={dispatcher}
-                  localPosterUrl="sample-img/video-screen-local.png"
-                  mediaConnected={true}
-                  remotePosterUrl="sample-img/video-screen-remote.png"
-                  remoteVideoEnabled={false}
-                  video={{ enabled: true, visible: true }} />
-              </div>
-            </FramedExample>
-
-          </Section>
-
           <Section name="FeedbackView">
             <p className="note">
             </p>
             <FramedExample dashed={true}
-                           height={272}
+                           height={288}
                            summary="Default (useable demo)"
-                           width={300}>
+                           width={348}>
               <div className="fx-embedded">
                 <FeedbackView mozLoop={{}}
                               onAfterFeedbackReceived={function() {}} />
@@ -1311,9 +837,9 @@
 
           <Section name="AlertMessages">
             <FramedExample dashed={true}
-                           height={272}
+                           height={288}
                            summary="Various alerts"
-                           width={300}>
+                           width={348}>
               <div>
                 <div className="alert alert-warning">
                   <button className="close"></button>
@@ -1333,7 +859,8 @@
           </Section>
 
           <Section name="UnsupportedBrowserView">
-            <FramedExample dashed={true}
+            <FramedExample cssClass="standalone"
+                           dashed={true}
                            height={430}
                            summary="Standalone Unsupported Browser"
                            width={480}>
@@ -1344,7 +871,8 @@
           </Section>
 
           <Section name="UnsupportedDeviceView">
-            <FramedExample dashed={true}
+            <FramedExample cssClass="standalone"
+                           dashed={true}
                            height={430}
                            summary="Standalone Unsupported Device"
                            width={480}>
@@ -1357,9 +885,9 @@
           <Section name="RoomFailureView">
             <FramedExample
               dashed={true}
-              height={254}
-              summary=""
-              width={298}>
+              height={288}
+              summary="Desktop Room Failure View"
+              width={348}>
               <div className="fx-embedded">
                 <RoomFailureView
                   dispatcher={dispatcher}
@@ -1370,34 +898,53 @@
           </Section>
 
           <Section name="DesktopRoomConversationView">
-            <FramedExample height={398}
+            <FramedExample height={448}
                            onContentsRendered={invitationRoomStore.activeRoomStore.forcedUpdate}
                            summary="Desktop room conversation (invitation, text-chat inclusion/scrollbars don't happen in real client)"
-                           width={298}>
+                           width={348}>
               <div className="fx-embedded">
                 <DesktopRoomConversationView
+                  chatWindowDetached={false}
                   dispatcher={dispatcher}
                   localPosterUrl="sample-img/video-screen-local.png"
                   mozLoop={navigator.mozLoop}
-                  onCallTerminated={function(){}}
+                  onCallTerminated={function() {}}
                   roomState={ROOM_STATES.INIT}
                   roomStore={invitationRoomStore} />
               </div>
             </FramedExample>
 
+            <FramedExample height={288}
+                           onContentsRendered={invitationRoomStore.activeRoomStore.forcedUpdate}
+                           summary="Desktop room Edit Context w/Error"
+                           width={348}>
+              <div className="fx-embedded room-invitation-overlay">
+                <DesktopRoomEditContextView
+                  dispatcher={dispatcher}
+                  error={{}}
+                  mozLoop={navigator.mozLoop}
+                  onClose={function() {}}
+                  roomData={{}}
+                  savingContext={false}
+                  show={true}
+                  />
+              </div>
+            </FramedExample>
+
             <FramedExample dashed={true}
-                           height={394}
+                           height={448}
                            onContentsRendered={desktopRoomStoreLoading.activeRoomStore.forcedUpdate}
                            summary="Desktop room conversation (loading)"
-                           width={298}>
+                           width={348}>
               {/* Hide scrollbars here. Rotating loading div overflows and causes
                scrollbars to appear */}
               <div className="fx-embedded overflow-hidden">
                 <DesktopRoomConversationView
+                  chatWindowDetached={false}
                   dispatcher={dispatcher}
                   localPosterUrl="sample-img/video-screen-local.png"
                   mozLoop={navigator.mozLoop}
-                  onCallTerminated={function(){}}
+                  onCallTerminated={function() {}}
                   remotePosterUrl="sample-img/video-screen-remote.png"
                   roomState={ROOM_STATES.HAS_PARTICIPANTS}
                   roomStore={desktopRoomStoreLoading} />
@@ -1405,16 +952,17 @@
             </FramedExample>
 
             <FramedExample dashed={true}
-                           height={394}
+                           height={448}
                            onContentsRendered={roomStore.activeRoomStore.forcedUpdate}
                            summary="Desktop room conversation"
-                           width={298}>
+                           width={348}>
               <div className="fx-embedded">
                 <DesktopRoomConversationView
+                  chatWindowDetached={false}
                   dispatcher={dispatcher}
                   localPosterUrl="sample-img/video-screen-local.png"
                   mozLoop={navigator.mozLoop}
-                  onCallTerminated={function(){}}
+                  onCallTerminated={function() {}}
                   remotePosterUrl="sample-img/video-screen-remote.png"
                   roomState={ROOM_STATES.HAS_PARTICIPANTS}
                   roomStore={roomStore} />
@@ -1428,10 +976,11 @@
                            width={602}>
               <div className="fx-embedded">
                 <DesktopRoomConversationView
+                  chatWindowDetached={false}
                   dispatcher={dispatcher}
                   localPosterUrl="sample-img/video-screen-local.png"
                   mozLoop={navigator.mozLoop}
-                  onCallTerminated={function(){}}
+                  onCallTerminated={function() {}}
                   remotePosterUrl="sample-img/video-screen-remote.png"
                   roomState={ROOM_STATES.HAS_PARTICIPANTS}
                   roomStore={desktopRoomStoreMedium} />
@@ -1445,10 +994,11 @@
                            width={646}>
               <div className="fx-embedded">
                 <DesktopRoomConversationView
+                  chatWindowDetached={false}
                   dispatcher={dispatcher}
                   localPosterUrl="sample-img/video-screen-local.png"
                   mozLoop={navigator.mozLoop}
-                  onCallTerminated={function(){}}
+                  onCallTerminated={function() {}}
                   remotePosterUrl="sample-img/video-screen-remote.png"
                   roomState={ROOM_STATES.HAS_PARTICIPANTS}
                   roomStore={desktopRoomStoreLarge} />
@@ -1456,33 +1006,50 @@
             </FramedExample>
 
             <FramedExample dashed={true}
-                           height={394}
+                           height={448}
                            onContentsRendered={desktopLocalFaceMuteRoomStore.activeRoomStore.forcedUpdate}
                            summary="Desktop room conversation local face-mute"
-                           width={298}>
+                           width={348}>
               <div className="fx-embedded">
                 <DesktopRoomConversationView
+                  chatWindowDetached={false}
                   dispatcher={dispatcher}
                   mozLoop={navigator.mozLoop}
-                  onCallTerminated={function(){}}
+                  onCallTerminated={function() {}}
                   remotePosterUrl="sample-img/video-screen-remote.png"
                   roomStore={desktopLocalFaceMuteRoomStore} />
               </div>
             </FramedExample>
 
             <FramedExample dashed={true}
-                           height={394}
+                           height={448}
                            onContentsRendered={desktopRemoteFaceMuteRoomStore.activeRoomStore.forcedUpdate}
                            summary="Desktop room conversation remote face-mute"
-                           width={298} >
+                           width={348} >
               <div className="fx-embedded">
                 <DesktopRoomConversationView
+                  chatWindowDetached={false}
                   dispatcher={dispatcher}
                   localPosterUrl="sample-img/video-screen-local.png"
                   mozLoop={navigator.mozLoop}
-                  onCallTerminated={function(){}}
+                  onCallTerminated={function() {}}
                   remotePosterUrl="sample-img/video-screen-remote.png"
                   roomStore={desktopRemoteFaceMuteRoomStore} />
+              </div>
+            </FramedExample>
+          </Section>
+
+          <Section name="StandaloneHandleUserAgentView">
+            <FramedExample
+              cssClass="standalone"
+              dashed={true}
+              height={483}
+              summary="Standalone Room Handle Join in Firefox"
+              width={644} >
+              <div className="standalone">
+                <StandaloneHandleUserAgentView
+                  activeRoomStore={readyRoomStore}
+                  dispatcher={dispatcher} />
               </div>
             </FramedExample>
           </Section>
@@ -1748,12 +1315,12 @@
                            width={800}>
               <SVGIcons size="10x10"/>
             </FramedExample>
-            <FramedExample  height={350}
+            <FramedExample height={350}
                             summary="14x14"
                             width={800}>
               <SVGIcons size="14x14" />
             </FramedExample>
-            <FramedExample  height={480}
+            <FramedExample height={480}
                             summary="16x16"
                             width={800}>
               <SVGIcons size="16x16"/>
@@ -1779,9 +1346,9 @@
       React.render(<App />, document.getElementById("main"));
 
       for (var listener of visibilityListeners) {
-        listener({target: {hidden: false}});
+        listener({ target: { hidden: false } });
       }
-    } catch(err) {
+    } catch (err) {
       console.error(err);
       uncaughtError = err;
     }
@@ -1816,7 +1383,7 @@
 
         if (warningsMismatch) {
           liTestFail.className = "test";
-          liTestFail.className = liTestFail.className + " fail";
+          liTestFail.className += " fail";
           h2Node.innerHTML = "Unexpected number of warnings detected in UI-Showcase";
           preErrorNode.className = "error";
           preErrorNode.innerHTML = "Got: " + caughtWarnings.length + "\n" + "Expected: " + expectedWarningsCount;
@@ -1826,7 +1393,7 @@
         }
         if (uncaughtError) {
           liTestFail.className = "test";
-          liTestFail.className = liTestFail.className + " fail";
+          liTestFail.className += " fail";
           h2Node.innerHTML = "Errors rendering UI-Showcase";
           preErrorNode.className = "error";
           preErrorNode.innerHTML = uncaughtError + "\n" + uncaughtError.stack;

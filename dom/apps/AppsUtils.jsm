@@ -130,6 +130,11 @@ function _setAppProperties(aObj, aApp) {
   aObj.kind = aApp.kind;
   aObj.enabled = aApp.enabled !== undefined ? aApp.enabled : true;
   aObj.sideloaded = aApp.sideloaded;
+  aObj.extensionVersion = aApp.extensionVersion;
+#ifdef MOZ_B2GDROID
+  aObj.android_packagename = aApp.android_packagename;
+  aObj.android_classname = aApp.android_classname;
+#endif
 }
 
 this.AppsUtils = {
@@ -147,6 +152,10 @@ this.AppsUtils = {
        topWindow : null,
        appId: aAppId,
        isInBrowserElement: aIsBrowser,
+       originAttributes: {
+         appId: aAppId,
+         inBrowser: aIsBrowser
+       },
        usePrivateBrowsing: false,
        isContent: false,
 
@@ -287,7 +296,7 @@ this.AppsUtils = {
     for (let id in aApps) {
       let app = aApps[id];
       if (app.localId == aLocalId) {
-        // Use the app kind and the app status to choose the right default CSP.
+        // Use the app status to choose the right default CSP.
         try {
           switch (app.appStatus) {
             case Ci.nsIPrincipal.APP_STATUS_CERTIFIED:
@@ -499,7 +508,7 @@ this.AppsUtils = {
     let hadCharset = { };
     let charset = { };
     let netutil = Cc["@mozilla.org/network/util;1"].getService(Ci.nsINetUtil);
-    let contentType = netutil.parseContentType(aContentType, charset, hadCharset);
+    let contentType = netutil.parseResponseContentType(aContentType, charset, hadCharset);
     if (aInstallOrigin != aWebappOrigin &&
         !(contentType == "application/x-web-app-manifest+json" ||
           contentType == "application/manifest+json")) {
@@ -753,8 +762,8 @@ this.AppsUtils = {
     return deferred.promise;
   },
 
-  // Returns the MD5 hash of a string.
-  computeHash: function(aString) {
+  // Returns the hash of a string, with MD5 as a default hashing function.
+  computeHash: function(aString, aAlgorithm = "MD5") {
     let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
                       .createInstance(Ci.nsIScriptableUnicodeConverter);
     converter.charset = "UTF-8";
@@ -764,7 +773,7 @@ this.AppsUtils = {
 
     let hasher = Cc["@mozilla.org/security/hash;1"]
                    .createInstance(Ci.nsICryptoHash);
-    hasher.init(hasher.MD5);
+    hasher.initWithString(aAlgorithm);
     hasher.update(data, data.length);
     // We're passing false to get the binary hash and not base64.
     let hash = hasher.finish(false);

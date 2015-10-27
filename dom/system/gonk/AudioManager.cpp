@@ -48,7 +48,6 @@
 
 using namespace mozilla::dom::gonk;
 using namespace android;
-using namespace mozilla::hal;
 using namespace mozilla;
 using namespace mozilla::dom::bluetooth;
 
@@ -77,7 +76,9 @@ static const uint32_t sMaxStreamVolumeTbl[AUDIO_STREAM_CNT] = {
   15,  // enforced audible
   15,  // DTMF
   15,  // TTS
+#if ANDROID_VERSION < 19
   15,  // FM
+#endif
 };
 
 // Use a half value of each volume category as the default volume.
@@ -126,6 +127,23 @@ public:
 protected:
   nsCOMPtr<nsIRunnable> mRunnable;
 };
+
+nsCOMPtr<nsISettingsServiceLock>
+GetSettingServiceLock()
+{
+  nsresult rv;
+  nsCOMPtr<nsISettingsService> service = do_GetService(SETTINGS_SERVICE, &rv);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return nullptr;
+  }
+
+  nsCOMPtr<nsISettingsServiceLock> lock;
+  rv = service->CreateLock(nullptr, getter_AddRefs(lock));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return nullptr;
+  }
+  return lock.forget();
+}
 
 class AudioProfileData final
 {
@@ -185,11 +203,11 @@ AudioManager::HandleAudioFlingerDied()
   }
 
   if (mHeadsetState & AUDIO_DEVICE_OUT_WIRED_HEADSET) {
-    UpdateHeadsetConnectionState(SWITCH_STATE_HEADSET);
+    UpdateHeadsetConnectionState(hal::SWITCH_STATE_HEADSET);
   } else if (mHeadsetState & AUDIO_DEVICE_OUT_WIRED_HEADPHONE) {
-    UpdateHeadsetConnectionState(SWITCH_STATE_HEADPHONE);
+    UpdateHeadsetConnectionState(hal::SWITCH_STATE_HEADPHONE);
   } else {
-    UpdateHeadsetConnectionState(SWITCH_STATE_OFF);
+    UpdateHeadsetConnectionState(hal::SWITCH_STATE_OFF);
   }
 
   int32_t phoneState = nsIAudioManager::PHONE_STATE_INVALID;
@@ -214,14 +232,14 @@ public:
     mPromise = mPromiseHolder.Ensure(__func__);
   }
 
-  nsRefPtr<VolumeInitPromise> GetPromise() const
+  RefPtr<VolumeInitPromise> GetPromise() const
   {
     return mPromise;
   }
 
   NS_IMETHOD Handle(const nsAString& aName, JS::Handle<JS::Value> aResult)
   {
-    nsRefPtr<AudioManager> audioManager = AudioManager::GetInstance();
+    RefPtr<AudioManager> audioManager = AudioManager::GetInstance();
     MOZ_ASSERT(audioManager);
     for (uint32_t idx = 0; idx < VOLUME_TOTAL_NUMBER; ++idx) {
       NS_ConvertASCIItoUTF16 volumeType(gVolumeData[idx].mChannelName);
@@ -269,7 +287,7 @@ protected:
     return DEVICE_ERROR;
   }
 
-  nsRefPtr<VolumeInitPromise> mPromise;
+  RefPtr<VolumeInitPromise> mPromise;
   MozPromiseHolder<VolumeInitPromise> mPromiseHolder;
   uint32_t mInitCounter;
 };
@@ -286,7 +304,7 @@ BinderDeadCallback(status_t aErr)
   nsCOMPtr<nsIRunnable> runnable =
     NS_NewRunnableFunction([]() {
       MOZ_ASSERT(NS_IsMainThread());
-      nsRefPtr<AudioManager> audioManager = AudioManager::GetInstance();
+      RefPtr<AudioManager> audioManager = AudioManager::GetInstance();
       NS_ENSURE_TRUE(audioManager.get(), );
       audioManager->HandleAudioFlingerDied();
     });
@@ -311,15 +329,15 @@ void
 AudioManager::UpdateHeadsetConnectionState(hal::SwitchState aState)
 {
 #if ANDROID_VERSION >= 15
-  if (aState == SWITCH_STATE_HEADSET) {
+  if (aState == hal::SWITCH_STATE_HEADSET) {
     AudioSystem::setDeviceConnectionState(AUDIO_DEVICE_OUT_WIRED_HEADSET,
                                           AUDIO_POLICY_DEVICE_STATE_AVAILABLE, "");
     mHeadsetState |= AUDIO_DEVICE_OUT_WIRED_HEADSET;
-  } else if (aState == SWITCH_STATE_HEADPHONE) {
+  } else if (aState == hal::SWITCH_STATE_HEADPHONE) {
     AudioSystem::setDeviceConnectionState(AUDIO_DEVICE_OUT_WIRED_HEADPHONE,
                                           AUDIO_POLICY_DEVICE_STATE_AVAILABLE, "");
     mHeadsetState |= AUDIO_DEVICE_OUT_WIRED_HEADPHONE;
-  } else if (aState == SWITCH_STATE_OFF) {
+  } else if (aState == hal::SWITCH_STATE_OFF) {
     if (mHeadsetState & AUDIO_DEVICE_OUT_WIRED_HEADSET) {
       AudioSystem::setDeviceConnectionState(AUDIO_DEVICE_OUT_WIRED_HEADSET,
                                             AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE, "");
@@ -374,7 +392,7 @@ AudioManager::HandleBluetoothStatusChanged(nsISupports* aSubject,
     }
   } else if (!strcmp(aTopic, BLUETOOTH_A2DP_STATUS_CHANGED_ID)) {
     if (audioState == AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE && mA2dpSwitchDone) {
-      nsRefPtr<AudioManager> self = this;
+      RefPtr<AudioManager> self = this;
       nsCOMPtr<nsIRunnable> runnable =
         NS_NewRunnableFunction([self, audioState, aAddress]() {
           if (self->mA2dpSwitchDone) {
@@ -448,7 +466,7 @@ AudioManager::HandleAudioChannelProcessChanged()
     return;
   }
 
-  nsRefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
+  RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
   MOZ_ASSERT(service);
 
   bool telephonyChannelIsActive = service->TelephonyChannelIsActive();
@@ -498,6 +516,12 @@ AudioManager::Observe(nsISupports* aSubject,
     for (uint32_t idx = 0; idx < VOLUME_TOTAL_NUMBER; ++idx) {
       if (setting.mKey.EqualsASCII(gVolumeData[idx].mChannelName)) {
         SetVolumeByCategory(gVolumeData[idx].mCategory, volIndex);
+        nsCOMPtr<nsISettingsServiceLock> lock = GetSettingServiceLock();
+        UpdateVolumeSettingToDatabase(lock.get(),
+                                      AppendProfileToVolumeSetting(
+                                        gVolumeData[idx].mChannelName,
+                                        mPresentProfile).get(),
+                                      volIndex);
         return NS_OK;
       }
     }
@@ -508,15 +532,15 @@ AudioManager::Observe(nsISupports* aSubject,
 }
 
 static void
-NotifyHeadphonesStatus(SwitchState aState)
+NotifyHeadphonesStatus(hal::SwitchState aState)
 {
   nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
   if (obs) {
-    if (aState == SWITCH_STATE_HEADSET) {
+    if (aState == hal::SWITCH_STATE_HEADSET) {
       obs->NotifyObservers(nullptr, HEADPHONES_STATUS_CHANGED, HEADPHONES_STATUS_HEADSET);
-    } else if (aState == SWITCH_STATE_HEADPHONE) {
+    } else if (aState == hal::SWITCH_STATE_HEADPHONE) {
       obs->NotifyObservers(nullptr, HEADPHONES_STATUS_CHANGED, HEADPHONES_STATUS_HEADPHONE);
-    } else if (aState == SWITCH_STATE_OFF) {
+    } else if (aState == hal::SWITCH_STATE_OFF) {
       obs->NotifyObservers(nullptr, HEADPHONES_STATUS_CHANGED, HEADPHONES_STATUS_OFF);
     } else {
       obs->NotifyObservers(nullptr, HEADPHONES_STATUS_CHANGED, HEADPHONES_STATUS_UNKNOWN);
@@ -524,11 +548,11 @@ NotifyHeadphonesStatus(SwitchState aState)
   }
 }
 
-class HeadphoneSwitchObserver : public SwitchObserver
+class HeadphoneSwitchObserver : public hal::SwitchObserver
 {
 public:
   void Notify(const hal::SwitchEvent& aEvent) {
-    nsRefPtr<AudioManager> audioManager = AudioManager::GetInstance();
+    RefPtr<AudioManager> audioManager = AudioManager::GetInstance();
     MOZ_ASSERT(audioManager);
     audioManager->HandleHeadphoneSwitchEvent(aEvent);
   }
@@ -539,22 +563,22 @@ AudioManager::HandleHeadphoneSwitchEvent(const hal::SwitchEvent& aEvent)
 {
   NotifyHeadphonesStatus(aEvent.status());
   // When user pulled out the headset, a delay of routing here can avoid the leakage of audio from speaker.
-  if (aEvent.status() == SWITCH_STATE_OFF && mSwitchDone) {
+  if (aEvent.status() == hal::SWITCH_STATE_OFF && mSwitchDone) {
 
-    nsRefPtr<AudioManager> self = this;
+    RefPtr<AudioManager> self = this;
     nsCOMPtr<nsIRunnable> runnable =
       NS_NewRunnableFunction([self]() {
         if (self->mSwitchDone) {
           return;
         }
-        self->UpdateHeadsetConnectionState(SWITCH_STATE_OFF);
+        self->UpdateHeadsetConnectionState(hal::SWITCH_STATE_OFF);
         self->mSwitchDone = true;
     });
     MessageLoop::current()->PostDelayedTask(FROM_HERE, new RunnableCallTask(runnable), 1000);
 
     SwitchProfileData(DEVICE_HEADSET, false);
     mSwitchDone = false;
-  } else if (aEvent.status() != SWITCH_STATE_OFF) {
+  } else if (aEvent.status() != hal::SWITCH_STATE_OFF) {
     UpdateHeadsetConnectionState(aEvent.status());
     SwitchProfileData(DEVICE_HEADSET, true);
     mSwitchDone = true;
@@ -563,7 +587,7 @@ AudioManager::HandleHeadphoneSwitchEvent(const hal::SwitchEvent& aEvent)
 #if ANDROID_VERSION >= 17
   int32_t forceUse = 0;
   GetForceForUse(AUDIO_POLICY_FORCE_FOR_MEDIA, &forceUse);
-  if (aEvent.status() != SWITCH_STATE_OFF && mBluetoothA2dpEnabled) {
+  if (aEvent.status() != hal::SWITCH_STATE_OFF && mBluetoothA2dpEnabled) {
     SetForceForUse(AUDIO_POLICY_FORCE_FOR_MEDIA, AUDIO_POLICY_FORCE_NO_BT_A2DP);
   } else if (forceUse == AUDIO_POLICY_FORCE_NO_BT_A2DP) {
     SetForceForUse(AUDIO_POLICY_FORCE_FOR_MEDIA, AUDIO_POLICY_FORCE_NONE);
@@ -586,10 +610,10 @@ AudioManager::AudioManager()
   , mMuteCallToRIL(false)
 #endif
 {
-  RegisterSwitchObserver(SWITCH_HEADPHONES, mObserver);
+  hal::RegisterSwitchObserver(hal::SWITCH_HEADPHONES, mObserver);
 
-  UpdateHeadsetConnectionState(GetCurrentSwitchState(SWITCH_HEADPHONES));
-  NotifyHeadphonesStatus(GetCurrentSwitchState(SWITCH_HEADPHONES));
+  UpdateHeadsetConnectionState(hal::GetCurrentSwitchState(hal::SWITCH_HEADPHONES));
+  NotifyHeadphonesStatus(hal::GetCurrentSwitchState(hal::SWITCH_HEADPHONES));
 
   for (uint32_t loop = 0; loop < AUDIO_STREAM_CNT; ++loop) {
     AudioSystem::initStreamVolume(static_cast<audio_stream_type_t>(loop), 0,
@@ -640,7 +664,7 @@ AudioManager::AudioManager()
 }
 
 AudioManager::~AudioManager() {
-  UnregisterSwitchObserver(SWITCH_HEADPHONES, mObserver);
+  hal::UnregisterSwitchObserver(hal::SWITCH_HEADPHONES, mObserver);
 
   nsCOMPtr<nsIObserverService> obs = services::GetObserverService();
   NS_ENSURE_TRUE_VOID(obs);
@@ -662,9 +686,6 @@ AudioManager::~AudioManager() {
   if (NS_FAILED(obs->RemoveObserver(this,  AUDIO_CHANNEL_PROCESS_CHANGED))) {
     NS_WARNING("Failed to remove audio-channel-process-changed!");
   }
-
-  // Store the present volume setting to setting database.
-  SendVolumeChangeNotification(FindAudioProfileData(mPresentProfile));
 }
 
 static StaticRefPtr<AudioManager> sAudioManager;
@@ -683,7 +704,7 @@ AudioManager::GetInstance()
     ClearOnShutdown(&sAudioManager);
   }
 
-  nsRefPtr<AudioManager> audioMgr = sAudioManager.get();
+  RefPtr<AudioManager> audioMgr = sAudioManager.get();
   return audioMgr.forget();
 }
 
@@ -793,13 +814,17 @@ AudioManager::SetFmRadioAudioEnabled(bool aFmRadioAudioEnabled)
   AudioSystem::setDeviceConnectionState(AUDIO_DEVICE_OUT_FM,
     aFmRadioAudioEnabled ? AUDIO_POLICY_DEVICE_STATE_AVAILABLE :
     AUDIO_POLICY_DEVICE_STATE_UNAVAILABLE, "");
-  UpdateHeadsetConnectionState(GetCurrentSwitchState(SWITCH_HEADPHONES));
+  UpdateHeadsetConnectionState(hal::GetCurrentSwitchState(hal::SWITCH_HEADPHONES));
+  // AUDIO_STREAM_FM is not used on recent gonk.
+  // AUDIO_STREAM_MUSIC is used for FM radio volume control.
+#if ANDROID_VERSION < 19
   // sync volume with music after powering on fm radio
   if (aFmRadioAudioEnabled) {
     uint32_t volIndex = mCurrentStreamVolumeTbl[AUDIO_STREAM_MUSIC];
     SetStreamVolumeIndex(AUDIO_STREAM_FM, volIndex);
     mCurrentStreamVolumeTbl[AUDIO_STREAM_FM] = volIndex;
   }
+#endif
   return NS_OK;
 }
 
@@ -819,6 +844,9 @@ AudioManager::SetVolumeByCategory(uint32_t aCategory, uint32_t aIndex)
   nsresult status;
   switch (static_cast<AudioVolumeCategories>(aCategory)) {
     case VOLUME_MEDIA:
+      // AUDIO_STREAM_FM is not used on recent gonk.
+      // AUDIO_STREAM_MUSIC is used for FM radio volume control.
+#if ANDROID_VERSION < 19
       // sync FMRadio's volume with content channel.
       if (IsDeviceOn(AUDIO_DEVICE_OUT_FM)) {
         status = SetStreamVolumeIndex(AUDIO_STREAM_FM, aIndex);
@@ -826,6 +854,7 @@ AudioManager::SetVolumeByCategory(uint32_t aCategory, uint32_t aIndex)
           return status;
         }
       }
+#endif
       status = SetStreamVolumeIndex(AUDIO_STREAM_MUSIC, aIndex);
       break;
     case VOLUME_NOTIFICATION:
@@ -1005,6 +1034,7 @@ AudioManager::SetStreamVolumeIndex(int32_t aStream, uint32_t aIndex) {
               aIndex);
    return status ? NS_ERROR_FAILURE : NS_OK;
 #else
+#if ANDROID_VERSION < 19
   if (aStream == AUDIO_STREAM_FM) {
     status = AudioSystem::setStreamVolumeIndex(
                static_cast<audio_stream_type_t>(aStream),
@@ -1012,7 +1042,7 @@ AudioManager::SetStreamVolumeIndex(int32_t aStream, uint32_t aIndex) {
                AUDIO_DEVICE_OUT_FM);
     return status ? NS_ERROR_FAILURE : NS_OK;
   }
-
+#endif
   if (mPresentProfile == DEVICE_PRIMARY) {
     status = AudioSystem::setStreamVolumeIndex(
             static_cast<audio_stream_type_t>(aStream),
@@ -1091,7 +1121,6 @@ AudioManager::AppendProfileToVolumeSetting(const char* aName, AudioOutputProfile
   return topic;
 }
 
-
 void
 AudioManager::InitVolumeFromDatabase()
 {
@@ -1107,7 +1136,7 @@ AudioManager::InitVolumeFromDatabase()
     return;
   }
 
-  nsRefPtr<VolumeInitCallback> callback = new VolumeInitCallback();
+  RefPtr<VolumeInitCallback> callback = new VolumeInitCallback();
   MOZ_ASSERT(callback);
   callback->GetPromise()->Then(AbstractThread::MainThread(), __func__, this,
                                &AudioManager::InitProfileVolumeSucceeded,
@@ -1134,33 +1163,33 @@ AudioManager::InitProfileVolumeFailed(const char* aError)
 }
 
 void
+AudioManager::UpdateVolumeSettingToDatabase(nsISettingsServiceLock* aLock,
+                                            const char* aTopic,
+                                            uint32_t aVolIndex)
+{
+  MOZ_ASSERT(aLock);
+
+  mozilla::AutoSafeJSContext cx;
+  JS::Rooted<JS::Value> value(cx);
+  value.setInt32(aVolIndex);
+  aLock->Set(aTopic, value, nullptr, nullptr);
+}
+
+void
 AudioManager::SendVolumeChangeNotification(AudioProfileData* aProfileData)
 {
   MOZ_ASSERT(aProfileData);
-  nsresult rv;
-  nsCOMPtr<nsISettingsService> service = do_GetService(SETTINGS_SERVICE, &rv);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return;
-  }
 
-  nsCOMPtr<nsISettingsServiceLock> lock;
-  rv = service->CreateLock(nullptr, getter_AddRefs(lock));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return;
-  }
-
-  // Send events to update the Gaia volume
-  mozilla::AutoSafeJSContext cx;
-  JS::Rooted<JS::Value> value(cx);
+  // Change the value of the current volume setting, so that the Gaia can get
+  // correct volume values and update the volume UI. In addition, for reducing
+  // the code dependency, Gaia doesn't need to know the current profile, it
+  // only need to care about different volume categories.
+  nsCOMPtr<nsISettingsServiceLock> lock = GetSettingServiceLock();
   for (uint32_t idx = 0; idx < VOLUME_TOTAL_NUMBER; ++idx) {
-    value.setInt32(aProfileData->mVolumeTable[gVolumeData[idx].mCategory]);
-    // For reducing the code dependency, Gaia doesn't need to know the current
-    // profile, it only need to care about different volume categories.
-    // However, we need to send the setting volume to the permanent database,
-    // so that we can store the volume setting even if the phone reboots.
-    lock->Set(gVolumeData[idx].mChannelName, value, nullptr, nullptr);
-    lock->Set(AppendProfileToVolumeSetting(gVolumeData[idx].mChannelName,
-               mPresentProfile).get(), value, nullptr, nullptr);
+    uint32_t volSetting = gVolumeData[idx].mCategory;
+    UpdateVolumeSettingToDatabase(lock.get(),
+                                  gVolumeData[idx].mChannelName,
+                                  aProfileData->mVolumeTable[volSetting]);
   }
 }
 

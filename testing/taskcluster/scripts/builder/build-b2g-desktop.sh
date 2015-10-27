@@ -8,7 +8,7 @@ PATH=$DIRNAME:$PATH
 . desktop-setup.sh
 
 ### Clone gaia
-pull-gaia.sh $GECKO_DIR $GAIA_DIR
+pull-gaia.sh $GECKO_DIR $GAIA_DIR gaia_props.py
 
 # Ensure symlink has been created to gaia...
 rm -f $GECKO_DIR/gaia
@@ -41,6 +41,7 @@ for name in common cppunittest reftest mochitest xpcshell web-platform; do
 done
 mv test_packages_tc.json        $HOME/artifacts/test_packages.json
 mv *.crashreporter-symbols.zip  $HOME/artifacts/target.crashreporter-symbols.zip
+mv mozharness.zip               $HOME/artifacts/mozharness.zip
 
 # If the simulator does not exist don't fail
 mv fxos-simulator*              $HOME/artifacts/fxos-simulator.xpi || :

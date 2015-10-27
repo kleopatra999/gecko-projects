@@ -6,7 +6,7 @@
 
 this.EXPORTED_SYMBOLS = ["BrowserIDManager"];
 
-const {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
+var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import("resource://gre/modules/Log.jsm");
 Cu.import("resource://services-common/async.js");
@@ -39,7 +39,7 @@ XPCOMUtils.defineLazyGetter(this, 'log', function() {
 });
 
 // FxAccountsCommon.js doesn't use a "namespace", so create one here.
-let fxAccountsCommon = {};
+var fxAccountsCommon = {};
 Cu.import("resource://gre/modules/FxAccountsCommon.js", fxAccountsCommon);
 
 const OBSERVER_TOPICS = [
@@ -475,6 +475,7 @@ this.BrowserIDManager.prototype = {
   unlockAndVerifyAuthState: function() {
     if (this._canFetchKeys()) {
       log.debug("unlockAndVerifyAuthState already has (or can fetch) sync keys");
+      Services.telemetry.getHistogramById("WEAVE_CAN_FETCH_KEYS").add(1);
       return Promise.resolve(STATUS_OK);
     }
     // so no keys - ensure MP unlocked.
@@ -491,7 +492,16 @@ this.BrowserIDManager.prototype = {
         // If we still can't get keys it probably means the user authenticated
         // without unlocking the MP or cleared the saved logins, so we've now
         // lost them - the user will need to reauth before continuing.
-        let result = this._canFetchKeys() ? STATUS_OK : LOGIN_FAILED_LOGIN_REJECTED;
+        let result;
+        if (this._canFetchKeys()) {
+          // A ternary would be more compact, but adding 0 to a flag histogram
+          // crashes the process with a C++ assertion error. See
+          // FlagHistogram::Accumulate in ipc/chromium/src/base/histogram.cc.
+          Services.telemetry.getHistogramById("WEAVE_CAN_FETCH_KEYS").add(1);
+          result = STATUS_OK;
+        } else {
+          result = LOGIN_FAILED_LOGIN_REJECTED;
+        }
         log.debug("unlockAndVerifyAuthState re-fetched credentials and is returning", result);
         return result;
       }
@@ -622,6 +632,7 @@ this.BrowserIDManager.prototype = {
         } else if (err.code && err.code === 401) {
           err = new AuthenticationError(err);
         }
+        Services.telemetry.getHistogramById("WEAVE_FXA_KEY_FETCH_ERRORS").add();
 
         // TODO: write tests to make sure that different auth error cases are handled here
         // properly: auth error getting assertion, auth error getting token (invalid generation
@@ -681,6 +692,10 @@ this.BrowserIDManager.prototype = {
   _getAuthenticationHeader: function(httpObject, method) {
     let cb = Async.makeSpinningCallback();
     this._ensureValidToken().then(cb, cb);
+    // Note that in failure states we return null, causing the request to be
+    // made without authorization headers, thereby presumably causing a 401,
+    // which causes Sync to log out. If we throw, this may not happen as
+    // expected.
     try {
       cb.wait();
     } catch (ex if !Async.isShutdownException(ex)) {
@@ -719,8 +734,17 @@ this.BrowserIDManager.prototype = {
 
   createClusterManager: function(service) {
     return new BrowserIDClusterManager(service);
-  }
+  },
 
+  // Tell Sync what the login status should be if it saw a 401 fetching
+  // info/collections as part of login verification (typically immediately
+  // after login.)
+  // In our case, it almost certainly means a transient error fetching a token
+  // (and hitting this will cause us to logout, which will correctly handle an
+  // authoritative login issue.)
+  loginStatusFromVerification404() {
+    return LOGIN_FAILED_NETWORK_ERROR;
+  },
 };
 
 /* An implementation of the ClusterManager for this identity
@@ -766,7 +790,7 @@ BrowserIDClusterManager.prototype = {
           // it's likely a 401 was received using the existing token - in which
           // case we just discard the existing token and fetch a new one.
           if (this.service.clusterURL) {
-            log.debug("_findCluster found existing clusterURL, so discarding the current token");
+            log.debug("_findCluster has a pre-existing clusterURL, so discarding the current token");
             this.identity._token = null;
           }
           return this.identity._ensureValidToken();

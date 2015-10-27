@@ -15,8 +15,7 @@ BEGIN_BLUETOOTH_NAMESPACE
 
 using mozilla::ipc::DaemonSocketPDU;
 using mozilla::ipc::DaemonSocketPDUHeader;
-
-class BluetoothSetupResultHandler;
+using mozilla::ipc::DaemonSocketResultHandler;
 
 class BluetoothDaemonHandsfreeModule
 {
@@ -44,14 +43,8 @@ public:
     OPCODE_CONFIGURE_WBS = 0x0f
   };
 
-  virtual nsresult Send(DaemonSocketPDU* aPDU, void* aUserData) = 0;
-
-  virtual nsresult RegisterModule(uint8_t aId, uint8_t aMode,
-                                  uint32_t aMaxNumClients,
-                                  BluetoothSetupResultHandler* aRes) = 0;
-
-  virtual nsresult UnregisterModule(uint8_t aId,
-                                    BluetoothSetupResultHandler* aRes) = 0;
+  virtual nsresult Send(DaemonSocketPDU* aPDU,
+                        DaemonSocketResultHandler* aRes) = 0;
 
   void SetNotificationHandler(
     BluetoothHandsfreeNotificationHandler* aNotificationHandler);
@@ -60,26 +53,26 @@ public:
   // Commands
   //
 
-  nsresult ConnectCmd(const nsAString& aBdAddr,
+  nsresult ConnectCmd(const BluetoothAddress& aBdAddr,
                       BluetoothHandsfreeResultHandler* aRes);
-  nsresult DisconnectCmd(const nsAString& aBdAddr,
+  nsresult DisconnectCmd(const BluetoothAddress& aBdAddr,
                          BluetoothHandsfreeResultHandler* aRes);
-  nsresult ConnectAudioCmd(const nsAString& aBdAddr,
+  nsresult ConnectAudioCmd(const BluetoothAddress& aBdAddr,
                            BluetoothHandsfreeResultHandler* aRes);
-  nsresult DisconnectAudioCmd(const nsAString& aBdAddr,
+  nsresult DisconnectAudioCmd(const BluetoothAddress& aBdAddr,
                               BluetoothHandsfreeResultHandler* aRes);
 
   /* Voice Recognition */
 
-  nsresult StartVoiceRecognitionCmd(const nsAString& aBdAddr,
+  nsresult StartVoiceRecognitionCmd(const BluetoothAddress& aBdAddr,
                                     BluetoothHandsfreeResultHandler* aRes);
-  nsresult StopVoiceRecognitionCmd(const nsAString& aBdAddr,
+  nsresult StopVoiceRecognitionCmd(const BluetoothAddress& aBdAddr,
                                    BluetoothHandsfreeResultHandler* aRes);
 
   /* Volume */
 
   nsresult VolumeControlCmd(BluetoothHandsfreeVolumeType aType, int aVolume,
-                            const nsAString& aBdAddr,
+                            const BluetoothAddress& aBdAddr,
                             BluetoothHandsfreeResultHandler* aRes);
 
   /* Device status */
@@ -92,17 +85,18 @@ public:
 
   /* Responses */
 
-  nsresult CopsResponseCmd(const char* aCops, const nsAString& aBdAddr,
+  nsresult CopsResponseCmd(const char* aCops, const BluetoothAddress& aBdAddr,
                            BluetoothHandsfreeResultHandler* aRes);
   nsresult CindResponseCmd(int aSvc, int aNumActive, int aNumHeld,
                            BluetoothHandsfreeCallState aCallSetupState,
                            int aSignal, int aRoam, int aBattChg,
-                           const nsAString& aBdAddr,
+                           const BluetoothAddress& aBdAddr,
                            BluetoothHandsfreeResultHandler* aRes);
-  nsresult FormattedAtResponseCmd(const char* aRsp, const nsAString& aBdAddr,
+  nsresult FormattedAtResponseCmd(const char* aRsp,
+                                  const BluetoothAddress& aBdAddr,
                                   BluetoothHandsfreeResultHandler* aRes);
   nsresult AtResponseCmd(BluetoothHandsfreeAtResponse aResponseCode,
-                         int aErrorCode, const nsAString& aBdAddr,
+                         int aErrorCode, const BluetoothAddress& aBdAddr,
                          BluetoothHandsfreeResultHandler* aRes);
   nsresult ClccResponseCmd(int aIndex, BluetoothHandsfreeCallDirection aDir,
                            BluetoothHandsfreeCallState aState,
@@ -110,7 +104,7 @@ public:
                            BluetoothHandsfreeCallMptyType aMpty,
                            const nsAString& aNumber,
                            BluetoothHandsfreeCallAddressType aType,
-                           const nsAString& aBdAddr,
+                           const BluetoothAddress& aBdAddr,
                            BluetoothHandsfreeResultHandler* aRes);
 
   /* Phone State */
@@ -123,16 +117,14 @@ public:
 
   /* Wide Band Speech */
 
-  nsresult ConfigureWbsCmd(const nsAString& aBdAddr,
+  nsresult ConfigureWbsCmd(const BluetoothAddress& aBdAddr,
                            BluetoothHandsfreeWbsConfig aConfig,
                            BluetoothHandsfreeResultHandler* aRes);
 
 protected:
-  nsresult Send(DaemonSocketPDU* aPDU,
-                BluetoothHandsfreeResultHandler* aRes);
-
   void HandleSvc(const DaemonSocketPDUHeader& aHeader,
-                 DaemonSocketPDU& aPDU, void* aUserData);
+                 DaemonSocketPDU& aPDU,
+                 DaemonSocketResultHandler* aRes);
 
   //
   // Responses
@@ -212,7 +204,7 @@ protected:
 
   void HandleRsp(const DaemonSocketPDUHeader& aHeader,
                  DaemonSocketPDU& aPDU,
-                 void* aUserData);
+                 DaemonSocketResultHandler* aRes);
 
   //
   // Notifications
@@ -221,84 +213,100 @@ protected:
   class NotificationHandlerWrapper;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, BluetoothHandsfreeConnectionState,
-    nsString, BluetoothHandsfreeConnectionState, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothHandsfreeConnectionState, BluetoothAddress,
+    BluetoothHandsfreeConnectionState, const BluetoothAddress&>
     ConnectionStateNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, BluetoothHandsfreeAudioState,
-    nsString, BluetoothHandsfreeAudioState, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothHandsfreeAudioState, BluetoothAddress,
+    BluetoothHandsfreeAudioState, const BluetoothAddress&>
     AudioStateNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, BluetoothHandsfreeVoiceRecognitionState,
-    nsString, BluetoothHandsfreeVoiceRecognitionState, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothHandsfreeVoiceRecognitionState, BluetoothAddress,
+    BluetoothHandsfreeVoiceRecognitionState, const BluetoothAddress&>
     VoiceRecognitionNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable1<
-    NotificationHandlerWrapper, void, nsString, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothAddress, const BluetoothAddress&>
     AnswerCallNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable1<
-    NotificationHandlerWrapper, void, nsString, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothAddress, const BluetoothAddress&>
     HangupCallNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable3<
-    NotificationHandlerWrapper, void, BluetoothHandsfreeVolumeType,
-    int, nsString, BluetoothHandsfreeVolumeType, int, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothHandsfreeVolumeType, int, BluetoothAddress,
+    BluetoothHandsfreeVolumeType, int, const BluetoothAddress&>
     VolumeNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, nsString, nsString, const nsAString&,
-    const nsAString&>
+    NotificationHandlerWrapper, void,
+    nsString, BluetoothAddress,
+    const nsAString&, const BluetoothAddress&>
     DialCallNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, char, nsString, char, const nsAString&>
+    NotificationHandlerWrapper, void,
+    char, BluetoothAddress, char, const BluetoothAddress&>
     DtmfNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, BluetoothHandsfreeNRECState, nsString,
-    BluetoothHandsfreeNRECState, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothHandsfreeNRECState, BluetoothAddress,
+    BluetoothHandsfreeNRECState, const BluetoothAddress&>
     NRECNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, BluetoothHandsfreeCallHoldType,
-    nsString, BluetoothHandsfreeCallHoldType, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothHandsfreeCallHoldType, BluetoothAddress,
+    BluetoothHandsfreeCallHoldType, const BluetoothAddress&>
     CallHoldNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable1<
-    NotificationHandlerWrapper, void, nsString, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothAddress, const BluetoothAddress&>
     CnumNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable1<
-    NotificationHandlerWrapper, void, nsString, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothAddress, const BluetoothAddress&>
     CindNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable1<
-    NotificationHandlerWrapper, void, nsString, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothAddress, const BluetoothAddress&>
     CopsNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable1<
-    NotificationHandlerWrapper, void, nsString, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothAddress, const BluetoothAddress&>
     ClccNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, nsCString, nsString,
-    const nsACString&, const nsAString&>
+    NotificationHandlerWrapper, void,
+    nsCString, BluetoothAddress,
+    const nsACString&, const BluetoothAddress&>
     UnknownAtNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable1<
-    NotificationHandlerWrapper, void, nsString, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothAddress, const BluetoothAddress&>
     KeyPressedNotification;
 
   typedef mozilla::ipc::DaemonNotificationRunnable2<
-    NotificationHandlerWrapper, void, BluetoothHandsfreeWbsConfig, nsString,
-    BluetoothHandsfreeWbsConfig, const nsAString&>
+    NotificationHandlerWrapper, void,
+    BluetoothHandsfreeWbsConfig, BluetoothAddress,
+    BluetoothHandsfreeWbsConfig, const BluetoothAddress&>
     WbsNotification;
 
   class ConnectionStateInitOp;
-  class AudioStateInitOp;
   class VoiceRecognitionInitOp;
   class AnswerCallInitOp;
   class HangupCallInitOp;
@@ -314,7 +322,6 @@ protected:
   class VolumeInitOp;
   class UnknownAtInitOp;
   class KeyPressedInitOp;
-  class WbsInitOp;
 
   void ConnectionStateNtf(const DaemonSocketPDUHeader& aHeader,
                           DaemonSocketPDU& aPDU);
@@ -369,93 +376,83 @@ protected:
 
   void HandleNtf(const DaemonSocketPDUHeader& aHeader,
                  DaemonSocketPDU& aPDU,
-                 void* aUserData);
+                 DaemonSocketResultHandler* aRes);
 
   static BluetoothHandsfreeNotificationHandler* sNotificationHandler;
 #if ANDROID_VERSION < 21
   /* |sConnectedDeviceAddress| stores Bluetooth device address of the
-   * connected device. Before BlueZ 5.25, we maintain this address by ourselves
-   * through ConnectionStateNtf(); after BlueZ 5.25, every callback carries
-   * this address directly so we don't have to keep it.
+   * connected device. Before BlueZ 5.25, we maintain this address by
+   * ourselves through ConnectionStateNtf(); after BlueZ 5.25, every
+   * callback carries this address directly so we don't have to keep
+   * it.
    */
-  static nsString sConnectedDeviceAddress;
+  static BluetoothAddress sConnectedDeviceAddress;
 #endif
 };
 
 class BluetoothDaemonHandsfreeInterface final
   : public BluetoothHandsfreeInterface
 {
-  class CleanupResultHandler;
-  class InitResultHandler;
-
-  enum {
-    MODE_HEADSET = 0x00,
-    MODE_NARROWBAND_SPEECH = 0x01,
-    MODE_NARRAWBAND_WIDEBAND_SPEECH = 0x02
-  };
-
 public:
   BluetoothDaemonHandsfreeInterface(BluetoothDaemonHandsfreeModule* aModule);
   ~BluetoothDaemonHandsfreeInterface();
 
-  void Init(
-    BluetoothHandsfreeNotificationHandler* aNotificationHandler,
-    int aMaxNumClients, BluetoothHandsfreeResultHandler* aRes);
-  void Cleanup(BluetoothHandsfreeResultHandler* aRes);
+  void SetNotificationHandler(
+    BluetoothHandsfreeNotificationHandler* aNotificationHandler) override;
 
   /* Connect / Disconnect */
 
-  void Connect(const nsAString& aBdAddr,
-               BluetoothHandsfreeResultHandler* aRes);
-  void Disconnect(const nsAString& aBdAddr,
-                  BluetoothHandsfreeResultHandler* aRes);
-  void ConnectAudio(const nsAString& aBdAddr,
-                    BluetoothHandsfreeResultHandler* aRes);
-  void DisconnectAudio(const nsAString& aBdAddr,
-                       BluetoothHandsfreeResultHandler* aRes);
+  void Connect(const BluetoothAddress& aBdAddr,
+               BluetoothHandsfreeResultHandler* aRes) override;
+  void Disconnect(const BluetoothAddress& aBdAddr,
+                  BluetoothHandsfreeResultHandler* aRes) override;
+  void ConnectAudio(const BluetoothAddress& aBdAddr,
+                    BluetoothHandsfreeResultHandler* aRes) override;
+  void DisconnectAudio(const BluetoothAddress& aBdAddr,
+                       BluetoothHandsfreeResultHandler* aRes) override;
 
   /* Voice Recognition */
 
-  void StartVoiceRecognition(const nsAString& aBdAddr,
-                             BluetoothHandsfreeResultHandler* aRes);
-  void StopVoiceRecognition(const nsAString& aBdAddr,
-                            BluetoothHandsfreeResultHandler* aRes);
+  void StartVoiceRecognition(const BluetoothAddress& aBdAddr,
+                             BluetoothHandsfreeResultHandler* aRes) override;
+  void StopVoiceRecognition(const BluetoothAddress& aBdAddr,
+                            BluetoothHandsfreeResultHandler* aRes) override;
 
   /* Volume */
 
   void VolumeControl(BluetoothHandsfreeVolumeType aType, int aVolume,
-                     const nsAString& aBdAddr,
-                     BluetoothHandsfreeResultHandler* aRes);
+                     const BluetoothAddress& aBdAddr,
+                     BluetoothHandsfreeResultHandler* aRes) override;
 
   /* Device status */
 
   void DeviceStatusNotification(BluetoothHandsfreeNetworkState aNtkState,
                                 BluetoothHandsfreeServiceType aSvcType,
                                 int aSignal, int aBattChg,
-                                BluetoothHandsfreeResultHandler* aRes);
+                                BluetoothHandsfreeResultHandler* aRes) override;
 
   /* Responses */
 
-  void CopsResponse(const char* aCops, const nsAString& aBdAddr,
+  void CopsResponse(const char* aCops, const BluetoothAddress& aBdAddr,
                     BluetoothHandsfreeResultHandler* aRes);
   void CindResponse(int aSvc, int aNumActive, int aNumHeld,
                     BluetoothHandsfreeCallState aCallSetupState,
                     int aSignal, int aRoam, int aBattChg,
-                    const nsAString& aBdAddr,
-                    BluetoothHandsfreeResultHandler* aRes);
-  void FormattedAtResponse(const char* aRsp, const nsAString& aBdAddr,
-                           BluetoothHandsfreeResultHandler* aRes);
+                    const BluetoothAddress& aBdAddr,
+                    BluetoothHandsfreeResultHandler* aRes) override;
+  void FormattedAtResponse(const char* aRsp, const BluetoothAddress& aBdAddr,
+                           BluetoothHandsfreeResultHandler* aRes) override;
   void AtResponse(BluetoothHandsfreeAtResponse aResponseCode, int aErrorCode,
-                  const nsAString& aBdAddr,
-                  BluetoothHandsfreeResultHandler* aRes);
+                  const BluetoothAddress& aBdAddr,
+                  BluetoothHandsfreeResultHandler* aRes) override;
   void ClccResponse(int aIndex, BluetoothHandsfreeCallDirection aDir,
                     BluetoothHandsfreeCallState aState,
                     BluetoothHandsfreeCallMode aMode,
                     BluetoothHandsfreeCallMptyType aMpty,
                     const nsAString& aNumber,
                     BluetoothHandsfreeCallAddressType aType,
-                    const nsAString& aBdAddr,
-                    BluetoothHandsfreeResultHandler* aRes);
+                    const BluetoothAddress& aBdAddr,
+                    BluetoothHandsfreeResultHandler* aRes) override;
 
   /* Phone State */
 
@@ -463,12 +460,12 @@ public:
                         BluetoothHandsfreeCallState aCallSetupState,
                         const nsAString& aNumber,
                         BluetoothHandsfreeCallAddressType aType,
-                        BluetoothHandsfreeResultHandler* aRes);
+                        BluetoothHandsfreeResultHandler* aRes) override;
 
   /* Wide Band Speech */
-  void ConfigureWbs(const nsAString& aBdAddr,
+  void ConfigureWbs(const BluetoothAddress& aBdAddr,
                     BluetoothHandsfreeWbsConfig aConfig,
-                    BluetoothHandsfreeResultHandler* aRes);
+                    BluetoothHandsfreeResultHandler* aRes) override;
 
 private:
   void DispatchError(BluetoothHandsfreeResultHandler* aRes,

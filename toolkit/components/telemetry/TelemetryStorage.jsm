@@ -21,9 +21,6 @@ Cu.import("resource://gre/modules/Task.jsm", this);
 Cu.import("resource://gre/modules/TelemetryUtils.jsm", this);
 Cu.import("resource://gre/modules/Promise.jsm", this);
 
-XPCOMUtils.defineLazyModuleGetter(this, 'Deprecated',
-  'resource://gre/modules/Deprecated.jsm');
-
 const LOGGER_NAME = "Toolkit.Telemetry";
 const LOGGER_PREFIX = "TelemetryStorage::";
 
@@ -103,7 +100,7 @@ PingParseError.prototype.constructor = PingParseError;
 /**
  * This is a policy object used to override behavior for testing.
  */
-let Policy = {
+var Policy = {
   now: () => new Date(),
   getArchiveQuota: () => ARCHIVE_QUOTA_BYTES,
   getPendingPingsQuota: () => (AppConstants.platform in ["android", "gonk"])
@@ -116,22 +113,9 @@ let Policy = {
  * always resolves its promise with undefined, and never rejects.
  */
 function waitForAll(it) {
-  let list = Array.from(it);
-  let pending = list.length;
-  if (pending == 0) {
-    return Promise.resolve();
-  }
-  return new Promise(function(resolve, reject) {
-    let rfunc = () => {
-      --pending;
-      if (pending == 0) {
-        resolve();
-      }
-    };
-    for (let p of list) {
-      p.then(rfunc, rfunc);
-    }
-  });
+  let dummy = () => {};
+  let promises = [for (p of it) p.catch(dummy)];
+  return Promise.all(promises);
 }
 
 this.TelemetryStorage = {
@@ -202,6 +186,15 @@ this.TelemetryStorage = {
    */
   runEnforcePendingPingsQuotaTask: function() {
     return TelemetryStorageImpl.runEnforcePendingPingsQuotaTask();
+  },
+
+  /**
+   * Run the task to remove all the pending pings (except the deletion ping).
+   *
+   * @return {Promise} Resolved when the pings are removed.
+   */
+  runRemovePendingPingsTask: function() {
+    return TelemetryStorageImpl.runRemovePendingPingsTask();
   },
 
   /**
@@ -375,19 +368,6 @@ this.TelemetryStorage = {
   },
 
   /**
-   * Add a ping from an existing file to the saved pings directory so that it gets saved
-   * and sent along with other pings.
-   * Note: that the original ping file will not be modified.
-   *
-   * @param {String} pingPath The path to the ping file that needs to be added to the
-   *                           saved pings directory.
-   * @return {Promise} A promise resolved when the ping is saved to the pings directory.
-   */
-  addPendingPingFromFile: function(pingPath) {
-    return TelemetryStorageImpl.addPendingPingFromFile(pingPath);
-  },
-
-  /**
    * Remove the file for a ping
    *
    * @param {object} ping The ping.
@@ -398,24 +378,10 @@ this.TelemetryStorage = {
   },
 
   /**
-   * Load the histograms from a file.
-   *
-   * @param {string} file The file to load.
-   * @returns {promise}
-   */
-  loadHistograms: function loadHistograms(file) {
-    return TelemetryStorageImpl.loadHistograms(file);
-  },
-
-  /**
    * The number of pending pings on disk.
    */
   get pendingPingCount() {
     return TelemetryStorageImpl.pendingPingCount;
-  },
-
-  testLoadHistograms: function(file) {
-    return TelemetryStorageImpl.testLoadHistograms(file);
   },
 
   /**
@@ -544,7 +510,7 @@ SaveSerializer.prototype = {
   },
 };
 
-let TelemetryStorageImpl = {
+var TelemetryStorageImpl = {
   _logger: null,
   // Used to serialize aborted session ping writes to disk.
   _abortedSessionSerializer: new SaveSerializer(),
@@ -562,6 +528,12 @@ let TelemetryStorageImpl = {
   _cleanArchiveTask: null,
   // Whether we already scanned the archived pings on disk.
   _scannedArchiveDirectory: false,
+
+  // Track the pending ping removal task.
+  _removePendingPingsTask: null,
+
+  // This tracks all the pending async ping save activity.
+  _activePendingPingSaves: new Set(),
 
   // Tracks the pending pings in a Map of (id -> {timestampCreated, type}).
   // We use this to cache info on pending pings to avoid scanning the disk more than once.
@@ -588,12 +560,40 @@ let TelemetryStorageImpl = {
    */
   shutdown: Task.async(function*() {
     this._shutdown = true;
-    yield this._abortedSessionSerializer.flushTasks();
-    yield this._deletionPingSerializer.flushTasks();
-    // If the tasks for archive cleaning or pending ping quota are still running, block on
-    // them. They will bail out as soon as possible.
-    yield this._cleanArchiveTask;
-    yield this._enforcePendingPingsQuotaTask;
+
+    // If the following tasks are still running, block on them. They will bail out as soon
+    // as possible.
+    yield this._abortedSessionSerializer.flushTasks().catch(ex => {
+      this._log.error("shutdown - failed to flush aborted-session writes", ex);
+    });
+
+    yield this._deletionPingSerializer.flushTasks().catch(ex => {
+      this._log.error("shutdown - failed to flush deletion ping writes", ex);
+    });
+
+    if (this._cleanArchiveTask) {
+      yield this._cleanArchiveTask.catch(ex => {
+        this._log.error("shutdown - the archive cleaning task failed", ex);
+      });
+    }
+
+    if (this._enforcePendingPingsQuotaTask) {
+      yield this._enforcePendingPingsQuotaTask.catch(ex => {
+        this._log.error("shutdown - the pending pings quota task failed", ex);
+      });
+    }
+
+    if (this._removePendingPingsTask) {
+      yield this._removePendingPingsTask.catch(ex => {
+        this._log.error("shutdown - the pending pings removal task failed", ex);
+      });
+    }
+
+    // Wait on pending pings still being saved. While OS.File should have shutdown
+    // blockers in place, we a) have seen weird errors being reported that might
+    // indicate a bad shutdown path and b) might have completion handlers hanging
+    // off the save operations that don't expect to be late in shutdown.
+    yield this.promisePendingPingSaves();
   }),
 
   /**
@@ -1176,26 +1176,6 @@ let TelemetryStorageImpl = {
   }),
 
   /**
-   * Add a ping from an existing file to the saved pings directory so that it gets saved
-   * and sent along with other pings.
-   * Note: that the original ping file will not be modified.
-   *
-   * @param {String} pingPath The path to the ping file that needs to be added to the
-   *                           saved pings directory.
-   * @return {Promise} A promise resolved when the ping is saved to the pings directory.
-   */
-  addPendingPingFromFile: function(pingPath) {
-    // Pings in the saved ping directory need to have the ping id or slug (old format) as
-    // the file name. We load the ping content, check that it is valid, and use it to save
-    // the ping file with the correct file name.
-    return this.loadPingFile(pingPath).then(ping => {
-      // Since we read a ping successfully, update the related histogram.
-      Telemetry.getHistogramById("READ_SAVED_PING_SUCCESS").add(1);
-      return this.addPendingPing(ping);
-    });
-  },
-
-  /**
    * Add a ping to the saved pings directory so that it gets saved
    * and sent along with other pings.
    * Note: that the original ping file will not be modified.
@@ -1218,13 +1198,15 @@ let TelemetryStorageImpl = {
   },
 
   savePendingPing: function(ping) {
-    return this.savePing(ping, true).then((path) => {
+    let p = this.savePing(ping, true).then((path) => {
       this._pendingPings.set(ping.id, {
         path: path,
         lastModificationDate: Policy.now().getTime(),
       });
       this._log.trace("savePendingPing - saved ping with id " + ping.id);
     });
+    this._trackPendingPingSaveTask(p);
+    return p;
   },
 
   loadPendingPing: Task.async(function*(id) {
@@ -1285,6 +1267,80 @@ let TelemetryStorageImpl = {
     return OS.File.remove(info.path).catch((ex) =>
       this._log.error("removePendingPing - failed to remove ping", ex));
   },
+
+  /**
+   * Track any pending ping save tasks through the promise passed here.
+   * This is needed to block on any outstanding ping save activity.
+   *
+   * @param {Object<Promise>} The save promise to track.
+   */
+  _trackPendingPingSaveTask: function (promise) {
+    let clear = () => this._activePendingPingSaves.delete(promise);
+    promise.then(clear, clear);
+    this._activePendingPingSaves.add(promise);
+  },
+
+  /**
+   * Return a promise that allows to wait on pending pings being saved.
+   * @return {Object<Promise>} A promise resolved when all the pending pings save promises
+   *         are resolved.
+   */
+  promisePendingPingSaves: function () {
+    // Make sure to wait for all the promises, even if they reject. We don't need to log
+    // the failures here, as they are already logged elsewhere.
+    return waitForAll(this._activePendingPingSaves);
+  },
+
+  /**
+   * Run the task to remove all the pending pings (except the deletion ping).
+   *
+   * @return {Promise} Resolved when the pings are removed.
+   */
+  runRemovePendingPingsTask: Task.async(function*() {
+    // If we already have a pending pings removal task active, return that.
+    if (this._removePendingPingsTask) {
+      return this._removePendingPingsTask;
+    }
+
+    // Start the task to remove all pending pings. Also make sure to clear the task once done.
+    try {
+      this._removePendingPingsTask = this.removePendingPings();
+      yield this._removePendingPingsTask;
+    } finally {
+      this._removePendingPingsTask = null;
+    }
+  }),
+
+  removePendingPings: Task.async(function*() {
+    this._log.trace("removePendingPings - removing all pending pings");
+
+    // Wait on pending pings still being saved, so so we don't miss removing them.
+    yield this.promisePendingPingSaves();
+
+    // Individually remove existing pings, so we don't interfere with operations expecting
+    // the pending pings directory to exist.
+    const directory = TelemetryStorage.pingDirectoryPath;
+    let iter = new OS.File.DirectoryIterator(directory);
+
+    try {
+      if (!(yield iter.exists())) {
+        this._log.trace("removePendingPings - the pending pings directory doesn't exist");
+        return;
+      }
+
+      let files = (yield iter.nextBatch()).filter(e => !e.isDir);
+      for (let file of files) {
+        try {
+          yield OS.File.remove(file.path);
+        } catch (ex) {
+          this._log.error("removePendingPings - failed to remove file " + file.path, ex);
+          continue;
+        }
+      }
+    } finally {
+      yield iter.close();
+    }
+  }),
 
   loadPendingPingList: function() {
     // If we already have a pending scanning task active, return that.
@@ -1395,35 +1451,8 @@ let TelemetryStorageImpl = {
     return list;
   },
 
-  /**
-   * Load the histograms from a file.
-   *
-   * Once loaded, the saved pings can be accessed (destructively only)
-   * through |popPendingPings|.
-   *
-   * @param {string} file The file to load.
-   * @returns {promise}
-   */
-  loadHistograms: Task.async(function*(file) {
-    let success = true;
-    try {
-      const ping = yield this.loadPingfile(file);
-      return ping;
-    } catch (ex) {
-      success = false;
-      yield OS.File.remove(file);
-    } finally {
-      const success_histogram = Telemetry.getHistogramById("READ_SAVED_PING_SUCCESS");
-      success_histogram.add(success);
-    }
-  }),
-
   get pendingPingCount() {
     return this._pendingPings.size;
-  },
-
-  testLoadHistograms: function(file) {
-    return this.loadHistograms(file.path);
   },
 
   /**
@@ -1537,7 +1566,7 @@ let TelemetryStorageImpl = {
     } catch (ex if ex.becauseNoSuchFile) {
       this._log.trace("loadAbortedSessionPing - no such file");
     } catch (ex) {
-      this._log.error("loadAbortedSessionPing - error removing ping", ex)
+      this._log.error("loadAbortedSessionPing - error loading ping", ex)
     }
     return ping;
   }),
@@ -1564,8 +1593,10 @@ let TelemetryStorageImpl = {
     this._log.trace("saveDeletionPing - ping path: " + gDeletionPingFilePath);
     yield OS.File.makeDir(gDataReportingDir, { ignoreExisting: true });
 
-    return this._deletionPingSerializer.enqueueTask(() =>
+    let p = this._deletionPingSerializer.enqueueTask(() =>
       this.savePingToFile(ping, gDeletionPingFilePath, true));
+    this._trackPendingPingSaveTask(p);
+    return p;
   }),
 
   /**
@@ -1643,7 +1674,7 @@ function getArchivedPingPath(aPingId, aDate, aType) {
  * Get the size of the ping file on the disk.
  * @return {Integer} The file size, in bytes, of the ping file or 0 on errors.
  */
-let getArchivedPingSize = Task.async(function*(aPingId, aDate, aType) {
+var getArchivedPingSize = Task.async(function*(aPingId, aDate, aType) {
   const path = getArchivedPingPath(aPingId, aDate, aType);
   let filePaths = [ path + "lz4", path ];
 
@@ -1661,7 +1692,7 @@ let getArchivedPingSize = Task.async(function*(aPingId, aDate, aType) {
  * Get the size of the pending ping file on the disk.
  * @return {Integer} The file size, in bytes, of the ping file or 0 on errors.
  */
-let getPendingPingSize = Task.async(function*(aPingId) {
+var getPendingPingSize = Task.async(function*(aPingId) {
   const path = OS.Path.join(TelemetryStorage.pingDirectoryPath, aPingId)
   try {
     return (yield OS.File.stat(path)).size;

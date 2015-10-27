@@ -103,7 +103,7 @@ AppleMP3Reader::Read(uint32_t *aNumBytes, char *aData)
 }
 
 nsresult
-AppleMP3Reader::Init(MediaDecoderReader* aCloneDonor)
+AppleMP3Reader::Init()
 {
   AudioFileTypeID fileType = kAudioFileMP3Type;
 
@@ -303,21 +303,6 @@ AppleMP3Reader::DecodeVideoFrame(bool &aKeyframeSkip,
   return false;
 }
 
-
-bool
-AppleMP3Reader::HasAudio()
-{
-  MOZ_ASSERT(OnTaskQueue());
-  return mStreamReady;
-}
-
-bool
-AppleMP3Reader::HasVideo()
-{
-  MOZ_ASSERT(OnTaskQueue());
-  return false;
-}
-
 bool
 AppleMP3Reader::IsMediaSeekable()
 {
@@ -478,7 +463,7 @@ AppleMP3Reader::SetupDecoder()
 }
 
 
-nsRefPtr<MediaDecoderReader::SeekPromise>
+RefPtr<MediaDecoderReader::SeekPromise>
 AppleMP3Reader::Seek(int64_t aTime, int64_t aEndTime)
 {
   MOZ_ASSERT(OnTaskQueue());
@@ -521,20 +506,23 @@ AppleMP3Reader::NotifyDataArrivedInternal(uint32_t aLength, int64_t aOffset)
     return;
   }
 
-  nsRefPtr<MediaByteBuffer> bytes =
-    mDecoder->GetResource()->MediaReadAt(aOffset, aLength);
-  NS_ENSURE_TRUE_VOID(bytes);
-  mMP3FrameParser.Parse(bytes->Elements(), aLength, aOffset);
-  if (!mMP3FrameParser.IsMP3()) {
-    return;
-  }
+  IntervalSet<int64_t> intervals = mFilter.NotifyDataArrived(aLength, aOffset);
+  for (const auto& interval : intervals) {
+    RefPtr<MediaByteBuffer> bytes =
+      mResource.MediaReadAt(interval.mStart, interval.Length());
+    NS_ENSURE_TRUE_VOID(bytes);
+    mMP3FrameParser.Parse(bytes->Elements(), interval.Length(), interval.mStart);
+    if (!mMP3FrameParser.IsMP3()) {
+      return;
+    }
 
-  uint64_t duration = mMP3FrameParser.GetDuration();
-  if (duration != mDuration) {
-    LOGD("Updating media duration to %lluus\n", duration);
-    MOZ_ASSERT(mDecoder);
-    mDuration = duration;
-    mDecoder->DispatchUpdateEstimatedMediaDuration(duration);
+    uint64_t duration = mMP3FrameParser.GetDuration();
+    if (duration != mDuration) {
+      LOGD("Updating media duration to %lluus\n", duration);
+      MOZ_ASSERT(mDecoder);
+      mDuration = duration;
+      mDecoder->DispatchUpdateEstimatedMediaDuration(duration);
+    }
   }
 }
 

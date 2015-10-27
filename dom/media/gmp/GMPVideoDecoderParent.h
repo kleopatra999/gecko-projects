@@ -14,6 +14,7 @@
 #include "GMPUtils.h"
 #include "GMPVideoHost.h"
 #include "GMPVideoDecoderProxy.h"
+#include "VideoUtils.h"
 
 namespace mozilla {
 namespace gmp {
@@ -80,16 +81,19 @@ private:
   virtual bool Recv__delete__() override;
 
   void UnblockResetAndDrain();
+  void CancelResetCompleteTimeout();
 
   bool mIsOpen;
   bool mShuttingDown;
   bool mActorDestroyed;
   bool mIsAwaitingResetComplete;
   bool mIsAwaitingDrainComplete;
-  nsRefPtr<GMPContentParent> mPlugin;
+  RefPtr<GMPContentParent> mPlugin;
   GMPVideoDecoderCallbackProxy* mCallback;
   GMPVideoHostImpl mVideoHost;
   const uint32_t mPluginId;
+  int32_t mFrameCount;
+  RefPtr<SimpleTimer> mResetCompleteTimeout;
 };
 
 } // namespace gmp

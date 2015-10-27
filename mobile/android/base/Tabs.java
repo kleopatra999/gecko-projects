@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import android.support.annotation.Nullable;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -314,6 +315,7 @@ public class Tabs implements GeckoEventListener {
      *
      * @return the selected tab, or null if no tabs exist
      */
+    @Nullable
     public Tab getSelectedTab() {
         return mSelectedTab;
     }
@@ -924,10 +926,8 @@ public class Tabs implements GeckoEventListener {
             selectTab(tabToSelect.getId());
         }
 
-        // TODO: surely we could just fetch *any* cached icon?
+        // Load favicon instantly for about:home page because it's already cached
         if (AboutPages.isBuiltinIconPage(url)) {
-            Log.d(LOGTAG, "Setting about: tab favicon inline.");
-            tabToSelect.addFavicon(url, Favicons.browserToolbarFaviconSize, "");
             tabToSelect.loadFavicon();
         }
 

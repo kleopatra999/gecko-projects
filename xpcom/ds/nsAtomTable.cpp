@@ -16,7 +16,7 @@
 #include "nsStaticAtom.h"
 #include "nsString.h"
 #include "nsCRT.h"
-#include "pldhash.h"
+#include "PLDHashTable.h"
 #include "prenv.h"
 #include "nsThreadUtils.h"
 #include "nsDataHashtable.h"
@@ -293,7 +293,7 @@ AtomTableInitEntry(PLDHashEntryHdr* aEntry, const void* aKey)
 static const PLDHashTableOps AtomTableOps = {
   AtomTableGetHash,
   AtomTableMatchKey,
-  PL_DHashMoveEntryStub,
+  PLDHashTable::MoveEntryStub,
   AtomTableClearEntry,
   AtomTableInitEntry
 };
@@ -349,7 +349,7 @@ NS_PurgeAtomTable()
 AtomImpl::AtomImpl(const nsAString& aString, uint32_t aHash)
 {
   mLength = aString.Length();
-  nsRefPtr<nsStringBuffer> buf = nsStringBuffer::FromString(aString);
+  RefPtr<nsStringBuffer> buf = nsStringBuffer::FromString(aString);
   if (buf) {
     mString = static_cast<char16_t*>(buf->Data());
   } else {
@@ -397,7 +397,7 @@ AtomImpl::~AtomImpl()
   // |AtomTableClearEntry|.
   if (!IsPermanentInDestructor()) {
     AtomTableKey key(mString, mLength, mHash);
-    PL_DHashTableRemove(gAtomTable, &key);
+    gAtomTable->Remove(&key);
     if (gAtomTable->EntryCount() == 0) {
       delete gAtomTable;
       gAtomTable = nullptr;
@@ -541,7 +541,7 @@ GetAtomHashEntry(const char* aString, uint32_t aLength, uint32_t* aHashOut)
   EnsureTableExists();
   AtomTableKey key(aString, aLength, aHashOut);
   // This is an infallible add.
-  return static_cast<AtomTableEntry*>(PL_DHashTableAdd(gAtomTable, &key));
+  return static_cast<AtomTableEntry*>(gAtomTable->Add(&key));
 }
 
 static inline AtomTableEntry*
@@ -551,7 +551,7 @@ GetAtomHashEntry(const char16_t* aString, uint32_t aLength, uint32_t* aHashOut)
   EnsureTableExists();
   AtomTableKey key(aString, aLength, aHashOut);
   // This is an infallible add.
-  return static_cast<AtomTableEntry*>(PL_DHashTableAdd(gAtomTable, &key));
+  return static_cast<AtomTableEntry*>(gAtomTable->Add(&key));
 }
 
 class CheckStaticAtomSizes
@@ -638,7 +638,7 @@ NS_NewAtom(const nsACString& aUTF8String)
   // Actually, now there is, sort of: ForgetSharedBuffer.
   nsString str;
   CopyUTF8toUTF16(aUTF8String, str);
-  nsRefPtr<AtomImpl> atom = new AtomImpl(str, hash);
+  RefPtr<AtomImpl> atom = new AtomImpl(str, hash);
 
   he->mAtom = atom;
 
@@ -665,7 +665,7 @@ NS_NewAtom(const nsAString& aUTF16String)
     return atom.forget();
   }
 
-  nsRefPtr<AtomImpl> atom = new AtomImpl(aUTF16String, hash);
+  RefPtr<AtomImpl> atom = new AtomImpl(aUTF16String, hash);
   he->mAtom = atom;
 
   return atom.forget();

@@ -19,13 +19,13 @@ XPCOMUtils.defineLazyModuleGetter(this, "ProfileAge",
                                   "resource://gre/modules/ProfileAge.jsm");
 
 // The webserver hosting the addons.
-let gHttpServer = null;
+var gHttpServer = null;
 // The URL of the webserver root.
-let gHttpRoot = null;
+var gHttpRoot = null;
 // The URL of the data directory, on the webserver.
-let gDataRoot = null;
+var gDataRoot = null;
 
-let gNow = new Date(2010, 1, 1, 12, 0, 0);
+var gNow = new Date(2010, 1, 1, 12, 0, 0);
 fakeNow(gNow);
 
 const PLATFORM_VERSION = "1.9.2";
@@ -96,13 +96,13 @@ PluginTag.prototype = {
 };
 
 // A container for the plugins handled by the fake plugin host.
-let gInstalledPlugins = [
+var gInstalledPlugins = [
   new PluginTag("Java", "A mock Java plugin", "1.0", false /* Disabled */),
   new PluginTag(FLASH_PLUGIN_NAME, FLASH_PLUGIN_DESC, FLASH_PLUGIN_VERSION, true),
 ];
 
 // A fake plugin host for testing plugin telemetry environment.
-let PluginHost = {
+var PluginHost = {
   getPluginTags: function(countRef) {
     countRef.value = gInstalledPlugins.length;
     return gInstalledPlugins;
@@ -210,13 +210,7 @@ function checkNullOrString(aValue) {
  *         boolean.
  */
 function checkNullOrBool(aValue) {
-  if (aValue) {
-    return (typeof aValue == "boolean");
-  } else if (aValue === null) {
-    return true;
-  }
-
-  return false;
+  return aValue === null || (typeof aValue == "boolean");
 }
 
 function checkBuildSection(data) {
@@ -564,9 +558,12 @@ function checkTheme(data) {
 }
 
 function checkActiveGMPlugin(data) {
-  Assert.equal(typeof data.version, "string");
+  // GMP plugin version defaults to null until GMPDownloader runs to update it.
+  if (data.version) {
+    Assert.equal(typeof data.version, "string");
+  }
   Assert.equal(typeof data.userDisabled, "boolean");
-  Assert.equal(typeof data.applyBackgroundUpdates, "boolean");
+  Assert.equal(typeof data.applyBackgroundUpdates, "number");
 }
 
 function checkAddonsSection(data) {
@@ -599,12 +596,8 @@ function checkAddonsSection(data) {
 
   // Check active GMPlugins
   let activeGMPlugins = data.addons.activeGMPlugins;
-  if (!gIsAndroid) {
-    // We don't check for data validity on Android here since XPCSHELL tests on Android
-    // report one valid (plugin.isValid == true) GMPlugin with a "null" version field.
-    for (let gmPlugin in activeGMPlugins) {
-      checkActiveGMPlugin(activeGMPlugins[gmPlugin]);
-    }
+  for (let gmPlugin in activeGMPlugins) {
+    checkActiveGMPlugin(activeGMPlugins[gmPlugin]);
   }
 
   // Check the active Experiment
@@ -1015,6 +1008,37 @@ add_task(function* test_signedAddon() {
   for (let f in EXPECTED_ADDON_DATA) {
     Assert.equal(targetAddon[f], EXPECTED_ADDON_DATA[f], f + " must have the correct value.");
   }
+});
+
+add_task(function* test_addonsFieldsLimit() {
+  const ADDON_INSTALL_URL = gDataRoot + "long-fields.xpi";
+  const ADDON_ID = "tel-longfields-xpi@tests.mozilla.org";
+
+  // Set the clock in the future so our changes don't get throttled.
+  gNow = fakeNow(futureDate(gNow, 10 * MILLISECONDS_PER_MINUTE));
+
+  // Install the addon and wait for the TelemetryEnvironment to pick it up.
+  let deferred = PromiseUtils.defer();
+  TelemetryEnvironment.registerChangeListener("test_longFieldsAddon", deferred.resolve);
+  yield AddonTestUtils.installXPIFromURL(ADDON_INSTALL_URL);
+  yield deferred.promise;
+  TelemetryEnvironment.unregisterChangeListener("test_longFieldsAddon");
+
+  let data = TelemetryEnvironment.currentEnvironment;
+  checkEnvironmentData(data);
+
+  // Check that the addon is available and that the string fields are limited.
+  Assert.ok(ADDON_ID in data.addons.activeAddons, "Add-on should be in the environment.");
+  let targetAddon = data.addons.activeAddons[ADDON_ID];
+
+  // TelemetryEnvironment limits the length of string fields for activeAddons to 100 chars,
+  // to mitigate misbehaving addons.
+  Assert.lessOrEqual(targetAddon.version.length, 100,
+               "The version string must have been limited");
+  Assert.lessOrEqual(targetAddon.name.length, 100,
+               "The name string must have been limited");
+  Assert.lessOrEqual(targetAddon.description.length, 100,
+               "The description string must have been limited");
 });
 
 add_task(function* test_changeThrottling() {

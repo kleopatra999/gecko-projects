@@ -137,6 +137,12 @@ public:
   // ID of the canvas HitRegion
   nsString region;
 
+  bool IsLeftButtonPressed() const { return !!(buttons & eLeftButtonFlag); }
+  bool IsRightButtonPressed() const { return !!(buttons & eRightButtonFlag); }
+  bool IsMiddleButtonPressed() const { return !!(buttons & eMiddleButtonFlag); }
+  bool Is4thButtonPressed() const { return !!(buttons & e4thButtonFlag); }
+  bool Is5thButtonPressed() const { return !!(buttons & e5thButtonFlag); }
+
   void AssignMouseEventBaseData(const WidgetMouseEventBase& aEvent,
                                 bool aCopyTargets)
   {
@@ -399,11 +405,11 @@ public:
   }
 
   // The delta value of mouse scroll event.
-  // If the event message is NS_MOUSE_SCROLL, the value indicates scroll amount
-  // in lines.  However, if the value is nsIDOMUIEvent::SCROLL_PAGE_UP or
-  // nsIDOMUIEvent::SCROLL_PAGE_DOWN, the value inducates one page scroll.
-  // If the event message is NS_MOUSE_PIXEL_SCROLL, the value indicates scroll
-  // amount in pixels.
+  // If the event message is eLegacyMouseLineOrPageScroll, the value indicates
+  // scroll amount in lines.  However, if the value is
+  // nsIDOMUIEvent::SCROLL_PAGE_UP or nsIDOMUIEvent::SCROLL_PAGE_DOWN, the
+  // value inducates one page scroll.  If the event message is
+  // eLegacyMousePixelScroll, the value indicates scroll amount in pixels.
   int32_t delta;
 
   // If this is true, it may cause to scroll horizontally.
@@ -499,13 +505,14 @@ public:
 
   // If device event handlers don't know when they should set lineOrPageDeltaX
   // and lineOrPageDeltaY, this is true.  Otherwise, false.
-  // If mIsNoLineOrPageDelta is true, ESM will generate NS_MOUSE_SCROLL events
-  // when accumulated delta values reach a line height.
+  // If mIsNoLineOrPageDelta is true, ESM will generate
+  // eLegacyMouseLineOrPageScroll events when accumulated delta values reach
+  // a line height.
   bool mIsNoLineOrPageDelta;
 
   // If widget sets lineOrPageDelta, EventStateManager will dispatch
-  // NS_MOUSE_SCROLL event for compatibility.  Note that the delta value means
-  // pages if the deltaMode is DOM_DELTA_PAGE, otherwise, lines.
+  // eLegacyMouseLineOrPageScroll event for compatibility.  Note that the delta
+  // value means pages if the deltaMode is DOM_DELTA_PAGE, otherwise, lines.
   int32_t lineOrPageDeltaX;
   int32_t lineOrPageDeltaY;
 

@@ -78,8 +78,6 @@ public:
     PLayerTransactionParent::DeallocShmem(aShmem);
   }
 
-  virtual LayersBackend GetCompositorBackendType() const override;
-
   virtual bool IsSameProcess() const override;
 
   const uint64_t& GetPendingTransactionId() { return mPendingTransaction; }
@@ -150,6 +148,7 @@ protected:
   virtual bool DeallocPCompositableParent(PCompositableParent* actor) override;
 
   virtual PTextureParent* AllocPTextureParent(const SurfaceDescriptor& aSharedData,
+                                              const LayersBackend& aLayersBackend,
                                               const TextureFlags& aFlags) override;
   virtual bool DeallocPTextureParent(PTextureParent* actor) override;
 
@@ -177,11 +176,11 @@ protected:
   friend class layout::RenderFrameParent;
 
 private:
-  nsRefPtr<LayerManagerComposite> mLayerManager;
+  RefPtr<LayerManagerComposite> mLayerManager;
   ShadowLayersManager* mShadowLayersManager;
   // Hold the root because it might be grafted under various
   // containers in the "real" layer tree
-  nsRefPtr<Layer> mRoot;
+  RefPtr<Layer> mRoot;
   // When this is nonzero, it refers to a layer tree owned by the
   // compositor thread.  It is always true that
   //   mId != 0 => mRoot == null

@@ -11,11 +11,11 @@
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/MessageEvent.h"
 #include "mozilla/dom/MessageEventBinding.h"
-#include "mozilla/dom/StructuredCloneIPCHelper.h"
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerScope.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/ipc/PBackgroundChild.h"
+#include "mozilla/dom/ipc/StructuredCloneData.h"
 #include "WorkerPrivate.h"
 
 namespace mozilla {
@@ -42,12 +42,12 @@ BroadcastChannelChild::RecvNotify(const ClonedMessageData& aData)
 {
   // Make sure to retrieve all blobs from the message before returning to avoid
   // leaking their actors.
-  nsTArray<nsRefPtr<BlobImpl>> blobs;
+  nsTArray<RefPtr<BlobImpl>> blobs;
   if (!aData.blobsChild().IsEmpty()) {
     blobs.SetCapacity(aData.blobsChild().Length());
 
     for (uint32_t i = 0, len = aData.blobsChild().Length(); i < len; ++i) {
-      nsRefPtr<BlobImpl> impl =
+      RefPtr<BlobImpl> impl =
         static_cast<BlobChild*>(aData.blobsChild()[i])->GetBlobImpl();
 
       blobs.AppendElement(impl);
@@ -69,6 +69,8 @@ BroadcastChannelChild::RecvNotify(const ClonedMessageData& aData)
     return true;
   }
 
+  mBC->RemoveDocFromBFCache();
+
   AutoJSAPI jsapi;
   nsCOMPtr<nsIGlobalObject> globalObject;
 
@@ -85,17 +87,17 @@ BroadcastChannelChild::RecvNotify(const ClonedMessageData& aData)
     return true;
   }
 
-  StructuredCloneIPCHelper cloneHelper;
-  cloneHelper.BlobImpls().AppendElements(blobs);
+  ipc::StructuredCloneData cloneData;
+  cloneData.BlobImpls().AppendElements(blobs);
 
   const SerializedStructuredCloneBuffer& buffer = aData.data();
-  cloneHelper.UseExternalData(buffer.data, buffer.dataLength);
+  cloneData.UseExternalData(buffer.data, buffer.dataLength);
 
   JSContext* cx = jsapi.cx();
   JS::Rooted<JS::Value> value(cx, JS::NullValue());
   if (buffer.dataLength) {
     ErrorResult rv;
-    cloneHelper.Read(cx, &value, rv);
+    cloneData.Read(cx, &value, rv);
     if (NS_WARN_IF(rv.Failed())) {
       return true;
     }
@@ -108,7 +110,7 @@ BroadcastChannelChild::RecvNotify(const ClonedMessageData& aData)
   init.mData = value;
 
   ErrorResult rv;
-  nsRefPtr<MessageEvent> event =
+  RefPtr<MessageEvent> event =
     MessageEvent::Constructor(mBC, NS_LITERAL_STRING("message"), init, rv);
   if (rv.Failed()) {
     NS_WARNING("Failed to create a MessageEvent object.");

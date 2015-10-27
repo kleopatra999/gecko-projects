@@ -62,7 +62,7 @@ EXPORTS += [
     'nsVersionComparator.h',
     'nsWeakReference.h',
     'nsXPTCUtils.h',
-    'pldhash.h',
+    'PLDHashTable.h',
 ]
 
 EXPORTS.mozilla += [
@@ -75,7 +75,6 @@ EXPORTS.mozilla += [
     'FileUtils.h',
     'GenericFactory.h',
     'IntentionalCrash.h',
-    'Logging.h',
     'Monitor.h',
     'Mutex.h',
     'Observer.h',
@@ -106,6 +105,7 @@ if CONFIG['_MSC_VER']:
 
 LOCAL_INCLUDES += [
     '../build',
+    '../threads',
 ]
 
 if CONFIG['ENABLE_TESTS']:
@@ -120,3 +120,6 @@ USE_LIBS += [
 NO_EXPAND_LIBS = True
 
 DIST_INSTALL = True
+
+if CONFIG['GNU_CXX']:
+    CXXFLAGS += ['-Wshadow']

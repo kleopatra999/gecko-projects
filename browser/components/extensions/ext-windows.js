@@ -1,8 +1,9 @@
-XPCOMUtils.defineLazyModuleGetter(this, "NewTabURL",
-                                  "resource:///modules/NewTabURL.jsm");
+XPCOMUtils.defineLazyServiceGetter(this, "aboutNewTabService",
+                                   "@mozilla.org/browser/aboutnewtab-service;1",
+                                   "nsIAboutNewTabService");
 
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
-let {
+var {
   EventManager,
   ignoreEvent,
   runSafe,
@@ -45,7 +46,11 @@ extensions.registerAPI((extension, context) => {
       },
 
       getCurrent: function(getInfo, callback) {
-        let window = context.contentWindow;
+        if (!callback) {
+          callback = getInfo;
+          getInfo = {};
+        }
+        let window = currentWindow(context);
         runSafe(context, callback, WindowManager.convert(extension, window, getInfo));
       },
 
@@ -60,12 +65,14 @@ extensions.registerAPI((extension, context) => {
         runSafe(context, callback, WindowManager.convert(extension, window, getInfo));
       },
 
-      getAll: function(getAll, callback) {
+      getAll: function(getInfo, callback) {
         let e = Services.wm.getEnumerator("navigator:browser");
         let windows = [];
         while (e.hasMoreElements()) {
           let window = e.getNext();
-          windows.push(WindowManager.convert(extension, window, getInfo));
+          if (window.document.readyState == "complete") {
+            windows.push(WindowManager.convert(extension, window, getInfo));
+          }
         }
         runSafe(context, callback, windows);
       },
@@ -89,7 +96,7 @@ extensions.registerAPI((extension, context) => {
             args.AppendElement(mkstr(createData.url));
           }
         } else {
-          args.AppendElement(mkstr(NewTabURL.get()));
+          args.AppendElement(mkstr(aboutNewTabService.newTabURL));
         }
 
         let extraFeatures = "";
@@ -131,7 +138,10 @@ extensions.registerAPI((extension, context) => {
           Services.focus.activeWindow = window;
         }
         // TODO: All the other properties...
-        runSafe(context, callback, WindowManager.convert(extension, window));
+
+        if (callback) {
+          runSafe(context, callback, WindowManager.convert(extension, window));
+        }
       },
 
       remove: function(windowId, callback) {

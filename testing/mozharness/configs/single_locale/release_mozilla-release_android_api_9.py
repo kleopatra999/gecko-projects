@@ -2,7 +2,7 @@ BRANCH = "mozilla-release"
 MOZ_UPDATE_CHANNEL = "release"
 MOZILLA_DIR = BRANCH
 OBJDIR = "obj-l10n"
-EN_US_BINARY_URL = "http://ftp.mozilla.org/pub/mozilla.org/mobile/candidates/%(version)s-candidates/build%(buildnum)d/android-api-9/en-US"
+EN_US_BINARY_URL = "http://archive.mozilla.org/pub/mobile/candidates/%(version)s-candidates/build%(buildnum)d/android-api-9/en-US"
 HG_SHARE_BASE_DIR = "/builds/hg-shared"
 
 config = {
@@ -91,5 +91,6 @@ config = {
                       ],
     "mock_files": [
         ("/home/cltbld/.ssh", "/home/mock_mozilla/.ssh"),
+        ('/usr/local/lib/hgext', '/usr/local/lib/hgext'),
     ],
 }

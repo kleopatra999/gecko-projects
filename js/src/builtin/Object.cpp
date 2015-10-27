@@ -13,6 +13,7 @@
 
 #include "builtin/Eval.h"
 #include "frontend/BytecodeCompiler.h"
+#include "jit/InlinableNatives.h"
 #include "vm/StringBuffer.h"
 
 #include "jsobjinlines.h"
@@ -519,16 +520,6 @@ js::obj_hasOwnProperty(JSContext* cx, unsigned argc, Value* vp)
     jsid id;
     if (args.thisv().isObject() && ValueToId<NoGC>(cx, idValue, &id)) {
         JSObject* obj = &args.thisv().toObject();
-
-#ifndef RELEASE_BUILD
-        if (obj->is<RegExpObject>() && id == NameToId(cx->names().source)) {
-            if (JSScript* script = cx->currentScript()) {
-                const char* filename = script->filename();
-                cx->compartment()->addTelemetry(filename, JSCompartment::RegExpSourceProperty);
-            }
-        }
-#endif
-
         Shape* prop;
         if (obj->isNative() &&
             NativeLookupOwnProperty<NoGC>(cx, &obj->as<NativeObject>(), id, &prop))
@@ -1016,7 +1007,7 @@ static const JSFunctionSpec object_static_methods[] = {
     JS_FN("is",                        obj_is,                      2, 0),
     JS_FN("defineProperty",            obj_defineProperty,          3, 0),
     JS_FN("defineProperties",          obj_defineProperties,        2, 0),
-    JS_FN("create",                    obj_create,                  2, 0),
+    JS_INLINABLE_FN("create",          obj_create,                  2, 0, ObjectCreate),
     JS_FN("getOwnPropertyNames",       obj_getOwnPropertyNames,     1, 0),
     JS_FN("getOwnPropertySymbols",     obj_getOwnPropertySymbols,   1, 0),
     JS_SELF_HOSTED_FN("isExtensible",  "ObjectIsExtensible",        1, JSPROP_DEFINE_LATE),
@@ -1054,6 +1045,13 @@ CreateObjectPrototype(JSContext* cx, JSProtoKey key)
                                                                            SingletonObject));
     if (!objectProto)
         return nullptr;
+
+    bool succeeded;
+    if (!SetImmutablePrototype(cx, objectProto, &succeeded))
+        return nullptr;
+    MOZ_ASSERT(succeeded,
+               "should have been able to make a fresh Object.prototype's "
+               "[[Prototype]] immutable");
 
     /*
      * The default 'new' type of Object.prototype is required by type inference
@@ -1120,7 +1118,6 @@ const Class PlainObject::class_ = {
     nullptr,  /* enumerate */
     nullptr,  /* resolve */
     nullptr,  /* mayResolve */
-    nullptr,  /* convert */
     nullptr,  /* finalize */
     nullptr,  /* call */
     nullptr,  /* hasInstance */

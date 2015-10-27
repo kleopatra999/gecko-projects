@@ -74,7 +74,7 @@ const CAPTURE_LOGS_START_EVENT = "capture-logs-start";
 const CAPTURE_LOGS_ERROR_EVENT = "capture-logs-error";
 const CAPTURE_LOGS_SUCCESS_EVENT = "capture-logs-success";
 
-let LogShake = {
+var LogShake = {
   QueryInterface: XPCOMUtils.generateQI([Ci.nsIObserver]),
 
   /**
@@ -128,7 +128,10 @@ let LogShake = {
     "/proc/version": LogParser.prettyPrintArray,
     "/proc/vmallocinfo": LogParser.prettyPrintArray,
     "/proc/vmstat": LogParser.prettyPrintArray,
-    "/system/b2g/application.ini": LogParser.prettyPrintArray
+    "/system/b2g/application.ini": LogParser.prettyPrintArray,
+    "/cache/recovery/last_install": LogParser.prettyPrintArray,
+    "/cache/recovery/last_kmsg": LogParser.prettyPrintArray,
+    "/cache/recovery/last_log": LogParser.prettyPrintArray
   },
 
   /**

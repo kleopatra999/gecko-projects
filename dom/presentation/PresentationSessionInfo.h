@@ -10,7 +10,7 @@
 #include "base/process.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
-#include "mozilla/nsRefPtr.h"
+#include "mozilla/RefPtr.h"
 #include "nsCOMPtr.h"
 #include "nsIPresentationControlChannel.h"
 #include "nsIPresentationDevice.h"
@@ -39,6 +39,7 @@ public:
     , mSessionId(aSessionId)
     , mIsResponderReady(false)
     , mIsTransportReady(false)
+    , mState(nsIPresentationSessionListener::STATE_CLOSED)
     , mCallback(aCallback)
   {
     MOZ_ASSERT(!mUrl.IsEmpty());
@@ -89,7 +90,8 @@ public:
 
   nsresult Send(nsIInputStream* aData);
 
-  nsresult Close(nsresult aReason);
+  nsresult Close(nsresult aReason,
+                 uint32_t aState);
 
   nsresult ReplyError(nsresult aReason);
 
@@ -112,10 +114,26 @@ protected:
 
   virtual nsresult UntrackFromService();
 
+  void SetState(uint32_t aState)
+  {
+    if (mState == aState) {
+      return;
+    }
+
+    mState = aState;
+
+    // Notify session state change.
+    if (mListener) {
+      nsresult rv = mListener->NotifyStateChange(mSessionId, mState);
+      NS_WARN_IF(NS_FAILED(rv));
+    }
+  }
+
   nsString mUrl;
   nsString mSessionId;
   bool mIsResponderReady;
   bool mIsTransportReady;
+  uint32_t mState; // CONNECTED, CLOSED, TERMINATED
   nsCOMPtr<nsIPresentationServiceCallback> mCallback;
   nsCOMPtr<nsIPresentationSessionListener> mListener;
   nsCOMPtr<nsIPresentationDevice> mDevice;
@@ -123,18 +141,18 @@ protected:
   nsCOMPtr<nsIPresentationControlChannel> mControlChannel;
 };
 
-// Session info with sender side behaviors.
-class PresentationRequesterInfo final : public PresentationSessionInfo
-                                      , public nsIServerSocketListener
+// Session info with controlling browsing context (sender side) behaviors.
+class PresentationControllingInfo final : public PresentationSessionInfo
+                                        , public nsIServerSocketListener
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIPRESENTATIONCONTROLCHANNELLISTENER
   NS_DECL_NSISERVERSOCKETLISTENER
 
-  PresentationRequesterInfo(const nsAString& aUrl,
-                            const nsAString& aSessionId,
-                            nsIPresentationServiceCallback* aCallback)
+  PresentationControllingInfo(const nsAString& aUrl,
+                              const nsAString& aSessionId,
+                              nsIPresentationServiceCallback* aCallback)
     : PresentationSessionInfo(aUrl, aSessionId, aCallback)
   {
     MOZ_ASSERT(mCallback);
@@ -143,31 +161,33 @@ public:
   nsresult Init(nsIPresentationControlChannel* aControlChannel) override;
 
 private:
-  ~PresentationRequesterInfo()
+  ~PresentationControllingInfo()
   {
     Shutdown(NS_OK);
   }
 
   void Shutdown(nsresult aReason) override;
 
-  nsresult GetAddress(nsACString& aAddress);
+  nsresult GetAddress();
+
+  nsresult OnGetAddress(const nsACString& aAddress);
 
   nsCOMPtr<nsIServerSocket> mServerSocket;
 };
 
-// Session info with receiver side behaviors.
-class PresentationResponderInfo final : public PresentationSessionInfo
-                                      , public PromiseNativeHandler
-                                      , public nsITimerCallback
+// Session info with presenting browsing context (receiver side) behaviors.
+class PresentationPresentingInfo final : public PresentationSessionInfo
+                                       , public PromiseNativeHandler
+                                       , public nsITimerCallback
 {
 public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIPRESENTATIONCONTROLCHANNELLISTENER
   NS_DECL_NSITIMERCALLBACK
 
-  PresentationResponderInfo(const nsAString& aUrl,
-                            const nsAString& aSessionId,
-                            nsIPresentationDevice* aDevice)
+  PresentationPresentingInfo(const nsAString& aUrl,
+                             const nsAString& aSessionId,
+                             nsIPresentationDevice* aDevice)
     : PresentationSessionInfo(aUrl, aSessionId, nullptr)
   {
     MOZ_ASSERT(aDevice);
@@ -192,7 +212,7 @@ public:
   bool IsAccessible(base::ProcessId aProcessId) override;
 
 private:
-  ~PresentationResponderInfo()
+  ~PresentationPresentingInfo()
   {
     Shutdown(NS_OK);
   }
@@ -203,10 +223,10 @@ private:
 
   nsresult UntrackFromService() override;
 
-  nsRefPtr<PresentationResponderLoadingCallback> mLoadingCallback;
+  RefPtr<PresentationResponderLoadingCallback> mLoadingCallback;
   nsCOMPtr<nsITimer> mTimer;
   nsCOMPtr<nsIPresentationChannelDescription> mRequesterDescription;
-  nsRefPtr<Promise> mPromise;
+  RefPtr<Promise> mPromise;
 
   // The content parent communicating with the content process which the OOP
   // receiver page belongs to.

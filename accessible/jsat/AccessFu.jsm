@@ -308,11 +308,15 @@ this.AccessFu = { // jshint ignore:line
         this._enableOrDisable();
         break;
       case 'Accessibility:NextObject':
-        this.Input.moveCursor('moveNext', 'Simple', 'gesture');
-        break;
       case 'Accessibility:PreviousObject':
-        this.Input.moveCursor('movePrevious', 'Simple', 'gesture');
+      {
+        let rule = aData ?
+          aData.substr(0, 1).toUpperCase() + aData.substr(1).toLowerCase() :
+          'Simple';
+        let method = aTopic.replace(/Accessibility:(\w+)Object/, 'move$1');
+        this.Input.moveCursor(method, rule, 'gesture');
         break;
+      }
       case 'Accessibility:ActivateObject':
         this.Input.activateCurrent(JSON.parse(aData));
         break;
@@ -518,7 +522,9 @@ var Output = {
 
   stop: function stop() {
     if (this.highlightBox) {
-      Utils.win.document.documentElement.removeChild(this.highlightBox.get());
+      let doc = Utils.win.document;
+      (doc.body || doc.documentElement).documentElement.removeChild(
+        this.highlightBox.get());
       delete this.highlightBox;
     }
   },
@@ -534,16 +540,17 @@ var Output = {
       {
         let highlightBox = null;
         if (!this.highlightBox) {
+          let doc = Utils.win.document;
           // Add highlight box
           highlightBox = Utils.win.document.
             createElementNS('http://www.w3.org/1999/xhtml', 'div');
-          Utils.win.document.documentElement.appendChild(highlightBox);
+          let parent = doc.body || doc.documentElement;
+          parent.appendChild(highlightBox);
           highlightBox.id = 'virtual-cursor-box';
 
           // Add highlight inset for inner shadow
           highlightBox.appendChild(
-            Utils.win.document.createElementNS(
-              'http://www.w3.org/1999/xhtml', 'div'));
+            doc.createElementNS('http://www.w3.org/1999/xhtml', 'div'));
 
           this.highlightBox = Cu.getWeakReference(highlightBox);
         } else {
@@ -740,6 +747,9 @@ var Input = {
       case 'tripletap3':
         Utils.dispatchChromeEvent('accessibility-control', 'toggle-shade');
         break;
+      case 'tap2':
+        Utils.dispatchChromeEvent('accessibility-control', 'toggle-pause');
+        break;
     }
   },
 
@@ -854,11 +864,12 @@ var Input = {
   },
 
   moveByGranularity: function moveByGranularity(aDetails) {
-    const MOVEMENT_GRANULARITY_PARAGRAPH = 8;
+    const GRANULARITY_PARAGRAPH = 8;
+    const GRANULARITY_LINE = 4;
 
     if (!this.editState.editing) {
-      if (aDetails.granularity === MOVEMENT_GRANULARITY_PARAGRAPH) {
-        this.moveCursor('move' + aDetails.direction, 'Paragraph', 'gesture');
+      if (aDetails.granularity & (GRANULARITY_PARAGRAPH | GRANULARITY_LINE)) {
+        this.moveCursor('move' + aDetails.direction, 'Simple', 'gesture');
         return;
       }
     } else {

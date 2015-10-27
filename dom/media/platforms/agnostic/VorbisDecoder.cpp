@@ -12,11 +12,10 @@
 #include "nsAutoPtr.h"
 
 #undef LOG
-#define LOG(type, msg) MOZ_LOG(gMediaDecoderLog, type, msg)
+extern PRLogModuleInfo* GetPDMLog();
+#define LOG(type, msg) MOZ_LOG(GetPDMLog(), type, msg)
 
 namespace mozilla {
-
-extern PRLogModuleInfo* gMediaDecoderLog;
 
 ogg_packet InitVorbisPacket(const unsigned char* aData, size_t aLength,
                          bool aBOS, bool aEOS,
@@ -64,7 +63,7 @@ VorbisDataDecoder::Shutdown()
   return NS_OK;
 }
 
-nsRefPtr<MediaDataDecoder::InitPromise>
+RefPtr<MediaDataDecoder::InitPromise>
 VorbisDataDecoder::Init()
 {
   vorbis_info_init(&mVorbisInfo);
@@ -126,9 +125,9 @@ nsresult
 VorbisDataDecoder::Input(MediaRawData* aSample)
 {
   nsCOMPtr<nsIRunnable> runnable(
-    NS_NewRunnableMethodWithArg<nsRefPtr<MediaRawData>>(
+    NS_NewRunnableMethodWithArg<RefPtr<MediaRawData>>(
       this, &VorbisDataDecoder::Decode,
-      nsRefPtr<MediaRawData>(aSample)));
+      RefPtr<MediaRawData>(aSample)));
   mTaskQueue->Dispatch(runnable.forget());
 
   return NS_OK;

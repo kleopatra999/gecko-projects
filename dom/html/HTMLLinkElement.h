@@ -61,16 +61,9 @@ public:
                               bool aCompileEventHandlers) override;
   virtual void UnbindFromTree(bool aDeep = true,
                               bool aNullParent = true) override;
-  nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                   const nsAString& aValue, bool aNotify)
-  {
-    return SetAttr(aNameSpaceID, aName, nullptr, aValue, aNotify);
-  }
-  virtual nsresult SetAttr(int32_t aNameSpaceID, nsIAtom* aName,
-                           nsIAtom* aPrefix, const nsAString& aValue,
-                           bool aNotify) override;
-  virtual nsresult UnsetAttr(int32_t aNameSpaceID, nsIAtom* aAttribute,
-                             bool aNotify) override;
+  virtual nsresult AfterSetAttr(int32_t aNameSpaceID, nsIAtom* aName,
+                                const nsAttrValue* aValue,
+                                bool aNotify) override;
   virtual bool IsLink(nsIURI** aURI) const override;
   virtual already_AddRefed<nsIURI> GetHrefURI() const override;
 
@@ -155,9 +148,10 @@ public:
   already_AddRefed<nsIDocument> GetImport();
   already_AddRefed<ImportLoader> GetImportLoader()
   {
-    return nsRefPtr<ImportLoader>(mImportLoader).forget();
+    return RefPtr<ImportLoader>(mImportLoader).forget();
   }
 
+  virtual CORSMode GetCORSMode() const override;
 protected:
   virtual ~HTMLLinkElement();
 
@@ -168,14 +162,13 @@ protected:
                                  nsAString& aMedia,
                                  bool* aIsScoped,
                                  bool* aIsAlternate) override;
-  virtual CORSMode GetCORSMode() const override;
 protected:
   // nsGenericHTMLElement
   virtual void GetItemValueText(DOMString& text) override;
   virtual void SetItemValueText(const nsAString& text) override;
-  nsRefPtr<nsDOMTokenList > mRelList;
+  RefPtr<nsDOMTokenList > mRelList;
 private:
-  nsRefPtr<ImportLoader> mImportLoader;
+  RefPtr<ImportLoader> mImportLoader;
 };
 
 } // namespace dom

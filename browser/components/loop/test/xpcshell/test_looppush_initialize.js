@@ -3,16 +3,9 @@
 
 "use strict";
 
-let dummyCallback = () => {};
-let mockWebSocket = new MockWebSocketChannel();
-let pushServerRequestCount = 0;
-
-add_test(function test_initalize_offline() {
-  Services.io.offline = true;
-  do_check_false(MozLoopPushHandler.initialize());
-  Services.io.offline = false;
-  run_next_test();
-});
+var dummyCallback = () => {};
+var mockWebSocket = new MockWebSocketChannel();
+var pushServerRequestCount = 0;
 
 add_test(function test_initalize_missing_chanid() {
   Assert.throws(() => MozLoopPushHandler.register(null, dummyCallback, dummyCallback));
@@ -30,7 +23,7 @@ add_test(function test_initalize_missing_notifycallback() {
 });
 
 add_test(function test_initalize_websocket() {
-  do_check_true(MozLoopPushHandler.initialize({mockWebSocket: mockWebSocket}));
+  MozLoopPushHandler.initialize({ mockWebSocket: mockWebSocket });
   MozLoopPushHandler.register(
     "chan-1",
     function(err, url, id) {
@@ -110,7 +103,7 @@ add_test(function test_retry_registration() {
 add_test(function test_reconnect_no_registration() {
   let regCnt = 0;
   MozLoopPushHandler.shutdown();
-  MozLoopPushHandler.initialize({mockWebSocket: mockWebSocket});
+  MozLoopPushHandler.initialize({ mockWebSocket: mockWebSocket });
   MozLoopPushHandler.register(
     "test-chan",
     function(err, url, id) {
@@ -137,7 +130,7 @@ add_test(function test_ping_websocket() {
   };
 
   MozLoopPushHandler.shutdown();
-  MozLoopPushHandler.initialize({mockWebSocket: mockWebSocket});
+  MozLoopPushHandler.initialize({ mockWebSocket: mockWebSocket });
   MozLoopPushHandler.register(
     "test-chan",
     function(err, url) {
@@ -171,7 +164,7 @@ add_test(function test_retry_pushurl() {
     case 2:
       // missing parameter
       response.setStatusLine(null, 200, "OK");
-      response.write(JSON.stringify({pushServerURI: null}));
+      response.write(JSON.stringify({ pushServerURI: null }));
       response.processAsync();
       response.finish();
       break;
@@ -183,7 +176,7 @@ add_test(function test_retry_pushurl() {
       break;
     case 4:
       response.setStatusLine(null, 200, "OK");
-      response.write(JSON.stringify({pushServerURI: kServerPushUrl}));
+      response.write(JSON.stringify({ pushServerURI: kServerPushUrl }));
       response.processAsync();
       response.finish();
 
@@ -192,7 +185,7 @@ add_test(function test_retry_pushurl() {
     }
   });
 
-  do_check_true(MozLoopPushHandler.initialize({mockWebSocket: mockWebSocket}));
+  MozLoopPushHandler.initialize({ mockWebSocket: mockWebSocket });
 });
 
 function run_test() {
@@ -200,7 +193,7 @@ function run_test() {
 
   loopServer.registerPathHandler("/push-server-config", (request, response) => {
     response.setStatusLine(null, 200, "OK");
-    response.write(JSON.stringify({pushServerURI: kServerPushUrl}));
+    response.write(JSON.stringify({ pushServerURI: kServerPushUrl }));
     response.processAsync();
     response.finish();
   });

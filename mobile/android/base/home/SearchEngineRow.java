@@ -5,22 +5,28 @@
 
 package org.mozilla.gecko.home;
 
-import org.mozilla.gecko.AppConstants;
-import org.mozilla.gecko.db.BrowserContract.SearchHistory;
+import org.mozilla.gecko.GeckoSharedPrefs;
 import org.mozilla.gecko.R;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.home.BrowserSearch.OnEditSuggestionListener;
 import org.mozilla.gecko.home.BrowserSearch.OnSearchListener;
 import org.mozilla.gecko.home.HomePager.OnUrlOpenListener;
+import org.mozilla.gecko.preferences.GeckoPreferences;
+import org.mozilla.gecko.util.DrawableUtil;
 import org.mozilla.gecko.util.StringUtils;
+import org.mozilla.gecko.util.HardwareUtils;
 import org.mozilla.gecko.widget.AnimatedHeightLayout;
 import org.mozilla.gecko.widget.FaviconView;
 import org.mozilla.gecko.widget.FlowLayout;
 
-import android.database.Cursor;
-import android.content.ContentResolver;
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.graphics.drawable.Drawable;
+import android.graphics.Typeface;
+import android.text.style.StyleSpan;
+import android.text.Spannable;
+import android.text.SpannableStringBuilder;
 import android.util.AttributeSet;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -31,6 +37,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.util.EnumSet;
+import java.util.List;
 
 class SearchEngineRow extends AnimatedHeightLayout {
     // Duration for fade-in animation
@@ -64,6 +71,18 @@ class SearchEngineRow extends AnimatedHeightLayout {
     // Selected suggestion view
     private int mSelectedView;
 
+    // android:backgroundTint only works in Android 21 and higher so we can't do this statically in the xml
+    private Drawable mSearchHistorySuggestionIcon;
+
+    // Maximums for suggestions
+    private int mMaxSavedSuggestions;
+    private int mMaxSearchSuggestions;
+
+    // Styles for text in a suggestion 'button' that is not part of the first instance of mUserSearchTerm
+    // Even though they're the same style, SpannableStringBuilder will interpret there as being only one Span present if we re-use a StyleSpan
+    StyleSpan mPriorToSearchTerm;
+    StyleSpan mAfterSearchTerm;
+
     public SearchEngineRow(Context context) {
         this(context, null);
     }
@@ -93,8 +112,7 @@ class SearchEngineRow extends AnimatedHeightLayout {
                     if (v == mUserEnteredView) {
                         Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.SUGGESTION, "user");
                     } else {
-                        final String extras = "engine." + (String) v.getTag();
-                        Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.SUGGESTION, extras);
+                        Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.SUGGESTION, (String) v.getTag());
                     }
                     mSearchListener.onSearch(mSearchEngine, suggestion);
                 }
@@ -125,6 +143,14 @@ class SearchEngineRow extends AnimatedHeightLayout {
         mUserEnteredView.setOnClickListener(mClickListener);
 
         mUserEnteredTextView = (TextView) findViewById(R.id.suggestion_text);
+        mSearchHistorySuggestionIcon = DrawableUtil.tintDrawable(getContext(), R.drawable.icon_most_recent_empty, R.color.tabs_tray_icon_grey);
+
+        // Suggestion limits
+        mMaxSavedSuggestions = getResources().getInteger(R.integer.max_saved_suggestions);
+        mMaxSearchSuggestions = getResources().getInteger(R.integer.max_search_suggestions);
+
+        mPriorToSearchTerm = new StyleSpan(Typeface.BOLD);
+        mAfterSearchTerm = new StyleSpan(Typeface.BOLD);
     }
 
     private void setDescriptionOnSuggestion(View v, String suggestion) {
@@ -139,10 +165,28 @@ class SearchEngineRow extends AnimatedHeightLayout {
 
     private void setSuggestionOnView(View v, String suggestion, boolean isUserSavedSearch) {
         final ImageView historyIcon = (ImageView) v.findViewById(R.id.suggestion_item_icon);
-        historyIcon.setVisibility(isUserSavedSearch ? View.VISIBLE: View.GONE);
+        if (isUserSavedSearch) {
+            historyIcon.setImageDrawable(mSearchHistorySuggestionIcon);
+            historyIcon.setVisibility(View.VISIBLE);
+        } else {
+            historyIcon.setVisibility(View.GONE);
+        }
 
         final TextView suggestionText = (TextView) v.findViewById(R.id.suggestion_text);
-        suggestionText.setText(suggestion);
+        final String searchTerm = getSuggestionTextFromView(mUserEnteredView);
+        // If there is more than one copy of mUserSearchTerm, only the first is not bolded
+        final int startOfSearchTerm = suggestion.indexOf(searchTerm);
+        // Sometimes the suggestion does not contain mUserSearmTerm at all, in which case, bold nothing
+        if (startOfSearchTerm >= 0) {
+            final int endOfSearchTerm = startOfSearchTerm + searchTerm.length();
+            final SpannableStringBuilder sb = new SpannableStringBuilder(suggestion);
+            sb.setSpan(mPriorToSearchTerm, 0, startOfSearchTerm, Spannable.SPAN_INCLUSIVE_INCLUSIVE);
+            sb.setSpan(mAfterSearchTerm, endOfSearchTerm, suggestion.length(), Spannable.SPAN_INCLUSIVE_INCLUSIVE);
+            suggestionText.setText(sb);
+        } else {
+            suggestionText.setText(suggestion);
+        }
+
         setDescriptionOnSuggestion(suggestionText, suggestion);
     }
 
@@ -161,7 +205,7 @@ class SearchEngineRow extends AnimatedHeightLayout {
         mUserEnteredTextView.setText(searchTerm);
 
         // mSearchEngine is not set in the first call to this method; the content description
-        // is instead initially set in updateFromSearchEngine.
+        // is instead initially set in updateSuggestions().
         if (mSearchEngine != null) {
             setDescriptionOnSuggestion(mUserEnteredTextView, searchTerm);
         }
@@ -179,7 +223,7 @@ class SearchEngineRow extends AnimatedHeightLayout {
         mEditSuggestionListener = listener;
     }
 
-    private void bindSuggestionView(String suggestion, boolean animate, int recycledSuggestionCount, Integer previousSuggestionChildIndex, boolean isUserSavedSearch){
+    private void bindSuggestionView(String suggestion, boolean animate, int recycledSuggestionCount, Integer previousSuggestionChildIndex, boolean isUserSavedSearch, String telemetryTag){
         final View suggestionItem;
 
         // Reuse suggestion views from recycled view, if possible.
@@ -192,8 +236,7 @@ class SearchEngineRow extends AnimatedHeightLayout {
             suggestionItem.setOnClickListener(mClickListener);
             suggestionItem.setOnLongClickListener(mLongClickListener);
 
-            // Store the position of the suggestion for telemetry.
-            suggestionItem.setTag(String.valueOf(previousSuggestionChildIndex));
+            suggestionItem.setTag(telemetryTag);
 
             mSuggestionView.addView(suggestionItem);
         }
@@ -215,48 +258,53 @@ class SearchEngineRow extends AnimatedHeightLayout {
         }
     }
 
-    private void updateFromSavedSearches(String searchTerm, boolean animate, int suggestionCounter, int recycledSuggestionCount) {
-        final ContentResolver cr = getContext().getContentResolver();
-
-        String[] columns = new String[] { SearchHistory.QUERY };
-        String actualQuery = SearchHistory.QUERY + " LIKE ?";
-        String[] queryArgs = new String[] { '%' + searchTerm + '%' };
-        String sortOrderAndLimit = SearchHistory.DATE + " DESC LIMIT 4";
-
-        final Cursor c = cr.query(SearchHistory.CONTENT_URI, columns, actualQuery, queryArgs, sortOrderAndLimit);
-
-        if (c == null) {
+    /**
+     * Displays search suggestions from previous searches.
+     *
+     * @param savedSuggestions The List to iterate over for saved search suggestions to display
+     * @param suggestionCounter global index of where to start adding suggestion "buttons" in the search engine row
+     * @param animate whether or not to animate suggestions for visual polish
+     * @param recycledSuggestionCount How many suggestion "button" views we could recycle from previous calls
+     */
+    private void updateFromSavedSearches(List<String> savedSuggestions, boolean animate, int suggestionCounter, int recycledSuggestionCount) {
+        if (savedSuggestions == null || savedSuggestions.isEmpty()) {
             return;
         }
-        try {
-            if (c.moveToFirst()) {
-                final int searchColumn = c.getColumnIndexOrThrow(SearchHistory.QUERY);
-                do {
-                    final String savedSearch = c.getString(searchColumn);
-                    bindSuggestionView(savedSearch, animate, recycledSuggestionCount, suggestionCounter, true);
-                    ++suggestionCounter;
-                } while (c.moveToNext());
-            }
-        } finally {
-            c.close();
+
+        final int historyStartIndex = suggestionCounter;
+        for (String suggestion : savedSuggestions) {
+            String telemetryTag = "history." + (suggestionCounter - historyStartIndex);
+            bindSuggestionView(suggestion, animate, recycledSuggestionCount, suggestionCounter, true, telemetryTag);
+            ++suggestionCounter;
         }
+
         hideRecycledSuggestions(suggestionCounter, recycledSuggestionCount);
     }
 
-    private int updateFromSearchEngine(SearchEngine searchEngine, boolean animate, int recycledSuggestionCount) {
-        // Update search engine reference.
-        mSearchEngine = searchEngine;
-
-        // Set the search engine icon (e.g., Google) for the row.
-        mIconView.updateAndScaleImage(mSearchEngine.getIcon(), mSearchEngine.getEngineIdentifier());
-
-        // Set the initial content description.
-        setDescriptionOnSuggestion(mUserEnteredTextView, mUserEnteredTextView.getText().toString());
+    /**
+     * Displays suggestions supplied by the search engine, relative to number of suggestions from search history.
+     *
+     * @param animate whether or not to animate suggestions for visual polish
+     * @param recycledSuggestionCount How many suggestion "button" views we could recycle from previous calls
+     * @param savedSuggestionCount how many saved searches this searchTerm has
+     * @return the global count of how many suggestions have been bound/shown in the search engine row
+     */
+    private int updateFromSearchEngine(boolean animate, int recycledSuggestionCount, int savedSuggestionCount) {
+        int maxSuggestions = mMaxSearchSuggestions;
+        // If there are less than max saved searches on phones, fill the space with more search engine suggestions
+        if (!HardwareUtils.isTablet() && savedSuggestionCount < mMaxSavedSuggestions) {
+            maxSuggestions += mMaxSavedSuggestions - savedSuggestionCount;
+        }
 
         int suggestionCounter = 0;
-        // Apply Search Engine's suggestions
         for (String suggestion : mSearchEngine.getSuggestions()) {
-            bindSuggestionView(suggestion, animate, recycledSuggestionCount, suggestionCounter, false);
+            if (suggestionCounter == maxSuggestions) {
+                break;
+            }
+
+            // Since the search engine suggestions are listed first, we can use suggestionCounter to get their relative positions for telemetry
+            String telemetryTag = "engine." + suggestionCounter;
+            bindSuggestionView(suggestion, animate, recycledSuggestionCount, suggestionCounter, false, telemetryTag);
             ++suggestionCounter;
         }
 
@@ -270,14 +318,38 @@ class SearchEngineRow extends AnimatedHeightLayout {
         return suggestionCounter;
     }
 
-    public void updateSuggestions(boolean suggestionsEnabled, SearchEngine searchEngine, String searchTerm, boolean animate) {
-        // This can be called before the opt-in permission prompt is shown or set. Check first.
-        if (suggestionsEnabled) {
-            final int recycledSuggestionCount = mSuggestionView.getChildCount();
-            final int suggestionViewCount = updateFromSearchEngine(searchEngine, animate, recycledSuggestionCount);
-            if (AppConstants.NIGHTLY_BUILD) {
-                updateFromSavedSearches(searchTerm, animate, suggestionViewCount, recycledSuggestionCount);
-            }
+    /**
+     * Updates the whole suggestions UI, the search engine UI, suggestions from the default search engine,
+     * and suggestions from search history.
+     *
+     * This can be called before the opt-in permission prompt is shown or set.
+     * Even if both suggestion types are disabled, we need to update the search engine, its image, and the content description.
+     *
+     * @param searchSuggestionsEnabled whether or not suggestions from the default search engine are enabled
+     * @param searchEngine the search engine to use throughout the SearchEngineRow class
+     * @param searchHistorySuggestions search history suggestions
+     * @param animate whether or not to use animations
+     **/
+    public void updateSuggestions(boolean searchSuggestionsEnabled, SearchEngine searchEngine, List<String> searchHistorySuggestions, boolean animate) {
+        mSearchEngine = searchEngine;
+        // Set the search engine icon (e.g., Google) for the row.
+        mIconView.updateAndScaleImage(mSearchEngine.getIcon(), mSearchEngine.getEngineIdentifier());
+        // Set the initial content description.
+        setDescriptionOnSuggestion(mUserEnteredTextView, mUserEnteredTextView.getText().toString());
+
+        final int recycledSuggestionCount = mSuggestionView.getChildCount();
+        final SharedPreferences prefs = GeckoSharedPrefs.forApp(getContext());
+        final boolean savedSearchesEnabled = prefs.getBoolean(GeckoPreferences.PREFS_HISTORY_SAVED_SEARCH, true);
+
+        if (searchSuggestionsEnabled && savedSearchesEnabled) {
+            final int savedSearchCount = (searchHistorySuggestions != null) ? searchHistorySuggestions.size() : 0;
+            final int suggestionViewCount = updateFromSearchEngine(animate, recycledSuggestionCount, savedSearchCount);
+            updateFromSavedSearches(searchHistorySuggestions, animate, suggestionViewCount, recycledSuggestionCount);
+
+        } else if (savedSearchesEnabled) {
+            updateFromSavedSearches(searchHistorySuggestions, animate, 0, recycledSuggestionCount);
+        } else if (searchSuggestionsEnabled) {
+            updateFromSearchEngine(animate, recycledSuggestionCount, 0);
         }
     }
 

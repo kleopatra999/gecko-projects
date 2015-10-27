@@ -171,7 +171,7 @@ class GraphserverOutput(Output):
                 for result in test.results:
                     filtered_val = result.values(testname,
                                                  test.test_config['filters'])
-                    vals.extend([[i['filtered'], j] for i, j in filtered_val])
+                    vals.extend([[i['value'], j] for i, j in filtered_val])
                 result_strings.append(self.construct_results(vals,
                                                              testname=testname,
                                                              **info_dict))
@@ -184,9 +184,8 @@ class GraphserverOutput(Output):
                                              self.shortName(counter_type))
                     if not values:
                         # failed to collect any data for this counter
-                        utils.stamped_msg(
-                            "No results collected for: " + counterName,
-                            "Error"
+                        logging.error(
+                            "No results collected for: " + counterName
                         )
 # NOTE: we are not going to enforce this warning for now as this happens too
 # frequently: bugs 803413, 802475, 805925
@@ -219,11 +218,9 @@ class GraphserverOutput(Output):
                     info['testname'] = counterName
 
                     # append the counter string
-                    utils.stamped_msg(
-                        "Generating results file: %s" % counterName, "Started")
+                    logging.info(
+                        "Generating results file: %s" % counterName)
                     result_strings.append(self.construct_results(vals, **info))
-                    utils.stamped_msg(
-                        "Generating results file: %s" % counterName, "Stopped")
 
         return result_strings
 
@@ -518,7 +515,7 @@ class PerfherderOutput(Output):
                     filtered_results = \
                         result.values(test_result['testrun']['suite'],
                                       test.test_config['filters'])
-                    vals.extend([[i['filtered'], j] for i, j in filtered_results])
+                    vals.extend([[i['value'], j] for i, j in filtered_results])
                     for val, page in filtered_results:
                         if page == 'NULL':
                             summary['subtests'][test.name()] = val

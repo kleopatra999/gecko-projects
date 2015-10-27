@@ -16,6 +16,7 @@
 #include "nsPresContext.h"
 #include "nsIWidget.h"
 #include "nsCRTGlue.h"
+#include "nsCSSParser.h"
 #include "nsCSSProps.h"
 
 #include "nsCOMPtr.h"
@@ -89,19 +90,30 @@ static int safe_strcmp(const char16_t* a, const char16_t* b)
   return NS_strcmp(a, b);
 }
 
-static nsChangeHint CalcShadowDifference(nsCSSShadowArray* lhs,
-                                         nsCSSShadowArray* rhs);
+static bool AreShadowArraysEqual(nsCSSShadowArray* lhs,
+                                 nsCSSShadowArray* rhs);
 
 // --------------------
 // nsStyleFont
 //
 nsStyleFont::nsStyleFont(const nsFont& aFont, nsPresContext *aPresContext)
   : mFont(aFont)
+  , mSize(nsStyleFont::ZoomText(aPresContext, mFont.size))
   , mGenericID(kGenericFont_NONE)
+  , mScriptLevel(0)
+  , mMathVariant(NS_MATHML_MATHVARIANT_NONE)
+  , mMathDisplay(NS_MATHML_DISPLAYSTYLE_INLINE)
+  , mMinFontSizeRatio(100) // 100%
   , mExplicitLanguage(false)
+  , mAllowZoom(true)
+  , mScriptUnconstrainedSize(mSize)
+  , mScriptMinSize(aPresContext->CSSTwipsToAppUnits(
+      NS_POINTS_TO_TWIPS(NS_MATHML_DEFAULT_SCRIPT_MIN_SIZE_PT)))
+  , mScriptSizeMultiplier(NS_MATHML_DEFAULT_SCRIPT_SIZE_MULTIPLIER)
+  , mLanguage(GetLanguage(aPresContext))
 {
   MOZ_COUNT_CTOR(nsStyleFont);
-  Init(aPresContext);
+  mFont.size = mSize;
 }
 
 nsStyleFont::nsStyleFont(const nsStyleFont& aSrc)
@@ -111,6 +123,7 @@ nsStyleFont::nsStyleFont(const nsStyleFont& aSrc)
   , mScriptLevel(aSrc.mScriptLevel)
   , mMathVariant(aSrc.mMathVariant)
   , mMathDisplay(aSrc.mMathDisplay)
+  , mMinFontSizeRatio(aSrc.mMinFontSizeRatio)
   , mExplicitLanguage(aSrc.mExplicitLanguage)
   , mAllowZoom(aSrc.mAllowZoom)
   , mScriptUnconstrainedSize(aSrc.mScriptUnconstrainedSize)
@@ -122,52 +135,16 @@ nsStyleFont::nsStyleFont(const nsStyleFont& aSrc)
 }
 
 nsStyleFont::nsStyleFont(nsPresContext* aPresContext)
-  // passing nullptr to GetDefaultFont make it use the doc language
-  : mFont(*(aPresContext->GetDefaultFont(kPresContext_DefaultVariableFont_ID,
-                                         nullptr)))
-  , mGenericID(kGenericFont_NONE)
-  , mExplicitLanguage(false)
+  : nsStyleFont(*(aPresContext->GetDefaultFont(
+      kPresContext_DefaultVariableFont_ID, nullptr)), aPresContext)
 {
-  MOZ_COUNT_CTOR(nsStyleFont);
-  Init(aPresContext);
-}
-
-void
-nsStyleFont::Init(nsPresContext* aPresContext)
-{
-  mSize = mFont.size = nsStyleFont::ZoomText(aPresContext, mFont.size);
-  mScriptUnconstrainedSize = mSize;
-  mScriptMinSize = aPresContext->CSSTwipsToAppUnits(
-      NS_POINTS_TO_TWIPS(NS_MATHML_DEFAULT_SCRIPT_MIN_SIZE_PT));
-  mScriptLevel = 0;
-  mScriptSizeMultiplier = NS_MATHML_DEFAULT_SCRIPT_SIZE_MULTIPLIER;
-  mMathVariant = NS_MATHML_MATHVARIANT_NONE;
-  mMathDisplay = NS_MATHML_DISPLAYSTYLE_INLINE;
-  mAllowZoom = true;
-
-  nsAutoString language;
-  aPresContext->Document()->GetContentLanguage(language);
-  language.StripWhitespace();
-
-  // Content-Language may be a comma-separated list of language codes,
-  // in which case the HTML5 spec says to treat it as unknown
-  if (!language.IsEmpty() &&
-      !language.Contains(char16_t(','))) {
-    mLanguage = do_GetAtom(language);
-    // NOTE:  This does *not* count as an explicit language; in other
-    // words, it doesn't trigger language-specific hyphenation.
-  } else {
-    // we didn't find a (usable) Content-Language, so we fall back
-    // to whatever the presContext guessed from the charset
-    mLanguage = aPresContext->GetLanguageFromCharset();
-  }
 }
 
 void 
 nsStyleFont::Destroy(nsPresContext* aContext) {
   this->~nsStyleFont();
   aContext->PresShell()->
-    FreeByObjectID(nsPresArena::nsStyleFont_id, this);
+    FreeByObjectID(eArenaObjectID_nsStyleFont, this);
 }
 
 void
@@ -198,7 +175,8 @@ nsChangeHint nsStyleFont::CalcDifference(const nsStyleFont& aOther) const
       mLanguage != aOther.mLanguage ||
       mExplicitLanguage != aOther.mExplicitLanguage ||
       mMathVariant != aOther.mMathVariant ||
-      mMathDisplay != aOther.mMathDisplay) {
+      mMathDisplay != aOther.mMathDisplay ||
+      mMinFontSizeRatio != aOther.mMinFontSizeRatio) {
     return NS_STYLE_HINT_REFLOW;
   }
 
@@ -231,6 +209,27 @@ nsStyleFont::UnZoomText(nsPresContext *aPresContext, nscoord aSize)
   return nscoord(float(aSize) / aPresContext->TextZoom());
 }
 
+/* static */ already_AddRefed<nsIAtom>
+nsStyleFont::GetLanguage(nsPresContext* aPresContext)
+{
+  nsAutoString language;
+  aPresContext->Document()->GetContentLanguage(language);
+  language.StripWhitespace();
+
+  // Content-Language may be a comma-separated list of language codes,
+  // in which case the HTML5 spec says to treat it as unknown
+  if (!language.IsEmpty() &&
+      !language.Contains(char16_t(','))) {
+    return do_GetAtom(language);
+    // NOTE:  This does *not* count as an explicit language; in other
+    // words, it doesn't trigger language-specific hyphenation.
+  } else {
+    // we didn't find a (usable) Content-Language, so we fall back
+    // to whatever the presContext guessed from the charset
+    return do_AddRef(aPresContext->GetLanguageFromCharset());
+  }
+}
+
 nsChangeHint nsStyleFont::CalcFontDifference(const nsFont& aFont1, const nsFont& aFont2)
 {
   if ((aFont1.size == aFont2.size) && 
@@ -256,7 +255,7 @@ nsChangeHint nsStyleFont::CalcFontDifference(const nsFont& aFont1, const nsFont&
     if ((aFont1.decorations == aFont2.decorations)) {
       return NS_STYLE_HINT_NONE;
     }
-    return NS_STYLE_HINT_VISUAL;
+    return nsChangeHint_RepaintFrame;
   }
   return NS_STYLE_HINT_REFLOW;
 }
@@ -310,7 +309,7 @@ void
 nsStyleMargin::Destroy(nsPresContext* aContext) {
   this->~nsStyleMargin();
   aContext->PresShell()->
-    FreeByObjectID(nsPresArena::nsStyleMargin_id, this);
+    FreeByObjectID(eArenaObjectID_nsStyleMargin, this);
 }
 
 
@@ -361,7 +360,7 @@ void
 nsStylePadding::Destroy(nsPresContext* aContext) {
   this->~nsStylePadding();
   aContext->PresShell()->
-    FreeByObjectID(nsPresArena::nsStylePadding_id, this);
+    FreeByObjectID(eArenaObjectID_nsStylePadding, this);
 }
 
 void nsStylePadding::RecalcData()
@@ -513,54 +512,66 @@ nsStyleBorder::Destroy(nsPresContext* aContext) {
   UntrackImage(aContext);
   this->~nsStyleBorder();
   aContext->PresShell()->
-    FreeByObjectID(nsPresArena::nsStyleBorder_id, this);
+    FreeByObjectID(eArenaObjectID_nsStyleBorder, this);
 }
 
 nsChangeHint nsStyleBorder::CalcDifference(const nsStyleBorder& aOther) const
 {
-  nsChangeHint shadowDifference =
-    CalcShadowDifference(mBoxShadow, aOther.mBoxShadow);
-  MOZ_ASSERT(shadowDifference == unsigned(NS_STYLE_HINT_REFLOW) ||
-             shadowDifference == unsigned(NS_STYLE_HINT_VISUAL) ||
-             shadowDifference == unsigned(NS_STYLE_HINT_NONE),
-             "should do more with shadowDifference");
-
   // XXXbz we should be able to return a more specific change hint for
   // at least GetComputedBorder() differences...
   if (mTwipsPerPixel != aOther.mTwipsPerPixel ||
       GetComputedBorder() != aOther.GetComputedBorder() ||
       mFloatEdge != aOther.mFloatEdge ||
       mBorderImageOutset != aOther.mBorderImageOutset ||
-      (shadowDifference & nsChangeHint_NeedReflow) ||
       mBoxDecorationBreak != aOther.mBoxDecorationBreak)
     return NS_STYLE_HINT_REFLOW;
+
+  nsChangeHint boxShadowHint = nsChangeHint(0);
+  if (!AreShadowArraysEqual(mBoxShadow, aOther.mBoxShadow)) {
+    // Update overflow regions & trigger DLBI to be sure it's noticed:
+    NS_UpdateHint(boxShadowHint, nsChangeHint_UpdateOverflow);
+    NS_UpdateHint(boxShadowHint, nsChangeHint_SchedulePaint);
+    // Also request a repaint, since it's possible that only the color
+    // of the shadow is changing (and UpdateOverflow/SchedulePaint won't
+    // repaint for that, since they won't know what needs invalidating.)
+    NS_UpdateHint(boxShadowHint, nsChangeHint_RepaintFrame);
+    // Don't return yet; we may also need nsChangeHint_BorderStyleNoneChange.
+  }
 
   NS_FOR_CSS_SIDES(ix) {
     // See the explanation in nsChangeHint.h of
     // nsChangeHint_BorderStyleNoneChange .
     // Furthermore, even though we know *this* side is 0 width, just
-    // assume a visual hint for some other change rather than bother
+    // assume a repaint hint for some other change rather than bother
     // tracking this result through the rest of the function.
     if (HasVisibleStyle(ix) != aOther.HasVisibleStyle(ix)) {
-      return NS_CombineHint(NS_STYLE_HINT_VISUAL,
+      return NS_CombineHint(boxShadowHint,
+                            nsChangeHint_RepaintFrame |
                             nsChangeHint_BorderStyleNoneChange);
     }
   }
 
+  if (boxShadowHint) {
+    // NOTE: This hint (UpdateOverflow + SchedulePaint + RepaintFrame) is
+    // expected to subsume all hints returned after this point. (Hence, we're
+    // OK to return early.)
+    return boxShadowHint;
+  }
+
   // Note that mBorderStyle stores not only the border style but also
   // color-related flags.  Given that we've already done an mComputedBorder
-  // comparison, border-style differences can only lead to a VISUAL hint.  So
+  // comparison, border-style differences can only lead to a repaint hint.  So
   // it's OK to just compare the values directly -- if either the actual
   // style or the color flags differ we want to repaint.
   NS_FOR_CSS_SIDES(ix) {
     if (mBorderStyle[ix] != aOther.mBorderStyle[ix] || 
         mBorderColor[ix] != aOther.mBorderColor[ix])
-      return NS_STYLE_HINT_VISUAL;
+      return nsChangeHint_RepaintFrame;
   }
 
   if (mBorderRadius != aOther.mBorderRadius ||
       !mBorderColors != !aOther.mBorderColors)
-    return NS_STYLE_HINT_VISUAL;
+    return nsChangeHint_RepaintFrame;
 
   if (IsBorderImageLoaded() || aOther.IsBorderImageLoaded()) {
     if (mBorderImageSource  != aOther.mBorderImageSource  ||
@@ -570,7 +581,7 @@ nsChangeHint nsStyleBorder::CalcDifference(const nsStyleBorder& aOther) const
         mBorderImageFill    != aOther.mBorderImageFill    ||
         mBorderImageWidth   != aOther.mBorderImageWidth   ||
         mBorderImageOutset  != aOther.mBorderImageOutset)
-      return NS_STYLE_HINT_VISUAL;
+      return nsChangeHint_RepaintFrame;
   }
 
   // Note that at this point if mBorderColors is non-null so is
@@ -579,12 +590,8 @@ nsChangeHint nsStyleBorder::CalcDifference(const nsStyleBorder& aOther) const
     NS_FOR_CSS_SIDES(ix) {
       if (!nsBorderColors::Equal(mBorderColors[ix],
                                  aOther.mBorderColors[ix]))
-        return NS_STYLE_HINT_VISUAL;
+        return nsChangeHint_RepaintFrame;
     }
-  }
-
-  if (shadowDifference) {
-    return shadowDifference;
   }
 
   // mBorder is the specified border value.  Changes to this don't
@@ -1059,7 +1066,7 @@ nsStyleClipPath::nsStyleClipPath(const nsStyleClipPath& aSource)
     SetURL(aSource.mURL);
   } else if (aSource.mType == NS_STYLE_CLIP_PATH_SHAPE) {
     SetBasicShape(aSource.mBasicShape, aSource.mSizingBox);
-  } else if (aSource.mType == NS_STYLE_CLIP_PATH_SHAPE) {
+  } else if (aSource.mType == NS_STYLE_CLIP_PATH_BOX) {
     SetSizingBox(aSource.mSizingBox);
   }
 }
@@ -1499,7 +1506,7 @@ IsAutonessEqual(const nsStyleSides& aSides1, const nsStyleSides& aSides2)
 
 nsChangeHint
 nsStylePosition::CalcDifference(const nsStylePosition& aOther,
-                                nsStyleContext* aContext) const
+                                const nsStyleVisibility* aOldStyleVisibility) const
 {
   nsChangeHint hint = nsChangeHint(0);
 
@@ -1584,16 +1591,9 @@ nsStylePosition::CalcDifference(const nsStylePosition& aOther,
     NS_UpdateHint(hint, nsChangeHint_NeedReflow);
   }
 
-  // Properties that apply only to multi-line flex containers:
-  // 'align-content' can change the positioning & sizing of a multi-line flex
-  // container's children when there's extra space in the cross axis, but it
-  // shouldn't affect the container's own sizing.
-  //
-  // NOTE: If we get here, we know that mFlexWrap == aOther.mFlexWrap
-  // (otherwise, we would've returned earlier). So it doesn't matter which one
-  // of those we check to see if we're multi-line.
-  if (mFlexWrap != NS_STYLE_FLEX_WRAP_NOWRAP &&
-      mAlignContent != aOther.mAlignContent) {
+  // 'align-content' doesn't apply to a single-line flexbox but we don't know
+  // if we're a flex container at this point so we can't optimize for that.
+  if (mAlignContent != aOther.mAlignContent) {
     NS_UpdateHint(hint, nsChangeHint_NeedReflow);
   }
 
@@ -1603,23 +1603,43 @@ nsStylePosition::CalcDifference(const nsStylePosition& aOther,
   bool heightChanged = mHeight != aOther.mHeight ||
                        mMinHeight != aOther.mMinHeight ||
                        mMaxHeight != aOther.mMaxHeight;
-  bool isVertical = WritingMode(aContext).IsVertical();
-  if (isVertical ? widthChanged : heightChanged) {
-    // Block-size changes can affect descendant intrinsic sizes due to replaced
-    // elements with percentage bsizes in descendants which also have
-    // percentage bsizes. This is handled via nsChangeHint_UpdateComputedBSize
-    // which clears intrinsic sizes for frames that have such replaced elements.
-    NS_UpdateHint(hint, nsChangeHint_NeedReflow |
-        nsChangeHint_UpdateComputedBSize |
-        nsChangeHint_ReflowChangesSizeOrPosition);
-  }
 
-  if (isVertical ? heightChanged : widthChanged) {
-    // None of our inline-size differences can affect descendant intrinsic
-    // sizes and none of them need to force children to reflow.
-    NS_UpdateHint(hint, NS_SubtractHint(nsChangeHint_AllReflowHints,
-                                        NS_CombineHint(nsChangeHint_ClearDescendantIntrinsics,
-                                                       nsChangeHint_NeedDirtyReflow)));
+  // If aOldStyleVisibility is null, we don't need to bother with any of
+  // these tests, since we know that the element never had its
+  // nsStyleVisibility accessed, which means it couldn't have done
+  // layout.
+  // Note that we pass an nsStyleVisibility here because we don't want
+  // to cause a new struct to be computed during
+  // nsStyleContext::CalcStyleDifference, which can lead to incorrect
+  // style data.
+  // It doesn't matter whether we're looking at the old or new
+  // visibility struct, since a change between vertical and horizontal
+  // writing-mode will cause a reframe, and it's easier to pass the old.
+  if (aOldStyleVisibility) {
+    bool isVertical = WritingMode(aOldStyleVisibility).IsVertical();
+    if (isVertical ? widthChanged : heightChanged) {
+      // Block-size changes can affect descendant intrinsic sizes due to
+      // replaced elements with percentage bsizes in descendants which
+      // also have percentage bsizes. This is handled via
+      // nsChangeHint_UpdateComputedBSize which clears intrinsic sizes
+      // for frames that have such replaced elements.
+      NS_UpdateHint(hint, nsChangeHint_NeedReflow |
+          nsChangeHint_UpdateComputedBSize |
+          nsChangeHint_ReflowChangesSizeOrPosition);
+    }
+
+    if (isVertical ? heightChanged : widthChanged) {
+      // None of our inline-size differences can affect descendant
+      // intrinsic sizes and none of them need to force children to
+      // reflow.
+      NS_UpdateHint(hint, NS_SubtractHint(nsChangeHint_AllReflowHints,
+                                          NS_CombineHint(nsChangeHint_ClearDescendantIntrinsics,
+                                                         nsChangeHint_NeedDirtyReflow)));
+    }
+  } else {
+    if (widthChanged || heightChanged) {
+      NS_UpdateHint(hint, nsChangeHint_NeutralChange);
+    }
   }
 
   // If any of the offsets have changed, then return the respective hints
@@ -1690,7 +1710,7 @@ nsStyleTableBorder::nsStyleTableBorder()
   mBorderCollapse = NS_STYLE_BORDER_SEPARATE;
 
   mEmptyCells = NS_STYLE_TABLE_EMPTY_CELLS_SHOW;
-  mCaptionSide = NS_STYLE_CAPTION_SIDE_BSTART;
+  mCaptionSide = NS_STYLE_CAPTION_SIDE_TOP;
   mBorderSpacingCol = 0;
   mBorderSpacingRow = 0;
 }
@@ -1751,7 +1771,7 @@ nsChangeHint nsStyleColor::CalcDifference(const nsStyleColor& aOther) const
 {
   if (mColor == aOther.mColor)
     return NS_STYLE_HINT_NONE;
-  return NS_STYLE_HINT_VISUAL;
+  return nsChangeHint_RepaintFrame;
 }
 
 // --------------------
@@ -2221,7 +2241,7 @@ nsStyleBackground::Destroy(nsPresContext* aContext)
 
   this->~nsStyleBackground();
   aContext->PresShell()->
-    FreeByObjectID(nsPresArena::nsStyleBackground_id, this);
+    FreeByObjectID(eArenaObjectID_nsStyleBackground, this);
 }
 
 nsChangeHint nsStyleBackground::CalcDifference(const nsStyleBackground& aOther) const
@@ -2238,18 +2258,20 @@ nsChangeHint nsStyleBackground::CalcDifference(const nsStyleBackground& aOther) 
       if (moreLayers->mLayers[i] != lessLayers->mLayers[i]) {
         if ((moreLayers->mLayers[i].mImage.GetType() == eStyleImageType_Element) ||
             (lessLayers->mLayers[i].mImage.GetType() == eStyleImageType_Element))
-          return NS_CombineHint(nsChangeHint_UpdateEffects, NS_STYLE_HINT_VISUAL);
+          return NS_CombineHint(nsChangeHint_UpdateEffects,
+                                nsChangeHint_RepaintFrame);
         hasVisualDifference = true;
       }
     } else {
       if (moreLayers->mLayers[i].mImage.GetType() == eStyleImageType_Element)
-        return NS_CombineHint(nsChangeHint_UpdateEffects, NS_STYLE_HINT_VISUAL);
+        return NS_CombineHint(nsChangeHint_UpdateEffects,
+                              nsChangeHint_RepaintFrame);
       hasVisualDifference = true;
     }
   }
 
   if (hasVisualDifference || mBackgroundColor != aOther.mBackgroundColor)
-    return NS_STYLE_HINT_VISUAL;
+    return nsChangeHint_RepaintFrame;
 
   if (mAttachmentCount != aOther.mAttachmentCount ||
       mClipCount != aOther.mClipCount ||
@@ -2467,15 +2489,24 @@ void nsTimingFunction::AssignFromKeyword(int32_t aTimingFunctionType)
 {
   switch (aTimingFunctionType) {
     case NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_START:
-      mType = StepStart;
-      mSteps = 1;
-      return;
-    case NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_END:
-      mType = StepEnd;
+      mType = Type::StepStart;
+      mStepSyntax = StepSyntax::Keyword;
       mSteps = 1;
       return;
     default:
-      mType = Function;
+      MOZ_ASSERT_UNREACHABLE("aTimingFunctionType must be a keyword value");
+      // fall through
+    case NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_END:
+      mType = Type::StepEnd;
+      mStepSyntax = StepSyntax::Keyword;
+      mSteps = 1;
+      return;
+    case NS_STYLE_TRANSITION_TIMING_FUNCTION_EASE:
+    case NS_STYLE_TRANSITION_TIMING_FUNCTION_LINEAR:
+    case NS_STYLE_TRANSITION_TIMING_FUNCTION_EASE_IN:
+    case NS_STYLE_TRANSITION_TIMING_FUNCTION_EASE_OUT:
+    case NS_STYLE_TRANSITION_TIMING_FUNCTION_EASE_IN_OUT:
+      mType = static_cast<Type>(aTimingFunctionType);
       break;
   }
 
@@ -2616,6 +2647,7 @@ nsStyleDisplay::nsStyleDisplay()
   mMixBlendMode = NS_STYLE_BLEND_NORMAL;
   mIsolation = NS_STYLE_ISOLATION_AUTO;
   mTouchAction = NS_STYLE_TOUCH_ACTION_AUTO;
+  mTopLayer = NS_STYLE_TOP_LAYER_NONE;
   mScrollBehavior = NS_STYLE_SCROLL_BEHAVIOR_AUTO;
   mScrollSnapTypeX = NS_STYLE_SCROLL_SNAP_TYPE_NONE;
   mScrollSnapTypeY = NS_STYLE_SCROLL_SNAP_TYPE_NONE;
@@ -2670,6 +2702,7 @@ nsStyleDisplay::nsStyleDisplay(const nsStyleDisplay& aSource)
   , mOrient(aSource.mOrient)
   , mMixBlendMode(aSource.mMixBlendMode)
   , mIsolation(aSource.mIsolation)
+  , mTopLayer(aSource.mTopLayer)
   , mWillChangeBitField(aSource.mWillChangeBitField)
   , mWillChange(aSource.mWillChange)
   , mTouchAction(aSource.mTouchAction)
@@ -2727,6 +2760,7 @@ nsChangeHint nsStyleDisplay::CalcDifference(const nsStyleDisplay& aOther) const
       || mScrollSnapPointsX != aOther.mScrollSnapPointsX
       || mScrollSnapPointsY != aOther.mScrollSnapPointsY
       || mScrollSnapDestination != aOther.mScrollSnapDestination
+      || mTopLayer != aOther.mTopLayer
       || mResize != aOther.mResize)
     NS_UpdateHint(hint, nsChangeHint_ReconstructFrame);
 
@@ -3134,7 +3168,7 @@ nsStyleContent::Destroy(nsPresContext* aContext)
 
   this->~nsStyleContent();
   aContext->PresShell()->
-    FreeByObjectID(nsPresArena::nsStyleContent_id, this);
+    FreeByObjectID(eArenaObjectID_nsStyleContent, this);
 }
 
 nsStyleContent::nsStyleContent(const nsStyleContent& aSource)
@@ -3350,10 +3384,12 @@ nsChangeHint nsStyleTextReset::CalcDifference(const nsStyleTextReset& aOther) co
     uint8_t otherLineStyle = aOther.GetDecorationStyle();
     if (mTextDecorationLine != aOther.mTextDecorationLine ||
         lineStyle != otherLineStyle) {
-      // Repaint for other style decoration lines because they must be in
-      // default overflow rect
-      nsChangeHint hint = NS_STYLE_HINT_VISUAL;
+      // Changes to our text-decoration line can impact our overflow area &
+      // also our descendants' overflow areas (particularly for text-frame
+      // descendants).  So, we update those areas & trigger a repaint.
+      nsChangeHint hint = nsChangeHint_RepaintFrame;
       NS_UpdateHint(hint, nsChangeHint_UpdateSubtreeOverflow);
+      NS_UpdateHint(hint, nsChangeHint_SchedulePaint);
       return hint;
     }
 
@@ -3363,36 +3399,33 @@ nsChangeHint nsStyleTextReset::CalcDifference(const nsStyleTextReset& aOther) co
     GetDecorationColor(decColor, isFG);
     aOther.GetDecorationColor(otherDecColor, otherIsFG);
     if (isFG != otherIsFG || (!isFG && decColor != otherDecColor)) {
-      return NS_STYLE_HINT_VISUAL;
+      return nsChangeHint_RepaintFrame;
     }
 
     if (mTextOverflow != aOther.mTextOverflow) {
-      return NS_STYLE_HINT_VISUAL;
+      return nsChangeHint_RepaintFrame;
     }
     return NS_STYLE_HINT_NONE;
   }
   return NS_STYLE_HINT_REFLOW;
 }
 
-// Allowed to return one of NS_STYLE_HINT_NONE, NS_STYLE_HINT_REFLOW
-// or NS_STYLE_HINT_VISUAL. Currently we just return NONE or REFLOW, though.
-// XXXbz can this not return a more specific hint?  If that's ever
-// changed, nsStyleBorder::CalcDifference will need changing too.
-static nsChangeHint
-CalcShadowDifference(nsCSSShadowArray* lhs,
+// Returns true if the given shadow-arrays are equal.
+static bool
+AreShadowArraysEqual(nsCSSShadowArray* lhs,
                      nsCSSShadowArray* rhs)
 {
   if (lhs == rhs)
-    return NS_STYLE_HINT_NONE;
+    return true;
 
   if (!lhs || !rhs || lhs->Length() != rhs->Length())
-    return NS_STYLE_HINT_REFLOW;
+    return false;
 
   for (uint32_t i = 0; i < lhs->Length(); ++i) {
     if (*lhs->ShadowAt(i) != *rhs->ShadowAt(i))
-      return NS_STYLE_HINT_REFLOW;
+      return false;
   }
-  return NS_STYLE_HINT_NONE;
+  return true;
 }
 
 // --------------------
@@ -3415,12 +3448,12 @@ nsStyleText::nsStyleText(void)
   mRubyPosition = NS_STYLE_RUBY_POSITION_OVER;
   mTextSizeAdjust = NS_STYLE_TEXT_SIZE_ADJUST_AUTO;
   mTextCombineUpright = NS_STYLE_TEXT_COMBINE_UPRIGHT_NONE;
-  mControlCharacterVisibility = NS_STYLE_CONTROL_CHARACTER_VISIBILITY_HIDDEN;
+  mControlCharacterVisibility = nsCSSParser::ControlCharVisibilityDefault();
 
+  mWordSpacing.SetCoordValue(0);
   mLetterSpacing.SetNormalValue();
   mLineHeight.SetNormalValue();
   mTextIndent.SetCoordValue(0);
-  mWordSpacing = 0;
 
   mTextShadow = nullptr;
   mTabSize = NS_STYLE_TABSIZE_INITIAL;
@@ -3488,7 +3521,12 @@ nsChangeHint nsStyleText::CalcDifference(const nsStyleText& aOther) const
       (mTabSize != aOther.mTabSize))
     return NS_STYLE_HINT_REFLOW;
 
-  return CalcShadowDifference(mTextShadow, aOther.mTextShadow);
+  if (!AreShadowArraysEqual(mTextShadow, aOther.mTextShadow)) {
+    return nsChangeHint_UpdateSubtreeOverflow |
+           nsChangeHint_SchedulePaint |
+           nsChangeHint_RepaintFrame;
+  }
+  return NS_STYLE_HINT_NONE;
 }
 
 //-----------------------

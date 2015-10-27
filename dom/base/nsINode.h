@@ -250,8 +250,8 @@ private:
 
 // IID for the nsINode interface
 #define NS_INODE_IID \
-{ 0xe8fdd227, 0x27da, 0x46ee, \
-  { 0xbe, 0xf3, 0x1a, 0xef, 0x5a, 0x8f, 0xc5, 0xb4 } }
+{ 0x70ba4547, 0x7699, 0x44fc, \
+  { 0xb3, 0x20, 0x52, 0xdb, 0xe3, 0xd1, 0xf9, 0x0a } }
 
 /**
  * An internal interface that abstracts some DOMNode-related parts that both
@@ -949,6 +949,9 @@ public:
                                 const mozilla::dom::Nullable<bool>& aWantsUntrusted,
                                 mozilla::ErrorResult& aRv) override;
   using nsIDOMEventTarget::AddSystemEventListener;
+
+  virtual bool HasApzAwareListeners() const override;
+
   virtual nsIDOMWindow* GetOwnerGlobalForBindings() override;
   virtual nsIGlobalObject* GetOwnerGlobal() const override;
 
@@ -1047,7 +1050,7 @@ public:
      * @see nsIDOMNodeList
      * @see nsGenericHTMLElement::GetChildNodes
      */
-    nsRefPtr<nsChildContentList> mChildNodes;
+    RefPtr<nsChildContentList> mChildNodes;
 
     /**
      * Weak reference to this node.  This is cleared by the destructor of
@@ -1495,6 +1498,8 @@ private:
     ElementHasWeirdParserInsertionMode,
     // Parser sets this flag if it has notified about the node.
     ParserHasNotified,
+    // EventListenerManager sets this flag in case we have apz aware listeners.
+    MayHaveApzAwareListeners,
     // Guard value
     BooleanFlagCount
   };
@@ -1637,6 +1642,12 @@ public:
   void SetHasRelevantHoverRules() { SetBoolFlag(NodeHasRelevantHoverRules); }
   void SetParserHasNotified() { SetBoolFlag(ParserHasNotified); };
   bool HasParserNotified() { return GetBoolFlag(ParserHasNotified); }
+
+  void SetMayHaveApzAwareListeners() { SetBoolFlag(MayHaveApzAwareListeners); }
+  bool NodeMayHaveApzAwareListeners() const
+  {
+    return GetBoolFlag(MayHaveApzAwareListeners);
+  }
 protected:
   void SetParentIsContent(bool aValue) { SetBoolFlag(ParentIsContent, aValue); }
   void SetInDocument() { SetBoolFlag(IsInDocument); }
@@ -1683,7 +1694,7 @@ public:
   // aObject alive anymore.
   void UnbindObject(nsISupports* aObject);
 
-  void GetBoundMutationObservers(nsTArray<nsRefPtr<nsDOMMutationObserver> >& aResult);
+  void GetBoundMutationObservers(nsTArray<RefPtr<nsDOMMutationObserver> >& aResult);
 
   /**
    * Returns the length of this node, as specified at
@@ -1724,6 +1735,8 @@ public:
     // The DOM spec says that when nodeValue is defined to be null "setting it
     // has no effect", so we don't throw an exception.
   }
+  void EnsurePreInsertionValidity(nsINode& aNewChild, nsINode* aRefChild,
+                                  mozilla::ErrorResult& aError);
   nsINode* InsertBefore(nsINode& aNode, nsINode* aChild,
                         mozilla::ErrorResult& aError)
   {
@@ -1795,7 +1808,7 @@ public:
   mozilla::dom::Element* GetLastElementChild() const;
 
   void GetBoxQuads(const BoxQuadOptions& aOptions,
-                   nsTArray<nsRefPtr<DOMQuad> >& aResult,
+                   nsTArray<RefPtr<DOMQuad> >& aResult,
                    mozilla::ErrorResult& aRv);
 
   already_AddRefed<DOMQuad> ConvertQuadFromNode(DOMQuad& aQuad,
@@ -1873,6 +1886,11 @@ protected:
   nsresult CompareDocumentPosition(nsIDOMNode* aOther,
                                    uint16_t* aReturn);
 
+  void EnsurePreInsertionValidity1(nsINode& aNewChild, nsINode* aRefChild,
+                                   mozilla::ErrorResult& aError);
+  void EnsurePreInsertionValidity2(bool aReplace, nsINode& aNewChild,
+                                   nsINode* aRefChild,
+                                   mozilla::ErrorResult& aError);
   nsresult ReplaceOrInsertBefore(bool aReplace, nsIDOMNode *aNewChild,
                                  nsIDOMNode *aRefChild, nsIDOMNode **aReturn);
   nsINode* ReplaceOrInsertBefore(bool aReplace, nsINode* aNewChild,
@@ -1949,7 +1967,7 @@ protected:
   static bool Traverse(nsINode *tmp, nsCycleCollectionTraversalCallback &cb);
   static void Unlink(nsINode *tmp);
 
-  nsRefPtr<mozilla::dom::NodeInfo> mNodeInfo;
+  RefPtr<mozilla::dom::NodeInfo> mNodeInfo;
 
   // mParent is an owning ref most of the time, except for the case of document
   // nodes, so it cannot be represented by nsCOMPtr, so mark is as

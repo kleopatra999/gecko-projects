@@ -21,6 +21,7 @@
 
 #include "builtin/Intl.h"
 #include "builtin/MapObject.h"
+#include "builtin/ModuleObject.h"
 #include "builtin/Object.h"
 #include "builtin/Reflect.h"
 #include "builtin/SelfHostingDefines.h"
@@ -212,6 +213,16 @@ intrinsic_ThrowTypeError(JSContext* cx, unsigned argc, Value* vp)
     MOZ_ASSERT(args.length() >= 1);
 
     ThrowErrorWithType(cx, JSEXN_TYPEERR, args);
+    return false;
+}
+
+static bool
+intrinsic_ThrowSyntaxError(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() >= 1);
+
+    ThrowErrorWithType(cx, JSEXN_SYNTAXERR, args);
     return false;
 }
 
@@ -509,6 +520,48 @@ intrinsic_IsStringIterator(JSContext* cx, unsigned argc, Value* vp)
     MOZ_ASSERT(args[0].isObject());
 
     args.rval().setBoolean(args[0].toObject().is<StringIteratorObject>());
+    return true;
+}
+
+static bool
+intrinsic_NewListIterator(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 0);
+
+    RootedObject proto(cx, GlobalObject::getOrCreateIteratorPrototype(cx, cx->global()));
+    if (!proto)
+        return false;
+
+    RootedObject iterator(cx);
+    iterator = NewObjectWithGivenProto(cx, &ListIteratorObject::class_, proto);
+    if (!iterator)
+        return false;
+
+    args.rval().setObject(*iterator);
+    return true;
+}
+
+static bool
+intrinsic_ActiveFunction(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 0);
+
+    ScriptFrameIter iter(cx);
+    MOZ_ASSERT(iter.isFunctionFrame());
+    args.rval().setObject(*iter.callee(cx));
+    return true;
+}
+
+static bool
+intrinsic_IsListIterator(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    MOZ_ASSERT(args[0].isObject());
+
+    args.rval().setBoolean(args[0].toObject().is<ListIteratorObject>());
     return true;
 }
 
@@ -1205,6 +1258,16 @@ intrinsic_RuntimeDefaultLocale(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static bool
+intrinsic_LocalTZA(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 0, "the LocalTZA intrinsic takes no arguments");
+
+    args.rval().setDouble(cx->runtime()->dateTimeInfo.localTZA());
+    return true;
+}
+
+static bool
 intrinsic_IsConstructing(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
@@ -1234,6 +1297,186 @@ intrinsic_ConstructorForTypedArray(JSContext* cx, unsigned argc, Value* vp)
     return true;
 }
 
+static bool
+intrinsic_IsModule(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    MOZ_ASSERT(args[0].isObject());
+
+    args.rval().setBoolean(args[0].toObject().is<ModuleObject>());
+    return true;
+}
+
+static bool
+intrinsic_HostResolveImportedModule(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 2);
+    MOZ_ASSERT(args[0].toObject().is<ModuleObject>());
+    MOZ_ASSERT(args[1].isString());
+
+    RootedFunction moduleResolveHook(cx, cx->global()->moduleResolveHook());
+    if (!moduleResolveHook) {
+        JS_ReportError(cx, "Module resolve hook not set");
+        return false;
+    }
+
+    RootedValue result(cx);
+    if (!JS_CallFunction(cx, nullptr, moduleResolveHook, args, &result))
+        return false;
+
+    if (!result.isObject() || !result.toObject().is<ModuleObject>()) {
+        JS_ReportError(cx, "Module resolve hook did not return Module object");
+        return false;
+    }
+
+    args.rval().set(result);
+    return true;
+}
+
+static bool
+intrinsic_GetModuleEnvironment(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+    RootedModuleEnvironmentObject env(cx, module->environment());
+    args.rval().setUndefined();
+    if (!env) {
+        args.rval().setUndefined();
+        return true;
+    }
+
+    args.rval().setObject(*env);
+    return true;
+}
+
+static bool
+intrinsic_CreateModuleEnvironment(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+    module->createEnvironment();
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+intrinsic_CreateImportBinding(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 4);
+    RootedModuleEnvironmentObject environment(cx, &args[0].toObject().as<ModuleEnvironmentObject>());
+    RootedAtom importedName(cx, &args[1].toString()->asAtom());
+    RootedModuleObject module(cx, &args[2].toObject().as<ModuleObject>());
+    RootedAtom localName(cx, &args[3].toString()->asAtom());
+    if (!environment->createImportBinding(cx, importedName, module, localName))
+        return false;
+
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+intrinsic_CreateNamespaceBinding(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 3);
+    RootedObject environment(cx, &args[0].toObject());
+    RootedId name(cx, AtomToId(&args[1].toString()->asAtom()));
+    MOZ_ASSERT(args[2].toObject().is<ModuleNamespaceObject>());
+    const unsigned attrs = JSPROP_ENUMERATE | JSPROP_READONLY | JSPROP_PERMANENT;
+    if (!DefineProperty(cx, environment, name, args[2], nullptr, nullptr, attrs))
+        return false;
+
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+intrinsic_InstantiateModuleFunctionDeclarations(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+    args.rval().setUndefined();
+    return ModuleObject::instantiateFunctionDeclarations(cx, module);
+}
+
+static bool
+intrinsic_SetModuleEvaluated(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+    module->setEvaluated();
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+intrinsic_EvaluateModule(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+    return ModuleObject::evaluate(cx, module, args.rval());
+}
+
+static bool
+intrinsic_IsModuleNamespace(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    MOZ_ASSERT(args[0].isObject());
+
+    args.rval().setBoolean(args[0].toObject().is<ModuleNamespaceObject>());
+    return true;
+}
+
+static bool
+intrinsic_NewModuleNamespace(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 2);
+    RootedModuleObject module(cx, &args[0].toObject().as<ModuleObject>());
+    RootedArrayObject exports(cx, &args[1].toObject().as<ArrayObject>());
+    RootedObject namespace_(cx, ModuleObject::createNamespace(cx, module, exports));
+    if (!namespace_)
+        return false;
+
+    args.rval().setObject(*namespace_);
+    return true;
+}
+
+static bool
+intrinsic_AddModuleNamespaceBinding(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 4);
+    RootedModuleNamespaceObject namespace_(cx, &args[0].toObject().as<ModuleNamespaceObject>());
+    RootedAtom exportedName(cx, &args[1].toString()->asAtom());
+    RootedModuleObject targetModule(cx, &args[2].toObject().as<ModuleObject>());
+    RootedAtom localName(cx, &args[3].toString()->asAtom());
+    if (!namespace_->addBinding(cx, exportedName, targetModule, localName))
+        return false;
+
+    args.rval().setUndefined();
+    return true;
+}
+
+static bool
+intrinsic_ModuleNamespaceExports(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 1);
+    RootedModuleNamespaceObject namespace_(cx, &args[0].toObject().as<ModuleNamespaceObject>());
+    args.rval().setObject(namespace_->exports());
+    return true;
+}
+
 // The self-hosting global isn't initialized with the normal set of builtins.
 // Instead, individual C++-implemented functions that're required by
 // self-hosted code are defined as global functions. Accessing these
@@ -1246,13 +1489,13 @@ intrinsic_ConstructorForTypedArray(JSContext* cx, unsigned argc, Value* vp)
 // Additionally, a set of C++-implemented helper functions is defined on the
 // self-hosting global.
 static const JSFunctionSpec intrinsic_functions[] = {
-    JS_FN("std_Array",                           ArrayConstructor,             1,0),
+    JS_INLINABLE_FN("std_Array",                 ArrayConstructor,             1,0, Array),
     JS_FN("std_Array_join",                      array_join,                   1,0),
-    JS_FN("std_Array_push",                      array_push,                   1,0),
-    JS_FN("std_Array_pop",                       array_pop,                    0,0),
-    JS_FN("std_Array_shift",                     array_shift,                  0,0),
+    JS_INLINABLE_FN("std_Array_push",            array_push,                   1,0, ArrayPush),
+    JS_INLINABLE_FN("std_Array_pop",             array_pop,                    0,0, ArrayPop),
+    JS_INLINABLE_FN("std_Array_shift",           array_shift,                  0,0, ArrayShift),
     JS_FN("std_Array_unshift",                   array_unshift,                1,0),
-    JS_FN("std_Array_slice",                     array_slice,                  2,0),
+    JS_INLINABLE_FN("std_Array_slice",           array_slice,                  2,0, ArraySlice),
     JS_FN("std_Array_sort",                      array_sort,                   1,0),
 
     JS_FN("std_Date_now",                        date_now,                     0,0),
@@ -1261,19 +1504,19 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("std_Function_bind",                   fun_bind,                     1,0),
     JS_FN("std_Function_apply",                  fun_apply,                    2,0),
 
-    JS_FN("std_Math_floor",                      math_floor,                   1,0),
-    JS_FN("std_Math_max",                        math_max,                     2,0),
-    JS_FN("std_Math_min",                        math_min,                     2,0),
-    JS_FN("std_Math_abs",                        math_abs,                     1,0),
-    JS_FN("std_Math_imul",                       math_imul,                    2,0),
-    JS_FN("std_Math_log2",                       math_log2,                    1,0),
+    JS_INLINABLE_FN("std_Math_floor",            math_floor,                   1,0, MathFloor),
+    JS_INLINABLE_FN("std_Math_max",              math_max,                     2,0, MathMax),
+    JS_INLINABLE_FN("std_Math_min",              math_min,                     2,0, MathMin),
+    JS_INLINABLE_FN("std_Math_abs",              math_abs,                     1,0, MathAbs),
+    JS_INLINABLE_FN("std_Math_imul",             math_imul,                    2,0, MathImul),
+    JS_INLINABLE_FN("std_Math_log2",             math_log2,                    1,0, MathLog2),
 
     JS_FN("std_Map_has",                         MapObject::has,               1,0),
     JS_FN("std_Map_iterator",                    MapObject::entries,           0,0),
 
     JS_FN("std_Number_valueOf",                  num_valueOf,                  0,0),
 
-    JS_FN("std_Object_create",                   obj_create,                   2,0),
+    JS_INLINABLE_FN("std_Object_create",         obj_create,                   2, 0, ObjectCreate),
     JS_FN("std_Object_propertyIsEnumerable",     obj_propertyIsEnumerable,     1,0),
     JS_FN("std_Object_defineProperty",           obj_defineProperty,           3,0),
     JS_FN("std_Object_getOwnPropertyNames",      obj_getOwnPropertyNames,      1,0),
@@ -1287,13 +1530,13 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("std_Set_has",                         SetObject::has,               1,0),
     JS_FN("std_Set_iterator",                    SetObject::values,            0,0),
 
-    JS_FN("std_String_fromCharCode",             str_fromCharCode,             1,0),
-    JS_FN("std_String_charCodeAt",               str_charCodeAt,               1,0),
+    JS_INLINABLE_FN("std_String_fromCharCode",   str_fromCharCode,             1,0, StringFromCharCode),
+    JS_INLINABLE_FN("std_String_charCodeAt",     str_charCodeAt,               1,0, StringCharCodeAt),
     JS_FN("std_String_indexOf",                  str_indexOf,                  1,0),
     JS_FN("std_String_lastIndexOf",              str_lastIndexOf,              1,0),
     JS_FN("std_String_match",                    str_match,                    1,0),
-    JS_FN("std_String_replace",                  str_replace,                  2,0),
-    JS_FN("std_String_split",                    str_split,                    2,0),
+    JS_INLINABLE_FN("std_String_replace",        str_replace,                  2,0, StringReplace),
+    JS_INLINABLE_FN("std_String_split",          str_split,                    2,0, StringSplit),
     JS_FN("std_String_startsWith",               str_startsWith,               1,0),
     JS_FN("std_String_toLowerCase",              str_toLowerCase,              0,0),
     JS_FN("std_String_toUpperCase",              str_toUpperCase,              0,0),
@@ -1304,8 +1547,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("std_WeakMap_delete",                  WeakMap_delete,               1,0),
     JS_FN("std_WeakMap_clear",                   WeakMap_clear,                0,0),
 
-    JS_FN("std_SIMD_Int32x4_extractLane",        simd_int32x4_extractLane,     2,0),
-    JS_FN("std_SIMD_Float32x4_extractLane",      simd_float32x4_extractLane,   2,0),
+    JS_INLINABLE_FN("std_SIMD_Int32x4_extractLane",   simd_int32x4_extractLane,  2,0, SimdInt32x4),
+    JS_INLINABLE_FN("std_SIMD_Float32x4_extractLane", simd_float32x4_extractLane,2,0, SimdFloat32x4),
     JS_FN("std_SIMD_Float64x2_extractLane",      simd_float64x2_extractLane,   2,0),
 
     // Helper funtions after this point.
@@ -1319,11 +1562,13 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("OwnPropertyKeys",         intrinsic_OwnPropertyKeys,         1,0),
     JS_FN("ThrowRangeError",         intrinsic_ThrowRangeError,         4,0),
     JS_FN("ThrowTypeError",          intrinsic_ThrowTypeError,          4,0),
+    JS_FN("ThrowSyntaxError",        intrinsic_ThrowSyntaxError,        4,0),
     JS_FN("AssertionFailed",         intrinsic_AssertionFailed,         1,0),
     JS_FN("MakeConstructible",       intrinsic_MakeConstructible,       2,0),
     JS_FN("_ConstructorForTypedArray", intrinsic_ConstructorForTypedArray, 1,0),
     JS_FN("DecompileArg",            intrinsic_DecompileArg,            2,0),
     JS_FN("RuntimeDefaultLocale",    intrinsic_RuntimeDefaultLocale,    0,0),
+    JS_FN("LocalTZA",                intrinsic_LocalTZA,                0,0),
 
     JS_INLINABLE_FN("_IsConstructing", intrinsic_IsConstructing,        0,0,
                     IntrinsicIsConstructing),
@@ -1352,12 +1597,19 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("CallArrayIteratorMethodIfWrapped",
           CallNonGenericSelfhostedMethod<Is<ArrayIteratorObject>>,      2,0),
 
+    JS_FN("NewListIterator",         intrinsic_NewListIterator,         0,0),
+    JS_FN("CallListIteratorMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<ListIteratorObject>>,       2,0),
+    JS_FN("ActiveFunction",          intrinsic_ActiveFunction,          0,0),
+
     JS_INLINABLE_FN("IsArrayIterator", intrinsic_IsArrayIterator,       1,0,
                     IntrinsicIsArrayIterator),
     JS_INLINABLE_FN("IsMapIterator",   intrinsic_IsMapIterator,         1,0,
                     IntrinsicIsMapIterator),
     JS_INLINABLE_FN("IsStringIterator",intrinsic_IsStringIterator,      1,0,
                     IntrinsicIsStringIterator),
+    JS_INLINABLE_FN("IsListIterator",intrinsic_IsListIterator,          1,0,
+                    IntrinsicIsListIterator),
 
     JS_FN("_GetNextMapEntryForIterator", intrinsic_GetNextMapEntryForIterator, 3,0),
     JS_FN("CallMapIteratorMethodIfWrapped",
@@ -1410,6 +1662,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
           CallNonGenericSelfhostedMethod<Is<StarGeneratorObject>>, 2, 0),
 
     JS_FN("IsWeakSet",               intrinsic_IsWeakSet,               1,0),
+    JS_FN("CallWeakSetMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<WeakSetObject>>, 2, 0),
 
     // See builtin/TypedObject.h for descriptors of the typedobj functions.
     JS_FN("NewOpaqueTypedObject",           js::NewOpaqueTypedObject, 1, 0),
@@ -1474,6 +1728,23 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("regexp_test_no_statics", regexp_test_no_statics, 2,0),
     JS_FN("regexp_construct_no_statics", regexp_construct_no_statics, 2,0),
 
+    JS_FN("IsModule", intrinsic_IsModule, 1, 0),
+    JS_FN("CallModuleMethodIfWrapped",
+          CallNonGenericSelfhostedMethod<Is<ModuleObject>>, 2, 0),
+    JS_FN("HostResolveImportedModule", intrinsic_HostResolveImportedModule, 2, 0),
+    JS_FN("GetModuleEnvironment", intrinsic_GetModuleEnvironment, 1, 0),
+    JS_FN("CreateModuleEnvironment", intrinsic_CreateModuleEnvironment, 1, 0),
+    JS_FN("CreateImportBinding", intrinsic_CreateImportBinding, 4, 0),
+    JS_FN("CreateNamespaceBinding", intrinsic_CreateNamespaceBinding, 3, 0),
+    JS_FN("InstantiateModuleFunctionDeclarations",
+          intrinsic_InstantiateModuleFunctionDeclarations, 1, 0),
+    JS_FN("SetModuleEvaluated", intrinsic_SetModuleEvaluated, 1, 0),
+    JS_FN("EvaluateModule", intrinsic_EvaluateModule, 1, 0),
+    JS_FN("IsModuleNamespace", intrinsic_IsModuleNamespace, 1, 0),
+    JS_FN("NewModuleNamespace", intrinsic_NewModuleNamespace, 2, 0),
+    JS_FN("AddModuleNamespaceBinding", intrinsic_AddModuleNamespaceBinding, 4, 0),
+    JS_FN("ModuleNamespaceExports", intrinsic_ModuleNamespaceExports, 1, 0),
+
     JS_FS_END
 };
 
@@ -1525,7 +1796,7 @@ JSRuntime::createSelfHostingGlobal(JSContext* cx)
         "self-hosting-global", JSCLASS_GLOBAL_FLAGS,
         nullptr, nullptr, nullptr, nullptr,
         nullptr, nullptr, nullptr, nullptr,
-        nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, nullptr,
         JS_GlobalObjectTraceHook
     };
 
@@ -1767,8 +2038,10 @@ CloneObject(JSContext* cx, HandleNativeObject selfHostedObject)
                                  ? gc::AllocKind::FUNCTION_EXTENDED
                                  : selfHostedFunction->getAllocKind();
         MOZ_ASSERT(!CanReuseScriptForClone(cx->compartment(), selfHostedFunction, cx->global()));
-        clone = CloneFunctionAndScript(cx, selfHostedFunction, cx->global(),
-                                       /* newStaticScope = */ nullptr, kind);
+        Rooted<ClonedBlockObject*> globalLexical(cx, &cx->global()->lexicalScope());
+        RootedObject staticGlobalLexical(cx, &globalLexical->staticBlock());
+        clone = CloneFunctionAndScript(cx, selfHostedFunction, globalLexical,
+                                       staticGlobalLexical, kind);
         // To be able to re-lazify the cloned function, its name in the
         // self-hosting compartment has to be stored on the clone.
         if (clone && hasName)
@@ -1853,16 +2126,28 @@ JSRuntime::cloneSelfHostedFunctionScript(JSContext* cx, HandlePropertyName name,
     // aren't any.
     MOZ_ASSERT(!sourceFun->isGenerator());
     MOZ_ASSERT(sourceFun->nargs() == targetFun->nargs());
-    // The target function might have been relazified after it's flags changed.
-    targetFun->setFlags((targetFun->flags() & ~JSFunction::INTERPRETED_LAZY) |
-                        sourceFun->flags() | JSFunction::EXTENDED);
     MOZ_ASSERT(targetFun->isExtended());
+    MOZ_ASSERT(targetFun->isInterpretedLazy());
+    MOZ_ASSERT(targetFun->isSelfHostedBuiltin());
 
     RootedScript sourceScript(cx, sourceFun->getOrCreateScript(cx));
     if (!sourceScript)
         return false;
-    MOZ_ASSERT(!sourceScript->enclosingStaticScope());
-    return !!CloneScriptIntoFunction(cx, /* enclosingScope = */ nullptr, targetFun, sourceScript);
+
+    // Assert that there are no intervening scopes between the global scope
+    // and the self-hosted script. Toplevel lexicals are explicitly forbidden
+    // by the parser when parsing self-hosted code. The fact they have the
+    // global lexical scope on the scope chain is for uniformity and engine
+    // invariants.
+    MOZ_ASSERT(IsStaticGlobalLexicalScope(sourceScript->enclosingStaticScope()));
+    Rooted<ScopeObject*> enclosingScope(cx, &cx->global()->lexicalScope().staticBlock());
+    if (!CloneScriptIntoFunction(cx, enclosingScope, targetFun, sourceScript))
+        return false;
+    MOZ_ASSERT(!targetFun->isInterpretedLazy());
+
+    // The target function might have been relazified after its flags changed.
+    targetFun->setFlags(targetFun->flags() | sourceFun->flags());
+    return true;
 }
 
 bool

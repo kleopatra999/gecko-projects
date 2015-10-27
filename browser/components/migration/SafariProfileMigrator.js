@@ -4,9 +4,9 @@
 
 "use strict";
 
-let Cc = Components.classes;
-let Ci = Components.interfaces;
-let Cu = Components.utils;
+var Cc = Components.classes;
+var Ci = Components.interfaces;
+var Cu = Components.utils;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/FileUtils.jsm");
@@ -325,7 +325,7 @@ Preferences.prototype = {
 
         this._dict = aDict;
 
-        let invert = function(webkitVal) !webkitVal;
+        let invert = webkitVal => !webkitVal;
         this._set("AutoFillPasswords", "signon.rememberSignons");
         this._set("OpenNewTabsInFront", "browser.tabs.loadInBackground", invert);
         this._set("WebKitJavaScriptCanOpenWindowsAutomatically",
@@ -342,7 +342,7 @@ Preferences.prototype = {
         // Allowed                          TRUE      1
         // Allowed, originating site only   --        3
         this._set("WebKitDisplayImagesKey", "permissions.default.image",
-                  function(webkitVal) webkitVal ? 1 : 2);
+                  webkitVal => webkitVal ? 1 : 2);
 
 #ifdef XP_WIN
         // Cookie-accept policy.
@@ -353,7 +353,7 @@ Preferences.prototype = {
         // Never Accept               1               2
         this._set("WebKitCookieStorageAcceptPolicy",
           "network.cookie.cookieBehavior",
-          function(webkitVal) webkitVal == 0 ? 0 : webkitVal == 1 ? 2 : 1);
+          webkitVal => webkitVal == 0 ? 0 : webkitVal == 1 ? 2 : 1);
 #endif
 
         this._migrateFontSettings();

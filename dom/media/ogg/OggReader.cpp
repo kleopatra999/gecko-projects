@@ -152,7 +152,7 @@ OggReader::~OggReader()
   MOZ_COUNT_DTOR(OggReader);
 }
 
-nsresult OggReader::Init(MediaDecoderReader* aCloneDonor) {
+nsresult OggReader::Init() {
   int ret = ogg_sync_init(&mOggState);
   NS_ENSURE_TRUE(ret == 0, NS_ERROR_FAILURE);
   return NS_OK;
@@ -240,7 +240,7 @@ void OggReader::SetupTargetTheora(TheoraState* aTheoraState)
 
     VideoFrameContainer* container = mDecoder->GetVideoFrameContainer();
     if (container) {
-      container->ClearCurrentFrame(gfxIntSize(displaySize.width, displaySize.height));
+      container->ClearCurrentFrame(IntSize(displaySize.width, displaySize.height));
     }
 
     // Copy Theora info data for time computations on other threads.
@@ -470,22 +470,16 @@ nsresult OggReader::ReadMetadata(MediaInfo* aInfo,
   SetupMediaTracksInfo(serials);
 
   if (HasAudio() || HasVideo()) {
-    ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
-
-    if (mInfo.mMetadataDuration.isNothing() && !mDecoder->IsOggDecoderShutdown() &&
-        mResource.GetLength() >= 0 && mDecoder->IsMediaSeekable())
-    {
+    if (mInfo.mMetadataDuration.isNothing() &&
+        !mDecoder->IsOggDecoderShutdown() &&
+        mResource.GetLength() >= 0) {
       // We didn't get a duration from the index or a Content-Duration header.
       // Seek to the end of file to find the end time.
       int64_t length = mResource.GetLength();
 
       NS_ASSERTION(length > 0, "Must have a content length to get end time");
 
-      int64_t endTime = 0;
-      {
-        ReentrantMonitorAutoExit exitMon(mDecoder->GetReentrantMonitor());
-        endTime = RangeEndTime(length);
-      }
+      int64_t endTime = RangeEndTime(length);
       if (endTime != -1) {
         mInfo.mUnadjustedMetadataEndTime.emplace(TimeUnit::FromMicroseconds(endTime));
         LOG(LogLevel::Debug, ("Got Ogg duration from seeking to end %lld", endTime));
@@ -720,10 +714,7 @@ void OggReader::SetChained(bool aIsChained) {
     ReentrantMonitorAutoEnter mon(mMonitor);
     mIsChained = aIsChained;
   }
-  {
-    ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
-    mDecoder->SetMediaSeekable(false);
-  }
+  mDecoder->DispatchSetMediaSeekable(false);
 }
 
 bool OggReader::ReadOggChain()
@@ -865,7 +856,7 @@ nsresult OggReader::DecodeTheora(ogg_packet* aPacket, int64_t aTimeThreshold)
     b.mPlanes[i].mOffset = b.mPlanes[i].mSkip = 0;
   }
 
-  nsRefPtr<VideoData> v = VideoData::Create(mInfo.mVideo,
+  RefPtr<VideoData> v = VideoData::Create(mInfo.mVideo,
                                             mDecoder->GetImageContainer(),
                                             mResource.Tell(),
                                             time,
@@ -1403,7 +1394,7 @@ nsresult OggReader::SeekInUnbuffered(int64_t aTarget,
   return SeekBisection(seekTarget, k, SEEK_FUZZ_USECS);
 }
 
-nsRefPtr<MediaDecoderReader::SeekPromise>
+RefPtr<MediaDecoderReader::SeekPromise>
 OggReader::Seek(int64_t aTarget, int64_t aEndTime)
 {
   nsresult res = SeekInternal(aTarget, aEndTime);
@@ -1479,7 +1470,7 @@ nsresult OggReader::SeekInternal(int64_t aTarget, int64_t aEndTime)
     // keyframe.
     VideoData* v;
     while ((v = mVideoQueue.PeekFront()) && !v->mKeyframe) {
-      nsRefPtr<VideoData> releaseMe = mVideoQueue.PopFront();
+      RefPtr<VideoData> releaseMe = mVideoQueue.PopFront();
     }
     if (mVideoQueue.GetSize() == 0) {
       // We didn't find a keyframe in the frames already here, so decode

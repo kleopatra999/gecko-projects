@@ -271,7 +271,7 @@ OuterizeValue(JSContext* cx, HandleValue v)
 }
 
 bool
-Proxy::get(JSContext* cx, HandleObject proxy, HandleObject receiver_, HandleId id,
+Proxy::get(JSContext* cx, HandleObject proxy, HandleValue receiver_, HandleId id,
            MutableHandleValue vp)
 {
     JS_CHECK_RECURSION(cx, return false);
@@ -283,7 +283,7 @@ Proxy::get(JSContext* cx, HandleObject proxy, HandleObject receiver_, HandleId i
 
     // Outerize the receiver. Proxy handlers shouldn't have to know about
     // the Window/WindowProxy distinction.
-    RootedObject receiver(cx, GetOuterObject(cx, receiver_));
+    RootedValue receiver(cx, OuterizeValue(cx, receiver_));
 
     if (handler->hasPrototype()) {
         bool own;
@@ -303,7 +303,7 @@ Proxy::get(JSContext* cx, HandleObject proxy, HandleObject receiver_, HandleId i
 }
 
 bool
-Proxy::callProp(JSContext* cx, HandleObject proxy, HandleObject receiver, HandleId id,
+Proxy::callProp(JSContext* cx, HandleObject proxy, HandleValue receiver, HandleId id,
                 MutableHandleValue vp)
 {
     // The inline caches need an access point for JSOP_CALLPROP sites that accounts
@@ -455,10 +455,16 @@ Proxy::hasInstance(JSContext* cx, HandleObject proxy, MutableHandleValue v, bool
 }
 
 bool
-Proxy::objectClassIs(HandleObject proxy, ESClassValue classValue, JSContext* cx)
+Proxy::getBuiltinClass(JSContext* cx, HandleObject proxy, ESClassValue* classValue)
 {
     JS_CHECK_RECURSION(cx, return false);
-    return proxy->as<ProxyObject>().handler()->objectClassIs(proxy, classValue, cx);
+    return proxy->as<ProxyObject>().handler()->getBuiltinClass(cx, proxy, classValue);
+}
+
+bool
+Proxy::isArray(JSContext* cx, HandleObject proxy, JS::IsArrayAnswer* answer)
+{
+    return proxy->as<ProxyObject>().handler()->isArray(cx, proxy, answer);
 }
 
 const char*
@@ -505,13 +511,6 @@ Proxy::boxedValue_unbox(JSContext* cx, HandleObject proxy, MutableHandleValue vp
 {
     JS_CHECK_RECURSION(cx, return false);
     return proxy->as<ProxyObject>().handler()->boxedValue_unbox(cx, proxy, vp);
-}
-
-bool
-Proxy::defaultValue(JSContext* cx, HandleObject proxy, JSType hint, MutableHandleValue vp)
-{
-    JS_CHECK_RECURSION(cx, return false);
-    return proxy->as<ProxyObject>().handler()->defaultValue(cx, proxy, hint, vp);
 }
 
 JSObject * const TaggedProto::LazyProto = reinterpret_cast<JSObject*>(0x1);
@@ -594,7 +593,7 @@ js::proxy_HasProperty(JSContext* cx, JS::HandleObject obj, JS::HandleId id, bool
 }
 
 bool
-js::proxy_GetProperty(JSContext* cx, HandleObject obj, HandleObject receiver, HandleId id,
+js::proxy_GetProperty(JSContext* cx, HandleObject obj, HandleValue receiver, HandleId id,
                       MutableHandleValue vp)
 {
     return Proxy::get(cx, obj, receiver, id, vp);
@@ -672,13 +671,6 @@ js::proxy_WeakmapKeyDelegate(JSObject* obj)
 {
     MOZ_ASSERT(obj->is<ProxyObject>());
     return obj->as<ProxyObject>().handler()->weakmapKeyDelegate(obj);
-}
-
-bool
-js::proxy_Convert(JSContext* cx, HandleObject proxy, JSType hint, MutableHandleValue vp)
-{
-    MOZ_ASSERT(proxy->is<ProxyObject>());
-    return Proxy::defaultValue(cx, proxy, hint, vp);
 }
 
 void

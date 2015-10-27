@@ -2,7 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-let TrackingProtection = {
+var TrackingProtection = {
   MAX_INTROS: 0,
   PREF_ENABLED_GLOBALLY: "privacy.trackingprotection.enabled",
   PREF_ENABLED_IN_PRIVATE_WINDOWS: "privacy.trackingprotection.pbmode.enabled",
@@ -30,6 +30,7 @@ let TrackingProtection = {
       gNavigatorBundle.getString("trackingProtection.icon.disabledTooltip");
 
     this.enabledHistogramAdd(this.enabledGlobally);
+    this.disabledPBMHistogramAdd(!this.enabledInPrivateWindows);
   },
 
   uninit() {
@@ -60,6 +61,13 @@ let TrackingProtection = {
       return;
     }
     Services.telemetry.getHistogramById("TRACKING_PROTECTION_ENABLED").add(value);
+  },
+
+  disabledPBMHistogramAdd(value) {
+    if (PrivateBrowsingUtils.isWindowPrivate(window)) {
+      return;
+    }
+    Services.telemetry.getHistogramById("TRACKING_PROTECTION_PBM_DISABLED").add(value);
   },
 
   eventsHistogramAdd(value) {

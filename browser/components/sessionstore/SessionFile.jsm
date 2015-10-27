@@ -38,7 +38,7 @@ Cu.import("resource://gre/modules/AsyncShutdown.jsm");
 Cu.import("resource://gre/modules/Preferences.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "console",
-  "resource://gre/modules/devtools/Console.jsm");
+  "resource://gre/modules/Console.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "RunState",
   "resource:///modules/sessionstore/RunState.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "TelemetryStopwatch",
@@ -51,6 +51,8 @@ XPCOMUtils.defineLazyServiceGetter(this, "sessionStartup",
   "@mozilla.org/browser/sessionstartup;1", "nsISessionStartup");
 XPCOMUtils.defineLazyModuleGetter(this, "SessionWorker",
   "resource:///modules/sessionstore/SessionWorker.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "SessionStore",
+  "resource:///modules/sessionstore/SessionStore.jsm");
 
 const PREF_UPGRADE_BACKUP = "browser.sessionstore.upgradeBackup.latestBuildID";
 const PREF_MAX_UPGRADE_BACKUPS = "browser.sessionstore.upgradeBackup.maxUpgradeBackups";
@@ -89,10 +91,10 @@ this.SessionFile = {
 
 Object.freeze(SessionFile);
 
-let Path = OS.Path;
-let profileDir = OS.Constants.Path.profileDir;
+var Path = OS.Path;
+var profileDir = OS.Constants.Path.profileDir;
 
-let SessionFileInternal = {
+var SessionFileInternal = {
   Paths: Object.freeze({
     // The path to the latest version of sessionstore written during a clean
     // shutdown. After startup, it is renamed `cleanBackup`.
@@ -199,6 +201,12 @@ let SessionFileInternal = {
         let startMs = Date.now();
         let source = yield OS.File.read(path, { encoding: "utf-8" });
         let parsed = JSON.parse(source);
+
+        if (!SessionStore.isFormatVersionCompatible(parsed.version || ["sessionrestore", 0] /*fallback for old versions*/)) {
+          // Skip sessionstore files that we don't understand.
+          Cu.reportError("Cannot extract data from Session Restore file " + path + ". Wrong format/version: " + JSON.stringify(parsed.version) + ".");
+          continue;
+        }
         result = {
           origin: key,
           source: source,

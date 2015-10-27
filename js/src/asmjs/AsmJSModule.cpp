@@ -314,10 +314,9 @@ AsmJSModule::finish(ExclusiveContext* cx, TokenStream& tokenStream, MacroAssembl
     MOZ_ASSERT(masm.preBarrierTableBytes() == 0);
     MOZ_ASSERT(!masm.hasSelfReference());
 
-    // Copy over metadata, making sure to update all offsets on ARM.
-
-    staticLinkData_.interruptExitOffset = masm.actualOffset(interruptLabel.offset());
-    staticLinkData_.outOfBoundsExitOffset = masm.actualOffset(outOfBoundsLabel.offset());
+    // Copy over metadata.
+    staticLinkData_.interruptExitOffset = interruptLabel.offset();
+    staticLinkData_.outOfBoundsExitOffset = outOfBoundsLabel.offset();
 
     // Heap-access metadata used for link-time patching and fault-handling.
     heapAccesses_ = masm.extractAsmJSHeapAccesses();
@@ -325,30 +324,6 @@ AsmJSModule::finish(ExclusiveContext* cx, TokenStream& tokenStream, MacroAssembl
     // Call-site metadata used for stack unwinding.
     callSites_ = masm.extractCallSites();
 
-#if defined(JS_CODEGEN_ARM)
-    // ARM requires the offsets to be updated.
-    pod.functionBytes_ = masm.actualOffset(pod.functionBytes_);
-    for (size_t i = 0; i < heapAccesses_.length(); i++) {
-        AsmJSHeapAccess& a = heapAccesses_[i];
-        a.setInsnOffset(masm.actualOffset(a.insnOffset()));
-    }
-    for (unsigned i = 0; i < numExportedFunctions(); i++) {
-        if (!exportedFunction(i).isChangeHeap())
-            exportedFunction(i).updateCodeOffset(masm);
-    }
-    for (unsigned i = 0; i < numExits(); i++)
-        exit(i).updateOffsets(masm);
-    for (size_t i = 0; i < callSites_.length(); i++) {
-        CallSite& c = callSites_[i];
-        c.setReturnAddressOffset(masm.actualOffset(c.returnAddressOffset()));
-    }
-    for (size_t i = 0; i < codeRanges_.length(); i++) {
-        codeRanges_[i].updateOffsets(masm);
-        MOZ_ASSERT_IF(i > 0, codeRanges_[i - 1].end() <= codeRanges_[i].begin());
-    }
-    for (size_t i = 0; i < builtinThunkOffsets_.length(); i++)
-        builtinThunkOffsets_[i] = masm.actualOffset(builtinThunkOffsets_[i]);
-#endif
     MOZ_ASSERT(pod.functionBytes_ % AsmJSPageSize == 0);
 
     // Absolute link metadata: absolute addresses that refer to some fixed
@@ -356,19 +331,19 @@ AsmJSModule::finish(ExclusiveContext* cx, TokenStream& tokenStream, MacroAssembl
     AbsoluteLinkArray& absoluteLinks = staticLinkData_.absoluteLinks;
     for (size_t i = 0; i < masm.numAsmJSAbsoluteLinks(); i++) {
         AsmJSAbsoluteLink src = masm.asmJSAbsoluteLink(i);
-        if (!absoluteLinks[src.target].append(masm.actualOffset(src.patchAt.offset())))
+        if (!absoluteLinks[src.target].append(src.patchAt.offset()))
             return false;
     }
 
     // Relative link metadata: absolute addresses that refer to another point within
     // the asm.js module.
 
-    // CodeLabels are used for switch cases and loads from doubles in the
-    // constant pool.
+    // CodeLabels are used for switch cases and loads from floating-point /
+    // SIMD values in the constant pool.
     for (size_t i = 0; i < masm.numCodeLabels(); i++) {
         CodeLabel src = masm.codeLabel(i);
         int32_t labelOffset = src.dest()->offset();
-        int32_t targetOffset = masm.actualOffset(src.src()->offset());
+        int32_t targetOffset = src.src()->offset();
         // The patched uses of a label embed a linked list where the
         // to-be-patched immediate is the offset of the next to-be-patched
         // instruction.
@@ -417,15 +392,6 @@ AsmJSModule::finish(ExclusiveContext* cx, TokenStream& tokenStream, MacroAssembl
     for (size_t i = 0; i < masm.numAsmJSGlobalAccesses(); i++) {
         AsmJSGlobalAccess a = masm.asmJSGlobalAccess(i);
         masm.patchAsmJSGlobalAccess(a.patchAt, code_, globalData(), a.globalDataOffset);
-    }
-#endif
-
-#if defined(MOZ_VTUNE) || defined(JS_ION_PERF)
-    // Fix up the code offsets.
-    for (size_t i = 0; i < profiledFunctions_.length(); i++) {
-        ProfiledFunction& pf = profiledFunctions_[i];
-        pf.pod.startCodeOffset = masm.actualOffset(pf.pod.startCodeOffset);
-        pf.pod.endCodeOffset = masm.actualOffset(pf.pod.endCodeOffset);
     }
 #endif
 
@@ -823,10 +789,13 @@ AsmJSModule::initHeap(Handle<ArrayBufferObjectMaybeShared*> heap, JSContext* cx)
     MOZ_ASSERT(!maybeHeap_);
 
     maybeHeap_ = heap;
-    heapDatum() = heap->dataPointer();
+    // heapDatum() may point to shared memory but that memory is only
+    // accessed from maybeHeap(), which wraps it, and from
+    // hasDetachedHeap(), which checks it for null.
+    heapDatum() = heap->dataPointerMaybeShared().unwrap(/*safe - explained above*/);
 
 #if defined(JS_CODEGEN_X86)
-    uint8_t* heapOffset = heap->dataPointer();
+    uint8_t* heapOffset = heap->dataPointerMaybeShared().unwrap(/*safe - used for value*/);
     uint32_t heapLength = heap->byteLength();
     for (unsigned i = 0; i < heapAccesses_.length(); i++) {
         const jit::AsmJSHeapAccess& access = heapAccesses_[i];
@@ -872,7 +841,7 @@ AsmJSModule::restoreHeapToInitialState(ArrayBufferObjectMaybeShared* maybePrevBu
 #if defined(JS_CODEGEN_X86)
     if (maybePrevBuffer) {
         // Subtract out the base-pointer added by AsmJSModule::initHeap.
-        uint8_t* ptrBase = maybePrevBuffer->dataPointer();
+        uint8_t* ptrBase = maybePrevBuffer->dataPointerMaybeShared().unwrap(/*safe - used for value*/);
         uint32_t heapLength = maybePrevBuffer->byteLength();
         for (unsigned i = 0; i < heapAccesses_.length(); i++) {
             const jit::AsmJSHeapAccess& access = heapAccesses_[i];
@@ -1013,7 +982,6 @@ const Class AsmJSModuleObject::class_ = {
     nullptr, /* enumerate */
     nullptr, /* resolve */
     nullptr, /* mayResolve */
-    nullptr, /* convert */
     AsmJSModuleObject_finalize,
     nullptr, /* call */
     nullptr, /* hasInstance */
@@ -1362,19 +1330,19 @@ AsmJSModule::CodeRange::CodeRange(uint32_t nameIndex, uint32_t lineNumber,
                                   const AsmJSFunctionLabels& l)
   : nameIndex_(nameIndex),
     lineNumber_(lineNumber),
-    begin_(l.begin.offset()),
+    begin_(l.profilingEntry.offset()),
     profilingReturn_(l.profilingReturn.offset()),
-    end_(l.end.offset())
+    end_(l.endAfterOOL.offset())
 {
     PodZero(&u);  // zero padding for Valgrind
     u.kind_ = Function;
-    setDeltas(l.entry.offset(), l.profilingJump.offset(), l.profilingEpilogue.offset());
+    setDeltas(l.nonProfilingEntry.offset(), l.profilingJump.offset(), l.profilingEpilogue.offset());
 
-    MOZ_ASSERT(l.begin.offset() < l.entry.offset());
-    MOZ_ASSERT(l.entry.offset() < l.profilingJump.offset());
+    MOZ_ASSERT(l.profilingEntry.offset() < l.nonProfilingEntry.offset());
+    MOZ_ASSERT(l.nonProfilingEntry.offset() < l.profilingJump.offset());
     MOZ_ASSERT(l.profilingJump.offset() < l.profilingEpilogue.offset());
     MOZ_ASSERT(l.profilingEpilogue.offset() < l.profilingReturn.offset());
-    MOZ_ASSERT(l.profilingReturn.offset() < l.end.offset());
+    MOZ_ASSERT(l.profilingReturn.offset() < l.endAfterOOL.offset());
 }
 
 void
@@ -1433,27 +1401,6 @@ AsmJSModule::CodeRange::CodeRange(AsmJSExit::BuiltinKind builtin, uint32_t begin
 
     MOZ_ASSERT(begin_ < profilingReturn_);
     MOZ_ASSERT(profilingReturn_ < end_);
-}
-
-void
-AsmJSModule::CodeRange::updateOffsets(jit::MacroAssembler& masm)
-{
-    uint32_t entryBefore, profilingJumpBefore, profilingEpilogueBefore;
-    if (isFunction()) {
-        entryBefore = entry();
-        profilingJumpBefore = profilingJump();
-        profilingEpilogueBefore = profilingEpilogue();
-    }
-
-    begin_ = masm.actualOffset(begin_);
-    profilingReturn_ = masm.actualOffset(profilingReturn_);
-    end_ = masm.actualOffset(end_);
-
-    if (isFunction()) {
-        setDeltas(masm.actualOffset(entryBefore),
-                  masm.actualOffset(profilingJumpBefore),
-                  masm.actualOffset(profilingEpilogueBefore));
-    }
 }
 
 #if defined(MOZ_VTUNE) || defined(JS_ION_PERF)
@@ -1788,6 +1735,7 @@ AsmJSModule::setProfilingEnabled(bool enabled, JSContext* cx)
 #elif defined(JS_CODEGEN_ARM64)
         MOZ_CRASH();
         void* callee = nullptr;
+        (void)callerRetAddr;
 #elif defined(JS_CODEGEN_MIPS32)
         Instruction* instr = (Instruction*)(callerRetAddr - 4 * sizeof(uint32_t));
         void* callee = (void*)Assembler::ExtractLuiOriValue(instr, instr->next());
@@ -1813,6 +1761,7 @@ AsmJSModule::setProfilingEnabled(bool enabled, JSContext* cx)
 #elif defined(JS_CODEGEN_ARM)
         new (caller) InstBLImm(BOffImm(newCallee - caller), Assembler::Always);
 #elif defined(JS_CODEGEN_ARM64)
+        (void)newCallee;
         MOZ_CRASH();
 #elif defined(JS_CODEGEN_MIPS32)
         Assembler::WriteLuiOriInstructions(instr, instr->next(),
@@ -1878,6 +1827,8 @@ AsmJSModule::setProfilingEnabled(bool enabled, JSContext* cx)
             new (jump) InstNOP();
         }
 #elif defined(JS_CODEGEN_ARM64)
+        (void)jump;
+        (void)profilingEpilogue;
         MOZ_CRASH();
 #elif defined(JS_CODEGEN_MIPS32)
         Instruction* instr = (Instruction*)jump;

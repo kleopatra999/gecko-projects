@@ -6,12 +6,12 @@
 "use strict";
 
 XPCOMUtils.defineLazyGetter(this, "DebuggerServer", () => {
-  let { require } = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
+  let { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
   let { DebuggerServer } = require("devtools/server/main");
   return DebuggerServer;
 });
 
-let RemoteDebugger = {
+var RemoteDebugger = {
   init() {
     USBRemoteDebugger.init();
     WiFiRemoteDebugger.init();
@@ -39,7 +39,7 @@ let RemoteDebugger = {
    *        }
    *        Specific authentication modes may include additional fields.  Check
    *        the different |allowConnection| methods in
-   *        toolkit/devtools/security/auth.js.
+   *        devtools/shared/security/auth.js.
    * @return An AuthenticationResult value.
    *         A promise that will be resolved to the above is also allowed.
    */
@@ -183,7 +183,7 @@ RemoteDebugger.allowConnection =
 RemoteDebugger.receiveOOB =
   RemoteDebugger.receiveOOB.bind(RemoteDebugger);
 
-let USBRemoteDebugger = {
+var USBRemoteDebugger = {
 
   init() {
     Services.prefs.addObserver("devtools.", this, false);
@@ -263,7 +263,7 @@ let USBRemoteDebugger = {
 
 };
 
-let WiFiRemoteDebugger = {
+var WiFiRemoteDebugger = {
 
   init() {
     Services.prefs.addObserver("devtools.", this, false);

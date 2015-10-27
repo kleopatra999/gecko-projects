@@ -501,7 +501,9 @@ nsBrowserContentHandler.prototype = {
       }
     }
 
+    var override;
     var overridePage = "";
+    var additionalPage = "";
     var willRestoreSession = false;
     try {
       // Read the old value of homepage_override.mstone before
@@ -513,12 +515,13 @@ nsBrowserContentHandler.prototype = {
       try {
         old_mstone = Services.prefs.getCharPref("browser.startup.homepage_override.mstone");
       } catch (ex) {}
-      let override = needHomepageOverride(prefb);
+      override = needHomepageOverride(prefb);
       if (override != OVERRIDE_NONE) {
         switch (override) {
           case OVERRIDE_NEW_PROFILE:
             // New profile.
             overridePage = Services.urlFormatter.formatURLPref("startup.homepage_welcome_url");
+            additionalPage = Services.urlFormatter.formatURLPref("startup.homepage_welcome_url.additional");
             break;
           case OVERRIDE_NEW_MSTONE:
             // Check whether we will restore a session. If we will, we assume
@@ -553,11 +556,18 @@ nsBrowserContentHandler.prototype = {
       let firstUseOnWindows10URL = Services.urlFormatter.formatURLPref("browser.usedOnWindows10.introURL");
 
       if (firstUseOnWindows10URL && firstUseOnWindows10URL.length) {
-        if (overridePage) {
-          overridePage += "|" + firstUseOnWindows10URL;
-        } else {
-          overridePage = firstUseOnWindows10URL;
+        additionalPage = firstUseOnWindows10URL;
+        if (override == OVERRIDE_NEW_PROFILE) {
+          additionalPage += "&utm_content=firstrun";
         }
+      }
+    }
+
+    if (additionalPage && additionalPage != "about:blank") {
+      if (overridePage) {
+        overridePage += "|" + additionalPage;
+      } else {
+        overridePage = additionalPage;
       }
     }
 
@@ -832,7 +842,7 @@ nsDefaultCommandLineHandler.prototype = {
         }
       }
 
-      var URLlist = urilist.filter(shouldLoadURI).map(function (u) u.spec);
+      var URLlist = urilist.filter(shouldLoadURI).map(u => u.spec);
       if (URLlist.length) {
         openWindow(null, gBrowserContentHandler.chromeURL, "_blank",
                    "chrome,dialog=no,all" + gBrowserContentHandler.getFeatures(cmdLine),

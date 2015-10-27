@@ -43,6 +43,7 @@
 #include "mozilla/dom/Permissions.h"
 #include "mozilla/dom/Presentation.h"
 #include "mozilla/dom/ServiceWorkerContainer.h"
+#include "mozilla/dom/TCPSocket.h"
 #include "mozilla/dom/Telephony.h"
 #include "mozilla/dom/Voicemail.h"
 #include "mozilla/dom/TVManager.h"
@@ -68,6 +69,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsIStringStream.h"
 #include "nsIHttpChannel.h"
+#include "nsIHttpChannelInternal.h"
 #include "TimeManager.h"
 #include "DeviceStorage.h"
 #include "nsIDOMNavigatorSystemMessages.h"
@@ -75,6 +77,7 @@
 #include "nsIAppsService.h"
 #include "mozIApplication.h"
 #include "WidgetUtils.h"
+#include "nsIPresentationService.h"
 
 #ifdef MOZ_MEDIA_NAVIGATOR
 #include "mozilla/dom/MediaDevices.h"
@@ -330,7 +333,7 @@ Navigator::Invalidate()
 
   uint32_t len = mDeviceStorageStores.Length();
   for (uint32_t i = 0; i < len; ++i) {
-    nsRefPtr<nsDOMDeviceStorage> ds = do_QueryReferent(mDeviceStorageStores[i]);
+    RefPtr<nsDOMDeviceStorage> ds = do_QueryReferent(mDeviceStorageStores[i]);
     if (ds) {
       ds->Shutdown();
     }
@@ -972,7 +975,7 @@ Navigator::FindDeviceStorage(const nsAString& aName, const nsAString& aType)
   auto i = mDeviceStorageStores.Length();
   while (i > 0) {
     --i;
-    nsRefPtr<nsDOMDeviceStorage> storage =
+    RefPtr<nsDOMDeviceStorage> storage =
       do_QueryReferent(mDeviceStorageStores[i]);
     if (storage) {
       if (storage->Equals(mWindow, aName, aType)) {
@@ -995,7 +998,7 @@ Navigator::GetDeviceStorage(const nsAString& aType, ErrorResult& aRv)
 
   nsString name;
   nsDOMDeviceStorage::GetDefaultStorageName(aType, name);
-  nsRefPtr<nsDOMDeviceStorage> storage = FindDeviceStorage(name, aType);
+  RefPtr<nsDOMDeviceStorage> storage = FindDeviceStorage(name, aType);
   if (storage) {
     return storage.forget();
   }
@@ -1014,7 +1017,7 @@ Navigator::GetDeviceStorage(const nsAString& aType, ErrorResult& aRv)
 
 void
 Navigator::GetDeviceStorages(const nsAString& aType,
-                             nsTArray<nsRefPtr<nsDOMDeviceStorage> >& aStores,
+                             nsTArray<RefPtr<nsDOMDeviceStorage> >& aStores,
                              ErrorResult& aRv)
 {
   if (!mWindow || !mWindow->GetOuterWindow() || !mWindow->GetDocShell()) {
@@ -1025,7 +1028,7 @@ Navigator::GetDeviceStorages(const nsAString& aType,
   nsDOMDeviceStorage::VolumeNameArray volumes;
   nsDOMDeviceStorage::GetOrderedVolumeNames(aType, volumes);
   if (volumes.IsEmpty()) {
-    nsRefPtr<nsDOMDeviceStorage> storage = GetDeviceStorage(aType, aRv);
+    RefPtr<nsDOMDeviceStorage> storage = GetDeviceStorage(aType, aRv);
     if (storage) {
       aStores.AppendElement(storage.forget());
     }
@@ -1033,7 +1036,7 @@ Navigator::GetDeviceStorages(const nsAString& aType,
     uint32_t len = volumes.Length();
     aStores.SetCapacity(len);
     for (uint32_t i = 0; i < len; ++i) {
-      nsRefPtr<nsDOMDeviceStorage> storage =
+      RefPtr<nsDOMDeviceStorage> storage =
         GetDeviceStorageByNameAndType(volumes[i], aType, aRv);
       if (aRv.Failed()) {
         break;
@@ -1056,7 +1059,7 @@ Navigator::GetDeviceStorageByNameAndType(const nsAString& aName,
     return nullptr;
   }
 
-  nsRefPtr<nsDOMDeviceStorage> storage = FindDeviceStorage(aName, aType);
+  RefPtr<nsDOMDeviceStorage> storage = FindDeviceStorage(aName, aType);
   if (storage) {
     return storage.forget();
   }
@@ -1303,16 +1306,16 @@ Navigator::SendBeacon(const nsAString& aUrl,
   loadGroup->SetNotificationCallbacks(callbacks);
   channel->SetLoadGroup(loadGroup);
 
-  nsRefPtr<BeaconStreamListener> beaconListener = new BeaconStreamListener();
+  RefPtr<BeaconStreamListener> beaconListener = new BeaconStreamListener();
 
   // Start a preflight if cross-origin and content type is not whitelisted
   nsCOMPtr<nsIScriptSecurityManager> secMan = nsContentUtils::GetSecurityManager();
   rv = secMan->CheckSameOriginURI(documentURI, uri, false);
   bool crossOrigin = NS_FAILED(rv);
   nsAutoCString contentType, parsedCharset;
-  rv = NS_ParseContentType(mimeType, contentType, parsedCharset);
+  rv = NS_ParseRequestContentType(mimeType, contentType, parsedCharset);
   if (crossOrigin &&
-      contentType.Length() > 0 &&
+      mimeType.Length() > 0 &&
       !contentType.Equals(APPLICATION_WWW_FORM_URLENCODED) &&
       !contentType.Equals(MULTIPART_FORM_DATA) &&
       !contentType.Equals(TEXT_PLAIN)) {
@@ -1322,18 +1325,24 @@ Navigator::SendBeacon(const nsAString& aUrl,
     nsCOMPtr<nsIInterfaceRequestor> soc = nsContentUtils::SameOriginChecker();
     channel->SetNotificationCallbacks(soc);
 
-    nsCOMPtr<nsIChannel> preflightChannel;
+    nsCOMPtr<nsIHttpChannelInternal> internalChannel =
+      do_QueryInterface(channel);
+    if (!internalChannel) {
+      aRv.Throw(NS_ERROR_FAILURE);
+      return false;
+    }
     nsTArray<nsCString> unsafeHeaders;
     unsafeHeaders.AppendElement(NS_LITERAL_CSTRING("Content-Type"));
-    rv = NS_StartCORSPreflight(channel,
-                               beaconListener,
-                               doc->NodePrincipal(),
-                               true,
-                               unsafeHeaders,
-                               getter_AddRefs(preflightChannel));
-  } else {
-    rv = channel->AsyncOpen2(beaconListener);
+    rv = internalChannel->SetCorsPreflightParameters(unsafeHeaders,
+                                                     true,
+                                                     doc->NodePrincipal());
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      aRv.Throw(rv);
+      return false;
+    }
   }
+
+  rv = channel->AsyncOpen2(beaconListener);
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
     return false;
@@ -1471,7 +1480,7 @@ Navigator::GetBattery(ErrorResult& aRv)
   }
 
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
-  nsRefPtr<Promise> batteryPromise = Promise::Create(go, aRv);
+  RefPtr<Promise> batteryPromise = Promise::Create(go, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
   }
@@ -1515,7 +1524,7 @@ Navigator::GetDataStores(nsPIDOMWindow* aWindow,
     return nullptr;
   }
 
-  nsRefPtr<DataStoreService> service = DataStoreService::GetOrCreate();
+  RefPtr<DataStoreService> service = DataStoreService::GetOrCreate();
   if (!service) {
     aRv.Throw(NS_ERROR_FAILURE);
     return nullptr;
@@ -1524,7 +1533,7 @@ Navigator::GetDataStores(nsPIDOMWindow* aWindow,
   nsCOMPtr<nsISupports> promise;
   aRv = service->GetDataStores(aWindow, aName, aOwner, getter_AddRefs(promise));
 
-  nsRefPtr<Promise> p = static_cast<Promise*>(promise.get());
+  RefPtr<Promise> p = static_cast<Promise*>(promise.get());
   return p.forget();
 }
 
@@ -1540,7 +1549,7 @@ already_AddRefed<Promise>
 Navigator::GetFeature(const nsAString& aName, ErrorResult& aRv)
 {
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
-  nsRefPtr<Promise> p = Promise::Create(go, aRv);
+  RefPtr<Promise> p = Promise::Create(go, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -1558,7 +1567,7 @@ Navigator::GetFeature(const nsAString& aName, ErrorResult& aRv)
     } else {
       mozilla::dom::ContentChild* cc =
         mozilla::dom::ContentChild::GetSingleton();
-      nsRefPtr<Promise> ipcRef(p);
+      RefPtr<Promise> ipcRef(p);
       cc->SendGetSystemMemory(reinterpret_cast<uint64_t>(ipcRef.forget().take()));
     }
     return p.forget();
@@ -1593,14 +1602,15 @@ already_AddRefed<Promise>
 Navigator::HasFeature(const nsAString& aName, ErrorResult& aRv)
 {
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
-  nsRefPtr<Promise> p = Promise::Create(go, aRv);
+  RefPtr<Promise> p = Promise::Create(go, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
 
-  // Hardcoded web-extensions feature which is b2g specific.
+  // Hardcoded extensions features which are b2g specific.
 #ifdef MOZ_B2G
-  if (aName.EqualsLiteral("web-extensions")) {
+  if (aName.EqualsLiteral("web-extensions") ||
+      aName.EqualsLiteral("late-customization")) {
     p->MaybeResolve(true);
     return p.forget();
   }
@@ -1613,6 +1623,7 @@ Navigator::HasFeature(const nsAString& aName, ErrorResult& aRv)
 #ifdef MOZ_B2G
   , "manifest.chrome.navigation"
   , "manifest.precompile"
+  , "manifest.role.homescreen"
 #endif
   };
 
@@ -1727,7 +1738,7 @@ Navigator::RequestWakeLock(const nsAString &aTopic, ErrorResult& aRv)
     return nullptr;
   }
 
-  nsRefPtr<power::PowerManagerService> pmService =
+  RefPtr<power::PowerManagerService> pmService =
     power::PowerManagerService::GetInstance();
   // Maybe it went away for some reason... Or maybe we're just called
   // from our XPCOM method.
@@ -1798,6 +1809,13 @@ Navigator::GetInputPortManager(ErrorResult& aRv)
   return mInputPortManager;
 }
 
+already_AddRefed<LegacyMozTCPSocket>
+Navigator::MozTCPSocket()
+{
+  RefPtr<LegacyMozTCPSocket> socket = new LegacyMozTCPSocket(GetWindow());
+  return socket.forget();
+}
+
 #ifdef MOZ_B2G
 already_AddRefed<Promise>
 Navigator::GetMobileIdAssertion(const MobileIdOptions& aOptions,
@@ -1832,7 +1850,7 @@ Navigator::GetMobileIdAssertion(const MobileIdOptions& aOptions,
                                       optionsValue,
                                       getter_AddRefs(promise));
 
-  nsRefPtr<Promise> p = static_cast<Promise*>(promise.get());
+  RefPtr<Promise> p = static_cast<Promise*>(promise.get());
   return p.forget();
 }
 #endif // MOZ_B2G
@@ -1902,7 +1920,7 @@ Navigator::GetMozIccManager(ErrorResult& aRv)
 
 #ifdef MOZ_GAMEPAD
 void
-Navigator::GetGamepads(nsTArray<nsRefPtr<Gamepad> >& aGamepads,
+Navigator::GetGamepads(nsTArray<RefPtr<Gamepad> >& aGamepads,
                        ErrorResult& aRv)
 {
   if (!mWindow) {
@@ -1925,14 +1943,14 @@ Navigator::GetVRDevices(ErrorResult& aRv)
   }
 
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
-  nsRefPtr<Promise> p = Promise::Create(go, aRv);
+  RefPtr<Promise> p = Promise::Create(go, aRv);
   if (aRv.Failed()) {
     return nullptr;
   }
 
   nsGlobalWindow* win = static_cast<nsGlobalWindow*>(mWindow.get());
 
-  nsTArray<nsRefPtr<VRDevice>> vrDevs;
+  nsTArray<RefPtr<VRDevice>> vrDevs;
   if (!win->GetVRDevices(vrDevs)) {
     p->MaybeReject(NS_ERROR_FAILURE);
   } else {
@@ -2123,7 +2141,7 @@ Navigator::ServiceWorker()
     mServiceWorkerContainer = new ServiceWorkerContainer(mWindow);
   }
 
-  nsRefPtr<ServiceWorkerContainer> ref = mServiceWorkerContainer;
+  RefPtr<ServiceWorkerContainer> ref = mServiceWorkerContainer;
   return ref.forget();
 }
 
@@ -2523,7 +2541,7 @@ Navigator::HasDataStoreSupport(JSContext* aCx, JSObject* aGlobal)
       workers::GetWorkerPrivateFromContext(aCx);
     workerPrivate->AssertIsOnWorkerThread();
 
-    nsRefPtr<HasDataStoreSupportRunnable> runnable =
+    RefPtr<HasDataStoreSupportRunnable> runnable =
       new HasDataStoreSupportRunnable(workerPrivate);
     runnable->Dispatch(aCx);
 
@@ -2603,6 +2621,59 @@ Navigator::HasTVSupport(JSContext* aCx, JSObject* aGlobal)
 
   // Only support TV Manager API for certified apps for now.
   return status == nsIPrincipal::APP_STATUS_CERTIFIED;
+}
+
+/* static */
+bool
+Navigator::HasPresentationSupport(JSContext* aCx, JSObject* aGlobal)
+{
+  JS::Rooted<JSObject*> global(aCx, aGlobal);
+
+  nsCOMPtr<nsPIDOMWindow> win = GetWindowFromGlobal(global);
+  if (NS_WARN_IF(!win)) {
+    return false;
+  }
+
+  // Grant access if it has the permission.
+  if (CheckPermission(win, "presentation")) {
+    return true;
+  }
+
+  // Grant access to browser receiving pages and their same-origin iframes. (App
+  // pages should be controlled by "presentation" permission in app manifests.)
+  mozilla::dom::ContentChild* cc =
+    mozilla::dom::ContentChild::GetSingleton();
+  if (!cc || !cc->IsForBrowser()) {
+    return false;
+  }
+
+  win = win->GetOuterWindow();
+  nsCOMPtr<nsPIDOMWindow> top = win->GetTop();
+  nsCOMPtr<nsIScriptObjectPrincipal> sop = do_QueryInterface(win);
+  nsCOMPtr<nsIScriptObjectPrincipal> topSop = do_QueryInterface(top);
+  if (!sop || !topSop) {
+    return false;
+  }
+
+  nsIPrincipal* principal = sop->GetPrincipal();
+  nsIPrincipal* topPrincipal = topSop->GetPrincipal();
+  if (!principal || !topPrincipal || !principal->Subsumes(topPrincipal)) {
+    return false;
+  }
+
+  if (!(top = top->GetCurrentInnerWindow())) {
+    return false;
+  }
+
+  nsCOMPtr<nsIPresentationService> presentationService =
+    do_GetService(PRESENTATION_SERVICE_CONTRACTID);
+  if (NS_WARN_IF(!presentationService)) {
+    return false;
+  }
+
+  nsAutoString sessionId;
+  presentationService->GetExistentSessionIdAtLaunch(top->WindowID(), sessionId);
+  return !sessionId.IsEmpty();
 }
 
 /* static */
@@ -2777,57 +2848,103 @@ Navigator::GetUserAgent(nsPIDOMWindow* aWindow, nsIURI* aURI,
 }
 
 #ifdef MOZ_EME
+static nsCString
+ToCString(const nsString& aString)
+{
+  return NS_ConvertUTF16toUTF8(aString);
+}
+
+static nsCString
+ToCString(const MediaKeySystemMediaCapability& aValue)
+{
+  nsCString str;
+  str.AppendLiteral("{contentType='");
+  if (!aValue.mContentType.IsEmpty()) {
+    str.Append(ToCString(aValue.mContentType));
+  }
+  str.AppendLiteral("'}");
+  return str;
+}
+
+template<class Type>
+static nsCString
+ToCString(const Sequence<Type>& aSequence)
+{
+  nsCString s;
+  s.AppendLiteral("[");
+  for (size_t i = 0; i < aSequence.Length(); i++) {
+    if (i != 0) {
+      s.AppendLiteral(",");
+    }
+    s.Append(ToCString(aSequence[i]));
+  }
+  s.AppendLiteral("]");
+  return s;
+}
+
+static nsCString
+ToCString(const MediaKeySystemConfiguration& aConfig)
+{
+  nsCString str;
+  str.AppendLiteral("{");
+  str.AppendPrintf("label='%s'", NS_ConvertUTF16toUTF8(aConfig.mLabel).get());
+
+  if (aConfig.mInitDataTypes.WasPassed()) {
+    str.AppendLiteral(", initDataTypes=");
+    str.Append(ToCString(aConfig.mInitDataTypes.Value()));
+  }
+
+  if (aConfig.mAudioCapabilities.WasPassed()) {
+    str.AppendLiteral(", audioCapabilities=");
+    str.Append(ToCString(aConfig.mAudioCapabilities.Value()));
+  }
+  if (aConfig.mVideoCapabilities.WasPassed()) {
+    str.AppendLiteral(", videoCapabilities=");
+    str.Append(ToCString(aConfig.mVideoCapabilities.Value()));
+  }
+
+  if (!aConfig.mAudioType.IsEmpty()) {
+    str.AppendPrintf(", audioType='%s'",
+      NS_ConvertUTF16toUTF8(aConfig.mAudioType).get());
+  }
+  if (!aConfig.mInitDataType.IsEmpty()) {
+    str.AppendPrintf(", initDataType='%s'",
+      NS_ConvertUTF16toUTF8(aConfig.mInitDataType).get());
+  }
+  if (!aConfig.mVideoType.IsEmpty()) {
+    str.AppendPrintf(", videoType='%s'",
+      NS_ConvertUTF16toUTF8(aConfig.mVideoType).get());
+  }
+  str.AppendLiteral("}");
+
+  return str;
+}
+
+static nsCString
+RequestKeySystemAccessLogString(const nsAString& aKeySystem,
+                                const Sequence<MediaKeySystemConfiguration>& aConfigs)
+{
+  nsCString str;
+  str.AppendPrintf("Navigator::RequestMediaKeySystemAccess(keySystem='%s' options=",
+                   NS_ConvertUTF16toUTF8(aKeySystem).get());
+  str.Append(ToCString(aConfigs));
+  str.AppendLiteral(")");
+  return str;
+}
+
 already_AddRefed<Promise>
 Navigator::RequestMediaKeySystemAccess(const nsAString& aKeySystem,
-                                       const Optional<Sequence<MediaKeySystemOptions>>& aOptions,
+                                       const Sequence<MediaKeySystemConfiguration>& aConfigs,
                                        ErrorResult& aRv)
 {
-  nsAutoCString logMsg;
-  logMsg.AppendPrintf("Navigator::RequestMediaKeySystemAccess(keySystem='%s' options=[",
-                      NS_ConvertUTF16toUTF8(aKeySystem).get());
-  if (aOptions.WasPassed()) {
-    const Sequence<MediaKeySystemOptions>& options = aOptions.Value();
-    for (size_t i = 0; i < options.Length(); i++) {
-      const MediaKeySystemOptions& op = options[i];
-      if (i > 0) {
-        logMsg.AppendLiteral(",");
-      }
-      logMsg.AppendLiteral("{");
-      logMsg.AppendPrintf("stateful='%s'",
-        MediaKeysRequirementValues::strings[(size_t)op.mStateful].value);
-
-      logMsg.AppendPrintf(", uniqueIdentifier='%s'",
-        MediaKeysRequirementValues::strings[(size_t)op.mUniqueidentifier].value);
-
-      if (!op.mAudioCapability.IsEmpty()) {
-        logMsg.AppendPrintf(", audioCapability='%s'",
-                            NS_ConvertUTF16toUTF8(op.mAudioCapability).get());
-      }
-      if (!op.mAudioType.IsEmpty()) {
-        logMsg.AppendPrintf(", audioType='%s'",
-          NS_ConvertUTF16toUTF8(op.mAudioType).get());
-      }
-      if (!op.mInitDataType.IsEmpty()) {
-        logMsg.AppendPrintf(", initDataType='%s'",
-          NS_ConvertUTF16toUTF8(op.mInitDataType).get());
-      }
-      if (!op.mVideoCapability.IsEmpty()) {
-        logMsg.AppendPrintf(", videoCapability='%s'",
-          NS_ConvertUTF16toUTF8(op.mVideoCapability).get());
-      }
-      if (!op.mVideoType.IsEmpty()) {
-        logMsg.AppendPrintf(", videoType='%s'",
-          NS_ConvertUTF16toUTF8(op.mVideoType).get());
-      }
-      logMsg.AppendLiteral("}");
-    }
-  }
-  logMsg.AppendPrintf("])");
-  EME_LOG(logMsg.get());
+  EME_LOG("%s", RequestKeySystemAccessLogString(aKeySystem, aConfigs).get());
 
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(mWindow);
-  nsRefPtr<DetailedPromise> promise = DetailedPromise::Create(go, aRv,
-    NS_LITERAL_CSTRING("navigator.requestMediaKeySystemAccess"));
+  RefPtr<DetailedPromise> promise =
+    DetailedPromise::Create(go, aRv,
+      NS_LITERAL_CSTRING("navigator.requestMediaKeySystemAccess"),
+      Telemetry::VIDEO_EME_REQUEST_SUCCESS_LATENCY_MS,
+      Telemetry::VIDEO_EME_REQUEST_FAILURE_LATENCY_MS);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -2836,10 +2953,9 @@ Navigator::RequestMediaKeySystemAccess(const nsAString& aKeySystem,
     mMediaKeySystemAccessManager = new MediaKeySystemAccessManager(mWindow);
   }
 
-  mMediaKeySystemAccessManager->Request(promise, aKeySystem, aOptions);
+  mMediaKeySystemAccessManager->Request(promise, aKeySystem, aConfigs);
   return promise.forget();
 }
-
 #endif
 
 Presentation*

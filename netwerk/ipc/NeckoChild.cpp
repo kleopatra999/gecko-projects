@@ -15,6 +15,7 @@
 #include "mozilla/net/WyciwygChannelChild.h"
 #include "mozilla/net/FTPChannelChild.h"
 #include "mozilla/net/WebSocketChannelChild.h"
+#include "mozilla/net/WebSocketFrameListenerChild.h"
 #include "mozilla/net/DNSRequestChild.h"
 #include "mozilla/net/RemoteOpenFileChild.h"
 #include "mozilla/net/ChannelDiverterChild.h"
@@ -158,6 +159,23 @@ NeckoChild::DeallocPWebSocketChild(PWebSocketChild* child)
   return true;
 }
 
+PWebSocketFrameListenerChild*
+NeckoChild::AllocPWebSocketFrameListenerChild(const uint64_t& aInnerWindowID)
+{
+  RefPtr<WebSocketFrameListenerChild> c =
+    new WebSocketFrameListenerChild(aInnerWindowID);
+  return c.forget().take();
+}
+
+bool
+NeckoChild::DeallocPWebSocketFrameListenerChild(PWebSocketFrameListenerChild* aActor)
+{
+  RefPtr<WebSocketFrameListenerChild> c =
+    dont_AddRef(static_cast<WebSocketFrameListenerChild*>(aActor));
+  MOZ_ASSERT(c);
+  return true;
+}
+
 PDataChannelChild*
 NeckoChild::AllocPDataChannelChild(const uint32_t& channelId)
 {
@@ -210,8 +228,7 @@ PTCPSocketChild*
 NeckoChild::AllocPTCPSocketChild(const nsString& host,
                                  const uint16_t& port)
 {
-  TCPSocketChild* p = new TCPSocketChild();
-  p->Init(host, port);
+  TCPSocketChild* p = new TCPSocketChild(host, port);
   p->AddIPDLReference();
   return p;
 }
@@ -227,7 +244,7 @@ NeckoChild::DeallocPTCPSocketChild(PTCPSocketChild* child)
 PTCPServerSocketChild*
 NeckoChild::AllocPTCPServerSocketChild(const uint16_t& aLocalPort,
                                   const uint16_t& aBacklog,
-                                  const nsString& aBinaryType)
+                                  const bool& aUseArrayBuffers)
 {
   NS_NOTREACHED("AllocPTCPServerSocket should not be called");
   return nullptr;
@@ -315,7 +332,7 @@ NeckoChild::RecvAsyncAuthPromptForNestedFrame(const TabId& aNestedFrameId,
                                               const nsString& aRealm,
                                               const uint64_t& aCallbackId)
 {
-  nsRefPtr<dom::TabChild> tabChild = dom::TabChild::FindTabChild(aNestedFrameId);
+  RefPtr<dom::TabChild> tabChild = dom::TabChild::FindTabChild(aNestedFrameId);
   if (!tabChild) {
     MOZ_CRASH();
     return false;

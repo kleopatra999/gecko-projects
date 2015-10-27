@@ -583,6 +583,7 @@ ShadowLayerForwarder::EndTransaction(InfallibleTArray<EditReply>* aReplies,
     if (mutant->GetIsFixedPosition()) {
       common.fixedPositionScrollContainerId() = mutant->GetFixedPositionScrollContainerId();
       common.fixedPositionAnchor() = mutant->GetFixedPositionAnchor();
+      common.isClipFixed() = mutant->IsClipFixed();
     }
     common.isStickyPosition() = mutant->GetIsStickyPosition();
     if (mutant->GetIsStickyPosition()) {
@@ -815,13 +816,14 @@ void ShadowLayerForwarder::AttachAsyncCompositable(uint64_t aCompositableID,
 
 PTextureChild*
 ShadowLayerForwarder::CreateTexture(const SurfaceDescriptor& aSharedData,
+                                    LayersBackend aLayersBackend,
                                     TextureFlags aFlags)
 {
   if (!HasShadowManager() ||
       !mShadowManager->IPCOpen()) {
     return nullptr;
   }
-  return mShadowManager->SendPTextureConstructor(aSharedData, aFlags);
+  return mShadowManager->SendPTextureConstructor(aSharedData, aLayersBackend, aFlags);
 }
 
 

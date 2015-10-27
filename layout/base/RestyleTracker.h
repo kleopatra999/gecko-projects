@@ -240,10 +240,10 @@ public:
     NS_PRECONDITION((mRestyleBits & ELEMENT_PENDING_RESTYLE_FLAGS) !=
                       ELEMENT_PENDING_RESTYLE_FLAGS,
                     "Shouldn't have both restyle flags set");
-    NS_PRECONDITION((mRestyleBits & ~ELEMENT_PENDING_RESTYLE_FLAGS) != 0,
+    NS_PRECONDITION((mRestyleBits & ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS) != 0,
                     "Must have root flag");
-    NS_PRECONDITION((mRestyleBits & ~ELEMENT_PENDING_RESTYLE_FLAGS) !=
-                    (ELEMENT_ALL_RESTYLE_FLAGS & ~ELEMENT_PENDING_RESTYLE_FLAGS),
+    NS_PRECONDITION((mRestyleBits & ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS) !=
+                    ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS,
                     "Shouldn't have both root flags");
   }
 
@@ -284,7 +284,13 @@ public:
 
   // Return our ELEMENT_IS_POTENTIAL_(ANIMATION_)RESTYLE_ROOT bit
   Element::FlagsType RootBit() const {
-    return mRestyleBits & ~ELEMENT_PENDING_RESTYLE_FLAGS;
+    return mRestyleBits & ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS;
+  }
+
+  // Return our ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR bit if present,
+  // or 0 if it is not.
+  Element::FlagsType ConditionalDescendantsBit() const {
+    return mRestyleBits & ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR;
   }
 
   struct Hints {
@@ -312,7 +318,7 @@ public:
     // with the same invariant as mRestyleRoots.  The elements here are those
     // that we called AddPendingRestyle for and found the element this is
     // the RestyleData for as its nearest restyle root.
-    nsTArray<nsRefPtr<Element>> mDescendants;
+    nsTArray<RefPtr<Element>> mDescendants;
 #if defined(MOZ_ENABLE_PROFILER_SPS) && !defined(MOZILLA_XPCOMRT_API)
     UniquePtr<ProfilerBacktrace> mBacktrace;
 #endif
@@ -351,7 +357,7 @@ public:
    * ancestors appear after descendants.
    */
   void AddRestyleRootsIfAwaitingRestyle(
-                                  const nsTArray<nsRefPtr<Element>>& aElements);
+                                  const nsTArray<RefPtr<Element>>& aElements);
 
   /**
    * Converts any eRestyle_SomeDescendants restyle hints in the pending restyle
@@ -388,10 +394,11 @@ private:
                                 const RestyleHintData& aRestyleHintData);
 
   typedef nsClassHashtable<nsISupportsHashKey, RestyleData> PendingRestyleTable;
-  typedef nsAutoTArray< nsRefPtr<Element>, 32> RestyleRootArray;
+  typedef nsAutoTArray< RefPtr<Element>, 32> RestyleRootArray;
   // Our restyle bits.  These will be a subset of ELEMENT_ALL_RESTYLE_FLAGS, and
-  // will include one flag from ELEMENT_PENDING_RESTYLE_FLAGS and one flag
-  // that's not in ELEMENT_PENDING_RESTYLE_FLAGS.
+  // will include one flag from ELEMENT_PENDING_RESTYLE_FLAGS, one flag
+  // from ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS, and might also include
+  // ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR.
   Element::FlagsType mRestyleBits;
   RestyleManager* mRestyleManager; // Owns us
   // A hashtable that maps elements to pointers to RestyleData structs.  The
@@ -437,6 +444,13 @@ RestyleTracker::AddPendingRestyleToTable(Element* aElement,
   } else {
     aElement->SetFlags(RestyleBit());
     existingData = nullptr;
+  }
+
+  if (aRestyleHint & eRestyle_SomeDescendants) {
+    NS_ASSERTION(ConditionalDescendantsBit(),
+                 "why are we getting eRestyle_SomeDescendants in an "
+                 "animation-only restyle?");
+    aElement->SetFlags(ConditionalDescendantsBit());
   }
 
   if (!existingData) {

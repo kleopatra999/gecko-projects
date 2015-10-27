@@ -270,7 +270,7 @@ Event::GetType(nsAString& aType)
   if (name) {
     CopyASCIItoUTF16(name, aType);
     return NS_OK;
-  } else if (mEvent->mMessage == NS_USER_DEFINED_EVENT && mEvent->userType) {
+  } else if (mEvent->mMessage == eUnidentifiedEvent && mEvent->userType) {
     aType = Substring(nsDependentAtomString(mEvent->userType), 2); // Remove "on"
     mEvent->typeString = aType;
     return NS_OK;
@@ -412,7 +412,7 @@ Event::Constructor(const GlobalObject& aGlobal,
                    ErrorResult& aRv)
 {
   nsCOMPtr<mozilla::dom::EventTarget> t = do_QueryInterface(aGlobal.GetAsSupports());
-  nsRefPtr<Event> e = new Event(t, nullptr, nullptr);
+  RefPtr<Event> e = new Event(t, nullptr, nullptr);
   bool trusted = e->Init(t);
   aRv = e->InitEvent(aType, aParam.mBubbles, aParam.mCancelable);
   e->SetTrusted(trusted);
@@ -567,7 +567,7 @@ Event::SetEventType(const nsAString& aEventTypeArg)
                                              &(mEvent->mMessage));
   } else {
     mEvent->userType = nullptr;
-    mEvent->mMessage = NS_USER_DEFINED_EVENT;
+    mEvent->mMessage = eUnidentifiedEvent;
     mEvent->typeString = aEventTypeArg;
   }
 }
@@ -737,7 +737,7 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
     // nsPresShell::HandleEventInternal() for details.
     if (EventStateManager::IsHandlingUserInput()) {
       switch(aEvent->mMessage) {
-      case NS_EDITOR_INPUT:
+      case eEditorInput:
         if (PopupAllowedForEvent("input")) {
           abuse = openControlled;
         }
@@ -799,12 +799,12 @@ Event::GetEventPopupControlState(WidgetEvent* aEvent, nsIDOMEvent* aDOMEvent)
   case eTouchEventClass:
     if (aEvent->mFlags.mIsTrusted) {
       switch (aEvent->mMessage) {
-      case NS_TOUCH_START :
+      case eTouchStart:
         if (PopupAllowedForEvent("touchstart")) {
           abuse = openControlled;
         }
         break;
-      case NS_TOUCH_END :
+      case eTouchEnd:
         if (PopupAllowedForEvent("touchend")) {
           abuse = openControlled;
         }
@@ -904,7 +904,7 @@ Event::GetScreenCoords(nsPresContext* aPresContext,
                        WidgetEvent* aEvent,
                        LayoutDeviceIntPoint aPoint)
 {
-  if (!nsContentUtils::IsCallerChrome() &&
+  if (!nsContentUtils::LegacyIsCallerChromeOrNativeCode() &&
       nsContentUtils::ResistFingerprinting()) {
     // When resisting fingerprinting, return client coordinates instead.
     CSSIntPoint clientCoords = GetClientCoords(aPresContext, aEvent, aPoint, CSSIntPoint(0, 0));
@@ -1005,7 +1005,7 @@ Event::GetOffsetCoords(nsPresContext* aPresContext,
                        LayoutDeviceIntPoint aPoint,
                        CSSIntPoint aDefaultPoint)
 {
-  if (!aEvent->mFlags.mIsBeingDispatched) {
+  if (!aEvent->target) {
     return GetPageCoords(aPresContext, aEvent, aPoint, aDefaultPoint);
   }
   nsCOMPtr<nsIContent> content = do_QueryInterface(aEvent->target);
@@ -1276,6 +1276,6 @@ NS_NewDOMEvent(EventTarget* aOwner,
                nsPresContext* aPresContext,
                WidgetEvent* aEvent) 
 {
-  nsRefPtr<Event> it = new Event(aOwner, aPresContext, aEvent);
+  RefPtr<Event> it = new Event(aOwner, aPresContext, aEvent);
   return it.forget();
 }

@@ -37,6 +37,7 @@
 #include "mozilla/dom/WindowBinding.h"
 #include "mozilla/dom/ElementBinding.h"
 #include "Units.h"
+#include "nsContentListDeclarations.h"
 
 class nsIFrame;
 class nsIDOMMozNamedAttrMap;
@@ -61,11 +62,6 @@ namespace dom {
 } // namespace mozilla
 
 
-already_AddRefed<nsContentList>
-NS_GetContentList(nsINode* aRootNode,
-                  int32_t  aMatchNameSpaceId,
-                  const nsAString& aTagname);
-
 #define ELEMENT_FLAG_BIT(n_) NODE_FLAG_BIT(NODE_TYPE_SPECIFIC_BITS_OFFSET + (n_))
 
 // Element-specific flags
@@ -89,18 +85,27 @@ enum {
   // change will attempt to restyle descendants).
   ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT = ELEMENT_FLAG_BIT(3),
 
-  // All of those bits together, for convenience.
-  ELEMENT_ALL_RESTYLE_FLAGS = ELEMENT_HAS_PENDING_RESTYLE |
-                              ELEMENT_IS_POTENTIAL_RESTYLE_ROOT |
-                              ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE |
-                              ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT,
+  // Set if this element has a pending restyle with an eRestyle_SomeDescendants
+  // restyle hint.
+  ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR = ELEMENT_FLAG_BIT(4),
 
   // Just the HAS_PENDING bits, for convenience
-  ELEMENT_PENDING_RESTYLE_FLAGS = ELEMENT_HAS_PENDING_RESTYLE |
-                                  ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE,
+  ELEMENT_PENDING_RESTYLE_FLAGS =
+    ELEMENT_HAS_PENDING_RESTYLE |
+    ELEMENT_HAS_PENDING_ANIMATION_ONLY_RESTYLE,
+
+  // Just the IS_POTENTIAL bits, for convenience
+  ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS =
+    ELEMENT_IS_POTENTIAL_RESTYLE_ROOT |
+    ELEMENT_IS_POTENTIAL_ANIMATION_ONLY_RESTYLE_ROOT,
+
+  // All of the restyle bits together, for convenience.
+  ELEMENT_ALL_RESTYLE_FLAGS = ELEMENT_PENDING_RESTYLE_FLAGS |
+                              ELEMENT_POTENTIAL_RESTYLE_ROOT_FLAGS |
+                              ELEMENT_IS_CONDITIONAL_RESTYLE_ANCESTOR,
 
   // Remaining bits are for subclasses
-  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 4
+  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 5
 };
 
 #undef ELEMENT_FLAG_BIT
@@ -126,8 +131,8 @@ class DestinationInsertionPointList;
 
 // IID for the dom::Element interface
 #define NS_ELEMENT_IID \
-{ 0x31d3f3fb, 0xcdf8, 0x4e40, \
- { 0xb7, 0x09, 0x1a, 0x11, 0x43, 0x93, 0x61, 0x71 } }
+{ 0xc67ed254, 0xfd3b, 0x4b10, \
+  { 0x96, 0xa2, 0xc5, 0x8b, 0x7b, 0x64, 0x97, 0xd1 } }
 
 class Element : public FragmentOrElement
 {
@@ -663,11 +668,6 @@ public:
                            ErrorResult& aError);
   already_AddRefed<nsIHTMLCollection>
     GetElementsByClassName(const nsAString& aClassNames);
-  bool MozMatchesSelector(const nsAString& aSelector,
-                          ErrorResult& aError)
-  {
-    return Matches(aSelector, aError);
-  }
   void SetPointerCapture(int32_t aPointerId, ErrorResult& aError)
   {
     bool activeState = false;
@@ -777,12 +777,24 @@ public:
   {
     return nsPresContext::AppUnitsToIntCSSPixels(GetClientAreaRect().height);
   }
+  int32_t ScrollTopMin()
+  {
+    nsIScrollableFrame* sf = GetScrollFrame();
+    return sf ?
+           nsPresContext::AppUnitsToIntCSSPixels(sf->GetScrollRange().y) : 0;
+  }
   int32_t ScrollTopMax()
   {
     nsIScrollableFrame* sf = GetScrollFrame();
     return sf ?
            nsPresContext::AppUnitsToIntCSSPixels(sf->GetScrollRange().YMost()) :
            0;
+  }
+  int32_t ScrollLeftMin()
+  {
+    nsIScrollableFrame* sf = GetScrollFrame();
+    return sf ?
+           nsPresContext::AppUnitsToIntCSSPixels(sf->GetScrollRange().x) : 0;
   }
   int32_t ScrollLeftMax()
   {
@@ -806,7 +818,7 @@ public:
   {
   }
 
-  void GetAnimations(nsTArray<nsRefPtr<Animation>>& aAnimations);
+  void GetAnimations(nsTArray<RefPtr<Animation>>& aAnimations);
 
   NS_IMETHOD GetInnerHTML(nsAString& aInnerHTML);
   virtual void SetInnerHTML(const nsAString& aInnerHTML, ErrorResult& aError);
@@ -1298,8 +1310,8 @@ public:
   NS_IMETHOD Run() override;
 private:
   virtual ~RemoveFromBindingManagerRunnable();
-  nsRefPtr<nsBindingManager> mManager;
-  nsRefPtr<nsIContent> mContent;
+  RefPtr<nsBindingManager> mManager;
+  RefPtr<nsIContent> mContent;
   nsCOMPtr<nsIDocument> mDoc;
 };
 
@@ -1323,7 +1335,7 @@ public:
 protected:
   virtual ~DestinationInsertionPointList();
 
-  nsRefPtr<Element> mParent;
+  RefPtr<Element> mParent;
   nsCOMArray<nsIContent> mDestinationPoints;
 };
 
@@ -1391,7 +1403,7 @@ _elementName::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const 
 {                                                                           \
   *aResult = nullptr;                                                       \
   already_AddRefed<mozilla::dom::NodeInfo> ni =                             \
-    nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
+    RefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
   _elementName *it = new _elementName(ni);                                  \
   if (!it) {                                                                \
     return NS_ERROR_OUT_OF_MEMORY;                                          \
@@ -1412,7 +1424,7 @@ _elementName::Clone(mozilla::dom::NodeInfo *aNodeInfo, nsINode **aResult) const 
 {                                                                           \
   *aResult = nullptr;                                                       \
   already_AddRefed<mozilla::dom::NodeInfo> ni =                             \
-    nsRefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
+    RefPtr<mozilla::dom::NodeInfo>(aNodeInfo).forget();                   \
   _elementName *it = new _elementName(ni);                                  \
   if (!it) {                                                                \
     return NS_ERROR_OUT_OF_MEMORY;                                          \
@@ -1764,8 +1776,8 @@ NS_IMETHOD MozMatchesSelector(const nsAString& selector,                      \
                               bool* _retval) final override                   \
 {                                                                             \
   mozilla::ErrorResult rv;                                                    \
-  *_retval = Element::MozMatchesSelector(selector, rv);                       \
-  return rv.StealNSResult();                                                      \
+  *_retval = Element::Matches(selector, rv);                                  \
+  return rv.StealNSResult();                                                  \
 }                                                                             \
 NS_IMETHOD SetCapture(bool retargetToElement) final override                  \
 {                                                                             \

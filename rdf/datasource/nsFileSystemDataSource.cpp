@@ -200,7 +200,7 @@ FileSystemDataSource::Create(nsISupports* aOuter, const nsIID& aIID, void **aRes
 {
     NS_ENSURE_NO_AGGREGATION(aOuter);
 
-    nsRefPtr<FileSystemDataSource> self = new FileSystemDataSource();
+    RefPtr<FileSystemDataSource> self = new FileSystemDataSource();
     if (!self)
         return NS_ERROR_OUT_OF_MEMORY;
      
@@ -851,7 +851,7 @@ FileSystemDataSource::GetVolumeList(nsISimpleEnumerator** aResult)
 
     for (volNum = 0; volNum < 26; volNum++)
     {
-        swprintf( drive, L"%c:\\", volNum + (char16_t)'A');
+        swprintf_s(drive, 32, L"%c:\\", volNum + (char16_t)'A');
 
         driveType = GetDriveTypeW(drive);
         if (driveType != DRIVE_UNKNOWN && driveType != DRIVE_NO_ROOT_DIR)

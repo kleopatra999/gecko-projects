@@ -121,13 +121,19 @@ class CPPUnitTests(object):
             else:
                 env[pathvar] = libpath
 
-        # Use llvm-symbolizer for ASan if available/required
-        llvmsym = os.path.join(self.xre_path, "llvm-symbolizer")
-        if os.path.isfile(llvmsym):
-            env["ASAN_SYMBOLIZER_PATH"] = llvmsym
-            self.log.info("ASan using symbolizer at %s" % llvmsym)
-        else:
-            self.log.info("Failed to find ASan symbolizer at %s" % llvmsym)
+        if mozinfo.info["asan"]:
+            # Use llvm-symbolizer for ASan if available/required
+            llvmsym = os.path.join(self.xre_path, "llvm-symbolizer")
+            if os.path.isfile(llvmsym):
+                env["ASAN_SYMBOLIZER_PATH"] = llvmsym
+                self.log.info("ASan using symbolizer at %s" % llvmsym)
+            else:
+                self.log.info("Failed to find ASan symbolizer at %s" % llvmsym)
+
+            # media/mtransport tests statically link in NSS, which
+            # causes ODR violations. See bug 1215679.
+            assert not 'ASAN_OPTIONS' in env
+            env['ASAN_OPTIONS'] = 'detect_leaks=0:detect_odr_violation=0'
 
         return env
 
@@ -227,6 +233,17 @@ def update_mozinfo():
         path = os.path.split(path)[0]
     mozinfo.find_and_update_from_json(*dirs)
 
+def run_test_harness(options, args):
+    update_mozinfo()
+    progs = extract_unittests_from_args(args, mozinfo.info, options.manifest_path)
+    options.xre_path = os.path.abspath(options.xre_path)
+    if mozinfo.isMac:
+        options.xre_path = os.path.join(os.path.dirname(options.xre_path), 'Resources')
+    tester = CPPUnitTests()
+    result = tester.run_tests(progs, options.xre_path, options.symbols_path)
+
+    return result
+
 def main():
     parser = CPPUnittestOptions()
     mozlog.commandline.add_logging_group(parser)
@@ -240,19 +257,10 @@ def main():
     if options.manifest_path and len(args) > 1:
         print >>sys.stderr, "Error: multiple arguments not supported with --test-manifest"
         sys.exit(1)
-
     log = mozlog.commandline.setup_logging("cppunittests", options,
                                            {"tbpl": sys.stdout})
-
-    update_mozinfo()
-    progs = extract_unittests_from_args(args, mozinfo.info, options.manifest_path)
-    options.xre_path = os.path.abspath(options.xre_path)
-    if mozinfo.isMac:
-        options.xre_path = os.path.join(os.path.dirname(options.xre_path), 'Resources')
-    tester = CPPUnitTests()
-
     try:
-        result = tester.run_tests(progs, options.xre_path, options.symbols_path)
+        result = run_test_harness(options, args)
     except Exception as e:
         log.error(str(e))
         result = False

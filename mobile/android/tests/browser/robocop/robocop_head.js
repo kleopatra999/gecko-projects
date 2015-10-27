@@ -30,7 +30,7 @@ function _dump(str) {
 }
 
 // Determine if we're running on parent or child
-let runningInParent = true;
+var runningInParent = true;
 try {
   runningInParent = Components.classes["@mozilla.org/xre/runtime;1"].
                     getService(Components.interfaces.nsIXULRuntime).processType
@@ -434,9 +434,9 @@ function todo_check_null(condition, stack=Components.stack.caller) {
  * do_check_matches([3,4,5], [3,4,5,6])   // fail; length doesn't match
  *
  * // functions in patterns get applied.
- * do_check_matches({foo:function (v) v.length == 2}, {foo:"hi"}) // pass
- * do_check_matches({foo:function (v) v.length == 2}, {bar:"hi"}) // fail
- * do_check_matches({foo:function (v) v.length == 2}, {foo:"hello"}) // fail
+ * do_check_matches({foo:v => v.length == 2}, {foo:"hi"}) // pass
+ * do_check_matches({foo:v => v.length == 2}, {bar:"hi"}) // fail
+ * do_check_matches({foo:v => v.length == 2}, {foo:"hello"}) // fail
  *
  * // We don't check constructors, prototypes, or classes. However, if
  * // pattern has a 'length' property, we require values to match that as
@@ -679,14 +679,14 @@ function _do_execute_cleanup() {
  *
  * @return the test function that was passed in.
  */
-let _gTests = [];
+var _gTests = [];
 function add_test(func) {
   _gTests.push([false, func]);
   return func;
 }
 
 // We lazy import Task.jsm so we don't incur a run-time penalty for all tests.
-let _Task;
+var _Task;
 
 /**
  * Add a test function which is a Task function.
@@ -737,8 +737,8 @@ function add_task(func) {
 /**
  * Runs the next test function from the list of async tests.
  */
-let _gRunningTest = null;
-let _gTestIndex = 0; // The index of the currently running test.
+var _gRunningTest = null;
+var _gTestIndex = 0; // The index of the currently running test.
 function run_next_test()
 {
   function _run_next_test()

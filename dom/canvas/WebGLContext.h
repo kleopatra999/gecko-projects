@@ -8,6 +8,7 @@
 
 #include <stdarg.h>
 
+#include "GLContextTypes.h"
 #include "GLDefs.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/CheckedInt.h"
@@ -24,6 +25,7 @@
 #include "nsLayoutUtils.h"
 #include "nsTArray.h"
 #include "nsWrapperCache.h"
+#include "SurfaceTypes.h"
 
 #ifdef XP_MACOSX
 #include "ForceDiscreteGPUHelperCGL.h"
@@ -38,8 +40,12 @@
 // Generated
 #include "nsIDOMEventListener.h"
 #include "nsIDOMWebGLRenderingContext.h"
+#include "nsICanvasRenderingContextInternal.h"
 #include "nsIObserver.h"
-
+#include "mozilla/dom/HTMLCanvasElement.h"
+#include "nsWrapperCache.h"
+#include "nsLayoutUtils.h"
+#include "mozilla/dom/UnionTypes.h"
 
 class nsIDocShell;
 
@@ -78,7 +84,6 @@ class WebGLContextLossHandler;
 class WebGLBuffer;
 class WebGLExtensionBase;
 class WebGLFramebuffer;
-class WebGLObserver;
 class WebGLProgram;
 class WebGLQuery;
 class WebGLRenderbuffer;
@@ -93,7 +98,9 @@ class WebGLVertexArray;
 namespace dom {
 class Element;
 class ImageData;
+class OwningHTMLCanvasElementOrOffscreenCanvas;
 struct WebGLContextAttributes;
+class ArrayBufferViewOrSharedArrayBufferView;
 template<typename> struct Nullable;
 } // namespace dom
 
@@ -182,7 +189,6 @@ class WebGLContext
     friend class WebGLExtensionLoseContext;
     friend class WebGLExtensionVertexArray;
     friend class WebGLMemoryTracker;
-    friend class WebGLObserver;
 
     enum {
         UNPACK_FLIP_Y_WEBGL = 0x9240,
@@ -212,11 +218,13 @@ public:
 
     NS_DECL_NSIDOMWEBGLRENDERINGCONTEXT
 
+    virtual void OnVisibilityChange() override;
+    virtual void OnMemoryPressure() override;
+
     // nsICanvasRenderingContextInternal
-#ifdef DEBUG
     virtual int32_t GetWidth() const override;
     virtual int32_t GetHeight() const override;
-#endif
+
     NS_IMETHOD SetDimensions(int32_t width, int32_t height) override;
     NS_IMETHOD InitializeWithSurface(nsIDocShell*, gfxASurface*, int32_t,
                                      int32_t) override
@@ -241,7 +249,8 @@ public:
     NS_IMETHOD SetIsOpaque(bool) override { return NS_OK; };
     bool GetIsOpaque() override { return false; }
     NS_IMETHOD SetContextOptions(JSContext* cx,
-                                 JS::Handle<JS::Value> options) override;
+                                 JS::Handle<JS::Value> options,
+                                 ErrorResult& aRvForDictionaryInit) override;
 
     NS_IMETHOD SetIsIPC(bool) override {
         return NS_ERROR_NOT_IMPLEMENTED;
@@ -316,6 +325,10 @@ public:
     // contents of the buffer.
     void MarkContextClean() override { mInvalidated = false; }
 
+    void MarkContextCleanForFrameCapture() override { mCapturedFrameInvalidated = false; }
+
+    bool IsContextCleanForFrameCapture() override { return !mCapturedFrameInvalidated; }
+
     gl::GLContext* GL() const { return gl; }
 
     bool IsPremultAlpha() const { return mOptions.premultipliedAlpha; }
@@ -356,8 +369,11 @@ public:
     void AssertCachedBindings();
     void AssertCachedState();
 
-    // WebIDL WebGLRenderingContext API
     dom::HTMLCanvasElement* GetCanvas() const { return mCanvasElement; }
+
+    // WebIDL WebGLRenderingContext API
+    void Commit();
+    void GetCanvas(Nullable<dom::OwningHTMLCanvasElementOrOffscreenCanvas>& retval);
     GLsizei DrawingBufferWidth() const { return IsContextLost() ? 0 : mWidth; }
     GLsizei DrawingBufferHeight() const {
         return IsContextLost() ? 0 : mHeight;
@@ -430,7 +446,7 @@ public:
 
     void
     GetAttachedShaders(WebGLProgram* prog,
-                       dom::Nullable<nsTArray<nsRefPtr<WebGLShader>>>& retval);
+                       dom::Nullable<nsTArray<RefPtr<WebGLShader>>>& retval);
 
     GLint GetAttribLocation(WebGLProgram* prog, const nsAString& name);
     JS::Value GetBufferParameter(GLenum target, GLenum pname);
@@ -442,9 +458,9 @@ public:
     }
 
     GLenum GetError();
-    JS::Value GetFramebufferAttachmentParameter(JSContext* cx, GLenum target,
-                                                GLenum attachment, GLenum pname,
-                                                ErrorResult& rv);
+    virtual JS::Value GetFramebufferAttachmentParameter(JSContext* cx, GLenum target,
+                                                        GLenum attachment, GLenum pname,
+                                                        ErrorResult& rv);
 
     void GetFramebufferAttachmentParameter(JSContext* cx, GLenum target,
                                            GLenum attachment, GLenum pname,
@@ -514,7 +530,7 @@ public:
     void PolygonOffset(GLfloat factor, GLfloat units);
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                     GLenum format, GLenum type,
-                    const dom::Nullable<dom::ArrayBufferView>& pixels,
+                    const dom::Nullable<dom::ArrayBufferViewOrSharedArrayBufferView>& pixels,
                     ErrorResult& rv);
     void RenderbufferStorage(GLenum target, GLenum internalFormat,
                              GLsizei width, GLsizei height);
@@ -735,8 +751,8 @@ public:
                          WebGLintptr offset, WebGLsizeiptr size);
 
 private:
-    void BufferDataUnchecked(GLenum target, GLsizeiptr size, const GLvoid* data, GLenum usage);
-    void BufferData(GLenum target, WebGLsizeiptr size, void* data, GLenum usage);
+    template<typename BufferT>
+    void BufferDataT(GLenum target, const BufferT& data, GLenum usage);
 
 public:
     void BufferData(GLenum target, WebGLsizeiptr size, GLenum usage);
@@ -744,16 +760,25 @@ public:
                     GLenum usage);
     void BufferData(GLenum target, const dom::Nullable<dom::ArrayBuffer>& maybeData,
                     GLenum usage);
+    void BufferData(GLenum target, const dom::SharedArrayBuffer& data,
+                    GLenum usage);
+    void BufferData(GLenum target, const dom::SharedArrayBufferView& data,
+                    GLenum usage);
 
 private:
-    void BufferSubDataUnchecked(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid* data);
-    void BufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid* data);
+    template<typename BufferT>
+    void BufferSubDataT(GLenum target, WebGLsizeiptr byteOffset,
+                        const BufferT& data);
 
 public:
     void BufferSubData(GLenum target, WebGLsizeiptr byteOffset,
                        const dom::ArrayBufferView& data);
     void BufferSubData(GLenum target, WebGLsizeiptr byteOffset,
                        const dom::Nullable<dom::ArrayBuffer>& maybeData);
+    void BufferSubData(GLenum target, WebGLsizeiptr byteOffset,
+                       const dom::SharedArrayBuffer& data);
+    void BufferSubData(GLenum target, WebGLsizeiptr byteOffset,
+                       const dom::SharedArrayBufferView& data);
     already_AddRefed<WebGLBuffer> CreateBuffer();
     void DeleteBuffer(WebGLBuffer* buf);
     bool IsBuffer(WebGLBuffer* buf);
@@ -808,6 +833,7 @@ private:
     realGLboolean mDitherEnabled;
     realGLboolean mRasterizerDiscardEnabled;
     realGLboolean mScissorTestEnabled;
+    realGLboolean mDepthTestEnabled;
     realGLboolean mStencilTestEnabled;
 
     bool ValidateCapabilityEnum(GLenum cap, const char* info);
@@ -849,10 +875,10 @@ protected:
 public:
     void CompressedTexImage2D(GLenum texImageTarget, GLint level, GLenum internalFormat,
                               GLsizei width, GLsizei height, GLint border,
-                              const dom::ArrayBufferView& view);
+                              const dom::ArrayBufferViewOrSharedArrayBufferView& view);
     void CompressedTexSubImage2D(GLenum texImageTarget, GLint level, GLint xOffset,
                                  GLint yOffset, GLsizei width, GLsizei height,
-                                 GLenum unpackFormat, const dom::ArrayBufferView& view);
+                                 GLenum unpackFormat, const dom::ArrayBufferViewOrSharedArrayBufferView& view);
 
     void CopyTexImage2D(GLenum texImageTarget, GLint level, GLenum internalFormat,
                         GLint x, GLint y, GLsizei width, GLsizei height, GLint border);
@@ -863,7 +889,7 @@ public:
     void TexImage2D(GLenum texImageTarget, GLint level, GLenum internalFormat,
                     GLsizei width, GLsizei height, GLint border, GLenum unpackFormat,
                     GLenum unpackType,
-                    const dom::Nullable<dom::ArrayBufferView>& maybeView,
+                    const dom::Nullable<dom::ArrayBufferViewOrSharedArrayBufferView>& maybeView,
                     ErrorResult& out_rv);
     void TexImage2D(GLenum texImageTarget, GLint level, GLenum internalFormat,
                     GLenum unpackFormat, GLenum unpackType, dom::ImageData* imageData,
@@ -876,7 +902,7 @@ public:
     void TexSubImage2D(GLenum texImageTarget, GLint level, GLint xOffset, GLint yOffset,
                        GLsizei width, GLsizei height, GLenum unpackFormat,
                        GLenum unpackType,
-                       const dom::Nullable<dom::ArrayBufferView>& maybeView,
+                       const dom::Nullable<dom::ArrayBufferViewOrSharedArrayBufferView>& maybeView,
                        ErrorResult& out_rv);
     void TexSubImage2D(GLenum texImageTarget, GLint level, GLint xOffset, GLint yOffset,
                        GLenum unpackFormat, GLenum unpackType, dom::ImageData* imageData,
@@ -1034,6 +1060,7 @@ protected:
     WebGLContextOptions mOptions;
 
     bool mInvalidated;
+    bool mCapturedFrameInvalidated;
     bool mResetLayer;
     bool mOptionsFrozen;
     bool mMinCapability;
@@ -1118,7 +1145,7 @@ protected:
     // -------------------------------------------------------------------------
     // WebGL extensions (implemented in WebGLContextExtensions.cpp)
     typedef EnumeratedArray<WebGLExtensionID, WebGLExtensionID::Max,
-                            nsRefPtr<WebGLExtensionBase>> ExtensionsArrayType;
+                            RefPtr<WebGLExtensionBase>> ExtensionsArrayType;
 
     ExtensionsArrayType mExtensions;
 
@@ -1148,11 +1175,19 @@ public:
 protected:
     bool InitWebGL2();
 
+    bool CreateAndInitGL(bool forceEnabled);
+    bool ResizeBackbuffer(uint32_t width, uint32_t height);
+
+    typedef already_AddRefed<gl::GLContext> FnCreateGL_T(const gl::SurfaceCaps& caps,
+                                                         gl::CreateContextFlags flags,
+                                                         WebGLContext* webgl);
+
+    bool CreateAndInitGLWith(FnCreateGL_T fnCreateGL, const gl::SurfaceCaps& baseCaps,
+                             gl::CreateContextFlags flags);
+
     // -------------------------------------------------------------------------
     // Validation functions (implemented in WebGLContextValidate.cpp)
-    bool CreateOffscreenGL(bool forceEnabled);
     bool InitAndValidateGL();
-    bool ResizeBackbuffer(uint32_t width, uint32_t height);
     bool ValidateBlendEquationEnum(GLenum cap, const char* info);
     bool ValidateBlendFuncDstEnum(GLenum mode, const char* info);
     bool ValidateBlendFuncSrcEnum(GLenum mode, const char* info);
@@ -1438,11 +1473,13 @@ protected:
     uint64_t mLastUseIndex;
 
     bool mNeedsFakeNoAlpha;
+    bool mNeedsFakeNoDepth;
     bool mNeedsFakeNoStencil;
 
     struct ScopedMaskWorkaround {
         WebGLContext& mWebGL;
         const bool mFakeNoAlpha;
+        const bool mFakeNoDepth;
         const bool mFakeNoStencil;
 
         static bool ShouldFakeNoAlpha(WebGLContext& webgl) {
@@ -1451,6 +1488,13 @@ protected:
             return !webgl.mBoundDrawFramebuffer &&
                    webgl.mNeedsFakeNoAlpha &&
                    webgl.mColorWriteMask[3] != false;
+        }
+
+        static bool ShouldFakeNoDepth(WebGLContext& webgl) {
+            // We should only be doing this if we're about to draw to the backbuffer.
+            return !webgl.mBoundDrawFramebuffer &&
+                   webgl.mNeedsFakeNoDepth &&
+                   webgl.mDepthTestEnabled;
         }
 
         static bool ShouldFakeNoStencil(WebGLContext& webgl) {
@@ -1483,8 +1527,6 @@ protected:
     // If in the future GC becomes much more frequent, we may have to revisit then (maybe use a timer).
     ForceDiscreteGPUHelperCGL mForceDiscreteGPUHelper;
 #endif
-
-    nsRefPtr<WebGLObserver> mContextObserver;
 
 public:
     // console logging helpers
@@ -1590,32 +1632,6 @@ WebGLContext::ValidateObject(const char* info, ObjectType* object)
     return ValidateObjectAssumeNonNull(info, object);
 }
 
-// Listen visibilitychange and memory-pressure event for context lose/restore
-class WebGLObserver final
-    : public nsIObserver
-    , public nsIDOMEventListener
-{
-public:
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSIOBSERVER
-    NS_DECL_NSIDOMEVENTLISTENER
-
-    explicit WebGLObserver(WebGLContext* webgl);
-
-    void Destroy();
-
-    void RegisterVisibilityChangeEvent();
-    void UnregisterVisibilityChangeEvent();
-
-    void RegisterMemoryPressureEvent();
-    void UnregisterMemoryPressureEvent();
-
-private:
-    ~WebGLObserver();
-
-    WebGLContext* mWebGL;
-};
-
 size_t RoundUpToMultipleOf(size_t value, size_t multiple);
 
 bool
@@ -1628,6 +1644,11 @@ ValidateTexImageTarget(WebGLContext* webgl, GLenum rawTexImageTarget,
 
 // Returns x rounded to the next highest multiple of y.
 CheckedUint32 RoundedToNextMultipleOf(CheckedUint32 x, CheckedUint32 y);
+
+void
+ComputeLengthAndData(const dom::ArrayBufferViewOrSharedArrayBufferView& view,
+                     void** const out_data, size_t* const out_length,
+                     js::Scalar::Type* const out_type);
 
 } // namespace mozilla
 

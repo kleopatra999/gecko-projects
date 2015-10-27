@@ -72,7 +72,6 @@
         './src/mediapipeline',
         './src/peerconnection',
         './src/sdp/sipcc',
-        '../../../xpcom/base',
         '../../../dom/base',
         '../../../dom/media',
         '../../../media/mtransport',
@@ -159,6 +158,7 @@
          './src/sdp/SdpHelper.h',
          './src/sdp/SdpHelper.cpp',
          './src/sdp/SdpMediaSection.h',
+         './src/sdp/SdpMediaSection.cpp',
          './src/sdp/SipccSdp.h',
          './src/sdp/SipccSdpAttributeList.h',
          './src/sdp/SipccSdpAttributeList.cpp',
@@ -173,6 +173,7 @@
          './src/jsep/JsepSession.h',
          './src/jsep/JsepSessionImpl.cpp',
          './src/jsep/JsepSessionImpl.h',
+         './src/jsep/JsepTrack.cpp',
          './src/jsep/JsepTrack.h',
          './src/jsep/JsepTransport.h'
       ],

@@ -10,16 +10,16 @@ const DEVELOPER_HUD_LOG_PREFIX = 'DeveloperHUD';
 const CUSTOM_HISTOGRAM_PREFIX = 'DEVTOOLS_HUD_CUSTOM_';
 
 XPCOMUtils.defineLazyGetter(this, 'devtools', function() {
-  const {devtools} = Cu.import('resource://gre/modules/devtools/Loader.jsm', {});
+  const {devtools} = Cu.import('resource://devtools/shared/Loader.jsm', {});
   return devtools;
 });
 
 XPCOMUtils.defineLazyGetter(this, 'DebuggerClient', function() {
-  return devtools.require('devtools/toolkit/client/main').DebuggerClient;
+  return devtools.require('devtools/shared/client/main').DebuggerClient;
 });
 
 XPCOMUtils.defineLazyGetter(this, 'WebConsoleUtils', function() {
-  return devtools.require('devtools/toolkit/webconsole/utils').Utils;
+  return devtools.require('devtools/shared/webconsole/utils').Utils;
 });
 
 XPCOMUtils.defineLazyGetter(this, 'EventLoopLagFront', function() {
@@ -36,7 +36,7 @@ XPCOMUtils.defineLazyGetter(this, 'MemoryFront', function() {
 
 Cu.import('resource://gre/modules/Frames.jsm');
 
-let _telemetryDebug = true;
+var _telemetryDebug = false;
 
 function telemetryDebug(...args) {
   if (_telemetryDebug) {
@@ -50,7 +50,7 @@ function telemetryDebug(...args) {
  * showing visual debug information about apps. Each widget corresponds to a
  * metric as tracked by a metric watcher (e.g. consoleWatcher).
  */
-let developerHUD = {
+var developerHUD = {
 
   _targets: new Map(),
   _histograms: new Set(),
@@ -108,8 +108,8 @@ let developerHUD = {
       this._logging = enabled;
     });
 
-    SettingsListener.observe('debug.performance_data.advanced_telemetry', this._telemetry, enabled => {
-      this._telemetry = enabled;
+    SettingsListener.observe('metrics.selectedMetrics.level', "", level => {
+      this._telemetry = (level === 'Enhanced');
     });
   },
 
@@ -190,7 +190,7 @@ let developerHUD = {
  * metrics, and how to notify the front-end when metrics have changed.
  */
 function Target(frame, actor) {
-  this._frame = frame;
+  this.frame = frame;
   this.actor = actor;
   this.metrics = new Map();
   this._appName = null;
@@ -198,15 +198,8 @@ function Target(frame, actor) {
 
 Target.prototype = {
 
-  get frame() {
-    let frame = this._frame;
-    let systemapp = document.querySelector('#systemapp');
-
-    return (frame === systemapp ? getContentWindow() : frame);
-  },
-
   get manifest() {
-    return this._frame.appManifestURL;
+    return this.frame.appManifestURL;
   },
 
   get appName() {
@@ -433,7 +426,7 @@ Target.prototype = {
  * The Console Watcher tracks the following metrics in apps: reflows, warnings,
  * and errors, with security errors reported separately.
  */
-let consoleWatcher = {
+var consoleWatcher = {
 
   _client: null,
   _targets: new Map(),
@@ -695,7 +688,7 @@ let consoleWatcher = {
 developerHUD.registerWatcher(consoleWatcher);
 
 
-let eventLoopLagWatcher = {
+var eventLoopLagWatcher = {
   _client: null,
   _fronts: new Map(),
   _active: false,
@@ -760,14 +753,29 @@ developerHUD.registerWatcher(eventLoopLagWatcher);
  * to the app-launch epoch and emits an "app-start-time-<performance mark name>"
  * event containing the delta.
  */
-let performanceEntriesWatcher = {
+var performanceEntriesWatcher = {
   _client: null,
   _fronts: new Map(),
   _appLaunchName: null,
   _appLaunchStartTime: null,
+  _supported: [
+    'contentInteractive',
+    'navigationInteractive',
+    'navigationLoaded',
+    'visuallyLoaded',
+    'fullyLoaded',
+    'mediaEnumerated',
+    'scanEnd'
+  ],
 
   init(client) {
     this._client = client;
+    let setting = 'devtools.telemetry.supported_performance_marks';
+    let defaultValue = this._supported.join(',');
+
+    SettingsListener.observe(setting, defaultValue, supported => {
+      this._supported = supported.split(',');
+    });
   },
 
   trackTarget(target) {
@@ -783,38 +791,57 @@ let performanceEntriesWatcher = {
     front.start();
 
     front.on('entry', detail => {
-      if (detail.type === 'mark') {
-        let name = detail.name;
-        let epoch = detail.epoch;
-        let CHARS_UNTIL_APP_NAME = 7; // '@app://'
 
-        // FIXME There is a potential race condition that can result
-        // in some performance entries being disregarded. See bug 1189942.
-        if (name.indexOf('appLaunch') != -1) {
-          let appStartPos = name.indexOf('@app') + CHARS_UNTIL_APP_NAME;
-          let length = (name.indexOf('.') - appStartPos);
-          this._appLaunchName = name.substr(appStartPos, length);
-          this._appLaunchStartTime = epoch;
-        } else {
-          let origin = detail.origin;
-          origin = origin.substr(0, origin.indexOf('.'));
-          if (this._appLaunchName === origin) {
-            let time = epoch - this._appLaunchStartTime;
-            let eventName = 'app-startup-time-' + name;
-
-            // Events based on performance marks are for telemetry only, they are
-            // not displayed in the HUD front end.
-            target._logHistogram({name: eventName, value: time});
-
-            memoryWatcher.front(target).residentUnique().then(value => {
-              eventName = 'app-memory-' + name;
-              target._logHistogram({name: eventName, value: value});
-            }, err => {
-              console.error(err);
-            });
-          }
-        }
+      // Only process performance marks.
+      if (detail.type !== 'mark') {
+        return;
       }
+
+      let name = detail.name;
+      let epoch = detail.epoch;
+
+      // FIXME There is a potential race condition that can result
+      // in some performance entries being disregarded. See bug 1189942.
+      //
+      // If this is an "app launch" mark, record the app that was
+      // launched and the epoch of when it was launched.
+      if (name.indexOf('appLaunch') !== -1) {
+        let CHARS_UNTIL_APP_NAME = 7; // '@app://'
+        let startPos = name.indexOf('@app') + CHARS_UNTIL_APP_NAME;
+        let endPos = name.indexOf('.');
+        this._appLaunchName = name.slice(startPos, endPos);
+        this._appLaunchStartTime = epoch;
+        return;
+      }
+
+      // Only process supported performance marks
+      if (this._supported.indexOf(name) === -1) {
+        return;
+      }
+
+      let origin = detail.origin;
+      origin = origin.slice(0, origin.indexOf('.'));
+
+      // Continue if the performance mark corresponds to the app
+      // for which we have recorded app launch information.
+      if (this._appLaunchName !== origin) {
+        return;
+      }
+
+      let time = epoch - this._appLaunchStartTime;
+      let eventName = 'app_startup_time_' + name;
+
+      // Events based on performance marks are for telemetry only, they are
+      // not displayed in the HUD front end.
+      target._logHistogram({name: eventName, value: time});
+
+      memoryWatcher.front(target).residentUnique().then(value => {
+        // bug 1215277, need 'v2' for app-memory histograms
+        eventName = 'app_memory_' + name + '_v2';
+        target._logHistogram({name: eventName, value: value});
+      }, err => {
+        console.error(err);
+      });
     });
   },
 
@@ -831,7 +858,7 @@ developerHUD.registerWatcher(performanceEntriesWatcher);
 /**
  * The Memory Watcher uses devtools actors to track memory usage.
  */
-let memoryWatcher = {
+var memoryWatcher = {
 
   _client: null,
   _fronts: new Map(),

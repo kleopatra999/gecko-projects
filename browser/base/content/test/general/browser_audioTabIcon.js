@@ -98,10 +98,9 @@ function* test_mute_tab(tab, icon, expectMuted) {
   return mutedPromise;
 }
 
-function get_tab_attributes(tab) {
+function get_tab_state(tab) {
   const ss = Cc["@mozilla.org/browser/sessionstore;1"].getService(Ci.nsISessionStore);
-  let {attributes} = JSON.parse(ss.getTabState(tab));
-  return attributes;
+  return JSON.parse(ss.getTabState(tab));
 }
 
 function* test_muting_using_menu(tab, expectMuted) {
@@ -147,17 +146,17 @@ function* test_playing_icon_on_tab(tab, browser, isPinned) {
 
   yield test_tooltip(icon, "Mute tab", isActiveTab);
 
-  ok(!("muted" in get_tab_attributes(tab)), "No muted attribute should be persisted");
+  ok(!("muted" in get_tab_state(tab)), "No muted attribute should be persisted");
 
   yield test_mute_tab(tab, icon, true);
 
-  ok("muted" in get_tab_attributes(tab), "Muted attribute should be persisted");
+  ok("muted" in get_tab_state(tab), "Muted attribute should be persisted");
 
   yield test_tooltip(icon, "Unmute tab", isActiveTab);
 
   yield test_mute_tab(tab, icon, false);
 
-  ok(!("muted" in get_tab_attributes(tab)), "No muted attribute should be persisted");
+  ok(!("muted" in get_tab_state(tab)), "No muted attribute should be persisted");
 
   yield test_tooltip(icon, "Mute tab", isActiveTab);
 
@@ -213,6 +212,10 @@ function* test_swapped_browser(oldTab, newBrowser, isPlaying) {
 
   ok(newTab.hasAttribute("muted"), "Expected the correct muted attribute on the new tab");
   is(newTab.hasAttribute("soundplaying"), isPlaying, "Expected the correct soundplaying attribute on the new tab");
+
+  let icon = document.getAnonymousElementByAttribute(newTab, "anonid",
+                                                     "soundplaying-icon");
+  yield test_tooltip(icon, "Unmute tab", true);
 }
 
 function* test_browser_swapping(tab, browser) {

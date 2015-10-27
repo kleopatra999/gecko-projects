@@ -69,7 +69,6 @@ pref("browser.cache.memory_limit", 5120); // 5 MB
 
 /* image cache prefs */
 pref("image.cache.size", 1048576); // bytes
-pref("image.high_quality_downscaling.enabled", false);
 
 /* offline cache prefs */
 pref("browser.offline-apps.notify", true);
@@ -221,6 +220,8 @@ pref("extensions.compatability.locales.buildid", "0");
 
 /* blocklist preferences */
 pref("extensions.blocklist.enabled", true);
+// OneCRL freshness checking depends on this value, so if you change it,
+// please also update security.onecrl.maximum_staleness_in_seconds.
 pref("extensions.blocklist.interval", 86400);
 pref("extensions.blocklist.url", "https://blocklist.addons.mozilla.org/blocklist/3/%APP_ID%/%APP_VERSION%/%PRODUCT%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/%PING_COUNT%/%TOTAL_PING_COUNT%/%DAYS_SINCE_LAST_PING%/");
 pref("extensions.blocklist.detailsURL", "https://www.mozilla.com/%LOCALE%/blocklist/");
@@ -349,6 +350,9 @@ pref("browser.link.open_newwindow", 3);
 // 0=force all new windows to tabs, 1=don't force, 2=only force those with no features set
 pref("browser.link.open_newwindow.restriction", 0);
 
+// Image blocking policy
+pref("browser.image_blocking.enabled", false);
+
 // controls which bits of private data to clear. by default we clear them all.
 pref("privacy.item.cache", true);
 pref("privacy.item.cookies", true);
@@ -414,7 +418,7 @@ pref("ui.zoomedview.enabled", true);
 pref("ui.zoomedview.keepLimitSize", 16); // value in layer pixels, used to not keep the large elements in the cluster list (Bug 1191041)
 pref("ui.zoomedview.limitReadableSize", 8); // value in layer pixels
 pref("ui.zoomedview.defaultZoomFactor", 2);
-pref("ui.zoomedview.simplified", true); // Do not display all the zoomed view controls
+pref("ui.zoomedview.simplified", true); // Do not display all the zoomed view controls, do not use size heurisistic
 
 pref("ui.touch.radius.enabled", false);
 pref("ui.touch.radius.leftmm", 3);
@@ -465,11 +469,8 @@ pref("app.releaseNotesURL", "http://www.mozilla.com/%LOCALE%/mobile/%VERSION%bet
 #else
 pref("app.releaseNotesURL", "http://www.mozilla.com/%LOCALE%/mobile/%VERSION%/releasenotes/");
 #endif
-#if MOZ_UPDATE_CHANNEL == beta
-pref("app.faqURL", "http://www.mozilla.com/%LOCALE%/mobile/beta/faq/");
-#else
-pref("app.faqURL", "http://www.mozilla.com/%LOCALE%/mobile/faq/");
-#endif
+
+pref("app.faqURL", "https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/faq");
 
 // Name of alternate about: page for certificate errors (when undefined, defaults to about:neterror)
 pref("security.alternate_certificate_error_page", "certerror");
@@ -481,6 +482,13 @@ pref("security.mixed_content.block_active_content", true);
 
 // Enable pinning
 pref("security.cert_pinning.enforcement_level", 1);
+
+// Allow SHA-1 certificates only before 2016-01-01
+pref("security.pki.sha1_enforcement_level", 2);
+
+// Required blocklist freshness for OneCRL OCSP bypass
+// (default is 1.25x extensions.blocklist.interval, or 30 hours)
+pref("security.onecrl.maximum_staleness_in_seconds", 108000);
 
 // Only fetch OCSP for EV certificates
 pref("security.OCSP.enabled", 2);
@@ -557,10 +565,6 @@ pref("layers.low-precision-opacity", "1.0");
 // work harder keep scrolling smooth and memory low.
 pref("layers.max-active", 20);
 
-// Temporarily disable support for offsetX/Y to work around Google Maps bug
-// (bug 1150284)
-pref("dom.mouseEvent.offsetXY.enabled", false);
-
 pref("notification.feature.enabled", true);
 pref("dom.webnotifications.enabled", true);
 
@@ -585,10 +589,8 @@ pref("media.cache_readahead_limit", 30);
 pref("media.video-queue.default-size", 3);
 
 // Enable the MediaCodec PlatformDecoderModule by default.
-pref("media.fragmented-mp4.exposed", true);
-pref("media.fragmented-mp4.enabled", true);
-pref("media.fragmented-mp4.android-media-codec.enabled", true);
-pref("media.fragmented-mp4.android-media-codec.preferred", true);
+pref("media.android-media-codec.enabled", true);
+pref("media.android-media-codec.preferred", true);
 
 // Enable MSE
 pref("media.mediasource.enabled", true);
@@ -934,3 +936,21 @@ pref("consoleservice.logcat", true);
 pref("dom.vr.cardboard.enabled", true);
 
 pref("browser.tabs.showAudioPlayingIcon", true);
+
+// Enable service workers and fetch interception on non-release Fennec
+#ifndef RELEASE_BUILD
+pref("dom.serviceWorkers.enabled", true);
+pref("dom.serviceWorkers.interception.enabled", true);
+#endif
+
+// The remote content URL where FxAccountsWebChannel messages originate.  Must use HTTPS.
+pref("identity.fxaccounts.remote.webchannel.uri", "https://accounts.firefox.com");
+
+// The remote URL of the Firefox Account profile server.
+pref("identity.fxaccounts.remote.profile.uri", "https://profile.accounts.firefox.com/v1");
+
+// The remote URL of the Firefox Account oauth server.
+pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com/v1"); 
+
+// Token server used by Firefox Account-authenticated Sync.
+pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");

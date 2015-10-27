@@ -50,9 +50,11 @@ public:
     virtual nsresult GetStandardFamilyName(const nsAString& aFontName,
                                            nsAString& aFamilyName) override;
 
-    virtual gfxFontGroup* CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
-                                          const gfxFontStyle *aStyle,
-                                          gfxUserFontSet *aUserFontSet) override;
+    gfxFontGroup*
+    CreateFontGroup(const mozilla::FontFamilyList& aFontFamilyList,
+                    const gfxFontStyle *aStyle,
+                    gfxTextPerfMetrics* aTextPerf,
+                    gfxUserFontSet *aUserFontSet) override;
 
     /**
      * Look up a local platform font using the full font face name (needed to
@@ -61,7 +63,7 @@ public:
     virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
                                           uint16_t aWeight,
                                           int16_t aStretch,
-                                          bool aItalic) override;
+                                          uint8_t aStyle) override;
 
     /**
      * Activate a platform font (needed to support @font-face src url() )
@@ -70,7 +72,7 @@ public:
     virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
                                            uint16_t aWeight,
                                            int16_t aStretch,
-                                           bool aItalic,
+                                           uint8_t aStyle,
                                            const uint8_t* aFontData,
                                            uint32_t aLength) override;
 
@@ -97,8 +99,8 @@ public:
 
     bool UseXRender() {
 #if defined(MOZ_X11)
-        if (GetContentBackend() != mozilla::gfx::BackendType::NONE &&
-            GetContentBackend() != mozilla::gfx::BackendType::CAIRO)
+        if (GetDefaultContentBackend() != mozilla::gfx::BackendType::NONE &&
+            GetDefaultContentBackend() != mozilla::gfx::BackendType::CAIRO)
             return false;
 
         return sUseXRender;
@@ -119,8 +121,6 @@ public:
     bool UseImageOffscreenSurfaces();
 
     virtual gfxImageFormat GetOffscreenFormat() override;
-
-    virtual int GetScreenDepth() const override;
 
     bool SupportsApzWheelInput() const override {
       return true;

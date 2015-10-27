@@ -14,14 +14,13 @@
 #include "nsIInputStream.h"
 #include "nsIRunnable.h"
 #include "nsIThread.h"
-#include "mozilla/nsRefPtr.h"
+#include "mozilla/RefPtr.h"
 #include "nsString.h"
 #include "nsThreadUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::image;
-
 
 TEST(ImageDecodeToSurface, ImageModuleAvailable)
 {
@@ -36,9 +35,11 @@ TEST(ImageDecodeToSurface, ImageModuleAvailable)
 class DecodeToSurfaceRunnable : public nsRunnable
 {
 public:
-  DecodeToSurfaceRunnable(nsIInputStream* aInputStream,
+  DecodeToSurfaceRunnable(RefPtr<SourceSurface>& aSurface,
+                          nsIInputStream* aInputStream,
                           const ImageTestCase& aTestCase)
-    : mInputStream(aInputStream)
+    : mSurface(aSurface)
+    , mInputStream(aInputStream)
     , mTestCase(aTestCase)
   { }
 
@@ -50,22 +51,23 @@ public:
 
   void Go()
   {
-    nsRefPtr<SourceSurface> surface =
+    mSurface =
       ImageOps::DecodeToSurface(mInputStream,
                                 nsAutoCString(mTestCase.mMimeType),
                                 imgIContainer::DECODE_FLAGS_DEFAULT);
-    ASSERT_TRUE(surface != nullptr);
+    ASSERT_TRUE(mSurface != nullptr);
 
-    EXPECT_EQ(SurfaceType::DATA, surface->GetType());
-    EXPECT_TRUE(surface->GetFormat() == SurfaceFormat::B8G8R8X8 ||
-                surface->GetFormat() == SurfaceFormat::B8G8R8A8);
-    EXPECT_EQ(mTestCase.mSize, surface->GetSize());
+    EXPECT_EQ(SurfaceType::DATA, mSurface->GetType());
+    EXPECT_TRUE(mSurface->GetFormat() == SurfaceFormat::B8G8R8X8 ||
+                mSurface->GetFormat() == SurfaceFormat::B8G8R8A8);
+    EXPECT_EQ(mTestCase.mSize, mSurface->GetSize());
 
-    EXPECT_TRUE(IsSolidColor(surface, BGRAColor::Green(),
+    EXPECT_TRUE(IsSolidColor(mSurface, BGRAColor::Green(),
                              mTestCase.mFlags & TEST_CASE_IS_FUZZY));
   }
 
 private:
+  RefPtr<SourceSurface>& mSurface;
   nsCOMPtr<nsIInputStream> mInputStream;
   ImageTestCase mTestCase;
 };
@@ -82,11 +84,15 @@ RunDecodeToSurface(const ImageTestCase& aTestCase)
 
   // We run the DecodeToSurface tests off-main-thread to ensure that
   // DecodeToSurface doesn't require any main-thread-only code.
+  RefPtr<SourceSurface> surface;
   nsCOMPtr<nsIRunnable> runnable =
-    new DecodeToSurfaceRunnable(inputStream, aTestCase);
+    new DecodeToSurfaceRunnable(surface, inputStream, aTestCase);
   thread->Dispatch(runnable, nsIThread::DISPATCH_SYNC);
 
   thread->Shutdown();
+
+  // Explicitly release the SourceSurface on the main thread.
+  surface = nullptr;
 }
 
 TEST(ImageDecodeToSurface, PNG) { RunDecodeToSurface(GreenPNGTestCase()); }
@@ -94,6 +100,7 @@ TEST(ImageDecodeToSurface, GIF) { RunDecodeToSurface(GreenGIFTestCase()); }
 TEST(ImageDecodeToSurface, JPG) { RunDecodeToSurface(GreenJPGTestCase()); }
 TEST(ImageDecodeToSurface, BMP) { RunDecodeToSurface(GreenBMPTestCase()); }
 TEST(ImageDecodeToSurface, ICO) { RunDecodeToSurface(GreenICOTestCase()); }
+TEST(ImageDecodeToSurface, Icon) { RunDecodeToSurface(GreenIconTestCase()); }
 
 TEST(ImageDecodeToSurface, AnimatedGIF)
 {
@@ -112,7 +119,7 @@ TEST(ImageDecodeToSurface, Corrupt)
   nsCOMPtr<nsIInputStream> inputStream = LoadFile(testCase.mPath);
   ASSERT_TRUE(inputStream != nullptr);
 
-  nsRefPtr<SourceSurface> surface =
+  RefPtr<SourceSurface> surface =
     ImageOps::DecodeToSurface(inputStream,
                               nsAutoCString(testCase.mMimeType),
                               imgIContainer::DECODE_FLAGS_DEFAULT);

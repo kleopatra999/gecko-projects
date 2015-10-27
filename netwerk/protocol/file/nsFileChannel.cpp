@@ -146,8 +146,8 @@ nsFileCopyEvent::Dispatch(nsIRunnable *callback,
   mCallbackTarget = target;
 
   // Build a coalescing proxy for progress events
-  nsresult rv = net_NewTransportEventSinkProxy(getter_AddRefs(mSink), sink,
-                                               target, true);
+  nsresult rv = net_NewTransportEventSinkProxy(getter_AddRefs(mSink), sink, target);
+
   if (NS_FAILED(rv))
     return rv;
 
@@ -193,7 +193,7 @@ private:
 
   void OnCopyComplete();
 
-  nsRefPtr<nsFileCopyEvent> mCopyEvent;
+  RefPtr<nsFileCopyEvent> mCopyEvent;
   nsCOMPtr<nsITransportEventSink> mSink;
 };
 
@@ -375,7 +375,7 @@ nsFileChannel::OpenContentStream(bool async, nsIInputStream **result,
     if (NS_FAILED(rv))
       return rv;
 
-    nsRefPtr<nsFileUploadContentStream> uploadStream =
+    RefPtr<nsFileUploadContentStream> uploadStream =
         new nsFileUploadContentStream(async, fileStream, mUploadStream,
                                       mUploadLength, this);
     if (!uploadStream || !uploadStream->IsInitialized()) {

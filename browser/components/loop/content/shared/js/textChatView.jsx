@@ -12,7 +12,7 @@ loop.shared.views.chat = (function(mozL10n) {
   var sharedMixins = loop.shared.mixins;
   var sharedViews = loop.shared.views;
   var CHAT_MESSAGE_TYPES = loop.store.CHAT_MESSAGE_TYPES;
-  var CHAT_CONTENT_TYPES = loop.store.CHAT_CONTENT_TYPES;
+  var CHAT_CONTENT_TYPES = loop.shared.utils.CHAT_CONTENT_TYPES;
 
   /**
    * Renders an individual entry for the text chat entries view.
@@ -41,8 +41,8 @@ loop.shared.views.chat = (function(mozL10n) {
       return (
         <span className="text-chat-entry-timestamp">
           {date.toLocaleTimeString(language,
-                                   {hour: "numeric", minute: "numeric",
-                                   hour12: false})}
+                                   { hour: "numeric", minute: "numeric",
+                                   hour12: false })}
         </span>
       );
     },
@@ -81,8 +81,8 @@ loop.shared.views.chat = (function(mozL10n) {
 
     render: function() {
       return (
-        <div className="text-chat-entry special room-name">
-          <p>{mozL10n.get("rooms_welcome_title", {conversationName: this.props.message})}</p>
+        <div className="text-chat-header special room-name">
+          <p>{mozL10n.get("rooms_welcome_title", { conversationName: this.props.message })}</p>
         </div>
       );
     }
@@ -140,7 +140,7 @@ loop.shared.views.chat = (function(mozL10n) {
       // If the number of received messages has increased, we play a sound.
       if (receivedMessageCount > this.state.receivedMessageCount) {
         this.play("message");
-        this.setState({receivedMessageCount: receivedMessageCount});
+        this.setState({ receivedMessageCount: receivedMessageCount });
       }
     },
 

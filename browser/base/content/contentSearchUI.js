@@ -623,17 +623,12 @@ ContentSearchUIController.prototype = {
       return;
     }
     let searchWithHeader = document.getElementById("contentSearchSearchWithHeader");
-    while (searchWithHeader.firstChild) {
-      searchWithHeader.firstChild.remove();
-    }
     if (this.input.value) {
-      let html = "<span class='contentSearchSearchWithHeaderSearchText'>" +
-                 this.input.value + "</span>";
-      html = this._strings.searchForKeywordsWith.replace("%S", html);
-      searchWithHeader.innerHTML = html;
-      return;
+      searchWithHeader.innerHTML = this._strings.searchForSomethingWith;
+      searchWithHeader.querySelector('.contentSearchSearchWithHeaderSearchText').textContent = this.input.value;
+    } else {
+      searchWithHeader.textContent = this._strings.searchWithHeader;
     }
-    searchWithHeader.appendChild(document.createTextNode(this._strings.searchWithHeader));
   },
 
   _speculativeConnect: function () {
@@ -678,12 +673,10 @@ ContentSearchUIController.prototype = {
     return row;
   },
 
-  // Converts favicon array buffer into data URI of the right size and dpi.
+  // Converts favicon array buffer into a data URI.
   _getFaviconURIFromBuffer: function (buffer) {
     let blob = new Blob([buffer]);
-    let dpiSize = Math.round(16 * window.devicePixelRatio);
-    let sizeStr = dpiSize + "," + dpiSize;
-    return URL.createObjectURL(blob) + "#-moz-resolution=" + sizeStr;
+    return URL.createObjectURL(blob);
   },
 
   // Adds "@2x" to the name of the given PNG url for "retina" screens.

@@ -292,7 +292,7 @@ nsXULPopupManager::Rollup(uint32_t aCount, bool aFlush,
       }
 
       nsPresContext* presContext = item->Frame()->PresContext();
-      nsRefPtr<nsViewManager> viewManager = presContext->PresShell()->GetViewManager();
+      RefPtr<nsViewManager> viewManager = presContext->PresShell()->GetViewManager();
 
       HidePopup(item->Content(), true, true, false, true, lastPopup);
 
@@ -486,10 +486,9 @@ nsXULPopupManager::PopupMoved(nsIFrame* aFrame, nsIntPoint aPnt)
     menuPopupFrame->SetPopupPosition(nullptr, true, false);
   }
   else {
-    nsPresContext* presContext = menuPopupFrame->PresContext();
-    aPnt.x = presContext->DevPixelsToIntCSSPixels(aPnt.x);
-    aPnt.y = presContext->DevPixelsToIntCSSPixels(aPnt.y);
-    menuPopupFrame->MoveTo(aPnt.x, aPnt.y, false);
+    CSSPoint cssPos = LayoutDeviceIntPoint::FromUntyped(aPnt)
+                    / menuPopupFrame->PresContext()->CSSToDevPixelScale();
+    menuPopupFrame->MoveTo(RoundedToInt(cssPos), false);
   }
 }
 
@@ -831,10 +830,10 @@ CheckCaretDrawingState()
     if (!window)
       return;
 
-    nsCOMPtr<nsIDOMDocument> domDoc;
-    nsCOMPtr<nsIDocument> focusedDoc;
-    window->GetDocument(getter_AddRefs(domDoc));
-    focusedDoc = do_QueryInterface(domDoc);
+    nsCOMPtr<nsPIDOMWindow> piWindow = do_QueryInterface(window);
+    MOZ_ASSERT(piWindow);
+
+    nsCOMPtr<nsIDocument> focusedDoc = piWindow->GetDoc();
     if (!focusedDoc)
       return;
 
@@ -842,7 +841,7 @@ CheckCaretDrawingState()
     if (!presShell)
       return;
 
-    nsRefPtr<nsCaret> caret = presShell->GetCaret();
+    RefPtr<nsCaret> caret = presShell->GetCaret();
     if (!caret)
       return;
     caret->SchedulePaint();
@@ -867,9 +866,13 @@ nsXULPopupManager::ShowPopupCallback(nsIContent* aPopup,
   // escape key may be used to close the panel. However, the ignorekeys
   // attribute may be used to disable adding these event listeners for popups
   // that want to handle their own keyboard events.
-  if (aPopup->AttrValueIs(kNameSpaceID_None, nsGkAtoms::ignorekeys,
-                           nsGkAtoms::_true, eCaseMatters))
-    item->SetIgnoreKeys(true);
+  nsAutoString ignorekeys;
+  aPopup->GetAttr(kNameSpaceID_None, nsGkAtoms::ignorekeys, ignorekeys);
+  if (ignorekeys.EqualsLiteral("true")) {
+    item->SetIgnoreKeys(eIgnoreKeys_True);
+  } else if (ignorekeys.EqualsLiteral("handled")) {
+    item->SetIgnoreKeys(eIgnoreKeys_Handled);
+  }
 
   if (ismenu) {
     // if the menu is on a menubar, use the menubar's listener instead
@@ -1497,7 +1500,7 @@ nsXULPopupManager::FirePopupHidingEvent(nsIContent* aPopup,
             return;
 
           if (nsLayoutUtils::HasCurrentTransitions(popupFrame)) {
-            nsRefPtr<TransitionEnder> ender = new TransitionEnder(aPopup, aDeselectMenu);
+            RefPtr<TransitionEnder> ender = new TransitionEnder(aPopup, aDeselectMenu);
             aPopup->AddSystemEventListener(NS_LITERAL_STRING("transitionend"),
                                            ender, false, false);
             return;
@@ -1835,8 +1838,9 @@ nsXULPopupManager::UpdateKeyboardListeners()
   bool isForMenu = false;
   nsMenuChainItem* item = GetTopVisibleMenu();
   if (item) {
-    if (!item->IgnoreKeys())
+    if (item->IgnoreKeys() != eIgnoreKeys_True) {
       newTarget = item->Content()->GetComposedDoc();
+    }
     isForMenu = item->PopupType() == ePopupTypeMenu;
   }
   else if (mActiveMenuBar) {
@@ -1889,7 +1893,7 @@ nsXULPopupManager::UpdateMenuItems(nsIContent* aPopup)
       grandChild->GetAttr(kNameSpaceID_None, nsGkAtoms::command, command);
       if (!command.IsEmpty()) {
         // We do! Look it up in our document
-        nsRefPtr<dom::Element> commandElement =
+        RefPtr<dom::Element> commandElement =
           document->GetElementById(command);
         if (commandElement) {
           nsAutoString commandValue;
@@ -2002,6 +2006,14 @@ bool
 nsXULPopupManager::HandleShortcutNavigation(nsIDOMKeyEvent* aKeyEvent,
                                             nsMenuPopupFrame* aFrame)
 {
+  // On Windows, don't check shortcuts when the accelerator key is down.
+#ifdef XP_WIN
+  WidgetInputEvent* evt = aKeyEvent->GetInternalNSEvent()->AsInputEvent();
+  if (evt && evt->IsAccel()) {
+    return false;
+  }
+#endif
+
   nsMenuChainItem* item = GetTopVisibleMenu();
   if (!aFrame && item)
     aFrame = item->Frame();
@@ -2240,13 +2252,17 @@ nsXULPopupManager::HandleKeyboardEventWithKeyCode(
 #ifndef XP_MACOSX
     case nsIDOMKeyEvent::DOM_VK_F10:
 #endif
-      // close popups or deactivate menubar when Tab or F10 are pressed
-      if (aTopVisibleMenuItem) {
+      if (aTopVisibleMenuItem &&
+          !aTopVisibleMenuItem->Frame()->GetContent()->AttrValueIs(kNameSpaceID_None,
+           nsGkAtoms::activateontab, nsGkAtoms::_true, eCaseMatters)) {
+        // close popups or deactivate menubar when Tab or F10 are pressed
         Rollup(0, false, nullptr, nullptr);
+        break;
       } else if (mActiveMenuBar) {
         mActiveMenuBar->MenuClosed();
+        break;
       }
-      break;
+      // Intentional fall-through to RETURN case
 
     case nsIDOMKeyEvent::DOM_VK_RETURN: {
       // If there is a popup open, check if the current item needs to be opened.
@@ -2470,6 +2486,11 @@ nsXULPopupManager::KeyUp(nsIDOMKeyEvent* aKeyEvent)
     nsMenuChainItem* item = GetTopVisibleMenu();
     if (!item || item->PopupType() != ePopupTypeMenu)
       return NS_OK;
+
+    if (item->IgnoreKeys() == eIgnoreKeys_Handled) {
+      aKeyEvent->StopCrossProcessForwarding();
+      return NS_OK;
+    }
   }
 
   aKeyEvent->StopPropagation();
@@ -2525,13 +2546,18 @@ nsXULPopupManager::KeyDown(nsIDOMKeyEvent* aKeyEvent)
         else if (mActiveMenuBar)
           mActiveMenuBar->MenuClosed();
       }
+      aKeyEvent->StopPropagation();
       aKeyEvent->PreventDefault();
     }
   }
 
   // Since a menu was open, stop propagation of the event to keep other event
   // listeners from becoming confused.
-  aKeyEvent->StopPropagation();
+
+  if (!item || item->IgnoreKeys() != eIgnoreKeys_Handled) {
+    aKeyEvent->StopPropagation();
+  }
+
   aKeyEvent->StopCrossProcessForwarding();
   return NS_OK;
 }
@@ -2551,10 +2577,17 @@ nsXULPopupManager::KeyPress(nsIDOMKeyEvent* aKeyEvent)
   NS_ENSURE_TRUE(keyEvent, NS_ERROR_UNEXPECTED);
   // if a menu is open or a menubar is active, it consumes the key event
   bool consume = (mPopups || mActiveMenuBar);
-  HandleShortcutNavigation(keyEvent, nullptr);
-  if (consume) {
+
+  // When ignorekeys="handled" is used, we don't call preventDefault on the key
+  // event, which allows another listener to handle keys that the popup hasn't
+  // already handled. For instance, this allows global shortcuts to still apply
+  // while a menu is open.
+  bool onlyHandled = item && item->IgnoreKeys() == eIgnoreKeys_Handled;
+  bool handled = HandleShortcutNavigation(keyEvent, nullptr);
+
+  aKeyEvent->StopCrossProcessForwarding();
+  if (handled || (consume && !onlyHandled)) {
     aKeyEvent->StopPropagation();
-    aKeyEvent->StopCrossProcessForwarding();
     aKeyEvent->PreventDefault();
   }
 
@@ -2632,7 +2665,7 @@ nsXULMenuCommandEvent::Run()
 
     nsPresContext* presContext = menuFrame->PresContext();
     nsCOMPtr<nsIPresShell> shell = presContext->PresShell();
-    nsRefPtr<nsViewManager> kungFuDeathGrip = shell->GetViewManager();
+    RefPtr<nsViewManager> kungFuDeathGrip = shell->GetViewManager();
 
     // Deselect ourselves.
     if (mCloseMenuMode != CloseMenuMode_None)

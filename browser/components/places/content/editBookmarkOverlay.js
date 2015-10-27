@@ -9,7 +9,7 @@ XPCOMUtils.defineLazyModuleGetter(this, "Task",
 const LAST_USED_ANNO = "bookmarkPropertiesDialog/folderLastUsed";
 const MAX_FOLDER_ITEM_IN_MENU_LIST = 5;
 
-let gEditItemOverlay = {
+var gEditItemOverlay = {
   _observersAdded: false,
   _staticFoldersListBuilt: false,
 
@@ -56,12 +56,13 @@ let gEditItemOverlay = {
                             PlacesUIUtils.isContentsReadOnly(parent);
       }
     }
+    let focusedElement = aInitInfo.focusedElement;
 
     return this._paneInfo = { itemId, itemGuid, isItem,
                               isURI, uri, title,
                               isBookmark, isFolderShortcut, isParentReadOnly,
                               bulkTagging, uris,
-                              visibleRows, postData, isTag };
+                              visibleRows, postData, isTag, focusedElement };
   },
 
   get initialized() {
@@ -181,7 +182,7 @@ let gEditItemOverlay = {
     let { itemId, itemGuid, isItem,
           isURI, uri, title,
           isBookmark, bulkTagging, uris,
-          visibleRows } = this._setPaneInfo(aInfo);
+          visibleRows, focusedElement } = this._setPaneInfo(aInfo);
 
     let showOrCollapse =
       (rowId, isAppropriateForInput, nameInHiddenRows = null) => {
@@ -252,6 +253,24 @@ let gEditItemOverlay = {
       window.addEventListener("unload", this, false);
       this._observersAdded = true;
     }
+
+    // The focusedElement possible values are:
+    //  * preferred: focus the field that the user touched first the last
+    //    time the pane was shown (either namePicker or tagsField)
+    //  * first: focus the first non collapsed textbox
+    // Note: since all controls are collapsed by default, we don't get the
+    // default XUL dialog behavior, that selects the first control, so we set
+    // the focus explicitly.
+    let elt;
+    if (focusedElement === "preferred") {
+      elt = this._element(gPrefService.getCharPref("browser.bookmarks.editDialog.firstEditField"));
+    } else if (focusedElement === "first") {
+      elt = document.querySelector("textbox:not([collapsed=true])");
+    }
+    if (elt) {
+      elt.focus();
+      elt.select();
+    }
   },
 
   /**
@@ -270,7 +289,7 @@ let gEditItemOverlay = {
     for (let uri of uris) {
       let curentURITags = PlacesUtils.tagging.getTagsForURI(uri);
       for (let tag of commonTags) {
-        if (curentURITags.indexOf(tag) == -1) {
+        if (!curentURITags.includes(tag)) {
           commonTags.delete(tag)
           if (commonTags.size == 0)
             return this._paneInfo.cachedCommonTags = [];
@@ -434,8 +453,8 @@ let gEditItemOverlay = {
     if (aCurrentTags.length == 0)
       return { newTags: inputTags, removedTags: [] };
 
-    let removedTags = aCurrentTags.filter(t => inputTags.indexOf(t) == -1);
-    let newTags = inputTags.filter(t => aCurrentTags.indexOf(t) == -1);
+    let removedTags = aCurrentTags.filter(t => !inputTags.includes(t));
+    let newTags = inputTags.filter(t => !aCurrentTags.includes(t));
     return { removedTags, newTags };
   },
 
@@ -712,7 +731,7 @@ let gEditItemOverlay = {
       this._folderMenuList.selectedItem = item;
       // XXXmano HACK: setTimeout 100, otherwise focus goes back to the
       // menulist right away
-      setTimeout(function(self) self.toggleFolderTreeVisibility(), 100, this);
+      setTimeout(() => this.toggleFolderTreeVisibility(), 100);
       return;
     }
 
@@ -854,7 +873,7 @@ let gEditItemOverlay = {
       let elt = document.createElement("listitem");
       elt.setAttribute("type", "checkbox");
       elt.setAttribute("label", tag);
-      if (tagsInField.indexOf(tag) != -1)
+      if (tagsInField.includes(tag))
         elt.setAttribute("checked", "true");
       tagsSelector.appendChild(elt);
       if (selectedTag === tag)
@@ -906,7 +925,7 @@ let gEditItemOverlay = {
     let tags = this._element("tagsField").value;
     return tags.trim()
                .split(/\s*,\s*/) // Split on commas and remove spaces.
-               .filter(function (tag) tag.length > 0); // Kill empty tags.
+               .filter(tag => tag.length > 0); // Kill empty tags.
   },
 
   newFolder: Task.async(function* () {

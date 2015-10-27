@@ -5,15 +5,68 @@
 
 import os
 import re
+import sys
 
+import mozinfo
+import mozrunner.utils
 
 def _raw_log():
     import logging
     return logging.getLogger(__name__)
 
 
+# Do not add anything to this list, unless one of the existing leaks below
+# has started to leak additional objects. This function returns a dict
+# mapping the names of objects as reported to the XPCOM leak checker to an
+# upper bound on the number of leaked objects of that kind that are allowed
+# to appear in a content process leak report.
+def expectedTabProcessLeakCounts():
+    leaks = {}
+
+    def appendExpectedLeakCounts(leaks2):
+        for obj, count in leaks2.iteritems():
+            leaks[obj] = leaks.get(obj, 0) + count
+
+    # Bug 1117203 - ImageBridgeChild is not shut down in tab processes.
+    appendExpectedLeakCounts({
+        'AsyncTransactionTrackersHolder': 1,
+        'CondVar': 2,
+        'IPC::Channel': 1,
+        'MessagePump': 1,
+        'Mutex': 2,
+        'PImageBridgeChild': 1,
+        'RefCountedMonitor': 1,
+        'RefCountedTask': 2,
+        'StoreRef': 1,
+        'WaitableEventKernel': 1,
+        'WeakReference<MessageListener>': 1,
+        'base::Thread': 1,
+        'ipc::MessageChannel': 1,
+        'nsTArray_base': 7,
+        'nsThread': 1,
+    })
+
+    # Bug 1215265 - CompositorChild is not shut down.
+    appendExpectedLeakCounts({
+        'CompositorChild': 1,
+        'CondVar': 1,
+        'IPC::Channel': 1,
+        'Mutex': 1,
+        'PCompositorChild': 1,
+        'RefCountedMonitor': 1,
+        'RefCountedTask': 2,
+        'StoreRef': 1,
+        'WeakReference<MessageListener>': 1,
+        'ipc::MessageChannel': 1,
+        'nsTArray_base': 2,
+    })
+
+    return leaks
+
+
 def process_single_leak_file(leakLogFileName, processType, leakThreshold,
-                             ignoreMissingLeaks, log=None):
+                             ignoreMissingLeaks, log=None,
+                             stackFixer=None):
     """Process a single leak log.
     """
 
@@ -30,6 +83,7 @@ def process_single_leak_file(leakLogFileName, processType, leakThreshold,
     log = log or _raw_log()
 
     processString = "%s process:" % processType
+    expectedLeaks = expectedTabProcessLeakCounts() if processType == 'tab' else {}
     crashedOnPurpose = False
     totalBytesLeaked = None
     logAsWarning = False
@@ -44,7 +98,8 @@ def process_single_leak_file(leakLogFileName, processType, leakThreshold,
             matches = lineRe.match(line)
             if not matches:
                 # eg: the leak table header row
-                log.info(line.rstrip())
+                strippedLine = line.rstrip()
+                log.info(stackFixer(strippedLine) if stackFixer else strippedLine)
                 continue
             name = matches.group("name").rstrip()
             size = int(matches.group("size"))
@@ -81,8 +136,15 @@ def process_single_leak_file(leakLogFileName, processType, leakThreshold,
                 continue
             if name != "TOTAL" and numLeaked != 0 and recordLeakedObjects:
                 leakedObjectNames.append(name)
-                leakedObjectAnalysis.append("TEST-INFO | leakcheck | %s leaked %d %s (%s bytes)"
-                                            % (processString, numLeaked, name, bytesLeaked))
+
+                currExpectedLeak = expectedLeaks.get(name, 0)
+                if not expectedLeaks or numLeaked <= currExpectedLeak:
+                    leakedObjectAnalysis.append("TEST-INFO | leakcheck | %s leaked %d %s"
+                                                % (processString, numLeaked, name))
+                else:
+                    leakedObjectAnalysis.append("TEST-UNEXPECTED-FAIL | leakcheck | %s leaked too many %s (expected %d, got %d)"
+                                                % (processString, name, currExpectedLeak, numLeaked))
+
 
     leakAnalysis.extend(leakedObjectAnalysis)
     if logAsWarning:
@@ -136,7 +198,8 @@ def process_single_leak_file(leakLogFileName, processType, leakThreshold,
 
 
 def process_leak_log(leak_log_file, leak_thresholds=None,
-                     ignore_missing_leaks=None, log=None):
+                     ignore_missing_leaks=None, log=None,
+                     stack_fixer=None):
     """Process the leak log, including separate leak logs created
     by child processes.
 
@@ -206,4 +269,4 @@ def process_leak_log(leak_log_file, leak_thresholds=None,
             leakThreshold = leakThresholds.get(processType, 0)
             process_single_leak_file(thisFile, processType, leakThreshold,
                                      processType in ignoreMissingLeaks,
-                                     log=log)
+                                     log=log, stackFixer=stack_fixer)

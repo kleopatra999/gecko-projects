@@ -1,0 +1,130 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== alert.css =====================================================
+  == Shared styles specific to the alerts dialog.
+  ======================================================================= */
+
+@import url("chrome://global/skin/");
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+#alertNotification {
+  padding: 30px;
+  padding-inline-start: 90px;
+}
+
+#alertBox[hasBodyText] > #alertTextBox,
+#alertBox[hasOrigin] > #alertTitleBox {
+  border-bottom: 1px solid ThreeDShadow;
+}
+
+#alertBox[animate] {
+  animation-timing-function: cubic-bezier(.12,1.23,.48,1.09);
+}
+
+#alertBox[animate][clicked] {
+  animation-duration: .6s;
+  animation-name: alert-clicked-animation;
+}
+
+/* This is used if the close button is clicked
+   before the animation has finished. */
+#alertBox[animate][closing] {
+  animation-duration: .6s;
+  animation-name: alert-closing-animation;
+}
+
+@keyframes alert-animation {
+  from {
+    transform: translate(110%, 0) rotate(-20deg);
+  }
+  5% {
+    transform: none;
+  }
+  95% {
+    transform: none;
+    opacity: 1;
+  }
+  to {
+    transform: translate(0, 60px) rotate(15deg);
+    opacity: 0;
+  }
+}
+
+@keyframes alert-clicked-animation {
+  to {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+@keyframes alert-closing-animation {
+  to {
+    transform: translate(0, 60px) rotate(15deg);
+    opacity: 0;
+  }
+}
+
+#alertImage {
+  margin: 8px 0;
+  width: 64px;
+}
+
+.alertTextBox {
+  padding-top: 8px;
+  padding-inline-start: 8px;
+  /* The text box width is increased to make up for the lack of image when one
+     is not provided. 319px is the text box width when a picture is present,
+     255px, plus the width of the image, 64px. */
+  width: 319px;
+}
+
+#alertBox[hasImage] > box > #alertTextBox {
+  width: 255px;
+}
+
+.alertTitle {
+  -moz-box-flex: 1;
+  font-weight: bold;
+  padding: 6px 8px;
+  width: 255px;
+}
+
+#alertNotification[clickable="true"] {
+  cursor: pointer;
+}
+
+label {
+  cursor: inherit;
+}
+
+#alertSourceLabel {
+  -moz-box-flex: 1;
+  font-size: 83.334%;
+  color: GrayText;
+}
+
+#alertSettings {
+  -moz-appearance: none;
+  background-color: transparent;
+  border-width: 0;
+  min-width: 0;
+  list-style-image: url("chrome://mozapps/skin/extensions/utilities.svg#utilities");
+}
+
+#alertSettings:hover {
+  background-color: rgba(107,107,107,.2);
+  border-radius: 20px;
+}
+
+#alertSettings[open],
+#alertSettings:hover:active {
+  background-color: rgba(107,107,107,.4);
+}
+
+#alertSettings > .button-box > .button-menu-dropmarker,
+#alertSettings > .button-box > .box-inherit > .button-text {
+  display: none;
+}

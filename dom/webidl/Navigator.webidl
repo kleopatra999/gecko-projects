@@ -389,7 +389,8 @@ partial interface Navigator {
   readonly attribute MediaDevices mediaDevices;
 
   // Deprecated. Use mediaDevices.getUserMedia instead.
-  [Throws, Func="Navigator::HasUserMediaSupport", UnsafeInPrerendering]
+  [Deprecated="NavigatorGetUserMedia", Throws,
+   Func="Navigator::HasUserMediaSupport", UnsafeInPrerendering]
   void mozGetUserMedia(MediaStreamConstraints constraints,
                        NavigatorUserMediaSuccessCallback successCallback,
                        NavigatorUserMediaErrorCallback errorCallback);
@@ -432,8 +433,13 @@ partial interface Navigator {
 };
 
 partial interface Navigator {
-  [Throws, Pref="dom.presentation.enabled", CheckAnyPermissions="presentation", AvailableIn="PrivilegedApps"]
+  [Throws, Pref="dom.presentation.enabled", Func="Navigator::HasPresentationSupport", SameObject]
   readonly attribute Presentation? presentation;
+};
+
+partial interface Navigator {
+  [NewObject, Pref="dom.mozTCPSocket.enabled", CheckAnyPermissions="tcp-socket"]
+  readonly attribute LegacyMozTCPSocket mozTCPSocket;
 };
 
 #ifdef MOZ_EME
@@ -441,7 +447,7 @@ partial interface Navigator {
   [Pref="media.eme.apiVisible", NewObject]
   Promise<MediaKeySystemAccess>
   requestMediaKeySystemAccess(DOMString keySystem,
-                              optional sequence<MediaKeySystemOptions> supportedConfigurations);
+                              sequence<MediaKeySystemConfiguration> supportedConfigurations);
 };
 #endif
 

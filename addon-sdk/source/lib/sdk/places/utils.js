@@ -26,7 +26,7 @@ const bmsrv = Cc["@mozilla.org/browser/nav-bookmarks-service;1"].
  * TreeNodes are used to construct dependency trees
  * for BookmarkItems
  */
-let TreeNode = Class({
+var TreeNode = Class({
   initialize: function (value) {
     this.value = value;
     this.children = [];
@@ -44,7 +44,7 @@ let TreeNode = Class({
   },
   get: method(get),
   walk: method(walk),
-  toString: function () '[object TreeNode]'
+  toString: () => '[object TreeNode]'
 });
 exports.TreeNode = TreeNode;
 
@@ -103,8 +103,9 @@ exports.constructTree = constructTree;
  * Shortcut for converting an id, or an object with an id, into
  * an object with corresponding bookmark data
  */
-function fetchItem (item)
-  send('sdk-places-bookmarks-get', { id: item.id || item })
+function fetchItem (item) {
+  return send('sdk-places-bookmarks-get', { id: item.id || item });
+}
 exports.fetchItem = fetchItem;
 
 /*

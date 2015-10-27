@@ -13,6 +13,13 @@
 #include "nsThreadUtils.h"
 #include "SharedSurface.h"
 
+#ifdef MOZ_WIDGET_GONK
+#include "mozilla/layers/GrallocTextureClient.h"
+#include "SharedSurfaceGralloc.h"
+#endif
+
+using namespace mozilla::gl;
+
 namespace mozilla {
 namespace layers {
 
@@ -22,7 +29,9 @@ SharedSurfaceTextureClient::SharedSurfaceTextureClient(ISurfaceAllocator* aAlloc
                                                        gl::SurfaceFactory* factory)
   : TextureClient(aAllocator, aFlags | TextureFlags::RECYCLE)
   , mSurf(Move(surf))
-{ }
+{
+  AddFlags(mSurf->GetTextureFlags());
+}
 
 SharedSurfaceTextureClient::~SharedSurfaceTextureClient()
 {
@@ -39,6 +48,67 @@ bool
 SharedSurfaceTextureClient::ToSurfaceDescriptor(SurfaceDescriptor& aOutDescriptor)
 {
   return mSurf->ToSurfaceDescriptor(&aOutDescriptor);
+}
+
+void
+SharedSurfaceTextureClient::SetReleaseFenceHandle(const FenceHandle& aReleaseFenceHandle)
+{
+#ifdef MOZ_WIDGET_GONK
+  SharedSurface_Gralloc* surf = nullptr;
+  if (mSurf->mType == SharedSurfaceType::Gralloc) {
+    surf = SharedSurface_Gralloc::Cast(mSurf.get());
+  }
+  if (surf && surf->GetTextureClient()) {
+    surf->GetTextureClient()->SetReleaseFenceHandle(aReleaseFenceHandle);
+    return;
+  }
+#endif
+  TextureClient::SetReleaseFenceHandle(aReleaseFenceHandle);
+}
+
+FenceHandle
+SharedSurfaceTextureClient::GetAndResetReleaseFenceHandle()
+{
+#ifdef MOZ_WIDGET_GONK
+  SharedSurface_Gralloc* surf = nullptr;
+  if (mSurf->mType == SharedSurfaceType::Gralloc) {
+    surf = SharedSurface_Gralloc::Cast(mSurf.get());
+  }
+  if (surf && surf->GetTextureClient()) {
+    return surf->GetTextureClient()->GetAndResetReleaseFenceHandle();
+  }
+#endif
+  return TextureClient::GetAndResetReleaseFenceHandle();
+}
+
+void
+SharedSurfaceTextureClient::SetAcquireFenceHandle(const FenceHandle& aAcquireFenceHandle)
+{
+#ifdef MOZ_WIDGET_GONK
+  SharedSurface_Gralloc* surf = nullptr;
+  if (mSurf->mType == SharedSurfaceType::Gralloc) {
+    surf = SharedSurface_Gralloc::Cast(mSurf.get());
+  }
+  if (surf && surf->GetTextureClient()) {
+    return surf->GetTextureClient()->SetAcquireFenceHandle(aAcquireFenceHandle);
+  }
+#endif
+  TextureClient::SetAcquireFenceHandle(aAcquireFenceHandle);
+}
+
+const FenceHandle&
+SharedSurfaceTextureClient::GetAcquireFenceHandle() const
+{
+#ifdef MOZ_WIDGET_GONK
+  SharedSurface_Gralloc* surf = nullptr;
+  if (mSurf->mType == SharedSurfaceType::Gralloc) {
+    surf = SharedSurface_Gralloc::Cast(mSurf.get());
+  }
+  if (surf && surf->GetTextureClient()) {
+    return surf->GetTextureClient()->GetAcquireFenceHandle();
+  }
+#endif
+  return TextureClient::GetAcquireFenceHandle();
 }
 
 } // namespace layers

@@ -24,6 +24,7 @@
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMRange.h"
+#include "nsIEditorIMESupport.h"
 #include "nsIFrame.h"
 #include "nsINode.h"
 #include "nsIPresShell.h"
@@ -48,29 +49,31 @@ ToChar(bool aBool)
 }
 
 static const char*
-ToChar(EventMessage aEventMessage)
+ToChar(IMEMessage aIMEMessage)
 {
-  switch (aEventMessage) {
-    case NS_QUERY_SELECTED_TEXT:
-      return "NS_QUERY_SELECTED_TEXT";
-    case NS_QUERY_TEXT_CONTENT:
-      return "NS_QUERY_TEXT_CONTENT";
-    case NS_QUERY_CARET_RECT:
-      return "NS_QUERY_CARET_RECT";
-    case NS_QUERY_TEXT_RECT:
-      return "NS_QUERY_TEXT_RECT";
-    case NS_QUERY_EDITOR_RECT:
-      return "NS_QUERY_EDITOR_RECT";
-    case NS_QUERY_CONTENT_STATE:
-      return "NS_QUERY_CONTENT_STATE";
-    case NS_QUERY_SELECTION_AS_TRANSFERABLE:
-      return "NS_QUERY_SELECTION_AS_TRANSFERABLE";
-    case NS_QUERY_CHARACTER_AT_POINT:
-      return "NS_QUERY_CHARACTER_AT_POINT";
-    case NS_QUERY_DOM_WIDGET_HITTEST:
-      return "NS_QUERY_DOM_WIDGET_HITTEST";
+  switch (aIMEMessage) {
+    case NOTIFY_IME_OF_NOTHING:
+      return "NOTIFY_IME_OF_NOTHING";
+    case NOTIFY_IME_OF_FOCUS:
+      return "NOTIFY_IME_OF_FOCUS";
+    case NOTIFY_IME_OF_BLUR:
+      return "NOTIFY_IME_OF_BLUR";
+    case NOTIFY_IME_OF_SELECTION_CHANGE:
+      return "NOTIFY_IME_OF_SELECTION_CHANGE";
+    case NOTIFY_IME_OF_TEXT_CHANGE:
+      return "NOTIFY_IME_OF_TEXT_CHANGE";
+    case NOTIFY_IME_OF_COMPOSITION_UPDATE:
+      return "NOTIFY_IME_OF_COMPOSITION_UPDATE";
+    case NOTIFY_IME_OF_POSITION_CHANGE:
+      return "NOTIFY_IME_OF_POSITION_CHANGE";
+    case NOTIFY_IME_OF_MOUSE_BUTTON_EVENT:
+      return "NOTIFY_IME_OF_MOUSE_BUTTON_EVENT";
+    case REQUEST_TO_COMMIT_COMPOSITION:
+      return "REQUEST_TO_COMMIT_COMPOSITION";
+    case REQUEST_TO_CANCEL_COMPOSITION:
+      return "REQUEST_TO_CANCEL_COMPOSITION";
     default:
-      return "Unsupprted message";
+      return "Unexpected value";
   }
 }
 
@@ -192,14 +195,15 @@ IMEContentObserver::IMEContentObserver()
   : mESM(nullptr)
   , mSuppressNotifications(0)
   , mPreCharacterDataChangeLength(-1)
+  , mSendingNotification(NOTIFY_IME_OF_NOTHING)
   , mIsObserving(false)
   , mIMEHasFocus(false)
-  , mIsFocusEventPending(false)
-  , mIsSelectionChangeEventPending(false)
-  , mSelectionChangeCausedOnlyByComposition(false)
-  , mSelectionChangeCausedOnlyBySelectionEvent(false)
-  , mIsPositionChangeEventPending(false)
+  , mNeedsToNotifyIMEOfFocusSet(false)
+  , mNeedsToNotifyIMEOfTextChange(false)
+  , mNeedsToNotifyIMEOfSelectionChange(false)
+  , mNeedsToNotifyIMEOfPositionChange(false)
   , mIsFlushingPendingNotifications(false)
+  , mIsHandlingQueryContentEvent(false)
 {
 #ifdef DEBUG
   mTextChangeData.Test();
@@ -215,8 +219,6 @@ IMEContentObserver::Init(nsIWidget* aWidget,
                          nsIContent* aContent,
                          nsIEditor* aEditor)
 {
-  MOZ_ASSERT(aEditor, "aEditor must not be null");
-
   State state = GetState();
   if (NS_WARN_IF(state == eState_Observing)) {
     return; // Nothing to do.
@@ -228,10 +230,7 @@ IMEContentObserver::Init(nsIWidget* aWidget,
     // should be registered again for simpler implementation.
     UnregisterObservers();
     // Clear members which may not be initialized again.
-    mRootContent = nullptr;
-    mEditor = nullptr;
-    mSelection = nullptr;
-    mDocShell = nullptr;
+    Clear();
   }
 
   mESM = aPresContext->EventStateManager();
@@ -239,51 +238,17 @@ IMEContentObserver::Init(nsIWidget* aWidget,
 
   mWidget = aWidget;
 
-  mEditableNode =
-    IMEStateManager::GetRootEditableNode(aPresContext, aContent);
-  if (!mEditableNode) {
-    return;
-  }
-
-  mEditor = aEditor;
-
-  nsIPresShell* presShell = aPresContext->PresShell();
-
-  // get selection and root content
-  nsCOMPtr<nsISelectionController> selCon;
-  if (mEditableNode->IsNodeOfType(nsINode::eCONTENT)) {
-    nsIFrame* frame =
-      static_cast<nsIContent*>(mEditableNode.get())->GetPrimaryFrame();
-    NS_ENSURE_TRUE_VOID(frame);
-
-    frame->GetSelectionController(aPresContext,
-                                  getter_AddRefs(selCon));
+  if (aWidget->GetInputContext().mIMEState.mEnabled == IMEState::PLUGIN) {
+    if (!InitWithPlugin(aPresContext, aContent)) {
+      Clear();
+      return;
+    }
   } else {
-    // mEditableNode is a document
-    selCon = do_QueryInterface(presShell);
+    if (!InitWithEditor(aPresContext, aContent, aEditor)) {
+      Clear();
+      return;
+    }
   }
-  NS_ENSURE_TRUE_VOID(selCon);
-
-  selCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
-                       getter_AddRefs(mSelection));
-  NS_ENSURE_TRUE_VOID(mSelection);
-
-  nsCOMPtr<nsIDOMRange> selDomRange;
-  if (NS_SUCCEEDED(mSelection->GetRangeAt(0, getter_AddRefs(selDomRange)))) {
-    nsRange* selRange = static_cast<nsRange*>(selDomRange.get());
-    NS_ENSURE_TRUE_VOID(selRange && selRange->GetStartParent());
-
-    mRootContent = selRange->GetStartParent()->
-                     GetSelectionRootContent(presShell);
-  } else {
-    mRootContent = mEditableNode->GetSelectionRootContent(presShell);
-  }
-  if (!mRootContent && mEditableNode->IsNodeOfType(nsINode::eDOCUMENT)) {
-    // The document node is editable, but there are no contents, this document
-    // is not editable.
-    return;
-  }
-  NS_ENSURE_TRUE_VOID(mRootContent);
 
   if (firstInitialization) {
     MaybeNotifyIMEOfFocusSet();
@@ -304,8 +269,6 @@ IMEContentObserver::Init(nsIWidget* aWidget,
     }
   }
 
-  mDocShell = aPresContext->GetDocShell();
-
   ObserveEditableNode();
 
   // Some change events may wait to notify IME because this was being
@@ -313,16 +276,138 @@ IMEContentObserver::Init(nsIWidget* aWidget,
   FlushMergeableNotifications();
 }
 
+bool
+IMEContentObserver::InitWithEditor(nsPresContext* aPresContext,
+                                   nsIContent* aContent,
+                                   nsIEditor* aEditor)
+{
+  MOZ_ASSERT(aEditor);
+
+  mEditableNode =
+    IMEStateManager::GetRootEditableNode(aPresContext, aContent);
+  if (NS_WARN_IF(!mEditableNode)) {
+    return false;
+  }
+
+  mEditor = aEditor;
+  if (NS_WARN_IF(!mEditor)) {
+    return false;
+  }
+
+  nsIPresShell* presShell = aPresContext->PresShell();
+
+  // get selection and root content
+  nsCOMPtr<nsISelectionController> selCon;
+  if (mEditableNode->IsNodeOfType(nsINode::eCONTENT)) {
+    nsIFrame* frame =
+      static_cast<nsIContent*>(mEditableNode.get())->GetPrimaryFrame();
+    if (NS_WARN_IF(!frame)) {
+      return false;
+    }
+
+    frame->GetSelectionController(aPresContext,
+                                  getter_AddRefs(selCon));
+  } else {
+    // mEditableNode is a document
+    selCon = do_QueryInterface(presShell);
+  }
+
+  if (NS_WARN_IF(!selCon)) {
+    return false;
+  }
+
+  selCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
+                       getter_AddRefs(mSelection));
+  if (NS_WARN_IF(!mSelection)) {
+    return false;
+  }
+
+  nsCOMPtr<nsIDOMRange> selDomRange;
+  if (NS_SUCCEEDED(mSelection->GetRangeAt(0, getter_AddRefs(selDomRange)))) {
+    nsRange* selRange = static_cast<nsRange*>(selDomRange.get());
+    if (NS_WARN_IF(!selRange) || NS_WARN_IF(!selRange->GetStartParent())) {
+      return false;
+    }
+
+    mRootContent = selRange->GetStartParent()->
+                     GetSelectionRootContent(presShell);
+  } else {
+    mRootContent = mEditableNode->GetSelectionRootContent(presShell);
+  }
+  if (!mRootContent && mEditableNode->IsNodeOfType(nsINode::eDOCUMENT)) {
+    // The document node is editable, but there are no contents, this document
+    // is not editable.
+    return false;
+  }
+
+  if (NS_WARN_IF(!mRootContent)) {
+    return false;
+  }
+
+  mDocShell = aPresContext->GetDocShell();
+  if (NS_WARN_IF(!mDocShell)) {
+    return false;
+  }
+
+  return true;
+}
+
+bool
+IMEContentObserver::InitWithPlugin(nsPresContext* aPresContext,
+                                   nsIContent* aContent)
+{
+  if (NS_WARN_IF(!aContent) ||
+      NS_WARN_IF(aContent->GetDesiredIMEState().mEnabled != IMEState::PLUGIN)) {
+    return false;
+  }
+  nsIFrame* frame = aContent->GetPrimaryFrame();
+  if (NS_WARN_IF(!frame)) {
+    return false;
+  }
+  nsCOMPtr<nsISelectionController> selCon;
+  frame->GetSelectionController(aPresContext, getter_AddRefs(selCon));
+  if (NS_WARN_IF(!selCon)) {
+    return false;
+  }
+  selCon->GetSelection(nsISelectionController::SELECTION_NORMAL,
+                       getter_AddRefs(mSelection));
+  if (NS_WARN_IF(!mSelection)) {
+    return false;
+  }
+
+  mEditor = nullptr;
+  mEditableNode = aContent;
+  mRootContent = aContent;
+
+  mDocShell = aPresContext->GetDocShell();
+  if (NS_WARN_IF(!mDocShell)) {
+    return false;
+  }
+
+  return true;
+}
+
+void
+IMEContentObserver::Clear()
+{
+  mEditor = nullptr;
+  mSelection = nullptr;
+  mEditableNode = nullptr;
+  mRootContent = nullptr;
+  mDocShell = nullptr;
+}
+
 void
 IMEContentObserver::ObserveEditableNode()
 {
-  MOZ_RELEASE_ASSERT(mEditor);
   MOZ_RELEASE_ASSERT(mSelection);
   MOZ_RELEASE_ASSERT(mRootContent);
   MOZ_RELEASE_ASSERT(GetState() != eState_Observing);
 
   mIsObserving = true;
-  mEditor->AddEditorObserver(this);
+  if (mEditor) {
+    mEditor->AddEditorObserver(this);
+  }
 
   mUpdatePreference = mWidget->GetIMEUpdatePreference();
   if (mUpdatePreference.WantSelectionChange()) {
@@ -361,7 +446,7 @@ IMEContentObserver::NotifyIMEOfBlur()
   // mWidget must have been non-nullptr if IME has focus.
   MOZ_RELEASE_ASSERT(widget);
 
-  nsRefPtr<IMEContentObserver> kungFuDeathGrip(this);
+  RefPtr<IMEContentObserver> kungFuDeathGrip(this);
 
   MOZ_LOG(sIMECOLog, LogLevel::Info,
     ("IMECO: 0x%p IMEContentObserver::NotifyIMEOfBlur(), "
@@ -427,13 +512,9 @@ IMEContentObserver::Destroy()
 
   NotifyIMEOfBlur();
   UnregisterObservers();
+  Clear();
 
-  mEditor = nullptr;
   mWidget = nullptr;
-  mSelection = nullptr;
-  mRootContent = nullptr;
-  mEditableNode = nullptr;
-  mDocShell = nullptr;
   mUpdatePreference.mWantUpdates = nsIMEUpdatePreference::NOTIFY_NOTHING;
 
   if (mESM) {
@@ -489,8 +570,10 @@ bool
 IMEContentObserver::IsObservingContent(nsPresContext* aPresContext,
                                        nsIContent* aContent) const
 {
-  return mEditableNode == IMEStateManager::GetRootEditableNode(aPresContext,
-                                                               aContent);
+  return IsInitializedWithPlugin() ?
+    mRootContent == aContent && mRootContent != nullptr :
+    mEditableNode == IMEStateManager::GetRootEditableNode(aPresContext,
+                                                          aContent);
 }
 
 bool
@@ -499,12 +582,31 @@ IMEContentObserver::IsEditorHandlingEventForComposition() const
   if (!mWidget) {
     return false;
   }
-  nsRefPtr<TextComposition> composition =
+  RefPtr<TextComposition> composition =
     IMEStateManager::GetTextCompositionFor(mWidget);
   if (!composition) {
     return false;
   }
   return composition->IsEditorHandlingEvent();
+}
+
+bool
+IMEContentObserver::IsEditorComposing() const
+{
+  // Note that don't use TextComposition here. The important thing is,
+  // whether the editor already started to handle composition because
+  // web contents can change selection, text content and/or something from
+  // compositionstart event listener which is run before nsEditor handles it.
+  nsCOMPtr<nsIEditorIMESupport> editorIMESupport = do_QueryInterface(mEditor);
+  if (NS_WARN_IF(!editorIMESupport)) {
+    return false;
+  }
+  bool isComposing = false;
+  nsresult rv = editorIMESupport->GetComposing(&isComposing);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return false;
+  }
+  return isComposing;
 }
 
 nsresult
@@ -532,8 +634,10 @@ IMEContentObserver::NotifySelectionChanged(nsIDOMDocument* aDOMDocument,
   if (count > 0 && mWidget) {
     bool causedByComposition = IsEditorHandlingEventForComposition();
     bool causedBySelectionEvent = TextComposition::IsHandlingSelectionEvent();
+    bool duringComposition = IsEditorComposing();
     MaybeNotifyIMEOfSelectionChange(causedByComposition,
-                                    causedBySelectionEvent);
+                                    causedBySelectionEvent,
+                                    duringComposition);
   }
   return NS_OK;
 }
@@ -563,14 +667,9 @@ IMEContentObserver::ReflowInterruptible(DOMHighResTimeStamp aStart,
 nsresult
 IMEContentObserver::HandleQueryContentEvent(WidgetQueryContentEvent* aEvent)
 {
-  MOZ_LOG(sIMECOLog, LogLevel::Debug,
-    ("IMECO: 0x%p IMEContentObserver::HandleQueryContentEvent(aEvent={ "
-     "mMessage=%s })", this, ToChar(aEvent->mMessage)));
-
   // If the instance has cache, it should use the cached selection which was
   // sent to the widget.
-  if (aEvent->mMessage == NS_QUERY_SELECTED_TEXT &&
-      aEvent->mUseNativeLineBreak &&
+  if (aEvent->mMessage == eQuerySelectedText && aEvent->mUseNativeLineBreak &&
       mSelectionData.IsValid()) {
     aEvent->mReply.mContentsRoot = mRootContent;
     aEvent->mReply.mHasSelection = !mSelectionData.IsCollapsed();
@@ -585,6 +684,12 @@ IMEContentObserver::HandleQueryContentEvent(WidgetQueryContentEvent* aEvent)
     return NS_OK;
   }
 
+  MOZ_LOG(sIMECOLog, LogLevel::Debug,
+    ("IMECO: 0x%p IMEContentObserver::HandleQueryContentEvent(aEvent={ "
+     "mMessage=%s })", this, ToChar(aEvent->mMessage)));
+
+  AutoRestore<bool> handling(mIsHandlingQueryContentEvent);
+  mIsHandlingQueryContentEvent = true;
   ContentEventHandler handler(GetPresContext());
   nsresult rv = handler.HandleQueryContentEvent(aEvent);
   if (aEvent->mSucceeded) {
@@ -619,9 +724,9 @@ IMEContentObserver::OnMouseButtonEvent(nsPresContext* aPresContext,
     return false;
   }
 
-  nsRefPtr<IMEContentObserver> kungFuDeathGrip(this);
+  RefPtr<IMEContentObserver> kungFuDeathGrip(this);
 
-  WidgetQueryContentEvent charAtPt(true, NS_QUERY_CHARACTER_AT_POINT,
+  WidgetQueryContentEvent charAtPt(true, eQueryCharacterAtPoint,
                                    aMouseEvent->widget);
   charAtPt.refPoint = aMouseEvent->refPoint;
   ContentEventHandler handler(aPresContext);
@@ -742,7 +847,8 @@ IMEContentObserver::CharacterDataChanged(nsIDocument* aDocument,
   uint32_t oldEnd = offset + static_cast<uint32_t>(removedLength);
   uint32_t newEnd = offset + newLength;
 
-  TextChangeData data(offset, oldEnd, newEnd, causedByComposition);
+  TextChangeData data(offset, oldEnd, newEnd, causedByComposition,
+                      IsEditorComposing());
   MaybeNotifyIMEOfTextChange(data);
 }
 
@@ -795,7 +901,7 @@ IMEContentObserver::NotifyContentAdded(nsINode* aContainer,
   }
 
   TextChangeData data(offset, offset, offset + addingLength,
-                      causedByComposition);
+                      causedByComposition, IsEditorComposing());
   MaybeNotifyIMEOfTextChange(data);
 }
 
@@ -872,7 +978,8 @@ IMEContentObserver::ContentRemoved(nsIDocument* aDocument,
     return;
   }
 
-  TextChangeData data(offset, offset + textLength, offset, causedByComposition);
+  TextChangeData data(offset, offset + textLength, offset,
+                      causedByComposition, IsEditorComposing());
   MaybeNotifyIMEOfTextChange(data);
 }
 
@@ -934,7 +1041,8 @@ IMEContentObserver::AttributeChanged(nsIDocument* aDocument,
   NS_ENSURE_SUCCESS_VOID(rv);
 
   TextChangeData data(start, start + mPreAttrChangeLength,
-                      start + postAttrChangeLength, causedByComposition);
+                      start + postAttrChangeLength, causedByComposition,
+                      IsEditorComposing());
   MaybeNotifyIMEOfTextChange(data);
 }
 
@@ -1002,51 +1110,32 @@ IMEContentObserver::PostFocusSetNotification()
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("IMECO: 0x%p IMEContentObserver::PostFocusSetNotification()", this));
 
-  mIsFocusEventPending = true;
+  mNeedsToNotifyIMEOfFocusSet = true;
 }
 
 void
-IMEContentObserver::PostTextChangeNotification(
-                      const TextChangeDataBase& aTextChangeData)
+IMEContentObserver::PostTextChangeNotification()
 {
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("IMECO: 0x%p IMEContentObserver::PostTextChangeNotification("
-     "aTextChangeData=%s)",
-     this, TextChangeDataToString(aTextChangeData).get()));
-
-  mTextChangeData += aTextChangeData;
-  MOZ_ASSERT(mTextChangeData.IsValid(),
-             "mTextChangeData must have text change data");
-
-  MOZ_LOG(sIMECOLog, LogLevel::Debug,
-    ("IMECO: 0x%p IMEContentObserver::PostTextChangeNotification(), "
      "mTextChangeData=%s)",
      this, TextChangeDataToString(mTextChangeData).get()));
+
+  MOZ_ASSERT(mTextChangeData.IsValid(),
+             "mTextChangeData must have text change data");
+  mNeedsToNotifyIMEOfTextChange = true;
 }
 
 void
-IMEContentObserver::PostSelectionChangeNotification(
-                      bool aCausedByComposition,
-                      bool aCausedBySelectionEvent)
+IMEContentObserver::PostSelectionChangeNotification()
 {
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
-    ("IMECO: 0x%p IMEContentObserver::PostSelectionChangeNotification("
-     "aCausedByComposition=%s, aCausedBySelectionEvent=%s)",
-     this, ToChar(aCausedByComposition), ToChar(aCausedBySelectionEvent)));
+    ("IMECO: 0x%p IMEContentObserver::PostSelectionChangeNotification(), "
+     "mSelectionData={ mCausedByComposition=%s, mCausedBySelectionEvent=%s }",
+     this, ToChar(mSelectionData.mCausedByComposition),
+     ToChar(mSelectionData.mCausedBySelectionEvent)));
 
-  if (!mIsSelectionChangeEventPending) {
-    mSelectionChangeCausedOnlyByComposition = aCausedByComposition;
-  } else {
-    mSelectionChangeCausedOnlyByComposition =
-      mSelectionChangeCausedOnlyByComposition && aCausedByComposition;
-  }
-  if (!mSelectionChangeCausedOnlyBySelectionEvent) {
-    mSelectionChangeCausedOnlyBySelectionEvent = aCausedBySelectionEvent;
-  } else {
-    mSelectionChangeCausedOnlyBySelectionEvent =
-      mSelectionChangeCausedOnlyBySelectionEvent && aCausedBySelectionEvent;
-  }
-  mIsSelectionChangeEventPending = true;
+  mNeedsToNotifyIMEOfSelectionChange = true;
 }
 
 void
@@ -1068,22 +1157,27 @@ IMEContentObserver::MaybeNotifyIMEOfTextChange(
      "aTextChangeData=%s)",
      this, TextChangeDataToString(aTextChangeData).get()));
 
-  PostTextChangeNotification(aTextChangeData);
+  mTextChangeData += aTextChangeData;
+  PostTextChangeNotification();
   FlushMergeableNotifications();
 }
 
 void
 IMEContentObserver::MaybeNotifyIMEOfSelectionChange(
                       bool aCausedByComposition,
-                      bool aCausedBySelectionEvent)
+                      bool aCausedBySelectionEvent,
+                      bool aOccurredDuringComposition)
 {
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("IMECO: 0x%p IMEContentObserver::MaybeNotifyIMEOfSelectionChange("
-     "aCausedByComposition=%s, aCausedBySelectionEvent=%s)",
+     "aCausedByComposition=%s, aCausedBySelectionEvent=%s, "
+     "aOccurredDuringComposition)",
      this, ToChar(aCausedByComposition), ToChar(aCausedBySelectionEvent)));
 
-  PostSelectionChangeNotification(aCausedByComposition,
-                                  aCausedBySelectionEvent);
+  mSelectionData.AssignReason(aCausedByComposition,
+                              aCausedBySelectionEvent,
+                              aOccurredDuringComposition);
+  PostSelectionChangeNotification();
   FlushMergeableNotifications();
 }
 
@@ -1092,6 +1186,18 @@ IMEContentObserver::MaybeNotifyIMEOfPositionChange()
 {
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("IMECO: 0x%p IMEContentObserver::MaybeNotifyIMEOfPositionChange()", this));
+  // If reflow is caused by ContentEventHandler during PositionChangeEvent
+  // sending NOTIFY_IME_OF_POSITION_CHANGE, we don't need to notify IME of it
+  // again since ContentEventHandler returns the result including this reflow's
+  // result.
+  if (mIsHandlingQueryContentEvent &&
+      mSendingNotification == NOTIFY_IME_OF_POSITION_CHANGE) {
+    MOZ_LOG(sIMECOLog, LogLevel::Debug,
+      ("IMECO: 0x%p   IMEContentObserver::MaybeNotifyIMEOfPositionChange(), "
+       "ignored since caused by ContentEventHandler during sending "
+       "NOTIY_IME_OF_POSITION_CHANGE", this));
+    return;
+  }
   PostPositionChangeNotification();
   FlushMergeableNotifications();
 }
@@ -1105,11 +1211,11 @@ IMEContentObserver::UpdateSelectionCache()
     return false;
   }
 
-  mSelectionData.Clear();
+  mSelectionData.ClearSelectionData();
 
   // XXX Cannot we cache some information for reducing the cost to compute
   //     selection offset and writing mode?
-  WidgetQueryContentEvent selection(true, NS_QUERY_SELECTED_TEXT, mWidget);
+  WidgetQueryContentEvent selection(true, eQuerySelectedText, mWidget);
   ContentEventHandler handler(GetPresContext());
   handler.OnQuerySelectedText(&selection);
   if (NS_WARN_IF(!selection.mSucceeded)) {
@@ -1121,8 +1227,8 @@ IMEContentObserver::UpdateSelectionCache()
   *mSelectionData.mString = selection.mReply.mString;
   mSelectionData.SetWritingMode(selection.GetWritingMode());
   mSelectionData.mReversed = selection.mReply.mReversed;
-  mSelectionData.mCausedByComposition = false;
-  mSelectionData.mCausedBySelectionEvent = false;
+
+  // WARNING: Don't modify the reason of selection change here.
 
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("IMECO: 0x%p IMEContentObserver::UpdateSelectionCache(), "
@@ -1138,7 +1244,7 @@ IMEContentObserver::PostPositionChangeNotification()
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("IMECO: 0x%p IMEContentObserver::PostPositionChangeNotification()", this));
 
-  mIsPositionChangeEventPending = true;
+  mNeedsToNotifyIMEOfPositionChange = true;
 }
 
 bool
@@ -1216,63 +1322,22 @@ IMEContentObserver::FlushMergeableNotifications()
     return;
   }
 
-  AutoRestore<bool> flusing(mIsFlushingPendingNotifications);
-  mIsFlushingPendingNotifications = true;
+  if (!NeedsToNotifyIMEOfSomething()) {
+    MOZ_LOG(sIMECOLog, LogLevel::Debug,
+      ("IMECO: 0x%p   IMEContentObserver::FlushMergeableNotifications(), "
+       "FAILED, due to no pending notifications", this));
+    return;
+  }
 
   // NOTE: Reset each pending flag because sending notification may cause
   //       another change.
 
-  if (mIsFocusEventPending) {
-    MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::FlushMergeableNotifications(), "
-       "creating FocusSetEvent...", this));
-    mIsFocusEventPending = false;
-    nsContentUtils::AddScriptRunner(new FocusSetEvent(this));
-    // This is the first notification to IME. So, we don't need to notify any
-    // more since IME starts to query content after it gets focus.
-    ClearPendingNotifications();
-    return;
-  }
+  MOZ_LOG(sIMECOLog, LogLevel::Debug,
+    ("IMECO: 0x%p IMEContentObserver::FlushMergeableNotifications(), "
+     "creating IMENotificationSender...", this));
 
-  if (mTextChangeData.IsValid()) {
-    MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::FlushMergeableNotifications(), "
-       "creating TextChangeEvent...", this));
-    nsContentUtils::AddScriptRunner(new TextChangeEvent(this, mTextChangeData));
-  }
-
-  // Be aware, PuppetWidget depends on the order of this. A selection change
-  // notification should not be sent before a text change notification because
-  // PuppetWidget shouldn't query new text content every selection change.
-  if (mIsSelectionChangeEventPending) {
-    MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::FlushMergeableNotifications(), "
-       "creating SelectionChangeEvent...", this));
-    mIsSelectionChangeEventPending = false;
-    nsContentUtils::AddScriptRunner(
-      new SelectionChangeEvent(this, mSelectionChangeCausedOnlyByComposition,
-                               mSelectionChangeCausedOnlyBySelectionEvent));
-  }
-
-  if (mIsPositionChangeEventPending) {
-    MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::FlushMergeableNotifications(), "
-       "creating PositionChangeEvent...", this));
-    mIsPositionChangeEventPending = false;
-    nsContentUtils::AddScriptRunner(new PositionChangeEvent(this));
-  }
-
-  // If notifications may cause new change, we should notify them now.
-  if (mTextChangeData.IsValid() ||
-      mIsSelectionChangeEventPending ||
-      mIsPositionChangeEventPending) {
-    MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::FlushMergeableNotifications(), "
-       "posting AsyncMergeableNotificationsFlusher to current thread", this));
-    nsRefPtr<AsyncMergeableNotificationsFlusher> asyncFlusher =
-      new AsyncMergeableNotificationsFlusher(this);
-    NS_DispatchToCurrentThread(asyncFlusher);
-  }
+  mIsFlushingPendingNotifications = true;
+  nsContentUtils::AddScriptRunner(new IMENotificationSender(this));
 
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
     ("IMECO: 0x%p IMEContentObserver::FlushMergeableNotifications(), "
@@ -1284,7 +1349,8 @@ IMEContentObserver::FlushMergeableNotifications()
  ******************************************************************************/
 
 bool
-IMEContentObserver::AChangeEvent::CanNotifyIME() const
+IMEContentObserver::AChangeEvent::CanNotifyIME(
+                                    ChangeEventType aChangeEventType) const
 {
   if (NS_WARN_IF(!mIMEContentObserver)) {
     return false;
@@ -1295,7 +1361,7 @@ IMEContentObserver::AChangeEvent::CanNotifyIME() const
     return false;
   }
   // If setting focus, just check the state.
-  if (mChangeEventType == eChangeEventType_Focus) {
+  if (aChangeEventType == eChangeEventType_Focus) {
     return !NS_WARN_IF(mIMEContentObserver->mIMEHasFocus);
   }
   // If we've not notified IME of focus yet, we shouldn't notify anything.
@@ -1310,13 +1376,24 @@ IMEContentObserver::AChangeEvent::CanNotifyIME() const
 }
 
 bool
-IMEContentObserver::AChangeEvent::IsSafeToNotifyIME() const
+IMEContentObserver::AChangeEvent::IsSafeToNotifyIME(
+                                    ChangeEventType aChangeEventType) const
 {
   if (NS_WARN_IF(!nsContentUtils::IsSafeToRunScript())) {
     return false;
   }
+  // While we're sending a notification, we shouldn't send another notification
+  // recursively.
+  if (mIMEContentObserver->mSendingNotification != NOTIFY_IME_OF_NOTHING) {
+    MOZ_LOG(sIMECOLog, LogLevel::Debug,
+      ("IMECO: 0x%p   IMEContentObserver::AChangeEvent::IsSafeToNotifyIME(), "
+       "putting off sending notification due to detecting recursive call, "
+       "mIMEContentObserver={ mSendingNotification=%s }",
+       this, ToChar(mIMEContentObserver->mSendingNotification)));
+    return false;
+  }
   State state = mIMEContentObserver->GetState();
-  if (mChangeEventType == eChangeEventType_Focus) {
+  if (aChangeEventType == eChangeEventType_Focus) {
     if (NS_WARN_IF(state != eState_Initializing && state != eState_Observing)) {
       return false;
     }
@@ -1327,28 +1404,90 @@ IMEContentObserver::AChangeEvent::IsSafeToNotifyIME() const
 }
 
 /******************************************************************************
- * mozilla::IMEContentObserver::FocusSetEvent
+ * mozilla::IMEContentObserver::IMENotificationSender
  ******************************************************************************/
-
+ 
 NS_IMETHODIMP
-IMEContentObserver::FocusSetEvent::Run()
+IMEContentObserver::IMENotificationSender::Run()
 {
-  if (!CanNotifyIME()) {
-    // If IMEContentObserver has already gone, we don't need to notify IME of
-    // focus.
-    MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::FocusSetEvent::Run(), FAILED, due to "
-       "impossible to notify IME of focus", this));
+  MOZ_ASSERT(mIMEContentObserver->mIsFlushingPendingNotifications);
+
+  // NOTE: Reset each pending flag because sending notification may cause
+  //       another change.
+
+  if (mIMEContentObserver->mNeedsToNotifyIMEOfFocusSet) {
+    mIMEContentObserver->mNeedsToNotifyIMEOfFocusSet = false;
+    SendFocusSet();
+    // This is the first notification to IME. So, we don't need to notify
+    // anymore since IME starts to query content after it gets focus.
     mIMEContentObserver->ClearPendingNotifications();
+    mIMEContentObserver->mIsFlushingPendingNotifications = false;
     return NS_OK;
   }
 
-  if (!IsSafeToNotifyIME()) {
+  if (mIMEContentObserver->mNeedsToNotifyIMEOfTextChange) {
+    mIMEContentObserver->mNeedsToNotifyIMEOfTextChange = false;
+    SendTextChange();
+  }
+
+  // If a text change notification causes another text change again, we should
+  // notify IME of that before sending a selection change notification.
+  if (!mIMEContentObserver->mNeedsToNotifyIMEOfTextChange) {
+    // Be aware, PuppetWidget depends on the order of this. A selection change
+    // notification should not be sent before a text change notification because
+    // PuppetWidget shouldn't query new text content every selection change.
+    if (mIMEContentObserver->mNeedsToNotifyIMEOfSelectionChange) {
+      mIMEContentObserver->mNeedsToNotifyIMEOfSelectionChange = false;
+      SendSelectionChange();
+    }
+  }
+
+  // If a text change notification causes another text change again or a
+  // selection change notification causes either a text change or another
+  // selection change, we should notify IME of those before sending a position
+  // change notification.
+  if (!mIMEContentObserver->mNeedsToNotifyIMEOfTextChange &&
+      !mIMEContentObserver->mNeedsToNotifyIMEOfSelectionChange) {
+    if (mIMEContentObserver->mNeedsToNotifyIMEOfPositionChange) {
+      mIMEContentObserver->mNeedsToNotifyIMEOfPositionChange = false;
+      SendPositionChange();
+    }
+  }
+
+  // If notifications caused some new change, we should notify them now.
+  mIMEContentObserver->mIsFlushingPendingNotifications =
+    mIMEContentObserver->NeedsToNotifyIMEOfSomething();
+  if (mIMEContentObserver->mIsFlushingPendingNotifications) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p   IMEContentObserver::FocusSetEvent::Run(), retrying to "
-       "send NOTIFY_IME_OF_FOCUS...", this));
+      ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::Run(), "
+       "posting AsyncMergeableNotificationsFlusher to current thread", this));
+    RefPtr<AsyncMergeableNotificationsFlusher> asyncFlusher =
+      new AsyncMergeableNotificationsFlusher(mIMEContentObserver);
+    NS_DispatchToCurrentThread(asyncFlusher);
+  }
+  return NS_OK;
+}
+
+void
+IMEContentObserver::IMENotificationSender::SendFocusSet()
+{
+  if (!CanNotifyIME(eChangeEventType_Focus)) {
+    // If IMEContentObserver has already gone, we don't need to notify IME of
+    // focus.
+    MOZ_LOG(sIMECOLog, LogLevel::Debug,
+      ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+       "SendFocusSet(), FAILED, due to impossible to notify IME of focus",
+       this));
+    mIMEContentObserver->ClearPendingNotifications();
+    return;
+  }
+
+  if (!IsSafeToNotifyIME(eChangeEventType_Focus)) {
+    MOZ_LOG(sIMECOLog, LogLevel::Debug,
+      ("IMECO: 0x%p   IMEContentObserver::IMENotificationSender::"
+       "SendFocusSet(), retrying to send NOTIFY_IME_OF_FOCUS...", this));
     mIMEContentObserver->PostFocusSetNotification();
-    return NS_OK;
+    return;
   }
 
   mIMEContentObserver->mIMEHasFocus = true;
@@ -1356,166 +1495,177 @@ IMEContentObserver::FocusSetEvent::Run()
   mIMEContentObserver->UpdateSelectionCache();
 
   MOZ_LOG(sIMECOLog, LogLevel::Info,
-    ("IMECO: 0x%p IMEContentObserver::FocusSetEvent::Run(), "
-     "sending NOTIFY_IME_OF_FOCUS...", this));
+    ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+     "SendFocusSet(), sending NOTIFY_IME_OF_FOCUS...", this));
 
+  MOZ_RELEASE_ASSERT(mIMEContentObserver->mSendingNotification ==
+                       NOTIFY_IME_OF_NOTHING);
+  mIMEContentObserver->mSendingNotification = NOTIFY_IME_OF_FOCUS;
   IMEStateManager::NotifyIME(IMENotification(NOTIFY_IME_OF_FOCUS),
                              mIMEContentObserver->mWidget);
+  mIMEContentObserver->mSendingNotification = NOTIFY_IME_OF_NOTHING;
 
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
-    ("IMECO: 0x%p IMEContentObserver::FocusSetEvent::Run(), "
-     "sent NOTIFY_IME_OF_FOCUS", this));
-  return NS_OK;
+    ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+     "SendFocusSet(), sent NOTIFY_IME_OF_FOCUS", this));
 }
 
-/******************************************************************************
- * mozilla::IMEContentObserver::SelectionChangeEvent
- ******************************************************************************/
-
-NS_IMETHODIMP
-IMEContentObserver::SelectionChangeEvent::Run()
+void
+IMEContentObserver::IMENotificationSender::SendSelectionChange()
 {
-  if (!CanNotifyIME()) {
+  if (!CanNotifyIME(eChangeEventType_Selection)) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::SelectionChangeEvent::Run(), FAILED, "
-       "due to impossible to notify IME of selection change", this));
-    return NS_OK;
+      ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+       "SendSelectionChange(), FAILED, due to impossible to notify IME of "
+       "selection change", this));
+    return;
   }
 
-  if (!IsSafeToNotifyIME()) {
+  if (!IsSafeToNotifyIME(eChangeEventType_Selection)) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p   IMEContentObserver::SelectionChangeEvent::Run(), "
-       "retrying to send NOTIFY_IME_OF_SELECTION_CHANGE...", this));
-    mIMEContentObserver->PostSelectionChangeNotification(
-                           mCausedByComposition, mCausedBySelectionEvent);
-    return NS_OK;
+      ("IMECO: 0x%p   IMEContentObserver::IMENotificationSender::"
+       "SendSelectionChange(), retrying to send "
+       "NOTIFY_IME_OF_SELECTION_CHANGE...", this));
+    mIMEContentObserver->PostSelectionChangeNotification();
+    return;
   }
 
   SelectionChangeData lastSelChangeData = mIMEContentObserver->mSelectionData;
   if (NS_WARN_IF(!mIMEContentObserver->UpdateSelectionCache())) {
     MOZ_LOG(sIMECOLog, LogLevel::Error,
-      ("IMECO: 0x%p IMEContentObserver::SelectionChangeEvent::Run(), FAILED, "
-       "due to UpdateSelectionCache() failure", this));
-    return NS_OK;
+      ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+       "SendSelectionChange(), FAILED, due to UpdateSelectionCache() failure",
+       this));
+    return;
   }
 
   // If the IME doesn't want selection change notifications caused by
   // composition, we should do nothing anymore.
-  if (mCausedByComposition &&
+  SelectionChangeData& newSelChangeData = mIMEContentObserver->mSelectionData;
+  if (newSelChangeData.mCausedByComposition &&
       !mIMEContentObserver->
         mUpdatePreference.WantChangesCausedByComposition()) {
-    return NS_OK;
+    return;
   }
 
   // The state may be changed since querying content causes flushing layout.
-  if (!CanNotifyIME()) {
+  if (!CanNotifyIME(eChangeEventType_Selection)) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::SelectionChangeEvent::Run(), FAILED, "
-       "due to flushing layout having changed something", this));
-    return NS_OK;
+      ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+       "SendSelectionChange(), FAILED, due to flushing layout having changed "
+       "something", this));
+    return;
   }
 
   // If the selection isn't changed actually, we shouldn't notify IME of
   // selection change.
-  SelectionChangeData& newSelChangeData = mIMEContentObserver->mSelectionData;
   if (lastSelChangeData.IsValid() &&
       lastSelChangeData.mOffset == newSelChangeData.mOffset &&
       lastSelChangeData.String() == newSelChangeData.String() &&
       lastSelChangeData.GetWritingMode() == newSelChangeData.GetWritingMode() &&
       lastSelChangeData.mReversed == newSelChangeData.mReversed) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::SelectionChangeEvent::Run(), not "
-       "notifying IME of NOTIFY_IME_OF_SELECTION_CHANGE due to not changed "
-       "actually", this));
-    return NS_OK;
+      ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+       "SendSelectionChange(), not notifying IME of "
+       "NOTIFY_IME_OF_SELECTION_CHANGE due to not changed actually", this));
+    return;
   }
 
   MOZ_LOG(sIMECOLog, LogLevel::Info,
-    ("IMECO: 0x%p IMEContentObserver::SelectionChangeEvent::Run(), "
-     "sending NOTIFY_IME_OF_SELECTION_CHANGE... newSelChangeData=%s",
+    ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+     "SendSelectionChange(), sending NOTIFY_IME_OF_SELECTION_CHANGE... "
+     "newSelChangeData=%s",
      this, SelectionChangeDataToString(newSelChangeData).get()));
 
   IMENotification notification(NOTIFY_IME_OF_SELECTION_CHANGE);
-  notification.SetData(mIMEContentObserver->mSelectionData,
-                       mCausedByComposition, mCausedBySelectionEvent);
+  notification.SetData(mIMEContentObserver->mSelectionData);
+
+  MOZ_RELEASE_ASSERT(mIMEContentObserver->mSendingNotification ==
+                       NOTIFY_IME_OF_NOTHING);
+  mIMEContentObserver->mSendingNotification = NOTIFY_IME_OF_SELECTION_CHANGE;
   IMEStateManager::NotifyIME(notification, mIMEContentObserver->mWidget);
+  mIMEContentObserver->mSendingNotification = NOTIFY_IME_OF_NOTHING;
 
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
-    ("IMECO: 0x%p IMEContentObserver::SelectionChangeEvent::Run(), "
-     "sent NOTIFY_IME_OF_SELECTION_CHANGE", this));
-  return NS_OK;
+    ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+     "SendSelectionChange(), sent NOTIFY_IME_OF_SELECTION_CHANGE", this));
 }
 
-/******************************************************************************
- * mozilla::IMEContentObserver::TextChangeEvent
- ******************************************************************************/
-
-NS_IMETHODIMP
-IMEContentObserver::TextChangeEvent::Run()
+void
+IMEContentObserver::IMENotificationSender::SendTextChange()
 {
-  if (!CanNotifyIME()) {
+  if (!CanNotifyIME(eChangeEventType_Text)) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::TextChangeEvent::Run(), FAILED, "
-       "due to impossible to notify IME of text change", this));
-    return NS_OK;
+      ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+       "SendTextChange(), FAILED, due to impossible to notify IME of text "
+       "change", this));
+    return;
   }
 
-  if (!IsSafeToNotifyIME()) {
+  if (!IsSafeToNotifyIME(eChangeEventType_Text)) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p   IMEContentObserver::TextChangeEvent::Run(), retrying to "
-       "send NOTIFY_IME_OF_TEXT_CHANGE...", this));
-    mIMEContentObserver->PostTextChangeNotification(mTextChangeData);
-    return NS_OK;
+      ("IMECO: 0x%p   IMEContentObserver::IMENotificationSender::"
+       "SendTextChange(), retrying to send NOTIFY_IME_OF_TEXT_CHANGE...",
+       this));
+    mIMEContentObserver->PostTextChangeNotification();
+    return;
   }
 
   MOZ_LOG(sIMECOLog, LogLevel::Info,
-    ("IMECO: 0x%p IMEContentObserver::TextChangeEvent::Run(), "
-     "sending NOTIFY_IME_OF_TEXT_CHANGE... mTextChangeData=%s",
-     this, TextChangeDataToString(mTextChangeData).get()));
+    ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+     "SendTextChange(), sending NOTIFY_IME_OF_TEXT_CHANGE... "
+     "mIMEContentObserver={ mTextChangeData=%s }",
+     this, TextChangeDataToString(mIMEContentObserver->mTextChangeData).get()));
 
   IMENotification notification(NOTIFY_IME_OF_TEXT_CHANGE);
-  notification.SetData(mTextChangeData);
+  notification.SetData(mIMEContentObserver->mTextChangeData);
+  mIMEContentObserver->mTextChangeData.Clear();
+
+  MOZ_RELEASE_ASSERT(mIMEContentObserver->mSendingNotification ==
+                       NOTIFY_IME_OF_NOTHING);
+  mIMEContentObserver->mSendingNotification = NOTIFY_IME_OF_TEXT_CHANGE;
   IMEStateManager::NotifyIME(notification, mIMEContentObserver->mWidget);
+  mIMEContentObserver->mSendingNotification = NOTIFY_IME_OF_NOTHING;
 
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
-    ("IMECO: 0x%p IMEContentObserver::TextChangeEvent::Run(), "
-     "sent NOTIFY_IME_OF_TEXT_CHANGE", this));
-  return NS_OK;
+    ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+     "SendTextChange(), sent NOTIFY_IME_OF_TEXT_CHANGE", this));
 }
 
-/******************************************************************************
- * mozilla::IMEContentObserver::PositionChangeEvent
- ******************************************************************************/
-
-NS_IMETHODIMP
-IMEContentObserver::PositionChangeEvent::Run()
+void
+IMEContentObserver::IMENotificationSender::SendPositionChange()
 {
-  if (!CanNotifyIME()) {
+  if (!CanNotifyIME(eChangeEventType_Position)) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p IMEContentObserver::PositionChangeEvent::Run(), FAILED, "
-       "due to impossible to notify IME of position change", this));
-    return NS_OK;
+      ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+       "SendPositionChange(), FAILED, due to impossible to notify IME of "
+       "position change", this));
+    return;
   }
 
-  if (!IsSafeToNotifyIME()) {
+  if (!IsSafeToNotifyIME(eChangeEventType_Position)) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
-      ("IMECO: 0x%p   IMEContentObserver::PositionChangeEvent::Run(), "
-       "retrying to send NOTIFY_IME_OF_POSITION_CHANGE...", this));
+      ("IMECO: 0x%p   IMEContentObserver::IMENotificationSender::"
+       "SendPositionChange(), retrying to send "
+       "NOTIFY_IME_OF_POSITION_CHANGE...", this));
     mIMEContentObserver->PostPositionChangeNotification();
-    return NS_OK;
+    return;
   }
 
   MOZ_LOG(sIMECOLog, LogLevel::Info,
-    ("IMECO: 0x%p IMEContentObserver::PositionChangeEvent::Run(), "
-     "sending NOTIFY_IME_OF_POSITION_CHANGE...", this));
+    ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+     "SendPositionChange(), sending NOTIFY_IME_OF_POSITION_CHANGE...", this));
 
+  MOZ_RELEASE_ASSERT(mIMEContentObserver->mSendingNotification ==
+                       NOTIFY_IME_OF_NOTHING);
+  mIMEContentObserver->mSendingNotification = NOTIFY_IME_OF_POSITION_CHANGE;
   IMEStateManager::NotifyIME(IMENotification(NOTIFY_IME_OF_POSITION_CHANGE),
                              mIMEContentObserver->mWidget);
+  mIMEContentObserver->mSendingNotification = NOTIFY_IME_OF_NOTHING;
 
   MOZ_LOG(sIMECOLog, LogLevel::Debug,
-    ("IMECO: 0x%p IMEContentObserver::PositionChangeEvent::Run(), "
-     "sent NOTIFY_IME_OF_POSITION_CHANGE", this));
-  return NS_OK;
+    ("IMECO: 0x%p IMEContentObserver::IMENotificationSender::"
+     "SendPositionChange(), sent NOTIFY_IME_OF_POSITION_CHANGE", this));
 }
 
 /******************************************************************************
@@ -1525,7 +1675,7 @@ IMEContentObserver::PositionChangeEvent::Run()
 NS_IMETHODIMP
 IMEContentObserver::AsyncMergeableNotificationsFlusher::Run()
 {
-  if (!CanNotifyIME()) {
+  if (!CanNotifyIME(eChangeEventType_FlushPendingEvents)) {
     MOZ_LOG(sIMECOLog, LogLevel::Debug,
       ("IMECO: 0x%p IMEContentObserver::AsyncMergeableNotificationsFlusher::"
        "Run(), FAILED, due to impossible to flush pending notifications",

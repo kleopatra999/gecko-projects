@@ -1771,6 +1771,14 @@ nsSHistory::InitiateLoad(nsISHEntry* aFrameEntry, nsIDocShell* aFrameDS,
   loadInfo->SetLoadType(aLoadType);
   loadInfo->SetSHEntry(aFrameEntry);
 
+  nsCOMPtr<nsIURI> originalURI;
+  aFrameEntry->GetOriginalURI(getter_AddRefs(originalURI));
+  loadInfo->SetOriginalURI(originalURI);
+
+  bool loadReplace;
+  aFrameEntry->GetLoadReplace(&loadReplace);
+  loadInfo->SetLoadReplace(loadReplace);
+
   nsCOMPtr<nsIURI> nextURI;
   aFrameEntry->GetURI(getter_AddRefs(nextURI));
   // Time   to initiate a document load
@@ -1790,7 +1798,7 @@ NS_IMETHODIMP
 nsSHistory::GetSHistoryEnumerator(nsISimpleEnumerator** aEnumerator)
 {
   NS_ENSURE_ARG_POINTER(aEnumerator);
-  nsRefPtr<nsSHEnumerator> iterator = new nsSHEnumerator(this);
+  RefPtr<nsSHEnumerator> iterator = new nsSHEnumerator(this);
   iterator.forget(aEnumerator);
   return NS_OK;
 }

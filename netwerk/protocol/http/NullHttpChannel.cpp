@@ -118,6 +118,12 @@ NullHttpChannel::VisitRequestHeaders(nsIHttpHeaderVisitor *aVisitor)
 }
 
 NS_IMETHODIMP
+NullHttpChannel::VisitNonDefaultRequestHeaders(nsIHttpHeaderVisitor *aVisitor)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 NullHttpChannel::GetAllowPipelining(bool *aAllowPipelining)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
@@ -655,6 +661,19 @@ NullHttpChannel::GetCacheReadEnd(mozilla::TimeStamp *aCacheReadEnd)
 {
   *aCacheReadEnd = mAsyncOpenTime;
   return NS_OK;
+}
+
+NS_IMETHODIMP
+NullHttpChannel::GetIsMainDocumentChannel(bool* aValue)
+{
+  *aValue = false;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+NullHttpChannel::SetIsMainDocumentChannel(bool aValue)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 #define IMPL_TIMING_ATTR(name)                                 \

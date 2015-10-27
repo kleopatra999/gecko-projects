@@ -10,7 +10,6 @@
 #include "MediaData.h"
 #include "MediaSourceDemuxer.h"
 #include "MediaSourceUtils.h"
-#include "TrackBuffer.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/Preferences.h"
@@ -57,7 +56,7 @@ public:
   }
 
 private:
-  nsRefPtr<SourceBuffer> mSourceBuffer;
+  RefPtr<SourceBuffer> mSourceBuffer;
   uint32_t mUpdateID;
 };
 
@@ -72,11 +71,7 @@ SourceBuffer::SetMode(SourceBufferAppendMode aMode, ErrorResult& aRv)
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
   }
-  if (!mIsUsingFormatReader && aMode == SourceBufferAppendMode::Sequence) {
-    aRv.Throw(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-    return;
-  }
-  if (mIsUsingFormatReader && mAttributes->mGenerateTimestamps &&
+  if (mAttributes->mGenerateTimestamps &&
       aMode == SourceBufferAppendMode::Segments) {
     aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
     return;
@@ -85,13 +80,12 @@ SourceBuffer::SetMode(SourceBufferAppendMode aMode, ErrorResult& aRv)
   if (mMediaSource->ReadyState() == MediaSourceReadyState::Ended) {
     mMediaSource->SetReadyState(MediaSourceReadyState::Open);
   }
-  if (mIsUsingFormatReader &&
-      mContentManager->GetAppendState() == AppendState::PARSING_MEDIA_SEGMENT){
+  if (mContentManager->GetAppendState() == AppendState::PARSING_MEDIA_SEGMENT){
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
   }
 
-  if (mIsUsingFormatReader && aMode == SourceBufferAppendMode::Sequence) {
+  if (aMode == SourceBufferAppendMode::Sequence) {
     // Will set GroupStartTimestamp to GroupEndTimestamp.
     mContentManager->RestartGroupStartTimestamp();
   }
@@ -114,31 +108,41 @@ SourceBuffer::SetTimestampOffset(double aTimestampOffset, ErrorResult& aRv)
   if (mMediaSource->ReadyState() == MediaSourceReadyState::Ended) {
     mMediaSource->SetReadyState(MediaSourceReadyState::Open);
   }
-  if (mIsUsingFormatReader &&
-      mContentManager->GetAppendState() == AppendState::PARSING_MEDIA_SEGMENT){
+  if (mContentManager->GetAppendState() == AppendState::PARSING_MEDIA_SEGMENT){
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
   }
   mAttributes->SetApparentTimestampOffset(aTimestampOffset);
-  if (mIsUsingFormatReader &&
-      mAttributes->GetAppendMode() == SourceBufferAppendMode::Sequence) {
+  if (mAttributes->GetAppendMode() == SourceBufferAppendMode::Sequence) {
     mContentManager->SetGroupStartTimestamp(mAttributes->GetTimestampOffset());
   }
 }
 
-already_AddRefed<TimeRanges>
+TimeRanges*
 SourceBuffer::GetBuffered(ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
+  // http://w3c.github.io/media-source/index.html#widl-SourceBuffer-buffered
+  // 1. If this object has been removed from the sourceBuffers attribute of the parent media source then throw an InvalidStateError exception and abort these steps.
   if (!IsAttached()) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return nullptr;
   }
-  media::TimeIntervals ranges = mContentManager->Buffered();
-  MSE_DEBUGV("ranges=%s", DumpTimeRanges(ranges).get());
-  nsRefPtr<dom::TimeRanges> tr = new dom::TimeRanges();
-  ranges.ToTimeRanges(tr);
-  return tr.forget();
+  bool rangeChanged = true;
+  media::TimeIntervals intersection = mContentManager->Buffered();
+  MSE_DEBUGV("intersection=%s", DumpTimeRanges(intersection).get());
+  if (mBuffered) {
+    media::TimeIntervals currentValue(mBuffered);
+    rangeChanged = (intersection != currentValue);
+    MSE_DEBUGV("currentValue=%s", DumpTimeRanges(currentValue).get());
+  }
+  // 5. If intersection ranges does not contain the exact same range information as the current value of this attribute, then update the current value of this attribute to intersection ranges.
+  if (rangeChanged) {
+    mBuffered = new TimeRanges(ToSupports(this));
+    intersection.ToTimeRanges(mBuffered);
+  }
+  // 6. Return the current value of this attribute.
+  return mBuffered;
 }
 
 media::TimeIntervals
@@ -261,7 +265,7 @@ SourceBuffer::RangeRemoval(double aStart, double aEnd)
 {
   StartUpdating();
 
-  nsRefPtr<SourceBuffer> self = this;
+  RefPtr<SourceBuffer> self = this;
   mContentManager->RangeRemoval(TimeUnit::FromSeconds(aStart),
                                 TimeUnit::FromSeconds(aEnd))
     ->Then(AbstractThread::MainThread(), __func__,
@@ -281,10 +285,8 @@ SourceBuffer::Detach()
   AbortBufferAppend();
   if (mContentManager) {
     mContentManager->Detach();
-    if (mIsUsingFormatReader) {
-      mMediaSource->GetDecoder()->GetDemuxer()->DetachSourceBuffer(
-        static_cast<mozilla::TrackBuffersManager*>(mContentManager.get()));
-    }
+    mMediaSource->GetDecoder()->GetDemuxer()->DetachSourceBuffer(
+      static_cast<mozilla::TrackBuffersManager*>(mContentManager.get()));
   }
   mContentManager = nullptr;
   mMediaSource = nullptr;
@@ -329,18 +331,14 @@ SourceBuffer::SourceBuffer(MediaSource* aMediaSource, const nsACString& aType)
   MSE_DEBUG("Create mContentManager=%p",
             mContentManager.get());
 
-  mIsUsingFormatReader =
-    Preferences::GetBool("media.mediasource.format-reader", false);
   ErrorResult dummy;
   if (mAttributes->mGenerateTimestamps) {
     SetMode(SourceBufferAppendMode::Sequence, dummy);
   } else {
     SetMode(SourceBufferAppendMode::Segments, dummy);
   }
-  if (mIsUsingFormatReader) {
-    mMediaSource->GetDecoder()->GetDemuxer()->AttachSourceBuffer(
-      static_cast<mozilla::TrackBuffersManager*>(mContentManager.get()));
-  }
+  mMediaSource->GetDecoder()->GetDemuxer()->AttachSourceBuffer(
+    static_cast<mozilla::TrackBuffersManager*>(mContentManager.get()));
 }
 
 SourceBuffer::~SourceBuffer()
@@ -433,7 +431,7 @@ SourceBuffer::AppendData(const uint8_t* aData, uint32_t aLength, ErrorResult& aR
 {
   MSE_DEBUG("AppendData(aLength=%u)", aLength);
 
-  nsRefPtr<MediaByteBuffer> data = PrepareAppend(aData, aLength, aRv);
+  RefPtr<MediaByteBuffer> data = PrepareAppend(aData, aLength, aRv);
   if (!data) {
     return;
   }
@@ -441,9 +439,6 @@ SourceBuffer::AppendData(const uint8_t* aData, uint32_t aLength, ErrorResult& aR
 
   StartUpdating();
 
-  MOZ_ASSERT(mIsUsingFormatReader ||
-             mAttributes->GetAppendMode() == SourceBufferAppendMode::Segments,
-             "We don't handle timestampOffset for sequence mode yet");
   nsCOMPtr<nsIRunnable> task = new BufferAppendRunnable(this, mUpdateID);
   NS_DispatchToMainThread(task);
 }
@@ -483,13 +478,9 @@ SourceBuffer::AppendDataCompletedWithSuccess(bool aHasActiveTracks)
     if (!mActive) {
       mActive = true;
       mMediaSource->SourceBufferIsActive(this);
-      mMediaSource->QueueInitializationEvent();
-      if (mIsUsingFormatReader) {
-        mMediaSource->GetDecoder()->NotifyWaitingForResourcesStatusChanged();
-      }
     }
   }
-  if (mActive && mIsUsingFormatReader) {
+  if (mActive) {
     // Tell our parent decoder that we have received new data.
     // The information provided do not matter much so long as it is monotonically
     // increasing.
@@ -591,15 +582,12 @@ SourceBuffer::PrepareAppend(const uint8_t* aData, uint32_t aLength, ErrorResult&
   // See if we have enough free space to append our new data.
   // As we can only evict once we have playable data, we must give a chance
   // to the DASH player to provide a complete media segment.
-  if (aLength > mEvictionThreshold || evicted == Result::BUFFER_FULL ||
-      ((!mIsUsingFormatReader &&
-        mContentManager->GetSize() > mEvictionThreshold - aLength) &&
-       evicted != Result::CANT_EVICT)) {
+  if (aLength > mEvictionThreshold || evicted == Result::BUFFER_FULL) {
     aRv.Throw(NS_ERROR_DOM_QUOTA_EXCEEDED_ERR);
     return nullptr;
   }
 
-  nsRefPtr<MediaByteBuffer> data = new MediaByteBuffer();
+  RefPtr<MediaByteBuffer> data = new MediaByteBuffer();
   if (!data->AppendElements(aData, aLength, fallible)) {
     aRv.Throw(NS_ERROR_DOM_QUOTA_EXCEEDED_ERR);
     return nullptr;
@@ -612,7 +600,7 @@ SourceBuffer::GetBufferedStart()
 {
   MOZ_ASSERT(NS_IsMainThread());
   ErrorResult dummy;
-  nsRefPtr<TimeRanges> ranges = GetBuffered(dummy);
+  RefPtr<TimeRanges> ranges = GetBuffered(dummy);
   return ranges->Length() > 0 ? ranges->GetStartTime() : 0;
 }
 
@@ -621,7 +609,7 @@ SourceBuffer::GetBufferedEnd()
 {
   MOZ_ASSERT(NS_IsMainThread());
   ErrorResult dummy;
-  nsRefPtr<TimeRanges> ranges = GetBuffered(dummy);
+  RefPtr<TimeRanges> ranges = GetBuffered(dummy);
   return ranges->Length() > 0 ? ranges->GetEndTime() : 0;
 }
 
@@ -658,11 +646,13 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(SourceBuffer)
     manager->Detach();
   }
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mMediaSource)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mBuffered)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END_INHERITED(DOMEventTargetHelper)
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(SourceBuffer,
                                                   DOMEventTargetHelper)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaSource)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBuffered)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_ADDREF_INHERITED(SourceBuffer, DOMEventTargetHelper)

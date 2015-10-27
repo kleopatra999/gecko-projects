@@ -10,6 +10,7 @@
 #include "nsIEventTarget.h"
 #include "nsITimer.h"
 #include "nsCOMPtr.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/SHA1.h"
 #include "mozilla/TimeStamp.h"
 #include "nsTArray.h"
@@ -69,7 +70,7 @@ private:
   virtual ~CacheFileHandle();
 
   const SHA1Sum::Hash *mHash;
-  bool                 mIsDoomed;
+  mozilla::Atomic<bool,ReleaseAcquire> mIsDoomed;
   bool                 mPriority;
   bool                 mClosed;
   bool                 mSpecialFile;
@@ -92,8 +93,8 @@ public:
   nsresult GetHandle(const SHA1Sum::Hash *aHash, CacheFileHandle **_retval);
   nsresult NewHandle(const SHA1Sum::Hash *aHash, bool aPriority, CacheFileHandle **_retval);
   void     RemoveHandle(CacheFileHandle *aHandlle);
-  void     GetAllHandles(nsTArray<nsRefPtr<CacheFileHandle> > *_retval);
-  void     GetActiveHandles(nsTArray<nsRefPtr<CacheFileHandle> > *_retval);
+  void     GetAllHandles(nsTArray<RefPtr<CacheFileHandle> > *_retval);
+  void     GetActiveHandles(nsTArray<RefPtr<CacheFileHandle> > *_retval);
   void     ClearAll();
   uint32_t HandleCount();
 
@@ -142,7 +143,7 @@ public:
     void AddHandle(CacheFileHandle* aHandle);
     void RemoveHandle(CacheFileHandle* aHandle);
     already_AddRefed<CacheFileHandle> GetNewestHandle();
-    void GetHandles(nsTArray<nsRefPtr<CacheFileHandle> > &aResult);
+    void GetHandles(nsTArray<RefPtr<CacheFileHandle> > &aResult);
 
     SHA1Sum::Hash *Hash() const { return mHash; }
     bool IsEmpty() const { return mHandles.Length() == 0; }
@@ -382,7 +383,7 @@ private:
   static CacheFileIOManager           *gInstance;
   TimeStamp                            mStartTime;
   bool                                 mShuttingDown;
-  nsRefPtr<CacheIOThread>              mIOThread;
+  RefPtr<CacheIOThread>              mIOThread;
   nsCOMPtr<nsIFile>                    mCacheDirectory;
 #if defined(MOZ_WIDGET_ANDROID)
   // On Android we add the active profile directory name between the path
@@ -395,7 +396,7 @@ private:
   CacheFileHandles                     mHandles;
   nsTArray<CacheFileHandle *>          mHandlesByLastUsed;
   nsTArray<CacheFileHandle *>          mSpecialHandles;
-  nsTArray<nsRefPtr<CacheFile> >       mScheduledMetadataWrites;
+  nsTArray<RefPtr<CacheFile> >       mScheduledMetadataWrites;
   nsCOMPtr<nsITimer>                   mMetadataWritesTimer;
   bool                                 mOverLimitEvicting;
   bool                                 mRemovingTrashDirs;
@@ -403,7 +404,7 @@ private:
   nsCOMPtr<nsIFile>                    mTrashDir;
   nsCOMPtr<nsIDirectoryEnumerator>     mTrashDirEnumerator;
   nsTArray<nsCString>                  mFailedTrashDirs;
-  nsRefPtr<CacheFileContextEvictor>    mContextEvictor;
+  RefPtr<CacheFileContextEvictor>    mContextEvictor;
   TimeStamp                            mLastSmartSizeTime;
 };
 

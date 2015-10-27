@@ -37,12 +37,23 @@
   <string name="no_space_to_start_error">&no_space_to_start_error;</string>
   <string name="error_loading_file">&error_loading_file;</string>
 
+
+  <string name="firstrun_panel_title_welcome">&firstrun_panel_title_welcome;</string>
   <string name="firstrun_welcome_message">&onboard_start_message3;</string>
   <string name="firstrun_welcome_subtext">&onboard_start_subtext3;</string>
   <string name="firstrun_welcome_button_account">&onboard_start_button_account;</string>
   <string name="firstrun_welcome_button_browser">&onboard_start_button_browser;</string>
+  <string name="firstrun_button_next">&firstrun_button_next;</string>
   <string name="firstrun_empty_contentDescription"></string>
+
   <string name="firstrun_welcome_restricted">&onboard_start_restricted1;</string>
+
+  <string name="firstrun_import_title">&firstrun_import_title;</string>
+  <string name="firstrun_import_message">&firstrun_import_message;</string>
+  <string name="firstrun_import_subtext">&firstrun_import_subtext;</string>
+  <string name="firstrun_import_action">&firstrun_import_action;</string>
+  <string name="firstrun_import_dialog_button">&firstrun_import_dialog_button;</string>
+  <string name="firstrun_import_progress_title">&firstrun_import_progress_title;</string>
 
   <string name="bookmarks_title">&bookmarks_title;</string>
   <string name="history_title">&history_title;</string>
@@ -71,6 +82,9 @@
   <string name="choose_file">&choose_file;</string>
 
   <string name="url_bar_default_text">&url_bar_default_text2;</string>
+
+  <!-- https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/faq -->
+  <string name="faq_link">https://support.mozilla.org/1/mobile/&formatS1;/&formatS2;/&formatS3;/faq</string>
 
   <!-- https://support.mozilla.org/1/mobile/%VERSION%/%OS%/%LOCALE%/ -->
   <string name="help_link">https://support.mozilla.org/1/mobile/&formatS1;/&formatS2;/&formatS3;/</string>
@@ -122,7 +136,6 @@
   <string name="overlay_share_no_url">&overlay_share_no_url;</string>
   <string name="overlay_share_select_device">&overlay_share_select_device;</string>
   <string name="overlay_no_synced_devices">&overlay_no_synced_devices;</string>
-  <string name="overlay_share_tab_not_sent">&overlay_share_tab_not_sent;</string>
 
   <string name="settings">&settings;</string>
   <string name="settings_title">&settings_title;</string>
@@ -171,6 +184,9 @@
   <string name="pref_home_updates_wifi">&pref_home_updates_wifi;</string>
   <string name="pref_home_suggested_sites">&pref_home_suggested_sites;</string>
   <string name="pref_home_suggested_sites_summary">&pref_home_suggested_sites_summary;</string>
+  <string name="pref_category_home_homepage">&pref_category_home_homepage;</string>
+  <string name="home_homepage_title">&home_homepage_title;</string>
+  <string name="home_homepage_use_current_tab">&home_homepage_use_current_tab;</string>
 
   <string name="pref_header_customize">&pref_header_customize;</string>
   <string name="pref_header_display">&pref_header_display;</string>
@@ -194,10 +210,17 @@
   <string name="pref_cookies_not_accept_foreign">&pref_cookies_not_accept_foreign;</string>
   <string name="pref_cookies_disabled">&pref_cookies_disabled;</string>
 
+  <string name="pref_tap_to_load_images_title">&pref_tap_to_load_images_title;</string>
+  <string name="pref_tap_to_load_images_summary2">&pref_tap_to_load_images_summary2;</string>
+
   <string name="pref_tracking_protection_title">&pref_tracking_protection_title;</string>
   <string name="pref_tracking_protection_summary">&pref_tracking_protection_summary3;</string>
   <string name="pref_donottrack_title">&pref_donottrack_title;</string>
   <string name="pref_donottrack_summary">&pref_donottrack_summary;</string>
+
+  <string name="pref_tracking_protection_enabled">&pref_tracking_protection_enabled;</string>
+  <string name="pref_tracking_protection_enabled_pb">&pref_tracking_protection_enabled_pb;</string>
+  <string name="pref_tracking_protection_disabled">&pref_tracking_protection_disabled;</string>
 
   <string name="pref_char_encoding">&pref_char_encoding;</string>
   <string name="pref_char_encoding_on">&pref_char_encoding_on;</string>
@@ -234,6 +257,7 @@
   <string name="pref_sync">&pref_sync;</string>
   <string name="pref_sync_summary">&pref_sync_summary2;</string>
   <string name="pref_search_suggestions">&pref_search_suggestions;</string>
+  <string name="pref_history_search_suggestions">&pref_history_search_suggestions;</string>
   <string name="pref_private_data_history2">&pref_private_data_history2;</string>
   <string name="pref_private_data_searchHistory">&pref_private_data_searchHistory;</string>
   <string name="pref_private_data_formdata2">&pref_private_data_formdata2;</string>
@@ -406,8 +430,6 @@
   <string name="button_no">&button_no;</string>
   <string name="button_copy">&button_copy;</string>
 
-  <string name="firstrun_panel_title_welcome">&firstrun_panel_title_welcome;</string>
-
   <string name="home_title">&home_title;</string>
   <string name="home_top_sites_title">&home_top_sites_title;</string>
   <string name="home_top_sites_add">&home_top_sites_add;</string>
@@ -462,15 +484,11 @@
   <string name="bookmarkdefaults_title_support">&bookmarks_support;</string>
   <string name="bookmarkdefaults_url_support">https://support.mozilla.org/products/mobile</string>
 
-  <!-- Icon is automatically generated from R.drawable.bookmarkdefaults_favicon_marketplace -->
-  <string name="bookmarkdefaults_title_marketplace">&bookmarks_marketplace;</string>
-  <string name="bookmarkdefaults_url_marketplace">https://marketplace.firefox.com/</string>
-
   <string name="bookmarkdefaults_title_restricted_webmaker">&bookmarks_restricted_webmaker;</string>
   <string name="bookmarkdefaults_url_restricted_webmaker">https://webmaker.org/</string>
 
-  <string name="bookmarkdefaults_title_restricted_support">&bookmarks_restricted_support;</string>
-  <string name="bookmarkdefaults_url_restricted_support">https://support.mozilla.org/kb/kids</string>
+  <string name="bookmarkdefaults_title_restricted_support">&bookmarks_restricted_support2;</string>
+  <string name="bookmarkdefaults_url_restricted_support">https://support.mozilla.org/kb/controlledaccess</string>
 
   <!-- Site identity popup -->
   <string name="identity_connection_secure">&identity_connection_secure;</string>
@@ -575,6 +593,8 @@
   <string name="remote_tabs_last_synced">&remote_tabs_last_synced;</string>
 
   <string name="intent_uri_cannot_open">&intent_uri_cannot_open;</string>
+  <string name="intent_uri_private_browsing_prompt">&intent_uri_private_browsing_prompt;</string>
+  <string name="intent_uri_private_browsing_multiple_match_title">&intent_uri_private_browsing_multiple_match_title;</string>
 
   <string name="devtools_auth_scan_header">&devtools_auth_scan_header;</string>
 </resources>
