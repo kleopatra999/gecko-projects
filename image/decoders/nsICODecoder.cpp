@@ -124,7 +124,7 @@ nsICODecoder::FillBitmapFileHeaderBuffer(int8_t* bfh)
   bfh[1] = 'M';
   int32_t dataOffset = 0;
   int32_t fileSize = 0;
-  dataOffset = BMPFILEHEADER::LENGTH + BITMAPINFOSIZE;
+  dataOffset = bmp::FileHeader::LENGTH + BITMAPINFOSIZE;
 
   // The color table is present only if BPP is <= 8
   if (mDirEntry.mBitCount <= 8) {
@@ -393,7 +393,7 @@ nsICODecoder::SniffResource(const char* aData)
     // is the AND mask, which isn't present in standalone BMPs.
     nsBMPDecoder* bmpDecoder = new nsBMPDecoder(mImage);
     mContainedDecoder = bmpDecoder;
-    bmpDecoder->SetUseAlphaData(true);
+    bmpDecoder->SetIsWithinICO();
     mContainedDecoder->SetMetadataDecode(IsMetadataDecode());
     mContainedDecoder->SetDecoderFlags(GetDecoderFlags());
     mContainedDecoder->SetSurfaceFlags(GetSurfaceFlags());
@@ -477,7 +477,7 @@ nsICODecoder::ReadBIH(const char* aData)
   // contained resource over our own information.
   // XXX(seth): Is this ever different than the value we obtained from
   // ReadBPP() above?
-  nsRefPtr<nsBMPDecoder> bmpDecoder =
+  RefPtr<nsBMPDecoder> bmpDecoder =
     static_cast<nsBMPDecoder*>(mContainedDecoder.get());
   mBPP = bmpDecoder->GetBitsPerPixel();
 
@@ -513,7 +513,7 @@ nsICODecoder::ReadBMP(const char* aData, uint32_t aLen)
 LexerTransition<ICOState>
 nsICODecoder::PrepareForMask()
 {
-  nsRefPtr<nsBMPDecoder> bmpDecoder =
+  RefPtr<nsBMPDecoder> bmpDecoder =
     static_cast<nsBMPDecoder*>(mContainedDecoder.get());
 
   uint16_t numColors = GetNumColors();
@@ -525,9 +525,9 @@ nsICODecoder::PrepareForMask()
   MOZ_ASSERT(bmpLengthWithHeader < mDirEntry.mBytesInRes);
   uint32_t maskLength = mDirEntry.mBytesInRes - bmpLengthWithHeader;
 
-  // If we have a 32-bpp BMP with alpha data, we ignore the AND mask. We can
+  // If the BMP provides its own transparency, we ignore the AND mask. We can
   // also obviously ignore it if the image has zero width or zero height.
-  if ((bmpDecoder->GetBitsPerPixel() == 32 && bmpDecoder->HasAlphaData()) ||
+  if (bmpDecoder->HasTransparency() ||
       GetRealWidth() == 0 || GetRealHeight() == 0) {
     return Transition::ToUnbuffered(ICOState::FINISHED_RESOURCE,
                                     ICOState::SKIP_MASK,
@@ -587,7 +587,7 @@ nsICODecoder::ReadMaskRow(const char* aData)
 
     decoded = reinterpret_cast<uint32_t*>(mDownscaler->RowBuffer());
   } else {
-    nsRefPtr<nsBMPDecoder> bmpDecoder =
+    RefPtr<nsBMPDecoder> bmpDecoder =
       static_cast<nsBMPDecoder*>(mContainedDecoder.get());
     uint32_t* imageData = bmpDecoder->GetImageData();
     if (!imageData) {
@@ -637,7 +637,7 @@ nsICODecoder::FinishMask()
   // mMaskBuffer. We just need to transfer them to the image.
   if (mDownscaler) {
     // Retrieve the image data.
-    nsRefPtr<nsBMPDecoder> bmpDecoder =
+    RefPtr<nsBMPDecoder> bmpDecoder =
       static_cast<nsBMPDecoder*>(mContainedDecoder.get());
     uint8_t* imageData = reinterpret_cast<uint8_t*>(bmpDecoder->GetImageData());
     if (!imageData) {
@@ -656,9 +656,9 @@ nsICODecoder::FinishMask()
   if (mHasMaskAlpha) {
     PostHasTransparency();
 
-    nsRefPtr<nsBMPDecoder> bmpDecoder =
+    RefPtr<nsBMPDecoder> bmpDecoder =
       static_cast<nsBMPDecoder*>(mContainedDecoder.get());
-    bmpDecoder->SetHasAlphaData();
+    bmpDecoder->SetHasTransparency();
   }
 
   return Transition::To(ICOState::FINISHED_RESOURCE, 0);

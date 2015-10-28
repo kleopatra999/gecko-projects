@@ -195,7 +195,7 @@ LayerManager::Mutated(Layer* aLayer)
 already_AddRefed<ImageContainer>
 LayerManager::CreateImageContainer(ImageContainer::Mode flag)
 {
-  nsRefPtr<ImageContainer> container = new ImageContainer(flag);
+  RefPtr<ImageContainer> container = new ImageContainer(flag);
   return container.forget();
 }
 
@@ -203,6 +203,19 @@ bool
 LayerManager::AreComponentAlphaLayersEnabled()
 {
   return gfxPrefs::ComponentAlphaEnabled();
+}
+
+/*static*/ void
+LayerManager::LayerUserDataDestroy(void* data)
+{
+  delete static_cast<LayerUserData*>(data);
+}
+
+nsAutoPtr<LayerUserData>
+LayerManager::RemoveUserData(void* aKey)
+{
+  nsAutoPtr<LayerUserData> d(static_cast<LayerUserData*>(mUserData.Remove(static_cast<gfx::UserDataKey*>(aKey))));
+  return d;
 }
 
 //--------------------------------------------------
@@ -302,7 +315,7 @@ CreateCSSValueList(const InfallibleTArray<TransformFunction>& aFunctions)
   nsAutoPtr<nsCSSValueList> result;
   nsCSSValueList** resultTail = getter_Transfers(result);
   for (uint32_t i = 0; i < aFunctions.Length(); i++) {
-    nsRefPtr<nsCSSValue::Array> arr;
+    RefPtr<nsCSSValue::Array> arr;
     switch (aFunctions[i].type()) {
       case TransformFunction::TRotationX:
       {
@@ -2056,6 +2069,13 @@ Layer::IsBackfaceHidden()
     }
   }
   return false;
+}
+
+nsAutoPtr<LayerUserData>
+Layer::RemoveUserData(void* aKey)
+{
+  nsAutoPtr<LayerUserData> d(static_cast<LayerUserData*>(mUserData.Remove(static_cast<gfx::UserDataKey*>(aKey))));
+  return d;
 }
 
 void

@@ -154,9 +154,11 @@ NativeRegExpMacroAssembler::GenerateCode(JSContext* cx, bool match_only)
     masm.reserveStack(frameSize);
     masm.checkStackAlignment();
 
-    // Check if we have space on the stack.
+    // Check if we have space on the stack. Use the *NoInterrupt stack limit to
+    // avoid failing repeatedly when the regex code is called from Ion JIT code,
+    // see bug 1208819.
     Label stack_ok;
-    void* stack_limit = runtime->addressOfJitStackLimit();
+    void* stack_limit = runtime->addressOfJitStackLimitNoInterrupt();
     masm.branchStackPtrRhs(Assembler::Below, AbsoluteAddress(stack_limit), &stack_ok);
 
     // Exit with an exception. There is not enough space on the stack
@@ -468,10 +470,8 @@ NativeRegExpMacroAssembler::GenerateCode(JSContext* cx, bool match_only)
     for (size_t i = 0; i < labelPatches.length(); i++) {
         LabelPatch& v = labelPatches[i];
         MOZ_ASSERT(!v.label);
-        v.patchOffset.fixup(&masm);
-        uintptr_t offset = masm.actualOffset(v.labelOffset);
         Assembler::PatchDataWithValueCheck(CodeLocationLabel(code, v.patchOffset),
-                                           ImmPtr(code->raw() + offset),
+                                           ImmPtr(code->raw() + v.labelOffset),
                                            ImmPtr(0));
     }
 

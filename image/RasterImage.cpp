@@ -14,7 +14,6 @@
 #include "nsComponentManagerUtils.h"
 #include "nsError.h"
 #include "Decoder.h"
-#include "nsAutoPtr.h"
 #include "prenv.h"
 #include "prsystem.h"
 #include "ImageContainer.h"
@@ -164,7 +163,6 @@ RasterImage::Init(const char* aMimeType,
 }
 
 //******************************************************************************
-// [notxpcom] void requestRefresh ([const] in TimeStamp aTime);
 NS_IMETHODIMP_(void)
 RasterImage::RequestRefresh(const TimeStamp& aTime)
 {
@@ -544,8 +542,6 @@ RasterImage::CopyFrame(uint32_t aWhichFrame, uint32_t aFlags)
 }
 
 //******************************************************************************
-/* [noscript] SourceSurface getFrame(in uint32_t aWhichFrame,
- *                                   in uint32_t aFlags); */
 NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
 RasterImage::GetFrame(uint32_t aWhichFrame,
                       uint32_t aFlags)
@@ -613,7 +609,7 @@ RasterImage::GetFrameInternal(const IntSize& aSize,
   return MakePair(DrawResult::SUCCESS, Move(frameSurf));
 }
 
-Pair<DrawResult, nsRefPtr<layers::Image>>
+Pair<DrawResult, RefPtr<layers::Image>>
 RasterImage::GetCurrentImage(ImageContainer* aContainer, uint32_t aFlags)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -626,7 +622,7 @@ RasterImage::GetCurrentImage(ImageContainer* aContainer, uint32_t aFlags)
   if (!surface) {
     // The OS threw out some or all of our buffer. We'll need to wait for the
     // redecode (which was automatically triggered by GetFrame) to complete.
-    return MakePair(drawResult, nsRefPtr<layers::Image>());
+    return MakePair(drawResult, RefPtr<layers::Image>());
   }
 
   CairoImage::Data cairoData;
@@ -634,7 +630,7 @@ RasterImage::GetCurrentImage(ImageContainer* aContainer, uint32_t aFlags)
   GetHeight(&cairoData.mSize.height);
   cairoData.mSourceSurface = surface;
 
-  nsRefPtr<layers::Image> image =
+  RefPtr<layers::Image> image =
     aContainer->CreateImage(ImageFormat::CAIRO_SURFACE);
   MOZ_ASSERT(image);
 
@@ -678,7 +674,7 @@ RasterImage::GetImageContainer(LayerManager* aManager, uint32_t aFlags)
     mProgressTracker->OnUnlockedDraw();
   }
 
-  nsRefPtr<layers::ImageContainer> container = mImageContainer.get();
+  RefPtr<layers::ImageContainer> container = mImageContainer.get();
 
   bool mustRedecode =
     (aFlags & (FLAG_SYNC_DECODE | FLAG_SYNC_DECODE_IF_FAST)) &&
@@ -693,7 +689,7 @@ RasterImage::GetImageContainer(LayerManager* aManager, uint32_t aFlags)
   container = LayerManager::CreateImageContainer();
 
   DrawResult drawResult;
-  nsRefPtr<layers::Image> image;
+  RefPtr<layers::Image> image;
   Tie(drawResult, image) = GetCurrentImage(container, aFlags);
   if (!image) {
     return nullptr;
@@ -715,13 +711,13 @@ RasterImage::UpdateImageContainer()
 {
   MOZ_ASSERT(NS_IsMainThread());
 
-  nsRefPtr<layers::ImageContainer> container = mImageContainer.get();
+  RefPtr<layers::ImageContainer> container = mImageContainer.get();
   if (!container) {
     return;
   }
 
   DrawResult drawResult;
-  nsRefPtr<layers::Image> image;
+  RefPtr<layers::Image> image;
   Tie(drawResult, image) = GetCurrentImage(container, FLAG_NONE);
   if (!image) {
     return;
@@ -769,7 +765,7 @@ public:
   }
 
 private:
-  nsRefPtr<RasterImage> mImage;
+  RefPtr<RasterImage> mImage;
   uint32_t mNewFrameCount;
   IntRect mNewRefreshArea;
 };
@@ -973,7 +969,6 @@ RasterImage::ResetAnimation()
 }
 
 //******************************************************************************
-// [notxpcom] void setAnimationStartTime ([const] in TimeStamp aTime);
 NS_IMETHODIMP_(void)
 RasterImage::SetAnimationStartTime(const TimeStamp& aTime)
 {
@@ -1290,7 +1285,7 @@ RasterImage::Decode(const IntSize& aSize, uint32_t aFlags)
   }
 
   // Create a decoder.
-  nsRefPtr<Decoder> decoder;
+  RefPtr<Decoder> decoder;
   if (mAnim) {
     decoder = DecoderFactory::CreateAnimationDecoder(mDecoderType, this,
                                                      mSourceBuffer, decoderFlags,
@@ -1352,7 +1347,7 @@ RasterImage::DecodeMetadata(uint32_t aFlags)
   MOZ_ASSERT(!mHasSize, "Should not do unnecessary metadata decodes");
 
   // Create a decoder.
-  nsRefPtr<Decoder> decoder =
+  RefPtr<Decoder> decoder =
     DecoderFactory::CreateMetadataDecoder(mDecoderType, this, mSourceBuffer,
                                           mRequestedSampleSize);
 
@@ -1479,15 +1474,6 @@ RasterImage::DrawInternal(DrawableFrameRef&& aFrameRef,
 }
 
 //******************************************************************************
-/* [noscript] void draw(in gfxContext aContext,
- *                      in Filter aFilter,
- *                      [const] in gfxMatrix aUserSpaceToImageSpace,
- *                      [const] in gfxRect aFill,
- *                      [const] in IntRect aSubimage,
- *                      [const] in IntSize aViewportSize,
- *                      [const] in SVGImageContext aSVGContext,
- *                      in uint32_t aWhichFrame,
- *                      in uint32_t aFlags); */
 NS_IMETHODIMP_(DrawResult)
 RasterImage::Draw(gfxContext* aContext,
                   const IntSize& aSize,
@@ -1659,7 +1645,7 @@ RasterImage::DoError()
 /* static */ void
 RasterImage::HandleErrorWorker::DispatchIfNeeded(RasterImage* aImage)
 {
-  nsRefPtr<HandleErrorWorker> worker = new HandleErrorWorker(aImage);
+  RefPtr<HandleErrorWorker> worker = new HandleErrorWorker(aImage);
   NS_DispatchToMainThread(worker);
 }
 
@@ -1705,7 +1691,7 @@ RasterImage::NotifyProgress(Progress aProgress,
   MOZ_ASSERT(NS_IsMainThread());
 
   // Ensure that we stay alive long enough to finish notifying.
-  nsRefPtr<RasterImage> image(this);
+  RefPtr<RasterImage> image(this);
 
   bool wasDefaultFlags = aSurfaceFlags == DefaultSurfaceFlags();
 

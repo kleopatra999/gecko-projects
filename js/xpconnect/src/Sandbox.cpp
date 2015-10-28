@@ -287,7 +287,7 @@ SandboxFetch(JSContext* cx, JS::HandleObject scope, const CallArgs& args)
         return false;
     }
     ErrorResult rv;
-    nsRefPtr<dom::Promise> response =
+    RefPtr<dom::Promise> response =
         FetchRequest(global, Constify(request), Constify(options), rv);
     rv.WouldReportJSException();
     if (rv.Failed()) {
@@ -979,7 +979,7 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
         if (sop) {
             principal = sop->GetPrincipal();
         } else {
-            nsRefPtr<nsNullPrincipal> nullPrin = nsNullPrincipal::Create();
+            RefPtr<nsNullPrincipal> nullPrin = nsNullPrincipal::Create();
             NS_ENSURE_TRUE(nullPrin, NS_ERROR_FAILURE);
             principal = nullPrin;
         }
@@ -1024,6 +1024,7 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
     CompartmentPrivate* priv = CompartmentPrivate::Get(sandbox);
     priv->allowWaivers = options.allowWaivers;
     priv->writeToGlobalPrototype = options.writeToGlobalPrototype;
+    priv->isWebExtensionContentScript = options.isWebExtensionContentScript;
 
     // Set up the wantXrays flag, which indicates whether xrays are desired even
     // for same-origin access.
@@ -1151,13 +1152,6 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
     return NS_OK;
 }
 
-/* bool call(in nsIXPConnectWrappedNative wrapper,
- *           in JSContextPtr cx,
- *           in JSObjectPtr obj,
- *           in uint32_t argc,
- *           in JSValPtr argv,
- *           in JSValPtr vp);
- */
 NS_IMETHODIMP
 nsXPCComponents_utils_Sandbox::Call(nsIXPConnectWrappedNative* wrapper, JSContext* cx,
                                     JSObject* objArg, const CallArgs& args, bool* _retval)
@@ -1166,13 +1160,6 @@ nsXPCComponents_utils_Sandbox::Call(nsIXPConnectWrappedNative* wrapper, JSContex
     return CallOrConstruct(wrapper, cx, obj, args, _retval);
 }
 
-/* bool construct(in nsIXPConnectWrappedNative wrapper,
- *                in JSContextPtr cx,
- *                in JSObjectPtr obj,
- *                in uint32_t argc,
- *                in JSValPtr argv,
- *                in JSValPtr vp);
- */
 NS_IMETHODIMP
 nsXPCComponents_utils_Sandbox::Construct(nsIXPConnectWrappedNative* wrapper, JSContext* cx,
                                          JSObject* objArg, const CallArgs& args, bool* _retval)
@@ -1503,6 +1490,7 @@ SandboxOptions::Parse()
               ParseBoolean("allowWaivers", &allowWaivers) &&
               ParseBoolean("wantComponents", &wantComponents) &&
               ParseBoolean("wantExportHelpers", &wantExportHelpers) &&
+              ParseBoolean("isWebExtensionContentScript", &isWebExtensionContentScript) &&
               ParseString("sandboxName", sandboxName) &&
               ParseObject("sameZoneAs", &sameZoneAs) &&
               ParseBoolean("freshZone", &freshZone) &&

@@ -52,7 +52,7 @@ BrowserElementAudioChannel::Create(nsPIDOMWindow* aWindow,
                                    AudioChannel aAudioChannel,
                                    ErrorResult& aRv)
 {
-  nsRefPtr<BrowserElementAudioChannel> ac =
+  RefPtr<BrowserElementAudioChannel> ac =
     new BrowserElementAudioChannel(aWindow, aFrameLoader, aAPI, aAudioChannel);
 
   aRv = ac->Initialize();
@@ -117,10 +117,7 @@ BrowserElementAudioChannel::Initialize()
       return NS_ERROR_FAILURE;
     }
 
-    nsCOMPtr<nsIDOMWindow> topWindow;
-    window->GetScriptableTop(getter_AddRefs(topWindow));
-
-    mFrameWindow = do_QueryInterface(topWindow);
+    mFrameWindow = window->GetScriptableTop();
     mFrameWindow = mFrameWindow->GetOuterWindow();
     return NS_OK;
   }
@@ -137,10 +134,7 @@ BrowserElementAudioChannel::Initialize()
       return NS_ERROR_FAILURE;
     }
 
-    nsCOMPtr<nsIDOMWindow> topWindow;
-    window->GetScriptableTop(getter_AddRefs(topWindow));
-
-    mFrameWindow = do_QueryInterface(topWindow);
+    mFrameWindow = window->GetScriptableTop();
     mFrameWindow = mFrameWindow->GetOuterWindow();
     return NS_OK;
   }
@@ -177,7 +171,7 @@ class BaseRunnable : public nsRunnable
 protected:
   nsCOMPtr<nsPIDOMWindow> mParentWindow;
   nsCOMPtr<nsPIDOMWindow> mFrameWindow;
-  nsRefPtr<DOMRequest> mRequest;
+  RefPtr<DOMRequest> mRequest;
   AudioChannel mAudioChannel;
 
   virtual void DoWork(AudioChannelService* aService,
@@ -194,7 +188,7 @@ public:
 
   NS_IMETHODIMP Run() override
   {
-    nsRefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
+    RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
     MOZ_ASSERT(service);
 
     AutoJSAPI jsapi;
@@ -327,7 +321,7 @@ BrowserElementAudioChannel::GetVolume(ErrorResult& aRv)
     return request.forget().downcast<DOMRequest>();
   }
 
-  nsRefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
+  RefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
 
   nsCOMPtr<nsIRunnable> runnable =
     new GetVolumeRunnable(GetOwner(), mFrameWindow, domRequest, mAudioChannel);
@@ -354,12 +348,12 @@ BrowserElementAudioChannel::SetVolume(float aVolume, ErrorResult& aRv)
     return request.forget().downcast<DOMRequest>();
   }
 
-  nsRefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
+  RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
   MOZ_ASSERT(service);
 
   service->SetAudioChannelVolume(mFrameWindow, mAudioChannel, aVolume);
 
-  nsRefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
+  RefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
   nsCOMPtr<nsIRunnable> runnable = new FireSuccessRunnable(GetOwner(),
                                                            mFrameWindow,
                                                            domRequest,
@@ -386,7 +380,7 @@ BrowserElementAudioChannel::GetMuted(ErrorResult& aRv)
     return request.forget().downcast<DOMRequest>();
   }
 
-  nsRefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
+  RefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
 
   nsCOMPtr<nsIRunnable> runnable =
     new GetMutedRunnable(GetOwner(), mFrameWindow, domRequest, mAudioChannel);
@@ -413,12 +407,12 @@ BrowserElementAudioChannel::SetMuted(bool aMuted, ErrorResult& aRv)
     return request.forget().downcast<DOMRequest>();
   }
 
-  nsRefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
+  RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
   MOZ_ASSERT(service);
 
   service->SetAudioChannelMuted(mFrameWindow, mAudioChannel, aMuted);
 
-  nsRefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
+  RefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
   nsCOMPtr<nsIRunnable> runnable = new FireSuccessRunnable(GetOwner(),
                                                            mFrameWindow,
                                                            domRequest,
@@ -435,7 +429,7 @@ BrowserElementAudioChannel::IsActive(ErrorResult& aRv)
   AssertIsInMainProcess();
 
   if (mState != eStateUnknown) {
-    nsRefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
+    RefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
 
     nsCOMPtr<nsIRunnable> runnable =
       new IsActiveRunnable(GetOwner(), mFrameWindow, domRequest, mAudioChannel,
@@ -456,7 +450,7 @@ BrowserElementAudioChannel::IsActive(ErrorResult& aRv)
     return request.forget().downcast<DOMRequest>();
   }
 
-  nsRefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
+  RefPtr<DOMRequest> domRequest = new DOMRequest(GetOwner());
 
   nsCOMPtr<nsIRunnable> runnable =
     new IsActiveRunnable(GetOwner(), mFrameWindow, domRequest, mAudioChannel);

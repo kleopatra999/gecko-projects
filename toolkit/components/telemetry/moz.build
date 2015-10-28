@@ -22,6 +22,7 @@ EXPORTS.mozilla += [
 
 SOURCES += [
     'Telemetry.cpp',
+    'WebrtcTelemetry.cpp',
 ]
 
 EXTRA_COMPONENTS += [
@@ -36,15 +37,12 @@ EXTRA_JS_MODULES += [
     'TelemetryLog.jsm',
     'TelemetryReportingPolicy.jsm',
     'TelemetrySend.jsm',
+    'TelemetrySession.jsm',
     'TelemetryStopwatch.jsm',
     'TelemetryStorage.jsm',
     'TelemetryUtils.jsm',
     'ThirdPartyCookieProbe.jsm',
     'UITelemetry.jsm',
-]
-
-EXTRA_PP_JS_MODULES += [
-    'TelemetrySession.jsm',
 ]
 
 TESTING_JS_MODULES += [

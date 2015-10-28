@@ -187,6 +187,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
 XPCOMUtils.defineLazyServiceGetter(this, "WindowsUIUtils",
                                    "@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils");
 
+const ABOUT_NEWTAB = "about:newtab";
+
 const PREF_PLUGINS_NOTIFYUSER = "plugins.update.notifyUser";
 const PREF_PLUGINS_UPDATEURL  = "plugins.update.url";
 
@@ -642,9 +644,11 @@ BrowserGlue.prototype = {
 
     ExtensionManagement.registerScript("chrome://browser/content/ext-utils.js");
     ExtensionManagement.registerScript("chrome://browser/content/ext-browserAction.js");
+    ExtensionManagement.registerScript("chrome://browser/content/ext-pageAction.js");
     ExtensionManagement.registerScript("chrome://browser/content/ext-contextMenus.js");
     ExtensionManagement.registerScript("chrome://browser/content/ext-tabs.js");
     ExtensionManagement.registerScript("chrome://browser/content/ext-windows.js");
+    ExtensionManagement.registerScript("chrome://browser/content/ext-bookmarks.js");
 
     this._flashHangCount = 0;
   },
@@ -2473,6 +2477,48 @@ BrowserGlue.prototype = {
   _xpcom_factory: BrowserGlueServiceFactory,
 }
 
+// ------------------------------------
+// nsIAboutNewTabService implementation
+//-------------------------------------
+
+function AboutNewTabService()
+{
+  this._newTabURL = ABOUT_NEWTAB;
+  this._overridden = false;
+}
+
+AboutNewTabService.prototype = {
+  classID: Components.ID("{97eea4bb-db50-4ae0-9147-1e5ed55b4ed5}"),
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsIAboutNewTabService]),
+
+  get newTabURL() {
+    if (Services.prefs.getBoolPref("browser.newtabpage.remote")) {
+      return "about:remote-newtab";
+    }
+    return this._newTabURL;
+  },
+
+  set newTabURL(aNewTabURL) {
+    if (aNewTabURL === ABOUT_NEWTAB) {
+      this.resetNewTabURL();
+      return;
+    }
+    this._newTabURL = aNewTabURL;
+    this._overridden = true;
+    Services.obs.notifyObservers(null, "newtab-url-changed", this._newTabURL);
+  },
+
+  get overridden() {
+    return this._overridden;
+  },
+
+  resetNewTabURL: function() {
+    this._newTabURL = ABOUT_NEWTAB;
+    this._overridden = false;
+    Services.obs.notifyObservers(null, "newtab-url-changed", this._newTabURL);
+   }
+};
+
 function ContentPermissionPrompt() {}
 
 ContentPermissionPrompt.prototype = {
@@ -2621,22 +2667,38 @@ ContentPermissionPrompt.prototype = {
   },
 
   _promptWebNotifications : function(aRequest) {
-    var message = gBrowserBundle.GetStringFromName("webNotifications.showFromSite2");
+    var message = gBrowserBundle.GetStringFromName("webNotifications.receiveFromSite");
 
-    var actions = [
-      {
-        stringId: "webNotifications.alwaysShow",
-        action: Ci.nsIPermissionManager.ALLOW_ACTION,
-        expireType: null,
-        callback: function() {},
-      },
-      {
-        stringId: "webNotifications.neverShow",
-        action: Ci.nsIPermissionManager.DENY_ACTION,
-        expireType: null,
-        callback: function() {},
-      },
-    ];
+    var actions;
+
+    var browser = this._getBrowserForRequest(aRequest);
+    // Only show "allow for session" in PB mode, we don't
+    // support "allow for session" in non-PB mode.
+    if (PrivateBrowsingUtils.isBrowserPrivate(browser)) {
+      actions = [
+        {
+          stringId: "webNotifications.receiveForSession",
+          action: Ci.nsIPermissionManager.ALLOW_ACTION,
+          expireType: Ci.nsIPermissionManager.EXPIRE_SESSION,
+          callback: function() {},
+        }
+      ];
+    } else {
+      actions = [
+        {
+          stringId: "webNotifications.alwaysReceive",
+          action: Ci.nsIPermissionManager.ALLOW_ACTION,
+          expireType: null,
+          callback: function() {},
+        },
+        {
+          stringId: "webNotifications.neverShow",
+          action: Ci.nsIPermissionManager.DENY_ACTION,
+          expireType: null,
+          callback: function() {},
+        },
+      ];
+    }
 
     var options = {
       learnMoreURL: Services.urlFormatter.formatURLPref("browser.push.warning.infoURL"),
@@ -3217,7 +3279,7 @@ var E10SUINotification = {
 };
 #endif
 
-var components = [BrowserGlue, ContentPermissionPrompt];
+var components = [BrowserGlue, ContentPermissionPrompt, AboutNewTabService];
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory(components);
 
 

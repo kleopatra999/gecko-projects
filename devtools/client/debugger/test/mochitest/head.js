@@ -13,11 +13,11 @@ var gEnableLogging = Services.prefs.getBoolPref("devtools.debugger.log");
 Services.prefs.setBoolPref("devtools.debugger.log", false);
 
 var { Task } = Cu.import("resource://gre/modules/Task.jsm", {});
-var { Promise: promise } = Cu.import("resource://gre/modules/devtools/shared/deprecated-sync-thenables.js", {});
-var { gDevTools } = Cu.import("resource:///modules/devtools/client/framework/gDevTools.jsm", {});
-var { require } = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {});
+var { Promise: promise } = Cu.import("resource://devtools/shared/deprecated-sync-thenables.js", {});
+var { gDevTools } = Cu.import("resource://devtools/client/framework/gDevTools.jsm", {});
+var { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
-var { BrowserToolboxProcess } = Cu.import("resource:///modules/devtools/client/framework/ToolboxProcess.jsm", {});
+var { BrowserToolboxProcess } = Cu.import("resource://devtools/client/framework/ToolboxProcess.jsm", {});
 var { DebuggerServer } = require("devtools/server/main");
 var { DebuggerClient, ObjectClient } = require("devtools/shared/client/main");
 var { AddonManager } = Cu.import("resource://gre/modules/AddonManager.jsm", {});
@@ -1124,24 +1124,6 @@ function waitForWorkerClose(workerClient) {
   });
 }
 
-function waitForWorkerFreeze(workerClient) {
-  info("Waiting for worker to freeze.");
-  return new Promise(function (resolve) {
-    workerClient.addOneTimeListener("freeze", function () {
-      resolve();
-    });
-  });
-}
-
-function waitForWorkerThaw(workerClient) {
-  info("Waiting for worker to thaw.");
-  return new Promise(function (resolve) {
-    workerClient.addOneTimeListener("thaw", function () {
-      resolve();
-    });
-  });
-}
-
 function resume(threadClient) {
   info("Resuming thread.");
   return rdpInvoke(threadClient, threadClient.resume);
@@ -1205,6 +1187,31 @@ function afterDispatch(store, type) {
         action.status ? action.status === "done" : true
       ),
       run: resolve
+    });
+  });
+}
+
+// Return a promise with a reference to jsterm, opening the split
+// console if necessary.  This cleans up the split console pref so
+// it won't pollute other tests.
+function getSplitConsole(toolbox, win) {
+  registerCleanupFunction(() => {
+    Services.prefs.clearUserPref("devtools.toolbox.splitconsoleEnabled");
+  });
+
+  if (!win) {
+    win = toolbox.doc.defaultView;
+  }
+
+  if (!toolbox.splitConsole) {
+    EventUtils.synthesizeKey("VK_ESCAPE", {}, win);
+  }
+
+  return new Promise(resolve => {
+    toolbox.getPanelWhenReady("webconsole").then(() => {
+      ok(toolbox.splitConsole, "Split console is shown.");
+      let jsterm = toolbox.getPanel("webconsole").hud.jsterm;
+      resolve(jsterm);
     });
   });
 }

@@ -122,10 +122,6 @@ static_assert(MAX_WORKERS_PER_DOMAIN >= 1,
 #define CC_REQUEST_OBSERVER_TOPIC "child-cc-request"
 #define MEMORY_PRESSURE_OBSERVER_TOPIC "memory-pressure"
 
-#define PREF_GENERAL_APPNAME_OVERRIDE "general.appname.override"
-#define PREF_GENERAL_APPVERSION_OVERRIDE "general.appversion.override"
-#define PREF_GENERAL_PLATFORM_OVERRIDE "general.platform.override"
-
 #define BROADCAST_ALL_WORKERS(_func, ...)                                      \
   PR_BEGIN_MACRO                                                               \
     AssertIsOnMainThread();                                                    \
@@ -151,26 +147,6 @@ static_assert(MAX_WORKERS_PER_DOMAIN >= 1,
 #define PREF_WORKERS_OPTIONS_PREFIX PREF_WORKERS_PREFIX "options."
 #define PREF_MEM_OPTIONS_PREFIX "mem."
 #define PREF_GCZEAL "gcZeal"
-
-#if !(defined(DEBUG) || defined(MOZ_ENABLE_JS_DUMP))
-#define DUMP_CONTROLLED_BY_PREF 1
-#define PREF_DOM_WINDOW_DUMP_ENABLED "browser.dom.window.dump.enabled"
-#endif
-
-#define PREF_DOM_CACHES_ENABLED        "dom.caches.enabled"
-#define PREF_DOM_CACHES_TESTING_ENABLED "dom.caches.testing.enabled"
-#define PREF_WORKERS_PERFORMANCE_LOGGING_ENABLED "dom.performance.enable_user_timing_logging"
-#define PREF_DOM_WORKERNOTIFICATION_ENABLED  "dom.webnotifications.enabled"
-#define PREF_DOM_SERVICEWORKERNOTIFICATION_ENABLED  "dom.webnotifications.serviceworker.enabled"
-#define PREF_WORKERS_LATEST_JS_VERSION "dom.workers.latestJSVersion"
-#define PREF_INTL_ACCEPT_LANGUAGES     "intl.accept_languages"
-#define PREF_SERVICEWORKERS_ENABLED    "dom.serviceWorkers.enabled"
-#define PREF_SERVICEWORKERS_TESTING_ENABLED "dom.serviceWorkers.testing.enabled"
-#define PREF_INTERCEPTION_ENABLED      "dom.serviceWorkers.interception.enabled"
-#define PREF_INTERCEPTION_OPAQUE_ENABLED "dom.serviceWorkers.interception.opaque.enabled"
-#define PREF_PUSH_ENABLED              "dom.push.enabled"
-#define PREF_REQUESTCONTEXT_ENABLED    "dom.requestcontext.enabled"
-#define PREF_OFFSCREENCANVAS_ENABLED   "gfx.offscreencanvas.enabled"
 
 namespace {
 
@@ -674,7 +650,7 @@ ContentSecurityPolicyAllows(JSContext* aCx)
       JS_ReportPendingException(aCx);
     }
 
-    nsRefPtr<LogViolationDetailsRunnable> runnable =
+    RefPtr<LogViolationDetailsRunnable> runnable =
         new LogViolationDetailsRunnable(worker, fileName, lineNum);
 
     if (!runnable->Dispatch(aCx)) {
@@ -1083,12 +1059,12 @@ private:
 class WorkerThreadPrimaryRunnable final : public nsRunnable
 {
   WorkerPrivate* mWorkerPrivate;
-  nsRefPtr<WorkerThread> mThread;
+  RefPtr<WorkerThread> mThread;
   JSRuntime* mParentRuntime;
 
   class FinishedRunnable final : public nsRunnable
   {
-    nsRefPtr<WorkerThread> mThread;
+    RefPtr<WorkerThread> mThread;
 
   public:
     explicit FinishedRunnable(already_AddRefed<WorkerThread> aThread)
@@ -1130,7 +1106,7 @@ private:
 
 class WorkerTaskRunnable final : public WorkerRunnable
 {
-  nsRefPtr<WorkerTask> mTask;
+  RefPtr<WorkerTask> mTask;
 
 public:
   WorkerTaskRunnable(WorkerPrivate* aWorkerPrivate, WorkerTask* aTask)
@@ -1181,7 +1157,7 @@ AppNameOverrideChanged(const char* /* aPrefName */, void* /* aClosure */)
   AssertIsOnMainThread();
 
   const nsAdoptingString& override =
-    mozilla::Preferences::GetString(PREF_GENERAL_APPNAME_OVERRIDE);
+    mozilla::Preferences::GetString("general.appname.override");
 
   RuntimeService* runtime = RuntimeService::GetService();
   if (runtime) {
@@ -1195,7 +1171,7 @@ AppVersionOverrideChanged(const char* /* aPrefName */, void* /* aClosure */)
   AssertIsOnMainThread();
 
   const nsAdoptingString& override =
-    mozilla::Preferences::GetString(PREF_GENERAL_APPVERSION_OVERRIDE);
+    mozilla::Preferences::GetString("general.appversion.override");
 
   RuntimeService* runtime = RuntimeService::GetService();
   if (runtime) {
@@ -1209,7 +1185,7 @@ PlatformOverrideChanged(const char* /* aPrefName */, void* /* aClosure */)
   AssertIsOnMainThread();
 
   const nsAdoptingString& override =
-    mozilla::Preferences::GetString(PREF_GENERAL_PLATFORM_OVERRIDE);
+    mozilla::Preferences::GetString("general.platform.override");
 
   RuntimeService* runtime = RuntimeService::GetService();
   if (runtime) {
@@ -1326,7 +1302,7 @@ WorkerCrossThreadDispatcher::PostTask(WorkerTask* aTask)
     return false;
   }
 
-  nsRefPtr<WorkerTaskRunnable> runnable =
+  RefPtr<WorkerTaskRunnable> runnable =
     new WorkerTaskRunnable(mWorkerPrivate, aTask);
   return runnable->Dispatch(nullptr);
 }
@@ -1383,7 +1359,7 @@ END_WORKERS_NAMESPACE
 
 struct RuntimeService::IdleThreadInfo
 {
-  nsRefPtr<WorkerThread> mThread;
+  RefPtr<WorkerThread> mThread;
   mozilla::TimeStamp mExpirationTime;
 };
 
@@ -1729,7 +1705,7 @@ RuntimeService::ScheduleWorker(JSContext* aCx, WorkerPrivate* aWorkerPrivate)
     return true;
   }
 
-  nsRefPtr<WorkerThread> thread;
+  RefPtr<WorkerThread> thread;
   {
     MutexAutoLock lock(mMutex);
     if (!mIdleThreadArray.IsEmpty()) {
@@ -1785,7 +1761,7 @@ RuntimeService::ShutdownIdleThreads(nsITimer* aTimer, void* /* aClosure */)
 
   TimeStamp nextExpiration;
 
-  nsAutoTArray<nsRefPtr<WorkerThread>, 20> expiredThreads;
+  nsAutoTArray<RefPtr<WorkerThread>, 20> expiredThreads;
   {
     MutexAutoLock lock(runtime->mMutex);
 
@@ -1797,7 +1773,7 @@ RuntimeService::ShutdownIdleThreads(nsITimer* aTimer, void* /* aClosure */)
         break;
       }
 
-      nsRefPtr<WorkerThread>* thread = expiredThreads.AppendElement();
+      RefPtr<WorkerThread>* thread = expiredThreads.AppendElement();
       thread->swap(info.mThread);
     }
 
@@ -1835,7 +1811,7 @@ RuntimeService::Init()
   // Make sure PBackground actors are connected as soon as possible for the main
   // thread in case workers clone remote blobs here.
   if (!BackgroundChild::GetForCurrentThread()) {
-    nsRefPtr<BackgroundChildCallback> callback = new BackgroundChildCallback();
+    RefPtr<BackgroundChildCallback> callback = new BackgroundChildCallback();
     if (!BackgroundChild::GetOrCreateForCurrentThread(callback)) {
       MOZ_CRASH("Unable to connect PBackground actor for the main thread!");
     }
@@ -1855,11 +1831,6 @@ RuntimeService::Init()
     SetDefaultJSGCSettings(JSGC_ALLOCATION_THRESHOLD,
                            WORKER_DEFAULT_ALLOCATION_THRESHOLD);
   }
-
-// If dump is not controlled by pref, it's set to true.
-#ifndef DUMP_CONTROLLED_BY_PREF
-  sDefaultPreferences[WORKERPREF_DUMP] = true;
-#endif
 
   mIdleThreadTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
   NS_ENSURE_STATE(mIdleThreadTimer);
@@ -1909,91 +1880,29 @@ RuntimeService::Init()
                                              LoadGCZealOptions,
                                              PREF_JS_OPTIONS_PREFIX PREF_GCZEAL,
                                              nullptr)) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                        LoadGCZealOptions,
-                                        PREF_WORKERS_OPTIONS_PREFIX PREF_GCZEAL,
-                                        nullptr)) ||
 #endif
-#if DUMP_CONTROLLED_BY_PREF
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_WINDOW_DUMP_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DUMP))) ||
-#endif
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_CACHES_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DOM_CACHES))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_WORKERNOTIFICATION_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DOM_WORKERNOTIFICATION))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_SERVICEWORKERNOTIFICATION_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DOM_SERVICEWORKERNOTIFICATION))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_SERVICEWORKERS_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_SERVICEWORKERS))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_INTERCEPTION_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_INTERCEPTION_ENABLED))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_INTERCEPTION_OPAQUE_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_INTERCEPTION_OPAQUE_ENABLED))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_CACHES_TESTING_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DOM_CACHES_TESTING))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_WORKERS_PERFORMANCE_LOGGING_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_PERFORMANCE_LOGGING_ENABLED))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_SERVICEWORKERS_TESTING_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_SERVICEWORKERS_TESTING))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_PUSH_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_PUSH))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_REQUESTCONTEXT_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_REQUESTCONTEXT))) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                  WorkerPrefChanged,
-                                  PREF_OFFSCREENCANVAS_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_OFFSCREENCANVAS))) ||
-      NS_FAILED(Preferences::RegisterCallback(LoadRuntimeOptions,
-                                              PREF_JS_OPTIONS_PREFIX,
-                                              nullptr)) ||
+
+#define WORKER_SIMPLE_PREF(name, getter, NAME)                                \
+      NS_FAILED(Preferences::RegisterCallbackAndCall(                         \
+                  WorkerPrefChanged,                                          \
+                  name,                                                       \
+                  reinterpret_cast<void*>(WORKERPREF_##NAME))) ||
+#define WORKER_PREF(name, callback)                                           \
+      NS_FAILED(Preferences::RegisterCallbackAndCall(                         \
+                  callback,                                                   \
+                  name,                                                       \
+                  nullptr)) ||
+#include "WorkerPrefs.h"
+#undef WORKER_SIMPLE_PREF
+#undef WORKER_PREF
+
       NS_FAILED(Preferences::RegisterCallbackAndCall(
                                                    LoadRuntimeOptions,
                                                    PREF_WORKERS_OPTIONS_PREFIX,
                                                    nullptr)) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(PrefLanguagesChanged,
-                                                     PREF_INTL_ACCEPT_LANGUAGES,
-                                                     nullptr)) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                                  AppNameOverrideChanged,
-                                                  PREF_GENERAL_APPNAME_OVERRIDE,
-                                                  nullptr)) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                               AppVersionOverrideChanged,
-                                               PREF_GENERAL_APPVERSION_OVERRIDE,
-                                               nullptr)) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                                 PlatformOverrideChanged,
-                                                 PREF_GENERAL_PLATFORM_OVERRIDE,
-                                                 nullptr)) ||
-      NS_FAILED(Preferences::RegisterCallbackAndCall(
-                                                 JSVersionChanged,
-                                                 PREF_WORKERS_LATEST_JS_VERSION,
-                                                 nullptr))) {
+      NS_FAILED(Preferences::RegisterCallback(LoadRuntimeOptions,
+                                              PREF_JS_OPTIONS_PREFIX,
+                                              nullptr))) {
     NS_WARNING("Failed to register pref callbacks!");
   }
 
@@ -2106,7 +2015,7 @@ RuntimeService::Cleanup()
 
       // Shut down any idle threads.
       if (!mIdleThreadArray.IsEmpty()) {
-        nsAutoTArray<nsRefPtr<WorkerThread>, 20> idleThreads;
+        nsAutoTArray<RefPtr<WorkerThread>, 20> idleThreads;
 
         uint32_t idleThreadCount = mIdleThreadArray.Length();
         idleThreads.SetLength(idleThreadCount);
@@ -2143,89 +2052,32 @@ RuntimeService::Cleanup()
   NS_ASSERTION(!mWindowMap.Count(), "All windows should have been released!");
 
   if (mObserved) {
-    if (NS_FAILED(Preferences::UnregisterCallback(JSVersionChanged,
-                                                  PREF_WORKERS_LATEST_JS_VERSION,
-                                                  nullptr)) ||
-        NS_FAILED(Preferences::UnregisterCallback(AppNameOverrideChanged,
-                                                  PREF_GENERAL_APPNAME_OVERRIDE,
-                                                  nullptr)) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                               AppVersionOverrideChanged,
-                                               PREF_GENERAL_APPVERSION_OVERRIDE,
-                                               nullptr)) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                                 PlatformOverrideChanged,
-                                                 PREF_GENERAL_PLATFORM_OVERRIDE,
-                                                 nullptr)) ||
-        NS_FAILED(Preferences::UnregisterCallback(LoadRuntimeOptions,
+    if (NS_FAILED(Preferences::UnregisterCallback(LoadRuntimeOptions,
                                                   PREF_JS_OPTIONS_PREFIX,
                                                   nullptr)) ||
         NS_FAILED(Preferences::UnregisterCallback(LoadRuntimeOptions,
                                                   PREF_WORKERS_OPTIONS_PREFIX,
                                                   nullptr)) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_SERVICEWORKERS_TESTING_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_SERVICEWORKERS_TESTING))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_CACHES_TESTING_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DOM_CACHES_TESTING))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_WORKERS_PERFORMANCE_LOGGING_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_PERFORMANCE_LOGGING_ENABLED))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_INTERCEPTION_OPAQUE_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_INTERCEPTION_OPAQUE_ENABLED))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_INTERCEPTION_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_INTERCEPTION_ENABLED))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_SERVICEWORKERS_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_SERVICEWORKERS))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_CACHES_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DOM_CACHES))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_WORKERNOTIFICATION_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DOM_WORKERNOTIFICATION))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_SERVICEWORKERNOTIFICATION_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DOM_SERVICEWORKERNOTIFICATION))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_PUSH_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_PUSH))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_REQUESTCONTEXT_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_REQUESTCONTEXT))) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_OFFSCREENCANVAS_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_OFFSCREENCANVAS))) ||
-#if DUMP_CONTROLLED_BY_PREF
-        NS_FAILED(Preferences::UnregisterCallback(
-                                  WorkerPrefChanged,
-                                  PREF_DOM_WINDOW_DUMP_ENABLED,
-                                  reinterpret_cast<void *>(WORKERPREF_DUMP))) ||
-#endif
+
+#define WORKER_SIMPLE_PREF(name, getter, NAME)                                \
+      NS_FAILED(Preferences::UnregisterCallback(                              \
+                  WorkerPrefChanged,                                          \
+                  name,                                                       \
+                  reinterpret_cast<void*>(WORKERPREF_##NAME))) ||
+#define WORKER_PREF(name, callback)                                           \
+      NS_FAILED(Preferences::UnregisterCallback(                              \
+                  callback,                                                   \
+                  name,                                                       \
+                  nullptr)) ||
+#include "WorkerPrefs.h"
+#undef WORKER_SIMPLE_PREF
+#undef WORKER_PREF
+
 #ifdef JS_GC_ZEAL
         NS_FAILED(Preferences::UnregisterCallback(
                                              LoadGCZealOptions,
                                              PREF_JS_OPTIONS_PREFIX PREF_GCZEAL,
                                              nullptr)) ||
-        NS_FAILED(Preferences::UnregisterCallback(
-                                        LoadGCZealOptions,
-                                        PREF_WORKERS_OPTIONS_PREFIX PREF_GCZEAL,
-                                        nullptr)) ||
 #endif
         NS_FAILED(Preferences::UnregisterCallback(
                                  LoadJSGCMemoryOptions,
@@ -2496,7 +2348,7 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
   MOZ_ASSERT(aLoadInfo);
   MOZ_ASSERT(aLoadInfo->mResolvedScriptURI);
 
-  nsRefPtr<WorkerPrivate> workerPrivate;
+  RefPtr<WorkerPrivate> workerPrivate;
   {
     MutexAutoLock lock(mMutex);
 
@@ -2541,12 +2393,12 @@ RuntimeService::CreateSharedWorkerFromLoadInfo(JSContext* aCx,
 
   // We don't actually care about this MessageChannel, but we use it to 'steal'
   // its 2 connected ports.
-  nsRefPtr<MessageChannel> channel = MessageChannel::Constructor(window, rv);
+  RefPtr<MessageChannel> channel = MessageChannel::Constructor(window, rv);
   if (NS_WARN_IF(rv.Failed())) {
     return rv.StealNSResult();
   }
 
-  nsRefPtr<SharedWorker> sharedWorker = new SharedWorker(window, workerPrivate,
+  RefPtr<SharedWorker> sharedWorker = new SharedWorker(window, workerPrivate,
                                                          channel->Port1());
 
   if (!workerPrivate->RegisterSharedWorker(aCx, sharedWorker,
@@ -2775,21 +2627,11 @@ RuntimeService::WorkerPrefChanged(const char* aPrefName, void* aClosure)
     static_cast<WorkerPreference>(reinterpret_cast<uintptr_t>(aClosure));
 
   switch (key) {
-    case WORKERPREF_DOM_CACHES:
-    case WORKERPREF_DOM_CACHES_TESTING:
-    case WORKERPREF_DOM_WORKERNOTIFICATION:
-    case WORKERPREF_DOM_SERVICEWORKERNOTIFICATION:
-    case WORKERPREF_PERFORMANCE_LOGGING_ENABLED:
-#ifdef DUMP_CONTROLLED_BY_PREF
-    case WORKERPREF_DUMP:
-#endif
-    case WORKERPREF_INTERCEPTION_ENABLED:
-    case WORKERPREF_INTERCEPTION_OPAQUE_ENABLED:
-    case WORKERPREF_SERVICEWORKERS:
-    case WORKERPREF_SERVICEWORKERS_TESTING:
-    case WORKERPREF_PUSH:
-    case WORKERPREF_REQUESTCONTEXT:
-    case WORKERPREF_OFFSCREENCANVAS:
+#define WORKER_SIMPLE_PREF(name, getter, NAME) case WORKERPREF_##NAME:
+#define WORKER_PREF(name, callback)
+#include "WorkerPrefs.h"
+#undef WORKER_SIMPLE_PREF
+#undef WORKER_PREF
       sDefaultPreferences[key] = Preferences::GetBool(aPrefName, false);
       break;
 
@@ -2809,7 +2651,7 @@ RuntimeService::JSVersionChanged(const char* /* aPrefName */, void* /* aClosure 
 {
   AssertIsOnMainThread();
 
-  bool useLatest = Preferences::GetBool(PREF_WORKERS_LATEST_JS_VERSION, false);
+  bool useLatest = Preferences::GetBool("dom.workers.latestJSVersion", false);
   JS::CompartmentOptions& options = sDefaultJSSettings.content.compartmentOptions;
   options.setVersion(useLatest ? JSVERSION_LATEST : JSVERSION_DEFAULT);
 }
@@ -2832,7 +2674,7 @@ LogViolationDetailsRunnable::Run()
     }
   }
 
-  nsRefPtr<MainThreadStopSyncLoopRunnable> response =
+  RefPtr<MainThreadStopSyncLoopRunnable> response =
     new MainThreadStopSyncLoopRunnable(mWorkerPrivate, mSyncLoopTarget.forget(),
                                        true);
   MOZ_ALWAYS_TRUE(response->Dispatch(nullptr));
@@ -2951,7 +2793,7 @@ WorkerThreadPrimaryRunnable::Run()
   nsCOMPtr<nsIThread> mainThread = do_GetMainThread();
   MOZ_ASSERT(mainThread);
 
-  nsRefPtr<FinishedRunnable> finishedRunnable =
+  RefPtr<FinishedRunnable> finishedRunnable =
     new FinishedRunnable(mThread.forget());
   MOZ_ALWAYS_TRUE(NS_SUCCEEDED(mainThread->Dispatch(finishedRunnable,
                                                     NS_DISPATCH_NORMAL)));
@@ -2996,7 +2838,7 @@ WorkerThreadPrimaryRunnable::FinishedRunnable::Run()
 {
   AssertIsOnMainThread();
 
-  nsRefPtr<WorkerThread> thread;
+  RefPtr<WorkerThread> thread;
   mThread.swap(thread);
 
   RuntimeService* rts = RuntimeService::GetService();

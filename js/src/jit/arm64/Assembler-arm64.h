@@ -34,14 +34,14 @@ static constexpr ARMRegister ScratchReg64 = { ScratchReg, 64 };
 static constexpr Register ScratchReg2 = { Registers::ip1 };
 static constexpr ARMRegister ScratchReg2_64 = { ScratchReg2, 64 };
 
-static constexpr FloatRegister ScratchDoubleReg = { FloatRegisters::d31 };
-static constexpr FloatRegister ReturnDoubleReg = { FloatRegisters::d0 };
+static constexpr FloatRegister ScratchDoubleReg = { FloatRegisters::d31, FloatRegisters::Double };
+static constexpr FloatRegister ReturnDoubleReg = { FloatRegisters::d0, FloatRegisters::Double };
 
-static constexpr FloatRegister ReturnFloat32Reg = { FloatRegisters::s0 , FloatRegisters::Single };
-static constexpr FloatRegister ScratchFloat32Reg = { FloatRegisters::s31 , FloatRegisters::Single };
+static constexpr FloatRegister ReturnFloat32Reg = { FloatRegisters::s0, FloatRegisters::Single };
+static constexpr FloatRegister ScratchFloat32Reg = { FloatRegisters::s31, FloatRegisters::Single };
 
 static constexpr Register InvalidReg = { Registers::invalid_reg };
-static constexpr FloatRegister InvalidFloatReg = { FloatRegisters::invalid_fpreg };
+static constexpr FloatRegister InvalidFloatReg = { FloatRegisters::invalid_fpreg, FloatRegisters::Single };
 
 static constexpr FloatRegister ReturnInt32x4Reg = InvalidFloatReg;
 static constexpr FloatRegister ReturnFloat32x4Reg = InvalidFloatReg;
@@ -63,9 +63,6 @@ static constexpr Register FramePointer = { Registers::fp };
 static constexpr Register ZeroRegister = { Registers::sp };
 static constexpr ARMRegister ZeroRegister64 = { Registers::sp, 64 };
 static constexpr ARMRegister ZeroRegister32 = { Registers::sp, 32 };
-
-static constexpr FloatRegister ReturnFloatReg = { FloatRegisters::d0 };
-static constexpr FloatRegister ScratchFloatReg = { FloatRegisters::d31 };
 
 static constexpr FloatRegister ReturnSimdReg = InvalidFloatReg;
 static constexpr FloatRegister ScratchSimdReg = InvalidFloatReg;
@@ -142,7 +139,7 @@ static constexpr Register AsmJSIonExitRegD2 = r4;
 static constexpr Register JSReturnReg_Type = r3;
 static constexpr Register JSReturnReg_Data = r2;
 
-static constexpr FloatRegister NANReg = { FloatRegisters::d14 };
+static constexpr FloatRegister NANReg = { FloatRegisters::d14, FloatRegisters::Single };
 // N.B. r8 isn't listed as an aapcs temp register, but we can use it as such because we never
 // use return-structs.
 static constexpr Register CallTempNonArgRegs[] = { r8, r9, r10, r11, r12, r13, r14, r15 };
@@ -236,25 +233,15 @@ class Assembler : public vixl::Assembler
             preBarrierTableBytes();
     }
 
-    void addCodeLabel(CodeLabel label) {
-        propagateOOM(codeLabels_.append(label));
-    }
-    size_t numCodeLabels() const {
-        return codeLabels_.length();
-    }
-    CodeLabel codeLabel(size_t i) {
-        return codeLabels_[i];
-    }
     void processCodeLabels(uint8_t* rawCode) {
         for (size_t i = 0; i < codeLabels_.length(); i++) {
             CodeLabel label = codeLabels_[i];
-            Bind(rawCode, label.dest(), rawCode + actualOffset(label.src()->offset()));
+            Bind(rawCode, label.dest(), rawCode + label.src()->offset());
         }
     }
 
     void Bind(uint8_t* rawCode, AbsoluteLabel* label, const void* address) {
-        uint32_t off = actualOffset(label->offset());
-        *reinterpret_cast<const void**>(rawCode + off) = address;
+        *reinterpret_cast<const void**>(rawCode + label->offset()) = address;
     }
     bool nextLink(BufferOffset cur, BufferOffset* next) {
         Instruction* link = getInstructionAt(cur);
@@ -272,16 +259,11 @@ class Assembler : public vixl::Assembler
         armbuffer_.flushPool();
     }
 
-    int actualOffset(int curOffset) {
-        return curOffset + armbuffer_.poolSizeBefore(curOffset);
-    }
     int actualIndex(int curOffset) {
         ARMBuffer::PoolEntry pe(curOffset);
         return armbuffer_.poolEntryOffset(pe);
     }
-    int labelOffsetToPatchOffset(int labelOff) {
-        return actualOffset(labelOff);
-    }
+    size_t labelOffsetToPatchOffset(size_t labelOff) { return labelOff; }
     static uint8_t* PatchableJumpAddress(JitCode* code, uint32_t index) {
         return code->raw() + index;
     }
@@ -356,11 +338,6 @@ class Assembler : public vixl::Assembler
     static void FixupNurseryObjects(JSContext* cx, JitCode* code, CompactBufferReader& reader,
                                     const ObjectVector& nurseryObjects);
 
-    // Convert a BufferOffset to a final byte offset from the start of the code buffer.
-    size_t toFinalOffset(BufferOffset offset) {
-        return size_t(offset.getOffset() + armbuffer_.poolSizeBefore(offset.getOffset()));
-    }
-
   public:
     // A Jump table entry is 2 instructions, with 8 bytes of raw data
     static const size_t SizeOfJumpTableEntry = 16;
@@ -416,13 +393,6 @@ class Assembler : public vixl::Assembler
         { }
     };
 
-    // Because ARM and A64 use a code buffer that allows for constant pool insertion,
-    // the actual offset of each jump cannot be known until finalization.
-    // These vectors store the WIP offsets.
-    js::Vector<BufferOffset, 0, SystemAllocPolicy> tmpDataRelocations_;
-    js::Vector<BufferOffset, 0, SystemAllocPolicy> tmpPreBarriers_;
-    js::Vector<JumpRelocation, 0, SystemAllocPolicy> tmpJumpRelocations_;
-
     // Structure for fixing up pc-relative loads/jumps when the machine
     // code gets moved (executable copy, gc, etc.).
     struct RelativePatch
@@ -435,8 +405,6 @@ class Assembler : public vixl::Assembler
           : offset(offset), target(target), kind(kind)
         { }
     };
-
-    js::Vector<CodeLabel, 0, SystemAllocPolicy> codeLabels_;
 
     // List of jumps for which the target is either unknown until finalization,
     // or cannot be known due to GC. Each entry here requires a unique entry

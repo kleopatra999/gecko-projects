@@ -142,7 +142,7 @@ loop.panel = (function(_, mozL10n) {
             {mozL10n.get("powered_by_afterLogo")}
           </p>
           <p className="terms-service"
-             dangerouslySetInnerHTML={{__html: tosHTML}}
+             dangerouslySetInnerHTML={{ __html: tosHTML }}
              onClick={this.handleLinkClick}></p>
          </div>
       );
@@ -161,7 +161,7 @@ loop.panel = (function(_, mozL10n) {
     },
 
     getDefaultProps: function() {
-      return {displayed: true};
+      return { displayed: true };
     },
 
     render: function() {
@@ -225,6 +225,16 @@ loop.panel = (function(_, mozL10n) {
       this.hideDropdownMenu();
     },
 
+    /**
+     * Load on the browser the feedback url from prefs
+     */
+    handleSubmitFeedback: function(event) {
+      event.preventDefault();
+      var helloFeedbackUrl = this.props.mozLoop.getLoopPref("feedback.formURL");
+      this.props.mozLoop.openURL(helloFeedbackUrl);
+      this.closeWindow();
+    },
+
     _isSignedIn: function() {
       return !!this.props.mozLoop.userProfile;
     },
@@ -247,7 +257,7 @@ loop.panel = (function(_, mozL10n) {
              onClick={this.toggleDropdownMenu}
              ref="menu-button"
              title={mozL10n.get("settings_menu_button_tooltip")} />
-          <ul className={cx({"dropdown-menu": true, hide: !this.state.showMenu})}>
+          <ul className={cx({ "dropdown-menu": true, hide: !this.state.showMenu })}>
             <SettingsDropdownEntry
                 extraCSSClass="entry-settings-notifications entries-divider"
                 label={mozL10n.get(notificationsLabel)}
@@ -262,6 +272,9 @@ loop.panel = (function(_, mozL10n) {
                                    onClick={this.handleClickSettingsEntry} />
             <SettingsDropdownEntry label={mozL10n.get("tour_label")}
                                    onClick={this.openGettingStartedTour} />
+            <SettingsDropdownEntry extraCSSClass="entry-settings-feedback"
+                                   label={mozL10n.get("settings_menu_item_feedback")}
+                                   onClick={this.handleSubmitFeedback} />
             <SettingsDropdownEntry displayed={this.props.mozLoop.fxAEnabled}
                                    extraCSSClass={accountEntryCSSClass}
                                    label={this._isSignedIn() ?
@@ -649,10 +662,10 @@ loop.panel = (function(_, mozL10n) {
     _renderLoadingRoomsView: function() {
       return (
         <div className="room-list">
+          {this._renderNewRoomButton()}
           <div className="room-list-loading">
             <img src="loop/shared/img/animated-spinner.svg" />
           </div>
-          {this._renderNewRoomButton()}
         </div>
       );
     },
@@ -660,6 +673,7 @@ loop.panel = (function(_, mozL10n) {
     _renderNoRoomsView: function() {
       return (
         <div className="rooms">
+          {this._renderNewRoomButton()}
           <div className="room-list-empty">
             <div className="no-conversations-message">
               <p className="panel-text-medium">
@@ -670,7 +684,6 @@ loop.panel = (function(_, mozL10n) {
               </p>
             </div>
           </div>
-          {this._renderNewRoomButton()}
         </div>
       );
     },
@@ -678,6 +691,7 @@ loop.panel = (function(_, mozL10n) {
     _renderNewRoomButton: function() {
       return (
         <NewRoomView dispatcher={this.props.dispatcher}
+          inRoom={this.state.openedRoom !== null}
           mozLoop={this.props.mozLoop}
           pendingOperation={this.state.pendingCreation ||
                             this.state.pendingInitialRetrieval} />
@@ -700,6 +714,7 @@ loop.panel = (function(_, mozL10n) {
 
       return (
         <div className="rooms">
+          {this._renderNewRoomButton()}
           <h1>{mozL10n.get("rooms_list_recent_conversations")}</h1>
           <div className="room-list">{
             this.state.rooms.map(function(room, i) {
@@ -712,7 +727,6 @@ loop.panel = (function(_, mozL10n) {
               );
             }, this)
           }</div>
-          {this._renderNewRoomButton()}
         </div>
       );
     }
@@ -724,6 +738,7 @@ loop.panel = (function(_, mozL10n) {
   var NewRoomView = React.createClass({
     propTypes: {
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher).isRequired,
+      inRoom: React.PropTypes.bool.isRequired,
       mozLoop: React.PropTypes.object.isRequired,
       pendingOperation: React.PropTypes.bool.isRequired
     },
@@ -778,14 +793,24 @@ loop.panel = (function(_, mozL10n) {
       this.props.dispatcher.dispatch(createRoomAction);
     },
 
+    handleStopSharingButtonClick: function() {
+      this.props.mozLoop.hangupAllChatWindows();
+    },
+
     render: function() {
       return (
         <div className="new-room-view">
-          <button className="btn btn-info new-room-button"
-                  disabled={this.props.pendingOperation}
-                  onClick={this.handleCreateButtonClick}>
-            {mozL10n.get("rooms_new_room_button_label")}
-          </button>
+          {this.props.inRoom ?
+            <button className="btn btn-info stop-sharing-button"
+              disabled={this.props.pendingOperation}
+              onClick={this.handleStopSharingButtonClick}>
+              {mozL10n.get("panel_stop_sharing_tabs_button")}
+            </button> :
+            <button className="btn btn-info new-room-button"
+              disabled={this.props.pendingOperation}
+              onClick={this.handleCreateButtonClick}>
+              {mozL10n.get("panel_browse_with_friend_button")}
+            </button>}
         </div>
       );
     }
@@ -846,9 +871,9 @@ loop.panel = (function(_, mozL10n) {
       var newUid = profile ? profile.uid : null;
       if (currUid === newUid) {
         // Update the state of hasEncryptionKey as this might have changed now.
-        this.setState({hasEncryptionKey: this.props.mozLoop.hasEncryptionKey});
+        this.setState({ hasEncryptionKey: this.props.mozLoop.hasEncryptionKey });
       } else {
-        this.setState({userProfile: profile});
+        this.setState({ userProfile: profile });
       }
       this.updateServiceErrors();
     },

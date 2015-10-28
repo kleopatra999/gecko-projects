@@ -245,8 +245,8 @@ void nsBaseWidget::DestroyCompositor()
   if (mCompositorChild) {
     // XXX CompositorChild and CompositorParent might be re-created in
     // ClientLayerManager destructor. See bug 1133426.
-    nsRefPtr<CompositorChild> compositorChild = mCompositorChild;
-    nsRefPtr<CompositorParent> compositorParent = mCompositorParent;
+    RefPtr<CompositorChild> compositorChild = mCompositorChild;
+    RefPtr<CompositorParent> compositorParent = mCompositorParent;
     mCompositorChild->Destroy();
   }
 
@@ -870,7 +870,7 @@ void nsBaseWidget::CreateCompositor()
 already_AddRefed<GeckoContentController>
 nsBaseWidget::CreateRootContentController()
 {
-  nsRefPtr<GeckoContentController> controller = new ChromeProcessController(this, mAPZEventState, mAPZC);
+  RefPtr<GeckoContentController> controller = new ChromeProcessController(this, mAPZEventState, mAPZC);
   return controller.forget();
 }
 
@@ -882,7 +882,7 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
 
   mAPZC->SetDPI(GetDPI());
 
-  nsRefPtr<APZCTreeManager> treeManager = mAPZC;  // for capture by the lambdas
+  RefPtr<APZCTreeManager> treeManager = mAPZC;  // for capture by the lambdas
 
   ContentReceivedInputBlockCallback callback(
       [treeManager](const ScrollableLayerGuid& aGuid,
@@ -905,10 +905,18 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
         aInputBlockId, aFlags));
   };
 
-  nsRefPtr<GeckoContentController> controller = CreateRootContentController();
+  RefPtr<GeckoContentController> controller = CreateRootContentController();
   if (controller) {
     uint64_t rootLayerTreeId = mCompositorParent->RootLayerTreeId();
     CompositorParent::SetControllerForLayerTree(rootLayerTreeId, controller);
+  }
+
+  // When APZ is enabled, we can actually enable raw touch events because we
+  // have code that can deal with them properly. If APZ is not enabled, this
+  // function doesn't get called.
+  if (Preferences::GetInt("dom.w3c_touch_events.enabled", 0) ||
+      Preferences::GetBool("dom.w3c_pointer_events.enabled", false)) {
+    RegisterTouchWindow();
   }
 }
 
@@ -1088,7 +1096,7 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 
   CreateCompositorVsyncDispatcher();
   mCompositorParent = NewCompositorParent(aWidth, aHeight);
-  nsRefPtr<ClientLayerManager> lm = new ClientLayerManager(this);
+  RefPtr<ClientLayerManager> lm = new ClientLayerManager(this);
   mCompositorChild = new CompositorChild(lm);
   mCompositorChild->OpenSameProcess(mCompositorParent);
 
@@ -2023,8 +2031,14 @@ IMENotification::TextChangeDataBase::MergeWith(
   const TextChangeDataBase& newData = aOther;
   const TextChangeDataBase oldData = *this;
 
+  // mCausedByComposition should be true only when all changes are caused by
+  // composition.
   mCausedByComposition =
     newData.mCausedByComposition && oldData.mCausedByComposition;
+  // mOccurredDuringComposition should be true only when all changes occurred
+  // during composition.
+  mOccurredDuringComposition =
+    newData.mOccurredDuringComposition && oldData.mOccurredDuringComposition;
 
   if (newData.mStartOffset >= oldData.mAddedEndOffset) {
     // Case 1:
@@ -2180,8 +2194,8 @@ IMENotification::TextChangeDataBase::Test()
    ****************************************************************************/
 
   // Appending text
-  MergeWith(TextChangeData(10, 10, 20, false));
-  MergeWith(TextChangeData(20, 20, 35, false));
+  MergeWith(TextChangeData(10, 10, 20, false, false));
+  MergeWith(TextChangeData(20, 20, 35, false, false));
   MOZ_ASSERT(mStartOffset == 10,
     "Test 1-1-1: mStartOffset should be the first offset");
   MOZ_ASSERT(mRemovedEndOffset == 10, // 20 - (20 - 10)
@@ -2191,8 +2205,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Removing text (longer line -> shorter line)
-  MergeWith(TextChangeData(10, 20, 10, false));
-  MergeWith(TextChangeData(10, 30, 10, false));
+  MergeWith(TextChangeData(10, 20, 10, false, false));
+  MergeWith(TextChangeData(10, 30, 10, false, false));
   MOZ_ASSERT(mStartOffset == 10,
     "Test 1-2-1: mStartOffset should be the first offset");
   MOZ_ASSERT(mRemovedEndOffset == 40, // 30 + (10 - 20)
@@ -2203,8 +2217,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Removing text (shorter line -> longer line)
-  MergeWith(TextChangeData(10, 20, 10, false));
-  MergeWith(TextChangeData(10, 15, 10, false));
+  MergeWith(TextChangeData(10, 20, 10, false, false));
+  MergeWith(TextChangeData(10, 15, 10, false, false));
   MOZ_ASSERT(mStartOffset == 10,
     "Test 1-3-1: mStartOffset should be the first offset");
   MOZ_ASSERT(mRemovedEndOffset == 25, // 15 + (10 - 20)
@@ -2215,8 +2229,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Appending text at different point (not sure if actually occurs)
-  MergeWith(TextChangeData(10, 10, 20, false));
-  MergeWith(TextChangeData(55, 55, 60, false));
+  MergeWith(TextChangeData(10, 10, 20, false, false));
+  MergeWith(TextChangeData(55, 55, 60, false, false));
   MOZ_ASSERT(mStartOffset == 10,
     "Test 1-4-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 45, // 55 - (10 - 20)
@@ -2227,8 +2241,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Removing text at different point (not sure if actually occurs)
-  MergeWith(TextChangeData(10, 20, 10, false));
-  MergeWith(TextChangeData(55, 68, 55, false));
+  MergeWith(TextChangeData(10, 20, 10, false, false));
+  MergeWith(TextChangeData(55, 68, 55, false, false));
   MOZ_ASSERT(mStartOffset == 10,
     "Test 1-5-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 78, // 68 - (10 - 20)
@@ -2239,8 +2253,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Replacing text and append text (becomes longer)
-  MergeWith(TextChangeData(30, 35, 32, false));
-  MergeWith(TextChangeData(32, 32, 40, false));
+  MergeWith(TextChangeData(30, 35, 32, false, false));
+  MergeWith(TextChangeData(32, 32, 40, false, false));
   MOZ_ASSERT(mStartOffset == 30,
     "Test 1-6-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 35, // 32 - (32 - 35)
@@ -2251,8 +2265,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Replacing text and append text (becomes shorter)
-  MergeWith(TextChangeData(30, 35, 32, false));
-  MergeWith(TextChangeData(32, 32, 33, false));
+  MergeWith(TextChangeData(30, 35, 32, false, false));
+  MergeWith(TextChangeData(32, 32, 33, false, false));
   MOZ_ASSERT(mStartOffset == 30,
     "Test 1-7-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 35, // 32 - (32 - 35)
@@ -2264,8 +2278,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Removing text and replacing text after first range (not sure if actually
   // occurs)
-  MergeWith(TextChangeData(30, 35, 30, false));
-  MergeWith(TextChangeData(32, 34, 48, false));
+  MergeWith(TextChangeData(30, 35, 30, false, false));
+  MergeWith(TextChangeData(32, 34, 48, false, false));
   MOZ_ASSERT(mStartOffset == 30,
     "Test 1-8-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 39, // 34 - (30 - 35)
@@ -2277,8 +2291,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Removing text and replacing text after first range (not sure if actually
   // occurs)
-  MergeWith(TextChangeData(30, 35, 30, false));
-  MergeWith(TextChangeData(32, 38, 36, false));
+  MergeWith(TextChangeData(30, 35, 30, false, false));
+  MergeWith(TextChangeData(32, 38, 36, false, false));
   MOZ_ASSERT(mStartOffset == 30,
     "Test 1-9-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 43, // 38 - (30 - 35)
@@ -2294,8 +2308,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text in around end of added text (becomes shorter) (not sure
   // if actually occurs)
-  MergeWith(TextChangeData(50, 50, 55, false));
-  MergeWith(TextChangeData(53, 60, 54, false));
+  MergeWith(TextChangeData(50, 50, 55, false, false));
+  MergeWith(TextChangeData(53, 60, 54, false, false));
   MOZ_ASSERT(mStartOffset == 50,
     "Test 2-1-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 55, // 60 - (55 - 50)
@@ -2307,8 +2321,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text around end of added text (becomes longer) (not sure
   // if actually occurs)
-  MergeWith(TextChangeData(50, 50, 55, false));
-  MergeWith(TextChangeData(54, 62, 68, false));
+  MergeWith(TextChangeData(50, 50, 55, false, false));
+  MergeWith(TextChangeData(54, 62, 68, false, false));
   MOZ_ASSERT(mStartOffset == 50,
     "Test 2-2-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 57, // 62 - (55 - 50)
@@ -2320,8 +2334,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text around end of replaced text (became shorter) (not sure if
   // actually occurs)
-  MergeWith(TextChangeData(36, 48, 45, false));
-  MergeWith(TextChangeData(43, 50, 49, false));
+  MergeWith(TextChangeData(36, 48, 45, false, false));
+  MergeWith(TextChangeData(43, 50, 49, false, false));
   MOZ_ASSERT(mStartOffset == 36,
     "Test 2-3-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 53, // 50 - (45 - 48)
@@ -2333,8 +2347,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text around end of replaced text (became longer) (not sure if
   // actually occurs)
-  MergeWith(TextChangeData(36, 52, 53, false));
-  MergeWith(TextChangeData(43, 68, 61, false));
+  MergeWith(TextChangeData(36, 52, 53, false, false));
+  MergeWith(TextChangeData(43, 68, 61, false, false));
   MOZ_ASSERT(mStartOffset == 36,
     "Test 2-4-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 67, // 68 - (53 - 52)
@@ -2349,8 +2363,8 @@ IMENotification::TextChangeDataBase::Test()
    ****************************************************************************/
 
   // Appending text in already added text (not sure if actually occurs)
-  MergeWith(TextChangeData(10, 10, 20, false));
-  MergeWith(TextChangeData(15, 15, 30, false));
+  MergeWith(TextChangeData(10, 10, 20, false, false));
+  MergeWith(TextChangeData(15, 15, 30, false, false));
   MOZ_ASSERT(mStartOffset == 10,
     "Test 3-1-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 10,
@@ -2361,8 +2375,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Replacing text in added text (not sure if actually occurs)
-  MergeWith(TextChangeData(50, 50, 55, false));
-  MergeWith(TextChangeData(52, 53, 56, false));
+  MergeWith(TextChangeData(50, 50, 55, false, false));
+  MergeWith(TextChangeData(52, 53, 56, false, false));
   MOZ_ASSERT(mStartOffset == 50,
     "Test 3-2-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 50,
@@ -2374,8 +2388,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text in replaced text (became shorter) (not sure if actually
   // occurs)
-  MergeWith(TextChangeData(36, 48, 45, false));
-  MergeWith(TextChangeData(37, 38, 50, false));
+  MergeWith(TextChangeData(36, 48, 45, false, false));
+  MergeWith(TextChangeData(37, 38, 50, false, false));
   MOZ_ASSERT(mStartOffset == 36,
     "Test 3-3-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 48,
@@ -2387,8 +2401,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text in replaced text (became longer) (not sure if actually
   // occurs)
-  MergeWith(TextChangeData(32, 48, 53, false));
-  MergeWith(TextChangeData(43, 50, 52, false));
+  MergeWith(TextChangeData(32, 48, 53, false, false));
+  MergeWith(TextChangeData(43, 50, 52, false, false));
   MOZ_ASSERT(mStartOffset == 32,
     "Test 3-4-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 48,
@@ -2401,8 +2415,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text in replaced text (became shorter) (not sure if actually
   // occurs)
-  MergeWith(TextChangeData(36, 48, 50, false));
-  MergeWith(TextChangeData(37, 49, 47, false));
+  MergeWith(TextChangeData(36, 48, 50, false, false));
+  MergeWith(TextChangeData(37, 49, 47, false, false));
   MOZ_ASSERT(mStartOffset == 36,
     "Test 3-5-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 48,
@@ -2415,8 +2429,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text in replaced text (became longer) (not sure if actually
   // occurs)
-  MergeWith(TextChangeData(32, 48, 53, false));
-  MergeWith(TextChangeData(43, 50, 47, false));
+  MergeWith(TextChangeData(32, 48, 53, false, false));
+  MergeWith(TextChangeData(43, 50, 47, false, false));
   MOZ_ASSERT(mStartOffset == 32,
     "Test 3-6-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 48,
@@ -2432,8 +2446,8 @@ IMENotification::TextChangeDataBase::Test()
    ****************************************************************************/
 
   // Replacing text all of already append text (not sure if actually occurs)
-  MergeWith(TextChangeData(50, 50, 55, false));
-  MergeWith(TextChangeData(44, 66, 68, false));
+  MergeWith(TextChangeData(50, 50, 55, false, false));
+  MergeWith(TextChangeData(44, 66, 68, false, false));
   MOZ_ASSERT(mStartOffset == 44,
     "Test 4-1-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 61, // 66 - (55 - 50)
@@ -2445,8 +2459,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text around a point in which text was removed (not sure if
   // actually occurs)
-  MergeWith(TextChangeData(50, 62, 50, false));
-  MergeWith(TextChangeData(44, 66, 68, false));
+  MergeWith(TextChangeData(50, 62, 50, false, false));
+  MergeWith(TextChangeData(44, 66, 68, false, false));
   MOZ_ASSERT(mStartOffset == 44,
     "Test 4-2-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 78, // 66 - (50 - 62)
@@ -2458,8 +2472,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text all replaced text (became shorter) (not sure if actually
   // occurs)
-  MergeWith(TextChangeData(50, 62, 60, false));
-  MergeWith(TextChangeData(49, 128, 130, false));
+  MergeWith(TextChangeData(50, 62, 60, false, false));
+  MergeWith(TextChangeData(49, 128, 130, false, false));
   MOZ_ASSERT(mStartOffset == 49,
     "Test 4-3-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 130, // 128 - (60 - 62)
@@ -2471,8 +2485,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text all replaced text (became longer) (not sure if actually
   // occurs)
-  MergeWith(TextChangeData(50, 61, 73, false));
-  MergeWith(TextChangeData(44, 100, 50, false));
+  MergeWith(TextChangeData(50, 61, 73, false, false));
+  MergeWith(TextChangeData(44, 100, 50, false, false));
   MOZ_ASSERT(mStartOffset == 44,
     "Test 4-4-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 88, // 100 - (73 - 61)
@@ -2487,8 +2501,8 @@ IMENotification::TextChangeDataBase::Test()
    ****************************************************************************/
 
   // Replacing text around start of added text (not sure if actually occurs)
-  MergeWith(TextChangeData(50, 50, 55, false));
-  MergeWith(TextChangeData(48, 52, 49, false));
+  MergeWith(TextChangeData(50, 50, 55, false, false));
+  MergeWith(TextChangeData(48, 52, 49, false, false));
   MOZ_ASSERT(mStartOffset == 48,
     "Test 5-1-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 50,
@@ -2501,8 +2515,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text around start of replaced text (became shorter) (not sure if
   // actually occurs)
-  MergeWith(TextChangeData(50, 60, 58, false));
-  MergeWith(TextChangeData(43, 50, 48, false));
+  MergeWith(TextChangeData(50, 60, 58, false, false));
+  MergeWith(TextChangeData(43, 50, 48, false, false));
   MOZ_ASSERT(mStartOffset == 43,
     "Test 5-2-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 60,
@@ -2515,8 +2529,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text around start of replaced text (became longer) (not sure if
   // actually occurs)
-  MergeWith(TextChangeData(50, 60, 68, false));
-  MergeWith(TextChangeData(43, 55, 53, false));
+  MergeWith(TextChangeData(50, 60, 68, false, false));
+  MergeWith(TextChangeData(43, 55, 53, false, false));
   MOZ_ASSERT(mStartOffset == 43,
     "Test 5-3-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 60,
@@ -2529,8 +2543,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text around start of replaced text (became shorter) (not sure if
   // actually occurs)
-  MergeWith(TextChangeData(50, 60, 58, false));
-  MergeWith(TextChangeData(43, 50, 128, false));
+  MergeWith(TextChangeData(50, 60, 58, false, false));
+  MergeWith(TextChangeData(43, 50, 128, false, false));
   MOZ_ASSERT(mStartOffset == 43,
     "Test 5-4-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 60,
@@ -2543,8 +2557,8 @@ IMENotification::TextChangeDataBase::Test()
 
   // Replacing text around start of replaced text (became longer) (not sure if
   // actually occurs)
-  MergeWith(TextChangeData(50, 60, 68, false));
-  MergeWith(TextChangeData(43, 55, 65, false));
+  MergeWith(TextChangeData(50, 60, 68, false, false));
+  MergeWith(TextChangeData(43, 55, 65, false, false));
   MOZ_ASSERT(mStartOffset == 43,
     "Test 5-5-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 60,
@@ -2560,8 +2574,8 @@ IMENotification::TextChangeDataBase::Test()
    ****************************************************************************/
 
   // Appending text before already added text (not sure if actually occurs)
-  MergeWith(TextChangeData(30, 30, 45, false));
-  MergeWith(TextChangeData(10, 10, 20, false));
+  MergeWith(TextChangeData(30, 30, 45, false, false));
+  MergeWith(TextChangeData(10, 10, 20, false, false));
   MOZ_ASSERT(mStartOffset == 10,
     "Test 6-1-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 30,
@@ -2573,8 +2587,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Removing text before already removed text (not sure if actually occurs)
-  MergeWith(TextChangeData(30, 35, 30, false));
-  MergeWith(TextChangeData(10, 25, 10, false));
+  MergeWith(TextChangeData(30, 35, 30, false, false));
+  MergeWith(TextChangeData(10, 25, 10, false, false));
   MOZ_ASSERT(mStartOffset == 10,
     "Test 6-2-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 35,
@@ -2586,8 +2600,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Replacing text before already replaced text (not sure if actually occurs)
-  MergeWith(TextChangeData(50, 65, 70, false));
-  MergeWith(TextChangeData(13, 24, 15, false));
+  MergeWith(TextChangeData(50, 65, 70, false, false));
+  MergeWith(TextChangeData(13, 24, 15, false, false));
   MOZ_ASSERT(mStartOffset == 13,
     "Test 6-3-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 65,
@@ -2599,8 +2613,8 @@ IMENotification::TextChangeDataBase::Test()
   Clear();
 
   // Replacing text before already replaced text (not sure if actually occurs)
-  MergeWith(TextChangeData(50, 65, 70, false));
-  MergeWith(TextChangeData(13, 24, 36, false));
+  MergeWith(TextChangeData(50, 65, 70, false, false));
+  MergeWith(TextChangeData(13, 24, 36, false, false));
   MOZ_ASSERT(mStartOffset == 13,
     "Test 6-4-1: mStartOffset should be the smallest offset");
   MOZ_ASSERT(mRemovedEndOffset == 65,

@@ -2229,11 +2229,17 @@ js::LookupNameUnqualified(JSContext* cx, HandlePropertyName name, HandleObject s
             break;
     }
 
-    // See note above UninitializedLexicalObject.
-    if (pobj == scope && IsUninitializedLexicalSlot(scope, shape)) {
-        scope = UninitializedLexicalObject::create(cx, scope);
-        if (!scope)
-            return false;
+    // See note above RuntimeLexicalErrorObject.
+    if (pobj == scope) {
+        if (IsUninitializedLexicalSlot(scope, shape)) {
+            scope = RuntimeLexicalErrorObject::create(cx, scope, JSMSG_UNINITIALIZED_LEXICAL);
+            if (!scope)
+                return false;
+        } else if (scope->is<ScopeObject>() && !scope->is<DeclEnvObject>() && !shape->writable()) {
+            scope = RuntimeLexicalErrorObject::create(cx, scope, JSMSG_BAD_CONST_ASSIGN);
+            if (!scope)
+                return false;
+        }
     }
 
     objp.set(scope);
@@ -2395,7 +2401,7 @@ JSObject::reportNotExtensible(JSContext* cx, unsigned report)
 // immutable-prototype behavior is enforced; if it's false, behavior is not
 // enforced, and immutable-prototype bits stored on objects are completely
 // ignored.
-static const bool ImmutablePrototypesEnabled = false;
+static const bool ImmutablePrototypesEnabled = true;
 
 JS_FRIEND_API(bool)
 JS_ImmutablePrototypesEnabled()
@@ -3505,8 +3511,15 @@ js::DumpBacktrace(JSContext* cx)
         const char* filename = JS_GetScriptFilename(i.script());
         unsigned line = PCToLineNumber(i.script(), i.pc());
         JSScript* script = i.script();
-        sprinter.printf("#%d %14p   %s:%d (%p @ %d)\n",
-                        depth, (i.isJit() ? 0 : i.interpFrame()), filename, line,
+        char frameType =
+            i.isInterp() ? 'i' :
+            i.isBaseline() ? 'b' :
+            i.isIon() ? 'I' :
+            i.isAsmJS() ? 'A' :
+            '?';
+
+        sprinter.printf("#%d %14p %c   %s:%d (%p @ %d)\n",
+                        depth, i.rawFramePtr(), frameType, filename, line,
                         script, script->pcToOffset(i.pc()));
     }
     fprintf(stdout, "%s", sprinter.string());
@@ -3713,11 +3726,15 @@ JSObject::traceChildren(JSTracer* trc)
             GetObjectSlotNameFunctor func(nobj);
             JS::AutoTracingDetails ctx(trc, func);
             JS::AutoTracingIndex index(trc);
-            for (uint32_t i = 0; i < nobj->slotSpan(); ++i) {
+            // Tracing can mutate the target but cannot change the slot count,
+            // but the compiler has no way of knowing this.
+            const uint32_t nslots = nobj->slotSpan();
+            for (uint32_t i = 0; i < nslots; ++i) {
                 TraceManuallyBarrieredEdge(trc, nobj->getSlotRef(i).unsafeUnbarrieredForTracing(),
                                            "object slot");
                 ++index;
             }
+            MOZ_ASSERT(nslots == nobj->slotSpan());
         }
 
         do {

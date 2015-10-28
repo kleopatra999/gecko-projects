@@ -1992,6 +1992,13 @@ NotifyPluginFramesCallback(nsISupports* aSupports, void* aFlag)
     }
   }
 }
+static bool
+NotifyPluginSubframesCallback(nsIDocument* aDocument, void* aFlag)
+{
+  aDocument->EnumerateActivityObservers(NotifyPluginFramesCallback,
+                                        aFlag);
+  return true;
+}
 #endif
 
 void
@@ -2011,6 +2018,9 @@ ScrollFrameHelper::NotifyPluginFrames(AsyncScrollEventType aEvent)
       bool begin = (aEvent == BEGIN_APZ || aEvent == BEGIN_DOM);
       presContext->Document()->EnumerateActivityObservers(NotifyPluginFramesCallback,
                                                           (void*)begin);
+      presContext->Document()->EnumerateSubDocuments(NotifyPluginSubframesCallback,
+                                                     (void*)begin);
+
       mAsyncScrollEvent = aEvent;
     }
   }
@@ -2689,17 +2699,20 @@ ScrollFrameHelper::AppendScrollPartsTo(nsDisplayListBuilder*   aBuilder,
     nsDisplayListBuilder::AutoBuildingDisplayList
       buildingForChild(aBuilder, scrollParts[i],
                        dirty + mOuter->GetOffsetTo(scrollParts[i]), true);
+
+    // Always create layers for overlay scrollbars so that we don't create a
+    // giant layer covering the whole scrollport if both scrollbars are visible.
+    bool isOverlayScrollbar = (flags != 0) && overlayScrollbars;
+    bool createLayer = aCreateLayer || isOverlayScrollbar;
+
     nsDisplayListBuilder::AutoCurrentScrollbarInfoSetter
-      infoSetter(aBuilder, scrollTargetId, flags);
+      infoSetter(aBuilder, scrollTargetId, flags, createLayer);
     nsDisplayListCollection partList;
     mOuter->BuildDisplayListForChild(
       aBuilder, scrollParts[i], dirty, partList,
       nsIFrame::DISPLAY_CHILD_FORCE_STACKING_CONTEXT);
 
-    // Always create layers for overlay scrollbars so that we don't create a
-    // giant layer covering the whole scrollport if both scrollbars are visible.
-    bool isOverlayScrollbar = (flags != 0) && overlayScrollbars;
-    if (aCreateLayer || isOverlayScrollbar) {
+    if (createLayer) {
       appendToTopFlags |= APPEND_OWN_LAYER;
     }
     if (aPositioned) {
@@ -3606,7 +3619,7 @@ ScrollFrameHelper::ScrollSnap(const nsPoint &aDestination,
 nsSize
 ScrollFrameHelper::GetLineScrollAmount() const
 {
-  nsRefPtr<nsFontMetrics> fm;
+  RefPtr<nsFontMetrics> fm;
   nsLayoutUtils::GetFontMetricsForFrame(mOuter, getter_AddRefs(fm),
     nsLayoutUtils::FontSizeInflationFor(mOuter));
   NS_ASSERTION(fm, "FontMetrics is null, assuming fontHeight == 1 appunit");
@@ -3926,14 +3939,14 @@ ScrollFrameHelper::CreateAnonymousContent(
 
   nsNodeInfoManager *nodeInfoManager =
     presContext->Document()->NodeInfoManager();
-  nsRefPtr<NodeInfo> nodeInfo;
+  RefPtr<NodeInfo> nodeInfo;
   nodeInfo = nodeInfoManager->GetNodeInfo(nsGkAtoms::scrollbar, nullptr,
                                           kNameSpaceID_XUL,
                                           nsIDOMNode::ELEMENT_NODE);
   NS_ENSURE_TRUE(nodeInfo, NS_ERROR_OUT_OF_MEMORY);
 
   if (canHaveHorizontal) {
-    nsRefPtr<NodeInfo> ni = nodeInfo;
+    RefPtr<NodeInfo> ni = nodeInfo;
     NS_TrustedNewXULElement(getter_AddRefs(mHScrollbarContent), ni.forget());
 #ifdef DEBUG
     // Scrollbars can get restyled by theme changes.  Whether such a restyle
@@ -3956,7 +3969,7 @@ ScrollFrameHelper::CreateAnonymousContent(
   }
 
   if (canHaveVertical) {
-    nsRefPtr<NodeInfo> ni = nodeInfo;
+    RefPtr<NodeInfo> ni = nodeInfo;
     NS_TrustedNewXULElement(getter_AddRefs(mVScrollbarContent), ni.forget());
 #ifdef DEBUG
     // Scrollbars can get restyled by theme changes.  Whether such a restyle
@@ -3979,7 +3992,7 @@ ScrollFrameHelper::CreateAnonymousContent(
   }
 
   if (isResizable) {
-    nsRefPtr<NodeInfo> nodeInfo;
+    RefPtr<NodeInfo> nodeInfo;
     nodeInfo = nodeInfoManager->GetNodeInfo(nsGkAtoms::resizer, nullptr,
                                             kNameSpaceID_XUL,
                                             nsIDOMNode::ELEMENT_NODE);
@@ -4149,7 +4162,7 @@ void ScrollFrameHelper::CurPosAttributeChanged(nsIContent* aContent)
   }
 
   if (mScrollbarActivity) {
-    nsRefPtr<ScrollbarActivity> scrollbarActivity(mScrollbarActivity);
+    RefPtr<ScrollbarActivity> scrollbarActivity(mScrollbarActivity);
     scrollbarActivity->ActivityOccurred();
   }
 
@@ -5143,7 +5156,7 @@ ScrollFrameHelper::SetCoordAttribute(nsIContent* aContent, nsIAtom* aAtom,
   }
 
   if (mScrollbarActivity) {
-    nsRefPtr<ScrollbarActivity> scrollbarActivity(mScrollbarActivity);
+    RefPtr<ScrollbarActivity> scrollbarActivity(mScrollbarActivity);
     scrollbarActivity->ActivityOccurred();
   }
 }

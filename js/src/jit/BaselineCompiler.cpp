@@ -155,7 +155,6 @@ BaselineCompiler::compile()
 
     for (size_t i = 0; i < pcMappingEntries_.length(); i++) {
         PCMappingEntry& entry = pcMappingEntries_[i];
-        entry.fixupNativeOffset(masm);
 
         if (entry.addIndexEntry) {
             PCMappingIndexEntry indexEntry;
@@ -189,16 +188,6 @@ BaselineCompiler::compile()
         ReportOutOfMemory(cx);
         return Method_Error;
     }
-
-    prologueOffset_.fixup(&masm);
-    epilogueOffset_.fixup(&masm);
-    profilerEnterFrameToggleOffset_.fixup(&masm);
-    profilerExitFrameToggleOffset_.fixup(&masm);
-#ifdef JS_TRACE_LOGGING
-    traceLoggerEnterToggleOffset_.fixup(&masm);
-    traceLoggerExitToggleOffset_.fixup(&masm);
-#endif
-    postDebugPrologueOffset_.fixup(&masm);
 
     // Note: There is an extra entry in the bytecode type map for the search hint, see below.
     size_t bytecodeTypeMapEntries = script->nTypeSets() + 1;
@@ -258,7 +247,6 @@ BaselineCompiler::compile()
     // Patch IC loads using IC entries.
     for (size_t i = 0; i < icLoadLabels_.length(); i++) {
         CodeOffsetLabel label = icLoadLabels_[i].label;
-        label.fixup(&masm);
         size_t icEntry = icLoadLabels_[i].icEntry;
         ICEntry* entryAddr = &(baselineScript->icEntry(icEntry));
         Assembler::PatchDataWithValueCheck(CodeLocationLabel(code, label),
@@ -1312,6 +1300,12 @@ BaselineCompiler::emitCheckThis()
 bool
 BaselineCompiler::emit_JSOP_THIS()
 {
+    // |this| is undefined in modules.
+    if (module()) {
+        frame.push(UndefinedValue());
+        return true;
+    }
+
     if (function() && function()->isArrow()) {
         // Arrow functions store their (lexical) |this| value in an
         // extended slot.
@@ -2177,11 +2171,14 @@ BaselineCompiler::emit_JSOP_BINDGNAME()
 {
     if (!script->hasNonSyntacticScope()) {
         // We can bind name to the global lexical scope if the binding already
-        // exists and is initialized at compile time.
+        // exists, is initialized, and is writable (i.e., an initialized
+        // 'let') at compile time.
         RootedPropertyName name(cx, script->getName(pc));
         Rooted<ClonedBlockObject*> globalLexical(cx, &script->global().lexicalScope());
         if (Shape* shape = globalLexical->lookup(cx, name)) {
-            if (!globalLexical->getSlot(shape->slot()).isMagic(JS_UNINITIALIZED_LEXICAL)) {
+            if (shape->writable() &&
+                !globalLexical->getSlot(shape->slot()).isMagic(JS_UNINITIALIZED_LEXICAL))
+            {
                 frame.push(ObjectValue(*globalLexical));
                 return true;
             }
@@ -2835,9 +2832,29 @@ BaselineCompiler::emit_JSOP_NEWTARGET()
     return true;
 }
 
-typedef bool (*ThrowUninitializedLexicalFn)(JSContext* cx);
-static const VMFunction ThrowUninitializedLexicalInfo =
-    FunctionInfo<ThrowUninitializedLexicalFn>(jit::ThrowUninitializedLexical);
+typedef bool (*ThrowRuntimeLexicalErrorFn)(JSContext* cx, unsigned);
+static const VMFunction ThrowRuntimeLexicalErrorInfo =
+    FunctionInfo<ThrowRuntimeLexicalErrorFn>(jit::ThrowRuntimeLexicalError);
+
+bool
+BaselineCompiler::emitThrowConstAssignment()
+{
+    prepareVMCall();
+    pushArg(Imm32(JSMSG_BAD_CONST_ASSIGN));
+    return callVM(ThrowRuntimeLexicalErrorInfo);
+}
+
+bool
+BaselineCompiler::emit_JSOP_THROWSETCONST()
+{
+    return emitThrowConstAssignment();
+}
+
+bool
+BaselineCompiler::emit_JSOP_THROWSETALIASEDCONST()
+{
+    return emitThrowConstAssignment();
+}
 
 bool
 BaselineCompiler::emitUninitializedLexicalCheck(const ValueOperand& val)
@@ -2846,13 +2863,13 @@ BaselineCompiler::emitUninitializedLexicalCheck(const ValueOperand& val)
     masm.branchTestMagicValue(Assembler::NotEqual, val, JS_UNINITIALIZED_LEXICAL, &done);
 
     prepareVMCall();
-    if (!callVM(ThrowUninitializedLexicalInfo))
+    pushArg(Imm32(JSMSG_UNINITIALIZED_LEXICAL));
+    if (!callVM(ThrowRuntimeLexicalErrorInfo))
         return false;
 
     masm.bind(&done);
     return true;
 }
-
 
 bool
 BaselineCompiler::emit_JSOP_CHECKLEXICAL()
@@ -3548,6 +3565,29 @@ BaselineCompiler::emit_JSOP_ENDITER()
 
     ICIteratorClose_Fallback::Compiler compiler(cx);
     return emitOpIC(compiler.getStub(&stubSpace_));
+}
+
+bool
+BaselineCompiler::emit_JSOP_GETRVAL()
+{
+    frame.syncStack(0);
+
+    Label norval, done;
+    Address flags = frame.addressOfFlags();
+    masm.branchTest32(Assembler::Zero, flags, Imm32(BaselineFrame::HAS_RVAL), &norval);
+    // Get the value from the return value slot, if any.
+    masm.loadValue(frame.addressOfReturnValue(), R0);
+    masm.jump(&done);
+
+    // Push undefined otherwise.  When we throw an exception in the try
+    // block, rval is not yet initialized when entering finally block.
+    masm.bind(&norval);
+    masm.moveValue(UndefinedValue(), R0);
+
+    masm.bind(&done);
+    frame.push(R0);
+
+    return true;
 }
 
 bool

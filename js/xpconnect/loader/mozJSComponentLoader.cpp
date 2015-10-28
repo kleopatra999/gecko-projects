@@ -537,7 +537,7 @@ mozJSComponentLoader::PrepareObjectForLocation(JSContext* aCx,
     bool createdNewGlobal = false;
 
     if (!mLoaderGlobal) {
-        nsRefPtr<BackstagePass> backstagePass;
+        RefPtr<BackstagePass> backstagePass;
         rv = NS_NewBackstagePass(getter_AddRefs(backstagePass));
         NS_ENSURE_SUCCESS(rv, nullptr);
 
@@ -1059,8 +1059,6 @@ mozJSComponentLoader::Import(const nsACString& registryLocation,
     return rv;
 }
 
-/* [noscript] JSObjectPtr importInto(in AUTF8String registryLocation,
-                                     in JSObjectPtr targetObj); */
 NS_IMETHODIMP
 mozJSComponentLoader::ImportInto(const nsACString& aLocation,
                                  JSObject* aTargetObj,

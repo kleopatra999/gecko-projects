@@ -5,6 +5,10 @@
 
 @import url(variables.css);
 
+body {
+  margin: 0;
+}
+
 .theme-body {
   background: var(--theme-body-background);
   color: var(--theme-body-color);
@@ -275,7 +279,7 @@ div.CodeMirror span.eval-text {
   outline-style: none;
 }
 
-.theme-twisty[open] {
+.theme-twisty[open], .theme-twisty.open  {
   background-position: -42px -14px;
 }
 

@@ -35,7 +35,7 @@
           android:showAsAction="ifRoom"/>
 
     <item android:id="@+id/send_to_device"
-        android:icon="@drawable/overlay_send_tab_icon"
+        android:icon="@drawable/overlay_send_tab_icon_menu"
         android:title="@string/overlay_share_send_other"
         android:showAsAction="ifRoom"/>
 
@@ -74,9 +74,6 @@
 
             <item android:id="@+id/add_search_engine"
                   android:title="@string/contextmenu_add_search_engine"/>
-
-            <item android:id="@+id/site_settings"
-                  android:title="@string/contextmenu_site_settings" />
 
             <item android:id="@+id/add_to_launcher"
                   android:title="@string/contextmenu_add_to_launcher"/>

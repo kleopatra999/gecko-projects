@@ -6,45 +6,33 @@
 
 "use strict";
 
+const Services = require("Services");
 const { Cc, Ci, Cu } = require("chrome");
 const { DebuggerServer, ActorPool } = require("devtools/server/main");
 const { EnvironmentActor, ThreadActor } = require("devtools/server/actors/script");
 const { ObjectActor, LongStringActor, createValueGrip, stringIsLong } = require("devtools/server/actors/object");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
-XPCOMUtils.defineLazyGetter(this, "NetworkMonitor", () => {
-  return require("devtools/shared/webconsole/network-monitor")
-         .NetworkMonitor;
-});
-XPCOMUtils.defineLazyGetter(this, "NetworkMonitorChild", () => {
-  return require("devtools/shared/webconsole/network-monitor")
-         .NetworkMonitorChild;
-});
-XPCOMUtils.defineLazyGetter(this, "ConsoleProgressListener", () => {
-  return require("devtools/shared/webconsole/network-monitor")
-         .ConsoleProgressListener;
-});
-XPCOMUtils.defineLazyGetter(this, "events", () => {
-  return require("sdk/event/core");
-});
-XPCOMUtils.defineLazyGetter(this, "ServerLoggingListener", () => {
-  return require("devtools/shared/webconsole/server-logger")
-         .ServerLoggingListener;
-});
+loader.lazyRequireGetter(this, "NetworkMonitor", "devtools/shared/webconsole/network-monitor", true);
+loader.lazyRequireGetter(this, "NetworkMonitorChild", "devtools/shared/webconsole/network-monitor", true);
+loader.lazyRequireGetter(this, "ConsoleProgressListener", "devtools/shared/webconsole/network-monitor", true);
+loader.lazyRequireGetter(this, "events", "sdk/event/core");
+loader.lazyRequireGetter(this, "ServerLoggingListener", "devtools/shared/webconsole/server-logger", true);
+loader.lazyRequireGetter(this, "JSPropertyProvider", "devtools/shared/webconsole/js-property-provider", true);
 
 for (let name of ["WebConsoleUtils", "ConsoleServiceListener",
-    "ConsoleAPIListener", "addWebConsoleCommands", "JSPropertyProvider",
+    "ConsoleAPIListener", "addWebConsoleCommands",
     "ConsoleReflowListener", "CONSOLE_WORKER_IDS"]) {
   Object.defineProperty(this, name, {
     get: function(prop) {
       if (prop == "WebConsoleUtils") {
         prop = "Utils";
       }
-      return require("devtools/shared/webconsole/utils")[prop];
+      if (isWorker) {
+        return require("devtools/shared/webconsole/worker-utils")[prop];
+      } else {
+        return require("devtools/shared/webconsole/utils")[prop];
+      }
     }.bind(null, name),
     configurable: true,
     enumerable: true
@@ -91,7 +79,8 @@ function WebConsoleActor(aConnection, aParentActor)
   this.traits = {
     customNetworkRequest: !this._parentIsContentActor,
     evaluateJSAsync: true,
-    transferredResponseSize: true
+    transferredResponseSize: true,
+    selectedObjectActor: true, // 44+
   };
 }
 
@@ -555,6 +544,11 @@ WebConsoleActor.prototype =
    */
   onStartListeners: function WCA_onStartListeners(aRequest)
   {
+    // XXXworkers: Not handling the Console API yet for workers (Bug 1209353).
+    if (isWorker) {
+       aRequest.listeners = [];
+    }
+
     let startedListeners = [];
     let window = !this.parentActor.isRootActor ? this.window : null;
     let appId = null;
@@ -832,6 +826,7 @@ WebConsoleActor.prototype =
       frameActor: aRequest.frameActor,
       url: aRequest.url,
       selectedNodeActor: aRequest.selectedNodeActor,
+      selectedObjectActor: aRequest.selectedObjectActor,
     };
 
     let evalInfo = this.evalWithDebugger(input, evalOptions);
@@ -847,8 +842,12 @@ WebConsoleActor.prototype =
       } else if ("throw" in evalResult) {
         let error = evalResult.throw;
         errorGrip = this.createValueGrip(error);
-        errorMessage = error && (typeof error === "object")
-          ? error.unsafeDereference().toString()
+        // XXXworkers: Calling unsafeDereference() returns an object with no
+        // toString method in workers. See Bug 1215120.
+        let unsafeDereference = error && (typeof error === "object") &&
+                                error.unsafeDereference();
+        errorMessage = unsafeDereference && unsafeDereference.toString
+          ? unsafeDereference.toString()
           : "" + error;
       }
     }
@@ -897,8 +896,8 @@ WebConsoleActor.prototype =
         environment = frame.environment;
       }
       else {
-        Cu.reportError("Web Console Actor: the frame actor was not found: " +
-                       frameActorId);
+        DevToolsUtils.reportException("onAutocomplete",
+          Error("The frame actor was not found: " + frameActorId));
       }
     }
     // This is the general case (non-paused debugger)
@@ -1041,9 +1040,13 @@ WebConsoleActor.prototype =
     }
     for (let name in helpers.sandbox) {
       let desc = Object.getOwnPropertyDescriptor(helpers.sandbox, name);
-      maybeExport(desc, 'get');
-      maybeExport(desc, 'set');
-      maybeExport(desc, 'value');
+
+      // Workers don't have access to Cu so won't be able to exportFunction.
+      if (!isWorker) {
+        maybeExport(desc, 'get');
+        maybeExport(desc, 'set');
+        maybeExport(desc, 'value');
+      }
       if (desc.value) {
         // Make sure the helpers can be used during eval.
         desc.value = aDebuggerGlobal.makeDebuggeeValue(desc.value);
@@ -1095,6 +1098,8 @@ WebConsoleActor.prototype =
    *          |evalWithBindings()| will be called with one additional binding:
    *          |_self| which will point to the Debugger.Object of the given
    *          ObjectActor.
+   *        - selectedObjectActor: Like bindObjectActor, but executes with the
+   *          top level window as the global.
    *        - frameActor: the FrameActor ID to use for evaluation. The given
    *        debugger frame is used for evaluation, instead of the global window.
    *        - selectedNodeActor: the NodeActor ID of the currently selected node
@@ -1134,8 +1139,8 @@ WebConsoleActor.prototype =
         frame = frameActor.frame;
       }
       else {
-        Cu.reportError("Web Console Actor: the frame actor was not found: " +
-                       aOptions.frameActor);
+        DevToolsUtils.reportException("evalWithDebugger",
+          Error("The frame actor was not found: " + aOptions.frameActor));
       }
     }
 
@@ -1151,8 +1156,9 @@ WebConsoleActor.prototype =
     // If we have an object to bind to |_self|, create a Debugger.Object
     // referring to that object, belonging to dbg.
     let bindSelf = null;
-    if (aOptions.bindObjectActor) {
-      let objActor = this.getActorByID(aOptions.bindObjectActor);
+    if (aOptions.bindObjectActor || aOptions.selectedObjectActor) {
+      let objActor = this.getActorByID(aOptions.bindObjectActor ||
+                                       aOptions.selectedObjectActor);
       if (objActor) {
         let jsObj = objActor.obj.unsafeDereference();
         // If we use the makeDebuggeeValue method of jsObj's own global, then
@@ -1160,8 +1166,12 @@ WebConsoleActor.prototype =
         // that is, without wrappers. The evalWithBindings call will then wrap
         // jsObj appropriately for the evaluation compartment.
         let global = Cu.getGlobalForObject(jsObj);
-        dbgWindow = dbg.makeGlobalObjectReference(global);
+        let _dbgWindow = dbg.makeGlobalObjectReference(global);
         bindSelf = dbgWindow.makeDebuggeeValue(jsObj);
+
+        if (aOptions.bindObjectActor) {
+          dbgWindow = _dbgWindow;
+        }
       }
     }
 

@@ -59,6 +59,7 @@ WEBIDL_FILES = [
     'BrowserElement.webidl',
     'BrowserElementAudioChannel.webidl',
     'BrowserElementDictionaries.webidl',
+    'BrowserElementProxy.webidl',
     'Cache.webidl',
     'CacheStorage.webidl',
     'CallsList.webidl',
@@ -271,6 +272,7 @@ WEBIDL_FILES = [
     'InterAppConnection.webidl',
     'InterAppConnectionRequest.webidl',
     'InterAppMessagePort.webidl',
+    'IterableIterator.webidl',
     'KeyAlgorithm.webidl',
     'KeyboardEvent.webidl',
     'KeyEvent.webidl',
@@ -382,6 +384,7 @@ WEBIDL_FILES = [
     'ProfileTimelineMarker.webidl',
     'Promise.webidl',
     'PromiseDebugging.webidl',
+    'PropertyIndexedKeyframes.webidl',
     'RadioNodeList.webidl',
     'Range.webidl',
     'Rect.webidl',
@@ -679,7 +682,7 @@ WEBIDL_FILES += [
 if CONFIG['MOZ_DEBUG']:
     WEBIDL_FILES += ['TestInterfaceJS.webidl',
                      'TestInterfaceJSDictionaries.webidl',
-                     'TestInterfaceJSMaplikeSetlike.webidl']
+                     'TestInterfaceJSMaplikeSetlikeIterable.webidl']
 
 if CONFIG['MOZ_B2G_BT']:
     WEBIDL_FILES += [

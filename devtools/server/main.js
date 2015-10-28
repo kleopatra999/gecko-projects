@@ -435,7 +435,7 @@ var DebuggerServer = {
       this.registerModule("devtools/server/actors/webbrowser");
     }
     if (!("ContentActor" in this)) {
-      this.addActors("resource://gre/modules/devtools/server/actors/childtab.js");
+      this.addActors("resource://devtools/server/actors/childtab.js");
     }
   },
 
@@ -778,7 +778,7 @@ var DebuggerServer = {
     return new Promise((resolve, reject) => {
       // Step 1: Ensure the worker debugger is initialized.
       if (!aDbg.isInitialized) {
-        aDbg.initialize("resource://gre/modules/devtools/server/worker.js");
+        aDbg.initialize("resource://devtools/server/worker.js");
 
         // Create a listener for rpc requests from the worker debugger. Only do
         // this once, when the worker debugger is first initialized, rather than
@@ -833,7 +833,7 @@ var DebuggerServer = {
 
       // Steps 3-5 are performed on the worker thread (see worker.js).
 
-      // Step 6: Wait for a response from the worker debugger.
+      // Step 6: Wait for a connection response from the worker debugger.
       let listener = {
         onClose: () => {
           aDbg.removeListener(listener);
@@ -843,19 +843,12 @@ var DebuggerServer = {
 
         onMessage: (message) => {
           let packet = JSON.parse(message);
-          if (packet.type !== "message" || packet.id !== aId) {
+          if (packet.type !== "connected" || packet.id !== aId) {
             return;
           }
 
-          message = packet.message;
-          if (message.error) {
-            reject(error);
-          }
-
-          if (message.type !== "paused") {
-            return;
-          }
-
+          // The initial connection packet has been received, don't
+          // need to listen any longer
           aDbg.removeListener(listener);
 
           // Step 7: Create a transport for the connection to the worker.
@@ -887,7 +880,8 @@ var DebuggerServer = {
           aConnection.setForwarding(aId, transport);
 
           resolve({
-            threadActor: message.from,
+            threadActor: packet.threadActor,
+            consoleActor: packet.consoleActor,
             transport: transport
           });
         }
@@ -954,7 +948,7 @@ var DebuggerServer = {
 
     let mm = aFrame.QueryInterface(Ci.nsIFrameLoaderOwner).frameLoader
              .messageManager;
-    mm.loadFrameScript("resource://gre/modules/devtools/server/child.js", false);
+    mm.loadFrameScript("resource://devtools/server/child.js", false);
     this._childMessageManagers.add(mm);
 
     let actor, childTransport;
@@ -1030,7 +1024,11 @@ var DebuggerServer = {
         aConnection.cancelForwarding(prefix);
 
         // ... and notify the child process to clean the tab actors.
-        mm.sendAsyncMessage("debug:disconnect", { prefix: prefix });
+        try {
+          // Bug 1169643: Ignore any exception as the child process
+          // may already be destroyed by now.
+          mm.sendAsyncMessage("debug:disconnect", { prefix: prefix });
+        } catch(e) {}
       } else {
         // Otherwise, the app has been closed before the actor
         // had a chance to be created, so we are not able to create

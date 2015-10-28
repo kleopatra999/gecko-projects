@@ -52,6 +52,8 @@ XPCOMUtils.defineLazyServiceGetter(this, "Favicons",
 XPCOMUtils.defineLazyServiceGetter(this, "gDNSService",
                                    "@mozilla.org/network/dns-service;1",
                                    "nsIDNSService");
+XPCOMUtils.defineLazyServiceGetter(this, "WindowsUIUtils",
+                                   "@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils");
 XPCOMUtils.defineLazyModuleGetter(this, "LightweightThemeManager",
                                   "resource://gre/modules/LightweightThemeManager.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "Pocket",
@@ -187,13 +189,13 @@ XPCOMUtils.defineLazyGetter(this, "PopupNotifications", function () {
 
 XPCOMUtils.defineLazyGetter(this, "DeveloperToolbar", function() {
   let tmp = {};
-  Cu.import("resource:///modules/devtools/client/shared/DeveloperToolbar.jsm", tmp);
+  Cu.import("resource://devtools/client/shared/DeveloperToolbar.jsm", tmp);
   return new tmp.DeveloperToolbar(window, document.getElementById("developer-toolbar"));
 });
 
 XPCOMUtils.defineLazyGetter(this, "BrowserToolboxProcess", function() {
   let tmp = {};
-  Cu.import("resource:///modules/devtools/client/framework/ToolboxProcess.jsm", tmp);
+  Cu.import("resource://devtools/client/framework/ToolboxProcess.jsm", tmp);
   return tmp.BrowserToolboxProcess;
 });
 
@@ -256,6 +258,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "ReaderMode",
 
 XPCOMUtils.defineLazyModuleGetter(this, "ReaderParent",
   "resource:///modules/ReaderParent.jsm");
+
+XPCOMUtils.defineLazyModuleGetter(this, "LoginManagerParent",
+  "resource://gre/modules/LoginManagerParent.jsm");
 
 var gInitialPages = [
   "about:blank",
@@ -1070,6 +1075,7 @@ var gBrowserInit = {
     }
 
     // Misc. inits.
+    TabletModeUpdater.init();
     CombinedStopReload.init();
     gPrivateBrowsingUI.init();
     TabsInTitlebar.init();
@@ -1193,6 +1199,10 @@ var gBrowserInit = {
         break;
       }
     }, false, true);
+
+    gBrowser.addEventListener("InsecureLoginFormsStateChange", function() {
+      gIdentityHandler.refreshForInsecureLoginForms();
+    });
 
     let uriToLoad = this._getUriToLoad();
     if (uriToLoad && uriToLoad != "about:blank") {
@@ -1553,6 +1563,8 @@ var gBrowserInit = {
     TabsInTitlebar.uninit();
 
     ToolbarIconColor.uninit();
+
+    TabletModeUpdater.uninit();
 
     BrowserOnClick.uninit();
 
@@ -2345,6 +2357,15 @@ function BrowserViewSourceOfDocument(aArgsOrDocument) {
         let browserWindow = RecentWindow.getMostRecentBrowserWindow();
         tabBrowser = browserWindow.gBrowser;
       }
+      // Some internal URLs (such as specific chrome: and about: URLs that are
+      // not yet remote ready) cannot be loaded in a remote browser.  View
+      // source in tab expects the new view source browser's remoteness to match
+      // that of the original URL, so disable remoteness if necessary for this
+      // URL.
+      let contentProcess = Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT
+      let forceNotRemote =
+        gMultiProcessBrowser &&
+        !E10SUtils.canLoadURIInProcess(args.URL, contentProcess);
       // `viewSourceInBrowser` will load the source content from the page
       // descriptor for the tab (when possible) or fallback to the network if
       // that fails.  Either way, the view source module will manage the tab's
@@ -2352,7 +2373,8 @@ function BrowserViewSourceOfDocument(aArgsOrDocument) {
       // requests.
       let tab = tabBrowser.loadOneTab("about:blank", {
         relatedToCurrent: true,
-        inBackground: false
+        inBackground: false,
+        forceNotRemote,
       });
       args.viewSourceBrowser = tabBrowser.getBrowserForTab(tab);
       top.gViewSourceUtils.viewSourceInBrowser(args);
@@ -2738,6 +2760,7 @@ var BrowserOnClick = {
     mm.addMessageListener("Browser:SendSSLErrorReport", this);
     mm.addMessageListener("Browser:SetSSLErrorReportAuto", this);
     mm.addMessageListener("Browser:SSLErrorReportTelemetry", this);
+    mm.addMessageListener("Browser:OverrideWeakCrypto", this);
   },
 
   uninit: function () {
@@ -2748,6 +2771,7 @@ var BrowserOnClick = {
     mm.removeMessageListener("Browser:SendSSLErrorReport", this);
     mm.removeMessageListener("Browser:SetSSLErrorReportAuto", this);
     mm.removeMessageListener("Browser:SSLErrorReportTelemetry", this);
+    mm.removeMessageListener("Browser:OverrideWeakCrypto", this);
   },
 
   handleEvent: function (event) {
@@ -2804,6 +2828,14 @@ var BrowserOnClick = {
         let reportStatus = msg.data.reportStatus;
         Services.telemetry.getHistogramById("TLS_ERROR_REPORT_UI")
           .add(reportStatus);
+      break;
+      case "Browser:OverrideWeakCrypto":
+        let weakCryptoOverride = Cc["@mozilla.org/security/weakcryptooverride;1"]
+                                   .getService(Ci.nsIWeakCryptoOverride);
+        weakCryptoOverride.addWeakCryptoOverride(
+          msg.data.location.hostname,
+          PrivateBrowsingUtils.isBrowserPrivate(gBrowser.selectedBrowser),
+          true /* temporary */);
       break;
     }
   },
@@ -5380,6 +5412,34 @@ var TabsInTitlebar = {
   }
 };
 
+var TabletModeUpdater = {
+  init() {
+    if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+      this.update(WindowsUIUtils.inTabletMode);
+      Services.obs.addObserver(this, "tablet-mode-change", false);
+    }
+  },
+
+  uninit() {
+    if (AppConstants.isPlatformAndVersionAtLeast("win", "10")) {
+      Services.obs.removeObserver(this, "tablet-mode-change");
+    }
+  },
+
+  observe(subject, topic, data) {
+    this.update(data == "tablet-mode");
+  },
+
+  update(isInTabletMode) {
+    if (isInTabletMode) {
+      document.documentElement.setAttribute("tabletmode", "true");
+    } else {
+      document.documentElement.removeAttribute("tabletmode");
+    }
+    TabsInTitlebar.updateAppearance(true);
+  },
+};
+
 #ifdef CAN_DRAW_IN_TITLEBAR
 function updateTitlebarDisplay() {
 
@@ -7011,6 +7071,7 @@ var gIdentityHandler = {
    *        processed by nsIURIFixup.createExposableURI.
    */
   updateIdentity(state, uri) {
+    let shouldHidePopup = this._uri && (this._uri.spec != uri.spec);
     this._state = state;
     this._uri = uri;
 
@@ -7024,7 +7085,7 @@ var gIdentityHandler = {
       this._uriHasHost = false;
     }
 
-    let whitelist = /^(?:accounts|addons|app-manager|cache|config|crashes|customizing|downloads|healthreport|home|license|newaddon|permissions|preferences|privatebrowsing|rights|sessionrestore|support|welcomeback)(?:[?#]|$)/i;
+    let whitelist = /^(?:accounts|addons|cache|config|crashes|customizing|downloads|healthreport|home|license|newaddon|permissions|preferences|privatebrowsing|rights|sessionrestore|support|welcomeback)(?:[?#]|$)/i;
     this._isSecureInternalUI = uri.schemeIs("about") && whitelist.test(uri.path);
 
     this._sslStatus = gBrowser.securityUI
@@ -7035,15 +7096,31 @@ var gIdentityHandler = {
     }
 
     // Then, update the user interface with the available data.
-
-    if (this._identityBox) {
-      this.refreshIdentityBlock();
+    this.refreshIdentityBlock();
+    // Handle a location change while the Control Center is focused
+    // by closing the popup (bug 1207542)
+    if (shouldHidePopup) {
+      this._identityPopup.hidePopup();
     }
 
     // NOTE: We do NOT update the identity popup (the control center) when
-    // we receive a new security state. If the user opened the popup and looks
-    // at the provided information we don't want to suddenly change the panel
-    // contents.
+    // we receive a new security state on the existing page (i.e. from a
+    // subframe). If the user opened the popup and looks at the provided
+    // information we don't want to suddenly change the panel contents.
+  },
+
+  /**
+   * This is called asynchronously when requested by the Logins module, after
+   * the insecure login forms state for the page has been updated.
+   */
+  refreshForInsecureLoginForms() {
+    // Check this._uri because we don't want to refresh the user interface if
+    // this is called before the first page load in the window for any reason.
+    if (!this._uri) {
+      Cu.reportError("Unexpected early call to refreshForInsecureLoginForms.");
+      return;
+    }
+    this.refreshIdentityBlock();
   },
 
   /**
@@ -7082,6 +7159,10 @@ var gIdentityHandler = {
    * Updates the identity block user interface with the data from this object.
    */
   refreshIdentityBlock() {
+    if (!this._identityBox) {
+      return;
+    }
+
     let icon_label = "";
     let tooltip = "";
     let icon_country_label = "";
@@ -7150,6 +7231,11 @@ var gIdentityHandler = {
           this._identityBox.classList.add("weakCipher");
         }
       }
+      if (LoginManagerParent.hasInsecureLoginForms(gBrowser.selectedBrowser)) {
+        // Insecure login forms can only be present on "unknown identity"
+        // pages, either already insecure or with mixed active content loaded.
+        this._identityBox.classList.add("insecureLoginForms");
+      }
       tooltip = gNavigatorBundle.getString("identity.unknown.tooltip");
     }
 
@@ -7185,6 +7271,12 @@ var gIdentityHandler = {
       connection = "secure-ev";
     } else if (this._isSecure) {
       connection = "secure";
+    }
+
+    // Determine if there are insecure login forms.
+    let loginforms = "secure";
+    if (LoginManagerParent.hasInsecureLoginForms(gBrowser.selectedBrowser)) {
+      loginforms = "insecure";
     }
 
     // Determine the mixed content state.
@@ -7224,6 +7316,7 @@ var gIdentityHandler = {
     for (let id of elementIDs) {
       let element = document.getElementById(id);
       updateAttribute(element, "connection", connection);
+      updateAttribute(element, "loginforms", loginforms);
       updateAttribute(element, "ciphers", ciphers);
       updateAttribute(element, "mixedcontent", mixedcontent);
       updateAttribute(element, "isbroken", this._isBroken);
@@ -7774,14 +7867,14 @@ var TabContextMenu = {
 };
 
 XPCOMUtils.defineLazyModuleGetter(this, "gDevTools",
-                                  "resource:///modules/devtools/client/framework/gDevTools.jsm");
+                                  "resource://devtools/client/framework/gDevTools.jsm");
 
 XPCOMUtils.defineLazyModuleGetter(this, "gDevToolsBrowser",
-                                  "resource:///modules/devtools/client/framework/gDevTools.jsm");
+                                  "resource://devtools/client/framework/gDevTools.jsm");
 
 Object.defineProperty(this, "HUDService", {
   get: function HUDService_getter() {
-    let devtools = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {}).devtools;
+    let devtools = Cu.import("resource://devtools/shared/Loader.jsm", {}).devtools;
     return devtools.require("devtools/client/webconsole/hudservice");
   },
   configurable: true,
@@ -7853,7 +7946,7 @@ var Scratchpad = {
 
 XPCOMUtils.defineLazyGetter(Scratchpad, "ScratchpadManager", function() {
   let tmp = {};
-  Cu.import("resource:///modules/devtools/client/scratchpad/scratchpad-manager.jsm", tmp);
+  Cu.import("resource://devtools/client/scratchpad/scratchpad-manager.jsm", tmp);
   return tmp.ScratchpadManager;
 });
 
@@ -7865,7 +7958,7 @@ var ResponsiveUI = {
 
 XPCOMUtils.defineLazyGetter(ResponsiveUI, "ResponsiveUIManager", function() {
   let tmp = {};
-  Cu.import("resource:///modules/devtools/client/responsivedesign/responsivedesign.jsm", tmp);
+  Cu.import("resource://devtools/client/responsivedesign/responsivedesign.jsm", tmp);
   return tmp.ResponsiveUIManager;
 });
 
@@ -7877,7 +7970,7 @@ function openEyedropper() {
 
 Object.defineProperty(this, "Eyedropper", {
   get: function() {
-    let devtools = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {}).devtools;
+    let devtools = Cu.import("resource://devtools/shared/Loader.jsm", {}).devtools;
     return devtools.require("devtools/client/eyedropper/eyedropper").Eyedropper;
   },
   configurable: true,
@@ -8082,3 +8175,83 @@ var AboutPrivateBrowsingListener = {
     });
   }
 };
+
+function TabModalPromptBox(browser) {
+  this._weakBrowserRef = Cu.getWeakReference(browser);
+}
+
+TabModalPromptBox.prototype = {
+  _promptCloseCallback(onCloseCallback, principalToAllowFocusFor, allowFocusCheckbox, ...args) {
+    if (principalToAllowFocusFor && allowFocusCheckbox.checked) {
+      Services.perms.addFromPrincipal(principalToAllowFocusFor, "focus-tab-by-prompt",
+                                      Services.perms.ALLOW_ACTION);
+    }
+    onCloseCallback.apply(this, args);
+  },
+
+  appendPrompt(args, onCloseCallback) {
+    const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+    let newPrompt = document.createElementNS(XUL_NS, "tabmodalprompt");
+    let browser = this.browser;
+    browser.parentNode.appendChild(newPrompt);
+    browser.setAttribute("tabmodalPromptShowing", true);
+
+    newPrompt.clientTop; // style flush to assure binding is attached
+
+    let principalToAllowFocusFor = this._allowTabFocusByPromptPrincipal;
+    delete this._allowTabFocusByPromptPrincipal;
+
+    let allowFocusCheckbox; // Define outside the if block so we can bind it into the callback.
+    if (principalToAllowFocusFor) {
+      let allowFocusRow = document.createElementNS(XUL_NS, "row");
+      allowFocusCheckbox = document.createElementNS(XUL_NS, "checkbox");
+      let spacer = document.createElementNS(XUL_NS, "spacer");
+      allowFocusRow.appendChild(spacer);
+      let label = gBrowser.mStringBundle.getFormattedString("tabs.allowTabFocusByPromptForSite",
+                                                            [principalToAllowFocusFor.URI.host]);
+      allowFocusCheckbox.setAttribute("label", label);
+      allowFocusRow.appendChild(allowFocusCheckbox);
+      newPrompt.appendChild(allowFocusRow);
+    }
+
+    let tab = gBrowser.getTabForBrowser(browser);
+    let closeCB = this._promptCloseCallback.bind(null, onCloseCallback, principalToAllowFocusFor,
+                                                 allowFocusCheckbox);
+    newPrompt.init(args, tab, closeCB);
+    return newPrompt;
+  },
+
+  removePrompt(aPrompt) {
+    let browser = this.browser;
+    browser.parentNode.removeChild(aPrompt);
+
+    let prompts = this.listPrompts();
+    if (prompts.length) {
+      let prompt = prompts[prompts.length - 1];
+      prompt.Dialog.setDefaultFocus();
+    } else {
+      browser.removeAttribute("tabmodalPromptShowing");
+      browser.focus();
+    }
+  },
+
+  listPrompts(aPrompt) {
+    // Get the nodelist, then return as an array
+    const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+    let els = this.browser.parentNode.getElementsByTagNameNS(XUL_NS, "tabmodalprompt");
+    return Array.from(els);
+  },
+
+  onNextPromptShowAllowFocusCheckboxFor(principal) {
+    this._allowTabFocusByPromptPrincipal = principal;
+  },
+
+  get browser() {
+    let browser = this._weakBrowserRef.get();
+    if (!browser) {
+      throw "Stale promptbox! The associated browser is gone.";
+    }
+    return browser;
+  },
+};
+

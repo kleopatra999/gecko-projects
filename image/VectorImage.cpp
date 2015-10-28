@@ -112,7 +112,7 @@ protected:
   }
 
   // Private data
-  const nsRefPtr<SVGDocumentWrapper> mDocWrapper;
+  const RefPtr<SVGDocumentWrapper> mDocWrapper;
   VectorImage* const mVectorImage;   // Raw pointer because it owns me.
   bool mHonoringInvalidations;
 };
@@ -152,7 +152,7 @@ public:
 
     // OnSVGDocumentParsed will release our owner's reference to us, so ensure
     // we stick around long enough to complete our work.
-    nsRefPtr<SVGParseCompleteListener> kungFuDeathGroup(this);
+    RefPtr<SVGParseCompleteListener> kungFuDeathGroup(this);
 
     mImage->OnSVGDocumentParsed();
   }
@@ -211,7 +211,7 @@ public:
 
     // OnSVGDocumentLoaded/OnSVGDocumentError will release our owner's reference
     // to us, so ensure we stick around long enough to complete our work.
-    nsRefPtr<SVGLoadEventListener> kungFuDeathGroup(this);
+    RefPtr<SVGLoadEventListener> kungFuDeathGroup(this);
 
     nsAutoString eventType;
     aEvent->GetType(eventType);
@@ -266,7 +266,7 @@ public:
                           const Filter& aFilter,
                           const gfxMatrix& aTransform);
 private:
-  nsRefPtr<SVGDocumentWrapper> mSVGDocumentWrapper;
+  RefPtr<SVGDocumentWrapper> mSVGDocumentWrapper;
   const IntRect              mViewport;
   const IntSize                mSize;
   uint32_t                     mImageFlags;
@@ -683,8 +683,6 @@ VectorImage::IsOpaque()
 }
 
 //******************************************************************************
-/* [noscript] SourceSurface getFrame(in uint32_t aWhichFrame,
- *                                   in uint32_t aFlags; */
 NS_IMETHODIMP_(already_AddRefed<SourceSurface>)
 VectorImage::GetFrame(uint32_t aWhichFrame, uint32_t aFlags)
 {
@@ -733,7 +731,7 @@ VectorImage::GetFrameAtSize(const IntSize& aSize,
     return nullptr;
   }
 
-  nsRefPtr<gfxContext> context = new gfxContext(dt);
+  RefPtr<gfxContext> context = new gfxContext(dt);
 
   auto result = Draw(context, aSize, ImageRegion::Create(aSize),
                      aWhichFrame, Filter::POINT, Nothing(), aFlags);
@@ -793,13 +791,6 @@ struct SVGDrawingParameters
 };
 
 //******************************************************************************
-/* [noscript] void draw(in gfxContext aContext,
- *                      [const] in nsIntSize aSize,
- *                      [const] in ImageRegion aRegion,
- *                      in uint32_t aWhichFrame,
- *                      in Filter aFilter,
- *                      [const] in MaybeSVGImageContext aSVGContext,
- *                      in uint32_t aFlags); */
 NS_IMETHODIMP_(DrawResult)
 VectorImage::Draw(gfxContext* aContext,
                   const nsIntSize& aSize,
@@ -862,7 +853,7 @@ VectorImage::Draw(gfxContext* aContext,
   if (result) {
     RefPtr<SourceSurface> surface = result.DrawableRef()->GetSurface();
     if (surface) {
-      nsRefPtr<gfxDrawable> svgDrawable =
+      RefPtr<gfxDrawable> svgDrawable =
         new gfxSurfaceDrawable(surface, result.DrawableRef()->GetSize());
       Show(svgDrawable, params);
       return DrawResult::SUCCESS;
@@ -883,13 +874,13 @@ VectorImage::CreateSurfaceAndShow(const SVGDrawingParameters& aParams)
   mSVGDocumentWrapper->UpdateViewportBounds(aParams.viewportSize);
   mSVGDocumentWrapper->FlushImageTransformInvalidation();
 
-  nsRefPtr<gfxDrawingCallback> cb =
+  RefPtr<gfxDrawingCallback> cb =
     new SVGDrawingCallback(mSVGDocumentWrapper,
                            IntRect(IntPoint(0, 0), aParams.viewportSize),
                            aParams.size,
                            aParams.flags);
 
-  nsRefPtr<gfxDrawable> svgDrawable =
+  RefPtr<gfxDrawable> svgDrawable =
     new gfxCallbackDrawable(cb, aParams.size);
 
   bool bypassCache = bool(aParams.flags & FLAG_BYPASS_SURFACE_CACHE) ||
@@ -912,7 +903,7 @@ VectorImage::CreateSurfaceAndShow(const SVGDrawingParameters& aParams)
 
   // Try to create an imgFrame, initializing the surface it contains by drawing
   // our gfxDrawable into it. (We use FILTER_NEAREST since we never scale here.)
-  nsRefPtr<imgFrame> frame = new imgFrame;
+  RefPtr<imgFrame> frame = new imgFrame;
   nsresult rv =
     frame->InitWithDrawable(svgDrawable, aParams.size,
                             SurfaceFormat::B8G8R8A8,
@@ -939,7 +930,7 @@ VectorImage::CreateSurfaceAndShow(const SVGDrawingParameters& aParams)
                                         aParams.animationTime));
 
   // Draw.
-  nsRefPtr<gfxDrawable> drawable =
+  RefPtr<gfxDrawable> drawable =
     new gfxSurfaceDrawable(surface, aParams.size);
   Show(drawable, aParams);
 
@@ -1134,8 +1125,6 @@ VectorImage::OnStartRequest(nsIRequest* aRequest, nsISupports* aCtxt)
 }
 
 //******************************************************************************
-/* void onStopRequest(in nsIRequest request, in nsISupports ctxt,
-                      in nsresult status); */
 NS_IMETHODIMP
 VectorImage::OnStopRequest(nsIRequest* aRequest, nsISupports* aCtxt,
                            nsresult aStatus)
@@ -1225,9 +1214,7 @@ VectorImage::OnSVGDocumentError()
 
   if (mProgressTracker) {
     // Notify observers about the error and unblock page load.
-    Progress progress = FLAG_DECODE_COMPLETE |
-                        FLAG_ONLOAD_UNBLOCKED |
-                        FLAG_HAS_ERROR;
+    Progress progress = FLAG_ONLOAD_UNBLOCKED | FLAG_HAS_ERROR;
 
     // Merge in any saved progress from OnImageDataComplete.
     if (mLoadProgress) {
@@ -1243,9 +1230,6 @@ VectorImage::OnSVGDocumentError()
 // nsIStreamListener method
 
 //******************************************************************************
-/* void onDataAvailable(in nsIRequest request, in nsISupports ctxt,
-                        in nsIInputStream inStr, in unsigned long sourceOffset,
-                        in unsigned long count); */
 NS_IMETHODIMP
 VectorImage::OnDataAvailable(nsIRequest* aRequest, nsISupports* aCtxt,
                              nsIInputStream* aInStr, uint64_t aSourceOffset,

@@ -11,8 +11,8 @@
     -->
     <style name="GeckoBase" parent="Theme.AppCompat.Light.DarkActionBar">
         <item name="android:windowContentOverlay">@null</item>
-        <item name="android:windowActionBar">false</item>
-        <item name="android:windowNoTitle">true</item>
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
     </style>
 
     <style name="GeckoDialogBase" parent="@android:style/Theme.Holo.Light.Dialog">
@@ -44,7 +44,7 @@
         <item name="android:panelBackground">@drawable/menu_panel_bg</item>
         <item name="android:spinnerDropDownItemStyle">@style/Widget.DropDownItem.Spinner</item>
         <item name="android:spinnerItemStyle">@style/Widget.TextView.SpinnerItem</item>
-        <item name="menuItemActionViewStyle">@style/Widget.MenuItemActionView</item>
+        <item name="menuItemSwitcherLayoutStyle">@style/Widget.MenuItemSwitcherLayout</item>
         <item name="menuItemDefaultStyle">@style/Widget.MenuItemDefault</item>
         <item name="menuItemSecondaryActionBarStyle">@style/Widget.MenuItemSecondaryActionBar</item>
         <item name="tabGridLayoutViewStyle">@style/Widget.TabsGridLayout</item>

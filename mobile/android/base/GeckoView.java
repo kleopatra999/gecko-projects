@@ -118,6 +118,7 @@ public class GeckoView extends LayerView
         static native void open(Window instance, GeckoView view, int width, int height);
         static native void setLayerClient(Object client);
         @Override protected native void disposeNative();
+        native void close();
     }
 
     private final Window window = new Window();
@@ -237,7 +238,20 @@ public class GeckoView extends LayerView
     public void onDetachedFromWindow()
     {
         super.onDetachedFromWindow();
-        window.disposeNative();
+
+        // FIXME: because we don't support separate nsWindow for each GeckoView
+        // yet, we have to keep this window around in case another GeckoView
+        // wants to attach. So don't call window.close() for now.
+
+        if (GeckoThread.isStateAtLeast(GeckoThread.State.PROFILE_READY)) {
+            // window.close();
+            window.disposeNative();
+        } else {
+            // GeckoThread.queueNativeCallUntil(GeckoThread.State.PROFILE_READY,
+            //        window, "close");
+            GeckoThread.queueNativeCallUntil(GeckoThread.State.PROFILE_READY,
+                    window, "disposeNative");
+        }
     }
 
     /* package */ void setInputConnectionListener(final InputConnectionListener icl) {

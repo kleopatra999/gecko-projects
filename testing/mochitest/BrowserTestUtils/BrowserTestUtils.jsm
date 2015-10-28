@@ -602,4 +602,57 @@ this.BrowserTestUtils = {
 
     return extra;
   }),
+
+  /**
+   * Returns a promise that is resolved when element gains attribute (or,
+   * optionally, when it is set to value).
+   * @param {String} attr
+   *        The attribute to wait for
+   * @param {Element} element
+   *        The element which should gain the attribute
+   * @param {String} value (optional)
+   *        Optional, the value the attribute should have.
+   *
+   * @returns {Promise}
+   */
+  waitForAttribute(attr, element, value) {
+    let MutationObserver = element.ownerDocument.defaultView.MutationObserver;
+    return new Promise(resolve => {
+      let mut = new MutationObserver(mutations => {
+        if ((!value && element.getAttribute(attr)) ||
+            (value && element.getAttribute(attr) === value)) {
+          resolve();
+          mut.disconnect();
+          return;
+        }
+      });
+
+      mut.observe(element, {attributeFilter: [attr]});
+    });
+  },
+
+  /**
+   * Version of EventUtils' `sendChar` function; it will synthesize a keypress
+   * event in a child process and returns a Promise that will result when the
+   * event was fired. Instead of a Window, a Browser object is required to be
+   * passed to this function.
+   *
+   * @param {String} char
+   *        A character for the keypress event that is sent to the browser.
+   * @param {Browser} browser
+   *        Browser element, must not be null.
+   *
+   * @returns {Promise}
+   * @resolves True if the keypress event was synthesized.
+   */
+  sendChar(char, browser) {
+    return new Promise(resolve => {
+      let mm = browser.messageManager;
+      mm.addMessageListener("Test:SendCharDone", function charMsg(message) {
+        mm.removeMessageListener("Test:SendCharDone", charMsg);
+        resolve(message.data.sendCharResult);
+      });
+      mm.sendAsyncMessage("Test:SendChar", { char: char });
+    });
+  }
 };

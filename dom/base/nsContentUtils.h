@@ -1672,24 +1672,6 @@ public:
    */
   static void RunInMetastableState(already_AddRefed<nsIRunnable> aRunnable);
 
-  /**
-   * Retrieve information about the viewport as a data structure.
-   * This will return information in the viewport META data section
-   * of the document. This can be used in lieu of ProcessViewportInfo(),
-   * which places the viewport information in the document header instead
-   * of returning it directly.
-   *
-   * @param aDisplayWidth width of the on-screen display area for this
-   * document, in device pixels.
-   * @param aDisplayHeight height of the on-screen display area for this
-   * document, in device pixels.
-   *
-   * NOTE: If the site is optimized for mobile (via the doctype), this
-   * will return viewport information that specifies default information.
-   */
-  static nsViewportInfo GetViewportInfo(nsIDocument* aDocument,
-                                        const mozilla::ScreenIntSize& aDisplaySize);
-
   // Call EnterMicroTask when you're entering JS execution.
   // Usually the best way to do this is to use nsAutoMicroTask.
   static void EnterMicroTask();
@@ -2089,7 +2071,7 @@ public:
    * Returns true if aWin and the current pointer lock document
    * have common scriptable top window.
    */
-  static bool IsInPointerLockContext(nsIDOMWindow* aWin);
+  static bool IsInPointerLockContext(nsPIDOMWindow* aWin);
 
   /**
    * Returns the time limit on handling user input before
@@ -2331,14 +2313,6 @@ public:
                                         int32_t& aOutEndOffset);
 
   /**
-   * Takes a selection, and return selection's bounding rect which is relative
-   * to root frame.
-   *
-   * @param aSel      Selection to check
-   */
-  static nsRect GetSelectionBoundingRect(mozilla::dom::Selection* aSel);
-
-  /**
    * Takes a frame for anonymous content within a text control (<input> or
    * <textarea>), and returns an offset in the text content, adjusted for a
    * trailing <br> frame.
@@ -2560,6 +2534,13 @@ public:
    * (if that is possible, the caller should use StorageAllowedForWindow)
    */
   static StorageAccess StorageAllowedForPrincipal(nsIPrincipal* aPrincipal);
+
+  /*
+   * Serializes a HTML nsINode into its markup representation.
+   */
+  static bool SerializeNodeToMarkup(nsINode* aRoot,
+                                    bool aDescendentsOnly,
+                                    nsAString& aOut);
 
 private:
   static bool InitializeEventTable();

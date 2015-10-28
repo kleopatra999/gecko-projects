@@ -469,51 +469,6 @@ html, .fx-embedded, #main,
   height: 100%;
 }
 
-.room-conversation-wrapper header {
-  background: #000;
-  height: 50px;
-  text-align: left;
-  margin: 0 10px;
-}
-
-html[dir="rtl"] .room-conversation-wrapper header {
-  text-align: right;
-}
-
-.room-conversation-wrapper header h1 {
-  font-size: 1.5em;
-  color: #fff;
-  line-height: 50px;
-  text-indent: 40px;
-  background-image: url("../img/firefox-logo.png");
-  background-size: 30px;
-  background-position: 0 center;
-  background-repeat: no-repeat;
-  display: inline-block;
-  margin: 0 10px;
-}
-
-html[dir="rtl"] .room-conversation-wrapper header h1 {
-  background-position: 100% center;
-}
-
-.room-conversation-wrapper header a {
-  float: right;
-}
-
-html[dir="rtl"] .room-conversation-wrapper header a {
-  float: left;
-}
-
-.room-conversation-wrapper header .icon-help {
-  display: inline-block;
-  background-size: contain;
-  margin-top: 15px;
-  width: 20px;
-  height: 20px;
-  background: transparent url("../img/svg/glyph-help-16x16.svg") no-repeat;
-}
-
 .room-invitation-overlay {
   position: absolute;
   background: rgba(255, 255, 255, 0.85);
@@ -575,13 +530,13 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
 }
 
 .context-url-view-wrapper {
-  padding: 12px;
-  margin-bottom: 0.5em;
+  padding: 14px 15px;
   background-color: #dbf7ff;
 }
 
 .showing-room-name > .text-chat-entries > .text-chat-scroller > .context-url-view-wrapper {
   padding-top: 0;
+  margin-bottom: 0;
 }
 
 .room-context {
@@ -676,12 +631,6 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   height: 100%;
 }
 
-.standalone-room-wrapper > .media-layout {
-  /* 50px is the header, 10px is the bottom margin. */
-  height: calc(100% - 50px - 10px);
-  margin: 0 10px;
-}
-
 .media-layout > .media-wrapper {
   display: flex;
   flex-flow: column wrap;
@@ -696,7 +645,7 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   /* 100% height to fill up media-layout, thus forcing other elements into the
      second column that's 200px wide */
   height: 100%;
-  background-color: #4E4E4E;
+  background-color: #D8D8D8;
 }
 
 .media-wrapper > .local {
@@ -797,11 +746,6 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
 }
 
 @media screen and (max-width:640px) {
-  .standalone-room-wrapper > .media-layout {
-    /* 50px is height of header, 10px is bottom margin. */
-    height: calc(100% - 50px - 10px);
-  }
-
   .media-layout > .media-wrapper {
     flex-direction: row;
     margin: 0;
@@ -811,7 +755,7 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   .media-wrapper > .focus-stream {
     width: 100%;
     /* A reasonable height */
-    height: 70%;
+    height: 55%;
   }
 
   .media-wrapper.receiving-screen-share > .focus-stream {
@@ -832,8 +776,8 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   }
 
   .media-wrapper > .focus-stream > .local ~ .conversation-toolbar {
-    /* 22px are the margins, 120px is for the local video area. */
-    max-width: calc(100% - 22px - 120px);
+    /* 120px is for the local video area. */
+    max-width: calc(100% - 120px);
   }
 
   .media-wrapper > .focus-stream > .local {
@@ -887,7 +831,7 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
 
   .desktop-room-wrapper > .media-layout > .media-wrapper > .text-chat-view {
     /* This is temp, to echo the .media-wrapper > .text-chat-view above */
-    height: 30%;
+    height: 45%;
   }
 
   .media-wrapper.receiving-screen-share > .screen {
@@ -938,7 +882,7 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   }
 
   .media-wrapper > .focus-stream > .local ~ .conversation-toolbar {
-    max-width: calc(75% - 22px);
+    max-width: 75%;
   }
 
   .media-wrapper > .focus-stream > .local {
@@ -981,12 +925,17 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   }
 
   .media-wrapper:not(.showing-remote-streams) > .focus-stream > .local ~ .conversation-toolbar {
-    max-width: calc(100% - 22px);
+    max-width: 100%;
   }
 
   .media-wrapper > .focus-stream {
     flex: 1 1 auto;
-    height: auto;
+    /* To keep the aspect ratio of video. Update accordingly with chatbox[customSize] width */
+    height: 263px;
+  }
+
+  .desktop-room-wrapper > .media-layout > .media-wrapper > .text-chat-view {
+    height: calc(100% - 263px);
   }
 }
 
@@ -1007,9 +956,17 @@ body[platform="win"] .share-service-dropdown.overflow > .dropdown-menu-item {
   align-items: flex-start;
 }
 
+.text-chat-header > p {
+  margin: 0;
+}
+
 .text-chat-entry {
   /* aligns paragraph to side where reading starts from */
   text-align: start;
+}
+
+.text-chat-scroller div:nth-child(2) {
+  margin-top: .5em;
 }
 
 /* Sent text chat entries should be on the right */
@@ -1036,8 +993,6 @@ html[dir="rtl"] .text-chat-entry.received {
   margin-right: 5px;
 }
 
-/* If you change this entry, check it doesn't affect the "special" text
-   chat entries as well (.speical, .room-name, .context-url-view-wrapper */
 .text-chat-entry > p {
   position: relative;
   z-index: 10;
@@ -1247,8 +1202,7 @@ html[dir="rtl"] .text-chat-entry.received .text-chat-arrow {
     left: 0;
   }
   .standalone .room-conversation-wrapper .video-layout-wrapper {
-    /* 50px: header's height; 10px: bottom margin */
-    height: calc(100% - 50px - 10px);
+    height: 100%;
   }
   .standalone .room-conversation .video_wrapper.remote_wrapper {
     width: 100%;
@@ -1263,8 +1217,6 @@ html[dir="rtl"] .text-chat-entry.received .text-chat-arrow {
   .text-chat-view {
     display: flex;
     flex-flow: column nowrap;
-    /* 120px max-height of .text-chat-entries plus 40px of .text-chat-box */
-    max-height: 160px;
     /* 60px min-height of .text-chat-entries plus 40px of .text-chat-box */
     min-height: 100px;
     height: auto;
@@ -1275,7 +1227,6 @@ html[dir="rtl"] .text-chat-entry.received .text-chat-arrow {
 
   .text-chat-entries {
     flex: 1 1 auto;
-    max-height: 120px;
     min-height: 60px;
   }
 

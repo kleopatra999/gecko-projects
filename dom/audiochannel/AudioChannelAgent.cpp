@@ -60,8 +60,6 @@ NS_IMETHODIMP AudioChannelAgent::GetAudioChannelType(int32_t *aAudioChannelType)
   return NS_OK;
 }
 
-/* boolean init (in nsIDOMWindow window, in long channelType,
- *               in nsIAudioChannelAgentCallback callback); */
 NS_IMETHODIMP
 AudioChannelAgent::Init(nsIDOMWindow* aWindow, int32_t aChannelType,
                         nsIAudioChannelAgentCallback *aCallback)
@@ -70,8 +68,6 @@ AudioChannelAgent::Init(nsIDOMWindow* aWindow, int32_t aChannelType,
                       /* useWeakRef = */ false);
 }
 
-/* boolean initWithWeakCallback (in nsIDOMWindow window, in long channelType,
- *                               in nsIAudioChannelAgentCallback callback); */
 NS_IMETHODIMP
 AudioChannelAgent::InitWithWeakCallback(nsIDOMWindow* aWindow,
                                         int32_t aChannelType,
@@ -112,8 +108,7 @@ AudioChannelAgent::InitInternal(nsIDOMWindow* aWindow, int32_t aChannelType,
   MOZ_ASSERT(pInnerWindow->IsInnerWindow());
   mInnerWindowID = pInnerWindow->WindowID();
 
-  nsCOMPtr<nsIDOMWindow> topWindow;
-  aWindow->GetScriptableTop(getter_AddRefs(topWindow));
+  nsCOMPtr<nsPIDOMWindow> topWindow = pInnerWindow->GetScriptableTop();
   if (NS_WARN_IF(!topWindow)) {
     return NS_OK;
   }
@@ -152,7 +147,7 @@ NS_IMETHODIMP AudioChannelAgent::NotifyStartedPlaying(uint32_t aNotifyPlayback,
     return NS_OK;
   }
 
-  nsRefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
+  RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
   if (mAudioChannelType == AUDIO_AGENT_CHANNEL_ERROR ||
       service == nullptr || mIsRegToService) {
     return NS_ERROR_FAILURE;
@@ -175,7 +170,7 @@ NS_IMETHODIMP AudioChannelAgent::NotifyStoppedPlaying()
     return NS_ERROR_FAILURE;
   }
 
-  nsRefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
+  RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
   service->UnregisterAudioChannelAgent(this, mNotifyPlayback);
   mIsRegToService = false;
   return NS_OK;
@@ -202,7 +197,7 @@ AudioChannelAgent::WindowVolumeChanged()
   float volume = 1.0;
   bool muted = false;
 
-  nsRefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
+  RefPtr<AudioChannelService> service = AudioChannelService::GetOrCreate();
   service->GetState(mWindow, mAudioChannelType, &volume, &muted);
 
   callback->WindowVolumeChanged(volume, muted);

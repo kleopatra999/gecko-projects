@@ -244,6 +244,9 @@ pref("security.alternate_certificate_error_page", "certerror");
 
 pref("security.warn_viewing_mixed", false); // Warning is disabled.  See Bug 616712.
 
+// Block insecure active content on https pages
+pref("security.mixed_content.block_active_content", true);
+
 // 2 = strict certificate pinning checks.
 // This default preference is more strict than Firefox because B2G
 // currently does not have a way to install local root certificates.
@@ -319,7 +322,7 @@ pref("media.cache_readahead_limit", 30);
 
 #ifdef MOZ_FMP4
 // Enable/Disable Gonk Decoder Module
-pref("media.fragmented-mp4.gonk.enabled", true);
+pref("media.gonk.enabled", true);
 #endif
 
 //Encrypted media extensions.
@@ -577,7 +580,7 @@ pref("app.update.incompatible.mode", 0);
 pref("app.update.staging.enabled", true);
 pref("app.update.service.enabled", true);
 
-pref("app.update.url", "https://aus5.mozilla.org/update/3/%PRODUCT%/%VERSION%/%BUILD_ID%/%PRODUCT_DEVICE%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml");
+pref("app.update.url", "https://aus5.mozilla.org/update/5/%PRODUCT%/%VERSION%/%BUILD_ID%/%PRODUCT_DEVICE%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/%IMEI%/update.xml");
 pref("app.update.channel", "@MOZ_UPDATE_CHANNEL@");
 
 // Interval at which update manifest is fetched.  In units of seconds.
@@ -676,7 +679,7 @@ pref("javascript.options.mem.gc_max_empty_chunk_count", 2);
 pref("ui.showHideScrollbars", 1);
 pref("ui.useOverlayScrollbars", 1);
 pref("ui.scrollbarFadeBeginDelay", 450);
-pref("ui.scrollbarFadeDuration", 200);
+pref("ui.scrollbarFadeDuration", 0);
 
 // Scrollbar position follows the document `dir` attribute
 pref("layout.scrollbar.side", 1);
@@ -953,7 +956,7 @@ pref("devtools.debugger.unix-domain-socket", "/data/local/debugger-socket");
 // falling back to Skia/software for smaller canvases
 #ifdef MOZ_WIDGET_GONK
 pref("gfx.canvas.azure.backends", "skia");
-pref("gfx.canvas.azure.accelerated", false);
+pref("gfx.canvas.azure.accelerated", true);
 #endif
 
 // Turn on dynamic cache size for Skia
@@ -1022,6 +1025,7 @@ pref("apz.fling_curve_function_x2", "0.80");
 pref("apz.fling_curve_function_y2", "1.0");
 pref("apz.fling_curve_threshold_inches_per_ms", "0.01");
 pref("apz.fling_friction", "0.0019");
+pref("apz.fling_snap_friction", "0.015");
 pref("apz.max_velocity_inches_per_ms", "0.07");
 pref("apz.touch_start_tolerance", "0.1");
 
@@ -1065,7 +1069,7 @@ pref("dom.wakelock.enabled", true);
 
 // Enable webapps add-ons
 pref("dom.apps.customization.enabled", true);
-pref("dom.apps.reviewer_paths", "/reviewers/,/content/addon/review/");
+pref("dom.apps.reviewer_paths", "/reviewers/,/extension/reviewers/");
 
 // New implementation to unify touch-caret and selection-carets.
 pref("layout.accessiblecaret.enabled", true);

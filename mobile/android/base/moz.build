@@ -52,6 +52,10 @@ if CONFIG['ANDROID_APPCOMPAT_V7_AAR']:
     ANDROID_EXTRA_PACKAGES += ['android.support.v7.appcompat']
     ANDROID_EXTRA_RES_DIRS += ['%' + CONFIG['ANDROID_APPCOMPAT_V7_AAR_RES']]
     resjar.generated_sources += ['android/support/v7/appcompat/R.java']
+if CONFIG['ANDROID_DESIGN_AAR']:
+    ANDROID_EXTRA_PACKAGES += ['android.support.design']
+    ANDROID_EXTRA_RES_DIRS += ['%' + CONFIG['ANDROID_DESIGN_AAR_RES']]
+    resjar.generated_sources += ['android/support/design/R.java']
 if CONFIG['ANDROID_RECYCLERVIEW_V7_AAR']:
     ANDROID_EXTRA_PACKAGES += ['android.support.v7.recyclerview']
     ANDROID_EXTRA_RES_DIRS += ['%' + CONFIG['ANDROID_RECYCLERVIEW_V7_AAR_RES']]
@@ -385,7 +389,6 @@ gbjar.sources += [
     'IntentHelper.java',
     'javaaddons/JavaAddonManager.java',
     'javaaddons/JavaAddonManagerV1.java',
-    'LayoutInterceptor.java',
     'LocaleManager.java',
     'Locales.java',
     'lwt/LightweightTheme.java',
@@ -398,8 +401,8 @@ gbjar.sources += [
     'menu/GeckoMenuItem.java',
     'menu/GeckoSubMenu.java',
     'menu/MenuItemActionBar.java',
-    'menu/MenuItemActionView.java',
     'menu/MenuItemDefault.java',
+    'menu/MenuItemSwitcherLayout.java',
     'menu/MenuPanel.java',
     'menu/MenuPopup.java',
     'MotionEventInterceptor.java',
@@ -409,7 +412,6 @@ gbjar.sources += [
     'NotificationService.java',
     'NSSBridge.java',
     'OrderedBroadcastHelper.java',
-    'OuterLayout.java',
     'preferences/AlignRightLinkPreference.java',
     'preferences/AndroidImport.java',
     'preferences/AndroidImportPreference.java',
@@ -470,7 +472,7 @@ gbjar.sources += [
     'sqlite/SQLiteBridgeException.java',
     'SuggestClient.java',
     'SurfaceBits.java',
-    'sync/TabReceivedBroadcastReceiver.java',
+    'sync/TabReceivedService.java',
     'Tab.java',
     'tabqueue/TabQueueDispatcher.java',
     'tabqueue/TabQueueHelper.java',
@@ -616,7 +618,6 @@ if CONFIG['MOZ_ANDROID_SHARE_OVERLAY']:
         'overlays/service/sharemethods/SendTab.java',
         'overlays/service/sharemethods/ShareMethod.java',
         'overlays/ui/OverlayDialogButton.java',
-        'overlays/ui/OverlayToastHelper.java',
         'overlays/ui/SendTabDeviceListArrayAdapter.java',
         'overlays/ui/SendTabList.java',
         'overlays/ui/SendTabTargetSelectedListener.java',
@@ -690,6 +691,7 @@ if CONFIG['MOZ_NATIVE_DEVICES']:
         resjar.generated_sources += ['com/google/android/gms/cast/R.java']
 
 gbjar.extra_jars += [CONFIG['ANDROID_APPCOMPAT_V7_AAR_LIB']]
+gbjar.extra_jars += [CONFIG['ANDROID_DESIGN_AAR_LIB']]
 gbjar.extra_jars += [CONFIG['ANDROID_RECYCLERVIEW_V7_AAR_LIB']]
 
 gbjar.javac_flags += ['-Xlint:all,-deprecation,-fallthrough', '-J-Xmx512m', '-J-Xms128m']
@@ -818,6 +820,7 @@ ANDROID_RES_DIRS += [
 ]
 
 ANDROID_GENERATED_RESFILES += [
+    'res/raw/browsersearch.json',
     'res/raw/suggestedsites.json',
     'res/values/strings.xml',
 ]

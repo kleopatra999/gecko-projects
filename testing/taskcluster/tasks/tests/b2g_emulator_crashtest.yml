@@ -1,6 +1,6 @@
 ---
 $inherits:
-  from: 'tasks/test.yml'
+  from: 'tasks/tests/b2g_unittest_base.yml'
 task:
   metadata:
     name: '[TC] Crashtest'
@@ -32,7 +32,9 @@ task:
   extra:
     chunks:
       total: 5
-
+    treeherderEnv:
+      - production
+      - staging
     treeherder:
       groupName: Reftest
       groupSymbol: tc-R

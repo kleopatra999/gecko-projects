@@ -433,7 +433,7 @@ partial interface Navigator {
 };
 
 partial interface Navigator {
-  [Throws, Pref="dom.presentation.enabled", CheckAnyPermissions="presentation", SameObject]
+  [Throws, Pref="dom.presentation.enabled", Func="Navigator::HasPresentationSupport", SameObject]
   readonly attribute Presentation? presentation;
 };
 
@@ -447,7 +447,7 @@ partial interface Navigator {
   [Pref="media.eme.apiVisible", NewObject]
   Promise<MediaKeySystemAccess>
   requestMediaKeySystemAccess(DOMString keySystem,
-                              optional sequence<MediaKeySystemOptions> supportedConfigurations);
+                              sequence<MediaKeySystemConfiguration> supportedConfigurations);
 };
 #endif
 

@@ -589,9 +589,8 @@ pref("media.cache_readahead_limit", 30);
 pref("media.video-queue.default-size", 3);
 
 // Enable the MediaCodec PlatformDecoderModule by default.
-pref("media.fragmented-mp4.enabled", true);
-pref("media.fragmented-mp4.android-media-codec.enabled", true);
-pref("media.fragmented-mp4.android-media-codec.preferred", true);
+pref("media.android-media-codec.enabled", true);
+pref("media.android-media-codec.preferred", true);
 
 // Enable MSE
 pref("media.mediasource.enabled", true);
@@ -938,8 +937,8 @@ pref("dom.vr.cardboard.enabled", true);
 
 pref("browser.tabs.showAudioPlayingIcon", true);
 
-// Enable service workers and fetch interception on Nightly Fennec
-#ifdef NIGHTLY_BUILD
+// Enable service workers and fetch interception on non-release Fennec
+#ifndef RELEASE_BUILD
 pref("dom.serviceWorkers.enabled", true);
 pref("dom.serviceWorkers.interception.enabled", true);
 #endif

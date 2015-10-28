@@ -943,13 +943,7 @@ static bool
 DoThisFallback(JSContext* cx, ICThis_Fallback* stub, HandleValue thisv, MutableHandleValue ret)
 {
     FallbackICSpew(cx, stub, "This");
-
-    JSObject* thisObj = BoxNonStrictThis(cx, thisv);
-    if (!thisObj)
-        return false;
-
-    ret.setObject(*thisObj);
-    return true;
+    return BoxNonStrictThis(cx, thisv, ret);
 }
 
 typedef bool (*DoThisFallbackFn)(JSContext*, ICThis_Fallback*, HandleValue, MutableHandleValue);
@@ -6260,9 +6254,7 @@ ICGetProp_Fallback::Compiler::generateStubCode(MacroAssembler& masm)
 void
 ICGetProp_Fallback::Compiler::postGenerateStubCode(MacroAssembler& masm, Handle<JitCode*> code)
 {
-    CodeOffsetLabel offset(returnOffset_);
-    offset.fixup(&masm);
-    cx->compartment()->jitCompartment()->initBaselineGetPropReturnAddr(code->raw() + offset.offset());
+    cx->compartment()->jitCompartment()->initBaselineGetPropReturnAddr(code->raw() + returnOffset_);
 }
 
 bool
@@ -7759,9 +7751,7 @@ ICSetProp_Fallback::Compiler::generateStubCode(MacroAssembler& masm)
 void
 ICSetProp_Fallback::Compiler::postGenerateStubCode(MacroAssembler& masm, Handle<JitCode*> code)
 {
-    CodeOffsetLabel offset(returnOffset_);
-    offset.fixup(&masm);
-    cx->compartment()->jitCompartment()->initBaselineSetPropReturnAddr(code->raw() + offset.offset());
+    cx->compartment()->jitCompartment()->initBaselineSetPropReturnAddr(code->raw() + returnOffset_);
 }
 
 static void
@@ -9537,9 +9527,7 @@ ICCall_Fallback::Compiler::postGenerateStubCode(MacroAssembler& masm, Handle<Jit
     if (MOZ_UNLIKELY(isSpread_))
         return;
 
-    CodeOffsetLabel offset(returnOffset_);
-    offset.fixup(&masm);
-    cx->compartment()->jitCompartment()->initBaselineCallReturnAddr(code->raw() + offset.offset(),
+    cx->compartment()->jitCompartment()->initBaselineCallReturnAddr(code->raw() + returnOffset_,
                                                                     isConstructing_);
 }
 

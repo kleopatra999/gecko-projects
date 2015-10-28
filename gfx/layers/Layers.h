@@ -103,13 +103,8 @@ class LayersPacket;
   virtual const char* Name() const override { return n; }  \
   virtual LayerType GetType() const override { return e; }
 
-/**
- * Base class for userdata objects attached to layers and layer managers.
- */
-class LayerUserData {
-public:
-  virtual ~LayerUserData() {}
-};
+// Defined in LayerUserData.h; please include that file instead.
+class LayerUserData;
 
 /*
  * Motivation: For truly smooth animation and video playback, we need to
@@ -136,11 +131,6 @@ public:
  * efficient implementation in an "immediate mode" style. See the
  * BasicLayerManager for such an implementation.
  */
-
-static void LayerManagerUserDataDestroy(void *data)
-{
-  delete static_cast<LayerUserData*>(data);
-}
 
 /**
  * A LayerManager controls a tree of layers. All layers in the tree
@@ -509,16 +499,13 @@ public:
    */
   void SetUserData(void* aKey, LayerUserData* aData)
   {
-    mUserData.Add(static_cast<gfx::UserDataKey*>(aKey), aData, LayerManagerUserDataDestroy);
+    mUserData.Add(static_cast<gfx::UserDataKey*>(aKey), aData, LayerUserDataDestroy);
   }
   /**
    * This can be used anytime. Ownership passes to the caller!
    */
-  nsAutoPtr<LayerUserData> RemoveUserData(void* aKey)
-  {
-    nsAutoPtr<LayerUserData> d(static_cast<LayerUserData*>(mUserData.Remove(static_cast<gfx::UserDataKey*>(aKey))));
-    return d;
-  }
+  nsAutoPtr<LayerUserData> RemoveUserData(void* aKey);
+
   /**
    * This getter can be used anytime.
    */
@@ -676,8 +663,10 @@ public:
     return false;
   }
 
+  static void LayerUserDataDestroy(void* data);
+
 protected:
-  nsRefPtr<Layer> mRoot;
+  RefPtr<Layer> mRoot;
   gfx::UserData mUserData;
   bool mDestroyed;
   bool mSnapEffectiveTransforms;
@@ -1063,7 +1052,7 @@ public:
    * CONSTRUCTION PHASE ONLY
    * Add a FrameMetrics-associated mask layer.
    */
-  void SetAncestorMaskLayers(const nsTArray<nsRefPtr<Layer>>& aLayers) {
+  void SetAncestorMaskLayers(const nsTArray<RefPtr<Layer>>& aLayers) {
     if (aLayers != mAncestorMaskLayers) {
       MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) AncestorMaskLayers", this));
       mAncestorMaskLayers = aLayers;
@@ -1389,16 +1378,12 @@ public:
    */
   void SetUserData(void* aKey, LayerUserData* aData)
   {
-    mUserData.Add(static_cast<gfx::UserDataKey*>(aKey), aData, LayerManagerUserDataDestroy);
+    mUserData.Add(static_cast<gfx::UserDataKey*>(aKey), aData, LayerManager::LayerUserDataDestroy);
   }
   /**
    * This can be used anytime. Ownership passes to the caller!
    */
-  nsAutoPtr<LayerUserData> RemoveUserData(void* aKey)
-  {
-    nsAutoPtr<LayerUserData> d(static_cast<LayerUserData*>(mUserData.Remove(static_cast<gfx::UserDataKey*>(aKey))));
-    return d;
-  }
+  nsAutoPtr<LayerUserData> RemoveUserData(void* aKey);
   /**
    * This getter can be used anytime.
    */
@@ -1472,9 +1457,12 @@ public:
   bool Extend3DContext() {
     return GetContentFlags() & CONTENT_EXTEND_3D_CONTEXT;
   }
-  bool Is3DContextLeaf() {
-    return !Extend3DContext() && GetParent() &&
+  bool Combines3DTransformWithAncestors() {
+    return GetParent() &&
       reinterpret_cast<Layer*>(GetParent())->Extend3DContext();
+  }
+  bool Is3DContextLeaf() {
+    return !Extend3DContext() && Combines3DTransformWithAncestors();
   }
   /**
    * It is true if the user can see the back of the layer and the
@@ -1772,8 +1760,8 @@ protected:
   Layer* mNextSibling;
   Layer* mPrevSibling;
   void* mImplData;
-  nsRefPtr<Layer> mMaskLayer;
-  nsTArray<nsRefPtr<Layer>> mAncestorMaskLayers;
+  RefPtr<Layer> mMaskLayer;
+  nsTArray<RefPtr<Layer>> mAncestorMaskLayers;
   gfx::UserData mUserData;
   gfx::IntRect mLayerBounds;
   nsIntRegion mVisibleRegion;
@@ -1797,7 +1785,7 @@ protected:
   Maybe<ParentLayerIntRect> mClipRect;
   gfx::IntRect mTileSourceRect;
   nsIntRegion mInvalidRegion;
-  nsTArray<nsRefPtr<AsyncPanZoomController> > mApzcs;
+  nsTArray<RefPtr<AsyncPanZoomController> > mApzcs;
   uint32_t mContentFlags;
   bool mUseTileSourceRect;
   bool mIsFixedPosition;
@@ -2193,7 +2181,7 @@ protected:
   // the intermediate surface.
   bool mChildrenChanged;
   EventRegionsOverride mEventRegionsOverride;
-  nsRefPtr<gfx::VRHMDInfo> mHMDInfo;
+  RefPtr<gfx::VRHMDInfo> mHMDInfo;
 };
 
 /**
@@ -2428,7 +2416,7 @@ protected:
   DidTransactionCallback mPostTransCallback;
   void* mPostTransCallbackData;
   gfx::Filter mFilter;
-  nsRefPtr<AsyncCanvasRenderer> mAsyncRenderer;
+  RefPtr<AsyncCanvasRenderer> mAsyncRenderer;
 
 private:
   /**

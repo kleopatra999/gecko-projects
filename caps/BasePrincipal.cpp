@@ -340,9 +340,30 @@ BasePrincipal::GetCspJSON(nsAString& outCSPinJSON)
 }
 
 NS_IMETHODIMP
-BasePrincipal::GetIsNullPrincipal(bool* aIsNullPrincipal)
+BasePrincipal::GetIsNullPrincipal(bool* aResult)
 {
-  *aIsNullPrincipal = false;
+  *aResult = Kind() == eNullPrincipal;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BasePrincipal::GetIsCodebasePrincipal(bool* aResult)
+{
+  *aResult = Kind() == eCodebasePrincipal;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BasePrincipal::GetIsExpandedPrincipal(bool* aResult)
+{
+  *aResult = Kind() == eExpandedPrincipal;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BasePrincipal::GetIsSystemPrincipal(bool* aResult)
+{
+  *aResult = Kind() == eSystemPrincipal;
   return NS_OK;
 }
 
@@ -437,12 +458,12 @@ BasePrincipal::CreateCodebasePrincipal(nsIURI* aURI, const OriginAttributes& aAt
     if (!principal) {
       return nsNullPrincipal::Create();
     }
-    nsRefPtr<BasePrincipal> concrete = Cast(principal);
+    RefPtr<BasePrincipal> concrete = Cast(principal);
     return concrete.forget();
   }
 
   // Mint a codebase principal.
-  nsRefPtr<nsPrincipal> codebase = new nsPrincipal();
+  RefPtr<nsPrincipal> codebase = new nsPrincipal();
   rv = codebase->Init(aURI, aAttrs);
   NS_ENSURE_SUCCESS(rv, nullptr);
   return codebase.forget();

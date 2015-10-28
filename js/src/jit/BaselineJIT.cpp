@@ -714,7 +714,6 @@ BaselineScript::copyICEntries(JSScript* script, const ICEntry* entries, MacroAss
     for (uint32_t i = 0; i < numICEntries(); i++) {
         ICEntry& realEntry = icEntry(i);
         realEntry = entries[i];
-        realEntry.fixupReturnOffset(masm);
 
         if (!realEntry.hasStub()) {
             // VM call without any stubs.
@@ -1167,6 +1166,11 @@ MarkActiveBaselineScripts(JSRuntime* rt, const JitActivationIterator& activation
           case JitFrame_BaselineJS:
             iter.script()->baselineScript()->setActive();
             break;
+          case JitFrame_LazyLink: {
+            LazyLinkExitFrameLayout* ll = iter.exitFrame()->as<LazyLinkExitFrameLayout>();
+            ScriptFromCalleeToken(ll->jsFrame()->calleeToken())->baselineScript()->setActive();
+            break;
+          }
           case JitFrame_Bailout:
           case JitFrame_IonJS: {
             // Keep the baseline script around, since bailouts from the ion

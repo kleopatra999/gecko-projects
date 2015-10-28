@@ -209,7 +209,6 @@ public class BrowserApp extends GeckoApp
     private static class MenuItemInfo {
         public int id;
         public String label;
-        public String icon;
         public boolean checkable;
         public boolean checked;
         public boolean enabled = true;
@@ -266,175 +265,6 @@ public class BrowserApp extends GeckoApp
     private boolean mHideWebContentOnAnimationEnd;
 
     private final DynamicToolbar mDynamicToolbar = new DynamicToolbar();
-
-    private DragHelper mDragHelper;
-
-    private class DragHelper implements OuterLayout.DragCallback {
-        private int[] mToolbarLocation = new int[2]; // to avoid creation every time we need to check for toolbar location.
-        // When dragging horizontally, the area of mainlayout between left drag bound and right drag bound can
-        // be dragged. A touch on the right of that area will automatically close the view.
-        private int mStatusBarHeight;
-
-        public DragHelper() {
-            // If a layout round happens from the root, the offset placed by viewdraghelper gets forgotten and
-            // main layout gets replaced to offset 0.
-            ((MainLayout) mMainLayout).setLayoutInterceptor(new LayoutInterceptor() {
-                @Override
-                public void onLayout() {
-                    if (mRootLayout.isMoving()) {
-                        mRootLayout.restoreTargetViewPosition();
-                    }
-                }
-            });
-        }
-
-        @Override
-        public void onDragProgress(float progress) {
-            mBrowserToolbar.setToolBarButtonsAlpha(1.0f - progress);
-            mTabsPanel.translateInRange(progress);
-        }
-
-        @Override
-        public View getViewToDrag() {
-            return mMainLayout;
-        }
-
-        /**
-         * Since pressing the tabs button slides the main layout, whereas draghelper changes its offset, here we
-         * restore the position of mainlayout as if it was opened by pressing the button. This allows the closing
-         * mechanism to work.
-         */
-        @Override
-        public void startDrag(boolean wasOpen) {
-            if (wasOpen) {
-                mTabsPanel.setHWLayerEnabled(true);
-                mMainLayout.offsetTopAndBottom(getDragRange());
-                mMainLayout.scrollTo(0, 0);
-            } else {
-                prepareTabsToShow();
-                mBrowserToolbar.hideVirtualKeyboard();
-            }
-            mBrowserToolbar.setContextMenuEnabled(false);
-        }
-
-        @Override
-        public void stopDrag(boolean stoppingToOpen) {
-            if (stoppingToOpen) {
-                mTabsPanel.setHWLayerEnabled(false);
-                mMainLayout.offsetTopAndBottom(-getDragRange());
-                mMainLayout.scrollTo(0, -getDragRange());
-            } else {
-                mTabsPanel.hideImmediately();
-                mTabsPanel.setHWLayerEnabled(false);
-            }
-            // Re-enabling context menu only while stopping to close.
-            if (stoppingToOpen) {
-                mBrowserToolbar.setContextMenuEnabled(false);
-            } else {
-                mBrowserToolbar.setContextMenuEnabled(true);
-            }
-        }
-
-        @Override
-        public int getDragRange() {
-            return mTabsPanel.getVerticalPanelHeight();
-        }
-
-        @Override
-        public int getOrderedChildIndex(int index) {
-            // See ViewDragHelper's findTopChildUnder method. ViewDragHelper looks for the topmost view in z order
-            // to understand what needs to be dragged. Here we are tampering Toast's index in case it's hidden,
-            // otherwise draghelper would try to drag it.
-            int mainLayoutIndex = mRootLayout.indexOfChild(mMainLayout);
-            if (index > mainLayoutIndex &&  (mToast == null || !mToast.isVisible())) {
-                return mainLayoutIndex;
-            } else {
-                return index;
-            }
-        }
-
-        @Override
-        public boolean canDrag(MotionEvent event) {
-            if (!AppConstants.MOZ_DRAGGABLE_URLBAR) {
-                return false;
-            }
-
-            // if no current tab is active.
-            if (Tabs.getInstance().getSelectedTab() == null) {
-                return false;
-            }
-
-            // currently disabled for tablets.
-            if (HardwareUtils.isTablet()) {
-                return false;
-            }
-
-            // not enabled in editing mode.
-            if (mBrowserToolbar.isEditing()) {
-                return false;
-            }
-
-            return isInToolbarBounds((int) event.getRawY());
-        }
-
-        @Override
-        public boolean canInterceptEventWhileOpen(MotionEvent event) {
-            if (event.getActionMasked() != MotionEvent.ACTION_DOWN) {
-                return false;
-            }
-
-            // Need to check if are intercepting a touch on main layout since we might hit a visible toast.
-            if (mRootLayout.findTopChildUnder(event) == mMainLayout &&
-                isInToolbarBounds((int) event.getRawY())) {
-                return true;
-            }
-            return false;
-        }
-
-        private boolean isInToolbarBounds(int y) {
-            mBrowserToolbar.getLocationOnScreen(mToolbarLocation);
-            final int upperLimit = mToolbarLocation[1] + mBrowserToolbar.getMeasuredHeight();
-            final int lowerLimit = mToolbarLocation[1];
-            return (y > lowerLimit && y < upperLimit);
-        }
-
-        public void prepareTabsToShow() {
-            if (ensureTabsPanelExists()) {
-                // If we've just inflated the tabs panel, only show it once the current
-                // layout pass is done to avoid displayed temporary UI states during
-                // relayout.
-                final ViewTreeObserver vto = mTabsPanel.getViewTreeObserver();
-                if (vto.isAlive()) {
-                    vto.addOnGlobalLayoutListener(new ViewTreeObserver.OnGlobalLayoutListener() {
-                        @Override
-                        public void onGlobalLayout() {
-                            mTabsPanel.getViewTreeObserver().removeGlobalOnLayoutListener(this);
-                            prepareTabsToShow();
-                        }
-                    });
-                }
-            } else {
-                mTabsPanel.prepareToDrag();
-            }
-        }
-
-        public int getLowerLimit() {
-            return getStatusBarHeight();
-        }
-
-        private int getStatusBarHeight() {
-            if (mStatusBarHeight != 0) {
-                return mStatusBarHeight;
-            }
-            final int resourceId = getResources().getIdentifier("status_bar_height", "dimen", "android");
-            if (resourceId > 0) {
-                mStatusBarHeight = getResources().getDimensionPixelSize(resourceId);
-                return mStatusBarHeight;
-            }
-            Log.e(LOGTAG, "Unable to find statusbar height");
-            return 0;
-        }
-    }
 
     @Override
     public View onCreateView(final String name, final Context context, final AttributeSet attrs) {
@@ -741,16 +571,13 @@ public class BrowserApp extends GeckoApp
 
         if (AppConstants.MOZ_SWITCHBOARD) {
             // Initializes the default URLs the first time.
-            Log.d(LOGTAG, "init Server Urls");
-            SwitchBoard.initDefaultServerUrls("https://mozilla-switchboard.herokuapp.com/SwitchboardURLs.php", "https://mozilla-switchboard.herokuapp.com/SwitchboardDriver.php", true);
+            SwitchBoard.initDefaultServerUrls("https://switchboard-server.dev.mozaws.net/urls", "https://switchboard-server.dev.mozaws.net/v1", true);
 
             // Looks at the server if there are changes in the server URL that should be used in the future
-            Log.d(LOGTAG, "update server urls from remote");
             new AsyncConfigLoader(this, AsyncConfigLoader.UPDATE_SERVER).execute();
 
             // Loads the actual config. This can be done on app start or on app onResume() depending
             // how often you want to update the config.
-            Log.d(LOGTAG, "update app config");
             new AsyncConfigLoader(this, AsyncConfigLoader.CONFIG_SERVER).execute();
         }
 
@@ -901,9 +728,6 @@ public class BrowserApp extends GeckoApp
                 setDynamicToolbarEnabled(enabled);
             }
         });
-
-        mDragHelper = new DragHelper();
-        mRootLayout.setDraggableCallback(mDragHelper);
 
         // Set the maximum bits-per-pixel the favicon system cares about.
         IconDirectoryEntry.setMaxBPP(GeckoAppShell.getScreenDepth());
@@ -1285,15 +1109,6 @@ public class BrowserApp extends GeckoApp
                 loadUrlOrKeywordSearch(text);
                 Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.CONTEXT_MENU);
                 Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.CONTEXT_MENU, "pasteandgo");
-            }
-            return true;
-        }
-
-        if (itemId == R.id.site_settings) {
-            // This can be selected from either the browser menu or the contextmenu, depending on the size and version (v11+) of the phone.
-            GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("Permissions:Get", null));
-            if (Versions.preHC) {
-                Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.CONTEXT_MENU, "site_settings");
             }
             return true;
         }
@@ -1690,7 +1505,6 @@ public class BrowserApp extends GeckoApp
         invalidateOptionsMenu();
 
         if (mTabsPanel != null) {
-            mRootLayout.reset();
             mTabsPanel.refresh();
         }
 
@@ -1772,7 +1586,6 @@ public class BrowserApp extends GeckoApp
             final MenuItemInfo info = new MenuItemInfo();
             info.label = message.getString("name");
             info.id = message.getInt("id") + ADDON_MENU_OFFSET;
-            info.icon = message.optString("icon", null);
             info.checked = message.optBoolean("checked", false);
             info.enabled = message.optBoolean("enabled", true);
             info.visible = message.optBoolean("visible", true);
@@ -2177,13 +1990,10 @@ public class BrowserApp extends GeckoApp
         if (!areTabsShown()) {
             mTabsPanel.setVisibility(View.INVISIBLE);
             mTabsPanel.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
-            mRootLayout.setClosed();
-            mBrowserToolbar.setContextMenuEnabled(true);
         } else {
             // Cancel editing mode to return to page content when the TabsPanel closes. We cancel
             // it here because there are graphical glitches if it's canceled while it's visible.
             mBrowserToolbar.cancelEdit();
-            mRootLayout.setOpen();
         }
 
         mTabsPanel.finishTabsAnimation();
@@ -3174,7 +2984,6 @@ public class BrowserApp extends GeckoApp
             }
             MenuUtils.safeSetEnabled(aMenu, R.id.subscribe, false);
             MenuUtils.safeSetEnabled(aMenu, R.id.add_search_engine, false);
-            MenuUtils.safeSetEnabled(aMenu, R.id.site_settings, false);
             MenuUtils.safeSetEnabled(aMenu, R.id.add_to_launcher, false);
 
             return true;
@@ -3260,7 +3069,6 @@ public class BrowserApp extends GeckoApp
         }
         MenuUtils.safeSetEnabled(aMenu, R.id.subscribe, tab.hasFeeds());
         MenuUtils.safeSetEnabled(aMenu, R.id.add_search_engine, tab.hasOpenSearch());
-        MenuUtils.safeSetEnabled(aMenu, R.id.site_settings, !isAboutHome(tab));
         MenuUtils.safeSetEnabled(aMenu, R.id.add_to_launcher, !isAboutHome(tab));
 
         // Action providers are available only ICS+.
@@ -3373,7 +3181,12 @@ public class BrowserApp extends GeckoApp
 
         // Track the menu action. We don't know much about the context, but we can use this to determine
         // the frequency of use for various actions.
-        Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.MENU, getResources().getResourceEntryName(itemId));
+        String extras = getResources().getResourceEntryName(itemId);
+        if (TextUtils.equals(extras, "new_private_tab")) {
+            // Mask private browsing
+            extras = "new_tab";
+        }
+        Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, TelemetryContract.Method.MENU, extras);
 
         mBrowserToolbar.cancelEdit();
 

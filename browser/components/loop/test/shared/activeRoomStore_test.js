@@ -1,7 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-describe("loop.store.ActiveRoomStore", function () {
+describe("loop.store.ActiveRoomStore", function() {
   "use strict";
 
   var expect = chai.expect;
@@ -83,7 +83,7 @@ describe("loop.store.ActiveRoomStore", function () {
 
     it("should throw an error if sdkDriver is missing", function() {
       expect(function() {
-        new loop.store.ActiveRoomStore(dispatcher, {mozLoop: {}});
+        new loop.store.ActiveRoomStore(dispatcher, { mozLoop: {} });
       }).to.Throw(/sdkDriver/);
     });
   });
@@ -171,7 +171,7 @@ describe("loop.store.ActiveRoomStore", function () {
     });
 
     it("should set screen sharing inactive", function() {
-      store.setStoreState({windowId: "1234"});
+      store.setStoreState({ windowId: "1234" });
 
       store.roomFailure(new sharedActions.RoomFailure({
         error: fakeError,
@@ -821,12 +821,15 @@ describe("loop.store.ActiveRoomStore", function () {
   });
 
   describe("#joinRoom", function() {
+    var hasDevicesStub;
+
     beforeEach(function() {
-      store.setStoreState({roomState: ROOM_STATES.READY});
+      store.setStoreState({ roomState: ROOM_STATES.READY });
+      hasDevicesStub = sandbox.stub(loop.shared.utils, "hasAudioOrVideoDevices");
     });
 
     it("should reset failureReason", function() {
-      store.setStoreState({failureReason: "Test"});
+      store.setStoreState({ failureReason: "Test" });
 
       store.joinRoom();
 
@@ -845,7 +848,7 @@ describe("loop.store.ActiveRoomStore", function () {
       });
 
       it("should set the state to MEDIA_WAIT if media devices are present", function() {
-        sandbox.stub(loop.shared.utils, "hasAudioOrVideoDevices").callsArgWith(0, true);
+        hasDevicesStub.callsArgWith(0, true);
 
         store.joinRoom();
 
@@ -853,7 +856,7 @@ describe("loop.store.ActiveRoomStore", function () {
       });
 
       it("should not set the state to MEDIA_WAIT if no media devices are present", function() {
-        sandbox.stub(loop.shared.utils, "hasAudioOrVideoDevices").callsArgWith(0, false);
+        hasDevicesStub.callsArgWith(0, false);
 
         store.joinRoom();
 
@@ -861,7 +864,7 @@ describe("loop.store.ActiveRoomStore", function () {
       });
 
       it("should dispatch `ConnectionFailure` if no media devices are present", function() {
-        sandbox.stub(loop.shared.utils, "hasAudioOrVideoDevices").callsArgWith(0, false);
+        hasDevicesStub.callsArgWith(0, false);
 
         store.joinRoom();
 
@@ -993,7 +996,7 @@ describe("loop.store.ActiveRoomStore", function () {
 
   describe("#gotMediaPermission", function() {
     beforeEach(function() {
-      store.setStoreState({roomToken: "tokenFake"});
+      store.setStoreState({ roomToken: "tokenFake" });
     });
 
     it("should set the room state to JOINING", function() {
@@ -1160,7 +1163,7 @@ describe("loop.store.ActiveRoomStore", function () {
     it("should call mozLoop.rooms.refreshMembership before the next expiresTime",
       function() {
         fakeMozLoop.rooms.refreshMembership.callsArgWith(2,
-          null, {expires: 40});
+          null, { expires: 40 });
 
         store.joinedRoom(new sharedActions.JoinedRoom(fakeJoinedData));
 
@@ -1232,7 +1235,7 @@ describe("loop.store.ActiveRoomStore", function () {
     });
 
     it("should set screen sharing inactive", function() {
-      store.setStoreState({windowId: "1234"});
+      store.setStoreState({ windowId: "1234" });
 
       store.connectionFailure(connectionFailureAction);
 
@@ -1307,7 +1310,7 @@ describe("loop.store.ActiveRoomStore", function () {
 
   describe("#setMute", function() {
     it("should save the mute state for the audio stream", function() {
-      store.setStoreState({audioMuted: false});
+      store.setStoreState({ audioMuted: false });
 
       store.setMute(new sharedActions.SetMute({
         type: "audio",
@@ -1318,7 +1321,7 @@ describe("loop.store.ActiveRoomStore", function () {
     });
 
     it("should save the mute state for the video stream", function() {
-      store.setStoreState({videoMuted: true});
+      store.setStoreState({ videoMuted: true });
 
       store.setMute(new sharedActions.SetMute({
         type: "video",
@@ -1333,7 +1336,7 @@ describe("loop.store.ActiveRoomStore", function () {
     var fakeStreamElement;
 
     beforeEach(function() {
-      fakeStreamElement = {name: "fakeStreamElement"};
+      fakeStreamElement = { name: "fakeStreamElement" };
     });
 
     it("should add a local video object to the store", function() {
@@ -1399,7 +1402,7 @@ describe("loop.store.ActiveRoomStore", function () {
     var fakeStreamElement;
 
     beforeEach(function() {
-      fakeStreamElement = {name: "fakeStreamElement"};
+      fakeStreamElement = { name: "fakeStreamElement" };
 
       store.setStoreState({
         localSrcMediaElement: fakeStreamElement,
@@ -1462,7 +1465,7 @@ describe("loop.store.ActiveRoomStore", function () {
 
   describe("#screenSharingState", function() {
     beforeEach(function() {
-      store.setStoreState({windowId: "1234"});
+      store.setStoreState({ windowId: "1234" });
     });
 
     it("should save the state", function() {
@@ -1502,7 +1505,7 @@ describe("loop.store.ActiveRoomStore", function () {
     });
 
     it("should add a screenShareMediaElement to the store when sharing is active", function() {
-      var fakeStreamElement = {name: "fakeStreamElement"};
+      var fakeStreamElement = { name: "fakeStreamElement" };
       expect(store.getStoreState()).to.not.have.property("screenShareMediaElement");
 
       store.receivingScreenShare(new sharedActions.ReceivingScreenShare({
@@ -1532,8 +1535,8 @@ describe("loop.store.ActiveRoomStore", function () {
     it("should delete the screen remote video dimensions if screen sharing is not active", function() {
       store.setStoreState({
         remoteVideoDimensions: {
-          screen: {fake: 10},
-          camera: {fake: 20}
+          screen: { fake: 10 },
+          camera: { fake: 20 }
         }
       });
 
@@ -1542,7 +1545,7 @@ describe("loop.store.ActiveRoomStore", function () {
       }));
 
       expect(store.getStoreState().remoteVideoDimensions).eql({
-        camera: {fake: 20}
+        camera: { fake: 20 }
       });
     });
   });
@@ -1703,7 +1706,7 @@ describe("loop.store.ActiveRoomStore", function () {
 
     it("should remove non-owner participants", function() {
       store.setStoreState({
-        participants: [{owner: true}, {}]
+        participants: [{ owner: true }, {}]
       });
 
       store.remotePeerDisconnected();
@@ -1715,7 +1718,7 @@ describe("loop.store.ActiveRoomStore", function () {
 
     it("should keep the owner participant", function() {
       store.setStoreState({
-        participants: [{owner: true}]
+        participants: [{ owner: true }]
       });
 
       store.remotePeerDisconnected();
@@ -1799,7 +1802,7 @@ describe("loop.store.ActiveRoomStore", function () {
 
     it("should call mozLoop.rooms.leave if the room state is JOINING",
       function() {
-        store.setStoreState({roomState: ROOM_STATES.JOINING});
+        store.setStoreState({ roomState: ROOM_STATES.JOINING });
 
         store.windowUnload();
 
@@ -2032,11 +2035,11 @@ describe("loop.store.ActiveRoomStore", function () {
         sinon.assert.calledOnce(dispatcher.dispatch);
         sinon.assert.calledWithExactly(dispatcher.dispatch,
           new sharedActions.UpdateRoomInfo({
-            description: "fakeDescription",
+            roomDescription: "fakeDescription",
             participants: undefined,
             roomName: fakeRoomData.decryptedContext.roomName,
             roomUrl: fakeRoomData.roomUrl,
-            urls: {
+            roomContextUrls: {
               fake: "url"
             }
           }));

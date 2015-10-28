@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* global Frame:false uncaughtError:true fakeManyContacts:true fakeFewerContacts:true */
+/* global Frame:false uncaughtError:true */
 
 (function() {
   "use strict";
@@ -17,20 +17,15 @@
   // 1.1 Panel
   var PanelView = loop.panel.PanelView;
   var SignInRequestView = loop.panel.SignInRequestView;
-  var ContactDetailsForm = loop.contacts.ContactDetailsForm;
-  var ContactDropdown = loop.contacts.ContactDropdown;
-  var ContactDetail = loop.contacts.ContactDetail;
-  var GettingStartedView = loop.panel.GettingStartedView;
   // 1.2. Conversation Window
   var DesktopRoomEditContextView = loop.roomViews.DesktopRoomEditContextView;
   var RoomFailureView = loop.roomViews.RoomFailureView;
   var DesktopRoomConversationView = loop.roomViews.DesktopRoomConversationView;
 
   // 2. Standalone webapp
-  var HomeView = loop.webapp.HomeView;
-  var UnsupportedBrowserView  = loop.webapp.UnsupportedBrowserView;
-  var UnsupportedDeviceView   = loop.webapp.UnsupportedDeviceView;
-  var StandaloneRoomView      = loop.standaloneRoomViews.StandaloneRoomView;
+  var UnsupportedBrowserView = loop.webapp.UnsupportedBrowserView;
+  var UnsupportedDeviceView = loop.webapp.UnsupportedDeviceView;
+  var StandaloneRoomView = loop.standaloneRoomViews.StandaloneRoomView;
   var StandaloneHandleUserAgentView = loop.standaloneRoomViews.StandaloneHandleUserAgentView;
 
   // 3. Shared components
@@ -54,7 +49,7 @@
     return false;
   }
 
-  function noop(){}
+  function noop() {}
 
   // We save the visibility change listeners so that we can fake an event
   // to the panel once we've loaded all the views.
@@ -146,12 +141,12 @@
         // (eg MacBook Pro) where that is the default camera resolution.
         var newStoreState = {
           localVideoDimensions: {
-            camera: {height: 480, orientation: 0, width: 640}
+            camera: { height: 480, orientation: 0, width: 640 }
           },
           mediaConnected: options.mediaConnected,
           receivingScreenShare: !!options.receivingScreenShare,
           remoteVideoDimensions: {
-            camera: {height: 480, orientation: 0, width: 640}
+            camera: { height: 480, orientation: 0, width: 640 }
           },
           remoteVideoEnabled: options.remoteVideoEnabled,
           // Override the matchMedia, this is so that the correct version is
@@ -177,7 +172,7 @@
           // For showcase purposes, this shouldn't matter much, as the sizes
           // of things being shared will be fairly arbitrary.
           newStoreState.remoteVideoDimensions.screen =
-          {height: 456, orientation: 0, width: 641};
+          { height: 456, orientation: 0, width: 641 };
         }
 
         store.setStoreState(newStoreState);
@@ -337,14 +332,14 @@
   textChatStore.updateRoomInfo(new sharedActions.UpdateRoomInfo({
     roomName: "A Very Long Conversation Name",
     roomUrl: "http://showcase",
-    urls: [{
+    roomContextUrls: [{
       description: "A wonderful page!",
       location: "http://wonderful.invalid"
       // use the fallback thumbnail
     }]
   }));
 
-  textChatStore.setStoreState({textChatEnabled: true});
+  textChatStore.setStoreState({ textChatEnabled: true });
 
   dispatcher.dispatch(new sharedActions.SendTextChatMessage({
     contentType: loop.shared.utils.CHAT_CONTENT_TYPES.TEXT,
@@ -397,10 +392,21 @@
   };
 
   var mockMozLoopNoRoomsNoContext = _.cloneDeep(navigator.mozLoop);
-  mockMozLoopNoRoomsNoContext.getSelectedTabMetadata = function(){};
+  mockMozLoopNoRoomsNoContext.getSelectedTabMetadata = function() {};
   mockMozLoopNoRoomsNoContext.rooms.getAll = function(version, callback) {
     callback(null, []);
   };
+
+  var roomStoreOpenedRoom = new loop.store.RoomStore(dispatcher, {
+    mozLoop: navigator.mozLoop,
+    activeRoomStore: makeActiveRoomStore({
+      roomState: ROOM_STATES.HAS_PARTICIPANTS
+    })
+  });
+
+  roomStoreOpenedRoom.setStoreState({
+    openedRoom: "3jKS_Els9IU"
+  });
 
   var roomStoreNoRooms = new loop.store.RoomStore(new loop.Dispatcher(), {
     mozLoop: mockMozLoopNoRooms,
@@ -430,7 +436,7 @@
   };
 
   var mockMozLoopLoggedInNoContext = _.cloneDeep(navigator.mozLoop);
-  mockMozLoopLoggedInNoContext.getSelectedTabMetadata = function(){};
+  mockMozLoopLoggedInNoContext.getSelectedTabMetadata = function() {};
   mockMozLoopLoggedInNoContext.userProfile = _.cloneDeep(mockMozLoopLoggedIn.userProfile);
 
   var mockMozLoopLoggedInLongEmail = _.cloneDeep(navigator.mozLoop);
@@ -441,27 +447,6 @@
 
   var mockMozLoopRooms = _.extend({}, navigator.mozLoop);
 
-  var mozLoopNoContacts = _.cloneDeep(navigator.mozLoop);
-  mozLoopNoContacts.contacts.getAll = function(callback) {
-    callback(null, []);
-  };
-  mozLoopNoContacts.userProfile = {
-    email: "reallyreallylongtext@example.com",
-    uid: "0354b278a381d3cb408bb46ffc01266"
-  };
-  mozLoopNoContacts.contacts.getAll = function(callback) {
-    callback(null, []);
-  };
-
-  var mozLoopNoContactsFilter = _.cloneDeep(navigator.mozLoop);
-  mozLoopNoContactsFilter.userProfile = {
-    email: "reallyreallylongtext@example.com",
-    uid: "0354b278a381d3cb408bb46ffc01266"
-  };
-  mozLoopNoContactsFilter.contacts.getAll = function(callback) {
-    callback(null, fakeFewerContacts); // Defined in fake-mozLoop.js.
-  };
-
   var firstTimeUseMozLoop = _.cloneDeep(navigator.mozLoop);
   firstTimeUseMozLoop.getLoopPref = function(prop) {
     if (prop === "gettingStarted.seen") {
@@ -469,13 +454,6 @@
     }
 
     return true;
-  };
-
-  var mockContact = {
-    name: ["Mr Smith"],
-    email: [{
-      value: "smith@invalid.com"
-    }]
   };
 
   var mockClient = {
@@ -530,8 +508,7 @@
         "volume-disabled", "clear", "magnifier"
       ],
       "16x16": ["add", "add-hover", "add-active", "audio", "audio-hover", "audio-active",
-        "block", "block-red", "block-hover", "block-active", "contacts", "contacts-hover",
-        "contacts-active", "copy", "checkmark", "delete", "globe", "google", "google-hover",
+        "block", "block-red", "block-hover", "block-active", "copy", "checkmark", "delete", "globe", "google", "google-hover",
         "google-active", "history", "history-hover", "history-active", "leave",
         "screen-white", "screenmute-white", "settings", "settings-hover", "settings-active",
         "share-darkgrey", "tag", "tag-hover", "tag-active", "trash", "unblock",
@@ -587,7 +564,7 @@
             React.createElement("a", {href: this.makeId("#")}, " ¶")
           ), 
           React.createElement("div", {className: "comp"}, 
-            React.createElement(Frame, {className: cx({dashed: this.props.dashed}), 
+            React.createElement(Frame, {className: cx({ dashed: this.props.dashed }), 
                    cssClass: this.props.cssClass, 
                    height: height, 
                    onContentsRendered: this.props.onContentsRendered, 
@@ -727,6 +704,20 @@
             React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
                            dashed: true, 
                            height: 410, 
+                           summary: "Room list (active view)", 
+                           width: 330}, 
+              React.createElement("div", {className: "panel"}, 
+                React.createElement(PanelView, {client: mockClient, 
+                           dispatcher: dispatcher, 
+                           mozLoop: navigator.mozLoop, 
+                           notifications: notifications, 
+                           roomStore: roomStoreOpenedRoom})
+              )
+            ), 
+
+            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
+                           dashed: true, 
+                           height: 410, 
                            summary: "Room list (no rooms)", 
                            width: 330}, 
               React.createElement("div", {className: "panel"}, 
@@ -755,62 +746,6 @@
             React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
                            dashed: true, 
                            height: 410, 
-                           summary: "Contact list tab", 
-                           width: 330}, 
-              React.createElement("div", {className: "panel"}, 
-                React.createElement(PanelView, {client: mockClient, 
-                           dispatcher: dispatcher, 
-                           mozLoop: mockMozLoopLoggedIn, 
-                           notifications: notifications, 
-                           roomStore: roomStore, 
-                           selectedTab: "contacts"})
-              )
-            ), 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 410, 
-                           summary: "Contact list tab (no search filter)", 
-                           width: 332}, 
-              React.createElement("div", {className: "panel"}, 
-                React.createElement(PanelView, {client: mockClient, 
-                           dispatcher: dispatcher, 
-                           mozLoop: mozLoopNoContactsFilter, 
-                           notifications: notifications, 
-                           roomStore: roomStore, 
-                           selectedTab: "contacts"})
-              )
-            ), 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 410, 
-                           summary: "Contact list tab long email", 
-                           width: 330}, 
-              React.createElement("div", {className: "panel"}, 
-                React.createElement(PanelView, {client: mockClient, 
-                           dispatcher: dispatcher, 
-                           mozLoop: mockMozLoopLoggedInLongEmail, 
-                           notifications: notifications, 
-                           roomStore: roomStore, 
-                           selectedTab: "contacts"})
-              )
-            ), 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 410, 
-                           summary: "Contact list tab (no contacts)", 
-                           width: 330}, 
-              React.createElement("div", {className: "panel"}, 
-                React.createElement(PanelView, {client: mockClient, 
-                           dispatcher: dispatcher, 
-                           mozLoop: mozLoopNoContacts, 
-                           notifications: notifications, 
-                           roomStore: roomStore, 
-                           selectedTab: "contacts"})
-              )
-            ), 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 410, 
                            summary: "Error Notification", 
                            width: 330}, 
               React.createElement("div", {className: "panel"}, 
@@ -833,107 +768,6 @@
                            notifications: errNotifications, 
                            roomStore: roomStore})
               )
-            ), 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 410, 
-                           summary: "Contact import success", 
-                           width: 330}, 
-              React.createElement("div", {className: "panel"}, 
-                React.createElement(PanelView, {dispatcher: dispatcher, 
-                           mozLoop: mockMozLoopLoggedIn, 
-                           notifications: new loop.shared.models.NotificationCollection([{level: "success", message: "Import success"}]), 
-                           roomStore: roomStore, 
-                           selectedTab: "contacts"})
-              )
-            ), 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 410, 
-                           summary: "Contact import error", 
-                           width: 330}, 
-              React.createElement("div", {className: "panel"}, 
-                React.createElement(PanelView, {dispatcher: dispatcher, 
-                           mozLoop: mockMozLoopLoggedIn, 
-                           notifications: new loop.shared.models.NotificationCollection([{level: "error", message: "Import error"}]), 
-                           roomStore: roomStore, 
-                           selectedTab: "contacts"})
-              )
-            ), 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 410, 
-                           summary: "Contact Form - Add", 
-                           width: 330}, 
-              React.createElement("div", {className: "panel"}, 
-                React.createElement(PanelView, {client: mockClient, 
-                           dispatcher: dispatcher, 
-                           initialSelectedTabComponent: "contactAdd", 
-                           mozLoop: mockMozLoopLoggedIn, 
-                           notifications: notifications, 
-                           roomStore: roomStore, 
-                           selectedTab: "contacts", 
-                           userProfile: {email: "test@example.com"}})
-              )
-            ), 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 410, 
-                           summary: "Contact Form - Edit", 
-                           width: 330}, 
-              React.createElement("div", {className: "panel"}, 
-                React.createElement(PanelView, {client: mockClient, 
-                           dispatcher: dispatcher, 
-                           initialSelectedTabComponent: "contactEdit", 
-                           mozLoop: mockMozLoopLoggedIn, 
-                           notifications: notifications, 
-                           roomStore: roomStore, 
-                           selectedTab: "contacts", 
-                           userProfile: {email: "test@example.com"}})
-              )
-            )
-          ), 
-
-          React.createElement(Section, {name: "ContactDetail"}, 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 50, 
-                           summary: "ContactDetail", 
-                           width: 334}, 
-              React.createElement("div", {className: "panel force-menu-show"}, 
-                React.createElement(ContactDetail, {contact: fakeManyContacts[0], 
-                               getContainerCoordinates: function() { return {"top": 0, "height": 0 }; }, 
-                               handleContactAction: function() {}})
-              )
-            )
-          ), 
-
-          React.createElement(Section, {name: "ContactDropdown"}, 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 272, 
-                           summary: "ContactDropdown not blocked can edit", 
-                           width: 300}, 
-             React.createElement("div", {className: "panel"}, 
-               React.createElement(ContactDropdown, {blocked: false, 
-                                canEdit: true, 
-                                eventPosY: 0, 
-                                getContainerCoordinates: function() { return {"top": 0, "height": 0 }; }, 
-                                handleAction: function () {}})
-             )
-            ), 
-            React.createElement(FramedExample, {cssClass: "fx-embedded-panel", 
-                           dashed: true, 
-                           height: 272, 
-                           summary: "ContactDropdown blocked can't edit", 
-                           width: 300}, 
-             React.createElement("div", {className: "panel"}, 
-               React.createElement(ContactDropdown, {blocked: true, 
-                                canEdit: false, 
-                                eventPosY: 0, 
-                                getContainerCoordinates: function() { return {"top": 0, "height": 0 }; }, 
-                                handleAction: function () {}})
-             )
             )
           ), 
 
@@ -1064,7 +898,7 @@
           ), 
 
           React.createElement(Section, {name: "DesktopRoomConversationView"}, 
-            React.createElement(FramedExample, {height: 398, 
+            React.createElement(FramedExample, {height: 448, 
                            onContentsRendered: invitationRoomStore.activeRoomStore.forcedUpdate, 
                            summary: "Desktop room conversation (invitation, text-chat inclusion/scrollbars don't happen in real client)", 
                            width: 348}, 
@@ -1074,7 +908,7 @@
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
-                  onCallTerminated: function(){}, 
+                  onCallTerminated: function() {}, 
                   roomState: ROOM_STATES.INIT, 
                   roomStore: invitationRoomStore})
               )
@@ -1089,7 +923,7 @@
                   dispatcher: dispatcher, 
                   error: {}, 
                   mozLoop: navigator.mozLoop, 
-                  onClose: function(){}, 
+                  onClose: function() {}, 
                   roomData: {}, 
                   savingContext: false, 
                   show: true}
@@ -1098,7 +932,7 @@
             ), 
 
             React.createElement(FramedExample, {dashed: true, 
-                           height: 398, 
+                           height: 448, 
                            onContentsRendered: desktopRoomStoreLoading.activeRoomStore.forcedUpdate, 
                            summary: "Desktop room conversation (loading)", 
                            width: 348}, 
@@ -1110,7 +944,7 @@
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
-                  onCallTerminated: function(){}, 
+                  onCallTerminated: function() {}, 
                   remotePosterUrl: "sample-img/video-screen-remote.png", 
                   roomState: ROOM_STATES.HAS_PARTICIPANTS, 
                   roomStore: desktopRoomStoreLoading})
@@ -1118,7 +952,7 @@
             ), 
 
             React.createElement(FramedExample, {dashed: true, 
-                           height: 398, 
+                           height: 448, 
                            onContentsRendered: roomStore.activeRoomStore.forcedUpdate, 
                            summary: "Desktop room conversation", 
                            width: 348}, 
@@ -1128,7 +962,7 @@
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
-                  onCallTerminated: function(){}, 
+                  onCallTerminated: function() {}, 
                   remotePosterUrl: "sample-img/video-screen-remote.png", 
                   roomState: ROOM_STATES.HAS_PARTICIPANTS, 
                   roomStore: roomStore})
@@ -1146,7 +980,7 @@
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
-                  onCallTerminated: function(){}, 
+                  onCallTerminated: function() {}, 
                   remotePosterUrl: "sample-img/video-screen-remote.png", 
                   roomState: ROOM_STATES.HAS_PARTICIPANTS, 
                   roomStore: desktopRoomStoreMedium})
@@ -1164,7 +998,7 @@
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
-                  onCallTerminated: function(){}, 
+                  onCallTerminated: function() {}, 
                   remotePosterUrl: "sample-img/video-screen-remote.png", 
                   roomState: ROOM_STATES.HAS_PARTICIPANTS, 
                   roomStore: desktopRoomStoreLarge})
@@ -1172,7 +1006,7 @@
             ), 
 
             React.createElement(FramedExample, {dashed: true, 
-                           height: 398, 
+                           height: 448, 
                            onContentsRendered: desktopLocalFaceMuteRoomStore.activeRoomStore.forcedUpdate, 
                            summary: "Desktop room conversation local face-mute", 
                            width: 348}, 
@@ -1181,14 +1015,14 @@
                   chatWindowDetached: false, 
                   dispatcher: dispatcher, 
                   mozLoop: navigator.mozLoop, 
-                  onCallTerminated: function(){}, 
+                  onCallTerminated: function() {}, 
                   remotePosterUrl: "sample-img/video-screen-remote.png", 
                   roomStore: desktopLocalFaceMuteRoomStore})
               )
             ), 
 
             React.createElement(FramedExample, {dashed: true, 
-                           height: 398, 
+                           height: 448, 
                            onContentsRendered: desktopRemoteFaceMuteRoomStore.activeRoomStore.forcedUpdate, 
                            summary: "Desktop room conversation remote face-mute", 
                            width: 348}, 
@@ -1198,7 +1032,7 @@
                   dispatcher: dispatcher, 
                   localPosterUrl: "sample-img/video-screen-local.png", 
                   mozLoop: navigator.mozLoop, 
-                  onCallTerminated: function(){}, 
+                  onCallTerminated: function() {}, 
                   remotePosterUrl: "sample-img/video-screen-remote.png", 
                   roomStore: desktopRemoteFaceMuteRoomStore})
               )
@@ -1512,9 +1346,9 @@
       React.render(React.createElement(App, null), document.getElementById("main"));
 
       for (var listener of visibilityListeners) {
-        listener({target: {hidden: false}});
+        listener({ target: { hidden: false } });
       }
-    } catch(err) {
+    } catch (err) {
       console.error(err);
       uncaughtError = err;
     }
@@ -1549,7 +1383,7 @@
 
         if (warningsMismatch) {
           liTestFail.className = "test";
-          liTestFail.className = liTestFail.className + " fail";
+          liTestFail.className += " fail";
           h2Node.innerHTML = "Unexpected number of warnings detected in UI-Showcase";
           preErrorNode.className = "error";
           preErrorNode.innerHTML = "Got: " + caughtWarnings.length + "\n" + "Expected: " + expectedWarningsCount;
@@ -1559,7 +1393,7 @@
         }
         if (uncaughtError) {
           liTestFail.className = "test";
-          liTestFail.className = liTestFail.className + " fail";
+          liTestFail.className += " fail";
           h2Node.innerHTML = "Errors rendering UI-Showcase";
           preErrorNode.className = "error";
           preErrorNode.innerHTML = uncaughtError + "\n" + uncaughtError.stack;

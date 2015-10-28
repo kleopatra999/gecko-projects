@@ -145,6 +145,9 @@ WGLLibrary::EnsureInitialized()
         return false;
     }
 
+    const GLLibraryLoader::PlatformLookupFunction lookupFunc =
+      (GLLibraryLoader::PlatformLookupFunction) fGetProcAddress;
+
     // Now we can grab all the other symbols that we couldn't without having
     // a context current.
 
@@ -163,16 +166,12 @@ WGLLibrary::EnsureInitialized()
         { nullptr, { nullptr } }
     };
 
-    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, &pbufferSymbols[0],
-         (GLLibraryLoader::PlatformLookupFunction)fGetProcAddress))
-    {
+    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, &pbufferSymbols[0], lookupFunc)) {
         // this isn't an error, just means that pbuffers aren't supported
         fCreatePbuffer = nullptr;
     }
 
-    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, &pixFmtSymbols[0],
-         (GLLibraryLoader::PlatformLookupFunction)fGetProcAddress))
-    {
+    if (!GLLibraryLoader::LoadSymbols(mOGLLibrary, &pixFmtSymbols[0], lookupFunc)) {
         // this isn't an error, just means that we don't have the pixel format extension
         fChoosePixelFormat = nullptr;
     }
@@ -187,16 +186,42 @@ WGLLibrary::EnsureInitialized()
         { nullptr, { nullptr } }
     };
 
-    if (GLLibraryLoader::LoadSymbols(mOGLLibrary, &extensionsSymbols[0],
-        (GLLibraryLoader::PlatformLookupFunction)fGetProcAddress)) {
+    if (GLLibraryLoader::LoadSymbols(mOGLLibrary, &extensionsSymbols[0], lookupFunc)) {
         const char *wglExts = fGetExtensionsString(mWindowDC);
         if (wglExts && HasExtension(wglExts, "WGL_ARB_create_context")) {
-            GLLibraryLoader::LoadSymbols(mOGLLibrary, &robustnessSymbols[0],
-            (GLLibraryLoader::PlatformLookupFunction)fGetProcAddress);
+            GLLibraryLoader::LoadSymbols(mOGLLibrary, &robustnessSymbols[0], lookupFunc);
             if (HasExtension(wglExts, "WGL_ARB_create_context_robustness")) {
                 mHasRobustness = true;
             }
         }
+    }
+
+    GLLibraryLoader::SymLoadStruct dxInteropSymbols[] = {
+        { (PRFuncPtr *) &fDXSetResourceShareHandle, { "wglDXSetResourceShareHandleNV", nullptr } },
+        { (PRFuncPtr *) &fDXOpenDevice,             { "wglDXOpenDeviceNV" , nullptr } },
+        { (PRFuncPtr *) &fDXCloseDevice,            { "wglDXCloseDeviceNV" , nullptr } },
+        { (PRFuncPtr *) &fDXRegisterObject,         { "wglDXRegisterObjectNV" , nullptr } },
+        { (PRFuncPtr *) &fDXUnregisterObject,       { "wglDXUnregisterObjectNV" , nullptr } },
+        { (PRFuncPtr *) &fDXObjectAccess,           { "wglDXObjectAccessNV" , nullptr } },
+        { (PRFuncPtr *) &fDXLockObjects,            { "wglDXLockObjectsNV" , nullptr } },
+        { (PRFuncPtr *) &fDXUnlockObjects,          { "wglDXUnlockObjectsNV" , nullptr } },
+        { nullptr, { nullptr } }
+    };
+
+    if (GLLibraryLoader::LoadSymbols(mOGLLibrary, &dxInteropSymbols[0], lookupFunc)) {
+        mHasDXInterop = true;
+        const char *wglExts = fGetExtensionsString(mWindowDC);
+        mHasDXInterop2 = HasExtension(wglExts, "WGL_NV_DX_interop2");
+    } else {
+        NS_ERROR("WGL supports NV_DX_interop without supplying its functions.");
+        fDXSetResourceShareHandle = nullptr;
+        fDXOpenDevice = nullptr;
+        fDXCloseDevice = nullptr;
+        fDXRegisterObject = nullptr;
+        fDXUnregisterObject = nullptr;
+        fDXObjectAccess = nullptr;
+        fDXLockObjects = nullptr;
+        fDXUnlockObjects = nullptr;
     }
 
     // reset back to the previous context, just in case
@@ -451,7 +476,7 @@ GLContextProviderWGL::CreateForWindow(nsIWidget *aWidget)
     }
 
     SurfaceCaps caps = SurfaceCaps::ForRGBA();
-    nsRefPtr<GLContextWGL> glContext = new GLContextWGL(caps,
+    RefPtr<GLContextWGL> glContext = new GLContextWGL(caps,
                                                         shareContext,
                                                         false,
                                                         dc,
@@ -546,7 +571,7 @@ CreatePBufferOffscreenContext(const IntSize& aSize,
     }
 
     SurfaceCaps dummyCaps = SurfaceCaps::Any();
-    nsRefPtr<GLContextWGL> glContext = new GLContextWGL(dummyCaps,
+    RefPtr<GLContextWGL> glContext = new GLContextWGL(dummyCaps,
                                                         aShareContext,
                                                         true,
                                                         pbuffer,
@@ -599,7 +624,7 @@ CreateWindowOffscreenContext()
     }
 
     SurfaceCaps caps = SurfaceCaps::ForRGBA();
-    nsRefPtr<GLContextWGL> glContext = new GLContextWGL(caps,
+    RefPtr<GLContextWGL> glContext = new GLContextWGL(caps,
                                                         shareContext, true,
                                                         dc, context, win);
 
@@ -613,7 +638,7 @@ GLContextProviderWGL::CreateHeadless(CreateContextFlags)
         return nullptr;
     }
 
-    nsRefPtr<GLContextWGL> glContext;
+    RefPtr<GLContextWGL> glContext;
 
     // Always try to create a pbuffer context first, because we
     // want the context isolation.
@@ -635,7 +660,7 @@ GLContextProviderWGL::CreateHeadless(CreateContextFlags)
         return nullptr;
     }
 
-    nsRefPtr<GLContext> retGL = glContext.get();
+    RefPtr<GLContext> retGL = glContext.get();
     return retGL.forget();
 }
 
@@ -654,7 +679,7 @@ GLContextProviderWGL::CreateOffscreen(const IntSize& size,
     return gl.forget();
 }
 
-static nsRefPtr<GLContextWGL> gGlobalContext;
+static RefPtr<GLContextWGL> gGlobalContext;
 
 /*static*/ GLContext*
 GLContextProviderWGL::GetGlobalContext()

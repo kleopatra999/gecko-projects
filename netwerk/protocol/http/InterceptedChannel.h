@@ -8,7 +8,7 @@
 #define InterceptedChannel_h
 
 #include "nsINetworkInterceptController.h"
-#include "mozilla/nsRefPtr.h"
+#include "mozilla/RefPtr.h"
 #include "mozilla/Maybe.h"
 
 class nsICacheEntry;
@@ -21,6 +21,7 @@ namespace net {
 class nsHttpChannel;
 class HttpChannelChild;
 class nsHttpResponseHead;
+class InterceptStreamListener;
 
 // An object representing a channel that has been intercepted. This avoids complicating
 // the actual channel implementation with the details of synthesizing responses.
@@ -56,7 +57,7 @@ public:
 class InterceptedChannelChrome : public InterceptedChannelBase
 {
   // The actual channel being intercepted.
-  nsRefPtr<nsHttpChannel> mChannel;
+  RefPtr<nsHttpChannel> mChannel;
 
   // Writeable cache entry for use when synthesizing a response in a parent process
   nsCOMPtr<nsICacheEntry> mSynthesizedCacheEntry;
@@ -72,7 +73,7 @@ public:
                            nsICacheEntry* aEntry);
 
   NS_IMETHOD ResetInterception() override;
-  NS_IMETHOD FinishSynthesizedResponse() override;
+  NS_IMETHOD FinishSynthesizedResponse(const nsACString& aFinalURLSpec) override;
   NS_IMETHOD GetChannel(nsIChannel** aChannel) override;
   NS_IMETHOD SynthesizeStatus(uint16_t aStatus, const nsACString& aReason) override;
   NS_IMETHOD SynthesizeHeader(const nsACString& aName, const nsACString& aValue) override;
@@ -86,21 +87,21 @@ public:
 class InterceptedChannelContent : public InterceptedChannelBase
 {
   // The actual channel being intercepted.
-  nsRefPtr<HttpChannelChild> mChannel;
+  RefPtr<HttpChannelChild> mChannel;
 
   // Reader-side of the response body when synthesizing in a child proces
   nsCOMPtr<nsIInputStream> mSynthesizedInput;
 
   // Listener for the synthesized response to fix up the notifications before they reach
   // the actual channel.
-  nsCOMPtr<nsIStreamListener> mStreamListener;
+  RefPtr<InterceptStreamListener> mStreamListener;
 public:
   InterceptedChannelContent(HttpChannelChild* aChannel,
                             nsINetworkInterceptController* aController,
-                            nsIStreamListener* aListener);
+                            InterceptStreamListener* aListener);
 
   NS_IMETHOD ResetInterception() override;
-  NS_IMETHOD FinishSynthesizedResponse() override;
+  NS_IMETHOD FinishSynthesizedResponse(const nsACString& aFinalURLSpec) override;
   NS_IMETHOD GetChannel(nsIChannel** aChannel) override;
   NS_IMETHOD SynthesizeStatus(uint16_t aStatus, const nsACString& aReason) override;
   NS_IMETHOD SynthesizeHeader(const nsACString& aName, const nsACString& aValue) override;

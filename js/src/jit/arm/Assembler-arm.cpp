@@ -631,24 +631,6 @@ Assembler::finish()
     flush();
     MOZ_ASSERT(!isFinished);
     isFinished = true;
-
-    for (unsigned int i = 0; i < tmpDataRelocations_.length(); i++) {
-        size_t offset = tmpDataRelocations_[i].getOffset();
-        size_t real_offset = offset + m_buffer.poolSizeBefore(offset);
-        dataRelocations_.writeUnsigned(real_offset);
-    }
-
-    for (unsigned int i = 0; i < tmpJumpRelocations_.length(); i++) {
-        size_t offset = tmpJumpRelocations_[i].getOffset();
-        size_t real_offset = offset + m_buffer.poolSizeBefore(offset);
-        jumpRelocations_.writeUnsigned(real_offset);
-    }
-
-    for (unsigned int i = 0; i < tmpPreBarriers_.length(); i++) {
-        size_t offset = tmpPreBarriers_[i].getOffset();
-        size_t real_offset = offset + m_buffer.poolSizeBefore(offset);
-        preBarriers_.writeUnsigned(real_offset);
-    }
 }
 
 void
@@ -657,12 +639,6 @@ Assembler::executableCopy(uint8_t* buffer)
     MOZ_ASSERT(isFinished);
     m_buffer.executableCopy(buffer);
     AutoFlushICache::setRange(uintptr_t(buffer), m_buffer.size());
-}
-
-uint32_t
-Assembler::actualOffset(uint32_t off_) const
-{
-    return off_ + m_buffer.poolSizeBefore(off_);
 }
 
 uint32_t
@@ -676,12 +652,6 @@ uint8_t*
 Assembler::PatchableJumpAddress(JitCode* code, uint32_t pe_)
 {
     return code->raw() + pe_;
-}
-
-BufferOffset
-Assembler::actualOffset(BufferOffset off_) const
-{
-    return BufferOffset(off_.getOffset() + m_buffer.poolSizeBefore(off_.getOffset()));
 }
 
 class RelocationIterator
@@ -908,12 +878,11 @@ TraceDataRelocations(JSTracer* trc, uint8_t* buffer, CompactBufferReader& reader
 }
 
 static void
-TraceDataRelocations(JSTracer* trc, ARMBuffer* buffer,
-                     Vector<BufferOffset, 0, SystemAllocPolicy>* locs)
+TraceDataRelocations(JSTracer* trc, ARMBuffer* buffer, CompactBufferReader& reader)
 {
-    for (unsigned int idx = 0; idx < locs->length(); idx++) {
-        BufferOffset bo = (*locs)[idx];
-        ARMBuffer::AssemblerBufferInstIterator iter(bo, buffer);
+    while (reader.more()) {
+        BufferOffset offset(reader.readUnsigned());
+        ARMBuffer::AssemblerBufferInstIterator iter(offset, buffer);
         TraceOneDataRelocation(trc, &iter);
     }
 }
@@ -957,8 +926,10 @@ Assembler::trace(JSTracer* trc)
         }
     }
 
-    if (tmpDataRelocations_.length())
-        ::TraceDataRelocations(trc, &m_buffer, &tmpDataRelocations_);
+    if (dataRelocations_.length()) {
+        CompactBufferReader reader(dataRelocations_);
+        ::TraceDataRelocations(trc, &m_buffer, reader);
+    }
 }
 
 void
@@ -966,7 +937,7 @@ Assembler::processCodeLabels(uint8_t* rawCode)
 {
     for (size_t i = 0; i < codeLabels_.length(); i++) {
         CodeLabel label = codeLabels_[i];
-        Bind(rawCode, label.dest(), rawCode + actualOffset(label.src()->offset()));
+        Bind(rawCode, label.dest(), rawCode + label.src()->offset());
     }
 }
 
@@ -988,8 +959,7 @@ void
 Assembler::Bind(uint8_t* rawCode, AbsoluteLabel* label, const void* address)
 {
     // See writeCodePointer comment.
-    uint32_t off = actualOffset(label->offset());
-    *reinterpret_cast<const void**>(rawCode + off) = address;
+    *reinterpret_cast<const void**>(rawCode + label->offset()) = address;
 }
 
 Assembler::Condition
@@ -1369,12 +1339,6 @@ Assembler::oom() const
            jumpRelocations_.oom() ||
            dataRelocations_.oom() ||
            preBarriers_.oom();
-}
-
-void
-Assembler::addCodeLabel(CodeLabel label)
-{
-    propagateOOM(codeLabels_.append(label));
 }
 
 // Size of the instruction stream, in bytes. Including pools. This function
@@ -2185,7 +2149,7 @@ Assembler::as_BranchPool(uint32_t value, RepatchLabel* label, ARMBuffer::PoolEnt
     if (label->bound()) {
         BufferOffset dest(label);
         as_b(dest.diffB<BOffImm>(ret), c, ret);
-    } else {
+    } else if (!oom()) {
         label->use(ret.getOffset());
     }
 #ifdef JS_DISASM_ARM
@@ -2385,20 +2349,21 @@ Assembler::as_b(BOffImm off, Condition c, Label* documentation)
 BufferOffset
 Assembler::as_b(Label* l, Condition c)
 {
-    if (m_buffer.oom()) {
-        BufferOffset ret;
-        return ret;
-    }
-
     if (l->bound()) {
         // Note only one instruction is emitted here, the NOP is overwritten.
         BufferOffset ret = allocBranchInst();
+        if (oom())
+            return BufferOffset();
+
         as_b(BufferOffset(l).diffB<BOffImm>(ret), c, ret);
 #ifdef JS_DISASM_ARM
         spewBranch(m_buffer.getInstOrNull(ret), l);
 #endif
         return ret;
     }
+
+    if (oom())
+        return BufferOffset();
 
     int32_t old;
     BufferOffset ret;
@@ -2416,6 +2381,10 @@ Assembler::as_b(Label* l, Condition c)
         BOffImm inv;
         ret = as_b(inv, c, l);
     }
+
+    if (oom())
+        return BufferOffset();
+
     DebugOnly<int32_t> check = l->use(ret.getOffset());
     MOZ_ASSERT(check == old);
     return ret;
@@ -2452,20 +2421,21 @@ Assembler::as_bl(BOffImm off, Condition c, Label* documentation)
 BufferOffset
 Assembler::as_bl(Label* l, Condition c)
 {
-    if (m_buffer.oom()) {
-        BufferOffset ret;
-        return ret;
-    }
-
     if (l->bound()) {
         // Note only one instruction is emitted here, the NOP is overwritten.
         BufferOffset ret = allocBranchInst();
+        if (oom())
+            return BufferOffset();
+
         as_bl(BufferOffset(l).diffB<BOffImm>(ret), c, ret);
 #ifdef JS_DISASM_ARM
         spewBranch(m_buffer.getInstOrNull(ret), l);
 #endif
         return ret;
     }
+
+    if (oom())
+        return BufferOffset();
 
     int32_t old;
     BufferOffset ret;
@@ -2484,6 +2454,10 @@ Assembler::as_bl(Label* l, Condition c)
         BOffImm inv;
         ret = as_bl(inv, c, l);
     }
+
+    if (oom())
+        return BufferOffset();
+
     DebugOnly<int32_t> check = l->use(ret.getOffset());
     MOZ_ASSERT(check == old);
     return ret;

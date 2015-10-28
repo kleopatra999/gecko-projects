@@ -102,14 +102,14 @@ enum AsmJSSimdOperation
 struct MOZ_STACK_CLASS AsmJSFunctionLabels
 {
     AsmJSFunctionLabels(jit::Label& entry, jit::Label& overflowExit)
-      : entry(entry), overflowExit(overflowExit) {}
+      : nonProfilingEntry(entry), overflowExit(overflowExit) {}
 
-    jit::Label begin;
-    jit::Label& entry;
-    jit::Label profilingJump;
-    jit::Label profilingEpilogue;
-    jit::Label profilingReturn;
-    jit::Label end;
+    jit::Label  profilingEntry;
+    jit::Label& nonProfilingEntry;
+    jit::Label  profilingJump;
+    jit::Label  profilingEpilogue;
+    jit::Label  profilingReturn;
+    jit::Label  endAfterOOL;
     mozilla::Maybe<jit::Label> overflowThunk;
     jit::Label& overflowExit;
 };
@@ -314,6 +314,10 @@ class AsmJSModule
             MOZ_ASSERT(pod.which_ == ArrayView || pod.which_ == SharedArrayView || pod.which_ == ArrayViewCtor);
             return pod.u.viewType_;
         }
+        void makeViewShared() {
+            MOZ_ASSERT(pod.which_ == ArrayView);
+            pod.which_ = SharedArrayView;
+        }
         PropertyName* mathName() const {
             MOZ_ASSERT(pod.which_ == MathBuiltinFunction);
             return name_;
@@ -397,10 +401,6 @@ class AsmJSModule
         void initJitOffset(unsigned off) {
             MOZ_ASSERT(!jitCodeOffset_);
             jitCodeOffset_ = off;
-        }
-        void updateOffsets(jit::MacroAssembler& masm) {
-            interpCodeOffset_ = masm.actualOffset(interpCodeOffset_);
-            jitCodeOffset_ = masm.actualOffset(jitCodeOffset_);
         }
 
         size_t serializedSize() const;
@@ -516,10 +516,6 @@ class AsmJSModule
             MOZ_ASSERT(pod.codeOffset_ == UINT32_MAX);
             pod.codeOffset_ = off;
         }
-        void updateCodeOffset(jit::MacroAssembler& masm) {
-            MOZ_ASSERT(!isChangeHeap());
-            pod.codeOffset_ = masm.actualOffset(pod.codeOffset_);
-        }
 
         unsigned numArgs() const {
             MOZ_ASSERT(!isChangeHeap());
@@ -574,7 +570,6 @@ class AsmJSModule
         CodeRange(Kind kind, uint32_t begin, uint32_t end);
         CodeRange(Kind kind, uint32_t begin, uint32_t profilingReturn, uint32_t end);
         CodeRange(AsmJSExit::BuiltinKind builtin, uint32_t begin, uint32_t pret, uint32_t end);
-        void updateOffsets(jit::MacroAssembler& masm);
 
         Kind kind() const { return Kind(u.kind_); }
         bool isFunction() const { return kind() == Function; }
@@ -1105,6 +1100,15 @@ class AsmJSModule
         if (pod.hasArrayView_)
             return pod.isSharedView_ == shared;
         return !pod.isSharedView_ || shared;
+    }
+    void setViewsAreShared() {
+        if (pod.hasArrayView_)
+            pod.isSharedView_ = true;
+        for (size_t i=0 ; i < globals_.length() ; i++) {
+            Global& g = globals_[i];
+            if (g.which() == Global::ArrayView)
+                g.makeViewShared();
+        }
     }
 
     /*************************************************************************/

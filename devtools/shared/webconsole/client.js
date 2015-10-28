@@ -255,6 +255,7 @@ WebConsoleClient.prototype = {
       frameActor: aOptions.frameActor,
       url: aOptions.url,
       selectedNodeActor: aOptions.selectedNodeActor,
+      selectedObjectActor: aOptions.selectedObjectActor,
     };
     this._client.request(packet, aOnResponse);
   },
@@ -279,6 +280,7 @@ WebConsoleClient.prototype = {
       frameActor: aOptions.frameActor,
       url: aOptions.url,
       selectedNodeActor: aOptions.selectedNodeActor,
+      selectedObjectActor: aOptions.selectedObjectActor,
     };
 
     this._client.request(packet, response => {
@@ -294,6 +296,13 @@ WebConsoleClient.prototype = {
    * Handler for the actors's unsolicited evaluationResult packet.
    */
   onEvaluationResult: function(aNotification, aPacket) {
+    // The client on the main thread can receive notification packets from
+    // multiple webconsole actors: the one on the main thread and the ones
+    // on worker threads.  So make sure we should be handling this request.
+    if (aPacket.from !== this._actor) {
+      return;
+    }
+
     // Find the associated callback based on this ID, and fire it.
     // In a sync evaluation, this would have already been called in
     // direct response to the client.request function.

@@ -1683,12 +1683,6 @@ GetPcScript(JSContext* cx, JSScript** scriptRes, jsbytecode** pcRes)
         rt->ionPcScriptCache->add(hash, retAddr, pc, *scriptRes);
 }
 
-void
-OsiIndex::fixUpOffset(MacroAssembler& masm)
-{
-    callPointDisplacement_ = masm.actualOffset(callPointDisplacement_);
-}
-
 uint32_t
 OsiIndex::returnPointDisplacement() const
 {
@@ -1749,6 +1743,14 @@ RInstructionResults::isInitialized() const
 {
     return initialized_;
 }
+
+#ifdef DEBUG
+size_t
+RInstructionResults::length() const
+{
+    return results_->length();
+}
+#endif
 
 JitFrameLayout*
 RInstructionResults::frame() const
@@ -2216,6 +2218,7 @@ SnapshotIterator::initInstructionResults(MaybeReadFallback& fallback)
     }
 
     MOZ_ASSERT(results->isInitialized());
+    MOZ_ASSERT(results->length() == recover_.numInstructions() - 1);
     instructionResults_ = results;
     return true;
 }

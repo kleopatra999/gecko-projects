@@ -205,6 +205,20 @@ this.AppConstants = Object.freeze({
   false,
 #endif
 
+  MOZ_PLACES:
+#ifdef MOZ_PLACES
+  true,
+#else
+  false,
+#endif
+
+  MOZ_ANDROID_HISTORY:
+#ifdef MOZ_ANDROID_HISTORY
+  true,
+#else
+  false,
+#endif
+
   DLL_PREFIX: "@DLL_PREFIX@",
   DLL_SUFFIX: "@DLL_SUFFIX@",
 
@@ -223,5 +237,10 @@ this.AppConstants = Object.freeze({
 #else
     false,
 #endif
-  DEBUG_JS_MODULES: "@DEBUG_JS_MODULES@"
+  DEBUG_JS_MODULES: "@DEBUG_JS_MODULES@",
+
+  // URL to the hg revision this was built from (e.g.
+  // "https://hg.mozilla.org/mozilla-central/rev/6256ec9113c1")
+  // On unofficial builds, this is an empty string.
+  SOURCE_REVISION_URL: "@SOURCE_REV_URL@"
 });

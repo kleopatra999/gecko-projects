@@ -42,6 +42,7 @@ WorkerActor.prototype = {
   form: function () {
     return {
       actor: this.actorID,
+      consoleActor: this._consoleActor,
       url: this._dbg.url,
       type: this._dbg.type
     };
@@ -59,7 +60,6 @@ WorkerActor.prototype = {
 
     return {
       type: "attached",
-      isFrozen: this._dbg.isFrozen,
       url: this._dbg.url
     };
   },
@@ -88,13 +88,15 @@ WorkerActor.prototype = {
 
     return DebuggerServer.connectToWorker(
       this.conn, this._dbg, this.actorID, request.options
-    ).then(({ threadActor, transport }) => {
+    ).then(({ threadActor, transport, consoleActor }) => {
       this._threadActor = threadActor;
       this._transport = transport;
+      this._consoleActor = consoleActor;
 
       return {
         type: "connected",
-        threadActor: this._threadActor
+        threadActor: this._threadActor,
+        consoleActor: this._consoleActor
       };
     }, (error) => {
       return { error: error.toString() };
@@ -111,14 +113,6 @@ WorkerActor.prototype = {
 
   onError: function (filename, lineno, message) {
     reportError("ERROR:" + filename + ":" + lineno + ":" + message + "\n");
-  },
-
-  onFreeze: function () {
-    this.conn.sendActorEvent(this.actorID, "freeze");
-  },
-
-  onThaw: function () {
-    this.conn.sendActorEvent(this.actorID, "thaw");
   },
 
   _detach: function () {

@@ -77,8 +77,7 @@ MSG_DEF(JSMSG_BAD_SURROGATE_CHAR,      1, JSEXN_TYPEERR, "bad surrogate characte
 MSG_DEF(JSMSG_UTF8_CHAR_TOO_LARGE,     1, JSEXN_TYPEERR, "UTF-8 character {0} too large")
 MSG_DEF(JSMSG_MALFORMED_UTF8_CHAR,     1, JSEXN_TYPEERR, "malformed UTF-8 character sequence at offset {0}")
 MSG_DEF(JSMSG_WRONG_CONSTRUCTOR,       1, JSEXN_TYPEERR, "wrong constructor called for {0}")
-MSG_DEF(JSMSG_BUILTIN_CTOR_NO_NEW,     1, JSEXN_NONE, "calling a builtin {0} constructor without new is deprecated and will be forbidden in ES6")
-MSG_DEF(JSMSG_BUILTIN_CTOR_NO_NEW_FATAL, 1, JSEXN_TYPEERR, "calling a builtin {0} constructor without new is forbidden")
+MSG_DEF(JSMSG_BUILTIN_CTOR_NO_NEW,     1, JSEXN_TYPEERR, "calling a builtin {0} constructor without new is forbidden")
 MSG_DEF(JSMSG_PROTO_SETTING_SLOW,      0, JSEXN_NONE, "mutating the [[Prototype]] of an object will cause your code to run very slowly; instead create the object with the correct initial [[Prototype]] value using Object.create")
 MSG_DEF(JSMSG_BAD_GENERATOR_YIELD,     1, JSEXN_TYPEERR, "yield from closing generator {0}")
 MSG_DEF(JSMSG_EMPTY_ARRAY_REDUCE,      0, JSEXN_TYPEERR, "reduce of empty array with no initial value")
@@ -121,6 +120,7 @@ MSG_DEF(JSMSG_IN_NOT_OBJECT,           1, JSEXN_TYPEERR, "invalid 'in' operand {
 MSG_DEF(JSMSG_TOO_MANY_CON_SPREADARGS, 0, JSEXN_RANGEERR, "too many constructor arguments")
 MSG_DEF(JSMSG_TOO_MANY_FUN_SPREADARGS, 0, JSEXN_RANGEERR, "too many function arguments")
 MSG_DEF(JSMSG_UNINITIALIZED_LEXICAL,   1, JSEXN_REFERENCEERR, "can't access lexical declaration `{0}' before initialization")
+MSG_DEF(JSMSG_BAD_CONST_ASSIGN,        1, JSEXN_TYPEERR, "invalid assignment to const `{0}'")
 
 // Date
 MSG_DEF(JSMSG_INVALID_DATE,            0, JSEXN_RANGEERR, "invalid date")
@@ -192,7 +192,6 @@ MSG_DEF(JSMSG_BAD_ANON_GENERATOR_RETURN, 0, JSEXN_TYPEERR, "anonymous generator 
 MSG_DEF(JSMSG_BAD_ARROW_ARGS,          0, JSEXN_SYNTAXERR, "invalid arrow-function arguments (parentheses around the arrow-function may help)")
 MSG_DEF(JSMSG_BAD_BINDING,             1, JSEXN_SYNTAXERR, "redefining {0} is deprecated")
 MSG_DEF(JSMSG_BAD_CONST_DECL,          0, JSEXN_SYNTAXERR, "missing = in const declaration")
-MSG_DEF(JSMSG_BAD_CONST_ASSIGN,        1, JSEXN_SYNTAXERR, "invalid assignment to const {0}")
 MSG_DEF(JSMSG_BAD_CONTINUE,            0, JSEXN_SYNTAXERR, "continue must be inside loop")
 MSG_DEF(JSMSG_BAD_DESTRUCT_ASS,        0, JSEXN_REFERENCEERR, "invalid destructuring assignment operator")
 MSG_DEF(JSMSG_BAD_DESTRUCT_TARGET,     0, JSEXN_SYNTAXERR, "invalid destructuring target")
@@ -245,7 +244,6 @@ MSG_DEF(JSMSG_DECLARATION_AFTER_EXPORT,0, JSEXN_SYNTAXERR, "missing declaration 
 MSG_DEF(JSMSG_DECLARATION_AFTER_IMPORT,0, JSEXN_SYNTAXERR, "missing declaration after 'import' keyword")
 MSG_DEF(JSMSG_DEPRECATED_DELETE_OPERAND, 0, JSEXN_SYNTAXERR, "applying the 'delete' operator to an unqualified name is deprecated")
 MSG_DEF(JSMSG_DEPRECATED_FLAGS_ARG,    0, JSEXN_NONE, "flags argument of String.prototype.{search,match,replace} is deprecated")
-MSG_DEF(JSMSG_DEPRECATED_LET_BLOCK,      0, JSEXN_NONE, "JavaScript 1.7's let blocks are deprecated")
 MSG_DEF(JSMSG_DEPRECATED_FOR_EACH,     0, JSEXN_NONE, "JavaScript 1.6's for-each-in loops are deprecated; consider using ES6 for-of instead")
 MSG_DEF(JSMSG_DEPRECATED_OCTAL,        0, JSEXN_SYNTAXERR, "octal literals and octal escape sequences are deprecated")
 MSG_DEF(JSMSG_DEPRECATED_PRAGMA,       1, JSEXN_NONE, "Using //@ to indicate {0} pragmas is deprecated. Use //# instead")
@@ -518,3 +516,4 @@ MSG_DEF(JSMSG_MISSING_INDIRECT_EXPORT,   0, JSEXN_SYNTAXERR, "indirect export no
 MSG_DEF(JSMSG_AMBIGUOUS_INDIRECT_EXPORT, 0, JSEXN_SYNTAXERR, "ambiguous indirect export")
 MSG_DEF(JSMSG_MISSING_IMPORT,            0, JSEXN_SYNTAXERR, "import not found")
 MSG_DEF(JSMSG_AMBIGUOUS_IMPORT,          0, JSEXN_SYNTAXERR, "ambiguous import")
+MSG_DEF(JSMSG_MISSING_NAMESPACE_EXPORT,  0, JSEXN_SYNTAXERR, "export not found for namespace")

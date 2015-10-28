@@ -89,12 +89,6 @@ AssemblerMIPSShared::finish()
 }
 
 uint32_t
-AssemblerMIPSShared::actualOffset(uint32_t off_) const
-{
-    return off_;
-}
-
-uint32_t
 AssemblerMIPSShared::actualIndex(uint32_t idx_) const
 {
     return idx_;
@@ -138,7 +132,7 @@ AssemblerMIPSShared::processCodeLabels(uint8_t* rawCode)
 {
     for (size_t i = 0; i < codeLabels_.length(); i++) {
         CodeLabel label = codeLabels_[i];
-        asAsm().Bind(rawCode, label.dest(), rawCode + actualOffset(label.src()->offset()));
+        asAsm().Bind(rawCode, label.dest(), rawCode + label.src()->offset());
     }
 }
 
@@ -229,12 +223,6 @@ AssemblerMIPSShared::oom() const
            jumpRelocations_.oom() ||
            dataRelocations_.oom() ||
            preBarriers_.oom();
-}
-
-void
-AssemblerMIPSShared::addCodeLabel(CodeLabel label)
-{
-    propagateOOM(codeLabels_.append(label));
 }
 
 // Size of the instruction stream, in bytes.

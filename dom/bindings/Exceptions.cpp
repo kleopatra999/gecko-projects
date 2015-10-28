@@ -105,7 +105,7 @@ Throw(JSContext* aCx, nsresult aRv, const nsACString& aMessage)
   nsCOMPtr<nsIException> existingException = runtime->GetPendingException();
   if (existingException) {
     nsresult nr;
-    if (NS_SUCCEEDED(existingException->GetResult(&nr)) && 
+    if (NS_SUCCEEDED(existingException->GetResult(&nr)) &&
         aRv == nr) {
       // Reuse the existing exception.
 
@@ -121,7 +121,7 @@ Throw(JSContext* aCx, nsresult aRv, const nsACString& aMessage)
     }
   }
 
-  nsRefPtr<Exception> finalException = CreateException(aCx, aRv, aMessage);
+  RefPtr<Exception> finalException = CreateException(aCx, aRv, aMessage);
 
   MOZ_ASSERT(finalException);
   if (!ThrowExceptionObject(aCx, finalException)) {
@@ -158,6 +158,7 @@ CreateException(JSContext* aCx, nsresult aRv, const nsACString& aMessage)
   case NS_ERROR_MODULE_DOM_INDEXEDDB:
   case NS_ERROR_MODULE_DOM_FILEHANDLE:
   case NS_ERROR_MODULE_DOM_BLUETOOTH:
+  case NS_ERROR_MODULE_DOM_ANIM:
     if (aMessage.IsEmpty()) {
       return DOMException::Create(aRv);
     }
@@ -167,7 +168,7 @@ CreateException(JSContext* aCx, nsresult aRv, const nsACString& aMessage)
   }
 
   // If not, use the default.
-  nsRefPtr<Exception> exception =
+  RefPtr<Exception> exception =
     new Exception(aMessage, aRv, EmptyCString(), nullptr, nullptr);
   return exception.forget();
 }
@@ -387,7 +388,8 @@ static void
 GetValueIfNotCached(JSContext* aCx, JSObject* aStack,
                     JS::SavedFrameResult (*aPropGetter)(JSContext*,
                                                         JS::Handle<JSObject*>,
-                                                        GetterOutParamType),
+                                                        GetterOutParamType,
+                                                        JS::SavedFrameSelfHosted),
                     bool aIsCached, bool* aCanCache, bool* aUseCachedValue,
                     ReturnType aValue)
 {
@@ -405,7 +407,7 @@ GetValueIfNotCached(JSContext* aCx, JSObject* aStack,
   *aUseCachedValue = false;
   JS::ExposeObjectToActiveJS(stack);
 
-  aPropGetter(aCx, stack, aValue);
+  aPropGetter(aCx, stack, aValue, JS::SavedFrameSelfHosted::Exclude);
 }
 
 NS_IMETHODIMP JSStackFrame::GetFilename(nsAString& aFilename)
@@ -675,15 +677,8 @@ NS_IMETHODIMP JSStackFrame::GetCaller(nsIStackFrame** aCaller)
     return StackFrame::GetCaller(aCaller);
   }
 
-  nsCOMPtr<nsIStackFrame> caller;
-  if (callerObj) {
-      caller = new JSStackFrame(callerObj);
-  } else {
-    // Do we really need this dummy frame?  If so, we should document why... I
-    // guess for symmetry with the "nothing on the stack" case, which returns
-    // a single dummy frame?
-    caller = new StackFrame();
-  }
+  nsCOMPtr<nsIStackFrame> caller =
+    callerObj ? new JSStackFrame(callerObj) : nullptr;
   caller.forget(aCaller);
 
   if (canCache) {

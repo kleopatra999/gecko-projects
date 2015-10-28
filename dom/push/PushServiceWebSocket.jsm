@@ -10,6 +10,13 @@ const Ci = Components.interfaces;
 const Cu = Components.utils;
 const Cr = Components.results;
 
+Cu.import("resource://gre/modules/AppConstants.jsm");
+Cu.import("resource://gre/modules/Preferences.jsm");
+Cu.import("resource://gre/modules/Promise.jsm");
+Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/Timer.jsm");
+Cu.import("resource://gre/modules/XPCOMUtils.jsm");
+
 const {PushDB} = Cu.import("resource://gre/modules/PushDB.jsm");
 const {PushRecord} = Cu.import("resource://gre/modules/PushRecord.jsm");
 const {
@@ -18,22 +25,16 @@ const {
   getEncryptionKeyParams,
   getEncryptionParams,
 } = Cu.import("resource://gre/modules/PushCrypto.jsm");
-Cu.import("resource://gre/modules/Preferences.jsm");
-Cu.import("resource://gre/modules/Timer.jsm");
-Cu.import("resource://gre/modules/Promise.jsm");
-Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-Cu.import("resource://gre/modules/Services.jsm");
-
 
 XPCOMUtils.defineLazyServiceGetter(this, "gDNSService",
                                    "@mozilla.org/network/dns-service;1",
                                    "nsIDNSService");
 
-#ifdef MOZ_B2G
-XPCOMUtils.defineLazyServiceGetter(this, "gPowerManagerService",
-                                   "@mozilla.org/power/powermanagerservice;1",
-                                   "nsIPowerManagerService");
-#endif
+if (AppConstants.MOZ_B2G) {
+  XPCOMUtils.defineLazyServiceGetter(this, "gPowerManagerService",
+                                     "@mozilla.org/power/powermanagerservice;1",
+                                     "nsIPowerManagerService");
+}
 
 var threadManager = Cc["@mozilla.org/thread-manager;1"]
                       .getService(Ci.nsIThreadManager);
@@ -173,32 +174,31 @@ this.PushServiceWebSocket = {
       break;
     case "timer-callback":
       if (aSubject == this._requestTimeoutTimer) {
-        if (Object.keys(this._pendingRequests).length === 0) {
+        if (Object.keys(this._registerRequests).length === 0) {
           this._requestTimeoutTimer.cancel();
         }
 
         // Set to true if at least one request timed out.
         let requestTimedOut = false;
-        for (let channelID in this._pendingRequests) {
-          let duration = Date.now() - this._pendingRequests[channelID].ctime;
+        for (let channelID in this._registerRequests) {
+          let duration = Date.now() - this._registerRequests[channelID].ctime;
           // If any of the registration requests time out, all the ones after it
           // also made to fail, since we are going to be disconnecting the
           // socket.
           if (requestTimedOut || duration > this._requestTimeout) {
             debug("Request timeout: Removing " + channelID);
             requestTimedOut = true;
-            this._pendingRequests[channelID]
+            this._registerRequests[channelID]
               .reject({status: 0, error: "TimeoutError"});
 
-            delete this._pendingRequests[channelID];
+            delete this._registerRequests[channelID];
           }
         }
 
         // The most likely reason for a registration request timing out is
         // that the socket has disconnected. Best to reconnect.
         if (requestTimedOut) {
-          this._shutdownWS();
-          this._reconnectAfterBackoff();
+          this._reconnect();
         }
       }
       break;
@@ -242,7 +242,7 @@ this.PushServiceWebSocket = {
   },
 
   _ws: null,
-  _pendingRequests: {},
+  _registerRequests: {},
   _currentState: STATE_SHUT_DOWN,
   _requestTimeout: 0,
   _requestTimeoutTimer: null,
@@ -344,7 +344,13 @@ this.PushServiceWebSocket = {
     prefs.observe("debug", this);
   },
 
-  _shutdownWS: function() {
+  _reconnect: function () {
+    debug("reconnect()");
+    this._shutdownWS(false);
+    this._reconnectAfterBackoff();
+  },
+
+  _shutdownWS: function(shouldCancelPending = true) {
     debug("shutdownWS()");
     this._currentState = STATE_SHUT_DOWN;
     this._willBeWokenUpByUDP = false;
@@ -366,7 +372,9 @@ this.PushServiceWebSocket = {
       dump("This should not happend");
     }
 
-    this._cancelPendingRequests();
+    if (shouldCancelPending) {
+      this._cancelRegisterRequests();
+    }
 
     if (this._notifyRequestQueue) {
       this._notifyRequestQueue();
@@ -631,13 +639,12 @@ this.PushServiceWebSocket = {
     try {
       // Grab a wakelock before we open the socket to ensure we don't go to
       // sleep before connection the is opened.
-      this._ws.asyncOpen(uri, uri.spec, this._wsListener, null);
+      this._ws.asyncOpen(uri, uri.spec, 0, this._wsListener, null);
       this._acquireWakeLock();
       this._currentState = STATE_WAITING_FOR_WS_START;
     } catch(e) {
       debug("Error opening websocket. asyncOpen failed!");
-      this._shutdownWS();
-      this._reconnectAfterBackoff();
+      this._reconnect();
     }
   },
 
@@ -684,8 +691,7 @@ this.PushServiceWebSocket = {
     // i.e. when _waitingForPong is true, other conditions are also true.
     if (this._waitingForPong) {
       debug("Did not receive pong in time. Reconnecting WebSocket.");
-      this._shutdownWS();
-      this._reconnectAfterBackoff();
+      this._reconnect();
     }
     else if (this._currentState == STATE_READY) {
       // Send a ping.
@@ -722,7 +728,10 @@ this.PushServiceWebSocket = {
   },
 
   _acquireWakeLock: function() {
-#ifdef MOZ_B2G
+    if (!AppConstants.MOZ_B2G) {
+      return;
+    }
+
     // Disable the wake lock on non-B2G platforms to work around bug 1154492.
     if (!this._socketWakeLock) {
       debug("Acquiring Socket Wakelock");
@@ -743,11 +752,13 @@ this.PushServiceWebSocket = {
                         // to sleep just as the socket connected.
                         this._requestTimeout + 1000,
                         Ci.nsITimer.TYPE_ONE_SHOT);
-#endif
   },
 
   _releaseWakeLock: function() {
-#ifdef MOZ_B2G
+    if (!AppConstants.MOZ_B2G) {
+      return;
+    }
+
     debug("Releasing Socket WakeLock");
     if (this._socketWakeLockTimer) {
       this._socketWakeLockTimer.cancel();
@@ -756,7 +767,6 @@ this.PushServiceWebSocket = {
       this._socketWakeLock.unlock();
       this._socketWakeLock = null;
     }
-#endif
   },
 
   /**
@@ -791,11 +801,12 @@ this.PushServiceWebSocket = {
       return;
     }
 
-    let notifyRequestQueue = () => {
+    let sendRequests = () => {
       if (this._notifyRequestQueue) {
         this._notifyRequestQueue();
         this._notifyRequestQueue = null;
       }
+      this._sendRegisterRequests();
     };
 
     function finishHandshake() {
@@ -811,9 +822,9 @@ this.PushServiceWebSocket = {
               debug("finishHandshake: Error updating record " + record.keyID);
             })
           ))
-        ).then(notifyRequestQueue);
+        ).then(sendRequests);
       } else {
-        notifyRequestQueue();
+        sendRequests();
       }
     }
 
@@ -842,13 +853,13 @@ this.PushServiceWebSocket = {
   _handleRegisterReply: function(reply) {
     debug("handleRegisterReply()");
     if (typeof reply.channelID !== "string" ||
-        typeof this._pendingRequests[reply.channelID] !== "object") {
+        typeof this._registerRequests[reply.channelID] !== "object") {
       return;
     }
 
-    let tmp = this._pendingRequests[reply.channelID];
-    delete this._pendingRequests[reply.channelID];
-    if (Object.keys(this._pendingRequests).length === 0 &&
+    let tmp = this._registerRequests[reply.channelID];
+    delete this._registerRequests[reply.channelID];
+    if (Object.keys(this._registerRequests).length === 0 &&
         this._requestTimeoutTimer) {
       this._requestTimeoutTimer.cancel();
     }
@@ -887,6 +898,15 @@ this.PushServiceWebSocket = {
       debug("handleDataUpdate: Discarding message without channel ID");
       return;
     }
+    // Unconditionally ack the update. This is important because the Push
+    // server requires the client to ack all outstanding updates before
+    // resuming delivery. However, the server doesn't verify the encryption
+    // params, and can't ensure that an update is encrypted correctly because
+    // it doesn't have the private key. Thus, if we only acked valid updates,
+    // it would be possible for a single invalid one to block delivery of all
+    // subsequent updates. A nack would be more appropriate for this case, but
+    // the protocol doesn't currently support them.
+    this._sendAck(update.channelID, update.version);
     if (typeof update.data != "string") {
       promise = this._mainPushService.receivedPushMessage(
         update.channelID,
@@ -908,7 +928,7 @@ this.PushServiceWebSocket = {
         record => record
       );
     }
-    promise.then(() => this._sendAck(update.channelID)).catch(err => {
+    promise.catch(err => {
       debug("handleDataUpdate: Error delivering message: " + err);
     });
   },
@@ -977,7 +997,7 @@ this.PushServiceWebSocket = {
   request: function(action, record) {
     debug("request() " + action);
 
-    if (Object.keys(this._pendingRequests).length === 0) {
+    if (Object.keys(this._registerRequests).length === 0) {
       // start the timer since we now have at least one request
       if (!this._requestTimeoutTimer) {
         this._requestTimeoutTimer = Cc["@mozilla.org/timer;1"]
@@ -993,7 +1013,7 @@ this.PushServiceWebSocket = {
                   messageType: action};
 
       return new Promise((resolve, reject) => {
-        this._pendingRequests[data.channelID] = {record: record,
+        this._registerRequests[data.channelID] = {record: record,
                                                  resolve: resolve,
                                                  reject: reject,
                                                  ctime: Date.now()
@@ -1020,7 +1040,7 @@ this.PushServiceWebSocket = {
   _queueStart: Promise.resolve(),
   _notifyRequestQueue: null,
   _queue: null,
-  _enqueue: function(op, errop) {
+  _enqueue: function(op) {
     debug("enqueue");
     if (!this._queue) {
       this._queue = this._queueStart;
@@ -1033,7 +1053,7 @@ this.PushServiceWebSocket = {
   _send(data) {
     if (this._currentState == STATE_READY) {
       if (data.messageType != "register" ||
-        typeof this._pendingRequests[data.channelID] == "object") {
+        typeof this._registerRequests[data.channelID] == "object") {
 
         // check if request has not been cancelled
         this._wsSendMessage(data);
@@ -1041,18 +1061,29 @@ this.PushServiceWebSocket = {
     }
   },
 
+  _sendRegisterRequests() {
+    this._enqueue(_ => Promise.all(Object.keys(this._registerRequests).map(channelID =>
+      this._send({
+        messageType: "register",
+        channelID: channelID,
+      })
+    )));
+  },
+
   _queueRequest(data) {
-    if (this._currentState != STATE_READY) {
-      if (!this._notifyRequestQueue) {
+    if (data.messageType != "register") {
+      if (this._currentState != STATE_READY && !this._notifyRequestQueue) {
         let promise = new Promise((resolve, reject) => {
           this._notifyRequestQueue = resolve;
         });
         this._enqueue(_ => promise);
       }
 
+      this._enqueue(_ => this._send(data));
+    } else if (this._currentState == STATE_READY) {
+      this._send(data);
     }
 
-    this._enqueue(_ => this._send(data));
     if (!this._ws) {
       // This will end up calling notifyRequestQueue().
       this._beginWSSetup();
@@ -1104,14 +1135,6 @@ this.PushServiceWebSocket = {
       data.uaid = this._UAID;
     }
 
-    function sendHelloMessage(ids) {
-      // On success, ids is an array, on error its not.
-      data.channelIDs = ids.map ?
-                           ids.map(function(el) { return el.channelID; }) : [];
-      this._wsSendMessage(data);
-      this._currentState = STATE_WAITING_FOR_HELLO;
-    }
-
     this._networkInfo.getNetworkState((networkState) => {
       if (networkState.ip) {
         // Opening an available UDP port.
@@ -1130,9 +1153,8 @@ this.PushServiceWebSocket = {
         };
       }
 
-      this._mainPushService.getAllUnexpired()
-        .then(sendHelloMessage.bind(this),
-              sendHelloMessage.bind(this));
+      this._wsSendMessage(data);
+      this._currentState = STATE_WAITING_FOR_HELLO;
     });
   },
 
@@ -1150,13 +1172,10 @@ this.PushServiceWebSocket = {
     if (statusCode != Cr.NS_OK &&
         !(statusCode == Cr.NS_BASE_STREAM_CLOSED && this._willBeWokenUpByUDP)) {
       debug("Socket error " + statusCode);
-      this._reconnectAfterBackoff();
+      this._reconnect();
+      return;
     }
 
-    // Bug 896919. We always shutdown the WebSocket, even if we need to
-    // reconnect. This works because _reconnectAfterBackoff() is "async"
-    // (there is a minimum delay of the pref retryBaseInterval, which by default
-    // is 5000ms), so that function will open the WebSocket again.
     this._shutdownWS();
   },
 
@@ -1245,12 +1264,12 @@ this.PushServiceWebSocket = {
   },
 
   /**
-   * Rejects all pending requests with errors.
+   * Rejects all pending register requests with errors.
    */
-  _cancelPendingRequests: function() {
-    for (let channelID in this._pendingRequests) {
-      let request = this._pendingRequests[channelID];
-      delete this._pendingRequests[channelID];
+  _cancelRegisterRequests: function() {
+    for (let channelID in this._registerRequests) {
+      let request = this._registerRequests[channelID];
+      delete this._registerRequests[channelID];
       request.reject({status: 0, error: "AbortError"});
     }
   },

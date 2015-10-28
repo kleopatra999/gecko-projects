@@ -502,6 +502,7 @@ PluginInstanceChild::NPN_GetValue(NPNVariable aVar,
     case NPNVSupportsXEmbedBool:
     case NPNVSupportsWindowless:
         NS_NOTREACHED("NPNVariable should be handled in PluginModuleChild.");
+        MOZ_FALLTHROUGH;
 #endif
 
     default:
@@ -510,7 +511,6 @@ PluginInstanceChild::NPN_GetValue(NPNVariable aVar,
                 (int) aVar, NPNVariableToString(aVar)));
         return NPERR_GENERIC_ERROR;
     }
-
 }
 
 #ifdef MOZ_WIDGET_COCOA
@@ -2313,7 +2313,6 @@ PluginInstanceChild::EnumThreadWindowsCallback(HWND hWnd,
     return TRUE;
 }
 
-
 void
 PluginInstanceChild::SetupFlashMsgThrottle()
 {
@@ -2610,7 +2609,6 @@ StreamNotifyChild::ActorDestroy(ActorDestroyReason why)
     }
 }
 
-
 void
 StreamNotifyChild::SetAssociatedStream(BrowserStreamChild* bs)
 {
@@ -2841,7 +2839,7 @@ PluginInstanceChild::CreateOptSurface(void)
                "Need a valid surface type here");
     NS_ASSERTION(!mCurrentSurface, "mCurrentSurfaceActor can get out of sync.");
 
-    nsRefPtr<gfxASurface> retsurf;
+    RefPtr<gfxASurface> retsurf;
     // Use an opaque surface unless we're transparent and *don't* have
     // a background to source from.
     gfxImageFormat format =
@@ -3069,7 +3067,7 @@ PluginInstanceChild::EnsureCurrentBuffer(void)
 void
 PluginInstanceChild::UpdateWindowAttributes(bool aForceSetWindow)
 {
-    nsRefPtr<gfxASurface> curSurface = mHelperSurface ? mHelperSurface : mCurrentSurface;
+    RefPtr<gfxASurface> curSurface = mHelperSurface ? mHelperSurface : mCurrentSurface;
     bool needWindowUpdate = aForceSetWindow;
 #ifdef MOZ_X11
     Visual* visual = nullptr;
@@ -3220,7 +3218,7 @@ PluginInstanceChild::PaintRectToSurface(const nsIntRect& aRect,
 {
     // Render using temporary X surface, with copy to image surface
     nsIntRect plPaintRect(aRect);
-    nsRefPtr<gfxASurface> renderSurface = aSurface;
+    RefPtr<gfxASurface> renderSurface = aSurface;
 #ifdef MOZ_X11
     if (mIsTransparent && (GetQuirks() & QUIRK_FLASH_EXPOSE_COORD_TRANSLATION)) {
         // Work around a bug in Flash up to 10.1 d51 at least, where expose event
@@ -3304,8 +3302,8 @@ PluginInstanceChild::PaintRectWithAlphaExtraction(const nsIntRect& aRect,
         }
     }
 
-    nsRefPtr<gfxImageSurface> whiteImage;
-    nsRefPtr<gfxImageSurface> blackImage;
+    RefPtr<gfxImageSurface> whiteImage;
+    RefPtr<gfxImageSurface> blackImage;
     gfxRect targetRect(rect.x, rect.y, rect.width, rect.height);
     IntSize targetSize(rect.width, rect.height);
     gfxPoint deviceOffset = -targetRect.TopLeft();
@@ -3508,7 +3506,7 @@ PluginInstanceChild::ShowPluginFrame()
         PLUGIN_LOG_DEBUG(("  (on background)"));
         // Source the background pixels ...
         {
-            nsRefPtr<gfxASurface> surface =
+            RefPtr<gfxASurface> surface =
                 mHelperSurface ? mHelperSurface : mCurrentSurface;
             RefPtr<DrawTarget> dt = CreateDrawTargetForSurface(surface);
             RefPtr<SourceSurface> backgroundSurface =
@@ -3530,7 +3528,7 @@ PluginInstanceChild::ShowPluginFrame()
         // plugins, and we're forcing a throwaway paint of a
         // wmode=transparent plugin, then make sure to use the helper
         // surface here.
-        nsRefPtr<gfxASurface> target =
+        RefPtr<gfxASurface> target =
             (temporarilyMakeVisible && mHelperSurface) ?
             mHelperSurface : mCurrentSurface;
 
@@ -3848,7 +3846,7 @@ PluginInstanceChild::PostChildAsyncCall(ChildAsyncCall* aTask)
 void
 PluginInstanceChild::SwapSurfaces()
 {
-    nsRefPtr<gfxASurface> tmpsurf = mCurrentSurface;
+    RefPtr<gfxASurface> tmpsurf = mCurrentSurface;
 #ifdef XP_WIN
     PPluginSurfaceChild* tmpactor = mCurrentSurfaceActor;
 #endif

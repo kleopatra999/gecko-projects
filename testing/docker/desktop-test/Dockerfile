@@ -1,12 +1,10 @@
-FROM          taskcluster/ubuntu1204-test-upd:20151005212801
+FROM          taskcluster/ubuntu1204-test-upd:0.1.1.20151012044301
 MAINTAINER    Jonas Finnemann Jensen <jopsen@gmail.com>
 
 # Add utilities and configuration
 COPY           dot-config                    /home/worker/.config
 COPY           dot-pulse                     /home/worker/.pulse
 COPY           bin                           /home/worker/bin
-# TODO: remove these (they should be in-tree)
-COPY           mozharness_configs            /home/worker/mozharness_configs
 # TODO: remove this when buildbot is gone
 COPY           buildprops.json               /home/worker/buildprops.json
 COPY           tc-vcs-config.yml /etc/taskcluster-vcs.yml
@@ -18,6 +16,9 @@ RUN chmod u+x /home/worker/bin/buildbot_step
 # TODO: remove
 ADD            https://s3-us-west-2.amazonaws.com/test-caching/packages/linux64-stackwalk /usr/local/bin/linux64-minidump_stackwalk
 RUN chmod u+x /usr/local/bin/linux64-minidump_stackwalk
+
+# allow the worker user to access video devices
+RUN usermod -a -G video worker
 
 RUN mkdir Documents; mkdir Pictures; mkdir Music; mkdir Videos; mkdir artifacts
 

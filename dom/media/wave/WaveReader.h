@@ -26,19 +26,9 @@ public:
   virtual bool DecodeVideoFrame(bool &aKeyframeSkip,
                                   int64_t aTimeThreshold) override;
 
-  virtual bool HasAudio() override
-  {
-    return true;
-  }
-
-  virtual bool HasVideo() override
-  {
-    return false;
-  }
-
   virtual nsresult ReadMetadata(MediaInfo* aInfo,
                                 MetadataTags** aTags) override;
-  virtual nsRefPtr<SeekPromise>
+  virtual RefPtr<SeekPromise>
   Seek(int64_t aTime, int64_t aEndTime) override;
 
   virtual media::TimeIntervals GetBuffered() override;

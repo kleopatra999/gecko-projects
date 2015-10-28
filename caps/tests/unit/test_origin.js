@@ -26,6 +26,8 @@ function checkOriginAttributes(prin, attrs, suffix) {
   do_check_eq(prin.originAttributes.appId, attrs.appId || 0);
   do_check_eq(prin.originAttributes.inBrowser, attrs.inBrowser || false);
   do_check_eq(prin.originSuffix, suffix || '');
+  do_check_eq(ChromeUtils.originAttributesToSuffix(attrs), suffix || '');
+  do_check_true(ChromeUtils.originAttributesMatchPattern(prin.originAttributes, attrs));
   if (!prin.isNullPrincipal && !prin.origin.startsWith('[')) {
     do_check_true(ssm.createCodebasePrincipalFromOrigin(prin.origin).equals(prin));
   } else {
@@ -133,7 +135,7 @@ function run_test() {
 
   // Just signedPkg
   var exampleOrg_signedPkg = ssm.createCodebasePrincipal(makeURI('http://example.org'), {signedPkg: 'whatever'});
-  checkOriginAttributes(exampleOrg_signedPkg, { signedPkg: 'id' }, '^signedPkg=whatever');
+  checkOriginAttributes(exampleOrg_signedPkg, { signedPkg: 'whatever' }, '^signedPkg=whatever');
   do_check_eq(exampleOrg_signedPkg.origin, 'http://example.org^signedPkg=whatever');
 
   // signedPkg and browser
@@ -160,4 +162,16 @@ function run_test() {
   checkCrossOrigin(exampleOrg_signedPkg, exampleOrg);
   checkCrossOrigin(exampleOrg_signedPkg, exampleOrg_signedPkg_browser);
   checkCrossOrigin(exampleOrg_signedPkg, exampleOrg_signedPkg_another);
+
+  // Check Principal kinds.
+  function checkKind(prin, kind) {
+    do_check_eq(prin.isNullPrincipal, kind == 'nullPrincipal');
+    do_check_eq(prin.isCodebasePrincipal, kind == 'codebasePrincipal');
+    do_check_eq(prin.isExpandedPrincipal, kind == 'expandedPrincipal');
+    do_check_eq(prin.isSystemPrincipal, kind == 'systemPrincipal');
+  }
+  checkKind(ssm.createNullPrincipal({}), 'nullPrincipal');
+  checkKind(ssm.createCodebasePrincipal(makeURI('http://www.example.com'), {}), 'codebasePrincipal');
+  checkKind(ssm.createExpandedPrincipal([ssm.createCodebasePrincipal(makeURI('http://www.example.com'), {})]), 'expandedPrincipal');
+  checkKind(ssm.getSystemPrincipal(), 'systemPrincipal');
 }

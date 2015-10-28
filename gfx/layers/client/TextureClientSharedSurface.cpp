@@ -14,8 +14,11 @@
 #include "SharedSurface.h"
 
 #ifdef MOZ_WIDGET_GONK
+#include "mozilla/layers/GrallocTextureClient.h"
 #include "SharedSurfaceGralloc.h"
 #endif
+
+using namespace mozilla::gl;
 
 namespace mozilla {
 namespace layers {
@@ -26,7 +29,9 @@ SharedSurfaceTextureClient::SharedSurfaceTextureClient(ISurfaceAllocator* aAlloc
                                                        gl::SurfaceFactory* factory)
   : TextureClient(aAllocator, aFlags | TextureFlags::RECYCLE)
   , mSurf(Move(surf))
-{ }
+{
+  AddFlags(mSurf->GetTextureFlags());
+}
 
 SharedSurfaceTextureClient::~SharedSurfaceTextureClient()
 {

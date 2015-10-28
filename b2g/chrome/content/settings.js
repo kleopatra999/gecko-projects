@@ -121,7 +121,15 @@ SettingsListener.observe('language.current', 'en-US', function(value) {
   Services.prefs.setCharPref(prefName, value);
 
   if (shell.hasStarted() == false) {
-    shell.bootstrap();
+    // On b2gdroid at first run we need to synchronize our wallpaper with
+    // Android one's before bootstrapping.
+    if (AppConstants.MOZ_B2GDROID) {
+      Cc["@mozilla.org/b2g/b2gdroid-setup;1"]
+        .getService().wrappedJSObject.setWallpaper()
+        .then(() => { shell.bootstrap(); });
+    } else {
+      shell.bootstrap();
+    }
   }
 });
 
@@ -698,6 +706,10 @@ var settingsToObserve = {
     prefName: 'dom.sms.maxReadAheadEntries',
     defaultValue: 7
   },
+  'services.sync.enabled': {
+    defaultValue: false,
+    notifyChange: true
+  },
   'ui.touch.radius.leftmm': {
     resetToPref: true
   },
@@ -710,9 +722,24 @@ var settingsToObserve = {
   'ui.touch.radius.bottommm': {
     resetToPref: true
   },
+  'ui.click_hold_context_menus.delay': {
+    resetToPref: true
+  },
   'wap.UAProf.tagname': 'x-wap-profile',
   'wap.UAProf.url': ''
 };
+
+function settingObserver(setPref, prefName, setting) {
+  return value => {
+    setPref(prefName, value);
+    if (setting.notifyChange) {
+      SystemAppProxy._sendCustomEvent('mozPrefChromeEvent', {
+        prefName: prefName,
+        value: value
+      });
+    }
+  };
+}
 
 for (let key in settingsToObserve) {
   let setting = settingsToObserve[key];
@@ -763,7 +790,6 @@ for (let key in settingsToObserve) {
       break;
   }
 
-  SettingsListener.observe(key, defaultValue, function(value) {
-    setPref(prefName, value);
-  });
+  SettingsListener.observe(key, defaultValue,
+                           settingObserver(setPref, prefName, setting));
 };

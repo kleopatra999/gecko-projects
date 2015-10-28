@@ -28,13 +28,10 @@ public:
   virtual bool DecodeVideoFrame(bool &aKeyframeSkip,
                                 int64_t aTimeThreshold) override;
 
-  virtual bool HasAudio() override;
-  virtual bool HasVideo() override;
-
   virtual nsresult ReadMetadata(MediaInfo* aInfo,
                                 MetadataTags** aTags) override;
 
-  virtual nsRefPtr<SeekPromise>
+  virtual RefPtr<SeekPromise>
   Seek(int64_t aTime, int64_t aEndTime) override;
 
   void AudioSampleCallback(UInt32 aNumBytes,

@@ -51,13 +51,6 @@
 
 #include "GeckoProfiler.h"
 
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-#include "libdisplay/GonkDisplay.h"     // for GonkDisplay
-#include <ui/Fence.h>
-#include "nsWindow.h"
-#include "nsScreenManagerGonk.h"
-#endif
-
 namespace mozilla {
 
 using namespace std;
@@ -101,7 +94,7 @@ CompositorOGL::~CompositorOGL()
 already_AddRefed<mozilla::gl::GLContext>
 CompositorOGL::CreateContext()
 {
-  nsRefPtr<GLContext> context;
+  RefPtr<GLContext> context;
 
   // Used by mock widget to create an offscreen context
   void* widgetOpenGLContext = mWidget->GetNativeData(NS_NATIVE_OPENGL_CONTEXT);
@@ -168,7 +161,7 @@ CompositorOGL::CleanupResources()
                          reinterpret_cast<uintptr_t>(nullptr));
 #endif
 
-  nsRefPtr<GLContext> ctx = mGLContext->GetSharedContext();
+  RefPtr<GLContext> ctx = mGLContext->GetSharedContext();
   if (!ctx) {
     ctx = mGLContext;
   }
@@ -1458,59 +1451,10 @@ CompositorOGL::EndFrame()
   }
 }
 
-#if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
-void
-CompositorOGL::SetDispAcquireFence(Layer* aLayer, nsIWidget* aWidget)
-{
-  // OpenGL does not provide ReleaseFence for rendering.
-  // Instead use DispAcquireFence as layer buffer's ReleaseFence
-  // to prevent flickering and tearing.
-  // DispAcquireFence is DisplaySurface's AcquireFence.
-  // AcquireFence will be signaled when a buffer's content is available.
-  // See Bug 974152.
-
-  if (!aLayer || !aWidget) {
-    return;
-  }
-  nsWindow* window = static_cast<nsWindow*>(aWidget);
-  RefPtr<FenceHandle::FdObj> fence = new FenceHandle::FdObj(
-      window->GetScreen()->GetPrevDispAcquireFd());
-  mReleaseFenceHandle.Merge(FenceHandle(fence));
-}
-
-FenceHandle
-CompositorOGL::GetReleaseFence()
-{
-  if (!mReleaseFenceHandle.IsValid()) {
-    return FenceHandle();
-  }
-
-  nsRefPtr<FenceHandle::FdObj> fdObj = mReleaseFenceHandle.GetDupFdObj();
-  return FenceHandle(fdObj);
-}
-
-#else
-void
-CompositorOGL::SetDispAcquireFence(Layer* aLayer, nsIWidget* aWidget)
-{
-}
-
-FenceHandle
-CompositorOGL::GetReleaseFence()
-{
-  return FenceHandle();
-}
-#endif
-
 void
 CompositorOGL::EndFrameForExternalComposition(const gfx::Matrix& aTransform)
 {
-  // This lets us reftest and screenshot content rendered externally
-  if (mTarget) {
-    MakeCurrent();
-    CopyToTarget(mTarget, mTargetBounds.TopLeft(), aTransform);
-    mGLContext->fBindBuffer(LOCAL_GL_ARRAY_BUFFER, 0);
-  }
+  MOZ_ASSERT(!mTarget);
   if (mTexturePool) {
     mTexturePool->EndFrame();
   }

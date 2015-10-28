@@ -1,4 +1,3 @@
-/* vim:set ts=2 sw=2 sts=2 et: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,62 +19,228 @@
   --row-hover-background-color: rgba(76,158,217,0.2);
 }
 
-.heap-view {
-  position: relative;
+html, .theme-body, #app, #memory-tool, #memory-tool-container {
+  height: 100%;
 }
 
-.heap-view .theme-twisty {
-  text-align: end;
+.theme-body {
+  overflow: hidden;
+  background-color: var(--theme-body-background);
 }
 
-.heap-tree-item {
+#memory-tool-container {
+  display: flex;
+  flex-direction: row;
+  --toolbar-height: 20px;
+  /**
+   * If --heap-tree-row-height changes, be sure to change HEAP_TREE_ROW_HEIGHT
+   * in `devtools/client/memory/components/heap.js`.
+   */
+  --heap-tree-row-height: 14px;
+}
+
+/**
+ * TODO bug 1213100
+ * should generalize toolbar buttons with images in them
+ * toolbars.inc.css contains definitions for .devtools-button,
+ * I wager that many of the below styles can be rolled into that
+ */
+.devtools-button.take-snapshot {
+  margin: 2px 1px;
+  padding: 1px;
+  border-width: 0px;
+  /* [standalone] buttons override min-height from 18px to 24px -- why? */
+  min-height: 18px;
+  /* not sure why this is needed for positioning */
+  display: -moz-box;
+}
+
+.devtools-button.take-snapshot::before {
+  background-image: url(images/command-screenshot.png);
+  -moz-appearance: none;
+  width: 16px;
+  height: 16px;
+  background-size: 64px 16px;
+  background-position: 0 center;
+  background-repeat: no-repeat;
+}
+@media (min-resolution: 1.1dppx) {
+  .devtools-button.take-snapshot::before {
+    background-image: url(images/command-screenshot@2x.png);
+  }
+}
+
+/**
+ * TODO bug 1213100
+ * Should this be codified in .devtools-toolbar itself?
+ */
+#memory-tool .devtools-toolbar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  height: var(--toolbar-height);
+}
+
+/**
+ * TODO bug 1213100
+ * Once we figure out how to store invertable buttons (pseudo element like in this case?)
+ * we should add a .invertable class to handle this generally, rather than the definitions
+ * in toolbars.inc.css.
+ *
+ * @see bug 1173397 for another inverted related bug
+ */
+.theme-light .devtools-toolbarbutton.take-snapshot::before {
+  filter: url(images/filters.svg#invert);
+}
+
+/**
+ * TODO bug 1213100
+ * The .list style is for a generalized React list component. It's children (.list > li)
+ * are generally styled here, as the component can take any type of child component.
+ * Memory tool specific styling are handling in (li.snapshot-list-item).
+ */
+
+.list {
+  margin: 0;
+  padding: 0;
+  width: 186px;
   list-style-type: none;
-  /* display: none; */
+  font-size: 12px;
+  height: 100%;
+  overflow-y: scroll;
+  background-color: var(--theme-toolbar-background);
+  border-color: var(--theme-splitter-color);
+  color: var(--theme-body-color-alt);
+  border-left-width: 1px;
 }
 
-.heap-tree-item[expanded] {
+.list > li {
+  height: 40px;
+  color: var(--theme-body-color);
+  border-bottom: 1px solid rgba(128,128,128,0.15);
+  padding: 8px;
+  cursor: pointer;
+}
+
+.list > li.selected {
+  background-color: var(--theme-selection-background);
+  color: var(--theme-selection-color);
+}
+
+.snapshot-list-item span {
   display: block;
 }
 
-.heap-tree-item:nth-child(2n) {
+.snapshot-list-item .snapshot-state {
+  font-size: 90%;
+  color: var(--theme-body-color-alt);
+}
+
+.snapshot-list-item.selected .snapshot-state {
+  /* Text inside a selected item should not be custom colored. */
+  color: inherit !important;
+}
+
+/**
+ * Main panel
+ */
+
+#heap-view {
+  flex: 1 1 auto;
+  border-color: var(--theme-splitter-color);
+  color: var(--theme-body-color)
+  border-left-width: 1px;
+}
+
+#heap-view .heap-view-panel {
+  width: 100%;
+  height: 100%;
+}
+
+#heap-view .take-snapshot {
+}
+
+/**
+ * Heap Tree View
+ */
+
+#heap-view .theme-twisty {
+  float: left;
+}
+
+.tree {
+  height: 100%;
+  overflow-y: scroll;
+}
+
+.tree .header {
+  height: 17px;
+  overflow: hidden;
+  color: var(--theme-body-color);
+  background-color: var(--theme-tab-toolbar-background);
+}
+
+.tree span {
+  border-left-color: var(--cell-border-color);
+  border-left-width: 1px;
+}
+
+.tree-node {
+  height: var(--heap-tree-row-height);
+}
+
+.heap-tree-item, .header {
+  list-style-type: none;
+  height: var(--heap-tree-row-height);
+}
+
+.heap-tree-item span, .header span {
+  float: left;
+}
+
+.tree-node:nth-child(2n) {
   background-color: var(--row-alt-background-color);
 }
 
-.heap-tree-item:hover {
+.tree-node:hover {
   background-color: var(--row-hover-background-color);
 }
 
-.heap-tree-item:focus {
+.tree-node:focus {
   background-color: var(--theme-selection-background);
 }
 
-.heap-tree-item:focus description {
-  color: var(--theme-selection-color) !important;
+.header {
+  background-color: var(--theme-tab-toolbar-background);
 }
 
-.heap-tree-item:focus .call-tree-cell {
-  -moz-border-end-color: var(--focus-cell-border-color);
-}
-
-
-.heap-tree-cell[type="bytes"], .heap-tree-cell[type="count"] {
-  position: absolute;
-  text-align: right;
-  width: 40px;
-}
-
-.heap-tree-cell[type="name"] {
-  width: 150px;
+.header span {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: block;
+  text-align: center;
+  font-size: 90%;
 }
 
-.heap-tree-cell[type="count"] {
-  left: 300px;
+.heap-tree-item-bytes,
+.heap-tree-item-count,
+.heap-tree-item-total-bytes,
+.heap-tree-item-total-count {
+  text-align: right;
+  border-right: var(--cell-border-color) 1px solid;
+  padding-right: 5px;
 }
 
-.heap-tree-cell[type="bytes"] {
-  left: 250px;
+.heap-tree-item-count,
+.heap-tree-item-total-count {
+  width: 5vw;
+}
+
+.heap-tree-item-bytes,
+.heap-tree-item-total-bytes {
+  width: 7vw;
+}
+
+.heap-tree-item-name {
+  padding-left: 10px;
 }

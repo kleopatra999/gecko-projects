@@ -119,7 +119,11 @@ loop.store.TextChatStore = (function() {
       // Notify MozLoopService if appropriate that a message has been appended
       // and it should therefore check if we need a different sized window or not.
       if (message.contentType !== CHAT_CONTENT_TYPES.ROOM_NAME) {
-        window.dispatchEvent(new CustomEvent("LoopChatMessageAppended"));
+        if (this._storeState.textChatEnabled) {
+          window.dispatchEvent(new CustomEvent("LoopChatMessageAppended"));
+        } else {
+          window.dispatchEvent(new CustomEvent("LoopChatDisabledMessageAppended"));
+        }
       }
     },
 
@@ -165,9 +169,10 @@ loop.store.TextChatStore = (function() {
       }
 
       // Append the context if we have any.
-      if (("urls" in actionData) && actionData.urls && actionData.urls.length) {
+      if (("roomContextUrls" in actionData) && actionData.roomContextUrls &&
+          actionData.roomContextUrls.length) {
         // We only support the first url at the moment.
-        var urlData = actionData.urls[0];
+        var urlData = actionData.roomContextUrls[0];
 
         this._appendTextChatMessage(CHAT_MESSAGE_TYPES.SPECIAL, {
           contentType: CHAT_CONTENT_TYPES.CONTEXT,

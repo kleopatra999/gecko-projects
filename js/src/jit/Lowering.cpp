@@ -381,7 +381,7 @@ LIRGenerator::visitReturnFromCtor(MReturnFromCtor* ins)
 void
 LIRGenerator::visitComputeThis(MComputeThis* ins)
 {
-    MOZ_ASSERT(ins->type() == MIRType_Object);
+    MOZ_ASSERT(ins->type() == MIRType_Value);
     MOZ_ASSERT(ins->input()->type() == MIRType_Value);
 
     LComputeThis* lir = new(alloc()) LComputeThis();
@@ -391,7 +391,7 @@ LIRGenerator::visitComputeThis(MComputeThis* ins)
     // they aren't clobbered.
     useBox(lir, LComputeThis::ValueIndex, ins->input());
 
-    define(lir, ins);
+    defineBox(lir, ins);
     assignSafepoint(lir, ins);
 }
 
@@ -479,8 +479,6 @@ LIRGenerator::visitCall(MCall* call)
     } else if (target) {
         // Call known functions.
         if (target->isNative()) {
-            MOZ_ASSERT(!target->isClassConstructor());
-
             Register cxReg, numReg, vpReg, tmpReg;
             GetTempRegForIntArg(0, 0, &cxReg);
             GetTempRegForIntArg(1, 0, &numReg);
@@ -3496,56 +3494,40 @@ LIRGenerator::visitDeleteElement(MDeleteElement* ins)
 void
 LIRGenerator::visitSetPropertyCache(MSetPropertyCache* ins)
 {
-    LUse obj = useRegisterAtStart(ins->object());
-    LDefinition slots = tempCopy(ins->object(), 0);
+    MOZ_ASSERT(ins->object()->type() == MIRType_Object);
+
+    MDefinition* id = ins->idval();
+    MOZ_ASSERT(id->type() == MIRType_String ||
+               id->type() == MIRType_Symbol ||
+               id->type() == MIRType_Int32 ||
+               id->type() == MIRType_Value);
+
+    // If this is a SETPROP, the id is a constant string. Allow passing it as a
+    // constant to reduce register allocation pressure.
+    bool useConstId = id->type() == MIRType_String || id->type() == MIRType_Symbol;
 
     // Set the performs-call flag so that we don't omit the overrecursed check.
     // This is necessary because the cache can attach a scripted setter stub
     // that calls this script recursively.
     gen->setPerformsCall();
 
-    LInstruction* lir;
-    if (ins->value()->type() == MIRType_Value) {
-        lir = new(alloc()) LSetPropertyCacheV(obj, slots);
-        useBox(lir, LSetPropertyCacheV::Value, ins->value());
-    } else {
-        LAllocation value = useRegisterOrConstant(ins->value());
-        lir = new(alloc()) LSetPropertyCacheT(obj, slots, value, ins->value()->type());
+    // If the index might be an integer, we need some extra temp registers for
+    // the dense and typed array element stubs.
+    LDefinition tempToUnboxIndex = LDefinition::BogusTemp();
+    LDefinition tempD = LDefinition::BogusTemp();
+    LDefinition tempF32 = LDefinition::BogusTemp();
+
+    if (id->mightBeType(MIRType_Int32)) {
+        if (id->type() != MIRType_Int32)
+            tempToUnboxIndex = tempToUnbox();
+        tempD = tempDouble();
+        tempF32 = hasUnaliasedDouble() ? tempFloat32() : LDefinition::BogusTemp();
     }
 
-    add(lir, ins);
-    assignSafepoint(lir, ins);
-}
-
-void
-LIRGenerator::visitSetElementCache(MSetElementCache* ins)
-{
-    MOZ_ASSERT(ins->object()->type() == MIRType_Object);
-    MOZ_ASSERT(ins->index()->type() == MIRType_Value);
-
-    gen->setPerformsCall(); // See visitSetPropertyCache.
-
-    // Due to lack of registers on x86, we reuse the object register as a
-    // temporary. This register may be used in a 1-byte store, which on x86
-    // again has constraints; thus the use of |useByteOpRegister| over
-    // |useRegister| below.
-    LInstruction* lir;
-    if (ins->value()->type() == MIRType_Value) {
-        LDefinition tempF32 = hasUnaliasedDouble() ? tempFloat32() : LDefinition::BogusTemp();
-        lir = new(alloc()) LSetElementCacheV(useByteOpRegister(ins->object()), tempToUnbox(),
-                                             temp(), tempDouble(), tempF32);
-
-        useBox(lir, LSetElementCacheV::Index, ins->index());
-        useBox(lir, LSetElementCacheV::Value, ins->value());
-    } else {
-        LDefinition tempF32 = hasUnaliasedDouble() ? tempFloat32() : LDefinition::BogusTemp();
-        lir = new(alloc()) LSetElementCacheT(useByteOpRegister(ins->object()),
-                                             useRegisterOrConstant(ins->value()),
-                                             tempToUnbox(), temp(), tempDouble(),
-                                             tempF32);
-
-        useBox(lir, LSetElementCacheT::Index, ins->index());
-    }
+    LInstruction* lir = new(alloc()) LSetPropertyCache(useRegister(ins->object()), temp(),
+                                                       tempToUnboxIndex, tempD, tempF32);
+    useBoxOrTypedOrConstant(lir, LSetPropertyCache::Id, id, useConstId);
+    useBoxOrTypedOrConstant(lir, LSetPropertyCache::Value, ins->value(), /* useConstant = */ true);
 
     add(lir, ins);
     assignSafepoint(lir, ins);
@@ -4255,9 +4237,9 @@ LIRGenerator::visitLexicalCheck(MLexicalCheck* ins)
 }
 
 void
-LIRGenerator::visitThrowUninitializedLexical(MThrowUninitializedLexical* ins)
+LIRGenerator::visitThrowRuntimeLexicalError(MThrowRuntimeLexicalError* ins)
 {
-    LThrowUninitializedLexical* lir = new(alloc()) LThrowUninitializedLexical();
+    LThrowRuntimeLexicalError* lir = new(alloc()) LThrowRuntimeLexicalError();
     add(lir, ins);
     assignSafepoint(lir, ins);
 }

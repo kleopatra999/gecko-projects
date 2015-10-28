@@ -68,6 +68,12 @@ CalleeTokenToScript(CalleeToken token)
     MOZ_ASSERT(GetCalleeTokenTag(token) == CalleeToken_Script);
     return (JSScript*)(uintptr_t(token) & CalleeTokenMask);
 }
+static inline bool
+CalleeTokenIsModuleScript(CalleeToken token)
+{
+    CalleeTokenTag tag = GetCalleeTokenTag(token);
+    return tag == CalleeToken_Script && CalleeTokenToScript(token)->module();
+}
 
 static inline JSScript*
 ScriptFromCalleeToken(CalleeToken token)
@@ -167,7 +173,6 @@ class OsiIndex
     uint32_t snapshotOffset() const {
         return snapshotOffset_;
     }
-    void fixUpOffset(MacroAssembler& masm);
 };
 
 // The layout of an Ion frame on the C stack is roughly:

@@ -201,6 +201,19 @@ body {
   border-right: 5px solid transparent;
 }
 
+/* The scrubber handle is a transparent element displayed on top of the scrubber
+   line that allows users to drag it */
+.animation-timeline .scrubber .scrubber-handle {
+  position: absolute;
+  height: 100%;
+  top: 0;
+  /* Make it thick enough for easy dragging */
+  width: 6px;
+  right: -3px;
+  cursor: col-resize;
+  pointer-events: all;
+}
+
 .animation-timeline .time-header {
   margin-left: var(--timeline-sidebar-width);
   min-height: var(--toolbar-height);
@@ -230,7 +243,7 @@ body {
 /* Animation block widgets */
 
 .animation-timeline .animation {
-  margin: 4px 0;
+  padding: 2px 0;
   height: var(--timeline-animation-height);
   position: relative;
 }
@@ -251,10 +264,10 @@ body {
 
 .animation-timeline .animation .time-block {
   position: absolute;
-  top: 0;
+  top: 2px;
   left: var(--timeline-sidebar-width);
   right: 0;
-  height: 100%;
+  height: var(--timeline-animation-height);
 }
 
 /* Animation iterations */

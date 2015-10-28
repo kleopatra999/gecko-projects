@@ -46,7 +46,7 @@ public:
 protected:
     GLContext* mCurConsGL;
     GLuint mConsTex;
-    nsRefPtr<TextureGarbageBin> mGarbageBin;
+    RefPtr<TextureGarbageBin> mGarbageBin;
     EGLSync mSync;
 
     SharedSurface_EGLImage(GLContext* gl,
@@ -62,6 +62,8 @@ protected:
 
 public:
     virtual ~SharedSurface_EGLImage();
+
+    virtual layers::TextureFlags GetTextureFlags() const override;
 
     virtual void LockProdImpl() override {}
     virtual void UnlockProdImpl() override {}

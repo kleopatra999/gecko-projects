@@ -16,7 +16,7 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
-var {devtools} = Cu.import("resource://gre/modules/devtools/shared/Loader.jsm", {});
+var {devtools} = Cu.import("resource://devtools/shared/Loader.jsm", {});
 this.DevToolsUtils = devtools.require("devtools/shared/DevToolsUtils");
 
 XPCOMUtils.defineLazyServiceGetter(
@@ -1623,6 +1623,13 @@ GeckoDriver.prototype.getActiveFrame = function(cmd, resp) {
 };
 
 /**
+ *
+ */
+GeckoDriver.prototype.switchToParentFrame = function (cmd, resp) {
+  let res = yield this.listener.switchToParentFrame();
+};
+
+/**
  * Switch to a given frame within the current window.
  *
  * @param {Object} element
@@ -2966,6 +2973,7 @@ GeckoDriver.prototype.commands = {
   "setWindowPosition": GeckoDriver.prototype.setWindowPosition,
   "getActiveFrame": GeckoDriver.prototype.getActiveFrame,
   "switchToFrame": GeckoDriver.prototype.switchToFrame,
+  "switchToParentFrame": GeckoDriver.prototype.switchToParentFrame,
   "switchToWindow": GeckoDriver.prototype.switchToWindow,
   "switchToShadowRoot": GeckoDriver.prototype.switchToShadowRoot,
   "deleteSession": GeckoDriver.prototype.deleteSession,

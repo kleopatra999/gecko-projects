@@ -162,6 +162,9 @@ ThrowNoSetterArg(JSContext* aCx, prototypes::ID aProtoId)
 } // namespace dom
 
 struct ErrorResult::Message {
+  Message() { MOZ_COUNT_CTOR(ErrorResult::Message); }
+  ~Message() { MOZ_COUNT_DTOR(ErrorResult::Message); }
+
   nsTArray<nsString> mArgs;
   dom::ErrNum mErrorNumber;
 
@@ -1084,7 +1087,7 @@ GetInterfaceImpl(JSContext* aCx, nsIInterfaceRequestor* aRequestor,
 {
   const nsID* iid = aIID->GetID();
 
-  nsRefPtr<nsISupports> result;
+  RefPtr<nsISupports> result;
   aError = aRequestor->GetInterface(*iid, getter_AddRefs(result));
   if (aError.Failed()) {
     return;
@@ -2784,7 +2787,7 @@ ConvertExceptionToPromise(JSContext* cx,
 
   JS_ClearPendingException(cx);
   ErrorResult rv;
-  nsRefPtr<Promise> promise = Promise::Reject(global, exn, rv);
+  RefPtr<Promise> promise = Promise::Reject(global, exn, rv);
   if (rv.Failed()) {
     // We just give up.  Make sure to not leak memory on the
     // ErrorResult, but then just put the original exception back.
@@ -2911,7 +2914,7 @@ UnwrapArgImpl(JS::Handle<JSObject*> src,
         return NS_OK;
     }
 
-    nsRefPtr<nsXPCWrappedJS> wrappedJS;
+    RefPtr<nsXPCWrappedJS> wrappedJS;
     nsresult rv = nsXPCWrappedJS::GetNewOrUsed(src, iid, getter_AddRefs(wrappedJS));
     if (NS_FAILED(rv) || !wrappedJS) {
         return rv;
@@ -3166,6 +3169,14 @@ DeprecationWarning(JSContext* aCx, JSObject* aObject,
   if (window && window->GetExtantDoc()) {
     window->GetExtantDoc()->WarnOnceAbout(aOperation);
   }
+}
+
+bool
+ObjectToOuterObjectValue(JSContext* cx, JS::Handle<JSObject*> obj, JS::MutableHandle<JS::Value> vp)
+{
+  JSObject* outer = JS_ObjectToOuterObject(cx, obj);
+  vp.setObject(*outer);
+  return true;
 }
 
 } // namespace dom
