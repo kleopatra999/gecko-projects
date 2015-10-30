@@ -1566,6 +1566,8 @@ var gBrowserInit = {
 
     TabletModeUpdater.uninit();
 
+    gTabletModePageCounter.finish();
+
     BrowserOnClick.uninit();
 
     DevEdition.uninit();
@@ -4443,6 +4445,7 @@ var XULBrowserWindow = {
         BookmarkingUI.onLocationChange();
         SocialUI.updateState(location);
         UITour.onLocationChange(location);
+        gTabletModePageCounter.inc();
       }
 
       // Utility functions for disabling find
@@ -5437,6 +5440,29 @@ var TabletModeUpdater = {
       document.documentElement.removeAttribute("tabletmode");
     }
     TabsInTitlebar.updateAppearance(true);
+  },
+};
+
+var gTabletModePageCounter = {
+  inc() {
+    if (!AppConstants.isPlatformAndVersionAtLeast("win", "10.0")) {
+      this.inc = () => {};
+      return;
+    }
+    this.inc = this._realInc;
+    this.inc();
+  },
+
+  _desktopCount: 0,
+  _tabletCount: 0,
+  _realInc() {
+    let inTabletMode = document.documentElement.hasAttribute("tabletmode");
+    this[inTabletMode ? "_tabletCount" : "_desktopCount"]++;
+  },
+
+  finish() {
+    Services.telemetry.getKeyedHistogramById("FX_TABLETMODE_PAGE_LOAD").add("tablet", this._tabletCount);
+    Services.telemetry.getKeyedHistogramById("FX_TABLETMODE_PAGE_LOAD").add("desktop", this._desktopCount);
   },
 };
 
@@ -6901,6 +6927,13 @@ var gIdentityHandler = {
     return this._state & Ci.nsIWebProgressListener.STATE_LOADED_MIXED_DISPLAY_CONTENT;
   },
 
+  get _hasInsecureLoginForms() {
+    // checks if the page has been flagged for an insecure login. Also checks
+    // if the pref to degrade the UI is set to true
+    return LoginManagerParent.hasInsecureLoginForms(gBrowser.selectedBrowser) &&
+           Services.prefs.getBoolPref("security.insecure_password.ui.enabled");
+  },
+
   // smart getters
   get _identityPopup () {
     delete this._identityPopup;
@@ -7231,7 +7264,7 @@ var gIdentityHandler = {
           this._identityBox.classList.add("weakCipher");
         }
       }
-      if (LoginManagerParent.hasInsecureLoginForms(gBrowser.selectedBrowser)) {
+      if (this._hasInsecureLoginForms) {
         // Insecure login forms can only be present on "unknown identity"
         // pages, either already insecure or with mixed active content loaded.
         this._identityBox.classList.add("insecureLoginForms");
@@ -7275,7 +7308,7 @@ var gIdentityHandler = {
 
     // Determine if there are insecure login forms.
     let loginforms = "secure";
-    if (LoginManagerParent.hasInsecureLoginForms(gBrowser.selectedBrowser)) {
+    if (this._hasInsecureLoginForms) {
       loginforms = "insecure";
     }
 

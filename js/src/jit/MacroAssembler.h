@@ -420,12 +420,14 @@ class MacroAssembler : public MacroAssemblerSpecific
     // ===============================================================
     // Stack manipulation functions.
 
-    void PushRegsInMask(LiveRegisterSet set) PER_SHARED_ARCH;
+    void PushRegsInMask(LiveRegisterSet set)
+                            DEFINED_ON(arm, arm64, mips32, x86_shared);
     void PushRegsInMask(LiveGeneralRegisterSet set);
 
     void PopRegsInMask(LiveRegisterSet set);
     void PopRegsInMask(LiveGeneralRegisterSet set);
-    void PopRegsInMaskIgnore(LiveRegisterSet set, LiveRegisterSet ignore) PER_SHARED_ARCH;
+    void PopRegsInMaskIgnore(LiveRegisterSet set, LiveRegisterSet ignore)
+                                 DEFINED_ON(arm, arm64, mips32, x86_shared);
 
     void Push(const Operand op) DEFINED_ON(x86_shared);
     void Push(Register reg) PER_SHARED_ARCH;
@@ -490,8 +492,8 @@ class MacroAssembler : public MacroAssemblerSpecific
     // Push the return address and make a call. On platforms where this function
     // is not defined, push the link register (pushReturnAddress) at the entry
     // point of the callee.
-    void callAndPushReturnAddress(Register reg) DEFINED_ON(mips32, x86_shared);
-    void callAndPushReturnAddress(Label* label) DEFINED_ON(mips32, x86_shared);
+    void callAndPushReturnAddress(Register reg) DEFINED_ON(mips_shared, x86_shared);
+    void callAndPushReturnAddress(Label* label) DEFINED_ON(mips_shared, x86_shared);
 
     void pushReturnAddress() DEFINED_ON(arm, arm64);
 

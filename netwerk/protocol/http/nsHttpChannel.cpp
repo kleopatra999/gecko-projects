@@ -262,6 +262,7 @@ nsHttpChannel::nsHttpChannel()
     , mConcurentCacheAccess(0)
     , mIsPartialRequest(0)
     , mHasAutoRedirectVetoNotifier(0)
+    , mPinCacheContent(0)
     , mIsPackagedAppResource(0)
     , mIsCorsPreflightDone(0)
     , mPushedStream(nullptr)
@@ -358,7 +359,7 @@ nsHttpChannel::Connect()
 
                 const char16_t* params[] = { reportSpec.get(), reportScheme.get() };
                 uint32_t innerWindowId = mLoadInfo ? mLoadInfo->GetInnerWindowID() : 0;
-                CSP_LogLocalizedStr(NS_LITERAL_STRING("upgradeInsecureRequest").get(),
+                CSP_LogLocalizedStr(MOZ_UTF16("upgradeInsecureRequest"),
                                     params, ArrayLength(params),
                                     EmptyString(), // aSourceFile
                                     EmptyString(), // aScriptSample
@@ -2982,6 +2983,10 @@ nsHttpChannel::OpenCacheEntry(bool isHttps)
             getter_AddRefs(cacheStorage));
     } else if (mLoadFlags & INHIBIT_PERSISTENT_CACHING) {
         rv = cacheStorageService->MemoryCacheStorage(info, // ? choose app cache as well...
+            getter_AddRefs(cacheStorage));
+    }
+    else if (mPinCacheContent) {
+        rv = cacheStorageService->PinningCacheStorage(info,
             getter_AddRefs(cacheStorage));
     }
     else {
@@ -6431,6 +6436,26 @@ nsHttpChannel::SetCacheOnlyMetadata(bool aOnlyMetadata)
         mLoadFlags |= LOAD_ONLY_IF_MODIFIED;
     }
 
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsHttpChannel::GetPin(bool *aPin)
+{
+    NS_ENSURE_ARG(aPin);
+    *aPin = mPinCacheContent;
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsHttpChannel::SetPin(bool aPin)
+{
+    LOG(("nsHttpChannel::SetPin [this=%p pin=%d]\n",
+        this, aPin));
+
+    ENSURE_CALLED_BEFORE_CONNECT();
+
+    mPinCacheContent = aPin;
     return NS_OK;
 }
 

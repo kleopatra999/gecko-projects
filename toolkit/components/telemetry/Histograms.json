@@ -4352,10 +4352,13 @@
     "extended_statistics_ok": true,
     "description": "Session restore: Time spent blocking the main thread while restoring a window state (ms)"
   },
-  "FX_TABLET_MODE_USED_DURING_SESSION": {
-    "expires_in_version": "46",
-    "kind": "count",
-    "description": "Windows 10+ only: The number of times tablet-mode is used during a session"
+  "FX_TABLETMODE_PAGE_LOAD": {
+    "expires_in_version": "47",
+    "kind": "exponential",
+    "high": 100000,
+    "n_buckets": 30,
+    "keyed": true,
+    "description": "Number of toplevel location changes in tablet and desktop mode (only used on win10 where tablet mode is available)"
   },
   "FX_TOUCH_USED": {
     "expires_in_version": "46",
@@ -5705,13 +5708,33 @@
     "kind": "boolean",
     "description": "Count the number of times the user clicked 'allow' on the hidden-plugin infobar."
   },
-  "POPUP_NOTIFICATION_MAINACTION_TRIGGERED_MS": {
-    "expires_in_version": "40",
-    "kind": "linear",
-    "low": 25,
-    "high": "80 * 25",
-    "n_buckets": "80 + 1",
-    "description": "The time (in milliseconds) after showing a PopupNotification that the mainAction was first triggered"
+  "POPUP_NOTIFICATION_STATS": {
+    "alert_emails": ["firefox-dev@mozilla.org"],
+    "expires_in_version": "48",
+    "kind": "enumerated",
+    "keyed": true,
+    "n_values": 40,
+    "description": "(Bug 1207089) Usage of popup notifications, keyed by ID (0 = Offered, 1..4 = Action, 5 = Click outside, 6 = Leave page, 7 = Use 'X', 8 = Not now, 10 = Open submenu, 11 = Learn more. Add 20 if happened after reopen.)"
+  },
+  "POPUP_NOTIFICATION_MAIN_ACTION_MS": {
+    "alert_emails": ["firefox-dev@mozilla.org"],
+    "expires_in_version": "48",
+    "kind": "exponential",
+    "keyed": true,
+    "low": 100,
+    "high": 600000,
+    "n_buckets": 40,
+    "description": "(Bug 1207089) Time in ms between initially requesting a popup notification and triggering the main action, keyed by ID"
+  },
+  "POPUP_NOTIFICATION_DISMISSAL_MS": {
+    "alert_emails": ["firefox-dev@mozilla.org"],
+    "expires_in_version": "48",
+    "kind": "exponential",
+    "keyed": true,
+    "low": 200,
+    "high": 20000,
+    "n_buckets": 50,
+    "description": "(Bug 1207089) Time in ms between displaying a popup notification and dismissing it without an action the first time, keyed by ID"
   },
   "DEVTOOLS_DEBUGGER_RDP_LOCAL_RELOAD_MS": {
     "expires_in_version": "never",
@@ -8337,7 +8360,7 @@
   },
   "LOOP_TWO_WAY_MEDIA_CONN_LENGTH_1": {
     "alert_emails": ["firefox-dev@mozilla.org", "dmose@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 8,
     "releaseChannelCollection": "opt-out",
@@ -8345,7 +8368,7 @@
   },
   "LOOP_SHARING_STATE_CHANGE_1": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 8,
     "releaseChannelCollection": "opt-out",
@@ -8353,7 +8376,7 @@
   },
   "LOOP_SHARING_ROOM_URL": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 8,
     "releaseChannelCollection": "opt-out",
@@ -8361,7 +8384,7 @@
   },
   "LOOP_ROOM_CREATE": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 4,
     "releaseChannelCollection": "opt-out",
@@ -8369,7 +8392,7 @@
   },
   "LOOP_ROOM_DELETE": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 4,
     "releaseChannelCollection": "opt-out",
@@ -8377,7 +8400,7 @@
   },
   "LOOP_ROOM_CONTEXT_ADD": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 8,
     "releaseChannelCollection": "opt-out",
@@ -8385,14 +8408,14 @@
   },
   "LOOP_ROOM_CONTEXT_CLICK": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "description": "Number times room context is clicked to visit the attached URL"
   },
   "LOOP_ROOM_SESSION_WITHCHAT": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "description": "Number of sessions where at least one chat message was exchanged"
@@ -9668,14 +9691,14 @@
   },
   "FXA_CONFIGURED": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "flag",
     "releaseChannelCollection": "opt-out",
     "description": "If the user is signed in to a Firefox Account on this device"
   },
   "FXA_UNVERIFIED_ACCOUNT_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9683,7 +9706,7 @@
   },
   "FXA_HAWK_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9691,7 +9714,7 @@
   },
   "FXA_SERVER_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9699,7 +9722,7 @@
   },
   "TOKENSERVER_AUTH_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9707,7 +9730,7 @@
   },
   "WEAVE_ENGINE_APPLY_NEW_FAILURES": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9715,7 +9738,7 @@
   },
   "WEAVE_ENGINE_APPLY_FAILURES": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9723,7 +9746,7 @@
   },
   "WEAVE_ENGINE_SYNC_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9731,21 +9754,21 @@
   },
   "WEAVE_CAN_FETCH_KEYS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "flag",
     "releaseChannelCollection": "opt-out",
     "description": "Whether Sync keys are present in account storage."
   },
   "WEAVE_FXA_KEY_FETCH_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "description": "Errors encountered fetching Sync keys, including network errors."
   },
   "WEAVE_STORAGE_AUTH_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9753,7 +9776,7 @@
   },
   "WEAVE_HMAC_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "description": "Sync cryptoKeys collection HMAC mismatches."

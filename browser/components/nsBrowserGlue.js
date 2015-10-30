@@ -187,6 +187,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "AppConstants",
 XPCOMUtils.defineLazyServiceGetter(this, "WindowsUIUtils",
                                    "@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils");
 
+XPCOMUtils.defineLazyServiceGetter(this, "AlertsService",
+                                   "@mozilla.org/alerts-service;1", "nsIAlertsService");
+
 const ABOUT_NEWTAB = "about:newtab";
 
 const PREF_PLUGINS_NOTIFYUSER = "plugins.update.notifyUser";
@@ -524,12 +527,6 @@ BrowserGlue.prototype = {
       case "autocomplete-did-enter-text":
         this._handleURLBarTelemetry(subject.QueryInterface(Ci.nsIAutoCompleteInput));
         break;
-      case "tablet-mode-change":
-        if (data == "tablet-mode") {
-          Services.telemetry.getHistogramById("FX_TABLET_MODE_USED_DURING_SESSION")
-                            .add(1);
-        }
-        break;
       case "test-initialize-sanitizer":
         this._sanitizer.onStartup();
         break;
@@ -640,7 +637,6 @@ BrowserGlue.prototype = {
     os.addObserver(this, "flash-plugin-hang", false);
     os.addObserver(this, "xpi-signature-changed", false);
     os.addObserver(this, "autocomplete-did-enter-text", false);
-    os.addObserver(this, "tablet-mode-change", false);
 
     ExtensionManagement.registerScript("chrome://browser/content/ext-utils.js");
     ExtensionManagement.registerScript("chrome://browser/content/ext-browserAction.js");
@@ -699,7 +695,6 @@ BrowserGlue.prototype = {
     os.removeObserver(this, "flash-plugin-hang");
     os.removeObserver(this, "xpi-signature-changed");
     os.removeObserver(this, "autocomplete-did-enter-text");
-    os.removeObserver(this, "tablet-mode-change");
   },
 
   _onAppDefaults: function BG__onAppDefaults() {
@@ -1080,13 +1075,6 @@ BrowserGlue.prototype = {
       let scaling = aWindow.devicePixelRatio * 100;
       Services.telemetry.getHistogramById(SCALING_PROBE_NAME).add(scaling);
     }
-
-#ifdef XP_WIN
-    if (WindowsUIUtils.inTabletMode) {
-      Services.telemetry.getHistogramById("FX_TABLET_MODE_USED_DURING_SESSION")
-                        .add(1);
-    }
-#endif
   },
 
   // the first browser window has finished initializing
@@ -1579,16 +1567,6 @@ BrowserGlue.prototype = {
     if (actions.indexOf("showAlert") == -1)
       return;
 
-    let notifier;
-    try {
-      notifier = Cc["@mozilla.org/alerts-service;1"].
-                 getService(Ci.nsIAlertsService);
-    }
-    catch (e) {
-      // nsIAlertsService is not available for this platform
-      return;
-    }
-
     let title = getNotifyString({propName: "alertTitle",
                                  stringName: "puAlertTitle",
                                  stringParams: [appName]});
@@ -1609,10 +1587,11 @@ BrowserGlue.prototype = {
     try {
       // This will throw NS_ERROR_NOT_AVAILABLE if the notification cannot
       // be displayed per the idl.
-      notifier.showAlertNotification(null, title, text,
-                                     true, url, clickCallback);
+      AlertsService.showAlertNotification(null, title, text,
+                                          true, url, clickCallback);
     }
     catch (e) {
+      Cu.reportError(e);
     }
   },
 
@@ -1892,7 +1871,7 @@ BrowserGlue.prototype = {
   },
 
   _migrateUI: function BG__migrateUI() {
-    const UI_VERSION = 31;
+    const UI_VERSION = 32;
     const BROWSER_DOCURL = "chrome://browser/content/browser.xul";
     let currentUIVersion = 0;
     try {
@@ -2233,8 +2212,47 @@ BrowserGlue.prototype = {
       xulStore.removeValue(BROWSER_DOCURL, "home-button", "class");
     }
 
+    if (currentUIVersion < 32) {
+      this._notifyNotificationsUpgrade();
+    }
+
     // Update the migration version.
     Services.prefs.setIntPref("browser.migration.version", UI_VERSION);
+  },
+
+  _hasExistingNotificationPermission: function BG__hasExistingNotificationPermission() {
+    let enumerator = Services.perms.enumerator;
+    while (enumerator.hasMoreElements()) {
+      let permission = enumerator.getNext().QueryInterface(Ci.nsIPermission);
+      if (permission.type == "desktop-notification") {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  _notifyNotificationsUpgrade: function BG__notifyNotificationsUpgrade() {
+    if (!this._hasExistingNotificationPermission()) {
+      return;
+    }
+    function clickCallback(subject, topic, data) {
+      if (topic != "alertclickcallback")
+        return;
+      let win = RecentWindow.getMostRecentBrowserWindow();
+      win.openUILinkIn(data, "tab");
+    }
+    let imageURL = "chrome://browser/skin/web-notifications-icon.svg";
+    let title = gBrowserBundle.GetStringFromName("webNotifications.upgradeTitle");
+    let text = gBrowserBundle.GetStringFromName("webNotifications.upgradeInfo");
+    let url = Services.urlFormatter.formatURLPref("browser.push.warning.infoURL");
+
+    try {
+      AlertsService.showAlertNotification(imageURL, title, text,
+                                          true, url, clickCallback);
+    }
+    catch (e) {
+      Cu.reportError(e);
+    }
   },
 
   // ------------------------------

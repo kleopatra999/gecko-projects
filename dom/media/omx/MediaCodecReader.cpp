@@ -520,10 +520,21 @@ void
 MediaCodecReader::NotifyDataArrivedInternal(uint32_t aLength,
                                             int64_t aOffset)
 {
-  IntervalSet<int64_t> intervals = mFilter.NotifyDataArrived(aLength, aOffset);
+  AutoPinned<MediaResource> resource(mDecoder->GetResource());
+  nsTArray<MediaByteRange> byteRanges;
+  nsresult rv = resource->GetCachedRanges(byteRanges);
+
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  IntervalSet<int64_t> intervals;
+  for (auto& range : byteRanges) {
+    intervals += mFilter.NotifyDataArrived(range.Length(), range.mStart);
+  }
   for (const auto& interval : intervals) {
     RefPtr<MediaByteBuffer> bytes =
-      mDecoder->GetResource()->MediaReadAt(interval.mStart, interval.Length());
+      resource->MediaReadAt(interval.mStart, interval.Length());
     MonitorAutoLock monLock(mParserMonitor);
     if (mNextParserPosition == mParsedDataLength &&
         mNextParserPosition >= interval.mStart &&
@@ -1303,12 +1314,12 @@ MediaCodecReader::CreateMediaCodecs()
   bool isWaiting = false;
   RefPtr<MediaResourcePromise> p = mMediaResourcePromise.Ensure(__func__);
 
-  if (!CreateMediaCodec(mLooper, mAudioTrack, false, isWaiting, nullptr)) {
+  if (!CreateMediaCodec(mLooper, mAudioTrack, isWaiting, nullptr)) {
     mMediaResourcePromise.Reject(true, __func__);
     return p;
   }
 
-  if (!CreateMediaCodec(mLooper, mVideoTrack, true, isWaiting, mVideoListener)) {
+  if (!CreateMediaCodec(mLooper, mVideoTrack, isWaiting, mVideoListener)) {
     mMediaResourcePromise.Reject(true, __func__);
     return p;
   }
@@ -1324,7 +1335,6 @@ MediaCodecReader::CreateMediaCodecs()
 bool
 MediaCodecReader::CreateMediaCodec(sp<ALooper>& aLooper,
                                    Track& aTrack,
-                                   bool aAsync,
                                    bool& aIsWaiting,
                                    wp<MediaCodecProxy::CodecResourceListener> aListener)
 {
@@ -1362,7 +1372,7 @@ MediaCodecReader::CreateMediaCodec(sp<ALooper>& aLooper,
 #endif
     }
 
-    if (!aAsync && aTrack.mCodec->AskMediaCodecAndWait()) {
+    if (aTrack.mType == Track::kAudio && aTrack.mCodec->AllocateAudioMediaCodec()) {
       // Pending configure() and start() to codecReserved() if the creation
       // should be asynchronous.
       if (!aTrack.mCodec->allocated() || !ConfigureMediaCodec(aTrack)){
@@ -1370,8 +1380,8 @@ MediaCodecReader::CreateMediaCodec(sp<ALooper>& aLooper,
         DestroyMediaCodec(aTrack);
         return false;
       }
-    } else if (aAsync) {
-      if (aTrack.mCodec->AsyncAskMediaCodec()) {
+    } else if (aTrack.mType == Track::kVideo) {
+      if (aTrack.mCodec->AsyncAllocateVideoMediaCodec()) {
         aIsWaiting = true;
       } else {
         NS_WARNING("Couldn't request MediaCodec asynchronously");

@@ -1586,10 +1586,6 @@ IonBuilder::snoopControlFlow(JSOp op)
       case JSOP_THROW:
         return processThrow();
 
-      case JSOP_THROWSETCONST:
-      case JSOP_THROWSETALIASEDCONST:
-        return processThrowSetConst();
-
       case JSOP_GOTO:
       {
         jssrcnote* sn = info().getNote(gsn, pc);
@@ -1777,6 +1773,10 @@ IonBuilder::inspectOpcode(JSOp op)
       case JSOP_SETLOCAL:
         current->setLocal(GET_LOCALNO(pc));
         return true;
+
+      case JSOP_THROWSETCONST:
+      case JSOP_THROWSETALIASEDCONST:
+        return jsop_throwsetconst();
 
       case JSOP_CHECKLEXICAL:
         return jsop_checklexical();
@@ -3241,8 +3241,8 @@ IonBuilder::whileOrForInLoop(jssrcnote* sn)
 IonBuilder::ControlStatus
 IonBuilder::forLoop(JSOp op, jssrcnote* sn)
 {
-    // Skip the NOP or POP.
-    MOZ_ASSERT(op == JSOP_POP || op == JSOP_NOP);
+    // Skip the NOP.
+    MOZ_ASSERT(op == JSOP_NOP);
     pc = GetNextPc(pc);
 
     jsbytecode* condpc = pc + GetSrcNoteOffset(sn, 0);
@@ -12740,20 +12740,13 @@ IonBuilder::jsop_deffun(uint32_t index)
     return resumeAfter(deffun);
 }
 
-IonBuilder::ControlStatus
-IonBuilder::processThrowSetConst()
+bool
+IonBuilder::jsop_throwsetconst()
 {
     current->peek(-1)->setImplicitlyUsedUnchecked();
     MInstruction* lexicalError = MThrowRuntimeLexicalError::New(alloc(), JSMSG_BAD_CONST_ASSIGN);
     current->add(lexicalError);
-    if (!resumeAfter(lexicalError))
-        return ControlStatus_Error;
-
-    current->end(MUnreachable::New(alloc()));
-
-    // Make sure no one tries to use this block now.
-    setCurrent(nullptr);
-    return processControlEnd();
+    return resumeAfter(lexicalError);
 }
 
 bool
