@@ -952,7 +952,7 @@ media::TimeIntervals GStreamerReader::GetBuffered()
 void GStreamerReader::ReadAndPushData(guint aLength)
 {
   int64_t offset1 = mResource.Tell();
-  unused << offset1;
+  Unused << offset1;
   nsresult rv = NS_OK;
 
   GstBuffer* buffer = gst_buffer_new_and_alloc(aLength);
@@ -974,7 +974,7 @@ void GStreamerReader::ReadAndPushData(guint aLength)
   }
 
   int64_t offset2 = mResource.Tell();
-  unused << offset2;
+  Unused << offset2;
 
 #if GST_VERSION_MAJOR >= 1
   gst_buffer_unmap(buffer, &info);
@@ -1275,8 +1275,7 @@ GStreamerReader::AutoplugSortCb(GstElement* aElement, GstPad* aPad,
  * If this is an MP3 stream, pass any new data we get to the MP3 frame parser
  * for duration estimation.
  */
-void GStreamerReader::NotifyDataArrivedInternal(uint32_t aLength,
-                                                int64_t aOffset)
+void GStreamerReader::NotifyDataArrivedInternal()
 {
   MOZ_ASSERT(OnTaskQueue());
   if (HasVideo()) {
@@ -1286,22 +1285,32 @@ void GStreamerReader::NotifyDataArrivedInternal(uint32_t aLength,
     return;
   }
 
-  IntervalSet<int64_t> intervals = mFilter.NotifyDataArrived(aLength, aOffset);
+  AutoPinned<MediaResource> resource(mResource.GetResource());
+  nsTArray<MediaByteRange> byteRanges;
+  nsresult rv = resource->GetCachedRanges(byteRanges);
+
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  IntervalSet<int64_t> intervals;
+  for (auto& range : byteRanges) {
+    intervals += mFilter.NotifyDataArrived(range.Length(), range.mStart);
+  }
   for (const auto& interval : intervals) {
     RefPtr<MediaByteBuffer> bytes =
-      mResource.MediaReadAt(interval.mStart, interval.Length());
+      resource->MediaReadAt(interval.mStart, interval.Length());
     NS_ENSURE_TRUE_VOID(bytes);
     mMP3FrameParser.Parse(bytes->Elements(), interval.Length(), interval.mStart);
     if (!mMP3FrameParser.IsMP3()) {
       return;
     }
-
-    int64_t duration = mMP3FrameParser.GetDuration();
-    if (duration != mLastParserDuration && mUseParserDuration) {
-      MOZ_ASSERT(mDecoder);
-      mLastParserDuration = duration;
-      mDecoder->DispatchUpdateEstimatedMediaDuration(mLastParserDuration);
-    }
+  }
+  int64_t duration = mMP3FrameParser.GetDuration();
+  if (duration != mLastParserDuration && mUseParserDuration) {
+    MOZ_ASSERT(mDecoder);
+    mLastParserDuration = duration;
+    mDecoder->DispatchUpdateEstimatedMediaDuration(mLastParserDuration);
   }
 }
 

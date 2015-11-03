@@ -605,19 +605,23 @@ class RecursiveMakeBackend(CommonBackend):
                 backend_file.write('DIST_FILES += %s\n' % f)
 
         elif isinstance(obj, AndroidResDirs):
+            # Order matters.
             for p in obj.paths:
                 backend_file.write('ANDROID_RES_DIRS += %s\n' % p.full_path)
 
         elif isinstance(obj, AndroidAssetsDirs):
+            # Order matters.
             for p in obj.paths:
                 backend_file.write('ANDROID_ASSETS_DIRS += %s\n' % p.full_path)
 
         elif isinstance(obj, AndroidExtraResDirs):
-            for p in obj.paths:
-                backend_file.write('ANDROID_EXTRA_RES_DIRS += %s\n' % p.full_path)
+            # Order does not matter.
+            for p in sorted(set(p.full_path for p in obj.paths)):
+                backend_file.write('ANDROID_EXTRA_RES_DIRS += %s\n' % p)
 
         elif isinstance(obj, AndroidExtraPackages):
-            for p in obj.packages:
+            # Order does not matter.
+            for p in sorted(set(obj.packages)):
                 backend_file.write('ANDROID_EXTRA_PACKAGES += %s\n' % p)
 
         else:
@@ -845,10 +849,6 @@ class RecursiveMakeBackend(CommonBackend):
                 (self.__class__.__name__, ' '.join(inputs)))
             for path in inputs:
                 backend_deps.write('%s:\n' % path)
-
-        with open(self._backend_output_list_file, 'a'):
-            pass
-        os.utime(self._backend_output_list_file, None)
 
         # Make the master test manifest files.
         for flavor, t in self._test_manifests.items():
@@ -1248,7 +1248,7 @@ INSTALL_TARGETS += %(prefix)s
                 (target, ' '.join(mozpath.join('generated', f) for f in jar.generated_sources)))
         if jar.extra_jars:
             backend_file.write('%s_EXTRA_JARS := %s\n' %
-                (target, ' '.join(jar.extra_jars)))
+                (target, ' '.join(sorted(set(jar.extra_jars)))))
         if jar.javac_flags:
             backend_file.write('%s_JAVAC_FLAGS := %s\n' %
                 (target, ' '.join(jar.javac_flags)))

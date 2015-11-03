@@ -487,9 +487,9 @@ nsBMPEncoder::InitFileHeader(Version aVersion, uint32_t aBPP, uint32_t aWidth,
   mBMPFileHeader.signature[1] = 'M';
 
   if (aVersion == VERSION_3) {
-    mBMPFileHeader.dataoffset = FileHeader::LENGTH + InfoHeaderLength::WIN_V3;
+    mBMPFileHeader.dataoffset = FILE_HEADER_LENGTH + InfoHeaderLength::WIN_V3;
   } else { // aVersion == 5
-    mBMPFileHeader.dataoffset = FileHeader::LENGTH + InfoHeaderLength::WIN_V5;
+    mBMPFileHeader.dataoffset = FILE_HEADER_LENGTH + InfoHeaderLength::WIN_V5;
   }
 
   // The color table is present only if BPP is <= 8
@@ -615,28 +615,16 @@ nsBMPEncoder::EncodeInfoHeader()
   NativeEndian::swapToLittleEndianInPlace(&littleEndianmBIH.profile_size, 1);
 
   ENCODE(&mImageBufferCurr, littleEndianmBIH.bihsize);
-
-  if (mBMPInfoHeader.bihsize == InfoHeaderLength::WIN_V2) {
-      uint16_t width = (uint16_t) littleEndianmBIH.width;
-      ENCODE(&mImageBufferCurr, width);
-      uint16_t height = (uint16_t) littleEndianmBIH.width;
-      ENCODE(&mImageBufferCurr, height);
-  } else {
-      ENCODE(&mImageBufferCurr, littleEndianmBIH.width);
-      ENCODE(&mImageBufferCurr, littleEndianmBIH.height);
-  }
-
+  ENCODE(&mImageBufferCurr, littleEndianmBIH.width);
+  ENCODE(&mImageBufferCurr, littleEndianmBIH.height);
   ENCODE(&mImageBufferCurr, littleEndianmBIH.planes);
   ENCODE(&mImageBufferCurr, littleEndianmBIH.bpp);
-
-  if (mBMPInfoHeader.bihsize > InfoHeaderLength::WIN_V2) {
-    ENCODE(&mImageBufferCurr, littleEndianmBIH.compression);
-    ENCODE(&mImageBufferCurr, littleEndianmBIH.image_size);
-    ENCODE(&mImageBufferCurr, littleEndianmBIH.xppm);
-    ENCODE(&mImageBufferCurr, littleEndianmBIH.yppm);
-    ENCODE(&mImageBufferCurr, littleEndianmBIH.colors);
-    ENCODE(&mImageBufferCurr, littleEndianmBIH.important_colors);
-  }
+  ENCODE(&mImageBufferCurr, littleEndianmBIH.compression);
+  ENCODE(&mImageBufferCurr, littleEndianmBIH.image_size);
+  ENCODE(&mImageBufferCurr, littleEndianmBIH.xppm);
+  ENCODE(&mImageBufferCurr, littleEndianmBIH.yppm);
+  ENCODE(&mImageBufferCurr, littleEndianmBIH.colors);
+  ENCODE(&mImageBufferCurr, littleEndianmBIH.important_colors);
 
   if (mBMPInfoHeader.bihsize > InfoHeaderLength::WIN_V3) {
     ENCODE(&mImageBufferCurr, littleEndianmBIH.red_mask);

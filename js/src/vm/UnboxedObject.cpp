@@ -893,34 +893,12 @@ UnboxedPlainObject::obj_watch(JSContext* cx, HandleObject obj, HandleId id, Hand
 UnboxedPlainObject::obj_enumerate(JSContext* cx, HandleObject obj, AutoIdVector& properties,
                                   bool enumerableOnly)
 {
-    UnboxedExpandoObject* expando = obj->as<UnboxedPlainObject>().maybeExpando();
-
-    // Add dense elements in the expando first, for consistency with plain objects.
-    if (expando) {
-        for (size_t i = 0; i < expando->getDenseInitializedLength(); i++) {
-            if (!expando->getDenseElement(i).isMagic(JS_ELEMENTS_HOLE)) {
-                if (!properties.append(INT_TO_JSID(i)))
-                    return false;
-            }
-        }
-    }
+    // Ignore expando properties here, they are special-cased by the property
+    // enumeration code.
 
     const UnboxedLayout::PropertyVector& unboxed = obj->as<UnboxedPlainObject>().layout().properties();
     for (size_t i = 0; i < unboxed.length(); i++) {
         if (!properties.append(NameToId(unboxed[i].name)))
-            return false;
-    }
-
-    if (expando) {
-        Vector<jsid> ids(cx);
-        for (Shape::Range<NoGC> r(expando->lastProperty()); !r.empty(); r.popFront()) {
-            if (enumerableOnly && !r.front().enumerable())
-                continue;
-            if (!ids.append(r.front().propid()))
-                return false;
-        }
-        ::Reverse(ids.begin(), ids.end());
-        if (!properties.append(ids.begin(), ids.length()))
             return false;
     }
 
@@ -962,7 +940,7 @@ const Class UnboxedPlainObject::class_ = {
         nullptr,   /* No unwatch needed, as watch() converts the object to native */
         nullptr,   /* getElements */
         UnboxedPlainObject::obj_enumerate,
-        nullptr, /* thisObject */
+        nullptr, /* thisValue */
     }
 };
 
@@ -1083,6 +1061,7 @@ UnboxedArrayObject::create(ExclusiveContext* cx, HandleObjectGroup group, uint32
         res = NewObjectWithGroup<UnboxedArrayObject>(cx, group, allocKind, newKind);
         if (!res)
             return nullptr;
+        res->setInitializedLengthNoBarrier(0);
         res->setInlineElements();
 
         size_t actualCapacity = (GetGCKindBytes(allocKind) - offsetOfInlineElements()) / elementSize;
@@ -1092,6 +1071,7 @@ UnboxedArrayObject::create(ExclusiveContext* cx, HandleObjectGroup group, uint32
         res = NewObjectWithGroup<UnboxedArrayObject>(cx, group, gc::AllocKind::OBJECT0, newKind);
         if (!res)
             return nullptr;
+        res->setInitializedLengthNoBarrier(0);
 
         uint32_t capacityIndex = (capacity == length)
                                  ? CapacityMatchesLengthIndex
@@ -1102,7 +1082,6 @@ UnboxedArrayObject::create(ExclusiveContext* cx, HandleObjectGroup group, uint32
         if (!res->elements_) {
             // Make the object safe for GC.
             res->setInlineElements();
-            res->setInitializedLength(0);
             return nullptr;
         }
 
@@ -1110,7 +1089,6 @@ UnboxedArrayObject::create(ExclusiveContext* cx, HandleObjectGroup group, uint32
     }
 
     res->setLength(cx, length);
-    res->setInitializedLength(0);
     return res;
 }
 
@@ -1653,7 +1631,7 @@ const Class UnboxedArrayObject::class_ = {
         nullptr,   /* No unwatch needed, as watch() converts the object to native */
         nullptr,   /* getElements */
         UnboxedArrayObject::obj_enumerate,
-        nullptr,   /* thisObject */
+        nullptr,   /* thisValue */
     }
 };
 

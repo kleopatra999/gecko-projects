@@ -102,6 +102,7 @@ class nsWrapperCache;
 class nsAttrValue;
 class nsITransferable;
 class nsPIWindowRoot;
+class nsIWindowProvider;
 
 struct JSPropertyDescriptor;
 struct JSRuntime;
@@ -900,9 +901,6 @@ public:
                                   uint32_t aLineNumber = 0,
                                   uint32_t aColumnNumber = 0);
 
-  static nsresult
-  MaybeReportInterceptionErrorToConsole(nsIDocument* aDocument, nsresult aError);
-
   static void LogMessageToConsole(const char* aMsg, ...);
   
   /**
@@ -1639,6 +1637,11 @@ public:
   static bool IsSafeToRunScript() {
     return sScriptBlockerCount == 0;
   }
+
+  // XXXcatalinb: workaround for weird include error when trying to reference
+  // ipdl types in WindowWatcher.
+  static nsIWindowProvider*
+  GetWindowProviderForContentProcess();
 
   /**
    * Call this function if !IsSafeToRunScript() and we fail to run the script
@@ -2408,13 +2411,30 @@ public:
                                       CallOnRemoteChildFunction aCallback,
                                       void* aArg);
 
+  /**
+   * Given an nsIFile, attempts to read it into aString.
+   *
+   * Note: Use sparingly! This causes main-thread I/O, which causes jank and all
+   * other bad things.
+   */
+  static nsresult SlurpFileToString(nsIFile* aFile, nsACString& aString);
+
+  /**
+   * Returns true if the mime service thinks this file contains an image.
+   *
+   * The content type is returned in aType.
+   */
+  static bool IsFileImage(nsIFile* aFile, nsACString& aType);
+
   static void TransferablesToIPCTransferables(nsISupportsArray* aTransferables,
                                               nsTArray<mozilla::dom::IPCDataTransfer>& aIPC,
+                                              bool aInSyncMessage,
                                               mozilla::dom::nsIContentChild* aChild,
                                               mozilla::dom::nsIContentParent* aParent);
 
   static void TransferableToIPCTransferable(nsITransferable* aTransferable,
                                             mozilla::dom::IPCDataTransfer* aIPCDataTransfer,
+                                            bool aInSyncMessage,
                                             mozilla::dom::nsIContentChild* aChild,
                                             mozilla::dom::nsIContentParent* aParent);
 

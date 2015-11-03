@@ -63,7 +63,7 @@
 // PER_SHARED_ARCH.
 
 # define ALL_ARCH mips32, arm, arm64, x86, x64
-# define ALL_SHARED_ARCH mips32, arm, arm64, x86_shared
+# define ALL_SHARED_ARCH arm, arm64, x86_shared, mips_shared
 
 // * How this macro works:
 //
@@ -107,6 +107,7 @@
 # define DEFINED_ON_arm
 # define DEFINED_ON_arm64
 # define DEFINED_ON_mips32
+# define DEFINED_ON_mips_shared
 # define DEFINED_ON_none
 
 // Specialize for each architecture.
@@ -129,6 +130,8 @@
 #elif defined(JS_CODEGEN_MIPS32)
 # undef DEFINED_ON_mips32
 # define DEFINED_ON_mips32 define
+# undef DEFINED_ON_mips_shared
+# define DEFINED_ON_mips_shared define
 #elif defined(JS_CODEGEN_NONE)
 # undef DEFINED_ON_none
 # define DEFINED_ON_none crash
@@ -417,12 +420,14 @@ class MacroAssembler : public MacroAssemblerSpecific
     // ===============================================================
     // Stack manipulation functions.
 
-    void PushRegsInMask(LiveRegisterSet set) PER_SHARED_ARCH;
+    void PushRegsInMask(LiveRegisterSet set)
+                            DEFINED_ON(arm, arm64, mips32, x86_shared);
     void PushRegsInMask(LiveGeneralRegisterSet set);
 
     void PopRegsInMask(LiveRegisterSet set);
     void PopRegsInMask(LiveGeneralRegisterSet set);
-    void PopRegsInMaskIgnore(LiveRegisterSet set, LiveRegisterSet ignore) PER_SHARED_ARCH;
+    void PopRegsInMaskIgnore(LiveRegisterSet set, LiveRegisterSet ignore)
+                                 DEFINED_ON(arm, arm64, mips32, x86_shared);
 
     void Push(const Operand op) DEFINED_ON(x86_shared);
     void Push(Register reg) PER_SHARED_ARCH;
@@ -487,8 +492,8 @@ class MacroAssembler : public MacroAssemblerSpecific
     // Push the return address and make a call. On platforms where this function
     // is not defined, push the link register (pushReturnAddress) at the entry
     // point of the callee.
-    void callAndPushReturnAddress(Register reg) DEFINED_ON(mips32, x86_shared);
-    void callAndPushReturnAddress(Label* label) DEFINED_ON(mips32, x86_shared);
+    void callAndPushReturnAddress(Register reg) DEFINED_ON(mips_shared, x86_shared);
+    void callAndPushReturnAddress(Label* label) DEFINED_ON(mips_shared, x86_shared);
 
     void pushReturnAddress() DEFINED_ON(arm, arm64);
 

@@ -176,7 +176,6 @@ PluginInstanceParent::ActorDestroy(ActorDestroyReason why)
     if (why == AbnormalShutdown) {
         // If the plugin process crashes, this is the only
         // chance we get to destroy resources.
-        SharedSurfaceRelease();
         UnsubclassPluginWindow();
     }
 #endif
@@ -204,7 +203,6 @@ PluginInstanceParent::Destroy()
     }
 
 #if defined(OS_WIN)
-    SharedSurfaceRelease();
     UnsubclassPluginWindow();
 #endif
 
@@ -829,7 +827,7 @@ PluginInstanceParent::EndUpdateBackground(gfxContext* aCtx,
     XSync(DefaultXDisplay(), False);
 #endif
 
-    unused << SendUpdateBackground(BackgroundDescriptor(), aRect);
+    Unused << SendUpdateBackground(BackgroundDescriptor(), aRect);
 
     return NS_OK;
 }
@@ -882,7 +880,7 @@ PluginInstanceParent::DestroyBackground()
 
     // If this fails, there's no problem: |bd| will be destroyed along
     // with the old background surface.
-    unused << SendPPluginBackgroundDestroyerConstructor(pbd);
+    Unused << SendPPluginBackgroundDestroyerConstructor(pbd);
 }
 
 mozilla::plugins::SurfaceDescriptor
@@ -949,11 +947,6 @@ PluginInstanceParent::NPP_SetWindow(const NPWindow* aWindow)
 #if defined(OS_WIN)
     // On windowless controls, reset the shared memory surface as needed.
     if (mWindowType == NPWindowTypeDrawable) {
-        // SharedSurfaceSetWindow will take care of NPRemoteWindow.
-        if (!SharedSurfaceSetWindow(aWindow, window)) {
-          return NPERR_OUT_OF_MEMORY_ERROR;
-        }
-
         MaybeCreateChildPopupSurrogate();
     } else {
         SubclassPluginWindow(reinterpret_cast<HWND>(aWindow->window));
@@ -1164,7 +1157,7 @@ PluginInstanceParent::NPP_URLRedirectNotify(const char* url, int32_t status,
     return;
 
   PStreamNotifyParent* streamNotify = static_cast<PStreamNotifyParent*>(notifyData);
-  unused << streamNotify->SendRedirectNotify(NullableString(url), status);
+  Unused << streamNotify->SendRedirectNotify(NullableString(url), status);
 }
 
 int16_t
@@ -1188,23 +1181,7 @@ PluginInstanceParent::NPP_HandleEvent(void* event)
 
 #if defined(OS_WIN)
     if (mWindowType == NPWindowTypeDrawable) {
-        if (DoublePassRenderingEvent() == npevent->event) {
-            return CallPaint(npremoteevent, &handled) && handled;
-        }
-
         switch (npevent->event) {
-            case WM_PAINT:
-            {
-                RECT rect;
-                SharedSurfaceBeforePaint(rect, npremoteevent);
-                if (!CallPaint(npremoteevent, &handled)) {
-                    handled = false;
-                }
-                SharedSurfaceAfterPaint(npevent);
-                return handled;
-            }
-            break;
-
             case WM_KILLFOCUS:
             {
               // When the user selects fullscreen mode in Flash video players,
@@ -1414,7 +1391,7 @@ PluginInstanceParent::NPP_NewStream(NPMIMEType type, NPStream* stream,
             err = NPERR_GENERIC_ERROR;
         }
         if (NPERR_NO_ERROR != err) {
-            unused << PBrowserStreamParent::Send__delete__(bs);
+            Unused << PBrowserStreamParent::Send__delete__(bs);
         }
     }
 
@@ -1543,7 +1520,7 @@ PluginInstanceParent::NPP_URLNotify(const char* url, NPReason reason,
 
     PStreamNotifyParent* streamNotify =
         static_cast<PStreamNotifyParent*>(notifyData);
-    unused << PStreamNotifyParent::Send__delete__(streamNotify, reason);
+    Unused << PStreamNotifyParent::Send__delete__(streamNotify, reason);
 }
 
 bool
@@ -1832,7 +1809,7 @@ PluginInstanceParent::PluginWindowHookProc(HWND hWnd,
     switch (message) {
         case WM_SETFOCUS:
         // Let the child plugin window know it should take focus.
-        unused << self->CallSetPluginFocus();
+        Unused << self->CallSetPluginFocus();
         break;
 
         case WM_CLOSE:
@@ -1935,108 +1912,6 @@ PluginInstanceParent::UnsubclassPluginWindow()
  *
  * painting: mPluginPort (nsIntRect, saved in SetWindow)
  */
-
-void
-PluginInstanceParent::SharedSurfaceRelease()
-{
-    mSharedSurfaceDib.Close();
-}
-
-bool
-PluginInstanceParent::SharedSurfaceSetWindow(const NPWindow* aWindow,
-                                             NPRemoteWindow& aRemoteWindow)
-{
-    aRemoteWindow.window = 0;
-    aRemoteWindow.x      = aWindow->x;
-    aRemoteWindow.y      = aWindow->y;
-    aRemoteWindow.width  = aWindow->width;
-    aRemoteWindow.height = aWindow->height;
-    aRemoteWindow.type   = aWindow->type;
-
-    nsIntRect newPort(aWindow->x, aWindow->y, aWindow->width, aWindow->height);
-
-    // save the the rect location within the browser window.
-    mPluginPort = newPort;
-
-    // move the port to our shared surface origin
-    newPort.MoveTo(0,0);
-
-    // check to see if we have the room in shared surface
-    if (mSharedSurfaceDib.IsValid() && mSharedSize.Contains(newPort)) {
-      // ok to paint
-      aRemoteWindow.surfaceHandle = 0;
-      return true;
-    }
-
-    // allocate a new shared surface
-    SharedSurfaceRelease();
-    if (NS_FAILED(mSharedSurfaceDib.Create(reinterpret_cast<HDC>(aWindow->window),
-                                           newPort.width, newPort.height, false)))
-      return false;
-
-    // save the new shared surface size we just allocated
-    mSharedSize = newPort;
-
-    base::SharedMemoryHandle handle;
-    if (NS_FAILED(mSharedSurfaceDib.ShareToProcess(OtherPid(), &handle))) {
-      return false;
-    }
-
-    aRemoteWindow.surfaceHandle = handle;
-
-    return true;
-}
-
-void
-PluginInstanceParent::SharedSurfaceBeforePaint(RECT& rect,
-                                               NPRemoteEvent& npremoteevent)
-{
-    RECT* dr = (RECT*)npremoteevent.event.lParam;
-    HDC parentHdc = (HDC)npremoteevent.event.wParam;
-
-    nsIntRect dirtyRect(dr->left, dr->top, dr->right-dr->left, dr->bottom-dr->top);
-    dirtyRect.MoveBy(-mPluginPort.x, -mPluginPort.y); // should always be smaller than dirtyRect
-
-    ::BitBlt(mSharedSurfaceDib.GetHDC(),
-             dirtyRect.x,
-             dirtyRect.y,
-             dirtyRect.width,
-             dirtyRect.height,
-             parentHdc,
-             dr->left,
-             dr->top,
-             SRCCOPY);
-
-    // setup the translated dirty rect we'll send to the child
-    rect.left   = dirtyRect.x;
-    rect.top    = dirtyRect.y;
-    rect.right  = dirtyRect.x + dirtyRect.width;
-    rect.bottom = dirtyRect.y + dirtyRect.height;
-
-    npremoteevent.event.wParam = WPARAM(0);
-    npremoteevent.event.lParam = LPARAM(&rect);
-}
-
-void
-PluginInstanceParent::SharedSurfaceAfterPaint(NPEvent* npevent)
-{
-    RECT* dr = (RECT*)npevent->lParam;
-    HDC parentHdc = (HDC)npevent->wParam;
-
-    nsIntRect dirtyRect(dr->left, dr->top, dr->right-dr->left, dr->bottom-dr->top);
-    dirtyRect.MoveBy(-mPluginPort.x, -mPluginPort.y);
-
-    // src copy the shared dib into the parent surface we are handed.
-    ::BitBlt(parentHdc,
-             dr->left,
-             dr->top,
-             dirtyRect.width,
-             dirtyRect.height,
-             mSharedSurfaceDib.GetHDC(),
-             dirtyRect.x,
-             dirtyRect.y,
-             SRCCOPY);
-}
 
 bool
 PluginInstanceParent::MaybeCreateAndParentChildPluginWindow()

@@ -145,6 +145,12 @@
      are found. -->
 <!ENTITY overlay_no_synced_devices "No Firefox Account connected devices found">
 
+<!-- Localization note (menu_no_synced_devices): Used in a toast when the user
+     clicks on the button to send a tab to another device and there are no
+     other devices present. This label should briefly inform the user that they
+     need another connected device in order to use the feature. -->
+<!ENTITY menu_no_synced_devices "Send this tab to another connected device">
+
 <!ENTITY pref_category_search3 "Search">
 <!ENTITY pref_category_search_summary "Customize your search providers">
 <!ENTITY pref_category_display "Display">
@@ -583,6 +589,7 @@ with that structure, consider a translation which ignores the preceding domain a
 just addresses the organization to follow, e.g. "This site is run by " -->
 <!ENTITY identity_connection_secure "Secure Connection">
 <!ENTITY identity_connection_insecure "Insecure connection">
+<!ENTITY identity_login_insecure "This page is not secure and your login could be vulnerable.">
 
 <!-- Mixed content notifications in site identity popup -->
 <!ENTITY mixed_content_blocked_all1 "&brandShortName; has blocked insecure content on this page.">

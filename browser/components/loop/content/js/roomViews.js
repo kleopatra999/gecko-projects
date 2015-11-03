@@ -268,10 +268,18 @@ loop.roomViews = (function(mozL10n) {
 
       var roomData = this.props.roomData;
       var contextURL = roomData.roomContextUrls && roomData.roomContextUrls[0];
+      if (contextURL) {
+        if (contextURL.location === null) {
+          contextURL = undefined;
+        } else {
+          contextURL = sharedUtils.formatURL(contextURL.location).hostname;
+        }
+      }
+
       this.props.dispatcher.dispatch(
         new sharedActions.EmailRoomUrl({
           roomUrl: roomData.roomUrl,
-          roomDescription: contextURL && contextURL.description,
+          roomDescription: contextURL,
           from: "conversation"
         }));
     },
@@ -755,8 +763,11 @@ loop.roomViews = (function(mozL10n) {
     },
 
     render: function() {
-      if (this.state.roomName) {
-        this.setTitle(this.state.roomName);
+      if (this.state.roomName || this.state.roomContextUrls) {
+        var roomTitle = this.state.roomName ||
+                        this.state.roomContextUrls[0].description ||
+                        this.state.roomContextUrls[0].location;
+        this.setTitle(roomTitle);
       }
 
       var screenShareData = {
@@ -812,7 +823,7 @@ loop.roomViews = (function(mozL10n) {
                 renderRemoteVideo: this.shouldRenderRemoteVideo(), 
                 screenShareMediaElement: this.state.screenShareMediaElement, 
                 screenSharePosterUrl: null, 
-                showContextRoomName: false, 
+                showInitialContext: false, 
                 useDesktopPaths: true}, 
                 React.createElement(sharedViews.ConversationToolbar, {
                   audio: { enabled: !this.state.audioMuted, visible: true}, 

@@ -212,7 +212,8 @@ describe("loop.roomViews", function() {
         React.createElement(loop.roomViews.DesktopRoomInvitationView, props));
     }
 
-    it("should dispatch an EmailRoomUrl action when the email button is pressed",
+    it("should dispatch an EmailRoomUrl with no description" +
+       " for rooms without context when the email button is pressed",
       function() {
         view = mountTestComponent({
           roomData: { roomUrl: "http://invalid" }
@@ -231,14 +232,13 @@ describe("loop.roomViews", function() {
           }));
       });
 
-    it("should dispatch a different EmailRoomUrl action for rooms with context",
+    it("should dispatch an EmailRoomUrl with a domain name description for rooms with context",
       function() {
         var url = "http://invalid";
-        var description = "Hello, is it me you're looking for?";
         view = mountTestComponent({
           roomData: {
             roomUrl: url,
-            roomContextUrls: [{ description: description }]
+            roomContextUrls: [{ location: "http://www.mozilla.com/" }]
           }
         });
 
@@ -250,7 +250,7 @@ describe("loop.roomViews", function() {
         sinon.assert.calledWith(dispatcher.dispatch,
           new sharedActions.EmailRoomUrl({
             roomUrl: url,
-            roomDescription: description,
+            roomDescription: "www.mozilla.com",
             from: "conversation"
           }));
       });
@@ -647,6 +647,48 @@ describe("loop.roomViews", function() {
         view = mountTestComponent();
 
         expect(view.getDOMNode().querySelector(".local video")).not.eql(null);
+      });
+
+      describe("Room name priority", function() {
+        var roomEntry;
+        beforeEach(function() {
+          activeRoomStore.setStoreState({
+            participants: [{}],
+            roomState: ROOM_STATES.JOINED,
+            roomName: "fakeName",
+            roomContextUrls: [
+              {
+                description: "Website title",
+                location: "https://fakeurl.com"
+              }
+            ]
+          });
+        });
+
+        it("should use room name by default", function() {
+          view = mountTestComponent();
+          expect(fakeWindow.document.title).to.equal("fakeName");
+        });
+
+        it("should use context title when there's no room title", function() {
+          activeRoomStore.setStoreState({ roomName: null });
+
+          view = mountTestComponent();
+          expect(fakeWindow.document.title).to.equal("Website title");
+        });
+
+        it("should use website url when there's no room title nor website", function() {
+          activeRoomStore.setStoreState({
+            roomName: null,
+            roomContextUrls: [
+                {
+                  location: "https://fakeurl.com"
+                }
+              ]
+          });
+          view = mountTestComponent();
+          expect(fakeWindow.document.title).to.equal("https://fakeurl.com");
+        });
       });
 
     });

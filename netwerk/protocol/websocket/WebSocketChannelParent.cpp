@@ -26,15 +26,15 @@ NS_IMPL_ISUPPORTS(WebSocketChannelParent,
 
 WebSocketChannelParent::WebSocketChannelParent(nsIAuthPromptProvider* aAuthProvider,
                                                nsILoadContext* aLoadContext,
-                                               PBOverrideStatus aOverrideStatus)
+                                               PBOverrideStatus aOverrideStatus,
+                                               uint32_t aSerial)
   : mAuthProvider(aAuthProvider)
   , mLoadContext(aLoadContext)
   , mIPCOpen(true)
+  , mSerial(aSerial)
 {
   // Websocket channels can't have a private browsing override
   MOZ_ASSERT_IF(!aLoadContext, aOverrideStatus == kPBOverride_Unset);
-  if (!webSocketLog)
-    webSocketLog = PR_NewLogModule("nsWebSocket");
   mObserver = new OfflineObserver(this);
 }
 
@@ -94,6 +94,11 @@ WebSocketChannelParent::RecvAsyncOpen(const URIParams& aURI,
   }
   if (NS_FAILED(rv))
     goto fail;
+
+  rv = mChannel->SetSerial(mSerial);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    goto fail;
+  }
 
   rv = LoadInfoArgsToLoadInfo(aLoadInfoArgs, getter_AddRefs(loadInfo));
   if (NS_FAILED(rv))

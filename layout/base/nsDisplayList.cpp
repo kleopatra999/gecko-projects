@@ -1123,6 +1123,12 @@ nsDisplayListBuilder::FindAnimatedGeometryRootFor(nsIFrame* aFrame, const nsIFra
 void
 nsDisplayListBuilder::RecomputeCurrentAnimatedGeometryRoot()
 {
+  // technically we only need to clear any part of the cache that relies on
+  // the AGR of mCurrentFrame (i.e. all entries in mAnimatedGeometryRootCache
+  // where the key frame is a descendant of mCurrentFrame) but doing that is
+  // complicated so we just clear the whole thing.
+  mAnimatedGeometryRootCache.Clear();
+
   mCurrentAnimatedGeometryRoot = ComputeAnimatedGeometryRootFor(this, const_cast<nsIFrame *>(mCurrentFrame));
   AnimatedGeometryRootLookup lookup(mCurrentFrame, nullptr);
   mAnimatedGeometryRootCache.Put(lookup, mCurrentAnimatedGeometryRoot);
@@ -2135,6 +2141,25 @@ nsDisplayBackgroundImage::nsDisplayBackgroundImage(nsDisplayListBuilder* aBuilde
   MOZ_COUNT_CTOR(nsDisplayBackgroundImage);
 
   mBounds = GetBoundsInternal(aBuilder);
+  mDestArea = GetDestAreaInternal(aBuilder);
+}
+
+nsRect
+nsDisplayBackgroundImage::GetDestAreaInternal(nsDisplayListBuilder* aBuilder)
+{
+  if (!mBackgroundStyle) {
+    return nsRect();
+  }
+
+  nsPresContext* presContext = mFrame->PresContext();
+  uint32_t flags = aBuilder->GetBackgroundPaintFlags();
+  nsRect borderArea = nsRect(ToReferenceFrame(), mFrame->GetSize());
+  const nsStyleBackground::Layer &layer = mBackgroundStyle->mLayers[mLayer];
+
+  nsBackgroundLayerState state =
+    nsCSSRendering::PrepareBackgroundLayer(presContext, mFrame, flags,
+                                           borderArea, borderArea, layer);
+  return state.mDestArea;
 }
 
 nsDisplayBackgroundImage::~nsDisplayBackgroundImage()
@@ -2428,7 +2453,7 @@ nsDisplayBackgroundImage::CanOptimizeToImageLayer(LayerManager* aManager,
   // layer pixel boundaries. This should be OK for now.
 
   int32_t appUnitsPerDevPixel = presContext->AppUnitsPerDevPixel();
-  mDestRect =
+  mImageLayerDestRect =
     LayoutDeviceRect::FromAppUnits(state.mDestArea, appUnitsPerDevPixel);
 
   // Ok, we can turn this into a layer if needed.
@@ -2462,65 +2487,81 @@ nsDisplayBackgroundImage::GetContainer(LayerManager* aManager,
   return container.forget();
 }
 
-LayerState
-nsDisplayBackgroundImage::GetLayerState(nsDisplayListBuilder* aBuilder,
-                                        LayerManager* aManager,
-                                        const ContainerLayerParameters& aParameters)
+nsDisplayBackgroundImage::ImageLayerization
+nsDisplayBackgroundImage::ShouldCreateOwnLayer(nsDisplayListBuilder* aBuilder,
+                                               LayerManager* aManager)
 {
-  bool animated = false;
-  if (mBackgroundStyle) {
+  nsIFrame* backgroundStyleFrame = nsCSSRendering::FindBackgroundStyleFrame(mFrame);
+  if (ActiveLayerTracker::IsStyleAnimated(aBuilder, backgroundStyleFrame,
+                                          eCSSProperty_background_position)) {
+    return WHENEVER_POSSIBLE;
+  }
+
+  if (nsLayoutUtils::AnimatedImageLayersEnabled() && mBackgroundStyle) {
     const nsStyleBackground::Layer &layer = mBackgroundStyle->mLayers[mLayer];
     const nsStyleImage* image = &layer.mImage;
     if (image->GetType() == eStyleImageType_Image) {
       imgIRequest* imgreq = image->GetImageData();
       nsCOMPtr<imgIContainer> image;
       if (NS_SUCCEEDED(imgreq->GetImage(getter_AddRefs(image))) && image) {
-        if (NS_FAILED(image->GetAnimated(&animated))) {
-          animated = false;
+        bool animated = false;
+        if (NS_SUCCEEDED(image->GetAnimated(&animated)) && animated) {
+          return WHENEVER_POSSIBLE;
         }
       }
     }
   }
 
-  if (!animated ||
-      !nsLayoutUtils::AnimatedImageLayersEnabled()) {
-    if (!aManager->IsCompositingCheap() ||
-        !nsLayoutUtils::GPUImageScalingEnabled()) {
-      return LAYER_NONE;
-    }
+  if (nsLayoutUtils::GPUImageScalingEnabled() &&
+      aManager->IsCompositingCheap()) {
+    return ONLY_FOR_SCALING;
   }
 
-  if (!CanOptimizeToImageLayer(aManager, aBuilder)) {
+  return NO_LAYER_NEEDED;
+}
+
+LayerState
+nsDisplayBackgroundImage::GetLayerState(nsDisplayListBuilder* aBuilder,
+                                        LayerManager* aManager,
+                                        const ContainerLayerParameters& aParameters)
+{
+  ImageLayerization shouldLayerize = ShouldCreateOwnLayer(aBuilder, aManager);
+  if (shouldLayerize == NO_LAYER_NEEDED) {
+    // We can skip the call to CanOptimizeToImageLayer if we don't want a
+    // layer anyway.
     return LAYER_NONE;
   }
 
-  MOZ_ASSERT(mImage);
+  if (CanOptimizeToImageLayer(aManager, aBuilder)) {
+    if (shouldLayerize == WHENEVER_POSSIBLE) {
+      return LAYER_ACTIVE;
+    }
 
-  if (!animated) {
+    MOZ_ASSERT(shouldLayerize == ONLY_FOR_SCALING, "unhandled ImageLayerization value?");
+
+    MOZ_ASSERT(mImage);
     int32_t imageWidth;
     int32_t imageHeight;
     mImage->GetWidth(&imageWidth);
     mImage->GetHeight(&imageHeight);
     NS_ASSERTION(imageWidth != 0 && imageHeight != 0, "Invalid image size!");
 
-    const LayerRect destLayerRect = mDestRect * aParameters.Scale();
+    const LayerRect destLayerRect = mImageLayerDestRect * aParameters.Scale();
 
     // Calculate the scaling factor for the frame.
     const gfxSize scale = gfxSize(destLayerRect.width / imageWidth,
                                   destLayerRect.height / imageHeight);
 
-    // If we are not scaling at all, no point in separating this into a layer.
-    if (scale.width == 1.0f && scale.height == 1.0f) {
-      return LAYER_NONE;
-    }
-
-    // If the target size is pretty small, no point in using a layer.
-    if (destLayerRect.width * destLayerRect.height < 64 * 64) {
-      return LAYER_NONE;
+    if ((scale.width != 1.0f || scale.height != 1.0f) &&
+        (destLayerRect.width * destLayerRect.height >= 64 * 64)) {
+      // Separate this image into a layer.
+      // There's no point in doing this if we are not scaling at all or if the
+      // target size is pretty small.
+      return LAYER_ACTIVE;
     }
   }
 
-  return LAYER_ACTIVE;
+  return LAYER_NONE;
 }
 
 already_AddRefed<Layer>
@@ -2567,10 +2608,10 @@ nsDisplayBackgroundImage::ConfigureLayer(ImageLayer* aLayer,
   // aParameters.Offset() is always zero.
   MOZ_ASSERT(aParameters.Offset() == LayerIntPoint(0,0));
 
-  const LayoutDevicePoint p = mDestRect.TopLeft();
+  const LayoutDevicePoint p = mImageLayerDestRect.TopLeft();
   Matrix transform = Matrix::Translation(p.x, p.y);
-  transform.PreScale(mDestRect.width / imageWidth,
-                     mDestRect.height / imageHeight);
+  transform.PreScale(mImageLayerDestRect.width / imageWidth,
+                     mImageLayerDestRect.height / imageHeight);
   aLayer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
 }
 
@@ -2767,6 +2808,13 @@ void nsDisplayBackgroundImage::ComputeInvalidationRegion(nsDisplayListBuilder* a
     if (positioningArea.Size() != geometry->mPositioningArea.Size()) {
       NotifyRenderingChanged();
     }
+    return;
+  }
+  if (!mDestArea.IsEqualInterior(geometry->mDestArea)) {
+    // Dest area changed in a way that could cause everything to change,
+    // so invalidate everything (both old and new painting areas).
+    aInvalidRegion->Or(bounds, geometry->mBounds);
+    NotifyRenderingChanged();
     return;
   }
   if (aBuilder->ShouldSyncDecodeImages()) {
@@ -3962,6 +4010,10 @@ nsDisplayOpacity::ShouldFlattenAway(nsDisplayListBuilder* aBuilder)
   bool snap;
   uint32_t numChildren = 0;
   for (; numChildren < ArrayLength(children) && child; numChildren++, child = child->GetAbove()) {
+    if (child->GetType() == nsDisplayItem::TYPE_LAYER_EVENT_REGIONS) {
+      numChildren--;
+      continue;
+    }
     if (!child->CanApplyOpacity()) {
       return false;
     }
@@ -5088,17 +5140,6 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
     result = Matrix4x4::From2D(svgTransform);
   }
 
-  if (aProperties.mChildPerspective > 0.0) {
-    Matrix4x4 perspective;
-    perspective._34 =
-      -1.0 / NSAppUnitsToFloatPixels(aProperties.mChildPerspective, aAppUnitsPerPixel);
-    /* At the point when perspective is applied, we have been translated to the transform origin.
-     * The translation to the perspective origin is the difference between these values.
-     */
-    perspective.ChangeBasis(aProperties.GetToPerspectiveOrigin() - aProperties.mToTransformOrigin);
-    result = result * perspective;
-  }
-
   /* Account for the transform-origin property by translating the
    * coordinate space to the new origin.
    */
@@ -5110,12 +5151,15 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
                         hasSVGTransforms ? newOrigin.y : NS_round(newOrigin.y),
                         0);
 
+  bool hasPerspective = aProperties.mChildPerspective > 0.0;
+
   if (!hasSVGTransforms || !hasTransformFromSVGParent) {
     // This is a simplification of the following |else| block, the
     // simplification being possible because we don't need to apply
     // mToTransformOrigin between two transforms.
     Point3D offsets = roundedOrigin + aProperties.mToTransformOrigin;
-    if (aOffsetByOrigin) {
+    if (aOffsetByOrigin &&
+        !hasPerspective) {
       // We can fold the final translation by roundedOrigin into the first matrix
       // basis change translation. This is more stable against variation due to
       // insufficient floating point precision than reversing the translation
@@ -5149,11 +5193,25 @@ nsDisplayTransform::GetResultingTransformMatrixInternal(const FrameTransformProp
     // for mToTransformOrigin so we don't include that. We also need to reapply
     // refBoxOffset.
     Point3D offsets = roundedOrigin + refBoxOffset;
-    if (aOffsetByOrigin) {
+    if (aOffsetByOrigin &&
+        !hasPerspective) {
       result.PreTranslate(-refBoxOffset);
       result.PostTranslate(offsets);
     } else {
       result.ChangeBasis(offsets);
+    }
+  }
+
+  if (hasPerspective) {
+    Matrix4x4 perspective;
+    perspective._34 =
+      -1.0 / NSAppUnitsToFloatPixels(aProperties.mChildPerspective, aAppUnitsPerPixel);
+
+    perspective.ChangeBasis(aProperties.GetToPerspectiveOrigin() + roundedOrigin);
+    result = result * perspective;
+
+    if (aOffsetByOrigin) {
+      result.PreTranslate(roundedOrigin);
     }
   }
 

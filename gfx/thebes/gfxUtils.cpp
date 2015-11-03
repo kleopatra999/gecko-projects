@@ -7,6 +7,7 @@
 
 #include "cairo.h"
 #include "gfxContext.h"
+#include "gfxEnv.h"
 #include "gfxImageSurface.h"
 #include "gfxPlatform.h"
 #include "gfxDrawable.h"
@@ -73,7 +74,7 @@ void mozilla_dump_image(void* bytes, int width, int height, int bytepp,
     // TODO more flexible; parse string?
     switch (bytepp) {
     case 2:
-        format = SurfaceFormat::R5G6B5;
+        format = SurfaceFormat::R5G6B5_UINT16;
         break;
     case 4:
     default:
@@ -1547,26 +1548,24 @@ gfxUtils::CopyAsDataURI(DrawTarget* aDT)
   }
 }
 
-/* static */ void
+/* static */ UniquePtr<uint8_t[]>
 gfxUtils::GetImageBuffer(gfx::DataSourceSurface* aSurface,
                          bool aIsAlphaPremultiplied,
-                         uint8_t** outImageBuffer,
                          int32_t* outFormat)
 {
-    *outImageBuffer = nullptr;
     *outFormat = 0;
 
     DataSourceSurface::MappedSurface map;
     if (!aSurface->Map(DataSourceSurface::MapType::READ, &map))
-        return;
+        return nullptr;
 
     uint32_t bufferSize = aSurface->GetSize().width * aSurface->GetSize().height * 4;
-    uint8_t* imageBuffer = new (fallible) uint8_t[bufferSize];
+    UniquePtr<uint8_t[]> imageBuffer(new (fallible) uint8_t[bufferSize]);
     if (!imageBuffer) {
         aSurface->Unmap();
-        return;
+        return nullptr;
     }
-    memcpy(imageBuffer, map.mData, bufferSize);
+    memcpy(imageBuffer.get(), map.mData, bufferSize);
 
     aSurface->Unmap();
 
@@ -1577,12 +1576,12 @@ gfxUtils::GetImageBuffer(gfx::DataSourceSurface* aSurface,
         // Yes, it is THAT silly.
         // Except for different lossy conversions by color,
         // we could probably just change the label, and not change the data.
-        gfxUtils::ConvertBGRAtoRGBA(imageBuffer, bufferSize);
+        gfxUtils::ConvertBGRAtoRGBA(imageBuffer.get(), bufferSize);
         format = imgIEncoder::INPUT_FORMAT_RGBA;
     }
 
-    *outImageBuffer = imageBuffer;
     *outFormat = format;
+    return imageBuffer;
 }
 
 /* static */ nsresult
@@ -1598,15 +1597,14 @@ gfxUtils::GetInputStream(gfx::DataSourceSurface* aSurface,
     if (!encoder)
         return NS_ERROR_FAILURE;
 
-    nsAutoArrayPtr<uint8_t> imageBuffer;
     int32_t format = 0;
-    GetImageBuffer(aSurface, aIsAlphaPremultiplied, getter_Transfers(imageBuffer), &format);
+    UniquePtr<uint8_t[]> imageBuffer = GetImageBuffer(aSurface, aIsAlphaPremultiplied, &format);
     if (!imageBuffer)
         return NS_ERROR_FAILURE;
 
     return dom::ImageEncoder::GetInputStream(aSurface->GetSize().width,
                                              aSurface->GetSize().height,
-                                             imageBuffer, format,
+                                             imageBuffer.get(), format,
                                              encoder, aEncoderOptions, outStream);
 }
 
@@ -1672,20 +1670,6 @@ gfxUtils::DumpDisplayList() {
 }
 
 FILE *gfxUtils::sDumpPaintFile = stderr;
-
-#ifdef MOZ_DUMP_PAINTING
-bool gfxUtils::sDumpPainting = getenv("MOZ_DUMP_PAINT") != 0;
-bool gfxUtils::sDumpPaintingIntermediate = getenv("MOZ_DUMP_PAINT_INTERMEDIATE") != 0;
-bool gfxUtils::sDumpPaintingToFile = getenv("MOZ_DUMP_PAINT_TO_FILE") != 0;
-bool gfxUtils::sDumpPaintItems = getenv("MOZ_DUMP_PAINT_ITEMS") != 0;
-bool gfxUtils::sDumpCompositorTextures = getenv("MOZ_DUMP_COMPOSITOR_TEXTURES") != 0;
-#else
-bool gfxUtils::sDumpPainting = false;
-bool gfxUtils::sDumpPaintingIntermediate = false;
-bool gfxUtils::sDumpPaintingToFile = false;
-bool gfxUtils::sDumpPaintItems = false;
-bool gfxUtils::sDumpCompositorTextures = false;
-#endif
 
 namespace mozilla {
 namespace gfx {

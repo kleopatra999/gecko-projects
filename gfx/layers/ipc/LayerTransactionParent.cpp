@@ -345,9 +345,12 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
         layer->SetMaskLayer(nullptr);
       }
       layer->SetAnimations(common.animations());
-      layer->SetInvalidRegion(common.invalidRegion());
       layer->SetFrameMetrics(common.metrics());
       layer->SetDisplayListLog(common.displayListLog().get());
+
+      // The updated invalid region is added to the existing one, since we can
+      // update multiple times before the next composite.
+      layer->AddInvalidRegion(common.invalidRegion());
 
       nsTArray<RefPtr<Layer>> maskLayers;
       for (size_t i = 0; i < common.ancestorMaskLayersParent().Length(); i++) {
@@ -454,6 +457,10 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
     case Edit::TOpSetDiagnosticTypes: {
       mLayerManager->GetCompositor()->SetDiagnosticTypes(
         edit.get_OpSetDiagnosticTypes().diagnostics());
+      break;
+    }
+    case Edit::TOpWindowOverlayChanged: {
+      mLayerManager->SetWindowOverlayChanged();
       break;
     }
     // Tree ops
@@ -1015,7 +1022,7 @@ LayerTransactionParent::SendFenceHandleIfPresent(PTextureParent* aTexture,
 void
 LayerTransactionParent::SendAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessage)
 {
-  mozilla::unused << SendParentAsyncMessages(aMessage);
+  mozilla::Unused << SendParentAsyncMessages(aMessage);
 }
 
 void
@@ -1023,7 +1030,7 @@ LayerTransactionParent::ReplyRemoveTexture(const OpReplyRemoveTexture& aReply)
 {
   InfallibleTArray<AsyncParentMessageData> messages;
   messages.AppendElement(aReply);
-  mozilla::unused << SendParentAsyncMessages(messages);
+  mozilla::Unused << SendParentAsyncMessages(messages);
 }
 
 } // namespace layers

@@ -215,6 +215,7 @@ TextureHost::Create(const SurfaceDescriptor& aDesc,
 
     case SurfaceDescriptor::TEGLImageDescriptor:
     case SurfaceDescriptor::TSurfaceTextureDescriptor:
+    case SurfaceDescriptor::TSurfaceDescriptorSharedGLTexture:
       return CreateTextureHostOGL(aDesc, aDeallocator, aFlags);
 
     case SurfaceDescriptor::TNewSurfaceDescriptorGralloc:
@@ -781,7 +782,7 @@ TextureParent::CompositorRecycle()
   mTextureHost->ClearRecycleCallback();
 
   if (mTextureHost->GetFlags() & TextureFlags::RECYCLE) {
-    mozilla::unused << SendCompositorRecycle();
+    mozilla::Unused << SendCompositorRecycle();
     // Don't forget to prepare for the next reycle
     // if TextureClient request it.
     mWaitForClientRecycle = mTextureHost;

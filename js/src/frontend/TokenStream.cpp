@@ -42,12 +42,11 @@ using mozilla::UniquePtr;
 struct KeywordInfo {
     const char* chars;         // C string with keyword text
     TokenKind   tokentype;
-    JSVersion   version;
 };
 
 static const KeywordInfo keywords[] = {
-#define KEYWORD_INFO(keyword, name, type, version) \
-    {js_##keyword##_str, type, version},
+#define KEYWORD_INFO(keyword, name, type) \
+    {js_##keyword##_str, type},
     FOR_EACH_JAVASCRIPT_KEYWORD(KEYWORD_INFO)
 #undef KEYWORD_INFO
 };
@@ -997,25 +996,21 @@ TokenStream::checkForKeyword(const KeywordInfo* kw, TokenKind* ttp)
         return reportError(JSMSG_RESERVED_ID, kw->chars);
     }
 
-    if (kw->tokentype != TOK_STRICT_RESERVED) {
-        if (kw->version <= versionNumber()) {
-            // Working keyword.
-            if (ttp) {
-                *ttp = kw->tokentype;
-                return true;
-            }
-            return reportError(JSMSG_RESERVED_ID, kw->chars);
-        }
+    if (kw->tokentype == TOK_STRICT_RESERVED)
+        return reportStrictModeError(JSMSG_RESERVED_ID, kw->chars);
 
-        // The keyword is not in this version. Treat it as an identifier, unless
-        // it is let which we treat as TOK_STRICT_RESERVED by falling through to
-        // the code below (ES5 forbids it in strict mode).
-        if (kw->tokentype != TOK_LET)
-            return true;
+    // Treat 'let' as an identifier and contextually a keyword in sloppy mode.
+    // It is always a keyword in strict mode.
+    if (kw->tokentype == TOK_LET && !strictMode())
+        return true;
+
+    // Working keyword.
+    if (ttp) {
+        *ttp = kw->tokentype;
+        return true;
     }
 
-    // Strict reserved word.
-    return reportStrictModeError(JSMSG_RESERVED_ID, kw->chars);
+    return reportError(JSMSG_RESERVED_ID, kw->chars);
 }
 
 bool

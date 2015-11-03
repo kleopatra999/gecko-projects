@@ -168,9 +168,7 @@ public:
     , mSnapEffectiveTransforms(true)
     , mId(0)
     , mInTransaction(false)
-  {
-    InitLog();
-  }
+  {}
 
   /**
    * Release layers and resources held by this layer manager, and mark
@@ -621,7 +619,7 @@ public:
   void BeginTabSwitch();
 
   static bool IsLogEnabled();
-  static PRLogModuleInfo* GetLog() { return sLog; }
+  static mozilla::LogModule* GetLog();
 
   bool IsCompositingCheap(LayersBackend aBackend)
   {
@@ -684,8 +682,6 @@ protected:
   // Internally used to implement Dump().
   virtual void DumpPacket(layerscope::LayersPacket* aPacket);
 
-  static void InitLog();
-  static PRLogModuleInfo* sLog;
   uint64_t mId;
   bool mInTransaction;
   // The time when painting most recently finished. This is recorded so that
@@ -1616,7 +1612,9 @@ public:
    * marked as needed to be recomposited.
    */
   const nsIntRegion& GetInvalidRegion() { return mInvalidRegion; }
-  const void SetInvalidRegion(const nsIntRegion& aRect) { mInvalidRegion = aRect; }
+  const void AddInvalidRegion(const nsIntRegion& aRegion) {
+    mInvalidRegion.Or(mInvalidRegion, aRegion);
+  }
 
   /**
    * Mark the entirety of the layer's visible region as being invalid.

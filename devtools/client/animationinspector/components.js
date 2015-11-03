@@ -34,6 +34,9 @@ const L10N = new ViewHelpers.L10N(STRINGS_URI);
 const MILLIS_TIME_FORMAT_MAX_DURATION = 4000;
 // The minimum spacing between 2 time graduation headers in the timeline (px).
 const TIME_GRADUATION_MIN_SPACING = 40;
+// The size of the fast-track icon (for compositor-running animations), this is
+// used to position the icon correctly.
+const FAST_TRACK_ICON_SIZE = 20;
 
 /**
  * UI component responsible for displaying a preview of the target dom node of
@@ -631,7 +634,9 @@ AnimationsTimeline.prototype = {
         parent: this.animationsEl,
         nodeType: "li",
         attributes: {
-          "class": "animation"
+          "class": "animation" + (animation.state.isRunningOnCompositor
+                                  ? " fast-track"
+                                  : "")
         }
       });
 
@@ -684,13 +689,22 @@ AnimationsTimeline.prototype = {
            this.animations.every(({state}) => state.currentTime === 0);
   },
 
+  hasInfiniteAnimations: function() {
+    return this.animations.some(({state}) => !state.iterationCount);
+  },
+
   startAnimatingScrubber: function(time) {
     let x = TimeScale.startTimeToDistance(time, this.timeHeaderEl.offsetWidth);
     this.scrubberEl.style.left = x + "px";
 
-    if (time < TimeScale.minStartTime ||
-        time > TimeScale.maxEndTime ||
-        !this.isAtLeastOneAnimationPlaying()) {
+    // Only stop the scrubber if it's out of bounds or all animations have been
+    // paused, but not if at least an animation is infinite.
+    let isOutOfBounds = time < TimeScale.minStartTime ||
+                        time > TimeScale.maxEndTime;
+    let isAllPaused = !this.isAtLeastOneAnimationPlaying();
+    let hasInfinite = this.hasInfiniteAnimations();
+
+    if (isAllPaused || (isOutOfBounds && !hasInfinite)) {
       this.stopAnimatingScrubber();
       this.emit("timeline-data-changed", {
         isPaused: !this.isAtLeastOneAnimationPlaying(),
@@ -792,6 +806,8 @@ AnimationTimeBlock.prototype = {
 
     let x = TimeScale.startTimeToDistance(start + (delay / rate), width);
     let w = TimeScale.durationToDistance(duration / rate, width);
+    let iterationW = w * (count || 1);
+    let delayW = TimeScale.durationToDistance(Math.abs(delay) / rate, width);
 
     let iterations = createNode({
       parent: this.containerEl,
@@ -800,7 +816,7 @@ AnimationTimeBlock.prototype = {
         // Individual iterations are represented by setting the size of the
         // repeating linear-gradient.
         "style": `left:${x}px;
-                  width:${w * (count || 1)}px;
+                  width:${iterationW}px;
                   background-size:${Math.max(w, 2)}px 100%;`
       }
     });
@@ -808,15 +824,17 @@ AnimationTimeBlock.prototype = {
     // The animation name is displayed over the iterations.
     // Note that in case of negative delay, we push the name towards the right
     // so the delay can be shown.
+    let negativeDelayW = delay < 0 ? delayW : 0;
     createNode({
       parent: iterations,
       attributes: {
         "class": "name",
         "title": this.getTooltipText(state),
-        "style": delay < 0
-                 ? "margin-left:" +
-                   TimeScale.durationToDistance(Math.abs(delay), width) + "px"
-                 : ""
+        // Position the fast-track icon with background-position, and make space
+        // for the negative delay with a margin-left.
+        "style": "background-position:" +
+                 (iterationW - FAST_TRACK_ICON_SIZE - negativeDelayW) +
+                 "px center;margin-left:" + negativeDelayW + "px"
       },
       textContent: state.name
     });
@@ -826,9 +844,6 @@ AnimationTimeBlock.prototype = {
       // Negative delays need to start at 0.
       let delayX = TimeScale.durationToDistance(
         (delay < 0 ? 0 : delay) / rate, width);
-      let delayW = TimeScale.durationToDistance(
-        Math.abs(delay) / rate, width);
-
       createNode({
         parent: iterations,
         attributes: {
@@ -855,6 +870,9 @@ AnimationTimeBlock.prototype = {
     let iterations = L10N.getStr("player.animationIterationCountLabel") + " " +
                      (state.iterationCount ||
                       L10N.getStr("player.infiniteIterationCountText"));
-    return [title, duration, iterations, delay].join("\n");
+    let compositor = state.isRunningOnCompositor
+                     ? L10N.getStr("player.runningOnCompositorTooltip")
+                     : "";
+    return [title, duration, iterations, delay, compositor].join("\n");
   }
 };

@@ -4078,12 +4078,12 @@
     "n_buckets": 30,
     "description": "Average paint duration during any tab open/close animation (excluding tabstrip scroll) *** No longer needed (bug 1156565). Delete histogram and accumulation code! ***"
   },
-  "FX_REFRESH_DRIVER_FRAME_DELAY_MS": {
+  "FX_REFRESH_DRIVER_CHROME_FRAME_DELAY_MS": {
     "expires_in_version": "default",
     "kind": "exponential",
     "high": "10000",
     "n_buckets": 50,
-    "description": "Delay in ms between the target and the actual handling time of the frame at refresh driver"
+    "description": "Delay in ms between the target and the actual handling time of the frame at refresh driver in chrome process."
   },
   "FX_TAB_SWITCH_UPDATE_MS": {
     "alert_emails": ["perf-telemetry-alerts@mozilla.com"],
@@ -4352,10 +4352,19 @@
     "extended_statistics_ok": true,
     "description": "Session restore: Time spent blocking the main thread while restoring a window state (ms)"
   },
-  "FX_TABLET_MODE_USED_DURING_SESSION": {
-    "expires_in_version": "46",
+  "FX_SESSION_RESTORE_SEND_UPDATE_CAUSED_OOM": {
+    "alert_emails": ["session-restore-telemetry-alerts@mozilla.com"],
+    "expires_in_version": "default",
     "kind": "count",
-    "description": "Windows 10+ only: The number of times tablet-mode is used during a session"
+    "description": "Count of messages sent by SessionRestore from child frames to the parent and that cannot be transmitted as they eat up too much memory."
+  },
+  "FX_TABLETMODE_PAGE_LOAD": {
+    "expires_in_version": "47",
+    "kind": "exponential",
+    "high": 100000,
+    "n_buckets": 30,
+    "keyed": true,
+    "description": "Number of toplevel location changes in tablet and desktop mode (only used on win10 where tablet mode is available)"
   },
   "FX_TOUCH_USED": {
     "expires_in_version": "46",
@@ -4722,6 +4731,7 @@
     "kind": "linear",
     "high": "13",
     "n_buckets": 12,
+    "bug_numbers": [1162538],
     "description": "Number of directories in the archive at scan"
   },
   "TELEMETRY_ARCHIVE_OLDEST_DIRECTORY_AGE": {
@@ -4730,6 +4740,7 @@
     "kind": "linear",
     "high": "13",
     "n_buckets": 12,
+    "bug_numbers": [1162538],
     "description": "The age of the oldest Telemetry archive directory in months"
   },
   "TELEMETRY_ARCHIVE_SCAN_PING_COUNT": {
@@ -4738,12 +4749,14 @@
     "kind": "exponential",
     "high": "100000",
     "n_buckets": 100,
+    "bug_numbers": [1162538],
     "description": "Number of Telemetry pings in the archive at scan"
   },
   "TELEMETRY_ARCHIVE_SESSION_PING_COUNT": {
     "alert_emails": ["telemetry-client-dev@mozilla.com"],
     "expires_in_version": "never",
     "kind": "count",
+    "bug_numbers": [1162538],
     "description": "Number of Telemetry pings added to the archive during the session"
   },
   "TELEMETRY_ARCHIVE_SIZE_MB": {
@@ -4752,6 +4765,7 @@
     "kind": "linear",
     "high": "300",
     "n_buckets": 60,
+    "bug_numbers": [1162538],
     "description": "The size of the Telemetry archive (MB)"
   },
   "TELEMETRY_ARCHIVE_EVICTED_OVER_QUOTA": {
@@ -4760,6 +4774,7 @@
     "kind": "exponential",
     "high": "100000",
     "n_buckets": 100,
+    "bug_numbers": [1162538],
     "description": "Number of Telemetry pings evicted from the archive during cleanup, because they were over the quota"
   },
   "TELEMETRY_ARCHIVE_EVICTED_OLD_DIRS": {
@@ -4768,6 +4783,7 @@
     "kind": "linear",
     "high": "13",
     "n_buckets": 12,
+    "bug_numbers": [1162538],
     "description": "Number of Telemetry directories evicted from the archive during cleanup, because they were too old"
   },
   "TELEMETRY_ARCHIVE_EVICTING_DIRS_MS": {
@@ -4776,6 +4792,7 @@
     "kind": "exponential",
     "high": "300000",
     "n_buckets": 20,
+    "bug_numbers": [1162538],
     "description": "Time (ms) it takes for evicting old directories"
   },
   "TELEMETRY_ARCHIVE_CHECKING_OVER_QUOTA_MS": {
@@ -4784,6 +4801,7 @@
     "kind": "exponential",
     "high": "300000",
     "n_buckets": 20,
+    "bug_numbers": [1162538],
     "description": "Time (ms) it takes for checking if the archive is over-quota"
   },
   "TELEMETRY_ARCHIVE_EVICTING_OVER_QUOTA_MS": {
@@ -4792,6 +4810,7 @@
     "kind": "exponential",
     "high": "300000",
     "n_buckets": 20,
+    "bug_numbers": [1162538],
     "description": "Time (ms) it takes for evicting over-quota pings"
   },
   "TELEMETRY_PENDING_LOAD_FAILURE_READ": {
@@ -5705,13 +5724,33 @@
     "kind": "boolean",
     "description": "Count the number of times the user clicked 'allow' on the hidden-plugin infobar."
   },
-  "POPUP_NOTIFICATION_MAINACTION_TRIGGERED_MS": {
-    "expires_in_version": "40",
-    "kind": "linear",
-    "low": 25,
-    "high": "80 * 25",
-    "n_buckets": "80 + 1",
-    "description": "The time (in milliseconds) after showing a PopupNotification that the mainAction was first triggered"
+  "POPUP_NOTIFICATION_STATS": {
+    "alert_emails": ["firefox-dev@mozilla.org"],
+    "expires_in_version": "48",
+    "kind": "enumerated",
+    "keyed": true,
+    "n_values": 40,
+    "description": "(Bug 1207089) Usage of popup notifications, keyed by ID (0 = Offered, 1..4 = Action, 5 = Click outside, 6 = Leave page, 7 = Use 'X', 8 = Not now, 10 = Open submenu, 11 = Learn more. Add 20 if happened after reopen.)"
+  },
+  "POPUP_NOTIFICATION_MAIN_ACTION_MS": {
+    "alert_emails": ["firefox-dev@mozilla.org"],
+    "expires_in_version": "48",
+    "kind": "exponential",
+    "keyed": true,
+    "low": 100,
+    "high": 600000,
+    "n_buckets": 40,
+    "description": "(Bug 1207089) Time in ms between initially requesting a popup notification and triggering the main action, keyed by ID"
+  },
+  "POPUP_NOTIFICATION_DISMISSAL_MS": {
+    "alert_emails": ["firefox-dev@mozilla.org"],
+    "expires_in_version": "48",
+    "kind": "exponential",
+    "keyed": true,
+    "low": 200,
+    "high": 20000,
+    "n_buckets": 50,
+    "description": "(Bug 1207089) Time in ms between displaying a popup notification and dismissing it without an action the first time, keyed by ID"
   },
   "DEVTOOLS_DEBUGGER_RDP_LOCAL_RELOAD_MS": {
     "expires_in_version": "never",
@@ -6951,6 +6990,12 @@
     "kind": "boolean",
     "description": "How many times has the devtool's Developer Toolbar been opened via the toolbox button?"
   },
+  "DEVTOOLS_ABOUTDEBUGGING_OPENED_BOOLEAN": {
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org", "jan@mozilla.com"],
+    "expires_in_version": "55",
+    "kind": "boolean",
+    "description": "How many times has about:debugging been opened? (bug 1204601)"
+  },
   "DEVTOOLS_WEBIDE_OPENED_BOOLEAN": {
     "expires_in_version": "never",
     "kind": "boolean",
@@ -7115,6 +7160,12 @@
     "expires_in_version": "never",
     "kind": "flag",
     "description": "How many users have opened the devtool's Developer Toolbar been opened via the toolbox button?"
+  },
+  "DEVTOOLS_ABOUTDEBUGGING_OPENED_PER_USER_FLAG": {
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org", "jan@mozilla.com"],
+    "expires_in_version": "55",
+    "kind": "flag",
+    "description": "How many users have opened about:debugging? (bug 1204601)"
   },
   "DEVTOOLS_WEBIDE_OPENED_PER_USER_FLAG": {
     "expires_in_version": "never",
@@ -7313,6 +7364,14 @@
     "high": "10000000",
     "n_buckets": 100,
     "description": "How long has the developer toolbar been active (seconds)"
+  },
+  "DEVTOOLS_ABOUTDEBUGGING_TIME_ACTIVE_SECONDS": {
+    "alert_emails": ["dev-developer-tools@lists.mozilla.org", "jan@mozilla.com"],
+    "expires_in_version": "55",
+    "kind": "exponential",
+    "high": "10000000",
+    "n_buckets": 100,
+    "description": "How long has about:debugging been active? (seconds) (bug 1204601)"
   },
   "DEVTOOLS_WEBIDE_TIME_ACTIVE_SECONDS": {
     "expires_in_version": "never",
@@ -7991,7 +8050,7 @@
     "expires_in_version": "default",
     "kind": "enumerated",
     "n_values": 100,
-    "description": "If certificate verification failed in a TLS handshake, what was the error? (see mapping in SSLServerCertVerification.cpp)"
+    "description": "If certificate verification failed in a TLS handshake, what was the error? (see MapCertErrorToProbeValue in security/manager/ssl/SSLServerCertVerification.cpp and the values in security/pkix/include/pkix/Result.h)"
   },
   "SSL_PERMANENT_CERT_ERROR_OVERRIDES": {
     "alert_emails": ["seceng@mozilla.org"],
@@ -8337,7 +8396,7 @@
   },
   "LOOP_TWO_WAY_MEDIA_CONN_LENGTH_1": {
     "alert_emails": ["firefox-dev@mozilla.org", "dmose@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 8,
     "releaseChannelCollection": "opt-out",
@@ -8345,7 +8404,7 @@
   },
   "LOOP_SHARING_STATE_CHANGE_1": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 8,
     "releaseChannelCollection": "opt-out",
@@ -8353,7 +8412,7 @@
   },
   "LOOP_SHARING_ROOM_URL": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 8,
     "releaseChannelCollection": "opt-out",
@@ -8361,7 +8420,7 @@
   },
   "LOOP_ROOM_CREATE": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 4,
     "releaseChannelCollection": "opt-out",
@@ -8369,7 +8428,7 @@
   },
   "LOOP_ROOM_DELETE": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 4,
     "releaseChannelCollection": "opt-out",
@@ -8377,7 +8436,7 @@
   },
   "LOOP_ROOM_CONTEXT_ADD": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "enumerated",
     "n_values": 8,
     "releaseChannelCollection": "opt-out",
@@ -8385,14 +8444,14 @@
   },
   "LOOP_ROOM_CONTEXT_CLICK": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "description": "Number times room context is clicked to visit the attached URL"
   },
   "LOOP_ROOM_SESSION_WITHCHAT": {
     "alert_emails": ["firefox-dev@mozilla.org", "mdeboer@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "description": "Number of sessions where at least one chat message was exchanged"
@@ -9668,14 +9727,14 @@
   },
   "FXA_CONFIGURED": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "flag",
     "releaseChannelCollection": "opt-out",
     "description": "If the user is signed in to a Firefox Account on this device"
   },
   "FXA_UNVERIFIED_ACCOUNT_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9683,7 +9742,7 @@
   },
   "FXA_HAWK_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9691,7 +9750,7 @@
   },
   "FXA_SERVER_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9699,7 +9758,7 @@
   },
   "TOKENSERVER_AUTH_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9707,7 +9766,7 @@
   },
   "WEAVE_ENGINE_APPLY_NEW_FAILURES": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9715,7 +9774,7 @@
   },
   "WEAVE_ENGINE_APPLY_FAILURES": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9723,7 +9782,7 @@
   },
   "WEAVE_ENGINE_SYNC_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9731,21 +9790,21 @@
   },
   "WEAVE_CAN_FETCH_KEYS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "flag",
     "releaseChannelCollection": "opt-out",
     "description": "Whether Sync keys are present in account storage."
   },
   "WEAVE_FXA_KEY_FETCH_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "description": "Errors encountered fetching Sync keys, including network errors."
   },
   "WEAVE_STORAGE_AUTH_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "keyed": true,
     "releaseChannelCollection": "opt-out",
@@ -9753,7 +9812,7 @@
   },
   "WEAVE_HMAC_ERRORS": {
     "alert_emails": ["fx-team@mozilla.com"],
-    "expires_in_version": "45",
+    "expires_in_version": "46",
     "kind": "count",
     "releaseChannelCollection": "opt-out",
     "description": "Sync cryptoKeys collection HMAC mismatches."

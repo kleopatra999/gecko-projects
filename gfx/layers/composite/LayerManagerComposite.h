@@ -278,6 +278,11 @@ public:
     aNotifications->AppendElements(Move(mImageCompositeNotifications));
   }
 
+  // Indicate that we need to composite even if nothing in our layers has
+  // changed, so that the widget can draw something different in its window
+  // overlay.
+  void SetWindowOverlayChanged() { mWindowOverlayChanged = true; }
+
 private:
   /** Region we're clipping our current drawing to. */
   nsIntRegion mClippingRegion;
@@ -298,9 +303,14 @@ private:
                                              const gfx::Matrix4x4& aTransform);
 
   /**
+   * Update the invalid region and render it.
+   */
+  void UpdateAndRender();
+
+  /**
    * Render the current layer tree to the active target.
    */
-  void Render();
+  void Render(const nsIntRegion& aInvalidRegion);
 #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WIDGET_GONK)
   void RenderToPresentationSurface();
 #endif
@@ -351,6 +361,8 @@ private:
   // Testing property. If hardware composer is supported, this will return
   // true if the last frame was deemed 'too complicated' to be rendered.
   bool mLastFrameMissedHWC;
+
+  bool mWindowOverlayChanged;
 };
 
 /**

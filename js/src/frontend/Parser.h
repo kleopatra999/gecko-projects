@@ -711,8 +711,8 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
                     bool allowCallSyntax, InvokedPrediction invoked = PredictUninvoked);
     Node primaryExpr(YieldHandling yieldHandling, TripledotHandling tripledotHandling, TokenKind tt,
                      InvokedPrediction invoked = PredictUninvoked);
-    Node parenExprOrGeneratorComprehension(YieldHandling yieldHandling);
-    Node exprInParens(InHandling inHandling, YieldHandling yieldHandling);
+    Node exprInParens(InHandling inHandling, YieldHandling yieldHandling,
+                      TripledotHandling tripledotHandling);
 
     bool tryNewTarget(Node& newTarget);
     bool checkAndMarkSuperScope();
@@ -737,18 +737,17 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
 
     Node condition(InHandling inHandling, YieldHandling yieldHandling);
 
-    Node generatorComprehensionLambda(GeneratorKind comprehensionKind, unsigned begin,
-                                      Node innerStmt);
-
+    /* comprehensions */
     Node legacyComprehensionTail(Node kid, unsigned blockid, GeneratorKind comprehensionKind,
                                  ParseContext<ParseHandler>* outerpc,
                                  unsigned innerBlockScopeDepth);
     Node legacyArrayComprehension(Node array);
+    Node generatorComprehensionLambda(GeneratorKind comprehensionKind, unsigned begin,
+                                      Node innerStmt);
     Node legacyGeneratorExpr(Node kid);
-
-    Node comprehensionTail(GeneratorKind comprehensionKind);
-    Node comprehensionIf(GeneratorKind comprehensionKind);
     Node comprehensionFor(GeneratorKind comprehensionKind);
+    Node comprehensionIf(GeneratorKind comprehensionKind);
+    Node comprehensionTail(GeneratorKind comprehensionKind);
     Node comprehension(GeneratorKind comprehensionKind);
     Node arrayComprehension(uint32_t begin);
     Node generatorComprehension(uint32_t begin);
@@ -799,6 +798,15 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
     bool isValidForStatementLHS(Node pn1, JSVersion version, bool forDecl, bool forEach,
                                 ParseNodeKind headKind);
     bool checkForHeadConstInitializers(Node pn1);
+
+    // Use when the current token is TOK_NAME and is known to be 'let'.
+    bool shouldParseLetDeclaration(bool* parseDeclOut);
+
+    // Use when the lookahead token is TOK_NAME and is known to be 'let'. If a
+    // let declaration should be parsed, the TOK_NAME token of 'let' is
+    // consumed. Otherwise, the current token remains the TOK_NAME token of
+    // 'let'.
+    bool peekShouldParseLetDeclaration(bool* parseDeclOut, TokenStream::Modifier modifier);
 
   public:
     enum FunctionCallBehavior {
@@ -885,6 +893,8 @@ class Parser : private JS::AutoGCRooter, public StrictModeGetter
     bool asmJS(Node list);
 
     void addTelemetry(JSCompartment::DeprecatedLanguageExtension e);
+
+    bool warnOnceAboutExprClosure();
 
     friend class LegacyCompExprTransplanter;
     friend struct BindData<ParseHandler>;

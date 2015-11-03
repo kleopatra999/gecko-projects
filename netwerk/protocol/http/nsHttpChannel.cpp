@@ -89,6 +89,7 @@
 #include "nsIPackagedAppService.h"
 #include "nsIDeprecationWarner.h"
 #include "nsIDocument.h"
+#include "nsICompressConvStats.h"
 
 namespace mozilla { namespace net {
 
@@ -208,11 +209,6 @@ AutoRedirectVetoNotifier::ReportRedirectResult(bool succeeded)
     if (!mChannel)
         return;
 
-    // Append the initial uri of the channel to the redirectChain
-    if (succeeded && mChannel->mLoadInfo) {
-        mChannel->mLoadInfo->AppendRedirectedPrincipal(mChannel->GetURIPrincipal());
-    }
-
     mChannel->mRedirectChannel = nullptr;
 
     nsCOMPtr<nsIRedirectResultListener> vetoHook;
@@ -262,6 +258,7 @@ nsHttpChannel::nsHttpChannel()
     , mConcurentCacheAccess(0)
     , mIsPartialRequest(0)
     , mHasAutoRedirectVetoNotifier(0)
+    , mPinCacheContent(0)
     , mIsPackagedAppResource(0)
     , mIsCorsPreflightDone(0)
     , mPushedStream(nullptr)
@@ -358,7 +355,7 @@ nsHttpChannel::Connect()
 
                 const char16_t* params[] = { reportSpec.get(), reportScheme.get() };
                 uint32_t innerWindowId = mLoadInfo ? mLoadInfo->GetInnerWindowID() : 0;
-                CSP_LogLocalizedStr(NS_LITERAL_STRING("upgradeInsecureRequest").get(),
+                CSP_LogLocalizedStr(MOZ_UTF16("upgradeInsecureRequest"),
                                     params, ArrayLength(params),
                                     EmptyString(), // aSourceFile
                                     EmptyString(), // aScriptSample
@@ -1063,6 +1060,7 @@ nsHttpChannel::CallOnStartRequest()
       }
       if (listener) {
         mListener = listener;
+        mCompressListener = listener;
       }
     }
 
@@ -2001,7 +1999,7 @@ nsHttpChannel::StartRedirectChannelToURI(nsIURI *upgradedURI, uint32_t flags)
                                ioService);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = SetupReplacementChannel(upgradedURI, newChannel, true);
+    rv = SetupReplacementChannel(upgradedURI, newChannel, true, flags);
     NS_ENSURE_SUCCESS(rv, rv);
 
     // Inform consumers about this fake redirect
@@ -2123,13 +2121,14 @@ nsHttpChannel::AsyncDoReplaceWithProxy(nsIProxyInfo* pi)
     if (NS_FAILED(rv))
         return rv;
 
-    rv = SetupReplacementChannel(mURI, newChannel, true);
+    uint32_t flags = nsIChannelEventSink::REDIRECT_INTERNAL;
+
+    rv = SetupReplacementChannel(mURI, newChannel, true, flags);
     if (NS_FAILED(rv))
         return rv;
 
     // Inform consumers about this fake redirect
     mRedirectChannel = newChannel;
-    uint32_t flags = nsIChannelEventSink::REDIRECT_INTERNAL;
 
     PushRedirectAsyncFunc(&nsHttpChannel::ContinueDoReplaceWithProxy);
     rv = gHttpHandler->AsyncOnChannelRedirect(this, newChannel, flags);
@@ -2775,7 +2774,8 @@ nsHttpChannel::ProcessFallback(bool *waitingForRedirectCallback)
                                    getter_AddRefs(newChannel));
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = SetupReplacementChannel(mURI, newChannel, true);
+    uint32_t redirectFlags = nsIChannelEventSink::REDIRECT_INTERNAL;
+    rv = SetupReplacementChannel(mURI, newChannel, true, redirectFlags);
     NS_ENSURE_SUCCESS(rv, rv);
 
     // Make sure the new channel loads from the fallback key.
@@ -2792,7 +2792,6 @@ nsHttpChannel::ProcessFallback(bool *waitingForRedirectCallback)
 
     // Inform consumers about this fake redirect
     mRedirectChannel = newChannel;
-    uint32_t redirectFlags = nsIChannelEventSink::REDIRECT_INTERNAL;
 
     PushRedirectAsyncFunc(&nsHttpChannel::ContinueProcessFallback);
     rv = gHttpHandler->AsyncOnChannelRedirect(this, newChannel, redirectFlags);
@@ -2982,6 +2981,10 @@ nsHttpChannel::OpenCacheEntry(bool isHttps)
             getter_AddRefs(cacheStorage));
     } else if (mLoadFlags & INHIBIT_PERSISTENT_CACHING) {
         rv = cacheStorageService->MemoryCacheStorage(info, // ? choose app cache as well...
+            getter_AddRefs(cacheStorage));
+    }
+    else if (mPinCacheContent) {
+        rv = cacheStorageService->PinningCacheStorage(info,
             getter_AddRefs(cacheStorage));
     }
     else {
@@ -3735,6 +3738,51 @@ nsHttpChannel::AssembleCacheKey(const char *spec, uint32_t postID,
         cacheKey.Append(spec);
 }
 
+nsresult
+DoUpdateExpirationTime(nsHttpChannel* aSelf,
+                       nsICacheEntry* aCacheEntry,
+                       nsHttpResponseHead* aResponseHead,
+                       uint32_t& aExpirationTime)
+{
+    MOZ_ASSERT(aExpirationTime == 0);
+    NS_ENSURE_TRUE(aResponseHead, NS_ERROR_FAILURE);
+
+    nsresult rv;
+
+    if (!aResponseHead->MustValidate()) {
+        uint32_t freshnessLifetime = 0;
+
+        rv = aResponseHead->ComputeFreshnessLifetime(&freshnessLifetime);
+        if (NS_FAILED(rv)) return rv;
+
+        if (freshnessLifetime > 0) {
+            uint32_t now = NowInSeconds(), currentAge = 0;
+
+            rv = aResponseHead->ComputeCurrentAge(now, aSelf->GetRequestTime(), &currentAge);
+            if (NS_FAILED(rv)) return rv;
+
+            LOG(("freshnessLifetime = %u, currentAge = %u\n",
+                freshnessLifetime, currentAge));
+
+            if (freshnessLifetime > currentAge) {
+                uint32_t timeRemaining = freshnessLifetime - currentAge;
+                // be careful... now + timeRemaining may overflow
+                if (now + timeRemaining < now)
+                    aExpirationTime = uint32_t(-1);
+                else
+                    aExpirationTime = now + timeRemaining;
+            }
+            else
+                aExpirationTime = now;
+        }
+    }
+
+    rv = aCacheEntry->SetExpirationTime(aExpirationTime);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    return rv;
+}
+
 // UpdateExpirationTime is called when a new response comes in from the server.
 // It updates the stored response-time and sets the expiration time on the
 // cache entry.
@@ -3747,40 +3795,8 @@ nsHttpChannel::AssembleCacheKey(const char *spec, uint32_t postID,
 nsresult
 nsHttpChannel::UpdateExpirationTime()
 {
-    NS_ENSURE_TRUE(mResponseHead, NS_ERROR_FAILURE);
-
-    nsresult rv;
-
     uint32_t expirationTime = 0;
-    if (!mResponseHead->MustValidate()) {
-        uint32_t freshnessLifetime = 0;
-
-        rv = mResponseHead->ComputeFreshnessLifetime(&freshnessLifetime);
-        if (NS_FAILED(rv)) return rv;
-
-        if (freshnessLifetime > 0) {
-            uint32_t now = NowInSeconds(), currentAge = 0;
-
-            rv = mResponseHead->ComputeCurrentAge(now, mRequestTime, &currentAge);
-            if (NS_FAILED(rv)) return rv;
-
-            LOG(("freshnessLifetime = %u, currentAge = %u\n",
-                freshnessLifetime, currentAge));
-
-            if (freshnessLifetime > currentAge) {
-                uint32_t timeRemaining = freshnessLifetime - currentAge;
-                // be careful... now + timeRemaining may overflow
-                if (now + timeRemaining < now)
-                    expirationTime = uint32_t(-1);
-                else
-                    expirationTime = now + timeRemaining;
-            }
-            else
-                expirationTime = now;
-        }
-    }
-
-    rv = mCacheEntry->SetExpirationTime(expirationTime);
+    nsresult rv = DoUpdateExpirationTime(this, mCacheEntry, mResponseHead, expirationTime);
     NS_ENSURE_SUCCESS(rv, rv);
 
     if (mOfflineCacheEntry) {
@@ -4550,13 +4566,16 @@ nsHttpChannel::ClearBogusContentEncodingIfNeeded()
 nsresult
 nsHttpChannel::SetupReplacementChannel(nsIURI       *newURI,
                                        nsIChannel   *newChannel,
-                                       bool          preserveMethod)
+                                       bool          preserveMethod,
+                                       uint32_t      redirectFlags)
 {
     LOG(("nsHttpChannel::SetupReplacementChannel "
          "[this=%p newChannel=%p preserveMethod=%d]",
          this, newChannel, preserveMethod));
 
-    nsresult rv = HttpBaseChannel::SetupReplacementChannel(newURI, newChannel, preserveMethod);
+    nsresult rv =
+      HttpBaseChannel::SetupReplacementChannel(newURI, newChannel,
+                                               preserveMethod, redirectFlags);
     if (NS_FAILED(rv))
         return rv;
 
@@ -4687,14 +4706,15 @@ nsHttpChannel::ContinueProcessRedirectionAfterFallback(nsresult rv)
                                ioService);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = SetupReplacementChannel(mRedirectURI, newChannel, !rewriteToGET);
-    if (NS_FAILED(rv)) return rv;
-
     uint32_t redirectFlags;
     if (nsHttp::IsPermanentRedirect(mRedirectType))
         redirectFlags = nsIChannelEventSink::REDIRECT_PERMANENT;
     else
         redirectFlags = nsIChannelEventSink::REDIRECT_TEMPORARY;
+
+    rv = SetupReplacementChannel(mRedirectURI, newChannel,
+                                 !rewriteToGET, redirectFlags);
+    if (NS_FAILED(rv)) return rv;
 
     // verify that this is a legal redirect
     mRedirectChannel = newChannel;
@@ -5333,6 +5353,19 @@ nsHttpChannel::BeginConnect()
     return NS_OK;
 }
 
+NS_IMETHODIMP
+nsHttpChannel::GetEncodedBodySize(uint64_t *aEncodedBodySize)
+{
+    if (mCacheEntry && !mCacheEntryIsWriteOnly) {
+        int64_t dataSize = 0;
+        mCacheEntry->GetDataSize(&dataSize);
+        *aEncodedBodySize = dataSize;
+    } else {
+        *aEncodedBodySize = mLogicalOffset;
+    }
+    return NS_OK;
+}
+
 //-----------------------------------------------------------------------------
 // nsHttpChannel::nsIHttpChannelInternal
 //-----------------------------------------------------------------------------
@@ -5826,6 +5859,11 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
             gHttpHandler->CancelTransaction(mTransaction, status);
     }
 
+    nsCOMPtr<nsICompressConvStats> conv = do_QueryInterface(mCompressListener);
+    if (conv) {
+        conv->GetDecodedDataLength(&mDecodedBodySize);
+    }
+
     if (mTransaction) {
         // determine if we should call DoAuthRetry
         bool authRetry = mAuthRetryPending && NS_SUCCEEDED(status);
@@ -5852,6 +5890,8 @@ nsHttpChannel::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult st
         RefPtr<nsAHttpConnection> stickyConn;
         if (mCaps & NS_HTTP_STICKY_CONNECTION)
             stickyConn = mTransaction->GetConnectionReference();
+
+        mTransferSize = mTransaction->GetTransferSize();
 
         // at this point, we're done with the transaction
         mTransactionTimings = mTransaction->Timings();
@@ -6418,6 +6458,26 @@ nsHttpChannel::SetCacheOnlyMetadata(bool aOnlyMetadata)
         mLoadFlags |= LOAD_ONLY_IF_MODIFIED;
     }
 
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsHttpChannel::GetPin(bool *aPin)
+{
+    NS_ENSURE_ARG(aPin);
+    *aPin = mPinCacheContent;
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsHttpChannel::SetPin(bool aPin)
+{
+    LOG(("nsHttpChannel::SetPin [this=%p pin=%d]\n",
+        this, aPin));
+
+    ENSURE_CALLED_BEFORE_CONNECT();
+
+    mPinCacheContent = aPin;
     return NS_OK;
 }
 

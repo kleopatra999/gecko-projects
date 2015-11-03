@@ -1026,7 +1026,7 @@ CanvasRenderingContext2D::ParseColor(const nsAString& aString,
         mCanvasElement, nullptr, presShell);
     }
 
-    unused << nsRuleNode::ComputeColor(
+    Unused << nsRuleNode::ComputeColor(
       value, presShell ? presShell->GetPresContext() : nullptr, parentContext,
       *aColor);
   }
@@ -1646,26 +1646,24 @@ CanvasRenderingContext2D::SetContextOptions(JSContext* aCx,
   return NS_OK;
 }
 
-void
-CanvasRenderingContext2D::GetImageBuffer(uint8_t** aImageBuffer,
-                                         int32_t* aFormat)
+UniquePtr<uint8_t[]>
+CanvasRenderingContext2D::GetImageBuffer(int32_t* aFormat)
 {
-  *aImageBuffer = nullptr;
   *aFormat = 0;
 
   EnsureTarget();
   RefPtr<SourceSurface> snapshot = mTarget->Snapshot();
   if (!snapshot) {
-    return;
+    return nullptr;
   }
 
   RefPtr<DataSourceSurface> data = snapshot->GetDataSurface();
   if (!data || data->GetSize() != IntSize(mWidth, mHeight)) {
-    return;
+    return nullptr;
   }
 
-  *aImageBuffer = SurfaceToPackedBGRA(data);
   *aFormat = imgIEncoder::INPUT_FORMAT_HOSTARGB;
+  return SurfaceToPackedBGRA(data);
 }
 
 nsString CanvasRenderingContext2D::GetHitRegion(const mozilla::gfx::Point& aPoint)
@@ -1691,15 +1689,15 @@ CanvasRenderingContext2D::GetInputStream(const char *aMimeType,
     return NS_ERROR_FAILURE;
   }
 
-  nsAutoArrayPtr<uint8_t> imageBuffer;
   int32_t format = 0;
-  GetImageBuffer(getter_Transfers(imageBuffer), &format);
+  UniquePtr<uint8_t[]> imageBuffer = GetImageBuffer(&format);
   if (!imageBuffer) {
     return NS_ERROR_FAILURE;
   }
 
-  return ImageEncoder::GetInputStream(mWidth, mHeight, imageBuffer, format,
-                                      encoder, aEncoderOptions, aStream);
+  return ImageEncoder::GetInputStream(mWidth, mHeight, imageBuffer.get(),
+                                      format, encoder, aEncoderOptions,
+                                      aStream);
 }
 
 SurfaceFormat
@@ -4499,7 +4497,7 @@ CanvasRenderingContext2D::DrawImage(const CanvasImageSource& image,
     if (ok) {
       NativeSurface texSurf;
       texSurf.mType = NativeSurfaceType::OPENGL_TEXTURE;
-      texSurf.mFormat = SurfaceFormat::R5G6B5;
+      texSurf.mFormat = SurfaceFormat::R5G6B5_UINT16;
       texSurf.mSize.width = mCurrentVideoSize.width;
       texSurf.mSize.height = mCurrentVideoSize.height;
       texSurf.mSurface = (void*)((uintptr_t)mVideoTexture);
@@ -4890,7 +4888,7 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& window, double x,
   }
 
   nsCOMPtr<nsIPresShell> shell = presContext->PresShell();
-  unused << shell->RenderDocument(r, renderDocFlags, backgroundColor, thebes);
+  Unused << shell->RenderDocument(r, renderDocFlags, backgroundColor, thebes);
   if (drawDT) {
     RefPtr<SourceSurface> snapshot = drawDT->Snapshot();
     RefPtr<DataSourceSurface> data = snapshot->GetDataSurface();

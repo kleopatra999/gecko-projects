@@ -394,10 +394,10 @@ Accessible::VisibilityState()
   if (frame->GetType() == nsGkAtoms::textFrame &&
       !(frame->GetStateBits() & NS_FRAME_OUT_OF_FLOW) &&
       frame->GetRect().IsEmpty()) {
-    nsAutoString renderedText;
-    frame->GetRenderedText(&renderedText, nullptr, nullptr, 0, 1);
-    if (renderedText.IsEmpty())
+    nsIFrame::RenderedText text = frame->GetRenderedText();
+    if (text.mString.IsEmpty()) {
       return states::INVISIBLE;
+    }
   }
 
   return 0;
@@ -1603,8 +1603,7 @@ Accessible::RelationByType(RelationType aType)
     }
 
     case RelationType::NODE_CHILD_OF: {
-      Relation rel(new ARIAOwnedByIterator(this));
-
+      Relation rel;
       // This is an ARIA tree or treegrid that doesn't use owns, so we need to
       // get the parent the hard way.
       if (mRoleMapEntry && (mRoleMapEntry->role == roles::OUTLINEITEM ||
@@ -1633,8 +1632,6 @@ Accessible::RelationByType(RelationType aType)
     }
 
     case RelationType::NODE_PARENT_OF: {
-      Relation rel(new ARIAOwnsIterator(this));
-
       // ARIA tree or treegrid can do the hierarchy by @aria-level, ARIA trees
       // also can be organized by groups.
       if (mRoleMapEntry &&
@@ -1644,10 +1641,10 @@ Accessible::RelationByType(RelationType aType)
            mRoleMapEntry->role == roles::OUTLINE ||
            mRoleMapEntry->role == roles::LIST ||
            mRoleMapEntry->role == roles::TREE_TABLE)) {
-        rel.AppendIter(new ItemIterator(this));
+        return Relation(new ItemIterator(this));
       }
 
-      return rel;
+      return Relation();
     }
 
     case RelationType::CONTROLLED_BY:

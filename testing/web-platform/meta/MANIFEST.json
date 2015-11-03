@@ -18702,6 +18702,14 @@
         "url": "/infrastructure/failing-test.html"
       },
       {
+        "path": "innerText/getter.html",
+        "url": "/innerText/getter.html"
+      },
+      {
+        "path": "innerText/setter.html",
+        "url": "/innerText/setter.html"
+      },
+      {
         "path": "js/behaviours/SetPrototypeOf-window.html",
         "url": "/js/behaviours/SetPrototypeOf-window.html"
       },
@@ -26304,6 +26312,10 @@
       {
         "path": "webaudio/the-audio-api/the-audioparam-interface/retrospective-setValueAtTime.html",
         "url": "/webaudio/the-audio-api/the-audioparam-interface/retrospective-setValueAtTime.html"
+      },
+      {
+        "path": "webaudio/the-audio-api/the-audionode-interface/audionode-connect-return-value.html",
+        "url": "/webaudio/the-audio-api/the-audionode-interface/audionode-connect-return-value.html"
       },
       {
         "path": "webaudio/the-audio-api/the-delaynode-interface/idl-test.html",

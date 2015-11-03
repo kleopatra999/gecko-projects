@@ -72,7 +72,7 @@ protected:
   // Used to retrieve some special information that can only be retrieved after
   // all contents have been continuously parsed. (ex. total duration of some
   // variable-bit-rate MP3 files.)
-  virtual void NotifyDataArrivedInternal(uint32_t aLength, int64_t aOffset) override;
+  virtual void NotifyDataArrivedInternal() override;
 public:
 
   // Flush the TaskQueue, flush MediaCodec and raise the mDiscontinuity.
@@ -340,7 +340,6 @@ private:
   RefPtr<MediaResourcePromise> CreateMediaCodecs();
   static bool CreateMediaCodec(android::sp<android::ALooper>& aLooper,
                                Track& aTrack,
-                               bool aAsync,
                                bool& aIsWaiting,
                                android::wp<android::MediaCodecProxy::CodecResourceListener> aListener);
   static bool ConfigureMediaCodec(Track& aTrack);

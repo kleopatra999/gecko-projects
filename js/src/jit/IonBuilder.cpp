@@ -189,12 +189,16 @@ bool
 IonBuilder::abort(const char* message, ...)
 {
     // Don't call PCToLineNumber in release builds.
-#ifdef DEBUG
+#ifdef JS_JITSPEW
     va_list ap;
     va_start(ap, message);
     abortFmt(message, ap);
     va_end(ap);
+# ifdef DEBUG
     JitSpew(JitSpew_IonAbort, "aborted @ %s:%d", script()->filename(), PCToLineNumber(script(), pc));
+# else
+    JitSpew(JitSpew_IonAbort, "aborted @ %s", script()->filename());
+# endif
 #endif
     trackActionableAbort(message);
     return false;
@@ -803,7 +807,7 @@ IonBuilder::build()
     if (!current)
         return false;
 
-#ifdef DEBUG
+#ifdef JS_JITSPEW
     if (info().isAnalysis()) {
         JitSpew(JitSpew_IonScripts, "Analyzing script %s:%" PRIuSIZE " (%p) %s",
                 script()->filename(), script()->lineno(), (void*)script(),
@@ -1586,10 +1590,6 @@ IonBuilder::snoopControlFlow(JSOp op)
       case JSOP_THROW:
         return processThrow();
 
-      case JSOP_THROWSETCONST:
-      case JSOP_THROWSETALIASEDCONST:
-        return processThrowSetConst();
-
       case JSOP_GOTO:
       {
         jssrcnote* sn = info().getNote(gsn, pc);
@@ -1777,6 +1777,10 @@ IonBuilder::inspectOpcode(JSOp op)
       case JSOP_SETLOCAL:
         current->setLocal(GET_LOCALNO(pc));
         return true;
+
+      case JSOP_THROWSETCONST:
+      case JSOP_THROWSETALIASEDCONST:
+        return jsop_throwsetconst();
 
       case JSOP_CHECKLEXICAL:
         return jsop_checklexical();
@@ -3241,8 +3245,8 @@ IonBuilder::whileOrForInLoop(jssrcnote* sn)
 IonBuilder::ControlStatus
 IonBuilder::forLoop(JSOp op, jssrcnote* sn)
 {
-    // Skip the NOP or POP.
-    MOZ_ASSERT(op == JSOP_POP || op == JSOP_NOP);
+    // Skip the NOP.
+    MOZ_ASSERT(op == JSOP_NOP);
     pc = GetNextPc(pc);
 
     jsbytecode* condpc = pc + GetSrcNoteOffset(sn, 0);
@@ -10582,7 +10586,7 @@ IonBuilder::annotateGetPropertyCache(MDefinition* obj, PropertyName* name,
         return true;
     }
 
-#ifdef DEBUG
+#ifdef JS_JITSPEW
     if (inlinePropTable->numEntries() > 0)
         JitSpew(JitSpew_Inlining, "Annotated GetPropertyCache with %d/%d inline cases",
                                     (int) inlinePropTable->numEntries(), (int) objCount);
@@ -12740,20 +12744,13 @@ IonBuilder::jsop_deffun(uint32_t index)
     return resumeAfter(deffun);
 }
 
-IonBuilder::ControlStatus
-IonBuilder::processThrowSetConst()
+bool
+IonBuilder::jsop_throwsetconst()
 {
     current->peek(-1)->setImplicitlyUsedUnchecked();
     MInstruction* lexicalError = MThrowRuntimeLexicalError::New(alloc(), JSMSG_BAD_CONST_ASSIGN);
     current->add(lexicalError);
-    if (!resumeAfter(lexicalError))
-        return ControlStatus_Error;
-
-    current->end(MUnreachable::New(alloc()));
-
-    // Make sure no one tries to use this block now.
-    setCurrent(nullptr);
-    return processControlEnd();
+    return resumeAfter(lexicalError);
 }
 
 bool

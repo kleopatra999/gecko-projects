@@ -273,15 +273,15 @@ AppleATDecoder::DecodeSample(MediaRawData* aSample)
       duration.ToSeconds());
 #endif
 
-  nsAutoArrayPtr<AudioDataValue> data(new AudioDataValue[outputData.Length()]);
+  auto data = MakeUnique<AudioDataValue[]>(outputData.Length());
   PodCopy(data.get(), &outputData[0], outputData.Length());
   RefPtr<AudioData> audio = new AudioData(aSample->mOffset,
-                                            aSample->mTime,
-                                            duration.ToMicroseconds(),
-                                            numFrames,
-                                            data.forget(),
-                                            channels,
-                                            rate);
+                                          aSample->mTime,
+                                          duration.ToMicroseconds(),
+                                          numFrames,
+                                          Move(data),
+                                          channels,
+                                          rate);
   mCallback->Output(audio);
   return NS_OK;
 }
@@ -397,6 +397,9 @@ AppleATDecoder::SetupDecoder(MediaRawData* aSample)
   mOutputFormat.mFormatFlags =
     kLinearPCMFormatFlagIsFloat |
     0;
+#elif defined(MOZ_SAMPLE_TYPE_S16)
+  mOutputFormat.mBitsPerChannel = 16;
+  mOutputFormat.mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | 0;
 #else
 # error Unknown audio sample type
 #endif

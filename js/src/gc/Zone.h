@@ -48,7 +48,8 @@ class ZoneHeapThreshold
     double allocTrigger(bool highFrequencyGC) const;
 
     void updateAfterGC(size_t lastBytes, JSGCInvocationKind gckind,
-                       const GCSchedulingTunables& tunables, const GCSchedulingState& state);
+                       const GCSchedulingTunables& tunables, const GCSchedulingState& state,
+                       const AutoLockGC& lock);
     void updateForRemovedArena(const GCSchedulingTunables& tunables);
 
   private:
@@ -57,7 +58,8 @@ class ZoneHeapThreshold
                                                          const GCSchedulingState& state);
     static size_t computeZoneTriggerBytes(double growthFactor, size_t lastBytes,
                                           JSGCInvocationKind gckind,
-                                          const GCSchedulingTunables& tunables);
+                                          const GCSchedulingTunables& tunables,
+                                          const AutoLockGC& lock);
 };
 
 // Maps a Cell* to a unique, 64bit id.
@@ -298,6 +300,12 @@ struct Zone : public JS::shadow::Zone,
     // preserved for re-scanning during sweeping.
     using WeakEdges = js::Vector<js::gc::TenuredCell**, 0, js::SystemAllocPolicy>;
     WeakEdges gcWeakRefs;
+
+    /*
+     * Mapping from not yet marked keys to a vector of all values that the key
+     * maps to in any live weak map.
+     */
+    js::gc::WeakKeyTable gcWeakKeys;
 
     // A set of edges from this zone to other zones.
     //

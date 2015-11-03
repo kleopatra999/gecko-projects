@@ -18,6 +18,7 @@
 
 #include "gc/Marking.h"
 #include "jit/JitCompartment.h"
+#include "js/Date.h"
 #include "js/Proxy.h"
 #include "js/RootingAPI.h"
 #include "proxy/DeadObjectProxy.h"
@@ -48,6 +49,7 @@ JSCompartment::JSCompartment(Zone* zone, const JS::CompartmentOptions& options =
     marked(true),
     warnedAboutNoSuchMethod(false),
     warnedAboutFlagsArgument(false),
+    warnedAboutExprClosure(false),
     addonId(options.addonIdOrNull()),
 #ifdef DEBUG
     firedOnNewGlobalObject(false),
@@ -120,11 +122,10 @@ JSCompartment::init(JSContext* maybecx)
      *
      * As a hack, we clear our timezone cache every time we create a new
      * compartment. This ensures that the cache is always relatively fresh, but
-     * shouldn't interfere with benchmarks which create tons of date objects
+     * shouldn't interfere with benchmarks that create tons of date objects
      * (unless they also create tons of iframes, which seems unlikely).
      */
-    if (maybecx)
-        maybecx->runtime()->dateTimeInfo.updateTimeZoneAdjustment();
+    JS::ResetTimeZone();
 
     if (!crossCompartmentWrappers.init(0)) {
         if (maybecx)
@@ -447,7 +448,6 @@ JSCompartment::wrap(JSContext* cx, MutableHandleObject obj, HandleObject existin
     if (obj->compartment() == this)
         return true;
 
-
     // If we already have a wrapper for this value, use it.
     RootedValue key(cx, ObjectValue(*obj));
     if (WrapperMap::Ptr p = crossCompartmentWrappers.lookup(CrossCompartmentKey(key))) {
@@ -468,15 +468,27 @@ JSCompartment::wrap(JSContext* cx, MutableHandleObject obj, HandleObject existin
         }
     }
 
-    obj.set(cb->wrap(cx, existing, obj));
-    if (!obj)
+    RootedObject wrapper(cx, cb->wrap(cx, existing, obj));
+    if (!wrapper)
         return false;
 
     // We maintain the invariant that the key in the cross-compartment wrapper
     // map is always directly wrapped by the value.
-    MOZ_ASSERT(Wrapper::wrappedObject(obj) == &key.get().toObject());
+    MOZ_ASSERT(Wrapper::wrappedObject(wrapper) == &key.get().toObject());
 
-    return putWrapper(cx, CrossCompartmentKey(key), ObjectValue(*obj));
+    if (!putWrapper(cx, CrossCompartmentKey(key), ObjectValue(*wrapper))) {
+        // Enforce the invariant that all cross-compartment wrapper object are
+        // in the map by nuking the wrapper if we couldn't add it.
+        // Unfortunately it's possible for the wrapper to still be marked if we
+        // took this path, for example if the object metadata callback stashes a
+        // reference to it.
+        if (wrapper->is<CrossCompartmentWrapperObject>())
+            NukeCrossCompartmentWrapper(cx, wrapper);
+        return false;
+    }
+
+    obj.set(wrapper);
+    return true;
 }
 
 bool

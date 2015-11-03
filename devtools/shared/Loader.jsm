@@ -87,9 +87,7 @@ BuiltinProvider.prototype = {
         // ⚠ DISCUSSION ON DEV-DEVELOPER-TOOLS REQUIRED BEFORE MODIFYING ⚠
         "devtools": "resource://devtools",
         // ⚠ DISCUSSION ON DEV-DEVELOPER-TOOLS REQUIRED BEFORE MODIFYING ⚠
-        "devtools/client": "resource://devtools/client",
-        // ⚠ DISCUSSION ON DEV-DEVELOPER-TOOLS REQUIRED BEFORE MODIFYING ⚠
-        "gcli": "resource://devtools/gcli",
+        "gcli": "resource://devtools/shared/gcli/source/lib/gcli",
         // ⚠ DISCUSSION ON DEV-DEVELOPER-TOOLS REQUIRED BEFORE MODIFYING ⚠
         "promise": "resource://gre/modules/Promise-backend.js",
         // ⚠ DISCUSSION ON DEV-DEVELOPER-TOOLS REQUIRED BEFORE MODIFYING ⚠
@@ -211,8 +209,7 @@ SrcdirProvider.prototype = {
       let entries = [];
       let lines = data.split(/\n/);
       let preprocessed = /^\s*\*/;
-      let contentEntry =
-        new RegExp("^\\s+content/(\\w+)/(\\S+)\\s+\\((\\S+)\\)");
+      let contentEntry = /^\s+content\/(\S+)\s+\((\S+)\)/;
       for (let line of lines) {
         if (preprocessed.test(line)) {
           dump("Unable to override preprocessed file: " + line + "\n");
@@ -220,12 +217,12 @@ SrcdirProvider.prototype = {
         }
         let match = contentEntry.exec(line);
         if (match) {
-          let pathComponents = match[3].split("/");
+          let pathComponents = match[2].split("/");
           pathComponents.unshift(clientDir);
           let path = OS.Path.join.apply(OS.Path, pathComponents);
           let uri = this.fileURI(path);
-          let entry = "override chrome://" + match[1] +
-                      "/content/" + match[2] + "\t" + uri;
+          let chromeURI = "chrome://devtools/content/" + match[1];
+          let entry = "override " + chromeURI + "\t" + uri;
           entries.push(entry);
         }
       }
@@ -429,12 +426,22 @@ DevToolsLoader.prototype = {
     this._chooseProvider();
     this.main("devtools/client/main");
 
-    // Reopen the toolbox automatically if requested
-    if (showToolbox) {
-      let { gBrowser } = Services.wm.getMostRecentWindow("navigator:browser");
-      let target = this.TargetFactory.forTab(gBrowser.selectedTab);
-      const { gDevTools } = this.require("resource://devtools/client/framework/gDevTools.jsm");
-      gDevTools.showToolbox(target);
+    let window = Services.wm.getMostRecentWindow(null);
+    let location = window.location.href;
+    if (location.includes("/browser.xul") && showToolbox) {
+      // Reopen the toolbox automatically if we are reloading from toolbox shortcut
+      // and are on a browser window.
+      // Wait for a second before opening the toolbox to avoid races
+      // between the old and the new one.
+      let {setTimeout} = Cu.import("resource://gre/modules/Timer.jsm", {});
+      setTimeout(() => {
+        let { gBrowser } = window;
+        let target = this.TargetFactory.forTab(gBrowser.selectedTab);
+        const { gDevTools } = this.require("resource://devtools/client/framework/gDevTools.jsm");
+        gDevTools.showToolbox(target);
+      }, 1000);
+    } else if (location.includes("/webide.xul")) {
+      window.location.reload();
     }
   },
 

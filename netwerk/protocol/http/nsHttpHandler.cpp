@@ -29,6 +29,7 @@
 #include "nsCOMPtr.h"
 #include "nsNetCID.h"
 #include "prprf.h"
+#include "mozilla/Snprintf.h"
 #include "nsAsyncRedirectVerifyHelper.h"
 #include "nsSocketTransportService2.h"
 #include "nsAlgorithm.h"
@@ -101,6 +102,8 @@ extern PRThread *gSocketThread;
 
 namespace mozilla {
 namespace net {
+
+LazyLogModule gHttpLog("nsHttp");
 
 static nsresult
 NewURI(const nsACString &aSpec,
@@ -215,8 +218,6 @@ nsHttpHandler::nsHttpHandler()
     , mTCPKeepaliveLongLivedIdleTimeS(600)
     , mEnforceH1Framing(FRAMECHECK_BARELY)
 {
-    gHttpLog = PR_NewLogModule("nsHttp");
-
     LOG(("Creating nsHttpHandler [this=%p].\n", this));
 
     RegisterStrongMemoryReporter(new SpdyZlibReporter());
@@ -430,16 +431,19 @@ nsHttpHandler::AddStandardRequestHeaders(nsHttpHeaderArray *request, bool isSecu
     if (NS_FAILED(rv)) return rv;
 
     // MIME based content negotiation lives!
-    // Add the "Accept" header
+    // Add the "Accept" header.  Note, this is set as an override because the
+    // service worker expects to see it.  The other "default" headers are
+    // hidden from service worker interception.
     rv = request->SetHeader(nsHttp::Accept, mAccept,
-                            false, nsHttpHeaderArray::eVarietyDefault);
+                            false, nsHttpHeaderArray::eVarietyOverride);
     if (NS_FAILED(rv)) return rv;
 
-    // Add the "Accept-Language" header
+    // Add the "Accept-Language" header.  This header is also exposed to the
+    // service worker.
     if (!mAcceptLanguages.IsEmpty()) {
         // Add the "Accept-Language" header
         rv = request->SetHeader(nsHttp::Accept_Language, mAcceptLanguages,
-                                false, nsHttpHeaderArray::eVarietyDefault);
+                                false, nsHttpHeaderArray::eVarietyOverride);
         if (NS_FAILED(rv)) return rv;
     }
 
@@ -738,6 +742,7 @@ nsHttpHandler::InitUserAgentComponents()
     nsresult rv;
     // Add the Android version number to the Fennec platform identifier.
 #if defined MOZ_WIDGET_ANDROID
+#ifndef MOZ_UA_OS_AGNOSTIC // Don't add anything to mPlatform since it's empty.
     nsAutoString androidVersion;
     rv = infoService->GetPropertyAsAString(
         NS_LITERAL_STRING("release_version"), androidVersion);
@@ -752,6 +757,7 @@ nsHttpHandler::InitUserAgentComponents()
         mPlatform += NS_LossyConvertUTF16toASCII(androidVersion);
       }
     }
+#endif
 #endif
     // Add the `Mobile` or `Tablet` or `TV` token when running on device.
     bool isTablet;
@@ -1759,9 +1765,9 @@ PrepareAcceptLanguages(const char *i_AcceptLanguages, nsACString &o_AcceptLangua
                     qval_str = "%s%s;q=0.%02u";
                 }
 
-                wrote = PR_snprintf(p2, available, qval_str, comma, token, u);
+                wrote = snprintf(p2, available, qval_str, comma, token, u);
             } else {
-                wrote = PR_snprintf(p2, available, "%s%s", comma, token);
+                wrote = snprintf(p2, available, "%s%s", comma, token);
             }
 
             q -= dec;

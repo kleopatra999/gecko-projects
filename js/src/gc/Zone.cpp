@@ -48,7 +48,8 @@ JS::Zone::Zone(JSRuntime* rt)
     MOZ_ASSERT(reinterpret_cast<JS::shadow::Zone*>(this) ==
                static_cast<JS::shadow::Zone*>(this));
 
-    threshold.updateAfterGC(8192, GC_NORMAL, rt->gc.tunables, rt->gc.schedulingState);
+    AutoLockGC lock(rt);
+    threshold.updateAfterGC(8192, GC_NORMAL, rt->gc.tunables, rt->gc.schedulingState, lock);
     setGCMaxMallocBytes(rt->gc.maxMallocBytesAllocated() * 0.9);
 }
 
@@ -65,7 +66,7 @@ Zone::~Zone()
 bool Zone::init(bool isSystemArg)
 {
     isSystem = isSystemArg;
-    return uniqueIds_.init() && gcZoneGroupEdges.init();
+    return uniqueIds_.init() && gcZoneGroupEdges.init() && gcWeakKeys.init();
 }
 
 void

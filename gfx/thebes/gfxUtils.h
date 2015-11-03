@@ -10,6 +10,7 @@
 #include "imgIContainer.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "nsColor.h"
 #include "nsPrintfCString.h"
 #include "mozilla/gfx/Rect.h"
@@ -282,10 +283,9 @@ public:
     static nsCString GetAsDataURI(DrawTarget* aDT);
     static nsCString GetAsLZ4Base64Str(DataSourceSurface* aSourceSurface);
 
-    static void GetImageBuffer(DataSourceSurface* aSurface,
-                               bool aIsAlphaPremultiplied,
-                               uint8_t** outImageBuffer,
-                               int32_t* outFormat);
+    static mozilla::UniquePtr<uint8_t[]> GetImageBuffer(DataSourceSurface* aSurface,
+                                                        bool aIsAlphaPremultiplied,
+                                                        int32_t* outFormat);
 
     static nsresult GetInputStream(DataSourceSurface* aSurface,
                                    bool aIsAlphaPremultiplied,
@@ -305,16 +305,6 @@ public:
 
     static bool DumpDisplayList();
 
-    static bool sDumpPainting;
-    static bool sDumpPaintingIntermediate;
-    static bool sDumpPaintingToFile;
-    static bool sDumpPaintItems;
-    // TODO: Dumping compositor textures is broken pretty badly. For example,
-    //       on Linux it crashes because TextureHost::GetAsSurface() returns
-    //       null. Expect to have to fix things like this if you turn it on.
-    //       Meanwhile, content-side texture dumping (conditioned on
-    //       sDumpPainting) is a good replacement.
-    static bool sDumpCompositorTextures;
     static FILE* sDumpPaintFile;
 };
 

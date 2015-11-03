@@ -36,6 +36,7 @@
 #include "mozilla/CheckedInt.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/LoadInfo.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/DocumentFragment.h"
 #include "mozilla/dom/DOMTypes.h"
 #include "mozilla/dom/Element.h"
@@ -188,6 +189,7 @@
 #include "nsViewManager.h"
 #include "nsViewportInfo.h"
 #include "nsWidgetsCID.h"
+#include "nsIWindowProvider.h"
 #include "nsWrapperCacheInlines.h"
 #include "nsXULPopupManager.h"
 #include "xpcprivate.h" // nsXPConnect
@@ -3126,7 +3128,8 @@ nsContentUtils::IsImageInCache(nsIURI* aURI, nsIDocument* aDocument)
     // If something unexpected happened we return false, otherwise if props
     // is set, the image is cached and we return true
     nsCOMPtr<nsIProperties> props;
-    nsresult rv = cache->FindEntryProperties(aURI, getter_AddRefs(props));
+    nsCOMPtr<nsIDOMDocument> domDoc = do_QueryInterface(aDocument);
+    nsresult rv = cache->FindEntryProperties(aURI, domDoc, getter_AddRefs(props));
     return (NS_SUCCEEDED(rv) && props);
 }
 
@@ -3475,42 +3478,6 @@ nsContentUtils::ReportToConsole(uint32_t aErrorFlags,
   return ReportToConsoleNonLocalized(errorText, aErrorFlags, aCategory,
                                      aDocument, aURI, aSourceLine,
                                      aLineNumber, aColumnNumber);
-}
-
-/* static */ nsresult
-nsContentUtils::MaybeReportInterceptionErrorToConsole(nsIDocument* aDocument,
-                                                      nsresult aError)
-{
-  const char* messageName = nullptr;
-  if (aError == NS_ERROR_INTERCEPTION_FAILED) {
-    messageName = "InterceptionFailed";
-  } else if (aError == NS_ERROR_OPAQUE_INTERCEPTION_DISABLED) {
-    messageName = "OpaqueInterceptionDisabled";
-  } else if (aError == NS_ERROR_BAD_OPAQUE_INTERCEPTION_REQUEST_MODE) {
-    messageName = "BadOpaqueInterceptionRequestMode";
-  } else if (aError == NS_ERROR_INTERCEPTED_ERROR_RESPONSE) {
-    messageName = "InterceptedErrorResponse";
-  } else if (aError == NS_ERROR_INTERCEPTED_USED_RESPONSE) {
-    messageName = "InterceptedUsedResponse";
-  } else if (aError == NS_ERROR_CLIENT_REQUEST_OPAQUE_INTERCEPTION) {
-    messageName = "ClientRequestOpaqueInterception";
-  } else if (aError == NS_ERROR_BAD_OPAQUE_REDIRECT_INTERCEPTION) {
-    messageName = "BadOpaqueRedirectInterception";
-  } else if (aError == NS_ERROR_INTERCEPTION_CANCELED) {
-    messageName = "InterceptionCanceled";
-  } else if (aError == NS_ERROR_REJECTED_RESPONSE_INTERCEPTION) {
-    messageName = "InterceptionRejectedResponse";
-  }
-
-  if (messageName) {
-    return ReportToConsole(nsIScriptError::warningFlag,
-                           NS_LITERAL_CSTRING("Service Worker Interception"),
-                           aDocument,
-                           nsContentUtils::eDOM_PROPERTIES,
-                           messageName);
-  }
-
-  return NS_OK;
 }
 
 
@@ -5204,6 +5171,14 @@ nsContentUtils::RemoveScriptBlocker()
   sRemovingScriptBlockers = true;
 #endif
   sBlockedScriptRunners->RemoveElementsAt(originalFirstBlocker, blockersCount);
+}
+
+/* static */
+nsIWindowProvider*
+nsContentUtils::GetWindowProviderForContentProcess()
+{
+  MOZ_ASSERT(XRE_IsContentProcess());
+  return ContentChild::GetSingleton();
 }
 
 /* static */
@@ -7372,6 +7347,7 @@ nsContentUtils::CallOnAllRemoteChildren(nsIDOMWindow* aWindow,
 void
 nsContentUtils::TransferablesToIPCTransferables(nsISupportsArray* aTransferables,
                                                 nsTArray<IPCDataTransfer>& aIPC,
+                                                bool aInSyncMessage,
                                                 mozilla::dom::nsIContentChild* aChild,
                                                 mozilla::dom::nsIContentParent* aParent)
 {
@@ -7384,14 +7360,71 @@ nsContentUtils::TransferablesToIPCTransferables(nsISupportsArray* aTransferables
       nsCOMPtr<nsISupports> genericItem;
       aTransferables->GetElementAt(i, getter_AddRefs(genericItem));
       nsCOMPtr<nsITransferable> transferable(do_QueryInterface(genericItem));
-      TransferableToIPCTransferable(transferable, dt, aChild, aParent);
+      TransferableToIPCTransferable(transferable, dt, aInSyncMessage, aChild, aParent);
     }
   }
+}
+
+nsresult
+nsContentUtils::SlurpFileToString(nsIFile* aFile, nsACString& aString)
+{
+  aString.Truncate();
+
+  nsCOMPtr<nsIURI> fileURI;
+  nsresult rv = NS_NewFileURI(getter_AddRefs(fileURI), aFile);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  nsCOMPtr<nsIChannel> channel;
+  rv = NS_NewChannel(getter_AddRefs(channel),
+                     fileURI,
+                     nsContentUtils::GetSystemPrincipal(),
+                     nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_DATA_IS_NULL,
+                     nsIContentPolicy::TYPE_OTHER);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  nsCOMPtr<nsIInputStream> stream;
+  rv = channel->Open2(getter_AddRefs(stream));
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  rv = NS_ConsumeStream(stream, UINT32_MAX, aString);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  rv = stream->Close();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  return NS_OK;
+}
+
+bool
+nsContentUtils::IsFileImage(nsIFile* aFile, nsACString& aType)
+{
+  nsCOMPtr<nsIMIMEService> mime = do_GetService("@mozilla.org/mime;1");
+  if (!mime) {
+    return false;
+  }
+
+  nsresult rv = mime->GetTypeFromFile(aFile, aType);
+  if (NS_FAILED(rv)) {
+    return false;
+  }
+
+  return StringBeginsWith(aType, NS_LITERAL_CSTRING("image/"));
 }
 
 void
 nsContentUtils::TransferableToIPCTransferable(nsITransferable* aTransferable,
                                               IPCDataTransfer* aIPCDataTransfer,
+                                              bool aInSyncMessage,
                                               mozilla::dom::nsIContentChild* aChild,
                                               mozilla::dom::nsIContentParent* aParent)
 {
@@ -7465,7 +7498,7 @@ nsContentUtils::TransferableToIPCTransferable(nsITransferable* aTransferable,
               int32_t stride;
               mozilla::UniquePtr<char[]> surfaceData =
                 nsContentUtils::GetSurfaceData(dataSurface, &length, &stride);
-              
+
               IPCDataTransferItem* item = aIPCDataTransfer->items().AppendElement();
               item->flavor() = nsCString(flavorStr);
               item->data() = nsCString(surfaceData.get(), length);
@@ -7485,6 +7518,22 @@ nsContentUtils::TransferableToIPCTransferable(nsITransferable* aTransferable,
           nsCOMPtr<BlobImpl> blobImpl;
           nsCOMPtr<nsIFile> file = do_QueryInterface(data);
           if (file) {
+            // If we can send this over as a blob, do so. Otherwise, we're
+            // responding to a sync message and the child can't process the blob
+            // constructor before processing our response, which would crash. In
+            // that case, hope that the caller is nsClipboardProxy::GetData,
+            // called from editor and send over images as raw data.
+            if (aInSyncMessage) {
+              nsAutoCString type;
+              if (IsFileImage(file, type)) {
+                IPCDataTransferItem* item = aIPCDataTransfer->items().AppendElement();
+                item->flavor() = type;
+                SlurpFileToString(file, item->data());
+              }
+
+              continue;
+            }
+
             blobImpl = new BlobImplFile(file, false);
             ErrorResult rv;
             // Ensure that file data is cached no that the content process
@@ -7493,6 +7542,10 @@ nsContentUtils::TransferableToIPCTransferable(nsITransferable* aTransferable,
             blobImpl->GetLastModified(rv);
             blobImpl->LookupAndCacheIsDirectory();
           } else {
+            if (aInSyncMessage) {
+              // Can't do anything.
+              continue;
+            }
             blobImpl = do_QueryInterface(data);
           }
           if (blobImpl) {
