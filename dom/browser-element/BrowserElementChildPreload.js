@@ -19,8 +19,17 @@ Cu.import("resource://gre/modules/ExtensionContent.jsm");
 XPCOMUtils.defineLazyServiceGetter(this, "acs",
                                    "@mozilla.org/audiochannel/service;1",
                                    "nsIAudioChannelService");
+XPCOMUtils.defineLazyModuleGetter(this, "ManifestFinder",
+                                  "resource://gre/modules/ManifestFinder.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "ManifestObtainer",
+                                  "resource://gre/modules/ManifestObtainer.jsm");
+
 
 var kLongestReturnedString = 128;
+
+const Timer = Components.Constructor("@mozilla.org/timer;1",
+                                     "nsITimer",
+                                     "initWithCallback");
 
 function debug(msg) {
   //dump("BrowserElementChildPreload - " + msg + "\n");
@@ -60,7 +69,8 @@ const OBSERVED_EVENTS = [
   'xpcom-shutdown',
   'audio-playback',
   'activity-done',
-  'invalid-widget'
+  'invalid-widget',
+  'will-launch-app'
 ];
 
 const COMMAND_MAP = {
@@ -289,7 +299,8 @@ BrowserElementChild.prototype = {
       "get-audio-channel-muted": this._recvGetAudioChannelMuted,
       "set-audio-channel-muted": this._recvSetAudioChannelMuted,
       "get-is-audio-channel-active": this._recvIsAudioChannelActive,
-      "get-structured-data": this._recvGetStructuredData
+      "get-structured-data": this._recvGetStructuredData,
+      "get-web-manifest": this._recvGetWebManifest,
     }
 
     addMessageListener("browser-element-api:call", function(aMessage) {
@@ -326,11 +337,14 @@ BrowserElementChild.prototype = {
     this.forwarder.init();
   },
 
+  _paintFrozenTimer: null,
   observe: function(subject, topic, data) {
     // Ignore notifications not about our document.  (Note that |content| /can/
     // be null; see bug 874900.)
 
-    if (topic !== 'activity-done' && topic !== 'audio-playback' &&
+    if (topic !== 'activity-done' &&
+        topic !== 'audio-playback' &&
+        topic !== 'will-launch-app' &&
         (!content || subject !== content.document)) {
       return;
     }
@@ -351,7 +365,24 @@ BrowserElementChild.prototype = {
       case 'invalid-widget':
         sendAsyncMsg('error', { type: 'invalid-widget' });
         break;
+      case 'will-launch-app':
+        // If the launcher is not visible, let's ignore the message.
+        if (!docShell.isActive) {
+          return;
+        }
+
+        docShell.contentViewer.pausePainting();
+
+        this._paintFrozenTimer && this._paintFrozenTimer.cancel();
+        this._paintFrozenTimer = new Timer(this, 3000, Ci.nsITimer.TYPE_ONE_SHOT);
+        break;
     }
+  },
+
+  notify: function(timer) {
+    docShell.contentViewer.resumePainting();
+    this._paintFrozenTimer.cancel();
+    this._paintFrozenTimer = null;
   },
 
   /**
@@ -1372,6 +1403,11 @@ BrowserElementChild.prototype = {
     if (docShell && docShell.isActive !== visible) {
       docShell.isActive = visible;
       sendAsyncMsg('visibilitychange', {visible: visible});
+
+      // Ensure painting is not frozen if the app goes visible.
+      if (visible && this._paintFrozenTimer) {
+        this.notify();
+      }
     }
   },
 
@@ -1527,7 +1563,26 @@ BrowserElementChild.prototype = {
       id: data.json.id, successRv: active
     });
   },
-
+  _recvGetWebManifest: Task.async(function* (data) {
+    debug(`Received GetWebManifest message: (${data.json.id})`);
+    let manifest = null;
+    let hasManifest = ManifestFinder.contentHasManifestLink(content);
+    if (hasManifest) {
+      try {
+        manifest = yield ManifestObtainer.contentObtainManifest(content);
+      } catch (e) {
+        sendAsyncMsg('got-web-manifest', {
+          id: data.json.id,
+          errorMsg: `Error fetching web manifest: ${e}.`,
+        });
+        return;
+      }
+    }
+    sendAsyncMsg('got-web-manifest', {
+      id: data.json.id,
+      successRv: manifest
+    });
+  }),
   _initFinder: function() {
     if (!this._finder) {
       try {

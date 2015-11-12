@@ -66,12 +66,12 @@ public:
               BluetoothReplyRunnable* aRunnable);
 
   virtual nsresult
-  GetServiceChannel(const nsAString& aDeviceAddress,
-                    const nsAString& aServiceUuid,
+  GetServiceChannel(const BluetoothAddress& aDeviceAddress,
+                    const BluetoothUuid& aServiceUuid,
                     BluetoothProfileManagerBase* aManager);
 
   virtual bool
-  UpdateSdpRecords(const nsAString& aDeviceAddress,
+  UpdateSdpRecords(const BluetoothAddress& aDeviceAddress,
                    BluetoothProfileManagerBase* aManager);
 
   virtual nsresult
@@ -148,6 +148,13 @@ public:
   IsScoConnected(BluetoothReplyRunnable* aRunnable);
 
   virtual void
+  SetObexPassword(const nsAString& aPassword,
+                  BluetoothReplyRunnable* aRunnable);
+
+  virtual void
+  RejectObexAuth(BluetoothReplyRunnable* aRunnable);
+
+  virtual void
   ReplyTovCardPulling(BlobParent* aBlobParent,
                       BlobChild* aBlobChild,
                       BluetoothReplyRunnable* aRunnable);
@@ -217,8 +224,10 @@ public:
                              BluetoothReplyRunnable* aRunnable);
 
   virtual void
-  ReplyToMapSendMessage(
-    long aMasId, bool aStatus, BluetoothReplyRunnable* aRunnable);
+  ReplyToMapSendMessage(long aMasId,
+                        const nsAString& aHandleId,
+                        bool aStatus,
+                        BluetoothReplyRunnable* aRunnable);
 
   virtual void
   ReplyToMapMessageUpdate(

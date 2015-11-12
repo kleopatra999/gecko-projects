@@ -283,17 +283,21 @@ GetLayerFixedMarginsOffset(Layer* aLayer,
   // Because fixed layer margins are stored relative to the root scrollable
   // layer, we can just take the difference between these values.
   LayerPoint translation;
-  const LayerPoint& anchor = aLayer->GetFixedPositionAnchor();
+  int32_t sides = aLayer->GetFixedPositionSides();
 
-  if (anchor.x > 0) {
+  if ((sides & eSideBitsLeftRight) == eSideBitsLeftRight) {
+    translation.x += (aFixedLayerMargins.left - aFixedLayerMargins.right) / 2;
+  } else if (sides & eSideBitsRight) {
     translation.x -= aFixedLayerMargins.right;
-  } else {
+  } else if (sides & eSideBitsLeft) {
     translation.x += aFixedLayerMargins.left;
   }
 
-  if (anchor.y > 0) {
+  if ((sides & eSideBitsTopBottom) == eSideBitsTopBottom) {
+    translation.y += (aFixedLayerMargins.top - aFixedLayerMargins.bottom) / 2;
+  } else if (sides & eSideBitsBottom) {
     translation.y -= aFixedLayerMargins.bottom;
-  } else {
+  } else if (sides & eSideBitsTop) {
     translation.y += aFixedLayerMargins.top;
   }
 
@@ -589,19 +593,20 @@ SampleAnimations(Layer* aLayer, TimeStamp aPoint)
       dom::KeyframeEffectReadOnly::GetComputedTimingAt(
         Nullable<TimeDuration>(elapsedDuration), timing);
 
-    MOZ_ASSERT(0.0 <= computedTiming.mProgress &&
-               computedTiming.mProgress <= 1.0,
+    MOZ_ASSERT(!computedTiming.mProgress.IsNull() &&
+               0.0 <= computedTiming.mProgress.Value() &&
+               computedTiming.mProgress.Value() <= 1.0,
                "iteration progress should be in [0-1]");
 
     int segmentIndex = 0;
     AnimationSegment* segment = animation.segments().Elements();
-    while (segment->endPortion() < computedTiming.mProgress) {
+    while (segment->endPortion() < computedTiming.mProgress.Value()) {
       ++segment;
       ++segmentIndex;
     }
 
     double positionInSegment =
-      (computedTiming.mProgress - segment->startPortion()) /
+      (computedTiming.mProgress.Value() - segment->startPortion()) /
       (segment->endPortion() - segment->startPortion());
 
     double portion =
@@ -817,9 +822,9 @@ AsyncCompositionManager::ApplyAsyncContentTransformToTree(Layer *aLayer,
               geckoZoom * asyncTransformWithoutOverscroll.mScale,
               metrics.GetScrollableRect(), displayPort, geckoZoom, mLayersUpdated,
               mPaintSyncId, fixedLayerMargins);
+          mLayersUpdated = false;
         }
         mIsFirstPaint = false;
-        mLayersUpdated = false;
         mPaintSyncId = 0;
       }
     }

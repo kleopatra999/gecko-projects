@@ -64,6 +64,7 @@ import android.hardware.SensorEventListener;
 import android.location.Location;
 import android.location.LocationListener;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -168,6 +169,8 @@ public abstract class GeckoApp
     // Delay before running one-time "cleanup" tasks that may be needed
     // after a version upgrade.
     private static final int CLEANUP_DEFERRAL_SECONDS = 15;
+
+    private static boolean sAlreadyLoaded;
 
     protected RelativeLayout mRootLayout;
     protected RelativeLayout mMainLayout;
@@ -1220,6 +1223,14 @@ public abstract class GeckoApp
             enableStrictMode();
         }
 
+        if (!isSupportedSDK()) {
+            // This build does not support the Android version of the device: Show an error and finish the app.
+            super.onCreate(savedInstanceState);
+            showSDKVersionError();
+            finish();
+            return;
+        }
+
         // The clock starts...now. Better hurry!
         mJavaUiStartupTimer = new Telemetry.UptimeTimer("FENNEC_STARTUP_TIME_JAVAUI");
         mGeckoReadyStartupTimer = new Telemetry.UptimeTimer("FENNEC_STARTUP_TIME_GECKOREADY");
@@ -1269,6 +1280,7 @@ public abstract class GeckoApp
         // When that's fixed, `this` can change to
         // `(GeckoApplication) getApplication()` here.
         GeckoAppShell.setContextGetter(this);
+        GeckoAppShell.setApplicationContext(getApplicationContext());
         GeckoAppShell.setGeckoInterface(this);
 
         Tabs.getInstance().attachToContext(this);
@@ -1292,7 +1304,7 @@ public abstract class GeckoApp
             return;
         }
 
-        if (GeckoThread.isLaunched()) {
+        if (sAlreadyLoaded) {
             // This happens when the GeckoApp activity is destroyed by Android
             // without killing the entire application (see Bug 769269).
             mIsRestoringActivity = true;
@@ -1301,6 +1313,7 @@ public abstract class GeckoApp
         } else {
             final String uri = getURIFromIntent(intent);
 
+            sAlreadyLoaded = true;
             GeckoThread.ensureInit(args, action,
                     /* debugging */ ACTION_DEBUG.equals(action));
 
@@ -2133,6 +2146,13 @@ public abstract class GeckoApp
 
     @Override
     public void onDestroy() {
+        if (!isSupportedSDK()) {
+            // This build does not support the Android version of the device:
+            // We did not initialize anything, so skip cleaning up.
+            super.onDestroy();
+            return;
+        }
+
         EventDispatcher.getInstance().unregisterGeckoThreadListener((GeckoEventListener)this,
             "Gecko:Ready",
             "Gecko:DelayedStartup",
@@ -2233,6 +2253,16 @@ public abstract class GeckoApp
             // Exiting, so kill our own process.
             Process.killProcess(Process.myPid());
         }
+    }
+
+    protected boolean isSupportedSDK() {
+        return Build.VERSION.SDK_INT >= Versions.MIN_SDK_VERSION &&
+               Build.VERSION.SDK_INT <= Versions.MAX_SDK_VERSION;
+    }
+
+    public void showSDKVersionError() {
+        final String message = getString(R.string.unsupported_sdk_version, Build.CPU_ABI, Build.VERSION.SDK_INT);
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
 
     // Get a temporary directory, may return null

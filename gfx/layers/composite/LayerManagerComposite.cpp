@@ -121,6 +121,7 @@ LayerManagerComposite::LayerManagerComposite(Compositor* aCompositor)
 , mDebugOverlayWantsNextFrame(false)
 , mGeometryChanged(true)
 , mLastFrameMissedHWC(false)
+, mWindowOverlayChanged(false)
 {
   mTextRenderer = new TextRenderer(aCompositor);
   MOZ_ASSERT(aCompositor);
@@ -246,7 +247,7 @@ LayerManagerComposite::ApplyOcclusionCulling(Layer* aLayer, nsIntRegion& aOpaque
     localOpaque.MoveBy(transform2d._31, transform2d._32);
     const Maybe<ParentLayerIntRect>& clip = aLayer->GetEffectiveClipRect();
     if (clip) {
-      localOpaque.And(localOpaque, ParentLayerIntRect::ToUntyped(*clip));
+      localOpaque.And(localOpaque, clip->ToUnknownRect());
     }
     aOpaqueRegion.Or(aOpaqueRegion, localOpaque);
   }
@@ -302,8 +303,13 @@ void
 LayerManagerComposite::UpdateAndRender()
 {
   nsIntRegion invalid;
+  bool didEffectiveTransforms = false;
 
   if (mClonedLayerTreeProperties) {
+    // Effective transforms are needed by ComputeDifferences().
+    mRoot->ComputeEffectiveTransforms(gfx::Matrix4x4());
+    didEffectiveTransforms = true;
+
     // We need to compute layer tree differences even if we're not going to
     // immediately use the resulting damage area, since ComputeDifferences
     // is also responsible for invalidates intermediate surfaces in
@@ -339,7 +345,7 @@ LayerManagerComposite::UpdateAndRender()
   // Update cached layer tree information.
   mClonedLayerTreeProperties = LayerProperties::CloneFrom(GetRoot());
 
-  if (invalid.IsEmpty()) {
+  if (invalid.IsEmpty() && !mWindowOverlayChanged) {
     // Composition requested, but nothing has changed. Don't do any work.
     return;
   }
@@ -348,9 +354,11 @@ LayerManagerComposite::UpdateAndRender()
   // so we will invalidate after we've decided if something changed.
   InvalidateDebugOverlay(mRenderBounds);
 
-  // The results of our drawing always go directly into a pixel buffer,
-  // so we don't need to pass any global transform here.
-  mRoot->ComputeEffectiveTransforms(gfx::Matrix4x4());
+  if (!didEffectiveTransforms) {
+    // The results of our drawing always go directly into a pixel buffer,
+    // so we don't need to pass any global transform here.
+    mRoot->ComputeEffectiveTransforms(gfx::Matrix4x4());
+  }
 
   nsIntRegion opaque;
   ApplyOcclusionCulling(mRoot, opaque);
@@ -360,6 +368,7 @@ LayerManagerComposite::UpdateAndRender()
   RenderToPresentationSurface();
 #endif
   mGeometryChanged = false;
+  mWindowOverlayChanged = false;
 }
 
 already_AddRefed<DrawTarget>
@@ -784,7 +793,7 @@ LayerManagerComposite::Render(const nsIntRegion& aInvalidRegion)
 
   // Render our layers.
   RootLayer()->Prepare(ViewAs<RenderTargetPixel>(clipRect, PixelCastJustification::RenderTargetIsParentLayerForRoot));
-  RootLayer()->RenderLayer(ParentLayerIntRect::ToUntyped(clipRect));
+  RootLayer()->RenderLayer(clipRect.ToUnknownRect());
 
   if (!mRegionToClear.IsEmpty()) {
     nsIntRegionRectIterator iter(mRegionToClear);
@@ -796,7 +805,7 @@ LayerManagerComposite::Render(const nsIntRegion& aInvalidRegion)
 
   if (mTwoPassTmpTarget) {
     MOZ_ASSERT(haveLayerEffects);
-    PopGroupForLayerEffects(previousTarget, ParentLayerIntRect::ToUntyped(clipRect),
+    PopGroupForLayerEffects(previousTarget, clipRect.ToUnknownRect(),
                             grayscaleVal, invertVal, contrastVal);
   }
 
@@ -967,7 +976,7 @@ LayerManagerComposite::RenderToPresentationSurface()
   }
   GLContext* gl = compositor->gl();
   GLContextEGL* egl = GLContextEGL::Cast(gl);
-  const IntSize windowSize = mirrorScreen->GetNaturalBounds().Size();
+  const IntSize windowSize = mirrorScreen->GetNaturalBoundsUntyped().Size();
 #endif
 
   if ((windowSize.width <= 0) || (windowSize.height <= 0)) {
@@ -1029,7 +1038,7 @@ LayerManagerComposite::RenderToPresentationSurface()
 
   const IntRect clipRect = IntRect(0, 0, actualWidth, actualHeight);
 
-  RootLayer()->Prepare(RenderTargetPixel::FromUntyped(clipRect));
+  RootLayer()->Prepare(RenderTargetIntRect::FromUnknownRect(clipRect));
   RootLayer()->RenderLayer(clipRect);
 
   mCompositor->EndFrame();
@@ -1059,7 +1068,7 @@ SubtractTransformedRegion(nsIntRegion& aRegion,
   // subtract it from the screen region.
   nsIntRegionRectIterator it(aRegionToSubtract);
   while (const IntRect* rect = it.Next()) {
-    Rect incompleteRect = aTransform.TransformAndClipBounds(ToRect(*rect),
+    Rect incompleteRect = aTransform.TransformAndClipBounds(IntRectToRect(*rect),
                                                             Rect::MaxIntRect());
     aRegion.Sub(aRegion, IntRect(incompleteRect.x,
                                    incompleteRect.y,

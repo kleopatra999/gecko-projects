@@ -42,7 +42,9 @@ public:
 class nsTextFrame : public nsTextFrameBase {
   typedef mozilla::TextRangeStyle TextRangeStyle;
   typedef mozilla::gfx::DrawTarget DrawTarget;
+  typedef mozilla::gfx::Point Point;
   typedef mozilla::gfx::Rect Rect;
+  typedef mozilla::gfx::Size Size;
 
 public:
   NS_DECL_QUERYFRAME_TARGET(nsTextFrame)
@@ -261,11 +263,10 @@ public:
     nscoord      mDeltaWidth;
   };
   TrimOutput TrimTrailingWhiteSpace(nsRenderingContext* aRC);
-  virtual nsresult GetRenderedText(nsAString* aString = nullptr,
-                                   gfxSkipChars* aSkipChars = nullptr,
-                                   gfxSkipCharsIterator* aSkipIter = nullptr,
-                                   uint32_t aSkippedStartOffset = 0,
-                                   uint32_t aSkippedMaxLength = UINT32_MAX) override;
+  virtual RenderedText GetRenderedText(uint32_t aStartOffset = 0,
+                                       uint32_t aEndOffset = UINT32_MAX,
+                                       TextOffsetType aOffsetType =
+                                           TextOffsetType::OFFSETS_IN_CONTENT_TEXT) override;
 
   nsOverflowAreas RecomputeOverflow(nsIFrame* aBlockFrame);
 
@@ -393,7 +394,8 @@ public:
   void PaintText(nsRenderingContext* aRenderingContext, nsPoint aPt,
                  const nsRect& aDirtyRect, const nsCharClipDisplayItem& aItem,
                  gfxTextContextPaint* aContextPaint = nullptr,
-                 DrawPathCallbacks* aCallbacks = nullptr);
+                 DrawPathCallbacks* aCallbacks = nullptr,
+                 float aOpacity = 1.0f);
   // helper: paint text frame when we're impacted by at least one selection.
   // Return false if the text was not painted and we should continue with
   // the fast path.
@@ -739,7 +741,7 @@ protected:
                                 SelectionType aType,
                                 nsTextPaintStyle& aTextPaintStyle,
                                 const TextRangeStyle &aRangeStyle,
-                                const gfxPoint& aPt,
+                                const Point& aPt,
                                 gfxFloat aICoordInFrame,
                                 gfxFloat aWidth,
                                 gfxFloat aAscent,
@@ -757,9 +759,9 @@ protected:
                            const gfxRect& aDirtyRect,
                            nscolor aColor,
                            const nscolor* aOverrideColor,
-                           const gfxPoint& aPt,
+                           const Point& aPt,
                            gfxFloat aICoordInFrame,
-                           const gfxSize& aLineSize,
+                           const Size& aLineSize,
                            gfxFloat aAscent,
                            gfxFloat aOffset,
                            uint8_t aDecoration,

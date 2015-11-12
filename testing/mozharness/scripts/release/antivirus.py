@@ -108,7 +108,7 @@ class AntivirusScan(BaseScript, VirtualenvMixin):
         self.dest_dir = self.CACHE_DIR
 
     def _get_candidates_prefix(self):
-        return "pub/{}/candidates/{}-candidates/build{}".format(
+        return "pub/{}/candidates/{}-candidates/build{}/".format(
             self.config['product'],
             self.config["version"],
             self.config["build_number"]
@@ -167,7 +167,7 @@ class AntivirusScan(BaseScript, VirtualenvMixin):
                 if self._matches_exclude(keyname):
                     self.debug("Excluding {}".format(keyname))
                 else:
-                    destination = self.dest_dir + keyname.replace(candidates_prefix, '')
+                    destination = os.path.join(self.dest_dir, keyname.replace(candidates_prefix, ''))
                     dest_dir = os.path.dirname(destination)
                     if not os.path.isdir(dest_dir):
                         os.makedirs(dest_dir)

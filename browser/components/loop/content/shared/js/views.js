@@ -70,7 +70,7 @@ loop.shared.views = (function(_, mozL10n) {
     },
 
     _getClasses: function() {
-      var cx = React.addons.classSet;
+      var cx = classNames;
       // classes
       var classesObj = {
         "btn": true,
@@ -170,7 +170,7 @@ loop.shared.views = (function(_, mozL10n) {
         return null;
       }
 
-      var cx = React.addons.classSet;
+      var cx = classNames;
 
       var isActive = this.props.state === SCREEN_SHARE_STATES.ACTIVE;
       var screenShareClasses = cx({
@@ -304,7 +304,7 @@ loop.shared.views = (function(_, mozL10n) {
      * Recover the needed info for generating an specific menu Item
      */
     getItemInfo: function(menuItem) {
-      var cx = React.addons.classSet;
+      var cx = classNames;
       switch (menuItem.id) {
         case "help":
           return {
@@ -362,7 +362,7 @@ loop.shared.views = (function(_, mozL10n) {
         return null;
       }
 
-      var cx = React.addons.classSet;
+      var cx = classNames;
       var settingsDropdownMenuClasses = cx({
         "settings-menu": true,
         "dropdown-menu": true,
@@ -494,7 +494,7 @@ loop.shared.views = (function(_, mozL10n) {
         return null;
       }
 
-      var cx = React.addons.classSet;
+      var cx = classNames;
       var conversationToolbarCssClasses = cx({
         "conversation-toolbar": true,
         "idle": this.state.idle
@@ -642,7 +642,7 @@ loop.shared.views = (function(_, mozL10n) {
     },
 
     render: function() {
-      var cx = React.addons.classSet;
+      var cx = classNames;
       var classObject = { button: true, disabled: this.props.disabled };
       if (this.props.additionalClass) {
         classObject[this.props.additionalClass] = true;
@@ -675,7 +675,7 @@ loop.shared.views = (function(_, mozL10n) {
     },
 
     render: function() {
-      var cx = React.addons.classSet;
+      var cx = classNames;
       var classObject = { "button-group": true };
       if (this.props.additionalClass) {
         classObject[this.props.additionalClass] = true;
@@ -742,7 +742,7 @@ loop.shared.views = (function(_, mozL10n) {
     },
 
     render: function() {
-      var cx = React.addons.classSet;
+      var cx = classNames;
       var wrapperClasses = {
         "checkbox-wrapper": true,
         disabled: this.props.disabled
@@ -810,7 +810,6 @@ loop.shared.views = (function(_, mozL10n) {
    *                                        is specified, then 'dispatcher' is also required.
    * @property {String}  description        The description for the context url.
    * @property {loop.Dispatcher} dispatcher
-   * @property {Boolean} showContextTitle   Whether or not to show the "Let's talk about" title.
    * @property {String}  thumbnail          The thumbnail url (expected to be a data url) to
    *                                        display. If not specified, a fallback url will be
    *                                        shown.
@@ -826,7 +825,6 @@ loop.shared.views = (function(_, mozL10n) {
       allowClick: React.PropTypes.bool.isRequired,
       description: React.PropTypes.string.isRequired,
       dispatcher: React.PropTypes.instanceOf(loop.Dispatcher),
-      showContextTitle: React.PropTypes.bool.isRequired,
       thumbnail: React.PropTypes.string,
       url: React.PropTypes.string,
       useDesktopPaths: React.PropTypes.bool.isRequired
@@ -843,17 +841,6 @@ loop.shared.views = (function(_, mozL10n) {
       this.props.dispatcher.dispatch(new sharedActions.RecordClick({
         linkInfo: "Shared URL"
       }));
-    },
-
-    /**
-     * Renders the context title ("Let's talk about") if necessary.
-     */
-    renderContextTitle: function() {
-      if (!this.props.showContextTitle) {
-        return null;
-      }
-
-      return React.createElement("p", null, mozL10n.get("context_inroom_label2"));
     },
 
     render: function() {
@@ -873,14 +860,13 @@ loop.shared.views = (function(_, mozL10n) {
           "shared/img/icons-16x16.svg#globe";
       }
 
-      var wrapperClasses = React.addons.classSet({
+      var wrapperClasses = classNames({
         "context-wrapper": true,
         "clicks-allowed": this.props.allowClick
       });
 
       return (
         React.createElement("div", {className: "context-content"}, 
-          this.renderContextTitle(), 
           React.createElement("a", {className: wrapperClasses, 
              href: this.props.allowClick ? this.props.url : null, 
              onClick: this.handleLinkClick, 
@@ -1031,7 +1017,7 @@ loop.shared.views = (function(_, mozL10n) {
       renderRemoteVideo: React.PropTypes.bool.isRequired,
       screenShareMediaElement: React.PropTypes.object,
       screenSharePosterUrl: React.PropTypes.string,
-      showContextRoomName: React.PropTypes.bool.isRequired,
+      showInitialContext: React.PropTypes.bool.isRequired,
       useDesktopPaths: React.PropTypes.bool.isRequired
     },
 
@@ -1090,17 +1076,17 @@ loop.shared.views = (function(_, mozL10n) {
     },
 
     render: function() {
-      var remoteStreamClasses = React.addons.classSet({
+      var remoteStreamClasses = classNames({
         "remote": true,
         "focus-stream": !this.props.displayScreenShare
       });
 
-      var screenShareStreamClasses = React.addons.classSet({
+      var screenShareStreamClasses = classNames({
         "screen": true,
         "focus-stream": this.props.displayScreenShare
       });
 
-      var mediaWrapperClasses = React.addons.classSet({
+      var mediaWrapperClasses = classNames({
         "media-wrapper": true,
         "receiving-screen-share": this.props.displayScreenShare,
         "showing-local-streams": this.props.localSrcMediaElement ||
@@ -1135,7 +1121,7 @@ loop.shared.views = (function(_, mozL10n) {
             ), 
             React.createElement(loop.shared.views.chat.TextChatView, {
               dispatcher: this.props.dispatcher, 
-              showRoomName: this.props.showContextRoomName, 
+              showInitialContext: this.props.showInitialContext, 
               useDesktopPaths: this.props.useDesktopPaths}), 
             this.state.localMediaAboslutelyPositioned ?
               null : this.renderLocalVideo()

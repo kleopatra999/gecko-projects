@@ -298,6 +298,12 @@ var PingPicker = {
             .addEventListener("click", () => this._movePingIndex(-1), false);
     document.getElementById("older-ping")
             .addEventListener("click", () => this._movePingIndex(1), false);
+    document.getElementById("show-raw-ping")
+            .addEventListener("click", () => this._showRawPingData(), false);
+    document.getElementById("hide-raw-ping")
+            .addEventListener("click", () => this._hideRawPingData(), false);
+    document.getElementById("choose-payload")
+            .addEventListener("change", () => displayPingData(gPingData), false);
   },
 
   onPingSourceChanged: function() {
@@ -322,13 +328,13 @@ var PingPicker = {
   _updateCurrentPingData: function() {
     const subsession = document.getElementById("show-subsession-data").checked;
     const ping = TelemetryController.getCurrentPingData(subsession);
-    displayPingData(ping);
+    displayPingData(ping, true);
   },
 
   _updateArchivedPingData: function() {
     let id = this._getSelectedPingId();
     TelemetryArchive.promiseArchivedPingById(id)
-                    .then((ping) => displayPingData(ping));
+                    .then((ping) => displayPingData(ping, true));
   },
 
   _updateArchivedPingList: function() {
@@ -444,6 +450,16 @@ var PingPicker = {
 
     this._renderPingList(ping.id);
     this._updateArchivedPingData();
+  },
+
+  _showRawPingData: function() {
+    let pre = document.getElementById("raw-ping-data");
+    pre.textContent = JSON.stringify(gPingData, null, 2);
+    document.getElementById("raw-ping-data-section").classList.remove("hidden");
+  },
+
+  _hideRawPingData: function() {
+    document.getElementById("raw-ping-data-section").classList.add("hidden");
   },
 };
 
@@ -1531,11 +1547,48 @@ function sortStartupMilestones(aSimpleMeasurements) {
   return result;
 }
 
-function displayPingData(ping) {
+function renderPayloadList(ping) {
+  // Rebuild the payload select with options:
+  //   Parent Payload (selected)
+  //   Child Payload 1..ping.payload.childPayloads.length
+  let listEl = document.getElementById("choose-payload");
+  removeAllChildNodes(listEl);
+
+  let option = document.createElement("option");
+  let text = bundle.GetStringFromName("parentPayload");
+  let content = document.createTextNode(text);
+  let payloadIndex = 0;
+  option.appendChild(content);
+  option.setAttribute("value", payloadIndex++);
+  option.selected = true;
+  listEl.appendChild(option);
+
+  if (!ping.payload.childPayloads) {
+    listEl.disabled = true;
+    return
+  }
+  listEl.disabled = false;
+
+  for (; payloadIndex <= ping.payload.childPayloads.length; ++payloadIndex) {
+    option = document.createElement("option");
+    text = bundle.formatStringFromName("childPayloadN", [payloadIndex], 1);
+    content = document.createTextNode(text);
+    option.appendChild(content);
+    option.setAttribute("value", payloadIndex);
+    listEl.appendChild(option);
+  }
+}
+
+function displayPingData(ping, updatePayloadList = false) {
   gPingData = ping;
 
   const keysHeader = bundle.GetStringFromName("keysHeader");
   const valuesHeader = bundle.GetStringFromName("valuesHeader");
+
+  // Update the payload list
+  if (updatePayloadList) {
+    renderPayloadList(ping);
+  }
 
   // Show general data.
   GeneralData.render(ping);
@@ -1558,8 +1611,17 @@ function displayPingData(ping) {
   // Render Addon details.
   AddonDetails.render(ping);
 
-  // Show simple measurements
+  // Select payload to render
+  let payloadSelect = document.getElementById("choose-payload");
+  let payloadOption = payloadSelect.selectedOptions.item(0);
+  let payloadIndex = payloadOption.getAttribute("value");
+
   let payload = ping.payload;
+  if (payloadIndex > 0) {
+    payload = ping.payload.childPayloads[payloadIndex - 1];
+  }
+
+  // Show simple measurements
   let simpleMeasurements = sortStartupMilestones(payload.simpleMeasurements);
   let hasData = Object.keys(simpleMeasurements).length > 0;
   setHasData("simple-measurements-section", hasData);
@@ -1574,13 +1636,13 @@ function displayPingData(ping) {
   LateWritesSingleton.renderLateWrites(payload.lateWrites);
 
   // Show basic system info gathered
-  hasData = Object.keys(payload.info).length > 0;
+  hasData = Object.keys(ping.payload.info).length > 0;
   setHasData("system-info-section", hasData);
   let infoSection = document.getElementById("system-info");
   removeAllChildNodes(infoSection);
 
   if (hasData) {
-    infoSection.appendChild(KeyValueTable.render(payload.info,
+    infoSection.appendChild(KeyValueTable.render(ping.payload.info,
                                                  keysHeader, valuesHeader));
   }
 

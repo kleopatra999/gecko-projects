@@ -9,7 +9,7 @@ const TEST_URI = "chrome://devtools/content/shared/widgets/filter-frame.xhtml";
 const {CSSFilterEditorWidget} = require("devtools/client/shared/widgets/FilterWidget");
 
 add_task(function *() {
-  yield promiseTab("about:blank");
+  yield addTab("about:blank");
   let [host, win, doc] = yield createHost("bottom", TEST_URI);
 
   const container = doc.querySelector("#container");
@@ -59,4 +59,14 @@ add_task(function *() {
   widget.setCssValue("contrast(5%) whatever invert('xxx')");
   is(widget.getCssValue(), "contrast(5%) invert(0%)",
      "setCssValue should handle multiple errors");
+
+  info("Test parsing of 'unset'");
+  widget.setCssValue("unset");
+  is(widget.getCssValue(), "unset", "setCssValue should handle 'unset'");
+  info("Test parsing of 'initial'");
+  widget.setCssValue("initial");
+  is(widget.getCssValue(), "initial", "setCssValue should handle 'initial'");
+  info("Test parsing of 'inherit'");
+  widget.setCssValue("inherit");
+  is(widget.getCssValue(), "inherit", "setCssValue should handle 'inherit'");
 });

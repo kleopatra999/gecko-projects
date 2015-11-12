@@ -165,7 +165,7 @@ loop.panel = (function(_, mozL10n) {
     },
 
     render: function() {
-      var cx = React.addons.classSet;
+      var cx = classNames;
 
       if (!this.props.displayed) {
         return null;
@@ -245,7 +245,7 @@ loop.panel = (function(_, mozL10n) {
     },
 
     render: function() {
-      var cx = React.addons.classSet;
+      var cx = classNames;
       var accountEntryCSSClass = this._isSignedIn() ? "entry-settings-signout" :
                                                       "entry-settings-signin";
       var notificationsLabel = this.props.mozLoop.doNotDisturb ? "settings_menu_item_turnnotificationson" :
@@ -436,7 +436,7 @@ loop.panel = (function(_, mozL10n) {
     },
 
     render: function() {
-      var roomClasses = React.addons.classSet({
+      var roomClasses = classNames({
         "room-entry": true,
         "room-active": this._isActive(),
         "room-opened": this.props.isOpenedRoom
@@ -588,7 +588,7 @@ loop.panel = (function(_, mozL10n) {
     },
 
     render: function() {
-      var dropdownClasses = React.addons.classSet({
+      var dropdownClasses = classNames({
         "dropdown-menu": true,
         "dropdown-menu-up": this.state.openDirUp
       });
@@ -611,7 +611,7 @@ loop.panel = (function(_, mozL10n) {
             className="dropdown-menu-item"
             onClick={this.props.handleDeleteButtonClick}
             ref="deleteButton">
-            {mozL10n.get("delete_conversation_menuitem")}
+            {mozL10n.get("delete_conversation_menuitem2")}
           </li>
         </ul>
       );
@@ -620,7 +620,7 @@ loop.panel = (function(_, mozL10n) {
 
   /**
    * User profile prop can be either an object or null as per mozLoopAPI
-   * and there is no way to express this with React 0.12.2
+   * and there is no way to express this with React 0.13.3
    */
   function userProfileValidator(props, propName, componentName) {
     if (Object.prototype.toString.call(props[propName]) !== "[object Object]" &&
@@ -806,9 +806,7 @@ loop.panel = (function(_, mozL10n) {
     },
 
     handleCreateButtonClick: function() {
-      var createRoomAction = new sharedActions.CreateRoom({
-        nameTemplate: mozL10n.get("rooms_default_room_name_template")
-      });
+      var createRoomAction = new sharedActions.CreateRoom();
 
       createRoomAction.urls = [{
         location: this.state.url,
@@ -923,12 +921,17 @@ loop.panel = (function(_, mozL10n) {
       window.removeEventListener("GettingStartedSeen", this._gettingStartedSeen);
     },
 
+    handleContextMenu: function(e) {
+      e.preventDefault();
+    },
+
     render: function() {
       var NotificationListView = sharedViews.NotificationListView;
 
       if (!this.state.gettingStartedSeen) {
         return (
-          <div className="fte-get-started-container">
+          <div className="fte-get-started-container"
+               onContextMenu={this.handleContextMenu}>
             <NotificationListView
               clearOnDocumentHidden={true}
               notifications={this.props.notifications} />
@@ -943,7 +946,9 @@ loop.panel = (function(_, mozL10n) {
       }
 
       return (
-        <div className="panel-content">
+        <div className="panel-content"
+             onContextMenu={this.handleContextMenu} >
+          <div className="beta-ribbon" />
           <NotificationListView
             clearOnDocumentHidden={true}
             notifications={this.props.notifications} />

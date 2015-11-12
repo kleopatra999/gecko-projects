@@ -10,6 +10,14 @@ body {
   background: none;
 }
 
+/* Beta Ribbon */
+.beta-ribbon {
+  background: url("../shared/img/beta-ribbon.svg") no-repeat;
+  background-size: 30px;
+  width: 30px;
+  height: 30px;
+}
+
 /* Panel styles */
 
 .panel {
@@ -28,6 +36,13 @@ body {
   display: flex;
   flex-flow: column nowrap;
   align-items: flex-start;
+}
+
+.panel-content > .beta-ribbon {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
 }
 
 /* Notifications displayed over tabs */
@@ -247,12 +262,17 @@ body {
 
 .room-list > .room-entry > h2 {
   display: inline-block;
-  font-size: 1.3rem;
-  line-height: 2.4rem;
-  color: #000;
+  vertical-align: middle;
   /* See .room-entry-context-item for the margin/size reductions.
    * An extra 16px to make space for the edit button. */
   width: calc(100% - 1rem - 32px);
+
+  font-size: 1.3rem;
+  line-height: 2.4rem;
+  color: #000;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .room-list > .room-entry.room-active:not(.room-opened) > h2 {
@@ -371,8 +391,7 @@ html[dir="rtl"] .room-entry-context-actions > .dropdown-menu {
   vertical-align: middle;
 }
 
-.room-entry-context-item > img {
-  height: 16px;
+.room-entry-context-item > a > img {
   width: 16px;
 }
 

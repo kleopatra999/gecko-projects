@@ -49,7 +49,7 @@ public:
     // Caller retains ownership of both "dataSource" and "sampleTable".
     MPEG4Source(const sp<MetaData> &format,
                 const sp<DataSource> &dataSource,
-                int32_t timeScale,
+                uint32_t timeScale,
                 const sp<SampleTable> &sampleTable,
                 nsTArray<SidxEntry> &sidx,
                 MPEG4Extractor::TrackExtends &trackExtends);
@@ -71,7 +71,7 @@ private:
 
     sp<MetaData> mFormat;
     sp<DataSource> mDataSource;
-    int32_t mTimescale;
+    uint32_t mTimescale;
     sp<SampleTable> mSampleTable;
     uint32_t mCurrentSampleIndex;
     uint32_t mCurrentFragmentIndex;
@@ -350,18 +350,22 @@ static const char *FourCC2MIME(uint32_t fourcc) {
             return MEDIA_MIMETYPE_VIDEO_VP6;
 
         default:
-            CHECK(!"should not be here.");
+            ALOGE("Unknown MIME type %08x", fourcc);
             return NULL;
     }
 }
 
 static bool AdjustChannelsAndRate(uint32_t fourcc, uint32_t *channels, uint32_t *rate) {
-    if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AMR_NB, FourCC2MIME(fourcc))) {
+    const char* mime = FourCC2MIME(fourcc);
+    if (!mime) {
+        return false;
+    }
+    if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AMR_NB, mime)) {
         // AMR NB audio is always mono, 8kHz
         *channels = 1;
         *rate = 8000;
         return true;
-    } else if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AMR_WB, FourCC2MIME(fourcc))) {
+    } else if (!strcasecmp(MEDIA_MIMETYPE_AUDIO_AMR_WB, mime)) {
         // AMR WB audio is always mono, 16kHz
         *channels = 1;
         *rate = 16000;
@@ -416,7 +420,7 @@ uint32_t MPEG4Extractor::flags() const {
 sp<MetaData> MPEG4Extractor::getMetaData() {
     status_t err;
     if ((err = readMetaData()) != OK) {
-        return new MetaData;
+        return NULL;
     }
 
     return mFileMetaData;
@@ -510,14 +514,15 @@ status_t MPEG4Extractor::readMetaData() {
     uint64_t psshsize = 0;
     for (size_t i = 0; i < mPssh.Length(); i++) {
         psshsize += 20 + mPssh[i].datalen;
-    }
-    if (psshsize > kMAX_ALLOCATION) {
-        return ERROR_MALFORMED;
+        if (mPssh[i].datalen > kMAX_ALLOCATION - 20 ||
+            psshsize > kMAX_ALLOCATION) {
+            return ERROR_MALFORMED;
+        }
     }
     if (psshsize) {
         char *buf = (char*)malloc(psshsize);
         if (!buf) {
-            return ERROR_MALFORMED;
+            return -ENOMEM;
         }
         char *ptr = buf;
         for (size_t i = 0; i < mPssh.Length(); i++) {
@@ -681,7 +686,10 @@ status_t MPEG4Extractor::parseDrmSINF(off64_t *offset, off64_t data_offset) {
                 return ERROR_MALFORMED;
             }
             sinf->len = dataLen - 3;
-            sinf->IPMPData = new char[sinf->len];
+            sinf->IPMPData = new (fallible) char[sinf->len];
+            if (!sinf->IPMPData) {
+                return -ENOMEM;
+            }
 
             if (mDataSource->readAt(data_offset + 2, sinf->IPMPData, sinf->len) < sinf->len) {
                 return ERROR_IO;
@@ -726,8 +734,11 @@ static bool underMetaDataPath(const nsTArray<uint32_t> &path) {
 
 // Given a time in seconds since Jan 1 1904, produce a human-readable string.
 static bool convertTimeToDate(int64_t time_1904, String8 *s) {
-    time_t time_1970 = time_1904 - (((66 * 365 + 17) * 24) * 3600);
+    if (!s) {
+        return false;
+    }
 
+    time_t time_1970 = time_1904 - (((66 * 365 + 17) * 24) * 3600);
     if (time_1970 < 0) {
         return false;
     }
@@ -1018,9 +1029,13 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             original_fourcc = ntohl(original_fourcc);
             ALOGV("read original format: %d", original_fourcc);
             if (!mLastTrack) {
-              return ERROR_MALFORMED;
+                return ERROR_MALFORMED;
             }
-            mLastTrack->meta->setCString(kKeyMIMEType, FourCC2MIME(original_fourcc));
+            const char* mime = FourCC2MIME(original_fourcc);
+            if (!mime) {
+                return ERROR_UNSUPPORTED;
+            }
+            mLastTrack->meta->setCString(kKeyMIMEType, mime);
             uint32_t num_channels = 0;
             uint32_t sample_rate = 0;
             if (AdjustChannelsAndRate(original_fourcc, &num_channels, &sample_rate)) {
@@ -1135,7 +1150,10 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
 
             // Copy the contents of the box (including header) verbatim.
             pssh.datalen = chunk_data_size + 8;
-            pssh.data = new uint8_t[pssh.datalen];
+            pssh.data = new (fallible) uint8_t[pssh.datalen];
+            if (!pssh.data) {
+                return -ENOMEM;
+            }
             if (mDataSource->readAt(data_offset - 8, pssh.data, pssh.datalen) < pssh.datalen) {
                 return ERROR_IO;
             }
@@ -1333,7 +1351,11 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             }
             if (chunk_type != FOURCC('e', 'n', 'c', 'a')) {
                 // if the chunk type is enca, we'll get the type from the sinf/frma box later
-                mLastTrack->meta->setCString(kKeyMIMEType, FourCC2MIME(chunk_type));
+                const char* mime = FourCC2MIME(chunk_type);
+                if (!mime) {
+                    return ERROR_UNSUPPORTED;
+                }
+                mLastTrack->meta->setCString(kKeyMIMEType, mime);
                 AdjustChannelsAndRate(chunk_type, &num_channels, &sample_rate);
             }
 
@@ -1451,7 +1473,11 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             }
             if (chunk_type != FOURCC('e', 'n', 'c', 'v')) {
                 // if the chunk type is encv, we'll get the type from the sinf/frma box later
-                mLastTrack->meta->setCString(kKeyMIMEType, FourCC2MIME(chunk_type));
+                const char* mime = FourCC2MIME(chunk_type);
+                if (!mime) {
+                    return ERROR_UNSUPPORTED;
+                }
+                mLastTrack->meta->setCString(kKeyMIMEType, mime);
             }
             mLastTrack->meta->setInt32(kKeyWidth, width);
             mLastTrack->meta->setInt32(kKeyHeight, height);
@@ -1743,7 +1769,10 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
               return ERROR_MALFORMED;
             }
 
-            sp<ABuffer> buffer = new ABuffer(chunk_data_size);
+            sp<ABuffer> buffer = new (fallible) ABuffer(chunk_data_size);
+            if (!buffer.get()) {
+                return -ENOMEM;
+            }
 
             if (mDataSource->readAt(
                         data_offset, buffer->data(), chunk_data_size) < chunk_data_size) {
@@ -1977,7 +2006,10 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             if (size >= kMAX_ALLOCATION - chunk_size) {
                 return ERROR_MALFORMED;
             }
-            uint8_t *buffer = new uint8_t[size + chunk_size];
+            uint8_t *buffer = new (fallible) uint8_t[size + chunk_size];
+            if (!buffer) {
+                return -ENOMEM;
+            }
 
             if (size > 0) {
                 memcpy(buffer, data, size);
@@ -2005,12 +2037,18 @@ status_t MPEG4Extractor::parseChunk(off64_t *offset, int depth) {
             if (mFileMetaData != NULL) {
                 ALOGV("chunk_data_size = %lld and data_offset = %lld",
                         chunk_data_size, data_offset);
-                sp<ABuffer> buffer = new ABuffer(chunk_data_size + 1);
+                const int kSkipBytesOfDataBox = 16;
+                if (chunk_data_size <= kSkipBytesOfDataBox) {
+                  return ERROR_MALFORMED;
+                }
+                sp<ABuffer> buffer = new (fallible) ABuffer(chunk_data_size + 1);
+                if (!buffer.get()) {
+                    return -ENOMEM;
+                }
                 if (mDataSource->readAt(
                     data_offset, buffer->data(), chunk_data_size) != (ssize_t)chunk_data_size) {
                     return ERROR_IO;
                 }
-                const int kSkipBytesOfDataBox = 16;
                 mFileMetaData->setData(
                     kKeyAlbumArt, MetaData::TYPE_NONE,
                     buffer->data() + kSkipBytesOfDataBox, chunk_data_size - kSkipBytesOfDataBox);
@@ -2548,15 +2586,25 @@ sp<MediaSource> MPEG4Extractor::getTrack(size_t index) {
 
 // static
 status_t MPEG4Extractor::verifyTrack(Track *track) {
+    int32_t trackId;
+    if (!track->meta->findInt32(kKeyTrackID, &trackId)) {
+        return ERROR_MALFORMED;
+    }
+
     const char *mime;
-    CHECK(track->meta->findCString(kKeyMIMEType, &mime));
+    if (!track->meta->findCString(kKeyMIMEType, &mime)) {
+        return ERROR_MALFORMED;
+    }
 
     uint32_t type;
     const void *data;
     size_t size;
     if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_AVC)) {
         if (!track->meta->findData(kKeyAVCC, &type, &data, &size)
-                || type != kTypeAVCC) {
+                || type != kTypeAVCC
+                || size < 7
+                // configurationVersion == 1?
+                || reinterpret_cast<const uint8_t*>(data)[0] != 1) {
             return ERROR_MALFORMED;
         }
     } else if (!strcasecmp(mime, MEDIA_MIMETYPE_VIDEO_MPEG4)
@@ -2570,6 +2618,15 @@ status_t MPEG4Extractor::verifyTrack(Track *track) {
     if (!track->sampleTable.get() || !track->sampleTable->isValid()) {
         // Make sure we have all the metadata we need.
         return ERROR_MALFORMED;
+    }
+
+    uint32_t keytype;
+    const void *key;
+    size_t keysize;
+    if (track->meta->findData(kKeyCryptoKey, &keytype, &key, &keysize)) {
+        if (keysize > 16) {
+            return ERROR_MALFORMED;
+        }
     }
 
     return OK;
@@ -2626,9 +2683,15 @@ status_t MPEG4Extractor::updateAudioTrackInfoFromESDS_MPEG4Audio(
     }
 
     ABitReader br(csd, csd_size);
+    if (br.numBitsLeft() < 5) {
+        return ERROR_MALFORMED;
+    }
     uint32_t objectType = br.getBits(5);
 
     if (objectType == 31) {  // AAC-ELD => additional 6 bits
+        if (br.numBitsLeft() < 6) {
+            return ERROR_MALFORMED;
+        }
         objectType = 32 + br.getBits(6);
     }
 
@@ -2639,6 +2702,9 @@ status_t MPEG4Extractor::updateAudioTrackInfoFromESDS_MPEG4Audio(
         mLastTrack->meta->setInt32(kKeyAACProfile, objectType);
     }
 
+    if (br.numBitsLeft() < 4) {
+        return ERROR_MALFORMED;
+    }
     uint32_t freqIndex = br.getBits(4);
 
     int32_t sampleRate = 0;
@@ -2647,15 +2713,27 @@ status_t MPEG4Extractor::updateAudioTrackInfoFromESDS_MPEG4Audio(
         if (csd_size < 5) {
             return ERROR_MALFORMED;
         }
+        if (br.numBitsLeft() < 24 + 4) {
+            return ERROR_MALFORMED;
+        }
         sampleRate = br.getBits(24);
         numChannels = br.getBits(4);
     } else {
+        if (br.numBitsLeft() < 4) {
+            return ERROR_MALFORMED;
+        }
         numChannels = br.getBits(4);
         if (objectType == 5) {
             // SBR specific config per 14496-3 table 1.13
+            if (br.numBitsLeft() < 4) {
+                return ERROR_MALFORMED;
+            }
             freqIndex = br.getBits(4);
             if (freqIndex == 15) {
                 if (csd_size < 8) {
+                    return ERROR_MALFORMED;
+                }
+                if (br.numBitsLeft() < 24) {
                     return ERROR_MALFORMED;
                 }
                 sampleRate = br.getBits(24);
@@ -2711,7 +2789,7 @@ status_t MPEG4Extractor::updateAudioTrackInfoFromESDS_MPEG4Audio(
 MPEG4Source::MPEG4Source(
         const sp<MetaData> &format,
         const sp<DataSource> &dataSource,
-        int32_t timeScale,
+        uint32_t timeScale,
         const sp<SampleTable> &sampleTable,
         nsTArray<SidxEntry> &sidx,
         MPEG4Extractor::TrackExtends &trackExtends)

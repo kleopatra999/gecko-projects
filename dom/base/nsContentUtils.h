@@ -102,10 +102,10 @@ class nsWrapperCache;
 class nsAttrValue;
 class nsITransferable;
 class nsPIWindowRoot;
+class nsIWindowProvider;
 
 struct JSPropertyDescriptor;
 struct JSRuntime;
-struct nsIntMargin;
 
 template<class E> class nsCOMArray;
 template<class K, class V> class nsDataHashtable;
@@ -900,9 +900,6 @@ public:
                                   uint32_t aLineNumber = 0,
                                   uint32_t aColumnNumber = 0);
 
-  static nsresult
-  MaybeReportInterceptionErrorToConsole(nsIDocument* aDocument, nsresult aError);
-
   static void LogMessageToConsole(const char* aMsg, ...);
   
   /**
@@ -1015,6 +1012,29 @@ public:
    * Note: DO NOT call this function unless you know what you're doing!
    */
   static nsContentPolicyType InternalContentPolicyTypeToExternalOrPreload(nsContentPolicyType aType);
+
+  /**
+   * Map internal content policy types to external ones, worker, or preload types:
+   *   * TYPE_INTERNAL_WORKER
+   *   * TYPE_INTERNAL_SHARED_WORKER
+   *   * TYPE_INTERNAL_SERVICE_WORKER
+   *   * TYPE_INTERNAL_SCRIPT_PRELOAD
+   *   * TYPE_INTERNAL_IMAGE_PRELOAD
+   *   * TYPE_INTERNAL_STYLESHEET_PRELOAD
+   *
+   * Note: DO NOT call this function unless you know what you're doing!
+   */
+  static nsContentPolicyType InternalContentPolicyTypeToExternalOrCSPInternal(nsContentPolicyType aType);
+
+  /**
+   * Map internal content policy types to external ones, worker, or preload types:
+   *   * TYPE_INTERNAL_WORKER
+   *   * TYPE_INTERNAL_SHARED_WORKER
+   *   * TYPE_INTERNAL_SERVICE_WORKER
+   *
+   * Note: DO NOT call this function unless you know what you're doing!
+   */
+  static nsContentPolicyType InternalContentPolicyTypeToExternalOrWorker(nsContentPolicyType aType);
 
   /**
    * Quick helper to determine whether there are any mutation listeners
@@ -1639,6 +1659,11 @@ public:
   static bool IsSafeToRunScript() {
     return sScriptBlockerCount == 0;
   }
+
+  // XXXcatalinb: workaround for weird include error when trying to reference
+  // ipdl types in WindowWatcher.
+  static nsIWindowProvider*
+  GetWindowProviderForContentProcess();
 
   /**
    * Call this function if !IsSafeToRunScript() and we fail to run the script

@@ -52,6 +52,7 @@
 #include "nsIHttpChannelInternal.h"
 #include "nsILoadContext.h"
 #include "nsILoadGroupChild.h"
+#include "nsIDOMDocument.h"
 
 using namespace mozilla;
 using namespace mozilla::image;
@@ -75,8 +76,16 @@ public:
     nsTArray<ImageMemoryCounter> uncached;
 
     for (uint32_t i = 0; i < mKnownLoaders.Length(); i++) {
-      mKnownLoaders[i]->mChromeCache.EnumerateRead(DoRecordCounter, &chrome);
-      mKnownLoaders[i]->mCache.EnumerateRead(DoRecordCounter, &content);
+      for (auto iter = mKnownLoaders[i]->mChromeCache.Iter(); !iter.Done(); iter.Next()) {
+        imgCacheEntry* entry = iter.UserData();
+        RefPtr<imgRequest> req = entry->GetRequest();
+        RecordCounterForRequest(req, &chrome, !entry->HasNoProxies());
+      }
+      for (auto iter = mKnownLoaders[i]->mCache.Iter(); !iter.Done(); iter.Next()) {
+        imgCacheEntry* entry = iter.UserData();
+        RefPtr<imgRequest> req = entry->GetRequest();
+        RecordCounterForRequest(req, &content, !entry->HasNoProxies());
+      }
       MutexAutoLock lock(mKnownLoaders[i]->mUncachedImagesMutex);
       for (auto iter = mKnownLoaders[i]->mUncachedImages.Iter();
            !iter.Done();
@@ -109,8 +118,29 @@ public:
     size_t n = 0;
     for (uint32_t i = 0; i < imgLoader::sMemReporter->mKnownLoaders.Length();
          i++) {
-      imgLoader::sMemReporter->mKnownLoaders[i]->
-        mCache.EnumerateRead(DoRecordCounterUsedDecoded, &n);
+      for (auto iter = imgLoader::sMemReporter->mKnownLoaders[i]->mCache.Iter();
+           !iter.Done();
+           iter.Next()) {
+        imgCacheEntry* entry = iter.UserData();
+        if (entry->HasNoProxies()) {
+          continue;
+        }
+
+        RefPtr<imgRequest> req = entry->GetRequest();
+        RefPtr<Image> image = req->GetImage();
+        if (!image) {
+          continue;
+        }
+
+        // Both this and EntryImageSizes measure images/content/raster/used/decoded
+        // memory.  This function's measurement is secondary -- the result doesn't
+        // go in the "explicit" tree -- so we use moz_malloc_size_of instead of
+        // ImagesMallocSizeOf to prevent DMD from seeing it reported twice.
+        ImageMemoryCounter counter(image, moz_malloc_size_of, /* aIsUsed = */ true);
+
+        n += counter.Values().DecodedHeap();
+        n += counter.Values().DecodedNonHeap();
+      }
     }
     return n;
   }
@@ -405,17 +435,6 @@ private:
                                    aValue, desc, aData);
   }
 
-  static PLDHashOperator DoRecordCounter(const ImageCacheKey&,
-                                         imgCacheEntry* aEntry,
-                                         void* aUserArg)
-  {
-    RefPtr<imgRequest> req = aEntry->GetRequest();
-    RecordCounterForRequest(req,
-                           static_cast<nsTArray<ImageMemoryCounter>*>(aUserArg),
-                           !aEntry->HasNoProxies());
-    return PL_DHASH_NEXT;
-  }
-
   static void RecordCounterForRequest(imgRequest* aRequest,
                                       nsTArray<ImageMemoryCounter>* aArray,
                                       bool aIsUsed)
@@ -428,33 +447,6 @@ private:
     ImageMemoryCounter counter(image, ImagesMallocSizeOf, aIsUsed);
 
     aArray->AppendElement(Move(counter));
-  }
-
-  static PLDHashOperator DoRecordCounterUsedDecoded(const ImageCacheKey&,
-                                                    imgCacheEntry* aEntry,
-                                                    void* aUserArg)
-  {
-    if (aEntry->HasNoProxies()) {
-      return PL_DHASH_NEXT;
-    }
-
-    RefPtr<imgRequest> req = aEntry->GetRequest();
-    RefPtr<Image> image = req->GetImage();
-    if (!image) {
-      return PL_DHASH_NEXT;
-    }
-
-    // Both this and EntryImageSizes measure images/content/raster/used/decoded
-    // memory.  This function's measurement is secondary -- the result doesn't
-    // go in the "explicit" tree -- so we use moz_malloc_size_of instead of
-    // ImagesMallocSizeOf to prevent DMD from seeing it reported twice.
-    ImageMemoryCounter counter(image, moz_malloc_size_of, /* aIsUsed = */ true);
-
-    auto n = static_cast<size_t*>(aUserArg);
-    *n += counter.Values().DecodedHeap();
-    *n += counter.Values().DecodedNonHeap();
-
-    return PL_DHASH_NEXT;
   }
 };
 
@@ -1335,21 +1327,13 @@ imgLoader::ClearCache(bool chrome)
 }
 
 NS_IMETHODIMP
-imgLoader::RemoveEntry(nsIURI* aURI)
-{
-  if (aURI && RemoveFromCache(ImageCacheKey(aURI))) {
-    return NS_OK;
-  }
-
-  return NS_ERROR_NOT_AVAILABLE;
-}
-
-NS_IMETHODIMP
-imgLoader::FindEntryProperties(nsIURI* uri, nsIProperties** _retval)
+imgLoader::FindEntryProperties(nsIURI* uri,
+                               nsIDOMDocument* doc,
+                               nsIProperties** _retval)
 {
   *_retval = nullptr;
 
-  ImageCacheKey key(uri);
+  ImageCacheKey key(uri, doc);
   imgCacheTable& cache = GetCache(key);
 
   RefPtr<imgCacheEntry> entry;
@@ -1366,6 +1350,25 @@ imgLoader::FindEntryProperties(nsIURI* uri, nsIProperties** _retval)
   }
 
   return NS_OK;
+}
+
+NS_IMETHODIMP_(void)
+imgLoader::ClearCacheForControlledDocument(nsIDocument* aDoc)
+{
+  MOZ_ASSERT(aDoc);
+  nsAutoTArray<RefPtr<imgCacheEntry>, 128> entriesToBeRemoved;
+  imgCacheTable& cache = GetCache(false);
+  for (auto iter = cache.Iter(); !iter.Done(); iter.Next()) {
+    auto& key = iter.Key();
+    if (key.ControlledDocument() == aDoc) {
+      entriesToBeRemoved.AppendElement(iter.Data());
+    }
+  }
+  for (auto& entry : entriesToBeRemoved) {
+    if (!RemoveFromCache(entry)) {
+      NS_WARNING("Couldn't remove an entry from the cache in ClearCacheForControlledDocument()\n");
+    }
+  }
 }
 
 void
@@ -1590,7 +1593,7 @@ imgLoader::ValidateRequestWithNewChannel(imgRequest* request,
       // We will send notifications from imgCacheValidator::OnStartRequest().
       // In the mean time, we must defer notifications because we are added to
       // the imgRequest's proxy list, and we can get extra notifications
-      // resulting from methods such as RequestDecode(). See bug 579122.
+      // resulting from methods such as StartDecoding(). See bug 579122.
       proxy->SetNotificationsDeferred(true);
 
       // Attach the proxy without notifying
@@ -1666,7 +1669,7 @@ imgLoader::ValidateRequestWithNewChannel(imgRequest* request,
     // We will send notifications from imgCacheValidator::OnStartRequest().
     // In the mean time, we must defer notifications because we are added to
     // the imgRequest's proxy list, and we can get extra notifications
-    // resulting from methods such as RequestDecode(). See bug 579122.
+    // resulting from methods such as StartDecoding(). See bug 579122.
     req->SetNotificationsDeferred(true);
 
     // Add the proxy without notifying
@@ -1891,19 +1894,6 @@ imgLoader::RemoveFromCache(imgCacheEntry* entry)
   return false;
 }
 
-static PLDHashOperator
-EnumEvictEntries(const ImageCacheKey&,
-                 RefPtr<imgCacheEntry>& aData,
-                 void* data)
-{
-  nsTArray<RefPtr<imgCacheEntry> >* entries =
-    reinterpret_cast<nsTArray<RefPtr<imgCacheEntry> > *>(data);
-
-  entries->AppendElement(aData);
-
-  return PL_DHASH_NEXT;
-}
-
 nsresult
 imgLoader::EvictEntries(imgCacheTable& aCacheToClear)
 {
@@ -1912,7 +1902,10 @@ imgLoader::EvictEntries(imgCacheTable& aCacheToClear)
   // We have to make a temporary, since RemoveFromCache removes the element
   // from the queue, invalidating iterators.
   nsTArray<RefPtr<imgCacheEntry> > entries;
-  aCacheToClear.Enumerate(EnumEvictEntries, &entries);
+  for (auto iter = aCacheToClear.Iter(); !iter.Done(); iter.Next()) {
+    RefPtr<imgCacheEntry>& data = iter.Data();
+    entries.AppendElement(data);
+  }
 
   for (uint32_t i = 0; i < entries.Length(); ++i) {
     if (!RemoveFromCache(entries[i])) {
@@ -2095,7 +2088,8 @@ imgLoader::LoadImage(nsIURI* aURI,
   // XXX For now ignore aCacheKey. We will need it in the future
   // for correctly dealing with image load requests that are a result
   // of post data.
-  ImageCacheKey key(aURI);
+  nsCOMPtr<nsIDOMDocument> doc = do_QueryInterface(aCX);
+  ImageCacheKey key(aURI, doc);
   imgCacheTable& cache = GetCache(key);
 
   if (cache.Get(key, getter_AddRefs(entry)) && entry) {
@@ -2319,7 +2313,8 @@ imgLoader::LoadImageWithChannel(nsIChannel* channel,
 
   nsCOMPtr<nsIURI> uri;
   channel->GetURI(getter_AddRefs(uri));
-  ImageCacheKey key(uri);
+  nsCOMPtr<nsIDOMDocument> doc = do_QueryInterface(aCX);
+  ImageCacheKey key(uri, doc);
 
   nsLoadFlags requestFlags = nsIRequest::LOAD_NORMAL;
   channel->GetLoadFlags(&requestFlags);
@@ -2413,7 +2408,7 @@ imgLoader::LoadImageWithChannel(nsIChannel* channel,
     // constructed above with the *current URI* and not the *original URI*. I'm
     // pretty sure this is a bug, and it's preventing us from ever getting a
     // cache hit in LoadImageWithChannel when redirects are involved.
-    ImageCacheKey originalURIKey(originalURI);
+    ImageCacheKey originalURIKey(originalURI, doc);
 
     // Default to doing a principal check because we don't know who
     // started that load and whether their principal ended up being

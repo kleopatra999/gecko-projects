@@ -22,6 +22,8 @@
 # include "jit/arm64/MacroAssembler-arm64.h"
 #elif defined(JS_CODEGEN_MIPS32)
 # include "jit/mips32/MacroAssembler-mips32.h"
+#elif defined(JS_CODEGEN_MIPS64)
+# include "jit/mips64/MacroAssembler-mips64.h"
 #elif defined(JS_CODEGEN_NONE)
 # include "jit/none/MacroAssembler-none.h"
 #else
@@ -62,7 +64,7 @@
 // architectures on each method declaration, such as PER_ARCH and
 // PER_SHARED_ARCH.
 
-# define ALL_ARCH mips32, arm, arm64, x86, x64
+# define ALL_ARCH mips32, mips64, arm, arm64, x86, x64
 # define ALL_SHARED_ARCH arm, arm64, x86_shared, mips_shared
 
 // * How this macro works:
@@ -107,6 +109,7 @@
 # define DEFINED_ON_arm
 # define DEFINED_ON_arm64
 # define DEFINED_ON_mips32
+# define DEFINED_ON_mips64
 # define DEFINED_ON_mips_shared
 # define DEFINED_ON_none
 
@@ -130,6 +133,11 @@
 #elif defined(JS_CODEGEN_MIPS32)
 # undef DEFINED_ON_mips32
 # define DEFINED_ON_mips32 define
+# undef DEFINED_ON_mips_shared
+# define DEFINED_ON_mips_shared define
+#elif defined(JS_CODEGEN_MIPS64)
+# undef DEFINED_ON_mips64
+# define DEFINED_ON_mips64 define
 # undef DEFINED_ON_mips_shared
 # define DEFINED_ON_mips_shared define
 #elif defined(JS_CODEGEN_NONE)
@@ -421,13 +429,13 @@ class MacroAssembler : public MacroAssemblerSpecific
     // Stack manipulation functions.
 
     void PushRegsInMask(LiveRegisterSet set)
-                            DEFINED_ON(arm, arm64, mips32, x86_shared);
+                            DEFINED_ON(arm, arm64, mips32, mips64, x86_shared);
     void PushRegsInMask(LiveGeneralRegisterSet set);
 
     void PopRegsInMask(LiveRegisterSet set);
     void PopRegsInMask(LiveGeneralRegisterSet set);
     void PopRegsInMaskIgnore(LiveRegisterSet set, LiveRegisterSet ignore)
-                                 DEFINED_ON(arm, arm64, mips32, x86_shared);
+                                 DEFINED_ON(arm, arm64, mips32, mips64, x86_shared);
 
     void Push(const Operand op) DEFINED_ON(x86_shared);
     void Push(Register reg) PER_SHARED_ARCH;
@@ -476,9 +484,9 @@ class MacroAssembler : public MacroAssemblerSpecific
     // ===============================================================
     // Simple call functions.
 
-    void call(Register reg) PER_SHARED_ARCH;
+    CodeOffsetLabel call(Register reg) PER_SHARED_ARCH;
+    CodeOffsetLabel call(Label* label) PER_SHARED_ARCH;
     void call(const Address& addr) DEFINED_ON(x86_shared);
-    void call(Label* label) PER_SHARED_ARCH;
     void call(ImmWord imm) PER_SHARED_ARCH;
     // Call a target native function, which is neither traceable nor movable.
     void call(ImmPtr imm) PER_SHARED_ARCH;
@@ -488,6 +496,10 @@ class MacroAssembler : public MacroAssemblerSpecific
 
     inline void call(const CallSiteDesc& desc, const Register reg);
     inline void call(const CallSiteDesc& desc, Label* label);
+    inline void call(const CallSiteDesc& desc, AsmJSInternalCallee callee);
+
+    CodeOffsetLabel callWithPatch() PER_SHARED_ARCH;
+    void patchCall(uint32_t callerOffset, uint32_t calleeOffset) PER_SHARED_ARCH;
 
     // Push the return address and make a call. On platforms where this function
     // is not defined, push the link register (pushReturnAddress) at the entry
@@ -1073,14 +1085,6 @@ class MacroAssembler : public MacroAssemblerSpecific
             MOZ_CRASH("Invalid typed array type");
         }
     }
-
-    template<typename T>
-    void compareExchangeToTypedIntArray(Scalar::Type arrayType, const T& mem, Register oldval, Register newval,
-                                        Register temp, AnyRegister output);
-
-    template<typename T>
-    void atomicExchangeToTypedIntArray(Scalar::Type arrayType, const T& mem, Register value,
-                                       Register temp, AnyRegister output);
 
     void storeToTypedFloatArray(Scalar::Type arrayType, FloatRegister value, const BaseIndex& dest,
                                 unsigned numElems = 0);

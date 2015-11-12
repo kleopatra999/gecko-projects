@@ -469,17 +469,6 @@ LinkModuleToHeap(JSContext* cx, AsmJSModule& module, Handle<ArrayBufferObjectMay
 {
     uint32_t heapLength = heap->byteLength();
 
-    if (IsDeprecatedAsmJSHeapLength(heapLength)) {
-        LinkFail(cx, "ArrayBuffer byteLengths smaller than 64KB are deprecated and "
-                     "will cause a link-time failure in the future");
-
-        // The goal of deprecation is to give apps some time before linking
-        // fails. However, if warnings-as-errors is turned on (which happens as
-        // part of asm.js testing) an exception may be raised.
-        if (cx->isExceptionPending())
-            return false;
-    }
-
     if (!IsValidAsmJSHeapLength(heapLength)) {
         ScopedJSFreePtr<char> msg(
             JS_smprintf("ArrayBuffer byteLength 0x%x is not a valid heap length. The next "
@@ -631,7 +620,6 @@ ChangeHeap(JSContext* cx, AsmJSModule& module, const CallArgs& args)
     }
 
     MOZ_ASSERT(IsValidAsmJSHeapLength(heapLength));
-    MOZ_ASSERT(!IsDeprecatedAsmJSHeapLength(heapLength));
 
     if (!ArrayBufferObject::prepareForAsmJS(cx, newBuffer, module.usesSignalHandlersForOOB()))
         return false;
@@ -1297,7 +1285,7 @@ js::AsmJSFunctionToString(JSContext* cx, HandleFunction fun)
 
             size_t nameEnd = begin + fun->atom()->length();
             Rooted<JSFlatString*> src(cx, source->substring(cx, nameEnd, end));
-            if (!AppendUseStrictSource(cx, fun, src, out))
+            if (!src || !AppendUseStrictSource(cx, fun, src, out))
                 return nullptr;
         } else {
             Rooted<JSFlatString*> src(cx, source->substring(cx, begin, end));

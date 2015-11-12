@@ -52,8 +52,6 @@ public:
   // called cross-thread.
   virtual bool IsOggDecoderShutdown() { return false; }
 
-  virtual bool OnStateMachineTaskQueue() const = 0;
-
   // Get the current MediaResource being used. Its URI will be returned
   // by currentSrc. Returns what was passed to Load(), if Load() has been called.
   virtual MediaResource* GetResource() const = 0;
@@ -113,8 +111,7 @@ public:
 
   // Called by the reader's MediaResource as data arrives over the network.
   // Must be called on the main thread.
-  virtual void NotifyDataArrived(uint32_t aLength, int64_t aOffset,
-                                 bool aThrottleUpdates) = 0;
+  virtual void NotifyDataArrived(bool aThrottleUpdates) = 0;
 
   // Set by Reader if the current audio track can be offloaded
   virtual void SetPlatformCanOffloadAudio(bool aCanOffloadAudio) {}

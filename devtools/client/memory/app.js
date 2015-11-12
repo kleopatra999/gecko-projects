@@ -8,6 +8,8 @@ const { breakdowns } = require("./constants");
 const { toggleRecordingAllocationStacks } = require("./actions/allocations");
 const { setBreakdownAndRefresh } = require("./actions/breakdown");
 const { toggleInvertedAndRefresh } = require("./actions/inverted");
+const { setFilterStringAndRefresh } = require("./actions/filter");
+const { pickFileAndExportSnapshot, pickFileAndImportSnapshotAndCensus } = require("./actions/io");
 const { selectSnapshotAndRefresh, takeSnapshotAndCensus } = require("./actions/snapshot");
 const { breakdownNameToSpec, getBreakdownDisplayData } = require("./utils");
 const Toolbar = createFactory(require("./components/toolbar"));
@@ -49,6 +51,7 @@ const App = createClass({
       allocations,
       inverted,
       toolbox,
+      filter,
     } = this.props;
 
     let selectedSnapshot = snapshots.find(s => s.selected);
@@ -58,6 +61,7 @@ const App = createClass({
 
         Toolbar({
           breakdowns: getBreakdownDisplayData(),
+          onImportClick: () => dispatch(pickFileAndImportSnapshotAndCensus(heapWorker)),
           onTakeSnapshotClick: () => dispatch(takeSnapshotAndCensus(front, heapWorker)),
           onBreakdownChange: breakdown =>
             dispatch(setBreakdownAndRefresh(heapWorker, breakdownNameToSpec(breakdown))),
@@ -66,14 +70,18 @@ const App = createClass({
           allocations,
           inverted,
           onToggleInverted: () =>
-            dispatch(toggleInvertedAndRefresh(heapWorker))
+            dispatch(toggleInvertedAndRefresh(heapWorker)),
+          filter,
+          setFilterString: filterString =>
+            dispatch(setFilterStringAndRefresh(filterString, heapWorker)),
         }),
 
         dom.div({ id: "memory-tool-container" },
           List({
             itemComponent: SnapshotListItem,
             items: snapshots,
-            onClick: snapshot => dispatch(selectSnapshotAndRefresh(heapWorker, snapshot))
+            onClick: snapshot => dispatch(selectSnapshotAndRefresh(heapWorker, snapshot)),
+            onSave: snapshot => dispatch(pickFileAndExportSnapshot(snapshot))
           }),
 
           HeapView({

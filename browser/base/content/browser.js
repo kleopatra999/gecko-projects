@@ -2836,8 +2836,7 @@ var BrowserOnClick = {
                                    .getService(Ci.nsIWeakCryptoOverride);
         weakCryptoOverride.addWeakCryptoOverride(
           msg.data.location.hostname,
-          PrivateBrowsingUtils.isBrowserPrivate(gBrowser.selectedBrowser),
-          true /* temporary */);
+          PrivateBrowsingUtils.isBrowserPrivate(gBrowser.selectedBrowser));
       break;
     }
   },
@@ -5010,6 +5009,10 @@ nsBrowserAccess.prototype = {
   isTabContentWindow: function (aWindow) {
     return gBrowser.browsers.some(browser => browser.contentWindow == aWindow);
   },
+
+  canClose() {
+    return CanCloseWindow();
+  },
 }
 
 function getTogglableToolbars() {
@@ -6566,6 +6569,26 @@ var IndexedDBPromptHelper = {
   }
 };
 
+function CanCloseWindow()
+{
+  // Avoid redundant calls to canClose from showing multiple
+  // PermitUnload dialogs.
+  if (window.skipNextCanClose) {
+    return true;
+  }
+
+  for (let browser of gBrowser.browsers) {
+    let {permitUnload, timedOut} = browser.permitUnload();
+    if (timedOut) {
+      return true;
+    }
+    if (!permitUnload) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function WindowIsClosing()
 {
   if (TabView.isVisible()) {
@@ -6576,27 +6599,19 @@ function WindowIsClosing()
   if (!closeWindow(false, warnAboutClosingWindow))
     return false;
 
-  // Bug 967873 - Proxy nsDocumentViewer::PermitUnload to the child process
-  if (gMultiProcessBrowser)
+  // In theory we should exit here and the Window's internal Close
+  // method should trigger canClose on nsBrowserAccess. However, by
+  // that point it's too late to be able to show a prompt for
+  // PermitUnload. So we do it here, when we still can.
+  if (CanCloseWindow()) {
+    // This flag ensures that the later canClose call does nothing.
+    // It's only needed to make tests pass, since they detect the
+    // prompt even when it's not actually shown.
+    window.skipNextCanClose = true;
     return true;
-
-  for (let browser of gBrowser.browsers) {
-    let ds = browser.docShell;
-    // Passing true to permitUnload indicates we plan on closing the window.
-    // This means that once unload is permitted, all further calls to
-    // permitUnload will be ignored. This avoids getting multiple prompts
-    // to unload the page.
-    if (ds.contentViewer && !ds.contentViewer.permitUnload(true)) {
-      // ... however, if the user aborts closing, we need to undo that,
-      // to ensure they get prompted again when we next try to close the window.
-      // We do this on the window's toplevel docshell instead of on the tab, so
-      // that all tabs we iterated before will get this reset.
-      window.getInterface(Ci.nsIDocShell).contentViewer.resetCloseWindow();
-      return false;
-    }
   }
 
-  return true;
+  return false;
 }
 
 /**
@@ -6968,6 +6983,11 @@ var gIdentityHandler = {
     return this._identityPopupMixedContentLearnMore =
       document.getElementById("identity-popup-mcb-learn-more");
   },
+  get _identityPopupInsecureLoginFormsLearnMore () {
+    delete this._identityPopupInsecureLoginFormsLearnMore;
+    return this._identityPopupInsecureLoginFormsLearnMore =
+      document.getElementById("identity-popup-insecure-login-forms-learn-more");
+  },
   get _identityIconLabel () {
     delete this._identityIconLabel;
     return this._identityIconLabel = document.getElementById("identity-icon-label");
@@ -7135,6 +7155,7 @@ var gIdentityHandler = {
     if (shouldHidePopup) {
       this._identityPopup.hidePopup();
     }
+    this.showWeakCryptoInfoBar();
 
     // NOTE: We do NOT update the identity popup (the control center) when
     // we receive a new security state on the existing page (i.e. from a
@@ -7284,15 +7305,66 @@ var gIdentityHandler = {
   },
 
   /**
+   * Show the weak crypto notification bar.
+   */
+  showWeakCryptoInfoBar() {
+    if (!this._uriHasHost || !this._isBroken || !this._sslStatus.cipherName ||
+        this._sslStatus.cipherName.indexOf("_RC4_") < 0) {
+      return;
+    }
+
+    let notificationBox = gBrowser.getNotificationBox();
+    let notification = notificationBox.getNotificationWithValue("weak-crypto");
+    if (notification) {
+      return;
+    }
+
+    let brandBundle = document.getElementById("bundle_brand");
+    let brandShortName = brandBundle.getString("brandShortName");
+    let message = gNavigatorBundle.getFormattedString("weakCryptoOverriding.message",
+                                                      [brandShortName]);
+
+    let host = this._uri.host;
+    let port = 443;
+    try {
+      if (this._uri.port > 0) {
+        port = this._uri.port;
+      }
+    } catch (e) {}
+
+    let buttons = [{
+      label: gNavigatorBundle.getString("revokeOverride.label"),
+      accessKey: gNavigatorBundle.getString("revokeOverride.accesskey"),
+      callback: function (aNotification, aButton) {
+        try {
+          let weakCryptoOverride = Cc["@mozilla.org/security/weakcryptooverride;1"]
+                                     .getService(Ci.nsIWeakCryptoOverride);
+          weakCryptoOverride.removeWeakCryptoOverride(host, port,
+            PrivateBrowsingUtils.isBrowserPrivate(gBrowser.selectedBrowser));
+          BrowserReloadWithFlags(nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE);
+        } catch (e) {
+          Cu.reportError(e);
+        }
+      }
+    }];
+
+    const priority = notificationBox.PRIORITY_WARNING_MEDIUM;
+    notificationBox.appendNotification(message, "weak-crypto", null,
+                                       priority, buttons);
+  },
+
+  /**
    * Set up the title and content messages for the identity message popup,
    * based on the specified mode, and the details of the SSL cert, where
    * applicable
    */
   refreshIdentityPopup() {
-    // Update the "Learn More" hrefs for Mixed Content Blocking.
+    // Update "Learn More" for Mixed Content Blocking and Insecure Login Forms.
     let baseURL = Services.urlFormatter.formatURLPref("app.support.baseURL");
-    let learnMoreHref = `${baseURL}mixed-content`;
-    this._identityPopupMixedContentLearnMore.setAttribute("href", learnMoreHref);
+    this._identityPopupMixedContentLearnMore
+        .setAttribute("href", baseURL + "mixed-content");
+    this._identityPopupInsecureLoginFormsLearnMore
+        .setAttribute("href", baseURL + "insecure-password");
 
     // Determine connection security information.
     let connection = "not-secure";

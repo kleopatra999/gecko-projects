@@ -1875,6 +1875,8 @@ ScrollFrameHelper::ScrollFrameHelper(nsContainerFrame* aOuter,
                                          ScreenMargin(),
                                          0,
                                          nsLayoutUtils::RepaintMode::DoNotRepaint);
+    nsLayoutUtils::SetZeroMarginDisplayPortOnAsyncScrollableAncestors(
+        mOuter, nsLayoutUtils::RepaintMode::DoNotRepaint);
   }
 
 }
@@ -2135,6 +2137,10 @@ ScrollFrameHelper::ScrollToWithOrigin(nsPoint aScrollPosition,
             // frame to force an APZC which can handle the request.
             nsLayoutUtils::CalculateAndSetDisplayPortMargins(
               mOuter->GetScrollTargetFrame(),
+              nsLayoutUtils::RepaintMode::DoNotRepaint);
+            nsIFrame* frame = do_QueryFrame(mOuter->GetScrollTargetFrame());
+            nsLayoutUtils::SetZeroMarginDisplayPortOnAsyncScrollableAncestors(
+              frame,
               nsLayoutUtils::RepaintMode::DoNotRepaint);
           }
 
@@ -2927,7 +2933,7 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
   // dirty rect here.
   nsRect dirtyRect = aDirtyRect.Intersect(mScrollPort);
 
-  unused << DecideScrollableLayer(aBuilder, &dirtyRect,
+  Unused << DecideScrollableLayer(aBuilder, &dirtyRect,
               /* aAllowCreateDisplayPort = */ !mIsRoot);
 
   bool usingDisplayPort = aBuilder->IsPaintingToWindow() &&
@@ -3092,7 +3098,21 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       //
       // This is not compatible when using containes for root scrollframes.
       MOZ_ASSERT(couldBuildLayer && mScrolledFrame->GetContent());
-      mWillBuildScrollableLayer = true;
+      if (!mWillBuildScrollableLayer) {
+        // Set a displayport so next paint we don't have to force layerization
+        // after the fact.
+        nsLayoutUtils::SetDisplayPortMargins(mOuter->GetContent(),
+                                             mOuter->PresContext()->PresShell(),
+                                             ScreenMargin(),
+                                             0,
+                                             nsLayoutUtils::RepaintMode::DoNotRepaint);
+        // Call DecideScrollableLayer to recompute mWillBuildScrollableLayer and
+        // recompute the current animated geometry root if needed.
+        // It's too late to change the dirty rect so pass a copy.
+        nsRect copyOfDirtyRect = dirtyRect;
+        Unused << DecideScrollableLayer(aBuilder, &copyOfDirtyRect,
+                    /* aAllowCreateDisplayPort = */ false);
+      }
     }
   }
 
@@ -3147,10 +3167,14 @@ ScrollFrameHelper::DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
                                          nsRect* aDirtyRect,
                                          bool aAllowCreateDisplayPort)
 {
+  // Save and check if this changes so we can recompute the current agr.
+  bool oldWillBuildScrollableLayer = mWillBuildScrollableLayer;
+
+  bool wasUsingDisplayPort = false;
   bool usingDisplayPort = false;
   nsIContent* content = mOuter->GetContent();
   if (aBuilder->IsPaintingToWindow()) {
-    bool wasUsingDisplayPort = nsLayoutUtils::GetDisplayPort(content);
+    wasUsingDisplayPort = nsLayoutUtils::GetDisplayPort(content);
 
     nsRect displayportBase = *aDirtyRect;
     nsPresContext* pc = mOuter->PresContext();
@@ -3175,12 +3199,6 @@ ScrollFrameHelper::DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
     // Override the dirty rectangle if the displayport has been set.
     if (usingDisplayPort) {
       *aDirtyRect = displayPort;
-
-      // The cached animated geometry root for the display builder is out of
-      // date if we just introduced a new animated geometry root.
-      if (!wasUsingDisplayPort) {
-        aBuilder->RecomputeCurrentAnimatedGeometryRoot();
-      }
     }
   }
 
@@ -3191,6 +3209,12 @@ ScrollFrameHelper::DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
   // If the element is marked 'scrollgrab', also force building of a layer
   // so that APZ can implement scroll grabbing.
   mWillBuildScrollableLayer = usingDisplayPort || nsContentUtils::HasScrollgrab(content);
+
+  // The cached animated geometry root for the display builder is out of
+  // date if we just introduced a new animated geometry root.
+  if ((oldWillBuildScrollableLayer != mWillBuildScrollableLayer) || (wasUsingDisplayPort != usingDisplayPort)) {
+    aBuilder->RecomputeCurrentAnimatedGeometryRoot();
+  }
 
   if (gfxPrefs::LayoutUseContainersForRootFrames() && mWillBuildScrollableLayer && mIsRoot) {
     mIsScrollableLayerInRootContainer = true;
@@ -4199,6 +4223,7 @@ ScrollFrameHelper::FireScrollEvent()
 {
   mScrollEvent.Forget();
 
+  ActiveLayerTracker::SetCurrentScrollHandlerFrame(mOuter);
   WidgetGUIEvent event(true, eScroll, nullptr);
   nsEventStatus status = nsEventStatus_eIgnore;
   nsIContent* content = mOuter->GetContent();
@@ -4216,6 +4241,7 @@ ScrollFrameHelper::FireScrollEvent()
     event.mFlags.mBubbles = false;
     EventDispatcher::Dispatch(content, prescontext, &event, nullptr, &status);
   }
+  ActiveLayerTracker::SetCurrentScrollHandlerFrame(nullptr);
 }
 
 void
@@ -4726,9 +4752,15 @@ ScrollFrameHelper::FinishReflowForScrollbar(nsIContent* aContent,
 bool
 ScrollFrameHelper::ReflowFinished()
 {
-  nsAutoScriptBlocker scriptBlocker;
   mPostedReflowCallback = false;
 
+  if (NS_SUBTREE_DIRTY(mOuter)) {
+    // We will get another call after the next reflow and scrolling
+    // later is less janky.
+    return false;
+  }
+
+  nsAutoScriptBlocker scriptBlocker;
   ScrollToRestoredPosition();
 
   // Clamp current scroll position to new bounds. Normally this won't
@@ -4742,9 +4774,9 @@ ScrollFrameHelper::ReflowFinished()
     mDestination = GetScrollPosition();
   }
 
-  if (NS_SUBTREE_DIRTY(mOuter) || !mUpdateScrollbarAttributes)
+  if (!mUpdateScrollbarAttributes) {
     return false;
-
+  }
   mUpdateScrollbarAttributes = false;
 
   // Update scrollbar attributes.

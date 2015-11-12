@@ -663,7 +663,7 @@ Animation::CanThrottle() const
     return true;
   }
 
-  return IsRunningOnCompositor();
+  return mEffect->CanThrottle();
 }
 
 void
@@ -933,7 +933,7 @@ Animation::PauseAt(const TimeDuration& aReadyTime)
   MOZ_ASSERT(mPendingState == PendingState::PausePending,
              "Expected to pause a pause-pending animation");
 
-  if (!mStartTime.IsNull()) {
+  if (!mStartTime.IsNull() && mHoldTime.IsNull()) {
     mHoldTime.SetValue((aReadyTime - mStartTime.Value())
                         .MultDouble(mPlaybackRate));
   }
@@ -1172,28 +1172,17 @@ Animation::GetRenderedDocument() const
     return nullptr;
   }
 
-  Element* targetElement;
-  nsCSSPseudoElements::Type pseudoType;
-  mEffect->GetTarget(targetElement, pseudoType);
-  if (!targetElement) {
-    return nullptr;
-  }
-
-  return targetElement->GetComposedDoc();
+  return mEffect->GetRenderedDocument();
 }
 
 nsPresContext*
 Animation::GetPresContext() const
 {
-  nsIDocument* doc = GetRenderedDocument();
-  if (!doc) {
+  if (!mEffect) {
     return nullptr;
   }
-  nsIPresShell* shell = doc->GetShell();
-  if (!shell) {
-    return nullptr;
-  }
-  return shell->GetPresContext();
+
+  return mEffect->GetPresContext();
 }
 
 AnimationCollection*

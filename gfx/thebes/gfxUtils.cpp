@@ -7,6 +7,7 @@
 
 #include "cairo.h"
 #include "gfxContext.h"
+#include "gfxEnv.h"
 #include "gfxImageSurface.h"
 #include "gfxPlatform.h"
 #include "gfxDrawable.h"
@@ -20,6 +21,7 @@
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/Vector.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIClipboardHelper.h"
@@ -506,7 +508,7 @@ struct MOZ_STACK_CLASS AutoCairoPixmanBugWorkaround
         bounds.RoundOut();
         mContext->Clip(bounds);
         mContext->SetMatrix(currentMatrix);
-        mContext->PushGroup(gfxContentType::COLOR_ALPHA);
+        mContext->PushGroupForBlendBack(gfxContentType::COLOR_ALPHA);
         mContext->SetOp(CompositionOp::OP_OVER);
 
         mPushedGroup = true;
@@ -515,8 +517,7 @@ struct MOZ_STACK_CLASS AutoCairoPixmanBugWorkaround
     ~AutoCairoPixmanBugWorkaround()
     {
         if (mPushedGroup) {
-            mContext->PopGroupToSource();
-            mContext->Paint();
+            mContext->PopGroupAndBlend();
             mContext->Restore();
         }
     }
@@ -1559,7 +1560,7 @@ gfxUtils::GetImageBuffer(gfx::DataSourceSurface* aSurface,
         return nullptr;
 
     uint32_t bufferSize = aSurface->GetSize().width * aSurface->GetSize().height * 4;
-    UniquePtr<uint8_t[]> imageBuffer(new (fallible) uint8_t[bufferSize]);
+    auto imageBuffer = MakeUniqueFallible<uint8_t[]>(bufferSize);
     if (!imageBuffer) {
         aSurface->Unmap();
         return nullptr;
@@ -1669,20 +1670,6 @@ gfxUtils::DumpDisplayList() {
 }
 
 FILE *gfxUtils::sDumpPaintFile = stderr;
-
-#ifdef MOZ_DUMP_PAINTING
-bool gfxUtils::sDumpPainting = getenv("MOZ_DUMP_PAINT") != 0;
-bool gfxUtils::sDumpPaintingIntermediate = getenv("MOZ_DUMP_PAINT_INTERMEDIATE") != 0;
-bool gfxUtils::sDumpPaintingToFile = getenv("MOZ_DUMP_PAINT_TO_FILE") != 0;
-bool gfxUtils::sDumpPaintItems = getenv("MOZ_DUMP_PAINT_ITEMS") != 0;
-bool gfxUtils::sDumpCompositorTextures = getenv("MOZ_DUMP_COMPOSITOR_TEXTURES") != 0;
-#else
-bool gfxUtils::sDumpPainting = false;
-bool gfxUtils::sDumpPaintingIntermediate = false;
-bool gfxUtils::sDumpPaintingToFile = false;
-bool gfxUtils::sDumpPaintItems = false;
-bool gfxUtils::sDumpCompositorTextures = false;
-#endif
 
 namespace mozilla {
 namespace gfx {

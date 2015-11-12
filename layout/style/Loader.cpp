@@ -266,33 +266,18 @@ private:
 
 #include "mozilla/Logging.h"
 
-static PRLogModuleInfo *
-GetLoaderLog()
-{
-  static PRLogModuleInfo *sLog;
-  if (!sLog)
-    sLog = PR_NewLogModule("nsCSSLoader");
-  return sLog;
-}
+static mozilla::LazyLogModule sCssLoaderLog("nsCSSLoader");
 
-static PRLogModuleInfo*
-GetSriLog()
-{
-  static PRLogModuleInfo *gSriPRLog;
-  if (!gSriPRLog) {
-    gSriPRLog = PR_NewLogModule("SRI");
-  }
-  return gSriPRLog;
-}
+static mozilla::LazyLogModule gSriPRLog("SRI");
 
-#define LOG_ERROR(args) MOZ_LOG(GetLoaderLog(), mozilla::LogLevel::Error, args)
-#define LOG_WARN(args) MOZ_LOG(GetLoaderLog(), mozilla::LogLevel::Warning, args)
-#define LOG_DEBUG(args) MOZ_LOG(GetLoaderLog(), mozilla::LogLevel::Debug, args)
+#define LOG_ERROR(args) MOZ_LOG(sCssLoaderLog, mozilla::LogLevel::Error, args)
+#define LOG_WARN(args) MOZ_LOG(sCssLoaderLog, mozilla::LogLevel::Warning, args)
+#define LOG_DEBUG(args) MOZ_LOG(sCssLoaderLog, mozilla::LogLevel::Debug, args)
 #define LOG(args) LOG_DEBUG(args)
 
-#define LOG_ERROR_ENABLED() MOZ_LOG_TEST(GetLoaderLog(), mozilla::LogLevel::Error)
-#define LOG_WARN_ENABLED() MOZ_LOG_TEST(GetLoaderLog(), mozilla::LogLevel::Warning)
-#define LOG_DEBUG_ENABLED() MOZ_LOG_TEST(GetLoaderLog(), mozilla::LogLevel::Debug)
+#define LOG_ERROR_ENABLED() MOZ_LOG_TEST(sCssLoaderLog, mozilla::LogLevel::Error)
+#define LOG_WARN_ENABLED() MOZ_LOG_TEST(sCssLoaderLog, mozilla::LogLevel::Warning)
+#define LOG_DEBUG_ENABLED() MOZ_LOG_TEST(sCssLoaderLog, mozilla::LogLevel::Debug)
 #define LOG_ENABLED() LOG_DEBUG_ENABLED()
 
 #define LOG_URI(format, uri)                        \
@@ -437,7 +422,7 @@ SheetLoadData::SheetLoadData(Loader* aLoader,
 
 SheetLoadData::~SheetLoadData()
 {
-  NS_IF_RELEASE(mNext);
+  NS_CSS_NS_RELEASE_LIST_MEMBER(SheetLoadData, this, mNext);
 }
 
 NS_IMETHODIMP
@@ -982,7 +967,7 @@ SheetLoadData::OnStreamComplete(nsIUnicharStreamLoader* aLoader,
                                           mSheet->GetCORSMode(), aBuffer,
                                           mLoader->mDocument))) {
     LOG(("  Load was blocked by SRI"));
-    MOZ_LOG(GetSriLog(), mozilla::LogLevel::Debug,
+    MOZ_LOG(gSriPRLog, mozilla::LogLevel::Debug,
             ("css::Loader::OnStreamComplete, bad metadata"));
     mLoader->SheetComplete(this, NS_ERROR_SRI_CORRUPT);
     return NS_OK;
@@ -1271,7 +1256,7 @@ Loader::CreateSheet(nsIURI* aURI,
 
     SRIMetadata sriMetadata;
     if (!aIntegrity.IsEmpty()) {
-      MOZ_LOG(GetSriLog(), mozilla::LogLevel::Debug,
+      MOZ_LOG(gSriPRLog, mozilla::LogLevel::Debug,
               ("css::Loader::CreateSheet, integrity=%s",
                NS_ConvertUTF16toUTF8(aIntegrity).get()));
       SRICheck::IntegrityMetadata(aIntegrity, mDocument, &sriMetadata);
@@ -1418,7 +1403,10 @@ Loader::InsertSheetInDoc(CSSStyleSheet* aSheet,
  * append to the end because the CSSOM can insert @import rules.  In
  * practice, we get the call to load the child sheet before the CSSOM
  * has finished inserting the @import rule, so we have no idea where
- * to put it anyway.  So just append for now.
+ * to put it anyway.  So just append for now.  (In the future if we
+ * want to insert the sheet at the correct position, we'll need to
+ * restore CSSStyleSheet::InsertStyleSheetAt, which was removed in
+ * bug 1220506.)
  */
 nsresult
 Loader::InsertChildSheet(CSSStyleSheet* aSheet,

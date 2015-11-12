@@ -8,6 +8,7 @@
 #define jit_JitSpewer_h
 
 #include "mozilla/DebugOnly.h"
+#include "mozilla/IntegerPrintfMacros.h"
 
 #include <stdarg.h>
 
@@ -105,7 +106,7 @@ class TempAllocator;
 // None of the global functions have effect on non-debug builds.
 static const int NULL_ID = -1;
 
-#ifdef DEBUG
+#ifdef JS_JITSPEW
 
 // Class made to hold the MIR and LIR graphs of an AsmJS / Ion compilation.
 class GraphSpewer
@@ -247,7 +248,7 @@ static inline void EnableIonDebugSyncLogging()
 static inline void EnableIonDebugAsyncLogging()
 { }
 
-#endif /* DEBUG */
+#endif /* JS_JITSPEW */
 
 template <JitSpewChannel Channel>
 class AutoDisableSpew
@@ -263,7 +264,7 @@ class AutoDisableSpew
 
     ~AutoDisableSpew()
     {
-#ifdef DEBUG
+#ifdef JS_JITSPEW
         if (enabled_)
             EnableChannel(Channel);
 #endif

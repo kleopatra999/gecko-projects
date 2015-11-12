@@ -66,11 +66,12 @@ Compositor::DrawDiagnostics(DiagnosticFlags aFlags,
     while (const gfx::IntRect* rect = screenIter.Next())
     {
       DrawDiagnostics(aFlags | DiagnosticFlags::REGION_RECT,
-                      ToRect(*rect), aClipRect, aTransform, aFlashCounter);
+                      IntRectToRect(*rect), aClipRect, aTransform,
+                      aFlashCounter);
     }
   }
 
-  DrawDiagnostics(aFlags, ToRect(aVisibleRegion.GetBounds()),
+  DrawDiagnostics(aFlags, IntRectToRect(aVisibleRegion.GetBounds()),
                   aClipRect, aTransform, aFlashCounter);
 }
 
@@ -111,7 +112,13 @@ Compositor::DrawDiagnosticsInternal(DiagnosticFlags aFlags,
       color = gfx::Color(0.0f, 1.0f, 1.0f, 1.0f); // greenish blue
     }
   } else if (aFlags & DiagnosticFlags::IMAGE) {
-    color = gfx::Color(1.0f, 0.0f, 0.0f, 1.0f); // red
+    if (aFlags & DiagnosticFlags::NV12) {
+      color = gfx::Color(1.0f, 1.0f, 0.0f, 1.0f); // yellow
+    } else if (aFlags & DiagnosticFlags::YCBCR) {
+      color = gfx::Color(1.0f, 0.55f, 0.0f, 1.0f); // orange
+    } else {
+      color = gfx::Color(1.0f, 0.0f, 0.0f, 1.0f); // red
+    }
   } else if (aFlags & DiagnosticFlags::COLOR) {
     color = gfx::Color(0.0f, 0.0f, 1.0f, 1.0f); // blue
   } else if (aFlags & DiagnosticFlags::CONTAINER) {

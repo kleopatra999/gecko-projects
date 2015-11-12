@@ -1251,7 +1251,7 @@ IMMHandler::HandleStartComposition(nsWindow* aWindow,
   mCursorPosition = NO_IME_CARET;
 
   WidgetCompositionEvent event(true, eCompositionStart, aWindow);
-  nsIntPoint point(0, 0);
+  LayoutDeviceIntPoint point(0, 0);
   aWindow->InitEvent(event, &point);
   aWindow->DispatchWindowEvent(&event);
 
@@ -1527,7 +1527,7 @@ IMMHandler::HandleEndComposition(nsWindow* aWindow,
   EventMessage message =
     aCommitString ? eCompositionCommit : eCompositionCommitAsIs;
   WidgetCompositionEvent compositionCommitEvent(true, message, aWindow);
-  nsIntPoint point(0, 0);
+  LayoutDeviceIntPoint point(0, 0);
   aWindow->InitEvent(compositionCommitEvent, &point);
   if (aCommitString) {
     compositionCommitEvent.mData = *aCommitString;
@@ -1662,8 +1662,7 @@ IMMHandler::HandleQueryCharPosition(nsWindow* aWindow,
       ("IMM: HandleQueryCharPosition, eQueryEditorRect failed"));
     ::GetWindowRect(aWindow->GetWindowHandle(), &pCharPosition->rcDocument);
   } else {
-    nsIntRect editorRectInWindow =
-      LayoutDevicePixel::ToUntyped(editorRect.mReply.mRect);
+    nsIntRect editorRectInWindow = editorRect.mReply.mRect.ToUnknownRect();
     nsWindow* window = editorRect.mReply.mFocusedWidget ?
       static_cast<nsWindow*>(editorRect.mReply.mFocusedWidget) : aWindow;
     nsIntRect editorRectInScreen;
@@ -1693,7 +1692,7 @@ IMMHandler::HandleDocumentFeed(nsWindow* aWindow,
   *oResult = 0;
   RECONVERTSTRING* pReconv = reinterpret_cast<RECONVERTSTRING*>(lParam);
 
-  nsIntPoint point(0, 0);
+  LayoutDeviceIntPoint point(0, 0);
 
   bool hasCompositionString =
     mIsComposing && ShouldDrawCompositionStringOurselves();
@@ -1895,7 +1894,7 @@ IMMHandler::DispatchCompositionChangeEvent(nsWindow* aWindow,
 
   RefPtr<nsWindow> kungFuDeathGrip(aWindow);
 
-  nsIntPoint point(0, 0);
+  LayoutDeviceIntPoint point(0, 0);
 
   WidgetCompositionEvent event(true, eCompositionChange, aWindow);
 
@@ -2098,7 +2097,7 @@ IMMHandler::GetCharacterRectOfSelectedTextAt(nsWindow* aWindow,
                                              nsIntRect& aCharRect,
                                              WritingMode* aWritingMode)
 {
-  nsIntPoint point(0, 0);
+  LayoutDeviceIntPoint point(0, 0);
 
   Selection& selection = GetSelection();
   if (!selection.EnsureValidSelection(aWindow)) {
@@ -2170,7 +2169,7 @@ IMMHandler::GetCharacterRectOfSelectedTextAt(nsWindow* aWindow,
     aWindow->InitEvent(charRect, &point);
     aWindow->DispatchWindowEvent(&charRect);
     if (charRect.mSucceeded) {
-      aCharRect = LayoutDevicePixel::ToUntyped(charRect.mReply.mRect);
+      aCharRect = charRect.mReply.mRect.ToUnknownRect();
       if (aWritingMode) {
         *aWritingMode = charRect.GetWritingMode();
       }
@@ -2192,7 +2191,7 @@ IMMHandler::GetCaretRect(nsWindow* aWindow,
                          nsIntRect& aCaretRect,
                          WritingMode* aWritingMode)
 {
-  nsIntPoint point(0, 0);
+  LayoutDeviceIntPoint point(0, 0);
 
   Selection& selection = GetSelection();
   if (!selection.EnsureValidSelection(aWindow)) {
@@ -2211,7 +2210,7 @@ IMMHandler::GetCaretRect(nsWindow* aWindow,
       ("IMM: GetCaretRect, FAILED, due to eQueryCaretRect failure"));
     return false;
   }
-  aCaretRect = LayoutDevicePixel::ToUntyped(caretRect.mReply.mRect);
+  aCaretRect = caretRect.mReply.mRect.ToUnknownRect();
   if (aWritingMode) {
     *aWritingMode = caretRect.GetWritingMode();
   }
@@ -2391,7 +2390,7 @@ IMMHandler::SetIMERelatedWindowsPosOnPlugin(nsWindow* aWindow,
   nsWindow* toplevelWindow = aWindow->GetTopLevelWindow(false);
   LayoutDeviceIntRect pluginRectInScreen =
     editorRectEvent.mReply.mRect + toplevelWindow->WidgetToScreenOffset();
-  nsIntRect winRectInScreen;
+  LayoutDeviceIntRect winRectInScreen;
   aWindow->GetClientBounds(winRectInScreen);
   // composition window cannot be positioned on the edge of client area.
   winRectInScreen.width--;
@@ -2753,7 +2752,7 @@ IMMHandler::Selection::Init(nsWindow* aWindow)
   Clear();
 
   WidgetQueryContentEvent selection(true, eQuerySelectedText, aWindow);
-  nsIntPoint point(0, 0);
+  LayoutDeviceIntPoint point(0, 0);
   aWindow->InitEvent(selection, &point);
   aWindow->DispatchWindowEvent(&selection);
   if (NS_WARN_IF(!selection.mSucceeded)) {

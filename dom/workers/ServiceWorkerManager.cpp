@@ -50,6 +50,7 @@
 #include "mozilla/EnumSet.h"
 
 #include "nsContentPolicyUtils.h"
+#include "nsContentSecurityManager.h"
 #include "nsContentUtils.h"
 #include "nsGlobalWindow.h"
 #include "nsNetUtil.h"
@@ -304,7 +305,6 @@ private:
 } // namespace
 
 NS_IMPL_ISUPPORTS0(ServiceWorkerJob)
-NS_IMPL_ISUPPORTS0(ServiceWorkerRegistrationInfo)
 
 void
 ServiceWorkerJob::Done(nsresult aStatus)
@@ -314,7 +314,7 @@ ServiceWorkerJob::Done(nsresult aStatus)
     nsAutoCString errorName;
     GetErrorName(aStatus, errorName);
 #endif
-    NS_WARNING(nsPrintfCString("ServiceWorkerJob failed with error: %s\n",
+    NS_WARNING(nsPrintfCString("ServiceWorkerJob failed with error: %s",
                                errorName.get()).get());
   }
 
@@ -381,6 +381,59 @@ ServiceWorkerRegistrationInfo::~ServiceWorkerRegistrationInfo()
   if (IsControllingDocuments()) {
     NS_WARNING("ServiceWorkerRegistrationInfo is still controlling documents. This can be a bug or a leak in ServiceWorker API or in any other API that takes the document alive.");
   }
+}
+
+NS_IMPL_ISUPPORTS(ServiceWorkerRegistrationInfo, nsIServiceWorkerRegistrationInfo)
+
+NS_IMETHODIMP
+ServiceWorkerRegistrationInfo::GetPrincipal(nsIPrincipal** aPrincipal)
+{
+  AssertIsOnMainThread();
+  NS_ADDREF(*aPrincipal = mPrincipal);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerRegistrationInfo::GetScope(nsAString& aScope)
+{
+  AssertIsOnMainThread();
+  CopyUTF8toUTF16(mScope, aScope);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerRegistrationInfo::GetScriptSpec(nsAString& aScriptSpec)
+{
+  AssertIsOnMainThread();
+  CopyUTF8toUTF16(mScriptSpec, aScriptSpec);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerRegistrationInfo::GetInstallingWorker(nsIServiceWorkerInfo **aResult)
+{
+  AssertIsOnMainThread();
+  nsCOMPtr<nsIServiceWorkerInfo> info = do_QueryInterface(mInstallingWorker);
+  info.forget(aResult);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerRegistrationInfo::GetWaitingWorker(nsIServiceWorkerInfo **aResult)
+{
+  AssertIsOnMainThread();
+  nsCOMPtr<nsIServiceWorkerInfo> info = do_QueryInterface(mWaitingWorker);
+  info.forget(aResult);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerRegistrationInfo::GetActiveWorker(nsIServiceWorkerInfo **aResult)
+{
+  AssertIsOnMainThread();
+  nsCOMPtr<nsIServiceWorkerInfo> info = do_QueryInterface(mActiveWorker);
+  info.forget(aResult);
+  return NS_OK;
 }
 
 already_AddRefed<ServiceWorkerInfo>
@@ -1215,7 +1268,7 @@ private:
     swm->MaybeRemoveRegistration(mRegistration);
     // Ensures that the job can't do anything useful from this point on.
     mRegistration = nullptr;
-    unused << NS_WARN_IF(NS_FAILED(aRv));
+    Unused << NS_WARN_IF(NS_FAILED(aRv));
     Done(aRv);
   }
 
@@ -1332,61 +1385,6 @@ ContinueInstallTask::ContinueAfterWorkerEvent(bool aSuccess)
   mJob->ContinueAfterInstallEvent(aSuccess);
 }
 
-static bool
-IsFromAuthenticatedOriginInternal(nsIDocument* aDoc)
-{
-  nsCOMPtr<nsIURI> documentURI = aDoc->GetDocumentURI();
-
-  bool authenticatedOrigin = false;
-  nsresult rv;
-  if (!authenticatedOrigin) {
-    nsAutoCString scheme;
-    rv = documentURI->GetScheme(scheme);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return false;
-    }
-
-    if (scheme.EqualsLiteral("https") ||
-        scheme.EqualsLiteral("file") ||
-        scheme.EqualsLiteral("app")) {
-      authenticatedOrigin = true;
-    }
-  }
-
-  if (!authenticatedOrigin) {
-    nsAutoCString host;
-    rv = documentURI->GetHost(host);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return false;
-    }
-
-    if (host.Equals("127.0.0.1") ||
-        host.Equals("localhost") ||
-        host.Equals("::1")) {
-      authenticatedOrigin = true;
-    }
-  }
-
-  if (!authenticatedOrigin) {
-    bool isFile;
-    rv = documentURI->SchemeIs("file", &isFile);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return false;
-    }
-
-    if (!isFile) {
-      bool isHttps;
-      rv = documentURI->SchemeIs("https", &isHttps);
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return false;
-      }
-      authenticatedOrigin = isHttps;
-    }
-  }
-
-  return authenticatedOrigin;
-}
-
 // This function implements parts of the step 3 of the following algorithm:
 // https://w3c.github.io/webappsec/specs/powerfulfeatures/#settings-secure
 static bool
@@ -1394,8 +1392,31 @@ IsFromAuthenticatedOrigin(nsIDocument* aDoc)
 {
   MOZ_ASSERT(aDoc);
   nsCOMPtr<nsIDocument> doc(aDoc);
+  nsCOMPtr<nsIContentSecurityManager> csm = do_GetService(NS_CONTENTSECURITYMANAGER_CONTRACTID);
+  if (NS_WARN_IF(!csm)) {
+    return false;
+  }
+
   while (doc && !nsContentUtils::IsChromeDoc(doc)) {
-    if (!IsFromAuthenticatedOriginInternal(doc)) {
+    bool trustworthyURI = false;
+
+    // The origin of the document may be different from the document URI
+    // itself.  Check the principal, not the document URI itself.
+    nsCOMPtr<nsIPrincipal> documentPrincipal = doc->NodePrincipal();
+
+    // The check for IsChromeDoc() above should mean we never see a system
+    // principal inside the loop.
+    MOZ_ASSERT(!nsContentUtils::IsSystemPrincipal(documentPrincipal));
+
+    // Pass the principal as a URI to the security manager
+    nsCOMPtr<nsIURI> uri;
+    documentPrincipal->GetURI(getter_AddRefs(uri));
+    if (NS_WARN_IF(!uri)) {
+      return false;
+    }
+
+    csm->IsURIPotentiallyTrustworthy(uri, &trustworthyURI);
+    if (!trustworthyURI) {
       return false;
     }
 
@@ -1415,16 +1436,19 @@ ServiceWorkerManager::Register(nsIDOMWindow* aWindow,
   AssertIsOnMainThread();
 
   nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aWindow);
-  MOZ_ASSERT(window);
+  if (NS_WARN_IF(!window)) {
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
 
   nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
   if (!doc) {
     return NS_ERROR_FAILURE;
   }
 
-  // Don't allow service workers to register when the *document* is chrome for
-  // now.
-  MOZ_ASSERT(!nsContentUtils::IsSystemPrincipal(doc->NodePrincipal()));
+  // Don't allow service workers to register when the *document* is chrome.
+  if (NS_WARN_IF(nsContentUtils::IsSystemPrincipal(doc->NodePrincipal()))) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
 
   nsCOMPtr<nsPIDOMWindow> outerWindow = window->GetOuterWindow();
   bool serviceWorkersTestingEnabled =
@@ -1473,6 +1497,28 @@ ServiceWorkerManager::Register(nsIDOMWindow* aWindow,
     return NS_ERROR_DOM_SECURITY_ERR;
   }
 
+  // The IsURIPotentiallyTrustworthy() check allows file:// and possibly other
+  // URI schemes.  We need to explicitly only allows http and https schemes.
+  // Note, we just use the aScriptURI here for the check since its already
+  // been verified as same origin with the document principal.  This also
+  // is a good block against accidentally allowing blob: script URIs which
+  // might inherit the origin.
+  bool isHttp = false;
+  bool isHttps = false;
+  aScriptURI->SchemeIs("http", &isHttp);
+  aScriptURI->SchemeIs("https", &isHttps);
+  if (NS_WARN_IF(!isHttp && !isHttps)) {
+#ifdef RELEASE_BUILD
+    return NS_ERROR_DOM_SECURITY_ERR;
+#else
+    bool isApp = false;
+    aScriptURI->SchemeIs("app", &isApp);
+    if (NS_WARN_IF(!isApp)) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+    }
+#endif
+  }
+
   nsCString cleanedScope;
   rv = aScopeURI->GetSpecIgnoringRef(cleanedScope);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -1480,7 +1526,7 @@ ServiceWorkerManager::Register(nsIDOMWindow* aWindow,
   }
 
   nsAutoCString spec;
-  rv = aScriptURI->GetSpec(spec);
+  rv = aScriptURI->GetSpecIgnoringRef(spec);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
@@ -1720,14 +1766,15 @@ ServiceWorkerManager::GetRegistrations(nsIDOMWindow* aWindow,
                                        nsISupports** aPromise)
 {
   AssertIsOnMainThread();
-  MOZ_ASSERT(aWindow);
 
   nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aWindow);
-  MOZ_ASSERT(window);
+  if (NS_WARN_IF(!window)) {
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
 
   nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
-  if (!doc) {
-    return NS_ERROR_FAILURE;
+  if (NS_WARN_IF(!doc)) {
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
 
   // Don't allow service workers to register when the *document* is chrome for
@@ -1824,14 +1871,15 @@ ServiceWorkerManager::GetRegistration(nsIDOMWindow* aWindow,
                                       nsISupports** aPromise)
 {
   AssertIsOnMainThread();
-  MOZ_ASSERT(aWindow);
 
   nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aWindow);
-  MOZ_ASSERT(window);
+  if (NS_WARN_IF(!window)) {
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
 
   nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
-  if (!doc) {
-    return NS_ERROR_FAILURE;
+  if (NS_WARN_IF(!doc)) {
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
 
   // Don't allow service workers to register when the *document* is chrome for
@@ -1977,13 +2025,14 @@ ServiceWorkerManager::GetReadyPromise(nsIDOMWindow* aWindow,
                                       nsISupports** aPromise)
 {
   AssertIsOnMainThread();
-  MOZ_ASSERT(aWindow);
 
   nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aWindow);
-  MOZ_ASSERT(window);
+  if (NS_WARN_IF(!window)) {
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
 
   nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
-  if (!doc) {
+  if (NS_WARN_IF(!doc)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -2222,7 +2271,7 @@ private:
   UnregisterAndDone()
   {
     nsresult rv = Unregister();
-    unused << NS_WARN_IF(NS_FAILED(rv));
+    Unused << NS_WARN_IF(NS_FAILED(rv));
     Done(rv);
   }
 };
@@ -2655,6 +2704,7 @@ ServiceWorkerManager::AddScopeAndRegistration(const nsACString& aScope,
     // Perfect match!
     if (aScope.Equals(current)) {
       data->mInfos.Put(aScope, aInfo);
+      swm->NotifyListenersOnRegister(aInfo);
       return;
     }
 
@@ -2664,12 +2714,14 @@ ServiceWorkerManager::AddScopeAndRegistration(const nsACString& aScope,
     if (StringBeginsWith(aScope, current)) {
       data->mOrderedScopes.InsertElementAt(i, aScope);
       data->mInfos.Put(aScope, aInfo);
+      swm->NotifyListenersOnRegister(aInfo);
       return;
     }
   }
 
   data->mOrderedScopes.AppendElement(aScope);
   data->mInfos.Put(aScope, aInfo);
+  swm->NotifyListenersOnRegister(aInfo);
 }
 
 /* static */ bool
@@ -2736,8 +2788,12 @@ ServiceWorkerManager::RemoveScopeAndRegistration(ServiceWorkerRegistrationInfo* 
     return;
   }
 
+  RefPtr<ServiceWorkerRegistrationInfo> info;
+  data->mInfos.Get(aRegistration->mScope, getter_AddRefs(info));
+
   data->mInfos.Remove(aRegistration->mScope);
   data->mOrderedScopes.RemoveElement(aRegistration->mScope);
+  swm->NotifyListenersOnUnregister(info);
 
   swm->MaybeRemoveRegistrationInfo(scopeKey);
 }
@@ -2915,7 +2971,7 @@ ServiceWorkerManager::GetServiceWorkerForScope(nsIDOMWindow* aWindow,
 
   nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aWindow);
   if (NS_WARN_IF(!window)) {
-    return NS_ERROR_FAILURE;
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
 
   nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
@@ -3138,7 +3194,6 @@ bool
 ServiceWorkerManager::IsControlled(nsIDocument* aDoc, ErrorResult& aRv)
 {
   MOZ_ASSERT(aDoc);
-  MOZ_ASSERT(!nsContentUtils::IsInPrivateBrowsing(aDoc));
 
   RefPtr<ServiceWorkerRegistrationInfo> registration;
   nsresult rv = GetDocumentRegistration(aDoc, getter_AddRefs(registration));
@@ -3148,6 +3203,7 @@ ServiceWorkerManager::IsControlled(nsIDocument* aDoc, ErrorResult& aRv)
     return false;
   }
 
+  MOZ_ASSERT_IF(!!registration, !nsContentUtils::IsInPrivateBrowsing(aDoc));
   return !!registration;
 }
 
@@ -3180,7 +3236,7 @@ ServiceWorkerManager::GetDocumentController(nsIDOMWindow* aWindow,
   nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aWindow);
   MOZ_ASSERT(window);
   if (!window || !window->GetExtantDoc()) {
-    return NS_ERROR_FAILURE;
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
   }
 
   nsCOMPtr<nsIDocument> doc = window->GetExtantDoc();
@@ -3325,44 +3381,6 @@ ServiceWorkerManager::SoftUpdate(const nsACString& aScopeKey,
 
 namespace {
 
-class MOZ_STACK_CLASS FilterRegistrationData
-{
-public:
-  FilterRegistrationData(nsTArray<ServiceWorkerClientInfo>& aDocuments,
-                         ServiceWorkerRegistrationInfo* aRegistration)
-  : mDocuments(aDocuments),
-    mRegistration(aRegistration)
-  {
-  }
-
-  nsTArray<ServiceWorkerClientInfo>& mDocuments;
-  RefPtr<ServiceWorkerRegistrationInfo> mRegistration;
-};
-
-static PLDHashOperator
-EnumControlledDocuments(nsISupports* aKey,
-                        ServiceWorkerRegistrationInfo* aRegistration,
-                        void* aData)
-{
-  FilterRegistrationData* data = static_cast<FilterRegistrationData*>(aData);
-  MOZ_ASSERT(data->mRegistration);
-  MOZ_ASSERT(aRegistration);
-  if (!data->mRegistration->mScope.Equals(aRegistration->mScope)) {
-    return PL_DHASH_NEXT;
-  }
-
-  nsCOMPtr<nsIDocument> document = do_QueryInterface(aKey);
-
-  if (!document || !document->GetWindow()) {
-    return PL_DHASH_NEXT;
-  }
-
-  ServiceWorkerClientInfo clientInfo(document);
-  data->mDocuments.AppendElement(clientInfo);
-
-  return PL_DHASH_NEXT;
-}
-
 static void
 FireControllerChangeOnDocument(nsIDocument* aDocument)
 {
@@ -3388,28 +3406,6 @@ FireControllerChangeOnDocument(nsIDocument* aDocument)
   }
 }
 
-static PLDHashOperator
-FireControllerChangeOnMatchingDocument(nsISupports* aKey,
-                                       ServiceWorkerRegistrationInfo* aValue,
-                                       void* aData)
-{
-  AssertIsOnMainThread();
-
-  ServiceWorkerRegistrationInfo* contextReg = static_cast<ServiceWorkerRegistrationInfo*>(aData);
-  if (aValue != contextReg) {
-    return PL_DHASH_NEXT;
-  }
-
-  nsCOMPtr<nsIDocument> doc = do_QueryInterface(aKey);
-  if (NS_WARN_IF(!doc)) {
-    return PL_DHASH_NEXT;
-  }
-
-  FireControllerChangeOnDocument(doc);
-
-  return PL_DHASH_NEXT;
-}
-
 } // anonymous namespace
 
 void
@@ -3427,9 +3423,22 @@ ServiceWorkerManager::GetAllClients(nsIPrincipal* aPrincipal,
     return;
   }
 
-  FilterRegistrationData data(aControlledDocuments, registration);
+  for (auto iter = mControlledDocuments.Iter(); !iter.Done(); iter.Next()) {
+    ServiceWorkerRegistrationInfo* thisRegistration = iter.UserData();
+    MOZ_ASSERT(thisRegistration);
+    if (!registration->mScope.Equals(thisRegistration->mScope)) {
+      continue;
+    }
 
-  mControlledDocuments.EnumerateRead(EnumControlledDocuments, &data);
+    nsCOMPtr<nsIDocument> document = do_QueryInterface(iter.Key());
+
+    if (!document || !document->GetWindow()) {
+      continue;
+    }
+
+    ServiceWorkerClientInfo clientInfo(document);
+    aControlledDocuments.AppendElement(clientInfo);
+  }
 }
 
 void
@@ -3517,7 +3526,19 @@ ServiceWorkerManager::SetSkipWaitingFlag(nsIPrincipal* aPrincipal,
 void
 ServiceWorkerManager::FireControllerChange(ServiceWorkerRegistrationInfo* aRegistration)
 {
-  mControlledDocuments.EnumerateRead(FireControllerChangeOnMatchingDocument, aRegistration);
+  AssertIsOnMainThread();
+  for (auto iter = mControlledDocuments.Iter(); !iter.Done(); iter.Next()) {
+    if (iter.UserData() != aRegistration) {
+      continue;
+    }
+
+    nsCOMPtr<nsIDocument> doc = do_QueryInterface(iter.Key());
+    if (NS_WARN_IF(!doc)) {
+      continue;
+    }
+
+    FireControllerChangeOnDocument(doc);
+  }
 }
 
 already_AddRefed<ServiceWorkerRegistrationInfo>
@@ -3613,30 +3634,6 @@ ServiceWorkerManager::RemoveRegistrationInternal(ServiceWorkerRegistrationInfo* 
   mActor->SendUnregister(principalInfo, NS_ConvertUTF8toUTF16(aRegistration->mScope));
 }
 
-class ServiceWorkerDataInfo final : public nsIServiceWorkerInfo
-{
-public:
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSISERVICEWORKERINFO
-
-  static already_AddRefed<ServiceWorkerDataInfo>
-  Create(const ServiceWorkerRegistrationInfo* aData);
-
-private:
-  ServiceWorkerDataInfo()
-  {}
-
-  ~ServiceWorkerDataInfo()
-  {}
-
-  nsCOMPtr<nsIPrincipal> mPrincipal;
-  nsString mScope;
-  nsString mScriptSpec;
-  nsString mCurrentWorkerURL;
-  nsString mActiveCacheName;
-  nsString mWaitingCacheName;
-};
-
 void
 ServiceWorkerManager::RemoveRegistration(ServiceWorkerRegistrationInfo* aRegistration)
 {
@@ -3687,247 +3684,7 @@ HasRootDomain(nsIURI* aURI, const nsACString& aDomain)
   return prevChar == '.';
 }
 
-struct UnregisterIfMatchesUserData final
-{
-  UnregisterIfMatchesUserData(
-    ServiceWorkerManager::RegistrationDataPerPrincipal* aRegistrationData,
-    void* aUserData)
-    : mRegistrationData(aRegistrationData)
-    , mUserData(aUserData)
-  {}
-
-  ServiceWorkerManager::RegistrationDataPerPrincipal* mRegistrationData;
-  void *mUserData;
-};
-
-// If host/aData is null, unconditionally unregisters.
-PLDHashOperator
-UnregisterIfMatchesHost(const nsACString& aScope,
-                        ServiceWorkerRegistrationInfo* aReg,
-                        void* aPtr)
-{
-  UnregisterIfMatchesUserData* data =
-    static_cast<UnregisterIfMatchesUserData*>(aPtr);
-
-  // We avoid setting toRemove = aReg by default since there is a possibility
-  // of failure when data->mUserData is passed, in which case we don't want to
-  // remove the registration.
-  ServiceWorkerRegistrationInfo* toRemove = nullptr;
-  if (data->mUserData) {
-    const nsACString& domain = *static_cast<nsACString*>(data->mUserData);
-    nsCOMPtr<nsIURI> scopeURI;
-    nsresult rv = NS_NewURI(getter_AddRefs(scopeURI), aScope, nullptr, nullptr);
-    // This way subdomains are also cleared.
-    if (NS_SUCCEEDED(rv) && HasRootDomain(scopeURI, domain)) {
-      toRemove = aReg;
-    }
-  } else {
-    toRemove = aReg;
-  }
-
-  if (toRemove) {
-    RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-    swm->ForceUnregister(data->mRegistrationData, toRemove);
-  }
-
-  return PL_DHASH_NEXT;
-}
-
-// If host/aData is null, unconditionally unregisters.
-PLDHashOperator
-UnregisterIfMatchesHostPerPrincipal(const nsACString& aKey,
-                                    ServiceWorkerManager::RegistrationDataPerPrincipal* aData,
-                                    void* aUserData)
-{
-  UnregisterIfMatchesUserData data(aData, aUserData);
-  aData->mInfos.EnumerateRead(UnregisterIfMatchesHost, &data);
-  return PL_DHASH_NEXT;
-}
-
-PLDHashOperator
-UnregisterIfMatchesClearOriginParams(const nsACString& aScope,
-                                     ServiceWorkerRegistrationInfo* aReg,
-                                     void* aPtr)
-{
-  UnregisterIfMatchesUserData* data =
-    static_cast<UnregisterIfMatchesUserData*>(aPtr);
-  MOZ_ASSERT(data);
-
-  if (data->mUserData) {
-    OriginAttributes* params = static_cast<OriginAttributes*>(data->mUserData);
-    MOZ_ASSERT(params);
-    MOZ_ASSERT(aReg);
-    MOZ_ASSERT(aReg->mPrincipal);
-
-    bool equals = false;
-
-    if (params->mInBrowser) {
-      // When we do a system wide "clear cookies and stored data" on B2G we get
-      // the "clear-origin-data" notification with the System app appID and
-      // the browserOnly flag set to true.
-      // Web sites registering a service worker on B2G have a principal with the
-      // following information: web site origin + System app appId + inBrowser=1
-      // So we need to check if the service worker registration info contains
-      // the System app appID and the enabled inBrowser flag and in that case
-      // remove it from the registry.
-      OriginAttributes attrs =
-        mozilla::BasePrincipal::Cast(aReg->mPrincipal)->OriginAttributesRef();
-      equals = attrs == *params;
-    } else {
-      // If we get the "clear-origin-data" notification because of an app
-      // uninstallation, we need to check the full principal to get the match
-      // in the service workers registry. If we find a match, we unregister the
-      // worker.
-      nsCOMPtr<nsIAppsService> appsService =
-        do_GetService(APPS_SERVICE_CONTRACTID);
-      if (NS_WARN_IF(!appsService)) {
-        return PL_DHASH_NEXT;
-      }
-
-      nsCOMPtr<mozIApplication> app;
-      appsService->GetAppByLocalId(params->mAppId, getter_AddRefs(app));
-      if (NS_WARN_IF(!app)) {
-        return PL_DHASH_NEXT;
-      }
-
-      nsCOMPtr<nsIPrincipal> principal;
-      app->GetPrincipal(getter_AddRefs(principal));
-      if (NS_WARN_IF(!principal)) {
-        return PL_DHASH_NEXT;
-      }
-
-      aReg->mPrincipal->Equals(principal, &equals);
-    }
-
-    if (equals) {
-      RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-      swm->ForceUnregister(data->mRegistrationData, aReg);
-    }
-  }
-
-  return PL_DHASH_NEXT;
-}
-
-PLDHashOperator
-UnregisterIfMatchesClearOriginParams(const nsACString& aKey,
-                             ServiceWorkerManager::RegistrationDataPerPrincipal* aData,
-                             void* aUserData)
-{
-  UnregisterIfMatchesUserData data(aData, aUserData);
-  // We can use EnumerateRead because ForceUnregister (and Unregister) are async.
-  // Otherwise doing some R/W operations on an hashtable during an EnumerateRead
-  // will crash.
-  aData->mInfos.EnumerateRead(UnregisterIfMatchesClearOriginParams,
-                              &data);
-  return PL_DHASH_NEXT;
-}
-
-PLDHashOperator
-GetAllRegistrationsEnumerator(const nsACString& aScope,
-                              ServiceWorkerRegistrationInfo* aReg,
-                              void* aData)
-{
-  nsIMutableArray* array = static_cast<nsIMutableArray*>(aData);
-  MOZ_ASSERT(aReg);
-
-  if (aReg->mPendingUninstall) {
-    return PL_DHASH_NEXT;
-  }
-
-  nsCOMPtr<nsIServiceWorkerInfo> info = ServiceWorkerDataInfo::Create(aReg);
-  if (NS_WARN_IF(!info)) {
-    return PL_DHASH_NEXT;
-  }
-
-  array->AppendElement(info, false);
-  return PL_DHASH_NEXT;
-}
-
-PLDHashOperator
-GetAllRegistrationsPerPrincipalEnumerator(const nsACString& aKey,
-                                          ServiceWorkerManager::RegistrationDataPerPrincipal* aData,
-                                          void* aUserData)
-{
-  aData->mInfos.EnumerateRead(GetAllRegistrationsEnumerator, aUserData);
-  return PL_DHASH_NEXT;
-}
-
 } // namespace
-
-NS_IMPL_ISUPPORTS(ServiceWorkerDataInfo, nsIServiceWorkerInfo)
-
-/* static */ already_AddRefed<ServiceWorkerDataInfo>
-ServiceWorkerDataInfo::Create(const ServiceWorkerRegistrationInfo* aData)
-{
-  AssertIsOnMainThread();
-  MOZ_ASSERT(aData);
-
-  RefPtr<ServiceWorkerDataInfo> info = new ServiceWorkerDataInfo();
-
-  info->mPrincipal = aData->mPrincipal;
-  CopyUTF8toUTF16(aData->mScope, info->mScope);
-  CopyUTF8toUTF16(aData->mScriptSpec, info->mScriptSpec);
-
-  if (aData->mActiveWorker) {
-    CopyUTF8toUTF16(aData->mActiveWorker->ScriptSpec(),
-                    info->mCurrentWorkerURL);
-    info->mActiveCacheName = aData->mActiveWorker->CacheName();
-  }
-
-  if (aData->mWaitingWorker) {
-    info->mWaitingCacheName = aData->mWaitingWorker->CacheName();
-  }
-
-  return info.forget();
-}
-
-NS_IMETHODIMP
-ServiceWorkerDataInfo::GetPrincipal(nsIPrincipal** aPrincipal)
-{
-  AssertIsOnMainThread();
-  NS_ADDREF(*aPrincipal = mPrincipal);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-ServiceWorkerDataInfo::GetScope(nsAString& aScope)
-{
-  AssertIsOnMainThread();
-  aScope = mScope;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-ServiceWorkerDataInfo::GetScriptSpec(nsAString& aScriptSpec)
-{
-  AssertIsOnMainThread();
-  aScriptSpec = mScriptSpec;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-ServiceWorkerDataInfo::GetCurrentWorkerURL(nsAString& aCurrentWorkerURL)
-{
-  AssertIsOnMainThread();
-  aCurrentWorkerURL = mCurrentWorkerURL;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-ServiceWorkerDataInfo::GetActiveCacheName(nsAString& aActiveCacheName)
-{
-  AssertIsOnMainThread();
-  aActiveCacheName = mActiveCacheName;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-ServiceWorkerDataInfo::GetWaitingCacheName(nsAString& aWaitingCacheName)
-{
-  AssertIsOnMainThread();
-  aWaitingCacheName = mWaitingCacheName;
-  return NS_OK;
-}
 
 NS_IMETHODIMP
 ServiceWorkerManager::GetAllRegistrations(nsIArray** aResult)
@@ -3939,12 +3696,24 @@ ServiceWorkerManager::GetAllRegistrations(nsIArray** aResult)
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  mRegistrationInfos.EnumerateRead(GetAllRegistrationsPerPrincipalEnumerator, array);
+  for (auto it1 = mRegistrationInfos.Iter(); !it1.Done(); it1.Next()) {
+    for (auto it2 = it1.UserData()->mInfos.Iter(); !it2.Done(); it2.Next()) {
+      ServiceWorkerRegistrationInfo* reg = it2.UserData();
+      MOZ_ASSERT(reg);
+
+      if (reg->mPendingUninstall) {
+        continue;
+      }
+
+      array->AppendElement(reg, false);
+    }
+  }
+
   array.forget(aResult);
   return NS_OK;
 }
 
-// MUST ONLY BE CALLED FROM UnregisterIfMatchesHost!
+// MUST ONLY BE CALLED FROM Remove(), RemoveAll() and RemoveAllRegistrations()!
 void
 ServiceWorkerManager::ForceUnregister(RegistrationDataPerPrincipal* aRegistrationData,
                                       ServiceWorkerRegistrationInfo* aRegistration)
@@ -3983,8 +3752,20 @@ ServiceWorkerManager::Remove(const nsACString& aHost)
     return;
   }
 
-  mRegistrationInfos.EnumerateRead(UnregisterIfMatchesHostPerPrincipal,
-                                   &const_cast<nsACString&>(aHost));
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  for (auto it1 = mRegistrationInfos.Iter(); !it1.Done(); it1.Next()) {
+    ServiceWorkerManager::RegistrationDataPerPrincipal* data = it1.UserData();
+    for (auto it2 = data->mInfos.Iter(); !it2.Done(); it2.Next()) {
+      ServiceWorkerRegistrationInfo* reg = it2.UserData();
+      nsCOMPtr<nsIURI> scopeURI;
+      nsresult rv = NS_NewURI(getter_AddRefs(scopeURI), it2.Key(),
+                              nullptr, nullptr);
+      // This way subdomains are also cleared.
+      if (NS_SUCCEEDED(rv) && HasRootDomain(scopeURI, aHost)) {
+        swm->ForceUnregister(data, reg);
+      }
+    }
+  }
 }
 
 void
@@ -4005,7 +3786,15 @@ void
 ServiceWorkerManager::RemoveAll()
 {
   AssertIsOnMainThread();
-  mRegistrationInfos.EnumerateRead(UnregisterIfMatchesHostPerPrincipal, nullptr);
+
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  for (auto it1 = mRegistrationInfos.Iter(); !it1.Done(); it1.Next()) {
+    ServiceWorkerManager::RegistrationDataPerPrincipal* data = it1.UserData();
+    for (auto it2 = data->mInfos.Iter(); !it2.Done(); it2.Next()) {
+      ServiceWorkerRegistrationInfo* reg = it2.UserData();
+      swm->ForceUnregister(data, reg);
+    }
+  }
 }
 
 void
@@ -4023,17 +3812,6 @@ ServiceWorkerManager::PropagateRemoveAll()
   mActor->SendPropagateRemoveAll();
 }
 
-static PLDHashOperator
-UpdateEachRegistration(const nsACString& aKey,
-                       ServiceWorkerRegistrationInfo* aInfo,
-                       void* aUserArg) {
-  auto This = static_cast<ServiceWorkerManager*>(aUserArg);
-  MOZ_ASSERT(!aInfo->mScope.IsEmpty());
-
-  This->SoftUpdate(aInfo->mPrincipal, aInfo->mScope);
-  return PL_DHASH_NEXT;
-}
-
 void
 ServiceWorkerManager::RemoveAllRegistrations(OriginAttributes* aParams)
 {
@@ -4041,24 +3819,89 @@ ServiceWorkerManager::RemoveAllRegistrations(OriginAttributes* aParams)
 
   MOZ_ASSERT(aParams);
 
-  mRegistrationInfos.EnumerateRead(UnregisterIfMatchesClearOriginParams,
-                                   aParams);
-}
+  for (auto it1 = mRegistrationInfos.Iter(); !it1.Done(); it1.Next()) {
+    ServiceWorkerManager::RegistrationDataPerPrincipal* data = it1.UserData();
 
-static PLDHashOperator
-UpdateEachRegistrationPerPrincipal(const nsACString& aKey,
-                                   ServiceWorkerManager::RegistrationDataPerPrincipal* aData,
-                                   void* aUserArg) {
-  aData->mInfos.EnumerateRead(UpdateEachRegistration, aUserArg);
-  return PL_DHASH_NEXT;
+    // We can use iteration because ForceUnregister (and Unregister) are
+    // async. Otherwise doing some R/W operations on an hashtable during
+    // iteration will crash.
+    for (auto it2 = data->mInfos.Iter(); !it2.Done(); it2.Next()) {
+      ServiceWorkerRegistrationInfo* reg = it2.UserData();
+
+      MOZ_ASSERT(reg);
+      MOZ_ASSERT(reg->mPrincipal);
+
+      bool equals = false;
+
+      if (aParams->mInBrowser) {
+        // When we do a system wide "clear cookies and stored data" on B2G we
+        // get the "clear-origin-data" notification with the System app appID
+        // and the browserOnly flag set to true. Web sites registering a
+        // service worker on B2G have a principal with the following
+        // information: web site origin + System app appId + inBrowser=1 So
+        // we need to check if the service worker registration info contains
+        // the System app appID and the enabled inBrowser flag and in that
+        // case remove it from the registry.
+        OriginAttributes attrs =
+          mozilla::BasePrincipal::Cast(reg->mPrincipal)->OriginAttributesRef();
+        equals = attrs == *aParams;
+      } else {
+        // If we get the "clear-origin-data" notification because of an app
+        // uninstallation, we need to check the full principal to get the
+        // match in the service workers registry. If we find a match, we
+        // unregister the worker.
+        nsCOMPtr<nsIAppsService> appsService = do_GetService(APPS_SERVICE_CONTRACTID);
+        if (NS_WARN_IF(!appsService)) {
+          continue;
+        }
+
+        nsCOMPtr<mozIApplication> app;
+        appsService->GetAppByLocalId(aParams->mAppId, getter_AddRefs(app));
+        if (NS_WARN_IF(!app)) {
+          continue;
+        }
+
+        nsCOMPtr<nsIPrincipal> principal;
+        app->GetPrincipal(getter_AddRefs(principal));
+        if (NS_WARN_IF(!principal)) {
+          continue;
+        }
+
+        reg->mPrincipal->Equals(principal, &equals);
+      }
+
+      if (equals) {
+        RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+        swm->ForceUnregister(data, reg);
+      }
+    }
+  }
 }
 
 NS_IMETHODIMP
-ServiceWorkerManager::UpdateAllRegistrations()
+ServiceWorkerManager::AddListener(nsIServiceWorkerManagerListener* aListener)
 {
   AssertIsOnMainThread();
 
-  mRegistrationInfos.EnumerateRead(UpdateEachRegistrationPerPrincipal, this);
+  if (mListeners.Contains(aListener)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  mListeners.AppendElement(aListener);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerManager::RemoveListener(nsIServiceWorkerManagerListener* aListener)
+{
+  AssertIsOnMainThread();
+
+  if (!mListeners.Contains(aListener)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  mListeners.RemoveElement(aListener);
 
   return NS_OK;
 }
@@ -4110,7 +3953,7 @@ ServiceWorkerManager::Observe(nsISupports* aSubject,
 
       RefPtr<TeardownRunnable> runnable = new TeardownRunnable(mActor);
       nsresult rv = NS_DispatchToMainThread(runnable);
-      unused << NS_WARN_IF(NS_FAILED(rv));
+      Unused << NS_WARN_IF(NS_FAILED(rv));
       mActor = nullptr;
     }
     return NS_OK;
@@ -4180,6 +4023,44 @@ ServiceWorkerManager::PropagateUnregister(nsIPrincipal* aPrincipal,
     return rv;
   }
 
+  return NS_OK;
+}
+
+void
+ServiceWorkerManager::NotifyListenersOnRegister(
+                                        nsIServiceWorkerRegistrationInfo* aInfo)
+{
+  nsTArray<nsCOMPtr<nsIServiceWorkerManagerListener>> listeners(mListeners);
+  for (size_t index = 0; index < listeners.Length(); ++index) {
+    listeners[index]->OnRegister(aInfo);
+  }
+}
+
+void
+ServiceWorkerManager::NotifyListenersOnUnregister(
+                                        nsIServiceWorkerRegistrationInfo* aInfo)
+{
+  nsTArray<nsCOMPtr<nsIServiceWorkerManagerListener>> listeners(mListeners);
+  for (size_t index = 0; index < listeners.Length(); ++index) {
+    listeners[index]->OnUnregister(aInfo);
+  }
+}
+
+NS_IMPL_ISUPPORTS(ServiceWorkerInfo, nsIServiceWorkerInfo)
+
+NS_IMETHODIMP
+ServiceWorkerInfo::GetScriptSpec(nsAString& aScriptSpec)
+{
+  AssertIsOnMainThread();
+  CopyUTF8toUTF16(mScriptSpec, aScriptSpec);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerInfo::GetCacheName(nsAString& aCacheName)
+{
+  AssertIsOnMainThread();
+  aCacheName = mCacheName;
   return NS_OK;
 }
 

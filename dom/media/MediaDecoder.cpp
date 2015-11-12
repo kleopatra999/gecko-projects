@@ -745,6 +745,9 @@ MediaDecoder::NotifyDataEnded(nsresult aStatus)
 {
   RefPtr<MediaDecoder> self = this;
   nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction([=] () {
+    if (self->mShuttingDown) {
+      return;
+    }
     self->NotifyDownloadEnded(aStatus);
     if (NS_SUCCEEDED(aStatus)) {
       HTMLMediaElement* element = self->mOwner->GetMediaElement();
@@ -1232,12 +1235,6 @@ MediaDecoder::SetLoadInBackground(bool aLoadInBackground)
   }
 }
 
-bool
-MediaDecoder::OnStateMachineTaskQueue() const
-{
-  return mDecoderStateMachine->OnTaskQueue();
-}
-
 void
 MediaDecoder::SetPlaybackRate(double aPlaybackRate)
 {
@@ -1344,13 +1341,11 @@ void MediaDecoder::AddSizeOfResources(ResourceSizes* aSizes) {
 }
 
 void
-MediaDecoder::NotifyDataArrived(uint32_t aLength,
-                                int64_t aOffset,
-                                bool aThrottleUpdates) {
+MediaDecoder::NotifyDataArrived(bool aThrottleUpdates) {
   MOZ_ASSERT(NS_IsMainThread());
 
   if (mDecoderStateMachine) {
-    mDecoderStateMachine->DispatchNotifyDataArrived(aLength, aOffset, aThrottleUpdates);
+    mDecoderStateMachine->DispatchNotifyDataArrived(aThrottleUpdates);
   }
 
   // ReadyState computation depends on MediaDecoder::CanPlayThrough, which

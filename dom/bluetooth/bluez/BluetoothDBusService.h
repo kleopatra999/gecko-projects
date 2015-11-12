@@ -78,12 +78,12 @@ public:
               BluetoothReplyRunnable* aRunnable) override;
 
   virtual nsresult
-  GetServiceChannel(const nsAString& aDeviceAddress,
-                    const nsAString& aServiceUuid,
+  GetServiceChannel(const BluetoothAddress& aDeviceAddress,
+                    const BluetoothUuid& aServiceUuid,
                     BluetoothProfileManagerBase* aManager) override;
 
   virtual bool
-  UpdateSdpRecords(const nsAString& aDeviceAddress,
+  UpdateSdpRecords(const BluetoothAddress& aDeviceAddress,
                    BluetoothProfileManagerBase* aManager) override;
 
   virtual nsresult
@@ -158,6 +158,13 @@ public:
   IsScoConnected(BluetoothReplyRunnable* aRunnable) override;
 
   virtual void
+  SetObexPassword(const nsAString& aPassword,
+                  BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
+  RejectObexAuth(BluetoothReplyRunnable* aRunnable) override;
+
+  virtual void
   ReplyTovCardPulling(BlobParent* aBlobParent,
                       BlobChild* aBlobChild,
                       BluetoothReplyRunnable* aRunnable) override;
@@ -226,6 +233,7 @@ public:
 
   virtual void
   ReplyToMapSendMessage(long aMasId,
+                        const nsAString& aHandleId,
                         bool aStatus,
                         BluetoothReplyRunnable* aRunnable) override;
 

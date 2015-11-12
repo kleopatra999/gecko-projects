@@ -51,9 +51,7 @@ class ServiceWorkerJobQueue;
 class ServiceWorkerManagerChild;
 class ServiceWorkerPrivate;
 
-// Needs to inherit from nsISupports because NS_ProxyRelease() does not support
-// non-ISupports classes.
-class ServiceWorkerRegistrationInfo final : public nsISupports
+class ServiceWorkerRegistrationInfo final : public nsIServiceWorkerRegistrationInfo
 {
   uint32_t mControlledDocumentsCounter;
 
@@ -61,6 +59,7 @@ class ServiceWorkerRegistrationInfo final : public nsISupports
 
 public:
   NS_DECL_ISUPPORTS
+  NS_DECL_NSISERVICEWORKERREGISTRATIONINFO
 
   nsCString mScope;
   // The scriptURL for the registration. This may be completely different from
@@ -169,7 +168,7 @@ public:
  * _GetNewestWorker(serviceWorkerRegistration)", we represent the description
  * by this class and spawn a ServiceWorker in the right global when required.
  */
-class ServiceWorkerInfo final
+class ServiceWorkerInfo final : public nsIServiceWorkerInfo
 {
 private:
   const ServiceWorkerRegistrationInfo* mRegistration;
@@ -198,7 +197,8 @@ private:
   GetNextID() const;
 
 public:
-  NS_INLINE_DECL_REFCOUNTING(ServiceWorkerInfo)
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSISERVICEWORKERINFO
 
   class ServiceWorkerPrivate*
   WorkerPrivate() const
@@ -598,6 +598,14 @@ private:
   nsTArray<PendingOperation> mPendingOperations;
 
   bool mShuttingDown;
+
+  nsTArray<nsCOMPtr<nsIServiceWorkerManagerListener>> mListeners;
+
+  void
+  NotifyListenersOnRegister(nsIServiceWorkerRegistrationInfo* aRegistration);
+
+  void
+  NotifyListenersOnUnregister(nsIServiceWorkerRegistrationInfo* aRegistration);
 };
 
 } // namespace workers

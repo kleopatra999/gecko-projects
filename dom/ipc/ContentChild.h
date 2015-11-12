@@ -17,6 +17,7 @@
 #include "nsTHashtable.h"
 
 #include "nsWeakPtr.h"
+#include "nsIWindowProvider.h"
 
 
 struct ChromePackage;
@@ -47,6 +48,7 @@ class ClonedMessageData;
 class TabChild;
 
 class ContentChild final : public PContentChild
+                         , public nsIWindowProvider
                          , public nsIContentChild
 {
     typedef mozilla::dom::ClonedMessageData ClonedMessageData;
@@ -55,6 +57,8 @@ class ContentChild final : public PContentChild
     typedef mozilla::ipc::URIParams URIParams;
 
 public:
+    NS_DECL_NSIWINDOWPROVIDER
+
     ContentChild();
     virtual ~ContentChild();
     NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr) override;
@@ -70,6 +74,20 @@ public:
         nsCString ID;
         nsCString vendor;
     };
+
+    nsresult
+    ProvideWindowCommon(TabChild* aTabOpener,
+                        nsIDOMWindow* aOpener,
+                        bool aIframeMoz,
+                        uint32_t aChromeFlags,
+                        bool aCalledFromJS,
+                        bool aPositionSpecified,
+                        bool aSizeSpecified,
+                        nsIURI* aURI,
+                        const nsAString& aName,
+                        const nsACString& aFeatures,
+                        bool* aWindowIsNew,
+                        nsIDOMWindow** aReturn);
 
     bool Init(MessageLoop* aIOLoop,
               base::ProcessId aParentPid,
@@ -311,8 +329,6 @@ public:
 
     virtual bool RecvBidiKeyboardNotify(const bool& isLangRTL) override;
 
-    virtual bool RecvUpdateServiceWorkerRegistrations() override;
-
     virtual bool RecvNotifyVisited(const URIParams& aURI) override;
     // auto remove when alertfinished is received.
     nsresult AddRemoteAlertObserver(const nsString& aData, nsIObserver* aObserver);
@@ -321,6 +337,13 @@ public:
                                            const uint32_t& aMemoryAvailable) override;
 
     virtual bool RecvPreferenceUpdate(const PrefSetting& aPref) override;
+
+    virtual bool RecvDataStoragePut(const nsString& aFilename,
+                                    const DataStorageItem& aItem) override;
+    virtual bool RecvDataStorageRemove(const nsString& aFilename,
+                                       const nsCString& aKey,
+                                       const DataStorageType& aType) override;
+    virtual bool RecvDataStorageClear(const nsString& aFilename) override;
 
     virtual bool RecvNotifyAlertsObserver(const nsCString& aType,
                                           const nsString& aData) override;

@@ -15,6 +15,7 @@
 #include "jit/CompileInfo.h"
 #include "jit/JitSpewer.h"
 #include "jit/mips32/Simulator-mips32.h"
+#include "jit/mips64/Simulator-mips64.h"
 #include "jit/Recover.h"
 #include "jit/RematerializedFrame.h"
 
@@ -374,7 +375,8 @@ struct BaselineStackBuilder
         priorOffset -= sizeof(void*);
         return virtualPointerAtStackOffset(priorOffset);
 #elif defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || \
-      defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_MIPS32)
+      defined(JS_CODEGEN_MIPS32) || defined(JS_CODEGEN_MIPS64) || \
+      defined(JS_CODEGEN_X64)
         // On X64, ARM, ARM64, and MIPS, the frame pointer save location depends on
         // the caller of the rectifier frame.
         BufferPointer<RectifierFrameLayout> priorFrame =
@@ -704,6 +706,8 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
                 {
                     scopeChain = fun->environment();
                 }
+            } else if (script->module()) {
+                scopeChain = script->module()->environment();
             } else {
                 // For global scripts without a non-syntactic scope the scope
                 // chain is the script's global lexical scope (Ion does not
@@ -971,7 +975,9 @@ InitFromBailout(JSContext* cx, HandleScript caller, jsbytecode* callerPC,
             }
         }
     }
+#endif
 
+#ifdef JS_JITSPEW
     JitSpew(JitSpew_BaselineBailouts, "      Resuming %s pc offset %d (op %s) (line %d) of %s:%" PRIuSIZE,
                 resumeAfter ? "after" : "at", (int) pcOff, js_CodeName[op],
                 PCToLineNumber(script, pc), script->filename(), script->lineno());
@@ -1420,12 +1426,14 @@ jit::BailoutIonToBaseline(JSContext* cx, JitActivation* activation, JitFrameIter
     //      Entry - Interpreter or other calling into Ion.
     //      Rectifier - Arguments rectifier calling into Ion.
     MOZ_ASSERT(iter.isBailoutJS());
-    mozilla::DebugOnly<FrameType> prevFrameType = iter.prevType();
+#if defined(DEBUG) || defined(JS_JITSPEW)
+    FrameType prevFrameType = iter.prevType();
     MOZ_ASSERT(prevFrameType == JitFrame_IonJS ||
                prevFrameType == JitFrame_BaselineStub ||
                prevFrameType == JitFrame_Entry ||
                prevFrameType == JitFrame_Rectifier ||
                prevFrameType == JitFrame_IonAccessorIC);
+#endif
 
     // All incoming frames are going to look like this:
     //

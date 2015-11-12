@@ -830,7 +830,7 @@ Tooltip.prototype = {
    * the instance of the widget
    */
   setCubicBezierContent: function(bezier) {
-    let dimensions = {width: "410", height: "360"};
+    let dimensions = {width: "500", height: "360"};
     let panel = this.panel;
     return this.setIFrameContent(dimensions, CUBIC_BEZIER_FRAME).then(onLoaded);
 
@@ -1089,9 +1089,11 @@ SwatchBasedEditorTooltip.prototype = {
    */
   revert: function() {
     if (this.activeSwatch) {
-      let swatch = this.swatches.get(this.activeSwatch);
-      swatch.callbacks.onRevert();
       this._reverted = true;
+      let swatch = this.swatches.get(this.activeSwatch);
+      this.tooltip.once("hiding", () => {
+        swatch.callbacks.onRevert();
+      });
     }
   },
 
@@ -1278,7 +1280,7 @@ EventTooltip.prototype = {
       if (!listener.hide.debugger) {
         let debuggerIcon = doc.createElement("image");
         debuggerIcon.className = "event-tooltip-debugger-icon";
-        debuggerIcon.setAttribute("src", "chrome://devtools/skin/themes/images/tool-debugger.svg");
+        debuggerIcon.setAttribute("src", "chrome://devtools/skin/images/tool-debugger.svg");
         let openInDebugger =
             l10n.strings.GetStringFromName("eventsTooltip.openInDebugger");
         debuggerIcon.setAttribute("tooltiptext", openInDebugger);
@@ -1717,5 +1719,5 @@ var l10n = new L10N();
 
 loader.lazyGetter(L10N.prototype, "strings", () => {
   return Services.strings.createBundle(
-    "chrome://browser/locale/devtools/inspector.properties");
+    "chrome://devtools/locale/inspector.properties");
 });

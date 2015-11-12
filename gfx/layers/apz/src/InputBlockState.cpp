@@ -7,6 +7,7 @@
 #include "InputBlockState.h"
 #include "AsyncPanZoomController.h"         // for AsyncPanZoomController
 #include "gfxPrefs.h"                       // for gfxPrefs
+#include "mozilla/MouseEvents.h"
 #include "mozilla/SizePrintfMacros.h"       // for PRIuSIZE
 #include "mozilla/layers/APZCTreeManager.h" // for AllowedTouchBehavior
 #include "OverscrollHandoffState.h"
@@ -102,9 +103,7 @@ CancelableBlockState::SetContentResponse(bool aPreventDefault)
   }
   TBS_LOG("%p got content response %d with timer expired %d\n",
     this, aPreventDefault, mContentResponseTimerExpired);
-  if (!mContentResponseTimerExpired) {
-    mPreventDefault = aPreventDefault;
-  }
+  mPreventDefault = aPreventDefault;
   mContentResponded = true;
   return true;
 }
@@ -160,6 +159,84 @@ CancelableBlockState::DispatchEvent(const InputData& aEvent) const
   GetTargetApzc()->HandleInputEvent(aEvent, mTransformToApzc);
 }
 
+DragBlockState::DragBlockState(const RefPtr<AsyncPanZoomController>& aTargetApzc,
+                               bool aTargetConfirmed,
+                               const MouseInput& aInitialEvent)
+  : CancelableBlockState(aTargetApzc, aTargetConfirmed)
+  , mReceivedMouseUp(false)
+{
+}
+
+bool
+DragBlockState::HasReceivedMouseUp()
+{
+  return mReceivedMouseUp;
+}
+
+void
+DragBlockState::MarkMouseUpReceived()
+{
+  mReceivedMouseUp = true;
+}
+
+void
+DragBlockState::SetDragMetrics(const AsyncDragMetrics& aDragMetrics)
+{
+  mDragMetrics = aDragMetrics;
+}
+
+void
+DragBlockState::DispatchEvent(const InputData& aEvent) const
+{
+  MouseInput mouseInput = aEvent.AsMouseInput();
+  if (!mouseInput.TransformToLocal(mTransformToApzc)) {
+    return;
+  }
+
+  GetTargetApzc()->HandleDragEvent(mouseInput, mDragMetrics);
+}
+
+void
+DragBlockState::AddEvent(const MouseInput& aEvent)
+{
+  mEvents.AppendElement(aEvent);
+}
+
+bool
+DragBlockState::HasEvents() const
+{
+  return !mEvents.IsEmpty();
+}
+
+void
+DragBlockState::DropEvents()
+{
+  TBS_LOG("%p dropping %" PRIuSIZE " events\n", this, mEvents.Length());
+  mEvents.Clear();
+}
+
+void
+DragBlockState::HandleEvents()
+{
+  while (HasEvents()) {
+    TBS_LOG("%p returning first of %" PRIuSIZE " events\n", this, mEvents.Length());
+    MouseInput event = mEvents[0];
+    mEvents.RemoveElementAt(0);
+    DispatchEvent(event);
+  }
+}
+
+bool
+DragBlockState::MustStayActive()
+{
+  return !mReceivedMouseUp;
+}
+
+const char*
+DragBlockState::Type()
+{
+  return "drag";
+}
 // This is used to track the current wheel transaction.
 static uint64_t sLastWheelBlockId = InputBlockState::NO_BLOCK_ID;
 
@@ -546,6 +623,7 @@ TouchBlockState::TouchBlockState(const RefPtr<AsyncPanZoomController>& aTargetAp
   , mAllowedTouchBehaviorSet(false)
   , mDuringFastFling(false)
   , mSingleTapOccurred(false)
+  , mInSlop(false)
   , mTouchCounter(aCounter)
 {
   TBS_LOG("Creating %p\n", this);
@@ -750,6 +828,37 @@ TouchBlockState::TouchActionAllowsPanningXY() const
   TouchBehaviorFlags flags = mAllowedTouchBehaviors[0];
   return (flags & AllowedTouchBehavior::HORIZONTAL_PAN)
       && (flags & AllowedTouchBehavior::VERTICAL_PAN);
+}
+
+bool
+TouchBlockState::UpdateSlopState(const MultiTouchInput& aInput,
+                                 bool aApzcCanConsumeEvents)
+{
+  if (aInput.mType == MultiTouchInput::MULTITOUCH_START) {
+    // this is by definition the first event in this block. If it's the first
+    // touch, then we enter a slop state.
+    mInSlop = (aInput.mTouches.Length() == 1);
+    if (mInSlop) {
+      mSlopOrigin = aInput.mTouches[0].mScreenPoint;
+      TBS_LOG("%p entering slop with origin %s\n", this, Stringify(mSlopOrigin).c_str());
+    }
+    return false;
+  }
+  if (mInSlop) {
+    ScreenCoord threshold = aApzcCanConsumeEvents
+        ? AsyncPanZoomController::GetTouchStartTolerance()
+        : ScreenCoord(gfxPrefs::APZTouchMoveTolerance() * APZCTreeManager::GetDPI());
+    bool stayInSlop = (aInput.mType == MultiTouchInput::MULTITOUCH_MOVE) &&
+        (aInput.mTouches.Length() == 1) &&
+        ((aInput.mTouches[0].mScreenPoint - mSlopOrigin).Length() < threshold);
+    if (!stayInSlop) {
+      // we're out of the slop zone, and will stay out for the remainder of
+      // this block
+      TBS_LOG("%p exiting slop\n", this);
+      mInSlop = false;
+    }
+  }
+  return mInSlop;
 }
 
 } // namespace layers

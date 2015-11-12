@@ -131,8 +131,8 @@ public:
     NS_IMETHOD         SetSizeMode(nsSizeMode aMode) override;
     NS_IMETHOD         Enable(bool aState) override;
     NS_IMETHOD         SetFocus(bool aRaise = false) override;
-    NS_IMETHOD         GetScreenBounds(nsIntRect &aRect) override;
-    NS_IMETHOD         GetClientBounds(nsIntRect &aRect) override;
+    NS_IMETHOD         GetScreenBoundsUntyped(nsIntRect &aRect) override;
+    NS_IMETHOD         GetClientBoundsUntyped(nsIntRect &aRect) override;
     virtual mozilla::gfx::IntSize GetClientSize() override;
     virtual nsIntPoint GetClientOffset() override;
     NS_IMETHOD         SetCursor(nsCursor aCursor) override;
@@ -219,7 +219,7 @@ public:
                                                 nsIntRegion& aInvalidRegion) override;
 
 private:
-    void               UpdateAlpha(gfxPattern* aPattern, nsIntRect aBoundsRect);
+    void               UpdateAlpha(mozilla::gfx::SourceSurface* aSourceSurface, nsIntRect aBoundsRect);
 
     void               NativeMove();
     void               NativeResize();
@@ -269,7 +269,7 @@ public:
     bool               IsDestroyed() { return mIsDestroyed; }
 
     void               DispatchDragEvent(mozilla::EventMessage aMsg,
-                                         const nsIntPoint& aRefPoint,
+                                         const mozilla::LayoutDeviceIntPoint& aRefPoint,
                                          guint aTime);
     static void        UpdateDragStatus (GdkDragContext *aDragContext,
                                          nsIDragService *aDragService);
@@ -356,7 +356,8 @@ protected:
     // event handling code
     void DispatchActivateEvent(void);
     void DispatchDeactivateEvent(void);
-    void DispatchResized(int32_t aWidth, int32_t aHeight);
+    void DispatchResized();
+    void MaybeDispatchResized();
 
     // Helper for SetParent and ReparentNativeWidget.
     void ReparentNativeWidgetInternal(nsIWidget* aNewParent,
@@ -377,6 +378,8 @@ protected:
 
     // Should we send resize events on all resizes?
     bool                mListenForResizes;
+    // Does WindowResized need to be called on listeners?
+    bool                mNeedsDispatchResized;
     // This flag tracks if we're hidden or shown.
     bool                mIsShown;
     bool                mNeedsShow;

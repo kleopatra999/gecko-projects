@@ -350,8 +350,9 @@ pref("browser.link.open_newwindow", 3);
 // 0=force all new windows to tabs, 1=don't force, 2=only force those with no features set
 pref("browser.link.open_newwindow.restriction", 0);
 
-// Image blocking policy
-pref("browser.image_blocking.enabled", false);
+// show images option
+// 0=never, 1=always, 2=cellular-only
+pref("browser.image_blocking", 1);
 
 // controls which bits of private data to clear. by default we clear them all.
 pref("privacy.item.cache", true);
@@ -421,17 +422,17 @@ pref("ui.zoomedview.defaultZoomFactor", 2);
 pref("ui.zoomedview.simplified", true); // Do not display all the zoomed view controls, do not use size heurisistic
 
 pref("ui.touch.radius.enabled", false);
-pref("ui.touch.radius.leftmm", 3);
-pref("ui.touch.radius.topmm", 5);
-pref("ui.touch.radius.rightmm", 3);
-pref("ui.touch.radius.bottommm", 2);
+pref("ui.touch.radius.leftmm", 8);
+pref("ui.touch.radius.topmm", 8);
+pref("ui.touch.radius.rightmm", 8);
+pref("ui.touch.radius.bottommm", 8);
 pref("ui.touch.radius.visitedWeight", 120);
 
 pref("ui.mouse.radius.enabled", true);
-pref("ui.mouse.radius.leftmm", 3);
-pref("ui.mouse.radius.topmm", 5);
-pref("ui.mouse.radius.rightmm", 3);
-pref("ui.mouse.radius.bottommm", 2);
+pref("ui.mouse.radius.leftmm", 8);
+pref("ui.mouse.radius.topmm", 8);
+pref("ui.mouse.radius.rightmm", 8);
+pref("ui.mouse.radius.bottommm", 8);
 pref("ui.mouse.radius.visitedWeight", 120);
 pref("ui.mouse.radius.reposition", true);
 
@@ -552,6 +553,7 @@ pref("layers.offmainthreadcomposition.enabled", true);
 pref("layers.async-video.enabled", true);
 #ifdef MOZ_ANDROID_APZ
 pref("layers.async-pan-zoom.enabled", true);
+pref("apz.axis_lock.mode", 1);
 #endif
 pref("apz.allow_zooming", true);
 pref("layers.progressive-paint", true);
@@ -935,6 +937,11 @@ pref("consoleservice.logcat", true);
 // Enable Cardboard VR on mobile, assuming VR at all is enabled
 pref("dom.vr.cardboard.enabled", true);
 
+#ifndef RELEASE_BUILD
+// Enable VR on mobile, making it enable by default.
+pref("dom.vr.enabled", true);
+#endif
+
 pref("browser.tabs.showAudioPlayingIcon", true);
 
 // Enable service workers and fetch interception on non-release Fennec
@@ -950,7 +957,7 @@ pref("identity.fxaccounts.remote.webchannel.uri", "https://accounts.firefox.com"
 pref("identity.fxaccounts.remote.profile.uri", "https://profile.accounts.firefox.com/v1");
 
 // The remote URL of the Firefox Account oauth server.
-pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com/v1"); 
+pref("identity.fxaccounts.remote.oauth.uri", "https://oauth.accounts.firefox.com/v1");
 
 // Token server used by Firefox Account-authenticated Sync.
 pref("identity.sync.tokenserver.uri", "https://token.services.mozilla.com/1.0/sync/1.5");

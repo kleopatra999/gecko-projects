@@ -116,7 +116,7 @@ user_pref("network.sntp.pools", "%(server)s");
 user_pref("network.sntp.maxRetryCount", 1);
 
 // Make sure the notification permission migration test doesn't hit the network.
-user_pref("browser.push.warning.infoURL", "http://%(server)s/alerts-dummy/infoURL");
+user_pref("app.support.baseURL", "http://%(server)s/support-dummy/");
 
 // Existing tests don't wait for the notification button security delay
 user_pref("security.notification_enable_delay", 0);
@@ -289,9 +289,6 @@ user_pref("browser.newtabpage.directory.ping", "");
 user_pref("loop.debug.loglevel", "All");
 user_pref("loop.enabled", true);
 user_pref("loop.throttled", false);
-user_pref("loop.oauth.google.URL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=");
-user_pref("loop.oauth.google.getContactsURL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=contacts");
-user_pref("loop.oauth.google.getGroupsURL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=groups");
 user_pref("loop.server", "http://%(server)s/browser/browser/components/loop/test/mochitest/loop_fxa.sjs?");
 user_pref("loop.CSP","default-src 'self' about: file: chrome: data: wss://* http://* https://*");
 
@@ -335,9 +332,6 @@ user_pref("network.proxy.pac_generator", false);
 // Make tests run consistently on DevEdition (which has a lightweight theme
 // selected by default).
 user_pref("lightweightThemes.selectedThemeID", "");
-
-// Disable periodic updates of service workers.
-user_pref("dom.serviceWorkers.periodic-updates.enabled", false);
 
 // Enable speech synth test service, and disable built in platform services.
 user_pref("media.webspeech.synth.test", true);

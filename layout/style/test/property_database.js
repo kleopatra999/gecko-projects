@@ -2568,7 +2568,7 @@ var gCSSProperties = {
     type: CSS_TYPE_LONGHAND,
     initial_values: [ "inline" ],
     /* XXX none will really mess with other properties */
-    prerequisites: { "float": "none", "position": "static" },
+    prerequisites: { "float": "none", "position": "static", "contain": "none" },
     other_values: [
       "block",
       "flex",
@@ -3226,7 +3226,7 @@ var gCSSProperties = {
     domProp: "overflow",
     inherited: false,
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    prerequisites: { "display": "block" },
+    prerequisites: { "display": "block", "contain": "none" },
     subproperties: [ "overflow-x", "overflow-y" ],
     initial_values: [ "visible" ],
     other_values: [ "auto", "scroll", "hidden", "-moz-hidden-unscrollable", "-moz-scrollbars-none" ],
@@ -3236,7 +3236,7 @@ var gCSSProperties = {
     domProp: "overflowX",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    prerequisites: { "display": "block", "overflow-y": "visible" },
+    prerequisites: { "display": "block", "overflow-y": "visible", "contain": "none" },
     initial_values: [ "visible" ],
     other_values: [ "auto", "scroll", "hidden", "-moz-hidden-unscrollable" ],
     invalid_values: []
@@ -3245,7 +3245,7 @@ var gCSSProperties = {
     domProp: "overflowY",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    prerequisites: { "display": "block", "overflow-x": "visible" },
+    prerequisites: { "display": "block", "overflow-x": "visible", "contain": "none" },
     initial_values: [ "visible" ],
     other_values: [ "auto", "scroll", "hidden", "-moz-hidden-unscrollable" ],
     invalid_values: []
@@ -3737,10 +3737,11 @@ var gCSSProperties = {
     initial_values: [ "normal", "0", "0px", "-0em",
       "calc(-0px)", "calc(0em)"
     ],
-    other_values: [ "1em", "2px", "-3px",
+    other_values: [ "1em", "2px", "-3px", "0%", "50%", "-120%",
       "calc(1em)", "calc(1em + 3px)",
       "calc(15px / 2)", "calc(15px/2)",
-      "calc(-2em)"
+      "calc(-2em)", "calc(0% + 0px)",
+      "calc(-10%/2 - 1em)"
     ],
     invalid_values: [],
     quirks_values: { "5": "5px" },
@@ -4044,32 +4045,82 @@ var gCSSProperties = {
     domProp: "alignContent",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: [ "stretch" ],
-    other_values: [
-      "flex-start",
-      "flex-end",
-      "center",
-      "space-between",
-      "space-around"
-    ],
-    invalid_values: [ "abc", "30px", "0", "auto" ]
+    initial_values: [ "auto" ],
+    other_values: [ "start", "end", "flex-start", "flex-end", "center", "left",
+                    "right", "space-between", "space-around", "space-evenly",
+                    "baseline", "last-baseline", "stretch", "start safe",
+                    "true end", "true end stretch", "end safe space-evenly" ],
+    invalid_values: [ "none", "5", "self-end", "safe", "auto true", "true safe",
+                      "safe baseline", "baseline true", "baseline end", "end auto",
+                      "safe end true start", "safe end true", "auto safe start",
+                      "true end start", "end start safe", "space-between true",
+                      "stretch safe" ]
   },
   "align-items": {
     domProp: "alignItems",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: [ "stretch" ],
-    other_values: [ "flex-start", "flex-end", "center", "baseline" ],
-    invalid_values: [ "space-between", "abc", "30px" ]
+    initial_values: [ "auto", "start" ],
+    // Can't test 'left'/'right' here since that computes to 'start' for blocks.
+    other_values: [ "end", "flex-start", "flex-end", "self-start", "self-end",
+                    "center", "stretch", "baseline", "true left",
+                    "center true", "safe right", "center safe" ],
+    invalid_values: [ "space-between", "abc", "5%", "legacy", "legacy end",
+                      "end legacy", "true", "true baseline", "auto true",
+                      "safe left true", "safe stretch", "end end" ]
   },
   "align-self": {
     domProp: "alignSelf",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    // (Assuming defaults on the parent, 'auto' will compute to 'stretch'.)
-    initial_values: [ "auto", "stretch" ],
-    other_values: [ "flex-start", "flex-end", "center", "baseline" ],
-    invalid_values: [ "space-between", "abc", "30px" ]
+    // (Assuming defaults on the parent, 'auto' will compute to 'start'.)
+    initial_values: [ "auto", "start" ],
+    other_values: [ "flex-start", "flex-end", "center", "stretch",
+                    "baseline", "last-baseline", "right safe", "true center",
+                    "self-start", "self-end safe" ],
+    invalid_values: [ "space-between", "abc", "30px", "stretch safe", "safe" ]
+  },
+  "justify-content": {
+    domProp: "justifyContent",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "auto" ],
+    other_values: [ "start", "end", "flex-start", "flex-end", "center", "left",
+                    "right", "space-between", "space-around", "space-evenly",
+                    "baseline", "last-baseline", "stretch", "start safe",
+                    "true end", "true end stretch", "end safe space-evenly" ],
+    invalid_values: [ "30px", "5%", "self-end", "safe", "auto true", "true safe",
+                      "safe baseline", "baseline true", "baseline end", "auto end",
+                      "safe end true start", "safe end true", "auto safe start",
+                      "true end start", "end start safe", "space-around true",
+                      "safe stretch"]
+  },
+  "justify-items": {
+    domProp: "justifyItems",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "auto", "start" ],
+    other_values: [ "end", "flex-start", "flex-end", "self-start", "self-end",
+                    "center", "left", "right", "baseline", "stretch",
+                    "legacy left", "right legacy", "legacy center",
+                    "true right", "left true", "safe right", "center safe" ],
+    invalid_values: [ "space-between", "abc", "30px", "legacy", "legacy start",
+                      "end legacy", "legacy baseline", "legacy legacy", "true",
+                      "safe legacy left", "legacy left safe", "legacy safe left",
+                      "safe left legacy", "legacy left legacy", "baseline true",
+                      "safe true", "safe left true", "safe stretch" ]
+  },
+  "justify-self": {
+    domProp: "justifySelf",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "auto", "start" ],
+    other_values: [ "end", "flex-start", "flex-end", "self-start",
+                    "self-end", "center", "left", "right", "baseline",
+                    "last-baseline", "stretch", "left true", "true right",
+                    "safe right", "center safe" ],
+    invalid_values: [ "space-between", "abc", "30px", "none",
+                      "legacy left", "right legacy" ]
   },
   "flex": {
     domProp: "flex",
@@ -4258,14 +4309,6 @@ var gCSSProperties = {
     initial_values: [ "0" ],
     other_values: [ "1", "99999", "-1", "-50" ],
     invalid_values: [ "0px", "1.0", "1.", "1%", "0.2", "3em", "stretch" ]
-  },
-  "justify-content": {
-    domProp: "justifyContent",
-    inherited: false,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: [ "flex-start" ],
-    other_values: [ "flex-end", "center", "space-between", "space-around" ],
-    invalid_values: [ "baseline", "stretch", "30px", "5%" ]
   },
 
   // Aliases
@@ -6517,6 +6560,27 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     alias_for: "transform-style",
     subproperties: [ "transform-style" ],
   };
+  gCSSProperties["-webkit-backface-visibility"] = {
+    domProp: "webkitBackfaceVisibility",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "backface-visibility",
+    subproperties: [ "backface-visibility" ],
+  };
+  gCSSProperties["-webkit-perspective"] = {
+    domProp: "webkitPerspective",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "perspective",
+    subproperties: [ "perspective" ],
+  };
+  gCSSProperties["-webkit-perspective-origin"] = {
+    domProp: "webkitPerspectiveOrigin",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "perspective-origin",
+    subproperties: [ "perspective-origin" ],
+  };
   gCSSProperties["-webkit-transition"] = {
     domProp: "webkitTransition",
     inherited: false,
@@ -6622,6 +6686,41 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     alias_for: "border-image",
     subproperties: [ "border-image-source", "border-image-slice", "border-image-width",  "border-image-outset", "border-image-repeat" ],
   };
+  gCSSProperties["-webkit-border-image-outset"] = {
+    domProp: "webkitBorderImageOutset",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "border-image-outset",
+    subproperties: [ "border-image-outset" ],
+  };
+  gCSSProperties["-webkit-border-image-repeat"] = {
+    domProp: "webkitBorderImageRepeat",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "border-image-repeat",
+    subproperties: [ "border-image-repeat" ],
+  };
+  gCSSProperties["-webkit-border-image-slice"] = {
+    domProp: "webkitBorderImageSlice",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "border-image-slice",
+    subproperties: [ "border-image-slice" ],
+  };
+  gCSSProperties["-webkit-border-image-source"] = {
+    domProp: "webkitBorderImageSource",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "border-image-source",
+    subproperties: [ "border-image-source" ],
+  };
+  gCSSProperties["-webkit-border-image-width"] = {
+    domProp: "webkitBorderImageWidth",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "border-image-width",
+    subproperties: [ "border-image-width" ],
+  };
   gCSSProperties["-webkit-box-shadow"] = {
     domProp: "webkitBoxShadow",
     inherited: false,
@@ -6635,6 +6734,34 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.webkit")) {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "box-sizing",
     subproperties: [ "box-sizing" ],
+  };
+  gCSSProperties["-webkit-box-flex"] = {
+    domProp: "webkitBoxFlex",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "flex-grow",
+    subproperties: [ "flex-grow" ],
+  };
+  gCSSProperties["-webkit-box-ordinal-group"] = {
+    domProp: "webkitBoxOrdinalGroup",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "order",
+    subproperties: [ "order" ],
+  };
+  gCSSProperties["-webkit-box-align"] = {
+    domProp: "webkitBoxAlign",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "align-items",
+    subproperties: [ "align-items" ],
+  };
+  gCSSProperties["-webkit-box-pack"] = {
+    domProp: "webkitBoxPack",
+    inherited: false,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "justify-content",
+    subproperties: [ "justify-content" ],
   };
   gCSSProperties["-webkit-user-select"] = {
     domProp: "webkitUserSelect",
@@ -6677,6 +6804,18 @@ if (IsCSSPropertyPrefEnabled("layout.css.unset-value.enabled")) {
   } else {
     gCSSProperties["text-align"].invalid_values.push("true left");
   }
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.float-logical-values.enabled")) {
+  gCSSProperties["float"].other_values.push("inline-start");
+  gCSSProperties["float"].other_values.push("inline-end");
+  gCSSProperties["clear"].other_values.push("inline-start");
+  gCSSProperties["clear"].other_values.push("inline-end");
+} else {
+  gCSSProperties["float"].invalid_values.push("inline-start");
+  gCSSProperties["float"].invalid_values.push("inline-end");
+  gCSSProperties["clear"].invalid_values.push("inline-start");
+  gCSSProperties["clear"].invalid_values.push("inline-end");
 }
 
 // Copy aliased properties' fields from their alias targets.

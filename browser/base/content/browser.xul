@@ -8,7 +8,7 @@
 
 <?xml-stylesheet href="chrome://browser/content/browser.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/content/places/places.css" type="text/css"?>
-<?xml-stylesheet href="chrome://devtools/skin/themes/common.css" type="text/css"?>
+<?xml-stylesheet href="chrome://devtools/skin/common.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/controlcenter/panel.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/customizableui/panelUIOverlay.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/" type="text/css"?>
@@ -119,7 +119,7 @@
                 accesskey="&bookmarkAllTabs.accesskey;"
                 command="Browser:BookmarkAllTabs"/>
       <menuitem id="context_closeTabsToTheEnd" label="&closeTabsToTheEnd.label;" accesskey="&closeTabsToTheEnd.accesskey;"
-                oncommand="gBrowser.removeTabsToTheEndFrom(TabContextMenu.contextTab);"/>
+                oncommand="gBrowser.removeTabsToTheEndFrom(TabContextMenu.contextTab, {animate: true});"/>
       <menuitem id="context_closeOtherTabs" label="&closeOtherTabs.label;" accesskey="&closeOtherTabs.accesskey;"
                 oncommand="gBrowser.removeAllTabsBut(TabContextMenu.contextTab);"/>
       <menuseparator/>
@@ -261,14 +261,6 @@
       <box id="UITourHighlight"></box>
     </panel>
 
-    <panel id="abouthome-search-panel" orient="vertical" type="arrow" hidden="true"
-           onclick="this.hidePopup()">
-      <hbox id="abouthome-search-panel-manage"
-            onclick="openPreferences('paneSearch')">
-        <label>&changeSearchSettings.button;</label>
-      </hbox>
-    </panel>
-
     <panel id="social-share-panel"
            class="social-panel"
            type="arrow"
@@ -318,26 +310,6 @@
            type="arrow"
            orient="horizontal"
            hidden="true"/>
-
-    <menupopup id="processHangOptions"
-               onpopupshowing="ProcessHangMonitor.refreshMenu(window);">
-      <menuitem id="processHangTerminateScript"
-                oncommand="ProcessHangMonitor.terminateScript(window)"
-                accesskey="&processHang.terminateScript.accessKey;"
-                label="&processHang.terminateScript.label;"/>
-      <menuitem id="processHangDebugScript"
-                oncommand="ProcessHangMonitor.debugScript(window)"
-                accesskey="&processHang.debugScript.accessKey;"
-                label="&processHang.debugScript.label;"/>
-      <menuitem id="processHangTerminatePlugin"
-                oncommand="ProcessHangMonitor.terminatePlugin(window)"
-                accesskey="&processHang.terminatePlugin.accessKey;"
-                label="&processHang.terminatePlugin.label;"/>
-      <menuitem id="processHangTerminateProcess"
-                oncommand="ProcessHangMonitor.terminateProcess(window)"
-                accesskey="&processHang.terminateProcess.accessKey;"
-                label="&processHang.terminateProcess.label;"/>
-    </menupopup>
 
     <menupopup id="toolbar-context-menu"
                onpopupshowing="onViewToolbarsPopupShowing(event, document.getElementById('viewToolbarsMenuSeparator'));">

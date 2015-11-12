@@ -147,6 +147,12 @@ public:
   void OnStopObservingContent(IMEContentObserver* aIMEContentObserver);
 
   /**
+   * TryToFlushPendingNotificationsToIME() suggests flushing pending
+   * notifications to IME to IMEContentObserver.
+   */
+  void TryToFlushPendingNotificationsToIME();
+
+  /**
    * Register accesskey on the given element. When accesskey is activated then
    * the element will be notified via nsIContent::PerformAccesskey() method.
    *
@@ -250,7 +256,7 @@ public:
   // locked. This is used by dom::Event::GetScreenCoords() to make mouse
   // events' screen coord appear frozen at the last mouse position while
   // the pointer is locked.
-  static LayoutDeviceIntPoint sLastScreenPoint;
+  static CSSIntPoint sLastScreenPoint;
 
   // Holds the point in client coords of the last mouse event. Used by
   // dom::Event::GetClientCoords() to make mouse events' client coords appear

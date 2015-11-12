@@ -234,6 +234,10 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "BluetoothMapSetMessageStatusEvent", b2g: true, permission: ["bluetooth"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "BluetoothObexAuthEvent", b2g: true, permission: ["bluetooth"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "BluetoothObexAuthHandle", b2g: true, permission: ["bluetooth"]},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "BluetoothPbapRequestHandle", b2g: true, permission: ["bluetooth"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "BluetoothPairingEvent", b2g: true, permission: ["bluetooth"]},
@@ -306,6 +310,8 @@ var interfaceNamesInGlobalScope =
     "ChannelSplitterNode",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "CharacterData",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "ChromeNodeList", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "ChromeWindow", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -517,7 +523,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "HDMIInputPort", b2g: true, permission: ["inputport"]},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "HMDVRDevice", disabled: true},
+    {name: "HMDVRDevice", android: true, release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "HTMLAllCollection",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -945,7 +951,7 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "PopupBoxObject", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "PositionSensorVRDevice", disabled: true},
+    {name: "PositionSensorVRDevice", android: true, release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "PresentationDeviceInfoManager",
      disabled: true,
@@ -1039,15 +1045,15 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "SourceBufferList",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "SpeechSynthesisErrorEvent", b2g: true},
+    {name: "SpeechSynthesisErrorEvent", android: false, nightly: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "SpeechSynthesisEvent", b2g: true},
+    {name: "SpeechSynthesisEvent", android: false, nightly: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "SpeechSynthesis", b2g: true},
+    {name: "SpeechSynthesis", android: false, nightly: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "SpeechSynthesisUtterance", b2g: true},
+    {name: "SpeechSynthesisUtterance", android: false, nightly: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "SpeechSynthesisVoice", b2g: true},
+    {name: "SpeechSynthesisVoice", android: false, nightly: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "SpecialPowers", xbl: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1397,13 +1403,15 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "VideoStreamTrack",
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRDevice", disabled: true},
+    {name: "VRDevice", android: true, release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRPositionState", disabled: true},
+    {name: "VRPositionState", android: true, release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRFieldOfView", disabled: true},
+    {name: "VREyeParameters", android: true, release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "VRFieldOfViewReadOnly", disabled: true},
+    {name: "VRFieldOfView", android: true, release: false},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "VRFieldOfViewReadOnly", android: true, release: false},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "VTTCue",
 // IMPORTANT: Do not change this list without review from a DOM peer!

@@ -253,7 +253,7 @@ nsPresContext::nsPresContext(nsIDocument* aDocument, nsPresContextType aType)
   mCounterStylesDirty = true;
 
   // if text perf logging enabled, init stats struct
-  PRLogModuleInfo *log = gfxPlatform::GetLog(eGfxLog_textperf);
+  LogModule* log = gfxPlatform::GetLog(eGfxLog_textperf);
   if (MOZ_LOG_TEST(log, LogLevel::Warning)) {
     mTextPerf = new gfxTextPerfMetrics();
   }
@@ -3128,7 +3128,7 @@ SortConfigurations(nsTArray<nsIWidget::Configuration>* aConfigurations)
         if (i == j)
           continue;
         nsIntRect bounds;
-        pluginsToMove[j].mChild->GetBounds(bounds);
+        pluginsToMove[j].mChild->GetBoundsUntyped(bounds);
         nsAutoTArray<nsIntRect,1> clipRects;
         pluginsToMove[j].mChild->GetWindowClipRegion(&clipRects);
         if (HasOverlap(bounds.TopLeft(), clipRects,

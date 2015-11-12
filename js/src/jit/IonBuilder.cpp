@@ -189,12 +189,16 @@ bool
 IonBuilder::abort(const char* message, ...)
 {
     // Don't call PCToLineNumber in release builds.
-#ifdef DEBUG
+#ifdef JS_JITSPEW
     va_list ap;
     va_start(ap, message);
     abortFmt(message, ap);
     va_end(ap);
+# ifdef DEBUG
     JitSpew(JitSpew_IonAbort, "aborted @ %s:%d", script()->filename(), PCToLineNumber(script(), pc));
+# else
+    JitSpew(JitSpew_IonAbort, "aborted @ %s", script()->filename());
+# endif
 #endif
     trackActionableAbort(message);
     return false;
@@ -803,13 +807,13 @@ IonBuilder::build()
     if (!current)
         return false;
 
-#ifdef DEBUG
+#ifdef JS_JITSPEW
     if (info().isAnalysis()) {
         JitSpew(JitSpew_IonScripts, "Analyzing script %s:%" PRIuSIZE " (%p) %s",
                 script()->filename(), script()->lineno(), (void*)script(),
                 AnalysisModeString(info().analysisMode()));
     } else {
-        JitSpew(JitSpew_IonScripts, "%sompiling script %s:%" PRIuSIZE " (%p) (warmup-counter=%" PRIuSIZE ", level=%s)",
+        JitSpew(JitSpew_IonScripts, "%sompiling script %s:%" PRIuSIZE " (%p) (warmup-counter=%" PRIu32 ", level=%s)",
                 (script()->hasIonScript() ? "Rec" : "C"),
                 script()->filename(), script()->lineno(), (void*)script(),
                 script()->getWarmUpCount(), OptimizationLevelString(optimizationInfo().level()));
@@ -6077,8 +6081,7 @@ IonBuilder::createThisScripted(MDefinition* callee, MDefinition* newTarget)
         getPropCache->setIdempotent();
         getProto = getPropCache;
     } else {
-        MCallGetProperty* callGetProp = MCallGetProperty::New(alloc(), newTarget, names().prototype,
-                                                              /* callprop = */ false);
+        MCallGetProperty* callGetProp = MCallGetProperty::New(alloc(), newTarget, names().prototype);
         callGetProp->setIdempotent();
         getProto = callGetProp;
     }
@@ -10582,7 +10585,7 @@ IonBuilder::annotateGetPropertyCache(MDefinition* obj, PropertyName* name,
         return true;
     }
 
-#ifdef DEBUG
+#ifdef JS_JITSPEW
     if (inlinePropTable->numEntries() > 0)
         JitSpew(JitSpew_Inlining, "Annotated GetPropertyCache with %d/%d inline cases",
                                     (int) inlinePropTable->numEntries(), (int) objCount);
@@ -10808,7 +10811,7 @@ IonBuilder::jsop_getprop(PropertyName* name)
             trackOptimizationOutcome(TrackedOutcome::NoTypeInfo);
         }
 
-        MCallGetProperty* call = MCallGetProperty::New(alloc(), obj, name, *pc == JSOP_CALLPROP);
+        MCallGetProperty* call = MCallGetProperty::New(alloc(), obj, name);
         current->add(call);
 
         // During the definite properties analysis we can still try to bake in
@@ -10875,7 +10878,7 @@ IonBuilder::jsop_getprop(PropertyName* name)
         return emitted;
 
     // Emit a call.
-    MCallGetProperty* call = MCallGetProperty::New(alloc(), obj, name, *pc == JSOP_CALLPROP);
+    MCallGetProperty* call = MCallGetProperty::New(alloc(), obj, name);
     current->add(call);
     current->push(call);
     if (!resumeAfter(call))
@@ -11844,11 +11847,14 @@ IonBuilder::tryInnerizeWindow(MDefinition* obj)
     if (!singleton)
         return obj;
 
-    JSObject* inner = GetInnerObject(singleton);
-    if (inner == singleton || inner != &script()->global())
+    if (!IsWindowProxy(singleton))
         return obj;
 
-    // When we navigate, the outer object is brain transplanted and we'll mark
+    // This must be a WindowProxy for the current Window/global. Else it'd be
+    // a cross-compartment wrapper and IsWindowProxy returns false for those.
+    MOZ_ASSERT(ToWindowIfWindowProxy(singleton) == &script()->global());
+
+    // When we navigate, the WindowProxy is brain transplanted and we'll mark
     // its ObjectGroup as having unknown properties. The type constraint we add
     // here will invalidate JIT code when this happens.
     TypeSet::ObjectKey* key = TypeSet::ObjectKey::get(singleton);
@@ -11865,6 +11871,11 @@ IonBuilder::getPropTryInnerize(bool* emitted, MDefinition* obj, PropertyName* na
 {
     // See the comment in tryInnerizeWindow for how this works.
 
+    // Note that it's important that we do this _before_ we'd try to
+    // do the optimizations below on obj normally, since some of those
+    // optimizations have fallback paths that are slower than the path
+    // we'd produce here.
+
     MOZ_ASSERT(*emitted == false);
 
     MDefinition* inner = tryInnerizeWindow(obj);
@@ -11872,15 +11883,6 @@ IonBuilder::getPropTryInnerize(bool* emitted, MDefinition* obj, PropertyName* na
         return true;
 
     if (!forceInlineCaches()) {
-        // Note: the Baseline ICs don't know about this optimization, so it's
-        // possible the global property's HeapTypeSet has not been initialized
-        // yet. In this case we'll fall back to getPropTryCache for now.
-
-        // Note that it's important that we do this _before_ we'd try to
-        // do the optimizations below on obj normally, since some of those
-        // optimizations have fallback paths that are slower than the path
-        // we'd produce here.
-
         trackOptimizationAttempt(TrackedStrategy::GetProp_Constant);
         if (!getPropTryConstant(emitted, inner, NameToId(name), types) || *emitted)
             return *emitted;

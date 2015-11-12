@@ -538,7 +538,7 @@ nsDisplayListBuilder::AddAnimationsAndTransitionsToLayer(Layer* aLayer,
     // AnimationManager or TransitionManager need to know that we refused to
     // run this animation asynchronously so that they will not throttle the
     // main thread animation.
-    aFrame->Properties().Set(nsIFrame::RefusedAsyncAnimation(),
+    aFrame->Properties().Set(nsIFrame::RefusedAsyncAnimationProperty(),
                             reinterpret_cast<void*>(intptr_t(true)));
 
     // We need to schedule another refresh driver run so that AnimationManager
@@ -1041,6 +1041,9 @@ nsDisplayListBuilder::IsAnimatedGeometryRoot(nsIFrame* aFrame, nsIFrame** aParen
     // for background-attachment:fixed elements.
     return true;
   }
+  if (aFrame->IsTransformed()) {
+    return true;
+  }
 
   nsIFrame* parent = nsLayoutUtils::GetCrossDocParentFrame(aFrame);
   if (!parent)
@@ -1079,23 +1082,20 @@ nsDisplayListBuilder::IsAnimatedGeometryRoot(nsIFrame* aFrame, nsIFrame** aParen
 
 bool
 nsDisplayListBuilder::GetCachedAnimatedGeometryRoot(const nsIFrame* aFrame,
-                                                    const nsIFrame* aStopAtAncestor,
                                                     nsIFrame** aOutResult)
 {
-  AnimatedGeometryRootLookup lookup(aFrame, aStopAtAncestor);
-  return mAnimatedGeometryRootCache.Get(lookup, aOutResult);
+  return mAnimatedGeometryRootCache.Get(const_cast<nsIFrame*>(aFrame), aOutResult);
 }
 
 static nsIFrame*
 ComputeAnimatedGeometryRootFor(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
-                               const nsIFrame* aStopAtAncestor = nullptr,
                                bool aUseCache = false)
 {
   nsIFrame* cursor = aFrame;
-  while (cursor != aStopAtAncestor) {
+  while (cursor != aBuilder->RootReferenceFrame()) {
     if (aUseCache) {
       nsIFrame* result;
-      if (aBuilder->GetCachedAnimatedGeometryRoot(cursor, aStopAtAncestor, &result)) {
+      if (aBuilder->GetCachedAnimatedGeometryRoot(cursor, &result)) {
         return result;
       }
     }
@@ -1108,24 +1108,29 @@ ComputeAnimatedGeometryRootFor(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
 }
 
 nsIFrame*
-nsDisplayListBuilder::FindAnimatedGeometryRootFor(nsIFrame* aFrame, const nsIFrame* aStopAtAncestor)
+nsDisplayListBuilder::FindAnimatedGeometryRootFor(nsIFrame* aFrame)
 {
   if (aFrame == mCurrentFrame) {
     return mCurrentAnimatedGeometryRoot;
   }
 
-  nsIFrame* result = ComputeAnimatedGeometryRootFor(this, aFrame, aStopAtAncestor, true);
-  AnimatedGeometryRootLookup lookup(aFrame, aStopAtAncestor);
-  mAnimatedGeometryRootCache.Put(lookup, result);
+  nsIFrame* result = ComputeAnimatedGeometryRootFor(this, aFrame, true);
+  mAnimatedGeometryRootCache.Put(aFrame, result);
   return result;
 }
 
 void
 nsDisplayListBuilder::RecomputeCurrentAnimatedGeometryRoot()
 {
+  // technically we only need to clear any part of the cache that relies on
+  // the AGR of mCurrentFrame (i.e. all entries in mAnimatedGeometryRootCache
+  // where the key frame is a descendant of mCurrentFrame) but doing that is
+  // complicated so we just clear the whole thing.
+  mAnimatedGeometryRootCache.Clear();
+
   mCurrentAnimatedGeometryRoot = ComputeAnimatedGeometryRootFor(this, const_cast<nsIFrame *>(mCurrentFrame));
-  AnimatedGeometryRootLookup lookup(mCurrentFrame, nullptr);
-  mAnimatedGeometryRootCache.Put(lookup, mCurrentAnimatedGeometryRoot);
+  MOZ_ASSERT(nsLayoutUtils::IsAncestorFrameCrossDoc(RootReferenceFrame(), mCurrentAnimatedGeometryRoot));
+  mAnimatedGeometryRootCache.Put(const_cast<nsIFrame*>(mCurrentFrame), mCurrentAnimatedGeometryRoot);
 }
 
 void
@@ -1185,9 +1190,9 @@ nsDisplayListBuilder::AdjustWindowDraggingRegion(nsIFrame* aFrame)
     if (transformedDevPixelBorderBox.ToIntRect(&transformedDevPixelBorderBoxInt)) {
       const nsStyleUserInterface* styleUI = aFrame->StyleUserInterface();
       if (styleUI->mWindowDragging == NS_STYLE_WINDOW_DRAGGING_DRAG) {
-        mWindowDraggingRegion.OrWith(LayoutDevicePixel::ToUntyped(transformedDevPixelBorderBoxInt));
+        mWindowDraggingRegion.OrWith(transformedDevPixelBorderBoxInt.ToUnknownRect());
       } else {
-        mWindowDraggingRegion.SubOut(LayoutDevicePixel::ToUntyped(transformedDevPixelBorderBoxInt));
+        mWindowDraggingRegion.SubOut(transformedDevPixelBorderBoxInt.ToUnknownRect());
       }
     }
   }
@@ -1991,11 +1996,17 @@ void nsDisplayList::Sort(nsDisplayListBuilder* aBuilder,
 nsDisplayItem::nsDisplayItem(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
   : mFrame(aFrame)
   , mClip(aBuilder->ClipState().GetCurrentCombinedClip(aBuilder))
+  , mAnimatedGeometryRoot(nullptr)
 #ifdef MOZ_DUMP_PAINTING
   , mPainted(false)
 #endif
 {
   mReferenceFrame = aBuilder->FindReferenceFrameFor(aFrame, &mToReferenceFrame);
+  // This can return the wrong result if the item override ShouldFixToViewport(),
+  // the item needs to set it again in its constructor.
+  mAnimatedGeometryRoot = nsLayoutUtils::GetAnimatedGeometryRootForInit(this, aBuilder);
+  MOZ_ASSERT(nsLayoutUtils::IsAncestorFrameCrossDoc(aBuilder->RootReferenceFrame(),
+                                                      mAnimatedGeometryRoot), "Bad");
   NS_ASSERTION(aBuilder->GetDirtyRect().width >= 0 ||
                !aBuilder->IsForPainting(), "dirty rect not set");
   // The dirty rect is for mCurrentFrame, so we have to use
@@ -2135,6 +2146,28 @@ nsDisplayBackgroundImage::nsDisplayBackgroundImage(nsDisplayListBuilder* aBuilde
   MOZ_COUNT_CTOR(nsDisplayBackgroundImage);
 
   mBounds = GetBoundsInternal(aBuilder);
+  mDestArea = GetDestAreaInternal(aBuilder);
+  if (ShouldFixToViewport(aBuilder)) {
+    mAnimatedGeometryRoot = nsLayoutUtils::GetAnimatedGeometryRootFor(this, aBuilder);
+  }
+}
+
+nsRect
+nsDisplayBackgroundImage::GetDestAreaInternal(nsDisplayListBuilder* aBuilder)
+{
+  if (!mBackgroundStyle) {
+    return nsRect();
+  }
+
+  nsPresContext* presContext = mFrame->PresContext();
+  uint32_t flags = aBuilder->GetBackgroundPaintFlags();
+  nsRect borderArea = nsRect(ToReferenceFrame(), mFrame->GetSize());
+  const nsStyleBackground::Layer &layer = mBackgroundStyle->mLayers[mLayer];
+
+  nsBackgroundLayerState state =
+    nsCSSRendering::PrepareBackgroundLayer(presContext, mFrame, flags,
+                                           borderArea, borderArea, layer);
+  return state.mDestArea;
 }
 
 nsDisplayBackgroundImage::~nsDisplayBackgroundImage()
@@ -2428,7 +2461,7 @@ nsDisplayBackgroundImage::CanOptimizeToImageLayer(LayerManager* aManager,
   // layer pixel boundaries. This should be OK for now.
 
   int32_t appUnitsPerDevPixel = presContext->AppUnitsPerDevPixel();
-  mDestRect =
+  mImageLayerDestRect =
     LayoutDeviceRect::FromAppUnits(state.mDestArea, appUnitsPerDevPixel);
 
   // Ok, we can turn this into a layer if needed.
@@ -2462,65 +2495,81 @@ nsDisplayBackgroundImage::GetContainer(LayerManager* aManager,
   return container.forget();
 }
 
-LayerState
-nsDisplayBackgroundImage::GetLayerState(nsDisplayListBuilder* aBuilder,
-                                        LayerManager* aManager,
-                                        const ContainerLayerParameters& aParameters)
+nsDisplayBackgroundImage::ImageLayerization
+nsDisplayBackgroundImage::ShouldCreateOwnLayer(nsDisplayListBuilder* aBuilder,
+                                               LayerManager* aManager)
 {
-  bool animated = false;
-  if (mBackgroundStyle) {
+  nsIFrame* backgroundStyleFrame = nsCSSRendering::FindBackgroundStyleFrame(mFrame);
+  if (ActiveLayerTracker::IsStyleAnimated(aBuilder, backgroundStyleFrame,
+                                          eCSSProperty_background_position)) {
+    return WHENEVER_POSSIBLE;
+  }
+
+  if (nsLayoutUtils::AnimatedImageLayersEnabled() && mBackgroundStyle) {
     const nsStyleBackground::Layer &layer = mBackgroundStyle->mLayers[mLayer];
     const nsStyleImage* image = &layer.mImage;
     if (image->GetType() == eStyleImageType_Image) {
       imgIRequest* imgreq = image->GetImageData();
       nsCOMPtr<imgIContainer> image;
       if (NS_SUCCEEDED(imgreq->GetImage(getter_AddRefs(image))) && image) {
-        if (NS_FAILED(image->GetAnimated(&animated))) {
-          animated = false;
+        bool animated = false;
+        if (NS_SUCCEEDED(image->GetAnimated(&animated)) && animated) {
+          return WHENEVER_POSSIBLE;
         }
       }
     }
   }
 
-  if (!animated ||
-      !nsLayoutUtils::AnimatedImageLayersEnabled()) {
-    if (!aManager->IsCompositingCheap() ||
-        !nsLayoutUtils::GPUImageScalingEnabled()) {
-      return LAYER_NONE;
-    }
+  if (nsLayoutUtils::GPUImageScalingEnabled() &&
+      aManager->IsCompositingCheap()) {
+    return ONLY_FOR_SCALING;
   }
 
-  if (!CanOptimizeToImageLayer(aManager, aBuilder)) {
+  return NO_LAYER_NEEDED;
+}
+
+LayerState
+nsDisplayBackgroundImage::GetLayerState(nsDisplayListBuilder* aBuilder,
+                                        LayerManager* aManager,
+                                        const ContainerLayerParameters& aParameters)
+{
+  ImageLayerization shouldLayerize = ShouldCreateOwnLayer(aBuilder, aManager);
+  if (shouldLayerize == NO_LAYER_NEEDED) {
+    // We can skip the call to CanOptimizeToImageLayer if we don't want a
+    // layer anyway.
     return LAYER_NONE;
   }
 
-  MOZ_ASSERT(mImage);
+  if (CanOptimizeToImageLayer(aManager, aBuilder)) {
+    if (shouldLayerize == WHENEVER_POSSIBLE) {
+      return LAYER_ACTIVE;
+    }
 
-  if (!animated) {
+    MOZ_ASSERT(shouldLayerize == ONLY_FOR_SCALING, "unhandled ImageLayerization value?");
+
+    MOZ_ASSERT(mImage);
     int32_t imageWidth;
     int32_t imageHeight;
     mImage->GetWidth(&imageWidth);
     mImage->GetHeight(&imageHeight);
     NS_ASSERTION(imageWidth != 0 && imageHeight != 0, "Invalid image size!");
 
-    const LayerRect destLayerRect = mDestRect * aParameters.Scale();
+    const LayerRect destLayerRect = mImageLayerDestRect * aParameters.Scale();
 
     // Calculate the scaling factor for the frame.
     const gfxSize scale = gfxSize(destLayerRect.width / imageWidth,
                                   destLayerRect.height / imageHeight);
 
-    // If we are not scaling at all, no point in separating this into a layer.
-    if (scale.width == 1.0f && scale.height == 1.0f) {
-      return LAYER_NONE;
-    }
-
-    // If the target size is pretty small, no point in using a layer.
-    if (destLayerRect.width * destLayerRect.height < 64 * 64) {
-      return LAYER_NONE;
+    if ((scale.width != 1.0f || scale.height != 1.0f) &&
+        (destLayerRect.width * destLayerRect.height >= 64 * 64)) {
+      // Separate this image into a layer.
+      // There's no point in doing this if we are not scaling at all or if the
+      // target size is pretty small.
+      return LAYER_ACTIVE;
     }
   }
 
-  return LAYER_ACTIVE;
+  return LAYER_NONE;
 }
 
 already_AddRefed<Layer>
@@ -2567,10 +2616,10 @@ nsDisplayBackgroundImage::ConfigureLayer(ImageLayer* aLayer,
   // aParameters.Offset() is always zero.
   MOZ_ASSERT(aParameters.Offset() == LayerIntPoint(0,0));
 
-  const LayoutDevicePoint p = mDestRect.TopLeft();
+  const LayoutDevicePoint p = mImageLayerDestRect.TopLeft();
   Matrix transform = Matrix::Translation(p.x, p.y);
-  transform.PreScale(mDestRect.width / imageWidth,
-                     mDestRect.height / imageHeight);
+  transform.PreScale(mImageLayerDestRect.width / imageWidth,
+                     mImageLayerDestRect.height / imageHeight);
   aLayer->SetBaseTransform(gfx::Matrix4x4::From2D(transform));
 }
 
@@ -2767,6 +2816,13 @@ void nsDisplayBackgroundImage::ComputeInvalidationRegion(nsDisplayListBuilder* a
     if (positioningArea.Size() != geometry->mPositioningArea.Size()) {
       NotifyRenderingChanged();
     }
+    return;
+  }
+  if (!mDestArea.IsEqualInterior(geometry->mDestArea)) {
+    // Dest area changed in a way that could cause everything to change,
+    // so invalidate everything (both old and new painting areas).
+    aInvalidRegion->Or(bounds, geometry->mBounds);
+    NotifyRenderingChanged();
     return;
   }
   if (aBuilder->ShouldSyncDecodeImages()) {
@@ -3234,6 +3290,12 @@ nsDisplayLayerEventRegions::AddFrame(nsDisplayListBuilder* aBuilder,
     if (pluginFrame && pluginFrame->WantsToHandleWheelEventAsDefaultAction()) {
       mDispatchToContentHitRegion.Or(mDispatchToContentHitRegion, borderBox);
     }
+  } else if (gfxPlatform::GetPlatform()->SupportsApzWheelInput() &&
+             nsLayoutUtils::IsScrollFrameWithSnapping(aFrame->GetParent())) {
+    // If the frame is the inner content of a scrollable frame with snap-points
+    // then we want to handle wheel events for it on the main thread. Add it to
+    // the d-t-c region so that APZ waits for the main thread.
+    mDispatchToContentHitRegion.Or(mDispatchToContentHitRegion, borderBox);
   }
 
   // Touch action region
@@ -3733,8 +3795,7 @@ RequiredLayerStateForChildren(nsDisplayListBuilder* aBuilder,
   LayerState result = LAYER_INACTIVE;
   for (nsDisplayItem* i = aList.GetBottom(); i; i = i->GetAbove()) {
     if (result == LAYER_INACTIVE &&
-        nsLayoutUtils::GetAnimatedGeometryRootFor(i, aBuilder) !=
-          aExpectedAnimatedGeometryRootForChildren) {
+        i->AnimatedGeometryRoot() != aExpectedAnimatedGeometryRootForChildren) {
       result = LAYER_ACTIVE;
     }
 
@@ -3884,9 +3945,11 @@ already_AddRefed<Layer>
 nsDisplayOpacity::BuildLayer(nsDisplayListBuilder* aBuilder,
                              LayerManager* aManager,
                              const ContainerLayerParameters& aContainerParameters) {
+  ContainerLayerParameters params = aContainerParameters;
+  params.mForEventsOnly = mForEventsOnly;
   RefPtr<Layer> container = aManager->GetLayerBuilder()->
     BuildContainerLayerFor(aBuilder, aManager, mFrame, this, &mList,
-                           aContainerParameters, nullptr,
+                           params, nullptr,
                            FrameLayerBuilder::CONTAINER_ALLOW_PULL_BACKGROUND_COLOR);
   if (!container)
     return nullptr;
@@ -3946,8 +4009,13 @@ nsDisplayOpacity::CanApplyOpacity() const
 bool
 nsDisplayOpacity::ShouldFlattenAway(nsDisplayListBuilder* aBuilder)
 {
-  if (NeedsActiveLayer(aBuilder))
+  if (NeedsActiveLayer(aBuilder) || mOpacity == 0.0) {
+    // If our opacity is zero then we'll discard all descendant display items
+    // except for layer event regions, so there's no point in doing this
+    // optimization (and if we do do it, then invalidations of those descendants
+    // might trigger repainting).
     return false;
+  }
 
   nsDisplayItem* child = mList.GetBottom();
   // Only try folding our opacity down if we have at most three children
@@ -3962,6 +4030,10 @@ nsDisplayOpacity::ShouldFlattenAway(nsDisplayListBuilder* aBuilder)
   bool snap;
   uint32_t numChildren = 0;
   for (; numChildren < ArrayLength(children) && child; numChildren++, child = child->GetAbove()) {
+    if (child->GetType() == nsDisplayItem::TYPE_LAYER_EVENT_REGIONS) {
+      numChildren--;
+      continue;
+    }
     if (!child->CanApplyOpacity()) {
       return false;
     }
@@ -4002,8 +4074,7 @@ nsDisplayOpacity::GetLayerState(nsDisplayListBuilder* aBuilder,
   if (NeedsActiveLayer(aBuilder))
     return LAYER_ACTIVE;
 
-  return RequiredLayerStateForChildren(aBuilder, aManager, aParameters, mList,
-    nsLayoutUtils::GetAnimatedGeometryRootFor(this, aBuilder));
+  return RequiredLayerStateForChildren(aBuilder, aManager, aParameters, mList, AnimatedGeometryRoot());
 }
 
 bool
@@ -4728,10 +4799,14 @@ nsDisplayTransform::nsDisplayTransform(nsDisplayListBuilder* aBuilder,
 void
 nsDisplayTransform::SetReferenceFrameToAncestor(nsDisplayListBuilder* aBuilder)
 {
+  if (mFrame == aBuilder->RootReferenceFrame()) {
+    return;
+  }
   nsIFrame *outerFrame = nsLayoutUtils::GetCrossDocParentFrame(mFrame);
   mReferenceFrame =
     aBuilder->FindReferenceFrameFor(outerFrame);
   mToReferenceFrame = mFrame->GetOffsetToCrossDoc(mReferenceFrame);
+  mAnimatedGeometryRoot = nsLayoutUtils::GetAnimatedGeometryRootForFrame(aBuilder, outerFrame);
   mVisibleRect = aBuilder->GetDirtyRect() + mToReferenceFrame;
 }
 

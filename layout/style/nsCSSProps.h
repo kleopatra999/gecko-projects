@@ -677,7 +677,9 @@ public:
   static const KTableValue kBoxShadowTypeKTable[];
   static const KTableValue kBoxSizingKTable[];
   static const KTableValue kCaptionSideKTable[];
-  static const KTableValue kClearKTable[];
+  // Not const because we modify its entries when the pref
+  // "layout.css.float-logical-values.enabled" changes:
+  static KTableValue kClearKTable[];
   static const KTableValue kColorKTable[];
   static const KTableValue kContentKTable[];
   static const KTableValue kControlCharacterVisibilityKTable[];
@@ -688,13 +690,24 @@ public:
   static KTableValue kDisplayKTable[];
   static const KTableValue kElevationKTable[];
   static const KTableValue kEmptyCellsKTable[];
-  static const KTableValue kAlignContentKTable[];
-  static const KTableValue kAlignItemsKTable[];
+  // -- tables for the align-/justify-content/items/self properties --
+  static const KTableValue kAlignAllKeywords[];
+  static const KTableValue kAlignOverflowPosition[]; // <overflow-position>
+  static const KTableValue kAlignSelfPosition[];     // <self-position>
+  static const KTableValue kAlignLegacy[];           // 'legacy'
+  static const KTableValue kAlignLegacyPosition[];   // 'left/right/center'
+  static const KTableValue kAlignAutoStretchBaseline[]; // 'auto/stretch/baseline/last-baseline'
+  static const KTableValue kAlignAutoBaseline[]; // 'auto/baseline/last-baseline'
+  static const KTableValue kAlignContentDistribution[]; // <content-distribution>
+  static const KTableValue kAlignContentPosition[]; // <content-position>
   static const KTableValue kAlignSelfKTable[];
+  static const KTableValue kJustifyContentKTable[];
+  // ------------------------------------------------------------------
   static const KTableValue kFlexDirectionKTable[];
   static const KTableValue kFlexWrapKTable[];
-  static const KTableValue kJustifyContentKTable[];
-  static const KTableValue kFloatKTable[];
+  // Not const because we modify its entries when the pref
+  // "layout.css.float-logical-values.enabled" changes:
+  static KTableValue kFloatKTable[];
   static const KTableValue kFloatEdgeKTable[];
   static const KTableValue kFontKTable[];
   static const KTableValue kFontKerningKTable[];

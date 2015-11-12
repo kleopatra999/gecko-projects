@@ -218,6 +218,16 @@ describe("loop.panel", function() {
         navigator.mozLoop.fxAEnabled = true;
       });
 
+      it("should NOT show the context menu on right click", function() {
+        var prevent = sandbox.stub();
+        var view = createTestPanelView();
+        TestUtils.Simulate.contextMenu(
+          view.getDOMNode(),
+          { preventDefault: prevent }
+        );
+        sinon.assert.calledOnce(prevent);
+      });
+
       it("should trigger the FxA sign in/up process when clicking the link",
         function() {
           navigator.mozLoop.logInToFxA = sandbox.stub();
@@ -264,9 +274,10 @@ describe("loop.panel", function() {
         expect(node.textContent).to.eql("reallyreallylongtext@exa…");
       });
 
-      it("should throw an error when user profile is different from {} or null",
+      it("should warn when user profile is different from {} or null",
          function() {
           var warnstub = sandbox.stub(console, "warn");
+
           var view = TestUtils.renderIntoDocument(React.createElement(
             loop.panel.AccountLink, {
               fxAEnabled: false,
@@ -275,21 +286,21 @@ describe("loop.panel", function() {
           ));
 
           sinon.assert.calledOnce(warnstub);
-          sinon.assert.calledWithExactly(warnstub, "Warning: Required prop `userProfile` was not correctly specified in `AccountLink`.");
+          sinon.assert.calledWithMatch(warnstub, "Required prop `userProfile` was not correctly specified in `AccountLink`.");
       });
 
-      it("should throw an error when user profile is different from {} or null",
+      it("should not warn when user profile is an object",
          function() {
           var warnstub = sandbox.stub(console, "warn");
+
           var view = TestUtils.renderIntoDocument(React.createElement(
             loop.panel.AccountLink, {
               fxAEnabled: false,
-              userProfile: function() {}
+              userProfile: {}
             }
           ));
 
-          sinon.assert.calledOnce(warnstub);
-          sinon.assert.calledWithExactly(warnstub, "Warning: Required prop `userProfile` was not correctly specified in `AccountLink`.");
+          sinon.assert.notCalled(warnstub);
       });
     });
 
@@ -1000,7 +1011,6 @@ describe("loop.panel", function() {
       TestUtils.Simulate.click(node.querySelector(".new-room-button"));
 
       sinon.assert.calledWith(dispatch, new sharedActions.CreateRoom({
-        nameTemplate: "Fake title",
         urls: [{
           location: "http://invalid.com",
           description: "fakeSite",

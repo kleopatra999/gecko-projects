@@ -22,7 +22,7 @@
 #include "WakeLockListener.h"
 #endif
 
-using mozilla::unused;
+using mozilla::Unused;
 
 #define NOTIFY_TOKEN 0xFA
 
@@ -45,6 +45,26 @@ PollWrapper(GPollFD *ufds, guint nfsd, gint timeout_)
     return result;
 }
 
+#if MOZ_WIDGET_GTK == 3
+// For bug 726483.
+static decltype(GtkContainerClass::check_resize) sReal_gtk_window_check_resize;
+
+void
+wrap_gtk_window_check_resize(GtkContainer *container)
+{
+    GdkWindow* gdk_window = gtk_widget_get_window(&container->widget);
+    if (gdk_window) {
+        g_object_ref(gdk_window);
+    }
+
+    sReal_gtk_window_check_resize(container);
+
+    if (gdk_window) {
+        g_object_unref(gdk_window);
+    }
+}
+#endif
+
 /*static*/ gboolean
 nsAppShell::EventProcessorCallback(GIOChannel *source, 
                                    GIOCondition condition,
@@ -53,7 +73,7 @@ nsAppShell::EventProcessorCallback(GIOChannel *source,
     nsAppShell *self = static_cast<nsAppShell *>(data);
 
     unsigned char c;
-    unused << read(self->mPipeFDs[0], &c, 1);
+    Unused << read(self->mPipeFDs[0], &c, 1);
     NS_ASSERTION(c == (unsigned char) NOTIFY_TOKEN, "wrong token");
 
     self->NativeEventCallback();
@@ -103,6 +123,18 @@ nsAppShell::Init()
         sPollFunc = g_main_context_get_poll_func(nullptr);
         g_main_context_set_poll_func(nullptr, &PollWrapper);
     }
+
+#if MOZ_WIDGET_GTK == 3
+    if (!sReal_gtk_window_check_resize &&
+        gtk_check_version(3,8,0) != nullptr) { // GTK 3.0 to GTK 3.6.
+        // GtkWindow is a static class and so will leak anyway but this ref
+        // makes sure it isn't recreated.
+        gpointer gtk_plug_class = g_type_class_ref(GTK_TYPE_WINDOW);
+        auto check_resize = &GTK_CONTAINER_CLASS(gtk_plug_class)->check_resize;
+        sReal_gtk_window_check_resize = *check_resize;
+        *check_resize = wrap_gtk_window_check_resize;
+    }
+#endif
 
     if (PR_GetEnv("MOZ_DEBUG_PAINTS"))
         gdk_window_set_debug_updates(TRUE);
@@ -167,7 +199,7 @@ void
 nsAppShell::ScheduleNativeEventCallback()
 {
     unsigned char buf[] = { NOTIFY_TOKEN };
-    unused << write(mPipeFDs[1], buf, 1);
+    Unused << write(mPipeFDs[1], buf, 1);
 }
 
 bool

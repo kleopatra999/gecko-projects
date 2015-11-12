@@ -5,14 +5,14 @@
 // Tests that mouse interaction works fine with tree widget
 
 const TEST_URI = "data:text/html;charset=utf-8,<head><link rel='stylesheet' " +
-  "type='text/css' href='chrome://devtools/skin/themes/common.css'><link " +
-  "rel='stylesheet' type='text/css' href='chrome://devtools/skin/themes/widg" +
+  "type='text/css' href='chrome://devtools/skin/common.css'><link " +
+  "rel='stylesheet' type='text/css' href='chrome://devtools/skin/widg" +
   "ets.css'></head><body><div></div><span></span></body>";
 const {TreeWidget} = require("devtools/client/shared/widgets/TreeWidget");
 const Promise = require("promise");
 
 add_task(function*() {
-  yield promiseTab("about:blank");
+  yield addTab("about:blank");
   let [host, win, doc] = yield createHost("bottom", TEST_URI);
 
   let tree = new TreeWidget(doc.querySelector("div"), {

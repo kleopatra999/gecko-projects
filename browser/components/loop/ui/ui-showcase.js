@@ -556,7 +556,7 @@
         width += 2;
       }
 
-      var cx = React.addons.classSet;
+      var cx = classNames;
       return (
         React.createElement("div", {className: "example"}, 
           React.createElement("h3", {id: this.makeId()}, 
@@ -1288,7 +1288,7 @@
                            width: 298}, 
               React.createElement("div", {className: "fx-embedded"}, 
                 React.createElement(TextChatView, {dispatcher: dispatcher, 
-                              showRoomName: false, 
+                              showInitialContext: false, 
                               useDesktopPaths: false})
               )
             ), 
@@ -1302,7 +1302,7 @@
                 React.createElement("div", {className: "media-wrapper"}, 
                   React.createElement(TextChatView, {
                     dispatcher: dispatcher, 
-                    showRoomName: true, 
+                    showInitialContext: true, 
                     useDesktopPaths: false})
                 )
               )

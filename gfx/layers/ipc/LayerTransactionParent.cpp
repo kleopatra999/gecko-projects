@@ -327,6 +327,7 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
       if (common.isFixedPosition()) {
         layer->SetFixedPositionData(common.fixedPositionScrollContainerId(),
                                     common.fixedPositionAnchor(),
+                                    common.fixedPositionSides(),
                                     common.isClipFixed());
       }
       if (common.isStickyPosition()) {
@@ -457,6 +458,10 @@ LayerTransactionParent::RecvUpdate(InfallibleTArray<Edit>&& cset,
     case Edit::TOpSetDiagnosticTypes: {
       mLayerManager->GetCompositor()->SetDiagnosticTypes(
         edit.get_OpSetDiagnosticTypes().diagnostics());
+      break;
+    }
+    case Edit::TOpWindowOverlayChanged: {
+      mLayerManager->SetWindowOverlayChanged();
       break;
     }
     // Tree ops
@@ -776,7 +781,7 @@ GetAPZCForViewID(Layer* aLayer, FrameMetrics::ViewID aScrollID)
 
 bool
 LayerTransactionParent::RecvSetAsyncScrollOffset(const FrameMetrics::ViewID& aScrollID,
-                                                 const int32_t& aX, const int32_t& aY)
+                                                 const float& aX, const float& aY)
 {
   if (mDestroyed || !layer_manager() || layer_manager()->IsDestroyed()) {
     return false;
@@ -1018,7 +1023,7 @@ LayerTransactionParent::SendFenceHandleIfPresent(PTextureParent* aTexture,
 void
 LayerTransactionParent::SendAsyncMessage(const InfallibleTArray<AsyncParentMessageData>& aMessage)
 {
-  mozilla::unused << SendParentAsyncMessages(aMessage);
+  mozilla::Unused << SendParentAsyncMessages(aMessage);
 }
 
 void
@@ -1026,7 +1031,7 @@ LayerTransactionParent::ReplyRemoveTexture(const OpReplyRemoveTexture& aReply)
 {
   InfallibleTArray<AsyncParentMessageData> messages;
   messages.AppendElement(aReply);
-  mozilla::unused << SendParentAsyncMessages(messages);
+  mozilla::Unused << SendParentAsyncMessages(messages);
 }
 
 } // namespace layers

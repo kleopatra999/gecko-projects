@@ -1026,7 +1026,7 @@ CanvasRenderingContext2D::ParseColor(const nsAString& aString,
         mCanvasElement, nullptr, presShell);
     }
 
-    unused << nsRuleNode::ComputeColor(
+    Unused << nsRuleNode::ComputeColor(
       value, presShell ? presShell->GetPresContext() : nullptr, parentContext,
       *aColor);
   }
@@ -2135,14 +2135,11 @@ CanvasRenderingContext2D::SetShadowColor(const nsAString& shadowColor)
 // filters
 //
 
-static already_AddRefed<StyleRule>
-CreateStyleRule(nsINode* aNode,
+static already_AddRefed<Declaration>
+CreateDeclaration(nsINode* aNode,
   const nsCSSProperty aProp1, const nsAString& aValue1, bool* aChanged1,
-  const nsCSSProperty aProp2, const nsAString& aValue2, bool* aChanged2,
-  ErrorResult& error)
+  const nsCSSProperty aProp2, const nsAString& aValue2, bool* aChanged2)
 {
-  RefPtr<StyleRule> rule;
-
   nsIPrincipal* principal = aNode->NodePrincipal();
   nsIDocument* document = aNode->OwnerDoc();
 
@@ -2153,38 +2150,32 @@ CreateStyleRule(nsINode* aNode,
   // to include the outer window ID.
   nsCSSParser parser(document->CSSLoader());
 
-  error = parser.ParseStyleAttribute(EmptyString(), docURL, baseURL,
-                                     principal, getter_AddRefs(rule));
-  if (error.Failed()) {
-    return nullptr;
-  }
+  RefPtr<Declaration> declaration =
+    parser.ParseStyleAttribute(EmptyString(), docURL, baseURL, principal);
 
   if (aProp1 != eCSSProperty_UNKNOWN) {
     parser.ParseProperty(aProp1, aValue1, docURL, baseURL, principal,
-                         rule->GetDeclaration(), aChanged1, false);
+                         declaration, aChanged1, false);
   }
 
   if (aProp2 != eCSSProperty_UNKNOWN) {
     parser.ParseProperty(aProp2, aValue2, docURL, baseURL, principal,
-                         rule->GetDeclaration(), aChanged2, false);
+                         declaration, aChanged2, false);
   }
 
-  rule->RuleMatched();
-
-  return rule.forget();
+  declaration->SetImmutable();
+  return declaration.forget();
 }
 
-static already_AddRefed<StyleRule>
-CreateFontStyleRule(const nsAString& aFont,
-                    nsINode* aNode,
-                    bool* aOutFontChanged,
-                    ErrorResult& error)
+static already_AddRefed<Declaration>
+CreateFontDeclaration(const nsAString& aFont,
+                      nsINode* aNode,
+                      bool* aOutFontChanged)
 {
   bool lineHeightChanged;
-  return CreateStyleRule(aNode,
+  return CreateDeclaration(aNode,
     eCSSProperty_font, aFont, aOutFontChanged,
-    eCSSProperty_line_height, NS_LITERAL_STRING("normal"), &lineHeightChanged,
-    error);
+    eCSSProperty_line_height, NS_LITERAL_STRING("normal"), &lineHeightChanged);
 }
 
 static already_AddRefed<nsStyleContext>
@@ -2205,13 +2196,9 @@ GetFontParentStyleContext(Element* aElement, nsIPresShell* presShell,
 
   // otherwise inherit from default (10px sans-serif)
   bool changed;
-  RefPtr<css::StyleRule> parentRule =
-    CreateFontStyleRule(NS_LITERAL_STRING("10px sans-serif"),
-                        presShell->GetDocument(), &changed, error);
-
-  if (error.Failed()) {
-    return nullptr;
-  }
+  RefPtr<css::Declaration> parentRule =
+    CreateFontDeclaration(NS_LITERAL_STRING("10px sans-serif"),
+                          presShell->GetDocument(), &changed);
 
   nsTArray<nsCOMPtr<nsIStyleRule>> parentRules;
   parentRules.AppendElement(parentRule);
@@ -2226,13 +2213,12 @@ GetFontParentStyleContext(Element* aElement, nsIPresShell* presShell,
 }
 
 static bool
-PropertyIsInheritOrInitial(StyleRule* aRule, const nsCSSProperty aProperty)
+PropertyIsInheritOrInitial(Declaration* aDeclaration, const nsCSSProperty aProperty)
 {
-  css::Declaration* declaration = aRule->GetDeclaration();
   // We know the declaration is not !important, so we can use
   // GetNormalBlock().
   const nsCSSValue* filterVal =
-    declaration->GetNormalBlock()->ValueFor(aProperty);
+    aDeclaration->GetNormalBlock()->ValueFor(aProperty);
   return (!filterVal || (filterVal->GetUnit() == eCSSUnit_Unset ||
                          filterVal->GetUnit() == eCSSUnit_Inherit ||
                          filterVal->GetUnit() == eCSSUnit_Initial));
@@ -2245,13 +2231,9 @@ GetFontStyleContext(Element* aElement, const nsAString& aFont,
                     ErrorResult& error)
 {
   bool fontParsedSuccessfully = false;
-  RefPtr<css::StyleRule> rule =
-    CreateFontStyleRule(aFont, presShell->GetDocument(),
-                        &fontParsedSuccessfully, error);
-
-  if (error.Failed()) {
-    return nullptr;
-  }
+  RefPtr<css::Declaration> decl =
+    CreateFontDeclaration(aFont, presShell->GetDocument(),
+                          &fontParsedSuccessfully);
 
   if (!fontParsedSuccessfully) {
     // We got a syntax error.  The spec says this value must be ignored.
@@ -2262,7 +2244,7 @@ GetFontStyleContext(Element* aElement, const nsAString& aFont,
   // 'inherit' and 'initial'. The easiest way to check for this is to look
   // at font-size-adjust, which the font shorthand resets to either 'none' or
   // '-moz-system-font'.
-  if (PropertyIsInheritOrInitial(rule, eCSSProperty_font_size_adjust)) {
+  if (PropertyIsInheritOrInitial(decl, eCSSProperty_font_size_adjust)) {
     return nullptr;
   }
 
@@ -2283,7 +2265,7 @@ GetFontStyleContext(Element* aElement, const nsAString& aFont,
              "GetFontParentStyleContext should have returned an error if the presshell is being destroyed.");
 
   nsTArray<nsCOMPtr<nsIStyleRule>> rules;
-  rules.AppendElement(rule);
+  rules.AppendElement(decl);
   // add a rule to prevent text zoom from affecting the style
   rules.AppendElement(new nsDisableTextZoomStyleRule);
 
@@ -2295,38 +2277,32 @@ GetFontStyleContext(Element* aElement, const nsAString& aFont,
   // parsed (including having line-height removed).  (Older drafts of
   // the spec required font sizes be converted to pixels, but that no
   // longer seems to be required.)
-  rule->GetDeclaration()->GetValue(eCSSProperty_font, aOutUsedFont);
+  decl->GetValue(eCSSProperty_font, aOutUsedFont);
 
   return sc.forget();
 }
 
-static already_AddRefed<StyleRule>
-CreateFilterStyleRule(const nsAString& aFilter,
-                      nsINode* aNode,
-                      bool* aOutFilterChanged,
-                      ErrorResult& error)
+static already_AddRefed<Declaration>
+CreateFilterDeclaration(const nsAString& aFilter,
+                        nsINode* aNode,
+                        bool* aOutFilterChanged)
 {
   bool dummy;
-  return CreateStyleRule(aNode,
+  return CreateDeclaration(aNode,
     eCSSProperty_filter, aFilter, aOutFilterChanged,
-    eCSSProperty_UNKNOWN, EmptyString(), &dummy,
-    error);
+    eCSSProperty_UNKNOWN, EmptyString(), &dummy);
 }
 
 static already_AddRefed<nsStyleContext>
-ResolveStyleForFilterRule(const nsAString& aFilterString,
-                          nsIPresShell* aPresShell,
-                          nsStyleContext* aParentContext,
-                          ErrorResult& error)
+ResolveStyleForFilter(const nsAString& aFilterString,
+                      nsIPresShell* aPresShell,
+                      nsStyleContext* aParentContext,
+                      ErrorResult& error)
 {
   nsIDocument* document = aPresShell->GetDocument();
   bool filterChanged = false;
-  RefPtr<css::StyleRule> rule =
-    CreateFilterStyleRule(aFilterString, document, &filterChanged, error);
-
-  if (error.Failed()) {
-    return nullptr;
-  }
+  RefPtr<css::Declaration> decl =
+    CreateFilterDeclaration(aFilterString, document, &filterChanged);
 
   if (!filterChanged) {
     // Refuse to accept the filter, but do not throw an error.
@@ -2335,12 +2311,12 @@ ResolveStyleForFilterRule(const nsAString& aFilterString,
 
   // In addition to unparseable values, the spec says we need to reject
   // 'inherit' and 'initial'.
-  if (PropertyIsInheritOrInitial(rule, eCSSProperty_filter)) {
+  if (PropertyIsInheritOrInitial(decl, eCSSProperty_filter)) {
     return nullptr;
   }
 
   nsTArray<nsCOMPtr<nsIStyleRule>> rules;
-  rules.AppendElement(rule);
+  rules.AppendElement(decl);
 
   RefPtr<nsStyleContext> sc =
     aPresShell->StyleSet()->ResolveStyleForRules(aParentContext, rules);
@@ -2375,7 +2351,7 @@ CanvasRenderingContext2D::ParseFilter(const nsAString& aString,
   }
 
   RefPtr<nsStyleContext> sc =
-    ResolveStyleForFilterRule(aString, presShell, parentContext, error);
+    ResolveStyleForFilter(aString, presShell, parentContext, error);
 
   if (!sc) {
     return false;
@@ -4312,7 +4288,8 @@ CanvasRenderingContext2D::CachedSurfaceFromElement(Element* aElement)
     return res;
   }
 
-  res.mSourceSurface = CanvasImageCache::SimpleLookup(aElement);
+  res.mSourceSurface =
+    CanvasImageCache::SimpleLookup(aElement, mIsSkiaGL);
   if (!res.mSourceSurface) {
     return res;
   }
@@ -4418,13 +4395,14 @@ CanvasRenderingContext2D::DrawImage(const CanvasImageSource& image,
     }
 
     srcSurf =
-      CanvasImageCache::Lookup(element, mCanvasElement, &imgSize);
+      CanvasImageCache::Lookup(element, mCanvasElement, &imgSize, mIsSkiaGL);
   }
 
   nsLayoutUtils::DirectDrawInfo drawInfo;
 
 #ifdef USE_SKIA_GPU
   if (mRenderingMode == RenderingMode::OpenGLBackendMode &&
+      mIsSkiaGL &&
       !srcSurf &&
       image.IsHTMLVideoElement() &&
       gfxPlatform::GetPlatform()->GetSkiaGLGlue()) {
@@ -4566,7 +4544,7 @@ CanvasRenderingContext2D::DrawImage(const CanvasImageSource& image,
     if (res.mSourceSurface) {
       if (res.mImageRequest) {
         CanvasImageCache::NotifyDrawImage(element, mCanvasElement, res.mImageRequest,
-                                          res.mSourceSurface, imgSize);
+                                          res.mSourceSurface, imgSize, mIsSkiaGL);
       }
 
       srcSurf = res.mSourceSurface;
@@ -4869,7 +4847,8 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& window, double x,
   // Rendering directly is faster and can be done if mTarget supports Azure
   // and does not need alpha blending.
   if (gfxPlatform::GetPlatform()->SupportsAzureContentForDrawTarget(mTarget) &&
-      GlobalAlpha() == 1.0f)
+      GlobalAlpha() == 1.0f &&
+      UsedOperation() == CompositionOp::OP_OVER)
   {
     thebes = new gfxContext(mTarget);
     thebes->SetMatrix(gfxMatrix(matrix._11, matrix._12, matrix._21,
@@ -4888,7 +4867,7 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& window, double x,
   }
 
   nsCOMPtr<nsIPresShell> shell = presContext->PresShell();
-  unused << shell->RenderDocument(r, renderDocFlags, backgroundColor, thebes);
+  Unused << shell->RenderDocument(r, renderDocFlags, backgroundColor, thebes);
   if (drawDT) {
     RefPtr<SourceSurface> snapshot = drawDT->Snapshot();
     RefPtr<DataSourceSurface> data = snapshot->GetDataSurface();
@@ -4914,7 +4893,7 @@ CanvasRenderingContext2D::DrawWindow(nsGlobalWindow& window, double x,
     gfx::Rect sourceRect(0, 0, sw, sh);
     mTarget->DrawSurface(source, destRect, sourceRect,
                          DrawSurfaceOptions(gfx::Filter::POINT),
-                         DrawOptions(GlobalAlpha(), CompositionOp::OP_OVER,
+                         DrawOptions(GlobalAlpha(), UsedOperation(),
                                      AntialiasMode::NONE));
     mTarget->Flush();
   } else {

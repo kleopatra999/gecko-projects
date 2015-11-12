@@ -13,13 +13,13 @@
 #include "mozilla/UniquePtr.h"
 #include "nsColor.h"
 #include "nsPrintfCString.h"
+#include "nsRegionFwd.h"
 #include "mozilla/gfx/Rect.h"
 
 class gfxASurface;
 class gfxDrawable;
 class nsIInputStream;
 class nsIGfxInfo;
-class nsIntRegion;
 class nsIPresShell;
 
 namespace mozilla {
@@ -305,16 +305,6 @@ public:
 
     static bool DumpDisplayList();
 
-    static bool sDumpPainting;
-    static bool sDumpPaintingIntermediate;
-    static bool sDumpPaintingToFile;
-    static bool sDumpPaintItems;
-    // TODO: Dumping compositor textures is broken pretty badly. For example,
-    //       on Linux it crashes because TextureHost::GetAsSurface() returns
-    //       null. Expect to have to fix things like this if you turn it on.
-    //       Meanwhile, content-side texture dumping (conditioned on
-    //       sDumpPainting) is a good replacement.
-    static bool sDumpCompositorTextures;
     static FILE* sDumpPaintFile;
 };
 

@@ -122,7 +122,7 @@ body {
 }
 
 #element-picker::before {
-  background-image: url("chrome://devtools/skin/themes/images/command-pick.png");
+  background-image: url("chrome://devtools/skin/images/command-pick.png");
 }
 
 .pause-button::before {
@@ -144,7 +144,7 @@ body {
 
 @media (min-resolution: 1.1dppx) {
   #element-picker::before {
-    background-image: url("chrome://devtools/skin/themes/images/command-pick@2x.png");
+    background-image: url("chrome://devtools/skin/images/command-pick@2x.png");
     background-size: 64px;
   }
 
@@ -159,6 +159,13 @@ body {
   #rewind-timeline::before {
     background-image: url("images/rewind@2x.png");
   }
+}
+
+#timeline-rate select {
+  -moz-appearance: none;
+  text-align: center;
+  color: inherit;
+  font-family: inherit;
 }
 
 /* Animation timeline component */
@@ -341,6 +348,12 @@ body {
   padding: 0 2px;
 }
 
+.animation-timeline .fast-track .name {
+  /* Animations running on the compositor have the fast-track background image*/
+  background-image: url("images/animation-fast-track.svg");
+  background-repeat: no-repeat;
+}
+
 .animation-timeline .animation .delay {
   position: absolute;
   top: 0;
@@ -384,7 +397,7 @@ body {
 }
 
 .animation-target .node-highlighter {
-  background: url("chrome://devtools/skin/themes/images/vview-open-inspector.png") no-repeat 0 0;
+  background: url("chrome://devtools/skin/images/vview-open-inspector.png") no-repeat 0 0;
   padding-left: 16px;
   margin-right: 5px;
   cursor: pointer;

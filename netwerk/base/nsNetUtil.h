@@ -376,7 +376,6 @@ nsresult NS_NewStreamLoaderInternal(nsIStreamLoader        **outStream,
                                     nsIPrincipal            *aLoadingPrincipal,
                                     nsSecurityFlags          aSecurityFlags,
                                     nsContentPolicyType      aContentPolicyType,
-                                    nsISupports             *aContext = nullptr,
                                     nsILoadGroup            *aLoadGroup = nullptr,
                                     nsIInterfaceRequestor   *aCallbacks = nullptr,
                                     nsLoadFlags              aLoadFlags = nsIRequest::LOAD_NORMAL,
@@ -389,7 +388,6 @@ NS_NewStreamLoader(nsIStreamLoader        **outStream,
                    nsINode                 *aLoadingNode,
                    nsSecurityFlags          aSecurityFlags,
                    nsContentPolicyType      aContentPolicyType,
-                   nsISupports             *aContext = nullptr,
                    nsILoadGroup            *aLoadGroup = nullptr,
                    nsIInterfaceRequestor   *aCallbacks = nullptr,
                    nsLoadFlags              aLoadFlags = nsIRequest::LOAD_NORMAL,
@@ -402,7 +400,6 @@ NS_NewStreamLoader(nsIStreamLoader        **outStream,
                    nsIPrincipal            *aLoadingPrincipal,
                    nsSecurityFlags          aSecurityFlags,
                    nsContentPolicyType      aContentPolicyType,
-                   nsISupports             *aContext = nullptr,
                    nsILoadGroup            *aLoadGroup = nullptr,
                    nsIInterfaceRequestor   *aCallbacks = nullptr,
                    nsLoadFlags              aLoadFlags = nsIRequest::LOAD_NORMAL,
@@ -603,20 +600,8 @@ nsresult NS_ReadInputStreamToString(nsIInputStream *aInputStream,
 #endif
 
 nsresult
-NS_LoadPersistentPropertiesFromURI(nsIPersistentProperties **outResult,
-                                   nsIURI                   *aUri,
-                                   nsIPrincipal             *aLoadingPrincipal,
-                                   nsContentPolicyType       aContentPolicyType,
-                                   nsIIOService             *aIoService = nullptr);
-
-nsresult
 NS_LoadPersistentPropertiesFromURISpec(nsIPersistentProperties **outResult,
-                                       const nsACString         &aSpec,
-                                       nsIPrincipal             *aLoadingPrincipal,
-                                       nsContentPolicyType       aContentPolicyType,
-                                       const char               *aCharset = nullptr,
-                                       nsIURI                   *aBaseURI = nullptr,
-                                       nsIIOService             *aIoService = nullptr);
+                                       const nsACString         &aSpec);
 
 /**
  * NS_QueryNotificationCallbacks implements the canonical algorithm for

@@ -164,9 +164,7 @@ LoadProperties(const nsString& aName,
   uriStr.StripWhitespace(); // that may come from aName
   uriStr.AppendLiteral(".properties");
   return NS_LoadPersistentPropertiesFromURISpec(getter_AddRefs(aProperties),
-                                                NS_ConvertUTF16toUTF8(uriStr),
-                                                nsContentUtils::GetSystemPrincipal(),
-                                                nsIContentPolicy::TYPE_OTHER);
+                                                NS_ConvertUTF16toUTF8(uriStr));
 }
 
 class nsPropertiesTable final : public nsGlyphTable {
@@ -2033,7 +2031,7 @@ void nsDisplayMathMLCharDebug::Paint(nsDisplayListBuilder* aBuilder,
 
   // Since this is used only for debugging, we don't need to worry about
   // tracking the DrawResult.
-  unused <<
+  Unused <<
     nsCSSRendering::PaintBorder(presContext, *aCtx, mFrame, mVisibleRect,
                                 rect, styleContext, flags, skipSides);
 

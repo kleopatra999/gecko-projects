@@ -145,7 +145,7 @@ public class LayerView extends ScrollView implements Tabs.OnTabsChangedListener 
      * PanZoomController not to generate longpress events.
      */
     public void setIsLongpressEnabled(boolean isLongpressEnabled) {
-        ((JavaPanZoomController) mPanZoomController).setIsLongpressEnabled(isLongpressEnabled);
+        mPanZoomController.setIsLongpressEnabled(isLongpressEnabled);
     }
 
     private static Point getEventRadius(MotionEvent event) {
@@ -267,6 +267,10 @@ public class LayerView extends ScrollView implements Tabs.OnTabsChangedListener 
 
     @Override
     protected void onAttachedToWindow() {
+        // We are adding descendants to this LayerView, but we don't want the
+        // descendants to affect the way LayerView retains its focus.
+        setDescendantFocusability(FOCUS_BLOCK_DESCENDANTS);
+
         // This check should not be done before the view is attached to a window
         // as hardware acceleration will not be enabled at that point.
         // We must create and add the SurfaceView instance before the view tree

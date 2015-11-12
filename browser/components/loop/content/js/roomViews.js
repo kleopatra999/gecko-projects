@@ -199,7 +199,7 @@ loop.roomViews = (function(mozL10n) {
         return null;
       }
 
-      var cx = React.addons.classSet;
+      var cx = classNames;
       var shareDropdown = cx({
         "share-service-dropdown": true,
         "dropdown-menu": true,
@@ -268,10 +268,18 @@ loop.roomViews = (function(mozL10n) {
 
       var roomData = this.props.roomData;
       var contextURL = roomData.roomContextUrls && roomData.roomContextUrls[0];
+      if (contextURL) {
+        if (contextURL.location === null) {
+          contextURL = undefined;
+        } else {
+          contextURL = sharedUtils.formatURL(contextURL.location).hostname;
+        }
+      }
+
       this.props.dispatcher.dispatch(
         new sharedActions.EmailRoomUrl({
           roomUrl: roomData.roomUrl,
-          roomDescription: contextURL && contextURL.description,
+          roomDescription: contextURL,
           from: "conversation"
         }));
     },
@@ -322,7 +330,7 @@ loop.roomViews = (function(mozL10n) {
         return null;
       }
 
-      var cx = React.addons.classSet;
+      var cx = classNames;
       return (
         React.createElement("div", {className: "room-invitation-overlay"}, 
           React.createElement("div", {className: "room-invitation-content"}, 
@@ -538,7 +546,7 @@ loop.roomViews = (function(mozL10n) {
       var urlDescription = url && url.description || "";
       var location = url && url.location || "";
 
-      var cx = React.addons.classSet;
+      var cx = classNames;
       var availableContext = this.state.availableContext;
       return (
         React.createElement("div", {className: "room-context"}, 
@@ -754,6 +762,10 @@ loop.roomViews = (function(mozL10n) {
       }
     },
 
+    handleContextMenu: function(e) {
+      e.preventDefault();
+    },
+
     render: function() {
       if (this.state.roomName || this.state.roomContextUrls) {
         var roomTitle = this.state.roomName ||
@@ -799,7 +811,8 @@ loop.roomViews = (function(mozL10n) {
             { id: "help" }
           ];
           return (
-            React.createElement("div", {className: "room-conversation-wrapper desktop-room-wrapper"}, 
+            React.createElement("div", {className: "room-conversation-wrapper desktop-room-wrapper", 
+              onContextMenu: this.handleContextMenu}, 
               React.createElement(sharedViews.MediaLayoutView, {
                 dispatcher: this.props.dispatcher, 
                 displayScreenShare: false, 
@@ -815,7 +828,7 @@ loop.roomViews = (function(mozL10n) {
                 renderRemoteVideo: this.shouldRenderRemoteVideo(), 
                 screenShareMediaElement: this.state.screenShareMediaElement, 
                 screenSharePosterUrl: null, 
-                showContextRoomName: false, 
+                showInitialContext: false, 
                 useDesktopPaths: true}, 
                 React.createElement(sharedViews.ConversationToolbar, {
                   audio: { enabled: !this.state.audioMuted, visible: true}, 

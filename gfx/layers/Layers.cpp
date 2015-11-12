@@ -15,6 +15,7 @@
 #include "LayersLogging.h"              // for AppendToString
 #include "ReadbackLayer.h"              // for ReadbackLayer
 #include "UnitTransforms.h"             // for ViewAs
+#include "gfxEnv.h"
 #include "gfxPlatform.h"                // for gfxPlatform
 #include "gfxPrefs.h"
 #include "gfxUtils.h"                   // for gfxUtils, etc
@@ -60,6 +61,14 @@ using namespace mozilla::Compression;
 
 //--------------------------------------------------
 // LayerManager
+
+/* static */ mozilla::LogModule*
+LayerManager::GetLog()
+{
+  static LazyLogModule sLog("Layers");
+  return sLog;
+}
+
 FrameMetrics::ViewID
 LayerManager::GetRootScrollableLayerId()
 {
@@ -651,7 +660,9 @@ Layer::SnapTransformTranslation(const Matrix4x4& aTransform,
   }
 
   if(aTransform.IsSingular() ||
-     (aTransform._14 != 0 || aTransform._24 != 0 || aTransform._34 != 0)) {
+     aTransform.HasPerspectiveComponent() ||
+     aTransform.HasNonTranslation() ||
+     !aTransform.HasNonIntegerTranslation()) {
     // For a singular transform, there is no reversed matrix, so we
     // don't snap it.
     // For a perspective transform, the content is transformed in
@@ -722,7 +733,7 @@ Layer::SnapTransform(const Matrix4x4& aTransform,
   Matrix4x4 result;
   if (mManager->IsSnappingEffectiveTransforms() &&
       aTransform.Is2D(&matrix2D) &&
-      gfx::Size(1.0, 1.0) <= ToSize(aSnapRect.Size()) &&
+      gfxSize(1.0, 1.0) <= aSnapRect.Size() &&
       matrix2D.PreservesAxisAlignedRectangles()) {
     IntPoint transformedTopLeft = RoundedToInt(matrix2D * ToPoint(aSnapRect.TopLeft()));
     IntPoint transformedTopRight = RoundedToInt(matrix2D * ToPoint(aSnapRect.TopRight()));
@@ -995,9 +1006,8 @@ RenderTargetRect
 Layer::TransformRectToRenderTarget(const LayerIntRect& aRect)
 {
   LayerRect rect(aRect);
-  RenderTargetRect quad = RenderTargetRect::FromUnknown(
-    GetEffectiveTransform().TransformBounds(
-      LayerPixel::ToUnknown(rect)));
+  RenderTargetRect quad = RenderTargetRect::FromUnknownRect(
+    GetEffectiveTransform().TransformBounds(rect.ToUnknownRect()));
   return quad;
 }
 
@@ -1030,7 +1040,7 @@ Layer::GetVisibleRegionRelativeToRootLayer(nsIntRegion& aResult,
     // If the parent layer clips its lower layers, clip the visible region
     // we're accumulating.
     if (layer->GetEffectiveClipRect()) {
-      aResult.AndWith(ParentLayerIntRect::ToUntyped(*layer->GetEffectiveClipRect()));
+      aResult.AndWith(layer->GetEffectiveClipRect()->ToUnknownRect());
     }
 
     // Now we need to walk across the list of siblings for this parent layer,
@@ -1052,6 +1062,12 @@ Layer::GetVisibleRegionRelativeToRootLayer(nsIntRegion& aResult,
       nsIntRegion siblingVisibleRegion(sibling->GetEffectiveVisibleRegion());
       // Translate the siblings region to |layer|'s origin.
       siblingVisibleRegion.MoveBy(-siblingOffset.x, -siblingOffset.y);
+      // Apply the sibling's clip.
+      // Layer clip rects are not affected by the layer's transform.
+      Maybe<ParentLayerIntRect> clipRect = sibling->GetEffectiveClipRect();
+      if (clipRect) {
+        siblingVisibleRegion.AndWith(clipRect->ToUnknownRect());
+      }
       // Subtract the sibling visible region from the visible region of |this|.
       aResult.SubOut(siblingVisibleRegion);
     }
@@ -1362,7 +1378,7 @@ ContainerLayer::DefaultComputeEffectiveTransforms(const Matrix4x4& aTransformToS
       GetForceIsolatedGroup()) {
     useIntermediateSurface = true;
 #ifdef MOZ_DUMP_PAINTING
-  } else if (gfxUtils::sDumpPaintingIntermediate && !Extend3DContext()) {
+  } else if (gfxEnv::DumpPaintIntermediate() && !Extend3DContext()) {
     useIntermediateSurface = true;
 #endif
   } else {
@@ -1685,9 +1701,9 @@ void
 Layer::Dump(std::stringstream& aStream, const char* aPrefix, bool aDumpHtml)
 {
 #ifdef MOZ_DUMP_PAINTING
-  bool dumpCompositorTexture = gfxUtils::sDumpCompositorTextures && AsLayerComposite() &&
+  bool dumpCompositorTexture = gfxEnv::DumpCompositorTextures() && AsLayerComposite() &&
                                AsLayerComposite()->GetCompositableHost();
-  bool dumpClientTexture = gfxUtils::sDumpPainting && AsShadowableLayer() &&
+  bool dumpClientTexture = gfxEnv::DumpPaint() && AsShadowableLayer() &&
                            AsShadowableLayer()->GetCompositableClient();
   nsCString layerId(Name());
   layerId.Append('-');
@@ -2379,19 +2395,10 @@ LayerManager::DumpPacket(layerscope::LayersPacket* aPacket)
   layer->set_parentptr(0);
 }
 
-/*static*/ void
-LayerManager::InitLog()
-{
-  if (!sLog)
-    sLog = PR_NewLogModule("Layers");
-}
-
 /*static*/ bool
 LayerManager::IsLogEnabled()
 {
-  MOZ_ASSERT(!!sLog,
-             "layer manager must be created before logging is allowed");
-  return MOZ_LOG_TEST(sLog, LogLevel::Debug);
+  return MOZ_LOG_TEST(GetLog(), LogLevel::Debug);
 }
 
 void
@@ -2438,8 +2445,6 @@ ToOutsideIntRect(const gfxRect &aRect)
   r.RoundOut();
   return IntRect(r.X(), r.Y(), r.Width(), r.Height());
 }
-
-PRLogModuleInfo* LayerManager::sLog;
 
 } // namespace layers
 } // namespace mozilla

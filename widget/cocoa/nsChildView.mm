@@ -906,7 +906,7 @@ NS_IMETHODIMP nsChildView::SetCursor(imgIContainer* aCursor,
 #pragma mark -
 
 // Get this component dimension
-NS_IMETHODIMP nsChildView::GetBounds(nsIntRect &aRect)
+NS_IMETHODIMP nsChildView::GetBoundsUntyped(nsIntRect &aRect)
 {
   if (!mView) {
     aRect = mBounds;
@@ -916,9 +916,9 @@ NS_IMETHODIMP nsChildView::GetBounds(nsIntRect &aRect)
   return NS_OK;
 }
 
-NS_IMETHODIMP nsChildView::GetClientBounds(nsIntRect &aRect)
+NS_IMETHODIMP nsChildView::GetClientBoundsUntyped(nsIntRect &aRect)
 {
-  GetBounds(aRect);
+  GetBoundsUntyped(aRect);
   if (!mParentWidget) {
     // For top level widgets we want the position on screen, not the position
     // of this view inside the window.
@@ -927,9 +927,9 @@ NS_IMETHODIMP nsChildView::GetClientBounds(nsIntRect &aRect)
   return NS_OK;
 }
 
-NS_IMETHODIMP nsChildView::GetScreenBounds(nsIntRect &aRect)
+NS_IMETHODIMP nsChildView::GetScreenBoundsUntyped(nsIntRect &aRect)
 {
-  GetBounds(aRect);
+  GetBoundsUntyped(aRect);
   aRect.MoveTo(WidgetToScreenOffsetUntyped());
   return NS_OK;
 }
@@ -1551,7 +1551,7 @@ LayoutDeviceIntPoint nsChildView::WidgetToScreenOffset()
   FlipCocoaScreenCoordinate(origin);
 
   // convert to device pixels
-  return LayoutDeviceIntPoint::FromUntyped(CocoaPointsToDevPixels(origin));
+  return LayoutDeviceIntPoint::FromUnknownPoint(CocoaPointsToDevPixels(origin));
 
   NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(LayoutDeviceIntPoint(0,0));
 }
@@ -3144,7 +3144,7 @@ GLPresenter::EndFrame()
 // in our native NSView (it is set in |draggingEntered:|). It is unset when the
 // drag session ends for this view, either with the mouse exiting or when a drop
 // occurs in this view.
-NSPasteboardWrapper* globalDragPboard = nil;
+NSPasteboard* globalDragPboard = nil;
 
 // gLastDragView and gLastDragMouseDownEvent are used to communicate information
 // to the drag service during drag invocation (starting a drag in from the view).
@@ -3672,7 +3672,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
     return;
 
 #ifdef DEBUG_UPDATE
-  nsIntRect geckoBounds;
+  LayoutDeviceIntRect geckoBounds;
   mGeckoChild->GetBounds(geckoBounds);
 
   fprintf (stderr, "---- Update[%p][%p] [%f %f %f %f] cgc: %p\n  gecko bounds: [%d %d %d %d]\n",
@@ -3821,7 +3821,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   mWaitingForPaint = NO;
 
   nsIntRect geckoBounds;
-  mGeckoChild->GetBounds(geckoBounds);
+  mGeckoChild->GetBoundsUntyped(geckoBounds);
   nsIntRegion region(geckoBounds);
 
   mGeckoChild->PaintWindow(region);
@@ -4523,7 +4523,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   else
     geckoEvent.button = WidgetMouseEvent::eLeftButton;
 
-  mGeckoChild->DispatchInputEvent(&geckoEvent);
+  mGeckoChild->DispatchAPZAwareEvent(&geckoEvent);
   mBlockedLastMouseDown = NO;
 
   // XXX maybe call markedTextSelectionChanged:client: here?
@@ -4550,7 +4550,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   // This might destroy our widget (and null out mGeckoChild).
   bool defaultPrevented =
-    (mGeckoChild->DispatchInputEvent(&geckoEvent) == nsEventStatus_eConsumeNoDefault);
+    (mGeckoChild->DispatchAPZAwareEvent(&geckoEvent) == nsEventStatus_eConsumeNoDefault);
 
   // Check to see if we are double-clicking in the titlebar.
   CGFloat locationInTitlebar = [[self window] frame].size.height - [theEvent locationInWindow].y;
@@ -4583,7 +4583,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
 
   EventMessage msg = aEnter ? eMouseEnterIntoWidget : eMouseExitFromWidget;
   WidgetMouseEvent event(true, msg, mGeckoChild, WidgetMouseEvent::eReal);
-  event.refPoint = LayoutDeviceIntPoint::FromUntyped(
+  event.refPoint = LayoutDeviceIntPoint::FromUnknownPoint(
     mGeckoChild->CocoaPointsToDevPixels(localEventLocation));
 
   event.exit = aType;
@@ -4676,7 +4676,7 @@ NewCGSRegionFromRegion(const nsIntRegion& aRegion,
                               WidgetMouseEvent::eReal);
   [self convertCocoaMouseEvent:theEvent toGeckoEvent:&geckoEvent];
 
-  mGeckoChild->DispatchInputEvent(&geckoEvent);
+  mGeckoChild->DispatchAPZAwareEvent(&geckoEvent);
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -4722,7 +4722,7 @@ NewCGSRegionFromRegion(const nsIntRegion& aRegion,
   geckoEvent.button = WidgetMouseEvent::eRightButton;
   geckoEvent.clickCount = [theEvent clickCount];
 
-  mGeckoChild->DispatchInputEvent(&geckoEvent);
+  mGeckoChild->DispatchAPZAwareEvent(&geckoEvent);
   if (!mGeckoChild)
     return;
 
@@ -4746,7 +4746,7 @@ NewCGSRegionFromRegion(const nsIntRegion& aRegion,
   geckoEvent.clickCount = [theEvent clickCount];
 
   nsAutoRetainCocoaObject kungFuDeathGrip(self);
-  mGeckoChild->DispatchInputEvent(&geckoEvent);
+  mGeckoChild->DispatchAPZAwareEvent(&geckoEvent);
 
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
@@ -4915,7 +4915,7 @@ PanGestureTypeForEvent(NSEvent* aEvent)
 
   NSPoint locationInWindow = nsCocoaUtils::EventLocationForWindow(theEvent, [self window]);
 
-  ScreenPoint position = ScreenPoint::FromUntyped(
+  ScreenPoint position = ScreenPoint::FromUnknownPoint(
     [self convertWindowCoordinates:locationInWindow]);
 
   bool usePreciseDeltas = nsCocoaUtils::HasPreciseScrollingDeltas(theEvent) &&
@@ -4990,7 +4990,7 @@ PanGestureTypeForEvent(NSEvent* aEvent)
   CGPoint loc = CGEventGetLocation(cgEvent);
   loc.y = nsCocoaUtils::FlippedScreenY(loc.y);
   NSPoint locationInWindow = [[self window] convertScreenToBase:NSPointFromCGPoint(loc)];
-  ScreenIntPoint location = ScreenPixel::FromUntyped([self convertWindowCoordinates:locationInWindow]);
+  ScreenIntPoint location = ScreenIntPoint::FromUnknownPoint([self convertWindowCoordinates:locationInWindow]);
 
   static NSTimeInterval sStartTime = [NSDate timeIntervalSinceReferenceDate];
   static TimeStamp sStartTimeStamp = TimeStamp::Now();
@@ -5007,7 +5007,7 @@ PanGestureTypeForEvent(NSEvent* aEvent)
     NSPoint locationInWindowMoved = NSMakePoint(
       locationInWindow.x + pixelDeltaX,
       locationInWindow.y - pixelDeltaY);
-    ScreenIntPoint locationMoved = ScreenPixel::FromUntyped(
+    ScreenIntPoint locationMoved = ScreenIntPoint::FromUnknownPoint(
       [self convertWindowCoordinates:locationInWindowMoved]);
     ScreenPoint delta = ScreenPoint(locationMoved - location);
     ScrollableLayerGuid guid;
@@ -5154,7 +5154,7 @@ PanGestureTypeForEvent(NSEvent* aEvent)
   // convert point to view coordinate system
   NSPoint locationInWindow = nsCocoaUtils::EventLocationForWindow(aMouseEvent, [self window]);
 
-  outGeckoEvent->refPoint = LayoutDeviceIntPoint::FromUntyped(
+  outGeckoEvent->refPoint = LayoutDeviceIntPoint::FromUnknownPoint(
     [self convertWindowCoordinates:locationInWindow]);
 
   WidgetMouseEventBase* mouseEvent = outGeckoEvent->AsMouseEventBase();
@@ -5218,116 +5218,6 @@ PanGestureTypeForEvent(NSEvent* aEvent)
           objectForKey:MDAppleMiniaturizeOnDoubleClickKey] boolValue];
 
   return shouldMinimize;
-}
-
-#pragma mark -
-// NSTextInput implementation
-
-- (void)insertText:(id)insertString
-{
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
-
-  // We're considering not implementing NSTextInput. Start by just
-  // preffing its methods off.
-  if (!Preferences::GetBool("intl.ime.nstextinput.enable", false)) {
-    NSLog(@"Set intl.ime.nstextinput.enable to true in about:config to fix input.");
-    return;
-  }
-
-  NS_ENSURE_TRUE_VOID(mGeckoChild);
-
-  nsAutoRetainCocoaObject kungFuDeathGrip(self);
-
-  NSAttributedString* attrStr;
-  if ([insertString isKindOfClass:[NSAttributedString class]]) {
-    attrStr = static_cast<NSAttributedString*>(insertString);
-  } else {
-    attrStr =
-      [[[NSAttributedString alloc] initWithString:insertString] autorelease];
-  }
-
-  mTextInputHandler->InsertText(attrStr);
-
-  NS_OBJC_END_TRY_ABORT_BLOCK;
-}
-
-- (void)insertNewline:(id)sender
-{
-  // We're considering not implementing NSTextInput. Start by just
-  // preffing its methods off.
-  if (!Preferences::GetBool("intl.ime.nstextinput.enable", false)) {
-    NSLog(@"Set intl.ime.nstextinput.enable to true in about:config to fix input.");
-    return;
-  }
-
-  [self insertText:@"\n"];
-}
-
-- (NSInteger)conversationIdentifier
-{
-  // We're considering not implementing NSTextInput. Start by just
-  // preffing its methods off.
-  if (!Preferences::GetBool("intl.ime.nstextinput.enable", false)) {
-    NSLog(@"Set intl.ime.nstextinput.enable to true in about:config to fix input.");
-    return 0;
-  }
-
-  NS_ENSURE_TRUE(mTextInputHandler, reinterpret_cast<NSInteger>(self));
-  return mTextInputHandler->ConversationIdentifier();
-}
-
-- (NSRect)firstRectForCharacterRange:(NSRange)theRange
-{
-  // We're considering not implementing NSTextInput. Start by just
-  // preffing its methods off.
-  if (!Preferences::GetBool("intl.ime.nstextinput.enable", false)) {
-    NSLog(@"Set intl.ime.nstextinput.enable to true in about:config to fix input.");
-    return NSMakeRect(0.0, 0.0, 0.0, 0.0);
-  }
-
-  NSRect rect;
-  NS_ENSURE_TRUE(mTextInputHandler, rect);
-  return mTextInputHandler->FirstRectForCharacterRange(theRange);
-}
-
-- (NSAttributedString *)attributedSubstringFromRange:(NSRange)theRange
-{
-  // We're considering not implementing NSTextInput. Start by just
-  // preffing its methods off.
-  if (!Preferences::GetBool("intl.ime.nstextinput.enable", false)) {
-    NSLog(@"Set intl.ime.nstextinput.enable to true in about:config to fix input.");
-    return nil;
-  }
-
-  NS_ENSURE_TRUE(mTextInputHandler, nil);
-  return mTextInputHandler->GetAttributedSubstringFromRange(theRange);
-}
-
-- (void)setMarkedText:(id)aString selectedRange:(NSRange)selRange
-{
-  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
-
-  // We're considering not implementing NSTextInput. Start by just
-  // preffing its methods off.
-  if (!Preferences::GetBool("intl.ime.nstextinput.enable", false)) {
-    NSLog(@"Set intl.ime.nstextinput.enable to true in about:config to fix input.");
-    return;
-  }
-
-  NS_ENSURE_TRUE_VOID(mTextInputHandler);
-
-  nsAutoRetainCocoaObject kungFuDeathGrip(self);
-
-  NSAttributedString* attrStr;
-  if ([aString isKindOfClass:[NSAttributedString class]]) {
-    attrStr = static_cast<NSAttributedString*>(aString);
-  } else {
-    attrStr = [[[NSAttributedString alloc] initWithString:aString] autorelease];
-  }
-
-  mTextInputHandler->SetMarkedText(attrStr, selRange);
-
-  NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
 #pragma mark -
@@ -5569,6 +5459,15 @@ PanGestureTypeForEvent(NSEvent* aEvent)
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
+- (void)insertNewline:(id)sender
+{
+  if (mTextInputHandler) {
+    NSAttributedString *attrStr = [[NSAttributedString alloc] initWithString:@"\n"];
+    mTextInputHandler->InsertText(attrStr);
+    [attrStr release];
+  }
+}
+
 - (void)flagsChanged:(NSEvent*)theEvent
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
@@ -5788,7 +5687,7 @@ PanGestureTypeForEvent(NSEvent* aEvent)
   // Convert event from gecko global coords to gecko view coords.
   NSPoint draggingLoc = [aSender draggingLocation];
 
-  geckoEvent.refPoint = LayoutDeviceIntPoint::FromUntyped(
+  geckoEvent.refPoint = LayoutDeviceIntPoint::FromUnknownPoint(
     [self convertWindowCoordinates:draggingLoc]);
 
   nsAutoRetainCocoaObject kungFuDeathGrip(self);
@@ -5850,8 +5749,7 @@ PanGestureTypeForEvent(NSEvent* aEvent)
   // Set the global drag pasteboard that will be used for this drag session.
   // This will be set back to nil when the drag session ends (mouse exits
   // the view or a drop happens within the view).
-  globalDragPboard =
-    [[NSPasteboardWrapper alloc] initWithPasteboard:[sender draggingPasteboard]];
+  globalDragPboard = [[sender draggingPasteboard] retain];
 
   return [self doDragAction:eDragEnter sender:sender];
 

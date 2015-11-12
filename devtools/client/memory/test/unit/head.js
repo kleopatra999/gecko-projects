@@ -8,6 +8,8 @@ var { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
 var { gDevTools } = Cu.import("resource://devtools/client/framework/gDevTools.jsm", {});
 var { console } = Cu.import("resource://gre/modules/Console.jsm", {});
 var { require } = Cu.import("resource://devtools/shared/Loader.jsm", {});
+var { OS } = require("resource://gre/modules/osfile.jsm");
+var { FileUtils } = require("resource://gre/modules/FileUtils.jsm");
 var { TargetFactory } = require("devtools/client/framework/target");
 var DevToolsUtils = require("devtools/shared/DevToolsUtils");
 var promise = require("promise");
@@ -70,6 +72,25 @@ function waitUntilState (store, predicate) {
   return deferred.promise;
 }
 
+function waitUntilAction (store, actionType) {
+  let deferred = promise.defer();
+  let unsubscribe = store.subscribe(check);
+  let history = store.history;
+  let index = history.length;
+
+  do_print(`Waiting for action "${actionType}"`);
+  function check () {
+    let action = history[index++];
+    if (action && action.type === actionType) {
+      do_print(`Found action "${actionType}"`);
+      unsubscribe();
+      deferred.resolve(store.getState());
+    }
+  }
+
+  return deferred.promise;
+}
+
 function waitUntilSnapshotState (store, expected) {
   let predicate = () => {
     let snapshots = store.getState().snapshots;
@@ -97,4 +118,13 @@ function isBreakdownType (census, type) {
     default:
       throw new Error(`isBreakdownType does not yet support ${type}`);
   }
+}
+
+function *createTempFile () {
+  let file = FileUtils.getFile("TmpD", ["tmp.fxsnapshot"]);
+  file.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
+  let destPath = file.path;
+  let stat = yield OS.File.stat(destPath);
+  ok(stat.size === 0, "new file is 0 bytes at start");
+  return destPath;
 }

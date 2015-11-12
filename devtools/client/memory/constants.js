@@ -23,6 +23,18 @@ actions.TAKE_CENSUS_END = "take-census-end";
 actions.TOGGLE_RECORD_ALLOCATION_STACKS_START = "toggle-record-allocation-stacks-start";
 actions.TOGGLE_RECORD_ALLOCATION_STACKS_END = "toggle-record-allocation-stacks-end";
 
+// When a heap snapshot is being saved to a user-specified
+// location on disk.
+actions.EXPORT_SNAPSHOT_START = "export-snapshot-start";
+actions.EXPORT_SNAPSHOT_END = "export-snapshot-end";
+actions.EXPORT_SNAPSHOT_ERROR = "export-snapshot-error";
+
+// When a heap snapshot is being read from a user selected file,
+// and represents the entire state until the census is available.
+actions.IMPORT_SNAPSHOT_START = "import-snapshot-start";
+actions.IMPORT_SNAPSHOT_END = "import-snapshot-end";
+actions.IMPORT_SNAPSHOT_ERROR = "import-snapshot-error";
+
 // Fired by UI to select a snapshot to view.
 actions.SELECT_SNAPSHOT = "select-snapshot";
 
@@ -34,6 +46,9 @@ actions.SET_BREAKDOWN = "set-breakdown";
 
 // Fired when there is an error processing a snapshot or taking a census.
 actions.SNAPSHOT_ERROR = "snapshot-error";
+
+// Fired when there is a new filter string set.
+actions.SET_FILTER_STRING = "set-filter-string";
 
 // Options passed to MemoryFront's startRecordingAllocations never change.
 exports.ALLOCATION_RECORDING_OPTIONS = {
@@ -53,7 +68,11 @@ const breakdowns = exports.breakdowns = {
       by: "coarseType",
       objects: OBJECT_CLASS,
       strings: COUNT,
-      scripts: INTERNAL_TYPE,
+      scripts: {
+        by: "filename",
+        then: INTERNAL_TYPE,
+        noFilename: INTERNAL_TYPE
+      },
       other: INTERNAL_TYPE,
     }
   },
@@ -80,14 +99,15 @@ const snapshotState = exports.snapshotState = {};
  * Various states a snapshot can be in.
  * An FSM describing snapshot states:
  *
- *     SAVING -> SAVED -> READING -> READ   <-  <-  <- SAVED_CENSUS
- *                                        ↘             ↗
- *                                         SAVING_CENSUS
+ *     SAVING -> SAVED    -> READING -> READ     SAVED_CENSUS
+ *               IMPORTING ↗                ↘     ↑  ↓
+ *                                            SAVING_CENSUS
  *
  * Any of these states may go to the ERROR state, from which they can never
  * leave (mwah ha ha ha!)
  */
 snapshotState.ERROR = "snapshot-state-error";
+snapshotState.IMPORTING = "snapshot-state-importing";
 snapshotState.SAVING = "snapshot-state-saving";
 snapshotState.SAVED = "snapshot-state-saved";
 snapshotState.READING = "snapshot-state-reading";

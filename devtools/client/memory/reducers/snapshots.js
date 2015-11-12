@@ -28,6 +28,8 @@ handlers[actions.TAKE_SNAPSHOT_END] = function (snapshots, action) {
   });
 };
 
+handlers[actions.IMPORT_SNAPSHOT_START] = handlers[actions.TAKE_SNAPSHOT_START];
+
 handlers[actions.READ_SNAPSHOT_START] = function (snapshots, action) {
   let snapshot = getSnapshot(snapshots, action.snapshot);
   snapshot.state = states.READING;
@@ -56,6 +58,7 @@ handlers[actions.TAKE_CENSUS_END] = function (snapshots, action) {
   snapshot.census = action.census;
   snapshot.breakdown = action.breakdown;
   snapshot.inverted = action.inverted;
+  snapshot.filter = action.filter;
   return [...snapshots];
 };
 

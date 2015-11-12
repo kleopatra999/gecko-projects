@@ -398,7 +398,7 @@ public:
     MOZ_ASSERT(aId);
 
     SelfType closure(aId, aName);
-    aEnumerable.EnumerateRead(Enumerate, &closure);
+    MatchHelper(aEnumerable, &closure);
 
     return closure.mMetadata;
   }
@@ -411,7 +411,7 @@ public:
     MOZ_ASSERT(aId);
 
     SelfType closure(aId);
-    aEnumerable.EnumerateRead(Enumerate, &closure);
+    MatchHelper(aEnumerable, &closure);
 
     return closure.mMetadata;
   }
@@ -436,25 +436,29 @@ private:
     MOZ_ASSERT(aId);
   }
 
-  static PLDHashOperator
-  Enumerate(const uint64_t& aKey, MetadataType* aValue, void* aClosure)
+  template <class Enumerable>
+  static void
+  MatchHelper(const Enumerable& aEnumerable, SelfType* aClosure)
   {
     AssertIsOnBackgroundThread();
-    MOZ_ASSERT(aKey);
-    MOZ_ASSERT(aValue);
     MOZ_ASSERT(aClosure);
 
-    auto* closure = static_cast<SelfType*>(aClosure);
+    for (auto iter = aEnumerable.ConstIter(); !iter.Done(); iter.Next()) {
+#ifdef DEBUG
+      const uint64_t key = iter.Key();
+#endif
+      MetadataType* value = iter.UserData();
+      MOZ_ASSERT(key != 0);
+      MOZ_ASSERT(value);
 
-    if (!aValue->mDeleted &&
-        (closure->mId == aValue->mCommonMetadata.id() ||
-         (closure->mCheckName &&
-          closure->mName == aValue->mCommonMetadata.name()))) {
-      closure->mMetadata = aValue;
-      return PL_DHASH_STOP;
+      if (!value->mDeleted &&
+          (aClosure->mId == value->mCommonMetadata.id() ||
+           (aClosure->mCheckName &&
+            aClosure->mName == value->mCommonMetadata.name()))) {
+        aClosure->mMetadata = value;
+        break;
+      }
     }
-
-    return PL_DHASH_NEXT;
   }
 };
 
@@ -5313,7 +5317,7 @@ public:
   void
   CloseDatabaseWhenIdle(const nsACString& aDatabaseId)
   {
-    unused << CloseDatabaseWhenIdleInternal(aDatabaseId);
+    Unused << CloseDatabaseWhenIdleInternal(aDatabaseId);
   }
 
   void
@@ -9592,7 +9596,7 @@ RecvPIndexedDBPermissionRequestConstructor(
   }
 
   if (permission != PermissionRequestBase::kPermissionPrompt) {
-    unused <<
+    Unused <<
       PIndexedDBPermissionRequestParent::Send__delete__(actor, permission);
   }
 
@@ -9850,7 +9854,7 @@ DatabaseConnection::RollbackWriteTransaction()
 
   // This may fail if SQLite already rolled back the transaction so ignore any
   // errors.
-  unused << stmt->Execute();
+  Unused << stmt->Execute();
 
   mInWriteTransaction = false;
 }
@@ -9978,7 +9982,7 @@ DatabaseConnection::RollbackSavepoint()
 
   // This may fail if SQLite already rolled back the savepoint so ignore any
   // errors.
-  unused << stmt->Execute();
+  Unused << stmt->Execute();
 
   return NS_OK;
 }
@@ -10068,7 +10072,7 @@ DatabaseConnection::DoIdleProcessing(bool aNeedsCheckpoint)
 
     // Release the connection's normal transaction. It's possible that it could
     // fail, but that isn't a problem here.
-    unused << rollbackStmt->Execute();
+    Unused << rollbackStmt->Execute();
 
     mInReadTransaction = false;
   }
@@ -10093,7 +10097,7 @@ DatabaseConnection::DoIdleProcessing(bool aNeedsCheckpoint)
   // Truncate the WAL if we were asked to or if we managed to free some space.
   if (aNeedsCheckpoint || freedSomePages) {
     rv = CheckpointInternal(CheckpointMode::Truncate);
-    unused << NS_WARN_IF(NS_FAILED(rv));
+    Unused << NS_WARN_IF(NS_FAILED(rv));
   }
 
   // Finally try to restart the read transaction if we rolled it back earlier.
@@ -10219,7 +10223,7 @@ DatabaseConnection::ReclaimFreePagesWhileIdle(
     MOZ_ASSERT(mInWriteTransaction);
 
     // Something failed, make sure we roll everything back.
-    unused << aRollbackStatement->Execute();
+    Unused << aRollbackStatement->Execute();
 
     mInWriteTransaction = false;
 
@@ -11187,7 +11191,7 @@ ConnectionPool::Start(const nsID& aBackgroundChildLoggingId,
   }
 
   if (!transactionInfo->mBlockedOn.Count()) {
-    unused << ScheduleTransaction(transactionInfo,
+    Unused << ScheduleTransaction(transactionInfo,
                                   /* aFromQueuedTransactions */ false);
   }
 
@@ -11280,7 +11284,7 @@ ConnectionPool::WaitForDatabasesToComplete(nsTArray<nsCString>&& aDatabaseIds,
   }
 
   if (mayRunCallbackImmediately) {
-    unused << aCallback->Run();
+    Unused << aCallback->Run();
     return;
   }
 
@@ -11352,7 +11356,7 @@ ConnectionPool::Cleanup()
       MOZ_ASSERT(completeCallback);
       MOZ_ASSERT(completeCallback->mCallback);
 
-      unused << completeCallback->mCallback->Run();
+      Unused << completeCallback->mCallback->Run();
     }
 
     mCompleteCallbacks.Clear();
@@ -11878,7 +11882,7 @@ ConnectionPool::NoteClosedDatabase(DatabaseInfo* aDatabaseInfo)
     for (uint32_t index = 0, count = scheduledTransactions.Length();
          index < count;
          index++) {
-      unused << ScheduleTransaction(scheduledTransactions[index],
+      Unused << ScheduleTransaction(scheduledTransactions[index],
                                     /* aFromQueuedTransactions */ false);
     }
 
@@ -11943,7 +11947,7 @@ ConnectionPool::MaybeFireCallback(DatabasesCompleteCallback* aCallback)
     }
   }
 
-  unused << aCallback->mCallback->Run();
+  Unused << aCallback->mCallback->Run();
   return true;
 }
 
@@ -12222,7 +12226,7 @@ FinishCallbackWrapper::Run()
 
     mHasRunOnce = true;
 
-    unused << mCallback->Run();
+    Unused << mCallback->Run();
 
     MOZ_ALWAYS_TRUE(NS_SUCCEEDED(
       mOwningThread->Dispatch(this, NS_DISPATCH_NORMAL)));
@@ -12520,7 +12524,7 @@ TransactionInfo::Schedule()
   MOZ_ASSERT(connectionPool);
   connectionPool->AssertIsOnOwningThread();
 
-  unused <<
+  Unused <<
     connectionPool->ScheduleTransaction(this,
                                         /* aFromQueuedTransactions */ false);
 }
@@ -12910,7 +12914,7 @@ WaitForTransactionsHelper::WaitForTransactions()
 {
   MOZ_ASSERT(mState == State::Initial);
 
-  unused << this->Run();
+  Unused << this->Run();
 }
 
 void
@@ -13142,7 +13146,7 @@ Database::Invalidate()
   mInvalidated = true;
 
   if (mActorWasAlive && !mActorDestroyed) {
-    unused << SendInvalidate();
+    Unused << SendInvalidate();
   }
 
   if (!Helper::InvalidateTransactions(mTransactions)) {
@@ -14748,7 +14752,7 @@ NormalTransaction::SendCompleteNotification(nsresult aResult)
   AssertIsOnBackgroundThread();
 
   if (!IsActorDestroyed()) {
-    unused << SendComplete(aResult);
+    Unused << SendComplete(aResult);
   }
 }
 
@@ -15047,7 +15051,7 @@ VersionChangeTransaction::SendCompleteNotification(nsresult aResult)
   openDatabaseOp->mState = OpenDatabaseOp::State::SendingResults;
 
   if (!IsActorDestroyed()) {
-    unused << SendComplete(aResult);
+    Unused << SendComplete(aResult);
   }
 
   MOZ_ALWAYS_TRUE(NS_SUCCEEDED(openDatabaseOp->Run()));
@@ -15159,56 +15163,6 @@ VersionChangeTransaction::RecvDeleteObjectStore(const int64_t& aObjectStoreId)
 {
   AssertIsOnBackgroundThread();
 
-  class MOZ_STACK_CLASS Helper final
-  {
-    const int64_t mObjectStoreId;
-    bool mIsLastObjectStore;
-    DebugOnly<bool> mFoundTargetId;
-
-  public:
-    static bool
-    IsLastObjectStore(const FullDatabaseMetadata* aDatabaseMetadata,
-                      const int64_t aObjectStoreId)
-    {
-      AssertIsOnBackgroundThread();
-      MOZ_ASSERT(aDatabaseMetadata);
-      MOZ_ASSERT(aObjectStoreId);
-
-      Helper helper(aObjectStoreId);
-      aDatabaseMetadata->mObjectStores.EnumerateRead(&Enumerate, &helper);
-
-      MOZ_ASSERT_IF(helper.mIsLastObjectStore, helper.mFoundTargetId);
-
-      return helper.mIsLastObjectStore;
-    }
-
-  private:
-    explicit
-    Helper(const int64_t aObjectStoreId)
-      : mObjectStoreId(aObjectStoreId)
-      , mIsLastObjectStore(true)
-      , mFoundTargetId(false)
-    { }
-
-    static PLDHashOperator
-    Enumerate(const uint64_t& aKey,
-              FullObjectStoreMetadata* aValue,
-              void* aClosure)
-    {
-      auto* helper = static_cast<Helper*>(aClosure);
-      MOZ_ASSERT(helper);
-
-      if (uint64_t(helper->mObjectStoreId) == aKey) {
-        helper->mFoundTargetId = true;
-      } else if(!aValue->mDeleted) {
-        helper->mIsLastObjectStore = false;
-        return PL_DHASH_STOP;
-      }
-
-      return PL_DHASH_NEXT;
-    }
-  };
-
   if (NS_WARN_IF(!aObjectStoreId)) {
     ASSERT_UNLESS_FUZZING();
     return false;
@@ -15238,11 +15192,22 @@ VersionChangeTransaction::RecvDeleteObjectStore(const int64_t& aObjectStoreId)
 
   foundMetadata->mDeleted = true;
 
+  bool isLastObjectStore = true;
+  DebugOnly<bool> foundTargetId = false;
+  for (auto iter = dbMetadata->mObjectStores.Iter();
+       !iter.Done();
+       iter.Next()) {
+    if (uint64_t(aObjectStoreId) == iter.Key()) {
+      foundTargetId = true;
+    } else if (!iter.UserData()->mDeleted) {
+      isLastObjectStore = false;
+      break;
+    }
+  }
+  MOZ_ASSERT_IF(isLastObjectStore, foundTargetId);
+
   RefPtr<DeleteObjectStoreOp> op =
-    new DeleteObjectStoreOp(this,
-                            foundMetadata,
-                            Helper::IsLastObjectStore(dbMetadata,
-                                                      aObjectStoreId));
+    new DeleteObjectStoreOp(this, foundMetadata, isLastObjectStore);
 
   if (NS_WARN_IF(!op->Init(this))) {
     op->Cleanup();
@@ -15330,54 +15295,6 @@ VersionChangeTransaction::RecvDeleteIndex(const int64_t& aObjectStoreId,
 {
   AssertIsOnBackgroundThread();
 
-  class MOZ_STACK_CLASS Helper final
-  {
-    const int64_t mIndexId;
-    bool mIsLastIndex;
-    DebugOnly<bool> mFoundTargetId;
-
-  public:
-    static bool
-    IsLastIndex(const FullObjectStoreMetadata* aObjectStoreMetadata,
-                const int64_t aIndexId)
-    {
-      AssertIsOnBackgroundThread();
-      MOZ_ASSERT(aObjectStoreMetadata);
-      MOZ_ASSERT(aIndexId);
-
-      Helper helper(aIndexId);
-      aObjectStoreMetadata->mIndexes.EnumerateRead(&Enumerate, &helper);
-
-      MOZ_ASSERT_IF(helper.mIsLastIndex, helper.mFoundTargetId);
-
-      return helper.mIsLastIndex;
-    }
-
-  private:
-    explicit
-    Helper(const int64_t aIndexId)
-      : mIndexId(aIndexId)
-      , mIsLastIndex(true)
-      , mFoundTargetId(false)
-    { }
-
-    static PLDHashOperator
-    Enumerate(const uint64_t& aKey, FullIndexMetadata* aValue, void* aClosure)
-    {
-      auto* helper = static_cast<Helper*>(aClosure);
-      MOZ_ASSERT(helper);
-
-      if (uint64_t(helper->mIndexId) == aKey) {
-        helper->mFoundTargetId = true;
-      } else if (!aValue->mDeleted) {
-        helper->mIsLastIndex = false;
-        return PL_DHASH_STOP;
-      }
-
-      return PL_DHASH_NEXT;
-    }
-  };
-
   if (NS_WARN_IF(!aObjectStoreId)) {
     ASSERT_UNLESS_FUZZING();
     return false;
@@ -15426,12 +15343,26 @@ VersionChangeTransaction::RecvDeleteIndex(const int64_t& aObjectStoreId,
 
   foundIndexMetadata->mDeleted = true;
 
+  bool isLastIndex = true;
+  DebugOnly<bool> foundTargetId = false;
+  for (auto iter = foundObjectStoreMetadata->mIndexes.ConstIter();
+       !iter.Done();
+       iter.Next()) {
+    if (uint64_t(aIndexId) == iter.Key()) {
+      foundTargetId = true;
+    } else if (!iter.UserData()->mDeleted) {
+      isLastIndex = false;
+      break;
+    }
+  }
+  MOZ_ASSERT_IF(isLastIndex, foundTargetId);
+
   RefPtr<DeleteIndexOp> op =
     new DeleteIndexOp(this,
                       aObjectStoreId,
                       aIndexId,
                       foundIndexMetadata->mCommonMetadata.unique(),
-                      Helper::IsLastIndex(foundObjectStoreMetadata, aIndexId));
+                      isLastIndex);
 
   if (NS_WARN_IF(!op->Init(this))) {
     op->Cleanup();
@@ -16843,7 +16774,7 @@ QuotaClient::PerformIdleMaintenance()
 
   if (kRunningXPCShellTests) {
     // We don't want user activity to impact this code if we're running tests.
-    unused << Observe(nullptr, OBSERVER_TOPIC_IDLE, nullptr);
+    Unused << Observe(nullptr, OBSERVER_TOPIC_IDLE, nullptr);
   } else if (!mIdleObserverRegistered) {
     nsCOMPtr<nsIIdleService> idleService =
       do_GetService(kIdleServiceContractId);
@@ -18009,7 +17940,7 @@ AutoProgressHandler::Unregister()
 
   nsCOMPtr<mozIStorageProgressHandler> oldHandler;
   nsresult rv = mConnection->RemoveProgressHandler(getter_AddRefs(oldHandler));
-  unused << NS_WARN_IF(NS_FAILED(rv));
+  Unused << NS_WARN_IF(NS_FAILED(rv));
 
   MOZ_ASSERT_IF(NS_SUCCEEDED(rv), oldHandler == this);
 }
@@ -18609,51 +18540,7 @@ DatabaseOperationBase::GetUniqueIndexTableForObjectStore(
   MOZ_ASSERT(aObjectStoreId);
   MOZ_ASSERT(aMaybeUniqueIndexTable.isNothing());
 
-  class MOZ_STACK_CLASS Helper final
-  {
-  public:
-    static nsresult
-    CopyUniqueValues(const IndexTable& aIndexes,
-                     Maybe<UniqueIndexTable>& aMaybeUniqueIndexTable)
-    {
-      const uint32_t indexCount = aIndexes.Count();
-      MOZ_ASSERT(indexCount);
-
-      aMaybeUniqueIndexTable.emplace();
-
-      aIndexes.EnumerateRead(Enumerate, aMaybeUniqueIndexTable.ptr());
-
-      if (NS_WARN_IF(aMaybeUniqueIndexTable.ref().Count() != indexCount)) {
-        IDB_REPORT_INTERNAL_ERR();
-        aMaybeUniqueIndexTable.reset();
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
-
-#ifdef DEBUG
-      aMaybeUniqueIndexTable.ref().MarkImmutable();
-#endif
-      return NS_OK;
-    }
-
-  private:
-    static PLDHashOperator
-    Enumerate(const uint64_t& aKey, FullIndexMetadata* aValue, void* aClosure)
-    {
-      auto* uniqueIndexTable = static_cast<UniqueIndexTable*>(aClosure);
-      MOZ_ASSERT(uniqueIndexTable);
-      MOZ_ASSERT(!uniqueIndexTable->Get(aValue->mCommonMetadata.id()));
-
-      if (NS_WARN_IF(!uniqueIndexTable->Put(aValue->mCommonMetadata.id(),
-                                            aValue->mCommonMetadata.unique(),
-                                            fallible))) {
-        return PL_DHASH_STOP;
-      }
-
-      return PL_DHASH_NEXT;
-    }
-  };
-
-  const RefPtr<FullObjectStoreMetadata> objectStoreMetadata = 
+  const RefPtr<FullObjectStoreMetadata> objectStoreMetadata =
     aTransaction->GetMetadataForObjectStoreId(aObjectStoreId);
   MOZ_ASSERT(objectStoreMetadata);
 
@@ -18661,11 +18548,34 @@ DatabaseOperationBase::GetUniqueIndexTableForObjectStore(
     return NS_OK;
   }
 
-  nsresult rv = Helper::CopyUniqueValues(objectStoreMetadata->mIndexes,
-                                         aMaybeUniqueIndexTable);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
+  const uint32_t indexCount = objectStoreMetadata->mIndexes.Count();
+  MOZ_ASSERT(indexCount > 0);
+
+  aMaybeUniqueIndexTable.emplace();
+  UniqueIndexTable* uniqueIndexTable = aMaybeUniqueIndexTable.ptr();
+  MOZ_ASSERT(uniqueIndexTable);
+
+  for (auto iter = objectStoreMetadata->mIndexes.Iter(); !iter.Done(); iter.Next()) {
+    FullIndexMetadata* value = iter.UserData();
+    MOZ_ASSERT(!uniqueIndexTable->Get(value->mCommonMetadata.id()));
+
+    if (NS_WARN_IF(!uniqueIndexTable->Put(value->mCommonMetadata.id(),
+                                          value->mCommonMetadata.unique(),
+                                          fallible))) {
+      break;
+    }
   }
+
+  if (NS_WARN_IF(aMaybeUniqueIndexTable.ref().Count() != indexCount)) {
+    IDB_REPORT_INTERNAL_ERR();
+    aMaybeUniqueIndexTable.reset();
+    NS_WARNING("out of memory");
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+#ifdef DEBUG
+  aMaybeUniqueIndexTable.ref().MarkImmutable();
+#endif
 
   return NS_OK;
 }
@@ -20932,7 +20842,7 @@ OpenDatabaseOp::SendBlockedNotification()
   MOZ_ASSERT(mState == State::WaitingForOtherDatabasesToClose);
 
   if (!IsActorDestroyed()) {
-    unused << SendBlocked(mMetadata->mCommonMetadata.version());
+    Unused << SendBlocked(mMetadata->mCommonMetadata.version());
   }
 }
 
@@ -21095,7 +21005,7 @@ OpenDatabaseOp::SendResults()
       response = ClampResultCode(mResultCode);
     }
 
-    unused <<
+    Unused <<
       PBackgroundIDBFactoryRequestParent::Send__delete__(this, response);
   }
 
@@ -21821,7 +21731,7 @@ DeleteDatabaseOp::SendBlockedNotification()
   MOZ_ASSERT(mState == State::WaitingForOtherDatabasesToClose);
 
   if (!IsActorDestroyed()) {
-    unused << SendBlocked(0);
+    Unused << SendBlocked(0);
   }
 }
 
@@ -21840,7 +21750,7 @@ DeleteDatabaseOp::SendResults()
       response = ClampResultCode(mResultCode);
     }
 
-    unused <<
+    Unused <<
       PBackgroundIDBFactoryRequestParent::Send__delete__(this, response);
   }
 
@@ -22914,7 +22824,7 @@ CreateFileOp::SendResults()
       response = ClampResultCode(mResultCode);
     }
 
-    unused <<
+    Unused <<
       PBackgroundIDBDatabaseRequestParent::Send__delete__(this, response);
   }
 
@@ -27272,7 +27182,7 @@ PermissionRequestHelper::OnPromptComplete(PermissionValue aPermissionValue)
   MOZ_ASSERT(NS_IsMainThread());
 
   if (!mActorDestroyed) {
-    unused <<
+    Unused <<
       PIndexedDBPermissionRequestParent::Send__delete__(this, aPermissionValue);
   }
 }

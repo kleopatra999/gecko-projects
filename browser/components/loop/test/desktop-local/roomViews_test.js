@@ -212,7 +212,8 @@ describe("loop.roomViews", function() {
         React.createElement(loop.roomViews.DesktopRoomInvitationView, props));
     }
 
-    it("should dispatch an EmailRoomUrl action when the email button is pressed",
+    it("should dispatch an EmailRoomUrl with no description" +
+       " for rooms without context when the email button is pressed",
       function() {
         view = mountTestComponent({
           roomData: { roomUrl: "http://invalid" }
@@ -231,14 +232,13 @@ describe("loop.roomViews", function() {
           }));
       });
 
-    it("should dispatch a different EmailRoomUrl action for rooms with context",
+    it("should dispatch an EmailRoomUrl with a domain name description for rooms with context",
       function() {
         var url = "http://invalid";
-        var description = "Hello, is it me you're looking for?";
         view = mountTestComponent({
           roomData: {
             roomUrl: url,
-            roomContextUrls: [{ description: description }]
+            roomContextUrls: [{ location: "http://www.mozilla.com/" }]
           }
         });
 
@@ -250,7 +250,7 @@ describe("loop.roomViews", function() {
         sinon.assert.calledWith(dispatcher.dispatch,
           new sharedActions.EmailRoomUrl({
             roomUrl: url,
-            roomDescription: description,
+            roomDescription: "www.mozilla.com",
             from: "conversation"
           }));
       });
@@ -341,6 +341,16 @@ describe("loop.roomViews", function() {
       return TestUtils.renderIntoDocument(
         React.createElement(loop.roomViews.DesktopRoomConversationView, props));
     }
+
+    it("should NOT show the context menu on right click", function() {
+      var prevent = sandbox.stub();
+      view = mountTestComponent();
+      TestUtils.Simulate.contextMenu(
+        view.getDOMNode(),
+        { preventDefault: prevent }
+      );
+      sinon.assert.calledOnce(prevent);
+    });
 
     it("should dispatch a setMute action when the audio mute button is pressed",
       function() {
@@ -690,7 +700,6 @@ describe("loop.roomViews", function() {
           expect(fakeWindow.document.title).to.equal("https://fakeurl.com");
         });
       });
-
     });
 
     describe("Edit Context", function() {

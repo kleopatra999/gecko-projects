@@ -14,7 +14,7 @@ const { Cu, Cc, Ci } = require("chrome");
 const { ViewHelpers } =
       Cu.import("resource://devtools/client/shared/widgets/ViewHelpers.jsm",
                 {});
-const STRINGS_URI = "chrome://browser/locale/devtools/filterwidget.properties";
+const STRINGS_URI = "chrome://devtools/locale/filterwidget.properties";
 const L10N = new ViewHelpers.L10N(STRINGS_URI);
 const {cssTokenizer} = require("devtools/client/shared/css-parsing-utils");
 
@@ -97,6 +97,9 @@ const filterList = [
     "type": "string"
   }
 ];
+
+// Valid values that shouldn't be parsed for filters.
+const SPECIAL_VALUES = new Set(["none", "unset", "initial", "inherit"]);
 
 /**
  * A CSS Filter editor widget used to add/remove/modify
@@ -557,7 +560,7 @@ CSSFilterEditorWidget.prototype = {
     let name = this.addPresetInput.value;
     let value = this.getCssValue();
 
-    if (!name || !value || value === "none") {
+    if (!name || !value || SPECIAL_VALUES.has(value)) {
       this.emit("preset-save-error");
       return;
     }
@@ -706,7 +709,8 @@ CSSFilterEditorWidget.prototype = {
 
     this.filters = [];
 
-    if (cssValue === "none") {
+    if (SPECIAL_VALUES.has(cssValue)) {
+      this._specialValue = cssValue;
       this.emit("updated", this.getCssValue());
       this.render();
       return;
@@ -825,7 +829,7 @@ CSSFilterEditorWidget.prototype = {
   getCssValue: function() {
     return this.filters.map((filter, i) => {
       return `${filter.name}(${this.getValueAt(i)})`;
-    }).join(" ") || "none";
+    }).join(" ") || this._specialValue || "none";
   },
 
   /**
@@ -906,7 +910,7 @@ function tokenizeFilterValue(css) {
   let filters = [];
   let depth = 0;
 
-  if (css === "none") {
+  if (SPECIAL_VALUES.has(css)) {
     return filters;
   }
 

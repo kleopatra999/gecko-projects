@@ -140,11 +140,11 @@ public:
                       SheetParsingMode aParsingMode,
                       LoaderReusableStyleSheets* aReusableSheets);
 
-  nsresult ParseStyleAttribute(const nsAString&  aAttributeValue,
+  already_AddRefed<css::Declaration>
+           ParseStyleAttribute(const nsAString&  aAttributeValue,
                                nsIURI*           aDocURL,
                                nsIURI*           aBaseURL,
-                               nsIPrincipal*     aNodePrincipal,
-                               css::StyleRule**  aResult);
+                               nsIPrincipal*     aNodePrincipal);
 
   nsresult ParseDeclarations(const nsAString&  aBuffer,
                              nsIURI*           aSheetURL,
@@ -752,8 +752,9 @@ protected:
     eCSSContext_Page
   };
 
-  css::Declaration* ParseDeclarationBlock(uint32_t aFlags,
-                                          nsCSSContextType aContext = eCSSContext_General);
+  already_AddRefed<css::Declaration>
+    ParseDeclarationBlock(uint32_t aFlags,
+                          nsCSSContextType aContext = eCSSContext_General);
   bool ParseDeclaration(css::Declaration* aDeclaration,
                         uint32_t aFlags,
                         bool aMustCallValueAppended,
@@ -934,6 +935,14 @@ protected:
   bool ParseGridColumnRow(nsCSSProperty aStartPropID,
                           nsCSSProperty aEndPropID);
   bool ParseGridArea();
+
+  // parsing 'align/justify-items/self' from the css-align spec
+  bool ParseAlignJustifyPosition(nsCSSValue& aResult,
+                                 const KTableValue aTable[]);
+  bool ParseJustifyItems();
+  bool ParseAlignItemsSelfJustifySelf(nsCSSProperty aPropID);
+  // parsing 'align/justify-content' from the css-align spec
+  bool ParseAlignJustifyContent(nsCSSProperty aPropID);
 
   // for 'clip' and '-moz-image-region'
   bool ParseRect(nsCSSProperty aPropID);
@@ -1618,7 +1627,6 @@ CSSParserImpl::ParseSheet(const nsAString& aInput,
   mIsChrome = false;
   mReusableSheets = nullptr;
 
-  // XXX check for low level errors
   return NS_OK;
 }
 
@@ -1635,12 +1643,11 @@ NonMozillaVendorIdentifier(const nsAString& ident)
 
 }
 
-nsresult
+already_AddRefed<css::Declaration>
 CSSParserImpl::ParseStyleAttribute(const nsAString& aAttributeValue,
                                    nsIURI*          aDocURI,
                                    nsIURI*          aBaseURI,
-                                   nsIPrincipal*    aNodePrincipal,
-                                   css::StyleRule** aResult)
+                                   nsIPrincipal*    aNodePrincipal)
 {
   NS_PRECONDITION(aNodePrincipal, "Must have principal here!");
   NS_PRECONDITION(aBaseURI, "need base URI");
@@ -1654,18 +1661,11 @@ CSSParserImpl::ParseStyleAttribute(const nsAString& aAttributeValue,
 
   uint32_t parseFlags = eParseDeclaration_AllowImportant;
 
-  css::Declaration* declaration = ParseDeclarationBlock(parseFlags);
-  if (declaration) {
-    // Create a style rule for the declaration
-    NS_ADDREF(*aResult = new css::StyleRule(nullptr, declaration, 0, 0));
-  } else {
-    *aResult = nullptr;
-  }
+  RefPtr<css::Declaration> declaration = ParseDeclarationBlock(parseFlags);
 
   ReleaseScanner();
 
-  // XXX check for low level errors
-  return NS_OK;
+  return declaration.forget();
 }
 
 nsresult
@@ -1773,17 +1773,17 @@ CSSParserImpl::ParseLonghandProperty(const nsCSSProperty aPropID,
   MOZ_ASSERT(aPropID < eCSSProperty_COUNT_no_shorthands,
              "ParseLonghandProperty must only take a longhand property");
 
-  Declaration declaration;
-  declaration.InitializeEmpty();
+  RefPtr<Declaration> declaration = new Declaration;
+  declaration->InitializeEmpty();
 
   bool changed;
   ParseProperty(aPropID, aPropValue, aSheetURL, aBaseURL, aSheetPrincipal,
-                &declaration, &changed,
+                declaration, &changed,
                 /* aIsImportant */ false,
                 /* aIsSVGMode */ false);
 
   if (changed) {
-    aValue = *declaration.GetNormalBlock()->ValueFor(aPropID);
+    aValue = *declaration->GetNormalBlock()->ValueFor(aPropID);
   } else {
     aValue.Reset();
   }
@@ -3410,22 +3410,35 @@ CSSParserImpl::ParseMediaQueryExpression(nsMediaQuery* aQuery)
 
   // case insensitive from CSS - must be lower cased
   nsContentUtils::ASCIIToLower(mToken.mIdent);
-  const char16_t *featureString;
-  if (StringBeginsWith(mToken.mIdent, NS_LITERAL_STRING("min-"))) {
+  nsDependentString featureString(mToken.mIdent, 0);
+  uint8_t satisfiedReqFlags = 0;
+
+  // Strip off "-webkit-" prefix from featureString:
+  if (sWebkitPrefixedAliasesEnabled &&
+      StringBeginsWith(featureString, NS_LITERAL_STRING("-webkit-"))) {
+    satisfiedReqFlags |= nsMediaFeature::eHasWebkitPrefix;
+    featureString.Rebind(featureString, 8);
+  }
+
+  // Strip off "min-"/"max-" prefix from featureString:
+  if (StringBeginsWith(featureString, NS_LITERAL_STRING("min-"))) {
     expr->mRange = nsMediaExpression::eMin;
-    featureString = mToken.mIdent.get() + 4;
-  } else if (StringBeginsWith(mToken.mIdent, NS_LITERAL_STRING("max-"))) {
+    featureString.Rebind(featureString, 4);
+  } else if (StringBeginsWith(featureString, NS_LITERAL_STRING("max-"))) {
     expr->mRange = nsMediaExpression::eMax;
-    featureString = mToken.mIdent.get() + 4;
+    featureString.Rebind(featureString, 4);
   } else {
     expr->mRange = nsMediaExpression::eEqual;
-    featureString = mToken.mIdent.get();
   }
 
   nsCOMPtr<nsIAtom> mediaFeatureAtom = do_GetAtom(featureString);
   const nsMediaFeature *feature = nsMediaFeatures::features;
   for (; feature->mName; ++feature) {
-    if (*(feature->mName) == mediaFeatureAtom) {
+    // See if name matches & all requirement flags are satisfied:
+    // (We check requirements by turning off all of the flags that have been
+    // satisfied, and then see if the result is 0.)
+    if (*(feature->mName) == mediaFeatureAtom &&
+        !(feature->mReqFlags & ~satisfiedReqFlags)) {
       break;
     }
   }
@@ -4188,18 +4201,16 @@ CSSParserImpl::ParsePageRule(RuleAppendFunc aAppendFunc, void* aData)
   MOZ_ASSERT(mViewportUnitsEnabled,
              "Viewport units should be enabled outside of @page rules.");
   mViewportUnitsEnabled = false;
-  nsAutoPtr<css::Declaration> declaration(
-                                ParseDeclarationBlock(parseFlags,
-                                                      eCSSContext_Page));
+  RefPtr<css::Declaration> declaration =
+    ParseDeclarationBlock(parseFlags, eCSSContext_Page);
   mViewportUnitsEnabled = true;
 
   if (!declaration) {
     return false;
   }
 
-  // Takes ownership of declaration.
-  RefPtr<nsCSSPageRule> rule = new nsCSSPageRule(Move(declaration),
-                                                   linenum, colnum);
+  RefPtr<nsCSSPageRule> rule =
+    new nsCSSPageRule(declaration, linenum, colnum);
 
   (*aAppendFunc)(rule, aData);
   return true;
@@ -4218,14 +4229,14 @@ CSSParserImpl::ParseKeyframeRule()
 
   // Ignore !important in keyframe rules
   uint32_t parseFlags = eParseDeclaration_InBraces;
-  nsAutoPtr<css::Declaration> declaration(ParseDeclarationBlock(parseFlags));
+  RefPtr<css::Declaration> declaration(ParseDeclarationBlock(parseFlags));
   if (!declaration) {
     return nullptr;
   }
 
   // Takes ownership of declaration, and steals contents of selectorList.
   RefPtr<nsCSSKeyframeRule> rule =
-    new nsCSSKeyframeRule(selectorList, Move(declaration), linenum, colnum);
+    new nsCSSKeyframeRule(selectorList, declaration, linenum, colnum);
   return rule.forget();
 }
 
@@ -5143,7 +5154,7 @@ CSSParserImpl::ParseRuleSet(RuleAppendFunc aAppendFunc, void* aData,
   // Next parse the declaration block
   uint32_t parseFlags = eParseDeclaration_InBraces |
                         eParseDeclaration_AllowImportant;
-  css::Declaration* declaration = ParseDeclarationBlock(parseFlags);
+  RefPtr<css::Declaration> declaration = ParseDeclarationBlock(parseFlags);
   if (nullptr == declaration) {
     delete slist;
     return false;
@@ -6354,7 +6365,7 @@ CSSParserImpl::ParseSelector(nsCSSSelectorList* aList,
   return true;
 }
 
-css::Declaration*
+already_AddRefed<css::Declaration>
 CSSParserImpl::ParseDeclarationBlock(uint32_t aFlags, nsCSSContextType aContext)
 {
   bool checkForBraces = (aFlags & eParseDeclaration_InBraces) != 0;
@@ -6371,7 +6382,7 @@ CSSParserImpl::ParseDeclarationBlock(uint32_t aFlags, nsCSSContextType aContext)
       return nullptr;
     }
   }
-  css::Declaration* declaration = new css::Declaration();
+  RefPtr<css::Declaration> declaration = new css::Declaration();
   mData.AssertInitialState();
   for (;;) {
     bool changed;
@@ -6389,7 +6400,7 @@ CSSParserImpl::ParseDeclarationBlock(uint32_t aFlags, nsCSSContextType aContext)
     }
   }
   declaration->CompressFrom(&mData);
-  return declaration;
+  return declaration.forget();
 }
 
 CSSParseResult
@@ -6778,12 +6789,11 @@ CSSParserImpl::LookupKeywordPrefixAware(nsAString& aKeywordStr,
   nsCSSKeyword keyword = nsCSSKeywords::LookupKeyword(aKeywordStr);
 
   if (aKeywordTable == nsCSSProps::kDisplayKTable) {
-    if (keyword == eCSSKeyword_UNKNOWN &&
-        ShouldUseUnprefixingService() &&
-        aKeywordStr.EqualsLiteral("-webkit-box")) {
+    if (keyword == eCSSKeyword__webkit_box &&
+        (sWebkitPrefixedAliasesEnabled || ShouldUseUnprefixingService())) {
       // Treat "display: -webkit-box" as "display: flex". In simple scenarios,
-      // they largely behave the same, as long as we use the CSS Unprefixing
-      // Service to also translate the associated properties.
+      // they largely behave the same, as long as we alias the associated
+      // properties to modern flexbox equivalents as well.
       if (mWebkitBoxUnprefixState == eHaveNotUnprefixed) {
         mWebkitBoxUnprefixState = eHaveUnprefixed;
       }
@@ -6799,9 +6809,10 @@ CSSParserImpl::LookupKeywordPrefixAware(nsAString& aKeywordStr,
     // "display: flex" (but only if we unprefixed an earlier "-webkit-box").
     if (mWebkitBoxUnprefixState == eHaveUnprefixed &&
         keyword == eCSSKeyword__moz_box) {
-      MOZ_ASSERT(ShouldUseUnprefixingService(),
+      MOZ_ASSERT(sWebkitPrefixedAliasesEnabled || ShouldUseUnprefixingService(),
                  "mDidUnprefixWebkitBoxInEarlierDecl should only be set if "
-                 "we're using the unprefixing service on this site");
+                 "we're supporting webkit-prefixed aliases, or if we're using "
+                 "the css unprefixing service on this site");
       return eCSSKeyword_flex;
     }
   }
@@ -9378,6 +9389,129 @@ CSSParserImpl::ParseGridArea()
   return true;
 }
 
+// [ $aTable && <overflow-position>? ] ?
+// $aTable is for <content-position> or <self-position>
+bool
+CSSParserImpl::ParseAlignJustifyPosition(nsCSSValue& aResult,
+                                         const KTableValue aTable[])
+{
+  nsCSSValue pos, overflowPos;
+  int32_t value = 0;
+  if (ParseEnum(pos, aTable)) {
+    value = pos.GetIntValue();
+    if (ParseEnum(overflowPos, nsCSSProps::kAlignOverflowPosition)) {
+      value |= overflowPos.GetIntValue();
+    }
+    aResult.SetIntValue(value, eCSSUnit_Enumerated);
+    return true;
+  }
+  if (ParseEnum(overflowPos, nsCSSProps::kAlignOverflowPosition)) {
+    if (ParseEnum(pos, aTable)) {
+      aResult.SetIntValue(pos.GetIntValue() | overflowPos.GetIntValue(),
+                          eCSSUnit_Enumerated);
+      return true;
+    }
+    return false; // <overflow-position> must be followed by a value in $table
+  }
+  return true;
+}
+
+// auto | stretch | <baseline-position> |
+// [ <self-position> && <overflow-position>? ] |
+// [ legacy && [ left | right | center ] ]
+bool
+CSSParserImpl::ParseJustifyItems()
+{
+  nsCSSValue value;
+  if (!ParseSingleTokenVariant(value, VARIANT_INHERIT, nullptr)) {
+    if (MOZ_UNLIKELY(ParseEnum(value, nsCSSProps::kAlignLegacy))) {
+      nsCSSValue legacy;
+      if (!ParseEnum(legacy, nsCSSProps::kAlignLegacyPosition)) {
+        return false; // leading 'legacy' not followed by 'left' etc is an error
+      }
+      value.SetIntValue(value.GetIntValue() | legacy.GetIntValue(),
+                        eCSSUnit_Enumerated);
+    } else {
+      if (!ParseEnum(value, nsCSSProps::kAlignAutoStretchBaseline)) {
+        if (!ParseAlignJustifyPosition(value, nsCSSProps::kAlignSelfPosition) ||
+            value.GetUnit() == eCSSUnit_Null) {
+          return false;
+        }
+        // check for a trailing 'legacy' after 'left' etc
+        auto val = value.GetIntValue();
+        if (val == NS_STYLE_JUSTIFY_CENTER ||
+            val == NS_STYLE_JUSTIFY_LEFT   ||
+            val == NS_STYLE_JUSTIFY_RIGHT) {
+          nsCSSValue legacy;
+          if (ParseEnum(legacy, nsCSSProps::kAlignLegacy)) {
+            value.SetIntValue(val | legacy.GetIntValue(), eCSSUnit_Enumerated);
+          }
+        }
+      }
+    }
+  }
+  AppendValue(eCSSProperty_justify_items, value);
+  return true;
+}
+
+// auto | stretch | <baseline-position> |
+// [ <overflow-position>? && <self-position> ] 
+bool
+CSSParserImpl::ParseAlignItemsSelfJustifySelf(nsCSSProperty aPropID)
+{
+  nsCSSValue value;
+  if (!ParseSingleTokenVariant(value, VARIANT_INHERIT, nullptr)) {
+    if (!ParseEnum(value, nsCSSProps::kAlignAutoStretchBaseline)) {
+      if (!ParseAlignJustifyPosition(value, nsCSSProps::kAlignSelfPosition) ||
+          value.GetUnit() == eCSSUnit_Null) {
+        return false;
+      }
+    }
+  }
+  AppendValue(aPropID, value);
+  return true;
+}
+
+// auto | <baseline-position> | [ <content-distribution> ||
+//   [ <overflow-position>? && <content-position> ] ]
+// (the part after the || is called <*-position> below)
+bool
+CSSParserImpl::ParseAlignJustifyContent(nsCSSProperty aPropID)
+{
+  nsCSSValue value;
+  if (!ParseSingleTokenVariant(value, VARIANT_INHERIT, nullptr)) {
+    if (!ParseEnum(value, nsCSSProps::kAlignAutoBaseline)) {
+      nsCSSValue fallbackValue;
+      if (!ParseEnum(value, nsCSSProps::kAlignContentDistribution)) {
+        if (!ParseAlignJustifyPosition(fallbackValue,
+                                       nsCSSProps::kAlignContentPosition) ||
+            fallbackValue.GetUnit() == eCSSUnit_Null) {
+          return false;
+        }
+        // optional <content-distribution> after <*-position> ...
+        if (!ParseEnum(value, nsCSSProps::kAlignContentDistribution)) {
+          // ... is missing so the <*-position> is the value, not the fallback
+          value = fallbackValue;
+          fallbackValue.Reset();
+        }
+      } else {
+        // any optional <*-position> is a fallback value
+        if (!ParseAlignJustifyPosition(fallbackValue,
+                                       nsCSSProps::kAlignContentPosition)) {
+          return false;
+        }
+      }
+      if (fallbackValue.GetUnit() != eCSSUnit_Null) {
+        auto fallback = fallbackValue.GetIntValue();
+        value.SetIntValue(value.GetIntValue() | (fallback << 8),
+                          eCSSUnit_Enumerated);
+      }
+    }
+  }
+  AppendValue(aPropID, value);
+  return true;
+}
+
 // <color-stop> : <color> [ <percentage> | <length> ]?
 bool
 CSSParserImpl::ParseColorStop(nsCSSValueGradient* aGradient)
@@ -10501,6 +10635,18 @@ CSSParserImpl::ParsePropertyByFunction(nsCSSProperty aPropID)
     return ParseGridArea();
   case eCSSProperty_image_region:
     return ParseRect(eCSSProperty_image_region);
+  case eCSSProperty_align_content:
+    return ParseAlignJustifyContent(aPropID);
+  case eCSSProperty_align_items:
+    return ParseAlignItemsSelfJustifySelf(aPropID);
+  case eCSSProperty_align_self:
+    return ParseAlignItemsSelfJustifySelf(aPropID);
+  case eCSSProperty_justify_content:
+    return ParseAlignJustifyContent(aPropID);
+  case eCSSProperty_justify_items:
+    return ParseJustifyItems();
+  case eCSSProperty_justify_self:
+    return ParseAlignItemsSelfJustifySelf(aPropID);
   case eCSSProperty_list_style:
     return ParseListStyle();
   case eCSSProperty_margin:
@@ -16081,27 +16227,6 @@ nsCSSParser::Shutdown()
 // Wrapper methods
 
 nsresult
-nsCSSParser::SetStyleSheet(CSSStyleSheet* aSheet)
-{
-  return static_cast<CSSParserImpl*>(mImpl)->
-    SetStyleSheet(aSheet);
-}
-
-nsresult
-nsCSSParser::SetQuirkMode(bool aQuirkMode)
-{
-  return static_cast<CSSParserImpl*>(mImpl)->
-    SetQuirkMode(aQuirkMode);
-}
-
-nsresult
-nsCSSParser::SetChildLoader(mozilla::css::Loader* aChildLoader)
-{
-  return static_cast<CSSParserImpl*>(mImpl)->
-    SetChildLoader(aChildLoader);
-}
-
-nsresult
 nsCSSParser::ParseSheet(const nsAString& aInput,
                         nsIURI*          aSheetURI,
                         nsIURI*          aBaseURI,
@@ -16115,16 +16240,14 @@ nsCSSParser::ParseSheet(const nsAString& aInput,
                aParsingMode, aReusableSheets);
 }
 
-nsresult
+already_AddRefed<css::Declaration>
 nsCSSParser::ParseStyleAttribute(const nsAString&  aAttributeValue,
                                  nsIURI*           aDocURI,
                                  nsIURI*           aBaseURI,
-                                 nsIPrincipal*     aNodePrincipal,
-                                 css::StyleRule**  aResult)
+                                 nsIPrincipal*     aNodePrincipal)
 {
   return static_cast<CSSParserImpl*>(mImpl)->
-    ParseStyleAttribute(aAttributeValue, aDocURI, aBaseURI,
-                        aNodePrincipal, aResult);
+    ParseStyleAttribute(aAttributeValue, aDocURI, aBaseURI, aNodePrincipal);
 }
 
 nsresult

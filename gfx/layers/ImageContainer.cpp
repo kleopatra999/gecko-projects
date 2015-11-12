@@ -74,7 +74,7 @@ ImageFactory::CreateImage(ImageFormat aFormat,
   }
 #endif
   if (aFormat == ImageFormat::PLANAR_YCBCR) {
-    img = new PlanarYCbCrImage(aRecycleBin);
+    img = new RecyclingPlanarYCbCrImage(aRecycleBin);
     return img.forget();
   }
   if (aFormat == ImageFormat::CAIRO_SURFACE) {
@@ -262,6 +262,14 @@ ImageContainer::SetCurrentImageInternal(const nsTArray<NonOwningImage>& aImages)
           mFrameIDsNotYetComposited.AppendElement(img.mFrameID);
         }
       }
+
+      // Remove really old frames, assuming they'll never be composited.
+      const uint32_t maxFrames = 100;
+      if (mFrameIDsNotYetComposited.Length() > maxFrames) {
+        uint32_t dropFrames = mFrameIDsNotYetComposited.Length() - maxFrames;
+        mDroppedImageCount += dropFrames;
+        mFrameIDsNotYetComposited.RemoveElementsAt(0, dropFrames);
+      }
     }
   }
 
@@ -397,16 +405,17 @@ ImageContainer::NotifyCompositeInternal(const ImageCompositeNotification& aNotif
   ++mPaintCount;
 
   if (aNotification.producerID() == mCurrentProducerID) {
-    while (!mFrameIDsNotYetComposited.IsEmpty()) {
-      if (mFrameIDsNotYetComposited[0] <= aNotification.frameID()) {
-        if (mFrameIDsNotYetComposited[0] < aNotification.frameID()) {
+    uint32_t i;
+    for (i = 0; i < mFrameIDsNotYetComposited.Length(); ++i) {
+      if (mFrameIDsNotYetComposited[i] <= aNotification.frameID()) {
+        if (mFrameIDsNotYetComposited[i] < aNotification.frameID()) {
           ++mDroppedImageCount;
         }
-        mFrameIDsNotYetComposited.RemoveElementAt(0);
       } else {
         break;
       }
     }
+    mFrameIDsNotYetComposited.RemoveElementsAt(0, i);
     for (auto& img : mCurrentImages) {
       if (img.mFrameID == aNotification.frameID()) {
         img.mComposited = true;
@@ -420,15 +429,14 @@ ImageContainer::NotifyCompositeInternal(const ImageCompositeNotification& aNotif
   }
 }
 
-PlanarYCbCrImage::PlanarYCbCrImage(BufferRecycleBin *aRecycleBin)
+PlanarYCbCrImage::PlanarYCbCrImage()
   : Image(nullptr, ImageFormat::PLANAR_YCBCR)
-  , mBufferSize(0)
   , mOffscreenFormat(gfxImageFormat::Unknown)
-  , mRecycleBin(aRecycleBin)
+  , mBufferSize(0)
 {
 }
 
-PlanarYCbCrImage::~PlanarYCbCrImage()
+RecyclingPlanarYCbCrImage::~RecyclingPlanarYCbCrImage()
 {
   if (mBuffer) {
     mRecycleBin->RecycleBuffer(mBuffer.forget(), mBufferSize);
@@ -436,7 +444,7 @@ PlanarYCbCrImage::~PlanarYCbCrImage()
 }
 
 size_t
-PlanarYCbCrImage::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
+RecyclingPlanarYCbCrImage::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 {
   // Ignoring:
   // - mData - just wraps mBuffer
@@ -455,7 +463,7 @@ PlanarYCbCrImage::SizeOfExcludingThis(MallocSizeOf aMallocSizeOf) const
 }
 
 uint8_t*
-PlanarYCbCrImage::AllocateBuffer(uint32_t aSize)
+RecyclingPlanarYCbCrImage::AllocateBuffer(uint32_t aSize)
 {
   return mRecycleBin->GetBuffer(aSize);
 }
@@ -484,8 +492,8 @@ CopyPlane(uint8_t *aDst, const uint8_t *aSrc,
   }
 }
 
-void
-PlanarYCbCrImage::CopyData(const Data& aData)
+bool
+RecyclingPlanarYCbCrImage::CopyData(const Data& aData)
 {
   mData = aData;
 
@@ -496,7 +504,7 @@ PlanarYCbCrImage::CopyData(const Data& aData)
   // get new buffer
   mBuffer = AllocateBuffer(size);
   if (!mBuffer)
-    return;
+    return false;
 
   // update buffer size
   mBufferSize = size;
@@ -513,12 +521,13 @@ PlanarYCbCrImage::CopyData(const Data& aData)
             mData.mCbCrSize, mData.mCbCrStride, mData.mCrSkip);
 
   mSize = aData.mPicSize;
+  return true;
 }
 
-void
-PlanarYCbCrImage::SetData(const Data &aData)
+bool
+RecyclingPlanarYCbCrImage::SetData(const Data &aData)
 {
-  CopyData(aData);
+  return CopyData(aData);
 }
 
 gfxImageFormat
@@ -529,15 +538,16 @@ PlanarYCbCrImage::GetOffscreenFormat()
     mOffscreenFormat;
 }
 
-void
+bool
 PlanarYCbCrImage::SetDataNoCopy(const Data &aData)
 {
   mData = aData;
   mSize = aData.mPicSize;
+  return true;
 }
 
 uint8_t*
-PlanarYCbCrImage::AllocateAndGetNewBuffer(uint32_t aSize)
+RecyclingPlanarYCbCrImage::AllocateAndGetNewBuffer(uint32_t aSize)
 {
   // get new buffer
   mBuffer = AllocateBuffer(aSize);
@@ -640,11 +650,10 @@ CairoImage::GetTextureClient(CompositableClient *aClient)
     return nullptr;
   }
 
-  if (!textureClient->Lock(OpenMode::OPEN_WRITE_ONLY)) {
+  TextureClientAutoLock autoLock(textureClient, OpenMode::OPEN_WRITE_ONLY);
+  if (!autoLock.Succeeded()) {
     return nullptr;
   }
-
-  TextureClientAutoUnlock autoUnlock(textureClient);
 
   textureClient->UpdateFromSurface(surface);
 

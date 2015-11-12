@@ -82,6 +82,7 @@
 #include "nsViewSourceHandler.h"
 #include "nsWhitespaceTokenizer.h"
 #include "nsICookieService.h"
+#include "nsIConsoleReportCollector.h"
 
 // we want to explore making the document own the load group
 // so we can associate the document URI with the load group.
@@ -4655,7 +4656,10 @@ nsDocShell::LoadURIWithOptions(const char16_t* aURI,
   // what happens
 
   if (NS_ERROR_MALFORMED_URI == rv) {
-    DisplayLoadError(rv, uri, aURI, nullptr);
+    if (DisplayLoadError(rv, uri, aURI, nullptr) &&
+        (aLoadFlags & LOAD_FLAGS_ERROR_LOAD_CHANGES_RV) != 0) {
+      return NS_ERROR_LOAD_SHOWED_ERRORPAGE;
+    }
   }
 
   if (NS_FAILED(rv) || !uri) {
@@ -4720,8 +4724,10 @@ nsDocShell::LoadURIWithOptions(const char16_t* aURI,
 NS_IMETHODIMP
 nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
                              const char16_t* aURL,
-                             nsIChannel* aFailedChannel)
+                             nsIChannel* aFailedChannel,
+                             bool* aDisplayedErrorPage)
 {
+  *aDisplayedErrorPage = false;
   // Get prompt and string bundle servcies
   nsCOMPtr<nsIPrompt> prompter;
   nsCOMPtr<nsIStringBundle> stringBundle;
@@ -5015,17 +5021,7 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
         error.AssignLiteral("corruptedContentError");
         break;
       case NS_ERROR_INTERCEPTION_FAILED:
-      case NS_ERROR_OPAQUE_INTERCEPTION_DISABLED:
-      case NS_ERROR_BAD_OPAQUE_INTERCEPTION_REQUEST_MODE:
-      case NS_ERROR_INTERCEPTED_ERROR_RESPONSE:
-      case NS_ERROR_INTERCEPTED_USED_RESPONSE:
-      case NS_ERROR_CLIENT_REQUEST_OPAQUE_INTERCEPTION:
-      case NS_ERROR_BAD_OPAQUE_REDIRECT_INTERCEPTION:
-      case NS_ERROR_INTERCEPTION_CANCELED:
-      case NS_ERROR_REJECTED_RESPONSE_INTERCEPTION:
         // ServiceWorker intercepted request, but something went wrong.
-        nsContentUtils::MaybeReportInterceptionErrorToConsole(GetDocument(),
-                                                              aError);
         error.AssignLiteral("corruptedContentError");
         break;
       default:
@@ -5109,14 +5105,16 @@ nsDocShell::DisplayLoadError(nsresult aError, nsIURI* aURI,
 
   if (UseErrorPages()) {
     // Display an error page
-    LoadErrorPage(aURI, aURL, errorPage.get(), error.get(),
-                  messageStr.get(), cssClass.get(), aFailedChannel);
+    nsresult loadedPage = LoadErrorPage(aURI, aURL, errorPage.get(),
+                                        error.get(), messageStr.get(),
+                                        cssClass.get(), aFailedChannel);
+    *aDisplayedErrorPage = NS_SUCCEEDED(loadedPage);
   } else {
     // The prompter reqires that our private window has a document (or it
     // asserts). Satisfy that assertion now since GetDoc will force
     // creation of one if it hasn't already been created.
     if (mScriptGlobal) {
-      unused << mScriptGlobal->GetDoc();
+      Unused << mScriptGlobal->GetDoc();
     }
 
     // Display a message box
@@ -5790,7 +5788,7 @@ nsDocShell::GetPositionAndSize(int32_t* aX, int32_t* aY, int32_t* aWidth,
 {
   if (mParentWidget) {
     // ensure size is up-to-date if window has changed resolution
-    nsIntRect r;
+    LayoutDeviceIntRect r;
     mParentWidget->GetClientBounds(r);
     SetPositionAndSize(mBounds.x, mBounds.y, r.width, r.height, false);
   }
@@ -5985,7 +5983,19 @@ nsDocShell::GetIsOffScreenBrowser(bool* aIsOffScreen)
 }
 
 NS_IMETHODIMP
+nsDocShell::SetIsActiveAndForeground(bool aIsActive)
+{
+  return SetIsActiveInternal(aIsActive, false);
+}
+
+NS_IMETHODIMP
 nsDocShell::SetIsActive(bool aIsActive)
+{
+  return SetIsActiveInternal(aIsActive, true);
+}
+
+nsresult
+nsDocShell::SetIsActiveInternal(bool aIsActive, bool aIsHidden)
 {
   // We disallow setting active on chrome docshells.
   if (mItemType == nsIDocShellTreeItem::typeChrome) {
@@ -5998,7 +6008,7 @@ nsDocShell::SetIsActive(bool aIsActive)
   // Tell the PresShell about it.
   nsCOMPtr<nsIPresShell> pshell = GetPresShell();
   if (pshell) {
-    pshell->SetIsActive(aIsActive);
+    pshell->SetIsActive(aIsActive, aIsHidden);
   }
 
   // Tell the window about it
@@ -6032,7 +6042,11 @@ nsDocShell::SetIsActive(bool aIsActive)
     }
 
     if (!docshell->GetIsBrowserOrApp()) {
-      docshell->SetIsActive(aIsActive);
+      if (aIsHidden) {
+        docshell->SetIsActive(aIsActive);
+      } else {
+        docshell->SetIsActiveAndForeground(aIsActive);
+      }
     }
   }
 
@@ -7357,6 +7371,11 @@ nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
     return NS_ERROR_NULL_POINTER;
   }
 
+  nsCOMPtr<nsIConsoleReportCollector> reporter = do_QueryInterface(aChannel);
+  if (reporter) {
+    reporter->FlushConsoleReports(GetDocument());
+  }
+
   nsCOMPtr<nsIURI> url;
   nsresult rv = aChannel->GetURI(getter_AddRefs(url));
   if (NS_FAILED(rv)) {
@@ -7683,13 +7702,6 @@ nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
                aStatus == NS_ERROR_UNSAFE_CONTENT_TYPE ||
                aStatus == NS_ERROR_REMOTE_XUL ||
                aStatus == NS_ERROR_INTERCEPTION_FAILED ||
-               aStatus == NS_ERROR_OPAQUE_INTERCEPTION_DISABLED ||
-               aStatus == NS_ERROR_BAD_OPAQUE_INTERCEPTION_REQUEST_MODE ||
-               aStatus == NS_ERROR_INTERCEPTED_ERROR_RESPONSE ||
-               aStatus == NS_ERROR_INTERCEPTED_USED_RESPONSE ||
-               aStatus == NS_ERROR_CLIENT_REQUEST_OPAQUE_INTERCEPTION ||
-               aStatus == NS_ERROR_INTERCEPTION_CANCELED ||
-               aStatus == NS_ERROR_REJECTED_RESPONSE_INTERCEPTION ||
                NS_ERROR_GET_MODULE(aStatus) == NS_ERROR_MODULE_SECURITY) {
       // Errors to be shown for any frame
       DisplayLoadError(aStatus, url, nullptr, aChannel);
@@ -7793,7 +7805,7 @@ nsDocShell::CreateAboutBlankContentViewer(nsIPrincipal* aPrincipal,
     mTiming->NotifyBeforeUnload();
 
     bool okToUnload;
-    rv = mContentViewer->PermitUnload(false, &okToUnload);
+    rv = mContentViewer->PermitUnload(&okToUnload);
 
     if (NS_SUCCEEDED(rv) && !okToUnload) {
       // The user chose not to unload the page, interrupt the load.
@@ -10131,7 +10143,7 @@ nsDocShell::InternalLoad(nsIURI* aURI,
   // protocol handler deals with this for javascript: URLs.
   if (!isJavaScript && aFileName.IsVoid() && mContentViewer) {
     bool okToUnload;
-    rv = mContentViewer->PermitUnload(false, &okToUnload);
+    rv = mContentViewer->PermitUnload(&okToUnload);
 
     if (NS_SUCCEEDED(rv) && !okToUnload) {
       // The user chose not to unload the page, interrupt the
@@ -10287,7 +10299,10 @@ nsDocShell::InternalLoad(nsIURI* aURI,
 
   if (NS_FAILED(rv)) {
     nsCOMPtr<nsIChannel> chan(do_QueryInterface(req));
-    DisplayLoadError(rv, aURI, nullptr, chan);
+    if (DisplayLoadError(rv, aURI, nullptr, chan) &&
+        (aFlags & LOAD_FLAGS_ERROR_LOAD_CHANGES_RV) != 0) {
+      return NS_ERROR_LOAD_SHOWED_ERRORPAGE;
+    }
   }
 
   return rv;
@@ -13896,7 +13911,9 @@ void
 nsDocShell::NotifyJSRunToCompletionStart(const char* aReason,
                                          const char16_t* aFunctionName,
                                          const char16_t* aFilename,
-                                         const uint32_t aLineNumber)
+                                         const uint32_t aLineNumber,
+                                         JS::Handle<JS::Value> aAsyncStack,
+                                         JS::Handle<JS::Value> aAsyncCause)
 {
   // If first start, mark interval start.
   if (mJSRunToCompletionDepth == 0) {
@@ -13904,7 +13921,8 @@ nsDocShell::NotifyJSRunToCompletionStart(const char* aReason,
     if (timelines && timelines->HasConsumer(this)) {
       timelines->AddMarkerForDocShell(this, Move(
         MakeUnique<JavascriptTimelineMarker>(
-          aReason, aFunctionName, aFilename, aLineNumber, MarkerTracingType::START)));
+          aReason, aFunctionName, aFilename, aLineNumber, MarkerTracingType::START,
+          aAsyncStack, aAsyncCause)));
     }
   }
 

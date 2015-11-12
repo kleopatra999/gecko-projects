@@ -75,8 +75,8 @@ using namespace mozilla::widget;
 using namespace mozilla::ipc;
 using namespace mozilla::layout;
 
-static PRLogModuleInfo *gLog = nullptr;
-#define LOG(...) MOZ_LOG(gLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
+static mozilla::LazyLogModule sRefreshDriverLog("nsRefreshDriver");
+#define LOG(...) MOZ_LOG(sRefreshDriverLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
 
 #define DEFAULT_THROTTLED_FRAME_RATE 1
 #define DEFAULT_RECOMPUTE_VISIBILITY_INTERVAL_MS 1000
@@ -313,6 +313,9 @@ private:
     explicit RefreshDriverVsyncObserver(VsyncRefreshDriverTimer* aVsyncRefreshDriverTimer)
       : mVsyncRefreshDriverTimer(aVsyncRefreshDriverTimer)
       , mRefreshTickLock("RefreshTickLock")
+      , mRecentVsync(TimeStamp::Now())
+      , mLastChildTick(TimeStamp::Now())
+      , mVsyncRate(TimeDuration::Forever())
       , mProcessedVsync(true)
     {
       MOZ_ASSERT(NS_IsMainThread());
@@ -352,17 +355,47 @@ private:
       mVsyncRefreshDriverTimer = nullptr;
     }
 
+    void OnTimerStart()
+    {
+      if (!XRE_IsParentProcess()) {
+        mLastChildTick = TimeStamp::Now();
+      }
+    }
+
   private:
     virtual ~RefreshDriverVsyncObserver() {}
+
+    void RecordTelemetryProbes(TimeStamp aVsyncTimestamp)
+    {
+      MOZ_ASSERT(NS_IsMainThread());
+    #ifndef ANDROID  /* bug 1142079 */
+      if (XRE_IsParentProcess()) {
+        TimeDuration vsyncLatency = TimeStamp::Now() - aVsyncTimestamp;
+        Telemetry::Accumulate(Telemetry::FX_REFRESH_DRIVER_CHROME_FRAME_DELAY_MS,
+                              vsyncLatency.ToMilliseconds());
+      } else if (mVsyncRate != TimeDuration::Forever()) {
+        TimeDuration contentDelay = (TimeStamp::Now() - mLastChildTick) - mVsyncRate;
+        Telemetry::Accumulate(Telemetry::FX_REFRESH_DRIVER_CONTENT_FRAME_DELAY_MS,
+                              contentDelay.ToMilliseconds());
+      } else {
+        // Request the vsync rate from the parent process. Might be a few vsyncs
+        // until the parent responds.
+        mVsyncRate = mVsyncRefreshDriverTimer->mVsyncChild->GetVsyncRate();
+      }
+    #endif
+    }
 
     void TickRefreshDriver(TimeStamp aVsyncTimestamp)
     {
       MOZ_ASSERT(NS_IsMainThread());
 
+      RecordTelemetryProbes(aVsyncTimestamp);
       if (XRE_IsParentProcess()) {
         MonitorAutoLock lock(mRefreshTickLock);
         aVsyncTimestamp = mRecentVsync;
         mProcessedVsync = true;
+      } else {
+        mLastChildTick = TimeStamp::Now();
       }
       MOZ_ASSERT(aVsyncTimestamp <= TimeStamp::Now());
 
@@ -380,6 +413,8 @@ private:
     VsyncRefreshDriverTimer* mVsyncRefreshDriverTimer;
     Monitor mRefreshTickLock;
     TimeStamp mRecentVsync;
+    TimeStamp mLastChildTick;
+    TimeDuration mVsyncRate;
     bool mProcessedVsync;
   }; // RefreshDriverVsyncObserver
 
@@ -393,7 +428,7 @@ private:
       // send the unobserveVsync message to disable vsync event. We don't need
       // to handle the cleanup stuff of this actor. PVsyncChild::ActorDestroy()
       // will be called and clean up this actor.
-      unused << mVsyncChild->SendUnobserve();
+      Unused << mVsyncChild->SendUnobserve();
       mVsyncChild->SetVsyncObserver(nullptr);
       mVsyncChild = nullptr;
     }
@@ -412,7 +447,8 @@ private:
     if (XRE_IsParentProcess()) {
       mVsyncDispatcher->SetParentRefreshTimer(mVsyncObserver);
     } else {
-      unused << mVsyncChild->SendObserve();
+      Unused << mVsyncChild->SendObserve();
+      mVsyncObserver->OnTimerStart();
     }
   }
 
@@ -421,7 +457,7 @@ private:
     if (XRE_IsParentProcess()) {
       mVsyncDispatcher->SetParentRefreshTimer(nullptr);
     } else {
-      unused << mVsyncChild->SendUnobserve();
+      Unused << mVsyncChild->SendUnobserve();
     }
   }
 
@@ -735,9 +771,6 @@ GetFirstFrameDelay(imgIRequest* req)
 /* static */ void
 nsRefreshDriver::InitializeStatics()
 {
-  if (!gLog) {
-    gLog = PR_NewLogModule("nsRefreshDriver");
-  }
 }
 
 /* static */ void

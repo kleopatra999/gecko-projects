@@ -225,19 +225,19 @@ public:
    * Get corresponding service channel of specific service on remote device.
    * It's usually the very first step of establishing an outbound connection.
    *
-   * @param aObjectPath Object path of remote device
+   * @param aObjectPath Address of remote device
    * @param aServiceUuid UUID of the target service
    * @param aManager Instance which has callback function OnGetServiceChannel()
    *
    * @return NS_OK if the task begins, NS_ERROR_FAILURE otherwise
    */
   virtual nsresult
-  GetServiceChannel(const nsAString& aDeviceAddress,
-                    const nsAString& aServiceUuid,
+  GetServiceChannel(const BluetoothAddress& aDeviceAddress,
+                    const BluetoothUuid& aServiceUuid,
                     BluetoothProfileManagerBase* aManager) = 0;
 
   virtual bool
-  UpdateSdpRecords(const nsAString& aDeviceAddress,
+  UpdateSdpRecords(const BluetoothAddress& aDeviceAddress,
                    BluetoothProfileManagerBase* aManager) = 0;
 
   virtual void
@@ -311,6 +311,13 @@ public:
   IsScoConnected(BluetoothReplyRunnable* aRunnable) = 0;
 
   virtual void
+  SetObexPassword(const nsAString& aPassword,
+                  BluetoothReplyRunnable* aRunnable) = 0;
+
+  virtual void
+  RejectObexAuth(BluetoothReplyRunnable* aRunnable) = 0;
+
+  virtual void
   ReplyTovCardPulling(BlobParent* aBlobParent,
                       BlobChild* aBlobChild,
                       BluetoothReplyRunnable* aRunnable) = 0;
@@ -381,7 +388,8 @@ public:
 
   virtual void
   ReplyToMapSendMessage(
-    long aMasId, bool aStatus, BluetoothReplyRunnable* aRunnable) = 0;
+    long aMasId, const nsAString& aHandleId, bool aStatus,
+    BluetoothReplyRunnable* aRunnable) = 0;
 
   virtual void
   ReplyToMapMessageUpdate(

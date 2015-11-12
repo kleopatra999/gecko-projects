@@ -61,6 +61,9 @@ if (AppConstants.MOZ_SAFE_BROWSING) {
                                     "resource://gre/modules/SafeBrowsing.jsm");
 }
 
+XPCOMUtils.defineLazyModuleGetter(this, "BrowserUtils",
+                                  "resource://gre/modules/BrowserUtils.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
                                   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 
@@ -932,7 +935,7 @@ var BrowserApp = {
         let doc = aTarget.ownerDocument;
         let imageCache = Cc["@mozilla.org/image/tools;1"].getService(Ci.imgITools)
                                                          .getImgCacheForDocument(doc);
-        let props = imageCache.findEntryProperties(aTarget.currentURI, doc.characterSet);
+        let props = imageCache.findEntryProperties(aTarget.currentURI, doc);
         let src = aTarget.src;
         return {
           title: src,
@@ -997,10 +1000,29 @@ var BrowserApp = {
 
     NativeWindow.contextmenus.add(stringGetter("contextmenu.showImage"),
       NativeWindow.contextmenus.imageBlockingPolicyContext,
-      function(target) {
+      function(aTarget) {
         UITelemetry.addEvent("action.1", "contextmenu", null, "web_show_image");
-        target.setAttribute("data-ctv-show", "true");
-        target.setAttribute("src", target.getAttribute("data-ctv-src"));
+        aTarget.setAttribute("data-ctv-show", "true");
+        aTarget.setAttribute("src", aTarget.getAttribute("data-ctv-src"));
+
+        // Shows a toast to unblock all images if browser.image_blocking.enabled is enabled.
+        let blockedImgs = aTarget.ownerDocument.querySelectorAll("[data-ctv-src]");
+        if (blockedImgs.length == 0) {
+          return;
+        }
+        let message = Strings.browser.GetStringFromName("imageblocking.downloadedImage");
+        NativeWindow.toast.show(message, "short", {
+          button: {
+            label: Strings.browser.GetStringFromName("imageblocking.showAllImages"),
+            callback: () => {
+              UITelemetry.addEvent("action.1", "toast", null, "web_show_all_image");
+              for (let i = 0; i < blockedImgs.length; ++i) {
+                blockedImgs[i].setAttribute("data-ctv-show", "true");
+                blockedImgs[i].setAttribute("src", blockedImgs[i].getAttribute("data-ctv-src"));
+              }
+            },
+          }
+        });
     });
   },
 
@@ -1534,6 +1556,7 @@ var BrowserApp = {
         case "network.cookie.cookieBehavior":
         case "font.size.inflation.minTwips":
         case "home.sync.updateMode":
+        case "browser.image_blocking":
           pref.type = "string";
           pref.value = pref.value.toString();
           break;
@@ -1610,6 +1633,7 @@ var BrowserApp = {
       case "network.cookie.cookieBehavior":
       case "font.size.inflation.minTwips":
       case "home.sync.updateMode":
+      case "browser.image_blocking":
         json.type = "int";
         json.value = parseInt(json.value);
         break;
@@ -2613,11 +2637,7 @@ var NativeWindow = {
 
     imageBlockingPolicyContext: {
       matches: function imageBlockingPolicyContextMatches(aElement) {
-        if (!Services.prefs.getBoolPref("browser.image_blocking.enabled")) {
-          return false;
-        }
-
-        if (aElement instanceof Ci.nsIDOMHTMLImageElement) {
+        if (aElement instanceof Ci.nsIDOMHTMLImageElement && aElement.getAttribute("data-ctv-src")) {
           // Only show the menuitem if we are blocking the image
           if (aElement.getAttribute("data-ctv-show") == "true") {
             return false;
@@ -3117,6 +3137,7 @@ var NativeWindow = {
     _copyStringToDefaultClipboard: function(aString) {
       let clipboard = Cc["@mozilla.org/widget/clipboardhelper;1"].getService(Ci.nsIClipboardHelper);
       clipboard.copyString(aString);
+      NativeWindow.toast.show(Strings.browser.GetStringFromName("selectionHelper.textCopied"), "short");
     },
 
     _stripScheme: function(aString) {
@@ -3472,6 +3493,10 @@ nsBrowserAccess.prototype = {
 
   isTabContentWindow: function(aWindow) {
     return BrowserApp.getBrowserForWindow(aWindow) != null;
+  },
+
+  canClose() {
+    return BrowserUtils.canCloseWindow(window);
   },
 };
 
@@ -4502,10 +4527,7 @@ Tab.prototype = {
     if (!ParentalControls.isAllowed(ParentalControls.VISIT_FILE_URLS, fixedURI)) {
       aRequest.cancel(Cr.NS_BINDING_ABORTED);
 
-      aRequest = this.browser.docShell.displayLoadError(Cr.NS_ERROR_UNKNOWN_PROTOCOL, fixedURI, null);
-      if (aRequest) {
-        fixedURI = aRequest.URI;
-      }
+      this.browser.docShell.displayLoadError(Cr.NS_ERROR_UNKNOWN_PROTOCOL, fixedURI, null);
     }
 
     let contentType = contentWin.document.contentType;
@@ -4767,7 +4789,9 @@ var BrowserEventHandler = {
 
     InitLater(() => BrowserApp.deck.addEventListener("click", InputWidgetHelper, true));
     InitLater(() => BrowserApp.deck.addEventListener("click", SelectHelper, true));
-    InitLater(() => BrowserApp.deck.addEventListener("InsecureLoginFormsStateChange", IdentityHandler.sendLoginInsecure, true));
+    if (AppConstants.NIGHTLY_BUILD) {
+      InitLater(() => BrowserApp.deck.addEventListener("InsecureLoginFormsStateChange", IdentityHandler.sendLoginInsecure, true));
+    }
 
     // ReaderViews support backPress listeners.
     Messaging.addListener(() => {

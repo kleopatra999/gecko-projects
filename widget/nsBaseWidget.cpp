@@ -692,16 +692,16 @@ nsBaseWidget::IsWindowClipRegionEqual(const nsTArray<nsIntRect>& aRects)
 {
   return mClipRects &&
          mClipRectCount == aRects.Length() &&
-         memcmp(mClipRects, aRects.Elements(), sizeof(nsIntRect)*mClipRectCount) == 0;
+         memcmp(mClipRects.get(), aRects.Elements(), sizeof(nsIntRect)*mClipRectCount) == 0;
 }
 
 void
 nsBaseWidget::StoreWindowClipRegion(const nsTArray<nsIntRect>& aRects)
 {
   mClipRectCount = aRects.Length();
-  mClipRects = new nsIntRect[mClipRectCount];
+  mClipRects = MakeUnique<nsIntRect[]>(mClipRectCount);
   if (mClipRects) {
-    memcpy(mClipRects, aRects.Elements(), sizeof(nsIntRect)*mClipRectCount);
+    memcpy(mClipRects.get(), aRects.Elements(), sizeof(nsIntRect)*mClipRectCount);
   }
 }
 
@@ -862,7 +862,7 @@ CompositorParent* nsBaseWidget::NewCompositorParent(int aSurfaceWidth,
 
 void nsBaseWidget::CreateCompositor()
 {
-  nsIntRect rect;
+  LayoutDeviceIntRect rect;
   GetBounds(rect);
   CreateCompositor(rect.width, rect.height);
 }
@@ -902,7 +902,7 @@ void nsBaseWidget::ConfigureAPZCTreeManager()
     MOZ_ASSERT(NS_IsMainThread());
     APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
         treeManager.get(), &APZCTreeManager::SetAllowedTouchBehavior,
-        aInputBlockId, aFlags));
+        aInputBlockId, nsTArray<TouchBehaviorFlags>(aFlags)));
   };
 
   RefPtr<GeckoContentController> controller = CreateRootContentController();
@@ -934,7 +934,7 @@ nsBaseWidget::SetConfirmedTargetAPZC(uint64_t aInputBlockId,
   void (APZCTreeManager::*setTargetApzcFunc)(uint64_t, const nsTArray<ScrollableLayerGuid>&)
           = &APZCTreeManager::SetTargetAPZC;
   APZThreadUtils::RunOnControllerThread(NewRunnableMethod(
-    mAPZC.get(), setTargetApzcFunc, aInputBlockId, mozilla::Move(aTargets)));
+    mAPZC.get(), setTargetApzcFunc, aInputBlockId, nsTArray<ScrollableLayerGuid>(aTargets)));
 }
 
 void
@@ -1006,7 +1006,8 @@ nsBaseWidget::ProcessUntransformedAPZEvent(WidgetInputEvent* aEvent,
         APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
             aGuid, aInputBlockId);
       }
-      mAPZEventState->ProcessTouchEvent(*touchEvent, aGuid, aInputBlockId, aApzResponse);
+      mAPZEventState->ProcessTouchEvent(*touchEvent, aGuid, aInputBlockId,
+          aApzResponse, status);
     } else if (WidgetWheelEvent* wheelEvent = aEvent->AsWheelEvent()) {
       if (wheelEvent->mFlags.mHandledByAPZ) {
         APZCCallbackHelper::SendSetTargetAPZCNotification(this, GetDocument(), *aEvent,
@@ -1016,6 +1017,8 @@ nsBaseWidget::ProcessUntransformedAPZEvent(WidgetInputEvent* aEvent,
         }
         mAPZEventState->ProcessWheelEvent(*wheelEvent, aGuid, aInputBlockId);
       }
+    } else if (WidgetMouseEvent* mouseEvent = aEvent->AsMouseEvent()) {
+      mAPZEventState->ProcessMouseEvent(*mouseEvent, aGuid, aInputBlockId);
     }
   }
 
@@ -1256,7 +1259,7 @@ NS_METHOD nsBaseWidget::ResizeClient(double aWidth,
   NS_ASSERTION((aWidth >=0) , "Negative width passed to ResizeClient");
   NS_ASSERTION((aHeight >=0), "Negative height passed to ResizeClient");
 
-  nsIntRect clientBounds;
+  LayoutDeviceIntRect clientBounds;
   GetClientBounds(clientBounds);
 
   // GetClientBounds and mBounds are device pixels; scale back to display pixels
@@ -1280,7 +1283,7 @@ NS_METHOD nsBaseWidget::ResizeClient(double aX,
   NS_ASSERTION((aWidth >=0) , "Negative width passed to ResizeClient");
   NS_ASSERTION((aHeight >=0), "Negative height passed to ResizeClient");
 
-  nsIntRect clientBounds;
+  LayoutDeviceIntRect clientBounds;
   GetClientBounds(clientBounds);
 
   double scale = BoundsUseDisplayPixels() ? 1.0 / GetDefaultScale().scale : 1.0;
@@ -1304,16 +1307,16 @@ NS_METHOD nsBaseWidget::ResizeClient(double aX,
 * If the implementation of nsWindow supports borders this method MUST be overridden
 *
 **/
-NS_METHOD nsBaseWidget::GetClientBounds(nsIntRect &aRect)
+NS_METHOD nsBaseWidget::GetClientBoundsUntyped(nsIntRect &aRect)
 {
-  return GetBounds(aRect);
+  return GetBoundsUntyped(aRect);
 }
 
 /**
 * If the implementation of nsWindow supports borders this method MUST be overridden
 *
 **/
-NS_METHOD nsBaseWidget::GetBounds(nsIntRect &aRect)
+NS_METHOD nsBaseWidget::GetBoundsUntyped(nsIntRect &aRect)
 {
   aRect = mBounds;
   return NS_OK;
@@ -1324,17 +1327,17 @@ NS_METHOD nsBaseWidget::GetBounds(nsIntRect &aRect)
 * this method must be overridden
 *
 **/
-NS_METHOD nsBaseWidget::GetScreenBounds(nsIntRect &aRect)
+NS_METHOD nsBaseWidget::GetScreenBoundsUntyped(nsIntRect &aRect)
 {
-  return GetBounds(aRect);
+  return GetBoundsUntyped(aRect);
 }
 
-NS_METHOD nsBaseWidget::GetRestoredBounds(nsIntRect &aRect)
+NS_METHOD nsBaseWidget::GetRestoredBoundsUntyped(nsIntRect &aRect)
 {
   if (SizeMode() != nsSizeMode_Normal) {
     return NS_ERROR_FAILURE;
   }
-  return GetScreenBounds(aRect);
+  return GetScreenBoundsUntyped(aRect);
 }
 
 nsIntPoint nsBaseWidget::GetClientOffset()
@@ -1722,7 +1725,7 @@ nsIntRect
 nsBaseWidget::GetScaledScreenBounds()
 {
   nsIntRect bounds;
-  GetScreenBounds(bounds);
+  GetScreenBoundsUntyped(bounds);
   CSSToLayoutDeviceScale scale = GetDefaultScale();
   bounds.x = NSToIntRound(bounds.x / scale.scale);
   bounds.y = NSToIntRound(bounds.y / scale.scale);
@@ -1966,7 +1969,7 @@ nsIWidget::SnapshotWidgetOnScreen()
     return nullptr;
   }
 
-  nsIntRect bounds;
+  LayoutDeviceIntRect bounds;
   GetBounds(bounds);
   if (bounds.IsEmpty()) {
     return nullptr;

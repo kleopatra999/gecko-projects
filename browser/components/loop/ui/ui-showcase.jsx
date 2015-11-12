@@ -556,7 +556,7 @@
         width += 2;
       }
 
-      var cx = React.addons.classSet;
+      var cx = classNames;
       return (
         <div className="example">
           <h3 id={this.makeId()}>
@@ -1288,7 +1288,7 @@
                            width={298}>
               <div className="fx-embedded">
                 <TextChatView dispatcher={dispatcher}
-                              showRoomName={false}
+                              showInitialContext={false}
                               useDesktopPaths={false} />
               </div>
             </FramedExample>
@@ -1302,7 +1302,7 @@
                 <div className="media-wrapper">
                   <TextChatView
                     dispatcher={dispatcher}
-                    showRoomName={true}
+                    showInitialContext={true}
                     useDesktopPaths={false} />
                 </div>
               </div>

@@ -52,11 +52,9 @@ NS_IMPL_ISUPPORTS(OfflineCacheUpdateParent,
 // OfflineCacheUpdateParent <public>
 //-----------------------------------------------------------------------------
 
-// TODO: Bug 1191740 - Add OriginAttributes in TabContext
-OfflineCacheUpdateParent::OfflineCacheUpdateParent(uint32_t aAppId,
-                                                   bool aIsInBrowser)
+OfflineCacheUpdateParent::OfflineCacheUpdateParent(const OriginAttributes& aAttrs)
     : mIPCClosed(false)
-    , mOriginAttributes(aAppId, aIsInBrowser)
+    , mOriginAttributes(aAttrs)
 {
     // Make sure the service has been initialized
     nsOfflineCacheUpdateService::EnsureService();
@@ -156,7 +154,7 @@ OfflineCacheUpdateParent::UpdateStateChanged(nsIOfflineCacheUpdate *aUpdate, uin
 
     uint64_t byteProgress;
     aUpdate->GetByteProgress(&byteProgress);
-    unused << SendNotifyStateEvent(state, byteProgress);
+    Unused << SendNotifyStateEvent(state, byteProgress);
 
     if (state == nsIOfflineCacheUpdateObserver::STATE_FINISHED) {
         // Tell the child the particulars after the update has finished.
@@ -167,7 +165,7 @@ OfflineCacheUpdateParent::UpdateStateChanged(nsIOfflineCacheUpdate *aUpdate, uin
         bool succeeded;
         aUpdate->GetSucceeded(&succeeded);
 
-        unused << SendFinish(succeeded, isUpgrade);
+        Unused << SendFinish(succeeded, isUpgrade);
     }
 
     return NS_OK;
@@ -186,7 +184,7 @@ OfflineCacheUpdateParent::ApplicationCacheAvailable(nsIApplicationCache *aApplic
     nsCString cacheGroupId;
     aApplicationCache->GetGroupID(cacheGroupId);
 
-    unused << SendAssociateDocuments(cacheGroupId, cacheClientId);
+    Unused << SendAssociateDocuments(cacheGroupId, cacheClientId);
     return NS_OK;
 }
 

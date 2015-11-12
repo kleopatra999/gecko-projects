@@ -20,7 +20,7 @@
 #include "nsQueryObject.h"
 #include "nsIContentInlines.h"
 #include "nsIContentViewer.h"
-#include "mozilla/css/StyleRule.h"
+#include "mozilla/css/Declaration.h"
 #include "nsIDocument.h"
 #include "nsIDocumentEncoder.h"
 #include "nsIDOMHTMLDocument.h"
@@ -35,7 +35,6 @@
 #include "nsHTMLStyleSheet.h"
 #include "nsIHTMLDocument.h"
 #include "nsPIDOMWindow.h"
-#include "nsIStyleRule.h"
 #include "nsIURL.h"
 #include "nsEscape.h"
 #include "nsIFrameInlines.h"
@@ -84,6 +83,8 @@
 #include "nsITextControlElement.h"
 #include "mozilla/dom/Element.h"
 #include "HTMLFieldSetElement.h"
+#include "nsTextNode.h"
+#include "HTMLBRElement.h"
 #include "HTMLMenuElement.h"
 #include "nsDOMMutationObserver.h"
 #include "mozilla/Preferences.h"
@@ -104,6 +105,7 @@
 #include "nsGlobalWindow.h"
 #include "mozilla/dom/HTMLBodyElement.h"
 #include "imgIContainer.h"
+#include "nsComputedDOMStyle.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -223,15 +225,14 @@ nsGenericHTMLElement::CopyInnerTo(Element* aDst)
     value->ToString(valStr);
 
     if (name->Equals(nsGkAtoms::style, kNameSpaceID_None) &&
-        value->Type() == nsAttrValue::eCSSStyleRule) {
+        value->Type() == nsAttrValue::eCSSDeclaration) {
       // We can't just set this as a string, because that will fail
       // to reparse the string into style data until the node is
       // inserted into the document.  Clone the Rule instead.
-      RefPtr<mozilla::css::Rule> ruleClone = value->GetCSSStyleRuleValue()->Clone();
-      RefPtr<mozilla::css::StyleRule> styleRule = do_QueryObject(ruleClone);
-      NS_ENSURE_TRUE(styleRule, NS_ERROR_UNEXPECTED);
+      RefPtr<css::Declaration> declClone =
+        new css::Declaration(*value->GetCSSDeclarationValue());
 
-      rv = aDst->SetInlineStyleRule(styleRule, &valStr, false);
+      rv = aDst->SetInlineStyleDeclaration(declClone, &valStr, false);
       NS_ENSURE_SUCCESS(rv, rv);
 
       continue;
@@ -3291,4 +3292,78 @@ nsGenericHTMLElement::NewURIFromString(const nsAString& aURISpec,
   }
 
   return NS_OK;
+}
+
+void
+nsGenericHTMLElement::GetInnerText(mozilla::dom::DOMString& aValue,
+                                   mozilla::ErrorResult& aError)
+{
+  if (!GetPrimaryFrame(Flush_Layout)) {
+    RefPtr<nsStyleContext> sc =
+      nsComputedDOMStyle::GetStyleContextForElementNoFlush(this, nullptr, nullptr);
+    if (!sc || sc->StyleDisplay()->mDisplay == NS_STYLE_DISPLAY_NONE ||
+        !IsInComposedDoc()) {
+      GetTextContentInternal(aValue, aError);
+      return;
+    }
+  }
+
+  nsRange::GetInnerTextNoFlush(aValue, aError, this, 0, this, GetChildCount());
+}
+
+void
+nsGenericHTMLElement::SetInnerText(const nsAString& aValue)
+{
+  // Fire DOMNodeRemoved mutation events before we do anything else.
+  nsCOMPtr<nsIContent> kungFuDeathGrip;
+
+  // Batch possible DOMSubtreeModified events.
+  mozAutoSubtreeModified subtree(OwnerDoc(), nullptr);
+  FireNodeRemovedForChildren();
+
+  // Might as well stick a batch around this since we're performing several
+  // mutations.
+  mozAutoDocUpdate updateBatch(GetComposedDoc(),
+    UPDATE_CONTENT_MODEL, true);
+  nsAutoMutationBatch mb;
+
+  uint32_t childCount = GetChildCount();
+
+  mb.Init(this, true, false);
+  for (uint32_t i = 0; i < childCount; ++i) {
+    RemoveChildAt(0, true);
+  }
+  mb.RemovalDone();
+
+  nsString str;
+  const char16_t* s = aValue.BeginReading();
+  const char16_t* end = aValue.EndReading();
+  while (true) {
+    if (s != end && *s == '\r' && s + 1 != end && s[1] == '\n') {
+      // a \r\n pair should only generate one <br>, so just skip the \r
+      ++s;
+    }
+    if (s == end || *s == '\r' || *s == '\n') {
+      if (!str.IsEmpty()) {
+        RefPtr<nsTextNode> textContent =
+          new nsTextNode(NodeInfo()->NodeInfoManager());
+        textContent->SetText(str, true);
+        AppendChildTo(textContent, true);
+      }
+      if (s == end) {
+        break;
+      }
+      str.Truncate();
+      already_AddRefed<mozilla::dom::NodeInfo> ni =
+        NodeInfo()->NodeInfoManager()->GetNodeInfo(nsGkAtoms::br,
+          nullptr, kNameSpaceID_XHTML, nsIDOMNode::ELEMENT_NODE);
+      RefPtr<HTMLBRElement> br = new HTMLBRElement(ni);
+      AppendChildTo(br, true);
+    } else {
+      str.Append(*s);
+    }
+    ++s;
+  }
+
+  mb.NodesAdded();
 }

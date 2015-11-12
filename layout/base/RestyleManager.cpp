@@ -1341,7 +1341,7 @@ RestyleManager::GetMaxAnimationGenerationForFrame(nsIFrame* aFrame)
 void
 RestyleManager::RestyleForEmptyChange(Element* aContainer)
 {
-  // In some cases (:empty + E, :empty ~ E), a change if the content of
+  // In some cases (:empty + E, :empty ~ E), a change in the content of
   // an element requires restyling its parent's siblings.
   nsRestyleHint hint = eRestyle_Subtree;
   nsIContent* grandparent = aContainer->GetParent();
@@ -3956,6 +3956,15 @@ ElementRestyler::RestyleSelf(nsIFrame* aSelf,
       // for the other frames sharing the style context.
       LOG_RESTYLE_CONTINUE("the old style context is shared");
       result = eRestyleResult_Continue;
+
+      // It's not safe to return eRestyleResult_StopWithStyleChange,
+      // as even though we might not have cached structs for inherited
+      // properties on oldContext (and thus our samePointerStructs
+      // check later will look OK), oldContext and newContext might
+      // represent different inherited style data, and some of the
+      // elements currently sharing oldContext might need to keep it
+      // rather than get restyled to use newContext.
+      canStopWithStyleChange = false;
     }
 
     // Look at some details of the new style context to see if it would

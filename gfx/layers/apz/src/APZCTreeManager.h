@@ -404,6 +404,14 @@ public:
    */
   RefPtr<const OverscrollHandoffChain> BuildOverscrollHandoffChain(const RefPtr<AsyncPanZoomController>& aInitialTarget);
 
+  /**
+   * Function used to disable LongTap gestures.
+   *
+   * On slow running tests, drags and touch events can be misinterpreted
+   * as a long tap. This allows tests to disable long tap gesture detection.
+   */
+  static void SetLongTapEnabled(bool aTapGestureEnabled);
+
 protected:
   // Protected destructor, to discourage deletion outside of Release():
   virtual ~APZCTreeManager();
@@ -441,8 +449,6 @@ private:
   HitTestingTreeNode* FindTargetNode(HitTestingTreeNode* aNode,
                                      const ScrollableLayerGuid& aGuid,
                                      GuidComparator aComparator);
-  HitTestingTreeNode* FindScrollNode(HitTestingTreeNode* aNode,
-                                     const AsyncDragMetrics& aDragMetrics);
   AsyncPanZoomController* GetAPZCAtPoint(HitTestingTreeNode* aNode,
                                          const ParentLayerPoint& aHitTestPoint,
                                          HitTestResult* aOutHitResult);
@@ -465,11 +471,7 @@ private:
                                   ScrollableLayerGuid* aOutTargetGuid,
                                   uint64_t* aOutInputBlockId);
   void UpdateWheelTransaction(WidgetInputEvent& aEvent);
-  void UpdateZoomConstraintsRecursively(HitTestingTreeNode* aNode,
-                                        const ZoomConstraints& aConstraints);
   void FlushRepaintsToClearScreenToGeckoTransform();
-  void FlushRepaintsRecursively(HitTestingTreeNode* aNode);
-  void FlushPendingRepaintRecursively(HitTestingTreeNode* aNode, uint64_t aLayersId);
 
   already_AddRefed<HitTestingTreeNode> RecycleOrCreateNode(TreeBuildingState& aState,
                                                            AsyncPanZoomController* aApzc,
