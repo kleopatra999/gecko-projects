@@ -1,3 +1,5 @@
+BORK BORK BORK!
+
 An explanation of the Mozilla Source Code Directory Structure and links to
 project pages with documentation can be found at:
 
