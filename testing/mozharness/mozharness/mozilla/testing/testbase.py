@@ -395,6 +395,7 @@ You can set this by:
             'robocop': 'mochitest',
             'mochitest-chrome': 'mochitest',
             'mochitest-gl': 'mochitest',
+            'mochitest-push': 'mochitest',
             'webapprt': 'mochitest',
             'jsreftest': 'reftest',
             'crashtest': 'reftest',
