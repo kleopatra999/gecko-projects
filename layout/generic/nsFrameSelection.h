@@ -597,7 +597,8 @@ public:
   nsFrameSelection();
 
   void StartBatchChanges();
-  void EndBatchChanges();
+  void EndBatchChanges(int16_t aReason = nsISelectionListener::NO_REASON);
+
   /*unsafe*/
   nsresult DeleteFromDocument();
 
@@ -621,9 +622,7 @@ private:
                          uint32_t aContentOffset,
                          nsSelectionAmount aAmount,
                          CaretAssociateHint aHint);
-  void BidiLevelFromClick(nsIContent *aNewFocus,
-                          uint32_t aContentOffset,
-                          CaretAssociateHint aHint);
+  void BidiLevelFromClick(nsIContent *aNewFocus, uint32_t aContentOffset);
   nsPrevNextBidiLevels GetPrevNextBidiLevels(nsIContent *aNode,
                                              uint32_t aContentOffset,
                                              CaretAssociateHint aHint,

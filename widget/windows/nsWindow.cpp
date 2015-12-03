@@ -490,10 +490,10 @@ ShouldCacheTitleBarInfo(nsWindowType aWindowType, nsBorderStyle aBorderStyle)
 
 // Create the proper widget
 nsresult
-nsWindow::Create(nsIWidget *aParent,
+nsWindow::Create(nsIWidget* aParent,
                  nsNativeWidget aNativeParent,
-                 const nsIntRect &aRect,
-                 nsWidgetInitData *aInitData)
+                 const LayoutDeviceIntRect& aRect,
+                 nsWidgetInitData* aInitData)
 {
   nsWidgetInitData defaultInitData;
   if (!aInitData)
@@ -507,7 +507,7 @@ nsWindow::Create(nsIWidget *aParent,
                           nullptr : aParent;
 
   mIsTopWidgetWindow = (nullptr == baseParent);
-  mBounds = aRect;
+  mBounds = aRect.ToUnknownRect();
 
   // Ensure that the toolkit is created.
   nsToolkit::GetToolkit();
@@ -1864,7 +1864,7 @@ NS_METHOD nsWindow::SetFocus(bool aRaise)
 // Return the window's full dimensions in screen coordinates.
 // If the window has a parent, converts the origin to an offset
 // of the parent's screen origin.
-NS_METHOD nsWindow::GetBounds(nsIntRect &aRect)
+NS_METHOD nsWindow::GetBounds(LayoutDeviceIntRect& aRect)
 {
   if (mWnd) {
     RECT r;
@@ -1918,7 +1918,7 @@ NS_METHOD nsWindow::GetBounds(nsIntRect &aRect)
       // adjust for chrome
       nsWindow* pWidget = static_cast<nsWindow*>(GetParent());
       if (pWidget && pWidget->IsTopLevelWidget()) {
-        nsIntPoint clientOffset = pWidget->GetClientOffset();
+        LayoutDeviceIntPoint clientOffset = pWidget->GetClientOffset();
         r.left -= clientOffset.x;
         r.top  -= clientOffset.y;
       }
@@ -1926,19 +1926,19 @@ NS_METHOD nsWindow::GetBounds(nsIntRect &aRect)
     aRect.x = r.left;
     aRect.y = r.top;
   } else {
-    aRect = mBounds;
+    aRect = LayoutDeviceIntRect::FromUnknownRect(mBounds);
   }
   return NS_OK;
 }
 
 // Get this component dimension
-NS_METHOD nsWindow::GetClientBounds(nsIntRect &aRect)
+NS_METHOD nsWindow::GetClientBounds(LayoutDeviceIntRect& aRect)
 {
   if (mWnd) {
     RECT r;
     VERIFY(::GetClientRect(mWnd, &r));
 
-    nsIntRect bounds;
+    LayoutDeviceIntRect bounds;
     GetBounds(bounds);
     aRect.MoveTo(bounds.TopLeft() + GetClientOffset());
     aRect.width  = r.right - r.left;
@@ -1951,7 +1951,7 @@ NS_METHOD nsWindow::GetClientBounds(nsIntRect &aRect)
 }
 
 // Like GetBounds, but don't offset by the parent
-NS_METHOD nsWindow::GetScreenBounds(nsIntRect &aRect)
+NS_METHOD nsWindow::GetScreenBounds(LayoutDeviceIntRect& aRect)
 {
   if (mWnd) {
     RECT r;
@@ -1961,13 +1961,13 @@ NS_METHOD nsWindow::GetScreenBounds(nsIntRect &aRect)
     aRect.height = r.bottom - r.top;
     aRect.x = r.left;
     aRect.y = r.top;
-  } else
-    aRect = mBounds;
-
+  } else {
+    aRect = LayoutDeviceIntRect::FromUnknownRect(mBounds);
+  }
   return NS_OK;
 }
 
-NS_METHOD nsWindow::GetRestoredBounds(nsIntRect &aRect)
+NS_METHOD nsWindow::GetRestoredBounds(LayoutDeviceIntRect &aRect)
 {
   if (SizeMode() == nsSizeMode_Normal) {
     return GetScreenBounds(aRect);
@@ -1993,18 +1993,19 @@ NS_METHOD nsWindow::GetRestoredBounds(nsIntRect &aRect)
   return NS_OK;
 }
 
-// return the x,y offset of the client area from the origin
-// of the window. If the window is borderless returns (0,0).
-nsIntPoint nsWindow::GetClientOffset()
+// Return the x,y offset of the client area from the origin of the window. If
+// the window is borderless returns (0,0).
+LayoutDeviceIntPoint
+nsWindow::GetClientOffset()
 {
   if (!mWnd) {
-    return nsIntPoint(0, 0);
+    return LayoutDeviceIntPoint(0, 0);
   }
 
   RECT r1;
   GetWindowRect(mWnd, &r1);
   LayoutDeviceIntPoint pt = WidgetToScreenOffset();
-  return nsIntPoint(pt.x - r1.left, pt.y - r1.top);
+  return LayoutDeviceIntPoint(pt.x - r1.left, pt.y - r1.top);
 }
 
 void
@@ -2017,17 +2018,17 @@ nsWindow::SetDrawsInTitlebar(bool aState)
 
   if (aState) {
     // top, right, bottom, left for nsIntMargin
-    nsIntMargin margins(0, -1, -1, -1);
+    LayoutDeviceIntMargin margins(0, -1, -1, -1);
     SetNonClientMargins(margins);
   }
   else {
-    nsIntMargin margins(-1, -1, -1, -1);
+    LayoutDeviceIntMargin margins(-1, -1, -1, -1);
     SetNonClientMargins(margins);
   }
 }
 
 NS_IMETHODIMP
-nsWindow::GetNonClientMargins(nsIntMargin &margins)
+nsWindow::GetNonClientMargins(LayoutDeviceIntMargin &margins)
 {
   nsWindow * window = GetTopLevelWindow(true);
   if (window && window != this) {
@@ -2302,7 +2303,7 @@ nsWindow::UpdateNonClientMargins(int32_t aSizeMode, bool aReflowWindow)
 }
 
 NS_IMETHODIMP
-nsWindow::SetNonClientMargins(nsIntMargin &margins)
+nsWindow::SetNonClientMargins(LayoutDeviceIntMargin &margins)
 {
   if (!mIsTopWidgetWindow ||
       mBorderStyle == eBorderStyle_none)
@@ -2652,7 +2653,7 @@ void nsWindow::SetTransparencyMode(nsTransparencyMode aMode)
   GetTopLevelWindow(true)->SetWindowTranslucencyInner(aMode);
 }
 
-void nsWindow::UpdateOpaqueRegion(const nsIntRegion &aOpaqueRegion)
+void nsWindow::UpdateOpaqueRegion(const LayoutDeviceIntRegion& aOpaqueRegion)
 {
   if (!HasGlass() || GetParent())
     return;
@@ -2662,22 +2663,23 @@ void nsWindow::UpdateOpaqueRegion(const nsIntRegion &aOpaqueRegion)
   // all values must be set to -1 to get a full sheet of glass.
   MARGINS margins = { -1, -1, -1, -1 };
   if (!aOpaqueRegion.IsEmpty()) {
-    nsIntRect pluginBounds;
+    LayoutDeviceIntRect pluginBounds;
     for (nsIWidget* child = GetFirstChild(); child; child = child->GetNextSibling()) {
       if (child->IsPlugin()) {
         // Collect the bounds of all plugins for GetLargestRectangle.
-        nsIntRect childBounds;
+        LayoutDeviceIntRect childBounds;
         child->GetBounds(childBounds);
         pluginBounds.UnionRect(pluginBounds, childBounds);
       }
     }
 
-    nsIntRect clientBounds;
+    LayoutDeviceIntRect clientBounds;
     GetClientBounds(clientBounds);
 
     // Find the largest rectangle and use that to calculate the inset. Our top
     // priority is to include the bounds of all plugins.
-    nsIntRect largest = aOpaqueRegion.GetLargestRectangle(pluginBounds);
+    LayoutDeviceIntRect largest =
+      aOpaqueRegion.GetLargestRectangle(pluginBounds);
     margins.cxLeftWidth = largest.x;
     margins.cxRightWidth = clientBounds.width - largest.XMost();
     margins.cyBottomHeight = clientBounds.height - largest.YMost();
@@ -2707,7 +2709,7 @@ void nsWindow::UpdateOpaqueRegion(const nsIntRegion &aOpaqueRegion)
 **************************************************************/
 
 void
-nsWindow::UpdateWindowDraggingRegion(const nsIntRegion& aRegion)
+nsWindow::UpdateWindowDraggingRegion(const LayoutDeviceIntRegion& aRegion)
 {
   if (mDraggableRegion != aRegion) {
     mDraggableRegion = aRegion;
@@ -2847,10 +2849,9 @@ NS_METHOD nsWindow::Invalidate(bool aEraseBackground,
 }
 
 // Invalidate this component visible area
-NS_METHOD nsWindow::Invalidate(const nsIntRect & aRect)
+NS_METHOD nsWindow::Invalidate(const LayoutDeviceIntRect& aRect)
 {
-  if (mWnd)
-  {
+  if (mWnd) {
 #ifdef WIDGET_DEBUG_OUTPUT
     debug_DumpInvalidate(stdout,
                          this,
@@ -3380,16 +3381,9 @@ NS_METHOD nsWindow::EnableDragDrop(bool aEnable)
 
 NS_METHOD nsWindow::CaptureMouse(bool aCapture)
 {
-  if (!nsToolkit::gMouseTrailer) {
-    NS_ERROR("nsWindow::CaptureMouse called after nsToolkit destroyed");
-    return NS_OK;
-  }
-
   if (aCapture) {
-    nsToolkit::gMouseTrailer->SetCaptureWindow(mWnd);
     ::SetCapture(mWnd);
   } else {
-    nsToolkit::gMouseTrailer->SetCaptureWindow(nullptr);
     ::ReleaseCapture();
   }
   sIsInMouseCapture = aCapture;
@@ -3548,7 +3542,7 @@ nsWindow::GetLayerManager(PLayerTransactionChild* aShadowManager,
  **************************************************************/
  
 NS_IMETHODIMP
-nsWindow::OnDefaultButtonLoaded(const nsIntRect &aButtonRect)
+nsWindow::OnDefaultButtonLoaded(const LayoutDeviceIntRect& aButtonRect)
 {
   if (aButtonRect.IsEmpty())
     return NS_OK;
@@ -3571,13 +3565,13 @@ nsWindow::OnDefaultButtonLoaded(const nsIntRect &aButtonRect)
       return NS_OK;
   }
 
-  nsIntRect widgetRect;
+  LayoutDeviceIntRect widgetRect;
   nsresult rv = GetScreenBounds(widgetRect);
   NS_ENSURE_SUCCESS(rv, rv);
-  nsIntRect buttonRect(aButtonRect + widgetRect.TopLeft());
+  LayoutDeviceIntRect buttonRect(aButtonRect + widgetRect.TopLeft());
 
-  nsIntPoint centerOfButton(buttonRect.x + buttonRect.width / 2,
-                            buttonRect.y + buttonRect.height / 2);
+  LayoutDeviceIntPoint centerOfButton(buttonRect.x + buttonRect.width / 2,
+                                      buttonRect.y + buttonRect.height / 2);
   // The center of the button can be outside of the widget.
   // E.g., it could be hidden by scrolling.
   if (!widgetRect.Contains(centerOfButton)) {
@@ -3763,7 +3757,7 @@ nsWindow::UpdateThemeGeometries(const nsTArray<ThemeGeometry>& aThemeGeometries)
   if (!IsWin10OrLater()) {
     for (size_t i = 0; i < aThemeGeometries.Length(); i++) {
       if (aThemeGeometries[i].mType == nsNativeThemeWin::eThemeGeometryTypeWindowButtons) {
-        nsIntRect bounds = aThemeGeometries[i].mRect;
+        LayoutDeviceIntRect bounds = aThemeGeometries[i].mRect;
         clearRegion.Or(clearRegion, nsIntRect(bounds.X(), bounds.Y(), bounds.Width(), bounds.Height() - 2.0));
         clearRegion.Or(clearRegion, nsIntRect(bounds.X() + 1.0, bounds.YMost() - 2.0, bounds.Width() - 1.0, 1.0));
         clearRegion.Or(clearRegion, nsIntRect(bounds.X() + 2.0, bounds.YMost() - 1.0, bounds.Width() - 3.0, 1.0));
@@ -3798,16 +3792,15 @@ nsWindow::GetMaxTouchPoints() const
  *
  **************************************************************/
 
-// Event intialization
-void nsWindow::InitEvent(WidgetGUIEvent& event, nsIntPoint* aPoint)
+// Event initialization
+void nsWindow::InitEvent(WidgetGUIEvent& event, LayoutDeviceIntPoint* aPoint)
 {
   if (nullptr == aPoint) {     // use the point from the event
     // get the message position in client coordinates
     if (mWnd != nullptr) {
-
       DWORD pos = ::GetMessagePos();
       POINT cpos;
-      
+
       cpos.x = GET_X_LPARAM(pos);
       cpos.y = GET_Y_LPARAM(pos);
 
@@ -3818,11 +3811,9 @@ void nsWindow::InitEvent(WidgetGUIEvent& event, nsIntPoint* aPoint)
       event.refPoint.x = 0;
       event.refPoint.y = 0;
     }
-  }
-  else {  
+  } else {
     // use the point override if provided
-    event.refPoint.x = aPoint->x;
-    event.refPoint.y = aPoint->y;
+    event.refPoint = *aPoint;
   }
 
   event.time = ::GetMessageTime();
@@ -4038,15 +4029,13 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
 
   } // switch
 
-  nsIntPoint eventPoint;
-  eventPoint.x = GET_X_LPARAM(lParam);
-  eventPoint.y = GET_Y_LPARAM(lParam);
+  LayoutDeviceIntPoint eventPoint(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 
   WidgetMouseEvent event(true, aEventMessage, this, WidgetMouseEvent::eReal,
                          aIsContextMenuKey ? WidgetMouseEvent::eContextMenuKey :
                                              WidgetMouseEvent::eNormal);
   if (aEventMessage == eContextMenu && aIsContextMenuKey) {
-    nsIntPoint zero(0, 0);
+    LayoutDeviceIntPoint zero(0, 0);
     InitEvent(event, &zero);
   } else {
     InitEvent(event, &eventPoint);
@@ -4060,7 +4049,7 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
   // convert it to pointer events as well
   event.convertToPointer = true;
 
-  nsIntPoint mpScreen = eventPoint + WidgetToScreenOffsetUntyped();
+  LayoutDeviceIntPoint mpScreen = eventPoint + WidgetToScreenOffset();
 
   // Suppress mouse moves caused by widget creation
   if (aEventMessage == eMouseMove) {
@@ -4204,18 +4193,13 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
 
   // call the event callback
   if (mWidgetListener) {
-    if (nsToolkit::gMouseTrailer)
-      nsToolkit::gMouseTrailer->Disable();
     if (aEventMessage == eMouseMove) {
-      if (nsToolkit::gMouseTrailer && !sIsInMouseCapture) {
-        nsToolkit::gMouseTrailer->SetMouseTrailerWindow(mWnd);
-      }
-      nsIntRect rect;
+      LayoutDeviceIntRect rect;
       GetBounds(rect);
       rect.x = 0;
       rect.y = 0;
 
-      if (rect.Contains(LayoutDeviceIntPoint::ToUntyped(event.refPoint))) {
+      if (rect.Contains(event.refPoint)) {
         if (sCurrentWindow == nullptr || sCurrentWindow != this) {
           if ((nullptr != sCurrentWindow) && (!sCurrentWindow->mInDtor)) {
             LPARAM pos = sCurrentWindow->lParamToClient(lParamToScreen(lParam));
@@ -4241,9 +4225,6 @@ nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
     }
 
     result = ConvertStatus(DispatchAPZAwareEvent(&event));
-
-    if (nsToolkit::gMouseTrailer)
-      nsToolkit::gMouseTrailer->Enable();
 
     // Release the widget with NS_IF_RELEASE() just in case
     // the context menu key code in EventListenerManager::HandleEvent()
@@ -5097,6 +5078,15 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
 
     case WM_MOUSEMOVE:
     {
+      if (!mMousePresent) {
+        // First MOOUSEMOVE over the client area. Ask for MOUSELEAVE
+        TRACKMOUSEEVENT mTrack;
+        mTrack.cbSize = sizeof(TRACKMOUSEEVENT);
+        mTrack.dwFlags = TME_LEAVE;
+        mTrack.dwHoverTime = 0;
+        mTrack.hwndTrack = mWnd;
+        TrackMouseEvent(&mTrack);
+      }
       mMousePresent = true;
 
       // Suppress dispatch of pending events
@@ -5610,7 +5600,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
         touchPoint = gestureinfo->ptsLocation;
         touchPoint.ScreenToClient(mWnd);
         WidgetGestureNotifyEvent gestureNotifyEvent(true, eGestureNotify, this);
-        gestureNotifyEvent.refPoint = LayoutDeviceIntPoint::FromUntyped(touchPoint);
+        gestureNotifyEvent.refPoint = LayoutDeviceIntPoint::FromUnknownPoint(touchPoint);
         nsEventStatus status;
         DispatchEvent(&gestureNotifyEvent, status);
         mDisplayPanFeedback = gestureNotifyEvent.displayPanFeedback;
@@ -5905,8 +5895,6 @@ nsWindow::ClientMarginHitTestPoint(int32_t mx, int32_t my)
 TimeStamp
 nsWindow::GetMessageTimeStamp(LONG aEventTime)
 {
-  DWORD eventTime = static_cast<DWORD>(aEventTime);
-
   CurrentWindowsTimeGetter getCurrentTime;
   return TimeConverter().GetTimeStampFromSystemTime(aEventTime,
                                                     getCurrentTime);
@@ -6412,7 +6400,7 @@ bool nsWindow::OnTouch(WPARAM wParam, LPARAM lParam)
 
       // Initialize the touch data.
       SingleTouchData touchData(pInputs[i].dwID,                                      // aIdentifier
-                                ScreenIntPoint::FromUntyped(touchPoint),              // aScreenPoint
+                                ScreenIntPoint::FromUnknownPoint(touchPoint),         // aScreenPoint
                                 /* radius, if known */
                                 pInputs[i].dwFlags & TOUCHINPUTMASKF_CONTACTAREA
                                   ? ScreenSize(
@@ -6537,7 +6525,7 @@ nsWindow::ConfigureChildren(const nsTArray<Configuration>& aConfigurations)
                  "Configured widget is not a child");
     nsresult rv = w->SetWindowClipRegion(configuration.mClipRegion, true);
     NS_ENSURE_SUCCESS(rv, rv);
-    nsIntRect bounds;
+    LayoutDeviceIntRect bounds;
     w->GetBounds(bounds);
     if (bounds.Size() != configuration.mBounds.Size()) {
       w->Resize(configuration.mBounds.x, configuration.mBounds.y,
@@ -6553,11 +6541,11 @@ nsWindow::ConfigureChildren(const nsTArray<Configuration>& aConfigurations)
         // XXX - Workaround for Bug 587508. This will invalidate the part of the
         // plugin window that might be touched by moving content somehow. The
         // underlying problem should be found and fixed!
-        nsIntRegion r;
+        LayoutDeviceIntRegion r;
         r.Sub(bounds, configuration.mBounds);
         r.MoveBy(-bounds.x,
                  -bounds.y);
-        nsIntRect toInvalidate = r.GetBounds();
+        LayoutDeviceIntRect toInvalidate = r.GetBounds();
 
         WinUtils::InvalidatePluginAsWorkaround(w, toInvalidate);
       }
@@ -6691,22 +6679,11 @@ void nsWindow::OnDestroy()
 
   IMEHandler::OnDestroyWindow(this);
 
-  // Turn off mouse trails if enabled.
-  MouseTrailer* mtrailer = nsToolkit::gMouseTrailer;
-  if (mtrailer) {
-    if (mtrailer->GetMouseTrailerWindow() == mWnd)
-      mtrailer->DestroyTimer();
-
-    if (mtrailer->GetCaptureWindow() == mWnd)
-      mtrailer->SetCaptureWindow(nullptr);
-  }
-
   // Free GDI window class objects
   if (mBrush) {
     VERIFY(::DeleteObject(mBrush));
     mBrush = nullptr;
   }
-
 
   // Destroy any custom cursor resources.
   if (mCursor == -1)
@@ -6870,17 +6847,6 @@ nsWindow::GetInputContext()
     mInputContext.mIMEState.mOpen = IMEState::CLOSED;
   }
   return mInputContext;
-}
-
-NS_IMETHODIMP
-nsWindow::GetToggledKeyState(uint32_t aKeyCode, bool* aLEDState)
-{
-#ifdef DEBUG_KBSTATE
-  MOZ_LOG(gWindowsLog, LogLevel::Info, ("GetToggledKeyState\n"));
-#endif 
-  NS_ENSURE_ARG_POINTER(aLEDState);
-  *aLEDState = (::GetKeyState(aKeyCode) & 1) != 0;
-  return NS_OK;
 }
 
 nsIMEUpdatePreference

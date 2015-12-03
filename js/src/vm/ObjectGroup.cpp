@@ -32,8 +32,8 @@ ObjectGroup::ObjectGroup(const Class* clasp, TaggedProto proto, JSCompartment* c
 {
     PodZero(this);
 
-    /* Inner objects may not appear on prototype chains. */
-    MOZ_ASSERT_IF(proto.isObject(), !proto.toObject()->getClass()->ext.outerObject);
+    /* Windows may not appear on prototype chains. */
+    MOZ_ASSERT_IF(proto.isObject(), !IsWindow(proto.toObject()));
 
     this->clasp_ = clasp;
     this->proto_ = proto;
@@ -210,8 +210,7 @@ ObjectGroup::useSingletonForAllocationSite(JSScript* script, jsbytecode* pc, JSP
         return GenericObject;
 
     if (key != JSProto_Object &&
-        !(key >= JSProto_Int8Array && key <= JSProto_Uint8ClampedArray) &&
-        !(key >= JSProto_SharedInt8Array && key <= JSProto_SharedUint8ClampedArray))
+        !(key >= JSProto_Int8Array && key <= JSProto_Uint8ClampedArray))
     {
         return GenericObject;
     }
@@ -277,8 +276,8 @@ JSObject::splicePrototype(JSContext* cx, const Class* clasp, Handle<TaggedProto>
      */
     MOZ_ASSERT(self->isSingleton());
 
-    // Inner objects may not appear on prototype chains.
-    MOZ_ASSERT_IF(proto.isObject(), !proto.toObject()->getClass()->ext.outerObject);
+    // Windows may not appear on prototype chains.
+    MOZ_ASSERT_IF(proto.isObject(), !IsWindow(proto.toObject()));
 
     if (proto.isObject() && !proto.toObject()->setDelegate(cx))
         return false;
@@ -704,17 +703,6 @@ GetClassForProtoKey(JSProtoKey key)
       case JSProto_Float64Array:
       case JSProto_Uint8ClampedArray:
         return &TypedArrayObject::classes[key - JSProto_Int8Array];
-
-      case JSProto_SharedInt8Array:
-      case JSProto_SharedUint8Array:
-      case JSProto_SharedInt16Array:
-      case JSProto_SharedUint16Array:
-      case JSProto_SharedInt32Array:
-      case JSProto_SharedUint32Array:
-      case JSProto_SharedFloat32Array:
-      case JSProto_SharedFloat64Array:
-      case JSProto_SharedUint8ClampedArray:
-        return &SharedTypedArrayObject::classes[key - JSProto_SharedInt8Array];
 
       case JSProto_ArrayBuffer:
         return &ArrayBufferObject::class_;

@@ -845,7 +845,7 @@ public:
    * visible region will be ignored. So if a layer draws outside the bounds
    * of its visible region, it needs to ensure that what it draws is valid.
    */
-  virtual void SetVisibleRegion(const nsIntRegion& aRegion)
+  virtual void SetVisibleRegion(const LayerIntRegion& aRegion)
   {
     if (!mVisibleRegion.IsEqual(aRegion)) {
       MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) VisibleRegion was %s is %s", this,
@@ -1113,6 +1113,21 @@ public:
     }
   }
 
+  /**
+   * CONSTRUCTION PHASE ONLY
+   * This flag is true when the transform on the layer is a perspective
+   * transform. The compositor treats perspective transforms specially
+   * for async scrolling purposes.
+   */
+  void SetTransformIsPerspective(bool aTransformIsPerspective)
+  {
+    if (mTransformIsPerspective != aTransformIsPerspective) {
+      MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) TransformIsPerspective", this));
+      mTransformIsPerspective = aTransformIsPerspective;
+      Mutated();
+    }
+  }
+
   // Call AddAnimation to add a new animation to this layer from layout code.
   // Caller must fill in all the properties of the returned animation.
   // A later animation overrides an earlier one.
@@ -1148,6 +1163,11 @@ public:
    *     compositing the layer tree with a transformation (such as when
    *     asynchronously scrolling and zooming).
    *
+   *   - |aSides| is the set of sides to which the element is fixed relative to.
+   *     This is used if the viewport size is changed in the compositor and
+   *     fixed position items need to shift accordingly. This value is made up
+   *     combining appropriate values from mozilla::SideBits.
+   *
    *   - |aIsClipFixed| is true if this layer's clip rect and mask layer
    *     should also remain fixed during async scrolling/animations.
    *     This is the case for fixed position layers, but not for
@@ -1155,11 +1175,13 @@ public:
    */
   void SetFixedPositionData(FrameMetrics::ViewID aScrollId,
                             const LayerPoint& aAnchor,
+                            int32_t aSides,
                             bool aIsClipFixed)
   {
     if (!mFixedPositionData ||
         mFixedPositionData->mScrollId != aScrollId ||
         mFixedPositionData->mAnchor != aAnchor ||
+        mFixedPositionData->mSides != aSides ||
         mFixedPositionData->mIsClipFixed != aIsClipFixed) {
       MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) FixedPositionData", this));
       if (!mFixedPositionData) {
@@ -1167,6 +1189,7 @@ public:
       }
       mFixedPositionData->mScrollId = aScrollId;
       mFixedPositionData->mAnchor = aAnchor;
+      mFixedPositionData->mSides = aSides;
       mFixedPositionData->mIsClipFixed = aIsClipFixed;
       Mutated();
     }
@@ -1238,7 +1261,7 @@ public:
   const Maybe<ParentLayerIntRect>& GetClipRect() const { return mClipRect; }
   uint32_t GetContentFlags() { return mContentFlags; }
   const gfx::IntRect& GetLayerBounds() const { return mLayerBounds; }
-  const nsIntRegion& GetVisibleRegion() const { return mVisibleRegion; }
+  const LayerIntRegion& GetVisibleRegion() const { return mVisibleRegion; }
   const FrameMetrics& GetFrameMetrics(uint32_t aIndex) const;
   uint32_t GetFrameMetricsCount() const { return mFrameMetrics.Length(); }
   const nsTArray<FrameMetrics>& GetAllFrameMetrics() { return mFrameMetrics; }
@@ -1258,9 +1281,11 @@ public:
   virtual float GetPostXScale() const { return mPostXScale; }
   virtual float GetPostYScale() const { return mPostYScale; }
   bool GetIsFixedPosition() { return mIsFixedPosition; }
+  bool GetTransformIsPerspective() const { return mTransformIsPerspective; }
   bool GetIsStickyPosition() { return mStickyPositionData; }
   FrameMetrics::ViewID GetFixedPositionScrollContainerId() { return mFixedPositionData ? mFixedPositionData->mScrollId : FrameMetrics::NULL_SCROLL_ID; }
   LayerPoint GetFixedPositionAnchor() { return mFixedPositionData ? mFixedPositionData->mAnchor : LayerPoint(); }
+  int32_t GetFixedPositionSides() { return mFixedPositionData ? mFixedPositionData->mSides : eSideBitsNone; }
   bool IsClipFixed() { return mFixedPositionData ? mFixedPositionData->mIsClipFixed : false; }
   FrameMetrics::ViewID GetStickyScrollContainerId() { return mStickyPositionData->mScrollId; }
   const LayerRect& GetStickyScrollRangeOuter() { return mStickyPositionData->mOuter; }
@@ -1448,7 +1473,7 @@ public:
   // values that should be used when drawing this layer to screen,
   // accounting for this layer possibly being a shadow.
   const Maybe<ParentLayerIntRect>& GetEffectiveClipRect();
-  const nsIntRegion& GetEffectiveVisibleRegion();
+  const LayerIntRegion& GetEffectiveVisibleRegion();
 
   bool Extend3DContext() {
     return GetContentFlags() & CONTENT_EXTEND_3D_CONTEXT;
@@ -1619,7 +1644,7 @@ public:
   /**
    * Mark the entirety of the layer's visible region as being invalid.
    */
-  void SetInvalidRectToVisibleRegion() { mInvalidRegion = GetVisibleRegion(); }
+  void SetInvalidRectToVisibleRegion() { mInvalidRegion = GetVisibleRegion().ToUnknownRegion(); }
 
   /**
    * Adds to the current invalid rect.
@@ -1762,7 +1787,7 @@ protected:
   nsTArray<RefPtr<Layer>> mAncestorMaskLayers;
   gfx::UserData mUserData;
   gfx::IntRect mLayerBounds;
-  nsIntRegion mVisibleRegion;
+  LayerIntRegion mVisibleRegion;
   nsTArray<FrameMetrics> mFrameMetrics;
   EventRegions mEventRegions;
   gfx::Matrix4x4 mTransform;
@@ -1787,9 +1812,11 @@ protected:
   uint32_t mContentFlags;
   bool mUseTileSourceRect;
   bool mIsFixedPosition;
+  bool mTransformIsPerspective;
   struct FixedPositionData {
     FrameMetrics::ViewID mScrollId;
     LayerPoint mAnchor;
+    int32_t mSides;
     bool mIsClipFixed;
   };
   UniquePtr<FixedPositionData> mFixedPositionData;
@@ -2061,7 +2088,7 @@ public:
   RenderTargetIntRect GetIntermediateSurfaceRect()
   {
     NS_ASSERTION(mUseIntermediateSurface, "Must have intermediate surface");
-    return RenderTargetPixel::FromUntyped(mVisibleRegion.GetBounds());
+    return RenderTargetIntRect::FromUnknownRect(GetEffectiveVisibleRegion().ToUnknownRegion().GetBounds());
   }
 
   /**

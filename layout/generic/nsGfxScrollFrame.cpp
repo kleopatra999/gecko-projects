@@ -1096,7 +1096,7 @@ ScrollFrameHelper::HandleScrollbarStyleSwitching()
   }
 }
 
-#if defined(MOZ_B2G) || (defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_ANDROID_APZ))
+#if defined(MOZ_B2G) || defined(MOZ_WIDGET_ANDROID)
 static bool IsFocused(nsIContent* aContent)
 {
   // Some content elements, like the GetContent() of a scroll frame
@@ -1138,7 +1138,7 @@ ScrollFrameHelper::WantAsyncScroll() const
   bool isHScrollable = !!(directions & nsIScrollableFrame::HORIZONTAL) &&
                        (styles.mHorizontal != NS_STYLE_OVERFLOW_HIDDEN);
 
-#if defined(MOZ_B2G) || (defined(MOZ_WIDGET_ANDROID) && !defined(MOZ_ANDROID_APZ))
+#if defined(MOZ_B2G) || defined(MOZ_WIDGET_ANDROID)
   // Mobile platforms need focus to scroll.
   bool canScrollWithoutScrollbars = IsFocused(mOuter->GetContent());
 #else
@@ -1825,7 +1825,6 @@ ScrollFrameHelper::ScrollFrameHelper(nsContainerFrame* aOuter,
   , mScrollPosAtLastPaint(0, 0)
   , mRestorePos(-1, -1)
   , mLastPos(-1, -1)
-  , mResolution(1.0)
   , mScrollPosForLayerPixelAlignment(-1, -1)
   , mLastUpdateImagesPos(-1, -1)
   , mNeverHasVerticalScrollbar(false)
@@ -1849,9 +1848,7 @@ ScrollFrameHelper::ScrollFrameHelper(nsContainerFrame* aOuter,
   , mWillBuildScrollableLayer(false)
   , mIsScrollableLayerInRootContainer(false)
   , mHasBeenScrolled(false)
-  , mIsResolutionSet(false)
   , mIgnoreMomentumScroll(false)
-  , mScaleToResolution(false)
   , mTransformingByAPZ(false)
   , mZoomableByAPZ(false)
   , mVelocityQueue(aOuter->PresContext())
@@ -1875,6 +1872,8 @@ ScrollFrameHelper::ScrollFrameHelper(nsContainerFrame* aOuter,
                                          ScreenMargin(),
                                          0,
                                          nsLayoutUtils::RepaintMode::DoNotRepaint);
+    nsLayoutUtils::SetZeroMarginDisplayPortOnAsyncScrollableAncestors(
+        mOuter, nsLayoutUtils::RepaintMode::DoNotRepaint);
   }
 
 }
@@ -2135,6 +2134,10 @@ ScrollFrameHelper::ScrollToWithOrigin(nsPoint aScrollPosition,
             // frame to force an APZC which can handle the request.
             nsLayoutUtils::CalculateAndSetDisplayPortMargins(
               mOuter->GetScrollTargetFrame(),
+              nsLayoutUtils::RepaintMode::DoNotRepaint);
+            nsIFrame* frame = do_QueryFrame(mOuter->GetScrollTargetFrame());
+            nsLayoutUtils::SetZeroMarginDisplayPortOnAsyncScrollableAncestors(
+              frame,
               nsLayoutUtils::RepaintMode::DoNotRepaint);
           }
 
@@ -3092,13 +3095,20 @@ ScrollFrameHelper::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       //
       // This is not compatible when using containes for root scrollframes.
       MOZ_ASSERT(couldBuildLayer && mScrolledFrame->GetContent());
-      bool needToRecomputeAGR = false;
       if (!mWillBuildScrollableLayer) {
-        needToRecomputeAGR = true;
-      }
-      mWillBuildScrollableLayer = true;
-      if (needToRecomputeAGR) {
-        aBuilder->RecomputeCurrentAnimatedGeometryRoot();
+        // Set a displayport so next paint we don't have to force layerization
+        // after the fact.
+        nsLayoutUtils::SetDisplayPortMargins(mOuter->GetContent(),
+                                             mOuter->PresContext()->PresShell(),
+                                             ScreenMargin(),
+                                             0,
+                                             nsLayoutUtils::RepaintMode::DoNotRepaint);
+        // Call DecideScrollableLayer to recompute mWillBuildScrollableLayer and
+        // recompute the current animated geometry root if needed.
+        // It's too late to change the dirty rect so pass a copy.
+        nsRect copyOfDirtyRect = dirtyRect;
+        Unused << DecideScrollableLayer(aBuilder, &copyOfDirtyRect,
+                    /* aAllowCreateDisplayPort = */ false);
       }
     }
   }
@@ -3154,10 +3164,14 @@ ScrollFrameHelper::DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
                                          nsRect* aDirtyRect,
                                          bool aAllowCreateDisplayPort)
 {
+  // Save and check if this changes so we can recompute the current agr.
+  bool oldWillBuildScrollableLayer = mWillBuildScrollableLayer;
+
+  bool wasUsingDisplayPort = false;
   bool usingDisplayPort = false;
   nsIContent* content = mOuter->GetContent();
   if (aBuilder->IsPaintingToWindow()) {
-    bool wasUsingDisplayPort = nsLayoutUtils::GetDisplayPort(content);
+    wasUsingDisplayPort = nsLayoutUtils::GetDisplayPort(content);
 
     nsRect displayportBase = *aDirtyRect;
     nsPresContext* pc = mOuter->PresContext();
@@ -3182,12 +3196,6 @@ ScrollFrameHelper::DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
     // Override the dirty rectangle if the displayport has been set.
     if (usingDisplayPort) {
       *aDirtyRect = displayPort;
-
-      // The cached animated geometry root for the display builder is out of
-      // date if we just introduced a new animated geometry root.
-      if (!wasUsingDisplayPort) {
-        aBuilder->RecomputeCurrentAnimatedGeometryRoot();
-      }
     }
   }
 
@@ -3198,6 +3206,12 @@ ScrollFrameHelper::DecideScrollableLayer(nsDisplayListBuilder* aBuilder,
   // If the element is marked 'scrollgrab', also force building of a layer
   // so that APZ can implement scroll grabbing.
   mWillBuildScrollableLayer = usingDisplayPort || nsContentUtils::HasScrollgrab(content);
+
+  // The cached animated geometry root for the display builder is out of
+  // date if we just introduced a new animated geometry root.
+  if ((oldWillBuildScrollableLayer != mWillBuildScrollableLayer) || (wasUsingDisplayPort != usingDisplayPort)) {
+    aBuilder->RecomputeCurrentAnimatedGeometryRoot();
+  }
 
   if (gfxPrefs::LayoutUseContainersForRootFrames() && mWillBuildScrollableLayer && mIsRoot) {
     mIsScrollableLayerInRootContainer = true;
@@ -3389,29 +3403,6 @@ ScrollFrameHelper::GetScrollPositionClampingScrollPortSize() const
     return presShell->GetScrollPositionClampingScrollPortSize();
   }
   return mScrollPort.Size();
-}
-
-float
-ScrollFrameHelper::GetResolution() const
-{
-  return mResolution;
-}
-
-void
-ScrollFrameHelper::SetResolution(float aResolution)
-{
-  mResolution = aResolution;
-  mIsResolutionSet = true;
-  mScaleToResolution = false;
-}
-
-void
-ScrollFrameHelper::SetResolutionAndScaleTo(float aResolution)
-{
-  MOZ_ASSERT(mIsRoot);  // This API should only be called on root scroll frames.
-  mResolution = aResolution;
-  mIsResolutionSet = true;
-  mScaleToResolution = true;
 }
 
 static void
@@ -3689,8 +3680,11 @@ GetScrollPortSizeExcludingHeadersAndFooters(nsIFrame* aViewportFrame,
   for (nsFrameList::Enumerator iterator(fixedFrames); !iterator.AtEnd();
        iterator.Next()) {
     nsIFrame* f = iterator.get();
-    nsRect r = f->GetRect().Intersect(aScrollPort);
-    if (r.x == 0 && r.width == aScrollPort.width &&
+    nsRect r = f->GetRectRelativeToSelf();
+    r = nsLayoutUtils::TransformFrameRectToAncestor(f, r, aViewportFrame);
+    r = r.Intersect(aScrollPort);
+    if ((r.width >= aScrollPort.width / 2 ||
+         r.width >= NSIntPixelsToAppUnits(800, AppUnitsPerCSSPixel())) &&
         r.height <= aScrollPort.height/3) {
       list.AppendElement(TopAndBottom(r.y, r.YMost()));
     }
@@ -4735,9 +4729,15 @@ ScrollFrameHelper::FinishReflowForScrollbar(nsIContent* aContent,
 bool
 ScrollFrameHelper::ReflowFinished()
 {
-  nsAutoScriptBlocker scriptBlocker;
   mPostedReflowCallback = false;
 
+  if (NS_SUBTREE_DIRTY(mOuter)) {
+    // We will get another call after the next reflow and scrolling
+    // later is less janky.
+    return false;
+  }
+
+  nsAutoScriptBlocker scriptBlocker;
   ScrollToRestoredPosition();
 
   // Clamp current scroll position to new bounds. Normally this won't
@@ -4751,9 +4751,9 @@ ScrollFrameHelper::ReflowFinished()
     mDestination = GetScrollPosition();
   }
 
-  if (NS_SUBTREE_DIRTY(mOuter) || !mUpdateScrollbarAttributes)
+  if (!mUpdateScrollbarAttributes) {
     return false;
-
+  }
   mUpdateScrollbarAttributes = false;
 
   // Update scrollbar attributes.
@@ -4763,7 +4763,7 @@ ScrollFrameHelper::ReflowFinished()
     mMayHaveDirtyFixedChildren = false;
     nsIFrame* parentFrame = mOuter->GetParent();
     for (nsIFrame* fixedChild =
-           parentFrame->GetFirstChild(nsIFrame::kFixedList);
+           parentFrame->GetChildList(nsIFrame::kFixedList).FirstChild();
          fixedChild; fixedChild = fixedChild->GetNextSibling()) {
       // force a reflow of the fixed child
       presContext->PresShell()->
@@ -4928,7 +4928,7 @@ ScrollFrameHelper::AdjustScrollbarRectForResizer(
   else {
     nsPoint offset;
     nsIWidget* widget = aFrame->GetNearestWidget(offset);
-    nsIntRect widgetRect;
+    LayoutDeviceIntRect widgetRect;
     if (!widget || !widget->ShowsResizeIndicator(&widgetRect))
       return;
 
@@ -5359,8 +5359,12 @@ ScrollFrameHelper::SaveState() const
     pt = mRestorePos;
   }
   state->SetScrollState(pt);
-  state->SetResolution(mResolution);
-  state->SetScaleToResolution(mScaleToResolution);
+  if (mIsRoot) {
+    // Only save resolution properties for root scroll frames
+    nsIPresShell* shell = mOuter->PresContext()->PresShell();
+    state->SetResolution(shell->GetResolution());
+    state->SetScaleToResolution(shell->ScaleToResolution());
+  }
   return state;
 }
 
@@ -5370,19 +5374,17 @@ ScrollFrameHelper::RestoreState(nsPresState* aState)
   mRestorePos = aState->GetScrollState();
   mDidHistoryRestore = true;
   mLastPos = mScrolledFrame ? GetLogicalScrollPosition() : nsPoint(0,0);
-  mResolution = aState->GetResolution();
-  mIsResolutionSet = true;
-  mScaleToResolution = aState->GetScaleToResolution();
 
-  // Scaling-to-resolution should only be used on root scroll frames.
-  MOZ_ASSERT(mIsRoot || !mScaleToResolution);
+  // Resolution properties should only exist on root scroll frames.
+  MOZ_ASSERT(mIsRoot || (!aState->GetScaleToResolution() &&
+                         aState->GetResolution() == 1.0));
 
   if (mIsRoot) {
     nsIPresShell* presShell = mOuter->PresContext()->PresShell();
-    if (mScaleToResolution) {
-      presShell->SetResolutionAndScaleTo(mResolution);
+    if (aState->GetScaleToResolution()) {
+      presShell->SetResolutionAndScaleTo(aState->GetResolution());
     } else {
-      presShell->SetResolution(mResolution);
+      presShell->SetResolution(aState->GetResolution());
     }
   }
 }

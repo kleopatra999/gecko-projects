@@ -118,16 +118,16 @@ WebGLContext::CreateShaderValidator(GLenum shaderType) const
     resources.MaxFragmentUniformVectors = mGLMaxFragmentUniformVectors;
     resources.MaxDrawBuffers = mGLMaxDrawBuffers;
 
-    if (IsExtensionEnabled(WebGLExtensionID::EXT_frag_depth))
+    if (IsWebGL2() || IsExtensionEnabled(WebGLExtensionID::EXT_frag_depth))
         resources.EXT_frag_depth = 1;
 
-    if (IsExtensionEnabled(WebGLExtensionID::OES_standard_derivatives))
+    if (IsWebGL2() || IsExtensionEnabled(WebGLExtensionID::OES_standard_derivatives))
         resources.OES_standard_derivatives = 1;
 
-    if (IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers))
+    if (IsWebGL2() || IsExtensionEnabled(WebGLExtensionID::WEBGL_draw_buffers))
         resources.EXT_draw_buffers = 1;
 
-    if (IsExtensionEnabled(WebGLExtensionID::EXT_shader_texture_lod))
+    if (IsWebGL2() || IsExtensionEnabled(WebGLExtensionID::EXT_shader_texture_lod))
         resources.EXT_shader_texture_lod = 1;
 
     // Tell ANGLE to allow highp in frag shaders. (unless disabled)
@@ -329,6 +329,12 @@ ShaderValidator::CalcNumSamplerUniforms() const
     return accum;
 }
 
+size_t
+ShaderValidator::NumAttributes() const
+{
+  return ShGetAttributes(mHandle)->size();
+}
+
 // Attribs cannot be structs or arrays, and neither can vertex inputs in ES3.
 // Therefore, attrib names are always simple.
 bool
@@ -361,6 +367,38 @@ ShaderValidator::FindAttribMappedNameByUserName(const std::string& userName,
     return false;
 }
 
+bool
+ShaderValidator::FindVaryingByMappedName(const std::string& mappedName,
+                                         std::string* const out_userName,
+                                         bool* const out_isArray) const
+{
+    const std::vector<sh::Varying>& varyings = *ShGetVaryings(mHandle);
+    for (auto itr = varyings.begin(); itr != varyings.end(); ++itr) {
+        const sh::ShaderVariable* found;
+        if (!itr->findInfoByMappedName(mappedName, &found, out_userName))
+            continue;
+
+        *out_isArray = found->isArray();
+        return true;
+    }
+
+    return false;
+}
+
+bool
+ShaderValidator::FindVaryingMappedNameByUserName(const std::string& userName,
+                                                 const std::string** const out_mappedName) const
+{
+    const std::vector<sh::Varying>& attribs = *ShGetVaryings(mHandle);
+    for (auto itr = attribs.begin(); itr != attribs.end(); ++itr) {
+        if (itr->name == userName) {
+            *out_mappedName = &(itr->mappedName);
+            return true;
+        }
+    }
+
+    return false;
+}
 // This must handle names like "foo.bar[0]".
 bool
 ShaderValidator::FindUniformByMappedName(const std::string& mappedName,
@@ -375,6 +413,34 @@ ShaderValidator::FindUniformByMappedName(const std::string& mappedName,
 
         *out_isArray = found->isArray();
         return true;
+    }
+
+    const std::vector<sh::InterfaceBlock>& interfaces = *ShGetInterfaceBlocks(mHandle);
+    for (const auto& interface : interfaces) {
+        for (const auto& field : interface.fields) {
+            const sh::ShaderVariable* found;
+
+            if (!field.findInfoByMappedName(mappedName, &found, out_userName))
+                continue;
+
+            *out_isArray = found->isArray();
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool
+ShaderValidator::FindUniformBlockByMappedName(const std::string& mappedName,
+                                              std::string* const out_userName) const
+{
+    const std::vector<sh::InterfaceBlock>& interfaces = *ShGetInterfaceBlocks(mHandle);
+    for (const auto& interface : interfaces) {
+        if (mappedName == interface.mappedName) {
+            *out_userName = interface.name;
+            return true;
+        }
     }
 
     return false;

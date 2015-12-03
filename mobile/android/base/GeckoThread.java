@@ -296,7 +296,7 @@ public class GeckoThread extends Thread implements GeckoEventListener {
     }
 
     private static String initGeckoEnvironment() {
-        final Context context = GeckoAppShell.getContext();
+        final Context context = GeckoAppShell.getApplicationContext();
         GeckoLoader.loadMozGlue(context);
         setState(State.MOZGLUE_READY);
 
@@ -486,6 +486,7 @@ public class GeckoThread extends Thread implements GeckoEventListener {
         if ("Gecko:Ready".equals(event)) {
             EventDispatcher.getInstance().unregisterGeckoThreadListener(this, event);
             setState(State.RUNNING);
+            Log.w(LOGTAG, "zerdatime " + SystemClock.uptimeMillis() + " - Gecko ready");
         }
     }
 

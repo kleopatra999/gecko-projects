@@ -147,6 +147,12 @@ public:
   void OnStopObservingContent(IMEContentObserver* aIMEContentObserver);
 
   /**
+   * TryToFlushPendingNotificationsToIME() suggests flushing pending
+   * notifications to IME to IMEContentObserver.
+   */
+  void TryToFlushPendingNotificationsToIME();
+
+  /**
    * Register accesskey on the given element. When accesskey is activated then
    * the element will be notified via nsIContent::PerformAccesskey() method.
    *
@@ -236,9 +242,10 @@ public:
   // Returns true if the given WidgetWheelEvent will resolve to a scroll action.
   static bool WheelEventIsScrollAction(WidgetWheelEvent* aEvent);
 
-  // Returns true if user prefs for wheel deltas apply to the given
-  // WidgetWheelEvent.
-  static bool WheelEventNeedsDeltaMultipliers(WidgetWheelEvent* aEvent);
+  // Returns user-set multipliers for a wheel event.
+  static void GetUserPrefsForWheelEvent(WidgetWheelEvent* aEvent,
+                                        double* aOutMultiplierX,
+                                        double* aOutMultiplierY);
 
   // Returns whether or not a frame can be vertically scrolled with a mouse
   // wheel (as opposed to, say, a selection or touch scroll).
@@ -250,7 +257,7 @@ public:
   // locked. This is used by dom::Event::GetScreenCoords() to make mouse
   // events' screen coord appear frozen at the last mouse position while
   // the pointer is locked.
-  static LayoutDeviceIntPoint sLastScreenPoint;
+  static CSSIntPoint sLastScreenPoint;
 
   // Holds the point in client coords of the last mouse event. Used by
   // dom::Event::GetClientCoords() to make mouse events' client coords appear
@@ -443,7 +450,9 @@ protected:
      * Returns whether or not ApplyUserPrefsToDelta() would change the delta
      * values of an event.
      */
-    bool HasUserPrefsForDelta(WidgetWheelEvent* aEvent);
+    void GetUserPrefsForEvent(WidgetWheelEvent* aEvent,
+                              double* aOutMultiplierX,
+                              double* aOutMultiplierY);
 
     /**
      * If ApplyUserPrefsToDelta() changed the delta values with customized
@@ -855,6 +864,7 @@ private:
                                bool dispatchedToContentProcess);
 
   int32_t     mLockCursor;
+  bool mLastFrameConsumedSetCursor;
 
   // Last mouse event refPoint (the offset from the widget's origin in
   // device pixels) when mouse was locked, used to restore mouse position

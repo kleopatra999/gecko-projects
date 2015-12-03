@@ -8,6 +8,7 @@
 #include <gui/Surface.h>
 #include <ICrypto.h>
 #include "GonkVideoDecoderManager.h"
+#include "GrallocImages.h"
 #include "MediaDecoderReader.h"
 #include "ImageContainer.h"
 #include "VideoUtils.h"
@@ -32,7 +33,7 @@
 #include <android/log.h>
 #define GVDM_LOG(...) __android_log_print(ANDROID_LOG_DEBUG, "GonkVideoDecoderManager", __VA_ARGS__)
 
-extern PRLogModuleInfo* GetPDMLog();
+extern mozilla::LogModule* GetPDMLog();
 #define LOG(...) MOZ_LOG(GetPDMLog(), mozilla::LogLevel::Debug, (__VA_ARGS__))
 using namespace mozilla::layers;
 using namespace android;
@@ -45,7 +46,6 @@ GonkVideoDecoderManager::GonkVideoDecoderManager(
   const VideoInfo& aConfig)
   : mImageContainer(aImageContainer)
   , mColorConverterBufferSize(0)
-  , mNativeWindow(nullptr)
   , mPendingReleaseItemsLock("GonkVideoDecoderManager::mPendingReleaseItemsLock")
   , mNeedsCopyBuffer(false)
 {
@@ -62,8 +62,6 @@ GonkVideoDecoderManager::GonkVideoDecoderManager(
   nsIntSize frameSize(mVideoWidth, mVideoHeight);
   mPicture = pictureRect;
   mInitialFrame = frameSize;
-  mVideoListener = new VideoResourceListener();
-
 }
 
 GonkVideoDecoderManager::~GonkVideoDecoderManager()
@@ -119,7 +117,21 @@ GonkVideoDecoderManager::Init()
 
   RefPtr<InitPromise> p = mInitPromise.Ensure(__func__);
   android::sp<GonkVideoDecoderManager> self = this;
-  mVideoCodecRequest.Begin(mVideoListener->Init()
+  mDecoder = MediaCodecProxy::CreateByType(mDecodeLooper, mMimeType.get(), false);
+
+  uint32_t capability = MediaCodecProxy::kEmptyCapability;
+  if (mDecoder->getCapability(&capability) == OK && (capability &
+      MediaCodecProxy::kCanExposeGraphicBuffer)) {
+#if ANDROID_VERSION >= 21
+    sp<IGonkGraphicBufferConsumer> consumer;
+    GonkBufferQueue::createBufferQueue(&mGraphicBufferProducer, &consumer);
+    mNativeWindow = new GonkNativeWindow(consumer);
+#else
+    mNativeWindow = new GonkNativeWindow();
+#endif
+  }
+
+  mVideoCodecRequest.Begin(mDecoder->AsyncAllocateVideoMediaCodec()
     ->Then(mReaderTaskQueue, __func__,
       [self] (bool) -> void {
         self->mVideoCodecRequest.Complete();
@@ -128,15 +140,6 @@ GonkVideoDecoderManager::Init()
         self->mVideoCodecRequest.Complete();
         self->codecCanceled();
       }));
-  mDecoder = MediaCodecProxy::CreateByType(mDecodeLooper, mMimeType.get(), false, mVideoListener);
-
-  uint32_t capability = MediaCodecProxy::kEmptyCapability;
-  if (mDecoder->getCapability(&capability) == OK && (capability &
-      MediaCodecProxy::kCanExposeGraphicBuffer)) {
-    mNativeWindow = new GonkNativeWindow();
-  }
-
-  mDecoder->AsyncAllocateVideoMediaCodec();
 
   return p;
 }
@@ -267,7 +270,7 @@ Align(int aX, int aAlign)
 }
 
 static void
-CopyGraphicBuffer(sp<GraphicBuffer>& aSource, sp<GraphicBuffer>& aDestination, gfx::IntRect& aPicture)
+CopyGraphicBuffer(sp<GraphicBuffer>& aSource, sp<GraphicBuffer>& aDestination)
 {
   void* srcPtr = nullptr;
   aSource->lock(GraphicBuffer::USAGE_SW_READ_OFTEN, &srcPtr);
@@ -356,7 +359,7 @@ GonkVideoDecoderManager::CreateVideoDataFromGraphicBuffer(MediaBuffer* aSource,
       return nullptr;
     }
 
-    gfx::IntSize size(Align(srcBuffer->getWidth(), 2) , Align(srcBuffer->getHeight(), 2));
+    gfx::IntSize size(Align(aPicture.width, 2) , Align(aPicture.height, 2));
     textureClient =
       mCopyAllocator->CreateOrRecycle(gfx::SurfaceFormat::YUV, size,
                                       BackendSelector::Content,
@@ -371,14 +374,13 @@ GonkVideoDecoderManager::CreateVideoDataFromGraphicBuffer(MediaBuffer* aSource,
     aPicture.height = size.height;
 
     sp<GraphicBuffer> destBuffer =
-      static_cast<GrallocTextureClientOGL*>(textureClient.get())->GetGraphicBuffer();
+      static_cast<GrallocTextureData*>(textureClient->GetInternalData())->GetGraphicBuffer();
 
-    CopyGraphicBuffer(srcBuffer, destBuffer, aPicture);
+    CopyGraphicBuffer(srcBuffer, destBuffer);
   } else {
     textureClient = mNativeWindow->getTextureClientFromBuffer(srcBuffer.get());
     textureClient->SetRecycleCallback(GonkVideoDecoderManager::RecycleCallback, this);
-    GrallocTextureClientOGL* grallocClient = static_cast<GrallocTextureClientOGL*>(textureClient.get());
-    grallocClient->SetMediaBuffer(aSource);
+    static_cast<GrallocTextureData*>(textureClient->GetInternalData())->SetMediaBuffer(aSource);
   }
 
   RefPtr<VideoData> data = VideoData::Create(mInfo.mVideo,
@@ -607,7 +609,11 @@ GonkVideoDecoderManager::codecReserved()
   // the video decoding.
   format->setInt32("moz-use-undequeued-bufs", 1);
   if (mNativeWindow != nullptr) {
+#if ANDROID_VERSION >= 21
+    surface = new Surface(mGraphicBufferProducer);
+#else
     surface = new Surface(mNativeWindow->getBufferQueue());
+#endif
   }
   mDecoder->configure(format, surface, nullptr, 0);
   mDecoder->Prepare();
@@ -654,26 +660,6 @@ GonkVideoDecoderManager::onMessageReceived(const sp<AMessage> &aMessage)
   }
 }
 
-GonkVideoDecoderManager::VideoResourceListener::VideoResourceListener()
-{
-}
-
-GonkVideoDecoderManager::VideoResourceListener::~VideoResourceListener()
-{
-}
-
-void
-GonkVideoDecoderManager::VideoResourceListener::codecReserved()
-{
-  mVideoCodecPromise.Resolve(true, __func__);
-}
-
-void
-GonkVideoDecoderManager::VideoResourceListener::codecCanceled()
-{
-  mVideoCodecPromise.Reject(true, __func__);
-}
-
 uint8_t *
 GonkVideoDecoderManager::GetColorConverterBuffer(int32_t aWidth, int32_t aHeight)
 {
@@ -696,7 +682,7 @@ GonkVideoDecoderManager::RecycleCallback(TextureClient* aClient, void* aClosure)
 {
   MOZ_ASSERT(aClient && !aClient->IsDead());
   GonkVideoDecoderManager* videoManager = static_cast<GonkVideoDecoderManager*>(aClosure);
-  GrallocTextureClientOGL* client = static_cast<GrallocTextureClientOGL*>(aClient);
+  GrallocTextureData* client = static_cast<GrallocTextureData*>(aClient->GetInternalData());
   aClient->ClearRecycleCallback();
   FenceHandle handle = aClient->GetAndResetReleaseFenceHandle();
   videoManager->PostReleaseVideoBuffer(client->GetMediaBuffer(), handle);

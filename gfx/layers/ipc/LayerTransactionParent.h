@@ -63,20 +63,13 @@ public:
   // ISurfaceAllocator
   virtual bool AllocShmem(size_t aSize,
                           ipc::SharedMemory::SharedMemoryType aType,
-                          ipc::Shmem* aShmem) override {
-    return PLayerTransactionParent::AllocShmem(aSize, aType, aShmem);
-  }
+                          ipc::Shmem* aShmem) override;
 
   virtual bool AllocUnsafeShmem(size_t aSize,
                                 ipc::SharedMemory::SharedMemoryType aType,
-                                ipc::Shmem* aShmem) override {
-    return PLayerTransactionParent::AllocUnsafeShmem(aSize, aType, aShmem);
-  }
+                                ipc::Shmem* aShmem) override;
 
-  virtual void DeallocShmem(ipc::Shmem& aShmem) override
-  {
-    PLayerTransactionParent::DeallocShmem(aShmem);
-  }
+  virtual void DeallocShmem(ipc::Shmem& aShmem) override;
 
   virtual bool IsSameProcess() const override;
 
@@ -132,7 +125,7 @@ protected:
                                          MaybeTransform* aTransform)
                                          override;
   virtual bool RecvSetAsyncScrollOffset(const FrameMetrics::ViewID& aId,
-                                        const int32_t& aX, const int32_t& aY) override;
+                                        const float& aX, const float& aY) override;
   virtual bool RecvSetAsyncZoom(const FrameMetrics::ViewID& aId,
                                 const float& aValue) override;
   virtual bool RecvFlushApzRepaints() override;

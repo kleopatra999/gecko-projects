@@ -173,9 +173,9 @@ static const char kDirectoryServiceContractID[] = "@mozilla.org/file/directory_s
 #define kPluginRegistryFilename NS_LITERAL_CSTRING("pluginreg.dat")
 
 #ifdef PLUGIN_LOGGING
-PRLogModuleInfo* nsPluginLogging::gNPNLog = nullptr;
-PRLogModuleInfo* nsPluginLogging::gNPPLog = nullptr;
-PRLogModuleInfo* nsPluginLogging::gPluginLog = nullptr;
+LazyLogModule nsPluginLogging::gNPNLog(NPN_LOG_NAME);
+LazyLogModule nsPluginLogging::gNPPLog(NPP_LOG_NAME);
+LazyLogModule nsPluginLogging::gPluginLog(PLUGIN_LOG_NAME);
 #endif
 
 // #defines for plugin cache and prefs
@@ -320,10 +320,6 @@ nsPluginHost::nsPluginHost()
   }
 
 #ifdef PLUGIN_LOGGING
-  nsPluginLogging::gNPNLog = PR_NewLogModule(NPN_LOG_NAME);
-  nsPluginLogging::gNPPLog = PR_NewLogModule(NPP_LOG_NAME);
-  nsPluginLogging::gPluginLog = PR_NewLogModule(PLUGIN_LOG_NAME);
-
   MOZ_LOG(nsPluginLogging::gNPNLog, PLUGIN_LOG_ALWAYS,("NPN Logging Active!\n"));
   MOZ_LOG(nsPluginLogging::gPluginLog, PLUGIN_LOG_ALWAYS,("General Plugin Logging Active! (nsPluginHost::ctor)\n"));
   MOZ_LOG(nsPluginLogging::gNPPLog, PLUGIN_LOG_ALWAYS,("NPP Logging Active!\n"));
@@ -2038,11 +2034,17 @@ bool
 nsPluginHost::ShouldAddPlugin(nsPluginTag* aPluginTag)
 {
 #if defined(XP_WIN) && (defined(__x86_64__) || defined(_M_X64))
-  // On 64-bit windows, the only plugin we should load is flash. Use library
-  // filename and MIME type to check.
+  // On 64-bit windows, the only plugins we should load are flash and
+  // silverlight. Use library filename and MIME type to check.
   if (StringBeginsWith(aPluginTag->FileName(), NS_LITERAL_CSTRING("NPSWF"), nsCaseInsensitiveCStringComparator()) &&
       (aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-shockwave-flash")) ||
        aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-shockwave-flash-test")))) {
+    return true;
+  }
+  if (StringBeginsWith(aPluginTag->FileName(), NS_LITERAL_CSTRING("npctrl"), nsCaseInsensitiveCStringComparator()) &&
+      (aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-silverlight-test")) ||
+       aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-silverlight-2")) ||
+       aPluginTag->HasMimeType(NS_LITERAL_CSTRING("application/x-silverlight")))) {
     return true;
   }
   // Accept the test plugin MIME types, so mochitests still work.
@@ -2227,9 +2229,6 @@ nsresult nsPluginHost::ScanPluginsDirectory(nsIFile *pluginsDir,
 
       pluginTag = new nsPluginTag(&info, fileModTime, fromExtension);
       pluginFile.FreePluginInfo(info);
-      if (!pluginTag)
-        return NS_ERROR_OUT_OF_MEMORY;
-
       pluginTag->mLibrary = library;
       uint32_t state;
       rv = pluginTag->GetBlocklistState(&state);
@@ -2418,9 +2417,11 @@ nsPluginHost::FindPluginsInContent(bool aCreatePluginList, bool* aPluginsChanged
   MOZ_ASSERT(XRE_IsContentProcess());
 
   dom::ContentChild* cp = dom::ContentChild::GetSingleton();
+  nsresult rv;
   nsTArray<PluginTag> plugins;
   uint32_t parentEpoch;
-  if (!cp->SendFindPlugins(ChromeEpochForContent(), &plugins, &parentEpoch)) {
+  if (!cp->SendFindPlugins(ChromeEpochForContent(), &rv, &plugins, &parentEpoch) ||
+      NS_FAILED(rv)) {
     return NS_ERROR_NOT_AVAILABLE;
   }
 
@@ -2634,7 +2635,7 @@ nsresult nsPluginHost::FindPlugins(bool aCreatePluginList, bool * aPluginsChange
   return NS_OK;
 }
 
-bool
+nsresult
 mozilla::plugins::FindPluginsForContent(uint32_t aPluginEpoch,
                                         nsTArray<PluginTag>* aPlugins,
                                         uint32_t* aNewPluginEpoch)
@@ -2642,11 +2643,10 @@ mozilla::plugins::FindPluginsForContent(uint32_t aPluginEpoch,
   MOZ_ASSERT(XRE_IsParentProcess());
 
   RefPtr<nsPluginHost> host = nsPluginHost::GetInst();
-  host->FindPluginsForContent(aPluginEpoch, aPlugins, aNewPluginEpoch);
-  return true;
+  return host->FindPluginsForContent(aPluginEpoch, aPlugins, aNewPluginEpoch);
 }
 
-void
+nsresult
 nsPluginHost::FindPluginsForContent(uint32_t aPluginEpoch,
                                     nsTArray<PluginTag>* aPlugins,
                                     uint32_t* aNewPluginEpoch)
@@ -2654,11 +2654,14 @@ nsPluginHost::FindPluginsForContent(uint32_t aPluginEpoch,
   MOZ_ASSERT(XRE_IsParentProcess());
 
   // Load plugins so that the epoch is correct.
-  LoadPlugins();
+  nsresult rv = LoadPlugins();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
   *aNewPluginEpoch = ChromeEpoch();
   if (aPluginEpoch == ChromeEpoch()) {
-    return;
+    return NS_OK;
   }
 
   nsTArray<nsCOMPtr<nsIInternalPluginTag>> plugins;
@@ -2693,6 +2696,7 @@ nsPluginHost::FindPluginsForContent(uint32_t aPluginEpoch,
                                       tag->mLastModifiedTime,
                                       tag->IsFromExtension()));
   }
+  return NS_OK;
 }
 
 // This function is not relevant for fake plugins.
@@ -3314,8 +3318,6 @@ nsPluginHost::EnsurePrivateDirServiceProvider()
   if (!mPrivateDirServiceProvider) {
     nsresult rv;
     mPrivateDirServiceProvider = new nsPluginDirServiceProvider();
-    if (!mPrivateDirServiceProvider)
-      return NS_ERROR_OUT_OF_MEMORY;
     nsCOMPtr<nsIDirectoryService> dirService(do_GetService(kDirectoryServiceContractID, &rv));
     if (NS_FAILED(rv))
       return rv;

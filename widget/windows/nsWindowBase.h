@@ -43,7 +43,7 @@ public:
    * @param aPoint message position in physical coordinates.
    */
   virtual void InitEvent(mozilla::WidgetGUIEvent& aEvent,
-                         nsIntPoint* aPoint = nullptr) = 0;
+                         LayoutDeviceIntPoint* aPoint = nullptr) = 0;
 
   /*
    * Dispatch a gecko event for this widget.
@@ -121,8 +121,6 @@ protected:
     int32_t mPointerId;
     nsIntPoint mPosition;
   };
-
-  static PLDHashOperator CancelTouchPoints(const unsigned int& aPointerId, nsAutoPtr<PointerInfo>& aInfo, void* aUserArg);
 
   nsClassHashtable<nsUint32HashKey, PointerInfo> mActivePointers;
   static bool sTouchInjectInitialized;

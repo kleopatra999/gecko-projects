@@ -160,7 +160,15 @@ InputQueue::ReceiveTouchInput(const RefPtr<AsyncPanZoomController>& aTarget,
     INPQ_LOG("dropping event due to block %p being in fast motion\n", block);
     result = nsEventStatus_eConsumeNoDefault;
   } else if (target && target->ArePointerEventsConsumable(block, aEvent.AsMultiTouchInput().mTouches.Length())) {
-    result = nsEventStatus_eConsumeDoDefault;
+    if (block->UpdateSlopState(aEvent.AsMultiTouchInput(), true)) {
+      INPQ_LOG("dropping event due to block %p being in slop\n", block);
+      result = nsEventStatus_eConsumeNoDefault;
+    } else {
+      result = nsEventStatus_eConsumeDoDefault;
+    }
+  } else if (block->UpdateSlopState(aEvent.AsMultiTouchInput(), false)) {
+    INPQ_LOG("dropping event due to block %p being in mini-slop\n", block);
+    result = nsEventStatus_eConsumeNoDefault;
   }
   if (!MaybeHandleCurrentBlock(block, aEvent)) {
     block->AddEvent(aEvent.AsMultiTouchInput());
@@ -269,15 +277,17 @@ InputQueue::ReceiveScrollWheelInput(const RefPtr<AsyncPanZoomController>& aTarge
     *aOutInputBlockId = block->GetBlockId();
   }
 
-  block->Update(aEvent);
+  // Copy the event, since WheelBlockState needs to affix a counter.
+  ScrollWheelInput event(aEvent);
+  block->Update(event);
 
   // Note that the |aTarget| the APZCTM sent us may contradict the confirmed
   // target set on the block. In this case the confirmed target (which may be
   // null) should take priority. This is equivalent to just always using the
   // target (confirmed or not) from the block, which is what
   // MaybeHandleCurrentBlock() does.
-  if (!MaybeHandleCurrentBlock(block, aEvent)) {
-    block->AddEvent(aEvent.AsScrollWheelInput());
+  if (!MaybeHandleCurrentBlock(block, event)) {
+    block->AddEvent(event);
   }
 
   return nsEventStatus_eConsumeDoDefault;
@@ -651,7 +661,9 @@ InputQueue::ProcessInputBlocks() {
       curBlock->DropEvents();
     } else if (curBlock->IsDefaultPrevented()) {
       curBlock->DropEvents();
-      target->ResetInputState();
+      if (curBlock->AsTouchBlock()) {
+        target->ResetTouchInputState();
+      }
     } else {
       UpdateActiveApzc(curBlock->GetTargetApzc());
       curBlock->HandleEvents();
@@ -677,7 +689,7 @@ void
 InputQueue::UpdateActiveApzc(const RefPtr<AsyncPanZoomController>& aNewActive) {
   if (mLastActiveApzc && mLastActiveApzc != aNewActive
       && mTouchCounter.GetActiveTouchCount() > 0) {
-    mLastActiveApzc->ResetInputState();
+    mLastActiveApzc->ResetTouchInputState();
   }
   mLastActiveApzc = aNewActive;
 }

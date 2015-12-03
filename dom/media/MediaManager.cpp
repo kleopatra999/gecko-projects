@@ -98,18 +98,33 @@ struct nsIMediaDevice::COMTypeInfo<mozilla::AudioDevice, void> {
 };
 const nsIID nsIMediaDevice::COMTypeInfo<mozilla::AudioDevice, void>::kIID = NS_IMEDIADEVICE_IID;
 
+namespace {
+already_AddRefed<nsIAsyncShutdownClient> GetShutdownPhase() {
+  nsCOMPtr<nsIAsyncShutdownService> svc = services::GetAsyncShutdown();
+  MOZ_RELEASE_ASSERT(svc);
+
+  nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase;
+  nsresult rv = svc->GetProfileBeforeChange(getter_AddRefs(shutdownPhase));
+  if (!shutdownPhase) {
+    // We are probably in a content process.
+    rv = svc->GetContentChildShutdown(getter_AddRefs(shutdownPhase));
+  }
+  MOZ_RELEASE_ASSERT(shutdownPhase);
+  MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv));
+  return shutdownPhase.forget();
+}
+}
+
 namespace mozilla {
 
 #ifdef LOG
 #undef LOG
 #endif
 
-PRLogModuleInfo*
+LogModule*
 GetMediaManagerLog()
 {
-  static PRLogModuleInfo *sLog;
-  if (!sLog)
-    sLog = PR_NewLogModule("MediaManager");
+  static LazyLogModule sLog("MediaManager");
   return sLog;
 }
 #define LOG(msg) MOZ_LOG(GetMediaManagerLog(), mozilla::LogLevel::Debug, msg)
@@ -1415,25 +1430,22 @@ MediaManager::EnumerateRawDevices(uint64_t aWindowId,
   RefPtr<PledgeSourceSet> p = new PledgeSourceSet();
   uint32_t id = mOutstandingPledges.Append(*p);
 
-  // Check if the preference for using audio/video loopback devices is
-  // enabled. This is currently used for automated media tests only.
-  //
-  // If present (and we're doing non-exotic cameras and microphones) use them
-  // instead of our built-in fake devices, except if fake tracks are requested
-  // (a feature of the built-in ones only).
-
   nsAdoptingCString audioLoopDev, videoLoopDev;
-  if (!aFakeTracks) {
-    if (aVideoType == dom::MediaSourceEnum::Camera) {
-      audioLoopDev = Preferences::GetCString("media.audio_loopback_dev");
+  if (!aFake) {
+    // Fake stream not requested. The entire device stack is available.
+    // Loop in loopback devices if they are set, and their respective type is
+    // requested. This is currently used for automated media tests only.
+    if (aVideoType == MediaSourceEnum::Camera) {
       videoLoopDev = Preferences::GetCString("media.video_loopback_dev");
-
-      if (aFake && !audioLoopDev.IsEmpty() && !videoLoopDev.IsEmpty()) {
-        aFake = false;
-      }
-    } else {
-      aFake = false;
     }
+    if (aAudioType == MediaSourceEnum::Microphone) {
+      audioLoopDev = Preferences::GetCString("media.audio_loopback_dev");
+    }
+  }
+
+  if (!aFake) {
+    // Fake tracks only make sense when we have a fake stream.
+    aFakeTracks = false;
   }
 
   MediaManager::PostTask(FROM_HERE, NewTaskFrom([id, aWindowId, audioLoopDev,
@@ -1483,7 +1495,6 @@ MediaManager::EnumerateRawDevices(uint64_t aWindowId,
 
 MediaManager::MediaManager()
   : mMediaThread(nullptr)
-  , mMutex("mozilla::MediaManager")
   , mBackend(nullptr) {
   mPrefs.mFreq   = 1000; // 1KHz test tone
   mPrefs.mWidth  = 0; // adaptive default
@@ -1566,13 +1577,7 @@ MediaManager::Get() {
 
     // Prepare async shutdown
 
-    nsCOMPtr<nsIAsyncShutdownClient> profileBeforeChange;
-    {
-      nsCOMPtr<nsIAsyncShutdownService> svc = services::GetAsyncShutdown();
-      MOZ_RELEASE_ASSERT(svc);
-      nsresult rv = svc->GetProfileBeforeChange(getter_AddRefs(profileBeforeChange));
-      MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv));
-    }
+    nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase = GetShutdownPhase();
 
     class Blocker : public media::ShutdownBlocker
     {
@@ -1581,7 +1586,7 @@ MediaManager::Get() {
       : media::ShutdownBlocker(NS_LITERAL_STRING(
           "Media shutdown: blocking on media thread")) {}
 
-      NS_IMETHOD BlockShutdown(nsIAsyncShutdownClient* aProfileBeforeChange) override
+      NS_IMETHOD BlockShutdown(nsIAsyncShutdownClient*) override
       {
         MOZ_RELEASE_ASSERT(MediaManager::GetIfExists());
         MediaManager::GetIfExists()->Shutdown();
@@ -1590,10 +1595,10 @@ MediaManager::Get() {
     };
 
     sSingleton->mShutdownBlocker = new Blocker();
-    nsresult rv = profileBeforeChange->AddBlocker(sSingleton->mShutdownBlocker,
-                                                  NS_LITERAL_STRING(__FILE__),
-                                                  __LINE__,
-                                                  NS_LITERAL_STRING("Media shutdown"));
+    nsresult rv = shutdownPhase->AddBlocker(sSingleton->mShutdownBlocker,
+                                            NS_LITERAL_STRING(__FILE__),
+                                            __LINE__,
+                                            NS_LITERAL_STRING("Media shutdown"));
     MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv));
 #ifdef MOZ_B2G
     // Init MediaPermissionManager before sending out any permission requests.
@@ -1821,7 +1826,7 @@ MediaManager::GetUserMedia(nsPIDOMWindow* aWindow,
   bool isApp;
   docURI->SchemeIs("app", &isApp);
   // Same localhost check as ServiceWorkers uses
-  // (see IsFromAuthenticatedOriginInternal())
+  // (see IsURIPotentiallyTrustworthy())
   bool isLocalhost = NS_SUCCEEDED(rv) &&
                      (host.LowerCaseEqualsLiteral("localhost") ||
                       host.LowerCaseEqualsLiteral("127.0.0.1") ||
@@ -2405,10 +2410,10 @@ MediaManager::GetUserMediaDevices(nsPIDOMWindow* aWindow,
 MediaEngine*
 MediaManager::GetBackend(uint64_t aWindowId)
 {
+  MOZ_ASSERT(MediaManager::IsInMediaThread());
   // Plugin backends as appropriate. The default engine also currently
   // includes picture support for Android.
   // This IS called off main-thread.
-  MutexAutoLock lock(mMutex);
   if (!mBackend) {
     MOZ_RELEASE_ASSERT(!sInShutdown);  // we should never create a new backend in shutdown
 #if defined(MOZ_WEBRTC)
@@ -2605,12 +2610,6 @@ MediaManager::Shutdown()
   GetActiveWindows()->Clear();
   mActiveCallbacks.Clear();
   mCallIds.Clear();
-  {
-    MutexAutoLock lock(mMutex);
-    if (mBackend) {
-      mBackend->Shutdown(); // ok to invoke multiple times
-    }
-  }
 
   // Because mMediaThread is not an nsThread, we must dispatch to it so it can
   // clean up BackgroundChild. Continue stopping thread once this is done.
@@ -2618,26 +2617,32 @@ MediaManager::Shutdown()
   class ShutdownTask : public Task
   {
   public:
-    ShutdownTask(already_AddRefed<MediaEngine> aBackend,
+    ShutdownTask(MediaManager* aManager,
                  nsRunnable* aReply)
-      : mReply(aReply)
-      , mBackend(aBackend) {}
+      : mManager(aManager)
+      , mReply(aReply) {}
   private:
     virtual void
     Run()
     {
       LOG(("MediaManager Thread Shutdown"));
       MOZ_ASSERT(MediaManager::IsInMediaThread());
+      // Must shutdown backend on MediaManager thread, since that's where we started it from!
+      {
+        if (mManager->mBackend) {
+          mManager->mBackend->Shutdown(); // ok to invoke multiple times
+        }
+      }
       mozilla::ipc::BackgroundChild::CloseForCurrentThread();
       // must explicitly do this before dispatching the reply, since the reply may kill us with Stop()
-      mBackend = nullptr; // last reference, will invoke Shutdown() again
+      mManager->mBackend = nullptr; // last reference, will invoke Shutdown() again
 
       if (NS_FAILED(NS_DispatchToMainThread(mReply.forget()))) {
         LOG(("Will leak thread: DispatchToMainthread of reply runnable failed in MediaManager shutdown"));
       }
     }
+    RefPtr<MediaManager> mManager;
     RefPtr<nsRunnable> mReply;
-    RefPtr<MediaEngine> mBackend;
   };
 
   // Post ShutdownTask to execute on mMediaThread and pass in a lambda
@@ -2650,14 +2655,8 @@ MediaManager::Shutdown()
   // note that this == sSingleton
   RefPtr<MediaManager> that(sSingleton);
   // Release the backend (and call Shutdown()) from within the MediaManager thread
-  RefPtr<MediaEngine> temp;
-  {
-    MutexAutoLock lock(mMutex);
-    temp = mBackend.forget();
-  }
   // Don't use MediaManager::PostTask() because we're sInShutdown=true here!
-  mMediaThread->message_loop()->PostTask(FROM_HERE, new ShutdownTask(
-      temp.forget(),
+  mMediaThread->message_loop()->PostTask(FROM_HERE, new ShutdownTask(this,
       media::NewRunnableFrom([this, that]() mutable {
     LOG(("MediaManager shutdown lambda running, releasing MediaManager singleton and thread"));
     if (mMediaThread) {
@@ -2666,14 +2665,8 @@ MediaManager::Shutdown()
 
     // Remove async shutdown blocker
 
-    nsCOMPtr<nsIAsyncShutdownClient> profileBeforeChange;
-    {
-      nsCOMPtr<nsIAsyncShutdownService> svc = services::GetAsyncShutdown();
-      MOZ_RELEASE_ASSERT(svc);
-      nsresult rv = svc->GetProfileBeforeChange(getter_AddRefs(profileBeforeChange));
-      MOZ_RELEASE_ASSERT(NS_SUCCEEDED(rv));
-    }
-    profileBeforeChange->RemoveBlocker(sSingleton->mShutdownBlocker);
+    nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase = GetShutdownPhase();
+    shutdownPhase->RemoveBlocker(sSingleton->mShutdownBlocker);
 
     // we hold a ref to 'that' which is the same as sSingleton
     sSingleton = nullptr;

@@ -16,6 +16,7 @@
 #include "mozilla/FontRange.h"
 #include "nsCOMPtr.h"
 #include "nsIDOMKeyEvent.h"
+#include "nsISelectionListener.h"
 #include "nsITransferable.h"
 #include "nsRect.h"
 #include "nsStringGlue.h"
@@ -489,7 +490,6 @@ public:
     NS_ASSERTION(!IsAllowedToDispatchDOMEvent(),
       "WidgetQueryContentEvent needs to support Duplicate()");
     MOZ_CRASH("WidgetQueryContentEvent doesn't support Duplicate()");
-    return nullptr;
   }
 
   void InitForQueryTextContent(uint32_t aOffset, uint32_t aLength,
@@ -663,6 +663,7 @@ public:
     , mExpandToClusterBoundary(true)
     , mSucceeded(false)
     , mUseNativeLineBreak(true)
+    , mReason(nsISelectionListener::NO_REASON)
   {
   }
 
@@ -687,6 +688,9 @@ public:
   bool mSucceeded;
   // true if native line breaks are used for mOffset and mLength
   bool mUseNativeLineBreak;
+  // Fennec provides eSetSelection reason codes for downstream
+  // use in AccessibleCaret visibility logic.
+  int16_t mReason;
 };
 
 /******************************************************************************

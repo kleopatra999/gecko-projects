@@ -44,6 +44,7 @@
 #include "jit/arm64/vixl/Simulator-vixl.h"
 #include "jit/JitCompartment.h"
 #include "jit/mips32/Simulator-mips32.h"
+#include "jit/mips64/Simulator-mips64.h"
 #include "jit/PcScriptCache.h"
 #include "js/Date.h"
 #include "js/MemoryMetrics.h"
@@ -225,6 +226,7 @@ JSRuntime::JSRuntime(JSRuntime* parentRuntime)
     ionPcScriptCache(nullptr),
     scriptEnvironmentPreparer(nullptr),
     ctypesActivityCallback(nullptr),
+    windowProxyClass_(nullptr),
     offthreadIonCompilationEnabled_(true),
     parallelParsingEnabled_(true),
     autoWritableJitCodeActive_(false),
@@ -615,7 +617,7 @@ JSRuntime::resetJitStackLimit()
 {
     // Note that, for now, we use the untrusted limit for ion. This is fine,
     // because it's the most conservative limit, and if we hit it, we'll bail
-    // out of ion into the interpeter, which will do a proper recursion check.
+    // out of ion into the interpreter, which will do a proper recursion check.
 #ifdef JS_SIMULATOR
     jitStackLimit_ = jit::Simulator::StackLimit();
 #else

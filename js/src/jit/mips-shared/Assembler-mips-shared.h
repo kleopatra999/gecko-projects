@@ -104,9 +104,8 @@ static MOZ_CONSTEXPR_VAR FloatRegister InvalidFloatReg;
 static MOZ_CONSTEXPR_VAR Register StackPointer = sp;
 static MOZ_CONSTEXPR_VAR Register FramePointer = InvalidReg;
 static MOZ_CONSTEXPR_VAR Register ReturnReg = v0;
-static MOZ_CONSTEXPR_VAR FloatRegister ReturnInt32x4Reg = InvalidFloatReg;
-static MOZ_CONSTEXPR_VAR FloatRegister ReturnFloat32x4Reg = InvalidFloatReg;
-static MOZ_CONSTEXPR_VAR FloatRegister ScratchSimdReg = InvalidFloatReg;
+static MOZ_CONSTEXPR_VAR FloatRegister ReturnSimd128Reg = InvalidFloatReg;
+static MOZ_CONSTEXPR_VAR FloatRegister ScratchSimd128Reg = InvalidFloatReg;
 
 // A bias applied to the GlobalReg to allow the use of instructions with small
 // negative immediate offsets which doubles the range of global data that can be
@@ -779,7 +778,7 @@ class AssemblerMIPSShared : public AssemblerShared
             dataRelocations_.writeUnsigned(nextOffset().getOffset());
         }
     }
-    void writePrebarrierOffset(CodeOffsetLabel label) {
+    void writePrebarrierOffset(CodeOffset label) {
         preBarriers_.writeUnsigned(label.offset());
     }
 
@@ -797,6 +796,9 @@ class AssemblerMIPSShared : public AssemblerShared
     bool isFinished;
   public:
     void finish();
+    bool asmMergeWith(const AssemblerMIPSShared& other) {
+        MOZ_CRASH("NYI");
+    }
     void executableCopy(void* buffer);
     void copyJumpRelocationTable(uint8_t* dest);
     void copyDataRelocationTable(uint8_t* dest);
@@ -1036,9 +1038,12 @@ class AssemblerMIPSShared : public AssemblerShared
         return nextOffset().getOffset();
     }
     void retarget(Label* label, Label* target);
+    void retargetWithOffset(size_t offset, const LabelBase* label, Label* target) {
+        MOZ_CRASH("NYI");
+    }
 
     // See Bind
-    size_t labelOffsetToPatchOffset(size_t offset) { return offset; }
+    size_t labelToPatchOffset(CodeOffset label) { return label.offset(); }
 
     void call(Label* label);
     void call(void* target);

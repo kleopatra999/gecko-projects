@@ -506,7 +506,7 @@ BasicCompositor::BeginFrame(const nsIntRegion& aInvalidRegion,
                             gfx::Rect *aClipRectOut /* = nullptr */,
                             gfx::Rect *aRenderBoundsOut /* = nullptr */)
 {
-  mWidgetSize = mWidget->GetClientSize();
+  mWidgetSize = mWidget->GetClientSize().ToUnknownSize();
   IntRect intRect = gfx::IntRect(IntPoint(), mWidgetSize);
   Rect rect = Rect(0, 0, intRect.width, intRect.height);
 
@@ -587,7 +587,7 @@ BasicCompositor::EndFrame()
     float g = float(rand()) / RAND_MAX;
     float b = float(rand()) / RAND_MAX;
     // We're still clipped to mInvalidRegion, so just fill the bounds.
-    mRenderTarget->mDrawTarget->FillRect(ToRect(mInvalidRegion.GetBounds()),
+    mRenderTarget->mDrawTarget->FillRect(IntRectToRect(mInvalidRegion.GetBounds()),
                                          ColorPattern(Color(r, g, b, 0.2f)));
   }
 

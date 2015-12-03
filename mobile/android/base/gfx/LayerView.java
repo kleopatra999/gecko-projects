@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import org.mozilla.gecko.AndroidGamepadManager;
 import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.annotation.WrapForJNI;
+import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoAccessibility;
@@ -145,7 +146,7 @@ public class LayerView extends ScrollView implements Tabs.OnTabsChangedListener 
      * PanZoomController not to generate longpress events.
      */
     public void setIsLongpressEnabled(boolean isLongpressEnabled) {
-        ((JavaPanZoomController) mPanZoomController).setIsLongpressEnabled(isLongpressEnabled);
+        mPanZoomController.setIsLongpressEnabled(isLongpressEnabled);
     }
 
     private static Point getEventRadius(MotionEvent event) {
@@ -249,6 +250,10 @@ public class LayerView extends ScrollView implements Tabs.OnTabsChangedListener 
         if (event.getSource() == InputDevice.SOURCE_TOUCHSCREEN &&
             !GeckoAccessibility.isEnabled()) {
             return false;
+        }
+
+        if (AppConstants.MOZ_ANDROID_APZ && mPanZoomController != null && mPanZoomController.onTouchEvent(event)) {
+            return true;
         }
 
         return sendEventToGecko(event);

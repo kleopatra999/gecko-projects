@@ -593,7 +593,9 @@ public:
 
     AutoJSAPI jsapi;
     jsapi.Init();
-    runnable->Dispatch(jsapi.cx());
+    if (!runnable->Dispatch(jsapi.cx())) {
+      NS_WARNING("Failed to dispatch SkipWaitingResultRunnable to the worker.");
+    }
     return NS_OK;
   }
 };
@@ -780,8 +782,6 @@ const js::Class workerdebuggersandbox_class = {
     nullptr,
     JS_GlobalObjectTraceHook,
     JS_NULL_CLASS_SPEC, {
-      nullptr,
-      nullptr,
       false,
       nullptr,
       workerdebuggersandbox_moved

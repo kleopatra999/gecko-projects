@@ -149,8 +149,8 @@ MAKE_SDK = $(CREATE_FINAL_TAR) - $(MOZ_APP_NAME)-sdk | bzip2 -vf > $(SDK)
 endif
 ifeq ($(MOZ_PKG_FORMAT),ZIP)
 ifdef MOZ_EXTERNAL_SIGNING_FORMAT
-# We can't use osslsigncode on zip files
-MOZ_EXTERNAL_SIGNING_FORMAT := $(filter-out osslsigncode,$(MOZ_EXTERNAL_SIGNING_FORMAT))
+# We can't use sha2signcode on zip files
+MOZ_EXTERNAL_SIGNING_FORMAT := $(filter-out sha2signcode,$(MOZ_EXTERNAL_SIGNING_FORMAT))
 endif
 PKG_SUFFIX	= .zip
 INNER_MAKE_PACKAGE	= $(ZIP) -r9D $(PACKAGE) $(MOZ_PKG_DIR) \
@@ -334,7 +334,7 @@ UPLOAD_EXTRA_FILES += ../embedding/android/geckoview_example/geckoview_example.a
 # Robocop/Robotium tests, Android Background tests, and Fennec need to
 # be signed with the same key, which means release signing them all.
 
-ROBOCOP_PATH = $(abspath $(_ABS_DIST)/../build/mobile/robocop)
+ROBOCOP_PATH = $(abspath $(DEPTH)/mobile/android/tests/browser/robocop)
 # Normally, $(NSINSTALL) would be used instead of cp, but INNER_ROBOCOP_PACKAGE
 # is used in a series of commands that run under a "cd something", while
 # $(NSINSTALL) is relative.

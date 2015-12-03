@@ -51,6 +51,10 @@
 #include "nsIDOMDesktopNotification.h"
 #endif
 
+#ifndef MOZ_SIMPLEPUSH
+#include "nsIPushNotificationService.h"
+#endif
+
 namespace mozilla {
 namespace dom {
 
@@ -678,6 +682,8 @@ protected:
   {
     AssertIsOnMainThread();
   }
+
+  nsresult AdjustPushQuota(const char* aTopic);
 };
 
 NS_IMPL_ISUPPORTS(NotificationObserver, nsIObserver)
@@ -1110,8 +1116,7 @@ Notification::DispatchClickEvent()
 {
   AssertIsOnTargetThread();
   RefPtr<Event> event = NS_NewDOMEvent(this, nullptr, nullptr);
-  nsresult rv = event->InitEvent(NS_LITERAL_STRING("click"), false, true);
-  NS_ENSURE_SUCCESS(rv, false);
+  event->InitEvent(NS_LITERAL_STRING("click"), false, true);
   event->SetTrusted(true);
   WantsPopupControlCheck popupControlCheck(event);
   bool doDefaultAction = true;
@@ -1156,6 +1161,7 @@ NotificationObserver::Observe(nsISupports* aSubject, const char* aTopic,
   AssertIsOnMainThread();
 
   if (!strcmp("alertdisablecallback", aTopic)) {
+    Telemetry::Accumulate(Telemetry::WEB_NOTIFICATION_MENU, 1);
     if (XRE_IsParentProcess()) {
       return Notification::RemovePermission(mPrincipal);
     }
@@ -1165,7 +1171,10 @@ NotificationObserver::Observe(nsISupports* aSubject, const char* aTopic,
     ContentChild::GetSingleton()->SendDisableNotifications(
       IPC::Principal(mPrincipal));
     return NS_OK;
+  } else if (!strcmp("alertclickcallback", aTopic)) {
+    Telemetry::Accumulate(Telemetry::WEB_NOTIFICATION_CLICKED, 1);
   } else if (!strcmp("alertsettingscallback", aTopic)) {
+    Telemetry::Accumulate(Telemetry::WEB_NOTIFICATION_MENU, 2);
     if (XRE_IsParentProcess()) {
       return Notification::OpenSettings(mPrincipal);
     }
@@ -1174,9 +1183,42 @@ NotificationObserver::Observe(nsISupports* aSubject, const char* aTopic,
     ContentChild::GetSingleton()->SendOpenNotificationSettings(
       IPC::Principal(mPrincipal));
     return NS_OK;
+  } else if (!strcmp("alertshow", aTopic) ||
+             !strcmp("alertfinished", aTopic)) {
+    Unused << NS_WARN_IF(NS_FAILED(AdjustPushQuota(aTopic)));
+
+    if (!strcmp("alertshow", aTopic)) {
+      // Record notifications actually shown (e.g. don't count if DND is on).
+      Telemetry::Accumulate(Telemetry::WEB_NOTIFICATION_SHOWN, 1);
+    }
   }
 
   return mObserver->Observe(aSubject, aTopic, aData);
+}
+
+nsresult
+NotificationObserver::AdjustPushQuota(const char* aTopic)
+{
+#ifdef MOZ_SIMPLEPUSH
+  return NS_ERROR_NOT_IMPLEMENTED;
+#else
+  nsCOMPtr<nsIPushQuotaManager> pushQuotaManager =
+    do_GetService("@mozilla.org/push/NotificationService;1");
+  if (!pushQuotaManager) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsAutoCString origin;
+  nsresult rv = mPrincipal->GetOrigin(origin);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  if (!strcmp("alertshow", aTopic)) {
+    return pushQuotaManager->NotificationForOriginShown(origin.get());
+  }
+  return pushQuotaManager->NotificationForOriginClosed(origin.get());
+#endif
 }
 
 NS_IMETHODIMP
@@ -1584,8 +1626,8 @@ Notification::GetPermission(nsIGlobalObject* aGlobal, ErrorResult& aRv)
     MOZ_ASSERT(worker);
     RefPtr<GetPermissionRunnable> r =
       new GetPermissionRunnable(worker);
-    if (!r->Dispatch(worker->GetJSContext())) {
-      aRv.Throw(NS_ERROR_DOM_ABORT_ERR);
+    r->Dispatch(aRv);
+    if (aRv.Failed()) {
       return NotificationPermission::Denied;
     }
 
@@ -2190,7 +2232,12 @@ NotificationFeature::Notify(JSContext* aCx, Status aStatus)
     // Dispatched to main thread, blocks on closing the Notification.
     RefPtr<CloseNotificationRunnable> r =
       new CloseNotificationRunnable(mNotification);
-    r->Dispatch(aCx);
+    ErrorResult rv;
+    r->Dispatch(rv);
+    // XXXbz I'm told throwing and returning false from here is pointless (and
+    // also that doing sync stuff from here is really weird), so I guess we just
+    // suppress the exception on rv, if any.
+    rv.SuppressException();
 
     // Only call ReleaseObject() to match the observer's NotificationRef
     // ownership (since CloseNotificationRunnable asked the observer to drop the
@@ -2325,15 +2372,14 @@ Notification::ShowPersistentNotification(nsIGlobalObject *aGlobal,
     worker->AssertIsOnWorkerThread();
     RefPtr<CheckLoadRunnable> loadChecker =
       new CheckLoadRunnable(worker, NS_ConvertUTF16toUTF8(aScope));
-    if (!loadChecker->Dispatch(worker->GetJSContext())) {
-      aRv.Throw(NS_ERROR_DOM_ABORT_ERR);
+    loadChecker->Dispatch(aRv);
+    if (aRv.Failed()) {
       return nullptr;
     }
 
     if (NS_WARN_IF(NS_FAILED(loadChecker->Result()))) {
       if (loadChecker->Result() == NS_ERROR_NOT_AVAILABLE) {
-        nsAutoString scope(aScope);
-        aRv.ThrowTypeError<MSG_NO_ACTIVE_WORKER>(&scope);
+        aRv.ThrowTypeError<MSG_NO_ACTIVE_WORKER>(aScope);
       } else {
         aRv.Throw(NS_ERROR_DOM_SECURITY_ERR);
       }

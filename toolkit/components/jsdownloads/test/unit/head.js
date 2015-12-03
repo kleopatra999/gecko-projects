@@ -409,11 +409,11 @@ function promiseStartExternalHelperAppServiceDownload(aSourceUrl) {
 
     let channel = NetUtil.newChannel({
       uri: sourceURI,
-      loadUsingSystemPrincipal: true,
+      loadUsingSystemPrincipal: true
     });
 
     // Start the actual download process.
-    channel.asyncOpen({
+    channel.asyncOpen2({
       contentListener: null,
 
       onStartRequest: function (aRequest, aContext)
@@ -435,7 +435,7 @@ function promiseStartExternalHelperAppServiceDownload(aSourceUrl) {
         this.contentListener.onDataAvailable(aRequest, aContext, aInputStream,
                                              aOffset, aCount);
       },
-    }, null);
+    });
   }.bind(this)).then(null, do_report_unexpected_exception);
 
   return deferred.promise;

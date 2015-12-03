@@ -957,7 +957,7 @@ TabParent::UpdateDimensions(const nsIntRect& rect, const ScreenIntSize& size)
       ViewAs<LayoutDevicePixel>(mRect,
                                 PixelCastJustification::LayoutDeviceIsScreenForTabDims);
     LayoutDeviceIntSize devicePixelSize =
-      ViewAs<LayoutDevicePixel>(mDimensions.ToUnknownSize(),
+      ViewAs<LayoutDevicePixel>(mDimensions,
                                 PixelCastJustification::LayoutDeviceIsScreenForTabDims);
 
     CSSRect unscaledRect = devicePixelRect / widgetScale;
@@ -2694,6 +2694,12 @@ TabParent::ApzAwareEventRoutingToChild(ScrollableLayerGuid* aOutTargetGuid,
                                        uint64_t* aOutInputBlockId,
                                        nsEventStatus* aOutApzResponse)
 {
+  // Let the widget know that the event will be sent to the child process,
+  // which will (hopefully) send a confirmation notice back to APZ.
+  // Do this even if APZ is off since we need it for swipe gesture support on
+  // OS X without APZ.
+  InputAPZContext::SetRoutedToChildProcess();
+
   if (AsyncPanZoomEnabled()) {
     if (aOutTargetGuid) {
       *aOutTargetGuid = InputAPZContext::GetTargetLayerGuid();
@@ -2715,10 +2721,6 @@ TabParent::ApzAwareEventRoutingToChild(ScrollableLayerGuid* aOutTargetGuid,
     if (aOutApzResponse) {
       *aOutApzResponse = InputAPZContext::GetApzResponse();
     }
-
-    // Let the widget know that the event will be sent to the child process,
-    // which will (hopefully) send a confirmation notice back to APZ.
-    InputAPZContext::SetRoutedToChildProcess();
   } else {
     if (aOutInputBlockId) {
       *aOutInputBlockId = 0;
@@ -2822,13 +2824,11 @@ TabParent::GetLoadContext()
   if (mLoadContext) {
     loadContext = mLoadContext;
   } else {
-    // TODO Bug 1191740 - Add OriginAttributes in TabContext
-    OriginAttributes attrs = OriginAttributes(OwnOrContainingAppId(), IsBrowserElement());
     loadContext = new LoadContext(GetOwnerElement(),
                                   true /* aIsContent */,
                                   mChromeFlags & nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW,
                                   mChromeFlags & nsIWebBrowserChrome::CHROME_REMOTE_WINDOW,
-                                  attrs);
+                                  OriginAttributesRef());
     mLoadContext = loadContext;
   }
   return loadContext.forget();
@@ -2880,11 +2880,13 @@ TabParent::InjectTouchEvent(const nsAString& aType,
         CSSPoint::ToAppUnits(CSSPoint(aXs[i], aYs[i])),
         presContext->AppUnitsPerDevPixel());
 
-    RefPtr<Touch> t = new Touch(aIdentifiers[i],
-                                  pt,
-                                  nsIntPoint(aRxs[i], aRys[i]),
-                                  aRotationAngles[i],
-                                  aForces[i]);
+    LayoutDeviceIntPoint radius =
+      LayoutDeviceIntPoint::FromAppUnitsRounded(
+        CSSPoint::ToAppUnits(CSSPoint(aRxs[i], aRys[i])),
+        presContext->AppUnitsPerDevPixel());
+
+    RefPtr<Touch> t =
+      new Touch(aIdentifiers[i], pt, radius, aRotationAngles[i], aForces[i]);
 
     // Consider all injected touch events as changedTouches. For more details
     // about the meaning of changedTouches for each event, see
@@ -2909,7 +2911,7 @@ NS_IMETHODIMP
 TabParent::SetDocShellIsActive(bool isActive)
 {
   mDocShellIsActive = isActive;
-  Unused << SendSetDocShellIsActive(isActive);
+  Unused << SendSetDocShellIsActive(isActive, true);
   return NS_OK;
 }
 
@@ -2917,6 +2919,14 @@ NS_IMETHODIMP
 TabParent::GetDocShellIsActive(bool* aIsActive)
 {
   *aIsActive = mDocShellIsActive;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+TabParent::SetDocShellIsActiveAndForeground(bool isActive)
+{
+  mDocShellIsActive = isActive;
+  Unused << SendSetDocShellIsActive(isActive, false);
   return NS_OK;
 }
 

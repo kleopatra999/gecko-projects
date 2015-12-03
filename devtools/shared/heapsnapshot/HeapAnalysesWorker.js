@@ -36,15 +36,17 @@ workerHelper.createTask(self, "takeCensus", ({ snapshotFilePath, censusOptions, 
     throw new Error(`No known heap snapshot for '${snapshotFilePath}'`);
   }
 
-  let report = snapshots[snapshotFilePath].takeCensus(censusOptions);
+  const report = snapshots[snapshotFilePath].takeCensus(censusOptions);
 
-  if (requestOptions.asTreeNode) {
-    return censusReportToCensusTreeNode(censusOptions.breakdown, report);
-  } else if (requestOptions.asInvertedTreeNode) {
-    return censusReportToCensusTreeNode(censusOptions.breakdown, report, { invert: true });
-  } else {
-    return report;
+  if (requestOptions.asTreeNode || requestOptions.asInvertedTreeNode) {
+    const opts = { filter: requestOptions.filter || null };
+    if (requestOptions.asInvertedTreeNode) {
+      opts.invert = true;
+    }
+    return censusReportToCensusTreeNode(censusOptions.breakdown, report, opts);
   }
+
+  return report;
 });
 
 /**
@@ -70,13 +72,15 @@ workerHelper.createTask(self, "takeCensusDiff", request => {
   const second = snapshots[secondSnapshotFilePath].takeCensus(censusOptions);
   const delta = CensusUtils.diff(censusOptions.breakdown, first, second);
 
-  if (requestOptions.asTreeNode) {
-    return censusReportToCensusTreeNode(censusOptions.breakdown, delta);
-  } else if (requestOptions.asInvertedTreeNode) {
-    return censusReportToCensusTreeNode(censusOptions.breakdown, delta, { invert: true });
-  } else {
-    return delta;
+  if (requestOptions.asTreeNode || requestOptions.asInvertedTreeNode) {
+    const opts = { filter: requestOptions.filter || null };
+    if (requestOptions.asInvertedTreeNode) {
+      opts.invert = true;
+    }
+    return censusReportToCensusTreeNode(censusOptions.breakdown, delta, opts);
   }
+
+  return delta;
 });
 
 /**

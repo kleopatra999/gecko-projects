@@ -311,11 +311,11 @@ CrashStatsLogForwarder::CrashAction(LogReason aReason)
 #ifndef RELEASE_BUILD
   // Non-release builds crash by default, but will use telemetry
   // if this environment variable is present.
-  static bool useTelemetry = gfxEnv::GfxCrashTelemetry();
+  static bool useTelemetry = gfxEnv::GfxDevCrashTelemetry();
 #else
   // Release builds use telemetry by default, but will crash instead
   // if this environment variable is present.
-  static bool useTelemetry = !gfxEnv::GfxCrashMozCrash();
+  static bool useTelemetry = !gfxEnv::GfxDevCrashMozCrash();
 #endif
 
   if (useTelemetry) {
@@ -504,13 +504,18 @@ gfxPlatform::Init()
     }
     gEverInitialized = true;
 
-    CrashStatsLogForwarder* logForwarder = new CrashStatsLogForwarder("GraphicsCriticalError");
-    mozilla::gfx::Factory::SetLogForwarder(logForwarder);
-
     // Initialize the preferences by creating the singleton.
     gfxPrefs::GetSingleton();
 
-    logForwarder->SetCircularBufferSize(gfxPrefs::GfxLoggingCrashLength());
+    auto fwd = new CrashStatsLogForwarder("GraphicsCriticalError");
+    fwd->SetCircularBufferSize(gfxPrefs::GfxLoggingCrashLength());
+
+    mozilla::gfx::Config cfg;
+    cfg.mLogForwarder = fwd;
+    cfg.mMaxTextureSize = gfxPrefs::MaxTextureSize();
+    cfg.mMaxAllocSize = gfxPrefs::MaxAllocSize();
+
+    gfx::Factory::Init(cfg);
 
     gGfxPlatformPrefsLock = new Mutex("gfxPlatform::gGfxPlatformPrefsLock");
 
@@ -700,6 +705,8 @@ gfxPlatform::Shutdown()
     // delete it.
     delete mozilla::gfx::Factory::GetLogForwarder();
     mozilla::gfx::Factory::SetLogForwarder(nullptr);
+
+    gfx::Factory::ShutDown();
 
     delete gGfxPlatformPrefsLock;
 
@@ -1109,6 +1116,16 @@ gfxPlatform::SupportsAzureContentForDrawTarget(DrawTarget* aTarget)
     return false;
   }
 
+#ifdef USE_SKIA_GPU
+ // Skia content rendering doesn't support GPU acceleration, so we can't
+ // use the same backend if the current backend is accelerated.
+ if ((aTarget->GetType() == DrawTargetType::HARDWARE_RASTER)
+     && (aTarget->GetBackendType() ==  BackendType::SKIA))
+ {
+  return false;
+ }
+#endif
+
   return SupportsAzureContentForType(aTarget->GetBackendType());
 }
 
@@ -1159,6 +1176,11 @@ SkiaGLGlue*
 gfxPlatform::GetSkiaGLGlue()
 {
 #ifdef USE_SKIA_GPU
+  if (!gfxPlatform::GetPlatform()->UseAcceleratedSkiaCanvas()) {
+    gfxCriticalNote << "Accelerated Skia canvas is disabled";
+    return nullptr;
+  }
+
   if (!mSkiaGlue) {
     /* Dummy context. We always draw into a FBO.
      *
@@ -1765,8 +1787,8 @@ gfxPlatform::GetBidiNumeralOption()
     return mBidiNumeralOption;
 }
 
-static void
-FlushFontAndWordCaches()
+/* static */ void
+gfxPlatform::FlushFontAndWordCaches()
 {
     gfxFontCache *fontCache = gfxFontCache::GetCache();
     if (fontCache) {
@@ -2120,34 +2142,6 @@ gfxPlatform::GetDefaultFrameRate()
   return 60;
 }
 
-static nsString
-DetectBadApzWheelInputPrefs()
-{
-  static const char *sBadMultiplierPrefs[] = {
-    "mousewheel.default.delta_multiplier_x",
-    "mousewheel.with_alt.delta_multiplier_x",
-    "mousewheel.with_control.delta_multiplier_x",
-    "mousewheel.with_meta.delta_multiplier_x",
-    "mousewheel.with_shift.delta_multiplier_x",
-    "mousewheel.with_win.delta_multiplier_x",
-    "mousewheel.with_alt.delta_multiplier_y",
-    "mousewheel.with_control.delta_multiplier_y",
-    "mousewheel.with_meta.delta_multiplier_y",
-    "mousewheel.with_shift.delta_multiplier_y",
-    "mousewheel.with_win.delta_multiplier_y",
-  };
-
-  nsString badPref;
-  for (size_t i = 0; i < MOZ_ARRAY_LENGTH(sBadMultiplierPrefs); i++) {
-    if (Preferences::GetInt(sBadMultiplierPrefs[i], 100) != 100) {
-      badPref.AssignASCII(sBadMultiplierPrefs[i]);
-      break;
-    }
-  }
-
-  return badPref;
-}
-
 void
 gfxPlatform::GetApzSupportInfo(mozilla::widget::InfoObject& aObj)
 {
@@ -2156,12 +2150,7 @@ gfxPlatform::GetApzSupportInfo(mozilla::widget::InfoObject& aObj)
   }
 
   if (SupportsApzWheelInput()) {
-    nsString badPref = DetectBadApzWheelInputPrefs();
-
     aObj.DefineProperty("ApzWheelInput", 1);
-    if (badPref.Length()) {
-      aObj.DefineProperty("ApzWheelInputWarning", badPref);
-    }
   }
 
   if (SupportsApzTouchInput()) {

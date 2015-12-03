@@ -96,6 +96,7 @@
 #include "nsIOService.h"
 #include "nsDOMClassInfoID.h"
 #include "nsColorPickerProxy.h"
+#include "nsContentPermissionHelper.h"
 #include "nsPresShell.h"
 #include "nsIAppsService.h"
 #include "nsNetUtil.h"
@@ -692,6 +693,9 @@ TabChild::Observe(nsISupports *aSubject,
     // In theory a tabChild should contain just 1 top window, but let's double
     // check it comparing the windowID.
     if (window->WindowID() != windowID) {
+      MOZ_LOG(AudioChannelService::GetAudioChannelLog(), LogLevel::Debug,
+              ("TabChild, Observe, different windowID, owner ID = %lld, "
+               "ID from wrapper = %lld", window->WindowID(), windowID));
       return NS_OK;
     }
 
@@ -753,7 +757,7 @@ TabChild::Init()
   }
   mPuppetWidget->Create(
     nullptr, 0,              // no parents
-    gfx::IntRect(gfx::IntPoint(0, 0), gfx::IntSize(0, 0)),
+    LayoutDeviceIntRect(0, 0, 0, 0),
     nullptr                  // HandleWidgetEvent
   );
 
@@ -829,6 +833,7 @@ TabChild::NotifyTabContextUpdated()
         } else {
           docShell->SetIsApp(OwnAppId());
         }
+        docShell->SetIsSignedPackage(OriginAttributesRef().mSignedPkg);
     }
 }
 
@@ -1803,10 +1808,11 @@ TabChild::RecvMouseWheelEvent(const WidgetWheelEvent& aEvent,
   event.widget = mPuppetWidget;
   APZCCallbackHelper::DispatchWidgetEvent(event);
 
+  if (event.mCanTriggerSwipe) {
+    SendRespondStartSwipeEvent(aInputBlockId, event.TriggersSwipe());
+  }
+
   if (aEvent.mFlags.mHandledByAPZ) {
-    if (event.mCanTriggerSwipe) {
-      SendRespondStartSwipeEvent(aInputBlockId, event.TriggersSwipe());
-    }
     mAPZEventState->ProcessWheelEvent(event, aGuid, aInputBlockId);
   }
   return true;
@@ -2116,7 +2122,6 @@ TabChild::DeallocPIndexedDBPermissionRequestChild(
                                        PIndexedDBPermissionRequestChild* aActor)
 {
   MOZ_ASSERT(aActor);
-
   delete aActor;
   return true;
 }
@@ -2228,6 +2233,15 @@ TabChild::RecvDestroy()
   MOZ_ASSERT(mDestroyed == false);
   mDestroyed = true;
 
+  nsTArray<PContentPermissionRequestChild*> childArray =
+      nsContentPermissionUtils::GetContentPermissionRequestChildById(GetTabId());
+
+  // Need to close undeleted ContentPermissionRequestChilds before tab is closed.
+  for (auto& permissionRequestChild : childArray) {
+      auto child = static_cast<RemotePermissionRequest*>(permissionRequestChild);
+      child->Destroy();
+  }
+
   while (mActiveSuppressDisplayport > 0) {
     APZCCallbackHelper::SuppressDisplayport(false);
     mActiveSuppressDisplayport--;
@@ -2290,11 +2304,15 @@ TabChild::RecvSetUpdateHitRegion(const bool& aEnabled)
 }
 
 bool
-TabChild::RecvSetDocShellIsActive(const bool& aIsActive)
+TabChild::RecvSetDocShellIsActive(const bool& aIsActive, const bool& aIsHidden)
 {
     nsCOMPtr<nsIDocShell> docShell = do_GetInterface(WebNavigation());
     if (docShell) {
-      docShell->SetIsActive(aIsActive);
+      if (aIsHidden) {
+        docShell->SetIsActive(aIsActive);
+      } else {
+        docShell->SetIsActiveAndForeground(aIsActive);
+      }
     }
     return true;
 }
@@ -2820,8 +2838,9 @@ TabChild::CreatePluginWidget(nsIWidget* aParent, nsIWidget** aOut)
   initData.mUnicode = false;
   initData.clipChildren = true;
   initData.clipSiblings = true;
-  nsresult rv = pluginWidget->Create(aParent, nullptr, gfx::IntRect(gfx::IntPoint(0, 0),
-                                     nsIntSize(0, 0)), &initData);
+  nsresult rv = pluginWidget->Create(aParent, nullptr,
+                                     LayoutDeviceIntRect(0, 0, 0, 0),
+                                     &initData);
   if (NS_FAILED(rv)) {
     NS_WARNING("Creating native plugin widget on the chrome side failed.");
   }

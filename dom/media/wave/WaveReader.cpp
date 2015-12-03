@@ -23,7 +23,7 @@ namespace mozilla {
 // Un-comment to enable logging of seek bisections.
 //#define SEEK_LOGGING
 
-extern PRLogModuleInfo* gMediaDecoderLog;
+extern LazyLogModule gMediaDecoderLog;
 #define LOG(type, msg) MOZ_LOG(gMediaDecoderLog, type, msg)
 #ifdef SEEK_LOGGING
 #define SEEK_LOG(type, msg) MOZ_LOG(gMediaDecoderLog, type, msg)
@@ -143,13 +143,6 @@ nsresult WaveReader::ReadMetadata(MediaInfo* aInfo,
 
 
   return NS_OK;
-}
-
-bool
-WaveReader::IsMediaSeekable()
-{
-  // not used
-  return true;
 }
 
 template <typename T> T UnsignedByteToAudioSample(uint8_t aValue);

@@ -45,7 +45,6 @@ user_pref("app.update.staging.enabled", false);
 user_pref("app.update.url.android", "");
 // Make sure GMPInstallManager won't hit the network.
 user_pref("media.gmp-manager.url.override", "http://%(server)s/dummy-gmp-manager.xml");
-user_pref("browser.panorama.experienced_first_run", true); // Assume experienced
 user_pref("dom.w3c_touch_events.enabled", 1);
 user_pref("dom.undo_manager.enabled", true);
 user_pref("dom.webcomponents.enabled", true);
@@ -116,8 +115,7 @@ user_pref("network.sntp.pools", "%(server)s");
 user_pref("network.sntp.maxRetryCount", 1);
 
 // Make sure the notification permission migration test doesn't hit the network.
-user_pref("browser.push.warning.infoURL", "http://%(server)s/alerts-dummy/infoURL");
-user_pref("browser.push.warning.migrationURL", "http://%(server)s/alerts-dummy/migrationURL");
+user_pref("app.support.baseURL", "http://%(server)s/support-dummy/");
 
 // Existing tests don't wait for the notification button security delay
 user_pref("security.notification_enable_delay", 0);
@@ -158,12 +156,6 @@ user_pref("layout.css.contain.enabled", true);
 
 // Enable CSS object-fit & object-position for testing
 user_pref("layout.css.object-fit-and-position.enabled", true);
-
-// Enable CSS Ruby for testing
-user_pref("layout.css.ruby.enabled", true);
-
-// Enable unicode-range for testing
-user_pref("layout.css.unicode-range.enabled", true);
 
 // Enable webkit prefixed CSS features for testing
 user_pref("layout.css.prefixes.webkit", true);
@@ -290,10 +282,7 @@ user_pref("browser.newtabpage.directory.ping", "");
 user_pref("loop.debug.loglevel", "All");
 user_pref("loop.enabled", true);
 user_pref("loop.throttled", false);
-user_pref("loop.oauth.google.URL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=");
-user_pref("loop.oauth.google.getContactsURL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=contacts");
-user_pref("loop.oauth.google.getGroupsURL", "http://%(server)s/browser/browser/components/loop/test/mochitest/google_service.sjs?action=groups");
-user_pref("loop.server", "http://%(server)s/browser/browser/components/loop/test/mochitest/loop_fxa.sjs?");
+user_pref("loop.server", "http://%(server)s/browser/browser/extensions/loop/test/mochitest/loop_fxa.sjs?");
 user_pref("loop.CSP","default-src 'self' about: file: chrome: data: wss://* http://* https://*");
 
 // Ensure UITour won't hit the network

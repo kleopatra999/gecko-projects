@@ -54,6 +54,7 @@
 #include "mozilla/AnimationComparator.h"
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/ContentEvents.h"
+#include "mozilla/EffectSet.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/EventStateManager.h"
@@ -543,6 +544,16 @@ void
 Element::GetClassList(nsISupports** aClassList)
 {
   NS_ADDREF(*aClassList = ClassList());
+}
+
+void
+Element::GetAttributeNames(nsTArray<nsString>& aResult)
+{
+  uint32_t count = mAttrsAndChildren.AttrCount();
+  for (uint32_t i = 0; i < count; ++i) {
+    const nsAttrName* name = mAttrsAndChildren.AttrNameAt(i);
+    name->GetQualifiedName(*aResult.AppendElement());
+  }
 }
 
 already_AddRefed<nsIHTMLCollection>
@@ -1760,6 +1771,23 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
     }
     SetParentIsContent(false);
   }
+
+  // Ensure that CSS transitions don't continue on an element at a
+  // different place in the tree (even if reinserted before next
+  // animation refresh).
+  // We need to delete the properties while we're still in document
+  // (if we were in document).
+  // FIXME (Bug 522599): Need a test for this.
+  //XXXsmaug this looks slow.
+  if (HasFlag(NODE_HAS_PROPERTIES)) {
+    DeleteProperty(nsGkAtoms::transitionsOfBeforeProperty);
+    DeleteProperty(nsGkAtoms::transitionsOfAfterProperty);
+    DeleteProperty(nsGkAtoms::transitionsProperty);
+    DeleteProperty(nsGkAtoms::animationsOfBeforeProperty);
+    DeleteProperty(nsGkAtoms::animationsOfAfterProperty);
+    DeleteProperty(nsGkAtoms::animationsProperty);
+  }
+
   ClearInDocument();
 
   // Editable descendant count only counts descendants that
@@ -1792,19 +1820,6 @@ Element::UnbindFromTree(bool aDeep, bool aNullParent)
       // Enqueue a detached callback for the custom element.
       document->EnqueueLifecycleCallback(nsIDocument::eDetached, this);
     }
-  }
-
-  // Ensure that CSS transitions don't continue on an element at a
-  // different place in the tree (even if reinserted before next
-  // animation refresh).
-  // FIXME (Bug 522599): Need a test for this.
-  if (HasFlag(NODE_HAS_PROPERTIES)) {
-    DeleteProperty(nsGkAtoms::transitionsOfBeforeProperty);
-    DeleteProperty(nsGkAtoms::transitionsOfAfterProperty);
-    DeleteProperty(nsGkAtoms::transitionsProperty);
-    DeleteProperty(nsGkAtoms::animationsOfBeforeProperty);
-    DeleteProperty(nsGkAtoms::animationsOfAfterProperty);
-    DeleteProperty(nsGkAtoms::animationsProperty);
   }
 
   // Unset this since that's what the old code effectively did.
@@ -1876,20 +1891,20 @@ Element::GetSMILOverrideStyle()
   return slots->mSMILOverrideStyle;
 }
 
-css::StyleRule*
-Element::GetSMILOverrideStyleRule()
+css::Declaration*
+Element::GetSMILOverrideStyleDeclaration()
 {
   Element::nsDOMSlots *slots = GetExistingDOMSlots();
-  return slots ? slots->mSMILOverrideStyleRule.get() : nullptr;
+  return slots ? slots->mSMILOverrideStyleDeclaration.get() : nullptr;
 }
 
 nsresult
-Element::SetSMILOverrideStyleRule(css::StyleRule* aStyleRule,
-                                           bool aNotify)
+Element::SetSMILOverrideStyleDeclaration(css::Declaration* aDeclaration,
+                                         bool aNotify)
 {
   Element::nsDOMSlots *slots = DOMSlots();
 
-  slots->mSMILOverrideStyleRule = aStyleRule;
+  slots->mSMILOverrideStyleDeclaration = aDeclaration;
 
   if (aNotify) {
     nsIDocument* doc = GetComposedDoc();
@@ -1924,18 +1939,18 @@ Element::IsInteractiveHTMLContent(bool aIgnoreTabindex) const
   return false;
 }
 
-css::StyleRule*
-Element::GetInlineStyleRule()
+css::Declaration*
+Element::GetInlineStyleDeclaration()
 {
   return nullptr;
 }
 
 nsresult
-Element::SetInlineStyleRule(css::StyleRule* aStyleRule,
-                            const nsAString* aSerialized,
-                            bool aNotify)
+Element::SetInlineStyleDeclaration(css::Declaration* aDeclaration,
+                                   const nsAString* aSerialized,
+                                   bool aNotify)
 {
-  NS_NOTYETIMPLEMENTED("Element::SetInlineStyleRule");
+  NS_NOTYETIMPLEMENTED("Element::SetInlineStyleDeclaration");
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
@@ -3301,24 +3316,22 @@ Element::GetAnimations(nsTArray<RefPtr<Animation>>& aAnimations)
     doc->FlushPendingNotifications(Flush_Style);
   }
 
-  nsIAtom* properties[] = { nsGkAtoms::transitionsProperty,
-                            nsGkAtoms::animationsProperty };
-  for (size_t propIdx = 0; propIdx < MOZ_ARRAY_LENGTH(properties);
-       propIdx++) {
-    AnimationCollection* collection =
-      static_cast<AnimationCollection*>(
-        GetProperty(properties[propIdx]));
-    if (!collection) {
-      continue;
-    }
-    for (size_t animIdx = 0;
-         animIdx < collection->mAnimations.Length();
-         animIdx++) {
-      Animation* anim = collection->mAnimations[animIdx];
-      if (anim->IsRelevant()) {
-        aAnimations.AppendElement(anim);
-      }
-    }
+  EffectSet* effects = EffectSet::GetEffectSet(this,
+                         nsCSSPseudoElements::ePseudo_NotPseudoElement);
+  if (!effects) {
+    return;
+  }
+
+  for (KeyframeEffectReadOnly* effect : *effects) {
+    MOZ_ASSERT(effect && effect->GetAnimation(),
+               "Only effects associated with an animation should be "
+               "added to an element's effect set");
+    Animation* animation = effect->GetAnimation();
+
+    MOZ_ASSERT(animation->IsRelevant(),
+               "Only relevant animations should be added to an element's "
+               "effect set");
+    aAnimations.AppendElement(animation);
   }
 
   aAnimations.Sort(AnimationPtrComparator<RefPtr<Animation>>());
@@ -3603,11 +3616,11 @@ Element::FontSizeInflation()
 }
 
 net::ReferrerPolicy
-Element::GetReferrerPolicy()
+Element::GetReferrerPolicyAsEnum()
 {
   if (Preferences::GetBool("network.http.enablePerElementReferrer", false) &&
       IsHTMLElement()) {
-    const nsAttrValue* referrerValue = GetParsedAttr(nsGkAtoms::referrer);
+    const nsAttrValue* referrerValue = GetParsedAttr(nsGkAtoms::referrerpolicy);
     if (referrerValue && referrerValue->Type() == nsAttrValue::eEnum) {
       return net::ReferrerPolicy(referrerValue->GetEnumValue());
     }

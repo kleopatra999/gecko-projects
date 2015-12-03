@@ -47,10 +47,12 @@
 #include "SpdyZlibReporter.h"
 #include "nsIMemoryReporter.h"
 #include "nsIParentalControlsService.h"
+#include "nsPIDOMWindow.h"
 #include "nsINetworkLinkService.h"
 #include "nsHttpChannelAuthProvider.h"
 #include "nsServiceManagerUtils.h"
 #include "nsComponentManagerUtils.h"
+#include "nsSocketTransportService2.h"
 
 #include "mozilla/net/NeckoChild.h"
 #include "mozilla/ipc/URIUtils.h"
@@ -72,11 +74,6 @@
 //-----------------------------------------------------------------------------
 #include "mozilla/net/HttpChannelChild.h"
 
-
-#ifdef DEBUG
-// defined by the socket transport service while active
-extern PRThread *gSocketThread;
-#endif
 
 #define UA_PREF_PREFIX          "general.useragent."
 #ifdef XP_WIN

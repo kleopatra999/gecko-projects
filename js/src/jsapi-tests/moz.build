@@ -90,6 +90,11 @@ UNIFIED_SOURCES += [
     'testXDR.cpp',
 ]
 
+SOURCES += [
+    # There are clashing definitions of js::jit::AssemblerBuffer.
+    'testAssemblerBuffer.cpp',
+]
+
 if CONFIG['ENABLE_ION']:
     UNIFIED_SOURCES += [
         'testJitDCEinGVN.cpp',
@@ -104,8 +109,10 @@ if CONFIG['ENABLE_ION']:
 
 DEFINES['EXPORT_JS_API'] = True
 
-LOCAL_INCLUDES += ['..']
-GENERATED_INCLUDES += ['..']
+LOCAL_INCLUDES += [
+    '!..',
+    '..',
+]
 
 USE_LIBS += [
     'static:js',

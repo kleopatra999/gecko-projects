@@ -143,6 +143,233 @@ MacroAssemblerX86Shared::asMasm() const
     return *static_cast<const MacroAssembler*>(this);
 }
 
+template<typename T>
+void
+MacroAssemblerX86Shared::compareExchangeToTypedIntArray(Scalar::Type arrayType, const T& mem,
+                                                        Register oldval, Register newval,
+                                                        Register temp, AnyRegister output)
+{
+    switch (arrayType) {
+      case Scalar::Int8:
+        compareExchange8SignExtend(mem, oldval, newval, output.gpr());
+        break;
+      case Scalar::Uint8:
+        compareExchange8ZeroExtend(mem, oldval, newval, output.gpr());
+        break;
+      case Scalar::Uint8Clamped:
+        compareExchange8ZeroExtend(mem, oldval, newval, output.gpr());
+        break;
+      case Scalar::Int16:
+        compareExchange16SignExtend(mem, oldval, newval, output.gpr());
+        break;
+      case Scalar::Uint16:
+        compareExchange16ZeroExtend(mem, oldval, newval, output.gpr());
+        break;
+      case Scalar::Int32:
+        compareExchange32(mem, oldval, newval, output.gpr());
+        break;
+      case Scalar::Uint32:
+        // At the moment, the code in MCallOptimize.cpp requires the output
+        // type to be double for uint32 arrays.  See bug 1077305.
+        MOZ_ASSERT(output.isFloat());
+        compareExchange32(mem, oldval, newval, temp);
+        asMasm().convertUInt32ToDouble(temp, output.fpu());
+        break;
+      default:
+        MOZ_CRASH("Invalid typed array type");
+    }
+}
+
+template void
+MacroAssemblerX86Shared::compareExchangeToTypedIntArray(Scalar::Type arrayType, const Address& mem,
+                                                        Register oldval, Register newval, Register temp,
+                                                        AnyRegister output);
+template void
+MacroAssemblerX86Shared::compareExchangeToTypedIntArray(Scalar::Type arrayType, const BaseIndex& mem,
+                                                        Register oldval, Register newval, Register temp,
+                                                        AnyRegister output);
+
+template<typename T>
+void
+MacroAssemblerX86Shared::atomicExchangeToTypedIntArray(Scalar::Type arrayType, const T& mem,
+                                                       Register value, Register temp, AnyRegister output)
+{
+    switch (arrayType) {
+      case Scalar::Int8:
+        atomicExchange8SignExtend(mem, value, output.gpr());
+        break;
+      case Scalar::Uint8:
+        atomicExchange8ZeroExtend(mem, value, output.gpr());
+        break;
+      case Scalar::Uint8Clamped:
+        atomicExchange8ZeroExtend(mem, value, output.gpr());
+        break;
+      case Scalar::Int16:
+        atomicExchange16SignExtend(mem, value, output.gpr());
+        break;
+      case Scalar::Uint16:
+        atomicExchange16ZeroExtend(mem, value, output.gpr());
+        break;
+      case Scalar::Int32:
+        atomicExchange32(mem, value, output.gpr());
+        break;
+      case Scalar::Uint32:
+        // At the moment, the code in MCallOptimize.cpp requires the output
+        // type to be double for uint32 arrays.  See bug 1077305.
+        MOZ_ASSERT(output.isFloat());
+        atomicExchange32(mem, value, temp);
+        asMasm().convertUInt32ToDouble(temp, output.fpu());
+        break;
+      default:
+        MOZ_CRASH("Invalid typed array type");
+    }
+}
+
+template void
+MacroAssemblerX86Shared::atomicExchangeToTypedIntArray(Scalar::Type arrayType, const Address& mem,
+                                                       Register value, Register temp, AnyRegister output);
+template void
+MacroAssemblerX86Shared::atomicExchangeToTypedIntArray(Scalar::Type arrayType, const BaseIndex& mem,
+                                                       Register value, Register temp, AnyRegister output);
+
+MacroAssemblerX86Shared::Float*
+MacroAssemblerX86Shared::getFloat(float f)
+{
+    if (!floatMap_.initialized()) {
+        enoughMemory_ &= floatMap_.init();
+        if (!enoughMemory_)
+            return nullptr;
+    }
+    size_t floatIndex;
+    if (FloatMap::AddPtr p = floatMap_.lookupForAdd(f)) {
+        floatIndex = p->value();
+    } else {
+        floatIndex = floats_.length();
+        enoughMemory_ &= floats_.append(Float(f));
+        if (!enoughMemory_)
+            return nullptr;
+        enoughMemory_ &= floatMap_.add(p, f, floatIndex);
+        if (!enoughMemory_)
+            return nullptr;
+    }
+    return &floats_[floatIndex];
+}
+
+MacroAssemblerX86Shared::Double*
+MacroAssemblerX86Shared::getDouble(double d)
+{
+    if (!doubleMap_.initialized()) {
+        enoughMemory_ &= doubleMap_.init();
+        if (!enoughMemory_)
+            return nullptr;
+    }
+    size_t doubleIndex;
+    if (DoubleMap::AddPtr p = doubleMap_.lookupForAdd(d)) {
+        doubleIndex = p->value();
+    } else {
+        doubleIndex = doubles_.length();
+        enoughMemory_ &= doubles_.append(Double(d));
+        if (!enoughMemory_)
+            return nullptr;
+        enoughMemory_ &= doubleMap_.add(p, d, doubleIndex);
+        if (!enoughMemory_)
+            return nullptr;
+    }
+    return &doubles_[doubleIndex];
+}
+
+MacroAssemblerX86Shared::SimdData*
+MacroAssemblerX86Shared::getSimdData(const SimdConstant& v)
+{
+    if (!simdMap_.initialized()) {
+        enoughMemory_ &= simdMap_.init();
+        if (!enoughMemory_)
+            return nullptr;
+    }
+    size_t index;
+    if (SimdMap::AddPtr p = simdMap_.lookupForAdd(v)) {
+        index = p->value();
+    } else {
+        index = simds_.length();
+        enoughMemory_ &= simds_.append(SimdData(v));
+        if (!enoughMemory_)
+            return nullptr;
+        enoughMemory_ &= simdMap_.add(p, v, index);
+        if (!enoughMemory_)
+            return nullptr;
+    }
+    return &simds_[index];
+}
+
+static bool
+AppendShiftedUses(const MacroAssemblerX86Shared::UsesVector& old, size_t delta,
+                  MacroAssemblerX86Shared::UsesVector* vec)
+{
+    for (CodeOffset use : old) {
+        use.offsetBy(delta);
+        if (!vec->append(use))
+            return false;
+    }
+    return true;
+}
+
+bool
+MacroAssemblerX86Shared::asmMergeWith(const MacroAssemblerX86Shared& other)
+{
+    size_t sizeBefore = masm.size();
+
+    if (!Assembler::asmMergeWith(other))
+        return false;
+
+    if (!doubleMap_.initialized() && !doubleMap_.init())
+        return false;
+    if (!floatMap_.initialized() && !floatMap_.init())
+        return false;
+    if (!simdMap_.initialized() && !simdMap_.init())
+        return false;
+
+    for (const Double& d : other.doubles_) {
+        size_t index;
+        if (DoubleMap::AddPtr p = doubleMap_.lookupForAdd(d.value)) {
+            index = p->value();
+        } else {
+            index = doubles_.length();
+            if (!doubles_.append(Double(d.value)) || !doubleMap_.add(p, d.value, index))
+                return false;
+        }
+        if (!AppendShiftedUses(d.uses, sizeBefore, &doubles_[index].uses))
+            return false;
+    }
+
+    for (const Float& f : other.floats_) {
+        size_t index;
+        if (FloatMap::AddPtr p = floatMap_.lookupForAdd(f.value)) {
+            index = p->value();
+        } else {
+            index = floats_.length();
+            if (!floats_.append(Float(f.value)) || !floatMap_.add(p, f.value, index))
+                return false;
+        }
+        if (!AppendShiftedUses(f.uses, sizeBefore, &floats_[index].uses))
+            return false;
+    }
+
+    for (const SimdData& s : other.simds_) {
+        size_t index;
+        if (SimdMap::AddPtr p = simdMap_.lookupForAdd(s.value)) {
+            index = p->value();
+        } else {
+            index = simds_.length();
+            if (!simds_.append(SimdData(s.value)) || !simdMap_.add(p, s.value, index))
+                return false;
+        }
+        if (!AppendShiftedUses(s.uses, sizeBefore, &simds_[index].uses))
+            return false;
+    }
+
+    return true;
+}
+
 //{{{ check_macroassembler_style
 // ===============================================================
 // Stack manipulation functions.
@@ -173,9 +400,7 @@ MacroAssembler::PushRegsInMask(LiveRegisterSet set)
             storeDouble(reg, spillAddress);
         else if (reg.isSingle())
             storeFloat32(reg, spillAddress);
-        else if (reg.isInt32x4())
-            storeUnalignedInt32x4(reg, spillAddress);
-        else if (reg.isFloat32x4())
+        else if (reg.isSimd128())
             storeUnalignedFloat32x4(reg, spillAddress);
         else
             MOZ_CRASH("Unknown register type.");
@@ -209,9 +434,7 @@ MacroAssembler::PopRegsInMaskIgnore(LiveRegisterSet set, LiveRegisterSet ignore)
             loadDouble(spillAddress, reg);
         else if (reg.isSingle())
             loadFloat32(spillAddress, reg);
-        else if (reg.isInt32x4())
-            loadUnalignedInt32x4(spillAddress, reg);
-        else if (reg.isFloat32x4())
+        else if (reg.isSimd128())
             loadUnalignedFloat32x4(spillAddress, reg);
         else
             MOZ_CRASH("Unknown register type.");
@@ -246,28 +469,28 @@ void
 MacroAssembler::Push(const Operand op)
 {
     push(op);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Push(Register reg)
 {
     push(reg);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Push(const Imm32 imm)
 {
     push(imm);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Push(const ImmWord imm)
 {
     push(imm);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
@@ -280,57 +503,57 @@ void
 MacroAssembler::Push(const ImmGCPtr ptr)
 {
     push(ptr);
-    framePushed_ += sizeof(intptr_t);
+    adjustFrame(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Push(FloatRegister t)
 {
     push(t);
-    framePushed_ += sizeof(double);
+    adjustFrame(sizeof(double));
 }
 
 void
 MacroAssembler::Pop(const Operand op)
 {
     pop(op);
-    framePushed_ -= sizeof(intptr_t);
+    implicitPop(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Pop(Register reg)
 {
     pop(reg);
-    framePushed_ -= sizeof(intptr_t);
+    implicitPop(sizeof(intptr_t));
 }
 
 void
 MacroAssembler::Pop(FloatRegister reg)
 {
     pop(reg);
-    framePushed_ -= sizeof(double);
+    implicitPop(sizeof(double));
 }
 
 void
 MacroAssembler::Pop(const ValueOperand& val)
 {
     popValue(val);
-    framePushed_ -= sizeof(Value);
+    implicitPop(sizeof(Value));
 }
 
 // ===============================================================
 // Simple call functions.
 
-void
+CodeOffset
 MacroAssembler::call(Register reg)
 {
-    Assembler::call(reg);
+    return Assembler::call(reg);
 }
 
-void
+CodeOffset
 MacroAssembler::call(Label* label)
 {
-    Assembler::call(label);
+    return Assembler::call(label);
 }
 
 void
@@ -340,7 +563,7 @@ MacroAssembler::call(const Address& addr)
 }
 
 void
-MacroAssembler::call(AsmJSImmPtr target)
+MacroAssembler::call(wasm::SymbolicAddress target)
 {
     mov(target, eax);
     Assembler::call(eax);
@@ -365,6 +588,17 @@ MacroAssembler::call(JitCode* target)
     Assembler::call(target);
 }
 
+CodeOffset
+MacroAssembler::callWithPatch()
+{
+    return Assembler::callWithPatch();
+}
+void
+MacroAssembler::patchCall(uint32_t callerOffset, uint32_t calleeOffset)
+{
+    Assembler::patchCall(callerOffset, calleeOffset);
+}
+
 void
 MacroAssembler::callAndPushReturnAddress(Register reg)
 {
@@ -385,9 +619,9 @@ MacroAssembler::pushFakeReturnAddress(Register scratch)
 {
     CodeLabel cl;
 
-    mov(cl.dest(), scratch);
+    mov(cl.patchAt(), scratch);
     Push(scratch);
-    bind(cl.src());
+    use(cl.target());
     uint32_t retAddr = currentOffset();
 
     addCodeLabel(cl);

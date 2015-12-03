@@ -496,6 +496,9 @@ private:
     ErrorResult rv;
     scriptloader::LoadMainScript(aCx, mScriptURL, WorkerScript, rv);
     if (NS_WARN_IF(rv.Failed())) {
+      // I guess suppress the exception since that's what we used to
+      // do, though this seems moderately weird.
+      rv.SuppressException();
       return false;
     }
 
@@ -532,6 +535,9 @@ private:
     JSAutoCompartment ac(aCx, global);
     scriptloader::LoadMainScript(aCx, mScriptURL, DebuggerScript, rv);
     if (NS_WARN_IF(rv.Failed())) {
+      // I guess suppress the exception since that's what we used to
+      // do, though this seems moderately weird.
+      rv.SuppressException();
       return false;
     }
 
@@ -572,12 +578,7 @@ private:
 
     RefPtr<Event> event = NS_NewDOMEvent(globalScope, nullptr, nullptr);
 
-    nsresult rv = event->InitEvent(NS_LITERAL_STRING("close"), false, false);
-    if (NS_FAILED(rv)) {
-      Throw(aCx, rv);
-      return false;
-    }
-
+    event->InitEvent(NS_LITERAL_STRING("close"), false, false);
     event->SetTrusted(true);
 
     globalScope->DispatchDOMEvent(nullptr, event, nullptr, nullptr);
@@ -669,31 +670,53 @@ public:
       return false;
     }
 
-    RefPtr<MessageEvent> event = new MessageEvent(aTarget, nullptr, nullptr);
-    rv = event->InitMessageEvent(NS_LITERAL_STRING("message"),
-                                 false /* non-bubbling */,
-                                 false /* cancelable */,
-                                 messageData,
-                                 EmptyString(),
-                                 EmptyString(),
-                                 nullptr);
+    nsTArray<RefPtr<MessagePort>> ports = TakeTransferredPorts();
+
+    nsCOMPtr<nsIDOMEvent> domEvent;
+    // For messages dispatched to service worker, use ExtendableMessageEvent
+    // https://slightlyoff.github.io/ServiceWorker/spec/service_worker/index.html#extendablemessage-event-section
     if (mEventSource) {
       RefPtr<ServiceWorkerClient> client =
         new ServiceWorkerWindowClient(aTarget, *mEventSource);
+
+      RootedDictionary<ExtendableMessageEventInit> init(aCx);
+
+      init.mBubbles = false;
+      init.mCancelable = false;
+
+      init.mData = messageData;
+      init.mPorts.Construct();
+      init.mPorts.Value().SetNull();
+
+      ErrorResult rv;
+      RefPtr<ExtendableMessageEvent> event = ExtendableMessageEvent::Constructor(
+        aTarget, NS_LITERAL_STRING("message"), init, rv);
+      if (NS_WARN_IF(rv.Failed())) {
+        return false;
+      }
       event->SetSource(client);
+      event->SetPorts(new MessagePortList(static_cast<dom::Event*>(event.get()),
+                                          ports));
+      domEvent = do_QueryObject(event);
+    } else {
+      RefPtr<MessageEvent> event = new MessageEvent(aTarget, nullptr, nullptr);
+      nsresult rv = event->InitMessageEvent(NS_LITERAL_STRING("message"),
+                                            false /* non-bubbling */,
+                                            false /* cancelable */,
+                                            messageData,
+                                            EmptyString(),
+                                            EmptyString(),
+                                            nullptr);
+      if (NS_WARN_IF(NS_FAILED(rv))) {
+        xpc::Throw(aCx, rv);
+        return false;
+      }
+      event->SetPorts(new MessagePortList(static_cast<dom::Event*>(event.get()),
+                                          ports));
+      domEvent = do_QueryObject(event);
     }
 
-    if (NS_WARN_IF(rv.Failed())) {
-      xpc::Throw(aCx, rv.StealNSResult());
-      return false;
-    }
-
-    nsTArray<RefPtr<MessagePort>> ports = TakeTransferredPorts();
-
-    event->SetTrusted(true);
-    event->SetPorts(new MessagePortList(static_cast<dom::Event*>(event.get()),
-                                        ports));
-    nsCOMPtr<nsIDOMEvent> domEvent = do_QueryObject(event);
+    domEvent->SetTrusted(true);
 
     nsEventStatus dummy = nsEventStatus_eIgnore;
     aTarget->DispatchDOMEvent(nullptr, domEvent, nullptr, &dummy);
@@ -1053,24 +1076,25 @@ private:
         return true;
       }
 
-      if (aWorkerPrivate->IsServiceWorker() || aWorkerPrivate->IsSharedWorker()) {
-        if (aWorkerPrivate->IsServiceWorker() && !JSREPORT_IS_WARNING(mFlags)) {
-          RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
-          MOZ_ASSERT(swm);
-          bool handled = swm->HandleError(aCx, aWorkerPrivate->GetPrincipal(),
-                                          aWorkerPrivate->WorkerName(),
-                                          aWorkerPrivate->ScriptURL(),
-                                          mMessage,
-                                          mFilename, mLine, mLineNumber,
-                                          mColumnNumber, mFlags, mExnType);
-          if (handled) {
-            return true;
-          }
-        }
-
+      if (aWorkerPrivate->IsSharedWorker()) {
         aWorkerPrivate->BroadcastErrorToSharedWorkers(aCx, mMessage, mFilename,
                                                       mLine, mLineNumber,
                                                       mColumnNumber, mFlags);
+        return true;
+      }
+
+      // Service workers do not have a main thread parent global, so normal
+      // worker error reporting will crash.  Instead, pass the error to
+      // the ServiceWorkerManager to report on any controlled documents.
+      if (aWorkerPrivate->IsServiceWorker()) {
+        RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+        MOZ_ASSERT(swm);
+        swm->HandleError(aCx, aWorkerPrivate->GetPrincipal(),
+                         aWorkerPrivate->WorkerName(),
+                         aWorkerPrivate->ScriptURL(),
+                         mMessage,
+                         mFilename, mLine, mLineNumber,
+                         mColumnNumber, mFlags, mExnType);
         return true;
       }
 
@@ -2174,24 +2198,11 @@ WorkerPrivateParent<Derived>::WorkerPrivateParent(
     aParent->CopyJSSettings(mJSSettings);
 
     MOZ_ASSERT(IsDedicatedWorker());
-    mNowBaseTimeStamp = aParent->NowBaseTimeStamp();
-    mNowBaseTimeHighRes = aParent->NowBaseTimeHighRes();
   }
   else {
     AssertIsOnMainThread();
 
     RuntimeService::GetDefaultJSSettings(mJSSettings);
-
-    if (IsDedicatedWorker() && mLoadInfo.mWindow &&
-        mLoadInfo.mWindow->GetPerformance()) {
-      mNowBaseTimeStamp = mLoadInfo.mWindow->GetPerformance()->GetDOMTiming()->
-        GetNavigationStartTimeStamp();
-      mNowBaseTimeHighRes = mLoadInfo.mWindow->GetPerformance()->GetDOMTiming()->
-        GetNavigationStartHighRes();
-    } else {
-      mNowBaseTimeStamp = CreationTimeStamp();
-      mNowBaseTimeHighRes = CreationTimeHighRes();
-    }
   }
 }
 
@@ -3051,9 +3062,7 @@ WorkerPrivate::OfflineStatusChangeEventInternal(JSContext* aCx, bool aIsOffline)
 
   RefPtr<Event> event = NS_NewDOMEvent(globalScope, nullptr, nullptr);
 
-  nsresult rv = event->InitEvent(eventType, false, false);
-  NS_ENSURE_SUCCESS_VOID(rv);
-
+  event->InitEvent(eventType, false, false);
   event->SetTrusted(true);
 
   globalScope->DispatchDOMEvent(nullptr, event, nullptr, nullptr);
@@ -3393,6 +3402,16 @@ WorkerPrivateParent<Derived>::SetPrincipal(nsIPrincipal* aPrincipal,
     (appStatus == nsIPrincipal::APP_STATUS_CERTIFIED ||
      appStatus == nsIPrincipal::APP_STATUS_PRIVILEGED);
   mLoadInfo.mIsInCertifiedApp = (appStatus == nsIPrincipal::APP_STATUS_CERTIFIED);
+
+  aPrincipal->GetCsp(getter_AddRefs(mLoadInfo.mCSP));
+
+  if (mLoadInfo.mCSP) {
+    mLoadInfo.mCSP->GetAllowsEval(&mLoadInfo.mReportCSPViolations,
+                                  &mLoadInfo.mEvalAllowed);
+  } else {
+    mLoadInfo.mEvalAllowed = true;
+    mLoadInfo.mReportCSPViolations = false;
+  }
 
   mLoadInfo.mLoadGroup = aLoadGroup;
 
@@ -4318,20 +4337,6 @@ WorkerPrivate::GetLoadInfo(JSContext* aCx, nsPIDOMWindow* aWindow,
 
     MOZ_ASSERT(loadInfo.mPrincipal);
     MOZ_ASSERT(isChrome || !loadInfo.mDomain.IsEmpty());
-
-    if (!nsContentUtils::GetContentSecurityPolicy(getter_AddRefs(loadInfo.mCSP))) {
-      NS_WARNING("Failed to get CSP!");
-      return NS_ERROR_FAILURE;
-    }
-
-    if (loadInfo.mCSP) {
-      rv = loadInfo.mCSP->GetAllowsEval(&loadInfo.mReportCSPViolations,
-                                        &loadInfo.mEvalAllowed);
-      NS_ENSURE_SUCCESS(rv, rv);
-    } else {
-      loadInfo.mEvalAllowed = true;
-      loadInfo.mReportCSPViolations = false;
-    }
 
     if (!loadInfo.mLoadGroup || aLoadGroupBehavior == OverrideLoadGroup) {
       OverrideLoadInfoLoadGroup(loadInfo);

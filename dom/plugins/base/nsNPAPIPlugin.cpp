@@ -169,7 +169,10 @@ static NPNetscapeFuncs sBrowserFuncs = {
   _convertpoint,
   nullptr, // handleevent, unimplemented
   nullptr, // unfocusinstance, unimplemented
-  _urlredirectresponse
+  _urlredirectresponse,
+  _initasyncsurface,
+  _finalizeasyncsurface,
+  _setcurrentasyncsurface
 };
 
 static Mutex *sPluginThreadAsyncCallLock = nullptr;
@@ -1350,10 +1353,8 @@ _evaluate(NPP npp, NPObject* npobj, NPString *script, NPVariant *result)
     return false;
   }
 
-  obj = JS_ObjectToInnerObject(cx, obj);
-  MOZ_ASSERT(obj,
-             "JS_ObjectToInnerObject should never return null with non-null "
-             "input.");
+  obj = js::ToWindowIfWindowProxy(obj);
+  MOZ_ASSERT(obj, "ToWindowIfWindowProxy should never return null");
 
   if (result) {
     // Initialize the out param to void
@@ -2780,6 +2781,39 @@ _urlredirectresponse(NPP instance, void* notifyData, NPBool allow)
   }
 
   inst->URLRedirectResponse(notifyData, allow);
+}
+
+NPError
+_initasyncsurface(NPP instance, NPSize *size, NPImageFormat format, void *initData, NPAsyncSurface *surface)
+{
+  nsNPAPIPluginInstance *inst = (nsNPAPIPluginInstance *)instance->ndata;
+  if (!inst) {
+    return NPERR_GENERIC_ERROR;
+  }
+
+  return inst->InitAsyncSurface(size, format, initData, surface);
+}
+
+NPError
+_finalizeasyncsurface(NPP instance, NPAsyncSurface *surface)
+{
+  nsNPAPIPluginInstance *inst = (nsNPAPIPluginInstance *)instance->ndata;
+  if (!inst) {
+    return NPERR_GENERIC_ERROR;
+  }
+
+  return inst->FinalizeAsyncSurface(surface);
+}
+
+void
+_setcurrentasyncsurface(NPP instance, NPAsyncSurface *surface, NPRect *changed)
+{
+  nsNPAPIPluginInstance *inst = (nsNPAPIPluginInstance *)instance->ndata;
+  if (!inst) {
+    return;
+  }
+
+  inst->SetCurrentAsyncSurface(surface, changed);
 }
 
 } /* namespace parent */

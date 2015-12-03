@@ -42,7 +42,9 @@ public:
 class nsTextFrame : public nsTextFrameBase {
   typedef mozilla::TextRangeStyle TextRangeStyle;
   typedef mozilla::gfx::DrawTarget DrawTarget;
+  typedef mozilla::gfx::Point Point;
   typedef mozilla::gfx::Rect Rect;
+  typedef mozilla::gfx::Size Size;
 
 public:
   NS_DECL_QUERYFRAME_TARGET(nsTextFrame)
@@ -264,7 +266,9 @@ public:
   virtual RenderedText GetRenderedText(uint32_t aStartOffset = 0,
                                        uint32_t aEndOffset = UINT32_MAX,
                                        TextOffsetType aOffsetType =
-                                           TextOffsetType::OFFSETS_IN_CONTENT_TEXT) override;
+                                           TextOffsetType::OFFSETS_IN_CONTENT_TEXT,
+                                       TrailingWhitespace aTrimTrailingWhitespace =
+                                           TrailingWhitespace::TRIM_TRAILING_WHITESPACE) override;
 
   nsOverflowAreas RecomputeOverflow(nsIFrame* aBlockFrame);
 
@@ -438,6 +442,12 @@ public:
                                      SelectionType aSelectionType,
                                      DrawPathCallbacks* aCallbacks);
 
+  void DrawEmphasisMarks(gfxContext* aContext,
+                         mozilla::WritingMode aWM,
+                         const gfxPoint& aTextBaselinePt,
+                         uint32_t aOffset, uint32_t aLength,
+                         PropertyProvider& aProvider);
+
   virtual nscolor GetCaretColorAt(int32_t aOffset) override;
 
   int16_t GetSelectionStatus(int16_t* aSelectionFlags);
@@ -582,6 +592,11 @@ protected:
                                PropertyProvider& aProvider,
                                nsRect* aVisualOverflowRect,
                                bool aIncludeTextDecorations);
+
+  // Update information of emphasis marks, and return the visial
+  // overflow rect of the emphasis marks.
+  nsRect UpdateTextEmphasis(mozilla::WritingMode aWM,
+                            PropertyProvider& aProvider);
 
   void PaintOneShadow(uint32_t aOffset,
                       uint32_t aLength,
@@ -739,7 +754,7 @@ protected:
                                 SelectionType aType,
                                 nsTextPaintStyle& aTextPaintStyle,
                                 const TextRangeStyle &aRangeStyle,
-                                const gfxPoint& aPt,
+                                const Point& aPt,
                                 gfxFloat aICoordInFrame,
                                 gfxFloat aWidth,
                                 gfxFloat aAscent,
@@ -757,9 +772,9 @@ protected:
                            const gfxRect& aDirtyRect,
                            nscolor aColor,
                            const nscolor* aOverrideColor,
-                           const gfxPoint& aPt,
+                           const Point& aPt,
                            gfxFloat aICoordInFrame,
-                           const gfxSize& aLineSize,
+                           const Size& aLineSize,
                            gfxFloat aAscent,
                            gfxFloat aOffset,
                            uint8_t aDecoration,
@@ -810,6 +825,14 @@ protected:
   void ClearMetrics(nsHTMLReflowMetrics& aMetrics);
 
   NS_DECLARE_FRAME_PROPERTY(JustificationAssignment, nullptr)
+
+  struct EmphasisMarkInfo
+  {
+    nsAutoPtr<gfxTextRun> textRun;
+    gfxFloat advance;
+    gfxFloat baselineOffset;
+  };
+  NS_DECLARE_FRAME_PROPERTY(EmphasisMarkProperty, DeleteValue<EmphasisMarkInfo>)
 };
 
 #endif

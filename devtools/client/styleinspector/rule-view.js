@@ -13,9 +13,8 @@ const {setTimeout, clearTimeout} =
 const {CssLogic} = require("devtools/shared/styleinspector/css-logic");
 const {InplaceEditor, editableField, editableItem} =
       require("devtools/client/shared/inplace-editor");
-const {ELEMENT_STYLE, PSEUDO_ELEMENTS} =
-      require("devtools/server/actors/styles");
-const {OutputParser} = require("devtools/shared/output-parser");
+const {ELEMENT_STYLE} = require("devtools/server/actors/styles");
+const {OutputParser} = require("devtools/client/shared/output-parser");
 const {PrefObserver, PREF_ORIG_SOURCES} = require("devtools/client/styleeditor/utils");
 const {
   createChild,
@@ -4049,7 +4048,7 @@ XPCOMUtils.defineLazyGetter(this, "osString", function() {
 
 XPCOMUtils.defineLazyGetter(this, "_strings", function() {
   return Services.strings.createBundle(
-    "chrome://global/locale/devtools/styleinspector.properties");
+    "chrome://devtools-shared/locale/styleinspector.properties");
 });
 
 XPCOMUtils.defineLazyGetter(this, "domUtils", function() {
@@ -4058,4 +4057,8 @@ XPCOMUtils.defineLazyGetter(this, "domUtils", function() {
 
 loader.lazyGetter(this, "AutocompletePopup", function() {
   return require("devtools/client/shared/autocomplete-popup").AutocompletePopup;
+});
+
+loader.lazyGetter(this, "PSEUDO_ELEMENTS", () => {
+  return domUtils.getCSSPseudoElementNames();
 });

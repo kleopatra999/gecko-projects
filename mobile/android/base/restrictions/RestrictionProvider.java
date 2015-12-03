@@ -6,9 +6,6 @@
 package org.mozilla.gecko.restrictions;
 
 import org.mozilla.gecko.AppConstants;
-import org.mozilla.gecko.restrictions.RestrictedProfileConfiguration;
-import org.mozilla.gecko.restrictions.Restriction;
-import org.mozilla.gecko.sync.setup.Constants;
 
 import android.annotation.TargetApi;
 import android.app.Activity;
@@ -18,8 +15,10 @@ import android.content.Intent;
 import android.content.RestrictionEntry;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.TextUtils;
 
 import java.util.ArrayList;
+import java.util.Map;
 
 /**
  * Broadcast receiver providing supported restrictions to the system.
@@ -39,6 +38,8 @@ public class RestrictionProvider extends BroadcastReceiver {
             @Override
             public void run() {
                 final Bundle oldRestrictions = intent.getBundleExtra(Intent.EXTRA_RESTRICTIONS_BUNDLE);
+                RestrictedProfileConfiguration.migrateRestrictionsIfNeeded(oldRestrictions);
+
                 final Bundle extras = new Bundle();
 
                 ArrayList<RestrictionEntry> entries = initRestrictions(context, oldRestrictions);
@@ -53,28 +54,30 @@ public class RestrictionProvider extends BroadcastReceiver {
     private ArrayList<RestrictionEntry> initRestrictions(Context context, Bundle oldRestrictions) {
         ArrayList<RestrictionEntry> entries = new ArrayList<RestrictionEntry>();
 
-        for (Restriction restriction : RestrictedProfileConfiguration.DEFAULT_RESTRICTIONS) {
-            if (restriction == Restriction.DISALLOW_LOCATION_SERVICE && !AppConstants.MOZ_STUMBLER_BUILD_TIME_ENABLED) {
+        final Map<Restrictable, Boolean> configuration = RestrictedProfileConfiguration.getConfiguration();
+
+        for (Restrictable restrictable : configuration.keySet()) {
+            if (RestrictedProfileConfiguration.shouldHide(restrictable)) {
                 continue;
             }
 
-            if (restriction == Restriction.DISALLOW_DEFAULT_THEME) {
-                // This restriction is not configurable
-                continue;
-            }
-
-            RestrictionEntry entry = createRestrictionEntryWithDefaultValue(context, restriction,
-                    oldRestrictions.getBoolean(restriction.name, true));
+            RestrictionEntry entry = createRestrictionEntryWithDefaultValue(context, restrictable,
+                    oldRestrictions.getBoolean(restrictable.name, configuration.get(restrictable)));
             entries.add(entry);
         }
 
         return entries;
     }
 
-    private RestrictionEntry createRestrictionEntryWithDefaultValue(Context context, Restriction restriction, boolean defaultValue) {
-        RestrictionEntry entry = new RestrictionEntry(restriction.name, defaultValue);
+    private RestrictionEntry createRestrictionEntryWithDefaultValue(Context context, Restrictable restrictable, boolean defaultValue) {
+        RestrictionEntry entry = new RestrictionEntry(restrictable.name, defaultValue);
 
-        entry.setTitle(restriction.getTitle(context));
+        entry.setTitle(restrictable.getTitle(context));
+
+        final String description = restrictable.getDescription(context);
+        if (!TextUtils.isEmpty(description)) {
+            entry.setDescription(description);
+        }
 
         return entry;
     }

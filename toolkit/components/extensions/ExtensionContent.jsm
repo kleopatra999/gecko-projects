@@ -31,9 +31,9 @@ XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 var {
   runSafeSyncWithoutClone,
+  LocaleData,
   MessageBroker,
   Messenger,
-  ignoreEvent,
   injectAPI,
   flushJarCache,
 } = ExtensionUtils;
@@ -60,8 +60,8 @@ var api = context => { return {
       return context.messenger.connect(context.messageManager, name, recipient);
     },
 
-    getManifest: function(context) {
-      return context.extension.getManifest();
+    getManifest: function() {
+      return Cu.cloneInto(context.extension.manifest, context.cloneScope);
     },
 
     getURL: function(url) {
@@ -94,6 +94,12 @@ var api = context => { return {
 
     inIncognitoContext: PrivateBrowsingUtils.isContentWindowPrivate(context.contentWindow),
   },
+
+  i18n: {
+    getMessage: function(messageName, substitutions) {
+      return context.extension.localizeMessage(messageName, substitutions);
+    },
+  },
 }};
 
 // Represents a content script.
@@ -106,6 +112,9 @@ function Script(options)
 
   this.matches_ = new MatchPattern(this.options.matches);
   this.exclude_matches_ = new MatchPattern(this.options.exclude_matches || null);
+  // TODO: MatchPattern should pre-mangle host-only patterns so that we
+  // don't need to call a separate match function.
+  this.matches_host_ = new MatchPattern(this.options.matchesHost || null);
 
   // TODO: Support glob patterns.
 }
@@ -113,7 +122,7 @@ function Script(options)
 Script.prototype = {
   matches(window) {
     let uri = window.document.documentURIObject;
-    if (!this.matches_.matches(uri)) {
+    if (!(this.matches_.matches(uri) || this.matches_host_.matchesIgnoringPath(uri))) {
       return false;
     }
 
@@ -123,6 +132,16 @@ Script.prototype = {
 
     if (!this.options.all_frames && window.top != window) {
       return false;
+    }
+
+    if ("innerWindowID" in this.options) {
+      let innerWindowID = window.QueryInterface(Ci.nsIInterfaceRequestor)
+                                .getInterface(Ci.nsIDOMWindowUtils)
+                                .currentInnerWindowID;
+
+      if (innerWindowID !== this.options.innerWindowID) {
+        return false;
+      }
     }
 
     // TODO: match_about_blank.
@@ -261,22 +280,29 @@ ExtensionContext.prototype = {
   },
 };
 
+function windowId(window)
+{
+  return window.QueryInterface(Ci.nsIInterfaceRequestor)
+               .getInterface(Ci.nsIDOMWindowUtils)
+               .currentInnerWindowID;
+}
+
 // Responsible for creating ExtensionContexts and injecting content
 // scripts into them when new documents are created.
 var DocumentManager = {
   extensionCount: 0,
 
-  // WeakMap[window -> Map[extensionId -> ExtensionContext]]
-  windows: new WeakMap(),
+  // Map[windowId -> Map[extensionId -> ExtensionContext]]
+  windows: new Map(),
 
   init() {
     Services.obs.addObserver(this, "document-element-inserted", false);
-    Services.obs.addObserver(this, "dom-window-destroyed", false);
+    Services.obs.addObserver(this, "inner-window-destroyed", false);
   },
 
   uninit() {
     Services.obs.removeObserver(this, "document-element-inserted");
-    Services.obs.removeObserver(this, "dom-window-destroyed");
+    Services.obs.removeObserver(this, "inner-window-destroyed");
   },
 
   getWindowState(contentWindow) {
@@ -305,28 +331,32 @@ var DocumentManager = {
         return;
       }
 
-      this.windows.delete(window);
-
       this.trigger("document_start", window);
       window.addEventListener("DOMContentLoaded", this, true);
       window.addEventListener("load", this, true);
-    } else if (topic == "dom-window-destroyed") {
-      let window = subject;
-      if (!this.windows.has(window)) {
+    } else if (topic == "inner-window-destroyed") {
+      let id = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
+      if (!this.windows.has(id)) {
         return;
       }
 
-      let extensions = this.windows.get(window);
+      let extensions = this.windows.get(id);
       for (let [extensionId, context] of extensions) {
         context.close();
       }
 
-      this.windows.delete(window);
+      this.windows.delete(id);
     }
   },
 
   handleEvent: function(event) {
-    let window = event.target.defaultView;
+    let window = event.currentTarget;
+    if (event.target != window.document) {
+      // We use capturing listeners so we have precedence over content script
+      // listeners, but only care about events targeted to the element we're
+      // listening on.
+      return;
+    }
     window.removeEventListener(event.type, this, true);
 
     // Need to check if we're still on the right page? Greasemonkey does this.
@@ -365,10 +395,11 @@ var DocumentManager = {
   },
 
   getContext(extensionId, window) {
-    if (!this.windows.has(window)) {
-      this.windows.set(window, new Map());
+    let winId = windowId(window);
+    if (!this.windows.has(winId)) {
+      this.windows.set(winId, new Map());
     }
-    let extensions = this.windows.get(window);
+    let extensions = this.windows.get(winId);
     if (!extensions.has(extensionId)) {
       let context = new ExtensionContext(extensionId, window);
       extensions.set(extensionId, context);
@@ -384,6 +415,9 @@ var DocumentManager = {
 
     let extension = ExtensionManager.get(extensionId);
     for (let global of ExtensionContent.globals.keys()) {
+      // Note that we miss windows in the bfcache here. In theory we
+      // could execute content scripts on a pageshow event for that
+      // window, but that seems extreme.
       for (let [window, state] of this.enumerateWindows(global.docShell)) {
         for (let script of extension.scripts) {
           if (script.matches(window)) {
@@ -396,17 +430,11 @@ var DocumentManager = {
   },
 
   shutdownExtension(extensionId) {
-    for (let global of ExtensionContent.globals.keys()) {
-      for (let [window, state] of this.enumerateWindows(global.docShell)) {
-        let extensions = this.windows.get(window);
-        if (!extensions) {
-          continue;
-        }
-        let context = extensions.get(extensionId);
-        if (context) {
-          context.close();
-          extensions.delete(extensionId);
-        }
+    for (let [windowId, extensions] of this.windows) {
+      let context = extensions.get(extensionId);
+      if (context) {
+        context.close();
+        extensions.delete(extensionId);
       }
     }
 
@@ -435,9 +463,11 @@ function BrowserExtensionContent(data)
   this.id = data.id;
   this.uuid = data.uuid;
   this.data = data;
-  this.scripts = [ for (scriptData of data.content_scripts) new Script(scriptData) ];
+  this.scripts = data.content_scripts.map(scriptData => new Script(scriptData));
   this.webAccessibleResources = data.webAccessibleResources;
   this.whiteListedHosts = data.whiteListedHosts;
+
+  this.localeData = new LocaleData(data.localeData);
 
   this.manifest = data.manifest;
   this.baseURI = Services.io.newURI(data.baseURL, null, null);
@@ -455,6 +485,14 @@ BrowserExtensionContent.prototype = {
     if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
       ExtensionManagement.shutdownExtension(this.uuid);
     }
+  },
+
+  localizeMessage(...args) {
+    return this.localeData.localizeMessage(...args);
+  },
+
+  localize(...args) {
+    return this.localeData.localize(...args);
   },
 };
 
@@ -544,7 +582,6 @@ this.ExtensionContent = {
   receiveMessage({target, name, data}) {
     switch (name) {
     case "Extension:Execute":
-      data.options.matches = "<all_urls>";
       let script = new Script(data.options);
       let {extensionId} = data;
       DocumentManager.executeScript(target, extensionId, script);

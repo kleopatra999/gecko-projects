@@ -601,7 +601,8 @@ CopyFrontToBack(TextureClient* aFront,
                 TextureClient* aBack,
                 const gfx::IntRect& aRectToCopy)
 {
-  if (!aFront->Lock(OpenMode::OPEN_READ)) {
+  TextureClientAutoLock frontLock(aFront, OpenMode::OPEN_READ);
+  if (!frontLock.Succeeded()) {
     gfxCriticalError() << "[Tiling:Client] Failed to lock the tile's front buffer";
     return false;
   }
@@ -613,8 +614,6 @@ CopyFrontToBack(TextureClient* aFront,
 
   gfx::IntPoint rectToCopyTopLeft = aRectToCopy.TopLeft();
   aFront->CopyToTextureClient(aBack, &aRectToCopy, &rectToCopyTopLeft);
-
-  aFront->Unlock();
   return true;
 }
 
@@ -704,7 +703,7 @@ TileClient::DiscardBackBuffer()
 {
   if (mBackBuffer) {
     MOZ_ASSERT(mBackLock);
-    if (!mBackBuffer->ImplementsLocking() && mBackLock->GetReadCount() > 1) {
+    if (!mBackBuffer->HasSynchronization() && mBackLock->GetReadCount() > 1) {
       // Our current back-buffer is still locked by the compositor. This can occur
       // when the client is producing faster than the compositor can consume. In
       // this case we just want to drop it and not return it to the pool.
@@ -1401,13 +1400,14 @@ ClientMultiTiledLayerBuffer::ValidateTile(TileClient& aTile,
  */
 static Maybe<LayerRect>
 GetCompositorSideCompositionBounds(const LayerMetricsWrapper& aScrollAncestor,
-                                   const Matrix4x4& aTransformToCompBounds,
+                                   const LayerToParentLayerMatrix4x4& aTransformToCompBounds,
                                    const ViewTransform& aAPZTransform,
                                    const LayerRect& aClip)
 {
-  Matrix4x4 transform = aTransformToCompBounds * Matrix4x4(aAPZTransform);
+  LayerToParentLayerMatrix4x4 transform = aTransformToCompBounds *
+      ViewAs<ParentLayerToParentLayerMatrix4x4>(aAPZTransform);
 
-  return UntransformTo<LayerPixel>(transform.Inverse(),
+  return UntransformBy(transform.Inverse(),
     aScrollAncestor.Metrics().GetCompositionBounds(), aClip);
 }
 
@@ -1509,13 +1509,13 @@ ClientMultiTiledLayerBuffer::ComputeProgressiveUpdateRegion(const nsIntRegion& a
   // make the progressive paint more visible to the user while scrolling.
   // On B2G uploads are cheaper and we value coherency more, especially outside
   // the browser, so we always use the entire user-visible area.
-  IntRect coherentUpdateRect(LayerIntRect::ToUntyped(RoundedOut(
+  IntRect coherentUpdateRect(RoundedOut(
 #ifdef MOZ_WIDGET_ANDROID
     transformedCompositionBounds->Intersect(aPaintData->mCompositionBounds)
 #else
     *transformedCompositionBounds
 #endif
-  )));
+  ).ToUnknownRect());
 
   TILING_LOG("TILING %p: Progressive update final coherency rect %s\n", mPaintedLayer, Stringify(coherentUpdateRect).c_str());
 

@@ -1885,8 +1885,10 @@ class CookieNotifierRunnable : public nsRunnable
 {
 public:
   CookieNotifierRunnable(HttpBaseChannel* aChannel, char const * aCookie)
-    : mChannel(aChannel), mCookie(aCookie)
-  { }
+    : mChannel(aChannel)
+  {
+    CopyASCIItoUTF16(aCookie, mCookie);
+  }
 
   NS_IMETHOD Run()
   {
@@ -1901,7 +1903,7 @@ public:
 
 private:
   RefPtr<HttpBaseChannel> mChannel;
-  NS_ConvertASCIItoUTF16 mCookie;
+  nsString mCookie;
 };
 
 } // namespace
@@ -2530,15 +2532,6 @@ HttpBaseChannel::AddCookiesToRequest()
   SetRequestHeader(nsDependentCString(nsHttp::Cookie), cookie, false);
 }
 
-static PLDHashOperator
-CopyProperties(const nsAString& aKey, nsIVariant *aData, void *aClosure)
-{
-  nsIWritablePropertyBag* bag = static_cast<nsIWritablePropertyBag*>
-                                           (aClosure);
-  bag->SetProperty(aKey, aData);
-  return PL_DHASH_NEXT;
-}
-
 bool
 HttpBaseChannel::ShouldRewriteRedirectToGET(uint32_t httpStatus,
                                             nsHttpRequestHead::ParsedMethodType method)
@@ -2734,8 +2727,11 @@ HttpBaseChannel::SetupReplacementChannel(nsIURI       *newURI,
 
   // transfer any properties
   nsCOMPtr<nsIWritablePropertyBag> bag(do_QueryInterface(newChannel));
-  if (bag)
-    mPropertyHash.EnumerateRead(CopyProperties, bag.get());
+  if (bag) {
+    for (auto iter = mPropertyHash.Iter(); !iter.Done(); iter.Next()) {
+      bag->SetProperty(iter.Key(), iter.UserData());
+    }
+  }
 
   // Transfer the timing data (if we are dealing with an nsITimedChannel).
   nsCOMPtr<nsITimedChannel> newTimedChannel(do_QueryInterface(newChannel));

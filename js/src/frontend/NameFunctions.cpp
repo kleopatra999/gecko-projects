@@ -366,7 +366,6 @@ class NameResolver
           case PNK_TRUE:
           case PNK_FALSE:
           case PNK_NULL:
-          case PNK_THIS:
           case PNK_ELISION:
           case PNK_GENERATOR:
           case PNK_NUMBER:
@@ -374,13 +373,13 @@ class NameResolver
           case PNK_CONTINUE:
           case PNK_DEBUGGER:
           case PNK_EXPORT_BATCH_SPEC:
-          case PNK_FRESHENBLOCK:
           case PNK_OBJECT_PROPERTY_NAME:
           case PNK_POSHOLDER:
             MOZ_ASSERT(cur->isArity(PN_NULLARY));
             break;
 
           case PNK_TYPEOFNAME:
+          case PNK_SUPERBASE:
             MOZ_ASSERT(cur->isArity(PN_UNARY));
             MOZ_ASSERT(cur->pn_kid->isKind(PNK_NAME));
             MOZ_ASSERT(!cur->pn_kid->maybeExpr());
@@ -420,6 +419,7 @@ class NameResolver
 
           // Nodes with a single nullable child.
           case PNK_SEMI:
+          case PNK_THIS:
             MOZ_ASSERT(cur->isArity(PN_UNARY));
             if (ParseNode* expr = cur->pn_kid) {
                 if (!resolve(expr, prefix))
@@ -442,7 +442,6 @@ class NameResolver
           case PNK_MODASSIGN:
           case PNK_POWASSIGN:
           case PNK_COLON:
-          case PNK_CASE:
           case PNK_SHORTHAND:
           case PNK_DOWHILE:
           case PNK_WHILE:
@@ -450,6 +449,7 @@ class NameResolver
           case PNK_LETBLOCK:
           case PNK_FOR:
           case PNK_CLASSMETHOD:
+          case PNK_SETTHIS:
             MOZ_ASSERT(cur->isArity(PN_BINARY));
             if (!resolve(cur->pn_left, prefix))
                 return false;
@@ -473,9 +473,12 @@ class NameResolver
                 return false;
             break;
 
-          case PNK_DEFAULT:
+          case PNK_CASE:
             MOZ_ASSERT(cur->isArity(PN_BINARY));
-            MOZ_ASSERT(!cur->pn_left);
+            if (ParseNode* caseExpr = cur->pn_left) {
+                if (!resolve(caseExpr, prefix))
+                    return false;
+            }
             if (!resolve(cur->pn_right, prefix))
                 return false;
             break;

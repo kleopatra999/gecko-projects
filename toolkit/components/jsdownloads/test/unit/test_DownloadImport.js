@@ -166,10 +166,10 @@ function promiseEntityID(aUrl) {
   let entityID = "";
   let channel = NetUtil.newChannel({
     uri: NetUtil.newURI(aUrl),
-    loadUsingSystemPrincipal: true,
+    loadUsingSystemPrincipal: true
   });
 
-  channel.asyncOpen({
+  channel.asyncOpen2({
     onStartRequest: function (aRequest) {
       if (aRequest instanceof Ci.nsIResumableChannel) {
         entityID = aRequest.entityID;
@@ -186,7 +186,7 @@ function promiseEntityID(aUrl) {
     },
 
     onDataAvailable: function () {}
-  }, null);
+  });
 
   return deferred.promise;
 }

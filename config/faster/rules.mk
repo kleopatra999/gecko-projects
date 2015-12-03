@@ -43,13 +43,20 @@ default: $(addprefix install-,$(INSTALL_MANIFESTS))
 
 # Explicit files to be built for a default build
 default: $(addprefix $(TOPOBJDIR)/,$(MANIFEST_TARGETS))
+ifndef TEST_MOZBUILD
 default: $(TOPOBJDIR)/dist/bin/platform.ini
+endif
 
+ifndef NO_XPIDL
 # Targets from the recursive make backend to be built for a default build
 default: $(TOPOBJDIR)/config/makefiles/xpidl/xpidl
+endif
 
 ifeq (cocoa,$(MOZ_WIDGET_TOOLKIT))
 # Mac builds require to copy things in dist/bin/*.app
+# TODO: remove the MOZ_WIDGET_TOOLKIT and MOZ_BUILD_APP variables from
+# faster/Makefile and python/mozbuild/mozbuild/test/backend/test_build.py
+# when this is not required anymore.
 default:
 	$(MAKE) -C $(TOPOBJDIR)/$(MOZ_BUILD_APP)/app repackage
 endif
@@ -77,6 +84,7 @@ $(TOPOBJDIR)/_virtualenv/%: ;
 # if there is no other rule.
 $(TOPOBJDIR)/dist/%:
 	rm -f $@
+	mkdir -p $(@D)
 	cp $< $@
 
 # Refresh backend
@@ -126,6 +134,8 @@ $(addprefix $(TOPOBJDIR)/,$(MANIFEST_TARGETS)): FORCE
 
 # Files to build with the recursive backend and simply copy
 $(TOPOBJDIR)/dist/bin/platform.ini: $(TOPOBJDIR)/toolkit/xre/platform.ini
+
+$(TOPOBJDIR)/toolkit/xre/platform.ini: $(TOPOBJDIR)/config/buildid
 
 # The xpidl target in config/makefiles/xpidl requires the install manifest for
 # dist/idl to have been processed.

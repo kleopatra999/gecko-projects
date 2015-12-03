@@ -619,24 +619,6 @@ gfxPlatformFontList::GlobalFontFallback(const uint32_t aCh,
     return data.mBestMatch;
 }
 
-#ifdef XP_WIN
-#include <windows.h>
-
-// crude hack for using when monitoring process
-static void LogRegistryEvent(const wchar_t *msg)
-{
-  HKEY dummyKey;
-  HRESULT hr;
-  wchar_t buf[512];
-
-  wsprintfW(buf, L" log %s", msg);
-  hr = RegOpenKeyExW(HKEY_LOCAL_MACHINE, buf, 0, KEY_READ, &dummyKey);
-  if (SUCCEEDED(hr)) {
-    RegCloseKey(dummyKey);
-  }
-}
-#endif
-
 gfxFontFamily*
 gfxPlatformFontList::CheckFamily(gfxFontFamily *aFamily)
 {
@@ -657,7 +639,8 @@ gfxPlatformFontList::CheckFamily(gfxFontFamily *aFamily)
 }
 
 gfxFontFamily* 
-gfxPlatformFontList::FindFamily(const nsAString& aFamily, gfxFontStyle* aStyle)
+gfxPlatformFontList::FindFamily(const nsAString& aFamily, gfxFontStyle* aStyle,
+                                gfxFloat aDevToCssSize)
 {
     nsAutoString key;
     gfxFontFamily *familyEntry;
@@ -804,39 +787,7 @@ gfxPlatformFontList::ResolveGenericFontNames(
 )
 {
     const char* langGroupStr = GetPrefLangName(aPrefLang);
-
-    static const char kGeneric_serif[] = "serif";
-    static const char kGeneric_sans_serif[] = "sans-serif";
-    static const char kGeneric_monospace[] = "monospace";
-    static const char kGeneric_cursive[] = "cursive";
-    static const char kGeneric_fantasy[] = "fantasy";
-
-    // type should be standard generic type at this point
-    NS_ASSERTION(aGenericType >= eFamily_serif &&
-                 aGenericType <= eFamily_fantasy,
-                 "standard generic font family type required");
-
-    // map generic type to string
-    const char *generic = nullptr;
-    switch (aGenericType) {
-        case eFamily_serif:
-            generic = kGeneric_serif;
-            break;
-        case eFamily_sans_serif:
-            generic = kGeneric_sans_serif;
-            break;
-        case eFamily_monospace:
-            generic = kGeneric_monospace;
-            break;
-        case eFamily_cursive:
-            generic = kGeneric_cursive;
-            break;
-        case eFamily_fantasy:
-            generic = kGeneric_fantasy;
-            break;
-        default:
-            break;
-    }
+    const char* generic = GetGenericName(aGenericType);
 
     if (!generic) {
         return;
@@ -916,19 +867,7 @@ gfxPlatformFontList::AddGenericFonts(mozilla::FontFamilyType aGenericType,
                                      nsTArray<gfxFontFamily*>& aFamilyList)
 {
     // map lang ==> langGroup
-    nsIAtom *langGroup = nullptr;
-    if (aLanguage) {
-        if (!mLangService) {
-            mLangService = do_GetService(NS_LANGUAGEATOMSERVICE_CONTRACTID);
-        }
-        if (mLangService) {
-            nsresult rv;
-            langGroup = mLangService->GetLanguageGroup(aLanguage, &rv);
-        }
-    }
-    if (!langGroup) {
-        langGroup = nsGkAtoms::Unicode;
-    }
+    nsIAtom* langGroup = GetLangGroup(aLanguage);
 
     // langGroup ==> prefLang
     eFontPrefLang prefLang = GetFontPrefLangFor(langGroup);
@@ -1219,6 +1158,71 @@ gfxPlatformFontList::GetFontFamilyNames(nsTArray<nsString>& aFontFamilyNames)
         RefPtr<gfxFontFamily>& family = iter.Data();
         aFontFamilyNames.AppendElement(family->Name());
     }
+}
+
+nsILanguageAtomService*
+gfxPlatformFontList::GetLangService()
+{
+    if (!mLangService) {
+        mLangService = do_GetService(NS_LANGUAGEATOMSERVICE_CONTRACTID);
+    }
+    NS_ASSERTION(mLangService, "no language service!");
+    return mLangService;
+}
+
+nsIAtom*
+gfxPlatformFontList::GetLangGroup(nsIAtom* aLanguage)
+{
+    // map lang ==> langGroup
+    nsIAtom *langGroup = nullptr;
+    if (aLanguage) {
+        nsresult rv;
+        nsILanguageAtomService* langService = GetLangService();
+        langGroup = langService->GetLanguageGroup(aLanguage, &rv);
+    }
+    if (!langGroup) {
+        langGroup = nsGkAtoms::Unicode;
+    }
+    return langGroup;
+}
+
+/* static */ const char*
+gfxPlatformFontList::GetGenericName(FontFamilyType aGenericType)
+{
+    static const char kGeneric_serif[] = "serif";
+    static const char kGeneric_sans_serif[] = "sans-serif";
+    static const char kGeneric_monospace[] = "monospace";
+    static const char kGeneric_cursive[] = "cursive";
+    static const char kGeneric_fantasy[] = "fantasy";
+
+    // type should be standard generic type at this point
+    NS_ASSERTION(aGenericType >= eFamily_serif &&
+                 aGenericType <= eFamily_fantasy,
+                 "standard generic font family type required");
+
+    // map generic type to string
+    const char *generic = nullptr;
+    switch (aGenericType) {
+        case eFamily_serif:
+            generic = kGeneric_serif;
+            break;
+        case eFamily_sans_serif:
+            generic = kGeneric_sans_serif;
+            break;
+        case eFamily_monospace:
+            generic = kGeneric_monospace;
+            break;
+        case eFamily_cursive:
+            generic = kGeneric_cursive;
+            break;
+        case eFamily_fantasy:
+            generic = kGeneric_fantasy;
+            break;
+        default:
+            break;
+    }
+
+    return generic;
 }
 
 void

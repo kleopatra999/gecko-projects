@@ -19,7 +19,6 @@ final class UnusedResourcesUtil {
 
     public static final int[] USED_IN_JS = {
             R.drawable.ab_search,
-            R.drawable.alert_addon,
             R.drawable.alert_app,
             R.drawable.alert_app_animation,
             R.drawable.alert_camera,
@@ -65,8 +64,8 @@ final class UnusedResourcesUtil {
     };
 
     public static final int[] USED_IN_PREFS = {
-            R.xml.preferences_devtools,
-            R.xml.preferences_display,
+            R.xml.preferences_advanced,
+            R.xml.preferences_accessibility,
             R.xml.preferences_home,
             R.xml.preferences_privacy,
     };

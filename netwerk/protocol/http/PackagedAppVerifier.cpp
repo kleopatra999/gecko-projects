@@ -81,7 +81,7 @@ NS_IMETHODIMP PackagedAppVerifier::Init(nsIPackagedAppVerifierListener* aListene
   mIsFirstResource = true;
   mManifest = EmptyCString();
 
-  OriginAttributes().PopulateFromOrigin(aPackageOrigin, mPackageOrigin);
+  NeckoOriginAttributes().PopulateFromOrigin(aPackageOrigin, mPackageOrigin);
   mBypassVerification = (mPackageOrigin ==
       Preferences::GetCString("network.http.signed-packages.trusted-origin"));
 
@@ -382,6 +382,12 @@ PackagedAppVerifier::OnManifestVerified(bool aSuccess)
   if (mIsPackageSigned) {
     mPackagedAppUtils->GetPackageIdentifier(mPackageIdentifer);
     LOG(("PackageIdentifer is: %s", mPackageIdentifer.get()));
+  }
+
+  // If the signature verification failed, doom the package cache to
+  // make its subresources unavailable in the subsequent requests.
+  if (!aSuccess && mPackageCacheEntry) {
+    mPackageCacheEntry->AsyncDoom(nullptr);
   }
 
   // If the package is signed, add related info to the package cache.

@@ -18,6 +18,7 @@
 #include "CrashReporterChild.h"
 #include "GeckoProfiler.h"
 #include "TabChild.h"
+#include "HandlerServiceChild.h"
 
 #include "mozilla/Attributes.h"
 #include "mozilla/LookAndFeel.h"
@@ -1894,6 +1895,20 @@ ContentChild::DeallocPExternalHelperAppChild(PExternalHelperAppChild* aService)
     return true;
 }
 
+PHandlerServiceChild*
+ContentChild::AllocPHandlerServiceChild()
+{
+    HandlerServiceChild* actor = new HandlerServiceChild();
+    actor->AddRef();
+    return actor;
+}
+
+bool ContentChild::DeallocPHandlerServiceChild(PHandlerServiceChild* aHandlerServiceChild)
+{
+    static_cast<HandlerServiceChild*>(aHandlerServiceChild)->Release();
+    return true;
+}
+
 PCellBroadcastChild*
 ContentChild::AllocPCellBroadcastChild()
 {
@@ -2162,8 +2177,7 @@ ContentChild::ActorDestroy(ActorDestroyReason why)
     // going through the full XPCOM shutdown path, because it doesn't
     // keep persistent state.
     QuickExit();
-#endif
-
+#else
     if (sFirstIdleTask) {
         sFirstIdleTask->Cancel();
     }
@@ -2188,6 +2202,7 @@ ContentChild::ActorDestroy(ActorDestroyReason why)
 #endif
 
     XRE_ShutdownChildProcess();
+#endif // NS_FREE_PERMANENT_DATA
 }
 
 void
@@ -2259,6 +2274,39 @@ bool
 ContentChild::RecvPreferenceUpdate(const PrefSetting& aPref)
 {
     Preferences::SetPreference(aPref);
+    return true;
+}
+
+bool
+ContentChild::RecvDataStoragePut(const nsString& aFilename,
+                                 const DataStorageItem& aItem)
+{
+    RefPtr<DataStorage> storage = DataStorage::GetIfExists(aFilename);
+    if (storage) {
+        storage->Put(aItem.key(), aItem.value(), aItem.type());
+    }
+    return true;
+}
+
+bool
+ContentChild::RecvDataStorageRemove(const nsString& aFilename,
+                                    const nsCString& aKey,
+                                    const DataStorageType& aType)
+{
+    RefPtr<DataStorage> storage = DataStorage::GetIfExists(aFilename);
+    if (storage) {
+        storage->Remove(aKey, aType);
+    }
+    return true;
+}
+
+bool
+ContentChild::RecvDataStorageClear(const nsString& aFilename)
+{
+    RefPtr<DataStorage> storage = DataStorage::GetIfExists(aFilename);
+    if (storage) {
+        storage->Clear();
+    }
     return true;
 }
 
@@ -2363,7 +2411,7 @@ ContentChild::RecvAddPermission(const IPC::Permission& permission)
                "We have no permissionManager in the Content process !");
 
     nsAutoCString originNoSuffix;
-    OriginAttributes attrs;
+    PrincipalOriginAttributes attrs;
     attrs.PopulateFromOrigin(permission.origin, originNoSuffix);
 
     nsCOMPtr<nsIURI> uri;
@@ -2759,22 +2807,20 @@ ContentChild::RecvOnAppThemeChanged()
 }
 
 bool
-ContentChild::RecvStartProfiler(const uint32_t& aEntries,
-                                const double& aInterval,
-                                nsTArray<nsCString>&& aFeatures,
-                                nsTArray<nsCString>&& aThreadNameFilters)
+ContentChild::RecvStartProfiler(const ProfilerInitParams& params)
 {
     nsTArray<const char*> featureArray;
-    for (size_t i = 0; i < aFeatures.Length(); ++i) {
-        featureArray.AppendElement(aFeatures[i].get());
+    for (size_t i = 0; i < params.features().Length(); ++i) {
+        featureArray.AppendElement(params.features()[i].get());
     }
 
     nsTArray<const char*> threadNameFilterArray;
-    for (size_t i = 0; i < aThreadNameFilters.Length(); ++i) {
-        threadNameFilterArray.AppendElement(aThreadNameFilters[i].get());
+    for (size_t i = 0; i < params.threadFilters().Length(); ++i) {
+        threadNameFilterArray.AppendElement(params.threadFilters()[i].get());
     }
 
-    profiler_start(aEntries, aInterval, featureArray.Elements(), featureArray.Length(),
+    profiler_start(params.entries(), params.interval(),
+                   featureArray.Elements(), featureArray.Length(),
                    threadNameFilterArray.Elements(), threadNameFilterArray.Length());
 
     return true;
@@ -2969,6 +3015,7 @@ ContentChild::AllocPContentPermissionRequestChild(const InfallibleTArray<Permiss
 bool
 ContentChild::DeallocPContentPermissionRequestChild(PContentPermissionRequestChild* actor)
 {
+    nsContentPermissionUtils::NotifyRemoveContentPermissionRequestChild(actor);
     auto child = static_cast<RemotePermissionRequest*>(actor);
     child->IPDLRelease();
     return true;

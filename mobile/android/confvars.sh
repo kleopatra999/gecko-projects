@@ -87,9 +87,6 @@ MOZ_WEBGL_CONFORMANT=1
 # Enable the Search Activity.
 MOZ_ANDROID_SEARCH_ACTIVITY=1
 
-# Enable the share handler.
-MOZ_ANDROID_SHARE_OVERLAY=1
-
 # Enable the Mozilla Location Service stumbler.
 MOZ_ANDROID_MLS_STUMBLER=1
 
@@ -107,8 +104,10 @@ if test "$NIGHTLY_BUILD"; then
   MOZ_ANDROID_GCM=1
 fi
 
-# Enable Firefox Account avatars.
-MOZ_ANDROID_FIREFOX_ACCOUNT_PROFILES=1
+# Enable C++ APZ on Nightly builds only.
+if test "$NIGHTLY_BUILD"; then
+  MOZ_ANDROID_APZ=1
+fi
 
 # Enable checking that add-ons are signed by the trusted root
 MOZ_ADDON_SIGNING=1
@@ -117,11 +116,6 @@ MOZ_ADDON_SIGNING=1
 # Note: The framework is always included in the app. This flag controls
 # usage of the framework.
 MOZ_SWITCHBOARD=1
-
-# Use native Firefox Accounts UI after Nightly.
-if ! test "$NIGHTLY_BUILD"; then
-MOZ_ANDROID_NATIVE_ACCOUNT_UI=1
-fi
 
 # Disable GeckoView by default.
 export MOZ_DISABLE_GECKOVIEW=1

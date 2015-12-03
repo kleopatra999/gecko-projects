@@ -101,11 +101,11 @@ GeckoChildProcessHost::GeckoChildProcessHost(GeckoProcessType aProcessType,
     mPrivileges(aPrivileges),
     mMonitor("mozilla.ipc.GeckChildProcessHost.mMonitor"),
     mProcessState(CREATING_CHANNEL),
-    mDelegate(nullptr),
 #if defined(MOZ_SANDBOX) && defined(XP_WIN)
     mEnableSandboxLogging(false),
     mSandboxLevel(0),
 #endif
+    mDelegate(nullptr),
     mChildProcessHandle(0)
 #if defined(MOZ_WIDGET_COCOA)
   , mChildTask(MACH_PORT_NULL)
@@ -541,12 +541,15 @@ AddAppDirToCommandLine(std::vector<std::string>& aCmdLine)
                                           NS_GET_IID(nsIFile),
                                           getter_AddRefs(appDir));
       if (NS_SUCCEEDED(rv)) {
+#if defined(XP_WIN)
+        nsString path;
+        MOZ_ALWAYS_TRUE(NS_SUCCEEDED(appDir->GetPath(path)));
+        aCmdLine.AppendLooseValue(UTF8ToWide("-appdir"));
+        std::wstring wpath(path.get());
+        aCmdLine.AppendLooseValue(wpath);
+#else
         nsAutoCString path;
         MOZ_ALWAYS_TRUE(NS_SUCCEEDED(appDir->GetNativePath(path)));
-#if defined(XP_WIN)
-        aCmdLine.AppendLooseValue(UTF8ToWide("-appdir"));
-        aCmdLine.AppendLooseValue(UTF8ToWide(path.get()));
-#else
         aCmdLine.push_back("-appdir");
         aCmdLine.push_back(path.get());
 #endif
@@ -948,6 +951,12 @@ GeckoChildProcessHost::PerformAsyncLaunchInternal(std::vector<std::string>& aExt
          it != mAllowedFilesReadWrite.end();
          ++it) {
       mSandboxBroker.AllowReadWriteFile(it->c_str());
+    }
+
+    for (auto it = mAllowedDirectories.begin();
+         it != mAllowedDirectories.end();
+         ++it) {
+      mSandboxBroker.AllowDirectory(it->c_str());
     }
   }
 #endif // XP_WIN && MOZ_SANDBOX

@@ -198,14 +198,14 @@ VideoData::ShallowCopyUpdateTimestampAndDuration(const VideoData* aOther,
 }
 
 /* static */
-void VideoData::SetVideoDataToImage(PlanarYCbCrImage* aVideoImage,
+bool VideoData::SetVideoDataToImage(PlanarYCbCrImage* aVideoImage,
                                     const VideoInfo& aInfo,
                                     const YCbCrBuffer &aBuffer,
                                     const IntRect& aPicture,
                                     bool aCopyData)
 {
   if (!aVideoImage) {
-    return;
+    return false;
   }
   const YCbCrBuffer::Plane &Y = aBuffer.mPlanes[0];
   const YCbCrBuffer::Plane &Cb = aBuffer.mPlanes[1];
@@ -229,9 +229,9 @@ void VideoData::SetVideoDataToImage(PlanarYCbCrImage* aVideoImage,
 
   aVideoImage->SetDelayedConversion(true);
   if (aCopyData) {
-    aVideoImage->SetData(data);
+    return aVideoImage->SetData(data);
   } else {
-    aVideoImage->SetDataNoCopy(data);
+    return aVideoImage->SetDataNoCopy(data);
   }
 }
 
@@ -312,11 +312,11 @@ VideoData::Create(const VideoInfo& aInfo,
     // format.
 #ifdef MOZ_WIDGET_GONK
     if (IsYV12Format(Y, Cb, Cr) && !IsInEmulator()) {
-      v->mImage = aContainer->CreateImage(ImageFormat::GRALLOC_PLANAR_YCBCR);
+      v->mImage = new layers::GrallocImage();
     }
 #endif
     if (!v->mImage) {
-      v->mImage = aContainer->CreateImage(ImageFormat::PLANAR_YCBCR);
+      v->mImage = aContainer->CreatePlanarYCbCrImage();
     }
   } else {
     v->mImage = aImage;
@@ -328,26 +328,27 @@ VideoData::Create(const VideoInfo& aInfo,
   NS_ASSERTION(v->mImage->GetFormat() == ImageFormat::PLANAR_YCBCR ||
                v->mImage->GetFormat() == ImageFormat::GRALLOC_PLANAR_YCBCR,
                "Wrong format?");
-  PlanarYCbCrImage* videoImage = static_cast<PlanarYCbCrImage*>(v->mImage.get());
+  PlanarYCbCrImage* videoImage = v->mImage->AsPlanarYCbCrImage();
+  MOZ_ASSERT(videoImage);
 
-  if (!aImage) {
-    VideoData::SetVideoDataToImage(videoImage, aInfo, aBuffer, aPicture,
-                                   true /* aCopyData */);
-  } else {
-    VideoData::SetVideoDataToImage(videoImage, aInfo, aBuffer, aPicture,
-                                   false /* aCopyData */);
+  bool shouldCopyData = (aImage == nullptr);
+  if (!VideoData::SetVideoDataToImage(videoImage, aInfo, aBuffer, aPicture,
+                                      shouldCopyData)) {
+    return nullptr;
   }
 
 #ifdef MOZ_WIDGET_GONK
   if (!videoImage->IsValid() && !aImage && IsYV12Format(Y, Cb, Cr)) {
     // Failed to allocate gralloc. Try fallback.
-    v->mImage = aContainer->CreateImage(ImageFormat::PLANAR_YCBCR);
+    v->mImage = aContainer->CreatePlanarYCbCrImage();
     if (!v->mImage) {
       return nullptr;
     }
-    videoImage = static_cast<PlanarYCbCrImage*>(v->mImage.get());
-    VideoData::SetVideoDataToImage(videoImage, aInfo, aBuffer, aPicture,
-                                   true /* aCopyData */);
+    videoImage = v->mImage->AsPlanarYCbCrImage();
+    if(!VideoData::SetVideoDataToImage(videoImage, aInfo, aBuffer, aPicture,
+                                       true /* aCopyData */)) {
+      return nullptr;
+    }
   }
 #endif
   return v.forget();
@@ -460,20 +461,9 @@ VideoData::Create(const VideoInfo& aInfo,
                                       aInfo.mDisplay,
                                       0));
 
-  v->mImage = aContainer->CreateImage(ImageFormat::GRALLOC_PLANAR_YCBCR);
-  if (!v->mImage) {
-    return nullptr;
-  }
-  NS_ASSERTION(v->mImage->GetFormat() == ImageFormat::GRALLOC_PLANAR_YCBCR,
-               "Wrong format?");
-  typedef mozilla::layers::GrallocImage GrallocImage;
-  GrallocImage* videoImage = static_cast<GrallocImage*>(v->mImage.get());
-  GrallocImage::GrallocData data;
-
-  data.mPicSize = aPicture.Size();
-  data.mGraphicBuffer = aBuffer;
-
-  videoImage->SetData(data);
+  RefPtr<layers::GrallocImage> image = new layers::GrallocImage();
+  image->SetData(aBuffer, aPicture.Size());
+  v->mImage = image;
 
   return v.forget();
 }

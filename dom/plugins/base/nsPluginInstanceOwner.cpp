@@ -179,16 +179,10 @@ AttachToContainerAsEGLImage(ImageContainer* container,
     return;
   }
 
-  RefPtr<Image> img = container->CreateImage(ImageFormat::EGLIMAGE);
-
-  EGLImageImage::Data data;
-  data.mImage = image;
-  data.mSize = gfx::IntSize(rect.width, rect.height);
-  data.mOriginPos = instance->OriginPos();
-
-  EGLImageImage* typedImg = static_cast<EGLImageImage*>(img.get());
-  typedImg->SetData(data);
-
+  RefPtr<EGLImageImage> img = new EGLImageImage(
+    image, nullptr,
+    gfx::IntSize(rect.width, rect.height), instance->OriginPos(),
+    false /* owns */);
   *out_image = img;
 }
 
@@ -206,16 +200,10 @@ AttachToContainerAsSurfaceTexture(ImageContainer* container,
     return;
   }
 
-  RefPtr<Image> img = container->CreateImage(ImageFormat::SURFACE_TEXTURE);
-
-  SurfaceTextureImage::Data data;
-  data.mSurfTex = surfTex;
-  data.mSize = gfx::IntSize(rect.width, rect.height);
-  data.mOriginPos = instance->OriginPos();
-
-  SurfaceTextureImage* typedImg = static_cast<SurfaceTextureImage*>(img.get());
-  typedImg->SetData(data);
-
+  RefPtr<Image> img = new SurfaceTextureImage(
+    surfTex,
+    gfx::IntSize(rect.width, rect.height),
+    instance->OriginPos());
   *out_image = img;
 }
 #endif
@@ -250,14 +238,23 @@ nsPluginInstanceOwner::GetImageContainer()
   if (!img) {
     AttachToContainerAsSurfaceTexture(container, mInstance, r, &img);
   }
-  MOZ_ASSERT(img);
 
-  container->SetCurrentImageInTransaction(img);
+  if (img) {
+    container->SetCurrentImageInTransaction(img);
+  }
 #else
   mInstance->GetImageContainer(getter_AddRefs(container));
 #endif
 
   return container.forget();
+}
+
+void
+nsPluginInstanceOwner::DidComposite()
+{
+  if (mInstance) {
+    mInstance->DidComposite();
+  }
 }
 
 void
@@ -611,9 +608,10 @@ NS_IMETHODIMP nsPluginInstanceOwner::InvalidateRect(NPRect *invalidRect)
   // Windowed plugins should not be calling NPN_InvalidateRect, but
   // Silverlight does and expects it to "work"
   if (mWidget) {
-    mWidget->Invalidate(nsIntRect(invalidRect->left, invalidRect->top,
-                                  invalidRect->right - invalidRect->left,
-                                  invalidRect->bottom - invalidRect->top));
+    mWidget->Invalidate(
+      LayoutDeviceIntRect(invalidRect->left, invalidRect->top,
+                          invalidRect->right - invalidRect->left,
+                          invalidRect->bottom - invalidRect->top));
     return NS_OK;
   }
 #endif
@@ -844,7 +842,7 @@ NPBool nsPluginInstanceOwner::ConvertPointPuppet(PuppetWidget *widget,
   nsPoint windowPosition = AsNsPoint(rootWidget->GetWindowPosition()) / scaleFactor;
 
   // Window size is tab size + chrome size.
-  nsIntRect tabContentBounds;
+  LayoutDeviceIntRect tabContentBounds;
   NS_ENSURE_SUCCESS(puppetWidget->GetBounds(tabContentBounds), false);
   tabContentBounds.ScaleInverseRoundOut(scaleFactor);
   int32_t windowH = tabContentBounds.height + int(chromeSize.y);
@@ -951,7 +949,7 @@ NPBool nsPluginInstanceOwner::ConvertPointNoPuppet(nsIWidget *widget,
   screen->GetRect(&screenX, &screenY, &screenWidth, &screenHeight);
   screenHeight /= scaleFactor;
 
-  nsIntRect windowScreenBounds;
+  LayoutDeviceIntRect windowScreenBounds;
   NS_ENSURE_SUCCESS(widget->GetScreenBounds(windowScreenBounds), false);
   windowScreenBounds.ScaleInverseRoundOut(scaleFactor);
   int32_t windowX = windowScreenBounds.x;
@@ -1045,6 +1043,21 @@ NPBool nsPluginInstanceOwner::ConvertPoint(double sourceX, double sourceY, NPCoo
 #else
   return false;
 #endif
+}
+
+NPError nsPluginInstanceOwner::InitAsyncSurface(NPSize *size, NPImageFormat format,
+                                                void *initData, NPAsyncSurface *surface)
+{
+  return NPERR_INCOMPATIBLE_VERSION_ERROR;
+}
+
+NPError nsPluginInstanceOwner::FinalizeAsyncSurface(NPAsyncSurface *)
+{
+  return NPERR_INCOMPATIBLE_VERSION_ERROR;
+}
+
+void nsPluginInstanceOwner::SetCurrentAsyncSurface(NPAsyncSurface *, NPRect*)
+{
 }
 
 NS_IMETHODIMP nsPluginInstanceOwner::GetTagType(nsPluginTagType *result)
@@ -1162,9 +1175,6 @@ void nsPluginInstanceOwner::AddToCARefreshTimer() {
 
   if (!sCARefreshListeners) {
     sCARefreshListeners = new nsTArray<nsPluginInstanceOwner*>();
-    if (!sCARefreshListeners) {
-      return;
-    }
   }
 
   if (sCARefreshListeners->Contains(this)) {
@@ -1175,9 +1185,6 @@ void nsPluginInstanceOwner::AddToCARefreshTimer() {
 
   if (!sCATimer) {
     sCATimer = new nsCOMPtr<nsITimer>();
-    if (!sCATimer) {
-      return;
-    }
   }
 
   if (sCARefreshListeners->Length() == 1) {
@@ -1339,16 +1346,10 @@ nsPluginInstanceOwner::GetImageContainerForVideo(nsNPAPIPluginInstance::VideoInf
 {
   RefPtr<ImageContainer> container = LayerManager::CreateImageContainer();
 
-  RefPtr<Image> img = container->CreateImage(ImageFormat::SURFACE_TEXTURE);
-
-  SurfaceTextureImage::Data data;
-  data.mSurfTex = aVideoInfo->mSurfaceTexture;
-  data.mOriginPos = gl::OriginPos::BottomLeft;
-  data.mSize = gfx::IntSize(aVideoInfo->mDimensions.width, aVideoInfo->mDimensions.height);
-
-  SurfaceTextureImage* typedImg = static_cast<SurfaceTextureImage*>(img.get());
-  typedImg->SetData(data);
-
+  RefPtr<Image> img = new SurfaceTextureImage(
+    aVideoInfo->mSurfaceTexture,
+    gfx::IntSize(aVideoInfo->mDimensions.width, aVideoInfo->mDimensions.height),
+    gl::OriginPos::BottomLeft);
   container->SetCurrentImageInTransaction(img);
 
   return container.forget();
@@ -2960,8 +2961,8 @@ NS_IMETHODIMP nsPluginInstanceOwner::CreateWidget(void)
       initData.mUnicode = false;
       initData.clipChildren = true;
       initData.clipSiblings = true;
-      rv = mWidget->Create(parentWidget.get(), nullptr, nsIntRect(0,0,0,0),
-                           &initData);
+      rv = mWidget->Create(parentWidget.get(), nullptr,
+                           LayoutDeviceIntRect(0, 0, 0, 0), &initData);
       if (NS_FAILED(rv)) {
         mWidget->Destroy();
         mWidget = nullptr;

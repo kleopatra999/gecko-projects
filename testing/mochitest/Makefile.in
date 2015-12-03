@@ -73,6 +73,7 @@ TEST_HARNESS_PLUGINS := \
   SecondTest.plugin/ \
   ThirdTest.plugin/ \
   npswftest.plugin/ \
+  npctrltest.plugin/ \
   JavaTest.plugin/
 else
 TEST_HARNESS_PLUGINS := \
@@ -80,7 +81,8 @@ TEST_HARNESS_PLUGINS := \
   $(DLL_PREFIX)npsecondtest$(DLL_SUFFIX) \
   $(DLL_PREFIX)npthirdtest$(DLL_SUFFIX) \
   $(DLL_PREFIX)nptestjava$(DLL_SUFFIX) \
-  $(DLL_PREFIX)npswftest$(DLL_SUFFIX)
+  $(DLL_PREFIX)npswftest$(DLL_SUFFIX) \
+  $(DLL_PREFIX)npctrltest$(DLL_SUFFIX)
 endif
 
 # Rules for staging the necessary harness bits for a test package
@@ -103,7 +105,7 @@ include $(topsrcdir)/config/android-common.mk
 stage-package-android:
 	$(NSINSTALL) -D $(_DEST_DIR)
 	$(call RELEASE_SIGN_ANDROID_APK,\
-		$(DEPTH)/build/mobile/robocop/robocop-debug-unsigned-unaligned.apk,\
+		$(DEPTH)/mobile/android/tests/browser/robocop/robocop-debug-unsigned-unaligned.apk,\
 		$(_DEST_DIR)/robocop.apk)
 
 stage-package: stage-package-android

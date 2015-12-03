@@ -198,18 +198,18 @@
 }
 
 .ruleview-bezierswatch {
-  background: url("chrome://devtools/skin/themes/images/cubic-bezier-swatch.png");
+  background: url("chrome://devtools/skin/images/cubic-bezier-swatch.png");
   background-size: 1em;
 }
 
 .ruleview-filterswatch {
-  background: url("chrome://devtools/skin/themes/images/filter-swatch.svg");
+  background: url("chrome://devtools/skin/images/filter-swatch.svg");
   background-size: 1em;
 }
 
 @media (min-resolution: 1.1dppx) {
   .ruleview-bezierswatch {
-    background: url("chrome://devtools/skin/themes/images/cubic-bezier-swatch@2x.png");
+    background: url("chrome://devtools/skin/images/cubic-bezier-swatch@2x.png");
     background-size: 1em;
   }
 }
@@ -277,55 +277,34 @@
 }
 
 .ruleview-selectorhighlighter {
-  background: url("chrome://devtools/skin/themes/images/vview-open-inspector.png") no-repeat 0 0;
+  background: url("chrome://devtools/skin/images/vview-open-inspector.png") no-repeat 0 0;
   padding-left: 16px;
   margin-left: 5px;
   cursor: pointer;
 }
 
 .ruleview-selectorhighlighter:hover {
-  background-position: -32px 0;
+  filter: url(images/filters.svg#checked-icon-state);
 }
 
 .ruleview-selectorhighlighter:active,
 .ruleview-selectorhighlighter.highlighted {
-  background-position: -16px 0;
+  filter: url(images/filters.svg#checked-icon-state) brightness(0.9);
 }
 
 #ruleview-add-rule-button::before {
-  background-image: url("chrome://devtools/skin/themes/images/add.svg");
+  background-image: url("chrome://devtools/skin/images/add.svg");
   background-size: cover;
 }
 
 #pseudo-class-panel-toggle::before {
-  background-image: url("chrome://devtools/skin/themes/images/pseudo-class.svg#pseudo-class");
+  background-image: url("chrome://devtools/skin/images/pseudo-class.svg");
   background-size: cover;
 }
-#pseudo-class-panel-toggle[checked]::before {
-  background-image: url("chrome://devtools/skin/themes/images/pseudo-class.svg#pseudo-class-checked");
-  filter: none !important;
-}
 
-/**
- * These buttons are using opacity instead of background color to indicate
- * the state
- */
-#ruleview-add-rule-button,
-#pseudo-class-panel-toggle,
 .ruleview-overridden-rule-filter {
   opacity: 0.8;
 }
-
-#ruleview-add-rule-button:not([disabled]):hover,
-#pseudo-class-panel-toggle:hover,
-#pseudo-class-panel-toggle[checked],
 .ruleview-overridden-rule-filter:hover {
   opacity: 1;
-}
-
-#ruleview-add-rule-button,
-#pseudo-class-panel-toggle,
-#pseudo-class-panel-toggle:hover,
-#pseudo-class-panel-toggle[checked]::before {
-  background-color: transparent !important;
 }

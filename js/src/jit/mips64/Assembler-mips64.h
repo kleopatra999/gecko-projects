@@ -151,11 +151,11 @@ class Assembler : public AssemblerMIPSShared
                                         PatchedImmPtr expectedValue);
 
     static void PatchInstructionImmediate(uint8_t* code, PatchedImmPtr imm);
+    static uint64_t ExtractInstructionImmediate(uint8_t* code);
 
     static void ToggleCall(CodeLocationLabel inst_, bool enabled);
 
     static void UpdateBoundsCheck(uint64_t logHeapSize, Instruction* inst);
-    static int64_t ExtractCodeLabelOffset(uint8_t* code);
 }; // Assembler
 
 static const uint32_t NumIntArgRegs = 8;

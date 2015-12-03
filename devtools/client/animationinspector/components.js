@@ -29,14 +29,17 @@ const {
   TargetNodeHighlighter
 } = require("devtools/client/animationinspector/utils");
 
-const STRINGS_URI = "chrome://browser/locale/devtools/animationinspector.properties";
+const STRINGS_URI = "chrome://devtools/locale/animationinspector.properties";
 const L10N = new ViewHelpers.L10N(STRINGS_URI);
 const MILLIS_TIME_FORMAT_MAX_DURATION = 4000;
 // The minimum spacing between 2 time graduation headers in the timeline (px).
 const TIME_GRADUATION_MIN_SPACING = 40;
-// The size of the fast-track icon (for compositor-running animations), this is
-// used to position the icon correctly.
-const FAST_TRACK_ICON_SIZE = 20;
+// List of playback rate presets displayed in the timeline toolbar.
+const PLAYBACK_RATES = [.1, .25, .5, 1, 2, 5, 10];
+// When the container window is resized, the timeline background gets refreshed,
+// but only after a timer, and the timer is reset if the window is continuously
+// resized.
+const TIMELINE_BACKGROUND_RESIZE_DEBOUNCE_TIMER = 50;
 
 /**
  * UI component responsible for displaying a preview of the target dom node of
@@ -187,6 +190,10 @@ AnimationTargetNode.prototype = {
       this.previewEl.appendChild(document.createTextNode(">"));
     }
 
+    this.startListeners();
+  },
+
+  startListeners: function() {
     // Init events for highlighting and selecting the node.
     this.previewEl.addEventListener("mouseover", this.onPreviewMouseOver);
     this.previewEl.addEventListener("mouseout", this.onPreviewMouseOut);
@@ -200,15 +207,19 @@ AnimationTargetNode.prototype = {
     TargetNodeHighlighter.on("highlighted", this.onTargetHighlighterLocked);
   },
 
-  destroy: function() {
-    TargetNodeHighlighter.unhighlight().catch(e => console.error(e));
-
+  stopListeners: function() {
     TargetNodeHighlighter.off("highlighted", this.onTargetHighlighterLocked);
     this.inspector.off("markupmutation", this.onMarkupMutations);
     this.previewEl.removeEventListener("mouseover", this.onPreviewMouseOver);
     this.previewEl.removeEventListener("mouseout", this.onPreviewMouseOut);
     this.previewEl.removeEventListener("click", this.onSelectNodeClick);
     this.highlightNodeEl.removeEventListener("click", this.onHighlightNodeClick);
+  },
+
+  destroy: function() {
+    TargetNodeHighlighter.unhighlight().catch(e => console.error(e));
+
+    this.stopListeners();
 
     this.el.remove();
     this.el = this.tagNameEl = this.idEl = this.classEl = null;
@@ -217,21 +228,26 @@ AnimationTargetNode.prototype = {
   },
 
   get highlighterUtils() {
-    return this.inspector.toolbox.highlighterUtils;
+    if (this.inspector && this.inspector.toolbox) {
+      return this.inspector.toolbox.highlighterUtils;
+    }
+    return null;
   },
 
   onPreviewMouseOver: function() {
-    if (!this.nodeFront) {
+    if (!this.nodeFront || !this.highlighterUtils) {
       return;
     }
-    this.highlighterUtils.highlightNodeFront(this.nodeFront);
+    this.highlighterUtils.highlightNodeFront(this.nodeFront)
+                         .catch(e => console.error(e));
   },
 
   onPreviewMouseOut: function() {
-    if (!this.nodeFront) {
+    if (!this.nodeFront || !this.highlighterUtils) {
       return;
     }
-    this.highlighterUtils.unhighlight();
+    this.highlighterUtils.unhighlight()
+                         .catch(e => console.error(e));
   },
 
   onSelectNodeClick: function() {
@@ -332,6 +348,90 @@ AnimationTargetNode.prototype = {
 };
 
 /**
+ * UI component responsible for displaying a playback rate selector UI.
+ * The rendering logic is such that a predefined list of rates is generated.
+ * If *all* animations passed to render share the same rate, then that rate is
+ * selected in the <select> element, otherwise, the empty value is selected.
+ * If the rate that all animations share isn't part of the list of predefined
+ * rates, than that rate is added to the list.
+ */
+function RateSelector() {
+  this.onRateChanged = this.onRateChanged.bind(this);
+  EventEmitter.decorate(this);
+}
+
+exports.RateSelector = RateSelector;
+
+RateSelector.prototype = {
+  init: function(containerEl) {
+    this.selectEl = createNode({
+      parent: containerEl,
+      nodeType: "select",
+      attributes: {"class": "devtools-button"}
+    });
+
+    this.selectEl.addEventListener("change", this.onRateChanged);
+  },
+
+  destroy: function() {
+    this.selectEl.removeEventListener("change", this.onRateChanged);
+    this.selectEl.remove();
+    this.selectEl = null;
+  },
+
+  getAnimationsRates: function(animations) {
+    return sortedUnique(animations.map(a => a.state.playbackRate));
+  },
+
+  getAllRates: function(animations) {
+    let animationsRates = this.getAnimationsRates(animations);
+    if (animationsRates.length > 1) {
+      return PLAYBACK_RATES;
+    }
+
+    return sortedUnique(PLAYBACK_RATES.concat(animationsRates));
+  },
+
+  render: function(animations) {
+    let allRates = this.getAnimationsRates(animations);
+    let hasOneRate = allRates.length === 1;
+
+    this.selectEl.innerHTML = "";
+
+    if (!hasOneRate) {
+      // When the animations displayed have mixed playback rates, we can't
+      // select any of the predefined ones, instead, insert an empty rate.
+      createNode({
+        parent: this.selectEl,
+        nodeType: "option",
+        attributes: {value: "", selector: "true"},
+        textContent: "-"
+      });
+    }
+    for (let rate of this.getAllRates(animations)) {
+      let option = createNode({
+        parent: this.selectEl,
+        nodeType: "option",
+        attributes: {value: rate},
+        textContent: L10N.getFormatStr("player.playbackRateLabel", rate)
+      });
+
+      // If there's only one rate and this is the option for it, select it.
+      if (hasOneRate && rate === allRates[0]) {
+        option.setAttribute("selected", "true");
+      }
+    }
+  },
+
+  onRateChanged: function() {
+    let rate = parseFloat(this.selectEl.value);
+    if (!isNaN(rate)) {
+      this.emit("rate-changed", rate);
+    }
+  }
+};
+
+/**
  * The TimeScale helper object is used to know which size should something be
  * displayed with in the animation panel, depending on the animations that are
  * currently displayed.
@@ -378,46 +478,42 @@ var TimeScale = {
   },
 
   /**
-   * Convert a startTime to a distance in pixels, in the current time scale.
+   * Convert a startTime to a distance in %, in the current time scale.
    * @param {Number} time
-   * @param {Number} containerWidth The width of the container element.
    * @return {Number}
    */
-  startTimeToDistance: function(time, containerWidth) {
+  startTimeToDistance: function(time) {
     time -= this.minStartTime;
-    return this.durationToDistance(time, containerWidth);
+    return this.durationToDistance(time);
   },
 
   /**
-   * Convert a duration to a distance in pixels, in the current time scale.
+   * Convert a duration to a distance in %, in the current time scale.
    * @param {Number} time
-   * @param {Number} containerWidth The width of the container element.
    * @return {Number}
    */
-  durationToDistance: function(duration, containerWidth) {
-    return containerWidth * duration / (this.maxEndTime - this.minStartTime);
+  durationToDistance: function(duration) {
+    return duration * 100 / (this.maxEndTime - this.minStartTime);
   },
 
   /**
-   * Convert a distance in pixels to a time, in the current time scale.
+   * Convert a distance in % to a time, in the current time scale.
    * @param {Number} distance
-   * @param {Number} containerWidth The width of the container element.
    * @return {Number}
    */
-  distanceToTime: function(distance, containerWidth) {
+  distanceToTime: function(distance) {
     return this.minStartTime +
-      ((this.maxEndTime - this.minStartTime) * distance / containerWidth);
+      ((this.maxEndTime - this.minStartTime) * distance / 100);
   },
 
   /**
-   * Convert a distance in pixels to a time, in the current time scale.
+   * Convert a distance in % to a time, in the current time scale.
    * The time will be relative to the current minimum start time.
    * @param {Number} distance
-   * @param {Number} containerWidth The width of the container element.
    * @return {Number}
    */
-  distanceToRelativeTime: function(distance, containerWidth) {
-    let time = this.distanceToTime(distance, containerWidth);
+  distanceToRelativeTime: function(distance) {
+    let time = this.distanceToTime(distance);
     return time - this.minStartTime;
   },
 
@@ -461,11 +557,15 @@ function AnimationsTimeline(inspector) {
   this.targetNodes = [];
   this.timeBlocks = [];
   this.inspector = inspector;
+
   this.onAnimationStateChanged = this.onAnimationStateChanged.bind(this);
   this.onScrubberMouseDown = this.onScrubberMouseDown.bind(this);
   this.onScrubberMouseUp = this.onScrubberMouseUp.bind(this);
   this.onScrubberMouseOut = this.onScrubberMouseOut.bind(this);
   this.onScrubberMouseMove = this.onScrubberMouseMove.bind(this);
+  this.onAnimationSelected = this.onAnimationSelected.bind(this);
+  this.onWindowResize = this.onWindowResize.bind(this);
+
   EventEmitter.decorate(this);
 }
 
@@ -482,8 +582,13 @@ AnimationsTimeline.prototype = {
       }
     });
 
-    this.scrubberEl = createNode({
+    let scrubberContainer = createNode({
       parent: this.rootWrapperEl,
+      attributes: {"class": "scrubber-wrapper"}
+    });
+
+    this.scrubberEl = createNode({
+      parent: scrubberContainer,
       attributes: {
         "class": "scrubber"
       }
@@ -512,12 +617,15 @@ AnimationsTimeline.prototype = {
         "class": "animations"
       }
     });
+
+    this.win.addEventListener("resize", this.onWindowResize);
   },
 
   destroy: function() {
     this.stopAnimatingScrubber();
     this.unrender();
 
+    this.win.removeEventListener("resize", this.onWindowResize);
     this.timeHeaderEl.removeEventListener("mousedown",
       this.onScrubberMouseDown);
     this.scrubberHandleEl.removeEventListener("mousedown",
@@ -534,14 +642,17 @@ AnimationsTimeline.prototype = {
     this.win = null;
     this.inspector = null;
   },
+
   destroyTargetNodes: function() {
     for (let targetNode of this.targetNodes) {
       targetNode.destroy();
     }
     this.targetNodes = [];
   },
+
   destroyTimeBlocks: function() {
     for (let timeBlock of this.timeBlocks) {
+      timeBlock.off("selected", this.onAnimationSelected);
       timeBlock.destroy();
     }
     this.timeBlocks = [];
@@ -555,6 +666,34 @@ AnimationsTimeline.prototype = {
     this.destroyTargetNodes();
     this.destroyTimeBlocks();
     this.animationsEl.innerHTML = "";
+  },
+
+  onWindowResize: function() {
+    if (this.windowResizeTimer) {
+      this.win.clearTimeout(this.windowResizeTimer);
+    }
+
+    this.windowResizeTimer = this.win.setTimeout(() => {
+      this.drawHeaderAndBackground();
+    }, TIMELINE_BACKGROUND_RESIZE_DEBOUNCE_TIMER);
+  },
+
+  onAnimationSelected: function(e, animation) {
+    // Unselect the previously selected animation if any.
+    [...this.rootWrapperEl.querySelectorAll(".animation.selected")].forEach(el => {
+      el.classList.remove("selected");
+    });
+
+    // Select the new animation.
+    let index = this.animations.indexOf(animation);
+    if (index === -1) {
+      return;
+    }
+    this.rootWrapperEl.querySelectorAll(".animation")[index]
+                      .classList.toggle("selected");
+
+    // Relay the event to the parent component.
+    this.emit("selected", animation);
   },
 
   onScrubberMouseDown: function(e) {
@@ -592,15 +731,18 @@ AnimationsTimeline.prototype = {
   moveScrubberTo: function(pageX) {
     this.stopAnimatingScrubber();
 
-    let offset = pageX - this.scrubberEl.offsetWidth;
+    // The offset needs to be in % and relative to the timeline's area (so we
+    // subtract the scrubber's left offset, which is equal to the sidebar's
+    // width).
+    let offset = (pageX - this.timeHeaderEl.offsetLeft) * 100 /
+                 this.timeHeaderEl.offsetWidth;
     if (offset < 0) {
       offset = 0;
     }
 
-    this.scrubberEl.style.left = offset + "px";
+    this.scrubberEl.style.left = offset + "%";
 
-    let time = TimeScale.distanceToRelativeTime(offset,
-      this.timeHeaderEl.offsetWidth);
+    let time = TimeScale.distanceToRelativeTime(offset);
 
     this.emit("timeline-data-changed", {
       isPaused: true,
@@ -665,6 +807,8 @@ AnimationsTimeline.prototype = {
       timeBlock.init(timeBlockEl);
       timeBlock.render(animation);
       this.timeBlocks.push(timeBlock);
+
+      timeBlock.on("selected", this.onAnimationSelected);
     }
     // Use the document's current time to position the scrubber (if the server
     // doesn't provide it, hide the scrubber entirely).
@@ -694,8 +838,8 @@ AnimationsTimeline.prototype = {
   },
 
   startAnimatingScrubber: function(time) {
-    let x = TimeScale.startTimeToDistance(time, this.timeHeaderEl.offsetWidth);
-    this.scrubberEl.style.left = x + "px";
+    let x = TimeScale.startTimeToDistance(time);
+    this.scrubberEl.style.left = x + "%";
 
     // Only stop the scrubber if it's out of bounds or all animations have been
     // paused, but not if at least an animation is infinite.
@@ -710,7 +854,7 @@ AnimationsTimeline.prototype = {
         isPaused: !this.isAtLeastOneAnimationPlaying(),
         isMoving: false,
         isUserDrag: false,
-        time: TimeScale.distanceToRelativeTime(x, this.timeHeaderEl.offsetWidth)
+        time: TimeScale.distanceToRelativeTime(x)
       });
       return;
     }
@@ -719,7 +863,7 @@ AnimationsTimeline.prototype = {
       isPaused: false,
       isMoving: true,
       isUserDrag: false,
-      time: TimeScale.distanceToRelativeTime(x, this.timeHeaderEl.offsetWidth)
+      time: TimeScale.distanceToRelativeTime(x)
     });
 
     let now = this.win.performance.now();
@@ -755,15 +899,15 @@ AnimationsTimeline.prototype = {
     this.timeHeaderEl.innerHTML = "";
     let interval = findOptimalTimeInterval(scale, TIME_GRADUATION_MIN_SPACING);
     for (let i = 0; i < width; i += interval) {
+      let pos = 100 * i / width;
       createNode({
         parent: this.timeHeaderEl,
         nodeType: "span",
         attributes: {
           "class": "time-tick",
-          "style": `left:${i}px`
+          "style": `left:${pos}%`
         },
-        textContent: TimeScale.formatTime(
-          TimeScale.distanceToRelativeTime(i, width))
+        textContent: TimeScale.formatTime(TimeScale.distanceToRelativeTime(pos))
       });
     }
   }
@@ -773,15 +917,21 @@ AnimationsTimeline.prototype = {
  * UI component responsible for displaying a single animation timeline, which
  * basically looks like a rectangle that shows the delay and iterations.
  */
-function AnimationTimeBlock() {}
+function AnimationTimeBlock() {
+  EventEmitter.decorate(this);
+  this.onClick = this.onClick.bind(this);
+}
 
 exports.AnimationTimeBlock = AnimationTimeBlock;
 
 AnimationTimeBlock.prototype = {
   init: function(containerEl) {
     this.containerEl = containerEl;
+    this.containerEl.addEventListener("click", this.onClick);
   },
+
   destroy: function() {
+    this.containerEl.removeEventListener("click", this.onClick);
     while (this.containerEl.firstChild) {
       this.containerEl.firstChild.remove();
     }
@@ -793,8 +943,6 @@ AnimationTimeBlock.prototype = {
     this.animation = animation;
     let {state} = this.animation;
 
-    let width = this.containerEl.offsetWidth;
-
     // Create a container element to hold the delay and iterations.
     // It is positioned according to its delay (divided by the playbackrate),
     // and its width is according to its duration (divided by the playbackrate).
@@ -804,10 +952,10 @@ AnimationTimeBlock.prototype = {
     let count = state.iterationCount;
     let delay = state.delay || 0;
 
-    let x = TimeScale.startTimeToDistance(start + (delay / rate), width);
-    let w = TimeScale.durationToDistance(duration / rate, width);
+    let x = TimeScale.startTimeToDistance(start + (delay / rate));
+    let w = TimeScale.durationToDistance(duration / rate);
     let iterationW = w * (count || 1);
-    let delayW = TimeScale.durationToDistance(Math.abs(delay) / rate, width);
+    let delayW = TimeScale.durationToDistance(Math.abs(delay) / rate);
 
     let iterations = createNode({
       parent: this.containerEl,
@@ -815,9 +963,9 @@ AnimationTimeBlock.prototype = {
         "class": state.type + " iterations" + (count ? "" : " infinite"),
         // Individual iterations are represented by setting the size of the
         // repeating linear-gradient.
-        "style": `left:${x}px;
-                  width:${iterationW}px;
-                  background-size:${Math.max(w, 2)}px 100%;`
+        "style": `left:${x}%;
+                  width:${iterationW}%;
+                  background-size:${100 / (count || 1)}% 100%;`
       }
     });
 
@@ -830,11 +978,8 @@ AnimationTimeBlock.prototype = {
       attributes: {
         "class": "name",
         "title": this.getTooltipText(state),
-        // Position the fast-track icon with background-position, and make space
-        // for the negative delay with a margin-left.
-        "style": "background-position:" +
-                 (iterationW - FAST_TRACK_ICON_SIZE - negativeDelayW) +
-                 "px center;margin-left:" + negativeDelayW + "px"
+        // Make space for the negative delay with a margin-left.
+        "style": `margin-left:${negativeDelayW}%`
       },
       textContent: state.name
     });
@@ -842,14 +987,13 @@ AnimationTimeBlock.prototype = {
     // Delay.
     if (delay) {
       // Negative delays need to start at 0.
-      let delayX = TimeScale.durationToDistance(
-        (delay < 0 ? 0 : delay) / rate, width);
+      let delayX = TimeScale.durationToDistance((delay < 0 ? 0 : delay) / rate);
       createNode({
         parent: iterations,
         attributes: {
           "class": "delay" + (delay < 0 ? " negative" : ""),
-          "style": `left:-${delayX}px;
-                    width:${delayW}px;`
+          "style": `left:-${delayX}%;
+                    width:${delayW}%;`
         }
       });
     }
@@ -858,21 +1002,53 @@ AnimationTimeBlock.prototype = {
   getTooltipText: function(state) {
     let getTime = time => L10N.getFormatStr("player.timeLabel",
                             L10N.numberWithDecimals(time / 1000, 2));
-    // The type isn't always available, older servers don't send it.
-    let title =
+
+    let text = "";
+
+    // Adding the name (the type isn't always available, older servers don't
+    // send it).
+    text +=
       state.type
       ? L10N.getFormatStr("timeline." + state.type + ".nameLabel", state.name)
       : state.name;
-    let delay = L10N.getStr("player.animationDelayLabel") + " " +
-                getTime(state.delay);
-    let duration = L10N.getStr("player.animationDurationLabel") + " " +
-                   getTime(state.duration);
-    let iterations = L10N.getStr("player.animationIterationCountLabel") + " " +
-                     (state.iterationCount ||
-                      L10N.getStr("player.infiniteIterationCountText"));
-    let compositor = state.isRunningOnCompositor
-                     ? L10N.getStr("player.runningOnCompositorTooltip")
-                     : "";
-    return [title, duration, iterations, delay, compositor].join("\n");
+    text += "\n";
+
+    // Adding the delay.
+    text += L10N.getStr("player.animationDelayLabel") + " ";
+    text += getTime(state.delay);
+    text += "\n";
+
+    // Adding the duration.
+    text += L10N.getStr("player.animationDurationLabel") + " ";
+    text += getTime(state.duration);
+    text += "\n";
+
+    // Adding the iteration count (the infinite symbol, or an integer).
+    // XXX: see bug 1219608 to remove this if the count is 1.
+    text += L10N.getStr("player.animationIterationCountLabel") + " ";
+    text += state.iterationCount ||
+            L10N.getStr("player.infiniteIterationCountText");
+    text += "\n";
+
+    // Adding the playback rate if it's different than 1.
+    if (state.playbackRate !== 1) {
+      text += L10N.getStr("player.animationRateLabel") + " ";
+      text += state.playbackRate;
+      text += "\n";
+    }
+
+    // Adding a note that the animation is running on the compositor thread if
+    // needed.
+    if (state.isRunningOnCompositor) {
+      text += L10N.getStr("player.runningOnCompositorTooltip");
+    }
+
+    return text;
+  },
+
+  onClick: function() {
+    this.emit("selected", this.animation);
   }
 };
+
+let sortedUnique = arr => [...new Set(arr)].sort((a, b) => a > b);

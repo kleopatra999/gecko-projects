@@ -57,7 +57,7 @@ using namespace widget;
  * for debug, log the information with LogLevel::Debug.  In this case, the log
  * should start with "ISM:   <method name>(),".
  */
-PRLogModuleInfo* sISMLog = nullptr;
+LazyLogModule sISMLog("IMEStateManager");
 
 static const char*
 GetBoolName(bool aBool)
@@ -162,7 +162,7 @@ GetNotifyIMEMessageName(IMEMessage aMessage)
 
 StaticRefPtr<nsIContent> IMEStateManager::sContent;
 nsPresContext* IMEStateManager::sPresContext = nullptr;
-StaticRefPtr<nsIWidget> IMEStateManager::sFocusedIMEWidget;
+nsIWidget* IMEStateManager::sFocusedIMEWidget;
 StaticRefPtr<TabParent> IMEStateManager::sActiveTabParent;
 StaticRefPtr<IMEContentObserver> IMEStateManager::sActiveIMEContentObserver;
 TextCompositionArray* IMEStateManager::sTextCompositions = nullptr;
@@ -175,10 +175,6 @@ bool IMEStateManager::sRemoteHasFocus = false;
 void
 IMEStateManager::Init()
 {
-  if (!sISMLog) {
-    sISMLog = PR_NewLogModule("IMEStateManager");
-  }
-
   Preferences::AddBoolVarCache(
     &sCheckForIMEUnawareWebApps,
     "intl.ime.hack.on_ime_unaware_apps.fire_key_events_for_composition",
@@ -215,6 +211,15 @@ IMEStateManager::OnTabParentDestroying(TabParent* aTabParent)
 
   // TODO: Need to cancel composition without TextComposition and make
   //       disable IME.
+}
+
+// static
+void
+IMEStateManager::WidgetDestroyed(nsIWidget* aWidget)
+{
+  if (sFocusedIMEWidget == aWidget) {
+    sFocusedIMEWidget = nullptr;
+  }
 }
 
 // static
@@ -515,6 +520,13 @@ IMEStateManager::OnChangeFocusInternal(nsPresContext* aPresContext,
   // editor.
   if (newState.mEnabled == IMEState::PLUGIN) {
     CreateIMEContentObserver(nullptr);
+    if (sActiveIMEContentObserver) {
+      MOZ_LOG(sISMLog, LogLevel::Debug,
+        ("ISM:   IMEStateManager::OnChangeFocusInternal(), an "
+         "IMEContentObserver instance is created for plugin and trying to "
+         "flush its pending notifications..."));
+      sActiveIMEContentObserver->TryToFlushPendingNotifications();
+    }
   }
 
   return NS_OK;
@@ -684,6 +696,14 @@ IMEStateManager::OnFocusInEditor(nsPresContext* aPresContext,
   }
 
   CreateIMEContentObserver(aEditor);
+
+  // Let's flush the focus notification now.
+  if (sActiveIMEContentObserver) {
+    MOZ_LOG(sISMLog, LogLevel::Debug,
+      ("ISM:   IMEStateManager::OnFocusInEditor(), new IMEContentObserver is "
+       "created, trying to flush pending notifications..."));
+    sActiveIMEContentObserver->TryToFlushPendingNotifications();
+  }
 }
 
 // static
@@ -797,6 +817,9 @@ IMEStateManager::UpdateIMEState(const IMEState& aNewIMEState,
   }
 
   if (createTextStateManager) {
+    // XXX In this case, it might not be enough safe to notify IME of anything.
+    //     So, don't try to flush pending notifications of IMEContentObserver
+    //     here.
     CreateIMEContentObserver(aEditor);
   }
 }
@@ -1298,7 +1321,7 @@ IMEStateManager::NotifyIME(const IMENotification& aNotification,
      "aWidget=0x%p, aOriginIsRemote=%s), sFocusedIMEWidget=0x%p, "
      "sRemoteHasFocus=%s",
      GetNotifyIMEMessageName(aNotification.mMessage), aWidget,
-     GetBoolName(aOriginIsRemote), sFocusedIMEWidget.get(),
+     GetBoolName(aOriginIsRemote), sFocusedIMEWidget,
      GetBoolName(sRemoteHasFocus)));
 
   if (NS_WARN_IF(!aWidget)) {

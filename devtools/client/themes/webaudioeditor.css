@@ -79,10 +79,10 @@ g.edgeLabel tspan {
  */
 
 .theme-light .nodes g.bypassed rect {
-  fill: url(chrome://devtools/skin/themes/images/filters.svg#bypass-light);
+  fill: url(chrome://devtools/skin/images/filters.svg#bypass-light);
 }
 .theme-dark .nodes g.bypassed rect {
-  fill: url(chrome://devtools/skin/themes/images/filters.svg#bypass-dark);
+  fill: url(chrome://devtools/skin/images/filters.svg#bypass-dark);
 }
 .nodes g.bypassed.selected rect {
   stroke: var(--theme-selection-background);
@@ -207,21 +207,6 @@ text {
 #audio-node-toolbar .bypass {
   list-style-image: url(images/power.svg);
 }
-
-#audio-node-toolbar toolbarbutton[disabled] {
-  opacity: 0.5;
-  background-color: transparent;
-}
-
-#audio-node-toolbar toolbarbutton[checked] {
-  background-color: var(--theme-selection-background);
-}
-
-/* don't invert checked buttons so we can have white icons on light theme */
-#audio-node-toolbar toolbarbutton[checked] > .toolbarbutton-icon {
-  filter: none;
-}
-
 
 /**
  * Responsive Styles

@@ -7,10 +7,12 @@ var {classes: Cc, interfaces: Ci, utils: Cu, results: Cr} = Components;
 
 Cu.import('resource://gre/modules/XPCOMUtils.jsm');
 Cu.import('resource://gre/modules/Services.jsm');
+Cu.import('resource://gre/modules/Task.jsm');
 Cu.import('resource://gre/modules/Timer.jsm');
 Cu.import('resource://gre/modules/Promise.jsm');
 Cu.import('resource://gre/modules/Preferences.jsm');
 Cu.import('resource://gre/modules/PlacesUtils.jsm');
+Cu.import('resource://gre/modules/ObjectUtils.jsm');
 
 const serviceExports = Cu.import('resource://gre/modules/PushService.jsm', {});
 const servicePrefs = new Preferences('dom.push.');
@@ -194,7 +196,7 @@ function disableServiceWorkerEvents(...scopes) {
  */
 function setPrefs(prefs = {}) {
   let defaultPrefs = Object.assign({
-    debug: true,
+    loglevel: 'all',
     serverURL: 'wss://push.example.org',
     'connection.enabled': true,
     userAgentID: '',
@@ -221,6 +223,7 @@ function setPrefs(prefs = {}) {
     'http2.retryInterval': 500,
     'http2.reset_retry_count_after_ms': 60000,
     maxQuotaPerSubscription: 16,
+    quotaUpdateDelay: 3000,
   }, prefs);
   for (let pref in defaultPrefs) {
     servicePrefs.set(pref, defaultPrefs[pref]);

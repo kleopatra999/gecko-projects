@@ -1,7 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-/* globals CSS */
 
 "use strict";
 
@@ -12,11 +11,12 @@ const {Arg, Option, method, RetVal, types} = protocol;
 const events = require("sdk/event/core");
 const {Class} = require("sdk/core/heritage");
 const {LongStringActor} = require("devtools/server/actors/string");
-const {PSEUDO_ELEMENT_SET} = require("devtools/shared/styleinspector/css-logic");
 
 // This will also add the "stylesheet" actor type for protocol.js to recognize
 const {UPDATE_PRESERVING_RULES, UPDATE_GENERAL} =
       require("devtools/server/actors/stylesheets");
+
+loader.lazyRequireGetter(this, "CSS", "CSS");
 
 loader.lazyGetter(this, "CssLogic", () => {
   return require("devtools/shared/styleinspector/css-logic").CssLogic;
@@ -35,24 +35,12 @@ loader.lazyGetter(this, "RuleRewriter", () => {
 const ELEMENT_STYLE = 100;
 exports.ELEMENT_STYLE = ELEMENT_STYLE;
 
-// Not included since these are uneditable by the user.
-// See https://hg.mozilla.org/mozilla-central/file/696a4ad5d011/layout/style/nsCSSPseudoElementList.h#l74
-PSEUDO_ELEMENT_SET.delete(":-moz-meter-bar");
-PSEUDO_ELEMENT_SET.delete(":-moz-list-bullet");
-PSEUDO_ELEMENT_SET.delete(":-moz-list-number");
-PSEUDO_ELEMENT_SET.delete(":-moz-focus-inner");
-PSEUDO_ELEMENT_SET.delete(":-moz-focus-outer");
-PSEUDO_ELEMENT_SET.delete(":-moz-math-anonymous");
-PSEUDO_ELEMENT_SET.delete(":-moz-math-stretchy");
-
-const PSEUDO_ELEMENTS = Array.from(PSEUDO_ELEMENT_SET);
-
-exports.PSEUDO_ELEMENTS = PSEUDO_ELEMENTS;
-
 // When gathering rules to read for pseudo elements, we will skip
 // :before and :after, which are handled as a special case.
-const PSEUDO_ELEMENTS_TO_READ = PSEUDO_ELEMENTS.filter(pseudo => {
-  return pseudo !== ":before" && pseudo !== ":after";
+loader.lazyGetter(this, "PSEUDO_ELEMENTS_TO_READ", () => {
+  return DOMUtils.getCSSPseudoElementNames().filter(pseudo => {
+    return pseudo !== ":before" && pseudo !== ":after";
+  });
 });
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
@@ -213,6 +201,9 @@ var PageStyleActor = protocol.ActorClass({
    * Called when a style sheet is updated.
    */
   _styleApplied: function(kind, styleSheet) {
+    // No matter what kind of update is done, we need to invalidate
+    // the keyframe cache.
+    this.cssLogic.reset();
     if (kind === UPDATE_GENERAL) {
       events.emit(this, "stylesheet-updated", styleSheet);
     }
@@ -1108,8 +1099,8 @@ var StyleRuleActor = protocol.ActorClass({
     if (item instanceof (Ci.nsIDOMCSSRule)) {
       this.type = item.type;
       this.rawRule = item;
-      if ((this.rawRule instanceof Ci.nsIDOMCSSStyleRule ||
-           this.rawRule instanceof Ci.nsIDOMMozCSSKeyframeRule) &&
+      if ((this.type === Ci.nsIDOMCSSRule.STYLE_RULE ||
+           this.type === Ci.nsIDOMCSSRule.KEYFRAME_RULE) &&
           this.rawRule.parentStyleSheet) {
         this.line = DOMUtils.getRelativeRuleLine(this.rawRule);
         this.column = DOMUtils.getRuleColumn(this.rawRule);
@@ -1272,18 +1263,61 @@ var StyleRuleActor = protocol.ActorClass({
 
   /**
    * Compute the index of this actor's raw rule in its parent style
-   * sheet.
+   * sheet.  The index is a vector where each element is the index of
+   * a given CSS rule in its parent.  A vector is used to support
+   * nested rules.
    */
   _computeRuleIndex: function() {
     let rule = this.rawRule;
-    let cssRules = this._parentSheet.cssRules;
-    this._ruleIndex = -1;
-    for (let i = 0; i < cssRules.length; i++) {
-      if (rule === cssRules.item(i)) {
-        this._ruleIndex = i;
-        break;
+    let result = [];
+
+    while (rule) {
+      let cssRules;
+      if (rule.parentRule) {
+        cssRules = rule.parentRule.cssRules;
+      } else {
+        cssRules = rule.parentStyleSheet.cssRules;
+      }
+
+      let found = false;
+      for (let i = 0; i < cssRules.length; i++) {
+        if (rule === cssRules.item(i)) {
+          found = true;
+          result.unshift(i);
+          break;
+        }
+      }
+
+      if (!found) {
+        this._ruleIndex = null;
+        return;
+      }
+
+      rule = rule.parentRule;
+    }
+
+    this._ruleIndex = result;
+  },
+
+  /**
+   * Get the rule corresponding to |this._ruleIndex| from the given
+   * style sheet.
+   *
+   * @param  {DOMStyleSheet} sheet
+   *         The style sheet.
+   * @return {CSSStyleRule} the rule corresponding to
+   * |this._ruleIndex|
+   */
+  _getRuleFromIndex: function(parentSheet) {
+    let currentRule = null;
+    for (let i of this._ruleIndex) {
+      if (currentRule === null) {
+        currentRule = parentSheet.cssRules[i];
+      } else {
+        currentRule = currentRule.cssRules.item(i);
       }
     }
+    return currentRule;
   },
 
   /**
@@ -1297,12 +1331,12 @@ var StyleRuleActor = protocol.ActorClass({
       if (this.sheetActor) {
         this.sheetActor.off("style-applied", this._onStyleApplied);
       }
-    } else if (this._ruleIndex >= 0) {
+    } else if (this._ruleIndex) {
       // The sheet was updated by this actor, in a way that preserves
       // the rules.  Now, recompute our new rule from the style sheet,
       // so that we aren't left with a reference to a dangling rule.
       let oldRule = this.rawRule;
-      this.rawRule = this._parentSheet.cssRules[this._ruleIndex];
+      this.rawRule = this._getRuleFromIndex(this._parentSheet);
       // Also tell the page style so that future calls to _styleRef
       // return the same StyleRuleActor.
       this.pageStyle.updateStyleRef(oldRule, this.rawRule, this);
@@ -1488,7 +1522,7 @@ var StyleRuleActor = protocol.ActorClass({
       }
     }
 
-    return parentStyleSheet.cssRules[this._ruleIndex];
+    return this._getRuleFromIndex(parentStyleSheet);
   }),
 
   /**
@@ -2038,6 +2072,13 @@ function getRuleText(initialText, line, column) {
   if (startOffset === undefined) {
     return {offset: 0, text: ""};
   }
+  // If the input didn't have any tokens between the braces (e.g.,
+  // "div {}"), then the endOffset won't have been set yet; so account
+  // for that here.
+  if (endOffset === undefined) {
+    endOffset = startOffset;
+  }
+
   // Note that this approach will preserve comments, despite the fact
   // that cssTokenizer skips them.
   return {offset: textOffset + startOffset,

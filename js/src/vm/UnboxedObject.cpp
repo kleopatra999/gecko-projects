@@ -940,7 +940,6 @@ const Class UnboxedPlainObject::class_ = {
         nullptr,   /* No unwatch needed, as watch() converts the object to native */
         nullptr,   /* getElements */
         UnboxedPlainObject::obj_enumerate,
-        nullptr, /* thisValue */
     }
 };
 
@@ -981,7 +980,7 @@ UnboxedArrayObject::convertToNativeWithGroup(ExclusiveContext* cx, JSObject* obj
     aobj->setLastPropertyMakeNative(cx, shape);
 
     // Make sure there is at least one element, so that this array does not
-    // use emptyObjectElements.
+    // use emptyObjectElements / emptyObjectElementsShared.
     if (!aobj->ensureElements(cx, Max<size_t>(initlen, 1)))
         return false;
 
@@ -1613,8 +1612,6 @@ const Class UnboxedArrayObject::class_ = {
     UnboxedArrayObject::trace,
     JS_NULL_CLASS_SPEC,
     {
-        nullptr,    /* outerObject */
-        nullptr,    /* innerObject */
         false,      /* isWrappedNative */
         nullptr,    /* weakmapKeyDelegateOp */
         UnboxedArrayObject::objectMoved
@@ -1631,7 +1628,6 @@ const Class UnboxedArrayObject::class_ = {
         nullptr,   /* No unwatch needed, as watch() converts the object to native */
         nullptr,   /* getElements */
         UnboxedArrayObject::obj_enumerate,
-        nullptr,   /* thisValue */
     }
 };
 
@@ -1923,7 +1919,7 @@ js::TryConvertToUnboxedLayout(ExclusiveContext* cx, Shape* templateShape,
         return true;
 #endif
     } else {
-        if (jit::js_JitOptions.disableUnboxedObjects)
+        if (jit::JitOptions.disableUnboxedObjects)
             return true;
     }
 

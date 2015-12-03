@@ -236,7 +236,7 @@ var Settings = {
           Cu.import("resource://gre/modules/Messaging.jsm");
           Messaging.sendRequest({
             type: "Settings:Show",
-            resource: "preferences_vendor",
+            resource: "preferences_privacy",
           });
         } else {
           // Show the data choices preferences on desktop.
@@ -298,7 +298,10 @@ var PingPicker = {
             .addEventListener("click", () => this._movePingIndex(-1), false);
     document.getElementById("older-ping")
             .addEventListener("click", () => this._movePingIndex(1), false);
-
+    document.getElementById("show-raw-ping")
+            .addEventListener("click", () => this._showRawPingData(), false);
+    document.getElementById("hide-raw-ping")
+            .addEventListener("click", () => this._hideRawPingData(), false);
     document.getElementById("choose-payload")
             .addEventListener("change", () => displayPingData(gPingData), false);
   },
@@ -325,6 +328,9 @@ var PingPicker = {
   _updateCurrentPingData: function() {
     const subsession = document.getElementById("show-subsession-data").checked;
     const ping = TelemetryController.getCurrentPingData(subsession);
+    if (!ping) {
+      return;
+    }
     displayPingData(ping, true);
   },
 
@@ -447,6 +453,16 @@ var PingPicker = {
 
     this._renderPingList(ping.id);
     this._updateArchivedPingData();
+  },
+
+  _showRawPingData: function() {
+    let pre = document.getElementById("raw-ping-data");
+    pre.textContent = JSON.stringify(gPingData, null, 2);
+    document.getElementById("raw-ping-data-section").classList.remove("hidden");
+  },
+
+  _hideRawPingData: function() {
+    document.getElementById("raw-ping-data-section").classList.add("hidden");
   },
 };
 
@@ -915,11 +931,11 @@ var ThreadHangStats = {
   /**
    * Renders raw thread hang stats data
    */
-  render: function(aPing) {
+  render: function(aPayload) {
     let div = document.getElementById("thread-hang-stats");
     removeAllChildNodes(div);
 
-    let stats = aPing.payload.threadHangStats;
+    let stats = aPayload.threadHangStats;
     setHasData("thread-hang-stats-section", stats && (stats.length > 0));
     if (!stats) {
       return;
@@ -1091,7 +1107,7 @@ var Histogram = {
               + " ".repeat(Math.max(0, labelPadTo - String(label).length)) + label // Right-aligned label
               + " |" + "#".repeat(Math.round(MAX_BAR_CHARS * barValue / maxBarValue)) // Bar
               + "  " + value // Value
-              + "  " + Math.round(100 * value / aHgram.sum) + "%"; // Percentage
+              + "  " + Math.round(100 * value / aHgram.sample_count) + "%"; // Percentage
 
       // Construct the HTML labels + bars
       let belowEm = Math.round(MAX_BAR_HEIGHT * (barValue / maxBarValue) * 10) / 10;
@@ -1592,9 +1608,6 @@ function displayPingData(ping, updatePayloadList = false) {
   // Show chrome hang stacks
   ChromeHangs.render(ping);
 
-  // Show thread hang stats
-  ThreadHangStats.render(ping);
-
   // Render Addon details.
   AddonDetails.render(ping);
 
@@ -1607,6 +1620,9 @@ function displayPingData(ping, updatePayloadList = false) {
   if (payloadIndex > 0) {
     payload = ping.payload.childPayloads[payloadIndex - 1];
   }
+
+  // Show thread hang stats
+  ThreadHangStats.render(payload);
 
   // Show simple measurements
   let simpleMeasurements = sortStartupMilestones(payload.simpleMeasurements);
@@ -1622,10 +1638,10 @@ function displayPingData(ping, updatePayloadList = false) {
 
   LateWritesSingleton.renderLateWrites(payload.lateWrites);
 
-  // Show basic system info gathered
+  // Show basic session info gathered
   hasData = Object.keys(ping.payload.info).length > 0;
-  setHasData("system-info-section", hasData);
-  let infoSection = document.getElementById("system-info");
+  setHasData("session-info-section", hasData);
+  let infoSection = document.getElementById("session-info");
   removeAllChildNodes(infoSection);
 
   if (hasData) {

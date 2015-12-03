@@ -42,10 +42,12 @@ class nsIRequestObserver;
 class nsIStreamListener;
 class nsIStreamLoader;
 class nsIStreamLoaderObserver;
+class nsIIncrementalStreamLoader;
+class nsIIncrementalStreamLoaderObserver;
 class nsIUnicharStreamLoader;
 class nsIUnicharStreamLoaderObserver;
 
-namespace mozilla { class OriginAttributes; }
+namespace mozilla { class NeckoOriginAttributes; }
 
 template <class> class nsCOMPtr;
 template <typename> struct already_AddRefed;
@@ -369,6 +371,9 @@ nsresult NS_NewStreamLoader(nsIStreamLoader        **result,
                             nsIStreamLoaderObserver *observer,
                             nsIRequestObserver      *requestObserver = nullptr);
 
+nsresult NS_NewIncrementalStreamLoader(nsIIncrementalStreamLoader        **result,
+                                       nsIIncrementalStreamLoaderObserver *observer);
+
 nsresult NS_NewStreamLoaderInternal(nsIStreamLoader        **outStream,
                                     nsIURI                  *aUri,
                                     nsIStreamLoaderObserver *aObserver,
@@ -600,20 +605,8 @@ nsresult NS_ReadInputStreamToString(nsIInputStream *aInputStream,
 #endif
 
 nsresult
-NS_LoadPersistentPropertiesFromURI(nsIPersistentProperties **outResult,
-                                   nsIURI                   *aUri,
-                                   nsIPrincipal             *aLoadingPrincipal,
-                                   nsContentPolicyType       aContentPolicyType,
-                                   nsIIOService             *aIoService = nullptr);
-
-nsresult
 NS_LoadPersistentPropertiesFromURISpec(nsIPersistentProperties **outResult,
-                                       const nsACString         &aSpec,
-                                       nsIPrincipal             *aLoadingPrincipal,
-                                       nsContentPolicyType       aContentPolicyType,
-                                       const char               *aCharset = nullptr,
-                                       nsIURI                   *aBaseURI = nullptr,
-                                       nsIIOService             *aIoService = nullptr);
+                                       const nsACString         &aSpec);
 
 /**
  * NS_QueryNotificationCallbacks implements the canonical algorithm for
@@ -693,10 +686,10 @@ NS_QueryNotificationCallbacks(nsIInterfaceRequestor  *callbacks,
 bool NS_UsePrivateBrowsing(nsIChannel *channel);
 
 /**
- * Extract the OriginAttributes from the channel's triggering principal.
+ * Extract the NeckoOriginAttributes from the channel's triggering principal.
  */
 bool NS_GetOriginAttributes(nsIChannel *aChannel,
-                            mozilla::OriginAttributes &aAttributes);
+                            mozilla::NeckoOriginAttributes &aAttributes);
 
 // Constants duplicated from nsIScriptSecurityManager so we avoid having necko
 // know about script security manager.

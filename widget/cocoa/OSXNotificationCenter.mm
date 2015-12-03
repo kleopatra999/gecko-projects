@@ -104,10 +104,14 @@ enum {
 - (void)userNotificationCenter:(id<FakeNSUserNotificationCenter>)center
        didActivateNotification:(id<FakeNSUserNotification>)notification
 {
-  NSNumber *alternateActionIndex = [(NSObject*)notification valueForKey:@"_alternateActionIndex"];
+  unsigned long long additionalActionIndex = ULLONG_MAX;
+  if ([notification respondsToSelector:@selector(_alternateActionIndex)]) {
+    NSNumber *alternateActionIndex = [(NSObject*)notification valueForKey:@"_alternateActionIndex"];
+    additionalActionIndex = [alternateActionIndex unsignedLongLongValue];
+  }
   mOSXNC->OnActivate([[notification userInfo] valueForKey:@"name"],
                      notification.activationType,
-                     [alternateActionIndex unsignedLongLongValue]);
+                     additionalActionIndex);
 }
 
 - (BOOL)userNotificationCenter:(id<FakeNSUserNotificationCenter>)center
@@ -247,9 +251,9 @@ OSXNotificationCenter::ShowAlertNotification(const nsAString & aImageUrl, const 
   nsAlertsUtils::GetSourceHostPort(aPrincipal, hostPort);
   nsCOMPtr<nsIStringBundle> bundle;
   nsCOMPtr<nsIStringBundleService> sbs = do_GetService(NS_STRINGBUNDLE_CONTRACTID);
-  nsresult rv = sbs->CreateBundle("chrome://alerts/locale/alert.properties", getter_AddRefs(bundle));
+  sbs->CreateBundle("chrome://alerts/locale/alert.properties", getter_AddRefs(bundle));
 
-  if (!hostPort.IsEmpty()) {
+  if (!hostPort.IsEmpty() && bundle) {
     const char16_t* formatStrings[] = { hostPort.get() };
     nsXPIDLString notificationSource;
     bundle->FormatStringFromName(MOZ_UTF16("source.label"),
@@ -265,7 +269,7 @@ OSXNotificationCenter::ShowAlertNotification(const nsAString & aImageUrl, const 
 
   // If this is not an application/extension alert, show additional actions dealing with permissions.
   if (nsAlertsUtils::IsActionablePrincipal(aPrincipal)) {
-    if (NS_SUCCEEDED(rv)) {
+    if (bundle) {
       nsXPIDLString closeButtonTitle, actionButtonTitle, disableButtonTitle, settingsButtonTitle;
       bundle->GetStringFromName(MOZ_UTF16("closeButton.title"),
                                 getter_Copies(closeButtonTitle));
@@ -281,16 +285,26 @@ OSXNotificationCenter::ShowAlertNotification(const nsAString & aImageUrl, const 
       bundle->GetStringFromName(MOZ_UTF16("webActions.settings.label"),
                                 getter_Copies(settingsButtonTitle));
 
-      notification.hasActionButton = YES;
       notification.otherButtonTitle = nsCocoaUtils::ToNSString(closeButtonTitle);
-      notification.actionButtonTitle = nsCocoaUtils::ToNSString(actionButtonTitle);
-      [(NSObject*)notification setValue:@(YES) forKey:@"_showsButtons"];
-      [(NSObject*)notification setValue:@(YES) forKey:@"_alwaysShowAlternateActionMenu"];
-      [(NSObject*)notification setValue:@[
-                                          nsCocoaUtils::ToNSString(disableButtonTitle),
-                                          nsCocoaUtils::ToNSString(settingsButtonTitle)
-                                          ]
-                               forKey:@"_alternateActionButtonTitles"];
+
+      // OS X 10.8 only shows action buttons if the "Alerts" style is set in
+      // Notification Center preferences, and doesn't support the alternate
+      // action menu.
+      if ([notification respondsToSelector:@selector(set_showsButtons:)] &&
+          [notification respondsToSelector:@selector(set_alwaysShowAlternateActionMenu:)] &&
+          [notification respondsToSelector:@selector(set_alternateActionButtonTitles:)]) {
+
+        notification.hasActionButton = YES;
+        notification.actionButtonTitle = nsCocoaUtils::ToNSString(actionButtonTitle);
+
+        [(NSObject*)notification setValue:@(YES) forKey:@"_showsButtons"];
+        [(NSObject*)notification setValue:@(YES) forKey:@"_alwaysShowAlternateActionMenu"];
+        [(NSObject*)notification setValue:@[
+                                            nsCocoaUtils::ToNSString(disableButtonTitle),
+                                            nsCocoaUtils::ToNSString(settingsButtonTitle)
+                                            ]
+                                 forKey:@"_alternateActionButtonTitles"];
+      }
     }
   }
   NSString *alertName = nsCocoaUtils::ToNSString(aAlertName);

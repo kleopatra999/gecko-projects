@@ -35,7 +35,7 @@ namespace jit {
 /*
  * Tracelogging overview.
  *
- * Tracelogging makes it possible to trace the occurence of a single event and/or
+ * Tracelogging makes it possible to trace the occurrence of a single event and/or
  * the start and stop of an event. This is implemented to give an as low overhead as
  * possible so it doesn't interfere with running.
  *
@@ -47,17 +47,17 @@ namespace jit {
  *
  * 2) Optionally create a TraceLoggerEvent for the text that needs to get logged. This
  *    step takes some time, so try to do this beforehand, outside the hot
- *    path and don't do unnecessary repetitions, since it will criple
+ *    path and don't do unnecessary repetitions, since it will cripple
  *    performance.
  *     - TraceLoggerEvent event(logger, "foo");
  *
  *    There are also some predefined events. They are located in
  *    TraceLoggerTextId. They don't require to create an TraceLoggerEvent and
  *    can also be used as an argument to these functions.
- * 3) Log the occurence of a single event:
+ * 3) Log the occurrence of a single event:
  *    - TraceLogTimestamp(logger, TraceLoggerTextId);
  *      Note: it is temporarily not supported to provide an TraceLoggerEvent as
- *            argument to log the occurence of a single event.
+ *            argument to log the occurrence of a single event.
  *
  *    or log the start and stop of an event:
  *    - TraceLogStartEvent(logger, TraceLoggerTextId);
@@ -110,6 +110,9 @@ class TraceLoggerEvent {
     bool hasPayload() const {
         return !!payload_;
     }
+
+    TraceLoggerEvent& operator=(const TraceLoggerEvent& other);
+    TraceLoggerEvent(const TraceLoggerEvent& event) = delete;
 };
 
 /**
@@ -129,6 +132,10 @@ class TraceLoggerEventPayload {
         string_(string),
         uses_(0)
     { }
+
+    ~TraceLoggerEventPayload() {
+        MOZ_ASSERT(uses_ == 0);
+    }
 
     uint32_t textId() {
         return textId_;
@@ -166,7 +173,8 @@ class TraceLoggerThread
     mozilla::UniquePtr<TraceLoggerGraph> graph;
 
     PointerHashMap pointerMap;
-    TextIdHashMap extraTextId;
+    TextIdHashMap textIdPayloads;
+    uint32_t nextTextId;
 
     ContinuousSpace<EventEntry> events;
 
@@ -181,6 +189,7 @@ class TraceLoggerThread
       : enabled(0),
         failed(false),
         graph(),
+        nextTextId(TraceLogger_Last),
         iteration_(0),
         top(nullptr)
     { }
@@ -205,11 +214,11 @@ class TraceLoggerThread
     EventEntry* getEventsStartingAt(uint32_t* lastIteration, uint32_t* lastEntryId, size_t* num) {
         EventEntry* start;
         if (iteration_ == *lastIteration) {
-            MOZ_ASSERT(events.lastEntryId() >= *lastEntryId);
+            MOZ_ASSERT(*lastEntryId < events.size());
             *num = events.lastEntryId() - *lastEntryId;
             start = events.data() + *lastEntryId + 1;
         } else {
-            *num = events.lastEntryId() + 1;
+            *num = events.size();
             start = events.data();
         }
 
@@ -227,7 +236,7 @@ class TraceLoggerThread
     bool lostEvents(uint32_t lastIteration, uint32_t lastEntryId) {
         // If still logging in the same iteration, there are no lost events.
         if (lastIteration == iteration_) {
-            MOZ_ASSERT(lastEntryId <= events.lastEntryId());
+            MOZ_ASSERT(lastEntryId < events.size());
             return false;
         }
 
@@ -272,6 +281,7 @@ class TraceLoggerThread
     void stopEvent(uint32_t id);
   private:
     void stopEvent();
+    void log(uint32_t id);
 
   public:
     static unsigned offsetOfEnabled() {

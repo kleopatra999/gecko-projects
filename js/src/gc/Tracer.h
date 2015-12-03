@@ -10,7 +10,7 @@
 #include "jsfriendapi.h"
 
 #include "gc/Barrier.h"
-#include "js/TraceableHashTable.h"
+#include "js/GCHashTable.h"
 
 namespace js {
 
@@ -123,7 +123,7 @@ TraceGenericPointerRoot(JSTracer* trc, gc::Cell** thingp, const char* name);
 void
 TraceManuallyBarrieredGenericPointerEdge(JSTracer* trc, gc::Cell** thingp, const char* name);
 
-// Depricated. Please use one of the strongly typed variants above.
+// Deprecated. Please use one of the strongly typed variants above.
 void
 TraceChildren(JSTracer* trc, void* thing, JS::TraceKind kind);
 
@@ -137,23 +137,6 @@ void
 TraceCycleCollectorChildren(JS::CallbackTracer* trc, ObjectGroup* group);
 
 } // namespace gc
-
-template <typename T>
-struct DefaultTracer<T*>
-{
-    static void trace(JSTracer* trc, T** t, const char* name) {
-        TraceManuallyBarrieredEdge(trc, t, name);
-    }
-};
-
-template <typename T>
-struct DefaultTracer<RelocatablePtr<T*>>
-{
-    static void trace(JSTracer* trc, RelocatablePtr<T*> t, const char* name) {
-        TraceEdge(trc, t, name);
-    }
-};
-
 } // namespace js
 
 #endif /* js_Tracer_h */

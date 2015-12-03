@@ -1867,21 +1867,6 @@ public:
     };
 
 public:
-    struct OnImeRemoveComposition_t {
-        typedef GeckoEditable Owner;
-        typedef void ReturnType;
-        typedef void SetterType;
-        typedef mozilla::jni::Args<> Args;
-        static constexpr char name[] = "onImeRemoveComposition";
-        static constexpr char signature[] =
-                "()V";
-        static const bool isStatic = false;
-        static const bool isMultithreaded = false;
-        static const mozilla::jni::ExceptionMode exceptionMode =
-                mozilla::jni::ExceptionMode::ABORT;
-    };
-
-public:
     struct OnImeReplaceText_t {
         typedef GeckoEditable Owner;
         typedef void ReturnType;
@@ -1889,28 +1874,10 @@ public:
         typedef mozilla::jni::Args<
                 int32_t,
                 int32_t,
-                mozilla::jni::String::Param,
-                bool> Args;
+                mozilla::jni::String::Param> Args;
         static constexpr char name[] = "onImeReplaceText";
         static constexpr char signature[] =
-                "(IILjava/lang/String;Z)V";
-        static const bool isStatic = false;
-        static const bool isMultithreaded = false;
-        static const mozilla::jni::ExceptionMode exceptionMode =
-                mozilla::jni::ExceptionMode::ABORT;
-    };
-
-public:
-    struct OnImeSetSelection_t {
-        typedef GeckoEditable Owner;
-        typedef void ReturnType;
-        typedef void SetterType;
-        typedef mozilla::jni::Args<
-                int32_t,
-                int32_t> Args;
-        static constexpr char name[] = "onImeSetSelection";
-        static constexpr char signature[] =
-                "(II)V";
+                "(IILjava/lang/String;)V";
         static const bool isStatic = false;
         static const bool isMultithreaded = false;
         static const mozilla::jni::ExceptionMode exceptionMode =
@@ -3077,23 +3044,23 @@ public:
     template<class Impl> class Natives;
 };
 
-class RestrictedProfiles : public mozilla::jni::Class<RestrictedProfiles>
+class Restrictions : public mozilla::jni::Class<Restrictions>
 {
 public:
-    typedef mozilla::jni::Ref<RestrictedProfiles> Ref;
-    typedef mozilla::jni::LocalRef<RestrictedProfiles> LocalRef;
-    typedef mozilla::jni::GlobalRef<RestrictedProfiles> GlobalRef;
-    typedef const mozilla::jni::Param<RestrictedProfiles>& Param;
+    typedef mozilla::jni::Ref<Restrictions> Ref;
+    typedef mozilla::jni::LocalRef<Restrictions> LocalRef;
+    typedef mozilla::jni::GlobalRef<Restrictions> GlobalRef;
+    typedef const mozilla::jni::Param<Restrictions>& Param;
 
     static constexpr char name[] =
-            "org/mozilla/gecko/RestrictedProfiles";
+            "org/mozilla/gecko/Restrictions";
 
 protected:
-    RestrictedProfiles(jobject instance) : Class(instance) {}
+    Restrictions(jobject instance) : Class(instance) {}
 
 public:
     struct IsAllowed_t {
-        typedef RestrictedProfiles Owner;
+        typedef Restrictions Owner;
         typedef bool ReturnType;
         typedef bool SetterType;
         typedef mozilla::jni::Args<
@@ -3112,7 +3079,7 @@ public:
 
 public:
     struct IsUserRestricted_t {
-        typedef RestrictedProfiles Owner;
+        typedef Restrictions Owner;
         typedef bool ReturnType;
         typedef bool SetterType;
         typedef mozilla::jni::Args<> Args;

@@ -18,6 +18,8 @@ EXPORTS.mozilla.dom += [
 EXPORTS.mozilla += [
     'AnimationComparator.h',
     'AnimationUtils.h',
+    'ComputedTimingFunction.h',
+    'EffectSet.h',
     'PendingAnimationTracker.h',
 ]
 
@@ -25,7 +27,9 @@ UNIFIED_SOURCES += [
     'Animation.cpp',
     'AnimationEffectReadOnly.cpp',
     'AnimationTimeline.cpp',
+    'ComputedTimingFunction.cpp',
     'DocumentTimeline.cpp',
+    'EffectSet.cpp',
     'KeyframeEffect.cpp',
     'PendingAnimationTracker.cpp',
 ]

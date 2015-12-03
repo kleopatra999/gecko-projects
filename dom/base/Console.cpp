@@ -309,7 +309,9 @@ private:
 
     MOZ_ASSERT(aWindow->IsInnerWindow());
     nsPIDOMWindow* outerWindow = aWindow->GetOuterWindow();
-    MOZ_ASSERT(outerWindow);
+    if (NS_WARN_IF(!outerWindow)) {
+      return;
+    }
 
     RunConsole(jsapi.cx(), outerWindow, aWindow);
   }
@@ -498,16 +500,20 @@ private:
         frame = *mCallData->mTopStackFrame;
       }
 
-      nsString id;
+      nsString id = frame.mFilename;
+      nsString innerID;
       if (mWorkerPrivate->IsSharedWorker()) {
-        id = NS_LITERAL_STRING("SharedWorker");
+        innerID = NS_LITERAL_STRING("SharedWorker");
       } else if (mWorkerPrivate->IsServiceWorker()) {
-        id = NS_LITERAL_STRING("ServiceWorker");
+        innerID = NS_LITERAL_STRING("ServiceWorker");
+        // Use scope as ID so the webconsole can decide if the message should
+        // show up per tab
+        id.AssignWithConversion(mWorkerPrivate->WorkerName());
       } else {
-        id = NS_LITERAL_STRING("Worker");
+        innerID = NS_LITERAL_STRING("Worker");
       }
 
-      mCallData->SetIDs(frame.mFilename, id);
+      mCallData->SetIDs(id, innerID);
     }
 
     // Now we could have the correct window (if we are not window-less).
@@ -691,9 +697,13 @@ Console::Console(nsPIDOMWindow* aWindow)
     MOZ_ASSERT(mWindow->IsInnerWindow());
     mInnerID = mWindow->WindowID();
 
+    // Without outerwindow any console message coming from this object will not
+    // shown in the devtools webconsole. But this should be fine because
+    // probably we are shutting down, or the window is CCed/GCed.
     nsPIDOMWindow* outerWindow = mWindow->GetOuterWindow();
-    MOZ_ASSERT(outerWindow);
-    mOuterID = outerWindow->WindowID();
+    if (outerWindow) {
+      mOuterID = outerWindow->WindowID();
+    }
   }
 
   if (NS_IsMainThread()) {

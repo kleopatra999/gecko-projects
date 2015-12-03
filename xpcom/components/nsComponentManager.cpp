@@ -1749,7 +1749,12 @@ nsComponentManagerImpl::IsContractIDRegistered(const char* aClass,
   nsFactoryEntry* entry = GetFactoryEntry(aClass, strlen(aClass));
 
   if (entry) {
-    *aResult = true;
+    // UnregisterFactory might have left a stale nsFactoryEntry in
+    // mContractIDs, so we should check to see whether this entry has
+    // anything useful.
+    *aResult = (bool(entry->mModule) ||
+                bool(entry->mFactory) ||
+                bool(entry->mServiceObject));
   } else {
     *aResult = false;
   }
@@ -1841,7 +1846,7 @@ nsComponentManagerImpl::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
   for (auto iter = mContractIDs.ConstIter(); !iter.Done(); iter.Next()) {
     // We don't measure the nsFactoryEntry data because it's owned by
     // mFactories (which is measured above).
-    n += iter.Key().SizeOfExcludingThisMustBeUnshared(aMallocSizeOf);
+    n += iter.Key().SizeOfExcludingThisIfUnshared(aMallocSizeOf);
   }
 
   n += sStaticModules->ShallowSizeOfIncludingThis(aMallocSizeOf);

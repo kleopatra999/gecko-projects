@@ -16,6 +16,7 @@
 
 #include "mozilla/Preferences.h"
 #include "mozilla/Services.h"
+#include "mozilla/Snprintf.h"
 #include "mozilla/WindowsVersion.h"
 #include "nsServiceManagerUtils.h"
 #include "nsTArray.h"
@@ -1047,9 +1048,11 @@ gfxFontGroup *
 gfxWindowsPlatform::CreateFontGroup(const FontFamilyList& aFontFamilyList,
                                     const gfxFontStyle *aStyle,
                                     gfxTextPerfMetrics* aTextPerf,
-                                    gfxUserFontSet *aUserFontSet)
+                                    gfxUserFontSet *aUserFontSet,
+                                    gfxFloat aDevToCssSize)
 {
-    return new gfxFontGroup(aFontFamilyList, aStyle, aTextPerf, aUserFontSet);
+    return new gfxFontGroup(aFontFamilyList, aStyle, aTextPerf,
+                            aUserFontSet, aDevToCssSize);
 }
 
 gfxFontEntry* 
@@ -1285,7 +1288,7 @@ gfxWindowsPlatform::GetDLLVersion(char16ptr_t aDLLPath, nsAString& aVersion)
     vers[3] = LOWORD(fileVersLS);
 
     char buf[256];
-    sprintf(buf, "%d.%d.%d.%d", vers[0], vers[1], vers[2], vers[3]);
+    snprintf_literal(buf, "%u.%u.%u.%u", vers[0], vers[1], vers[2], vers[3]);
     aVersion.Assign(NS_ConvertUTF8toUTF16(buf));
 }
 
@@ -1625,30 +1628,56 @@ gfxWindowsPlatform::GetDXGIAdapter()
   decltype(CreateDXGIFactory1)* createDXGIFactory1 = (decltype(CreateDXGIFactory1)*)
     GetProcAddress(dxgiModule, "CreateDXGIFactory1");
 
+  if (!createDXGIFactory1) {
+    return nullptr;
+  }
+
   // Try to use a DXGI 1.1 adapter in order to share resources
   // across processes.
-  if (createDXGIFactory1) {
-    RefPtr<IDXGIFactory1> factory1;
-    HRESULT hr = createDXGIFactory1(__uuidof(IDXGIFactory1),
-                                    getter_AddRefs(factory1));
+  RefPtr<IDXGIFactory1> factory1;
+  HRESULT hr = createDXGIFactory1(__uuidof(IDXGIFactory1),
+                                  getter_AddRefs(factory1));
+  if (FAILED(hr) || !factory1) {
+    // This seems to happen with some people running the iZ3D driver.
+    // They won't get acceleration.
+    return nullptr;
+  }
 
-    if (FAILED(hr) || !factory1) {
-      // This seems to happen with some people running the iZ3D driver.
-      // They won't get acceleration.
+  if (!XRE_IsContentProcess()) {
+    // In the parent process, we pick the first adapter.
+    if (FAILED(factory1->EnumAdapters1(0, getter_AddRefs(mAdapter)))) {
       return nullptr;
     }
+  } else {
+    const DxgiAdapterDesc& parent = GetParentDevicePrefs().adapter();
 
-    hr = factory1->EnumAdapters1(0, getter_AddRefs(mAdapter));
-    if (FAILED(hr)) {
-      // We should return and not accelerate if we can't obtain
-      // an adapter.
-      return nullptr;
+    // In the child process, we search for the adapter that matches the parent
+    // process. The first adapter can be mismatched on dual-GPU systems.
+    for (UINT index = 0; ; index++) {
+      RefPtr<IDXGIAdapter1> adapter;
+      if (FAILED(factory1->EnumAdapters1(index, getter_AddRefs(adapter)))) {
+        break;
+      }
+
+      DXGI_ADAPTER_DESC desc;
+      if (SUCCEEDED(adapter->GetDesc(&desc)) &&
+          desc.AdapterLuid.HighPart == parent.AdapterLuid.HighPart &&
+          desc.AdapterLuid.LowPart == parent.AdapterLuid.LowPart &&
+          desc.VendorId == parent.VendorId &&
+          desc.DeviceId == parent.DeviceId)
+      {
+        mAdapter = adapter.forget();
+        break;
+      }
     }
+  }
+
+  if (!mAdapter) {
+    return nullptr;
   }
 
   // We leak this module everywhere, we might as well do so here as well.
   dxgiModule.disown();
-
   return mAdapter;
 }
 
@@ -1770,7 +1799,6 @@ bool DoesRenderTargetViewNeedsRecreating(ID3D11Device *device)
         gfxCriticalNote << "DoesRecreatingKeyedMutexFailed";
         return false;
     }
-
     D3D11_RENDER_TARGET_VIEW_DESC offscreenRTVDesc;
     offscreenRTVDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
     offscreenRTVDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
@@ -1834,6 +1862,22 @@ bool DoesRenderTargetViewNeedsRecreating(ID3D11Device *device)
     return result;
 }
 
+static bool TryCreateTexture2D(ID3D11Device *device,
+                               D3D11_TEXTURE2D_DESC* desc,
+                               D3D11_SUBRESOURCE_DATA* data,
+                               RefPtr<ID3D11Texture2D>& texture)
+{
+  // Older Intel driver version (see bug 1221348 for version #s) crash when
+  // creating a texture with shared keyed mutex and data.
+  MOZ_SEH_TRY {
+    return !FAILED(device->CreateTexture2D(desc, data, getter_AddRefs(texture)));
+  } MOZ_SEH_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+    // For now we want to aggregrate all the crash signature to a known crash.
+    MOZ_CRASH("Crash creating texture. See bug 1221348.");
+    return false;
+  }
+}
+
 
 // See bug 1083071. On some drivers, Direct3D 11 CreateShaderResourceView fails
 // with E_OUTOFMEMORY.
@@ -1885,12 +1929,30 @@ bool DoesD3D11TextureSharingWorkInternal(ID3D11Device *device, DXGI_FORMAT forma
   for (size_t i = 0; i < sizeof(color)/sizeof(color[0]); i++) {
     color[i] = 0xff00ffff;
   }
-  // We're going to check that sharing actually works with this format
-  D3D11_SUBRESOURCE_DATA data;
-  data.pSysMem = color;
-  data.SysMemPitch = texture_size * 4;
-  data.SysMemSlicePitch = 0;
-  if (FAILED(device->CreateTexture2D(&desc, &data, getter_AddRefs(texture)))) {
+  // XXX If we pass the data directly at texture creation time we
+  //     get a crash on Intel 8.5.10.[18xx-1994] drivers.
+  //     We can work around this issue by doing UpdateSubresource.
+  if (!TryCreateTexture2D(device, &desc, nullptr, texture)) {
+    gfxCriticalError() << "DoesD3D11TextureSharingWork_TryCreateTextureFailure";
+    return false;
+  }
+
+  RefPtr<IDXGIKeyedMutex> sourceSharedMutex;
+  texture->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)getter_AddRefs(sourceSharedMutex));
+  if (FAILED(sourceSharedMutex->AcquireSync(0, 30*1000))) {
+    gfxCriticalError() << "DoesD3D11TextureSharingWork_SourceMutexTimeout";
+    // only wait for 30 seconds
+    return false;
+  }
+
+  RefPtr<ID3D11DeviceContext> deviceContext;
+  device->GetImmediateContext(getter_AddRefs(deviceContext));
+
+  int stride = texture_size * 4;
+  deviceContext->UpdateSubresource(texture, 0, nullptr, color, stride, stride * texture_size);
+
+  if (FAILED(sourceSharedMutex->ReleaseSync(0))) {
+    gfxCriticalError() << "DoesD3D11TextureSharingWork_SourceReleaseSyncTimeout";
     return false;
   }
 
@@ -1899,10 +1961,12 @@ bool DoesD3D11TextureSharingWorkInternal(ID3D11Device *device, DXGI_FORMAT forma
   if (FAILED(texture->QueryInterface(__uuidof(IDXGIResource),
                                      getter_AddRefs(otherResource))))
   {
+    gfxCriticalError() << "DoesD3D11TextureSharingWork_GetResourceFailure";
     return false;
   }
 
   if (FAILED(otherResource->GetSharedHandle(&shareHandle))) {
+    gfxCriticalError() << "DoesD3D11TextureSharingWork_GetSharedTextureFailure";
     return false;
   }
 
@@ -1918,6 +1982,7 @@ bool DoesD3D11TextureSharingWorkInternal(ID3D11Device *device, DXGI_FORMAT forma
   if (FAILED(sharedResource->QueryInterface(__uuidof(ID3D11Texture2D),
                                             getter_AddRefs(sharedTexture))))
   {
+    gfxCriticalError() << "DoesD3D11TextureSharingWork_GetSharedTextureFailure";
     return false;
   }
 
@@ -1928,13 +1993,12 @@ bool DoesD3D11TextureSharingWorkInternal(ID3D11Device *device, DXGI_FORMAT forma
   desc.MiscFlags = 0;
   desc.BindFlags = 0;
   if (FAILED(device->CreateTexture2D(&desc, nullptr, getter_AddRefs(cpuTexture)))) {
+    gfxCriticalError() << "DoesD3D11TextureSharingWork_CreateTextureFailure";
     return false;
   }
 
   RefPtr<IDXGIKeyedMutex> sharedMutex;
-  RefPtr<ID3D11DeviceContext> deviceContext;
   sharedResource->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)getter_AddRefs(sharedMutex));
-  device->GetImmediateContext(getter_AddRefs(deviceContext));
   if (FAILED(sharedMutex->AcquireSync(0, 30*1000))) {
     gfxCriticalError() << "DoesD3D11TextureSharingWork_AcquireSyncTimeout";
     // only wait for 30 seconds
@@ -2148,7 +2212,7 @@ gfxWindowsPlatform::AttemptWARPDeviceCreation()
     return FeatureStatus::Crashed;
   }
 
-  if (FAILED(hr)) {
+  if (FAILED(hr) || !mD3D11Device) {
     // This should always succeed... in theory.
     gfxCriticalError() << "Failed to initialize WARP D3D11 device! " << hexa(hr);
     return FeatureStatus::Failed;
@@ -2173,14 +2237,14 @@ gfxWindowsPlatform::ContentAdapterIsParentAdapter(ID3D11Device* device)
     return false;
   }
 
-  const DxgiDesc& parent = GetParentDevicePrefs().dxgiDesc();
-  if (desc.VendorId != parent.vendorID() ||
-      desc.DeviceId != parent.deviceID() ||
-      desc.SubSysId != parent.subSysID() ||
-      desc.AdapterLuid.HighPart != parent.luid().HighPart() ||
-      desc.AdapterLuid.LowPart != parent.luid().LowPart())
+  const DxgiAdapterDesc& parent = GetParentDevicePrefs().adapter();
+  if (desc.VendorId != parent.VendorId ||
+      desc.DeviceId != parent.DeviceId ||
+      desc.SubSysId != parent.SubSysId ||
+      desc.AdapterLuid.HighPart != parent.AdapterLuid.HighPart ||
+      desc.AdapterLuid.LowPart != parent.AdapterLuid.LowPart)
   {
-    gfxCriticalNote << "VendorIDMismatch " << hexa(parent.vendorID()) << " " << hexa(desc.VendorId);
+    gfxCriticalNote << "VendorIDMismatch " << hexa(parent.VendorId) << " " << hexa(desc.VendorId);
     return false;
   }
 
@@ -2221,7 +2285,7 @@ gfxWindowsPlatform::AttemptD3D11ContentDeviceCreation()
     return FeatureStatus::Crashed;
   }
 
-  if (FAILED(hr)) {
+  if (FAILED(hr) || !mD3D11ContentDevice) {
     return FeatureStatus::Failed;
   }
 
@@ -2232,21 +2296,22 @@ gfxWindowsPlatform::AttemptD3D11ContentDeviceCreation()
   // we re-check texture sharing against the newly created D3D11 content device.
   // If it fails, we won't use Direct2D.
   if (XRE_IsContentProcess()) {
-    if (!DoesD3D11TextureSharingWork(mD3D11ContentDevice) ||
-        !ContentAdapterIsParentAdapter(mD3D11ContentDevice))
-    {
+    if (!DoesD3D11TextureSharingWork(mD3D11ContentDevice)) {
       mD3D11ContentDevice = nullptr;
       return FeatureStatus::Failed;
     }
+
+    DebugOnly<bool> ok = ContentAdapterIsParentAdapter(mD3D11ContentDevice);
+    MOZ_ASSERT(ok);
   }
 
   mD3D11ContentDevice->SetExceptionMode(0);
 
   RefPtr<ID3D10Multithread> multi;
-  mD3D11ContentDevice->QueryInterface(__uuidof(ID3D10Multithread), getter_AddRefs(multi));
-  multi->SetMultithreadProtected(TRUE);
-
-  Factory::SetDirect3D11Device(mD3D11ContentDevice);
+  hr = mD3D11ContentDevice->QueryInterface(__uuidof(ID3D10Multithread), getter_AddRefs(multi));
+  if (SUCCEEDED(hr) && multi) {
+    multi->SetMultithreadProtected(TRUE);
+  }
   return FeatureStatus::Available;
 }
 
@@ -2264,16 +2329,18 @@ gfxWindowsPlatform::AttemptD3D11ImageBridgeDeviceCreation()
     return FeatureStatus::Crashed;
   }
 
-  if (FAILED(hr)) {
+  if (FAILED(hr) || !mD3D11ImageBridgeDevice) {
     return FeatureStatus::Failed;
   }
 
   mD3D11ImageBridgeDevice->SetExceptionMode(0);
-  if (!DoesD3D11AlphaTextureSharingWork(mD3D11ImageBridgeDevice) ||
-      (XRE_IsContentProcess() && !ContentAdapterIsParentAdapter(mD3D11ImageBridgeDevice)))
-  {
+  if (!DoesD3D11AlphaTextureSharingWork(mD3D11ImageBridgeDevice)) {
     mD3D11ImageBridgeDevice = nullptr;
     return FeatureStatus::Failed;
+  }
+
+  if (XRE_IsContentProcess()) {
+    ContentAdapterIsParentAdapter(mD3D11ImageBridgeDevice);
   }
   return FeatureStatus::Available;
 }
@@ -2312,6 +2379,8 @@ gfxWindowsPlatform::InitializeDevices()
 
   // First, initialize D3D11. If this succeeds we attempt to use Direct2D.
   InitializeD3D11();
+
+  // Initialize Direct2D.
   if (mD3D11Status == FeatureStatus::Available) {
     InitializeD2D();
   }
@@ -2431,6 +2500,11 @@ gfxWindowsPlatform::InitializeD3D11()
       DisableD3D11AfterCrash();
       return;
     }
+  }
+
+  if (AttemptD3D11ContentDeviceCreation() == FeatureStatus::Crashed) {
+    DisableD3D11AfterCrash();
+    return;
   }
 
   // We leak these everywhere and we need them our entire runtime anyway, let's
@@ -2575,15 +2649,14 @@ gfxWindowsPlatform::InitializeD2D1()
     return;
   }
 
-  mD2D1Status = AttemptD3D11ContentDeviceCreation();
-  if (IsFeatureStatusFailure(mD2D1Status)) {
-    if (mD2D1Status == FeatureStatus::Crashed) {
-      DisableD3D11AfterCrash();
-    }
+  if (!mD3D11ContentDevice) {
+    mD2D1Status = FeatureStatus::Failed;
     return;
   }
 
-  MOZ_ASSERT(mD2D1Status == FeatureStatus::Available);
+  mD2D1Status = FeatureStatus::Available;
+  Factory::SetDirect3D11Device(mD3D11ContentDevice);
+
   d2d1_1.SetSuccessful();
 }
 
@@ -2626,7 +2699,7 @@ gfxWindowsPlatform::CreateD3D11DecoderDevice()
     return nullptr;
   }
 
-  if (FAILED(hr) || !DoesD3D11DeviceWork()) {
+  if (FAILED(hr) || !device || !DoesD3D11DeviceWork()) {
     return nullptr;
   }
 
@@ -2656,14 +2729,37 @@ public:
     NS_INLINE_DECL_THREADSAFE_REFCOUNTING(D3DVsyncDisplay)
     public:
       D3DVsyncDisplay()
-        : mVsyncEnabledLock("D3DVsyncEnabledLock")
-        , mPrevVsync(TimeStamp::Now())
+        : mPrevVsync(TimeStamp::Now())
+        , mVsyncEnabledLock("D3DVsyncEnabledLock")
         , mVsyncEnabled(false)
       {
         mVsyncThread = new base::Thread("WindowsVsyncThread");
         const double rate = 1000 / 60.0;
         mSoftwareVsyncRate = TimeDuration::FromMilliseconds(rate);
         MOZ_RELEASE_ASSERT(mVsyncThread->Start(), "Could not start Windows vsync thread");
+        SetVsyncRate();
+      }
+
+      void SetVsyncRate()
+      {
+        if (!DwmCompositionEnabled()) {
+          mVsyncRate = TimeDuration::FromMilliseconds(1000.0 / 60.0);
+          return;
+        }
+
+        DWM_TIMING_INFO vblankTime;
+        // Make sure to init the cbSize, otherwise GetCompositionTiming will fail
+        vblankTime.cbSize = sizeof(DWM_TIMING_INFO);
+        HRESULT hr = WinUtils::dwmGetCompositionTimingInfoPtr(0, &vblankTime);
+        if (SUCCEEDED(hr)) {
+          UNSIGNED_RATIO refreshRate = vblankTime.rateRefresh;
+          // We get the rate in hertz / time, but we want the rate in ms.
+          float rate = ((float) refreshRate.uiDenominator
+                       / (float) refreshRate.uiNumerator) * 1000;
+          mVsyncRate = TimeDuration::FromMilliseconds(rate);
+        } else {
+          mVsyncRate = TimeDuration::FromMilliseconds(1000.0 / 60.0);
+        }
       }
 
       virtual void EnableVsync() override
@@ -2699,6 +2795,11 @@ public:
         MOZ_ASSERT(NS_IsMainThread());
         MonitorAutoLock lock(mVsyncEnabledLock);
         return mVsyncEnabled;
+      }
+
+      virtual TimeDuration GetVsyncRate() override
+      {
+        return mVsyncRate;
       }
 
       void ScheduleSoftwareVsync(TimeStamp aVsyncTimestamp)
@@ -2826,6 +2927,7 @@ public:
       TimeStamp mPrevVsync; // Only used on Windows 10
       Monitor mVsyncEnabledLock;
       base::Thread* mVsyncThread;
+      TimeDuration mVsyncRate;
       bool mVsyncEnabled;
   }; // end d3dvsyncdisplay
 
@@ -2962,11 +3064,15 @@ gfxWindowsPlatform::GetDeviceInitData(DeviceInitData* aOut)
     if (!GetDxgiDesc(mD3D11Device, &desc)) {
       return;
     }
-
-    aOut->dxgiDesc().vendorID() = desc.VendorId;
-    aOut->dxgiDesc().deviceID() = desc.DeviceId;
-    aOut->dxgiDesc().subSysID() = desc.SubSysId;
-    aOut->dxgiDesc().luid().LowPart() = desc.AdapterLuid.LowPart;
-    aOut->dxgiDesc().luid().HighPart() = desc.AdapterLuid.HighPart;
+    aOut->adapter() = DxgiAdapterDesc::From(desc);
   }
+}
+
+bool
+gfxWindowsPlatform::SupportsPluginDirectDXGIDrawing()
+{
+  if (!GetD3D11ContentDevice() || !CompositorD3D11TextureSharingWorks()) {
+    return false;
+  }
+  return true;
 }

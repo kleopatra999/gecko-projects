@@ -5,16 +5,21 @@
 
 package org.mozilla.gecko.home;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.mozilla.gecko.annotation.RobocopTarget;
+
+import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.EventDispatcher;
 import org.mozilla.gecko.GeckoAppShell;
 import org.mozilla.gecko.GeckoEvent;
@@ -25,6 +30,7 @@ import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.Tabs;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
+import org.mozilla.gecko.annotation.RobocopTarget;
 import org.mozilla.gecko.db.BrowserContract;
 import org.mozilla.gecko.db.BrowserContract.History;
 import org.mozilla.gecko.db.BrowserContract.URLColumns;
@@ -101,8 +107,9 @@ public class BrowserSearch extends HomeFragment
     // Timeout for the suggestion client to respond
     private static final int SUGGESTION_TIMEOUT = 3000;
 
-    // Maximum number of results returned by the suggestion client
-    private static final int SUGGESTION_MAX = 3;
+    // Maximum number of suggestions from the search engine's suggestion client. This impacts network traffic and device
+    // data consumption whereas R.integer.max_saved_suggestions controls how many suggestion to show in the UI.
+    private static final int NETWORK_SUGGESTION_MAX = 3;
 
     // The maximum number of rows deep in a search we'll dig
     // for an autocomplete result
@@ -240,6 +247,15 @@ public class BrowserSearch extends HomeFragment
     @Override
     public void onHiddenChanged(boolean hidden) {
         if (!hidden) {
+            Tab tab = Tabs.getInstance().getSelectedTab();
+            final boolean isPrivate = (tab != null && tab.isPrivate());
+
+            // Removes Search Suggestions Loader if in private browsing mode
+            // Loader may have been inserted when browsing in normal tab
+            if (isPrivate) {
+                getLoaderManager().destroyLoader(LOADER_ID_SUGGESTION);
+            }
+
             GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent("SearchEngines:GetVisible", null));
         }
         super.onHiddenChanged(hidden);
@@ -457,9 +473,51 @@ public class BrowserSearch extends HomeFragment
         return url.substring(offset, chop);
     }
 
+    LinkedHashSet<String> domains = null;
+    private LinkedHashSet<String> getDomains() {
+        if (domains == null) {
+            domains = new LinkedHashSet<String>();
+            BufferedReader buf = null;
+            try {
+                buf = new BufferedReader(new InputStreamReader(getResources().openRawResource(R.raw.topdomains)));
+                String res = null;
+
+                do {
+                    res = buf.readLine();
+                    if (res != null) {
+                        domains.add(res);
+                    }
+                } while (res != null);
+            } catch (IOException e) {
+                Log.e(LOGTAG, "Error reading domains", e);
+            } finally {
+                if (buf != null) {
+                    try {
+                        buf.close();
+                    } catch (IOException e) { }
+                }
+            }
+        }
+        return domains;
+    }
+
+    private String searchDomains(String search) {
+        if (AppConstants.NIGHTLY_BUILD == false) {
+            return null;
+        }
+
+        for (String domain : getDomains()) {
+            if (domain.startsWith(search)) {
+                return domain;
+            }
+        }
+        return null;
+    }
+
     private String findAutocompletion(String searchTerm, Cursor c, boolean searchPath) {
         if (!c.moveToFirst()) {
-            return null;
+            // No cursor probably means no history, so let's try the fallback list.
+            return searchDomains(searchTerm);
         }
 
         final int searchLength = searchTerm.length();
@@ -521,7 +579,8 @@ public class BrowserSearch extends HomeFragment
             }
         } while (searchCount < MAX_AUTOCOMPLETE_SEARCH && c.moveToNext());
 
-        return null;
+        // If we can't find an autocompletion domain from history, let's try using the fallback list.
+        return searchDomains(searchTerm);
     }
 
     public void resetScrollState() {
@@ -634,9 +693,15 @@ public class BrowserSearch extends HomeFragment
 
             // Show suggestions opt-in prompt only if suggestions are not enabled yet,
             // user hasn't been prompted and we're not on a private browsing tab.
+            // The prompt might have been inflated already when this view was previously called.
+            // Remove the opt-in prompt if it has been inflated in the view and dealt with by the user,
+            // or if we're on a private browsing tab
             if (!mSuggestionsEnabled && !suggestionsPrompted && mSuggestClient != null) {
                 showSuggestionsOptIn();
+            } else {
+                removeSuggestionsOptIn();
             }
+
         } catch (JSONException e) {
             Log.e(LOGTAG, "Error getting search engine JSON", e);
         }
@@ -666,11 +731,16 @@ public class BrowserSearch extends HomeFragment
     }
 
     private void maybeSetSuggestClient(final String suggestTemplate, final boolean isPrivate) {
-        if (mSuggestClient != null || isPrivate) {
+        if (isPrivate) {
+            mSuggestClient = null;
             return;
         }
 
-        mSuggestClient = sSuggestClientFactory.getSuggestClient(getActivity(), suggestTemplate, SUGGESTION_TIMEOUT, SUGGESTION_MAX);
+        if (mSuggestClient != null) {
+            return;
+        }
+
+        mSuggestClient = sSuggestClientFactory.getSuggestClient(getActivity(), suggestTemplate, SUGGESTION_TIMEOUT, NETWORK_SUGGESTION_MAX);
     }
 
     private void showSuggestionsOptIn() {
@@ -713,6 +783,14 @@ public class BrowserSearch extends HomeFragment
                 }
             }
         });
+    }
+
+    private void removeSuggestionsOptIn() {
+        if (mSuggestionsOptInPrompt == null) {
+            return;
+        }
+
+        mSuggestionsOptInPrompt.setVisibility(View.GONE);
     }
 
     private void setSuggestionsEnabled(final boolean enabled) {
@@ -815,7 +893,7 @@ public class BrowserSearch extends HomeFragment
         mSearchTerm = searchTerm;
         mAutocompleteHandler = handler;
 
-        if (isVisible()) {
+        if (mAdapter != null) {
             if (isNewFilter) {
                 // The adapter depends on the search term to determine its number
                 // of items. Make it we notify the view about it.
@@ -903,7 +981,11 @@ public class BrowserSearch extends HomeFragment
             String actualQuery = BrowserContract.SearchHistory.QUERY + " LIKE ?";
             String[] queryArgs = new String[] { '%' + mSearchTerm + '%' };
 
-            final int maxSavedSuggestions = getContext().getResources().getInteger(R.integer.max_saved_suggestions);
+            // For deduplication, the worst case is that all the first NETWORK_SUGGESTION_MAX history suggestions are duplicates
+            // of search engine suggestions, and the there is a duplicate for the search term itself. A duplicate of the
+            // search term  can occur if the user has previously searched for the same thing.
+            final int maxSavedSuggestions = NETWORK_SUGGESTION_MAX + 1 + getContext().getResources().getInteger(R.integer.max_saved_suggestions);
+
             final String sortOrderAndLimit = BrowserContract.SearchHistory.DATE +" DESC LIMIT " + maxSavedSuggestions;
             final Cursor result =  cr.query(BrowserContract.SearchHistory.CONTENT_URI, columns, actualQuery, queryArgs, sortOrderAndLimit);
 

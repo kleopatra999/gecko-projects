@@ -53,18 +53,36 @@ html, body, #app, #memory-tool {
   align-items: center;
 }
 
+.devtools-toolbar > .toolbar-group:nth-of-type(1) {
+  /**
+   * We want this to be exactly at a `--sidebar-width` distance from the
+   * toolbar's start boundary. A `.devtools-toolbar` has a 3px start padding.
+   */
+  flex: 0 0 calc(var(--sidebar-width) - 3px);
+  border-inline-end: 1px solid var(--theme-splitter-color);
+  margin-inline-end: 5px;
+}
+
 .devtools-toolbar > .toolbar-group {
   /**
-   * We want this to be exactly at a --sidebar-width distance from the
-   * toolbar's start boundary. A .devtools-toolbar has a 3px start padding
-   * and the preceeding .take-snapshot button is exactly 32px.
+   * Flex: contains several children, which need to be laid out horizontally,
+   * and aligned vertically in the middle of the container.
    */
-  margin-inline-start: calc(var(--sidebar-width) - 3px - 32px);
-  border-inline-start: 1px solid var(--theme-splitter-color);
-  padding-inline-start: 5px;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .devtools-toolbar > .toolbar-group > label {
+  /**
+   * Flex: contains form controls and text, which need to be laid out
+   * horizontally, vertically aligned in the middle of the container.
+   */
+  display: flex;
+  align-items: center;
   margin-inline-end: 5px;
 }
 
@@ -72,27 +90,30 @@ html, body, #app, #memory-tool {
   margin-inline-end: 5px;
 }
 
-.devtools-toolbar > .devtools-button.take-snapshot::before {
+#take-snapshot::before {
   background-image: url(images/command-screenshot.png);
-  background-size: 64px 16px;
-  background-position: 0 center;
 }
 @media (min-resolution: 1.1dppx) {
-  .devtools-toolbar > .devtools-button.take-snapshot::before {
+  #take-snapshot::before {
     background-image: url(images/command-screenshot@2x.png);
   }
 }
 
 /**
- * TODO bug 1213100
- * Once we figure out how to store invertable buttons (pseudo element like in
- * this case?) we should add a .invertable class to handle this generally,
- * rather than the definitions in toolbars.inc.css.
- *
- * @see bug 1173397 for another inverted related bug
+ * Due to toolbar styles of `.devtools-toolbarbutton:not([label])` which overrides
+ * .devtools-toolbarbutton's min-width of 78px, reset the min-width.
  */
-.theme-light .devtools-toolbar > .devtools-toolbarbutton.take-snapshot::before {
-  filter: url(images/filters.svg#invert);
+#import-snapshot {
+  min-width: 78px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+#filter {
+  align-self: stretch;
+  margin: 2px;
 }
 
 /**
@@ -136,7 +157,6 @@ html, body, #app, #memory-tool {
   color: var(--theme-body-color);
   border-bottom: 1px solid rgba(128,128,128,0.15);
   padding: 8px;
-  cursor: pointer;
 }
 
 .snapshot-list-item.selected {
@@ -144,8 +164,24 @@ html, body, #app, #memory-tool {
   color: var(--theme-selection-color);
 }
 
+.snapshot-list-item .snapshot-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 90%;
+}
+
+.snapshot-list-item .save {
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .snapshot-list-item > .snapshot-title {
   margin-bottom: 14px;
+}
+
+.snapshot-list-item > .snapshot-title > input[type=checkbox] {
+  margin: 0;
+  margin-inline-end: 5px;
 }
 
 .snapshot-list-item > .snapshot-state,
@@ -342,7 +378,7 @@ html, body, #app, #memory-tool {
 }
 
 .heap-tree-percent {
-  width: 2.5em;
+  flex: 0 0 3.5em;
 }
 
 .heap-tree-item.focused .heap-tree-number,
@@ -360,7 +396,7 @@ html, body, #app, #memory-tool {
   width: 12px;
   height: 12px;
   max-height: 12px;
-  background-image: url(chrome://devtools/skin/themes/images/webconsole.svg);
+  background-image: url(chrome://devtools/skin/images/webconsole.svg);
   background-size: 72px 60px;
   background-position: -24px -24px;
   background-repeat: no-repeat;
@@ -370,7 +406,7 @@ html, body, #app, #memory-tool {
 }
 
 .theme-light .error::before {
-  background-image: url(chrome://devtools/skin/themes/images/webconsole.svg#light-icons);
+  background-image: url(chrome://devtools/skin/images/webconsole.svg#light-icons);
 }
 
 /**

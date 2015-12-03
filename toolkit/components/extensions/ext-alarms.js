@@ -3,7 +3,6 @@ var { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 var {
   EventManager,
-  ignoreEvent,
   runSafe,
 } = ExtensionUtils;
 
@@ -122,7 +121,7 @@ extensions.registerAPI((extension, context) => {
 
       getAll: function(callback) {
         let alarms = alarmsMap.get(extension);
-        result = [ for (alarm of alarms) alarm.data ];
+        result = alarms.map(alarm => alarm.data);
         runSafe(context, callback, result);
       },
 

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include "mozilla/Compiler.h"
+#include "mozilla/Endian.h"
 #include "mozilla/Observer.h"
 #include "nsAutoPtr.h"
 #include "nsPrintfCString.h"
@@ -243,6 +244,12 @@ extern bool gBluetoothDebugFlag;
 #define REQUEST_MEDIA_PLAYSTATUS_ID          "requestmediaplaystatus"
 
 /**
+ * When receiving an OBEX authenticate challenge request from a remote device,
+ * we'll dispatch an event.
+ */
+#define OBEX_PASSWORD_REQ_ID                 "obexpasswordreq"
+
+/**
  * When receiving a PBAP request from a remote device, we'll dispatch an event.
  */
 #define PULL_PHONEBOOK_REQ_ID                "pullphonebookreq"
@@ -256,7 +263,7 @@ extern bool gBluetoothDebugFlag;
 #define MAP_MESSAGES_LISTING_REQ_ID          "mapmessageslistingreq"
 #define MAP_GET_MESSAGE_REQ_ID               "mapgetmessagereq"
 #define MAP_SET_MESSAGE_STATUS_REQ_ID        "mapsetmessagestatusreq"
-#define MAP_PUSH_MESSAGE_REQ_ID              "mappushmessagereq"
+#define MAP_SEND_MESSAGE_REQ_ID              "mapsendmessagereq"
 #define MAP_FOLDER_LISTING_REQ_ID            "mapfolderlistingreq"
 #define MAP_MESSAGE_UPDATE_REQ_ID            "mapmessageupdatereq"
 
@@ -496,14 +503,12 @@ struct BluetoothAddress {
 
   uint16_t GetNAP() const
   {
-    return (static_cast<uint16_t>(mAddr[4])) |
-           (static_cast<uint16_t>(mAddr[5]) << 8);
+    return LittleEndian::readUint16(&mAddr[4]);
   }
 
   void SetNAP(uint16_t aNAP)
   {
-    mAddr[4] = aNAP;
-    mAddr[5] = aNAP >> 8;
+    LittleEndian::writeUint16(&mAddr[4], aNAP);
   }
 
 };
@@ -635,10 +640,7 @@ struct BluetoothUuid {
 
   void SetUuid32(uint32_t aUuid32)
   {
-    mUuid[0] = static_cast<uint8_t>(0xff & (aUuid32 >> 24));
-    mUuid[1] = static_cast<uint8_t>(0xff & (aUuid32 >> 16));
-    mUuid[2] = static_cast<uint8_t>(0xff & (aUuid32 >> 8));
-    mUuid[3] = static_cast<uint8_t>(0xff & (aUuid32));
+    BigEndian::writeUint32(&mUuid[0], aUuid32);
     mUuid[4] = 0x00;
     mUuid[5] = 0x00;
     mUuid[6] = 0x10;
@@ -655,10 +657,7 @@ struct BluetoothUuid {
 
   uint32_t GetUuid32() const
   {
-    return (static_cast<uint32_t>(mUuid[0]) << 24) |
-           (static_cast<uint32_t>(mUuid[1]) << 16) |
-           (static_cast<uint32_t>(mUuid[2]) << 8) |
-           (static_cast<uint32_t>(mUuid[3]));
+    return BigEndian::readUint32(&mUuid[0]);
   }
 
   void SetUuid16(uint16_t aUuid16)
@@ -668,14 +667,31 @@ struct BluetoothUuid {
 
   uint16_t GetUuid16() const
   {
-    return (static_cast<uint16_t>(mUuid[2]) << 8) |
-           (static_cast<uint16_t>(mUuid[3]));
+    return BigEndian::readUint16(&mUuid[2]);
   }
 };
 
 struct BluetoothPinCode {
   uint8_t mPinCode[16]; /* not \0-terminated */
   uint8_t mLength;
+
+  BluetoothPinCode()
+    : mLength(0)
+  {
+    std::fill(mPinCode, mPinCode + MOZ_ARRAY_LENGTH(mPinCode), 0);
+  }
+
+  bool operator==(const BluetoothPinCode& aRhs) const
+  {
+    MOZ_ASSERT(mLength <= MOZ_ARRAY_LENGTH(mPinCode));
+    return (mLength == aRhs.mLength) &&
+            std::equal(aRhs.mPinCode, aRhs.mPinCode + aRhs.mLength, mPinCode);
+  }
+
+  bool operator!=(const BluetoothPinCode& aRhs) const
+  {
+    return !operator==(aRhs);
+  }
 };
 
 struct BluetoothServiceName {

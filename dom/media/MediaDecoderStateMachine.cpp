@@ -392,7 +392,7 @@ MediaDecoderStateMachine::CreateMediaSink(bool aAudioCaptured)
   RefPtr<media::MediaSink> mediaSink =
     new VideoSink(mTaskQueue, audioSink, mVideoQueue,
                   mDecoder->GetVideoFrameContainer(), mRealTime,
-                  mDecoder->GetFrameStatistics(), AUDIO_DURATION_USECS,
+                  mDecoder->GetFrameStatistics(),
                   sVideoQueueSendToCompositorSize);
   return mediaSink.forget();
 }
@@ -471,6 +471,10 @@ bool MediaDecoderStateMachine::HaveEnoughDecodedAudio(int64_t aAmpleAudioUSecs)
 bool MediaDecoderStateMachine::HaveEnoughDecodedVideo()
 {
   MOZ_ASSERT(OnTaskQueue());
+
+  if (VideoQueue().GetSize() == 0) {
+    return false;
+  }
 
   if (VideoQueue().GetSize() - 1 < GetAmpleVideoFrames() * mPlaybackRate) {
     return false;
@@ -890,19 +894,6 @@ MediaDecoderStateMachine::OnVideoDecoded(MediaData* aVideoSample)
         StopPrerollingVideo();
       }
 
-      // Schedule the state machine to send stream data as soon as possible if
-      // the VideoQueue() is empty or contains one frame before the Push().
-      //
-      // The state machine threads requires a frame in VideoQueue() that is `in
-      // the future` to gather precise timing information. The head of
-      // VideoQueue() is always `in the past`.
-      //
-      // Schedule the state machine as soon as possible to render the video
-      // frame or delay the state machine thread accurately.
-      if (VideoQueue().GetSize() <= 2) {
-        ScheduleStateMachine();
-      }
-
       // For non async readers, if the requested video sample was slow to
       // arrive, increase the amount of audio we buffer to ensure that we
       // don't run out of audio. This is unnecessary for async readers,
@@ -1063,7 +1054,7 @@ void MediaDecoderStateMachine::StopPlayback()
   MOZ_ASSERT(OnTaskQueue());
   DECODER_LOG("StopPlayback()");
 
-  mDecoder->DispatchPlaybackStopped();
+  mOnPlaybackEvent.Notify(MediaEventType::PlaybackStopped);
 
   if (IsPlaying()) {
     mMediaSink->SetPlaying(false);
@@ -1096,7 +1087,7 @@ void MediaDecoderStateMachine::MaybeStartPlayback()
   }
 
   DECODER_LOG("MaybeStartPlayback() starting playback");
-  mDecoder->DispatchPlaybackStarted();
+  mOnPlaybackEvent.Notify(MediaEventType::PlaybackStarted);
   StartMediaSink();
 
   if (!IsPlaying()) {
@@ -1608,12 +1599,7 @@ MediaDecoderStateMachine::InitiateSeek()
   StopPlayback();
   UpdatePlaybackPositionInternal(mCurrentSeek.mTarget.mTime);
 
-  nsCOMPtr<nsIRunnable> startEvent =
-      NS_NewRunnableMethodWithArg<MediaDecoderEventVisibility>(
-        mDecoder,
-        &MediaDecoder::SeekingStarted,
-        mCurrentSeek.mTarget.mEventVisibility);
-  AbstractThread::MainThread()->Dispatch(startEvent.forget());
+  mOnSeekingStart.Notify(mCurrentSeek.mTarget.mEventVisibility);
 
   // Reset our state machine and decoding pipeline before seeking.
   Reset();
@@ -1906,9 +1892,7 @@ MediaDecoderStateMachine::DecodeError()
 
   // MediaDecoder::DecodeError notifies the owner, and then shuts down the state
   // machine.
-  nsCOMPtr<nsIRunnable> event =
-    NS_NewRunnableMethod(mDecoder, &MediaDecoder::DecodeError);
-  AbstractThread::MainThread()->Dispatch(event.forget());
+  mOnPlaybackEvent.Notify(MediaEventType::DecodeError);
 }
 
 void
@@ -1925,7 +1909,6 @@ MediaDecoderStateMachine::OnMetadataRead(MetadataHolder* aMetadata)
 
   // Set mode to PLAYBACK after reading metadata.
   mResource->SetReadMode(MediaCacheStream::MODE_PLAYBACK);
-  mDecoder->DispatchSetMediaSeekable(mReader->IsMediaSeekable());
   mInfo = aMetadata->mInfo;
   mMetadataTags = aMetadata->mTags.forget();
   RefPtr<MediaDecoderStateMachine> self = this;
@@ -2009,14 +1992,12 @@ void
 MediaDecoderStateMachine::EnqueueLoadedMetadataEvent()
 {
   MOZ_ASSERT(OnTaskQueue());
-  nsAutoPtr<MediaInfo> info(new MediaInfo());
-  *info = mInfo;
-  MediaDecoderEventVisibility visibility = mSentLoadedMetadataEvent?
-                                    MediaDecoderEventVisibility::Suppressed :
-                                    MediaDecoderEventVisibility::Observable;
-  nsCOMPtr<nsIRunnable> metadataLoadedEvent =
-    new MetadataEventRunner(mDecoder, info, mMetadataTags, visibility);
-  AbstractThread::MainThread()->Dispatch(metadataLoadedEvent.forget());
+  MediaDecoderEventVisibility visibility =
+    mSentLoadedMetadataEvent ? MediaDecoderEventVisibility::Suppressed
+                             : MediaDecoderEventVisibility::Observable;
+  mMetadataLoadedEvent.Notify(nsAutoPtr<MediaInfo>(new MediaInfo(mInfo)),
+                              Move(mMetadataTags),
+                              Move(visibility));
   mSentLoadedMetadataEvent = true;
 }
 
@@ -2024,14 +2005,11 @@ void
 MediaDecoderStateMachine::EnqueueFirstFrameLoadedEvent()
 {
   MOZ_ASSERT(OnTaskQueue());
-  nsAutoPtr<MediaInfo> info(new MediaInfo());
-  *info = mInfo;
-  MediaDecoderEventVisibility visibility = mSentFirstFrameLoadedEvent?
-                                    MediaDecoderEventVisibility::Suppressed :
-                                    MediaDecoderEventVisibility::Observable;
-  nsCOMPtr<nsIRunnable> event =
-    new FirstFrameLoadedEventRunner(mDecoder, info, visibility);
-  AbstractThread::MainThread()->Dispatch(event.forget());
+  MediaDecoderEventVisibility visibility =
+    mSentFirstFrameLoadedEvent ? MediaDecoderEventVisibility::Suppressed
+                               : MediaDecoderEventVisibility::Observable;
+  mFirstFrameLoadedEvent.Notify(nsAutoPtr<MediaInfo>(new MediaInfo(mInfo)),
+                                Move(visibility));
   mSentFirstFrameLoadedEvent = true;
 }
 
@@ -2172,9 +2150,7 @@ MediaDecoderStateMachine::SeekCompleted()
 
   if (video) {
     mMediaSink->Redraw();
-    nsCOMPtr<nsIRunnable> event =
-      NS_NewRunnableMethod(mDecoder, &MediaDecoder::Invalidate);
-    AbstractThread::MainThread()->Dispatch(event.forget());
+    mOnPlaybackEvent.Notify(MediaEventType::Invalidate);
   }
 }
 
@@ -2427,9 +2403,7 @@ nsresult MediaDecoderStateMachine::RunStateMachine()
         // Ensure readyState is updated before firing the 'ended' event.
         UpdateNextFrameStatus();
 
-        nsCOMPtr<nsIRunnable> event =
-          NS_NewRunnableMethod(mDecoder, &MediaDecoder::PlaybackEnded);
-        AbstractThread::MainThread()->Dispatch(event.forget());
+        mOnPlaybackEvent.Notify(MediaEventType::PlaybackEnded);
 
         mSentPlaybackEndedEvent = true;
 

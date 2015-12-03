@@ -14,7 +14,7 @@ namespace mozilla {
 #undef LOG
 #endif
 
-extern PRLogModuleInfo* GetGMPLog();
+extern LogModule* GetGMPLog();
 
 #define LOGV(msg) MOZ_LOG(GetGMPLog(), mozilla::LogLevel::Verbose, msg)
 #define LOGD(msg) MOZ_LOG(GetGMPLog(), mozilla::LogLevel::Debug, msg)
@@ -248,7 +248,7 @@ GMPDecryptorParent::RecvRejectPromise(const uint32_t& aPromiseId,
                                       const nsCString& aMessage)
 {
   LOGD(("GMPDecryptorParent[%p]::RecvRejectPromise(promiseId=%u, exception=%d, msg='%s')",
-        this, aException, aMessage.get()));
+        this, aPromiseId, aException, aMessage.get()));
 
   if (!mIsOpen) {
     NS_WARNING("Trying to use a dead GMP decrypter!");

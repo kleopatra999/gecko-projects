@@ -1462,7 +1462,8 @@ Debugger::onTrap(JSContext* cx, MutableHandleValue vp)
          * global the script is running against.
          */
         Debugger* dbg = bp->debugger;
-        if (dbg->enabled && dbg->debuggees.lookup(scriptGlobal)) {
+        bool hasDebuggee = dbg->enabled && dbg->debuggees.has(scriptGlobal);
+        if (hasDebuggee) {
             Maybe<AutoCompartment> ac;
             ac.emplace(cx, dbg->object);
 
@@ -2536,13 +2537,8 @@ Debugger::markAll(JSTracer* trc)
 {
     JSRuntime* rt = trc->runtime();
     for (Debugger* dbg : rt->debuggerList) {
-        WeakGlobalObjectSet& debuggees = dbg->debuggees;
-        for (WeakGlobalObjectSet::Enum e(debuggees); !e.empty(); e.popFront()) {
-            GlobalObject* global = e.front().unbarrieredGet();
-            TraceManuallyBarrieredEdge(trc, &global, "Global Object");
-            if (global != e.front().unbarrieredGet())
-                e.rekeyFront(global, ReadBarrieredGlobalObject(global));
-        }
+        for (WeakGlobalObjectSet::Enum e(dbg->debuggees); !e.empty(); e.popFront())
+            TraceManuallyBarrieredEdge(trc, e.mutableFront().unsafeGet(), "Global Object");
 
         HeapPtrNativeObject& dbgobj = dbg->toJSObjectRef();
         TraceEdge(trc, &dbgobj, "Debugger Object");
@@ -3064,10 +3060,8 @@ Debugger::unwrapDebuggeeArgument(JSContext* cx, const Value& v)
         return nullptr;
     }
 
-    /* If that produced an outer window, innerize it. */
-    obj = GetInnerObject(obj);
-    if (!obj)
-        return nullptr;
+    /* If that produced a WindowProxy, get the Window (global). */
+    obj = ToWindowIfWindowProxy(obj);
 
     /* If that didn't produce a global object, it's an error. */
     if (!obj->is<GlobalObject>()) {
@@ -5046,7 +5040,7 @@ class FlowGraphSummary {
             if (FlowsIntoNext(prevOp))
                 addEdge(prevLineno, prevColumn, r.frontOffset());
 
-            if (js_CodeSpec[op].type() == JOF_JUMP) {
+            if (CodeSpec[op].type() == JOF_JUMP) {
                 addEdge(lineno, column, r.frontOffset() + GET_JUMP_OFFSET(r.frontPC()));
             } else if (op == JSOP_TABLESWITCH) {
                 jsbytecode* pc = r.frontPC();
@@ -6310,11 +6304,15 @@ DebuggerFrame_getThis(JSContext* cx, unsigned argc, Value* vp)
     THIS_FRAME_ITER(cx, argc, vp, "get this", args, thisobj, _, iter);
     RootedValue thisv(cx);
     {
-        AutoCompartment ac(cx, iter.scopeChain(cx));
-        if (!iter.computeThis(cx))
+        AbstractFramePtr frame = iter.abstractFramePtr();
+        AutoCompartment ac(cx, frame.scopeChain());
+
+        UpdateFrameIterPc(iter);
+
+        if (!GetThisValueForDebuggerMaybeOptimizedOut(cx, frame, iter.pc(), &thisv))
             return false;
-        thisv = iter.computedThisValue();
     }
+
     if (!Debugger::fromChildJSObject(thisobj)->wrapDebuggeeValue(cx, &thisv))
         return false;
     args.rval().set(thisv);
@@ -6602,12 +6600,11 @@ DebuggerFrame_setOnPop(JSContext* cx, unsigned argc, Value* vp)
  * go. In this case, |frame| must have a computed 'this' value, equal to |thisv|.
  */
 static bool
-EvaluateInEnv(JSContext* cx, Handle<Env*> env, HandleValue thisv, AbstractFramePtr frame,
+EvaluateInEnv(JSContext* cx, Handle<Env*> env, AbstractFramePtr frame,
               jsbytecode* pc, mozilla::Range<const char16_t> chars, const char* filename,
               unsigned lineno, MutableHandleValue rval)
 {
     assertSameCompartment(cx, env, frame);
-    MOZ_ASSERT_IF(frame, thisv.get() == frame.thisValue());
     MOZ_ASSERT_IF(frame, pc);
 
     /*
@@ -6668,7 +6665,7 @@ EvaluateInEnv(JSContext* cx, Handle<Env*> env, HandleValue thisv, AbstractFrameP
     }
 
     ExecuteType type = !frame ? EXECUTE_GLOBAL : EXECUTE_DEBUG;
-    return ExecuteKernel(cx, script, *env, thisv, NullValue(), type, frame, rval.address());
+    return ExecuteKernel(cx, script, *env, NullValue(), type, frame, rval.address());
 }
 
 enum EvalBindings { EvalHasExtraBindings = true, EvalWithDefaultBindings = false };
@@ -6761,24 +6758,12 @@ DebuggerGenericEval(JSContext* cx, const char* fullMethodName, const Value& code
     else
         ac.emplace(cx, scope);
 
-    RootedValue thisv(cx);
     Rooted<Env*> env(cx);
     if (iter) {
-        /* ExecuteInEnv requires 'fp' to have a computed 'this" value. */
-        if (!iter->computeThis(cx))
-            return false;
-        thisv = iter->computedThisValue();
         env = GetDebugScopeForFrame(cx, iter->abstractFramePtr(), iter->pc());
         if (!env)
             return false;
     } else {
-        /*
-         * Use the global lexical scope as 'this'. If the global is an inner
-         * object, it should have a thisValue hook that returns the appropriate
-         * outer object.
-         */
-        if (!GetThisValue(cx, scope, &thisv))
-            return false;
         env = scope;
     }
 
@@ -6818,7 +6803,7 @@ DebuggerGenericEval(JSContext* cx, const char* fullMethodName, const Value& code
         return false;
 
     mozilla::Range<const char16_t> chars = stableChars.twoByteRange();
-    bool ok = EvaluateInEnv(cx, env, thisv, frame, pc, chars, url ? url : "debugger eval code",
+    bool ok = EvaluateInEnv(cx, env, frame, pc, chars, url ? url : "debugger eval code",
                             lineNumber, &rval);
     return dbg->receiveCompletionValue(ac, ok, rval, vp);
 }
@@ -7107,7 +7092,7 @@ DebuggerObject_getScript(JSContext* cx, unsigned argc, Value* vp)
     }
 
     RootedFunction fun(cx, &obj->as<JSFunction>());
-    if (fun->isBuiltin()) {
+    if (!fun->isInterpreted()) {
         args.rval().setUndefined();
         return true;
     }
@@ -7696,8 +7681,8 @@ RequireGlobalObject(JSContext* cx, HandleValue dbgobj, HandleObject referent)
         }
 
         /* ... and WindowProxies around Windows. */
-        if (IsOuterObject(obj)) {
-            obj = JS_ObjectToInnerObject(cx, obj);
+        if (IsWindowProxy(obj)) {
+            obj = ToWindowIfWindowProxy(obj);
             isWindowProxy = "a WindowProxy referring to ";
         }
 
@@ -7799,8 +7784,8 @@ DebuggerObject_unsafeDereference(JSContext* cx, unsigned argc, Value* vp)
     if (!cx->compartment()->wrap(cx, args.rval()))
         return false;
 
-    // Wrapping should outerize inner objects.
-    MOZ_ASSERT(!IsInnerObject(&args.rval().toObject()));
+    // Wrapping should return the WindowProxy.
+    MOZ_ASSERT(!IsWindow(&args.rval().toObject()));
 
     return true;
 }

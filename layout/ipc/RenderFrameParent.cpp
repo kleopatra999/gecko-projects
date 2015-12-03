@@ -173,7 +173,7 @@ public:
       return;
     }
     if (mRenderFrame) {
-      mRenderFrame->TakeFocusForClick();
+      mRenderFrame->TakeFocusForClickFromTap();
       TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
       browser->HandleSingleTap(aPoint, aModifiers, aGuid);
     }
@@ -200,25 +200,6 @@ public:
   }
 
   void ClearRenderFrame() { mRenderFrame = nullptr; }
-
-  virtual void SendAsyncScrollDOMEvent(bool aIsRootContent,
-                                       const CSSRect& aContentRect,
-                                       const CSSSize& aContentSize) override
-  {
-    if (MessageLoop::current() != mUILoop) {
-      mUILoop->PostTask(
-        FROM_HERE,
-        NewRunnableMethod(this,
-                          &RemoteContentController::SendAsyncScrollDOMEvent,
-                          aIsRootContent, aContentRect, aContentSize));
-      return;
-    }
-    if (mRenderFrame && aIsRootContent) {
-      TabParent* browser = TabParent::GetFrom(mRenderFrame->Manager());
-      BrowserElementParent::DispatchAsyncScrollEvent(browser, aContentRect,
-                                                     aContentSize);
-    }
-  }
 
   virtual void PostDelayedTask(Task* aTask, int aDelayMs) override
   {
@@ -388,7 +369,9 @@ RenderFrameParent::BuildLayer(nsDisplayListBuilder* aBuilder,
     // draw a manager's subtree.  The latter is bad bad bad, but the the
     // MOZ_ASSERT() above will flag it.  Returning nullptr here will just
     // cause the shadow subtree not to be rendered.
-    NS_WARNING("Remote iframe not rendered");
+    if (!aContainerParameters.mForEventsOnly) {
+      NS_WARNING("Remote iframe not rendered");
+    }
     return nullptr;
   }
 
@@ -626,7 +609,7 @@ RenderFrameParent::GetTextureFactoryIdentifier(TextureFactoryIdentifier* aTextur
 }
 
 void
-RenderFrameParent::TakeFocusForClick()
+RenderFrameParent::TakeFocusForClickFromTap()
 {
   nsIFocusManager* fm = nsFocusManager::GetFocusManager();
   if (!fm) {
@@ -641,6 +624,7 @@ RenderFrameParent::TakeFocusForClick()
     return;
   }
   fm->SetFocus(element, nsIFocusManager::FLAG_BYMOUSE |
+                        nsIFocusManager::FLAG_BYTOUCH |
                         nsIFocusManager::FLAG_NOSCROLL);
 }
 

@@ -58,6 +58,7 @@ JSFunction::AutoParseUsingFunctionBox::AutoParseUsingFunctionBox(ExclusiveContex
     fun_->setFunctionBox(funbox);
     funbox->computeAllowSyntax(fun_);
     funbox->computeInWith(fun_);
+    funbox->computeThisBinding(fun_);
 }
 
 JSFunction::AutoParseUsingFunctionBox::~AutoParseUsingFunctionBox()
@@ -131,6 +132,44 @@ SharedContext::computeAllowSyntax(JSObject* staticScope)
             break;
         }
     }
+}
+
+void
+SharedContext::computeThisBinding(JSObject* staticScope)
+{
+    for (StaticScopeIter<CanGC> it(context, staticScope); !it.done(); it++) {
+        if (it.type() == StaticScopeIter<CanGC>::Module) {
+            thisBinding_ = ThisBinding::Module;
+            return;
+        }
+
+        if (it.type() == StaticScopeIter<CanGC>::Function) {
+            // Arrow functions and generator expression lambdas don't have
+            // their own `this` binding.
+            if (it.fun().isArrow())
+                continue;
+            bool isDerived;
+            if (it.maybeFunctionBox()) {
+                if (it.maybeFunctionBox()->inGenexpLambda)
+                    continue;
+                isDerived = it.maybeFunctionBox()->isDerivedClassConstructor();
+            } else {
+                if (it.fun().nonLazyScript()->isGeneratorExp())
+                    continue;
+                isDerived = it.fun().isDerivedClassConstructor();
+            }
+
+            // Derived class constructors (including nested arrow functions and
+            // eval) need TDZ checks when accessing |this|.
+            if (isDerived)
+                needsThisTDZChecks_ = true;
+
+            thisBinding_ = ThisBinding::Function;
+            return;
+        }
+    }
+
+    thisBinding_ = ThisBinding::Global;
 }
 
 void
@@ -224,7 +263,7 @@ ParseContext<FullParseHandler>::define(TokenStream& ts,
     switch (kind) {
       case Definition::ARG:
         MOZ_ASSERT(sc->isFunctionBox());
-        dn->setOp((js_CodeSpec[dn->getOp()].format & JOF_SET) ? JSOP_SETARG : JSOP_GETARG);
+        dn->setOp((CodeSpec[dn->getOp()].format & JOF_SET) ? JSOP_SETARG : JSOP_GETARG);
         dn->pn_blockid = bodyid;
         dn->pn_dflags |= PND_BOUND;
         if (!dn->pn_scopecoord.setSlot(ts, args_.length()))
@@ -255,7 +294,7 @@ ParseContext<FullParseHandler>::define(TokenStream& ts,
         // and non-deoptimized (e.g., inside a with scope) vars live in frame
         // or CallObject slots.
         if (!sc->isGlobalContext() && !dn->isDeoptimized()) {
-            dn->setOp((js_CodeSpec[dn->getOp()].format & JOF_SET) ? JSOP_SETLOCAL : JSOP_GETLOCAL);
+            dn->setOp((CodeSpec[dn->getOp()].format & JOF_SET) ? JSOP_SETLOCAL : JSOP_GETLOCAL);
             dn->pn_dflags |= PND_BOUND;
             if (!dn->pn_scopecoord.setSlot(ts, vars_.length() - 1))
                 return false;
@@ -766,7 +805,9 @@ ModuleBox::ModuleBox(ExclusiveContext* cx, ObjectBox* traceListHead, ModuleObjec
     SharedContext(cx, Directives(true), false),
     bindings(),
     exportNames(cx)
-{}
+{
+    computeThisBinding(staticScope());
+}
 
 template <typename ParseHandler>
 ModuleBox*
@@ -1015,6 +1056,59 @@ Parser<FullParseHandler>::globalBody()
         return nullptr;
 
     return body;
+}
+
+template <typename ParseHandler>
+typename ParseHandler::Node
+Parser<ParseHandler>::newThisName()
+{
+    Node thisName = newName(context->names().dotThis);
+    if (!thisName)
+        return null();
+    if (!noteNameUse(context->names().dotThis, thisName))
+        return null();
+    return thisName;
+}
+
+template <>
+bool
+Parser<FullParseHandler>::defineFunctionThis()
+{
+    HandlePropertyName dotThis = context->names().dotThis;
+
+    // Create a declaration for '.this' if there are any unbound uses in the
+    // function body.
+    for (AtomDefnRange r = pc->lexdeps->all(); !r.empty(); r.popFront()) {
+        if (r.front().key() == dotThis) {
+            Definition* dn = r.front().value().get<FullParseHandler>();
+            MOZ_ASSERT(dn->isPlaceholder());
+            pc->sc->asFunctionBox()->setHasThisBinding();
+            return pc->define(tokenStream, dotThis, dn, Definition::VAR);
+        }
+    }
+
+    // Also define a this-binding if direct eval is used, in derived class
+    // constructors (JSOP_CHECKRETURN relies on it) or if there's a debugger
+    // statement.
+    if (pc->sc->hasDirectEval() ||
+        pc->sc->asFunctionBox()->isDerivedClassConstructor() ||
+        pc->sc->hasDebuggerStatement())
+    {
+        ParseNode* pn = newName(dotThis);
+        if (!pn)
+            return false;
+        pc->sc->asFunctionBox()->setHasThisBinding();
+        return pc->define(tokenStream, dotThis, pn, Definition::VAR);
+    }
+
+    return true;
+}
+
+template <>
+bool
+Parser<SyntaxParseHandler>::defineFunctionThis()
+{
+    return true;
 }
 
 template <>
@@ -1284,9 +1378,11 @@ Parser<ParseHandler>::functionBody(InHandling inHandling, YieldHandling yieldHan
     }
 
     if (kind != Arrow) {
-        // Define the 'arguments' binding if necessary. Arrow functions
-        // don't have 'arguments'.
+        // Define the 'arguments' and 'this' bindings if necessary. Arrow
+        // functions don't have these bindings.
         if (!checkFunctionArguments())
+            return null();
+        if (!defineFunctionThis())
             return null();
     }
 
@@ -1356,7 +1452,7 @@ Parser<FullParseHandler>::makeDefIntoUse(Definition* dn, ParseNode* pn, HandleAt
     MOZ_ASSERT(dn->isKind(PNK_NAME));
     MOZ_ASSERT(dn->isArity(PN_NAME));
     MOZ_ASSERT(dn->pn_atom == atom);
-    dn->setOp((js_CodeSpec[dn->getOp()].format & JOF_SET) ? JSOP_SETNAME : JSOP_GETNAME);
+    dn->setOp((CodeSpec[dn->getOp()].format & JOF_SET) ? JSOP_SETNAME : JSOP_GETNAME);
     dn->setDefn(false);
     dn->setUsed(true);
     dn->pn_lexdef = (Definition*) pn;
@@ -4063,7 +4159,8 @@ Parser<FullParseHandler>::pushLetScope(HandleStaticBlockObject blockObj, AutoPus
 
 template <>
 SyntaxParseHandler::Node
-Parser<SyntaxParseHandler>::pushLetScope(HandleStaticBlockObject blockObj, AutoPushStmtInfoPC& stmt)
+Parser<SyntaxParseHandler>::pushLetScope(HandleStaticBlockObject blockObj,
+                                         AutoPushStmtInfoPC& stmt)
 {
     JS_ALWAYS_FALSE(abortIfSyntaxParser());
     return SyntaxParseHandler::NodeFailure;
@@ -4591,9 +4688,21 @@ Parser<FullParseHandler>::namedImportsOrNamespaceImport(TokenKind tt, Node impor
         if (!importName)
             return null();
 
-        Node bindingName = newBoundImportForCurrentName();
+        Node bindingName = newName(tokenStream.currentName());
         if (!bindingName)
-            return false;
+            return null();
+
+        // Namespace imports are are not indirect bindings but lexical
+        // definitions that hold a module namespace object. They are treated as
+        // const variables which are initialized during the
+        // ModuleDeclarationInstantiation step. Thus we don't set the PND_IMPORT
+        // flag on the definition.
+        bindingName->pn_dflags |= PND_CONST;
+        BindData<FullParseHandler> data(context);
+        data.initLexical(HoistVars, JSOP_DEFLET, nullptr, JSMSG_TOO_MANY_LOCALS);
+        handler.setPosition(bindingName, pos());
+        if (!bindUninitialized(&data, bindingName))
+            return null();
 
         Node importSpec = handler.newBinary(PNK_IMPORT_SPEC, importName, bindingName);
         if (!importSpec)
@@ -5187,19 +5296,37 @@ Parser<FullParseHandler>::forStatement(YieldHandling yieldHandling)
 
     MUST_MATCH_TOKEN(TOK_LP, JSMSG_PAREN_AFTER_FOR);
 
-    /*
-     * True if we have 'for (var/let/const ...)'.
-     */
+    // True if we have 'for (var/let/const ...)'.
     bool isForDecl = false;
+
+    // The next three variables are used to implement `for (let/const ...)`.
+    //
+    // We generate an implicit block, wrapping the whole loop, to store loop
+    // variables declared this way. Note that if the loop uses `for (var...)`
+    // instead, those variables go on some existing enclosing scope, so no
+    // implicit block scope is created.
+    //
+    // All three variables remain null/none if the loop is any other form.
+    //
+    // blockObj is the static block object for the implicit block scope.
+    RootedStaticBlockObject blockObj(context);
+
+    // letStmt is the BLOCK StmtInfo for the implicit block.
+    //
+    // Caution: `letStmt.emplace()` creates some Rooted objects. Rooteds must
+    // be created/destroyed in FIFO order. Therefore adding a Rooted in this
+    // function, between this point and the .emplace() call below, would trip
+    // assertions.
+    Maybe<AutoPushStmtInfoPC> letStmt;
+
+    // The PNK_LEXICALSCOPE node containing blockObj's ObjectBox.
+    ParseNode* forLetImpliedBlock = nullptr;
 
     // True if a 'let' token at the head is parsed as an identifier instead of
     // as starting a declaration.
     bool letIsIdentifier = false;
 
-    /* Non-null when isForDecl is true for a 'for (let ...)' statement. */
-    RootedStaticBlockObject blockObj(context);
-
-    /* Set to 'x' in 'for (x ;... ;...)' or 'for (x in ...)'. */
+    // Set to 'x' in 'for (x; ...; ...)' or 'for (x in ...)'.
     ParseNode* pn1;
 
     TokenStream::Modifier modifier = TokenStream::Operand;
@@ -5243,15 +5370,22 @@ Parser<FullParseHandler>::forStatement(YieldHandling yieldHandling)
                 if (parseDecl) {
                     bool constDecl = tt == TOK_CONST;
                     isForDecl = true;
-                    blockObj = StaticBlockObject::create(context);
-                    if (!blockObj)
-                        return null();
 
                     // Initialize the enclosing scope manually for the call to
                     // |variables| below.
+                    blockObj = StaticBlockObject::create(context);
+                    if (!blockObj)
+                        return null();
                     blockObj->initEnclosingScopeFromParser(pc->innermostStaticScope());
+                    letStmt.emplace(*this, StmtType::BLOCK);
+                    forLetImpliedBlock = pushLetScope(blockObj, *letStmt);
+                    if (!forLetImpliedBlock)
+                        return null();
+                    (*letStmt)->isForLetBlock = true;
+
+                    MOZ_ASSERT(CurrentLexicalStaticBlock(pc) == blockObj);
                     pn1 = variables(yieldHandling, constDecl ? PNK_CONST : PNK_LET, InForInit,
-                                    nullptr, blockObj, DontHoistVars);
+                                    nullptr, blockObj, HoistVars);
                 } else {
                     pn1 = expr(InProhibited, yieldHandling, TripledotProhibited);
                 }
@@ -5269,60 +5403,10 @@ Parser<FullParseHandler>::forStatement(YieldHandling yieldHandling)
     }
 
     MOZ_ASSERT_IF(isForDecl, pn1->isArity(PN_LIST));
-    MOZ_ASSERT(!!blockObj == (isForDecl && (pn1->isOp(JSOP_DEFLET) || pn1->isOp(JSOP_DEFCONST))));
-
-    // If the head of a for-loop declares any lexical variables, we generate an
-    // implicit block to store them. We implement this by desugaring. These:
-    //
-    //     for (let/const <bindings>; <test>; <update>) <stmt>
-    //     for (let <pattern> in <expr>) <stmt>
-    //     for (let <pattern> of <expr>) <stmt>
-    //
-    // transform into roughly the same parse trees as these (using deprecated
-    // let-block syntax):
-    //
-    //     let (<bindings>) { for (; <test>; <update>) <stmt> }
-    //     let (<pattern>) { for (<pattern> in <expr>) <stmt> }
-    //     let (<pattern>) { for (<pattern> of <expr>) <stmt> }
-    //
-    // This desugaring is not ES6 compliant. Initializers in the head of a
-    // let-block are evaluated *outside* the scope of the variables being
-    // initialized. ES6 mandates that they be evaluated in the same scope,
-    // triggering used-before-initialization temporal dead zone errors as
-    // necessary. See bug 1216623 on scoping and bug 1069480 on TDZ.
-    //
-    // Additionally, in ES6, each iteration of a for-loop creates a fresh
-    // binding of the loop variables. For example:
-    //
-    //     var funcs = [];
-    //     for (let i = 0; i < 2; i++)
-    //         funcs.push(function() { return i; });
-    //     assertEq(funcs[0](), 0);  // the two closures capture...
-    //     assertEq(funcs[1](), 1);  // ...two different `i` bindings
-    //
-    // These semantics are implemented by "freshening" the implicit block --
-    // changing the scope chain to a fresh clone of the instantaneous block
-    // object -- each iteration, just before evaluating the "update" in
-    // for(;;) loops. We don't implement this freshening for for-in/of loops
-    // yet: bug 449811.
-    //
-    // No freshening occurs in `for (const ...;;)` as there's no point: you
-    // can't reassign consts. This is observable through the Debugger API. (The
-    // ES6 spec also skips cloning the environment in this case.)
-    //
-    // If the for-loop head includes a lexical declaration, then we create an
-    // implicit block scope, and:
-    //
-    //   * forLetImpliedBlock is the node for the implicit block scope.
-    //   * forLetDecl is the node for the decl 'let/const <pattern>'.
-    //
-    // Otherwise both are null.
-    ParseNode* forLetImpliedBlock = nullptr;
-    ParseNode* forLetDecl = nullptr;
+    MOZ_ASSERT(letStmt.isSome() == (isForDecl && (pn1->isOp(JSOP_DEFLET) || pn1->isOp(JSOP_DEFCONST))));
 
     // If there's an |in| keyword here, it's a for-in loop, by dint of careful
     // parsing of |pn1|.
-    Maybe<AutoPushStmtInfoPC> letStmt; /* used if blockObj != nullptr. */
     ParseNode* pn2;      /* forHead->pn_kid2 */
     ParseNode* pn3;      /* forHead->pn_kid3 */
     ParseNodeKind headKind = PNK_FORHEAD;
@@ -5393,7 +5477,7 @@ Parser<FullParseHandler>::forStatement(YieldHandling yieldHandling)
             }
         } else {
             /* Not a declaration. */
-            MOZ_ASSERT(!blockObj);
+            MOZ_ASSERT(!letStmt);
             pn2 = pn1;
             pn1 = nullptr;
 
@@ -5408,27 +5492,10 @@ Parser<FullParseHandler>::forStatement(YieldHandling yieldHandling)
             return null();
         modifier = TokenStream::None;
 
-        if (blockObj) {
-            /*
-             * Now that the pn3 has been parsed, push the let scope. To hold
-             * the blockObj for the emitter, wrap the PNK_LEXICALSCOPE node
-             * created by pushLetScope around the for's initializer. This also
-             * serves to indicate the let-decl to the emitter.
-             */
-            letStmt.emplace(*this, StmtType::BLOCK);
-            ParseNode* block = pushLetScope(blockObj, *letStmt);
-            if (!block)
-                return null();
-            (*letStmt)->isForLetBlock = true;
-            block->pn_expr = pn1;
-            block->pn_pos = pn1->pn_pos;
-            pn1 = block;
-        }
-
         if (isForDecl) {
             /*
              * pn2 is part of a declaration. Make a copy that can be passed to
-             * EmitAssignment. Take care to do this after pushLetScope.
+             * BytecodeEmitter::emitAssignment.
              */
             pn2 = cloneLeftHandSide(pn2);
             if (!pn2)
@@ -5450,46 +5517,12 @@ Parser<FullParseHandler>::forStatement(YieldHandling yieldHandling)
 
         MOZ_ASSERT(headKind == PNK_FORHEAD);
 
-        if (blockObj) {
+        if (letStmt) {
             // Ensure here that the previously-unchecked assignment mandate for
             // const declarations holds.
             if (!checkForHeadConstInitializers(pn1)) {
                 report(ParseError, false, nullptr, JSMSG_BAD_CONST_DECL);
                 return null();
-            }
-
-            // Desugar
-            //
-            //   for (let INIT; TEST; UPDATE) STMT
-            //
-            // into
-            //
-            //   let (INIT) { for (; TEST; UPDATE) STMT }
-            //
-            // to provide a block scope for INIT.
-            letStmt.emplace(*this, StmtType::BLOCK);
-            forLetImpliedBlock = pushLetScope(blockObj, *letStmt);
-            if (!forLetImpliedBlock)
-                return null();
-            (*letStmt)->isForLetBlock = true;
-
-            forLetDecl = pn1;
-
-            // The above transformation isn't enough to implement |INIT|
-            // scoping, because each loop iteration must see separate bindings
-            // of |INIT|.  We handle this by replacing the block on the scope
-            // chain with a new block, copying the old one's contents, each
-            // iteration.  We supply a special PNK_FRESHENBLOCK node as the
-            // |let INIT| node for |for(let INIT;;)| loop heads to distinguish
-            // such nodes from *actual*, non-desugared use of the above syntax.
-            // (We don't do this for PNK_CONST nodes because the spec says no
-            // freshening happens -- observable with the Debugger API.)
-            if (pn1->isKind(PNK_CONST)) {
-                pn1 = nullptr;
-            } else {
-                pn1 = handler.newFreshenBlock(pn1->pn_pos);
-                if (!pn1)
-                    return null();
             }
         }
 
@@ -5542,7 +5575,7 @@ Parser<FullParseHandler>::forStatement(YieldHandling yieldHandling)
     if (forLetImpliedBlock) {
         forLetImpliedBlock->pn_expr = forLoop;
         forLetImpliedBlock->pn_pos = forLoop->pn_pos;
-        return handler.newLetBlock(forLetDecl, forLetImpliedBlock, forLoop->pn_pos);
+        return forLetImpliedBlock;
     }
     return forLoop;
 }
@@ -7708,6 +7741,7 @@ LegacyCompExprTransplanter::transplant(ParseNode* pn)
                 if (pc->sc->isDotVariable(atom)) {
                     if (dn->dn_uses == pn)
                         adjustBlockId(dn);
+                    dn->pn_dflags |= PND_CLOSED;
                 } else if (dn->pn_pos < root->pn_pos) {
                     /*
                      * The variable originally appeared to be a use of a
@@ -8131,6 +8165,8 @@ Parser<ParseHandler>::generatorComprehensionLambda(GeneratorKind comprehensionKi
     if (!genFunbox)
         return null();
 
+    genFunbox->inGenexpLambda = true;
+
     ParseContext<ParseHandler> genpc(this, outerpc, genfn, genFunbox,
                                      /* newDirectives = */ nullptr);
     if (!genpc.init(*this))
@@ -8147,7 +8183,6 @@ Parser<ParseHandler>::generatorComprehensionLambda(GeneratorKind comprehensionKi
         genFunbox->funCxFlags = outerpc->sc->asFunctionBox()->funCxFlags;
 
     MOZ_ASSERT(genFunbox->generatorKind() == comprehensionKind);
-    genFunbox->inGenexpLambda = true;
     handler.setBlockId(genfn, genpc.bodyid);
 
     Node generator = newName(context->names().dotGenerator);
@@ -8293,6 +8328,7 @@ Parser<ParseHandler>::comprehensionFor(GeneratorKind comprehensionKind)
     RootedStaticBlockObject blockObj(context, StaticBlockObject::create(context));
     if (!blockObj)
         return null();
+
     // Initialize the enclosing scope manually for the call to |bind|
     // below, which is before the call to |pushLetScope|.
     blockObj->initEnclosingScopeFromParser(pc->innermostStaticScope());
@@ -8620,7 +8656,10 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TripledotHandling 
             }
         }
     } else if (tt == TOK_SUPER) {
-        lhs = handler.newSuperBase(pos(), context);
+        Node thisName = newThisName();
+        if (!thisName)
+            return null();
+        lhs = handler.newSuperBase(thisName, pos());
         if (!lhs)
             return null();
     } else {
@@ -8629,7 +8668,7 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TripledotHandling 
             return null();
     }
 
-    MOZ_ASSERT_IF(handler.isSuperBase(lhs, context), tokenStream.isCurrentTokenType(TOK_SUPER));
+    MOZ_ASSERT_IF(handler.isSuperBase(lhs), tokenStream.isCurrentTokenType(TOK_SUPER));
 
     while (true) {
         if (!tokenStream.getToken(&tt))
@@ -8643,7 +8682,7 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TripledotHandling 
                 return null();
             if (tt == TOK_NAME) {
                 PropertyName* field = tokenStream.currentName();
-                if (handler.isSuperBase(lhs, context) && !checkAndMarkSuperScope()) {
+                if (handler.isSuperBase(lhs) && !checkAndMarkSuperScope()) {
                     report(ParseError, false, null(), JSMSG_BAD_SUPERPROP, "property");
                     return null();
                 }
@@ -8661,7 +8700,7 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TripledotHandling 
 
             MUST_MATCH_TOKEN(TOK_RB, JSMSG_BRACKET_IN_INDEX);
 
-            if (handler.isSuperBase(lhs, context) && !checkAndMarkSuperScope()) {
+            if (handler.isSuperBase(lhs) && !checkAndMarkSuperScope()) {
                     report(ParseError, false, null(), JSMSG_BAD_SUPERPROP, "member");
                     return null();
             }
@@ -8672,7 +8711,7 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TripledotHandling 
                    tt == TOK_TEMPLATE_HEAD ||
                    tt == TOK_NO_SUBS_TEMPLATE)
         {
-            if (handler.isSuperBase(lhs, context)) {
+            if (handler.isSuperBase(lhs)) {
                 if (!pc->sc->isFunctionBox() || !pc->sc->asFunctionBox()->isDerivedClassConstructor()) {
                     report(ParseError, false, null(), JSMSG_BAD_SUPERCALL);
                     return null();
@@ -8697,7 +8736,15 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TripledotHandling 
                 if (isSpread)
                     handler.setOp(nextMember, JSOP_SPREADSUPERCALL);
 
-                return nextMember;
+                Node thisName = newThisName();
+                if (!thisName)
+                    return null();
+                return handler.newSetThis(thisName, nextMember);
+            }
+
+            if (options().selfHostingMode && handler.isPropertyAccess(lhs)) {
+                report(ParseError, false, null(), JSMSG_SELFHOSTED_METHOD_CALL);
+                return null();
             }
 
             nextMember = tt == TOK_LP ? handler.newCall() : handler.newTaggedTemplate();
@@ -8759,7 +8806,7 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TripledotHandling 
             handler.setOp(nextMember, op);
         } else {
             tokenStream.ungetToken();
-            if (handler.isSuperBase(lhs, context))
+            if (handler.isSuperBase(lhs))
                 break;
             return lhs;
         }
@@ -8767,7 +8814,7 @@ Parser<ParseHandler>::memberExpr(YieldHandling yieldHandling, TripledotHandling 
         lhs = nextMember;
     }
 
-    if (handler.isSuperBase(lhs, context)) {
+    if (handler.isSuperBase(lhs)) {
         report(ParseError, false, null(), JSMSG_BAD_SUPER);
         return null();
     }
@@ -9442,10 +9489,17 @@ Parser<ParseHandler>::primaryExpr(YieldHandling yieldHandling, TripledotHandling
         return handler.newBooleanLiteral(true, pos());
       case TOK_FALSE:
         return handler.newBooleanLiteral(false, pos());
-      case TOK_THIS:
+      case TOK_THIS: {
         if (pc->sc->isFunctionBox())
             pc->sc->asFunctionBox()->usesThis = true;
-        return handler.newThisLiteral(pos());
+        Node thisName = null();
+        if (pc->sc->thisBinding() == ThisBinding::Function) {
+            thisName = newThisName();
+            if (!thisName)
+                return null();
+        }
+        return handler.newThisLiteral(pos(), thisName);
+      }
       case TOK_NULL:
         return handler.newNullLiteral(pos());
 

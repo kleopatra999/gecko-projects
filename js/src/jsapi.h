@@ -1102,8 +1102,7 @@ class JS_PUBLIC_API(RuntimeOptions) {
         asyncStack_(true),
         werror_(false),
         strictMode_(false),
-        extraWarnings_(false),
-        noSuchMethod_(false)
+        extraWarnings_(false)
     {
     }
 
@@ -1195,12 +1194,6 @@ class JS_PUBLIC_API(RuntimeOptions) {
         return *this;
     }
 
-    bool noSuchMethod() const { return noSuchMethod_; }
-    RuntimeOptions& setNoSuchMethod(bool flag) {
-        noSuchMethod_ = flag;
-        return *this;
-    }
-
   private:
     bool baseline_ : 1;
     bool ion_ : 1;
@@ -1212,7 +1205,6 @@ class JS_PUBLIC_API(RuntimeOptions) {
     bool werror_ : 1;
     bool strictMode_ : 1;
     bool extraWarnings_ : 1;
-    bool noSuchMethod_ : 1;
 };
 
 JS_PUBLIC_API(RuntimeOptions&)
@@ -1510,6 +1502,13 @@ JS_GetArrayPrototype(JSContext* cx, JS::HandleObject forObj);
  */
 extern JS_PUBLIC_API(JSObject*)
 JS_GetErrorPrototype(JSContext* cx);
+
+/**
+ * Returns the %IteratorPrototype% object that all built-in iterator prototype
+ * chains go through for the global object of the current compartment of cx.
+ */
+extern JS_PUBLIC_API(JSObject*)
+JS_GetIteratorPrototype(JSContext* cx);
 
 extern JS_PUBLIC_API(JSObject*)
 JS_GetGlobalForObject(JSContext* cx, JSObject* obj);
@@ -3575,6 +3574,8 @@ namespace JS {
  *   derived from ReadOnlyCompileOptions, so the compiler accepts it.
  */
 
+enum class AsmJSOption : uint8_t { Enabled, Disabled, DisabledByDebugger };
+
 /**
  * The common base class for the CompileOptions hierarchy.
  *
@@ -3617,7 +3618,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
         strictOption(false),
         extraWarningsOption(false),
         werrorOption(false),
-        asmJSOption(false),
+        asmJSOption(AsmJSOption::Disabled),
         throwOnAsmJSValidationFailureOption(false),
         forceAsync(false),
         installedFile(false),
@@ -3652,7 +3653,7 @@ class JS_FRIEND_API(TransitiveCompileOptions)
     bool strictOption;
     bool extraWarningsOption;
     bool werrorOption;
-    bool asmJSOption;
+    AsmJSOption asmJSOption;
     bool throwOnAsmJSValidationFailureOption;
     bool forceAsync;
     bool installedFile;  // 'true' iff pre-compiling js file in packaged app
@@ -5493,6 +5494,25 @@ SetOutOfMemoryCallback(JSRuntime* rt, OutOfMemoryCallback cb, void* data);
  */
 extern JS_PUBLIC_API(bool)
 CaptureCurrentStack(JSContext* cx, MutableHandleObject stackp, unsigned maxFrameCount = 0);
+
+/*
+ * This is a utility function for preparing an async stack to be used
+ * by some other object.  This may be used when you need to treat a
+ * given stack trace as an async parent.  If you just need to capture
+ * the current stack, async parents and all, use CaptureCurrentStack
+ * instead.
+ *
+ * Here |asyncStack| is the async stack to prepare.  It is copied into
+ * |cx|'s current compartment, and the newest frame is given
+ * |asyncCause| as its asynchronous cause.  If |maxFrameCount| is
+ * non-zero, capture at most the youngest |maxFrameCount| frames.  The
+ * new stack object is written to |stackp|.  Returns true on success,
+ * or sets an exception and returns |false| on error.
+ */
+extern JS_PUBLIC_API(bool)
+CopyAsyncStack(JSContext* cx, HandleObject asyncStack,
+               HandleString asyncCause, MutableHandleObject stackp,
+               unsigned maxFrameCount);
 
 /*
  * Accessors for working with SavedFrame JSObjects

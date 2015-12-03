@@ -5,6 +5,7 @@
 
 package org.mozilla.gecko.preferences;
 
+import android.annotation.TargetApi;
 import org.mozilla.gecko.AboutPages;
 import org.mozilla.gecko.AppConstants;
 import org.mozilla.gecko.AppConstants.Versions;
@@ -22,14 +23,14 @@ import org.mozilla.gecko.LocaleManager;
 import org.mozilla.gecko.Locales;
 import org.mozilla.gecko.PrefsHelper;
 import org.mozilla.gecko.R;
-import org.mozilla.gecko.RestrictedProfiles;
+import org.mozilla.gecko.Restrictions;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.TelemetryContract.Method;
 import org.mozilla.gecko.background.common.GlobalConstants;
 import org.mozilla.gecko.background.healthreport.HealthReportConstants;
 import org.mozilla.gecko.db.BrowserContract.SuggestedSites;
-import org.mozilla.gecko.restrictions.Restriction;
+import org.mozilla.gecko.restrictions.Restrictable;
 import org.mozilla.gecko.tabqueue.TabQueueHelper;
 import org.mozilla.gecko.updater.UpdateService;
 import org.mozilla.gecko.updater.UpdateServiceHelper;
@@ -78,7 +79,6 @@ import android.widget.ListAdapter;
 import android.widget.ListView;
 import android.widget.Toast;
 import org.json.JSONObject;
-
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -109,7 +109,7 @@ OnSharedPreferenceChangeListener
     private static boolean sIsCharEncodingEnabled;
     private boolean mInitialized;
     private int mPrefsRequestId;
-    private PanelsPreferenceCategory mPanelsPreferenceCategory;
+    private List<Header> mHeaders;
 
     // These match keys in resources/xml*/preferences*.xml
     private static final String PREFS_SEARCH_RESTORE_DEFAULTS = NON_PREF_PREFIX + "search.restore_defaults";
@@ -126,20 +126,22 @@ OnSharedPreferenceChangeListener
     private static final String PREFS_HEALTHREPORT_LINK = NON_PREF_PREFIX + "healthreport.link";
     private static final String PREFS_DEVTOOLS_REMOTE_USB_ENABLED = "devtools.remote.usb.enabled";
     private static final String PREFS_DEVTOOLS_REMOTE_WIFI_ENABLED = "devtools.remote.wifi.enabled";
-    private static final String PREFS_DISPLAY_TITLEBAR_MODE = "browser.chrome.titlebarMode";
+    private static final String PREFS_DEVTOOLS_REMOTE_LINK = NON_PREF_PREFIX + "remote_debugging.link";
     private static final String PREFS_SYNC = NON_PREF_PREFIX + "sync";
     private static final String PREFS_TRACKING_PROTECTION = "privacy.trackingprotection.state";
     private static final String PREFS_TRACKING_PROTECTION_PB = "privacy.trackingprotection.pbmode.enabled";
     public static final String PREFS_OPEN_URLS_IN_PRIVATE = NON_PREF_PREFIX + "openExternalURLsPrivately";
     public static final String PREFS_VOICE_INPUT_ENABLED = NON_PREF_PREFIX + "voice_input_enabled";
     public static final String PREFS_QRCODE_ENABLED = NON_PREF_PREFIX + "qrcode_enabled";
-    private static final String PREFS_DEVTOOLS = NON_PREF_PREFIX + "devtools.enabled";
-    private static final String PREFS_DISPLAY = NON_PREF_PREFIX + "display.enabled";
+    private static final String PREFS_ADVANCED = NON_PREF_PREFIX + "advanced.enabled";
+    private static final String PREFS_ACCESSIBILITY = NON_PREF_PREFIX + "accessibility.enabled";
     private static final String PREFS_CUSTOMIZE_HOME = NON_PREF_PREFIX + "customize_home";
-    private static final String PREFS_CUSTOMIZE_IMAGE_BLOCKING = "browser.image_blocking.enabled";
+    private static final String PREFS_CUSTOMIZE_IMAGE_BLOCKING = "browser.image_blocking";
     private static final String PREFS_TRACKING_PROTECTION_PRIVATE_BROWSING = "privacy.trackingprotection.pbmode.enabled";
     private static final String PREFS_TRACKING_PROTECTION_LEARN_MORE = NON_PREF_PREFIX + "trackingprotection.learn_more";
-    private static final String PREFS_CATEGORY_PRIVATE_DATA = NON_PREF_PREFIX + "category_private_data";
+    private static final String PREFS_CLEAR_PRIVATE_DATA = NON_PREF_PREFIX + "privacy.clear";
+    private static final String PREFS_CLEAR_PRIVATE_DATA_EXIT = NON_PREF_PREFIX + "history.clear_on_exit";
+    private static final String PREFS_SCREEN_ADVANCED = NON_PREF_PREFIX + "advanced_screen";
     private static final String PREFS_CATEGORY_HOMEPAGE = NON_PREF_PREFIX + "category_homepage";
     public static final String PREFS_HOMEPAGE = NON_PREF_PREFIX + "homepage";
     public static final String PREFS_HISTORY_SAVED_SEARCH = NON_PREF_PREFIX + "search.search_history.enabled";
@@ -154,7 +156,6 @@ OnSharedPreferenceChangeListener
     public static final String PREFS_RESTORE_SESSION = NON_PREF_PREFIX + "restoreSession3";
     public static final String PREFS_SUGGESTED_SITES = NON_PREF_PREFIX + "home_suggested_sites";
     public static final String PREFS_TAB_QUEUE = NON_PREF_PREFIX + "tab_queue";
-    public static final String PREFS_CUSTOMIZE_SCREEN = NON_PREF_PREFIX + "customize_screen";
     public static final String PREFS_TAB_QUEUE_LAST_SITE = NON_PREF_PREFIX + "last_site";
     public static final String PREFS_TAB_QUEUE_LAST_TIME = NON_PREF_PREFIX + "last_time";
 
@@ -200,44 +201,10 @@ OnSharedPreferenceChangeListener
         }
     }
 
-    private void updateTitle(String newTitle) {
-        if (newTitle != null) {
-            Log.v(LOGTAG, "Setting activity title to " + newTitle);
-            setTitle(newTitle);
-        }
-    }
-
-    private void updateTitle(int title) {
-        updateTitle(getString(title));
-    }
-
     /**
-     * This updates the title shown above the prefs fragment in
-     * a multi-pane view.
+     * We only call this method for pre-HC versions of Android.
      */
-    private void updateBreadcrumbTitle(int title) {
-        final String newTitle = getString(title);
-        showBreadCrumbs(newTitle, newTitle);
-    }
-
     private void updateTitleForPrefsResource(int res) {
-        // If we're a multi-pane view, the activity title is really
-        // the header bar above the fragment.
-        // Find out which fragment we're showing, and use that.
-        if (Versions.feature11Plus && isMultiPane()) {
-            int title = getIntent().getIntExtra(EXTRA_SHOW_FRAGMENT_TITLE, -1);
-            if (res == R.xml.preferences) {
-                // This should only occur when res == R.xml.preferences,
-                // but showing "Settings" is better than crashing or showing
-                // "Fennec".
-                updateActionBarTitle(R.string.settings_title);
-            }
-
-            updateTitle(title);
-            updateBreadcrumbTitle(title);
-            return;
-        }
-
         // At present we only need to do this for non-leaf prefs views
         // and the locale switcher itself.
         int title = -1;
@@ -247,13 +214,13 @@ OnSharedPreferenceChangeListener
             title = R.string.pref_category_language;
         } else if (res == R.xml.preferences_vendor) {
             title = R.string.pref_category_vendor;
-        } else if (res == R.xml.preferences_customize) {
-            title = R.string.pref_category_customize;
+        } else if (res == R.xml.preferences_general) {
+            title = R.string.pref_category_general;
         } else if (res == R.xml.preferences_search) {
             title = R.string.pref_category_search;
         }
         if (title != -1) {
-            updateTitle(title);
+            setTitle(title);
         }
     }
 
@@ -289,8 +256,8 @@ OnSharedPreferenceChangeListener
                 updateActionBarTitle(R.string.settings_title);
             }
 
-            updateTitle(R.string.pref_header_language);
-            updateBreadcrumbTitle(R.string.pref_header_language);
+            // Update the title to for the preference pane that we're currently showing.
+            setTitle(R.string.pref_category_language);
 
             // Don't finish the activity -- we just reloaded all of the
             // individual parts! -- but when it returns, make sure that the
@@ -344,7 +311,7 @@ OnSharedPreferenceChangeListener
 
                 // This is the default header, because it's the first one.
                 // I know, this is an affront to all human decency. And yet.
-                updateTitle(getString(R.string.pref_header_customize));
+                setTitle(R.string.pref_header_general);
             }
 
             if (onIsMultiPane()) {
@@ -472,7 +439,7 @@ OnSharedPreferenceChangeListener
             if (!onIsMultiPane()) {
                 fragmentArgs.putString(INTENT_EXTRA_RESOURCES, "preferences");
             } else {
-                fragmentArgs.putString(INTENT_EXTRA_RESOURCES, "preferences_customize_tablet");
+                fragmentArgs.putString(INTENT_EXTRA_RESOURCES, "preferences_general_tablet");
             }
         }
 
@@ -496,16 +463,26 @@ OnSharedPreferenceChangeListener
             while (iterator.hasNext()) {
                 Header header = iterator.next();
 
-                if (header.id == R.id.pref_header_language && !localeSwitchingIsEnabled) {
-                    // If locale switching is disabled, remove the section
-                    // entirely. This logic will need to be extended when
-                    // content language selection (Bug 881510) is implemented.
-                    iterator.remove();
-                } else if (header.id == R.id.pref_header_devtools && !RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_DEVELOPER_TOOLS)) {
-                    iterator.remove();
-                } else if (header.id == R.id.pref_header_display && !RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_DISPLAY_SETTINGS)) {
+                if (header.id == R.id.pref_header_advanced && !Restrictions.isAllowed(this, Restrictable.ADVANCED_SETTINGS)) {
                     iterator.remove();
                 }
+            }
+
+            mHeaders = target;
+        }
+    }
+
+    @TargetApi(11)
+    public void switchToHeader(int id) {
+        if (mHeaders == null) {
+            // Can't switch to a header if there are no headers!
+            return;
+        }
+
+        for (Header header : mHeaders) {
+            if (header.id == id) {
+                switchToHeader(header);
+                return;
             }
         }
     }
@@ -695,57 +672,16 @@ OnSharedPreferenceChangeListener
             if (pref instanceof PreferenceGroup) {
                 // If datareporting is disabled, remove UI.
                 if (PREFS_DATA_REPORTING_PREFERENCES.equals(key)) {
-                    if (!AppConstants.MOZ_DATA_REPORTING) {
+                    if (!AppConstants.MOZ_DATA_REPORTING || !Restrictions.isAllowed(this, Restrictable.DATA_CHOICES)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
-                } else if (pref instanceof PanelsPreferenceCategory) {
-                    mPanelsPreferenceCategory = (PanelsPreferenceCategory) pref;
-                }
-                if(TabQueueHelper.TAB_QUEUE_ENABLED && PREFS_CUSTOMIZE_SCREEN.equals(key)) {
-                    pref.setSummary(getString(R.string.pref_category_customize_alt_summary));
-                }
-                if (getResources().getString(R.string.pref_category_input_options).equals(key)) {
-                    if (!InputOptionsUtils.supportsVoiceRecognizer(getApplicationContext(), getResources().getString(R.string.voicesearch_prompt)) &&
-                            !InputOptionsUtils.supportsQrCodeReader(getApplicationContext())) {
-                        preferences.removePreference(pref);
-                        i--;
-                        continue;
-                    }
-                }
-                if (PREFS_DEVTOOLS.equals(key) &&
-                    !RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_DEVELOPER_TOOLS)) {
+                } else if (PREFS_SCREEN_ADVANCED.equals(key) &&
+                        !Restrictions.isAllowed(this, Restrictable.ADVANCED_SETTINGS)) {
                     preferences.removePreference(pref);
                     i--;
                     continue;
-                }
-                if (PREFS_DISPLAY.equals(key) && !RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_DISPLAY_SETTINGS)) {
-                    preferences.removePreference(pref);
-                    i--;
-                    continue;
-                }
-                if (PREFS_CUSTOMIZE_HOME.equals(key)) {
-                    if (!RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_CUSTOMIZE_HOME)) {
-                        preferences.removePreference(pref);
-                        i--;
-                        continue;
-                    }
-                }
-                if (PREFS_CATEGORY_PRIVATE_DATA.equals(key)) {
-                    if (!RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_CLEAR_HISTORY)) {
-                        preferences.removePreference(pref);
-                        i--;
-                        continue;
-                    }
-                }
-                if (PREFS_CATEGORY_HOMEPAGE.equals(key)) {
-                    // Only enable the home page setting on Nightly.
-                    if (!AppConstants.NIGHTLY_BUILD) {
-                        preferences.removePreference(pref);
-                        i--;
-                        continue;
-                    }
                 }
                 setupPreferences((PreferenceGroup) pref, prefs);
             } else {
@@ -756,16 +692,9 @@ OnSharedPreferenceChangeListener
                         i--;
                         continue;
                     }
-                } else if (PREFS_ZOOMED_VIEW_ENABLED.equals(key)) {
-                    // Only enable the ZoomedView / magnifying pref on Nightly.
-                    if (!AppConstants.NIGHTLY_BUILD) {
-                        preferences.removePreference(pref);
-                        i--;
-                        continue;
-                    }
                 } else if (PREFS_OPEN_URLS_IN_PRIVATE.equals(key)) {
                     // Remove UI for opening external links in private browsing on non-Nightly builds.
-                    if (!AppConstants.NIGHTLY_BUILD || !RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_PRIVATE_BROWSING)) {
+                    if (!AppConstants.NIGHTLY_BUILD || !Restrictions.isAllowed(this, Restrictable.PRIVATE_BROWSING)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
@@ -785,39 +714,39 @@ OnSharedPreferenceChangeListener
                         continue;
                     }
                 } else if (PREFS_TELEMETRY_ENABLED.equals(key)) {
-                    if (!AppConstants.MOZ_TELEMETRY_REPORTING) {
+                    if (!AppConstants.MOZ_TELEMETRY_REPORTING || !Restrictions.isAllowed(this, Restrictable.DATA_CHOICES)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
                 } else if (PREFS_HEALTHREPORT_UPLOAD_ENABLED.equals(key) ||
                            PREFS_HEALTHREPORT_LINK.equals(key)) {
-                    if (!AppConstants.MOZ_SERVICES_HEALTHREPORT) {
+                    if (!AppConstants.MOZ_SERVICES_HEALTHREPORT || !Restrictions.isAllowed(this, Restrictable.DATA_CHOICES)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
                 } else if (PREFS_CRASHREPORTER_ENABLED.equals(key)) {
-                    if (!AppConstants.MOZ_CRASHREPORTER) {
+                    if (!AppConstants.MOZ_CRASHREPORTER || !Restrictions.isAllowed(this, Restrictable.DATA_CHOICES)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
                 } else if (PREFS_GEO_REPORTING.equals(key) ||
                            PREFS_GEO_LEARN_MORE.equals(key)) {
-                    if (!AppConstants.MOZ_STUMBLER_BUILD_TIME_ENABLED || !RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_LOCATION_SERVICE)) {
+                    if (!AppConstants.MOZ_STUMBLER_BUILD_TIME_ENABLED || !Restrictions.isAllowed(this, Restrictable.DATA_CHOICES)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
                 } else if (PREFS_DEVTOOLS_REMOTE_USB_ENABLED.equals(key)) {
-                    if (!RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_REMOTE_DEBUGGING)) {
+                    if (!Restrictions.isAllowed(this, Restrictable.REMOTE_DEBUGGING)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
                 } else if (PREFS_DEVTOOLS_REMOTE_WIFI_ENABLED.equals(key)) {
-                    if (!RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_REMOTE_DEBUGGING)) {
+                    if (!Restrictions.isAllowed(this, Restrictable.REMOTE_DEBUGGING)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
@@ -826,6 +755,13 @@ OnSharedPreferenceChangeListener
                         // WiFi debugging requires a QR code reader
                         pref.setEnabled(false);
                         pref.setSummary(getString(R.string.pref_developer_remotedebugging_wifi_disabled_summary));
+                        continue;
+                    }
+                } else if (PREFS_DEVTOOLS_REMOTE_LINK.equals(key)) {
+                    // Remove the "Learn more" link if remote debugging is disabled
+                    if (!Restrictions.isAllowed(this, Restrictable.REMOTE_DEBUGGING)) {
+                        preferences.removePreference(pref);
+                        i--;
                         continue;
                     }
                 } else if (PREFS_RESTORE_SESSION.equals(key) ||
@@ -840,7 +776,7 @@ OnSharedPreferenceChangeListener
                     continue;
                 } else if (PREFS_SYNC.equals(key)) {
                     // Don't show sync prefs while in guest mode.
-                    if (!RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_MODIFY_ACCOUNTS)) {
+                    if (!Restrictions.isAllowed(this, Restrictable.MODIFY_ACCOUNTS)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
@@ -854,20 +790,6 @@ OnSharedPreferenceChangeListener
                             return true;
                         }
                     });
-                } else if (PREFS_DISPLAY_TITLEBAR_MODE.equals(key)) {
-                    if (HardwareUtils.isTablet()) {
-                        // New tablet always shows URLS, not titles.
-                        preferences.removePreference(pref);
-                        i--;
-                        continue;
-                    }
-                } else if (handlers.containsKey(key)) {
-                    PrefHandler handler = handlers.get(key);
-                    if (!handler.setupPref(this, pref)) {
-                        preferences.removePreference(pref);
-                        i--;
-                        continue;
-                    }
                 } else if (PREFS_TAB_QUEUE.equals(key)) {
                     // Only show tab queue pref on nightly builds with the tab queue build flag.
                     if (!TabQueueHelper.TAB_QUEUE_ENABLED) {
@@ -890,40 +812,39 @@ OnSharedPreferenceChangeListener
                         continue;
                     }
                 } else if (PREFS_TRACKING_PROTECTION_PRIVATE_BROWSING.equals(key)) {
-                    if (!RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_PRIVATE_BROWSING)) {
+                    if (!Restrictions.isAllowed(this, Restrictable.PRIVATE_BROWSING)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
                 } else if (PREFS_TRACKING_PROTECTION_LEARN_MORE.equals(key)) {
-                    if (!RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_PRIVATE_BROWSING)) {
+                    if (!Restrictions.isAllowed(this, Restrictable.PRIVATE_BROWSING)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
                 } else if (PREFS_MP_ENABLED.equals(key)) {
-                    if (!RestrictedProfiles.isAllowed(this, Restriction.DISALLOW_MASTER_PASSWORD)) {
+                    if (!Restrictions.isAllowed(this, Restrictable.MASTER_PASSWORD)) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
                 } else if (PREFS_CUSTOMIZE_IMAGE_BLOCKING.equals(key)) {
-                    // Only enable the ZoomedView / magnifying pref on Nightly.
                     if (!AppConstants.NIGHTLY_BUILD) {
                         preferences.removePreference(pref);
                         i--;
                         continue;
                     }
+                } else if (PREFS_CLEAR_PRIVATE_DATA.equals(key) || PREFS_CLEAR_PRIVATE_DATA_EXIT.equals(key)) {
+                    if (!Restrictions.isAllowed(this, Restrictable.CLEAR_HISTORY)) {
+                        preferences.removePreference(pref);
+                        i--;
+                        continue;
+                    }
                 } else if (PREFS_HOMEPAGE.equals(key)) {
-                    String setUrl = GeckoSharedPrefs.forProfile(getBaseContext()).getString(PREFS_HOMEPAGE, AboutPages.HOME);
-                    setHomePageSummary(pref, setUrl);
-                    pref.setOnPreferenceChangeListener(new OnPreferenceChangeListener() {
-                        @Override
-                        public boolean onPreferenceChange(final Preference preference, final Object newValue) {
-                            setHomePageSummary(pref, String.valueOf(newValue));
-                            return true;
-                        }
-                    });
+                        String setUrl = GeckoSharedPrefs.forProfile(getBaseContext()).getString(PREFS_HOMEPAGE, AboutPages.HOME);
+                        setHomePageSummary(pref, setUrl);
+                        pref.setOnPreferenceChangeListener(this);
                 } else if (PREFS_FAQ_LINK.equals(key)) {
                     // Format the FAQ link
                     final String VERSION = AppConstants.MOZ_APP_VERSION;
@@ -932,6 +853,15 @@ OnSharedPreferenceChangeListener
 
                     final String url = getResources().getString(R.string.faq_link, VERSION, OS, LOCALE);
                     ((LinkPreference) pref).setUrl(url);
+                } else if (handlers.containsKey(key)) {
+                    // This should be the last task. We might have removed some of this preferences previously. We only
+                    // want to run the PrefHandler for a preference if it still exists.
+                    PrefHandler handler = handlers.get(key);
+                    if (!handler.setupPref(this, pref)) {
+                        preferences.removePreference(pref);
+                        i--;
+                        continue;
+                    }
                 }
 
                 // Some Preference UI elements are not actually preferences,
@@ -1241,6 +1171,10 @@ OnSharedPreferenceChangeListener
             // We don't want the "use master password" pref to change until the
             // user has gone through the dialog.
             return false;
+        }
+
+        if (PREFS_HOMEPAGE.equals(prefName)) {
+            setHomePageSummary(preference, String.valueOf(newValue));
         }
 
         if (PREFS_BROWSER_LOCALE.equals(prefName)) {

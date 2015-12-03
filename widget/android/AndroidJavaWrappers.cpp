@@ -662,14 +662,14 @@ AndroidGeckoEvent::MakeTouchEvent(nsIWidget* widget)
         LayoutDeviceIntPoint pt(
             (Points()[i].x * scale.scale) - offset.x,
             (Points()[i].y * scale.scale) - offset.y);
-        nsIntPoint radii(
+        LayoutDeviceIntPoint radius(
             PointRadii()[i].x * scale.scale,
             PointRadii()[i].y * scale.scale);
         RefPtr<Touch> t = new Touch(PointIndicies()[i],
-                                      pt,
-                                      radii,
-                                      Orientations()[i],
-                                      Pressures()[i]);
+                                    pt,
+                                    radius,
+                                    Orientations()[i],
+                                    Pressures()[i]);
         event.touches.AppendElement(t);
     }
 
@@ -684,14 +684,29 @@ AndroidGeckoEvent::MakeMultiTouchInput(nsIWidget* widget)
     int endIndex = Count();
 
     switch (Action()) {
+        case AndroidMotionEvent::ACTION_HOVER_ENTER: {
+            if (ToolTypes()[0] == AndroidMotionEvent::TOOL_TYPE_MOUSE) {
+                break;
+            }
+        }
         case AndroidMotionEvent::ACTION_DOWN:
         case AndroidMotionEvent::ACTION_POINTER_DOWN: {
             type = MultiTouchInput::MULTITOUCH_START;
             break;
         }
+        case AndroidMotionEvent::ACTION_HOVER_MOVE: {
+            if (ToolTypes()[0] == AndroidMotionEvent::TOOL_TYPE_MOUSE) {
+                break;
+            }
+        }
         case AndroidMotionEvent::ACTION_MOVE: {
             type = MultiTouchInput::MULTITOUCH_MOVE;
             break;
+        }
+        case AndroidMotionEvent::ACTION_HOVER_EXIT: {
+            if (ToolTypes()[0] == AndroidMotionEvent::TOOL_TYPE_MOUSE) {
+                break;
+            }
         }
         case AndroidMotionEvent::ACTION_UP:
         case AndroidMotionEvent::ACTION_POINTER_UP: {
@@ -717,7 +732,7 @@ AndroidGeckoEvent::MakeMultiTouchInput(nsIWidget* widget)
         return event;
     }
 
-    const nsIntPoint& offset = widget->WidgetToScreenOffsetUntyped();
+    const nsIntPoint& offset = widget->WidgetToScreenOffset().ToUnknownPoint();
     event.mTouches.SetCapacity(endIndex - startIndex);
     for (int i = startIndex; i < endIndex; i++) {
         nsIntPoint point = Points()[i] - offset;

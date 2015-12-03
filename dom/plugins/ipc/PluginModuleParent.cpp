@@ -40,6 +40,7 @@
 #include "GeckoProfiler.h"
 #include "nsPluginTags.h"
 #include "nsUnicharUtils.h"
+#include "mozilla/layers/TextureClientRecycleAllocator.h"
 
 #ifdef XP_WIN
 #include "mozilla/plugins/PluginSurfaceParent.h"
@@ -1945,6 +1946,14 @@ PluginModuleParent::GetImageSize(NPP instance,
     return !i ? NS_ERROR_FAILURE : i->GetImageSize(aSize);
 }
 
+void
+PluginModuleParent::DidComposite(NPP aInstance)
+{
+    if (PluginInstanceParent* i = PluginInstanceParent::Cast(aInstance)) {
+        i->DidComposite();
+    }
+}
+
 nsresult
 PluginModuleParent::SetBackgroundUnknown(NPP instance)
 {
@@ -3016,6 +3025,15 @@ PluginModuleParent::RecvReturnSitesWithData(nsTArray<nsCString>&& aSites,
     return true;
 }
 
+layers::TextureClientRecycleAllocator*
+PluginModuleParent::EnsureTextureAllocator()
+{
+    if (!mTextureAllocator) {
+        mTextureAllocator = new TextureClientRecycleAllocator(ImageBridgeChild::GetSingleton());
+    }
+    return mTextureAllocator;
+}
+
 #ifdef MOZ_CRASHREPORTER_INJECTOR
 
 // We only add the crash reporter to subprocess which have the filename
@@ -3150,7 +3168,15 @@ PluginProfilerObserver::Observe(nsISupports *aSubject,
         params->GetInterval(&interval);
         const nsTArray<nsCString>& features = params->GetFeatures();
         const nsTArray<nsCString>& threadFilterNames = params->GetThreadFilterNames();
-        Unused << mPmp->SendStartProfiler(entries, interval, features, threadFilterNames);
+
+        ProfilerInitParams ipcParams;
+        ipcParams.enabled() = true;
+        ipcParams.entries() = entries;
+        ipcParams.interval() = interval;
+        ipcParams.features() = features;
+        ipcParams.threadFilters() = threadFilterNames;
+
+        Unused << mPmp->SendStartProfiler(ipcParams);
     } else if (!strcmp(aTopic, "profiler-stopped")) {
         Unused << mPmp->SendStopProfiler();
     } else if (!strcmp(aTopic, "profiler-subprocess-gather")) {

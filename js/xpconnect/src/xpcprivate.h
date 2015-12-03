@@ -612,8 +612,6 @@ public:
 
     PRTime GetWatchdogTimestamp(WatchdogTimestampCategory aCategory);
 
-    nsTArray<nsXPCWrappedJS*>& WrappedJSToReleaseArray() { return mWrappedJSToReleaseArray; }
-
 private:
     XPCJSRuntime() = delete;
     explicit XPCJSRuntime(nsXPConnect* aXPConnect);
@@ -639,7 +637,6 @@ private:
     XPCWrappedNativeProtoMap* mDyingWrappedNativeProtoMap;
     XPCWrappedNativeProtoMap* mDetachedWrappedNativeProtoMap;
     bool mGCIsRunning;
-    nsTArray<nsXPCWrappedJS*> mWrappedJSToReleaseArray;
     nsTArray<nsISupports*> mNativesToReleaseArray;
     bool mDoingFinalization;
     XPCRootSetElem* mVariantRoots;
@@ -948,9 +945,6 @@ XPC_WN_CallMethod(JSContext* cx, unsigned argc, JS::Value* vp);
 extern bool
 XPC_WN_GetterSetter(JSContext* cx, unsigned argc, JS::Value* vp);
 
-extern bool
-XPC_WN_JSOp_ThisValue(JSContext* cx, JS::HandleObject obj, JS::MutableHandleValue vp);
-
 // Macros to initialize Object or Function like XPC_WN classes
 #define XPC_WN_WithCall_ObjectOps                                             \
     {                                                                         \
@@ -964,7 +958,6 @@ XPC_WN_JSOp_ThisValue(JSContext* cx, JS::HandleObject obj, JS::MutableHandleValu
         nullptr, nullptr, /* watch/unwatch */                                 \
         nullptr, /* getElements */                                            \
         nullptr, /* enumerate */                                              \
-        XPC_WN_JSOp_ThisValue,                                               \
     }
 
 #define XPC_WN_NoCall_ObjectOps                                               \
@@ -979,7 +972,6 @@ XPC_WN_JSOp_ThisValue(JSContext* cx, JS::HandleObject obj, JS::MutableHandleValu
         nullptr, nullptr, /* watch/unwatch */                                 \
         nullptr, /* getElements */                                            \
         nullptr, /* enumerate */                                              \
-        XPC_WN_JSOp_ThisValue,                                               \
     }
 
 // Maybe this macro should check for class->enumerate ==
@@ -1127,8 +1119,8 @@ public:
     static bool
     IsDyingScope(XPCWrappedNativeScope* scope);
 
-    typedef js::HashSet<JSObject*,
-                        js::PointerHasher<JSObject*, 3>,
+    typedef js::HashSet<JS::Heap<JSObject*>,
+                        js::MovableCellHasher<JS::Heap<JSObject*>>,
                         js::SystemAllocPolicy> DOMExpandoSet;
 
     bool RegisterDOMExpandoObject(JSObject* expando) {
@@ -1138,11 +1130,11 @@ public:
             mDOMExpandoSet = new DOMExpandoSet();
             mDOMExpandoSet->init(8);
         }
-        return mDOMExpandoSet->put(expando);
+        return mDOMExpandoSet->put(JS::Heap<JSObject*>(expando));
     }
     void RemoveDOMExpandoObject(JSObject* expando) {
         if (mDOMExpandoSet) {
-            DOMExpandoSet::Ptr p = mDOMExpandoSet->lookup(expando);
+            DOMExpandoSet::Ptr p = mDOMExpandoSet->lookup(JS::Heap<JSObject*>(expando));
             MOZ_ASSERT(p.found());
             mDOMExpandoSet->remove(p);
         }
@@ -3475,6 +3467,7 @@ public:
         , wantComponents(true)
         , wantExportHelpers(false)
         , isWebExtensionContentScript(false)
+        , waiveInterposition(false)
         , proto(cx)
         , addonId(cx)
         , writeToGlobalPrototype(false)
@@ -3492,6 +3485,7 @@ public:
     bool wantComponents;
     bool wantExportHelpers;
     bool isWebExtensionContentScript;
+    bool waiveInterposition;
     JS::RootedObject proto;
     nsCString sandboxName;
     JS::RootedString addonId;
@@ -3731,6 +3725,11 @@ public:
     // This scope corresponds to a WebExtension content script, and receives
     // various bits of special compatibility behavior.
     bool isWebExtensionContentScript;
+
+    // Even if an add-on needs interposition, it does not necessary need it
+    // for every scope. If this flag is set we waive interposition for this
+    // scope.
+    bool waiveInterposition;
 
     // This is only ever set during mochitest runs when enablePrivilege is called.
     // It's intended as a temporary stopgap measure until we can finish ripping out

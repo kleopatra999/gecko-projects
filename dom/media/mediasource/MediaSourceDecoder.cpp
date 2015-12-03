@@ -17,7 +17,7 @@
 #include "MediaSourceDemuxer.h"
 #include "SourceBufferList.h"
 
-extern PRLogModuleInfo* GetMediaSourceLog();
+extern mozilla::LogModule* GetMediaSourceLog();
 
 #define MSE_DEBUG(arg, ...) MOZ_LOG(GetMediaSourceLog(), mozilla::LogLevel::Debug, ("MediaSourceDecoder(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
 #define MSE_DEBUGV(arg, ...) MOZ_LOG(GetMediaSourceLog(), mozilla::LogLevel::Verbose, ("MediaSourceDecoder(%p)::%s: " arg, this, __func__, ##__VA_ARGS__))
@@ -85,7 +85,8 @@ MediaSourceDecoder::GetSeekable()
   } else if (duration > 0 && mozilla::IsInfinite(duration)) {
     media::TimeIntervals buffered = GetBuffered();
     if (buffered.Length()) {
-      seekable += media::TimeInterval(buffered.GetStart(), buffered.GetEnd());
+      seekable +=
+        media::TimeInterval(media::TimeUnit::FromSeconds(0), buffered.GetEnd());
     }
   } else {
     seekable += media::TimeInterval(media::TimeUnit::FromSeconds(0),
@@ -101,6 +102,10 @@ MediaSourceDecoder::GetBuffered()
   MOZ_ASSERT(NS_IsMainThread());
 
   dom::SourceBufferList* sourceBuffers = mMediaSource->ActiveSourceBuffers();
+  if (!sourceBuffers) {
+    // Media source object is shutting down.
+    return TimeIntervals();
+  }
   media::TimeUnit highestEndTime;
   nsTArray<media::TimeIntervals> activeRanges;
   media::TimeIntervals buffered;

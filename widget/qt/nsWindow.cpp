@@ -133,10 +133,10 @@ nsWindow::~nsWindow()
 }
 
 nsresult
-nsWindow::Create(nsIWidget        *aParent,
-                 nsNativeWidget    aNativeParent,
-                 const nsIntRect  &aRect,
-                 nsWidgetInitData *aInitData)
+nsWindow::Create(nsIWidget* aParent,
+                 nsNativeWidget aNativeParent,
+                 const LayoutDeviceIntRect& aRect,
+                 nsWidgetInitData* aInitData)
 {
     // only set the base parent if we're not going to be a dialog or a
     // toplevel
@@ -151,7 +151,7 @@ nsWindow::Create(nsIWidget        *aParent,
     mParent = (nsWindow *)aParent;
 
     // save our bounds
-    mBounds = aRect;
+    mBounds = aRect.ToUnknownRect();
 
     // find native parent
     MozQWidget *parent = nullptr;
@@ -466,7 +466,8 @@ nsWindow::Resize(double aWidth, double aHeight, bool aRepaint)
     // synthesize a resize event if this isn't a toplevel
     if (mIsTopLevel || mListenForResizes) {
         nsEventStatus status;
-        DispatchResizeEvent(mBounds, status);
+        DispatchResizeEvent(LayoutDeviceIntRect::FromUnknownRect(mBounds),
+                            status);
     }
 
     NotifyRollupGeometryChange();
@@ -529,7 +530,8 @@ nsWindow::Resize(double aX, double aY, double aWidth, double aHeight,
     if (mIsTopLevel || mListenForResizes) {
         // synthesize a resize event
         nsEventStatus status;
-        DispatchResizeEvent(mBounds, status);
+        DispatchResizeEvent(LayoutDeviceIntRect::FromUnknownRect(mBounds),
+                            status);
     }
 
     if (aRepaint) {
@@ -601,11 +603,13 @@ nsWindow::ConfigureChildren(const nsTArray<nsIWidget::Configuration>& aConfigura
         NS_ASSERTION(w->GetParent() == this,
                      "Configured widget is not a child");
 
-        if (w->mBounds.Size() != configuration.mBounds.Size()) {
+        LayoutDeviceIntRect wBounds =
+            LayoutDeviceIntRect::FromUnknownRect(w->mBounds);
+        if (wBounds.Size() != configuration.mBounds.Size()) {
             w->Resize(configuration.mBounds.x, configuration.mBounds.y,
                       configuration.mBounds.width, configuration.mBounds.height,
                       true);
-        } else if (w->mBounds.TopLeft() != configuration.mBounds.TopLeft()) {
+        } else if (wBounds.TopLeft() != configuration.mBounds.TopLeft()) {
             w->Move(configuration.mBounds.x, configuration.mBounds.y);
         }
     }
@@ -613,10 +617,10 @@ nsWindow::ConfigureChildren(const nsTArray<nsIWidget::Configuration>& aConfigura
 }
 
 NS_IMETHODIMP
-nsWindow::Invalidate(const nsIntRect &aRect)
+nsWindow::Invalidate(const LayoutDeviceIntRect& aRect)
 {
     LOGDRAW(("Invalidate (rect) [%p,%p]: %d %d %d %d\n", (void *)this,
-             (void*)mWidget,aRect.x, aRect.y, aRect.width, aRect.height));
+             (void*)mWidget, aRect.x, aRect.y, aRect.width, aRect.height));
 
     if (!mWidget) {
         return NS_OK;
@@ -905,7 +909,7 @@ nsWindow::moveEvent(QMoveEvent* aEvent)
 nsEventStatus
 nsWindow::resizeEvent(QResizeEvent* aEvent)
 {
-    nsIntRect rect;
+    LayoutDeviceIntRect rect;
 
     // Generate XPFE resize event
     GetBounds(rect);
@@ -1366,7 +1370,8 @@ nsWindow::DispatchDeactivateEventOnTopLevelWindow(void)
 }
 
 void
-nsWindow::DispatchResizeEvent(nsIntRect &aRect, nsEventStatus &aStatus)
+nsWindow::DispatchResizeEvent(LayoutDeviceIntRect& aRect,
+                              nsEventStatus& aStatus)
 {
     aStatus = nsEventStatus_eIgnore;
     if (mWidgetListener &&
@@ -1495,15 +1500,15 @@ void find_first_visible_parent(QWindow* aItem, QWindow*& aVisibleItem)
 }
 
 NS_IMETHODIMP
-nsWindow::GetScreenBounds(nsIntRect &aRect)
+nsWindow::GetScreenBounds(LayoutDeviceIntRect& aRect)
 {
-    aRect = gfx::IntRect(gfx::IntPoint(0, 0), mBounds.Size());
+    aRect = LayoutDeviceIntRect(LayoutDeviceIntPoint(0, 0),
+                                LayoutDeviceIntSize::FromUnknownSize(mBounds.Size()));
     if (mIsTopLevel) {
         QPoint pos = mWidget->position();
         aRect.MoveTo(pos.x(), pos.y());
-    }
-    else {
-        aRect.MoveTo(WidgetToScreenOffsetUntyped());
+    } else {
+        aRect.MoveTo(WidgetToScreenOffset());
     }
     LOG(("GetScreenBounds %d %d | %d %d | %d %d\n",
          aRect.x, aRect.y,

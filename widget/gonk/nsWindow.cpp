@@ -286,7 +286,7 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
         if (index >= 0) {
             // found an existing touch point, update it
             SingleTouchData& point = mSynthesizedTouchInput->mTouches[index];
-            point.mScreenPoint = ScreenIntPoint::FromUntyped(aPointerScreenPoint);
+            point.mScreenPoint = ScreenIntPoint::FromUnknownPoint(aPointerScreenPoint);
             point.mRotationAngle = (float)aPointerOrientation;
             point.mForce = (float)aPointerPressure;
             inputToDispatch.mType = MultiTouchInput::MULTITOUCH_MOVE;
@@ -294,7 +294,7 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
             // new touch point, add it
             mSynthesizedTouchInput->mTouches.AppendElement(SingleTouchData(
                 (int32_t)aPointerId,
-                ScreenIntPoint::FromUntyped(aPointerScreenPoint),
+                ScreenIntPoint::FromUnknownPoint(aPointerScreenPoint),
                 ScreenSize(0, 0),
                 (float)aPointerOrientation,
                 (float)aPointerPressure));
@@ -312,7 +312,7 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
             : MultiTouchInput::MULTITOUCH_CANCEL);
         inputToDispatch.mTouches.AppendElement(SingleTouchData(
             (int32_t)aPointerId,
-            ScreenIntPoint::FromUntyped(aPointerScreenPoint),
+            ScreenIntPoint::FromUnknownPoint(aPointerScreenPoint),
             ScreenSize(0, 0),
             (float)aPointerOrientation,
             (float)aPointerPressure));
@@ -330,10 +330,10 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
 }
 
 NS_IMETHODIMP
-nsWindow::Create(nsIWidget *aParent,
-                 void *aNativeParent,
-                 const nsIntRect &aRect,
-                 nsWidgetInitData *aInitData)
+nsWindow::Create(nsIWidget* aParent,
+                 void* aNativeParent,
+                 const LayoutDeviceIntRect& aRect,
+                 nsWidgetInitData* aInitData)
 {
     BaseCreate(aParent, aRect, aInitData);
 
@@ -347,13 +347,13 @@ nsWindow::Create(nsIWidget *aParent,
 
     mScreen = static_cast<nsScreenGonk*>(screen.get());
 
-    mBounds = aRect;
+    mBounds = aRect.ToUnknownRect();
 
     mParent = (nsWindow *)aParent;
     mVisible = false;
 
     if (!aParent) {
-        mBounds = mScreen->GetRect();
+        mBounds = mScreen->GetRect().ToUnknownRect();
     }
 
     mComposer2D = HwcComposer2D::GetInstance();
@@ -458,7 +458,7 @@ nsWindow::Resize(double aX,
     }
 
     if (aRepaint) {
-        Invalidate(mBounds);
+        Invalidate(LayoutDeviceIntRect::FromUnknownRect(mBounds));
     }
 
     return NS_OK;
@@ -498,7 +498,7 @@ nsWindow::ConfigureChildren(const nsTArray<nsIWidget::Configuration>&)
 }
 
 NS_IMETHODIMP
-nsWindow::Invalidate(const nsIntRect &aRect)
+nsWindow::Invalidate(const LayoutDeviceIntRect& aRect)
 {
     nsWindow *top = mParent;
     while (top && top->mParent) {
@@ -537,7 +537,10 @@ nsWindow::GetNativeData(uint32_t aDataType)
     case NS_NATIVE_WINDOW:
         // Called before primary display's EGLSurface creation.
         return mScreen->GetNativeWindow();
+    case NS_NATIVE_OPENGL_CONTEXT:
+        return mScreen->GetGLContext().take();
     }
+
     return nullptr;
 }
 
@@ -747,7 +750,7 @@ nsWindow::GetDefaultScaleInternal()
     if (dpi < 200.0) {
         return 1.0; // mdpi devices.
     }
-    if (dpi < 300.0) {
+    if (dpi < 280.0) {
         return 1.5; // hdpi devices.
     }
     // xhdpi devices and beyond.
@@ -824,7 +827,7 @@ nsWindow::BringToTop()
         mWidgetListener->WindowActivated();
     }
 
-    Invalidate(mBounds);
+    Invalidate(LayoutDeviceIntRect::FromUnknownRect(mBounds));
 }
 
 void
@@ -851,7 +854,7 @@ nsWindow::GetGLFrameBufferFormat()
     return LOCAL_GL_NONE;
 }
 
-nsIntRect
+LayoutDeviceIntRect
 nsWindow::GetNaturalBounds()
 {
     return mScreen->GetNaturalBounds();

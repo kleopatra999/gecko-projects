@@ -31,6 +31,7 @@ class SharedPluginTexture;
 
 #include "mozilla/TimeStamp.h"
 #include "mozilla/PluginLibrary.h"
+#include "mozilla/WeakPtr.h"
 
 class nsPluginStreamListenerPeer; // browser-initiated stream class
 class nsNPAPIPluginStreamListener; // plugin-initiated stream class
@@ -76,11 +77,13 @@ public:
 };
 
 class nsNPAPIPluginInstance final : public nsIAudioChannelAgentCallback
+                                  , public mozilla::SupportsWeakPtr<nsNPAPIPluginInstance>
 {
 private:
   typedef mozilla::PluginLibrary PluginLibrary;
 
 public:
+  MOZ_DECLARE_WEAKREFERENCE_TYPENAME(nsNPAPIPluginInstance)
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIAUDIOCHANNELAGENTCALLBACK
 
@@ -118,6 +121,7 @@ public:
   nsresult GetJSContext(JSContext* *outContext);
   nsPluginInstanceOwner* GetOwner();
   void SetOwner(nsPluginInstanceOwner *aOwner);
+  void DidComposite();
 
   bool HasAudioChannelAgent() const
   {
@@ -288,6 +292,11 @@ public:
   nsresult AsyncSetWindow(NPWindow& window);
 
   void URLRedirectResponse(void* notifyData, NPBool allow);
+
+  NPError InitAsyncSurface(NPSize *size, NPImageFormat format,
+                           void *initData, NPAsyncSurface *surface);
+  NPError FinalizeAsyncSurface(NPAsyncSurface *surface);
+  void SetCurrentAsyncSurface(NPAsyncSurface *surface, NPRect *changed);
 
   // Called when the instance fails to instantiate beceause the Carbon
   // event model is not supported.

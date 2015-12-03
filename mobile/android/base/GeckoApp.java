@@ -5,6 +5,9 @@
 
 package org.mozilla.gecko;
 
+import org.mozilla.gecko.AppConstants;
+import android.widget.AdapterView;
+import android.widget.Button;
 import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.GeckoProfileDirectories.NoMozillaDirectoryException;
 import org.mozilla.gecko.db.BrowserDB;
@@ -64,6 +67,7 @@ import android.hardware.SensorEventListener;
 import android.location.Location;
 import android.location.LocationListener;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
@@ -72,6 +76,7 @@ import android.os.Process;
 import android.os.StrictMode;
 import android.provider.ContactsContract;
 import android.provider.MediaStore.Images.Media;
+import android.support.annotation.Nullable;
 import android.support.design.widget.Snackbar;
 import android.support.v4.content.ContextCompat;
 import android.text.TextUtils;
@@ -168,6 +173,8 @@ public abstract class GeckoApp
     // Delay before running one-time "cleanup" tasks that may be needed
     // after a version upgrade.
     private static final int CLEANUP_DEFERRAL_SECONDS = 15;
+
+    private static boolean sAlreadyLoaded;
 
     protected RelativeLayout mRootLayout;
     protected RelativeLayout mMainLayout;
@@ -624,9 +631,8 @@ public abstract class GeckoApp
             setLocale(message.getString("locale"));
 
         } else if ("Permissions:Data".equals(event)) {
-            String host = message.getString("host");
             final NativeJSObject[] permissions = message.getObjectArray("permissions");
-            showSiteSettingsDialog(host, permissions);
+            showSiteSettingsDialog(permissions);
 
         } else if ("PrivateBrowsing:Data".equals(event)) {
             mPrivateBrowsingSession = message.optString("session", null);
@@ -654,25 +660,14 @@ public abstract class GeckoApp
 
             NativeJSObject action = message.optObject("action", null);
 
+            final SnackbarEventCallback snackbarCallback = new SnackbarEventCallback(callback);
+
             showSnackbar(msg,
                     duration,
                     action != null ? action.optString("label", null) : null,
-                    callback);
+                    snackbarCallback);
         } else if ("SystemUI:Visibility".equals(event)) {
             setSystemUiVisible(message.getBoolean("visible"));
-
-        } else if ("Toast:Show".equals(event)) {
-            final String msg = message.getString("message");
-            final String duration = message.getString("duration");
-            final NativeJSObject button = message.optObject("button", null);
-            if (button != null) {
-                final String label = button.optString("label", "");
-                final String icon = button.optString("icon", "");
-                final String id = button.optString("id", "");
-                showButtonToast(msg, duration, label, icon, id);
-            } else {
-                showNormalToast(msg, duration);
-            }
 
         } else if ("ToggleChrome:Focus".equals(event)) {
             focusChrome();
@@ -752,59 +747,48 @@ public abstract class GeckoApp
      *        Array of JSON objects to represent site permissions.
      *        Example: { type: "offline-app", setting: "Store Offline Data", value: "Allow" }
      */
-    private void showSiteSettingsDialog(final String host, final NativeJSObject[] permissions) {
+    private void showSiteSettingsDialog(final NativeJSObject[] permissions) {
         final AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle(R.string.site_settings_title);
 
-        View customTitleView = getLayoutInflater().inflate(R.layout.site_setting_title, null);
-        ((TextView) customTitleView.findViewById(R.id.title)).setText(R.string.site_settings_title);
-        ((TextView) customTitleView.findViewById(R.id.host)).setText(host);
-        builder.setCustomTitle(customTitleView);
-
-        // If there are no permissions to clear, show the user a message about that.
-        // In the future, we want to disable the menu item if there are no permissions to clear.
-        if (permissions.length == 0) {
-            builder.setMessage(R.string.site_settings_no_settings);
-        } else {
-
-            final ArrayList<HashMap<String, String>> itemList =
-                    new ArrayList<HashMap<String, String>>();
-            for (final NativeJSObject permObj : permissions) {
-                final HashMap<String, String> map = new HashMap<String, String>();
-                map.put("setting", permObj.getString("setting"));
-                map.put("value", permObj.getString("value"));
-                itemList.add(map);
-            }
-
-            // setMultiChoiceItems doesn't support using an adapter, so we're creating a hack with
-            // setSingleChoiceItems and changing the choiceMode below when we create the dialog
-            builder.setSingleChoiceItems(new SimpleAdapter(
-                GeckoApp.this,
-                itemList,
-                R.layout.site_setting_item,
-                new String[] { "setting", "value" },
-                new int[] { R.id.setting, R.id.value }
-                ), -1, new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int id) { }
-                });
-
-            builder.setPositiveButton(R.string.site_settings_clear, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface dialog, int id) {
-                    ListView listView = ((AlertDialog) dialog).getListView();
-                    SparseBooleanArray checkedItemPositions = listView.getCheckedItemPositions();
-
-                    // An array of the indices of the permissions we want to clear
-                    JSONArray permissionsToClear = new JSONArray();
-                    for (int i = 0; i < checkedItemPositions.size(); i++)
-                        if (checkedItemPositions.get(i))
-                            permissionsToClear.put(i);
-
-                    GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent(
-                        "Permissions:Clear", permissionsToClear.toString()));
-                }
-            });
+        final ArrayList<HashMap<String, String>> itemList =
+                new ArrayList<HashMap<String, String>>();
+        for (final NativeJSObject permObj : permissions) {
+            final HashMap<String, String> map = new HashMap<String, String>();
+            map.put("setting", permObj.getString("setting"));
+            map.put("value", permObj.getString("value"));
+            itemList.add(map);
         }
+
+        // setMultiChoiceItems doesn't support using an adapter, so we're creating a hack with
+        // setSingleChoiceItems and changing the choiceMode below when we create the dialog
+        builder.setSingleChoiceItems(new SimpleAdapter(
+            GeckoApp.this,
+            itemList,
+            R.layout.site_setting_item,
+            new String[] { "setting", "value" },
+            new int[] { R.id.setting, R.id.value }
+            ), -1, new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialog, int id) { }
+            });
+
+        builder.setPositiveButton(R.string.site_settings_clear, new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int id) {
+                ListView listView = ((AlertDialog) dialog).getListView();
+                SparseBooleanArray checkedItemPositions = listView.getCheckedItemPositions();
+
+                // An array of the indices of the permissions we want to clear
+                JSONArray permissionsToClear = new JSONArray();
+                for (int i = 0; i < checkedItemPositions.size(); i++)
+                    if (checkedItemPositions.get(i))
+                        permissionsToClear.put(i);
+
+                GeckoAppShell.sendEventToGecko(GeckoEvent.createBroadcastEvent(
+                    "Permissions:Clear", permissionsToClear.toString()));
+            }
+        });
 
         builder.setNegativeButton(R.string.site_settings_cancel, new DialogInterface.OnClickListener(){
             @Override
@@ -816,40 +800,39 @@ public abstract class GeckoApp
         ThreadUtils.postToUiThread(new Runnable() {
             @Override
             public void run() {
-                Dialog dialog = builder.create();
+                AlertDialog dialog = builder.create();
                 dialog.show();
 
-                ListView listView = ((AlertDialog) dialog).getListView();
+                final ListView listView = dialog.getListView();
                 if (listView != null) {
                     listView.setChoiceMode(ListView.CHOICE_MODE_MULTIPLE);
-                    int listSize = listView.getAdapter().getCount();
-                    for (int i = 0; i < listSize; i++)
-                        listView.setItemChecked(i, true);
                 }
-            }
-        });
-    }
 
-    public void showToast(final int resId, final int duration) {
-        ThreadUtils.postToUiThread(new Runnable() {
-            @Override
-            public void run() {
-                Toast.makeText(GeckoApp.this, resId, duration).show();
-            }
-        });
-    }
+                final Button clearButton = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+                clearButton.setEnabled(false);
 
-    public void showNormalToast(final String message, final String duration) {
-        ThreadUtils.postToUiThread(new Runnable() {
-            @Override
-            public void run() {
-                Toast toast;
-                if (duration.equals("long")) {
-                    toast = Toast.makeText(GeckoApp.this, message, Toast.LENGTH_LONG);
-                } else {
-                    toast = Toast.makeText(GeckoApp.this, message, Toast.LENGTH_SHORT);
-                }
-                toast.show();
+                dialog.getListView().setOnItemClickListener(new AdapterView.OnItemClickListener() {
+                    @Override
+                    public void onItemClick(AdapterView<?> adapterView, View view, int i, long l) {
+                        if (Versions.feature11Plus) {
+                            if (listView.getCheckedItemCount() == 0) {
+                                clearButton.setEnabled(false);
+                            } else {
+                                clearButton.setEnabled(true);
+                            }
+                        } else {
+                            final SparseBooleanArray items = listView.getCheckedItemPositions();
+                            for (int j = 0; j < items.size(); j++) {
+                                if (items.valueAt(j) == true) {
+                                    clearButton.setEnabled(true);
+                                    return;
+                                }
+                            }
+
+                            clearButton.setEnabled(false);
+                        }
+                    }
+                });
             }
         });
     }
@@ -865,21 +848,29 @@ public abstract class GeckoApp
         return mToast;
     }
 
-    void showSnackbar(final String message, final int duration, final String action, final EventCallback callback) {
+    void showSnackbar(final String message, final int duration, @Nullable final String action,
+                      final @Nullable SnackbarCallback callback) {
         final Snackbar snackbar = Snackbar.make(mRootLayout, message, duration);
 
-        if (!TextUtils.isEmpty(action)) {
-            final SnackbarEventCallback snackbarCallback = new SnackbarEventCallback(callback);
-
-            snackbar.setAction(action, snackbarCallback);
+        if (callback != null && !TextUtils.isEmpty(action)) {
+            snackbar.setAction(action, callback);
             snackbar.setActionTextColor(ContextCompat.getColor(this, R.color.fennec_ui_orange));
-            snackbar.setCallback(snackbarCallback);
+            snackbar.setCallback(callback);
         }
 
         snackbar.show();
     }
 
-    private static class SnackbarEventCallback extends Snackbar.Callback implements View.OnClickListener {
+    /**
+     * Combined interface for handling all callbacks from a snackbar because anonymous classes can only extend one
+     * interface or class.
+     */
+    public static abstract class SnackbarCallback extends Snackbar.Callback implements View.OnClickListener {};
+
+    /**
+     * SnackbarCallback implementation for delegating snackbar events to an EventCallback.
+     */
+    private static class SnackbarEventCallback extends SnackbarCallback {
         private EventCallback callback;
 
         public SnackbarEventCallback(EventCallback callback) {
@@ -1220,6 +1211,14 @@ public abstract class GeckoApp
             enableStrictMode();
         }
 
+        if (!isSupportedSystem()) {
+            // This build does not support the Android version of the device: Show an error and finish the app.
+            super.onCreate(savedInstanceState);
+            showSDKVersionError();
+            finish();
+            return;
+        }
+
         // The clock starts...now. Better hurry!
         mJavaUiStartupTimer = new Telemetry.UptimeTimer("FENNEC_STARTUP_TIME_JAVAUI");
         mGeckoReadyStartupTimer = new Telemetry.UptimeTimer("FENNEC_STARTUP_TIME_GECKOREADY");
@@ -1269,6 +1268,7 @@ public abstract class GeckoApp
         // When that's fixed, `this` can change to
         // `(GeckoApplication) getApplication()` here.
         GeckoAppShell.setContextGetter(this);
+        GeckoAppShell.setApplicationContext(getApplicationContext());
         GeckoAppShell.setGeckoInterface(this);
 
         Tabs.getInstance().attachToContext(this);
@@ -1292,7 +1292,7 @@ public abstract class GeckoApp
             return;
         }
 
-        if (GeckoThread.isLaunched()) {
+        if (sAlreadyLoaded) {
             // This happens when the GeckoApp activity is destroyed by Android
             // without killing the entire application (see Bug 769269).
             mIsRestoringActivity = true;
@@ -1301,6 +1301,7 @@ public abstract class GeckoApp
         } else {
             final String uri = getURIFromIntent(intent);
 
+            sAlreadyLoaded = true;
             GeckoThread.ensureInit(args, action,
                     /* debugging */ ACTION_DEBUG.equals(action));
 
@@ -1335,7 +1336,6 @@ public abstract class GeckoApp
             "Share:Text",
             "Snackbar:Show",
             "SystemUI:Visibility",
-            "Toast:Show",
             "ToggleChrome:Focus",
             "ToggleChrome:Hide",
             "ToggleChrome:Show",
@@ -2052,7 +2052,7 @@ public abstract class GeckoApp
             }
         });
 
-        RestrictedProfiles.update(this);
+        Restrictions.update(this);
     }
 
     @Override
@@ -2133,6 +2133,13 @@ public abstract class GeckoApp
 
     @Override
     public void onDestroy() {
+        if (!isSupportedSystem()) {
+            // This build does not support the Android version of the device:
+            // We did not initialize anything, so skip cleaning up.
+            super.onDestroy();
+            return;
+        }
+
         EventDispatcher.getInstance().unregisterGeckoThreadListener((GeckoEventListener)this,
             "Gecko:Ready",
             "Gecko:DelayedStartup",
@@ -2153,7 +2160,6 @@ public abstract class GeckoApp
             "Session:StatePurged",
             "Share:Text",
             "SystemUI:Visibility",
-            "Toast:Show",
             "ToggleChrome:Focus",
             "ToggleChrome:Hide",
             "ToggleChrome:Show",
@@ -2233,6 +2239,37 @@ public abstract class GeckoApp
             // Exiting, so kill our own process.
             Process.killProcess(Process.myPid());
         }
+    }
+
+    protected boolean isSupportedSystem() {
+        if (Build.VERSION.SDK_INT < Versions.MIN_SDK_VERSION ||
+            Build.VERSION.SDK_INT > Versions.MAX_SDK_VERSION) {
+            return false;
+        }
+
+        // See http://developer.android.com/ndk/guides/abis.html
+        boolean isSystemARM = Build.CPU_ABI != null && Build.CPU_ABI.startsWith("arm");
+        boolean isSystemX86 = Build.CPU_ABI != null && Build.CPU_ABI.startsWith("x86");
+
+        boolean isAppARM = AppConstants.ANDROID_CPU_ARCH.startsWith("arm");
+        boolean isAppX86 = AppConstants.ANDROID_CPU_ARCH.startsWith("x86");
+
+        // Only reject known incompatible ABIs. Better safe than sorry.
+        if ((isSystemX86 && isAppARM) || (isSystemARM && isAppX86)) {
+            return false;
+        }
+
+        if ((isSystemX86 && isAppX86) || (isSystemARM && isAppARM)) {
+            return true;
+        }
+
+        Log.w(LOGTAG, "Unknown app/system ABI combination: " + AppConstants.MOZ_APP_ABI + " / " + Build.CPU_ABI);
+        return true;
+    }
+
+    public void showSDKVersionError() {
+        final String message = getString(R.string.unsupported_sdk_version, Build.CPU_ABI, Build.VERSION.SDK_INT);
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
 
     // Get a temporary directory, may return null

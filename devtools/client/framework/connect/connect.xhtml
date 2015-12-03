@@ -4,7 +4,7 @@
    - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 
 <!DOCTYPE html [
-<!ENTITY % connectionDTD SYSTEM "chrome://browser/locale/devtools/connection-screen.dtd" >
+<!ENTITY % connectionDTD SYSTEM "chrome://devtools/locale/connection-screen.dtd" >
  %connectionDTD;
 ]>
 
@@ -12,7 +12,7 @@
       xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
   <head>
     <title>&title;</title>
-    <link rel="stylesheet" href="chrome://devtools/skin/themes/dark-theme.css" type="text/css"/>
+    <link rel="stylesheet" href="chrome://devtools/skin/dark-theme.css" type="text/css"/>
     <link rel="stylesheet" href="chrome://devtools/content/framework/connect/connect.css" type="text/css"/>
     <script type="application/javascript;version=1.8" src="connect.js"></script>
   </head>
@@ -45,7 +45,7 @@
       <ul class="actors" id="globalActors"></ul>
     </section>
     <section id="connecting">
-      <p><img src="chrome://browser/skin/tabbrowser/loading.png"></img> &connecting;</p>
+      <p class="devtools-throbber">&connecting;</p>
     </section>
     <footer>&remoteHelp;<a target='_' href='https://developer.mozilla.org/docs/Tools/Remote_Debugging'>&remoteDocumentation;</a>&remoteHelpSuffix;</footer>
   </body>

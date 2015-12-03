@@ -83,7 +83,7 @@ js::obj_propertyIsEnumerable(JSContext* cx, unsigned argc, Value* vp)
 
     /* Step 1. */
     RootedId idRoot(cx);
-    if (!ValueToId<CanGC>(cx, idValue, &idRoot))
+    if (!ToPropertyKey(cx, idValue, &idRoot))
         return false;
 
     /* Step 2. */
@@ -531,7 +531,7 @@ js::obj_hasOwnProperty(JSContext* cx, unsigned argc, Value* vp)
 
     /* Step 1. */
     RootedId idRoot(cx);
-    if (!ValueToId<CanGC>(cx, idValue, &idRoot))
+    if (!ToPropertyKey(cx, idValue, &idRoot))
         return false;
 
     /* Step 2. */
@@ -774,7 +774,7 @@ js::obj_defineProperty(JSContext* cx, unsigned argc, Value* vp)
     if (!GetFirstArgumentAsObject(cx, args, "Object.defineProperty", &obj))
         return false;
     RootedId id(cx);
-    if (!ValueToId<CanGC>(cx, args.get(1), &id))
+    if (!ToPropertyKey(cx, args.get(1), &id))
         return false;
 
     // Steps 4-5.
@@ -1004,6 +1004,10 @@ static const JSFunctionSpec object_static_methods[] = {
     JS_FN("setPrototypeOf",            obj_setPrototypeOf,          2, 0),
     JS_FN("getOwnPropertyDescriptor",  obj_getOwnPropertyDescriptor,2, 0),
     JS_FN("keys",                      obj_keys,                    1, 0),
+#ifndef RELEASE_BUILD
+    JS_SELF_HOSTED_FN("values",        "ObjectValues",              1, JSPROP_DEFINE_LATE),
+    JS_SELF_HOSTED_FN("entries",       "ObjectEntries",             1, JSPROP_DEFINE_LATE),
+#endif
     JS_FN("is",                        obj_is,                      2, 0),
     JS_FN("defineProperty",            obj_defineProperty,          3, 0),
     JS_FN("defineProperties",          obj_defineProperties,        2, 0),

@@ -21,6 +21,7 @@
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/Vector.h"
 #include "nsComponentManagerUtils.h"
 #include "nsIClipboardHelper.h"
@@ -458,7 +459,7 @@ CreateSamplingRestrictedDrawable(gfxDrawable* aDrawable,
 
     RefPtr<gfxContext> tmpCtx = new gfxContext(target);
     tmpCtx->SetOp(OptimalFillOp());
-    aDrawable->Draw(tmpCtx, needed - needed.TopLeft(), true, Filter::LINEAR,
+    aDrawable->Draw(tmpCtx, needed - needed.TopLeft(), ExtendMode::REPEAT, Filter::LINEAR,
                     1.0, gfxMatrix::Translation(needed.TopLeft()));
     RefPtr<SourceSurface> surface = target->Snapshot();
 
@@ -507,7 +508,7 @@ struct MOZ_STACK_CLASS AutoCairoPixmanBugWorkaround
         bounds.RoundOut();
         mContext->Clip(bounds);
         mContext->SetMatrix(currentMatrix);
-        mContext->PushGroup(gfxContentType::COLOR_ALPHA);
+        mContext->PushGroupForBlendBack(gfxContentType::COLOR_ALPHA);
         mContext->SetOp(CompositionOp::OP_OVER);
 
         mPushedGroup = true;
@@ -516,8 +517,7 @@ struct MOZ_STACK_CLASS AutoCairoPixmanBugWorkaround
     ~AutoCairoPixmanBugWorkaround()
     {
         if (mPushedGroup) {
-            mContext->PopGroupToSource();
-            mContext->Paint();
+            mContext->PopGroupAndBlend();
             mContext->Restore();
         }
     }
@@ -683,7 +683,7 @@ PrescaleAndTileDrawable(gfxDrawable* aDrawable,
   RefPtr<gfxContext> tmpCtx = new gfxContext(scaledDT);
   scaledDT->SetTransform(ToMatrix(scaleMatrix));
   gfxRect gfxImageRect(aImageRect.x, aImageRect.y, aImageRect.width, aImageRect.height);
-  aDrawable->Draw(tmpCtx, gfxImageRect, true, aFilter, 1.0, gfxMatrix());
+  aDrawable->Draw(tmpCtx, gfxImageRect, ExtendMode::REPEAT, aFilter, 1.0, gfxMatrix());
 
   RefPtr<SourceSurface> scaledImage = scaledDT->Snapshot();
 
@@ -722,9 +722,7 @@ gfxUtils::DrawPixelSnapped(gfxContext*         aContext,
 
     gfxRect imageRect(gfxPoint(0, 0), aImageSize);
     gfxRect region(aRegion.Rect());
-
-    bool doTile = !imageRect.Contains(region) &&
-                  !(aImageFlags & imgIContainer::FLAG_CLAMP);
+    ExtendMode extendMode = aRegion.GetExtendMode();
 
     RefPtr<gfxASurface> currentTarget = aContext->CurrentSurface();
     gfxMatrix deviceSpaceToImageSpace = DeviceToImageTransform(aContext);
@@ -745,10 +743,11 @@ gfxUtils::DrawPixelSnapped(gfxContext*         aContext,
     // translations, then we assume no resampling will occur so there's
     // nothing to do.
     // XXX if only we had source-clipping in cairo!
+
     if (aContext->CurrentMatrix().HasNonIntegerTranslation()) {
-        if (doTile || !aRegion.RestrictionContains(imageRect)) {
+        if ((extendMode != ExtendMode::CLAMP) || !aRegion.RestrictionContains(imageRect)) {
             if (drawable->DrawWithSamplingRect(aContext, aRegion.Rect(), aRegion.Restriction(),
-                                               doTile, aFilter, aOpacity)) {
+                                               extendMode, aFilter, aOpacity)) {
               return;
             }
 
@@ -773,13 +772,13 @@ gfxUtils::DrawPixelSnapped(gfxContext*         aContext,
               // We no longer need to tile: Either we never needed to, or we already
               // filled a surface with the tiled pattern; this surface can now be
               // drawn without tiling.
-              doTile = false;
+              extendMode = ExtendMode::CLAMP;
             }
 #endif
         }
     }
 
-    drawable->Draw(aContext, aRegion.Rect(), doTile, aFilter, aOpacity);
+    drawable->Draw(aContext, aRegion.Rect(), extendMode, aFilter, aOpacity, gfxMatrix());
 }
 
 /* static */ int
@@ -1560,7 +1559,7 @@ gfxUtils::GetImageBuffer(gfx::DataSourceSurface* aSurface,
         return nullptr;
 
     uint32_t bufferSize = aSurface->GetSize().width * aSurface->GetSize().height * 4;
-    UniquePtr<uint8_t[]> imageBuffer(new (fallible) uint8_t[bufferSize]);
+    auto imageBuffer = MakeUniqueFallible<uint8_t[]>(bufferSize);
     if (!imageBuffer) {
         aSurface->Unmap();
         return nullptr;
@@ -1656,7 +1655,14 @@ gfxUtils::ThreadSafeGetFeatureStatus(const nsCOMPtr<nsIGfxInfo>& gfxInfo,
     RefPtr<GetFeatureStatusRunnable> runnable =
       new GetFeatureStatusRunnable(workerPrivate, gfxInfo, feature, status);
 
-    runnable->Dispatch(workerPrivate->GetJSContext());
+    ErrorResult rv;
+    runnable->Dispatch(rv);
+    if (rv.Failed()) {
+        // XXXbz This is totally broken, since we're supposed to just abort
+        // everything up the callstack but the callers basically eat the
+        // exception.  Ah, well.
+        return rv.StealNSResult();
+    }
 
     return runnable->GetNSResult();
   }

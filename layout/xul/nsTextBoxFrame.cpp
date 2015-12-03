@@ -320,7 +320,7 @@ void
 nsDisplayXULTextBox::Paint(nsDisplayListBuilder* aBuilder,
                            nsRenderingContext* aCtx)
 {
-  gfxContextAutoDisableSubpixelAntialiasing disable(aCtx->ThebesContext(),
+  DrawTargetAutoDisableSubpixelAntialiasing disable(aCtx->GetDrawTarget(),
                                                     mDisableSubpixelAA);
 
   // Paint the text shadow before doing any foreground stuff
@@ -477,9 +477,9 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
     }
 
     RefPtr<gfxContext> ctx = aRenderingContext.ThebesContext();
-    gfxPoint pt(presContext->AppUnitsToGfxUnits(aTextRect.x),
-                presContext->AppUnitsToGfxUnits(aTextRect.y));
-    gfxFloat width = presContext->AppUnitsToGfxUnits(aTextRect.width);
+    Point pt(presContext->AppUnitsToGfxUnits(aTextRect.x),
+             presContext->AppUnitsToGfxUnits(aTextRect.y));
+    Float width = presContext->AppUnitsToGfxUnits(aTextRect.width);
     gfxFloat ascentPixel = presContext->AppUnitsToGfxUnits(ascent);
     Float xInFrame = Float(PresContext()->AppUnitsToGfxUnits(mTextDrawRect.x));
     gfxRect dirtyRect(presContext->AppUnitsToGfxUnits(aDirtyRect));
@@ -492,25 +492,25 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
     // (We don't apply this rule to the access-key underline because we only
     // find out where that is as a side effect of drawing the text, in the
     // general case -- see below.)
-    if (decorations & (NS_FONT_DECORATION_OVERLINE |
-                       NS_FONT_DECORATION_UNDERLINE)) {
+    if (decorations & (NS_STYLE_TEXT_DECORATION_LINE_OVERLINE |
+                       NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE)) {
       fontMet->GetUnderline(offset, size);
       gfxFloat offsetPixel = presContext->AppUnitsToGfxUnits(offset);
-      gfxFloat sizePixel = presContext->AppUnitsToGfxUnits(size);
-      if ((decorations & NS_FONT_DECORATION_UNDERLINE) &&
+      Float sizePixel = presContext->AppUnitsToGfxUnits(size);
+      if ((decorations & NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE) &&
           underStyle != NS_STYLE_TEXT_DECORATION_STYLE_NONE) {
         nsCSSRendering::PaintDecorationLine(this, *drawTarget,
                                             ToRect(dirtyRect), underColor,
-                          pt, xInFrame, gfxSize(width, sizePixel),
+                          pt, xInFrame, Size(width, sizePixel),
                           ascentPixel, offsetPixel,
                           NS_STYLE_TEXT_DECORATION_LINE_UNDERLINE, underStyle,
                           vertical);
       }
-      if ((decorations & NS_FONT_DECORATION_OVERLINE) &&
+      if ((decorations & NS_STYLE_TEXT_DECORATION_LINE_OVERLINE) &&
           overStyle != NS_STYLE_TEXT_DECORATION_STYLE_NONE) {
         nsCSSRendering::PaintDecorationLine(this, *drawTarget,
                                             ToRect(dirtyRect), overColor,
-                          pt, xInFrame, gfxSize(width, sizePixel),
+                          pt, xInFrame, Size(width, sizePixel),
                           ascentPixel, ascentPixel,
                           NS_STYLE_TEXT_DECORATION_LINE_OVERLINE, overStyle,
                           vertical);
@@ -586,14 +586,14 @@ nsTextBoxFrame::DrawText(nsRenderingContext& aRenderingContext,
 
     // Strikeout is drawn on top of the text, per
     // http://www.w3.org/TR/CSS21/zindex.html point 7.2.1.4.1.1.
-    if ((decorations & NS_FONT_DECORATION_LINE_THROUGH) &&
+    if ((decorations & NS_STYLE_TEXT_DECORATION_LINE_LINE_THROUGH) &&
         strikeStyle != NS_STYLE_TEXT_DECORATION_STYLE_NONE) {
       fontMet->GetStrikeout(offset, size);
       gfxFloat offsetPixel = presContext->AppUnitsToGfxUnits(offset);
       gfxFloat sizePixel = presContext->AppUnitsToGfxUnits(size);
       nsCSSRendering::PaintDecorationLine(this, *drawTarget, ToRect(dirtyRect),
                                           strikeColor,
-                        pt, xInFrame, gfxSize(width, sizePixel), ascentPixel,
+                        pt, xInFrame, Size(width, sizePixel), ascentPixel,
                         offsetPixel, NS_STYLE_TEXT_DECORATION_LINE_LINE_THROUGH,
                         strikeStyle, vertical);
     }

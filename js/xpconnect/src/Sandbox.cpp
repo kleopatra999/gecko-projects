@@ -289,9 +289,8 @@ SandboxFetch(JSContext* cx, JS::HandleObject scope, const CallArgs& args)
     ErrorResult rv;
     RefPtr<dom::Promise> response =
         FetchRequest(global, Constify(request), Constify(options), rv);
-    rv.WouldReportJSException();
-    if (rv.Failed()) {
-        return ThrowMethodFailed(cx, rv);
+    if (rv.MaybeSetPendingException(cx)) {
+        return false;
     }
     if (!GetOrCreateDOMReflector(cx, response, args.rval())) {
         return false;
@@ -510,7 +509,7 @@ sandbox_addProperty(JSContext* cx, HandleObject obj, HandleId id, HandleValue v)
         return false;
 
     // After bug 1015790 is fixed, we should be able to remove this unwrapping.
-    RootedObject unwrappedProto(cx, js::UncheckedUnwrap(proto, /* stopAtOuter = */ false));
+    RootedObject unwrappedProto(cx, js::UncheckedUnwrap(proto, /* stopAtWindowProxy = */ false));
 
     Rooted<JSPropertyDescriptor> pd(cx);
     if (!JS_GetPropertyDescriptorById(cx, proto, id, &pd))
@@ -562,8 +561,6 @@ static const js::Class SandboxClass = {
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
     JS_NULL_CLASS_SPEC,
     {
-      nullptr,      /* outerObject */
-      nullptr,      /* innerObject */
       false,        /* isWrappedNative */
       nullptr,      /* weakmapKeyDelegateOp */
       sandbox_moved /* objectMovedOp */
@@ -583,8 +580,6 @@ static const js::Class SandboxWriteToProtoClass = {
     nullptr, nullptr, nullptr, JS_GlobalObjectTraceHook,
     JS_NULL_CLASS_SPEC,
     {
-      nullptr,      /* outerObject */
-      nullptr,      /* innerObject */
       false,        /* isWrappedNative */
       nullptr,      /* weakmapKeyDelegateOp */
       sandbox_moved /* objectMovedOp */
@@ -1025,6 +1020,7 @@ xpc::CreateSandboxObject(JSContext* cx, MutableHandleValue vp, nsISupports* prin
     priv->allowWaivers = options.allowWaivers;
     priv->writeToGlobalPrototype = options.writeToGlobalPrototype;
     priv->isWebExtensionContentScript = options.isWebExtensionContentScript;
+    priv->waiveInterposition = options.waiveInterposition;
 
     // Set up the wantXrays flag, which indicates whether xrays are desired even
     // for same-origin access.
@@ -1189,7 +1185,7 @@ ParsePrincipal(JSContext* cx, HandleString codebase, nsIPrincipal** principal)
     // We could allow passing in the app-id and browser-element info to the
     // sandbox constructor. But creating a sandbox based on a string is a
     // deprecated API so no need to add features to it.
-    OriginAttributes attrs;
+    PrincipalOriginAttributes attrs;
     nsCOMPtr<nsIPrincipal> prin =
         BasePrincipal::CreateCodebasePrincipal(uri, attrs);
     prin.forget(principal);
@@ -1491,6 +1487,7 @@ SandboxOptions::Parse()
               ParseBoolean("wantComponents", &wantComponents) &&
               ParseBoolean("wantExportHelpers", &wantExportHelpers) &&
               ParseBoolean("isWebExtensionContentScript", &isWebExtensionContentScript) &&
+              ParseBoolean("waiveInterposition", &waiveInterposition) &&
               ParseString("sandboxName", sandboxName) &&
               ParseObject("sameZoneAs", &sameZoneAs) &&
               ParseBoolean("freshZone", &freshZone) &&

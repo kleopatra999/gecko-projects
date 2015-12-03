@@ -58,11 +58,17 @@ var gVideoTests = [
   { name:"bogus.duh", type:"bogus/duh" }
 ];
 
+// Temp hack for trackIDs and captureStream() -- bug 1215769
+var gLongerTests = [
+  { name:"seek.webm", type:"video/webm", width:320, height:240, duration:3.966 },
+  { name:"gizmo.mp4", type:"video/mp4", width:560, height:320, duration:5.56 },
+];
+
 // Used by test_progress to ensure we get the correct progress information
 // during resource download.
 var gProgressTests = [
   { name:"r11025_u8_c1.wav", type:"audio/x-wav", duration:1.0, size:11069 },
-  { name:"big.wav", type:"audio/x-wav", duration:9.278981, size:102444 },
+  { name:"big.wav", type:"audio/x-wav", duration:9.278982, size:102444 },
   { name:"seek.ogv", type:"video/ogg", duration:3.966, size:285310 },
   { name:"320x240.ogv", type:"video/ogg", width:320, height:240, duration:0.266, size:28942 },
   { name:"seek.webm", type:"video/webm", duration:3.966, size:215529 },
@@ -109,7 +115,7 @@ var gPausedAfterEndedTests = gSmallTests.concat([
 // Test the mozHasAudio property, and APIs that detect different kinds of
 // tracks
 var gTrackTests = [
-  { name:"big.wav", type:"audio/x-wav", duration:9.278981, size:102444, hasAudio:true, hasVideo:false },
+  { name:"big.wav", type:"audio/x-wav", duration:9.278982, size:102444, hasAudio:true, hasVideo:false },
   { name:"320x240.ogv", type:"video/ogg", width:320, height:240, duration:0.266, size:28942, hasAudio:false, hasVideo:true },
   { name:"short-video.ogv", type:"video/ogg", duration:1.081, hasAudio:true, hasVideo:true },
   { name:"seek.webm", type:"video/webm", duration:3.966, size:215529, hasAudio:false, hasVideo:true },
@@ -261,7 +267,7 @@ var gPlayTests = [
 
 // A file for each type we can support.
 var gSnifferTests = [
-  { name:"big.wav", type:"audio/x-wav", duration:9.278981, size:102444 },
+  { name:"big.wav", type:"audio/x-wav", duration:9.278982, size:102444 },
   { name:"320x240.ogv", type:"video/ogg", width:320, height:240, duration:0.233, size:28942 },
   { name:"seek.webm", type:"video/webm", duration:3.966, size:215529 },
   { name:"gizmo.mp4", type:"video/mp4", duration:5.56, size:383631 },
@@ -554,7 +560,7 @@ var gDecodeErrorTests = [
 
 // These are files that are used for media fragments tests
 var gFragmentTests = [
-  { name:"big.wav", type:"audio/x-wav", duration:9.278981, size:102444 }
+  { name:"big.wav", type:"audio/x-wav", duration:9.278982, size:102444 }
 ];
 
 // Used by test_chaining.html. The |links| attributes is the number of links in
