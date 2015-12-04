@@ -273,14 +273,11 @@ MacroAssemblerMIPS64Compat::movq(Register rs, Register rd)
 }
 
 void
-MacroAssemblerMIPS64::ma_li(Register dest, AbsoluteLabel* label)
+MacroAssemblerMIPS64::ma_li(Register dest, CodeOffset* label)
 {
-    MOZ_ASSERT(!label->bound());
-    // Thread the patch list through the unpatched address word in the
-    // instruction stream.
     BufferOffset bo = m_buffer.nextOffset();
-    ma_liPatchable(dest, ImmWord(label->prev()));
-    label->setPrev(bo.getOffset());
+    ma_liPatchable(dest, ImmWord(/* placeholder */ 0));
+    label->bind(bo.getOffset());
 }
 
 void
@@ -2540,9 +2537,6 @@ MacroAssemblerMIPS64Compat::compareExchangeToTypedIntArray(Scalar::Type arrayTyp
       case Scalar::Uint8:
         compareExchange8ZeroExtend(mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output.gpr());
         break;
-      case Scalar::Uint8Clamped:
-        compareExchange8ZeroExtend(mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
       case Scalar::Int16:
         compareExchange16SignExtend(mem, oldval, newval, valueTemp, offsetTemp, maskTemp, output.gpr());
         break;
@@ -2587,9 +2581,6 @@ MacroAssemblerMIPS64Compat::atomicExchangeToTypedIntArray(Scalar::Type arrayType
         atomicExchange8SignExtend(mem, value, valueTemp, offsetTemp, maskTemp, output.gpr());
         break;
       case Scalar::Uint8:
-        atomicExchange8ZeroExtend(mem, value, valueTemp, offsetTemp, maskTemp, output.gpr());
-        break;
-      case Scalar::Uint8Clamped:
         atomicExchange8ZeroExtend(mem, value, valueTemp, offsetTemp, maskTemp, output.gpr());
         break;
       case Scalar::Int16:
