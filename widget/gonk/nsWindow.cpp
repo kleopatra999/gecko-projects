@@ -258,7 +258,7 @@ private:
 nsresult
 nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
                                      TouchPointerState aPointerState,
-                                     nsIntPoint aPointerScreenPoint,
+                                     ScreenIntPoint aPointerScreenPoint,
                                      double aPointerPressure,
                                      uint32_t aPointerOrientation,
                                      nsIObserver* aObserver)
@@ -286,7 +286,7 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
         if (index >= 0) {
             // found an existing touch point, update it
             SingleTouchData& point = mSynthesizedTouchInput->mTouches[index];
-            point.mScreenPoint = ScreenIntPoint::FromUnknownPoint(aPointerScreenPoint);
+            point.mScreenPoint = aPointerScreenPoint;
             point.mRotationAngle = (float)aPointerOrientation;
             point.mForce = (float)aPointerPressure;
             inputToDispatch.mType = MultiTouchInput::MULTITOUCH_MOVE;
@@ -294,7 +294,7 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
             // new touch point, add it
             mSynthesizedTouchInput->mTouches.AppendElement(SingleTouchData(
                 (int32_t)aPointerId,
-                ScreenIntPoint::FromUnknownPoint(aPointerScreenPoint),
+                aPointerScreenPoint,
                 ScreenSize(0, 0),
                 (float)aPointerOrientation,
                 (float)aPointerPressure));
@@ -312,7 +312,7 @@ nsWindow::SynthesizeNativeTouchPoint(uint32_t aPointerId,
             : MultiTouchInput::MULTITOUCH_CANCEL);
         inputToDispatch.mTouches.AppendElement(SingleTouchData(
             (int32_t)aPointerId,
-            ScreenIntPoint::FromUnknownPoint(aPointerScreenPoint),
+            aPointerScreenPoint,
             ScreenSize(0, 0),
             (float)aPointerOrientation,
             (float)aPointerPressure));
@@ -539,6 +539,9 @@ nsWindow::GetNativeData(uint32_t aDataType)
         return mScreen->GetNativeWindow();
     case NS_NATIVE_OPENGL_CONTEXT:
         return mScreen->GetGLContext().take();
+    case NS_RAW_NATIVE_IME_CONTEXT:
+        // There is only one IME context on Gonk.
+        return NS_ONLY_ONE_NATIVE_IME_CONTEXT;
     }
 
     return nullptr;
@@ -582,8 +585,6 @@ nsWindow::SetInputContext(const InputContext& aContext,
 NS_IMETHODIMP_(InputContext)
 nsWindow::GetInputContext()
 {
-    // There is only one IME context on Gonk.
-    mInputContext.mNativeIMEContext = nullptr;
     return mInputContext;
 }
 

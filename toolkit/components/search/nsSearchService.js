@@ -2208,6 +2208,16 @@ Engine.prototype = {
      *   [other]/engine.xml
      */
 
+    const NS_XPCOM_CURRENT_PROCESS_DIR = "XCurProcD";
+    const NS_APP_USER_PROFILE_50_DIR = "ProfD";
+    const XRE_APP_DISTRIBUTION_DIR = "XREAppDist";
+
+    const knownDirs = {
+      app: NS_XPCOM_CURRENT_PROCESS_DIR,
+      profile: NS_APP_USER_PROFILE_50_DIR,
+      distribution: XRE_APP_DISTRIBUTION_DIR
+    };
+
     let leafName = this._shortName;
     if (!leafName)
       return "null";
@@ -2226,6 +2236,25 @@ Engine.prototype = {
         packageName = uri.hostPort;
         uri = gChromeReg.convertChromeURL(uri);
       }
+
+#ifdef ANDROID
+      // On Android the omni.ja file isn't at the same path as the binary
+      // used to start the process. We tweak the path here so that the code
+      // shared with Desktop will correctly identify files from the omni.ja
+      // file as coming from the [app] folder.
+      let appPath = Services.io.getProtocolHandler("resource")
+                            .QueryInterface(Ci.nsIResProtocolHandler)
+                            .getSubstitution("android");
+      if (appPath) {
+        appPath = appPath.spec;
+        let spec = uri.spec;
+        if (spec.includes(appPath)) {
+          let appURI = Services.io.newFileURI(getDir(knownDirs["app"]));
+          uri = NetUtil.newURI(spec.replace(appPath, appURI.spec));
+        }
+      }
+#endif
+
       if (uri instanceof Ci.nsINestedURI) {
         prefix = "jar:";
         suffix = "!" + packageName + "/" + leafName;
@@ -2244,16 +2273,6 @@ Engine.prototype = {
 
     let id;
     let enginePath = file.path;
-
-    const NS_XPCOM_CURRENT_PROCESS_DIR = "XCurProcD";
-    const NS_APP_USER_PROFILE_50_DIR = "ProfD";
-    const XRE_APP_DISTRIBUTION_DIR = "XREAppDist";
-
-    const knownDirs = {
-      app: NS_XPCOM_CURRENT_PROCESS_DIR,
-      profile: NS_APP_USER_PROFILE_50_DIR,
-      distribution: XRE_APP_DISTRIBUTION_DIR
-    };
 
     for (let key in knownDirs) {
       let path;
@@ -4114,8 +4133,7 @@ SearchService.prototype = {
 
   get currentEngine() {
     this._ensureInitialized();
-    let currentEngine = this._currentEngine;
-    if (!currentEngine) {
+    if (!this._currentEngine) {
       let name = this.getGlobalAttr("current");
       let engine = this.getEngineByName(name);
       if (engine && (this.getGlobalAttr("hash") == getVerificationHash(name) ||
@@ -4123,32 +4141,38 @@ SearchService.prototype = {
         // If the current engine is a default one, we can relax the
         // verification hash check to reduce the annoyance for users who
         // backup/sync their profile in custom ways.
-        currentEngine = engine;
+        this._currentEngine = engine;
       }
+      if (!name)
+        this._currentEngine = this._originalDefaultEngine;
     }
 
-    if (!currentEngine || currentEngine.hidden)
-      currentEngine = this._originalDefaultEngine;
-    if (!currentEngine || currentEngine.hidden)
-      currentEngine = this._getSortedEngines(false)[0];
+    // If the current engine is not set or hidden, we fallback...
+    if (!this._currentEngine || this._currentEngine.hidden) {
+      // first to the original default engine
+      let originalDefault = this._originalDefaultEngine;
+      if (!originalDefault || originalDefault.hidden) {
+        // then to the first visible engine
+        let firstVisible = this._getSortedEngines(false)[0];
+        if (firstVisible && !firstVisible.hidden) {
+          this.currentEngine = firstVisible;
+          return firstVisible;
+        }
+        // and finally as a last resort we unhide the original default engine.
+        if (originalDefault)
+          originalDefault.hidden = false;
+      }
+      if (!originalDefault)
+        return null;
 
-    if (!currentEngine) {
-      // Last resort fallback: unhide the original default engine.
-      currentEngine = this._originalDefaultEngine;
-      if (currentEngine)
-        currentEngine.hidden = false;
-    }
-
-    if (currentEngine) {
       // If the current engine wasn't set or was hidden, we used a fallback
       // to pick a new current engine. As soon as we return it, this new
       // current engine will become user-visible, so we should persist it.
-      // Calling the setter achieves this, and is a no-op when we haven't
-      // actually changed the current engine.
-      this.currentEngine = currentEngine;
+      // by calling the setter.
+      this.currentEngine = originalDefault;
     }
 
-    return currentEngine;
+    return this._currentEngine;
   },
 
   set currentEngine(val) {

@@ -175,6 +175,22 @@ js::GetNonSyntacticGlobalThis(JSContext* cx, HandleObject scopeChain, MutableHan
     return true;
 }
 
+bool
+js::Debug_CheckSelfHosted(JSContext* cx, HandleValue fun)
+{
+#ifndef DEBUG
+    MOZ_CRASH("self-hosted checks should only be done in Debug builds");
+#endif
+
+    MOZ_ASSERT(fun.isObject());
+
+    MOZ_ASSERT(fun.toObject().is<JSFunction>());
+    MOZ_ASSERT(fun.toObject().as<JSFunction>().isSelfHostedOrIntrinsic());
+
+    // This is purely to police self-hosted code. There is no actual operation.
+    return true;
+}
+
 static inline bool
 GetPropertyOperation(JSContext* cx, InterpreterFrame* fp, HandleScript script, jsbytecode* pc,
                      MutableHandleValue lval, MutableHandleValue vp)
@@ -291,7 +307,7 @@ js::ReportIsNotFunction(JSContext* cx, HandleValue v, int numToSkip, MaybeConstr
     unsigned error = construct ? JSMSG_NOT_CONSTRUCTOR : JSMSG_NOT_FUNCTION;
     int spIndex = numToSkip >= 0 ? -(numToSkip + 1) : JSDVG_SEARCH_STACK;
 
-    ReportValueError3(cx, error, spIndex, v, nullptr, nullptr, nullptr);
+    ReportValueError(cx, error, spIndex, v, nullptr);
     return false;
 }
 
@@ -1740,9 +1756,6 @@ CASE(JSOP_NOP)
 CASE(JSOP_UNUSED14)
 CASE(JSOP_UNUSED65)
 CASE(JSOP_BACKPATCH)
-CASE(JSOP_UNUSED145)
-CASE(JSOP_UNUSED163)
-CASE(JSOP_UNUSED177)
 CASE(JSOP_UNUSED178)
 CASE(JSOP_UNUSED179)
 CASE(JSOP_UNUSED180)
@@ -1755,7 +1768,6 @@ CASE(JSOP_UNUSED209)
 CASE(JSOP_UNUSED210)
 CASE(JSOP_UNUSED211)
 CASE(JSOP_UNUSED212)
-CASE(JSOP_UNUSED213)
 CASE(JSOP_UNUSED219)
 CASE(JSOP_UNUSED220)
 CASE(JSOP_UNUSED221)
@@ -2091,6 +2103,12 @@ CASE(JSOP_BINDNAME)
 }
 END_CASE(JSOP_BINDNAME)
 
+CASE(JSOP_BINDVAR)
+{
+    PUSH_OBJECT(REGS.fp()->varObj());
+}
+END_CASE(JSOP_BINDVAR)
+
 #define BITWISE_OP(OP)                                                        \
     JS_BEGIN_MACRO                                                            \
         int32_t i, j;                                                         \
@@ -2418,10 +2436,9 @@ CASE(JSOP_TOID)
      * but we need to avoid the observable stringification the second time.
      * There must be an object value below the id, which will not be popped.
      */
-    ReservedRooted<Value> objval(&rootValue0, REGS.sp[-2]);
     ReservedRooted<Value> idval(&rootValue1, REGS.sp[-1]);
     MutableHandleValue res = REGS.stackHandleAt(-1);
-    if (!ToIdOperation(cx, script, REGS.pc, objval, idval, res))
+    if (!ToIdOperation(cx, script, REGS.pc, idval, res))
         goto error;
 }
 END_CASE(JSOP_TOID)
@@ -2737,6 +2754,7 @@ CASE(JSOP_FUNAPPLY)
 
 CASE(JSOP_NEW)
 CASE(JSOP_CALL)
+CASE(JSOP_CALLITER)
 CASE(JSOP_SUPERCALL)
 CASE(JSOP_FUNCALL)
 {
@@ -2760,6 +2778,11 @@ CASE(JSOP_FUNCALL)
             if (!ConstructFromStack(cx, args))
                 goto error;
         } else {
+            if (*REGS.pc == JSOP_CALLITER && args.calleev().isPrimitive()) {
+                MOZ_ASSERT(args.length() == 0, "thisv must be on top of the stack");
+                ReportValueError(cx, JSMSG_NOT_ITERABLE, -1, args.thisv(), nullptr);
+                goto error;
+            }
             if (!Invoke(cx, args))
                 goto error;
         }
@@ -3222,10 +3245,7 @@ CASE(JSOP_SETLOCAL)
 {
     uint32_t i = GET_LOCALNO(REGS.pc);
 
-    // Derived class constructors store the TDZ Value in the .this slot
-    // before a super() call.
-    MOZ_ASSERT_IF(!script->isDerivedClassConstructor(),
-                  !IsUninitializedLexical(REGS.fp()->unaliasedLocal(i)));
+    MOZ_ASSERT(!IsUninitializedLexical(REGS.fp()->unaliasedLocal(i)));
 
     REGS.fp()->unaliasedLocal(i) = REGS.sp[-1];
 }
@@ -3883,6 +3903,24 @@ CASE(JSOP_CLASSCONSTRUCTOR)
 }
 END_CASE(JSOP_CLASSCONSTRUCTOR)
 
+CASE(JSOP_CHECKOBJCOERCIBLE)
+{
+    ReservedRooted<Value> checkVal(&rootValue0, REGS.sp[-1]);
+    if (checkVal.isNullOrUndefined() && !ToObjectFromStack(cx, checkVal))
+        goto error;
+}
+END_CASE(JSOP_CHECKOBJCOERCIBLE)
+
+CASE(JSOP_DEBUGCHECKSELFHOSTED)
+{
+#ifdef DEBUG
+    ReservedRooted<Value> checkVal(&rootValue0, REGS.sp[-1]);
+    if (!Debug_CheckSelfHosted(cx, checkVal))
+        goto error;
+#endif
+}
+END_CASE(JSOP_DEBUGCHECKSELFHOSTED)
+
 DEFAULT()
 {
     char numBuf[12];
@@ -3998,12 +4036,11 @@ js::GetProperty(JSContext* cx, HandleValue v, HandlePropertyName name, MutableHa
             return true;
     }
 
+    RootedValue receiver(cx, v);
     RootedObject obj(cx, ToObjectFromStack(cx, v));
     if (!obj)
         return false;
 
-    // Bug 603201: Pass primitive receiver here.
-    RootedValue receiver(cx, ObjectValue(*obj));
     return GetProperty(cx, obj, receiver, name, vp);
 }
 
@@ -4770,20 +4807,7 @@ js::DefaultClassConstructor(JSContext* cx, unsigned argc, Value* vp)
     }
 
     RootedObject newTarget(cx, &args.newTarget().toObject());
-    RootedValue protoVal(cx);
-
-    if (!GetProperty(cx, newTarget, newTarget, cx->names().prototype, &protoVal))
-        return false;
-
-    RootedObject proto(cx);
-    if (!protoVal.isObject()) {
-        if (!GetBuiltinPrototype(cx, JSProto_Object, &proto))
-            return false;
-    } else {
-        proto = &protoVal.toObject();
-    }
-
-    JSObject* obj = NewObjectWithGivenProto(cx, &PlainObject::class_, proto);
+    JSObject* obj = CreateThis(cx, &PlainObject::class_, newTarget);
     if (!obj)
         return false;
 
@@ -4839,9 +4863,6 @@ bool
 js::ThrowUninitializedThis(JSContext* cx, AbstractFramePtr frame)
 {
     RootedFunction fun(cx, frame.callee());
-
-    MOZ_ASSERT(fun->isClassConstructor());
-    MOZ_ASSERT(fun->nonLazyScript()->isDerivedClassConstructor());
 
     const char* name = "anonymous";
     JSAutoByteString str;

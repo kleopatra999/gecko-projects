@@ -74,6 +74,7 @@ class Element;
 class HTMLImageElement;
 class HTMLCanvasElement;
 class HTMLVideoElement;
+class OffscreenCanvas;
 class Selection;
 } // namespace dom
 namespace gfx {
@@ -1208,6 +1209,23 @@ public:
                                                 float aSizeInflation = 1.0f);
 
   /**
+   * Get the font metrics of emphasis marks corresponding to the given
+   * style data. The result is same as GetFontMetricsForStyleContext
+   * except that the font size is scaled down to 50%.
+   * @param aStyleContext the style data
+   * @param aFontMetrics the font metrics result
+   * @param aInflation number to multiple font size by
+   * @return success or failure code
+   */
+  static nsresult GetFontMetricsOfEmphasisMarks(nsStyleContext* aStyleContext,
+                                                nsFontMetrics** aFontMetrics,
+                                                float aInflation)
+  {
+    return GetFontMetricsForStyleContext(aStyleContext, aFontMetrics,
+                                         aInflation * 0.5f);
+  }
+
+  /**
    * Find the immediate child of aParent whose frame subtree contains
    * aDescendantFrame. Returns null if aDescendantFrame is not a descendant
    * of aParent.
@@ -2098,24 +2116,42 @@ public:
     const RefPtr<mozilla::gfx::SourceSurface>& GetSourceSurface();
   };
 
+  // This function can be called on any thread.
+  static SurfaceFromElementResult
+  SurfaceFromOffscreenCanvas(mozilla::dom::OffscreenCanvas *aOffscreenCanvas,
+                             uint32_t aSurfaceFlags,
+                             RefPtr<DrawTarget>& aTarget);
+  static SurfaceFromElementResult
+  SurfaceFromOffscreenCanvas(mozilla::dom::OffscreenCanvas *aOffscreenCanvas,
+                             uint32_t aSurfaceFlags = 0) {
+    RefPtr<DrawTarget> target = nullptr;
+    return SurfaceFromOffscreenCanvas(aOffscreenCanvas, aSurfaceFlags, target);
+  }
+
   static SurfaceFromElementResult SurfaceFromElement(mozilla::dom::Element *aElement,
-                                                     uint32_t aSurfaceFlags = 0,
-                                                     DrawTarget *aTarget = nullptr);
+                                                     uint32_t aSurfaceFlags,
+                                                     RefPtr<DrawTarget>& aTarget);
+  static SurfaceFromElementResult SurfaceFromElement(mozilla::dom::Element *aElement,
+                                                     uint32_t aSurfaceFlags = 0) {
+    RefPtr<DrawTarget> target = nullptr;
+    return SurfaceFromElement(aElement, aSurfaceFlags, target);
+  }
+
   static SurfaceFromElementResult SurfaceFromElement(nsIImageLoadingContent *aElement,
-                                                     uint32_t aSurfaceFlags = 0,
-                                                     DrawTarget *aTarget = nullptr);
+                                                     uint32_t aSurfaceFlags,
+                                                     RefPtr<DrawTarget>& aTarget);
   // Need an HTMLImageElement overload, because otherwise the
   // nsIImageLoadingContent and mozilla::dom::Element overloads are ambiguous
   // for HTMLImageElement.
   static SurfaceFromElementResult SurfaceFromElement(mozilla::dom::HTMLImageElement *aElement,
-                                                     uint32_t aSurfaceFlags = 0,
-                                                     DrawTarget *aTarget = nullptr);
+                                                     uint32_t aSurfaceFlags,
+                                                     RefPtr<DrawTarget>& aTarget);
   static SurfaceFromElementResult SurfaceFromElement(mozilla::dom::HTMLCanvasElement *aElement,
-                                                     uint32_t aSurfaceFlags = 0,
-                                                     DrawTarget *aTarget = nullptr);
+                                                     uint32_t aSurfaceFlags,
+                                                     RefPtr<DrawTarget>& aTarget);
   static SurfaceFromElementResult SurfaceFromElement(mozilla::dom::HTMLVideoElement *aElement,
-                                                     uint32_t aSurfaceFlags = 0,
-                                                     DrawTarget *aTarget = nullptr);
+                                                     uint32_t aSurfaceFlags,
+                                                     RefPtr<DrawTarget>& aTarget);
 
   /**
    * When the document is editable by contenteditable attribute of its root
@@ -2190,13 +2226,6 @@ public:
   static bool GetAnimationContent(const nsIFrame* aFrame,
                                   nsIContent* &aContentResult,
                                   nsCSSPseudoElements::Type &aPseudoTypeResult);
-
-  /**
-   * Returns true if the frame has animations or transitions that can be
-   * performed on the compositor.
-   */
-  static bool HasAnimationsForCompositor(const nsIFrame* aFrame,
-                                         nsCSSProperty aProperty);
 
   /**
    * Returns true if the frame has current (i.e. running or scheduled-to-run)

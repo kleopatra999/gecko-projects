@@ -15,7 +15,7 @@ RUN chmod u+x /home/worker/bin/buildbot_step
 
 # TODO: remove
 ADD            https://s3-us-west-2.amazonaws.com/test-caching/packages/linux64-stackwalk /usr/local/bin/linux64-minidump_stackwalk
-RUN chmod u+x /usr/local/bin/linux64-minidump_stackwalk
+RUN chmod +x /usr/local/bin/linux64-minidump_stackwalk
 
 # allow the worker user to access video devices
 RUN usermod -a -G video worker
@@ -38,6 +38,10 @@ RUN            chown -R root:root /home/worker
 
 # clean up
 RUN rm -Rf .cache && mkdir -p .cache
+
+# Disable Ubuntu update prompt
+# http://askubuntu.com/questions/515161/ubuntu-12-04-disable-release-notification-of-14-04-in-update-manager
+ADD release-upgrades /etc/update-manager/release-upgrades
 
 # Set a default command useful for debugging
 CMD ["/bin/bash", "--login"]

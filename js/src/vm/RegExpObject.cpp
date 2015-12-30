@@ -39,25 +39,18 @@ JS_STATIC_ASSERT(IgnoreCaseFlag == JSREG_FOLD);
 JS_STATIC_ASSERT(GlobalFlag == JSREG_GLOB);
 JS_STATIC_ASSERT(MultilineFlag == JSREG_MULTILINE);
 JS_STATIC_ASSERT(StickyFlag == JSREG_STICKY);
+JS_STATIC_ASSERT(UnicodeFlag == JSREG_UNICODE);
 
 RegExpObject*
-js::RegExpAlloc(ExclusiveContext* cx)
+js::RegExpAlloc(ExclusiveContext* cx, HandleObject proto /* = nullptr */)
 {
     // Note: RegExp objects are always allocated in the tenured heap. This is
     // not strictly required, but simplifies embedding them in jitcode.
-    RegExpObject* regexp = NewBuiltinClassInstance<RegExpObject>(cx, TenuredObject);
+    RegExpObject* regexp = NewObjectWithClassProto<RegExpObject>(cx, proto, TenuredObject);
     if (!regexp)
         return nullptr;
-
     regexp->initPrivate(nullptr);
     return regexp;
-}
-
-RegExpObject*
-js::InitializeRegExp(ExclusiveContext* cx, Handle<RegExpObject*> regexp, HandleAtom source,
-                     RegExpFlag flags)
-{
-    return regexp->init(cx, source, flags) ? regexp : nullptr;
 }
 
 /* MatchPairs */
@@ -155,6 +148,13 @@ RegExpObject::trace(JSTracer* trc, JSObject* obj)
     }
 }
 
+/* static */ bool
+RegExpObject::initFromAtom(ExclusiveContext* cx, Handle<RegExpObject*> regexp, HandleAtom source,
+                           RegExpFlag flags)
+{
+    return regexp->init(cx, source, flags);
+}
+
 const Class RegExpObject::class_ = {
     js_RegExp_str,
     JSCLASS_HAS_PRIVATE |
@@ -217,14 +217,17 @@ RegExpObject::createNoStatics(ExclusiveContext* cx, HandleAtom source, RegExpFla
         tokenStream = dummyTokenStream.ptr();
     }
 
-    if (!irregexp::ParsePatternSyntax(*tokenStream, alloc, source))
+    if (!irregexp::ParsePatternSyntax(*tokenStream, alloc, source, flags & UnicodeFlag))
         return nullptr;
 
     Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx));
     if (!regexp)
         return nullptr;
 
-    return InitializeRegExp(cx, regexp, source, flags);
+    if (!RegExpObject::initFromAtom(cx, regexp, source, flags))
+        return nullptr;
+
+    return regexp;
 }
 
 bool
@@ -274,6 +277,7 @@ RegExpObject::init(ExclusiveContext* cx, HandleAtom source, RegExpFlag flags)
     self->setIgnoreCase(flags & IgnoreCaseFlag);
     self->setMultiline(flags & MultilineFlag);
     self->setSticky(flags & StickyFlag);
+    self->setUnicode(flags & UnicodeFlag);
     return true;
 }
 
@@ -456,6 +460,8 @@ RegExpObject::toString(JSContext* cx) const
         return nullptr;
     if (multiline() && !sb.append('m'))
         return nullptr;
+    if (unicode() && !sb.append('u'))
+        return nullptr;
     if (sticky() && !sb.append('y'))
         return nullptr;
 
@@ -516,7 +522,7 @@ RegExpShared::compile(JSContext* cx, HandleAtom pattern, HandleLinearString inpu
     /* Parse the pattern. */
     irregexp::RegExpCompileData data;
     if (!irregexp::ParsePattern(dummyTokenStream, cx->tempLifoAlloc(), pattern,
-                                multiline(), mode == MatchOnly, &data))
+                                multiline(), mode == MatchOnly, unicode(), ignoreCase(), &data))
     {
         return false;
     }
@@ -529,7 +535,7 @@ RegExpShared::compile(JSContext* cx, HandleAtom pattern, HandleLinearString inpu
                                                          input->hasLatin1Chars(),
                                                          mode == MatchOnly,
                                                          force == ForceByteCode,
-                                                         sticky());
+                                                         sticky(), unicode());
     if (code.empty())
         return false;
 
@@ -894,7 +900,10 @@ js::CloneRegExpObject(JSContext* cx, JSObject* obj_)
         if (!clone)
             return nullptr;
 
-        return InitializeRegExp(cx, clone, source, RegExpFlag(origFlags | staticsFlags));
+        if (!RegExpObject::initFromAtom(cx, clone, source, RegExpFlag(origFlags | staticsFlags)))
+            return nullptr;
+
+        return clone;
     }
 
     // Otherwise, the clone can use |regexp|'s RegExpShared.
@@ -911,7 +920,7 @@ js::CloneRegExpObject(JSContext* cx, JSObject* obj_)
     if (!regex->getShared(cx, &g))
         return nullptr;
 
-    if (!InitializeRegExp(cx, clone, source, g->getFlags()))
+    if (!RegExpObject::initFromAtom(cx, clone, source, g->getFlags()))
         return nullptr;
 
     clone->setShared(*g.re());
@@ -950,6 +959,10 @@ ParseRegExpFlags(const CharT* chars, size_t length, RegExpFlag* flagsOut, char16
             break;
           case 'y':
             if (!HandleRegExpFlag(StickyFlag, flagsOut))
+                return false;
+            break;
+          case 'u':
+            if (!HandleRegExpFlag(UnicodeFlag, flagsOut))
                 return false;
             break;
           default:

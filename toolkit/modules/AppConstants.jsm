@@ -52,6 +52,13 @@ this.AppConstants = Object.freeze({
   false,
 #endif
 
+  MOZ_DEV_EDITION:
+#ifdef MOZ_DEV_EDITION
+  true,
+#else
+  false,
+#endif
+
   MOZ_SERVICES_HEALTHREPORT:
 #ifdef MOZ_SERVICES_HEALTHREPORT
   true,
@@ -132,6 +139,13 @@ this.AppConstants = Object.freeze({
 # MOZ_B2G covers both device and desktop b2g
   MOZ_B2G:
 #ifdef MOZ_B2G
+  true,
+#else
+  false,
+#endif
+
+  XP_UNIX:
+#ifdef XP_UNIX
   true,
 #else
   false,

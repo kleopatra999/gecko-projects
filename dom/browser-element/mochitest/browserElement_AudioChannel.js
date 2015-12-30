@@ -173,6 +173,7 @@ function audio() {
     ac.onactivestatechanged = function() {
       ok("activestatechanged event received.");
       ac.onactivestatechanged = null;
+      document.body.removeChild(iframe);
       runTests();
     }
   }
@@ -246,6 +247,9 @@ function runTests() {
   test();
 }
 
-addEventListener('load', function() {
-  SimpleTest.executeSoon(runTests);
+addEventListener('testready', function() {
+  SpecialPowers.pushPrefEnv({'set': [["b2g.system_manifest_url", "http://mochi.test:8888/manifest.webapp"]]},
+                            function() {
+    SimpleTest.executeSoon(runTests);
+  });
 });

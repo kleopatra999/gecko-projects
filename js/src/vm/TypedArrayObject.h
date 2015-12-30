@@ -69,6 +69,16 @@ class TypedArrayObject : public NativeObject
     template<typename T> struct OfType;
 
     static bool sameBuffer(Handle<TypedArrayObject*> a, Handle<TypedArrayObject*> b) {
+        // Inline buffers.
+        if (!a->hasBuffer() || !b->hasBuffer())
+            return a.get() == b.get();
+
+        // Shared buffers.
+        if (a->isSharedMemory() && b->isSharedMemory()) {
+            return (a->bufferObject()->as<SharedArrayBufferObject>().globalID() ==
+                    b->bufferObject()->as<SharedArrayBufferObject>().globalID());
+        }
+
         return a->bufferObject() == b->bufferObject();
     }
 
@@ -198,7 +208,7 @@ class TypedArrayObject : public NativeObject
     }
 
     bool isNeutered() const {
-        return !isSharedMemory() && (!bufferUnshared() || bufferUnshared()->isNeutered());
+        return !isSharedMemory() && bufferUnshared() && bufferUnshared()->isNeutered();
     }
 
   private:
@@ -384,6 +394,16 @@ class DataViewObject : public NativeObject
     static bool
     defineGetter(JSContext* cx, PropertyName* name, HandleNativeObject proto);
 
+    static bool getAndCheckConstructorArgs(JSContext* cx, JSObject* bufobj, const CallArgs& args,
+                                           uint32_t *byteOffset, uint32_t* byteLength);
+    static bool constructSameCompartment(JSContext* cx, HandleObject bufobj, const CallArgs& args);
+    static bool constructWrapped(JSContext* cx, HandleObject bufobj, const CallArgs& args);
+
+    friend bool ArrayBufferObject::createDataViewForThisImpl(JSContext* cx, const CallArgs& args);
+    static DataViewObject*
+    create(JSContext* cx, uint32_t byteOffset, uint32_t byteLength,
+           Handle<ArrayBufferObject*> arrayBuffer, JSObject* proto);
+
   public:
     static const Class class_;
 
@@ -420,13 +440,6 @@ class DataViewObject : public NativeObject
     }
 
     static bool class_constructor(JSContext* cx, unsigned argc, Value* vp);
-    static bool constructWithProto(JSContext* cx, unsigned argc, Value* vp);
-    static bool construct(JSContext* cx, JSObject* bufobj, const CallArgs& args,
-                          HandleObject proto);
-
-    static inline DataViewObject*
-    create(JSContext* cx, uint32_t byteOffset, uint32_t byteLength,
-           Handle<ArrayBufferObject*> arrayBuffer, JSObject* proto);
 
     static bool getInt8Impl(JSContext* cx, const CallArgs& args);
     static bool fun_getInt8(JSContext* cx, unsigned argc, Value* vp);

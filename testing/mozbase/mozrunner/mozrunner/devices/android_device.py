@@ -99,7 +99,7 @@ def verify_android_device(build_obj, install=False, xre=False, debugger=False):
     device_verified = False
     emulator = AndroidEmulator('*', substs=build_obj.substs)
     devices = emulator.dm.devices()
-    if len(devices) > 0:
+    if (len(devices) > 0) and ('device' in [d[1] for d in devices]):
         device_verified = True
     elif emulator.is_available():
         response = raw_input(
@@ -278,7 +278,7 @@ class AndroidEmulator(object):
                 emulator.wait()
     """
 
-    def __init__(self, avd_type='4.3', verbose=False, substs=None):
+    def __init__(self, avd_type='4.3', verbose=False, substs=None, device_serial=None):
         global verbose_logging
         self.emulator_log = None
         self.emulator_path = 'emulator'
@@ -289,7 +289,8 @@ class AndroidEmulator(object):
         adb_path = _find_sdk_exe(substs, 'adb', False)
         if not adb_path:
             adb_path = 'adb'
-        self.dm = DeviceManagerADB(autoconnect=False, adbPath=adb_path, retryLimit=1)
+        self.dm = DeviceManagerADB(autoconnect=False, adbPath=adb_path, retryLimit=1,
+            deviceSerial=device_serial)
         self.dm.default_timeout = 10
         _log_debug("Emulator created with type %s" % self.avd_type)
 
@@ -370,6 +371,9 @@ class AndroidEmulator(object):
         command = [self.emulator_path, "-avd",
                    self.avd_info.name, "-port", "5554"]
         if self.avd_info.extra_args:
+            # -enable-kvm option is not valid on OSX
+            if _get_host_platform() == 'macosx64' and '-enable-kvm' in self.avd_info.extra_args:
+                self.avd_info.extra_args.remove('-enable-kvm')
             command += self.avd_info.extra_args
         log_path = os.path.join(EMULATOR_HOME_DIR, 'emulator.log')
         self.emulator_log = open(log_path, 'w')
@@ -577,6 +581,11 @@ def _find_sdk_exe(substs, exe, tools):
                     "Unable to find executable at %s" % exe_path)
         except KeyError:
             _log_debug("%s not set" % exe.upper())
+
+    # Append '.exe' to the name on Windows if it's not present,
+    # so that the executable can be found.
+    if (os.name == 'nt' and not exe.lower().endswith('.exe')):
+        exe += '.exe'
 
     if not found:
         # Can exe be found in the Android SDK?

@@ -1008,6 +1008,8 @@ class CGHeaders(CGWrapper):
                                   d.interface.hasInterfaceObject() and
                                   NeedsGeneratedHasInstance(d) and
                                   d.interface.hasInterfacePrototypeObject())
+        if len(hasInstanceIncludes) > 0:
+            hasInstanceIncludes.add("nsContentUtils.h")
 
         # Now find all the things we'll need as arguments because we
         # need to wrap or unwrap them.
@@ -2264,22 +2266,6 @@ class MethodDefiner(PropertyDefiner):
                 "selfHostedName": "ArrayValues",
                 "length": 0,
                 "flags": "JSPROP_ENUMERATE",
-                "condition": MemberCondition()
-            })
-
-        # Output an @@iterator for generated iterator interfaces.  This should
-        # not be necessary, but
-        # https://bugzilla.mozilla.org/show_bug.cgi?id=1091945 means that
-        # %IteratorPrototype%[@@iterator] is a broken puppy.
-        if (not static and
-            not unforgeable and
-            descriptor.interface.isIteratorInterface()):
-            self.regular.append({
-                "name": "@@iterator",
-                "methodInfo": False,
-                "selfHostedName": "IteratorIdentity",
-                "length": 0,
-                "flags": "0",
                 "condition": MemberCondition()
             })
 
@@ -13120,7 +13106,11 @@ class CGBindingRoot(CGThing):
                     # interface object might have a ChromeOnly constructor.
                     (desc.interface.hasInterfaceObject() and
                      (desc.interface.isJSImplemented() or
-                      (ctor and isChromeOnly(ctor)))))
+                      (ctor and isChromeOnly(ctor)))) or
+                    # JS-implemented interfaces with clearable cached
+                    # attrs have chromeonly _clearFoo methods.
+                    (desc.interface.isJSImplemented() and
+                     any(clearableCachedAttrs(desc))))
 
         bindingHeaders["nsContentUtils.h"] = any(
             descriptorHasChromeOnly(d) for d in descriptors)

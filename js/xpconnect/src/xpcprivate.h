@@ -592,7 +592,7 @@ public:
     void RemoveGCCallback(xpcGCCallback cb);
 
     struct EnvironmentPreparer : public js::ScriptEnvironmentPreparer {
-        bool invoke(JS::HandleObject scope, Closure& closure) override;
+        void invoke(JS::HandleObject scope, Closure& closure) override;
     };
     EnvironmentPreparer mEnvironmentPreparer;
 
@@ -1128,7 +1128,8 @@ public:
         JS::AssertGCThingMustBeTenured(expando);
         if (!mDOMExpandoSet) {
             mDOMExpandoSet = new DOMExpandoSet();
-            mDOMExpandoSet->init(8);
+            if (!mDOMExpandoSet->init(8))
+                return false;
         }
         return mDOMExpandoSet->put(JS::Heap<JSObject*>(expando));
     }
@@ -3424,6 +3425,7 @@ struct GlobalProperties {
     bool rtcIdentityProvider : 1;
     bool fetch : 1;
     bool caches : 1;
+    bool fileReader: 1;
 };
 
 // Infallible.

@@ -654,7 +654,9 @@
                 if (this._shouldShowProgress(aRequest)) {
                   if (!(aStateFlags & nsIWebProgressListener.STATE_RESTORING)) {
                     this.mTab.setAttribute("busy", "true");
-                    if (!(aWebProgress.loadType & Ci.nsIDocShell.LOAD_CMD_RELOAD))
+
+                    if (aWebProgress.isTopLevel &&
+                        !(aWebProgress.loadType & Ci.nsIDocShell.LOAD_CMD_RELOAD))
                       this.mTabBrowser.setTabTitleLoading(this.mTab);
                   }
 
@@ -761,7 +763,7 @@
                 }
 
                 // If the browser was playing audio, we should remove the playing state.
-                if (this.mTab.hasAttribute("soundplaying")) {
+                if (this.mTab.hasAttribute("soundplaying") && this.mBrowser.lastURI != aLocation) {
                   this.mTab.removeAttribute("soundplaying");
                   this.mTabBrowser._tabAttrModified(this.mTab, ["soundplaying"]);
                 }
@@ -4027,7 +4029,7 @@
             case "DOMTitleChanged": {
               let tab = this.getTabForBrowser(browser);
               if (!tab || tab.hasAttribute("pending"))
-                return;
+                return undefined;
               let titleChanged = this.setTabTitle(tab);
               if (titleChanged && !tab.selected && !tab.hasAttribute("busy"))
                 tab.setAttribute("titlechanged", "true");
@@ -4040,7 +4042,7 @@
                 // need to do it again for any tabs.
                 window.skipNextCanClose = true;
                 window.close();
-                return;
+                return undefined;
               }
 
               let tab = this.getTabForBrowser(browser);
@@ -4088,7 +4090,7 @@
             case "DOMWebNotificationClicked": {
               let tab = this.getTabForBrowser(browser);
               if (!tab)
-                return;
+                return undefined;
               this.selectedTab = tab;
               window.focus();
               break;
@@ -4096,7 +4098,7 @@
             case "Browser:Init": {
               let tab = this.getTabForBrowser(browser);
               if (!tab)
-                return;
+                return undefined;
 
               this._outerWindowIDBrowserMap.set(browser.outerWindowID, browser);
               browser.messageManager.sendAsyncMessage("Browser:AppTab", { isAppTab: tab.pinned })
@@ -4689,6 +4691,9 @@
           let hoveredTab = this._hoveredTab;
           if (hoveredTab) {
             hoveredTab._mouseleave();
+          }
+          hoveredTab = this.querySelector("tab:hover");
+          if (hoveredTab) {
             hoveredTab._mouseenter();
           }
         ]]></body>
@@ -5202,10 +5207,9 @@
             return "none";
 
           var types = dt.mozTypesAt(0);
-          var sourceNode = null;
           // tabs are always added as the first type
           if (types[0] == TAB_DROP_TYPE) {
-            var sourceNode = dt.mozGetDataAt(TAB_DROP_TYPE, 0);
+            let sourceNode = dt.mozGetDataAt(TAB_DROP_TYPE, 0);
             if (sourceNode instanceof XULElement &&
                 sourceNode.localName == "tab" &&
                 sourceNode.ownerDocument.defaultView instanceof ChromeWindow &&
@@ -5533,6 +5537,7 @@
         canvas.width = 160 * scale;
         canvas.height = 90 * scale;
         let toDrag;
+        let dragImageOffset = -16;
         if (gMultiProcessBrowser) {
           var context = canvas.getContext('2d');
           context.fillStyle = "white";
@@ -5544,7 +5549,13 @@
             this._dndCanvas = canvas;
             this._dndPanel = document.createElement("panel");
             this._dndPanel.setAttribute("type", "drag");
-            this._dndPanel.appendChild(canvas);
+            let wrapper = document.createElementNS("http://www.w3.org/1999/xhtml", "div");
+            wrapper.style.width = "160px";
+            wrapper.style.height = "90px";
+            wrapper.appendChild(canvas);
+            canvas.style.width = "100%";
+            canvas.style.height = "100%";
+            this._dndPanel.appendChild(wrapper);
             document.documentElement.appendChild(this._dndPanel);
           }
           // PageThumb is async with e10s but that's fine
@@ -5557,8 +5568,9 @@
           // be fine, so let's use the canvas for setDragImage.
           PageThumbs.captureToCanvas(browser, canvas);
           toDrag = canvas;
+          dragImageOffset = dragImageOffset * scale;
         }
-        dt.setDragImage(toDrag, -16 * scale, -16 * scale);
+        dt.setDragImage(toDrag, dragImageOffset, dragImageOffset);
 
         // _dragData.offsetX/Y give the coordinates that the mouse should be
         // positioned relative to the corner of the new window created upon

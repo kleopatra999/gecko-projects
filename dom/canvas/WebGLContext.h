@@ -303,7 +303,7 @@ public:
     // Returns hex formatted version of glenum if glenum is unknown.
     static void EnumName(GLenum glenum, nsACString* out_name);
 
-    void DummyFramebufferOperation(const char* funcName);
+    void DummyReadFramebufferOperation(const char* funcName);
 
     WebGLTexture* ActiveBoundTextureForTarget(const TexTarget texTarget) const {
         switch (texTarget.get()) {
@@ -331,8 +331,8 @@ public:
         return ActiveBoundTextureForTarget(texTarget);
     }
 
-    already_AddRefed<CanvasLayer>
-    GetCanvasLayer(nsDisplayListBuilder* builder, CanvasLayer* oldLayer,
+    already_AddRefed<Layer>
+    GetCanvasLayer(nsDisplayListBuilder* builder, Layer* oldLayer,
                    LayerManager* manager) override;
 
     // Note that 'clean' here refers to its invalidation state, not the
@@ -1311,7 +1311,7 @@ public:
         if (!mPixelStore_PremultiplyAlpha)
             flags |= nsLayoutUtils::SFE_PREFER_NO_PREMULTIPLY_ALPHA;
 
-        gfx::DrawTarget* idealDrawTarget = nullptr; // Don't care for now.
+        RefPtr<gfx::DrawTarget> idealDrawTarget = nullptr; // Don't care for now.
         return nsLayoutUtils::SurfaceFromElement(elem, flags, idealDrawTarget);
     }
 
@@ -1756,7 +1756,7 @@ Intersect(uint32_t srcSize, int32_t dstStartInSrc, uint32_t dstSize,
 
 bool
 ZeroTextureData(WebGLContext* webgl, const char* funcName, bool respecifyTexture,
-                TexImageTarget target, uint32_t level,
+                GLuint tex, TexImageTarget target, uint32_t level,
                 const webgl::FormatUsageInfo* usage, uint32_t xOffset, uint32_t yOffset,
                 uint32_t zOffset, uint32_t width, uint32_t height, uint32_t depth);
 

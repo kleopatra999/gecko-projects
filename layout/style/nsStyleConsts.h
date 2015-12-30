@@ -244,6 +244,7 @@ enum class StyleBoxSizing : uint8_t {
 #define NS_STYLE_WILL_CHANGE_SCROLL             (1<<2)
 #define NS_STYLE_WILL_CHANGE_OPACITY            (1<<3)
 #define NS_STYLE_WILL_CHANGE_FIXPOS_CB          (1<<4)
+#define NS_STYLE_WILL_CHANGE_ABSPOS_CB          (1<<5)
 
 // See AnimationEffectReadOnly.webidl
 // and mozilla/dom/AnimationEffectReadOnlyBinding.h
@@ -635,6 +636,10 @@ enum class FillMode : uint32_t;
 // Should not overlap with NS_STYLE_GRID_TEMPLATE_SUBGRID
 #define NS_STYLE_GRID_TRACK_BREADTH_MAX_CONTENT 1
 #define NS_STYLE_GRID_TRACK_BREADTH_MIN_CONTENT 2
+
+// CSS Grid keywords for <auto-repeat>
+#define NS_STYLE_GRID_REPEAT_AUTO_FILL          0
+#define NS_STYLE_GRID_REPEAT_AUTO_FIT           1
 
 // defaults per MathML spec
 #define NS_MATHML_DEFAULT_SCRIPT_SIZE_MULTIPLIER 0.71f

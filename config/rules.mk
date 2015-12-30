@@ -53,19 +53,6 @@ _VPATH_SRCS = $(abspath $<)
 testxpcobjdir = $(DEPTH)/_tests/xpcshell
 
 ifdef ENABLE_TESTS
-
-# Add test directories to the regular directories list. TEST_DIRS should
-# arguably have the same status as other *_DIRS variables. It is coded this way
-# until Makefiles stop using the "ifdef ENABLE_TESTS; DIRS +=" convention.
-#
-# The current developer workflow expects tests to be updated when processing
-# the default target. If we ever change this implementation, the behavior
-# should be preserved or the change should be widely communicated. A
-# consequence of not processing test dir targets during the default target is
-# that changes to tests may not be updated and code could assume to pass
-# locally against non-current test code.
-DIRS += $(TEST_DIRS)
-
 ifdef CPP_UNIT_TESTS
 ifdef COMPILE_ENVIRONMENT
 
@@ -945,7 +932,7 @@ ifdef MOZ_RUST
 # in the target's LIBS.
 $(RSOBJS):
 	$(REPORT_BUILD)
-	$(RUSTC) $(RUSTFLAGS) --crate-type staticlib -o $(call mk_libname,$<) $(_VPATH_SRCS)
+	$(RUSTC) $(RUSTFLAGS) --crate-type staticlib --emit dep-info=$(MDDEPDIR)/$(call mk_libname,$<).pp,link=$(call mk_libname,$<) $(_VPATH_SRCS)
 endif
 
 $(SOBJS):
@@ -1296,7 +1283,7 @@ ifneq (,$(filter-out all chrome default export realchrome clean clobber clobber_
 MDDEPEND_FILES		:= $(strip $(wildcard $(addprefix $(MDDEPDIR)/,$(addsuffix .pp,$(notdir $(sort $(OBJS) $(PROGOBJS) $(HOST_OBJS) $(HOST_PROGOBJS)))))))
 
 ifneq (,$(MDDEPEND_FILES))
-$(call include_deps,$(MDDEPEND_FILES))
+-include $(MDDEPEND_FILES)
 endif
 
 endif
@@ -1304,7 +1291,7 @@ endif
 MDDEPEND_FILES		:= $(strip $(wildcard $(addprefix $(MDDEPDIR)/,$(EXTRA_MDDEPEND_FILES))))
 
 ifneq (,$(MDDEPEND_FILES))
-$(call include_deps,$(MDDEPEND_FILES))
+-include $(MDDEPEND_FILES)
 endif
 
 #############################################################################
@@ -1483,7 +1470,7 @@ $(foreach file,$(PP_TARGETS_ALL_RESULTS), \
 MDDEPEND_FILES := $(strip $(wildcard $(addprefix $(MDDEPDIR)/,$(addsuffix .pp,$(notdir $(PP_TARGETS_ALL_RESULTS))))))
 
 ifneq (,$(MDDEPEND_FILES))
-$(call include_deps,$(MDDEPEND_FILES))
+-include $(MDDEPEND_FILES)
 endif
 
 endif

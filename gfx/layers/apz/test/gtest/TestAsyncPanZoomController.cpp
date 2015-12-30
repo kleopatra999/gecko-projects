@@ -154,8 +154,7 @@ public:
 
 protected:
   AsyncPanZoomController* NewAPZCInstance(uint64_t aLayersId,
-                                          GeckoContentController* aController,
-                                          TaskThrottler* aPaintThrottler) override;
+                                          GeckoContentController* aController) override;
 
   TimeStamp GetFrameTime() override {
     return mcc->Time();
@@ -169,10 +168,9 @@ class TestAsyncPanZoomController : public AsyncPanZoomController {
 public:
   TestAsyncPanZoomController(uint64_t aLayersId, MockContentControllerDelayed* aMcc,
                              TestAPZCTreeManager* aTreeManager,
-                             TaskThrottler* aPaintThrottler,
                              GestureBehavior aBehavior = DEFAULT_GESTURES)
     : AsyncPanZoomController(aLayersId, aTreeManager, aTreeManager->GetInputQueue(),
-        aMcc, aPaintThrottler, aBehavior)
+        aMcc, aBehavior)
     , mWaitForMainThread(false)
     , mcc(aMcc)
   {}
@@ -261,11 +259,10 @@ private:
 
 AsyncPanZoomController*
 TestAPZCTreeManager::NewAPZCInstance(uint64_t aLayersId,
-                                     GeckoContentController* aController,
-                                     TaskThrottler* aPaintThrottler)
+                                     GeckoContentController* aController)
 {
   MockContentControllerDelayed* mcc = static_cast<MockContentControllerDelayed*>(aController);
-  return new TestAsyncPanZoomController(aLayersId, mcc, this, aPaintThrottler,
+  return new TestAsyncPanZoomController(aLayersId, mcc, this,
       AsyncPanZoomController::USE_GESTURE_DETECTOR);
 }
 
@@ -297,9 +294,8 @@ protected:
     APZThreadUtils::SetControllerThread(MessageLoop::current());
 
     mcc = new NiceMock<MockContentControllerDelayed>();
-    mPaintThrottler = new TaskThrottler(mcc->Time(), TimeDuration::FromMilliseconds(500));
     tm = new TestAPZCTreeManager(mcc);
-    apzc = new TestAsyncPanZoomController(0, mcc, tm, mPaintThrottler, mGestureBehavior);
+    apzc = new TestAsyncPanZoomController(0, mcc, tm, mGestureBehavior);
     apzc->SetFrameMetrics(TestFrameMetrics());
   }
 
@@ -382,7 +378,6 @@ protected:
 
   AsyncPanZoomController::GestureBehavior mGestureBehavior;
   RefPtr<MockContentControllerDelayed> mcc;
-  RefPtr<TaskThrottler> mPaintThrottler;
   RefPtr<TestAPZCTreeManager> tm;
   RefPtr<TestAsyncPanZoomController> apzc;
 };
@@ -548,11 +543,12 @@ Pan(const RefPtr<InputReceiver>& aTarget,
     nsEventStatus (*aOutEventStatuses)[4] = nullptr,
     uint64_t* aOutInputBlockId = nullptr)
 {
-  // Reduce the touch start tolerance to a tiny value.
+  // Reduce the touch start and move tolerance to a tiny value.
   // We can't use a scoped pref because this value might be read at some later
   // time when the events are actually processed, rather than when we deliver
   // them.
   gfxPrefs::SetAPZTouchStartTolerance(1.0f / 1000.0f);
+  gfxPrefs::SetAPZTouchMoveTolerance(0.0f);
   const int OVERCOME_TOUCH_TOLERANCE = 1;
 
   const TimeDuration TIME_BETWEEN_TOUCH_EVENT = TimeDuration::FromMilliseconds(50);
@@ -818,7 +814,8 @@ protected:
     MakeApzcZoomable();
 
     if (aShouldTriggerPinch) {
-      EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(1);
+      // One repaint request for each gesture.
+      EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(2);
     } else {
       EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(0);
     }
@@ -1140,7 +1137,7 @@ TEST_F(APZCBasicTester, ComplexTransform) {
   // sides.
 
   RefPtr<TestAsyncPanZoomController> childApzc =
-      new TestAsyncPanZoomController(0, mcc, tm, mPaintThrottler);
+      new TestAsyncPanZoomController(0, mcc, tm);
 
   const char* layerTreeSyntax = "c(c)";
   // LayerID                     0 1
@@ -1247,7 +1244,8 @@ protected:
   void DoPanTest(bool aShouldTriggerScroll, bool aShouldBeConsumed, uint32_t aBehavior)
   {
     if (aShouldTriggerScroll) {
-      EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(1);
+      // One repaint request for each pan.
+      EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(2);
     } else {
       EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(0);
     }
@@ -1356,8 +1354,6 @@ TEST_F(APZCPanningTester, PanWithPreventDefault) {
 }
 
 TEST_F(APZCBasicTester, Fling) {
-  EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(1);
-
   int touchStart = 50;
   int touchEnd = 10;
   ParentLayerPoint pointOut;
@@ -2421,10 +2417,8 @@ TEST_F(APZHitTestingTester, HitTesting2) {
   // because we have already issued a paint request with it.
   EXPECT_EQ(ScreenPoint(25, 25), transformToGecko * ParentLayerPoint(12.5, 75));
 
-  // This second pan will move the APZC by another 50 pixels but since the paint
-  // request dispatched above has not "completed", we will not dispatch another
-  // one yet. Now we have an async transform on top of the pending paint request
-  // transform.
+  // This second pan will move the APZC by another 50 pixels.
+  EXPECT_CALL(*mcc, RequestContentRepaint(_)).Times(1);
   ApzcPanNoFling(apzcroot, mcc, 100, 50);
 
   // Hit where layers[3] used to be. It should now hit the root.
@@ -2432,18 +2426,16 @@ TEST_F(APZHitTestingTester, HitTesting2) {
   EXPECT_EQ(apzcroot, hit.get());
   // transformToApzc doesn't unapply the root's own async transform
   EXPECT_EQ(ParentLayerPoint(75, 75), transformToApzc * ScreenPoint(75, 75));
-  // transformToGecko unapplies the full async transform of -100 pixels, and then
-  // reapplies the "D" transform of -50 leading to an overall adjustment of +50
-  EXPECT_EQ(ScreenPoint(75, 125), transformToGecko * ParentLayerPoint(75, 75));
+  // transformToGecko unapplies the full async transform of -100 pixels
+  EXPECT_EQ(ScreenPoint(75, 75), transformToGecko * ParentLayerPoint(75, 75));
 
   // Hit where layers[1] used to be. It should now hit the root.
   hit = GetTargetAPZC(ScreenPoint(25, 25));
   EXPECT_EQ(apzcroot, hit.get());
   // transformToApzc doesn't unapply the root's own async transform
   EXPECT_EQ(ParentLayerPoint(25, 25), transformToApzc * ScreenPoint(25, 25));
-  // transformToGecko unapplies the full async transform of -100 pixels, and then
-  // reapplies the "D" transform of -50 leading to an overall adjustment of +50
-  EXPECT_EQ(ScreenPoint(25, 75), transformToGecko * ParentLayerPoint(25, 25));
+  // transformToGecko unapplies the full async transform of -100 pixels
+  EXPECT_EQ(ScreenPoint(25, 25), transformToGecko * ParentLayerPoint(25, 25));
 }
 
 TEST_F(APZCTreeManagerTester, ScrollablePaintedLayers) {
@@ -2992,6 +2984,43 @@ TEST_F(APZOverscrollHandoffTester, StuckInOverscroll_Bug1073250) {
   EXPECT_FALSE(rootApzc->IsOverscrolled());
 }
 
+// This is almost exactly like StuckInOverscroll_Bug1073250, except the
+// APZC receiving the input events for the first touch block is the child
+// (and thus not the same APZC that overscrolls, which is the parent).
+TEST_F(APZOverscrollHandoffTester, StuckInOverscroll_Bug1231228) {
+  // Enable overscrolling.
+  SCOPED_GFX_PREF(APZOverscrollEnabled, bool, true);
+
+  CreateOverscrollHandoffLayerTree1();
+
+  TestAsyncPanZoomController* child = ApzcOf(layers[1]);
+
+  // Pan, causing the parent APZC to overscroll.
+  Pan(manager, mcc, 60, 90, true /* keep finger down */);
+  EXPECT_FALSE(child->IsOverscrolled());
+  EXPECT_TRUE(rootApzc->IsOverscrolled());
+
+  // Put a second finger down.
+  MultiTouchInput secondFingerDown(MultiTouchInput::MULTITOUCH_START, 0, TimeStamp(), 0);
+  // Use the same touch identifier for the first touch (0) as Pan(). (A bit hacky.)
+  secondFingerDown.mTouches.AppendElement(SingleTouchData(0, ScreenIntPoint(10, 40), ScreenSize(0, 0), 0, 0));
+  secondFingerDown.mTouches.AppendElement(SingleTouchData(1, ScreenIntPoint(30, 20), ScreenSize(0, 0), 0, 0));
+  manager->ReceiveInputEvent(secondFingerDown, nullptr, nullptr);
+
+  // Release the fingers.
+  MultiTouchInput fingersUp = secondFingerDown;
+  fingersUp.mType = MultiTouchInput::MULTITOUCH_END;
+  manager->ReceiveInputEvent(fingersUp, nullptr, nullptr);
+
+  // Allow any animations to run their course.
+  child->AdvanceAnimationsUntilEnd();
+  rootApzc->AdvanceAnimationsUntilEnd();
+
+  // Make sure nothing is overscrolled.
+  EXPECT_FALSE(child->IsOverscrolled());
+  EXPECT_FALSE(rootApzc->IsOverscrolled());
+}
+
 // Test that flinging in a direction where one component of the fling goes into
 // overscroll but the other doesn't, results in just the one component being
 // handed off to the parent, while the original APZC continues flinging in the
@@ -3086,6 +3115,66 @@ TEST_F(APZOverscrollHandoffTester, ScrollgrabFlingAcceleration1) {
 TEST_F(APZOverscrollHandoffTester, ScrollgrabFlingAcceleration2) {
   CreateScrollgrabLayerTree(false /* do not make parent scrollable */);
   TestFlingAcceleration();
+}
+
+TEST_F(APZOverscrollHandoffTester, ImmediateHandoffDisallowed_Pan) {
+  SCOPED_GFX_PREF(APZAllowImmediateHandoff, bool, false);
+
+  CreateOverscrollHandoffLayerTree1();
+
+  RefPtr<TestAsyncPanZoomController> parentApzc = ApzcOf(root);
+  RefPtr<TestAsyncPanZoomController> childApzc = ApzcOf(layers[1]);
+
+  // Pan on the child, enough to scroll it to its end and have scroll
+  // left to hand off. Since immediate handoff is disallowed, we expect
+  // the leftover scroll not to be handed off.
+  Pan(childApzc, mcc, 60, 5);
+
+  // Verify that the parent has not scrolled.
+  EXPECT_EQ(50, childApzc->GetFrameMetrics().GetScrollOffset().y);
+  EXPECT_EQ(0, parentApzc->GetFrameMetrics().GetScrollOffset().y);
+
+  // Pan again on the child. This time, since the child was scrolled to
+  // its end when the gesture began, we expect the scroll to be handed off.
+  Pan(childApzc, mcc, 60, 50);
+
+  // Verify that the parent scrolled.
+  EXPECT_EQ(10, parentApzc->GetFrameMetrics().GetScrollOffset().y);
+}
+
+TEST_F(APZOverscrollHandoffTester, ImmediateHandoffDisallowed_Fling) {
+  SCOPED_GFX_PREF(APZAllowImmediateHandoff, bool, false);
+
+  CreateOverscrollHandoffLayerTree1();
+
+  RefPtr<TestAsyncPanZoomController> parentApzc = ApzcOf(root);
+  RefPtr<TestAsyncPanZoomController> childApzc = ApzcOf(layers[1]);
+
+  // Pan on the child, enough to get very close to the end, so that the
+  // subsequent fling reaches the end and has leftover velocity to hand off.
+  Pan(childApzc, mcc, 60, 12);
+
+  // Allow the fling to run its course.
+  childApzc->AdvanceAnimationsUntilEnd();
+  parentApzc->AdvanceAnimationsUntilEnd();
+
+  // Verify that the parent has not scrolled.
+  // The first comparison needs to be an ASSERT_NEAR because the fling
+  // computations are such that the final scroll position can be within
+  // COORDINATE_EPSILON of the end rather than right at the end.
+  ASSERT_NEAR(50, childApzc->GetFrameMetrics().GetScrollOffset().y, COORDINATE_EPSILON);
+  EXPECT_EQ(0, parentApzc->GetFrameMetrics().GetScrollOffset().y);
+
+  // Pan again on the child. This time, since the child was scrolled to
+  // its end when the gesture began, we expect the scroll to be handed off.
+  Pan(childApzc, mcc, 60, 50);
+
+  // Allow the fling to run its course. The fling should also be handed off.
+  childApzc->AdvanceAnimationsUntilEnd();
+  parentApzc->AdvanceAnimationsUntilEnd();
+
+  // Verify that the parent scrolled from the fling.
+  EXPECT_GT(parentApzc->GetFrameMetrics().GetScrollOffset().y, 10);
 }
 
 class APZEventRegionsTester : public APZCTreeManagerTester {
@@ -3399,89 +3488,3 @@ public:
 private:
   TaskRunMetrics& mMetrics;
 };
-
-class APZTaskThrottlerTester : public ::testing::Test {
-public:
-  APZTaskThrottlerTester()
-  {
-    now = TimeStamp::Now();
-    throttler = new TaskThrottler(now, TimeDuration::FromMilliseconds(100));
-  }
-
-protected:
-  TimeStamp Advance(int aMillis = 5)
-  {
-    now = now + TimeDuration::FromMilliseconds(aMillis);
-    return now;
-  }
-
-  UniquePtr<CancelableTask> NewTask()
-  {
-    return MakeUnique<MockTask>(metrics);
-  }
-
-  TimeStamp now;
-  RefPtr<TaskThrottler> throttler;
-  TaskRunMetrics metrics;
-};
-
-TEST_F(APZTaskThrottlerTester, BasicTest) {
-  // Check that posting the first task runs right away
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 1
-  EXPECT_EQ(1, metrics.GetAndClearRunCount());
-
-  // Check that posting the second task doesn't run until the first one is done
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 2
-  EXPECT_EQ(0, metrics.GetAndClearRunCount());
-  throttler->TaskComplete(Advance());                           // for task 1
-  EXPECT_EQ(1, metrics.GetAndClearRunCount());
-  EXPECT_EQ(0, metrics.GetAndClearCancelCount());
-
-  // Check that tasks are coalesced: dispatch 5 tasks
-  // while there is still one outstanding, and ensure
-  // that only one of the 5 runs
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 3
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 4
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 5
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 6
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 7
-  EXPECT_EQ(0, metrics.GetAndClearRunCount());
-  EXPECT_EQ(4, metrics.GetAndClearCancelCount());
-
-  throttler->TaskComplete(Advance());                           // for task 2
-  EXPECT_EQ(1, metrics.GetAndClearRunCount());
-  throttler->TaskComplete(Advance());                           // for task 7 (tasks 3..6 were cancelled)
-  EXPECT_EQ(0, metrics.GetAndClearRunCount());
-  EXPECT_EQ(0, metrics.GetAndClearCancelCount());
-}
-
-TEST_F(APZTaskThrottlerTester, TimeoutTest) {
-  // Check that posting the first task runs right away
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 1
-  EXPECT_EQ(1, metrics.GetAndClearRunCount());
-
-  // Because we let 100ms pass, the second task should
-  // run immediately even though the first one isn't
-  // done yet
-  throttler->PostTask(FROM_HERE, NewTask(), Advance(100));      // task 2; task 1 is assumed lost
-  EXPECT_EQ(1, metrics.GetAndClearRunCount());
-  throttler->TaskComplete(Advance());                           // for task 1, but TaskThrottler thinks it's for task 2
-  throttler->TaskComplete(Advance());                           // for task 2, TaskThrottler ignores it
-  EXPECT_EQ(0, metrics.GetAndClearRunCount());
-  EXPECT_EQ(0, metrics.GetAndClearCancelCount());
-
-  // This time queue up a few tasks before the timeout expires
-  // and ensure cancellation still works as expected
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 3
-  EXPECT_EQ(1, metrics.GetAndClearRunCount());
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 4
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 5
-  throttler->PostTask(FROM_HERE, NewTask(), Advance());         // task 6
-  EXPECT_EQ(0, metrics.GetAndClearRunCount());
-  throttler->PostTask(FROM_HERE, NewTask(), Advance(100));      // task 7; task 3 is assumed lost
-  EXPECT_EQ(1, metrics.GetAndClearRunCount());
-  EXPECT_EQ(3, metrics.GetAndClearCancelCount());               // tasks 4..6 should have been cancelled
-  throttler->TaskComplete(Advance());                           // for task 7
-  EXPECT_EQ(0, metrics.GetAndClearRunCount());
-  EXPECT_EQ(0, metrics.GetAndClearCancelCount());
-}

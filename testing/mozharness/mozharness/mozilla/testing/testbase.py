@@ -309,8 +309,17 @@ class TestingMixin(VirtualenvMixin, BuildbotMixin, ResourceMonitoringMixin,
             if c.get("test_packages_url"):
                 self.test_packages_url = c['test_packages_url']
 
+            # This supports original Buildbot to Buildbot mode
             if self.buildbot_config['sourcestamp']['changes']:
                 self.find_artifacts_from_buildbot_changes()
+
+            # This supports TaskCluster/BBB task to Buildbot job
+            elif 'testPackagesUrl' in self.buildbot_config['properties'] and \
+                 'packageUrl' in self.buildbot_config['properties']:
+                self.installer_url = self.buildbot_config['properties']['packageUrl']
+                self.test_packages_url = self.buildbot_config['properties']['testPackagesUrl']
+
+            # This supports TaskCluster/BBB task to TaskCluster/BBB task
             elif 'taskId' in self.buildbot_config['properties']:
                 self.find_artifacts_from_taskcluster()
 
@@ -427,7 +436,8 @@ You can set this by:
             for file_name in target_packages:
                 target_dir = test_install_dir
                 unzip_dirs = target_unzip_dirs
-                if "jsshell-" in file_name:
+                if "jsshell-" in file_name or file_name == "target.jsshell.zip":
+                    self.info("Special-casing the jsshell zip file")
                     unzip_dirs = None
                     target_dir = dirs['abs_test_bin_dir']
                 url = self.query_build_dir_url(file_name)
@@ -539,7 +549,7 @@ You can set this by:
             if self.test_packages_url:
                 self.error('Test data will be downloaded from "%s", the specified test '
                            ' package data at "%s" will be ignored.' %
-                           (self.config('test_url'), self.test_packages_url))
+                           (self.config.get('test_url'), self.test_packages_url))
 
             self._download_test_zip()
             self._extract_test_zip(target_unzip_dirs=target_unzip_dirs)

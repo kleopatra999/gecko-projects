@@ -1,3 +1,7 @@
+/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
+/* vim: set sts=2 sw=2 et tw=80: */
+"use strict";
+
 Cu.import("resource://gre/modules/ExtensionUtils.jsm");
 Cu.import("resource://gre/modules/MatchPattern.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
@@ -5,8 +9,7 @@ Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 
 var {
   EventManager,
-  contextMenuItems,
-  runSafe
+  runSafe,
 } = ExtensionUtils;
 
 
@@ -20,11 +23,6 @@ var onClickedCallbacksMap = new WeakMap();
 
 // If id is not specified for an item we use an integer.
 var nextID = 0;
-
-function contextMenuObserver(subject, topic, data) {
-  subject = subject.wrappedJSObject;
-  menuBuilder.build(subject);
-}
 
 // When a new contextMenu is opened, this function is called and
 // we populate the |xulMenu| with all the items from extensions
@@ -82,7 +80,7 @@ var menuBuilder = {
             topLevelItems.add(element);
           }
 
-          element.addEventListener("command", event => {
+          element.addEventListener("command", event => { // eslint-disable-line mozilla/balanced-listeners
             item.tabManager.addActiveTabPermission();
             if (item.onclick) {
               let clickData = item.getClickData(contextData, event);
@@ -124,6 +122,11 @@ var menuBuilder = {
   },
 
   _itemsToCleanUp: new Set(),
+};
+
+function contextMenuObserver(subject, topic, data) {
+  subject = subject.wrappedJSObject;
+  menuBuilder.build(subject);
 }
 
 function getContexts(contextData) {
@@ -132,38 +135,37 @@ function getContexts(contextData) {
   contexts.add("page");
 
   if (contextData.inFrame) {
-    contexts.add("frame")
+    contexts.add("frame");
   }
 
   if (contextData.isTextSelected) {
-    contexts.add("selection")
+    contexts.add("selection");
   }
 
   if (contextData.onLink) {
-    contexts.add("link")
+    contexts.add("link");
   }
 
   if (contextData.onEditableArea) {
-    contexts.add("editable")
+    contexts.add("editable");
   }
 
   if (contextData.onImage) {
-    contexts.add("image")
+    contexts.add("image");
   }
 
   if (contextData.onVideo) {
-    contexts.add("video")
+    contexts.add("video");
   }
 
   if (contextData.onAudio) {
-    contexts.add("audio")
+    contexts.add("audio");
   }
 
   return contexts;
 }
 
-function MenuItem(extension, extContext, createProperties)
-{
+function MenuItem(extension, extContext, createProperties) {
   this.extension = extension;
   this.extContext = extContext;
 
@@ -175,11 +177,11 @@ function MenuItem(extension, extContext, createProperties)
 MenuItem.prototype = {
   // init is called from the MenuItem ctor and from update. The |update|
   // flag is for the later case.
-  init(createProperties, update=false) {
+  init(createProperties, update = false) {
     let item = this;
     // return true if the prop was set on |this|
     function parseProp(propName, defaultValue = null) {
-      if (propName in createProperties) {
+      if (createProperties[propName] !== null) {
         item[propName] = createProperties[propName];
         return true;
       } else if (!update && defaultValue !== null) {
@@ -189,9 +191,7 @@ MenuItem.prototype = {
       return false;
     }
 
-    if (update && "id" in createProperties) {
-      throw new Error("Id of a MenuItem cannot be changed");
-    } else if (!update) {
+    if (!update) {
       let isIdUsed = contextMenuMap.get(this.extension).has(createProperties.id);
       if (createProperties.id && isIdUsed) {
         throw new Error("Id already exists");
@@ -204,18 +204,16 @@ MenuItem.prototype = {
     parseProp("checked", false);
     parseProp("contexts", ["all"]);
 
-    // It's a bit wacky... but we shouldn't be too scared to use wrappedJSObject here.
-    // Later on we will do proper argument validation anyway.
-    if ("onclick" in createProperties.wrappedJSObject) {
-      this.onclick = createProperties.wrappedJSObject.onclick;
+    if (createProperties.onclick !== null) {
+      this.onclick = createProperties.onclick;
     }
 
     if (parseProp("parentId")) {
       let found = false;
       let menuMap = contextMenuMap.get(this.extension);
       if (menuMap.has(this.parentId)) {
-          found = true;
-          menuMap.get(this.parentId).isMenu = true;
+        found = true;
+        menuMap.get(this.parentId).isMenu = true;
       }
       if (!found) {
         throw new Error("MenuItem with this parentId not found");
@@ -265,7 +263,7 @@ MenuItem.prototype = {
 
     let toRemove = new Set();
     toRemove.add(this.id);
-    for (let [id, item] of menuMap) {
+    for (let [, item] of menuMap) {
       if (hasAncestorWithId(item, this.id)) {
         toRemove.add(item.id);
       }
@@ -288,7 +286,7 @@ MenuItem.prototype = {
     }
 
     let clickData = {
-      menuItemId: this.id
+      menuItemId: this.id,
     };
 
     function setIfDefined(argName, value) {
@@ -318,7 +316,7 @@ MenuItem.prototype = {
     for (let c of this.contexts) {
       if (contexts.has(c)) {
         enabled = true;
-        break
+        break;
       }
     }
     if (!enabled) {
@@ -342,6 +340,7 @@ MenuItem.prototype = {
 };
 
 var extCount = 0;
+/* eslint-disable mozilla/balanced-listeners */
 extensions.on("startup", (type, extension) => {
   contextMenuMap.set(extension, new Map());
   if (++extCount == 1) {
@@ -358,8 +357,9 @@ extensions.on("shutdown", (type, extension) => {
                                 "on-build-contextmenu");
   }
 });
+/* eslint-enable mozilla/balanced-listeners */
 
-extensions.registerPrivilegedAPI("contextMenus", (extension, context) => {
+extensions.registerSchemaAPI("contextMenus", "contextMenus", (extension, context) => {
   return {
     contextMenus: {
       create: function(createProperties, callback) {
@@ -392,7 +392,7 @@ extensions.registerPrivilegedAPI("contextMenus", (extension, context) => {
       },
 
       removeAll: function(callback) {
-        for (let [id, menuItem] of contextMenuMap.get(extension)) {
+        for (let [, menuItem] of contextMenuMap.get(extension)) {
           menuItem.remove();
         }
         if (callback) {

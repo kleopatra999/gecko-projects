@@ -14,12 +14,14 @@
 #include "jit/InlinableNatives.h"
 #include "vm/RegExpStatics.h"
 #include "vm/StringBuffer.h"
+#include "vm/Unicode.h"
 
 #include "jsobjinlines.h"
 
 #include "vm/NativeObject-inl.h"
 
 using namespace js;
+using namespace js::unicode;
 
 using mozilla::ArrayLength;
 using mozilla::Maybe;
@@ -174,8 +176,11 @@ RegExpInitialize(JSContext* cx, Handle<RegExpObject*> obj, HandleValue patternVa
     /* Steps 9-10. */
     CompileOptions options(cx);
     frontend::TokenStream dummyTokenStream(cx, options, nullptr, 0, nullptr);
-    if (!irregexp::ParsePatternSyntax(dummyTokenStream, cx->tempLifoAlloc(), pattern))
+    if (!irregexp::ParsePatternSyntax(dummyTokenStream, cx->tempLifoAlloc(), pattern,
+                                      flags & UnicodeFlag))
+    {
         return false;
+    }
 
     if (staticsUse == UseRegExpStatics) {
         RegExpStatics* res = cx->global()->getRegExpStatics(cx);
@@ -185,7 +190,7 @@ RegExpInitialize(JSContext* cx, Handle<RegExpObject*> obj, HandleValue patternVa
     }
 
     /* Steps 11-15. */
-    if (!InitializeRegExp(cx, obj, pattern, flags))
+    if (!RegExpObject::initFromAtom(cx, obj, pattern, flags))
         return false;
 
     /* Step 16. */
@@ -268,7 +273,7 @@ regexp_compile_impl(JSContext* cx, const CallArgs& args)
         }
 
         // Step 5.
-        if (!InitializeRegExp(cx, regexp, sourceAtom, flags))
+        if (!RegExpObject::initFromAtom(cx, regexp, sourceAtom, flags))
             return false;
 
         args.rval().setObject(*regexp);
@@ -307,11 +312,11 @@ js::regexp_construct(JSContext* cx, unsigned argc, Value* vp)
     if (!IsRegExp(cx, args.get(0), &patternIsRegExp))
         return false;
 
-    if (args.isConstructing()) {
-        // XXX Step 3!
-    } else {
-        // XXX Step 4a
 
+    // We can delay step 3 and step 4a until later, during
+    // GetPrototypeFromCallableConstructor calls. Accessing the new.target
+    // and the callee from the stack is unobservable.
+    if (!args.isConstructing()) {
         // Step 4b.
         if (patternIsRegExp && !args.hasDefined(1)) {
             RootedObject patternObj(cx, &args[0].toObject());
@@ -341,6 +346,7 @@ js::regexp_construct(JSContext* cx, unsigned argc, Value* vp)
         // don't reuse the RegExpShared below.
         RootedObject patternObj(cx, &patternValue.toObject());
 
+        // Step 5
         RootedAtom sourceAtom(cx);
         RegExpFlag flags;
         {
@@ -353,27 +359,30 @@ js::regexp_construct(JSContext* cx, unsigned argc, Value* vp)
             if (!args.hasDefined(1)) {
                 // Step 5b.
                 flags = g->getFlags();
-            } else {
-                // Step 5c.
-                // XXX We shouldn't be converting to string yet!  This must
-                //     come *after* the .constructor access in step 8.
-                flags = RegExpFlag(0);
-                RootedString flagStr(cx, ToString<CanGC>(cx, args[1]));
-                if (!flagStr)
-                    return false;
-                if (!ParseRegExpFlags(cx, flagStr, &flags))
-                    return false;
             }
         }
 
         // Steps 8-9.
-        // XXX Note bug in step 5c, with respect to step 8.
-        Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx));
+        RootedObject proto(cx);
+        if (!GetPrototypeFromCallableConstructor(cx, args, &proto))
+            return false;
+
+        Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx, proto));
         if (!regexp)
             return false;
 
         // Step 10.
-        if (!InitializeRegExp(cx, regexp, sourceAtom, flags))
+        if (args.hasDefined(1)) {
+            // Step 5c / 21.2.3.2.2 RegExpInitialize step 5.
+            flags = RegExpFlag(0);
+            RootedString flagStr(cx, ToString<CanGC>(cx, args[1]));
+            if (!flagStr)
+                return false;
+            if (!ParseRegExpFlags(cx, flagStr, &flags))
+                return false;
+        }
+
+        if (!RegExpObject::initFromAtom(cx, regexp, sourceAtom, flags))
             return false;
 
         args.rval().setObject(*regexp);
@@ -404,7 +413,11 @@ js::regexp_construct(JSContext* cx, unsigned argc, Value* vp)
     }
 
     // Steps 8-9.
-    Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx));
+    RootedObject proto(cx);
+    if (!GetPrototypeFromCallableConstructor(cx, args, &proto))
+        return false;
+
+    Rooted<RegExpObject*> regexp(cx, RegExpAlloc(cx, proto));
     if (!regexp)
         return false;
 
@@ -549,6 +562,24 @@ regexp_sticky(JSContext* cx, unsigned argc, JS::Value* vp)
     return CallNonGenericMethod<IsRegExpObject, regexp_sticky_impl>(cx, args);
 }
 
+/* ES6 21.2.5.15. */
+MOZ_ALWAYS_INLINE bool
+regexp_unicode_impl(JSContext* cx, const CallArgs& args)
+{
+    MOZ_ASSERT(IsRegExpObject(args.thisv()));
+    /* Steps 4-6. */
+    args.rval().setBoolean(args.thisv().toObject().as<RegExpObject>().unicode());
+    return true;
+}
+
+static bool
+regexp_unicode(JSContext* cx, unsigned argc, JS::Value* vp)
+{
+    /* Steps 1-3. */
+    CallArgs args = CallArgsFromVp(argc, vp);
+    return CallNonGenericMethod<IsRegExpObject, regexp_unicode_impl>(cx, args);
+}
+
 const JSPropertySpec js::regexp_properties[] = {
     JS_SELF_HOSTED_GET("flags", "RegExpFlagsGetter", 0),
     JS_PSG("global", regexp_global, 0),
@@ -556,6 +587,7 @@ const JSPropertySpec js::regexp_properties[] = {
     JS_PSG("multiline", regexp_multiline, 0),
     JS_PSG("source", regexp_source, 0),
     JS_PSG("sticky", regexp_sticky, 0),
+    JS_PSG("unicode", regexp_unicode, 0),
     JS_PS_END
 };
 
@@ -602,8 +634,6 @@ const JSFunctionSpec js::regexp_methods[] = {
     }
 
 DEFINE_STATIC_GETTER(static_input_getter,        return res->createPendingInput(cx, args.rval()))
-DEFINE_STATIC_GETTER(static_multiline_getter,    args.rval().setBoolean(res->multiline());
-                                                 return true)
 DEFINE_STATIC_GETTER(static_lastMatch_getter,    return res->createLastMatch(cx, args.rval()))
 DEFINE_STATIC_GETTER(static_lastParen_getter,    return res->createLastParen(cx, args.rval()))
 DEFINE_STATIC_GETTER(static_leftContext_getter,  return res->createLeftContext(cx, args.rval()))
@@ -648,11 +678,44 @@ static_input_setter(JSContext* cx, unsigned argc, Value* vp)
 }
 
 static bool
+WarnOnceAboutRegExpMultiline(JSContext* cx)
+{
+    if (!cx->compartment()->warnedAboutRegExpMultiline) {
+        if (!JS_ReportErrorFlagsAndNumber(cx, JSREPORT_WARNING, GetErrorMessage, nullptr,
+                                          JSMSG_DEPRECATED_REGEXP_MULTILINE))
+        {
+            return false;
+        }
+        cx->compartment()->warnedAboutRegExpMultiline = true;
+    }
+
+    return true;
+}
+
+static bool
+static_multiline_getter(JSContext* cx, unsigned argc, Value* vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    RegExpStatics* res = cx->global()->getRegExpStatics(cx);
+    if (!res)
+        return false;
+
+    if (!WarnOnceAboutRegExpMultiline(cx))
+        return false;
+
+    args.rval().setBoolean(res->multiline());
+    return true;
+}
+
+static bool
 static_multiline_setter(JSContext* cx, unsigned argc, Value* vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
     RegExpStatics* res = cx->global()->getRegExpStatics(cx);
     if (!res)
+        return false;
+
+    if (!WarnOnceAboutRegExpMultiline(cx))
         return false;
 
     bool b = ToBoolean(args.get(0));
@@ -699,7 +762,9 @@ js::CreateRegExpPrototype(JSContext* cx, JSProtoKey key)
     proto->NativeObject::setPrivate(nullptr);
 
     RootedAtom source(cx, cx->names().empty);
-    return InitializeRegExp(cx, proto, source, RegExpFlag(0));
+    if (!RegExpObject::initFromAtom(cx, proto, source, RegExpFlag(0)))
+        return nullptr;
+    return proto;
 }
 
 static bool
@@ -717,6 +782,29 @@ SetLastIndex(JSContext* cx, Handle<RegExpObject*> reobj, double lastIndex)
 
     reobj->setLastIndex(lastIndex);
     return true;
+}
+
+template <typename CharT>
+static bool
+IsTrailSurrogateWithLeadSurrogateImpl(JSContext* cx, HandleLinearString input, size_t index)
+{
+    JS::AutoCheckCannotGC nogc;
+    MOZ_ASSERT(index > 0 && index < input->length());
+    const CharT* inputChars = input->chars<CharT>(nogc);
+
+    return unicode::IsTrailSurrogate(inputChars[index]) &&
+           unicode::IsLeadSurrogate(inputChars[index - 1]);
+}
+
+static bool
+IsTrailSurrogateWithLeadSurrogate(JSContext* cx, HandleLinearString input, int32_t index)
+{
+    if (index <= 0 || size_t(index) >= input->length())
+        return false;
+
+    return input->hasLatin1Chars()
+           ? IsTrailSurrogateWithLeadSurrogateImpl<Latin1Char>(cx, input, index)
+           : IsTrailSurrogateWithLeadSurrogateImpl<char16_t>(cx, input, index);
 }
 
 /* ES6 final draft 21.2.5.2.2. */
@@ -799,6 +887,33 @@ js::ExecuteRegExp(JSContext* cx, HandleObject regexp, HandleString string,
 
         /* Step 15.a.iii. */
         return RegExpRunStatus_Success_NotFound;
+    }
+
+    /* Steps 12-13. */
+    if (reobj->unicode()) {
+        /*
+         * ES6 21.2.2.2 step 2.
+         *   Let listIndex be the index into Input of the character that was
+         *   obtained from element index of str.
+         *
+         * In the spec, pattern match is performed with decoded Unicode code
+         * points, but our implementation performs it with UTF-16 encoded
+         * string.  In step 2, we should decrement searchIndex (index) if it
+         * points the trail surrogate that has corresponding lead surrogate.
+         *
+         *   var r = /\uD83D\uDC38/ug;
+         *   r.lastIndex = 1;
+         *   var str = "\uD83D\uDC38";
+         *   var result = r.exec(str); // pattern match starts from index 0
+         *   print(result.index);      // prints 0
+         *
+         * Note: this doesn't match the current spec text and result in
+         * different values for `result.index` under certain conditions.
+         * However, the spec will change to match our implementation's
+         * behavior. See https://github.com/tc39/ecma262/issues/128.
+         */
+        if (IsTrailSurrogateWithLeadSurrogate(cx, input, searchIndex))
+            searchIndex--;
     }
 
     /* Step 14-29. */

@@ -8,6 +8,7 @@
 
 var escope = require("escope");
 var espree = require("espree");
+var path = require("path");
 
 var regexes = [
   /^(?:Cu|Components\.utils)\.import\(".*\/(.*?)\.jsm?"\);?$/,
@@ -15,8 +16,11 @@ var regexes = [
   /^loader\.lazyRequireGetter\(\w+, "(\w+)"/,
   /^loader\.lazyServiceGetter\(\w+, "(\w+)"/,
   /^XPCOMUtils\.defineLazyModuleGetter\(\w+, "(\w+)"/,
+  /^DevToolsUtils\.defineLazyModuleGetter\(\w+, "(\w+)"/,
   /^loader\.lazyGetter\(\w+, "(\w+)"/,
-  /^XPCOMUtils\.defineLazyGetter\(\w+, "(\w+)"/
+  /^XPCOMUtils\.defineLazyGetter\(\w+, "(\w+)"/,
+  /^XPCOMUtils\.defineLazyServiceGetter\(\w+, "(\w+)"/,
+  /^DevToolsUtils\.defineLazyGetter\(\w+, "(\w+)"/,
 ];
 
 module.exports = {
@@ -232,5 +236,33 @@ module.exports = {
     var pathAndFilename = scope.getFilename();
 
     return /.*[\\/]browser_.+\.js$/.test(pathAndFilename);
+  },
+
+  /**
+   * ESLint may be executed from various places: from mach, at the root of the
+   * repository, or from a directory in the repository when, for instance,
+   * executed by a text editor's plugin.
+   * The value returned by context.getFileName() varies because of this.
+   * This helper function makes sure to return an absolute file path for the
+   * current context, by looking at process.cwd().
+   * @param {Context} context
+   * @return {String} The absolute path
+   */
+  getAbsoluteFilePath: function(context) {
+    var fileName = context.getFilename();
+    var cwd = process.cwd();
+
+    if (path.isAbsolute(fileName)) {
+      // Case 2: executed from the repo's root with mach:
+      //   fileName: /path/to/mozilla/repo/a/b/c/d.js
+      //   cwd: /path/to/mozilla/repo
+      return fileName;
+    } else {
+      // Case 1: executed form in a nested directory, e.g. from a text editor:
+      //   fileName: a/b/c/d.js
+      //   cwd: /path/to/mozilla/repo/a/b/c
+      var dirName = path.dirname(fileName);
+      return cwd.slice(0, cwd.length - dirName.length) + fileName;
+    }
   }
 };

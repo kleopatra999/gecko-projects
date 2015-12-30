@@ -220,7 +220,17 @@ class TestRecursiveMakeBackend(BackendTester):
         lines = [l.strip() for l in open(p, 'rt').readlines()[2:]]
         self.assertEqual(lines, [
             'DIRS := dir1 dir2',
-            'TEST_DIRS := dir3',
+        ])
+
+        # Make env.substs writable to add ENABLE_TESTS
+        env.substs = dict(env.substs)
+        env.substs['ENABLE_TESTS'] = '1'
+        self._consume('stub0', RecursiveMakeBackend, env=env)
+        p = mozpath.join(env.topobjdir, 'backend.mk')
+
+        lines = [l.strip() for l in open(p, 'rt').readlines()[2:]]
+        self.assertEqual(lines, [
+            'DIRS := dir1 dir2 dir3',
         ])
 
     def test_mtime_no_change(self):
@@ -393,6 +403,53 @@ class TestRecursiveMakeBackend(BackendTester):
         self.maxDiff = None
         self.assertEqual(lines, expected)
 
+    def test_exports_generated(self):
+        """Ensure EXPORTS that are listed in GENERATED_FILES
+        are handled properly."""
+        env = self._consume('exports-generated', RecursiveMakeBackend)
+
+        # EXPORTS files should appear in the dist_include install manifest.
+        m = InstallManifest(path=mozpath.join(env.topobjdir,
+            '_build_manifests', 'install', 'dist_include'))
+        self.assertEqual(len(m), 8)
+        self.assertIn('foo.h', m)
+        self.assertIn('mozilla/mozilla1.h', m)
+        self.assertIn('mozilla/dom/dom1.h', m)
+        self.assertIn('gfx/gfx.h', m)
+        self.assertIn('bar.h', m)
+        self.assertIn('mozilla/mozilla2.h', m)
+        self.assertIn('mozilla/dom/dom2.h', m)
+        self.assertIn('mozilla/dom/dom3.h', m)
+        # EXPORTS files that are also GENERATED_FILES should be handled as
+        # INSTALL_TARGETS.
+        backend_path = mozpath.join(env.topobjdir, 'backend.mk')
+        lines = [l.strip() for l in open(backend_path, 'rt').readlines()[2:]]
+        expected = [
+            'GENERATED_FILES += bar.h',
+            'EXTRA_MDDEPEND_FILES += bar.h.pp',
+            'GENERATED_FILES += mozilla2.h',
+            'EXTRA_MDDEPEND_FILES += mozilla2.h.pp',
+            'GENERATED_FILES += dom2.h',
+            'EXTRA_MDDEPEND_FILES += dom2.h.pp',
+            'GENERATED_FILES += dom3.h',
+            'EXTRA_MDDEPEND_FILES += dom3.h.pp',
+            'dist_include_FILES += bar.h',
+            'dist_include_DEST := $(DEPTH)/dist/include/',
+            'dist_include_TARGET := export',
+            'INSTALL_TARGETS += dist_include',
+            'dist_include_mozilla_FILES += mozilla2.h',
+            'dist_include_mozilla_DEST := $(DEPTH)/dist/include/mozilla',
+            'dist_include_mozilla_TARGET := export',
+            'INSTALL_TARGETS += dist_include_mozilla',
+            'dist_include_mozilla_dom_FILES += dom2.h',
+            'dist_include_mozilla_dom_FILES += dom3.h',
+            'dist_include_mozilla_dom_DEST := $(DEPTH)/dist/include/mozilla/dom',
+            'dist_include_mozilla_dom_TARGET := export',
+            'INSTALL_TARGETS += dist_include_mozilla_dom',
+        ]
+        self.maxDiff = None
+        self.assertEqual(lines, expected)
+
     def test_resources(self):
         """Ensure RESOURCE_FILES is handled properly."""
         env = self._consume('resources', RecursiveMakeBackend)
@@ -454,7 +511,7 @@ class TestRecursiveMakeBackend(BackendTester):
         """Pattern matches in test manifests' support-files should be recorded."""
         env = self._consume('test-manifests-written', RecursiveMakeBackend)
         m = InstallManifest(path=mozpath.join(env.topobjdir,
-            '_build_manifests', 'install', 'tests'))
+            '_build_manifests', 'install', '_tests'))
 
         # This is not the most robust test in the world, but it gets the job
         # done.
@@ -655,8 +712,7 @@ class TestRecursiveMakeBackend(BackendTester):
         self.assertEqual(found, expected)
 
     def test_config(self):
-        """Test that CONFIGURE_SUBST_FILES and CONFIGURE_DEFINE_FILES are
-        properly handled."""
+        """Test that CONFIGURE_SUBST_FILES are properly handled."""
         env = self._consume('test_config', RecursiveMakeBackend)
 
         self.assertEqual(
@@ -664,25 +720,6 @@ class TestRecursiveMakeBackend(BackendTester):
                 '#ifdef foo\n',
                 'bar baz\n',
                 '@bar@\n',
-            ])
-
-        self.assertEqual(
-            open(os.path.join(env.topobjdir, 'file.h'), 'r').readlines(), [
-                '/* Comment */\n',
-                '#define foo\n',
-                '#define foo baz qux\n',
-                '#define foo baz qux\n',
-                '#define bar\n',
-                '#define bar 42\n',
-                '/* #undef bar */\n',
-                '\n',
-                '# define baz 1\n',
-                '\n',
-                '#ifdef foo\n',
-                '#   define   foo baz qux\n',
-                '#  define foo    baz qux\n',
-                '  #     define   foo   baz qux   \n',
-                '#endif\n',
             ])
 
     def test_jar_manifests(self):
@@ -700,7 +737,7 @@ class TestRecursiveMakeBackend(BackendTester):
         env = self._consume('test-manifests-duplicate-support-files',
             RecursiveMakeBackend)
 
-        p = os.path.join(env.topobjdir, '_build_manifests', 'install', 'tests')
+        p = os.path.join(env.topobjdir, '_build_manifests', 'install', '_tests')
         m = InstallManifest(p)
         self.assertIn('testing/mochitest/tests/support-file.txt', m)
 
@@ -755,7 +792,7 @@ class TestRecursiveMakeBackend(BackendTester):
         man_dir = mozpath.join(env.topobjdir, '_build_manifests', 'install')
         self.assertTrue(os.path.isdir(man_dir))
 
-        full = mozpath.join(man_dir, 'tests')
+        full = mozpath.join(man_dir, '_tests')
         self.assertTrue(os.path.exists(full))
 
         m = InstallManifest(path=full)

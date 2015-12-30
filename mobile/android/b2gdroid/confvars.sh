@@ -48,6 +48,7 @@ MOZ_PLACES=
 MOZ_SOCIAL=
 MOZ_ANDROID_HISTORY=1
 MOZ_DISABLE_EXPORT_JS=1
+MOZ_ANDROID_APZ=1
 
 # use custom widget for html:select
 MOZ_USE_NATIVE_POPUP_WINDOWS=1
@@ -90,11 +91,6 @@ fi
 
 # Mark as WebGL conformant
 MOZ_WEBGL_CONFORMANT=1
-
-# Enable Tab Queue
-if test "$NIGHTLY_BUILD"; then
-  MOZ_ANDROID_TAB_QUEUE=1
-fi
 
 # Use the low-memory GC tuning.
 export JS_GC_SMALL_CHUNK_SIZE=1

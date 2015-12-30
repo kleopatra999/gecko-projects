@@ -442,12 +442,10 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
     aBuilder->EnterPresShell(subdocRootFrame,
                              pointerEventsNone && !passPointerEventsToChildren);
 
-#if defined(MOZ_SINGLE_PROCESS_APZ)
     if (!haveDisplayPort) {
       // Remove nsPresShell resolution
       dirty = dirty.RemoveResolution(presShell->ScaleToResolution() ? presShell->GetResolution () : 1.0f);
     }
-#endif
   } else {
     dirty = aDirtyRect;
   }
@@ -485,7 +483,7 @@ nsSubDocumentFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       // the layer we will construct will be clipped by the current clip.
       // In fact for nsDisplayZoom propagating it down would be incorrect since
       // nsDisplayZoom changes the meaning of appunits.
-      nestedClipState.Clear();
+      nestedClipState.ClearForStackingContextContents();
     }
 
     if (subdocRootFrame) {

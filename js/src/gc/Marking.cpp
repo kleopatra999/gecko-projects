@@ -418,7 +418,7 @@ js::TraceWeakEdge(JSTracer* trc, WeakRef<T>* thingp, const char* name)
 {
     // Non-marking tracers treat the edge strongly.
     if (!trc->isMarkingTracer())
-        DispatchToTracer(trc, ConvertToBase(thingp->unsafeUnbarrieredForTracing()), name);
+        return DispatchToTracer(trc, ConvertToBase(thingp->unsafeUnbarrieredForTracing()), name);
 
     NoteWeakEdge(static_cast<GCMarker*>(trc),
                  ConvertToBase(thingp->unsafeUnbarrieredForTracing()));
@@ -434,11 +434,25 @@ js::TraceRoot(JSTracer* trc, T* thingp, const char* name)
 
 template <typename T>
 void
+js::TraceRoot(JSTracer* trc, ReadBarriered<T>* thingp, const char* name)
+{
+    TraceRoot(trc, thingp->unsafeGet(), name);
+}
+
+template <typename T>
+void
 js::TraceNullableRoot(JSTracer* trc, T* thingp, const char* name)
 {
     AssertRootMarkingPhase(trc);
     if (InternalGCMethods<T>::isMarkableTaggedPointer(*thingp))
         DispatchToTracer(trc, ConvertToBase(thingp), name);
+}
+
+template <typename T>
+void
+js::TraceNullableRoot(JSTracer* trc, ReadBarriered<T>* thingp, const char* name)
+{
+    TraceNullableRoot(trc, thingp->unsafeGet(), name);
 }
 
 template <typename T>
@@ -473,7 +487,9 @@ js::TraceRootRange(JSTracer* trc, size_t len, T* vec, const char* name)
     template void js::TraceManuallyBarrieredEdge<type>(JSTracer*, type*, const char*); \
     template void js::TraceWeakEdge<type>(JSTracer*, WeakRef<type>*, const char*); \
     template void js::TraceRoot<type>(JSTracer*, type*, const char*); \
+    template void js::TraceRoot<type>(JSTracer*, ReadBarriered<type>*, const char*); \
     template void js::TraceNullableRoot<type>(JSTracer*, type*, const char*); \
+    template void js::TraceNullableRoot<type>(JSTracer*, ReadBarriered<type>*, const char*); \
     template void js::TraceRange<type>(JSTracer*, size_t, WriteBarrieredBase<type>*, const char*); \
     template void js::TraceRootRange<type>(JSTracer*, size_t, type*, const char*);
 FOR_EACH_GC_POINTER_TYPE(INSTANTIATE_ALL_VALID_TRACE_FUNCTIONS)
@@ -1748,8 +1764,11 @@ GCMarker::stop()
 
     /* Free non-ballast stack memory. */
     stack.reset();
-    for (GCZonesIter zone(runtime()); !zone.done(); zone.next())
-        zone->gcWeakKeys.clear();
+    AutoEnterOOMUnsafeRegion oomUnsafe;
+    for (GCZonesIter zone(runtime()); !zone.done(); zone.next()) {
+        if (!zone->gcWeakKeys.clear())
+            oomUnsafe.crash("clearing weak keys in GCMarker::stop()");
+    }
 }
 
 void
@@ -1804,8 +1823,11 @@ GCMarker::leaveWeakMarkingMode()
 
     // Table is expensive to maintain when not in weak marking mode, so we'll
     // rebuild it upon entry rather than allow it to contain stale data.
-    for (GCZonesIter zone(runtime()); !zone.done(); zone.next())
-        zone->gcWeakKeys.clear();
+    AutoEnterOOMUnsafeRegion oomUnsafe;
+    for (GCZonesIter zone(runtime()); !zone.done(); zone.next()) {
+        if (!zone->gcWeakKeys.clear())
+            oomUnsafe.crash("clearing weak keys in GCMarker::leaveWeakMarkingMode()");
+    }
 }
 
 void

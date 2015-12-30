@@ -336,7 +336,9 @@ class GLPresenter : public GLManager
 public:
   static GLPresenter* CreateForWindow(nsIWidget* aWindow)
   {
-    RefPtr<GLContext> context = gl::GLContextProvider::CreateForWindow(aWindow);
+    // Contrary to CompositorOGL, we allow unaccelerated OpenGL contexts to be
+    // used. BasicCompositor only requires very basic GL functionality.
+    RefPtr<GLContext> context = gl::GLContextProvider::CreateForWindow(aWindow, false);
     return context ? new GLPresenter(context) : nullptr;
   }
 
@@ -683,6 +685,17 @@ void* nsChildView::GetNativeData(uint32_t aDataType)
 
     case NS_NATIVE_OFFSETY:
       retVal = 0;
+      break;
+
+    case NS_RAW_NATIVE_IME_CONTEXT:
+      retVal = [mView inputContext];
+      // If input context isn't available on this widget, we should set |this|
+      // instead of nullptr since if this returns nullptr, IMEStateManager
+      // cannot manage composition with TextComposition instance.  Although,
+      // this case shouldn't occur.
+      if (NS_WARN_IF(!retVal)) {
+        retVal = this;
+      }
       break;
   }
 
@@ -1488,7 +1501,7 @@ void nsChildView::WillPaintWindow()
   }
 }
 
-bool nsChildView::PaintWindow(nsIntRegion aRegion)
+bool nsChildView::PaintWindow(LayoutDeviceIntRegion aRegion)
 {
   nsCOMPtr<nsIWidget> widget = GetWidgetForListenerEvents();
 
@@ -1768,13 +1781,6 @@ nsChildView::GetInputContext()
     default:
       mInputContext.mIMEState.mOpen = IMEState::CLOSED;
       break;
-  }
-  mInputContext.mNativeIMEContext = [mView inputContext];
-  // If input context isn't available on this widget, we should set |this|
-  // instead of nullptr since nullptr means that the platform has only one
-  // context per process.
-  if (!mInputContext.mNativeIMEContext) {
-    mInputContext.mNativeIMEContext = this;
   }
   return mInputContext;
 }
@@ -3756,10 +3762,10 @@ NSEvent* gLastDragMouseDownEvent = nil;
   if (mGeckoChild->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_BASIC) {
     nsBaseWidget::AutoLayerManagerSetup
       setupLayerManager(mGeckoChild, targetContext, BufferMode::BUFFER_NONE);
-    painted = mGeckoChild->PaintWindow(region.ToUnknownRegion());
+    painted = mGeckoChild->PaintWindow(region);
   } else if (mGeckoChild->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
     // We only need this so that we actually get DidPaintWindow fired
-    painted = mGeckoChild->PaintWindow(region.ToUnknownRegion());
+    painted = mGeckoChild->PaintWindow(region);
   }
 
   targetContext = nullptr;
@@ -3830,7 +3836,7 @@ NSEvent* gLastDragMouseDownEvent = nil;
   mGeckoChild->GetBounds(geckoBounds);
   LayoutDeviceIntRegion region(geckoBounds);
 
-  mGeckoChild->PaintWindow(region.ToUnknownRegion());
+  mGeckoChild->PaintWindow(region);
 
   // Force OpenGL to refresh the very first time we draw. This works around a
   // Mac OS X bug that stops windows updating on OS X when we use OpenGL.

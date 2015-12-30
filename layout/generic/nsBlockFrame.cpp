@@ -61,6 +61,7 @@ static const char16_t kDiscCharacter = 0x2022;
 using namespace mozilla;
 using namespace mozilla::css;
 using namespace mozilla::layout;
+typedef nsAbsoluteContainingBlock::AbsPosReflowFlags AbsPosReflowFlags;
 
 static void MarkAllDescendantLinesDirty(nsBlockFrame* aBlock)
 {
@@ -714,10 +715,10 @@ nsBlockFrame::GetMinISize(nsRenderingContext *aRenderingContext)
       AutoNoisyIndenter lineindent(gNoisyIntrinsic);
 #endif
       if (line->IsBlock()) {
-        data.ForceBreak(aRenderingContext);
+        data.ForceBreak();
         data.currentLine = nsLayoutUtils::IntrinsicForContainer(aRenderingContext,
                         line->mFirstChild, nsLayoutUtils::MIN_ISIZE);
-        data.ForceBreak(aRenderingContext);
+        data.ForceBreak();
       } else {
         if (!curFrame->GetPrevContinuation() &&
             line == curFrame->begin_lines()) {
@@ -747,7 +748,7 @@ nsBlockFrame::GetMinISize(nsRenderingContext *aRenderingContext)
 #endif
     }
   }
-  data.ForceBreak(aRenderingContext);
+  data.ForceBreak();
 
   mMinWidth = data.prevLines;
   return mMinWidth;
@@ -802,10 +803,10 @@ nsBlockFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
       AutoNoisyIndenter lineindent(gNoisyIntrinsic);
 #endif
       if (line->IsBlock()) {
-        data.ForceBreak(aRenderingContext);
+        data.ForceBreak();
         data.currentLine = nsLayoutUtils::IntrinsicForContainer(aRenderingContext,
                         line->mFirstChild, nsLayoutUtils::PREF_ISIZE);
-        data.ForceBreak(aRenderingContext);
+        data.ForceBreak();
       } else {
         if (!curFrame->GetPrevContinuation() &&
             line == curFrame->begin_lines()) {
@@ -835,7 +836,7 @@ nsBlockFrame::GetPrefISize(nsRenderingContext *aRenderingContext)
 #endif
     }
   }
-  data.ForceBreak(aRenderingContext);
+  data.ForceBreak();
 
   mPrefWidth = data.prevLines;
   return mPrefWidth;
@@ -873,7 +874,7 @@ nsBlockFrame::GetPrefWidthTightBounds(nsRenderingContext* aRenderingContext,
     {
       nscoord childX, childXMost;
       if (line->IsBlock()) {
-        data.ForceBreak(aRenderingContext);
+        data.ForceBreak();
         rv = line->mFirstChild->GetPrefWidthTightBounds(aRenderingContext,
                                                         &childX, &childXMost);
         NS_ENSURE_SUCCESS(rv, rv);
@@ -907,7 +908,7 @@ nsBlockFrame::GetPrefWidthTightBounds(nsRenderingContext* aRenderingContext,
       }
     }
   }
-  data.ForceBreak(aRenderingContext);
+  data.ForceBreak();
 
   return NS_OK;
 }
@@ -1366,10 +1367,16 @@ nsBlockFrame::Reflow(nsPresContext*           aPresContext,
 
       nsRect containingBlock(nsPoint(0, 0),
                              containingBlockSize.GetPhysicalSize(parentWM));
+      AbsPosReflowFlags flags = AbsPosReflowFlags::eConstrainHeight;
+      if (cbWidthChanged) {
+        flags |= AbsPosReflowFlags::eCBWidthChanged;
+      }
+      if (cbHeightChanged) {
+        flags |= AbsPosReflowFlags::eCBHeightChanged;
+      }
       absoluteContainer->Reflow(this, aPresContext, *reflowState,
                                 state.mReflowStatus,
-                                containingBlock, true,
-                                cbWidthChanged, cbHeightChanged,
+                                containingBlock, flags,
                                 &aMetrics.mOverflowAreas);
     }
   }
@@ -1946,9 +1953,9 @@ nsBlockFrame::PropagateFloatDamage(nsBlockReflowState& aState,
     nscoord lineBCoordCombinedAfter = lineBCoordCombinedBefore +
                                       overflow.BSize(wm);
 
-    bool isDirty = floatManager->IntersectsDamage(wm, lineBCoordBefore,
+    bool isDirty = floatManager->IntersectsDamage(lineBCoordBefore,
                                                   lineBCoordAfter) ||
-                   floatManager->IntersectsDamage(wm, lineBCoordCombinedBefore,
+                   floatManager->IntersectsDamage(lineBCoordCombinedBefore,
                                                   lineBCoordCombinedAfter);
     if (isDirty) {
       aLine->MarkDirty();

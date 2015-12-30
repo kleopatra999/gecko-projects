@@ -79,7 +79,7 @@ js::SetFakeCPUCount(size_t count)
 }
 
 bool
-js::StartOffThreadWasmCompile(ExclusiveContext* cx, wasm::CompileTask* task)
+js::StartOffThreadWasmCompile(ExclusiveContext* cx, wasm::IonCompileTask* task)
 {
     AutoLockHelperThreadState lock;
 
@@ -427,7 +427,9 @@ js::EnqueuePendingParseTasksAfterGC(JSRuntime* rt)
         for (size_t i = 0; i < waiting.length(); i++) {
             ParseTask* task = waiting[i];
             if (task->runtimeMatches(rt)) {
-                newTasks.append(task);
+                AutoEnterOOMUnsafeRegion oomUnsafe;
+                if (!newTasks.append(task))
+                    oomUnsafe.crash("EnqueuePendingParseTasksAfterGC");
                 HelperThreadState().remove(waiting, &i);
             }
         }
@@ -444,8 +446,11 @@ js::EnqueuePendingParseTasksAfterGC(JSRuntime* rt)
 
     AutoLockHelperThreadState lock;
 
-    for (size_t i = 0; i < newTasks.length(); i++)
-        HelperThreadState().parseWorklist().append(newTasks[i]);
+    {
+        AutoEnterOOMUnsafeRegion oomUnsafe;
+        if (!HelperThreadState().parseWorklist().appendAll(newTasks))
+            oomUnsafe.crash("EnqueuePendingParseTasksAfterGC");
+    }
 
     HelperThreadState().notifyAll(GlobalHelperThreadState::PRODUCER);
 }
@@ -732,7 +737,7 @@ GlobalHelperThreadState::canStartWasmCompile()
 
     // Honor the maximum allowed threads to compile wasm jobs at once,
     // to avoid oversaturating the machine.
-    if (!checkTaskThreadLimit<wasm::CompileTask*>(maxWasmCompilationThreads()))
+    if (!checkTaskThreadLimit<wasm::IonCompileTask*>(maxWasmCompilationThreads()))
         return false;
 
     return true;
@@ -1196,11 +1201,11 @@ HelperThread::handleWasmWorkload()
     currentTask.emplace(HelperThreadState().wasmWorklist().popCopy());
     bool success = false;
 
-    wasm::CompileTask* task = wasmTask();
+    wasm::IonCompileTask* task = wasmTask();
     {
         AutoUnlockHelperThreadState unlock;
-        PerThreadData::AutoEnterRuntime enter(threadData.ptr(), task->args().runtime);
-        success = wasm::CompileFunction(task);
+        PerThreadData::AutoEnterRuntime enter(threadData.ptr(), task->runtime());
+        success = wasm::IonCompileFunction(task);
     }
 
     // On success, try to move work to the finished list.
@@ -1332,11 +1337,10 @@ ExclusiveContext::setHelperThread(HelperThread* thread)
 frontend::CompileError&
 ExclusiveContext::addPendingCompileError()
 {
+    AutoEnterOOMUnsafeRegion oomUnsafe;
     frontend::CompileError* error = js_new<frontend::CompileError>();
-    if (!error)
-        MOZ_CRASH();
-    if (!helperThread()->parseTask()->errors.append(error))
-        MOZ_CRASH();
+    if (!error || !helperThread()->parseTask()->errors.append(error))
+        oomUnsafe.crash("ExclusiveContext::addPendingCompileError");
     return *error;
 }
 

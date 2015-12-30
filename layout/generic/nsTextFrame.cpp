@@ -5117,27 +5117,6 @@ GetInflationForTextDecorations(nsIFrame* aFrame, nscoord aInflationMinFontSize)
   return nsLayoutUtils::FontSizeInflationInner(aFrame, aInflationMinFontSize);
 }
 
-static already_AddRefed<nsFontMetrics>
-GetFontMetricsOfEmphasisMarks(nsStyleContext* aStyleContext, float aInflation)
-{
-  nsPresContext* pc = aStyleContext->PresContext();
-  WritingMode wm(aStyleContext);
-  gfxFont::Orientation orientation = wm.IsVertical() && !wm.IsSideways() ?
-                                     gfxFont::eVertical : gfxFont::eHorizontal;
-
-  const nsStyleFont* styleFont = aStyleContext->StyleFont();
-  nsFont font = styleFont->mFont;
-  font.size = NSToCoordRound(font.size * aInflation * 0.5f);
-
-  RefPtr<nsFontMetrics> fm;
-  pc->DeviceContext()->GetMetricsFor(font, styleFont->mLanguage,
-                                     styleFont->mExplicitLanguage,
-                                     orientation, pc->GetUserFontSet(),
-                                     pc->GetTextPerfMetrics(),
-                                     *getter_AddRefs(fm));
-  return fm.forget();
-}
-
 static gfxTextRun*
 GenerateTextRunForEmphasisMarks(nsTextFrame* aFrame, nsFontMetrics* aFontMetrics,
                                 WritingMode aWM, const nsStyleText* aStyleText)
@@ -5178,8 +5157,9 @@ nsTextFrame::UpdateTextEmphasis(WritingMode aWM, PropertyProvider& aProvider)
     return nsRect();
   }
 
-  RefPtr<nsFontMetrics> fm =
-    GetFontMetricsOfEmphasisMarks(StyleContext(), GetFontSizeInflation());
+  RefPtr<nsFontMetrics> fm;
+  nsLayoutUtils::GetFontMetricsOfEmphasisMarks(
+    StyleContext(), getter_AddRefs(fm), GetFontSizeInflation());
   EmphasisMarkInfo* info = new EmphasisMarkInfo;
   info->textRun =
     GenerateTextRunForEmphasisMarks(this, fm, aWM, styleText);
@@ -7926,14 +7906,12 @@ nsTextFrame::AddInlineMinISizeForFlow(nsRenderingContext *aRenderingContext,
         (i == textRun->GetLength() &&
          (textRun->GetFlags() & nsTextFrameUtils::TEXT_HAS_TRAILING_BREAK))) {
       if (preformattedNewline) {
-        aData->ForceBreak(aRenderingContext);
+        aData->ForceBreak();
       } else if (i < flowEndInTextRun && hyphBreakBefore &&
-                 hyphBreakBefore[i - start])
-      {
-        aData->OptionallyBreak(aRenderingContext, 
-                               NSToCoordRound(provider.GetHyphenWidth()));
+                 hyphBreakBefore[i - start]) {
+        aData->OptionallyBreak(NSToCoordRound(provider.GetHyphenWidth()));
       } else {
-        aData->OptionallyBreak(aRenderingContext);
+        aData->OptionallyBreak();
       }
       wordStart = i;
     }
@@ -8076,7 +8054,7 @@ nsTextFrame::AddInlinePrefISizeForFlow(nsRenderingContext *aRenderingContext,
       aData->currentLine = nscoord(afterTab + spacing.mAfter);
       lineStart = i + 1;
     } else if (preformattedNewline) {
-      aData->ForceBreak(aRenderingContext);
+      aData->ForceBreak();
       lineStart = i;
     }
   }

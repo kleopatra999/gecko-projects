@@ -44,7 +44,6 @@ from .data import (
     ExampleWebIDLInterface,
     ExternalStaticLibrary,
     ExternalSharedLibrary,
-    HeaderFileSubstitution,
     HostDefines,
     HostLibrary,
     HostProgram,
@@ -548,10 +547,6 @@ class TreeMetadataEmitter(LoggingMixin):
             yield self._create_substitution(ConfigFileSubstitution, context,
                 path)
 
-        for path in context['CONFIGURE_DEFINE_FILES']:
-            yield self._create_substitution(HeaderFileSubstitution, context,
-                path)
-
         for obj in self._process_xpidl(context):
             yield obj
 
@@ -608,12 +603,9 @@ class TreeMetadataEmitter(LoggingMixin):
         for obj in self._process_sources(context, passthru):
             yield obj
 
-        exports = context.get('EXPORTS')
-        if exports:
-            yield Exports(context, exports,
-                dist_install=dist_install is not False)
-
+        generated_files = set()
         for obj in self._process_generated_files(context):
+            generated_files.add(obj.output)
             yield obj
 
         for obj in self._process_test_harness_files(context):
@@ -653,6 +645,8 @@ class TreeMetadataEmitter(LoggingMixin):
 
         components = []
         for var, cls in (
+            ('BRANDING_FILES', BrandingFiles),
+            ('EXPORTS', Exports),
             ('FINAL_TARGET_FILES', FinalTargetFiles),
             ('FINAL_TARGET_PP_FILES', FinalTargetPreprocessedFiles),
             ('TESTING_FILES', TestingFiles),
@@ -674,11 +668,23 @@ class TreeMetadataEmitter(LoggingMixin):
                 if mozpath.split(base)[0] == 'res':
                     has_resources = True
                 for f in files:
-                    path = f.full_path
-                    if not os.path.exists(path):
+                    if (var == 'FINAL_TARGET_PP_FILES' and
+                        not isinstance(f, SourcePath)):
                         raise SandboxValidationError(
-                            'File listed in %s does not exist: %s'
-                            % (var, path), context)
+                                ('Only source directory paths allowed in ' +
+                                'FINAL_TARGET_PP_FILES: %s')
+                                % (f,), context)
+                    if not isinstance(f, ObjDirPath):
+                        path = f.full_path
+                        if not os.path.exists(path):
+                            raise SandboxValidationError(
+                                'File listed in %s does not exist: %s'
+                                % (var, path), context)
+                    else:
+                        if mozpath.basename(f.full_path) not in generated_files:
+                            raise SandboxValidationError(
+                                ('Objdir file listed in %s not in ' +
+                                 'GENERATED_FILES: %s') % (var, f), context)
 
             # Addons (when XPI_NAME is defined) and Applications (when
             # DIST_SUBDIR is defined) use a different preferences directory
@@ -713,10 +719,6 @@ class TreeMetadataEmitter(LoggingMixin):
                 yield ChromeManifestEntry(context, 'chrome.manifest',
                                           Manifest('components',
                                                    mozpath.basename(c)))
-
-        branding_files = context.get('BRANDING_FILES')
-        if branding_files:
-            yield BrandingFiles(context, branding_files)
 
         for obj in self._handle_libraries(context):
             yield obj
@@ -890,6 +892,13 @@ class TreeMetadataEmitter(LoggingMixin):
                 xpidl_module, add_to_manifest=not context['XPIDL_NO_MANIFEST'])
 
     def _process_generated_files(self, context):
+        for path in context['CONFIGURE_DEFINE_FILES']:
+            script = mozpath.join(mozpath.dirname(mozpath.dirname(__file__)),
+                                  'action', 'process_define_files.py')
+            yield GeneratedFile(context, script, 'process_define_file',
+                                unicode(path),
+                                [mozpath.join(context.srcdir, path + '.in')])
+
         generated_files = context.get('GENERATED_FILES')
         if not generated_files:
             return
@@ -1275,7 +1284,6 @@ class TreeMetadataEmitter(LoggingMixin):
     def _emit_directory_traversal_from_context(self, context):
         o = DirectoryTraversal(context)
         o.dirs = context.get('DIRS', [])
-        o.test_dirs = context.get('TEST_DIRS', [])
         o.affected_tiers = context.get_affected_tiers()
 
         # Some paths have a subconfigure, yet also have a moz.build. Those

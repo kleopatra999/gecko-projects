@@ -121,7 +121,12 @@ enum VarEmitOption {
     // Emit code to evaluate initializer expressions and leave those values on
     // the stack. This is used to implement `for (let/const ...;;)` and
     // deprecated `let` blocks.
-    PushInitialValues
+    PushInitialValues,
+
+    // Like InitializeVars, but bind using BINDVAR instead of
+    // BINDNAME/BINDGNAME. Only used for emitting declarations synthesized for
+    // Annex B block-scoped function semantics.
+    AnnexB,
 };
 
 struct BytecodeEmitter
@@ -249,7 +254,10 @@ struct BytecodeEmitter
         return parser->blockScopes[dn->pn_blockid];
     }
 
-    bool atBodyLevel() const;
+    bool atBodyLevel(StmtInfoBCE* stmt) const;
+    bool atBodyLevel() const {
+        return atBodyLevel(innermostStmt());
+    }
     uint32_t computeHops(ParseNode* pn, BytecodeEmitter** bceOfDefOut);
     bool isAliasedName(BytecodeEmitter* bceOfDef, ParseNode* pn);
     bool computeDefinitionIsAliased(BytecodeEmitter* bceOfDef, Definition* dn, JSOp* op);
@@ -427,10 +435,12 @@ struct BytecodeEmitter
     bool emitSetThis(ParseNode* pn);
 
     // These functions are used to emit GETLOCAL/GETALIASEDVAR or
-    // SETLOCAL/SETALIASEDVAR for a particular binding. The CallObject must be
-    // on top of the scope chain.
-    bool emitLoadFromTopScope(BindingIter& bi);
-    bool emitStoreToTopScope(BindingIter& bi);
+    // SETLOCAL/SETALIASEDVAR for a particular binding on a function's
+    // CallObject.
+    bool emitLoadFromEnclosingFunctionScope(BindingIter& bi);
+    bool emitStoreToEnclosingFunctionScope(BindingIter& bi);
+
+    uint32_t computeHopsToEnclosingFunction();
 
     bool emitJump(JSOp op, ptrdiff_t off, ptrdiff_t* jumpOffset = nullptr);
     bool emitCall(JSOp op, uint16_t argc, ParseNode* pn = nullptr);
@@ -463,6 +473,8 @@ struct BytecodeEmitter
 
     MOZ_NEVER_INLINE bool emitFunction(ParseNode* pn, bool needsProto = false);
     MOZ_NEVER_INLINE bool emitObject(ParseNode* pn);
+
+    bool emitHoistedFunctionsInList(ParseNode* pn);
 
     bool emitPropertyList(ParseNode* pn, MutableHandlePlainObject objp, PropListType type);
 
@@ -509,7 +521,8 @@ struct BytecodeEmitter
     // Emit bytecode to put operands for a JSOP_GETELEM/CALLELEM/SETELEM/DELELEM
     // opcode onto the stack in the right order. In the case of SETELEM, the
     // value to be assigned must already be pushed.
-    bool emitElemOperands(ParseNode* pn, JSOp op);
+    enum class EmitElemOption { Get, Set, Call, IncDec };
+    bool emitElemOperands(ParseNode* pn, EmitElemOption opts);
 
     bool emitElemOpBase(JSOp op);
     bool emitElemOp(ParseNode* pn, JSOp op);
@@ -597,14 +610,20 @@ struct BytecodeEmitter
     bool emitConditionalExpression(ConditionalExpression& conditional);
 
     bool emitCallOrNew(ParseNode* pn);
+    bool emitDebugOnlyCheckSelfHosted();
     bool emitSelfHostedCallFunction(ParseNode* pn);
     bool emitSelfHostedResumeGenerator(ParseNode* pn);
     bool emitSelfHostedForceInterpreter(ParseNode* pn);
 
+    bool emitComprehensionFor(ParseNode* compFor);
+    bool emitComprehensionForIn(ParseNode* pn);
+    bool emitComprehensionForInOrOfVariables(ParseNode* pn, bool* letBlockScope);
+    bool emitComprehensionForOf(ParseNode* pn);
+
     bool emitDo(ParseNode* pn);
     bool emitFor(ParseNode* pn);
     bool emitForIn(ParseNode* pn);
-    bool emitForInOrOfVariables(ParseNode* pn, bool* letDecl);
+    bool emitForInOrOfVariables(ParseNode* pn);
     bool emitCStyleFor(ParseNode* pn);
     bool emitWhile(ParseNode* pn);
 
@@ -639,8 +658,7 @@ struct BytecodeEmitter
     bool emitClass(ParseNode* pn);
     bool emitSuperPropLHS(ParseNode* superBase, bool isCall = false);
     bool emitSuperPropOp(ParseNode* pn, JSOp op, bool isCall = false);
-    enum SuperElemOptions { SuperElem_Get, SuperElem_Set, SuperElem_Call, SuperElem_IncDec };
-    bool emitSuperElemOperands(ParseNode* pn, SuperElemOptions opts = SuperElem_Get);
+    bool emitSuperElemOperands(ParseNode* pn, EmitElemOption opts = EmitElemOption::Get);
     bool emitSuperElemOp(ParseNode* pn, JSOp op, bool isCall = false);
 };
 

@@ -1191,7 +1191,7 @@ VARIABLES = {
         This variable can only be used on Linux.
         """, None),
 
-    'BRANDING_FILES': (HierarchicalStringList, list,
+    'BRANDING_FILES': (ContextDerivedTypedHierarchicalStringList(Path), list,
         """List of files to be installed into the branding directory.
 
         ``BRANDING_FILES`` will copy (or symlink, if the platform supports it)
@@ -1241,15 +1241,6 @@ VARIABLES = {
         ``HOST_BIN_SUFFIX``, the name will remain unchanged.
         """, None),
 
-    'TEST_DIRS': (ContextDerivedTypedList(SourcePath), list,
-        """Like DIRS but only for directories that contain test-only code.
-
-        If tests are not enabled, this variable will be ignored.
-
-        This variable may go away once the transition away from Makefiles is
-        complete.
-        """, None),
-
     'CONFIGURE_SUBST_FILES': (ContextDerivedTypedList(SourcePath, StrictOrderingOnAppendList), list,
         """Output files that will be generated using configure-like substitution.
 
@@ -1268,7 +1259,7 @@ VARIABLES = {
         into account the values of ``AC_DEFINE`` instead of ``AC_SUBST``.
         """, None),
 
-    'EXPORTS': (HierarchicalStringList, list,
+    'EXPORTS': (ContextDerivedTypedHierarchicalStringList(Path), list,
         """List of files to be exported, and in which subdirectories.
 
         ``EXPORTS`` is generally used to list the include files to be exported to
@@ -1281,6 +1272,10 @@ VARIABLES = {
 
            EXPORTS += ['foo.h']
            EXPORTS.mozilla.dom += ['bar.h']
+
+        Entries in ``EXPORTS`` are paths, so objdir paths may be used, but
+        any files listed from the objdir must also be listed in
+        ``GENERATED_FILES``.
         """, None),
 
     'PROGRAM' : (unicode, unicode,
@@ -1873,6 +1868,10 @@ FUNCTIONS = {
         """),
 }
 
+
+TestDirsPlaceHolder = List()
+
+
 # Special variables. These complement VARIABLES.
 #
 # Each entry is a tuple of:
@@ -1996,6 +1995,15 @@ SPECIAL_VARIABLES = {
         ``TESTING_JS_MODULES.foo += ['module.jsm']``.
         """),
 
+    'TEST_DIRS': (lambda context: context['DIRS'] if context.config.substs.get('ENABLE_TESTS')
+                                  else TestDirsPlaceHolder, list,
+        """Like DIRS but only for directories that contain test-only code.
+
+        If tests are not enabled, this variable will be ignored.
+
+        This variable may go away once the transition away from Makefiles is
+        complete.
+        """),
 }
 
 # Deprecation hints.

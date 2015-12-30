@@ -55,7 +55,8 @@ static void DrawDebugOverlay(mozilla::gfx::DrawTarget* dt, int x, int y, int wid
   ss << x << ", " << y;
 
   // Draw text using cairo toy text API
-  cairo_t* cr = c.GetCairo();
+  // XXX: this drawing will silently fail if |dt| doesn't have a Cairo backend
+  cairo_t* cr = gfxContext::RefCairo(dt);
   cairo_set_font_size(cr, 25);
   cairo_text_extents_t extents;
   cairo_text_extents(cr, ss.str().c_str(), &extents);
@@ -1020,16 +1021,16 @@ void PadDrawTargetOutFromRegion(RefPtr<DrawTarget> drawTarget, nsIntRegion &regi
     static void ensure_memcpy(uint8_t *dst, uint8_t *src, size_t n, uint8_t *bitmap, int stride, int height)
     {
         if (src + n > bitmap + stride*height) {
-            MOZ_CRASH("long src memcpy");
+            MOZ_CRASH("GFX: long src memcpy");
         }
         if (src < bitmap) {
-            MOZ_CRASH("short src memcpy");
+            MOZ_CRASH("GFX: short src memcpy");
         }
         if (dst + n > bitmap + stride*height) {
-            MOZ_CRASH("long dst mempcy");
+            MOZ_CRASH("GFX: long dst mempcy");
         }
         if (dst < bitmap) {
-            MOZ_CRASH("short dst mempcy");
+            MOZ_CRASH("GFX: short dst mempcy");
         }
     }
 

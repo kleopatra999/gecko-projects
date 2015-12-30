@@ -2580,8 +2580,7 @@ void nsTimingFunction::AssignFromKeyword(int32_t aTimingFunctionType)
       mSteps = 1;
       return;
     default:
-      MOZ_ASSERT_UNREACHABLE("aTimingFunctionType must be a keyword value");
-      // fall through
+      MOZ_FALLTHROUGH_ASSERT("aTimingFunctionType must be a keyword value");
     case NS_STYLE_TRANSITION_TIMING_FUNCTION_STEP_END:
       mType = Type::StepEnd;
       mStepSyntax = StepSyntax::Keyword;
@@ -3632,16 +3631,18 @@ nsChangeHint nsStyleText::CalcDifference(const nsStyleText& aOther) const
       (mTabSize != aOther.mTabSize))
     return NS_STYLE_HINT_REFLOW;
 
-  if (!AreShadowArraysEqual(mTextShadow, aOther.mTextShadow)) {
-    return nsChangeHint_UpdateSubtreeOverflow |
-           nsChangeHint_SchedulePaint |
+  if (HasTextEmphasis() != aOther.HasTextEmphasis() ||
+      (HasTextEmphasis() &&
+       mTextEmphasisPosition != aOther.mTextEmphasisPosition)) {
+    // Text emphasis position change could affect line height calculation.
+    return nsChangeHint_AllReflowHints |
            nsChangeHint_RepaintFrame;
   }
 
-  if (mTextEmphasisPosition != aOther.mTextEmphasisPosition ||
+  if (!AreShadowArraysEqual(mTextShadow, aOther.mTextShadow) ||
       mTextEmphasisStyle != aOther.mTextEmphasisStyle ||
       mTextEmphasisStyleString != aOther.mTextEmphasisStyleString) {
-    return nsChangeHint_UpdateOverflow |
+    return nsChangeHint_UpdateSubtreeOverflow |
            nsChangeHint_SchedulePaint |
            nsChangeHint_RepaintFrame;
   }
@@ -3655,6 +3656,10 @@ nsChangeHint nsStyleText::CalcDifference(const nsStyleText& aOther) const
       mTextEmphasisColor != aOther.mTextEmphasisColor) {
     return nsChangeHint_SchedulePaint |
            nsChangeHint_RepaintFrame;
+  }
+
+  if (mTextEmphasisPosition != aOther.mTextEmphasisPosition) {
+    return nsChangeHint_NeutralChange;
   }
 
   return NS_STYLE_HINT_NONE;

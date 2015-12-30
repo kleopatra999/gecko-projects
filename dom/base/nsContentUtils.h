@@ -1666,6 +1666,11 @@ public:
   static nsIWindowProvider*
   GetWindowProviderForContentProcess();
 
+  // Returns the browser window with the most recent time stamp that is
+  // not in private browsing mode.
+  static already_AddRefed<nsPIDOMWindow>
+  GetMostRecentNonPBWindow();
+
   /**
    * Call this function if !IsSafeToRunScript() and we fail to run the script
    * (rather than using AddScriptRunner as we usually do). |aDocument| is
@@ -2053,14 +2058,6 @@ public:
   {
     return sPrivacyResistFingerprinting;
   }
-
-  /**
-   * Returns true if the doc tree branch which contains aDoc contains any
-   * plugins which we don't control event dispatch for, i.e. do any plugins
-   * in the same tab as this document receive key events outside of our
-   * control? This always returns false on MacOSX.
-   */
-  static bool HasPluginWithUncontrolledEventDispatch(nsIDocument* aDoc);
 
   /**
    * Return true if this doc is controlled by a ServiceWorker.

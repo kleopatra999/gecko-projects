@@ -250,6 +250,12 @@ int             nsWindow::sTrimOnMinimize         = 2;
 
 TriStateBool nsWindow::sHasBogusPopupsDropShadowOnMultiMonitor = TRI_UNKNOWN;
 
+static SystemTimeConverter<DWORD>&
+TimeConverter() {
+  static SystemTimeConverter<DWORD> timeConverterSingleton;
+  return timeConverterSingleton;
+}
+
 namespace mozilla {
 
 class CurrentWindowsTimeGetter {
@@ -261,17 +267,13 @@ public:
 
   void GetTimeAsyncForPossibleBackwardsSkew(const TimeStamp& aNow)
   {
-    // FIXME: Get time async
+    NS_DispatchToMainThread(NS_NewRunnableFunction([aNow]() {
+      TimeConverter().CompensateForBackwardsSkew(::GetMessageTime(), aNow);
+    }));
   }
 };
 
 } // namespace mozilla
-
-static SystemTimeConverter<DWORD>&
-TimeConverter() {
-  static SystemTimeConverter<DWORD> timeConverterSingleton;
-  return timeConverterSingleton;
-}
 
 /**************************************************************
  *
@@ -656,6 +658,7 @@ nsWindow::Create(nsIWidget* aParent,
                                                        NOTIFY_FOR_THIS_SESSION);
   NS_ASSERTION(wtsRegistered, "WTSRegisterSessionNotification failed!\n");
 
+  mDefaultIMC.Init(this);
   IMEHandler::InitInputContext(this, mInputContext);
 
   // If the internal variable set by the config.trim_on_minimize pref has not
@@ -3149,10 +3152,11 @@ void* nsWindow::GetNativeData(uint32_t aDataType)
       return (void*)::GetDC(mWnd);
 #endif
 
+    case NS_RAW_NATIVE_IME_CONTEXT:
     case NS_NATIVE_TSF_THREAD_MGR:
     case NS_NATIVE_TSF_CATEGORY_MGR:
     case NS_NATIVE_TSF_DISPLAY_ATTR_MGR:
-      return IMEHandler::GetNativeData(aDataType);
+      return IMEHandler::GetNativeData(this, aDataType);
 
     default:
       break;
@@ -5079,7 +5083,7 @@ nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
     case WM_MOUSEMOVE:
     {
       if (!mMousePresent) {
-        // First MOOUSEMOVE over the client area. Ask for MOUSELEAVE
+        // First MOUSEMOVE over the client area. Ask for MOUSELEAVE
         TRACKMOUSEEVENT mTrack;
         mTrack.cbSize = sizeof(TRACKMOUSEEVENT);
         mTrack.dwFlags = TME_LEAVE;

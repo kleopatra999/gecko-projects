@@ -104,7 +104,14 @@ typedef void* nsNativeWidget;
 #define NS_NATIVE_SHAREABLE_WINDOW 11
 #define NS_NATIVE_OPENGL_CONTEXT   12
 // See RegisterPluginWindowForRemoteUpdates
-#define NS_NATIVE_PLUGIN_ID            13
+#define NS_NATIVE_PLUGIN_ID        13
+// This is available only with GetNativeData() in parent process.  Anybody
+// shouldn't access this pointer as a valid pointer since the result may be
+// special value like NS_ONLY_ONE_NATIVE_IME_CONTEXT.  So, the result is just
+// an identifier of distinguishing a text composition is caused by which native
+// IME context.  Note that the result is only valid in the process.  So,
+// XP code should use nsIWidget::GetNativeIMEContext() instead of using this.
+#define NS_RAW_NATIVE_IME_CONTEXT  14
 #ifdef XP_MACOSX
 #define NS_NATIVE_PLUGIN_PORT_QD    100
 #define NS_NATIVE_PLUGIN_PORT_CG    101
@@ -121,10 +128,13 @@ typedef void* nsNativeWidget;
 // set/get nsPluginNativeWindowGtk, e10s specific
 #define NS_NATIVE_PLUGIN_OBJECT_PTR    104
 #endif
+#ifdef MOZ_WIDGET_ANDROID
+#define NS_NATIVE_NEW_EGL_SURFACE      100
+#endif
 
 #define NS_IWIDGET_IID \
-{ 0xd953b7a1, 0x6981, 0x4ed7, \
-  { 0xbc, 0xf0, 0xed, 0x96, 0x70, 0xee, 0x23, 0x28 } }
+{ 0xaaa79c8d, 0xc99d, 0x4fe1, \
+  { 0xa5, 0x11, 0xd3, 0xeb, 0xb1, 0x61, 0x9e, 0x26 } }
 
 /*
  * Window shadow styles
@@ -329,6 +339,7 @@ class nsIWidget : public nsISupports {
     typedef mozilla::widget::IMEState IMEState;
     typedef mozilla::widget::InputContext InputContext;
     typedef mozilla::widget::InputContextAction InputContextAction;
+    typedef mozilla::widget::NativeIMEContext NativeIMEContext;
     typedef mozilla::widget::SizeConstraints SizeConstraints;
     typedef mozilla::widget::TextEventDispatcher TextEventDispatcher;
     typedef mozilla::CompositorVsyncDispatcher CompositorVsyncDispatcher;
@@ -337,6 +348,7 @@ class nsIWidget : public nsISupports {
     typedef mozilla::LayoutDeviceIntRect LayoutDeviceIntRect;
     typedef mozilla::LayoutDeviceIntRegion LayoutDeviceIntRegion;
     typedef mozilla::LayoutDeviceIntSize LayoutDeviceIntSize;
+    typedef mozilla::ScreenIntPoint ScreenIntPoint;
 
     // Used in UpdateThemeGeometries.
     struct ThemeGeometry {
@@ -1643,7 +1655,7 @@ class nsIWidget : public nsISupports {
      */
     virtual nsresult SynthesizeNativeTouchPoint(uint32_t aPointerId,
                                                 TouchPointerState aPointerState,
-                                                nsIntPoint aPointerScreenPoint,
+                                                ScreenIntPoint aPointerScreenPoint,
                                                 double aPointerPressure,
                                                 uint32_t aPointerOrientation,
                                                 nsIObserver* aObserver) = 0;
@@ -1656,7 +1668,7 @@ class nsIWidget : public nsISupports {
      * @param aObserver The observer that will get notified once the events
      * have been dispatched.
      */
-    virtual nsresult SynthesizeNativeTouchTap(nsIntPoint aPointerScreenPoint,
+    virtual nsresult SynthesizeNativeTouchTap(ScreenIntPoint aPointerScreenPoint,
                                               bool aLongTap,
                                               nsIObserver* aObserver);
 
@@ -1692,7 +1704,7 @@ private:
   class LongTapInfo
   {
   public:
-    LongTapInfo(int32_t aPointerId, nsIntPoint& aPoint,
+    LongTapInfo(int32_t aPointerId, ScreenIntPoint& aPoint,
                 mozilla::TimeDuration aDuration,
                 nsIObserver* aObserver) :
       mPointerId(aPointerId),
@@ -1704,7 +1716,7 @@ private:
     }
 
     int32_t mPointerId;
-    nsIntPoint mPosition;
+    ScreenIntPoint mPosition;
     mozilla::TimeDuration mDuration;
     nsCOMPtr<nsIObserver> mObserver;
     mozilla::TimeStamp mStamp;
@@ -1789,6 +1801,13 @@ public:
      * Get current input context.
      */
     NS_IMETHOD_(InputContext) GetInputContext() = 0;
+
+    /**
+     * Get native IME context.  This is different from GetNativeData() with
+     * NS_RAW_NATIVE_IME_CONTEXT, the result is unique even if in a remote
+     * process.
+     */
+    NS_IMETHOD_(NativeIMEContext) GetNativeIMEContext();
 
     /*
      * Given a WidgetKeyboardEvent, this method synthesizes a corresponding
