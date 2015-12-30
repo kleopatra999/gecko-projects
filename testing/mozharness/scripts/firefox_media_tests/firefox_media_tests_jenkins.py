@@ -4,9 +4,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 # ***** BEGIN LICENSE BLOCK *****
-"""firefox_media_tests_buildbot.py
+"""firefox_media_tests_jenkins.py
 
-Author: Maja Frydrychowicz
+Author: Syd Polk
 """
 import copy
 import glob
@@ -21,20 +21,16 @@ from mozharness.mozilla.blob_upload import (
     BlobUploadMixin,
     blobupload_config_options
 )
-from mozharness.mozilla.buildbot import (
-    TBPL_SUCCESS, TBPL_WARNING, TBPL_FAILURE
-)
 from mozharness.mozilla.testing.firefox_media_tests import (
     FirefoxMediaTestsBase, BUSTED, TESTFAILED, UNKNOWN, EXCEPTION, SUCCESS
 )
 
 
-class FirefoxMediaTestsBuildbot(FirefoxMediaTestsBase, BlobUploadMixin):
+class FirefoxMediaTestsJenkins(FirefoxMediaTestsBase):
 
     def __init__(self):
-        super(FirefoxMediaTestsBuildbot, self).__init__(
+        super(FirefoxMediaTestsJenkins, self).__init__(
             all_actions=['clobber',
-                         'read-buildbot-config',
                          'checkout',
                          'download-and-extract',
                          'create-virtualenv',
@@ -52,12 +48,12 @@ class FirefoxMediaTestsBuildbot(FirefoxMediaTestsBase, BlobUploadMixin):
         if os.access(requirements, os.F_OK):
             self.register_virtualenv_module(requirements=[requirements],
                                             two_pass=True)
-        super(FirefoxMediaTestsBuildbot, self)._pre_create_virtualenv(action)
+        super(FirefoxMediaTestsJenkins, self)._pre_create_virtualenv(action)
 
     def query_abs_dirs(self):
         if self.abs_dirs:
             return self.abs_dirs
-        dirs = super(FirefoxMediaTestsBuildbot, self).query_abs_dirs()
+        dirs = super(FirefoxMediaTestsJenkins, self).query_abs_dirs()
         dirs['abs_blob_upload_dir'] = os.path.join(dirs['abs_work_dir'],
                                                    'blobber_upload_dir')
         dirs['abs_test_install_dir'] = os.path.join(dirs['abs_work_dir'],
@@ -65,17 +61,6 @@ class FirefoxMediaTestsBuildbot(FirefoxMediaTestsBase, BlobUploadMixin):
         self.abs_dirs = dirs
         return self.abs_dirs
 
-    def run_media_tests(self):
-        status = super(FirefoxMediaTestsBuildbot, self).run_media_tests()
-        if status == SUCCESS:
-            tbpl_status = TBPL_SUCCESS
-        else:
-            tbpl_status = TBPL_FAILURE
-        if status == TESTFAILED:
-            tbpl_status = TBPL_WARNING
-        self.buildbot_status(tbpl_status)
-
-
 if __name__ == '__main__':
-    media_test = FirefoxMediaTestsBuildbot()
+    media_test = FirefoxMediaTestsJenkins()
     media_test.run_and_exit()
