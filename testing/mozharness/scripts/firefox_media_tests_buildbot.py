@@ -32,7 +32,9 @@ from mozharness.mozilla.testing.firefox_media_tests import (
 class FirefoxMediaTestsBuildbot(FirefoxMediaTestsBase, BlobUploadMixin):
 
     def __init__(self):
+        config_options = copy.deepcopy(blobupload_config_options)
         super(FirefoxMediaTestsBuildbot, self).__init__(
+            config_options=config_options,
             all_actions=['clobber',
                          'read-buildbot-config',
                          'checkout',
